@@ -4,43 +4,43 @@
 """
 
 import asyncio
-import threading
 import time
 import traceback
 from typing import Callable, Optional, Dict, Any
 from datetime import datetime
 from src.utils.logger import get_logger
-from .environment import global_environment
+from src.plugins.maicraft.agent.environment import global_environment
 import json
+from src.plugins.maicraft.agent.block_cache.block_cache import global_block_cache
 
 class EnvironmentUpdater:
     """环境信息定期更新器"""
     
     def __init__(self, 
-                 agent=None,
-                 update_interval: int = 2,
-                 auto_start: bool = False):
+                 mcp_client,
+                 update_interval: int = 3,
+                 ):
         """
         初始化环境更新器
         
         Args:
             agent: MaicraftAgent实例，用于调用查询工具
-            update_interval: 更新间隔（秒），默认2秒
+            update_interval: 更新间隔（秒），默认3秒
             auto_start: 是否自动开始更新，默认False
         """
-        self.agent = agent
+        self.mcp_client = mcp_client
         self.update_interval = update_interval
         self.logger = get_logger("EnvironmentUpdater")
+        
         
         # 更新状态
         self.is_running = False
         self.is_paused = False
         
-        # 线程和任务控制
-        self._update_thread: Optional[threading.Thread] = None
+        # 异步任务控制
         self._update_task: Optional[asyncio.Task] = None
-        self._stop_event = threading.Event()
-        self._pause_event = threading.Event()
+        self._stop_event = asyncio.Event()
+        self._pause_event = asyncio.Event()
         
         # 统计信息
         self.update_count = 0
@@ -49,9 +49,6 @@ class EnvironmentUpdater:
         self.average_update_duration = 0.0
         self.total_update_duration = 0.0
         
-        # 如果自动开始，则启动更新
-        if auto_start:
-            self.start()
     
     def start(self) -> bool:
         """启动环境更新器"""
@@ -66,21 +63,15 @@ class EnvironmentUpdater:
             self.is_paused = False
             
             # 使用asyncio.create_task启动异步更新循环
-            import asyncio
             try:
-                loop = asyncio.get_running_loop()
                 # 如果已有事件循环，直接创建任务
-                self._update_task = loop.create_task(self._update_loop())
+                self._update_task = asyncio.create_task(self._update_loop())
                 self.logger.info(f"[EnvironmentUpdater] 在现有事件循环中启动成功，更新间隔: {self.update_interval}秒")
             except RuntimeError:
-                # 如果没有运行中的事件循环，创建新的事件循环
-                self._update_thread = threading.Thread(
-                    target=self._run_async_loop,
-                    name="EnvironmentUpdater",
-                    daemon=True
-                )
-                self._update_thread.start()
-                self.logger.info(f"[EnvironmentUpdater] 在新线程中启动成功，更新间隔: {self.update_interval}秒")
+                # 如果没有运行中的事件循环，记录错误
+                self.logger.error("[EnvironmentUpdater] 无法获取运行中的事件循环")
+                self.is_running = False
+                return False
             
             return True
             
@@ -104,12 +95,6 @@ class EnvironmentUpdater:
                 self._update_task.cancel()
                 self.logger.info("[EnvironmentUpdater] 异步任务已取消")
             
-            # 等待线程结束
-            if self._update_thread and self._update_thread.is_alive():
-                self._update_thread.join(timeout=10.0)
-                if self._update_thread.is_alive():
-                    self.logger.warning("[EnvironmentUpdater] 线程未能在10秒内结束")
-            
             self.is_running = False
             self.is_paused = False
             self.logger.info("[EnvironmentUpdater] 已停止")
@@ -117,46 +102,6 @@ class EnvironmentUpdater:
             
         except Exception as e:
             self.logger.error(f"[EnvironmentUpdater] 停止失败: {e}")
-            return False
-    
-    def pause(self) -> bool:
-        """暂停环境更新"""
-        if not self.is_running:
-            self.logger.warning("[EnvironmentUpdater] 更新器未在运行")
-            return False
-        
-        if self.is_paused:
-            self.logger.warning("[EnvironmentUpdater] 更新器已暂停")
-            return False
-        
-        try:
-            self._pause_event.set()
-            self.is_paused = True
-            self.logger.info("[EnvironmentUpdater] 已暂停")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"[EnvironmentUpdater] 暂停失败: {e}")
-            return False
-    
-    def resume(self) -> bool:
-        """恢复环境更新"""
-        if not self.is_running:
-            self.logger.warning("[EnvironmentUpdater] 更新器未在运行")
-            return False
-        
-        if not self.is_paused:
-            self.logger.warning("[EnvironmentUpdater] 更新器未暂停")
-            return False
-        
-        try:
-            self._pause_event.clear()
-            self.is_paused = False
-            self.logger.info("[EnvironmentUpdater] 已恢复")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"[EnvironmentUpdater] 恢复失败: {e}")
             return False
     
     
@@ -173,11 +118,8 @@ class EnvironmentUpdater:
                 
                 # 执行更新
                 start_time = time.time()
-                await self._perform_update()
+                await self.perform_update()
                 update_duration = time.time() - start_time
-                
-                # 更新统计信息
-                self._update_statistics(update_duration)
                 
                 # 等待下次更新
                 await asyncio.sleep(self.update_interval)
@@ -188,12 +130,10 @@ class EnvironmentUpdater:
         
         self.logger.info("[EnvironmentUpdater] 异步更新循环已结束")
     
-    async def _perform_update(self):
+    async def perform_update(self):
         """执行单次环境更新（异步版本）"""
         try:
-            if not self.agent:
-                self.logger.error("[EnvironmentUpdater] Agent未设置，无法执行更新")
-                return
+            
             
             # 使用新的拆分后的查询工具获取环境数据
             environment_data = await self._gather_environment_data()
@@ -311,20 +251,17 @@ class EnvironmentUpdater:
                     self.logger.warning(f"[EnvironmentUpdater] 处理周围实体数据时出错: {e}")
                     combined_data["data"]["nearbyEntities"] = []
             
-            # 处理周围环境 - 方块
+            
+            
+            # 处理周围方块缓存器
             if isinstance(results[5], dict) and results[5].get("ok"):
                 try:
                     blocks = results[5].get("data", {}).get("blocks", {})
-                    if isinstance(blocks, dict):
-                        combined_data["data"]["nearbyBlocks"] = blocks
-                    else:
-                        # 如果blocks不是预期的结构，设置为空字典
-                        combined_data["data"]["nearbyBlocks"] = {}
-                    combined_data["elapsed_ms"] = max(combined_data["elapsed_ms"], results[5].get("elapsed_ms", 0))
+                    global_block_cache.update_from_blocks(blocks)
                     self.logger.debug("[EnvironmentUpdater] 周围方块数据更新成功")
                 except Exception as e:
                     self.logger.warning(f"[EnvironmentUpdater] 处理周围方块数据时出错: {e}")
-                    combined_data["data"]["nearbyBlocks"] = {}
+                    self.logger.warning(traceback.format_exc())
             
             return combined_data
             
@@ -335,7 +272,7 @@ class EnvironmentUpdater:
     async def _call_tool(self, tool_name: str, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """调用工具"""
         try:
-            result = await self.agent.mcp_client.call_tool_directly(tool_name, params)
+            result = await self.mcp_client.call_tool_directly(tool_name, params)
             if not result.is_error and result.content:
                 content_text = result.content[0].text
                 return json.loads(content_text)
@@ -360,43 +297,7 @@ class EnvironmentUpdater:
 
     async def _call_query_surroundings(self, env_type: str) -> Optional[Dict[str, Any]]:
         """调用query_surroundings工具"""
-        return await self._call_tool("query_surroundings", {"type": env_type})
-
-    def _run_async_loop(self):
-        """在新线程中运行异步事件循环"""
-        import asyncio
-        
-        # 创建新的事件循环
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        try:
-            # 运行异步更新循环
-            loop.run_until_complete(self._update_loop())
-        finally:
-            loop.close()
-            asyncio.set_event_loop(None)
-    
-    def _update_statistics(self, update_duration: float):
-        """更新统计信息"""
-        self.update_count += 1
-        self.last_update_time = datetime.now()
-        self.last_update_duration = update_duration
-        self.total_update_duration += update_duration
-        self.average_update_duration = self.total_update_duration / self.update_count
-
-    
-    def reset_statistics(self):
-        """重置统计信息"""
-        self.update_count = 0
-        self.last_update_time = None
-        self.last_update_duration = 0.0
-        self.average_update_duration = 0.0
-        self.total_update_duration = 0.0
-        self.error_count = 0
-        self.last_error = None
-        self.last_error_time = None
-        self.logger.info("[EnvironmentUpdater] 统计信息已重置")
+        return await self._call_tool("query_surroundings", {"type": env_type,"range":5,"useAbsoluteCoords":True})
     
     def __enter__(self):
         """上下文管理器入口"""

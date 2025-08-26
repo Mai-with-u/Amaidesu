@@ -1,41 +1,7 @@
-from .prompt_manager import PromptTemplate, prompt_manager
+from src.plugins.maicraft.agent.prompt_manager.prompt_manager import PromptTemplate, prompt_manager
 
 def init_templates() -> None:
     """初始化提示词模板"""
-    prompt_manager.register_template(
-        PromptTemplate(
-        name="minecraft_goal_generation",
-        template="""
-    你的用户名是Mai，是一个Minecraft玩家。现在请你根据游戏情况一个简单可行的游戏目标。
-    你的目标是：
-    设置一个箱子仓库，用于存储物品
-
-    
-    请进行决策，你会有兴趣，也会乏味
-    当前信息:
-    - 你的位置: {player_position}
-    - 你的库存: {inventory}
-
-    环境信息: 
-    {environment}
-    
-    
-你之前执行过的目标：
-{executed_goals}
-
-    请生成一个简单、具体、可执行的目标。目标应该：
-    1. 明确可执行，可操作
-    2. 可以再5-15分钟内通过数个步骤完成
-    3. 可以通过物品栏，环境信息，位置信息和状态来进行验证是否完成
-    4. 根据现在的状态和已经完成的目标进行决策
-    5. 如果之前有目标失败，请考虑失败原因，避免类似问题
-
-    直接返回目标描述，不要JSON格式，不要复杂分析：""",
-        description="Minecraft游戏目标生成模板",
-        parameters=["player_position", "inventory", "environment", "executed_goals"],
-    ))
-
-    
     prompt_manager.register_template(
         PromptTemplate(
         name="minecraft_choose_task",
@@ -43,13 +9,19 @@ def init_templates() -> None:
 你是Mai，一名Minecraft玩家。请你规划下一步要做什么：
 
 **当前任务列表**：
-
 {to_do_list}
 
 **任务执行记录**：
 {task_done_list}
 
-**环境信息**：{environment}
+**环境信息**：
+{environment}
+
+**位置信息**：
+{position}
+
+**周围方块的信息**：
+{nearby_block_info}
 
 请你从中选择一个合适的任务，进行执行
 
@@ -62,7 +34,7 @@ def init_templates() -> None:
 请你输出你的想法，不要输出其他内容
 """,
         description="Minecraft游戏任务选择模板",
-        parameters=["to_do_list", "environment", "task_done_list"],
+        parameters=["to_do_list", "environment", "task_done_list", "nearby_block_info", "position"],
     ))
     
     prompt_manager.register_template(
@@ -75,6 +47,12 @@ def init_templates() -> None:
 {task}
 
 **环境信息**：{environment}
+
+**位置信息**：
+{position}
+
+**周围方块的信息**：
+{nearby_block_info}
 
 **你可以做的动作**
  1. chat：在聊天框发送消息
@@ -117,16 +95,11 @@ def init_templates() -> None:
  
  
  **你可以做的动作：任务动作**
- 1. 完成当前任务
- {{
-     "action_type":"complete_task",
-     "dont":true,
- }}
- 
- 2. 更新当前任务的进展
+ 1. 更新当前任务的进展
  {{
      "action_type":"update_task_progress",
      "progress":"目前任务的进展情况",
+     "done":bool类型，true表示完成，false表示未完成
  }}
  
  3. 如果当前任务无法完成，需要前置任务，创建新任务:
@@ -135,16 +108,23 @@ def init_templates() -> None:
      "new_task":"前置任务的描述",
      "new_task_criteria":"前置任务的评估标准",
  }}
-
-
-之前的思考和执行的记录：
+ 
+ 之前的思考和执行的记录：
 {thinking_list}
-请你先总结之前的思考和执行的记录，然后根据现有的工具，任务和情景，进行思考，如果要使用动作，直接在思考后输出动作，使用json格式:
 
+**注意事项**
+1.先总结之前的思考和执行的记录，对执行结果进行分析，是否达成目的，是否需要调整任务或动作
+2.然后根据现有的**动作**，**任务**,**情景**，**物品栏**和**周围环境**，进行下一步规划，推进任务进度。
+规划内容是一段平文本，不要分点
+规划后请使用动作，动作用json格式输出:
 """,
         description="Minecraft游戏任务执行想法模板",
-        parameters=["task", "environment", "executed_tools", "thinking_list"],
+        parameters=["task", "environment", "executed_tools", "thinking_list", "nearby_block_info", "position"],
     ))
+    
+    
+    
+    
     
     
     
@@ -157,7 +137,14 @@ def init_templates() -> None:
 
 **当前目标**：{goal}
 
-**环境信息**：{environment}
+**位置信息**：
+{position}
+
+**环境信息**：
+{environment}
+
+**周围方块的信息**：
+{nearby_block_info}
 
 请判断为了达成目标，需要进行什么任务
 请列举出所有需要完成的任务，并以json格式输出：
@@ -201,7 +188,7 @@ def init_templates() -> None:
 请用json格式输出任务列表。
 """,
         description="Minecraft游戏任务规划模板",
-        parameters=["goal", "environment"],
+        parameters=["goal", "environment", "nearby_block_info", "position"],
     ))
     
     
@@ -214,11 +201,19 @@ def init_templates() -> None:
 
 **当前目标**：{goal}
 
-**任务列表**：{to_do_list}
+**任务列表**：
+{to_do_list}
 
 **建议**：{suggestion}
 
-**环境信息**：{environment}
+**位置信息**：
+{position}
+
+**环境信息**：
+{environment}
+
+**周围方块的信息**：
+{nearby_block_info}
 
 请根据建议，修改任务列表，并输出修改后的任务列表，并以json格式输出：
 
@@ -262,6 +257,6 @@ def init_templates() -> None:
 请用json格式输出任务列表。
 """,
         description="Minecraft游戏任务规划模板",
-        parameters=["goal", "environment", "to_do_list", "suggestion"],
+        parameters=["goal", "environment", "to_do_list", "suggestion", "nearby_block_info", "position"],
     ))
     

@@ -4,27 +4,28 @@ from typing import List, Dict, Any, Optional, Union
 from openai import AsyncOpenAI
 from src.plugins.maicraft.config import MaicraftConfig, load_config_from_dict
 from src.utils.logger import get_logger
+from src.plugins.maicraft.openai_client.modelconfig import ModelConfig
 
-
+        
 class LLMClient:
-    """精简的LLM调用客户端"""
+    """LLM调用客户端"""
     
-    def __init__(self, config: Optional[MaicraftConfig] = None):
+    def __init__(self,model_config: Optional[ModelConfig]):
         """初始化LLM客户端
         
         Args:
             config: Maicraft配置对象，如果为None则使用默认配置
         """
-        self.config = config or MaicraftConfig()
+        self.model_config = model_config
         self.logger = get_logger("LLMClient")
         
         # 初始化OpenAI客户端
         self.client = AsyncOpenAI(
-            api_key=self.config.llm.api_key,
-            base_url=self.config.llm.base_url,
+            api_key=self.model_config.api_key,
+            base_url=self.model_config.base_url,
         )
         
-        self.logger.info(f"LLM客户端初始化完成，模型: {self.config.llm.model}")
+        self.logger.info(f"LLM客户端初始化完成，模型: {self.model_config.model_name}")
     
     async def chat_completion(
         self,
@@ -57,9 +58,9 @@ class LLMClient:
             
             # 构建请求参数
             request_params = {
-                "model": self.config.llm.model,
+                "model": self.model_config.model_name,
                 "messages": messages,
-                "temperature": temperature or self.config.llm.temperature,
+                "temperature": temperature or self.model_config.temperature,
             }
             
             if tools:
@@ -68,8 +69,8 @@ class LLMClient:
             
             if max_tokens:
                 request_params["max_tokens"] = max_tokens
-            elif self.config.langchain.max_token_limit:
-                request_params["max_tokens"] = self.config.langchain.max_token_limit
+            elif self.model_config.max_tokens:
+                request_params["max_tokens"] = self.model_config.max_tokens
             
             self.logger.debug(f"发送LLM请求: {request_params}")
             
@@ -170,10 +171,10 @@ class LLMClient:
             配置信息字典
         """
         return {
-            "model": self.config.llm.model,
-            "base_url": self.config.llm.base_url,
-            "temperature": self.config.llm.temperature,
-            "max_tokens": self.config.langchain.max_token_limit,
-            "api_key_set": bool(self.config.llm.api_key)
+            "model": self.model_config.model_name,
+            "base_url": self.model_config.base_url,
+            "temperature": self.model_config.temperature,
+            "max_tokens": self.model_config.max_tokens,
+            "api_key_set": bool(self.model_config.api_key)
         }
 

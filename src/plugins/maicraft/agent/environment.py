@@ -7,72 +7,21 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from src.utils.logger import get_logger
+from .basic_info import Player, Position, Entity, Event, BlockPosition
+from src.plugins.maicraft.agent.block_cache.block_cache import global_block_cache
 
 logger = get_logger("EnvironmentInfo")
-
-
-@dataclass
-class Player:
-    """玩家信息"""
-    uuid: str
-    username: str
-    display_name: str
-    ping: int
-    gamemode: int
-
-
-@dataclass
-class Position:
-    """位置信息"""
-    x: float
-    y: float
-    z: float
-
-
-@dataclass
-class Block:
-    """方块信息"""
-    type: int
-    name: str
-    position: Position
-
-
-@dataclass
-class Event:
-    """事件信息"""
-    type: str
-    timestamp: int
-    server_id: str
-    player_name: str
-    player: Optional[Player] = None
-    old_position: Optional[Position] = None
-    new_position: Optional[Position] = None
-    block: Optional[Block] = None
-    experience: Optional[int] = None
-    level: Optional[int] = None
-    health: Optional[int] = None
-    food: Optional[int] = None
-    saturation: Optional[int] = None
-
-
-@dataclass
-class Entity:
-    """实体信息"""
-    id: int
-    type: str
-    name: str
-    position: Position
-
 
 class EnvironmentInfo:
     """Minecraft环境信息存储类"""
     
     def __init__(self):
         # 玩家信息
-        self.player: Optional[Player] = None
+        self.player_name: str = ""
         
-        # 位置信息
+        # 位置信息(脚)
         self.position: Optional[Position] = None
+        self.block_position: Optional[BlockPosition] = None
         
         # 状态信息
         self.health: int = 0
@@ -84,9 +33,16 @@ class EnvironmentInfo:
         self.food_percentage: int = 0
         self.experience: int = 0
         self.level: int = 0
+        self.oxygen: int = 0
+
         
         # 物品栏
         self.inventory: List[Any] = field(default_factory=list)
+        
+        self.occupied_slot_count: int = 0
+        self.empty_slot_count: int = 0
+        self.slot_count: int = 0
+        
         
         # 环境信息
         self.weather: str = ""
@@ -99,8 +55,6 @@ class EnvironmentInfo:
         # 附近实体
         self.nearby_entities: List[Entity] = field(default_factory=list)
         
-        # 附近方块
-        self.nearby_blocks: Dict[str, Any] = field(default_factory=dict)
         
         # 最近事件
         self.recent_events: List[Event] = field(default_factory=list)
@@ -112,10 +66,6 @@ class EnvironmentInfo:
         
         # 时间戳
         self.last_update: Optional[datetime] = None
-    
-    def get_summary(self) -> str:
-        """获取环境信息摘要"""
-        return self.to_readable_text()
 
     def update_from_observation(self, observation_data: Dict[str, Any]) -> None:
         """从观察数据更新环境信息"""
@@ -123,11 +73,14 @@ class EnvironmentInfo:
             return
         
         data = observation_data.get("data", {})
+
         
         # 更新游戏状态信息 (来自 query_game_state)
         self.weather = data.get("weather", "")
         self.time_of_day = data.get("timeOfDay", 0)
         self.dimension = data.get("dimension", "")
+        
+        self.player_name = data.get("username", "")
         
         # 更新在线玩家信息 (来自 query_game_state)
         online_players = data.get("onlinePlayers", [])
@@ -142,51 +95,44 @@ class EnvironmentInfo:
                 gamemode=0  # 在线玩家列表中没有游戏模式信息
             )
             self.nearby_players.append(player)
+    
         
-        # 更新玩家状态信息 (来自 query_player_status)
-        if "player" in data:
-            player_data = data["player"]
-            self.player = Player(
-                uuid=player_data.get("uuid", ""),
-                username=player_data.get("username", ""),
-                display_name=player_data.get("displayName", ""),
-                ping=player_data.get("ping", 0),
-                gamemode=player_data.get("gamemode", 0)
-            )
-        
-        # 更新位置信息 (来自 query_player_status)
-        if "position" in data:
-            pos_data = data["position"]
+        # 更新位置信息
+        pos_data = data.get("position")
+        if pos_data and isinstance(pos_data, dict):
             self.position = Position(
                 x=pos_data.get("x", 0.0),
                 y=pos_data.get("y", 0.0),
                 z=pos_data.get("z", 0.0)
             )
+        else:
+            # 如果没有位置数据，设置为默认位置或保持为None
+            self.position = None
+            logger.warning("未找到有效的位置数据，位置信息未更新")
+            
+        self.block_position = BlockPosition(self.position)
         
-        # 更新状态信息 (来自 query_player_status)
-        # 处理新的health格式
+        # 更新状态信息
         health_data = data.get("health", {})
-
         self.health = health_data.get("current", 0)
         self.health_max = health_data.get("max", 20)
         self.health_percentage = health_data.get("percentage", 0)
-
         
-        # 处理新的food格式
         food_data = data.get("food", {})
-
         self.food = food_data.get("current", 0)
         self.food_max = food_data.get("max", 20)
         self.food_saturation = food_data.get("saturation", 0)
         self.food_percentage = food_data.get("percentage", 0)
 
+        experience_data = data.get("experience", {})
+        self.experience = experience_data.get("points", 0)
+        self.level = experience_data.get("level", 0)
         
-        self.experience = data.get("experience", 0)
-        self.level = data.get("level", 0)
+        self.oxygen = data.get("oxygen", 0)
         
-        # 更新物品栏 (来自 query_player_status)
+        
+        # 更新物品栏
         inventory_data = data.get("inventory", {})
-        # 处理新的物品栏数据格式
         self.inventory = [] 
 
         # 新格式：包含统计信息和槽位数据
@@ -204,9 +150,9 @@ class EnvironmentInfo:
                     self.inventory.append(item_info)
         
         # 记录物品栏统计信息
-        full_slots = inventory_data.get('fullSlotCount', 0)
-        empty_slots = inventory_data.get('emptySlotCount', 0)
-        total_slots = inventory_data.get('slotCount', 0)
+        self.occupied_slot_count = inventory_data.get('fullSlotCount', 0)
+        self.empty_slot_count = inventory_data.get('emptySlotCount', 0)
+        self.slot_count = inventory_data.get('slotCount', 0)
         
 
 
@@ -367,171 +313,37 @@ class EnvironmentInfo:
                         print(f"错误详情: {traceback.format_exc()}")
                         continue
         
-        # 更新周围环境 - 方块 (来自 query_surroundings("blocks"))
-        if "nearbyBlocks" in data:
-            blocks_data = data["nearbyBlocks"]
-            if isinstance(blocks_data, dict) and "blockMap" in blocks_data:
-                # 处理新的方块数据格式
-                self.nearby_blocks = blocks_data
-        elif "blocks" in data:
-            # 处理直接包含blocks字段的数据
-            blocks_data = data["blocks"]
-            if isinstance(blocks_data, dict) and "blockMap" in blocks_data:
-                self.nearby_blocks = blocks_data
-        
-        # 更新系统状态
-        self.status = "正常"  # 默认状态
-        
         # 更新请求信息
         self.request_id = observation_data.get("request_id", "")
         self.elapsed_ms = observation_data.get("elapsed_ms", 0)
         
         # 更新时间戳
         self.last_update = datetime.now()
-    
-
-    
-    def get_recent_events(self, event_type: Optional[str] = None) -> List[Event]:
-        """获取最近事件列表，可选择按类型过滤"""
-        if event_type is None:
-            return self.recent_events
-        return [event for event in self.recent_events if event.type == event_type]
-    
-
-    
-    def get_distance_to_player(self, target_position: Position) -> float:
-        """计算到指定位置的距离"""
-        if not self.position:
-            return float('inf')
         
-        dx = self.position.x - target_position.x
-        dy = self.position.y - target_position.y
-        dz = self.position.z - target_position.z
-        return (dx * dx + dy * dy + dz * dz) ** 0.5
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """将环境信息转换为字典格式"""
-        return {
-            "player": {
-                "uuid": self.player.uuid if self.player else None,
-                "username": self.player.username if self.player else None,
-                "display_name": self.player.display_name if self.player else None,
-                "ping": self.player.ping if self.player else None,
-                "gamemode": self.player.gamemode if self.player else None
-            } if self.player else None,
-            "position": {
-                "x": self.position.x if self.position else None,
-                "y": self.position.y if self.position else None,
-                "z": self.position.z if self.position else None
-            } if self.position else None,
-            "health": {
-                "current": self.health,
-                "max": self.health_max,
-                "percentage": self.health_percentage
-            },
-            "food": {
-                "current": self.food,
-                "max": self.food_max,
-                "saturation": self.food_saturation,
-                "percentage": self.food_percentage
-            },
-            "experience": self.experience,
-            "level": self.level,
-            "inventory": self.inventory,
-            "weather": self.weather,
-            "time_of_day": self.time_of_day,
-            "dimension": self.dimension,
-            "nearby_players": [
-                {
-                    "uuid": p.uuid,
-                    "username": p.username,
-                    "display_name": p.display_name,
-                    "ping": p.ping,
-                    "gamemode": p.gamemode
-                } for p in self.nearby_players
-            ],
-            "nearby_entities": [
-                {
-                    "id": e.id,
-                    "type": e.type,
-                    "name": e.name,
-                    "position": {
-                        "x": e.position.x,
-                        "y": e.position.y,
-                        "z": e.position.z
-                    }
-                } for e in self.nearby_entities
-            ],
-            "nearby_blocks": self.nearby_blocks,
-            "recent_events_count": len(self.recent_events),
-            "status": self.status,
-            "last_update": self.last_update.isoformat() if self.last_update else None
-        }
-    
-    def __str__(self) -> str:
-        """字符串表示"""
-        return f"EnvironmentInfo(player={self.player.username if self.player else 'None'}, " \
-               f"position=({self.position.x:.2f}, {self.position.y:.2f}, {self.position.z:.2f}) " \
-               f"if self.position else 'None', health={self.health}, status={self.status})"
+    def get_position_str(self) -> str:
+        """获取位置信息"""
+        if self.block_position:
+            block_on_feet = global_block_cache.get_block(self.block_position.x, self.block_position.y-1, self.block_position.z)
+            if block_on_feet:
+                block_on_feet_str = f"你正站在方块 {block_on_feet.block_type} 上"
+            else:
+                block_on_feet_str = "脚下没有方块"
+        position_str = f"""
+你现在的坐标(脚所在的坐标)是：x={self.block_position.x}, y={self.block_position.y}, z={self.block_position.z}，你有两格高，y代表高度
+{block_on_feet_str}
+        """
+        return position_str
 
-    def to_readable_text(self) -> str:
+    def get_summary(self) -> str:
         """以可读文本形式返回所有环境信息"""
         lines = []
         
         # 玩家信息
-        if self.player:
-            lines.append("【玩家信息】")
-            lines.append(f"  用户名: {self.player.username}")
+        if self.player_name:
+            lines.append("【自身信息】")
+            lines.append(f"  用户名: {self.player_name}")
             # lines.append(f"  显示名: {self.player.display_name}")
             # lines.append(f"  游戏模式: {self._get_gamemode_name(self.player.gamemode)}")
-            lines.append("")
-        else:
-            lines.append("【玩家信息】")
-            lines.append("  未获取到玩家信息")
-            lines.append("")
-        
-        # 位置信息
-        if self.position:
-            lines.append("【周围环境信息】")
-            lines.append(f"  坐标: X={self.position.x:.2f}, Y={self.position.y:.2f}, Z={self.position.z:.2f}")
-            lines.append("")
-        else:
-            lines.append("【周围环境信息】")
-            lines.append("  未获取到位置信息")
-            lines.append("")
-        
-        # 附近方块
-        if self.nearby_blocks and "blockMap" in self.nearby_blocks:
-            lines.append("【附近方块】")
-            block_map = self.nearby_blocks["blockMap"]
-            total_count = self.nearby_blocks.get("totalCount", 0)
-            lines.append(f"  总方块数量: {total_count}")
-            
-            # 按方块类型分组显示
-            for block_type, block_info in block_map.items():
-                if isinstance(block_info, dict) and "count" in block_info:
-                    count = block_info["count"]
-                    positions = block_info.get("positions", [])
-                    
-                    # 获取方块的中文名称
-                    # block_name = self._get_block_name(block_type)
-                    lines.append(f"  {block_type}: {count} 个")
-                    
-
-                    for pos in positions:
-                        if isinstance(pos, list) and len(pos) >= 3:
-                            x, y, z = pos[0], pos[1], pos[2]
-                            # 将相对位置转换为绝对位置
-                            abs_x = self.position.x + x
-                            abs_y = self.position.y + y
-                            abs_z = self.position.z + z
-                            lines.append(f"    x={abs_x:.1f}, y={abs_y:.1f}, z={abs_z:.1f}")
-
-                    
-            lines.append("")
-        else:
-            lines.append("【附近方块】")
-            lines.append("  未获取到方块信息")
             lines.append("")
         
         # 状态信息
@@ -541,14 +353,16 @@ class EnvironmentInfo:
         if self.food_saturation > 0:
             lines.append(f"  饥饿饱和度: {self.food_saturation}")
         # lines.append(f"  经验值: {self.experience}")
-        # lines.append(f"  等级: {self.level}")
-        # lines.append(f"  存活状态: {'存活' if self.is_player_alive() else '死亡'}")
+        lines.append(f"  等级: {self.level}")
         lines.append("")
         
         # 物品栏
         lines.append("【物品栏】")
         if self.inventory:
-            lines.append(f"  物品数量: {len(self.inventory)}")
+            if self.empty_slot_count == 0:
+                lines.append(f"物品栏已满！无法装入新物品！")
+            else:
+                lines.append(f"物品栏有{self.empty_slot_count}个空槽位")
             # 按槽位排序显示物品
             sorted_inventory = sorted(self.inventory, key=lambda x: x.get('slot', 0) if isinstance(x, dict) else 0)
             
@@ -558,14 +372,10 @@ class EnvironmentInfo:
                 
                 # 添加类型检查，确保item是字典类型
                 if isinstance(item, dict):
-                    if 'slot' in item:
-                        item_info.append(f"[槽位{item['slot']}]")
-                    if 'displayName' in item and item['displayName']:
-                        item_info.append(item['displayName'])
-                    elif 'name' in item and item['name']:
+                    if 'name' in item and item['name']:
                         item_info.append(item['name'])
                     if 'count' in item and item['count'] > 0:
-                        item_info.append(f"x{item['count']}")
+                        item_info.append(f"x{item['count']} ")
                 elif isinstance(item, str):
                     # 如果item是字符串，直接显示
                     item_info.append(item)
@@ -580,20 +390,13 @@ class EnvironmentInfo:
             lines.append("  物品栏为空")
         lines.append("")
         
-        # # 环境信息
-        # lines.append("【环境信息】")
-        # lines.append(f"  天气: {self._get_weather_name(self.weather)}")
-        # lines.append(f"  时间: {self._get_time_name(self.time_of_day)}")
-        # lines.append(f"  维度: {self._get_dimension_name(self.dimension)}")
-        # lines.append("")
-        
         # 附近玩家
         lines.append("【附近玩家】")
         if self.nearby_players:
             lines.append(f"  附近玩家数量: {len(self.nearby_players)}")
             for i, player in enumerate(self.nearby_players, 1):
                 lines.append(f"  {i}. {player.display_name} ({player.username})")
-                lines.append(f"     延迟: {player.ping}ms, 游戏模式: {self._get_gamemode_name(player.gamemode)}")
+                lines.append(f"     延迟: {player.ping}ms, 游戏模式: {player.gamemode}")
         else:
             lines.append("  附近没有其他玩家")
         lines.append("")
@@ -606,73 +409,12 @@ class EnvironmentInfo:
                 pos = entity.position
                 lines.append(f"  {i}. {entity.name} (ID: {entity.id}, 类型: {entity.type})")
                 lines.append(f"     位置: X={pos.x:.2f}, Y={pos.y:.2f}, Z={pos.z:.2f}")
-        else:
-            lines.append("  附近没有实体")
-        lines.append("")
-        
-        # # 最近事件
-        # lines.append("【最近事件】")
-        # if self.recent_events:
-        #     lines.append(f"  事件数量: {len(self.recent_events)}")
-        #     # 只显示最近5个事件
-        #     recent_events = self.recent_events[-5:] if len(self.recent_events) > 5 else self.recent_events
-        #     for i, event in enumerate(recent_events, 1):
-        #         event_time = datetime.fromtimestamp(event.timestamp / 1000).strftime("%H:%M:%S")
-        #         lines.append(f"  {i}. [{event_time}] {self._get_event_description(event)}")
-        # else:
-        #     lines.append("  没有最近事件")
-        # lines.append("")
-        
-        # 系统状态
-        # lines.append("【系统状态】")
-        # lines.append(f"  状态: {self.status}")
-        # lines.append(f"  请求ID: {self.request_id}")
-        # lines.append(f"  响应时间: {self.elapsed_ms}ms")
-        # if self.last_update:
-        #     lines.append(f"  最后更新: {self.last_update.strftime('%Y-%m-%d %H:%M:%S')}")
-        # lines.append("")
-        
-        # 统计信息
-        lines.append("【统计信息】")
-        lines.append(f"  附近玩家: {len(self.nearby_players)} 人")
-        lines.append(f"  附近实体: {len(self.nearby_entities)} 个")
-        if self.nearby_blocks and "totalCount" in self.nearby_blocks:
-            lines.append(f"  附近方块: {self.nearby_blocks['totalCount']} 个")
-        else:
-            lines.append(f"  附近方块: 0 个")
-        lines.append(f"  最近事件: {len(self.recent_events)} 个")
-        lines.append(f"  物品栏: {len(self.inventory)} 个物品")
         lines.append("")
         
         lines.append("=" * 10)
         
         return "\n".join(lines)
     
-    def _get_gamemode_name(self, gamemode: int) -> str:
-        """获取游戏模式名称"""
-        gamemodes = {
-            0: "生存模式",
-            1: "创造模式", 
-            2: "冒险模式",
-            3: "观察者模式"
-        }
-        return gamemodes.get(gamemode, f"未知模式({gamemode})")
-    
-    
-    def _get_time_name(self, time_of_day: int) -> str:
-        """获取时间名称"""
-        # Minecraft时间转换为现实时间
-        # 0-1000: 黎明, 1000-6000: 白天, 6000-12000: 黄昏, 12000-18000: 夜晚
-        if 0 <= time_of_day < 1000:
-            return f"黎明 ({time_of_day})"
-        elif 1000 <= time_of_day < 6000:
-            return f"白天 ({time_of_day})"
-        elif 6000 <= time_of_day < 12000:
-            return f"黄昏 ({time_of_day})"
-        elif 12000 <= time_of_day < 18000:
-            return f"夜晚 ({time_of_day})"
-        else:
-            return f"未知时间 ({time_of_day})"
     
     def _get_event_description(self, event: Event) -> str:
         """获取事件描述"""
