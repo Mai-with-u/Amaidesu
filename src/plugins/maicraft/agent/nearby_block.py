@@ -85,7 +85,7 @@ class NearbyBlockManager:
         简短的分析结果:
         """
         
-        logger.info(prompt)
+        # logger.info(prompt)
         
         response = await self.llm_client_fast.simple_chat(prompt)
         

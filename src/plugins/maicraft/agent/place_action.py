@@ -53,7 +53,7 @@ class PlaceAction:
         }
         prompt = prompt_manager.generate_prompt("minecraft_place_block", **input_data)
         
-        self.logger.info(f"[PlaceAction] 生成提示词: {prompt}")
+        # self.logger.info(f"[PlaceAction] 生成提示词: {prompt}")
         
         response = await self.llm_client.simple_chat(prompt)
         result_json = parse_json(response)

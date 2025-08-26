@@ -63,6 +63,8 @@ class MaiAgent:
         
         self.goal_list: list[tuple[str, str, str]] = []  # (goal, status, details)
         
+        self.memo_list: list[str] = []
+        
         
         self.to_do_list: ToDoList = ToDoList()
         self.task_done_list: list[tuple[bool, str, str]] = []
@@ -280,7 +282,7 @@ class MaiAgent:
         if self._viewer_started:
             return
         try:
-            self.block_cache_viewer = BlockCacheViewer(update_interval_seconds=0.5)
+            self.block_cache_viewer = BlockCacheViewer(update_interval_seconds=0.3)
             # 使用 asyncio.to_thread 符合用户偏好，避免阻塞事件循环
             import asyncio
             asyncio.create_task(asyncio.to_thread(self.block_cache_viewer.run))
@@ -423,6 +425,7 @@ class MaiAgent:
                     "thinking_list": "\n".join(thinking_list),
                     "nearby_block_info": nearby_block_info,
                     "position": global_environment.get_position_str(),
+                    "memo_list": "\n".join(self.memo_list),
                 }
                 prompt = prompt_manager.generate_prompt("minecraft_excute_task_thinking", **input_data)
                 self.logger.info(f"[MaiAgent] 执行任务提示词: {prompt}")
@@ -481,25 +484,25 @@ class MaiAgent:
             args = {"x": x, "y": y, "z": z, "type": "coordinate","useAbsoluteCoords": True}
             result.result_str = f"尝试移动到：{x},{y},{z}\n"
             
-            self_position = global_environment.block_position
-            if abs(self_position.x - x) < 0.7 and abs(self_position.y - y) < 0.7 and abs(self_position.z - z) < 0.7:
-                result.result_str += f"已经在{x},{y},{z} 附近，不需要移动"
-                return result
+            # self_position = global_environment.block_position
+            # if abs(self_position.x - x) < 0.7 and abs(self_position.y - y) < 0.7 and abs(self_position.z - z) < 0.7:
+            #     result.result_str += f"已经在{x},{y},{z} 附近，不需要移动"
+            #     return result
             
-            standing_block = global_block_cache.get_block(x, y-1, z)
-            if not standing_block or standing_block.block_type == "air":
-                result.result_str += f"位置{x},{y},{z}，在空中，脚下(x={x},y={y-1},z={z})没有方块，无法移动"
-                return result
+            # standing_block = global_block_cache.get_block(x, y-1, z)
+            # if not standing_block or standing_block.block_type == "air":
+            #     result.result_str += f"位置{x},{y},{z}，在空中，脚下(x={x},y={y-1},z={z})没有方块，无法移动"
+            #     return result
             
-            target_block = global_block_cache.get_block(x, y, z)
-            target_block_up = global_block_cache.get_block(x, y+1, z)
+            # target_block = global_block_cache.get_block(x, y, z)
+            # target_block_up = global_block_cache.get_block(x, y+1, z)
             # if target_block and target_block.block_type != "air":
             #     result.result_str += f"位置{x},{y},{z}，脚下(x={x},y={y-1},z={z})有方块，无法移动"
             #     return result
             
-            if target_block_up and target_block_up.block_type != "air":
-                result.result_str += f"位置{x},{y},{z}，头部(x={x},y={y+1},z={z})有方块，无法移动"
-                return result
+            # if target_block_up and target_block_up.block_type != "air":
+            #     result.result_str += f"位置{x},{y},{z}，头部(x={x},y={y+1},z={z})有方块，无法移动"
+            #     return result
             
             call_result = await self.mcp_client.call_tool_directly("move", args)
             is_success, result_content = await self.parse_action_result(action_type, args, call_result)
@@ -519,10 +522,13 @@ class MaiAgent:
             else:
                 result.result_str += f"合成失败: {result_content}"
         elif action_type == "mine_block":
-            block = json_obj.get("block")
-            count = json_obj.get("count")
-            args = {"name": block, "count": count}
-            result.result_str = f"尝试挖掘：{block} 数量：{count}\n"
+            x = json_obj.get("x")
+            y = json_obj.get("y")
+            z = json_obj.get("z")
+            
+            args = {"x": x, "y": y, "z": z}
+            block = global_block_cache.get_block(x, y, z)
+            result.result_str = f"尝试挖掘：{x},{y},{z} 方块：{block.block_type}\n"
             call_result = await self.mcp_client.call_tool_directly("mine_block", args)
             is_success, result_content = await self.parse_action_result(action_type, args, call_result)
             if is_success:
@@ -561,6 +567,10 @@ class MaiAgent:
             result.result_str = f"尝试查询：{item} 的合成表：\n"
             recipe_str = await recipe_finder.find_recipe(item)
             result.result_str += recipe_str
+        elif action_type == "add_memo":
+            memo = json_obj.get("memo")
+            result.result_str = f"添加备忘录: {memo}\n"
+            self.memo_list.append(memo)
         # 任务动作
         elif action_type == "update_task_progress":
             progress = json_obj.get("progress")

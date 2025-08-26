@@ -54,6 +54,9 @@ def init_templates() -> None:
 **周围方块的信息**：
 {nearby_block_info}
 
+**备忘录**：
+{memo_list}
+
 **你可以做的动作**
  1. chat：在聊天框发送消息
  可以与其他玩家交流或者求助
@@ -67,11 +70,12 @@ def init_templates() -> None:
      "item":"物品名称",
      "count":"数量",
  }}
- 3. mine_block：找到附近的特定方块，并挖掘
+ 3. mine_block：挖掘方块
  {{
      "action_type":"mine_block",
-     "block":"方块名称",
-     "count":"挖掘的数量",
+     "x":"位置",
+     "y":"位置",
+     "z":"位置",
  }}
  4. place_block：放置方块
  {{
@@ -93,7 +97,11 @@ def init_templates() -> None:
      "action_type":"get_recipe",
      "item":"物品名称",
  }}
- 
+ 7. add_memo：添加备忘录，用于记录重要信息，用于后续的思考和执行
+ {{
+     "action_type":"add_memo",
+     "memo":"备忘录内容",
+ }}
  
  **你可以做的动作：任务动作**
  1. 更新当前任务的进展
@@ -120,7 +128,7 @@ def init_templates() -> None:
 规划后请使用动作，动作用json格式输出:
 """,
         description="Minecraft游戏任务执行想法模板",
-        parameters=["task", "environment", "executed_tools", "thinking_list", "nearby_block_info", "position"],
+        parameters=["task", "environment", "executed_tools", "thinking_list", "nearby_block_info", "position", "memo_list"],
     ))
     
     
