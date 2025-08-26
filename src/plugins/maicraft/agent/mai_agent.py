@@ -141,7 +141,7 @@ class MaiAgent:
         运行主循环
         """
         while True:            
-            goal = "放置背包里的方块，建造一个仓库"
+            goal = "挖到钻石，并修建仓库来存储钻石"
             
             await self.propose_all_task(goal=goal, to_do_list=self.to_do_list, environment_info=global_environment.get_summary())
             while True:

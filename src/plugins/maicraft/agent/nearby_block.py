@@ -41,17 +41,14 @@ class NearbyBlockManager:
         for block in around_blocks:
             # if block.block_type != "air":
             block_num += 1
-            if block.position == position:
-                around_blocks_str += f"玩家所在位置: x={block.position.x}, y={block.position.y}, z={block.position.z}\n"
-                continue
-            if block.position.x == position.x and block.position.y == position.y+1 and block.position.z == position.z:
-                around_blocks_str += f"玩家头部位置: x={block.position.x}, y={block.position.y}, z={block.position.z}\n"
-                continue
-            
             if block.block_type == "air":
                 around_blocks_str += f"无方块: x={block.position.x}, y={block.position.y}, z={block.position.z}\n"
             else:
                 around_blocks_str += f"{block.block_type} : x={block.position.x}, y={block.position.y}, z={block.position.z}\n"
+                
+        around_blocks_str += f"玩家所在位置: x={position.x}, y={position.y}, z={position.z}\n"    
+        around_blocks_str += f"玩家头部位置: x={position.x}, y={position.y+1}, z={position.z}\n"    
+        
                 
         if block_num >64:
             around_blocks_str = await self.get_block_details_str(position, require,distance)

@@ -87,6 +87,9 @@ class MCPClient:
         try:
             import asyncio
 
+            if tool_name == "place_block":
+                self.logger.info(f"[MCP] 调用工具: {tool_name}，参数: {arguments}")
+            
             try:
                 result = await asyncio.wait_for(
                     self._client.call_tool(tool_name, arguments),

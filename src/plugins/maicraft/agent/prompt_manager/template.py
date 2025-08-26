@@ -56,6 +56,7 @@ def init_templates() -> None:
 
 **你可以做的动作**
  1. chat：在聊天框发送消息
+ 可以与其他玩家交流或者求助
  {{
      "action_type":"chat",
      "message":"消息内容",
@@ -70,7 +71,7 @@ def init_templates() -> None:
  {{
      "action_type":"mine_block",
      "block":"方块名称",
-     "count":"数量",
+     "count":"挖掘的数量",
  }}
  4. place_block：放置方块
  {{
@@ -87,7 +88,7 @@ def init_templates() -> None:
      "y":"位置",
      "z":"位置",
  }}
- 6. get_recipe：获取物品的合成表
+ 6. get_recipe：获取物品的合成表，需要合成物品时使用
  {{
      "action_type":"get_recipe",
      "item":"物品名称",

@@ -469,8 +469,8 @@ class MCPToolsBrowser:
                                 selected_tool = matching_tools[choice_id - 1]
                                 print(f"\n✅ 查看工具: {selected_tool['name']}")
                                 self.display_tool_details(selected_tool)
-                                if self._ask_execute_tool():
-                                    await self._execute_single_tool(selected_tool)
+
+                                await self._execute_single_tool(selected_tool)
                                 
                                 # 询问是否继续查看其他工具
                                 if not self._ask_continue_viewing():
@@ -592,19 +592,6 @@ class MCPToolsBrowser:
         except Exception as e:
             print(f"导出失败: {e}")
 
-    def _ask_execute_tool(self) -> bool:
-        """询问是否执行该工具"""
-        while True:
-            try:
-                choice = input("\n是否立即执行该工具? (y/n): ").strip().lower()
-                if choice in ["y", "yes", "是", ""]:
-                    return True
-                if choice in ["n", "no", "否"]:
-                    return False
-                print("请输入 y/是 或 n/否")
-            except KeyboardInterrupt:
-                print("\n用户中断，取消执行")
-                return False
 
     async def execute_tool_flow(self, tools_info: List[Dict[str, Any]]):
         """执行工具并查看返回值的完整流程"""

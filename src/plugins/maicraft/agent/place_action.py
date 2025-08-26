@@ -72,5 +72,5 @@ class PlaceAction:
         
 
         
-        args = {"block":block_type,"x":new_x,"y":new_y,"z":new_z}
+        args = {"block":block_type,"x":new_x,"y":new_y,"z":new_z,"useAbsoluteCoords":True}
         return f"决定在{new_x},{new_y},{new_z}放置{block_type}，理由：{reason}\n",args
