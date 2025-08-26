@@ -30,8 +30,6 @@ class RenderConfig:
     trail_max_points: int = 500
     trail_color: Tuple[int, int, int, int] = (255, 210, 0, 180)  # 半透明黄
     trail_width: int = 2
-    # 视角对齐（第一人称方向）：将世界绕Y轴按玩家朝向旋转后再做等距投影
-    align_to_player_yaw: bool = True
 
     def __post_init__(self) -> None:
         if self.face_colors is None:
@@ -108,12 +106,8 @@ class BlockCacheRenderer:
         max_px = -10**9
         min_py = 10**9
         max_py = -10**9
-        yaw_rad = self._get_player_yaw()
         for b in blocks:
-            x, y, z = b.position.x, b.position.y, b.position.z
-            if cfg.align_to_player_yaw and yaw_rad is not None:
-                x, z = self._rotate_y(x, z, yaw_rad)
-            sx, sy = self._iso_project(x, y, z)
+            sx, sy = self._iso_project(b.position.x, b.position.y, b.position.z)
             depth = b.position.x + b.position.y + b.position.z
             projected_raw.append((sx, sy, depth, b))
             if auto_center:
@@ -196,10 +190,7 @@ class BlockCacheRenderer:
                     if len(self._player_trail) >= 2:
                         pts: List[Tuple[int, int]] = []
                         for wx, wy, wz in self._player_trail:
-                            rx, rz = (wx, wz)
-                            if cfg.align_to_player_yaw and yaw_rad is not None:
-                                rx, rz = self._rotate_y(wx, wz, yaw_rad)
-                            sx, sy = self._iso_project(rx, wy, rz)
+                            sx, sy = self._iso_project(wx, wy, wz)
                             pts.append((sx + dx, sy + dy))
                         for i in range(1, len(pts)):
                             self._line(draw, pts[i-1], pts[i], cfg.trail_color, cfg.trail_width)
@@ -446,40 +437,6 @@ class BlockCacheRenderer:
         ]
         draw.polygon(arrow, fill=(255, 210, 0, 255))
         draw.line(arrow + [arrow[0]], fill=(20, 20, 20, 255), width=2)
-
-    def _get_player_yaw(self) -> Optional[float]:
-        """返回玩家朝向（弧度）。若不可用，返回 None。
-        目前数据源未包含 yaw/pitch；后续若加入则从 global_environment 获取。
-        暂时可从最近两点轨迹近似推断（不足两点返回 None）。
-        """
-        try:
-            # 预留：如果环境以后提供 yaw，则直接读取
-            yaw_deg = getattr(global_environment, "yaw", None)
-            if yaw_deg is not None:
-                import math
-                return math.radians(float(yaw_deg))
-
-            # 从轨迹推断朝向
-            if len(getattr(self, "_player_trail", [])) >= 2:
-                import math
-                (x1, _y1, z1) = self._player_trail[-2]
-                (x2, _y2, z2) = self._player_trail[-1]
-                dx = x2 - x1
-                dz = z2 - z1
-                if abs(dx) + abs(dz) > 1e-6:
-                    return math.atan2(dx, dz)  # 将 +Z 作为前方
-        except Exception:
-            pass
-        return None
-
-    def _rotate_y(self, x: float, z: float, yaw_rad: float) -> Tuple[float, float]:
-        """绕 Y 轴旋转（仅在平面 XZ），使玩家前向对齐屏幕前方。"""
-        import math
-        cos_y = math.cos(-yaw_rad)
-        sin_y = math.sin(-yaw_rad)
-        rx = x * cos_y - z * sin_y
-        rz = x * sin_y + z * cos_y
-        return rx, rz
 
 
 __all__ = ["BlockCacheRenderer", "RenderConfig"]
