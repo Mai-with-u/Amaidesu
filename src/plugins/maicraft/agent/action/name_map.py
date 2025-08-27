@@ -35,7 +35,6 @@ ITEM_NAME_MAP = {
     "jungle wood": "jungle_wood",
     "acacia wood": "acacia_wood",
     "dark oak wood": "dark_oak_wood",
-    "oak planks": "oak_planks",
     
     "Stick":"stick",
     

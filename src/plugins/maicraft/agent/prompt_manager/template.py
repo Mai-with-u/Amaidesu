@@ -2,40 +2,6 @@ from src.plugins.maicraft.agent.prompt_manager.prompt_manager import PromptTempl
 
 def init_templates() -> None:
     """初始化提示词模板"""
-    prompt_manager.register_template(
-        PromptTemplate(
-        name="minecraft_choose_task",
-        template="""
-你是Mai，一名Minecraft玩家。请你规划下一步要做什么：
-
-**当前任务列表**：
-{to_do_list}
-
-**任务执行记录**：
-{task_done_list}
-
-**环境信息**：
-{environment}
-
-**位置信息**：
-{position}
-
-**周围方块的信息**：
-{nearby_block_info}
-
-请你从中选择一个合适的任务，进行执行
-
-你可以：
-1. 请根据当前情况，选择最合适的任务，不一定要按照id顺序，而是按任务的优先度和相互逻辑来选择
-2. 你可以选择已经部分执行的任务或尚未开始的任务
-3. 如果当前任务列表不合理或无法完成，请返回<修改：修改的原因>
-4. 如果某个任务已经完成，请返回<完成：完成任务的id>
-5. 如果当前任务列表合理，请返回<执行：执行的任务id>
-请你输出你的想法，不要输出其他内容
-""",
-        description="Minecraft游戏任务选择模板",
-        parameters=["to_do_list", "environment", "task_done_list", "nearby_block_info", "position"],
-    ))
     
     prompt_manager.register_template(
         PromptTemplate(
@@ -58,64 +24,179 @@ def init_templates() -> None:
 {memo_list}
 
 **你可以做的动作**
- 1. chat：在聊天框发送消息
- 可以与其他玩家交流或者求助
+**聊天动作**
+在聊天框发送消息
+可以与其他玩家交流或者求助
  {{
      "action_type":"chat",
      "message":"消息内容",
  }}
- 2. craft_item：合成物品(直接合成或使用工作台)
- {{
-     "action_type":"craft_item",
-     "item":"物品名称",
-     "count":"数量",
- }}
- 3. mine_block：挖掘方块
+ 
+**挖掘/破坏动作**
+能够挖掘方块
  {{
      "action_type":"mine_block",
-     "x":"位置",
-     "y":"位置",
-     "z":"位置",
+     "name":"需要挖掘的方块名称",
+     "count":"挖掘的数量",
+     "direction":"挖掘方向可选：+x,-x,+z,-z,+y,-y,all",
+     //x,z为水平方向，all 代表所有方向，y为垂直方向
  }}
- 4. place_block：放置方块
- {{
-     "action_type":"place_block",
-     "block":"方块名称",
-     "x":"放置位置",
-     "y":"放置位置",
-     "z":"放置位置",
- }}
- 5. move：移动到指定位置
- {{
-     "action_type":"move",
-     "x":"位置",
-     "y":"位置",
-     "z":"位置",
- }}
- 6. get_recipe：获取物品的合成表，需要合成物品时使用
- {{
-     "action_type":"get_recipe",
-     "item":"物品名称",
- }}
- 7. add_memo：添加备忘录，用于记录重要信息，用于后续的思考和执行
- {{
-     "action_type":"add_memo",
-     "memo":"备忘录内容",
- }}
+
+**放置动作**
+能够放置方块
+{{
+    "action_type":"place_block",
+    "block":"方块名称",
+    "x":"放置位置",
+    "y":"放置位置",
+    "z":"放置位置",
+}}
+
+**移动动作**
+移动到一个能够到达的位置
+{{
+    "action_type":"move",
+    "reason":"移动的原因"
+}}
+
+
+**合成/制作动作**
+能够进行合成表查询，直接合成，或者使用工作台合成等操作
+{{
+    "action_type":"craft",
+    "item":"物品名称",
+    "count":"数量",
+    "reason":"合成/制作的原因"
+}}
+
+**添加备忘录**
+添加备忘录，用于记录重要信息，用于后续的思考和执行
+你的记忆是有限的，因此请将重要信息记录下来，用于后续的思考和执行
+{{
+    "action_type":"add_memo",
+    "memo":"备忘录内容",
+}}
+
+**任务动作**
+对任务列表进行修改，包括：
+1. 更新当前任务的进展
+2. 如果当前任务无法完成，需要前置任务，创建新任务
+{{
+    "action_type":"update_task_list",
+    "reason":"修改任务列表的原因"
+}}
+
+之前的思考和执行的记录：
+{thinking_list}
+
+**注意事项**
+1.先总结之前的思考和执行的记录，对执行结果进行分析，是否达成目的，是否需要调整任务或动作
+2.想法要求简短，精准，如果要描述坐标，完整的描述，不要有多余信息
+3.你的想法长度最多保留10条，如果有重要信息，请使用备忘录进行保留
+3.然后根据现有的**动作**，**任务**,**情景**，**物品栏**和**周围环境**，进行下一步规划，推进任务进度。
+4.你的视野是周围3-4个方块，如果你需要更多信息，或者寻找目标，请移动到合适的位置，再进行规划
+规划内容是一段平文本，不要分点
+规划后请使用动作，动作用json格式输出:
+""",
+        description="任务-动作选择",
+        parameters=["task", "environment", "thinking_list", "nearby_block_info", "position", "memo_list"],
+    ))
+
+    
+    prompt_manager.register_template(
+        PromptTemplate(
+        name="minecraft_excute_move_action",
+        template="""
+你是Mai，一名Minecraft玩家。请你选择合适的动作来完成当前任务：
+
+**当前需要执行的任务**：
+{task}
+
+**环境信息**：{environment}
+
+**位置信息**：
+{position}
+
+**周围方块的信息**：
+{nearby_block_info}
+
+**备忘录**：
+{memo_list}
  
- **你可以做的动作：任务动作**
- 1. 更新当前任务的进展
+ 之前的思考和执行的记录：
+{thinking_list}
+
+**注意事项**
+1.你现在想要进行移动动作，请你选择合适的移动目的地
+2.请参考周围方块的信息，寻找可以站立的位置，从中选择移动的目的地，并输出移动的目的地
+请将目标位置用json格式输出:
+{{
+    "x":坐标x,
+    "y":坐标y,
+    "z":坐标z,
+}}
+
+""",
+        description="任务-移动动作",
+        parameters=["task", "environment", "thinking_list", "nearby_block_info", "position", "memo_list"],
+    ))
+    
+    
+    prompt_manager.register_template(
+        PromptTemplate(
+        name="minecraft_excute_task_action",
+        template="""
+你是Mai，一名Minecraft玩家。请你选择合适的动作修改当前的任务列表：
+**当前目标**：
+{goal}
+
+**当前任务列表**：
+{to_do_list}
+
+**任务执行记录**：
+{task_done_list}
+
+**当前正在执行的任务**：
+{task}
+
+**环境信息**：{environment}
+
+**位置信息**：
+{position}
+
+**周围方块的信息**：
+{nearby_block_info}
+
+**备忘录**：
+{memo_list}
+ 
+**动作列表：任务动作**
+1. 更新某个任务的进度
  {{
      "action_type":"update_task_progress",
+     "task_id":"任务id",
      "progress":"目前任务的进展情况",
      "done":bool类型，true表示完成，false表示未完成
  }}
  
- 3. 如果当前任务无法完成，需要前置任务，创建新任务:
+ 2. 如果当前任务无法完成，需要前置任务，创建一个新任务:
  {{
      "action_type":"create_new_task",
      "new_task":"前置任务的描述",
      "new_task_criteria":"前置任务的评估标准",
+ }}
+ 
+ 3. 如果当前条件适合执行别的任务，或当前任务无法完成，需要更换任务，请选择一个合适的任务:
+ 如果当前没有在执行任务，请选择一个合适的任务
+ {{
+     "action_type":"change_task",
+     "new_task_id":"任务id",
+ }}
+ 
+ 4. 如果你认为任务列表有问题，无法通过任务列表达成目标，请修改任务列表：
+ {{
+     "action_type":"rewrite_task_list",
+     "reason":"修改任务列表的原因",
  }}
  
  之前的思考和执行的记录：
@@ -125,17 +206,26 @@ def init_templates() -> None:
 1.先总结之前的思考和执行的记录，对执行结果进行分析，是否达成目的，是否需要调整任务或动作
 2.然后根据现有的**动作**，**任务**,**情景**，**物品栏**和**周围环境**，进行下一步规划，推进任务进度。
 规划内容是一段平文本，不要分点
-规划后请使用动作，动作用json格式输出:
+规划后请使用动作，你**必须**从上述动作列表中选择一个动作，动作用json格式输出:
 """,
-        description="Minecraft游戏任务执行想法模板",
-        parameters=["task", "environment", "executed_tools", "thinking_list", "nearby_block_info", "position", "memo_list"],
+        description="任务-任务动作",
+        parameters=["goal", "to_do_list", "task_done_list", "task", "environment", "thinking_list", "nearby_block_info", "position", "memo_list"],
     ))
     
     
-    
-    
-    
-    
+
+
+
+
+
+
+
+
+
+
+
+
+
     
     
     prompt_manager.register_template(
@@ -196,7 +286,7 @@ def init_templates() -> None:
 
 请用json格式输出任务列表。
 """,
-        description="Minecraft游戏任务规划模板",
+        description="任务规划",
         parameters=["goal", "environment", "nearby_block_info", "position"],
     ))
     

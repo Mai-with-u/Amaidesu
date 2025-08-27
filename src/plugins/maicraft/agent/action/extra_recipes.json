@@ -1,0 +1,176 @@
+{
+  "oak_planks": {
+    "withoutTable": [
+      [
+        { "name": "oak_log", "count": 1 }
+      ]
+    ],
+    "withTable": [
+      [
+        { "name": "oak_log", "count": 1 }
+      ]
+    ]
+  },
+  "spruce_planks": {
+    "withoutTable": [
+      [
+        { "name": "spruce_log", "count": 1 }
+      ]
+    ],
+    "withTable": [
+      [
+        { "name": "spruce_log", "count": 1 }
+      ]
+    ]
+  },
+  "birch_planks": {
+    "withoutTable": [
+      [
+        { "name": "birch_log", "count": 1 }
+      ]
+    ],
+    "withTable": [
+      [
+        { "name": "birch_log", "count": 1 }
+      ]
+    ]
+  },
+  "jungle_planks": {
+    "withoutTable": [
+      [
+        { "name": "jungle_log", "count": 1 }
+      ]
+    ],
+    "withTable": [
+      [
+        { "name": "jungle_log", "count": 1 }
+      ]
+    ]
+  },
+  "acacia_planks": {
+    "withoutTable": [
+      [
+        { "name": "acacia_log", "count": 1 }
+      ]
+    ],
+    "withTable": [
+      [
+        { "name": "acacia_log", "count": 1 }
+      ]
+    ]
+  },
+  "dark_oak_planks": {
+    "withoutTable": [
+      [
+        { "name": "dark_oak_log", "count": 1 }
+      ]
+    ],
+    "withTable": [
+      [
+        { "name": "dark_oak_log", "count": 1 }
+      ]
+    ]
+  },
+  "mangrove_planks": {
+    "withoutTable": [
+      [
+        { "name": "mangrove_log", "count": 1 }
+      ]
+    ],
+    "withTable": [
+      [
+        { "name": "mangrove_log", "count": 1 }
+      ]
+    ]
+  },
+  "cherry_planks": {
+    "withoutTable": [
+      [
+        { "name": "cherry_log", "count": 1 }
+      ]
+    ],
+    "withTable": [
+      [
+        { "name": "cherry_log", "count": 1 }
+      ]
+    ]
+  },
+  "crimson_planks": {
+    "withoutTable": [
+      [
+        { "name": "crimson_stem", "count": 1 }
+      ]
+    ],
+      "withTable": [
+      [
+        { "name": "crimson_stem", "count": 1 }
+      ]
+    ]
+  },
+  "warped_planks": {
+    "withoutTable": [
+      [
+        { "name": "warped_stem", "count": 1 }
+      ]
+    ],
+    "withTable": [
+      [
+        { "name": "warped_stem", "count": 1 }
+      ]
+    ]
+  },
+  "stick": {
+    "withTable": [
+      [ { "name": "oak_planks", "count": 2 } ],
+      [ { "name": "spruce_planks", "count": 2 } ],
+      [ { "name": "birch_planks", "count": 2 } ],
+      [ { "name": "jungle_planks", "count": 2 } ],
+      [ { "name": "acacia_planks", "count": 2 } ],
+      [ { "name": "dark_oak_planks", "count": 2 } ],
+      [ { "name": "mangrove_planks", "count": 2 } ],
+      [ { "name": "cherry_planks", "count": 2 } ],
+      [ { "name": "crimson_planks", "count": 2 } ],
+      [ { "name": "warped_planks", "count": 2 } ]
+    ],
+    "withoutTable": [
+      [ { "name": "oak_planks", "count": 2 } ],
+      [ { "name": "spruce_planks", "count": 2 } ],
+      [ { "name": "birch_planks", "count": 2 } ],
+      [ { "name": "jungle_planks", "count": 2 } ],
+      [ { "name": "acacia_planks", "count": 2 } ],
+      [ { "name": "dark_oak_planks", "count": 2 } ],
+      [ { "name": "mangrove_planks", "count": 2 } ],
+      [ { "name": "cherry_planks", "count": 2 } ],
+      [ { "name": "crimson_planks", "count": 2 } ],
+      [ { "name": "warped_planks", "count": 2 } ]
+    ]
+  },
+  "crafting_table": {
+    "withTable": [
+      [ { "name": "oak_planks", "count": 4 } ],
+      [ { "name": "spruce_planks", "count": 4 } ],
+      [ { "name": "birch_planks", "count": 4 } ],
+      [ { "name": "jungle_planks", "count": 4 } ],
+      [ { "name": "acacia_planks", "count": 4 } ],
+      [ { "name": "dark_oak_planks", "count": 4 } ],
+      [ { "name": "mangrove_planks", "count": 4 } ],
+      [ { "name": "cherry_planks", "count": 4 } ],
+      [ { "name": "crimson_planks", "count": 4 } ],
+      [ { "name": "warped_planks", "count": 4 } ]
+    ],
+    "withoutTable": [
+      [ { "name": "oak_planks", "count": 4 } ],
+      [ { "name": "spruce_planks", "count": 4 } ],
+      [ { "name": "birch_planks", "count": 4 } ],
+      [ { "name": "jungle_planks", "count": 4 } ],
+      [ { "name": "acacia_planks", "count": 4 } ],
+      [ { "name": "dark_oak_planks", "count": 4 } ],
+      [ { "name": "mangrove_planks", "count": 4 } ],
+      [ { "name": "cherry_planks", "count": 4 } ],
+      [ { "name": "crimson_planks", "count": 4 } ],
+      [ { "name": "warped_planks", "count": 4 } ]
+    ]
+  }
+}
+
+
