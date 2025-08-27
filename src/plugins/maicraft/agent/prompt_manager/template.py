@@ -33,23 +33,30 @@ def init_templates() -> None:
  }}
  
 **挖掘/破坏动作**
-能够挖掘方块
- {{
-     "action_type":"mine_block",
-     "name":"需要挖掘的方块名称",
-     "count":"挖掘的数量",
-     "direction":"挖掘方向可选：+x,-x,+z,-z,+y,-y,all",
-     //x,z为水平方向，all 代表所有方向，y为垂直方向
- }}
+挖掘某个位置指定的方块
+{{
+    "action_type":"mine_block",
+    "name":"需要挖掘的方块名称",
+    "x":"挖掘x位置",
+    "y":"挖掘y位置",
+    "z":"挖掘z位置",
+}}
+
+挖掘一片附近的某种方块，适合采集资源
+{{
+    "action_type":"mine_nearby",
+    "name":"需要采集的方块名称",
+    "count":"挖掘数量",
+}}
 
 **放置动作**
 能够放置方块
 {{
     "action_type":"place_block",
     "block":"方块名称",
-    "x":"放置位置",
-    "y":"放置位置",
-    "z":"放置位置",
+    "x":"放置x位置",
+    "y":"放置y位置",
+    "z":"放置z位置",
 }}
 
 **移动动作**
