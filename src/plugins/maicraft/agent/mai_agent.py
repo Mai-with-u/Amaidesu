@@ -63,6 +63,11 @@ class MaiAgent:
         # 初始化LLM客户端
         self.llm_client: Optional[LLMClient] = None
         self.llm_client_fast: Optional[LLMClient] = None
+        
+        
+        self.vlm: Optional[LLMClient] = None
+        
+
 
         # 初始化LLM和工具适配器
         # 延迟初始化
@@ -123,6 +128,19 @@ class MaiAgent:
             
             
             self.llm_client = LLMClient(model_config)
+            
+            model_config = ModelConfig(
+                model_name=self.config.vlm.model,
+                api_key=self.config.vlm.api_key,
+                base_url=self.config.vlm.base_url,
+                max_tokens=self.config.vlm.max_tokens,
+                temperature=self.config.vlm.temperature
+            )
+            
+            self.vlm = LLMClient(model_config)
+            global_environment.set_vlm(self.vlm)
+            
+            
             self.logger.info("[MaiAgent] LLM客户端初始化成功")
             
             
@@ -131,9 +149,12 @@ class MaiAgent:
             self.logger.info(f"[MaiAgent] 获取到 {len(self.action_tools)} 个可用工具")
             self.openai_tools = convert_mcp_tools_to_openai_format(self.action_tools)
 
+            await self._start_block_cache_viewer()
+            
             # 创建并启动环境更新器
             self.environment_updater = EnvironmentUpdater(
                 mcp_client = self.mcp_client,
+                block_cache_viewer = self.block_cache_viewer,
                 update_interval=0.1,  # 默认5秒更新间隔
             )
             
@@ -156,7 +177,7 @@ class MaiAgent:
             self.logger.info("[MaiAgent] 初始化完成")
 
             # 启动方块缓存预览窗口（后台，不阻塞事件循环）
-            await self._start_block_cache_viewer()
+            
             
             
             self.inventory_old:List[Any] = []
@@ -293,6 +314,7 @@ class MaiAgent:
             self.block_cache_viewer = BlockCacheViewer(update_interval_seconds=0.6)
             # 使用 asyncio.to_thread 符合用户偏好，避免阻塞事件循环
             import asyncio
+            asyncio.create_task(self.block_cache_viewer.run_loop())
             asyncio.create_task(asyncio.to_thread(self.block_cache_viewer.run))
             self._viewer_started = True
             self.logger.info("[MaiAgent] 方块缓存预览窗口已启动（每3秒刷新）")
@@ -373,18 +395,21 @@ class MaiAgent:
                 
                 if self.mode == "main_action":
                     prompt = prompt_manager.generate_prompt("minecraft_excute_task_thinking", **input_data)
+                    self.logger.info(f"[MaiAgent] 执行任务提示词: {prompt}")
                 elif self.mode == "task_action":
                     input_data["to_do_list"] = self.to_do_list.__str__()
                     input_data["task_done_list"] = self._format_task_done_list()
                     input_data["goal"] = self.goal
                     prompt = prompt_manager.generate_prompt("minecraft_excute_task_action", **input_data)
+                    self.logger.info(f"\033[38;5;153m[MaiAgent] 执行任务提示词: {prompt}\033[0m")
                 elif self.mode == "move_action":
                     prompt = prompt_manager.generate_prompt("minecraft_excute_move_action", **input_data)
+                    self.logger.info(f"\033[38;5;208m[MaiAgent] 执行任务提示词: {prompt}\033[0m")
                 elif self.mode == "craft_action":
                     prompt = prompt_manager.generate_prompt("minecraft_excute_craft_action", **input_data)
                     
                     
-                self.logger.info(f"[MaiAgent] 执行任务提示词: {prompt}")
+                
                 
                 
                 thinking = await self.llm_client.simple_chat(prompt)
@@ -485,20 +510,19 @@ class MaiAgent:
             
             ok, summary = await recipe_finder.craft_item_smart(item, count, global_environment.inventory, global_environment.block_position)
             if ok:
-                result.result_str = f"智能合成成功：{item} x{count}\n{summary}\n"
+                result.result_str = f"合成成功：{item} x{count}\n{summary}\n"
             else:
-                result.result_str = f"智能合成未完成：{item} x{count}\n{summary}\n"
+                result.result_str = f"合成未完成：{item} x{count}\n{summary}\n"
             return result
         
             
 
         elif action_type == "mine_block":
-            name = json_obj.get("name")
             x = json_obj.get("x")
             y = json_obj.get("y")
             z = json_obj.get("z")
-            args = {"name": name, "x": x, "y": y, "z": z}
-            result.result_str = f"尝试挖掘：{name} 位置：{x},{y},{z}\n"
+            args = {"x": x, "y": y, "z": z}
+            result.result_str = f"尝试挖掘位置：{x},{y},{z}\n"
             call_result = await self.mcp_client.call_tool_directly("mine_block", args)
             is_success, result_content = await self.parse_action_result(action_type, args, call_result)
             if is_success:
@@ -510,7 +534,7 @@ class MaiAgent:
             count = json_obj.get("count")
             args = {"name": name, "count": count}
             result.result_str = f"尝试采集：{name} 数量：{count}\n"
-            call_result = await self.mcp_client.call_tool_directly("mine_nearby", args)
+            call_result = await self.mcp_client.call_tool_directly("mine_block", args)
             is_success, result_content = await self.parse_action_result(action_type, args, call_result)
             if is_success:
                 result.result_str += translate_mine_nearby_tool_result(result_content)

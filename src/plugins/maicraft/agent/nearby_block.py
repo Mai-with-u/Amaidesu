@@ -2,8 +2,8 @@ from src.plugins.maicraft.agent.block_cache.block_cache import global_block_cach
 from src.plugins.maicraft.agent.environment import global_environment
 from .basic_info import BlockPosition
 from ..openai_client.llm_request import LLMClient
-from ..openai_client.modelconfig import ModelConfig
-from ..config import MaicraftConfig
+from src.plugins.maicraft.openai_client.modelconfig import ModelConfig
+from src.plugins.maicraft.config import MaicraftConfig
 from src.utils.logger import get_logger
 
 logger = get_logger("NearbyBlockManager")

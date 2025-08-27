@@ -49,7 +49,7 @@ async def run_interactive():
 
         while True:
             # 使用 EnvironmentUpdater 获取背包与方块缓存（每轮刷新一次）
-            updater = EnvironmentUpdater(client, update_interval=1)
+            updater = EnvironmentUpdater(mcp_client=client, block_cache_viewer=None, update_interval=1)
             await updater.perform_update()
             inventory: List[Any] = global_environment.inventory or []
             block_pos = global_environment.block_position

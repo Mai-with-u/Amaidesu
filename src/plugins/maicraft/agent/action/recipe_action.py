@@ -283,6 +283,8 @@ class RecipeFinder:
                 seen_hashes.add(hash_val)
                 unique_recipes.append(recipe)
         
+        self.logger.info(f"[RecipeFinder] 获取到 {item_name} 的配方：\n{unique_recipes}\n")
+        
         return unique_recipes
 
     async def check_craft_feasibility(self, target_item: str, quantity: int, use_crafting_table: bool, inventory: list) -> tuple:
@@ -697,7 +699,10 @@ class RecipeFinder:
                         steps = await self._plan_crafting_steps(item_norm, count, False, inventory)
                         logs: list[str] = ["附近无工作台。按步骤合成："]
                         for step_item, step_count, step_use_table in steps:
-                            args = {"item": step_item, "count": step_count}
+                            if step_use_table:
+                                args = {"item": step_item, "count": step_count}
+                            else:
+                                args = {"item": step_item, "count": step_count, "without_crafting_table": True}
                             call_result = await self.mcp_client.call_tool_directly("craft_item", args)
                             result_text = "".join([getattr(c, "text", "") for c in getattr(call_result, "content", [])]) if hasattr(call_result, 'content') else str(call_result)
                             ok_step, detail = parse_craft_result_text(result_text, "")

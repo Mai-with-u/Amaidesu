@@ -140,7 +140,6 @@ class BlockCacheRenderer:
         # 保存当前图像用于半透明合成
         self._current_img = img
 
-
         # 基于邻居的简单遮挡剔除：若 +x、+y、+z 三方向均有方块，则认为该方块被完全遮挡
         occupied: Set[Tuple[int, int, int]] = set()
         for _b in blocks:
@@ -470,23 +469,31 @@ class BlockCacheRenderer:
 
     def _poly(self, draw: ImageDraw.ImageDraw, points: List[Tuple[int, int]], color: Tuple[int, int, int, int]) -> None:
         """绘制支持半透明合成的多边形。alpha<255 时在临时图层绘制并合成。"""
-        if len(color) == 4 and color[3] < 255 and getattr(self, "_current_img", None) is not None:
-            w, h = self._current_img.size
-            layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-            layer_draw = ImageDraw.Draw(layer, "RGBA")
-            layer_draw.polygon(points, fill=color)
-            self._current_img.alpha_composite(layer)
+        if len(color) == 4 and color[3] < 255 and hasattr(self, "_current_img") and self._current_img is not None:
+            try:
+                w, h = self._current_img.size
+                layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+                layer_draw = ImageDraw.Draw(layer, "RGBA")
+                layer_draw.polygon(points, fill=color)
+                self._current_img.alpha_composite(layer)
+            except (AttributeError, Exception):
+                # 如果合成失败，回退到直接绘制
+                draw.polygon(points, fill=color)
         else:
             draw.polygon(points, fill=color)
 
     def _line(self, draw: ImageDraw.ImageDraw, p1: Tuple[int, int], p2: Tuple[int, int],
               color: Tuple[int, int, int, int], width: int) -> None:
-        if len(color) == 4 and color[3] < 255 and getattr(self, "_current_img", None) is not None:
-            w, h = self._current_img.size
-            layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-            layer_draw = ImageDraw.Draw(layer, "RGBA")
-            layer_draw.line([p1, p2], fill=color, width=width)
-            self._current_img.alpha_composite(layer)
+        if len(color) == 4 and color[3] < 255 and hasattr(self, "_current_img") and self._current_img is not None:
+            try:
+                w, h = self._current_img.size
+                layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+                layer_draw = ImageDraw.Draw(layer, "RGBA")
+                layer_draw.line([p1, p2], fill=color, width=width)
+                self._current_img.alpha_composite(layer)
+            except (AttributeError, Exception):
+                # 如果合成失败，回退到直接绘制
+                draw.line([p1, p2], fill=color, width=width)
         else:
             draw.line([p1, p2], fill=color, width=width)
 

@@ -36,7 +36,6 @@ def init_templates() -> None:
 挖掘某个位置指定的方块
 {{
     "action_type":"mine_block",
-    "name":"需要挖掘的方块名称",
     "x":"挖掘x位置",
     "y":"挖掘y位置",
     "z":"挖掘z位置",

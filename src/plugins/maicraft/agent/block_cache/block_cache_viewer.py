@@ -4,13 +4,17 @@
 """
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Optional, Tuple
 
 import pygame
 
 from .renderer import BlockCacheRenderer, RenderConfig
+from src.plugins.maicraft.agent.environment import global_environment
+from src.utils.logger import get_logger
 
+logger = get_logger("BlockCacheViewer")
 
 class BlockCacheViewer:
     def __init__(self,
@@ -24,6 +28,7 @@ class BlockCacheViewer:
             center: Optional[Tuple[float, float, float]] = None,
             radius: Optional[float] = None) -> None:
         cfg: RenderConfig = self.renderer.config
+        
 
         pygame.init()
         window = pygame.display.set_mode((cfg.image_width, cfg.image_height))
@@ -54,6 +59,21 @@ class BlockCacheViewer:
             clock.tick(60)
 
         pygame.quit()
+        
+    
+        
+    
+    async def run_loop(self):
+        while True:
+            await self.update_overview()
+            await asyncio.sleep(20)
+    
+    async def update_overview(self):
+        renderer = self.renderer
+        renderer.render_to_base64()
+        image_base64 = renderer.get_last_render_base64(image_format="PNG", data_uri=True)
+        global_environment.overview_base64 = image_base64
+        await global_environment.get_overview_str()
 
 
 __all__ = ["BlockCacheViewer"]

@@ -9,6 +9,7 @@ from datetime import datetime
 from src.utils.logger import get_logger
 from .basic_info import Player, Position, Entity, Event, BlockPosition
 from src.plugins.maicraft.agent.block_cache.block_cache import global_block_cache
+from src.plugins.maicraft.openai_client.llm_request import LLMClient
 
 logger = get_logger("EnvironmentInfo")
 
@@ -35,6 +36,8 @@ class EnvironmentInfo:
         self.level: int = 0
         self.oxygen: int = 0
 
+        self.overview_base64 = ""
+        self.overview_str = ""
         
         # 物品栏
         self.inventory: List[Any] = field(default_factory=list)
@@ -66,6 +69,25 @@ class EnvironmentInfo:
         
         # 时间戳
         self.last_update: Optional[datetime] = None
+        
+    def set_vlm(self, vlm: LLMClient):
+        self.vlm = vlm
+        
+    async def get_overview_str(self) -> str:
+        if not self.vlm:
+            return ""
+        prompt = """
+你是一个经验丰富的Minecraft玩家，现在你正在一个Minecraft世界中，请根据你看到的画面，描述你周围的环境。
+黄色箭头代表玩家位置，黄色线条代表了玩家走过的路线
+周围黑色的区域代表还未探索的区域，不是没有方块的区域
+请你根据这幅鸟瞰图大致描述 xyz各个方向的地形和物品 
+        """
+        
+        logger.info(f"prompt: {prompt}")
+        result = await self.vlm.simple_vision(prompt, self.overview_base64)
+        self.overview_str = result
+        return result
+        
 
     def update_from_observation(self, observation_data: Dict[str, Any]) -> None:
         """从观察数据更新环境信息"""
@@ -416,6 +438,13 @@ class EnvironmentInfo:
                 lines.append(f"  {i}. {entity.name} (ID: {entity.id}, 类型: {entity.type})")
                 lines.append(f"     位置: X={pos.x:.2f}, Y={pos.y:.2f}, Z={pos.z:.2f}")
         lines.append("")
+        
+        
+        if self.overview_str:
+            lines.append("【周围环境鸟瞰】")
+            lines.append(self.overview_str)
+            lines.append("")
+        
         
         lines.append("=" * 10)
         

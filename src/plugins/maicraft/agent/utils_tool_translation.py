@@ -2,7 +2,7 @@ import json
 from typing import Any
 
 
-def translate_move_tool_result(self, result: Any, arguments: Any = None) -> str:
+def translate_move_tool_result(result: Any, arguments: Any = None) -> str:
     """
     翻译move工具的执行结果，使其更可读
     
@@ -66,7 +66,7 @@ def translate_move_tool_result(self, result: Any, arguments: Any = None) -> str:
         # 如果解析失败，返回原始结果
         return str(result)
 
-def translate_craft_item_tool_result(self, result: Any) -> str:
+def translate_craft_item_tool_result(result: Any) -> str:
     """
     翻译craft_item工具的执行结果，使其更可读
     
@@ -113,13 +113,13 @@ def translate_craft_item_tool_result(self, result: Any) -> str:
         # 如果解析失败，返回原始结果
         return str(result)
 
-def translate_mine_nearby_tool_result(self, result: Any) -> str:
+def translate_mine_nearby_tool_result(result: Any) -> str:
     """
     翻译mine_nearby工具的执行结果，使其更可读
     """
-    return self._translate_mine_block_tool_result(result)
+    return translate_mine_block_tool_result(result)
 
-def translate_mine_block_tool_result(self, result: Any) -> str:
+def translate_mine_block_tool_result(result: Any) -> str:
     """
     翻译mine_block工具的执行结果，使其更可读
     
@@ -167,7 +167,7 @@ def translate_mine_block_tool_result(self, result: Any) -> str:
         # 如果解析失败，返回原始结果
         return str(result)
     
-def translate_place_block_tool_result(self, result: Any, arguments: Any = None) -> str:
+def translate_place_block_tool_result(result: Any, arguments: Any = None) -> str:
     """
     翻译place_block工具的执行结果，使其更可读
     """
@@ -188,7 +188,7 @@ def translate_place_block_tool_result(self, result: Any, arguments: Any = None) 
     return "放置方块成功"
         
 
-def translate_chat_tool_result(self, result: Any) -> str:
+def translate_chat_tool_result(result: Any) -> str:
     """
     翻译chat工具的执行结果，使其更可读
     

@@ -12,12 +12,14 @@ from src.utils.logger import get_logger
 from src.plugins.maicraft.agent.environment import global_environment
 import json
 from src.plugins.maicraft.agent.block_cache.block_cache import global_block_cache
+from src.plugins.maicraft.agent.block_cache.block_cache_viewer import BlockCacheViewer
 
 class EnvironmentUpdater:
     """环境信息定期更新器"""
     
     def __init__(self, 
                  mcp_client,
+                 block_cache_viewer,
                  update_interval: int = 3,
                  ):
         """
@@ -31,7 +33,7 @@ class EnvironmentUpdater:
         self.mcp_client = mcp_client
         self.update_interval = update_interval
         self.logger = get_logger("EnvironmentUpdater")
-        
+        self.block_cache_viewer:BlockCacheViewer = block_cache_viewer
         
         # 更新状态
         self.is_running = False
@@ -116,10 +118,7 @@ class EnvironmentUpdater:
                     await asyncio.sleep(0.1)  # 暂停时短暂休眠
                     continue
                 
-                # 执行更新
-                start_time = time.time()
                 await self.perform_update()
-                update_duration = time.time() - start_time
                 
                 # 等待下次更新
                 await asyncio.sleep(self.update_interval)
@@ -129,6 +128,10 @@ class EnvironmentUpdater:
                 await asyncio.sleep(1)  # 出错时等待1秒再继续
         
         self.logger.info("[EnvironmentUpdater] 异步更新循环已结束")
+
+            
+        
+    
     
     async def perform_update(self):
         """执行单次环境更新（异步版本）"""
@@ -143,7 +146,7 @@ class EnvironmentUpdater:
                 try:
                     
                     global_environment.update_from_observation(environment_data)
-                    self.logger.debug(f"[EnvironmentUpdater] 全局环境信息已更新，最后更新: {global_environment.last_update}")
+                    # self.logger.info(f"[EnvironmentUpdater] 全局环境信息已更新，最后更新: {global_environment.last_update}")
                 except Exception as e:
                     self.logger.error(f"[EnvironmentUpdater] 更新全局环境信息失败: {e}")
                     self.logger.error(traceback.format_exc())
