@@ -442,7 +442,9 @@ class MaiAgent:
                         task_result.message = f"新任务: {result.new_task}"
                         return task_result
                     elif result.progress:
-                        task.progress = result.progress
+                        update_task = self.to_do_list.get_task_by_id(result.task_id)
+                        if update_task:
+                            update_task.progress = result.progress
                     elif result.new_task_id:
                         task_result.status = "change"
                         task_result.message = f"当前任务未完成，切换到任务: {result.new_task_id}"

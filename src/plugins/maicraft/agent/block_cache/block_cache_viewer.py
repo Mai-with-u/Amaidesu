@@ -64,7 +64,7 @@ class BlockCacheViewer:
         
     
     async def run_loop(self):
-        while True:
+        while False:
             await self.update_overview()
             await asyncio.sleep(20)
     
