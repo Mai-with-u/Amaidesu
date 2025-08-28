@@ -1,33 +1,37 @@
+from typing import List
+
 class ToDoItem:
     def __init__(self, details: str, done_criteria: str, progress: str):
-        self.details:str = details
-        self.done_criteria:str = done_criteria
-        self.progress:str = progress
-        self.done:bool = False
+        self.details: str = details
+        self.done_criteria: str = done_criteria
+        self.progress: str = progress
+        self.done: bool = False
 
-        self.id:str = ""
+        self.id: str = ""
         
     def __str__(self):
         if self.done:
-            return f"已完成的任务详情：{self.details}\n"
-        return f"任务（未完成）详情：{self.details}\nprogress：{self.progress}\n完成条件：{self.done_criteria}"
+            return f"（已完成）详情：{self.details}\nprogress：已完成，无需更新\n"
+        return f"（未完成）详情：{self.details}\n完成条件：{self.done_criteria}\nprogress：{self.progress}\n"
 
 class ToDoList:
     def __init__(self):
-        self.items:list[ToDoItem] = []
+        self.items: List[ToDoItem] = []
         
-        self.is_done:bool = False
-        self.need_edit:str = ""
+        self.is_done: bool = False
+        self.need_edit: str = ""
         
-    def add_task(self, details: str, done_criteria: str):
+    def add_task(self, details: str, done_criteria: str) -> ToDoItem:
         to_do_item = ToDoItem(details, done_criteria, "尚未开始")
         to_do_item.id = str(len(self.items)+1)
         self.items.append(to_do_item)
         
+        return to_do_item
+        
     def __str__(self):
         summary = ""
         for item in self.items:
-            summary += f"任务(id:{item.id})，{item}\n"
+            summary += f"task(id:{item.id})，{item}\n"
         return summary
 
     
@@ -39,6 +43,17 @@ class ToDoList:
         for item in self.items:
             if item.id == id:
                 return item
+            
+            
+        import re
+        match = re.search(r'\d+', str(id))
+        if match:
+            new_id = match.group(0)
+            
+        for item in self.items:
+            if item.id == new_id:
+                return item
+            
         return None
 
     

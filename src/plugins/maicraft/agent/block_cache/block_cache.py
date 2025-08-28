@@ -3,6 +3,10 @@
 用于缓存和管理所有获取过的方块信息
 支持位置更新、查询和统计功能
 """
+import json
+import os
+import asyncio
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Set, Any
 from datetime import datetime
 from collections import defaultdict
@@ -14,7 +18,7 @@ logger = get_logger("BlockCache")
 
 class CachedBlock:
     """缓存的方块信息"""
-    def __init__(self, block_type: int, position: BlockPosition, last_seen: datetime, first_seen: datetime, seen_count: int = 1) -> None:
+    def __init__(self, block_type: str, position: BlockPosition, last_seen: datetime, first_seen: datetime, seen_count: int = 1) -> None:
         self.block_type = block_type
         self.position = position
         self.last_seen = last_seen
@@ -32,6 +36,17 @@ class CachedBlock:
             "seen_count": self.seen_count
         }
     
+    @classmethod
+    def from_dict(cls, data: dict) -> 'CachedBlock':
+        """从字典创建对象"""
+        return cls(
+            block_type=data["block_type"],
+            position=BlockPosition(data["position"]),
+            last_seen=datetime.fromisoformat(data["last_seen"]),
+            first_seen=datetime.fromisoformat(data["first_seen"]),
+            seen_count=data["seen_count"]
+        )
+    
     def __hash__(self):
         """使对象可哈希，用于集合操作"""
         return hash((self.position.x, self.position.y, self.position.z))
@@ -45,22 +60,22 @@ class CachedBlock:
 
 class BlockCache:
     """方块缓存管理器"""
-    def __init__(self):
+    def __init__(self, cache_file: str = None, auto_save_interval: int = None):
         """
         初始化方块缓存
         
         Args:
-            max_cache_size: 最大缓存方块数量
-            cleanup_interval: 清理间隔（秒）
+            cache_file: 缓存文件路径，如果为None则使用默认路径
+            auto_save_interval: 自动保存间隔（秒），如果为None则从配置文件读取或使用默认值30秒
         """
         # 主缓存：位置 -> 方块信息
         self._position_cache: Dict[BlockPosition, CachedBlock] = dict()
         
         # 类型索引：方块类型 -> 位置集合
-        self._type_index: Dict[int, Set[Tuple[float, float, float]]] = defaultdict(set)
+        self._type_index: Dict[str, Set[BlockPosition]] = defaultdict(set)
         
         # 名称索引：方块名称 -> 位置集合
-        self._name_index: Dict[str, Set[Tuple[float, float, float]]] = defaultdict(set)
+        self._name_index: Dict[str, Set[BlockPosition]] = defaultdict(set)
         
         # 统计信息
         self._stats = {
@@ -71,7 +86,190 @@ class BlockCache:
             "last_cleanup": datetime.now()
         }
         
-        logger.info("方块缓存系统初始化完成")
+        # 缓存文件配置
+        if cache_file is None:
+            # 使用默认路径：插件目录下的cache子目录
+            plugin_dir = Path(__file__).parent.parent.parent.parent
+            cache_dir = plugin_dir / "cache"
+            cache_dir.mkdir(exist_ok=True)
+            self._cache_file = cache_dir / "block_cache.json"
+        else:
+            self._cache_file = Path(cache_file)
+            self._cache_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        # 自动保存间隔配置
+        if auto_save_interval is None:
+            self._auto_save_interval = self._get_config_auto_save_interval()
+        else:
+            self._auto_save_interval = auto_save_interval
+        
+        self._auto_save_task = None
+        
+        # 从文件加载缓存
+        self._load_cache()
+        
+        # 启动自动保存任务
+        self._start_auto_save()
+        
+        logger.info(f"方块缓存系统初始化完成，缓存文件：{self._cache_file}")
+        logger.info(f"自动保存间隔：{self._auto_save_interval}秒")
+    
+    def _get_config_auto_save_interval(self) -> int:
+        """从配置文件读取自动保存间隔"""
+        try:
+            # 尝试读取配置文件
+            config_file = Path(__file__).parent.parent.parent.parent / "config.toml"
+            if config_file.exists():
+                import tomllib
+                with open(config_file, 'rb') as f:
+                    config = tomllib.load(f)
+                
+                block_cache_config = config.get("block_cache", {})
+                return block_cache_config.get("auto_save_interval", 30)
+        except Exception as e:
+            logger.debug(f"读取配置文件失败，使用默认值: {e}")
+        
+        return 30  # 默认30秒
+    
+    def _load_cache(self):
+        """从文件加载缓存"""
+        try:
+            if self._cache_file.exists():
+                with open(self._cache_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                # 加载方块数据
+                blocks_data = data.get("blocks", {})
+                loaded_count = 0
+                
+                for pos_key, block_data in blocks_data.items():
+                    try:
+                        # 解析位置键 "x,y,z"
+                        x, y, z = map(int, pos_key.split(','))
+                        position = BlockPosition({"x": x, "y": y, "z": z})
+                        
+                        # 创建缓存方块对象
+                        cached_block = CachedBlock.from_dict(block_data)
+                        
+                        # 添加到缓存
+                        self._position_cache[position] = cached_block
+                        self._type_index[cached_block.block_type].add(position)
+                        
+                        loaded_count += 1
+                    except Exception as e:
+                        logger.warning(f"加载方块缓存数据失败 {pos_key}: {e}")
+                        continue
+                
+                # 加载统计信息
+                stats_data = data.get("stats", {})
+                if stats_data:
+                    for key, value in stats_data.items():
+                        if key in self._stats:
+                            if key in ["last_cleanup"] and isinstance(value, str):
+                                try:
+                                    self._stats[key] = datetime.fromisoformat(value)
+                                except:
+                                    pass
+                            else:
+                                self._stats[key] = value
+                
+                logger.info(f"从文件加载了 {loaded_count} 个方块缓存")
+            else:
+                logger.info("缓存文件不存在，将创建新的缓存")
+        except Exception as e:
+            logger.error(f"加载缓存文件失败: {e}")
+    
+    def _save_cache(self):
+        """保存缓存到文件"""
+        try:
+            # 准备保存数据
+            save_data = {
+                "blocks": {},
+                "stats": self._serialize_stats(),
+                "last_save": datetime.now().isoformat(),
+                "cache_version": "1.0"
+            }
+            
+            # 转换方块数据为可序列化格式
+            for position, block in self._position_cache.items():
+                pos_key = f"{position.x},{position.y},{position.z}"
+                save_data["blocks"][pos_key] = block.to_dict()
+            
+            # 保存到文件
+            with open(self._cache_file, 'w', encoding='utf-8') as f:
+                json.dump(save_data, f, ensure_ascii=False, indent=2)
+            
+            logger.debug(f"缓存已保存到文件: {self._cache_file}")
+        except Exception as e:
+            logger.error(f"保存缓存文件失败: {e}")
+    
+    def _serialize_stats(self) -> dict:
+        """序列化统计信息，将datetime对象转换为字符串"""
+        serialized_stats = {}
+        for key, value in self._stats.items():
+            if isinstance(value, datetime):
+                serialized_stats[key] = value.isoformat()
+            else:
+                serialized_stats[key] = value
+        return serialized_stats
+    
+    def _start_auto_save(self):
+        """启动自动保存任务"""
+        async def auto_save_loop():
+            while True:
+                try:
+                    await asyncio.sleep(self._auto_save_interval)
+                    self._save_cache()
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    logger.error(f"自动保存任务出错: {e}")
+        
+        # 创建异步任务
+        try:
+            loop = asyncio.get_event_loop()
+            self._auto_save_task = loop.create_task(auto_save_loop())
+        except RuntimeError:
+            # 如果没有事件循环，使用asyncio.create_task
+            self._auto_save_task = asyncio.create_task(auto_save_loop())
+        
+        logger.info("自动保存任务已启动")
+    
+    def stop_auto_save(self):
+        """停止自动保存任务"""
+        if self._auto_save_task and not self._auto_save_task.done():
+            self._auto_save_task.cancel()
+            logger.info("自动保存任务已停止")
+    
+    def force_save(self):
+        """强制保存缓存"""
+        logger.info("强制保存缓存...")
+        self._save_cache()
+    
+    def clear_cache(self):
+        """清空缓存"""
+        self._position_cache.clear()
+        self._type_index.clear()
+        self._name_index.clear()
+        
+        # 重置统计信息
+        self._stats = {
+            "total_blocks_cached": 0,
+            "total_updates": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "last_cleanup": datetime.now()
+        }
+        
+        logger.info("缓存已清空")
+    
+    def __del__(self):
+        """析构函数，确保保存缓存"""
+        try:
+            self.stop_auto_save()
+            self._save_cache()
+        except:
+            pass
     
     def update_from_blocks(self, blocks_data: Dict[str, Any]) -> int:
         """
@@ -190,12 +388,12 @@ class BlockCache:
             self._stats["cache_misses"] += 1
             return None
     
-    def get_blocks_by_type(self, block_type: int) -> List[CachedBlock]:
+    def get_blocks_by_type(self, block_type: str) -> List[CachedBlock]:
         """
         获取指定类型的所有方块
         
         Args:
-            block_type: 方块类型ID
+            block_type: 方块类型名称
             
         Returns:
             方块列表
@@ -256,7 +454,7 @@ class BlockCache:
         if not self._type_index[block.block_type]:
             del self._type_index[block.block_type]
         
-        logger.debug(f"移除方块缓存: {block.block_name} at ({x}, {y}, {z})")
+        logger.debug(f"移除方块缓存: {block.block_type} at ({x}, {y}, {z})")
         return True
     
     
@@ -270,7 +468,7 @@ class BlockCache:
                               max(1, self._stats["cache_hits"] + self._stats["cache_misses"]))
         }
     
-    def _update_indices(self, block: CachedBlock, new_type: int):
+    def _update_indices(self, block: CachedBlock, new_type: str):
         """更新索引信息"""
         old_type = block.block_type
         
@@ -289,5 +487,5 @@ class BlockCache:
         """检查指定位置是否有缓存的方块"""
         return position in self._position_cache
     
-# 全局单例实例
+# 全局实例
 global_block_cache = BlockCache()

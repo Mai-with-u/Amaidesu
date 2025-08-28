@@ -7,7 +7,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, List, Optional, Tuple, Dict, Set, Any
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
+from io import BytesIO
+import base64
 import colorsys
 
 from src.plugins.maicraft.agent.block_cache.block_cache import BlockCache, CachedBlock, global_block_cache
@@ -51,6 +53,8 @@ class BlockCacheRenderer:
         self.config = config or RenderConfig()
         # 玩家轨迹（世界坐标，渲染时投影）
         self._player_trail: List[Tuple[float, float, float]] = []
+        # 最近一次渲染的图像
+        self._last_image: Optional[Image.Image] = None
 
     # === 公共 API ===
     def render(self,
@@ -67,7 +71,44 @@ class BlockCacheRenderer:
         img = self._render_blocks(blocks, auto_center=center is None)
         if save_path:
             img.save(save_path, format="PNG")
+        # 缓存最近一次渲染的图像
+        try:
+            self._last_image = img.copy()
+        except Exception:
+            self._last_image = img
         return img
+
+    def render_to_base64(self,
+                          center: Optional[Tuple[float, float, float]] = None,
+                          radius: Optional[float] = None,
+                          image_format: str = "PNG",
+                          data_uri: bool = False) -> str:
+        """渲染并返回图像的Base64字符串。
+        - image_format: "PNG" 或 "JPEG"
+        - data_uri: True时返回 data URI 前缀
+        """
+        img = self.render(center=center, radius=radius, save_path=None)
+        buffer = BytesIO()
+        fmt = image_format.upper()
+        img.save(buffer, format=fmt)
+        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+        if data_uri:
+            mime = "image/png" if fmt == "PNG" else "image/jpeg"
+            return f"data:{mime};base64,{encoded}"
+        return encoded
+
+    def get_last_render_base64(self, image_format: str = "PNG", data_uri: bool = False) -> Optional[str]:
+        """返回最近一次渲染图像的Base64字符串；若还未渲染则返回None。"""
+        if self._last_image is None:
+            return None
+        buffer = BytesIO()
+        fmt = image_format.upper()
+        self._last_image.save(buffer, format=fmt)
+        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+        if data_uri:
+            mime = "image/png" if fmt == "PNG" else "image/jpeg"
+            return f"data:{mime};base64,{encoded}"
+        return encoded
 
     # === 内部方法 ===
     def _collect_blocks(self,
@@ -99,6 +140,21 @@ class BlockCacheRenderer:
         # 保存当前图像用于半透明合成
         self._current_img = img
 
+        # 基于邻居的简单遮挡剔除：若 +x、+y、+z 三方向均有方块，则认为该方块被完全遮挡
+        occupied: Set[Tuple[int, int, int]] = set()
+        for _b in blocks:
+            occupied.add((int(_b.position.x), int(_b.position.y), int(_b.position.z)))
+
+        visible_blocks: List[CachedBlock] = []
+        for _b in blocks:
+            _x, _y, _z = int(_b.position.x), int(_b.position.y), int(_b.position.z)
+            if (
+                (_x + 1, _y, _z) in occupied and
+                (_x, _y + 1, _z) in occupied and
+                (_x, _y, _z + 1) in occupied
+            ):
+                continue
+            visible_blocks.append(_b)
 
         # 将世界坐标直接投影到等距坐标（不在世界坐标中做平移），避免小数平移引起的 round 抖动
         projected_raw: List[Tuple[int, int, float, CachedBlock]] = []
@@ -106,7 +162,7 @@ class BlockCacheRenderer:
         max_px = -10**9
         min_py = 10**9
         max_py = -10**9
-        for b in blocks:
+        for b in visible_blocks:
             sx, sy = self._iso_project(b.position.x, b.position.y, b.position.z)
             depth = b.position.x + b.position.y + b.position.z
             projected_raw.append((sx, sy, depth, b))
@@ -140,6 +196,10 @@ class BlockCacheRenderer:
                 dx -= center_x
                 dy -= center_y
 
+        # 视口尺寸
+        img_w, img_h = cfg.image_width, cfg.image_height
+        margin = 2
+
         for sx, sy, _h, b in projected_raw:
             bt_str = str(b.block_type).lower()
             face_colors = self._get_face_colors_for_type(b.block_type)
@@ -154,6 +214,17 @@ class BlockCacheRenderer:
 
             cxp = sx + dx
             cyp = sy + dy
+
+            # 屏幕外裁剪：估算该方块在屏幕上的包围盒（与 _draw_cube 几何一致）
+            tile_w = cfg.block_size
+            tile_h = cfg.block_size // 2
+            h = int(round(cfg.block_size * cfg.vertical_scale))
+            minx = cxp - tile_w - 2
+            maxx = cxp + tile_w + 2
+            miny = cyp - tile_h - 2 - 1
+            maxy = cyp + tile_h + h + 2
+            if maxx < -margin or minx > img_w + margin or maxy < -margin or miny > img_h + margin:
+                continue
 
             # 水体：3/4 高度半透明蓝色
             if "water" in bt_str:
@@ -206,6 +277,9 @@ class BlockCacheRenderer:
                 self._draw_player_marker(draw, px + dx, py + dy, cfg.block_size)
         except Exception:
             pass
+
+        # 绘制坐标轴方向标注（不包含图例说明）
+        self._draw_coordinate_axes(draw, dx, dy, cfg)
 
         # 清理当前图像引用
         self._current_img = None
@@ -395,23 +469,31 @@ class BlockCacheRenderer:
 
     def _poly(self, draw: ImageDraw.ImageDraw, points: List[Tuple[int, int]], color: Tuple[int, int, int, int]) -> None:
         """绘制支持半透明合成的多边形。alpha<255 时在临时图层绘制并合成。"""
-        if len(color) == 4 and color[3] < 255 and getattr(self, "_current_img", None) is not None:
-            w, h = self._current_img.size
-            layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-            layer_draw = ImageDraw.Draw(layer, "RGBA")
-            layer_draw.polygon(points, fill=color)
-            self._current_img.alpha_composite(layer)
+        if len(color) == 4 and color[3] < 255 and hasattr(self, "_current_img") and self._current_img is not None:
+            try:
+                w, h = self._current_img.size
+                layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+                layer_draw = ImageDraw.Draw(layer, "RGBA")
+                layer_draw.polygon(points, fill=color)
+                self._current_img.alpha_composite(layer)
+            except (AttributeError, Exception):
+                # 如果合成失败，回退到直接绘制
+                draw.polygon(points, fill=color)
         else:
             draw.polygon(points, fill=color)
 
     def _line(self, draw: ImageDraw.ImageDraw, p1: Tuple[int, int], p2: Tuple[int, int],
               color: Tuple[int, int, int, int], width: int) -> None:
-        if len(color) == 4 and color[3] < 255 and getattr(self, "_current_img", None) is not None:
-            w, h = self._current_img.size
-            layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-            layer_draw = ImageDraw.Draw(layer, "RGBA")
-            layer_draw.line([p1, p2], fill=color, width=width)
-            self._current_img.alpha_composite(layer)
+        if len(color) == 4 and color[3] < 255 and hasattr(self, "_current_img") and self._current_img is not None:
+            try:
+                w, h = self._current_img.size
+                layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+                layer_draw = ImageDraw.Draw(layer, "RGBA")
+                layer_draw.line([p1, p2], fill=color, width=width)
+                self._current_img.alpha_composite(layer)
+            except (AttributeError, Exception):
+                # 如果合成失败，回退到直接绘制
+                draw.line([p1, p2], fill=color, width=width)
         else:
             draw.line([p1, p2], fill=color, width=width)
 
@@ -437,6 +519,86 @@ class BlockCacheRenderer:
         ]
         draw.polygon(arrow, fill=(255, 210, 0, 255))
         draw.line(arrow + [arrow[0]], fill=(20, 20, 20, 255), width=2)
+
+    def _draw_coordinate_axes(self, draw: ImageDraw.ImageDraw, dx: int, dy: int, cfg: RenderConfig) -> None:
+        """绘制坐标轴方向标注"""
+        # 轴的长度（像素）
+        axis_length = cfg.block_size * 3
+        
+        # 起始点（左下角，留出边距）
+        margin = 50
+        start_x = margin
+        start_y = cfg.image_height - margin
+        
+        # 绘制X轴（红色，指向右）
+        x_end_x = start_x + axis_length
+        x_end_y = start_y
+        draw.line([(start_x, start_y), (x_end_x, x_end_y)], fill=(255, 0, 0, 255), width=3)
+        # X轴箭头
+        self._draw_axis_arrow(draw, (x_end_x, x_end_y), (1, 0), (255, 0, 0, 255))
+        # X轴标签
+        self._draw_axis_label(draw, "X", (x_end_x + 6, x_end_y - 10), (255, 0, 0, 255))
+        
+        # 绘制Z轴（蓝色，指向左上方，等距投影）
+        z_end_x = start_x - axis_length // 2
+        z_end_y = start_y - axis_length // 4
+        draw.line([(start_x, start_y), (z_end_x, z_end_y)], fill=(0, 0, 255, 255), width=3)
+        # Z轴箭头
+        self._draw_axis_arrow(draw, (z_end_x, z_end_y), (-0.5, -0.25), (0, 0, 255, 255))
+        # Z轴标签
+        self._draw_axis_label(draw, "Z", (z_end_x - 10, z_end_y - 14), (0, 0, 255, 255))
+        
+        # 绘制Y轴（绿色，指向上方）
+        y_end_x = start_x
+        y_end_y = start_y - axis_length
+        draw.line([(start_x, start_y), (y_end_x, y_end_y)], fill=(0, 255, 0, 255), width=3)
+        # Y轴箭头
+        self._draw_axis_arrow(draw, (y_end_x, y_end_y), (0, -1), (0, 255, 0, 255))
+        # Y轴标签
+        self._draw_axis_label(draw, "Y", (y_end_x - 8, y_end_y - 18), (0, 255, 0, 255))
+        
+        # 绘制原点标记
+        draw.ellipse([(start_x - 3, start_y - 3), (start_x + 3, start_y + 3)], 
+                    fill=(255, 255, 255, 255), outline=(0, 0, 0, 255), width=1)
+        # 不绘制图例
+
+    def _draw_axis_arrow(self, draw: ImageDraw.ImageDraw, pos: Tuple[int, int], 
+                         direction: Tuple[float, float], color: Tuple[int, int, int, int]) -> None:
+        """绘制轴箭头"""
+        x, y = pos
+        dx, dy = direction
+        
+        # 箭头大小
+        arrow_size = 8
+        
+        # 计算箭头的两个端点
+        perp_x, perp_y = -dy, dx  # 垂直方向
+        
+        # 箭头头部
+        arrow_tip = (x, y)
+        arrow_left = (int(x - arrow_size * dx + arrow_size * 0.5 * perp_x), 
+                     int(y - arrow_size * dy + arrow_size * 0.5 * perp_y))
+        arrow_right = (int(x - arrow_size * dx - arrow_size * 0.5 * perp_x), 
+                      int(y - arrow_size * dy - arrow_size * 0.5 * perp_y))
+        
+        # 绘制箭头
+        arrow_points = [arrow_tip, arrow_left, arrow_right]
+        draw.polygon(arrow_points, fill=color)
+
+    def _draw_axis_label(self, draw: ImageDraw.ImageDraw, label: str, pos: Tuple[int, int], 
+                         color: Tuple[int, int, int, int]) -> None:
+        """使用标准字体绘制轴标签，避免字体渲染异常"""
+        x, y = pos
+        try:
+            font = ImageFont.load_default()
+            draw.text((x, y), label, fill=color, font=font)
+        except Exception:
+            # 回退：若字体加载失败，使用小矩形代替
+            draw.rectangle([(x, y), (x + 6, y + 6)], fill=color)
+
+    def _draw_legend(self, draw: ImageDraw.ImageDraw, x: int, y: int, cfg: RenderConfig) -> None:
+        """保留占位函数，但不绘制任何图例（按需求移除图例显示）"""
+        return
 
 
 __all__ = ["BlockCacheRenderer", "RenderConfig"]

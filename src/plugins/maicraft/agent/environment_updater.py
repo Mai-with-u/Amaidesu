@@ -12,12 +12,14 @@ from src.utils.logger import get_logger
 from src.plugins.maicraft.agent.environment import global_environment
 import json
 from src.plugins.maicraft.agent.block_cache.block_cache import global_block_cache
+from src.plugins.maicraft.agent.block_cache.block_cache_viewer import BlockCacheViewer
 
 class EnvironmentUpdater:
     """环境信息定期更新器"""
     
     def __init__(self, 
                  mcp_client,
+                 block_cache_viewer,
                  update_interval: int = 3,
                  ):
         """
@@ -31,7 +33,7 @@ class EnvironmentUpdater:
         self.mcp_client = mcp_client
         self.update_interval = update_interval
         self.logger = get_logger("EnvironmentUpdater")
-        
+        self.block_cache_viewer:BlockCacheViewer = block_cache_viewer
         
         # 更新状态
         self.is_running = False
@@ -48,6 +50,9 @@ class EnvironmentUpdater:
         self.last_update_duration = 0.0
         self.average_update_duration = 0.0
         self.total_update_duration = 0.0
+        
+        # 事件处理相关
+        self.last_processed_tick: int = 0  # 记录最后处理的事件 gameTick
         
     
     def start(self) -> bool:
@@ -116,10 +121,7 @@ class EnvironmentUpdater:
                     await asyncio.sleep(0.1)  # 暂停时短暂休眠
                     continue
                 
-                # 执行更新
-                start_time = time.time()
                 await self.perform_update()
-                update_duration = time.time() - start_time
                 
                 # 等待下次更新
                 await asyncio.sleep(self.update_interval)
@@ -129,6 +131,10 @@ class EnvironmentUpdater:
                 await asyncio.sleep(1)  # 出错时等待1秒再继续
         
         self.logger.info("[EnvironmentUpdater] 异步更新循环已结束")
+
+            
+        
+    
     
     async def perform_update(self):
         """执行单次环境更新（异步版本）"""
@@ -143,7 +149,7 @@ class EnvironmentUpdater:
                 try:
                     
                     global_environment.update_from_observation(environment_data)
-                    self.logger.debug(f"[EnvironmentUpdater] 全局环境信息已更新，最后更新: {global_environment.last_update}")
+                    # self.logger.info(f"[EnvironmentUpdater] 全局环境信息已更新，最后更新: {global_environment.last_update}")
                 except Exception as e:
                     self.logger.error(f"[EnvironmentUpdater] 更新全局环境信息失败: {e}")
                     self.logger.error(traceback.format_exc())
@@ -214,12 +220,36 @@ class EnvironmentUpdater:
             if isinstance(results[2], dict) and results[2].get("ok"):
                 try:
                     recent_events = results[2].get("data", {})
-                    combined_data["data"]["recentEvents"] = recent_events.get("events", [])
+                    # 根据工具返回的数据结构，events 字段直接包含事件列表
+                    new_events = recent_events.get("events", [])
+                    
+                    # 更新 last_processed_tick 为最新的事件 tick
+                    old_tick = self.last_processed_tick  # 在条件块外定义
+                    if new_events:
+                        # 找到最大的 gameTick 值
+                        max_tick = max(event.get("gameTick", 0) for event in new_events if event.get("gameTick") is not None)
+                        # 每次获取后都更新 last_processed_tick 为最新事件的 gameTick
+                        self.last_processed_tick = max_tick + 5
+                        # self.logger.info(f"[EnvironmentUpdater] 更新 last_processed_tick: {old_tick} -> {self.last_processed_tick}")
+                    
+                    # 记录事件数量信息，用于调试
+                    # if old_tick == 0:
+                    #     self.logger.info(f"[EnvironmentUpdater] 首次获取事件，获取到 {len(new_events)} 个事件")
+                    # else:
+                    #     self.logger.info(f"[EnvironmentUpdater] 增量获取事件，获取到 {len(new_events)} 个新事件 (sinceTick: {old_tick})")
+                    
+                    # 将新事件添加到现有事件列表中，而不是替换
+                    combined_data["data"]["recentEvents"] = new_events
+                    # 同时保存统计信息
+                    combined_data["data"]["recentEventsStats"] = recent_events.get("stats", {})
+                    combined_data["data"]["supportedEventTypes"] = recent_events.get("supportedEventTypes", [])
                     combined_data["elapsed_ms"] = max(combined_data["elapsed_ms"], results[2].get("elapsed_ms", 0))
-                    self.logger.debug("[EnvironmentUpdater] 最近事件数据更新成功")
+                    self.logger.debug(f"[EnvironmentUpdater] 最近事件数据更新成功")
                 except Exception as e:
                     self.logger.warning(f"[EnvironmentUpdater] 处理最近事件数据时出错: {e}")
                     combined_data["data"]["recentEvents"] = []
+                    combined_data["data"]["recentEventsStats"] = {}
+                    combined_data["data"]["supportedEventTypes"] = []
             
             # 处理周围环境 - 玩家
             if isinstance(results[3], dict) and results[3].get("ok"):
@@ -293,11 +323,16 @@ class EnvironmentUpdater:
 
     async def _call_query_recent_events(self) -> Optional[Dict[str, Any]]:
         """调用query_recent_events工具"""
-        return await self._call_tool("query_recent_events", {})
+        return await self._call_tool("query_recent_events", {"sinceTick": self.last_processed_tick})
 
     async def _call_query_surroundings(self, env_type: str) -> Optional[Dict[str, Any]]:
         """调用query_surroundings工具"""
         return await self._call_tool("query_surroundings", {"type": env_type,"range":5,"useAbsoluteCoords":True})
+    
+    def reset_event_tracking(self):
+        """重置事件跟踪，清空 last_processed_tick"""
+        self.last_processed_tick = 0
+        self.logger.info("[EnvironmentUpdater] 事件跟踪已重置，last_processed_tick 设为 0")
     
     def __enter__(self):
         """上下文管理器入口"""

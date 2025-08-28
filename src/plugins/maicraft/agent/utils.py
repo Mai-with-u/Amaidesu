@@ -212,48 +212,46 @@ def format_executed_goals(goal_list: list[tuple[str, str, str]]) -> str:
     
     return "\n".join(lines)
 
-def parse_tag(text: str) -> List[tuple[str, str]]:
+def parse_thinking(thinking: str) -> tuple[str, str, dict, str]:
     """
-    解析字符串中所有的[xxxx:xxxx]标记对，只解析最外层的标记
-    
-    Args:
-        text: 输入字符串
-        
-    Returns:
-        包含(标记名, 标记值)元组的列表
-        
-    Example:
-        >>> parse_tag("Hello [name:John] and [age:25]")
-        [('name', 'John'), ('age', '25')]
-        >>> parse_tag("Hello [outer:[inner:value]]")
-        [('outer', '[inner:value]')]
+    解析思考结果
+    1. 先解析thinking中有没有json，如果有，就获取第一个json的完整内容
+    2. 拆分出第一个json前所有内容
+    返回: (是否成功, 思考结果, 第一个json对象, json前内容)
     """
-    import re
+    # 匹配第一个json对象（支持嵌套大括号）
+    def find_first_json(text):
+        stack = []
+        start = None
+        for i, c in enumerate(text):
+            if c == '{':
+                if not stack:
+                    start = i
+                stack.append('{')
+            elif c == '}':
+                if stack:
+                    stack.pop()
+                    if not stack and start is not None:
+                        return text[start:i+1], start, i+1
+        return None, None, None
+
+    json_obj = None
+    json_str, json_start, json_end = find_first_json(thinking)
+    json_before = ""
+    if json_str:
+        json_before = thinking[:json_start].strip()
+        try:
+            json_obj = parse_json(json_str)
+        except Exception:
+            logger.error(f"[MaiAgent] 解析思考结果时异常: {json_str}")
+    else:
+        json_before = thinking.strip()
+
+    # 移除json_before中的 ```json 和 ```
+    if "```json" in json_before:
+        json_before = json_before.replace("```json", "")
+    if "```" in json_before:
+        json_before = json_before.replace("```", "")
     
-    # 使用栈来匹配最外层的括号，只解析最外层的[xxxx:xxxx]格式
-    result = []
-    stack = []
-    start = -1
     
-    for i, char in enumerate(text):
-        if char == '[':
-            if not stack:  # 这是最外层的左括号
-                start = i
-            stack.append(char)
-        elif char == ']':
-            if stack:  # 有对应的左括号
-                stack.pop()
-                if not stack and start != -1:  # 这是最外层的右括号
-                    # 提取最外层的标记内容
-                    content = text[start + 1:i]
-                    # 检查是否包含冒号（标记格式）
-                    if ':' in content:
-                        # 分割标记名和标记值
-                        parts = content.split(':', 1)
-                        if len(parts) == 2:
-                            tag_name = parts[0].strip()
-                            tag_value = parts[1].strip()
-                            result.append((tag_name, tag_value))
-                    start = -1
-    
-    return result
+    return json_obj, json_before

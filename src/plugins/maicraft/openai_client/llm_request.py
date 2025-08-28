@@ -1,8 +1,10 @@
-import asyncio
-import json
+import os
+import base64
+import mimetypes
+from io import BytesIO
 from typing import List, Dict, Any, Optional, Union
 from openai import AsyncOpenAI
-from src.plugins.maicraft.config import MaicraftConfig, load_config_from_dict
+from PIL import Image
 from src.utils.logger import get_logger
 from src.plugins.maicraft.openai_client.modelconfig import ModelConfig
 
@@ -26,6 +28,56 @@ class LLMClient:
         )
         
         self.logger.info(f"LLM客户端初始化完成，模型: {self.model_config.model_name}")
+    
+    def _infer_mime_from_bytes(self, data: bytes) -> str:
+        """根据图片字节推断 MIME 类型，默认 image/png"""
+        try:
+            with Image.open(BytesIO(data)) as img:
+                format_to_mime = {
+                    "PNG": "image/png",
+                    "JPEG": "image/jpeg",
+                    "JPG": "image/jpeg",
+                    "WEBP": "image/webp",
+                    "GIF": "image/gif",
+                }
+                return format_to_mime.get(img.format, "image/png")
+        except Exception:
+            return "image/png"
+
+    def _path_or_url_to_data_url(self, image: Union[str, bytes]) -> str:
+        """将 URL/本地路径/字节 转为 URL 或 data URL"""
+        if isinstance(image, str):
+            if image.startswith("http://") or image.startswith("https://"):
+                return image
+            if os.path.exists(image) and os.path.isfile(image):
+                with open(image, "rb") as f:
+                    data = f.read()
+                mime, _ = mimetypes.guess_type(image)
+                if mime is None:
+                    mime = self._infer_mime_from_bytes(data)
+                b64 = base64.b64encode(data).decode("ascii")
+                return f"data:{mime};base64,{b64}"
+            return image
+        elif isinstance(image, (bytes, bytearray)):
+            data = bytes(image)
+            mime = self._infer_mime_from_bytes(data)
+            b64 = base64.b64encode(data).decode("ascii")
+            return f"data:{mime};base64,{b64}"
+        else:
+            raise TypeError("image 参数必须为 str(路径或URL) 或 bytes")
+
+    def _build_vision_user_content(self, prompt: str, images: Union[str, bytes, List[Union[str, bytes]]]) -> List[Dict[str, Any]]:
+        """构建多模态 user content 列表，兼容 OpenAI Chat Completions 识图格式"""
+        contents: List[Dict[str, Any]] = []
+        contents.append({"type": "text", "text": prompt})
+        image_list: List[Union[str, bytes]] = images if isinstance(images, list) else [images]
+        for img in image_list:
+            url_or_data = self._path_or_url_to_data_url(img)
+            contents.append({
+                "type": "image_url",
+                "image_url": {"url": url_or_data}
+            })
+        return contents
     
     async def chat_completion(
         self,
@@ -164,6 +216,73 @@ class LLMClient:
         return tool_calls
         
     
+    async def vision_completion(
+        self,
+        prompt: str,
+        images: Union[str, bytes, List[Union[str, bytes]]],
+        system_message: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """异步识图(多模态)调用，支持 URL/本地文件/字节 多图"""
+        try:
+            messages: List[Dict[str, Any]] = []
+            if system_message:
+                messages.append({"role": "system", "content": system_message})
+            user_content = self._build_vision_user_content(prompt, images)
+            messages.append({"role": "user", "content": user_content})
+
+            request_params: Dict[str, Any] = {
+                "model": self.model_config.model_name,
+                "messages": messages,
+                "temperature": temperature or self.model_config.temperature,
+            }
+            if max_tokens:
+                request_params["max_tokens"] = max_tokens
+            elif self.model_config.max_tokens:
+                request_params["max_tokens"] = self.model_config.max_tokens
+
+            self.logger.debug(f"发送VLM请求: {request_params}")
+            response = await self.client.chat.completions.create(**request_params)
+
+            result = {
+                "success": True,
+                "content": response.choices[0].message.content,
+                "model": response.model,
+                "usage": {
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                    "total_tokens": response.usage.total_tokens
+                },
+                "finish_reason": response.choices[0].finish_reason
+            }
+            return result
+        except Exception as e:
+            error_msg = f"VLM请求失败: {str(e)}"
+            self.logger.error(error_msg)
+            return {
+                "success": False,
+                "error": error_msg,
+                "content": None
+            }
+
+    async def simple_vision(
+        self,
+        prompt: str,
+        images: Union[str, bytes, List[Union[str, bytes]]],
+        system_message: Optional[str] = None
+    ) -> str:
+        """简化的识图接口，只返回文本内容"""
+        result = await self.vision_completion(
+            prompt=prompt,
+            images=images,
+            system_message=system_message
+        )
+        if result["success"]:
+            return result["content"]
+        else:
+            return f"错误: {result['error']}"
+
     def get_config_info(self) -> Dict[str, Any]:
         """获取配置信息
         

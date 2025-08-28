@@ -37,8 +37,12 @@ class PlaceAction:
         if self_position.x == x and (self_position.y == y or self_position.y == y+1) and self_position.z == z:
             edit += f"你不能放置方块到你自己的脚下(x={x},y={y},z={z})或头部(x={x},y={y+1},z={z})"
         
+        if edit:
+            return f"无法在{x},{y},{z}放置{block_type}，理由：{edit}\n",{}
+        return f"尝试在{x},{y},{z}放置{block_type}\n",{"block":block_type,"x":x,"y":y,"z":z}
+        
 
-        nearby_block_info = await self.nearby_block_manager.get_block_details_mix_str(self_position,f"{edit} 找一个适合放置{block_type}的坐标")
+        nearby_block_info = await self.nearby_block_manager.get_block_details_mix_str(self_position)
         
         if edit:
             suggest_position = edit
@@ -53,7 +57,7 @@ class PlaceAction:
         }
         prompt = prompt_manager.generate_prompt("minecraft_place_block", **input_data)
         
-        self.logger.info(f"[PlaceAction] 生成提示词: {prompt}")
+        # self.logger.info(f"[PlaceAction] 生成提示词: {prompt}")
         
         response = await self.llm_client.simple_chat(prompt)
         result_json = parse_json(response)

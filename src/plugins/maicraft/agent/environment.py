@@ -9,6 +9,7 @@ from datetime import datetime
 from src.utils.logger import get_logger
 from .basic_info import Player, Position, Entity, Event, BlockPosition
 from src.plugins.maicraft.agent.block_cache.block_cache import global_block_cache
+from src.plugins.maicraft.openai_client.llm_request import LLMClient
 
 logger = get_logger("EnvironmentInfo")
 
@@ -35,6 +36,8 @@ class EnvironmentInfo:
         self.level: int = 0
         self.oxygen: int = 0
 
+        self.overview_base64 = ""
+        self.overview_str = ""
         
         # 物品栏
         self.inventory: List[Any] = field(default_factory=list)
@@ -57,7 +60,7 @@ class EnvironmentInfo:
         
         
         # 最近事件
-        self.recent_events: List[Event] = field(default_factory=list)
+        self.recent_events: List[Event] = []
         
         # 系统状态
         self.status: str = ""
@@ -66,6 +69,25 @@ class EnvironmentInfo:
         
         # 时间戳
         self.last_update: Optional[datetime] = None
+        
+    def set_vlm(self, vlm: LLMClient):
+        self.vlm = vlm
+        
+    async def get_overview_str(self) -> str:
+        if not self.vlm:
+            return ""
+        prompt = """
+你是一个经验丰富的Minecraft玩家，现在你正在一个Minecraft世界中，请根据你看到的画面，描述你周围的环境。
+黄色箭头代表玩家位置，黄色线条代表了玩家走过的路线
+周围黑色的区域代表还未探索的区域，不是没有方块的区域
+请你根据这幅鸟瞰图大致描述 xyz各个方向的地形和物品 
+        """
+        
+        logger.info(f"prompt: {prompt}")
+        result = await self.vlm.simple_vision(prompt, self.overview_base64)
+        self.overview_str = result
+        return result
+        
 
     def update_from_observation(self, observation_data: Dict[str, Any]) -> None:
         """从观察数据更新环境信息"""
@@ -157,14 +179,33 @@ class EnvironmentInfo:
 
 
         # 更新最近事件 (来自 query_recent_events)
-        self.recent_events = []
-        for event_data in data.get("recentEvents", []):
+        new_events = data.get("recentEvents", [])
+        # logger.info(f"新增事件数量: {len(new_events)}")
+        
+        # 确保 recent_events 是列表类型
+        if not isinstance(self.recent_events, list):
+            logger.warning("recent_events 不是列表类型，重新初始化为空列表")
+            self.recent_events = []
+        
+        # 将新事件添加到现有事件列表中，而不是清空重写
+        for event_data in new_events:
+
+            
             try:
+                # 确定玩家名称
+                player_name = ""
+                if event_data.get("playerInfo"):
+                    player_name = event_data["playerInfo"].get("username", "")
+                elif event_data.get("player"):
+                    player_name = event_data["player"].get("username", "")
+                elif event_data.get("chatInfo"):
+                    player_name = event_data["chatInfo"].get("username", "")
+                
                 event = Event(
                     type=event_data.get("type", ""),
                     timestamp=event_data.get("gameTick", 0),  # 使用gameTick作为时间戳
                     server_id="",  # 新格式中没有serverId
-                    player_name=event_data.get("playerName", "")
+                    player_name=player_name
                 )
                 
                 # 根据事件类型设置特定属性
@@ -228,6 +269,56 @@ class EnvironmentInfo:
                         event.food = event_data.get("food", 0)
                         event.saturation = event_data.get("saturation", 0)
                 
+                # 处理聊天事件
+                if event.type == "chat" and event_data.get("chatInfo"):
+                    chat_info = event_data["chatInfo"]
+                    event.chat_text = chat_info.get("text", "")
+                    # 确保玩家名称正确设置
+                    if not event.player_name and chat_info.get("username"):
+                        event.player_name = chat_info.get("username", "")
+                    # 添加调试信息
+                
+                # 处理踢出事件
+                if event.type == "playerKick" and event_data.get("reason"):
+                    reason_data = event_data["reason"]
+                    if isinstance(reason_data, dict) and reason_data.get("value", {}).get("translate"):
+                        event.kick_reason = reason_data["value"]["translate"].get("value", "未知原因")
+                    else:
+                        event.kick_reason = str(reason_data)
+                
+                # 处理实体伤害事件
+                if event.type == "entityHurt" and event_data.get("entity"):
+                    entity_data = event_data["entity"]
+                    event.entity_name = entity_data.get("name", "")
+                    event.damage = event_data.get("damage", 0)
+                    # 保存实体位置信息
+                    if entity_data.get("position"):
+                        pos_data = entity_data["position"]
+                        if isinstance(pos_data, dict):
+                            event.entity_position = Position(
+                                x=pos_data.get("x", 0.0),
+                                y=pos_data.get("y", 0.0),
+                                z=pos_data.get("z", 0.0)
+                            )
+                
+                # 处理实体死亡事件
+                if event.type == "entityDeath" and event_data.get("entity"):
+                    entity_data = event_data["entity"]
+                    event.entity_name = entity_data.get("name", "")
+                    # 保存实体位置信息
+                    if entity_data.get("position"):
+                        pos_data = entity_data["position"]
+                        if isinstance(pos_data, dict):
+                            event.entity_position = Position(
+                                x=pos_data.get("x", 0.0),
+                                y=pos_data.get("y", 0.0),
+                                z=pos_data.get("z", 0.0)
+                            )
+                
+                # 处理天气变化事件
+                if event.type == "weatherChange":
+                    event.weather = event_data.get("weather", "")
+                
                 self.recent_events.append(event)
             except Exception as e:
                 # 记录事件处理错误，但继续处理其他事件
@@ -236,6 +327,14 @@ class EnvironmentInfo:
                 print(f"事件数据: {event_data}")
                 print(f"错误详情: {traceback.format_exc()}")
                 continue
+        
+        # 限制事件列表大小，避免无限增长（保留最近1000个事件）
+        if len(self.recent_events) > 1000:
+            removed_count = len(self.recent_events) - 1000
+            self.recent_events = self.recent_events[removed_count:]
+            # logger.info(f"事件列表已限制大小，移除了 {removed_count} 个旧事件，当前事件总数: {len(self.recent_events)}")
+        # else:
+        #     logger.info(f"事件列表更新完成，当前事件总数: {len(self.recent_events)}")
         
         # 更新周围环境 - 玩家 (来自 query_surroundings("players"))
         if "nearbyPlayers" in data:
@@ -323,13 +422,19 @@ class EnvironmentInfo:
     def get_position_str(self) -> str:
         """获取位置信息"""
         if self.block_position:
+            block_feet = global_block_cache.get_block(self.block_position.x, self.block_position.y, self.block_position.z)
+            if block_feet:
+                if block_feet.block_type == "water":
+                    block_on_feet_str = f"注意：你正在水(x={self.block_position.x},y={self.block_position.y},z={self.block_position.z})中，可能会受到水流的影响"
+                    
             block_on_feet = global_block_cache.get_block(self.block_position.x, self.block_position.y-1, self.block_position.z)
             if block_on_feet:
-                block_on_feet_str = f"你正站在方块 {block_on_feet.block_type} 上"
+                block_on_feet_str = f"你正站在方块 {block_on_feet.block_type} (x={block_on_feet.position.x},y={block_on_feet.position.y},z={block_on_feet.position.z}) 的上方"
             else:
-                block_on_feet_str = "脚下没有方块"
+                block_on_feet_str = "注意：脚下没有方块，你可能在方块边缘或正在下坠"
         position_str = f"""
-你现在的坐标(脚所在的坐标)是：x={self.block_position.x}, y={self.block_position.y}, z={self.block_position.z}，你有两格高，y代表高度
+请注意：
+你现在的坐标(脚所在的坐标)是：x={self.block_position.x}, y={self.block_position.y}, z={self.block_position.z}
 {block_on_feet_str}
         """
         return position_str
@@ -411,6 +516,99 @@ class EnvironmentInfo:
                 lines.append(f"     位置: X={pos.x:.2f}, Y={pos.y:.2f}, Z={pos.z:.2f}")
         lines.append("")
         
+        
+        if self.overview_str:
+            lines.append("【周围环境鸟瞰】")
+            lines.append(self.overview_str)
+            lines.append("")
+        
+        # 最近事件
+        lines.append("【最近事件】")
+        if self.recent_events:
+            # 限制显示最近的事件数量，避免信息过多
+            max_events = 10
+            recent_events_to_show = self.recent_events[-max_events:] if len(self.recent_events) > max_events else self.recent_events
+            
+            for i, event in enumerate(recent_events_to_show, 1):
+                event_desc = self._get_event_description(event)
+                # 添加格式化的时间戳信息
+                if event:
+                    timestamp_str = ""
+                    if event.timestamp:
+                        try:
+                            dt = datetime.fromtimestamp(event.timestamp)
+                            timestamp_str = f"[{dt.strftime('%H:%M:%S')}]"
+                        except (ValueError, OSError):
+                            # 如果时间戳转换失败，使用原始时间戳
+                            timestamp_str = f"[{event.timestamp:.1f}s]"
+                    lines.append(f"  {i}. {timestamp_str} {event_desc}")
+        else:
+            lines.append("  暂无最近事件记录")
+        lines.append("")
+        
+        lines.append("=" * 10)
+        
+        return "\n".join(lines)
+    
+    def get_chat_str(self) -> str:
+        """获取所有聊天事件的字符串表示"""
+        lines = ["【聊天记录】"]
+        
+        if not self.recent_events:
+            lines.append("暂无聊天记录")
+            return "\n".join(lines)
+        
+        # 筛选出聊天事件
+        chat_events = [event for event in self.recent_events if event.type == "chat"]
+        
+        if not chat_events:
+            lines.append("暂无聊天记录")
+            return "\n".join(lines)
+        
+        # 按时间戳排序（从旧到新）
+        sorted_chat_events = sorted(chat_events, key=lambda x: x.timestamp)
+        
+        # 限制显示的聊天数量，避免信息过多
+        max_chats = 30
+        chats_to_show = sorted_chat_events[-max_chats:] if len(sorted_chat_events) > max_chats else sorted_chat_events
+        
+        lines.append(f"最近 {len(chats_to_show)} 条聊天记录 (总计: {len(chat_events)} 条):")
+        lines.append("")
+        
+        # 重新编号，确保最新的聊天记录在最下方且编号连续
+        for i, event in enumerate(chats_to_show, 1):
+            # 格式化时间戳
+            timestamp_str = ""
+            if event.timestamp:
+                try:
+                    # 尝试将gameTick转换为可读时间
+                    # 假设1秒 = 20 ticks
+                    total_seconds = event.timestamp / 20
+                    minutes = int(total_seconds // 60)
+                    seconds = int(total_seconds % 60)
+                    
+                    # 对于Minecraft的gameTick，直接显示时间，不限制分钟数
+                    timestamp_str = f"[{minutes:02d}:{seconds:02d}]"
+                    
+                except (ValueError, OSError):
+                    # 如果转换失败，使用原始时间戳
+                    timestamp_str = f"[{event.timestamp}ticks]"
+            
+            # 获取聊天内容
+            chat_content = ""
+            if hasattr(event, 'chat_text') and event.chat_text:
+                chat_content = event.chat_text
+            else:
+                chat_content = "未知内容"
+            
+            # 获取玩家名称
+            player_name = event.player_name or "未知玩家"
+            
+            # 构建聊天行
+            chat_line = f"  {i}. {timestamp_str} {player_name}: {chat_content}"
+            lines.append(chat_line)
+        
+        lines.append("")
         lines.append("=" * 10)
         
         return "\n".join(lines)
@@ -418,8 +616,14 @@ class EnvironmentInfo:
     
     def _get_event_description(self, event: Event) -> str:
         """获取事件描述"""
-        base_desc = f"{event.type} - {event.player_name}"
         
+        # logger.info(f"事件: {event}")
+        
+        # 获取玩家名称，优先使用事件中的玩家名称
+        player_name = event.player_name or "未知玩家"
+        base_desc = f"{event.type} - {player_name}"
+        
+        # 根据事件类型生成详细描述
         if event.type == "playerMove" and event.old_position and event.new_position:
             old_pos = event.old_position
             new_pos = event.new_position
@@ -430,14 +634,270 @@ class EnvironmentInfo:
             pos = block.position
             return f"{base_desc} 破坏了 {block.name} 在 ({pos.x:.1f}, {pos.y:.1f}, {pos.z:.1f})"
         
+        elif event.type == "blockPlace" and event.block:
+            block = event.block
+            pos = block.position
+            return f"{base_desc} 放置了 {block.name} 在 ({pos.x:.1f}, {pos.y:.1f}, {pos.z:.1f})"
+        
         elif event.type == "experienceUpdate":
             return f"{base_desc} 经验值更新: {event.experience}, 等级: {event.level}"
         
         elif event.type == "healthUpdate":
-            return f"{base_desc} 生命值更新: {event.health}, 饥饿值: {event.food}"
+            health_info = f"生命值: {event.health}"
+            food_info = f"饥饿值: {event.food}"
+            saturation_info = f"饱和度: {event.saturation}" if event.saturation is not None else ""
+            
+            info_parts = [health_info, food_info]
+            if saturation_info:
+                info_parts.append(saturation_info)
+            
+            return f"{base_desc} 状态更新: {', '.join(info_parts)}"
+        
+        elif event.type == "playerJoin":
+            return f"{base_desc} 加入了游戏"
+        
+        elif event.type == "playerLeave":
+            return f"{base_desc} 离开了游戏"
+        
+        elif event.type == "playerDeath":
+            return f"{base_desc} 死亡了"
+        
+        elif event.type == "playerRespawn":
+            if event.new_position:
+                pos = event.new_position
+                return f"{base_desc} 重生于 ({pos.x:.1f}, {pos.y:.1f}, {pos.z:.1f})"
+            else:
+                return f"{base_desc} 重生了"
+        
+        elif event.type == "playerKick":
+            if hasattr(event, 'kick_reason') and event.kick_reason:
+                return f"{base_desc} 被踢出游戏: {event.kick_reason}"
+            else:
+                return f"{base_desc} 被踢出游戏"
+        
+        elif event.type == "entityHurt":
+            if hasattr(event, 'entity_name') and event.entity_name:
+                entity_name = event.entity_name
+                if hasattr(event, 'damage') and event.damage is not None:
+                    return f"{base_desc} 对 {entity_name} 造成了 {event.damage} 点伤害"
+                else:
+                    return f"{base_desc} 攻击了 {entity_name}"
+            else:
+                return f"{base_desc} 攻击了实体"
+        
+        elif event.type == "entityDeath":
+            if hasattr(event, 'entity_name') and event.entity_name:
+                entity_name = event.entity_name
+                if hasattr(event, 'entity_position') and event.entity_position:
+                    pos = event.entity_position
+                    return f"{base_desc} 击杀了 {entity_name} 在 ({pos.x:.1f}, {pos.y:.1f}, {pos.z:.1f})"
+                else:
+                    return f"{base_desc} 击杀了 {entity_name}"
+            else:
+                return f"{base_desc} 击杀了实体"
+        
+        elif event.type == "weatherChange":
+            if hasattr(event, 'weather') and event.weather:
+                return f"{base_desc} 天气变为: {event.weather}"
+            else:
+                return f"{base_desc} 天气发生了变化"
+        
+        elif event.type == "spawnPointReset":
+            return f"{base_desc} 重置了出生点"
         
         else:
-            return base_desc
+            return ""
+
+    @staticmethod
+    def compare_inventories(old_inventory: List[Dict[str, Any]], new_inventory: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        比较两个inventory的差异
+        
+        Args:
+            old_inventory: 旧的物品栏列表
+            new_inventory: 新的物品栏列表
+            
+        Returns:
+            包含差异信息的字典:
+            {
+                'added': [{'name': '物品名', 'count': 数量, 'slot': 槽位}],
+                'removed': [{'name': '物品名', 'count': 数量, 'slot': 槽位}],
+                'changed': [{'name': '物品名', 'old_count': 旧数量, 'new_count': 新数量, 'slot': 槽位}],
+                'summary': '差异摘要文本'
+            }
+        """
+        # 创建物品名称到物品信息的映射，用于快速查找
+        old_items = {}
+        new_items = {}
+        
+        # 处理旧物品栏
+        for item in old_inventory:
+            if isinstance(item, dict) and 'name' in item and item['name']:
+                item_name = item['name']
+                if item_name not in old_items:
+                    old_items[item_name] = []
+                old_items[item_name].append({
+                    'name': item_name,
+                    'count': item.get('count', 0),
+                    'slot': item.get('slot', 0)
+                })
+        
+        # 处理新物品栏
+        for item in new_inventory:
+            if isinstance(item, dict) and 'name' in item and item['name']:
+                item_name = item['name']
+                if item_name not in new_items:
+                    new_items[item_name] = []
+                new_items[item_name].append({
+                    'name': item_name,
+                    'count': item.get('count', 0),
+                    'slot': item.get('slot', 0)
+                })
+        
+        added = []
+        removed = []
+        changed = []
+        
+        # 检查新增的物品
+        for item_name, new_item_list in new_items.items():
+            if item_name not in old_items:
+                # 完全新增的物品
+                for new_item in new_item_list:
+                    added.append(new_item.copy())
+            else:
+                # 检查数量变化
+                old_item_list = old_items[item_name]
+                
+                # 简单的数量比较（假设相同名称的物品数量变化）
+                old_total_count = sum(item['count'] for item in old_item_list)
+                new_total_count = sum(item['count'] for item in new_item_list)
+                
+                if new_total_count > old_total_count:
+                    # 数量增加
+                    added.append({
+                        'name': item_name,
+                        'count': new_total_count - old_total_count,
+                        'slot': 'multiple'  # 多个槽位
+                    })
+                elif new_total_count < old_total_count:
+                    # 数量减少
+                    removed.append({
+                        'name': item_name,
+                        'count': old_total_count - new_total_count,
+                        'slot': 'multiple'  # 多个槽位
+                    })
+                
+                # 检查具体槽位的变化
+                for new_item in new_item_list:
+                    new_slot = new_item['slot']
+                    new_count = new_item['count']
+                    
+                    # 查找相同槽位的旧物品
+                    old_item_in_slot = None
+                    for old_item in old_item_list:
+                        if old_item['slot'] == new_slot:
+                            old_item_in_slot = old_item
+                            break
+                    
+                    if old_item_in_slot is None:
+                        # 这个槽位新增了物品
+                        added.append(new_item.copy())
+                    elif old_item_in_slot['count'] != new_count:
+                        # 这个槽位的物品数量发生了变化
+                        changed.append({
+                            'name': item_name,
+                            'old_count': old_item_in_slot['count'],
+                            'new_count': new_count,
+                            'slot': new_slot
+                        })
+        
+        # 检查移除的物品
+        for item_name, old_item_list in old_items.items():
+            if item_name not in new_items:
+                # 完全移除的物品
+                for old_item in old_item_list:
+                    removed.append(old_item.copy())
+            else:
+                # 检查具体槽位的移除
+                new_item_list = new_items[item_name]
+                for old_item in old_item_list:
+                    old_slot = old_item['slot']
+                    old_count = old_item['count']
+                    
+                    # 查找相同槽位的新物品
+                    new_item_in_slot = None
+                    for new_item in new_item_list:
+                        if new_item['slot'] == old_slot:
+                            new_item_in_slot = new_item
+                            break
+                    
+                    if new_item_in_slot is None:
+                        # 这个槽位的物品被移除了
+                        removed.append(old_item.copy())
+        
+        # 生成摘要文本
+        summary_parts = []
+        if added:
+            added_summary = ", ".join([f"{item['name']}x{item['count']}" for item in added])
+            summary_parts.append(f"新增: {added_summary}")
+        
+        if removed:
+            removed_summary = ", ".join([f"{item['name']}x{item['count']}" for item in removed])
+            summary_parts.append(f"减少: {removed_summary}")
+        
+        if changed:
+            changed_summary = ", ".join([f"{item['name']} {item['old_count']}→{item['new_count']}" for item in changed])
+            summary_parts.append(f"变化: {changed_summary}")
+        
+        if not summary_parts:
+            summary = "物品栏没有变化"
+        else:
+            summary = "; ".join(summary_parts)
+        
+        return {
+            'added': added,
+            'removed': removed,
+            'changed': changed,
+            'summary': summary
+        }
+
+    @staticmethod
+    def get_inventory_diff_text(old_inventory: List[Dict[str, Any]], new_inventory: List[Dict[str, Any]]) -> str:
+        """
+        获取两个inventory差异的可读文本
+        
+        Args:
+            old_inventory: 旧的物品栏列表
+            new_inventory: 新的物品栏列表
+            
+        Returns:
+            格式化的差异文本
+        """
+        diff = EnvironmentInfo.compare_inventories(old_inventory, new_inventory)
+        
+        lines = ["【物品栏变化】"]
+        
+        if diff['added']:
+            lines.append("新增物品:")
+            for item in diff['added']:
+                slot_info = f" (槽位{item['slot']})" if item['slot'] != 'multiple' else ""
+                lines.append(f"  + {item['name']} x{item['count']}{slot_info}")
+        
+        if diff['removed']:
+            lines.append("减少物品:")
+            for item in diff['removed']:
+                slot_info = f" (槽位{item['slot']})" if item['slot'] != 'multiple' else ""
+                lines.append(f"  - {item['name']} x{item['count']}{slot_info}")
+        
+        if diff['changed']:
+            lines.append("数量变化:")
+            for item in diff['changed']:
+                lines.append(f"  {item['name']}: {item['old_count']} → {item['new_count']} (槽位{item['slot']})")
+        
+        if not any([diff['added'], diff['removed'], diff['changed']]):
+            lines.append("物品栏没有变化")
+        
+        return "\n".join(lines)
 
 
 # 全局环境信息实例
