@@ -99,6 +99,14 @@ class Event:
     health: Optional[int] = None
     food: Optional[int] = None
     saturation: Optional[int] = None
+    
+    # 新增属性支持更多事件类型
+    chat_text: Optional[str] = None  # 聊天消息内容
+    kick_reason: Optional[str] = None  # 踢出原因
+    entity_name: Optional[str] = None  # 实体名称
+    damage: Optional[int] = None  # 伤害值
+    entity_position: Optional[Position] = None  # 实体位置
+    weather: Optional[str] = None  # 天气信息
 
 
 @dataclass

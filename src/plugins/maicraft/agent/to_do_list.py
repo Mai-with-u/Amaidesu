@@ -11,8 +11,8 @@ class ToDoItem:
         
     def __str__(self):
         if self.done:
-            return f"已完成的任务详情：{self.details}\n"
-        return f"（未完成）详情：{self.details}\nprogress：{self.progress}\n完成条件：{self.done_criteria}"
+            return f"（已完成）详情：{self.details}\nprogress：已完成，无需更新\n"
+        return f"（未完成）详情：{self.details}\n完成条件：{self.done_criteria}\nprogress：{self.progress}\n"
 
 class ToDoList:
     def __init__(self):
@@ -31,7 +31,7 @@ class ToDoList:
     def __str__(self):
         summary = ""
         for item in self.items:
-            summary += f"任务(id:{item.id})，{item}\n"
+            summary += f"task(id:{item.id})，{item}\n"
         return summary
 
     

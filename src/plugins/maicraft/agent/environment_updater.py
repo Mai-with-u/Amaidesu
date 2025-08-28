@@ -51,6 +51,9 @@ class EnvironmentUpdater:
         self.average_update_duration = 0.0
         self.total_update_duration = 0.0
         
+        # 事件处理相关
+        self.last_processed_tick: int = 0  # 记录最后处理的事件 gameTick
+        
     
     def start(self) -> bool:
         """启动环境更新器"""
@@ -217,12 +220,36 @@ class EnvironmentUpdater:
             if isinstance(results[2], dict) and results[2].get("ok"):
                 try:
                     recent_events = results[2].get("data", {})
-                    combined_data["data"]["recentEvents"] = recent_events.get("events", [])
+                    # 根据工具返回的数据结构，events 字段直接包含事件列表
+                    new_events = recent_events.get("events", [])
+                    
+                    # 更新 last_processed_tick 为最新的事件 tick
+                    old_tick = self.last_processed_tick  # 在条件块外定义
+                    if new_events:
+                        # 找到最大的 gameTick 值
+                        max_tick = max(event.get("gameTick", 0) for event in new_events if event.get("gameTick") is not None)
+                        # 每次获取后都更新 last_processed_tick 为最新事件的 gameTick
+                        self.last_processed_tick = max_tick + 5
+                        # self.logger.info(f"[EnvironmentUpdater] 更新 last_processed_tick: {old_tick} -> {self.last_processed_tick}")
+                    
+                    # 记录事件数量信息，用于调试
+                    # if old_tick == 0:
+                    #     self.logger.info(f"[EnvironmentUpdater] 首次获取事件，获取到 {len(new_events)} 个事件")
+                    # else:
+                    #     self.logger.info(f"[EnvironmentUpdater] 增量获取事件，获取到 {len(new_events)} 个新事件 (sinceTick: {old_tick})")
+                    
+                    # 将新事件添加到现有事件列表中，而不是替换
+                    combined_data["data"]["recentEvents"] = new_events
+                    # 同时保存统计信息
+                    combined_data["data"]["recentEventsStats"] = recent_events.get("stats", {})
+                    combined_data["data"]["supportedEventTypes"] = recent_events.get("supportedEventTypes", [])
                     combined_data["elapsed_ms"] = max(combined_data["elapsed_ms"], results[2].get("elapsed_ms", 0))
-                    self.logger.debug("[EnvironmentUpdater] 最近事件数据更新成功")
+                    self.logger.debug(f"[EnvironmentUpdater] 最近事件数据更新成功")
                 except Exception as e:
                     self.logger.warning(f"[EnvironmentUpdater] 处理最近事件数据时出错: {e}")
                     combined_data["data"]["recentEvents"] = []
+                    combined_data["data"]["recentEventsStats"] = {}
+                    combined_data["data"]["supportedEventTypes"] = []
             
             # 处理周围环境 - 玩家
             if isinstance(results[3], dict) and results[3].get("ok"):
@@ -296,11 +323,16 @@ class EnvironmentUpdater:
 
     async def _call_query_recent_events(self) -> Optional[Dict[str, Any]]:
         """调用query_recent_events工具"""
-        return await self._call_tool("query_recent_events", {})
+        return await self._call_tool("query_recent_events", {"sinceTick": self.last_processed_tick})
 
     async def _call_query_surroundings(self, env_type: str) -> Optional[Dict[str, Any]]:
         """调用query_surroundings工具"""
         return await self._call_tool("query_surroundings", {"type": env_type,"range":5,"useAbsoluteCoords":True})
+    
+    def reset_event_tracking(self):
+        """重置事件跟踪，清空 last_processed_tick"""
+        self.last_processed_tick = 0
+        self.logger.info("[EnvironmentUpdater] 事件跟踪已重置，last_processed_tick 设为 0")
     
     def __enter__(self):
         """上下文管理器入口"""

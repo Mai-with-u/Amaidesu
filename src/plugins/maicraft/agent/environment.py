@@ -60,7 +60,7 @@ class EnvironmentInfo:
         
         
         # 最近事件
-        self.recent_events: List[Event] = field(default_factory=list)
+        self.recent_events: List[Event] = []
         
         # 系统状态
         self.status: str = ""
@@ -179,14 +179,33 @@ class EnvironmentInfo:
 
 
         # 更新最近事件 (来自 query_recent_events)
-        self.recent_events = []
-        for event_data in data.get("recentEvents", []):
+        new_events = data.get("recentEvents", [])
+        # logger.info(f"新增事件数量: {len(new_events)}")
+        
+        # 确保 recent_events 是列表类型
+        if not isinstance(self.recent_events, list):
+            logger.warning("recent_events 不是列表类型，重新初始化为空列表")
+            self.recent_events = []
+        
+        # 将新事件添加到现有事件列表中，而不是清空重写
+        for event_data in new_events:
+
+            
             try:
+                # 确定玩家名称
+                player_name = ""
+                if event_data.get("playerInfo"):
+                    player_name = event_data["playerInfo"].get("username", "")
+                elif event_data.get("player"):
+                    player_name = event_data["player"].get("username", "")
+                elif event_data.get("chatInfo"):
+                    player_name = event_data["chatInfo"].get("username", "")
+                
                 event = Event(
                     type=event_data.get("type", ""),
                     timestamp=event_data.get("gameTick", 0),  # 使用gameTick作为时间戳
                     server_id="",  # 新格式中没有serverId
-                    player_name=event_data.get("playerName", "")
+                    player_name=player_name
                 )
                 
                 # 根据事件类型设置特定属性
@@ -250,6 +269,56 @@ class EnvironmentInfo:
                         event.food = event_data.get("food", 0)
                         event.saturation = event_data.get("saturation", 0)
                 
+                # 处理聊天事件
+                if event.type == "chat" and event_data.get("chatInfo"):
+                    chat_info = event_data["chatInfo"]
+                    event.chat_text = chat_info.get("text", "")
+                    # 确保玩家名称正确设置
+                    if not event.player_name and chat_info.get("username"):
+                        event.player_name = chat_info.get("username", "")
+                    # 添加调试信息
+                
+                # 处理踢出事件
+                if event.type == "playerKick" and event_data.get("reason"):
+                    reason_data = event_data["reason"]
+                    if isinstance(reason_data, dict) and reason_data.get("value", {}).get("translate"):
+                        event.kick_reason = reason_data["value"]["translate"].get("value", "未知原因")
+                    else:
+                        event.kick_reason = str(reason_data)
+                
+                # 处理实体伤害事件
+                if event.type == "entityHurt" and event_data.get("entity"):
+                    entity_data = event_data["entity"]
+                    event.entity_name = entity_data.get("name", "")
+                    event.damage = event_data.get("damage", 0)
+                    # 保存实体位置信息
+                    if entity_data.get("position"):
+                        pos_data = entity_data["position"]
+                        if isinstance(pos_data, dict):
+                            event.entity_position = Position(
+                                x=pos_data.get("x", 0.0),
+                                y=pos_data.get("y", 0.0),
+                                z=pos_data.get("z", 0.0)
+                            )
+                
+                # 处理实体死亡事件
+                if event.type == "entityDeath" and event_data.get("entity"):
+                    entity_data = event_data["entity"]
+                    event.entity_name = entity_data.get("name", "")
+                    # 保存实体位置信息
+                    if entity_data.get("position"):
+                        pos_data = entity_data["position"]
+                        if isinstance(pos_data, dict):
+                            event.entity_position = Position(
+                                x=pos_data.get("x", 0.0),
+                                y=pos_data.get("y", 0.0),
+                                z=pos_data.get("z", 0.0)
+                            )
+                
+                # 处理天气变化事件
+                if event.type == "weatherChange":
+                    event.weather = event_data.get("weather", "")
+                
                 self.recent_events.append(event)
             except Exception as e:
                 # 记录事件处理错误，但继续处理其他事件
@@ -258,6 +327,14 @@ class EnvironmentInfo:
                 print(f"事件数据: {event_data}")
                 print(f"错误详情: {traceback.format_exc()}")
                 continue
+        
+        # 限制事件列表大小，避免无限增长（保留最近1000个事件）
+        if len(self.recent_events) > 1000:
+            removed_count = len(self.recent_events) - 1000
+            self.recent_events = self.recent_events[removed_count:]
+            # logger.info(f"事件列表已限制大小，移除了 {removed_count} 个旧事件，当前事件总数: {len(self.recent_events)}")
+        # else:
+        #     logger.info(f"事件列表更新完成，当前事件总数: {len(self.recent_events)}")
         
         # 更新周围环境 - 玩家 (来自 query_surroundings("players"))
         if "nearbyPlayers" in data:
@@ -445,7 +522,93 @@ class EnvironmentInfo:
             lines.append(self.overview_str)
             lines.append("")
         
+        # 最近事件
+        lines.append("【最近事件】")
+        if self.recent_events:
+            # 限制显示最近的事件数量，避免信息过多
+            max_events = 10
+            recent_events_to_show = self.recent_events[-max_events:] if len(self.recent_events) > max_events else self.recent_events
+            
+            for i, event in enumerate(recent_events_to_show, 1):
+                event_desc = self._get_event_description(event)
+                # 添加格式化的时间戳信息
+                if event:
+                    timestamp_str = ""
+                    if event.timestamp:
+                        try:
+                            dt = datetime.fromtimestamp(event.timestamp)
+                            timestamp_str = f"[{dt.strftime('%H:%M:%S')}]"
+                        except (ValueError, OSError):
+                            # 如果时间戳转换失败，使用原始时间戳
+                            timestamp_str = f"[{event.timestamp:.1f}s]"
+                    lines.append(f"  {i}. {timestamp_str} {event_desc}")
+        else:
+            lines.append("  暂无最近事件记录")
+        lines.append("")
         
+        lines.append("=" * 10)
+        
+        return "\n".join(lines)
+    
+    def get_chat_str(self) -> str:
+        """获取所有聊天事件的字符串表示"""
+        lines = ["【聊天记录】"]
+        
+        if not self.recent_events:
+            lines.append("暂无聊天记录")
+            return "\n".join(lines)
+        
+        # 筛选出聊天事件
+        chat_events = [event for event in self.recent_events if event.type == "chat"]
+        
+        if not chat_events:
+            lines.append("暂无聊天记录")
+            return "\n".join(lines)
+        
+        # 按时间戳排序（从旧到新）
+        sorted_chat_events = sorted(chat_events, key=lambda x: x.timestamp)
+        
+        # 限制显示的聊天数量，避免信息过多
+        max_chats = 30
+        chats_to_show = sorted_chat_events[-max_chats:] if len(sorted_chat_events) > max_chats else sorted_chat_events
+        
+        lines.append(f"最近 {len(chats_to_show)} 条聊天记录 (总计: {len(chat_events)} 条):")
+        lines.append("")
+        
+        # 重新编号，确保最新的聊天记录在最下方且编号连续
+        for i, event in enumerate(chats_to_show, 1):
+            # 格式化时间戳
+            timestamp_str = ""
+            if event.timestamp:
+                try:
+                    # 尝试将gameTick转换为可读时间
+                    # 假设1秒 = 20 ticks
+                    total_seconds = event.timestamp / 20
+                    minutes = int(total_seconds // 60)
+                    seconds = int(total_seconds % 60)
+                    
+                    # 对于Minecraft的gameTick，直接显示时间，不限制分钟数
+                    timestamp_str = f"[{minutes:02d}:{seconds:02d}]"
+                    
+                except (ValueError, OSError):
+                    # 如果转换失败，使用原始时间戳
+                    timestamp_str = f"[{event.timestamp}ticks]"
+            
+            # 获取聊天内容
+            chat_content = ""
+            if hasattr(event, 'chat_text') and event.chat_text:
+                chat_content = event.chat_text
+            else:
+                chat_content = "未知内容"
+            
+            # 获取玩家名称
+            player_name = event.player_name or "未知玩家"
+            
+            # 构建聊天行
+            chat_line = f"  {i}. {timestamp_str} {player_name}: {chat_content}"
+            lines.append(chat_line)
+        
+        lines.append("")
         lines.append("=" * 10)
         
         return "\n".join(lines)
@@ -453,8 +616,14 @@ class EnvironmentInfo:
     
     def _get_event_description(self, event: Event) -> str:
         """获取事件描述"""
-        base_desc = f"{event.type} - {event.player_name}"
         
+        # logger.info(f"事件: {event}")
+        
+        # 获取玩家名称，优先使用事件中的玩家名称
+        player_name = event.player_name or "未知玩家"
+        base_desc = f"{event.type} - {player_name}"
+        
+        # 根据事件类型生成详细描述
         if event.type == "playerMove" and event.old_position and event.new_position:
             old_pos = event.old_position
             new_pos = event.new_position
@@ -465,14 +634,79 @@ class EnvironmentInfo:
             pos = block.position
             return f"{base_desc} 破坏了 {block.name} 在 ({pos.x:.1f}, {pos.y:.1f}, {pos.z:.1f})"
         
+        elif event.type == "blockPlace" and event.block:
+            block = event.block
+            pos = block.position
+            return f"{base_desc} 放置了 {block.name} 在 ({pos.x:.1f}, {pos.y:.1f}, {pos.z:.1f})"
+        
         elif event.type == "experienceUpdate":
             return f"{base_desc} 经验值更新: {event.experience}, 等级: {event.level}"
         
         elif event.type == "healthUpdate":
-            return f"{base_desc} 生命值更新: {event.health}, 饥饿值: {event.food}"
+            health_info = f"生命值: {event.health}"
+            food_info = f"饥饿值: {event.food}"
+            saturation_info = f"饱和度: {event.saturation}" if event.saturation is not None else ""
+            
+            info_parts = [health_info, food_info]
+            if saturation_info:
+                info_parts.append(saturation_info)
+            
+            return f"{base_desc} 状态更新: {', '.join(info_parts)}"
+        
+        elif event.type == "playerJoin":
+            return f"{base_desc} 加入了游戏"
+        
+        elif event.type == "playerLeave":
+            return f"{base_desc} 离开了游戏"
+        
+        elif event.type == "playerDeath":
+            return f"{base_desc} 死亡了"
+        
+        elif event.type == "playerRespawn":
+            if event.new_position:
+                pos = event.new_position
+                return f"{base_desc} 重生于 ({pos.x:.1f}, {pos.y:.1f}, {pos.z:.1f})"
+            else:
+                return f"{base_desc} 重生了"
+        
+        elif event.type == "playerKick":
+            if hasattr(event, 'kick_reason') and event.kick_reason:
+                return f"{base_desc} 被踢出游戏: {event.kick_reason}"
+            else:
+                return f"{base_desc} 被踢出游戏"
+        
+        elif event.type == "entityHurt":
+            if hasattr(event, 'entity_name') and event.entity_name:
+                entity_name = event.entity_name
+                if hasattr(event, 'damage') and event.damage is not None:
+                    return f"{base_desc} 对 {entity_name} 造成了 {event.damage} 点伤害"
+                else:
+                    return f"{base_desc} 攻击了 {entity_name}"
+            else:
+                return f"{base_desc} 攻击了实体"
+        
+        elif event.type == "entityDeath":
+            if hasattr(event, 'entity_name') and event.entity_name:
+                entity_name = event.entity_name
+                if hasattr(event, 'entity_position') and event.entity_position:
+                    pos = event.entity_position
+                    return f"{base_desc} 击杀了 {entity_name} 在 ({pos.x:.1f}, {pos.y:.1f}, {pos.z:.1f})"
+                else:
+                    return f"{base_desc} 击杀了 {entity_name}"
+            else:
+                return f"{base_desc} 击杀了实体"
+        
+        elif event.type == "weatherChange":
+            if hasattr(event, 'weather') and event.weather:
+                return f"{base_desc} 天气变为: {event.weather}"
+            else:
+                return f"{base_desc} 天气发生了变化"
+        
+        elif event.type == "spawnPointReset":
+            return f"{base_desc} 重置了出生点"
         
         else:
-            return base_desc
+            return ""
 
     @staticmethod
     def compare_inventories(old_inventory: List[Dict[str, Any]], new_inventory: List[Dict[str, Any]]) -> Dict[str, Any]:

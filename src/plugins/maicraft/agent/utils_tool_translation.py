@@ -230,3 +230,123 @@ def translate_chat_tool_result(result: Any) -> str:
     except Exception:
         # 如果解析失败，返回原始结果
         return str(result)
+
+
+def translate_start_smelting_tool_result(result: Any) -> str:
+    """
+    翻译start_smelting工具的执行结果，使其更可读
+    
+    Args:
+        result: start_smelting工具的执行结果
+        
+    Returns:
+        翻译后的可读文本
+    """
+    try:
+        # 如果结果是字符串，尝试解析JSON
+        if isinstance(result, str):
+            try:
+                result_data = json.loads(result)
+            except json.JSONDecodeError:
+                return str(result)
+        else:
+            result_data = result
+        
+        # 检查是否是start_smelting工具的结果
+        if not isinstance(result_data, dict):
+            return str(result)
+        
+        # 提取关键信息
+        ok = result_data.get("ok", False)
+        data = result_data.get("data", {})
+        
+        if not ok:
+            return "开始熔炼失败，可能是物品不存在或缺少熔炉"
+        
+        # 提取熔炼信息
+        item_name = data.get("item", "未知物品")
+        count = data.get("count", 1)
+        furnace_position = data.get("furnacePosition", {})
+        
+        # 格式化熔炉位置信息
+        x = furnace_position.get("x", 0)
+        y = furnace_position.get("y", 0)
+        z = furnace_position.get("z", 0)
+        
+        # 构建可读文本
+        if count == 1:
+            readable_text = f"成功开始熔炼1个{item_name}，熔炉位置：({x}, {y}, {z})"
+        else:
+            readable_text = f"成功开始熔炼{count}个{item_name}，熔炉位置：({x}, {y}, {z})"
+        
+        return readable_text
+        
+    except Exception:
+        # 如果解析失败，返回原始结果
+        return str(result)
+
+
+def translate_collect_smelted_items_tool_result(result: Any) -> str:
+    """
+    翻译collect_smelted_items工具的执行结果，使其更可读
+    
+    Args:
+        result: collect_smelted_items工具的执行结果
+        
+    Returns:
+        翻译后的可读文本
+    """
+    try:
+        # 如果结果是字符串，尝试解析JSON
+        if isinstance(result, str):
+            try:
+                result_data = json.loads(result)
+            except json.JSONDecodeError:
+                return str(result)
+        else:
+            result_data = result
+        
+        # 检查是否是collect_smelted_items工具的结果
+        if not isinstance(result_data, dict):
+            return str(result)
+        
+        # 提取关键信息
+        ok = result_data.get("ok", False)
+        data = result_data.get("data", {})
+        
+        if not ok:
+            return "收集熔炼物品失败"
+        
+        # 提取收集信息
+        items = data.get("items", [])
+        total_count = data.get("totalCount", 0)
+        furnace_position = data.get("furnacePosition", {})
+        
+        # 格式化熔炉位置信息
+        x = furnace_position.get("x", 0)
+        y = furnace_position.get("y", 0)
+        z = furnace_position.get("z", 0)
+        
+        if not items:
+            return f"从熔炉位置 ({x}, {y}, {z}) 收集物品，但没有收集到任何物品"
+        
+        # 构建物品列表文本
+        item_texts = []
+        for item in items:
+            item_name = item.get("name", "未知物品")
+            item_count = item.get("count", 1)
+            if item_count == 1:
+                item_texts.append(f"1个{item_name}")
+            else:
+                item_texts.append(f"{item_count}个{item_name}")
+        
+        items_str = "、".join(item_texts)
+        
+        # 构建可读文本
+        readable_text = f"成功从熔炉位置 ({x}, {y}, {z}) 收集到：{items_str}，总计：{total_count}个物品"
+        
+        return readable_text
+        
+    except Exception:
+        # 如果解析失败，返回原始结果
+        return str(result)

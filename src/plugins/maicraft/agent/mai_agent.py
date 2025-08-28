@@ -13,10 +13,11 @@ from src.plugins.maicraft.agent.environment import global_environment, Environme
 from src.plugins.maicraft.agent.prompt_manager.prompt_manager import prompt_manager
 from src.plugins.maicraft.agent.prompt_manager.template import init_templates
 from src.plugins.maicraft.agent.prompt_manager.template_place import init_templates_place
-from .utils import parse_json, convert_mcp_tools_to_openai_format, parse_tool_result, filter_action_tools, extract_between
-from .tool_handler import ToolHandlerRegistry, PlaceBlockHandler
+from .utils import (
+    parse_json, convert_mcp_tools_to_openai_format, parse_tool_result, filter_action_tools, extract_between,
+    parse_thinking,
+)
 from src.plugins.maicraft.agent.to_do_list import ToDoList, ToDoItem
-from .memory.position_memory import FurnaceMemory, CraftingTableMemory
 from .action.recipe_action import recipe_finder
 import traceback
 from .nearby_block import NearbyBlockManager
@@ -31,6 +32,8 @@ from .utils_tool_translation import (
     translate_mine_block_tool_result, 
     translate_place_block_tool_result, 
     translate_chat_tool_result,
+    translate_start_smelting_tool_result,
+    translate_collect_smelted_items_tool_result,
 )
 
 class ThinkingJsonResult:
@@ -88,22 +91,17 @@ class MaiAgent:
         
         self.goal_list: list[tuple[str, str, str]] = []  # (goal, status, details)
 
-        self.goal = "制作合适的工具，挖到半组铁矿并制作一把铁镐"
+        self.goal = "以合适的步骤挖到3个钻石，制作成钻石镐"
 
         self.memo_list: list[str] = []
         
         self.on_going_task_id = ""
         
+        self.thinking_list: list[str] = []
+        
         
         self.to_do_list: ToDoList = ToDoList()
         self.task_done_list: list[tuple[bool, str, str]] = []
-        
-        # 工具处理器注册表
-        self.tool_handler_registry: ToolHandlerRegistry = ToolHandlerRegistry()
-        self.tool_handler_registry.register(PlaceBlockHandler())
-        
-        self.furnace_memory: FurnaceMemory = FurnaceMemory()
-        self.crafting_table_memory: CraftingTableMemory = CraftingTableMemory()
         
         # 方块缓存预览窗口
         self.block_cache_viewer: Optional[BlockCacheViewer] = None
@@ -247,6 +245,7 @@ class MaiAgent:
             "suggestion": suggestion,
             "position": global_environment.get_position_str(),
             "nearby_block_info": nearby_block_info,
+            "chat_str": global_environment.get_chat_str(),
         }
         prompt = prompt_manager.generate_prompt("minecraft_rewrite_task", **input_data)
         self.logger.info(f"[MaiAgent] 任务修改提示词: {prompt}")
@@ -284,6 +283,7 @@ class MaiAgent:
             "to_do_list": to_do_list.__str__(),
             "nearby_block_info": nearby_block_info,
             "position": global_environment.get_position_str(),
+            "chat_str": global_environment.get_chat_str(),
         }
         prompt = prompt_manager.generate_prompt("minecraft_to_do", **input_data)
         self.logger.info(f"[MaiAgent] 任务提议提示词: {prompt}")
@@ -361,14 +361,15 @@ class MaiAgent:
                     task_result.message = f"任务不存在: {self.on_going_task_id}"
                     return task_result
                 else:
-                    self.mode = "main_action"
+                    if self.mode == "task_action":
+                        self.mode = "main_action"
             
-            thinking_list: List[str] = []
+            
             
             # 限制思考上下文
             while True:
-                if len(thinking_list) > 20:
-                    thinking_list = thinking_list[-20:]
+                if len(self.thinking_list) > 20:
+                    self.thinking_list = self.thinking_list[-20:]
                     
                 if task:
                     self.logger.info(f"[MaiAgent]\n执行任务:\n {task} \n尝试")
@@ -386,14 +387,16 @@ class MaiAgent:
                     "task": task.__str__(),
                     "environment": environment_info,
                     # "executed_tools": executed_tools_str,
-                    "thinking_list": "\n".join(thinking_list),
+                    "thinking_list": "\n".join(self.thinking_list),
                     "nearby_block_info": nearby_block_info,
                     "position": global_environment.get_position_str(),
                     "memo_list": "\n".join(self.memo_list),
+                    "chat_str": global_environment.get_chat_str(),
                 }
                 
                 
                 if self.mode == "main_action":
+                    input_data["goal"] = self.goal
                     prompt = prompt_manager.generate_prompt("minecraft_excute_task_thinking", **input_data)
                     self.logger.info(f"[MaiAgent] 执行任务提示词: {prompt}")
                 elif self.mode == "task_action":
@@ -401,13 +404,13 @@ class MaiAgent:
                     input_data["task_done_list"] = self._format_task_done_list()
                     input_data["goal"] = self.goal
                     prompt = prompt_manager.generate_prompt("minecraft_excute_task_action", **input_data)
-                    self.logger.info(f"\033[38;5;153m[MaiAgent] 执行任务提示词: {prompt}\033[0m")
+                    # self.logger.info(f"\033[38;5;153m[MaiAgent] 执行任务提示词: {prompt}\033[0m")
                 elif self.mode == "move_action":
                     prompt = prompt_manager.generate_prompt("minecraft_excute_move_action", **input_data)
+                    # self.logger.info(f"\033[38;5;208m[MaiAgent] 执行任务提示词: {prompt}\033[0m")
+                elif self.mode == "container_action":
+                    prompt = prompt_manager.generate_prompt("minecraft_excute_container_action", **input_data)
                     self.logger.info(f"\033[38;5;208m[MaiAgent] 执行任务提示词: {prompt}\033[0m")
-                elif self.mode == "craft_action":
-                    prompt = prompt_manager.generate_prompt("minecraft_excute_craft_action", **input_data)
-                    
                     
                 
                 
@@ -415,7 +418,7 @@ class MaiAgent:
                 thinking = await self.llm_client.simple_chat(prompt)
                 # self.logger.info(f"[MaiAgent] 任务想法: {thinking}")
                 
-                json_obj, json_before = await self.parse_thinking(thinking, task)
+                json_obj, json_before = parse_thinking(thinking)
                 
                 time_str = time.strftime("%H:%M:%S", time.localtime())
                 
@@ -424,11 +427,11 @@ class MaiAgent:
                     self.logger.info(f"\033[32m[MaiAgent] 动作: {json_obj}\033[0m")
                     
                     if json_before:
-                        thinking_list.append(f"时间：{time_str} 思考结果：{json_before}")
+                        self.thinking_list.append(f"时间：{time_str} 思考结果：{json_before}")
                     
                     result = await self.excute_json(json_obj)
                     
-                    thinking_list.append(f"时间：{time_str} 执行结果：{result.result_str}")
+                    self.thinking_list.append(f"时间：{time_str} 执行结果：{result.result_str}")
                     if result.done:
                         update_task = self.to_do_list.get_task_by_id(result.task_id)
                         if update_task:
@@ -460,7 +463,7 @@ class MaiAgent:
                 else:
                     self.logger.info(f"[MaiAgent] 想法:{json_before}")
                     if json_before:
-                        thinking_list.append(f"时间：{time_str} 思考结果：{json_before}")
+                        self.thinking_list.append(f"时间：{time_str} 思考结果：{json_before}")
                     
 
         except Exception as e:
@@ -475,6 +478,7 @@ class MaiAgent:
         返回: ThinkingJsonResult
         """
         result = ThinkingJsonResult()
+        action_type = json_obj.get("action_type")
         
         if self.mode == "move_action":
             x=json_obj.get("x")
@@ -484,206 +488,183 @@ class MaiAgent:
             result.result_str = f"尝试移动到：{x},{y},{z}\n"
             
             call_result = await self.mcp_client.call_tool_directly("move", args)
-            is_success, result_content = await self.parse_action_result("move", args, call_result)
+            is_success, result_content = parse_tool_result(call_result)
             result.result_str += translate_move_tool_result(result_content, args)
 
             self.mode = "main_action"
             return result
-        
-        
-        action_type = json_obj.get("action_type")
-        if action_type == "move":
-            self.mode = "move_action"
-            reason = json_obj.get("reason")
-            result.result_str = f"选择进行移动动作: \n原因: {reason}\n"            
-            return result
-        
-        elif action_type == "abandon_craft":
-            reason = json_obj.get("reason")
-            result.result_str = f"放弃合成: \n原因: {reason}\n"
-            self.mode = "main_action"
-            return result
-        
-        elif action_type == "craft":
-            reason = json_obj.get("reason")
-            item = json_obj.get("item")
-            count = json_obj.get("count")
-            self.inventory_old = global_environment.inventory
-            
-            ok, summary = await recipe_finder.craft_item_smart(item, count, global_environment.inventory, global_environment.block_position)
-            if ok:
-                result.result_str = f"合成成功：{item} x{count}\n{summary}\n"
-            else:
-                result.result_str = f"合成未完成：{item} x{count}\n{summary}\n"
-            return result
-        
-            
-
-        elif action_type == "mine_block":
-            x = json_obj.get("x")
-            y = json_obj.get("y")
-            z = json_obj.get("z")
-            args = {"x": x, "y": y, "z": z}
-            result.result_str = f"尝试挖掘位置：{x},{y},{z}\n"
-            call_result = await self.mcp_client.call_tool_directly("mine_block", args)
-            is_success, result_content = await self.parse_action_result(action_type, args, call_result)
-            if is_success:
-                result.result_str += translate_mine_block_tool_result(result_content)
-            else:
-                result.result_str += f"挖掘失败: {result_content}"
-        elif action_type == "mine_nearby":
-            name = json_obj.get("name")
-            count = json_obj.get("count")
-            args = {"name": name, "count": count}
-            result.result_str = f"尝试采集：{name} 数量：{count}\n"
-            call_result = await self.mcp_client.call_tool_directly("mine_block", args)
-            is_success, result_content = await self.parse_action_result(action_type, args, call_result)
-            if is_success:
-                result.result_str += translate_mine_nearby_tool_result(result_content)
-            else:
-                result.result_str += f"采集失败: {result_content}"
-        elif action_type == "place_block":
-            block = json_obj.get("block")
-            x = json_obj.get("x")
-            y = json_obj.get("y")
-            z = json_obj.get("z")
-            
-            result_str, args = await self.place_action.place_action(block, x, y, z)            
-            result.result_str = result_str
-
-            if not args:
-                return result
-            
-            call_result = await self.mcp_client.call_tool_directly("place_block", args)
-            is_success, result_content = await self.parse_action_result(action_type, args, call_result)
-            result.result_str += translate_place_block_tool_result(result_content,args)
-
-        elif action_type == "chat":
-            message = json_obj.get("message")
-            args = {"message": message}
-            call_result = await self.mcp_client.call_tool_directly("chat", args)
-            is_success, result_content = await self.parse_action_result(action_type, args, call_result)
-            if is_success:
-                result.result_str = translate_chat_tool_result(result_content)
-            else:
-                result.result_str = f"聊天失败: {result_content}"
-        elif action_type == "get_recipe":
-            item = json_obj.get("item")
-            result.result_str = f"尝试查询：{item} 的合成表：\n"
-            recipe_str = await recipe_finder.find_recipe(item)
-            result.result_str += recipe_str
-        elif action_type == "add_memo":
-            memo = json_obj.get("memo")
-            result.result_str = f"添加备忘录: {memo}\n"
-            self.memo_list.append(memo)
-        # 任务动作
-        elif action_type == "update_task_list":
-            self.mode = "task_action"
-            reason = json_obj.get("reason")
-            result.result_str = f"选择进行修改任务列表: \n原因: {reason}\n"
-            return result
-        elif action_type == "change_task":
-            new_task_id = json_obj.get("new_task_id")
-            reason  = json_obj.get("reason")
-            result.new_task_id = new_task_id
-            result.result_str = f"选择更换任务: {new_task_id},原因是: {reason}\n"
-            self.on_going_task_id = new_task_id
-            return result
-        elif action_type == "rewrite_task_list":
-            reason = json_obj.get("reason")
-            result.rewrite = reason
-            result.result_str = f"选择修改任务列表: \n原因: {reason}\n"
-            self.mode = "task_action"
-            self.on_going_task_id = ""
-            return result
-        elif action_type == "update_task_progress":
-            progress = json_obj.get("progress")
-            done = json_obj.get("done")
-            task_id = json_obj.get("task_id")
-            
-            result.task_id = task_id
-            
-            if done:
-                result.done = done
-                result.progress = progress
-                result.result_str = "任务已完成"
+        elif self.mode == "container_action":
+            if action_type == "collect_smelted_items":
+                item = json_obj.get("item")
+                x = json_obj.get("x")
+                y = json_obj.get("y")
+                z = json_obj.get("z")
+                result.result_str = f"想要收集熔炼后的物品: {item}\n"
+                if x and y and z:
+                    args = {"item": item, "x": x, "y": y, "z": z}
+                else:
+                    args = {"item": item}
+                call_result = await self.mcp_client.call_tool_directly("collect_smelted_items", args)
+                is_success, result_content = parse_tool_result(call_result)
+                if is_success:
+                    result.result_str += translate_collect_smelted_items_tool_result(result_content)
+                else:
+                    result.result_str += f"收集熔炼物品失败: {result_content}"
                 self.mode = "main_action"
+            elif action_type == "start_smelting":
+                item = json_obj.get("item")
+                fuel = json_obj.get("fuel")
+                count = json_obj.get("count")
+                result.result_str = f"想要开始熔炼: {item} 燃料: {fuel} 数量: {count}\n"
+                args = {"item": item, "fuel": fuel, "count": count}
+                call_result = await self.mcp_client.call_tool_directly("start_smelting", args)
+                is_success, result_content = parse_tool_result(call_result)
+                if is_success:
+                    result.result_str += translate_start_smelting_tool_result(result_content)
+                else:
+                    result.result_str += f"开始熔炼失败: {result_content}"
+                self.mode = "main_action"
+
+            elif action_type == "craft":
+                item = json_obj.get("item")
+                count = json_obj.get("count")
+                result.result_str = f"想要合成: {item} 数量: {count}\n"
+                self.inventory_old = global_environment.inventory
+                
+                ok, summary = await recipe_finder.craft_item_smart(item, count, global_environment.inventory, global_environment.block_position)
+                if ok:
+                    result.result_str = f"合成成功：{item} x{count}\n{summary}\n"
+                else:
+                    result.result_str = f"合成未完成：{item} x{count}\n{summary}\n"
+                self.mode = "main_action"
+
+            elif action_type == "use_chest":
+                item = json_obj.get("item")
+                type = json_obj.get("type")
+                result.result_str = f"想要使用箱子: {item} 类型: {type}\n"
+                if type == "in":
+                    args = {"item": item, "action": "store"}
+                elif type == "out":
+                    args = {"item": item, "action": "withdraw"}
+                call_result = await self.mcp_client.call_tool_directly("use_chest", args)
+                is_success, result_content = parse_tool_result(call_result)
+                result.result_str += result_content
+                self.mode = "main_action"
+            else:
+                self.logger.warning(f"在合成模式，{self.mode} 不支持的action_type: {action_type}")
+                self.mode = "main_action"
+        elif self.mode == "task_action":
+            if action_type == "change_task":
+                new_task_id = json_obj.get("new_task_id")
+                reason  = json_obj.get("reason")
+                result.new_task_id = new_task_id
+                result.result_str = f"选择更换任务: {new_task_id},原因是: {reason}\n"
+                self.on_going_task_id = new_task_id
                 return result
-            result.result_str = f"任务进度已更新: {progress}"
-            result.progress = progress
-            self.mode = "main_action"
-        elif action_type == "create_new_task":
-            new_task = json_obj.get("new_task")
-            new_task_criteria = json_obj.get("new_task_criteria")
-            
-            # 创建并执行新任务
-            new_task_item = self.to_do_list.add_task(new_task, new_task_criteria)
-            self.on_going_task_id = new_task_item.id
-            self.mode = "main_action"
+            elif action_type == "rewrite_task_list":
+                reason = json_obj.get("reason")
+                result.rewrite = reason
+                result.result_str = f"选择修改任务列表: \n原因: {reason}\n"
+                self.mode = "task_action"
+                self.on_going_task_id = ""
+                return result
+            elif action_type == "update_task_progress":
+                progress = json_obj.get("progress")
+                done = json_obj.get("done")
+                task_id = json_obj.get("task_id")
+                
+                result.task_id = task_id
+                
+                if done:
+                    result.done = done
+                    result.progress = progress
+                    result.result_str = f"任务({task_id})已标记为完成"
+                    self.mode = "main_action"
+                    return result
+                result.result_str = f"任务({task_id})进度已更新: {progress}"
+                result.progress = progress
+                self.mode = "main_action"
+            elif action_type == "create_new_task":
+                new_task = json_obj.get("new_task")
+                new_task_criteria = json_obj.get("new_task_criteria")
+                
+                # 创建并执行新任务
+                new_task_item = self.to_do_list.add_task(new_task, new_task_criteria)
+                self.on_going_task_id = new_task_item.id
+                self.mode = "main_action"
         else:
-            self.logger.warning(f"[MaiAgent] 不支持的action_type: {action_type}")
+            if action_type == "move":
+                self.mode = "move_action"
+                reason = json_obj.get("reason")
+                result.result_str = f"选择进行移动动作: \n原因: {reason}\n"            
+                return result
+            elif action_type == "mine_block":
+                x = json_obj.get("x")
+                y = json_obj.get("y")
+                z = json_obj.get("z")
+                args = {"x": x, "y": y, "z": z,"digOnly": True}
+                result.result_str = f"尝试挖掘位置：{x},{y},{z}\n"
+                call_result = await self.mcp_client.call_tool_directly("mine_block", args)
+                is_success, result_content = parse_tool_result(call_result)
+                if is_success:
+                    result.result_str += translate_mine_block_tool_result(result_content)
+                else:
+                    result.result_str += f"挖掘失败: {result_content}"
+            elif action_type == "mine_nearby":
+                name = json_obj.get("name")
+                count = json_obj.get("count")
+                args = {"name": name, "count": count}
+                result.result_str = f"尝试采集：{name} 数量：{count}\n"
+                call_result = await self.mcp_client.call_tool_directly("mine_block", args)
+                is_success, result_content = parse_tool_result(call_result)
+                if is_success:
+                    result.result_str += translate_mine_nearby_tool_result(result_content)
+                else:
+                    result.result_str += f"采集失败: {result_content}"
+            elif action_type == "place_block":
+                block = json_obj.get("block")
+                x = json_obj.get("x")
+                y = json_obj.get("y")
+                z = json_obj.get("z")
+                
+                result_str, args = await self.place_action.place_action(block, x, y, z)            
+                result.result_str = result_str
+
+                if not args:
+                    return result
+                
+                call_result = await self.mcp_client.call_tool_directly("place_block", args)
+                is_success, result_content = parse_tool_result(call_result)
+                result.result_str += translate_place_block_tool_result(result_content,args)
+
+            elif action_type == "chat":
+                message = json_obj.get("message")
+                args = {"message": message}
+                call_result = await self.mcp_client.call_tool_directly("chat", args)
+                is_success, result_content = parse_tool_result(call_result)
+                if is_success:
+                    result.result_str = translate_chat_tool_result(result_content)
+                else:
+                    result.result_str = f"聊天失败: {result_content}"
+            elif action_type == "use_container":
+                reason = json_obj.get("reason")
+                result.result_str = f"想要使用容器，原因是: {reason}\n"
+                self.mode = "container_action"
+                return result
+            elif action_type == "add_memo":
+                memo = json_obj.get("memo")
+                result.result_str = f"添加备忘录: {memo}\n"
+                self.memo_list.append(memo)
+            # 任务动作
+            elif action_type == "update_task_list":
+                self.mode = "task_action"
+                reason = json_obj.get("reason")
+                result.result_str = f"选择进行修改任务列表: \n原因: {reason}\n"
+                return result
+            else:
+                self.logger.warning(f"[MaiAgent] {self.mode} 不支持的action_type: {action_type}")
+            
         
         return result
     
-    async def parse_action_result(self, action_type: str, arguments: dict, result: str) -> tuple[bool, str]:
-        """
-        解析动作执行结果
-        返回: 动作执行结果
-        """
-        handler = self.tool_handler_registry.find(action_type)
-        if handler is not None:
-            result = await handler.post_process(
-                tool_name=action_type,
-                arguments=arguments,
-                result=result,
-                environment=global_environment,
-                logger=self.logger,
-            )
-        
-        # 解析工具执行结果，判断是否真的成功
-        is_success, result_content = parse_tool_result(result)
-        return is_success, result_content
-    
-    async def parse_thinking(self, thinking: str, task: 'ToDoItem') -> tuple[str, str, dict, str]:
-        """
-        解析思考结果
-        1. 先解析thinking中有没有json，如果有，就获取第一个json的完整内容
-        2. 拆分出第一个json前所有内容
-        返回: (是否成功, 思考结果, 第一个json对象, json前内容)
-        """
-        # 匹配第一个json对象（支持嵌套大括号）
-        def find_first_json(text):
-            stack = []
-            start = None
-            for i, c in enumerate(text):
-                if c == '{':
-                    if not stack:
-                        start = i
-                    stack.append('{')
-                elif c == '}':
-                    if stack:
-                        stack.pop()
-                        if not stack and start is not None:
-                            return text[start:i+1], start, i+1
-            return None, None, None
 
-        json_obj = None
-        json_str, json_start, json_end = find_first_json(thinking)
-        json_before = ""
-        if json_str:
-            json_before = thinking[:json_start].strip()
-            try:
-                json_obj = parse_json(json_str)
-            except Exception:
-                self.logger.error(f"[MaiAgent] 解析思考结果时异常: {json_str}")
-        else:
-            json_before = thinking.strip()
-
-        # 移除json_before中的 ```json 和 ```
-        if "```json" in json_before:
-            json_before = json_before.replace("```json", "")
-        if "```" in json_before:
-            json_before = json_before.replace("```", "")
-        
-        
-        return json_obj, json_before
