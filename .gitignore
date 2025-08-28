@@ -189,3 +189,5 @@ MineLand/
 *.exe
 *mcp_servers.json
 .kiro/
+
+**/minecraft_json_files/**
