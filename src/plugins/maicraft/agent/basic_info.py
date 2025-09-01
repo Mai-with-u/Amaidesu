@@ -116,3 +116,6 @@ class Entity:
     type: str
     name: str
     position: Position
+    distance: Optional[float] = None
+    health: Optional[int] = None
+    max_health: Optional[int] = None

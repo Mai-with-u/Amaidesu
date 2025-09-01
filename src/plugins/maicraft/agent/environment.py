@@ -3,7 +3,7 @@ Minecraft环境信息存储类
 用于存储和管理游戏环境数据
 """
 
-from dataclasses import dataclass, field
+from dataclasses import field
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from src.utils.logger import get_logger
@@ -379,7 +379,7 @@ class EnvironmentInfo:
                 for entity_data in nearby_entities_data:
                     try:
                         if isinstance(entity_data, dict):
-                            # 安全地获取位置信息
+                            # 位置兼容：支持 {x,y,z} 与 [x,y,z]
                             position = Position(0.0, 0.0, 0.0)
                             if "position" in entity_data:
                                 pos_data = entity_data["position"]
@@ -390,18 +390,42 @@ class EnvironmentInfo:
                                         z=pos_data.get("z", 0.0)
                                     )
                                 elif isinstance(pos_data, list) and len(pos_data) >= 3:
-                                    # 如果位置是列表格式 [x, y, z]
                                     position = Position(
                                         x=float(pos_data[0]) if pos_data[0] is not None else 0.0,
                                         y=float(pos_data[1]) if pos_data[1] is not None else 0.0,
                                         z=float(pos_data[2]) if pos_data[2] is not None else 0.0
                                     )
-                            
+
+                            # 字段兼容：优先取标准字段，不存在则回退
+                            # name: name -> displayName -> type/kind -> "未知实体"
+                            raw_name = (
+                                entity_data.get("name")
+                                or entity_data.get("displayName")
+                                or entity_data.get("type")
+                                or entity_data.get("kind")
+                                or "未知实体"
+                            )
+
+                            # type: type -> kind -> "other"
+                            raw_type = entity_data.get("type") or entity_data.get("kind") or "other"
+
+                            # id: id -> entityId -> 尝试由(name+pos)派生稳定整数
+                            raw_id = entity_data.get("id") or entity_data.get("entityId")
+                            if raw_id is None:
+                                try:
+                                    stable_key = f"{raw_name}|{position.x:.3f},{position.y:.3f},{position.z:.3f}"
+                                    raw_id = abs(hash(stable_key)) % 1000000
+                                except Exception:
+                                    raw_id = 0
+
                             entity = Entity(
-                                id=entity_data.get("id", 0),
-                                type=entity_data.get("type", ""),
-                                name=entity_data.get("name", ""),
-                                position=position
+                                id=int(raw_id) if isinstance(raw_id, (int, float, str)) and str(raw_id).isdigit() else 0,
+                                type=str(raw_type),
+                                name=str(raw_name),
+                                position=position,
+                                distance=(float(entity_data.get("distance")) if entity_data.get("distance") is not None else None),
+                                health=(int(entity_data.get("health")) if entity_data.get("health") is not None else None),
+                                max_health=(int(entity_data.get("maxHealth")) if entity_data.get("maxHealth") is not None else None)
                             )
                             self.nearby_entities.append(entity)
                     except Exception as e:
@@ -465,7 +489,7 @@ class EnvironmentInfo:
         lines.append("【物品栏】")
         if self.inventory:
             if self.empty_slot_count == 0:
-                lines.append(f"物品栏已满！无法装入新物品！")
+                lines.append("物品栏已满！无法装入新物品！")
             else:
                 lines.append(f"物品栏有{self.empty_slot_count}个空槽位")
             # 按槽位排序显示物品
@@ -822,7 +846,6 @@ class EnvironmentInfo:
                 new_item_list = new_items[item_name]
                 for old_item in old_item_list:
                     old_slot = old_item['slot']
-                    old_count = old_item['count']
                     
                     # 查找相同槽位的新物品
                     new_item_in_slot = None
