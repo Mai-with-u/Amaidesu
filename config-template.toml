@@ -11,6 +11,18 @@ host = "127.0.0.1"
 port = 8000
 # token = "your_maicore_token_if_needed" # 如果 MaiCore 需要认证，取消注释并设置
 
+[spark_rtasr]
+# 讯飞 RTASR 实时识别凭据
+# app_id = ""
+# access_key_id = ""
+# access_key_secret = ""
+# 可选：自定义 websocket URL（默认官方地址）
+# ws_url = "wss://office-api-ast-dx.iflyaisol.com/ast/communicate/v1"
+app_id = ""
+access_key_id = ""
+access_key_secret = ""
+
+
 [http_server]
 # 是否启用本地 HTTP 回调服务器
 enable = true

@@ -7,13 +7,14 @@ setuptools
 uvicorn
 ruff
 requests
-websockets
+websockets>=10.0
 python-logging-loki
 typer
 aiohttp
 edge-tts
 mss
 numpy
+dashscope
 openai
 Pillow
 pyvts

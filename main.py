@@ -22,6 +22,7 @@ from src.core.plugin_manager import PluginManager
 from src.core.pipeline_manager import PipelineManager  # 导入管道管理器
 from src.utils.logger import get_logger
 from src.utils.config import initialize_configurations  # Updated import
+from src.config.config import global_config
 
 logger = get_logger("Main")
 
