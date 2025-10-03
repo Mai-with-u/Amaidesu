@@ -12,12 +12,6 @@ logger.add(
     format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{line: <4}</cyan> | <cyan>{extra[module]}</cyan> - <level>{message}</level>",
 )
 
-# logger.add(
-#     sys.stderr,
-#     level="INFO",  # 可以根据需要调整日志级别
-#     colorize=True,
-#     format="<green>{time:HH:mm:ss.SSS}</green> | <level>{level: <2}</level> | <cyan>{line: <4}</cyan> | <cyan>{extra[module]}</cyan> | <level>{message}</level>",
-# )
 
 # 可以在这里添加其他的 handler，比如写入文件
 # logger.add("file_{time}.log", rotation="1 week") # 例如：每周轮换日志文件

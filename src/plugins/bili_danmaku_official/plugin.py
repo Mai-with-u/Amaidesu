@@ -14,6 +14,7 @@ from src.core.amaidesu_core import AmaidesuCore
 from .client.websocket_client import BiliWebSocketClient
 from .service.message_cache import MessageCacheService
 from .service.message_handler import BiliMessageHandler
+from src.mais4u.mais4u_chat.s4u_msg_processor import S4UMessageProcessor
 
 
 class BiliDanmakuOfficialPlugin(BasePlugin):
@@ -75,6 +76,9 @@ class BiliDanmakuOfficialPlugin(BasePlugin):
         cache_size = self.config.get("message_cache_size", 1000)
         self.message_cache_service = MessageCacheService(max_cache_size=cache_size)
 
+        # --- S4U 消息处理器（直接投递，不再发往 MaiCore） ---
+        self.s4u_processor = S4UMessageProcessor()
+
         # --- 添加退出机制相关属性 ---
         self.shutdown_timeout = self.config.get("shutdown_timeout", 30)  # 30秒超时
         self.cleanup_lock = asyncio.Lock()
@@ -82,6 +86,32 @@ class BiliDanmakuOfficialPlugin(BasePlugin):
 
         # --- 注册信号处理器 ---
         self._setup_signal_handlers()
+
+    # 轻量适配器：将 MessageBase 转为 S4U 期望的最小消息结构
+    class _S4UMessageAdapter:
+        def __init__(self, base_message):
+            # 直接复用 MessageBase 的 message_info
+            self.message_info = base_message.message_info
+            # 使用 raw_message 作为纯文本
+            self.processed_plain_text = base_message.raw_message if hasattr(base_message, "raw_message") else ""
+
+            # 下游会在存储阶段填充 chat_stream，这里先占位
+            self.chat_stream = None
+
+            # 默认非礼物/非SC/非屏幕/非内部
+            self.is_gift = False
+            self.gift_name = ""
+            self.gift_count = 0
+            self.is_fake_gift = False
+            self.is_superchat = False
+            self.superchat_price = 0
+            self.is_screen = False
+            self.screen_info = None
+            self.is_internal = False
+            self.voice_done = ""
+
+            # 可选：优先级信息（留空或默认）
+            self.priority_info = {"message_type": "normal", "priority": 0}
 
     def _setup_signal_handlers(self):
         """设置信号处理器以实现优雅退出"""
@@ -263,8 +293,9 @@ class BiliDanmakuOfficialPlugin(BasePlugin):
                 # 将消息缓存到消息缓存服务中
                 self.message_cache_service.cache_message(message)
                 self.logger.debug(f"消息已缓存: {message.message_info.message_id}")
-                await self.core.send_to_maicore(message)
-                # print(f"处理消息: {message}")
+                # 直接转投递到 S4U 处理器
+                s4u_msg = self._S4UMessageAdapter(message)
+                await self.s4u_processor.process_message(s4u_msg)
         except Exception as e:
             self.logger.error(f"处理消息时出错: {message_data} - {e}", exc_info=True)
 

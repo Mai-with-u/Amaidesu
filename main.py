@@ -28,42 +28,6 @@ logger = get_logger("Main")
 # 获取 main.py 文件所在的目录 (项目根目录)
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-def easter_egg():
-    # 彩蛋
-    import random
-    from colorama import init, Fore
-
-    # 初始化 colorama
-    init()
-
-    easter_egg_list = ["多年以后，面对AI行刑队，李四将会回想起他2025年在会议上讨论人工智能的那个下午。"] # 默认彩蛋
-    egg_config_path = os.path.join(_BASE_DIR, "egg.toml")
-
-    try:
-        with open(egg_config_path, "rb") as f:
-            egg_data = tomllib.load(f)
-            # 确保 'egg' 表和 'easter_egg_list' 列表存在且不为空
-            if "egg" in egg_data and "easter_egg_list" in egg_data["egg"] and egg_data["egg"]["easter_egg_list"]:
-                easter_egg_list = egg_data["egg"]["easter_egg_list"]
-    except FileNotFoundError:
-        # 如果文件不存在，静默处理，使用默认彩蛋
-        pass
-    except (tomllib.TOMLDecodeError, KeyError, TypeError) as e:
-        # 如果文件格式错误或结构不正确，记录一个警告并使用默认彩蛋
-        logger.warning(f"无法从 {egg_config_path} 加载彩蛋: {e}")
-
-
-    # 2. 从列表中随机选择一个
-    text = random.choice(easter_egg_list)
-
-    rainbow_colors = [Fore.RED, Fore.YELLOW, Fore.GREEN, Fore.CYAN, Fore.BLUE, Fore.MAGENTA]
-    rainbow_text = ""
-    for i, char in enumerate(text):
-        rainbow_text += rainbow_colors[i % len(rainbow_colors)] + char
-    
-    print(rainbow_text)
-    
-
 async def main():
     """应用程序主入口点。"""
 
@@ -131,9 +95,6 @@ async def main():
         logger.info(f"日志过滤器已激活: {list(filtered_modules)} (INFO 级别)")
 
     logger.info("启动 Amaidesu 应用程序...")
-
-    #彩蛋
-    easter_egg()
     
     # --- 初始化所有配置 ---
     try:
