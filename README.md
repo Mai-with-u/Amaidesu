@@ -191,8 +191,8 @@ flowchart TD
 插件开发需要继承 `BasePlugin` 类并实现必要的方法：
 
 ```python
-from src.core.plugin_manager import BasePlugin
-from src.core.amaidesu_core import AmaidesuCore # 确保导入 AmaidesuCore
+from core.plugin_manager import BasePlugin
+from core.amaidesu_core import AmaidesuCore # 确保导入 AmaidesuCore
 from typing import Dict, Any # 确保导入 Dict 和 Any
 from maim_message.message_base import MessageBase
 
@@ -316,7 +316,7 @@ global_rate_limit = 50 # 全局覆盖
 
 ```python
 # src/pipelines/my_pipeline/pipeline.py
-from src.core.pipeline_manager import MessagePipeline
+from core.pipeline_manager import MessagePipeline
 from maim_message import MessageBase
 from typing import Optional, Dict, Any # 确保导入 Dict, Any
 

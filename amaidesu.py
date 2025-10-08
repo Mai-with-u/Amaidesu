@@ -1,13 +1,13 @@
-from src.spark_asr.rtasr_client import RTASRClient
-from src.openai_client.modelconfig import ModelConfig
-from src.config.config import global_config
-from src.utils.logger import get_logger
-from src.openai_client.llm_request import LLMClient
-from src.prompt_manager.prompt_manager import prompt_manager
+from spark_asr.rtasr_client import RTASRClient
+from openai_client.modelconfig import ModelConfig
+from config.config import global_config
+from utils.logger import get_logger
+from openai_client.llm_request import LLMClient
+from prompt_manager.prompt_manager import prompt_manager
 from typing import List,Tuple
 import asyncio
 import traceback
-from src.prompt_manager.template import init_templates
+from prompt_manager.template import init_templates
 import time
 logger = get_logger("LiveMai")
 
@@ -170,6 +170,9 @@ class LiveMai():
     def stop(self):
         self.rtasr_client.stop_microphone()
         self.rtasr_client.close()
+
+
+
 
 
 async def main():

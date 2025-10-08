@@ -11,7 +11,6 @@ websockets>=10.0
 python-logging-loki
 typer
 aiohttp
-edge-tts
 mss
 numpy
 dashscope
@@ -29,10 +28,4 @@ torchaudio
 maim-message
 customtkinter
 fastmcp
-# LangChain dependencies
-langchain
-langchain-core
-langchain-openai
-langchain-community
-dirtyjson
 json-repair
