@@ -336,10 +336,8 @@ def _get_config_path() -> str:
     
     base_dir = os.path.dirname(os.path.abspath(__file__))
     config_path = os.path.join(base_dir, "config.toml")
-    
-    if not os.path.exists(config_path):
-        # 兼容从项目根目录执行
-        config_path = os.path.join(os.getcwd(), "config.toml")
+
+
     
     template_path = _get_template_path()
     
