@@ -1,5 +1,5 @@
 import re
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 from maim_message import MessageBase
 from src.core.pipeline_manager import MessagePipeline
 
@@ -54,30 +54,21 @@ class CommandRouterPipeline(MessagePipeline):
             return message
 
         # 检查是否包含命令
-        commands_found = self.command_pattern.findall(original_text)
-        if not commands_found:
+        command_match = self.command_pattern.search(original_text)
+        if not command_match:
             return message
 
-        self.logger.info(f"在消息中发现 {len(commands_found)} 个命令: {[cmd[0] for cmd in commands_found]}")
+        command_name, command_args = command_match.groups()
+        command_args = command_args or ""
+
+        self.logger.info(f"在消息中发现命令: '{command_name}'")
 
         # 转发命令给订阅的插件
-        for command_name, command_args in commands_found:
-            await self._forward_command_to_subscribers(message, command_name, command_args)
+        await self._forward_command_to_subscribers(message, command_name, command_args)
 
-        # 从原消息中移除命令
-        processed_text = self.command_pattern.sub("", original_text).strip()
-
-        # 如果处理后文本为空，返回None表示消息被完全处理
-        if not processed_text:
-            self.logger.debug("消息中的所有内容都是命令，消息被完全处理")
-            return None
-
-        # 更新消息内容
-        if processed_text != original_text:
-            self.logger.debug(f"原始文本: '{original_text}' -> 处理后文本: '{processed_text}'")
-            message.message_segment.data = processed_text
-
-        return message
+        # 发现命令直接拦截，返回None表示消息被完全处理
+        self.logger.debug("发现命令，消息被拦截处理")
+        return None
 
     async def _forward_command_to_subscribers(
         self, original_message: MessageBase, command_name: str, command_args: str

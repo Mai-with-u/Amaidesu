@@ -3,14 +3,14 @@ import importlib
 import inspect
 import os
 import sys
-
-from typing import Dict, List, Optional, Any, Type
+from typing import Dict, List, Optional, Any, Type, TYPE_CHECKING
 
 from maim_message import MessageBase
 from src.utils.logger import get_logger
 from src.utils.config import load_component_specific_config, merge_component_configs
 
-from .amaidesu_core import AmaidesuCore
+if TYPE_CHECKING:
+    from .amaidesu_core import AmaidesuCore
 
 
 class MessagePipeline(ABC):
@@ -31,7 +31,7 @@ class MessagePipeline(ABC):
         """
         self.config = config
         self.logger = get_logger(self.__class__.__name__)
-        self.core: Optional["AmaidesuCore"] = None  # 添加core属性的类型注解
+        self.core: Optional[AmaidesuCore] = None  # 添加core属性的类型注解
         # 管道实现可以在这里从 self.config 中读取自己的配置项
         # 例如:
         # self.rate_limit = self.config.get("rate_limit", 60)
