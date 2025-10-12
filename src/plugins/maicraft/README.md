@@ -1,73 +1,280 @@
-# Maicraft 弹幕互动游戏插件
+# Maicraft 插件
 
-## 概述
+基于**抽象工厂模式**的弹幕互动游戏插件。
 
-Maicraft 是一个弹幕互动游戏插件，能够接收来自弹幕的"/"前缀命令，通过行动抽象层控制游戏角色。
+## 设计架构
 
-## 功能特性
+### 核心设计模式：抽象工厂模式（Abstract Factory Pattern）
 
-- **命令解析**: 支持解析 `/command args` 格式的命令
-- **行动抽象**: 每个行动都有独立的类实现，便于扩展
-- **多种实现**: 支持不同的执行器实现（日志、真实游戏等）
-- **命令别名**: 支持多个命令映射到同一个行动
+插件采用抽象工厂模式，允许通过配置切换整套动作实现，而不需要修改代码。
 
-## 支持的命令
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     MaicraftPlugin                          │
+│  - 解析命令                                                  │
+│  - 根据配置选择工厂                                          │
+│  - 通过工厂创建动作                                          │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ├──────────────┐
+                            ▼              ▼
+                  ┌──────────────┐  ┌──────────────┐
+                  │ LogFactory   │  │ McpFactory   │
+                  │ (日志实现)   │  │ (MCP实现)    │
+                  └──────────────┘  └──────────────┘
+                         │                  │
+         ┌───────────────┼────────┐         ├───────────────┐
+         ▼               ▼        ▼         ▼               ▼
+  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐
+  │LogChat   │   │LogAttack │   │McpChat   │   │McpAttack │
+  │Action    │   │Action    │   │Action    │   │Action    │
+  └──────────┘   └──────────┘   └──────────┘   └──────────┘
+       │              │               │              │
+       └──────────────┴───────────────┴──────────────┘
+                      │
+                      ▼
+            ┌──────────────────┐
+            │  动作接口层      │
+            │  - IChatAction   │
+            │  - IAttackAction │
+            └──────────────────┘
+```
 
-### 聊天命令
-- `/chat <message>` - 发送聊天消息
-- `/say <message>` - 发送聊天消息（别名）
-- `/whisper <message>` - 发送聊天消息（别名）
+## 目录结构
 
-## 配置
+```
+maicraft/
+├── actions/                    # 动作接口和实现
+│   ├── action_interfaces.py   # 动作接口定义（IAction、IChatAction、IAttackAction）
+│   └── implementations/        # 动作具体实现
+│       ├── log_actions.py      # Log 系列实现
+│       └── mcp_actions.py      # MCP 系列实现
+├── factories/                  # 工厂模块
+│   ├── abstract_factory.py    # 抽象工厂接口
+│   ├── log_factory.py         # Log 工厂实现
+│   └── mcp_factory.py         # MCP 工厂实现
+├── action_types.py            # 动作类型枚举
+├── action_registry.py         # 命令到动作类型的映射
+├── command_parser.py          # 命令解析器
+├── command_data.py            # 命令数据结构
+├── plugin.py                  # 插件主逻辑
+└── config.toml                # 配置文件
+```
 
-插件配置位于 `config.toml` 文件中：
+## 核心概念
+
+### 1. 动作接口（Action Interfaces）
+
+定义抽象的动作类型，规定参数和行为接口：
+- `IChatAction`: 聊天动作接口（参数：message）
+- `IAttackAction`: 攻击动作接口（参数：mob_name）
+
+### 2. 抽象工厂（Abstract Factory）
+
+`AbstractActionFactory` 定义创建所有动作类型的接口：
+```python
+class AbstractActionFactory(ABC):
+    @abstractmethod
+    def create_chat_action(self) -> IChatAction: ...
+    
+    @abstractmethod
+    def create_attack_action(self) -> IAttackAction: ...
+```
+
+### 3. 具体工厂（Concrete Factories）
+
+#### LogActionFactory
+创建一整套"仅打印日志"的动作实现，用于测试和调试。
+
+#### McpActionFactory
+创建一整套"通过 MCP Server"的动作实现，用于真实的游戏控制。
+
+### 4. 动作类型枚举（ActionType）
+
+定义所有可用的抽象动作类型：
+```python
+class ActionType(Enum):
+    CHAT = "chat"      # 聊天动作
+    ATTACK = "attack"  # 攻击动作
+```
+
+### 5. 命令映射
+
+命令名称映射到抽象的动作类型，而不是具体实现：
+```toml
+[command_mappings]
+chat = "chat"      # chat 命令 -> CHAT 动作类型
+say = "chat"       # say 命令 -> CHAT 动作类型
+attack = "attack"  # attack 命令 -> ATTACK 动作类型
+```
+
+## 配置说明
+
+### 切换动作实现系列
+
+通过配置 `factory_type` 来切换整套动作实现：
 
 ```toml
-# 是否启用插件
-enabled = true
+# 使用 Log 实现（仅打印日志）
+factory_type = "log"
 
-# 行动执行器类型 (log/minecraft)
-executor_type = "log"
+# 或使用 MCP 实现（真实游戏控制）
+factory_type = "mcp"
+```
 
-# 命令到行动的映射配置
-# 格式：命令名 = "动作标识"
-# 动作标识由具体的动作类定义（如 ChatAction 的动作标识为 "chat_action"）
+切换工厂后，所有动作（聊天、攻击等）都会自动使用对应的实现。
+
+### 命令映射配置
+
+```toml
 [command_mappings]
-chat = "chat_action"
-say = "chat_action"      # 多个命令可以映射到同一个行动
-whisper = "chat_action"
+# 多个命令可以映射到同一个动作类型
+chat = "chat"
+say = "chat"
+whisper = "chat"
+
+attack = "attack"
+hit = "attack"
 ```
 
-## 使用方法
+## 添加新动作
 
-1. 确保在主配置文件中启用了 `cmd_router` 管道和 `maicraft` 插件
-2. 通过弹幕或控制台发送命令，如：`/chat 你好世界`
-3. 查看日志输出确认命令执行
+### 1. 定义动作接口
 
-## 扩展开发
+在 `action_interfaces.py` 中定义新的动作接口：
 
-### 添加新的行动
-
-1. 在 `actions/` 目录下创建新的行动类，继承 `BaseAction`
-2. 实现 `execute()` 和 `get_action_id()` 方法
-3. 在配置文件中添加命令映射（系统会自动发现新的行动类）
-
-**注意**: 行动类会通过 `ActionDiscoverer` 自动发现，无需手动注册。
-
-### 添加新的执行器
-
-1. 在 `impl/` 目录下创建新的执行器类，继承 `ActionExecutor`
-2. 实现 `execute_action()` 方法
-3. 在插件主文件中添加执行器类型判断逻辑
-
-## 架构设计
-
-```
-弹幕消息 -> cmd_router管道 -> maicraft插件 -> 命令解析器 -> 行动注册表 -> 具体行动类 -> 执行器实现
+```python
+class IMineAction(IAction):
+    """挖矿动作接口（参数：block_type）"""
+    pass
 ```
 
-- **cmd_router管道**: 拦截包含"/"前缀的消息，转发给订阅插件
-- **命令解析器**: 解析命令格式和参数
-- **行动注册表**: 管理命令到行动类的映射
-- **行动类**: 具体的行动实现，每个行动都有独立的类
-- **执行器**: 不同的实现方式，如日志输出、真实游戏控制等
+### 2. 添加动作类型枚举
+
+在 `action_types.py` 中添加枚举值：
+
+```python
+class ActionType(Enum):
+    CHAT = "chat"
+    ATTACK = "attack"
+    MINE = "mine"  # 新增
+```
+
+### 3. 扩展抽象工厂
+
+在 `abstract_factory.py` 中添加创建方法：
+
+```python
+class AbstractActionFactory(ABC):
+    @abstractmethod
+    def create_mine_action(self) -> IMineAction: ...
+```
+
+### 4. 实现具体动作
+
+在 `log_actions.py` 和 `mcp_actions.py` 中分别实现：
+
+```python
+class LogMineAction(IMineAction):
+    async def execute(self, params: Dict[str, Any]) -> bool:
+        block_type = params.get("block_type")
+        self.logger.info(f"[MAICRAFT-MINE] 挖掘方块: {block_type}")
+        return True
+```
+
+### 5. 更新工厂实现
+
+在 `log_factory.py` 和 `mcp_factory.py` 中实现创建方法：
+
+```python
+class LogActionFactory(AbstractActionFactory):
+    def create_mine_action(self) -> IMineAction:
+        return LogMineAction()
+```
+
+### 6. 更新插件逻辑
+
+在 `plugin.py` 的 `_create_action()` 和 `_prepare_action_params()` 中添加对应逻辑。
+
+### 7. 更新配置
+
+在 `config.toml` 中添加命令映射：
+
+```toml
+[command_mappings]
+mine = "mine"
+dig = "mine"
+```
+
+## 添加新工厂
+
+如果要添加新的实现系列（如 WebSocket 实现），需要：
+
+### 1. 创建新的动作实现
+
+```python
+# websocket_actions.py
+class WebSocketChatAction(IChatAction):
+    async def execute(self, params):
+        # WebSocket 实现
+        pass
+```
+
+### 2. 创建新工厂
+
+```python
+# websocket_factory.py
+class WebSocketActionFactory(AbstractActionFactory):
+    def create_chat_action(self) -> IChatAction:
+        return WebSocketChatAction()
+    
+    def create_attack_action(self) -> IAttackAction:
+        return WebSocketAttackAction()
+```
+
+### 3. 在插件中注册
+
+在 `plugin.py` 的 `_initialize_factory()` 中添加：
+
+```python
+elif factory_type == "websocket":
+    self.action_factory = WebSocketActionFactory()
+```
+
+### 4. 更新配置
+
+```toml
+factory_type = "websocket"
+```
+
+## 优势
+
+1. **易于扩展**：添加新动作只需实现接口，所有工厂自动支持
+2. **易于切换**：通过配置即可切换整套实现，无需修改代码
+3. **解耦合**：命令、动作类型、具体实现三者完全解耦
+4. **易于测试**：可以轻松切换到 Log 实现进行测试
+5. **统一接口**：所有实现遵循相同的接口规范
+
+## 工作流程
+
+1. 用户发送弹幕命令：`chat 你好`
+2. `CommandParser` 解析命令：`Command(name="chat", args=["你好"])`
+3. `ActionRegistry` 查找映射：`"chat" -> ActionType.CHAT`
+4. `Plugin` 通过当前工厂创建动作：`factory.create_chat_action()`
+5. 准备参数：`{"message": "你好"}`
+6. 执行动作：`action.execute(params)`
+7. 动作实现执行具体逻辑（打印日志 或 调用 MCP Server）
+
+## 当前状态
+
+- ✅ 抽象工厂架构已完成
+- ✅ Log 系列实现已完成（聊天、攻击）
+- ✅ MCP 系列框架已完成（需补充 MCP Server 调用逻辑）
+- ⚠️ MCP Server 连接逻辑待实现（标记为 TODO）
+
+## 待办事项
+
+- [ ] 实现 MCP Server 连接和通信逻辑
+- [ ] 添加更多动作类型（移动、挖掘、建造等）
+- [ ] 添加动作执行结果反馈机制
+- [ ] 添加动作队列和调度系统

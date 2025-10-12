@@ -3,13 +3,27 @@
 # 是否启用插件
 enabled = true
 
-# 行动执行器类型 (log/minecraft)
-executor_type = "log"
+# 动作工厂类型
+# 可选值：
+#   - "log": 仅打印日志，用于测试和调试
+#   - "mcp": 通过 MCP Server 执行真实的 Minecraft 操作
+factory_type = "log"
 
-# 命令到行动的映射配置（解耦命令名和行动标识）
-# 格式：命令名 = "动作标识"
-# 动作标识由具体的动作类定义（如 ChatAction 的动作标识为 "chat_action"）
+# 命令到动作类型的映射配置
+# 格式：命令名 = "动作类型"
+# 
+# 可用的动作类型：
+#   - "chat": 聊天动作，发送聊天消息（参数：message）
+#   - "attack": 攻击动作，攻击指定生物（参数：mob_name）
+#
+# 多个命令可以映射到同一个动作类型
+# 具体的动作实现由 factory_type 决定
 [command_mappings]
-chat = "chat_action"
-say = "chat_action"     # 多个命令可以映射到同一个行动
-whisper = "chat_action"
+# 聊天动作命令
+chat = "chat"
+say = "chat"
+whisper = "chat"
+
+# 攻击动作命令
+attack = "attack"
+hit = "attack"
