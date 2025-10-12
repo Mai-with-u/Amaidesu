@@ -5,6 +5,8 @@ MCP 版本的聊天动作实现
 目前为框架实现，具体的 MCP 调用逻辑需要根据实际 MCP Server 接口来完善。
 """
 
+from __future__ import annotations  # ✅ 延迟类型注解求值
+
 from src.utils.logger import get_logger
 from ...interfaces import IChatAction
 from ...interfaces.chat_action import ChatActionParams

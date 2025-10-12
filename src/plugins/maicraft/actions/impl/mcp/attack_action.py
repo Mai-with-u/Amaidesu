@@ -5,9 +5,11 @@ MCP 版本的攻击动作实现
 目前为框架实现，具体的 MCP 调用逻辑需要根据实际 MCP Server 接口来完善。
 """
 
-from typing import Dict, Any
+from __future__ import annotations  # ✅ 延迟类型注解求值
+
 from src.utils.logger import get_logger
 from ...interfaces import IAttackAction
+from ...interfaces.attack_action import AttackActionParams
 from ....mcp.client import global_mcp_client
 
 
@@ -39,10 +41,10 @@ class McpAttackAction(IAttackAction):
             self.logger.error(f"攻击动作参数验证失败: {params}")
             return False
 
-        mob_name = params["mob"]
+        mob = params["mob"]
 
         try:
-            await self.mcp_client.call_tool_directly("attack", {"mob": mob_name})
+            await self.mcp_client.call_tool_directly("attack", {"mob": mob})
 
             # 暂时返回 True，实际应该根据 MCP 调用结果返回
             return True

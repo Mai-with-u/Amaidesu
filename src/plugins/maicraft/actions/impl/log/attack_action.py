@@ -4,6 +4,8 @@ Log 版本的攻击动作实现
 将攻击目标输出到日志，主要用于测试和调试。
 """
 
+from __future__ import annotations  # ✅ 延迟类型注解求值
+
 from src.utils.logger import get_logger
 from ...interfaces import IAttackAction
 from ...interfaces.attack_action import AttackActionParams
