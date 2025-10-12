@@ -4,10 +4,13 @@
 定义所有抽象动作的接口。
 每个动作接口规定了参数和行为，但不包含具体实现。
 具体实现由不同的工厂创建（如 Log 实现、MCP 实现等）。
+
+使用 TypedDict 定义参数类型，获得类型安全和 IDE 支持。
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Dict, Any, Mapping
+from .action_params import ChatActionParams, AttackActionParams
 
 
 class IAction(ABC):
@@ -29,7 +32,7 @@ class IAction(ABC):
         pass
 
     @abstractmethod
-    def validate_params(self, params: Dict[str, Any]) -> bool:
+    def validate_params(self, params: Mapping[str, Any]) -> bool:
         """
         验证参数是否有效。
 
@@ -56,41 +59,69 @@ class IChatAction(IAction):
     """
     聊天动作接口。
 
-    参数：
+    参数类型：ChatActionParams
         - message: str - 要发送的聊天消息
     """
 
     @abstractmethod
-    async def execute(self, params: Dict[str, Any]) -> bool:
+    async def execute(self, params: ChatActionParams) -> bool:
         """
         执行聊天动作。
 
         Args:
-            params: 必须包含 'message' 键
+            params: ChatActionParams 类型，包含 message 字段
 
         Returns:
             执行是否成功
         """
         pass
+
+    def validate_params(self, params: Mapping[str, Any]) -> bool:
+        """
+        验证参数（默认实现）。
+        子类可以重写以添加额外验证。
+
+        Args:
+            params: 参数字典
+
+        Returns:
+            参数是否有效
+        """
+        # 检查必需字段
+        return "message" in params and isinstance(params.get("message"), str)
 
 
 class IAttackAction(IAction):
     """
     攻击动作接口。
 
-    参数：
+    参数类型：AttackActionParams
         - mob_name: str - 要攻击的生物名称
     """
 
     @abstractmethod
-    async def execute(self, params: Dict[str, Any]) -> bool:
+    async def execute(self, params: AttackActionParams) -> bool:
         """
         执行攻击动作。
 
         Args:
-            params: 必须包含 'mob_name' 键
+            params: AttackActionParams 类型，包含 mob_name 字段
 
         Returns:
             执行是否成功
         """
         pass
+
+    def validate_params(self, params: Mapping[str, Any]) -> bool:
+        """
+        验证参数（默认实现）。
+        子类可以重写以添加额外验证。
+
+        Args:
+            params: 参数字典
+
+        Returns:
+            参数是否有效
+        """
+        # 检查必需字段
+        return "mob_name" in params and isinstance(params.get("mob_name"), str)
