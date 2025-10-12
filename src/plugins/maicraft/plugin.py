@@ -109,13 +109,12 @@ class MaicraftPlugin(BasePlugin):
         self.logger.info("Maicraft插件清理完成")
         await super().cleanup()
 
-    async def handle_command(self, command_text: str, original_message) -> bool:
+    async def handle_command(self, message) -> bool:
         """
-        处理命令。
+        处理命令消息。
 
         Args:
-            command_text: 命令文本（如 "/chat hello world"）
-            original_message: 原始消息对象
+            message: 包含命令的完整消息对象
 
         Returns:
             是否成功处理命令
@@ -124,10 +123,20 @@ class MaicraftPlugin(BasePlugin):
             return False
 
         try:
+            # 从消息中提取文本内容
+            if not message.message_segment or message.message_segment.type != "text":
+                self.logger.debug("消息不包含文本内容")
+                return False
+
+            message_text = message.message_segment.data.strip()
+            if not message_text:
+                self.logger.debug("消息文本为空")
+                return False
+
             # 解析命令
-            command = self.command_parser.parse_command(command_text, original_message)
+            command = self.command_parser.parse_command(message_text, message)
             if not command:
-                self.logger.debug(f"无法解析命令: '{command_text}'")
+                self.logger.debug(f"无法解析命令: '{message_text}'")
                 return False
 
             # 检查是否支持该命令
@@ -150,6 +159,10 @@ class MaicraftPlugin(BasePlugin):
                 return False
 
             # 执行行动
+            if not self.action_executor:
+                self.logger.error(f"行动执行器未初始化，无法执行命令: '{command.name}'")
+                return False
+
             success = await action.execute(params, self.action_executor)
             if success:
                 self.logger.info(f"成功执行命令: '{command.name}' -> 行动: '{action.get_action_id()}'")
@@ -159,7 +172,7 @@ class MaicraftPlugin(BasePlugin):
             return success
 
         except Exception as e:
-            self.logger.error(f"处理命令时出错: '{command_text}', 错误: {e}", exc_info=True)
+            self.logger.error(f"处理命令时出错: '{message_text}', 错误: {e}", exc_info=True)
             return False
 
     def _prepare_action_params(self, command) -> Dict[str, Any]:
