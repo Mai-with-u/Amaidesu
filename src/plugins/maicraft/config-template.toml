@@ -1,0 +1,13 @@
+# Maicraft 插件配置模板
+
+# 是否启用插件
+enabled = true
+
+# 行动执行器类型 (log/minecraft)
+executor_type = "log"
+
+# 命令到行动的映射配置（解耦命令名和行动标识）
+[command_mappings]
+chat = "chat_action"
+say = "chat_action"     # 多个命令可以映射到同一个行动
+whisper = "chat_action"
