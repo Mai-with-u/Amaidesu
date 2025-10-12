@@ -8,7 +8,7 @@ Log 动作工厂
 from src.utils.logger import get_logger
 from .abstract_factory import AbstractActionFactory
 from ..actions.action_interfaces import IChatAction, IAttackAction
-from ..actions.implementations.log_actions import LogChatAction, LogAttackAction
+from ..actions.impl.log import LogChatAction, LogAttackAction
 
 
 class LogActionFactory(AbstractActionFactory):

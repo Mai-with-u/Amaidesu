@@ -2,7 +2,7 @@ import re
 import shlex
 from typing import Optional
 from maim_message import MessageBase
-from .command_data import Command
+from .command import Command
 from src.utils.logger import get_logger
 
 

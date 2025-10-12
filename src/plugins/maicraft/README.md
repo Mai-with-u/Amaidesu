@@ -44,21 +44,29 @@
 
 ```
 maicraft/
-├── actions/                    # 动作接口和实现
-│   ├── action_interfaces.py   # 动作接口定义（IAction、IChatAction、IAttackAction）
-│   └── implementations/        # 动作具体实现
-│       ├── log_actions.py      # Log 系列实现
-│       └── mcp_actions.py      # MCP 系列实现
-├── factories/                  # 工厂模块
-│   ├── abstract_factory.py    # 抽象工厂接口
-│   ├── log_factory.py         # Log 工厂实现
-│   └── mcp_factory.py         # MCP 工厂实现
-├── action_types.py            # 动作类型枚举
-├── action_registry.py         # 命令到动作类型的映射
-├── command_parser.py          # 命令解析器
-├── command_data.py            # 命令数据结构
-├── plugin.py                  # 插件主逻辑
-└── config.toml                # 配置文件
+├── actions/                      # 动作接口和实现
+│   ├── action_interfaces.py     # 动作接口定义（IAction、IChatAction、IAttackAction）
+│   └── impl/                     # 动作具体实现
+│       ├── log/                  # Log 系列实现
+│       │   ├── chat_action.py   # Log 聊天动作
+│       │   ├── attack_action.py # Log 攻击动作
+│       │   └── __init__.py
+│       ├── mcp/                  # MCP 系列实现
+│       │   ├── chat_action.py   # MCP 聊天动作
+│       │   ├── attack_action.py # MCP 攻击动作
+│       │   └── __init__.py
+│       └── __init__.py
+├── factories/                    # 工厂模块
+│   ├── abstract_factory.py      # 抽象工厂接口
+│   ├── log_factory.py           # Log 工厂实现
+│   ├── mcp_factory.py           # MCP 工厂实现
+│   └── __init__.py
+├── action_types.py              # 动作类型枚举
+├── action_registry.py           # 命令到动作类型的映射
+├── command_parser.py            # 命令解析器
+├── command.py                   # 命令数据结构
+├── plugin.py                    # 插件主逻辑
+└── config.toml                  # 配置文件
 ```
 
 ## 核心概念
@@ -172,9 +180,10 @@ class AbstractActionFactory(ABC):
 
 ### 4. 实现具体动作
 
-在 `log_actions.py` 和 `mcp_actions.py` 中分别实现：
+在 `impl/log/mine_action.py` 和 `impl/mcp/mine_action.py` 中分别实现：
 
 ```python
+# impl/log/mine_action.py
 class LogMineAction(IMineAction):
     async def execute(self, params: Dict[str, Any]) -> bool:
         block_type = params.get("block_type")
@@ -182,21 +191,32 @@ class LogMineAction(IMineAction):
         return True
 ```
 
-### 5. 更新工厂实现
+### 5. 更新 impl 模块的 __init__.py
+
+在 `impl/log/__init__.py` 和 `impl/mcp/__init__.py` 中导出新动作：
+
+```python
+# impl/log/__init__.py
+from .mine_action import LogMineAction
+```
+
+### 6. 更新工厂实现
 
 在 `log_factory.py` 和 `mcp_factory.py` 中实现创建方法：
 
 ```python
+from ..actions.impl.log import LogMineAction
+
 class LogActionFactory(AbstractActionFactory):
     def create_mine_action(self) -> IMineAction:
         return LogMineAction()
 ```
 
-### 6. 更新插件逻辑
+### 7. 更新插件逻辑
 
 在 `plugin.py` 的 `_create_action()` 和 `_prepare_action_params()` 中添加对应逻辑。
 
-### 7. 更新配置
+### 8. 更新配置
 
 在 `config.toml` 中添加命令映射：
 
@@ -212,8 +232,10 @@ dig = "mine"
 
 ### 1. 创建新的动作实现
 
+在 `impl/websocket/` 目录下创建各个动作文件：
+
 ```python
-# websocket_actions.py
+# impl/websocket/chat_action.py
 class WebSocketChatAction(IChatAction):
     async def execute(self, params):
         # WebSocket 实现

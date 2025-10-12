@@ -8,7 +8,7 @@ MCP 动作工厂
 from src.utils.logger import get_logger
 from .abstract_factory import AbstractActionFactory
 from ..actions.action_interfaces import IChatAction, IAttackAction
-from ..actions.implementations.mcp_actions import McpChatAction, McpAttackAction
+from ..actions.impl.mcp import McpChatAction, McpAttackAction
 
 
 class McpActionFactory(AbstractActionFactory):
