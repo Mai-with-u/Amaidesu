@@ -24,7 +24,7 @@ class ChatAction(BaseAction):
         执行聊天行动。
 
         Args:
-            params: 行动参数，应包含 'message' 键
+            params: 行动参数，应包含 'args' 键
             executor: 行动执行器实例
 
         Returns:
@@ -35,7 +35,8 @@ class ChatAction(BaseAction):
             self.logger.error(f"聊天行动参数验证失败: {params}")
             return False
 
-        message = params.get("message", "").strip()
+        args = params.get("args", [])
+        message = " ".join(args).strip()
         if not message:
             self.logger.warning("聊天消息为空，跳过执行")
             return False
@@ -66,13 +67,15 @@ class ChatAction(BaseAction):
         if not self.validate_required_params(params):
             return False
 
-        # 检查消息内容
-        message = params.get("message", "")
-        if not isinstance(message, str):
-            self.logger.error(f"消息参数必须是字符串类型: {type(message)}")
+        # 检查参数内容
+        args = params.get("args", [])
+        if not isinstance(args, list):
+            self.logger.error(f"args参数必须是列表类型: {type(args)}")
             return False
 
-        if not message.strip():
+        # 将参数连接成消息进行验证
+        message = " ".join(args).strip()
+        if not message:
             self.logger.error("消息内容不能为空")
             return False
 
@@ -85,4 +88,4 @@ class ChatAction(BaseAction):
 
     def get_required_params(self) -> list[str]:
         """获取必需的参数列表"""
-        return ["message"]
+        return ["args"]

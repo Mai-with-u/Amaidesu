@@ -1,6 +1,7 @@
 from typing import Dict, Any, Optional
 from src.core.plugin_manager import BasePlugin
 from src.core.amaidesu_core import AmaidesuCore
+from maim_message import MessageBase
 from .command_parser import CommandParser
 from .action_registry import ActionRegistry
 from .actions import ActionDiscoverer
@@ -119,7 +120,7 @@ class MaicraftPlugin(BasePlugin):
         self.logger.info("Maicraft插件清理完成")
         await super().cleanup()
 
-    async def handle_command(self, message) -> bool:
+    async def handle_command(self, message: MessageBase) -> bool:
         """
         处理命令消息。
 
@@ -138,7 +139,8 @@ class MaicraftPlugin(BasePlugin):
                 self.logger.debug("消息不包含文本内容")
                 return False
 
-            message_text = message.message_segment.data.strip()
+            data = str(message.message_segment.data)
+            message_text = data.strip()
             if not message_text:
                 self.logger.debug("消息文本为空")
                 return False
@@ -161,7 +163,7 @@ class MaicraftPlugin(BasePlugin):
                 return False
 
             # 准备行动参数
-            params = self._prepare_action_params(command)
+            params = {"args": command.args}
 
             # 验证参数
             if not action.validate_params(params):
@@ -184,27 +186,6 @@ class MaicraftPlugin(BasePlugin):
         except Exception as e:
             self.logger.error(f"处理命令时出错: '{message_text}', 错误: {e}", exc_info=True)
             return False
-
-    def _prepare_action_params(self, command) -> Dict[str, Any]:
-        """
-        根据命令准备行动参数。
-
-        Args:
-            command: 解析后的命令对象
-
-        Returns:
-            行动参数字典
-        """
-        params = {}
-
-        # 对于聊天类命令，将所有参数连接成消息
-        if command.name in ["chat", "say", "whisper"]:
-            message = command.join_args()
-            params["message"] = message
-
-        # 可以根据需要添加更多命令的参数处理逻辑
-
-        return params
 
 
 # 插件入口点
