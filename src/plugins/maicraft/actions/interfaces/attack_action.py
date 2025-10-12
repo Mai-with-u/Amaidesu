@@ -14,10 +14,10 @@ class AttackActionParams(TypedDict):
     攻击动作参数。
 
     Attributes:
-        mob_name: 要攻击的生物名称
+        mob: 要攻击的生物名称
     """
 
-    mob_name: str
+    mob: str
 
 
 class IAttackAction(IAction, ValidatedAction):
@@ -25,7 +25,7 @@ class IAttackAction(IAction, ValidatedAction):
     攻击动作接口。
 
     参数类型：AttackActionParams
-        - mob_name: str - 要攻击的生物名称
+        - mob: str - 要攻击的生物名称
 
     使用 ValidatedAction 提供自动参数验证。
     """
@@ -38,12 +38,9 @@ class IAttackAction(IAction, ValidatedAction):
         执行攻击动作。
 
         Args:
-            params: AttackActionParams 类型，包含 mob_name 字段
+            params: AttackActionParams 类型，包含 mob 字段
 
         Returns:
             执行是否成功
         """
         ...
-
-    # ✅ validate_params 已经由 ValidatedAction 自动提供
-    # 子类不需要再实现！

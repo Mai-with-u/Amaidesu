@@ -53,7 +53,3 @@ class LogChatAction(IChatAction):
         self.logger.info(f"[MAICRAFT-CHAT] 发送聊天消息: '{message}'")
 
         return True
-
-    # ✅ 不需要实现 validate_params！
-    # 基本的类型验证由 ValidatedAction 自动提供
-    # 只需要在 execute 中添加业务相关的验证

@@ -5,9 +5,10 @@ MCP 版本的聊天动作实现
 目前为框架实现，具体的 MCP 调用逻辑需要根据实际 MCP Server 接口来完善。
 """
 
-from typing import Dict, Any
 from src.utils.logger import get_logger
-from ...action_interfaces import IChatAction
+from ...interfaces import IChatAction
+from ...interfaces.chat_action import ChatActionParams
+from ....mcp.client import global_mcp_client
 
 
 class McpChatAction(IChatAction):
@@ -18,19 +19,18 @@ class McpChatAction(IChatAction):
 
     def __init__(self):
         self.logger = get_logger("McpChatAction")
-        # TODO: 添加 MCP 客户端连接
-        self.mcp_client = None
+        self.mcp_client = global_mcp_client
 
     def get_action_type(self) -> str:
         """获取动作类型"""
         return "chat"
 
-    async def execute(self, params: Dict[str, Any]) -> bool:
+    async def execute(self, params: ChatActionParams) -> bool:
         """
         执行聊天动作（通过 MCP Server）。
 
         Args:
-            params: 必须包含 'message' 键
+            params: ChatActionParams 类型，包含 message 字段
 
         Returns:
             执行是否成功
@@ -39,52 +39,14 @@ class McpChatAction(IChatAction):
             self.logger.error(f"聊天动作参数验证失败: {params}")
             return False
 
-        message = params.get("message", "")
-        
+        message = params["message"]
+
         try:
-            # TODO: 实现实际的 MCP Server 调用
-            # 例如: await self.mcp_client.send_chat(message)
-            self.logger.info(f"[MAICRAFT-MCP-CHAT] 通过 MCP 发送聊天消息: '{message}'")
-            self.logger.warning("[TODO] MCP Server 调用逻辑待实现")
-            
+            await self.mcp_client.call_tool_directly("chat", {"message": message})
+
             # 暂时返回 True，实际应该根据 MCP 调用结果返回
             return True
-            
+
         except Exception as e:
             self.logger.error(f"MCP 聊天动作执行失败: {e}", exc_info=True)
             return False
-
-    def validate_params(self, params: Dict[str, Any]) -> bool:
-        """
-        验证聊天动作的参数。
-
-        Args:
-            params: 参数字典
-
-        Returns:
-            参数是否有效
-        """
-        # 检查必需参数
-        if "message" not in params:
-            self.logger.error("缺少必需参数: message")
-            return False
-
-        message = params.get("message", "")
-        
-        # 检查消息类型
-        if not isinstance(message, str):
-            self.logger.error(f"message 参数必须是字符串类型: {type(message)}")
-            return False
-
-        # 检查消息是否为空
-        if not message.strip():
-            self.logger.error("消息内容不能为空")
-            return False
-
-        # 检查消息长度（Minecraft 聊天消息长度限制）
-        if len(message) > 256:
-            self.logger.error(f"消息长度超过限制 (256字符): {len(message)}")
-            return False
-
-        return True
-
