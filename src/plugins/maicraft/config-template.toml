@@ -7,6 +7,8 @@ enabled = true
 executor_type = "log"
 
 # 命令到行动的映射配置（解耦命令名和行动标识）
+# 格式：命令名 = "动作标识"
+# 动作标识由具体的动作类定义（如 ChatAction 的动作标识为 "chat_action"）
 [command_mappings]
 chat = "chat_action"
 say = "chat_action"     # 多个命令可以映射到同一个行动

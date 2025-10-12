@@ -30,6 +30,8 @@ enabled = true
 executor_type = "log"
 
 # 命令到行动的映射配置
+# 格式：命令名 = "动作标识"
+# 动作标识由具体的动作类定义（如 ChatAction 的动作标识为 "chat_action"）
 [command_mappings]
 chat = "chat_action"
 say = "chat_action"      # 多个命令可以映射到同一个行动
@@ -48,8 +50,9 @@ whisper = "chat_action"
 
 1. 在 `actions/` 目录下创建新的行动类，继承 `BaseAction`
 2. 实现 `execute()` 和 `get_action_id()` 方法
-3. 在 `action_registry.py` 中注册新的行动
-4. 在配置文件中添加命令映射
+3. 在配置文件中添加命令映射（系统会自动发现新的行动类）
+
+**注意**: 行动类会通过 `ActionDiscoverer` 自动发现，无需手动注册。
 
 ### 添加新的执行器
 

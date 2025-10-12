@@ -3,7 +3,7 @@ from src.core.plugin_manager import BasePlugin
 from src.core.amaidesu_core import AmaidesuCore
 from .command_parser import CommandParser
 from .action_registry import ActionRegistry
-from .actions.chat_action import ChatAction
+from .actions import ActionDiscoverer
 from .impl.action_executor_interface import ActionExecutor
 from .impl.log_action_executor import LogActionExecutor
 
@@ -29,6 +29,7 @@ class MaicraftPlugin(BasePlugin):
         # 初始化组件
         self.command_parser = CommandParser()
         self.action_registry = ActionRegistry()
+        self.action_discoverer = ActionDiscoverer()
         self.action_executor: Optional[ActionExecutor] = None
 
         # 初始化执行器
@@ -47,30 +48,39 @@ class MaicraftPlugin(BasePlugin):
             self.action_executor = LogActionExecutor()
         else:
             self.logger.warning(f"未知的执行器类型: {executor_type}，使用默认的日志执行器")
-            self.action_executor = LogActionExecutor()
+
+        self.action_executor = LogActionExecutor()
 
         self.logger.info(f"使用行动执行器: {executor_type}")
 
     def _register_actions(self):
         """注册所有支持的行动"""
+        # 发现所有可用的动作类
+        available_actions = self.action_discoverer.discover_actions()
+        if not available_actions:
+            self.logger.warning("未发现任何可用的动作类")
+            return
+
         # 获取命令映射配置
         command_mappings = self.config.get("command_mappings", {})
 
-        # 注册ChatAction到所有映射的命令
-        chat_action_commands = []
-        for command, action_type in command_mappings.items():
-            if action_type == "chat_action":
-                self.action_registry.register_action(command, ChatAction)
-                chat_action_commands.append(command)
+        # 注册命令映射
+        registered_commands = []
+        for command, action_id in command_mappings.items():
+            if (action_class := available_actions.get(action_id)) is not None:
+                self.action_registry.register_action(command, action_class)
+                registered_commands.append(f"{command}({action_id})")
+                self.logger.debug(f"注册命令映射: '{command}' -> {action_class.__name__}({action_id})")
+            else:
+                self.logger.warning(f"未找到动作类: '{action_id}'，跳过命令 '{command}' 的注册")
 
-        if chat_action_commands:
-            self.logger.info(f"注册聊天行动到命令: {chat_action_commands}")
+        if registered_commands:
+            self.logger.info(f"已注册命令映射: {registered_commands}")
         else:
-            # 如果没有配置，使用默认映射
-            default_commands = ["chat", "say", "whisper"]
-            for cmd in default_commands:
-                self.action_registry.register_action(cmd, ChatAction)
-            self.logger.info(f"使用默认聊天命令映射: {default_commands}")
+            self.logger.warning("未找到有效的命令映射配置")
+
+        # 输出发现的动作信息
+        self.logger.info(f"发现的可用动作: {list(available_actions.keys())}")
 
     async def setup(self):
         """设置插件"""

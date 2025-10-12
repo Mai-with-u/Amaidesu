@@ -17,7 +17,7 @@ class ChatAction(BaseAction):
 
     def get_action_id(self) -> str:
         """获取行动标识（独立于命令名称）"""
-        return "minecraft_chat"
+        return "chat_action"
 
     async def execute(self, params: Dict[str, Any], executor: "ActionExecutor") -> bool:
         """
