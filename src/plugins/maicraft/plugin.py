@@ -181,7 +181,7 @@ class MaicraftPlugin(BasePlugin):
                 return False
 
             # 执行动作
-            success = await action.execute(params)
+            success = await action.execute(params)  # type: ignore
             if success:
                 self.logger.info(
                     f"成功执行命令: '{command.name}' -> "

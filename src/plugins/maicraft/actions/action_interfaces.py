@@ -10,7 +10,8 @@
 
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Mapping
-from .action_params import ChatActionParams, AttackActionParams
+from .interfaces.chat_action import ChatActionParams
+from .interfaces.attack_action import AttackActionParams
 
 
 class IAction(ABC):

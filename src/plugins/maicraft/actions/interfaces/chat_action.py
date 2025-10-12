@@ -4,9 +4,20 @@
 定义聊天动作的接口规范。
 """
 
+from typing import TypedDict
 from .base import IAction
-from ..action_params import ChatActionParams
 from ..param_validator import ValidatedAction
+
+
+class ChatActionParams(TypedDict):
+    """
+    聊天动作参数。
+
+    Attributes:
+        message: 要发送的聊天消息
+    """
+
+    message: str
 
 
 class IChatAction(IAction, ValidatedAction):

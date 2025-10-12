@@ -38,7 +38,7 @@ class LogActionFactory(AbstractActionFactory):
         Returns:
             LogAttackAction 实例
         """
-        return LogAttackAction()
+        return LogAttackAction()  # type: ignore
 
     async def initialize(self) -> bool:
         """

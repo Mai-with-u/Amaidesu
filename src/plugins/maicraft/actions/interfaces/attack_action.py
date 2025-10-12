@@ -4,9 +4,20 @@
 定义攻击动作的接口规范。
 """
 
+from typing import TypedDict
 from .base import IAction
-from ..action_params import AttackActionParams
 from ..param_validator import ValidatedAction
+
+
+class AttackActionParams(TypedDict):
+    """
+    攻击动作参数。
+
+    Attributes:
+        mob_name: 要攻击的生物名称
+    """
+
+    mob_name: str
 
 
 class IAttackAction(IAction, ValidatedAction):

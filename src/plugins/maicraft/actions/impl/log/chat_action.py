@@ -6,7 +6,7 @@ Log 版本的聊天动作实现
 
 from src.utils.logger import get_logger
 from ...interfaces import IChatAction
-from ...action_params import ChatActionParams
+from ...interfaces.chat_action import ChatActionParams
 
 
 class LogChatAction(IChatAction):
