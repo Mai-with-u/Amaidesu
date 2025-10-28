@@ -77,7 +77,6 @@ priority = 50
 # 插件全局配置
 [plugins]
 enable_console_input = true
-enable_omni_tts = false              # 阿里云 Qwen-Omni TTS 插件（需要API密钥）
 enable_stt = false
 enable_vtube_studio = false
 enable_websocket_lip_sync = false
@@ -90,8 +89,8 @@ enable_sticker = false
 enable_funasr_stt = false
 enable_gptsovits_tts = false
 enable_mock_danmaku = false
-enable_bili_danmaku_selenium = false
 enable_bili_danmaku_official = false # 请不要和 bili_danmaku_selenium 同时启用
+enable_bili_danmaku_official_maicraft = false # 请不要和 bili_danmaku_selenium 同时启用
 enable_dg_lab_service = false
 enable_keyword_action = true
 enable_read_pingmu = false

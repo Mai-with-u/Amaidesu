@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import signal
+import json
 
 from typing import Dict, Any, Optional, List
 
@@ -16,7 +17,72 @@ from .service.message_cache import MessageCacheService
 from .service.message_handler import BiliMessageHandler
 
 
-class BiliDanmakuOfficialPlugin(BasePlugin):
+class ForwardWebSocketClient:
+    """简易的外发 WebSocket 客户端，支持自动重连与发送JSON。"""
+
+    def __init__(self, url: str, logger, reconnect_delay: int = 5):
+        self.url = url
+        self.logger = logger
+        self.reconnect_delay = reconnect_delay
+        self._ws = None
+        self._task = None
+        self._stop = asyncio.Event()
+
+    async def run(self):
+        try:
+            import websockets  # 延迟导入
+        except Exception as e:
+            self.logger.error(f"缺少 websockets 依赖，无法转发消息: {e}")
+            return
+
+        while not self._stop.is_set():
+            try:
+                self.logger.info(f"尝试连接外发 WebSocket: {self.url}")
+                async with websockets.connect(self.url) as ws:
+                    self._ws = ws
+                    self.logger.info("外发 WebSocket 已连接")
+                    # 等待直到停止事件或连接断开
+                    while not self._stop.is_set():
+                        await asyncio.sleep(0.5)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self.logger.warning(f"外发 WebSocket 连接失败/已断开: {e}")
+            finally:
+                self._ws = None
+                if not self._stop.is_set():
+                    self.logger.info(f"{self.reconnect_delay} 秒后重试连接外发 WebSocket...")
+                    try:
+                        await asyncio.wait_for(self._stop.wait(), timeout=self.reconnect_delay)
+                    except asyncio.TimeoutError:
+                        pass
+
+    async def send_json(self, data: Dict[str, Any]) -> bool:
+        if self._ws is None:
+            self.logger.debug("外发 WebSocket 未连接，丢弃消息")
+            return False
+        try:
+            await self._ws.send(json.dumps(data, ensure_ascii=False))
+            return True
+        except Exception as e:
+            self.logger.error(f"外发 WebSocket 发送失败: {e}")
+            return False
+
+    async def start(self):
+        if self._task is None or self._task.done():
+            self._stop.clear()
+            self._task = asyncio.create_task(self.run(), name="ForwardWebSocketClient")
+
+    async def close(self):
+        self._stop.set()
+        if self._task and not self._task.done():
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+        self._task = None
+
+
+class BiliDanmakuOfficialMaiCraftPlugin(BasePlugin):
     """Bilibili 直播弹幕插件（官方WebSocket版），使用官方开放平台API获取实时弹幕。"""
 
     def __init__(self, core: AmaidesuCore, config: Dict[str, Any]):
@@ -27,7 +93,7 @@ class BiliDanmakuOfficialPlugin(BasePlugin):
         self.enabled = self.config.get("enabled", True)
 
         if not self.enabled:
-            self.logger.warning("BiliDanmakuOfficialPlugin 在配置中已禁用。")
+            self.logger.warning("BiliDanmakuOfficialMaiCraftPlugin 在配置中已禁用。")
             return
 
         # --- 官方API配置检查 ---
@@ -56,20 +122,19 @@ class BiliDanmakuOfficialPlugin(BasePlugin):
         else:
             self.logger.info(f"将获取具有以下标签的上下文: {self.context_tags}")
 
-        # --- Load Template Items ---
+        # --- 模板信息已移除 ---
         self.template_items = None
-        if self.config.get("enable_template_info", False):
-            self.template_items = self.config.get("template_items", {})
-            if not self.template_items:
-                self.logger.warning(
-                    "BiliDanmakuOfficial 配置启用了 template_info，但在 config.toml 中未找到 template_items。"
-                )
+
+        # --- 外发目标配置 ---
+        self.forward_ws_url: Optional[str] = self.config.get("forward_ws_url")
+        self.forward_enabled: bool = self.config.get("forward_enabled", True)
 
         # --- 状态变量 ---
         self.websocket_client = None
         self.message_handler = None
         self.monitoring_task = None
         self.stop_event = asyncio.Event()
+        self.forward_client: Optional[ForwardWebSocketClient] = None
 
         # --- 初始化消息缓存服务 ---
         cache_size = self.config.get("message_cache_size", 1000)
@@ -155,9 +220,19 @@ class BiliDanmakuOfficialPlugin(BasePlugin):
                 core=self.core,
                 config=self.config,
                 context_tags=self.context_tags,
-                template_items=self.template_items,
                 message_cache_service=self.message_cache_service,
             )
+
+            # 初始化外发 WebSocket 客户端
+            if self.forward_enabled and self.forward_ws_url:
+                self.forward_client = ForwardWebSocketClient(self.forward_ws_url, self.logger)
+                await self.forward_client.start()
+                self.logger.info(f"已启用外发 WebSocket 转发: {self.forward_ws_url}")
+            else:
+                if not self.forward_enabled:
+                    self.logger.info("已禁用外发 WebSocket 转发")
+                else:
+                    self.logger.warning("未配置 forward_ws_url，外发 WebSocket 转发不可用")
 
             # 启动后台监控任务
             self.monitoring_task = asyncio.create_task(
@@ -166,7 +241,7 @@ class BiliDanmakuOfficialPlugin(BasePlugin):
             self.logger.info(f"启动 Bilibili 官方WebSocket弹幕监控任务 (应用ID: {self.app_id})...")
 
         except Exception as e:
-            self.logger.error(f"设置 BiliDanmakuOfficialPlugin 时发生错误: {e}", exc_info=True)
+            self.logger.error(f"设置 BiliDanmakuOfficialMaiCraftPlugin 时发生错误: {e}", exc_info=True)
             self.enabled = False
 
     async def cleanup(self):
@@ -175,7 +250,7 @@ class BiliDanmakuOfficialPlugin(BasePlugin):
             if self.is_shutting_down and hasattr(self, "_cleanup_done"):
                 return  # 避免重复清理
 
-            self.logger.info("开始清理 BiliDanmakuOfficial 插件资源...")
+            self.logger.info("开始清理 BiliDanmakuOfficialMaiCraft 插件资源...")
             self.is_shutting_down = True
 
             try:
@@ -210,7 +285,17 @@ class BiliDanmakuOfficialPlugin(BasePlugin):
                     except Exception as e:
                         self.logger.warning(f"清理消息缓存时出错: {e}")
 
-                self.logger.info("BiliDanmakuOfficial 插件资源清理完成")
+                # 关闭外发客户端
+                if self.forward_client:
+                    self.logger.info("关闭外发 WebSocket 客户端...")
+                    try:
+                        await self.forward_client.close()
+                    except Exception as e:
+                        self.logger.warning(f"关闭外发客户端时出错: {e}")
+                    finally:
+                        self.forward_client = None
+
+                self.logger.info("BiliDanmakuOfficialMaiCraft 插件资源清理完成")
                 self._cleanup_done = True
 
             except Exception as e:
@@ -264,11 +349,18 @@ class BiliDanmakuOfficialPlugin(BasePlugin):
                 # 将消息缓存到消息缓存服务中
                 self.message_cache_service.cache_message(message)
                 self.logger.debug(f"消息已缓存: {message.message_info.message_id}")
-                # 发送消息到 MaiCore
-                await self.core.send_to_maicore(message)
+                # 外发到指定 WebSocket
+                if self.forward_client and self.forward_enabled and self.forward_ws_url:
+                    try:
+                        payload = message.to_dict()
+                        sent = await self.forward_client.send_json(payload)
+                        if not sent:
+                            self.logger.debug("外发失败，消息未送达")
+                    except Exception as e:
+                        self.logger.error(f"外发消息序列化或发送失败: {e}")
         except Exception as e:
             self.logger.error(f"处理消息时出错: {message_data} - {e}", exc_info=True)
 
 
 # --- Plugin Entry Point ---
-plugin_entrypoint = BiliDanmakuOfficialPlugin
+plugin_entrypoint = BiliDanmakuOfficialMaiCraftPlugin
