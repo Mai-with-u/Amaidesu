@@ -1,0 +1,37 @@
+# OBS 控制插件配置模板：src/plugins/obs_control/config-template.toml
+
+[obs_control]
+# OBS WebSocket 连接配置
+[obs_control.obs]
+# OBS WebSocket 服务器地址（通常为 localhost）
+host = "localhost"
+# OBS WebSocket 服务器端口（默认为 4455）
+port = 4455
+# OBS WebSocket 密码（必须设置，否则插件无法启动）
+password = "your_obs_websocket_password_here"
+# OBS 场景中使用的文本源名称（默认为 "text"）
+text_source_name = "text"
+
+# 插件行为配置
+[obs_control.behavior]
+# 是否启用本插件
+enabled = true
+# 连接失败时是否自动禁用插件
+disable_on_connect_fail = true
+# 连接成功后是否发送测试消息以验证功能
+send_test_message_on_connect = true
+# 是否启用逐字显示效果
+typewriter_effect = false
+# 逐字显示速度（每个字符间隔秒数，如 0.1 表示 0.1 秒/字符）
+typewriter_speed = 2.5
+# 逐字显示完成后等待时间（秒）
+typewriter_delay = 0.5
+
+# 高级配置
+[obs_control.advanced]
+# 连接超时时间（秒）
+connect_timeout = 10
+# 连接失败后重试间隔（秒）
+reconnect_interval = 5
+# 最大重连次数（0 表示无限重连）
+max_reconnect_attempts = 3
