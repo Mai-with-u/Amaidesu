@@ -1,12 +1,10 @@
 # src/plugins/mock_danmaku/plugin.py
 
 import asyncio
-import time
 import os
 import json
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Deque
-from collections import deque
+from typing import Dict, Any, Optional, List
 import traceback  # 导入 traceback 用于详细错误日志记录
 
 # --- 依赖检查 & TOML ---

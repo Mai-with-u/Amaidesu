@@ -46,7 +46,13 @@ class EnterMessage(BiliBaseMessage):
 
         # 创建消息段 - 进入直播间消息
         text = f"{self.uname} 进入了直播间"
-        message_segment = Seg(type="text", data=text)
+        message_segment = Seg(
+            "seglist",
+            [
+                Seg(type="text", data=text),
+                Seg("priority_info", {"message_type": "normal", "priority": 0}),
+            ],
+        )
 
         # 记录消息日志
         self.logger.info(f"[进入] {self.uname}: {text}")

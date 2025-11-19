@@ -1,9 +1,6 @@
 # src/plugins/vtube_studio/plugin.py
 import asyncio
-import tomllib
-import os
-from typing import Any, Dict, Optional
-import aiohttp
+from typing import Any, Dict
 import time
 from PIL import Image
 import io

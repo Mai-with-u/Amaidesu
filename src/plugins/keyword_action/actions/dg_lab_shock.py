@@ -1,6 +1,5 @@
 # src/plugins/keyword_action/actions/dg_lab_shock.py
 
-import asyncio
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:

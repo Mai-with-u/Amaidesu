@@ -1,6 +1,16 @@
 [plugin]
-# output_device_name = ""
+# 指定音频输出设备名称，例如 "CABLE Input (VB-Audio Virtual Cable)"
+# 如果留空，则使用系统默认输出设备。
+output_device_name = ""
+
+# 是否启用LLM文本清理服务（如果该服务可用）
 llm_clean = true
+use_remote_stream = false  # 是否启用远程音频输出（需安装remote_stream插件）
+
+# 指定要使用的口型同步服务名称。
+# 默认是 "vts_lip_sync" (VTube Studio 插件)。
+# 如果使用新的 websocket_lip_sync 插件，请设为 "websocket_lip_sync"。
+lip_sync_service_name = "vts_lip_sync"
 
 [pipeline]
 # pipeline预设配置
@@ -34,6 +44,7 @@ text_split_method = "cut5" # 文本分割方法
 repetition_penalty = 1.35 # 重复惩罚系数
 sample_steps = 32        # VITS采样步数
 super_sampling = false    # 是否启用超采样
+sample_rate = 32000
 
 [tts.models]
 # GPT模型配置

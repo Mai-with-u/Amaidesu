@@ -1,0 +1,48 @@
+# Remote Stream 插件配置模板
+# 此插件允许通过WebSocket在服务器和边缘设备间传输音视频数据
+
+# 主要配置
+# server_mode = true 时作为服务端，等待边缘设备连接
+# server_mode = false 时作为客户端，主动连接到边缘设备上的服务
+server_mode = true
+
+# WebSocket 服务器/客户端设置
+# 服务端模式下，host为监听地址（0.0.0.0表示所有网卡）
+# 客户端模式下，host为远程服务器地址
+host = "0.0.0.0"
+port = 8765
+
+# 音频配置
+[audio]
+# 采样率 (Hz)
+sample_rate = 16000
+# 通道数 (1=单声道, 2=立体声)
+channels = 1
+# 格式 ("int16", "float32")
+format = "int16"
+# 每次传输的音频块大小(采样点数)
+chunk_size = 1024
+
+# 图像配置
+[image]
+# 图像宽度(像素)
+width = 640
+# 图像高度(像素)
+height = 480
+# 图像格式 ("jpeg", "png")
+format = "jpeg"
+# JPEG压缩质量 (1-100)
+quality = 80
+
+# 服务配置
+[service]
+# 是否处理音频输入（从边缘设备传入的麦克风数据）
+handle_audio_input = true
+# 是否处理TTS输出（发送到边缘设备的TTS数据）
+handle_tts_output = true
+# 是否处理图像请求（当需要时获取边缘设备的摄像头图像）
+handle_image_requests = true
+# 当收到图像数据时是否保存为文件（用于调试）
+save_images = false
+# 图像保存路径（相对于插件目录）
+image_save_path = "./captured_images/"

@@ -1,0 +1,45 @@
+# Screen Monitor Plugin 配置文件
+# 自动屏幕监控和AI分析插件
+
+# =========================
+# 基础配置
+# =========================
+enabled = true  # 是否启用插件
+
+# =========================
+# AI 模型配置
+# =========================
+api_key = ""
+base_url = ""
+model_name = ""  # 视觉模型名称
+
+# =========================
+# 屏幕分析器配置
+# =========================
+screenshot_interval = 0.3     # 截图间隔(秒)
+diff_threshold = 25.0          # 差异阈值，越低越敏感
+check_window = 3               # 检查最近几帧的变化
+max_cache_size = 5             # 分析器最大缓存帧数
+max_cached_images = 5          # 读取器最大缓存图像数
+
+# =========================
+# 消息配置
+# =========================
+[message]
+# 用户信息
+user_id = 99999
+user_nickname = "屏幕监控"
+user_cardname = ""
+
+# 群组信息 (可选)
+enable_group_info = false
+group_id = 0
+group_name = "屏幕监控"
+
+# 格式信息
+content_format = ["text"]
+accept_format = ["text"]
+
+# 模板信息 (可选)
+enable_template = false
+template_name = "ScreenMonitor" 

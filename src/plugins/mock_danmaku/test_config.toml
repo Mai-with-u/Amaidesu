@@ -1,0 +1,18 @@
+# src/plugins/mock_danmaku/test_config.toml
+# 测试礼物和SC功能的专用配置
+
+[mock_danmaku]
+# 是否启用此插件
+enabled = true
+
+# 使用测试礼物和SC数据文件
+log_file_path = "test_gifts_and_sc.jsonl"
+
+# 发送间隔设为3秒，便于观察效果
+send_interval = 3.0
+
+# 循环播放，持续测试
+loop_playback = true
+
+# 立即开始测试
+start_immediately = true 

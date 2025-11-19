@@ -11,6 +11,18 @@ host = "127.0.0.1"
 port = 8000
 # token = "your_maicore_token_if_needed" # 如果 MaiCore 需要认证，取消注释并设置
 
+[spark_rtasr]
+# 讯飞 RTASR 实时识别凭据
+# app_id = ""
+# access_key_id = ""
+# access_key_secret = ""
+# 可选：自定义 websocket URL（默认官方地址）
+# ws_url = "wss://office-api-ast-dx.iflyaisol.com/ast/communicate/v1"
+app_id = ""
+access_key_id = ""
+access_key_secret = ""
+
+
 [http_server]
 # 是否启用本地 HTTP 回调服务器
 enable = true
@@ -57,7 +69,7 @@ default_priority = 100    # 默认优先级值
 [pipelines.command_processor]
 # 这是一个入站管道，用于处理和执行来自 MaiCore 消息中的命令
 # 例如，执行 VTubeStudio 热键，然后从文本中移除命令标记
-priority = 50 
+priority = 50
 # direction = "inbound" # 此管道的 direction 已在其自己的 config 中设置，此处无需重复
 # 可以在此覆盖 command_map
 # command_map = { vts_trigger_hotkey = { service = "vts_control", method = "trigger_hotkey" } }
@@ -65,10 +77,9 @@ priority = 50
 # 插件全局配置
 [plugins]
 enable_console_input = true
-enable_tts = false              # Microsoft Edge TTS 插件（免费）
-enable_omni_tts = false         # 阿里云 Qwen-Omni TTS 插件（需要API密钥）
 enable_stt = false
 enable_vtube_studio = false
+enable_websocket_lip_sync = false
 enable_bili_danmaku = false
 enable_subtitle = false
 enable_dg-lab-do = false
@@ -78,11 +89,12 @@ enable_sticker = false
 enable_funasr_stt = false
 enable_gptsovits_tts = false
 enable_mock_danmaku = false
-enable_minecraft = false
-enable_bili_danmaku_selenium = false
-enable_bili_danmaku_official = false # 请不要和 bili_danmaku_selenium 同时启用
-enable_arknights = false
+enable_bili_danmaku_official = false          # 请不要和 bili_danmaku_selenium 同时启用
+enable_bili_danmaku_official_maicraft = false # 请不要和 bili_danmaku_selenium 同时启用
 enable_dg_lab_service = false
 enable_keyword_action = true
 enable_read_pingmu = false
 enable_lichess = true
+enable_remote_stream = false
+enable_warudo = false
+enable_screen_monitor = false
