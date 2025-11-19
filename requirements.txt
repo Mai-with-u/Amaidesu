@@ -28,6 +28,7 @@ tomli
 torchaudio
 maim-message
 customtkinter
+obsws_python
 fastmcp
 # LangChain dependencies
 langchain
