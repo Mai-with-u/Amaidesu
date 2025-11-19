@@ -5,9 +5,30 @@ enabled = true
 # 截图频率（秒）
 screenshot_interval_seconds = 5 # 建议不要设置太低
 
+# --- 截图源配置 ---
+# 截图来源类型: "screen"(直接截屏) 或 "obs"(从OBS获取)
+capture_source = "screen"
+
+# --- 调试配置 ---
+[read_pingmu.debug]
+# 是否启用调试模式
+enable_debug = false
+# 是否保存图片和描述到本地
+save_captures = false
+# 保存路径 (相对于插件目录或绝对路径)
+save_dir = "./debug_captures"
+# 文件名前缀
+filename_prefix = "capture_"
+# 是否保存原始图片
+save_image = true
+# 是否保存描述文本
+save_description = true
+# 是否在图片上添加时间戳水印
+add_timestamp = true
+
 # --- OpenAI 兼容 API 配置 ---
 # !!! 必须填入你的 API Key !!!
-api_key = ""   
+api_key = ""
 
 # !!! 必须填入你的服务商提供的 OpenAI 兼容 Base URL !!!
 # 例如 SiliconFlow: "https://api.siliconflow.cn/v1"
@@ -15,7 +36,7 @@ openai_compatible_base_url = "https://api.siliconflow.cn/v1"
 
 # 使用的模型名称 (请根据你的服务商和所选模型调整)
 # 例如 SiliconFlow: "deepseek-ai/deepseek-vl2"
-model_name = "deepseek-ai/deepseek-vl2" 
+model_name = "deepseek-ai/deepseek-vl2"
 
 # 发送给 VL 模型的指令 (Prompt)
 vl_prompt = "请用一句话全面的描述目前屏幕上的的内容和活动窗口标题。output in chinese!!!"
@@ -28,8 +49,23 @@ context_provider_name = "screen_content_latest"
 context_priority = 20
 
 # --- 消息发送配置 ---
-send_messages = true  # 是否发送屏幕描述消息到MaiCore
-context_tags = ["screen", "vision", "context"]  # 获取上下文时的标签过滤
+send_messages = true                           # 是否发送屏幕描述消息到MaiCore
+context_tags = ["screen", "vision", "context"] # 获取上下文时的标签过滤
+
+# --- OBS WebSocket 配置 (仅在 capture_source = "obs" 时使用) ---
+[read_pingmu.obs_config]
+# OBS WebSocket服务器地址
+host = "localhost"
+port = 4455
+# 密码 (如果OBS WebSocket设置了密码)
+password = ""
+# 源名称 (OBS中的场景项名称)
+source_name = "游戏捕获"
+# 是否启用自动场景切换（当指定场景存在时自动切换）
+auto_switch_scene = false
+# 场景名称（当启用自动场景切换时使用）
+scene_name = "游戏"
+
 
 # --- 消息配置 ---
 [read_pingmu.message_config]

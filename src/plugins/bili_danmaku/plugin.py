@@ -2,7 +2,6 @@
 
 import asyncio
 import time
-import os
 from typing import Dict, Any, Optional, List
 
 # --- Dependency Check & TOML ---
@@ -22,7 +21,7 @@ except ModuleNotFoundError:
 # --- Amaidesu Core Imports ---
 from src.core.plugin_manager import BasePlugin
 from src.core.amaidesu_core import AmaidesuCore
-from maim_message import MessageBase, UserInfo, BaseMessageInfo, GroupInfo, FormatInfo, Seg, TemplateInfo
+from maim_message import MessageBase, UserInfo, BaseMessageInfo, GroupInfo, FormatInfo, Seg
 
 
 # --- Plugin Class ---

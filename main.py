@@ -22,47 +22,12 @@ from src.core.plugin_manager import PluginManager
 from src.core.pipeline_manager import PipelineManager  # 导入管道管理器
 from src.utils.logger import get_logger
 from src.utils.config import initialize_configurations  # Updated import
+from src.config.config import global_config
 
 logger = get_logger("Main")
 
 # 获取 main.py 文件所在的目录 (项目根目录)
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-def easter_egg():
-    # 彩蛋
-    import random
-    from colorama import init, Fore
-
-    # 初始化 colorama
-    init()
-
-    easter_egg_list = ["多年以后，面对AI行刑队，李四将会回想起他2025年在会议上讨论人工智能的那个下午。"] # 默认彩蛋
-    egg_config_path = os.path.join(_BASE_DIR, "egg.toml")
-
-    try:
-        with open(egg_config_path, "rb") as f:
-            egg_data = tomllib.load(f)
-            # 确保 'egg' 表和 'easter_egg_list' 列表存在且不为空
-            if "egg" in egg_data and "easter_egg_list" in egg_data["egg"] and egg_data["egg"]["easter_egg_list"]:
-                easter_egg_list = egg_data["egg"]["easter_egg_list"]
-    except FileNotFoundError:
-        # 如果文件不存在，静默处理，使用默认彩蛋
-        pass
-    except (tomllib.TOMLDecodeError, KeyError, TypeError) as e:
-        # 如果文件格式错误或结构不正确，记录一个警告并使用默认彩蛋
-        logger.warning(f"无法从 {egg_config_path} 加载彩蛋: {e}")
-
-
-    # 2. 从列表中随机选择一个
-    text = random.choice(easter_egg_list)
-
-    rainbow_colors = [Fore.RED, Fore.YELLOW, Fore.GREEN, Fore.CYAN, Fore.BLUE, Fore.MAGENTA]
-    rainbow_text = ""
-    for i, char in enumerate(text):
-        rainbow_text += rainbow_colors[i % len(rainbow_colors)] + char
-    
-    print(rainbow_text)
-    
 
 async def main():
     """应用程序主入口点。"""
@@ -83,7 +48,8 @@ async def main():
 
     # --- 配置日志 ---
     base_level = "DEBUG" if args.debug else "INFO"
-    log_format = "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{line: <4}</cyan> | <cyan>{extra[module]}</cyan> - <level>{message}</level>"
+    # log_format = "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{line: <4}</cyan> | <cyan>{extra[module]}</cyan> - <level>{message}</level>"
+    log_format = "<green>{time:HH:mm:ss.SSS}</green> | <level>{level: <2}</level> | <cyan>{line: <4}</cyan> | <cyan>{extra[module]}</cyan> | <level>{message}</level>"
 
     # 清除所有预设的 handler (包括 src/utils/logger.py 中添加的)
     logger.remove()
@@ -130,9 +96,6 @@ async def main():
         logger.info(f"日志过滤器已激活: {list(filtered_modules)} (INFO 级别)")
 
     logger.info("启动 Amaidesu 应用程序...")
-
-    #彩蛋
-    easter_egg()
     
     # --- 初始化所有配置 ---
     try:
@@ -258,31 +221,76 @@ async def main():
 
     # --- 保持运行并处理退出信号 ---
     stop_event = asyncio.Event()
+    shutdown_initiated = False
 
-    def signal_handler():
+    def signal_handler(signum=None, frame=None):
+        nonlocal shutdown_initiated
+        if shutdown_initiated:
+            logger.warning("已经在关闭中，忽略重复信号")
+            return
+        shutdown_initiated = True
         logger.info("收到退出信号，开始关闭...")
         stop_event.set()
 
-    loop = asyncio.get_running_loop()
-    # 在 Windows 上，SIGINT (Ctrl+C) 通常可用
-    # 在 Unix/Linux 上，可以添加 SIGTERM
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(sig, signal_handler)
-        except NotImplementedError:
-            # Windows 可能不支持 add_signal_handler
-            # 使用 signal.signal 作为备选方案
-            signal.signal(sig, lambda signum, frame: signal_handler())
+    # 优先使用系统信号处理
+    try:
+        loop = asyncio.get_running_loop()
+        # 在 Windows 上，SIGINT (Ctrl+C) 通常可用
+        # 在 Unix/Linux 上，可以添加 SIGTERM
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, signal_handler)
+            except (NotImplementedError, ValueError):
+                # Windows 可能不支持 add_signal_handler
+                pass
+    except Exception:
+        pass
+    
+    # 为Windows等不支持loop.add_signal_handler的系统设置信号处理
+    original_sigint = signal.signal(signal.SIGINT, signal_handler)
+    try:
+        original_sigterm = signal.signal(signal.SIGTERM, signal_handler)
+    except (ValueError, OSError):
+        # 某些系统可能不支持SIGTERM
+        original_sigterm = None
 
     logger.info("应用程序正在运行。按 Ctrl+C 退出。")
-    await stop_event.wait()
+    
+    try:
+        await stop_event.wait()
+        logger.info("收到关闭信号，开始执行清理...")
+    except KeyboardInterrupt:
+        logger.info("检测到 KeyboardInterrupt，开始清理...")
+        shutdown_initiated = True
+
+    # 立即移除信号处理器，防止重复触发
+    try:
+        signal.signal(signal.SIGINT, original_sigint)
+        if original_sigterm is not None:
+            signal.signal(signal.SIGTERM, original_sigterm)
+        logger.debug("信号处理器已恢复")
+    except Exception as e:
+        logger.debug(f"恢复信号处理器时出错: {e}")
 
     # --- 执行清理 ---
     logger.info("正在卸载插件...")
-    await plugin_manager.unload_plugins()  # 在断开连接前卸载插件
+    try:
+        await asyncio.wait_for(plugin_manager.unload_plugins(), timeout=2.0)  # 减少到5秒
+        logger.info("插件卸载完成")
+    except asyncio.TimeoutError:
+        logger.warning("插件卸载超时，强制继续")
+    except Exception as e:
+        logger.error(f"插件卸载时出错: {e}")
 
     logger.info("正在关闭核心服务...")
-    await core.disconnect()
+    try:
+        await asyncio.wait_for(core.disconnect(), timeout=2.0)  # 减少到3秒
+        logger.info("核心服务关闭完成")
+    except asyncio.TimeoutError:
+        logger.warning("核心服务关闭超时，强制退出")
+    except Exception as e:
+        logger.error(f"核心服务关闭时出错: {e}")
+    
     logger.info("Amaidesu 应用程序已关闭。")
 
 

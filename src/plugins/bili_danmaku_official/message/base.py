@@ -1,6 +1,6 @@
 from typing import Optional, Dict, Any
 from dataclasses import dataclass
-from maim_message import MessageBase, UserInfo, BaseMessageInfo, GroupInfo, FormatInfo, Seg, TemplateInfo
+from maim_message import MessageBase, UserInfo, BaseMessageInfo, GroupInfo, FormatInfo, TemplateInfo
 from enum import Enum
 import time
 from src.utils.logger import get_logger
@@ -129,14 +129,15 @@ class BiliBaseMessage:
         modified_template_items = template_items.copy()
 
         if prompt_ctx_service := core.get_service("prompt_context"):
+            self.logger.info("正在获取 Prompt 上下文...")
             try:
                 additional_context = await prompt_ctx_service.get_formatted_context(tags=context_tags)
                 if additional_context:
                     # 修改主 Prompt
-                    main_prompt_key = "reasoning_prompt_main"
+                    main_prompt_key = "default_generator_prompt"
                     if main_prompt_key in modified_template_items:
                         original_prompt = modified_template_items[main_prompt_key]
-                        modified_template_items[main_prompt_key] = original_prompt + "\n" + additional_context
+                        modified_template_items[main_prompt_key] = additional_context + "\n" + original_prompt
             except Exception as e:
                 self.logger.error(f"创建模板信息时发生错误: {e}", exc_info=True)
 

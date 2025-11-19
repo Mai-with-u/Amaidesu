@@ -65,10 +65,18 @@ class SuperChatMessage(BiliBaseMessage):
         # 创建消息段 - 醒目留言消息
         if self.message.strip():
             text = f"[SC {self.rmb}元] {self.uname}: {self.msg.strip()}"
+            data = f"{self.rmb}:{self.message}"
         else:
             text = f"[SC {self.rmb}元] {self.uname} 发送了醒目留言"
+            data = f"{self.rmb}:{self.message}"
 
-        message_segment = Seg(type="text", data=text)
+        message_segment = Seg(
+            "seglist",
+            [
+                Seg(type="superchat", data=data),
+                Seg("priority_info", {"message_type": "vip", "priority": self.rmb}),
+            ],
+        )
 
         # 记录消息日志
         self.logger.info(f"[SC] {self.uname}: {text}")

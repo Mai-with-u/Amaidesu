@@ -10,7 +10,6 @@ except ImportError:
 
 from src.core.plugin_manager import BasePlugin
 from src.core.amaidesu_core import AmaidesuCore
-from maim_message import MessageBase
 
 
 class DGLabServicePlugin(BasePlugin):

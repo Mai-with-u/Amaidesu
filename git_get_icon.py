@@ -1,7 +1,6 @@
 import os
 import subprocess
 import requests
-import json
 
 # --- 配置 ---
 # 头像保存的目录 (建议放在 .git 目录内，这样不会被 Git 跟踪)

@@ -72,9 +72,22 @@ class GuardMessage(BiliBaseMessage):
             3: "舰长",
         }
 
+        guard_money_map = {
+            1: 20000,
+            2: 2000,
+            3: 138,
+        }
+
         guard_name = guard_level_map.get(self.guard_level, "无等级")
         text = f"{self.uname} 开通了 {guard_name}"
-        message_segment = Seg(type="text", data=text)
+        # message_segment = Seg(type="text", data=text)
+        message_segment = Seg(
+            "seglist",
+            [
+                Seg(type="guard", data=text),
+                Seg("priority_info", {"message_type": "vip", "priority": guard_money_map.get(self.guard_level, 138)}),
+            ],
+        )
 
         # 记录消息日志
         self.logger.info(f"[大航海] {self.uname}: {text}")

@@ -1,9 +1,8 @@
 # src/plugins/keyword_action/plugin.py
 import asyncio
 import importlib
-import os
 import time
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, List
 
 from src.core.plugin_manager import BasePlugin
 from src.core.amaidesu_core import AmaidesuCore

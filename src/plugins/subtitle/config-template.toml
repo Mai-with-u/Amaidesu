@@ -1,7 +1,5 @@
 
-[subtitle_display] 
-enabled = true
-
+[subtitle_display]
 # --- 窗口样式 ---
 window_width = 800      # 窗口宽度 (像素)
 window_height = 100     # 窗口高度 (像素)
@@ -9,8 +7,30 @@ window_offset_y = 100   # 窗口底部距离屏幕底部的距离 (像素)
 font_family = "Microsoft YaHei UI" # 字体 (确保系统支持)
 font_size = 28          # 字号
 font_weight = "bold"    # 字重 (normal, bold)
-text_color = "white"    # 文字颜色 (CSS 颜色名或 #RRGGBB)
-bg_color = "black"      # 背景色 (用于透明效果，通常设为黑色或一个不常用的颜色)
+text_color = "#ff83a0"    # 文字颜色 (CSS 颜色名或 #RRGGBB)
 
-# --- 行为 ---
-fade_delay_seconds = 5  # 语音停止后多少秒开始清除文字 (设置为 0 永不清除) 
+# --- 窗口行为配置 ---
+always_show_window = true          # 始终显示窗口 (便于 OBS 窗口捕获和任务栏操作)
+show_in_taskbar = true             # 在任务栏显示 (便于点击切换)
+window_minimizable = true          # 允许最小化窗口
+show_waiting_text = false          # 是否显示等待文字 (设为 false 在无内容时透明)
+
+# --- 描边配置 ---
+outline_enabled = true   # 是否启用文字描边
+outline_color = "white"  # 描边颜色
+outline_width = 2        # 描边宽度
+
+# --- 背景配置 ---
+background_color = "white" # 背景颜色
+
+# --- 窗口行为 ---
+window_alpha = 1.0      # 整体窗口透明度 (OBS 可调整此值, 0.0-1.0)
+always_on_top = false   # 是否始终置顶显示 (关键配置！)
+auto_hide = true        # 是否自动隐藏/清空内容
+fade_delay_seconds = 5  # 语音停止后多少秒开始清除文字 (设置为 0 永不清除)
+
+# --- OBS 集成配置 ---
+obs_friendly_mode = true           # OBS 友好模式
+window_title = "Amaidesu-Subtitle-OBS" # 窗口标题 (便于 OBS 识别)
+use_chroma_key = false             # 是否使用色度键背景 (绿幕抠像)
+chroma_key_color = "#00FF00"       # 色度键颜色 (绿幕: #00FF00, 蓝幕: #0000FF) 

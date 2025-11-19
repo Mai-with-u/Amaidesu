@@ -24,7 +24,6 @@ import base64
 import sys
 import argparse  # 导入 argparse
 from typing import Set, Dict, Callable, List, Any, Optional
-from enum import Enum
 
 from maim_message.message_base import BaseMessageInfo, FormatInfo, Seg, UserInfo
 from maim_message import MessageBase
@@ -210,75 +209,135 @@ async def cmd_help(args: List[str]) -> Optional[MessageBase]:
     return None  # 不发送任何消息到websocket
 
 
-@command("sendRandomEmoji", "发送随机表情包", "/sendRandomEmoji")
-async def cmd_sendRandomEmoji(args: List[str]) -> Optional[MessageBase]:
-    """发送随机表情包"""
-    emoji_data = get_random_emoji()
-    if emoji_data:
-        return build_message(emoji_data, "emoji")
-    else:
-        print(f"{COLOR_RED}无法发送表情消息：没有可用的表情包{COLOR_RESET}")
-        return None
+@command("gift", "发送虚假礼物消息", "/gift [用户名] [礼物名] [数量]")
+async def cmd_gift(args: List[str]) -> Optional[MessageBase]:
+    """发送虚假礼物消息"""
+    # 默认参数
+    username = args[0] if len(args) > 0 else "测试用户"
+    gift_name = args[1] if len(args) > 1 else "辣条"
+    gift_count = args[2] if len(args) > 2 else "1"
+    
+    try:
+        count = int(gift_count)
+    except ValueError:
+        count = 1
+        
+    user_id = f"test_gift_{hash(username) % 10000}"
+    message_id = f"test_gift_{int(time.time())}"
+    
+    message_base = MessageBase(
+        message_info=BaseMessageInfo(
+            platform="bilibili",
+            message_id=message_id,
+            time=int(time.time()),
+            user_info=UserInfo(
+                platform="bilibili",
+                user_id=user_id,
+                user_nickname=username,
+                user_cardname=username
+            ),
+            format_info=FormatInfo(
+                content_format=["text"],
+                accept_format=["text", "gift"]
+            )
+        ),
+        message_segment=Seg(
+            "seglist",
+            [
+                Seg(type="gift", data=f"{gift_name}:{count}"),
+                Seg("priority_info", {"message_type": "vip", "priority": 1})
+            ]
+        ),
+        raw_message=f"{username} 送出了 {count} 个 {gift_name}"
+    )
+    
+    print(f"{COLOR_GREEN}💝 发送礼物: {username} -> {count}个{gift_name}{COLOR_RESET}")
+    return message_base
 
 
-@command("mc_help", "显示Minecraft相关命令帮助", "/mc_help")
-async def cmd_mc_help(args: List[str]) -> Optional[MessageBase]:
-    """显示Minecraft相关命令的帮助信息"""
-    help_text = f"\n{COLOR_CYAN}===== Minecraft命令帮助 ====={COLOR_RESET}\n"
-
-    # 筛选所有mc_前缀的命令
-    mc_commands = {name: info for name, info in commands.items() if name.startswith("mc_")}
-
-    for cmd_name, cmd_info in sorted(mc_commands.items()):
-        help_text += f"{COLOR_YELLOW}{cmd_info['usage']}{COLOR_RESET} - {cmd_info['description']}\n"
-
-    print(help_text)
-    return None  # 不发送任何消息到websocket
-
-
-@command("mc_low_level", "发送自定义低级动作", "/mc_low_level [val1] [val2] [val3] [val4] [val5] [val6] [val7] [val8]")
-async def cmd_mc_low_level(args: List[str]) -> Optional[MessageBase]:
-    """发送Minecraft低级动作
-
-    用法: /mc_low_level <val1> <val2> <val3> <val4> <val5> <val6> <val7> <val8>
-    默认: 0 0 0 0 0 0 0 0 (空闲)
-    示例动作:
-    - 前进: 0 1 0 0 0 0 0 0
-    - 后退: 0 -1 0 0 0 0 0 0
-    - 向左: -1 0 0 0 0 0 0 0
-    - 向右: 1 0 0 0 0 0 0 0
-    - 跳跃: 0 0 0 1 0 0 0 0
-    - 攻击: 0 0 0 0 1 0 0 0
-    - 使用: 0 0 0 0 0 1 0 0
-    """
-    # 默认全为0的低级动作
-    values = [0, 0, 0, 0, 0, 0, 0, 0]
-
-    # 如果用户提供了参数，覆盖相应位置的值
-    for i, arg in enumerate(args):
-        if i < 8:  # 只处理前8个参数
-            try:
-                values[i] = int(arg)
-            except ValueError:
-                print(f"{COLOR_RED}警告: 参数 '{arg}' 不是有效整数，使用默认值0{COLOR_RESET}")
-
-    action = {"actions": values}
-
-    return build_message(json.dumps(action))
+@command("sc", "发送虚假醒目留言", "/sc [用户名] [内容]")
+async def cmd_sc(args: List[str]) -> Optional[MessageBase]:
+    """发送虚假醒目留言（SuperChat）"""
+    # 默认参数
+    username = args[0] if len(args) > 0 else "SC大佬"
+    content = " ".join(args[1:]) if len(args) > 1 else "这是一条测试醒目留言！"
+    
+    user_id = f"test_sc_{hash(username) % 10000}"
+    message_id = f"test_sc_{int(time.time())}"
+    
+    message_base = MessageBase(
+        message_info=BaseMessageInfo(
+            platform="bilibili",
+            message_id=message_id,
+            time=int(time.time()),
+            user_info=UserInfo(
+                platform="bilibili",
+                user_id=user_id,
+                user_nickname=username,
+                user_cardname=username
+            ),
+            format_info=FormatInfo(
+                content_format=["text"],
+                accept_format=["text"]
+            )
+        ),
+        message_segment=Seg(
+            "seglist",
+            [
+                Seg(type="text", data=content),
+                Seg("priority_info", {"message_type": "super_vip", "priority": 2})
+            ]
+        ),
+        raw_message=f"{username} 发送了醒目留言：{content}"
+    )
+    
+    print(f"{COLOR_YELLOW}⭐ 发送醒目留言: {username} -> {content}{COLOR_RESET}")
+    return message_base
 
 
-@command("mc_code", "发送Minecraft高级动作 - 提交JavaScript代码", "/mc_code [代码]")
-async def cmd_mc_code(args: List[str]) -> Optional[MessageBase]:
-    """发送Minecraft高级动作（JavaScript代码）"""
-    # 默认代码
-    default_code = """bot.chat("Hello, Minecraft world!")"""
-
-    # 如果提供了自定义代码，使用用户提供的代码
-    code = " ".join(args) if args else default_code
-
-    action = {"actions": code}
-
-    return build_message(json.dumps(action))
+@command("guard", "发送虚假大航海开通消息", "/guard [用户名] [等级]")
+async def cmd_guard(args: List[str]) -> Optional[MessageBase]:
+    """发送虚假大航海开通消息"""
+    # 默认参数
+    username = args[0] if len(args) > 0 else "大航海"
+    guard_level = args[1] if len(args) > 1 else "舰长"
+    
+    # 验证大航海等级
+    valid_levels = ["舰长", "提督", "总督"]
+    if guard_level not in valid_levels:
+        guard_level = "舰长"
+    
+    user_id = f"test_guard_{hash(username) % 10000}"
+    message_id = f"test_guard_{int(time.time())}"
+    
+    message_base = MessageBase(
+        message_info=BaseMessageInfo(
+            platform="bilibili",
+            message_id=message_id,
+            time=int(time.time()),
+            user_info=UserInfo(
+                platform="bilibili",
+                user_id=user_id,
+                user_nickname=username,
+                user_cardname=username
+            ),
+            format_info=FormatInfo(
+                content_format=["text"],
+                accept_format=["text"]
+            )
+        ),
+        message_segment=Seg(
+            "seglist",
+            [
+                Seg(type="text", data=f"开通了{guard_level}"),
+                Seg("priority_info", {"message_type": "super_vip", "priority": 3})
+            ]
+        ),
+        raw_message=f"{username} 开通了{guard_level}"
+    )
+    
+    print(f"{COLOR_MAGENTA}⚓ 发送大航海: {username} -> {guard_level}{COLOR_RESET}")
+    return message_base
 
 
 async def handle_command(cmd_line: str):
