@@ -27,3 +27,5 @@ torchaudio
 maim-message
 customtkinter
 obsws_python
+librosa
+scipy

@@ -1,41 +1,47 @@
 # Amaidesu GPTSoVITS TTS 插件
 
-TTS（语音合成）插件是 Amaidesu VTuber 项目的核心组件，负责将文本消息转换为语音并播放给用户。插件使用 GPTSoVITS 引擎实现高质量语音合成，并支持与其他插件如文本清理服务和字幕服务的集成。
+TTS（语音合成）插件是 Amaidesu VTuber 项目的核心组件，负责将文本消息转换为语音并播放给用户。插件使用 GPTSoVITS 引擎实现高质量语音合成，并支持与其他插件如文本清理服务、字幕服务、VTS 口型同步服务及 OBS 控制服务的深度集成。
 
 ## 功能特点
 
-- 接收并处理 WebSocket 文本消息
-- 使用 GPTSoVITS 进行语音合成（流式传输）
-- 支持选择不同语音角色和输出音频设备
-- 支持预设角色配置（包括参考音频和提示文本）
-- 集成文本清理服务（可选）
-- 发送播放信息到字幕服务（可选）
-- 智能错误处理和资源管理
+- 接收并处理 WebSocket 文本消息  
+- 使用 GPTSoVITS 进行 **流式语音合成**  
+- 支持选择不同语音角色和输出音频设备  
+- 支持预设角色配置（包括参考音频和提示文本）  
+- 集成 **文本清理服务（可选）**  
+- **在首个有效音频块到达时触发字幕显示**（兼容 Subtitle 服务与 OBS）  
+- 支持 **VTS 口型同步会话管理**（启动/停止）  
+- 智能错误处理和资源管理  
 
 ## 依赖
 
 ### 必需依赖
 
-- `GPTSoVITS`：AI语音克隆引擎
-- `sounddevice`: 音频播放
-- `numpy`: 用于音频数据处理
+- `GPTSoVITS`：AI语音克隆引擎  
+- `sounddevice`: 音频播放  
+- `numpy`: 用于音频数据处理  
 
 ### 可选服务依赖
 
-- `text_cleanup`: 用于优化 TTS 的文本（由 LLM Text Processor 插件提供）
-- `subtitle_service`: 用于显示正在播放的文本（由 Subtitle 插件提供）
+- `text_cleanup`: 优化 TTS 输入文本（由 LLM Text Processor 插件提供）  
+- `subtitle_service`: 显示字幕（由 Subtitle 插件提供）  
+- `vts_lip_sync`: 控制 VTS 模型口型同步（由 VTS Lip Sync 插件提供）  
+- `obs_control`: 向 OBS 推送字幕文本（由 OBS Control 插件提供）  
 
 ## 消息处理流程
 
 TTS 插件处理流程如下：
 
-1. **消息接收**：监听来自 MaiCore 的所有 WebSocket 消息，过滤出文本类型消息
-2. **文本清理**（可选）：通过 `text_cleanup` 服务优化文本内容
-3. **语音合成**：使用 GPTSoVITS 将文本转换为流式音频数据
-4. **播放前处理**：计算估计音频时长并通知字幕服务
-5. **音频流处理**：接收WAV音频流数据并实时解码为PCM数据
-6. **缓冲处理**：将PCM数据分块并缓冲到音频播放队列
-7. **音频播放**：通过 sounddevice 流式播放音频
+1. **消息接收**：监听 MaiCore 的 WebSocket 文本消息  
+2. **文本清理**（可选）：通过 `text_cleanup` 服务优化文本  
+3. **启动口型同步**（若服务可用）：调用 `vts_lip_sync.start_lip_sync_session(text)`  
+4. **发起流式 TTS 请求**：调用 `tts_model.tts_stream(text)`  
+5. **等待首个音频块**：不提前预估时长，**在收到首个有效音频块时才触发字幕**  
+   - 向 `obs_control` 发送字幕  
+   - 调用 `subtitle_service.record_speech(text, estimated_duration)`  
+6. **音频流处理**：逐块解码 WAV 为 PCM 并缓冲  
+7. **实时播放 + 口型同步**：音频播放同时维持口型会话  
+8. **清理阶段**：播放结束后调用 `vts_lip_sync.stop_lip_sync_session()`  
 
 ## 时序图
 
@@ -44,6 +50,8 @@ sequenceDiagram
     participant MaiCore as MaiCore WebSocket
     participant TTS as TTS插件
     participant Cleanup as 文本清理服务
+    participant VTS as VTS口型同步服务
+    participant OBS as OBS控制服务
     participant Subtitle as 字幕服务
     participant GPTSoVITS as GPTSoVITS引擎
     participant Audio as 音频设备
@@ -55,45 +63,49 @@ sequenceDiagram
         Cleanup-->>TTS: 返回优化后文本
     end
     
-    TTS->>Subtitle: 通知字幕服务（预估时长）
+    TTS->>VTS: 启动口型同步会话
     TTS->>GPTSoVITS: 请求流式语音合成
     
-    loop 对每个音频块
-        GPTSoVITS-->>TTS: 返回WAV音频数据块
+    loop 等待并处理音频块
+        GPTSoVITS-->>TTS: 返回WAV音频块
+        
+        alt 首个有效块
+            TTS->>OBS: 发送字幕文本
+            TTS->>Subtitle: record_speech(文本, 估算时长)
+        end
+        
         TTS->>TTS: 解码WAV为PCM
-        TTS->>TTS: 缓冲PCM数据
         TTS->>Audio: 播放音频块
     end
     
-    Audio-->>TTS: 播放完成
+    TTS->>VTS: 停止口型同步会话
+    Note right of Audio: 播放完成
 ```
 
 ## 核心服务使用
 
-### 文本清理服务使用示例
-
-TTS 插件通过`text_cleanup`服务来优化文本以获得更好的语音效果：
+### VTS 口型同步集成
 
 ```python
-# 获取文本清理服务
-cleanup_service = self.core.get_service("text_cleanup")
-if cleanup_service:
-    # 尝试清理文本
-    cleaned = await cleanup_service.clean_text(original_text)
-    if cleaned:
-        # 使用清理后的文本
-        final_text = cleaned
+vts_lip_sync_service = self.core.get_service("vts_lip_sync")
+if vts_lip_sync_service:
+    await vts_lip_sync_service.start_lip_sync_session(text)
+    # ... 播放中 ...
+    await vts_lip_sync_service.stop_lip_sync_session()
 ```
 
-### 字幕服务通知示例
-
-TTS 插件在播放音频前会通知字幕服务展示对应文本：
+### 字幕与 OBS 推送（在首个音频块时触发）
 
 ```python
+# 仅在收到第一个有效音频块时执行
+obs_service = self.core.get_service("obs_control")
+if obs_service:
+    await obs_service.send_to_obs(text)
+
 subtitle_service = self.core.get_service("subtitle_service")
 if subtitle_service:
-    # 异步调用，不阻塞播放
-    asyncio.create_task(subtitle_service.record_speech(text, duration_seconds))
+    estimated_duration = max(3.0, len(text) * 0.3)
+    asyncio.create_task(subtitle_service.record_speech(text, estimated_duration))
 ```
 
 ## 核心代码解析
@@ -103,7 +115,6 @@ if subtitle_service:
 ```python
 async def handle_maicore_message(self, message: MessageBase):
     """处理从 MaiCore 收到的消息，如果是文本类型，则进行 TTS 处理。"""
-    # 检查消息段是否存在且类型为 'text'
     if message.message_segment and message.message_segment.type == "text":
         original_text = message.message_segment.data
         if not isinstance(original_text, str) or not original_text.strip():
@@ -115,7 +126,7 @@ async def handle_maicore_message(self, message: MessageBase):
 
         final_text = original_text
 
-        # 1. (可选) 清理文本 - 通过服务调用
+        # (可选) 清理文本
         cleanup_service = self.core.get_service("text_cleanup")
         if cleanup_service:
             try:
@@ -125,39 +136,80 @@ async def handle_maicore_message(self, message: MessageBase):
             except Exception as e:
                 self.logger.error(f"调用 text_cleanup 服务时出错: {e}")
 
-        # 2. 执行 TTS
+        # 执行 TTS
         await self._speak(final_text)
 ```
 
-### 2. TTS 执行函数
+### 2. 更新后的 TTS 执行函数 `_speak`
 
 ```python
 async def _speak(self, text: str):
-    """执行 GPTSoVITS 合成和播放，并通知 Subtitle Service。"""
-    async with self.tts_lock:
-        # 通知字幕服务（预估时长）
-        duration_seconds = 10.0  # 初始化时长变量
-        subtitle_service = self.core.get_service("subtitle_service")
-        if subtitle_service:
-            asyncio.create_task(subtitle_service.record_speech(text, duration_seconds))
+    self.logger.info(f"请求播放: '{text[:30]}...'")
+
+    vts_lip_sync_service = self.core.get_service("vts_lip_sync")
+    if vts_lip_sync_service:
+        try:
+            await vts_lip_sync_service.start_lip_sync_session(text)
+        except Exception as e:
+            self.logger.debug(f"启动口型同步会话失败: {e}")
 
     try:
-        # 获取音频流
+        # 发起流式请求（不阻塞，但首 chunk 可能延迟）
         audio_stream = self.tts_model.tts_stream(text)
-        
-        # 确保音频流已启动
+        self.logger.debug("TTS 流已创建，等待首音频块...")
+
+        # 确保音频播放流已启动
         if self.stream and not self.stream.active:
             self.stream.start()
 
-        # 异步处理音频数据块
+        # 标记是否已发送字幕（避免重复）
+        subtitle_sent = False
+
+        # 开始消费音频流
         for chunk in audio_stream:
-            if chunk:
-                await self.decode_and_buffer(chunk)
-            else:
+            if not chunk:
+                self.logger.debug("收到空音频块，跳过")
                 continue
 
+            # 👇 第一次收到有效音频块时，立即发送字幕
+            if not subtitle_sent:
+                self.logger.debug("收到首个音频块，触发字幕显示")
+                
+                # 发送 OBS 字幕
+                obs_service = self.core.get_service("obs_control")
+                if obs_service:
+                    try:
+                        await obs_service.send_to_obs(text)
+                    except Exception as e:
+                        self.logger.error(f"向 OBS 发送字幕失败: {e}", exc_info=True)
+
+                # 通知字幕服务
+                subtitle_service = self.core.get_service("subtitle_service")
+                if subtitle_service:
+                    try:
+                        # 动态估算时长
+                        estimated_duration = max(3.0, len(text) * 0.3)
+                        asyncio.create_task(
+                            subtitle_service.record_speech(text, estimated_duration)
+                        )
+                    except Exception as e:
+                        self.logger.error(f"调用 subtitle_service 出错: {e}", exc_info=True)
+
+                subtitle_sent = True  # 只发一次
+
+            # 处理音频（播放 + 口型同步）
+            await self.decode_and_buffer(chunk)
+
+        self.logger.info(f"音频播放完成: '{text[:30]}...'")
+
     except Exception as e:
-        self.logger.error(f"音频流处理出错: {e}")
+        self.logger.error(f"TTS 播放出错: {e}", exc_info=True)
+    finally:
+        if vts_lip_sync_service:
+            try:
+                await vts_lip_sync_service.stop_lip_sync_session()
+            except Exception as e:
+                self.logger.debug(f"停止口型同步失败: {e}")
 ```
 
 ### 3. 音频流处理函数
@@ -257,17 +309,16 @@ llm_clean = true
 
 ## 优化与扩展
 
-1. **多预设支持**：通过配置不同的角色预设，轻松切换不同的语音角色
-2. **流式传输**：实时接收和处理音频块，减少延迟
-3. **高级音频控制**：可通过参数调整语速、顿挫感等
-4. **模型热切换**：支持在运行时切换不同的模型和预设
-5. **情感分析集成**：可与情感分析插件集成以自动选择合适的语音风格
-6. **WAV/PCM流处理**：高效的音频流解析和缓冲机制
+1. **精准字幕时机**：避免因提前预估时长导致字幕与语音不同步  
+2. **多服务协同**：VTS + OBS + Subtitle 三端同步支持  
+3. **流式低延迟**：首块音频即触发下游服务，提升响应感  
+4. **会话生命周期管理**：口型同步会话自动启停，避免残留状态  
+5. **动态时长估算**：`max(3.0, len(text) * 0.3)` 平衡短句与长句显示时间  
 
 ## 开发注意事项
 
-1. 确保GPTSoVITS服务已正确配置并运行
-2. 注意异步锁的正确使用，避免死锁和资源竞争
-3. 音频缓冲区应适当大小，过小可能导致音频播放不流畅
-4. 考虑长文本的分段处理以提高响应速度
-5. 注意异常处理，确保意外情况下不会阻塞其他功能
+1. `subtitle_sent` 标志确保字幕只触发一次，防止重复  
+2. 所有服务调用均包裹在 `try-except` 中，避免单点故障中断 TTS  
+3. VTS 会话必须在 `finally` 块中关闭，确保资源释放  
+4. 字幕时长估算为启发式策略，可根据实际语音速度进一步优化（如结合 GPTSoVITS 的 token 长度）  
+5. 若 GPTSoVITS 首块延迟较高，可考虑预加载或静音填充以维持口型同步同步性  
