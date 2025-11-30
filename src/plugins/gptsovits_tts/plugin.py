@@ -880,17 +880,24 @@ class TTSPlugin(BasePlugin):
         
         async with self.tts_lock:
             self.logger.debug(f"获取 TTS 锁，开始处理: '{text[:30]}...'")
-            duration_seconds: Optional[float] = 10.0  # 初始化时长变量
+            duration_seconds: Optional[float] = 10.0
+
+            # --- 通知字幕服务 ---
             subtitle_service = self.core.get_service("subtitle_service")
             if subtitle_service:
-                self.logger.debug("找到 subtitle_service，准备记录语音信息...")
                 try:
-                    # 异步调用，不阻塞播放
                     asyncio.create_task(subtitle_service.record_speech(text, duration_seconds))
-                except AttributeError:
-                    self.logger.error("获取到的 'subtitle_service' 没有 'record_speech' 方法。")
                 except Exception as e:
-                    self.logger.error(f"调用 subtitle_service.record_speech 时出错: {e}", exc_info=True)
+                    self.logger.error(f"调用 subtitle_service.record_speech 出错: {e}", exc_info=True)
+
+            # --- 同步发送到 OBS ---
+            obs_service = self.core.get_service("obs_control")
+            if obs_service:
+                try:
+                    # 可选：是否使用逐字效果？这里使用默认配置
+                    await obs_service.send_to_obs(text)
+                except Exception as e:
+                    self.logger.error(f"向 OBS 发送字幕失败: {e}", exc_info=True)
 
         try:
             # 获取音频流

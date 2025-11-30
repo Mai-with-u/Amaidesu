@@ -385,7 +385,7 @@ class ScreenMonitorPlugin(BasePlugin):
         encoded_image: Optional[str] = None
         try:
             with mss.mss() as sct:
-                monitor = sct.monitors[1]
+                monitor = sct.monitors[0]
                 sct_img = sct.grab(monitor)
                 img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
                 buffer = BytesIO()
