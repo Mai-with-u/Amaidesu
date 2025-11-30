@@ -31,6 +31,13 @@ context_priority = 20
 send_messages = true  # 是否发送屏幕描述消息到MaiCore
 context_tags = ["screen", "vision", "context"]  # 获取上下文时的标签过滤
 
+# 截图区域配置
+# monitor = "primary"   # 使用主显示器
+# monitor = "all"       # 截取整个虚拟屏幕（等同于 sct.monitors[0]）
+# monitor = [1]         # 截取第一个显示器（索引从 1 开始）
+# monitor = [1, 2]      # 合并截取多个显示器（需额外处理）
+monitor = "all"
+
 # --- 消息配置 ---
 [read_pingmu.message_config]
 # 用户信息
@@ -71,3 +78,4 @@ reasoning_prompt_main = '''
 
 请保持简洁、有用的回应。
 '''
+

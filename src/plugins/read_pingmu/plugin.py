@@ -231,6 +231,7 @@ class ScreenMonitorPlugin(BasePlugin):
         self.timeout_seconds = self.config.get("request_timeout", 20)  # 请求超时
         self.context_provider_name = self.config.get("context_provider_name", "screen_content_latest")
         self.context_priority = self.config.get("context_priority", 20)
+        self.monitor_selection = self.config.get("monitor", "all")  # 截图区域配置
 
         # --- 消息发送相关配置 ---
         self.send_messages = self.config.get("send_messages", True)  # 是否发送消息到MaiCore
@@ -385,7 +386,23 @@ class ScreenMonitorPlugin(BasePlugin):
         encoded_image: Optional[str] = None
         try:
             with mss.mss() as sct:
-                monitor = sct.monitors[0]
+                if self.monitor_selection == "all":
+                    monitor = sct.monitors[0]  # 整个虚拟桌面
+                elif self.monitor_selection == "primary":
+                    monitor = sct.monitors[1]  # 主显示器（mss 中索引 1 是主屏）
+                elif isinstance(self.monitor_selection, list):
+                    # 如果配置为 [1, 2]，可选择第一个显示器（或后续支持拼接）
+                    # 简化处理：只取第一个
+                    idx = self.monitor_selection[0]
+                    if 1 <= idx < len(sct.monitors):
+                        monitor = sct.monitors[idx]
+                    else:
+                        self.logger.warning(f"显示器索引 {idx} 超出范围，回退到主屏")
+                        monitor = sct.monitors[1]
+                else:
+                    self.logger.warning(f"未知的 monitor 配置: {self.monitor_selection}，使用默认 'all'")
+                    monitor = sct.monitors[0]
+
                 sct_img = sct.grab(monitor)
                 img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
                 buffer = BytesIO()

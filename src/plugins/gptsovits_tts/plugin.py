@@ -866,68 +866,71 @@ class TTSPlugin(BasePlugin):
             pass
 
     async def _speak(self, text: str):
-        """执行 TTS 合成和播放，并通知 Subtitle Service。"""
-
         self.logger.info(f"请求播放: '{text[:30]}...'")
-        
-        # --- 启动口型同步会话 ---
+
         vts_lip_sync_service = self.core.get_service("vts_lip_sync")
         if vts_lip_sync_service:
             try:
                 await vts_lip_sync_service.start_lip_sync_session(text)
             except Exception as e:
                 self.logger.debug(f"启动口型同步会话失败: {e}")
-        
-        async with self.tts_lock:
-            self.logger.debug(f"获取 TTS 锁，开始处理: '{text[:30]}...'")
-            duration_seconds: Optional[float] = 10.0
-
-            # --- 通知字幕服务 ---
-            subtitle_service = self.core.get_service("subtitle_service")
-            if subtitle_service:
-                try:
-                    asyncio.create_task(subtitle_service.record_speech(text, duration_seconds))
-                except Exception as e:
-                    self.logger.error(f"调用 subtitle_service.record_speech 出错: {e}", exc_info=True)
-
-            # --- 同步发送到 OBS ---
-            obs_service = self.core.get_service("obs_control")
-            if obs_service:
-                try:
-                    # 可选：是否使用逐字效果？这里使用默认配置
-                    await obs_service.send_to_obs(text)
-                except Exception as e:
-                    self.logger.error(f"向 OBS 发送字幕失败: {e}", exc_info=True)
 
         try:
-            # 获取音频流
+            # 发起流式请求（不阻塞，但首 chunk 可能延迟）
             audio_stream = self.tts_model.tts_stream(text)
-            self.logger.info("开始处理音频流...")
+            self.logger.debug("TTS 流已创建，等待首音频块...")
 
-            # 确保音频流已启动
+            # 确保音频播放流已启动
             if self.stream and not self.stream.active:
                 self.stream.start()
 
-            # 异步处理音频数据块
+            # 标记是否已发送字幕（避免重复）
+            subtitle_sent = False
+
+            # 开始消费音频流
             for chunk in audio_stream:
-                if chunk:
-                    # self.logger.debug(f"收到音频块，大小: {len(chunk)} 字节")
-                    # 修改为异步调用
-                    await self.decode_and_buffer(chunk)
-                else:
-                    self.logger.warning("收到空音频块，跳过。")
+                if not chunk:
+                    self.logger.debug("收到空音频块，跳过")
                     continue
 
-            self.logger.info(f"音频流播放完成: '{text[:30]}...'")
+                # 👇 第一次收到有效音频块时，立即发送字幕
+                if not subtitle_sent:
+                    self.logger.debug("收到首个音频块，触发字幕显示")
+                    
+                    # 发送 OBS 字幕
+                    obs_service = self.core.get_service("obs_control")
+                    if obs_service:
+                        try:
+                            await obs_service.send_to_obs(text)
+                        except Exception as e:
+                            self.logger.error(f"向 OBS 发送字幕失败: {e}", exc_info=True)
+
+                    # 通知字幕服务
+                    subtitle_service = self.core.get_service("subtitle_service")
+                    if subtitle_service:
+                        try:
+                            # 动态估算时长
+                            estimated_duration = max(3.0, len(text) * 0.3)
+                            asyncio.create_task(
+                                subtitle_service.record_speech(text, estimated_duration)
+                            )
+                        except Exception as e:
+                            self.logger.error(f"调用 subtitle_service 出错: {e}", exc_info=True)
+
+                    subtitle_sent = True  # 只发一次
+
+                # 处理音频（播放 + 口型同步）
+                await self.decode_and_buffer(chunk)
+
+            self.logger.info(f"音频播放完成: '{text[:30]}...'")
+
         except Exception as e:
-            self.logger.error(f"音频流处理出错: {e}", exc_info=True)
+            self.logger.error(f"TTS 播放出错: {e}", exc_info=True)
         finally:
-            # --- 停止口型同步会话 ---
             if vts_lip_sync_service:
                 try:
                     await vts_lip_sync_service.stop_lip_sync_session()
                 except Exception as e:
-                    self.logger.debug(f"停止口型同步会话失败: {e}")
-
+                    self.logger.debug(f"停止口型同步失败: {e}")
 
 plugin_entrypoint = TTSPlugin
