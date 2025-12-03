@@ -40,9 +40,6 @@ class ObsControlPlugin(BasePlugin):
         if not self.enabled:
             self.logger.warning("OBS 控制插件已禁用，因缺少必要配置")
             return
-            
-        # 注册 WebSocket 消息处理器
-        self.core.register_websocket_handler("text", self.handle_message)
         
         # 尝试连接 OBS
         await self.connect_obs()

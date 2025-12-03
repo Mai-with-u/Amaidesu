@@ -29,11 +29,5 @@ torchaudio
 maim-message
 customtkinter
 obsws_python
-fastmcp
-# LangChain dependencies
-langchain
-langchain-core
-langchain-openai
-langchain-community
-dirtyjson
-json-repair
+librosa
+scipy

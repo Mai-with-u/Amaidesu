@@ -953,331 +953,72 @@ class TTSPlugin(BasePlugin):
                 pass
 
     async def _speak(self, text: str):
-        """执行 TTS 合成和播放，并通知 Subtitle Service。"""
-
-        # --- 惰性加载口型同步服务 ---
-        lip_sync_service = self.vts_lip_sync_service
-        # 如果服务未缓存，则在首次使用时尝试获取
-        if not lip_sync_service:
-            service_name = self.tts_config.plugin.lip_sync_service_name
-            # 确保配置了服务名且不为'none'
-            if service_name and service_name.lower() != "none":
-                lip_sync_service = self.core.get_service(service_name)
-                if lip_sync_service:
-                    self.logger.info(f"首次使用时，成功获取并缓存 '{service_name}' 服务。")
-                    self.vts_lip_sync_service = lip_sync_service  # 缓存服务
-                else:
-                    lip_sync_service = self.core.get_service("warudo")
-                    if lip_sync_service:
-                        self.vts_lip_sync_service = lip_sync_service
-                        self.logger.info(f"使用 warudo 服务作为口型同步服务")
-                    else:
-                        self.logger.warning(f"口型同步功能不可用：未找到服务 '{service_name}' 或 warudo。")
-
-        # --- 获取回复页面管理器 ---
-        reply_manager : ReplyGenerationManager = self.core.get_service("reply_generation_manager")
-        if not reply_manager:
-            self.logger.warning("未找到回复页面管理器服务，回复页面功能将不可用")
-            return
-
         self.logger.info(f"请求播放: '{text[:30]}...'")
 
-        # --- 启动口型同步会话 ---
-        if lip_sync_service:
+        vts_lip_sync_service = self.core.get_service("vts_lip_sync")
+        if vts_lip_sync_service:
             try:
                 await lip_sync_service.start_lip_sync_session(text)
             except Exception as e:
                 self.logger.debug(f"启动口型同步会话失败: {e}")
 
-        # --- 启动回复生成显示 ---
         try:
-            await reply_manager.start_generation("AI")  # 使用固定用户名"AI"
-            self.logger.debug("回复生成页面已启动")
-        except Exception as e:
-            self.logger.error(f"启动回复生成页面失败: {e}")
+            # 发起流式请求（不阻塞，但首 chunk 可能延迟）
+            audio_stream = self.tts_model.tts_stream(text)
+            self.logger.debug("TTS 流已创建，等待首音频块...")
 
-        async with self.tts_lock:
-            self.logger.debug(f"获取 TTS 锁，开始处理: '{text[:30]}...'")
+            # 确保音频播放流已启动
+            if self.stream and not self.stream.active:
+                self.stream.start()
 
-            # 每次新的TTS请求，重置WAV头标志，确保为每个新的语音添加WAV头
-            if hasattr(self, "_wav_header_sent"):
-                self._wav_header_sent = False
+            # 标记是否已发送字幕（避免重复）
+            subtitle_sent = False
 
-            duration_seconds: Optional[float] = 10.0  # 初始化时长变量
-            subtitle_service = self.core.get_service("subtitle_service")
-            if subtitle_service:
-                self.logger.debug("找到 subtitle_service，准备记录语音信息...")
-                try:
-                    # 异步调用，不阻塞播放
-                    asyncio.create_task(subtitle_service.record_speech(text, duration_seconds))
-                except AttributeError:
-                    self.logger.error("获取到的 'subtitle_service' 没有 'record_speech' 方法。")
-                except Exception as e:
-                    self.logger.error(f"调用 subtitle_service.record_speech 时出错: {e}", exc_info=True)
+            # 开始消费音频流
+            for chunk in audio_stream:
+                if not chunk:
+                    self.logger.debug("收到空音频块，跳过")
+                    continue
 
-            try:
-                # 获取音频流
-                audio_stream = self.tts_model.tts_stream(text)
-                self.logger.info("开始处理音频流...")
-
-                # 确保本地音频流已启动（仅在非远程模式下）
-                if not self.use_remote_stream and self.stream and not self.stream.active:
-                    self.stream.start()
-                if self.use_remote_stream and not self.remote_stream_service:
-                    # 获取 remote_stream 服务
-                    remote_stream_service = self.core.get_service("remote_stream")
-                    if remote_stream_service:
-                        self.remote_stream_service = remote_stream_service
-                        self.logger.info("已获取 Remote Stream 服务，将使用远程音频输出")
-                # --- for debugging: save audio to file ---
-                debug_audio_dir = os.path.join(_PLUGIN_DIR, "debug_audio")
-                os.makedirs(debug_audio_dir, exist_ok=True)
-
-                temp_path = None
-                try:
-                    # We just want a unique name, so we create and close it immediately.
-                    # The file will be written to later.
-                    with tempfile.NamedTemporaryFile(
-                        delete=False, dir=debug_audio_dir, suffix=".wav", mode="wb"
-                    ) as temp_f:
-                        temp_path = temp_f.name
-                    self.logger.info(f"将为调试目的保存音频到: {temp_path}")
-                except Exception as e:
-                    self.logger.error(f"创建临时调试音频文件失败: {e}")
-                    temp_path = None
-
-                all_audio_data = bytearray()
-                
-                # 用于计算播放进度的变量
-                text_length = len(text)
-                displayed_length = 0
-                chunk_count = 0
-                start_time = asyncio.get_event_loop().time()
-                estimated_total_duration = max(text_length * 0.5, 2.0)  # 估算总时长：每个字符0.15秒，最少2秒
-                
-
-                
-                # 创建音频流迭代器，在线程池中逐块处理，避免阻塞事件循环
-                async def get_next_chunk():
-                    """在线程池中获取下一个音频块"""
-                    def get_chunk():
-                        try:
-                            return next(audio_stream)
-                        except StopIteration:
-                            return None
-                        except Exception as e:
-                            self.logger.error(f"获取音频块时出错: {e}")
-                            return None
+                # 👇 第一次收到有效音频块时，立即发送字幕
+                if not subtitle_sent:
+                    self.logger.debug("收到首个音频块，触发字幕显示")
                     
-                    # 在线程池中执行同步的next操作
-                    return await asyncio.to_thread(get_chunk)
-                
-                # 流式处理音频块
-                while True:
-                    chunk = await get_next_chunk()
-                    if chunk is None:
-                        # 流结束，确保显示完整文本
-                        if displayed_length < text_length:
-                            remaining_text = text[displayed_length:]
-                            try:
-                                await reply_manager.add_chunk(remaining_text)
-                                self.logger.debug(f"流结束，显示剩余文本: {remaining_text}")
-                            except Exception as e:
-                                self.logger.error(f"显示剩余文本失败: {e}")
-                        break
-                    if chunk:
-                        all_audio_data.extend(chunk)
-                        chunk_count += 1
-                        # self.logger.debug(f"收到音频块，大小: {len(chunk)} 字节")
+                    # 发送 OBS 字幕
+                    obs_service = self.core.get_service("obs_control")
+                    if obs_service:
+                        try:
+                            await obs_service.send_to_obs(text)
+                        except Exception as e:
+                            self.logger.error(f"向 OBS 发送字幕失败: {e}", exc_info=True)
 
-                        # 优化的进度计算：基于时间的播放进度更准确
-                        current_time = asyncio.get_event_loop().time()
-                        elapsed_time = current_time - start_time
-                        
-                        # 主要基于时间进度，辅以音频块进度验证
-                        time_progress = min(elapsed_time / estimated_total_duration, 1.0)
-                        chunk_progress = min(chunk_count * 0.03, 1.0)  # 每个chunk代表约6%的进度
-                        
-                        # 时间进度为主（80%），音频块进度为辅（20%）
-                        estimated_progress = (time_progress * 0.7 + chunk_progress * 0.3)  
-                        
-                        # 确保进度不会倒退，并为初始显示预留空间
-                        estimated_progress = max(estimated_progress, displayed_length / text_length)
-                        target_length = int(text_length * estimated_progress)
-                        
-                        # 逐字添加文本到回复页面
-                        if target_length > displayed_length:
-                            new_text = text[displayed_length:target_length]
-                            if new_text:
-                                try:
-                                    await reply_manager.add_chunk(new_text)
-                                    displayed_length = target_length
-                                    self.logger.debug(f"回复页面显示进度: {displayed_length}/{text_length} ({estimated_progress:.2%}) 时间:{elapsed_time:.1f}s")
-                                except Exception as e:
-                                    self.logger.error(f"更新回复页面失败: {e}")
+                    # 通知字幕服务
+                    subtitle_service = self.core.get_service("subtitle_service")
+                    if subtitle_service:
+                        try:
+                            # 动态估算时长
+                            estimated_duration = max(3.0, len(text) * 0.3)
+                            asyncio.create_task(
+                                subtitle_service.record_speech(text, estimated_duration)
+                            )
+                        except Exception as e:
+                            self.logger.error(f"调用 subtitle_service 出错: {e}", exc_info=True)
 
-                        # 如果启用了远程流，发送音频数据到远程设备
+                    subtitle_sent = True  # 只发一次
 
-                        if self.use_remote_stream and self.remote_stream_service:
-                            try:
-                                # 发送音频数据到远程设备
-                                format_info = {
-                                    "sample_rate": self.tts_config.tts.sample_rate,
-                                    "channels": CHANNELS,
-                                    "format": str(DTYPE.__name__),
-                                    "bits_per_sample": SAMPLE_SIZE * 8,  # 样本位数，如16位
-                                }
+                # 处理音频（播放 + 口型同步）
+                await self.decode_and_buffer(chunk)
 
-                                # 检查第一块是否需要添加WAV头
-                                if not hasattr(self, "_wav_header_sent") or not self._wav_header_sent:
-                                    self.logger.info("首次发送TTS数据，添加WAV头信息")
+            self.logger.info(f"音频播放完成: '{text[:30]}...'")
 
-                                    # 标记已发送WAV头
-                                    self._wav_header_sent = True
-
-                                    # 生成WAV头
-                                    wav_header = self._generate_wav_header(
-                                        len(chunk), self.tts_config.tts.sample_rate, CHANNELS, SAMPLE_SIZE * 8
-                                    )
-
-                                    # 将WAV头与音频数据结合发送
-                                    combined_data = wav_header + chunk
-                                    await self.remote_stream_service.send_tts_audio(combined_data, format_info)
-                                    self.logger.debug(
-                                        f"已发送WAV头({len(wav_header)}字节)和{len(chunk)}字节的TTS音频数据到远程设备"
-                                    )
-                                else:
-                                    # 发送普通音频块
-                                    await self.remote_stream_service.send_tts_audio(chunk, format_info)
-                                    self.logger.debug(f"已发送{len(chunk)}字节TTS音频数据到远程设备")
-                                self.logger.debug(f"已发送 {len(chunk)} 字节TTS音频数据到远程设备")
-                            except Exception as e:
-                                self.logger.error(f"发送TTS音频到远程设备失败: {e}")
-                                # 如果远程发送失败，回退到本地播放
-                                if not self.stream:
-                                    self.logger.info("创建本地音频流作为远程发送失败的回退...")
-                                    self.stream = self.start_pcm_stream(
-                                        samplerate=self.tts_config.tts.sample_rate,
-                                        channels=CHANNELS,
-                                        dtype=DTYPE,
-                                        blocksize=BLOCKSIZE,
-                                    )
-                                    if not self.stream.active:
-                                        self.stream.start()
-                                await self.decode_and_buffer(chunk)
-                        else:
-                            # 本地播放模式
-                            # 检查音频队列长度，如果队列过长则等待
-                            while len(self.audio_data_queue) >= self.audio_data_queue.maxlen * 0.8:
-                                await asyncio.sleep(0.05)  # 短暂等待，让音频播放追赶队列
-
-                                                        # 修改为异步调用
-                            await self.decode_and_buffer(chunk)
-
-                # 将收集到的所有音频数据写入文件
-                if temp_path:
-                    try:
-                        with open(temp_path, "wb") as f:
-                            f.write(all_audio_data)
-                        self.logger.info(f"成功保存调试音频文件: {temp_path}")
-                    except Exception as e:
-                        self.logger.error(f"保存调试音频文件失败: {temp_path}, 错误: {e}")
-
-                # --- 完成回复生成显示 ---
+        except Exception as e:
+            self.logger.error(f"TTS 播放出错: {e}", exc_info=True)
+        finally:
+            if vts_lip_sync_service:
                 try:
                     await reply_manager.complete_generation()
                     self.logger.debug("回复生成页面已完成")
                 except Exception as e:
-                    self.logger.error(f"完成回复生成页面失败: {e}")
-                
-                await self.send_done_message()
-                self.logger.info(f"音频流播放完成: '{text[:30]}...'")
-            except Exception as e:
-                self.logger.error(f"音频流处理出错: {e}", exc_info=True)
-                # 如果出错，也要清空回复页面
-                try:
-                    await reply_manager.clear_generation()
-                except Exception as clear_error:
-                    self.logger.error(f"清空回复生成页面失败: {clear_error}")
-            finally:
-                # --- 停止口型同步会话 ---
-                if lip_sync_service:
-                    try:
-                        await lip_sync_service.stop_lip_sync_session()
-                    except Exception as e:
-                        self.logger.debug(f"停止口型同步会话失败: {e}")
-                        
-    async def send_done_message(self):
-        if not self.message:
-            return
-        
-        message_info = self.message.message_info
-        message_info.time = time.time()
-        message_segment = Seg(type="voice_done", data=f"{self.msg_id}")
-        
-        message = MessageBase(message_info=message_info, message_segment=message_segment, raw_message=f"{self.msg_id}")
-        await self.core.send_to_maicore(message)
-    
-
-    def _generate_wav_header(self, data_size, sample_rate, channels, bits_per_sample):
-        """生成标准WAV文件头
-
-        Args:
-            data_size: PCM数据大小（字节）
-            sample_rate: 采样率（Hz）
-            channels: 通道数
-            bits_per_sample: 位深度（8, 16, 24, 32）
-
-        Returns:
-            WAV头的二进制数据
-        """
-        # WAV头部大小为44字节
-        header = bytearray(44)
-
-        # RIFF头 (4字节)
-        header[0:4] = b"RIFF"
-
-        # 文件总大小减去8字节 (4字节)
-        # 总大小 = 数据大小 + 36字节(头部大小 - 8)
-        file_size = data_size + 36
-        header[4:8] = file_size.to_bytes(4, byteorder="little")
-
-        # 文件类型 'WAVE' (4字节)
-        header[8:12] = b"WAVE"
-
-        # 格式块标识符 'fmt ' (4字节)
-        header[12:16] = b"fmt "
-
-        # 格式块大小 (4字节) - PCM格式为16
-        header[16:20] = (16).to_bytes(4, byteorder="little")
-
-        # 音频格式 (2字节) - PCM格式为1
-        header[20:22] = (1).to_bytes(2, byteorder="little")
-
-        # 通道数 (2字节)
-        header[22:24] = channels.to_bytes(2, byteorder="little")
-
-        # 采样率 (4字节)
-        header[24:28] = sample_rate.to_bytes(4, byteorder="little")
-
-        # 字节率 (4字节) = 采样率 × 每个样本的字节数 × 通道数
-        byte_rate = sample_rate * (bits_per_sample // 8) * channels
-        header[28:32] = byte_rate.to_bytes(4, byteorder="little")
-
-        # 块对齐 (2字节) = 每个样本的字节数 × 通道数
-        block_align = (bits_per_sample // 8) * channels
-        header[32:34] = block_align.to_bytes(2, byteorder="little")
-
-        # 位深度 (2字节)
-        header[34:36] = bits_per_sample.to_bytes(2, byteorder="little")
-
-        # 数据块标识 'data' (4字节)
-        header[36:40] = b"data"
-
-        # 数据大小 (4字节)
-        header[40:44] = data_size.to_bytes(4, byteorder="little")
-
-        return bytes(header)
-
+                    self.logger.debug(f"停止口型同步失败: {e}")
 
 plugin_entrypoint = TTSPlugin

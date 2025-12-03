@@ -285,6 +285,7 @@ class ScreenMonitorPlugin(BasePlugin):
         self.timeout_seconds = self.config.get("request_timeout", 20)  # 请求超时
         self.context_provider_name = self.config.get("context_provider_name", "screen_content_latest")
         self.context_priority = self.config.get("context_priority", 20)
+        self.monitor_selection = self.config.get("monitor", "all")  # 截图区域配置
 
         # --- 消息发送相关配置 ---
         self.send_messages = self.config.get("send_messages", True)  # 是否发送消息到MaiCore
@@ -529,50 +530,35 @@ class ScreenMonitorPlugin(BasePlugin):
             return
 
         encoded_image: Optional[str] = None
-
-        # 根据不同的截图源获取图像
-        if self.use_remote_stream:
-            # 尝试从远程流获取图像
-            self.logger.debug("正在尝试从远程流获取图像...")
-            # 如果启用了远程流，但尚未收到图像，尝试请求一次
-            if not self.remote_image_received and self.remote_stream_service:
-                try:
-                    self.logger.debug("向远程设备发送图像请求...")
-                    await self.remote_stream_service.request_image()
-                    # 等待短暂时间，看是否收到响应
-                    await asyncio.sleep(0.5)
-                except Exception as e:
-                    self.logger.error(f"请求远程图像失败: {e}")
-
-            # 检查是否有可用的远程图像
-            async with self.remote_image_lock:
-                if self.remote_image_received and self.latest_remote_image:
-                    self.logger.debug("使用已接收的远程图像...")
-                    # 将二进制图像转换为base64编码
-                    encoded_image = base64.b64encode(self.latest_remote_image).decode("utf-8")
+        try:
+            with mss.mss() as sct:
+                if self.monitor_selection == "all":
+                    monitor = sct.monitors[0]  # 整个虚拟桌面
+                elif self.monitor_selection == "primary":
+                    monitor = sct.monitors[1]  # 主显示器（mss 中索引 1 是主屏）
+                elif isinstance(self.monitor_selection, list):
+                    # 如果配置为 [1, 2]，可选择第一个显示器（或后续支持拼接）
+                    # 简化处理：只取第一个
+                    idx = self.monitor_selection[0]
+                    if 1 <= idx < len(sct.monitors):
+                        monitor = sct.monitors[idx]
+                    else:
+                        self.logger.warning(f"显示器索引 {idx} 超出范围，回退到主屏")
+                        monitor = sct.monitors[1]
                 else:
-                    self.logger.debug("未收到远程图像，尝试使用本地捕获...")
-                    # 回退到配置的本地捕获方式
-                    self.use_remote_stream = False  # 临时禁用远程流
+                    self.logger.warning(f"未知的 monitor 配置: {self.monitor_selection}，使用默认 'all'")
+                    monitor = sct.monitors[0]
 
-        # 如果远程流不可用或未收到图像，使用本地捕获
-        if not self.use_remote_stream or not encoded_image:
-            if self.capture_source == "screen":
-                # 使用屏幕截图方法
-                self.logger.debug("正在通过屏幕捕获截取屏幕...")
-                encoded_image = await self._get_screenshot_from_screen()
-            elif self.capture_source == "obs" and self.obs_client:
-                # 使用 OBS 截图方法
-                self.logger.debug(f"正在通过OBS获取源 '{self.obs_source_name}' 的截图...")
-                encoded_image = await self._get_screenshot_from_obs()
-
-            # 恢复远程流设置
-            if (
-                not self.use_remote_stream
-                and REMOTE_STREAM_AVAILABLE
-                and self.plugin_config.get("use_remote_stream", False)
-            ):
-                self.use_remote_stream = True
+                sct_img = sct.grab(monitor)
+                img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
+                buffer = BytesIO()
+                img.save(buffer, format="PNG")
+                img_bytes = buffer.getvalue()
+                encoded_image = base64.b64encode(img_bytes).decode("utf-8")
+                self.logger.debug(f"截图成功并编码为 Base64 (大小: {len(encoded_image)} bytes)")
+        except Exception as e:
+            self.logger.error(f"截图或编码失败: {e}", exc_info=True)
+            return
 
         if not encoded_image:
             return
