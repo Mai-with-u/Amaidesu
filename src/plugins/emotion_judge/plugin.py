@@ -1,6 +1,4 @@
 # src/plugins/vtube_studio/plugin.py
-import tomllib
-import os
 from typing import Any, Dict, Optional
 import time
 from openai import AsyncOpenAI

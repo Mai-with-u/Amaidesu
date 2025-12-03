@@ -82,7 +82,13 @@ class DanmakuMessage(BiliBaseMessage):
         message_info = await self._create_base_message_info(core, config, context_tags, template_items)
 
         # 创建消息段 - 弹幕消息直接使用msg内容
-        message_segment = Seg(type="text", data=self.msg.strip())
+        message_segment = Seg(
+            "seglist",
+            [
+                Seg(type="text", data=self.msg.strip()),
+                Seg("priority_info", {"message_type": "normal", "priority": 0}),
+            ],
+        )
 
         # 记录消息日志
         self.logger.info(f"[弹幕] {self.uname}: {self.msg}")

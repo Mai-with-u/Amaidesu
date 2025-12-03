@@ -1,0 +1,39 @@
+# Bilibili 直播弹幕插件（官方WebSocket版）配置文件
+
+# === 基本配置 ===
+enabled = false # 是否启用插件，默认关闭，需要配置后手动启用
+
+# === 官方API配置 ===
+# 以下配置项需要在 B站开放平台申请获取
+# 申请地址: https://live-open.biliapi.com/
+id_code = ""                               # 主播身份码
+app_id = 0                                 # 应用ID
+access_key = ""
+access_key_secret = ""
+api_host = "https://live-open.biliapi.com" # API地址，通常不需要修改
+
+# === 消息处理配置 ===
+# 是否处理不同类型的消息
+handle_enter_messages = true     # 是否处理进入直播间消息
+handle_gift_messages = true      # 是否处理礼物消息
+handle_guard_messages = true     # 是否处理守护消息
+handle_superchat_messages = true # 是否处理醒目留言消息
+
+# === 消息缓存配置 ===
+message_cache_size = 1000 # 消息缓存最大数量
+
+# === 退出配置 ===
+shutdown_timeout = 30 # 优雅关闭超时时间（秒）
+
+# === 群组信息配置 ===
+enable_group_info = false # 是否启用群组信息
+group_id = ""             # 群组ID，留空则使用房间ID
+group_name = ""           # 群组名称，留空则使用 "bili_{房间ID}"
+
+# === 消息格式配置 ===
+content_format = ["text"] # 内容格式
+accept_format = ["text"]  # 接受格式
+
+# === 外发配置 ===
+forward_enabled = true
+forward_ws_url = "ws://127.0.0.1:9000/ws" # 指定消息转发的WebSocket地址

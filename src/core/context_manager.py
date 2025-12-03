@@ -42,7 +42,7 @@ class ContextManager:
         self.separator = self.formatting_config.get("separator", "\\n").replace("\\n", "\n")
         self.add_provider_title = self.formatting_config.get("add_provider_title", False)
         self.title_separator = self.formatting_config.get("title_separator", ": ")
-        self.default_max_length = self.limits_config.get("default_max_length", 1000)
+        self.default_max_length = self.limits_config.get("default_max_length", 5000)
         self.default_priority = self.limits_config.get("default_priority", 100)
 
         self.logger.info(f"上下文管理器初始化完成，启用状态: {self.enabled}")

@@ -1,5 +1,4 @@
 import sys
-import inspect
 from loguru import logger
 
 # 移除默认的 handler
@@ -12,6 +11,7 @@ logger.add(
     colorize=True,
     format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{line: <4}</cyan> | <cyan>{extra[module]}</cyan> - <level>{message}</level>",
 )
+
 
 # 可以在这里添加其他的 handler，比如写入文件
 # logger.add("file_{time}.log", rotation="1 week") # 例如：每周轮换日志文件

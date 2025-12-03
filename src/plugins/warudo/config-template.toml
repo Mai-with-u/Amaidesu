@@ -1,0 +1,39 @@
+[plugin]
+# 插件开关
+enable = true
+
+# WebSocket服务器地址
+ws_host = "127.0.0.1"
+# WebSocket服务器端口
+ws_port = 8765
+
+# 口型同步相关配置
+[lip_sync]
+# 是否启用口型同步功能
+enabled = true
+
+# 音量阈值，低于此值的声音将被忽略
+volume_threshold = 0.01
+
+# 平滑系数，用于平滑处理音量和元音参数，值越高越平滑，但延迟也可能越高
+smoothing_factor = 0.3
+
+# 元音检测灵敏度，影响元音口型的强度
+vowel_detection_sensitivity = 0.5
+
+# 音频分析的采样率（应与TTS输出的采样率匹配）
+sample_rate = 32000
+
+# 音频处理缓冲区大小
+buffer_size = 1024 
+
+# 字幕显示相关配置
+[subtitle]
+# 是否启用字幕功能
+enabled = true
+
+# 字幕Web服务器端口
+port = 8766
+
+# 是否显示连接状态
+show_status = false 

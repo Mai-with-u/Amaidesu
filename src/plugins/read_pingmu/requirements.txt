@@ -1,0 +1,4 @@
+mss
+openai
+Pillow
+obsws-python

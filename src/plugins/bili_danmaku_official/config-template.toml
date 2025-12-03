@@ -40,11 +40,56 @@ template_name = ""           # 模板名称，留空则使用 "bili_{房间ID}"
 
 # 模板项（当 enable_template_info = true 时使用）
 [template_items]
-reasoning_prompt_main = """
-你是一个AI虚拟主播助手，正在与B站直播间的观众互动。
-请根据弹幕内容给出自然、友好的回应。
-回应要简洁、有趣，符合虚拟主播的人设。
+default_generator_prompt = """
+{expression_habits_block}
+{tool_info_block}
+{knowledge_prompt}
+{memory_block}
+{relation_info_block}
+{extra_info_block}
+
+{chat_target}
+{time_block}
+{chat_info}
+{reply_target_block}
+{identity}
+
+{action_descriptions}
+你正在{chat_target_2},现在请你读读之前的弹幕内容，{mood_prompt}，请你给出回复
+{config_expression_style}。
+请回复的平淡一些，简短一些，说中文，不要刻意突出自身学科背景，注意不要复读你说过的话。
+{keywords_reaction_prompt}
+请注意不要输出多余内容(包括前后缀，冒号和引号，at或 @等 )。只输出回复内容。
+{moderation_prompt}
+不要浮夸，不要夸张修辞，不要输出多余内容(包括前后缀，冒号和引号，括号()，表情包，at或 @等 )。只输出回复内容"""
+
+default_expressor_prompt = """
+{expression_habits_block}
+{relation_info_block}
+
+{chat_target}
+{time_block}
+{chat_info}
+{identity}
+
+你正在{chat_target_2},{reply_target_block}
+对这句弹幕，你想表达，原句：{raw_reply},原因是：{reason}。你现在要思考怎么组织回复
+你需要使用合适的语法和句法，参考直播弹幕内容，组织一条日常且口语化的回复。请你修改你想表达的原句，符合你的表达风格和语言习惯
+{config_expression_style}，你可以完全重组回复，保留最基本的表达含义就好，但重组后保持语意通顺。
+{keywords_reaction_prompt}
+{moderation_prompt}
+不要浮夸，不要夸张修辞，平淡且不要输出多余内容(包括前后缀，冒号和引号，括号，表情包，at或 @等 )，只输出一条回复就好。
+现在，你说：
 """
+
+chat_target_group1 = "你正在直播间里和观众互动，下面是直播间的弹幕内容："
+chat_target_private1 = "你正在和{sender_name}互动，这是之前的弹幕内容："
+chat_target_group2 = "在直播间与观众互动"
+chat_target_private2 = "回复{sender_name}的弹幕"
+knowledge_prompt = "\n你有以下这些**知识**：\n{prompt_info}\n请你**记住上面的知识**，之后可能会用到。\n"
+
+template_name = "live"
+template_default = false
 
 context_tags = []
 # === 上下文标签配置 ===

@@ -7,17 +7,19 @@ setuptools
 uvicorn
 ruff
 requests
-websockets
+websockets>=10.0
 python-logging-loki
 typer
 aiohttp
 edge-tts
 mss
 numpy
+dashscope
 openai
 Pillow
 pyvts
 sounddevice
+obsws-python
 soundfile
 pygame  # Optional: For more reliable audio playback in TTS plugin
 toml # For Python < 3.11 compatibility with TOML files

@@ -4,13 +4,15 @@ import asyncio
 import logging
 import os
 import sys
-import socket
 import tempfile
 import struct  # 添加struct模块导入，用于解析WAV数据
 from typing import Dict, Any, Optional
 import numpy as np  # 确保导入 numpy
 from collections import deque
 import base64
+import time
+import re  # 添加正则表达式模块，用于检测英文字符
+from ..warudo.talk_subtitle import ReplyGenerationManager
 
 # --- Dependencies Check (Inform User) ---
 # Try importing required libraries and inform the user if they are missing.
@@ -22,6 +24,16 @@ try:
 except ImportError:
     print("依赖缺失: 请运行 'pip install sounddevice soundfile' 来使用音频播放功能。", file=sys.stderr)
     dependencies_ok = False
+
+# --- 远程流支持 ---
+try:
+    from src.plugins.remote_stream.plugin import RemoteStreamService, StreamMessage, MessageType
+
+    REMOTE_STREAM_AVAILABLE = True
+except ImportError:
+    REMOTE_STREAM_AVAILABLE = False
+    print("提示: 未找到 remote_stream 插件，将使用本地音频输出。", file=sys.stderr)
+
 # try:
 #     from openai import AsyncOpenAI, APIConnectionError, RateLimitError, APIStatusError
 # except ImportError:
@@ -51,7 +63,6 @@ _CONFIG_FILE = os.path.join(_PLUGIN_DIR, "config.toml")
 
 
 # 音频流参数（根据实际播放器配置）
-SAMPLERATE = 32000  # 采样率
 CHANNELS = 1  # 声道数
 DTYPE = np.int16  # 样本类型
 BLOCKSIZE = 1024  # 每次播放的帧数
@@ -61,9 +72,8 @@ SAMPLE_SIZE = DTYPE().itemsize  # 单个样本大小（如 np.int16 → 2 bytes�
 BUFFER_REQUIRED_BYTES = BLOCKSIZE * CHANNELS * SAMPLE_SIZE
 
 from dataclasses import dataclass
-from typing import Dict, Any, List, Optional
+from typing import List
 import toml
-from pathlib import Path
 
 
 @dataclass
@@ -96,6 +106,7 @@ class TTSConfig:
     # api_url: str
     host: str
     port: int
+    sample_rate: int
     ref_audio_path: str
     prompt_text: str
     aux_ref_audio_paths: List[str]
@@ -128,12 +139,16 @@ class TTSConfig:
 class PluginConfig:
     output_device: str
     llm_clean: bool
+    lip_sync_service_name: str
+    use_remote_stream: bool = False  # 是否使用远程流服务
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "PluginConfig":
         return cls(
             output_device=data.get("output_device_name", ""),
             llm_clean=data.get("llm_clean", True),
+            lip_sync_service_name=data.get("lip_sync_service_name", "vts_lip_sync"),
+            use_remote_stream=data.get("use_remote_stream", False),
         )
 
 
@@ -213,7 +228,7 @@ def get_default_config() -> Config:
 
 import requests
 import os
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 
 
 class TTSModel:
@@ -412,6 +427,15 @@ class TTSModel:
         if self.config:
             cfg = self.config.tts
             text_lang = text_lang or cfg.text_language
+
+            # 如果设置的text_lang是auto，检测文本是否包含英文字符
+            if text_lang == "auto":
+                # 检查是否包含英文字符
+                has_english = bool(re.search("[a-zA-Z]", text))
+                if not has_english:
+                    text_lang = "zh"  # 如果不含英文字符，则设为中文
+                # 含英文字符，保持auto不变
+
             prompt_lang = prompt_lang or cfg.prompt_language
             media_type = media_type or cfg.media_type
             streaming_mode = streaming_mode if streaming_mode is not None else cfg.streaming_mode
@@ -425,6 +449,13 @@ class TTSModel:
             repetition_penalty = repetition_penalty or cfg.repetition_penalty
             sample_steps = sample_steps or cfg.sample_steps
             super_sampling = super_sampling if super_sampling is not None else cfg.super_sampling
+
+        # 检测文本是否包含英文字符
+        contains_english = bool(re.search(r"[a-zA-Z]", text))
+
+        # 如果文本包含英文字符且未指定文本语言，则自动设置为英文
+        if contains_english and text_lang is None:
+            text_lang = "en"
 
         params = {
             "text": text,
@@ -490,6 +521,15 @@ class TTSModel:
         if self.config:
             cfg = self.config.tts
             text_lang = text_lang or cfg.text_language
+
+            # 如果设置的text_lang是auto，检测文本是否包含英文字符
+            if text_lang == "auto":
+                # 检查是否包含英文字符
+                has_english = bool(re.search("[a-zA-Z]", text))
+                if not has_english:
+                    text_lang = "zh"  # 如果不含英文字符，则设为中文
+                # 含英文字符，保持auto不变
+
             prompt_lang = prompt_lang or cfg.prompt_language
             media_type = media_type or cfg.media_type
             top_k = top_k or cfg.top_k
@@ -553,18 +593,37 @@ class TTSPlugin(BasePlugin):
         super().__init__(core, plugin_config)
         self.tts_config = get_default_config()
 
+        # --- 服务缓存 ---
+        self.vts_lip_sync_service = None
+
+        # --- 远程流支持 ---
+        self.use_remote_stream = self.tts_config.plugin.use_remote_stream
+        self.remote_stream_service = None
+
         # --- TTS Service Initialization (from tts_service.py) ---
-        if not self.tts_config.plugin.output_device:
-            self.output_device_name = ""
+        self.output_device_name = self.tts_config.plugin.output_device or ""
         self.output_device_index = self._find_device_index(self.output_device_name, kind="output")
         self.tts_lock = asyncio.Lock()
+        # 为消息处理添加专门的锁
+        self.message_lock = asyncio.Lock()
+
+        self.vts_lip_sync_service = None
         # 使用threading.Lock而不是asyncio.Lock，因为decode_and_buffer是同步方法
         self.input_pcm_queue_lock = asyncio.Lock()
 
         self.logger.info(f"TTS 服务组件初始化。输出设备: {self.output_device_name or '默认设备'}")
         self.tts_model = TTSModel(self.tts_config, self.tts_config.tts.host, self.tts_config.tts.port)
         self.input_pcm_queue = deque(b"")
-        self.audio_data_queue = deque()
+        # 为音频数据队列添加最大长度限制，防止内存占用过高
+        self.audio_data_queue = deque(maxlen=1000)  # 限制缓冲区大小，防止内存占用过高
+        
+        
+        # 当前处理消息数据
+        self.msg_id = ""
+        self.message = None
+        
+
+        self.stream = None
 
         # --- UDP Broadcast Initialization (from tts_monitor.py / mmc_client.py) ---
 
@@ -578,7 +637,8 @@ class TTSPlugin(BasePlugin):
             if device_name:
                 for i, device in enumerate(devices):
                     # Case-insensitive partial match
-                    if device_name.lower() in device["name"].lower() and device[f"{kind}_channels"] > 0:
+                    max_channels_key = f"max_{kind}_channels"
+                    if device_name.lower() in device["name"].lower() and device[max_channels_key] > 0:
                         self.logger.info(f"找到 {kind} 设备 '{device['name']}' (匹配 '{device_name}')，索引: {i}")
                         return i
                 self.logger.warning(f"未找到名称包含 '{device_name}' 的 {kind} 设备，将使用默认设备。")
@@ -664,11 +724,11 @@ class TTSPlugin(BasePlugin):
 
         # --- 向VTube Studio插件发送音频数据进行口型同步分析 ---
         if pcm_data and len(pcm_data) > 0:
-            vts_lip_sync_service = self.core.get_service("vts_lip_sync")
-            if vts_lip_sync_service:
+            if self.vts_lip_sync_service:
                 try:
                     # 异步发送音频数据进行口型同步分析
-                    await vts_lip_sync_service.process_tts_audio(pcm_data, sample_rate=SAMPLERATE)
+                    self.logger.debug(f"发送音频数据进行口型同步分析: {len(pcm_data)}")
+                    await self.vts_lip_sync_service.process_tts_audio(pcm_data, sample_rate=self.tts_config.tts.sample_rate)
                 except Exception as e:
                     self.logger.debug(f"口型同步处理失败: {e}")
 
@@ -679,6 +739,13 @@ class TTSPlugin(BasePlugin):
 
         # 按需切割音频块
         while await self.get_available_pcm_bytes() >= BUFFER_REQUIRED_BYTES:
+            # 检查音频队列长度，防止队列过长
+            if len(self.audio_data_queue) >= self.audio_data_queue.maxlen * 0.9:  # 接近队列上限的90%
+                self.logger.warning("音频队列接近满，暂停处理")
+                # 短暂等待，让音频播放追赶队列
+                await asyncio.sleep(0.1)
+                continue
+
             raw_block = await self.read_from_pcm_buffer(BUFFER_REQUIRED_BYTES)
             self.audio_data_queue.append(raw_block)
             # self.logger.debug(f"成功添加 {BUFFER_REQUIRED_BYTES} 字节到音频播放队列")
@@ -734,13 +801,25 @@ class TTSPlugin(BasePlugin):
         # 我们将在处理函数内部检查消息类型是否为 'text'
         self.core.register_websocket_handler("*", self.handle_maicore_message)
         self.logger.info("TTS 插件已设置，监听所有 MaiCore WebSocket 消息。")
-        self.stream = self.start_pcm_stream(
-            samplerate=SAMPLERATE,
-            channels=CHANNELS,
-            dtype=DTYPE,
-            blocksize=BLOCKSIZE,
-        )
-        self.logger.info("音频流已启动。")
+
+        # 设置远程流（如果启用）
+        if self.use_remote_stream:
+            # 获取 remote_stream 服务
+            remote_stream_service = self.core.get_service("remote_stream")
+            if remote_stream_service:
+                self.remote_stream_service = remote_stream_service
+                self.logger.info("已获取 Remote Stream 服务，将使用远程音频输出")
+
+        # 只有在不使用远程流时才启动本地音频流
+        if not self.use_remote_stream:
+            self.stream = self.start_pcm_stream(
+                samplerate=self.tts_config.tts.sample_rate,
+                channels=CHANNELS,
+                dtype=DTYPE,
+                blocksize=BLOCKSIZE,
+            )
+            self.logger.info("本地音频流已启动。")
+
         self.tts_model.load_preset(self.tts_config.pipeline.default_preset)
 
     async def cleanup(self):
@@ -753,97 +832,66 @@ class TTSPlugin(BasePlugin):
 
     async def handle_maicore_message(self, message: MessageBase):
         """处理从 MaiCore 收到的消息，如果是文本类型，则进行 TTS 处理。"""
+        # 使用消息锁确保同一时间只处理一条消息
+        async with self.message_lock:
+            self.logger.debug("获取消息处理锁，开始处理消息")
 
-        # 检查消息段是否存在且类型为 'text'
-        def process_seg(seg: Seg) -> str:
-            text = ""
-            if seg.type == "seglist":
-                for s in seg.data:
-                    text += process_seg(s)
-            elif seg.type == "text":
-                text = seg.data
-            elif seg.type == "reply":
-                # 处理回复类型的seg，通过消息缓存服务获取原始消息内容
-                message_cache_service = self.core.get_service("message_cache")
-                if message_cache_service:
-                    try:
-                        original_message = message_cache_service.get_message(seg.data)
-                        if original_message:
-                            # 递归处理原始消息的内容
-                            if original_message.message_segment:
-                                reply_text = process_seg(original_message.message_segment)
-                                text = f"回复{reply_text},"
+            # 检查消息段是否存在且类型为 'text'
+            def process_seg(seg: Seg) -> str:
+                text = ""
+                if seg.type == "seglist":
+                    for s in seg.data:
+                        text += process_seg(s)
+                elif seg.type == "tts_text":
+                    # 用冒号分割，取第一个和后面的所有
+                    msg_id, text = seg.data.split(':', 1)
+                    self.msg_id = msg_id
+                    self.logger.info(f"收到TTS文本消息，msg_id: {msg_id}, text: {text}")
+                elif seg.type == "reply":
+                    # 处理回复类型的seg，通过消息缓存服务获取原始消息内容
+                    message_cache_service = self.core.get_service("message_cache")
+                    if message_cache_service:
+                        try:
+                            original_message = message_cache_service.get_message(seg.data)
+                            if original_message:
+                                # 递归处理原始消息的内容
+                                if original_message.message_segment:
+                                    reply_text = process_seg(original_message.message_segment)
+                                    text = f"回复{reply_text},"
+                                else:
+                                    text = ""
                             else:
                                 text = ""
-                        else:
+                        except Exception as e:
+                            self.logger.error(f"获取回复消息内容失败: {e}")
                             text = ""
-                    except Exception as e:
-                        self.logger.error(f"获取回复消息内容失败: {e}")
-                        text = ""
-                else:
-                    text = ""
-            return text
-
-        if message.message_segment:
-            original_text = process_seg(message.message_segment)
-            if not isinstance(original_text, str) or not original_text.strip():
-                self.logger.debug("收到非字符串或空文本消息段，跳过 TTS。")
-                return
-
-            original_text = original_text.strip()
-            self.logger.info(f"收到文本消息，准备 TTS: '{original_text[:50]}...'")
-
-            final_text = original_text
-
-            # 1. (可选) 清理文本 - 通过服务调用
-            cleanup_service = self.core.get_service("text_cleanup")
-            if cleanup_service:
-                self.logger.debug("找到 text_cleanup 服务，尝试清理文本...")
-                try:
-                    # 确保调用的是 await clean_text(text)
-                    cleaned = await cleanup_service.clean_text(original_text)
-                    if cleaned:
-                        self.logger.info(
-                            f"文本经 Cleanup 服务清理: '{cleaned[:50]}...' (原: '{original_text[:50]}...')"
-                        )
-                        final_text = cleaned
                     else:
-                        self.logger.warning("Cleanup 服务调用失败或返回空，使用原始文本。")
-                except AttributeError:
-                    self.logger.error("获取到的 'text_cleanup' 服务没有 'clean_text' 方法。")
-                except Exception as e:
-                    self.logger.error(f"调用 text_cleanup 服务时出错: {e}", exc_info=True)
-            else:
-                # 如果配置中 cleanup_llm.enable 为 true 但服务未注册，可能需要警告
-                cleanup_config_in_tts = self.tts_config.plugin.llm_clean
-                if cleanup_config_in_tts.get("enable", False):
-                    self.logger.warning(
-                        "Cleanup LLM 在 TTS 配置中启用，但未找到 'text_cleanup' 服务。请确保 CleanupLLMPlugin 已启用并成功加载。"
-                    )
-                else:
-                    self.logger.debug("未找到 text_cleanup 服务 (可能未启用 CleanupLLMPlugin)。")
+                        text = ""
+                return text
 
-            if not final_text:
-                self.logger.warning("清理后文本为空，跳过后续处理。")
-                return
-            # 3. 执行 TTS
-            await self._speak(final_text)
-        elif message.message_segment:
-            # 处理其他类型的消息段，包括 reply 类型
-            processed_text = process_seg(message.message_segment)
-            if processed_text and processed_text.strip():
-                self.logger.info(f"收到非文本类型消息，处理后准备 TTS: '{processed_text[:50]}...'")
-                final_text = processed_text.strip()
+            self.message = message
+            
+            if message.message_segment:
+                original_text = process_seg(message.message_segment)
+                if not isinstance(original_text, str) or not original_text.strip():
+                    self.logger.debug("收到非字符串或空文本消息段，跳过 TTS。")
+                    return
 
-                # 执行相同的清理和TTS流程
+                original_text = original_text.strip()
+                self.logger.info(f"收到文本消息，准备 TTS: '{original_text[:50]}...'")
+
+                final_text = original_text
+
+                # 1. (可选) 清理文本 - 通过服务调用
                 cleanup_service = self.core.get_service("text_cleanup")
                 if cleanup_service:
                     self.logger.debug("找到 text_cleanup 服务，尝试清理文本...")
                     try:
-                        cleaned = await cleanup_service.clean_text(final_text)
+                        # 确保调用的是 await clean_text(text)
+                        cleaned = await cleanup_service.clean_text(original_text)
                         if cleaned:
                             self.logger.info(
-                                f"文本经 Cleanup 服务清理: '{cleaned[:50]}...' (原: '{final_text[:50]}...')"
+                                f"文本经 Cleanup 服务清理: '{cleaned[:50]}...' (原: '{original_text[:50]}...')"
                             )
                             final_text = cleaned
                         else:
@@ -852,18 +900,57 @@ class TTSPlugin(BasePlugin):
                         self.logger.error("获取到的 'text_cleanup' 服务没有 'clean_text' 方法。")
                     except Exception as e:
                         self.logger.error(f"调用 text_cleanup 服务时出错: {e}", exc_info=True)
-
-                if final_text:
-                    await self._speak(final_text)
                 else:
-                    self.logger.warning("处理后文本为空，跳过 TTS。")
+                    # 如果配置中 cleanup_llm.enable 为 true 但服务未注册，可能需要警告
+                    cleanup_config_in_tts = self.tts_config.plugin.llm_clean
+                    if cleanup_config_in_tts.get("enable", False):
+                        self.logger.warning(
+                            "Cleanup LLM 在 TTS 配置中启用，但未找到 'text_cleanup' 服务。请确保 CleanupLLMPlugin 已启用并成功加载。"
+                        )
+                    else:
+                        self.logger.debug("未找到 text_cleanup 服务 (可能未启用 CleanupLLMPlugin)。")
+
+                if not final_text:
+                    self.logger.warning("清理后文本为空，跳过后续处理。")
+                    return
+                # 3. 执行 TTS
+                await self._speak(final_text)
+            elif message.message_segment:
+                # 处理其他类型的消息段，包括 reply 类型
+                processed_text = process_seg(message.message_segment)
+                if processed_text and processed_text.strip():
+                    self.logger.info(f"收到非文本类型消息，处理后准备 TTS: '{processed_text[:50]}...'")
+                    final_text = processed_text.strip()
+
+                    # 执行相同的清理和TTS流程
+                    cleanup_service = self.core.get_service("text_cleanup")
+                    if cleanup_service:
+                        self.logger.debug("找到 text_cleanup 服务，尝试清理文本...")
+                        try:
+                            cleaned = await cleanup_service.clean_text(final_text)
+                            if cleaned:
+                                self.logger.info(
+                                    f"文本经 Cleanup 服务清理: '{cleaned[:50]}...' (原: '{final_text[:50]}...')"
+                                )
+                                final_text = cleaned
+                            else:
+                                self.logger.warning("Cleanup 服务调用失败或返回空，使用原始文本。")
+                        except AttributeError:
+                            self.logger.error("获取到的 'text_cleanup' 服务没有 'clean_text' 方法。")
+                        except Exception as e:
+                            self.logger.error(f"调用 text_cleanup 服务时出错: {e}", exc_info=True)
+
+                    if final_text:
+                        await self._speak(final_text)
+                    else:
+                        self.logger.warning("处理后文本为空，跳过 TTS。")
+                else:
+                    self.logger.debug("处理后文本为空，跳过 TTS。")
             else:
-                self.logger.debug("处理后文本为空，跳过 TTS。")
-        else:
-            # 可以选择性地记录收到的非文本消息
-            # msg_type = message.message_segment.type if message.message_segment else "No Segment"
-            # self.logger.debug(f"收到非文本类型消息 ({msg_type})，TTS 插件跳过。")
-            pass
+                # 可以选择性地记录收到的非文本消息
+                # msg_type = message.message_segment.type if message.message_segment else "No Segment"
+                # self.logger.debug(f"收到非文本类型消息 ({msg_type})，TTS 插件跳过。")
+                pass
 
     async def _speak(self, text: str):
         self.logger.info(f"请求播放: '{text[:30]}...'")
@@ -871,7 +958,7 @@ class TTSPlugin(BasePlugin):
         vts_lip_sync_service = self.core.get_service("vts_lip_sync")
         if vts_lip_sync_service:
             try:
-                await vts_lip_sync_service.start_lip_sync_session(text)
+                await lip_sync_service.start_lip_sync_session(text)
             except Exception as e:
                 self.logger.debug(f"启动口型同步会话失败: {e}")
 
@@ -929,7 +1016,8 @@ class TTSPlugin(BasePlugin):
         finally:
             if vts_lip_sync_service:
                 try:
-                    await vts_lip_sync_service.stop_lip_sync_session()
+                    await reply_manager.complete_generation()
+                    self.logger.debug("回复生成页面已完成")
                 except Exception as e:
                     self.logger.debug(f"停止口型同步失败: {e}")
 

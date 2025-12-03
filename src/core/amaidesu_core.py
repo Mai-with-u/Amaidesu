@@ -72,6 +72,10 @@ class AmaidesuCore:
             self.logger.info("管道处理功能已禁用")
         else:
             self.logger.info("管道处理功能已启用")
+            # 为管道管理器设置core引用
+            self._pipeline_manager.core = self
+            # 为所有已加载的管道设置core引用
+            self._pipeline_manager._set_core_for_all_pipelines()
 
         # 设置上下文管理器
         self._context_manager = context_manager if context_manager is not None else ContextManager({})

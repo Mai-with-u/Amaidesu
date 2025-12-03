@@ -146,7 +146,7 @@ class PluginManager:
                         plugin_instance = plugin_class(self.core, final_plugin_config)
                         
                         # 手动将插件目录路径设置到实例上，实现向后兼容
-                        setattr(plugin_instance, 'plugin_dir', item_path)
+                        plugin_instance.plugin_dir = item_path
                         self.logger.debug(f"已为插件 '{plugin_class.__name__}' 设置 'plugin_dir' 属性: {item_path}")
 
                         self.logger.debug(f"插件 '{plugin_class.__name__}' 实例化完成，准备调用 setup()")

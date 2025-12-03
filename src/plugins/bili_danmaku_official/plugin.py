@@ -3,7 +3,7 @@
 import asyncio
 import contextlib
 import signal
-import threading
+
 from typing import Dict, Any, Optional, List
 
 # --- Amaidesu Core Imports ---
@@ -75,9 +75,10 @@ class BiliDanmakuOfficialPlugin(BasePlugin):
         cache_size = self.config.get("message_cache_size", 1000)
         self.message_cache_service = MessageCacheService(max_cache_size=cache_size)
 
+
         # --- 添加退出机制相关属性 ---
         self.shutdown_timeout = self.config.get("shutdown_timeout", 30)  # 30秒超时
-        self.cleanup_lock = threading.Lock()
+        self.cleanup_lock = asyncio.Lock()
         self.is_shutting_down = False
 
         # --- 注册信号处理器 ---
@@ -170,11 +171,12 @@ class BiliDanmakuOfficialPlugin(BasePlugin):
 
     async def cleanup(self):
         """清理资源"""
-        with self.cleanup_lock:
+        async with self.cleanup_lock:
             if self.is_shutting_down and hasattr(self, "_cleanup_done"):
                 return  # 避免重复清理
 
             self.logger.info("开始清理 BiliDanmakuOfficial 插件资源...")
+            self.is_shutting_down = True
 
             try:
                 # 设置停止事件
@@ -185,7 +187,7 @@ class BiliDanmakuOfficialPlugin(BasePlugin):
                     self.logger.info("取消监控任务...")
                     self.monitoring_task.cancel()
                     try:
-                        await asyncio.wait_for(self.monitoring_task, timeout=10)
+                        await asyncio.wait_for(self.monitoring_task, timeout=2.0)  # 减少到2秒
                     except (asyncio.CancelledError, asyncio.TimeoutError):
                         self.logger.info("监控任务已取消或超时")
 
@@ -262,7 +264,7 @@ class BiliDanmakuOfficialPlugin(BasePlugin):
                 # 将消息缓存到消息缓存服务中
                 self.message_cache_service.cache_message(message)
                 self.logger.debug(f"消息已缓存: {message.message_info.message_id}")
-
+                # 发送消息到 MaiCore
                 await self.core.send_to_maicore(message)
         except Exception as e:
             self.logger.error(f"处理消息时出错: {message_data} - {e}", exc_info=True)

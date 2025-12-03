@@ -1,0 +1,2 @@
+# Torch cache directory for VAD model (避免中文路径问题)
+.torch_cache/

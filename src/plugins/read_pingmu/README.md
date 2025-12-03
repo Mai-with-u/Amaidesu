@@ -1,10 +1,13 @@
 # 屏幕监控插件 (ScreenMonitorPlugin)
 
-这是一个用于监控屏幕内容并通过视觉语言模型（VL）进行描述的插件。它能够定期截取屏幕内容，使用 VL 模型分析并生成描述，然后将这些描述作为上下文提供给其他服务使用。
+这是一个用于监控屏幕内容并通过视觉语言模型（VL）进行描述的插件。它能够定期截取屏幕内容（支持直接屏幕截图或从OBS获取），使用 VL 模型分析并生成描述，然后将这些描述作为上下文提供给其他服务使用。
 
 ## 功能特点
 
 - 定期自动截取屏幕内容
+- 支持多种截图源：
+  - 直接屏幕截图
+  - OBS Studio 通过 WebSocket 获取场景源
 - 使用 OpenAI 兼容的 VL 模型分析屏幕内容
 - 将屏幕描述作为动态上下文提供给其他服务
 - 可配置的截图间隔和模型参数
@@ -13,9 +16,10 @@
 ## 依赖库
 
 插件运行需要以下依赖库：
-- `mss`: 用于屏幕截图
+- `mss`: 用于屏幕截图（直接屏幕截图模式下需要）
 - `openai`: 用于调用 VL 模型 API
 - `Pillow`: 用于图像处理
+- `obsws-python`: 用于连接 OBS WebSocket（OBS截图模式下需要）
 
 ## 消息处理流程
 
@@ -27,7 +31,62 @@
 
 2. 运行时的处理流程：
    - 启动后台监控循环任务
-   - 定期截取屏幕内容
+   - 定期截取屏幕内容（通过直接截屏或OBS源）
+   - 编码图像为Base64格式
+   - 将图像发送到VL模型API
+   - 获取并更新屏幕描述
+   - 发送消息到MaiCore（如果启用）
+
+## 截图源配置
+
+插件支持两种截图源：
+
+### 1. 直接屏幕截图 (screen)
+
+使用系统级的屏幕截图功能，通过`mss`库实现。这是默认的截图源。
+
+### 2. OBS Studio (obs)
+
+通过OBS WebSocket API从OBS Studio获取指定源的截图。这需要在OBS中启用WebSocket服务器。
+
+#### OBS WebSocket设置步骤
+
+1. 在OBS Studio中，打开"工具"菜单，选择"WebSocket服务器设置"
+2. 勾选"启用WebSocket服务器"
+3. 设置服务器端口（默认为4455）
+4. 根据需要设置身份验证密码
+5. 点击"确定"保存设置
+
+## 配置示例
+
+以下是使用OBS作为截图源的配置示例：
+
+```toml
+# 插件配置
+[read_pingmu]
+enabled = true
+
+# 截图频率（秒）
+screenshot_interval_seconds = 5 
+
+# 截图来源类型: "screen"(直接截屏) 或 "obs"(从OBS获取)
+capture_source = "obs"
+
+# --- OpenAI 兼容 API 配置 ---
+api_key = "你的API密钥"
+openai_compatible_base_url = "https://api.siliconflow.cn/v1"
+model_name = "deepseek-ai/deepseek-vl2"
+vl_prompt = "请用一句话全面的描述目前屏幕上的的内容和活动窗口标题。output in chinese!!!"
+
+# --- OBS WebSocket 配置 ---
+[read_pingmu.obs_config]
+host = "localhost"
+port = 4455
+password = "你的OBS WebSocket密码"  # 如果未设置密码可以留空
+source_name = "游戏捕获"  # OBS中的源名称
+auto_switch_scene = true
+scene_name = "游戏"  # 自动切换的场景名称
+```
    - 将截图转换为 base64 编码
    - 调用 VL 模型获取描述（通过 OpenAI 兼容接口）
    - 使用线程锁保护更新最新的屏幕描述
