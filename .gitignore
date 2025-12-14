@@ -193,3 +193,4 @@ MineLand/
 .kiro/
 
 **/minecraft_json_files/**
+.claude/settings.local.json

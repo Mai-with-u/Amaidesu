@@ -104,9 +104,13 @@ class MaicraftPlugin(BasePlugin):
                     self.enabled = False
                     return
 
-            # 向 AmaidesuCore 注册命令处理服务
+            # 监听命令事件（新的事件系统方式）
+            self.listen_event("command_router.received", self.handle_command_event)
+            self.logger.info("Maicraft插件已监听命令事件")
+
+            # 保留旧的服务注册方式作为向后兼容
             self.core.register_service("maicraft_command_handler", self.handle_command)
-            self.logger.info("Maicraft命令处理服务已注册")
+            self.logger.info("Maicraft命令处理服务已注册（向后兼容）")
 
         except Exception as e:
             self.logger.error(f"设置Maicraft插件时出错: {e}", exc_info=True)
@@ -121,9 +125,38 @@ class MaicraftPlugin(BasePlugin):
         self.logger.info("Maicraft插件清理完成")
         await super().cleanup()
 
+    async def handle_command_event(self, event_name: str, data: dict, source: str):
+        """
+        处理命令事件。
+
+        Args:
+            event_name: 事件名称
+            data: 事件数据，包含command等字段
+            source: 事件源
+        """
+        if not self.enabled:
+            return
+
+        try:
+            # 从事件数据中提取命令
+            command = data.get("command", "")
+            message = data.get("message")
+
+            if not command:
+                self.logger.debug("事件中没有命令")
+                return
+
+            self.logger.info(f"收到命令事件: {command} (来源: {source})")
+
+            # 解析并执行命令
+            await self._parse_and_execute_command(command, message)
+
+        except Exception as e:
+            self.logger.error(f"处理命令事件时出错: {e}", exc_info=True)
+
     async def handle_command(self, message: MessageBase) -> bool:
         """
-        处理命令消息。
+        处理命令消息（旧的服务调用方式，向后兼容）。
 
         Args:
             message: 包含命令的完整消息对象
@@ -146,10 +179,21 @@ class MaicraftPlugin(BasePlugin):
                 self.logger.debug("消息文本为空")
                 return False
 
+            # 解析并执行命令
+            await self._parse_and_execute_command(message_text, message)
+            return True
+
+        except Exception as e:
+            self.logger.error(f"处理命令消息时出错: {e}", exc_info=True)
+            return False
+
+    async def _parse_and_execute_command(self, command_text: str, message):
+        """解析并执行命令的共享逻辑"""
+        try:
             # 解析命令
-            command = self.command_parser.parse_command(message_text, message)
+            command = self.command_parser.parse_command(command_text, message)
             if not command:
-                self.logger.debug(f"无法解析命令: '{message_text}'")
+                self.logger.debug(f"无法解析命令: '{command_text}'")
                 return False
 
             # 检查是否支持该命令
@@ -194,7 +238,7 @@ class MaicraftPlugin(BasePlugin):
             return success
 
         except Exception as e:
-            self.logger.error(f"处理命令时出错: '{message_text}', 错误: {e}", exc_info=True)
+            self.logger.error(f"处理命令时出错: '{command_text}', 错误: {e}", exc_info=True)
             return False
 
     def _create_action(self, action_type: ActionType):

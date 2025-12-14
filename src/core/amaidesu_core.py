@@ -9,12 +9,18 @@ from maim_message import Router, RouteConfig, TargetConfig, MessageBase
 from src.utils.logger import get_logger
 from .pipeline_manager import PipelineManager
 from .context_manager import ContextManager  # 导入ContextManager
+from .event_bus import EventBus  # 导入EventBus
 
 
 class AmaidesuCore:
     """
     Amaidesu 核心模块，负责与 MaiCore 的通信以及消息的分发。
     """
+
+    @property
+    def event_bus(self) -> Optional[EventBus]:
+        """获取事件总线实例（供插件使用）"""
+        return self._event_bus
 
     def __init__(
         self,
@@ -26,6 +32,7 @@ class AmaidesuCore:
         http_callback_path: str = "/callback",
         pipeline_manager: Optional[PipelineManager] = None,
         context_manager: Optional[ContextManager] = None,  # 修改为接收ContextManager实例
+        event_bus: Optional[EventBus] = None,  # 可选的事件总线
     ):
         """
         初始化 Amaidesu Core。
@@ -39,6 +46,7 @@ class AmaidesuCore:
             http_callback_path: (可选) 接收 HTTP 回调的路径。
             pipeline_manager: (可选) 已配置的管道管理器。如果为None则禁用管道处理。
             context_manager: (可选) 已配置的上下文管理器。如果为None则创建默认实例。
+            event_bus: (可选) 已配置的事件总线。如果为None则创建默认实例。
         """
         # 初始化 AmaidesuCore 自己的 logger
         self.logger = get_logger("AmaidesuCore")
@@ -81,6 +89,11 @@ class AmaidesuCore:
         self._context_manager = context_manager if context_manager is not None else ContextManager({})
         self.register_service("prompt_context", self._context_manager)  # 兼容以前通过服务发现调用上下文管理器的插件
         self.logger.info("上下文管理器已注册为服务")
+
+        # 设置事件总线（可选功能）
+        self._event_bus = event_bus  # 如果为None，表示不使用事件总线
+        if event_bus is not None:
+            self.logger.info("已使用外部提供的事件总线")
 
         self._setup_router()
         if self._http_host and self._http_port:

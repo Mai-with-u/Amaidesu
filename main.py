@@ -20,6 +20,7 @@ except ModuleNotFoundError:
 from src.core.amaidesu_core import AmaidesuCore
 from src.core.plugin_manager import PluginManager
 from src.core.pipeline_manager import PipelineManager  # 导入管道管理器
+from src.core.event_bus import EventBus  # 导入事件总线
 from src.utils.logger import get_logger
 from src.utils.config import initialize_configurations  # Updated import
 from src.config.config import global_config
@@ -196,7 +197,9 @@ async def main():
     context_manager = ContextManager(context_manager_config)
     logger.info("已创建上下文管理器实例")
 
-    # --- 初始化核心 ---
+    # --- 初始化事件总线和核心 ---
+    logger.info("初始化事件总线和AmaidesuCore...")
+    event_bus = EventBus()  # 创建事件总线
     core = AmaidesuCore(
         platform=platform_id,
         maicore_host=maicore_host,
@@ -206,6 +209,7 @@ async def main():
         http_callback_path=http_callback_path,
         pipeline_manager=pipeline_manager,  # 传入加载好的管道管理器或None
         context_manager=context_manager,  # 传入创建好的上下文管理器
+        event_bus=event_bus,  # 传入事件总线
         # maicore_token=maicore_token # 如果 core 需要 token
     )
 

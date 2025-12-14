@@ -1,16 +1,17 @@
 from typing import Dict, Any, Optional
+import time
 from maim_message import MessageBase
 from src.core.pipeline_manager import MessagePipeline
 
 
 class CommandRouterPipeline(MessagePipeline):
     """
-    命令路由管道，拦截包含指定前缀的命令消息，转发给订阅的插件列表。
+    命令路由管道，检测命令消息并发布事件。
 
     功能：
     1. 检测消息是否以指定前缀开头（默认以"/"开头）
-    2. 将整个消息对象转发给配置的订阅插件自行处理
-    3. 最多只记录原始消息的正文日志
+    2. 发布命令事件供插件监听
+    3. 兼容旧的服务调用方式（向后兼容）
     """
 
     def __init__(self, config: Dict[str, Any]):
@@ -18,13 +19,16 @@ class CommandRouterPipeline(MessagePipeline):
 
         self.enabled = self.config.get("enabled", True)
         self.command_prefix = self.config.get("command_prefix", "/")
-        self.subscribers = self.config.get("subscribers", [])
+        self.subscribers = self.config.get("subscribers", [])  # 保留用于向后兼容
+        self.use_events = self.config.get("use_events", True)  # 默认使用事件系统
 
-        self.logger.info(f"命令路由管道初始化完成，前缀: '{self.command_prefix}', 订阅插件: {self.subscribers}")
+        self.logger.info(f"命令路由管道初始化完成，前缀: '{self.command_prefix}', 使用事件: {self.use_events}")
+        if self.subscribers and not self.use_events:
+            self.logger.info(f"向后兼容模式，订阅插件: {self.subscribers}")
 
     async def process_message(self, message: MessageBase) -> Optional[MessageBase]:
         """
-        处理消息，检测命令前缀并转发整个消息给订阅插件。
+        处理消息，检测命令前缀并发布事件或转发给订阅插件。
 
         Args:
             message: 要处理的消息对象
@@ -52,13 +56,45 @@ class CommandRouterPipeline(MessagePipeline):
             return message
 
         # 记录原始消息正文
-        self.logger.info(f"检测到命令消息，原始消息正文: '{original_text}'")
+        self.logger.info(f"检测到命令消息: '{original_text}'")
 
-        # 转发整个消息给订阅的插件
-        await self._forward_message_to_subscribers(message)
+        # 准备命令事件数据
+        command_data = {
+            "command": original_text,
+            "prefix": self.command_prefix,
+            "message": message,  # 包含完整消息对象
+            "user_id": message.message_info.user_info.user_id if message.message_info.user_info else None,
+            "username": message.message_info.user_info.user_nickname if message.message_info.user_info else None,
+            "timestamp": time.time()
+        }
 
-        # 发现命令直接拦截，返回None表示消息被完全处理
-        self.logger.debug("命令消息被拦截，转发给订阅插件")
+        # 尝试使用事件系统
+        if self.use_events and hasattr(self, "core") and self.core:
+            try:
+                event_bus = self.core.event_bus
+                if event_bus:
+                    # 使用事件系统（新模式）
+                    self.logger.info(f"发布命令事件: {original_text}")
+                    await event_bus.emit("command_router.received", command_data, source="CommandRouter")
+                else:
+                    raise AttributeError("EventBus not available")
+            except (AttributeError, TypeError) as e:
+                self.logger.warning(f"无法使用事件系统，回退到兼容模式: {e}")
+                if self.subscribers:
+                    self.logger.info("使用向后兼容模式，转发消息给订阅插件")
+                    await self._forward_message_to_subscribers(message)
+                else:
+                    self.logger.warning("未启用事件系统且没有配置订阅插件，命令将被忽略")
+        else:
+            # 向后兼容：旧的服务调用方式
+            if self.subscribers:
+                self.logger.info("使用向后兼容模式，转发消息给订阅插件")
+                await self._forward_message_to_subscribers(message)
+            else:
+                self.logger.warning("未启用事件系统且没有配置订阅插件，命令将被忽略")
+
+        # 命令消息被处理，返回None
+        self.logger.info("命令消息处理完成")
         return None
 
     async def _forward_message_to_subscribers(self, message: MessageBase):

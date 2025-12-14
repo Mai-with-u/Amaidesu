@@ -3,7 +3,7 @@ import importlib
 import inspect
 import os
 import sys
-from typing import TYPE_CHECKING, Dict, Any, Optional, Type
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Type
 
 # 避免循环导入，使用 TYPE_CHECKING
 if TYPE_CHECKING:
@@ -29,6 +29,53 @@ class BasePlugin:
         self.plugin_config = plugin_config
         self.logger = get_logger(self.__class__.__name__)
         self.logger.info(f"初始化插件: {self.__class__.__name__}")
+
+        # 检查Core是否提供了EventBus（可选功能）
+        if core.event_bus is not None:
+            self.event_bus = core.event_bus
+            self.logger.debug(f"{self.__class__.__name__} 检测到EventBus")
+        else:
+            self.event_bus = None
+
+    # 便捷方法（可选使用）
+    async def emit_event(self, event_name: str, data: Any) -> None:
+        """
+        发布事件（如果EventBus可用）
+
+        Args:
+            event_name: 事件名称
+            data: 事件数据
+        """
+        if self.event_bus:
+            await self.event_bus.emit(event_name, data, self.__class__.__name__)
+        else:
+            self.logger.debug(f"EventBus不可用，忽略事件: {event_name}")
+
+    def listen_event(self, event_name: str, handler: Callable) -> None:
+        """
+        订阅事件（如果EventBus可用）
+
+        Args:
+            event_name: 要监听的事件名称
+            handler: 事件处理器函数
+        """
+        if self.event_bus:
+            self.event_bus.on(event_name, handler)
+        else:
+            self.logger.debug(f"EventBus不可用，无法监听事件: {event_name}")
+
+    def stop_listening_event(self, event_name: str, handler: Callable) -> None:
+        """
+        取消订阅事件（如果EventBus可用）
+
+        Args:
+            event_name: 事件名称
+            handler: 要移除的事件处理器函数
+        """
+        if self.event_bus:
+            self.event_bus.off(event_name, handler)
+        else:
+            self.logger.debug(f"EventBus不可用，无法取消监听事件: {event_name}")
 
     async def setup(self):
         """设置插件，例如注册处理器。"""
@@ -144,7 +191,7 @@ class PluginManager:
                         self.logger.debug(f"准备实例化插件: {plugin_class.__name__}")
                         # 实例化插件
                         plugin_instance = plugin_class(self.core, final_plugin_config)
-                        
+
                         # 手动将插件目录路径设置到实例上，实现向后兼容
                         plugin_instance.plugin_dir = item_path
                         self.logger.debug(f"已为插件 '{plugin_class.__name__}' 设置 'plugin_dir' 属性: {item_path}")
