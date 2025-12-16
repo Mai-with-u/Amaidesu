@@ -19,9 +19,15 @@ response_timeout = 10
 check_interval = 1
 
 # 游戏控制配置
-auto_click = true           # 是否自动点击鼠标推进游戏
-click_position = [960, 540] # 点击位置 [x, y] - 默认屏幕中心，可根据游戏中"下一步"按钮位置调整
-use_enter_key = false       # 是否使用Enter键推进游戏
+# control_method: 推进游戏的控制方式
+#   - "mouse_click": 鼠标单击 (需配合 click_position 使用)
+#   - "enter_key": 按 Enter 键
+#   - "space_key": 按空格键
+control_method = "mouse_click"
+click_position = [
+  960,
+  540,
+] # 鼠标点击位置 [x, y] - 仅 control_method = "mouse_click" 时生效
 
 # 高级配置
 screenshot_min_interval = 0.5 # 最小截屏间隔 (秒)

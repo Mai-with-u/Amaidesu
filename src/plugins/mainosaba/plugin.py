@@ -11,11 +11,19 @@ import io
 import base64
 import traceback
 from typing import Optional, Dict, Any
+from enum import Enum
 from PIL import ImageGrab
 import pyautogui
 import aiohttp
 from src.core.plugin_manager import BasePlugin
 from maim_message import MessageBase, BaseMessageInfo, UserInfo, Seg, FormatInfo
+
+
+class ControlMethod(Enum):
+    """游戏控制方式枚举"""
+    MOUSE_CLICK = "mouse_click"  # 鼠标单击
+    ENTER_KEY = "enter_key"      # Enter键
+    SPACE_KEY = "space_key"      # 空格键
 
 
 class MainosabaPlugin(BasePlugin):
@@ -37,9 +45,13 @@ class MainosabaPlugin(BasePlugin):
         self.check_interval = plugin_config.get("check_interval", 1)  # 秒
 
         # 控制配置
-        self.auto_click = plugin_config.get("auto_click", True)
+        control_method_str = plugin_config.get("control_method", "mouse_click")
+        try:
+            self.control_method = ControlMethod(control_method_str)
+        except ValueError:
+            self.logger.warning(f"未知的控制方式: {control_method_str}，使用默认值 mouse_click")
+            self.control_method = ControlMethod.MOUSE_CLICK
         self.click_position = plugin_config.get("click_position", [1920 // 2, 1080 // 2])  # 默认屏幕中心
-        self.use_enter_key = plugin_config.get("use_enter_key", False)
 
         # 运行状态
         self.is_running = False
@@ -125,8 +137,15 @@ class MainosabaPlugin(BasePlugin):
                         self.waiting_for_response = False
                 else:
                     # 正常监听游戏文本
+                    self.logger.info("开始截屏识别...")
                     game_text = await self.capture_and_recognize()
-                    if game_text and game_text != self.last_game_text:
+                    self.logger.info(f"识别完成，结果: {game_text[:50] if game_text else 'None'}...")
+                    
+                    if game_text is None:
+                        self.logger.info("未识别到有效文本，继续监听")
+                    elif game_text == self.last_game_text:
+                        self.logger.info("识别到的文本与上次相同，跳过")
+                    else:
                         self.logger.info(f"检测到新游戏文本: {game_text[:50]}...")
                         await self.send_game_text_to_maibot(game_text)
                         self.last_game_text = game_text
@@ -195,9 +214,14 @@ class MainosabaPlugin(BasePlugin):
 
 请仔细识别并提取游戏中的对话内容，只返回角色说的台词文本。
 如果是系统提示或界面元素，请忽略。
-如果没有对话文本，请返回"无对话文本"。
+如果没有对话文本，才返回对画面的描述。
 
-请以纯文本形式返回识别到的对话内容。""",
+请以纯文本形式返回识别到的对话内容，如果没有角色只有旁白，那么就以“旁白”作为角色名。格式为：
+
+游戏角色名:发言内容
+或者
+游戏角色名:(角色心理描写)
+""",
                             },
                             {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}},
                         ],
@@ -258,7 +282,7 @@ class MainosabaPlugin(BasePlugin):
             game_user_info = UserInfo(
                 platform=self.core.platform,
                 user_id="game_character",
-                user_nickname="游戏角色",
+                user_nickname="《魔法少女的魔女审判》游戏内容同步助手",
                 user_cardname="Mainosaba",
             )
 
@@ -268,7 +292,6 @@ class MainosabaPlugin(BasePlugin):
             # 附加配置，用于标识这是游戏消息
             additional_config = {
                 "source": "manosaba_game",
-                "sender_name": "游戏角色",
                 "maimcore_reply_probability_gain": 1.5,  # 提高回复概率
             }
 
@@ -300,16 +323,19 @@ class MainosabaPlugin(BasePlugin):
     async def advance_game(self) -> None:
         """推进游戏到下一句对话"""
         try:
-            if self.auto_click:
+            if self.control_method == ControlMethod.MOUSE_CLICK:
                 # 鼠标点击指定位置
                 x, y = self.click_position
                 pyautogui.click(x, y)
                 self.logger.info(f"已点击位置 ({x}, {y}) 推进游戏")
-
-            if self.use_enter_key:
+            elif self.control_method == ControlMethod.ENTER_KEY:
                 # 按Enter键
                 pyautogui.press("enter")
                 self.logger.info("已按Enter键推进游戏")
+            elif self.control_method == ControlMethod.SPACE_KEY:
+                # 按空格键
+                pyautogui.press("space")
+                self.logger.info("已按空格键推进游戏")
 
             # 等待一下让游戏界面更新
             await asyncio.sleep(0.5)
