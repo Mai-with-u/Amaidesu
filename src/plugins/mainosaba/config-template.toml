@@ -1,0 +1,27 @@
+# MainosabaPlugin - 《魔法少女的魔女裁判》游戏助手插件配置
+
+# 是否启用插件
+enabled = true
+
+# VLM API配置 (支持OpenAI GPT-4 Vision或兼容的视觉语言模型)
+vlm_api_url = "https://api.siliconflow.cn/v1/chat/completions"
+vlm_api_key = ""                                               # 请填入你的API密钥
+vlm_model = "Pro/Qwen/Qwen2.5-VL-7B-Instruct"
+
+# 截图设置
+full_screen = true # 是否全屏截图，如果为false则使用game_region
+# game_region = [100, 100, 900, 700]  # 指定区域截图 [x1, y1, x2, y2]，full_screen=false时使用
+
+# 响应超时设置 (秒) - 等待MaiBot回应的超时时间
+response_timeout = 10
+
+# 检查间隔 (秒) - 多久检查一次游戏画面
+check_interval = 1
+
+# 游戏控制配置
+auto_click = true           # 是否自动点击鼠标推进游戏
+click_position = [960, 540] # 点击位置 [x, y] - 默认屏幕中心，可根据游戏中"下一步"按钮位置调整
+use_enter_key = false       # 是否使用Enter键推进游戏
+
+# 高级配置
+screenshot_min_interval = 0.5 # 最小截屏间隔 (秒)

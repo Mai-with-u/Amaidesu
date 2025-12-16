@@ -31,3 +31,4 @@ customtkinter
 obsws_python
 librosa
 scipy
+pyautogui

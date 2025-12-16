@@ -98,3 +98,4 @@ enable_lichess = true
 enable_remote_stream = false
 enable_warudo = false
 enable_screen_monitor = false
+enable_mainosaba = false
