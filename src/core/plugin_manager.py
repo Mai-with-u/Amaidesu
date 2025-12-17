@@ -11,6 +11,9 @@ if TYPE_CHECKING:
 
 from src.utils.logger import get_logger
 from src.utils.config import load_component_specific_config, merge_component_configs
+from src.openai_client.llm_request import LLMClient
+from src.openai_client.modelconfig import ModelConfig
+from src.config.config import global_config
 
 
 # --- 插件基类 (可选但推荐) ---
@@ -36,6 +39,9 @@ class BasePlugin:
             self.logger.debug(f"{self.__class__.__name__} 检测到EventBus")
         else:
             self.event_bus = None
+        
+        # LLM客户端缓存
+        self._llm_client_cache: Dict[str, LLMClient] = {}
 
     # 便捷方法（可选使用）
     async def emit_event(self, event_name: str, data: Any) -> None:
@@ -90,6 +96,165 @@ class BasePlugin:
         self.logger.debug(f"清理插件: {self.__class__.__name__}")
         # 子类应在此处实现清理逻辑
         pass
+    
+    # --- LLM 客户端获取方法 ---
+    
+    def get_llm_client(self, config_type: str = "llm") -> LLMClient:
+        """
+        获取 LLM 客户端实例
+        
+        Args:
+            config_type: 配置类型，可选值：
+                - "llm": 标准 LLM 配置（默认）
+                - "llm_fast": 快速 LLM 配置（低延迟场景）
+                - "vlm": 视觉语言模型配置
+        
+        Returns:
+            LLMClient 实例
+            
+        Raises:
+            ValueError: 如果 config_type 无效或必需配置缺失
+        """
+        # 检查缓存
+        if config_type in self._llm_client_cache:
+            self.logger.debug(f"从缓存返回 {config_type} 客户端")
+            return self._llm_client_cache[config_type]
+        
+        # 验证 config_type
+        if config_type not in ["llm", "llm_fast", "vlm"]:
+            raise ValueError(f"无效的 config_type: {config_type}，必须是 'llm', 'llm_fast' 或 'vlm'")
+        
+        try:
+            # 1. 从全局配置获取基础配置
+            if config_type == "llm":
+                base_config = global_config.llm
+            elif config_type == "llm_fast":
+                base_config = global_config.llm_fast
+            else:  # vlm
+                base_config = global_config.vlm
+            
+            # 2. 获取插件配置中的 llm_config 覆盖项
+            plugin_llm_config = self.plugin_config.get("llm_config", {})
+            
+            # 3. 执行字段级合并（插件配置优先）
+            merged_config = self._merge_llm_config(base_config, plugin_llm_config)
+            
+            # 4. 创建 ModelConfig
+            model_config = ModelConfig(
+                model_name=merged_config["model"],
+                api_key=merged_config["api_key"],
+                base_url=merged_config["base_url"],
+                max_tokens=merged_config["max_tokens"],
+                temperature=merged_config["temperature"]
+            )
+            
+            # 5. 创建 LLMClient
+            client = LLMClient(model_config)
+            
+            # 6. 缓存客户端
+            self._llm_client_cache[config_type] = client
+            
+            self.logger.info(
+                f"已创建并缓存 {config_type} 客户端 (model: {model_config.model_name}, "
+                f"base_url: {model_config.base_url})"
+            )
+            
+            return client
+            
+        except Exception as e:
+            error_msg = f"创建 {config_type} 客户端失败: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
+            raise ValueError(error_msg) from e
+    
+    def _merge_llm_config(self, base_config, plugin_config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        合并 LLM 配置（字段级合并）
+        
+        Args:
+            base_config: 全局配置对象（LLMConfig/LLMConfigFast/VLMConfig）
+            plugin_config: 插件配置字典
+        
+        Returns:
+            合并后的配置字典
+        """
+        # 从 base_config 提取字段
+        merged = {
+            "model": base_config.model,
+            "api_key": base_config.api_key,
+            "base_url": base_config.base_url,
+            "max_tokens": base_config.max_tokens,
+            "temperature": base_config.temperature
+        }
+        
+        # 插件配置覆盖（仅覆盖非 None 和非空字符串的值）
+        for key in ["model", "api_key", "base_url", "max_tokens", "temperature"]:
+            if key in plugin_config:
+                value = plugin_config[key]
+                # 特殊处理 api_key：空字符串视为未配置
+                if key == "api_key" and value == "":
+                    continue
+                # None 值不覆盖
+                if value is not None:
+                    merged[key] = value
+                    self.logger.debug(f"插件配置覆盖 {key}: {value}")
+        
+        # 验证必需字段
+        if not merged["api_key"]:
+            raise ValueError(
+                "LLM API Key 未配置！请在全局配置或插件配置中设置 api_key。"
+            )
+        
+        return merged
+    
+    def get_fast_llm_client(self) -> LLMClient:
+        """
+        获取快速 LLM 客户端（低延迟场景）
+        
+        Returns:
+            LLMClient 实例
+        """
+        return self.get_llm_client(config_type="llm_fast")
+    
+    def get_vlm_client(self) -> LLMClient:
+        """
+        获取视觉语言模型客户端
+        
+        Returns:
+            LLMClient 实例
+        """
+        return self.get_llm_client(config_type="vlm")
+    
+    def create_custom_llm_client(self, model_config: ModelConfig) -> LLMClient:
+        """
+        创建自定义配置的 LLM 客户端（不使用缓存）
+        
+        Args:
+            model_config: 自定义模型配置
+        
+        Returns:
+            LLMClient 实例
+        """
+        self.logger.info(
+            f"创建自定义 LLM 客户端 (model: {model_config.model_name}, "
+            f"base_url: {model_config.base_url})"
+        )
+        return LLMClient(model_config)
+    
+    def _clear_llm_client_cache(self, config_type: Optional[str] = None) -> None:
+        """
+        清除 LLM 客户端缓存
+        
+        Args:
+            config_type: 要清除的配置类型，如果为 None 则清除所有缓存
+        """
+        if config_type is None:
+            self._llm_client_cache.clear()
+            self.logger.debug("已清除所有 LLM 客户端缓存")
+        elif config_type in self._llm_client_cache:
+            del self._llm_client_cache[config_type]
+            self.logger.debug(f"已清除 {config_type} 客户端缓存")
+        else:
+            self.logger.warning(f"缓存中不存在 {config_type} 客户端")
 
 
 class PluginManager:

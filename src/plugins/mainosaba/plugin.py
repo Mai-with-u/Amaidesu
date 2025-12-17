@@ -9,12 +9,10 @@ import asyncio
 import time
 import io
 import base64
-import traceback
 from typing import Optional, Dict, Any
 from enum import Enum
 from PIL import ImageGrab
 import pyautogui
-import aiohttp
 from src.core.plugin_manager import BasePlugin
 from maim_message import MessageBase, BaseMessageInfo, UserInfo, Seg, FormatInfo
 
@@ -33,14 +31,9 @@ class MainosabaPlugin(BasePlugin):
         super().__init__(core, plugin_config)
         self.plugin_name = "MainosabaPlugin"
 
-        # VLM API配置
-        self.vlm_api_url = plugin_config.get("vlm_api_url", "")
-        self.vlm_api_key = plugin_config.get("vlm_api_key", "")
-        self.vlm_model = plugin_config.get("vlm_model", "Pro/Qwen/Qwen2.5-VL-7B-Instruct")
-
         # 游戏配置
         self.full_screen = plugin_config.get("full_screen", True)  # 是否全屏截图
-        self.game_region = plugin_config.get("game_region", None)  # [x1, y1, x2, y2] 如果为None则全屏
+        self.game_region = plugin_config.get("game_region", None)  # [x1, y1, x2, y2] 如果None则全屏
         self.response_timeout = plugin_config.get("response_timeout", 10)  # 秒
         self.check_interval = plugin_config.get("check_interval", 1)  # 秒
 
@@ -61,19 +54,20 @@ class MainosabaPlugin(BasePlugin):
         self.last_message_time = 0
         self.monitor_task: Optional[asyncio.Task] = None
 
-        # HTTP会话
-        self.http_session: Optional[aiohttp.ClientSession] = None
+        # VLM 客户端（将在 setup 中初始化）
+        self.vlm_client = None
 
         self.logger.info(f"{self.plugin_name} 插件初始化完成")
 
     async def setup(self) -> None:
         """插件启动时的设置"""
-        # 创建HTTP会话，设置较长的超时时间以支持VLM图片处理
-        # connect: 连接超时 10秒
-        # total: 总超时 120秒（VLM处理图片可能需要较长时间）
-        timeout = aiohttp.ClientTimeout(connect=10, total=120)
-        self.http_session = aiohttp.ClientSession(timeout=timeout)
-        self.logger.info("aiohttp.ClientSession 已创建（连接超时:10s, 总超时:120s）")
+        # 获取 VLM 客户端
+        try:
+            self.vlm_client = self.get_vlm_client()
+            self.logger.info("VLM 客户端已初始化")
+        except Exception as e:
+            self.logger.error(f"VLM 客户端初始化失败: {e}")
+            self.logger.warning("插件将在无 VLM 支持的情况下运行")
 
         # 注册消息处理器来检测MaiBot回应
         self.core.register_websocket_handler("*", self.handle_maicore_message)
@@ -93,12 +87,6 @@ class MainosabaPlugin(BasePlugin):
                 await self.monitor_task
             except asyncio.CancelledError:
                 pass
-
-        # 关闭HTTP会话
-        if self.http_session:
-            await self.http_session.close()
-            self.logger.info("aiohttp.ClientSession 已关闭")
-            self.http_session = None
 
         self.logger.info(f"{self.plugin_name} 插件清理完成")
 
@@ -184,89 +172,60 @@ class MainosabaPlugin(BasePlugin):
             img_base64 = base64.b64encode(img_buffer.getvalue()).decode()
 
             # 调用VLM API识别文本
-            game_text = await self.call_vlm_api(img_base64)
+            game_text = await self.recognize_game_text(img_base64)
             return game_text
 
         except Exception as e:
             self.logger.error(f"截屏识别出错: {e}")
             return None
 
-    async def call_vlm_api(self, image_base64: str) -> Optional[str]:
-        """调用VLM API识别游戏文本"""
+    async def recognize_game_text(self, image_base64: str) -> Optional[str]:
+        """识别游戏截图中的文本（使用 VLM）"""
+        if not self.vlm_client:
+            self.logger.warning("VLM 客户端未初始化，无法识别文本")
+            return None
+        
         try:
-            if not self.vlm_api_key or not self.vlm_api_url:
-                self.logger.warning(f"VLM API配置不完整，无法识别文本: {self.vlm_api_key} {self.vlm_api_url}")
-                self.logger.warning("VLM API配置不完整，无法识别文本")
-                return None
-
-            headers = {"Content-Type": "application/json", "Authorization": f"Bearer {self.vlm_api_key}"}
-
-            data = {
-                "model": self.vlm_model,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": """请识别这张游戏截图中的对话文本。
+            # 构建 prompt
+            prompt = """请识别这张游戏截图中的对话文本。
 这是《魔法少女的魔女裁判》游戏的界面。
 
 请仔细识别并提取游戏中的对话内容，只返回角色说的台词文本。
 如果是系统提示或界面元素，请忽略。
 如果没有对话文本，才返回对画面的描述。
 
-请以纯文本形式返回识别到的对话内容，如果没有角色只有旁白，那么就以“旁白”作为角色名。格式为：
+请以纯文本形式返回识别到的对话内容，如果没有角色只有旁白，那么就以"旁白"作为角色名。格式为：
 
 游戏角色名:发言内容
 或者
 游戏角色名:(角色心理描写)
-""",
-                            },
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}},
-                        ],
-                    }
-                ],
-                "max_tokens": 500,
-            }
-
-            if not self.http_session:
-                self.logger.error("HTTP会话未初始化")
+"""
+            
+            # 构建图像 URL（LLMClient 支持 base64 格式）
+            image_data_url = f"data:image/png;base64,{image_base64}"
+            
+            # 调用 VLM（自动处理 HTTP 请求、错误、Token 统计）
+            result = await self.vlm_client.vision_completion(
+                prompt=prompt,
+                images=image_data_url,
+                max_tokens=500
+            )
+            
+            if not result["success"]:
+                self.logger.error(f"VLM识别失败: {result.get('error')}")
                 return None
-
-            # 添加调试日志
-            self.logger.debug(f"开始调用VLM API: {self.vlm_api_url}")
-            self.logger.debug(f"图片Base64长度: {len(image_base64)}")
-
-            async with self.http_session.post(self.vlm_api_url, headers=headers, json=data) as response:
-                self.logger.debug(f"收到响应，状态码: {response.status}")
-
-                if response.status == 200:
-                    result = await response.json()
-                    content = result["choices"][0]["message"]["content"].strip()
-
-                    # 过滤无效响应
-                    if content in ["无对话文本", "没有对话文本", "No dialogue text", ""]:
-                        return None
-
-                    self.logger.info(f"VLM识别结果: {content[:100]}...")
-                    return content
-                else:
-                    error_text = await response.text()
-                    self.logger.error(f"VLM API调用失败: {response.status} - {error_text}")
-                    return None
-
-        except asyncio.TimeoutError:
-            self.logger.error("调用VLM API超时")
-            self.logger.error(f"完整错误信息:\n{traceback.format_exc()}")
-            return None
-        except aiohttp.ClientError as e:
-            self.logger.error(f"调用VLM API网络错误: {type(e).__name__} - {e}")
-            self.logger.error(f"完整错误信息:\n{traceback.format_exc()}")
-            return None
+            
+            content = result["content"].strip()
+            
+            # 过滤无效响应
+            if content in ["无对话文本", "没有对话文本", "No dialogue text", ""]:
+                return None
+            
+            self.logger.info(f"VLM识别结果: {content[:100]}...")
+            return content
+            
         except Exception as e:
-            self.logger.error(f"调用VLM API出错: {type(e).__name__} - {e}")
-            self.logger.error(f"完整错误信息:\n{traceback.format_exc()}")
+            self.logger.error(f"识别游戏文本出错: {e}", exc_info=True)
             return None
 
     async def send_game_text_to_maibot(self, game_text: str) -> None:

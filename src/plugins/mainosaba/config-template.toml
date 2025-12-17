@@ -3,22 +3,40 @@
 # 是否启用插件
 enabled = true
 
-# VLM API配置 (支持OpenAI GPT-4 Vision或兼容的视觉语言模型)
-vlm_api_url = "https://api.siliconflow.cn/v1/chat/completions"
-vlm_api_key = ""                                               # 请填入你的API密钥
-vlm_model = "Pro/Qwen/Qwen2.5-VL-7B-Instruct"
+# ========== VLM 配置 ==========
+# 注意：本插件已迁移到统一的 LLM 客户端系统
+# VLM API配置 - 使用统一的 llm_config 格式
+# 推荐方式 1：使用全局 VLM 配置（在主配置文件 config.toml 的 [vlm] 节中配置）
+# 推荐方式 2：在主配置文件的 [plugins.mainosaba.llm_config] 节中覆盖配置
+# 方式 3（可选）：在此处定义插件特定配置（会覆盖全局配置）
 
-# 截图设置
+# 如果需要在此处定义插件特定的 VLM 配置，请取消以下注释：
+# [llm_config]
+# model = "Pro/Qwen/Qwen2.5-VL-7B-Instruct"
+# api_key = ""  # 请填入你的 API 密钥
+# base_url = "https://api.siliconflow.cn/v1"
+# max_tokens = 500
+# temperature = 0.3
+
+# 说明：
+# - 如果未在此处定义，插件将自动使用全局 [vlm] 配置
+# - 如果只定义部分字段（如 model），其他字段将从全局配置继承
+# - 这种设计让你可以在全局统一管理 API Key，避免重复配置
+
+# ========== 游戏配置 ==========
+
+# ========== 截图设置 ==========
 full_screen = true # 是否全屏截图，如果为false则使用game_region
 # game_region = [100, 100, 900, 700]  # 指定区域截图 [x1, y1, x2, y2]，full_screen=false时使用
 
-# 响应超时设置 (秒) - 等待MaiBot回应的超时时间
+# ========== 响应超时设置 ==========
+# 等待MaiBot回应的超时时间 (秒)
 response_timeout = 10
 
-# 检查间隔 (秒) - 多久检查一次游戏画面
+# 多久检查一次游戏画面 (秒)
 check_interval = 1
 
-# 游戏控制配置
+# ========== 游戏控制配置 ==========
 # control_method: 推进游戏的控制方式
 #   - "mouse_click": 鼠标单击 (需配合 click_position 使用)
 #   - "enter_key": 按 Enter 键
@@ -29,5 +47,5 @@ click_position = [
   540,
 ] # 鼠标点击位置 [x, y] - 仅 control_method = "mouse_click" 时生效
 
-# 高级配置
+# ========== 高级配置 ==========
 screenshot_min_interval = 0.5 # 最小截屏间隔 (秒)
