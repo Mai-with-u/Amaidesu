@@ -5,7 +5,6 @@ import os
 import argparse  # 导入 argparse
 
 
-
 # 尝试导入 tomllib (Python 3.11+), 否则使用 toml
 try:
     import tomllib
@@ -29,6 +28,7 @@ logger = get_logger("Main")
 
 # 获取 main.py 文件所在的目录 (项目根目录)
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 
 async def main():
     """应用程序主入口点。"""
@@ -54,7 +54,6 @@ async def main():
 
     # 清除所有预设的 handler (包括 src/utils/logger.py 中添加的)
     logger.remove()
-    
 
     module_filter_func = None
     if args.filter:
@@ -97,7 +96,7 @@ async def main():
         logger.info(f"日志过滤器已激活: {list(filtered_modules)} (INFO 级别)")
 
     logger.info("启动 Amaidesu 应用程序...")
-    
+
     # --- 初始化所有配置 ---
     try:
         config, main_cfg_copied, plugin_cfg_copied, pipeline_cfg_copied = initialize_configurations(
@@ -169,7 +168,7 @@ async def main():
             # 创建管道管理器并加载管道
             pipeline_manager = PipelineManager()
             await pipeline_manager.load_pipelines(pipeline_load_dir, pipeline_config)
-            
+
             # 计算加载的管道总数并记录日志
             total_pipelines = len(pipeline_manager._inbound_pipelines) + len(pipeline_manager._outbound_pipelines)
             if total_pipelines > 0:
@@ -249,7 +248,7 @@ async def main():
                 pass
     except Exception:
         pass
-    
+
     # 为Windows等不支持loop.add_signal_handler的系统设置信号处理
     original_sigint = signal.signal(signal.SIGINT, signal_handler)
     try:
@@ -259,7 +258,7 @@ async def main():
         original_sigterm = None
 
     logger.info("应用程序正在运行。按 Ctrl+C 退出。")
-    
+
     try:
         await stop_event.wait()
         logger.info("收到关闭信号，开始执行清理...")
@@ -294,7 +293,7 @@ async def main():
         logger.warning("核心服务关闭超时，强制退出")
     except Exception as e:
         logger.error(f"核心服务关闭时出错: {e}")
-    
+
     logger.info("Amaidesu 应用程序已关闭。")
 
 

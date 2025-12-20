@@ -105,6 +105,33 @@ python mock_maicore.py
 - 管道配置：`src/pipelines/{管道}/config-template.toml` → `config.toml`
 - 管道覆盖：根配置中的 `[pipelines.管道名]` 部分
 
+#### 插件配置（新格式）
+
+推荐使用新的 `enabled` 列表格式来管理插件开关：
+
+```toml
+[plugins]
+# 启用的插件列表
+enabled = [
+    "console_input",
+    "llm_text_processor",
+    "keyword_action",
+
+    # 注释掉的插件将被禁用
+    # "stt",
+    # "bili_danmaku",
+]
+```
+
+**新格式优势**：
+- 一目了然：所有启用的插件集中在一个列表中
+- 操作简便：只需添加、删除或注释插件名
+- 分组清晰：通过注释可以将相关插件分组
+- 避免混淆：不会因为同时存在enabled和disabled列表而困惑
+
+**向后兼容**：
+系统仍然支持旧的 `enable_xxx = true/false` 格式，但会提示迁移到新格式。如果同时存在两种格式，新格式优先。
+
 应用程序在生成配置文件后会退出，需要手动配置API密钥和其他敏感值后重新启动。
 
 ## 开发注意事项

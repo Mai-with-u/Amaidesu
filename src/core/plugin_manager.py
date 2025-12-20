@@ -275,6 +275,33 @@ class PluginManager:
         self.logger = get_logger("PluginManager")
         self.logger.debug("PluginManager 初始化完成")
 
+    def _is_plugin_enabled(self, plugin_name: str) -> bool:
+        """
+        检查插件是否启用（支持新格式和旧格式的向后兼容）
+
+        Args:
+            plugin_name: 插件名称
+
+        Returns:
+            bool: 是否启用
+        """
+        # 1. 检查 enabled 列表（优先级最高）
+        enabled_list = self.global_plugin_config.get("enabled", [])
+        if plugin_name in enabled_list:
+            return True
+
+        # 2. 如果有enabled列表但插件不在其中，则禁用
+        if enabled_list:
+            return False
+
+        # 3. 向后兼容：检查旧的 enable_xxx 格式
+        old_format_key = f"enable_{plugin_name}"
+        if old_format_key in self.global_plugin_config:
+            return self.global_plugin_config[old_format_key]
+
+        # 4. 默认行为：如果都没有配置，默认禁用（更安全）
+        return False
+
     async def load_plugins(self, plugin_dir: str = "src/plugins"):
         """扫描指定目录下的子目录，加载所有有效的插件。"""
         # 使用 self.logger 而不是全局 logger
@@ -303,9 +330,8 @@ class PluginManager:
                     continue
 
                 # --- 检查插件是否在配置中启用 ---
-                is_enabled_key = f"enable_{plugin_name}"
-                is_enabled = self.global_plugin_config.get(is_enabled_key, True)
-                self.logger.debug(f"检查插件 '{plugin_name}' 是否启用: Key='{is_enabled_key}', Enabled={is_enabled}")
+                is_enabled = self._is_plugin_enabled(plugin_name)
+                self.logger.debug(f"检查插件 '{plugin_name}' 是否启用: Enabled={is_enabled}")
 
                 if not is_enabled:
                     self.logger.info(f"插件 '{plugin_name}' 在配置中被禁用，跳过加载。")

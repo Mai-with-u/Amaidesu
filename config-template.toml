@@ -76,26 +76,58 @@ priority = 50
 
 # 插件全局配置
 [plugins]
-enable_console_input = true
-enable_stt = false
-enable_vtube_studio = false
-enable_websocket_lip_sync = false
-enable_bili_danmaku = false
-enable_subtitle = false
-enable_dg-lab-do = false
-enable_llm_text_processor = true
-enable_emotion_judge = false
-enable_sticker = false
-enable_funasr_stt = false
-enable_gptsovits_tts = false
-enable_mock_danmaku = false
-enable_bili_danmaku_official = false          # 请不要和 bili_danmaku_selenium 同时启用
-enable_bili_danmaku_official_maicraft = false # 请不要和 bili_danmaku_selenium 同时启用
-enable_dg_lab_service = false
-enable_keyword_action = true
-enable_read_pingmu = false
-enable_lichess = true
-enable_remote_stream = false
-enable_warudo = false
-enable_screen_monitor = false
-enable_mainosaba = false
+# === 新格式：启用列表 ===
+# 取消注释来启用插件，注释掉来禁用
+enabled = [
+    # 基础功能（建议启用）
+    "console_input",
+    "keyword_action",
+    "llm_text_processor",  # LLM文本处理器
+
+    # 游戏互动
+    # "mainosaba",        # 魔裁游戏
+    # "arknights",        # 明日方舟
+    # "minecraft",        # 我的世界
+
+    # 输入功能（语音和文本输入）
+    # "stt",              # 语音识别
+    # "funasr_stt",       # FunASR语音识别
+    # "bili_danmaku",     # B站弹幕输入
+    # "bili_danmaku_official",       # B站官方弹幕（不要和bili_danmaku同时启用）
+    # "bili_danmaku_official_maicraft",  # B站弹幕-MaiCraft版（不要和bili_danmaku_selenium同时启用）
+    # "bili_danmaku_selenium",        # B站弹幕-Selenium版
+    # "mock_danmaku",     # 模拟弹幕输入
+    # "read_pingmu",      # 读屏木输入
+    # "message_replayer", # 消息重放器
+
+    # 输出功能（语音和视觉输出）
+    # "tts",              # 语音合成
+    # "gptsovits_tts",    # GPT-SoVITS TTS
+    # "omni_tts",         # Omni TTS
+    # "subtitle",         # 字幕生成
+    # "sticker",          # 贴纸生成
+    # "emotion_judge",    # 情感判断
+
+    # 外部控制和集成
+    # "vtube_studio",     # VTubeStudio控制
+    # "warudo",           # Warudo控制
+    # "obs_control",      # OBS Studio控制
+    # "dg_lab_service",   # DG-Lab服务
+    # "dg-lab-do",        # DG-Lab DO
+
+    # 监控和流媒体
+    # "screen_monitor",   # 屏幕监控
+    # "remote_stream",    # 远程串流
+
+    # 游戏相关
+    # "maicraft",         # MaiCraft游戏
+
+    # 系统工具
+    # "command_processor",  # 命令处理器（通常作为管道使用）
+]
+
+# === 旧格式（向后兼容，可选） ===
+# 以下配置仍然有效，但会被enabled列表覆盖
+# enable_console_input = true
+# enable_stt = false
+# ...（保留原有配置作为注释示例）
