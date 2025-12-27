@@ -5,6 +5,7 @@ import mimetypes
 from io import BytesIO
 from typing import List, Dict, Any, Optional, Union, AsyncGenerator
 from openai import AsyncOpenAI
+from openai.types.chat import ChatCompletionToolParam
 from PIL import Image
 from src.utils.logger import get_logger
 from src.openai_client.modelconfig import ModelConfig
@@ -102,20 +103,20 @@ class LLMClient:
     async def chat_completion(
         self,
         prompt: str,
-        tools: Optional[List[Dict[str, Any]]] = None,
+        tools: Optional[List[ChatCompletionToolParam]] = None,
         system_message: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None
     ) -> Dict[str, Any]:
         """异步聊天完成调用
-        
+
         Args:
             prompt: 用户输入的提示
-            tools: 工具列表，格式为OpenAI工具格式
+            tools: 工具列表，使用 OpenAI 官方类型定义
             system_message: 系统消息
             temperature: 温度参数，覆盖配置中的默认值
             max_tokens: 最大token数，覆盖配置中的默认值
-            
+
         Returns:
             包含响应结果的字典
         """
@@ -215,16 +216,16 @@ class LLMClient:
     async def call_tool(
         self,
         prompt: str,
-        tools: List[Dict[str, Any]],
+        tools: List[ChatCompletionToolParam],
         system_message: Optional[str] = None
     ) -> Dict[str, Any]:
         """调用工具的函数
-        
+
         Args:
             prompt: 用户输入的提示
-            tools: 工具列表
+            tools: 工具列表，使用 OpenAI 官方类型定义
             system_message: 系统消息
-            
+
         Returns:
             包含工具调用结果的字典
         """

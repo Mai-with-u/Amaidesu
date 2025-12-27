@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Type
 # 避免循环导入，使用 TYPE_CHECKING
 if TYPE_CHECKING:
     from .amaidesu_core import AmaidesuCore
+    from .llm_client_manager import LLMClientManager
 
 from src.utils.logger import get_logger
 from src.utils.config import load_component_specific_config, merge_component_configs
@@ -39,9 +40,19 @@ class BasePlugin:
             self.logger.debug(f"{self.__class__.__name__} 检测到EventBus")
         else:
             self.event_bus = None
-        
-        # LLM客户端缓存
-        self._llm_client_cache: Dict[str, LLMClient] = {}
+
+        # 检查Core是否提供了LLMClientManager（可选功能）
+        if core.llm_client_manager is not None:
+            self._llm_client_manager = core.llm_client_manager
+            self.logger.debug(f"{self.__class__.__name__} 检测到LLMClientManager")
+        else:
+            self._llm_client_manager = None
+            self.logger.warning(
+                f"{self.__class__.__name__} 未检测到LLMClientManager，LLM功能将不可用"
+            )
+
+        # 插件级LLM配置缓存（用于覆盖全局配置）
+        self._plugin_llm_cache: Dict[str, LLMClient] = {}
 
     # 便捷方法（可选使用）
     async def emit_event(self, event_name: str, data: Any) -> None:
@@ -98,71 +109,85 @@ class BasePlugin:
         pass
     
     # --- LLM 客户端获取方法 ---
-    
+
     def get_llm_client(self, config_type: str = "llm") -> LLMClient:
         """
         获取 LLM 客户端实例
-        
+
+        优先使用插件级覆盖配置（如果配置了 llm_config），否则使用全局配置。
+
         Args:
             config_type: 配置类型，可选值：
                 - "llm": 标准 LLM 配置（默认）
                 - "llm_fast": 快速 LLM 配置（低延迟场景）
                 - "vlm": 视觉语言模型配置
-        
+
         Returns:
             LLMClient 实例
-            
+
         Raises:
-            ValueError: 如果 config_type 无效或必需配置缺失
+            ValueError: 如果 LLMClientManager 未提供或配置无效
         """
-        # 检查缓存
-        if config_type in self._llm_client_cache:
-            self.logger.debug(f"从缓存返回 {config_type} 客户端")
-            return self._llm_client_cache[config_type]
-        
-        # 验证 config_type
-        if config_type not in ["llm", "llm_fast", "vlm"]:
-            raise ValueError(f"无效的 config_type: {config_type}，必须是 'llm', 'llm_fast' 或 'vlm'")
-        
+        # 检查是否有插件级配置覆盖
+        plugin_llm_config = self.plugin_config.get("llm_config", {})
+
+        # 如果插件没有配置覆盖，直接使用全局管理器
+        if not plugin_llm_config:
+            if self._llm_client_manager is None:
+                raise ValueError(
+                    "LLM 客户端管理器未初始化，且插件未提供自己的 LLM 配置！"
+                )
+            return self._llm_client_manager.get_client(config_type)
+
+        # 插件有配置覆盖，检查缓存
+        cache_key = f"{config_type}_plugin_override"
+        if cache_key in self._plugin_llm_cache:
+            self.logger.debug(f"从缓存返回插件覆盖的 {config_type} 客户端")
+            return self._plugin_llm_cache[cache_key]
+
+        # 创建插件专用的客户端（使用覆盖配置）
         try:
-            # 1. 从全局配置获取基础配置
+            # 验证 config_type
+            if config_type not in ["llm", "llm_fast", "vlm"]:
+                raise ValueError(
+                    f"无效的 config_type: {config_type}，必须是 'llm', 'llm_fast' 或 'vlm'"
+                )
+
+            # 从全局配置获取基础配置
             if config_type == "llm":
                 base_config = global_config.llm
             elif config_type == "llm_fast":
                 base_config = global_config.llm_fast
             else:  # vlm
                 base_config = global_config.vlm
-            
-            # 2. 获取插件配置中的 llm_config 覆盖项
-            plugin_llm_config = self.plugin_config.get("llm_config", {})
-            
-            # 3. 执行字段级合并（插件配置优先）
+
+            # 合并配置（插件配置优先）
             merged_config = self._merge_llm_config(base_config, plugin_llm_config)
-            
-            # 4. 创建 ModelConfig
+
+            # 创建 ModelConfig
             model_config = ModelConfig(
                 model_name=merged_config["model"],
                 api_key=merged_config["api_key"],
                 base_url=merged_config["base_url"],
                 max_tokens=merged_config["max_tokens"],
-                temperature=merged_config["temperature"]
+                temperature=merged_config["temperature"],
             )
-            
-            # 5. 创建 LLMClient
+
+            # 创建 LLMClient
             client = LLMClient(model_config)
-            
-            # 6. 缓存客户端
-            self._llm_client_cache[config_type] = client
-            
+
+            # 缓存客户端
+            self._plugin_llm_cache[cache_key] = client
+
             self.logger.info(
-                f"已创建并缓存 {config_type} 客户端 (model: {model_config.model_name}, "
-                f"base_url: {model_config.base_url})"
+                f"已创建并缓存插件覆盖的 {config_type} 客户端 "
+                f"(model: {model_config.model_name}, base_url: {model_config.base_url})"
             )
-            
+
             return client
-            
+
         except Exception as e:
-            error_msg = f"创建 {config_type} 客户端失败: {str(e)}"
+            error_msg = f"创建插件覆盖的 {config_type} 客户端失败: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
             raise ValueError(error_msg) from e
     
@@ -243,18 +268,20 @@ class BasePlugin:
     def _clear_llm_client_cache(self, config_type: Optional[str] = None) -> None:
         """
         清除 LLM 客户端缓存
-        
+
         Args:
             config_type: 要清除的配置类型，如果为 None 则清除所有缓存
         """
         if config_type is None:
-            self._llm_client_cache.clear()
-            self.logger.debug("已清除所有 LLM 客户端缓存")
-        elif config_type in self._llm_client_cache:
-            del self._llm_client_cache[config_type]
-            self.logger.debug(f"已清除 {config_type} 客户端缓存")
+            self._plugin_llm_cache.clear()
+            self.logger.debug("已清除所有插件级 LLM 客户端缓存")
         else:
-            self.logger.warning(f"缓存中不存在 {config_type} 客户端")
+            cache_key = f"{config_type}_plugin_override"
+            if cache_key in self._plugin_llm_cache:
+                del self._plugin_llm_cache[cache_key]
+                self.logger.debug(f"已清除插件级 {config_type} 客户端缓存")
+            else:
+                self.logger.warning(f"缓存中不存在插件级 {config_type} 客户端")
 
 
 class PluginManager:

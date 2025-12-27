@@ -1,5 +1,33 @@
 # Amaidesu 配置文件
 
+# === 全局 LLM 配置 ===
+# 重要：这是项目通用的 LLM 配置，供所有模块和插件使用
+# Avatar 自动表情、插件等功能都会使用这些配置
+[llm]
+# 标准 LLM 配置（用于高质量任务）
+model = "Pro/deepseek-ai/DeepSeek-V3.2"
+temperature = 0.2
+api_key = "your-api-key"                    # 可选，如果不设置将使用环境变量
+base_url = "https://api.siliconflow.cn/v1/" # 可选，用于自定义API端点
+max_tokens = 1024
+
+[llm_fast]
+# 快速 LLM 配置（用于低延迟任务，如 Avatar 表情分析）
+model = "Qwen/Qwen3-8B"
+temperature = 0.2
+api_key = "your-api-key"                    # 可选，如果不设置将使用环境变量
+base_url = "https://api.siliconflow.cn/v1/" # 可选，用于自定义API端点
+max_tokens = 1024
+
+[vlm]
+# 视觉语言模型配置（用于图像理解任务）
+model = "zai-org/GLM-4.6V"
+temperature = 0.3
+api_key = "your-api-key"
+base_url = "https://api.siliconflow.cn/v1/"
+max_tokens = 1024
+
+# === Amaidesu 核心配置 ===
 [general]
 # Amaidesu 在 MaiCore 中注册的平台标识符
 platform_id = "amaidesu_default"
@@ -48,6 +76,105 @@ title_separator = ": "     # 如果添加提供者名称，使用的分隔符
 default_max_length = 1000 # 默认上下文最大长度
 default_priority = 100    # 默认优先级值
 
+# 通用虚拟形象控制系统配置
+[avatar]
+# 全局启用虚拟形象控制系统
+enabled = true
+
+# 默认活跃适配器（如果没有设置，将使用第一个注册的适配器）
+# 可选值: "vts", "vrc", "live2d" 等
+default_adapter = "vts"
+
+# 自动表情配置
+[avatar.auto_expression]
+# 是否启用自动表情功能
+# 启用后，收到消息时会自动分析文本并设置表情
+enabled = false
+# 最小文本长度（少于这个长度的文本不会触发）
+min_text_length = 2
+
+# LLM 配置（用于自动文本分析和表情选择）
+[avatar.llm]
+# 启用 LLM 功能
+enabled = true
+
+# LLM 类型：使用全局配置的哪个 LLM
+# "llm" - 标准LLM（更准确但较慢）
+# "llm_fast" - 快速LLM（推荐，平衡速度和质量）
+# "vlm" - 视觉语言模型
+type = "llm_fast"
+
+# 自定义 LLM 配置（可选，如果不设置则使用全局配置）
+# 如果需要覆盖全局配置，取消下面的注释并填写
+# model = "deepseek-chat"
+# api_key = "your-api-key"
+# base_url = "https://api.siliconflow.cn/v1"
+# temperature = 0.1
+# max_tokens = 100
+
+# 语义动作自定义映射
+[avatar.semantic_actions.happy_expression]
+description = "开心的表情"
+
+# VTS 平台特定覆盖
+[avatar.semantic_actions.happy_expression.platforms.vts]
+MouthSmile = 1.0
+EyeOpenLeft = 0.9
+EyeOpenRight = 0.9
+
+# VRChat 平台特定覆盖（OSC 地址）
+[avatar.semantic_actions.happy_expression.platforms.vrc]
+"/input/face/eyes" = 1.0
+"/input/face/mouth_smile" = 1.0
+
+[avatar.semantic_actions.sad_expression]
+description = "悲伤的表情"
+
+[avatar.semantic_actions.sad_expression.platforms.vts]
+MouthSmile = -0.5
+EyeOpenLeft = 0.5
+EyeOpenRight = 0.5
+MouthOpen = 0.2
+
+[avatar.semantic_actions.surprised_expression]
+description = "惊讶的表情"
+
+[avatar.semantic_actions.surprised_expression.platforms.vts]
+MouthOpen = 0.8
+EyeOpenLeft = 1.0
+EyeOpenRight = 1.0
+
+[avatar.semantic_actions.angry_expression]
+description = "生气的表情"
+
+[avatar.semantic_actions.angry_expression.platforms.vts]
+MouthSmile = -0.8
+EyeOpenLeft = 0.6
+EyeOpenRight = 0.6
+
+[avatar.semantic_actions.close_eyes]
+description = "闭眼"
+
+[avatar.semantic_actions.close_eyes.platforms.vts]
+EyeOpenLeft = 0.0
+EyeOpenRight = 0.0
+
+[avatar.semantic_actions.open_eyes]
+description = "睁眼"
+
+[avatar.semantic_actions.open_eyes.platforms.vts]
+EyeOpenLeft = 1.0
+EyeOpenRight = 1.0
+
+[avatar.semantic_actions.neutral]
+description = "中性表情"
+
+[avatar.semantic_actions.neutral.platforms.vts]
+MouthSmile = 0.0
+MouthOpen = 0.0
+EyeOpenLeft = 1.0
+EyeOpenRight = 1.0
+
 # 管道配置
 [pipelines]
 # 示例：启用并配置 throttle 管道
@@ -82,7 +209,7 @@ enabled = [
     # 基础功能（建议启用）
     "console_input",
     "keyword_action",
-    "llm_text_processor",  # LLM文本处理器
+    "llm_text_processor", # LLM文本处理器
 
     # 游戏互动
     # "mainosaba",        # 魔裁游戏
@@ -114,6 +241,7 @@ enabled = [
     # "obs_control",      # OBS Studio控制
     # "dg_lab_service",   # DG-Lab服务
     # "dg-lab-do",        # DG-Lab DO
+    "vrchat", # VRChat控制
 
     # 监控和流媒体
     # "screen_monitor",   # 屏幕监控

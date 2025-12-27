@@ -32,3 +32,4 @@ obsws_python
 librosa
 scipy
 pyautogui
+python-osc

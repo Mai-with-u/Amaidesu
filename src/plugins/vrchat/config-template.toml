@@ -1,0 +1,64 @@
+# VRChat 插件配置
+# 此插件通过 OSC 协议与 VRChat 进行通信
+
+[plugins.vrchat]
+# 启用插件
+enabled = true
+
+# VRChat OSC 地址配置
+# VRChat 默认 OSC 端口：
+# - 发送端口 (Out): 9000 (VRChat 监听此端口接收指令)
+# - 接收端口 (In): 9001 (VRChat 向此端口发送数据)
+
+vrc_host = "127.0.0.1"      # VRChat 所在的主机地址
+vrc_out_port = 9000         # 发送 OSC 指令到 VRChat 的端口
+vrc_in_port = 9001          # 接收来自 VRChat 数据的端口
+
+# 本地监听配置（如果需要接收来自 VRChat 的数据）
+local_host = "127.0.0.1"
+local_in_port = 9001        # 本地监听端口（应与 VRChat 的发送端口匹配）
+
+# 是否启动 OSC 服务器（接收来自 VRChat 的数据）
+# 如果只需发送指令到 VRChat，可以设为 false
+enable_server = false
+
+# 是否自动发送参数更新
+auto_send_params = true
+
+# Avatar 模块配置（可选）
+[plugins.vrchat.avatar]
+# Avatar 模块会自动继承全局配置
+# 这里可以添加 VRC 特定的覆盖
+
+# VRC 特定的语义动作映射
+[plugins.vrchat.avatar.semantic_actions.happy_expression.platforms.vrc]
+# 使用 VRChat 的 /input/ 参数（如果 avatar 模型支持）
+"/input/face/eyes" = 1.0
+"/input/face/mouth_smile" = 1.0
+
+# 或者使用自定义的 avatar 参数
+EyeOpen = 1.0
+MouthSmile = 1.0
+
+[plugins.vrchat.avatar.semantic_actions.sad_expression.platforms.vrc]
+MouthSmile = -0.5
+EyeOpen = 0.5
+
+[plugins.vrchat.avatar.semantic_actions.surprised_expression.platforms.vrc]
+MouthOpen = 0.8
+EyeOpen = 1.0
+
+[plugins.vrchat.avatar.semantic_actions.angry_expression.platforms.vrc]
+MouthSmile = -0.8
+EyeOpen = 0.6
+
+[plugins.vrchat.avatar.semantic_actions.close_eyes.platforms.vrc]
+EyeOpen = 0.0
+
+[plugins.vrchat.avatar.semantic_actions.open_eyes.platforms.vrc]
+EyeOpen = 1.0
+
+[plugins.vrchat.avatar.semantic_actions.neutral.platforms.vrc]
+MouthSmile = 0.0
+MouthOpen = 0.0
+EyeOpen = 1.0

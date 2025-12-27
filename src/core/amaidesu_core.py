@@ -1,5 +1,5 @@
 import asyncio
-from typing import Callable, Dict, Any, Optional
+from typing import Callable, Dict, Any, Optional, TYPE_CHECKING
 
 # 注意：需要安装 aiohttp
 # pip install aiohttp
@@ -7,9 +7,15 @@ from aiohttp import web
 
 from maim_message import Router, RouteConfig, TargetConfig, MessageBase
 from src.utils.logger import get_logger
+from src.openai_client.llm_request import LLMClient
 from .pipeline_manager import PipelineManager
 from .context_manager import ContextManager  # 导入ContextManager
 from .event_bus import EventBus  # 导入EventBus
+
+# 类型检查时的导入
+if TYPE_CHECKING:
+    from .avatar.avatar_manager import AvatarControlManager
+    from .llm_client_manager import LLMClientManager
 
 
 class AmaidesuCore:
@@ -22,6 +28,11 @@ class AmaidesuCore:
         """获取事件总线实例（供插件使用）"""
         return self._event_bus
 
+    @property
+    def avatar(self) -> Optional["AvatarControlManager"]:
+        """获取虚拟形象控制管理器实例（供插件使用）"""
+        return self._avatar
+
     def __init__(
         self,
         platform: str,
@@ -33,6 +44,8 @@ class AmaidesuCore:
         pipeline_manager: Optional[PipelineManager] = None,
         context_manager: Optional[ContextManager] = None,  # 修改为接收ContextManager实例
         event_bus: Optional[EventBus] = None,  # 可选的事件总线
+        avatar: Optional["AvatarControlManager"] = None,  # 可选的虚拟形象控制管理器
+        llm_client_manager: Optional["LLMClientManager"] = None,  # 可选的 LLM 客户端管理器
     ):
         """
         初始化 Amaidesu Core。
@@ -47,6 +60,8 @@ class AmaidesuCore:
             pipeline_manager: (可选) 已配置的管道管理器。如果为None则禁用管道处理。
             context_manager: (可选) 已配置的上下文管理器。如果为None则创建默认实例。
             event_bus: (可选) 已配置的事件总线。如果为None则创建默认实例。
+            avatar: (可选) 已配置的虚拟形象控制管理器。
+            llm_client_manager: (可选) 已配置的 LLM 客户端管理器。如果为None则LLM功能不可用。
         """
         # 初始化 AmaidesuCore 自己的 logger
         self.logger = get_logger("AmaidesuCore")
@@ -60,6 +75,7 @@ class AmaidesuCore:
         ] = {}  # 按消息类型或其他标识符存储处理器
         self._http_request_handlers: Dict[str, list[Callable[[web.Request], asyncio.Task]]] = {}  # 用于 HTTP 请求处理
         self._services: Dict[str, Any] = {}  # 新增：用于存储已注册的服务
+        self._llm_client_manager: Optional["LLMClientManager"] = llm_client_manager  # LLM 客户端管理器
         self._is_connected = False
         self._connect_lock = asyncio.Lock()  # 防止并发连接
 
@@ -94,6 +110,19 @@ class AmaidesuCore:
         self._event_bus = event_bus  # 如果为None，表示不使用事件总线
         if event_bus is not None:
             self.logger.info("已使用外部提供的事件总线")
+
+        # 设置虚拟形象控制管理器（可选功能）
+        self._avatar = avatar
+        if avatar is not None:
+            # 设置 core 引用（因为初始化时 core 可能还未创建）
+            avatar.core = self
+            self.logger.info("已使用外部提供的虚拟形象控制管理器")
+
+        # 设置 LLM 客户端管理器（可选功能）
+        if llm_client_manager is not None:
+            self.logger.info("已使用外部提供的 LLM 客户端管理器")
+        else:
+            self.logger.warning("未提供 LLM 客户端管理器，LLM 相关功能将不可用")
 
         self._setup_router()
         if self._http_host and self._http_port:
@@ -390,6 +419,27 @@ class AmaidesuCore:
                 self.logger.warning("由于入站管道错误，将尝试分发原始消息给插件。")
                 message_to_broadcast = message  # Fallback to original message
 
+        # --- 自动触发 Avatar 表情 ---
+        if self._avatar:
+            try:
+                # 提取消息文本
+                text = None
+                if message_to_broadcast.message_segment:
+                    # message_segment.data 直接就是文本内容（str）
+                    if hasattr(message_to_broadcast.message_segment, 'data'):
+                        data = message_to_broadcast.message_segment.data
+                        # 确保 data 是字符串类型
+                        if isinstance(data, str):
+                            text = data
+                        # 如果是 seglist（列表），跳过处理
+                        # 或者可以提取 seglist 中的文本（如果需要的话）
+
+                # 调用 avatar 自动表情（内部会判断是否启用）
+                if text:
+                    await self._avatar.try_auto_expression(text)
+            except Exception as e:
+                self.logger.error(f"触发 avatar 自动表情时出错: {e}", exc_info=True)
+
         # --- 分发给插件处理器 ---
         # 确定分发键 (例如, 消息段类型)
         dispatch_key = "*"  # 通配符，默认所有消息都发送给通配符处理器
@@ -559,3 +609,33 @@ class AmaidesuCore:
             上下文管理器实例
         """
         return self._context_manager
+
+    # ==================== LLM 客户端管理 ====================
+
+    @property
+    def llm_client_manager(self) -> Optional["LLMClientManager"]:
+        """获取 LLM 客户端管理器实例（供插件使用）"""
+        return self._llm_client_manager
+
+    def get_llm_client(self, config_type: str = "llm") -> LLMClient:
+        """
+        获取 LLM 客户端实例（委托给 LLMClientManager）
+
+        Args:
+            config_type: 配置类型，可选值：
+                - "llm": 标准 LLM 配置（默认）
+                - "llm_fast": 快速 LLM 配置（低延迟场景）
+                - "vlm": 视觉语言模型配置
+
+        Returns:
+            LLMClient 实例
+
+        Raises:
+            ValueError: 如果 LLMClientManager 未提供或配置无效
+        """
+        if self._llm_client_manager is None:
+            raise ValueError(
+                "LLM 客户端管理器未初始化！请在 main.py 中创建 LLMClientManager 并传入 AmaidesuCore。"
+            )
+
+        return self._llm_client_manager.get_client(config_type)

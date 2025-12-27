@@ -186,6 +186,38 @@ class VTubeStudioPlugin(BasePlugin):
                 self.openai_client = openai.OpenAI(api_key=self.llm_api_key, base_url=self.llm_base_url)
                 self.logger.info(f"LLM客户端已初始化，使用模型: {self.llm_model}")
 
+    def _setup_avatar_adapter(self):
+        """初始化通用虚拟形象控制系统的适配器"""
+        try:
+            # 导入适配器
+            from src.plugins.vtube_studio.avatar_adapter import VTSAdapter
+
+            # 获取 AvatarControlManager（已在核心初始化时创建）
+            avatar_manager = self.core.avatar
+            if not avatar_manager:
+                self.logger.warning("AvatarControlManager 未在核心中初始化，跳过适配器设置")
+                return
+
+            self.logger.info("使用核心中的 AvatarControlManager")
+
+            # 创建 VTS 适配器
+            self.vts_adapter = VTSAdapter(self)
+            avatar_manager.register_adapter(self.vts_adapter)
+
+            # 设置为活跃适配器（如果还没有活跃适配器）
+            if avatar_manager.get_active_adapter() is None:
+                avatar_manager.set_active_adapter("vts")
+                self.logger.info("设置 VTS 为默认活跃适配器")
+
+            # 同时也注册为服务（向后兼容）
+            self.core.register_service("avatar_control_manager", avatar_manager)
+            self.logger.info("已集成通用虚拟形象控制系统")
+
+        except ImportError as e:
+            self.logger.warning(f"无法导入虚拟形象控制模块: {e}")
+        except Exception as e:
+            self.logger.error(f"设置虚拟形象适配器时出错: {e}", exc_info=True)
+
     async def setup(self):
         await super().setup()
         if not self.vts:
@@ -207,6 +239,9 @@ class VTubeStudioPlugin(BasePlugin):
         if self.lip_sync_enabled:
             self.core.register_service("vts_lip_sync", self)
             self.logger.info("Registered 'vts_lip_sync' service for audio analysis.")
+
+        # --- 集成通用虚拟形象控制系统 ---
+        self._setup_avatar_adapter()
 
     async def _connect_and_auth(self):
         """Internal task to connect, authenticate, and register context."""
