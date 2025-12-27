@@ -93,6 +93,35 @@ enabled = false
 # 最小文本长度（少于这个长度的文本不会触发）
 min_text_length = 2
 
+# ========== 新增：智能触发配置 ==========
+
+# 简单回复过滤（优先级最高，快速本地判断）
+# 过滤"好的"、"嗯"等简单确认语
+simple_reply_filter_enabled = true
+simple_reply_patterns = [
+    "^[好的好的]$", "^[好呀]$", "^[好的]$",
+    "^[嗯嗯]$", "^[嗯]$", "^[收到]$",
+    "^[知道了]$", "^[明白]$", "^[OK]$", "^[ok]$",
+    "^(好|行|可以)[呀啊嘛。！!]*$"
+]
+
+# 时间间隔控制（快速本地判断）
+# 避免频繁调整表情
+time_interval_enabled = true
+min_time_interval = 5.0  # 秒
+
+# LLM智能判断（重要性 + 情感分析 + 变化检测）
+# 注意：通过前两层过滤后才执行，使用小模型成本低
+# 一次调用完成3个任务：判断内容重要性、分析情感、检测情感变化
+llm_judge_enabled = true
+
+# 情感历史记录（用于情感变化检测）
+max_emotion_history = 5
+
+# 调试配置
+debug_mode = false
+log_filtered_messages = true
+
 # LLM 配置（用于自动文本分析和表情选择）
 [avatar.llm]
 # 启用 LLM 功能
@@ -241,7 +270,7 @@ enabled = [
     # "obs_control",      # OBS Studio控制
     # "dg_lab_service",   # DG-Lab服务
     # "dg-lab-do",        # DG-Lab DO
-    "vrchat", # VRChat控制
+    # "vrchat", # VRChat控制
 
     # 监控和流媒体
     # "screen_monitor",   # 屏幕监控

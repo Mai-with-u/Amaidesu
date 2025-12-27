@@ -70,9 +70,27 @@ class AvatarControlManager:
         self._auto_expression_enabled = auto_config.get("enabled", False)
         self._auto_min_text_length = auto_config.get("min_text_length", 2)
 
+        # 新增：初始化触发策略引擎
+        if self._auto_expression_enabled:
+            from .trigger_strategy import TriggerStrategyEngine
+            self._trigger_strategy = TriggerStrategyEngine(auto_config, self)
+        else:
+            self._trigger_strategy = None
+
         self.logger.info("AvatarControlManager 初始化完成")
         if self._auto_expression_enabled:
-            self.logger.info(f"自动表情已启用（最小文本长度: {self._auto_min_text_length}）")
+            strategy_info = []
+            if auto_config.get("simple_reply_filter_enabled", True):
+                strategy_info.append("简单回复过滤")
+            if auto_config.get("time_interval_enabled", True):
+                strategy_info.append(f"时间间隔({auto_config.get('min_time_interval', 5.0)}s)")
+            if auto_config.get("llm_judge_enabled", True):
+                strategy_info.append("LLM智能判断")
+
+            self.logger.info(
+                f"自动表情已启用（最小长度: {self._auto_min_text_length}）"
+                + (f"，触发策略: {', '.join(strategy_info)}" if strategy_info else "")
+            )
 
     def _load_platform_overrides(self) -> None:
         """加载配置中的平台特定映射覆盖"""
@@ -471,8 +489,21 @@ class AvatarControlManager:
         if len(text_stripped) < self._auto_min_text_length:
             return False
 
+        # 新增：使用触发策略引擎判断（异步）
+        if self._trigger_strategy:
+            should_trigger, filter_reason, llm_result = await self._trigger_strategy.should_trigger(text_stripped)
+            if not should_trigger:
+                self.logger.debug(f"自动表情触发被过滤: {filter_reason}")
+                return False
+
+            # 记录LLM返回的情感信息（如果有）
+            if llm_result:
+                emotion = llm_result.get("emotion", "neutral")
+                intensity = llm_result.get("intensity", 1.0)
+                self._trigger_strategy.record_trigger(emotion, intensity, text_stripped)
+
+        # 通过所有检查，创建后台任务异步执行表情设置
         self.logger.info(f"自动触发虚拟形象控制: {text_stripped}")
-        # 创建后台任务异步执行，不阻塞调用者
         asyncio.create_task(self._set_expression_async(text_stripped))
 
         return True
