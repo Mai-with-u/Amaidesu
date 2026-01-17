@@ -70,34 +70,41 @@ text_cleanup = self.core.get_service("text_cleanup")
 
 ### 架构概览
 
+**核心设计**：
+- **核心数据流**（Layer 1-6）：按AI VTuber数据处理流程组织，职责清晰
+- **扩展系统**（Layer 8）：社区开发者通过"扩展"添加新能力
+- **EventBus**：唯一的跨层通信机制，实现松耦合
+
 ```mermaid
 graph TB
-    subgraph "Layer 1: 输入感知层"
-        Perception[获取外部原始数据<br/>麦克风/弹幕/控制台/屏幕]
+    subgraph "核心数据流: Layer 1-6"
+        subgraph "Layer 1: 输入感知层"
+            Perception[获取外部原始数据<br/>麦克风/弹幕/控制台/游戏/硬件]
+        end
+
+        subgraph "Layer 2: 输入标准化层"
+            Normalization[格式转换,统一转换为Text<br/>音频→文本/图像→文本描述]
+        end
+
+        subgraph "Layer 3: 中间表示层"
+            Canonical[统一消息格式<br/>CanonicalMessage对象]
+        end
+
+        subgraph "Layer 4: 语言理解层"
+            Understanding[理解意图+生成回复<br/>LLM/NLP处理]
+        end
+
+        subgraph "Layer 5: 表现生成层"
+            Expression[生成各种表现参数<br/>表情/语音/字幕]
+        end
+
+        subgraph "Layer 6: 渲染呈现层"
+            Rendering[最终渲染输出<br/>虚拟形象/音频播放/游戏命令]
+        end
     end
 
-    subgraph "Layer 2: 输入标准化层"
-        Normalization[格式转换,统一转换为Text<br/>音频→文本/图像→文本描述/文本→文本]
-    end
-
-    subgraph "Layer 3: 中间表示层"
-        Canonical[统一消息格式<br/>创建CanonicalMessage对象]
-    end
-
-    subgraph "Layer 4: 语言理解层"
-        Understanding[理解意图+生成回复<br/>LLM/NLP处理]
-    end
-
-    subgraph "Layer 5: 表现生成层"
-        Expression[生成各种表现参数<br/>表情/语音/字幕]
-    end
-
-    subgraph "Layer 6: 渲染呈现层"
-        Rendering[最终渲染输出<br/>虚拟形象/音频播放/视觉渲染]
-    end
-
-    subgraph "Layer 7: 外部集成层"
-        Integration[第三方服务集成<br/>游戏/硬件/平台]
+    subgraph "扩展系统: Layer 8"
+        Extensions[扩展=聚合多个Provider的完整功能<br/>Minecraft扩展/原神扩展/自定义扩展]
     end
 
     Perception -->|"Raw Data"| Normalization
@@ -105,7 +112,9 @@ graph TB
     Canonical -->|"CanonicalMessage"| Understanding
     Understanding -->|"Intent"| Expression
     Expression -->|"Parameters"| Rendering
-    Rendering -.事件通知.-> Integration
+
+    Perception -.输入Provider.-> Extensions
+    Rendering -.输出Provider.-> Extensions
 
     style Perception fill:#e1f5ff
     style Normalization fill:#fff4e1
@@ -113,8 +122,47 @@ graph TB
     style Understanding fill:#ffe1f5
     style Expression fill:#e1ffe1
     style Rendering fill:#e1f5ff
-    style Integration fill:#f5e1ff
+    style Extensions fill:#f5e1ff
 ```
+
+### 核心概念
+
+#### Provider（提供者）
+
+**定义**：标准化的原子能力，分为两类：
+
+| 类型 | 位置 | 职责 | 示例 |
+|------|------|------|------|
+| **InputProvider** | Layer 1 | 接收外部数据，生成RawData | ConsoleInputProvider, MinecraftEventProvider |
+| **OutputProvider** | Layer 6 | 接收渲染参数，执行实际输出 | VTSRenderer, MinecraftCommandProvider |
+
+**特点**：
+- ✅ 标准化接口：所有Provider都实现统一的接口
+- ✅ 可替换性：同一功能的不同实现可以切换
+- ✅ 易测试性：每个Provider可以独立测试
+- ✅ 职责单一：每个Provider只负责一个能力
+
+#### Extension（扩展）
+
+**定义**：聚合多个Provider的完整功能，是社区开发的入口。
+
+**示例**：
+```python
+# Minecraft扩展 = 聚合Minecraft相关的所有Provider
+class MinecraftExtension(Extension):
+    async def setup(self, event_bus, config):
+        providers = [
+            MinecraftEventProvider(config),    # 输入
+            MinecraftCommandProvider(config)    # 输出
+        ]
+        return providers
+```
+
+**特点**：
+- ✅ 聚合能力：一个扩展包含多个Provider
+- ✅ 统一配置：扩展的配置集中管理
+- ✅ 一键开关：通过`enabled`控制扩展的整体开关
+- ✅ 社区友好：开发者只需实现扩展，自动拆分为Provider
 
 ### 7层架构详细设计
 
@@ -343,7 +391,10 @@ amaidesu/
 │   │   ├── event_bus.py                   # 事件系统(主要通信方式)
 │   │   ├── pipeline_manager.py            # 管道系统
 │   │   ├── context_manager.py             # 上下文管理
-│   │   ├── providers/                    # Provider基类
+│   │   ├── providers/                     # Provider基类
+│   │   │   ├── input_provider.py          # InputProvider接口
+│   │   │   └── output_provider.py         # OutputProvider接口
+│   │   │
 │   │   ├── factories/                     # 工厂模式实现
 │   │   └── module_loader.py              # 模块加载器
 │   │
@@ -400,33 +451,320 @@ amaidesu/
 │   │       ├── subtitle_renderer.py
 │   │       └── sticker_renderer.py
 │   │
-│   └── integration/                         # 【Layer 7】外部集成层(保留插件系统)
-│       ├── game_integration/               # 游戏集成
-│       ├── tools/                          # 工具插件
-│       └── hardware/                       # 硬件集成
+│   └── extensions/                         # 【Layer 8】扩展系统
+│       ├── minecraft/                      # 内置扩展（官方）
+│       │   ├── __init__.py
+│       │   │   └── MinecraftExtension
+│       │   └── providers/                   # 扩展内部Provider
+│       │       ├── event_provider.py       # 输入Provider
+│       │       └── command_provider.py    # 输出Provider
+│       ├── warudo/                         # 内置扩展
+│       ├── dg_lab/                         # 内置扩展
+│       └── user_extensions/                # 用户扩展（社区）
+│           └── installed/                  # 用户安装的扩展
+│               ├── genshin/                 # 原神扩展
+│               └── mygame/                  # 其他扩展
 │
 ├── config/
 ├── config-template.toml
 └── main.py
 ````
 
-## 🔌 插件系统重新定位
+## 🔌 扩展系统设计
 
-### 保留为插件的功能(8个)
+### 核心概念
 
-| 插件类型      | 数量 | 保留理由                   |
-| ------------- | ---- | -------------------------- |
-| **游戏集成**  | 4个  | 真正的外部集成，需要插件化 |
-| **工具/硬件** | 4个  | 边缘功能，可选扩展         |
+**Extension（扩展）**：聚合多个Provider的完整功能，是社区开发的入口。
 
-### 迁移到7层架构的插件(16个)
+**对比**：
 
-| 原插件                | 迁移到层级 | 迁移方式                        |
-| --------------------- | ---------- | ------------------------------- |
-| **TTS系列(3个)**      | Layer 5+6  | 统一为TTS模块，Provider模式实现 |
-| **弹幕输入系列(4个)** | Layer 1    | 统一接口，工厂模式选择          |
-| **虚拟渲染系列(3个)** | Layer 6    | 统一渲染器接口                  |
-| **理解处理系列(2个)** | Layer 4    | 合并为语言理解模块              |
+| 概念 | 定义 | 职责 | 示例 |
+|------|------|------|------|
+| **Provider** | 标准化的原子能力 | 单一能力，可替换 | MinecraftEventProvider |
+| **Extension** | 聚合多个Provider | 完整功能，一键开关 | MinecraftExtension |
+
+**关系**：
+- 一个Extension = 多个Provider的聚合
+- Extension的`setup()`方法返回Provider列表
+- 扩展加载器自动注册所有Provider
+
+### 内置扩展 vs 用户扩展
+
+| 维度 | 内置扩展 | 用户扩展 |
+|------|---------|---------|
+| **目录** | `src/extensions/` | `extensions/`（根目录） |
+| **维护者** | 官方团队 | 社区/用户 |
+| **启用** | 默认启用 | ✅ **自动识别，默认启用** |
+| **配置** | `[extensions.xxx]` | `[extensions.xxx]`（可选覆盖） |
+| **Provider** | 可以定义新Provider | 可以定义新Provider |
+| **来源** | 代码仓库 | 扩展市场/手动安装 |
+| **版本控制** | 纳入Git仓库 | `.gitignore`排除 |
+
+### Provider接口（公共API）
+
+**InputProvider接口**：
+
+```python
+# 输入Provider（Layer 1）
+class InputProvider(Protocol):
+    """输入Provider接口 - 社区可继承"""
+    
+    async def start(self) -> AsyncIterator[RawData]:
+        """启动输入流"""
+        ...
+    
+    async def stop(self):
+        """停止输入源"""
+        ...
+    
+    async def cleanup(self):
+        """清理资源"""
+        ...
+```
+
+**OutputProvider接口**：
+
+```python
+# 输出Provider（Layer 6）
+class OutputProvider(Protocol):
+    """输出Provider接口 - 社区可继承"""
+    
+    async def setup(self, event_bus: EventBus):
+        """设置Provider（订阅EventBus）"""
+        ...
+    
+    async def render(self, parameters: Any):
+        """渲染输出"""
+        ...
+    
+    async def cleanup(self):
+        """清理资源"""
+        ...
+```
+
+### Extension接口
+
+```python
+# 扩展接口
+class Extension(Protocol):
+    """扩展协议 - 聚合多个Provider"""
+    
+    async def setup(self, event_bus: EventBus, config: dict) -> List[Provider]:
+        """
+        初始化扩展
+        
+        Returns:
+            初始化好的Provider列表
+        """
+        ...
+    
+    async def cleanup(self):
+        """清理资源"""
+        ...
+    
+    def get_info(self) -> dict:
+        """获取扩展信息"""
+        return {
+            "name": "ExtensionName",
+            "version": "1.0.0",
+            "author": "Author",
+            "description": "Extension description",
+            "category": "game/hardware/software",
+            "api_version": "1.0"
+        }
+```
+
+### 示例：Minecraft扩展
+
+```python
+# src/extensions/minecraft/__init__.py
+"""Minecraft扩展"""
+from .providers import MinecraftEventProvider, MinecraftCommandProvider
+
+class MinecraftExtension(Extension):
+    """Minecraft扩展 - 聚合Minecraft的所有能力"""
+    
+    async def setup(self, event_bus: EventBus, config: dict) -> List[Provider]:
+        # ✅ 一处配置
+        self.host = config.get("host", "localhost")
+        self.port = config.get("port", 25565)
+        
+        # ✅ 一处初始化
+        providers = []
+        
+        # 输入Provider
+        if config.get("events_enabled", True):
+            event_provider = MinecraftEventProvider({
+                "host": self.host,
+                "port": self.port
+            })
+            await event_provider.setup(event_bus)
+            providers.append(event_provider)
+        
+        # 输出Provider
+        if config.get("commands_enabled", True):
+            command_provider = MinecraftCommandProvider({
+                "host": self.host,
+                "port": self.port
+            })
+            await command_provider.setup(event_bus)
+            providers.append(command_provider)
+        
+        return providers
+    
+    async def cleanup(self):
+        """清理资源"""
+        await asyncio.gather(*[p.cleanup() for p in self.providers])
+    
+    def get_info(self) -> dict:
+        return {
+            "name": "Minecraft",
+            "version": "1.0.0",
+            "description": "Minecraft游戏集成扩展",
+            "category": "game",
+            "api_version": "1.0"
+        }
+
+# 内部Provider（对开发者透明）
+# src/extensions/minecraft/providers/event_provider.py
+class MinecraftEventProvider(InputProvider):
+    """Minecraft事件输入Provider"""
+    async def start(self):
+        async for event in self.game_client.events():
+            yield RawData(content=event, source="game.minecraft")
+
+# src/extensions/minecraft/providers/command_provider.py
+class MinecraftCommandProvider(OutputProvider):
+    """Minecraft命令输出Provider"""
+    async def render(self, parameters):
+        if parameters.minecraft_commands:
+            await self.game_client.send_commands(parameters.minecraft_commands)
+```
+
+### 配置示例
+
+```toml
+# 内置扩展（官方）
+[extensions.minecraft]
+enabled = true
+host = "localhost"
+port = 25565
+events_enabled = true
+commands_enabled = true
+
+[extensions.warudo]
+enabled = true
+host = "localhost"
+port = 50051
+
+# 用户扩展（社区）
+[user_extensions.genshin]
+enabled = false  # 需要手动启用
+api_url = "https://genshin-api.example.com"
+events_enabled = true
+
+[user_extensions.mygame]
+enabled = false
+api_url = "https://mygame-api.example.com"
+```
+
+### 插件迁移到扩展
+
+#### 内置扩展迁移
+
+| 原插件 | 迁移到 | 扩展类型 |
+|-------|--------|---------|
+| `mainosaba` | `extensions/mainosaba/` | 内置扩展 |
+| `minecraft` | `extensions/minecraft/` | 内置扩展 |
+| `warudo` | `extensions/warudo/` | 内置扩展 |
+| `dg_lab_service` | `extensions/dg_lab/` | 内置扩展 |
+
+#### 迁移步骤
+
+```bash
+# 1. 使用git mv迁移（必须！）
+git mv src/plugins/minecraft src/extensions/minecraft
+git commit -m "refactor: migrate minecraft plugin to extension"
+
+# 2. 改造插件为扩展
+# 将单一插件拆分为多个Provider
+# 创建Extension类聚合Provider
+
+# 3. 更新配置
+# [plugins.minecraft] → [extensions.minecraft]
+```
+
+#### 用户扩展安装
+
+**自动识别**：
+- ✅ 用户扩展放在根目录`extensions/`文件夹中
+- ✅ 启动时自动扫描并加载
+- ✅ 无需手动配置，开箱即用
+
+**安装示例**：
+
+```bash
+# 1. 安装扩展（3种方式）
+
+# 方式1：从GitHub克隆
+git clone https://github.com/xxx/genshin-extension.git extensions/genshin
+
+# 方式2：下载后复制
+cp -r ~/downloads/mygame-extension extensions/mygame
+
+# 方式3：直接创建目录
+mkdir extensions/my-custom-extension
+# 然后创建扩展文件...
+
+# 2. 运行程序（自动识别）
+python main.py
+# 日志会显示：✅ 扩展加载成功: genshin, mygame
+
+# 3. 禁用某个扩展（可选）
+# 在config.toml中设置
+[extensions.mygame]
+enabled = false
+```
+
+**扩展目录结构要求**：
+
+```
+extensions/
+├── genshin/                # 用户扩展1
+│   ├── __init__.py         # 必须包含
+│   │   └── GenshinExtension
+│   └── providers/
+└── mygame/                 # 用户扩展2
+    ├── __init__.py         # 必须包含
+    │   └── MyGameExtension
+    └── providers/
+```
+
+**配置覆盖（可选）**：
+
+```toml
+# 默认：所有扩展自动启用，使用默认配置
+
+# 可选：自定义扩展配置
+[extensions.genshin]
+enabled = true  # 显式启用（默认就是true）
+api_url = "https://genshin-api.example.com"  # 自定义配置
+
+[extensions.mygame]
+enabled = false  # 禁用某个扩展
+```
+
+### 迁移到核心数据流的插件(16个)
+
+| 原插件 | 迁移到层级 | 迁移方式 |
+|-------|----------|---------|
+| **TTS系列(3个)** | Layer 5+6 | 统一为TTS模块，Provider模式实现 |
+| **弹幕输入系列(4个)** | Layer 1 | 统一接口，工厂模式选择 |
+| **虚拟渲染系列(3个)** | Layer 6 | 统一渲染器接口 |
+| **理解处理系列(2个)** | Layer 4 | 合并为语言理解模块 |
+| **STT系列(2个)** | Layer 1 | 统一STT接口 |
+| **其他输入(2个)** | Layer 1 | 转换为InputProvider |
+| **其他渲染(2个)** | Layer 6 | 转换为OutputProvider |
 
 ## ✅ 成功标准
 
@@ -438,14 +776,16 @@ amaidesu/
 - ✅ 代码重复率降低30%以上
 - ✅ **服务注册调用减少80%以上**
 - ✅ **EventBus事件调用覆盖率90%以上**
+- ✅ **扩展系统正常加载内置扩展和用户扩展**
 
 ### 架构指标
 
-- ✅ 清晰的7层数据流架构
+- ✅ 清晰的核心数据流架构（Layer 1-6）
 - ✅ 层级间依赖关系清晰(单向依赖)
 - ✅ **EventBus为主要通信模式**
 - ✅ **Provider模式替代重复插件**
 - ✅ **工厂模式支持动态切换**
+- ✅ **扩展系统支持社区开发**
 
 ## 📚 设计优势
 
@@ -464,13 +804,15 @@ amaidesu/
 - ✅ **"用Provider模式或者工厂动态选实现"**：工厂模式支持
 - ✅ **"驱动层只输出参数，渲染层只管渲染"**：Layer 5&6分离
 - ✅ **"以后换个模型或者引擎难道要重写一遍"**：通过Provider切换解决
+- ✅ **"扩展系统支持社区开发"**：Extension接口聚合Provider
 
 ### 3. 架构优势
 
-1. **数据流清晰**: 7层架构，每层职责明确
-2. **消除重复**: 统一接口替代重复插件实现
+1. **数据流清晰**: 核心数据流（Layer 1-6），每层职责明确
+2. **消除重复**: Provider模式替代重复插件实现
 3. **松耦合**: EventBus通信，模块间无直接依赖
-4. **易扩展**: 新实现只需实现Provider接口并注册
-5. **易维护**: 分层清晰，问题定位准确
+4. **易扩展**: 新实现只需实现Provider接口
+5. **社区友好**: Extension接口降低社区开发门槛
+6. **易维护**: 分层清晰，问题定位准确
 
 **本文档为Amaidesu项目的完整架构重构计划，聚焦于消灭过度插件化和依赖地狱，建立清晰的数据流架构。**
