@@ -1,4 +1,4 @@
-# Amaidesu 架构重构计划：基于数据流的7层架构设计
+# Amaidesu 架构重构计划：基于数据流的6层架构设计
 
 ## 📋 核心问题
 
@@ -58,7 +58,7 @@ text_cleanup = self.core.get_service("text_cleanup")
 4. **按数据流组织架构**：音输入→语言推理→表情动作→虚拟渲染→直播推流
 5. **驱动与渲染分离**：驱动层输出参数，渲染层只管渲染（换引擎不用重写）
 
-## 🏗️ 7层架构设计
+## 🏗️ 6层架构设计
 
 ### 核心理念
 
@@ -71,47 +71,53 @@ text_cleanup = self.core.get_service("text_cleanup")
 ### 架构概览
 
 **核心设计**：
+
 - **核心数据流**（Layer 1-6）：按AI VTuber数据处理流程组织，职责清晰
 - **扩展系统**（Layer 8）：社区开发者通过"扩展"添加新能力
 - **EventBus**：唯一的跨层通信机制，实现松耦合
 
 ```mermaid
 graph TB
-    subgraph "核心数据流: Layer 1-6"
-        subgraph "Layer 1: 输入感知层"
-            Perception[获取外部原始数据<br/>麦克风/弹幕/控制台/游戏/硬件]
+    subgraph "Amaidesu: 核心数据流"
+        subgraph "Layer 1: 输入感知层（多Provider并发）"
+            Perception[弹幕/游戏/语音<br/>多个InputProvider并发采集]
         end
 
         subgraph "Layer 2: 输入标准化层"
-            Normalization[格式转换,统一转换为Text<br/>音频→文本/图像→文本描述]
+            Normalization[统一转换为Text]
         end
 
         subgraph "Layer 3: 中间表示层"
-            Canonical[统一消息格式<br/>CanonicalMessage对象]
+            Canonical[CanonicalMessage]
         end
 
-        subgraph "Layer 4: 语言理解层"
-            Understanding[理解意图+生成回复<br/>LLM/NLP处理]
+        subgraph "决策层（可替换）"
+            DecisionLayer[DecisionProvider<br/>MaiCore/本地LLM/规则引擎]
+        end
+
+        subgraph "Layer 4: 表现理解层"
+            Understanding[解析MessageBase<br/>生成Intent]
         end
 
         subgraph "Layer 5: 表现生成层"
-            Expression[生成各种表现参数<br/>表情/语音/字幕]
+            Expression[生成RenderParameters]
         end
 
-        subgraph "Layer 6: 渲染呈现层"
-            Rendering[最终渲染输出<br/>虚拟形象/音频播放/游戏命令]
+        subgraph "Layer 6: 渲染呈现层（多Provider并发）"
+            Rendering[字幕/TTS/VTS<br/>多个OutputProvider并发渲染]
         end
     end
 
-    subgraph "扩展系统: Layer 8"
-        Extensions[扩展=聚合多个Provider的完整功能<br/>Minecraft扩展/原神扩展/自定义扩展]
+    subgraph "扩展系统: Extension"
+        Extensions[扩展=聚合多个Provider<br/>Minecraft/原神/自定义]
     end
 
     Perception -->|"Raw Data"| Normalization
     Normalization -->|"Text"| Canonical
-    Canonical -->|"CanonicalMessage"| Understanding
+    Canonical -->|"CanonicalMessage"| DecisionLayer
+    DecisionLayer -->|"MessageBase"| Understanding
     Understanding -->|"Intent"| Expression
-    Expression -->|"Parameters"| Rendering
+    Expression -->|"RenderParameters"| Rendering
 
     Perception -.输入Provider.-> Extensions
     Rendering -.输出Provider.-> Extensions
@@ -119,6 +125,7 @@ graph TB
     style Perception fill:#e1f5ff
     style Normalization fill:#fff4e1
     style Canonical fill:#f3e5f5
+    style DecisionLayer fill:#ff9999,stroke:#ff0000,stroke-width:3px
     style Understanding fill:#ffe1f5
     style Expression fill:#e1ffe1
     style Rendering fill:#e1f5ff
@@ -131,12 +138,13 @@ graph TB
 
 **定义**：标准化的原子能力，分为两类：
 
-| 类型 | 位置 | 职责 | 示例 |
-|------|------|------|------|
-| **InputProvider** | Layer 1 | 接收外部数据，生成RawData | ConsoleInputProvider, MinecraftEventProvider |
-| **OutputProvider** | Layer 6 | 接收渲染参数，执行实际输出 | VTSRenderer, MinecraftCommandProvider |
+| 类型               | 位置    | 职责                       | 示例                                         |
+| ------------------ | ------- | -------------------------- | -------------------------------------------- |
+| **InputProvider**  | Layer 1 | 接收外部数据，生成RawData  | ConsoleInputProvider, MinecraftEventProvider |
+| **OutputProvider** | Layer 6 | 接收渲染参数，执行实际输出 | VTSRenderer, MinecraftCommandProvider        |
 
 **特点**：
+
 - ✅ 标准化接口：所有Provider都实现统一的接口
 - ✅ 可替换性：同一功能的不同实现可以切换
 - ✅ 易测试性：每个Provider可以独立测试
@@ -147,6 +155,7 @@ graph TB
 **定义**：聚合多个Provider的完整功能，是社区开发的入口。
 
 **示例**：
+
 ```python
 # Minecraft扩展 = 聚合Minecraft相关的所有Provider
 class MinecraftExtension(Extension):
@@ -159,22 +168,166 @@ class MinecraftExtension(Extension):
 ```
 
 **特点**：
+
 - ✅ 聚合能力：一个扩展包含多个Provider
 - ✅ 统一配置：扩展的配置集中管理
 - ✅ 一键开关：通过`enabled`控制扩展的整体开关
 - ✅ 社区友好：开发者只需实现扩展，自动拆分为Provider
 
-### 7层架构详细设计
+### 6层架构 + 决策层详细设计
 
-| 层级                | 英文名        | 输入格式         | 输出格式             | 核心职责          | 设计理由                                       |
-| ------------------- | ------------- | ---------------- | -------------------- | ----------------- | ---------------------------------------------- |
-| **1. 输入感知层**   | Perception    | -                | Raw Data             | 获取外部原始数据  | 按数据源(音频/文本/图像)分离输入源             |
-| **2. 输入标准化层** | Normalization | Raw Data         | **Text**             | 统一转换为文本    | LLM只能处理文本，简化后续处理流程              |
-| **3. 中间表示层**   | Canonical     | Text             | **CanonicalMessage** | 统一消息格式      | 标准化数据结构，易于扩展和传输                 |
-| **4. 语言理解层**   | Understanding | CanonicalMessage | **Intent**           | 理解意图+生成回复 | AI VTuber的"大脑"，负责语言理解与生成          |
-| **5. 表现生成层**   | Expression    | Intent           | **Parameters**       | 生成各种表现参数  | **驱动层只输出参数**，符合设计讨论中的分离原则 |
-| **6. 渲染呈现层**   | Rendering     | Parameters       | **Frame/Stream**     | 最终渲染输出      | **渲染层只管渲染**，换引擎不用重写             |
-| **7. 外部集成层**   | Integration   | -                | -                    | 第三方服务集成    | 保留插件系统，仅用于真正的扩展                 |
+| 层级/层                  | 英文名               | 输入格式           | 输出格式              | 核心职责                    | 并发支持 |
+| ----------------------- | -------------------- | ------------------ | --------------------- | --------------------------- | -------- |
+| **1. 输入感知层**       | Perception           | -                  | Raw Data              | 获取外部原始数据            | ✅ 多Provider并发 |
+| **2. 输入标准化层**     | Normalization        | Raw Data           | **Text**              | 统一转换为文本              | -        |
+| **3. 中间表示层**       | Canonical            | Text               | **CanonicalMessage**   | 统一消息格式                | -        |
+| **决策层**              | Decision Layer       | CanonicalMessage    | **MessageBase**        | 决策处理                    | ✅ 可替换 |
+| **4. 表现理解层**       | Understanding        | MessageBase        | **Intent**            | 解析决策指令                | -        |
+| **5. 表现生成层**       | Expression           | Intent             | **RenderParameters**   | 生成各种表现参数            | -        |
+| **6. 渲染呈现层**       | Rendering            | RenderParameters   | **Frame/Stream**      | 最终渲染输出                | ✅ 多Provider并发 |
+| **8. 扩展系统**        | Extension System     | -                  | -                     | 社区开发的扩展能力          | -        |
+
+### 决策层设计（核心特性）
+
+**重要说明**：MaiBot (MaiCore) 是独立的聊天机器人核心，但**不是唯一的决策方式**。
+
+#### 决策层特点
+
+1. **可替换**：支持多种DecisionProvider实现
+   - `MaiCoreDecisionProvider`（默认）：使用MaiCore进行决策
+   - `LocalLLMDecisionProvider`：使用本地LLM进行决策
+   - `RuleEngineDecisionProvider`：使用规则引擎进行决策
+   - 支持运行时切换DecisionProvider
+
+2. **可扩展**：社区开发者可以实现自定义DecisionProvider
+
+3. **多Provider模式**：
+   - 支持多个DecisionProvider并行处理
+   - 支持多个DecisionProvider串行处理（链式决策）
+
+#### 数据流
+
+```
+外部输入（弹幕、游戏、语音）
+  ↓
+Layer 1: 输入感知（多个InputProvider并发采集）
+  ├─ 弹幕InputProvider ──┐
+  ├─ 游戏InputProvider ──┼──→ RawData (多个)
+  └─ 语音InputProvider ──┘
+  ↓
+Layer 2: 输入标准化（转换为Text）
+  ↓
+Layer 3: 中间表示（构建CanonicalMessage）
+  ↓
+【决策层：DecisionProvider】⭐ 可替换、可扩展
+  ├─ MaiCoreDecisionProvider (默认）
+  ├─ LocalLLMDecisionProvider (可选）
+  └─ RuleEngineDecisionProvider (可选）
+  ↓
+DecisionProvider返回MessageBase
+  ↓
+Layer 4: 表现理解（解析MessageBase → Intent）
+  ├─ text_cleanup
+  └─ emotion_judge
+  ↓
+Layer 5: 表现生成（生成RenderParameters）
+  ↓
+Layer 6: 渲染呈现（多个OutputProvider并发渲染）
+  ├─ 字幕Renderer ──┐
+  ├─ TTS Renderer ──┼──→ Frame/Stream (多个)
+  └─ VTS Renderer ──┘
+```
+
+#### 多Provider并发示例
+
+**输入层并发（Layer 1）**：
+```
+弹幕Provider、游戏Provider、语音Provider同时运行
+        ↓
+都生成RawData，通过EventBus发送到Layer 2
+```
+
+**输出层并发（Layer 6）**：
+```
+RenderParameters
+        ↓
+同时发送给：字幕Provider、TTS Provider、VTS Provider
+        ↓
+分别渲染到不同目标
+```
+
+### 关键接口
+
+#### DecisionProvider接口
+
+```python
+# 决策Provider接口
+class DecisionProvider(Protocol):
+    """决策Provider接口 - 支持多种决策实现"""
+
+    async def setup(self, event_bus: EventBus, config: dict):
+        """初始化决策Provider"""
+
+    async def decide(self, canonical_message: CanonicalMessage) -> MessageBase:
+        """
+        根据CanonicalMessage做出决策，返回MessageBase
+
+        Args:
+            canonical_message: 标准化消息
+
+        Returns:
+            MessageBase: 决策结果
+        """
+
+    async def cleanup(self):
+        """清理资源"""
+```
+
+#### InputProvider接口（支持多并发）
+
+```python
+# 输入Provider接口
+class InputProvider(Protocol):
+    """输入Provider接口 - 支持多个Provider并发采集"""
+
+    async def start(self) -> AsyncIterator[RawData]:
+        """
+        启动输入流，返回原始数据
+
+        多个InputProvider可以同时运行，各自采集不同来源的数据
+        """
+
+    async def stop(self):
+        """停止输入源"""
+
+    async def cleanup(self):
+        """清理资源"""
+```
+
+#### OutputProvider接口（支持多并发）
+
+```python
+# 输出Provider接口
+class OutputProvider(Protocol):
+    """输出Provider接口 - 支持多个Provider并发渲染"""
+
+    async def setup(self, event_bus: EventBus):
+        """
+        设置Provider（订阅EventBus）
+
+        多个OutputProvider可以同时订阅RenderParameters事件
+        """
+
+    async def render(self, parameters: RenderParameters):
+        """
+        渲染输出
+
+        多个OutputProvider可以同时处理相同的RenderParameters
+        """
+
+    async def cleanup(self):
+        """清理资源"""
+```
 
 ### 关键设计决策
 
@@ -185,11 +338,66 @@ class MinecraftExtension(Extension):
 **理由**:
 
 - 简化后续处理流程
-- LLM只能处理文本
+- 为决策层准备标准化输入
 - 图像/音频通过VL模型转换为文本描述
 - 降低系统复杂度
 
-#### 2. 驱动与渲染分离(Layer 5 & 6)
+#### 2. 决策层可替换（核心特性）
+
+**决策**:决策层支持多种DecisionProvider实现，MaiCore只是其中之一
+
+**理由**:
+
+- MaiCore是成熟的外部服务，但不应该强制要求
+- 支持本地LLM、规则引擎等其他决策方式
+- 允许运行时切换DecisionProvider
+- 支持社区开发自定义DecisionProvider
+
+**实现**:
+```python
+# 配置
+[decision]
+default_provider = "maicore"
+
+[decision.providers.maicore]
+host = "localhost"
+port = 8000
+
+[decision.providers.local_llm]
+model = "gpt-4"
+api_key = "your_key"
+
+# 运行时切换
+decision_manager.switch_provider("local_llm")
+```
+
+#### 3. 多Provider并发处理
+
+**决策**:输入层和输出层支持多个Provider同时运行
+
+**理由**:
+
+- 现实场景需要：弹幕、游戏、语音等不同来源同时输入
+- 输出也需要：字幕、TTS、VTS等不同目标同时渲染
+- Provider间解耦，互不干扰
+- 提高系统吞吐量和响应速度
+
+**示例**:
+```python
+# 输入层：3个Provider并发
+danmaku_provider.start()  # 采集弹幕
+game_provider.start()      # 采集游戏状态
+voice_provider.start()     # 采集语音
+
+# 输出层：3个Provider并发
+subtitle_provider.render(params)   # 显示字幕
+tts_provider.render(params)        # 播放语音
+vts_provider.render(params)       # 控制虚拟形象
+```
+
+#### 4. 驱动与渲染分离(Layer 5 & 6)
+
+#### 3. 驱动与渲染分离(Layer 5 & 6)
 
 **设计初衷**："虽然都是虚拟形象，但**驱动层只输出参数，渲染层只管画图**。这都不分开，以后换个模型或者引擎难道要重写一遍？"
 
@@ -219,12 +427,17 @@ class ConversationContext:
 # 核心概念（伪代码，完整实现见implementation_plan.md）
 class Intent:
     """意图对象 - Layer 4的输出格式"""
-    # 包含：original_text、emotion、response_text、actions、metadata
+    # 包含：original_text, emotion, response_text, actions, metadata
 
 class EmotionType:
     """情感类型枚举"""
     # NEUTRAL, HAPPY, SAD, ANGRY, SURPRISED等
 ```
+
+**注意**：即使MaiCore返回的是MessageBase，我们内部仍然需要"意图"的概念。Layer 4的职责是：
+1. 接收MessageBase（来自决策层）
+2. 解析文本内容和元数据
+3. 生成内部统一的Intent对象
 
 #### 5. RenderParameters参数对象(Layer 5输出)
 
@@ -326,17 +539,20 @@ EVENT_DEFINITIONS = {
     # Layer 1 → Layer 2
     "perception.raw_data": Any,              # RawData
     
-    # Layer 2 → Layer 3  
-    "normalization.text_ready": str,            # Text
-    
-    # Layer 3 → Layer 4
-    "canonical.message_created": "CanonicalMessage",  # CanonicalMessage
-    
+    # Layer 2 → Layer 3
+    "normalization.text_ready": str,                  # Text
+
+    # Layer 3 → 决策层 ⭐ 核心事件
+    "canonical.message_ready": "CanonicalMessage",     # CanonicalMessage
+
+    # 决策层 → Layer 4 ⭐ 核心事件
+    "decision.response_generated": "MessageBase",       # MessageBase from DecisionProvider
+
     # Layer 4 → Layer 5 ⭐ 核心事件
-    "understanding.intent_generated": Intent,       # Intent
-    
+    "understanding.intent_generated": "Intent",       # Intent
+
     # Layer 5 → Layer 6 ⭐ 核心事件
-    "expression.parameters_generated": RenderParameters,  # RenderParameters
+    "expression.parameters_generated": "RenderParameters",  # RenderParameters
     
     # Layer 6 输出
     "rendering.audio_played": Dict[str, Any],    # 播放信息
@@ -422,7 +638,7 @@ amaidesu/
 │   │   ├── message_builder.py             # 消息构建器
 │   │   └── context_attacher.py            # 上下文附加器
 │   │
-│   ├── understanding/                       # 【Layer 4】语言理解层
+│   ├── understanding/                       # 【Layer 4】表现理解层
 │   │   ├── base_llm.py                    # LLM接口
 │   │   ├── intent_analyzer.py             # 意图分析
 │   │   ├── emotion_detector.py            # 情感检测
@@ -459,12 +675,9 @@ amaidesu/
 │       │       ├── event_provider.py       # 输入Provider
 │       │       └── command_provider.py    # 输出Provider
 │       ├── warudo/                         # 内置扩展
-│       ├── dg_lab/                         # 内置扩展
-│       └── user_extensions/                # 用户扩展（社区）
-│           └── installed/                  # 用户安装的扩展
-│               ├── genshin/                 # 原神扩展
-│               └── mygame/                  # 其他扩展
+│       └── dg_lab/                         # 内置扩展
 │
+├── extensions/ # 用户安装的扩展
 ├── config/
 ├── config-template.toml
 └── main.py
@@ -478,27 +691,28 @@ amaidesu/
 
 **对比**：
 
-| 概念 | 定义 | 职责 | 示例 |
-|------|------|------|------|
-| **Provider** | 标准化的原子能力 | 单一能力，可替换 | MinecraftEventProvider |
-| **Extension** | 聚合多个Provider | 完整功能，一键开关 | MinecraftExtension |
+| 概念          | 定义             | 职责               | 示例                   |
+| ------------- | ---------------- | ------------------ | ---------------------- |
+| **Provider**  | 标准化的原子能力 | 单一能力，可替换   | MinecraftEventProvider |
+| **Extension** | 聚合多个Provider | 完整功能，一键开关 | MinecraftExtension     |
 
 **关系**：
+
 - 一个Extension = 多个Provider的聚合
 - Extension的`setup()`方法返回Provider列表
 - 扩展加载器自动注册所有Provider
 
 ### 内置扩展 vs 用户扩展
 
-| 维度 | 内置扩展 | 用户扩展 |
-|------|---------|---------|
-| **目录** | `src/extensions/` | `extensions/`（根目录） |
-| **维护者** | 官方团队 | 社区/用户 |
-| **启用** | 默认启用 | ✅ **自动识别，默认启用** |
-| **配置** | `[extensions.xxx]` | `[extensions.xxx]`（可选覆盖） |
-| **Provider** | 可以定义新Provider | 可以定义新Provider |
-| **来源** | 代码仓库 | 扩展市场/手动安装 |
-| **版本控制** | 纳入Git仓库 | `.gitignore`排除 |
+| 维度         | 内置扩展           | 用户扩展                       |
+| ------------ | ------------------ | ------------------------------ |
+| **目录**     | `src/extensions/`  | `extensions/`（根目录）        |
+| **维护者**   | 官方团队           | 社区/用户                      |
+| **启用**     | 默认启用           | ✅ **自动识别，默认启用**       |
+| **配置**     | `[extensions.xxx]` | `[extensions.xxx]`（可选覆盖） |
+| **Provider** | 可以定义新Provider | 可以定义新Provider             |
+| **来源**     | 代码仓库           | 扩展市场/手动安装              |
+| **版本控制** | 纳入Git仓库        | `.gitignore`排除               |
 
 ### Provider接口（公共API）
 
@@ -672,12 +886,12 @@ api_url = "https://mygame-api.example.com"
 
 #### 内置扩展迁移
 
-| 原插件 | 迁移到 | 扩展类型 |
-|-------|--------|---------|
-| `mainosaba` | `extensions/mainosaba/` | 内置扩展 |
-| `minecraft` | `extensions/minecraft/` | 内置扩展 |
-| `warudo` | `extensions/warudo/` | 内置扩展 |
-| `dg_lab_service` | `extensions/dg_lab/` | 内置扩展 |
+| 原插件           | 迁移到                  | 扩展类型 |
+| ---------------- | ----------------------- | -------- |
+| `mainosaba`      | `extensions/mainosaba/` | 内置扩展 |
+| `minecraft`      | `extensions/minecraft/` | 内置扩展 |
+| `warudo`         | `extensions/warudo/`    | 内置扩展 |
+| `dg_lab_service` | `extensions/dg_lab/`    | 内置扩展 |
 
 #### 迁移步骤
 
@@ -697,6 +911,7 @@ git commit -m "refactor: migrate minecraft plugin to extension"
 #### 用户扩展安装
 
 **自动识别**：
+
 - ✅ 用户扩展放在根目录`extensions/`文件夹中
 - ✅ 启动时自动扫描并加载
 - ✅ 无需手动配置，开箱即用
@@ -728,7 +943,7 @@ enabled = false
 
 **扩展目录结构要求**：
 
-```
+````
 extensions/
 ├── genshin/                # 用户扩展1
 │   ├── __init__.py         # 必须包含
@@ -738,7 +953,7 @@ extensions/
     ├── __init__.py         # 必须包含
     │   └── MyGameExtension
     └── providers/
-```
+````
 
 **配置覆盖（可选）**：
 
@@ -756,15 +971,15 @@ enabled = false  # 禁用某个扩展
 
 ### 迁移到核心数据流的插件(16个)
 
-| 原插件 | 迁移到层级 | 迁移方式 |
-|-------|----------|---------|
-| **TTS系列(3个)** | Layer 5+6 | 统一为TTS模块，Provider模式实现 |
-| **弹幕输入系列(4个)** | Layer 1 | 统一接口，工厂模式选择 |
-| **虚拟渲染系列(3个)** | Layer 6 | 统一渲染器接口 |
-| **理解处理系列(2个)** | Layer 4 | 合并为语言理解模块 |
-| **STT系列(2个)** | Layer 1 | 统一STT接口 |
-| **其他输入(2个)** | Layer 1 | 转换为InputProvider |
-| **其他渲染(2个)** | Layer 6 | 转换为OutputProvider |
+| 原插件                | 迁移到层级 | 迁移方式                        |
+| --------------------- | ---------- | ------------------------------- |
+| **TTS系列(3个)**      | Layer 5+6  | 统一为TTS模块，Provider模式实现 |
+| **弹幕输入系列(4个)** | Layer 1    | 统一接口，工厂模式选择          |
+| **虚拟渲染系列(3个)** | Layer 6    | 统一渲染器接口                  |
+| **文本清理(1个)**     | Layer 4    | 合并到表现理解层                |
+| **STT系列(2个)**      | Layer 1    | 统一STT接口                     |
+| **其他输入(2个)**     | Layer 1    | 转换为InputProvider             |
+| **其他渲染(2个)**     | Layer 6    | 转换为OutputProvider            |
 
 ## ✅ 成功标准
 
@@ -780,10 +995,12 @@ enabled = false  # 禁用某个扩展
 
 ### 架构指标
 
-- ✅ 清晰的核心数据流架构（Layer 1-6）
+- ✅ 清晰的6层核心数据流架构
+- ✅ 决策层可替换（支持多种DecisionProvider）
 - ✅ 层级间依赖关系清晰(单向依赖)
-- ✅ **EventBus为主要通信模式**
+- ✅ **EventBus为内部主要通信模式**
 - ✅ **Provider模式替代重复插件**
+- ✅ **支持多Provider并发处理**
 - ✅ **工厂模式支持动态切换**
 - ✅ **扩展系统支持社区开发**
 
@@ -805,14 +1022,18 @@ enabled = false  # 禁用某个扩展
 - ✅ **"驱动层只输出参数，渲染层只管渲染"**：Layer 5&6分离
 - ✅ **"以后换个模型或者引擎难道要重写一遍"**：通过Provider切换解决
 - ✅ **"扩展系统支持社区开发"**：Extension接口聚合Provider
+- ✅ **"决策层可替换"**：MaiCore只是DecisionProvider的一种实现
+- ✅ **"多Provider并发处理"**：支持输入层和输出层的并发处理
 
 ### 3. 架构优势
 
-1. **数据流清晰**: 核心数据流（Layer 1-6），每层职责明确
-2. **消除重复**: Provider模式替代重复插件实现
-3. **松耦合**: EventBus通信，模块间无直接依赖
-4. **易扩展**: 新实现只需实现Provider接口
-5. **社区友好**: Extension接口降低社区开发门槛
-6. **易维护**: 分层清晰，问题定位准确
+1. **数据流清晰**: 6层核心数据流 + 可替换的决策层，每层职责明确
+2. **决策灵活**: 支持多种DecisionProvider，可运行时切换
+3. **并发处理**: 输入层和输出层支持多Provider并发，提高吞吐量
+4. **消除重复**: Provider模式替代重复插件实现
+5. **松耦合**: EventBus内部通信，模块间无直接依赖
+6. **易扩展**: 新实现只需实现Provider接口
+7. **社区友好**: Extension接口降低社区开发门槛
+8. **易维护**: 分层清晰，问题定位准确
 
-**本文档为Amaidesu项目的完整架构重构计划，聚焦于消灭过度插件化和依赖地狱，建立清晰的数据流架构。**
+**本文档为Amaidesu项目的完整架构重构计划，聚焦于消灭过度插件化和依赖地狱，建立清晰的6层数据流架构，支持决策层可替换和多Provider并发处理。**
