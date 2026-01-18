@@ -128,27 +128,27 @@ Phase 1 (基础设施) → Phase 2 (输入) → Phase 3 (决策+中间) → Phas
 
 ---
 
-### Phase 5: 扩展系统实现
+### Phase 5: 插件系统实现
 
-**目标**：实现扩展系统（Layer 8）
+**目标**：实现插件系统（Layer 8）
 
-**详细内容**：[Phase 5: 扩展系统](./phase5_extensions.md)
+**详细内容**：[Phase 5: 插件系统](./phase5_plugins.md)
 
 **任务清单**：
-- [x] ExtensionLoader实现（支持内置和用户扩展）
-- [x] 迁移内置扩展（minecraft, warudo, dg_lab）
+- [x] PluginLoader实现（支持官方和社区插件）
+- [x] 迁移官方插件（minecraft, warudo, dg_lab）
 - [x] 配置系统更新
 - [x] .gitignore配置
 
 **预期产出**：
-- `src/extensions/` 目录（内置扩展）
-- `extensions/` 目录（用户扩展，.gitignore）
+- `src/plugins/` 目录（官方插件）
+- `plugins/` 目录（社区插件，.gitignore）
 
 **迁移清单**（必须使用git mv）：
-- [x] minecraft → extensions/minecraft
-- [x] warudo → extensions/warudo
-- [x] dg_lab_service → extensions/dg_lab
-- [x] mainosaba → extensions/mainosaba
+- [x] minecraft → plugins/minecraft
+- [x] warudo → plugins/warudo
+- [x] dg_lab_service → plugins/dg_lab
+- [x] mainosaba → plugins/mainosaba
 
 ---
 
@@ -180,7 +180,7 @@ Phase 1 (基础设施) → Phase 2 (输入) → Phase 3 (决策+中间) → Phas
 - ✅ 代码重复率降低30%以上
 - ✅ 服务注册调用减少80%以上
 - ✅ EventBus事件调用覆盖率90%以上
-- ✅ 扩展系统正常加载内置扩展和用户扩展
+- ✅ 插件系统正常加载官方插件和社区插件
 
 ### 架构指标
 - ✅ 清晰的6层核心数据流架构
@@ -190,7 +190,7 @@ Phase 1 (基础设施) → Phase 2 (输入) → Phase 3 (决策+中间) → Phas
 - ✅ EventBus为内部主要通信模式
 - ✅ Provider模式替代重复插件
 - ✅ 工厂模式支持动态切换
-- ✅ 扩展系统支持社区开发
+- ✅ 插件系统支持社区开发
 
 ---
 
@@ -201,7 +201,7 @@ Phase 1 (基础设施) → Phase 2 (输入) → Phase 3 (决策+中间) → Phas
 - [6层架构设计](../design/layer_refactoring.md)
 - [决策层设计](../design/decision_layer.md)
 - [多Provider并发设计](../design/multi_provider.md)
-- [扩展系统设计](../design/extension_system.md)
+- [插件系统设计](../design/plugin_system.md)
 - [核心重构设计](../design/core_refactoring.md)
 
 ### 实施文档
@@ -209,7 +209,7 @@ Phase 1 (基础设施) → Phase 2 (输入) → Phase 3 (决策+中间) → Phas
 - [Phase 2: 输入层](./phase2_input.md)
 - [Phase 3: 决策层](./phase3_decision.md)
 - [Phase 4: 输出层](./phase4_output.md)
-- [Phase 5: 扩展系统](./phase5_extensions.md)
+- [Phase 5: 插件系统](./phase5_plugins.md)
 - [Phase 6: 清理和测试](./phase6_cleanup.md)
 
 ---
@@ -256,7 +256,7 @@ git commit -m "refactor: remove plugin system and update main.py"
 2. ✅ 可替换的决策层
 3. ✅ 多Provider并发支持
 4. ✅ Provider模式统一接口
-5. ✅ 扩展系统支持社区开发
+5. ✅ 插件系统支持社区开发
 6. ✅ EventBus内部通信
 7. ✅ 配置简化40%以上
 8. ✅ Git历史完整保留

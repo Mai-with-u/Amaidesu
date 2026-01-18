@@ -1,73 +1,73 @@
-# Phase 5: 扩展系统实现
+# Phase 5: 插件系统实现
 
 ## 🎯 目标
 
-实现扩展系统（Layer 8），支持：
-1. 内置扩展（官方维护）
-2. 用户扩展（社区开发）
-3. 自动扫描用户扩展目录
-4. Extension接口（聚合多个Provider）
+实现插件系统（Layer 8），支持：
+1. 官方插件（官方维护）
+2. 社区插件（社区开发）
+3. 自动扫描社区插件目录
+4. Plugin接口（聚合多个Provider）
 
 ## 📁 目录结构
 
 ```
 src/
-└── extensions/                      # 内置扩展
+└── plugins/                         # 官方插件
     ├── minecraft/
     │   ├── __init__.py
-    │   │   └── MinecraftExtension
+    │   │   └── MinecraftPlugin
     │   └── providers/
     │       ├── event_provider.py
     │       └── command_provider.py
     ├── warudo/
     └── dg_lab/
 
-extensions/                           # 用户扩展（根目录，.gitignore）
+plugins/                            # 社区插件（根目录，.gitignore）
     ├── genshin/
     └── mygame/
 ```
 
 ## 📝 实施内容
 
-### 5.1 迁移内置扩展
+### 5.1 迁移官方插件
 
-#### Minecraft扩展
+#### Minecraft插件
 
-使用`git mv`迁移Minecraft插件到扩展：
+使用`git mv`迁移Minecraft插件到插件：
 
 ```bash
 # 使用git mv迁移（必须！）
-git mv src/plugins/minecraft src/extensions/minecraft
-git commit -m "refactor: migrate minecraft to extension"
+git mv src/plugins/minecraft src/plugins/minecraft
+git commit -m "refactor: migrate minecraft to plugin"
 ```
 
-`src/extensions/minecraft/__init__.py`:
+`src/plugins/minecraft/__init__.py`:
 ```python
 from typing import List, Dict, Any
-from src.core.extension import Extension
+from src.core.plugin import Plugin
 from src.core.event_bus import EventBus
 from src.core.provider import InputProvider, OutputProvider
 from src.utils.logger import get_logger
 
-class MinecraftExtension:
-    """Minecraft扩展 - 聚合Minecraft的所有能力"""
+class MinecraftPlugin:
+    """Minecraft插件 - 聚合Minecraft的所有能力"""
 
     def __init__(self):
-        self.logger = get_logger("MinecraftExtension")
+        self.logger = get_logger("MinecraftPlugin")
         self.providers: List = []
 
     async def setup(self, event_bus: EventBus, config: Dict[str, Any]) -> List:
         """
-        初始化Minecraft扩展
+        初始化Minecraft插件
 
         Args:
             event_bus: 事件总线
-            config: 扩展配置
+            config: 插件配置
 
         Returns:
             List[Provider]: 初始化好的Provider列表
         """
-        self.logger.info("Setting up Minecraft extension")
+        self.logger.info("Setting up Minecraft plugin")
 
         self.host = config.get("host", "localhost")
         self.port = config.get("port", 25565)
@@ -101,24 +101,24 @@ class MinecraftExtension:
 
     async def cleanup(self):
         """清理资源"""
-        self.logger.info("Cleaning up Minecraft extension")
+        self.logger.info("Cleaning up Minecraft plugin")
         for provider in self.providers:
             await provider.cleanup()
         self.providers = []
 
     def get_info(self) -> Dict[str, Any]:
-        """获取扩展信息"""
+        """获取插件信息"""
         return {
             "name": "Minecraft",
             "version": "1.0.0",
             "author": "Official",
-            "description": "Minecraft游戏集成扩展",
+            "description": "Minecraft游戏集成插件",
             "category": "game",
             "api_version": "1.0"
         }
 ```
 
-`src/extensions/minecraft/providers/event_provider.py`:
+`src/plugins/minecraft/providers/event_provider.py`:
 ```python
 from src.core.provider import InputProvider, RawData
 from src.core.event_bus import EventBus
@@ -153,7 +153,7 @@ class MinecraftEventProvider:
         await self.stop()
 ```
 
-`src/extensions/minecraft/providers/command_provider.py`:
+`src/plugins/minecraft/providers/command_provider.py`:
 ```python
 from src.core.provider import OutputProvider
 from src.core.event_bus import EventBus
@@ -199,21 +199,21 @@ class MinecraftCommandProvider:
 ```toml
 # config.toml
 
-# 内置扩展（官方）
-[extensions.minecraft]
+# 官方插件（官方）
+[plugins.minecraft]
 enabled = true
 host = "localhost"
 port = 25565
 events_enabled = true
 commands_enabled = true
 
-[extensions.warudo]
+[plugins.warudo]
 enabled = true
 host = "localhost"
 port = 50051
 
-# 用户扩展（社区）- 自动扫描，无需配置
-# [extensions.genshin]
+# 社区插件（社区）- 自动扫描，无需配置
+# [plugins.genshin]
 # enabled = false  # 可选：显式禁用
 ```
 
@@ -221,38 +221,37 @@ port = 50051
 
 `.gitignore`:
 ```
-# 用户扩展目录（不纳入版本控制）
-extensions/
+# 社区插件目录（不纳入版本控制）
+plugins/
 
 # 但保留.gitkeep文件
-!extensions/.gitkeep
+!plugins/.gitkeep
 ```
 
-`extensions/.gitkeep`:
+`plugins/.gitkeep`:
 ```
-# 此文件用于保留extensions/目录在Git仓库中
-# 实际的用户扩展不会被提交
+# 此文件用于保留plugins/目录在Git仓库中
+# 实际的社区插件不会被提交
 ```
 
 ## ✅ 验证标准
 
-1. ✅ Minecraft扩展可以正常加载
-2. ✅ 内置扩展自动加载
-3. ✅ 用户扩展自动扫描（extensions/目录）
-4. ✅ Extension接口正确实现
+1. ✅ Minecraft插件可以正常加载
+2. ✅ 官方插件自动加载
+3. ✅ 社区插件自动扫描（plugins/目录）
+4. ✅ Plugin接口正确实现
 5. ✅ Provider正确聚合和注册
 6. ✅ Git历史通过`git mv`保留
 
 ## 📝 提交
 
 ```bash
-# 迁移所有内置扩展
-git mv src/plugins/mainosaba src/extensions/mainosaba
-git mv src/plugins/warudo src/extensions/warudo
-git mv src/plugins/dg_lab_service src/extensions/dg_lab
-
+# 迁移所有官方插件
+git mv src/plugins/mainosaba src/plugins/mainosaba
+git mv src/plugins/warudo src/plugins/warudo
+git mv src/plugins/dg_lab_service src/plugins/dg_lab
 # 添加.gitkeep
-git add extensions/.gitkeep
+git add plugins/.gitkeep
 
-git commit -m "feat(phase5): implement extension system and migrate built-in extensions"
+git commit -m "feat(phase5): implement plugin system and migrate built-in plugins"
 ```

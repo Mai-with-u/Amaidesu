@@ -4,11 +4,11 @@
 
 本文档是Amaidesu架构重构的设计总览。详细设计请查看：
 
-- [6层架构设计](./layer_refactoring.md) - 核心数据流的6层架构
-- [决策层设计](./decision_layer.md) - 可替换的决策Provider系统
-- [多Provider并发设计](./multi_provider.md) - 输入/输出层并发处理
-- [扩展系统设计](./extension_system.md) - 扩展系统和Provider接口
-- [核心重构设计](./core_refactoring.md) - AmaidesuCore的彻底解耦
+ - [6层架构设计](./layer_refactoring.md) - 核心数据流的6层架构
+ - [决策层设计](./decision_layer.md) - 可替换的决策Provider系统
+ - [多Provider并发设计](./multi_provider.md) - 输入/输出层并发处理
+ - [插件系统设计](./plugin_system.md) - 插件系统和Provider接口
+ - [核心重构设计](./core_refactoring.md) - AmaidesuCore的彻底解耦
 
 ---
 
@@ -18,7 +18,7 @@
 
 1. **过度插件化**：24个插件中，核心功能也作为插件
 2. **依赖地狱**：18个插件使用服务注册，形成复杂依赖链
-3. **模块定位模糊**：核心功能、可选扩展、测试工具都作为插件
+3. **模块定位模糊**：核心功能、可选插件、测试工具都作为插件
 
 ### 重构目标
 
@@ -36,10 +36,10 @@
 
 **按AI VTuber数据处理的完整流程组织层级，每层有明确的输入和输出格式。**
 
-- **核心数据流**（Layer 1-6）：按AI VTuber数据处理流程组织
-- **决策层**（Decision Layer）：可替换的决策Provider系统
-- **扩展系统**（Extension System）：社区开发者添加新能力
-- **EventBus**：唯一的跨层通信机制，实现松耦合
+ - **核心数据流**（Layer 1-6）：按AI VTuber数据处理流程组织
+ - **决策层**（Decision Layer）：可替换的决策Provider系统
+ - **插件系统**（Plugin System）：社区开发者添加新能力
+ - **EventBus**：唯一的跨层通信机制，实现松耦合
 
 ### 架构分层
 
@@ -65,7 +65,7 @@ DecisionProvider返回MessageBase
   ↓
 【Layer 6: 渲染呈现】多个OutputProvider并发渲染
   ↓
-【扩展系统：Extension】社区开发的扩展能力
+【插件系统：Plugin】社区开发的插件能力
 ```
 
 ---
@@ -74,11 +74,11 @@ DecisionProvider返回MessageBase
 
 ### 设计文档
 
-- [6层架构设计](./layer_refactoring.md) - 详细描述6层核心数据流
-- [决策层设计](./decision_layer.md) - 可替换的决策Provider系统
-- [多Provider并发设计](./multi_provider.md) - 输入/输出层并发处理
-- [扩展系统设计](./extension_system.md) - 扩展系统和Provider接口
-- [核心重构设计](./core_refactoring.md) - AmaidesuCore的彻底解耦
+ - [6层架构设计](./layer_refactoring.md) - 详细描述6层核心数据流
+ - [决策层设计](./decision_layer.md) - 可替换的决策Provider系统
+ - [多Provider并发设计](./multi_provider.md) - 输入/输出层并发处理
+ - [插件系统设计](./plugin_system.md) - 插件系统和Provider接口
+ - [核心重构设计](./core_refactoring.md) - AmaidesuCore的彻底解耦
 
 ### 实施计划
 
@@ -87,7 +87,7 @@ DecisionProvider返回MessageBase
 - [Phase 2: 输入层](../plan/phase2_input.md) - Layer 1-2实现
 - [Phase 3: 决策层](../plan/phase3_decision.md) - 决策层+Layer 3-4实现
 - [Phase 4: 输出层](../plan/phase4_output.md) - Layer 5-6实现
-- [Phase 5: 扩展系统](../plan/phase5_extensions.md) - 扩展系统实现
+ - [Phase 5: 插件系统](../plan/phase5_plugins.md) - 插件系统实现
 - [Phase 6: 清理和测试](../plan/phase6_cleanup.md) - 清理、测试和迁移
 
 ---
@@ -101,7 +101,7 @@ DecisionProvider返回MessageBase
 - ✅ 代码重复率降低30%以上
 - ✅ 服务注册调用减少80%以上
 - ✅ EventBus事件调用覆盖率90%以上
-- ✅ 扩展系统正常加载内置扩展和用户扩展
+ - ✅ 插件系统正常加载官方插件和社区插件
 
 ### 架构指标
 - ✅ 清晰的6层核心数据流架构
@@ -111,7 +111,7 @@ DecisionProvider返回MessageBase
 - ✅ EventBus为内部主要通信模式
 - ✅ Provider模式替代重复插件
 - ✅ 工厂模式支持动态切换
-- ✅ 扩展系统支持社区开发
+ - ✅ 插件系统支持社区开发
 
 ---
 
@@ -128,8 +128,8 @@ DecisionProvider返回MessageBase
 **多个Provider如何并发？**
 → 阅读[多Provider并发设计](./multi_provider.md)
 
-**如何开发扩展？**
-→ 阅读[扩展系统设计](./extension_system.md)
+**如何开发插件？**
+→ 阅读[插件系统设计](./plugin_system.md)
 
 **AmaidesuCore如何重构？**
 → 阅读[核心重构设计](./core_refactoring.md)

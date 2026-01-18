@@ -59,8 +59,8 @@ graph TB
         end
     end
 
-    subgraph "扩展系统: Extension"
-        Extensions[扩展=聚合多个Provider<br/>Minecraft/原神/自定义]
+    subgraph "插件系统: Plugin"
+        Plugins[插件=聚合多个Provider<br/>Minecraft/原神/自定义]
     end
 
     Perception -->|"Raw Data"| Normalization
@@ -70,8 +70,8 @@ graph TB
     Understanding -->|"Intent"| Expression
     Expression -->|"RenderParameters"| Rendering
 
-    Perception -.输入Provider.-> Extensions
-    Rendering -.输出Provider.-> Extensions
+    Perception -.输入Provider.-> Plugins
+    Rendering -.输出Provider.-> Plugins
 
     style Perception fill:#e1f5ff
     style Normalization fill:#fff4e1
@@ -80,7 +80,7 @@ graph TB
     style Understanding fill:#ffe1f5
     style Expression fill:#e1ffe1
     style Rendering fill:#e1f5ff
-    style Extensions fill:#f5e1ff
+    style Plugins fill:#f5e1ff
 ```
 
 ---
@@ -220,5 +220,5 @@ class RenderParameters:
 - [设计总览](./overview.md)
 - [决策层设计](./decision_layer.md)
 - [多Provider并发设计](./multi_provider.md)
-- [扩展系统设计](./extension_system.md)
+- [插件系统设计](./plugin_system.md)
 - [核心重构设计](./core_refactoring.md)

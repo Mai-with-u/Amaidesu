@@ -552,4 +552,4 @@ port = 8001
 
 - [6层架构设计](./layer_refactoring.md)
 - [决策层设计](./decision_layer.md)
-- [扩展系统设计](./extension_system.md)
+- [插件系统设计](./plugin_system.md)

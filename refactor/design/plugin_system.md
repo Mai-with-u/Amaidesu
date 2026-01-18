@@ -1,14 +1,14 @@
-# 扩展系统设计
+# 插件系统设计
 
 ## 🎯 核心目标
 
-构建友好的扩展系统，让社区开发者能够轻松为Amaidesu添加新能力。
+构建友好的插件系统，让社区开发者能够轻松为Amaidesu添加新能力。
 
 ---
 
 ## 📊 核心概念
 
-### Extension（扩展）
+### Plugin（插件）
 
 **定义**：聚合多个Provider的完整功能，是社区开发的入口。
 
@@ -16,13 +16,13 @@
 
 | 概念         | 定义             | 职责               | 示例                   |
 | ------------ | ---------------- | ------------------ | ---------------------- |
-| **Provider** | 标准化的原子能力 | 单一能力，可替换   | MinecraftEventProvider |
-| **Extension** | 聚合多个Provider | 完整功能，一键开关 | MinecraftExtension     |
+| **Provider**  | 标准化的原子能力 | 单一能力，可替换   | MinecraftEventProvider |
+| **Plugin**    | 聚合多个Provider | 完整功能，一键开关 | MinecraftPlugin     |
 
 **关系**：
-- 一个Extension = 多个Provider的聚合
-- Extension的`setup()`方法返回Provider列表
-- 扩展加载器自动注册所有Provider
+- 一个Plugin = 多个Provider的聚合
+- Plugin的`setup()`方法返回Provider列表
+- 插件加载器自动注册所有Provider
 
 ---
 
@@ -89,21 +89,21 @@ class OutputProvider(Protocol):
         ...
 ```
 
-### Extension接口
+### Plugin接口
 
 ```python
 from typing import List, Protocol
 
-class Extension(Protocol):
-    """扩展协议 - 聚合多个Provider"""
+class Plugin(Protocol):
+    """插件协议 - 聚合多个Provider"""
 
     async def setup(self, event_bus: EventBus, config: dict) -> List[Provider]:
         """
-        初始化扩展
+        初始化插件
 
         Args:
             event_bus: 事件总线实例
-            config: 扩展配置
+            config: 插件配置
 
         Returns:
             初始化好的Provider列表
@@ -116,16 +116,16 @@ class Extension(Protocol):
 
     def get_info(self) -> dict:
         """
-        获取扩展信息
+        获取插件信息
 
         Returns:
-            dict: 扩展信息（name, version, description等）
+            dict: 插件信息（name, version, description等）
         """
         return {
-            "name": "ExtensionName",
+            "name": "PluginName",
             "version": "1.0.0",
             "author": "Author",
-            "description": "Extension description",
+            "description": "Plugin description",
             "category": "game/hardware/software",
             "api_version": "1.0"
         }
@@ -133,41 +133,41 @@ class Extension(Protocol):
 
 ---
 
-## 🏗️ 内置扩展 vs 用户扩展
+## 🏗️ 官方插件 vs 社区插件
 
-| 维量         | 内置扩展           | 用户扩展                       |
+| 维量         | 官方插件           | 社区插件                       |
 | ------------ | ------------------ | ------------------------------ |
-| **目录**     | `src/extensions/`  | `extensions/`（根目录）        |
+| **目录**     | `src/plugins/`     | `plugins/`（根目录）        |
 | **维护者**   | 官方团队           | 社区/用户                      |
 | **启用**     | 默认启用           | ✅ **自动识别，默认启用**       |
-| **配置**     | `[extensions.xxx]` | `[extensions.xxx]`（可选覆盖） |
+| **配置**     | `[plugins.xxx]` | `[plugins.xxx]`（可选覆盖） |
 | **Provider** | 可以定义新Provider | 可以定义新Provider             |
-| **来源**     | 代码仓库           | 扩展市场/手动安装              |
+| **来源**     | 代码仓库           | 插件市场/手动安装              |
 | **版本控制** | 纳入Git仓库        | `.gitignore`排除               |
 
 ---
 
 ## 🔧 具体实现示例
 
-### 示例：Minecraft扩展
+### 示例：Minecraft插件
 
 ```python
-# src/extensions/minecraft/__init__.py
-"""Minecraft扩展"""
+# src/plugins/minecraft/__init__.py
+"""Minecraft插件"""
 from typing import List
-from src.core.extension import Extension
+from src.core.plugin import Plugin
 from src.core.event_bus import EventBus
 from src.core.input_provider import InputProvider
 from src.core.output_provider import OutputProvider
 from src.providers.event_provider import MinecraftEventProvider
 from src.providers.command_provider import MinecraftCommandProvider
 
-class MinecraftExtension(Extension):
-    """Minecraft扩展 - 聚合Minecraft的所有能力"""
+class MinecraftPlugin(Plugin):
+    """Minecraft插件 - 聚合Minecraft的所有能力"""
 
     async def setup(self, event_bus: EventBus, config: dict) -> List[Provider]:
         """
-        初始化Minecraft扩展
+        初始化Minecraft插件
 
         Returns:
             Provider列表
@@ -205,18 +205,18 @@ class MinecraftExtension(Extension):
         await asyncio.gather(*[p.cleanup() for p in self.providers])
 
     def get_info(self) -> dict:
-        """获取扩展信息"""
+        """获取插件信息"""
         return {
             "name": "Minecraft",
             "version": "1.0.0",
             "author": "Amaidesu Team",
-            "description": "Minecraft游戏集成扩展",
+            "description": "Minecraft游戏集成插件",
             "category": "game",
             "api_version": "1.0"
         }
 
 # 内部Provider（对开发者透明）
-# src/extensions/minecraft/providers/event_provider.py
+# src/plugins/minecraft/providers/event_provider.py
 from typing import AsyncIterator
 from src.core.input_provider import InputProvider, RawData
 from src.utils.logger import get_logger
@@ -257,7 +257,7 @@ class MinecraftEventProvider(InputProvider):
         """清理资源"""
         self.logger.info("MinecraftEventProvider cleanup")
 
-# src/extensions/minecraft/providers/command_provider.py
+# src/plugins/minecraft/providers/command_provider.py
 from src.core.output_provider import OutputProvider, RenderParameters
 from src.utils.logger import get_logger
 
@@ -306,42 +306,42 @@ class MinecraftCommandProvider(OutputProvider):
 
 ---
 
-## 📦 扩展安装
+## 📦 插件安装
 
 ### 自动识别
 
-**内置扩展**：`src/extensions/`（官方，自动启用）
-**用户扩展**：`extensions/`（根目录，自动扫描）
+**官方插件**：`src/plugins/`（官方，自动启用）
+**社区插件**：`plugins/`（根目录，自动扫描）
 
 ### 安装示例
 
 ```bash
 # 方式1：从GitHub克隆
-git clone https://github.com/xxx/genshin-extension.git extensions/genshin
+git clone https://github.com/xxx/genshin-plugin.git plugins/genshin
 
 # 方式2：下载后复制
-cp -r ~/downloads/mygame-extension extensions/mygame
+cp -r ~/downloads/mygame-plugin plugins/mygame
 
 # 方式3：直接创建目录
-mkdir extensions/my-custom-extension
-# 然后创建扩展文件...
+mkdir plugins/my-custom-plugin
+# 然后创建插件文件...
 
 # 运行程序（自动识别）
 python main.py
-# 日志会显示：✅ 扩展加载成功: genshin, mygame
+# 日志会显示：✅ 插件加载成功: genshin, mygame
 ```
 
-### 扩展目录结构要求
+### 插件目录结构要求
 
 ```
-extensions/
-├── genshin/                # 用户扩展1
+plugins/
+├── genshin/                # 社区插件1
 │   ├── __init__.py         # 必须包含
-│   │   └── GenshinExtension
+│   │   └── GenshinPlugin
 │   └── providers/
-└── mygame/                 # 用户扩展2
+└── mygame/                 # 社区插件2
     ├── __init__.py         # 必须包含
-    │   └── MyGameExtension
+    │   └── MyGamePlugin
     └── providers/
 ```
 
@@ -349,37 +349,37 @@ extensions/
 
 ## 📋 配置示例
 
-### 内置扩展配置
+### 官方插件配置
 
 ```toml
-# 内置扩展（官方）
-[extensions.minecraft]
+# 官方插件（官方）
+[plugins.minecraft]
 enabled = true
 host = "localhost"
 port = 25565
 events_enabled = true
 commands_enabled = true
 
-[extensions.warudo]
+[plugins.warudo]
 enabled = true
 host = "localhost"
 port = 50051
 
-[extensions.dg_lab]
+[plugins.dg_lab]
 enabled = true
 api_url = "http://localhost:8080/api"
 ```
 
-### 用户扩展配置
+### 社区插件配置
 
 ```toml
-# 用户扩展（社区）
-[extensions.genshin]
+# 社区插件（社区）
+[plugins.genshin]
 enabled = false  # 需要手动启用
 api_url = "https://genshin-api.example.com"
 events_enabled = true
 
-[extensions.mygame]
+[plugins.mygame]
 enabled = false
 api_url = "https://mygame-api.example.com"
 ```
@@ -387,43 +387,43 @@ api_url = "https://mygame-api.example.com"
 ### 配置覆盖（可选）
 
 ```toml
-# 默认：所有扩展自动启用，使用默认配置
+# 默认：所有插件自动启用，使用默认配置
 
-# 可选：自定义扩展配置
-[extensions.genshin]
+# 可选：自定义插件配置
+[plugins.genshin]
 enabled = true  # 显式启用（默认就是true）
 api_url = "https://genshin-api.example.com"  # 自定义配置
 
-[extensions.mygame]
-enabled = false  # 禁用某个扩展
+[plugins.mygame]
+enabled = false  # 禁用某个插件
 ```
 
 ---
 
 ## 🔄 插件迁移到扩展
 
-### 内置扩展迁移
+### 官方插件迁移
 
-| 原插件           | 迁移到                  | 扩展类型 |
+| 原插件           | 迁移到                  | 插件类型 |
 | ---------------- | ----------------------- | -------- |
-| `mainosaba`      | `extensions/mainosaba/` | 内置扩展 |
-| `minecraft`      | `extensions/minecraft/` | 内置扩展 |
-| `warudo`         | `extensions/warudo/`    | 内置扩展 |
-| `dg_lab_service` | `extensions/dg_lab/`    | 内置扩展 |
+| `mainosaba`      | `src/plugins/mainosaba/` | 官方插件 |
+| `minecraft`      | `src/plugins/minecraft/` | 官方插件 |
+| `warudo`         | `src/plugins/warudo/`    | 官方插件 |
+| `dg_lab_service` | `src/plugins/dg_lab/`    | 官方插件 |
 
 ### 迁移步骤
 
 ```bash
 # 1. 使用git mv迁移（必须！）
-git mv src/plugins/minecraft src/extensions/minecraft
-git commit -m "refactor: migrate minecraft plugin to extension"
+git mv src/plugins/minecraft src/plugins/minecraft
+git commit -m "refactor: migrate minecraft plugin to plugin"
 
-# 2. 改造插件为扩展
+# 2. 改造插件为插件
 # 将单一插件拆分为多个Provider
-# 创建Extension类聚合Provider
+# 创建Plugin类聚合Provider
 
 # 3. 更新配置
-# [plugins.minecraft] → [extensions.minecraft]
+# [plugins.minecraft] → [plugins.minecraft]
 ```
 
 ### 迁移代码示例
@@ -444,10 +444,10 @@ class MinecraftPlugin(BasePlugin):
         await self._send_command(message)
 ```
 
-**迁移后扩展** (`src/extensions/minecraft/__init__.py`):
+**迁移后插件** (`src/plugins/minecraft/__init__.py`):
 ```python
-# 扩展：拆分为多个Provider
-class MinecraftExtension(Extension):
+# 插件：拆分为多个Provider
+class MinecraftPlugin(Plugin):
     async def setup(self, event_bus, config):
         providers = []
 
@@ -468,33 +468,33 @@ class MinecraftExtension(Extension):
 
 ---
 
-## 📁 扩展目录结构
+## 📁 插件目录结构
 
-### 内置扩展结构
+### 官方插件结构
 
 ```
-src/extensions/
-├── minecraft/                      # 内置扩展（官方）
-│   ├── __init__.py                 # Extension类
+src/plugins/
+├── minecraft/                      # 官方插件（官方）
+│   ├── __init__.py                 # Plugin类
 │   └── providers/                  # Provider实现
 │       ├── event_provider.py       # 输入Provider
 │       └── command_provider.py    # 输出Provider
-├── warudo/                         # 内置扩展
+├── warudo/                         # 官方插件
 │   ├── __init__.py
 │   └── providers/
-└── dg_lab/                         # 内置扩展
+└── dg_lab/                         # 官方插件
     ├── __init__.py
     └── providers/
 ```
 
-### 用户扩展结构
+### 社区插件结构
 
 ```
-extensions/                        # 用户扩展（根目录）
-├── genshin/                        # 用户扩展1
+plugins/                            # 社区插件（根目录）
+├── genshin/                        # 社区插件1
 │   ├── __init__.py                 # 必须包含
 │   └── providers/                  # Provider实现
-└── mygame/                         # 用户扩展2
+└── mygame/                         # 社区插件2
     ├── __init__.py                 # 必须包含
     └── providers/
 ```
@@ -504,24 +504,24 @@ extensions/                        # 用户扩展（根目录）
 ## ✅ 关键优势
 
 ### 1. 一键开关
-- ✅ 通过`enabled`控制扩展的整体开关
+- ✅ 通过`enabled`控制插件的整体开关
 - ✅ 无需修改代码，只需修改配置
 
 ### 2. 统一配置
-- ✅ 扩展的配置集中管理
+- ✅ 插件的配置集中管理
 - ✅ 一处配置，多处生效
 
 ### 3. 社区友好
-- ✅ 开发者只需实现Extension
+- ✅ 开发者只需实现Plugin
 - ✅ 自动拆分为Provider
 - ✅ 降低开发门槛
 
 ### 4. 自动识别
-- ✅ 放在`extensions/`目录自动加载
+- ✅ 放在`plugins/`目录自动加载
 - ✅ 无需手动配置，开箱即用
 
 ### 5. 聚合能力
-- ✅ 一个扩展包含多个Provider
+- ✅ 一个插件包含多个Provider
 - ✅ 统一初始化和清理
 - ✅ 统一配置管理
 
