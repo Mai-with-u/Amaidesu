@@ -11,7 +11,7 @@ OutputProvider负责将RenderParameters渲染到目标设备。
 - StickerProvider: 显示表情贴纸
 """
 
-from typing import Optional
+from typing import Optional, Dict, Any
 from abc import ABC, abstractmethod
 
 from .base import RenderParameters
@@ -105,6 +105,22 @@ class OutputProvider(ABC):
         """
         await self._cleanup_internal()
         self.is_setup = False
+
+    def get_info(self) -> Dict[str, Any]:
+        """
+        获取Provider信息
+
+        Returns:
+            Provider信息字典，包含:
+            - name: Provider名称
+            - is_setup: 是否已完成设置
+            - type: Provider类型
+        """
+        return {
+            "name": self.__class__.__name__,
+            "is_setup": self.is_setup,
+            "type": "output_provider",
+        }
 
     async def _cleanup_internal(self):
         """
