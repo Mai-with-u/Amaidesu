@@ -4,9 +4,9 @@
 
 搭建重构的基础设施，包括：
 1. Provider接口定义（公共API）
-2. Extension接口定义
+2. Plugin接口定义
 3. 决策Provider接口定义（新增）
-4. ExtensionLoader实现
+4. PluginLoader实现
 5. 完善EventBus
 
 ## 📁 目录结构
@@ -20,8 +20,8 @@ src/
 │   ├── context_manager.py      # 保留
 │   ├── provider.py             # Provider接口（新建）
 │   ├── decision_provider.py    # 决策Provider接口（新建）
-│   ├── extension.py            # Extension接口（新建）
-│   └── extension_loader.py     # 扩展加载器（新建）
+│   ├── plugin.py            # Plugin接口（新建）
+│   └── extension_loader.py     # 插件加载器（新建）
 ```
 
 ## 📝 实施内容
@@ -216,16 +216,16 @@ class DecisionManager:
             await self._current_provider.cleanup()
 ```
 
-### 1.3 Extension接口
+### 1.3 Plugin接口
 
-创建`src/core/extension.py`，定义Extension接口：
+创建`src/core/plugin.py`，定义Plugin接口：
 
 ```python
 from typing import Protocol, List, Dict, Any
 from src.core.event_bus import EventBus
 
 class Extension(Protocol):
-    """扩展协议 - Layer 8
+    """插件协议 - Layer 8
 
     Extension是聚合多个Provider的完整功能
     """
@@ -263,9 +263,9 @@ class Extension(Protocol):
         }
 ```
 
-### 1.4 ExtensionLoader实现
+### 1.4 PluginLoader实现
 
-创建`src/core/extension_loader.py`，实现扩展加载器：
+创建`src/core/extension_loader.py`，实现插件加载器：
 
 ```python
 import os
@@ -277,21 +277,21 @@ from src.utils.logger import get_logger
 from src.core.extension import Extension
 from src.core.event_bus import EventBus
 
-class ExtensionLoader:
-    """扩展加载器 - 加载和管理扩展"""
+class PluginLoader:
+    """插件加载器 - 加载和管理扩展"""
 
     def __init__(self, event_bus: EventBus, config: dict):
         self.event_bus = event_bus
         self.config = config
-        self.logger = get_logger("ExtensionLoader")
+        self.logger = get_logger("PluginLoader")
         self._loaded_extensions: Dict[str, Extension] = {}
 
         # 配置
-        self.builtin_extensions_dir = "src/extensions"
+        self.builtin_extensions_dir = "src/plugins"
         self.user_extensions_dir = "extensions"  # 根目录
 
     def _setup_sys_path(self):
-        """设置sys.path以支持用户扩展"""
+        """设置sys.path以支持社区插件"""
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         user_extensions_dir = os.path.join(project_root, "extensions")
 
@@ -303,16 +303,16 @@ class ExtensionLoader:
         """加载所有扩展（内置 + 用户）"""
         self._setup_sys_path()
 
-        # 加载内置扩展
+        # 加载官方插件
         await self._load_builtin_extensions()
 
-        # 加载用户扩展
+        # 加载社区插件
         await self._load_user_extensions()
 
         self.logger.info(f"Total loaded extensions: {len(self._loaded_extensions)}")
 
     async def _load_builtin_extensions(self):
-        """加载内置扩展（src/extensions/）"""
+        """加载官方插件（src/plugins/）"""
         builtin_extensions = ["minecraft", "warudo", "dg_lab"]
 
         for ext_name in builtin_extensions:
@@ -322,7 +322,7 @@ class ExtensionLoader:
                 self.logger.error(f"Failed to load builtin extension '{ext_name}': {e}", exc_info=True)
 
     async def _load_user_extensions(self):
-        """加载用户扩展（extensions/）"""
+        """加载社区插件（plugins/）"""
         if not os.path.exists(self.user_extensions_dir):
             self.logger.info("User extensions directory not found")
             return
@@ -363,7 +363,7 @@ class ExtensionLoader:
         # 动态导入
         module = importlib.import_module(module_path)
 
-        # 查找Extension类
+        # 查找Plugin类
         extension_class = None
         for name, obj in inspect.getmembers(module):
             if inspect.isclass(obj) and issubclass(obj, Extension):
@@ -500,8 +500,8 @@ class EventBus:
 
 1. ✅ Provider接口定义完整（InputProvider、OutputProvider）
 2. ✅ 决策Provider接口定义完整（DecisionProvider）
-3. ✅ Extension接口定义完整
-4. ✅ ExtensionLoader实现完整，支持内置和用户扩展
+3. ✅ Plugin接口定义完整
+4. ✅ PluginLoader实现完整，支持内置和社区插件
 5. ✅ EventBus增强完成，支持事件路由和历史记录
 6. ✅ 所有代码通过类型检查
 7. ✅ 所有代码有完整的文档字符串
@@ -509,6 +509,6 @@ class EventBus:
 ## 📝 提交
 
 ```bash
-git add src/core/provider.py src/core/decision_provider.py src/core/extension.py src/core/extension_loader.py
+git add src/core/provider.py src/core/decision_provider.py src/core/plugin.py src/core/extension_loader.py
 git commit -m "feat(phase1): add provider interfaces and extension system"
 ```
