@@ -22,8 +22,8 @@
 **多个Provider如何并发？**
 → [多Provider并发设计](./design/multi_provider.md)
 
-**如何开发扩展？**
-→ [扩展系统设计](./design/extension_system.md)
+**如何开发插件？**
+→ [插件系统设计](./design/plugin_system.md)
 
 **AmaidesuCore如何重构？**
 → [核心重构设计](./design/core_refactoring.md)
@@ -43,7 +43,7 @@ refactor/
 │   ├── layer_refactoring.md         # 6层架构设计
 │   ├── decision_layer.md           # 决策层设计
 │   ├── multi_provider.md           # 多Provider并发设计
-│   ├── extension_system.md         # 扩展系统设计
+│   ├── plugin_system.md            # 插件系统设计
 │   └── core_refactoring.md          # AmaidesuCore重构设计
 │
 └── plan/                            # 实施计划
