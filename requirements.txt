@@ -33,3 +33,4 @@ librosa
 scipy
 pyautogui
 python-osc
+pytest
