@@ -1,7 +1,8 @@
 import os
 import sys
 import shutil
-from typing import Dict, Any
+from typing import Dict, Any, Optional, Tuple
+from packaging import version
 
 # 尝试导入 tomllib (Python 3.11+), 否则使用 toml
 try:
@@ -321,3 +322,242 @@ def initialize_configurations(
 # - Error Handling: More emphasis on raising exceptions for `load_config` and critical failures in `check_and_setup_main_config`, allowing the caller (`main.py`) to decide on termination.
 # - Path handling for plugin/pipeline directories in `initialize_configurations` assumes they are relative to the project root if not absolute.
 """
+
+
+# ==================== 版本检查和自动更新功能 ====================
+
+def _get_version_from_toml(toml_path: str) -> Optional[str]:
+    """从TOML文件中获取版本号"""
+    try:
+        with open(toml_path, "rb") as f:
+            data = tomllib.load(f)
+        return data.get("inner", {}).get("version")
+    except Exception:
+        return None
+
+
+def _compare_versions(template_version: str, config_version: str) -> bool:
+    """比较版本号，返回True表示模板版本更高"""
+    try:
+        return version.parse(template_version) > version.parse(config_version)
+    except Exception:
+        # 如果版本号格式不正确，认为需要更新
+        return True
+
+
+def _parse_toml_with_comments(file_path: str) -> Tuple[Dict[str, Any], str]:
+    """解析TOML文件并保留注释"""
+    with open(file_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    # 使用tomllib解析数据
+    with open(file_path, "rb") as f:
+        data = tomllib.load(f)
+
+    return data, content
+
+
+def _format_toml_value(value: Any) -> str:
+    """将Python值转换为TOML字面量字符串，确保布尔为小写true/false。"""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        escaped = value.replace('"', '\\"')
+        return f'"{escaped}"'
+    if isinstance(value, (int, float)):
+        return str(value)
+    if value is None:
+        return '""'
+    if isinstance(value, list):
+        items = ", ".join(_format_toml_value(v) for v in value)
+        return f"[ {items} ]"
+    return f'"{str(value)}"'
+
+
+def _extract_section_comment(content: str, section: str) -> str:
+    """从内容中提取section的注释"""
+    lines = content.split("\n")
+    section_line = f"[{section}]"
+
+    for i, line in enumerate(lines):
+        if line.strip() == section_line:
+            # 查找section前的注释
+            for j in range(i - 1, -1, -1):
+                comment_line = lines[j].strip()
+                if comment_line.startswith("#"):
+                    return comment_line
+                elif comment_line == "":
+                    continue
+                else:
+                    break
+            break
+
+    return ""
+
+
+def _extract_key_comment(content: str, section: str, key: str) -> str:
+    """从内容中提取key的注释"""
+    lines = content.split("\n")
+    in_section = False
+
+    for i, line in enumerate(lines):
+        line_stripped = line.strip()
+
+        # 检查是否进入目标section
+        if line_stripped == f"[{section}]":
+            in_section = True
+            continue
+
+        # 如果遇到新的section，退出当前section
+        if in_section and line_stripped.startswith("[") and line_stripped.endswith("]"):
+            break
+
+        # 在目标section中查找key
+        if in_section and line_stripped.startswith(f"{key} ="):
+            # 查找key前的注释
+            for j in range(i - 1, -1, -1):
+                comment_line = lines[j].strip()
+                if comment_line.startswith("#"):
+                    return comment_line
+                elif comment_line == "":
+                    continue
+                else:
+                    break
+            break
+
+    return ""
+
+
+def _generate_config_content_with_comments(
+    merged_data: Dict[str, Any], template_content: str, existing_content: str
+) -> str:
+    """生成包含注释的配置文件内容"""
+    lines = []
+
+    # 添加文件头注释
+    lines.append("# Amaidesu 配置文件")
+    lines.append("# 此文件从 config-template.toml 自动生成")
+    lines.append("")
+
+    # 为每个section生成内容
+    for section, values in merged_data.items():
+        # 添加section注释（从模板中提取）
+        section_comment = _extract_section_comment(template_content, section)
+        if section_comment:
+            lines.append(section_comment)
+
+        lines.append(f"[{section}]")
+
+        if isinstance(values, dict):
+            for key, value in values.items():
+                # 添加key的注释（从模板中提取）
+                key_comment = _extract_key_comment(template_content, section, key)
+                if key_comment:
+                    lines.append(key_comment)
+
+                # 添加配置项
+                lines.append(f"{key} = {_format_toml_value(value)}")
+        else:
+            lines.append(f"value = {_format_toml_value(values)}")
+
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _update_config_from_template(config_path: str, template_path: str) -> None:
+    """从模板更新配置文件，保留用户的自定义设置和注释"""
+    logger.info(f"[配置更新] 开始从模板更新配置文件: {config_path}")
+
+    try:
+        # 读取模板和现有配置
+        template_data, template_content = _parse_toml_with_comments(template_path)
+
+        # 如果配置文件存在，读取现有配置
+        existing_data = {}
+        existing_content = ""
+        if os.path.exists(config_path):
+            existing_data, existing_content = _parse_toml_with_comments(config_path)
+
+        # 创建备份
+        if os.path.exists(config_path):
+            backup_path = config_path + ".backup"
+            shutil.copy2(config_path, backup_path)
+            logger.info(f"[配置更新] 已创建备份文件: {backup_path}")
+
+        # 合并配置：以模板为基础，保留用户的自定义值
+        merged_data = {}
+
+        # 首先添加模板中的所有配置项
+        for section, values in template_data.items():
+            if isinstance(values, dict):
+                merged_data[section] = {}
+                for key, template_value in values.items():
+                    # 如果现有配置中有相同的键，且不是默认值，则保留用户设置
+                    if (
+                        section in existing_data
+                        and key in existing_data[section]
+                        and existing_data[section][key] != template_value
+                        and not (key == "api_key" and existing_data[section][key] == "your-api-key")
+                        and not (section == "inner" and key == "version")
+                    ):
+                        merged_data[section][key] = existing_data[section][key]
+                        logger.info(f"[配置更新] 保留用户设置: {section}.{key} = {existing_data[section][key]}")
+                    else:
+                        merged_data[section][key] = template_value
+            else:
+                merged_data[section] = values
+
+        # 生成新的配置文件内容，保留注释
+        new_content = _generate_config_content_with_comments(merged_data, template_content, existing_content)
+
+        # 写入更新后的配置
+        with open(config_path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+
+        logger.info(f"[配置更新] 配置文件已更新: {config_path}")
+
+    except Exception as e:
+        logger.error(f"[配置更新] 更新配置文件失败: {e}")
+        raise
+
+
+def check_and_update_config_with_version(
+    config_path: str, template_path: str
+) -> bool:
+    """检查配置文件版本，如果需要则从模板更新
+
+    Args:
+        config_path: 配置文件路径
+        template_path: 模板文件路径
+
+    Returns:
+        True 如果配置文件被更新，否则 False
+    """
+    if not os.path.exists(config_path):
+        logger.debug(f"[配置检查] 配置文件不存在，跳过版本检查: {config_path}")
+        return False
+
+    if not os.path.exists(template_path):
+        logger.warning(f"[配置检查] 模板文件不存在，跳过版本检查: {template_path}")
+        return False
+
+    try:
+        template_version = _get_version_from_toml(template_path)
+        config_version = _get_version_from_toml(config_path)
+
+        if template_version and config_version:
+            if _compare_versions(template_version, config_version):
+                logger.info(f"[配置更新] 检测到模板版本更新: {config_version} -> {template_version}")
+                _update_config_from_template(config_path, template_path)
+                return True
+            else:
+                logger.debug(f"[配置检查] 配置文件版本已是最新: {config_version}")
+        else:
+            logger.warning("[配置检查] 无法获取版本信息，跳过版本检查")
+
+        return False
+
+    except Exception as e:
+        logger.warning(f"[配置检查] 版本检查失败: {e}")
+        return False

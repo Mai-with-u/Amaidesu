@@ -1,7 +1,15 @@
 # 导出所有管道类，方便导入
-from src.pipelines.throttle import ThrottlePipeline
-from src.pipelines.message_logger import MessageLoggerPipeline
-from src.pipelines.similar_message_filter import SimilarMessageFilterPipeline
-from src.pipelines.command_router import CommandRouterPipeline
+# 新架构管道（TextPipelineBase）
+from src.pipelines.throttle.pipeline import RateLimitTextPipeline
+from src.pipelines.similar_message_filter.pipeline import SimilarTextFilterPipeline
 
-__all__ = ["ThrottlePipeline", "MessageLoggerPipeline", "SimilarMessageFilterPipeline", "CommandRouterPipeline"]
+# 旧架构管道（MessagePipeline）- 保留用于消息日志记录
+from src.pipelines.message_logger.pipeline import MessageLoggerPipeline
+
+__all__ = [
+    # 新架构管道
+    "RateLimitTextPipeline",
+    "SimilarTextFilterPipeline",
+    # 旧架构管道
+    "MessageLoggerPipeline",
+]

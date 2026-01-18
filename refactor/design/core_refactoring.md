@@ -112,7 +112,7 @@ class AmaidesuCore:
         self.pipeline_manager = None
         self.context_manager = None
         self.avatar_manager = None
-        self.llm_client = None
+        self.llm_service = None
 
         # ✅ 决策层管理（新增）
         self.decision_manager = None
@@ -124,7 +124,7 @@ class AmaidesuCore:
         self.pipeline_manager = PipelineManager(self.event_bus)
         self.context_manager = ContextManager()
         self.avatar_manager = AvatarManager()
-        self.llm_client = LLMClientManager()
+        self.llm_service = LLMService()
 
         # ✅ 决策层（新增）
         await self._setup_decision_layer()
@@ -213,12 +213,12 @@ src/core/
 ├── pipeline_manager.py
 ├── context_manager.py
 ├── decision_manager.py       # 新增：决策层管理
+├── llm_service.py            # LLM 服务（llm/llm_fast/vlm）
 ├── providers/                 # 新增：Provider基类
 │   ├── input_provider.py
 │   └── output_provider.py
 └── services/
-    ├── avatar_manager.py
-    └── llm_client_manager.py
+    └── avatar_manager.py
 ```
 
 ---
@@ -230,7 +230,9 @@ src/core/
 ```python
 from typing import Dict, Optional
 from src.core.event_bus import EventBus
-from src.core.decision_provider import DecisionProvider, CanonicalMessage
+from src.core.decision_provider import DecisionProvider
+from src.data_types.normalized_message import NormalizedMessage
+from src.layers.decision.intent import Intent
 from src.utils.logger import get_logger
 
 class DecisionManager:
@@ -264,19 +266,19 @@ class DecisionManager:
 
         self.logger.info(f"DecisionProvider已设置: {provider_name}")
 
-    async def decide(self, canonical_message: CanonicalMessage):
+    async def decide(self, message: NormalizedMessage) -> Intent:
         """
         进行决策
 
         Args:
-            canonical_message: 标准化消息
+            message: 标准化消息（NormalizedMessage）
 
         Returns:
-            MessageBase: 决策结果
+            Intent: 决策意图
         """
         if not self._current_provider:
             raise RuntimeError("No decision provider configured")
-        return await self._current_provider.decide(canonical_message)
+        return await self._current_provider.decide(message)
 
     async def switch_provider(self, provider_name: str, config: dict):
         """
@@ -305,7 +307,7 @@ from src.core.pipeline_manager import PipelineManager
 from src.core.context_manager import ContextManager
 from src.core.decision_manager import DecisionManager
 from src.core.services.avatar_manager import AvatarManager
-from src.core.services.llm_client_manager import LLMClientManager
+from src.core.llm_service import LLMService
 from src.utils.logger import get_logger
 
 class AmaidesuCore:
@@ -320,7 +322,7 @@ class AmaidesuCore:
         self.pipeline_manager: Optional[PipelineManager] = None
         self.context_manager: Optional[ContextManager] = None
         self.avatar_manager: Optional[AvatarManager] = None
-        self.llm_client: Optional[LLMClientManager] = None
+        self.llm_service: Optional[LLMService] = None
 
         # 决策层管理（新增）
         self.decision_manager: Optional[DecisionManager] = None
@@ -340,8 +342,8 @@ class AmaidesuCore:
         self.avatar_manager = AvatarManager()
         await self.avatar_manager.setup(self.event_bus, self.config.get("avatar", {}))
 
-        self.llm_client = LLMClientManager()
-        await self.llm_client.setup(self.config.get("llm", {}))
+        self.llm_service = LLMService()
+        await self.llm_service.setup(self.config.get("llm", {}))
 
         # 初始化决策层（新增）
         await self._setup_decision_layer()
@@ -371,9 +373,9 @@ class AmaidesuCore:
         """获取AvatarManager实例"""
         return self.avatar_manager
 
-    def get_llm_client(self) -> LLMClientManager:
-        """获取LLM客户端实例"""
-        return self.llm_client
+    def get_llm_service(self) -> LLMService:
+        """获取LLM服务实例"""
+        return self.llm_service
 
     def get_decision_manager(self) -> DecisionManager:
         """获取DecisionManager实例（新增）"""
@@ -384,8 +386,8 @@ class AmaidesuCore:
         if self.decision_manager:
             await self.decision_manager.cleanup()
 
-        if self.llm_client:
-            await self.llm_client.cleanup()
+        if self.llm_service:
+            await self.llm_service.cleanup()
 
         if self.avatar_manager:
             await self.avatar_manager.cleanup()
@@ -650,8 +652,8 @@ class MaiCoreDecisionProvider(DecisionProvider):
         # 处理HTTP回调逻辑
         return JSONResponse({"status": "ok"})
 
-    async def decide(self, canonical_message: CanonicalMessage) -> MessageBase:
-        """决策"""
+    async def decide(self, message: NormalizedMessage) -> Intent:
+        """决策（NormalizedMessage → Intent）"""
         # 实现决策逻辑
         pass
 
@@ -765,6 +767,7 @@ graph TB
 
 ## 🔗 相关文档
 
-- [6层架构设计](./layer_refactoring.md)
+- [5层架构设计](./layer_refactoring.md)
 - [决策层设计](./decision_layer.md)
 - [多Provider并发设计](./multi_provider.md)
+- [HTTP服务器设计](./http_server.md)

@@ -1,254 +1,332 @@
+"""Amaidesu 应用程序主入口。"""
+
+
 import asyncio
 import signal
 import sys
 import os
-import argparse  # 导入 argparse
+import argparse
+import contextlib
+from typing import Any, Callable, Dict, Optional, Tuple
 
-
-# 尝试导入 tomllib (Python 3.11+), 否则使用 toml
-try:
-    import tomllib
-except ModuleNotFoundError:
-    try:
-        import toml as tomllib  # type: ignore
-    except ModuleNotFoundError:
-        print("错误：需要安装 TOML 解析库。请运行 'pip install toml'", file=sys.stderr)
-        sys.exit(1)
-
-# 从 src 目录导入核心类和插件管理器
 from src.core.amaidesu_core import AmaidesuCore
-from src.core.plugin_manager import PluginManager
-from src.core.pipeline_manager import PipelineManager  # 导入管道管理器
-from src.core.event_bus import EventBus  # 导入事件总线
-from src.core.llm_client_manager import LLMClientManager  # 导入 LLM 客户端管理器
+from src.core.config_service import ConfigService
+from src.core.context_manager import ContextManager
+from src.core.event_bus import EventBus
+from src.core.events import register_core_events
+from src.core.flow_coordinator import FlowCoordinator
+from src.core.llm_service import LLMService
+from src.core.pipeline_manager import PipelineManager
 from src.utils.logger import get_logger
-from src.utils.config import initialize_configurations  # Updated import
-from src.config.config import global_config
-from src.core.avatar.avatar_manager import AvatarControlManager
+from src.layers.input.input_layer import InputLayer
+from src.layers.input.input_provider_manager import InputProviderManager
+from src.layers.decision.decision_manager import DecisionManager
 
 logger = get_logger("Main")
-
-# 获取 main.py 文件所在的目录 (项目根目录)
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-async def main():
-    """应用程序主入口点。"""
+# ---------------------------------------------------------------------------
+# 命令行与日志
+# ---------------------------------------------------------------------------
 
-    # 创建命令行参数解析器
+
+def parse_args() -> argparse.Namespace:
+    """解析命令行参数。"""
     parser = argparse.ArgumentParser(description="Amaidesu 应用程序")
-    # 添加 --debug 参数，用于控制日志级别
     parser.add_argument("--debug", action="store_true", help="启用 DEBUG 级别日志输出")
-    # 添加 --filter 参数，用于过滤特定模块的日志
     parser.add_argument(
         "--filter",
-        nargs="+",  # 允许一个或多个参数
-        metavar="MODULE_NAME",  # 在帮助信息中显示的参数名
+        nargs="+",
+        metavar="MODULE_NAME",
         help="仅显示指定模块的 INFO/DEBUG 级别日志 (WARNING 及以上级别总是显示)",
     )
-    # 解析命令行参数
-    args = parser.parse_args()
+    return parser.parse_args()
 
-    # --- 配置日志 ---
+
+def setup_logging(args: argparse.Namespace) -> None:
+    """根据命令行参数配置日志。"""
     base_level = "DEBUG" if args.debug else "INFO"
-    # log_format = "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{line: <4}</cyan> | <cyan>{extra[module]}</cyan> - <level>{message}</level>"
     log_format = "<green>{time:HH:mm:ss.SSS}</green> | <level>{level: <2}</level> | <cyan>{line: <4}</cyan> | <cyan>{extra[module]}</cyan> | <level>{message}</level>"
 
-    # 清除所有预设的 handler (包括 src/utils/logger.py 中添加的)
     logger.remove()
 
-    module_filter_func = None
+    module_filter_func: Optional[Callable] = None
     if args.filter:
-        filtered_modules = set(args.filter)  # 使用集合提高查找效率
+        filtered_modules = set(args.filter)
 
-        def filter_logic(record):
-            # 总是允许 WARN/ERROR/CRITICAL 级别通过
+        def filter_logic(record: Dict[str, Any]) -> bool:
             if record["level"].no >= logger.level("WARNING").no:
                 return True
-            # 检查模块名是否在过滤列表中
             module_name = record["extra"].get("module")
-            if module_name and module_name in filtered_modules:
-                return True
-            # 其他 DEBUG/INFO 级别的日志，如果模块不在列表里，则过滤掉
-            return False
+            return bool(module_name and module_name in filtered_modules)
 
         module_filter_func = filter_logic
-        # 使用一个临时 logger 配置来打印这条信息，确保它不被自身过滤掉
-        logger.add(sys.stderr, level="INFO", format=log_format, colorize=True, filter=None)  # 临时添加无过滤的 handler
+        logger.add(sys.stderr, level="INFO", format=log_format, colorize=True, filter=None)
         logger.info(f"日志过滤器已激活，将主要显示来自模块 {list(filtered_modules)} 的日志")
-        logger.remove()  # 移除临时 handler
+        logger.remove()
 
-    # 添加最终的 handler，应用过滤器（如果定义了）
-    logger.add(
-        sys.stderr,
-        level=base_level,
-        colorize=True,
-        format=log_format,
-        filter=module_filter_func,  # 如果 args.filter 为 None，filter 参数为 None，表示不过滤
-    )
+    logger.add(sys.stderr, level=base_level, colorize=True, format=log_format, filter=module_filter_func)
 
-    # 打印日志级别和过滤器状态相关的提示信息
     if args.debug:
-        if args.filter:
-            logger.info(f"已启用 DEBUG 日志级别，并激活模块过滤器: {list(filtered_modules)}")
-        else:
-            logger.info("已启用 DEBUG 日志级别。")
+        logger.info(f"已启用 DEBUG 日志级别{f'，并激活模块过滤器: {list(args.filter)}' if args.filter else '。'}")
     elif args.filter:
-        # 如果只设置了 filter 但没设置 debug
-        logger.info(f"日志过滤器已激活: {list(filtered_modules)} (INFO 级别)")
+        logger.info(f"日志过滤器已激活: {list(args.filter)} (INFO 级别)")
 
     logger.info("启动 Amaidesu 应用程序...")
 
-    # --- 初始化所有配置 ---
+
+# ---------------------------------------------------------------------------
+# 配置加载
+# ---------------------------------------------------------------------------
+
+
+def load_config() -> Tuple[ConfigService, Dict[str, Any], bool, bool, bool]:
+    """加载配置，失败时直接退出进程。返回 (config_service, config, main_copied, plugin_copied, pipeline_copied)。"""
+    config_service = ConfigService(base_dir=_BASE_DIR)
     try:
-        config, main_cfg_copied, plugin_cfg_copied, pipeline_cfg_copied = initialize_configurations(
-            base_dir=_BASE_DIR,
-            main_cfg_name="config.toml",  # Default, but explicit
-            main_template_name="config-template.toml",  # Default, but explicit
-            plugin_dir_name="src/plugins",  # Default, but explicit
-            pipeline_dir_name="src/pipelines",  # Default, but explicit
-        )
-    except (IOError, FileNotFoundError) as e:  # Catch errors from config_manager
+        config, main_copied, plugin_copied, pipeline_copied = config_service.initialize()
+        return config_service, config, main_copied, plugin_copied, pipeline_copied
+    except (IOError, FileNotFoundError) as e:
         logger.critical(f"配置文件初始化失败: {e}")
         logger.critical("请检查错误信息并确保配置文件或模板存在且可访问。")
         sys.exit(1)
-    except Exception as e:  # Catch any other unexpected error during config init
+    except Exception as e:
         logger.critical(f"加载配置时发生未知严重错误: {e}", exc_info=True)
         sys.exit(1)
 
-    # --- 处理配置文件复制后的用户提示和退出 ---
+
+def validate_config(config: Dict[str, Any]) -> None:
+    """
+    验证配置完整性，缺失必要配置时给出明确错误提示
+
+    Args:
+        config: 配置字典
+
+    Raises:
+        SystemExit: 如果配置验证失败
+    """
+    errors = []
+
+    # 检查核心配置段
+    if not config.get("general"):
+        errors.append("缺少 [general] 配置段")
+
+    # 检查输入层配置
+    if not config.get("input"):
+        logger.warning("未检测到 [input] 配置，输入层将被禁用")
+
+    # 检查决策层配置
+    if not config.get("decision"):
+        logger.warning("未检测到 [decision] 配置，决策层将被禁用")
+
+    # 检查渲染层配置
+    if not config.get("rendering"):
+        logger.warning("未检测到 [rendering] 配置，渲染层将被禁用")
+
+    # 如果有严重错误，退出程序
+    if errors:
+        logger.critical("配置验证失败，发现以下问题：")
+        for error in errors:
+            logger.critical(f"  - {error}")
+        logger.critical("请检查 config.toml 文件并添加缺失的配置段。")
+        sys.exit(1)
+
+    logger.info("配置验证通过")
+
+
+def exit_if_config_copied(main_cfg_copied: bool, plugin_cfg_copied: bool, pipeline_cfg_copied: bool) -> None:
+    """若配置文件为新创建，提示用户并退出。"""
+    box = "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+
     if main_cfg_copied:
-        logger.warning("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        logger.warning(box)
         logger.warning("!! 主配置文件 config.toml 已根据模板创建。                 !!")
         logger.warning("!! 请检查根目录下的 config.toml 文件，并根据需要进行修改。   !!")
         logger.warning("!! 修改完成后，请重新运行程序。                           !!")
-        logger.warning("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-        sys.exit(0)  # 正常退出，让用户去修改配置
+        logger.warning(box)
+        sys.exit(0)
 
     if plugin_cfg_copied or pipeline_cfg_copied:
-        logger.warning("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        logger.warning(box)
         if plugin_cfg_copied:
             logger.warning("!! 已根据模板创建了部分插件的 config.toml 文件。          !!")
-            logger.warning("!! 请检查 src/plugins/ 下各插件目录中的 config.toml 文件， !!")
+            logger.warning("!! 请检查 src/layers/ 下各插件目录中的 config.toml 文件， !!")
         if pipeline_cfg_copied:
             logger.warning("!! 已根据模板创建了部分管道的 config.toml 文件。          !!")
             logger.warning("!! 请检查 src/pipelines/ 下各管道目录中的 config.toml 文件，!!")
         logger.warning("!! 特别是 API 密钥、房间号、设备名称等需要您修改的配置。   !!")
         logger.warning("!! 修改完成后，请重新运行程序。                           !!")
-        logger.warning("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-        sys.exit(0)  # 正常退出，让用户去修改配置
+        logger.warning(box)
+        sys.exit(0)
 
-    # 如果没有配置文件被复制，config_manager 已经记录了相关信息，可以简单记录继续
-    if not main_cfg_copied and not plugin_cfg_copied and not pipeline_cfg_copied:
-        logger.info("所有必要的配置文件已存在或已处理。继续正常启动...")
+    logger.info("所有必要的配置文件已存在或已处理。继续正常启动...")
 
-    # --- 提取配置部分 ---
-    # 从配置中提取参数，提供默认值或进行错误处理
-    general_config = config.get("general", {})
-    maicore_config = config.get("maicore", {})
-    http_config = config.get("http_server", {})
-    pipeline_config = config.get("pipelines", {})  # 添加管道配置
 
-    platform_id = general_config.get("platform_id", "amaidesu_default")
+# ---------------------------------------------------------------------------
+# 管道与核心组件
+# ---------------------------------------------------------------------------
 
-    maicore_host = maicore_config.get("host", "127.0.0.1")
-    maicore_port = maicore_config.get("port", 8000)
-    # maicore_token = maicore_config.get("token") # 如果需要 token
 
-    http_enabled = http_config.get("enable", False)
-    http_host = http_config.get("host", "127.0.0.1") if http_enabled else None
-    http_port = http_config.get("port", 8080) if http_enabled else None
-    http_callback_path = http_config.get("callback_path", "/maicore_callback")
-
-    # --- 加载管道 ---
-    pipeline_manager = None
-    if pipeline_config:
-        pipeline_load_dir = os.path.join(_BASE_DIR, "src", "pipelines")  # 确保变量名不冲突且清晰
-        logger.info(f"准备加载管道 (从目录: {pipeline_load_dir})...")
-
-        try:
-            # 创建管道管理器并加载管道
-            pipeline_manager = PipelineManager()
-            await pipeline_manager.load_pipelines(pipeline_load_dir, pipeline_config)
-
-            # 计算加载的管道总数并记录日志
-            total_pipelines = len(pipeline_manager._inbound_pipelines) + len(pipeline_manager._outbound_pipelines)
-            if total_pipelines > 0:
-                logger.info(
-                    f"管道加载完成，共 {total_pipelines} 个管道 "
-                    f"(入站: {len(pipeline_manager._inbound_pipelines)}, 出站: {len(pipeline_manager._outbound_pipelines)})。"
-                )
-            else:
-                logger.warning("未找到任何有效的管道，管道功能将被禁用。")
-                pipeline_manager = None
-        except Exception as e:
-            logger.error(f"加载管道时出错: {e}", exc_info=True)
-            logger.warning("由于加载失败，管道处理功能将被禁用")
-            pipeline_manager = None
-    else:
+async def load_pipeline_manager(config: Dict[str, Any]) -> Optional[PipelineManager]:
+    """加载管道管理器，包括 MessagePipeline（旧架构）和 TextPipeline（新架构）。"""
+    pipeline_config = config.get("pipelines", {})
+    if not pipeline_config:
         logger.info("配置中未启用管道功能")
+        return None
 
-    # 从配置中读取上下文管理器配置
+    pipeline_load_dir = os.path.join(_BASE_DIR, "src", "pipelines")
+    logger.info(f"准备加载管道 (从目录: {pipeline_load_dir})...")
+
+    try:
+        manager = PipelineManager()
+
+        # 加载 MessagePipeline（inbound/outbound，旧架构）
+        await manager.load_pipelines(pipeline_load_dir, pipeline_config)
+        inbound = len(manager._inbound_pipelines)
+        outbound = len(manager._outbound_pipelines)
+
+        # 加载 TextPipeline（Layer 1-2 输入层文本预处理，新架构）
+        await manager.load_text_pipelines(pipeline_load_dir, pipeline_config)
+        text_pipeline_count = len(manager._text_pipelines)
+
+        total = inbound + outbound + text_pipeline_count
+
+        if total > 0:
+            logger.info(
+                f"管道加载完成，共 {total} 个管道 "
+                f"(入站: {inbound}, 出站: {outbound}, TextPipeline: {text_pipeline_count})。"
+            )
+        else:
+            logger.warning("未找到任何有效的管道，管道功能将被禁用。")
+            return None
+        return manager
+    except Exception as e:
+        logger.error(f"加载管道时出错: {e}", exc_info=True)
+        logger.warning("由于加载失败，管道处理功能将被禁用")
+        return None
+
+
+async def create_app_components(
+    config: Dict[str, Any],
+    pipeline_manager: Optional[PipelineManager],
+    config_service: ConfigService,
+) -> Tuple[
+    AmaidesuCore,
+    Optional[FlowCoordinator],
+    InputLayer,
+    LLMService,
+    Optional[DecisionManager],
+    Optional[InputProviderManager],
+]:
+    """创建并连接核心组件（事件总线、输入层、决策层、协调器、核心、插件）。"""
+    general_config = config.get("general", {})
+    rendering_config = config.get("rendering", {})
+    decision_config = config.get("decision", {})
+    input_config = config.get("input", {})
+    platform_id = general_config.get("platform_id", "amaidesu")
+
+    if rendering_config:
+        logger.info("检测到渲染配置，将启用数据流协调器")
+    else:
+        logger.info("未检测到渲染配置，数据流协调器功能将被禁用")
+
+    # 上下文管理器
     context_manager_config = config.get("context_manager", {})
-    logger.info("已读取上下文管理器配置")
-
-    # 创建上下文管理器实例
-    from src.core.context_manager import ContextManager
-
     context_manager = ContextManager(context_manager_config)
     logger.info("已创建上下文管理器实例")
 
-    # --- 初始化 LLM 客户端管理器 ---
-    logger.info("初始化 LLM 客户端管理器...")
-    llm_client_manager = LLMClientManager()
-    logger.info("已创建 LLM 客户端管理器实例")
+    # LLM 服务
+    logger.info("初始化 LLM 服务...")
+    llm_service = LLMService()
+    await llm_service.setup(config)
+    logger.info("已创建 LLM 服务实例")
 
-    # --- 初始化虚拟形象控制管理器 ---
-    avatar_config = config.get("avatar", {})
-    if avatar_config.get("enabled", True):
+    # 事件总线
+    logger.info("初始化事件总线、数据流协调器和 AmaidesuCore...")
+    event_bus = EventBus()
+
+    register_core_events()
+    logger.info("核心事件已注册到 EventRegistry")
+
+    # 输入Provider管理器 (Layer 1)
+    input_provider_manager: Optional[InputProviderManager] = None
+    if input_config:
+        logger.info("初始化输入Provider管理器（Layer 1 数据流）...")
         try:
-            avatar = AvatarControlManager(None, avatar_config)
-            logger.info("已创建虚拟形象控制管理器实例")
-        except ImportError as e:
-            logger.warning(f"无法导入虚拟形象控制模块: {e}")
-            avatar = None
+            input_provider_manager = InputProviderManager(event_bus)
+            providers = await input_provider_manager.load_from_config(input_config)
+            await input_provider_manager.start_all_providers(providers)
+            logger.info(f"InputProviderManager 已设置（已启动 {len(input_provider_manager._providers)} 个Provider）")
+        except Exception as e:
+            logger.error(f"设置输入Provider管理器失败: {e}", exc_info=True)
+            logger.warning("输入Provider功能不可用，继续启动其他服务")
+            input_provider_manager = None
     else:
-        logger.info("虚拟形象控制功能已禁用")
-        avatar = None
+        logger.info("未检测到输入配置，输入Provider功能将被禁用")
 
-    # --- 初始化事件总线和核心 ---
-    logger.info("初始化事件总线和AmaidesuCore...")
-    event_bus = EventBus()  # 创建事件总线
+    # 输入层 (Layer 1-2)
+    logger.info("初始化输入层组件（Layer 1-2 数据流）...")
+    input_layer = InputLayer(event_bus, pipeline_manager=pipeline_manager)
+    await input_layer.setup()
+    logger.info("InputLayer 已设置（Layer 1-2）")
+
+    # 决策层 (Layer 3)
+    decision_manager: Optional[DecisionManager] = None
+    if decision_config:
+        logger.info("初始化决策层组件（Layer 3 数据流）...")
+        try:
+            decision_manager = DecisionManager(event_bus, llm_service)
+
+            # 设置决策 Provider（通过 ProviderRegistry 自动创建）
+            provider_name = decision_config.get("provider", "maicore")
+            provider_config = decision_config.get(provider_name, {})
+            await decision_manager.setup(provider_name, provider_config)
+            logger.info(f"DecisionManager 已设置（Provider: {provider_name}）")
+        except Exception as e:
+            logger.error(f"设置决策层组件失败: {e}", exc_info=True)
+            logger.warning("决策层功能不可用，继续启动其他服务")
+            decision_manager = None
+    else:
+        logger.info("未检测到决策配置，决策层功能将被禁用")
+
+    # 数据流协调器 (Layer 4-5)
+    logger.info("初始化数据流协调器...")
+    flow_coordinator: Optional[FlowCoordinator] = FlowCoordinator(event_bus) if rendering_config else None
+    if flow_coordinator:
+        try:
+            await flow_coordinator.setup(rendering_config)
+            logger.info("数据流协调器已设置（Layer 4-5）")
+        except Exception as e:
+            logger.error(f"设置数据流协调器失败: {e}", exc_info=True)
+            logger.warning("数据流协调器功能不可用，继续启动其他服务")
+            flow_coordinator = None
+
+    # 核心
     core = AmaidesuCore(
         platform=platform_id,
-        maicore_host=maicore_host,
-        maicore_port=maicore_port,
-        http_host=http_host,  # 如果 http_enabled=False, 这里会是 None
-        http_port=http_port,
-        http_callback_path=http_callback_path,
-        pipeline_manager=pipeline_manager,  # 传入加载好的管道管理器或None
-        context_manager=context_manager,  # 传入创建好的上下文管理器
-        event_bus=event_bus,  # 传入事件总线
-        avatar=avatar,  # 传入创建好的虚拟形象控制管理器
-        llm_client_manager=llm_client_manager,  # 传入创建好的 LLM 客户端管理器
-        # maicore_token=maicore_token # 如果 core 需要 token
+        pipeline_manager=pipeline_manager,
+        context_manager=context_manager,
+        event_bus=event_bus,
+        llm_service=llm_service,
+        flow_coordinator=flow_coordinator,
     )
 
-    # --- 插件加载 ---
-    logger.info("加载插件...")
-    plugin_manager = PluginManager(core, config.get("plugins", {}))  # 传入插件全局配置
-    plugin_load_dir = os.path.join(_BASE_DIR, "src", "plugins")  # 确保变量名不冲突且清晰
-    await plugin_manager.load_plugins(plugin_load_dir)
-    logger.info("插件加载完成。")
+    await core.connect()
 
-    # --- 连接核心服务 ---
-    await core.connect()  # 连接 WebSocket 并启动 HTTP 服务器
+    return core, flow_coordinator, input_layer, llm_service, decision_manager, input_provider_manager
 
-    # --- 保持运行并处理退出信号 ---
-    stop_event = asyncio.Event()
+
+# ---------------------------------------------------------------------------
+# 信号与关闭
+# ---------------------------------------------------------------------------
+
+
+def setup_signal_handlers(stop_event: asyncio.Event) -> Tuple[Optional[Any], Optional[Any]]:
+    """注册退出信号处理，返回原始处理器以便恢复。"""
     shutdown_initiated = False
 
-    def signal_handler(signum=None, frame=None):
+    def handler(signum=None, frame=None):
         nonlocal shutdown_initiated
         if shutdown_initiated:
             logger.warning("已经在关闭中，忽略重复信号")
@@ -257,38 +335,22 @@ async def main():
         logger.info("收到退出信号，开始关闭...")
         stop_event.set()
 
-    # 优先使用系统信号处理
+    original_sigint = signal.signal(signal.SIGINT, handler)
     try:
-        loop = asyncio.get_running_loop()
-        # 在 Windows 上，SIGINT (Ctrl+C) 通常可用
-        # 在 Unix/Linux 上，可以添加 SIGTERM
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            try:
-                loop.add_signal_handler(sig, signal_handler)
-            except (NotImplementedError, ValueError):
-                # Windows 可能不支持 add_signal_handler
-                pass
-    except Exception:
-        pass
-
-    # 为Windows等不支持loop.add_signal_handler的系统设置信号处理
-    original_sigint = signal.signal(signal.SIGINT, signal_handler)
-    try:
-        original_sigterm = signal.signal(signal.SIGTERM, signal_handler)
+        original_sigterm = signal.signal(signal.SIGTERM, handler)
     except (ValueError, OSError):
-        # 某些系统可能不支持SIGTERM
         original_sigterm = None
 
-    logger.info("应用程序正在运行。按 Ctrl+C 退出。")
+    with contextlib.suppress(Exception):
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            with contextlib.suppress(NotImplementedError, ValueError):
+                loop.add_signal_handler(sig, handler)
+    return original_sigint, original_sigterm
 
-    try:
-        await stop_event.wait()
-        logger.info("收到关闭信号，开始执行清理...")
-    except KeyboardInterrupt:
-        logger.info("检测到 KeyboardInterrupt，开始清理...")
-        shutdown_initiated = True
 
-    # 立即移除信号处理器，防止重复触发
+def restore_signal_handlers(original_sigint: Optional[Any], original_sigterm: Optional[Any]) -> None:
+    """恢复原始信号处理器。"""
     try:
         signal.signal(signal.SIGINT, original_sigint)
         if original_sigterm is not None:
@@ -297,19 +359,55 @@ async def main():
     except Exception as e:
         logger.debug(f"恢复信号处理器时出错: {e}")
 
-    # --- 执行清理 ---
-    logger.info("正在卸载插件...")
+
+async def run_shutdown(
+    flow_coordinator: Optional[FlowCoordinator],
+    input_layer: InputLayer,
+    llm_service: LLMService,
+    core: AmaidesuCore,
+    decision_manager: Optional[DecisionManager],
+    input_provider_manager: Optional[InputProviderManager],
+) -> None:
+    """按顺序执行关闭与清理。"""
+    if flow_coordinator:
+        logger.info("正在清理数据流协调器...")
+        try:
+            await flow_coordinator.cleanup()
+            logger.info("数据流协调器清理完成")
+        except Exception as e:
+            logger.error(f"清理数据流协调器时出错: {e}")
+
+    # 清理决策层
+    if decision_manager:
+        logger.info("正在清理决策管理器...")
+        try:
+            await decision_manager.cleanup()
+            logger.info("决策管理器清理完成")
+        except Exception as e:
+            logger.error(f"清理决策管理器时出错: {e}")
+
+    # 停止输入Provider
+    if input_provider_manager:
+        logger.info("正在停止输入Provider...")
+        try:
+            await input_provider_manager.stop_all_providers()
+            logger.info("输入Provider已停止")
+        except Exception as e:
+            logger.error(f"停止输入Provider时出错: {e}")
+
+    logger.info("正在清理输入层组件...")
     try:
-        await asyncio.wait_for(plugin_manager.unload_plugins(), timeout=2.0)  # 减少到5秒
-        logger.info("插件卸载完成")
-    except asyncio.TimeoutError:
-        logger.warning("插件卸载超时，强制继续")
+        await input_layer.cleanup()
+        logger.info("输入层组件清理完成")
     except Exception as e:
-        logger.error(f"插件卸载时出错: {e}")
+        logger.error(f"清理输入层组件时出错: {e}")
 
     logger.info("正在关闭核心服务...")
     try:
-        await asyncio.wait_for(core.disconnect(), timeout=2.0)  # 减少到3秒
+        if llm_service:
+            await llm_service.cleanup()
+            logger.info("LLM 服务已清理")
+        await asyncio.wait_for(core.disconnect(), timeout=2.0)
         logger.info("核心服务关闭完成")
     except asyncio.TimeoutError:
         logger.warning("核心服务关闭超时，强制退出")
@@ -319,9 +417,43 @@ async def main():
     logger.info("Amaidesu 应用程序已关闭。")
 
 
+# ---------------------------------------------------------------------------
+# 主入口
+# ---------------------------------------------------------------------------
+
+
+async def main() -> None:
+    """应用程序主入口点。"""
+    args = parse_args()
+    setup_logging(args)
+
+    config_service, config, main_cfg_copied, plugin_cfg_copied, pipeline_cfg_copied = load_config()
+    validate_config(config)
+    exit_if_config_copied(main_cfg_copied, plugin_cfg_copied, pipeline_cfg_copied)
+
+    pipeline_manager = await load_pipeline_manager(config)
+
+    core, flow_coordinator, input_layer, llm_service, decision_manager, input_provider_manager = await create_app_components(
+        config, pipeline_manager, config_service
+    )
+
+    stop_event = asyncio.Event()
+    orig_sigint, orig_sigterm = setup_signal_handlers(stop_event)
+
+    logger.info("应用程序正在运行。按 Ctrl+C 退出。")
+
+    try:
+        await stop_event.wait()
+        logger.info("收到关闭信号，开始执行清理...")
+    except KeyboardInterrupt:
+        logger.info("检测到 KeyboardInterrupt，开始清理...")
+
+    restore_signal_handlers(orig_sigint, orig_sigterm)
+    await run_shutdown(flow_coordinator, input_layer, llm_service, core, decision_manager, input_provider_manager)
+
+
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        # 在 asyncio.run 之外捕获 KeyboardInterrupt (尽管上面的信号处理应该先触发)
         logger.info("检测到 KeyboardInterrupt，强制退出。")

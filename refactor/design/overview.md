@@ -2,13 +2,16 @@
 
 ## 📋 文档结构
 
-本文档是Amaidesu架构重构的设计总览。详细设计请查看：
+本文档是Amaidesu架构重构的设计总览，**以 5 层架构为基准**，下述子文档的层号与本文一致。详细设计请查看：
 
- - [6层架构设计](./layer_refactoring.md) - 核心数据流的6层架构
- - [决策层设计](./decision_layer.md) - 可替换的决策Provider系统
+ - [5层架构设计](./layer_refactoring.md) - 核心数据流的5层架构
+ - [决策层设计](./decision_layer.md) - 可替换的决策Provider系统（含LLM意图解析）
  - [多Provider并发设计](./multi_provider.md) - 输入/输出层并发处理
- - [插件系统设计](./plugin_system.md) - 插件系统和Provider接口
  - [核心重构设计](./core_refactoring.md) - AmaidesuCore的彻底解耦
+ - [事件数据契约设计](./event_data_contract.md) - 类型安全的事件数据契约系统
+ - [LLM服务设计](./llm_service.md) - 统一的LLM调用服务
+ - [Pipeline重新设计](./pipeline_refactoring.md) - 3类Pipeline系统（Pre/Post/Render）
+ - [HTTP服务器设计](./http_server.md) - HTTP服务器管理
 
 ---
 
@@ -19,14 +22,16 @@
 1. **过度插件化**：24个插件中，核心功能也作为插件
 2. **依赖地狱**：18个插件使用服务注册，形成复杂依赖链
 3. **模块定位模糊**：核心功能、可选插件、测试工具都作为插件
+4. **职责边界不清**：Plugin在创建和管理Provider，导致管理分散
 
 ### 重构目标
 
-1. **消灭插件化**：核心功能全部模块化
+1. **消灭插件化**：核心功能全部模块化，移除插件系统
 2. **统一接口**：同一功能收敛到统一接口，用Provider模式动态选择实现
 3. **消除依赖**：推广EventBus通信，替代服务注册模式
 4. **按数据流组织**：按AI VTuber数据处理流程组织层级
 5. **职责分离**：驱动与渲染分离，决策层可替换
+6. **Provider直接管理**：Provider由Manager统一管理，不再通过Plugin
 
 ---
 
@@ -36,62 +41,235 @@
 
 **按AI VTuber数据处理的完整流程组织层级，每层有明确的输入和输出格式。**
 
- - **核心数据流**（Layer 1-6）：按AI VTuber数据处理流程组织
- - **决策层**（Decision Layer）：可替换的决策Provider系统
- - **插件系统**（Plugin System）：社区开发者添加新能力
+ - **核心数据流**（Layer 1-5）：按AI VTuber数据处理流程组织
+ - **Provider直接管理**：Provider由Manager直接管理，配置驱动启用
  - **EventBus**：唯一的跨层通信机制，实现松耦合
+ - **事件数据契约**（Event Contract）：类型安全的事件数据格式，支持社区扩展
+ - **LLM服务**（LLM Service）：统一的LLM调用基础设施，与EventBus同级
 
-### 架构分层
+### 插件系统移除说明
+
+**历史背景**：
+早期架构采用插件系统 + Provider系统双轨并行，但实际运行中发现：
+- ❌ Plugin在创建和管理Provider，违背了"不创建Provider"的设计原则
+- ❌ Provider生命周期由Plugin管理，而不是Manager，导致管理分散
+- ❌ 增加了一层不必要的抽象，反而使架构更复杂
+
+**当前状态**：
+- ✅ 插件系统已完全移除
+- ✅ Provider由Manager统一管理（InputProviderManager、DecisionManager、OutputProviderManager）
+- ✅ 配置驱动启用/禁用，无需修改代码
+- ✅ 职责边界明确：Provider = 原子能力
+- ✅ 代码组织更清晰：按数据流层级组织
+
+### 5层架构（2025年最新版本）
 
 ```
 外部输入（弹幕、游戏、语音）
   ↓
-【Layer 1: 输入感知】多个InputProvider并发采集
+【Layer 1-2: Input】RawData → NormalizedMessage
+  ├─ InputProvider: 并发采集 RawData
+  ├─ TextPipeline: 限流、过滤、相似文本检测（可选）
+  └─ InputLayer: 标准化为 NormalizedMessage
+  ↓ normalization.message_ready
+【Layer 3: Decision】NormalizedMessage → Intent
+  ├─ MaiCoreDecisionProvider (默认，WebSocket+LLM意图解析)
+  ├─ LocalLLMDecisionProvider (可选，直接LLM)
+  └─ RuleEngineDecisionProvider (可选，规则引擎)
+  ↓ decision.intent_generated
+【Layer 4-5: Parameters+Rendering】Intent → RenderParameters → 输出
+  ├─ ExpressionGenerator: Intent → RenderParameters
+  └─ OutputProvider: 并发渲染（TTS、字幕、VTS等）
   ↓
-【Layer 2: 输入标准化】统一转换为Text
-  ↓
-【Layer 3: 中间表示】构建CanonicalMessage
-  ↓
-【决策层：DecisionProvider】⭐ 可替换、可扩展
-  ├─ MaiCoreDecisionProvider (默认）
-  ├─ LocalLLMDecisionProvider (可选）
-  └─ RuleEngineDecisionProvider (可选)
-  ↓
-DecisionProvider返回MessageBase
-  ↓
-【Layer 4: 表现理解】解析MessageBase → Intent
-  ↓
-【Layer 5: 表现生成】生成RenderParameters
-  ↓
-【Layer 6: 渲染呈现】多个OutputProvider并发渲染
-  ↓
-【插件系统：Plugin】社区开发的插件能力
+【配置驱动】Provider管理 + Pipeline系统
 ```
+
+**架构变化说明：**
+
+1. **合并 Layer 1-2**: Input 和 Normalization 合并为 InputLayer
+   - 减少数据转换开销
+   - NormalizedMessage 直接包含 StructuredContent
+
+2. **移除 UnderstandingLayer**: Intent 解析由 DecisionProvider 负责
+   - MaiCoreDecisionProvider 使用 IntentParser (LLM)
+   - LocalLLMDecisionProvider 直接生成响应
+   - RuleEngineDecisionProvider 使用规则匹配
+
+3. **简化 Pipeline**: TextPipeline 集成到 InputLayer
+   - 在 RawData → NormalizedMessage 转换中处理文本
+   - 不再单独的 Pre-Pipeline 层
+
+4. **移除插件系统**: Provider由Manager直接管理
+   - InputProviderManager 管理输入Provider
+   - OutputProviderManager 管理输出Provider
+   - DecisionManager 管理决策Provider
+   - 配置驱动启用/禁用
 
 ---
 
-## 🔗 相关文档
+## 📊 Provider管理架构
 
-### 设计文档
- 
- - [6层架构设计](./layer_refactoring.md) - 详细描述6层核心数据流（含元数据管理）
- - [决策层设计](./decision_layer.md) - 可替换的决策Provider系统
- - [多Provider并发设计](./multi_provider.md) - 输入/输出层并发处理（含错误处理和生命周期）
- - [插件系统设计](./plugin_system.md) - 插件系统和Provider接口（含迁移指南）
- - [核心重构设计](./core_refactoring.md) - AmaidesuCore的彻底解耦（含HTTP服务器管理）
- - [DataCache设计](./data_cache.md) - 原始数据缓存服务
- - [Pipeline重新设计](./pipeline_refactoring.md) - TextPipeline处理系统
- - [HTTP服务器设计](./http_server.md) - 基于FastAPI的HTTP服务器
+### Provider目录组织
 
-### 实施计划
+```
+src/
+├── layers/
+│   ├── input/                   # Layer 1-2: 输入层
+│   │   ├── input_layer.py       # InputLayer（统一管理）
+│   │   ├── input_provider_manager.py  # Provider管理器
+│   │   └── providers/           # ✅ 所有输入Provider（按功能分组）
+│   │       ├── console_input/   # 控制台输入
+│   │       ├── bili_danmaku/    # B站弹幕（第三方API）
+│   │       ├── bili_danmaku_official/  # B站弹幕（官方WebSocket）
+│   │       ├── bili_danmaku_official_maicraft/  # B站弹幕（Maicraft优化版）
+│   │       ├── mainosaba/       # Mainosaba输入
+│   │       ├── mock_danmaku/    # 模拟弹幕（测试用）
+│   │       ├── read_pingmu/     # PingMu读取
+│   │       └── remote_stream/   # 远程流输入
+│   │
+│   ├── normalization/           # Normalization模块
+│   │   └── normalized_message.py  # NormalizedMessage定义
+│   │
+│   ├── decision/                # Layer 3: 决策层
+│   │   ├── decision_manager.py  # DecisionManager（统一管理）
+│   │   ├── intent_parser.py     # LLM意图解析器
+│   │   ├── intent.py            # Intent定义
+│   │   └── providers/           # ✅ 所有决策Provider（按功能分组）
+│   │       ├── maicore/         # MaiCore决策（WebSocket + LLM意图解析）
+│   │       ├── local_llm/       # 本地LLM决策
+│   │       ├── rule_engine/     # 规则引擎决策
+│   │       └── emotion_judge/   # 情绪判断决策
+│   │
+│   ├── parameters/              # Layer 4: 参数生成层
+│   │   └── (待实现)
+│   │
+│   └── rendering/               # Layer 5: 渲染层
+│       ├── rendering_manager.py # OutputProviderManager（统一管理）
+│       └── providers/           # ✅ 所有输出Provider（按功能分组）
+│           ├── gptsovits/       # GPT-SoVITS TTS
+│           ├── omni_tts/        # Omni TTS
+│           ├── tts/             # 通用TTS
+│           ├── subtitle/        # 字幕渲染
+│           ├── vts/             # VTS虚拟形象
+│           ├── avatar/          # Avatar控制
+│           ├── sticker/         # 贴图/表情
+│           ├── obs_control/     # OBS控制
+│           └── warudo/          # Warudo控制
+│
+├── core/
+│   ├── base/                    # ✅ 基类和数据类型定义
+│   │   ├── base.py              # 基类
+│   │   ├── input_provider.py    # InputProvider基类
+│   │   ├── decision_provider.py # DecisionProvider基类
+│   │   ├── output_provider.py   # OutputProvider基类
+│   │   ├── raw_data.py          # RawData定义
+│   │   └── normalized_message.py # NormalizedMessage定义
+│   │
+│   ├── providers/               # 旧的Provider接口（已废弃）
+│   │
+│   ├── amaidesu_core.py         # AmaidesuCore（中央枢纽）
+│   ├── event_bus.py             # EventBus（事件总线）
+│   ├── flow_coordinator.py      # FlowCoordinator（流程协调器）
+│   ├── llm_service.py           # LLM服务
+│   ├── context_manager.py       # 上下文管理器
+│   ├── output_provider_manager.py  # 输出Provider管理器
+│   ├── pipeline_manager.py      # Pipeline管理器
+│   ├── http_server.py           # HTTP服务器
+│   └── events/                  # 事件定义
+│       └── (事件契约定义)
+│
+└── plugins/                     # 插件目录（已废弃，保留用于向后兼容）
+```
 
-- [实施计划总览](../plan/overview.md) - 重构实施计划总览
-- [Phase 1: 基础设施](../plan/phase1_infrastructure.md) - Provider接口和EventBus
-- [Phase 2: 输入层](../plan/phase2_input.md) - Layer 1-2实现
-- [Phase 3: 决策层](../plan/phase3_decision.md) - 决策层+Layer 3-4实现
-- [Phase 4: 输出层](../plan/phase4_output.md) - Layer 5-6实现
- - [Phase 5: 插件系统](../plan/phase5_plugins.md) - 插件系统实现
-- [Phase 6: 清理和测试](../plan/phase6_cleanup.md) - 清理、测试和迁移
+### 配置驱动启用
+
+```toml
+# 输入Provider配置
+[input]
+enabled = ["console_input", "bili_danmaku_official", "mainosaba"]  # 启用的输入Provider
+
+[input.providers.console_input]
+source = "stdin"  # 控制台输入
+
+[input.providers.bili_danmaku_official]
+room_id = "123456"  # B站直播间ID
+
+[input.providers.mainosaba]
+# Mainosaba特定配置
+
+# 决策Provider配置
+[decision]
+default_provider = "maicore"  # 默认决策Provider
+
+[decision.providers.maicore]
+host = "localhost"
+port = 8000
+
+[decision.providers.local_llm]
+model = "gpt-4"
+api_key = "your_key"
+
+# 输出Provider配置
+[output]
+enabled = ["gptsovits", "subtitle", "vts"]  # 启用的输出Provider
+
+[output.providers.gptsovits]
+api_url = "http://localhost:5000"
+
+[output.providers.subtitle]
+font_size = 24
+window_position = "bottom"
+
+[output.providers.vts]
+host = "localhost"
+port = 8001
+```
+
+### 社区扩展
+
+社区开发者如何添加新的Provider？
+
+```python
+# 1. 在对应层创建Provider目录和文件
+# src/layers/input/providers/my_input/my_input_provider.py
+
+from src.core.base.input_provider import InputProvider
+from src.core.base.raw_data import RawData
+from typing import AsyncIterator
+
+class MyInputProvider(InputProvider):
+    """自定义输入Provider"""
+
+    def __init__(self, config: dict):
+        super().__init__(config)
+        self.logger = get_logger("MyInputProvider")
+
+    async def _collect_data(self) -> AsyncIterator[RawData]:
+        """采集数据"""
+        while self.is_running:
+            # 采集数据逻辑
+            data = await self._fetch_data()
+            if data:
+                yield RawData(
+                    content={"data": data},
+                    source="my_provider",
+                    data_type="text",
+                )
+
+# 2. 创建 __init__.py 导出Provider
+# src/layers/input/providers/my_input/__init__.py
+from .my_input_provider import MyInputProvider
+
+__all__ = ["MyInputProvider"]
+
+# 3. 在配置中启用
+# config.toml
+[input]
+enabled = ["console_input", "my_input"]  # 添加到enabled列表
+
+[input.providers.my_input]
+api_url = "https://my-api.example.com"
+```
 
 ---
 
@@ -104,17 +282,21 @@ DecisionProvider返回MessageBase
 - ✅ 代码重复率降低30%以上
 - ✅ 服务注册调用减少80%以上
 - ✅ EventBus事件调用覆盖率90%以上
- - ✅ 插件系统正常加载官方插件和社区插件
+- ✅ 插件系统已移除，Provider由Manager统一管理
 
 ### 架构指标
-- ✅ 清晰的6层核心数据流架构
+- ✅ 清晰的5层核心数据流架构
 - ✅ 决策层可替换（支持多种DecisionProvider）
 - ✅ 多Provider并发支持（输入层和输出层）
 - ✅ 层级间依赖关系清晰（单向依赖）
 - ✅ EventBus为内部主要通信模式
 - ✅ Provider模式替代重复插件
 - ✅ 工厂模式支持动态切换
- - ✅ 插件系统支持社区开发
+- ✅ 配置驱动，无需修改代码即可启用/禁用Provider
+- ✅ 事件数据契约类型安全（Pydantic Model + 开放式注册表）
+- ✅ 结构化消息保留原始数据（不丢失信息）
+- ✅ LLM意图解析（比规则更智能）
+- ✅ 插件系统已完全移除
 
 ---
 
@@ -123,19 +305,74 @@ DecisionProvider返回MessageBase
 ### 我想知道...
 
 **整体架构是什么？**
-→ 阅读[6层架构设计](./layer_refactoring.md)
+→ 阅读[5层架构设计](./layer_refactoring.md)
 
 **决策层如何工作？**
-→ 阅读[决策层设计](./decision_layer.md)
+→ 阅读[决策层设计](./decision_layer.md)（含LLM意图解析）
 
 **多个Provider如何并发？**
 → 阅读[多Provider并发设计](./multi_provider.md)
 
-**如何开发插件？**
-→ 阅读[插件系统设计](./plugin_system.md)
+**如何配置Provider？**
+→ 阅读[多Provider并发设计 - 配置示例](./multi_provider.md#配置示例)
+
+**Pipeline如何工作？**
+→ 阅读[Pipeline重新设计](./pipeline_refactoring.md)
+
+**LLM意图解析如何实现？**
+→ 阅读[决策层设计 - LLM意图解析](./decision_layer.md#llm意图解析)
+
+**如何定义事件数据格式？**
+→ 阅读[事件数据契约设计](./event_data_contract.md)
 
 **AmaidesuCore如何重构？**
 → 阅读[核心重构设计](./core_refactoring.md)
 
-**如何实施重构？**
-→ 阅读[实施计划总览](../plan/overview.md)
+**LLM调用如何统一管理？**
+→ 阅读[LLM服务设计](./llm_service.md)
+
+**HTTP服务器如何管理？**
+→ 阅读[HTTP服务器设计](./http_server.md)
+
+**为什么移除插件系统？**
+→ 查看本文档的[为什么移除插件系统？](#为什么移除插件系统)章节
+
+**如何添加新Provider？**
+→ 查看本文档的[社区扩展](#社区扩展)章节
+
+---
+
+## 🔄 架构演进历史
+
+### 2024年初始设计（已废弃）
+
+- 插件系统 + Provider系统双轨并行
+- Plugin创建和管理Provider
+- 24个插件，18个服务注册
+
+### 2025年重构（当前架构）
+
+- 移除插件系统
+- Provider由Manager统一管理
+- 配置驱动启用/禁用
+- 5层架构，职责清晰
+
+---
+
+## 🔗 相关文档
+
+### 设计文档
+
+ - [5层架构设计](./layer_refactoring.md) - 详细描述5层核心数据流
+ - [决策层设计](./decision_layer.md) - 可替换的决策Provider系统（含LLM意图解析）
+ - [多Provider并发设计](./multi_provider.md) - 输入/输出层并发处理
+ - [核心重构设计](./core_refactoring.md) - AmaidesuCore的彻底解耦
+ - [事件数据契约设计](./event_data_contract.md) - 类型安全的事件数据契约系统
+ - [LLM服务设计](./llm_service.md) - 统一的LLM调用服务
+ - [Pipeline重新设计](./pipeline_refactoring.md) - 3类Pipeline系统
+ - [HTTP服务器设计](./http_server.md) - HTTP服务器管理
+
+### 已移除的文档
+
+ - [插件系统设计](./plugin_system.md) - 已完全移除，插件系统不再存在
+ - [架构设计审查](./architecture_review.md) - 历史文档，仅供参考

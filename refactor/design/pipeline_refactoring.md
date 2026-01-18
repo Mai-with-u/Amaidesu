@@ -1,5 +1,20 @@
 # Pipeline重新设计
 
+> **✅ 实现状态**
+> 本文档描述的架构**已完成实现**：
+> - ✅ 限流管道（throttle/RateLimitTextPipeline）已迁移到 TextPipeline 架构
+> - ✅ 相似文本过滤管道（similar_message_filter/SimilarTextFilterPipeline）已迁移到 TextPipeline 架构
+> - ✅ 消息日志管道（message_logger/MessageLoggerPipeline）保留旧架构（用于消息记录）
+> - ✅ 已移除 command_router 和 command_processor 管道（功能由 Provider 系统替代）
+> - ✅ TextPipeline 已接入 Layer 2→3 数据流
+>
+> **当前管道列表**：
+> - RateLimitTextPipeline - 限流（新架构）
+> - SimilarTextFilterPipeline - 相似文本过滤（新架构）
+> - MessageLoggerPipeline - 消息日志（旧架构，用于记录）
+
+---
+
 ## 🎯 核心目标
 
 重新设计Pipeline系统，从处理MessageBase改为处理Text，位于Layer 2和Layer 3之间，用于Text的预处理和过滤。
@@ -371,7 +386,7 @@ graph TB
 
 | 维度 | Pipeline | Provider |
 |------|----------|----------|
-| **位置** | Layer 2和Layer 3之间 | Layer 1（输入）/ Layer 6（输出） |
+| **位置** | Layer 2和Layer 3之间 | Layer 1（输入）/ Layer 5（输出） |
 | **处理数据** | Text | RawData / RenderParameters |
 | **职责** | 文本预处理和过滤 | 数据采集和渲染 |
 | **并发** | 顺序处理（按优先级） | 并发处理 |
@@ -441,7 +456,6 @@ sensitive_words = ["禁词1", "禁词2", "禁词3"]
 
 ## 🔗 相关文档
 
-- [6层架构设计](./layer_refactoring.md)
+- [5层架构设计](./layer_refactoring.md)
 - [多Provider并发设计](./multi_provider.md)
-- [插件系统设计](./plugin_system.md)
 - [AmaidesuCore重构设计](./core_refactoring.md)

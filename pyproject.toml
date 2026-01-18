@@ -1,10 +1,90 @@
 [project]
-name = "MaiBot-Vtuber"
+name = "amaidesu"
 version = "0.1.0"
-description = "MaiBot-Vtuber"
+description = "MaiBot VTuber - AI VTuber Assistant with MaiCore Integration"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+
+# 核心依赖
+dependencies = [
+    # Web 框架和网络
+    "aiohttp>=3.9.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.20.0",
+    "requests>=2.31.0",
+    "websockets>=10.0",
+    # 日志和配置
+    "loguru>=0.7.0",
+    "toml>=0.10.0",
+    "python-logging-loki>=0.3.0",
+    # 数据验证
+    "pydantic>=2.0",
+    # CLI
+    "typer>=0.9.0",
+    # MaiCore 消息协议
+    "maim-message>=0.1.0",
+    # VTube Studio 控制
+    "pyvts>=0.3.0",
+    # TTS 相关
+    "edge-tts>=6.1.0",
+    "sounddevice>=0.4.0",
+    "soundfile>=0.12.0",
+    "pygame>=2.5.0",
+    # 音频处理
+    "librosa>=0.10.0",
+    "scipy>=1.10.0",
+    # 图像和屏幕捕获
+    "mss>=9.0.0",
+    "numpy>=1.24.0",
+    "Pillow>=10.0.0",
+    # LLM API
+    "dashscope>=1.14.0",
+    "openai>=1.0.0",
+    # OBS 控制
+    "obsws-python>=1.6.0",
+    # GUI
+    "customtkinter>=5.2.0",
+    # 自动化和 OSC
+    "pyautogui>=0.9.0",
+    "python-osc>=1.8.0",
+    "pytest>=9.0.2",
+]
+
+[project.optional-dependencies]
+# 语音识别（需要 PyTorch）
+stt = [
+    "torch>=2.0.0",
+    "torchaudio>=2.0.0",
+]
+
+# 开发依赖
+dev = [
+    "ruff>=0.1.0",
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "setuptools>=68.0.0",
+]
+
+# 所有可选依赖
+all = [
+    "amaidesu[stt]",
+    "amaidesu[dev]",
+]
+
+[project.scripts]
+amaidesu = "main:main"
+
+[tool.uv]
+# 开发模式下默认安装开发依赖
+dev-dependencies = [
+    "ruff>=0.1.0",
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "setuptools>=68.0.0",
+]
 
 [tool.ruff]
-
 include = ["*.py"]
 
 # 行长度设置
@@ -30,7 +110,6 @@ ignore = ["E711", "E501"]
 docstring-code-format = true
 indent-style = "space"
 
-
 # 使用双引号表示字符串
 quote-style = "double"
 
@@ -45,3 +124,16 @@ skip-magic-trailing-comma = false
 
 # 自动检测合适的换行符
 line-ending = "auto"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]

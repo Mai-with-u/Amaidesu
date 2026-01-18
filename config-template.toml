@@ -1,18 +1,38 @@
 # Amaidesu 配置文件
-
+#
+# 📝 配置格式说明（5层架构）
+# ================================
+# 当前使用统一的 [providers.*] 配置格式管理所有Provider：
+#   - [providers.input]    输入Provider（Layer 1: Input）
+#   - [providers.decision] 决策Provider（Layer 3: Decision）
+#   - [providers.output]   输出Provider（Layer 5: Rendering）
+#
+# ⚠️ 以下旧配置节已标记为 DEPRECATED，仅保留向后兼容：
+#   - [understanding]  → 请迁移到 [providers.input]
+#   - [expression]     → 请迁移到 [providers.output.expression_generator]
+#   - [rendering]      → 请迁移到 [providers.output]
+#   - [avatar]         → 请迁移到 [providers.output]
+#   - [platform]       → 请迁移到 [providers.output.outputs.*]
+#
+# 🔄 配置迁移工具
+# 程序启动时会自动检测并提示旧配置的使用，建议尽快迁移到新格式。
+#
 # === 全局 LLM 配置 ===
-# 重要：这是项目通用的 LLM 配置，供所有模块和插件使用
-# Avatar 自动表情、插件等功能都会使用这些配置
+# 重要：这是项目通用的 LLM 配置，供所有模块使用
 [llm]
 # 标准 LLM 配置（用于高质量任务）
+backend = "openai"              # openai | ollama | anthropic
 model = "Pro/deepseek-ai/DeepSeek-V3.2"
 temperature = 0.2
 api_key = "your-api-key"                    # 可选，如果不设置将使用环境变量
 base_url = "https://api.siliconflow.cn/v1/" # 可选，用于自定义API端点
 max_tokens = 1024
+max_retries = 3                 # 可选，默认 3
+retry_delay = 1.0               # 可选，默认 1.0
 
 [llm_fast]
 # 快速 LLM 配置（用于低延迟任务，如 Avatar 表情分析）
+backend = "openai"
 model = "Qwen/Qwen3-8B"
 temperature = 0.2
 api_key = "your-api-key"                    # 可选，如果不设置将使用环境变量
@@ -21,16 +41,24 @@ max_tokens = 1024
 
 [vlm]
 # 视觉语言模型配置（用于图像理解任务）
+backend = "openai"
 model = "zai-org/GLM-4.6V"
 temperature = 0.3
 api_key = "your-api-key"
 base_url = "https://api.siliconflow.cn/v1/"
 max_tokens = 1024
 
+# 可选：本地 Ollama
+[llm_local]
+backend = "ollama"
+model = "llama3"
+api_base = "http://localhost:11434/v1"
+api_key = "sk-dummy"            # Ollama 不需要真实 API key
+
 # === Amaidesu 核心配置 ===
 [general]
 # Amaidesu 在 MaiCore 中注册的平台标识符
-platform_id = "amaidesu_default"
+platform_id = "amaidesu"
 
 [maicore]
 # MaiCore WebSocket 服务器地址
@@ -76,152 +104,34 @@ title_separator = ": "     # 如果添加提供者名称，使用的分隔符
 default_max_length = 1000 # 默认上下文最大长度
 default_priority = 100    # 默认优先级值
 
-# 通用虚拟形象控制系统配置
-[avatar]
-# 全局启用虚拟形象控制系统
-enabled = true
-
-# 默认活跃适配器（如果没有设置，将使用第一个注册的适配器）
-# 可选值: "vts", "vrc", "live2d" 等
-default_adapter = "vts"
-
-# 自动表情配置
-[avatar.auto_expression]
-# 是否启用自动表情功能
-# 启用后，收到消息时会自动分析文本并设置表情
-enabled = false
-# 最小文本长度（少于这个长度的文本不会触发）
-min_text_length = 2
-
-# ========== 新增：智能触发配置 ==========
-
-# 简单回复过滤（优先级最高，快速本地判断）
-# 过滤"好的"、"嗯"等简单确认语
-simple_reply_filter_enabled = true
-simple_reply_patterns = [
-    "^[好的好的]$", "^[好呀]$", "^[好的]$",
-    "^[嗯嗯]$", "^[嗯]$", "^[收到]$",
-    "^[知道了]$", "^[明白]$", "^[OK]$", "^[ok]$",
-    "^(好|行|可以)[呀啊嘛。！!]*$"
-]
-
-# 时间间隔控制（快速本地判断）
-# 避免频繁调整表情
-time_interval_enabled = true
-min_time_interval = 5.0  # 秒
-
-# LLM智能判断（重要性 + 情感分析 + 变化检测）
-# 注意：通过前两层过滤后才执行，使用小模型成本低
-# 一次调用完成3个任务：判断内容重要性、分析情感、检测情感变化
-llm_judge_enabled = true
-
-# 情感历史记录（用于情感变化检测）
-max_emotion_history = 5
-
-# 调试配置
-debug_mode = false
-log_filtered_messages = true
-
-# LLM 配置（用于自动文本分析和表情选择）
-[avatar.llm]
-# 启用 LLM 功能
-enabled = true
-
-# LLM 类型：使用全局配置的哪个 LLM
-# "llm" - 标准LLM（更准确但较慢）
-# "llm_fast" - 快速LLM（推荐，平衡速度和质量）
-# "vlm" - 视觉语言模型
-type = "llm_fast"
-
-# 自定义 LLM 配置（可选，如果不设置则使用全局配置）
-# 如果需要覆盖全局配置，取消下面的注释并填写
-# model = "deepseek-chat"
-# api_key = "your-api-key"
-# base_url = "https://api.siliconflow.cn/v1"
-# temperature = 0.1
-# max_tokens = 100
-
-# 语义动作自定义映射
-[avatar.semantic_actions.happy_expression]
-description = "开心的表情"
-
-# VTS 平台特定覆盖
-[avatar.semantic_actions.happy_expression.platforms.vts]
-MouthSmile = 1.0
-EyeOpenLeft = 0.9
-EyeOpenRight = 0.9
-
-# VRChat 平台特定覆盖（OSC 地址）
-[avatar.semantic_actions.happy_expression.platforms.vrc]
-"/input/face/eyes" = 1.0
-"/input/face/mouth_smile" = 1.0
-
-[avatar.semantic_actions.sad_expression]
-description = "悲伤的表情"
-
-[avatar.semantic_actions.sad_expression.platforms.vts]
-MouthSmile = -0.5
-EyeOpenLeft = 0.5
-EyeOpenRight = 0.5
-MouthOpen = 0.2
-
-[avatar.semantic_actions.surprised_expression]
-description = "惊讶的表情"
-
-[avatar.semantic_actions.surprised_expression.platforms.vts]
-MouthOpen = 0.8
-EyeOpenLeft = 1.0
-EyeOpenRight = 1.0
-
-[avatar.semantic_actions.angry_expression]
-description = "生气的表情"
-
-[avatar.semantic_actions.angry_expression.platforms.vts]
-MouthSmile = -0.8
-EyeOpenLeft = 0.6
-EyeOpenRight = 0.6
-
-[avatar.semantic_actions.close_eyes]
-description = "闭眼"
-
-[avatar.semantic_actions.close_eyes.platforms.vts]
-EyeOpenLeft = 0.0
-EyeOpenRight = 0.0
-
-[avatar.semantic_actions.open_eyes]
-description = "睁眼"
-
-[avatar.semantic_actions.open_eyes.platforms.vts]
-EyeOpenLeft = 1.0
-EyeOpenRight = 1.0
-
-[avatar.semantic_actions.neutral]
-description = "中性表情"
-
-[avatar.semantic_actions.neutral.platforms.vts]
-MouthSmile = 0.0
-MouthOpen = 0.0
-EyeOpenLeft = 1.0
-EyeOpenRight = 1.0
-
-# 管道配置
+# ========== 管道配置 ==========
 [pipelines]
-# 示例：启用并配置 throttle 管道
-# [pipelines.throttle]
-# priority = 100        # 数字越小优先级越高，此行存在即表示启用
-# global_rate_limit = 1 # 可选：覆盖 throttle/config.toml 中的 global_rate_limit
-# user_rate_limit = 5    # 可选：覆盖 throttle/config.toml 中的 user_rate_limit
+# === TextPipeline（新架构，Layer 2→3 文本预处理） ===
+# TextPipeline 在 NormalizedText → CanonicalMessage 之间执行文本预处理
 
-# 示例：启用 message_logger 管道，使用其默认配置
+# 示例：启用限流管道（TextPipeline 版本）
+# [pipelines.rate_limit]
+# priority = 100        # 数字越小优先级越高
+# global_rate_limit = 100  # 可选：全局每分钟最大消息数
+# user_rate_limit = 10     # 可选：每个用户每分钟最大消息数
+# window_size = 60         # 可选：滑动窗口大小（秒）
+
+# 示例：启用相似文本过滤管道（TextPipeline 版本）
+# [pipelines.similar_text_filter]
+# priority = 200
+# similarity_threshold = 0.85  # 可选：相似度阈值（0-1）
+# time_window = 60.0           # 可选：时间窗口（秒）
+# max_cache_size = 1000       # 可选：最大缓存条目数
+
+# === MessagePipeline（旧架构，inbound/outbound 消息处理） ===
+# MessagePipeline 在 MaiCore 消息的入站/出站路径上处理
+
+# 示例：启用 message_logger 管道
 # [pipelines.message_logger]
 # priority = 200
+# log_dir = "data/message_logs"  # 可选：日志目录
 
-# 示例：启用 similar_message_filter 管道，并覆盖其时间窗口
-# [pipelines.similar_message_filter]
-# priority = 300
-# time_window = 10.0 # 覆盖 similar_message_filter/config.toml 中的 time_window
-
-# 示例：启用并配置 command_processor 管道 (入站)
+# 示例：启用 command_processor 管道 (入站)
 [pipelines.command_processor]
 # 这是一个入站管道，用于处理和执行来自 MaiCore 消息中的命令
 # 例如，执行 VTubeStudio 热键，然后从文本中移除命令标记
@@ -230,61 +140,235 @@ priority = 50
 # 可以在此覆盖 command_map
 # command_map = { vts_trigger_hotkey = { service = "vts_control", method = "trigger_hotkey" } }
 
-# 插件全局配置
-[plugins]
-# === 新格式：启用列表 ===
-# 取消注释来启用插件，注释掉来禁用
-enabled = [
-    # 基础功能（建议启用）
-    "console_input",
-    "keyword_action",
-    "llm_text_processor", # LLM文本处理器
+# ========== Provider配置 ==========
 
-    # 游戏互动
-    # "mainosaba",        # 魔裁游戏
-    # "arknights",        # 明日方舟
-    # "minecraft",        # 我的世界
+# Provider配置统一管理
+# 此配置用于统一管理所有Provider（Input、Output、Decision）
 
-    # 输入功能（语音和文本输入）
-    # "stt",              # 语音识别
-    # "funasr_stt",       # FunASR语音识别
-    # "bili_danmaku",     # B站弹幕输入
-    # "bili_danmaku_official",       # B站官方弹幕（不要和bili_danmaku同时启用）
-    # "bili_danmaku_official_maicraft",  # B站弹幕-MaiCraft版（不要和bili_danmaku_selenium同时启用）
-    # "bili_danmaku_selenium",        # B站弹幕-Selenium版
-    # "mock_danmaku",     # 模拟弹幕输入
-    # "read_pingmu",      # 读屏木输入
-    # "message_replayer", # 消息重放器
+# === 输入Provider配置（Layer 1: Perception） ===
+[providers.input]
+# 是否启用输入层
+enabled = true
+# 启用的输入Provider列表
+enabled_inputs = [
+    # 控制台输入（开发测试用）
+    # "console_input",
 
-    # 输出功能（语音和视觉输出）
-    # "tts",              # 语音合成
-    # "gptsovits_tts",    # GPT-SoVITS TTS
-    # "omni_tts",         # Omni TTS
-    # "subtitle",         # 字幕生成
-    # "sticker",          # 贴纸生成
-    # "emotion_judge",    # 情感判断
+    # B站弹幕输入
+    # "bili_danmaku",           # 普通B站弹幕
+    # "bili_danmaku_official",  # B站官方弹幕（不要和bili_danmaku同时启用）
+    # "bili_danmaku_selenium",  # B站弹幕-Selenium版
 
-    # 外部控制和集成
-    # "vtube_studio",     # VTubeStudio控制
-    # "warudo",           # Warudo控制
-    # "obs_control",      # OBS Studio控制
-    # "dg_lab_service",   # DG-Lab服务
-    # "dg-lab-do",        # DG-Lab DO
-    # "vrchat", # VRChat控制
-
-    # 监控和流媒体
-    # "screen_monitor",   # 屏幕监控
-    # "remote_stream",    # 远程串流
-
-    # 游戏相关
-    # "maicraft",         # MaiCraft游戏
-
-    # 系统工具
-    # "command_processor",  # 命令处理器（通常作为管道使用）
+    # 其他输入
+    # "mock_danmaku",           # 模拟弹幕
+    # "read_pingmu",            # 读屏木
 ]
 
-# === 旧格式（向后兼容，可选） ===
-# 以下配置仍然有效，但会被enabled列表覆盖
-# enable_console_input = true
-# enable_stt = false
-# ...（保留原有配置作为注释示例）
+# 各个InputProvider的详细配置
+[providers.input.inputs.console_input]
+type = "console_input"
+# 可选：添加自定义配置
+
+[providers.input.inputs.bili_danmaku]
+type = "bili_danmaku"
+room_id = ""          # B站直播间号
+# ... 其他B站弹幕配置
+
+[providers.input.inputs.mock_danmaku]
+type = "mock_danmaku"
+# 模拟弹幕配置
+
+# === 输出Provider配置（Layer 7: Rendering） ===
+[providers.output]
+# 是否启用输出层
+enabled = true
+# 是否并发渲染到所有Provider
+concurrent_rendering = true
+# 错误处理策略：continue（继续）、stop（停止）、drop（丢弃）
+error_handling = "continue"
+
+# 启用的输出Provider列表
+enabled_outputs = [
+    # 基础输出（推荐启用）
+    "subtitle",     # 字幕
+    "vts",          # VTS控制
+
+    # TTS输出（选择一个或多个）
+    # "tts",         # Edge TTS
+    # "omni_tts",    # Omni TTS (GPT-SoVITS)
+
+    # 其他输出
+    # "sticker",     # 表情贴纸
+]
+
+# ExpressionGenerator配置
+[providers.output.expression_generator]
+# 默认TTS是否启用
+default_tts_enabled = true
+# 默认字幕是否启用
+default_subtitle_enabled = true
+# 默认表情是否启用
+default_expressions_enabled = true
+# 默认热键是否启用
+default_hotkeys_enabled = true
+
+# 各个OutputProvider的详细配置
+
+# TTS Provider配置
+[providers.output.outputs.tts]
+type = "tts"
+# TTS引擎：edge 或 omni
+engine = "edge"
+# Edge TTS语音
+voice = "zh-CN-XiaoxiaoNeural"
+# 音频输出设备名称（留空使用默认设备）
+output_device_name = ""
+
+# Omni TTS配置（仅在engine=omni时生效）
+[providers.output.outputs.tts.omni]
+# Omni TTS API地址
+api_url = "http://localhost:9880"
+# 模型名称
+model = "path/to/model"
+# 说话人ID
+speaker = 0
+# 语速
+speed = 1.0
+# 音调
+pitch = 1.0
+# 音量
+volume = 1.0
+
+# Subtitle Provider配置
+[providers.output.outputs.subtitle]
+type = "subtitle"
+# 字幕窗口宽度
+window_width = 800
+# 字幕窗口高度
+window_height = 100
+# 字体大小
+font_size = 24
+# 字体颜色
+font_color = "#FFFFFF"
+# 背景颜色
+bg_color = "#000000"
+# 背景透明度（0-255）
+bg_alpha = 180
+# 字幕显示位置（top/center/bottom）
+position = "bottom"
+# 自动隐藏延迟（秒，0表示不隐藏）
+auto_hide_delay = 5.0
+# 是否启用拖拽
+draggable = true
+# 是否启用Chroma-key（OBS抠图）
+chroma_key_enabled = false
+# Chroma-key颜色
+chroma_key_color = "#00FF00"
+
+# Sticker Provider配置
+[providers.output.outputs.sticker]
+type = "sticker"
+# 贴纸大小（相对于窗口宽度的比例，0-1）
+sticker_size = 0.33
+# 贴纸旋转角度（度）
+sticker_rotation = 0
+# 贴纸显示时长（秒）
+display_duration = 3.0
+# 贴纸冷却时间（秒，防止刷屏）
+cooldown = 5.0
+# 贴纸目录
+sticker_dir = "data/stickers"
+# 默认贴纸（当没有关键词匹配时使用）
+default_sticker = "default.png"
+
+# VTS Provider配置
+[providers.output.outputs.vts]
+type = "vts"
+# VTS WebSocket地址
+vts_host = "localhost"
+vts_port = 8001
+# 是否自动连接
+auto_connect = true
+# 连接超时（秒）
+connect_timeout = 10.0
+# 重连间隔（秒）
+reconnect_interval = 5.0
+# 是否启用LLM智能热键匹配
+llm_matching_enabled = false
+# LLM配置（可选，不设置则使用全局llm配置）
+# llm_type = "llm_fast"  # llm, llm_fast, vlm
+# max_hotkey_candidates = 5
+
+# Omni TTS Provider配置
+[providers.output.outputs.omni_tts]
+type = "omni_tts"
+# Omni TTS API地址
+api_url = "http://localhost:9880"
+# 模型路径
+model_path = "path/to/model"
+# 说话人ID
+speaker_id = 0
+# 语速
+speed = 1.0
+# 音调
+pitch = 1.0
+# 音量
+volume = 1.0
+# 音频输出设备名称（留空使用默认设备）
+output_device_name = ""
+# 是否启用流式TTS
+stream_enabled = true
+# 缓存目录
+cache_dir = "data/omni_tts_cache"
+# 最大缓存数量（0表示不限制）
+max_cache_size = 100
+
+# === 决策Provider配置（Layer 4: Decision） ===
+[providers.decision]
+# 是否启用决策层
+enabled = true
+# 当前使用的决策Provider（active provider）
+active_provider = "maicore"
+# 支持的决策Provider列表
+available_providers = [
+    "maicore",        # MaiCore决策（默认）
+    "rule_engine",    # 规则引擎
+    "local_llm",      # 本地LLM
+]
+
+# 各个DecisionProvider的详细配置
+
+# MaiCore决策Provider配置
+[providers.decision.providers.maicore]
+type = "maicore"
+# WebSocket连接配置
+host = "127.0.0.1"
+port = 8000
+# token = "your_token_if_needed"
+# 连接超时（秒）
+connect_timeout = 10.0
+# 重连间隔（秒）
+reconnect_interval = 5.0
+
+# 规则引擎决策Provider配置
+[providers.decision.providers.rule_engine]
+type = "rule_engine"
+# 规则文件路径
+rules_file = "data/rules/decision_rules.toml"
+# 默认回复
+default_response = "我不知道怎么回答这个问题"
+
+# 本地LLM决策Provider配置
+[providers.decision.providers.local_llm]
+type = "local_llm"
+# LLM类型（llm, llm_fast, vlm）
+llm_type = "llm"
+# 自定义模型配置（可选，不设置则使用全局配置）
+# model = "gpt-4"
+# api_key = "your-api-key"
+# base_url = "https://api.openai.com/v1"
+# temperature = 0.7
+# max_tokens = 1000
+# 系统提示词
+system_prompt = "你是一个友好的AI助手，请简洁地回答用户的问题。"
+

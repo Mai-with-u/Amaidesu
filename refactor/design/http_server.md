@@ -268,8 +268,8 @@ class MaiCoreDecisionProvider(DecisionProvider):
 
         self.logger.info(f"MaiCoreDecisionProvider WebSocket setup: {ws_url}")
 
-    async def decide(self, canonical_message: CanonicalMessage) -> MessageBase:
-        """决策"""
+    async def decide(self, message: NormalizedMessage) -> Intent:
+        """决策（NormalizedMessage → Intent）"""
         # 实现决策逻辑
         pass
 
@@ -408,4 +408,3 @@ http_callback_path = "/maicore/callback"
 
 - [AmaidesuCore重构设计](./core_refactoring.md)
 - [决策层设计](./decision_layer.md)
-- [插件系统设计](./plugin_system.md)

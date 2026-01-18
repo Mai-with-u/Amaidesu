@@ -1,8 +1,20 @@
 # Amaidesu 架构重构文档索引
 
-> **版本**: v2.0
-> **日期**: 2026-01-17
-> **状态**: 设计阶段
+> **版本**: v3.0
+> **日期**: 2026-02-01
+> **状态**: 插件系统已移除，采用纯Provider架构
+
+---
+
+## ⚠️ 当前架构问题
+
+> **重要**: 设计与实现存在不一致，详见 [架构问题分析报告](./ARCHITECTURE_ISSUES_REPORT.md)
+
+| 优先级 | 问题 | 影响 |
+|--------|------|------|
+| 🔴 P0 | 插件系统残留引用 | 应用无法启动 |
+| 🔴 P0 | 输入层主流程未接线 | 数据流完全断裂 |
+| 🟡 P1 | LLMService 依赖注入技术债 | 架构不清晰 |
 
 ---
 
@@ -10,11 +22,14 @@
 
 ### 我想了解...
 
+**⚠️ 当前有什么问题？**
+→ [架构问题分析报告](./ARCHITECTURE_ISSUES_REPORT.md)（**推荐先看**）
+
 **整体架构是什么？**
 → [设计总览](./design/overview.md)
 
-**6层架构如何工作？**
-→ [6层架构设计](./design/layer_refactoring.md)
+**5层架构如何工作？**
+→ [5层架构设计](./design/layer_refactoring.md)
 
 **决策层如何可替换？**
 → [决策层设计](./design/decision_layer.md)
@@ -22,14 +37,17 @@
 **多个Provider如何并发？**
 → [多Provider并发设计](./design/multi_provider.md)
 
-**如何开发插件？**
-→ [插件系统设计](./design/plugin_system.md)
+**⚠️ 插件系统为什么移除？**
+→ [插件系统移除说明](./PLUGIN_SYSTEM_REMOVAL.md)
 
 **AmaidesuCore如何重构？**
 → [核心重构设计](./design/core_refactoring.md)
 
+**HTTP服务器如何管理？**
+→ [HTTP服务器设计](./design/http_server.md)
+
 **如何实施重构？**
-→ [实施计划总览](./plan/overview.md)
+→ [5层架构重构实施计划](./plan/5_layer_refactoring_plan.md)
 
 ---
 
@@ -37,241 +55,134 @@
 
 ```
 refactor/
-├── README.md                       # 本文件 - 文档索引
-├── design/                         # 设计文档
-│   ├── overview.md                  # 架构总览
-│   ├── layer_refactoring.md         # 6层架构设计
-│   ├── decision_layer.md           # 决策层设计
-│   ├── multi_provider.md           # 多Provider并发设计
-│   ├── plugin_system.md            # 插件系统设计
-│   └── core_refactoring.md          # AmaidesuCore重构设计
+├── README.md                            # 本文件 - 文档索引
+├── ARCHITECTURE_ISSUES_REPORT.md        # ⚠️ 架构问题分析报告（必读）
+├── PLUGIN_SYSTEM_REMOVAL.md             # 插件系统移除说明
 │
-└── plan/                            # 实施计划
-    ├── overview.md                  # 实施计划总览
-    ├── phase1_infrastructure.md    # Phase 1: 基础设施
-    ├── phase2_input.md             # Phase 2: 输入层
-    ├── phase3_decision.md          # Phase 3: 决策层+Layer 3-4
-    ├── phase4_output.md            # Phase 4: 输出层
-    ├── phase5_extensions.md         # Phase 5: 扩展系统
-    └── phase6_cleanup.md           # Phase 6: 清理和测试
+├── design/                              # 设计文档
+│   ├── overview.md                       # 架构总览（2025年新架构）
+│   ├── layer_refactoring.md              # 5层架构设计
+│   ├── decision_layer.md                 # 决策层设计
+│   ├── multi_provider.md                 # 多Provider并发设计
+│   ├── core_refactoring.md               # AmaidesuCore重构设计
+│   ├── http_server.md                    # HTTP服务器设计
+│   ├── llm_service.md                    # LLM服务设计
+│   ├── event_data_contract.md            # 事件数据契约设计
+│   ├── pipeline_refactoring.md           # Pipeline重新设计
+│   ├── avatar_refactoring.md             # 虚拟形象重构设计
+│   ├── DESIGN_CONSISTENCY_REPORT.md      # 设计文档一致性检查报告
+│   └── plugin_system.md                  # ⚠️ 已废弃
+│
+└── plan/                                # 实施计划
+    └── 5_layer_refactoring_plan.md       # 5层架构重构实施计划
 ```
 
 ---
 
 ## 🎯 重构核心要点
 
-### 1. 6层核心数据流
+### 1. 5层核心数据流（2025年架构）
 
 ```
-Layer 1: 输入感知（多Provider并发）
-    ↓
-Layer 2: 输入标准化（统一转换为Text）
-    ↓
-Layer 3: 中间表示（CanonicalMessage）
-    ↓
-决策层（可替换DecisionProvider）
-    ↓
-Layer 4: 表现理解（解析MessageBase → Intent）
-    ↓
-Layer 5: 表现生成（生成RenderParameters）
-    ↓
-Layer 6: 渲染呈现（多Provider并发）
+Layer 1-2: Input（输入感知 + 标准化）
+    ↓ NormalizedMessage
+Layer 3: Decision（决策层，可替换）
+    ↓ Intent
+Layer 4: Parameters（参数生成）
+    ↓ RenderParameters
+Layer 5: Rendering（渲染呈现，多Provider并发）
 ```
 
-### 2. 决策层可替换
+### 2. 核心变化
 
-- ✅ **MaiCoreDecisionProvider**：默认实现，使用maim_message WebSocket
-- ✅ **LocalLLMDecisionProvider**：可选实现，使用本地LLM API
-- ✅ **RuleEngineDecisionProvider**：可选实现，本地规则引擎
-- ✅ 支持运行时切换DecisionProvider
+| 变化 | 旧架构（7层） | 新架构（5层） |
+|------|-------------|-------------|
+| **层级数** | 7层 | 5层 |
+| **Layer 1-2** | Input + Normalization | 合并为InputLayer |
+| **Layer 3** | Canonical（中间表示） | 移除，功能合并到Layer 2 |
+| **Layer 4** | Decision（决策层） | 不变，可替换 |
+| **Layer 5** | Understanding（理解层） | 移除，功能由DecisionProvider负责 |
+| **Layer 6** | Parameters（参数生成） | 不变 |
+| **Layer 7** | Rendering（渲染层） | 不变，重编号为Layer 5 |
+| **插件系统** | 存在 | **已移除**，采用纯Provider架构 |
 
-### 3. 多Provider并发
+### 3. 为什么移除插件系统？
 
-**输入层（Layer 1）**：
-```
-弹幕InputProvider ──┐
-                    ├──→ 都生成RawData
-游戏InputProvider ──┤
-                    │
-语音InputProvider ──┘
-```
+详见：[插件系统移除说明](./PLUGIN_SYSTEM_REMOVAL.md)
 
-**输出层（Layer 6）**：
-```
-RenderParameters ──┐
-                  ├──→ 分别渲染到不同目标
-字幕Renderer ─────┤  (字幕窗口、TTS音频、虚拟形象）
-                  │
-TTSRenderer ───────┤
-                  │
-VTSRenderer ───────┘
-```
+**核心原因**：
+- ❌ Plugin在创建Provider，违背了"不创建Provider"的设计原则
+- ❌ 与"消灭插件化"的重构目标直接矛盾
+- ❌ 增加了一层不必要的抽象，反而使架构更复杂
 
-### 4. AmaidesuCore彻底解耦
-
-**删除职责**（约500行代码）：
-- ❌ WebSocket连接管理
-- ❌ HTTP服务器管理
-- ❌ maim_message.Router相关
-- ❌ send_to_maicore()方法
-- ❌ _handle_maicore_message()方法
-
-**保留职责**（约300行代码）：
-- ✅ EventBus管理
-- ✅ Pipeline管理
-- ✅ Context管理
-- ✅ Avatar管理器
-- ✅ LLM客户端管理
-
-**新增职责**（约50行代码）：
-- ✅ DecisionManager集成
+**新架构优势**：
+- ✅ Provider由Manager统一管理，配置驱动启用
+- ✅ 职责边界明确：Provider = 原子能力
+- ✅ 代码组织更清晰：按数据流层级组织
 
 ---
 
-## 🗺️ 数据流图
+## 🔑 关键设计概念
 
-```mermaid
-graph TB
-    subgraph "Amaidesu: 核心数据流"
-        subgraph "Layer 1: 输入感知层（多Provider并发）"
-            Perception[弹幕/游戏/语音<br/>多个InputProvider并发采集]
-        end
+### Provider（提供者）
 
-        subgraph "Layer 2: 输入标准化层"
-            Normalization[统一转换为Text]
-        end
+| 类型 | 位置 | 职责 | 示例 |
+|------|------|------|------|
+| **InputProvider** | Layer 1 | 接收外部数据，生成RawData | ConsoleInputProvider, BiliDanmakuProvider |
+| **DecisionProvider** | Layer 3 | 处理NormalizedMessage，决策并返回Intent | MaiCoreDecisionProvider, LocalLLMDecisionProvider |
+| **OutputProvider** | Layer 5 | 接收渲染参数，执行实际输出 | TTSProvider, SubtitleProvider, VTSProvider |
 
-        subgraph "Layer 3: 中间表示层"
-            Canonical[CanonicalMessage]
-        end
+### Manager（管理者）
 
-        subgraph "决策层（可替换）"
-            DecisionLayer[DecisionProvider<br/>MaiCore/本地LLM/规则引擎]
-        end
+- **InputProviderManager**：管理输入Provider的生命周期
+- **DecisionManager**：管理决策Provider，支持运行时切换
+- **OutputProviderManager**：管理输出Provider的生命周期
 
-        subgraph "Layer 4: 表现理解层"
-            Understanding[解析MessageBase<br/>生成Intent]
-        end
+### 配置驱动
 
-        subgraph "Layer 5: 表现生成层"
-            Expression[生成RenderParameters]
-        end
-
-        subgraph "Layer 6: 渲染呈现层（多Provider并发）"
-            Rendering[字幕/TTS/VTS<br/>多个OutputProvider并发渲染]
-        end
-    end
-
-    subgraph "扩展系统: Extension"
-        Extensions[扩展=聚合多个Provider<br/>Minecraft/原神/自定义]
-    end
-
-    Perception -->|"Raw Data"| Normalization
-    Normalization -->|"Text"| Canonical
-    Canonical -->|"CanonicalMessage"| DecisionLayer
-    DecisionLayer -->|"MessageBase"| Understanding
-    Understanding -->|"Intent"| Expression
-    Expression -->|"RenderParameters"| Rendering
-
-    Perception -.输入Provider.-> Extensions
-    Rendering -.输出Provider.-> Extensions
-
-    style Perception fill:#e1f5ff
-    style Normalization fill:#fff4e1
-    style Canonical fill:#f3e5f5
-    style DecisionLayer fill:#ff9999,stroke:#ff0000,stroke-width:3px
-    style Understanding fill:#ffe1f5
-    style Expression fill:#e1ffe1
-    style Rendering fill:#e1f5ff
-    style Extensions fill:#f5e1ff
-```
-
----
-
-## ✅ 关键设计特性
-
-### 1. 决策层可替换
-
-**配置示例**：
 ```toml
+# 输入Provider配置
+[input]
+enabled = ["console", "bili_danmaku", "minecraft"]
+
+[input.providers.console]
+source = "stdin"
+
+# 决策Provider配置
 [decision]
-default_provider = "maicore"  # 可切换为 local_llm 或 rule_engine
+default_provider = "maicore"
 
-[decision.providers.maicore]
-host = "localhost"
-port = 8000
-
-[decision.providers.local_llm]
-model = "gpt-4"
-api_key = "your_key"
-```
-
-### 2. 多Provider并发
-
-**输入层配置**：
-```toml
-[perception]
-inputs = ["danmaku", "game", "voice"]
-
-[perception.inputs.danmaku]
-type = "bilibili_danmaku"
-room_id = "123456"
-
-[perception.inputs.game]
-type = "minecraft"
-host = "localhost"
-port = 25565
-
-[perception.inputs.voice]
-type = "microphone"
-device_index = 0
-```
-
-**输出层配置**：
-```toml
-[rendering]
-outputs = ["subtitle", "tts", "vts"]
-
-[rendering.outputs.subtitle]
-type = "subtitle"
-font_size = 24
-
-[rendering.outputs.tts]
-type = "tts"
-provider = "edge"
-voice = "zh-CN-XiaoxiaoNeural"
-
-[rendering.outputs.vts]
-type = "virtual"
-host = "localhost"
-port = 8001
-```
-
-### 3. 扩展系统自动加载
-
-**内置扩展**：`src/extensions/`（官方，自动启用）
-**用户扩展**：`extensions/`（根目录，自动扫描）
-
-**安装示例**：
-```bash
-# 方式1：从GitHub克隆
-git clone https://github.com/xxx/genshin-extension.git extensions/genshin
-
-# 方式2：下载后复制
-cp -r ~/downloads/mygame-extension extensions/mygame
-
-# 方式3：直接创建目录
-mkdir extensions/my-custom-extension
-# 然后创建扩展文件...
-
-# 运行程序（自动识别）
-python main.py
-# 日志会显示：✅ 扩展加载成功: genshin, mygame
+# 输出Provider配置
+[output]
+enabled = ["tts", "subtitle", "vts"]
 ```
 
 ---
 
-## 📊 重构成果
+## 📊 架构演进
+
+### v1.0（2024年）
+
+- 24个插件，18个服务注册
+- 过度插件化，依赖地狱
+- 模块定位模糊
+
+### v2.0（2025年初）
+
+- 插件系统 + Provider系统双轨并行
+- Plugin创建和管理Provider
+- 仍然存在职责边界模糊的问题
+
+### v3.0（2025年2月，当前）
+
+- **移除插件系统**
+- Provider由Manager统一管理
+- 配置驱动启用/禁用
+- 5层架构，职责清晰
+
+---
+
+## ✅ 成功标准
 
 ### 技术指标
 - ✅ 所有现有功能正常运行
@@ -280,69 +191,73 @@ python main.py
 - ✅ 代码重复率降低30%以上
 - ✅ 服务注册调用减少80%以上
 - ✅ EventBus事件调用覆盖率90%以上
-- ✅ 扩展系统正常加载内置扩展和用户扩展
+- ✅ 插件系统已移除，Provider由Manager统一管理
 
 ### 架构指标
-- ✅ 清晰的6层核心数据流架构
+- ✅ 清晰的5层核心数据流架构
 - ✅ 决策层可替换（支持多种DecisionProvider）
 - ✅ 多Provider并发支持（输入层和输出层）
 - ✅ 层级间依赖关系清晰（单向依赖）
 - ✅ EventBus为内部主要通信模式
 - ✅ Provider模式替代重复插件
-- ✅ 工厂模式支持动态切换
-- ✅ 扩展系统支持社区开发
+- ✅ 配置驱动，无需修改代码即可启用/禁用Provider
+- ✅ 插件系统已完全移除
 
 ---
 
-## 📝 Git历史保留
+## 🔗 相关资源
 
-**强制要求**：所有文件迁移必须使用`git mv`命令
+### 状态报告
+- [架构问题分析报告](./ARCHITECTURE_ISSUES_REPORT.md) - **当前架构问题和修复建议**
+- [设计文档一致性检查报告](./design/DESIGN_CONSISTENCY_REPORT.md) - 文档一致性验证
 
-**正确做法**：
-```bash
-# ✅ 正确：使用git mv
-git mv src/plugins/minecraft src/extensions/minecraft
-git commit -m "refactor: migrate minecraft to extension"
+### 设计文档
+- [设计总览](./design/overview.md) - 2025年新架构总览
+- [5层架构设计](./design/layer_refactoring.md) - 详细描述5层核心数据流
+- [决策层设计](./design/decision_layer.md) - 可替换的决策Provider系统
+- [多Provider并发设计](./design/multi_provider.md) - Provider管理架构
 
-# 查看完整历史（包括移动）
-git log --follow src/extensions/minecraft/
-```
+### 实施计划
+- [5层架构重构实施计划](./plan/5_layer_refactoring_plan.md) - 详细的重构步骤
 
-**错误做法**：
-```bash
-# ❌ 错误：直接在文件系统移动文件
-mv src/plugins/mainosaba src/extensions/mainosaba
-git add src/extensions/mainosaba
-git commit -m "refactor: move mainosaba"
-# 结果：Git历史丢失！
-```
+### 迁移指南
+- [插件系统移除说明](./PLUGIN_SYSTEM_REMOVAL.md) - 配置和代码迁移指南
 
----
-
-## 🎉 重构完成
-
-所有Phase完成后，架构重构结束！
-
-**主要成果**：
-1. ✅ 6层核心数据流架构
-2. ✅ 可替换的决策层
-3. ✅ 多Provider并发支持
-4. ✅ Provider模式统一接口
-5. ✅ 扩展系统支持社区开发
-6. ✅ EventBus内部通信
-7. ✅ 配置简化40%以上
-8. ✅ Git历史完整保留
-
-**下一步**：
-- 部署到生产环境
-- 监控性能指标
-- 收集用户反馈
-- 持续优化
+### docs 目录相关文档
+- [尚未完成的重构项](../docs/REFACTOR_REMAINING.md) - 重构剩余工作
+- [VTuber 全流程 E2E 测试缺口分析](../docs/VTUBER_FLOW_E2E_GAP_ANALYSIS.md) - E2E 测试缺口
 
 ---
 
-## 🔗 相关链接
+## ❓ 常见问题
 
-- [项目主页](../../README.md)
-- [原始设计文档](./design.md)（已废弃，保留作为历史参考）
-- [原始实施计划](./implementation_plan.md)（已废弃，保留作为历史参考）
+### Q: 为什么要从7层改为5层？
+
+**A**: 简化架构，消除冗余：
+- Layer 2（Normalization）和Layer 3（Canonical）合并
+- Layer 5（Understanding）的功能由DecisionProvider承担
+- 减少数据转换开销，提高性能
+
+### Q: 插件系统为什么要移除？
+
+**A**: 插件系统与"消灭插件化"的重构目标不兼容：
+- Plugin在创建Provider，违背了设计原则
+- 增加了一层不必要的抽象
+- 纯Provider架构更简单、更清晰
+
+详见：[插件系统移除说明](./PLUGIN_SYSTEM_REMOVAL.md)
+
+### Q: 社区开发者如何扩展功能？
+
+**A**: 直接添加Provider：
+
+1. 在对应层创建Provider文件：`src/layers/{layer}/providers/my_provider.py`
+2. 在配置中启用：`[input]enabled = ["console", "my_provider"]`
+3. 无需创建Plugin
+
+详见：[设计总览 - 社区扩展](./design/overview.md#社区扩展)
+
+---
+
+**最后更新**：2026年2月1日
+**维护者**：Amaidesu Team

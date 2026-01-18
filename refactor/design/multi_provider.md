@@ -2,7 +2,7 @@
 
 ## 🎯 核心目标
 
-支持输入层(Layer 1)和输出层(Layer 6)的**多Provider并发处理**，提高系统吞吐量和响应速度。
+支持输入层(Layer 1)和输出层(Layer 5)的**多Provider并发处理**，提高系统吞吐量和响应速度。
 
 ---
 
@@ -18,7 +18,7 @@
 语音InputProvider ──┘
 ```
 
-### 输出层并发（Layer 6）
+### 输出层并发（Layer 5）
 
 ```
 RenderParameters ──┐
@@ -92,11 +92,11 @@ graph TB
     style Normalization fill:#fff4e1
 ```
 
-### Layer 6: 输出层并发架构
+### Layer 5: 输出层并发架构
 
 ```mermaid
 graph TB
-    subgraph "Layer 5: 表现生成层"
+    subgraph "Layer 4: 表现生成层"
         Expression[生成RenderParameters]
     end
 
@@ -104,7 +104,7 @@ graph TB
         EventBus[事件总线]
     end
 
-    subgraph "Layer 6: 渲染呈现层（多Provider并发）"
+    subgraph "Layer 5: 渲染呈现层（多Provider并发）"
         Subtitle[字幕Renderer]
         TTS[TTSRenderer]
         VTS[VTSRenderer]
@@ -210,7 +210,7 @@ class OutputProvider(Protocol):
 ### 输入层目录结构（Layer 1）
 
 ```
-src/perception/                    # Layer 1: 输入感知
+src/layers/input/                    # Layer 1: 输入感知
 ├── text/
 │   ├── console_input.py           # ConsoleInputProvider
 │   └── danmaku/                   # 弹幕输入
@@ -223,10 +223,10 @@ src/perception/                    # Layer 1: 输入感知
 └── input_factory.py               # InputProvider工厂
 ```
 
-### 输出层目录结构（Layer 6）
+### 输出层目录结构（Layer 5）
 
 ```
-src/rendering/                    # Layer 6: 渲染呈现
+src/layers/rendering/              # Layer 5: 渲染呈现
 ├── virtual_rendering/             # 虚拟渲染
 │   ├── base_renderer.py
 │   └── implementations/
@@ -483,19 +483,19 @@ class VTSRenderer(OutputProvider):
 ### 输入层配置
 
 ```toml
-[perception]
+[input]
 inputs = ["danmaku", "game", "voice"]
 
-[perception.inputs.danmaku]
+[input.inputs.danmaku]
 type = "bilibili_danmaku"
 room_id = "123456"
 
-[perception.inputs.game]
+[input.inputs.game]
 type = "minecraft"
 host = "localhost"
 port = 25565
 
-[perception.inputs.voice]
+[input.inputs.voice]
 type = "microphone"
 device_index = 0
 ```
@@ -503,20 +503,20 @@ device_index = 0
 ### 输出层配置
 
 ```toml
-[rendering]
+[output]
 outputs = ["subtitle", "tts", "vts"]
 
-[rendering.outputs.subtitle]
+[output.outputs.subtitle]
 type = "subtitle"
 font_size = 24
 window_position = "bottom"
 
-[rendering.outputs.tts]
+[output.outputs.tts]
 type = "tts"
 provider = "edge"
 voice = "zh-CN-XiaoxiaoNeural"
 
-[rendering.outputs.vts]
+[output.outputs.vts]
 type = "virtual"
 host = "localhost"
 port = 8001
@@ -818,6 +818,6 @@ restart_interval = 5
 
 ## 🔗 相关文档
 
-- [6层架构设计](./layer_refactoring.md)
+- [5层架构设计](./layer_refactoring.md)
 - [决策层设计](./decision_layer.md)
-- [插件系统设计](./plugin_system.md)
+- [核心重构设计](./core_refactoring.md)
