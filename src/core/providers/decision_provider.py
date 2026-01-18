@@ -10,11 +10,13 @@ DecisionProvider负责将CanonicalMessage转换为决策结果(MessageBase)。
 - RuleEngineDecisionProvider: 使用本地规则引擎
 """
 
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from abc import ABC, abstractmethod
 
 from maim_message import MessageBase
-from .base import CanonicalMessage
+
+if TYPE_CHECKING:
+    from src.canonical.canonical_message import CanonicalMessage
 
 
 class DecisionProvider(ABC):
@@ -64,7 +66,7 @@ class DecisionProvider(ABC):
         self.is_setup = True
 
     @abstractmethod
-    async def decide(self, canonical_message: CanonicalMessage) -> MessageBase:
+    async def decide(self, canonical_message: "CanonicalMessage") -> MessageBase:
         """
         决策
 
