@@ -524,6 +524,274 @@ port = 8001
 
 ---
 
+---
+
+## 🔧 Provider错误处理
+
+### 1. 错误隔离原则
+
+**设计原则**：
+- Provider失败**不影响其他Provider**
+- Provider失败不影响EventBus
+- 记录详细错误日志
+- 提供手动重启接口
+
+### 2. ProviderManager错误隔离实现
+
+```python
+import asyncio
+from typing import List
+
+class ProviderManager:
+    """Provider管理器"""
+
+    def __init__(self, event_bus: EventBus):
+        self.event_bus = event_bus
+        self.logger = get_logger("ProviderManager")
+
+    async def start_input_providers(self, providers: List[InputProvider]):
+        """
+        启动所有InputProvider，错误隔离
+
+        使用asyncio.gather确保所有Provider都启动完成，即使某个失败
+        """
+        tasks = []
+
+        for provider in providers:
+            # 为每个Provider创建独立任务，错误隔离
+            task = asyncio.create_task(self._run_provider(provider))
+            tasks.append(task)
+
+        # 使用gather，即使某个Provider失败也等待所有Provider
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # 检查哪些Provider启动失败
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                self.logger.error(f"Provider {providers[i].get_info().name} failed to start: {result}")
+
+    async def _run_provider(self, provider: InputProvider):
+        """运行单个Provider，捕获异常"""
+        try:
+            async for data in provider.start():
+                await self.event_bus.emit("perception.raw_data.generated", {
+                    "data": data,
+                    "source": provider.get_info().name
+                })
+        except Exception as e:
+            self.logger.error(f"Provider {provider.get_info().name} failed: {e}", exc_info=True)
+            # 不重新抛出，不影响其他Provider
+```
+
+### 3. 错误处理策略
+
+```python
+@dataclass
+class ProviderConfig:
+    """Provider配置"""
+    enabled: bool = True
+    auto_restart: bool = False  # 自动重启失败的Provider（可选）
+    restart_interval: int = 5  # 自动重启的间隔（秒）
+
+class ProviderManager:
+    def __init__(self, event_bus: EventBus, config: ProviderConfig):
+        self.event_bus = event_bus
+        self.config = config
+        self.logger = get_logger("ProviderManager")
+        self._provider_tasks: Dict[str, asyncio.Task] = {}
+
+    async def _run_provider(self, provider: InputProvider):
+        """运行单个Provider，支持自动重启"""
+        provider_name = provider.get_info().name
+
+        while True:
+            try:
+                async for data in provider.start():
+                    await self.event_bus.emit("perception.raw_data.generated", {
+                        "data": data,
+                        "source": provider_name
+                    })
+                # Provider正常结束，退出循环
+                break
+
+            except Exception as e:
+                self.logger.error(f"Provider {provider_name} failed: {e}", exc_info=True)
+
+                # 检查是否需要自动重启
+                if not self.config.auto_restart:
+                    self.logger.error(f"Provider {provider_name} stopped (auto_restart=False)")
+                    break
+
+                # 等待重启间隔
+                self.logger.info(f"Provider {provider_name} will restart in {self.config.restart_interval}s")
+                await asyncio.sleep(self.config.restart_interval)
+```
+
+---
+
+## 🔄 Provider生命周期管理
+
+### 1. Provider生命周期
+
+**生命周期**：start → running → stop → cleanup
+
+**生命周期钩子**：
+
+```python
+from typing import Protocol
+
+class InputProvider(Protocol):
+    """输入Provider接口"""
+
+    async def start(self) -> AsyncIterator[RawData]:
+        """启动Provider，开始生成数据"""
+        ...
+
+    async def stop(self):
+        """停止Provider，停止生成数据"""
+        ...
+
+    async def cleanup(self):
+        """清理Provider资源"""
+        ...
+
+    async def on_start(self):
+        """启动后钩子（可选）"""
+        ...
+
+    async def on_stop(self):
+        """停止后钩子（可选）"""
+        ...
+
+    async def on_error(self, error: Exception):
+        """错误处理钩子（可选）"""
+        ...
+```
+
+### 2. ProviderInfo接口
+
+```python
+from dataclasses import dataclass
+from typing import List
+
+@dataclass
+class ProviderInfo:
+    """Provider信息"""
+    name: str
+    version: str
+    description: str
+    supported_data_types: List[str]
+    author: str
+    dependencies: List[str] = []  # 依赖的其他Provider（可选）
+    configuration_schema: dict = {}  # 配置模式（可选）
+
+class InputProvider(Protocol):
+    """输入Provider接口"""
+
+    def get_info(self) -> ProviderInfo:
+        """获取Provider信息"""
+        ...
+```
+
+### 3. 生命周期钩子实现示例
+
+```python
+class BilibiliDanmakuProvider:
+    """B站弹幕Provider"""
+
+    def __init__(self, config: dict):
+        self.config = config
+        self.room_id = config.get("room_id")
+        self.logger = get_logger("BilibiliDanmakuProvider")
+        self._client = None
+        self._running = False
+
+    def get_info(self) -> ProviderInfo:
+        return ProviderInfo(
+            name="bilibili_danmaku",
+            version="1.0.0",
+            description="B站弹幕输入Provider",
+            supported_data_types=["danmaku"],
+            author="Official",
+            dependencies=[],
+            configuration_schema={
+                "room_id": {"type": "string", "required": true}
+            }
+        )
+
+    async def start(self) -> AsyncIterator[RawData]:
+        """启动弹幕输入"""
+        # 调用启动后钩子
+        await self.on_start()
+
+        self._running = True
+
+        # 连接B站直播间
+        from blivedm import BLiveClient
+
+        async def on_danmaku(client, danmaku):
+            yield RawData(
+                content=danmaku.text,
+                type="danmaku",
+                source=self.get_info().name,
+                metadata={
+                    "user": danmaku.user_name,
+                    "room_id": self.room_id
+                }
+            )
+
+        self._client = BLiveClient(self.room_id)
+        self._client.set_handler(on_danmaku)
+        await self._client.connect()
+
+        while self._running:
+            await asyncio.sleep(1)
+
+    async def stop(self):
+        """停止弹幕输入"""
+        self._running = False
+        if self._client:
+            await self._client.disconnect()
+
+        # 调用停止后钩子
+        await self.on_stop()
+
+    async def cleanup(self):
+        """清理Provider资源"""
+        self.logger.info(f"Provider {self.get_info().name} cleanup")
+
+    async def on_start(self):
+        """启动后钩子"""
+        self.logger.info(f"Provider {self.get_info().name} started")
+        # 初始化连接前的工作
+        pass
+
+    async def on_stop(self):
+        """停止后钩子"""
+        self.logger.info(f"Provider {self.get_info().name} stopped")
+        # 清理工作
+        pass
+
+    async def on_error(self, error: Exception):
+        """错误处理钩子"""
+        self.logger.error(f"Provider {self.get_info().name} error: {error}")
+        # 错误处理逻辑
+        pass
+```
+
+### 4. Provider配置示例
+
+```toml
+[providers]
+# 自动重启失败的Provider（可选）
+auto_restart = true
+
+# 自动重启的间隔（秒）
+restart_interval = 5
+```
+
+---
+
 ## ✅ 关键优势
 
 ### 1. 高并发性能

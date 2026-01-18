@@ -374,15 +374,33 @@ api_url = "http://localhost:8080/api"
 
 ```toml
 # 社区插件（社区）
+[plugins]
+# 启用的插件列表
+enabled = [
+    "console_input",
+    "llm_text_processor",
+    "keyword_action",
+
+    # 注释掉的插件将被禁用
+    # "genshin",
+    # "mygame",
+]
+
 [plugins.genshin]
-enabled = false  # 需要手动启用
+enabled = true  # 单独配置优先级更高
 api_url = "https://genshin-api.example.com"
 events_enabled = true
 
 [plugins.mygame]
-enabled = false
+enabled = false  # 单独禁用
 api_url = "https://mygame-api.example.com"
 ```
+
+**配置说明**：
+- **推荐使用**：`[plugins]enabled = [...]` 列表格式
+- **兼容旧格式**：`[plugins.xxx]enabled = true/false` 单独配置
+- **优先级规则**：单独配置 > 列表配置（如果两者都存在）
+- **迁移工具**：提供工具自动转换旧配置到新格式
 
 ### 配置覆盖（可选）
 
@@ -498,6 +516,317 @@ plugins/                            # 社区插件（根目录）
     ├── __init__.py                 # 必须包含
     └── providers/
 ```
+
+---
+
+## 🔄 Plugin迁移指南
+
+### 1. 迁移策略
+
+**总体原则**：
+- 完全重构，不提供兼容层
+- 所有24个插件需要按新规范重写
+- 提供详细的迁移指南和示例代码
+
+### 2. 迁移步骤
+
+#### 步骤1：分析现有Plugin
+
+```python
+# 旧Plugin（BasePlugin）
+class BilibiliDanmakuPlugin(BasePlugin):
+    def __init__(self, core: AmaidesuCore, plugin_config: Dict[str, Any]):
+        super().__init__(core, plugin_config)
+        self.room_id = plugin_config.get("room_id")
+        self.danmaku_client = None
+
+    async def setup(self):
+        # 初始化弹幕客户端
+        self.danmaku_client = BilibiliDanmakuClient(self.room_id)
+        self.danmaku_client.on_danmaku(self._on_danmaku)
+
+        # 注册WebSocket处理器
+        await self.core.register_websocket_handler("text", self.handle_message)
+
+        # 注册服务
+        self.core.register_service("danmaku_input", self)
+
+    async def handle_message(self, message: MessageBase):
+        # 处理从MaiCore返回的消息
+        pass
+
+    async def cleanup(self):
+        # 清理弹幕客户端
+        if self.danmaku_client:
+            await self.danmaku_client.close()
+
+    async def _on_danmaku(self, danmaku: Danmaku):
+        # 接收弹幕
+        text = danmaku.text
+        # 发送到MaiCore
+        await self.core.send_to_maicore(MessageBase(text))
+```
+
+#### 步骤2：识别Plugin的功能
+
+分析旧Plugin的功能，拆分为Provider：
+
+| 旧Plugin功能 | 新Provider | 类型 |
+|-------------|-----------|------|
+| 接收弹幕 | BilibiliDanmakuInputProvider | InputProvider |
+| 处理弹幕 | DanmakuProcessor | Plugin |
+
+#### 步骤3：实现Provider
+
+```python
+@dataclass
+class ProviderInfo:
+    name: str
+    version: str
+    description: str
+    supported_data_types: List[str]
+    author: str
+
+class BilibiliDanmakuInputProvider:
+    """B站弹幕输入Provider"""
+
+    def __init__(self, config: dict):
+        self.config = config
+        self.room_id = config.get("room_id")
+        self.danmaku_client = None
+
+    def get_info(self) -> ProviderInfo:
+        return ProviderInfo(
+            name="bilibili_danmaku",
+            version="1.0.0",
+            description="B站弹幕输入Provider",
+            supported_data_types=["danmaku"],
+            author="Official"
+        )
+
+    async def start(self) -> AsyncIterator[RawData]:
+        """启动弹幕输入"""
+        self.danmaku_client = BilibiliDanmakuClient(self.room_id)
+        self.danmaku_client.on_danmaku(self._on_danmaku)
+        await self.danmaku_client.connect()
+
+        while True:
+            # 等待弹幕
+            danmaku = await self.danmaku_client.wait_for_danmaku()
+            yield RawData(
+                content=danmaku.text,
+                type="danmaku",
+                source=self.get_info().name,
+                metadata={
+                    "user": danmaku.user,
+                    "room_id": self.room_id
+                }
+            )
+
+    async def stop(self):
+        """停止弹幕输入"""
+        if self.danmaku_client:
+            await self.danmaku_client.close()
+
+    async def cleanup(self):
+        """清理资源"""
+        await self.stop()
+
+    async def _on_danmaku(self, danmaku: Danmaku):
+        # 内部使用，不暴露
+        pass
+```
+
+#### 步骤4：实现Plugin
+
+```python
+class BilibiliDanmakuPlugin(Plugin):
+    """B站弹幕Plugin"""
+
+    async def setup(self, event_bus: EventBus, config: dict) -> List[Provider]:
+        """初始化Plugin，返回Provider列表"""
+        self.event_bus = event_bus
+        self.config = config
+
+        # 1. 创建Provider
+        danmaku_provider = BilibiliDanmakuInputProvider(config)
+
+        # 2. 订阅EventBus（如果需要处理Decision层的响应）
+        event_bus.on("decision.response.generated", self._on_response)
+
+        # 3. 返回Provider列表
+        return [danmaku_provider]
+
+    async def cleanup(self):
+        """清理资源"""
+        pass
+
+    async def _on_response(self, event: dict):
+        """处理Decision层的响应"""
+        # 如果需要处理弹幕相关的响应
+        pass
+
+    def get_info(self) -> dict:
+        return {
+            "name": "BilibiliDanmaku",
+            "version": "1.0.0",
+            "author": "Official",
+            "description": "B站弹幕输入插件",
+            "category": "input"
+        }
+```
+
+#### 步骤5：测试验证
+
+```python
+# 测试Provider
+async def test_bilibili_danmaku_input_provider():
+    provider = BilibiliDanmakuInputProvider({"room_id": "123456"})
+
+    # 启动Provider
+    data_count = 0
+    async for data in provider.start():
+        assert isinstance(data, RawData)
+        assert data.type == "danmaku"
+        data_count += 1
+        if data_count >= 10:
+            await provider.stop()
+            break
+
+# 测试Plugin
+async def test_bilibili_danmaku_plugin():
+    event_bus = EventBus()
+    config = {"room_id": "123456"}
+
+    plugin = BilibiliDanmakuPlugin()
+    providers = await plugin.setup(event_bus, config)
+
+    assert len(providers) == 1
+    assert isinstance(providers[0], BilibiliDanmakuInputProvider)
+
+    await plugin.cleanup()
+```
+
+### 3. Plugin迁移检查清单
+
+#### 分析阶段
+- [ ] 列出旧Plugin的所有功能
+- [ ] 识别哪些功能是输入，哪些是输出，哪些是处理
+- [ ] 识别哪些功能可以拆分为Provider
+
+#### 设计阶段
+- [ ] 设计Provider接口
+- [ ] 设计Plugin结构
+- [ ] 设计EventBus事件订阅
+- [ ] 设计配置文件格式
+- [ ] 设计错误处理机制
+
+#### 实现阶段
+- [ ] 实现Provider
+  - [ ] 实现start/stop/cleanup
+  - [ ] 实现get_info()
+  - [ ] 实现生命周期钩子（可选）
+- [ ] 实现Plugin
+  - [ ] 实现setup()
+  - [ ] 实现cleanup()
+  - [ ] 订阅EventBus（如果需要）
+  - [ ] 实现get_info()
+
+#### 测试阶段
+- [ ] 单元测试
+  - [ ] 测试Provider的功能
+  - [ ] 测试Plugin的功能
+  - [ ] 测试Provider的错误处理
+  - [ ] 测试Plugin的生命周期
+- [ ] 集成测试
+  - [ ] 测试Provider集成
+  - [ ] 测试Plugin集成
+  - [ ] 测试EventBus集成
+  - [ ] 测试端到端流程
+- [ ] 手动测试
+  - [ ] 功能验证
+  - [ ] 性能验证
+  - [ ] 边界条件测试
+  - [ ] 用户场景测试
+
+#### 文档阶段
+- [ ] 创建config-template.toml
+- [ ] 更新README.md
+- [ ] 提供使用示例
+- [ ] 说明迁移注意事项
+
+### 4. Plugin迁移优先级
+
+| 优先级 | Plugin类型 | Plugin名称 | 复杂度 | 预计工作量 |
+|--------|----------|-----------|--------|-----------|
+| P1 | 输入型 | ConsoleInput | 简单 | 1天 |
+| P1 | 输入型 | MockDanmaku | 简单 | 1天 |
+| P1 | 输出型 | Subtitle | 简单 | 2天 |
+| P2 | 输入型 | BilibiliDanmaku | 中等 | 3天 |
+| P2 | 输出型 | TTS | 中等 | 3天 |
+| P2 | 输出型 | VTubeStudio | 中等 | 3天 |
+| P3 | 输入型 | Microphone | 复杂 | 3天 |
+| P3 | 输入型 | MinecraftPlugin | 复杂 | 5天 |
+| P3 | 输出型 | Warudo | 复杂 | 5天 |
+| P3 | 处理型 | EmotionJudge | 中等 | 3天 |
+| P4 | 输入型 | BilibiliDanmakuOfficial | 复杂 | 5天 |
+| P4 | 输入型 | VRChat | 复杂 | 5天 |
+| P4 | 输出型 | OBS | 复杂 | 4天 |
+| P4 | 处理型 | LLMProcessor | 复杂 | 5天 |
+| P4 | 处理型 | STT | 复杂 | 5天 |
+
+**总计**：24个插件，预计36-40天
+
+### 5. Plugin迁移验证流程
+
+```
+1. 单元测试
+   ├─ Provider功能测试
+   ├─ Plugin功能测试
+   ├─ 错误处理测试
+   └─ 生命周期测试
+
+2. 集成测试
+   ├─ Provider集成测试
+   ├─ Plugin集成测试
+   ├─ EventBus集成测试
+   └─ 端到端测试
+
+3. 手动测试
+   ├─ 功能验证
+   ├─ 性能验证
+   ├─ 边界条件测试
+   └─ 用户场景测试
+```
+
+### 6. 迁移配置示例
+
+```toml
+# 旧Plugin配置
+[plugins.bilibili_danmaku]
+enabled = true
+room_id = "123456"
+
+# 新Plugin配置
+[plugins.bilibili_danmaku]
+enabled = true
+# Plugin配置保持不变
+room_id = "123456"
+```
+
+### 7. 迁移注意事项
+
+1. **不要使用BasePlugin**：新Plugin使用Plugin接口，不继承BasePlugin
+2. **不要调用self.core**：新Plugin通过event_bus和config进行依赖注入
+3. **拆分为Provider**：将旧Plugin的功能拆分为一个或多个Provider
+4. **返回Provider列表**：Plugin的setup()方法必须返回Provider列表
+5. **生命周期管理**：Provider实现start/stop/cleanup，Plugin实现setup/cleanup
+
+### 8. 相关文档
+
+- [多Provider并发设计](./multi_provider.md) - Provider接口和实现
+- [DataCache设计](./data_cache.md) - 元数据和原始数据管理
+- [ AmaidesuCore重构设计](./core_refactoring.md) - 核心模块重构
 
 ---
 

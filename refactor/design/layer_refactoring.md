@@ -124,6 +124,189 @@ src/
 
 ---
 
+## 💾 元数据和原始数据管理
+
+### 1. 设计背景
+
+**问题**：
+- Layer 2统一转Text，但某些场景（如图像输入）需要保留原始数据
+- EventBus传递原始大对象（图像、音频）会影响性能
+- 需要按需加载，避免内存浪费
+
+**解决方案**：
+- NormalizedText包含data_ref（引用）而非原始数据
+- 原始数据存储在DataCache中
+- 通过引用按需加载
+
+### 2. NormalizedText结构
+
+```python
+from dataclasses import dataclass
+from typing import Optional, Any, Dict
+
+@dataclass
+class NormalizedText:
+    """标准化文本"""
+    text: str                    # 文本描述
+    metadata: Dict[str, Any]      # 元数据（必需）
+    data_ref: Optional[str] = None  # 原始数据引用（可选）
+
+    # 示例：图像输入
+    # NormalizedText(
+    #     text="用户发送了一张猫咪图片",
+    #     metadata={
+    #         "type": "image",
+    #         "format": "jpeg",
+    #         "size": 102400,
+    #         "timestamp": 1234567890
+    #     },
+    #     data_ref="cache://image/abc123"  # 引用，不是实际数据
+    # )
+
+    # 示例：文本输入（不需要保留原始数据）
+    # NormalizedText(
+    #     text="用户说：你好",
+    #     metadata={
+    #         "type": "text",
+    #         "source": "danmaku",
+    #         "timestamp": 1234567890
+    #     },
+    #     data_ref=None
+    # )
+```
+
+### 3. Layer 2使用DataCache
+
+```python
+class Normalizer:
+    """输入标准化层"""
+
+    def __init__(self, event_bus: EventBus, data_cache: DataCache):
+        self.event_bus = event_bus
+        self.data_cache = data_cache  # 数据缓存服务
+
+    async def normalize(self, raw_data: RawData) -> NormalizedText:
+        """标准化原始数据"""
+
+        # 1. 转换为文本
+        text = await self._to_text(raw_data.content)
+
+        # 2. 如果需要保留原始数据，放入缓存
+        data_ref = None
+        if raw_data.preserve_original:
+            data_ref = await self.data_cache.store(
+                data=raw_data.original_data,
+                ttl=300,  # 5分钟
+                tags={
+                    "type": raw_data.type,
+                    "source": raw_data.source
+                }
+            )
+
+        # 3. 创建NormalizedText
+        normalized = NormalizedText(
+            text=text,
+            metadata={
+                "type": raw_data.type,
+                "source": raw_data.source,
+                "timestamp": raw_data.timestamp
+            },
+            data_ref=data_ref
+        )
+
+        # 4. 发布事件（只传递NormalizedText，不传递原始数据）
+        await self.event_bus.emit("normalization.text.ready", {
+            "normalized": normalized
+        })
+
+        return normalized
+```
+
+### 4. Layer 4访问原始数据
+
+```python
+class Understanding:
+    """表现理解层"""
+
+    def __init__(self, event_bus: EventBus, data_cache: DataCache):
+        self.event_bus = event_bus
+        self.data_cache = data_cache
+
+    async def on_text_ready(self, event: dict):
+        """处理文本就绪事件"""
+        normalized: NormalizedText = event.get("normalized")
+
+        # 1. 处理文本
+        text = normalized.text
+        metadata = normalized.metadata
+
+        # 2. 如果需要访问原始数据，通过引用获取
+        image_features = None
+        if normalized.data_ref:
+            try:
+                original_data = await self.data_cache.retrieve(normalized.data_ref)
+                # 使用原始数据进行多模态处理
+                image_features = await self._extract_image_features(original_data)
+            except NotFoundError:
+                # 数据已过期，使用文本处理
+                self.logger.warning(f"Original data expired: {normalized.data_ref}")
+                image_features = None
+
+        # 3. 生成Intent
+        intent = await self._generate_intent(text, metadata, image_features)
+
+        # 4. 发布事件
+        await self.event_bus.emit("understanding.intent.ready", {
+            "intent": intent
+        })
+```
+
+### 5. DataCache配置
+
+```toml
+[data_cache]
+# TTL默认5分钟
+ttl_seconds = 300
+
+# 最大100MB
+max_size_mb = 100
+
+# 最多1000个条目
+max_entries = 1000
+
+# 淘汰策略：TTL或LRU任一触发
+eviction_policy = "ttl_or_lru"  # ttl_only | lru_only | ttl_or_lru | ttl_and_lru
+```
+
+### 6. 关键优势
+
+**性能优化**：
+- ✅ EventBus传递轻量级的NormalizedText对象
+- ✅ 原始数据存储在DataCache中，不占用EventBus带宽
+- ✅ 按需加载，只有需要时才从缓存中获取
+
+**生命周期管理**：
+- ✅ DataCache自动管理原始数据的生命周期（TTL过期自动删除）
+- ✅ 避免内存泄漏
+- ✅ 可配置的TTL，适应不同场景
+
+**灵活性**：
+- ✅ 不需要保留原始数据时，data_ref=None，不占用缓存
+- ✅ 需要保留时，通过data_ref按需加载
+- ✅ 支持多种数据类型（bytes, Image, Audio等）
+
+**可测试性**：
+- ✅ DataCache可以mock，易于单元测试
+- ✅ NormalizedText是纯数据结构，易于验证
+
+### 7. 相关文档
+
+- [DataCache设计](./data_cache.md) - 详细的DataCache接口和实现
+- [多Provider并发设计](./multi_provider.md)
+- [插件系统设计](./plugin_system.md)
+
+---
+
 ## 🔑 核心概念
 
 ### 1. Provider（提供者）

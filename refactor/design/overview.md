@@ -73,12 +73,15 @@ DecisionProvider返回MessageBase
 ## 🔗 相关文档
 
 ### 设计文档
-
- - [6层架构设计](./layer_refactoring.md) - 详细描述6层核心数据流
+ 
+ - [6层架构设计](./layer_refactoring.md) - 详细描述6层核心数据流（含元数据管理）
  - [决策层设计](./decision_layer.md) - 可替换的决策Provider系统
- - [多Provider并发设计](./multi_provider.md) - 输入/输出层并发处理
- - [插件系统设计](./plugin_system.md) - 插件系统和Provider接口
- - [核心重构设计](./core_refactoring.md) - AmaidesuCore的彻底解耦
+ - [多Provider并发设计](./multi_provider.md) - 输入/输出层并发处理（含错误处理和生命周期）
+ - [插件系统设计](./plugin_system.md) - 插件系统和Provider接口（含迁移指南）
+ - [核心重构设计](./core_refactoring.md) - AmaidesuCore的彻底解耦（含HTTP服务器管理）
+ - [DataCache设计](./data_cache.md) - 原始数据缓存服务
+ - [Pipeline重新设计](./pipeline_refactoring.md) - TextPipeline处理系统
+ - [HTTP服务器设计](./http_server.md) - 基于FastAPI的HTTP服务器
 
 ### 实施计划
 
