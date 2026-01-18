@@ -1,262 +1,347 @@
 # Amaidesu 重构实施计划总览
 
-## 📋 实施原则
+> **版本**: v1.0
+> **日期**: 2026-01-18
+> **状态**: 设计阶段
 
-### 核心目标
-1. **全面重构**：1-2天内完成，不考虑向后兼容
-2. **消灭插件化**：核心功能全部模块化
-3. **EventBus优先**：用事件系统替代服务注册
-4. **Provider模式**：统一接口，工厂动态选择
-5. **支持并发**：每层支持多个Provider同时处理
-6. **决策层可替换**：MaiCore只是决策Provider的一种实现
-7. **保留Git历史**：使用`git mv`迁移文件，避免丢失提交历史
+---
 
-### ⚠️ 重要：Git历史保留
+## 📊 差距分析
 
-**强制要求**：所有文件迁移必须使用`git mv`命令，**禁止使用文件系统直接移动文件**
+### 当前代码 vs 设计目标
 
-**原因**：
-- `git mv`会记录文件移动，Git可以追溯完整历史
-- 直接移动文件会导致Git丢失该文件的提交历史
-- 重构后的代码应该可以追溯到原始实现
+| 维度 | 当前状态 | 设计目标 | 差距 |
+|------|---------|---------|------|
+| **AmaidesuCore代码量** | 642行,管理WebSocket/HTTP/插件/Pipeline/服务 | ~350行,只管内部协调 | 删除292行 |
+| **插件数量** | 23个插件,全部作为插件 | 核心6层 + 扩展 | 23个插件重新分类 |
+| **服务注册调用** | ~50次(频繁使用get_service/register_service) | ~10次(核心保留) | 减少80% |
+| **决策层** | 直接使用maim_message连接MaiCore | 可替换的DecisionProvider系统 | 新增抽象层 |
+| **数据流** | 插件→MessageBase→MaiCore(单一流程) | 6层清晰数据流 | 新增5层抽象 |
+| **通信模式** | 混合:EventBus + 服务注册 | EventBus为主(90%覆盖率) | 统一通信 |
 
-**正确做法**：
-```bash
-# ✅ 正确：使用git mv
-git mv src/plugins/minecraft src/extensions/minecraft
-git commit -m "refactor: migrate minecraft to extension"
+### 关键发现
 
-# 查看完整历史（包括移动）
-git log --follow src/extensions/minecraft/
+#### 1. 插件功能分析
+
+**输入型插件**(6个):
+- `console_input`: 控制台输入,使用prompt_context服务
+- `bili_danmaku`: B站弹幕,使用prompt_context服务
+- `mock_danmaku`: 模拟弹幕
+- `bili_danmaku_official`: B站官方弹幕
+- `bili_danmaku_selenium`: B站Selenium弹幕
+- `stt`: 语音识别
+
+**输出型插件**(5个):
+- `tts`: Edge TTS + Omni TTS,使用text_cleanup和vts_lip_sync服务
+- `subtitle`: 字幕显示
+- `sticker`: 表情贴纸
+- `vtube_studio`: VTS控制,注册vts_control服务
+- `omni_tts`: Omni TTS
+
+**游戏交互型插件**(4个):
+- `maicraft`: Minecraft交互
+- `mainosaba`: 主OSABA
+- `arknights`: 明日方舟
+- `warudo`: Warudo控制
+
+**处理型插件**(3个):
+- `llm_text_processor`: LLM文本处理,注册text_cleanup服务
+- `keyword_action`: 关键词动作
+- `emotion_judge`: 情感判断
+
+**其他插件**(5个):
+- `read_pingmu`: 读屏木
+- `remote_stream`: 远程串流
+- `dg_lab_service`: DG-Lab服务
+- `dg-lab-do`: DG-Lab DO
+- `vrchat`: VRChat控制
+
+#### 2. 服务依赖分析
+
+**核心服务**(必须保留):
+- `prompt_context`: 被2个插件依赖
+- `avatar_control_manager`: 虚拟形象控制核心
+
+**输出相关服务**(通过EventBus替代):
+- `vts_control`: 可通过"expression.parameters_generated"事件
+- `text_cleanup`: 可通过"text.ready"事件
+- `vts_lip_sync`: 可通过"audio.playing"事件
+- `subtitle_service`: 可通过"audio.playing"事件
+
+**游戏相关服务**(可迁移到扩展):
+- `minecraft_service`: 作为服务或扩展
+- `warudo_service`: 作为服务或扩展
+
+#### 3. Pipeline使用分析
+
+**现有Pipeline**:
+- `throttle`: 限流Pipeline,处理MessageBase
+- 其他Pipeline未启用或不存在
+
+**迁移策略**:
+- `throttle` → 保留并改造为TextPipeline
+- 新增`filter`: 过滤敏感词
+- 新增`message_logger`: 消息日志(可选)
+
+---
+
+## 🎯 重构策略
+
+### 核心原则
+
+1. **不中断现有功能**: 重构过程中系统始终可用
+2. **向后兼容配置**: 保留旧配置格式,逐步迁移
+3. **增量式重构**: 分阶段实施,每阶段验证后继续
+4. **并行独立**: 可并行的模块尽量并行开发
+5. **风险控制**: 关键路径单线程执行,非关键路径并行
+
+### 依赖关系图
+
+```
+Phase 1: 基础设施(必须先完成)
+├─ Provider接口定义(无依赖)
+├─ EventBus增强(无依赖)
+├─ DataCache实现(无依赖)
+└─ 配置系统迁移(无依赖)
+
+Phase 2: 输入层(依赖Phase 1)
+├─ Layer 1: InputProvider接口(依赖: EventBus)
+├─ Layer 2: Normalization层(依赖: EventBus, DataCache)
+└─ 插件迁移示例(依赖: Layer 1-2)
+
+Phase 3: 决策层+中间层(依赖Phase 1)
+├─ Layer 3: CanonicalMessage(依赖: EventBus)
+├─ DecisionProvider接口(依赖: Layer 3)
+├─ MaiCoreDecisionProvider实现(依赖: 现有代码)
+├─ DecisionManager(依赖: DecisionProvider)
+└─ Layer 4: Understanding(依赖: DecisionProvider)
+
+Phase 4: 输出层(依赖Phase 1, 3)
+├─ Layer 5: Expression生成(依赖: DecisionProvider)
+├─ Layer 6: Rendering层(依赖: Layer 5)
+└─ 输出插件迁移(依赖: Layer 5-6)
+
+Phase 5: 扩展系统(依赖: Phase 2, 4)
+├─ Plugin接口(依赖: Provider接口)
+├─ PluginManager重构(依赖: Plugin接口)
+└─ 剩余插件迁移(依赖: Plugin接口)
+
+Phase 6: 清理和测试(依赖所有前期)
+├─ AmaidesuCore简化(依赖: 所有阶段)
+├─ 移除旧代码(依赖: 所有阶段)
+└─ 测试和文档(依赖: 所有阶段)
 ```
 
-### 实施顺序
+---
 
-按照数据流顺序，从输入到输出逐步重构：
-```
-Phase 1 (基础设施) → Phase 2 (输入) → Phase 3 (决策+中间) → Phase 4 (输出) → Phase 5 (扩展) → Phase 6 (清理)
-```
+## 📅 6阶段重构计划
+
+### Phase 1: 基础设施 (5-7天)
+
+**目标**: 建立新架构的基础设施,为后续阶段提供支撑
+
+**范围**:
+- ✅ Provider接口定义(InputProvider, OutputProvider, DecisionProvider)
+- ✅ EventBus增强(添加错误处理、生命周期管理)
+- ✅ DataCache实现(原始数据缓存)
+- ✅ 配置系统迁移(支持新配置格式)
+
+**关键依赖**: 无
+
+**风险**: 低
+
+**验收标准**:
+- [ ] Provider接口定义完成,文档齐全
+- [ ] EventBus支持错误隔离、优先级、统计
+- [ ] DataCache支持TTL/LRU、线程安全
+- [ ] 新配置格式可加载,向后兼容旧格式
 
 ---
 
-## 🗓️ 各阶段详细计划
+### Phase 2: 输入层 (7-10天)
 
-### Phase 1: 基础设施搭建
+**目标**: 实现Layer 1和Layer 2,迁移2个简单输入插件
 
-**目标**：搭建重构的基础设施
+**范围**:
+- ✅ Layer 1: InputProvider接口
+- ✅ Layer 2: Normalization层(RawData → Text)
+- ✅ ConsoleInputProvider实现(从现有插件迁移)
+- ✅ MockDanmakuProvider实现(从现有插件迁移)
+- ✅ InputProviderManager(多Provider并发管理)
 
-**详细内容**：[Phase 1: 基础设施](./phase1_infrastructure.md)
+**关键依赖**: Phase 1完成
 
-**任务清单**：
-- [x] Provider接口定义（公共API）
-- [x] 决策Provider接口定义（新增）
-- [x] Extension接口定义
-- [x] ExtensionLoader实现
-- [x] EventBus增强
+**风险**: 中(需要保证现有输入功能正常)
 
-**预期产出**：
-- `src/core/provider.py`
-- `src/core/decision_provider.py`
-- `src/core/extension.py`
-- `src/core/extension_loader.py`
-
----
-
-### Phase 2: 输入层实现 (Layer 1-2)
-
-**目标**：实现输入数据流的前两层
-
-**详细内容**：[Phase 2: 输入层](./phase2_input.md)
-
-**任务清单**：
-- [x] Layer 1: 输入感知层 - 统一所有输入源接口
-- [x] Layer 2: 输入标准化层 - 统一转换为Text格式
-
-**预期产出**：
-- `src/perception/` 目录及所有Provider
-- `src/normalization/` 目录及所有Normalizer
-
-**迁移清单**：
-- [x] console_input → perception/text/console_input.py
-- [x] bili_danmaku → perception/text/danmaku/
-- [x] mock_danmaku → perception/text/danmaku/
-- [x] stt → perception/audio/stt/
+**验收标准**:
+- [ ] 输入数据正确转换为RawData
+- [ ] RawData正确转换为Text
+- [ ] ConsoleInput和MockDanmaku在6层架构下正常工作
+- [ ] 多Provider并发正常
 
 ---
 
-### Phase 3: 决策层 + Layer 3-4
+### Phase 3: 决策层+中间层 (10-14天)
 
-**目标**：实现决策层和中间表示、表现理解层
+**目标**: 实现决策层可替换性和中间表示层
 
-**详细内容**：[Phase 3: 决策层](./phase3_decision.md)
+**范围**:
+- ✅ Layer 3: CanonicalMessage + MessageBuilder
+- ✅ DecisionProvider接口
+- ✅ MaiCoreDecisionProvider实现(从现有AmaidesuCore迁移WebSocket/HTTP代码)
+- ✅ DecisionManager(工厂模式,支持运行时切换)
+- ✅ LocalLLMDecisionProvider(可选实现)
+- ✅ RuleEngineDecisionProvider(可选实现)
+- ✅ Layer 4: Understanding层(Intent解析)
 
-**任务清单**：
-- [x] 决策层实现（DecisionManager + DecisionProviders）
-- [x] Layer 3: 中间表示层 - 统一消息格式
-- [x] Layer 4: 表现理解层 - 解析MaiCore返回
+**关键依赖**: Phase 1完成
 
-**预期产出**：
-- `src/core/decision_manager.py`
-- `src/core/providers/` (MaiCore + LocalLLM + RuleEngine)
-- `src/canonical/` 目录
-- `src/understanding/` 目录
+**风险**: 高(核心功能迁移,容易破坏现有流程)
 
-**迁移清单**：
-- [x] llm_text_processor → understanding/response_parser.py
-- [x] emotion_judge → understanding/emotion_judge.py
-
----
-
-### Phase 4: 输出层实现 (Layer 5-6)
-
-**目标**：实现输出数据流的后两层
-
-**详细内容**：[Phase 4: 输出层](./phase4_output.md)
-
-**任务清单**：
-- [x] Layer 5: 表现生成层 - 生成渲染参数
-- [x] Layer 6: 渲染呈现层 - 多Provider并发渲染
-
-**预期产出**：
-- `src/expression/` 目录
-- `src/rendering/` 目录及所有Renderer
-
-**迁移清单**：
-- [x] tts → expression/tts_module.py + rendering/audio_renderer.py
-- [x] subtitle → rendering/subtitle_renderer.py
-- [x] vtube_studio → rendering/virtual_renderer.py
+**验收标准**:
+- [ ] MaiCoreDecisionProvider完全替代现有WebSocket连接
+- [ ] DecisionManager支持运行时切换Provider
+- [ ] CanonicalMessage格式清晰
+- [ ] Understanding正确解析MessageBase→Intent
 
 ---
 
-### Phase 5: 插件系统实现
+### Phase 4: 输出层 (10-14天)
 
-**目标**：实现插件系统（Layer 8）
+**目标**: 实现表现生成和渲染层,迁移输出插件
 
-**详细内容**：[Phase 5: 插件系统](./phase5_plugins.md)
+**范围**:
+- ✅ Layer 5: Expression生成层(Intent → RenderParameters)
+- ✅ Layer 6: Rendering层(RenderParameters → 实际渲染)
+- ✅ TTSProvider迁移(从现有插件迁移)
+- ✅ SubtitleProvider迁移(从现有插件迁移)
+- ✅ StickerProvider迁移(从现有插件迁移)
+- ✅ VTSProvider迁移(从现有插件迁移)
+- ✅ OutputProviderManager(多Provider并发渲染)
 
-**任务清单**：
-- [x] PluginLoader实现（支持官方和社区插件）
-- [x] 迁移官方插件（minecraft, warudo, dg_lab）
-- [x] 配置系统更新
-- [x] .gitignore配置
+**关键依赖**: Phase 1, 3完成
 
-**预期产出**：
-- `src/plugins/` 目录（官方插件）
-- `plugins/` 目录（社区插件，.gitignore）
+**风险**: 中(输出功能多样化,需要保证兼容性)
 
-**迁移清单**（必须使用git mv）：
-- [x] minecraft → plugins/minecraft
-- [x] warudo → plugins/warudo
-- [x] dg_lab_service → plugins/dg_lab
-- [x] mainosaba → plugins/mainosaba
-
----
-
-### Phase 6: 清理、测试和迁移
-
-**目标**：清理旧代码，测试所有功能，验证完整性
-
-**详细内容**：[Phase 6: 清理和测试](./phase6_cleanup.md)
-
-**任务清单**：
-- [x] 删除旧插件系统（PluginManager、plugins/目录）
-- [x] 更新main.py以使用新架构
-- [x] 测试所有功能
-- [x] 验证Git历史完整性
-
-**预期产出**：
-- 简化后的 `main.py`
-- 删除的 `src/plugins/` 目录
-- 完整的测试覆盖
+**验收标准**:
+- [ ] Intent正确转换为RenderParameters
+- [ ] TTS、Subtitle、Sticker、VTS正常工作
+- [ ] 多Provider渲染并发正常
+- [ ] 服务注册调用减少80%
 
 ---
 
-## ✅ 总体验证标准
+### Phase 5: 扩展系统 (14-18天)
 
-### 技术指标
-- ✅ 所有现有功能正常运行
-- ✅ 配置文件行数减少40%以上
-- ✅ 核心功能响应时间无增加
-- ✅ 代码重复率降低30%以上
-- ✅ 服务注册调用减少80%以上
-- ✅ EventBus事件调用覆盖率90%以上
-- ✅ 插件系统正常加载官方插件和社区插件
+**目标**: 实现插件系统,迁移剩余插件
 
-### 架构指标
-- ✅ 清晰的6层核心数据流架构
-- ✅ 决策层可替换（支持多种DecisionProvider）
-- ✅ 多Provider并发支持（输入层和输出层）
-- ✅ 层级间依赖关系清晰（单向依赖）
-- ✅ EventBus为内部主要通信模式
-- ✅ Provider模式替代重复插件
-- ✅ 工厂模式支持动态切换
-- ✅ 插件系统支持社区开发
+**范围**:
+- ✅ Plugin接口(聚合多个Provider)
+- ✅ PluginManager重构(支持自动加载)
+- ✅ ExtensionLoader(扫描src/extensions/和extensions/)
+- ✅ 游戏插件迁移(maicraft, mainosaba, arknights, warudo)
+- ✅ 输入插件迁移(bili_danmaku系列, stt)
+- ✅ 输出插件迁移(omni_tts, vrchat, read_pingmu)
+- ✅ 处理插件迁移(llm_text_processor, keyword_action, emotion_judge, dg_lab_service)
+- ✅ 远程/监控插件迁移(remote_stream, dg-lab-do)
+
+**关键依赖**: Phase 2, 4完成
+
+**风险**: 中(插件数量多,需要大量迁移工作)
+
+**验收标准**:
+- [ ] 所有插件迁移完成
+- [ ] 插件系统支持自动加载
+- [ ] 配置简化40%以上
+- [ ] 扩展系统支持社区开发
+
+---
+
+### Phase 6: 清理和测试 (7-10天)
+
+**目标**: 简化AmaidesuCore,清理旧代码,全面测试
+
+**范围**:
+- ✅ AmaidesuCore重构(删除WebSocket/HTTP/Router代码,精简到350行)
+- ✅ 移除旧代码(删除未使用的函数、废弃的类)
+- ✅ 集成测试(端到端测试)
+- ✅ 性能测试(确保响应时间无增加)
+- ✅ 文档完善(迁移指南、开发者文档)
+- ✅ 配置迁移工具(自动转换旧配置到新格式)
+
+**关键依赖**: 所有前期阶段完成
+
+**风险**: 低(清理和测试,风险可控)
+
+**验收标准**:
+- [ ] AmaidesuCore代码量降至350行
+- [ ] 所有现有功能正常运行
+- [ ] 核心功能响应时间无增加
+- [ ] 代码重复率降低30%以上
+- [ ] 文档齐全,示例清晰
+
+---
+
+## 📊 工作量估算
+
+| Phase | 工作日 | 复杂度 | 关键路径 |
+|-------|--------|--------|----------|
+| Phase 1: 基础设施 | 5-7 | 低 | ✅ 是 |
+| Phase 2: 输入层 | 7-10 | 中 | ✅ 是 |
+| Phase 3: 决策层+中间层 | 10-14 | 高 | ✅ 是 |
+| Phase 4: 输出层 | 10-14 | 中 | ✅ 是 |
+| Phase 5: 扩展系统 | 14-18 | 中 | ✅ 是 |
+| Phase 6: 清理和测试 | 7-10 | 低 | ✅ 是 |
+| **总计** | **53-73天** | - | - |
+
+---
+
+## 🔄 迭代策略
+
+### Alpha版本 (Phase 1-2完成)
+- **功能**: 基础设施 + 输入层
+- **可用**: ConsoleInput, MockDanmaku在6层架构下工作
+- **限制**: 决策层仍使用旧方式连接MaiCore
+
+### Beta版本 (Phase 1-4完成)
+- **功能**: 基础设施 + 输入层 + 决策层 + 输出层
+- **可用**: 所有输入和输出功能在新架构下工作
+- **限制**: 扩展系统未完成,插件仍使用旧方式
+
+### RC版本 (Phase 1-6完成)
+- **功能**: 完整6层架构 + 插件系统
+- **可用**: 所有功能迁移完成
+- **限制**: 部分插件可能仍需测试
+
+### 正式版本 (所有Phase完成)
+- **功能**: 完整6层架构 + 插件系统 + 清理旧代码
+- **可用**: 所有功能正常,性能优化
+- **限制**: 无
+
+---
+
+## 🚀 快速开始
+
+### 下一步行动
+
+1. **创建refactor/plan/目录结构**
+2. **为每个Phase创建详细计划文档**:
+   - `phase1_infrastructure.md`
+   - `phase2_input.md`
+   - `phase3_decision.md`
+   - `phase4_output.md`
+   - `phase5_plugins.md`
+   - `phase6_cleanup.md`
+
+3. **评审和完善计划**: 与团队讨论,调整优先级和工作量估算
 
 ---
 
 ## 🔗 相关文档
 
-### 设计文档
 - [设计总览](../design/overview.md)
 - [6层架构设计](../design/layer_refactoring.md)
 - [决策层设计](../design/decision_layer.md)
 - [多Provider并发设计](../design/multi_provider.md)
 - [插件系统设计](../design/plugin_system.md)
 - [核心重构设计](../design/core_refactoring.md)
-
-### 实施文档
-- [Phase 1: 基础设施](./phase1_infrastructure.md)
-- [Phase 2: 输入层](./phase2_input.md)
-- [Phase 3: 决策层](./phase3_decision.md)
-- [Phase 4: 输出层](./phase4_output.md)
-- [Phase 5: 插件系统](./phase5_plugins.md)
-- [Phase 6: 清理和测试](./phase6_cleanup.md)
-
----
-
-## 📝 提交策略
-
-每个Phase完成后，创建独立提交：
-
-```bash
-# Phase 1
-git add src/core/provider.py src/core/decision_provider.py src/core/extension.py src/core/extension_loader.py
-git commit -m "feat(phase1): add provider interfaces and extension system"
-
-# Phase 2
-git add src/perception/ src/normalization/
-git commit -m "feat(phase2): implement Layer 1-2 input perception and normalization"
-
-# Phase 3
-git add src/canonical/ src/understanding/ src/core/decision_manager.py src/core/providers/
-git commit -m "feat(phase3): implement decision layer and Layer 3-4"
-
-# Phase 4
-git add src/expression/ src/rendering/
-git commit -m "feat(phase4): implement Layer 5-6 output rendering"
-
-# Phase 5
-git add src/extensions/ extensions/.gitkeep
-git commit -m "feat(phase5): implement extension system and migrate built-in extensions"
-
-# Phase 6
-git add main.py
-git rm -r src/plugins/
-git commit -m "refactor: remove plugin system and update main.py"
-```
-
----
-
-## 🎉 重构完成
-
-所有Phase完成，架构重构结束！
-
-**主要成果**：
-1. ✅ 6层核心数据流架构
-2. ✅ 可替换的决策层
-3. ✅ 多Provider并发支持
-4. ✅ Provider模式统一接口
-5. ✅ 插件系统支持社区开发
-6. ✅ EventBus内部通信
-7. ✅ 配置简化40%以上
-8. ✅ Git历史完整保留
