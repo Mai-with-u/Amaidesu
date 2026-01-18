@@ -14,14 +14,14 @@
 
 ## 🏗️ 6层架构详细设计
 
-| 层级                | 英文名        | 输入格式         | 输出格式             | 核心职责          | 设计理由                                       |
-| ------------------- | ------------- | ---------------- | -------------------- | ----------------- | ---------------------------------------------- |
-| **1. 输入感知层**   | Perception    | -                | Raw Data             | 获取外部原始数据  | 按数据源(音频/文本/图像)分离输入源             |
-| **2. 输入标准化层** | Normalization | Raw Data         | **Text**             | 统一转换为文本    | 为决策层准备标准化输入                         |
-| **3. 中间表示层**   | Canonical     | Text             | **CanonicalMessage** | 统一消息格式      | 标准化数据结构，发送给决策层进行决策         |
-| **4. 表现理解层**   | Understanding | MessageBase       | **Intent**            | 解析决策层返回      | 接收DecisionProvider返回，理解表现意图和渲染需求         |
-| **5. 表现生成层**   | Expression    | Intent             | **RenderParameters**  | 生成各种表现参数  | **驱动层只输出参数**，符合设计讨论中的分离原则 |
-| **6. 渲染呈现层**   | Rendering     | RenderParameters | **Frame/Stream**     | 最终渲染输出      | **渲染层只管渲染**，换引擎不用重写             |
+| 层级                | 英文名        | 输入格式         | 输出格式             | 核心职责         | 设计理由                                         |
+| ------------------- | ------------- | ---------------- | -------------------- | ---------------- | ------------------------------------------------ |
+| **1. 输入感知层**   | Perception    | -                | Raw Data             | 获取外部原始数据 | 按数据源(音频/文本/图像)分离输入源               |
+| **2. 输入标准化层** | Normalization | Raw Data         | **Text**             | 统一转换为文本   | 为决策层准备标准化输入                           |
+| **3. 中间表示层**   | Canonical     | Text             | **CanonicalMessage** | 统一消息格式     | 标准化数据结构，发送给决策层进行决策             |
+| **4. 表现理解层**   | Understanding | MessageBase      | **Intent**           | 解析决策层返回   | 接收DecisionProvider返回，理解表现意图和渲染需求 |
+| **5. 表现生成层**   | Expression    | Intent           | **RenderParameters** | 生成各种表现参数 | **驱动层只输出参数**，符合设计讨论中的分离原则   |
+| **6. 渲染呈现层**   | Rendering     | RenderParameters | **Frame/Stream**     | 最终渲染输出     | **渲染层只管渲染**，换引擎不用重写               |
 
 ---
 
@@ -60,7 +60,7 @@ graph TB
     end
 
     subgraph "插件系统: Plugin"
-        Plugins[插件=聚合多个Provider<br/>Minecraft/原神/自定义]
+        Plugins[插件=聚合多个Provider<br/>Minecraft/自定义]
     end
 
     Perception -->|"Raw Data"| Normalization

@@ -297,7 +297,7 @@ class Plugin(Protocol):
 **1. 当前场景评估**（基于现有24个插件）：
 - 文本输入：ConsoleInput、BilibiliDanmaku、BilibiliComment、BilibiliChat
 - 语音输入：STTPlugin（转文本）
-- 游戏输入：MinecraftPlugin（游戏状态转文本）、原神Plugin（游戏状态转文本）
+- 游戏输入：MinecraftPlugin（游戏状态转文本）
 - 图像/视频输入：无
 
 **结论**：当前所有输入最终都是文本，转Text是合理的。
@@ -597,36 +597,36 @@ class MaiCoreDecisionProvider:
 
 ### 5.1 高优先级采纳的改进
 
-| 改进点 | 采纳方案 | 实施阶段 |
-|--------|---------|---------|
-| Plugin接口兼容性 | **完全重构，废弃BasePlugin** | Phase 5 |
-| EventBus使用边界 | 明确使用场景和命名规范 | Phase 1 |
-| Provider错误处理 | 错误隔离，手动重启 | Phase 1 |
-| Provider元数据 | 添加ProviderInfo类 | Phase 1 |
-| Provider生命周期钩子 | 添加start/stop/cleanup等钩子 | Phase 1 |
-| Plugin生命周期钩子 | 添加load/unload/enable/disable等钩子 | Phase 5 |
+| 改进点               | 采纳方案                             | 实施阶段 |
+| -------------------- | ------------------------------------ | -------- |
+| Plugin接口兼容性     | **完全重构，废弃BasePlugin**         | Phase 5  |
+| EventBus使用边界     | 明确使用场景和命名规范               | Phase 1  |
+| Provider错误处理     | 错误隔离，手动重启                   | Phase 1  |
+| Provider元数据       | 添加ProviderInfo类                   | Phase 1  |
+| Provider生命周期钩子 | 添加start/stop/cleanup等钩子         | Phase 1  |
+| Plugin生命周期钩子   | 添加load/unload/enable/disable等钩子 | Phase 5  |
 
 ### 5.2 澄清的设计意图
 
-| 设计点 | 澄清内容 | 结论 |
-|--------|---------|------|
-| EventBus是IoC容器 | **不是IoC容器**，是事件总线，通过参数注入依赖 | EventBus是事件总线 |
-| Plugin兼容性 | **不需要并存**，项目初期无历史包袱，完全重构 | 废弃BasePlugin |
-| Provider/Plugin生命周期 | **区分**：Provider是数据组件，Plugin是容器 | 各自有独立生命周期 |
-| Layer 2统一转Text | 当前场景合理，未来支持元数据 | 保持当前设计 |
-| Layer 5与Layer 6分离 | 不是过度设计，收益大于成本 | 保持分离 |
-| Pipeline与Provider边界 | Pipeline需要重新评估，不在Phase 1-5 | Phase 6评估 |
-| MaiCoreDecisionProvider | 复用现有Router代码 | Phase 3实施 |
-| LocalLLM/RuleEngine | 有真实需求，但优先级较低 | Phase 5或6 |
+| 设计点                  | 澄清内容                                      | 结论               |
+| ----------------------- | --------------------------------------------- | ------------------ |
+| EventBus是IoC容器       | **不是IoC容器**，是事件总线，通过参数注入依赖 | EventBus是事件总线 |
+| Plugin兼容性            | **不需要并存**，项目初期无历史包袱，完全重构  | 废弃BasePlugin     |
+| Provider/Plugin生命周期 | **区分**：Provider是数据组件，Plugin是容器    | 各自有独立生命周期 |
+| Layer 2统一转Text       | 当前场景合理，未来支持元数据                  | 保持当前设计       |
+| Layer 5与Layer 6分离    | 不是过度设计，收益大于成本                    | 保持分离           |
+| Pipeline与Provider边界  | Pipeline需要重新评估，不在Phase 1-5           | Phase 6评估        |
+| MaiCoreDecisionProvider | 复用现有Router代码                            | Phase 3实施        |
+| LocalLLM/RuleEngine     | 有真实需求，但优先级较低                      | Phase 5或6         |
 
 ### 5.3 不同意但理解评审者观点
 
-| 评审者建议 | 不同意理由 |
-|-----------|-----------|
+| 评审者建议                                  | 不同意理由                                       |
+| ------------------------------------------- | ------------------------------------------------ |
 | Plugin兼容方案3（BasePlugin作为Plugin基类） | 违背解耦目标，增加复杂度，**项目初期无历史包袱** |
-| Pipeline保留在Layer 2和Layer 5 | 数据格式不匹配，不合理 |
-| Layer 2支持多数据类型 | 当前场景不需要，违反YAGNI原则 |
-| 多Provider同步策略 | 当前场景不需要，提前设计增加复杂度 |
+| Pipeline保留在Layer 2和Layer 5              | 数据格式不匹配，不合理                           |
+| Layer 2支持多数据类型                       | 当前场景不需要，违反YAGNI原则                    |
+| 多Provider同步策略                          | 当前场景不需要，提前设计增加复杂度               |
 
 ---
 

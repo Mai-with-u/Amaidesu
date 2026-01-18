@@ -16,8 +16,8 @@
 
 | 概念         | 定义             | 职责               | 示例                   |
 | ------------ | ---------------- | ------------------ | ---------------------- |
-| **Provider**  | 标准化的原子能力 | 单一能力，可替换   | MinecraftEventProvider |
-| **Plugin**    | 聚合多个Provider | 完整功能，一键开关 | MinecraftPlugin     |
+| **Provider** | 标准化的原子能力 | 单一能力，可替换   | MinecraftEventProvider |
+| **Plugin**   | 聚合多个Provider | 完整功能，一键开关 | MinecraftPlugin        |
 
 **关系**：
 - 一个Plugin = 多个Provider的聚合
@@ -135,15 +135,15 @@ class Plugin(Protocol):
 
 ## 🏗️ 官方插件 vs 社区插件
 
-| 维量         | 官方插件           | 社区插件                       |
-| ------------ | ------------------ | ------------------------------ |
+| 维量         | 官方插件           | 社区插件                    |
+| ------------ | ------------------ | --------------------------- |
 | **目录**     | `src/plugins/`     | `plugins/`（根目录）        |
-| **维护者**   | 官方团队           | 社区/用户                      |
-| **启用**     | 默认启用           | ✅ **自动识别，默认启用**       |
-| **配置**     | `[plugins.xxx]` | `[plugins.xxx]`（可选覆盖） |
-| **Provider** | 可以定义新Provider | 可以定义新Provider             |
-| **来源**     | 代码仓库           | 插件市场/手动安装              |
-| **版本控制** | 纳入Git仓库        | `.gitignore`排除               |
+| **维护者**   | 官方团队           | 社区/用户                   |
+| **启用**     | 默认启用           | ✅ **自动识别，默认启用**    |
+| **配置**     | `[plugins.xxx]`    | `[plugins.xxx]`（可选覆盖） |
+| **Provider** | 可以定义新Provider | 可以定义新Provider          |
+| **来源**     | 代码仓库           | 插件市场/手动安装           |
+| **版本控制** | 纳入Git仓库        | `.gitignore`排除            |
 
 ---
 
@@ -317,7 +317,7 @@ class MinecraftCommandProvider(OutputProvider):
 
 ```bash
 # 方式1：从GitHub克隆
-git clone https://github.com/xxx/genshin-plugin.git plugins/genshin
+git clone https://github.com/xxx/minecraft-plugin.git plugins/minecraft
 
 # 方式2：下载后复制
 cp -r ~/downloads/mygame-plugin plugins/mygame
@@ -328,16 +328,16 @@ mkdir plugins/my-custom-plugin
 
 # 运行程序（自动识别）
 python main.py
-# 日志会显示：✅ 插件加载成功: genshin, mygame
+# 日志会显示：✅ 插件加载成功: minecraft, mygame
 ```
 
 ### 插件目录结构要求
 
 ```
 plugins/
-├── genshin/                # 社区插件1
+├── minecraft/                # 社区插件1
 │   ├── __init__.py         # 必须包含
-│   │   └── GenshinPlugin
+│   │   └── minecraftPlugin
 │   └── providers/
 └── mygame/                 # 社区插件2
     ├── __init__.py         # 必须包含
@@ -382,13 +382,13 @@ enabled = [
     "keyword_action",
 
     # 注释掉的插件将被禁用
-    # "genshin",
+    # "minecraft",
     # "mygame",
 ]
 
-[plugins.genshin]
+[plugins.minecraft]
 enabled = true  # 单独配置优先级更高
-api_url = "https://genshin-api.example.com"
+api_url = "https://minecraft-api.example.com"
 events_enabled = true
 
 [plugins.mygame]
@@ -408,9 +408,9 @@ api_url = "https://mygame-api.example.com"
 # 默认：所有插件自动启用，使用默认配置
 
 # 可选：自定义插件配置
-[plugins.genshin]
+[plugins.minecraft]
 enabled = true  # 显式启用（默认就是true）
-api_url = "https://genshin-api.example.com"  # 自定义配置
+api_url = "https://minecraft-api.example.com"  # 自定义配置
 
 [plugins.mygame]
 enabled = false  # 禁用某个插件
@@ -422,8 +422,8 @@ enabled = false  # 禁用某个插件
 
 ### 官方插件迁移
 
-| 原插件           | 迁移到                  | 插件类型 |
-| ---------------- | ----------------------- | -------- |
+| 原插件           | 迁移到                   | 插件类型 |
+| ---------------- | ------------------------ | -------- |
 | `mainosaba`      | `src/plugins/mainosaba/` | 官方插件 |
 | `minecraft`      | `src/plugins/minecraft/` | 官方插件 |
 | `warudo`         | `src/plugins/warudo/`    | 官方插件 |
@@ -509,7 +509,7 @@ src/plugins/
 
 ```
 plugins/                            # 社区插件（根目录）
-├── genshin/                        # 社区插件1
+├── minecraft/                        # 社区插件1
 │   ├── __init__.py                 # 必须包含
 │   └── providers/                  # Provider实现
 └── mygame/                         # 社区插件2
@@ -571,10 +571,10 @@ class BilibiliDanmakuPlugin(BasePlugin):
 
 分析旧Plugin的功能，拆分为Provider：
 
-| 旧Plugin功能 | 新Provider | 类型 |
-|-------------|-----------|------|
-| 接收弹幕 | BilibiliDanmakuInputProvider | InputProvider |
-| 处理弹幕 | DanmakuProcessor | Plugin |
+| 旧Plugin功能 | 新Provider                   | 类型          |
+| ------------ | ---------------------------- | ------------- |
+| 接收弹幕     | BilibiliDanmakuInputProvider | InputProvider |
+| 处理弹幕     | DanmakuProcessor             | Plugin        |
 
 #### 步骤3：实现Provider
 
@@ -757,23 +757,23 @@ async def test_bilibili_danmaku_plugin():
 
 ### 4. Plugin迁移优先级
 
-| 优先级 | Plugin类型 | Plugin名称 | 复杂度 | 预计工作量 |
-|--------|----------|-----------|--------|-----------|
-| P1 | 输入型 | ConsoleInput | 简单 | 1天 |
-| P1 | 输入型 | MockDanmaku | 简单 | 1天 |
-| P1 | 输出型 | Subtitle | 简单 | 2天 |
-| P2 | 输入型 | BilibiliDanmaku | 中等 | 3天 |
-| P2 | 输出型 | TTS | 中等 | 3天 |
-| P2 | 输出型 | VTubeStudio | 中等 | 3天 |
-| P3 | 输入型 | Microphone | 复杂 | 3天 |
-| P3 | 输入型 | MinecraftPlugin | 复杂 | 5天 |
-| P3 | 输出型 | Warudo | 复杂 | 5天 |
-| P3 | 处理型 | EmotionJudge | 中等 | 3天 |
-| P4 | 输入型 | BilibiliDanmakuOfficial | 复杂 | 5天 |
-| P4 | 输入型 | VRChat | 复杂 | 5天 |
-| P4 | 输出型 | OBS | 复杂 | 4天 |
-| P4 | 处理型 | LLMProcessor | 复杂 | 5天 |
-| P4 | 处理型 | STT | 复杂 | 5天 |
+| 优先级 | Plugin类型 | Plugin名称              | 复杂度 | 预计工作量 |
+| ------ | ---------- | ----------------------- | ------ | ---------- |
+| P1     | 输入型     | ConsoleInput            | 简单   | 1天        |
+| P1     | 输入型     | MockDanmaku             | 简单   | 1天        |
+| P1     | 输出型     | Subtitle                | 简单   | 2天        |
+| P2     | 输入型     | BilibiliDanmaku         | 中等   | 3天        |
+| P2     | 输出型     | TTS                     | 中等   | 3天        |
+| P2     | 输出型     | VTubeStudio             | 中等   | 3天        |
+| P3     | 输入型     | Microphone              | 复杂   | 3天        |
+| P3     | 输入型     | MinecraftPlugin         | 复杂   | 5天        |
+| P3     | 输出型     | Warudo                  | 复杂   | 5天        |
+| P3     | 处理型     | EmotionJudge            | 中等   | 3天        |
+| P4     | 输入型     | BilibiliDanmakuOfficial | 复杂   | 5天        |
+| P4     | 输入型     | VRChat                  | 复杂   | 5天        |
+| P4     | 输出型     | OBS                     | 复杂   | 4天        |
+| P4     | 处理型     | LLMProcessor            | 复杂   | 5天        |
+| P4     | 处理型     | STT                     | 复杂   | 5天        |
 
 **总计**：24个插件，预计36-40天
 

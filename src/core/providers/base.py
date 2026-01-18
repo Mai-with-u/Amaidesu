@@ -2,47 +2,19 @@
 Provider接口基础数据类定义
 
 定义了新架构中的核心数据结构:
-- RawData: 原始数据(来自Layer 1: 输入感知层)
 - RenderParameters: 渲染参数(传递给Layer 6: 渲染呈现层)
 - CanonicalMessage: 标准消息(Layer 3: 中间表示层)
+
+注意: RawData 和 NormalizedText 已移动到 src/core/data_types/
 """
 
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 
-@dataclass
-class RawData:
-    """
-    原始数据
-
-    来自输入感知层(Layer 1)的原始数据，可以包括:
-    - 弹幕文本
-    - 游戏事件数据
-    - 语音音频数据
-    - 屏幕截图数据
-    等任意格式
-
-    Attributes:
-        content: 原始内容(bytes, str, dict等)
-        source: 数据源标识(如"bili_danmaku", "minecraft", "console")
-        data_type: 数据类型(如"text", "audio", "image", "json", "event")
-        timestamp: 时间戳(Unix时间戳,秒)
-        preserve_original: 是否保留原始数据到缓存
-        metadata: 额外的元数据(用于扩展和特殊用途)
-    """
-
-    content: Any
-    source: str
-    data_type: str
-    timestamp: float
-    preserve_original: bool = False
-    metadata: dict = field(default_factory=dict)
-
-    def __post_init__(self):
-        """初始化后处理"""
-        if self.metadata is None:
-            self.metadata = {}
+# 从 data_types 导入数据类，避免重复定义
+from src.core.data_types.raw_data import RawData
+from src.core.data_types.normalized_text import NormalizedText
 
 
 @dataclass

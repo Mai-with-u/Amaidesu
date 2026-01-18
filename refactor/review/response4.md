@@ -379,7 +379,7 @@ enabled = [
     "keyword_action",
 
     # 注释掉的插件将被禁用
-    # "genshin",
+    # "minecraft",
     # "mygame",
 ]
 
@@ -621,24 +621,24 @@ class EmotionType(Enum):
 
 ### 4.1 高优先级修复（7个问题）
 
-| 问题 | 修复方案 | 相关文档 | 状态 |
-|------|---------|----------|------|
-| DataCache引用生成不稳定 | 根据数据类型使用不同的hash策略 | data_cache.md | ✅ |
-| Provider并发启动逻辑 | 使用asyncio.gather确保所有Provider启动 | multi_provider.md | ✅ |
-| MaiCoreDecisionProvider竞态条件 | 使用Future模式避免竞态 | http_server.md | ✅ |
-| Pipeline并发处理 | 添加asyncio.Lock保护 | pipeline_refactoring.md | ✅ |
-| DataCache并发访问 | 线程锁 + asyncio锁双重保护 | data_cache.md | ✅ |
-| Plugin配置格式不一致 | 统一为列表格式，提供迁移工具 | plugin_system.md | ✅ |
-| Layer 4 MessageBase→Intent转换 | 添加详细设计和示例 | layer_refactoring.md | ✅ |
+| 问题                            | 修复方案                               | 相关文档                | 状态 |
+| ------------------------------- | -------------------------------------- | ----------------------- | ---- |
+| DataCache引用生成不稳定         | 根据数据类型使用不同的hash策略         | data_cache.md           | ✅    |
+| Provider并发启动逻辑            | 使用asyncio.gather确保所有Provider启动 | multi_provider.md       | ✅    |
+| MaiCoreDecisionProvider竞态条件 | 使用Future模式避免竞态                 | http_server.md          | ✅    |
+| Pipeline并发处理                | 添加asyncio.Lock保护                   | pipeline_refactoring.md | ✅    |
+| DataCache并发访问               | 线程锁 + asyncio锁双重保护             | data_cache.md           | ✅    |
+| Plugin配置格式不一致            | 统一为列表格式，提供迁移工具           | plugin_system.md        | ✅    |
+| Layer 4 MessageBase→Intent转换  | 添加详细设计和示例                     | layer_refactoring.md    | ✅    |
 
 ### 4.2 修复类型分布
 
-| 类型 | 数量 | 问题 |
-|------|------|------|
-| 并发安全 | 4 | 引用生成、Provider启动、Pipeline处理、DataCache访问 |
-| 竞态条件 | 1 | MaiCoreDecisionProvider获取AmaidesuCore |
-| 配置一致性 | 1 | Plugin配置格式 |
-| 文档完善 | 1 | Layer 4 MessageBase→Intent转换 |
+| 类型       | 数量 | 问题                                                |
+| ---------- | ---- | --------------------------------------------------- |
+| 并发安全   | 4    | 引用生成、Provider启动、Pipeline处理、DataCache访问 |
+| 竞态条件   | 1    | MaiCoreDecisionProvider获取AmaidesuCore             |
+| 配置一致性 | 1    | Plugin配置格式                                      |
+| 文档完善   | 1    | Layer 4 MessageBase→Intent转换                      |
 
 ---
 

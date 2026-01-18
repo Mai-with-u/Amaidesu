@@ -163,7 +163,7 @@ graph TB
     end
 
     subgraph "扩展系统: Extension"
-        Extensions[扩展=聚合多个Provider<br/>Minecraft/原神/自定义]
+        Extensions[扩展=聚合多个Provider<br/>Minecraft/自定义]
     end
 
     Perception -->|"Raw Data"| Normalization
@@ -255,7 +255,7 @@ port = 8001
 **安装示例**：
 ```bash
 # 方式1：从GitHub克隆
-git clone https://github.com/xxx/genshin-extension.git extensions/genshin
+git clone https://github.com/xxx/minecraft-extension.git extensions/minecraft
 
 # 方式2：下载后复制
 cp -r ~/downloads/mygame-extension extensions/mygame
@@ -266,7 +266,7 @@ mkdir extensions/my-custom-extension
 
 # 运行程序（自动识别）
 python main.py
-# 日志会显示：✅ 扩展加载成功: genshin, mygame
+# 日志会显示：✅ 扩展加载成功: minecraft, mygame
 ```
 
 ---
