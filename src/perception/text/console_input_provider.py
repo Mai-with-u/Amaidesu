@@ -6,7 +6,7 @@ ConsoleInputProvider - 控制台输入Provider
 
 import sys
 import asyncio
-from typing import AsyncIterator, Optional, List, Union
+from typing import AsyncIterator, Optional, List
 
 from src.core.providers.input_provider import InputProvider
 from src.core.data_types.raw_data import RawData

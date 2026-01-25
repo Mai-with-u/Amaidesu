@@ -222,12 +222,12 @@ class TriggerStrategyEngine:
                 if not is_important:
                     if self.log_filtered:
                         self.logger.info(f"触发跳过 [重要性低] {reason}: '{text[:30]}...'")
-                    return False, f"not_important", llm_result
+                    return False, "not_important", llm_result
 
                 if not has_changed:
                     if self.log_filtered:
                         self.logger.info(f"触发跳过 [情感未变化] {reason}: '{text[:30]}...'")
-                    return False, f"emotion_unchanged", llm_result
+                    return False, "emotion_unchanged", llm_result
 
                 # 通过所有检查
                 if self.debug_mode:
@@ -236,7 +236,7 @@ class TriggerStrategyEngine:
                 return True, None, llm_result
 
             except Exception:
-                self.logger.error(f"LLM判断失败，回退到允许触发", exc_info=True)
+                self.logger.error("LLM判断失败，回退到允许触发", exc_info=True)
                 # LLM失败时回退到允许触发（向后兼容）
                 return True, None, None
         else:
@@ -313,7 +313,7 @@ class TriggerStrategyEngine:
 
         try:
             llm_result = json.loads(content)
-        except json.JSONDecodeError as e:
+        except json.JSONDecodeError:
             self.logger.error(f"LLM返回的不是有效JSON: {content}")
             # 回退：返回默认值（允许触发）
             return {

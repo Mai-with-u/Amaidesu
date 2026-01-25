@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Type
 # 避免循环导入，使用 TYPE_CHECKING
 if TYPE_CHECKING:
     from .amaidesu_core import AmaidesuCore
-    from .llm_client_manager import LLMClientManager
 
 from src.utils.logger import get_logger
 from src.utils.config import load_component_specific_config, merge_component_configs

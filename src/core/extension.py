@@ -10,8 +10,6 @@ from dataclasses import dataclass, field
 
 if TYPE_CHECKING:
     from .event_bus import EventBus
-    from ..core.providers.input_provider import InputProvider
-    from ..core.providers.output_provider import OutputProvider
 
 
 @dataclass

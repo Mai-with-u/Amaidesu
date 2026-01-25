@@ -8,17 +8,15 @@ ExtensionManager - 扩展管理器
 - Extension生命周期管理（加载、卸载、查询）
 """
 
-import asyncio
 import importlib
 import importlib.util
-import os
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 
 if TYPE_CHECKING:
     from .event_bus import EventBus
-    from .extension import Extension, ExtensionInfo, BaseExtension
+    from .extension import Extension, ExtensionInfo
 
 from src.utils.logger import get_logger
 
