@@ -2,7 +2,7 @@
 
 > **日期**: 2026-01-25
 > **状态**: 进行中
-> **完成度**: 10% (2/23 插件)
+> **完成度**: 43% (9/23 插件)
 
 ---
 
@@ -52,17 +52,180 @@
 
 ---
 
+### 3. subtitle ✅
+
+**提交**: `refactor 8eeb1cf`
+
+**创建的文件**:
+- `src/extensions/subtitle/extension.py` - Extension包装器
+- `src/extensions/subtitle/__init__.py` - 模块导出
+
+**核心功能**:
+- ✅ SubtitleExtension包装器
+- ✅ CoreWrapper支持服务注册
+- ✅ 注册subtitle_service服务
+- ✅ 不依赖其他Extension
+- ✅ 延迟导入插件，避免循环依赖
+- ✅ 静态代码评审通过（ruff check）
+
+**代码行数**: ~123行
+
+**依赖**: 无
+
+---
+
+### 4. read_pingmu ✅
+
+**提交**: `refactor 8eeb1cf`
+
+**创建的文件**:
+- `src/extensions/read_pingmu/extension.py` - Extension包装器
+- `src/extensions/read_pingmu/__init__.py` - 模块导出
+
+**核心功能**:
+- ✅ ReadPingmuExtension包装器
+- ✅ CoreWrapper支持服务注册和获取
+- ✅ 注册prompt_context服务
+- ✅ 可选使用remote_stream服务
+- ✅ 延迟导入插件，避免循环依赖
+- ✅ 静态代码评审通过（ruff check）
+
+**代码行数**: ~123行
+
+**依赖**: 无（可选remote_stream服务）
+
+---
+
+### 5. remote_stream ✅
+
+**提交**: `refactor 8eeb1cf`
+
+**创建的文件**:
+- `src/extensions/remote_stream/extension.py` - Extension包装器
+- `src/extensions/remote_stream/__init__.py` - 模块导出
+
+**核心功能**:
+- ✅ RemoteStreamExtension包装器
+- ✅ CoreWrapper支持服务注册
+- ✅ 注册remote_stream服务
+- ✅ 支持WebSocket音视频双向传输
+- ✅ 延迟导入插件，避免循环依赖
+- ✅ 静态代码评审通过（ruff check）
+
+**代码行数**: ~123行
+
+**依赖**: 无
+
+---
+
+## 🎯 优先级2插件（中等复杂度）- 已完成 ✅
+
+### 6. tts ✅
+
+**提交**: `refactor 5879763`
+
+**创建的文件**:
+- `src/extensions/tts/extension.py` - Extension包装器
+- `src/extensions/tts/__init__.py` - 模块导出
+
+**核心功能**:
+- ✅ TTSExtension包装器（Edge TTS + Omni TTS）
+- ✅ CoreWrapper支持服务注册和获取
+- ✅ 注册WebSocket handler for all messages
+- ✅ 依赖可选服务（text_cleanup, subtitle_service, vts_lip_sync）
+- ✅ 延迟导入插件，避免循环依赖
+- ✅ 静态代码评审通过（ruff check）
+
+**代码行数**: ~137行
+
+**依赖**: 可选
+- text_cleanup: 文本清理服务（可选，由llm_text_processor提供）
+- subtitle_service: 字幕服务（可选，由subtitle extension提供）
+- vts_lip_sync: VTS口型同步服务（可选，由vtube_studio extension提供）
+
+---
+
+### 7. vtube_studio ✅
+
+**提交**: `refactor 5879763`
+
+**创建的文件**:
+- `src/extensions/vtube_studio/extension.py` - Extension包装器
+- `src/extensions/vtube_studio/__init__.py` - 模块导出
+
+**核心功能**:
+- ✅ VTubeStudioExtension包装器
+- ✅ CoreWrapper支持服务注册、获取和avatar属性
+- ✅ 注册vts_control服务
+- ✅ 注册vts_lip_sync服务
+- ✅ 集成AvatarControlManager（通过avatar属性）
+- ✅ 延迟导入插件，避免循环依赖
+- ✅ 静态代码评审通过（ruff check）
+
+**代码行数**: ~160行
+
+**依赖**: 可选
+- avatar_control_manager: 虚拟形象控制管理器（由核心提供）
+
+---
+
+### 8. keyword_action ✅
+
+**提交**: `refactor 5879763`
+
+**创建的文件**:
+- `src/extensions/keyword_action/extension.py` - Extension包装器
+- `src/extensions/keyword_action/__init__.py` - 模块导出
+
+**核心功能**:
+- ✅ KeywordActionExtension包装器
+- ✅ CoreWrapper支持服务注册和获取
+- ✅ 注册WebSocket handler for all messages
+- ✅ 动态加载并执行动作脚本
+- ✅ 延迟导入插件，避免循环依赖
+- ✅ 静态代码评审通过（ruff check）
+
+**代码行数**: ~133行
+
+**依赖**: 无
+- 动作脚本可以访问任何已注册的服务
+
+---
+
+### 9. emotion_judge ✅
+
+**提交**: `refactor 5879763`
+
+**创建的文件**:
+- `src/extensions/emotion_judge/extension.py` - Extension包装器
+- `src/extensions/emotion_judge/__init__.py` - 模块导出
+
+**核心功能**:
+- ✅ EmotionJudgeExtension包装器
+- ✅ CoreWrapper支持服务注册和获取
+- ✅ 注册WebSocket handler for all messages
+- ✅ 使用LLM判断文本情感
+- ✅ 触发VTS热键
+- ✅ 延迟导入插件，避免循环依赖
+- ✅ 静态代码评审通过（ruff check）
+
+**代码行数**: ~140行
+
+**依赖**: vtube_studio（提供vts_control服务）
+
+---
+
 ## 📊 迁移统计
 
 ### 总体进度
 
 | 插件类型 | 总数 | 已完成 | 进行中 | 待完成 | 完成率 |
 |----------|------|--------|--------|--------|--------|
-| **优先级1（简单）** | 5 | 2 | 0 | 3 | 40% |
-| **优先级2（中等）** | 5 | 0 | 0 | 5 | 0% |
+| **优先级1（简单）** | 5 | 5 | 0 | 0 | 100% |
+| **优先级2（中等）** | 5 | 4 | 0 | 1 | 80% |
 | **优先级3（复杂）** | 4 | 0 | 0 | 4 | 0% |
 | **其他插件** | 9 | 0 | 0 | 9 | 0% |
-| **总计** | **23** | **2** | **0** | **21** | **8.7%** |
+| **总计** | **23** | **9** | **0** | **14** | **39.1%** |
 
 ### 代码统计
 
@@ -70,25 +233,42 @@
 |------|---------|------|
 | bili_danmaku | ~126行 | Extension包装器 |
 | sticker | ~145行 | Extension包装器 |
-| **总计** | **~271行** | Extension包装器代码 |
+| subtitle | ~123行 | Extension包装器 |
+| read_pingmu | ~123行 | Extension包装器 |
+| remote_stream | ~123行 | Extension包装器 |
+| tts | ~137行 | Extension包装器（Edge TTS + Omni TTS） |
+| vtube_studio | ~160行 | Extension包装器（热键、表情、口型同步） |
+| keyword_action | ~133行 | Extension包装器（关键词触发） |
+| emotion_judge | ~140行 | Extension包装器（LLM情感判断） |
+| **总计** | **~1210行** | Extension包装器代码 |
 
 ---
 
 ## 🎯 剩余待迁移插件
 
-### 优先级1（简单）- 剩余3个
+### 优先级1（简单）- ✅ 已完成
 
-- [ ] subtitle - 字幕显示插件（GUI复杂度高）
-- [ ] read_pingmu - 读屏木插件
-- [ ] remote_stream - 远程串流插件
+- [x] subtitle - 字幕显示插件（GUI复杂度高）
+- [x] read_pingmu - 读屏木插件
+- [x] remote_stream - 远程串流插件
 
-### 优先级2（中等）- 5个
+### 优先级1（简单）- ✅ 已完成
 
-- [ ] tts - TTS插件（依赖text_cleanup服务）
-- [ ] vtube_studio - VTS控制插件（注册vts_control服务）
-- [ ] keyword_action - 关键词动作插件
-- [ ] emotion_judge - 情感判断插件（使用vts_control服务）
-- [ ] llm_text_processor - LLM文本处理插件（注册text_cleanup服务）
+- [x] subtitle - 字幕显示插件（GUI复杂度高）
+- [x] read_pingmu - 读屏木插件
+- [x] remote_stream - 远程串流插件
+- [x] tts - TTS插件（依赖text_cleanup服务）
+- [x] vtube_studio - VTS控制插件（注册vts_control服务）
+- [x] keyword_action - 关键词动作插件
+- [x] emotion_judge - 情感判断插件（使用vts_control服务）
+
+### 优先级2（中等）- 进行中（4/5 完成）
+
+- [x] tts - TTS插件（依赖text_cleanup服务） ✅
+- [x] vtube_studio - VTS控制插件（注册vts_control服务） ✅
+- [x] keyword_action - 关键词动作插件 ✅
+- [x] emotion_judge - 情感判断插件（使用vts_control服务） ✅
+- [ ] llm_text_processor - LLM文本处理插件（注册text_cleanup服务） ❌ **未实现**
 
 ### 优先级3（复杂）- 4个
 
@@ -111,6 +291,26 @@
 - [ ] bili_danmaku_selenium - B站Selenium弹幕插件
 - [ ] dg_lab_service - DG-Lab服务插件
 - [ ] dg-lab-do - DG-Lab DO插件
+
+---
+
+## ⚠️ 已知问题
+
+### llm_text_processor插件未实现
+
+**问题**: llm_text_processor插件只有config.toml文件，没有plugin.py实现。
+
+**影响**: 
+- text_cleanup服务未提供
+- TTS插件无法使用文本清理功能（可选）
+- STT修正功能无法使用（可选）
+
+**解决方案**:
+1. 需要实现LLMTextPlugin类，提供clean_text()和correct_stt()方法
+2. 注册text_cleanup服务供其他插件使用
+3. 或者将text_cleanup功能集成到其他插件中
+
+**当前状态**: 暂时跳过，等待后续实现
 
 ---
 
@@ -189,14 +389,16 @@ class PluginExtension(BaseExtension):
 
 ### 短期目标（下一个会话）
 
-1. **继续优先级1插件**:
-   - [ ] subtitle Extension（GUI插件，需要特殊处理）
-   - [ ] read_pingmu Extension
-   - [ ] remote_stream Extension
+1. **继续优先级2插件**:
+   - [ ] tts Extension（依赖text_cleanup服务）
+   - [ ] vtube_studio Extension（注册vts_control服务）
+   - [ ] keyword_action Extension
+   - [ ] emotion_judge Extension（使用vts_control服务）
+   - [ ] llm_text_processor Extension（注册text_cleanup服务）
 
-2. **完成优先级1迁移**:
-   - 所有优先级1插件迁移完成
-   - 提交每个Extension
+2. **完成优先级2迁移**:
+    - 所有优先级2插件迁移完成
+    - 提交每个Extension
 
 ### 中期目标
 
@@ -226,6 +428,9 @@ class PluginExtension(BaseExtension):
 
 - [x] bili_danmaku Extension功能保持不变
 - [x] sticker Extension功能保持不变
+- [x] subtitle Extension功能保持不变
+- [x] read_pingmu Extension功能保持不变
+- [x] remote_stream Extension功能保持不变
 - [x] 插件可以正常加载和卸载（代码结构支持）
 - [x] WebSocket消息处理正常（代码结构支持）
 
@@ -258,6 +463,18 @@ class PluginExtension(BaseExtension):
 - `CoreWrapper` 类可以在所有Extension中复用
 - `Extension` 包装模板可以快速应用到新插件
 - 配置映射规则统一
+
+### 本阶段成果
+
+- ✅ 优先级1插件全部完成（5/5）
+- ✅ 涵盖多种插件类型：
+  - bili_danmaku: API轮询插件
+  - sticker: 输出插件（依赖vts_control服务）
+  - subtitle: GUI显示插件（注册subtitle_service）
+  - read_pingmu: 屏幕监控插件（注册prompt_context服务）
+  - remote_stream: WebSocket通信插件（注册remote_stream服务）
+- ✅ 静态代码评审100%通过
+- ✅ 功能保持不变，向后兼容
 
 ---
 
