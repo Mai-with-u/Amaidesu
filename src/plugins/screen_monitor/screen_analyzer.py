@@ -2,7 +2,7 @@ import asyncio
 import time
 import base64
 from io import BytesIO
-from typing import Optional, List, Tuple, Dict, Any
+from typing import Optional, Dict, Any
 from dataclasses import dataclass
 from collections import deque
 import logging

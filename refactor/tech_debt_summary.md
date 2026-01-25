@@ -320,12 +320,87 @@ hotkey_list_str = "\n".join([f"- {hotkey.get('name')}" for hotkey in self.hotkey
 
 ---
 
+### 问题6: 未使用的导入和变量（2026-01-25更新）
+
+**文件**: 21个文件（包括插件和测试文件）
+**错误类型**: F401 (unused-import), F841 (unused-variable)
+**描述**: 以下文件有未使用的导入或变量
+
+**未使用的导入** (F401):
+- `src/plugins/gptsovits_tts/plugin.py` (3个)
+- `src/plugins/obs_control/plugin.py` (1个)
+- `src/plugins/omni_tts/omni_tts.py` (4个)
+- `src/plugins/screen_monitor/plugin.py` (3个)
+- `src/plugins/vrchat/plugin.py` (1个)
+- `src/plugins/warudo/small_actions/throw_fish.py` (1个)
+- `tests/` 多个测试文件 (约18个)
+
+**未使用的变量** (F841):
+- `src/plugins/screen_monitor/screen_analyzer.py` (2个)
+- `src/plugins/screen_monitor/screen_reader.py` (7个)
+- `src/plugins/warudo/mai_state.py` (6个)
+- `tests/` 多个测试文件 (约9个)
+
+**修复建议**: 使用`ruff check --fix`自动修复
+
+**优先级**: 低
+**影响**: 不影响功能，只是代码清理问题
+
+---
+
+### 问题7: 模块导入不在文件顶部（2026-01-25更新）
+
+**文件**: 21个文件（包括插件和测试文件）
+**错误类型**: E402 (module-import-not-at-top-of-file)
+**描述**: 某些文件的模块导入不在文件顶部，可能是因为条件导入
+
+**优先级**: 低
+**影响**: 不影响功能，但不符合代码风格规范
+
+---
+
+### 问题8: 循环导入问题（2026-01-25更新）
+
+**文件**: `src/core/amaidesu_core.py`
+**错误类型**: reportImportCycles
+**描述**: 检测到导入循环
+```
+amaidesu_core.py -> pipeline_manager.py -> amaidesu_core.py
+```
+
+**原因**: AmaidesuCore和PipelineManager之间存在循环依赖
+
+**优先级**: 中
+**影响**: 可能导致模块加载问题，但当前代码运行正常
+
+**修复建议**: 考虑重构架构，将共享的代码提取到单独的模块中
+
+---
+
+### 问题9: 缺少类型参数（2026-01-25更新）
+
+**文件**: `src/core/amaidesu_core.py`
+**错误类型**: reportMissingTypeArgument
+**描述**: Task类型缺少类型参数
+
+**代码**:
+```python
+self._tasks: List[Task] = []  # ❌ 缺少类型参数
+self._tasks: List[Task[Any]] = []  # ✅ 正确
+```
+
+**优先级**: 低
+**影响**: 不影响运行，只是类型安全问题
+
+---
+
 ## 📝 下一步建议
 
 ### 立即任务
 1. ✅ 移除旧代码文件(已完成)
 2. ✅ 静态代码评审(已完成)
-3. ✅ 提交Git commit(已完成 - Phase 4 输出层集成完成)
+3. ✅ 整理技术债到文档(已完成 - 2026-01-25更新)
+4. 提交Git commit(待完成)
 
 ### 后续任务(按需执行)
 1. ✅ Phase 4: 完善输出层集成(已完成)

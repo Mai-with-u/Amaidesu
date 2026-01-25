@@ -12,7 +12,6 @@ from src.core.event_bus import EventBus
 from src.perception.input_provider_manager import InputProviderManager
 from src.perception.input_layer import InputLayer
 from src.perception.text.mock_danmaku_provider import MockDanmakuProvider
-from src.perception.text.mock_danmaku_provider import MockDanmakuProvider
 
 
 class TestRawData:

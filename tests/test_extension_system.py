@@ -4,17 +4,14 @@ Extension系统单元测试
 测试Extension接口、ExtensionManager和示例Extension
 """
 
-import asyncio
 import pytest
 from typing import Any, Dict, List
 
 from src.core.extensions import (
     BaseExtension,
-    Extension,
     ExtensionInfo,
     ExtensionManager,
     ExtensionDependencyError,
-    ExtensionLoadError,
 )
 from src.core.event_bus import EventBus
 

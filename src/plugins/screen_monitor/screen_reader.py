@@ -13,7 +13,6 @@ import logging
 from typing import Optional, List, Dict, Any, Callable
 from dataclasses import dataclass
 from collections import deque
-import json
 import base64
 import io
 
@@ -567,7 +566,7 @@ async def example_usage():
     
     # 3. 设置上下文更新回调
     async def on_context_update(data):
-        print(f"\n📄 上下文已更新:")
+        print("\n📄 上下文已更新:")
         print(f"  🎯 主上下文: {data['main_context']}")
         print(f"  📝 当前上下文: {data['current_context']}")
         print(f"  🆕 新内容: {data['analysis_result'].new_current_context}")
@@ -583,7 +582,7 @@ async def example_usage():
     
     # 4. 设置变化检测回调 - 连接 analyzer 到 reader
     async def on_screen_change(change_data):
-        print(f"\n🔍 检测到屏幕变化!")
+        print("\n🔍 检测到屏幕变化!")
         print(f"  ⏰ 时间戳: {change_data['timestamp']}")
         print(f"  📊 差异分数: {change_data['difference_score']:.2f}")
         print(f"  🖼️ 图像大小: {len(change_data['image_base64'])} bytes")
@@ -594,7 +593,7 @@ async def example_usage():
             if result:
                 print(f"  ✅ AI分析完成: {result.new_current_context}")
             else:
-                print(f"  📦 图像已缓存或分析失败")
+                print("  📦 图像已缓存或分析失败")
         except Exception as e:
             print(f"  ⚠️ 处理变化时出错: {e}")
     

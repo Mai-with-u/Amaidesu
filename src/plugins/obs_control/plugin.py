@@ -5,7 +5,6 @@ from typing import Dict, Any
 from maim_message.message_base import MessageBase
 import asyncio
 import obsws_python as obs
-import time
 
 class ObsControlPlugin(BasePlugin):
     def __init__(self, core: AmaidesuCore, plugin_config: Dict[str, Any]):

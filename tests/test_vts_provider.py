@@ -10,10 +10,9 @@ VTSProvider单元测试
 """
 
 import pytest
-import asyncio
-from unittest.mock import Mock, AsyncMock, MagicMock, patch
+from unittest.mock import Mock, AsyncMock
 from src.providers.vts_provider import VTSProvider
-from src.expression.render_parameters import RenderParameters, ExpressionParameters
+from src.expression.render_parameters import ExpressionParameters
 
 
 @pytest.fixture

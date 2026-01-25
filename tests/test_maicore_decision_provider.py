@@ -3,8 +3,7 @@ MaiCoreDecisionProvider单元测试
 """
 
 import pytest
-import asyncio
-from unittest.mock import Mock, AsyncMock, MagicMock
+from unittest.mock import Mock, AsyncMock
 
 from src.core.providers.maicore_decision_provider import MaiCoreDecisionProvider
 from src.canonical.canonical_message import CanonicalMessage

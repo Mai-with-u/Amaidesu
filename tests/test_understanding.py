@@ -3,7 +3,7 @@ Understanding层单元测试
 """
 
 import pytest
-from src.understanding.intent import Intent, IntentAction, ActionType, EmotionType
+from src.understanding.intent import Intent
 from src.understanding.response_parser import ResponseParser
 from maim_message import MessageBase, BaseMessageInfo, UserInfo, Seg, FormatInfo
 

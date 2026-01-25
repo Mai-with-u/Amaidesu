@@ -4,8 +4,6 @@ CanonicalMessage单元测试
 测试CanonicalMessage类和MessageBuilder工具的功能。
 """
 
-import pytest
-import asyncio
 from src.canonical.canonical_message import CanonicalMessage, MessageBuilder
 from src.core.data_types.normalized_text import NormalizedText
 

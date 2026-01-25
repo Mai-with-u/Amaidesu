@@ -8,7 +8,7 @@ from typing import Any, Mapping, get_type_hints, get_origin, get_args, Type, TYP
 import sys
 
 if TYPE_CHECKING:
-    from typing import TypedDict
+    pass
 
 
 class ParamValidator:

@@ -5,7 +5,6 @@ Phase 4 Provider验证测试（简化版）
 """
 
 import asyncio
-from unittest.mock import AsyncMock
 from typing import Dict, Any
 
 from src.core.event_bus import EventBus

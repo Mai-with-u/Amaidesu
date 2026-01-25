@@ -685,7 +685,7 @@ class MCPClient:
                     break
 
                 # 尝试重连
-                self.logger.info(f"[MCP] 正在尝试重新连接到 MCP 服务器...")
+                self.logger.info("[MCP] 正在尝试重新连接到 MCP 服务器...")
                 success = await self.connect(enable_auto_reconnect=False)
 
                 if success:
