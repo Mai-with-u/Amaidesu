@@ -97,11 +97,7 @@ class ToolGenerator:
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "expression": {
-                            "type": "string",
-                            "enum": enum_values,
-                            "description": "要设置的表情类型"
-                        },
+                        "expression": {"type": "string", "enum": enum_values, "description": "要设置的表情类型"},
                         "intensity": {
                             "type": "number",
                             "minimum": 0.0,

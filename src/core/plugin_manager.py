@@ -46,9 +46,7 @@ class BasePlugin:
             self.logger.debug(f"{self.__class__.__name__} 检测到LLMClientManager")
         else:
             self._llm_client_manager = None
-            self.logger.warning(
-                f"{self.__class__.__name__} 未检测到LLMClientManager，LLM功能将不可用"
-            )
+            self.logger.warning(f"{self.__class__.__name__} 未检测到LLMClientManager，LLM功能将不可用")
 
         # 插件级LLM配置缓存（用于覆盖全局配置）
         self._plugin_llm_cache: Dict[str, LLMClient] = {}
@@ -106,7 +104,7 @@ class BasePlugin:
         self.logger.debug(f"清理插件: {self.__class__.__name__}")
         # 子类应在此处实现清理逻辑
         pass
-    
+
     # --- LLM 客户端获取方法 ---
 
     def get_llm_client(self, config_type: str = "llm") -> LLMClient:
@@ -133,9 +131,7 @@ class BasePlugin:
         # 如果插件没有配置覆盖，直接使用全局管理器
         if not plugin_llm_config:
             if self._llm_client_manager is None:
-                raise ValueError(
-                    "LLM 客户端管理器未初始化，且插件未提供自己的 LLM 配置！"
-                )
+                raise ValueError("LLM 客户端管理器未初始化，且插件未提供自己的 LLM 配置！")
             return self._llm_client_manager.get_client(config_type)
 
         # 插件有配置覆盖，检查缓存
@@ -148,9 +144,7 @@ class BasePlugin:
         try:
             # 验证 config_type
             if config_type not in ["llm", "llm_fast", "vlm"]:
-                raise ValueError(
-                    f"无效的 config_type: {config_type}，必须是 'llm', 'llm_fast' 或 'vlm'"
-                )
+                raise ValueError(f"无效的 config_type: {config_type}，必须是 'llm', 'llm_fast' 或 'vlm'")
 
             # 从全局配置获取基础配置
             if config_type == "llm":
@@ -189,15 +183,15 @@ class BasePlugin:
             error_msg = f"创建插件覆盖的 {config_type} 客户端失败: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
             raise ValueError(error_msg) from e
-    
+
     def _merge_llm_config(self, base_config, plugin_config: Dict[str, Any]) -> Dict[str, Any]:
         """
         合并 LLM 配置（字段级合并）
-        
+
         Args:
             base_config: 全局配置对象（LLMConfig/LLMConfigFast/VLMConfig）
             plugin_config: 插件配置字典
-        
+
         Returns:
             合并后的配置字典
         """
@@ -207,9 +201,9 @@ class BasePlugin:
             "api_key": base_config.api_key,
             "base_url": base_config.base_url,
             "max_tokens": base_config.max_tokens,
-            "temperature": base_config.temperature
+            "temperature": base_config.temperature,
         }
-        
+
         # 插件配置覆盖（仅覆盖非 None 和非空字符串的值）
         for key in ["model", "api_key", "base_url", "max_tokens", "temperature"]:
             if key in plugin_config:
@@ -221,49 +215,44 @@ class BasePlugin:
                 if value is not None:
                     merged[key] = value
                     self.logger.debug(f"插件配置覆盖 {key}: {value}")
-        
+
         # 验证必需字段
         if not merged["api_key"]:
-            raise ValueError(
-                "LLM API Key 未配置！请在全局配置或插件配置中设置 api_key。"
-            )
-        
+            raise ValueError("LLM API Key 未配置！请在全局配置或插件配置中设置 api_key。")
+
         return merged
-    
+
     def get_fast_llm_client(self) -> LLMClient:
         """
         获取快速 LLM 客户端（低延迟场景）
-        
+
         Returns:
             LLMClient 实例
         """
         return self.get_llm_client(config_type="llm_fast")
-    
+
     def get_vlm_client(self) -> LLMClient:
         """
         获取视觉语言模型客户端
-        
+
         Returns:
             LLMClient 实例
         """
         return self.get_llm_client(config_type="vlm")
-    
+
     def create_custom_llm_client(self, model_config: ModelConfig) -> LLMClient:
         """
         创建自定义配置的 LLM 客户端（不使用缓存）
-        
+
         Args:
             model_config: 自定义模型配置
-        
+
         Returns:
             LLMClient 实例
         """
-        self.logger.info(
-            f"创建自定义 LLM 客户端 (model: {model_config.model_name}, "
-            f"base_url: {model_config.base_url})"
-        )
+        self.logger.info(f"创建自定义 LLM 客户端 (model: {model_config.model_name}, base_url: {model_config.base_url})")
         return LLMClient(model_config)
-    
+
     def _clear_llm_client_cache(self, config_type: Optional[str] = None) -> None:
         """
         清除 LLM 客户端缓存

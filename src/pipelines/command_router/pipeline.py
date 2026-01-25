@@ -65,7 +65,7 @@ class CommandRouterPipeline(MessagePipeline):
             "message": message,  # 包含完整消息对象
             "user_id": message.message_info.user_info.user_id if message.message_info.user_info else None,
             "username": message.message_info.user_info.user_nickname if message.message_info.user_info else None,
-            "timestamp": time.time()
+            "timestamp": time.time(),
         }
 
         # 尝试使用事件系统

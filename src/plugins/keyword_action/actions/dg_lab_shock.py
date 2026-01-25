@@ -6,6 +6,7 @@ if TYPE_CHECKING:
     from src.core.amaidesu_core import AmaidesuCore
     from maim_message import MessageBase
 
+
 async def execute(core: "AmaidesuCore", message: "MessageBase"):
     """
     通过调用 dg_lab_control 服务来执行电击动作。
@@ -19,4 +20,4 @@ async def execute(core: "AmaidesuCore", message: "MessageBase"):
         # 这里可以添加更复杂的逻辑，例如从 message 中解析参数
         await dg_lab_service.trigger_shock()
     else:
-        core.logger.error("动作脚本: 未能找到 'dg_lab_control' 服务。请确保 dg_lab_service 插件已启用。") 
+        core.logger.error("动作脚本: 未能找到 'dg_lab_control' 服务。请确保 dg_lab_service 插件已启用。")

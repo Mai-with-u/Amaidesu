@@ -23,19 +23,21 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(_SCRIPT_PATH))
 PLUGINS_DIR = os.path.join(PROJECT_ROOT, "src", "plugins")
 CONFIG_TEMPLATE_PATH = os.path.join(PROJECT_ROOT, "config-template.toml")
 
+
 def get_plugin_names():
     """扫描插件目录并返回所有有效插件的名称列表。"""
     plugin_names = []
     if not os.path.isdir(PLUGINS_DIR):
         print(f"警告: 插件目录未找到: {PLUGINS_DIR}")
         return []
-    
+
     for item in os.listdir(PLUGINS_DIR):
         item_path = os.path.join(PLUGINS_DIR, item)
         # 如果一个项目是目录并且包含 __init__.py，则我们认为它是一个插件
         if os.path.isdir(item_path) and os.path.exists(os.path.join(item_path, "__init__.py")):
             plugin_names.append(item)
-    return sorted(plugin_names) # 排序以保证输出一致性
+    return sorted(plugin_names)  # 排序以保证输出一致性
+
 
 def update_config_template():
     """
@@ -129,7 +131,7 @@ def update_config_template():
             if not lines[section_end_index].strip():
                 available_slots.append(section_end_index)
             section_end_index += 1
-        
+
         # 准备要插入的新行
         lines_to_add = [f"enable_{name} = true\n" for name in sorted(missing_plugins)]
         plugins_to_insert_in_bulk = []
@@ -143,7 +145,7 @@ def update_config_template():
             else:
                 # 如果没有可用的插槽，则将剩余的条目收集起来以便批量插入
                 plugins_to_insert_in_bulk.append(line_content)
-        
+
         # 3. 如果有需要批量插入的条目，则在区域末尾插入它们
         if plugins_to_insert_in_bulk:
             print(f"  -> 正在区域末尾批量添加 {len(plugins_to_insert_in_bulk)} 个剩余插件。")
@@ -167,6 +169,7 @@ def update_config_template():
         print("成功同步 config-template.toml 文件。")
     except IOError as e:
         print(f"错误: 写入文件失败: {e}")
+
 
 if __name__ == "__main__":
     update_config_template()

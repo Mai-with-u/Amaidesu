@@ -3,7 +3,7 @@ import sys
 import os
 
 # 添加项目根目录到Python路径
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from maim_message import MessageBase, Seg, BaseMessageInfo, UserInfo
 from src.core.event_bus import EventBus
@@ -30,27 +30,16 @@ class MockCommandPlugin(BasePlugin):
     async def handle_command(self, event_name: str, data: dict, source: str):
         """处理命令事件"""
         command = data["command"]
-        self.received_commands.append({
-            "command": command,
-            "source": source,
-            "data": data
-        })
+        self.received_commands.append({"command": command, "source": source, "data": data})
         self.logger.info(f"收到命令: {command}")
 
         # 模拟处理命令
         if command == "/test":
-            await self.emit_event("chat.reply", {
-                "message": "测试命令执行成功！",
-                "type": "test"
-            })
+            await self.emit_event("chat.reply", {"message": "测试命令执行成功！", "type": "test"})
 
     async def handle_reply(self, event_name: str, data: dict, source: str):
         """处理回复事件"""
-        self.reply_messages.append({
-            "message": data["message"],
-            "type": data["type"],
-            "source": source
-        })
+        self.reply_messages.append({"message": data["message"], "type": data["type"], "source": source})
 
 
 class LegacyCommandPlugin(BasePlugin):
@@ -90,19 +79,14 @@ async def test_command_router_with_events():
     event_bus = EventBus()
 
     # 创建Core
-    core = AmaidesuCore(
-        platform="test",
-        maicore_host="localhost",
-        maicore_port=8080,
-        event_bus=event_bus
-    )
+    core = AmaidesuCore(platform="test", maicore_host="localhost", maicore_port=8080, event_bus=event_bus)
 
     # 创建管道（使用事件模式）
     pipeline_config = {
         "enabled": True,
         "command_prefix": "/",
         "use_events": True,
-        "subscribers": []  # 不需要订阅者
+        "subscribers": [],  # 不需要订阅者
     }
     pipeline = CommandRouterPipeline(pipeline_config)
     pipeline.core = core  # 设置core引用
@@ -143,20 +127,10 @@ async def test_command_router_legacy_mode():
     print("\n=== 测试CommandRouter向后兼容模式 ===")
 
     # 创建Core（不使用EventBus）
-    core = AmaidesuCore(
-        platform="test",
-        maicore_host="localhost",
-        maicore_port=8080,
-        event_bus=None
-    )
+    core = AmaidesuCore(platform="test", maicore_host="localhost", maicore_port=8080, event_bus=None)
 
     # 创建管道（使用兼容模式）
-    pipeline_config = {
-        "enabled": True,
-        "command_prefix": "/",
-        "use_events": False,
-        "subscribers": ["legacy"]
-    }
+    pipeline_config = {"enabled": True, "command_prefix": "/", "use_events": False, "subscribers": ["legacy"]}
     pipeline = CommandRouterPipeline(pipeline_config)
     pipeline.core = core
 
@@ -184,19 +158,14 @@ async def test_command_fallback():
 
     # 创建Core（有EventBus但subscribers为空）
     event_bus = EventBus()
-    core = AmaidesuCore(
-        platform="test",
-        maicore_host="localhost",
-        maicore_port=8080,
-        event_bus=event_bus
-    )
+    core = AmaidesuCore(platform="test", maicore_host="localhost", maicore_port=8080, event_bus=event_bus)
 
     # 创建管道（事件模式启用，但会回退）
     pipeline_config = {
         "enabled": True,
         "command_prefix": "/",
         "use_events": True,
-        "subscribers": ["fallback_test"]  # 配置订阅者用于回退
+        "subscribers": ["fallback_test"],  # 配置订阅者用于回退
     }
     pipeline = CommandRouterPipeline(pipeline_config)
     pipeline.core = core
@@ -226,28 +195,19 @@ async def test_non_command_messages():
     """测试非命令消息的处理"""
     print("\n=== 测试非命令消息处理 ===")
 
-    core = AmaidesuCore(
-        platform="test",
-        maicore_host="localhost",
-        maicore_port=8080,
-        event_bus=EventBus()
-    )
+    core = AmaidesuCore(platform="test", maicore_host="localhost", maicore_port=8080, event_bus=EventBus())
 
-    pipeline_config = {
-        "enabled": True,
-        "command_prefix": "/",
-        "use_events": True
-    }
+    pipeline_config = {"enabled": True, "command_prefix": "/", "use_events": True}
     pipeline = CommandRouterPipeline(pipeline_config)
     pipeline.core = core
 
     # 测试各种非命令消息
     test_cases = [
-        "hello world",           # 普通文本
-        "http://example.com",    # URL
-        "",                      # 空文本
-        "   ",                   # 空白文本
-        "prefix: command",       # 其他前缀
+        "hello world",  # 普通文本
+        "http://example.com",  # URL
+        "",  # 空文本
+        "   ",  # 空白文本
+        "prefix: command",  # 其他前缀
     ]
 
     for text in test_cases:
@@ -268,17 +228,9 @@ async def test_disabled_pipeline():
     """测试禁用的管道"""
     print("\n=== 测试禁用的CommandRouter ===")
 
-    core = AmaidesuCore(
-        platform="test",
-        maicore_host="localhost",
-        maicore_port=8080,
-        event_bus=EventBus()
-    )
+    core = AmaidesuCore(platform="test", maicore_host="localhost", maicore_port=8080, event_bus=EventBus())
 
-    pipeline_config = {
-        "enabled": False,
-        "use_events": True
-    }
+    pipeline_config = {"enabled": False, "use_events": True}
     pipeline = CommandRouterPipeline(pipeline_config)
 
     # 测试命令
@@ -307,6 +259,7 @@ async def main():
     except Exception as e:
         print(f"\n[ERROR] 测试失败: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 

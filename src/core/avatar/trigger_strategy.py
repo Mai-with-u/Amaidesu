@@ -21,10 +21,11 @@ from src.utils.logger import get_logger
 @dataclass
 class EmotionRecord:
     """情感记录"""
-    emotion: str          # 情感名称（如 "happy_expression"）
-    timestamp: float      # 时间戳
-    intensity: float      # 强度 (0.0-1.0)
-    text: str            # 原始文本（用于调试）
+
+    emotion: str  # 情感名称（如 "happy_expression"）
+    timestamp: float  # 时间戳
+    intensity: float  # 强度 (0.0-1.0)
+    text: str  # 原始文本（用于调试）
 
 
 class SimpleReplyFilter:
@@ -35,19 +36,22 @@ class SimpleReplyFilter:
 
     def __init__(self, config: Dict):
         self.enabled = config.get("simple_reply_filter_enabled", True)
-        patterns = config.get("simple_reply_patterns", [
-            "^[好的好的]$",
-            "^[好呀]$",
-            "^[好的]$",
-            "^[嗯嗯]$",
-            "^[嗯]$",
-            "^[收到]$",
-            "^[知道了]$",
-            "^[明白]$",
-            "^[OK]$",
-            "^[ok]$",
-            "^(好|行|可以)[呀啊嘛。！!]*$"
-        ])
+        patterns = config.get(
+            "simple_reply_patterns",
+            [
+                "^[好的好的]$",
+                "^[好呀]$",
+                "^[好的]$",
+                "^[嗯嗯]$",
+                "^[嗯]$",
+                "^[收到]$",
+                "^[知道了]$",
+                "^[明白]$",
+                "^[OK]$",
+                "^[ok]$",
+                "^(好|行|可以)[呀啊嘛。！!]*$",
+            ],
+        )
         self.patterns = [re.compile(p) for p in patterns]
         self.logger = get_logger("SimpleReplyFilter")
 
@@ -97,9 +101,7 @@ class TimeIntervalController:
         elapsed = current_time - self.last_trigger_time
 
         if elapsed < self.min_interval:
-            self.logger.debug(
-                f"时间间隔控制: 距离上次触发 {elapsed:.2f}秒 < {self.min_interval}秒，跳过"
-            )
+            self.logger.debug(f"时间间隔控制: 距离上次触发 {elapsed:.2f}秒 < {self.min_interval}秒，跳过")
             return True
 
         return False
@@ -138,12 +140,7 @@ class EmotionHistory:
             intensity: 强度
             text: 原始文本
         """
-        record = EmotionRecord(
-            emotion=emotion,
-            timestamp=time.monotonic(),
-            intensity=intensity,
-            text=text
-        )
+        record = EmotionRecord(emotion=emotion, timestamp=time.monotonic(), intensity=intensity, text=text)
         self.history.append(record)
         self.logger.debug(f"记录情感: {emotion} (强度: {intensity:.2f})")
 
@@ -183,7 +180,7 @@ class TriggerStrategyEngine:
             "sad_expression",
             "surprised_expression",
             "angry_expression",
-            "neutral"
+            "neutral",
         ]
 
     async def should_trigger(self, text: str) -> Tuple[bool, Optional[str], Optional[Dict]]:
@@ -268,7 +265,7 @@ class TriggerStrategyEngine:
 
 {context}
 
-可用表情: {', '.join(self.available_emotions)}
+可用表情: {", ".join(self.available_emotions)}
 
 【重要】你必须严格按照以下JSON格式返回结果，不要包含任何其他文字：
 {{
@@ -288,10 +285,7 @@ class TriggerStrategyEngine:
 现在请分析上述文本并返回JSON格式结果："""
 
         # 调用LLM（使用llm_fast小模型）
-        result = await llm_client.chat_completion(
-            prompt=prompt,
-            temperature=0.3
-        )
+        result = await llm_client.chat_completion(prompt=prompt, temperature=0.3)
 
         if not result.get("success"):
             raise RuntimeError(f"LLM调用失败: {result.get('error')}")
@@ -321,7 +315,7 @@ class TriggerStrategyEngine:
                 "emotion": "neutral",
                 "intensity": 1.0,
                 "has_changed": True,
-                "reason": "JSON解析失败，使用默认值"
+                "reason": "JSON解析失败，使用默认值",
             }
 
         return llm_result
@@ -338,7 +332,4 @@ class TriggerStrategyEngine:
         self.emotion_history.record_emotion(emotion, intensity, text)
 
         if self.debug_mode:
-            self.logger.debug(
-                f"记录触发: 情感={emotion}, 强度={intensity:.2f}, "
-                f"文本='{text[:30]}...'"
-            )
+            self.logger.debug(f"记录触发: 情感={emotion}, 强度={intensity:.2f}, 文本='{text[:30]}...'")

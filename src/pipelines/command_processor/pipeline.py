@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional
 from src.core.pipeline_manager import MessagePipeline
 from maim_message import MessageBase
 
+
 class CommandProcessorPipeline(MessagePipeline):
     """
     一个入站管道，用于处理从 MaiCore 返回的消息。
@@ -29,19 +30,26 @@ class CommandProcessorPipeline(MessagePipeline):
             self.logger.error(f"无效的指令匹配模式 '{self.command_pattern_str}': {e}。管道已禁用。")
             self.enabled = False
             self.command_pattern = None
-        
+
         # 从配置加载命令映射
-        self.command_map = self.config.get("command_map", {
-            "vts_trigger_hotkey": {"service": "vts_control", "method": "trigger_hotkey"},
-        })
+        self.command_map = self.config.get(
+            "command_map",
+            {
+                "vts_trigger_hotkey": {"service": "vts_control", "method": "trigger_hotkey"},
+            },
+        )
         self.logger.debug(f"使用命令映射初始化: {self.command_map}")
 
     async def process_message(self, message: MessageBase) -> Optional[MessageBase]:
         """
         处理消息，查找、执行并移除命令标签。
         """
-        if (not self.enabled or not self.command_pattern or
-                not message.message_segment or message.message_segment.type != "text"):
+        if (
+            not self.enabled
+            or not self.command_pattern
+            or not message.message_segment
+            or message.message_segment.type != "text"
+        ):
             return message
 
         original_text = message.message_segment.data
@@ -60,7 +68,7 @@ class CommandProcessorPipeline(MessagePipeline):
             coro = self._execute_single_command(command_full_match)
             if coro:
                 coroutines_to_run.append(coro)
-        
+
         if coroutines_to_run:
             # "即发即忘" (Fire-and-forget) 模式：
             # 我们将所有命令的协程收集起来，然后使用 asyncio.create_task()
@@ -85,7 +93,7 @@ class CommandProcessorPipeline(MessagePipeline):
         返回 None 如果命令无效或无法执行。
         """
         self.logger.debug(f"处理指令标签内容: '{command_full_match}'")
-        
+
         parts = command_full_match.strip().split(":", 1)
         command_name = parts[0]
         args_str = parts[1] if len(parts) > 1 else ""
@@ -115,7 +123,7 @@ class CommandProcessorPipeline(MessagePipeline):
             return None
 
         args = [arg.strip() for arg in args_str.split(",") if arg.strip()]
-        
+
         # 返回协程本身，而不是在此处 await 它
         return method_to_call(*args)
 
@@ -124,4 +132,4 @@ class CommandProcessorPipeline(MessagePipeline):
     #     self.logger.info("CommandProcessorPipeline 已连接")
 
     # async def on_disconnect(self) -> None:
-    #     self.logger.info("CommandProcessorPipeline 已断开") 
+    #     self.logger.info("CommandProcessorPipeline 已断开")

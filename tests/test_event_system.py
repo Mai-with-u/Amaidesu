@@ -3,7 +3,7 @@ import sys
 import os
 
 # 添加项目根目录到Python路径
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.core.event_bus import EventBus
 from src.core.amaidesu_core import AmaidesuCore
@@ -22,10 +22,7 @@ class TestPlugin1(BasePlugin):
     async def trigger_event(self):
         """触发测试事件"""
         self.counter += 1
-        await self.emit_event("test.counter", {
-            "count": self.counter,
-            "message": f"这是第 {self.counter} 次触发"
-        })
+        await self.emit_event("test.counter", {"count": self.counter, "message": f"这是第 {self.counter} 次触发"})
 
 
 class TestPlugin2(BasePlugin):
@@ -43,17 +40,10 @@ class TestPlugin2(BasePlugin):
     async def handle_counter_event(self, event_name: str, data: dict, source: str):
         """处理计数器事件"""
         self.logger.info(f"收到事件: {event_name}, 来源: {source}, 数据: {data}")
-        self.received_events.append({
-            "name": event_name,
-            "data": data,
-            "source": source
-        })
+        self.received_events.append({"name": event_name, "data": data, "source": source})
 
         # 回应一个事件
-        await self.emit_event("test.received", {
-            "original_count": data["count"],
-            "response": "已收到"
-        })
+        await self.emit_event("test.received", {"original_count": data["count"], "response": "已收到"})
 
 
 class TestPlugin3(BasePlugin):
@@ -117,12 +107,7 @@ async def test_core_with_eventbus():
     event_bus = EventBus()
 
     # 创建Core（使用虚拟参数，只测试EventBus功能）
-    core = AmaidesuCore(
-        platform="test",
-        maicore_host="localhost",
-        maicore_port=8080,
-        event_bus=event_bus
-    )
+    core = AmaidesuCore(platform="test", maicore_host="localhost", maicore_port=8080, event_bus=event_bus)
 
     # 验证Core的event_bus属性
     assert core.event_bus is event_bus, "Core的event_bus属性应该返回传入的event_bus"
@@ -138,12 +123,7 @@ async def test_plugin_communication():
     event_bus = EventBus()
 
     # 创建Core（使用虚拟参数）
-    core = AmaidesuCore(
-        platform="test",
-        maicore_host="localhost",
-        maicore_port=8080,
-        event_bus=event_bus
-    )
+    core = AmaidesuCore(platform="test", maicore_host="localhost", maicore_port=8080, event_bus=event_bus)
 
     # 创建插件
     plugin1 = TestPlugin1(core, {"name": "plugin1"})
@@ -180,12 +160,7 @@ async def test_no_eventbus():
     print("\n=== 测试没有EventBus的情况 ===")
 
     # 创建Core（不传入EventBus）
-    core = AmaidesuCore(
-        platform="test",
-        maicore_host="localhost",
-        maicore_port=8080,
-        event_bus=None
-    )
+    core = AmaidesuCore(platform="test", maicore_host="localhost", maicore_port=8080, event_bus=None)
 
     # 创建插件
     plugin = TestPlugin1(core, {"name": "plugin1"})
@@ -248,6 +223,7 @@ async def main():
     except Exception as e:
         print(f"\n[ERROR] 测试失败: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 

@@ -140,7 +140,6 @@ class BiliDanmakuOfficialMaiCraftPlugin(BasePlugin):
         cache_size = self.config.get("message_cache_size", 1000)
         self.message_cache_service = MessageCacheService(max_cache_size=cache_size)
 
-
         # --- 添加退出机制相关属性 ---
         self.shutdown_timeout = self.config.get("shutdown_timeout", 30)  # 30秒超时
         self.cleanup_lock = asyncio.Lock()

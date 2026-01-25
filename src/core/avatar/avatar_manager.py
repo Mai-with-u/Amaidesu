@@ -73,6 +73,7 @@ class AvatarControlManager:
         # 新增：初始化触发策略引擎
         if self._auto_expression_enabled:
             from .trigger_strategy import TriggerStrategyEngine
+
             self._trigger_strategy = TriggerStrategyEngine(auto_config, self)
         else:
             self._trigger_strategy = None

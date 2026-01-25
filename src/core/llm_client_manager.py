@@ -95,9 +95,7 @@ class LLMClientManager:
 
         # 验证 config_type
         if config_type not in ["llm", "llm_fast", "vlm"]:
-            raise ValueError(
-                f"无效的 config_type: {config_type}，必须是 'llm', 'llm_fast' 或 'vlm'"
-            )
+            raise ValueError(f"无效的 config_type: {config_type}，必须是 'llm', 'llm_fast' 或 'vlm'")
 
         try:
             # 1. 从配置文件获取基础配置
@@ -118,9 +116,7 @@ class LLMClientManager:
 
             # 4. 验证必需字段
             if not config_dict["api_key"] or config_dict["api_key"] == "your-api-key":
-                raise ValueError(
-                    f"LLM API Key 未配置！请在 {self.config_path} 的 [{config_type}] 部分设置 api_key。"
-                )
+                raise ValueError(f"LLM API Key 未配置！请在 {self.config_path} 的 [{config_type}] 部分设置 api_key。")
 
             # 4. 创建 ModelConfig
             model_config = ModelConfig(
