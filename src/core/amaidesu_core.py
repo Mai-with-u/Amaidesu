@@ -190,8 +190,13 @@ class AmaidesuCore:
         self._http_app.router.add_post(self._http_callback_path, self._handle_http_request)
         self.logger.info(f"HTTP 服务器配置完成，监听路径: {self._http_callback_path}")
 
-    async def connect(self):
-        """启动核心服务（HTTP服务器等）"""
+    async def connect(self, rendering_config: Optional[Dict[str, Any]] = None):
+        """
+        启动核心服务（HTTP服务器等）
+
+        Args:
+            rendering_config: (可选) 渲染层配置，用于设置输出层
+        """
         if self._http_host and self._http_port:
             self.logger.info(f"正在启动 HTTP 服务器 ({self._http_host}:{self._http_port})...")
             try:
@@ -216,7 +221,15 @@ class AmaidesuCore:
                 except Exception as e:
                     self.logger.error(f"DecisionProvider 连接失败: {e}", exc_info=True)
 
-        # Phase 4: 启动OutputProvider
+        # Phase 4: 设置并启动输出层
+        if rendering_config:
+            try:
+                await self._setup_output_layer(rendering_config)
+            except Exception as e:
+                self.logger.error(f"设置输出层失败: {e}", exc_info=True)
+                self.logger.warning("输出层功能可能不可用，继续启动其他服务")
+
+        # Phase 4: 启动OutputProvider（如果已经通过_setup_output_layer创建了）
         if self._output_provider_manager:
             try:
                 await self._output_provider_manager.setup_all_providers(self._event_bus)
@@ -573,7 +586,6 @@ class AmaidesuCore:
 
             # Layer 5: Intent → ExpressionParameters
             if self._expression_generator:
-
                 params = await self._expression_generator.generate(intent)
                 self.logger.info(f"ExpressionParameters生成完成: {params}")
 

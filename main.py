@@ -23,7 +23,6 @@ from src.core.event_bus import EventBus  # 导入事件总线
 from src.core.llm_client_manager import LLMClientManager  # 导入 LLM 客户端管理器
 from src.utils.logger import get_logger
 from src.utils.config import initialize_configurations  # Updated import
-from src.config.config import global_config
 from src.core.avatar.avatar_manager import AvatarControlManager
 
 logger = get_logger("Main")
@@ -148,6 +147,7 @@ async def main():
     maicore_config = config.get("maicore", {})
     http_config = config.get("http_server", {})
     pipeline_config = config.get("pipelines", {})  # 添加管道配置
+    rendering_config = config.get("rendering", {})  # Phase 4: 渲染配置
 
     platform_id = general_config.get("platform_id", "amaidesu_default")
 
@@ -159,6 +159,12 @@ async def main():
     http_host = http_config.get("host", "127.0.0.1") if http_enabled else None
     http_port = http_config.get("port", 8080) if http_enabled else None
     http_callback_path = http_config.get("callback_path", "/maicore_callback")
+
+    # Phase 4: 记录渲染配置状态
+    if rendering_config:
+        logger.info("检测到渲染配置，将启用输出层")
+    else:
+        logger.info("未检测到渲染配置，输出层功能将被禁用")
 
     # --- 加载管道 ---
     pipeline_manager = None
@@ -242,7 +248,7 @@ async def main():
     logger.info("插件加载完成。")
 
     # --- 连接核心服务 ---
-    await core.connect()  # 连接 WebSocket 并启动 HTTP 服务器
+    await core.connect(rendering_config=rendering_config)  # 连接 WebSocket 并启动 HTTP 服务器，Phase 4: 设置输出层
 
     # --- 保持运行并处理退出信号 ---
     stop_event = asyncio.Event()
