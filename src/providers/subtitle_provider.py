@@ -544,12 +544,12 @@ class SubtitleProvider(OutputProvider):
 
     def _show_context_menu(self, event):
         """显示右键菜单"""
-        if not self.root:
+        if not self.root or not ctk:
             return
 
         try:
             # 创建右键菜单
-            context_menu = tk.Menu(self.root, tearoff=0)
+            context_menu = ctk.Menu(self.root, tearoff=0)
 
             # 添加菜单项
             if self.always_show_window:

@@ -11,16 +11,10 @@ VTS Provider - Layer 6 Rendering层实现
 import asyncio
 import time
 from typing import Dict, Any, Optional, List
-from dataclasses import dataclass
-from enum import Enum
-from PIL import Image
-import io
-import base64
 
 from src.core.providers.output_provider import OutputProvider
-from src.expression.render_parameters import ExpressionParameters, RenderParameters
+from src.expression.render_parameters import RenderParameters
 from src.utils.logger import get_logger
-from src.understanding.intent import EmotionType, ActionType
 
 # LLM匹配依赖
 LLM_AVAILABLE = False

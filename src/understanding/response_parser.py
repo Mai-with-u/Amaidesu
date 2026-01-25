@@ -8,7 +8,7 @@ ResponseParser - 解析MessageBase为Intent
 """
 
 import re
-from typing import Optional, TYPE_CHECKING, Dict, List, Any
+from typing import Optional, TYPE_CHECKING, Dict
 
 from maim_message import MessageBase
 from .intent import Intent, IntentAction, ActionType, EmotionType
@@ -53,12 +53,10 @@ class ResponseParser:
             "愤怒": EmotionType.ANGRY,
             "生气了": EmotionType.ANGRY,
             "惊讶": EmotionType.SURPRISED,
-            "惊讶": EmotionType.SURPRISED,
             "惊喜": EmotionType.SURPRISED,
             "意外": EmotionType.SURPRISED,
             "喜欢": EmotionType.LOVE,
             "爱": EmotionType.LOVE,
-            "喜欢": EmotionType.LOVE,
         }
 
     def parse(self, message: MessageBase) -> Intent:

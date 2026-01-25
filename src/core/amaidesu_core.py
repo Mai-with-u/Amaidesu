@@ -27,13 +27,16 @@ from src.utils.logger import get_logger
 from .pipeline_manager import PipelineManager
 from .context_manager import ContextManager
 from .event_bus import EventBus
-from .decision_manager import DecisionManager, DecisionProviderFactory
+from .decision_manager import DecisionManager
+
+# Phase 4: 输出层
+from .output_provider_manager import OutputProviderManager
+from ..expression.expression_generator import ExpressionGenerator
 
 # 类型检查时的导入
 if TYPE_CHECKING:
     from .avatar.avatar_manager import AvatarControlManager
     from .llm_client_manager import LLMClientManager
-    from .canonical.canonical_message import CanonicalMessage
 
 
 class AmaidesuCore:
@@ -44,6 +47,11 @@ class AmaidesuCore:
     - WebSocket/HTTP/Router功能迁移到MaiCoreDecisionProvider
     - 新增DecisionManager支持
     - 简化为约350行代码
+
+    重构变化（Phase 4）:
+    - 新增OutputProviderManager支持
+    - 新增ExpressionGenerator支持
+    - 实现Layer 4→Layer 5→Layer 6数据流
     """
 
     @property
@@ -75,6 +83,8 @@ class AmaidesuCore:
         avatar: Optional["AvatarControlManager"] = None,
         llm_client_manager: Optional["LLMClientManager"] = None,
         decision_manager: Optional[DecisionManager] = None,
+        output_provider_manager: Optional[OutputProviderManager] = None,
+        expression_generator: Optional[ExpressionGenerator] = None,
     ):
         """
         初始化 Amaidesu Core（重构版本）。
@@ -92,6 +102,8 @@ class AmaidesuCore:
             avatar: (可选) 已配置的虚拟形象控制管理器。
             llm_client_manager: (可选) 已配置的 LLM 客户端管理器。
             decision_manager: (可选) 已配置的决策管理器（Phase 3新增）。
+            output_provider_manager: (可选) 已配置的输出Provider管理器（Phase 4新增）。
+            expression_generator: (可选) 已配置的表达式生成器（Phase 4新增）。
         """
         # 初始化 Logger
         self.logger = get_logger("AmaidesuCore")
@@ -154,6 +166,16 @@ class AmaidesuCore:
         if decision_manager is not None:
             self.logger.info("已使用外部提供的决策管理器")
 
+        # 设置输出Provider管理器（Phase 4新增）
+        self._output_provider_manager = output_provider_manager
+        if output_provider_manager is not None:
+            self.logger.info("已使用外部提供的输出Provider管理器")
+
+        # 设置表达式生成器（Phase 4新增）
+        self._expression_generator = expression_generator
+        if expression_generator is not None:
+            self.logger.info("已使用外部提供的表达式生成器")
+
         # HTTP 服务器（用于插件HTTP回调）
         if self._http_host and self._http_port:
             self._setup_http_server()
@@ -194,8 +216,24 @@ class AmaidesuCore:
                 except Exception as e:
                     self.logger.error(f"DecisionProvider 连接失败: {e}", exc_info=True)
 
+        # Phase 4: 启动OutputProvider
+        if self._output_provider_manager:
+            try:
+                await self._output_provider_manager.setup_all_providers(self._event_bus)
+                self.logger.info("OutputProvider 已启动")
+            except Exception as e:
+                self.logger.error(f"启动 OutputProvider 失败: {e}", exc_info=True)
+
     async def disconnect(self):
         """停止核心服务"""
+        # Phase 4: 停止OutputProvider
+        if self._output_provider_manager:
+            try:
+                await self._output_provider_manager.stop_all_providers()
+                self.logger.info("OutputProvider 已停止")
+            except Exception as e:
+                self.logger.error(f"停止 OutputProvider 失败: {e}", exc_info=True)
+
         # 停止 HTTP 服务器
         if self._http_runner:
             self.logger.info("正在停止 HTTP 服务器...")
@@ -449,7 +487,6 @@ class AmaidesuCore:
         Raises:
             ValueError: 如果 LLMClientManager 未提供或配置无效
         """
-        from src.openai_client.llm_request import LLMClient
 
         if self._llm_client_manager is None:
             raise ValueError("LLM 客户端管理器未初始化！请在 main.py 中创建 LLMClientManager 并传入 AmaidesuCore。")
@@ -472,3 +509,79 @@ class AmaidesuCore:
         """
         self._decision_manager = decision_manager
         self.logger.info("决策管理器已设置")
+
+    # ==================== 输出层管理器（Phase 4新增） ====================
+
+    @property
+    def output_provider_manager(self) -> Optional[OutputProviderManager]:
+        """获取输出Provider管理器实例"""
+        return self._output_provider_manager
+
+    @property
+    def expression_generator(self) -> Optional[ExpressionGenerator]:
+        """获取表达式生成器实例"""
+        return self._expression_generator
+
+    async def _setup_output_layer(self, config: Dict[str, Any]):
+        """
+        设置输出层（Phase 4新增）
+
+        Args:
+            config: 渲染配置（来自[rendering]）
+        """
+        self.logger.info("开始设置输出层...")
+
+        # 创建表达式生成器（如果未提供）
+        if self._expression_generator is None:
+            expression_config = config.get("expression_generator", {})
+            self._expression_generator = ExpressionGenerator(expression_config)
+            self.logger.info("表达式生成器已创建")
+
+        # 创建输出Provider管理器（如果未提供）
+        if self._output_provider_manager is None:
+            self._output_provider_manager = OutputProviderManager(config)
+            self.logger.info("输出Provider管理器已创建")
+
+        # 从配置加载Provider
+        if self._output_provider_manager:
+            await self._output_provider_manager.load_from_config(config, core=self)
+
+        # 订阅Layer 4的Intent事件
+        if self._event_bus:
+            self._event_bus.on("understanding.intent_generated", self._on_intent_ready, priority=50)
+            self.logger.info("已订阅 'understanding.intent_generated' 事件")
+
+        self.logger.info("输出层设置完成")
+
+    async def _on_intent_ready(self, event_name: str, event_data: Dict[str, Any], source: str):
+        """
+        处理Intent事件（Layer 4 → Layer 5 → Layer 6）（Phase 4新增）
+
+        Args:
+            event_name: 事件名称
+            event_data: 事件数据（包含intent对象）
+            source: 事件源
+        """
+        self.logger.info(f"收到Intent事件: {event_name}")
+
+        try:
+            # 提取Intent对象
+            intent = event_data.get("intent")
+            if not intent:
+                self.logger.error("事件数据中缺少intent对象")
+                return
+
+            # Layer 5: Intent → ExpressionParameters
+            if self._expression_generator:
+
+                params = await self._expression_generator.generate(intent)
+                self.logger.info(f"ExpressionParameters生成完成: {params}")
+
+                # Layer 6: ExpressionParameters → OutputProvider
+                if self._output_provider_manager:
+                    await self._output_provider_manager.render_all(params)
+            else:
+                self.logger.warning("表达式生成器未初始化，跳过渲染")
+
+        except Exception as e:
+            self.logger.error(f"处理Intent事件时出错: {e}", exc_info=True)

@@ -8,7 +8,7 @@ import pytest
 import asyncio
 from src.core.data_types.raw_data import RawData
 from src.core.data_types.normalized_text import NormalizedText
-from src.core.event_bus_new import EventBus
+from src.core.event_bus import EventBus
 from src.perception.input_provider_manager import InputProviderManager
 from src.perception.input_layer import InputLayer
 from src.perception.text.mock_danmaku_provider import MockDanmakuProvider

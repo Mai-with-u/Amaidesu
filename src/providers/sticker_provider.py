@@ -4,12 +4,20 @@ Sticker Provider - Layer 6 Rendering层实现
 职责:
 - 将ExpressionParameters中的贴纸动作渲染到VTS
 - 支持VTS道具加载、显示、卸载
-- 集成vts_control服务（向后兼容）
+- 支持自定义贴纸位置、大小、旋转
+- 图片大小调整（PIL）
+- 冷却时间控制
 """
 
+import asyncio
 import base64
 import io
-from typing import Optional, Dict, Any
+from typing import Dict, Any
+
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
 
 from src.core.providers.output_provider import OutputProvider
 from src.expression.render_parameters import ExpressionParameters

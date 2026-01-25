@@ -6,14 +6,19 @@ OutputProviderManager - Layer 6 Rendering层管理器
 - 支持并发渲染
 - 错误隔离（单个Provider失败不影响其他）
 - 生命周期管理（启动、停止、清理）
+- 从配置加载Provider
 """
 
 import asyncio
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, TYPE_CHECKING
 from src.utils.logger import get_logger
 
-from .output_provider import OutputProvider
+from .providers.output_provider import OutputProvider
 from ..expression.render_parameters import ExpressionParameters
+
+# 类型检查时的导入
+if TYPE_CHECKING:
+    pass
 
 
 class OutputProviderManager:
@@ -215,3 +220,121 @@ class OutputProviderManager:
         except Exception as e:
             self.logger.error(f"Provider渲染异常: {provider.get_info()['name']} - {e}")
             raise e
+
+    # ==================== Phase 4: 配置加载 ====================
+
+    async def load_from_config(self, config: Dict[str, Any], core=None):
+        """
+        从配置加载并创建所有OutputProvider
+
+        Args:
+            config: 渲染配置（来自[rendering]）
+            core: AmaidesuCore实例（可选，用于访问服务）
+
+        配置格式:
+            [rendering]
+            outputs = ["tts", "subtitle", "sticker", "vts", "omni_tts"]
+
+            [rendering.outputs.tts]
+            type = "tts"
+            engine = "edge"
+            voice = "zh-CN-XiaoxiaoNeural"
+            ...
+        """
+        self.logger.info("开始从配置加载OutputProvider...")
+
+        # 检查是否启用
+        enabled = config.get("enabled", True)
+        if not enabled:
+            self.logger.info("渲染层已禁用（enabled=false）")
+            return
+
+        # 更新管理器配置
+        self.concurrent_rendering = config.get("concurrent_rendering", True)
+        self.error_handling = config.get("error_handling", "continue")
+
+        # 获取Provider列表
+        outputs = config.get("outputs", [])
+        if not outputs:
+            self.logger.warning("未配置任何输出Provider（outputs为空）")
+            return
+
+        self.logger.info(f"配置了 {len(outputs)} 个输出Provider: {outputs}")
+
+        # 获取各个Provider的配置
+        outputs_config = config.get("outputs", {})
+
+        # 创建Provider实例
+        created_count = 0
+        failed_count = 0
+
+        for output_name in outputs:
+            provider_config = outputs_config.get(output_name, {})
+            provider_type = provider_config.get("type", output_name)
+
+            try:
+                provider = self._create_provider(provider_type, provider_config, core)
+                if provider:
+                    await self.register_provider(provider)
+                    created_count += 1
+                else:
+                    self.logger.error(f"Provider创建失败: {output_name} (type={provider_type})")
+                    failed_count += 1
+            except Exception as e:
+                self.logger.error(f"Provider创建异常: {output_name} - {e}", exc_info=True)
+                failed_count += 1
+
+        self.logger.info(
+            f"OutputProvider加载完成: 成功={created_count}/{len(outputs)}, 失败={failed_count}/{len(outputs)}"
+        )
+
+    def _create_provider(self, provider_type: str, config: Dict[str, Any], core=None) -> Optional[OutputProvider]:
+        """
+        Provider工厂方法：根据类型创建Provider实例
+
+        Args:
+            provider_type: Provider类型（"tts", "subtitle", "sticker", "vts", "omni_tts"）
+            config: Provider配置
+            core: AmaidesuCore实例（可选）
+
+        Returns:
+            Provider实例，如果创建失败返回None
+        """
+        # Provider类型映射
+        provider_classes = {
+            "tts": "src.providers.tts_provider.TTSProvider",
+            "subtitle": "src.providers.subtitle_provider.SubtitleProvider",
+            "sticker": "src.providers.sticker_provider.StickerProvider",
+            "vts": "src.providers.vts_provider.VTSProvider",
+            "omni_tts": "src.providers.omni_tts_provider.OmniTTSProvider",
+        }
+
+        # 获取Provider类路径
+        class_path = provider_classes.get(provider_type.lower())
+        if not class_path:
+            self.logger.error(f"未知的Provider类型: {provider_type}")
+            return None
+
+        try:
+            # 动态导入Provider类
+            module_path, class_name = class_path.rsplit(".", 1)
+            module = __import__(module_path, fromlist=[class_name])
+            provider_class = getattr(module, class_name)
+
+            # 创建Provider实例
+            # 注意：有些Provider的__init__可能需要event_bus和core参数
+            # 但根据基类设计，应该在setup中设置event_bus
+            provider = provider_class(config, event_bus=None, core=core)
+
+            self.logger.info(f"Provider创建成功: {provider_type} -> {class_name}")
+            return provider
+
+        except ImportError as e:
+            self.logger.error(f"Provider模块导入失败: {module_path} - {e}")
+            return None
+        except AttributeError as e:
+            self.logger.error(f"Provider类不存在: {class_name} - {e}")
+            return None
+        except Exception as e:
+            self.logger.error(f"Provider实例化失败: {provider_type} - {e}", exc_info=True)
+            return None

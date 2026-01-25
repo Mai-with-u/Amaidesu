@@ -39,9 +39,9 @@ class TestProviderDataStructures:
 
     def test_canonical_message_creation(self):
         """测试CanonicalMessage创建"""
-        msg = CanonicalMessage(text="hello world")
+        msg = CanonicalMessage(text="hello world", source="test")
         assert msg.text == "hello world"
-        assert msg.intent is None
+        assert msg.source == "test"
         assert msg.metadata == {}
 
 
@@ -51,7 +51,7 @@ class TestEventBusBasic:
     @pytest.mark.asyncio
     async def test_emit_and_receive(self):
         """测试发布和接收"""
-        from src.core.event_bus_new import EventBus
+        from src.core.event_bus import EventBus
 
         event_bus = EventBus(enable_stats=False)
         received = []
@@ -189,7 +189,7 @@ class TestEventBusAdvanced:
     @pytest.mark.asyncio
     async def test_priority_control(self):
         """测试优先级控制"""
-        from src.core.event_bus_new import EventBus
+        from src.core.event_bus import EventBus
 
         event_bus = EventBus(enable_stats=False)
         execution_order = []
@@ -219,7 +219,7 @@ class TestEventBusAdvanced:
     @pytest.mark.asyncio
     async def test_error_isolation(self):
         """测试错误隔离"""
-        from src.core.event_bus_new import EventBus
+        from src.core.event_bus import EventBus
 
         event_bus = EventBus(enable_stats=False)
         results = []
@@ -246,7 +246,7 @@ class TestEventBusAdvanced:
     @pytest.mark.asyncio
     async def test_statistics_tracking(self):
         """测试统计信息跟踪"""
-        from src.core.event_bus_new import EventBus
+        from src.core.event_bus import EventBus
 
         event_bus = EventBus(enable_stats=True)
 
@@ -272,7 +272,7 @@ class TestEventBusAdvanced:
     @pytest.mark.asyncio
     async def test_statistics_with_errors(self):
         """测试错误统计"""
-        from src.core.event_bus_new import EventBus
+        from src.core.event_bus import EventBus
 
         event_bus = EventBus(enable_stats=True)
 
@@ -300,7 +300,7 @@ class TestEventBusAdvanced:
     @pytest.mark.asyncio
     async def test_lifecycle_cleanup(self):
         """测试生命周期清理"""
-        from src.core.event_bus_new import EventBus
+        from src.core.event_bus import EventBus
 
         event_bus = EventBus(enable_stats=False)
 
