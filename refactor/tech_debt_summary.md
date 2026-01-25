@@ -1,8 +1,9 @@
 # Amaidesu 重构技术债总结
 
 > **创建日期**: 2026-01-25
+> **最后更新**: 2026-01-25
 > **目的**: 记录重构过程中发现的小问题和未完成的工作
-> **状态**: 待处理
+> **状态**: 持续更新中
 
 ---
 
@@ -13,11 +14,11 @@
 | **Phase 1: 基础设施** | ✅ 完成 | 100% | Provider接口、EventBus增强、DataCache、配置转换工具 |
 | **Phase 2: 输入层** | ✅ 完成 | 90% | RawData/NormalizedText、InputProviderManager、2个Provider迁移 |
 | **Phase 3: 决策层** | ✅ 完成 | 100% | CanonicalMessage、DecisionManager、3种DecisionProvider、AmaidesuCore重构 |
-| **Phase 4: 输出层** | ✅ 完成 | 90% | Layer 5-6接口、5个OutputProvider实现、AmaidesuCore集成 |
+| **Phase 4: 输出层** | ✅ 完成 | 100% | Layer 5-6接口、5个OutputProvider实现、AmaidesuCore集成（已完成输出层集成） |
 | **Phase 5: 扩展系统** | ✅ 第一阶段完成 | 20% | Extension接口、ExtensionManager、示例Extension,插件迁移待完成 |
 | **Phase 6: 清理和测试** | ✅ 部分完成 | 80% | 旧代码删除,静态代码评审 |
 
-**总体完成度：约 80%**
+**总体完成度：约 82%**
 
 ---
 
@@ -151,25 +152,22 @@ hotkey_list_str = "\n".join([f"- {hotkey.get('name')}" for hotkey in self.hotkey
 
 ## ⏸️ 未完成的工作
 
-### Phase 4: 输出层集成（部分完成）
+### Phase 4: 输出层集成（✅ 已完成）
 
-**状态**: AmaidesuCore已集成OutputProviderManager和ExpressionGenerator,但未被调用
+**状态**: AmaidesuCore已完成输出层集成
 
-**问题**:
-1. `_setup_output_layer()` 方法已实现,但从未被调用
-2. `_on_intent_ready()` 事件处理器已实现,但未订阅`understanding.intent_generated`事件
+**完成的改进**:
+1. ✅ `connect()` 方法现在接受可选的 `rendering_config` 参数
+2. ✅ 在 `connect()` 中调用 `_setup_output_layer(rendering_config)` 当配置存在时
+3. ✅ `_on_intent_ready()` 通过 `_setup_output_layer()` 订阅 `understanding.intent_generated` 事件
+4. ✅ main.py 提取渲染配置并传递给 `core.connect()`
+5. ✅ Layer 4 → Layer 5 → Layer 6 数据流现已激活
 
-**影响**: Layer 4→Layer 5→Layer 6的完整数据流未被激活
+**Git commit**: `refactor: Phase 4 输出层集成完成` (commit 3e540d0)
 
-**建议**: 在AmaidesuCore的connect()方法中添加调用:
-```python
-# 在connect()方法中,启动HTTP服务器后添加
-output_config = config.get("rendering", {})
-if output_config:
-    await self._setup_output_layer(output_config)
-```
+**影响**: Phase 4 现已 100% 完成,输出层完全集成到 AmaidesuCore
 
-**优先级**: 中
+**优先级**: 完成
 **工作量**: 1-2小时
 
 ---
@@ -327,14 +325,20 @@ if output_config:
 ### 立即任务
 1. ✅ 移除旧代码文件(已完成)
 2. ✅ 静态代码评审(已完成)
-3. ✅ 提交Git commit(待进行)
+3. ✅ 提交Git commit(已完成 - Phase 4 输出层集成完成)
 
 ### 后续任务(按需执行)
-1. Phase 4: 完善输出层集成(调用_setup_output_layer)
-2. Phase 5: 插件迁移(16个插件)
-3. Phase 6: 进一步精简AmaidesuCore
-4. 补充测试(集成测试、端到端测试)
+1. ✅ Phase 4: 完善输出层集成(已完成)
+2. Phase 5: 插件迁移(16个插件) - **下一步优先任务**
+   - 游戏扩展: minecraft, mainosaba
+   - 输入扩展: bili_danmaku系列, stt
+   - 输出扩展: 已在Phase 4完成
+   - 处理型扩展: llm_text_processor, keyword_action, emotion_judge
+   - 其他扩展: remote_stream, vrchat, read_pingmu, dg_lab_service
+3. Phase 6: 进一步精简AmaidesuCore (当前587行, 目标350行)
+4. 补充测试(集成测试、端到端测试) - **用户将手动测试**
 5. 完善文档(用户文档、API文档)
+6. 配置模板完善 (为每个Provider创建config-template.toml)
 
 ---
 
