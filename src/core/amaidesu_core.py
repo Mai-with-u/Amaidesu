@@ -18,10 +18,6 @@ Amaidesu Core - 核心模块（Phase 3重构后版本）
 import asyncio
 from typing import Callable, Dict, Any, Optional, TYPE_CHECKING
 
-# 注意：需要安装 aiohttp
-# pip install aiohttp
-from aiohttp import web
-
 from maim_message import MessageBase
 from src.utils.logger import get_logger
 from .pipeline_manager import PipelineManager
@@ -72,11 +68,6 @@ class AmaidesuCore:
     def __init__(
         self,
         platform: str,
-        maicore_host: str,
-        maicore_port: int,
-        http_host: Optional[str] = None,
-        http_port: Optional[int] = None,
-        http_callback_path: str = "/callback",
         pipeline_manager: Optional[PipelineManager] = None,
         context_manager: Optional[ContextManager] = None,
         event_bus: Optional[EventBus] = None,
@@ -91,11 +82,6 @@ class AmaidesuCore:
 
         Args:
             platform: 平台标识符 (例如 "amaidesu_default")。
-            maicore_host: MaiCore WebSocket 服务器的主机地址。
-            maicore_port: MaiCore WebSocket 服务器的端口。
-            http_host: (可选) 监听 HTTP 回调的主机地址。
-            http_port: (可选) 监听 HTTP 回调的端口。
-            http_callback_path: (可选) 接收 HTTP 回调的路径。
             pipeline_manager: (可选) 已配置的管道管理器。
             context_manager: (可选) 已配置的上下文管理器。
             event_bus: (可选) 已配置的事件总线。
@@ -113,18 +99,8 @@ class AmaidesuCore:
 
         # 消息处理器（插件注册）
         self._message_handlers: Dict[str, list[Callable[[MessageBase], asyncio.Task]]] = {}
-        # HTTP 请求处理器（插件注册）
-        self._http_request_handlers: Dict[str, list[Callable[[web.Request], asyncio.Task]]] = {}
         # 服务注册表
         self._services: Dict[str, Any] = {}
-
-        # HTTP 服务器相关配置（用于插件注册的HTTP回调）
-        self._http_host = http_host
-        self._http_port = http_port
-        self._http_callback_path = http_callback_path
-        self._http_app: Optional[web.Application] = None
-        self._http_runner: Optional[web.AppRunner] = None
-        self._http_site: Optional[web.TCPSite] = None
 
         # 管道管理器
         self._pipeline_manager = pipeline_manager
@@ -176,41 +152,15 @@ class AmaidesuCore:
         if expression_generator is not None:
             self.logger.info("已使用外部提供的表达式生成器")
 
-        # HTTP 服务器（用于插件HTTP回调）
-        if self._http_host and self._http_port:
-            self._setup_http_server()
-
         self.logger.debug("AmaidesuCore 初始化完成")
-
-    def _setup_http_server(self):
-        """配置 aiohttp 应用和路由（用于插件HTTP回调）"""
-        if not (self._http_host and self._http_port):
-            return
-        self._http_app = web.Application()
-        self._http_app.router.add_post(self._http_callback_path, self._handle_http_request)
-        self.logger.info(f"HTTP 服务器配置完成，监听路径: {self._http_callback_path}")
 
     async def connect(self, rendering_config: Optional[Dict[str, Any]] = None):
         """
-        启动核心服务（HTTP服务器等）
+        启动核心服务
 
         Args:
             rendering_config: (可选) 渲染层配置，用于设置输出层
         """
-        if self._http_host and self._http_port:
-            self.logger.info(f"正在启动 HTTP 服务器 ({self._http_host}:{self._http_port})...")
-            try:
-                self._http_runner = web.AppRunner(self._http_app)
-                await self._http_runner.setup()
-                self._http_site = web.TCPSite(self._http_runner, self._http_host, self._http_port)
-                await self._http_site.start()
-                self.logger.info(
-                    f"HTTP 服务器成功启动于 http://{self._http_host}:{self._http_port}{self._http_callback_path}"
-                )
-            except Exception as e:
-                self.logger.error(f"启动 HTTP 服务器失败: {e}", exc_info=True)
-                raise ConnectionError(f"无法启动 HTTP 服务器: {e}") from e
-
         # 如果有决策管理器，启动DecisionProvider
         if self._decision_manager:
             provider = self._decision_manager.get_current_provider()
@@ -247,14 +197,6 @@ class AmaidesuCore:
             except Exception as e:
                 self.logger.error(f"停止 OutputProvider 失败: {e}", exc_info=True)
 
-        # 停止 HTTP 服务器
-        if self._http_runner:
-            self.logger.info("正在停止 HTTP 服务器...")
-            await self._http_runner.cleanup()
-            self._http_runner = None
-            self._http_site = None
-            self._http_app = None
-
         # 如果有决策管理器，断开DecisionProvider
         if self._decision_manager:
             provider = self._decision_manager.get_current_provider()
@@ -269,12 +211,12 @@ class AmaidesuCore:
 
     async def send_to_maicore(self, message: MessageBase):
         """
-        将消息发送到 MaiCore，通过DecisionManager或Router（向后兼容）。
+        将消息发送到 MaiCore，通过DecisionManager（向后兼容）。
 
         Args:
             message: 要发送的消息对象
         """
-        # 优先使用DecisionManager
+        # 使用DecisionManager发送
         if self._decision_manager:
             try:
                 # 转换MessageBase为CanonicalMessage
@@ -288,18 +230,8 @@ class AmaidesuCore:
                 return
             except Exception as e:
                 self.logger.error(f"通过DecisionManager发送消息失败: {e}", exc_info=True)
-                # 降级：尝试通过其他方式发送
 
-        # 向后兼容：如果有Router，直接使用
-        if hasattr(self, "_router") and self._router:
-            try:
-                await self._router.send_message(message)
-                self.logger.info(f"消息通过Router发送: {message.message_info.message_id}")
-                return
-            except Exception as e:
-                self.logger.error(f"通过Router发送消息失败: {e}", exc_info=True)
-
-        self.logger.warning("没有可用的发送方式（DecisionManager或Router），消息未发送")
+        self.logger.warning("DecisionManager未配置，消息未发送")
 
     async def broadcast_message(self, message: MessageBase):
         """
@@ -373,73 +305,6 @@ class AmaidesuCore:
             self._message_handlers[message_type_or_key] = []
         self._message_handlers[message_type_or_key].append(handler)
         self.logger.info(f"成功注册 WebSocket 消息处理器: Key='{message_type_or_key}', Handler='{handler.__name__}'")
-
-    async def _handle_http_request(self, request: web.Request) -> web.Response:
-        """
-        处理HTTP请求（用于插件回调）
-
-        Args:
-            request: aiohttp Request对象
-
-        Returns:
-            aiohttp Response对象
-        """
-        self.logger.info(f"收到来自 {request.remote} 的 HTTP 请求: {request.method} {request.path}")
-
-        dispatch_key = "http_callback"
-
-        response_tasks = []
-        if dispatch_key in self._http_request_handlers:
-            handlers = self._http_request_handlers[dispatch_key]
-            self.logger.info(f"为 HTTP 请求找到 {len(handlers)} 个 '{dispatch_key}' 处理器")
-            for handler in handlers:
-                response_tasks.append(asyncio.create_task(handler(request)))
-        else:
-            self.logger.warning(f"没有找到适用于 HTTP 回调 Key='{dispatch_key}' 的处理器")
-            return web.json_response(
-                {"status": "error", "message": "No handler configured for this request"}, status=404
-            )
-
-        gathered_responses = await asyncio.gather(*response_tasks, return_exceptions=True)
-
-        final_response: Optional[web.Response] = None
-        first_exception: Optional[Exception] = None
-
-        for result in gathered_responses:
-            if isinstance(result, web.Response):
-                if final_response is None:
-                    final_response = result
-            elif isinstance(result, Exception):
-                self.logger.error(f"处理 HTTP 请求时，某个 handler 抛出异常: {result}", exc_info=result)
-                if first_exception is None:
-                    first_exception = result
-
-        if final_response:
-            self.logger.info(f"HTTP 请求处理完成，返回状态: {final_response.status}")
-            return final_response
-        elif first_exception:
-            return web.json_response(
-                {"status": "error", "message": f"Error processing request: {first_exception}"}, status=500
-            )
-        else:
-            self.logger.info("HTTP 请求处理完成，没有显式响应，返回默认成功状态。")
-            return web.json_response({"status": "accepted"}, status=202)
-
-    def register_http_handler(self, key: str, handler: Callable[[web.Request], asyncio.Task]):
-        """
-        注册一个处理 HTTP 回调请求的处理器。
-
-        Args:
-            key: 用于匹配请求的键
-            handler: 一个异步函数，接收 aiohttp.web.Request 对象，并应返回 aiohttp.web.Response 对象。
-        """
-        if not asyncio.iscoroutinefunction(handler):
-            self.logger.warning(f"注册的 HTTP 处理器 '{handler.__name__}' 不是一个异步函数 (async def)。")
-
-        if key not in self._http_request_handlers:
-            self._http_request_handlers[key] = []
-        self._http_request_handlers[key].append(handler)
-        self.logger.info(f"成功注册 HTTP 请求处理器: Key='{key}', Handler='{handler.__name__}'")
 
     # ==================== 服务注册与发现 ====================
 
