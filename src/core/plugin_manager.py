@@ -273,20 +273,19 @@ class BasePlugin:
 
 
 class PluginManager:
-    """负责加载、管理和卸载插件。"""
+    """负责加载、管理和卸载插件。
+
+    支持两种插件类型：
+    - BasePlugin（旧系统）：继承AmaidesuCore，通过 self.core 访问核心
+    - Plugin（新系统）：实现Plugin协议，通过 event_bus 和 config 依赖注入
+
+    向后兼容：两种插件类型都能正常工作。
+    """
 
     def __init__(self, core: "AmaidesuCore", global_plugin_config: Dict[str, Any]):
-        """
-        初始化插件管理器。
-
-        Args:
-            core: AmaidesuCore 实例。
-            global_plugin_config: config.toml 中 [plugins] 部分的配置。
-        """
         self.core = core
         self.global_plugin_config = global_plugin_config
-        self.loaded_plugins: Dict[str, BasePlugin] = {}
-        # 初始化 PluginManager 自己的 logger
+        self.loaded_plugins: Dict[str, Any] = {}
         self.logger = get_logger("PluginManager")
         self.logger.debug("PluginManager 初始化完成")
 
@@ -360,54 +359,87 @@ class PluginManager:
                     module = importlib.import_module(module_import_path)
                     self.logger.debug(f"成功导入插件模块: {module_import_path}")
 
-                    # --- 查找并实例化插件类 (使用入口点) ---
-                    plugin_class: Optional[Type[BasePlugin]] = None
-                    entrypoint = None  # 初始化为 None
+                    plugin_class = None
+                    entrypoint = None
+                    plugin_type = "unknown"
+
                     if hasattr(module, "plugin_entrypoint"):
                         entrypoint = module.plugin_entrypoint
                         self.logger.debug(
                             f"在模块 '{module_import_path}' 中找到入口点 'plugin_entrypoint' 指向: {entrypoint}"
                         )
-                        # 检查 entrypoint 是否是类，并且是 BasePlugin 的子类
-                        if inspect.isclass(entrypoint) and issubclass(entrypoint, BasePlugin):
-                            plugin_class = entrypoint
-                            self.logger.debug(
-                                f"入口点验证成功 (通过继承 BasePlugin)，插件类为: {plugin_class.__name__}"
-                            )
+
+                        if inspect.isclass(entrypoint):
+                            if issubclass(entrypoint, BasePlugin):
+                                plugin_class = entrypoint
+                                plugin_type = "base_plugin"
+                                self.logger.debug(
+                                    f"入口点验证成功 (通过继承 BasePlugin)，插件类为: {plugin_class.__name__}"
+                                )
+                            else:
+                                if hasattr(entrypoint, "setup"):
+                                    try:
+                                        sig = inspect.signature(entrypoint.setup)
+                                        params = list(sig.parameters.keys())
+                                        if "event_bus" in params and "config" in params:
+                                            plugin_class = entrypoint
+                                            plugin_type = "new_plugin"
+                                            self.logger.debug(
+                                                f"入口点验证成功 (通过实现新 Plugin 接口)，插件类为: {plugin_class.__name__}"
+                                            )
+                                        else:
+                                            self.logger.warning(
+                                                f"模块 '{module_import_path}' 中的插件类 setup() 方法签名不符合要求。"
+                                                f"应该包含 event_bus 和 config 参数，当前参数: {params}"
+                                            )
+                                    except Exception as e:
+                                        self.logger.warning(
+                                            f"检查 '{module_import_path}' 中插件类的 setup() 方法时出错: {e}"
+                                        )
+                                else:
+                                    self.logger.warning(f"模块 '{module_import_path}' 中的插件类没有 setup() 方法。")
                         else:
                             self.logger.warning(
-                                f"模块 '{module_import_path}' 中的 'plugin_entrypoint' ({entrypoint}) 不是 BasePlugin 的有效子类。"
+                                f"模块 '{module_import_path}' 中的 'plugin_entrypoint' ({entrypoint}) 不是有效的类。"
                             )
                     else:
                         self.logger.warning(f"在模块 '{module_import_path}' 中未找到入口点 'plugin_entrypoint'。")
 
                     if plugin_class:
-                        # 1. 获取主 config.toml 中 [plugins.plugin_name] 下的配置
                         main_provided_config = self.global_plugin_config.get(plugin_name, {}).copy()
                         self.logger.debug(f"从主配置为插件 '{plugin_name}' 获取的配置: {main_provided_config}")
 
-                        # 2. 加载插件自身目录下的 config.toml (如果存在)
                         plugin_own_config_data = load_component_specific_config(item_path, plugin_name, "插件")
 
-                        # 3. 合并配置：主配置覆盖插件独立配置
                         final_plugin_config = merge_component_configs(
                             plugin_own_config_data, main_provided_config, plugin_name, "插件"
                         )
 
-                        self.logger.debug(f"准备实例化插件: {plugin_class.__name__}")
-                        # 实例化插件
-                        plugin_instance = plugin_class(self.core, final_plugin_config)
+                        self.logger.debug(f"准备实例化插件: {plugin_class.__name__} (类型: {plugin_type})")
 
-                        # 手动将插件目录路径设置到实例上，实现向后兼容
-                        plugin_instance.plugin_dir = item_path
-                        self.logger.debug(f"已为插件 '{plugin_class.__name__}' 设置 'plugin_dir' 属性: {item_path}")
+                        if plugin_type == "base_plugin":
+                            plugin_instance = plugin_class(self.core, final_plugin_config)
 
-                        self.logger.debug(f"插件 '{plugin_class.__name__}' 实例化完成，准备调用 setup()")
-                        await plugin_instance.setup()
+                            plugin_instance.plugin_dir = item_path
+                            self.logger.debug(f"已为插件 '{plugin_class.__name__}' 设置 'plugin_dir' 属性: {item_path}")
+
+                            self.logger.debug(f"插件 '{plugin_class.__name__}' 实例化完成，准备调用 setup()")
+                            await plugin_instance.setup()
+                        elif plugin_type == "new_plugin":
+                            plugin_instance = plugin_class(final_plugin_config)
+
+                            self.logger.debug(
+                                f"插件 '{plugin_class.__name__}' 实例化完成，准备调用 setup(event_bus, config)"
+                            )
+
+                            providers = await plugin_instance.setup(self.core.event_bus, final_plugin_config)
+                            self.logger.info(f"插件 '{plugin_class.__name__}' 返回了 {len(providers)} 个 Provider")
+
                         self.loaded_plugins[plugin_name] = plugin_instance
-                        self.logger.info(f"成功加载并设置插件: {plugin_class.__name__} (来自 {plugin_name}/plugin.py)")
+                        self.logger.info(
+                            f"成功加载并设置插件: {plugin_class.__name__} (来自 {plugin_name}/plugin.py, 类型: {plugin_type})"
+                        )
                     else:
-                        # 如果没有找到有效的 plugin_class (无论是没找到入口点还是入口点无效)
                         self.logger.warning(f"未能为模块 '{module_import_path}' 找到并验证有效的插件类。")
 
                 except ImportError as e:
@@ -431,7 +463,7 @@ class PluginManager:
         self.logger.info("开始卸载所有插件...")
         unload_tasks = []
         for plugin_name, plugin_instance in self.loaded_plugins.items():
-            self.logger.debug(f"准备清理插件: {plugin_name}")
+            self.logger.debug(f"准备清理插件: {plugin_name} ({plugin_instance.__class__.__name__})")
             unload_tasks.append(asyncio.create_task(plugin_instance.cleanup()))
 
         if unload_tasks:

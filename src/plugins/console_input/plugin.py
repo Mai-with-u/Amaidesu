@@ -1,9 +1,12 @@
-import asyncio
-
-# import logging
+ import asyncio
 import sys
 import time
 from typing import Dict, Any, Optional, List, Union
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.core.event_bus import EventBus
+    from src.core.plugin import Plugin
 
 # --- Dependency Check & TOML ---
 try:
@@ -15,43 +18,32 @@ except ModuleNotFoundError:
         print("依赖缺失: 请运行 'pip install toml' 来加载 Console Input 插件配置。", file=sys.stderr)
         tomllib = None
 
-# --- Amaidesu Core Imports ---
-from src.core.plugin_manager import BasePlugin
+# --- Core Imports ---
+from src.core.plugin import Plugin
 from src.core.amaidesu_core import AmaidesuCore
 from maim_message import MessageBase, BaseMessageInfo, UserInfo, GroupInfo, Seg, FormatInfo, TemplateInfo
-
-# --- Plugin Configuration Loading ---
-# _PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
-# _CONFIG_FILE = os.path.join(_PLUGIN_DIR, "config.toml")
-#
-#
-# def load_plugin_config() -> Dict[str, Any]:
-#     """Loads the plugin's specific config.toml file."""
-#     if tomllib is None:
-#         logger.error("TOML library not available, cannot load Console Input plugin config.")
-#         return {}
-#     try:
-#         with open(_CONFIG_FILE, "rb") as f:
-#             config = tomllib.load(f)
-#             logger.info(f"成功加载 Console Input 插件配置文件: {_CONFIG_FILE}")
-#             return config
-#     except FileNotFoundError:
-#         logger.warning(f"Console Input 插件配置文件未找到: {_CONFIG_FILE}。将使用默认值。")
-#     except tomllib.TOMLDecodeError as e:
-#         logger.error(f"Console Input 插件配置文件 '{_CONFIG_FILE}' 格式无效: {e}。将使用默认值。")
-#     except Exception as e:
-#         logger.error(f"加载 Console Input 插件配置文件 '{_CONFIG_FILE}' 时发生未知错误: {e}", exc_info=True)
-#     return {}
+from src.utils.logger import get_logger
 
 
-class ConsoleInputPlugin(BasePlugin):
-    """通过控制台接收用户输入并发送消息的插件"""
+class ConsoleInputPlugin:
+    """
+    通过控制台接收用户输入并发送消息的插件
 
-    def __init__(self, core: AmaidesuCore, plugin_config: Dict[str, Any]):
-        super().__init__(core, plugin_config)
-        # self.config = load_plugin_config()
-        self.config = self.plugin_config  # 直接使用注入的 plugin_config
+    迁移到新的Plugin接口：
+    - 不继承BasePlugin
+    - 实现Plugin协议
+    - 通过event_bus和config进行依赖注入
+    - 返回Provider列表（此插件不返回Provider，返回空列表）
+    """
+
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
         self.enabled = True
+        self.logger = get_logger(self.__class__.__name__)
+        self.logger.info(f"初始化插件: {self.__class__.__name__}")
+
+        self.event_bus: Optional["EventBus"] = None
+        self.core: Optional["AmaidesuCore"] = None
 
         # --- Dependency Check ---
         if tomllib is None:
@@ -60,10 +52,9 @@ class ConsoleInputPlugin(BasePlugin):
             return
 
         # --- Load Message Config Defaults from plugin's config.toml ---
-        self.message_config = self.config.get("message_config", {})  # Expecting a [message_config] section
+        self.message_config = self.config.get("message_config", {})
         if not self.message_config:
             self.logger.warning("在 console_input/config.toml 中未找到 [message_config] 配置段，将使用硬编码默认值。")
-            # Define fallback defaults if message_config is missing
             self.message_config = {
                 "user_id": "console_user_fallback",
                 "user_nickname": "控制台",
@@ -82,24 +73,22 @@ class ConsoleInputPlugin(BasePlugin):
             self.logger.info("已加载来自 console_input/config.toml 的 [message_config]。")
 
         # --- Prompt Context Tags ---
-        # Read from message_config section
         self.context_tags: Optional[List[str]] = self.message_config.get("context_tags")
         if not isinstance(self.context_tags, list):
             if self.context_tags is not None:
                 self.logger.warning(
                     f"Config 'context_tags' in [message_config] is not a list ({type(self.context_tags)}), will fetch all context."
                 )
-            self.context_tags = None  # None tells get_formatted_context to get all
+            self.context_tags = None
         elif not self.context_tags:
             self.logger.info("'context_tags' in [message_config] is empty, will fetch all context.")
-            self.context_tags = None  # Treat empty list same as None
+            self.context_tags = None
         else:
             self.logger.info(f"Will fetch context with tags: {self.context_tags}")
 
-        # --- Load Template Items Separately (if enabled and exists within message_config) ---
+        # --- Load Template Items Separately (if enabled and exists within config) ---
         self.template_items = None
         if self.message_config.get("enable_template_info", False):
-            # Load template_items directly from the message_config dictionary
             self.template_items = self.message_config.get("template_items", {})
             if not self.template_items:
                 self.logger.warning("配置启用了 template_info，但在 message_config 中未找到 template_items。")
@@ -107,28 +96,39 @@ class ConsoleInputPlugin(BasePlugin):
         self._input_task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
 
-    async def setup(self):
-        """启动控制台输入监听任务。"""
-        await super().setup()
+    async def setup(self, event_bus: "EventBus", config: Dict[str, Any]) -> List[Any]:
+        """
+        设置插件
+
+        此插件不返回Provider列表，因为它是输入处理插件，直接通过event_bus发送消息
+
+        Args:
+            event_bus: 事件总线实例
+            config: 插件配置
+
+        Returns:
+            空列表（此插件不返回Provider）
+        """
+        self.event_bus = event_bus
+        self.logger.info("启动控制台输入监听任务...")
+
         if not self.enabled:
             self.logger.warning("Console Input 插件未启用，不启动监听任务。")
-            return
-        self.logger.info("启动控制台输入监听任务...")
+            return []
+
         self._stop_event.clear()
         self._input_task = asyncio.create_task(self._input_loop(), name="ConsoleInputLoop")
+
+        return []
 
     async def cleanup(self):
         """停止控制台输入任务。"""
         self.logger.info("请求停止 Console Input 插件...")
         self._stop_event.set()
-        # Give the input loop a chance to exit gracefully
+
         if self._input_task and not self._input_task.done():
             self.logger.info("正在等待控制台输入任务结束 (最多 2 秒)...")
             try:
-                # Signal stdin to unblock (implementation specific)
-                # On Windows, sending a newline might work if blocked on input()
-                # On Linux/macOS, this might be more complex (e.g., closing stdin requires care)
-                # For simplicity, we rely on the timeout/cancellation here.
                 await asyncio.wait_for(self._input_task, timeout=2.0)
             except asyncio.TimeoutError:
                 self.logger.warning("控制台输入任务在超时后仍未结束，将强制取消。")
@@ -137,8 +137,8 @@ class ConsoleInputPlugin(BasePlugin):
                 self.logger.info("控制台输入任务已被取消。")
             except Exception as e:
                 self.logger.error(f"等待控制台输入任务结束时出错: {e}", exc_info=True)
+
         self.logger.info("Console Input 插件清理完成。")
-        await super().cleanup()
 
     async def _input_loop(self):
         """异步循环以读取控制台输入。"""
@@ -158,29 +158,14 @@ class ConsoleInputPlugin(BasePlugin):
                 if self._stop_event.is_set():  # Check again after potential blocking read
                     break
 
-                # 检查是否为命令
-                if text.startswith("/"):
-                    messages = await self._handle_command(text)
-                    if messages:
-                        # 处理可能返回的多个消息（比如多个礼物）
-                        if isinstance(messages, list):
-                            for message in messages:
-                                await self.core.send_to_maicore(message)
-                                await asyncio.sleep(0.05)  # 每个消息间隔0.5秒
-                        else:
-                            await self.core.send_to_maicore(messages)
-                else:
-                    # Create normal message using loaded config
-                    message = await self._create_console_message(text)
-                    if message:
-                        await self.core.send_to_maicore(message)
+                if self.event_bus:
+                    await self.event_bus.emit("console.input", {"text": text}, "ConsoleInputPlugin")
 
             except asyncio.CancelledError:
                 self.logger.info("控制台输入循环被取消。")
                 break
             except Exception as e:
                 self.logger.error(f"控制台输入循环出错: {e}", exc_info=True)
-                # Avoid busy-looping on persistent errors
                 await asyncio.sleep(1)
         self.logger.info("控制台输入循环结束。")
 
@@ -511,5 +496,15 @@ class ConsoleInputPlugin(BasePlugin):
         return MessageBase(message_info=message_info, message_segment=message_segment, raw_message=text)
 
 
-# --- Plugin Entry Point ---
+def get_info(self) -> Dict[str, Any]:
+    """获取插件信息"""
+    return {
+        "name": "ConsoleInput",
+        "version": "1.0.0",
+        "author": "Amaidesu Team",
+        "description": "通过控制台接收用户输入并发送消息的插件",
+        "category": "input",
+        "api_version": "1.0"
+    }
+
 plugin_entrypoint = ConsoleInputPlugin

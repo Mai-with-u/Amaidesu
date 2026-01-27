@@ -2,21 +2,36 @@
 import asyncio
 import importlib
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING
 
-from src.core.plugin_manager import BasePlugin
-from src.core.amaidesu_core import AmaidesuCore
+if TYPE_CHECKING:
+    from src.core.event_bus import EventBus
+    from src.core.amaidesu_core import AmaidesuCore
+
+from src.core.plugin import Plugin
+from src.utils.logger import get_logger
 from maim_message import MessageBase
 
 
-class KeywordActionPlugin(BasePlugin):
+class KeywordActionPlugin:
     """
     监听消息中的关键词，并根据配置动态执行相应的动作脚本。
+
+    迁移到新的Plugin接口：
+    - 不继承BasePlugin
+    - 实现Plugin协议
+    - 通过event_bus和config进行依赖注入
+    - 不返回Provider（此插件处理消息，不返回Provider列表）
     """
 
-    def __init__(self, core: AmaidesuCore, plugin_config: Dict[str, Any]):
-        super().__init__(core, plugin_config)
-        self.config = self.plugin_config
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self.logger = get_logger(self.__class__.__name__)
+        self.logger.info(f"初始化插件: {self.__class__.__name__}")
+
+        self.event_bus: Optional["EventBus"] = None
+        self.core: Optional["AmaidesuCore"] = None
 
         if not self.config.get("enabled", True):
             self.logger.warning("KeywordActionPlugin 在配置中被禁用。")
@@ -27,18 +42,32 @@ class KeywordActionPlugin(BasePlugin):
         self.global_cooldown = self.config.get("global_cooldown", 1.0)
 
         # 状态追踪
-        self.last_triggered_times: Dict[str, float] = {}  # Key: action_name, Value: timestamp
+        self.last_triggered_times: Dict[str, float] = {}
 
         self.logger.info(f"成功加载 {len(self.actions)} 个动作规则。")
 
-    async def setup(self):
-        await super().setup()
-        if not self.config.get("enabled", True):
-            return
+    async def setup(self, event_bus: "EventBus", config: Dict[str, Any]) -> List[Any]:
+        """
+        设置插件
 
-        # 注册通配符处理器，监听所有消息
-        self.core.register_websocket_handler("*", self.handle_message)
+        Args:
+            event_bus: 事件总线实例
+            config: 插件配置
+
+        Returns:
+            空列表（此插件不返回Provider）
+        """
+        self.event_bus = event_bus
+        self.logger.info("设置KeywordActionPlugin")
+
+        if not self.config.get("enabled", True):
+            return []
+
+        # 监听所有消息
+        event_bus.on("websocket.*", self.handle_message)
         self.logger.info("已注册消息处理器 handle_message。")
+
+        return []
 
     async def handle_message(self, message: MessageBase):
         """处理传入的消息，检查是否有匹配的关键词动作。"""
@@ -119,6 +148,17 @@ class KeywordActionPlugin(BasePlugin):
             self.logger.error(f"无法找到或导入动作脚本: {script_name} (路径: {module_path})")
         except Exception as e:
             self.logger.error(f"执行动作脚本 '{script_name}' 时发生错误: {e}", exc_info=True)
+
+    def get_info(self) -> Dict[str, Any]:
+        """获取插件信息"""
+        return {
+            "name": "KeywordAction",
+            "version": "1.0.0",
+            "author": "Amaidesu Team",
+            "description": "监听消息中的关键词，并根据配置动态执行相应的动作脚本",
+            "category": "processing",
+            "api_version": "1.0",
+        }
 
 
 # 插件入口点

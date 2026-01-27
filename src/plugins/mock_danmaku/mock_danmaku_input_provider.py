@@ -6,9 +6,8 @@ Mock Danmaku Input Provider
 
 import asyncio
 import json
-import os
 from pathlib import Path
-from typing import AsyncIterator, Optional, Dict, Any
+from typing import AsyncIterator
 
 from src.core.providers.input_provider import InputProvider
 from src.core.data_types.raw_data import RawData
