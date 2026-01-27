@@ -7,7 +7,6 @@ Sticker Plugin
 
 from typing import Dict, Any, List
 
-from src.core.plugin import Plugin
 from src.core.event_bus import EventBus
 from src.plugins.sticker.sticker_output_provider import StickerOutputProvider
 from src.utils.logger import get_logger

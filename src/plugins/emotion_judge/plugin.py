@@ -7,7 +7,6 @@ Emotion Judge Plugin
 
 from typing import Dict, Any, List
 
-from src.core.plugin import Plugin
 from src.core.event_bus import EventBus
 from src.plugins.emotion_judge.emotion_judge_decision_provider import EmotionJudgeDecisionProvider
 from src.utils.logger import get_logger

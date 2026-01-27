@@ -4,9 +4,7 @@ Sticker Output Provider
 贴纸输出Provider，处理表情图片并发送到VTS。
 """
 
-import asyncio
 import time
-from typing import Optional
 
 import base64
 import io
@@ -131,13 +129,6 @@ class StickerOutputProvider(OutputProvider):
         Args:
             image_base64: base64编码的图片数据
         """
-        # 通过EventBus获取vts_control服务
-        vts_control_service = None
-        if self.event_bus:
-            # 这里需要一种方式从EventBus获取服务
-            # 暂时通过事件系统发送请求
-            pass
-
         # 由于当前架构限制，我们暂时通过事件发送请求
         # 未来可能需要更完善的服务注册机制
         self.logger.debug(f"发送贴纸到VTS (大小: {self.sticker_size}, 旋转: {self.sticker_rotation})")

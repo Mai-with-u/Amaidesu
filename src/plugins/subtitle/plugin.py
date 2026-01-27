@@ -8,7 +8,6 @@ Subtitle Plugin
 import threading
 from typing import Dict, Any, List
 
-from src.core.plugin import Plugin
 from src.core.event_bus import EventBus
 from src.plugins.subtitle.subtitle_output_provider import SubtitleOutputProvider, CTK_AVAILABLE
 from src.utils.logger import get_logger
