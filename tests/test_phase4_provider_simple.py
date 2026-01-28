@@ -6,6 +6,7 @@ Phase 4 Provider验证测试（简化版）
 
 import asyncio
 from typing import Dict, Any
+import pytest
 
 from src.core.event_bus import EventBus
 from src.core.output_provider_manager import OutputProviderManager

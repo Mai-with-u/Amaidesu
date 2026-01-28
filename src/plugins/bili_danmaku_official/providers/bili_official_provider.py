@@ -7,9 +7,9 @@ Bilibili 官方弹幕 InputProvider
 import asyncio
 from typing import AsyncIterator, Dict, Any, Optional
 
-from .client.websocket_client import BiliWebSocketClient
-from .service.message_cache import MessageCacheService
-from .service.message_handler import BiliMessageHandler
+from ..client.websocket_client import BiliWebSocketClient
+from ..service.message_cache import MessageCacheService
+from ..service.message_handler import BiliMessageHandler
 
 from src.core.providers.input_provider import InputProvider
 from src.core.data_types.raw_data import RawData

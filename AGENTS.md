@@ -147,6 +147,79 @@ class MyPlugin(BasePlugin):
 ```
 
 ### 插件开发规范
+
+#### 新架构（推荐）
+
+新插件应使用 Plugin 协议，通过 event_bus 和 config 进行依赖注入：
+
+1. 不继承任何基类
+2. 实现 `__init__(config)`, `setup(event_bus, config)`, `cleanup()` 方法
+3. 在 `setup()` 中创建 Provider 并返回 Provider 列表
+4. 在 `cleanup()` 中清理资源
+5. 定义 `plugin_entrypoint` 作为模块入口点
+6. 在 `__init__.py` 中导出插件类
+
+```python
+# src/plugins/my_plugin/plugin.py
+from typing import Dict, Any, List
+from src.core.plugin import Plugin
+from src.core.providers.input_provider import InputProvider
+from .providers.my_provider import MyProvider
+
+class MyPlugin:
+    """
+    我的插件（使用新架构）
+
+    不继承 BasePlugin，实现 Plugin 协议
+    """
+
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self._providers: List[InputProvider] = []
+
+    async def setup(self, event_bus, config: Dict[str, Any]) -> List[Any]:
+        """
+        设置插件
+
+        Args:
+            event_bus: 事件总线实例
+            config: 插件配置
+
+        Returns:
+            Provider列表
+        """
+        # 创建 Provider
+        provider = MyProvider(config)
+        self._providers.append(provider)
+
+        return self._providers
+
+    async def cleanup(self):
+        """清理资源"""
+        for provider in self._providers:
+            await provider.cleanup()
+        self._providers.clear()
+
+    def get_info(self) -> Dict[str, Any]:
+        """获取插件信息"""
+        return {
+            "name": "MyPlugin",
+            "version": "1.0.0",
+            "author": "Author",
+            "description": "My plugin description",
+            "category": "input",  # input/output/processing
+            "api_version": "1.0",
+        }
+
+plugin_entrypoint = MyPlugin
+```
+
+#### 旧架构（已废弃）
+
+⚠️ **BasePlugin 已废弃，仅用于向后兼容**
+
+旧插件使用 BasePlugin 基类，通过 self.core 访问核心功能：
+
 1. 继承 `BasePlugin` 类
 2. 实现 `__init__()`, `setup()`, `cleanup()` 方法
 3. 在 `setup()` 中注册处理器和服务
@@ -176,6 +249,58 @@ class MyPlugin(BasePlugin):
         await super().cleanup()
 
 plugin_entrypoint = MyPlugin
+```
+
+**注意**：当前只有 gptsovits_tts 插件使用旧架构，其他插件已迁移到新架构。
+
+### Provider 接口说明
+
+新架构插件通过 Provider 封装具体功能，提供更好的解耦和可测试性。
+
+#### Provider 类型
+
+- **InputProvider**: 输入 Provider，从外部数据源采集数据
+  - 示例：BiliDanmakuInputProvider（B站弹幕）、ConsoleInputProvider（控制台输入）
+- **OutputProvider**: 输出 Provider，渲染到目标设备
+  - 示例：TTSOutputProvider（语音合成）、SubtitleOutputProvider（字幕显示）
+- **DecisionProvider**: 决策 Provider，处理 CanonicalMessage
+  - 示例：CommandRouterProvider（命令路由）
+
+#### Provider 开发示例
+
+```python
+# src/plugins/my_plugin/providers/my_provider.py
+from src.core.providers.input_provider import InputProvider
+from src.core.data_types.raw_data import RawData
+from typing import AsyncIterator, Optional, Dict, Any
+from src.utils.logger import get_logger
+
+class MyInputProvider(InputProvider):
+    """自定义输入 Provider"""
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        self.logger = get_logger(self.__class__.__name__)
+        # 初始化逻辑
+
+    async def _collect_data(self) -> AsyncIterator[RawData]:
+        """采集数据"""
+        while not self._stop_event.is_set():
+            # 采集数据
+            data = await self._fetch_data()
+            if data:
+                raw_data = RawData(
+                    content={"data": data},
+                    source="my_provider",
+                    data_type="text",
+                )
+                yield raw_data
+
+            await asyncio.sleep(1)
+
+    async def _cleanup(self):
+        """清理资源"""
+        self.logger.info("MyInputProvider 清理完成")
 ```
 
 ### 管道开发规范

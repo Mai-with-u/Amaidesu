@@ -5,16 +5,6 @@ import os
 import argparse  # 导入 argparse
 
 
-# 尝试导入 tomllib (Python 3.11+), 否则使用 toml
-try:
-    import tomllib
-except ModuleNotFoundError:
-    try:
-        import toml as tomllib  # type: ignore
-    except ModuleNotFoundError:
-        print("错误：需要安装 TOML 解析库。请运行 'pip install toml'", file=sys.stderr)
-        sys.exit(1)
-
 # 从 src 目录导入核心类和插件管理器
 from src.core.amaidesu_core import AmaidesuCore
 from src.core.plugin_manager import PluginManager

@@ -202,7 +202,7 @@ async def cmd_help(args: List[str]) -> Optional[MessageBase]:
     """显示所有可用命令的帮助信息"""
     help_text = f"\n{COLOR_CYAN}===== 可用命令列表 ====={COLOR_RESET}\n"
 
-    for cmd_name, cmd_info in sorted(commands.items()):
+    for _cmd_name, cmd_info in sorted(commands.items()):
         help_text += f"{COLOR_YELLOW}{cmd_info['usage']}{COLOR_RESET} - {cmd_info['description']}\n"
 
     print(help_text)

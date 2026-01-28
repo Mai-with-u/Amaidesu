@@ -16,9 +16,25 @@ from src.openai_client.modelconfig import ModelConfig
 from src.config.config import global_config
 
 
-# --- 插件基类 (可选但推荐) ---
+# --- 插件基类 (已废弃，仅用于向后兼容) ---
 class BasePlugin:
-    """所有插件的基础类，定义插件的基本接口。"""
+    """
+    所有插件的基础类（已废弃，仅用于向后兼容）
+
+    ⚠️ **废弃说明**：
+    - BasePlugin 已被新的 Plugin 接口替代
+    - 新插件应使用 src/core/plugin.py 中定义的 Plugin 协议
+    - 新架构通过 event_bus 和 config 进行依赖注入，不继承 AmaidesuCore
+    - BasePlugin 将在未来版本中移除
+
+    **迁移指南**：
+    1. 查看新 Plugin 接口：src/core/plugin.py
+    2. 参考已迁移插件示例：src/plugins/bili_danmaku/plugin.py
+    3. 将插件重写为 Plugin 协议实现（不继承 BasePlugin）
+    4. 如果需要访问 AmaidesuCore，通过 event_bus 发布事件或服务注册
+
+    保留原因：gptsovits_tts 插件仍在使用 BasePlugin，需要后续迁移
+    """
 
     def __init__(self, core: "AmaidesuCore", plugin_config: Dict[str, Any]):
         """
@@ -273,11 +289,23 @@ class BasePlugin:
 
 
 class PluginManager:
-    """负责加载、管理和卸载插件。
+    """
+    负责加载、管理和卸载插件
 
     支持两种插件类型：
-    - BasePlugin（旧系统）：继承AmaidesuCore，通过 self.core 访问核心
-    - Plugin（新系统）：实现Plugin协议，通过 event_bus 和 config 依赖注入
+
+    1. **Plugin（新系统）** - 推荐
+       - 实现 Plugin 协议（不继承任何基类）
+       - 通过 event_bus 和 config 进行依赖注入
+       - 返回 Provider 列表（InputProvider、OutputProvider 等）
+       - 更好的解耦和可测试性
+       - 参考：src/core/plugin.py
+
+    2. **BasePlugin（旧系统）** - 已废弃
+       - 继承 BasePlugin（继承 AmaidesuCore）
+       - 通过 self.core 访问核心功能
+       - 仅用于向后兼容，将在未来版本中移除
+       - 当前使用：gptsovits_tts 插件（待迁移）
 
     向后兼容：两种插件类型都能正常工作。
     """

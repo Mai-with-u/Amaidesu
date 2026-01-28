@@ -36,10 +36,37 @@ Amaidesu!
 
 1. **AmaidesuCore**: 核心模块，负责与 MaiCore 的通信，有服务注册与发现、消息分发的功能。
 2. **PluginManager**: 插件管理器，负责插件的加载和管理
-3. **BasePlugin**: 插件基类，定义插件的基本接口
-4. **PipelineManager**: 管道管理器，负责管道的加载和执行，用于在消息发送到 MaiCore 前进行预处理
-5. **ContextManager**: 上下文管理器，负责管理和聚合来自不同插件的上下文信息，为需要上下文信息的插件提供统一的数据来源。
-6. **插件系统**: 各种功能插件，如 TTS、STT、LLM 等。各个插件可以利用被注入的 AmaidesuCore 实例发送消息给 MaiCore，在 AmaidesuCore接收到消息时，会分发给注册了对应处理类型的插件进行处理。也可以将本插件作为服务注册到 AmaidesuCore 中，供其他插件使用。
+   - 支持新旧两种插件架构（向后兼容）
+   - 新架构：Plugin 协议（推荐），通过 event_bus 和 config 依赖注入
+   - 旧架构：BasePlugin（已废弃），通过 self.core 访问核心功能
+3. **EventBus**: 事件总线，提供发布-订阅机制，用于插件间通信
+4. **Provider 接口**: 新架构的核心抽象，封装具体功能
+   - InputProvider: 输入数据采集（如弹幕、控制台输入）
+   - OutputProvider: 输出渲染（如 TTS、字幕显示）
+   - DecisionProvider: 消息决策处理（如命令路由）
+5. **PipelineManager**: 管道管理器，负责管道的加载和执行，用于在消息发送到 MaiCore 前进行预处理
+6. **ContextManager**: 上下文管理器，负责管理和聚合来自不同插件的上下文信息，为需要上下文信息的插件提供统一的数据来源。
+7. **插件系统**: 各种功能插件，如 TTS、STT、LLM 等。各个插件可以利用被注入的 AmaidesuCore 实例发送消息给 MaiCore，在 AmaidesuCore接收到消息时，会分发给注册了对应处理类型的插件进行处理。也可以将本插件作为服务注册到 AmaidesuCore 中，供其他插件使用。
+
+### 插件架构迁移
+
+系统已完成从 BasePlugin 到新 Plugin 架构的重构：
+
+**新架构特点**：
+- 不继承任何基类，通过 event_bus 和 config 依赖注入
+- 使用 Provider 接口封装具体功能，更好的解耦和可测试性
+- 支持事件总线通信，插件间通过发布-订阅模式交互
+
+**迁移状态**：
+- ✅ 已迁移：大部分插件（如 bili_danmaku、console_input、subtitle 等）
+- ⏳ 待迁移：gptsovits_tts（仍在使用 BasePlugin）
+
+**迁移指南**：
+1. 新插件应使用 Plugin 协议（参考：src/core/plugin.py）
+2. 查看已迁移插件示例：src/plugins/bili_danmaku/plugin.py
+3. 旧 BasePlugin 将在未来版本中移除，现有插件无需立即迁移（向后兼容）
+
+详见：[插件开发指南](#插件开发)
 
 ### 消息处理时序图
 
@@ -192,7 +219,81 @@ flowchart TD
 
 ## 插件开发
 
-插件开发需要继承 `BasePlugin` 类并实现必要的方法：
+### 新架构（推荐）
+
+新插件应使用 Plugin 协议，不继承任何基类：
+
+```python
+# src/plugins/my_plugin/plugin.py
+from typing import Dict, Any, List
+from src.core.plugin import Plugin
+from src.core.providers.input_provider import InputProvider
+from src.utils.logger import get_logger
+
+class MyPlugin:
+    """
+    我的插件（使用新架构）
+
+    不继承 BasePlugin，实现 Plugin 协议
+    """
+
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self.logger = get_logger(self.__class__.__name__)
+        self.logger.info(f"初始化插件: {self.__class__.__name__}")
+
+        self.event_bus = None
+        self._providers: List[InputProvider] = []
+
+    async def setup(self, event_bus, config: Dict[str, Any]) -> List[Any]:
+        """
+        设置插件
+
+        Args:
+            event_bus: 事件总线实例
+            config: 插件配置
+
+        Returns:
+            Provider列表
+        """
+        self.event_bus = event_bus
+
+        # 创建 Provider
+        from .providers.my_provider import MyProvider
+        provider = MyProvider(config)
+        self._providers.append(provider)
+
+        return self._providers
+
+    async def cleanup(self):
+        """清理资源"""
+        self.logger.info(f"开始清理 {self.__class__.__name__}...")
+
+        for provider in self._providers:
+            await provider.cleanup()
+        self._providers.clear()
+
+        self.logger.info(f"{self.__class__.__name__} 清理完成")
+
+    def get_info(self) -> Dict[str, Any]:
+        """获取插件信息"""
+        return {
+            "name": "MyPlugin",
+            "version": "1.0.0",
+            "author": "Author",
+            "description": "My plugin description",
+            "category": "input",  # input/output/processing
+            "api_version": "1.0",
+        }
+
+plugin_entrypoint = MyPlugin
+```
+
+### 旧架构（已废弃）
+
+⚠️ **BasePlugin 已废弃，仅用于向后兼容**
+
+旧插件开发需要继承 `BasePlugin` 类：
 
 ```python
 from src.core.plugin_manager import BasePlugin
@@ -208,7 +309,7 @@ class MyPlugin(BasePlugin):
         # 例如，从插件的配置中获取一个设置：
         # self.my_specific_setting = self.plugin_config.get("my_key", "default_value")
         # self.logger.info(f"MyPlugin '{self.__class__.__name__}' loaded with config: {self.plugin_config}")
-        
+
         # 自己的初始化逻辑
         # 例如:
         # self.api_url = self.plugin_config.get("api_url")
@@ -221,19 +322,29 @@ class MyPlugin(BasePlugin):
         await self.core.register_websocket_handler("text", self.handle_message)
         # 也可以将自己这个插件注册为服务供其他插件使用
         self.core.register_service("vts_control", self)
-    
+
     async def handle_message(self, message: MessageBase):
         # 处理从 AmaidesuCore (通常是 MaiCore 转发) 传递回来的消息
         # self.logger.debug(f"MyPlugin received message: {message.message_segment.data}")
         pass
-    
+
     async def cleanup(self):
         # 清理插件使用的资源，例如关闭网络连接、释放文件句柄等
         self.logger.info(f"MyPlugin '{self.__class__.__name__}' cleaning up...")
         await super().cleanup() # 调用父类的 cleanup 方法
         self.logger.info(f"MyPlugin '{self.__class__.__name__}' cleanup complete.")
 
+plugin_entrypoint = MyPlugin
 ```
+
+### 开发指南
+
+- ✅ **新插件应使用 Plugin 协议**（参考：src/core/plugin.py）
+- ✅ **查看已迁移插件示例**：src/plugins/bili_danmaku/plugin.py
+- ⚠️ **BasePlugin 将在未来版本中移除**，但现有插件无需立即迁移（向后兼容）
+- ⏳ **待迁移插件**：gptsovits_tts
+
+详见 [AGENTS.md](./AGENTS.md) 获取完整的插件开发规范。
 
 ## 管道系统
 
