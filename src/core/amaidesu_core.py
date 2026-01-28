@@ -15,8 +15,7 @@ Amaidesu Core - 核心模块（Phase 3重构后版本）
 - 此版本从原来的641行简化到约350行
 """
 
-import asyncio
-from typing import Callable, Dict, Any, Optional, TYPE_CHECKING
+from typing import Dict, Any, Optional, TYPE_CHECKING
 
 from maim_message import MessageBase
 from src.utils.logger import get_logger
@@ -97,8 +96,6 @@ class AmaidesuCore:
 
         self.platform = platform
 
-        # 消息处理器（插件注册）
-        self._message_handlers: Dict[str, list[Callable[[MessageBase], asyncio.Task]]] = {}
         # 服务注册表
         self._services: Dict[str, Any] = {}
 
@@ -208,103 +205,6 @@ class AmaidesuCore:
                     self.logger.error(f"DecisionProvider 断开失败: {e}", exc_info=True)
 
         self.logger.info("核心服务已停止")
-
-    async def send_to_maicore(self, message: MessageBase):
-        """
-        将消息发送到 MaiCore，通过DecisionManager（向后兼容）。
-
-        Args:
-            message: 要发送的消息对象
-        """
-        # 使用DecisionManager发送
-        if self._decision_manager:
-            try:
-                # 转换MessageBase为CanonicalMessage
-                from src.canonical.canonical_message import MessageBuilder
-
-                canonical_message = MessageBuilder.build_from_message_base(message)
-
-                # 通过DecisionManager发送
-                result = await self._decision_manager.decide(canonical_message)
-                self.logger.info(f"消息通过DecisionManager发送: {result.message_info.message_id}")
-                return
-            except Exception as e:
-                self.logger.error(f"通过DecisionManager发送消息失败: {e}", exc_info=True)
-
-        self.logger.warning("DecisionManager未配置，消息未发送")
-
-    async def broadcast_message(self, message: MessageBase):
-        """
-        广播消息给插件处理器
-
-        Args:
-            message: 要广播的消息对象
-        """
-        # 通过管道处理消息
-        message_to_broadcast = message
-        if self._pipeline_manager:
-            try:
-                processed_message = await self._pipeline_manager.process_inbound_message(message)
-                if processed_message is None:
-                    self.logger.info(f"消息 {message.message_info.message_id} 已被入站管道丢弃")
-                    return
-                message_to_broadcast = processed_message
-            except Exception as e:
-                self.logger.error(f"处理入站管道时发生错误: {e}", exc_info=True)
-                message_to_broadcast = message
-
-        # 触发 Avatar 自动表情
-        if self._avatar:
-            try:
-                text = None
-                if message_to_broadcast.message_segment and hasattr(message_to_broadcast.message_segment, "data"):
-                    data = message_to_broadcast.message_segment.data
-                    if isinstance(data, str):
-                        text = data
-
-                if text:
-                    await self._avatar.try_auto_expression(text)
-            except Exception as e:
-                self.logger.error(f"触发 avatar 自动表情时出错: {e}", exc_info=True)
-
-        # 分发给插件处理器
-        dispatch_key = "*"
-        specific_key = None
-        if message_to_broadcast.message_segment and message_to_broadcast.message_segment.type:
-            specific_key = message_to_broadcast.message_segment.type
-
-        handlers_to_call = self._message_handlers.get(dispatch_key, [])
-        if specific_key and specific_key != dispatch_key:
-            handlers_to_call = handlers_to_call + self._message_handlers.get(specific_key, [])
-
-        if not handlers_to_call:
-            self.logger.debug(f"没有找到消息类型为 '{specific_key or 'N/A'}' 的处理器。")
-            return
-
-        self.logger.info(
-            f"将消息 {message_to_broadcast.message_info.message_id} 分发给 {len(handlers_to_call)} 个处理器..."
-        )
-
-        # 并发执行所有处理器
-        tasks = [handler(message_to_broadcast) for handler in handlers_to_call]
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-
-    def register_websocket_handler(self, message_type_or_key: str, handler: Callable[[MessageBase], asyncio.Task]):
-        """
-        注册一个消息处理器。
-
-        Args:
-            message_type_or_key: 标识消息类型的字符串 (例如 "text", "vts_command", "danmu", 或 "*")。
-            handler: 一个异步函数，接收 MessageBase 对象作为参数。
-        """
-        if not asyncio.iscoroutinefunction(handler):
-            self.logger.warning(f"注册的 WebSocket 处理器 '{handler.__name__}' 不是一个异步函数 (async def)。")
-
-        if message_type_or_key not in self._message_handlers:
-            self._message_handlers[message_type_or_key] = []
-        self._message_handlers[message_type_or_key].append(handler)
-        self.logger.info(f"成功注册 WebSocket 消息处理器: Key='{message_type_or_key}', Handler='{handler.__name__}'")
 
     # ==================== 服务注册与发现 ====================
 

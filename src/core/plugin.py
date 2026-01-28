@@ -2,10 +2,10 @@
 插件接口（Plugin Protocol）
 
 定义了refactor/design/plugin_system.md中要求的Plugin接口。
-这个接口与BasePlugin和Extension都不同：
-- BasePlugin（旧系统）：继承AmaidesuCore，在src/plugins/下使用
-- Extension（Phase 5）：包装BasePlugin，在src/extensions/下使用
-- Plugin（新系统）：聚合Provider，不继承基类，在src/plugins/下使用
+
+这个接口是新的插件系统架构，用于替代BasePlugin系统：
+- BasePlugin（旧系统）：继承AmaidesuCore，通过self.core访问核心功能
+- Plugin（新系统）：聚合Provider，通过event_bus和config进行依赖注入
 
 Plugin的职责：
 1. 聚合多个Provider（InputProvider、OutputProvider、DecisionProvider等）
