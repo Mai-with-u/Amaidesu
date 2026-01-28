@@ -289,9 +289,245 @@ enabled = [
 # enable_stt = false
 # ...（保留原有配置作为注释示例）
 
-# ========== 新增：Phase 4 渲染层配置 ==========
+# ========== 新增：Phase 5 Provider配置 ==========
 
-# 输出层配置（Phase 4新增）
+# Provider配置统一管理
+# 此配置用于统一管理所有Provider（Input、Output、Decision）
+
+# === 输入Provider配置（Layer 1: Perception） ===
+[providers.input]
+# 是否启用输入层
+enabled = true
+# 启用的输入Provider列表
+inputs = [
+    # 控制台输入（开发测试用）
+    # "console_input",
+
+    # B站弹幕输入
+    # "bili_danmaku",           # 普通B站弹幕
+    # "bili_danmaku_official",  # B站官方弹幕（不要和bili_danmaku同时启用）
+    # "bili_danmaku_selenium",  # B站弹幕-Selenium版
+
+    # 其他输入
+    # "mock_danmaku",           # 模拟弹幕
+    # "read_pingmu",            # 读屏木
+]
+
+# 各个InputProvider的详细配置
+[providers.input.inputs.console_input]
+type = "console_input"
+# 可选：添加自定义配置
+
+[providers.input.inputs.bili_danmaku]
+type = "bili_danmaku"
+room_id = ""          # B站直播间号
+# ... 其他B站弹幕配置
+
+[providers.input.inputs.mock_danmaku]
+type = "mock_danmaku"
+# 模拟弹幕配置
+
+# === 输出Provider配置（Layer 6: Rendering） ===
+[providers.output]
+# 是否启用输出层
+enabled = true
+# 是否并发渲染到所有Provider
+concurrent_rendering = true
+# 错误处理策略：continue（继续）、stop（停止）、drop（丢弃）
+error_handling = "continue"
+
+# 启用的输出Provider列表
+outputs = [
+    # 基础输出（推荐启用）
+    "subtitle",     # 字幕
+    "vts",          # VTS控制
+
+    # TTS输出（选择一个或多个）
+    # "tts",         # Edge TTS
+    # "omni_tts",    # Omni TTS (GPT-SoVITS)
+
+    # 其他输出
+    # "sticker",     # 表情贴纸
+]
+
+# ExpressionGenerator配置
+[providers.output.expression_generator]
+# 默认TTS是否启用
+default_tts_enabled = true
+# 默认字幕是否启用
+default_subtitle_enabled = true
+# 默认表情是否启用
+default_expressions_enabled = true
+# 默认热键是否启用
+default_hotkeys_enabled = true
+
+# 各个OutputProvider的详细配置
+
+# TTS Provider配置
+[providers.output.outputs.tts]
+type = "tts"
+# TTS引擎：edge 或 omni
+engine = "edge"
+# Edge TTS语音
+voice = "zh-CN-XiaoxiaoNeural"
+# 音频输出设备名称（留空使用默认设备）
+output_device_name = ""
+
+# Omni TTS配置（仅在engine=omni时生效）
+[providers.output.outputs.tts.omni]
+# Omni TTS API地址
+api_url = "http://localhost:9880"
+# 模型名称
+model = "path/to/model"
+# 说话人ID
+speaker = 0
+# 语速
+speed = 1.0
+# 音调
+pitch = 1.0
+# 音量
+volume = 1.0
+
+# Subtitle Provider配置
+[providers.output.outputs.subtitle]
+type = "subtitle"
+# 字幕窗口宽度
+window_width = 800
+# 字幕窗口高度
+window_height = 100
+# 字体大小
+font_size = 24
+# 字体颜色
+font_color = "#FFFFFF"
+# 背景颜色
+bg_color = "#000000"
+# 背景透明度（0-255）
+bg_alpha = 180
+# 字幕显示位置（top/center/bottom）
+position = "bottom"
+# 自动隐藏延迟（秒，0表示不隐藏）
+auto_hide_delay = 5.0
+# 是否启用拖拽
+draggable = true
+# 是否启用Chroma-key（OBS抠图）
+chroma_key_enabled = false
+# Chroma-key颜色
+chroma_key_color = "#00FF00"
+
+# Sticker Provider配置
+[providers.output.outputs.sticker]
+type = "sticker"
+# 贴纸大小（相对于窗口宽度的比例，0-1）
+sticker_size = 0.33
+# 贴纸旋转角度（度）
+sticker_rotation = 0
+# 贴纸显示时长（秒）
+display_duration = 3.0
+# 贴纸冷却时间（秒，防止刷屏）
+cooldown = 5.0
+# 贴纸目录
+sticker_dir = "data/stickers"
+# 默认贴纸（当没有关键词匹配时使用）
+default_sticker = "default.png"
+
+# VTS Provider配置
+[providers.output.outputs.vts]
+type = "vts"
+# VTS WebSocket地址
+vts_host = "localhost"
+vts_port = 8001
+# 是否自动连接
+auto_connect = true
+# 连接超时（秒）
+connect_timeout = 10.0
+# 重连间隔（秒）
+reconnect_interval = 5.0
+# 是否启用LLM智能热键匹配
+llm_matching_enabled = false
+# LLM配置（可选，不设置则使用全局llm配置）
+# llm_type = "llm_fast"  # llm, llm_fast, vlm
+# max_hotkey_candidates = 5
+
+# Omni TTS Provider配置
+[providers.output.outputs.omni_tts]
+type = "omni_tts"
+# Omni TTS API地址
+api_url = "http://localhost:9880"
+# 模型路径
+model_path = "path/to/model"
+# 说话人ID
+speaker_id = 0
+# 语速
+speed = 1.0
+# 音调
+pitch = 1.0
+# 音量
+volume = 1.0
+# 音频输出设备名称（留空使用默认设备）
+output_device_name = ""
+# 是否启用流式TTS
+stream_enabled = true
+# 缓存目录
+cache_dir = "data/omni_tts_cache"
+# 最大缓存数量（0表示不限制）
+max_cache_size = 100
+
+# === 决策Provider配置（Layer 3.5: Decision） ===
+[providers.decision]
+# 是否启用决策层
+enabled = true
+# 当前使用的决策Provider（active provider）
+active_provider = "maicore"
+# 支持的决策Provider列表
+providers = [
+    "maicore",        # MaiCore决策（默认）
+    "rule_engine",    # 规则引擎
+    "local_llm",      # 本地LLM
+]
+
+# 各个DecisionProvider的详细配置
+
+# MaiCore决策Provider配置
+[providers.decision.providers.maicore]
+type = "maicore"
+# WebSocket连接配置
+host = "127.0.0.1"
+port = 8000
+# token = "your_token_if_needed"
+# 连接超时（秒）
+connect_timeout = 10.0
+# 重连间隔（秒）
+reconnect_interval = 5.0
+
+# 规则引擎决策Provider配置
+[providers.decision.providers.rule_engine]
+type = "rule_engine"
+# 规则文件路径
+rules_file = "data/rules/decision_rules.toml"
+# 默认回复
+default_response = "我不知道怎么回答这个问题"
+
+# 本地LLM决策Provider配置
+[providers.decision.providers.local_llm]
+type = "local_llm"
+# LLM类型（llm, llm_fast, vlm）
+llm_type = "llm"
+# 自定义模型配置（可选，不设置则使用全局配置）
+# model = "gpt-4"
+# api_key = "your-api-key"
+# base_url = "https://api.openai.com/v1"
+# temperature = 0.7
+# max_tokens = 1000
+# 系统提示词
+system_prompt = "你是一个友好的AI助手，请简洁地回答用户的问题。"
+
+# ========== 旧配置兼容性说明 ==========
+# 以下配置节已迁移到新的 [providers.*] 结构，但保留以向后兼容
+# [rendering] 节点已迁移到 [providers.output]，但仍可使用（已标记为过时）
+# 推荐使用新的 [providers.*] 结构，未来版本将移除旧的 [rendering] 节点
+
+# ========== 旧Phase 4渲染层配置（已过时，保留以兼容） ==========
+# 注意：此配置节已迁移到 [providers.output]，请使用新配置
 [rendering]
 # 是否启用输出层
 enabled = true
@@ -325,113 +561,24 @@ default_expressions_enabled = true
 # 默认热键是否启用
 default_hotkeys_enabled = true
 
-# ========== 各个Provider的详细配置 ==========
-
-# TTS Provider配置
+# 各个Provider的详细配置（已迁移到 [providers.output.outputs.xxx]，此处仅作为引用）
 [rendering.outputs.tts]
 type = "tts"
-# TTS引擎：edge 或 omni
-engine = "edge"
-# Edge TTS语音
-voice = "zh-CN-XiaoxiaoNeural"
-# 音频输出设备名称（留空使用默认设备）
-output_device_name = ""
+# 使用 [providers.output.outputs.tts] 的配置
 
-# Omni TTS配置（仅在engine=omni时生效）
-[rendering.outputs.tts.omni]
-# Omni TTS API地址
-api_url = "http://localhost:9880"
-# 模型名称
-model = "path/to/model"
-# 说话人ID
-speaker = 0
-# 语速
-speed = 1.0
-# 音调
-pitch = 1.0
-# 音量
-volume = 1.0
-
-# Subtitle Provider配置
 [rendering.outputs.subtitle]
 type = "subtitle"
-# 字幕窗口宽度
-window_width = 800
-# 字幕窗口高度
-window_height = 100
-# 字体大小
-font_size = 24
-# 字体颜色
-font_color = "#FFFFFF"
-# 背景颜色
-bg_color = "#000000"
-# 背景透明度（0-255）
-bg_alpha = 180
-# 字幕显示位置（top/center/bottom）
-position = "bottom"
-# 自动隐藏延迟（秒，0表示不隐藏）
-auto_hide_delay = 5.0
-# 是否启用拖拽
-draggable = true
-# 是否启用Chroma-key（OBS抠图）
-chroma_key_enabled = false
-# Chroma-key颜色
-chroma_key_color = "#00FF00"
+# 使用 [providers.output.outputs.subtitle] 的配置
 
-# Sticker Provider配置
 [rendering.outputs.sticker]
 type = "sticker"
-# 贴纸大小（相对于窗口宽度的比例，0-1）
-sticker_size = 0.33
-# 贴纸旋转角度（度）
-sticker_rotation = 0
-# 贴纸显示时长（秒）
-display_duration = 3.0
-# 贴纸冷却时间（秒，防止刷屏）
-cooldown = 5.0
-# 贴纸目录
-sticker_dir = "data/stickers"
-# 默认贴纸（当没有关键词匹配时使用）
-default_sticker = "default.png"
+# 使用 [providers.output.outputs.sticker] 的配置
 
-# VTS Provider配置
 [rendering.outputs.vts]
 type = "vts"
-# VTS WebSocket地址
-vts_host = "localhost"
-vts_port = 8001
-# 是否自动连接
-auto_connect = true
-# 连接超时（秒）
-connect_timeout = 10.0
-# 重连间隔（秒）
-reconnect_interval = 5.0
-# 是否启用LLM智能热键匹配
-llm_matching_enabled = false
-# LLM配置（可选，不设置则使用全局llm配置）
-# llm_type = "llm_fast"  # llm, llm_fast, vlm
-# max_hotkey_candidates = 5
+# 使用 [providers.output.outputs.vts] 的配置
 
-# Omni TTS Provider配置
 [rendering.outputs.omni_tts]
 type = "omni_tts"
-# Omni TTS API地址
-api_url = "http://localhost:9880"
-# 模型路径
-model_path = "path/to/model"
-# 说话人ID
-speaker_id = 0
-# 语速
-speed = 1.0
-# 音调
-pitch = 1.0
-# 音量
-volume = 1.0
-# 音频输出设备名称（留空使用默认设备）
-output_device_name = ""
-# 是否启用流式TTS
-stream_enabled = true
-# 缓存目录
-cache_dir = "data/omni_tts_cache"
-# 最大缓存数量（0表示不限制）
-max_cache_size = 100
+# 使用 [providers.output.outputs.omni_tts] 的配置
+

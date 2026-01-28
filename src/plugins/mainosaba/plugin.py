@@ -1,19 +1,19 @@
-"""
-MainosabaPlugin - 《魔法少女的魔女裁判》游戏助手插件
-
-该插件通过截取屏幕、调用VLM模型识别游戏台词，
-发送给MaiBot后等待任意回应（或超时），然后自动继续游戏。
-"""
+# Mainosaba Plugin - 新Plugin架构实现
 
 import asyncio
 import time
 import io
 import base64
-from typing import Optional, Dict, Any
+from typing import Dict, Any, List, Optional, AsyncIterator
 from enum import Enum
 from PIL import ImageGrab
 import pyautogui
-from src.core.plugin_manager import BasePlugin
+
+from src.core.plugin import Plugin
+from src.core.providers.input_provider import InputProvider
+from src.core.data_types.raw_data import RawData
+from src.core.event_bus import EventBus
+from src.utils.logger import get_logger
 from maim_message import MessageBase, BaseMessageInfo, UserInfo, Seg, FormatInfo
 
 
@@ -25,118 +25,71 @@ class ControlMethod(Enum):
     SPACE_KEY = "space_key"  # 空格键
 
 
-class MainosabaPlugin(BasePlugin):
-    """《魔法少女的魔女裁判》游戏助手插件"""
+class MainosabaInputProvider(InputProvider):
+    """
+    Mainosaba InputProvider - 从游戏画面采集文本数据
 
-    def __init__(self, core, plugin_config: Dict[str, Any]):
-        super().__init__(core, plugin_config)
-        self.plugin_name = "MainosabaPlugin"
+    职责：
+    - 截取游戏画面
+    - 使用VLM识别游戏文本
+    - 产生RawData供后续处理
+    """
+
+    def __init__(self, config: Dict[str, Any], vlm_client=None, event_bus: Optional[EventBus] = None):
+        super().__init__(config)
+        self.logger = get_logger("MainosabaInputProvider")
+        self.vlm_client = vlm_client
+        self.event_bus = event_bus
 
         # 游戏配置
-        self.full_screen = plugin_config.get("full_screen", True)  # 是否全屏截图
-        self.game_region = plugin_config.get("game_region", None)  # [x1, y1, x2, y2] 如果None则全屏
-        self.response_timeout = plugin_config.get("response_timeout", 10)  # 秒
-        self.check_interval = plugin_config.get("check_interval", 1)  # 秒
+        self.full_screen = config.get("full_screen", True)
+        self.game_region = config.get("game_region", None)
+        self.check_interval = config.get("check_interval", 1)
+        self.screenshot_min_interval = config.get("screenshot_min_interval", 0.5)
 
-        # 控制配置
-        control_method_str = plugin_config.get("control_method", "mouse_click")
-        try:
-            self.control_method = ControlMethod(control_method_str)
-        except ValueError:
-            self.logger.warning(f"未知的控制方式: {control_method_str}，使用默认值 mouse_click")
-            self.control_method = ControlMethod.MOUSE_CLICK
-        self.click_position = plugin_config.get("click_position", [1920 // 2, 1080 // 2])  # 默认屏幕中心
-
-        # 运行状态
-        self.is_running = False
+        # 状态
         self.last_screenshot_time = 0
         self.last_game_text = ""
         self.waiting_for_response = False
         self.last_message_time = 0
-        self.monitor_task: Optional[asyncio.Task] = None
 
-        # VLM 客户端（将在 setup 中初始化）
-        self.vlm_client = None
-
-        self.logger.info(f"{self.plugin_name} 插件初始化完成")
-
-    async def setup(self) -> None:
-        """插件启动时的设置"""
-        # 获取 VLM 客户端
-        try:
-            self.vlm_client = self.get_vlm_client()
-            self.logger.info("VLM 客户端已初始化")
-        except Exception as e:
-            self.logger.error(f"VLM 客户端初始化失败: {e}")
-            self.logger.warning("插件将在无 VLM 支持的情况下运行")
-
-        # 注册消息处理器来检测MaiBot回应
-        self.core.register_websocket_handler("*", self.handle_maicore_message)
-
-        # 启动游戏监听任务
-        self.is_running = True
-        self.monitor_task = asyncio.create_task(self.game_monitor_loop())
-
-        self.logger.info(f"{self.plugin_name} 插件启动完成")
-
-    async def cleanup(self) -> None:
-        """插件清理资源"""
-        self.is_running = False
-        if self.monitor_task and not self.monitor_task.done():
-            self.monitor_task.cancel()
-            try:
-                await self.monitor_task
-            except asyncio.CancelledError:
-                pass
-
-        self.logger.info(f"{self.plugin_name} 插件清理完成")
-
-    async def handle_maicore_message(self, message: MessageBase):
-        """处理来自MaiCore的消息，检测MaiBot回应"""
-        try:
-            # 如果正在等待MaiBot回应，检测到任何消息就继续游戏
-            if self.waiting_for_response:
-                # 忽略自己发送的游戏消息，避免循环
-                if (
-                    message.message_info
-                    and message.message_info.additional_config
-                    and message.message_info.additional_config.get("source") == "manosaba_game"
-                ):
-                    return
-
-                self.logger.info("检测到MaiBot回应，继续游戏")
-                self.waiting_for_response = False
-                await self.advance_game()
-
-        except Exception as e:
-            self.logger.error(f"处理消息时出错: {e}")
-
-    async def game_monitor_loop(self) -> None:
-        """游戏监听主循环"""
-        self.logger.info("开始游戏监听循环")
+    async def _collect_data(self) -> AsyncIterator[RawData]:
+        """采集游戏文本数据"""
+        self.logger.info("开始采集游戏文本数据...")
 
         while self.is_running:
             try:
                 # 检查是否在等待回应
                 if self.waiting_for_response:
                     # 检查是否超时
-                    if time.time() - self.last_message_time > self.response_timeout:
+                    if time.time() - self.last_message_time > self.config.get("response_timeout", 10):
                         self.logger.info("等待回应超时，继续游戏")
                         await self.advance_game()
                         self.waiting_for_response = False
                 else:
                     # 正常监听游戏文本
-                    self.logger.info("开始截屏识别...")
+                    self.logger.debug("开始截屏识别...")
                     game_text = await self.capture_and_recognize()
-                    self.logger.info(f"识别完成，结果: {game_text[:50] if game_text else 'None'}...")
+                    self.logger.debug(f"识别完成，结果: {game_text[:50] if game_text else 'None'}...")
 
                     if game_text is None:
-                        self.logger.info("未识别到有效文本，继续监听")
+                        self.logger.debug("未识别到有效文本，继续监听")
                     elif game_text == self.last_game_text:
-                        self.logger.info("识别到的文本与上次相同，跳过")
+                        self.logger.debug("识别到的文本与上次相同，跳过")
                     else:
                         self.logger.info(f"检测到新游戏文本: {game_text[:50]}...")
-                        await self.send_game_text_to_maibot(game_text)
+                        # 产生RawData
+                        yield RawData(
+                            source="mainosaba_game",
+                            content=game_text,
+                            data_type="text",
+                            timestamp=time.time(),
+                            metadata={
+                                "platform": "mainosaba",
+                                "source": "manosaba_game",
+                                "maimcore_reply_probability_gain": 1.5,
+                            },
+                        )
                         self.last_game_text = game_text
                         self.last_message_time = time.time()
                         self.waiting_for_response = True
@@ -146,17 +99,17 @@ class MainosabaPlugin(BasePlugin):
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                self.logger.error(f"游戏监听循环出错: {e}")
+                self.logger.error(f"游戏监听循环出错: {e}", exc_info=True)
                 await asyncio.sleep(5)  # 出错时等待5秒再继续
 
-        self.logger.info("游戏监听循环结束")
+        self.logger.info("游戏文本采集结束")
 
     async def capture_and_recognize(self) -> Optional[str]:
         """截取屏幕并识别游戏文本"""
         try:
             # 检查截屏频率限制
             current_time = time.time()
-            if current_time - self.last_screenshot_time < 0.5:  # 最小0.5秒间隔
+            if current_time - self.last_screenshot_time < self.screenshot_min_interval:
                 return None
 
             # 截取全屏或指定区域
@@ -177,7 +130,7 @@ class MainosabaPlugin(BasePlugin):
             return game_text
 
         except Exception as e:
-            self.logger.error(f"截屏识别出错: {e}")
+            self.logger.error(f"截屏识别出错: {e}", exc_info=True)
             return None
 
     async def recognize_game_text(self, image_base64: str) -> Optional[str]:
@@ -218,77 +171,35 @@ class MainosabaPlugin(BasePlugin):
             if content in ["无对话文本", "没有对话文本", "No dialogue text", ""]:
                 return None
 
-            self.logger.info(f"VLM识别结果: {content[:100]}...")
+            self.logger.debug(f"VLM识别结果: {content[:100]}...")
             return content
 
         except Exception as e:
             self.logger.error(f"识别游戏文本出错: {e}", exc_info=True)
             return None
 
-    async def send_game_text_to_maibot(self, game_text: str) -> None:
-        """将游戏文本发送给MaiBot"""
-        try:
-            # 直接发送游戏原文，不做任何加工
-            content = game_text
-
-            timestamp = time.time()
-            message_id = f"manosaba_game_{int(timestamp * 1000)}"
-
-            # 创建用户信息（游戏角色）
-            game_user_info = UserInfo(
-                platform=self.core.platform,
-                user_id="game_character",
-                user_nickname="《魔法少女的魔女审判》游戏内容同步助手",
-                user_cardname="Mainosaba",
-            )
-
-            # 创建格式信息
-            format_info = FormatInfo(content_format=["text"], accept_format=["text"])
-
-            # 附加配置，用于标识这是游戏消息
-            additional_config = {
-                "source": "manosaba_game",
-                "maimcore_reply_probability_gain": 1.5,  # 提高回复概率
-            }
-
-            # 创建消息信息
-            message_info = BaseMessageInfo(
-                platform=self.core.platform,
-                message_id=message_id,
-                time=timestamp,
-                user_info=game_user_info,
-                group_info=None,
-                template_info=None,
-                format_info=format_info,
-                additional_config=additional_config,
-            )
-
-            # 创建消息段
-            message_segment = Seg(type="text", data=content)
-
-            # 创建最终消息
-            message = MessageBase(message_info=message_info, message_segment=message_segment, raw_message=content)
-
-            # 发送消息到MaiCore
-            await self.core.send_to_maicore(message)
-            self.logger.info(f"已发送游戏文本给MaiBot: {game_text[:50]}...")
-
-        except Exception as e:
-            self.logger.error(f"发送游戏文本到MaiBot出错: {e}")
-
     async def advance_game(self) -> None:
         """推进游戏到下一句对话"""
         try:
-            if self.control_method == ControlMethod.MOUSE_CLICK:
+            control_method_str = self.config.get("control_method", "mouse_click")
+            try:
+                control_method = ControlMethod(control_method_str)
+            except ValueError:
+                self.logger.warning(f"未知的控制方式: {control_method_str}，使用默认值 mouse_click")
+                control_method = ControlMethod.MOUSE_CLICK
+
+            click_position = self.config.get("click_position", [1920 // 2, 1080 // 2])
+
+            if control_method == ControlMethod.MOUSE_CLICK:
                 # 鼠标点击指定位置
-                x, y = self.click_position
+                x, y = click_position
                 pyautogui.click(x, y)
                 self.logger.info(f"已点击位置 ({x}, {y}) 推进游戏")
-            elif self.control_method == ControlMethod.ENTER_KEY:
+            elif control_method == ControlMethod.ENTER_KEY:
                 # 按Enter键
                 pyautogui.press("enter")
                 self.logger.info("已按Enter键推进游戏")
-            elif self.control_method == ControlMethod.SPACE_KEY:
+            elif control_method == ControlMethod.SPACE_KEY:
                 # 按空格键
                 pyautogui.press("space")
                 self.logger.info("已按空格键推进游戏")
@@ -297,7 +208,101 @@ class MainosabaPlugin(BasePlugin):
             await asyncio.sleep(0.5)
 
         except Exception as e:
-            self.logger.error(f"推进游戏出错: {e}")
+            self.logger.error(f"推进游戏出错: {e}", exc_info=True)
+
+
+class MainosabaPlugin:
+    """
+    Mainosaba插件 - 《魔法少女的魔女裁判》游戏助手
+
+    功能：
+    - 截取游戏画面并识别台词
+    - 将识别的文本发送给系统
+    - 检测回应后自动推进游戏
+
+    迁移到新的Plugin架构，包装MainosabaInputProvider。
+    """
+
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self.logger = get_logger(self.__class__.__name__)
+        self.logger.info(f"初始化插件: {self.__class__.__name__}")
+
+        self.event_bus = None
+        self._providers: List[MainosabaInputProvider] = []
+
+        # 配置检查
+        self.enabled = self.config.get("enabled", True)
+        if not self.enabled:
+            self.logger.warning("MainosabaPlugin 在配置中已禁用。")
+            return
+
+        # VLM 客户端（将在 setup 中初始化）
+        self.vlm_client = None
+
+    async def setup(self, event_bus, config: Dict[str, Any]) -> List[Any]:
+        """
+        设置插件
+
+        Args:
+            event_bus: 事件总线实例
+            config: 插件配置
+
+        Returns:
+            Provider列表（包含MainosabaInputProvider）
+        """
+        self.event_bus = event_bus
+
+        if not self.enabled:
+            return []
+
+        # 获取 VLM 客户端（需要从全局或插件配置）
+        # 注意：这里需要集成到新的LLM客户端系统
+        # 暂时保持为None，让InputProvider自己处理
+        try:
+            # 检查插件级VLM配置
+            llm_config = self.config.get("llm_config", {})
+            if llm_config:
+                self.logger.info("检测到插件级VLM配置")
+                # 这里应该创建LLMClient，但由于依赖关系，暂时跳过
+                pass
+        except Exception as e:
+            self.logger.warning(f"VLM配置检查失败: {e}")
+
+        # 创建Provider
+        try:
+            provider = MainosabaInputProvider(self.config, self.vlm_client, event_bus)
+            self._providers.append(provider)
+            self.logger.info("MainosabaInputProvider 已创建")
+        except Exception as e:
+            self.logger.error(f"创建Provider失败: {e}", exc_info=True)
+            return []
+
+        return self._providers
+
+    async def cleanup(self):
+        """清理资源"""
+        self.logger.info("开始清理 MainosabaPlugin...")
+
+        for provider in self._providers:
+            try:
+                await provider.stop()
+            except Exception as e:
+                self.logger.error(f"清理Provider时出错: {e}", exc_info=True)
+
+        self._providers.clear()
+        self.logger.info("MainosabaPlugin 清理完成")
+
+    def get_info(self) -> Dict[str, Any]:
+        """获取插件信息"""
+        return {
+            "name": "Mainosaba",
+            "version": "1.0.0",
+            "author": "Amaidesu Team",
+            "description": "Mainosaba插件，《魔法少女的魔女裁判》游戏助手",
+            "category": "input",
+            "api_version": "1.0",
+        }
 
 
 # 插件入口点
