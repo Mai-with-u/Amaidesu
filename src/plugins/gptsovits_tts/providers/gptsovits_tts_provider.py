@@ -38,13 +38,9 @@ except ImportError:
     pass
 
 # --- 远程流支持 ---
-try:
-    from src.plugins.remote_stream.plugin import RemoteStreamService
-
-    REMOTE_STREAM_AVAILABLE = True
-except ImportError:
-    REMOTE_STREAM_AVAILABLE = False
-    print("提示: 未找到 remote_stream 插件，将使用本地音频输出。", file=sys.stderr)
+# 远程流插件未安装，将禁用远程流功能
+# 如需启用远程流，请安装 remote_stream 插件
+REMOTE_STREAM_AVAILABLE = False
 
 # --- 音频流参数 ---
 CHANNELS = 1
