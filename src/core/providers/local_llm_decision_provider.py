@@ -197,9 +197,9 @@ class LocalLLMDecisionProvider(DecisionProvider):
                     return response_text
 
         except asyncio.TimeoutError:
-            raise TimeoutError(f"LLM API请求超时（{self.timeout}秒）")
+            raise TimeoutError(f"LLM API请求超时（{self.timeout}秒）") from None
         except aiohttp.ClientError as e:
-            raise ConnectionError(f"LLM API连接失败: {e}")
+            raise ConnectionError(f"LLM API连接失败: {e}") from e
 
     def _create_message_base(self, text: str, canonical_message: "CanonicalMessage") -> "MessageBase":
         """

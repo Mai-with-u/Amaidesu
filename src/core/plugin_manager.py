@@ -3,7 +3,7 @@ import importlib
 import inspect
 import os
 import sys
-from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Type
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
 
 # 避免循环导入，使用 TYPE_CHECKING
 if TYPE_CHECKING:
@@ -496,7 +496,7 @@ class PluginManager:
 
         if unload_tasks:
             results = await asyncio.gather(*unload_tasks, return_exceptions=True)
-            for i, task in enumerate(unload_tasks):
+            for i, _task in enumerate(unload_tasks):
                 plugin_name = list(self.loaded_plugins.keys())[i]
                 if isinstance(results[i], Exception):
                     self.logger.error(f"清理插件 '{plugin_name}' 时出错: {results[i]}", exc_info=results[i])

@@ -161,7 +161,7 @@ class VTSProvider(OutputProvider):
         except ImportError:
             self.logger.error("pyvts库不可用，VTSProvider将被禁用")
             self._vts = None
-            raise ImportError("pyvts library not available")
+            raise ImportError("pyvts library not available") from None
 
         # 初始化音频分析相关
         self.accumulated_audio = bytearray()
@@ -688,9 +688,6 @@ class VTSProvider(OutputProvider):
         if not self.hotkey_list:
             self.logger.warning("热键列表为空，无法使用LLM匹配")
             return None
-
-        # 构造热键列表字符串
-        hotkey_list_str = "\n".join([f"- {hotkey.get('name')}" for hotkey in self.hotkey_list])
 
         # 构造提示词
         prompt = self.llm_prompt_prefix.format(text=text)
