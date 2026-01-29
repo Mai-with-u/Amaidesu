@@ -1,7 +1,7 @@
 """
 CanonicalMessage - Layer 3: 中间表示
 
-统一的中间表示格式,支持元数据传递和DataCache引用。
+统一的中间表示格式,支持元数据传递。
 """
 
 import time
@@ -23,7 +23,6 @@ class CanonicalMessage:
     核心职责:
     - 统一的中间表示格式
     - 支持元数据传递
-    - 支持DataCache引用(data_ref → DataCache)
     - 可序列化/反序列化
     - 兼容MessageBase(向后兼容)
 
@@ -31,7 +30,6 @@ class CanonicalMessage:
         text: 文本内容
         source: 数据来源(弹幕/控制台/等)
         metadata: 元数据(用户ID、时间戳等)
-        data_ref: DataCache引用(可选)
         original_message: 原始MessageBase(保留兼容)
         timestamp: 时间戳(Unix时间戳,秒)
     """
@@ -39,7 +37,7 @@ class CanonicalMessage:
     text: str
     source: str
     metadata: Dict[str, Any] = field(default_factory=dict)
-    data_ref: Optional[str] = None
+    # data_ref: Optional[str] = None  # DataCache引用已移除(未实际使用)
     original_message: Optional["MessageBase"] = None
     timestamp: float = field(default_factory=time.time)
 

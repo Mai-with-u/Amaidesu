@@ -2,6 +2,8 @@
 NormalizedText数据类定义
 
 Layer 2(输入标准化层)的输出格式，表示标准化后的文本。
+
+注意：data_ref字段保留用于向后兼容，但DataCache功能已移除（未实际使用）。
 """
 
 from dataclasses import dataclass
@@ -19,7 +21,7 @@ class NormalizedText:
     Attributes:
         text: 文本描述
         metadata: 元数据(必需，包含type, source, timestamp等)
-        data_ref: 原始数据引用(可选，用于Layer 4按需加载原始数据)
+        data_ref: 原始数据引用(可选，保留用于向后兼容，但DataCache已移除)
     """
 
     text: str
@@ -51,6 +53,8 @@ class NormalizedText:
         """
         设置DataCache引用并返回新对象
 
+        注意：DataCache功能已移除（未实际使用），此方法保留用于向后兼容。
+
         Args:
             data_ref: 数据引用
 
@@ -66,7 +70,7 @@ class NormalizedText:
         Returns:
             字典表示的NormalizedText
         """
-        return {"text": self.text, "metadata": self.metadata, "data_ref": self.data_ref}
+        return {"text": self.text, "metadata": self.metadata, "data_ref": self.data_ref}  # 保留data_ref字段用于向后兼容
 
     @classmethod
     def from_raw_data(

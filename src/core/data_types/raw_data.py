@@ -50,6 +50,8 @@ class RawData:
         """
         设置DataCache引用并返回新对象
 
+        注意：DataCache功能已移除（未实际使用），此方法保留用于向后兼容。
+
         Args:
             data_ref: 数据引用
 
@@ -64,7 +66,7 @@ class RawData:
             preserve_original=self.preserve_original,
             original_data=self.original_data,
             metadata=self.metadata.copy(),
-            data_ref=data_ref,
+            data_ref=data_ref,  # 保留字段，但DataCache已移除
         )
 
     def to_dict(self) -> dict:
@@ -81,5 +83,6 @@ class RawData:
             "timestamp": self.timestamp,
             "preserve_original": self.preserve_original,
             "metadata": self.metadata,
+            # data_ref字段已保留，但DataCache功能已移除（未实际使用）
             "data_ref": self.data_ref,
         }
