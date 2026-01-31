@@ -107,13 +107,18 @@ class CanonicalLayer:
             text = normalized.text
             metadata = normalized.metadata.copy()
 
-            # TODO: 当 TextPipeline 实现后，在此处调用 process_text
-            # if self.pipeline_manager and hasattr(self.pipeline_manager, 'process_text'):
-            #     text = await self.pipeline_manager.process_text(text, metadata)
-            #     if text is None:
-            #         self.logger.debug(f"文本被Pipeline丢弃 (source: {original_source})")
-            #         self._dropped_count += 1
-            #         return
+            # 通过 TextPipeline 进行文本预处理（如限流、敏感词过滤等）
+            if self.pipeline_manager and hasattr(self.pipeline_manager, "process_text"):
+                try:
+                    processed_text = await self.pipeline_manager.process_text(text, metadata)
+                    if processed_text is None:
+                        self.logger.debug(f"文本被 TextPipeline 丢弃 (source: {original_source})")
+                        self._dropped_count += 1
+                        return
+                    text = processed_text
+                except Exception as e:
+                    # Pipeline 异常时根据配置决定是否继续
+                    self.logger.warning(f"TextPipeline 处理异常: {e}，使用原始文本继续")
 
             # 构建 CanonicalMessage
             canonical = CanonicalMessage.from_normalized_text(normalized)

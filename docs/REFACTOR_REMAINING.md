@@ -11,13 +11,15 @@
 
 | 状态 | 说明 |
 |------|------|
-| ❌ 未实现 | **TextPipeline** 接口（`process(text, metadata) -> Optional[str]`）未实现，代码中无 `TextPipeline`、`PipelineErrorHandling`、`PipelineStats`。 |
-| ❌ 未实现 | **PipelineManager** 仍为旧版：处理 `MessageBase`、inbound/outbound 双向、`process_outbound_message` / `process_inbound_message`。 |
-| ❌ 未接入 | **管道未被调用**：`process_outbound_message` / `process_inbound_message` 在代码中无调用点，现有管道（command_router、throttle、similar_message_filter 等）在运行时不生效。 |
-| ❌ 未实现 | Layer 2→3 之间未插入 **process_text**：设计为「NormalizedText → Pipeline(process_text) → CanonicalMessage」，当前无此环节。 |
-| ❌ 未迁移 | **CommandRouterPipeline** 设计上由 DecisionProvider（如命令路由 Provider）替代，当前仍保留为 MessagePipeline，且未被调用。 |
+| ✅ 已实现 | **TextPipeline** 接口：`TextPipeline` 协议、`TextPipelineBase` 基类、`PipelineErrorHandling` 枚举、`PipelineStats` 统计类、`PipelineException` 异常已在 `pipeline_manager.py` 中实现。 |
+| ✅ 已实现 | **PipelineManager.process_text()**：新版方法已实现，支持超时控制、错误处理策略（CONTINUE/STOP/DROP）、统计信息、并发保护（asyncio.Lock）。 |
+| ✅ 已接入 | Layer 2→3 之间已插入 **process_text**：`CanonicalLayer._on_normalized_text_ready` 中调用 `pipeline_manager.process_text(text, metadata)`，支持文本预处理和丢弃逻辑。 |
+| ⏳ 待迁移 | **现有 Pipeline 迁移**：command_router、throttle、similar_message_filter 等仍为 MessagePipeline，需迁移到 TextPipeline 接口，或根据需求移除/替换。 |
+| ⏳ 待迁移 | **CommandRouterPipeline** 设计上由 DecisionProvider 替代，当前仍保留为 MessagePipeline，可考虑移除。 |
 
-**待做**：实现 TextPipeline 协议与新版 PipelineManager、在 normalization.text.ready 与 CanonicalMessage 构建之间接入 `process_text`，并迁移/移除 CommandRouter 等管道逻辑。
+**已完成**：TextPipeline 协议与 `process_text()` 已实现并接入 CanonicalLayer。
+
+**待做**：将现有 Pipeline（throttle、filter 等）迁移到 TextPipeline 接口，或实现新的 TextPipeline 示例（如 RateLimitTextPipeline、FilterTextPipeline）。
 
 ---
 
@@ -99,7 +101,7 @@
 | 状态 | 说明 |
 |------|------|
 | ✅ 已做 | WebSocket/HTTP/Router 已迁出 Core，由 MaiCoreDecisionProvider 负责。 |
-| ⚠️ 未完全对齐 | **PipelineManager** 设计为 `PipelineManager(event_bus)` 且处理 Text；当前为 `PipelineManager(core)` 且处理 MessageBase，且未被调用。 |
+| ✅ 已改进 | **PipelineManager** 已添加 `process_text(text, metadata)` 方法和 TextPipeline 支持；仍保留旧的 MessagePipeline 支持以保持向后兼容。CanonicalLayer 中已接入 `process_text`。 |
 | ⚠️ 未完全对齐 | **main.py** 仍向 AmaidesuCore 传入 `maicore_host`、`maicore_port`、`http_host`、`http_port` 等；若决策与 HTTP 完全由 Provider 管理，这些可考虑从 Core 构造中移除或仅作兼容保留。 |
 
 **待做**：管道改为 TextPipeline 并接入后，将 PipelineManager 改为依赖 event_bus 并处理文本；视情况清理 main 对 Core 的 MaiCore/HTTP 相关传参。
@@ -120,9 +122,9 @@
 
 | 类别           | 状态       | 优先级建议 |
 |----------------|------------|------------|
-| Pipeline 重设计 | 未实现且未接入 | 高         |
+| Pipeline 重设计 | ✅ 核心已完成，待迁移现有 Pipeline | 中         |
 | Layer 2→3 桥接 | ✅ 已完成   | -          |
-| 事件数据契约   | 未实现     | 中         |
+| 事件数据契约   | ⏳ 进行中（另一 AI） | 中         |
 | 服务注册瘦身   | 未达标     | 中         |
 | HTTP 服务器    | 未按设计实现 | 中/低      |
 | DataCache      | 有意未实现 | 低/可选    |
@@ -133,10 +135,11 @@
 ## 建议实施顺序
 
 1. ~~**Layer 2→3 桥接**~~：✅ 已完成（CanonicalLayer 实现，main.py 启动 InputLayer 和 CanonicalLayer）。
-2. **Pipeline**：实现 TextPipeline 与 `process_text`，在 CanonicalLayer 中插入「process_text → 再构建 CanonicalMessage」。
+2. ~~**Pipeline（TextPipeline + process_text）**~~：✅ 核心已完成（TextPipeline 协议、PipelineManager.process_text()、CanonicalLayer 接入）。
 3. ~~**main 启动输入层**~~：✅ 已完成（InputLayer、CanonicalLayer 在 main.py 中启动）。
 4. **事件契约**：⏳ 另一 AI 正在进行 EventRegistry 与 Pydantic 事件 payload 的实现。
 5. **服务注册**：逐步用 EventBus/依赖注入替代剩余 `get_service` 调用。
+6. **Pipeline 迁移**：将现有 MessagePipeline（throttle、filter 等）迁移到 TextPipeline 接口。
 
 以上顺序可根据排期与风险调整。
 
@@ -151,8 +154,8 @@
 | 重构项 | 为何可并行 | 建议注意点 |
 |--------|------------|------------|
 | ~~**1. Layer 2→3 桥接（Canonical 层）**~~ | ✅ **已完成** | - |
-| **2. 管道系统（TextPipeline + process_text）** | 在桥接内部调用 `process_text(text, metadata)`，不改变 EventBus 的 emit/on 签名或事件 payload 类型；Pipeline 相关代码在 `pipeline_manager`、`pipelines/` 等，与 `src/core/events/` 无重叠。 | 桥接里传 `normalized.text`、`normalized.metadata` 等现有结构即可，无需在此处定义新事件契约。 |
-| **3. main 中启动 InputLayer / InputProviderManager** | 仅在 main 中创建并 setup InputProviderManager、InputLayer，不涉及事件 payload 类型或 EventRegistry。 | 无；与契约工作完全独立。 |
+| ~~**2. 管道系统（TextPipeline + process_text）**~~ | ✅ **核心已完成**：TextPipeline 协议、PipelineManager.process_text()、CanonicalLayer 接入均已实现。待迁移现有 MessagePipeline。 | - |
+| ~~**3. main 中启动 InputLayer / InputProviderManager**~~ | ✅ **已完成** | - |
 | **4. HTTP 服务器（独立 FastAPI + register_route）** | 新增 HttpServer、MaiCoreDecisionProvider 改为注册路由，不涉及 EventBus 或事件 payload。 | 无；与契约工作完全独立。 |
 | **5. 服务注册瘦身（用 EventBus 替代 get_service）** | 可先做「用 `event_bus.emit/on` 替代部分 `get_service` 调用」，**不在此处新增或修改事件的 Pydantic 模型**；新事件名与 payload 保持简单 dict，由契约方后续补类型。 | 避免在服务注册瘦身时**新增**或**修改**契约文档中已列出的核心事件（如 `perception.raw_data.generated`、`normalization.text.ready`、`decision.response_generated` 等）的 payload 结构；新事件（如 `tts.synthesize.request`）保持 dict，由契约方统一补契约。 |
 
@@ -165,8 +168,10 @@
 
 - ~~**组合 A（数据流打通）**~~：✅ **已完成**（Layer 2→3 桥接 + main 启动 InputLayer/CanonicalLayer）。
 
-- **组合 B（在桥接上接管道）**：在组合 A 的基础上，同一分支或紧接做 **TextPipeline + process_text 接入 CanonicalLayer**。  
-  → 仍不碰事件 payload 类型，仅桥接内部多一步 `process_text`。
+- ~~**组合 B（在桥接上接管道）**~~：✅ **已完成**（TextPipeline + process_text 已接入 CanonicalLayer）。
 
 - **组合 C（独立模块）**：**HTTP 服务器（FastAPI + register_route）**  
   → 与事件、契约均无交集，可随时并行。
+
+- **组合 D（Pipeline 迁移）**：将现有 MessagePipeline（throttle、similar_message_filter 等）迁移到 TextPipeline 接口，或实现新的 TextPipeline 示例。  
+  → 不涉及事件契约，可与契约工作并行。
