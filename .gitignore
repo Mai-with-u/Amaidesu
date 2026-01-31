@@ -194,3 +194,5 @@ MineLand/
 
 **/minecraft_json_files/**
 .claude/settings.local.json
+.omc/ultrawork-state.json
+.sisyphus/
