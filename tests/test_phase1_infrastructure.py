@@ -8,7 +8,6 @@ Phase 1 基础设施测试
 """
 
 import pytest
-import asyncio
 from src.core.providers import RawData, RenderParameters, CanonicalMessage
 
 

@@ -5,16 +5,14 @@ Mock Danmaku Plugin 测试
 """
 
 import pytest
-import asyncio
 import json
 import tempfile
 from pathlib import Path
 
 from src.plugins.mock_danmaku.mock_danmaku_input_provider import MockDanmakuInputProvider
 from src.plugins.mock_danmaku.plugin import MockDanmakuPlugin
-from src.core.event_bus import EventBus
 from src.core.data_types.raw_data import RawData
-from tests.test_plugin_utils import MockEventBus, ProviderTestHelper
+from tests.test_plugin_utils import MockEventBus
 
 
 class TestMockDanmakuInputProvider:

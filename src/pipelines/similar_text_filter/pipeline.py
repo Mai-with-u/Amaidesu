@@ -12,7 +12,7 @@
 import difflib
 import time
 from collections import defaultdict, deque
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Optional
 
 from src.core.pipeline_manager import TextPipelineBase
 
@@ -147,8 +147,7 @@ class SimilarTextFilterPipeline(TextPipelineBase):
 
             if similarity >= self._similarity_threshold:
                 self.logger.debug(
-                    f"发现相似文本 (相似度={similarity:.2f}): "
-                    f"'{text[:30]}...' vs '{cached_text[:30]}...'"
+                    f"发现相似文本 (相似度={similarity:.2f}): '{text[:30]}...' vs '{cached_text[:30]}...'"
                 )
                 return True
 

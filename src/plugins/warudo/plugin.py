@@ -1,7 +1,6 @@
 # Warudo Plugin - Warudo虚拟形象控制（新架构）
 
-import asyncio
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 from src.core.plugin import Plugin
 from src.core.event_bus import EventBus
@@ -72,7 +71,7 @@ class WarudoPlugin(Plugin):
 
     async def _handle_tts_audio(self, event_name: str, data: Any, source: str):
         """处理TTS音频事件"""
-        self.logger.debug(f"收到TTS音频事件")
+        self.logger.debug("收到TTS音频事件")
 
     def get_info(self) -> Dict[str, Any]:
         return {

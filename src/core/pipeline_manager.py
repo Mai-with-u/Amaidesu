@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 import importlib
 import inspect
@@ -133,9 +133,7 @@ class TextPipelineBase(ABC):
             try:
                 self.error_handling = PipelineErrorHandling(error_handling_str)
             except ValueError:
-                self.logger.warning(
-                    f"无效的 error_handling 值: {error_handling_str}，使用默认值 CONTINUE"
-                )
+                self.logger.warning(f"无效的 error_handling 值: {error_handling_str}，使用默认值 CONTINUE")
                 self.error_handling = PipelineErrorHandling.CONTINUE
 
     async def process(self, text: str, metadata: Dict[str, Any]) -> Optional[str]:
@@ -397,9 +395,7 @@ class PipelineManager:
         if not self._text_pipelines_sorted:
             self._text_pipelines.sort(key=lambda p: p.priority)
             self._text_pipelines_sorted = True
-            pipe_info = ", ".join(
-                [f"{p.get_info()['name']}({p.priority})" for p in self._text_pipelines]
-            )
+            pipe_info = ", ".join([f"{p.get_info()['name']}({p.priority})" for p in self._text_pipelines])
             self.logger.debug(f"TextPipeline 已排序: {pipe_info}")
 
     async def process_text(self, text: str, metadata: Dict[str, Any]) -> Optional[str]:
@@ -449,21 +445,15 @@ class PipelineManager:
 
                     # 如果返回 None，丢弃消息
                     if current_text is None:
-                        self.logger.debug(
-                            f"TextPipeline {pipeline_name} 丢弃了消息 (耗时 {duration_ms:.2f}ms)"
-                        )
+                        self.logger.debug(f"TextPipeline {pipeline_name} 丢弃了消息 (耗时 {duration_ms:.2f}ms)")
                         stats = pipeline.get_stats()
                         stats.dropped_count += 1
                         return None
 
-                    self.logger.debug(
-                        f"TextPipeline {pipeline_name} 处理完成 (耗时 {duration_ms:.2f}ms)"
-                    )
+                    self.logger.debug(f"TextPipeline {pipeline_name} 处理完成 (耗时 {duration_ms:.2f}ms)")
 
                 except asyncio.TimeoutError:
-                    error = PipelineException(
-                        pipeline_name, f"处理超时 ({pipeline.timeout_seconds}s)"
-                    )
+                    error = PipelineException(pipeline_name, f"处理超时 ({pipeline.timeout_seconds}s)")
                     self.logger.error(f"TextPipeline 超时: {error}")
 
                     stats = pipeline.get_stats()

@@ -2,9 +2,7 @@
 
 from typing import Dict, Any, List
 
-from src.core.plugin import Plugin
 from src.utils.logger import get_logger
-from maim_message import MessageBase
 
 
 class ArknightsPlugin:

@@ -3,7 +3,6 @@
 import asyncio
 from typing import Dict, Any, List, Optional
 
-from src.core.plugin import Plugin
 from src.core.providers.output_provider import OutputProvider
 from src.core.providers.base import RenderParameters
 from src.utils.logger import get_logger
@@ -149,7 +148,6 @@ class OmniTTSOutputProvider(OutputProvider):
         """播放音频数据"""
         import os
         import tempfile
-        import asyncio
 
         try:
             import soundfile as sf

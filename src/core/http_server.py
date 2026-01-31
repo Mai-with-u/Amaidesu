@@ -134,8 +134,7 @@ class HttpServer:
             """列出所有已注册的路由"""
             return {
                 "routes": [
-                    {"path": path, "methods": info.get("methods", ["GET"])}
-                    for path, info in self._routes.items()
+                    {"path": path, "methods": info.get("methods", ["GET"])} for path, info in self._routes.items()
                 ]
             }
 

@@ -6,10 +6,8 @@ Amaidesu Remote Stream Plugin - 远程流媒体插件（新架构）
 通过WebSocket协议实现与边缘设备的音视频双向传输。
 """
 
-import asyncio
-import base64
 import json
-from typing import Dict, Any, Optional, List, Callable
+from typing import Dict, Any, List, Callable
 from dataclasses import dataclass, asdict
 from enum import Enum
 

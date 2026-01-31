@@ -8,8 +8,7 @@ Command Processor Plugin 测试
 """
 
 import pytest
-import asyncio
-from unittest.mock import Mock, AsyncMock, MagicMock
+from unittest.mock import Mock, AsyncMock
 
 from src.plugins.command_processor.plugin import CommandProcessorPlugin
 from maim_message import MessageBase, BaseMessageInfo, UserInfo, Seg, FormatInfo

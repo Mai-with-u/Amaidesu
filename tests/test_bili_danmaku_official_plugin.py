@@ -3,7 +3,6 @@ Bilibili 官方弹幕插件测试
 """
 
 import pytest
-import asyncio
 from tests.test_plugin_utils import PluginTestBase, MockEventBus
 from src.plugins.bili_danmaku_official.plugin import BiliDanmakuOfficialPlugin
 from src.plugins.bili_danmaku_official.providers.bili_official_provider import BiliDanmakuOfficialInputProvider

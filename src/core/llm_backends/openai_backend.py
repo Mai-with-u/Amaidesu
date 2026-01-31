@@ -11,7 +11,6 @@ from io import BytesIO
 from typing import List, Dict, Any, Optional, AsyncIterator, Union
 
 from openai import AsyncOpenAI
-from openai.types.chat import ChatCompletionToolParam
 from PIL import Image
 
 from src.core.llm_backends.base import LLMBackend

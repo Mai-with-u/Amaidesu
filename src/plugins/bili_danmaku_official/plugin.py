@@ -1,12 +1,10 @@
 # src/plugins/bili_danmaku_official/plugin.py
 
-import asyncio
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.core.event_bus import EventBus
 
-from src.core.plugin import Plugin
 from src.core.providers.input_provider import InputProvider
 from src.utils.logger import get_logger
 from .providers.bili_official_provider import BiliDanmakuOfficialInputProvider

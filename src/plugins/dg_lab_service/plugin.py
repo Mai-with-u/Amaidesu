@@ -7,7 +7,6 @@ DGLabService Plugin - 新Plugin架构实现
 import asyncio
 from typing import Dict, Any, List, Optional
 
-from src.core.plugin import Plugin
 from src.utils.logger import get_logger
 
 

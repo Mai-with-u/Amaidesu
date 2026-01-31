@@ -1,7 +1,6 @@
 # Screen Monitor Plugin - 屏幕监控插件（新架构）
 
-import asyncio
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 from src.core.plugin import Plugin
 from src.core.event_bus import EventBus

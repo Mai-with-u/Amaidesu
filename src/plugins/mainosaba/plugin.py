@@ -9,12 +9,10 @@ from enum import Enum
 from PIL import ImageGrab
 import pyautogui
 
-from src.core.plugin import Plugin
 from src.core.providers.input_provider import InputProvider
 from src.core.data_types.raw_data import RawData
 from src.core.event_bus import EventBus
 from src.utils.logger import get_logger
-from maim_message import MessageBase, BaseMessageInfo, UserInfo, Seg, FormatInfo
 
 
 class ControlMethod(Enum):

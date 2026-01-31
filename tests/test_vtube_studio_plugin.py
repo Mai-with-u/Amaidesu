@@ -4,7 +4,6 @@ VTube Studio Plugin 单元测试
 
 import sys
 import pytest
-import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
 
 # Mock pyvts before importing plugin

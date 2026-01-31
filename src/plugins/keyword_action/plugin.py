@@ -9,7 +9,6 @@ if TYPE_CHECKING:
     from src.core.event_bus import EventBus
     from src.core.amaidesu_core import AmaidesuCore
 
-from src.core.plugin import Plugin
 from src.utils.logger import get_logger
 from maim_message import MessageBase
 

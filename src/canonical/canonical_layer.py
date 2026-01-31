@@ -76,9 +76,7 @@ class CanonicalLayer:
             f"dropped={self._dropped_count}, errors={self._error_count})"
         )
 
-    async def _on_normalized_text_ready(
-        self, event_name: str, event_data: Dict[str, Any], source: str
-    ):
+    async def _on_normalized_text_ready(self, event_name: str, event_data: Dict[str, Any], source: str):
         """
         处理 NormalizedText 就绪事件
 
@@ -99,9 +97,7 @@ class CanonicalLayer:
                 self._error_count += 1
                 return
 
-            self.logger.debug(
-                f"收到NormalizedText: text={normalized.text[:50]}..., source={original_source}"
-            )
+            self.logger.debug(f"收到NormalizedText: text={normalized.text[:50]}..., source={original_source}")
 
             # 获取待处理的文本
             text = normalized.text
@@ -136,15 +132,11 @@ class CanonicalLayer:
 
             self._processed_count += 1
 
-            self.logger.debug(
-                f"生成CanonicalMessage: text={canonical.text[:50]}..., source={canonical.source}"
-            )
+            self.logger.debug(f"生成CanonicalMessage: text={canonical.text[:50]}..., source={canonical.source}")
 
         except Exception as e:
             self._error_count += 1
-            self.logger.error(
-                f"处理NormalizedText事件时出错 (source: {source}): {e}", exc_info=True
-            )
+            self.logger.error(f"处理NormalizedText事件时出错 (source: {source}): {e}", exc_info=True)
 
     async def get_stats(self) -> Dict[str, Any]:
         """
@@ -158,9 +150,5 @@ class CanonicalLayer:
             "processed_count": self._processed_count,
             "dropped_count": self._dropped_count,
             "error_count": self._error_count,
-            "success_rate": (
-                self._processed_count / self._received_count
-                if self._received_count > 0
-                else 0.0
-            ),
+            "success_rate": (self._processed_count / self._received_count if self._received_count > 0 else 0.0),
         }

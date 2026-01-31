@@ -76,7 +76,6 @@ class LLMService:
         self._config = config
 
         # 延迟导入，避免循环依赖
-        from src.core.llm_backends.base import LLMBackend
 
         # 支持的后端类型映射
         backend_types = {

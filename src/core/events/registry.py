@@ -11,7 +11,7 @@
 - 未注册事件：允许发布，仅警告
 """
 
-from typing import Dict, Type, Optional, List
+from typing import Dict, Type, Optional
 from pydantic import BaseModel
 
 from src.utils.logger import get_logger

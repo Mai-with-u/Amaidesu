@@ -312,7 +312,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
         Returns:
             响应字典（将被FastAPI转换为JSONResponse）
         """
-        self.logger.info(f"收到MaiCore HTTP回调请求")
+        self.logger.info("收到MaiCore HTTP回调请求")
         self.logger.debug(f"回调数据: {body}")
 
         # 简化实现：使用固定key "http_callback" 分发给所有注册的HTTP处理器

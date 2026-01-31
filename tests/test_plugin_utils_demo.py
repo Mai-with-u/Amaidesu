@@ -5,7 +5,6 @@
 """
 
 import pytest
-import asyncio
 import sys
 from pathlib import Path
 
@@ -24,8 +23,6 @@ from tests.test_plugin_utils import (
     assert_provider_implements_protocol,
 )
 from src.core.data_types.raw_data import RawData
-from src.core.providers.input_provider import InputProvider
-from src.core.providers.decision_provider import DecisionProvider
 
 
 # ============================================================================
@@ -177,7 +174,6 @@ class TestPluginTestBase(PluginTestBase):
     @pytest.mark.asyncio
     async def test_plugin_info_validation(self):
         """测试Plugin信息验证"""
-        from src.core.plugin import Plugin
 
         class MockPlugin:
             def get_info(self):
@@ -212,7 +208,6 @@ class TestPluginTestBase(PluginTestBase):
     @pytest.mark.asyncio
     async def test_plugin_cleanup_verification(self):
         """测试Plugin清理验证"""
-        from src.core.plugin import Plugin
 
         class MockPlugin:
             def __init__(self, config):
@@ -353,7 +348,6 @@ class TestIntegration(PluginTestBase):
     @pytest.mark.asyncio
     async def test_plugin_with_providers_integration(self):
         """测试Plugin与Provider的集成"""
-        from src.core.plugin import Plugin
 
         # 创建一个简单的Plugin实现
         class SimplePlugin:

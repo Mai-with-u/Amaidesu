@@ -14,12 +14,10 @@ from src.core.events import (
     NormalizedTextEvent,
     DecisionRequestEvent,
     DecisionResponseEvent,
-    IntentGeneratedEvent,
     ExpressionParametersEvent,
     SystemErrorEvent,
 )
 from src.core.event_bus import EventBus
-from pydantic import ValidationError
 
 
 class TestEventRegistry:

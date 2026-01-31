@@ -14,52 +14,41 @@ dependencies = [
     "uvicorn>=0.20.0",
     "requests>=2.31.0",
     "websockets>=10.0",
-
     # 日志和配置
     "loguru>=0.7.0",
     "toml>=0.10.0",
     "python-logging-loki>=0.3.0",
-
     # 数据验证
     "pydantic>=2.0",
-
     # CLI
     "typer>=0.9.0",
-
     # MaiCore 消息协议
     "maim-message>=0.1.0",
-
     # VTube Studio 控制
     "pyvts>=0.3.0",
-
     # TTS 相关
     "edge-tts>=6.1.0",
     "sounddevice>=0.4.0",
     "soundfile>=0.12.0",
     "pygame>=2.5.0",
-
     # 音频处理
     "librosa>=0.10.0",
     "scipy>=1.10.0",
-
     # 图像和屏幕捕获
     "mss>=9.0.0",
     "numpy>=1.24.0",
     "Pillow>=10.0.0",
-
     # LLM API
     "dashscope>=1.14.0",
     "openai>=1.0.0",
-
     # OBS 控制
     "obsws-python>=1.6.0",
-
     # GUI
     "customtkinter>=5.2.0",
-
     # 自动化和 OSC
     "pyautogui>=0.9.0",
     "python-osc>=1.8.0",
+    "pytest>=9.0.2",
 ]
 
 [project.optional-dependencies]

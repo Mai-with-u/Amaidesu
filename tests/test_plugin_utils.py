@@ -9,8 +9,8 @@
 
 import pytest
 import asyncio
-from typing import Any, Dict, List, Optional, AsyncIterator
-from unittest.mock import Mock, AsyncMock, MagicMock
+from typing import Any, Dict, List, AsyncIterator
+from unittest.mock import Mock
 
 from src.core.event_bus import EventBus
 from src.core.plugin import Plugin

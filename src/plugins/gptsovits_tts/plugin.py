@@ -12,13 +12,10 @@ GPT-SoVITS TTS Plugin - 新架构版本
 - TTS功能封装在GPTSoVITSOutputProvider中
 """
 
-import asyncio
 import os
 from typing import Dict, Any, List
 
 # --- Amaidesu Core Imports ---
-from src.core.plugin import Plugin
-from src.core.event_bus import EventBus
 from src.utils.logger import get_logger
 
 # --- Provider Import ---

@@ -19,7 +19,7 @@ import time
 from collections import defaultdict, deque
 from typing import Any, Dict, Optional
 
-from src.core.pipeline_manager import TextPipelineBase, PipelineErrorHandling
+from src.core.pipeline_manager import TextPipelineBase
 
 
 class RateLimitTextPipeline(TextPipelineBase):
@@ -84,8 +84,7 @@ class RateLimitTextPipeline(TextPipelineBase):
         if await self._is_throttled(user_id):
             self._stats.dropped_count += 1
             self.logger.info(
-                f"消息限流: user_id={user_id}, "
-                f"text_preview='{text[:50]}{'...' if len(text) > 50 else ''}'"
+                f"消息限流: user_id={user_id}, text_preview='{text[:50]}{'...' if len(text) > 50 else ''}'"
             )
             return None  # 丢弃该消息
 

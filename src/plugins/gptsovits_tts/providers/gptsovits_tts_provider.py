@@ -24,8 +24,7 @@ from src.expression.render_parameters import RenderParameters
 from src.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from src.expression.intent import Intent
-    from maim_message import MessageBase
+    pass
 
 # --- Dependencies Check ---
 TTS_DEPENDENCIES_OK = False

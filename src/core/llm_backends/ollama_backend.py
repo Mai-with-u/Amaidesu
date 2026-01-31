@@ -6,7 +6,7 @@ Ollama 后端实现（占位符）
 
 import asyncio
 from src.core.llm_backends.base import LLMBackend
-from typing import List, Dict, Any, Optional, AsyncIterator, Union
+from typing import List, Dict, Any, Optional, Union
 
 
 class OllamaBackend(LLMBackend):

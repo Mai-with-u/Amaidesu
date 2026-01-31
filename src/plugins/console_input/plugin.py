@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.core.event_bus import EventBus
-    from src.core.plugin import Plugin
 
 # --- Dependency Check & TOML ---
 try:
@@ -19,7 +18,6 @@ except ModuleNotFoundError:
         tomllib = None
 
 # --- Core Imports ---
-from src.core.plugin import Plugin
 from src.core.amaidesu_core import AmaidesuCore
 from src.core.data_types.raw_data import RawData
 from maim_message import MessageBase, BaseMessageInfo, UserInfo, GroupInfo, Seg, FormatInfo, TemplateInfo
@@ -519,7 +517,8 @@ def get_info(self) -> Dict[str, Any]:
         "author": "Amaidesu Team",
         "description": "通过控制台接收用户输入并发送消息的插件",
         "category": "input",
-        "api_version": "1.0"
+        "api_version": "1.0",
     }
+
 
 plugin_entrypoint = ConsoleInputPlugin
