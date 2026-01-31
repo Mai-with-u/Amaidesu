@@ -9,7 +9,7 @@ Amaidesu!
 
 
 
-  ![Python Version](https://img.shields.io/badge/Python-3.10+-blue)
+  ![Python Version](https://img.shields.io/badge/Python-3.12+-blue)
   ![Status](https://img.shields.io/badge/状态-开摆中-red)
   ![Contributors](https://img.shields.io/badge/贡献者-没几个人-red)
   ![forks](https://img.shields.io/badge/分支数-一点点-green)
@@ -94,36 +94,86 @@ sequenceDiagram
 
 ## 安装与运行
 
-1. 克隆仓库
-2. 安装依赖：`pip install -r requirements.txt`
-3. 复制需要启动的插件的 `config-template.toml` 为 `config.toml` 并配置
-4. 启动在这之前已经部署好的 MaiMaiCore（参见[MaiBot部署教程](https://docs.mai-mai.org/manual/usage/mmc_q_a)）
-5. 运行：`python main.py`
+### 使用 uv（推荐）
+
+本项目使用 [uv](https://docs.astral.sh/uv/) 作为包管理器，它比 pip 快 10-100 倍。
+
+```bash
+# 1. 安装 uv（如果尚未安装）
+# Windows (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# macOS/Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 2. 克隆仓库
+git clone https://github.com/ChangingSelf/Amaidesu.git
+cd Amaidesu
+
+# 3. 同步依赖（自动创建虚拟环境）
+uv sync
+
+# 4. 如果需要语音识别功能，安装额外依赖
+uv sync --extra stt
+
+# 5. 配置（首次运行会自动生成配置文件）
+uv run python main.py
+
+# 6. 编辑生成的 config.toml 文件，填入必要配置
+
+# 7. 启动在这之前已经部署好的 MaiCore（参见 MaiBot部署教程）
+
+# 8. 再次运行
+uv run python main.py
+```
+
+### 使用 pip（传统方式）
+
+```bash
+# 1. 克隆仓库
+git clone https://github.com/ChangingSelf/Amaidesu.git
+cd Amaidesu
+
+# 2. 创建虚拟环境
+python -m venv .venv
+# Windows
+.venv\Scripts\activate
+# macOS/Linux
+source .venv/bin/activate
+
+# 3. 安装依赖
+pip install -e .
+
+# 4. 运行（后续步骤同上）
+python main.py
+```
+
+详见 [MaiBot部署教程](https://docs.mai-mai.org/manual/usage/mmc_q_a) 了解 MaiCore 的部署方法。
 
 ## 运行与配置
 
 1.  **首次运行与配置生成**: 
-    - 在首次运行 `python main.py` 之前，请确保根目录下存在 `config-template.toml`。
+    - 在首次运行 `uv run python main.py` 之前，请确保根目录下存在 `config-template.toml`。
     - 首次运行会自动检查并根据 `config-template.toml` 创建 `config.toml`。
     - 同时，它也会检查 `src/plugins/` 和 `src/pipelines/` 下各个子目录，如果存在 `config-template.toml` 但不存在 `config.toml`，也会自动复制生成。
     - **插件配置加载**: 插件在运行时会加载其各自目录下的 `config.toml` 文件。您可以在这些文件中为插件设置特定的参数。如果需要在全局层面覆盖某个插件的特定配置项，可以在根目录的 `config.toml` 文件中的 `[plugins.插件名]` 部分进行设置（例如，对于名为 "tts" 的插件，配置段为 `[plugins.tts]`）。全局配置会覆盖插件目录下 `config.toml` 中的同名配置项。最终生效的配置会传递给插件实例。
     - **重要**: 自动生成配置文件后，程序会提示并退出。请务必检查新生成的 `config.toml` 文件（包括根目录和插件/管道目录下的），填入必要的配置信息（如 API 密钥、设备名称、房间号等），然后再重新运行程序。
 
 2.  **启动程序**: 
-    - 配置完成后，使用 `python main.py` 启动应用程序。
+    - 配置完成后，使用 `uv run python main.py` 启动应用程序。
 
 3.  **命令行参数**:
     - `--debug`: 启用详细的 DEBUG 级别日志输出，方便排查问题。
       ```bash
-      python main.py --debug
+      uv run python main.py --debug
       ```
     - `--filter <MODULE_NAME> [<MODULE_NAME> ...]`: 过滤日志输出，只显示指定模块的 INFO/DEBUG 级别日志。WARNING 及以上级别的日志总是会显示。可以指定一个或多个模块名。
       ```bash
       # 只显示来自 StickerPlugin 和 TTS 模块的 INFO/DEBUG 日志 (以及所有模块的 WARN+ 日志)
-      python main.py --filter StickerPlugin TTSPlugin 
+      uv run python main.py --filter StickerPlugin TTSPlugin 
       
       # 同时启用 DEBUG 并过滤
-      python main.py --debug --filter StickerPlugin
+      uv run python main.py --debug --filter StickerPlugin
       ```
       *   模块名通常是 `src/utils/logger.py` 中 `get_logger("模块名")` 使用的名称，或者插件/管道的类名或目录名（取决于日志记录时如何绑定模块名）。可以通过查看日志输出中的模块名来确定。
 
@@ -134,7 +184,7 @@ sequenceDiagram
 使用方法：
 
 ```bash
-python mock_maicore.py
+uv run python mock_maicore.py
 ```
 
 现在支持的简单命令：

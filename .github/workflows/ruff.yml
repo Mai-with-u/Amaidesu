@@ -7,16 +7,19 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.10"
+          enable-cache: true
 
-      - name: Install Ruff
-        run: pip install ruff
+      - name: Set up Python
+        run: uv python install 3.12
 
       - name: Format Code
-        run: ruff format .
+        run: uv run ruff format .
+
+      - name: Lint Code
+        run: uv run ruff check .
 
       # - name: Commit and Push Changes (Optional) # 自动格式化后提交并推送更改
       #   if: github.event_name == 'push'  # 仅在 Push 时提交更改
@@ -36,4 +39,3 @@ jobs:
       #       git commit -m "Auto-format code via Ruff"
       #       git push origin HEAD:$GITHUB_REF
       #     fi
-

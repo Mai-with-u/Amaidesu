@@ -4,49 +4,86 @@
 
 ## 构建/检查/测试命令
 
+### 包管理器
+
+本项目使用 [uv](https://docs.astral.sh/uv/) 作为 Python 包管理器。
+
+```bash
+# 安装 uv（如果尚未安装）
+# Windows (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# macOS/Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+### 开发环境设置
+```bash
+# 同步依赖（自动创建虚拟环境并安装所有依赖）
+uv sync
+
+# 安装包含语音识别（STT）的依赖
+uv sync --extra stt
+
+# 安装所有可选依赖
+uv sync --all-extras
+
+# 添加新依赖
+uv add package-name
+
+# 添加开发依赖
+uv add --dev package-name
+
+# 移除依赖
+uv remove package-name
+
+# 升级特定依赖
+uv lock --upgrade-package package-name
+```
+
 ### 运行应用程序
 ```bash
 # 正常运行
-python main.py
+uv run python main.py
 
 # 调试模式（显示详细日志）
-python main.py --debug
+uv run python main.py --debug
 
 # 过滤日志，只显示指定模块（除了WARNING及以上级别的日志）
-python main.py --filter StickerPlugin TTSPlugin
+uv run python main.py --filter StickerPlugin TTSPlugin
 
 # 调试模式并过滤特定模块
-python main.py --debug --filter StickerPlugin
+uv run python main.py --debug --filter StickerPlugin
 ```
 
 ### 测试
 ```bash
 # 运行所有测试
-python -m pytest tests/
+uv run pytest tests/
 
 # 运行特定测试文件
-python -m pytest tests/test_event_system.py
+uv run pytest tests/test_event_system.py
 
 # 详细输出模式
-python -m pytest tests/ -v
+uv run pytest tests/ -v
 ```
 
 ### 代码质量
 ```bash
 # 代码检查
-ruff check .
+uv run ruff check .
 
 # 代码格式化
-ruff format .
+uv run ruff format .
 
 # 自动修复可修复的问题
-ruff check --fix .
+uv run ruff check --fix .
 ```
 
 ### 模拟服务器
 ```bash
 # 当没有部署MaiCore时，使用模拟服务器测试
-python mock_maicore.py
+uv run python mock_maicore.py
 ```
 
 ## 代码风格指南
