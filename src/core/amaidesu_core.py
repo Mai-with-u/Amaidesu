@@ -1,17 +1,18 @@
 """
 Amaidesu Core - 核心模块（Phase 3-4重构版本）
 
-职责: 插件管理、服务注册、Pipeline/Decision/Context/EventBus集成
+职责: 插件管理、服务注册、Pipeline/Decision/Context/EventBus/HttpServer集成
 注意: WebSocket/HTTP/Router已迁移到MaiCoreDecisionProvider（641行→350行）
 """
 
-from typing import Dict, Any, Optional, TYPE_CHECKING
+from typing import Callable, Dict, Any, List, Optional, TYPE_CHECKING
 
 from src.utils.logger import get_logger
 from .pipeline_manager import PipelineManager
 from .context_manager import ContextManager
 from .event_bus import EventBus
 from .decision_manager import DecisionManager
+from .http_server import HttpServer
 
 # Phase 4: 输出层
 from .output_provider_manager import OutputProviderManager
@@ -41,6 +42,11 @@ class AmaidesuCore:
         """获取LLM客户端管理器实例"""
         return self._llm_client_manager
 
+    @property
+    def http_server(self) -> Optional[HttpServer]:
+        """获取HTTP服务器实例"""
+        return self._http_server
+
     def __init__(
         self,
         platform: str,
@@ -52,6 +58,7 @@ class AmaidesuCore:
         decision_manager: Optional[DecisionManager] = None,
         output_provider_manager: Optional[OutputProviderManager] = None,
         expression_generator: Optional[ExpressionGenerator] = None,
+        http_server: Optional[HttpServer] = None,
     ):
         """
         初始化 Amaidesu Core（重构版本）。
@@ -66,6 +73,7 @@ class AmaidesuCore:
             decision_manager: (可选) 已配置的决策管理器（Phase 3新增）。
             output_provider_manager: (可选) 已配置的输出Provider管理器（Phase 4新增）。
             expression_generator: (可选) 已配置的表达式生成器（Phase 4新增）。
+            http_server: (可选) 已配置的HTTP服务器（Phase 5新增）。
         """
         # 初始化 Logger
         self.logger = get_logger("AmaidesuCore")
@@ -75,6 +83,11 @@ class AmaidesuCore:
 
         # 服务注册表
         self._services: Dict[str, Any] = {}
+
+        # HTTP服务器（Phase 5新增）
+        self._http_server = http_server
+        if http_server is not None:
+            self.logger.info("已使用外部提供的HTTP服务器")
 
         # 管道管理器
         self._pipeline_manager = pipeline_manager
@@ -135,6 +148,23 @@ class AmaidesuCore:
         Args:
             rendering_config: (可选) 渲染层配置，用于设置输出层
         """
+        # Phase 5: 启动HTTP服务器（如果已配置）
+        if self._http_server and self._http_server.is_available:
+            try:
+                await self._http_server.start()
+                self.logger.info("HTTP服务器已启动")
+
+                # 发布 core.ready 事件，让Provider可以注册路由
+                if self._event_bus:
+                    await self._event_bus.emit(
+                        "core.ready",
+                        {"core": self},
+                        source="AmaidesuCore",
+                    )
+            except Exception as e:
+                self.logger.error(f"启动HTTP服务器失败: {e}", exc_info=True)
+                self.logger.warning("HTTP服务器功能不可用，继续启动其他服务")
+
         # 如果有决策管理器，启动DecisionProvider
         if self._decision_manager:
             provider = self._decision_manager.get_current_provider()
@@ -181,7 +211,42 @@ class AmaidesuCore:
                 except Exception as e:
                     self.logger.error(f"DecisionProvider 断开失败: {e}", exc_info=True)
 
+        # Phase 5: 停止HTTP服务器
+        if self._http_server and self._http_server.is_running:
+            try:
+                await self._http_server.stop()
+                self.logger.info("HTTP服务器已停止")
+            except Exception as e:
+                self.logger.error(f"停止HTTP服务器失败: {e}", exc_info=True)
+
         self.logger.info("核心服务已停止")
+
+    # ==================== HTTP服务器管理（Phase 5新增） ====================
+
+    def register_http_callback(
+        self,
+        path: str,
+        handler: Callable,
+        methods: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> bool:
+        """
+        注册HTTP回调路由（供Provider使用）
+
+        Args:
+            path: 路径（如 "/maicore/callback"）
+            handler: 处理函数（异步函数）
+            methods: 允许的HTTP方法（如 ["GET", "POST"]）
+            **kwargs: 传递给 HttpServer.register_route 的其他参数
+
+        Returns:
+            是否注册成功
+        """
+        if not self._http_server:
+            self.logger.warning(f"HTTP服务器未初始化，无法注册路由: {path}")
+            return False
+
+        return self._http_server.register_route(path, handler, methods, **kwargs)
 
     # ==================== 服务注册与发现 ====================
 

@@ -43,10 +43,17 @@
 
 | 状态 | 说明 |
 |------|------|
-| ❌ 未实现 | 独立的 **HttpServer**（FastAPI + `register_route`）未实现。 |
-| ⚠️ 现状 | HTTP 由 **MaiCoreDecisionProvider** 内部用 aiohttp 自建，未统一到设计中的「AmaidesuCore 管理 HttpServer、Provider 注册路由」模式。 |
+| ✅ 已实现 | 独立的 **HttpServer**（FastAPI + `register_route`）已实现：`src/core/http_server.py`。 |
+| ✅ 已实现 | **AmaidesuCore** 已添加 `http_server` 属性和 `register_http_callback()` 方法，管理 HttpServer 生命周期（connect/disconnect）。 |
+| ⏳ 待迁移 | **MaiCoreDecisionProvider** 仍使用 aiohttp 自建 HTTP，尚未迁移到使用 HttpServer.register_route() 模式。 |
 
-**待做**：实现 FastAPI HttpServer、由 Core 管理生命周期，MaiCoreDecisionProvider 等通过 register_route 注册回调。
+**已完成**：
+- `src/core/http_server.py` - 基于 FastAPI 的独立 HTTP 服务器，支持 `register_route()`
+- `src/core/amaidesu_core.py` - AmaidesuCore 管理 HttpServer 生命周期，提供 `register_http_callback()` 便捷方法
+- connect() 中启动 HttpServer 并发布 `core.ready` 事件
+- disconnect() 中停止 HttpServer
+
+**待做**：将 MaiCoreDecisionProvider 迁移到使用 HttpServer.register_route() 而非内部 aiohttp。
 
 ---
 
@@ -126,7 +133,7 @@
 | Layer 2→3 桥接 | ✅ 已完成   | -          |
 | 事件数据契约   | ⏳ 进行中（另一 AI） | 中         |
 | 服务注册瘦身   | 未达标     | 中         |
-| HTTP 服务器    | 未按设计实现 | 中/低      |
+| HTTP 服务器    | ✅ 核心已完成，待迁移 Provider | 中/低      |
 | DataCache      | 有意未实现 | 低/可选    |
 | 实施计划文档   | 缺失       | 低         |
 
@@ -156,7 +163,7 @@
 | ~~**1. Layer 2→3 桥接（Canonical 层）**~~ | ✅ **已完成** | - |
 | ~~**2. 管道系统（TextPipeline + process_text）**~~ | ✅ **核心已完成**：TextPipeline 协议、PipelineManager.process_text()、CanonicalLayer 接入均已实现。待迁移现有 MessagePipeline。 | - |
 | ~~**3. main 中启动 InputLayer / InputProviderManager**~~ | ✅ **已完成** | - |
-| **4. HTTP 服务器（独立 FastAPI + register_route）** | 新增 HttpServer、MaiCoreDecisionProvider 改为注册路由，不涉及 EventBus 或事件 payload。 | 无；与契约工作完全独立。 |
+| ~~**4. HTTP 服务器（独立 FastAPI + register_route）**~~ | ✅ **核心已完成**：HttpServer 类已实现，AmaidesuCore 已集成 HttpServer 管理。待迁移 MaiCoreDecisionProvider 使用新 HttpServer。 | - |
 | **5. 服务注册瘦身（用 EventBus 替代 get_service）** | 可先做「用 `event_bus.emit/on` 替代部分 `get_service` 调用」，**不在此处新增或修改事件的 Pydantic 模型**；新事件名与 payload 保持简单 dict，由契约方后续补类型。 | 避免在服务注册瘦身时**新增**或**修改**契约文档中已列出的核心事件（如 `perception.raw_data.generated`、`normalization.text.ready`、`decision.response_generated` 等）的 payload 结构；新事件（如 `tts.synthesize.request`）保持 dict，由契约方统一补契约。 |
 
 ### 不建议与事件契约并行的部分
@@ -170,8 +177,10 @@
 
 - ~~**组合 B（在桥接上接管道）**~~：✅ **已完成**（TextPipeline + process_text 已接入 CanonicalLayer）。
 
-- **组合 C（独立模块）**：**HTTP 服务器（FastAPI + register_route）**  
-  → 与事件、契约均无交集，可随时并行。
+- ~~**组合 C（独立模块）**~~：✅ **已完成**（HttpServer + AmaidesuCore 集成）。
 
 - **组合 D（Pipeline 迁移）**：将现有 MessagePipeline（throttle、similar_message_filter 等）迁移到 TextPipeline 接口，或实现新的 TextPipeline 示例。  
+  → 不涉及事件契约，可与契约工作并行。
+
+- **组合 E（Provider 迁移）**：将 MaiCoreDecisionProvider 迁移到使用 HttpServer.register_route()。  
   → 不涉及事件契约，可与契约工作并行。
