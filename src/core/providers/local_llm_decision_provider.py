@@ -2,8 +2,8 @@
 LocalLLMDecisionProvider - 本地LLM决策提供者
 
 职责:
-- 使用OpenAI兼容API进行决策
-- 支持自定义prompt模板
+- 使用 LLM Service 进行决策
+- 支持自定义 prompt 模板
 - 错误处理和降级机制
 """
 
@@ -12,10 +12,11 @@ from typing import Dict, Any, Optional, TYPE_CHECKING
 
 from src.core.providers.decision_provider import DecisionProvider
 from src.utils.logger import get_logger
-from maim_message import MessageBase  # 移出TYPE_CHECKING块，因为运行时需要
+from maim_message import MessageBase
 
 if TYPE_CHECKING:
     from src.core.event_bus import EventBus
+    from src.core.llm_service import LLMService
     from src.canonical.canonical_message import CanonicalMessage
 
 
@@ -23,33 +24,25 @@ class LocalLLMDecisionProvider(DecisionProvider):
     """
     本地LLM决策提供者
 
-    使用OpenAI兼容API（如本地Ollama）进行决策。
+    使用 LLM Service 统一接口进行决策。
 
     配置示例:
         ```toml
         [decision.local_llm]
-        api_base = "http://localhost:11434/v1"
-        model = "llama2"
-        api_key = "sk-dummy"  # Ollama不需要真实API key
+        backend = "llm_fast"  # 使用的 LLM 后端（llm, llm_fast, vlm）
         prompt_template = "You are a helpful assistant. User: {text}"
-        timeout = 30
-        max_retries = 3
         fallback_mode = "simple"
         ```
 
     属性:
-        api_base: OpenAI API基础URL
-        model: 使用的模型名称
-        api_key: API密钥
+        backend: 使用的 LLM 后端名称
         prompt_template: Prompt模板，使用{text}占位符
-        timeout: 请求超时时间（秒）
-        max_retries: 最大重试次数
         fallback_mode: 降级模式（"simple"返回简单响应，"error"抛出异常）
     """
 
     def __init__(self, config: Dict[str, Any]):
         """
-        初始化LocalLLMDecisionProvider
+        初始化 LocalLLMDecisionProvider
 
         Args:
             config: 配置字典
@@ -57,20 +50,19 @@ class LocalLLMDecisionProvider(DecisionProvider):
         self.config = config
         self.logger = get_logger("LocalLLMDecisionProvider")
 
-        # API配置
-        self.api_base = config.get("api_base", "http://localhost:11434/v1")
-        self.model = config.get("model", "llama2")
-        self.api_key = config.get("api_key", "sk-dummy")
+        # LLM Service 引用（通过 setup 注入）
+        self._llm_service: Optional["LLMService"] = None
 
-        # Prompt配置
+        # LLM 配置
+        self.backend = config.get("backend", "llm")  # 使用的后端名称
+
+        # Prompt 配置
         self.prompt_template = config.get(
             "prompt_template",
             "You are a helpful AI assistant. Please respond to the user's message.\n\nUser: {text}\n\nAssistant:",
         )
 
-        # 超时和重试配置
-        self.timeout = config.get("timeout", 30)
-        self.max_retries = config.get("max_retries", 3)
+        # 降级模式配置
         self.fallback_mode = config.get("fallback_mode", "simple")
 
         # 统计信息
@@ -78,71 +70,72 @@ class LocalLLMDecisionProvider(DecisionProvider):
         self._successful_requests = 0
         self._failed_requests = 0
 
-        # EventBus引用（用于事件通知）
+        # EventBus 引用（用于事件通知）
         self._event_bus: Optional["EventBus"] = None
 
     async def setup(self, event_bus: "EventBus", config: Dict[str, Any]) -> None:
         """
-        设置LocalLLMDecisionProvider
+        设置 LocalLLMDecisionProvider
 
         Args:
-            event_bus: EventBus实例
-            config: Provider配置（忽略，使用__init__传入的config）
+            event_bus: EventBus 实例
+            config: Provider 配置（使用 __init__ 传入的 config）
         """
         self._event_bus = event_bus
-        self.logger.info("初始化LocalLLMDecisionProvider...")
+        self.logger.info("初始化 LocalLLMDecisionProvider...")
 
-        # 验证API基础URL
-        if not self.api_base:
-            raise ValueError("api_base配置不能为空")
-
-        # 验证模型名称
-        if not self.model:
-            raise ValueError("model配置不能为空")
-
-        # 验证prompt模板包含{text}占位符
+        # 验证 prompt 模板包含 {text} 占位符
         if "{text}" not in self.prompt_template:
-            self.logger.warning("prompt_template中未包含{text}占位符，将直接替换")
+            self.logger.warning("prompt_template 中未包含 {text} 占位符，将直接替换")
             self.prompt_template = self.prompt_template.replace("{}", "{text}")
 
-        self.logger.info(f"LocalLLMDecisionProvider初始化完成 (API: {self.api_base}, Model: {self.model})")
+        self.logger.info(f"LocalLLMDecisionProvider 初始化完成 (Backend: {self.backend})")
 
     async def decide(self, canonical_message: "CanonicalMessage") -> MessageBase:
         """
-        进行决策（通过LLM生成响应）
+        进行决策（通过 LLM 生成响应）
 
         Args:
             canonical_message: 标准化消息
 
         Returns:
-            MessageBase: 决策结果（LLM生成的响应）
+            MessageBase: 决策结果（LLM 生成的响应）
 
         Raises:
-            RuntimeError: 如果所有重试失败且fallback_mode为"error"
+            RuntimeError: 如果所有重试失败且 fallback_mode 为 "error"
         """
+        if self._llm_service is None:
+            raise RuntimeError("LLM Service 未注入！请确保在 setup 中正确配置。")
+
         self._total_requests += 1
 
-        # 构建Prompt
+        # 构建提示词
         prompt = self.prompt_template.format(text=canonical_message.text)
 
-        # 尝试多次请求（重试机制）
-        last_exception = None
-        for attempt in range(self.max_retries):
-            try:
-                self.logger.debug(f"LLM请求 (尝试 {attempt + 1}/{self.max_retries})")
-                response_text = await self._call_llm_api(prompt)
-                self._successful_requests += 1
-                return self._create_message_base(response_text, canonical_message)
-            except Exception as e:
-                last_exception = e
-                self.logger.warning(f"LLM请求失败 (尝试 {attempt + 1}/{self.max_retries}): {e}")
-                if attempt < self.max_retries - 1:
-                    await asyncio.sleep(1 * (attempt + 1))  # 指数退避
+        try:
+            # 使用 LLM Service 进行调用
+            response = await self._llm_service.chat(
+                prompt=prompt,
+                backend=self.backend,
+            )
 
-        # 所有重试失败，使用降级策略
-        self._failed_requests += 1
-        self.logger.error(f"所有LLM请求失败，使用降级模式: {self.fallback_mode}")
+            if not response.success:
+                self._failed_requests += 1
+                self.logger.error(f"LLM 调用失败: {response.error}")
+                # 使用降级策略
+                return self._handle_fallback(canonical_message)
 
+            self._successful_requests += 1
+            return self._create_message_base(response.content, canonical_message)
+
+        except Exception as e:
+            self._failed_requests += 1
+            self.logger.error(f"LLM 调用异常: {e}", exc_info=True)
+            # 使用降级策略
+            return self._handle_fallback(canonical_message)
+
+    def _handle_fallback(self, canonical_message: "CanonicalMessage") -> MessageBase:
+        """处理降级逻辑"""
         if self.fallback_mode == "simple":
             # 简单降级：返回原始文本
             return self._create_message_base(canonical_message.text, canonical_message)
@@ -151,55 +144,7 @@ class LocalLLMDecisionProvider(DecisionProvider):
             return self._create_message_base(f"你说：{canonical_message.text}", canonical_message)
         else:
             # 错误降级：抛出异常
-            raise RuntimeError(f"LLM请求失败: {last_exception}") from last_exception
-
-    async def _call_llm_api(self, prompt: str) -> str:
-        """
-        调用LLM API
-
-        Args:
-            prompt: 完整的prompt文本
-
-        Returns:
-            str: LLM生成的响应文本
-
-        Raises:
-            ConnectionError: 如果API连接失败
-            TimeoutError: 如果请求超时
-            Exception: 其他API错误
-        """
-        import aiohttp
-
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
-        }
-
-        data = {
-            "model": self.model,
-            "messages": [
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": 0.7,
-            "max_tokens": 500,
-        }
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                url = f"{self.api_base}/chat/completions"
-                async with session.post(url, json=data, headers=headers, timeout=self.timeout) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        raise Exception(f"API返回错误状态 {response.status}: {error_text}")
-
-                    result = await response.json()
-                    response_text = result["choices"][0]["message"]["content"]
-                    return response_text
-
-        except asyncio.TimeoutError:
-            raise TimeoutError(f"LLM API请求超时（{self.timeout}秒）") from None
-        except aiohttp.ClientError as e:
-            raise ConnectionError(f"LLM API连接失败: {e}") from e
+            raise RuntimeError("LLM 请求失败，且未配置降级模式")
 
     def _create_message_base(self, text: str, canonical_message: "CanonicalMessage") -> "MessageBase":
         """

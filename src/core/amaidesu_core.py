@@ -18,10 +18,12 @@ from .http_server import HttpServer
 from .output_provider_manager import OutputProviderManager
 from ..expression.expression_generator import ExpressionGenerator
 
+# LLM 服务（核心基础设施）
+from .llm_service import LLMService
+
 # 类型检查时的导入
 if TYPE_CHECKING:
     from .avatar.avatar_manager import AvatarControlManager
-    from .llm_client_manager import LLMClientManager
 
 
 class AmaidesuCore:
@@ -38,9 +40,9 @@ class AmaidesuCore:
         return self._avatar
 
     @property
-    def llm_client_manager(self) -> Optional["LLMClientManager"]:
-        """获取LLM客户端管理器实例"""
-        return self._llm_client_manager
+    def llm_service(self) -> Optional[LLMService]:
+        """获取 LLM 服务实例"""
+        return self._llm_service
 
     @property
     def http_server(self) -> Optional[HttpServer]:
@@ -54,7 +56,7 @@ class AmaidesuCore:
         context_manager: Optional[ContextManager] = None,
         event_bus: Optional[EventBus] = None,
         avatar: Optional["AvatarControlManager"] = None,
-        llm_client_manager: Optional["LLMClientManager"] = None,
+        llm_service: Optional[LLMService] = None,
         decision_manager: Optional[DecisionManager] = None,
         output_provider_manager: Optional[OutputProviderManager] = None,
         expression_generator: Optional[ExpressionGenerator] = None,
@@ -69,7 +71,7 @@ class AmaidesuCore:
             context_manager: (可选) 已配置的上下文管理器。
             event_bus: (可选) 已配置的事件总线。
             avatar: (可选) 已配置的虚拟形象控制管理器。
-            llm_client_manager: (可选) 已配置的 LLM 客户端管理器。
+            llm_service: (可选) 已配置的 LLM 服务。
             decision_manager: (可选) 已配置的决策管理器（Phase 3新增）。
             output_provider_manager: (可选) 已配置的输出Provider管理器（Phase 4新增）。
             expression_generator: (可选) 已配置的表达式生成器（Phase 4新增）。
@@ -117,12 +119,12 @@ class AmaidesuCore:
             avatar.core = self
             self.logger.info("已使用外部提供的虚拟形象控制管理器")
 
-        # 设置 LLM 客户端管理器（可选功能）
-        self._llm_client_manager = llm_client_manager
-        if llm_client_manager is not None:
-            self.logger.info("已使用外部提供的 LLM 客户端管理器")
+        # 设置 LLM 服务（可选功能）
+        self._llm_service = llm_service
+        if llm_service is not None:
+            self.logger.info("已使用外部提供的 LLM 服务")
         else:
-            self.logger.warning("未提供 LLM 客户端管理器，LLM 相关功能将不可用")
+            self.logger.warning("未提供 LLM 服务，LLM 相关功能将不可用")
 
         # 设置决策管理器（Phase 3新增）
         self._decision_manager = decision_manager
@@ -288,30 +290,6 @@ class AmaidesuCore:
             上下文管理器实例
         """
         return self._context_manager
-
-    # ==================== LLM 客户端管理 ====================
-
-    def get_llm_client(self, config_type: str = "llm"):
-        """
-        获取 LLM 客户端实例（委托给 LLMClientManager）
-
-        Args:
-            config_type: 配置类型，可选值：
-                - "llm": 标准 LLM 配置（默认）
-                - "llm_fast": 快速 LLM 配置（低延迟场景）
-                - "vlm": 视觉语言模型配置
-
-        Returns:
-            LLMClient 实例
-
-        Raises:
-            ValueError: 如果 LLMClientManager 未提供或配置无效
-        """
-
-        if self._llm_client_manager is None:
-            raise ValueError("LLM 客户端管理器未初始化！请在 main.py 中创建 LLMClientManager 并传入 AmaidesuCore。")
-
-        return self._llm_client_manager.get_client(config_type)
 
     # ==================== 决策管理器（Phase 3新增） ====================
 

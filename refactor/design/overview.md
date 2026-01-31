@@ -10,6 +10,7 @@
  - [插件系统设计](./plugin_system.md) - 插件系统和Provider接口
  - [核心重构设计](./core_refactoring.md) - AmaidesuCore的彻底解耦
  - [事件数据契约设计](./event_data_contract.md) - 类型安全的事件数据契约系统
+ - [LLM服务设计](./llm_service.md) - 统一的LLM调用服务
 
 ---
 
@@ -42,6 +43,7 @@
  - **插件系统**（Plugin System）：社区开发者添加新能力
  - **EventBus**：唯一的跨层通信机制，实现松耦合
  - **事件数据契约**（Event Contract）：类型安全的事件数据格式，支持社区扩展
+ - **LLM服务**（LLM Service）：统一的LLM调用基础设施，与EventBus同级
 
 ### 架构分层
 
@@ -82,6 +84,7 @@ DecisionProvider返回MessageBase
  - [插件系统设计](./plugin_system.md) - 插件系统和Provider接口（含迁移指南）
  - [核心重构设计](./core_refactoring.md) - AmaidesuCore的彻底解耦（含HTTP服务器管理）
  - [事件数据契约设计](./event_data_contract.md) - 类型安全的事件数据契约系统（Pydantic + 开放式注册表）
+ - [LLM服务设计](./llm_service.md) - 统一的LLM调用服务（核心基础设施）
  - [DataCache设计](./data_cache.md) - 原始数据缓存服务
  - [Pipeline重新设计](./pipeline_refactoring.md) - TextPipeline处理系统
  - [HTTP服务器设计](./http_server.md) - 基于FastAPI的HTTP服务器
@@ -143,6 +146,9 @@ DecisionProvider返回MessageBase
 
 **AmaidesuCore如何重构？**
 → 阅读[核心重构设计](./core_refactoring.md)
+
+**LLM调用如何统一管理？**
+→ 阅读[LLM服务设计](./llm_service.md)
 
 **如何实施重构？**
 → 阅读[实施计划总览](../plan/overview.md)

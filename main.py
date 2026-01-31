@@ -10,7 +10,7 @@ from src.core.amaidesu_core import AmaidesuCore
 from src.core.plugin_manager import PluginManager
 from src.core.pipeline_manager import PipelineManager  # 导入管道管理器
 from src.core.event_bus import EventBus  # 导入事件总线
-from src.core.llm_client_manager import LLMClientManager  # 导入 LLM 客户端管理器
+from src.core.llm_service import LLMService  # 导入 LLM 服务
 from src.utils.logger import get_logger
 from src.utils.config import initialize_configurations  # Updated import
 from src.core.avatar.avatar_manager import AvatarControlManager
@@ -198,10 +198,11 @@ async def main():
     context_manager = ContextManager(context_manager_config)
     logger.info("已创建上下文管理器实例")
 
-    # --- 初始化 LLM 客户端管理器 ---
-    logger.info("初始化 LLM 客户端管理器...")
-    llm_client_manager = LLMClientManager()
-    logger.info("已创建 LLM 客户端管理器实例")
+    # --- 初始化 LLM 服务 ---
+    logger.info("初始化 LLM 服务...")
+    llm_service = LLMService()
+    await llm_service.setup(config)
+    logger.info("已创建 LLM 服务实例")
 
     # --- 初始化虚拟形象控制管理器 ---
     avatar_config = config.get("avatar", {})
@@ -248,17 +249,11 @@ async def main():
     # 创建核心
     core = AmaidesuCore(
         platform=platform_id,
-        maicore_host=maicore_host,
-        maicore_port=maicore_port,
-        http_host=http_host,  # 如果 http_enabled=False, 这里会是 None
-        http_port=http_port,
-        http_callback_path=http_callback_path,
         pipeline_manager=pipeline_manager,  # 传入加载好的管道管理器或None
         context_manager=context_manager,  # 传入创建好的上下文管理器
         event_bus=event_bus,  # 传入事件总线
         avatar=avatar,  # 传入创建好的虚拟形象控制管理器
-        llm_client_manager=llm_client_manager,  # 传入创建好的 LLM 客户端管理器
-        # maicore_token=maicore_token # 如果 core 需要 token
+        llm_service=llm_service,  # 传入创建好的 LLM 服务
     )
 
     # --- 插件加载 ---
@@ -346,6 +341,10 @@ async def main():
 
     logger.info("正在关闭核心服务...")
     try:
+        # 清理 LLM 服务
+        if llm_service:
+            await llm_service.cleanup()
+            logger.info("LLM 服务已清理")
         await asyncio.wait_for(core.disconnect(), timeout=2.0)  # 减少到3秒
         logger.info("核心服务关闭完成")
     except asyncio.TimeoutError:
