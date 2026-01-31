@@ -128,6 +128,11 @@ class GPTSoVITSOutputProvider(OutputProvider):
         # TTSModel实例（后续在_setup_internal中初始化）
         self.tts_model = None
 
+        # 服务引用缓存（在_setup_internal中初始化，避免重复调用get_service）
+        self._text_cleanup_service = None
+        self._vts_lip_sync_service = None
+        self._subtitle_service = None
+
         self.logger.info("GPTSoVITSOutputProvider初始化完成")
 
     async def _setup_internal(self):
@@ -144,6 +149,23 @@ class GPTSoVITSOutputProvider(OutputProvider):
 
         # 加载默认预设
         self.tts_model.load_preset("default")
+
+        # 一次性获取服务引用（避免在渲染时重复调用get_service）
+        if self.core:
+            if self.use_text_cleanup:
+                self._text_cleanup_service = self.core.get_service("text_cleanup")
+                if self._text_cleanup_service:
+                    self.logger.info("已获取 text_cleanup 服务引用")
+
+            if self.use_vts_lip_sync:
+                self._vts_lip_sync_service = self.core.get_service(self.lip_sync_service_name)
+                if self._vts_lip_sync_service:
+                    self.logger.info(f"已获取 {self.lip_sync_service_name} 服务引用")
+
+            if self.use_subtitle:
+                self._subtitle_service = self.core.get_service("subtitle_service")
+                if self._subtitle_service:
+                    self.logger.info("已获取 subtitle_service 服务引用")
 
         self.logger.info("GPTSoVITSOutputProvider设置完成")
 
@@ -193,20 +215,16 @@ class GPTSoVITSOutputProvider(OutputProvider):
 
         final_text = original_text
 
-        # 文本清理
-        if self.use_text_cleanup:
+        # 文本清理（使用缓存的服务引用）
+        if self.use_text_cleanup and self._text_cleanup_service:
             try:
-                cleanup_service = self.core.get_service("text_cleanup")
-                if cleanup_service:
-                    self.logger.debug("找到 text_cleanup 服务，尝试清理文本...")
-                    cleaned = await cleanup_service.clean_text(original_text)
-                    if cleaned:
-                        self.logger.info(f"文本经Cleanup服务清理: '{cleaned[:50]}...'")
-                        final_text = cleaned
-                    else:
-                        self.logger.warning("Cleanup服务调用失败或返回空，使用原始文本")
+                self.logger.debug("使用缓存的 text_cleanup 服务清理文本...")
+                cleaned = await self._text_cleanup_service.clean_text(original_text)
+                if cleaned:
+                    self.logger.info(f"文本经Cleanup服务清理: '{cleaned[:50]}...'")
+                    final_text = cleaned
                 else:
-                    self.logger.debug("未找到 text_cleanup 服务")
+                    self.logger.warning("Cleanup服务调用失败或返回空，使用原始文本")
             except Exception as e:
                 self.logger.error(f"调用 text_cleanup 服务时出错: {e}", exc_info=True)
 
@@ -214,12 +232,10 @@ class GPTSoVITSOutputProvider(OutputProvider):
             self.logger.warning("清理后文本为空，跳过TTS")
             return
 
-        # 启动VTS口型同步
-        if self.use_vts_lip_sync:
+        # 启动VTS口型同步（使用缓存的服务引用）
+        if self.use_vts_lip_sync and self._vts_lip_sync_service:
             try:
-                vts_lip_sync_service = self.core.get_service(self.lip_sync_service_name)
-                if vts_lip_sync_service:
-                    await vts_lip_sync_service.start_lip_sync_session(final_text)
+                await self._vts_lip_sync_service.start_lip_sync_session(final_text)
             except Exception as e:
                 self.logger.debug(f"启动口型同步失败: {e}")
 
@@ -301,13 +317,11 @@ class GPTSoVITSOutputProvider(OutputProvider):
             self.logger.error(f"处理WAV数据失败: {str(e)}")
             return
 
-        # 向VTube Studio插件发送音频数据进行口型同步分析
+        # 向VTube Studio插件发送音频数据进行口型同步分析（使用缓存的服务引用）
         if pcm_data and len(pcm_data) > 0:
-            if self.use_vts_lip_sync:
+            if self.use_vts_lip_sync and self._vts_lip_sync_service:
                 try:
-                    vts_lip_sync_service = self.core.get_service(self.lip_sync_service_name)
-                    if vts_lip_sync_service:
-                        await vts_lip_sync_service.process_tts_audio(pcm_data, sample_rate=self.sample_rate)
+                    await self._vts_lip_sync_service.process_tts_audio(pcm_data, sample_rate=self.sample_rate)
                 except Exception as e:
                     self.logger.debug(f"口型同步处理失败: {e}")
 
@@ -341,21 +355,17 @@ class GPTSoVITSOutputProvider(OutputProvider):
         """触发字幕显示和VTS口型同步（仅在首个音频块时调用）"""
         estimated_duration = max(3.0, len(text) * 0.3)
 
-        # 字幕服务
-        if self.use_subtitle:
+        # 字幕服务（使用缓存的服务引用）
+        if self.use_subtitle and self._subtitle_service:
             try:
-                subtitle_service = self.core.get_service("subtitle_service")
-                if subtitle_service:
-                    await subtitle_service.record_speech(text, estimated_duration)
+                await self._subtitle_service.record_speech(text, estimated_duration)
             except Exception as e:
                 self.logger.error(f"调用 subtitle_service 出错: {e}", exc_info=True)
 
-        # VTS口型同步（发送"说话"动作）
-        if self.use_vts_lip_sync:
+        # VTS口型同步（使用缓存的服务引用）
+        if self.use_vts_lip_sync and self._vts_lip_sync_service:
             try:
-                vts_lip_sync_service = self.core.get_service(self.lip_sync_service_name)
-                if vts_lip_sync_service:
-                    await vts_lip_sync_service.complete_generation()
+                await self._vts_lip_sync_service.complete_generation()
             except Exception as e:
                 self.logger.debug(f"完成口型同步失败: {e}")
 

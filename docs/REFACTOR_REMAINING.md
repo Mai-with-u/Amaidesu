@@ -86,10 +86,17 @@
 
 | 状态 | 说明 |
 |------|------|
-| ❌ 未达标 | **服务注册仍大量使用**：约 62 处 `register_service` / `get_service`，设计目标「服务注册减少 80%」未达成。 |
-| ⚠️ 进行中 | 插件已普遍改为 `setup(event_bus, config)` 并返回 Provider 列表，但许多仍通过 `get_service` 获取 TTS、VTS 等，未完全改为 EventBus 事件。 |
+| ⚠️ 部分优化 | **服务调用已优化**：Provider 中的服务调用改为初始化时一次性获取并缓存，减少运行时 `get_service` 调用。 |
+| ✅ 已优化 | `gptsovits_tts_provider.py`：5 次运行时调用 → 3 次初始化时调用（缓存 `text_cleanup`、`vts_lip_sync`、`subtitle_service`） |
+| ✅ 已优化 | `omni_tts_provider.py`：4 次运行时调用 → 3 次初始化时调用 |
+| ⏳ 待进一步 | 约 25+ 处 `get_service` 调用仍存在（部分在文档/测试中），后续可考虑用 EventBus 事件替代。 |
 
-**待做**：将剩余强依赖服务注册的调用改为 EventBus 事件或显式依赖注入，减少对 `register_service`/`get_service` 的依赖。
+**已完成优化**：
+- `src/plugins/gptsovits_tts/providers/gptsovits_tts_provider.py` - 服务引用缓存
+- `src/providers/omni_tts_provider.py` - 服务引用缓存
+- `src/providers/tts_provider.py` - 已有服务引用缓存模式
+
+**待做**：将剩余服务调用改为 EventBus 事件（需配合事件数据契约工作）。
 
 ---
 
@@ -136,7 +143,7 @@
 | Pipeline 重设计 | ✅ 核心+示例已完成 | -          |
 | Layer 2→3 桥接 | ✅ 已完成   | -          |
 | 事件数据契约   | ⏳ 进行中（另一 AI） | 中         |
-| 服务注册瘦身   | 未达标     | 中         |
+| 服务注册瘦身   | ⚠️ 部分优化（运行时调用减少） | 低         |
 | HTTP 服务器    | ✅ 已完成（含 Provider 迁移） | -          |
 | DataCache      | 有意未实现 | 低/可选    |
 | 实施计划文档   | 缺失       | 低         |
