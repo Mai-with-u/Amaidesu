@@ -454,25 +454,6 @@ class ConsoleInputPlugin:
             # 1. 获取原始模板项 (创建副本)
             modified_template_items = (self.template_items or {}).copy()
 
-            # 2. --- 获取并追加 Prompt 上下文 ---
-            additional_context = ""
-            prompt_ctx_service = self.core.get_service("prompt_context")
-            if prompt_ctx_service:
-                try:
-                    # 使用 self.context_tags 获取上下文
-                    additional_context = await prompt_ctx_service.get_formatted_context(tags=self.context_tags)
-                    if additional_context:
-                        self.logger.debug(f"获取到聚合 Prompt 上下文: '{additional_context[:100]}...'")
-                except Exception as e:
-                    self.logger.error(f"调用 prompt_context 服务时出错: {e}", exc_info=True)
-
-            # 3. 修改主 Prompt (如果上下文非空且主 Prompt 存在)
-            main_prompt_key = "reasoning_prompt_main"  # 假设主 Prompt 的键
-            if additional_context and main_prompt_key in modified_template_items:
-                original_prompt = modified_template_items[main_prompt_key]
-                modified_template_items[main_prompt_key] = original_prompt + "\n" + additional_context
-                self.logger.debug(f"已将聚合上下文追加到 '{main_prompt_key}'。")
-
             # 4. 使用修改后的模板项构建最终结构
             final_template_info_value = TemplateInfo(
                 template_name=cfg.get("template_name", "default"),

@@ -13,6 +13,7 @@ import asyncio
 import time
 from collections import defaultdict
 from dataclasses import dataclass
+from uuid import uuid4
 
 from src.utils.logger import get_logger
 from pydantic import BaseModel, ValidationError
@@ -68,6 +69,7 @@ class EventBus:
     - 优先级控制(按priority排序执行)
     - 统计功能(跟踪emit、错误、执行时间)
     - 生命周期管理(cleanup方法)
+    - 请求-响应模式(通过request方法)
     """
 
     def __init__(self, enable_stats: bool = True, enable_validation: bool = False):
@@ -83,6 +85,7 @@ class EventBus:
         self.enable_stats = enable_stats
         self.enable_validation = enable_validation
         self._is_cleanup = False
+        self._pending_requests: Dict[str, asyncio.Future] = {}
         self.logger = get_logger("EventBus")
         self.logger.debug(f"EventBus 初始化完成 (stats={enable_stats}, validation={enable_validation})")
 
@@ -216,6 +219,12 @@ class EventBus:
         标记为清理中，并清除所有监听器和统计信息。
         """
         self._is_cleanup = True
+
+        for future in self._pending_requests.values():
+            if not future.done():
+                future.cancel()
+        self._pending_requests.clear()
+
         await asyncio.sleep(0.1)  # 等待处理的事件完成
         self.clear()
         self.logger.info("EventBus已清理")
@@ -326,3 +335,40 @@ class EventBus:
             error_isolate: 是否隔离错误
         """
         await self.emit(event_name, data.model_dump(), source, error_isolate)
+
+    async def request(self, event_name: str, data: Any, timeout: float = 5.0) -> Any:
+        """
+        请求-响应模式（带超时）
+
+        通过 EventBus 发送请求并等待响应。响应事件名格式为 "{event_name}.response.{uuid}"。
+
+        Args:
+            event_name: 请求事件名称
+            data: 请求数据
+            timeout: 超时时间（秒），默认 5.0
+
+        Returns:
+            响应数据
+
+        Raises:
+            asyncio.TimeoutError: 请求超时
+        """
+        if self._is_cleanup:
+            self.logger.warning(f"EventBus正在清理中，忽略请求: {event_name}")
+            return None
+
+        response_event = f"{event_name}.response.{uuid4()}"
+        future = asyncio.Future()
+
+        def handler(name, data, source):
+            future.set_result(data)
+
+        self.on(response_event, handler)
+        self._pending_requests[response_event] = future
+
+        try:
+            await self.emit(event_name, {**data, "response_event": response_event})
+            return await asyncio.wait_for(future, timeout)
+        finally:
+            self.off(response_event, handler)
+            self._pending_requests.pop(response_event, None)

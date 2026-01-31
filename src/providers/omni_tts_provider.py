@@ -99,11 +99,6 @@ class OmniTTSProvider(OutputProvider):
         self.render_count = 0
         self.error_count = 0
 
-        # 服务引用缓存（在_setup_internal中初始化，避免重复调用get_service）
-        self._text_cleanup_service = None
-        self._vts_lip_sync_service = None
-        self._subtitle_service = None
-
         self.logger.info("OmniTTSProvider初始化完成")
 
     async def _setup_internal(self):
@@ -129,23 +124,6 @@ class OmniTTSProvider(OutputProvider):
             callback=self._audio_callback,
             blocksize=1024,
         )
-
-        # 一次性获取服务引用（避免在渲染时重复调用get_service）
-        if self.core:
-            if self.use_text_cleanup:
-                self._text_cleanup_service = self.core.get_service("text_cleanup")
-                if self._text_cleanup_service:
-                    self.logger.info("已获取 text_cleanup 服务引用")
-
-            if self.use_vts_lip_sync:
-                self._vts_lip_sync_service = self.core.get_service("vts_lip_sync")
-                if self._vts_lip_sync_service:
-                    self.logger.info("已获取 vts_lip_sync 服务引用")
-
-            if self.use_subtitle:
-                self._subtitle_service = self.core.get_service("subtitle_service")
-                if self._subtitle_service:
-                    self.logger.info("已获取 subtitle_service 服务引用")
 
         self.logger.info("OmniTTSProvider设置完成")
 
@@ -191,25 +169,6 @@ class OmniTTSProvider(OutputProvider):
         text = parameters.tts_text
 
         try:
-            # 文本清理（使用缓存的服务引用）
-            if self.use_text_cleanup and self._text_cleanup_service:
-                text = await self._cleanup_text_with_service(text)
-
-            # 启动口型同步（使用缓存的服务引用）
-            if self.use_vts_lip_sync and self._vts_lip_sync_service:
-                try:
-                    await self._vts_lip_sync_service.start_lip_sync_session(text)
-                except Exception as e:
-                    self.logger.debug(f"启动口型同步失败: {e}")
-
-            # 通知字幕服务（使用缓存的服务引用）
-            if self.use_subtitle and self._subtitle_service:
-                try:
-                    estimated_duration = max(3.0, len(text) * 0.3)
-                    asyncio.create_task(self._subtitle_service.record_speech(text, estimated_duration))
-                except Exception as e:
-                    self.logger.error(f"通知字幕服务失败: {e}")
-
             # 启动音频流
             if self.stream and not self.stream.active:
                 self.stream.start()
@@ -222,26 +181,6 @@ class OmniTTSProvider(OutputProvider):
         except Exception as e:
             self.logger.error(f"OmniTTS渲染失败: {e}", exc_info=True)
             raise RuntimeError(f"OmniTTS渲染失败: {e}") from e
-
-        finally:
-            # 停止口型同步（使用缓存的服务引用）
-            if self.use_vts_lip_sync and self._vts_lip_sync_service:
-                try:
-                    await self._vts_lip_sync_service.stop_lip_sync_session()
-                except Exception as e:
-                    self.logger.debug(f"停止口型同步失败: {e}")
-
-    async def _cleanup_text_with_service(self, text: str) -> str:
-        """使用缓存的服务引用清理文本"""
-        if not self._text_cleanup_service:
-            return text
-
-        try:
-            cleaned = await self._text_cleanup_service.clean_text(text)
-            return cleaned if cleaned else text
-        except Exception as e:
-            self.logger.error(f"清理文本失败: {e}")
-            return text
 
     async def _speak(self, text: str):
         """执行TTS并播放"""

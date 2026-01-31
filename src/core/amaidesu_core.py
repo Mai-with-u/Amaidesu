@@ -84,9 +84,6 @@ class AmaidesuCore:
 
         self.platform = platform
 
-        # 服务注册表
-        self._services: Dict[str, Any] = {}
-
         # HTTP服务器（Phase 5新增）
         self._http_server = http_server
         if http_server is not None:
@@ -103,8 +100,6 @@ class AmaidesuCore:
 
         # 设置上下文管理器
         self._context_manager = context_manager if context_manager is not None else ContextManager({})
-        self.register_service("prompt_context", self._context_manager)
-        self.logger.info("上下文管理器已注册为服务")
 
         # 设置事件总线（可选功能）
         self._event_bus = event_bus
@@ -250,38 +245,6 @@ class AmaidesuCore:
             return False
 
         return self._http_server.register_route(path, handler, methods, **kwargs)
-
-    # ==================== 服务注册与发现 ====================
-
-    def register_service(self, name: str, service_instance: Any):
-        """
-        注册一个服务实例，供其他插件或模块使用。
-
-        Args:
-            name: 服务的唯一名称 (例如 "text_cleanup", "vts_control")。
-            service_instance: 提供服务的对象实例。
-        """
-        if name in self._services:
-            self.logger.warning(f"服务名称 '{name}' 已被注册，将被覆盖！")
-        self._services[name] = service_instance
-        self.logger.info(f"服务已注册: '{name}' (类型: {type(service_instance).__name__})")
-
-    def get_service(self, name: str) -> Optional[Any]:
-        """
-        根据名称获取已注册的服务实例。
-
-        Args:
-            name: 要获取的服务名称。
-
-        Returns:
-            服务实例，如果找到的话；否则返回 None。
-        """
-        service = self._services.get(name)
-        if service:
-            self.logger.debug(f"获取服务 '{name}' 成功。")
-        else:
-            self.logger.warning(f"尝试获取未注册的服务: '{name}'")
-        return service
 
     def get_context_manager(self) -> ContextManager:
         """

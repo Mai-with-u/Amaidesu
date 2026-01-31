@@ -213,12 +213,12 @@ src/core/
 ├── pipeline_manager.py
 ├── context_manager.py
 ├── decision_manager.py       # 新增：决策层管理
+├── llm_service.py            # LLM 服务（llm/llm_fast/vlm）
 ├── providers/                 # 新增：Provider基类
 │   ├── input_provider.py
 │   └── output_provider.py
 └── services/
-    ├── avatar_manager.py
-    └── llm_client_manager.py
+    └── avatar_manager.py
 ```
 
 ---

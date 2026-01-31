@@ -87,6 +87,7 @@ DecisionProvider返回MessageBase
  - [事件数据契约设计](./event_data_contract.md) - 类型安全的事件数据契约系统（Pydantic + 开放式注册表）
  - [LLM服务设计](./llm_service.md) - 统一的LLM调用服务（核心基础设施）
  - [Avatar系统重构](./avatar_refactoring.md) - 虚拟形象控制系统重构（消除与6层架构的重复）
+ - [架构设计审查](./architecture_review.md) - 重构后的架构设计问题和改进建议
  - [DataCache设计](./data_cache.md) - 原始数据缓存服务
  - [Pipeline重新设计](./pipeline_refactoring.md) - TextPipeline处理系统
  - [HTTP服务器设计](./http_server.md) - 基于FastAPI的HTTP服务器

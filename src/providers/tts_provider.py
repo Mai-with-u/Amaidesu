@@ -4,9 +4,6 @@ TTS Provider - Layer 6 Rendering层实现
 职责:
 - 将ExpressionParameters中的TTS文本转换为语音并播放
 - 支持Edge TTS和Omni TTS引擎
-- 集成text_cleanup服务
-- 集成vts_lip_sync服务
-- 通知subtitle_service显示字幕
 """
 
 import asyncio
@@ -38,9 +35,6 @@ class TTSProvider(OutputProvider):
 
     核心功能:
     - 支持Edge TTS和Omni TTS两种引擎
-    - 集成text_cleanup服务
-    - 集成vts_lip_sync服务（口型同步）
-    - 通知subtitle_service显示字幕
     - 错误处理和降级方案
     """
 
@@ -72,11 +66,6 @@ class TTSProvider(OutputProvider):
         # 音频播放配置
         self.tts_lock = asyncio.Lock()
 
-        # 服务引用（延迟初始化，在setup中获取）
-        self.text_cleanup_service = None
-        self.vts_lip_sync_service = None
-        self.subtitle_service = None
-
         # 播放状态
         self.is_playing = False
         self.current_task = None
@@ -87,17 +76,6 @@ class TTSProvider(OutputProvider):
         """内部设置逻辑"""
         # 查找音频设备索引
         self.output_device_index = self._find_device_index(self.output_device_name)
-
-        # 获取服务引用
-        if self.core:
-            self.text_cleanup_service = self.core.get_service("text_cleanup")
-            self.vts_lip_sync_service = self.core.get_service("vts_lip_sync")
-            self.subtitle_service = self.core.get_service("subtitle_service")
-
-            self.logger.info("服务引用获取完成")
-            self.logger.info(f"  text_cleanup: {'✓' if self.text_cleanup_service else '✗'}")
-            self.logger.info(f"  vts_lip_sync: {'✓' if self.vts_lip_sync_service else '✗'}")
-            self.logger.info(f"  subtitle_service: {'✓' if self.subtitle_service else '✗'}")
 
         # 验证依赖
         if not DEPENDENCIES_OK:
@@ -153,23 +131,7 @@ class TTSProvider(OutputProvider):
         text = parameters.tts_text
         self.logger.info(f"开始TTS渲染: '{text[:30]}...'")
 
-        # 1. 文本清理（如果服务可用）
-        final_text = text
-        if self.text_cleanup_service:
-            try:
-                cleaned = await self.text_cleanup_service.clean_text(text)
-                if cleaned:
-                    self.logger.info(f"文本已清理: '{cleaned[:30]}...'")
-                    final_text = cleaned
-            except Exception as e:
-                self.logger.error(f"文本清理失败: {e}，使用原始文本")
-
-        if not final_text:
-            self.logger.warning("清理后文本为空，跳过TTS")
-            return
-
-        # 2. 执行TTS
-        await self._speak(final_text, parameters)
+        await self._speak(text, parameters)
 
     async def _speak(self, text: str, parameters: ExpressionParameters):
         """
@@ -194,21 +156,7 @@ class TTSProvider(OutputProvider):
                 duration_seconds = len(audio_array) / samplerate if samplerate > 0 else 3.0
                 self.logger.info(f"音频时长: {duration_seconds:.3f}秒")
 
-                # 2.3 通知字幕服务
-                if self.subtitle_service and duration_seconds > 0:
-                    try:
-                        asyncio.create_task(self.subtitle_service.record_speech(text, duration_seconds))
-                    except Exception as e:
-                        self.logger.error(f"调用subtitle_service失败: {e}")
-
-                # 2.4 启动口型同步（如果服务可用）
-                if self.vts_lip_sync_service:
-                    try:
-                        await self.vts_lip_sync_service.start_lip_sync_session(text)
-                    except Exception as e:
-                        self.logger.error(f"启动口型同步失败: {e}")
-
-                # 2.5 播放音频
+                # 2.3 播放音频
                 self.logger.info("开始播放音频...")
                 await self._play_audio(audio_array, samplerate, self.output_device_index)
 
@@ -226,13 +174,6 @@ class TTSProvider(OutputProvider):
                         self.logger.debug(f"已删除临时文件: {tmp_filename}")
                     except Exception as e_rem:
                         self.logger.warning(f"删除临时文件失败: {e_rem}")
-
-                # 停止口型同步
-                if self.vts_lip_sync_service:
-                    try:
-                        await self.vts_lip_sync_service.stop_lip_sync_session()
-                    except Exception as e:
-                        self.logger.debug(f"停止口型同步失败: {e}")
 
     async def _edge_tts_synthesize(self, text: str):
         """

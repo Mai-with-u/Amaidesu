@@ -68,27 +68,11 @@ class VTubeStudioPlugin:
             self._providers.append(provider)
             self.logger.info("VTSOutputProvider 已创建")
 
-            # 注册服务（向后兼容）
-            # 其他插件可以通过event_bus或服务注册获取VTS控制功能
-            await self._register_services(provider)
-
         except Exception as e:
             self.logger.error(f"创建 VTSOutputProvider 失败: {e}", exc_info=True)
             return []
 
         return self._providers
-
-    async def _register_services(self, provider: VTSOutputProvider):
-        """注册服务以向后兼容"""
-        # 在新架构中，服务注册通过EventBus进行
-        # 这里保留一些关键的服务接口方法供其他插件使用
-
-        # VTS控制服务
-        self.vts_provider = provider
-
-        # 将provider本身作为服务导出
-        # 在新架构中，通过event_bus进行服务发现
-        pass
 
     async def cleanup(self):
         """清理资源"""

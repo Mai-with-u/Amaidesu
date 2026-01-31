@@ -280,9 +280,6 @@ class SubtitleProvider(OutputProvider):
         self.is_running = True
         self.is_visible = False
 
-        # 服务引用（延迟初始化）
-        self.subtitle_service = None
-
         self.logger.info("SubtitleProvider初始化完成")
 
     async def _setup_internal(self):
@@ -290,12 +287,6 @@ class SubtitleProvider(OutputProvider):
         # 检查依赖
         if not CTK_AVAILABLE:
             raise RuntimeError("CustomTkinter库不可用，无法使用Subtitle Provider")
-
-        # 获取服务引用（向后兼容）
-        if self.core:
-            self.subtitle_service = self.core.get_service("subtitle_service")
-            if self.subtitle_service:
-                self.logger.info("已获取subtitle_service服务引用（向后兼容）")
 
         self.logger.info("SubtitleProvider设置完成")
 
