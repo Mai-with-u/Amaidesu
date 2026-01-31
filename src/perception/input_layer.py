@@ -21,13 +21,13 @@ class InputLayer:
     接收RawData事件，转换为NormalizedText，发布到EventBus。
     """
 
-    def __init__(self, event_bus: EventBus, input_provider_manager: InputProviderManager):
+    def __init__(self, event_bus: EventBus, input_provider_manager: Optional[InputProviderManager] = None):
         """
         初始化InputLayer
 
         Args:
             event_bus: 事件总线实例
-            input_provider_manager: InputProviderManager实例
+            input_provider_manager: InputProviderManager实例（可选，如果不提供则只监听事件）
         """
         self.event_bus = event_bus
         self.input_provider_manager = input_provider_manager

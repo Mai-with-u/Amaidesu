@@ -78,8 +78,12 @@ class MockDanmakuPlugin:
             self.logger.info("模拟弹幕数据采集循环开始。")
 
             async for raw_data in provider.start():
-                # 通过EventBus发送原始数据
-                await self.event_bus.emit("input.raw", raw_data, source="MockDanmakuPlugin")
+                # 通过EventBus发送原始数据（使用标准事件格式）
+                await self.event_bus.emit(
+                    "perception.raw_data.generated",
+                    {"data": raw_data, "source": "mock_danmaku"},
+                    source="MockDanmakuPlugin",
+                )
 
         except asyncio.CancelledError:
             self.logger.info("模拟弹幕数据采集循环被取消。")

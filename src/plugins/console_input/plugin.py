@@ -1,4 +1,4 @@
- import asyncio
+import asyncio
 import sys
 import time
 from typing import Dict, Any, Optional, List, Union
@@ -21,6 +21,7 @@ except ModuleNotFoundError:
 # --- Core Imports ---
 from src.core.plugin import Plugin
 from src.core.amaidesu_core import AmaidesuCore
+from src.core.data_types.raw_data import RawData
 from maim_message import MessageBase, BaseMessageInfo, UserInfo, GroupInfo, Seg, FormatInfo, TemplateInfo
 from src.utils.logger import get_logger
 
@@ -159,7 +160,21 @@ class ConsoleInputPlugin:
                     break
 
                 if self.event_bus:
-                    await self.event_bus.emit("console.input", {"text": text}, "ConsoleInputPlugin")
+                    # 创建RawData并发送标准事件
+                    raw_data = RawData(
+                        content=text,
+                        source="console",
+                        data_type="text",
+                        metadata={
+                            "user_id": self.message_config.get("user_id", "console_user"),
+                            "user_nickname": self.message_config.get("user_nickname", "控制台"),
+                        },
+                    )
+                    await self.event_bus.emit(
+                        "perception.raw_data.generated",
+                        {"data": raw_data, "source": "console"},
+                        source="ConsoleInputPlugin",
+                    )
 
             except asyncio.CancelledError:
                 self.logger.info("控制台输入循环被取消。")

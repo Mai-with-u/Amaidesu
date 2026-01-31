@@ -222,8 +222,10 @@ class MaiCoreDecisionProvider(DecisionProvider):
 
     async def _on_canonical_message(self, event_name: str, event_data: dict, source: str) -> None:
         """处理CanonicalMessage事件"""
-        canonical_message = event_data.get("data")
+        # 支持新格式 {"canonical": ...} 和旧格式 {"data": ...}
+        canonical_message = event_data.get("canonical") or event_data.get("data")
         if not canonical_message:
+            self.logger.warning(f"收到空的canonical.message_ready事件 (source: {source})")
             return
 
         # 构建MessageBase

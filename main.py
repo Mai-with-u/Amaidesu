@@ -15,6 +15,10 @@ from src.utils.logger import get_logger
 from src.utils.config import initialize_configurations  # Updated import
 from src.core.avatar.avatar_manager import AvatarControlManager
 
+# 导入输入层组件（Layer 1-2-3 数据流）
+from src.perception.input_layer import InputLayer
+from src.canonical.canonical_layer import CanonicalLayer
+
 logger = get_logger("Main")
 
 # 获取 main.py 文件所在的目录 (项目根目录)
@@ -215,6 +219,22 @@ async def main():
     # --- 初始化事件总线和核心 ---
     logger.info("初始化事件总线和AmaidesuCore...")
     event_bus = EventBus()  # 创建事件总线
+
+    # --- 初始化输入层组件（Layer 1-2-3 数据流） ---
+    logger.info("初始化输入层组件（Layer 1-2-3 数据流）...")
+
+    # InputLayer: Layer 1→2（RawData → NormalizedText）
+    # 注意: InputProviderManager 目前由插件单独管理，InputLayer 只订阅事件
+    input_layer = InputLayer(event_bus)
+    await input_layer.setup()
+    logger.info("InputLayer 已设置（Layer 1→2）")
+
+    # CanonicalLayer: Layer 2→3（NormalizedText → CanonicalMessage）
+    canonical_layer = CanonicalLayer(event_bus, pipeline_manager=pipeline_manager)
+    await canonical_layer.setup()
+    logger.info("CanonicalLayer 已设置（Layer 2→3）")
+
+    # 创建核心
     core = AmaidesuCore(
         platform=platform_id,
         maicore_host=maicore_host,
@@ -294,6 +314,16 @@ async def main():
         logger.debug(f"恢复信号处理器时出错: {e}")
 
     # --- 执行清理 ---
+
+    # 清理输入层组件（Layer 1-2-3）
+    logger.info("正在清理输入层组件...")
+    try:
+        await canonical_layer.cleanup()
+        await input_layer.cleanup()
+        logger.info("输入层组件清理完成")
+    except Exception as e:
+        logger.error(f"清理输入层组件时出错: {e}")
+
     logger.info("正在卸载插件...")
     try:
         await asyncio.wait_for(plugin_manager.unload_plugins(), timeout=2.0)  # 减少到5秒
