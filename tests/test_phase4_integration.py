@@ -155,8 +155,6 @@ class TestAmaidesuCoreIntegration:
 
         core = AmaidesuCore(
             platform="test",
-            maicore_host="localhost",
-            maicore_port=8000,
             event_bus=event_bus,
         )
 
@@ -183,8 +181,6 @@ class TestAmaidesuCoreIntegration:
 
         core = AmaidesuCore(
             platform="test",
-            maicore_host="localhost",
-            maicore_port=8000,
             event_bus=event_bus,
         )
 
