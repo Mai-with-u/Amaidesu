@@ -16,7 +16,7 @@
 | **A-04** | MaiCoreDecisionProvider 职责过重 | 🔴 | 决策层 | ✅ 已完成 |
 | **A-05** | `src/providers/` 目录定位不清 | 🟡 | 目录结构 | ⏳ |
 | **A-06** | 输出层 Provider 依赖 core 实例 | 🔴 | 依赖注入 | ✅ 已完成 |
-| **A-07** | DataCache 未实现（Layer 2 已实现） | 🟢 | 数据流 | ✅ 不需要 |
+| **A-07** | DataCache 未实现（Layer 2 已实现） | 🟢 | 数据流 | ✅ 已确认 |
 | **A-08** | 配置加载散落在多个模块 | 🟡 | 配置管理 | ✅ 已完成 |
 | **A-09** | 循环依赖风险 | 🟡 | 模块结构 | ⏳ |
 | **A-10** | 废弃代码未清理干净 | 🟢 | 代码质量 | ⏳ |
@@ -588,7 +588,7 @@ src/plugins/subtitle/providers/subtitle_provider.py # 保留
 
 ---
 
-### A-07: DataCache 未实现（Layer 2 已实现）
+### A-07: DataCache 未实现（Layer 2 已实现） ✅ 已确认
 
 **问题描述**：
 
@@ -616,6 +616,20 @@ RawData → InputLayer.normalize() → NormalizedText → CanonicalLayer → Can
 **建议**：
 
 当前可以接受，DataCache 作为未来扩展点保留。如果需要多模态输入支持，再实现 DataCache。
+
+**执行情况**：
+
+✅ 已确认：
+- Layer 2 核心组件已完整实现（NormalizedText 数据类、InputLayer、CanonicalLayer）
+- DataCache 组件未实现，经过评估确认当前不需要
+- 相关代码中保留了 DataCache 相关字段用于向后兼容（data_ref 字段、with_data_ref 方法）
+- 代码中有清晰的注释说明 DataCache 功能已移除
+- 当前场景（主要是文本输入）不受影响
+
+**说明**：
+- DataCache 作为未来扩展点保留
+- 如果需要多模态输入支持（图像、音频），再考虑实现 DataCache
+- 向后兼容性字段已保留，避免破坏现有代码
 
 ---
 
