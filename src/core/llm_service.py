@@ -5,9 +5,12 @@ LLM 服务 - 核心基础设施
 """
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List, AsyncIterator
 from src.utils.logger import get_logger
+
+
+# === 数据类定义 ===
 
 
 @dataclass
@@ -16,20 +19,20 @@ class LLMResponse:
 
     success: bool
     content: Optional[str] = None
-    tool_calls: Optional[List[Dict[str, Any]]] = None
-    usage: Optional[Dict[str, int]] = None
     model: Optional[str] = None
-    error: Optional[str] = None
+    usage: Optional[Dict[str, int]] = None
+    tool_calls: Optional[List[Dict[str, Any]]] = field(default_factory=list)
     reasoning_content: Optional[str] = None
+    error: Optional[str] = None
 
 
 @dataclass
 class RetryConfig:
-    """重试配置"""
+    """LLM 调用重试配置"""
 
     max_retries: int = 3
     base_delay: float = 1.0
-    max_delay: float = 30.0
+    max_delay: float = 10.0
 
 
 class LLMService:
@@ -111,7 +114,7 @@ class LLMService:
                 self.logger.info(f"已初始化 {name} 后端 ({backend_type})")
 
         # 初始化 token 管理器
-        from src.openai_client_archived.token_usage_manager import TokenUsageManager
+        from src.core.llm_backends.token_usage_manager import TokenUsageManager
 
         self._token_manager = TokenUsageManager(use_global=True)
 
@@ -253,7 +256,7 @@ class LLMService:
             str: 响应文本，失败时返回错误信息
         """
         result = await self.chat(prompt, backend=backend, system_message=system_message)
-        return result.content if result.success else f"错误: {result.error}"
+        return result.content if result.success and result.content else f"错误: {result.error}"
 
     async def simple_vision(
         self,
@@ -263,7 +266,7 @@ class LLMService:
     ) -> str:
         """简化视觉理解，直接返回文本"""
         result = await self.vision(prompt, images, backend=backend)
-        return result.content if result.success else f"错误: {result.error}"
+        return result.content if result.success and result.content else f"错误: {result.error}"
 
     # === 内部方法 ===
 
