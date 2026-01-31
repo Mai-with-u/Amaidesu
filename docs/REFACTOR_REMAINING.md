@@ -14,12 +14,16 @@
 | ✅ 已实现 | **TextPipeline** 接口：`TextPipeline` 协议、`TextPipelineBase` 基类、`PipelineErrorHandling` 枚举、`PipelineStats` 统计类、`PipelineException` 异常已在 `pipeline_manager.py` 中实现。 |
 | ✅ 已实现 | **PipelineManager.process_text()**：新版方法已实现，支持超时控制、错误处理策略（CONTINUE/STOP/DROP）、统计信息、并发保护（asyncio.Lock）。 |
 | ✅ 已接入 | Layer 2→3 之间已插入 **process_text**：`CanonicalLayer._on_normalized_text_ready` 中调用 `pipeline_manager.process_text(text, metadata)`，支持文本预处理和丢弃逻辑。 |
-| ⏳ 待迁移 | **现有 Pipeline 迁移**：command_router、throttle、similar_message_filter 等仍为 MessagePipeline，需迁移到 TextPipeline 接口，或根据需求移除/替换。 |
-| ⏳ 待迁移 | **CommandRouterPipeline** 设计上由 DecisionProvider 替代，当前仍保留为 MessagePipeline，可考虑移除。 |
+| ✅ 已实现 | **TextPipeline 示例**：`RateLimitTextPipeline`（限流）和 `SimilarTextFilterPipeline`（相似文本过滤）已实现。 |
+| ⏳ 待迁移 | **现有 MessagePipeline**：command_router、throttle、similar_message_filter、message_logger 等仍为 MessagePipeline，可保留向后兼容或逐步替换。 |
+| ⏳ 可移除 | **CommandRouterPipeline** 设计上由 DecisionProvider 替代，可考虑移除。 |
 
-**已完成**：TextPipeline 协议与 `process_text()` 已实现并接入 CanonicalLayer。
+**已完成**：
+- TextPipeline 协议与 `process_text()` 已实现并接入 CanonicalLayer
+- `src/pipelines/rate_limit/` - RateLimitTextPipeline（限流管道，ThrottlePipeline 的 TextPipeline 版本）
+- `src/pipelines/similar_text_filter/` - SimilarTextFilterPipeline（相似文本过滤管道）
 
-**待做**：将现有 Pipeline（throttle、filter 等）迁移到 TextPipeline 接口，或实现新的 TextPipeline 示例（如 RateLimitTextPipeline、FilterTextPipeline）。
+**待做**：如有需要，可继续迁移其他 MessagePipeline 到 TextPipeline 接口。现有 MessagePipeline 可保留向后兼容。
 
 ---
 
@@ -129,7 +133,7 @@
 
 | 类别           | 状态       | 优先级建议 |
 |----------------|------------|------------|
-| Pipeline 重设计 | ✅ 核心已完成，待迁移现有 Pipeline | 中         |
+| Pipeline 重设计 | ✅ 核心+示例已完成 | -          |
 | Layer 2→3 桥接 | ✅ 已完成   | -          |
 | 事件数据契约   | ⏳ 进行中（另一 AI） | 中         |
 | 服务注册瘦身   | 未达标     | 中         |
@@ -179,7 +183,6 @@
 
 - ~~**组合 C（独立模块）**~~：✅ **已完成**（HttpServer + AmaidesuCore 集成）。
 
-- **组合 D（Pipeline 迁移）**：将现有 MessagePipeline（throttle、similar_message_filter 等）迁移到 TextPipeline 接口，或实现新的 TextPipeline 示例。  
-  → 不涉及事件契约，可与契约工作并行。
+- ~~**组合 D（Pipeline 迁移）**~~：✅ **已完成**（RateLimitTextPipeline 和 SimilarTextFilterPipeline 已实现，现有 MessagePipeline 可保留向后兼容）。
 
 - ~~**组合 E（Provider 迁移）**~~：✅ **已完成**（MaiCoreDecisionProvider 已迁移到使用 HttpServer.register_route()，移除 aiohttp 内部 HTTP 服务器）。
