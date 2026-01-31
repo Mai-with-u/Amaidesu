@@ -14,7 +14,7 @@ import os
 import subprocess
 import sys
 import re
-from typing import List, Tuple
+from typing import Tuple
 
 # 需要迁移的插件列表（21个已迁移到Extension系统的插件）
 PLUGINS_TO_MIGRATE = [
@@ -273,14 +273,14 @@ def main():
         print("   如需回滚，运行: git checkout {backup_branch}\n")
 
     # 确认操作
-    print(f"将执行以下操作:")
+    print("将执行以下操作:")
     print(f"1. 迁移 {len(PLUGINS_TO_MIGRATE)} 个插件到 src/plugins_new/")
-    print(f"2. 重命名 extension.py → plugin.py")
-    print(f"3. 重命名核心文件: extension → plugin")
-    print(f"4. 删除旧的 src/plugins/ 中已迁移的插件")
-    print(f"5. 重命名 src/extensions/ → src/extensions_old/")
-    print(f"6. 重命名 src/plugins_new/ → src/plugins/")
-    print(f"7. 更新所有导入语句\n")
+    print("2. 重命名 extension.py → plugin.py")
+    print("3. 重命名核心文件: extension → plugin")
+    print("4. 删除旧的 src/plugins/ 中已迁移的插件")
+    print("5. 重命名 src/extensions/ → src/extensions_old/")
+    print("6. 重命名 src/plugins_new/ → src/plugins/")
+    print("7. 更新所有导入语句\n")
 
     response = input("是否继续？(y/n): ")
     if response.lower() != "y":
@@ -343,10 +343,10 @@ def main():
     update_imports()
 
     # 显示结果
-    print("\n" + "=" * 70)
+    print("=" * 70)
     print("修复完成！")
     print("=" * 70)
-    print(f"\n统计:")
+    print("\n统计:")
     print(f"  ✅ 成功: {success_count}")
     print(f"  ⚠️  跳过: {skip_count}")
     print(f"  ❌ 失败: {error_count}")

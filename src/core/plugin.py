@@ -18,8 +18,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .event_bus import EventBus
-    from .providers.base import RenderParameters
-    from .data_types.raw_data import RawData
 
     # Provider类型的统一接口
     class Provider(Protocol):

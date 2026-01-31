@@ -1,18 +1,14 @@
 """
-Extension系统单元测试
+Extension系统单元测试（已废弃 - 扩展系统已迁移到Plugin系统）
 
-测试Extension接口、ExtensionManager和示例Extension
+测试Plugin接口、PluginManager和示例Plugin
 """
 
 import pytest
 from typing import Any, Dict, List
 
-from src.core.extensions import (
-    BaseExtension,
-    ExtensionInfo,
-    ExtensionManager,
-    ExtensionDependencyError,
-)
+from src.core.plugin import Plugin
+from src.core.plugin_manager import PluginManager
 from src.core.event_bus import EventBus
 
 

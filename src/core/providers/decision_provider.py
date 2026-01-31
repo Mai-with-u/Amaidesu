@@ -84,14 +84,10 @@ class DecisionProvider(ABC):
         """
         pass
 
-    async def _setup_internal(self):
-        """
-        内部设置逻辑(子类可选重写)
-
-        子类可以重写此方法来执行初始化逻辑,
-        如连接到服务、加载模型等。
-        """
-        pass
+    async def _setup_internal(self):  # noqa: B027
+        """内部设置逻辑(子类可选重写)"""
+        # 子类可以重写此方法来执行初始化逻辑,如连接到服务、加载模型等。
+        ...
 
     async def cleanup(self):
         """
@@ -102,11 +98,7 @@ class DecisionProvider(ABC):
         await self._cleanup_internal()
         self.is_setup = False
 
-    async def _cleanup_internal(self):
-        """
-        内部清理逻辑(子类可选重写)
-
-        子类可以重写此方法来执行清理逻辑,
-        如关闭连接、释放资源等。
-        """
-        pass
+    async def _cleanup_internal(self):  # noqa: B027
+        """内部清理逻辑(子类可选重写)"""
+        # 子类可以重写此方法来执行清理逻辑,如关闭连接、释放资源等。
+        ...

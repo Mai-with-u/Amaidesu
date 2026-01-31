@@ -1,23 +1,12 @@
 """
-Amaidesu Core - 核心模块（Phase 3重构后版本）
+Amaidesu Core - 核心模块（Phase 3-4重构版本）
 
-职责:
-- 管理插件系统
-- 提供服务注册与发现
-- 集成管道管理器
-- 集成决策管理器（DecisionManager）
-- 集成上下文管理器
-- 集成事件总线（EventBus）
-- 分发消息给插件和管道
-
-注意:
-- WebSocket/HTTP/Router功能已迁移到MaiCoreDecisionProvider
-- 此版本从原来的641行简化到约350行
+职责: 插件管理、服务注册、Pipeline/Decision/Context/EventBus集成
+注意: WebSocket/HTTP/Router已迁移到MaiCoreDecisionProvider（641行→350行）
 """
 
 from typing import Dict, Any, Optional, TYPE_CHECKING
 
-from maim_message import MessageBase
 from src.utils.logger import get_logger
 from .pipeline_manager import PipelineManager
 from .context_manager import ContextManager
@@ -35,33 +24,21 @@ if TYPE_CHECKING:
 
 
 class AmaidesuCore:
-    """
-    Amaidesu 核心模块，负责插件管理和消息分发。
-
-    重构变化（Phase 3）:
-    - WebSocket/HTTP/Router功能迁移到MaiCoreDecisionProvider
-    - 新增DecisionManager支持
-    - 简化为约350行代码
-
-    重构变化（Phase 4）:
-    - 新增OutputProviderManager支持
-    - 新增ExpressionGenerator支持
-    - 实现Layer 4→Layer 5→Layer 6数据流
-    """
+    """Amaidesu 核心模块 - 插件管理和服务分发（Phase 3-4重构）"""
 
     @property
     def event_bus(self) -> Optional[EventBus]:
-        """获取事件总线实例（供插件使用）"""
+        """获取事件总线实例"""
         return self._event_bus
 
     @property
     def avatar(self) -> Optional["AvatarControlManager"]:
-        """获取虚拟形象控制管理器实例（供插件使用）"""
+        """获取虚拟形象控制管理器实例"""
         return self._avatar
 
     @property
     def llm_client_manager(self) -> Optional["LLMClientManager"]:
-        """获取 LLM 客户端管理器实例（供插件使用）"""
+        """获取LLM客户端管理器实例"""
         return self._llm_client_manager
 
     def __init__(

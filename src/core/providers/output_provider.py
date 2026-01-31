@@ -76,14 +76,10 @@ class OutputProvider(ABC):
             raise RuntimeError("Provider not setup, call setup() first")
         await self._render_internal(parameters)
 
-    async def _setup_internal(self):
-        """
-        内部设置逻辑(子类可选重写)
-
-        子类可以重写此方法来执行初始化逻辑,
-        如连接到设备、加载资源等。
-        """
-        pass
+    async def _setup_internal(self):  # noqa: B027
+        """内部设置逻辑(子类可选重写)"""
+        # 子类可以重写此方法来执行初始化逻辑,如连接到设备、加载资源等。
+        ...
 
     @abstractmethod
     async def _render_internal(self, parameters: RenderParameters):
@@ -122,11 +118,7 @@ class OutputProvider(ABC):
             "type": "output_provider",
         }
 
-    async def _cleanup_internal(self):
-        """
-        内部清理逻辑(子类可选重写)
-
-        子类可以重写此方法来执行清理逻辑,
-        如关闭连接、释放资源等。
-        """
-        pass
+    async def _cleanup_internal(self):  # noqa: B027
+        """内部清理逻辑(子类可选重写)"""
+        # 子类可以重写此方法来执行清理逻辑,如关闭连接、释放资源等。
+        ...
