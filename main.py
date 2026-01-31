@@ -8,13 +8,12 @@ import argparse  # 导入 argparse
 # 从 src 目录导入核心类和插件管理器
 from src.core.amaidesu_core import AmaidesuCore
 from src.core.plugin_manager import PluginManager
-from src.core.pipeline_manager import PipelineManager  # 导入管道管理器
-from src.core.event_bus import EventBus  # 导入事件总线
-from src.core.llm_service import LLMService  # 导入 LLM 服务
+from src.core.pipeline_manager import PipelineManager
+from src.core.event_bus import EventBus
+from src.core.llm_service import LLMService
+from src.core.flow_coordinator import FlowCoordinator
 from src.utils.logger import get_logger
-from src.utils.config import initialize_configurations  # Updated import
-# 已废弃: AvatarControlManager 已迁移到 Platform Layer
-# from src.core.avatar.avatar_manager import AvatarControlManager
+from src.utils.config import initialize_configurations
 
 # 导入输入层组件（Layer 1-2-3 数据流）
 from src.perception.input_layer import InputLayer
@@ -139,27 +138,16 @@ async def main():
     # --- 提取配置部分 ---
     # 从配置中提取参数，提供默认值或进行错误处理
     general_config = config.get("general", {})
-    maicore_config = config.get("maicore", {})
-    http_config = config.get("http_server", {})
-    pipeline_config = config.get("pipelines", {})  # 添加管道配置
-    rendering_config = config.get("rendering", {})  # Phase 4: 渲染配置
+    pipeline_config = config.get("pipelines", {})
+    rendering_config = config.get("rendering", {})
 
     platform_id = general_config.get("platform_id", "amaidesu_default")
 
-    maicore_host = maicore_config.get("host", "127.0.0.1")
-    maicore_port = maicore_config.get("port", 8000)
-    # maicore_token = maicore_config.get("token") # 如果需要 token
-
-    http_enabled = http_config.get("enable", False)
-    http_host = http_config.get("host", "127.0.0.1") if http_enabled else None
-    http_port = http_config.get("port", 8080) if http_enabled else None
-    http_callback_path = http_config.get("callback_path", "/maicore_callback")
-
-    # Phase 4: 记录渲染配置状态
+    # 记录渲染配置状态
     if rendering_config:
-        logger.info("检测到渲染配置，将启用输出层")
+        logger.info("检测到渲染配置，将启用数据流协调器")
     else:
-        logger.info("未检测到渲染配置，输出层功能将被禁用")
+        logger.info("未检测到渲染配置，数据流协调器功能将被禁用")
 
     # --- 加载管道 ---
     pipeline_manager = None
@@ -205,20 +193,8 @@ async def main():
     await llm_service.setup(config)
     logger.info("已创建 LLM 服务实例")
 
-    # --- 初始化虚拟形象控制管理器（已废弃）---
-    # AvatarControlManager 已迁移到 Platform Layer（Layer 6: AvatarOutputProvider）
-    # 新架构使用 OutputProviderManager 管理 AvatarOutputProvider
-    # 这里的代码已废弃，保留用于向后兼容，但不再创建 AvatarControlManager
-    avatar_config = config.get("avatar", {})
-    if avatar_config.get("enabled", True):
-        logger.info("虚拟形象控制功能已迁移到新的 Platform Layer 架构")
-        logger.info("请使用新的 [rendering.avatar] 和 [platform] 配置")
-    else:
-        logger.info("虚拟形象控制功能已禁用")
-    avatar = None  # 不再创建 AvatarControlManager
-
     # --- 初始化事件总线和核心 ---
-    logger.info("初始化事件总线和AmaidesuCore...")
+    logger.info("初始化事件总线、数据流协调器和AmaidesuCore...")
 
     # 从配置中读取事件总线配置
     event_bus_config = config.get("event_bus", {})
@@ -236,7 +212,6 @@ async def main():
     logger.info("初始化输入层组件（Layer 1-2-3 数据流）...")
 
     # InputLayer: Layer 1→2（RawData → NormalizedText）
-    # 注意: InputProviderManager 目前由插件单独管理，InputLayer 只订阅事件
     input_layer = InputLayer(event_bus)
     await input_layer.setup()
     logger.info("InputLayer 已设置（Layer 1→2）")
@@ -246,14 +221,26 @@ async def main():
     await canonical_layer.setup()
     logger.info("CanonicalLayer 已设置（Layer 2→3）")
 
+    # --- 初始化数据流协调器（A-01新增） ---
+    logger.info("初始化数据流协调器...")
+    flow_coordinator = FlowCoordinator(event_bus) if rendering_config else None
+    if flow_coordinator:
+        try:
+            await flow_coordinator.setup(rendering_config)
+            logger.info("数据流协调器已设置（Layer 4→5→6）")
+        except Exception as e:
+            logger.error(f"设置数据流协调器失败: {e}", exc_info=True)
+            logger.warning("数据流协调器功能不可用，继续启动其他服务")
+            flow_coordinator = None
+
     # 创建核心
     core = AmaidesuCore(
         platform=platform_id,
-        pipeline_manager=pipeline_manager,  # 传入加载好的管道管理器或None
-        context_manager=context_manager,  # 传入创建好的上下文管理器
-        event_bus=event_bus,  # 传入事件总线
-        avatar=avatar,  # 传入创建好的虚拟形象控制管理器
-        llm_service=llm_service,  # 传入创建好的 LLM 服务
+        pipeline_manager=pipeline_manager,
+        context_manager=context_manager,
+        event_bus=event_bus,
+        llm_service=llm_service,
+        flow_coordinator=flow_coordinator,
     )
 
     # --- 插件加载 ---
@@ -264,7 +251,7 @@ async def main():
     logger.info("插件加载完成。")
 
     # --- 连接核心服务 ---
-    await core.connect(rendering_config=rendering_config)  # 连接 WebSocket 并启动 HTTP 服务器，Phase 4: 设置输出层
+    await core.connect()  # 启动所有核心服务
 
     # --- 保持运行并处理退出信号 ---
     stop_event = asyncio.Event()
@@ -320,6 +307,15 @@ async def main():
         logger.debug(f"恢复信号处理器时出错: {e}")
 
     # --- 执行清理 ---
+
+    # 清理数据流协调器（A-01新增）
+    logger.info("正在清理数据流协调器...")
+    if flow_coordinator:
+        try:
+            await flow_coordinator.cleanup()
+            logger.info("数据流协调器清理完成")
+        except Exception as e:
+            logger.error(f"清理数据流协调器时出错: {e}")
 
     # 清理输入层组件（Layer 1-2-3）
     logger.info("正在清理输入层组件...")
