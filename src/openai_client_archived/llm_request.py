@@ -8,8 +8,8 @@ from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionToolParam
 from PIL import Image
 from src.utils.logger import get_logger
-from src.openai_client.modelconfig import ModelConfig
-from src.openai_client.token_usage_manager import TokenUsageManager
+from src.openai_client_archived.modelconfig import ModelConfig
+from src.openai_client_archived.token_usage_manager import TokenUsageManager
 from src.config.config import global_config
 
 logger = get_logger("LLMClient")

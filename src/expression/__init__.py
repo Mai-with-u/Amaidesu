@@ -15,5 +15,8 @@ Expression生成层 - Layer 5
 
 from .render_parameters import RenderParameters
 from .expression_generator import ExpressionGenerator
+from .emotion_mapper import EmotionMapper
+from .action_mapper import ActionMapper
+from .expression_mapper import ExpressionMapper
 
-__all__ = ["RenderParameters", "ExpressionGenerator"]
+__all__ = ["RenderParameters", "ExpressionGenerator", "EmotionMapper", "ActionMapper", "ExpressionMapper"]

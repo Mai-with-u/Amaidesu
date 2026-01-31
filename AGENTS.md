@@ -425,3 +425,30 @@ async def test_with_marker():
 - 项目使用中文作为注释和用户界面语言
 - 文档字符串（docstring）和注释应使用清晰、准确的中文
 - 变量名和函数名仍使用英文命名
+
+### Layer 架构说明
+
+新架构分为 6 层：
+
+| Layer | 职责 | 核心模块 |
+|-------|------|---------|
+| **Layer 4: Understanding** | 表现理解层（情感分析、意图解析） | `src/understanding/` |
+| **Layer 5: Expression** | 表情生成层（表情映射、动作映射） | `src/expression/` |
+| **Layer 6: Rendering** | 渲染呈现层（TTS、字幕、虚拟形象） | `src/rendering/` |
+
+### Avatar 系统重构说明
+
+Avatar 系统已重构到 6 层架构中：
+
+- **Layer 4**: 统一的情感分析入口 `EmotionAnalyzer`（合并了原有的 TriggerStrategyEngine 的 LLM 功能）
+- **Layer 5**: 统一的表情映射器 `ExpressionMapper`（合并了 EmotionMapper 和 SemanticActionMapper）
+- **Layer 6**: 虚拟形象输出 Provider `AvatarOutputProvider`（使用 PlatformAdapter）
+- **Platform Layer**: 平台抽象层 `PlatformAdapter`（支持 VTS、VRChat、Live2D）
+
+配置已迁移到新的按层级组织结构：
+- `[understanding.emotion_analyzer]` - Layer 4 情感分析配置
+- `[expression]` - Layer 5 表情映射配置
+- `[rendering.avatar]` - Layer 6 虚拟形象输出配置
+- `[platform.vts]` - Platform Layer 平台适配器配置
+
+详细设计文档见：`refactor/design/avatar_refactoring.md`

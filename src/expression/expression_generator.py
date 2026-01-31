@@ -7,7 +7,7 @@ Expression生成器 - Layer 5 Expression生成层核心
 - 生成完整的渲染参数
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from src.utils.logger import get_logger
 
 from .render_parameters import ExpressionParameters
@@ -82,7 +82,7 @@ class ExpressionGenerator:
         else:
             params.subtitle_enabled = False
 
-        # 3. 映射情感到VTS表情参数
+        # 3. 映射情感到抽象表情参数（平台无关）
         if self.default_expressions_enabled:
             emotion_params = self.emotion_mapper.map_emotion(intent.emotion)
             params.expressions = emotion_params
@@ -124,7 +124,7 @@ class ExpressionGenerator:
 
         Args:
             emotion: 情感类型
-            params: VTS表情参数字典
+            params: 抽象表情参数字典（平台无关）
         """
         self.emotion_mapper.set_emotion_mapping(emotion, params)
         self.logger.info(f"情感映射已更新: {emotion}")

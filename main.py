@@ -13,7 +13,8 @@ from src.core.event_bus import EventBus  # 导入事件总线
 from src.core.llm_service import LLMService  # 导入 LLM 服务
 from src.utils.logger import get_logger
 from src.utils.config import initialize_configurations  # Updated import
-from src.core.avatar.avatar_manager import AvatarControlManager
+# 已废弃: AvatarControlManager 已迁移到 Platform Layer
+# from src.core.avatar.avatar_manager import AvatarControlManager
 
 # 导入输入层组件（Layer 1-2-3 数据流）
 from src.perception.input_layer import InputLayer
@@ -204,18 +205,17 @@ async def main():
     await llm_service.setup(config)
     logger.info("已创建 LLM 服务实例")
 
-    # --- 初始化虚拟形象控制管理器 ---
+    # --- 初始化虚拟形象控制管理器（已废弃）---
+    # AvatarControlManager 已迁移到 Platform Layer（Layer 6: AvatarOutputProvider）
+    # 新架构使用 OutputProviderManager 管理 AvatarOutputProvider
+    # 这里的代码已废弃，保留用于向后兼容，但不再创建 AvatarControlManager
     avatar_config = config.get("avatar", {})
     if avatar_config.get("enabled", True):
-        try:
-            avatar = AvatarControlManager(None, avatar_config)
-            logger.info("已创建虚拟形象控制管理器实例")
-        except ImportError as e:
-            logger.warning(f"无法导入虚拟形象控制模块: {e}")
-            avatar = None
+        logger.info("虚拟形象控制功能已迁移到新的 Platform Layer 架构")
+        logger.info("请使用新的 [rendering.avatar] 和 [platform] 配置")
     else:
         logger.info("虚拟形象控制功能已禁用")
-        avatar = None
+    avatar = None  # 不再创建 AvatarControlManager
 
     # --- 初始化事件总线和核心 ---
     logger.info("初始化事件总线和AmaidesuCore...")

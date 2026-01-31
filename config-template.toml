@@ -94,133 +94,82 @@ default_priority = 100    # 默认优先级值
 # 开启后会验证所有已注册事件的数据格式
 enable_validation = false
 
-# 通用虚拟形象控制系统配置
-[avatar]
-# 全局启用虚拟形象控制系统
-enabled = true
+# ========== 新架构：按层级组织配置 ==========
 
-# 默认活跃适配器（如果没有设置，将使用第一个注册的适配器）
-# 可选值: "vts", "vrc", "live2d" 等
-default_adapter = "vts"
+# === Layer 4: Understanding（表现理解层） ===
+[understanding]
+# 情感分析配置（唯一位置）
+[understanding.emotion_analyzer]
+# 情感分析配置（Layer 4 统一入口）
+use_rules = true              # 使用规则分析（快速、确定性）
+use_llm = false               # 使用 LLM 分析（可选、智能）
 
-# 自动表情配置
-[avatar.auto_expression]
-# 是否启用自动表情功能
-# 启用后，收到消息时会自动分析文本并设置表情
-enabled = false
-# 最小文本长度（少于这个长度的文本不会触发）
-min_text_length = 2
-
-# ========== 新增：智能触发配置 ==========
-
-# 简单回复过滤（优先级最高，快速本地判断）
-# 过滤"好的"、"嗯"等简单确认语
-simple_reply_filter_enabled = true
-simple_reply_patterns = [
-    "^[好的好的]$", "^[好呀]$", "^[好的]$",
-    "^[嗯嗯]$", "^[嗯]$", "^[收到]$",
-    "^[知道了]$", "^[明白]$", "^[OK]$", "^[ok]$",
-    "^(好|行|可以)[呀啊嘛。！!]*$"
-]
-
-# 时间间隔控制（快速本地判断）
-# 避免频繁调整表情
-time_interval_enabled = true
-min_time_interval = 5.0  # 秒
-
-# LLM智能判断（重要性 + 情感分析 + 变化检测）
-# 注意：通过前两层过滤后才执行，使用小模型成本低
-# 一次调用完成3个任务：判断内容重要性、分析情感、检测情感变化
-llm_judge_enabled = true
-
-# 情感历史记录（用于情感变化检测）
-max_emotion_history = 5
-
-# 调试配置
-debug_mode = false
-log_filtered_messages = true
-
-# LLM 配置（用于自动文本分析和表情选择）
-[avatar.llm]
-# 启用 LLM 功能
-enabled = true
-
-# LLM 类型：使用全局配置的哪个 LLM
-# "llm" - 标准LLM（更准确但较慢）
-# "llm_fast" - 快速LLM（推荐，平衡速度和质量）
-# "vlm" - 视觉语言模型
-type = "llm_fast"
-
+# LLM 配置（用于情感分析）
+llm_type = "llm_fast"       # 使用全局配置的哪个 LLM
 # 自定义 LLM 配置（可选，如果不设置则使用全局配置）
-# 如果需要覆盖全局配置，取消下面的注释并填写
 # model = "deepseek-chat"
-# api_key = "your-api-key"
-# base_url = "https://api.siliconflow.cn/v1"
-# temperature = 0.1
+# temperature = 0.3
 # max_tokens = 100
 
-# 语义动作自定义映射
-[avatar.semantic_actions.happy_expression]
-description = "开心的表情"
+# === Layer 5: Expression（表情生成层） ===
+[expression]
+# 表情映射配置（统一位置）
+# 表情映射自定义（可选覆盖）
+[expression.mappings]
+# 覆盖默认情感到抽象参数的映射
+# happy 开心
+[expression.mappings.happy]
+smile = 0.9
+eye_open = 0.95
 
-# VTS 平台特定覆盖
-[avatar.semantic_actions.happy_expression.platforms.vts]
-MouthSmile = 1.0
-EyeOpenLeft = 0.9
-EyeOpenRight = 0.9
+# sad 悲伤
+[expression.mappings.sad]
+smile = -0.3
+eye_open = 0.7
 
-# VRChat 平台特定覆盖（OSC 地址）
-[avatar.semantic_actions.happy_expression.platforms.vrc]
-"/input/face/eyes" = 1.0
-"/input/face/mouth_smile" = 1.0
+# surprised 惊讶
+[expression.mappings.surprised]
+smile = 0.2
+eye_open = 1.0
+mouth_open = 0.6
 
-[avatar.semantic_actions.sad_expression]
-description = "悲伤的表情"
+# angry 生气
+[expression.mappings.angry]
+smile = -0.5
+eye_open = 0.6
+brow_down = 0.5
 
-[avatar.semantic_actions.sad_expression.platforms.vts]
-MouthSmile = -0.5
-EyeOpenLeft = 0.5
-EyeOpenRight = 0.5
-MouthOpen = 0.2
+# === Layer 6: Rendering（渲染呈现层） ===
+[rendering]
+# 渲染层配置（已移至 [providers.output]）
 
-[avatar.semantic_actions.surprised_expression]
-description = "惊讶的表情"
+# Avatar 输出配置
+[rendering.avatar]
+enabled = true                    # 是否启用虚拟形象输出
+adapter_type = "vts"              # vts | vrchat | live2d
 
-[avatar.semantic_actions.surprised_expression.platforms.vts]
-MouthOpen = 0.8
-EyeOpenLeft = 1.0
-EyeOpenRight = 1.0
+# === Platform Layer（平台抽象层） ===
+[platform]
+# 平台适配器配置
+[platform.vts]
+plugin_name = "Amaidesu_VTS_Adapter"
+developer = "Amaidesu"
+authentication_token_path = "./vts_token.txt"
+vts_host = "localhost"
+vts_port = 8001
 
-[avatar.semantic_actions.angry_expression]
-description = "生气的表情"
+# ========== 旧配置兼容性说明 ==========
+# 以下配置节已迁移到新的 [understanding]、[expression]、[platform] 结构
+# 但保留以向后兼容。推荐使用新的 [providers.output] 结构
+# 旧配置节已标记为过时（deprecated）
 
-[avatar.semantic_actions.angry_expression.platforms.vts]
-MouthSmile = -0.8
-EyeOpenLeft = 0.6
-EyeOpenRight = 0.6
+# 通用虚拟形象控制系统配置（已迁移到 Platform Layer）
+[avatar]
+# 已废弃：请使用新的 [rendering.avatar] + [platform] 配置
+enabled = false
 
-[avatar.semantic_actions.close_eyes]
-description = "闭眼"
-
-[avatar.semantic_actions.close_eyes.platforms.vts]
-EyeOpenLeft = 0.0
-EyeOpenRight = 0.0
-
-[avatar.semantic_actions.open_eyes]
-description = "睁眼"
-
-[avatar.semantic_actions.open_eyes.platforms.vts]
-EyeOpenLeft = 1.0
-EyeOpenRight = 1.0
-
-[avatar.semantic_actions.neutral]
-description = "中性表情"
-
-[avatar.semantic_actions.neutral.platforms.vts]
-MouthSmile = 0.0
-MouthOpen = 0.0
-EyeOpenLeft = 1.0
-EyeOpenRight = 1.0
+# 默认活跃适配器（已废弃）
+default_adapter = "vts"
 
 # 管道配置
 [pipelines]

@@ -11,6 +11,7 @@
  - [核心重构设计](./core_refactoring.md) - AmaidesuCore的彻底解耦
  - [事件数据契约设计](./event_data_contract.md) - 类型安全的事件数据契约系统
  - [LLM服务设计](./llm_service.md) - 统一的LLM调用服务
+ - [Avatar系统重构](./avatar_refactoring.md) - 虚拟形象控制系统重构到6层架构
 
 ---
 
@@ -85,6 +86,7 @@ DecisionProvider返回MessageBase
  - [核心重构设计](./core_refactoring.md) - AmaidesuCore的彻底解耦（含HTTP服务器管理）
  - [事件数据契约设计](./event_data_contract.md) - 类型安全的事件数据契约系统（Pydantic + 开放式注册表）
  - [LLM服务设计](./llm_service.md) - 统一的LLM调用服务（核心基础设施）
+ - [Avatar系统重构](./avatar_refactoring.md) - 虚拟形象控制系统重构（消除与6层架构的重复）
  - [DataCache设计](./data_cache.md) - 原始数据缓存服务
  - [Pipeline重新设计](./pipeline_refactoring.md) - TextPipeline处理系统
  - [HTTP服务器设计](./http_server.md) - 基于FastAPI的HTTP服务器
@@ -149,6 +151,9 @@ DecisionProvider返回MessageBase
 
 **LLM调用如何统一管理？**
 → 阅读[LLM服务设计](./llm_service.md)
+
+**Avatar系统如何重构？**
+→ 阅读[Avatar系统重构](./avatar_refactoring.md)
 
 **如何实施重构？**
 → 阅读[实施计划总览](../plan/overview.md)

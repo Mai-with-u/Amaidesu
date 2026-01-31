@@ -23,7 +23,7 @@ from .llm_service import LLMService
 
 # 类型检查时的导入
 if TYPE_CHECKING:
-    from .avatar.avatar_manager import AvatarControlManager
+    pass
 
 
 class AmaidesuCore:
@@ -35,9 +35,10 @@ class AmaidesuCore:
         return self._event_bus
 
     @property
-    def avatar(self) -> Optional["AvatarControlManager"]:
-        """获取虚拟形象控制管理器实例"""
-        return self._avatar
+    def avatar(self) -> None:
+        """已废弃：AvatarControlManager 已迁移到 Platform Layer"""
+        self.logger.warning("AvatarControlManager 已迁移到 Platform Layer，请使用 OutputProvider")
+        return None
 
     @property
     def llm_service(self) -> Optional[LLMService]:
@@ -113,11 +114,11 @@ class AmaidesuCore:
         else:
             self.logger.info("已使用外部提供的事件总线")
 
-        # 设置虚拟形象控制管理器（可选功能）
+        # 设置虚拟形象控制管理器（可选功能，已废弃）
         self._avatar = avatar
         if avatar is not None:
             avatar.core = self
-            self.logger.info("已使用外部提供的虚拟形象控制管理器")
+            self.logger.warning("AvatarControlManager 已废弃，请迁移到 Platform Layer")
 
         # 设置 LLM 服务（可选功能）
         self._llm_service = llm_service

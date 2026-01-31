@@ -11,8 +11,8 @@ if TYPE_CHECKING:
 
 from src.utils.logger import get_logger
 from src.utils.config import load_component_specific_config, merge_component_configs
-from src.openai_client.llm_request import LLMClient
-from src.openai_client.modelconfig import ModelConfig
+from src.openai_client_archived.llm_request import LLMClient
+from src.openai_client_archived.modelconfig import ModelConfig
 from src.config.config import global_config
 
 
