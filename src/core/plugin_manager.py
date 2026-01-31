@@ -3,13 +3,14 @@ import importlib
 import inspect
 import os
 import sys
-from typing import TYPE_CHECKING, Any, Callable, Dict
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
 
 # 避免循环导入，使用 TYPE_CHECKING
 if TYPE_CHECKING:
     from .amaidesu_core import AmaidesuCore
 
 from src.utils.logger import get_logger
+from src.services.config_service import ConfigService
 from src.utils.config import load_component_specific_config, merge_component_configs
 
 
@@ -130,9 +131,12 @@ class PluginManager:
     向后兼容：两种插件类型都能正常工作。
     """
 
-    def __init__(self, core: "AmaidesuCore", global_plugin_config: Dict[str, Any]):
+    def __init__(
+        self, core: "AmaidesuCore", global_plugin_config: Dict[str, Any], config_service: Optional[ConfigService] = None
+    ):
         self.core = core
         self.global_plugin_config = global_plugin_config
+        self.config_service = config_service
         self.loaded_plugins: Dict[str, Any] = {}
         self.logger = get_logger("PluginManager")
         self.logger.debug("PluginManager 初始化完成")
@@ -147,6 +151,11 @@ class PluginManager:
         Returns:
             bool: 是否启用
         """
+        # 如果有 ConfigService，使用它
+        if self.config_service:
+            return self.config_service.is_plugin_enabled(plugin_name)
+
+        # 否则使用旧的逻辑（向后兼容）
         # 1. 检查 enabled 列表（优先级最高）
         enabled_list = self.global_plugin_config.get("enabled", [])
         if plugin_name in enabled_list:
@@ -254,14 +263,18 @@ class PluginManager:
                         self.logger.warning(f"在模块 '{module_import_path}' 中未找到入口点 'plugin_entrypoint'。")
 
                     if plugin_class:
-                        main_provided_config = self.global_plugin_config.get(plugin_name, {}).copy()
-                        self.logger.debug(f"从主配置为插件 '{plugin_name}' 获取的配置: {main_provided_config}")
+                        # 使用 ConfigService 或旧的配置加载方式
+                        if self.config_service:
+                            final_plugin_config = self.config_service.get_plugin_config(plugin_name, item_path)
+                        else:
+                            main_provided_config = self.global_plugin_config.get(plugin_name, {}).copy()
+                            self.logger.debug(f"从主配置为插件 '{plugin_name}' 获取的配置: {main_provided_config}")
 
-                        plugin_own_config_data = load_component_specific_config(item_path, plugin_name, "插件")
+                            plugin_own_config_data = load_component_specific_config(item_path, plugin_name, "插件")
 
-                        final_plugin_config = merge_component_configs(
-                            plugin_own_config_data, main_provided_config, plugin_name, "插件"
-                        )
+                            final_plugin_config = merge_component_configs(
+                                plugin_own_config_data, main_provided_config, plugin_name, "插件"
+                            )
 
                         self.logger.debug(f"准备实例化插件: {plugin_class.__name__} (类型: {plugin_type})")
 

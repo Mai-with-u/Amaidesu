@@ -14,10 +14,10 @@
 | **A-02** | 服务注册机制与 EventBus 并存导致混乱 | 🔴 | 全局通信 | ✅ 已完成 |
 | **A-03** | Provider 构造函数签名不一致 | 🟡 | 可测试性 | ✅ 已完成 |
 | **A-04** | MaiCoreDecisionProvider 职责过重 | 🔴 | 决策层 | ✅ 已完成 |
-| **A-05** | 插件与 Provider 概念边界模糊 | 🟡 | 插件系统 | ⏳ |
+| **A-05** | `src/providers/` 目录定位不清 | 🟡 | 目录结构 | ⏳ |
 | **A-06** | 输出层 Provider 依赖 core 实例 | 🔴 | 依赖注入 | ✅ 已完成 |
-| **A-07** | 数据流中间层（Layer 2）缺失 | 🟡 | 数据流 | ⏳ |
-| **A-08** | 配置加载散落在多个模块 | 🟡 | 配置管理 | ⏳ |
+| **A-07** | DataCache 未实现（Layer 2 已实现） | 🟢 | 数据流 | ✅ 不需要 |
+| **A-08** | 配置加载散落在多个模块 | 🟡 | 配置管理 | ✅ 已完成 |
 | **A-09** | 循环依赖风险 | 🟡 | 模块结构 | ⏳ |
 | **A-10** | 废弃代码未清理干净 | 🟢 | 代码质量 | ⏳ |
 
@@ -536,72 +536,86 @@ class OutputProvider(ABC):
 
 ---
 
-### A-05: 插件与 Provider 概念边界模糊
+### A-05: `src/providers/` 目录定位不清
 
 **问题描述**：
 
-项目中存在多层级的概念：Plugin → Provider，但边界不清晰：
+项目中存在一个设计文档未规划的目录 `src/providers/`：
 
 ```
-src/plugins/tts/
-├── plugin.py                    # Plugin 定义
-└── providers/
-    └── tts_output_provider.py   # Provider 实现
+src/core/providers/              # ✅ 基类和接口（设计文档规划）
+├── output_provider.py
+└── input_provider.py
 
-src/providers/
-└── tts_provider.py              # 另一个 Provider？
+src/plugins/tts/                 # ✅ 官方插件（设计文档规划）
+├── plugin.py
+└── providers/
+    └── tts_output_provider.py
+
+plugins/                         # ✅ 社区插件目录（设计文档规划）
+
+src/providers/                   # ❓ 这个目录是什么？（未在设计文档中）
+├── tts_provider.py
+├── subtitle_provider.py
+├── vts_provider.py
+└── ...
 ```
 
 **混乱点**：
-1. `src/providers/` 和 `src/plugins/xxx/providers/` 都有 Provider
-2. 有些 Provider 直接在 `src/providers/`，有些在 Plugin 目录下
-3. OutputProviderManager 直接引用 `src/providers/` 而非通过 Plugin
+1. `src/providers/` 不是基类（基类在 `src/core/providers/`）
+2. `src/providers/` 不是插件（插件在 `src/plugins/`）
+3. `src/providers/` 与 `src/plugins/xxx/providers/` 存在功能重复
+4. OutputProviderManager 硬编码引用 `src/providers/`
+
+**注意**：此问题**不影响社区插件**，社区插件目录是 `plugins/`（根目录）。
 
 **建议**：
 
 ```
-# 方案：明确层级关系
+# 方案 A：将 src/providers/ 作为核心渲染模块
+src/rendering/providers/         # 核心渲染 Provider（非插件）
+├── tts_provider.py
+├── subtitle_provider.py
+└── ...
 
-src/
-├── providers/                   # 核心 Provider（框架提供）
-│   ├── output_provider.py       # 基类
-│   └── input_provider.py        # 基类
-│
-└── plugins/                     # 插件（用户/社区提供）
-    └── tts/
-        ├── plugin.py            # 插件入口
-        └── tts_provider.py      # 插件的 Provider 实现
+# 方案 B：合并到对应的官方插件中
+src/plugins/tts/providers/tts_provider.py          # 保留
+src/plugins/subtitle/providers/subtitle_provider.py # 保留
+# 删除 src/providers/ 目录
 
-# 规则：
-# 1. src/providers/ 只放基类和接口
-# 2. 具体实现都在 plugins/ 下
-# 3. OutputProviderManager 通过 Plugin 获取 Provider，不直接引用实现
+# 推荐方案 B：减少目录混乱
 ```
 
 ---
 
-### A-07: 数据流中间层（Layer 2）缺失
+### A-07: DataCache 未实现（Layer 2 已实现）
 
 **问题描述**：
 
-设计文档定义了 6 层架构，但 Layer 2（输入标准化层）完全未实现：
+~~Layer 2 完全未实现~~ **更正**：Layer 2 已完整实现，只是 DataCache 组件未实现。
 
 ```
-设计文档：
-Layer 1 (Raw Data) → Layer 2 (NormalizedText) → Layer 3 (CanonicalMessage)
-
-实际实现：
-Layer 1 (Raw Data) → Layer 3 (CanonicalMessage)  # 跳过了 Layer 2
+已实现的数据流：
+RawData → InputLayer.normalize() → NormalizedText → CanonicalLayer → CanonicalMessage
+         ↑                        ↑                 ↑
+         Layer 1                  Layer 2           Layer 3
 ```
+
+**已实现的组件**：
+- `src/core/data_types/normalized_text.py` - NormalizedText 数据类
+- `src/perception/input_layer.py` - InputLayer（RawData → NormalizedText）
+- `src/canonical/canonical_layer.py` - CanonicalLayer（NormalizedText → CanonicalMessage）
+
+**未实现的组件**：
+- DataCache - 用于缓存原始大对象（图像、音频）
 
 **影响**：
-- 无法处理非文本输入的标准化
-- 大对象直接传递影响性能
-- 设计与实现不一致
+- 当前场景（主要是文本输入）不受影响
+- 未来如果需要处理图像/音频输入，需要实现 DataCache
 
 **建议**：
 
-要么实现 Layer 2，要么更新设计文档说明简化原因。
+当前可以接受，DataCache 作为未来扩展点保留。如果需要多模态输入支持，再实现 DataCache。
 
 ---
 
@@ -645,9 +659,33 @@ class ConfigService:
     def get_section(self, section: str) -> Dict[str, Any]:
         """获取配置节"""
         ...
-```
-
----
+    ```
+    
+    **执行情况**：
+    
+    ✅ 已完成：
+    - 创建了 `ConfigService` 类，作为统一的配置管理服务
+    - ConfigService 封装了所有配置加载逻辑（`load_config`, `load_component_specific_config`, `merge_component_configs` 等）
+    - ConfigService 提供了统一的配置访问接口（`get_section`, `get`, `get_plugin_config`, `get_pipeline_config`, `get_provider_config` 等）
+    - 更新了 `PluginManager` 使用 ConfigService（向后兼容，支持旧的配置加载方式）
+    - 更新了 `main.py` 使用 ConfigService 初始化配置
+    - ConfigService 作为新的服务类位于 `src/services/` 目录下
+    
+    **修改的文件**：
+    - `src/services/config_service.py` - 新增文件，实现统一的配置管理服务
+    - `src/services/__init__.py` - 新增文件，导出 ConfigService
+    - `src/core/plugin_manager.py` - 更新为使用 ConfigService（向后兼容）
+    - `main.py` - 更新为使用 ConfigService 初始化配置
+    - `refactor/design/architecture_review.md` - 本文档，更新 A-08 状态
+    
+    **说明**：
+    - 所有配置加载现在都通过 ConfigService 进行，配置加载逻辑集中在单一位置
+    - ConfigService 提供了清晰的 API，方便各模块获取配置
+    - 保持了向后兼容性，PluginManager 仍支持旧的配置加载方式（如果 ConfigService 未提供）
+    - ConfigService 支持插件、管道、Provider 等组件的配置获取和合并
+    - 配置合并策略统一：全局配置覆盖组件配置
+    
+    ---
 
 ### A-09: 循环依赖风险
 

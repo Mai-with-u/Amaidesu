@@ -12,6 +12,7 @@ from src.core.pipeline_manager import PipelineManager
 from src.core.event_bus import EventBus
 from src.core.llm_service import LLMService
 from src.core.flow_coordinator import FlowCoordinator
+from src.services.config_service import ConfigService
 from src.utils.logger import get_logger
 from src.utils.config import initialize_configurations
 
@@ -92,15 +93,10 @@ async def main():
 
     logger.info("启动 Amaidesu 应用程序...")
 
-    # --- 初始化所有配置 ---
+    # --- 初始化配置服务 ---
+    config_service = ConfigService(base_dir=_BASE_DIR)
     try:
-        config, main_cfg_copied, plugin_cfg_copied, pipeline_cfg_copied = initialize_configurations(
-            base_dir=_BASE_DIR,
-            main_cfg_name="config.toml",  # Default, but explicit
-            main_template_name="config-template.toml",  # Default, but explicit
-            plugin_dir_name="src/plugins",  # Default, but explicit
-            pipeline_dir_name="src/pipelines",  # Default, but explicit
-        )
+        config, main_cfg_copied, plugin_cfg_copied, pipeline_cfg_copied = config_service.initialize()
     except (IOError, FileNotFoundError) as e:  # Catch errors from config_manager
         logger.critical(f"配置文件初始化失败: {e}")
         logger.critical("请检查错误信息并确保配置文件或模板存在且可访问。")
@@ -245,7 +241,7 @@ async def main():
 
     # --- 插件加载 ---
     logger.info("加载插件...")
-    plugin_manager = PluginManager(core, config.get("plugins", {}))  # 传入插件全局配置
+    plugin_manager = PluginManager(core, config.get("plugins", {}), config_service)  # 传入插件全局配置和配置服务
     plugin_load_dir = os.path.join(_BASE_DIR, "src", "plugins")  # 确保变量名不冲突且清晰
     await plugin_manager.load_plugins(plugin_load_dir)
     logger.info("插件加载完成。")
