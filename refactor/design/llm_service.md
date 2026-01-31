@@ -1,5 +1,7 @@
 # LLM 服务设计
 
+> **注意**: 本文档部分内容描述了从 LLMClientManager 迁移到 LLMService 的历史过程，这些是迁移前/历史说明，供参考。当前实现已使用 LLMService。
+
 ## 📋 概述
 
 本文档描述 LLM 调用能力的重构设计。LLM 服务是**核心基础设施服务**，与 EventBus 同级，可被任何 Provider、模块或插件使用。

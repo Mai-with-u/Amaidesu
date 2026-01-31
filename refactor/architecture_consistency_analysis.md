@@ -55,7 +55,7 @@
 - context_manager: 上下文管理器
 - event_bus: 事件总线
 - _avatar: 虚拟形象控制管理器
-- _llm_client_manager: LLM客户端管理器
+- llm_service: LLM服务
 - decision_manager: 决策管理器（Phase 3新增）
 - output_provider_manager: 输出Provider管理器（Phase 4新增）
 - expression_generator: 表达式生成器（Phase 4新增）

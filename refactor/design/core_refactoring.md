@@ -112,7 +112,7 @@ class AmaidesuCore:
         self.pipeline_manager = None
         self.context_manager = None
         self.avatar_manager = None
-        self.llm_client = None
+        self.llm_service = None
 
         # ✅ 决策层管理（新增）
         self.decision_manager = None
@@ -124,7 +124,7 @@ class AmaidesuCore:
         self.pipeline_manager = PipelineManager(self.event_bus)
         self.context_manager = ContextManager()
         self.avatar_manager = AvatarManager()
-        self.llm_client = LLMClientManager()
+        self.llm_service = LLMService()
 
         # ✅ 决策层（新增）
         await self._setup_decision_layer()
@@ -305,7 +305,7 @@ from src.core.pipeline_manager import PipelineManager
 from src.core.context_manager import ContextManager
 from src.core.decision_manager import DecisionManager
 from src.core.services.avatar_manager import AvatarManager
-from src.core.services.llm_client_manager import LLMClientManager
+from src.core.llm_service import LLMService
 from src.utils.logger import get_logger
 
 class AmaidesuCore:
@@ -320,7 +320,7 @@ class AmaidesuCore:
         self.pipeline_manager: Optional[PipelineManager] = None
         self.context_manager: Optional[ContextManager] = None
         self.avatar_manager: Optional[AvatarManager] = None
-        self.llm_client: Optional[LLMClientManager] = None
+        self.llm_service: Optional[LLMService] = None
 
         # 决策层管理（新增）
         self.decision_manager: Optional[DecisionManager] = None
@@ -340,8 +340,8 @@ class AmaidesuCore:
         self.avatar_manager = AvatarManager()
         await self.avatar_manager.setup(self.event_bus, self.config.get("avatar", {}))
 
-        self.llm_client = LLMClientManager()
-        await self.llm_client.setup(self.config.get("llm", {}))
+        self.llm_service = LLMService()
+        await self.llm_service.setup(self.config.get("llm", {}))
 
         # 初始化决策层（新增）
         await self._setup_decision_layer()
@@ -371,9 +371,9 @@ class AmaidesuCore:
         """获取AvatarManager实例"""
         return self.avatar_manager
 
-    def get_llm_client(self) -> LLMClientManager:
-        """获取LLM客户端实例"""
-        return self.llm_client
+    def get_llm_service(self) -> LLMService:
+        """获取LLM服务实例"""
+        return self.llm_service
 
     def get_decision_manager(self) -> DecisionManager:
         """获取DecisionManager实例（新增）"""
@@ -384,8 +384,8 @@ class AmaidesuCore:
         if self.decision_manager:
             await self.decision_manager.cleanup()
 
-        if self.llm_client:
-            await self.llm_client.cleanup()
+        if self.llm_service:
+            await self.llm_service.cleanup()
 
         if self.avatar_manager:
             await self.avatar_manager.cleanup()

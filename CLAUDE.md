@@ -128,7 +128,7 @@ uv run ruff check --fix .
 #### 管理器
 - **DecisionManager** ([`src/core/decision_manager.py`](src/core/decision_manager.py)): 管理决策Provider，支持运行时切换
 - **OutputProviderManager** ([`src/core/output_provider_manager.py`](src/core/output_provider_manager.py)): 管理输出Provider，支持并发渲染
-- **LLMClientManager** ([`src/core/llm_client_manager.py`](src/core/llm_client_manager.py)): 管理LLM客户端（llm/llm_fast/vlm）
+- **LLMService** ([`src/core/llm_service.py`](src/core/llm_service.py)): 管理LLM客户端（llm/llm_fast/vlm）
 - **ContextManager** ([`src/core/context_manager.py`](src/core/context_manager.py)): 聚合插件上下文信息
 
 ### Provider接口说明
