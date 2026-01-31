@@ -466,15 +466,15 @@ class MyPlugin:
 ```python
 class AmaidesuCore:
     # 保留的职责
-    def __init__(self, platform, pipeline_manager, context_manager, 
-                 event_bus, avatar, llm_client_manager, 
+    def __init__(self, platform, pipeline_manager, context_manager,
+                 event_bus, avatar, llm_service,
                  decision_manager, output_provider_manager, expression_generator):
         # 核心协调器
         self.pipeline_manager = pipeline_manager
         self.context_manager = context_manager
         self.event_bus = event_bus
         self._avatar = avatar
-        self._llm_client_manager = llm_client_manager
+        self._llm_service = llm_service
         
         # Phase 3 新增
         self._decision_manager = decision_manager  # 决策层管理

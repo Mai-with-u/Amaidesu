@@ -35,21 +35,6 @@ class EmotionResult:
     source: str
 
 
-@dataclass
-class EmotionResult:
-    """情感分析结果
-
-    Attributes:
-        emotion: 情感类型
-        confidence: 置信度 (0.0-1.0)
-        source: 结果来源 ("rule", "llm", "default")
-    """
-
-    emotion: EmotionType
-    confidence: float
-    source: str
-
-
 class EmotionAnalyzer:
     """统一的情感分析器
 
@@ -248,8 +233,9 @@ class EmotionAnalyzer:
 }}
 """
 
-            result = await self.llm_service.chat_completion(
+            result = await self.llm_service.chat(
                 prompt=prompt,
+                backend=self.llm_type,
                 temperature=self.llm_temperature,
             )
 
@@ -264,7 +250,7 @@ class EmotionAnalyzer:
             # 解析 JSON 结果
             import json
 
-            content = result.content.strip()
+            content = result.content.strip() if result.content else ""
 
             # 提取 JSON（处理可能的 markdown 代码块）
             if "```json" in content:
