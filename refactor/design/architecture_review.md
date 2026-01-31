@@ -13,7 +13,7 @@
 | **A-01** | AmaidesuCore 仍承担过多职责 | 🔴 | 核心架构 | ✅ 已完成 |
 | **A-02** | 服务注册机制与 EventBus 并存导致混乱 | 🔴 | 全局通信 | ✅ 已完成 |
 | **A-03** | Provider 构造函数签名不一致 | 🟡 | 可测试性 | ✅ 已完成 |
-| **A-04** | MaiCoreDecisionProvider 职责过重 | 🔴 | 决策层 | ⏳ |
+| **A-04** | MaiCoreDecisionProvider 职责过重 | 🔴 | 决策层 | ✅ 已完成 |
 | **A-05** | 插件与 Provider 概念边界模糊 | 🟡 | 插件系统 | ⏳ |
 | **A-06** | 输出层 Provider 依赖 core 实例 | 🔴 | 依赖注入 | ⏳ |
 | **A-07** | 数据流中间层（Layer 2）缺失 | 🟡 | 数据流 | ⏳ |
@@ -242,7 +242,7 @@ class EventBus:
 
 ---
 
-### A-04: MaiCoreDecisionProvider 职责过重
+### A-04: MaiCoreDecisionProvider 职责过重 ✅ 已完成
 
 **问题描述**：
 
@@ -251,22 +251,22 @@ class EventBus:
 ```python
 class MaiCoreDecisionProvider:
     # 职责1：WebSocket 连接管理
-    async def connect(self)
+    async def connect()
     async def disconnect()
     _ws_task, _monitor_task
-    
+
     # 职责2：HTTP 服务器管理
     _setup_http_server()
     _http_runner, _http_site, _http_app
     _handle_http_request()
-    
+
     # 职责3：Router 管理
     _setup_router()
     _router: Router
-    
+
     # 职责4：消息处理
     _handle_maicore_message()
-    
+
     # 职责5：决策逻辑
     async def decide(canonical_message)
 ```
@@ -286,7 +286,7 @@ graph TB
         HTTP[HttpServer<br/>已有，复用]
         ROUTER[RouterAdapter<br/>Router封装]
     end
-    
+
     MDP --> WSC
     MDP --> HTTP
     MDP --> ROUTER
@@ -296,11 +296,11 @@ graph TB
 # 拆分后
 class MaiCoreDecisionProvider:
     """只负责决策逻辑"""
-    
+
     def __init__(self, config, ws_connector, router_adapter):
         self.ws_connector = ws_connector
         self.router_adapter = router_adapter
-    
+
     async def decide(self, canonical_message) -> MessageBase:
         """核心决策方法"""
         await self.router_adapter.send(canonical_message)
@@ -317,6 +317,32 @@ class RouterAdapter:
     async def send(self, message): ...
     async def receive(self) -> MessageBase: ...
 ```
+
+**执行情况**：
+
+✅ 已完成：
+- 创建了 `WebSocketConnector` 类，负责 WebSocket 连接管理和状态监控
+- 创建了 `RouterAdapter` 类，封装 Router 的发送/接收接口
+- 重构了 `MaiCoreDecisionProvider`，只保留决策逻辑（`decide` 方法）
+- 移除了 MaiCoreDecisionProvider 中的 HTTP 服务器管理代码（未实际使用）
+- 移除了 MaiCoreDecisionProvider 中的 WebSocket 连接管理代码，委托给 WebSocketConnector
+- 移除了 MaiCoreDecisionProvider 中的 Router 封装代码，使用 RouterAdapter
+- 添加了 `_process_maicore_message` 方法，避免阻塞回调处理
+
+**修改的文件**：
+- `src/core/providers/websocket_connector.py` - 新增文件，WebSocket 连接管理器
+- `src/core/providers/router_adapter.py` - 新增文件，Router 封装适配器
+- `src/core/providers/maicore_decision_provider.py` - 重构为只负责决策逻辑
+- `refactor/design/architecture_review.md` - 本文档，更新 A-04 状态
+
+**说明**：
+- MaiCoreDecisionProvider 现在只负责决策逻辑（`decide` 方法）
+- WebSocket 连接管理已完全委托给 WebSocketConnector
+- Router 操作已通过 RouterAdapter 封装，提供简化的接口
+- HTTP 服务器管理代码已移除（未实际使用，AmaidesuCore 已有 HttpServer）
+- 代码量从 473 行减少到约 220 行，职责更加清晰
+- 保持了向后兼容性，现有功能继续正常工作
+- 消息处理改为非阻塞方式，使用 `asyncio.create_task` 避免阻塞回调
 
 ---
 
