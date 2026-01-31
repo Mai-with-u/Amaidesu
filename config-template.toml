@@ -76,6 +76,12 @@ title_separator = ": "     # 如果添加提供者名称，使用的分隔符
 default_max_length = 1000 # 默认上下文最大长度
 default_priority = 100    # 默认优先级值
 
+# === 事件总线配置 ===
+[event_bus]
+# 是否启用事件数据验证（建议仅 debug 模式开启）
+# 开启后会验证所有已注册事件的数据格式
+enable_validation = false
+
 # 通用虚拟形象控制系统配置
 [avatar]
 # 全局启用虚拟形象控制系统

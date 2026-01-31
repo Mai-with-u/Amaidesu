@@ -9,6 +9,7 @@
  - [多Provider并发设计](./multi_provider.md) - 输入/输出层并发处理
  - [插件系统设计](./plugin_system.md) - 插件系统和Provider接口
  - [核心重构设计](./core_refactoring.md) - AmaidesuCore的彻底解耦
+ - [事件数据契约设计](./event_data_contract.md) - 类型安全的事件数据契约系统
 
 ---
 
@@ -40,6 +41,7 @@
  - **决策层**（Decision Layer）：可替换的决策Provider系统
  - **插件系统**（Plugin System）：社区开发者添加新能力
  - **EventBus**：唯一的跨层通信机制，实现松耦合
+ - **事件数据契约**（Event Contract）：类型安全的事件数据格式，支持社区扩展
 
 ### 架构分层
 
@@ -79,6 +81,7 @@ DecisionProvider返回MessageBase
  - [多Provider并发设计](./multi_provider.md) - 输入/输出层并发处理（含错误处理和生命周期）
  - [插件系统设计](./plugin_system.md) - 插件系统和Provider接口（含迁移指南）
  - [核心重构设计](./core_refactoring.md) - AmaidesuCore的彻底解耦（含HTTP服务器管理）
+ - [事件数据契约设计](./event_data_contract.md) - 类型安全的事件数据契约系统（Pydantic + 开放式注册表）
  - [DataCache设计](./data_cache.md) - 原始数据缓存服务
  - [Pipeline重新设计](./pipeline_refactoring.md) - TextPipeline处理系统
  - [HTTP服务器设计](./http_server.md) - 基于FastAPI的HTTP服务器
@@ -114,7 +117,8 @@ DecisionProvider返回MessageBase
 - ✅ EventBus为内部主要通信模式
 - ✅ Provider模式替代重复插件
 - ✅ 工厂模式支持动态切换
- - ✅ 插件系统支持社区开发
+- ✅ 插件系统支持社区开发
+- ✅ 事件数据契约类型安全（Pydantic Model + 开放式注册表）
 
 ---
 
@@ -133,6 +137,9 @@ DecisionProvider返回MessageBase
 
 **如何开发插件？**
 → 阅读[插件系统设计](./plugin_system.md)
+
+**如何定义事件数据格式？**
+→ 阅读[事件数据契约设计](./event_data_contract.md)
 
 **AmaidesuCore如何重构？**
 → 阅读[核心重构设计](./core_refactoring.md)

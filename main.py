@@ -218,7 +218,18 @@ async def main():
 
     # --- 初始化事件总线和核心 ---
     logger.info("初始化事件总线和AmaidesuCore...")
-    event_bus = EventBus()  # 创建事件总线
+
+    # 从配置中读取事件总线配置
+    event_bus_config = config.get("event_bus", {})
+    enable_validation = event_bus_config.get("enable_validation", False)
+
+    event_bus = EventBus(enable_validation=enable_validation)  # 创建事件总线
+
+    # 注册核心事件
+    from src.core.events import register_core_events
+
+    register_core_events()
+    logger.info("核心事件已注册到 EventRegistry")
 
     # --- 初始化输入层组件（Layer 1-2-3 数据流） ---
     logger.info("初始化输入层组件（Layer 1-2-3 数据流）...")

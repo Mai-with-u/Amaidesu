@@ -27,17 +27,22 @@
 
 ---
 
-## 二、事件数据契约（Event Data Contract）
+## 二、事件数据契约（Event Data Contract）✅ 已完成
 
 **设计文档**：[event_data_contract.md](../refactor/design/event_data_contract.md)
 
 | 状态 | 说明 |
 |------|------|
-| ❌ 未实现 | **EventRegistry**（事件注册表）不存在，无 `src/core/events/` 或 `register_core_event`。 |
-| ❌ 未实现 | 事件 payload 的 **Pydantic 模型** 与按事件名校验未实现，当前仍为 `data: Any` 与魔法字符串。 |
-| ❌ 未实现 | 核心事件（如 `perception.raw_data.generated`、`normalization.text.ready`）的契约类型与校验未落地。 |
+| ✅ 已实现 | **EventRegistry**（事件注册表）：`src/core/events/registry.py`，支持核心事件和插件事件注册。 |
+| ✅ 已实现 | **Pydantic 模型**：`src/core/events/models.py`，定义 `RawDataEvent`、`NormalizedTextEvent`、`DecisionResponseEvent`、`IntentGeneratedEvent`、`ExpressionParametersEvent` 等。 |
+| ✅ 已实现 | **事件名称常量**：`src/core/events/names.py`，`CoreEvents` 类替代魔法字符串。 |
+| ✅ 已实现 | **EventBus 集成**：`event_bus.py` 新增 `_validate_event_data()` 和 `emit_typed()` 方法，支持 Pydantic 校验。 |
 
-**待做**：实现 EventRegistry、为核心事件定义 Pydantic 契约，并在 emit/on 处接入校验（可先 debug 模式）。
+**已完成**：
+- `src/core/events/registry.py` - EventRegistry 事件注册表
+- `src/core/events/models.py` - Pydantic 事件模型
+- `src/core/events/names.py` - CoreEvents 事件名称常量
+- `src/core/event_bus.py` - 集成验证逻辑和 `emit_typed()` 方法
 
 ---
 
@@ -142,7 +147,7 @@
 |----------------|------------|------------|
 | Pipeline 重设计 | ✅ 核心+示例已完成 | -          |
 | Layer 2→3 桥接 | ✅ 已完成   | -          |
-| 事件数据契约   | ⏳ 进行中（另一 AI） | 中         |
+| 事件数据契约   | ✅ 已完成   | -          |
 | 服务注册瘦身   | ⚠️ 部分优化（运行时调用减少） | 低         |
 | HTTP 服务器    | ✅ 已完成（含 Provider 迁移） | -          |
 | DataCache      | 有意未实现 | 低/可选    |
@@ -155,9 +160,9 @@
 1. ~~**Layer 2→3 桥接**~~：✅ 已完成（CanonicalLayer 实现，main.py 启动 InputLayer 和 CanonicalLayer）。
 2. ~~**Pipeline（TextPipeline + process_text）**~~：✅ 核心已完成（TextPipeline 协议、PipelineManager.process_text()、CanonicalLayer 接入）。
 3. ~~**main 启动输入层**~~：✅ 已完成（InputLayer、CanonicalLayer 在 main.py 中启动）。
-4. **事件契约**：⏳ 另一 AI 正在进行 EventRegistry 与 Pydantic 事件 payload 的实现。
-5. **服务注册**：逐步用 EventBus/依赖注入替代剩余 `get_service` 调用。
-6. **Pipeline 迁移**：将现有 MessagePipeline（throttle、filter 等）迁移到 TextPipeline 接口。
+4. ~~**事件契约**~~：✅ 已完成（EventRegistry、Pydantic 事件模型、EventBus 集成）。
+5. **服务注册**：（低优先级）逐步用 EventBus/依赖注入替代剩余 `get_service` 调用。
+6. **Pipeline 迁移**：（可选）将现有 MessagePipeline（throttle、filter 等）迁移到 TextPipeline 接口。
 
 以上顺序可根据排期与风险调整。
 

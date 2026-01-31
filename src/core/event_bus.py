@@ -15,6 +15,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from src.utils.logger import get_logger
+from pydantic import BaseModel, ValidationError
+from src.core.events.registry import EventRegistry
 
 
 @dataclass
@@ -68,40 +70,46 @@ class EventBus:
     - 生命周期管理(cleanup方法)
     """
 
-    def __init__(self, enable_stats: bool = True):
+    def __init__(self, enable_stats: bool = True, enable_validation: bool = False):
         """
         初始化事件总线
 
         Args:
             enable_stats: 是否启用统计功能
+            enable_validation: 是否启用数据验证（建议仅 debug 模式开启）
         """
         self._handlers: Dict[str, List[HandlerWrapper]] = defaultdict(list)
         self._stats: Dict[str, EventStats] = defaultdict(lambda: EventStats())
         self.enable_stats = enable_stats
+        self.enable_validation = enable_validation
         self._is_cleanup = False
         self.logger = get_logger("EventBus")
-        self.logger.debug("EventBus 初始化完成")
+        self.logger.debug(f"EventBus 初始化完成 (stats={enable_stats}, validation={enable_validation})")
 
     async def emit(self, event_name: str, data: Any, source: str = "unknown", error_isolate: bool = True) -> None:
         """
-        发布事件
+        发布事件（新增验证逻辑）
 
         Args:
             event_name: 事件名称
-            data: 事件数据
-            source: 事件源(通常是发布者的类名)
-            error_isolate: 是否隔离错误(True时单个handler异常不影响其他)
+            data: 事件数据（推荐使用 Pydantic Model 或 dict）
+            source: 事件源（通常是发布者的类名）
+            error_isolate: 是否隔离错误（True 时单个 handler 异常不影响其他）
         """
         if self._is_cleanup:
             self.logger.warning(f"EventBus正在清理中，忽略事件: {event_name}")
             return
+
+        # === 新增：数据验证 ===
+        if self.enable_validation:
+            self._validate_event_data(event_name, data)
 
         handlers = self._handlers.get(event_name, [])
         if not handlers:
             self.logger.debug(f"事件 {event_name} 没有监听器")
             return
 
-        # 按优先级排序(数字越小越优先)
+        # 按优先级排序（数字越小越优先）
         handlers = sorted(handlers, key=lambda h: h.priority)
 
         self.logger.info(f"发布事件 {event_name} (来源: {source}, 监听器: {len(handlers)})")
@@ -269,3 +277,52 @@ class EventBus:
             self._stats[event_name] = EventStats()
         else:
             self._stats.clear()
+
+    def _validate_event_data(self, event_name: str, data: Any) -> None:
+        """
+        验证事件数据
+
+        策略：
+        - 已注册事件：验证数据格式
+        - 未注册事件：仅警告，不阻断
+        """
+        model = EventRegistry.get(event_name)
+
+        if model is None:
+            # 未注册事件
+            if not event_name.startswith("plugin.") and not event_name.startswith("internal."):
+                self.logger.debug(f"未注册的非插件事件: {event_name}")
+            return
+
+        # 已注册事件：验证数据
+        try:
+            if isinstance(data, BaseModel):
+                # 已经是 Pydantic Model，跳过验证
+                return
+            elif isinstance(data, dict):
+                # 字典数据，尝试验证
+                model.model_validate(data)
+            else:
+                self.logger.warning(f"事件 {event_name} 数据类型不支持验证: {type(data).__name__}")
+        except ValidationError as e:
+            self.logger.warning(f"事件数据验证失败 ({event_name}): {e.error_count()} 个错误")
+            for error in e.errors():
+                self.logger.debug(f"  - {error['loc']}: {error['msg']}")
+
+    async def emit_typed(
+        self,
+        event_name: str,
+        data: BaseModel,
+        source: str = "unknown",
+        error_isolate: bool = True,
+    ) -> None:
+        """
+        发布类型安全的事件（推荐使用）
+
+        Args:
+            event_name: 事件名称
+            data: Pydantic Model 实例（自动序列化为 dict）
+            source: 事件源
+            error_isolate: 是否隔离错误
+        """
+        await self.emit(event_name, data.model_dump(), source, error_isolate)
