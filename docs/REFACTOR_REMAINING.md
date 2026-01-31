@@ -37,7 +37,7 @@
 
 ---
 
-## 三、HTTP 服务器（独立 FastAPI）
+## 三、HTTP 服务器（独立 FastAPI）✅ 已完成
 
 **设计文档**：[http_server.md](../refactor/design/http_server.md)
 
@@ -45,15 +45,15 @@
 |------|------|
 | ✅ 已实现 | 独立的 **HttpServer**（FastAPI + `register_route`）已实现：`src/core/http_server.py`。 |
 | ✅ 已实现 | **AmaidesuCore** 已添加 `http_server` 属性和 `register_http_callback()` 方法，管理 HttpServer 生命周期（connect/disconnect）。 |
-| ⏳ 待迁移 | **MaiCoreDecisionProvider** 仍使用 aiohttp 自建 HTTP，尚未迁移到使用 HttpServer.register_route() 模式。 |
+| ✅ 已完成 | **MaiCoreDecisionProvider** 已迁移到使用 HttpServer.register_route() 模式，移除 aiohttp 内部 HTTP 服务器。 |
 
 **已完成**：
 - `src/core/http_server.py` - 基于 FastAPI 的独立 HTTP 服务器，支持 `register_route()`
 - `src/core/amaidesu_core.py` - AmaidesuCore 管理 HttpServer 生命周期，提供 `register_http_callback()` 便捷方法
 - connect() 中启动 HttpServer 并发布 `core.ready` 事件
 - disconnect() 中停止 HttpServer
-
-**待做**：将 MaiCoreDecisionProvider 迁移到使用 HttpServer.register_route() 而非内部 aiohttp。
+- `src/providers/maicore_decision_provider.py` - 订阅 `core.ready` 事件，通过 `register_http_callback()` 注册 HTTP 路由
+- MaiCoreDecisionProvider 移除 aiohttp 依赖，改用 FastAPI 兼容的处理器
 
 ---
 
@@ -133,7 +133,7 @@
 | Layer 2→3 桥接 | ✅ 已完成   | -          |
 | 事件数据契约   | ⏳ 进行中（另一 AI） | 中         |
 | 服务注册瘦身   | 未达标     | 中         |
-| HTTP 服务器    | ✅ 核心已完成，待迁移 Provider | 中/低      |
+| HTTP 服务器    | ✅ 已完成（含 Provider 迁移） | -          |
 | DataCache      | 有意未实现 | 低/可选    |
 | 实施计划文档   | 缺失       | 低         |
 
@@ -182,5 +182,4 @@
 - **组合 D（Pipeline 迁移）**：将现有 MessagePipeline（throttle、similar_message_filter 等）迁移到 TextPipeline 接口，或实现新的 TextPipeline 示例。  
   → 不涉及事件契约，可与契约工作并行。
 
-- **组合 E（Provider 迁移）**：将 MaiCoreDecisionProvider 迁移到使用 HttpServer.register_route()。  
-  → 不涉及事件契约，可与契约工作并行。
+- ~~**组合 E（Provider 迁移）**~~：✅ **已完成**（MaiCoreDecisionProvider 已迁移到使用 HttpServer.register_route()，移除 aiohttp 内部 HTTP 服务器）。
