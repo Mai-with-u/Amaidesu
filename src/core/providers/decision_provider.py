@@ -37,31 +37,31 @@ class DecisionProvider(ABC):
         is_setup: 是否已完成设置
     """
 
-    def __init__(self, config: dict, event_bus: Optional = None):
+    def __init__(self, config: dict):
         """
         初始化Provider
 
         Args:
             config: Provider配置(来自decision.providers.xxx配置)
-            event_bus: EventBus实例(可选,用于事件通信)
         """
         self.config = config
-        self.event_bus = event_bus
+        self.event_bus = None
         self.is_setup = False
 
-    async def setup(self, event_bus, config: dict):
+    async def setup(self, event_bus, config: Optional[dict] = None):
         """
         设置Provider
 
         Args:
             event_bus: EventBus实例
-            config: Provider配置
+            config: Provider配置（可选，如果传入则覆盖构造时的配置）
 
         Raises:
             ConnectionError: 如果无法连接到决策服务
         """
         self.event_bus = event_bus
-        self.config = config
+        if config:
+            self.config = config
         await self._setup_internal()
         self.is_setup = True
 

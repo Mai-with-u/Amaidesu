@@ -68,7 +68,7 @@ class TTSPlugin:
 
         # 创建Provider
         try:
-            provider = TTSOutputProvider(self.config, event_bus)
+            provider = TTSOutputProvider(self.config)
             await provider.setup(event_bus)
             self._providers.append(provider)
             self.logger.info("TTSOutputProvider 已创建")

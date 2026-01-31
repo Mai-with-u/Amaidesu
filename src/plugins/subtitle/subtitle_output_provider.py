@@ -205,8 +205,8 @@ class SubtitleOutputProvider(OutputProvider):
     使用CustomTkinter显示字幕窗口，支持描边和半透明背景。
     """
 
-    def __init__(self, config: dict, event_bus=None):
-        super().__init__(config, event_bus)
+    def __init__(self, config: dict):
+        super().__init__(config)
         self.logger = get_logger("SubtitleOutputProvider")
 
         if not CTK_AVAILABLE:

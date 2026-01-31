@@ -33,8 +33,8 @@ class TTSOutputProvider(OutputProvider):
     负责TTS语音合成和播放。
     """
 
-    def __init__(self, config: dict, event_bus: Optional = None):
-        super().__init__(config, event_bus)
+    def __init__(self, config: dict):
+        super().__init__(config)
         self.logger = get_logger(self.__class__.__name__)
 
         # 依赖检查

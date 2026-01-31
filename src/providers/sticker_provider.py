@@ -9,9 +9,6 @@ Sticker Provider - Layer 6 Rendering层实现
 - 冷却时间控制
 """
 
-import asyncio
-import base64
-import io
 from typing import Dict, Any
 
 try:
@@ -35,17 +32,14 @@ class StickerProvider(OutputProvider):
     - 冷却时间控制
     """
 
-    def __init__(self, config: Dict[str, Any], event_bus=None, core=None):
+    def __init__(self, config: Dict[str, Any]):
         """
         初始化Sticker Provider
 
         Args:
             config: Provider配置（来自[rendering.outputs.sticker]）
-            event_bus: EventBus实例（可选）
-            core: AmaidesuCore实例（可选，用于访问服务）
         """
-        super().__init__(config, event_bus)
-        self.core = core
+        super().__init__(config)
         self.logger = get_logger("StickerProvider")
 
         # 配置参数

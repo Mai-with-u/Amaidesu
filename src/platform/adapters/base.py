@@ -8,7 +8,7 @@ Platform Adapter 基类
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 
 class PlatformAdapter(ABC):

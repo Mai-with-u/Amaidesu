@@ -22,8 +22,8 @@ class StickerOutputProvider(OutputProvider):
     处理表情图片，调整大小并发送到VTS显示。
     """
 
-    def __init__(self, config: dict, event_bus=None):
-        super().__init__(config, event_bus)
+    def __init__(self, config: dict):
+        super().__init__(config)
         self.logger = get_logger("StickerOutputProvider")
 
         # 表情贴纸配置

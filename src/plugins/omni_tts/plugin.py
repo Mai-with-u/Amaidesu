@@ -252,6 +252,7 @@ class OmniTTSPlugin:
         # 创建Provider
         try:
             provider = OmniTTSOutputProvider(self.config)
+            await provider.setup(event_bus)
             self._providers.append(provider)
             self.logger.info("OmniTTSOutputProvider 已创建")
         except Exception as e:

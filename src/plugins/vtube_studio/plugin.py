@@ -63,7 +63,7 @@ class VTubeStudioPlugin:
 
         # 创建Provider
         try:
-            provider = VTSOutputProvider(self.config, event_bus)
+            provider = VTSOutputProvider(self.config)
             await provider.setup(event_bus)
             self._providers.append(provider)
             self.logger.info("VTSOutputProvider 已创建")

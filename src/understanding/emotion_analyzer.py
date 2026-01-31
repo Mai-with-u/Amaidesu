@@ -9,7 +9,6 @@ Emotion Analyzer - Layer 4: 情感分析（统一入口）
 - 支持 LLM 分析（可选、智能）
 """
 
-import re
 from dataclasses import dataclass
 from typing import Dict, Any, Optional, TYPE_CHECKING
 

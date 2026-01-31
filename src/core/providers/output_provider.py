@@ -35,29 +35,30 @@ class OutputProvider(ABC):
         is_setup: 是否已完成设置
     """
 
-    def __init__(self, config: dict, event_bus: Optional = None):
+    def __init__(self, config: dict):
         """
         初始化Provider
 
         Args:
             config: Provider配置(来自rendering.outputs.xxx配置)
-            event_bus: EventBus实例(可选,用于事件通信)
         """
         self.config = config
-        self.event_bus = event_bus
+        self.event_bus = None
         self.is_setup = False
 
-    async def setup(self, event_bus):
+    async def setup(self, event_bus, dependencies: Optional[Dict[str, Any]] = None):
         """
         设置Provider
 
         Args:
             event_bus: EventBus实例
+            dependencies: 可选的依赖注入（替代 core）
 
         Raises:
             ConnectionError: 如果无法连接到目标设备
         """
         self.event_bus = event_bus
+        self._dependencies = dependencies or {}
         await self._setup_internal()
         self.is_setup = True
 

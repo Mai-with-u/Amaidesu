@@ -117,6 +117,7 @@ class GPTSoVITSPlugin:
         # 创建 GPTSoVITSOutputProvider
         try:
             provider = GPTSoVITSOutputProvider(self.config)
+            await provider.setup(event_bus)
             self._providers.append(provider)
             self.logger.info("GPTSoVITSOutputProvider 已创建")
         except Exception as e:

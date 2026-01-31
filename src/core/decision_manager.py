@@ -174,7 +174,7 @@ class DecisionManager:
 
             # 初始化Provider
             try:
-                await self._current_provider.setup(self.event_bus, config)
+                await self._current_provider.setup(self.event_bus)
                 self.logger.info(f"DecisionProvider '{provider_name}' 初始化成功")
             except Exception as e:
                 self.logger.error(f"DecisionProvider '{provider_name}' 初始化失败: {e}", exc_info=True)

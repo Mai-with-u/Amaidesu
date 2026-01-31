@@ -59,8 +59,8 @@ class StickerPlugin:
             sticker_config = config  # 向后兼容
 
         # 创建OutputProvider
-        output_provider = StickerOutputProvider(sticker_config, event_bus)
-        await output_provider.setup(event_bus, sticker_config)
+        output_provider = StickerOutputProvider(sticker_config)
+        await output_provider.setup(event_bus)
         self._providers.append(output_provider)
 
         self.logger.info(f"StickerPlugin 设置完成，已创建 {len(self._providers)} 个Provider。")

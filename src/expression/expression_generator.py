@@ -7,7 +7,7 @@ Expression生成器 - Layer 5 Expression生成层核心
 - 生成完整的渲染参数
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from src.utils.logger import get_logger
 
 from .render_parameters import ExpressionParameters

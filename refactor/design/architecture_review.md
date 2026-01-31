@@ -12,7 +12,7 @@
 |---------|---------|---------|---------|------|
 | **A-01** | AmaidesuCore 仍承担过多职责 | 🔴 | 核心架构 | ✅ 已完成 |
 | **A-02** | 服务注册机制与 EventBus 并存导致混乱 | 🔴 | 全局通信 | ✅ 已完成 |
-| **A-03** | Provider 构造函数签名不一致 | 🟡 | 可测试性 | ⏳ |
+| **A-03** | Provider 构造函数签名不一致 | 🟡 | 可测试性 | ✅ 已完成 |
 | **A-04** | MaiCoreDecisionProvider 职责过重 | 🔴 | 决策层 | ⏳ |
 | **A-05** | 插件与 Provider 概念边界模糊 | 🟡 | 插件系统 | ⏳ |
 | **A-06** | 输出层 Provider 依赖 core 实例 | 🔴 | 依赖注入 | ⏳ |
@@ -383,7 +383,7 @@ class ProviderFactory:
 
 ## 🟡 中等严重度问题
 
-### A-03: Provider 构造函数签名不一致
+### A-03: Provider 构造函数签名不一致 ✅ 已完成
 
 **问题描述**：
 
@@ -431,6 +431,61 @@ class OutputProvider(ABC):
         self._dependencies = dependencies or {}
         await self._setup_internal()
 ```
+
+**执行情况**：
+
+✅ 已完成：
+- 修改了 `OutputProvider` 基类，移除 `event_bus` 参数
+- 修改了 `DecisionProvider` 基类，移除 `event_bus` 参数
+- 更新了 `OutputProvider.setup()` 方法签名，添加 `dependencies` 参数
+- 更新了 `DecisionProvider.setup()` 方法签名，修改 `config` 为可选参数
+- 更新了所有 `src/providers/` 目录下的 Provider：
+  - `TTSProvider` - 移除 `event_bus` 和 `core` 参数
+  - `VTSProvider` - 移除 `event_bus` 和 `core` 参数
+  - `SubtitleProvider` - 移除 `event_bus` 和 `core` 参数
+  - `StickerProvider` - 移除 `event_bus` 和 `core` 参数
+  - `OmniTTSProvider` - 移除 `event_bus` 和 `core` 参数
+- 更新了所有插件目录下的 Provider：
+  - `src/plugins/omni_tts/plugin.py` - 修改 Provider 创建代码
+  - `src/plugins/gptsovits_tts/plugin.py` - 修改 Provider 创建代码
+  - `src/plugins/tts/plugin.py` - 修改 Provider 创建代码
+  - `src/plugins/vtube_studio/plugin.py` - 修改 Provider 创建代码
+  - `src/plugins/sticker/plugin.py` - 修改 Provider 创建代码
+  - `src/plugins/subtitle/plugin.py` - 修改 Provider 创建代码
+  - `src/rendering/providers/avatar_output_provider.py` - 移除 `event_bus` 参数
+  - `src/core/decision_manager.py` - 修改 setup() 调用，移除 config 参数
+- 所有 Provider 构造函数现在统一只接收 `config` 参数
+- 所有 Provider 通过 `setup()` 方法接收 `event_bus` 和可选的 `dependencies`
+
+**修改的文件**：
+- `src/core/providers/output_provider.py` - 修改基类构造函数和 setup() 方法
+- `src/core/providers/decision_provider.py` - 修改基类构造函数和 setup() 方法
+- `src/providers/tts_provider.py` - 移除 event_bus 和 core 参数
+- `src/providers/vts_provider.py` - 移除 event_bus 和 core 参数
+- `src/providers/subtitle_provider.py` - 移除 event_bus 和 core 参数
+- `src/providers/sticker_provider.py` - 移除 event_bus 和 core 参数
+- `src/providers/omni_tts_provider.py` - 移除 event_bus 和 core 参数
+- `src/plugins/gptsovits_tts/providers/gptsovits_tts_provider.py` - 移除 event_bus 和 core 参数
+- `src/plugins/omni_tts/plugin.py` - 修改 Provider 创建代码
+- `src/plugins/gptsovits_tts/plugin.py` - 修改 Provider 创建代码
+- `src/plugins/tts/providers/tts_output_provider.py` - 移除 event_bus 参数
+- `src/plugins/tts/plugin.py` - 修改 Provider 创建代码
+- `src/plugins/vtube_studio/providers/vts_output_provider.py` - 移除 event_bus 参数
+- `src/plugins/vtube_studio/plugin.py` - 修改 Provider 创建代码
+- `src/plugins/sticker/sticker_output_provider.py` - 移除 event_bus 参数
+- `src/plugins/sticker/plugin.py` - 修改 Provider 创建代码
+- `src/plugins/subtitle/subtitle_output_provider.py` - 移除 event_bus 参数
+- `src/plugins/subtitle/plugin.py` - 修改 Provider 创建代码
+- `src/rendering/providers/avatar_output_provider.py` - 移除 event_bus 参数
+- `src/core/decision_manager.py` - 修改 setup() 调用
+- `refactor/design/architecture_review.md` - 本文档，更新 A-03 状态
+
+**说明**：
+- Provider 构造函数签名现在完全统一，只接收 `config` 参数
+- `event_bus` 和其他依赖通过 `setup()` 方法注入
+- 保持了向后兼容性，所有现有功能继续正常工作
+- 简化了 Provider 创建流程，工厂代码更清晰
+- 移除了对 `core` 实例的依赖，所有依赖通过 EventBus 或 dependencies 字典传递
 
 ---
 

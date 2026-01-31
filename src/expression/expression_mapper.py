@@ -8,7 +8,7 @@ Expression Mapper - Layer 5: 表情映射（统一入口）
 - 支持自定义情感映射
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Optional
 
 from src.understanding.intent import EmotionType
 from src.utils.logger import get_logger

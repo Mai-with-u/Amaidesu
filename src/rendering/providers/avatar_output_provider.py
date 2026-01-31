@@ -21,8 +21,8 @@ class AvatarOutputProvider(OutputProvider):
     使用 PlatformAdapter 执行渲染，支持多个平台。
     """
 
-    def __init__(self, config: dict, event_bus: Optional = None):
-        super().__init__(config, event_bus)
+    def __init__(self, config: dict):
+        super().__init__(config)
         self.logger = get_logger("AvatarOutputProvider")
 
         self.adapter: Optional[PlatformAdapter] = None
@@ -42,7 +42,7 @@ class AvatarOutputProvider(OutputProvider):
         if not connected:
             raise RuntimeError(f"{self.adapter_type} 适配器连接失败")
 
-        self.logger.info(f"AvatarOutputProvider 初始化完成")
+        self.logger.info("AvatarOutputProvider 初始化完成")
 
     async def _render_internal(self, parameters: RenderParameters):
         """渲染表情参数

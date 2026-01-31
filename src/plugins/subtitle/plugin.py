@@ -66,8 +66,8 @@ class SubtitlePlugin:
             subtitle_config = config  # 向后兼容
 
         # 创建OutputProvider
-        output_provider = SubtitleOutputProvider(subtitle_config, event_bus)
-        await output_provider.setup(event_bus, subtitle_config)
+        output_provider = SubtitleOutputProvider(subtitle_config)
+        await output_provider.setup(event_bus)
         self._providers.append(output_provider)
 
         # 启动GUI线程

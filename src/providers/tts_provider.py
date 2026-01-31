@@ -38,17 +38,14 @@ class TTSProvider(OutputProvider):
     - 错误处理和降级方案
     """
 
-    def __init__(self, config: Dict[str, Any], event_bus=None, core=None):
+    def __init__(self, config: Dict[str, Any]):
         """
         初始化TTS Provider
 
         Args:
             config: Provider配置（来自[rendering.outputs.tts]）
-            event_bus: EventBus实例（可选）
-            core: AmaidesuCore实例（可选，用于访问服务）
         """
-        super().__init__(config, event_bus)
-        self.core = core
+        super().__init__(config)
         self.logger = get_logger("TTSProvider")
 
         # 引擎选择
