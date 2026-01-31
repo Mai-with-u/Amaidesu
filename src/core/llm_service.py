@@ -7,30 +7,7 @@ LLM 服务 - 核心基础设施
 import asyncio
 from dataclasses import dataclass
 from typing import Dict, Any, Optional, List, AsyncIterator
-
 from src.utils.logger import get_logger
-
-
-@dataclass
-class LLMResponse:
-    """LLM 响应结果"""
-
-    success: bool
-    content: Optional[str] = None
-    tool_calls: Optional[List[Dict[str, Any]]] = None
-    usage: Optional[Dict[str, int]] = None
-    model: Optional[str] = None
-    error: Optional[str] = None
-    reasoning_content: Optional[str] = None  # 推理链内容（如 DeepSeek R1）
-
-
-@dataclass
-class RetryConfig:
-    """重试配置"""
-
-    max_retries: int = 3
-    base_delay: float = 1.0
-    max_delay: float = 30.0
 
 
 class LLMService:

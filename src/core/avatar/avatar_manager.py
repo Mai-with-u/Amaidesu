@@ -4,15 +4,17 @@
 
 import asyncio
 import json
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, TYPE_CHECKING
 
 from src.utils.logger import get_logger
-from src.openai_client.llm_request import LLMClient
-from openai.types.chat import ChatCompletionToolParam
 from .adapter_base import AvatarAdapter, ParameterMetadata, ActionMetadata
 from .semantic_actions import SemanticActionMapper
 from .tool_generator import ToolGenerator
 from .llm_executor import LLMExecutor
+
+if TYPE_CHECKING:
+    from src.core.llm_service import LLMService
+    from openai.types.chat import ChatCompletionToolParam
 
 
 class AvatarControlManager:
@@ -60,10 +62,8 @@ class AvatarControlManager:
         # 加载平台特定的覆盖配置
         self._load_platform_overrides()
 
-        # LLM 客户端初始化
-        self._llm_client: Optional[LLMClient] = None
-        self._llm_config = self.config.get("llm", {})
-        self._llm_enabled = self._llm_config.get("enabled", True)
+        # LLM 服务（从 core 注入）
+        self._llm_service: Optional["LLMService"] = None
 
         # 自动表情配置
         auto_config = self.config.get("auto_expression", {})
@@ -240,19 +240,23 @@ class AvatarControlManager:
             all_actions.update(adapter.get_registered_actions())
         return all_actions
 
-    async def generate_llm_tools(self) -> List[ChatCompletionToolParam]:
+    async def generate_llm_tools(self) -> Any:
         """生成 LLM 工具定义
 
         根据所有适配器注册的参数和动作，生成符合 OpenAI 工具格式的定义。
 
         Returns:
-            符合 OpenAI 官方类型的工具定义列表
+            符合 OpenAI 工具格式的定义列表，失败时返回 None
         """
-        parameters = self.get_all_registered_parameters()
-        actions = self.get_all_registered_actions()
-        semantic_actions = list(self.semantic_mapper.list_semantic_actions().keys())
+        try:
+            parameters = self.get_all_registered_parameters()
+            actions = self.get_all_registered_actions()
+            semantic_actions = list(self.semantic_mapper.list_semantic_actions().keys())
 
-        return self.tool_generator.generate_tools(parameters, actions, semantic_actions)
+            return self.tool_generator.generate_tools(parameters, actions, semantic_actions)
+        except Exception as e:
+            self.logger.error(f"生成 LLM 工具定义失败: {e}", exc_info=True)
+            return None
 
     async def execute_tool_call(
         self, function_name: str, arguments: Dict[str, Any], adapter_name: Optional[str] = None
@@ -315,44 +319,19 @@ class AvatarControlManager:
             return self.get_adapter(adapter_name)
         return self.get_active_adapter()
 
-    # ==================== LLM 集成方法 ====================
+    # ==================== LLM 集成方法（使用 LLMService）====================
 
-    def _get_llm_client(self) -> Optional[LLMClient]:
-        """获取 LLM 客户端
+    def _get_llm_service(self) -> Optional["LLMService"]:
+        """获取 LLM 服务
         Returns:
-            LLM 客户端实例，如果未启用或初始化失败返回 None
+            LLM 服务实例，如果未初始化返回 None
         """
-        if not self._llm_enabled:
+        # 从 core 获取 LLMService
+        if not hasattr(self.core, "llm_service"):
+            self.logger.error("核心未提供 llm_service 属性，Avatar 模块无法使用 LLM 功能")
             return None
 
-        if self._llm_client is None:
-            try:
-                # 使用快速 LLM 配置
-                llm_type = self._llm_config.get("type", "llm_fast")
-
-                # 从 core 获取全局 LLM 客户端（不创建独立客户端）
-                self._llm_client = self.core.get_llm_client(llm_type)
-                self.logger.info(f"使用核心的 LLM 客户端 ({llm_type})")
-                return self._llm_client
-            except AttributeError:
-                self.logger.error("核心未提供 get_llm_client() 方法，Avatar 模块无法使用 LLM 功能")
-                self.logger.error("Avatar 模块需要核心提供 LLM 客户端，已禁用 LLM 功能")
-                self._llm_enabled = False
-                return None
-
-            except ValueError as e:
-                # LLM 配置错误（如 API Key 未配置）
-                self.logger.error(f"LLM 配置错误: {e}")
-                self.logger.error("Avatar 模块已禁用 LLM 功能")
-                self._llm_enabled = False
-                return None
-
-            except Exception as e:
-                self.logger.error(f"获取 LLM 客户端失败: {e}", exc_info=True)
-                self._llm_enabled = False
-                return None
-
-        return self._llm_client
+        return self.core.llm_service
 
     async def set_expression_from_text(
         self, text: str, adapter_name: Optional[str] = None, fallback_expression: str = "neutral"
@@ -367,9 +346,9 @@ class AvatarControlManager:
         Returns:
             执行结果 {"success": bool, "expression": str, "message": str}
         """
-        if not self._llm_enabled:
-            # LLM 未启用，使用中性表情
-            self.logger.warning("LLM 功能未启用，使用中性表情")
+        llm_service = self._get_llm_service()
+        if not llm_service:
+            self.logger.warning("LLM 服务不可用，使用备用表情")
             return await self._set_fallback_expression(fallback_expression, adapter_name)
 
         # 检查是否有活跃适配器
@@ -377,12 +356,6 @@ class AvatarControlManager:
         if not adapter:
             self.logger.warning("没有可用的适配器")
             return {"success": False, "error": "no_adapter", "message": "没有可用的适配器"}
-
-        # 获取 LLM 客户端
-        llm_client = self._get_llm_client()
-        if not llm_client:
-            self.logger.warning("LLM 客户端不可用，使用备用表情")
-            return await self._set_fallback_expression(fallback_expression, adapter_name)
 
         # 生成工具定义
         tools = await self.generate_llm_tools()
@@ -401,28 +374,30 @@ class AvatarControlManager:
 - 如果文本平淡或中性，请使用 "neutral" 表情
 - 如果文本没有明确情感倾向，使用较低的强度（0.3-0.5）"""
 
-            # 调用 LLM
-            result = await llm_client.chat_completion(
+            # 使用 LLMService 调用
+            # 将 ChatCompletionToolParam 转换为 Dict[str, Any]
+            tools_dict = [dict(t) for t in tools] if tools else []
+            result = await llm_service.call_tools(
                 prompt=prompt,
-                tools=tools,
-                temperature=0.3,  # 较低的温度以获得更稳定的结果
+                tools=tools_dict,
             )
 
-            if not result.get("success"):
-                self.logger.warning(f"LLM 调用失败: {result.get('error')}")
+            if not result.success:
+                self.logger.warning(f"LLM 调用失败: {result.error}")
                 return await self._set_fallback_expression(fallback_expression, adapter_name)
 
             # 检查是否有工具调用
-            tool_calls = result.get("tool_calls")
+            tool_calls = result.tool_calls
             if not tool_calls or len(tool_calls) == 0:
                 # 没有 tool_call，尝试从文本中解析
-                content = result.get("content", "")
+                content = result.content
                 if not content:
                     return await self._set_fallback_expression(fallback_expression, adapter_name)
 
                 self.logger.info(f"LLM 返回了内容而非工具调用: {content}")
                 # 简单的回退：使用中性表情
                 return await self._set_fallback_expression("neutral", adapter_name)
+
             # 执行工具调用
             tool_call = tool_calls[0]
             function_name = tool_call["function"]["name"]
@@ -452,16 +427,6 @@ class AvatarControlManager:
         """
         success = await self.set_semantic_action(expression, 1.0, adapter_name)
         return {"success": success, "expression": expression, "message": f"使用备用表情: {expression}"}
-
-    def enable_llm(self) -> None:
-        """启用 LLM 功能"""
-        self._llm_enabled = True
-        self.logger.info("LLM 功能已启用")
-
-    def disable_llm(self) -> None:
-        """禁用 LLM 功能"""
-        self._llm_enabled = False
-        self.logger.info("LLM 功能已禁用")
 
     # ==================== 自动表情功能 ====================
 
@@ -506,7 +471,6 @@ class AvatarControlManager:
         # 通过所有检查，创建后台任务异步执行表情设置
         self.logger.info(f"自动触发虚拟形象控制: {text_stripped}")
         asyncio.create_task(self._set_expression_async(text_stripped))
-
         return True
 
     async def _set_expression_async(self, text: str):
