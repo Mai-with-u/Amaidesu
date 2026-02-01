@@ -192,8 +192,9 @@ class LocalLLMDecisionProvider(DecisionProvider):
         return {
             "name": "LocalLLMDecisionProvider",
             "version": "1.0.0",
-            "api_base": self.api_base,
-            "model": self.model,
+            "backend": self.backend,
+            "prompt_template": self.prompt_template[:50] + "..." if len(self.prompt_template) > 50 else self.prompt_template,
+            "fallback_mode": self.fallback_mode,
             "total_requests": self._total_requests,
             "successful_requests": self._successful_requests,
             "failed_requests": self._failed_requests,
