@@ -1,10 +1,19 @@
 """
-FlowCoordinator - 数据流协调器（Layer 5 → Layer 6 → Layer 7）
+FlowCoordinator - 数据流协调器（5层架构：Layer 3 → Layer 4-5）
 
 职责:
-- 协调 Layer 5 到 Layer 6 到 Layer 7 的数据流
+- 协调 Layer 3 (Decision) 到 Layer 4-5 (Parameters+Rendering) 的数据流
 - 订阅 Intent 事件并触发 Expression 生成和渲染
 - 初始化输出层（OutputProviderManager 和 ExpressionGenerator）
+
+数据流（5层架构）:
+    Intent (Layer 3 Decision)
+        ↓ decision.intent_generated
+    FlowCoordinator
+        ↓
+    ExpressionGenerator (Layer 4 Parameters)
+        ↓
+    OutputProviderManager (Layer 5 Rendering)
 """
 
 from typing import Dict, Any, Optional
@@ -17,15 +26,15 @@ from src.layers.parameters.expression_generator import ExpressionGenerator
 
 class FlowCoordinator:
     """
-    数据流协调器
+    数据流协调器（5层架构）
 
     核心职责:
-    - 协调 Layer 5 (Intent) → Layer 6 (Expression) → Layer 7 (Output) 的数据流
+    - 协调 Layer 3 (Decision) → Layer 4-5 (Parameters+Rendering) 的数据流
     - 初始化和管理输出层组件
     - 订阅并处理 Intent 事件
 
-    数据流程:
-    Intent (Layer 5) → ExpressionGenerator (Layer 6) → OutputProviderManager (Layer 7)
+    数据流程（5层架构）:
+    Intent (Layer 3) → ExpressionGenerator (Layer 4) → OutputProviderManager (Layer 5)
     """
 
     def __init__(
@@ -76,10 +85,10 @@ class FlowCoordinator:
         if self.output_provider_manager:
             await self.output_provider_manager.load_from_config(config, core=None)
 
-        # 订阅 Layer 5 的 Intent 事件
-        self.event_bus.on("understanding.intent_generated", self._on_intent_ready, priority=50)
+        # 订阅 Layer 3 (Decision) 的 Intent 事件（5层架构）
+        self.event_bus.on("decision.intent_generated", self._on_intent_ready, priority=50)
         self._event_handler_registered = True
-        self.logger.info("已订阅 'understanding.intent_generated' 事件")
+        self.logger.info("已订阅 'decision.intent_generated' 事件")
 
         self._is_setup = True
         self.logger.info("数据流协调器设置完成")
@@ -119,7 +128,7 @@ class FlowCoordinator:
         # 取消事件订阅
         if self._event_handler_registered:
             try:
-                self.event_bus.off("understanding.intent_generated", self._on_intent_ready)
+                self.event_bus.off("decision.intent_generated", self._on_intent_ready)
                 self._event_handler_registered = False
                 self.logger.info("事件订阅已取消")
             except Exception as e:
@@ -130,10 +139,10 @@ class FlowCoordinator:
 
     async def _on_intent_ready(self, event_name: str, event_data: Dict[str, Any], source: str):
         """
-        处理Intent事件（Layer 5 → Layer 6 → Layer 7）
+        处理Intent事件（Layer 3 Decision → Layer 4-5 Parameters+Rendering）
 
         Args:
-            event_name: 事件名称
+            event_name: 事件名称（decision.intent_generated）
             event_data: 事件数据（包含intent对象）
             source: 事件源
         """

@@ -220,7 +220,8 @@ class DecisionManager:
         """
         处理 normalization.message_ready 事件
 
-        当 InputLayer 生成 NormalizedMessage 时，自动调用当前活动的 DecisionProvider 进行决策。
+        当 InputLayer 生成 NormalizedMessage 时，自动调用当前活动的 DecisionProvider 进行决策，
+        并发布 decision.intent_generated 事件（5层架构）。
 
         Args:
             event_name: 事件名称
@@ -235,7 +236,19 @@ class DecisionManager:
         try:
             self.logger.debug(f"收到 NormalizedMessage: {normalized.text[:50]}...")
             # 调用当前活动的 Provider 进行决策
-            await self.decide(normalized)
+            intent = await self.decide(normalized)
+
+            # 发布 decision.intent_generated 事件（5层架构）
+            await self.event_bus.emit(
+                "decision.intent_generated",
+                {
+                    "intent": intent,
+                    "original_message": normalized,
+                    "provider": self._provider_name,
+                },
+                source="DecisionManager",
+            )
+            self.logger.debug(f"已发布 decision.intent_generated 事件: {intent.response_text[:50]}...")
         except Exception as e:
             self.logger.error(f"处理 NormalizedMessage 时出错: {e}", exc_info=True)
 

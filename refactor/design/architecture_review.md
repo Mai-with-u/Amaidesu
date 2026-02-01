@@ -1,143 +1,91 @@
-# 架构设计审查报告
 
-> **审查日期**: 2026-02-01（更新：B-05 Decision Layer 数据流集成已修复）
-> **审查范围**: 重构后项目中**尚未解决**的架构问题
-> **严重程度**: 🔴 高 | 🟡 中 | 🟢 低
-
-**说明**：历史上已关闭的问题（A-01～A-10、B-01～B-04）已从正文移除，仅在下文「已解决问题摘要」中一笔带过。正文只保留**当前待办**和**新发现**的问题，便于审阅时聚焦。
+根据 `refactor/design/overview.md` 的成功标准与当前代码对照，结论如下。
 
 ---
 
-## 📋 已解决问题摘要（供参考）
+## 重构完成度判断报告
 
-以下问题在既往审阅中已标记为完成，此处不再展开描述：
-
-- **A-01** AmaidesuCore 职责过重 → 已引入 FlowCoordinator，Core 为纯组合根
-- **A-02** 服务注册与 EventBus 并存 → 已从 AmaidesuCore 移除接口（**已迁移调用方，见 B-03**）
-- **A-03** Provider 构造函数不一致 → 已统一为 `__init__(config)` + `setup(event_bus, dependencies)`
-- **A-04** MaiCoreDecisionProvider 过重 → 已拆分为 WebSocketConnector + RouterAdapter
-- **A-05** Provider/Plugin 边界不清 → 已实施 ProviderRegistry 和目录迁移（**见 B-02**）
-- **A-06** 输出层 Provider 依赖 core → 已移除 core 参数
-- **A-07** Layer 2 / DataCache → Layer 2 已实现，DataCache 保留为扩展点
-- **A-08** 配置分散 → 已引入 ConfigService
-- **A-09** 循环依赖 → 已通过 CoreServices 接口与 TYPE_CHECKING 缓解
-- **A-10** 废弃代码未清理 → 已移除 BasePlugin、avatar 等
-- **B-01** 管道系统未重构成功 → TextPipeline 加载机制已实现，限流和相似文本过滤已接入 Layer 2→3 数据流
-- **B-02** A-05 迁移计划未实施 → ProviderRegistry 已实现，内置 Provider 已迁移到 `src/rendering/providers/`，OutputProviderManager 已重构使用 Registry
-- **B-03** 服务注册调用方未迁移 → 已迁移4处代码到EventBus或直接方法调用
-- **B-04** 事件数据 IDE 类型识别缺失 → 已创建 payloads.py 并更新 EventBus 文档
-- **B-05** Decision Layer 数据流集成缺失 → 已实现 DecisionManager 订阅 canonical.message_ready、创建 UnderstandingLayer 解析 MessageBase → Intent
+### 结论：**重构未完成** — 存在关键数据流断裂
 
 ---
 
-## 📋 当前问题总览（未解决）
+### 已基本达成的部分
 
-| 问题编号 | 问题名称 | 严重程度 | 影响范围 | 状态 |
-|----------|----------|----------|----------|------|
-
-**所有高优先级问题已解决！** ✅
-
----
-
-## ✅ B-05: Decision Layer 数据流集成缺失（已解决）
-
-### 问题描述（已修复）
-
-当前实现中 **Layer 3 → Layer 4 决策层 → Layer 5** 的数据流存在三处断裂：
-
-1. **DecisionManager 未在 main.py 中创建**：`DecisionManager` 存在但未被实例化和启动
-2. **`canonical.message_ready` 无订阅者**：`CanonicalLayer` 发射该事件后，无核心组件订阅并触发决策
-3. **Decision 响应未解析为 Intent**：`MaiCoreDecisionProvider` 发射 `maicore.message`，但无组件将 `MessageBase` 解析为 `Intent` 并发射 `understanding.intent_generated`
-
-### 解决方案实施
-
-#### 1. main.py 中创建 DecisionManager ✅
-
-- 在 `create_app_components()` 中创建 `DecisionManager` 实例
-- 创建 `DecisionProviderFactory` 并注册 `MaiCoreDecisionProvider`
-- 调用 `setup()` 初始化 provider
-- 在 `run_shutdown()` 中添加 cleanup
-
-#### 2. DecisionManager 订阅 canonical.message_ready ✅
-
-- 在 `DecisionManager.setup()` 中订阅 `canonical.message_ready` 事件
-- 添加 `_on_canonical_message_ready()` 事件处理方法
-- 调用当前活动的 Provider 的 `decide()` 方法
-
-#### 3. 创建 UnderstandingLayer ✅
-
-- 新建 `src/understanding/understanding_layer.py`
-- 订阅 `decision.response_generated` 事件
-- 使用 `ResponseParser` 解析 `MessageBase` → `Intent`
-- 发射 `understanding.intent_generated` 事件
-
-#### 4. 更新 MaiCoreDecisionProvider ✅
-
-- 将事件名从 `maicore.message` 改为 `decision.response_generated`
-
-#### 5. 在 main.py 中集成 UnderstandingLayer ✅
-
-- 在 `create_app_components()` 中创建 `UnderstandingLayer`
-- 在 `run_shutdown()` 中添加 cleanup
-
-### 完整数据流（实施后）
-
-```
-InputProvider → perception.raw_data.generated
-       ↓
-InputLayer → normalization.text.ready
-       ↓
-CanonicalLayer → canonical.message_ready
-       ↓
-DecisionManager → active_provider.decide() → decision.response_generated
-       ↓
-UnderstandingLayer → ResponseParser → understanding.intent_generated
-       ↓
-FlowCoordinator → ExpressionGenerator → OutputProviderManager
-```
-
-### 修改的文件
-
-- `src/core/decision_manager.py` - 添加事件订阅和处理
-- `src/core/providers/maicore_decision_provider.py` - 更新事件名称
-- `src/understanding/understanding_layer.py` - 新建组件
-- `main.py` - 集成 DecisionManager 和 UnderstandingLayer
+| 项目 | 状态 | 说明 |
+|------|------|------|
+| 核心分层与目录 | ✅ | `src/layers/` 下有 input、decision、intent_analysis、normalization、parameters、rendering，对应多层数据流 |
+| Provider 模式 | ✅ | `src/core/base/` 有 InputProvider、DecisionProvider、OutputProvider；Decision 层有 MaiCore / LocalLLM / RuleEngine 三种 Provider |
+| AmaidesuCore 解耦 | ✅ | Core 作为组合根，数据流由 FlowCoordinator 协调，注释标明「A-01 重构完成」 |
+| EventBus 为主通信 | ✅ | 层间用事件（如 `normalization.message_ready`、`decision.response_generated`、`understanding.intent_generated`） |
+| 服务注册大幅减少 | ✅ | 核心 `.py` 中仅测试里对 `register_service`/`get_service` 的 mock，无业务侧调用 |
+| 输入层 + 决策层接入 | ✅ | main.py 中创建并 setup 了 InputLayer、DecisionManager，且 DecisionManager 已订阅 `normalization.message_ready` |
+| 事件与数据契约 | ✅ | `src/core/events/` 下有 names、models、payloads、registry，事件名与文档一致 |
 
 ---
 
-## ✅ 做得好的地方（保持不变）
+### 未完成 / 与设计不一致的部分
 
-1. **EventBus 设计良好**：优先级、错误隔离、统计功能完善
-2. **DecisionManager 工厂模式**：支持运行时切换 Provider
-3. **LLMService 设计清晰**：统一后端管理、重试、token 统计
-4. **Plugin Protocol 设计**：不继承基类，依赖注入清晰
-5. **FlowCoordinator**：Layer 5→6→7 数据流独立、职责清晰
-6. **AmaidesuCore 纯组合根**：只做组件组合与生命周期
-7. **7层架构数据流完整**：从 InputProvider 到 OutputProvider 的完整链路已打通
+#### 1. **UnderstandingLayer 未接入，数据流断裂**（高优先级）
+
+- **设计/实现意图**：  
+  `DecisionProvider` 发出 `decision.response_generated` → **UnderstandingLayer** 解析 MessageBase → Intent → 发出 `understanding.intent_generated` → FlowCoordinator 消费。
+- **现状**：  
+  - `UnderstandingLayer` 已在 `src/layers/intent_analysis/understanding_layer.py` 实现，并订阅 `decision.response_generated`、发送 `understanding.intent_generated`。  
+  - **在 main.py 中从未创建、也未对 UnderstandingLayer 调用 `setup()`**。  
+- **结果**：  
+  - 没有任何订阅者处理 `decision.response_generated`；  
+  - `understanding.intent_generated` 永远不会被发出；  
+  - FlowCoordinator 虽然订阅了 `understanding.intent_generated`，但在当前启动流程下永远收不到事件，**决策结果无法进入参数生成与渲染**。
+
+因此，以 overview 中「清晰的 5 层核心数据流」「层级间依赖清晰」等标准衡量，**从决策到输出的这一段尚未打通**，属于未完成。
+
+#### 2. 设计文档（overview）与当前实现不一致
+
+- **overview 中的 5 层目标**：  
+  - 合并 Layer 1–2 为 Input；  
+  - **移除 UnderstandingLayer**，由 Decision 层直接产出 Intent（`decision.intent_generated`）。  
+- **当前实现**：  
+  - 仍是「Decision 产出 MessageBase → UnderstandingLayer 解析为 Intent → understanding.intent_generated」的 7 步式数据流；  
+  - 且 UnderstandingLayer 尚未在 main 中接入。  
+
+要么在 main 中接入现有 UnderstandingLayer，把当前 7 步流跑通；要么按 overview 再重构为「Decision 直接输出 Intent」并删掉 UnderstandingLayer。二者必选其一，当前处于「设计说一套、实现做一套且实现还缺一环」的状态。
+
+#### 3. 实施计划文档与目录不一致
+
+- overview 中引用的 `refactor/plan/overview.md` 以及 `phase1_infrastructure.md` ~ `phase6_cleanup.md` 在仓库中**不存在**。  
+- 实际仅有 `refactor/plan/5_layer_refactoring_plan.md`。  
+文档引用需要更新或补全，否则「按实施计划验收」无法执行。
 
 ---
 
-## 📝 优先级建议
+### 建议的下一步（按优先级）
 
-### 高优先级
+1. **修复数据流（必须）**  
+   - 在 `main.py` 的 `create_app_components()`（或等价启动逻辑）中：  
+     - 创建 `UnderstandingLayer` 实例；  
+     - 在 EventBus 已创建、DecisionManager 已 setup 之后，对 UnderstandingLayer 调用 `setup(event_bus)`（或当前接口要求的参数）；  
+   - 在 `run_shutdown()` 中增加对 UnderstandingLayer 的 `cleanup()`，保证关闭顺序正确（建议在 FlowCoordinator 之后、DecisionManager 之前或按依赖关系调整）。  
+   - 验证：从输入到决策再到 `understanding.intent_generated`，最终到 FlowCoordinator 和输出，整条链有事件、有调用、有日志。
 
-**暂无高优先级问题！** 🎉
+2. **统一架构描述与实现**  
+   - 若保留 UnderstandingLayer：  
+     - 在 overview（或 layer_refactoring）中把「Decision → UnderstandingLayer → Intent → FlowCoordinator」写清楚，并注明当前为 7 步流；  
+     - 将「移除 UnderstandingLayer」从当前成功标准中暂时拿掉或改为「可选后续优化」。  
+   - 若目标仍是 overview 的 5 层且「Decision 直接出 Intent」：  
+     - 在 Decision 层内完成 MessageBase → Intent 的解析（例如在 MaiCoreDecisionProvider 或共用的 IntentParser 中），改为发送 `decision.intent_generated`；  
+     - FlowCoordinator 改为订阅 `decision.intent_generated`；  
+     - 再删除或废弃 UnderstandingLayer 的订阅/发布逻辑，并更新文档。
 
-### 中优先级
-
-- 无
-
-### 低优先级
-
-- 更新 README 文档，移除 `core.get_service()` 示例（B-03 后续待办）
-- Plugin 迁移到声明式依赖（B-02 后续优化）
-- 扩展事件类型定义（为更多事件添加 payloads 类型注解，B-04 后续优化）
+3. **文档与验收**  
+   - 更新 `refactor/design/overview.md` 中的计划链接，指向实际存在的 `5_layer_refactoring_plan.md`，或补全 phase1–6 的文档。  
+   - 用 overview 中的「成功标准」逐条做一次验收（配置行数、响应时间、重复率、EventBus 覆盖率等），并记录在 `architecture_review.md` 或单独验收文档中。
 
 ---
 
-## 🔗 相关文档
+### 简要总结
 
-- [架构设计总览](./overview.md)
-- [Pipeline 重新设计](./pipeline_refactoring.md)（目标架构；**已实现**，见已解决问题摘要 B-01）
-- [插件系统设计](./plugin_system.md)
-- [Avatar 系统重构](./avatar_refactoring.md)
+- **结构层面**：分层、Provider、EventBus、Core 解耦、服务注册清理等已基本到位。  
+- **功能层面**：由于 **UnderstandingLayer 未在 main 中接入**，Decision → Intent → 输出 这段数据流在实际运行中是断的，**不满足 overview 中「清晰的 5 层核心数据流」和端到端可运行的要求**。  
+- **文档层面**：overview 与实现不一致，实施计划引用缺失。  
+
+**综合判断：重构未完成；优先在 main.py 中接入并正确启动/清理 UnderstandingLayer，打通决策到输出的数据流，再根据目标选择保留 7 步流或继续向 overview 的 5 层目标收敛。**
