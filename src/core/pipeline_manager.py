@@ -63,10 +63,15 @@ class PipelineException(Exception):
 @runtime_checkable
 class TextPipeline(Protocol):
     """
-    文本处理管道协议（Layer 2→3 之间的文本预处理）
+    文本处理管道协议（5层架构：Layer 1-2 输入层的文本预处理）
 
-    用于在 NormalizedText → CanonicalMessage 之间处理文本，
-    如限流、敏感词过滤、文本清理等。
+    用于在 InputLayer (RawData → NormalizedMessage) 中处理文本，
+    如限流、敏感词过滤、文本清理、相似消息过滤等。
+
+    位置：
+        - InputLayer.normalize() 方法内部调用
+        - 在创建 NormalizedMessage 之前对文本进行预处理
+        - 可返回 None 表示丢弃该消息
     """
 
     priority: int
@@ -246,9 +251,18 @@ class PipelineManager:
     """
     管道管理器，负责加载、排序和执行管道。
 
-    支持两种管道类型：
-    - MessagePipeline（旧架构）：处理 MessageBase，用于 inbound/outbound 消息处理
-    - TextPipeline（新架构）：处理文本，用于 Layer 2→3 之间的文本预处理
+    5层架构中的Pipeline位置：
+
+    **MessagePipeline（旧架构，保持向后兼容）**：
+        - 处理 MessageBase（MaiCore 格式）
+        - 用于 MaiCoreDecisionProvider 的 inbound/outbound 消息处理
+        - 在 AmaidesuCore 中管理
+
+    **TextPipeline（新架构，推荐使用）**：
+        - 处理 text + metadata
+        - 用于 InputLayer (Layer 1-2) 中的文本预处理
+        - 在 RawData → NormalizedMessage 转换过程中处理文本
+        - 示例：限流、相似文本过滤、敏感词过滤
     """
 
     def __init__(self, core=None):
@@ -398,7 +412,8 @@ class PipelineManager:
         """
         按优先级顺序通过所有启用的 TextPipeline 处理文本
 
-        这是 Layer 2→3 之间的文本预处理入口点，在 CanonicalLayer 中调用。
+        这是 InputLayer (Layer 1-2) 中的文本预处理入口点。
+        在 RawData → NormalizedMessage 转换过程中调用。
 
         Args:
             text: 待处理的文本
@@ -658,8 +673,13 @@ class PipelineManager:
         """
         扫描并加载 TextPipeline 类型的管道。
 
-        TextPipeline 用于 Layer 2→3 之间的文本预处理，处理纯文本和元数据。
+        TextPipeline 用于 InputLayer (Layer 1-2) 中的文本预处理。
         与 MessagePipeline 不同，TextPipeline 不区分 inbound/outbound，统一按 priority 顺序执行。
+
+        5层架构中的位置：
+            - InputLayer.normalize() 方法内部调用
+            - 在 RawData → NormalizedMessage 转换过程中处理文本
+            - 示例：限流、相似文本过滤、敏感词过滤
 
         Args:
             pipeline_base_dir: 管道包的基础目录，默认为 "src/pipelines"

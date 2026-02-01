@@ -18,22 +18,33 @@ if TYPE_CHECKING:
 
 class InputLayer:
     """
-    输入层协调器
+    输入层协调器（5层架构：Layer 1-2）
 
     负责协调Layer 1(输入感知)和Layer 2(输入标准化)。
     接收RawData事件，转换为NormalizedMessage，发布到EventBus。
+
+    Pipeline 集成：
+        - 在 normalize() 方法中使用 TextPipeline 进行文本预处理
+        - PipelineManager 由外部注入（可选）
     """
 
-    def __init__(self, event_bus: EventBus, input_provider_manager: Optional[InputProviderManager] = None):
+    def __init__(
+        self,
+        event_bus: EventBus,
+        input_provider_manager: Optional[InputProviderManager] = None,
+        pipeline_manager: Optional["PipelineManager"] = None,
+    ):
         """
         初始化InputLayer
 
         Args:
             event_bus: 事件总线实例
             input_provider_manager: InputProviderManager实例（可选，如果不提供则只监听事件）
+            pipeline_manager: PipelineManager实例（可选，用于文本预处理）
         """
         self.event_bus = event_bus
         self.input_provider_manager = input_provider_manager
+        self.pipeline_manager = pipeline_manager
         self.logger = get_logger("InputLayer")
 
         # 统计信息
@@ -183,8 +194,23 @@ class InputLayer:
                 structured_content = TextContent(text=text)
 
             elif data_type == "text":
-                # 文本直接使用
-                structured_content = TextContent(text=str(content))
+                # 文本类型：应用 TextPipeline 预处理
+                text = str(content)
+
+                # 如果配置了 PipelineManager，使用 TextPipeline 处理文本
+                if self.pipeline_manager:
+                    try:
+                        processed_text = await self.pipeline_manager.process_text(text, metadata)
+                        if processed_text is None:
+                            # Pipeline 返回 None 表示丢弃该消息
+                            self.logger.debug(f"文本被Pipeline丢弃: {text[:50]}...")
+                            return None
+                        text = processed_text
+                    except Exception as e:
+                        self.logger.error(f"TextPipeline处理失败: {e}", exc_info=True)
+                        # 出错时使用原文本，不中断流程
+
+                structured_content = TextContent(text=text)
 
             else:
                 # 未知类型，转换为文本

@@ -148,7 +148,7 @@ async def load_pipeline_manager(config: Dict[str, Any]) -> Optional[PipelineMana
         inbound = len(manager._inbound_pipelines)
         outbound = len(manager._outbound_pipelines)
 
-        # 加载 TextPipeline（Layer 2→3 文本预处理，新架构）
+        # 加载 TextPipeline（Layer 1-2 输入层文本预处理，新架构）
         await manager.load_text_pipelines(pipeline_load_dir, pipeline_config)
         text_pipeline_count = len(manager._text_pipelines)
 
@@ -217,7 +217,7 @@ async def create_app_components(
 
     # 输入层 (Layer 1-2)
     logger.info("初始化输入层组件（Layer 1-2 数据流）...")
-    input_layer = InputLayer(event_bus)
+    input_layer = InputLayer(event_bus, pipeline_manager=pipeline_manager)
     await input_layer.setup()
     logger.info("InputLayer 已设置（Layer 1-2）")
 
