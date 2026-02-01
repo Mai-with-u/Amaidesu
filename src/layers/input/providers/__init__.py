@@ -1,7 +1,9 @@
 """
-Perception Text - 文本输入Provider
+Input Providers - 输入Provider实现
 
-包含控制台输入和模拟弹幕Provider。
+包含各种 InputProvider 的具体实现：
+- ConsoleInputProvider: 控制台输入Provider
+- MockDanmakuProvider: 模拟弹幕Provider
 """
 
 from .console_input_provider import ConsoleInputProvider
