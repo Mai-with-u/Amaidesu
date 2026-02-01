@@ -1,23 +1,19 @@
 """
-测试 InputLayer 和 InputProvider（pytest 标准）
+测试 InputLayer 数据流（pytest）
 
-使用 pytest 和 pytest-asyncio 测试输入层功能。
-运行: uv run pytest tests/test_input_providers.py -v
+运行: uv run pytest tests/layers/input/test_input_layer.py -v
 """
 
 import asyncio
 import sys
 import os
 
-# 添加项目根目录到Python路径
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 import pytest
 from src.core.event_bus import EventBus
 from src.core.base.raw_data import RawData
 from src.layers.input.input_layer import InputLayer
-from src.layers.input.providers.console_input_provider import ConsoleInputProvider
-from src.layers.input.providers.mock_danmaku_provider import MockDanmakuProvider
 
 
 # =============================================================================
@@ -29,7 +25,6 @@ async def event_bus():
     """创建事件总线"""
     bus = EventBus()
     yield bus
-    # 清理（如果需要）
 
 
 @pytest.fixture
@@ -42,7 +37,7 @@ async def input_layer(event_bus):
 
 
 # =============================================================================
-# InputLayer 测试
+# InputLayer 核心功能测试
 # =============================================================================
 
 @pytest.mark.asyncio
@@ -57,7 +52,6 @@ async def test_raw_data_to_normalized_message(input_layer):
     """测试 RawData 转换为 NormalizedMessage"""
     results = []
 
-    # 监听消息就绪事件
     async def on_message_ready(event_name: str, event_data: dict, source: str):
         message = event_data.get("message")
         if message:
@@ -154,57 +148,6 @@ async def test_input_layer_empty_content(input_layer):
     assert results[0].text == "{}"
 
 
-# =============================================================================
-# ConsoleInputProvider 测试
-# =============================================================================
-
-@pytest.mark.asyncio
-async def test_console_input_provider_init():
-    """测试 ConsoleInputProvider 初始化"""
-    config = {
-        "user_id": "test_user",
-        "user_nickname": "测试用户"
-    }
-
-    provider = ConsoleInputProvider(config)
-
-    assert provider is not None
-    assert provider.user_id == "test_user"
-    assert provider.user_nickname == "测试用户"
-    assert not provider._running  # 使用私有属性检查初始状态
-
-
-@pytest.mark.asyncio
-async def test_console_input_provider_config_defaults():
-    """测试 ConsoleInputProvider 默认配置"""
-    provider = ConsoleInputProvider({})
-
-    assert provider.user_id == "console_user"
-    assert provider.user_nickname == "控制台"
-
-
-# =============================================================================
-# MockDanmakuProvider 测试
-# =============================================================================
-
-@pytest.mark.asyncio
-async def test_mock_danmaku_provider_init():
-    """测试 MockDanmakuProvider 初始化"""
-    config = {
-        "interval": 5,
-        "messages": ["消息1", "消息2"]
-    }
-
-    provider = MockDanmakuProvider(config)
-
-    assert provider is not None
-    assert not provider.is_running
-
-
-# =============================================================================
-# 集成测试
-# =============================================================================
-
 @pytest.mark.asyncio
 async def test_full_data_flow():
     """测试完整数据流：RawData -> NormalizedMessage"""
@@ -247,10 +190,6 @@ async def test_full_data_flow():
 
     await input_layer.cleanup()
 
-
-# =============================================================================
-# 运行测试的主函数（可选）
-# =============================================================================
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
