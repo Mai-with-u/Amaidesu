@@ -182,6 +182,10 @@ class DecisionManager:
                 self._provider_name = None
                 raise ConnectionError(f"无法初始化DecisionProvider '{provider_name}': {e}") from e
 
+        # 订阅 canonical.message_ready 事件
+        self.event_bus.on("canonical.message_ready", self._on_canonical_message_ready)
+        self.logger.info("DecisionManager 已订阅 canonical.message_ready 事件")
+
     async def decide(self, canonical_message: "CanonicalMessage") -> "MessageBase":
         """
         进行决策
@@ -207,6 +211,29 @@ class DecisionManager:
             self.logger.error(f"决策失败: {e}", exc_info=True)
             # 优雅降级: 抛出异常让上层处理
             raise
+
+    async def _on_canonical_message_ready(self, event_name: str, event_data: dict, source: str):
+        """
+        处理 canonical.message_ready 事件
+
+        当 CanonicalLayer 生成 CanonicalMessage 时，自动调用当前活动的 DecisionProvider 进行决策。
+
+        Args:
+            event_name: 事件名称
+            event_data: 事件数据，包含 "canonical" (CanonicalMessage) 和 "source"
+            source: 事件源
+        """
+        canonical: "CanonicalMessage" = event_data.get("canonical")
+        if not canonical:
+            self.logger.warning("收到空的 CanonicalMessage 事件")
+            return
+
+        try:
+            self.logger.debug(f"收到 CanonicalMessage: {canonical.text[:50]}...")
+            # 调用当前活动的 Provider 进行决策
+            await self.decide(canonical)
+        except Exception as e:
+            self.logger.error(f"处理 CanonicalMessage 时出错: {e}", exc_info=True)
 
     async def switch_provider(self, provider_name: str, config: Dict[str, Any]) -> None:
         """
@@ -241,8 +268,11 @@ class DecisionManager:
         """
         清理资源
 
-        清理当前Provider和工厂。
+        清理当前Provider、取消事件订阅和工厂。
         """
+        # 取消事件订阅
+        self.event_bus.off("canonical.message_ready", self._on_canonical_message_ready)
+
         async with self._switch_lock:
             if self._current_provider:
                 self.logger.info(f"清理当前Provider: {self._provider_name}")
