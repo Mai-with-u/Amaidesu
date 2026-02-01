@@ -19,7 +19,7 @@ from collections import deque
 import numpy as np
 
 from src.core.base.output_provider import OutputProvider
-from src.layers.expression.render_parameters import RenderParameters
+from src.layers.parameters.render_parameters import RenderParameters
 from src.utils.logger import get_logger
 
 # 检查依赖

@@ -13,7 +13,7 @@ from src.utils.logger import get_logger
 from .render_parameters import ExpressionParameters
 from .emotion_mapper import EmotionMapper
 from .action_mapper import ActionMapper
-from src.layers.understanding.intent import Intent, EmotionType
+from src.layers.intent_analysis.intent import Intent, EmotionType
 
 
 class ExpressionGenerator:

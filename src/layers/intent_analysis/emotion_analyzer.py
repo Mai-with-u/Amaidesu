@@ -12,7 +12,7 @@ Emotion Analyzer - Layer 5: 情感分析（统一入口）
 from dataclasses import dataclass
 from typing import Dict, Any, Optional, TYPE_CHECKING
 
-from src.layers.understanding.intent import EmotionType
+from src.layers.intent_analysis.intent import EmotionType
 from src.utils.logger import get_logger
 
 if TYPE_CHECKING:

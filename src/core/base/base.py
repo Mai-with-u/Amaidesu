@@ -15,6 +15,6 @@ Provider接口基础数据类定义
 from src.layers.canonical.canonical_message import CanonicalMessage
 
 # 从 expression 导入 RenderParameters (ExpressionParameters 的别名)
-from src.layers.expression.render_parameters import RenderParameters
+from src.layers.parameters.render_parameters import RenderParameters
 
 __all__ = ["RenderParameters", "CanonicalMessage"]

@@ -8,7 +8,7 @@
 """
 
 from typing import Dict
-from src.layers.understanding.intent import EmotionType
+from src.layers.intent_analysis.intent import EmotionType
 
 
 class EmotionMapper:

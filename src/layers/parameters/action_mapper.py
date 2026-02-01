@@ -8,7 +8,7 @@
 """
 
 from typing import Dict, Any, List
-from src.layers.understanding.intent import ActionType, IntentAction
+from src.layers.intent_analysis.intent import ActionType, IntentAction
 
 
 class ActionMapper:

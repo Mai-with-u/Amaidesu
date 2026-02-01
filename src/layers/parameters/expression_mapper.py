@@ -10,7 +10,7 @@ Expression Mapper - Layer 6: 表情映射（统一入口）
 
 from typing import Dict, Optional
 
-from src.layers.understanding.intent import EmotionType
+from src.layers.intent_analysis.intent import EmotionType
 from src.utils.logger import get_logger
 
 

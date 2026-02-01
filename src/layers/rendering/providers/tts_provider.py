@@ -12,7 +12,7 @@ from typing import Optional, Dict, Any
 import numpy as np
 
 from src.core.base.output_provider import OutputProvider
-from src.layers.expression.render_parameters import ExpressionParameters
+from src.layers.parameters.render_parameters import ExpressionParameters
 from src.utils.logger import get_logger
 
 # 检查依赖

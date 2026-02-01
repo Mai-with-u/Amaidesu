@@ -13,7 +13,7 @@ import time
 from typing import Dict, Any, Optional, List
 
 from src.core.base.output_provider import OutputProvider
-from src.layers.expression.render_parameters import RenderParameters
+from src.layers.parameters.render_parameters import RenderParameters
 from src.utils.logger import get_logger
 
 # LLM匹配依赖
