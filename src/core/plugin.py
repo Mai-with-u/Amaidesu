@@ -3,10 +3,6 @@
 
 定义了refactor/design/plugin_system.md中要求的Plugin接口。
 
-这个接口是新的插件系统架构，用于替代BasePlugin系统：
-- BasePlugin（旧系统）：继承AmaidesuCore，通过self.core访问核心功能
-- Plugin（新系统）：聚合Provider，通过event_bus和config进行依赖注入
-
 Plugin的职责：
 1. 聚合多个Provider（InputProvider、OutputProvider、DecisionProvider等）
 2. 通过EventBus进行通信
@@ -50,11 +46,7 @@ class Plugin(Protocol):
     """
     插件协议 - 聚合多个Provider
 
-    这是plugin_system.md中定义的新Plugin接口，用于替代BasePlugin系统。
-
-    与BasePlugin的区别：
-    - BasePlugin继承自 AmaidesuCore，通过 self.core 访问核心功能
-    - Plugin不继承任何基类，通过 event_bus 和 config 进行依赖注入
+    Plugin不继承任何基类，通过 event_bus 和 config 进行依赖注入。
 
     生命周期：
     1. 实例化(__init__) - 接收配置

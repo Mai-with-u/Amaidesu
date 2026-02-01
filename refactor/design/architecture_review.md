@@ -887,17 +887,22 @@ def __init__(self, ..., avatar: Optional["AvatarControlManager"] = None, ...):
 ✅ 已完成：
 - AmaidesuCore 中的 `avatar` 属性和参数已在 A-01 重构时移除
 - 移除了 `PipelineManager._ensure_sorted()` 废弃方法（空方法，未被调用）
-- 验证没有实际插件仍在使用 `BasePlugin` 类（gptsovits_tts 已迁移到新架构）
-- `BasePlugin` 类保留用于向后兼容（PluginManager 验证机制使用），但没有实际插件使用
+- 验证没有实际插件仍在使用 `BasePlugin` 类
+- 完全移除了 `BasePlugin` 类及其相关代码：
+  - 删除了 `src/core/plugin_manager.py` 中的 `BasePlugin` 类定义
+  - 简化了 PluginManager 的插件检测逻辑，只保留新 Plugin 协议
+  - 更新了 `src/core/plugin.py` 文档，移除了对 BasePlugin 的引用
 
 **修改的文件**：
 - `src/core/pipeline_manager.py` - 移除了 `_ensure_sorted()` 废弃方法
+- `src/core/plugin_manager.py` - 完全移除 BasePlugin 类和相关处理逻辑
+- `src/core/plugin.py` - 更新文档，移除对 BasePlugin 的引用
 - `refactor/design/architecture_review.md` - 本文档，更新 A-10 状态
 
 **说明**：
 - A-10 问题中提到的 AmaidesuCore avatar 废弃代码已在 A-01 重构时清理
 - PipelineManager 中的 `_ensure_sorted()` 废弃方法已移除（未被调用的空方法）
-- BasePlugin 类虽然标记为废弃，但保留用于向后兼容，当前没有实际插件使用
+- BasePlugin 类已完全移除，没有任何实际插件使用它
 - 所有活跃插件已迁移到新 Plugin 协议架构
 
 ---

@@ -14,121 +14,15 @@ from src.services.config_service import ConfigService
 from src.utils.config import load_component_specific_config, merge_component_configs
 
 
-# --- 插件基类 (已废弃，仅用于向后兼容) ---
-class BasePlugin:
-    """
-    所有插件的基础类（已废弃，仅用于向后兼容）
-
-    ⚠️ **废弃说明**：
-    - BasePlugin 已被新的 Plugin 接口替代
-    - 新插件应使用 src/core/plugin.py 中定义的 Plugin 协议
-    - 新架构通过 event_bus 和 config 进行依赖注入，不继承 AmaidesuCore
-    - BasePlugin 将在未来版本中移除
-
-    **迁移指南**：
-    1. 查看新 Plugin 接口：src/core/plugin.py
-    2. 参考已迁移插件示例：src/plugins/bili_danmaku/plugin.py
-    3. 将插件重写为 Plugin 协议实现（不继承 BasePlugin）
-    4. 如果需要访问 AmaidesuCore，通过 event_bus 发布事件或服务注册
-
-    保留原因：gptsovits_tts 插件仍在使用 BasePlugin，需要后续迁移
-    """
-
-    def __init__(self, core: "AmaidesuCore", plugin_config: Dict[str, Any]):
-        """
-        初始化插件。
-
-        Args:
-            core: AmaidesuCore 的实例，用于插件与核心交互。
-            plugin_config: 该插件在 config.toml 中的配置。
-        """
-        self.core = core
-        self.plugin_config = plugin_config
-        self.logger = get_logger(self.__class__.__name__)
-        self.logger.info(f"初始化插件: {self.__class__.__name__}")
-
-        # 检查Core是否提供了EventBus（可选功能）
-        if core.event_bus is not None:
-            self.event_bus = core.event_bus
-            self.logger.debug(f"{self.__class__.__name__} 检测到EventBus")
-        else:
-            self.event_bus = None
-
-    # 便捷方法（可选使用）
-    async def emit_event(self, event_name: str, data: Any) -> None:
-        """
-        发布事件（如果EventBus可用）
-
-        Args:
-            event_name: 事件名称
-            data: 事件数据
-        """
-        if self.event_bus:
-            await self.event_bus.emit(event_name, data, self.__class__.__name__)
-        else:
-            self.logger.debug(f"EventBus不可用，忽略事件: {event_name}")
-
-    def listen_event(self, event_name: str, handler: Callable) -> None:
-        """
-        订阅事件（如果EventBus可用）
-
-        Args:
-            event_name: 要监听的事件名称
-            handler: 事件处理器函数
-        """
-        if self.event_bus:
-            self.event_bus.on(event_name, handler)
-        else:
-            self.logger.debug(f"EventBus不可用，无法监听事件: {event_name}")
-
-    def stop_listening_event(self, event_name: str, handler: Callable) -> None:
-        """
-        取消订阅事件（如果EventBus可用）
-
-        Args:
-            event_name: 事件名称
-            handler: 要移除的事件处理器函数
-        """
-        if self.event_bus:
-            self.event_bus.off(event_name, handler)
-        else:
-            self.logger.debug(f"EventBus不可用，无法取消监听事件: {event_name}")
-
-    async def setup(self):
-        """设置插件，例如注册处理器。"""
-        self.logger.debug(f"设置插件: {self.__class__.__name__}")
-        # 子类应在此处实现具体的设置逻辑，例如：
-        # await self.core.register_websocket_handler("text", self.handle_text_message)
-        # await self.core.register_http_handler("http_callback", self.handle_http_callback)
-        pass
-
-    async def cleanup(self):
-        """清理插件资源。"""
-        self.logger.debug(f"清理插件: {self.__class__.__name__}")
-        # 子类应在此处实现清理逻辑
-        pass
-
-
 class PluginManager:
     """
     负责加载、管理和卸载插件
 
-    支持两种插件类型：
-
-    1. **Plugin（新系统）** - 推荐
-       - 实现 Plugin 协议（不继承任何基类）
-       - 通过 event_bus 和 config 进行依赖注入
-       - 返回 Provider 列表（InputProvider、OutputProvider 等）
-       - 更好的解耦和可测试性
-       - 参考：src/core/plugin.py
-
-    2. **BasePlugin（旧系统）** - 已废弃
-       - 继承 BasePlugin（继承 AmaidesuCore）
-       - 通过 self.core 访问核心功能
-       - 仅用于向后兼容，将在未来版本中移除
-       - 当前使用：gptsovits_tts 插件（待迁移）
-
-    向后兼容：两种插件类型都能正常工作。
+    插件系统：
+    - 实现 Plugin 协议（不继承任何基类）
+    - 通过 event_bus 和 config 进行依赖注入
+    - 返回 Provider 列表（InputProvider、OutputProvider 等）
+    - 参考：src/core/plugin.py
     """
 
     def __init__(
@@ -218,7 +112,6 @@ class PluginManager:
 
                     plugin_class = None
                     entrypoint = None
-                    plugin_type = "unknown"
 
                     if hasattr(module, "plugin_entrypoint"):
                         entrypoint = module.plugin_entrypoint
@@ -227,34 +120,26 @@ class PluginManager:
                         )
 
                         if inspect.isclass(entrypoint):
-                            if issubclass(entrypoint, BasePlugin):
-                                plugin_class = entrypoint
-                                plugin_type = "base_plugin"
-                                self.logger.debug(
-                                    f"入口点验证成功 (通过继承 BasePlugin)，插件类为: {plugin_class.__name__}"
-                                )
-                            else:
-                                if hasattr(entrypoint, "setup"):
-                                    try:
-                                        sig = inspect.signature(entrypoint.setup)
-                                        params = list(sig.parameters.keys())
-                                        if "event_bus" in params and "config" in params:
-                                            plugin_class = entrypoint
-                                            plugin_type = "new_plugin"
-                                            self.logger.debug(
-                                                f"入口点验证成功 (通过实现新 Plugin 接口)，插件类为: {plugin_class.__name__}"
-                                            )
-                                        else:
-                                            self.logger.warning(
-                                                f"模块 '{module_import_path}' 中的插件类 setup() 方法签名不符合要求。"
-                                                f"应该包含 event_bus 和 config 参数，当前参数: {params}"
-                                            )
-                                    except Exception as e:
-                                        self.logger.warning(
-                                            f"检查 '{module_import_path}' 中插件类的 setup() 方法时出错: {e}"
+                            if hasattr(entrypoint, "setup"):
+                                try:
+                                    sig = inspect.signature(entrypoint.setup)
+                                    params = list(sig.parameters.keys())
+                                    if "event_bus" in params and "config" in params:
+                                        plugin_class = entrypoint
+                                        self.logger.debug(
+                                            f"入口点验证成功 (实现 Plugin 接口)，插件类为: {plugin_class.__name__}"
                                         )
-                                else:
-                                    self.logger.warning(f"模块 '{module_import_path}' 中的插件类没有 setup() 方法。")
+                                    else:
+                                        self.logger.warning(
+                                            f"模块 '{module_import_path}' 中的插件类 setup() 方法签名不符合要求。"
+                                            f"应该包含 event_bus 和 config 参数，当前参数: {params}"
+                                        )
+                                except Exception as e:
+                                    self.logger.warning(
+                                        f"检查 '{module_import_path}' 中插件类的 setup() 方法时出错: {e}"
+                                    )
+                            else:
+                                self.logger.warning(f"模块 '{module_import_path}' 中的插件类没有 setup() 方法。")
                         else:
                             self.logger.warning(
                                 f"模块 '{module_import_path}' 中的 'plugin_entrypoint' ({entrypoint}) 不是有效的类。"
@@ -276,29 +161,20 @@ class PluginManager:
                                 plugin_own_config_data, main_provided_config, plugin_name, "插件"
                             )
 
-                        self.logger.debug(f"准备实例化插件: {plugin_class.__name__} (类型: {plugin_type})")
+                        self.logger.debug(f"准备实例化插件: {plugin_class.__name__}")
 
-                        if plugin_type == "base_plugin":
-                            plugin_instance = plugin_class(self.core, final_plugin_config)
+                        plugin_instance = plugin_class(final_plugin_config)
 
-                            plugin_instance.plugin_dir = item_path
-                            self.logger.debug(f"已为插件 '{plugin_class.__name__}' 设置 'plugin_dir' 属性: {item_path}")
+                        self.logger.debug(
+                            f"插件 '{plugin_class.__name__}' 实例化完成，准备调用 setup(event_bus, config)"
+                        )
 
-                            self.logger.debug(f"插件 '{plugin_class.__name__}' 实例化完成，准备调用 setup()")
-                            await plugin_instance.setup()
-                        elif plugin_type == "new_plugin":
-                            plugin_instance = plugin_class(final_plugin_config)
-
-                            self.logger.debug(
-                                f"插件 '{plugin_class.__name__}' 实例化完成，准备调用 setup(event_bus, config)"
-                            )
-
-                            providers = await plugin_instance.setup(self.core.event_bus, final_plugin_config)
-                            self.logger.info(f"插件 '{plugin_class.__name__}' 返回了 {len(providers)} 个 Provider")
+                        providers = await plugin_instance.setup(self.core.event_bus, final_plugin_config)
+                        self.logger.info(f"插件 '{plugin_class.__name__}' 返回了 {len(providers)} 个 Provider")
 
                         self.loaded_plugins[plugin_name] = plugin_instance
                         self.logger.info(
-                            f"成功加载并设置插件: {plugin_class.__name__} (来自 {plugin_name}/plugin.py, 类型: {plugin_type})"
+                            f"成功加载并设置插件: {plugin_class.__name__} (来自 {plugin_name}/plugin.py)"
                         )
                     else:
                         self.logger.warning(f"未能为模块 '{module_import_path}' 找到并验证有效的插件类。")
