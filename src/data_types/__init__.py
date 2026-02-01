@@ -5,6 +5,6 @@ Phase 2: 输入层数据类型
 """
 
 from .raw_data import RawData
-from .normalized_text import NormalizedText
+from .normalized_message import NormalizedMessage
 
-__all__ = ["RawData", "NormalizedText"]
+__all__ = ["RawData", "NormalizedMessage"]

@@ -8,18 +8,18 @@ Provider抽象基类
 
 以及核心数据类型：
 - RenderParameters: 渲染参数
-- CanonicalMessage: 标准消息
+- NormalizedMessage: 标准化消息
 """
 
 from .input_provider import InputProvider
 from .decision_provider import DecisionProvider
 from .output_provider import OutputProvider
-from .base import RenderParameters, CanonicalMessage
+from .base import RenderParameters, NormalizedMessage
 
 __all__ = [
     "InputProvider",
     "DecisionProvider",
     "OutputProvider",
     "RenderParameters",
-    "CanonicalMessage",
+    "NormalizedMessage",
 ]

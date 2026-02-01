@@ -13,12 +13,12 @@ import re
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 
 from src.core.base.decision_provider import DecisionProvider
+from src.layers.decision.intent import Intent, EmotionType, ActionType, IntentAction
 from src.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from src.core.event_bus import EventBus
-    from src.layers.canonical.canonical_message import CanonicalMessage
-    from maim_message import MessageBase
+    from src.data_types.normalized_message import NormalizedMessage
 
 
 class RuleEngineDecisionProvider(DecisionProvider):
@@ -162,43 +162,43 @@ class RuleEngineDecisionProvider(DecisionProvider):
         # 按优先级排序（降序）
         self.rules.sort(key=lambda r: r.get("priority", 0), reverse=True)
 
-    async def decide(self, canonical_message: "CanonicalMessage") -> "MessageBase":
+    async def decide(self, normalized_message: "NormalizedMessage") -> "Intent":
         """
         进行决策（通过规则引擎匹配）
 
         Args:
-            canonical_message: 标准化消息
+            normalized_message: 标准化消息
 
         Returns:
-            MessageBase: 决策结果（规则匹配的响应）
+            Intent: 决策意图（规则匹配的响应）
         """
         self._total_requests += 1
-        text = canonical_message.text
+        text = normalized_message.text
 
         # 准备匹配文本
         match_text = text if self.case_sensitive else text.lower()
 
         # 按优先级尝试匹配规则
         for rule in self.rules:
-            if await self._match_rule(rule, match_text, canonical_message):
+            if await self._match_rule(rule, match_text, normalized_message):
                 self._matched_rules += 1
                 self.logger.debug(f"匹配规则: {rule.get('name', 'unnamed')}")
                 response_text = rule["response"]
-                return self._create_message_base(response_text, canonical_message)
+                return self._create_intent(response_text, normalized_message)
 
         # 没有匹配的规则，使用默认响应
         self._unmatched_requests += 1
         self.logger.debug("没有匹配的规则，使用默认响应")
-        return self._create_message_base(self.default_response, canonical_message)
+        return self._create_intent(self.default_response, normalized_message)
 
-    async def _match_rule(self, rule: Dict[str, Any], text: str, canonical_message: "CanonicalMessage") -> bool:
+    async def _match_rule(self, rule: Dict[str, Any], text: str, normalized_message: "NormalizedMessage") -> bool:
         """
         检查规则是否匹配
 
         Args:
             rule: 规则字典
             text: 要匹配的文本
-            canonical_message: CanonicalMessage（用于元数据匹配）
+            normalized_message: NormalizedMessage（用于元数据匹配）
 
         Returns:
             bool: 是否匹配
@@ -235,53 +235,31 @@ class RuleEngineDecisionProvider(DecisionProvider):
         if "metadata_match" in rule:
             metadata_rules = rule["metadata_match"]
             for key, value in metadata_rules.items():
-                if canonical_message.metadata.get(key) != value:
+                if normalized_message.metadata.get(key) != value:
                     return False
             return True
 
         return False
 
-    def _create_message_base(self, text: str, canonical_message: "CanonicalMessage") -> "MessageBase":
+    def _create_intent(self, text: str, normalized_message: "NormalizedMessage") -> Intent:
         """
-        创建MessageBase对象
+        创建Intent对象
 
         Args:
             text: 响应文本
-            canonical_message: 原始CanonicalMessage
+            normalized_message: 原始NormalizedMessage
 
         Returns:
-            MessageBase实例
+            Intent实例
         """
-        try:
-            from maim_message import MessageBase, BaseMessageInfo, UserInfo, Seg, FormatInfo
-
-            # 构建UserInfo
-            user_info = UserInfo(
-                user_id=canonical_message.metadata.get("user_id", "rule_engine"),
-                nickname=canonical_message.metadata.get("user_nickname", "规则引擎"),
-            )
-
-            # 构建FormatInfo
-            format_info = FormatInfo(font=None, color=None, size=None)
-
-            # 构建Seg（文本片段）
-            seg = Seg(type="text", data=text, format=format_info)
-
-            # 构建MessageBase
-            message = MessageBase(
-                message_info=BaseMessageInfo(
-                    message_id=f"rule_{int(canonical_message.timestamp)}",
-                    platform="rule_engine",
-                    sender=user_info,
-                    timestamp=canonical_message.timestamp,
-                ),
-                message_segment=seg,
-            )
-
-            return message
-        except Exception as e:
-            self.logger.error(f"创建MessageBase失败: {e}", exc_info=True)
-            raise
+        # 简单规则：默认中性情感，眨眼动作
+        return Intent(
+            original_text=normalized_message.text,
+            response_text=text,
+            emotion=EmotionType.NEUTRAL,
+            actions=[IntentAction(type=ActionType.BLINK, params={}, priority=30)],
+            metadata={"parser": "rule_engine"},
+        )
 
     async def cleanup(self) -> None:
         """

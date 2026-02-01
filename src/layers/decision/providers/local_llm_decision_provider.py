@@ -10,13 +10,13 @@ LocalLLMDecisionProvider - 本地LLM决策提供者
 from typing import Dict, Any, Optional, TYPE_CHECKING
 
 from src.core.base.decision_provider import DecisionProvider
+from src.layers.decision.intent import Intent, EmotionType, ActionType, IntentAction
 from src.utils.logger import get_logger
-from maim_message import MessageBase
 
 if TYPE_CHECKING:
     from src.core.event_bus import EventBus
     from src.core.llm_service import LLMService
-    from src.layers.canonical.canonical_message import CanonicalMessage
+    from src.data_types.normalized_message import NormalizedMessage
 
 
 class LocalLLMDecisionProvider(DecisionProvider):
@@ -90,15 +90,15 @@ class LocalLLMDecisionProvider(DecisionProvider):
 
         self.logger.info(f"LocalLLMDecisionProvider 初始化完成 (Backend: {self.backend})")
 
-    async def decide(self, canonical_message: "CanonicalMessage") -> MessageBase:
+    async def decide(self, normalized_message: "NormalizedMessage") -> Intent:
         """
         进行决策（通过 LLM 生成响应）
 
         Args:
-            canonical_message: 标准化消息
+            normalized_message: 标准化消息
 
         Returns:
-            MessageBase: 决策结果（LLM 生成的响应）
+            Intent: 决策意图（LLM 生成的响应）
 
         Raises:
             RuntimeError: 如果所有重试失败且 fallback_mode 为 "error"
@@ -109,7 +109,7 @@ class LocalLLMDecisionProvider(DecisionProvider):
         self._total_requests += 1
 
         # 构建提示词
-        prompt = self.prompt_template.format(text=canonical_message.text)
+        prompt = self.prompt_template.format(text=normalized_message.text)
 
         try:
             # 使用 LLM Service 进行调用
@@ -122,70 +122,48 @@ class LocalLLMDecisionProvider(DecisionProvider):
                 self._failed_requests += 1
                 self.logger.error(f"LLM 调用失败: {response.error}")
                 # 使用降级策略
-                return self._handle_fallback(canonical_message)
+                return self._handle_fallback(normalized_message)
 
             self._successful_requests += 1
-            return self._create_message_base(response.content, canonical_message)
+            return self._create_intent(response.content, normalized_message)
 
         except Exception as e:
             self._failed_requests += 1
             self.logger.error(f"LLM 调用异常: {e}", exc_info=True)
             # 使用降级策略
-            return self._handle_fallback(canonical_message)
+            return self._handle_fallback(normalized_message)
 
-    def _handle_fallback(self, canonical_message: "CanonicalMessage") -> MessageBase:
+    def _handle_fallback(self, normalized_message: "NormalizedMessage") -> Intent:
         """处理降级逻辑"""
         if self.fallback_mode == "simple":
             # 简单降级：返回原始文本
-            return self._create_message_base(canonical_message.text, canonical_message)
+            return self._create_intent(normalized_message.text, normalized_message)
         elif self.fallback_mode == "echo":
             # 回声降级：重复用户输入
-            return self._create_message_base(f"你说：{canonical_message.text}", canonical_message)
+            return self._create_intent(f"你说：{normalized_message.text}", normalized_message)
         else:
             # 错误降级：抛出异常
             raise RuntimeError("LLM 请求失败，且未配置降级模式")
 
-    def _create_message_base(self, text: str, canonical_message: "CanonicalMessage") -> "MessageBase":
+    def _create_intent(self, text: str, normalized_message: "NormalizedMessage") -> Intent:
         """
-        创建MessageBase对象
+        创建Intent对象
 
         Args:
             text: 响应文本
-            canonical_message: 原始CanonicalMessage
+            normalized_message: 原始NormalizedMessage
 
         Returns:
-            MessageBase实例
+            Intent实例
         """
-        try:
-            from maim_message import MessageBase, BaseMessageInfo, UserInfo, Seg, FormatInfo
-
-            # 构建UserInfo
-            user_info = UserInfo(
-                user_id=canonical_message.metadata.get("user_id", "llm"),
-                nickname=canonical_message.metadata.get("user_nickname", "Local LLM"),
-            )
-
-            # 构建FormatInfo
-            format_info = FormatInfo(font=None, color=None, size=None)
-
-            # 构建Seg（文本片段）
-            seg = Seg(type="text", data=text, format=format_info)
-
-            # 构建MessageBase
-            message = MessageBase(
-                message_info=BaseMessageInfo(
-                    message_id=f"llm_{int(canonical_message.timestamp)}",
-                    platform="llm",
-                    sender=user_info,
-                    timestamp=canonical_message.timestamp,
-                ),
-                message_segment=seg,
-            )
-
-            return message
-        except Exception as e:
-            self.logger.error(f"创建MessageBase失败: {e}", exc_info=True)
-            raise
+        # 简单实现：默认中性情感，眨眼动作
+        return Intent(
+            original_text=normalized_message.text,
+            response_text=text,
+            emotion=EmotionType.NEUTRAL,
+            actions=[IntentAction(type=ActionType.BLINK, params={}, priority=30)],
+            metadata={"parser": "local_llm"},
+        )
 
     async def cleanup(self) -> None:
         """
