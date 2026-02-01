@@ -66,7 +66,7 @@ Plugin = 能力组合（整合 Provider、提供业务场景、不创建 Provide
 2. 插件之间可能绕过 EventBus，直接服务注册
 3. 重蹈重构前的覆辙（24个插件，18个服务注册）
 
-→ 详见 [插件系统设计](./plugin_system.md) 和 [架构设计审查 A-05](./architecture_review.md#a-05-providerplugin-职责边界不清--设计已确定)
+→ 详见 [插件系统设计](./plugin_system.md) 和 [架构设计审查](./architecture_review.md)（当前未解决问题含 Provider 迁移计划 B-02、管道系统 B-01）
 
 ### 架构分层
 
@@ -109,9 +109,9 @@ DecisionProvider返回MessageBase
  - [事件数据契约设计](./event_data_contract.md) - 类型安全的事件数据契约系统（Pydantic + 开放式注册表）
  - [LLM服务设计](./llm_service.md) - 统一的LLM调用服务（核心基础设施）
  - [Avatar系统重构](./avatar_refactoring.md) - 虚拟形象控制系统重构（消除与6层架构的重复）
- - [架构设计审查](./architecture_review.md) - 重构后的架构设计问题和改进建议
+ - [架构设计审查](./architecture_review.md) - **未解决**的架构问题（含管道系统未重构成功 B-01、Provider 迁移 B-02）
  - [DataCache设计](./data_cache.md) - 原始数据缓存服务
- - [Pipeline重新设计](./pipeline_refactoring.md) - TextPipeline处理系统
+ - [Pipeline重新设计](./pipeline_refactoring.md) - TextPipeline 目标设计（**实现未完成**，见 [审查 B-01](./architecture_review.md#b-01-管道系统未重构成功--待修复)）
  - [HTTP服务器设计](./http_server.md) - 基于FastAPI的HTTP服务器
 
 ### 实施计划

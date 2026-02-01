@@ -1,5 +1,14 @@
 # Pipeline重新设计
 
+> **⚠️ 实现状态**  
+> 本文档描述的是**目标架构**。当前实现**未完成**：  
+> - 现有管道均为 **MessagePipeline**（处理 MessageBase），未迁移到 **TextPipeline**（处理 Text）。  
+> - **TextPipeline** 未被注册到 PipelineManager，CanonicalLayer 调用 `process_text()` 时无管道可执行，限流/过滤等未接入 6 层数据流。  
+> - MessagePipeline 的 `process_inbound_message` / `process_outbound_message` 在 6 层架构中**无调用点**。  
+> 详见 [架构设计审查 B-01：管道系统未重构成功](./architecture_review.md#b-01-管道系统未重构成功--待修复)。
+
+---
+
 ## 🎯 核心目标
 
 重新设计Pipeline系统，从处理MessageBase改为处理Text，位于Layer 2和Layer 3之间，用于Text的预处理和过滤。

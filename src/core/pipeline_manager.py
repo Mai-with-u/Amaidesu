@@ -650,6 +650,126 @@ class PipelineManager:
             pipeline.core = self.core
         self.logger.debug(f"已为 {len(all_pipelines)} 个管道设置core引用")
 
+    # ==================== TextPipeline 加载（新架构） ====================
+
+    async def load_text_pipelines(
+        self, pipeline_base_dir: str = "src/pipelines", root_config_pipelines_section: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """
+        扫描并加载 TextPipeline 类型的管道。
+
+        TextPipeline 用于 Layer 2→3 之间的文本预处理，处理纯文本和元数据。
+        与 MessagePipeline 不同，TextPipeline 不区分 inbound/outbound，统一按 priority 顺序执行。
+
+        Args:
+            pipeline_base_dir: 管道包的基础目录，默认为 "src/pipelines"
+            root_config_pipelines_section: 根配置文件中 'pipelines' 部分的字典
+        """
+        self.logger.info(f"开始从目录加载 TextPipeline: {pipeline_base_dir}")
+        pipeline_dir_abs = os.path.abspath(pipeline_base_dir)
+
+        if not os.path.isdir(pipeline_dir_abs):
+            self.logger.warning(f"管道目录不存在: {pipeline_base_dir}，跳过 TextPipeline 加载。")
+            return
+
+        # 将 src 目录添加到 sys.path（如果尚未添加）
+        src_dir = os.path.dirname(pipeline_dir_abs)
+        if src_dir not in sys.path:
+            sys.path.insert(0, src_dir)
+            self.logger.debug(f"已将目录添加到 sys.path: {src_dir}")
+
+        if root_config_pipelines_section is None:
+            root_config_pipelines_section = {}
+            self.logger.warning("未提供根配置中的 'pipelines' 部分，所有 TextPipeline 将无法加载。")
+            return
+
+        loaded_pipeline_count = 0
+
+        # 遍历根配置中定义的管道
+        for pipeline_name_snake, pipeline_global_settings in root_config_pipelines_section.items():
+            if not isinstance(pipeline_global_settings, dict):
+                self.logger.warning(f"管道 '{pipeline_name_snake}' 在根配置中的条目格式不正确 (应为字典), 跳过。")
+                continue
+
+            priority = pipeline_global_settings.get("priority")
+            if not isinstance(priority, int):
+                # TextPipeline 可能通过priority启用，也可能禁用
+                self.logger.debug(
+                    f"管道 '{pipeline_name_snake}' 在根配置中 'priority' 缺失或无效，跳过 TextPipeline 加载。"
+                )
+                continue
+
+            pipeline_package_path = os.path.join(pipeline_dir_abs, pipeline_name_snake)
+
+            # 检查管道目录结构
+            if not (
+                os.path.isdir(pipeline_package_path)
+                and os.path.exists(os.path.join(pipeline_package_path, "__init__.py"))
+                and os.path.exists(os.path.join(pipeline_package_path, "pipeline.py"))
+            ):
+                continue
+
+            # 提取全局覆盖配置（排除 'priority' 和 'direction' 键）
+            global_override_config = {
+                k: v for k, v in pipeline_global_settings.items() if k not in ["priority", "direction"]
+            }
+
+            # 加载管道自身的独立配置
+            pipeline_specific_config = load_component_specific_config(
+                pipeline_package_path, pipeline_name_snake, "管道"
+            )
+
+            # 合并配置：全局覆盖配置优先
+            final_pipeline_config = merge_component_configs(
+                pipeline_specific_config, global_override_config, pipeline_name_snake, "管道"
+            )
+
+            # 导入并查找 TextPipelineBase 子类
+            try:
+                module_import_path = f"pipelines.{pipeline_name_snake}.pipeline"
+                self.logger.debug(f"尝试导入管道模块: {module_import_path}")
+                module = importlib.import_module(module_import_path)
+
+                expected_class_name = "".join(word.title() for word in pipeline_name_snake.split("_")) + "TextPipeline"
+                pipeline_class: Optional[Type[TextPipeline]] = None
+
+                # 查找 TextPipelineBase 子类
+                for name, obj in inspect.getmembers(module):
+                    # 检查是否是 TextPipelineBase 的子类（间接检查 Protocol）
+                    if (
+                        inspect.isclass(obj)
+                        and hasattr(obj, "__bases__")
+                        and any(base.__name__ == "TextPipelineBase" for base in obj.__bases__)
+                    ):
+                        if name == expected_class_name:
+                            pipeline_class = obj
+                            break
+                        self.logger.debug(
+                            f"在 {module_import_path} 中找到 TextPipelineBase 子类 '{name}'，但期望的是 '{expected_class_name}'。"
+                        )
+
+                if pipeline_class:
+                    # 实例化管道
+                    pipeline_instance = pipeline_class(config=final_pipeline_config)
+                    pipeline_instance.priority = priority
+
+                    # 注册到 TextPipeline 列表
+                    self.register_text_pipeline(pipeline_instance)
+                    loaded_pipeline_count += 1
+                else:
+                    # 未找到 TextPipeline，可能该管道是 MessagePipeline，跳过
+                    self.logger.debug(f"模块 '{module_import_path}' 中未找到 TextPipeline，跳过。")
+
+            except ImportError as e:
+                self.logger.error(f"导入管道模块 '{module_import_path}' 失败: {e}", exc_info=True)
+            except Exception as e:
+                self.logger.error(f"加载 TextPipeline '{pipeline_name_snake}' 时发生错误: {e}", exc_info=True)
+
+        if loaded_pipeline_count > 0:
+            self.logger.info(f"TextPipeline 加载完成，共加载 {loaded_pipeline_count} 个管道。")
+        else:
+            self.logger.info("未加载任何 TextPipeline。")
+
     async def notify_connect(self) -> None:
         """当 AmaidesuCore 连接时，按优先级顺序通知所有管道。"""
         self.logger.debug("正在按顺序通知管道连接...")

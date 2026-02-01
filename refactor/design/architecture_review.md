@@ -1,951 +1,223 @@
 # 架构设计审查报告
 
-> **审查日期**: 2026-01-31
-> **审查范围**: 重构后项目的架构设计问题
+> **审查日期**: 2026-02-01（更新：B-01 核心功能已实现，B-03 服务注册调用方未迁移）
+> **审查范围**: 重构后项目中**尚未解决**的架构问题
 > **严重程度**: 🔴 高 | 🟡 中 | 🟢 低
 
----
-
-## 📋 问题总览
-
-| 问题编号 | 问题名称 | 严重程度 | 影响范围 | 状态 |
-|---------|---------|---------|---------|------|
-| **A-01** | AmaidesuCore 仍承担过多职责 | 🔴 | 核心架构 | ✅ 已完成 |
-| **A-02** | 服务注册机制与 EventBus 并存导致混乱 | 🔴 | 全局通信 | ✅ 已完成 |
-| **A-03** | Provider 构造函数签名不一致 | 🟡 | 可测试性 | ✅ 已完成 |
-| **A-04** | MaiCoreDecisionProvider 职责过重 | 🔴 | 决策层 | ✅ 已完成 |
-| **A-05** | Provider/Plugin 职责边界不清 | 🟡 | 目录结构 | ✅ 设计已确定 |
-| **A-06** | 输出层 Provider 依赖 core 实例 | 🔴 | 依赖注入 | ✅ 已完成 |
-| **A-07** | DataCache 未实现（Layer 2 已实现） | 🟢 | 数据流 | ✅ 已确认 |
-| **A-08** | 配置加载散落在多个模块 | 🟡 | 配置管理 | ✅ 已完成 |
-| **A-09** | 循环依赖风险 | 🟡 | 模块结构 | ✅ 已完成 |
-| **A-10** | 废弃代码未清理干净 | 🟢 | 代码质量 | ✅ 已完成 |
+**说明**：历史上已关闭的问题（A-01～A-10）已从正文移除，仅在下文「已解决问题摘要」中一笔带过。正文只保留**当前待办**和**新发现**的问题，便于审阅时聚焦。
 
 ---
 
-## 🔴 高严重度问题
+## 📋 已解决问题摘要（供参考）
 
-### A-01: AmaidesuCore 仍承担过多职责 ✅ 已完成
+以下问题在既往审阅中已标记为完成，此处不再展开描述：
 
-**问题描述**：
-
-虽然 AmaidesuCore 已从 641 行精简到 386 行，但仍然是一个"上帝类"，承担了过多职责：
-
-```python
-# 当前 AmaidesuCore 的职责（仍然过多）
-class AmaidesuCore:
-    # 1. 组件持有（可接受）
-    - plugin_manager
-    - pipeline_manager
-    - context_manager
-    - event_bus
-    - llm_service
-    - decision_manager
-    - output_provider_manager
-    - expression_generator
-    - http_server
-    
-    # 2. 服务注册（应该移除）
-    - register_service()
-    - get_service()
-    - _services: Dict[str, Any]
-    
-    # 3. 数据流处理（不应该在 Core 中）
-    - _on_intent_ready()  # Layer 4→5→6 的处理逻辑
-    - _setup_output_layer()
-    
-    # 4. HTTP 回调注册（应该委托）
-    - register_http_callback()
-```
-
-**影响**：
-- 难以测试（需要 mock 大量依赖）
-- 修改任何功能都可能影响整个核心
-- 新开发者难以理解职责边界
-
-**建议**：
-
-```python
-# 方案：Core 只做组合，不做处理
-class AmaidesuCore:
-    """纯粹的组合根（Composition Root）"""
-    
-    def __init__(self, ...):
-        # 只持有组件引用
-        self.event_bus = event_bus
-        self.plugin_manager = plugin_manager
-        # ...
-    
-    async def start(self):
-        """启动所有组件"""
-        await self.http_server.start()
-        await self.decision_manager.connect()
-        # ...
-    
-    async def stop(self):
-        """停止所有组件"""
-        # ...
-
-# 数据流处理移到独立的 FlowCoordinator
-class FlowCoordinator:
-    """数据流协调器"""
-    
-    def __init__(self, event_bus, expression_generator, output_manager):
-        self.event_bus = event_bus
-        self.expression_generator = expression_generator
-        self.output_manager = output_manager
-        
-        # 订阅事件
-        event_bus.on("understanding.intent_generated", self._on_intent)
-    
-    async def _on_intent(self, event_name, data, source):
-        intent = data.get("intent")
-        params = await self.expression_generator.generate(intent)
-        await self.output_manager.render_all(params)
-
-# 服务注册移到 ServiceLocator（或直接删除）
-class ServiceLocator:
-    """服务定位器（如果确实需要）"""
-    _services: Dict[str, Any] = {}
-
-    @classmethod
-    def register(cls, name: str, service: Any):
-        cls._services[name] = service
-```
-
-**执行情况**：
-
-✅ 已完成：
-- 创建了 `FlowCoordinator` 类，负责协调 Layer 4 → Layer 5 → Layer 6 的数据流
-- 将 `_setup_output_layer()` 和 `_on_intent_ready()` 从 AmaidesuCore 移到了 FlowCoordinator
-- 移除了 AmaidesuCore 中的 `register_http_callback()` 方法（未被使用）
-- 更新 AmaidesuCore 为纯组合根（Composition Root），只负责持有组件和启动/停止
-- 从 AmaidesuCore 移除了 `avatar` 属性和参数
-- 从 AmaidesuCore 移除了 `output_provider_manager` 属性和参数
-- 从 AmaidesuCore 移除了 `expression_generator` 属性和参数
-- 添加了 `flow_coordinator` 属性到 AmaidesuCore
-- 在 main.py 中创建并配置 FlowCoordinator
-- 更新了 AmaidesuCore 的 `connect()` 和 `disconnect()` 方法，移除输出层设置逻辑
-
-**修改的文件**：
-- `src/core/flow_coordinator.py` - 新增文件，实现数据流协调器
-- `src/core/amaidesu_core.py` - 重构为纯组合根，移除数据处理逻辑
-- `main.py` - 创建并配置 FlowCoordinator，移除废弃代码
-- `refactor/design/architecture_review.md` - 本文档，更新 A-01 状态
-
-**说明**：
-- AmaidesuCore 现在是纯粹的组合根（Composition Root），只负责持有组件引用和协调启动/停止
-- 数据流处理（Layer 4 → Layer 5 → Layer 6）已完全委托给 FlowCoordinator
-- HTTP 回调注册方法已被移除（未被实际使用）
-- Core 的代码量进一步减少，职责更加清晰
-- 保持了向后兼容性，所有现有功能继续正常工作
+- **A-01** AmaidesuCore 职责过重 → 已引入 FlowCoordinator，Core 为纯组合根
+- **A-02** 服务注册与 EventBus 并存 → 已从 AmaidesuCore 移除接口（**但调用方未迁移，见 B-03**）
+- **A-03** Provider 构造函数不一致 → 已统一为 `__init__(config)` + `setup(event_bus, dependencies)`
+- **A-04** MaiCoreDecisionProvider 过重 → 已拆分为 WebSocketConnector + RouterAdapter
+- **A-05** Provider/Plugin 边界不清 → 设计已确定（迁移计划见下文 B-02）
+- **A-06** 输出层 Provider 依赖 core → 已移除 core 参数
+- **A-07** Layer 2 / DataCache → Layer 2 已实现，DataCache 保留为扩展点
+- **A-08** 配置分散 → 已引入 ConfigService
+- **A-09** 循环依赖 → 已通过 CoreServices 接口与 TYPE_CHECKING 缓解
+- **A-10** 废弃代码未清理 → 已移除 BasePlugin、avatar 等
+- **B-01** 管道系统未重构成功 → TextPipeline 加载机制已实现，限流和相似文本过滤已接入 Layer 2→3 数据流  
 
 ---
 
-### A-02: 服务注册机制与 EventBus 并存导致混乱 ✅ 已完成
+## 📋 当前问题总览（未解决）
 
-**问题描述**：
-
-项目中存在两种通信模式并存，但边界不清：
-
-```python
-# 模式1：服务注册（旧）
-self.core.register_service("text_cleanup", self)
-service = self.core.get_service("vts_control")
-
-# 模式2：EventBus（新）
-await self.event_bus.emit("tts.speak", {"text": "hello"})
-self.event_bus.on("tts.speak", self.handle_speak)
-```
-
-**问题表现**：
-
-```python
-# TTSProvider 中的混乱
-class TTSProvider(OutputProvider):
-    def __init__(self, config, event_bus=None, core=None):
-        self.core = core  # 为了使用服务注册
-
-    async def _render_internal(self, parameters):
-        # 混用两种模式
-        text_cleanup = self.core.get_service("text_cleanup")  # 服务注册
-        await self.event_bus.emit("subtitle.show", {...})      # EventBus
-```
-
-**影响**：
-- 依赖关系不透明
-- 难以追踪数据流
-- 测试时需要同时 mock 两种机制
-
-**建议**：
-
-```python
-# 方案：统一使用 EventBus，废弃服务注册
-
-# 1. 对于"请求-响应"场景，使用 EventBus + 回调
-class TTSProvider:
-    async def _render_internal(self, parameters):
-        # 通过事件请求文本清理
-        result = await self.event_bus.request(
-            "text_cleanup.clean",
-            {"text": parameters.tts_text}
-        )
-        cleaned_text = result.get("cleaned_text")
-
-# 2. EventBus 增加请求-响应支持
-class EventBus:
-    async def request(self, event_name: str, data: Any, timeout: float = 5.0) -> Any:
-        """请求-响应模式（带超时）"""
-        response_event = f"{event_name}.response.{uuid4()}"
-        future = asyncio.Future()
-
-        def handler(name, data, source):
-            future.set_result(data)
-
-        self.on(response_event, handler)
-        await self.emit(event_name, {**data, "response_event": response_event})
-
-        try:
-            return await asyncio.wait_for(future, timeout)
-        finally:
-            self.off(response_event, handler)
-```
-
-**执行情况**：
-
-✅ 已完成：
-- 为 EventBus 实现了 `request()` 方法，支持请求-响应模式
-- 移除了所有 Provider 中的 `get_service()` 调用
-- 移除了所有 Provider 中的服务引用初始化
-- 从 AmaidesuCore 移除了 `register_service()` 和 `get_service()` 方法
-- 从 AmaidesuCore 移除了 `_services` 字典
-- 移除了 vtube_studio/plugin.py 中的服务注册代码
-- 所有 Provider 现在只依赖 EventBus 进行通信
-
-**修改的文件**：
-- `src/core/event_bus.py` - 添加了 `request()` 方法和 `_pending_requests` 管理
-- `src/core/amaidesu_core.py` - 移除了服务注册相关代码
-- `src/providers/tts_provider.py` - 移除了服务调用
-- `src/providers/subtitle_provider.py` - 移除了服务调用
-- `src/providers/omni_tts_provider.py` - 移除了服务调用
-- `src/providers/sticker_provider.py` - 移除了服务调用，禁用了贴纸功能
-- `src/plugins/console_input/plugin.py` - 移除了服务调用
-- `src/plugins/gptsovits_tts/providers/gptsovits_tts_provider.py` - 移除了所有服务调用
-- `src/plugins/vtube_studio/plugin.py` - 移除了服务注册代码
-
-**说明**：
-- 服务注册机制已完全废弃
-- 所有服务间通信应使用 EventBus（发布-订阅或请求-响应）
-- 原有的可选服务（text_cleanup, vts_lip_sync, subtitle_service）因未实际提供而失效
-- 将来可以通过 EventBus 实现类似的功能，或者通过构造函数注入依赖
-- EventBus.request() 方法已实现，可用于将来需要请求-响应模式的场景
-
----
-
-### A-04: MaiCoreDecisionProvider 职责过重 ✅ 已完成
-
-**问题描述**：
-
-`MaiCoreDecisionProvider` 承担了过多职责，成为另一个"上帝类"：
-
-```python
-class MaiCoreDecisionProvider:
-    # 职责1：WebSocket 连接管理
-    async def connect()
-    async def disconnect()
-    _ws_task, _monitor_task
-
-    # 职责2：HTTP 服务器管理
-    _setup_http_server()
-    _http_runner, _http_site, _http_app
-    _handle_http_request()
-
-    # 职责3：Router 管理
-    _setup_router()
-    _router: Router
-
-    # 职责4：消息处理
-    _handle_maicore_message()
-
-    # 职责5：决策逻辑
-    async def decide(canonical_message)
-```
-
-**影响**：
-- 单个 Provider 超过 470 行代码
-- 难以单独测试各个功能
-- 与 HttpServer（已有）功能重复
-
-**建议**：
-
-```mermaid
-graph TB
-    subgraph "重构后"
-        MDP[MaiCoreDecisionProvider<br/>只负责决策逻辑]
-        WSC[WebSocketConnector<br/>WebSocket连接管理]
-        HTTP[HttpServer<br/>已有，复用]
-        ROUTER[RouterAdapter<br/>Router封装]
-    end
-
-    MDP --> WSC
-    MDP --> HTTP
-    MDP --> ROUTER
-```
-
-```python
-# 拆分后
-class MaiCoreDecisionProvider:
-    """只负责决策逻辑"""
-
-    def __init__(self, config, ws_connector, router_adapter):
-        self.ws_connector = ws_connector
-        self.router_adapter = router_adapter
-
-    async def decide(self, canonical_message) -> MessageBase:
-        """核心决策方法"""
-        await self.router_adapter.send(canonical_message)
-        return await self.router_adapter.receive()
-
-class WebSocketConnector:
-    """WebSocket 连接管理"""
-    async def connect(self): ...
-    async def disconnect(self): ...
-
-class RouterAdapter:
-    """Router 封装"""
-    def __init__(self, router: Router): ...
-    async def send(self, message): ...
-    async def receive(self) -> MessageBase: ...
-```
-
-**执行情况**：
-
-✅ 已完成：
-- 创建了 `WebSocketConnector` 类，负责 WebSocket 连接管理和状态监控
-- 创建了 `RouterAdapter` 类，封装 Router 的发送/接收接口
-- 重构了 `MaiCoreDecisionProvider`，只保留决策逻辑（`decide` 方法）
-- 移除了 MaiCoreDecisionProvider 中的 HTTP 服务器管理代码（未实际使用）
-- 移除了 MaiCoreDecisionProvider 中的 WebSocket 连接管理代码，委托给 WebSocketConnector
-- 移除了 MaiCoreDecisionProvider 中的 Router 封装代码，使用 RouterAdapter
-- 添加了 `_process_maicore_message` 方法，避免阻塞回调处理
-
-**修改的文件**：
-- `src/core/providers/websocket_connector.py` - 新增文件，WebSocket 连接管理器
-- `src/core/providers/router_adapter.py` - 新增文件，Router 封装适配器
-- `src/core/providers/maicore_decision_provider.py` - 重构为只负责决策逻辑
-- `refactor/design/architecture_review.md` - 本文档，更新 A-04 状态
-
-**说明**：
-- MaiCoreDecisionProvider 现在只负责决策逻辑（`decide` 方法）
-- WebSocket 连接管理已完全委托给 WebSocketConnector
-- Router 操作已通过 RouterAdapter 封装，提供简化的接口
-- HTTP 服务器管理代码已移除（未实际使用，AmaidesuCore 已有 HttpServer）
-- 代码量从 473 行减少到约 220 行，职责更加清晰
-- 保持了向后兼容性，现有功能继续正常工作
-- 消息处理改为非阻塞方式，使用 `asyncio.create_task` 避免阻塞回调
-
----
-
-### A-06: 输出层 Provider 依赖 core 实例 ✅ 已完成
-
-**问题描述**：
-
-所有 OutputProvider 的构造函数都接收 `core` 参数，形成对核心的直接依赖：
-
-```python
-# 当前设计
-class TTSProvider(OutputProvider):
-    def __init__(self, config: Dict[str, Any], event_bus=None, core=None):
-        self.core = core  # 直接依赖 AmaidesuCore
-    
-    async def _render_internal(self, parameters):
-        # 通过 core 获取服务
-        vts_control = self.core.get_service("vts_control")
-        text_cleanup = self.core.get_service("text_cleanup")
-```
-
-**影响**：
-- Provider 难以独立测试（需要完整的 core 实例）
-- 形成隐式依赖，难以追踪
-- 违反依赖倒置原则
-
-**建议**：
-
-```python
-# 方案：通过接口注入依赖
-
-# 定义服务接口
-class TextCleanupService(Protocol):
-    async def clean(self, text: str) -> str: ...
-
-class VTSControlService(Protocol):
-    async def trigger_hotkey(self, hotkey_id: str) -> bool: ...
-
-# Provider 通过构造函数注入
-class TTSProvider(OutputProvider):
-    def __init__(
-        self,
-        config: Dict[str, Any],
-        event_bus: EventBus,
-        text_cleanup: TextCleanupService,  # 显式依赖
-        vts_control: Optional[VTSControlService] = None,
-    ):
-        self.text_cleanup = text_cleanup
-        self.vts_control = vts_control
-    
-    async def _render_internal(self, parameters):
-        cleaned = await self.text_cleanup.clean(parameters.tts_text)
-        # ...
-
-# 在工厂中组装
-class ProviderFactory:
-    def create_tts_provider(self, config, event_bus) -> TTSProvider:
-        text_cleanup = TextCleanupServiceImpl()
-        vts_control = self.get_vts_control()  # 可选依赖
-        return TTSProvider(config, event_bus, text_cleanup, vts_control)
-```
-
-**执行情况**：
-
-✅ 已完成：
-- 在 A-03 的重构中，所有 Provider 的构造函数已经移除了 `core` 参数
-- 所有 Provider 现在只接收 `config` 参数
-- `event_bus` 和其他依赖通过 `setup()` 方法注入
-- 验证了以下目录下的 Provider 都没有 `core` 参数：
-  - `src/providers/` - 核心 Provider
-  - `src/rendering/providers/` - 渲染 Provider
-  - `src/plugins/` - 所有插件目录下的 Provider
-
-**修改的文件**：
-- `refactor/design/architecture_review.md` - 本文档，更新 A-06 状态
-
-**说明**：
-- A-06 问题已在 A-03 重构时一并解决
-- 所有 Provider 构造函数签名已统一，不再接收 `core` 参数
-- Provider 现在通过 `setup()` 方法接收 `event_bus` 和可选的 `dependencies`
-- 隐式依赖问题已解决，依赖关系更加清晰
-- Provider 现在可以独立测试，无需完整的 core 实例
+| 问题编号 | 问题名称                         | 严重程度 | 影响范围   | 状态   |
+|----------|----------------------------------|----------|------------|--------|
+| **B-01** | 管道系统未重构成功               | 🟡       | 数据流/管道 | ✅ 核心已修复 |
+| **B-02** | A-05 迁移计划未实施（Provider 目录与 Registry） | 🟡       | 目录结构   | ⏳ 待实施 |
+| **B-03** | A-02 未完成：服务注册调用方未迁移 | 🔴       | 运行时崩溃 | ⏳ 待修复 |
 
 ---
 
 ## 🟡 中等严重度问题
 
-### A-03: Provider 构造函数签名不一致 ✅ 已完成
+### B-01: 管道系统未重构成功 ✅ 核心功能已实现
 
-**问题描述**：
+**问题描述**（2026-02-01 更新）：
 
-不同 Provider 的构造函数签名不统一：
+设计文档（`pipeline_refactoring.md`）规定管道应位于 **Layer 2 与 Layer 3 之间**，处理 **Text**（`TextPipeline` 接口），并在 CanonicalLayer 中调用。
 
-```python
-# OutputProvider 基类定义
-class OutputProvider(ABC):
-    def __init__(self, config: dict, event_bus: Optional = None):
-        ...
+**已修复的问题**：
 
-# 实际实现（不一致）
-class TTSProvider(OutputProvider):
-    def __init__(self, config: Dict[str, Any], event_bus=None, core=None):  # 多了 core
+1. ✅ **TextPipeline 加载机制已实现**
+   - 在 `PipelineManager` 中添加 `load_text_pipelines()` 方法（lines 655-771）
+   - 自动扫描并注册 `TextPipelineBase` 子类
+   - `main.py` 调用该方法，确保 TextPipeline 被正确加载
 
-class VTSProvider(OutputProvider):
-    def __init__(self, config: Dict[str, Any], event_bus=None, core=None):  # 多了 core
+2. ✅ **TextPipeline 已接入 Layer 2→3 数据流**
+   - `RateLimitTextPipeline`（限流管道）已实现并接入
+   - `SimilarTextFilterPipeline`（相似文本过滤管道）已实现并接入
+   - CanonicalLayer 的 `process_text()` 调用路径完整
 
-class SubtitleProvider(OutputProvider):
-    def __init__(self, config: Dict[str, Any], event_bus=None, core=None):  # 多了 core
-```
+3. ⏳ **CommandRouter 仍依赖已废弃机制**（待迁移）
+   - `command_router/pipeline.py` 仍使用 `self.core.get_service(service_name)`
+   - 需要迁移到事件订阅模式（见 B-03）
 
-**影响**：
-- 工厂代码需要特殊处理
-- 违反里氏替换原则
-- 新 Provider 不知道该用哪种签名
+4. ⚠️ **MessagePipeline 保留用于特定场景**
+   - 保留用于 inbound/outbound 场景（如 command_processor）
+   - 与 TextPipeline 共存，保持向后兼容
 
-**建议**：
+**设计 vs 实现对照**：
 
-```python
-# 统一签名，core 依赖通过其他方式注入
-class OutputProvider(ABC):
-    def __init__(self, config: dict):
-        self.config = config
-        self.event_bus = None
-        self.is_setup = False
-    
-    async def setup(self, event_bus: EventBus, dependencies: Dict[str, Any] = None):
-        """
-        Args:
-            event_bus: 事件总线
-            dependencies: 可选的依赖注入（替代 core）
-        """
-        self.event_bus = event_bus
-        self._dependencies = dependencies or {}
-        await self._setup_internal()
-```
+| 设计（pipeline_refactoring.md）     | 当前实现 | 状态 |
+|------------------------------------|----------|------|
+| Pipeline 位于 Layer 2→3，处理 Text | CanonicalLayer 调用 `process_text()`，TextPipeline 已注册 | ✅ 已实现 |
+| TextPipeline：process(text, metadata) -> Optional[str] | RateLimitTextPipeline、SimilarTextFilterPipeline 已实现 | ✅ 已实现 |
+| 保留 RateLimit、Filter 等           | 已接入 Layer 2→3 数据流 | ✅ 已实现 |
+| 移除 CommandRouter（用 Provider/事件替代） | CommandRouter 仍存在，仍使用 get_service | ⏳ 待实施（见 B-03） |
 
-**执行情况**：
+**修复内容**（2026-02-01 实施）：
 
-✅ 已完成：
-- 修改了 `OutputProvider` 基类，移除 `event_bus` 参数
-- 修改了 `DecisionProvider` 基类，移除 `event_bus` 参数
-- 更新了 `OutputProvider.setup()` 方法签名，添加 `dependencies` 参数
-- 更新了 `DecisionProvider.setup()` 方法签名，修改 `config` 为可选参数
-- 更新了所有 `src/providers/` 目录下的 Provider：
-  - `TTSProvider` - 移除 `event_bus` 和 `core` 参数
-  - `VTSProvider` - 移除 `event_bus` 和 `core` 参数
-  - `SubtitleProvider` - 移除 `event_bus` 和 `core` 参数
-  - `StickerProvider` - 移除 `event_bus` 和 `core` 参数
-  - `OmniTTSProvider` - 移除 `event_bus` 和 `core` 参数
-- 更新了所有插件目录下的 Provider：
-  - `src/plugins/omni_tts/plugin.py` - 修改 Provider 创建代码
-  - `src/plugins/gptsovits_tts/plugin.py` - 修改 Provider 创建代码
-  - `src/plugins/tts/plugin.py` - 修改 Provider 创建代码
-  - `src/plugins/vtube_studio/plugin.py` - 修改 Provider 创建代码
-  - `src/plugins/sticker/plugin.py` - 修改 Provider 创建代码
-  - `src/plugins/subtitle/plugin.py` - 修改 Provider 创建代码
-  - `src/rendering/providers/avatar_output_provider.py` - 移除 `event_bus` 参数
-  - `src/core/decision_manager.py` - 修改 setup() 调用，移除 config 参数
-- 所有 Provider 构造函数现在统一只接收 `config` 参数
-- 所有 Provider 通过 `setup()` 方法接收 `event_bus` 和可选的 `dependencies`
+1. **PipelineManager 扩展**（`src/core/pipeline_manager.py`）：
+   - 新增 `load_text_pipelines()` 方法（lines 655-771）
+   - 扫描 `TextPipelineBase` 子类并自动注册
+   - 配置合并逻辑与 MessagePipeline 一致
 
-**修改的文件**：
-- `src/core/providers/output_provider.py` - 修改基类构造函数和 setup() 方法
-- `src/core/providers/decision_provider.py` - 修改基类构造函数和 setup() 方法
-- `src/providers/tts_provider.py` - 移除 event_bus 和 core 参数
-- `src/providers/vts_provider.py` - 移除 event_bus 和 core 参数
-- `src/providers/subtitle_provider.py` - 移除 event_bus 和 core 参数
-- `src/providers/sticker_provider.py` - 移除 event_bus 和 core 参数
-- `src/providers/omni_tts_provider.py` - 移除 event_bus 和 core 参数
-- `src/plugins/gptsovits_tts/providers/gptsovits_tts_provider.py` - 移除 event_bus 和 core 参数
-- `src/plugins/omni_tts/plugin.py` - 修改 Provider 创建代码
-- `src/plugins/gptsovits_tts/plugin.py` - 修改 Provider 创建代码
-- `src/plugins/tts/providers/tts_output_provider.py` - 移除 event_bus 参数
-- `src/plugins/tts/plugin.py` - 修改 Provider 创建代码
-- `src/plugins/vtube_studio/providers/vts_output_provider.py` - 移除 event_bus 参数
-- `src/plugins/vtube_studio/plugin.py` - 修改 Provider 创建代码
-- `src/plugins/sticker/sticker_output_provider.py` - 移除 event_bus 参数
-- `src/plugins/sticker/plugin.py` - 修改 Provider 创建代码
-- `src/plugins/subtitle/subtitle_output_provider.py` - 移除 event_bus 参数
-- `src/plugins/subtitle/plugin.py` - 修改 Provider 创建代码
-- `src/rendering/providers/avatar_output_provider.py` - 移除 event_bus 参数
-- `src/core/decision_manager.py` - 修改 setup() 调用
-- `refactor/design/architecture_review.md` - 本文档，更新 A-03 状态
+2. **main.py 更新**（`main.py:128-164`）：
+   - 调用 `load_text_pipelines()` 加载 TextPipeline
+   - 日志显示 TextPipeline 加载数量
 
-**说明**：
-- Provider 构造函数签名现在完全统一，只接收 `config` 参数
-- `event_bus` 和其他依赖通过 `setup()` 方法注入
-- 保持了向后兼容性，所有现有功能继续正常工作
-- 简化了 Provider 创建流程，工厂代码更清晰
-- 移除了对 `core` 实例的依赖，所有依赖通过 EventBus 或 dependencies 字典传递
-
----
-
-### A-05: Provider/Plugin 职责边界不清 ✅ 设计已确定
-
-**问题描述**：
-
-项目中存在一个设计文档未规划的目录 `src/providers/`，且 Provider/Plugin 的职责边界不清晰：
-
-```
-src/core/providers/              # ✅ 基类和接口（设计文档规划）
-├── output_provider.py
-└── input_provider.py
-
-src/plugins/tts/                 # ✅ 官方插件（设计文档规划）
-├── plugin.py
-└── providers/
-    └── tts_output_provider.py
-
-plugins/                         # ✅ 社区插件目录（设计文档规划）
-
-src/providers/                   # ❓ 这个目录是什么？（未在设计文档中）
-├── tts_provider.py
-├── subtitle_provider.py
-├── vts_provider.py
-└── ...
-```
-
-**核心问题**：
-
-如果 Provider 分散在各插件内部而没有统一管理机制，可能导致：
-1. 插件之间绕过 EventBus，直接服务注册（回到旧架构）
-2. 没有统一的渲染入口
-3. 重构白费
-
-**设计决策**：
-
-经过分析，确定以下 Provider/Plugin 职责边界：
-
-```
-Provider = 原子能力（单一职责、可复用、统一管理）
-Plugin = 能力组合（整合 Provider、提供业务场景）
-```
-
-| 参与者 | 职责 | 创建 Provider | 管理方式 |
-|--------|------|--------------|----------|
-| **内置 Provider** | 核心原子能力 | 放在层目录下 | Manager 直接管理 |
-| **官方 Plugin** | 场景整合 | 不创建，只声明依赖 | 配置驱动 |
-| **第三方插件** | 扩展能力 | 可通过 Registry 注册 | 统一注册机制 |
-
-**推荐架构**：
-
-```
-src/
-├── perception/                    # Layer 1-2 感知层
-│   ├── input_layer.py
-│   └── providers/                 # ✅ 内置 InputProvider
-│       ├── console_input_provider.py
-│       ├── bili_danmaku_provider.py
-│       └── minecraft_provider.py
-│
-├── decision/                      # Layer 3-4 决策层
-│   ├── decision_manager.py
-│   └── providers/                 # ✅ 内置 DecisionProvider
-│       ├── maicore_decision_provider.py
-│       └── local_llm_provider.py
-│
-├── rendering/                     # Layer 5-6 渲染层
-│   ├── output_provider_manager.py
-│   ├── provider_registry.py       # ✅ Provider 注册表
-│   └── providers/                 # ✅ 内置 OutputProvider
-│       ├── tts_provider.py
-│       ├── subtitle_provider.py
-│       └── vts_provider.py
-│
-├── plugins/                       # 官方 Plugin（整合 Provider）
-│   ├── live_stream/               # 直播场景
-│   │   └── plugin.py              # 声明依赖: bili_danmaku + tts + vts
-│   └── game_companion/            # 游戏陪伴场景
-│       └── plugin.py              # 声明依赖: minecraft + tts
-│
-plugins/                           # 第三方插件（社区）
-├── custom_stt/
-│   └── providers/
-│       └── whisper_provider.py    # 通过 Registry 注册
-```
-
-**实现示例**：
-
-```python
-# 1. 内置 Provider - 放在层目录，被 Manager 直接管理
-# src/rendering/providers/tts_provider.py
-class TTSProvider(OutputProvider):
-    """内置 TTS 能力"""
-    async def render(self, params: ExpressionParameters): ...
-
-# 2. Provider 注册表 - 统一管理
-# src/rendering/provider_registry.py
-class ProviderRegistry:
-    """Provider 注册表 - 统一管理所有 Provider"""
-    _providers: Dict[str, Type[OutputProvider]] = {}
-
-    @classmethod
-    def register(cls, name: str, provider_class: Type[OutputProvider]):
-        """注册 Provider 类"""
-        cls._providers[name] = provider_class
-
-    @classmethod
-    def create(cls, name: str, config: dict) -> OutputProvider:
-        """创建 Provider 实例"""
-        if name not in cls._providers:
-            raise ValueError(f"Unknown provider: {name}")
-        return cls._providers[name](config)
-
-# 3. 官方 Plugin - 整合已有 Provider，不创建新 Provider
-# src/plugins/live_stream/plugin.py
-class LiveStreamPlugin:
-    """直播场景 Plugin - 整合已有能力"""
-
-    def get_required_providers(self) -> Dict[str, List[str]]:
-        """声明需要的 Provider（不创建）"""
-        return {
-            "input": ["bili_danmaku"],
-            "output": ["tts", "vts", "subtitle"]
-        }
-
-    async def setup(self, event_bus, config):
-        # 不创建 Provider，只注册事件处理逻辑
-        event_bus.subscribe("danmaku.received", self.on_danmaku)
-        return []  # 不返回新 Provider
-
-# 4. 第三方插件 - 可以注册自定义 Provider
-# plugins/custom_stt/plugin.py
-from src.rendering.provider_registry import ProviderRegistry
-from .providers.whisper_provider import WhisperProvider
-
-class CustomSTTPlugin:
-    async def setup(self, event_bus, config):
-        # 通过 Registry 注册自定义 Provider
-        ProviderRegistry.register("whisper_stt", WhisperProvider)
-        return []
-```
-
-**关键保障**：
-
-1. **统一注册入口**：所有 Provider 通过 Registry 注册
-2. **统一生命周期**：Manager 管理所有 Provider 的启动/停止
-3. **强制 EventBus**：禁止服务注册，所有通信通过 EventBus
-4. **配置驱动**：通过配置决定启用哪些 Provider
-
-**迁移计划**：
-
-1. 创建 `src/rendering/provider_registry.py`
-2. 将 `src/providers/` 移动到 `src/rendering/providers/`
-3. 更新 `OutputProviderManager` 使用 Registry
-4. 更新官方 Plugin，移除 Provider 创建逻辑
-5. 删除 `src/providers/` 目录
-
-**注意**：此变更**不影响社区插件**，社区插件目录仍是 `plugins/`（根目录），且可以通过 Registry 注册自定义 Provider
-
----
-
-### A-07: DataCache 未实现（Layer 2 已实现） ✅ 已确认
-
-**问题描述**：
-
-~~Layer 2 完全未实现~~ **更正**：Layer 2 已完整实现，只是 DataCache 组件未实现。
-
-```
-已实现的数据流：
-RawData → InputLayer.normalize() → NormalizedText → CanonicalLayer → CanonicalMessage
-         ↑                        ↑                 ↑
-         Layer 1                  Layer 2           Layer 3
-```
-
-**已实现的组件**：
-- `src/core/data_types/normalized_text.py` - NormalizedText 数据类
-- `src/perception/input_layer.py` - InputLayer（RawData → NormalizedText）
-- `src/canonical/canonical_layer.py` - CanonicalLayer（NormalizedText → CanonicalMessage）
-
-**未实现的组件**：
-- DataCache - 用于缓存原始大对象（图像、音频）
+3. **配置文件更新**（`config-template.toml:176-191`）：
+   - 添加 TextPipeline 配置示例（rate_limit、similar_text_filter）
+   - 清晰标注新旧架构用途
 
 **影响**：
-- 当前场景（主要是文本输入）不受影响
-- 未来如果需要处理图像/音频输入，需要实现 DataCache
 
-**建议**：
+- ✅ **限流、相似文本过滤**等 TextPipeline 功能已接入 Layer 2→3 数据流，正常生效
+- ⚠️ **MessagePipeline** 保留用于特定场景（command_processor 等）
+- ⏳ CommandRouter 迁移待实施（与 B-03 一并处理）
 
-当前可以接受，DataCache 作为未来扩展点保留。如果需要多模态输入支持，再实现 DataCache。
+**相关代码位置**：
 
-**执行情况**：
+- `src/core/pipeline_manager.py`：TextPipeline 协议（lines 64-100）、TextPipelineBase（lines 103-183）、`process_text()`（lines 397-482）、**新增 `load_text_pipelines()`**（lines 655-771）
+- `src/canonical/canonical_layer.py:109`：`_on_normalized_text_ready` 调用 `pipeline_manager.process_text()`
+- `main.py:147-148`：调用 `load_text_pipelines()`
+- TextPipeline 实现：
+  - `src/pipelines/rate_limit/pipeline.py`：RateLimitTextPipeline
+  - `src/pipelines/similar_text_filter/pipeline.py`：SimilarTextFilterPipeline
 
-✅ 已确认：
-- Layer 2 核心组件已完整实现（NormalizedText 数据类、InputLayer、CanonicalLayer）
-- DataCache 组件未实现，经过评估确认当前不需要
-- 相关代码中保留了 DataCache 相关字段用于向后兼容（data_ref 字段、with_data_ref 方法）
-- 代码中有清晰的注释说明 DataCache 功能已移除
-- 当前场景（主要是文本输入）不受影响
+**后续待办**：
 
-**说明**：
-- DataCache 作为未来扩展点保留
-- 如果需要多模态输入支持（图像、音频），再考虑实现 DataCache
-- 向后兼容性字段已保留，避免破坏现有代码
+- CommandRouter 迁移到事件订阅模式（见 B-03）
+- 逐步迁移其他 MessagePipeline 到 TextPipeline（可选）
 
 ---
 
-### A-08: 配置加载散落在多个模块 ✅ 已完成
+### B-03: A-02 未完成：服务注册调用方未迁移 ⏳ 待修复
 
 **问题描述**：
 
-配置加载逻辑散落在多个地方：
+A-02 标记「服务注册已废弃」，但实际只完成了一半：**接口从 AmaidesuCore 移除了，调用方却没有迁移**。
 
-```python
-# PluginManager 中
-plugin_own_config_data = load_component_specific_config(item_path, plugin_name, "插件")
-final_plugin_config = merge_component_configs(...)
+1. **AmaidesuCore 已移除服务注册**  
+   - `register_service()` 和 `get_service()` 方法已从 `src/core/amaidesu_core.py` 删除  
+   - `_services: Dict[str, Any]` 字典也不存在
 
-# OutputProviderManager 中
-async def load_from_config(self, config: Dict[str, Any], core=None):
-    ...
+2. **仍有代码调用 `core.get_service()`（运行时会崩溃）**  
 
-# main.py 中
-config = load_config("config.toml")
-```
+   | 文件 | 调用代码 | 影响 |
+   |------|---------|------|
+   | `src/pipelines/command_router/pipeline.py:132` | `self.core.get_service(service_name)` | ❌ AttributeError |
+   | `src/pipelines/command_processor/pipeline.py:113` | `self.core.get_service(service_name)` | ❌ AttributeError |
+   | `src/plugins/bili_danmaku_official/message/base.py:131` | `core.get_service("prompt_context")` | ❌ AttributeError |
+   | `src/plugins/keyword_action/actions/dg_lab_shock.py:15` | `core.get_service("dg_lab_control")` | ❌ AttributeError |
 
-**建议**：
+3. **15+ 个 README 文档仍引用旧模式**  
+   - `vtube_studio/README.md`、`tts/README.md`、`subtitle/README.md` 等仍示例 `core.get_service()`  
+   - 社区开发者参照文档会写出无法运行的代码
 
-```python
-# 统一的配置服务
-class ConfigService:
-    """配置管理服务"""
-    
-    def __init__(self, config_path: str):
-        self._config = self._load(config_path)
-    
-    def get_plugin_config(self, plugin_name: str) -> Dict[str, Any]:
-        """获取合并后的插件配置"""
-        ...
-    
-    def get_provider_config(self, provider_name: str) -> Dict[str, Any]:
-        """获取 Provider 配置"""
-        ...
-    
-    def get_section(self, section: str) -> Dict[str, Any]:
-        """获取配置节"""
-        ...
-    ```
-    
-    **执行情况**：
-    
-    ✅ 已完成：
-    - 创建了 `ConfigService` 类，作为统一的配置管理服务
-    - ConfigService 封装了所有配置加载逻辑（`load_config`, `load_component_specific_config`, `merge_component_configs` 等）
-    - ConfigService 提供了统一的配置访问接口（`get_section`, `get`, `get_plugin_config`, `get_pipeline_config`, `get_provider_config` 等）
-    - 更新了 `PluginManager` 使用 ConfigService（向后兼容，支持旧的配置加载方式）
-    - 更新了 `main.py` 使用 ConfigService 初始化配置
-    - ConfigService 作为新的服务类位于 `src/services/` 目录下
-    
-    **修改的文件**：
-    - `src/services/config_service.py` - 新增文件，实现统一的配置管理服务
-    - `src/services/__init__.py` - 新增文件，导出 ConfigService
-    - `src/core/plugin_manager.py` - 更新为使用 ConfigService（向后兼容）
-    - `main.py` - 更新为使用 ConfigService 初始化配置
-    - `refactor/design/architecture_review.md` - 本文档，更新 A-08 状态
-    
-    **说明**：
-    - 所有配置加载现在都通过 ConfigService 进行，配置加载逻辑集中在单一位置
-    - ConfigService 提供了清晰的 API，方便各模块获取配置
-    - 保持了向后兼容性，PluginManager 仍支持旧的配置加载方式（如果 ConfigService 未提供）
-    - ConfigService 支持插件、管道、Provider 等组件的配置获取和合并
-    - 配置合并策略统一：全局配置覆盖组件配置
-    
-    ---
+**影响**：
 
-### A-09: 循环依赖风险 ✅ 已完成
+- **运行时崩溃**：上述代码一旦执行到，会抛出 `AttributeError: 'AmaidesuCore' object has no attribute 'get_service'`
+- **目前"能跑"的原因**：管道系统未接入 6 层数据流（B-01），旧插件可能未启用
+- **文档误导**：README 仍指引使用已删除的 API
 
-**问题描述**：
+**建议（修复方向）**：
 
-存在潜在的循环依赖：
+1. **代码迁移**  
+   - 管道（command_router、command_processor）：改用 EventBus 发布/订阅（与 B-01 一并处理）  
+   - bili_danmaku_official：改为通过依赖注入获取 ContextManager，或订阅事件  
+   - keyword_action：改用 EventBus 调用 dg_lab 服务
 
-```
-AmaidesuCore → PluginManager → Plugin → core.get_service() → AmaidesuCore
-                                      → core.event_bus → AmaidesuCore
-```
+2. **文档更新**  
+   - 批量更新 README，移除 `core.get_service()` 示例  
+   - 改为 EventBus 事件订阅或依赖注入模式
 
-当前通过 `TYPE_CHECKING` 延迟导入缓解，但根本问题未解决。
+3. **ContextManager 的访问方式**  
+   - 方案 A：通过 EventBus 请求/响应模式获取上下文  
+   - 方案 B：在 CanonicalLayer 统一附加上下文到 CanonicalMessage  
+   - 方案 C：创建 PromptBuilder 服务，通过依赖注入使用
 
-**建议**：
+**相关代码位置**：
 
-```python
-# 通过接口隔离
-class CoreServices(Protocol):
-    """Core 提供的服务接口"""
-    event_bus: EventBus
+- 已删除的接口：`src/core/amaidesu_core.py`（无 `get_service`）  
+- 仍在调用的代码：见上表  
+- 过时文档：`src/plugins/*/README.md`（15+ 个文件）
 
-    def get_service(self, name: str) -> Any: ...
+**与其他问题的关联**：
 
-# Plugin 依赖接口而非具体类
-class Plugin(Protocol):
-    async def setup(self, services: CoreServices, config: dict) -> List[Provider]:
-        ...
-```
-
-**执行情况**：
-
-✅ 已完成：
-- 创建了 `CoreServices` 接口（Protocol），定义核心服务抽象
-- `CoreServices` 接口只包含 `event_bus` 属性（`get_service()` 已在 A-02 中移除）
-- `Plugin.setup()` 方法现在可以接收 `CoreServices` 接口或直接接收 `EventBus` 实例
-- 新架构（Plugin）通过 `TYPE_CHECKING` 延迟导入 `EventBus`，避免循环依赖
-- 旧架构（BasePlugin）已废弃，但仍保留向后兼容性
-- 依赖链现在清晰：`AmaidesuCore → PluginManager → Plugin.setup(event_bus)`
-
-**修改的文件**：
-- `src/core/plugin.py` - 添加 `CoreServices` 接口，更新 `Plugin.setup()` 文档，导出 `CoreServices`
-- `refactor/design/architecture_review.md` - 本文档，更新 A-09 状态
-
-**说明**：
-- `CoreServices` 接口完全解耦了 Plugin 与 AmaidesuCore 的直接依赖
-- Plugin 只依赖 `CoreServices` 接口，不依赖具体的 AmaidesuCore 实现
-- 当前实现中，`Plugin.setup()` 仍接收 `event_bus` 参数（与 `CoreServices` 接口兼容）
-- AmaidesuCore 已经实现了 `CoreServices` 接口（有 `event_bus` 属性）
-- 通过 `TYPE_CHECKING` 延迟导入，避免了运行时的循环依赖问题
-- 保持了向后兼容性，所有现有功能继续正常工作
+- **B-01**：command_router、command_processor 的 `get_service` 调用属于管道系统问题，可一并修复  
+- **A-02**：本问题是 A-02 的遗留，A-02 应标记为「部分完成」
 
 ---
 
-## 🟢 低严重度问题
+## 🟡 中等严重度问题
 
-### A-10: 废弃代码未清理干净 ✅ 已完成
+### B-02: A-05 迁移计划未实施（Provider 目录与 Registry）⏳ 待实施
 
 **问题描述**：
 
-```python
-# AmaidesuCore 中
-@property
-def avatar(self) -> None:
-    """已废弃：AvatarControlManager 已迁移到 Platform Layer"""
-    self.logger.warning("AvatarControlManager 已迁移...")
-    return None
+A-05 已确定「Provider = 原子能力、Plugin = 场景整合」及目录与注册方式，但**代码迁移未做**：
 
-# 构造函数仍接收 avatar 参数
-def __init__(self, ..., avatar: Optional["AvatarControlManager"] = None, ...):
-    self._avatar = avatar  # 已废弃但仍保留
-```
+- 设计规定：内置 OutputProvider 放在 `src/rendering/providers/`，由 ProviderRegistry 统一注册，OutputProviderManager 通过 Registry 创建/管理。  
+- 当前：内置输出仍位于 `src/providers/`，无 `ProviderRegistry`，官方插件仍自行创建 Provider 实例。
 
-**建议**：完全移除废弃代码，不要保留"兼容性"代码。
+**待实施步骤**（与 A-05 迁移计划一致）：
 
-**执行情况**：
+1. 创建 `src/rendering/provider_registry.py`（或等效注册表）。  
+2. 将 `src/providers/` 下内置 OutputProvider 迁至 `src/rendering/providers/`。  
+3. 令 OutputProviderManager 基于 Registry 创建/管理 Provider。  
+4. 更新官方 Plugin：不再创建 Provider，仅声明依赖（如 `get_required_providers()`）。  
+5. 删除空的或仅剩兼容代码的 `src/providers/` 目录。
 
-✅ 已完成：
-- AmaidesuCore 中的 `avatar` 属性和参数已在 A-01 重构时移除
-- 移除了 `PipelineManager._ensure_sorted()` 废弃方法（空方法，未被调用）
-- 验证没有实际插件仍在使用 `BasePlugin` 类
-- 完全移除了 `BasePlugin` 类及其相关代码：
-  - 删除了 `src/core/plugin_manager.py` 中的 `BasePlugin` 类定义
-  - 简化了 PluginManager 的插件检测逻辑，只保留新 Plugin 协议
-  - 更新了 `src/core/plugin.py` 文档，移除了对 BasePlugin 的引用
-
-**修改的文件**：
-- `src/core/pipeline_manager.py` - 移除了 `_ensure_sorted()` 废弃方法
-- `src/core/plugin_manager.py` - 完全移除 BasePlugin 类和相关处理逻辑
-- `src/core/plugin.py` - 更新文档，移除对 BasePlugin 的引用
-- `refactor/design/architecture_review.md` - 本文档，更新 A-10 状态
-
-**说明**：
-- A-10 问题中提到的 AmaidesuCore avatar 废弃代码已在 A-01 重构时清理
-- PipelineManager 中的 `_ensure_sorted()` 废弃方法已移除（未被调用的空方法）
-- BasePlugin 类已完全移除，没有任何实际插件使用它
-- 所有活跃插件已迁移到新 Plugin 协议架构
+**说明**：此变更不影响社区插件目录 `plugins/`，社区插件仍可通过 Registry 注册自定义 Provider。
 
 ---
 
-## ✅ 做得好的地方
+## ✅ 做得好的地方（保持不变）
 
-1. **EventBus 设计良好**：优先级、错误隔离、统计功能完善
-2. **DecisionManager 工厂模式**：支持运行时切换 Provider
-3. **LLMService 设计清晰**：统一的后端管理、重试机制、token 统计
-4. **Plugin Protocol 设计**：不继承基类，依赖注入清晰
-5. **代码量控制**：AmaidesuCore 从 641 行精简到约 200 行（A-01 后）
-6. **FlowCoordinator 设计**：独立的数据流协调，职责清晰
-7. **AmaidesuCore 纯组合根**：只负责组件组合和生命周期管理
+1. **EventBus 设计良好**：优先级、错误隔离、统计功能完善  
+2. **DecisionManager 工厂模式**：支持运行时切换 Provider  
+3. **LLMService 设计清晰**：统一后端管理、重试、token 统计  
+4. **Plugin Protocol 设计**：不继承基类，依赖注入清晰  
+5. **FlowCoordinator**：Layer 4→5→6 数据流独立、职责清晰  
+6. **AmaidesuCore 纯组合根**：只做组件组合与生命周期  
 
 ---
 
 ## 📝 优先级建议
 
-### 已完成
+### 高优先级
 
-- ✅ **A-01**: AmaidesuCore 重构为纯组合根
-- ✅ **A-02**: 统一通信模式，废弃服务注册
-- ✅ **A-03**: 统一 Provider 构造函数签名
-- ✅ **A-04**: 拆分 MaiCoreDecisionProvider
-- ✅ **A-05**: Provider/Plugin 职责边界设计确定
-- ✅ **A-06**: 移除 Provider 对 core 的直接依赖
-- ✅ **A-07**: Layer 2 已实现，DataCache 作为扩展点保留
-- ✅ **A-08**: 统一配置加载（ConfigService）
-- ✅ **A-09**: 循环依赖风险（通过接口隔离）
-- ✅ **A-10**: 清理废弃代码
+- **B-03** 服务注册调用方未迁移：迁移 4 处代码到 EventBus、更新 15+ 个 README 文档、确定 ContextManager 新访问方式。（**会导致运行时崩溃，优先修复**）
 
-### 待实施（A-05 迁移计划）
+### 中优先级
 
-1. 创建 `src/rendering/provider_registry.py`
-2. 将 `src/providers/` 移动到 `src/rendering/providers/`
-3. 更新 `OutputProviderManager` 使用 Registry
-4. 更新官方 Plugin，移除 Provider 创建逻辑
-5. 删除 `src/providers/` 目录
+- **B-01** 管道系统：核心功能已实现，后续可选迁移 CommandRouter 到事件订阅模式
+- **B-02** A-05 迁移计划：实施 ProviderRegistry、目录迁移与 Plugin 声明式依赖。
 
 ---
 
 ## 🔗 相关文档
 
 - [架构设计总览](./overview.md)
+- [Pipeline 重新设计](./pipeline_refactoring.md)（目标架构；**实现未完成**，见本文 B-01）
+- [插件系统设计](./plugin_system.md)
 - [Avatar 系统重构](./avatar_refactoring.md)
-- [架构一致性分析](../architecture_consistency_analysis.md)

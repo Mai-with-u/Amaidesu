@@ -173,22 +173,32 @@ default_adapter = "vts"
 
 # 管道配置
 [pipelines]
-# 示例：启用并配置 throttle 管道
-# [pipelines.throttle]
-# priority = 100        # 数字越小优先级越高，此行存在即表示启用
-# global_rate_limit = 1 # 可选：覆盖 throttle/config.toml 中的 global_rate_limit
-# user_rate_limit = 5    # 可选：覆盖 throttle/config.toml 中的 user_rate_limit
+# === TextPipeline（新架构，Layer 2→3 文本预处理） ===
+# TextPipeline 在 NormalizedText → CanonicalMessage 之间执行文本预处理
 
-# 示例：启用 message_logger 管道，使用其默认配置
+# 示例：启用限流管道（TextPipeline 版本）
+# [pipelines.rate_limit]
+# priority = 100        # 数字越小优先级越高
+# global_rate_limit = 100  # 可选：全局每分钟最大消息数
+# user_rate_limit = 10     # 可选：每个用户每分钟最大消息数
+# window_size = 60         # 可选：滑动窗口大小（秒）
+
+# 示例：启用相似文本过滤管道（TextPipeline 版本）
+# [pipelines.similar_text_filter]
+# priority = 200
+# similarity_threshold = 0.85  # 可选：相似度阈值（0-1）
+# time_window = 60.0           # 可选：时间窗口（秒）
+# max_cache_size = 1000       # 可选：最大缓存条目数
+
+# === MessagePipeline（旧架构，inbound/outbound 消息处理） ===
+# MessagePipeline 在 MaiCore 消息的入站/出站路径上处理
+
+# 示例：启用 message_logger 管道
 # [pipelines.message_logger]
 # priority = 200
+# log_dir = "data/message_logs"  # 可选：日志目录
 
-# 示例：启用 similar_message_filter 管道，并覆盖其时间窗口
-# [pipelines.similar_message_filter]
-# priority = 300
-# time_window = 10.0 # 覆盖 similar_message_filter/config.toml 中的 time_window
-
-# 示例：启用并配置 command_processor 管道 (入站)
+# 示例：启用 command_processor 管道 (入站)
 [pipelines.command_processor]
 # 这是一个入站管道，用于处理和执行来自 MaiCore 消息中的命令
 # 例如，执行 VTubeStudio 热键，然后从文本中移除命令标记
