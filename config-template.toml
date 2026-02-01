@@ -42,7 +42,7 @@ api_key = "sk-dummy"            # Ollama 不需要真实 API key
 # === Amaidesu 核心配置 ===
 [general]
 # Amaidesu 在 MaiCore 中注册的平台标识符
-platform_id = "amaidesu_default"
+platform_id = "amaidesu"
 
 [maicore]
 # MaiCore WebSocket 服务器地址
