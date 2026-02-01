@@ -195,7 +195,11 @@ class InputLayer:
 
             elif data_type == "text":
                 # 文本类型：应用 TextPipeline 预处理
-                text = str(content)
+                # 从 content 中提取文本（支持字典格式和纯文本）
+                if isinstance(content, dict):
+                    text = content.get("text", str(content))
+                else:
+                    text = str(content)
 
                 # 如果配置了 PipelineManager，使用 TextPipeline 处理文本
                 if self.pipeline_manager:
