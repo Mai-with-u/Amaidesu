@@ -8,7 +8,7 @@
 """
 
 from typing import Dict
-from src.layers.intent_analysis.intent import EmotionType
+from src.layers.decision.intent import EmotionType
 
 
 class EmotionMapper:
@@ -47,16 +47,6 @@ class EmotionMapper:
             "MouthSmile": 0.1,
             "EyeOpenLeft": 1.0,
             "EyeOpenRight": 1.0,
-        },
-        EmotionType.EXCITED: {
-            "MouthSmile": 0.6,
-            "EyeOpenLeft": 0.95,
-            "EyeOpenRight": 0.95,
-        },
-        EmotionType.CONFUSED: {
-            "MouthSmile": 0.2,
-            "EyeOpenLeft": 0.85,
-            "EyeOpenRight": 0.85,
         },
         EmotionType.LOVE: {
             "MouthSmile": 0.7,

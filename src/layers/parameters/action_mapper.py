@@ -8,7 +8,7 @@
 """
 
 from typing import Dict, Any, List
-from src.layers.intent_analysis.intent import ActionType, IntentAction
+from src.layers.decision.intent import ActionType, IntentAction
 
 
 class ActionMapper:
@@ -23,14 +23,14 @@ class ActionMapper:
 
     # 默认动作类型处理函数映射
     DEFAULT_ACTION_HANDLERS = {
-        ActionType.TEXT: "handle_text_action",
         ActionType.EMOJI: "handle_emoji_action",
         ActionType.HOTKEY: "handle_hotkey_action",
-        ActionType.TTS: "handle_tts_action",
-        ActionType.SUBTITLE: "handle_subtitle_action",
         ActionType.EXPRESSION: "handle_expression_action",
-        ActionType.MOTION: "handle_motion_action",
-        ActionType.CUSTOM: "handle_custom_action",
+        ActionType.BLINK: "handle_blink_action",
+        ActionType.NOD: "handle_nod_action",
+        ActionType.SHAKE: "handle_shake_action",
+        ActionType.WAVE: "handle_wave_action",
+        ActionType.CLAP: "handle_clap_action",
     }
 
     def __init__(self):

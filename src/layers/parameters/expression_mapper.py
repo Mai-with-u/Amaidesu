@@ -10,7 +10,7 @@ Expression Mapper - Layer 6: 表情映射（统一入口）
 
 from typing import Dict, Optional
 
-from src.layers.intent_analysis.intent import EmotionType
+from src.layers.decision.intent import EmotionType
 from src.utils.logger import get_logger
 
 
@@ -32,8 +32,6 @@ class ExpressionMapper:
         EmotionType.SAD: {"smile": -0.3, "eye_open": 0.7},
         EmotionType.ANGRY: {"smile": -0.5, "eye_open": 0.6, "brow_down": 0.5},
         EmotionType.SURPRISED: {"smile": 0.2, "eye_open": 1.0, "mouth_open": 0.6},
-        EmotionType.EXCITED: {"smile": 0.6, "eye_open": 0.95},
-        EmotionType.CONFUSED: {"smile": 0.2, "eye_open": 0.85},
         EmotionType.LOVE: {"smile": 0.7, "eye_open": 0.95},
     }
 
