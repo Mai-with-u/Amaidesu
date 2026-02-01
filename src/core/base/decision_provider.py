@@ -1,34 +1,38 @@
 """
 决策Provider接口
 
-定义了决策层(Layer 4: Decision)的Provider接口。
-DecisionProvider负责将CanonicalMessage转换为决策结果(MessageBase)。
+定义了决策层(Layer 3: Decision)的Provider接口。
+DecisionProvider负责将NormalizedMessage转换为决策结果(Intent)。
+
+关键变更:
+- 输入: NormalizedMessage (代替 CanonicalMessage)
+- 输出: Intent (代替 MessageBase)
+- 异步返回: 符合AI VTuber特性
 
 示例实现:
-- MaiCoreDecisionProvider: 使用WebSocket连接到MaiCore
-- LocalLLMDecisionProvider: 使用本地LLM API
+- MaiCoreDecisionProvider: 使用WebSocket连接到MaiCore (异步+LLM意图解析)
+- LocalLLMDecisionProvider: 使用本地LLM API (直接生成Intent)
 - RuleEngineDecisionProvider: 使用本地规则引擎
 """
 
 from typing import Optional, TYPE_CHECKING
 from abc import ABC, abstractmethod
 
-from maim_message import MessageBase
-
 if TYPE_CHECKING:
-    from src.layers.canonical.canonical_message import CanonicalMessage
+    from src.data_types.normalized_message import NormalizedMessage
+    from src.layers.decision.intent import Intent
 
 
 class DecisionProvider(ABC):
     """
     决策Provider抽象基类
 
-    职责: 将CanonicalMessage转换为决策结果(MessageBase)
+    职责: 将NormalizedMessage转换为决策结果(Intent)
 
     生命周期:
     1. 实例化(__init__)
     2. 设置(setup()) - 初始化并注册到EventBus
-    3. 决策(decide()) - 处理CanonicalMessage
+    3. 决策(decide()) - 异步处理NormalizedMessage
     4. 清理(cleanup()) - 释放资源
 
     Attributes:
@@ -66,17 +70,17 @@ class DecisionProvider(ABC):
         self.is_setup = True
 
     @abstractmethod
-    async def decide(self, canonical_message: "CanonicalMessage") -> MessageBase:
+    async def decide(self, message: "NormalizedMessage") -> "Intent":
         """
-        决策
+        决策（异步）
 
-        根据CanonicalMessage生成决策结果(MessageBase)。
+        根据NormalizedMessage生成决策结果(Intent)。
 
         Args:
-            canonical_message: 标准消息
+            message: 标准化消息
 
         Returns:
-            MessageBase: 决策结果
+            Intent: 决策意图
 
         Raises:
             ValueError: 如果输入消息无效

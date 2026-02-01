@@ -1,16 +1,19 @@
 """
 InputLayer - 输入层协调器
 
-负责协调Layer 1(输入感知)和Layer 2(输入标准化)，建立RawData到NormalizedText的数据流。
+负责协调Layer 1(输入感知)和Layer 2(输入标准化)，建立RawData到NormalizedMessage的数据流。
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, TYPE_CHECKING
 
 from src.core.event_bus import EventBus
 from src.data_types.raw_data import RawData
-from src.data_types.normalized_text import NormalizedText
+from src.data_types.normalized_message import NormalizedMessage
 from src.layers.input.input_provider_manager import InputProviderManager
 from src.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from src.layers.normalization.content import StructuredContent
 
 
 class InputLayer:
@@ -18,7 +21,7 @@ class InputLayer:
     输入层协调器
 
     负责协调Layer 1(输入感知)和Layer 2(输入标准化)。
-    接收RawData事件，转换为NormalizedText，发布到EventBus。
+    接收RawData事件，转换为NormalizedMessage，发布到EventBus。
     """
 
     def __init__(self, event_bus: EventBus, input_provider_manager: Optional[InputProviderManager] = None):
@@ -35,7 +38,7 @@ class InputLayer:
 
         # 统计信息
         self._raw_data_count = 0
-        self._normalized_count = 0
+        self._normalized_message_count = 0
 
         self.logger.debug("InputLayer初始化完成")
 
@@ -76,38 +79,44 @@ class InputLayer:
                 f"content={str(raw_data.content)[:50]}..."
             )
 
-            # 转换为NormalizedText
-            normalized = await self.normalize(raw_data)
+            # 转换为NormalizedMessage
+            normalized_message = await self.normalize(raw_data)
 
-            if normalized:
-                self._normalized_count += 1
+            if normalized_message:
+                self._normalized_message_count += 1
 
-                # 发布NormalizedText就绪事件
+                # 发布NormalizedMessage就绪事件
                 await self.event_bus.emit(
-                    "normalization.text.ready",
-                    {"normalized": normalized, "source": raw_data.source},
+                    "normalization.message_ready",
+                    {"message": normalized_message, "source": raw_data.source},
                     source="InputLayer",
                 )
 
-                self.logger.debug(f"生成NormalizedText: text={normalized.text[:50]}..., source={normalized.source}")
+                self.logger.debug(
+                    f"生成NormalizedMessage: text={normalized_message.text[:50]}..., "
+                    f"source={normalized_message.source}, "
+                    f"importance={normalized_message.importance:.2f}"
+                )
 
         except Exception as e:
             self.logger.error(f"处理RawData事件时出错 (source: {source}): {e}", exc_info=True)
 
-    async def normalize(self, raw_data: RawData) -> Optional[NormalizedText]:
+    async def normalize(self, raw_data: RawData) -> Optional[NormalizedMessage]:
         """
-        将RawData转换为NormalizedText
+        将RawData转换为NormalizedMessage
 
         根据raw_data的data_type选择不同的转换策略:
-        - text: 直接转换为文本
-        - gift, superchat, guard: 格式化描述为文本
+        - text: 创建TextContent
+        - gift: 创建GiftContent
+        - superchat: 创建SuperChatContent
+        - guard: 创建TextContent(带有特殊标记)
         - audio, image: 简化为文本描述(暂不处理多模态)
 
         Args:
             raw_data: 原始数据
 
         Returns:
-            NormalizedText对象，转换失败返回None
+            NormalizedMessage对象，转换失败返回None
         """
         try:
             data_type = raw_data.data_type
@@ -118,46 +127,82 @@ class InputLayer:
             metadata["source"] = raw_data.source
             metadata["original_timestamp"] = raw_data.timestamp
 
-            # 根据数据类型转换为文本
+            # 导入StructuredContent类型
+            from src.layers.normalization.content import (
+                TextContent,
+                GiftContent,
+                SuperChatContent,
+            )
+
+            # 根据数据类型创建对应的StructuredContent
+            structured_content: "StructuredContent"
+
             if data_type == "gift":
-                # 礼物消息格式化
+                # 礼物消息
                 if isinstance(content, dict):
                     user = content.get("user", "未知用户")
                     gift_name = content.get("gift_name", "未知礼物")
+                    gift_level = content.get("gift_level", 1)
                     count = content.get("count", 1)
-                    text = f"{user} 送出了 {count} 个 {gift_name}"
+                    value = content.get("value", 0.0)
+
+                    structured_content = GiftContent(
+                        user=user,
+                        gift_name=gift_name,
+                        gift_level=gift_level,
+                        count=count,
+                        value=value,
+                    )
                 else:
-                    text = f"有人送出了礼物: {str(content)}"
+                    # 降级为文本
+                    structured_content = TextContent(text=f"有人送出了礼物: {str(content)}")
+
+            elif data_type == "superchat":
+                # 醒目留言
+                if isinstance(content, dict):
+                    user = content.get("user", "未知用户")
+                    sc_content = content.get("content", "")
+                    price = content.get("price", 0.0)
+
+                    structured_content = SuperChatContent(
+                        user=user,
+                        content=sc_content,
+                        price=price,
+                    )
+                else:
+                    structured_content = TextContent(text=f"醒目留言: {str(content)}")
 
             elif data_type == "guard":
-                # 大航海格式化
+                # 大航海
                 if isinstance(content, dict):
                     user = content.get("user", "未知用户")
                     level = content.get("level", "大航海")
                     text = f"{user} 开通了{level}"
                 else:
                     text = f"有人开通了大航海: {str(content)}"
-
-            elif data_type == "superchat":
-                # 醒目留言格式化
-                if isinstance(content, dict):
-                    user = content.get("user", "未知用户")
-                    sc_content = content.get("content", "")
-                    text = f"{user} 发送了醒目留言: {sc_content}"
-                else:
-                    text = f"醒目留言: {str(content)}"
+                structured_content = TextContent(text=text)
 
             elif data_type == "text":
                 # 文本直接使用
-                text = str(content)
+                structured_content = TextContent(text=str(content))
 
             else:
-                # 未知类型，转换为字符串
+                # 未知类型，转换为文本
                 text = f"[{data_type}] {str(content)}"
+                structured_content = TextContent(text=text)
 
-            return NormalizedText(text=text, metadata=metadata, data_ref=raw_data.data_ref)
+            # 构建NormalizedMessage
+            return NormalizedMessage(
+                text=structured_content.get_display_text(),
+                content=structured_content,
+                source=raw_data.source,
+                data_type=data_type,
+                importance=structured_content.get_importance(),
+                metadata=metadata,
+                timestamp=raw_data.timestamp,
+            )
         except Exception as e:
-            self.logger.error(f"转换RawData为NormalizedText时出错: {e}", exc_info=True)
+            self.logger.error(f"转换RawData为NormalizedMessage时出错: {e}", exc_info=True)
             return None
 
     async def get_stats(self) -> Dict[str, Any]:
@@ -169,6 +214,10 @@ class InputLayer:
         """
         return {
             "raw_data_count": self._raw_data_count,
-            "normalized_count": self._normalized_count,
-            "success_rate": (self._normalized_count / self._raw_data_count if self._raw_data_count > 0 else 0.0),
+            "normalized_message_count": self._normalized_message_count,
+            "success_rate": (
+                self._normalized_message_count / self._raw_data_count
+                if self._raw_data_count > 0
+                else 0.0
+            ),
         }

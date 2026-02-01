@@ -16,8 +16,8 @@ from src.utils.logger import get_logger
 if TYPE_CHECKING:
     from src.core.event_bus import EventBus
     from src.core.base.decision_provider import DecisionProvider
-    from src.layers.canonical.canonical_message import CanonicalMessage
-    from maim_message import MessageBase
+    from src.data_types.normalized_message import NormalizedMessage
+    from src.layers.decision.intent import Intent
 
 
 class DecisionProviderFactory:
@@ -80,7 +80,7 @@ class DecisionProviderFactory:
 
 class DecisionManager:
     """
-    决策管理器(Layer 4: 决策层)
+    决策管理器(Layer 3: 决策层)
 
     职责:
     - 管理DecisionProvider生命周期
@@ -103,8 +103,8 @@ class DecisionManager:
         await manager.setup(provider_name="maicore", config={"host": "localhost", "port": 8000})
 
         # 进行决策
-        canonical_message = CanonicalMessage(...)
-        result = await manager.decide(canonical_message)
+        normalized_message = NormalizedMessage(...)
+        result = await manager.decide(normalized_message)
 
         # 运行时切换Provider
         await manager.switch_provider(provider_name="local_llm", config={"model": "gpt-4", "api_key": "..."})
@@ -182,19 +182,19 @@ class DecisionManager:
                 self._provider_name = None
                 raise ConnectionError(f"无法初始化DecisionProvider '{provider_name}': {e}") from e
 
-        # 订阅 canonical.message_ready 事件
-        self.event_bus.on("canonical.message_ready", self._on_canonical_message_ready)
-        self.logger.info("DecisionManager 已订阅 canonical.message_ready 事件")
+        # 订阅 normalization.message_ready 事件
+        self.event_bus.on("normalization.message_ready", self._on_normalized_message_ready)
+        self.logger.info("DecisionManager 已订阅 normalization.message_ready 事件")
 
-    async def decide(self, canonical_message: "CanonicalMessage") -> "MessageBase":
+    async def decide(self, normalized_message: "NormalizedMessage") -> "Intent":
         """
         进行决策
 
         Args:
-            canonical_message: 标准化消息
+            normalized_message: 标准化消息
 
         Returns:
-            MessageBase: 决策结果
+            Intent: 决策意图
 
         Raises:
             RuntimeError: 如果当前Provider未设置
@@ -202,9 +202,11 @@ class DecisionManager:
         if not self._current_provider:
             raise RuntimeError("当前未设置DecisionProvider，请先调用 setup()")
 
-        self.logger.debug(f"进行决策 (Provider: {self._provider_name}, Text: {canonical_message.text[:50]})")
+        self.logger.debug(
+            f"进行决策 (Provider: {self._provider_name}, Text: {normalized_message.text[:50]})"
+        )
         try:
-            result = await self._current_provider.decide(canonical_message)
+            result = await self._current_provider.decide(normalized_message)
             self.logger.debug(f"决策完成: {result}")
             return result
         except Exception as e:
@@ -212,28 +214,30 @@ class DecisionManager:
             # 优雅降级: 抛出异常让上层处理
             raise
 
-    async def _on_canonical_message_ready(self, event_name: str, event_data: dict, source: str):
+    async def _on_normalized_message_ready(
+        self, event_name: str, event_data: dict, source: str
+    ):
         """
-        处理 canonical.message_ready 事件
+        处理 normalization.message_ready 事件
 
-        当 CanonicalLayer 生成 CanonicalMessage 时，自动调用当前活动的 DecisionProvider 进行决策。
+        当 InputLayer 生成 NormalizedMessage 时，自动调用当前活动的 DecisionProvider 进行决策。
 
         Args:
             event_name: 事件名称
-            event_data: 事件数据，包含 "canonical" (CanonicalMessage) 和 "source"
+            event_data: 事件数据，包含 "message" (NormalizedMessage) 和 "source"
             source: 事件源
         """
-        canonical: "CanonicalMessage" = event_data.get("canonical")
-        if not canonical:
-            self.logger.warning("收到空的 CanonicalMessage 事件")
+        normalized: "NormalizedMessage" = event_data.get("message")
+        if not normalized:
+            self.logger.warning("收到空的 NormalizedMessage 事件")
             return
 
         try:
-            self.logger.debug(f"收到 CanonicalMessage: {canonical.text[:50]}...")
+            self.logger.debug(f"收到 NormalizedMessage: {normalized.text[:50]}...")
             # 调用当前活动的 Provider 进行决策
-            await self.decide(canonical)
+            await self.decide(normalized)
         except Exception as e:
-            self.logger.error(f"处理 CanonicalMessage 时出错: {e}", exc_info=True)
+            self.logger.error(f"处理 NormalizedMessage 时出错: {e}", exc_info=True)
 
     async def switch_provider(self, provider_name: str, config: Dict[str, Any]) -> None:
         """
@@ -271,7 +275,7 @@ class DecisionManager:
         清理当前Provider、取消事件订阅和工厂。
         """
         # 取消事件订阅
-        self.event_bus.off("canonical.message_ready", self._on_canonical_message_ready)
+        self.event_bus.off("normalization.message_ready", self._on_normalized_message_ready)
 
         async with self._switch_lock:
             if self._current_provider:
