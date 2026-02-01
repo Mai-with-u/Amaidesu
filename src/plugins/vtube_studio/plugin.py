@@ -7,7 +7,7 @@ if TYPE_CHECKING:
 
 from src.core.base.output_provider import OutputProvider
 from src.utils.logger import get_logger
-from .providers.vts_output_provider import VTSOutputProvider
+from src.layers.rendering.providers.vts_provider import VTSProvider as VTSOutputProvider
 
 
 class VTubeStudioPlugin:

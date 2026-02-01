@@ -20,7 +20,7 @@ from typing import Dict, Any, List
 from src.utils.logger import get_logger
 
 # --- Provider Import ---
-from src.plugins.gptsovits_tts.providers.gptsovits_tts_provider import GPTSoVITSOutputProvider
+from src.layers.rendering.providers.gptsovits_provider import GPTSoVITSOutputProvider
 
 # --- Configuration Imports ---
 try:

@@ -7,7 +7,7 @@ if TYPE_CHECKING:
 
 from src.core.base.output_provider import OutputProvider
 from src.utils.logger import get_logger
-from .providers.tts_output_provider import TTSOutputProvider
+from src.layers.rendering.providers.tts_provider import TTSProvider as TTSOutputProvider
 
 
 class TTSPlugin:
