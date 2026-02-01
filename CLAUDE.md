@@ -85,9 +85,9 @@ uv run ruff check --fix .
 
 ## 核心架构
 
-项目采用**6层架构** + **Provider系统** + **插件系统**的组合设计，通过核心模块管理插件与MaiCore（主聊天机器人核心）之间的通信。
+项目采用**7层架构** + **Provider系统** + **插件系统**的组合设计，通过核心模块管理插件与MaiCore（主聊天机器人核心）之间的通信。
 
-### 6层核心数据流
+### 7层核心数据流
 
 ```
 外部输入（弹幕、游戏、语音）
@@ -97,17 +97,17 @@ uv run ruff check --fix .
 【Layer 2: 输入标准化】统一转换为Text
   ↓ 转换
 【Layer 3: 中间表示】构建CanonicalMessage
-  ↓ 生成Intent
-【决策层：DecisionProvider】⭐ 可替换、可扩展
+  ↓
+【Layer 4: 决策层】DecisionProvider ⭐ 可替换、可扩展
   ├─ MaiCoreDecisionProvider (默认，WebSocket连接MaiCore)
   ├─ LocalLLMDecisionProvider (可选，本地LLM)
   └─ RuleEngineDecisionProvider (可选，规则引擎)
   ↓ 返回MessageBase
-【Layer 4: 表现理解】解析MessageBase → Intent
+【Layer 5: 表现理解】解析MessageBase → Intent
   ↓ EventBus事件流
-【Layer 5: 表现生成】生成RenderParameters
+【Layer 6: 表现生成】生成RenderParameters
   ↓ 生成ExpressionParameters
-【Layer 6: 渲染呈现】多个OutputProvider并发渲染
+【Layer 7: 渲染呈现】多个OutputProvider并发渲染
   ↓ 并发渲染到多个设备
 【插件系统：Plugin】社区开发的插件能力
 ```
@@ -337,7 +337,7 @@ config.toml（根配置）
 ### 架构设计文档
 
 详细的架构设计文档位于 [`refactor/design/`](refactor/design/)：
-- [架构总览](refactor/design/overview.md) - 重构目标和6层架构概述
+- [架构总览](refactor/design/overview.md) - 重构目标和7层架构概述
 - [插件系统设计](refactor/design/plugin_system.md) - 插件系统和Provider接口详细说明
 - [决策层设计](refactor/design/decision_layer.md) - 可替换的决策Provider系统
 - [多Provider并发设计](refactor/design/multi_provider.md) - 输入/输出层并发处理
@@ -349,7 +349,7 @@ config.toml（根配置）
 | **插件模式** | 继承BasePlugin | 实现Plugin协议（依赖注入） |
 | **核心抽象** | 服务注册 | Provider接口（Input/Decision/Output） |
 | **通信方式** | 服务注册为主 | EventBus事件系统（优先级、错误隔离） |
-| **数据流** | 隐式、混乱 | 明确的6层架构 |
+| **数据流** | 隐式、混乱 | 明确的7层架构 |
 | **决策层** | 硬编码MaiCore | 可替换的DecisionProvider |
 | **输出渲染** | 单一输出 | 多Provider并发渲染 |
 | **配置格式** | enable_xxx布尔值 | enabled列表（推荐） |

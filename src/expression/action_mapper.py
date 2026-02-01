@@ -1,5 +1,5 @@
 """
-动作映射器 - Layer 5 Expression生成层
+动作映射器 - Layer 6 表现生成层
 
 职责:
 - 将Intent中的ActionType映射到渲染指令

@@ -1,9 +1,9 @@
 """
-Emotion Analyzer - Layer 4: 情感分析（统一入口）
+Emotion Analyzer - Layer 5: 情感分析（统一入口）
 
 职责:
-- 统一的情感分析入口（Layer 4 唯一情感分析位置）
-- 合并原有的 Layer 4 情感判断逻辑
+- 统一的情感分析入口（Layer 5 唯一情感分析位置）
+- 合并原有的 Layer 5 情感判断逻辑
 - 合并 Avatar.TriggerStrategyEngine 的 LLM 分析功能
 - 支持规则分析（快速、确定性）
 - 支持 LLM 分析（可选、智能）
@@ -38,7 +38,7 @@ class EmotionAnalyzer:
     """统一的情感分析器
 
     合并原来的：
-    - Layer 4 的情感判断逻辑
+    - Layer 5 的情感判断逻辑
     - Avatar.TriggerStrategyEngine 的 LLM 分析
     """
 

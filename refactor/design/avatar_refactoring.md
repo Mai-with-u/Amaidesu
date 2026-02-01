@@ -12,16 +12,16 @@
 
 当前 Avatar 系统（`src/core/avatar/`）与 6 层架构存在严重的职责重复：
 
-| 功能 | Avatar 系统 | 6层架构 | 问题 |
+| 功能 | Avatar 系统 | 7层架构 | 问题 |
 |------|-------------|---------|------|
-| **情感分析** | `TriggerStrategyEngine` (LLM) | Layer 4 `EmotionAnalyzer` | 两处都做情感分析 |
-| **表情映射** | `SemanticActionMapper` | Layer 5 `EmotionMapper` | 两套映射逻辑 |
+| **情感分析** | `TriggerStrategyEngine` (LLM) | Layer 5 `EmotionAnalyzer` | 两处都做情感分析 |
+| **表情映射** | `SemanticActionMapper` | Layer 6 `EmotionMapper` | 两套映射逻辑 |
 | **VTS控制** | `VTSAdapter` | `VTSOutputProvider` | 两套 VTS 控制代码 |
 
 ### 重构目标
 
 1. **消除重复**：每个功能只在一处实现
-2. **职责清晰**：分析归 Layer 4，映射归 Layer 5，执行归 Layer 6
+2. **职责清晰**：分析归 Layer 5，映射归 Layer 6，执行归 Layer 7
 3. **平台抽象**：保留多平台支持能力（VTS、VRChat、Live2D）
 
 ---
@@ -32,10 +32,10 @@
 
 ```mermaid
 graph TB
-    subgraph "6层架构路径"
-        L4_OLD[Layer 4: Understanding]
-        L5_OLD[Layer 5: Expression]
-        L6_OLD[Layer 6: VTSOutputProvider]
+    subgraph "7层架构路径"
+        L5_OLD[Layer 5: Understanding]
+        L6_OLD[Layer 6: Expression]
+        L7_OLD[Layer 7: VTSOutputProvider]
     end
 
     subgraph "Avatar系统路径（重复）"
@@ -68,17 +68,17 @@ graph TB
 
 ```mermaid
 graph TB
-    subgraph "Layer 4: Understanding"
+    subgraph "Layer 5: Understanding"
         INTENT_PARSER[IntentParser]
         EMOTION_ANALYZER[EmotionAnalyzer<br/>统一情感分析]
     end
 
-    subgraph "Layer 5: Expression"
+    subgraph "Layer 6: Expression"
         EXPR_GEN[ExpressionGenerator]
         EXPR_MAPPER[ExpressionMapper<br/>统一表情映射]
     end
 
-    subgraph "Layer 6: Rendering"
+    subgraph "Layer 7: Rendering"
         AVATAR_PROVIDER[AvatarOutputProvider]
     end
 
@@ -118,9 +118,9 @@ graph TB
 
 ## 🔗 核心设计
 
-### 1. Layer 4: 情感分析（唯一位置）
+### 1. Layer 5: 情感分析（唯一位置）
 
-将 Avatar 的 `TriggerStrategyEngine` 迁移到 Layer 4 的 `EmotionAnalyzer`。
+将 Avatar 的 `TriggerStrategyEngine` 迁移到 Layer 5 的 `EmotionAnalyzer`。
 
 ```python
 # src/understanding/emotion_analyzer.py
@@ -128,7 +128,7 @@ class EmotionAnalyzer:
     """统一的情感分析器
     
     合并原来的：
-    - Layer 4 的情感判断逻辑
+    - Layer 5 的情感判断逻辑
     - Avatar.TriggerStrategyEngine 的 LLM 分析
     """
     
@@ -156,7 +156,7 @@ class EmotionAnalyzer:
         return EmotionResult(emotion=EmotionType.NEUTRAL, confidence=0.5)
 ```
 
-### 2. Layer 5: 表情映射（唯一位置）
+### 2. Layer 6: 表情映射（唯一位置）
 
 合并 `EmotionMapper` 和 `SemanticActionMapper` 为统一的 `ExpressionMapper`。
 
@@ -166,7 +166,7 @@ class ExpressionMapper:
     """统一的表情映射器
     
     合并原来的：
-    - Layer 5 的 EmotionMapper
+    - Layer 6 的 EmotionMapper
     - Avatar 的 SemanticActionMapper
     
     输出平台无关的抽象参数，由 PlatformAdapter 翻译为平台特定参数。
@@ -238,7 +238,7 @@ class VTSAdapter(PlatformAdapter):
         return vts_params
 ```
 
-### 4. Layer 6: 渲染输出
+### 4. Layer 7: 渲染输出
 
 `AvatarOutputProvider` 使用 `PlatformAdapter` 执行渲染。
 
@@ -284,18 +284,18 @@ src/core/avatar/                  # ❌ 整个删除
 
 ```
 src/
-├── understanding/                 # Layer 4
+├── understanding/                 # Layer 5
 │   ├── intent.py
 │   ├── intent_parser.py
 │   └── emotion_analyzer.py       # 统一的情感分析器
 │
-├── expression/                    # Layer 5
+├── expression/                    # Layer 6
 │   ├── expression_generator.py
 │   ├── expression_mapper.py      # 统一的表情映射器（新）
 │   ├── action_mapper.py
 │   └── render_parameters.py
 │
-├── rendering/                     # Layer 6
+├── rendering/                     # Layer 7
 │   └── providers/
 │       ├── tts_output_provider.py
 │       ├── subtitle_output_provider.py
@@ -321,9 +321,9 @@ src/
 ```mermaid
 sequenceDiagram
     participant MC as MaiCore
-    participant L4 as Layer 4<br/>Understanding
-    participant L5 as Layer 5<br/>Expression
-    participant L6 as Layer 6<br/>Rendering
+    participant L5 as Layer 5<br/>Understanding
+    participant L6 as Layer 6<br/>Expression
+    participant L7 as Layer 7<br/>Rendering
     participant PA as PlatformAdapter
     participant VTS as VTube Studio
 
@@ -438,7 +438,7 @@ plugin_name = "Amaidesu"
 
 ## 🔗 相关文档
 
-- [6层架构设计](./layer_refactoring.md)
+- [7层架构设计](./layer_refactoring.md)
 - [决策层设计](./decision_layer.md)
 - [多Provider并发设计](./multi_provider.md)
 - [插件系统设计](./plugin_system.md)

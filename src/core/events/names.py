@@ -14,19 +14,19 @@ class CoreEvents:
     # Layer 2: 输入标准化
     NORMALIZATION_TEXT_READY = "normalization.text.ready"
 
-    # Layer 3-4: 决策层
+    # Layer 4: 决策层
     DECISION_REQUEST = "decision.request"
     DECISION_RESPONSE_GENERATED = "decision.response_generated"
     DECISION_PROVIDER_CONNECTED = "decision.provider.connected"
     DECISION_PROVIDER_DISCONNECTED = "decision.provider.disconnected"
 
-    # Layer 4: 表现理解
+    # Layer 5: 表现理解
     UNDERSTANDING_INTENT_GENERATED = "understanding.intent_generated"
 
-    # Layer 5: 表现生成
+    # Layer 6: 表现生成
     EXPRESSION_PARAMETERS_GENERATED = "expression.parameters_generated"
 
-    # Layer 6: 渲染呈现
+    # Layer 7: 渲染呈现
     RENDER_COMPLETED = "render.completed"
     RENDER_FAILED = "render.failed"
 

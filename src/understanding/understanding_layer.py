@@ -1,5 +1,5 @@
 """
-UnderstandingLayer - Layer 4: 表现理解层
+UnderstandingLayer - Layer 5: 表现理解层
 
 负责将决策响应 (MessageBase) 解析为意图 (Intent)。
 订阅 decision.response_generated 事件，发布 understanding.intent_generated 事件。
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 class UnderstandingLayer:
     """
-    Layer 4: 表现理解层
+    Layer 5: 表现理解层
 
     职责:
     - 订阅 decision.response_generated 事件

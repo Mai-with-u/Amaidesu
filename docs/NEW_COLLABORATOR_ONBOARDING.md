@@ -206,16 +206,16 @@ class MyPlugin(BasePlugin):
     ↓ (发布 normalization.text.ready 事件)
 【Layer 3: 中间表示】构建 CanonicalMessage
     ↓ (发送到决策层)
-【决策层：DecisionProvider】可替换、可扩展
+【Layer 4: 决策层】DecisionProvider 可替换、可扩展
     ├─ MaiCoreDecisionProvider (默认)
     ├─ LocalLLMDecisionProvider (可选)
     └─ RuleEngineDecisionProvider (可选)
     ↓ (返回 MessageBase)
-【Layer 4: 表现理解】解析 MessageBase → Intent
+【Layer 5: 表现理解】解析 MessageBase → Intent
     ↓ (发布 understanding.intent_generated 事件)
-【Layer 5: 表现生成】生成 RenderParameters
+【Layer 6: 表现生成】生成 RenderParameters
     ↓ (发布 expression.parameters_generated 事件)
-【Layer 6: 渲染呈现】多个 OutputProvider 并发渲染
+【Layer 7: 渲染呈现】多个 OutputProvider 并发渲染
     ↓ (字幕、TTS、VTS 等)
 【插件系统：Plugin】社区开发的插件能力
 ```
@@ -252,8 +252,8 @@ class MyPlugin(BasePlugin):
 | 类型 | 位置 | 职责 | 示例 |
 |------|------|------|------|
 | **InputProvider** | Layer 1 | 接收外部数据，生成 RawData | ConsoleInputProvider, BiliDanmakuInputProvider |
-| **OutputProvider** | Layer 6 | 接收渲染参数，执行实际输出 | TTSOutputProvider, SubtitleOutputProvider |
-| **DecisionProvider** | 决策层 | 决策能力接口 | MaiCoreDecisionProvider, LocalLLMDecisionProvider |
+| **OutputProvider** | Layer 7 | 接收渲染参数，执行实际输出 | TTSOutputProvider, SubtitleOutputProvider |
+| **DecisionProvider** | Layer 4: 决策层 | 决策能力接口 | MaiCoreDecisionProvider, LocalLLMDecisionProvider |
 
 **InputProvider 示例**：
 ```python
@@ -657,9 +657,9 @@ class AmaidesuCore:
 - Layer 2：原材料预处理（标准化）
 - Layer 3：标准化零件组装（中间表示）
 - 决策层：决策如何使用这些零件
-- Layer 4：生成使用说明书（理解）
-- Layer 5：生成生产计划（参数）
-- Layer 6：执行生产计划（渲染）
+- Layer 5：生成使用说明书（理解）
+- Layer 6：生成生产计划（参数）
+- Layer 7：执行生产计划（渲染）
 
 **Q5: 决策层为什么可替换？**
 
@@ -709,7 +709,7 @@ class AmaidesuCore:
 
 ```
 Layer 1 (输入感知) → Layer 2 (输入标准化) → Layer 3 (中间表示) → 
-决策层 → Layer 4 (表现理解) → Layer 5 (表现生成) → Layer 6 (渲染呈现)
+Layer 4 决策层 → Layer 5 (表现理解) → Layer 6 (表现生成) → Layer 7 (渲染呈现)
 ```
 
 **关键接口速查表**：
@@ -745,7 +745,7 @@ OutputProvider.cleanup()
 
 **核心数据流**：
 ```
-外部输入 → Layer 1 → Layer 2 → Layer 3 → 决策层 → Layer 4 → Layer 5 → Layer 6 → 最终输出
+外部输入 → Layer 1 → Layer 2 → Layer 3 → Layer 4 决策层 → Layer 5 → Layer 6 → Layer 7 → 最终输出
 ```
 
 **三个核心概念**：

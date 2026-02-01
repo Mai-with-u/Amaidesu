@@ -1,5 +1,5 @@
 """
-渲染参数数据类 - Layer 5到Layer 6的数据格式
+渲染参数数据类 - Layer 6 到 Layer 7 的数据格式
 
 定义了从Expression生成层传递到Rendering呈现层的参数结构。
 """
@@ -12,7 +12,7 @@ import time
 @dataclass
 class ExpressionParameters:
     """
-    表达参数 - Layer 5输出给Layer 6的完整参数
+    表达参数 - Layer 6 输出给 Layer 7 的完整参数
 
     Attributes:
         tts_text: TTS文本内容

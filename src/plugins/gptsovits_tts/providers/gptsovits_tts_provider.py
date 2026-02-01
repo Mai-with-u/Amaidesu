@@ -1,5 +1,5 @@
 """
-GPTSoVITS OutputProvider - Layer 6 Rendering层实现
+GPTSoVITS OutputProvider - Layer 7 渲染呈现层实现
 
 职责:
 - 使用GPT-SoVITS引擎进行文本转语音

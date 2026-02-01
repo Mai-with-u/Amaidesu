@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 class ResponseParser:
     """
-    响应解析器(Layer 4: 表现理解层)
+    响应解析器(Layer 5: 表现理解层)
 
     职责:
     - 解析MessageBase的文本内容

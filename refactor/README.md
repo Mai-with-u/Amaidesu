@@ -13,8 +13,8 @@
 **整体架构是什么？**
 → [设计总览](./design/overview.md)
 
-**6层架构如何工作？**
-→ [6层架构设计](./design/layer_refactoring.md)
+**7层架构如何工作？**
+→ [7层架构设计](./design/layer_refactoring.md)
 
 **决策层如何可替换？**
 → [决策层设计](./design/decision_layer.md)
@@ -40,7 +40,7 @@ refactor/
 ├── README.md                       # 本文件 - 文档索引
 ├── design/                         # 设计文档
 │   ├── overview.md                  # 架构总览
-│   ├── layer_refactoring.md         # 6层架构设计
+│   ├── layer_refactoring.md         # 7层架构设计
 │   ├── decision_layer.md           # 决策层设计
 │   ├── multi_provider.md           # 多Provider并发设计
 │   ├── plugin_system.md            # 插件系统设计
@@ -50,7 +50,7 @@ refactor/
     ├── overview.md                  # 实施计划总览
     ├── phase1_infrastructure.md    # Phase 1: 基础设施
     ├── phase2_input.md             # Phase 2: 输入层
-    ├── phase3_decision.md          # Phase 3: 决策层+Layer 3-4
+    ├── phase3_decision.md          # Phase 3: 决策层(Layer 4)+Layer 5
     ├── phase4_output.md            # Phase 4: 输出层
     ├── phase5_extensions.md         # Phase 5: 扩展系统
     └── phase6_cleanup.md           # Phase 6: 清理和测试
@@ -60,7 +60,7 @@ refactor/
 
 ## 🎯 重构核心要点
 
-### 1. 6层核心数据流
+### 1. 7层核心数据流
 
 ```
 Layer 1: 输入感知（多Provider并发）
@@ -69,13 +69,13 @@ Layer 2: 输入标准化（统一转换为Text）
     ↓
 Layer 3: 中间表示（CanonicalMessage）
     ↓
-决策层（可替换DecisionProvider）
+Layer 4: 决策层（可替换DecisionProvider）
     ↓
-Layer 4: 表现理解（解析MessageBase → Intent）
+Layer 5: 表现理解（解析MessageBase → Intent）
     ↓
-Layer 5: 表现生成（生成RenderParameters）
+Layer 6: 表现生成（生成RenderParameters）
     ↓
-Layer 6: 渲染呈现（多Provider并发）
+Layer 7: 渲染呈现（多Provider并发）
 ```
 
 ### 2. 决策层可替换
@@ -96,7 +96,7 @@ Layer 6: 渲染呈现（多Provider并发）
 语音InputProvider ──┘
 ```
 
-**输出层（Layer 6）**：
+**输出层（Layer 7）**：
 ```
 RenderParameters ──┐
                   ├──→ 分别渲染到不同目标
@@ -145,19 +145,19 @@ graph TB
             Canonical[CanonicalMessage]
         end
 
-        subgraph "决策层（可替换）"
+        subgraph "Layer 4: 决策层（可替换）"
             DecisionLayer[DecisionProvider<br/>MaiCore/本地LLM/规则引擎]
         end
 
-        subgraph "Layer 4: 表现理解层"
+        subgraph "Layer 5: 表现理解层"
             Understanding[解析MessageBase<br/>生成Intent]
         end
 
-        subgraph "Layer 5: 表现生成层"
+        subgraph "Layer 6: 表现生成层"
             Expression[生成RenderParameters]
         end
 
-        subgraph "Layer 6: 渲染呈现层（多Provider并发）"
+        subgraph "Layer 7: 渲染呈现层（多Provider并发）"
             Rendering[字幕/TTS/VTS<br/>多个OutputProvider并发渲染]
         end
     end
@@ -283,7 +283,7 @@ python main.py
 - ✅ 扩展系统正常加载内置扩展和用户扩展
 
 ### 架构指标
-- ✅ 清晰的6层核心数据流架构
+- ✅ 清晰的7层核心数据流架构
 - ✅ 决策层可替换（支持多种DecisionProvider）
 - ✅ 多Provider并发支持（输入层和输出层）
 - ✅ 层级间依赖关系清晰（单向依赖）
@@ -324,7 +324,7 @@ git commit -m "refactor: move mainosaba"
 所有Phase完成后，架构重构结束！
 
 **主要成果**：
-1. ✅ 6层核心数据流架构
+1. ✅ 7层核心数据流架构
 2. ✅ 可替换的决策层
 3. ✅ 多Provider并发支持
 4. ✅ Provider模式统一接口

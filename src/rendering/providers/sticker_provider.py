@@ -1,5 +1,5 @@
 """
-Sticker Provider - Layer 6 Rendering层实现
+Sticker Provider - Layer 7 渲染呈现层实现
 
 职责:
 - 将ExpressionParameters中的贴纸动作渲染到VTS

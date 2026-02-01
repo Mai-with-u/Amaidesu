@@ -77,7 +77,7 @@ class NormalizedTextEvent(BaseModel):
     )
 
 
-# ==================== Layer 3-4: 决策层 ====================
+# ==================== Layer 4: 决策层 ====================
 
 
 class DecisionRequestEvent(BaseModel):
@@ -113,7 +113,7 @@ class DecisionResponseEvent(BaseModel):
 
     事件名：decision.response_generated
     发布者：DecisionProvider
-    订阅者：UnderstandingLayer（Layer 4）
+    订阅者：UnderstandingLayer（Layer 5）
     """
 
     response: Dict[str, Any] = Field(..., description="决策响应（MessageBase格式）")
@@ -122,7 +122,7 @@ class DecisionResponseEvent(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict, description="元数据")
 
 
-# ==================== Layer 4: 表现理解 ====================
+# ==================== Layer 5: 表现理解 ====================
 
 
 class IntentGeneratedEvent(BaseModel):
@@ -131,7 +131,7 @@ class IntentGeneratedEvent(BaseModel):
 
     事件名：understanding.intent_generated
     发布者：UnderstandingLayer
-    订阅者：ExpressionLayer（Layer 5）
+    订阅者：ExpressionLayer（Layer 6）
     """
 
     original_text: str = Field(..., description="原始文本")
@@ -142,7 +142,7 @@ class IntentGeneratedEvent(BaseModel):
     timestamp: float = Field(default_factory=time.time, description="时间戳")
 
 
-# ==================== Layer 5: 表现生成 ====================
+# ==================== Layer 6: 表现生成 ====================
 
 
 class ExpressionParametersEvent(BaseModel):
@@ -151,7 +151,7 @@ class ExpressionParametersEvent(BaseModel):
 
     事件名：expression.parameters_generated
     发布者：ExpressionLayer
-    订阅者：OutputProvider（Layer 6）
+    订阅者：OutputProvider（Layer 7）
     """
 
     tts_text: str = Field(default="", description="TTS 文本")

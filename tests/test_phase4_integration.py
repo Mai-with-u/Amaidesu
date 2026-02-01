@@ -4,7 +4,7 @@ Phase 4 集成测试
 测试内容:
 1. OutputProviderManager 从配置加载Provider
 2. AmaidesuCore 集成 OutputProviderManager 和 ExpressionGenerator
-3. Layer 4 → Layer 5 → Layer 6 完整数据流
+3. Layer 5 → Layer 6 → Layer 7 完整数据流
 """
 
 import asyncio
@@ -205,7 +205,7 @@ class TestAmaidesuCoreIntegration:
 
 
 class TestLayerDataFlow:
-    """测试 Layer 4 → Layer 5 → Layer 6 数据流"""
+    """测试 Layer 5 → Layer 6 → Layer 7 数据流"""
 
     @pytest.mark.asyncio
     async def test_complete_data_flow(self):
@@ -233,11 +233,11 @@ class TestLayerDataFlow:
             metadata={},
         )
 
-        # Layer 5: Intent → ExpressionParameters
+        # Layer 6: Intent → ExpressionParameters
         params = await expression_generator.generate(intent)
         assert params.tts_text == "你好！"
 
-        # Layer 6: ExpressionParameters → Provider
+        # Layer 7: ExpressionParameters → Provider
         await output_manager.render_all(params)
 
         # 验证Provider被调用

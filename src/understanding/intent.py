@@ -1,5 +1,5 @@
 """
-Intent数据结构 - Layer 4: 表现理解层
+Intent数据结构 - Layer 5: 表现理解层
 
 职责:
 - 定义Intent数据类
@@ -66,7 +66,7 @@ class IntentAction:
 @dataclass
 class Intent:
     """
-    Intent意图(Layer 4: 表现理解层)
+    Intent意图(Layer 5: 表现理解层)
 
     核心职责:
     - 解析决策结果(MessageBase)为意图

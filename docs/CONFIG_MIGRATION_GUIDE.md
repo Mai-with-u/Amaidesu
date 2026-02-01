@@ -20,7 +20,7 @@
 新的Provider配置结构具有以下优势：
 
 1. **统一管理**：所有Provider（Input、Output、Decision）在统一的 `[providers.*]` 节点下管理
-2. **清晰的层级**：按照系统架构层级组织配置（Layer 1: Perception, Layer 6: Rendering, Layer 3.5: Decision）
+2. **清晰的层级**：按照系统架构层级组织配置（Layer 1: Perception, Layer 4: Decision, Layer 7: Rendering）
 3. **更好的可扩展性**：新增Provider类型更容易，配置结构更清晰
 4. **向后兼容**：旧配置格式仍然有效，无需立即迁移
 

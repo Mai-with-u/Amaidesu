@@ -2,7 +2,7 @@
 Provider接口基础数据类定义
 
 定义了新架构中的核心数据结构:
-- RenderParameters: 渲染参数(传递给Layer 6: 渲染呈现层)
+- RenderParameters: 渲染参数(传递给Layer 7: 渲染呈现层)
 
 注意:
 - RawData 和 NormalizedText 已移动到 src/core/data_types/
@@ -22,7 +22,7 @@ class RenderParameters:
     """
     渲染参数
 
-    传递给渲染呈现层(Layer 6)的参数,用于控制输出渲染:
+    传递给渲染呈现层(Layer 7)的参数,用于控制输出渲染:
     - TTS文本和语音参数
     - 字幕文本和显示参数
     - VTS表情和动作参数

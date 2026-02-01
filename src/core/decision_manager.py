@@ -80,7 +80,7 @@ class DecisionProviderFactory:
 
 class DecisionManager:
     """
-    决策管理器(Layer 3.5: 决策层)
+    决策管理器(Layer 4: 决策层)
 
     职责:
     - 管理DecisionProvider生命周期

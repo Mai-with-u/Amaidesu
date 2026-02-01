@@ -1,5 +1,5 @@
 """
-VTS Provider - Layer 6 Rendering层实现
+VTS Provider - Layer 7 渲染呈现层实现
 
 职责:
 - 将ExpressionParameters中的表情和动作参数渲染到VTS

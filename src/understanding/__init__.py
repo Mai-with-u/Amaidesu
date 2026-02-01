@@ -1,5 +1,5 @@
 """
-Understanding模块 - Layer 4: 表现理解层
+Understanding模块 - Layer 5: 表现理解层
 
 职责:
 - 定义Intent数据结构

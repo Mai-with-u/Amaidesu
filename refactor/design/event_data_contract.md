@@ -294,19 +294,19 @@ class CoreEvents:
     # Layer 2: 输入标准化
     NORMALIZATION_TEXT_READY = "normalization.text.ready"
     
-    # Layer 3-4: 决策层
+    # Layer 4: 决策层
     DECISION_REQUEST = "decision.request"
     DECISION_RESPONSE_GENERATED = "decision.response_generated"
     DECISION_PROVIDER_CONNECTED = "decision.provider.connected"
     DECISION_PROVIDER_DISCONNECTED = "decision.provider.disconnected"
     
-    # Layer 4: 表现理解
+    # Layer 5: 表现理解
     UNDERSTANDING_INTENT_GENERATED = "understanding.intent_generated"
     
-    # Layer 5: 表现生成
+    # Layer 6: 表现生成
     EXPRESSION_PARAMETERS_GENERATED = "expression.parameters_generated"
     
-    # Layer 6: 渲染呈现
+    # Layer 7: 渲染呈现
     RENDER_COMPLETED = "render.completed"
     RENDER_FAILED = "render.failed"
     
@@ -431,7 +431,7 @@ class NormalizedTextEvent(BaseModel):
         }
 
 
-# ==================== Layer 3-4: 决策层 ====================
+# ==================== Layer 4: 决策层 ====================
 
 class DecisionRequestEvent(BaseModel):
     """
@@ -465,7 +465,7 @@ class DecisionResponseEvent(BaseModel):
     
     事件名：decision.response_generated
     发布者：DecisionProvider
-    订阅者：UnderstandingLayer（Layer 4）
+    订阅者：UnderstandingLayer（Layer 5）
     """
     
     response: Dict[str, Any] = Field(..., description="决策响应（MessageBase格式）")
@@ -474,7 +474,7 @@ class DecisionResponseEvent(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict, description="元数据")
 
 
-# ==================== Layer 4: 表现理解 ====================
+# ==================== Layer 5: 表现理解 ====================
 
 class IntentGeneratedEvent(BaseModel):
     """
@@ -482,7 +482,7 @@ class IntentGeneratedEvent(BaseModel):
     
     事件名：understanding.intent_generated
     发布者：UnderstandingLayer
-    订阅者：ExpressionLayer（Layer 5）
+    订阅者：ExpressionLayer（Layer 6）
     """
     
     original_text: str = Field(..., description="原始文本")
@@ -493,7 +493,7 @@ class IntentGeneratedEvent(BaseModel):
     timestamp: float = Field(default_factory=time.time, description="时间戳")
 
 
-# ==================== Layer 5: 表现生成 ====================
+# ==================== Layer 6: 表现生成 ====================
 
 class ExpressionParametersEvent(BaseModel):
     """
@@ -501,7 +501,7 @@ class ExpressionParametersEvent(BaseModel):
     
     事件名：expression.parameters_generated
     发布者：ExpressionLayer
-    订阅者：OutputProvider（Layer 6）
+    订阅者：OutputProvider（Layer 7）
     """
     
     tts_text: str = Field(default="", description="TTS 文本")
@@ -594,7 +594,7 @@ def register_core_events() -> None:
         NormalizedTextEvent
     )
     
-    # Layer 3-4: 决策层
+    # Layer 4: 决策层
     EventRegistry.register_core_event(
         CoreEvents.DECISION_REQUEST,
         DecisionRequestEvent
@@ -604,13 +604,13 @@ def register_core_events() -> None:
         DecisionResponseEvent
     )
     
-    # Layer 4: 表现理解
+    # Layer 5: 表现理解
     EventRegistry.register_core_event(
         CoreEvents.UNDERSTANDING_INTENT_GENERATED,
         IntentGeneratedEvent
     )
     
-    # Layer 5: 表现生成
+    # Layer 6: 表现生成
     EventRegistry.register_core_event(
         CoreEvents.EXPRESSION_PARAMETERS_GENERATED,
         ExpressionParametersEvent
@@ -948,7 +948,7 @@ enable_validation = true  # 仅在 debug 模式启用
 
 ## 🔗 相关文档
 
-- [架构总览](./overview.md) - 重构目标和6层架构概述
+- [架构总览](./overview.md) - 重构目标和7层架构概述
 - [插件系统设计](./plugin_system.md) - 插件系统和Provider接口
 - [EventBus增强](../plan/eventbus_enhancement.md) - EventBus增强计划
 

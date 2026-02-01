@@ -96,11 +96,11 @@ enable_validation = false
 
 # ========== 新架构：按层级组织配置 ==========
 
-# === Layer 4: Understanding（表现理解层） ===
+# === Layer 5: Understanding（表现理解层） ===
 [understanding]
 # 情感分析配置（唯一位置）
 [understanding.emotion_analyzer]
-# 情感分析配置（Layer 4 统一入口）
+# 情感分析配置（Layer 5 统一入口）
 use_rules = true              # 使用规则分析（快速、确定性）
 use_llm = false               # 使用 LLM 分析（可选、智能）
 
@@ -111,7 +111,7 @@ llm_type = "llm_fast"       # 使用全局配置的哪个 LLM
 # temperature = 0.3
 # max_tokens = 100
 
-# === Layer 5: Expression（表情生成层） ===
+# === Layer 6: Expression（表现生成层） ===
 [expression]
 # 表情映射配置（统一位置）
 # 表情映射自定义（可选覆盖）
@@ -139,7 +139,7 @@ smile = -0.5
 eye_open = 0.6
 brow_down = 0.5
 
-# === Layer 6: Rendering（渲染呈现层） ===
+# === Layer 7: Rendering（渲染呈现层） ===
 [rendering]
 # 渲染层配置（已移至 [providers.output]）
 
@@ -304,7 +304,7 @@ room_id = ""          # B站直播间号
 type = "mock_danmaku"
 # 模拟弹幕配置
 
-# === 输出Provider配置（Layer 6: Rendering） ===
+# === 输出Provider配置（Layer 7: Rendering） ===
 [providers.output]
 # 是否启用输出层
 enabled = true
@@ -449,7 +449,7 @@ cache_dir = "data/omni_tts_cache"
 # 最大缓存数量（0表示不限制）
 max_cache_size = 100
 
-# === 决策Provider配置（Layer 3.5: Decision） ===
+# === 决策Provider配置（Layer 4: Decision） ===
 [providers.decision]
 # 是否启用决策层
 enabled = true

@@ -1,5 +1,5 @@
 """
-TTS Provider - Layer 6 Rendering层实现
+TTS Provider - Layer 7 渲染呈现层实现
 
 职责:
 - 将ExpressionParameters中的TTS文本转换为语音并播放

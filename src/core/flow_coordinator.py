@@ -1,8 +1,8 @@
 """
-FlowCoordinator - 数据流协调器（Layer 4 → Layer 5 → Layer 6）
+FlowCoordinator - 数据流协调器（Layer 5 → Layer 6 → Layer 7）
 
 职责:
-- 协调 Layer 4 到 Layer 5 到 Layer 6 的数据流
+- 协调 Layer 5 到 Layer 6 到 Layer 7 的数据流
 - 订阅 Intent 事件并触发 Expression 生成和渲染
 - 初始化输出层（OutputProviderManager 和 ExpressionGenerator）
 """
@@ -20,12 +20,12 @@ class FlowCoordinator:
     数据流协调器
 
     核心职责:
-    - 协调 Layer 4 (Intent) → Layer 5 (Expression) → Layer 6 (Output) 的数据流
+    - 协调 Layer 5 (Intent) → Layer 6 (Expression) → Layer 7 (Output) 的数据流
     - 初始化和管理输出层组件
     - 订阅并处理 Intent 事件
 
     数据流程:
-    Intent (Layer 4) → ExpressionGenerator (Layer 5) → OutputProviderManager (Layer 6)
+    Intent (Layer 5) → ExpressionGenerator (Layer 6) → OutputProviderManager (Layer 7)
     """
 
     def __init__(
@@ -76,7 +76,7 @@ class FlowCoordinator:
         if self.output_provider_manager:
             await self.output_provider_manager.load_from_config(config, core=None)
 
-        # 订阅Layer 4的Intent事件
+        # 订阅 Layer 5 的 Intent 事件
         self.event_bus.on("understanding.intent_generated", self._on_intent_ready, priority=50)
         self._event_handler_registered = True
         self.logger.info("已订阅 'understanding.intent_generated' 事件")
@@ -130,7 +130,7 @@ class FlowCoordinator:
 
     async def _on_intent_ready(self, event_name: str, event_data: Dict[str, Any], source: str):
         """
-        处理Intent事件（Layer 4 → Layer 5 → Layer 6）
+        处理Intent事件（Layer 5 → Layer 6 → Layer 7）
 
         Args:
             event_name: 事件名称
@@ -146,12 +146,12 @@ class FlowCoordinator:
                 self.logger.error("事件数据中缺少intent对象")
                 return
 
-            # Layer 5: Intent → ExpressionParameters
+            # Layer 6: Intent → ExpressionParameters
             if self.expression_generator:
                 params = await self.expression_generator.generate(intent)
                 self.logger.info(f"ExpressionParameters生成完成: {params}")
 
-                # Layer 6: ExpressionParameters → OutputProvider
+                # Layer 7: ExpressionParameters → OutputProvider
                 if self.output_provider_manager:
                     await self.output_provider_manager.render_all(params)
             else:

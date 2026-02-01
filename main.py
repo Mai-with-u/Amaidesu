@@ -226,11 +226,11 @@ async def create_app_components(
     await canonical_layer.setup()
     logger.info("CanonicalLayer 已设置（Layer 2→3）")
 
-    # 决策层 (Layer 3.5: Decision Layer)
+    # 决策层 (Layer 4)
     decision_manager: Optional[DecisionManager] = None
     understanding_layer: Optional[UnderstandingLayer] = None
     if decision_config:
-        logger.info("初始化决策层组件（Layer 3.5-4 数据流）...")
+        logger.info("初始化决策层组件（Layer 4-5 数据流）...")
         try:
             decision_manager = DecisionManager(event_bus)
 
@@ -245,10 +245,10 @@ async def create_app_components(
             await decision_manager.setup(provider_name, provider_config)
             logger.info(f"DecisionManager 已设置（Provider: {provider_name}）")
 
-            # 表现理解层 (Layer 4)
+            # 表现理解层 (Layer 5)
             understanding_layer = UnderstandingLayer(event_bus)
             await understanding_layer.setup()
-            logger.info("UnderstandingLayer 已设置（Layer 4）")
+            logger.info("UnderstandingLayer 已设置（Layer 5）")
         except Exception as e:
             logger.error(f"设置决策层组件失败: {e}", exc_info=True)
             logger.warning("决策层功能不可用，继续启动其他服务")
@@ -263,7 +263,7 @@ async def create_app_components(
     if flow_coordinator:
         try:
             await flow_coordinator.setup(rendering_config)
-            logger.info("数据流协调器已设置（Layer 4→5→6）")
+            logger.info("数据流协调器已设置（Layer 5→6→7）")
         except Exception as e:
             logger.error(f"设置数据流协调器失败: {e}", exc_info=True)
             logger.warning("数据流协调器功能不可用，继续启动其他服务")

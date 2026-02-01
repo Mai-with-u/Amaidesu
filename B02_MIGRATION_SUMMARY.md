@@ -114,7 +114,7 @@ B-02 migration completed:
 
 1. **架构清晰**
    - 内置 Provider 统一位于 `src/rendering/providers/`
-   - 目录结构更加合理（Layer 6 渲染层）
+   - 目录结构更加合理（Layer 7 渲染层）
 
 2. **Registry 机制**
    - Provider 注册和创建中心化

@@ -526,7 +526,7 @@ class Normalizer:
         return normalized
 ```
 
-### Layer 4（Understanding）使用DataCache
+### Layer 5（Understanding）使用DataCache
 
 ```python
 class Understanding:
@@ -598,6 +598,6 @@ class Understanding:
 
 ## 🔗 相关文档
 
-- [6层架构设计](./layer_refactoring.md)
+- [7层架构设计](./layer_refactoring.md)
 - [多Provider并发设计](./multi_provider.md)
 - [插件系统设计](./plugin_system.md)

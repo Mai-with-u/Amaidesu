@@ -2,7 +2,7 @@
 
 ## 🎯 核心目标
 
-支持输入层(Layer 1)和输出层(Layer 6)的**多Provider并发处理**，提高系统吞吐量和响应速度。
+支持输入层(Layer 1)和输出层(Layer 7)的**多Provider并发处理**，提高系统吞吐量和响应速度。
 
 ---
 
@@ -18,7 +18,7 @@
 语音InputProvider ──┘
 ```
 
-### 输出层并发（Layer 6）
+### 输出层并发（Layer 7）
 
 ```
 RenderParameters ──┐
@@ -92,7 +92,7 @@ graph TB
     style Normalization fill:#fff4e1
 ```
 
-### Layer 6: 输出层并发架构
+### Layer 7: 输出层并发架构
 
 ```mermaid
 graph TB
@@ -104,7 +104,7 @@ graph TB
         EventBus[事件总线]
     end
 
-    subgraph "Layer 6: 渲染呈现层（多Provider并发）"
+    subgraph "Layer 7: 渲染呈现层（多Provider并发）"
         Subtitle[字幕Renderer]
         TTS[TTSRenderer]
         VTS[VTSRenderer]
@@ -226,7 +226,7 @@ src/perception/                    # Layer 1: 输入感知
 ### 输出层目录结构（Layer 6）
 
 ```
-src/rendering/                    # Layer 6: 渲染呈现
+src/rendering/                    # Layer 7: 渲染呈现
 ├── virtual_rendering/             # 虚拟渲染
 │   ├── base_renderer.py
 │   └── implementations/
@@ -818,6 +818,6 @@ restart_interval = 5
 
 ## 🔗 相关文档
 
-- [6层架构设计](./layer_refactoring.md)
+- [7层架构设计](./layer_refactoring.md)
 - [决策层设计](./decision_layer.md)
 - [插件系统设计](./plugin_system.md)

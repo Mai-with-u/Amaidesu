@@ -29,14 +29,14 @@ def register_core_events() -> None:
     # Layer 2: 输入标准化
     EventRegistry.register_core_event(CoreEvents.NORMALIZATION_TEXT_READY, NormalizedTextEvent)
 
-    # Layer 3-4: 决策层
+    # Layer 4: 决策层
     EventRegistry.register_core_event(CoreEvents.DECISION_REQUEST, DecisionRequestEvent)
     EventRegistry.register_core_event(CoreEvents.DECISION_RESPONSE_GENERATED, DecisionResponseEvent)
 
-    # Layer 4: 表现理解
+    # Layer 5: 表现理解
     EventRegistry.register_core_event(CoreEvents.UNDERSTANDING_INTENT_GENERATED, IntentGeneratedEvent)
 
-    # Layer 5: 表现生成
+    # Layer 6: 表现生成
     EventRegistry.register_core_event(CoreEvents.EXPRESSION_PARAMETERS_GENERATED, ExpressionParametersEvent)
 
     # 系统事件

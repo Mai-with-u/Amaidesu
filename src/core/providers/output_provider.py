@@ -1,7 +1,7 @@
 """
 输出Provider接口
 
-定义了渲染呈现层(Layer 6)的Provider接口。
+定义了渲染呈现层(Layer 7)的Provider接口。
 OutputProvider负责将RenderParameters渲染到目标设备。
 
 示例实现:

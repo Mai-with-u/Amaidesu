@@ -1,8 +1,8 @@
 """
-Expression Mapper - Layer 5: 表情映射（统一入口）
+Expression Mapper - Layer 6: 表情映射（统一入口）
 
 职责:
-- 统一的表情映射器（Layer 5 唯一位置）
+- 统一的表情映射器（Layer 6 唯一位置）
 - 合并原有的 EmotionMapper 和 SemanticActionMapper
 - 输出平台无关的抽象参数（由 PlatformAdapter 翻译为平台特定参数）
 - 支持自定义情感映射
@@ -18,7 +18,7 @@ class ExpressionMapper:
     """统一的表情映射器
 
     合并原来的：
-    - Layer 5 的 EmotionMapper
+    - Layer 6 的 EmotionMapper
     - Avatar 的 SemanticActionMapper
 
     输出平台无关的抽象参数，由 PlatformAdapter 翻译为平台特定参数。

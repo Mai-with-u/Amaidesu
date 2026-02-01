@@ -1,4 +1,4 @@
-# 6层架构设计
+# 7层架构设计
 
 ## 📋 核心概念
 
@@ -12,16 +12,17 @@
 
 ---
 
-## 🏗️ 6层架构详细设计
+## 🏗️ 7层架构详细设计
 
 | 层级                | 英文名        | 输入格式         | 输出格式             | 核心职责         | 设计理由                                         |
 | ------------------- | ------------- | ---------------- | -------------------- | ---------------- | ------------------------------------------------ |
 | **1. 输入感知层**   | Perception    | -                | Raw Data             | 获取外部原始数据 | 按数据源(音频/文本/图像)分离输入源               |
 | **2. 输入标准化层** | Normalization | Raw Data         | **Text**             | 统一转换为文本   | 为决策层准备标准化输入                           |
 | **3. 中间表示层**   | Canonical     | Text             | **CanonicalMessage** | 统一消息格式     | 标准化数据结构，发送给决策层进行决策             |
-| **4. 表现理解层**   | Understanding | MessageBase      | **Intent**           | 解析决策层返回   | 接收DecisionProvider返回，理解表现意图和渲染需求 |
-| **5. 表现生成层**   | Expression    | Intent           | **RenderParameters** | 生成各种表现参数 | **驱动层只输出参数**，符合设计讨论中的分离原则   |
-| **6. 渲染呈现层**   | Rendering     | RenderParameters | **Frame/Stream**     | 最终渲染输出     | **渲染层只管渲染**，换引擎不用重写               |
+| **4. 决策层**       | Decision      | CanonicalMessage | **MessageBase**      | 可替换的决策     | MaiCore/本地LLM/规则引擎，输出回复与表现指令     |
+| **5. 表现理解层**   | Understanding | MessageBase      | **Intent**           | 解析决策返回     | 接收DecisionProvider返回，理解表现意图和渲染需求 |
+| **6. 表现生成层**   | Expression    | Intent           | **RenderParameters** | 生成各种表现参数 | **驱动层只输出参数**，符合设计讨论中的分离原则   |
+| **7. 渲染呈现层**   | Rendering     | RenderParameters | **Frame/Stream**     | 最终渲染输出     | **渲染层只管渲染**，换引擎不用重写               |
 
 ---
 
@@ -42,19 +43,19 @@ graph TB
             Canonical[CanonicalMessage]
         end
 
-        subgraph "决策层（可替换）"
+        subgraph "Layer 4: 决策层（可替换）"
             DecisionLayer[DecisionProvider<br/>MaiCore/本地LLM/规则引擎]
         end
 
-        subgraph "Layer 4: 表现理解层"
+        subgraph "Layer 5: 表现理解层"
             Understanding[解析MessageBase<br/>生成Intent]
         end
 
-        subgraph "Layer 5: 表现生成层"
+        subgraph "Layer 6: 表现生成层"
             Expression[生成RenderParameters]
         end
 
-        subgraph "Layer 6: 渲染呈现层（多Provider并发）"
+        subgraph "Layer 7: 渲染呈现层（多Provider并发）"
             Rendering[字幕/TTS/VTS<br/>多个OutputProvider并发渲染]
         end
     end
@@ -106,17 +107,17 @@ src/
 │   ├── message_builder.py
 │   └── maicore_adapter.py
 │
-├── understanding/                 # Layer 4: 表现理解
+├── understanding/                 # Layer 5: 表现理解
 │   ├── response_parser.py
 │   ├── text_cleanup.py
 │   └── emotion_judge.py
 │
-├── expression/                    # Layer 5: 表现生成
+├── expression/                    # Layer 6: 表现生成
 │   ├── expression_generator.py
 │   ├── tts_module.py
 │   └── action_mapper.py
 │
-└── rendering/                     # Layer 6: 渲染呈现
+└── rendering/                     # Layer 7: 渲染呈现
     ├── subtitle_renderer.py
     ├── audio_renderer.py
     └── virtual_renderer.py
@@ -222,7 +223,7 @@ class Normalizer:
         return normalized
 ```
 
-### 4. Layer 4访问原始数据
+### 4. Layer 5 访问原始数据
 
 ```python
 class Understanding:
@@ -316,7 +317,7 @@ eviction_policy = "ttl_or_lru"  # ttl_only | lru_only | ttl_or_lru | ttl_and_lru
 | 类型               | 位置    | 职责                       | 示例                                         |
 | ------------------ | ------- | -------------------------- | -------------------------------------------- |
 | **InputProvider**  | Layer 1 | 接收外部数据，生成RawData  | ConsoleInputProvider, MinecraftEventProvider |
-| **OutputProvider** | Layer 6 | 接收渲染参数，执行实际输出 | VTSRenderer, MinecraftCommandProvider        |
+| **OutputProvider** | Layer 7 | 接收渲染参数，执行实际输出 | VTSRenderer, MinecraftCommandProvider        |
 
 **特点**：
 - ✅ 标准化接口：所有Provider都实现统一的接口
@@ -324,9 +325,9 @@ eviction_policy = "ttl_or_lru"  # ttl_only | lru_only | ttl_or_lru | ttl_and_lru
 - ✅ 易测试性：每个Provider可以独立测试
 - ✅ 职责单一：每个Provider只负责一个能力
 
-### 2. Intent意图对象(Layer 4输出)
+### 2. Intent意图对象(Layer 5输出)
 
-**定义**：Layer 4的输出格式，用于传递表现意图
+**定义**：Layer 5的输出格式，用于传递表现意图
 
 ```python
 # 核心概念（伪代码，完整实现见implementation_plan.md）
@@ -339,14 +340,14 @@ class EmotionType:
     # NEUTRAL, HAPPY, SAD, ANGRY, SURPRISED等
 ```
 
-**注意**：即使MaiCore返回的是MessageBase，我们内部仍然需要"意图"的概念。Layer 4的职责是：
+**注意**：即使MaiCore返回的是MessageBase，我们内部仍然需要"意图"的概念。Layer 5的职责是：
 1. 接收MessageBase（来自决策层）
 2. 解析文本内容和元数据
 3. 生成内部统一的Intent对象
 
-### 3. RenderParameters渲染参数(Layer 5输出)
+### 3. RenderParameters渲染参数(Layer 6输出)
 
-**定义**：Layer 5的输出格式，用于传递渲染参数
+**定义**：Layer 6的输出格式，用于传递渲染参数
 
 ```python
 # 核心概念（伪代码，完整实现见implementation_plan.md）
@@ -374,8 +375,8 @@ class RenderParameters:
 
 **设计初衷**："虽然都是虚拟形象，但**驱动层只输出参数，渲染层只管渲染**。这都不分开，以后换个模型或者引擎难道要重写一遍？"
 
-- **Layer 5 (Expression)**: 生成抽象的表现参数（表情参数、热键、TTS文本）
-- **Layer 6 (Rendering)**: 接收参数进行实际渲染（VTS调用、音频播放、字幕显示）
+- **Layer 6 (Expression)**: 生成抽象的表现参数（表情参数、热键、TTS文本）
+- **Layer 7 (Rendering)**: 接收参数进行实际渲染（VTS调用、音频播放、字幕显示）
 
 ---
 
@@ -390,7 +391,7 @@ class RenderParameters:
 - ✅ EventBus事件调用覆盖率90%以上
 
 ### 架构指标
-- ✅ 清晰的6层核心数据流架构
+- ✅ 清晰的7层核心数据流架构
 - ✅ 层级间依赖关系清晰(单向依赖)
 - ✅ EventBus为内部主要通信模式
 - ✅ Provider模式替代重复插件

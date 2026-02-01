@@ -1,5 +1,5 @@
 """
-OutputProviderManager - Layer 6 Rendering层管理器
+OutputProviderManager - Layer 7 渲染呈现层管理器
 
 职责:
 - 管理多个OutputProvider

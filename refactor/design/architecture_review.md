@@ -43,7 +43,7 @@
 
 ### 问题描述（已修复）
 
-当前实现中 **Layer 3 → Decision Layer → Layer 4** 的数据流存在三处断裂：
+当前实现中 **Layer 3 → Layer 4 决策层 → Layer 5** 的数据流存在三处断裂：
 
 1. **DecisionManager 未在 main.py 中创建**：`DecisionManager` 存在但未被实例化和启动
 2. **`canonical.message_ready` 无订阅者**：`CanonicalLayer` 发射该事件后，无核心组件订阅并触发决策
@@ -111,9 +111,9 @@ FlowCoordinator → ExpressionGenerator → OutputProviderManager
 2. **DecisionManager 工厂模式**：支持运行时切换 Provider
 3. **LLMService 设计清晰**：统一后端管理、重试、token 统计
 4. **Plugin Protocol 设计**：不继承基类，依赖注入清晰
-5. **FlowCoordinator**：Layer 4→5→6 数据流独立、职责清晰
+5. **FlowCoordinator**：Layer 5→6→7 数据流独立、职责清晰
 6. **AmaidesuCore 纯组合根**：只做组件组合与生命周期
-7. **6层架构数据流完整**：从 InputProvider 到 OutputProvider 的完整链路已打通
+7. **7层架构数据流完整**：从 InputProvider 到 OutputProvider 的完整链路已打通
 
 ---
 

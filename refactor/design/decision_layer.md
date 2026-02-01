@@ -14,14 +14,14 @@
 ```
 Layer 3: 中间表示（CanonicalMessage）
     ↓
-【决策层：DecisionProvider】⭐ 可替换、可扩展
+Layer 4: 决策层（DecisionProvider）⭐ 可替换、可扩展
     ├─ MaiCoreDecisionProvider (默认）
     ├─ LocalLLMDecisionProvider (可选)
     └─ RuleEngineDecisionProvider (可选)
     ↓
 DecisionProvider返回MessageBase
     ↓
-Layer 4: 表现理解（解析MessageBase → Intent）
+Layer 5: 表现理解（解析MessageBase → Intent）
 ```
 
 ---
@@ -459,6 +459,6 @@ rules_file = "rules.json"
 
 ## 🔗 相关文档
 
-- [6层架构设计](./layer_refactoring.md)
+- [7层架构设计](./layer_refactoring.md)
 - [多Provider并发设计](./multi_provider.md)
 - [AmaidesuCore重构设计](./core_refactoring.md)

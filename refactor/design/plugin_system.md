@@ -57,7 +57,7 @@ src/
 ├── decision/providers/            # ✅ 内置 DecisionProvider
 │   └── maicore_decision_provider.py
 │
-├── rendering/                     # Layer 5-6 渲染层
+├── rendering/                     # Layer 6-7 渲染层
 │   ├── output_provider_manager.py # Manager 直接管理 Provider
 │   ├── provider_registry.py       # ✅ Provider 注册表
 │   └── providers/                 # ✅ 内置 OutputProvider
@@ -671,7 +671,7 @@ src/
 │       ├── bili_danmaku_provider.py
 │       └── minecraft_event_provider.py
 │
-├── decision/                       # Layer 3-4 决策层
+├── decision/                       # Layer 4: 决策层
 │   ├── decision_manager.py
 │   └── providers/                  # ✅ 内置 DecisionProvider
 │       ├── __init__.py
@@ -1069,6 +1069,6 @@ room_id = "123456"
 
 ## 🔗 相关文档
 
-- [6层架构设计](./layer_refactoring.md)
+- [7层架构设计](./layer_refactoring.md)
 - [多Provider并发设计](./multi_provider.md)
 - [决策层设计](./decision_layer.md)

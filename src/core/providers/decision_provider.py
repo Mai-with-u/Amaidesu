@@ -1,7 +1,7 @@
 """
 决策Provider接口
 
-定义了决策层(Decision Layer)的Provider接口。
+定义了决策层(Layer 4: Decision)的Provider接口。
 DecisionProvider负责将CanonicalMessage转换为决策结果(MessageBase)。
 
 示例实现:

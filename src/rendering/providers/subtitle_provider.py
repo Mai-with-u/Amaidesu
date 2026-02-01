@@ -1,5 +1,5 @@
 """
-Subtitle Provider - Layer 6 Rendering层实现
+Subtitle Provider - Layer 7 渲染呈现层实现
 
 职责:
 - 在窗口中显示字幕文本
