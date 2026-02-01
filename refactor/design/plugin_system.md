@@ -8,21 +8,71 @@
 
 ## 📊 核心概念
 
-### Plugin（插件）
+### Provider 与 Plugin 的职责边界
 
-**定义**：聚合多个Provider的完整功能，是社区开发的入口。
+**核心原则**：
+
+```
+Provider = 原子能力（单一职责、可复用、统一管理）
+Plugin = 能力组合（整合 Provider、提供业务场景、不创建 Provider）
+```
 
 **对比**：
 
-| 概念         | 定义             | 职责               | 示例                   |
-| ------------ | ---------------- | ------------------ | ---------------------- |
-| **Provider** | 标准化的原子能力 | 单一能力，可替换   | MinecraftEventProvider |
-| **Plugin**   | 聚合多个Provider | 完整功能，一键开关 | MinecraftPlugin        |
+| 概念         | 定义             | 职责               | 创建 Provider | 示例                   |
+| ------------ | ---------------- | ------------------ | ------------- | ---------------------- |
+| **Provider** | 标准化的原子能力 | 单一能力，可替换   | -             | TTSProvider, VTSProvider |
+| **Plugin**   | 聚合多个Provider | 业务场景，一键开关 | ❌ 不创建      | LiveStreamPlugin       |
 
-**关系**：
-- 一个Plugin = 多个Provider的聚合
-- Plugin的`setup()`方法返回Provider列表
-- 插件加载器自动注册所有Provider
+### 三类参与者
+
+| 参与者 | 职责 | Provider 来源 | 管理方式 |
+|--------|------|--------------|----------|
+| **内置 Provider** | 核心原子能力 | 放在层目录下 | Manager 直接管理 |
+| **官方 Plugin** | 场景整合 | 声明依赖，不创建 | 配置驱动 |
+| **第三方插件** | 扩展能力 | 通过 Registry 注册 | 统一注册机制 |
+
+### 为什么 Plugin 不应该创建 Provider？
+
+如果 Plugin 创建并管理自己的 Provider，会导致：
+
+1. **管理分散**：每个 Plugin 各自管理 Provider，没有统一入口
+2. **依赖混乱**：Plugin 之间可能绕过 EventBus，直接服务注册
+3. **回到旧架构**：重蹈重构前的覆辙（24个插件，18个服务注册）
+
+**正确做法**：
+
+- 内置 Provider 放在层目录（`src/rendering/providers/`），由 Manager 统一管理
+- Plugin 只声明需要哪些 Provider，不创建
+- 第三方插件如需新 Provider，通过 ProviderRegistry 注册
+
+### 推荐架构
+
+```
+src/
+├── perception/providers/          # ✅ 内置 InputProvider
+│   ├── console_input_provider.py
+│   └── bili_danmaku_provider.py
+│
+├── decision/providers/            # ✅ 内置 DecisionProvider
+│   └── maicore_decision_provider.py
+│
+├── rendering/                     # Layer 5-6 渲染层
+│   ├── output_provider_manager.py # Manager 直接管理 Provider
+│   ├── provider_registry.py       # ✅ Provider 注册表
+│   └── providers/                 # ✅ 内置 OutputProvider
+│       ├── tts_provider.py
+│       ├── subtitle_provider.py
+│       └── vts_provider.py
+│
+├── plugins/                       # 官方 Plugin（整合，不创建）
+│   ├── live_stream/plugin.py      # 声明: bili_danmaku + tts + vts
+│   └── game_companion/plugin.py   # 声明: minecraft + tts
+│
+plugins/                           # 第三方插件
+├── custom_stt/
+│   └── providers/whisper_provider.py  # 通过 Registry 注册
+```
 
 ---
 
@@ -92,12 +142,27 @@ class OutputProvider(Protocol):
 ### Plugin接口
 
 ```python
-from typing import List, Protocol
+from typing import List, Dict, Protocol, Optional
 
 class Plugin(Protocol):
-    """插件协议 - 聚合多个Provider"""
+    """插件协议 - 整合已有 Provider，不创建新 Provider"""
 
-    async def setup(self, event_bus: EventBus, config: dict) -> List[Provider]:
+    def get_required_providers(self) -> Dict[str, List[str]]:
+        """
+        声明需要的 Provider（不创建）
+
+        Returns:
+            dict: 分类的 Provider 名称列表
+            - input: 输入 Provider 列表
+            - output: 输出 Provider 列表
+            - decision: 决策 Provider 列表（可选）
+        """
+        return {
+            "input": [],
+            "output": []
+        }
+
+    async def setup(self, event_bus: EventBus, config: dict) -> List[Any]:
         """
         初始化插件
 
@@ -106,7 +171,12 @@ class Plugin(Protocol):
             config: 插件配置
 
         Returns:
-            初始化好的Provider列表
+            空列表（官方 Plugin 不创建 Provider）
+            或第三方插件通过 Registry 注册后返回空列表
+
+        注意：
+            - 官方 Plugin 不应创建 Provider，只声明依赖
+            - 第三方插件如需新 Provider，应通过 ProviderRegistry 注册
         """
         ...
 
@@ -131,177 +201,278 @@ class Plugin(Protocol):
         }
 ```
 
+### ProviderRegistry（Provider 注册表）
+
+```python
+from typing import Dict, Type
+
+class ProviderRegistry:
+    """
+    Provider 注册表 - 统一管理所有 Provider
+
+    内置 Provider 在模块加载时自动注册
+    第三方插件可以通过此接口注册自定义 Provider
+    """
+    _input_providers: Dict[str, Type[InputProvider]] = {}
+    _output_providers: Dict[str, Type[OutputProvider]] = {}
+    _decision_providers: Dict[str, Type[DecisionProvider]] = {}
+
+    @classmethod
+    def register_input(cls, name: str, provider_class: Type[InputProvider]):
+        """注册输入 Provider"""
+        cls._input_providers[name] = provider_class
+
+    @classmethod
+    def register_output(cls, name: str, provider_class: Type[OutputProvider]):
+        """注册输出 Provider"""
+        cls._output_providers[name] = provider_class
+
+    @classmethod
+    def register_decision(cls, name: str, provider_class: Type[DecisionProvider]):
+        """注册决策 Provider"""
+        cls._decision_providers[name] = provider_class
+
+    @classmethod
+    def create_output(cls, name: str, config: dict) -> OutputProvider:
+        """创建输出 Provider 实例"""
+        if name not in cls._output_providers:
+            raise ValueError(f"Unknown output provider: {name}")
+        return cls._output_providers[name](config)
+
+    # ... 其他 create 方法
+```
+
 ---
 
-## 🏗️ 官方插件 vs 社区插件
+## 🏗️ 内置 Provider vs 官方 Plugin vs 社区插件
 
-| 维量         | 官方插件           | 社区插件                    |
-| ------------ | ------------------ | --------------------------- |
-| **目录**     | `src/plugins/`     | `plugins/`（根目录）        |
-| **维护者**   | 官方团队           | 社区/用户                   |
-| **启用**     | 默认启用           | ✅ **自动识别，默认启用**    |
-| **配置**     | `[plugins.xxx]`    | `[plugins.xxx]`（可选覆盖） |
-| **Provider** | 可以定义新Provider | 可以定义新Provider          |
-| **来源**     | 代码仓库           | 插件市场/手动安装           |
-| **版本控制** | 纳入Git仓库        | `.gitignore`排除            |
+| 维量           | 内置 Provider            | 官方 Plugin              | 社区插件                  |
+| -------------- | ------------------------ | ------------------------ | ------------------------- |
+| **目录**       | `src/{layer}/providers/` | `src/plugins/`           | `plugins/`（根目录）      |
+| **职责**       | 原子能力                 | 场景整合                 | 扩展能力                  |
+| **创建 Provider** | ✅ 是 Provider 本身    | ❌ 只声明依赖             | ✅ 可通过 Registry 注册    |
+| **管理方式**   | Manager 直接管理         | 配置驱动                 | Registry 统一注册         |
+| **维护者**     | 官方核心团队             | 官方团队                 | 社区/用户                 |
+| **启用**       | 配置驱动                 | 默认启用                 | 自动识别，默认启用        |
+| **配置**       | `[providers.xxx]`        | `[plugins.xxx]`          | `[plugins.xxx]`           |
+| **版本控制**   | 纳入 Git 仓库            | 纳入 Git 仓库            | `.gitignore` 排除         |
+
+### 关键区别
+
+```
+内置 Provider（原子能力）
+├── 放在层目录：src/perception/providers/, src/rendering/providers/
+├── 由 Manager 直接管理（统一生命周期）
+└── 配置文件决定启用哪些
+
+官方 Plugin（场景整合）
+├── 放在 src/plugins/
+├── 声明需要哪些 Provider（不创建）
+├── 处理业务逻辑（如礼物触发表情）
+└── 通过 EventBus 通信
+
+社区插件（扩展能力）
+├── 放在 plugins/（根目录）
+├── 可以通过 ProviderRegistry 注册新 Provider
+├── 也可以只做业务逻辑整合
+└── 遵循统一的注册机制
+```
 
 ---
 
 ## 🔧 具体实现示例
 
-### 示例：Minecraft插件
+### 示例1：官方 Plugin（整合已有 Provider）
 
 ```python
-# src/plugins/minecraft/__init__.py
-"""Minecraft插件"""
-from typing import List
-from src.core.plugin import Plugin
+# src/plugins/live_stream/plugin.py
+"""直播场景 Plugin - 整合已有 Provider，不创建新 Provider"""
+from typing import List, Dict, Any
 from src.core.event_bus import EventBus
-from src.core.input_provider import InputProvider
-from src.core.output_provider import OutputProvider
-from src.providers.event_provider import MinecraftEventProvider
-from src.providers.command_provider import MinecraftCommandProvider
 
-class MinecraftPlugin(Plugin):
-    """Minecraft插件 - 聚合Minecraft的所有能力"""
+class LiveStreamPlugin:
+    """
+    直播场景 Plugin
 
-    async def setup(self, event_bus: EventBus, config: dict) -> List[Provider]:
+    整合 B 站弹幕输入 + TTS + VTS + 字幕输出
+    不创建 Provider，只声明依赖和处理业务逻辑
+    """
+
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self.event_bus = None
+
+    def get_required_providers(self) -> Dict[str, List[str]]:
         """
-        初始化Minecraft插件
+        声明需要的 Provider（不创建）
 
-        Returns:
-            Provider列表
+        这些 Provider 在 src/perception/providers/ 和 src/rendering/providers/ 中
+        由 Manager 统一管理
         """
-        # ✅ 一处配置
-        self.host = config.get("host", "localhost")
-        self.port = config.get("port", 25565)
+        return {
+            "input": ["bili_danmaku"],
+            "output": ["tts", "vts", "subtitle"]
+        }
 
-        # ✅ 一处初始化
-        providers = []
+    async def setup(self, event_bus: EventBus, config: dict) -> List[Any]:
+        """
+        设置 Plugin
 
-        # 输入Provider
-        if config.get("events_enabled", True):
-            event_provider = MinecraftEventProvider({
-                "host": self.host,
-                "port": self.port
-            })
-            await event_provider.setup(event_bus)
-            providers.append(event_provider)
+        注意：不创建 Provider，只注册业务逻辑
+        """
+        self.event_bus = event_bus
 
-        # 输出Provider
-        if config.get("commands_enabled", True):
-            command_provider = MinecraftCommandProvider({
-                "host": self.host,
-                "port": self.port
-            })
-            await command_provider.setup(event_bus)
-            providers.append(command_provider)
+        # 订阅业务事件（可选）
+        event_bus.subscribe("danmaku.gift_received", self.on_gift)
+        event_bus.subscribe("danmaku.super_chat", self.on_super_chat)
 
-        self.providers = providers
-        return providers
+        return []  # ✅ 不返回 Provider
+
+    async def on_gift(self, event_name: str, data: dict, source: str):
+        """处理礼物事件"""
+        # 业务逻辑：礼物触发特殊表情
+        await self.event_bus.emit("expression.trigger", {
+            "expression": "happy",
+            "intensity": 0.8
+        })
+
+    async def on_super_chat(self, event_name: str, data: dict, source: str):
+        """处理 SC 事件"""
+        # 业务逻辑：SC 优先播报
+        pass
 
     async def cleanup(self):
         """清理资源"""
-        await asyncio.gather(*[p.cleanup() for p in self.providers])
+        pass
 
     def get_info(self) -> dict:
-        """获取插件信息"""
         return {
-            "name": "Minecraft",
+            "name": "LiveStream",
             "version": "1.0.0",
             "author": "Amaidesu Team",
-            "description": "Minecraft游戏集成插件",
-            "category": "game",
+            "description": "直播场景整合 Plugin",
+            "category": "scene",
             "api_version": "1.0"
         }
 
-# 内部Provider（对开发者透明）
-# src/plugins/minecraft/providers/event_provider.py
+plugin_entrypoint = LiveStreamPlugin
+```
+
+### 示例2：内置 Provider（放在层目录下）
+
+```python
+# src/perception/providers/bili_danmaku_provider.py
+"""B 站弹幕输入 Provider - 内置，放在层目录下"""
 from typing import AsyncIterator
-from src.core.input_provider import InputProvider, RawData
+from src.core.providers.input_provider import InputProvider
+from src.core.data_types.raw_data import RawData
 from src.utils.logger import get_logger
 
-class MinecraftEventProvider(InputProvider):
-    """Minecraft事件输入Provider"""
+class BiliDanmakuProvider(InputProvider):
+    """
+    B 站弹幕输入 Provider
+
+    内置 Provider，放在 src/perception/providers/ 下
+    由 InputProviderManager 统一管理
+    """
 
     def __init__(self, config: dict):
-        self.config = config
-        self.host = config.get("host", "localhost")
-        self.port = config.get("port", 25565)
-        self.logger = get_logger("MinecraftEventProvider")
+        super().__init__(config)
+        self.room_id = config.get("room_id")
+        self.logger = get_logger("BiliDanmakuProvider")
         self._client = None
-        self._running = False
 
-    async def start(self) -> AsyncIterator[RawData]:
-        """启动游戏事件输入流"""
-        self._running = False
+    async def _collect_data(self) -> AsyncIterator[RawData]:
+        """采集弹幕数据"""
+        # 连接 B 站直播间
+        self._client = await self._connect(self.room_id)
 
-        # 连接Minecraft服务器
-        # ... 连接逻辑
-
-        while self._running:
-            # 监听游戏事件
-            event = await self._wait_for_event()
-
+        while self.is_running:
+            danmaku = await self._client.wait_for_danmaku()
             yield RawData(
-                content=event,
-                source="minecraft",
-                metadata={"host": self.host, "port": self.port}
+                content={"text": danmaku.text, "user": danmaku.user},
+                source="bili_danmaku",
+                data_type="text",
+                metadata={"room_id": self.room_id}
             )
 
-    async def stop(self):
-        """停止输入源"""
-        self._running = False
+    async def _cleanup(self):
+        """清理连接"""
+        if self._client:
+            await self._client.close()
+
+# 模块加载时自动注册到 Registry
+from src.rendering.provider_registry import ProviderRegistry
+ProviderRegistry.register_input("bili_danmaku", BiliDanmakuProvider)
+```
+
+### 示例3：第三方插件（注册自定义 Provider）
+
+```python
+# plugins/custom_stt/plugin.py
+"""第三方 STT 插件 - 可以注册自定义 Provider"""
+from typing import List, Dict, Any
+from src.core.event_bus import EventBus
+from src.rendering.provider_registry import ProviderRegistry
+from .providers.whisper_provider import WhisperSTTProvider
+
+class CustomSTTPlugin:
+    """
+    自定义 STT 插件
+
+    第三方插件可以通过 ProviderRegistry 注册新的 Provider
+    """
+
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+
+    def get_required_providers(self) -> Dict[str, List[str]]:
+        """声明依赖（包括自己注册的）"""
+        return {
+            "input": ["whisper_stt"],  # 自己注册的 Provider
+            "output": []
+        }
+
+    async def setup(self, event_bus: EventBus, config: dict) -> List[Any]:
+        """
+        设置插件
+
+        第三方插件通过 Registry 注册自定义 Provider
+        """
+        # ✅ 注册自定义 Provider 到全局 Registry
+        ProviderRegistry.register_input("whisper_stt", WhisperSTTProvider)
+
+        return []  # 不直接返回 Provider 实例
 
     async def cleanup(self):
-        """清理资源"""
-        self.logger.info("MinecraftEventProvider cleanup")
+        pass
 
-# src/plugins/minecraft/providers/command_provider.py
-from src.core.output_provider import OutputProvider, RenderParameters
-from src.utils.logger import get_logger
+    def get_info(self) -> dict:
+        return {
+            "name": "CustomSTT",
+            "version": "1.0.0",
+            "author": "Community",
+            "description": "基于 Whisper 的语音识别插件",
+            "category": "input",
+            "api_version": "1.0"
+        }
 
-class MinecraftCommandProvider(OutputProvider):
-    """Minecraft命令输出Provider"""
+plugin_entrypoint = CustomSTTPlugin
+
+# plugins/custom_stt/providers/whisper_provider.py
+"""自定义 Whisper STT Provider"""
+from src.core.providers.input_provider import InputProvider
+
+class WhisperSTTProvider(InputProvider):
+    """Whisper 语音识别 Provider"""
 
     def __init__(self, config: dict):
-        self.config = config
-        self.host = config.get("host", "localhost")
-        self.port = config.get("port", 25565)
-        self.logger = get_logger("MinecraftCommandProvider")
-        self._client = None
+        super().__init__(config)
+        self.model_size = config.get("model_size", "base")
 
-    async def setup(self, event_bus: EventBus):
-        """设置Provider（订阅EventBus）"""
-        self.event_bus = event_bus
-
-        # 订阅RenderParameters事件
-        event_bus.on("expression.parameters_generated", self.on_parameters)
-
-        # 连接Minecraft服务器
-        # ... 连接逻辑
-
-    async def on_parameters(self, event: dict):
-        """处理RenderParameters事件"""
-        parameters = event.get("data")
-        if not parameters:
-            return
-
-        # 渲染命令
-        await self.render(parameters)
-
-    async def render(self, parameters: RenderParameters):
-        """渲染Minecraft命令"""
-        if parameters.minecraft_commands:
-            await self._send_commands(parameters.minecraft_commands)
-
-    async def _send_commands(self, commands: list):
-        """发送Minecraft命令"""
-        # ... 发送逻辑
-
-    async def cleanup(self):
-        """清理资源"""
-        self.logger.info("MinecraftCommandProvider cleanup")
+    async def _collect_data(self):
+        # 语音识别逻辑
+        ...
 ```
 
 ---
@@ -486,36 +657,64 @@ class MinecraftPlugin(Plugin):
 
 ---
 
-## 📁 插件目录结构
+## 📁 目录结构
 
-### 官方插件结构
-
-```
-src/plugins/
-├── minecraft/                      # 官方插件（官方）
-│   ├── __init__.py                 # Plugin类
-│   └── providers/                  # Provider实现
-│       ├── event_provider.py       # 输入Provider
-│       └── command_provider.py    # 输出Provider
-├── warudo/                         # 官方插件
-│   ├── __init__.py
-│   └── providers/
-└── dg_lab/                         # 官方插件
-    ├── __init__.py
-    └── providers/
-```
-
-### 社区插件结构
+### 完整目录结构
 
 ```
+src/
+├── perception/                     # Layer 1-2 感知层
+│   ├── input_layer.py
+│   └── providers/                  # ✅ 内置 InputProvider
+│       ├── __init__.py             # 自动注册到 Registry
+│       ├── console_input_provider.py
+│       ├── bili_danmaku_provider.py
+│       └── minecraft_event_provider.py
+│
+├── decision/                       # Layer 3-4 决策层
+│   ├── decision_manager.py
+│   └── providers/                  # ✅ 内置 DecisionProvider
+│       ├── __init__.py
+│       └── maicore_decision_provider.py
+│
+├── rendering/                      # Layer 5-6 渲染层
+│   ├── output_provider_manager.py
+│   ├── provider_registry.py        # ✅ Provider 注册表
+│   └── providers/                  # ✅ 内置 OutputProvider
+│       ├── __init__.py             # 自动注册到 Registry
+│       ├── tts_provider.py
+│       ├── subtitle_provider.py
+│       ├── vts_provider.py
+│       └── minecraft_command_provider.py
+│
+├── plugins/                        # 官方 Plugin（场景整合）
+│   ├── live_stream/                # 直播场景
+│   │   ├── __init__.py
+│   │   └── plugin.py               # 声明: bili_danmaku + tts + vts
+│   ├── game_companion/             # 游戏陪伴场景
+│   │   ├── __init__.py
+│   │   └── plugin.py               # 声明: minecraft + tts
+│   └── console_debug/              # 控制台调试
+│       ├── __init__.py
+│       └── plugin.py               # 声明: console_input + subtitle
+│
 plugins/                            # 社区插件（根目录）
-├── minecraft/                        # 社区插件1
-│   ├── __init__.py                 # 必须包含
-│   └── providers/                  # Provider实现
-└── mygame/                         # 社区插件2
-    ├── __init__.py                 # 必须包含
+├── custom_stt/                     # 社区插件：自定义 STT
+│   ├── __init__.py
+│   ├── plugin.py                   # 注册 WhisperSTTProvider
+│   └── providers/
+│       └── whisper_provider.py
+└── my_game/                        # 社区插件：自定义游戏
+    ├── __init__.py
+    ├── plugin.py                   # 注册自定义 Provider
     └── providers/
 ```
+
+### 关键说明
+
+1. **内置 Provider** 放在对应层的 `providers/` 目录下
+2. **官方 Plugin** 放在 `src/plugins/` 下，只做场景整合
+3. **社区插件** 放在 `plugins/`（根目录），可以注册新 Provider
 
 ---
 
@@ -832,27 +1031,39 @@ room_id = "123456"
 
 ## ✅ 关键优势
 
-### 1. 一键开关
-- ✅ 通过`enabled`控制插件的整体开关
+### 1. 统一管理，不会回到旧架构
+- ✅ 内置 Provider 由 Manager 统一管理
+- ✅ 所有 Provider 通过 Registry 注册
+- ✅ 强制使用 EventBus，禁止服务注册
+- ✅ 不会重蹈"24个插件，18个服务注册"的覆辙
+
+### 2. 职责清晰
+- ✅ Provider = 原子能力（单一职责）
+- ✅ Plugin = 场景整合（业务逻辑）
+- ✅ 不混淆"能力"和"场景"
+
+### 3. 一键开关
+- ✅ 通过 `enabled` 控制 Provider/Plugin 的开关
 - ✅ 无需修改代码，只需修改配置
 
-### 2. 统一配置
-- ✅ 插件的配置集中管理
-- ✅ 一处配置，多处生效
+### 4. 统一配置
+- ✅ Provider 配置：`[providers.xxx]`
+- ✅ Plugin 配置：`[plugins.xxx]`
+- ✅ 配置层次清晰
 
-### 3. 社区友好
-- ✅ 开发者只需实现Plugin
-- ✅ 自动拆分为Provider
-- ✅ 降低开发门槛
+### 5. 社区友好
+- ✅ 社区可以通过 Registry 注册新 Provider
+- ✅ 也可以只做业务整合（不注册 Provider）
+- ✅ 遵循统一规范，降低学习成本
 
-### 4. 自动识别
-- ✅ 放在`plugins/`目录自动加载
+### 6. 自动识别
+- ✅ `plugins/` 目录自动扫描
 - ✅ 无需手动配置，开箱即用
 
-### 5. 聚合能力
-- ✅ 一个插件包含多个Provider
-- ✅ 统一初始化和清理
-- ✅ 统一配置管理
+### 7. 可测试性
+- ✅ Provider 独立，可单独测试
+- ✅ Plugin 只依赖 EventBus，易于 mock
+- ✅ 没有隐式依赖
 
 ---
 

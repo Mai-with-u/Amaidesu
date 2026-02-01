@@ -17,8 +17,6 @@ except ModuleNotFoundError:
         print("依赖缺失: 请运行 'pip install toml' 来加载 Console Input 插件配置。", file=sys.stderr)
         tomllib = None
 
-# --- Core Imports ---
-from src.core.amaidesu_core import AmaidesuCore
 from src.core.data_types.raw_data import RawData
 from maim_message import MessageBase, BaseMessageInfo, UserInfo, GroupInfo, Seg, FormatInfo, TemplateInfo
 from src.utils.logger import get_logger
@@ -42,7 +40,7 @@ class ConsoleInputPlugin:
         self.logger.info(f"初始化插件: {self.__class__.__name__}")
 
         self.event_bus: Optional["EventBus"] = None
-        self.core: Optional["AmaidesuCore"] = None
+        self.platform = config.get("platform", "amaidesu_default")
 
         # --- Dependency Check ---
         if tomllib is None:
@@ -255,14 +253,14 @@ class ConsoleInputPlugin:
 
             # User Info
             user_info = UserInfo(
-                platform=self.core.platform, user_id=user_id, user_nickname=username, user_cardname=username
+                platform=self.platform, user_id=user_id, user_nickname=username, user_cardname=username
             )
 
             # Group Info (可选)
             group_info: Optional[GroupInfo] = None
             if self.message_config.get("enable_group_info", False):
                 group_info = GroupInfo(
-                    platform=self.core.platform,
+                    platform=self.platform,
                     group_id=self.message_config.get("group_id", 0),
                     group_name=self.message_config.get("group_name", "default"),
                 )
@@ -275,7 +273,7 @@ class ConsoleInputPlugin:
 
             # Message Info
             message_info = BaseMessageInfo(
-                platform=self.core.platform,
+                platform=self.platform,
                 message_id=message_id,
                 time=timestamp,
                 user_info=user_info,
@@ -315,15 +313,13 @@ class ConsoleInputPlugin:
         message_id = f"test_sc_{int(timestamp * 1000)}"
 
         # User Info
-        user_info = UserInfo(
-            platform=self.core.platform, user_id=user_id, user_nickname=username, user_cardname=username
-        )
+        user_info = UserInfo(platform=self.platform, user_id=user_id, user_nickname=username, user_cardname=username)
 
         # Group Info (可选)
         group_info: Optional[GroupInfo] = None
         if self.message_config.get("enable_group_info", False):
             group_info = GroupInfo(
-                platform=self.core.platform,
+                platform=self.platform,
                 group_id=self.message_config.get("group_id", 0),
                 group_name=self.message_config.get("group_name", "default"),
             )
@@ -336,7 +332,7 @@ class ConsoleInputPlugin:
 
         # Message Info
         message_info = BaseMessageInfo(
-            platform=self.core.platform,
+            platform=self.platform,
             message_id=message_id,
             time=timestamp,
             user_info=user_info,
@@ -374,15 +370,13 @@ class ConsoleInputPlugin:
         message_id = f"test_guard_{int(timestamp * 1000)}"
 
         # User Info
-        user_info = UserInfo(
-            platform=self.core.platform, user_id=user_id, user_nickname=username, user_cardname=username
-        )
+        user_info = UserInfo(platform=self.platform, user_id=user_id, user_nickname=username, user_cardname=username)
 
         # Group Info (可选)
         group_info: Optional[GroupInfo] = None
         if self.message_config.get("enable_group_info", False):
             group_info = GroupInfo(
-                platform=self.core.platform,
+                platform=self.platform,
                 group_id=self.message_config.get("group_id", 0),
                 group_name=self.message_config.get("group_name", "default"),
             )
@@ -395,7 +389,7 @@ class ConsoleInputPlugin:
 
         # Message Info
         message_info = BaseMessageInfo(
-            platform=self.core.platform,
+            platform=self.platform,
             message_id=message_id,
             time=timestamp,
             user_info=user_info,
@@ -428,7 +422,7 @@ class ConsoleInputPlugin:
         user_id_from_config = cfg.get("user_id", 0)  # Assume int from config, default to 0
         user_info = UserInfo(
             # platform=cfg.get("platform", "qq"),
-            platform=self.core.platform,
+            platform=self.platform,
             user_id=user_id_from_config,
             user_nickname=cfg.get("user_nickname", "ConsoleUser"),
             user_cardname=cfg.get("user_cardname", ""),
@@ -438,7 +432,7 @@ class ConsoleInputPlugin:
         group_info: Optional[GroupInfo] = None
         if cfg.get("enable_group_info", False):
             group_info = GroupInfo(
-                platform=self.core.platform,
+                platform=self.platform,
                 group_id=cfg.get("group_id", 0),
                 group_name=cfg.get("group_name", "default"),
             )
@@ -470,7 +464,7 @@ class ConsoleInputPlugin:
 
         # --- Base Message Info ---
         message_info = BaseMessageInfo(
-            platform=self.core.platform,
+            platform=self.platform,
             # Consider casting time to int for consistency, but optional for now
             message_id=f"console_{int(timestamp * 1000)}_{hash(text) % 10000}",
             time=timestamp,

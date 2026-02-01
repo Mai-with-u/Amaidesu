@@ -41,10 +41,32 @@
 
  - **核心数据流**（Layer 1-6）：按AI VTuber数据处理流程组织
  - **决策层**（Decision Layer）：可替换的决策Provider系统
- - **插件系统**（Plugin System）：社区开发者添加新能力
+ - **Provider/Plugin 职责分离**：Provider = 原子能力，Plugin = 场景整合（详见下文）
  - **EventBus**：唯一的跨层通信机制，实现松耦合
  - **事件数据契约**（Event Contract）：类型安全的事件数据格式，支持社区扩展
  - **LLM服务**（LLM Service）：统一的LLM调用基础设施，与EventBus同级
+
+### Provider/Plugin 职责边界
+
+```
+Provider = 原子能力（单一职责、可复用、统一管理）
+Plugin = 能力组合（整合 Provider、提供业务场景、不创建 Provider）
+```
+
+| 参与者 | 职责 | 创建 Provider | 管理方式 |
+|--------|------|--------------|----------|
+| **内置 Provider** | 核心原子能力 | 放在层目录下 | Manager 直接管理 |
+| **官方 Plugin** | 场景整合 | 不创建，只声明依赖 | 配置驱动 |
+| **第三方插件** | 扩展能力 | 通过 Registry 注册 | 统一注册机制 |
+
+**为什么这样设计？**
+
+如果 Plugin 创建并管理自己的 Provider，会导致：
+1. 管理分散，没有统一入口
+2. 插件之间可能绕过 EventBus，直接服务注册
+3. 重蹈重构前的覆辙（24个插件，18个服务注册）
+
+→ 详见 [插件系统设计](./plugin_system.md) 和 [架构设计审查 A-05](./architecture_review.md#a-05-providerplugin-职责边界不清--设计已确定)
 
 ### 架构分层
 

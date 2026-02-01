@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.core.event_bus import EventBus
-    from src.core.amaidesu_core import AmaidesuCore
+
 
 from src.utils.logger import get_logger
 from maim_message import MessageBase
@@ -30,7 +30,6 @@ class KeywordActionPlugin:
         self.logger.info(f"初始化插件: {self.__class__.__name__}")
 
         self.event_bus: Optional["EventBus"] = None
-        self.core: Optional["AmaidesuCore"] = None
 
         if not self.config.get("enabled", True):
             self.logger.warning("KeywordActionPlugin 在配置中被禁用。")
@@ -138,8 +137,9 @@ class KeywordActionPlugin:
 
             if hasattr(action_module, "execute"):
                 self.logger.debug(f"正在执行动作脚本: {script_name}")
-                # 传递 core 实例和原始消息给脚本
-                await action_module.execute(self.core, message)
+                # 注意：旧架构通过 core 传递服务，新架构应通过 event_bus 通信
+                # 当前无 action scripts，此功能暂时禁用
+                self.logger.warning("KeywordAction 脚本执行已禁用，请使用 EventBus 进行服务调用")
             else:
                 self.logger.error(f"动作脚本 '{script_name}' 中未找到可执行的 'execute' 函数。")
 
