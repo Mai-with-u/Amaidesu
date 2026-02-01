@@ -29,7 +29,6 @@ def register_core_events() -> None:
 
     # Layer 3: 决策层
     EventRegistry.register_core_event(CoreEvents.DECISION_REQUEST, DecisionRequestEvent)
-    EventRegistry.register_core_event(CoreEvents.DECISION_RESPONSE_GENERATED, DecisionResponseEvent)
     EventRegistry.register_core_event(CoreEvents.DECISION_INTENT_GENERATED, IntentGeneratedEvent)
 
     # Layer 4-5: 参数和渲染

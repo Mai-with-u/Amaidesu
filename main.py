@@ -10,6 +10,7 @@ import contextlib
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from src.core.amaidesu_core import AmaidesuCore
+from src.core.config_service import ConfigService
 from src.core.context_manager import ContextManager
 from src.core.event_bus import EventBus
 from src.core.events import register_core_events
@@ -17,7 +18,6 @@ from src.core.flow_coordinator import FlowCoordinator
 from src.core.llm_service import LLMService
 from src.core.pipeline_manager import PipelineManager
 from src.core.plugin_manager import PluginManager
-from src.services.config_service import ConfigService
 from src.utils.logger import get_logger
 from src.layers.input.input_layer import InputLayer
 from src.layers.decision.decision_manager import DecisionManager, DecisionProviderFactory

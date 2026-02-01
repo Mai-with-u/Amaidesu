@@ -22,6 +22,7 @@ from src.utils.logger import get_logger
 from .event_bus import EventBus
 from .events.names import CoreEvents
 from src.layers.parameters.expression_generator import ExpressionGenerator
+from .output_provider_manager import OutputProviderManager
 
 
 class FlowCoordinator:
