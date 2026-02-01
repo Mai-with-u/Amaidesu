@@ -11,7 +11,7 @@ from src.utils.logger import get_logger
 from .pipeline_manager import PipelineManager
 from .context_manager import ContextManager
 from .event_bus import EventBus
-from .decision_manager import DecisionManager
+from src.layers.decision.decision_manager import DecisionManager
 from .http_server import HttpServer
 from .flow_coordinator import FlowCoordinator
 

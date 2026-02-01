@@ -20,10 +20,8 @@ from src.core.plugin_manager import PluginManager
 from src.services.config_service import ConfigService
 from src.utils.logger import get_logger
 from src.layers.input.input_layer import InputLayer
-from src.layers.canonical.canonical_layer import CanonicalLayer
 from src.layers.decision.decision_manager import DecisionManager, DecisionProviderFactory
 from src.layers.decision.providers.maicore_decision_provider import MaiCoreDecisionProvider
-from src.layers.understanding.understanding_layer import UnderstandingLayer
 
 logger = get_logger("Main")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -179,13 +177,11 @@ async def create_app_components(
     AmaidesuCore,
     PluginManager,
     Optional[FlowCoordinator],
-    "CanonicalLayer",
     InputLayer,
     LLMService,
     Optional[DecisionManager],
-    Optional[UnderstandingLayer],
 ]:
-    """创建并连接核心组件（事件总线、输入层、决策层、表现理解层、协调器、核心、插件）。"""
+    """创建并连接核心组件（事件总线、输入层、决策层、协调器、核心、插件）。"""
     general_config = config.get("general", {})
     rendering_config = config.get("rendering", {})
     decision_config = config.get("decision", {})
@@ -213,24 +209,22 @@ async def create_app_components(
     enable_validation = event_bus_config.get("enable_validation", False)
     event_bus = EventBus(enable_validation=enable_validation)
 
+    # 将 LLMService 添加到 EventBus，供 IntentParser 使用
+    event_bus._llm_service = llm_service
+
     register_core_events()
     logger.info("核心事件已注册到 EventRegistry")
 
-    # 输入层 (Layer 1→2→3)
-    logger.info("初始化输入层组件（Layer 1-2-3 数据流）...")
+    # 输入层 (Layer 1-2)
+    logger.info("初始化输入层组件（Layer 1-2 数据流）...")
     input_layer = InputLayer(event_bus)
     await input_layer.setup()
-    logger.info("InputLayer 已设置（Layer 1→2）")
+    logger.info("InputLayer 已设置（Layer 1-2）")
 
-    canonical_layer = CanonicalLayer(event_bus, pipeline_manager=pipeline_manager)
-    await canonical_layer.setup()
-    logger.info("CanonicalLayer 已设置（Layer 2→3）")
-
-    # 决策层 (Layer 4)
+    # 决策层 (Layer 3)
     decision_manager: Optional[DecisionManager] = None
-    understanding_layer: Optional[UnderstandingLayer] = None
     if decision_config:
-        logger.info("初始化决策层组件（Layer 4-5 数据流）...")
+        logger.info("初始化决策层组件（Layer 3 数据流）...")
         try:
             decision_manager = DecisionManager(event_bus)
 
@@ -244,26 +238,20 @@ async def create_app_components(
             provider_config = decision_config.get(provider_name, {})
             await decision_manager.setup(provider_name, provider_config)
             logger.info(f"DecisionManager 已设置（Provider: {provider_name}）")
-
-            # 表现理解层 (Layer 5)
-            understanding_layer = UnderstandingLayer(event_bus)
-            await understanding_layer.setup()
-            logger.info("UnderstandingLayer 已设置（Layer 5）")
         except Exception as e:
             logger.error(f"设置决策层组件失败: {e}", exc_info=True)
             logger.warning("决策层功能不可用，继续启动其他服务")
             decision_manager = None
-            understanding_layer = None
     else:
         logger.info("未检测到决策配置，决策层功能将被禁用")
 
-    # 数据流协调器
+    # 数据流协调器 (Layer 4-5)
     logger.info("初始化数据流协调器...")
     flow_coordinator: Optional[FlowCoordinator] = FlowCoordinator(event_bus) if rendering_config else None
     if flow_coordinator:
         try:
             await flow_coordinator.setup(rendering_config)
-            logger.info("数据流协调器已设置（Layer 5→6→7）")
+            logger.info("数据流协调器已设置（Layer 4-5）")
         except Exception as e:
             logger.error(f"设置数据流协调器失败: {e}", exc_info=True)
             logger.warning("数据流协调器功能不可用，继续启动其他服务")
@@ -288,7 +276,7 @@ async def create_app_components(
 
     await core.connect()
 
-    return core, plugin_manager, flow_coordinator, canonical_layer, input_layer, llm_service, decision_manager, understanding_layer
+    return core, plugin_manager, flow_coordinator, input_layer, llm_service, decision_manager
 
 
 # ---------------------------------------------------------------------------
@@ -336,13 +324,11 @@ def restore_signal_handlers(original_sigint: Optional[Any], original_sigterm: Op
 
 async def run_shutdown(
     flow_coordinator: Optional[FlowCoordinator],
-    canonical_layer: "CanonicalLayer",
     input_layer: InputLayer,
     plugin_manager: PluginManager,
     llm_service: LLMService,
     core: AmaidesuCore,
     decision_manager: Optional[DecisionManager],
-    understanding_layer: Optional[UnderstandingLayer],
 ) -> None:
     """按顺序执行关闭与清理。"""
     if flow_coordinator:
@@ -353,15 +339,7 @@ async def run_shutdown(
         except Exception as e:
             logger.error(f"清理数据流协调器时出错: {e}")
 
-    # 清理决策层和表现理解层
-    if understanding_layer:
-        logger.info("正在清理表现理解层...")
-        try:
-            await understanding_layer.cleanup()
-            logger.info("表现理解层清理完成")
-        except Exception as e:
-            logger.error(f"清理表现理解层时出错: {e}")
-
+    # 清理决策层
     if decision_manager:
         logger.info("正在清理决策管理器...")
         try:
@@ -372,7 +350,6 @@ async def run_shutdown(
 
     logger.info("正在清理输入层组件...")
     try:
-        await canonical_layer.cleanup()
         await input_layer.cleanup()
         logger.info("输入层组件清理完成")
     except Exception as e:
@@ -417,7 +394,7 @@ async def main() -> None:
 
     pipeline_manager = await load_pipeline_manager(config)
 
-    core, plugin_manager, flow_coordinator, canonical_layer, input_layer, llm_service, decision_manager, understanding_layer = await create_app_components(
+    core, plugin_manager, flow_coordinator, input_layer, llm_service, decision_manager = await create_app_components(
         config, pipeline_manager, config_service
     )
 
@@ -433,7 +410,7 @@ async def main() -> None:
         logger.info("检测到 KeyboardInterrupt，开始清理...")
 
     restore_signal_handlers(orig_sigint, orig_sigterm)
-    await run_shutdown(flow_coordinator, canonical_layer, input_layer, plugin_manager, llm_service, core, decision_manager, understanding_layer)
+    await run_shutdown(flow_coordinator, input_layer, plugin_manager, llm_service, core, decision_manager)
 
 
 if __name__ == "__main__":

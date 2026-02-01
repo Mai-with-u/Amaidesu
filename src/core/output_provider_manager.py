@@ -13,8 +13,8 @@ import asyncio
 from typing import List, Dict, Any, Optional, TYPE_CHECKING
 from src.utils.logger import get_logger
 
-from .providers.output_provider import OutputProvider
-from ..expression.render_parameters import ExpressionParameters
+from .base.output_provider import OutputProvider
+from src.layers.parameters.render_parameters import RenderParameters
 
 # 类型检查时的导入
 if TYPE_CHECKING:
@@ -93,12 +93,12 @@ class OutputProviderManager:
             setup_count = sum(1 for p in self.providers if p.is_setup)
             self.logger.warning(f"部分Provider启动失败: {setup_count}/{len(self.providers)}")
 
-    async def render_all(self, parameters: ExpressionParameters):
+    async def render_all(self, parameters: RenderParameters):
         """
         并发渲染到所有Provider
 
         Args:
-            parameters: ExpressionParameters对象
+            parameters: RenderParameters对象
         """
         self.logger.info(f"正在渲染到 {len(self.providers)} 个Provider...")
 
@@ -206,13 +206,13 @@ class OutputProviderManager:
             "provider_stats": provider_stats,
         }
 
-    async def _render_single(self, provider: OutputProvider, parameters: ExpressionParameters):
+    async def _render_single(self, provider: OutputProvider, parameters: RenderParameters):
         """
         渲染到单个Provider（内部方法）
 
         Args:
             provider: Provider实例
-            parameters: ExpressionParameters对象
+            parameters: RenderParameters对象
         """
         try:
             await provider.render(parameters)

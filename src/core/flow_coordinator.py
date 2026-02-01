@@ -12,7 +12,7 @@ from src.utils.logger import get_logger
 
 from .event_bus import EventBus
 from .output_provider_manager import OutputProviderManager
-from ..expression.expression_generator import ExpressionGenerator
+from src.layers.parameters.expression_generator import ExpressionGenerator
 
 
 class FlowCoordinator:
