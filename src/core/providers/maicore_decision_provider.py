@@ -198,12 +198,12 @@ class MaiCoreDecisionProvider(DecisionProvider):
             self.logger.debug(f"原始消息数据: {message_data}")
             return
 
-        # 通过 EventBus 发布消息事件
+        # 通过 EventBus 发布决策响应事件
         if self._event_bus:
             try:
-                await self._event_bus.emit("maicore.message", {"message": message})
+                await self._event_bus.emit("decision.response_generated", {"message": message})
             except Exception as e:
-                self.logger.error(f"发布消息事件失败: {e}", exc_info=True)
+                self.logger.error(f"发布决策响应事件失败: {e}", exc_info=True)
 
     async def cleanup(self) -> None:
         """
