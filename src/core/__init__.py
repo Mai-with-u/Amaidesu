@@ -6,7 +6,6 @@ Amaidesu核心模块
 - AmaidesuCore: 核心管理器
 - HttpServer: HTTP服务器
 - PipelineManager: 管道管理器
-- PluginManager: 插件管理器
 """
 
 from src.core.http_server import HttpServer, HttpServerError
