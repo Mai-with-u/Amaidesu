@@ -212,10 +212,13 @@ priority = 50
 # === 新格式：启用列表 ===
 # 取消注释来启用插件，注释掉来禁用
 enabled = [
+    # 模拟插件（用于测试和演示）
+    "mock_providers",    # 模拟输入、决策、输出三层（推荐用于测试）
+
     # 基础功能（建议启用）
-    "console_input",
-    "keyword_action",
-    "llm_text_processor", # LLM文本处理器
+    # "console_input",
+    # "keyword_action",
+    # "llm_text_processor", # LLM文本处理器
 
     # 游戏互动
     # "mainosaba",        # 魔裁游戏
