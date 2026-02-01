@@ -81,6 +81,11 @@ class TTSProvider(OutputProvider):
         if self.tts_engine == "edge" and "edge_tts" not in globals():
             raise RuntimeError("Edge TTS引擎未安装")
 
+        # 订阅 expression.parameters_generated 事件（事件驱动架构）
+        if self.event_bus:
+            self.event_bus.on("expression.parameters_generated", self._on_parameters_ready, priority=50)
+            self.logger.info("TTSProvider 已订阅 expression.parameters_generated 事件")
+
         self.logger.info("TTSProvider设置完成")
 
     def _find_device_index(self, device_name: Optional[str]) -> Optional[int]:
@@ -256,9 +261,35 @@ class TTSProvider(OutputProvider):
             self.logger.error(f"音频播放失败: {e}", exc_info=True)
             raise e
 
+    async def _on_parameters_ready(self, event_name: str, event_data: ExpressionParameters, source: str):
+        """
+        处理 expression.parameters_generated 事件（事件驱动架构）
+
+        Args:
+            event_name: 事件名称
+            event_data: ExpressionParameters 对象
+            source: 事件源
+        """
+        # 检查是否启用 TTS
+        if not event_data.tts_enabled or not event_data.tts_text:
+            return
+
+        try:
+            await self._render_internal(event_data)
+        except Exception as e:
+            self.logger.error(f"TTS 渲染失败: {e}", exc_info=True)
+
     async def _cleanup_internal(self):
         """内部清理逻辑"""
         self.logger.info("TTSProvider清理中...")
+
+        # 取消事件订阅
+        if self.event_bus:
+            try:
+                self.event_bus.off("expression.parameters_generated", self._on_parameters_ready)
+                self.logger.debug("TTSProvider 已取消事件订阅")
+            except Exception as e:
+                self.logger.warning(f"取消事件订阅失败: {e}")
 
         # 停止所有播放
         try:

@@ -20,7 +20,7 @@ from typing import Dict, Any, Optional
 from src.utils.logger import get_logger
 
 from .event_bus import EventBus
-from .output_provider_manager import OutputProviderManager
+from .events.names import CoreEvents
 from src.layers.parameters.expression_generator import ExpressionGenerator
 
 
@@ -141,6 +141,9 @@ class FlowCoordinator:
         """
         处理Intent事件（Layer 3 Decision → Layer 4-5 Parameters+Rendering）
 
+        数据流（事件驱动）:
+            Intent → ExpressionParameters → 发布 expression.parameters_generated 事件 → OutputProvider 订阅并渲染
+
         Args:
             event_name: 事件名称（decision.intent_generated）
             event_data: 事件数据（包含intent对象）
@@ -155,14 +158,19 @@ class FlowCoordinator:
                 self.logger.error("事件数据中缺少intent对象")
                 return
 
-            # Layer 6: Intent → ExpressionParameters
+            # Layer 4: Intent → ExpressionParameters
             if self.expression_generator:
                 params = await self.expression_generator.generate(intent)
-                self.logger.info(f"ExpressionParameters生成完成: {params}")
+                self.logger.info(f"ExpressionParameters生成完成")
 
-                # Layer 7: ExpressionParameters → OutputProvider
-                if self.output_provider_manager:
-                    await self.output_provider_manager.render_all(params)
+                # Layer 5: 发布 expression.parameters_generated 事件（事件驱动）
+                # OutputProvider 订阅此事件并响应
+                await self.event_bus.emit(
+                    CoreEvents.EXPRESSION_PARAMETERS_GENERATED,
+                    params,
+                    source="FlowCoordinator"
+                )
+                self.logger.debug(f"已发布事件: {CoreEvents.EXPRESSION_PARAMETERS_GENERATED}")
             else:
                 self.logger.warning("表达式生成器未初始化，跳过渲染")
 
