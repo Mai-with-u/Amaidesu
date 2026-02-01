@@ -1,11 +1,17 @@
 # Pipeline重新设计
 
-> **⚠️ 实现状态**  
-> 本文档描述的是**目标架构**。当前实现**未完成**：  
-> - 现有管道均为 **MessagePipeline**（处理 MessageBase），未迁移到 **TextPipeline**（处理 Text）。  
-> - **TextPipeline** 未被注册到 PipelineManager，CanonicalLayer 调用 `process_text()` 时无管道可执行，限流/过滤等未接入 6 层数据流。  
-> - MessagePipeline 的 `process_inbound_message` / `process_outbound_message` 在 6 层架构中**无调用点**。  
-> 详见 [架构设计审查 B-01：管道系统未重构成功](./architecture_review.md#b-01-管道系统未重构成功--待修复)。
+> **✅ 实现状态**
+> 本文档描述的架构**已完成实现**：
+> - ✅ 限流管道（throttle/RateLimitTextPipeline）已迁移到 TextPipeline 架构
+> - ✅ 相似文本过滤管道（similar_message_filter/SimilarTextFilterPipeline）已迁移到 TextPipeline 架构
+> - ✅ 消息日志管道（message_logger/MessageLoggerPipeline）保留旧架构（用于消息记录）
+> - ✅ 已移除 command_router 和 command_processor 管道（功能由 Provider 系统替代）
+> - ✅ TextPipeline 已接入 Layer 2→3 数据流
+>
+> **当前管道列表**：
+> - RateLimitTextPipeline - 限流（新架构）
+> - SimilarTextFilterPipeline - 相似文本过滤（新架构）
+> - MessageLoggerPipeline - 消息日志（旧架构，用于记录）
 
 ---
 

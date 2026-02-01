@@ -5,7 +5,7 @@
 
 ---
 
-## 一、管道系统（Pipeline）
+## 一、管道系统（Pipeline）✅ 已完成
 
 **设计文档**：[pipeline_refactoring.md](../refactor/design/pipeline_refactoring.md)
 
@@ -14,16 +14,19 @@
 | ✅ 已实现 | **TextPipeline** 接口：`TextPipeline` 协议、`TextPipelineBase` 基类、`PipelineErrorHandling` 枚举、`PipelineStats` 统计类、`PipelineException` 异常已在 `pipeline_manager.py` 中实现。 |
 | ✅ 已实现 | **PipelineManager.process_text()**：新版方法已实现，支持超时控制、错误处理策略（CONTINUE/STOP/DROP）、统计信息、并发保护（asyncio.Lock）。 |
 | ✅ 已接入 | Layer 2→3 之间已插入 **process_text**：`CanonicalLayer._on_normalized_text_ready` 中调用 `pipeline_manager.process_text(text, metadata)`，支持文本预处理和丢弃逻辑。 |
-| ✅ 已实现 | **TextPipeline 示例**：`RateLimitTextPipeline`（限流）和 `SimilarTextFilterPipeline`（相似文本过滤）已实现。 |
-| ⏳ 待迁移 | **现有 MessagePipeline**：command_router、throttle、similar_message_filter、message_logger 等仍为 MessagePipeline，可保留向后兼容或逐步替换。 |
-| ⏳ 可移除 | **CommandRouterPipeline** 设计上由 DecisionProvider 替代，可考虑移除。 |
+| ✅ 已完成 | **限流管道迁移**：`throttle/RateLimitTextPipeline` 已迁移到 TextPipeline 架构（保留 git 历史）。 |
+| ✅ 已完成 | **相似文本过滤迁移**：`similar_message_filter/SimilarTextFilterPipeline` 已迁移到 TextPipeline 架构（保留 git 历史）。 |
+| ✅ 已完成 | **已移除管道**：command_router、command_processor 已移除（功能由 Provider 系统替代）。 |
+| ✅ 保留 | **消息日志管道**：`message_logger/MessageLoggerPipeline` 保留旧架构（用于消息记录，不参与处理）。 |
 
 **已完成**：
 - TextPipeline 协议与 `process_text()` 已实现并接入 CanonicalLayer
-- `src/pipelines/rate_limit/` - RateLimitTextPipeline（限流管道，ThrottlePipeline 的 TextPipeline 版本）
-- `src/pipelines/similar_text_filter/` - SimilarTextFilterPipeline（相似文本过滤管道）
+- `src/pipelines/throttle/pipeline.py` - RateLimitTextPipeline（限流管道，新架构，保留 git 历史）
+- `src/pipelines/similar_message_filter/pipeline.py` - SimilarTextFilterPipeline（相似文本过滤，新架构，保留 git 历史）
+- `src/pipelines/message_logger/pipeline.py` - MessageLoggerPipeline（消息日志，保留旧架构）
+- 已删除：command_router、command_processor、rate_limit、similar_text_filter
 
-**待做**：如有需要，可继续迁移其他 MessagePipeline 到 TextPipeline 接口。现有 MessagePipeline 可保留向后兼容。
+**待做**：无。管道系统重构已完成。
 
 ---
 
@@ -158,11 +161,10 @@
 ## 建议实施顺序
 
 1. ~~**Layer 2→3 桥接**~~：✅ 已完成（CanonicalLayer 实现，main.py 启动 InputLayer 和 CanonicalLayer）。
-2. ~~**Pipeline（TextPipeline + process_text）**~~：✅ 核心已完成（TextPipeline 协议、PipelineManager.process_text()、CanonicalLayer 接入）。
+2. ~~**Pipeline（TextPipeline + process_text）**~~：✅ 已完成（TextPipeline 协议、PipelineManager.process_text()、CanonicalLayer 接入、管道迁移完成）。
 3. ~~**main 启动输入层**~~：✅ 已完成（InputLayer、CanonicalLayer 在 main.py 中启动）。
 4. ~~**事件契约**~~：✅ 已完成（EventRegistry、Pydantic 事件模型、EventBus 集成）。
 5. **服务注册**：（低优先级）逐步用 EventBus/依赖注入替代剩余 `get_service` 调用。
-6. **Pipeline 迁移**：（可选）将现有 MessagePipeline（throttle、filter 等）迁移到 TextPipeline 接口。
 
 以上顺序可根据排期与风险调整。
 
@@ -177,7 +179,7 @@
 | 重构项 | 为何可并行 | 建议注意点 |
 |--------|------------|------------|
 | ~~**1. Layer 2→3 桥接（Canonical 层）**~~ | ✅ **已完成** | - |
-| ~~**2. 管道系统（TextPipeline + process_text）**~~ | ✅ **核心已完成**：TextPipeline 协议、PipelineManager.process_text()、CanonicalLayer 接入均已实现。待迁移现有 MessagePipeline。 | - |
+| ~~**2. 管道系统（TextPipeline + process_text）**~~ | ✅ **已完成**：TextPipeline 协议、PipelineManager.process_text()、CanonicalLayer 接入、管道迁移（限流、相似文本过滤）均已完成。 | - |
 | ~~**3. main 中启动 InputLayer / InputProviderManager**~~ | ✅ **已完成** | - |
 | ~~**4. HTTP 服务器（独立 FastAPI + register_route）**~~ | ✅ **核心已完成**：HttpServer 类已实现，AmaidesuCore 已集成 HttpServer 管理。待迁移 MaiCoreDecisionProvider 使用新 HttpServer。 | - |
 | **5. 服务注册瘦身（用 EventBus 替代 get_service）** | 可先做「用 `event_bus.emit/on` 替代部分 `get_service` 调用」，**不在此处新增或修改事件的 Pydantic 模型**；新事件名与 payload 保持简单 dict，由契约方后续补类型。 | 避免在服务注册瘦身时**新增**或**修改**契约文档中已列出的核心事件（如 `perception.raw_data.generated`、`normalization.text.ready`、`decision.response_generated` 等）的 payload 结构；新事件（如 `tts.synthesize.request`）保持 dict，由契约方统一补契约。 |

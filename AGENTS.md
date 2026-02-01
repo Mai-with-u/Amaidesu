@@ -128,7 +128,7 @@ def __init__(self, config: Dict[str, Any]):
 - **变量名**：snake_case（如 `plugin_config`, `event_bus`）
 - **私有成员**：前导下划线（如 `_message_handlers`, `_is_connected`）
 - **插件类**：以 `Plugin` 结尾（如 `ConsoleInputPlugin`, `TTSPlugin`）
-- **管道类**：以 `Pipeline` 结尾（如 `ThrottlePipeline`, `CommandRouterPipeline`）
+- **管道类**：以 `Pipeline` 结尾（如 `RateLimitTextPipeline`, `SimilarTextFilterPipeline`, `MessageLoggerPipeline`）
 - **插件入口点**：模块级别的 `plugin_entrypoint` 变量
 
 ### 格式化规范（基于 pyproject.toml）
@@ -301,7 +301,7 @@ plugin_entrypoint = MyPlugin
 - **OutputProvider**: 输出 Provider，渲染到目标设备
   - 示例：TTSOutputProvider（语音合成）、SubtitleOutputProvider（字幕显示）
 - **DecisionProvider**: 决策 Provider，处理 CanonicalMessage
-  - 示例：CommandRouterProvider（命令路由）
+  - 示例：MaiCoreDecisionProvider（连接 MaiCore 进行决策）、LocalLLMDecisionProvider（本地 LLM 决策）
 
 #### Provider 开发示例
 

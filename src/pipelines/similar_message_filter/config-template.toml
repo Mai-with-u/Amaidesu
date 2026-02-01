@@ -1,17 +1,14 @@
-# 相似消息过滤管道配置模板
+# 相似文本过滤管道配置模板（TextPipeline 架构）
 
 [similar_message_filter]
-# 消息类型过滤，只处理这些类型的消息，留空则处理所有消息类型
-message_types = ["text"]
-
-# 消息相似度阈值 (0.0-1.0)，高于此值的消息将被视为相似消息并被过滤
+# 文本相似度阈值 (0.0-1.0)，高于此值的消息将被视为相似消息并被过滤
 similarity_threshold = 0.85
 
 # 检查窗口的时间范围（秒），只有在此时间范围内的消息才会被检查过滤
-time_window = 60
+time_window = 5.0
 
-# 最小消息长度，低于此长度的消息不会被过滤
-min_message_length = 1
+# 最小文本长度，低于此长度的消息不会被过滤
+min_text_length = 3
 
 # 是否跨用户过滤相似消息，设为 true 表示忽略用户ID，对所有用户的相似消息进行过滤
 cross_user_filter = true
