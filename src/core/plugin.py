@@ -13,9 +13,27 @@ Plugin的职责：
 3. 管理Provider的生命周期
 """
 
-from typing import Protocol, List, Dict, Any
-from typing import TYPE_CHECKING
+from typing import Protocol, List, Dict, Any, TYPE_CHECKING
 
+
+# --- 核心服务接口（用于避免循环依赖 - A-09） ---
+class CoreServices(Protocol):
+    """
+    核心服务接口（Protocol）
+
+    用于解耦 Plugin 与 AmaidesuCore 的直接依赖关系（A-09 重构）。
+    Plugin 只依赖这个接口，不依赖具体的 AmaidesuCore 实现。
+
+    这个接口定义了 Plugin 需要的核心服务，通过依赖注入方式传递。
+    """
+
+    @property
+    def event_bus(self) -> Any:  # 实际上是 EventBus，但避免循环导入
+        """获取事件总线实例"""
+        ...
+
+
+# --- Provider 接口 ---
 if TYPE_CHECKING:
     from .event_bus import EventBus
 
@@ -89,7 +107,8 @@ class Plugin(Protocol):
         初始化插件
 
         Args:
-            event_bus: 事件总线实例
+            event_bus: 事件总线实例（或 CoreServices 接口）
+                       A-09 重构：可以直接传递 EventBus 实例，或传递 CoreServices 接口
             config: 插件配置（从config.toml中读取）
 
         Returns:
@@ -134,4 +153,4 @@ class Plugin(Protocol):
 
 
 # 导出
-__all__ = ["Plugin"]
+__all__ = ["Plugin", "CoreServices"]

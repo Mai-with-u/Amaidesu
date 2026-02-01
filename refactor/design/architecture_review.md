@@ -14,11 +14,11 @@
 | **A-02** | 服务注册机制与 EventBus 并存导致混乱 | 🔴 | 全局通信 | ✅ 已完成 |
 | **A-03** | Provider 构造函数签名不一致 | 🟡 | 可测试性 | ✅ 已完成 |
 | **A-04** | MaiCoreDecisionProvider 职责过重 | 🔴 | 决策层 | ✅ 已完成 |
-| **A-05** | `src/providers/` 目录定位不清 | 🟡 | 目录结构 | ⏳ |
+| **A-05** | Provider/Plugin 职责边界不清 | 🟡 | 目录结构 | ✅ 设计已确定 |
 | **A-06** | 输出层 Provider 依赖 core 实例 | 🔴 | 依赖注入 | ✅ 已完成 |
 | **A-07** | DataCache 未实现（Layer 2 已实现） | 🟢 | 数据流 | ✅ 已确认 |
 | **A-08** | 配置加载散落在多个模块 | 🟡 | 配置管理 | ✅ 已完成 |
-| **A-09** | 循环依赖风险 | 🟡 | 模块结构 | ⏳ |
+| **A-09** | 循环依赖风险 | 🟡 | 模块结构 | ✅ 已完成 |
 | **A-10** | 废弃代码未清理干净 | 🟢 | 代码质量 | ⏳ |
 
 ---
@@ -536,11 +536,11 @@ class OutputProvider(ABC):
 
 ---
 
-### A-05: `src/providers/` 目录定位不清
+### A-05: Provider/Plugin 职责边界不清 ✅ 设计已确定
 
 **问题描述**：
 
-项目中存在一个设计文档未规划的目录 `src/providers/`：
+项目中存在一个设计文档未规划的目录 `src/providers/`，且 Provider/Plugin 的职责边界不清晰：
 
 ```
 src/core/providers/              # ✅ 基类和接口（设计文档规划）
@@ -561,30 +561,137 @@ src/providers/                   # ❓ 这个目录是什么？（未在设计�
 └── ...
 ```
 
-**混乱点**：
-1. `src/providers/` 不是基类（基类在 `src/core/providers/`）
-2. `src/providers/` 不是插件（插件在 `src/plugins/`）
-3. `src/providers/` 与 `src/plugins/xxx/providers/` 存在功能重复
-4. OutputProviderManager 硬编码引用 `src/providers/`
+**核心问题**：
 
-**注意**：此问题**不影响社区插件**，社区插件目录是 `plugins/`（根目录）。
+如果 Provider 分散在各插件内部而没有统一管理机制，可能导致：
+1. 插件之间绕过 EventBus，直接服务注册（回到旧架构）
+2. 没有统一的渲染入口
+3. 重构白费
 
-**建议**：
+**设计决策**：
+
+经过分析，确定以下 Provider/Plugin 职责边界：
 
 ```
-# 方案 A：将 src/providers/ 作为核心渲染模块
-src/rendering/providers/         # 核心渲染 Provider（非插件）
-├── tts_provider.py
-├── subtitle_provider.py
-└── ...
-
-# 方案 B：合并到对应的官方插件中
-src/plugins/tts/providers/tts_provider.py          # 保留
-src/plugins/subtitle/providers/subtitle_provider.py # 保留
-# 删除 src/providers/ 目录
-
-# 推荐方案 B：减少目录混乱
+Provider = 原子能力（单一职责、可复用、统一管理）
+Plugin = 能力组合（整合 Provider、提供业务场景）
 ```
+
+| 参与者 | 职责 | 创建 Provider | 管理方式 |
+|--------|------|--------------|----------|
+| **内置 Provider** | 核心原子能力 | 放在层目录下 | Manager 直接管理 |
+| **官方 Plugin** | 场景整合 | 不创建，只声明依赖 | 配置驱动 |
+| **第三方插件** | 扩展能力 | 可通过 Registry 注册 | 统一注册机制 |
+
+**推荐架构**：
+
+```
+src/
+├── perception/                    # Layer 1-2 感知层
+│   ├── input_layer.py
+│   └── providers/                 # ✅ 内置 InputProvider
+│       ├── console_input_provider.py
+│       ├── bili_danmaku_provider.py
+│       └── minecraft_provider.py
+│
+├── decision/                      # Layer 3-4 决策层
+│   ├── decision_manager.py
+│   └── providers/                 # ✅ 内置 DecisionProvider
+│       ├── maicore_decision_provider.py
+│       └── local_llm_provider.py
+│
+├── rendering/                     # Layer 5-6 渲染层
+│   ├── output_provider_manager.py
+│   ├── provider_registry.py       # ✅ Provider 注册表
+│   └── providers/                 # ✅ 内置 OutputProvider
+│       ├── tts_provider.py
+│       ├── subtitle_provider.py
+│       └── vts_provider.py
+│
+├── plugins/                       # 官方 Plugin（整合 Provider）
+│   ├── live_stream/               # 直播场景
+│   │   └── plugin.py              # 声明依赖: bili_danmaku + tts + vts
+│   └── game_companion/            # 游戏陪伴场景
+│       └── plugin.py              # 声明依赖: minecraft + tts
+│
+plugins/                           # 第三方插件（社区）
+├── custom_stt/
+│   └── providers/
+│       └── whisper_provider.py    # 通过 Registry 注册
+```
+
+**实现示例**：
+
+```python
+# 1. 内置 Provider - 放在层目录，被 Manager 直接管理
+# src/rendering/providers/tts_provider.py
+class TTSProvider(OutputProvider):
+    """内置 TTS 能力"""
+    async def render(self, params: ExpressionParameters): ...
+
+# 2. Provider 注册表 - 统一管理
+# src/rendering/provider_registry.py
+class ProviderRegistry:
+    """Provider 注册表 - 统一管理所有 Provider"""
+    _providers: Dict[str, Type[OutputProvider]] = {}
+
+    @classmethod
+    def register(cls, name: str, provider_class: Type[OutputProvider]):
+        """注册 Provider 类"""
+        cls._providers[name] = provider_class
+
+    @classmethod
+    def create(cls, name: str, config: dict) -> OutputProvider:
+        """创建 Provider 实例"""
+        if name not in cls._providers:
+            raise ValueError(f"Unknown provider: {name}")
+        return cls._providers[name](config)
+
+# 3. 官方 Plugin - 整合已有 Provider，不创建新 Provider
+# src/plugins/live_stream/plugin.py
+class LiveStreamPlugin:
+    """直播场景 Plugin - 整合已有能力"""
+
+    def get_required_providers(self) -> Dict[str, List[str]]:
+        """声明需要的 Provider（不创建）"""
+        return {
+            "input": ["bili_danmaku"],
+            "output": ["tts", "vts", "subtitle"]
+        }
+
+    async def setup(self, event_bus, config):
+        # 不创建 Provider，只注册事件处理逻辑
+        event_bus.subscribe("danmaku.received", self.on_danmaku)
+        return []  # 不返回新 Provider
+
+# 4. 第三方插件 - 可以注册自定义 Provider
+# plugins/custom_stt/plugin.py
+from src.rendering.provider_registry import ProviderRegistry
+from .providers.whisper_provider import WhisperProvider
+
+class CustomSTTPlugin:
+    async def setup(self, event_bus, config):
+        # 通过 Registry 注册自定义 Provider
+        ProviderRegistry.register("whisper_stt", WhisperProvider)
+        return []
+```
+
+**关键保障**：
+
+1. **统一注册入口**：所有 Provider 通过 Registry 注册
+2. **统一生命周期**：Manager 管理所有 Provider 的启动/停止
+3. **强制 EventBus**：禁止服务注册，所有通信通过 EventBus
+4. **配置驱动**：通过配置决定启用哪些 Provider
+
+**迁移计划**：
+
+1. 创建 `src/rendering/provider_registry.py`
+2. 将 `src/providers/` 移动到 `src/rendering/providers/`
+3. 更新 `OutputProviderManager` 使用 Registry
+4. 更新官方 Plugin，移除 Provider 创建逻辑
+5. 删除 `src/providers/` 目录
+
+**注意**：此变更**不影响社区插件**，社区插件目录仍是 `plugins/`（根目录），且可以通过 Registry 注册自定义 Provider
 
 ---
 
@@ -633,7 +740,7 @@ RawData → InputLayer.normalize() → NormalizedText → CanonicalLayer → Can
 
 ---
 
-### A-08: 配置加载散落在多个模块
+### A-08: 配置加载散落在多个模块 ✅ 已完成
 
 **问题描述**：
 
@@ -701,7 +808,7 @@ class ConfigService:
     
     ---
 
-### A-09: 循环依赖风险
+### A-09: 循环依赖风险 ✅ 已完成
 
 **问题描述**：
 
@@ -721,7 +828,7 @@ AmaidesuCore → PluginManager → Plugin → core.get_service() → AmaidesuCor
 class CoreServices(Protocol):
     """Core 提供的服务接口"""
     event_bus: EventBus
-    
+
     def get_service(self, name: str) -> Any: ...
 
 # Plugin 依赖接口而非具体类
@@ -729,6 +836,28 @@ class Plugin(Protocol):
     async def setup(self, services: CoreServices, config: dict) -> List[Provider]:
         ...
 ```
+
+**执行情况**：
+
+✅ 已完成：
+- 创建了 `CoreServices` 接口（Protocol），定义核心服务抽象
+- `CoreServices` 接口只包含 `event_bus` 属性（`get_service()` 已在 A-02 中移除）
+- `Plugin.setup()` 方法现在可以接收 `CoreServices` 接口或直接接收 `EventBus` 实例
+- 新架构（Plugin）通过 `TYPE_CHECKING` 延迟导入 `EventBus`，避免循环依赖
+- 旧架构（BasePlugin）已废弃，但仍保留向后兼容性
+- 依赖链现在清晰：`AmaidesuCore → PluginManager → Plugin.setup(event_bus)`
+
+**修改的文件**：
+- `src/core/plugin.py` - 添加 `CoreServices` 接口，更新 `Plugin.setup()` 文档，导出 `CoreServices`
+- `refactor/design/architecture_review.md` - 本文档，更新 A-09 状态
+
+**说明**：
+- `CoreServices` 接口完全解耦了 Plugin 与 AmaidesuCore 的直接依赖
+- Plugin 只依赖 `CoreServices` 接口，不依赖具体的 AmaidesuCore 实现
+- 当前实现中，`Plugin.setup()` 仍接收 `event_bus` 参数（与 `CoreServices` 接口兼容）
+- AmaidesuCore 已经实现了 `CoreServices` 接口（有 `event_bus` 属性）
+- 通过 `TYPE_CHECKING` 延迟导入，避免了运行时的循环依赖问题
+- 保持了向后兼容性，所有现有功能继续正常工作
 
 ---
 
@@ -769,22 +898,29 @@ def __init__(self, ..., avatar: Optional["AvatarControlManager"] = None, ...):
 
 ## 📝 优先级建议
 
-### 高优先级（立即处理）
+### 已完成
 
-1. **A-02**: 统一通信模式，废弃服务注册
-2. **A-06**: 移除 Provider 对 core 的直接依赖
-3. **A-04**: 拆分 MaiCoreDecisionProvider
+- ✅ **A-01**: AmaidesuCore 重构为纯组合根
+- ✅ **A-02**: 统一通信模式，废弃服务注册
+- ✅ **A-03**: 统一 Provider 构造函数签名
+- ✅ **A-04**: 拆分 MaiCoreDecisionProvider
+- ✅ **A-05**: Provider/Plugin 职责边界设计确定
+- ✅ **A-06**: 移除 Provider 对 core 的直接依赖
+- ✅ **A-07**: Layer 2 已实现，DataCache 作为扩展点保留
+- ✅ **A-08**: 统一配置加载（ConfigService）
+- ✅ **A-09**: 循环依赖风险（通过接口隔离）
 
-### 中优先级（下一阶段）
+### 待实施（A-05 迁移计划）
 
-4. **A-03**: 统一 Provider 构造函数签名
-5. **A-05**: 明确插件和 Provider 的目录结构
+1. 创建 `src/rendering/provider_registry.py`
+2. 将 `src/providers/` 移动到 `src/rendering/providers/`
+3. 更新 `OutputProviderManager` 使用 Registry
+4. 更新官方 Plugin，移除 Provider 创建逻辑
+5. 删除 `src/providers/` 目录
 
 ### 低优先级（持续改进）
 
-7. **A-08**: 统一配置加载
-8. **A-07**: 决定 Layer 2 的去留
-9. **A-10**: 清理废弃代码
+- **A-10**: 清理废弃代码
 
 ---
 
