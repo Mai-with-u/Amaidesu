@@ -1,14 +1,18 @@
 # refactor/design 设计文档一致性检查报告
 
-**检查日期**: 2025-02-01
-**更新日期**: 2025-02-01 (已修复P0/P1问题)
+**检查日期**: 2025-02-01  
+**更新日期**: 2025-02-01（再次检查，补修遗漏）  
 **检查范围**: `refactor/design/` 下全部 10 个设计文档
 
 ---
 
 ## 一、总体结论
 
-文档在**5 层架构**、**Provider 管理**、**移除插件系统**等主线上一致，已修复所有P0/P1优先级的不一致问题。
+文档在**5 层架构**、**Provider 管理**、**决策层 NormalizedMessage→Intent**、**移除插件系统**等主线上已统一。再次检查后补修了以下遗漏：
+
+- **core_refactoring.md**：MaiCoreDecisionProvider 示例中 `decide(canonical_message: CanonicalMessage) -> MessageBase` 已改为 `decide(message: NormalizedMessage) -> Intent`
+- **llm_service.md**：LocalLLMDecisionProvider 示例中 `decide` 签名及方法体已改为 NormalizedMessage → Intent
+- **event_data_contract.md**：相关文档描述「7层架构概述」已改为「5层架构概述」
 
 ---
 
@@ -35,13 +39,12 @@
 
 **原问题**：
 - **decision_layer.md**、**overview.md**：输入 `NormalizedMessage`，输出 `Intent`
-- **core_refactoring.md**、**http_server.md**：输入 `CanonicalMessage`，输出 `MessageBase`
+- **core_refactoring.md**、**http_server.md**、**llm_service.md**：曾使用 `CanonicalMessage`、`MessageBase`
 
-**修复计划**：
-- ⏳ 待修复：将 `CanonicalMessage` 统一改为 `NormalizedMessage`
-- ⏳ 待修复：将返回类型统一改为 `Intent`
-
-**注意**：此问题需要配合代码修改，建议在下一轮重构中处理
+**修复内容**：
+- ✅ core_refactoring.md 中 DecisionManager 与 MaiCoreDecisionProvider 示例已改为 NormalizedMessage → Intent
+- ✅ http_server.md 中 decide 签名已改为 NormalizedMessage → Intent
+- ✅ llm_service.md 中 LocalLLMDecisionProvider 示例已改为 NormalizedMessage → Intent
 
 ---
 
@@ -121,19 +124,9 @@
 
 ---
 
-## 四、待修复问题（优先级较低）
+## 四、可选优化（优先级较低）
 
-### 1. 决策层类型统一（P0 - 配合代码修改）
-
-**建议**：
-- 在core_refactoring.md、http_server.md中，将 `CanonicalMessage` 改为 `NormalizedMessage`
-- 将返回类型改为 `Intent`（若仍写返回值）
-
-**注意**：需要配合代码修改，建议在决策层重构时统一处理
-
----
-
-### 2. 事件契约与5层对应关系（P2）
+### 1. 事件契约与5层对应关系（P2）
 
 **原问题**：
 - **event_data_contract.md**：事件按Layer 1-7命名（含 understanding、expression、render）

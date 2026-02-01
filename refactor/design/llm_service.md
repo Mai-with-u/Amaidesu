@@ -603,19 +603,19 @@ class LocalLLMDecisionProvider(DecisionProvider):
         super().__init__(config)
         self.llm_service = llm_service
     
-    async def decide(self, canonical_message: CanonicalMessage) -> MessageBase:
+    async def decide(self, message: NormalizedMessage) -> Intent:
         # 使用 LLMService 进行决策
         response = await self.llm_service.chat(
-            prompt=self._build_prompt(canonical_message),
+            prompt=self._build_prompt(message),
             backend="llm",
             system_message=self.system_prompt,
         )
         
         if not response.success:
             # 降级处理
-            return self._create_fallback_message(canonical_message)
+            return self._create_fallback_intent(message)
         
-        return self._create_message_base(response.content, canonical_message)
+        return self._create_intent(response.content, message)
 ```
 
 ### 在 AvatarManager 中使用

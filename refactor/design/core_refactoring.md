@@ -652,8 +652,8 @@ class MaiCoreDecisionProvider(DecisionProvider):
         # 处理HTTP回调逻辑
         return JSONResponse({"status": "ok"})
 
-    async def decide(self, canonical_message: CanonicalMessage) -> MessageBase:
-        """决策"""
+    async def decide(self, message: NormalizedMessage) -> Intent:
+        """决策（NormalizedMessage → Intent）"""
         # 实现决策逻辑
         pass
 
