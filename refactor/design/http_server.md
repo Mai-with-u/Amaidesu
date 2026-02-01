@@ -408,4 +408,3 @@ http_callback_path = "/maicore/callback"
 
 - [AmaidesuCore重构设计](./core_refactoring.md)
 - [决策层设计](./decision_layer.md)
-- [插件系统设计](./plugin_system.md)

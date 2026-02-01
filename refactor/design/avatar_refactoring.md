@@ -441,4 +441,3 @@ plugin_name = "Amaidesu"
 - [7层架构设计](./layer_refactoring.md)
 - [决策层设计](./decision_layer.md)
 - [多Provider并发设计](./multi_provider.md)
-- [插件系统设计](./plugin_system.md)

@@ -458,5 +458,4 @@ sensitive_words = ["禁词1", "禁词2", "禁词3"]
 
 - [7层架构设计](./layer_refactoring.md)
 - [多Provider并发设计](./multi_provider.md)
-- [插件系统设计](./plugin_system.md)
 - [AmaidesuCore重构设计](./core_refactoring.md)

@@ -765,6 +765,7 @@ graph TB
 
 ## 🔗 相关文档
 
-- [7层架构设计](./layer_refactoring.md)
+- [5层架构设计](./layer_refactoring.md)
 - [决策层设计](./decision_layer.md)
 - [多Provider并发设计](./multi_provider.md)
+- [HTTP服务器设计](./http_server.md)

@@ -818,6 +818,6 @@ restart_interval = 5
 
 ## 🔗 相关文档
 
-- [7层架构设计](./layer_refactoring.md)
+- [5层架构设计](./layer_refactoring.md)
 - [决策层设计](./decision_layer.md)
-- [插件系统设计](./plugin_system.md)
+- [核心重构设计](./core_refactoring.md)

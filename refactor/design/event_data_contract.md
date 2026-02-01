@@ -949,7 +949,6 @@ enable_validation = true  # 仅在 debug 模式启用
 ## 🔗 相关文档
 
 - [架构总览](./overview.md) - 重构目标和7层架构概述
-- [插件系统设计](./plugin_system.md) - 插件系统和Provider接口
 - [EventBus增强](../plan/eventbus_enhancement.md) - EventBus增强计划
 
 ---

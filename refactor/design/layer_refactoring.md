@@ -31,7 +31,7 @@
 graph TB
     subgraph "Amaidesu: 核心数据流"
         subgraph "Layer 1: Input（多Provider并发）"
-            InputLayer[弹幕/游戏/语音<br/>多个InputProvider并发采集]
+            InputLayer[弹幕/游戏/语音<br/>多个InputProvider并发采集<br/>配置驱动启用]
         end
 
         subgraph "Layer 2: Normalization"
@@ -43,7 +43,7 @@ graph TB
         end
 
         subgraph "Layer 3: Decision（可替换）"
-            DecisionLayer[DecisionProvider<br/>MaiCore/本地LLM/规则引擎<br/>异步返回+LLM意图解析]
+            DecisionLayer[DecisionProvider<br/>MaiCore/本地LLM/规则引擎<br/>异步返回+LLM意图解析<br/>配置驱动切换]
         end
 
         subgraph "Post-Pipeline（可选）"
@@ -55,12 +55,8 @@ graph TB
         end
 
         subgraph "Layer 5: Rendering（多Provider并发）"
-            Rendering[字幕/TTS/VTS<br/>多个OutputProvider并发渲染]
+            Rendering[字幕/TTS/VTS<br/>多个OutputProvider并发渲染<br/>配置驱动启用]
         end
-    end
-
-    subgraph "插件系统: Plugin"
-        Plugins[插件=聚合多个Provider<br/>Minecraft/自定义]
     end
 
     InputLayer -->|"RawData"| Normalization
@@ -70,9 +66,6 @@ graph TB
     PostPipeline -->|"Intent'"| ParametersLayer
     ParametersLayer -->|"RenderParameters"| Rendering
 
-    InputLayer -.输入Provider.-> Plugins
-    Rendering -.输出Provider.-> Plugins
-
     style InputLayer fill:#e1f5ff
     style Normalization fill:#fff4e1
     style PrePipeline fill:#ffd700
@@ -80,7 +73,6 @@ graph TB
     style PostPipeline fill:#ffd700
     style ParametersLayer fill:#e1ffe1
     style Rendering fill:#e1f5ff
-    style Plugins fill:#f5e1ff
 ```
 
 ---
@@ -469,6 +461,8 @@ class RenderParameters:
 - [设计总览](./overview.md)
 - [决策层设计](./decision_layer.md)（含LLM意图解析）
 - [多Provider并发设计](./multi_provider.md)
-- [插件系统设计](./plugin_system.md)
 - [核心重构设计](./core_refactoring.md)
 - [Pipeline重新设计](./pipeline_refactoring.md)
+
+**已移除的文档**：
+- [插件系统设计](./plugin_system.md) - 已完全移除，插件系统不再存在
