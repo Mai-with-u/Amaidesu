@@ -11,7 +11,8 @@ from typing import Optional, Dict, Any
 
 from src.core.base.output_provider import OutputProvider
 from src.core.base.base import RenderParameters
-from src.platform import PlatformAdapter, AdapterFactory
+from src.layers.rendering.adapters import PlatformAdapter
+from src.layers.rendering.adapter_factory import AdapterFactory
 from src.utils.logger import get_logger
 
 

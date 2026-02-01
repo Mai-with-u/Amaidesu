@@ -10,7 +10,7 @@ from PIL import ImageGrab
 import pyautogui
 
 from src.core.base.input_provider import InputProvider
-from src.data_types.raw_data import RawData
+from src.core.base.raw_data import RawData
 from src.core.event_bus import EventBus
 from src.utils.logger import get_logger
 

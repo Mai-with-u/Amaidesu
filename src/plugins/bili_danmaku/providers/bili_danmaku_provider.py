@@ -14,7 +14,7 @@ except ImportError:
     aiohttp = None
 
 from src.core.base.input_provider import InputProvider
-from src.data_types.raw_data import RawData
+from src.core.base.raw_data import RawData
 from src.utils.logger import get_logger
 
 

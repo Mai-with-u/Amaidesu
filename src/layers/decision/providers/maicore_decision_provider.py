@@ -20,7 +20,7 @@ from src.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from src.core.event_bus import EventBus
-    from src.data_types.normalized_message import NormalizedMessage
+    from src.core.base.normalized_message import NormalizedMessage
 
 
 class MaiCoreDecisionProvider(DecisionProvider):

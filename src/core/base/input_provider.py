@@ -14,7 +14,7 @@ InputProvider负责从外部数据源采集原始数据。
 from typing import AsyncIterator
 from abc import ABC, abstractmethod
 
-from src.data_types.raw_data import RawData
+from src.core.base.raw_data import RawData
 
 
 class InputProvider(ABC):

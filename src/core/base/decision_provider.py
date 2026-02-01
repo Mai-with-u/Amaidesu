@@ -19,7 +19,7 @@ from typing import Optional, TYPE_CHECKING
 from abc import ABC, abstractmethod
 
 if TYPE_CHECKING:
-    from src.data_types.normalized_message import NormalizedMessage
+    from src.core.base.normalized_message import NormalizedMessage
     from src.layers.decision.intent import Intent
 
 

@@ -7,8 +7,8 @@ InputLayer - 输入层协调器
 from typing import Dict, Any, Optional, TYPE_CHECKING
 
 from src.core.event_bus import EventBus
-from src.data_types.raw_data import RawData
-from src.data_types.normalized_message import NormalizedMessage
+from src.core.base.raw_data import RawData
+from src.core.base.normalized_message import NormalizedMessage
 from src.layers.input.input_provider_manager import InputProviderManager
 from src.utils.logger import get_logger
 

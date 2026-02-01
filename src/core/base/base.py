@@ -12,7 +12,7 @@ Provider接口基础数据类定义
 """
 
 # 从 data_types 导入 NormalizedMessage
-from src.data_types.normalized_message import NormalizedMessage
+from src.core.base.normalized_message import NormalizedMessage
 
 # 从 parameters 导入 RenderParameters
 from src.layers.parameters.render_parameters import RenderParameters

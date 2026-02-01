@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from .amaidesu_core import AmaidesuCore
 
 from src.utils.logger import get_logger
-from src.services.config_service import ConfigService
+from src.core.config_service import ConfigService
 from src.utils.config import load_component_specific_config, merge_component_configs
 
 
