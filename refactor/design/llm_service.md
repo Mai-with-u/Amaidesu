@@ -754,6 +754,48 @@ class EmotionJudgePlugin:
 
 ---
 
+## ⏳ 待办：LLMService 依赖注入方式（技术债）
+
+### 当前实现
+
+- **Core**：`main.py` 创建 `LLMService` 后传入 `AmaidesuCore(llm_service=llm_service)`，通过 `core.llm_service` 暴露。**架构上合理**（Core 为组合根，持有基础设施服务）。
+- **EventBus**：为让只收到 `event_bus` 的 Provider 拿到 LLM，在 main 中执行 `event_bus._llm_service = llm_service`；决策层等通过 `event_bus._llm_service` 或 `hasattr(event_bus, "_llm_service")` 取用。
+
+### 问题
+
+| 挂载点   | 是否合理 | 说明 |
+|----------|----------|------|
+| **Core** | ✅ 合理   | 组合根持有并暴露 LLMService 符合依赖注入惯例。 |
+| **EventBus** | ❌ 不合理 | EventBus 职责应为**事件发布/订阅**。在其上挂 `_llm_service` 会：破坏单一职责、混淆“事件总线”语义、与“通过 Core 暴露服务”形成两套入口。 |
+
+根因：`DecisionManager` 在 `setup(provider_name, config)` 时只向 Provider 传入 `event_bus`（`provider.setup(self.event_bus)`），Provider 拿不到 Core 或其它服务容器，于是用 EventBus 充当“传话人”。
+
+### 建议改法
+
+1. **方案 A（推荐）**：`setup` 增加 `dependencies` 参数  
+   - 例如 `provider.setup(event_bus, config, dependencies={"llm_service": llm_service})`。  
+   - DecisionManager 在调用 `setup` 时从 Core（或 main 已有引用）取 `llm_service` 填入 `dependencies`。  
+   - 需要 LLM 的 Provider 从 `dependencies["llm_service"]` 取值，**不再使用 `event_bus._llm_service`**，EventBus 不再挂任何服务。
+
+2. **方案 B**：DecisionManager 持有并注入 LLMService  
+   - 构造 DecisionManager 时传入 `llm_service`；在 `setup(provider_name, config)` 里对需要 LLM 的 Provider 多传 `llm_service` 或通过小型 context 对象传入。  
+   - 同样可移除对 `event_bus._llm_service` 的依赖。
+
+3. **方案 C**：构造时注入  
+   - 创建 Provider 时由工厂/调用方传入 `llm_service`（如 `LocalLLMDecisionProvider(config, llm_service=llm_service)`），`setup` 只做连接 EventBus、加载 config 等。  
+   - 需调整 DecisionProviderFactory 的创建接口（如 create 时接收 dependencies 或 llm_service）。
+
+### 涉及代码位置
+
+- `main.py`：`event_bus._llm_service = llm_service`
+- `src/layers/decision/decision_manager.py`：`await self._current_provider.setup(self.event_bus)`（仅传 event_bus）
+- `src/layers/decision/providers/maicore_decision_provider.py`：`llm_service = event_bus._llm_service if hasattr(event_bus, "_llm_service") else None`
+- `src/layers/decision/providers/local_llm_decision_provider.py`：`self._llm_service` 未在 setup 中从 event_bus 赋值，当前若使用会报「LLM Service 未注入」
+
+改完后：**仅通过 Core 或显式依赖（setup 的 dependencies/context 或构造参数）传递 LLMService，EventBus 只负责事件。**
+
+---
+
 ## 🔗 相关文档
 
 - [架构总览](./overview.md) - 整体架构设计

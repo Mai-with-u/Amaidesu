@@ -144,6 +144,20 @@
 
 ---
 
+## 九、LLMService 依赖注入方式（技术债）
+
+**设计文档**：[llm_service.md](../refactor/design/llm_service.md)（见「待办：LLMService 依赖注入方式」小节）
+
+| 状态 | 说明 |
+|------|------|
+| ⏳ 待改 | **当前**：LLMService 挂在 Core（合理）且挂在 EventBus 上（`event_bus._llm_service`），供只收到 `event_bus` 的 DecisionProvider 等取用。 |
+| ❌ 问题 | EventBus 职责应为事件发布/订阅，挂服务引用破坏单一职责，且与 Core 暴露形成两套入口。 |
+| ✅ 建议 | 通过显式依赖传递 LLMService：`setup(event_bus, config, dependencies={"llm_service": ...})`，或 DecisionManager 持有并注入，或构造时注入；移除对 `event_bus._llm_service` 的依赖。 |
+
+**涉及位置**：`main.py`、`decision_manager.py`、`maicore_decision_provider.py`、`local_llm_decision_provider.py`。详见 [llm_service.md 待办小节](../refactor/design/llm_service.md#待办llmservice-依赖注入方式技术债)。
+
+---
+
 ## 汇总表
 
 | 类别           | 状态       | 优先级建议 |
@@ -153,6 +167,7 @@
 | 事件数据契约   | ✅ 已完成   | -          |
 | 服务注册瘦身   | ⚠️ 部分优化（运行时调用减少） | 低         |
 | HTTP 服务器    | ✅ 已完成（含 Provider 迁移） | -          |
+| **LLMService 依赖注入** | ⏳ 待改（EventBus 挂 _llm_service 技术债） | 中         |
 | DataCache      | 有意未实现 | 低/可选    |
 | 实施计划文档   | 缺失       | 低         |
 
@@ -165,6 +180,7 @@
 3. ~~**main 启动输入层**~~：✅ 已完成（InputLayer、CanonicalLayer 在 main.py 中启动）。
 4. ~~**事件契约**~~：✅ 已完成（EventRegistry、Pydantic 事件模型、EventBus 集成）。
 5. **服务注册**：（低优先级）逐步用 EventBus/依赖注入替代剩余 `get_service` 调用。
+6. **LLMService 依赖注入**：（中优先级）移除 `event_bus._llm_service`，改为通过 setup 的 dependencies 或构造注入传递 LLMService，见 [llm_service.md 待办小节](../refactor/design/llm_service.md#待办llmservice-依赖注入方式技术债)。
 
 以上顺序可根据排期与风险调整。
 

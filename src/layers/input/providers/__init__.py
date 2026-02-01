@@ -9,6 +9,7 @@ Input Providers - 输入Provider实现
 - BiliDanmakuOfficialMaiCraftInputProvider: B站官方弹幕+Minecraft转发Provider
 - ReadPingmuInputProvider: 屏幕读评输入Provider
 - RemoteStreamProvider: 远程流输入Provider
+- MainosabaInputProvider: 游戏画面文本采集Provider
 """
 
 from .console_input import ConsoleInputProvider
@@ -18,6 +19,7 @@ from .bili_danmaku_official import BiliDanmakuOfficialInputProvider
 from .bili_danmaku_official_maicraft import BiliDanmakuOfficialMaiCraftInputProvider
 from .read_pingmu import ReadPingmuInputProvider
 from .remote_stream import RemoteStreamProvider
+from .mainosaba import MainosabaInputProvider
 
 __all__ = [
     "ConsoleInputProvider",
@@ -27,4 +29,5 @@ __all__ = [
     "BiliDanmakuOfficialMaiCraftInputProvider",
     "ReadPingmuInputProvider",
     "RemoteStreamProvider",
+    "MainosabaInputProvider",
 ]

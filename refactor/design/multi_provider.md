@@ -2,7 +2,7 @@
 
 ## 🎯 核心目标
 
-支持输入层(Layer 1)和输出层(Layer 7)的**多Provider并发处理**，提高系统吞吐量和响应速度。
+支持输入层(Layer 1)和输出层(Layer 5)的**多Provider并发处理**，提高系统吞吐量和响应速度。
 
 ---
 
@@ -92,7 +92,7 @@ graph TB
     style Normalization fill:#fff4e1
 ```
 
-### Layer 7: 输出层并发架构
+### Layer 5: 输出层并发架构
 
 ```mermaid
 graph TB
@@ -104,7 +104,7 @@ graph TB
         EventBus[事件总线]
     end
 
-    subgraph "Layer 7: 渲染呈现层（多Provider并发）"
+    subgraph "Layer 5: 渲染呈现层（多Provider并发）"
         Subtitle[字幕Renderer]
         TTS[TTSRenderer]
         VTS[VTSRenderer]
