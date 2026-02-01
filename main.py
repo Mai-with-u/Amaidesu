@@ -189,7 +189,7 @@ async def create_app_components(
     general_config = config.get("general", {})
     rendering_config = config.get("rendering", {})
     decision_config = config.get("decision", {})
-    platform_id = general_config.get("platform_id", "amaidesu_default")
+    platform_id = general_config.get("platform_id", "amaidesu")
 
     if rendering_config:
         logger.info("检测到渲染配置，将启用数据流协调器")

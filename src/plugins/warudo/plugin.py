@@ -1,79 +1,63 @@
 # Warudo Plugin - Warudo虚拟形象控制（新架构）
 
-from typing import Dict, Any
+from typing import Dict, Any, List
 
-from src.core.plugin import Plugin
-from src.core.event_bus import EventBus
 from src.utils.logger import get_logger
+from .providers.warudo_output_provider import WarudoOutputProvider
 
 
-class WarudoPlugin(Plugin):
+class WarudoPlugin:
     """Warudo虚拟形象控制插件（新架构）"""
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.event_bus = None
         self.logger = get_logger("WarudoPlugin")
 
-        # WebSocket配置
-        self.ws_host = config.get("ws_host", "localhost")
-        self.ws_port = config.get("ws_port", 19190)
-        self.websocket = None
-        self._is_connected = False
+        self.event_bus = None
+        self._providers: List[Any] = []
 
-    async def setup(self, event_bus: EventBus, config: Dict[str, Any]) -> list:
-        """初始化插件"""
+    async def setup(self, event_bus, config: Dict[str, Any]) -> List[Any]:
+        """
+        设置插件
+
+        Args:
+            event_bus: 事件总线实例
+            config: 插件配置
+
+        Returns:
+            Provider列表（包含WarudoOutputProvider）
+        """
         self.event_bus = event_bus
-        self.config = config
 
-        # 注册事件监听
-        self.event_bus.on("vts.send_emotion", self._handle_emotion)
-        self.event_bus.on("vts.send_state", self._handle_state)
-        self.event_bus.on("tts.audio_ready", self._handle_tts_audio)
+        # 创建 WarudoOutputProvider
+        try:
+            provider = WarudoOutputProvider(self.config)
+            await provider.setup(event_bus)
+            self._providers.append(provider)
+            self.logger.info("WarudoOutputProvider 已创建")
+        except Exception as e:
+            self.logger.error(f"创建 WarudoOutputProvider 失败: {e}", exc_info=True)
+            return []
 
-        # 启动WebSocket连接
-        await self._connect_websocket()
-
-        self.logger.info("WarudoPlugin 初始化完成")
-        return []
+        return self._providers
 
     async def cleanup(self):
         """清理资源"""
-        if self.websocket:
-            await self.websocket.close()
+        self.logger.info("开始清理 WarudoPlugin...")
 
-        if self.event_bus:
-            self.event_bus.off("vts.send_emotion", self._handle_emotion)
-            self.event_bus.off("vts.send_state", self._handle_state)
-            self.event_bus.off("tts.audio_ready", self._handle_tts_audio)
+        # 清理所有 Provider
+        for provider in self._providers:
+            try:
+                await provider.cleanup()
+            except Exception as e:
+                self.logger.error(f"清理 Provider 时出错: {e}", exc_info=True)
+
+        self._providers.clear()
 
         self.logger.info("WarudoPlugin 清理完成")
 
-    async def _connect_websocket(self):
-        """连接WebSocket服务器"""
-        try:
-            import websockets
-
-            uri = f"ws://{self.ws_host}:{self.ws_port}"
-            self.websocket = await websockets.connect(uri)
-            self._is_connected = True
-            self.logger.info(f"已连接到Warudo: {uri}")
-        except Exception as e:
-            self.logger.error(f"连接Warudo失败: {e}")
-
-    async def _handle_emotion(self, event_name: str, data: Any, source: str):
-        """处理表情事件"""
-        self.logger.debug(f"收到表情事件: {data}")
-
-    async def _handle_state(self, event_name: str, data: Any, source: str):
-        """处理状态事件"""
-        self.logger.debug(f"收到状态事件: {data}")
-
-    async def _handle_tts_audio(self, event_name: str, data: Any, source: str):
-        """处理TTS音频事件"""
-        self.logger.debug("收到TTS音频事件")
-
     def get_info(self) -> Dict[str, Any]:
+        """获取插件信息"""
         return {
             "name": "Warudo",
             "version": "2.0.0",

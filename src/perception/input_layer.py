@@ -119,11 +119,7 @@ class InputLayer:
             metadata["original_timestamp"] = raw_data.timestamp
 
             # 根据数据类型转换为文本
-            if data_type == "text":
-                # 文本直接使用
-                text = str(content)
-
-            elif data_type == "gift":
+            if data_type == "gift":
                 # 礼物消息格式化
                 if isinstance(content, dict):
                     user = content.get("user", "未知用户")
@@ -132,15 +128,6 @@ class InputLayer:
                     text = f"{user} 送出了 {count} 个 {gift_name}"
                 else:
                     text = f"有人送出了礼物: {str(content)}"
-
-            elif data_type == "superchat":
-                # 醒目留言格式化
-                if isinstance(content, dict):
-                    user = content.get("user", "未知用户")
-                    sc_content = content.get("content", "")
-                    text = f"{user} 发送了醒目留言: {sc_content}"
-                else:
-                    text = f"醒目留言: {str(content)}"
 
             elif data_type == "guard":
                 # 大航海格式化
@@ -151,15 +138,24 @@ class InputLayer:
                 else:
                     text = f"有人开通了大航海: {str(content)}"
 
+            elif data_type == "superchat":
+                # 醒目留言格式化
+                if isinstance(content, dict):
+                    user = content.get("user", "未知用户")
+                    sc_content = content.get("content", "")
+                    text = f"{user} 发送了醒目留言: {sc_content}"
+                else:
+                    text = f"醒目留言: {str(content)}"
+
+            elif data_type == "text":
+                # 文本直接使用
+                text = str(content)
+
             else:
                 # 未知类型，转换为字符串
                 text = f"[{data_type}] {str(content)}"
 
-            # 创建NormalizedText
-            normalized = NormalizedText(text=text, metadata=metadata, data_ref=raw_data.data_ref)
-
-            return normalized
-
+            return NormalizedText(text=text, metadata=metadata, data_ref=raw_data.data_ref)
         except Exception as e:
             self.logger.error(f"转换RawData为NormalizedText时出错: {e}", exc_info=True)
             return None

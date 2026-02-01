@@ -40,7 +40,7 @@ class ConsoleInputPlugin:
         self.logger.info(f"初始化插件: {self.__class__.__name__}")
 
         self.event_bus: Optional["EventBus"] = None
-        self.platform = config.get("platform", "amaidesu_default")
+        self.platform = config.get("platform", "amaidesu")
 
         # --- Dependency Check ---
         if tomllib is None:

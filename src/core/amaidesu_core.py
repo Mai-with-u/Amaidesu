@@ -61,7 +61,7 @@ class AmaidesuCore:
         初始化 Amaidesu Core（A-01重构版本 - 纯组合根）。
 
         Args:
-            platform: 平台标识符 (例如 "amaidesu_default")。
+            platform: 平台标识符 (例如 "amaidesu")。
             pipeline_manager: (可选) 已配置的管道管理器。
             context_manager: (可选) 已配置的上下文管理器。
             event_bus: (可选) 已配置的事件总线。

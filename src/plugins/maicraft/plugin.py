@@ -1,13 +1,11 @@
 # Maicraft Plugin - Minecraft弹幕互动插件（新架构）
 
-from typing import Dict, Any
+from typing import Dict, Any, List
 
-from src.core.plugin import Plugin
-from src.core.event_bus import EventBus
 from src.utils.logger import get_logger
 
 
-class MaicraftPlugin(Plugin):
+class MaicraftPlugin:
     """Minecraft弹幕互动游戏插件（新架构）"""
 
     def __init__(self, config: Dict[str, Any]):
@@ -18,7 +16,7 @@ class MaicraftPlugin(Plugin):
         self.enabled = config.get("enabled", True)
         self.factory_type = config.get("factory_type", "log")
 
-    async def setup(self, event_bus: EventBus, config: Dict[str, Any]) -> list:
+    async def setup(self, event_bus, config: Dict[str, Any]) -> List[Any]:
         """初始化插件"""
         self.event_bus = event_bus
         self.config = config

@@ -36,7 +36,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
         [decision.maicore]
         host = "localhost"
         port = 8000
-        platform = "amaidesu_default"
+        platform = "amaidesu"
         http_host = "localhost"
         http_port = 8080
         http_callback_path = "/callback"
@@ -62,7 +62,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
         # WebSocket 配置
         self.host = config.get("host", "localhost")
         self.port = config.get("port", 8000)
-        self.platform = config.get("platform", "amaidesu_default")
+        self.platform = config.get("platform", "amaidesu")
         self.ws_url = f"ws://{self.host}:{self.port}/ws"
 
         # HTTP 配置

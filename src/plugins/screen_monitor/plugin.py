@@ -1,18 +1,11 @@
 # Screen Monitor Plugin - 屏幕监控插件（新架构）
 
-from typing import Dict, Any
+from typing import Dict, Any, List
 
-from src.core.plugin import Plugin
-from src.core.event_bus import EventBus
 from src.utils.logger import get_logger
 
-try:
-    from src.core.providers.input_provider import InputProvider
-except ImportError:
-    InputProvider = None
 
-
-class ScreenMonitorPlugin(Plugin):
+class ScreenMonitorPlugin:
     """屏幕监控插件（新架构）"""
 
     def __init__(self, config: Dict[str, Any]):
@@ -20,7 +13,7 @@ class ScreenMonitorPlugin(Plugin):
         self.event_bus = None
         self.logger = get_logger("ScreenMonitorPlugin")
 
-    async def setup(self, event_bus: EventBus, config: Dict[str, Any]) -> list:
+    async def setup(self, event_bus, config: Dict[str, Any]) -> List[Any]:
         """初始化插件"""
         self.event_bus = event_bus
         self.config = config

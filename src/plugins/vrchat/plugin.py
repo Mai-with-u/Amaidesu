@@ -1,13 +1,11 @@
 # VRChat Plugin - VRChat控制（新架构）
 
-from typing import Dict, Any
+from typing import Dict, Any, List
 
-from src.core.plugin import Plugin
-from src.core.event_bus import EventBus
 from src.utils.logger import get_logger
 
 
-class VRChatPlugin(Plugin):
+class VRChatPlugin:
     """VRChat虚拟形象控制插件（新架构）"""
 
     def __init__(self, config: Dict[str, Any]):
@@ -20,7 +18,7 @@ class VRChatPlugin(Plugin):
         self.vrc_port = config.get("vrc_port", 9000)
         self.enabled = config.get("enabled", True)
 
-    async def setup(self, event_bus: EventBus, config: Dict[str, Any]) -> list:
+    async def setup(self, event_bus, config: Dict[str, Any]) -> List[Any]:
         """初始化插件"""
         self.event_bus = event_bus
         self.config = config
