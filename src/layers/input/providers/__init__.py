@@ -15,7 +15,7 @@ from .console_input import ConsoleInputProvider
 from .mock_danmaku import MockDanmakuInputProvider
 from .bili_danmaku import BiliDanmakuInputProvider
 from .bili_danmaku_official import BiliDanmakuOfficialInputProvider
-from .bili_official_maicraft import BiliDanmakuOfficialMaiCraftInputProvider
+from .bili_danmaku_official_maicraft import BiliDanmakuOfficialMaiCraftInputProvider
 from .read_pingmu import ReadPingmuInputProvider
 from .remote_stream import RemoteStreamProvider
 
