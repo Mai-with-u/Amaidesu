@@ -4,6 +4,45 @@
 
 ---
 
+## 🔍 重新审查（2026年2月1日）
+
+### 代码与报告一致性验证
+
+| 检查项 | 代码位置 | 结果 |
+|--------|----------|------|
+| FlowCoordinator 订阅 `decision.intent_generated` | `flow_coordinator.py:89` | ✅ 一致 |
+| DecisionManager 发布 `decision.intent_generated` | `decision_manager.py:241-243` | ✅ 一致 |
+| DecisionProvider.decide() 返回 Intent | `base/decision_provider.py:72` | ✅ 接口已统一 |
+| MaiCoreDecisionProvider 经 IntentParser 返回 Intent | `maicore_decision_provider.py` decide→Future→parse→Intent | ✅ 一致 |
+| main.py 未创建 UnderstandingLayer | `main.py` create_app_components | ✅ 符合 5 层设计 |
+| 输入层目录为 providers | `src/layers/input/providers/` | ✅ 已规范化 |
+| 事件常量 DECISION_INTENT_GENERATED | `events/names.py:17` | ✅ 已定义 |
+
+**结论**：当前实现与审查报告一致，**5 层数据流已打通**（InputLayer → DecisionManager → FlowCoordinator → 渲染）。
+
+### 遗留项与建议（非阻塞）
+
+1. **UnderstandingLayer 遗留代码**
+   - `src/layers/intent_analysis/understanding_layer.py` 仍存在，且仍订阅 `decision.response_generated`、发布 `understanding.intent_generated`。
+   - main.py 中未创建该组件，故不影响主数据流。
+   - **建议**：在文件头或 `layers/__init__.py` 中标注「已废弃，5 层架构下由 DecisionManager 直接发布 decision.intent_generated」，或在下个清理阶段删除。
+
+2. **事件模型文档仍为 7 层表述**
+   - `src/core/events/models.py` 中 `DecisionResponseEvent`、`IntentGeneratedEvent` 的 docstring 仍写「订阅者：UnderstandingLayer」「事件名：understanding.intent_generated」。
+   - **建议**：为 `decision.intent_generated` 增加对应 Payload 模型（如 `IntentGeneratedEvent` 改为 5 层语义），并将旧模型标为废弃或更新描述。
+
+3. **MaiCoreDecisionProvider 边缘路径**
+   - 仅在「收到未知 message_id 的响应」（无对应 Future）时 emit `decision.response_generated`，主流程已改为通过 decide() 返回 Intent 并由 DecisionManager 发布 `decision.intent_generated`。
+   - **建议**：保留或改为 debug 日志即可，无需修改主流程。
+
+### 重新审查结论
+
+- **架构**：5 层架构在代码中已落实，数据流完整。
+- **与文档**：本审查报告中的「已完成的修复」「当前数据流」「验证结果」与代码一致。
+- **后续**：建议按上述 3 项做小幅清理与文档更新，不影响「重构已完成」结论。
+
+---
+
 ## 问题描述
 
 之前AI审查报告指出以下问题：

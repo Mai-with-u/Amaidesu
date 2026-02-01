@@ -1,5 +1,5 @@
 """
-事件系统模块
+事件系统模块（5层架构）
 
 提供类型安全的事件数据契约系统。
 """
@@ -8,7 +8,7 @@ from .registry import EventRegistry
 from .names import CoreEvents, PluginEventPrefix
 from .models import (
     RawDataEvent,
-    NormalizedTextEvent,
+    NormalizedMessageEvent,
     DecisionRequestEvent,
     DecisionResponseEvent,
     IntentGeneratedEvent,
@@ -19,24 +19,20 @@ from .models import (
 
 def register_core_events() -> None:
     """
-    注册所有核心事件
+    注册所有核心事件（5层架构）
 
     在 AmaidesuCore 初始化时调用。
     """
-    # Layer 1: 输入感知
+    # Layer 1-2: 输入层
     EventRegistry.register_core_event(CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataEvent)
+    EventRegistry.register_core_event(CoreEvents.NORMALIZATION_MESSAGE_READY, NormalizedMessageEvent)
 
-    # Layer 2: 输入标准化
-    EventRegistry.register_core_event(CoreEvents.NORMALIZATION_TEXT_READY, NormalizedTextEvent)
-
-    # Layer 4: 决策层
+    # Layer 3: 决策层
     EventRegistry.register_core_event(CoreEvents.DECISION_REQUEST, DecisionRequestEvent)
     EventRegistry.register_core_event(CoreEvents.DECISION_RESPONSE_GENERATED, DecisionResponseEvent)
+    EventRegistry.register_core_event(CoreEvents.DECISION_INTENT_GENERATED, IntentGeneratedEvent)
 
-    # Layer 5: 表现理解
-    EventRegistry.register_core_event(CoreEvents.UNDERSTANDING_INTENT_GENERATED, IntentGeneratedEvent)
-
-    # Layer 6: 表现生成
+    # Layer 4-5: 参数和渲染
     EventRegistry.register_core_event(CoreEvents.EXPRESSION_PARAMETERS_GENERATED, ExpressionParametersEvent)
 
     # 系统事件
@@ -51,7 +47,7 @@ __all__ = [
     "PluginEventPrefix",
     # 事件模型
     "RawDataEvent",
-    "NormalizedTextEvent",
+    "NormalizedMessageEvent",
     "DecisionRequestEvent",
     "DecisionResponseEvent",
     "IntentGeneratedEvent",

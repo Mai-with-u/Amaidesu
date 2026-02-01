@@ -1,11 +1,24 @@
 """
 UnderstandingLayer - Layer 5: 表现理解层
 
-负责将决策响应 (MessageBase) 解析为意图 (Intent)。
-订阅 decision.response_generated 事件，发布 understanding.intent_generated 事件。
+⚠️ **已废弃**（Deprecated - 5层架构）
 
-数据流:
+此组件在 5 层架构中已被废弃，功能已迁移到：
+- IntentParser: 位于 src/layers/decision/intent_parser.py
+- DecisionManager: 直接发布 decision.intent_generated 事件
+
+旧架构（7层）的职责：
+- 订阅 decision.response_generated 事件
+- 使用 ResponseParser 将 MessageBase 解析为 Intent
+- 发布 understanding.intent_generated 事件
+
+旧数据流:
     DecisionProvider → decision.response_generated → UnderstandingLayer → understanding.intent_generated → FlowCoordinator
+
+新数据流（5层）:
+    DecisionProvider.decide() → Intent → DecisionManager 发布 decision.intent_generated → FlowCoordinator
+
+**注意**: 此文件保留仅为向后兼容，main.py 中未创建此组件，不影响主数据流。
 """
 
 from typing import Dict, Any, TYPE_CHECKING

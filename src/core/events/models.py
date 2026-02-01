@@ -1,5 +1,5 @@
 """
-核心事件数据模型
+核心事件数据模型（5层架构）
 
 使用 Pydantic BaseModel 定义，提供：
 - 运行时类型验证
@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, ConfigDict
 import time
 
 
-# ==================== Layer 1: 输入感知 ====================
+# ==================== Layer 1-2: 输入层 ====================
 
 
 class RawDataEvent(BaseModel):
@@ -22,7 +22,7 @@ class RawDataEvent(BaseModel):
 
     事件名：perception.raw_data.generated
     发布者：InputProvider
-    订阅者：InputLayer（Layer 2）
+    订阅者：InputLayer（Layer 1-2）
     """
 
     content: Any = Field(..., description="原始数据内容（bytes, str, dict等）")
@@ -46,30 +46,30 @@ class RawDataEvent(BaseModel):
     )
 
 
-# ==================== Layer 2: 输入标准化 ====================
-
-
-class NormalizedTextEvent(BaseModel):
+class NormalizedMessageEvent(BaseModel):
     """
-    标准化文本事件
+    标准化消息事件（5层架构）
 
-    事件名：normalization.text.ready
+    事件名：normalization.message_ready
     发布者：InputLayer
-    订阅者：CanonicalMessageBuilder（Layer 3）
+    订阅者：DecisionManager（Layer 3）
     """
 
-    text: str = Field(..., min_length=1, description="标准化后的文本")
+    message: Dict[str, Any] = Field(..., description="标准化消息（NormalizedMessage）")
     source: str = Field(..., min_length=1, description="数据源")
-    data_type: str = Field(default="text", description="数据类型")
     timestamp: float = Field(default_factory=time.time, description="时间戳")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="元数据")
 
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "text": "你好，今天天气怎么样？",
+                "message": {
+                    "text": "你好，今天天气怎么样？",
+                    "content": {"type": "TextContent", "text": "你好，今天天气怎么样？"},
+                    "source": "bili_danmaku",
+                    "data_type": "text",
+                },
                 "source": "bili_danmaku",
-                "data_type": "text",
                 "timestamp": 1706745600.0,
                 "metadata": {"user": "观众A", "room_id": "123456"},
             }
@@ -77,28 +77,29 @@ class NormalizedTextEvent(BaseModel):
     )
 
 
-# ==================== Layer 4: 决策层 ====================
+# ==================== Layer 3: 决策层（5层架构） ====================
 
 
 class DecisionRequestEvent(BaseModel):
     """
-    决策请求事件
+    决策请求事件（5层架构 - 可选）
 
     事件名：decision.request
-    发布者：CanonicalMessageBuilder
+    发布者：任何需要决策的组件
     订阅者：DecisionManager
     """
 
-    canonical_message: Dict[str, Any] = Field(..., description="规范化消息")
+    normalized_message: Dict[str, Any] = Field(..., description="标准化消息")
     context: Dict[str, Any] = Field(default_factory=dict, description="上下文信息")
     priority: int = Field(default=100, ge=0, le=1000, description="优先级")
 
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "canonical_message": {
+                "normalized_message": {
                     "text": "你好",
-                    "sender": {"id": "user_123", "name": "观众A"},
+                    "source": "console_input",
+                    "data_type": "text",
                 },
                 "context": {"conversation_id": "conv_456"},
                 "priority": 100,
@@ -109,11 +110,18 @@ class DecisionRequestEvent(BaseModel):
 
 class DecisionResponseEvent(BaseModel):
     """
-    决策响应事件
+    决策响应事件（5层架构）
+
+    ⚠️ 注意：此事件主要在 MaiCoreDecisionProvider 内部使用
 
     事件名：decision.response_generated
-    发布者：DecisionProvider
-    订阅者：UnderstandingLayer（Layer 5）
+    发布者：DecisionProvider（MaiCore）
+    订阅者：MaiCoreDecisionProvider 内部处理（通过 IntentParser 转换为 Intent）
+
+    **5层架构说明**：
+    - 在新架构中，DecisionProvider.decide() 直接返回 Intent
+    - DecisionManager 负责发布 decision.intent_generated 事件
+    - 此事件仅用于 MaiCoreDecisionProvider 内部的异步响应处理
     """
 
     response: Dict[str, Any] = Field(..., description="决策响应（MessageBase格式）")
@@ -122,36 +130,59 @@ class DecisionResponseEvent(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict, description="元数据")
 
 
-# ==================== Layer 5: 表现理解 ====================
-
-
 class IntentGeneratedEvent(BaseModel):
     """
-    意图生成事件
+    意图生成事件（5层架构）
 
-    事件名：understanding.intent_generated
-    发布者：UnderstandingLayer
-    订阅者：ExpressionLayer（Layer 6）
+    事件名：decision.intent_generated（✅ 新架构）
+    发布者：DecisionManager（Layer 3）
+    订阅者：FlowCoordinator（Layer 4-5）
+
+    **5层架构说明**：
+    - DecisionProvider.decide() 直接返回 Intent
+    - DecisionManager 接收到 Intent 后发布此事件
+    - FlowCoordinator 订阅此事件并触发渲染
+
+    **废弃说明**：
+    - 旧架构（7层）中，此事件名为 understanding.intent_generated
+    - 由 UnderstandingLayer 发布，现已废弃
     """
 
-    original_text: str = Field(..., description="原始文本")
-    emotion: str = Field(..., description="情感类型")
-    response_text: str = Field(..., description="响应文本")
-    actions: List[Dict[str, Any]] = Field(default_factory=list, description="动作列表")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="元数据")
+    intent: Dict[str, Any] = Field(..., description="意图对象（Intent）")
+    original_message: Dict[str, Any] = Field(..., description="原始标准化消息")
+    provider: str = Field(..., description="决策Provider名称")
     timestamp: float = Field(default_factory=time.time, description="时间戳")
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "intent": {
+                    "original_text": "你好",
+                    "response_text": "你好！很高兴见到你~",
+                    "emotion": "happy",
+                    "actions": [{"type": "blink", "params": {}, "priority": 30}],
+                },
+                "original_message": {
+                    "text": "你好",
+                    "source": "console_input",
+                },
+                "provider": "maicore",
+                "timestamp": 1706745600.0,
+            }
+        }
+    )
 
-# ==================== Layer 6: 表现生成 ====================
+
+# ==================== Layer 4-5: 参数和渲染 ====================
 
 
 class ExpressionParametersEvent(BaseModel):
     """
-    表现参数事件
+    表现参数事件（5层架构）
 
     事件名：expression.parameters_generated
-    发布者：ExpressionLayer
-    订阅者：OutputProvider（Layer 7）
+    发布者：ExpressionGenerator
+    订阅者：OutputProvider（Layer 5）
     """
 
     tts_text: str = Field(default="", description="TTS 文本")
