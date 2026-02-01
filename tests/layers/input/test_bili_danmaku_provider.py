@@ -5,7 +5,7 @@ BiliDanmakuInputProvider 测试
 import pytest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
-from src.providers.bili_danmaku import BiliDanmakuInputProvider
+from src.layers.input.providers.bili_danmaku import BiliDanmakuInputProvider
 from src.core.base.raw_data import RawData
 
 
@@ -47,7 +47,7 @@ class TestBiliDanmakuInputProvider:
 
     def test_init_without_aiohttp(self, bili_config):
         """测试缺少aiohttp依赖"""
-        with patch('src.providers.bili_danmaku.bili_danmaku_provider.aiohttp', None):
+        with patch('src.layers.input.providers.bili_danmaku.bili_danmaku_provider.aiohttp', None):
             with pytest.raises(ImportError, match="aiohttp is required"):
                 BiliDanmakuInputProvider(bili_config)
 
