@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from src.core.base.decision_provider import DecisionProvider
     from src.core.base.normalized_message import NormalizedMessage
     from src.layers.decision.intent import Intent
+    from src.core.llm_service import LLMService
 
 
 class DecisionProviderFactory:
@@ -114,14 +115,16 @@ class DecisionManager:
         ```
     """
 
-    def __init__(self, event_bus: "EventBus"):
+    def __init__(self, event_bus: "EventBus", llm_service: Optional["LLMService"] = None):
         """
         初始化DecisionManager
 
         Args:
             event_bus: EventBus实例
+            llm_service: 可选的LLMService实例，将作为依赖注入到DecisionProvider
         """
         self.event_bus = event_bus
+        self._llm_service = llm_service
         self.logger = get_logger("DecisionManager")
         self._factory: Optional[DecisionProviderFactory] = None
         self._current_provider: Optional["DecisionProvider"] = None
@@ -174,7 +177,9 @@ class DecisionManager:
 
             # 初始化Provider
             try:
-                await self._current_provider.setup(self.event_bus)
+                # 准备依赖注入
+                dependencies = {"llm_service": self._llm_service} if self._llm_service else {}
+                await self._current_provider.setup(self.event_bus, config, dependencies)
                 self.logger.info(f"DecisionProvider '{provider_name}' 初始化成功")
             except Exception as e:
                 self.logger.error(f"DecisionProvider '{provider_name}' 初始化失败: {e}", exc_info=True)

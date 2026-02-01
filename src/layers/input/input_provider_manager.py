@@ -249,6 +249,77 @@ class InputProviderManager:
             self._provider_stats[provider_name].error_count += 1
             # 不重新抛出，避免影响其他Provider
 
+    async def load_from_config(self, config: Dict[str, Any]) -> List[InputProvider]:
+        """
+        从配置加载并创建所有InputProvider
+
+        Args:
+            config: 输入配置（来自[input]）
+
+        Returns:
+            创建的InputProvider列表
+
+        配置格式:
+            [input]
+            enabled = true
+            inputs = ["console", "bili_danmaku"]
+
+            [input.inputs.console]
+            type = "console"
+            enabled = true
+        """
+        from src.layers.rendering.provider_registry import ProviderRegistry
+
+        self.logger.info("开始从配置加载InputProvider...")
+
+        # 检查是否启用
+        enabled = config.get("enabled", True)
+        if not enabled:
+            self.logger.info("输入层已禁用（enabled=false）")
+            return []
+
+        # 获取Provider列表
+        inputs = config.get("inputs", [])
+        if not inputs:
+            self.logger.warning("未配置任何输入Provider（inputs为空）")
+            return []
+
+        self.logger.info(f"配置了 {len(inputs)} 个输入Provider: {inputs}")
+
+        # 获取各个Provider的配置
+        inputs_config = config.get("inputs", {})
+
+        # 创建Provider实例
+        created_providers = []
+        failed_count = 0
+
+        for input_name in inputs:
+            provider_config = inputs_config.get(input_name, {})
+            provider_type = provider_config.get("type", input_name)
+
+            # 检查单个Provider是否启用
+            provider_enabled = provider_config.get("enabled", True)
+            if not provider_enabled:
+                self.logger.info(f"Provider {input_name} 已禁用（enabled=false）")
+                continue
+
+            try:
+                provider = ProviderRegistry.create_input(provider_type, provider_config)
+                created_providers.append(provider)
+                self.logger.info(f"成功创建InputProvider: {input_name} (type={provider_type})")
+            except Exception as e:
+                self.logger.error(f"InputProvider创建异常: {input_name} (type={provider_type}) - {e}", exc_info=True)
+                failed_count += 1
+
+        if failed_count > 0:
+            self.logger.warning(
+                f"InputProvider加载完成: 成功={len(created_providers)}/{len(inputs)}, 失败={failed_count}/{len(inputs)}"
+            )
+        else:
+            self.logger.info(f"InputProvider加载完成: 成功={len(created_providers)}/{len(inputs)}")
+
+        return created_providers
+
     def _get_provider_name(self, provider: InputProvider) -> str:
         """
         获取Provider名称

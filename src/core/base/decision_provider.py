@@ -52,13 +52,14 @@ class DecisionProvider(ABC):
         self.event_bus = None
         self.is_setup = False
 
-    async def setup(self, event_bus, config: Optional[dict] = None):
+    async def setup(self, event_bus, config: Optional[dict] = None, dependencies: Optional[dict] = None):
         """
         设置Provider
 
         Args:
             event_bus: EventBus实例
             config: Provider配置（可选，如果传入则覆盖构造时的配置）
+            dependencies: 可选的依赖注入（如 llm_service 等）
 
         Raises:
             ConnectionError: 如果无法连接到决策服务
@@ -66,6 +67,7 @@ class DecisionProvider(ABC):
         self.event_bus = event_bus
         if config:
             self.config = config
+        self._dependencies = dependencies or {}
         await self._setup_internal()
         self.is_setup = True
 

@@ -1,14 +1,29 @@
 # Amaidesu 架构重构文档索引
 
 > **版本**: v3.0
-> **日期**: 2025-02-01
+> **日期**: 2026-02-01
 > **状态**: 插件系统已移除，采用纯Provider架构
+
+---
+
+## ⚠️ 当前架构问题
+
+> **重要**: 设计与实现存在不一致，详见 [架构问题分析报告](./ARCHITECTURE_ISSUES_REPORT.md)
+
+| 优先级 | 问题 | 影响 |
+|--------|------|------|
+| 🔴 P0 | 插件系统残留引用 | 应用无法启动 |
+| 🔴 P0 | 输入层主流程未接线 | 数据流完全断裂 |
+| 🟡 P1 | LLMService 依赖注入技术债 | 架构不清晰 |
 
 ---
 
 ## 📋 快速导航
 
 ### 我想了解...
+
+**⚠️ 当前有什么问题？**
+→ [架构问题分析报告](./ARCHITECTURE_ISSUES_REPORT.md)（**推荐先看**）
 
 **整体架构是什么？**
 → [设计总览](./design/overview.md)
@@ -41,6 +56,7 @@
 ```
 refactor/
 ├── README.md                            # 本文件 - 文档索引
+├── ARCHITECTURE_ISSUES_REPORT.md        # ⚠️ 架构问题分析报告（必读）
 ├── PLUGIN_SYSTEM_REMOVAL.md             # 插件系统移除说明
 │
 ├── design/                              # 设计文档
@@ -54,6 +70,7 @@ refactor/
 │   ├── event_data_contract.md            # 事件数据契约设计
 │   ├── pipeline_refactoring.md           # Pipeline重新设计
 │   ├── avatar_refactoring.md             # 虚拟形象重构设计
+│   ├── DESIGN_CONSISTENCY_REPORT.md      # 设计文档一致性检查报告
 │   └── plugin_system.md                  # ⚠️ 已废弃
 │
 └── plan/                                # 实施计划
@@ -190,6 +207,10 @@ enabled = ["tts", "subtitle", "vts"]
 
 ## 🔗 相关资源
 
+### 状态报告
+- [架构问题分析报告](./ARCHITECTURE_ISSUES_REPORT.md) - **当前架构问题和修复建议**
+- [设计文档一致性检查报告](./design/DESIGN_CONSISTENCY_REPORT.md) - 文档一致性验证
+
 ### 设计文档
 - [设计总览](./design/overview.md) - 2025年新架构总览
 - [5层架构设计](./design/layer_refactoring.md) - 详细描述5层核心数据流
@@ -201,6 +222,10 @@ enabled = ["tts", "subtitle", "vts"]
 
 ### 迁移指南
 - [插件系统移除说明](./PLUGIN_SYSTEM_REMOVAL.md) - 配置和代码迁移指南
+
+### docs 目录相关文档
+- [尚未完成的重构项](../docs/REFACTOR_REMAINING.md) - 重构剩余工作
+- [VTuber 全流程 E2E 测试缺口分析](../docs/VTUBER_FLOW_E2E_GAP_ANALYSIS.md) - E2E 测试缺口
 
 ---
 
@@ -234,5 +259,5 @@ enabled = ["tts", "subtitle", "vts"]
 
 ---
 
-**最后更新**：2025年2月1日
+**最后更新**：2026年2月1日
 **维护者**：Amaidesu Team

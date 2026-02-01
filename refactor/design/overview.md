@@ -47,22 +47,17 @@
  - **事件数据契约**（Event Contract）：类型安全的事件数据格式，支持社区扩展
  - **LLM服务**（LLM Service）：统一的LLM调用基础设施，与EventBus同级
 
-### 为什么移除插件系统？
+### 插件系统移除说明
 
-**设计文档的初衷**（已废弃）：
-```
-Provider = 原子能力（单一职责、可复用、统一管理）
-Plugin = 能力组合（整合 Provider、提供业务场景、不创建 Provider）
-```
-
-**实际实现的问题**：
+**历史背景**：
+早期架构采用插件系统 + Provider系统双轨并行，但实际运行中发现：
 - ❌ Plugin在创建和管理Provider，违背了"不创建Provider"的设计原则
 - ❌ Provider生命周期由Plugin管理，而不是Manager，导致管理分散
-- ❌ 与"消灭插件化"的重构目标直接矛盾
 - ❌ 增加了一层不必要的抽象，反而使架构更复杂
 
-**新架构的优势**：
-- ✅ Provider由Manager统一管理，生命周期清晰
+**当前状态**：
+- ✅ 插件系统已完全移除
+- ✅ Provider由Manager统一管理（InputProviderManager、DecisionManager、OutputProviderManager）
 - ✅ 配置驱动启用/禁用，无需修改代码
 - ✅ 职责边界明确：Provider = 原子能力
 - ✅ 代码组织更清晰：按数据流层级组织
@@ -122,45 +117,68 @@ src/
 │   ├── input/                   # Layer 1-2: 输入层
 │   │   ├── input_layer.py       # InputLayer（统一管理）
 │   │   ├── input_provider_manager.py  # Provider管理器
-│   │   └── providers/           # ✅ 所有输入Provider
-│   │       ├── console_input_provider.py
-│   │       ├── bili_danmaku_provider.py
-│   │       ├── minecraft_event_provider.py
-│   │       └── mock_danmaku_provider.py
+│   │   └── providers/           # ✅ 所有输入Provider（按功能分组）
+│   │       ├── console_input/   # 控制台输入
+│   │       ├── bili_danmaku/    # B站弹幕（第三方API）
+│   │       ├── bili_danmaku_official/  # B站弹幕（官方WebSocket）
+│   │       ├── bili_danmaku_official_maicraft/  # B站弹幕（Maicraft优化版）
+│   │       ├── mainosaba/       # Mainosaba输入
+│   │       ├── mock_danmaku/    # 模拟弹幕（测试用）
+│   │       ├── read_pingmu/     # PingMu读取
+│   │       └── remote_stream/   # 远程流输入
+│   │
+│   ├── normalization/           # Normalization模块
+│   │   └── normalized_message.py  # NormalizedMessage定义
 │   │
 │   ├── decision/                # Layer 3: 决策层
 │   │   ├── decision_manager.py  # DecisionManager（统一管理）
 │   │   ├── intent_parser.py     # LLM意图解析器
-│   │   └── providers/           # ✅ 所有决策Provider
-│   │       ├── maicore_decision_provider.py
-│   │       ├── local_llm_decision_provider.py
-│   │       ├── rule_engine_decision_provider.py
-│   │       └── mock_decision_provider.py
+│   │   ├── intent.py            # Intent定义
+│   │   └── providers/           # ✅ 所有决策Provider（按功能分组）
+│   │       ├── maicore/         # MaiCore决策（WebSocket + LLM意图解析）
+│   │       ├── local_llm/       # 本地LLM决策
+│   │       ├── rule_engine/     # 规则引擎决策
+│   │       └── emotion_judge/   # 情绪判断决策
 │   │
-│   ├── parameters/              # Layer 4: 参数生成
-│   │   ├── parameters_layer.py
-│   │   ├── emotion_mapper.py
-│   │   ├── action_mapper.py
-│   │   └── expression_mapper.py
+│   ├── parameters/              # Layer 4: 参数生成层
+│   │   └── (待实现)
 │   │
-│   └── output/                  # Layer 5: 渲染层
+│   └── rendering/               # Layer 5: 渲染层
 │       ├── rendering_manager.py # OutputProviderManager（统一管理）
-│       └── providers/           # ✅ 所有输出Provider
-│           ├── tts_provider.py
-│           ├── subtitle_provider.py
-│           ├── vts_provider.py
-│           └── mock_tts_provider.py
+│       └── providers/           # ✅ 所有输出Provider（按功能分组）
+│           ├── gptsovits/       # GPT-SoVITS TTS
+│           ├── omni_tts/        # Omni TTS
+│           ├── tts/             # 通用TTS
+│           ├── subtitle/        # 字幕渲染
+│           ├── vts/             # VTS虚拟形象
+│           ├── avatar/          # Avatar控制
+│           ├── sticker/         # 贴图/表情
+│           ├── obs_control/     # OBS控制
+│           └── warudo/          # Warudo控制
 │
-└── core/
-    └── pipelines/               # 3类Pipeline系统
-        ├── pre/                 # Pre-Pipeline（处理NormalizedMessage）
-        │   ├── rate_limit_pipeline.py
-        │   ├── filter_pipeline.py
-        │   └── similar_text_pipeline.py
-        ├── post/                # Post-Pipeline（处理Intent，可选）
-        │   └── format_cleanup_pipeline.py
-        └── render/              # Render-Pipeline（处理Intent，可选）
-            └── emotion_smoothing_pipeline.py
+├── core/
+│   ├── base/                    # ✅ 基类和数据类型定义
+│   │   ├── base.py              # 基类
+│   │   ├── input_provider.py    # InputProvider基类
+│   │   ├── decision_provider.py # DecisionProvider基类
+│   │   ├── output_provider.py   # OutputProvider基类
+│   │   ├── raw_data.py          # RawData定义
+│   │   └── normalized_message.py # NormalizedMessage定义
+│   │
+│   ├── providers/               # 旧的Provider接口（已废弃）
+│   │
+│   ├── amaidesu_core.py         # AmaidesuCore（中央枢纽）
+│   ├── event_bus.py             # EventBus（事件总线）
+│   ├── flow_coordinator.py      # FlowCoordinator（流程协调器）
+│   ├── llm_service.py           # LLM服务
+│   ├── context_manager.py       # 上下文管理器
+│   ├── output_provider_manager.py  # 输出Provider管理器
+│   ├── pipeline_manager.py      # Pipeline管理器
+│   ├── http_server.py           # HTTP服务器
+│   └── events/                  # 事件定义
+│       └── (事件契约定义)
+│
+└── plugins/                     # 插件目录（已废弃，保留用于向后兼容）
 ```
 
 ### 配置驱动启用
@@ -168,17 +186,16 @@ src/
 ```toml
 # 输入Provider配置
 [input]
-enabled = ["console", "bili_danmaku", "minecraft"]  # 启用的输入Provider
+enabled = ["console_input", "bili_danmaku_official", "mainosaba"]  # 启用的输入Provider
 
-[input.providers.console]
+[input.providers.console_input]
 source = "stdin"  # 控制台输入
 
-[input.providers.bili_danmaku]
+[input.providers.bili_danmaku_official]
 room_id = "123456"  # B站直播间ID
 
-[input.providers.minecraft]
-host = "localhost"
-port = 25565
+[input.providers.mainosaba]
+# Mainosaba特定配置
 
 # 决策Provider配置
 [decision]
@@ -194,10 +211,9 @@ api_key = "your_key"
 
 # 输出Provider配置
 [output]
-enabled = ["tts", "subtitle", "vts"]  # 启用的输出Provider
+enabled = ["gptsovits", "subtitle", "vts"]  # 启用的输出Provider
 
-[output.providers.tts]
-engine = "gptsovits"
+[output.providers.gptsovits]
 api_url = "http://localhost:5000"
 
 [output.providers.subtitle]
@@ -214,11 +230,11 @@ port = 8001
 社区开发者如何添加新的Provider？
 
 ```python
-# 1. 在对应层创建Provider文件
-# src/layers/input/providers/my_input_provider.py
+# 1. 在对应层创建Provider目录和文件
+# src/layers/input/providers/my_input/my_input_provider.py
 
-from src.core.providers.input_provider import InputProvider
-from src.core.data_types.raw_data import RawData
+from src.core.base.input_provider import InputProvider
+from src.core.base.raw_data import RawData
 from typing import AsyncIterator
 
 class MyInputProvider(InputProvider):
@@ -240,12 +256,18 @@ class MyInputProvider(InputProvider):
                     data_type="text",
                 )
 
-# 2. 在配置中启用
+# 2. 创建 __init__.py 导出Provider
+# src/layers/input/providers/my_input/__init__.py
+from .my_input_provider import MyInputProvider
+
+__all__ = ["MyInputProvider"]
+
+# 3. 在配置中启用
 # config.toml
 [input]
-enabled = ["console", "my_provider"]  # 添加到enabled列表
+enabled = ["console_input", "my_input"]  # 添加到enabled列表
 
-[input.providers.my_provider]
+[input.providers.my_input]
 api_url = "https://my-api.example.com"
 ```
 

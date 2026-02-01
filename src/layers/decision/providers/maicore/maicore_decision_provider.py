@@ -5,6 +5,10 @@ MaiCoreDecisionProvider - MaiCore决策提供者
 - 将 NormalizedMessage 转换为 Intent
 - 通过 WebSocket 与 MaiCore 通信
 - 使用 IntentParser 解析 MaiCore 响应
+
+事件说明:
+- "decision.response_generated": 保留字符串形式的事件名，用于向后兼容
+  该事件不在 CoreEvents 中定义，因为它是 MaiCore 特定的历史事件
 """
 
 import asyncio
@@ -94,13 +98,19 @@ class MaiCoreDecisionProvider(DecisionProvider):
         self._pending_futures: Dict[str, asyncio.Future] = {}
         self._futures_lock = asyncio.Lock()
 
-    async def setup(self, event_bus: "EventBus", config: Optional[Dict[str, Any]] = None) -> None:
+    async def setup(
+        self,
+        event_bus: "EventBus",
+        config: Optional[Dict[str, Any]] = None,
+        dependencies: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """
         设置 MaiCoreDecisionProvider
 
         Args:
             event_bus: EventBus 实例
             config: Provider 配置（忽略，使用 __init__ 传入的 config）
+            dependencies: 依赖注入字典，可能包含 llm_service
         """
         self._event_bus = event_bus
         self.logger.info("初始化 MaiCoreDecisionProvider...")
@@ -122,7 +132,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
         )
 
         # 初始化 IntentParser（需要LLMService）
-        llm_service = event_bus._llm_service if hasattr(event_bus, "_llm_service") else None
+        llm_service = dependencies.get("llm_service") if dependencies else None
         if llm_service:
             from src.layers.decision.intent_parser import IntentParser
 
@@ -258,6 +268,8 @@ class MaiCoreDecisionProvider(DecisionProvider):
         if not future:
             self.logger.warning(f"收到未知消息的响应: {message_id}")
             # 仍然发布事件（向后兼容）
+            # 注意: "decision.response_generated" 是保留的字符串事件名，不使用 CoreEvents 常量
+            # 这是 MaiCore 特定的历史事件，用于向后兼容
             if self._event_bus:
                 try:
                     await self._event_bus.emit("decision.response_generated", {"message": message})
@@ -274,7 +286,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
                 # 降级：创建简单的 Intent
                 text = str(message)
                 intent = self._create_fallback_intent(text, "no_parser")
-                self.logger.warning(f"IntentParser未初始化，使用降级方案")
+                self.logger.warning("IntentParser未初始化，使用降级方案")
 
             # 设置 Future 结果
             if not future.done():

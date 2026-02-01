@@ -17,11 +17,11 @@ from src.core.events import register_core_events
 from src.core.flow_coordinator import FlowCoordinator
 from src.core.llm_service import LLMService
 from src.core.pipeline_manager import PipelineManager
-from src.core.plugin_manager import PluginManager
 from src.utils.logger import get_logger
 from src.layers.input.input_layer import InputLayer
+from src.layers.input.input_provider_manager import InputProviderManager
 from src.layers.decision.decision_manager import DecisionManager, DecisionProviderFactory
-from src.layers.decision.providers.maicore_decision_provider import MaiCoreDecisionProvider
+from src.layers.decision.providers.maicore.maicore_decision_provider import MaiCoreDecisionProvider
 
 logger = get_logger("Main")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -97,6 +97,45 @@ def load_config() -> Tuple[ConfigService, Dict[str, Any], bool, bool, bool]:
         sys.exit(1)
 
 
+def validate_config(config: Dict[str, Any]) -> None:
+    """
+    验证配置完整性，缺失必要配置时给出明确错误提示
+
+    Args:
+        config: 配置字典
+
+    Raises:
+        SystemExit: 如果配置验证失败
+    """
+    errors = []
+
+    # 检查核心配置段
+    if not config.get("general"):
+        errors.append("缺少 [general] 配置段")
+
+    # 检查输入层配置
+    if not config.get("input"):
+        logger.warning("未检测到 [input] 配置，输入层将被禁用")
+
+    # 检查决策层配置
+    if not config.get("decision"):
+        logger.warning("未检测到 [decision] 配置，决策层将被禁用")
+
+    # 检查渲染层配置
+    if not config.get("rendering"):
+        logger.warning("未检测到 [rendering] 配置，渲染层将被禁用")
+
+    # 如果有严重错误，退出程序
+    if errors:
+        logger.critical("配置验证失败，发现以下问题：")
+        for error in errors:
+            logger.critical(f"  - {error}")
+        logger.critical("请检查 config.toml 文件并添加缺失的配置段。")
+        sys.exit(1)
+
+    logger.info("配置验证通过")
+
+
 def exit_if_config_copied(main_cfg_copied: bool, plugin_cfg_copied: bool, pipeline_cfg_copied: bool) -> None:
     """若配置文件为新创建，提示用户并退出。"""
     box = "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
@@ -113,7 +152,7 @@ def exit_if_config_copied(main_cfg_copied: bool, plugin_cfg_copied: bool, pipeli
         logger.warning(box)
         if plugin_cfg_copied:
             logger.warning("!! 已根据模板创建了部分插件的 config.toml 文件。          !!")
-            logger.warning("!! 请检查 src/plugins/ 下各插件目录中的 config.toml 文件， !!")
+            logger.warning("!! 请检查 src/layers/ 下各插件目录中的 config.toml 文件， !!")
         if pipeline_cfg_copied:
             logger.warning("!! 已根据模板创建了部分管道的 config.toml 文件。          !!")
             logger.warning("!! 请检查 src/pipelines/ 下各管道目录中的 config.toml 文件，!!")
@@ -175,16 +214,17 @@ async def create_app_components(
     config_service: ConfigService,
 ) -> Tuple[
     AmaidesuCore,
-    PluginManager,
     Optional[FlowCoordinator],
     InputLayer,
     LLMService,
     Optional[DecisionManager],
+    Optional[InputProviderManager],
 ]:
     """创建并连接核心组件（事件总线、输入层、决策层、协调器、核心、插件）。"""
     general_config = config.get("general", {})
     rendering_config = config.get("rendering", {})
     decision_config = config.get("decision", {})
+    input_config = config.get("input", {})
     platform_id = general_config.get("platform_id", "amaidesu")
 
     if rendering_config:
@@ -209,11 +249,24 @@ async def create_app_components(
     enable_validation = event_bus_config.get("enable_validation", False)
     event_bus = EventBus(enable_validation=enable_validation)
 
-    # 将 LLMService 添加到 EventBus，供 IntentParser 使用
-    event_bus._llm_service = llm_service
-
     register_core_events()
     logger.info("核心事件已注册到 EventRegistry")
+
+    # 输入Provider管理器 (Layer 1)
+    input_provider_manager: Optional[InputProviderManager] = None
+    if input_config:
+        logger.info("初始化输入Provider管理器（Layer 1 数据流）...")
+        try:
+            input_provider_manager = InputProviderManager(event_bus)
+            providers = await input_provider_manager.load_from_config(input_config)
+            await input_provider_manager.start_all_providers(providers)
+            logger.info(f"InputProviderManager 已设置（已启动 {len(input_provider_manager._providers)} 个Provider）")
+        except Exception as e:
+            logger.error(f"设置输入Provider管理器失败: {e}", exc_info=True)
+            logger.warning("输入Provider功能不可用，继续启动其他服务")
+            input_provider_manager = None
+    else:
+        logger.info("未检测到输入配置，输入Provider功能将被禁用")
 
     # 输入层 (Layer 1-2)
     logger.info("初始化输入层组件（Layer 1-2 数据流）...")
@@ -226,7 +279,7 @@ async def create_app_components(
     if decision_config:
         logger.info("初始化决策层组件（Layer 3 数据流）...")
         try:
-            decision_manager = DecisionManager(event_bus)
+            decision_manager = DecisionManager(event_bus, llm_service)
 
             # 创建并设置 DecisionProviderFactory
             factory = DecisionProviderFactory()
@@ -267,16 +320,9 @@ async def create_app_components(
         flow_coordinator=flow_coordinator,
     )
 
-    # 插件
-    logger.info("加载插件...")
-    plugin_manager = PluginManager(core, config.get("plugins", {}), config_service)
-    plugin_load_dir = os.path.join(_BASE_DIR, "src", "plugins")
-    await plugin_manager.load_plugins(plugin_load_dir)
-    logger.info("插件加载完成。")
-
     await core.connect()
 
-    return core, plugin_manager, flow_coordinator, input_layer, llm_service, decision_manager
+    return core, flow_coordinator, input_layer, llm_service, decision_manager, input_provider_manager
 
 
 # ---------------------------------------------------------------------------
@@ -325,10 +371,10 @@ def restore_signal_handlers(original_sigint: Optional[Any], original_sigterm: Op
 async def run_shutdown(
     flow_coordinator: Optional[FlowCoordinator],
     input_layer: InputLayer,
-    plugin_manager: PluginManager,
     llm_service: LLMService,
     core: AmaidesuCore,
     decision_manager: Optional[DecisionManager],
+    input_provider_manager: Optional[InputProviderManager],
 ) -> None:
     """按顺序执行关闭与清理。"""
     if flow_coordinator:
@@ -348,21 +394,21 @@ async def run_shutdown(
         except Exception as e:
             logger.error(f"清理决策管理器时出错: {e}")
 
+    # 停止输入Provider
+    if input_provider_manager:
+        logger.info("正在停止输入Provider...")
+        try:
+            await input_provider_manager.stop_all_providers()
+            logger.info("输入Provider已停止")
+        except Exception as e:
+            logger.error(f"停止输入Provider时出错: {e}")
+
     logger.info("正在清理输入层组件...")
     try:
         await input_layer.cleanup()
         logger.info("输入层组件清理完成")
     except Exception as e:
         logger.error(f"清理输入层组件时出错: {e}")
-
-    logger.info("正在卸载插件...")
-    try:
-        await asyncio.wait_for(plugin_manager.unload_plugins(), timeout=2.0)
-        logger.info("插件卸载完成")
-    except asyncio.TimeoutError:
-        logger.warning("插件卸载超时，强制继续")
-    except Exception as e:
-        logger.error(f"插件卸载时出错: {e}")
 
     logger.info("正在关闭核心服务...")
     try:
@@ -390,11 +436,12 @@ async def main() -> None:
     setup_logging(args)
 
     config_service, config, main_cfg_copied, plugin_cfg_copied, pipeline_cfg_copied = load_config()
+    validate_config(config)
     exit_if_config_copied(main_cfg_copied, plugin_cfg_copied, pipeline_cfg_copied)
 
     pipeline_manager = await load_pipeline_manager(config)
 
-    core, plugin_manager, flow_coordinator, input_layer, llm_service, decision_manager = await create_app_components(
+    core, flow_coordinator, input_layer, llm_service, decision_manager, input_provider_manager = await create_app_components(
         config, pipeline_manager, config_service
     )
 
@@ -410,7 +457,7 @@ async def main() -> None:
         logger.info("检测到 KeyboardInterrupt，开始清理...")
 
     restore_signal_handlers(orig_sigint, orig_sigterm)
-    await run_shutdown(flow_coordinator, input_layer, plugin_manager, llm_service, core, decision_manager)
+    await run_shutdown(flow_coordinator, input_layer, llm_service, core, decision_manager, input_provider_manager)
 
 
 if __name__ == "__main__":

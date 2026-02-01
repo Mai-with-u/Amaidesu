@@ -10,6 +10,7 @@ WebSocket 连接管理器
 import asyncio
 from typing import Optional, TYPE_CHECKING
 
+from src.core.events.names import CoreEvents
 from src.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -112,7 +113,7 @@ class WebSocketConnector:
                 # 通过 EventBus 发布连接事件
                 if self._event_bus:
                     try:
-                        await self._event_bus.emit("decision_provider.connected", {"provider": self.provider_name})
+                        await self._event_bus.emit(CoreEvents.DECISION_PROVIDER_CONNECTED, {"provider": self.provider_name})
                     except Exception as e:
                         self.logger.error(f"发布连接事件失败: {e}", exc_info=True)
             else:
@@ -132,7 +133,7 @@ class WebSocketConnector:
             # 通过 EventBus 发布断开事件
             if self._is_connected and self._event_bus:
                 try:
-                    await self._event_bus.emit("decision_provider.disconnected", {"provider": self.provider_name})
+                    await self._event_bus.emit(CoreEvents.DECISION_PROVIDER_DISCONNECTED, {"provider": self.provider_name})
                 except Exception as e:
                     self.logger.error(f"发布断开事件失败: {e}", exc_info=True)
 

@@ -72,16 +72,29 @@ class LocalLLMDecisionProvider(DecisionProvider):
         # EventBus 引用（用于事件通知）
         self._event_bus: Optional["EventBus"] = None
 
-    async def setup(self, event_bus: "EventBus", config: Dict[str, Any]) -> None:
+    async def setup(
+        self,
+        event_bus: "EventBus",
+        config: Dict[str, Any],
+        dependencies: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """
         设置 LocalLLMDecisionProvider
 
         Args:
             event_bus: EventBus 实例
             config: Provider 配置（使用 __init__ 传入的 config）
+            dependencies: 依赖注入字典，必须包含 llm_service
         """
         self._event_bus = event_bus
         self.logger.info("初始化 LocalLLMDecisionProvider...")
+
+        # 从依赖注入中获取 LLMService
+        if dependencies and "llm_service" in dependencies:
+            self._llm_service = dependencies["llm_service"]
+            self.logger.info("LLMService 已从依赖注入中获取")
+        else:
+            self.logger.warning("LLMService 未通过依赖注入提供，决策功能将不可用")
 
         # 验证 prompt 模板包含 {text} 占位符
         if "{text}" not in self.prompt_template:
