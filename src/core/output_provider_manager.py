@@ -292,48 +292,37 @@ class OutputProviderManager:
         """
         Provider工厂方法：根据类型创建Provider实例
 
+        使用 ProviderRegistry 来创建 Provider，替代之前的硬编码映射。
+
         Args:
-            provider_type: Provider类型（"tts", "subtitle", "sticker", "vts", "omni_tts"）
+            provider_type: Provider类型（"tts", "subtitle", "sticker", "vts", "omni_tts", "avatar"等）
             config: Provider配置
             core: AmaidesuCore实例（可选）
 
         Returns:
             Provider实例，如果创建失败返回None
         """
-        # Provider类型映射
-        provider_classes = {
-            "tts": "src.providers.tts_provider.TTSProvider",
-            "subtitle": "src.providers.subtitle_provider.SubtitleProvider",
-            "sticker": "src.providers.sticker_provider.StickerProvider",
-            "vts": "src.providers.vts_provider.VTSProvider",
-            "omni_tts": "src.providers.omni_tts_provider.OmniTTSProvider",
-        }
+        from src.rendering.provider_registry import ProviderRegistry
 
-        # 获取Provider类路径
-        class_path = provider_classes.get(provider_type.lower())
-        if not class_path:
-            self.logger.error(f"未知的Provider类型: {provider_type}")
+        # 检查 Provider 是否已注册
+        if not ProviderRegistry.is_output_provider_registered(provider_type):
+            available = ", ".join(ProviderRegistry.get_registered_output_providers())
+            self.logger.error(
+                f"未知的Provider类型: '{provider_type}'. "
+                f"可用的Provider: {available or '无'}"
+            )
             return None
 
         try:
-            # 动态导入Provider类
-            module_path, class_name = class_path.rsplit(".", 1)
-            module = __import__(module_path, fromlist=[class_name])
-            provider_class = getattr(module, class_name)
+            # 使用 ProviderRegistry 创建 Provider 实例
+            provider = ProviderRegistry.create_output(provider_type, config)
 
-            # 创建Provider实例
-            # 注意：有些Provider的__init__可能需要event_bus和core参数
-            # 但根据基类设计，应该在setup中设置event_bus
-            provider = provider_class(config, event_bus=None, core=core)
-
-            self.logger.info(f"Provider创建成功: {provider_type} -> {class_name}")
+            self.logger.info(f"Provider创建成功: {provider_type}")
             return provider
 
-        except ImportError as e:
-            self.logger.error(f"Provider模块导入失败: {module_path} - {e}")
-            return None
-        except AttributeError as e:
-            self.logger.error(f"Provider类不存在: {class_name} - {e}")
+        except ValueError as e:
+            # ProviderRegistry.create_output 抛出的 ValueError
+            self.logger.error(f"Provider创建失败: {provider_type} - {e}")
             return None
         except Exception as e:
             self.logger.error(f"Provider实例化失败: {provider_type} - {e}", exc_info=True)
