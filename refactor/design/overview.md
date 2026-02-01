@@ -4,14 +4,14 @@
 
 本文档是Amaidesu架构重构的设计总览。详细设计请查看：
 
- - [7层架构设计](./layer_refactoring.md) - 核心数据流的7层架构
- - [决策层设计](./decision_layer.md) - 可替换的决策Provider系统
+ - [5层架构设计](./layer_refactoring.md) - 核心数据流的5层架构
+ - [决策层设计](./decision_layer.md) - 可替换的决策Provider系统（含LLM意图解析）
  - [多Provider并发设计](./multi_provider.md) - 输入/输出层并发处理
  - [插件系统设计](./plugin_system.md) - 插件系统和Provider接口
  - [核心重构设计](./core_refactoring.md) - AmaidesuCore的彻底解耦
  - [事件数据契约设计](./event_data_contract.md) - 类型安全的事件数据契约系统
  - [LLM服务设计](./llm_service.md) - 统一的LLM调用服务
- - [Avatar系统重构](./avatar_refactoring.md) - 虚拟形象控制系统重构到7层架构
+ - [Pipeline重新设计](./pipeline_refactoring.md) - 3类Pipeline系统（Pre/Post/Render）
 
 ---
 
@@ -39,7 +39,7 @@
 
 **按AI VTuber数据处理的完整流程组织层级，每层有明确的输入和输出格式。**
 
- - **核心数据流**（Layer 1-7）：按AI VTuber数据处理流程组织
+ - **核心数据流**（Layer 1-5）：按AI VTuber数据处理流程组织
  - **Provider/Plugin 职责分离**：Provider = 原子能力，Plugin = 场景整合（详见下文）
  - **EventBus**：唯一的跨层通信机制，实现松耦合
  - **事件数据契约**（Event Contract）：类型安全的事件数据格式，支持社区扩展
@@ -65,32 +65,28 @@ Plugin = 能力组合（整合 Provider、提供业务场景、不创建 Provide
 2. 插件之间可能绕过 EventBus，直接服务注册
 3. 重蹈重构前的覆辙（24个插件，18个服务注册）
 
-→ 详见 [插件系统设计](./plugin_system.md) 和 [架构设计审查](./architecture_review.md)（当前未解决问题含 Provider 迁移计划 B-02、管道系统 B-01）
-
-### 架构分层
+### 5层架构
 
 ```
 外部输入（弹幕、游戏、语音）
   ↓
-【Layer 1: 输入感知】多个InputProvider并发采集
-  ↓
-【Layer 2: 输入标准化】统一转换为Text
-  ↓
-【Layer 3: 中间表示】构建CanonicalMessage
-  ↓
-【Layer 4: 决策层】DecisionProvider ⭐ 可替换、可扩展
-  ├─ MaiCoreDecisionProvider (默认）
-  ├─ LocalLLMDecisionProvider (可选）
+【Layer 1: Input】多个InputProvider并发采集
+  ↓ RawData
+【Layer 2: Normalization】统一转换为NormalizedMessage
+  ↓ NormalizedMessage
+【Pre-Pipeline】限流、过滤、相似文本检测
+  ↓ NormalizedMessage'
+【Layer 3: Decision】DecisionProvider ⭐ 可替换、可扩展
+  ├─ MaiCoreDecisionProvider (默认，异步+LLM意图解析)
+  ├─ LocalLLMDecisionProvider (可选)
   └─ RuleEngineDecisionProvider (可选)
-  ↓
-DecisionProvider返回MessageBase
-  ↓
-【Layer 5: 表现理解】解析MessageBase → Intent
-  ↓
-【Layer 6: 表现生成】生成RenderParameters
-  ↓
-【Layer 7: 渲染呈现】多个OutputProvider并发渲染
-  ↓
+  ↓ Intent
+【Post-Pipeline】格式清理、安全检查（可选）
+  ↓ Intent'
+【Layer 4: Parameters】生成RenderParameters
+  ↓ RenderParameters
+【Layer 5: Rendering】多个OutputProvider并发渲染
+  ↓ 输出
 【插件系统：Plugin】社区开发的插件能力
 ```
 
@@ -99,27 +95,24 @@ DecisionProvider返回MessageBase
 ## 🔗 相关文档
 
 ### 设计文档
- 
- - [7层架构设计](./layer_refactoring.md) - 详细描述7层核心数据流（含元数据管理）
- - [决策层设计](./decision_layer.md) - 可替换的决策Provider系统
- - [多Provider并发设计](./multi_provider.md) - 输入/输出层并发处理（含错误处理和生命周期）
+
+ - [5层架构设计](./layer_refactoring.md) - 详细描述5层核心数据流
+ - [决策层设计](./decision_layer.md) - 可替换的决策Provider系统（含LLM意图解析）
+ - [多Provider并发设计](./multi_provider.md) - 输入/输出层并发处理
  - [插件系统设计](./plugin_system.md) - 插件系统和Provider接口（含迁移指南）
- - [核心重构设计](./core_refactoring.md) - AmaidesuCore的彻底解耦（含HTTP服务器管理）
- - [事件数据契约设计](./event_data_contract.md) - 类型安全的事件数据契约系统（Pydantic + 开放式注册表）
- - [LLM服务设计](./llm_service.md) - 统一的LLM调用服务（核心基础设施）
- - [Avatar系统重构](./avatar_refactoring.md) - 虚拟形象控制系统重构（消除与7层架构的重复）
- - [架构设计审查](./architecture_review.md) - **未解决**的架构问题（含管道系统未重构成功 B-01、Provider 迁移 B-02）
- - [DataCache设计](./data_cache.md) - 原始数据缓存服务
- - [Pipeline重新设计](./pipeline_refactoring.md) - TextPipeline 目标设计（**实现未完成**，见 [审查 B-01](./architecture_review.md#b-01-管道系统未重构成功--待修复)）
- - [HTTP服务器设计](./http_server.md) - 基于FastAPI的HTTP服务器
+ - [核心重构设计](./core_refactoring.md) - AmaidesuCore的彻底解耦
+ - [事件数据契约设计](./event_data_contract.md) - 类型安全的事件数据契约系统
+ - [LLM服务设计](./llm_service.md) - 统一的LLM调用服务
+ - [Pipeline重新设计](./pipeline_refactoring.md) - 3类Pipeline系统（Pre/Post/Render）
+ - [架构设计审查](./architecture_review.md) - 已解决问题和待优化项
 
 ### 实施计划
 
 - [实施计划总览](../plan/overview.md) - 重构实施计划总览
 - [Phase 1: 基础设施](../plan/phase1_infrastructure.md) - Provider接口和EventBus
 - [Phase 2: 输入层](../plan/phase2_input.md) - Layer 1-2实现
-- [Phase 3: 决策层](../plan/phase3_decision.md) - 决策层(Layer 4)+Layer 5实现
-- [Phase 4: 输出层](../plan/phase4_output.md) - Layer 6-7实现
+- [Phase 3: 决策层](../plan/phase3_decision.md) - Layer 3实现
+- [Phase 4: 输出层](../plan/phase4_output.md) - Layer 4-5实现
  - [Phase 5: 插件系统](../plan/phase5_plugins.md) - 插件系统实现
 - [Phase 6: 清理和测试](../plan/phase6_cleanup.md) - 清理、测试和迁移
 
@@ -137,7 +130,7 @@ DecisionProvider返回MessageBase
  - ✅ 插件系统正常加载官方插件和社区插件
 
 ### 架构指标
-- ✅ 清晰的7层核心数据流架构
+- ✅ 清晰的5层核心数据流架构
 - ✅ 决策层可替换（支持多种DecisionProvider）
 - ✅ 多Provider并发支持（输入层和输出层）
 - ✅ 层级间依赖关系清晰（单向依赖）
@@ -146,6 +139,8 @@ DecisionProvider返回MessageBase
 - ✅ 工厂模式支持动态切换
 - ✅ 插件系统支持社区开发
 - ✅ 事件数据契约类型安全（Pydantic Model + 开放式注册表）
+- ✅ 结构化消息保留原始数据（不丢失信息）
+- ✅ LLM意图解析（比规则更智能）
 
 ---
 
@@ -154,16 +149,22 @@ DecisionProvider返回MessageBase
 ### 我想知道...
 
 **整体架构是什么？**
-→ 阅读[7层架构设计](./layer_refactoring.md)
+→ 阅读[5层架构设计](./layer_refactoring.md)
 
 **决策层如何工作？**
-→ 阅读[决策层设计](./decision_layer.md)
+→ 阅读[决策层设计](./decision_layer.md)（含LLM意图解析）
 
 **多个Provider如何并发？**
 → 阅读[多Provider并发设计](./multi_provider.md)
 
 **如何开发插件？**
 → 阅读[插件系统设计](./plugin_system.md)
+
+**Pipeline如何工作？**
+→ 阅读[Pipeline重新设计](./pipeline_refactoring.md)
+
+**LLM意图解析如何实现？**
+→ 阅读[决策层设计 - LLM意图解析](./decision_layer.md#llm意图解析)
 
 **如何定义事件数据格式？**
 → 阅读[事件数据契约设计](./event_data_contract.md)
@@ -173,9 +174,6 @@ DecisionProvider返回MessageBase
 
 **LLM调用如何统一管理？**
 → 阅读[LLM服务设计](./llm_service.md)
-
-**Avatar系统如何重构？**
-→ 阅读[Avatar系统重构](./avatar_refactoring.md)
 
 **如何实施重构？**
 → 阅读[实施计划总览](../plan/overview.md)

@@ -3,7 +3,7 @@
 ## 🎯 核心目标
 
 实现可替换的决策系统，支持多种决策方式：
-1. **MaiCoreDecisionProvider**：默认实现，使用MaiCore进行决策
+1. **MaiCoreDecisionProvider**：默认实现，使用MaiCore进行决策（异步+LLM意图解析）
 2. **LocalLLMDecisionProvider**：可选实现，使用本地LLM进行决策
 3. **RuleEngineDecisionProvider**：可选实现，使用规则引擎进行决策
 
@@ -12,33 +12,39 @@
 ## 📊 决策层位置
 
 ```
-Layer 3: 中间表示（CanonicalMessage）
+Layer 2: Normalization（NormalizedMessage）
     ↓
-Layer 4: 决策层（DecisionProvider）⭐ 可替换、可扩展
-    ├─ MaiCoreDecisionProvider (默认）
+【Pre-Pipeline】限流、过滤
+    ↓
+Layer 3: Decision（DecisionProvider）⭐ 可替换、可扩展
+    ├─ MaiCoreDecisionProvider (默认，异步+LLM意图解析)
     ├─ LocalLLMDecisionProvider (可选)
     └─ RuleEngineDecisionProvider (可选)
+    ↓ Intent
+【Post-Pipeline】格式清理、安全检查（可选）
     ↓
-DecisionProvider返回MessageBase
-    ↓
-Layer 5: 表现理解（解析MessageBase → Intent）
+Layer 4: Parameters（生成RenderParameters）
 ```
 
 ---
 
 ## 🔗 核心接口
 
-### DecisionProvider接口
+### DecisionProvider接口（新）
 
 ```python
 from typing import Protocol
 from src.core.event_bus import EventBus
-from src.canonical.canonical_message import CanonicalMessage
+from src.layers.normalization.normalized_message import NormalizedMessage
+from src.layers.decision.intent import Intent
 
 class DecisionProvider(Protocol):
-    """决策Provider接口 - 决策层
+    """决策Provider接口
 
-    支持多种决策实现：MaiCore、本地LLM、规则引擎等
+    关键变更：
+    - 输入：NormalizedMessage（结构化消息）
+    - 输出：Intent（意图，而不是MessageBase）
+    - 异步返回：符合AI VTuber的异步特性
     """
 
     async def setup(self, event_bus: EventBus, config: dict):
@@ -51,15 +57,15 @@ class DecisionProvider(Protocol):
         """
         ...
 
-    async def decide(self, canonical_message: CanonicalMessage):
+    async def decide(self, message: NormalizedMessage) -> Intent:
         """
-        根据CanonicalMessage做出决策
+        根据NormalizedMessage做出决策（异步）
 
         Args:
-            canonical_message: 标准化消息
+            message: 标准化消息
 
         Returns:
-            MessageBase: 决策结果
+            Intent: 决策意图
         """
         ...
 
@@ -82,222 +88,354 @@ class DecisionProvider(Protocol):
         }
 ```
 
+**关键变更**：
+- ✅ 输入从 `CanonicalMessage` 改为 `NormalizedMessage`
+- ✅ 输出从 `MessageBase` 改为 `Intent`
+- ✅ 支持异步返回（符合AI VTuber特性）
+
 ---
 
-## 🎨 具体实现
+## 🎨 MaiCoreDecisionProvider实现（新架构）
 
-### 1. MaiCoreDecisionProvider（默认）
+### 设计理念
 
-**设计理念**：继续使用现有的maim_message WebSocket通信
+**挑战**：MaiCore是异步的，但`decide()`需要返回Intent
 
-**关键特性**：
-- ✅ 使用maim_message.Router进行WebSocket连接
-- ✅ 保持与MaiCore的兼容性
-- ✅ 保留所有现有功能
+**解决方案**：
+1. 发送消息到MaiCore
+2. 使用`asyncio.Future`等待响应
+3. 收到MessageBase后，使用LLM解析为Intent
+4. 返回Intent
+
+### 完整实现
 
 ```python
+import asyncio
+from typing import Dict, Any, Optional
 from maim_message import MessageBase
-from src.core.decision_provider import DecisionProvider, CanonicalMessage
+
+from src.core.base.decision_provider import DecisionProvider
+from src.layers.normalization.normalized_message import NormalizedMessage
+from src.layers.decision.intent import Intent
+from src.layers.decision.intent_parser import IntentParser
+from src.core.base.websocket_connector import WebSocketConnector
+from src.core.base.router_adapter import RouterAdapter
 from src.utils.logger import get_logger
 
 class MaiCoreDecisionProvider:
-    """MaiCore决策Provider（默认实现）"""
+    """MaiCore决策Provider（异步 + LLM意图解析）"""
 
-    def __init__(self, config: dict):
+    def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.host = config.get("host", "localhost")
-        self.port = config.get("port", 8000)
-        self.router = None
         self.logger = get_logger("MaiCoreDecisionProvider")
 
-    async def setup(self, event_bus: EventBus, config: dict):
-        """初始化WebSocket连接（自己管理！）"""
-        from maim_message import Router, RouteConfig, TargetConfig
+        # WebSocket配置
+        self.host = config.get("host", "localhost")
+        self.port = config.get("port", 8000)
+        self.platform = config.get("platform", "amaidesu")
 
-        ws_url = f"ws://{self.host}:{self.port}/ws"
+        # 意图解析器（小LLM）
+        self._intent_parser: Optional[IntentParser] = None
 
-        route_config = RouteConfig(
-            route_config={
-                "amaidesu": TargetConfig(
-                    url=ws_url,
-                    token=None
-                )
-            }
-        )
+        # 请求-响应映射（message_id → Future）
+        self._pending_requests: Dict[str, asyncio.Future] = {}
 
-        self.router = Router(route_config)
-        self.router.register_class_handler(self._handle_maicore_message)
+        # WebSocket连接
+        self._ws_connector: Optional[WebSocketConnector] = None
+        self._router_adapter: Optional[RouterAdapter] = None
 
-        # 订阅EventBus
-        event_bus.on("canonical.message_ready", self._on_canonical_message)
+    async def setup(self, event_bus: EventBus, config: Dict[str, Any] = None):
+        """设置Provider"""
+        # 初始化意图解析器
+        llm_config = self.config.get("llm", {})
+        self._intent_parser = IntentParser(llm_config)
+        await self._intent_parser.initialize()
 
-        self.logger.info(f"MaiCore WebSocket连接已配置: {ws_url}")
+        # 初始化WebSocket连接
+        await self._setup_websocket()
 
-        # 启动WebSocket连接
-        self._ws_task = asyncio.create_task(self._run_websocket())
+    async def decide(self, message: NormalizedMessage) -> Intent:
+        """
+        进行决策（异步）
 
-    async def _run_websocket(self):
-        """运行WebSocket连接（自己管理！）"""
+        Args:
+            message: 标准化消息
+
+        Returns:
+            Intent: 决策意图
+        """
+        # 1. 转换为MessageBase
+        message_base = message.to_message_base()
+        message_id = message_base.message_info.message_id
+
+        # 2. 创建Future等待响应
+        future = asyncio.Future()
+        self._pending_requests[message_id] = future
+
+        # 3. 发送到MaiCore
+        await self._router_adapter.send(message_base)
+
+        # 4. 异步等待响应（超时30秒）
         try:
-            await self.router.run()
-        except asyncio.CancelledError:
-            self.logger.info("WebSocket任务被取消")
-        except Exception as e:
-            self.logger.error(f"WebSocket异常: {e}", exc_info=True)
+            response_message_base = await asyncio.wait_for(future, timeout=30.0)
+        except asyncio.TimeoutError:
+            del self._pending_requests[message_id]
+            self.logger.error(f"MaiCore响应超时: {message_id}")
+            # 返回默认Intent
+            return Intent(
+                original_text=message.text,
+                response_text="(MaiCore响应超时)",
+                emotion=EmotionType.NEUTRAL,
+                actions=[],
+                metadata={"error": "timeout"}
+            )
 
-    async def _on_canonical_message(self, event: dict):
-        """处理CanonicalMessage事件"""
-        canonical_message = event.get("data")
+        # 5. 使用LLM解析意图
+        intent = await self._intent_parser.parse(response_message_base)
+        intent.original_text = message.text
+        intent.metadata["original_message_id"] = message_id
 
-        # 构建MessageBase
-        message = self._build_messagebase(canonical_message)
+        return intent
 
-        # 发送给MaiCore（自己管理！）
-        await self.router.send_message(message)
-
-    async def _handle_maicore_message(self, message_data: dict):
-        """处理MaiCore返回的消息"""
+    def _handle_maicore_message(self, message_data: Dict[str, Any]):
+        """处理MaiCore的异步响应"""
         message = MessageBase.from_dict(message_data)
+        message_id = message.message_info.message_id
 
-        # 发布到EventBus
-        await self.event_bus.emit("decision.response_generated", {
-            "data": message
-        })
-
-    async def decide(self, canonical_message: CanonicalMessage):
-        """决策接口"""
-        # 构建MessageBase
-        message = self._build_messagebase(canonical_message)
-
-        # 发送给MaiCore
-        await self.router.send_message(message)
-
-        # 简化实现：等待响应（实际应该用asyncio.Queue）
-        # 响应会通过_handle_maicore_message回调
-
-        return message
-
-    def _build_messagebase(self, canonical_message: CanonicalMessage):
-        """构建MessageBase"""
-        from maim_message import MessageBase, BaseMessageInfo, UserInfo, Seg, FormatInfo
-        # ... 构建逻辑
+        # 查找对应的Future
+        future = self._pending_requests.get(message_id)
+        if future and not future.done():
+            future.set_result(message)
+            del self._pending_requests[message_id]
+        else:
+            self.logger.warning(f"未找到对应的请求或已超时: {message_id}")
 
     async def cleanup(self):
         """清理资源"""
-        if self._ws_task:
-            self._ws_task.cancel()
-        self.logger.info("MaiCore WebSocket连接已清理")
+        if self._ws_connector:
+            await self._ws_connector.disconnect()
+        if self._intent_parser:
+            await self._intent_parser.cleanup()
 ```
 
-### 2. LocalLLMDecisionProvider（可选）
+---
 
-**设计理念**：使用本地LLM API进行决策，无需MaiCore
+## 🤖 LLM意图解析
 
-**关键特性**：
-- ✅ 使用OpenAI API或其他LLM API
-- ✅ 无需外部依赖
-- ✅ 可配置不同的模型
-- ✅ 支持离线场景
+### 为什么需要LLM解析？
+
+**问题**：MaiCore返回的是MessageBase（文本格式）
+```
+"你好呀！[开心] [微笑] 谢谢你的礼物！"
+```
+
+**需求**：提取结构化的Intent
+```python
+Intent(
+    response_text="你好呀！谢谢你的礼物！",
+    emotion=HAPPY,
+    actions=[SMILE]
+)
+```
+
+**挑战**：
+- ❌ 正则表达式和关键词匹配：规则死板，易误判
+- ❌ MaiCore不适合直接输出JSON（群聊机器人，各种过滤）
+- ✅ **LLM解析**：智能、灵活、可扩展
+
+### IntentParser设计
 
 ```python
+from typing import Optional
 from maim_message import MessageBase
-from src.core.decision_provider import DecisionProvider, CanonicalMessage
-from src.utils.logger import get_logger
 
+class IntentParser:
+    """使用小LLM解析意图"""
+
+    def __init__(self, llm_config: dict):
+        self.llm_service = LLMService(llm_config)
+        self.system_prompt = """你是一个AI VTuber意图解析器。
+
+任务：分析AI的回复，提取：
+1. response_text: 清理后的回复文本（移除所有标记）
+2. emotion: 情感类型（NEUTRAL/HAPPY/SAD/ANGRY/SURPRISED/LOVE）
+3. actions: 表现动作列表（从以下选择：SMILE, BLINK, NOD, SHAKE, WAVE, CLAP, NONE）
+
+示例：
+输入: "你好呀！[开心] [微笑] 谢谢！"
+输出:
+{
+  "response_text": "你好呀！谢谢！",
+  "emotion": "HAPPY",
+  "actions": ["SMILE"]
+}
+
+输入: "哈哈，太有趣了！😆"
+输出:
+{
+  "response_text": "哈哈，太有趣了！",
+  "emotion": "HAPPY",
+  "actions": []
+}
+
+输入: "哦...是吗。"
+输出:
+{
+  "response_text": "哦...是吗。",
+  "emotion": "NEUTRAL",
+  "actions": []
+}
+
+只返回JSON，不要其他内容。"""
+
+    async def parse(self, message: MessageBase) -> Intent:
+        """解析MessageBase → Intent"""
+        # 1. 提取文本
+        text = self._extract_text(message)
+
+        # 2. 调用小LLM解析
+        response = await self.llm_service.generate(
+            prompt=text,
+            system_prompt=self.system_prompt,
+            temperature=0.1,  # 低温度，保证稳定
+            model="haiku"  # 或其他小模型
+        )
+
+        # 3. 解析JSON
+        import json
+        try:
+            result = json.loads(response)
+            return Intent(
+                response_text=result["response_text"],
+                emotion=EmotionType[result["emotion"]],
+                actions=[
+                    IntentAction(
+                        type=ActionType.EXPRESSION,
+                        params={"expression": a}
+                    ) for a in result.get("actions", [])
+                ],
+                metadata={"source": "maicore", "parser": "llm"}
+            )
+        except Exception as e:
+            self.logger.error(f"LLM解析失败: {e}, 原始响应: {response}")
+            # 降级：返回默认Intent
+            return Intent(
+                response_text=text,
+                emotion=EmotionType.NEUTRAL,
+                actions=[],
+                metadata={"source": "maicore", "parser": "fallback"}
+            )
+
+    def _extract_text(self, message: MessageBase) -> str:
+        """提取文本"""
+        if not message.message_segment:
+            return ""
+
+        if hasattr(message.message_segment, "data"):
+            data = message.message_segment.data
+            if isinstance(data, str):
+                return data
+            elif isinstance(data, list):
+                # 处理seglist
+                text_parts = []
+                for seg in data:
+                    if hasattr(seg, "data") and isinstance(seg.data, str):
+                        text_parts.append(seg.data)
+                return " ".join(text_parts)
+        return ""
+```
+
+### 成本考虑
+
+**小LLM成本**（以Claude Haiku为例）：
+- 输入：~100 tokens (MaiCore回复 + prompt)
+- 输出：~50 tokens (JSON响应)
+- 成本：~$0.00025 / 次
+
+**假设每分钟处理10条弹幕**：
+- 每小时：600次
+- 每天成本：600 * 24 * $0.00025 = **$3.6/天**
+
+**优化方案**：
+- 使用更小的模型（如Qwen2.5-3B本地部署）
+- 简单情况降级到规则匹配
+- 缓存相似回复的解析结果
+
+### LLM解析 vs 规则匹配对比
+
+| 维度 | 规则匹配 | LLM解析 |
+|------|---------|---------|
+| **准确性** | ❌ 规则死板，易误判 | ✅ 上下文理解，更准确 |
+| **灵活性** | ❌ 新格式需要改代码 | ✅ 自动适应各种格式 |
+| **维护成本** | ❌ 需要维护规则库 | ✅ 只需调整prompt |
+| **扩展性** | ❌ 复杂模式难以处理 | ✅ 可处理复杂语义 |
+| **成本** | ✅ 免费 | ⚠️ 小LLM成本很低 |
+| **速度** | ✅ 极快 | ⚠️ ~100ms延迟 |
+
+---
+
+## 🎨 LocalLLMDecisionProvider实现
+
+### 设计理念
+
+直接使用LLM生成决策，返回Intent（不需要二次解析）
+
+```python
 class LocalLLMDecisionProvider:
-    """本地LLM决策Provider（可选实现）"""
+    """本地LLM决策Provider（直接返回Intent）"""
 
     def __init__(self, config: dict):
         self.config = config
-        self.model = config.get("model", "gpt-4")
-        self.api_key = config.get("api_key")
-        self.base_url = config.get("base_url", "https://api.openai.com/v1")
+        self.llm_service = LLMService(config)
         self.logger = get_logger("LocalLLMDecisionProvider")
 
-    async def setup(self, event_bus: EventBus, config: dict):
-        """初始化LLM客户端"""
-        # 订阅EventBus
-        event_bus.on("canonical.message_ready", self._on_canonical_message)
+    async def decide(self, message: NormalizedMessage) -> Intent:
+        """
+        决策接口（直接返回Intent）
 
-        self.logger.info(f"LocalLLM DecisionProvider初始化完成，模型: {self.model}")
+        Args:
+            message: 标准化消息
 
-    async def _on_canonical_message(self, event: dict):
-        """处理CanonicalMessage事件"""
-        canonical_message = event.get("data")
+        Returns:
+            Intent: 决策意图
+        """
+        # 1. 构建prompt
+        prompt = self._build_prompt(message)
 
-        # 调用LLM API
-        response_text = await self._call_llm(canonical_message.text)
+        # 2. 调用LLM
+        response = await self.llm_service.generate(
+            prompt=prompt,
+            system_prompt="你是一个AI VTuber助手...",
+            temperature=0.8
+        )
 
-        # 构建MessageBase
-        message = self._build_messagebase(canonical_message, response_text)
+        # 3. 返回Intent
+        return Intent(
+            original_text=message.text,
+            response_text=response,
+            emotion=self._detect_emotion(response),
+            actions=[],
+            metadata={"source": "local_llm"}
+        )
 
-        # 发布到EventBus
-        await self.event_bus.emit("decision.response_generated", {
-            "data": message
-        })
-
-    async def decide(self, canonical_message: CanonicalMessage):
-        """决策接口"""
-        # 调用LLM API
-        response_text = await self._call_llm(canonical_message.text)
-
-        # 构建MessageBase
-        message = self._build_messagebase(canonical_message, response_text)
-
-        return message
-
-    async def _call_llm(self, prompt: str) -> str:
-        """调用LLM API"""
-        import aiohttp
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-
-        data = {
-            "model": self.model,
-            "messages": [
-                {"role": "user", "content": prompt}
-            ]
-        }
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{self.base_url}/chat/completions",
-                headers=headers,
-                json=data
-            ) as response:
-                result = await response.json()
-                return result["choices"][0]["message"]["content"]
-
-    def _build_messagebase(self, canonical_message: CanonicalMessage, response_text: str):
-        """构建MessageBase"""
-        from maim_message import MessageBase, BaseMessageInfo, UserInfo, Seg, FormatInfo
-        # ... 构建逻辑
-
-    async def cleanup(self):
-        """清理资源"""
-        self.logger.info("LocalLLM DecisionProvider cleanup")
+    def _build_prompt(self, message: NormalizedMessage) -> str:
+        """构建prompt"""
+        # 基于结构化内容构建更智能的prompt
+        if message.content.type == "gift":
+            return f"用户送了礼物：{message.content.get_display_text()}，请回复感谢语。"
+        elif message.content.type == "text":
+            return f"用户说：{message.text}，请回复。"
+        else:
+            return f"用户输入：{message.text}，请回复。"
 ```
 
-### 3. RuleEngineDecisionProvider（可选）
+---
 
-**设计理念**：使用规则引擎进行决策，无需AI
-
-**关键特性**：
-- ✅ 基于规则匹配
-- ✅ 无需外部依赖
-- ✅ 可配置规则文件
-- ✅ 适用于简单场景
+## 🎨 RuleEngineDecisionProvider实现
 
 ```python
-from maim_message import MessageBase
-from src.core.decision_provider import DecisionProvider, CanonicalMessage
-from src.utils.logger import get_logger
-
 class RuleEngineDecisionProvider:
-    """规则引擎决策Provider（可选实现）"""
+    """规则引擎决策Provider"""
 
     def __init__(self, config: dict):
         self.config = config
@@ -305,60 +443,41 @@ class RuleEngineDecisionProvider:
         self.logger = get_logger("RuleEngineDecisionProvider")
         self._rules = []
 
-    async def setup(self, event_bus: EventBus, config: dict):
-        """初始化规则引擎"""
-        # 订阅EventBus
-        event_bus.on("canonical.message_ready", self._on_canonical_message)
+    async def decide(self, message: NormalizedMessage) -> Intent:
+        """
+        决策接口（基于规则匹配）
 
-        # 加载规则
-        await self._load_rules()
+        Args:
+            message: 标准化消息
 
-        self.logger.info(f"RuleEngine DecisionProvider初始化完成，规则文件: {self.rules_file}")
-
-    async def _on_canonical_message(self, event: dict):
-        """处理CanonicalMessage事件"""
-        canonical_message = event.get("data")
-
+        Returns:
+            Intent: 决策意图
+        """
         # 匹配规则
-        response_text = self._match_rules(canonical_message.text)
+        response_text = self._match_rules(message)
 
-        # 构建MessageBase
-        message = self._build_messagebase(canonical_message, response_text)
+        return Intent(
+            original_text=message.text,
+            response_text=response_text,
+            emotion=self._detect_emotion(response_text),
+            actions=[],
+            metadata={"source": "rule_engine"}
+        )
 
-        # 发布到EventBus
-        await self.event_bus.emit("decision.response_generated", {
-            "data": message
-        })
-
-    async def decide(self, canonical_message: CanonicalMessage):
-        """决策接口"""
-        # 匹配规则
-        response_text = self._match_rules(canonical_message.text)
-
-        # 构建MessageBase
-        message = self._build_messagebase(canonical_message, response_text)
-
-        return message
+    def _match_rules(self, message: NormalizedMessage) -> str:
+        """匹配规则"""
+        # 基于content类型匹配
+        if message.content.type == "gift":
+            return f"谢谢{message.content.user}送的{message.content.gift_name}！"
+        elif message.content.type == "text":
+            return self._generate_text_response(message.text)
+        else:
+            return "感谢支持！"
 
     async def _load_rules(self):
         """加载规则文件"""
         # 从JSON文件加载规则
         pass
-
-    def _match_rules(self, text: str) -> str:
-        """匹配规则"""
-        # 简化实现：基于关键词匹配
-        # 实际应使用复杂的规则引擎
-        pass
-
-    def _build_messagebase(self, canonical_message: CanonicalMessage, response_text: str):
-        """构建MessageBase"""
-        from maim_message import MessageBase, BaseMessageInfo, UserInfo, Seg, FormatInfo
-        # ... 构建逻辑
-
-    async def cleanup(self):
-        """清理资源"""
-        self.logger.info("RuleEngine DecisionProvider cleanup")
 ```
 
 ---
@@ -368,7 +487,8 @@ class RuleEngineDecisionProvider:
 ```python
 from typing import Dict, Any, Optional
 from src.core.event_bus import EventBus
-from src.core.decision_provider import DecisionProvider, CanonicalMessage
+from src.layers.normalization.normalized_message import NormalizedMessage
+from src.layers.decision.intent import Intent
 
 class DecisionManager:
     """决策管理器 - 管理决策Provider"""
@@ -377,12 +497,12 @@ class DecisionManager:
         self.event_bus = event_bus
         self.logger = get_logger("DecisionManager")
         self._factory = DecisionProviderFactory()
-        self._current_provider: DecisionProvider = None
-        self._provider_name: str = None
+        self._current_provider: Optional[DecisionProvider] = None
+        self._provider_name: Optional[str] = None
 
     async def setup(self, provider_name: str, config: dict):
         """设置决策Provider"""
-        provider_class = self.factory._providers.get(provider_name)
+        provider_class = self._factory.get_provider(provider_name)
         if not provider_class:
             raise ValueError(f"DecisionProvider not found: {provider_name}")
 
@@ -393,11 +513,11 @@ class DecisionManager:
         self._provider_name = provider_name
         await self._current_provider.setup(self.event_bus, config)
 
-    async def decide(self, canonical_message: CanonicalMessage):
-        """进行决策"""
+    async def decide(self, message: NormalizedMessage) -> Intent:
+        """进行决策（异步）"""
         if not self._current_provider:
             raise RuntimeError("No decision provider configured")
-        return await self._current_provider.decide(canonical_message)
+        return await self._current_provider.decide(message)
 
     async def switch_provider(self, provider_name: str, config: dict):
         """切换决策Provider（运行时）"""
@@ -421,6 +541,14 @@ default_provider = "maicore"  # 可切换为 local_llm 或 rule_engine
 [decision.providers.maicore]
 host = "127.0.0.1"
 port = 8000
+platform = "amaidesu"
+
+# LLM意图解析配置
+[decision.providers.maicore.intent_parser]
+model = "claude-3-5-haiku-20241022"  # 或 "qwen2.5-3b"
+temperature = 0.1
+timeout_seconds = 5
+enable_fallback = true  # LLM失败时降级到规则匹配
 
 [decision.providers.local_llm]
 model = "gpt-4"
@@ -440,25 +568,31 @@ rules_file = "rules.json"
 - ✅ 支持运行时切换
 - ✅ 社区开发者可以开发自定义DecisionProvider
 
-### 2. 解耦性
+### 2. 异步特性
+- ✅ 符合AI VTuber的异步处理特性
+- ✅ MaiCoreDecisionProvider支持异步返回
+- ✅ 使用Future机制管理请求-响应
+
+### 3. LLM意图解析
+- ✅ 比规则更智能、更灵活
+- ✅ 适应各种文本格式
+- ✅ 成本可控（小LLM）
+
+### 4. 解耦性
 - ✅ AmaidesuCore不关心外部通信
-- ✅ DecisionProvider自己管理通信
+- ✅ DecisionProvider自己管理通信和解析
 - ✅ 通过EventBus松耦合
 
-### 3. 灵活性
+### 5. 灵活性
 - ✅ 可以混合多种决策方式
 - ✅ 可以A/B测试不同DecisionProvider
 - ✅ 支持本地LLM、规则引擎等
-
-### 4. 可扩展性
-- ✅ 社区开发者可以实现自定义DecisionProvider
-- ✅ 支持新的通信协议
-- ✅ 不限制决策算法
 
 ---
 
 ## 🔗 相关文档
 
-- [7层架构设计](./layer_refactoring.md)
+- [5层架构设计](./layer_refactoring.md)
 - [多Provider并发设计](./multi_provider.md)
 - [AmaidesuCore重构设计](./core_refactoring.md)
+- [LLM服务设计](./llm_service.md)
