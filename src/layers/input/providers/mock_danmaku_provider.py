@@ -1,102 +1,138 @@
 """
-MockDanmakuProvider - 模拟弹幕Provider
+Mock Danmaku Input Provider
 
-生成随机弹幕用于测试。
+模拟弹幕输入Provider，从JSONL文件读取消息并发送到EventBus。
 """
 
 import asyncio
-import random
-from typing import Any, AsyncIterator, Dict
+import json
+from pathlib import Path
+from typing import AsyncIterator
 
 from src.core.base.input_provider import InputProvider
 from src.core.base.raw_data import RawData
 from src.utils.logger import get_logger
 
 
-class MockDanmakuProvider(InputProvider):
+class MockDanmakuInputProvider(InputProvider):
     """
-    模拟弹幕Provider
+    模拟弹幕输入Provider
 
-    生成随机弹幕用于测试。
+    从JSONL文件读取消息并按设定速率发送到EventBus。
     """
 
-    # 模拟弹幕内容
-    DANMAKU_TEMPLATES = [
-        "这是一个测试弹幕",
-        "666666",
-        "主播好厉害！",
-        "哈哈哈哈",
-        "???",
-        "原来如此",
-        "这是什么操作",
-        "学到了学到了",
-        "太强了吧",
-        "加油加油！",
-        "下次一定",
-        "真的吗？我不信",
-        "卧槽，牛逼！",
-        "这就很离谱",
-        "哈哈哈哈哈",
-        "理解一下",
-        "可以可以",
-        "好耶！",
-        "泪目了",
-        "破防了",
-    ]
-
-    def __init__(self, config: Dict[str, Any]):
-        """
-        初始化MockDanmakuProvider
-
-        Args:
-            config: 配置字典
-        """
+    def __init__(self, config: dict):
         super().__init__(config)
-        self.logger = get_logger("MockDanmakuProvider")
-        self._running = False
+        self.logger = get_logger("MockDanmakuInputProvider")
 
-        # 读取配置
-        self.send_interval = max(0.1, config.get("send_interval", 1.0))
-        self.min_interval = max(0.1, config.get("min_interval", 1.0))
-        self.max_interval = max(self.min_interval, config.get("max_interval", 3.0))
+        # 从配置中读取参数
+        self.log_filename = self.config.get("log_file_path", "msg_default.jsonl")
+        self.send_interval = max(0.1, self.config.get("send_interval", 1.0))
+        self.loop_playback = self.config.get("loop_playback", True)
+        self.start_immediately = self.config.get("start_immediately", True)
 
-        self.logger.info(f"MockDanmakuProvider初始化完成 (间隔: {self.send_interval}s)")
+        # 获取插件目录
+        plugin_dir = Path(__file__).resolve().parent
+        self.data_dir = plugin_dir / "data"
+
+        # 确保data目录存在
+        try:
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            self.logger.error(f"创建数据目录失败: {self.data_dir}: {e}")
+
+        # 最终的日志文件路径
+        self.log_file_path = self.data_dir / self.log_filename
+
+        # 状态变量
+        self._message_lines: list = []
+        self._current_line_index: int = 0
+        self._stop_event = asyncio.Event()
 
     async def _collect_data(self) -> AsyncIterator[RawData]:
         """
-        生成模拟弹幕
+        从JSONL文件采集数据
 
         Yields:
-            RawData: 原始弹幕数据
+            RawData: 包含JSON消息的原始数据
         """
-        user_counter = 1000
+        # 加载消息
+        await self._load_message_lines()
 
-        self.logger.info("开始生成模拟弹幕...")
+        if not self._message_lines:
+            self.logger.warning(f"未从 '{self.log_file_path}' 加载任何消息。")
+            return
 
-        while self.is_running:
-            # 生成随机弹幕
-            user_id = f"user_{random.randint(1000, 9999)}"
-            user_nickname = f"用户{user_counter % 100}"
-            user_counter += 1
+        self.logger.info(f"模拟弹幕发送循环开始 (源: {self.log_file_path.name})")
 
-            danmaku_text = random.choice(self.DANMAKU_TEMPLATES)
+        while not self._stop_event.is_set():
+            if not self._message_lines:
+                self.logger.warning("消息列表为空，停止发送循环。")
+                break
 
-            # 创建RawData
-            yield RawData(
-                content=danmaku_text,
-                source="mock_danmaku",
-                data_type="text",
-                metadata={"user_id": user_id, "user_name": user_nickname, "platform": "mock"},
-            )
+            # 检查是否到达文件末尾
+            if self._current_line_index >= len(self._message_lines):
+                if self.loop_playback:
+                    self.logger.info("到达文件末尾，循环播放已启用，重置索引。")
+                    self._current_line_index = 0
+                else:
+                    self.logger.info("到达文件末尾，循环播放已禁用，停止发送。")
+                    break
 
-            self.logger.debug(f"生成弹幕: {user_nickname}: {danmaku_text}")
+            # 重置后再次检查索引
+            if self._current_line_index >= len(self._message_lines):
+                self.logger.warning("索引仍然超出范围，停止循环。")
+                break
 
-            # 随机等待
-            wait_time = random.uniform(self.min_interval, self.max_interval)
-            await asyncio.sleep(wait_time)
+            line = self._message_lines[self._current_line_index]
+            self._current_line_index += 1
 
-        self.logger.info("模拟弹幕生成结束")
+            try:
+                # 解析JSON
+                data = json.loads(line)
+
+                # 创建RawData
+                raw_data = RawData(
+                    content=data, source="mock_danmaku", data_type="message", timestamp=asyncio.get_event_loop().time()
+                )
+
+                self.logger.debug(f"发送模拟消息 (行 {self._current_line_index}): {str(data)[:50]}...")
+
+                # 返回数据
+                yield raw_data
+
+                # 等待间隔时间
+                await asyncio.sleep(self.send_interval)
+
+            except asyncio.CancelledError:
+                self.logger.info("模拟弹幕发送循环被取消。")
+                break
+            except json.JSONDecodeError as e:
+                self.logger.error(f"JSON 解析错误: {e}. 行内容: {line[:100]}...")
+            except Exception as e:
+                self.logger.error(f"发送模拟消息时发生错误: {e}", exc_info=True)
+
+        self.logger.info("模拟弹幕发送循环已结束。")
+
+    async def _load_message_lines(self):
+        """从 JSONL 文件加载消息行。"""
+        self._message_lines = []
+        self._current_line_index = 0
+
+        if not self.log_file_path.exists() or not self.log_file_path.is_file():
+            self.logger.error(f"日志文件未找到或不是文件: {self.log_file_path}")
+            return
+
+        try:
+            with open(self.log_file_path, "r", encoding="utf-8") as f:
+                self._message_lines = [line.strip() for line in f if line.strip()]
+            self.logger.info(f"成功从 '{self.log_file_path.name}' 加载 {len(self._message_lines)} 行消息。")
+        except Exception as e:
+            self.logger.error(f"读取日志文件时出错: {self.log_file_path}: {e}", exc_info=True)
+            self._message_lines = []
 
     async def _cleanup(self):
         """清理资源"""
-        self.logger.info("MockDanmakuProvider cleanup完成")
+        self._stop_event.set()
+        self._message_lines = []
+        self._current_line_index = 0
