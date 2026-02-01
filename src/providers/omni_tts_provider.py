@@ -27,7 +27,7 @@ TTS_DEPENDENCIES_OK = False
 try:
     import requests
     import sounddevice as sd
-    import soundfile as sf
+    import soundfile as sf  # noqa: F401
 
     TTS_DEPENDENCIES_OK = True
 except ImportError:

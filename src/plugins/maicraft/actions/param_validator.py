@@ -40,9 +40,7 @@ class ParamValidator:
                 if hasattr(typed_dict_class, "__required_keys__")
                 else set(hints.keys())
             )
-            optional_keys = (
-                typed_dict_class.__optional_keys__ if hasattr(typed_dict_class, "__optional_keys__") else set()
-            )
+            (typed_dict_class.__optional_keys__ if hasattr(typed_dict_class, "__optional_keys__") else set())
 
             # 检查是否缺少必需字段
             for key in required_keys:

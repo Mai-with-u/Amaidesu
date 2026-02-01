@@ -5,6 +5,7 @@ Bilibili 官方弹幕+Minecraft转发 InputProvider
 """
 
 import asyncio
+import contextlib
 from typing import AsyncIterator, Dict, Any, Optional
 
 from .client.websocket_client import BiliWebSocketClient

@@ -99,7 +99,7 @@ class TestBiliDanmakuPlugin(PluginTestBase):
         plugin = plugin_factory(BiliDanmakuPlugin, config)
         event_bus = MockEventBus()
 
-        providers = await plugin.setup(event_bus, config)
+        await plugin.setup(event_bus, config)
 
         # 清理插件
         await plugin.cleanup()
@@ -152,4 +152,4 @@ class TestBiliDanmakuInputProvider:
         """测试无效配置"""
         with pytest.raises(ValueError):
             config = {"room_id": -1}
-            provider = BiliDanmakuInputProvider(config)
+            BiliDanmakuInputProvider(config)

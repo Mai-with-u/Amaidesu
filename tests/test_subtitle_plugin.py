@@ -58,8 +58,8 @@ class TestSubtitleOutputProvider:
         assert provider.window_height == 100
         assert provider.font_family == "Microsoft YaHei UI"
         assert provider.font_size == 28
-        assert provider.outline_enabled == True
-        assert provider.auto_hide == True
+        assert provider.outline_enabled
+        assert provider.auto_hide
         assert provider.fade_delay_seconds == 5
 
     @pytest.mark.asyncio
@@ -142,7 +142,7 @@ class TestSubtitlePlugin:
     async def test_plugin_cleanup(self, plugin_config, event_bus):
         """测试Plugin清理"""
         plugin = SubtitlePlugin(plugin_config)
-        providers = await plugin.setup(event_bus, plugin_config)
+        await plugin.setup(event_bus, plugin_config)
 
         # 清理
         await plugin.cleanup()

@@ -7,12 +7,11 @@
 
 import sys
 from pathlib import Path
+from typing import Dict, Any
 
 # 添加项目根目录到Python路径
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
-
-from typing import Dict, Any
 
 
 class ConfigCompatibilityTester:
@@ -69,7 +68,7 @@ class ConfigCompatibilityTester:
             # 检查旧的enable_xxx格式
             is_enabled = config.get(old_format_key, False)
 
-            assert is_enabled == True
+            assert is_enabled
             self.record_result("旧插件配置格式 - enable_xxx", True, f"插件 '{plugin_name}' 启用状态: {is_enabled}")
         except Exception as e:
             self.record_result("旧插件配置格式 - enable_xxx", False, str(e))
@@ -93,9 +92,9 @@ class ConfigCompatibilityTester:
             plugin2_old_key = f"enable_{plugin2}"
             plugin2_enabled = config.get(plugin2_old_key, False)
 
-            assert plugin1_enabled == True
+            assert plugin1_enabled
             # 注意：如果enabled列表存在，旧格式应该被忽略
-            assert plugin2_enabled == True  # 如果没有enabled列表
+            assert plugin2_enabled  # 如果没有enabled列表
             self.record_result("混合插件配置格式", True, f"插件1: {plugin1_enabled}, 插件2: {plugin2_enabled}")
         except Exception as e:
             self.record_result("混合插件配置格式", False, str(e))
@@ -123,8 +122,8 @@ class ConfigCompatibilityTester:
             }
 
             # 验证配置结构
-            assert config.get("enabled") == True
-            assert config.get("concurrent_rendering") == True
+            assert config.get("enabled")
+            assert config.get("concurrent_rendering")
             assert config.get("error_handling") == "continue"
             assert "tts" in config["outputs"]
             assert "subtitle" in config["outputs"]
@@ -153,7 +152,7 @@ class ConfigCompatibilityTester:
             }
 
             # 验证配置结构
-            assert config.get("enabled") == True
+            assert config.get("enabled")
             assert "console_input" in config["inputs"]
             assert "bili_danmaku" in config["inputs"]
             assert config["inputs_config"]["bili_danmaku"]["room_id"] == "123456"
@@ -187,7 +186,7 @@ class ConfigCompatibilityTester:
             }
 
             # 验证配置结构
-            assert config.get("enabled") == True
+            assert config.get("enabled")
             assert config.get("active_provider") == "maicore"
             assert "maicore" in config["providers"]
             assert config["providers_config"]["maicore"]["host"] == "127.0.0.1"

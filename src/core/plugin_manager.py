@@ -3,7 +3,7 @@ import importlib
 import inspect
 import os
 import sys
-from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 # 避免循环导入，使用 TYPE_CHECKING
 if TYPE_CHECKING:
@@ -173,9 +173,7 @@ class PluginManager:
                         self.logger.info(f"插件 '{plugin_class.__name__}' 返回了 {len(providers)} 个 Provider")
 
                         self.loaded_plugins[plugin_name] = plugin_instance
-                        self.logger.info(
-                            f"成功加载并设置插件: {plugin_class.__name__} (来自 {plugin_name}/plugin.py)"
-                        )
+                        self.logger.info(f"成功加载并设置插件: {plugin_class.__name__} (来自 {plugin_name}/plugin.py)")
                     else:
                         self.logger.warning(f"未能为模块 '{module_import_path}' 找到并验证有效的插件类。")
 

@@ -22,7 +22,7 @@ _fastapi_available = False
 _uvicorn_available = False
 
 try:
-    from fastapi import FastAPI, Request, Response
+    from fastapi import FastAPI
     from fastapi.responses import JSONResponse
 
     _fastapi_available = True

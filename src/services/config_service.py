@@ -13,7 +13,6 @@ from typing import Dict, Any, Optional
 
 from src.utils.logger import get_logger
 from src.utils.config import (
-    load_config,
     load_component_specific_config,
     merge_component_configs,
     initialize_configurations,

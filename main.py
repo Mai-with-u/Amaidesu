@@ -92,9 +92,7 @@ def load_config() -> Tuple[ConfigService, Dict[str, Any], bool, bool, bool]:
         sys.exit(1)
 
 
-def exit_if_config_copied(
-    main_cfg_copied: bool, plugin_cfg_copied: bool, pipeline_cfg_copied: bool
-) -> None:
+def exit_if_config_copied(main_cfg_copied: bool, plugin_cfg_copied: bool, pipeline_cfg_copied: bool) -> None:
     """若配置文件为新创建，提示用户并退出。"""
     box = "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
 
@@ -374,9 +372,7 @@ async def main() -> None:
         logger.info("检测到 KeyboardInterrupt，开始清理...")
 
     restore_signal_handlers(orig_sigint, orig_sigterm)
-    await run_shutdown(
-        flow_coordinator, canonical_layer, input_layer, plugin_manager, llm_service, core
-    )
+    await run_shutdown(flow_coordinator, canonical_layer, input_layer, plugin_manager, llm_service, core)
 
 
 if __name__ == "__main__":

@@ -228,7 +228,7 @@ async def test_disabled_pipeline():
     """测试禁用的管道"""
     print("\n=== 测试禁用的CommandRouter ===")
 
-    core = AmaidesuCore(platform="test", maicore_host="localhost", maicore_port=8080, event_bus=EventBus())
+    AmaidesuCore(platform="test", maicore_host="localhost", maicore_port=8080, event_bus=EventBus())
 
     pipeline_config = {"enabled": False, "use_events": True}
     pipeline = CommandRouterPipeline(pipeline_config)

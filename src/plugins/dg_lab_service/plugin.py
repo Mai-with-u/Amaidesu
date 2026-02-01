@@ -34,7 +34,7 @@ class DGLabServiceProvider:
 
         # 检查依赖
         try:
-            import aiohttp
+            import aiohttp  # noqa: F401
 
             self.aiohttp_available = True
         except ImportError:

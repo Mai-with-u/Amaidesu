@@ -88,7 +88,7 @@ class SimilarMessageFilterPipeline(MessagePipeline):
         self._last_cleanup_time = now
 
         # 清理前的缓存状态
-        cache_stats_before = {
+        {
             "group_count": len(self.message_cache),
             "message_count": sum(len(queue) for queue in self.message_cache.values()),
         }
@@ -191,7 +191,7 @@ class SimilarMessageFilterPipeline(MessagePipeline):
                     try:
                         content = str(content)
                         self.logger.warning(f"文本消息内容不是字符串类型，已尝试转换: {content}")
-                    except:
+                    except Exception:
                         self.logger.warning(f"文本消息内容不是字符串类型且无法转换: {type(content)}")
                         return None
                 self.logger.debug(f"提取到文本消息内容: '{content}'")
@@ -265,7 +265,7 @@ class SimilarMessageFilterPipeline(MessagePipeline):
             cache_size = len(self.message_cache[group_id])
             self.logger.debug(f"当前群组缓存消息数量: {cache_size}")
 
-            for cached_ts, cached_msg_id, cached_content, cached_user_id in self.message_cache[group_id]:
+            for cached_ts, _cached_msg_id, cached_content, cached_user_id in self.message_cache[group_id]:
                 if cached_ts < cutoff_time:
                     continue  # 跳过过期消息
 

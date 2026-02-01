@@ -38,8 +38,8 @@ class ActionType(Enum):
         """
         try:
             return cls(action_type.lower())
-        except ValueError:
-            raise ValueError(f"未知的动作类型: {action_type}")
+        except ValueError as e:
+            raise ValueError(f"未知的动作类型: {action_type}") from e
 
     @classmethod
     def all_types(cls) -> list[str]:

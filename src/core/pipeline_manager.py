@@ -448,7 +448,7 @@ class PipelineManager:
 
                     self.logger.debug(f"TextPipeline {pipeline_name} 处理完成 (耗时 {duration_ms:.2f}ms)")
 
-                except asyncio.TimeoutError:
+                except asyncio.TimeoutError as timeout_error:
                     error = PipelineException(pipeline_name, f"处理超时 ({pipeline.timeout_seconds}s)")
                     self.logger.error(f"TextPipeline 超时: {error}")
 
@@ -456,7 +456,7 @@ class PipelineManager:
                     stats.error_count += 1
 
                     if pipeline.error_handling == PipelineErrorHandling.STOP:
-                        raise error
+                        raise error from timeout_error
                     elif pipeline.error_handling == PipelineErrorHandling.DROP:
                         stats.dropped_count += 1
                         return None
@@ -473,7 +473,7 @@ class PipelineManager:
                     stats.error_count += 1
 
                     if pipeline.error_handling == PipelineErrorHandling.STOP:
-                        raise error
+                        raise error from e
                     elif pipeline.error_handling == PipelineErrorHandling.DROP:
                         stats.dropped_count += 1
                         return None

@@ -13,6 +13,7 @@ GPTSoVITS OutputProvider - Layer 6 Rendering层实现
 import asyncio
 import base64
 import struct
+import sys
 from typing import Dict, Any, Optional, TYPE_CHECKING
 from collections import deque
 import re
@@ -30,7 +31,7 @@ if TYPE_CHECKING:
 TTS_DEPENDENCIES_OK = False
 try:
     import sounddevice as sd
-    import soundfile as sf
+    import soundfile as sf  # noqa: F401
     import requests
 except ImportError:
     print("依赖缺失: 请运行 'pip install requests sounddevice soundfile' 来使用音频播放功能。", file=sys.stderr)

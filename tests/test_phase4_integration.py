@@ -62,7 +62,6 @@ class TestOutputProviderManagerConfigLoading:
         """测试加载Provider时依赖缺失"""
         config = {
             "enabled": True,
-            "outputs": ["tts"],
             "outputs": {
                 "tts": {"type": "tts", "voice": "test"},
             },

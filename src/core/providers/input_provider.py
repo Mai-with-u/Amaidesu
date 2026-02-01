@@ -84,7 +84,7 @@ class InputProvider(ABC):
         """
         pass
 
-    async def _cleanup(self):
+    async def _cleanup(self):  # noqa: B027
         """
         清理资源(子类可选重写)
 

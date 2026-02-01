@@ -146,7 +146,7 @@ async def test_screen_monitor_plugin():
         try:
             await plugin.cleanup()
             print("🧹 插件已清理")
-        except:
+        except Exception:
             pass
 
 

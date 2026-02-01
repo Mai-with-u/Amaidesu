@@ -318,7 +318,7 @@ class TestVTSProviderIntegration:
     async def test_real_vts_rendering(self, vts_config, mock_event_bus):
         """测试真实的VTS渲染（需要VTS Studio运行）"""
         pytest.skip("需要VTS Studio运行，手动测试")
-        provider = VTSProvider(vts_config, mock_event_bus)
+        VTSProvider(vts_config, mock_event_bus)
         # 实际测试需要VTS Studio运行
         pass
 

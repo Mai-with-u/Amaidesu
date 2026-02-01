@@ -135,8 +135,8 @@ class VTSProvider(OutputProvider):
         # 初始化pyvts（已移到独立模块）
 
         try:
-            import pyvts
-            from pyvts import vts, vts_request
+            import pyvts  # noqa: F401
+            from pyvts import vts, vts_request  # noqa: F401
 
             plugin_info = {
                 "plugin_name": "Amaidesu_VTS_OutputProvider",

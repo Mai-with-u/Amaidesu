@@ -9,9 +9,9 @@ from unittest.mock import MagicMock, AsyncMock, patch
 # Mock pyvts before importing plugin
 sys.modules["pyvts"] = MagicMock()
 
-from src.plugins.vtube_studio.plugin import VTubeStudioPlugin
-from src.plugins.vtube_studio.providers.vts_output_provider import VTSOutputProvider
-from src.core.providers.base import RenderParameters
+from src.plugins.vtube_studio.plugin import VTubeStudioPlugin  # noqa: E402
+from src.plugins.vtube_studio.providers.vts_output_provider import VTSOutputProvider  # noqa: E402
+from src.core.providers.base import RenderParameters  # noqa: E402
 
 
 @pytest.fixture

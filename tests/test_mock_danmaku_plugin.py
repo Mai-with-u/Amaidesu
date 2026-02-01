@@ -47,8 +47,8 @@ class TestMockDanmakuInputProvider:
         provider = MockDanmakuInputProvider(test_config)
 
         assert provider.send_interval == 0.1
-        assert provider.loop_playback == False
-        assert provider.start_immediately == True
+        assert not provider.loop_playback
+        assert provider.start_immediately
 
     @pytest.mark.asyncio
     async def test_provider_collect_data(self, test_config):
@@ -130,7 +130,7 @@ class TestMockDanmakuPlugin:
     async def test_plugin_cleanup(self, plugin_config, event_bus):
         """测试Plugin清理"""
         plugin = MockDanmakuPlugin(plugin_config)
-        providers = await plugin.setup(event_bus, plugin_config)
+        await plugin.setup(event_bus, plugin_config)
 
         # 清理
         await plugin.cleanup()

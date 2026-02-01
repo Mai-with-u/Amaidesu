@@ -52,10 +52,10 @@ async def test_maicore_provider_connect_disconnect(event_bus_mock, maicore_confi
     await provider.setup(event_bus_mock, maicore_config)
     await provider.connect()
 
-    assert provider._is_connected == True
+    assert provider._is_connected
 
     await provider.disconnect()
-    assert provider._is_connected == False
+    assert not provider._is_connected
 
 
 @pytest.mark.asyncio
@@ -113,7 +113,7 @@ async def test_maicore_provider_cleanup(event_bus_mock, maicore_config):
 
     await provider.cleanup()
 
-    assert provider._is_connected == False
+    assert not provider._is_connected
     assert provider._router is None
 
 

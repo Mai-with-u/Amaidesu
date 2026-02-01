@@ -15,8 +15,8 @@ from datetime import datetime
 
 # 导入音频处理库
 try:
-    from pydub import AudioSegment
-    from pydub.generators import WhiteNoise
+    from pydub import AudioSegment  # noqa: F401
+    from pydub.generators import WhiteNoise  # noqa: F401
 
     PYDUB_AVAILABLE = True
 except ImportError:
@@ -91,8 +91,8 @@ class OmniTTS:
         global PYDUB_AVAILABLE
         if not PYDUB_AVAILABLE:
             try:
-                from pydub import AudioSegment
-                from pydub.generators import WhiteNoise
+                from pydub import AudioSegment  # noqa: F401
+                from pydub.generators import WhiteNoise  # noqa: F401
 
                 PYDUB_AVAILABLE = True
                 print("成功导入pydub库")
@@ -103,7 +103,7 @@ class OmniTTS:
 
         # 尝试导入OpenAI库
         try:
-            import openai
+            import openai  # noqa: F401
 
             self.openai_available = True
         except ImportError:

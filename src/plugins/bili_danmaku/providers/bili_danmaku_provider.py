@@ -117,7 +117,7 @@ class BiliDanmakuInputProvider(InputProvider):
                     new_danmakus = []
                     for item in room_data:
                         timestamp = item.get("check_info", {}).get("ts")
-                        uid = item.get("uid")
+                        item.get("uid")
 
                         if timestamp and timestamp > self._latest_timestamp:
                             new_danmakus.append(item)

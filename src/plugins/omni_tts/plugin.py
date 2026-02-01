@@ -21,12 +21,12 @@ class OmniTTSOutputProvider(OutputProvider):
 
         # 检查依赖
         try:
-            import aiohttp
-            import sounddevice as sd
-            import soundfile as sf
+            import aiohttp  # noqa: F401
+            import sounddevice as sd  # noqa: F401
+            import soundfile as sf  # noqa: F401
         except ImportError as e:
             self.logger.error(f"依赖缺失: {e}")
-            raise ImportError("请安装必要依赖: pip install aiohttp sounddevice soundfile")
+            raise ImportError("请安装必要依赖: pip install aiohttp sounddevice soundfile") from e
 
         # 初始化 OmniTTS
         try:
@@ -152,7 +152,7 @@ class OmniTTSOutputProvider(OutputProvider):
         try:
             import soundfile as sf
             import sounddevice as sd
-            import numpy as np
+            import numpy as np  # noqa: F401
             import time
         except ImportError as e:
             self.logger.error(f"缺少音频库: {e}")

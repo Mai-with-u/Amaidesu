@@ -93,7 +93,7 @@ class ReadPingmuPlugin(Plugin):
             max_cached_images = config.get("max_cached_images", 5)
 
             # 消息配置
-            message_config = config.get("message", {})
+            config.get("message", {})
 
             # 创建屏幕阅读器
             self.screen_reader = ScreenReader(

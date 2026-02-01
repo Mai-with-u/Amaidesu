@@ -94,7 +94,7 @@ class LLMBackend(ABC):
         """
         pass
 
-    async def cleanup(self) -> None:
+    async def cleanup(self) -> None:  # noqa: B027
         """清理资源（子类可选重写）"""
         pass
 

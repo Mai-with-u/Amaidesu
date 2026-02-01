@@ -12,7 +12,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from tests.test_plugin_utils import (
+from tests.test_plugin_utils import (  # noqa: E402
     MockProvider,
     MockInputProvider,
     MockDecisionProvider,
@@ -22,7 +22,7 @@ from tests.test_plugin_utils import (
     assert_plugin_info_valid,
     assert_provider_implements_protocol,
 )
-from src.core.data_types.raw_data import RawData
+from src.core.data_types.raw_data import RawData  # noqa: E402
 
 
 # ============================================================================
@@ -399,7 +399,7 @@ class TestIntegration(PluginTestBase):
         event_bus = MockEventBus()
 
         # 创建Provider并监听事件
-        provider = MockDecisionProvider({})
+        MockDecisionProvider({})
 
         received_events = []
 

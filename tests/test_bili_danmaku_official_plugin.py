@@ -101,7 +101,7 @@ class TestBiliDanmakuOfficialPlugin(PluginTestBase):
         plugin = plugin_factory(BiliDanmakuOfficialPlugin, config)
         event_bus = MockEventBus()
 
-        providers = await plugin.setup(event_bus, config)
+        await plugin.setup(event_bus, config)
 
         # 清理插件
         await plugin.cleanup()
@@ -139,4 +139,4 @@ class TestBiliDanmakuOfficialInputProvider:
                 "id_code": "test",
                 # 缺少其他必需配置
             }
-            provider = BiliDanmakuOfficialInputProvider(config)
+            BiliDanmakuOfficialInputProvider(config)

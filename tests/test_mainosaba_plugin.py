@@ -49,7 +49,7 @@ class TestMainosabaPlugin:
     @pytest.mark.asyncio
     async def test_cleanup(self, plugin, event_bus):
         """测试插件cleanup"""
-        providers = await plugin.setup(event_bus, plugin.config)
+        await plugin.setup(event_bus, plugin.config)
         await plugin.cleanup()
         # 只要不抛出异常就算成功
 

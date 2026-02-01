@@ -6,6 +6,9 @@ from typing import Dict, Any, List
 from src.core.providers.input_provider import InputProvider
 from src.utils.logger import get_logger
 
+# --- Provider Imports ---
+from src.plugins.bili_danmaku.providers.bili_danmaku_provider import BiliDanmakuInputProvider
+
 
 class BiliDanmakuPlugin:
     """

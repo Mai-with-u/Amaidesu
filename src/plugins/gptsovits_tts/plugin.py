@@ -13,6 +13,7 @@ GPT-SoVITS TTS Plugin - 新架构版本
 """
 
 import os
+import sys
 from typing import Dict, Any, List
 
 # --- Amaidesu Core Imports ---
@@ -22,8 +23,6 @@ from src.utils.logger import get_logger
 from src.plugins.gptsovits_tts.providers.gptsovits_tts_provider import GPTSoVITSOutputProvider
 
 # --- Configuration Imports ---
-import tomllib
-
 try:
     import tomllib
 except ModuleNotFoundError:

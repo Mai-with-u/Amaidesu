@@ -3,7 +3,7 @@ Understanding层单元测试
 """
 
 import pytest
-from src.understanding.intent import Intent
+from src.understanding.intent import Intent, EmotionType, ActionType, IntentAction
 from src.understanding.response_parser import ResponseParser
 from maim_message import MessageBase, BaseMessageInfo, UserInfo, Seg, FormatInfo
 
@@ -34,44 +34,39 @@ def response_parser():
 
 def test_intent_creation():
     """测试Intent创建"""
-    emotion = Emotion(primary="happy", secondary=None, confidence=0.9)
-    action = Action(type="speak", data={"text": "测试"})
+    emotion = EmotionType.HAPPY
+    action = IntentAction(type=ActionType.TEXT, params={"text": "测试"})
 
     intent = Intent(
-        text="测试文本",
+        original_text="测试文本",
         emotion=emotion,
         response_text="这是响应",
         actions=[action],
         metadata={"key": "value"},
     )
 
-    assert intent.text == "测试文本"
-    assert intent.emotion.primary == "happy"
-    assert intent.emotion.confidence == 0.9
+    assert intent.original_text == "测试文本"
+    assert intent.emotion == EmotionType.HAPPY
     assert len(intent.actions) == 1
-    assert intent.actions[0].type == "speak"
+    assert intent.actions[0].type == ActionType.TEXT
 
 
-def test_emotion_creation():
-    """测试Emotion创建"""
-    emotion1 = Emotion(primary="happy", secondary="excited", confidence=0.8)
-    assert emotion1.primary == "happy"
-    assert emotion1.secondary == "excited"
-    assert emotion1.confidence == 0.8
-
-    emotion2 = Emotion(primary="sad", secondary=None, confidence=1.0)
-    assert emotion2.secondary is None
+def test_emotion_type_enum():
+    """测试EmotionType枚举"""
+    assert EmotionType.HAPPY == "happy"
+    assert EmotionType.SAD == "sad"
+    assert EmotionType.NEUTRAL == "neutral"
 
 
-def test_action_creation():
-    """测试Action创建"""
-    action1 = Action(type="speak", data={"text": "你好", "speed": 1.0})
-    assert action1.type == "speak"
-    assert action1.data["text"] == "你好"
+def test_intent_action_creation():
+    """测试IntentAction创建"""
+    action1 = IntentAction(type=ActionType.TEXT, params={"text": "你好", "speed": 1.0})
+    assert action1.type == ActionType.TEXT
+    assert action1.params["text"] == "你好"
 
-    action2 = Action(type="expression", data={"emotion": "smile"})
-    assert action2.type == "expression"
-    assert action2.data["emotion"] == "smile"
+    action2 = IntentAction(type=ActionType.EXPRESSION, params={"emotion": "smile"})
+    assert action2.type == ActionType.EXPRESSION
+    assert action2.params["emotion"] == "smile"
 
 
 def test_response_parser_extract_text(response_parser, sample_message):
@@ -110,9 +105,9 @@ async def test_response_parser_parse(response_parser, sample_message):
     """测试解析MessageBase为Intent"""
     intent = await response_parser.parse(sample_message)
 
-    assert intent.text == "你好"
+    assert intent.original_text == "你好"
     assert intent.emotion is not None
-    assert isinstance(intent.emotion, Emotion)
+    assert isinstance(intent.emotion, EmotionType)
     assert len(intent.actions) >= 0
     assert "source" in intent.metadata
 
@@ -121,13 +116,13 @@ def test_response_parser_emotion_recognition(response_parser):
     """测试情感识别"""
     # 基于规则的情感识别
     emotion1 = response_parser._recognize_emotion("哈哈，太搞笑了")
-    assert emotion1.primary == "happy"
+    assert emotion1 == EmotionType.HAPPY
 
     emotion2 = response_parser._recognize_emotion("我很难过")
-    assert emotion2.primary == "sad"
+    assert emotion2 == EmotionType.SAD
 
     emotion3 = response_parser._recognize_emotion("你真是让我生气")
-    assert emotion3.primary == "angry"
+    assert emotion3 == EmotionType.ANGRY
 
 
 def test_response_parser_action_extraction(response_parser):
@@ -135,26 +130,26 @@ def test_response_parser_action_extraction(response_parser):
     # 提取指令类动作
     text1 = "请说你好"
     intent1 = Intent(
-        text=text1,
-        emotion=Emotion(primary="neutral", secondary=None, confidence=0.5),
+        original_text=text1,
+        emotion=EmotionType.NEUTRAL,
         response_text="",
         actions=[],
         metadata={},
     )
     actions1 = response_parser._extract_actions(text1, intent1)
-    assert any(a.type == "speak" for a in actions1)
+    assert any(a.type == ActionType.TEXT for a in actions1)
 
     # 提取表情类动作
     text2 = "请笑一下"
     intent2 = Intent(
-        text=text2,
-        emotion=Emotion(primary="neutral", secondary=None, confidence=0.5),
+        original_text=text2,
+        emotion=EmotionType.NEUTRAL,
         response_text="",
         actions=[],
         metadata={},
     )
     actions2 = response_parser._extract_actions(text2, intent2)
-    assert any(a.type == "expression" for a in actions2)
+    assert any(a.type == ActionType.EXPRESSION for a in actions2)
 
 
 def test_canonical_message_from_message_base():
