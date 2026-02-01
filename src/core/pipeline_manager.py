@@ -287,10 +287,6 @@ class PipelineManager:
 
         self.logger.info(f"管道已注册: {pipeline.__class__.__name__} (方向: {direction}, 优先级: {pipeline.priority})")
 
-    def _ensure_sorted(self) -> None:
-        """确保管道列表按优先级排序 (此方法已废弃，请使用带有方向的方法)"""
-        pass  # 保留为空以防万一，但不应再被调用
-
     def _ensure_outbound_sorted(self) -> None:
         """确保出站管道列表按优先级排序"""
         if not self._outbound_sorted:
