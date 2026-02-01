@@ -1,10 +1,27 @@
 """
 ResponseParser - 解析MessageBase为Intent
 
-职责:
-- 从MessageBase中提取文本内容
-- 从MessageBase中解析表情和热键
-- 构建Intent对象
+⚠️ **已废弃**（Deprecated - 5层架构）
+
+此组件在 5 层架构中已被废弃，功能已迁移到：
+- IntentParser: 位于 src/layers/decision/intent_parser.py
+
+旧架构（7层）的职责：
+- UnderstandingLayer 使用 ResponseParser 将 MessageBase 解析为 Intent
+- 通过关键词匹配提取情感和动作
+
+旧数据流:
+    DecisionProvider → MessageBase → ResponseParser → Intent → UnderstandingLayer
+
+新数据流（5层）:
+    DecisionProvider.decide() → 直接返回 Intent（使用 IntentParser）
+
+**注意**: 此文件保留仅为向后兼容，UnderstandingLayer 已废弃，此文件不再使用。
+
+新架构的 IntentParser:
+- 使用 LLM（Claude Haiku）进行智能意图解析
+- 成本：~$0.00025/请求
+- 位置：src/layers/decision/intent_parser.py
 """
 
 import re
