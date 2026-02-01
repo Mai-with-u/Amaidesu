@@ -31,11 +31,12 @@ class CommandProcessorPipeline(MessagePipeline):
             self.enabled = False
             self.command_pattern = None
 
-        # 从配置加载命令映射
+        # 从配置加载命令映射（新版：事件发布模式）
+        # 配置格式: {"command_name": {"event": "event_name", "event_key": "data_key"}}
         self.command_map = self.config.get(
             "command_map",
             {
-                "vts_trigger_hotkey": {"service": "vts_control", "method": "trigger_hotkey"},
+                "vts_trigger_hotkey": {"event": "vts.trigger_hotkey", "event_key": "hotkey_name"},
             },
         )
         self.logger.debug(f"使用命令映射初始化: {self.command_map}")
@@ -89,7 +90,7 @@ class CommandProcessorPipeline(MessagePipeline):
 
     async def _execute_single_command(self, command_full_match: str) -> Optional[asyncio.Task]:
         """
-        解析单个命令字符串并返回一个可执行的协程。
+        解析单个命令字符串并发布事件。
         返回 None 如果命令无效或无法执行。
         """
         self.logger.debug(f"处理指令标签内容: '{command_full_match}'")
@@ -103,29 +104,35 @@ class CommandProcessorPipeline(MessagePipeline):
             return None
 
         command_config = self.command_map[command_name]
-        service_name = command_config.get("service")
-        method_name = command_config.get("method")
+        event_name = command_config.get("event")
+        event_key = command_config.get("event_key", "args")
 
-        if not service_name or not method_name:
-            self.logger.error(f"指令 '{command_name}' 的配置不完整 (缺少 service 或 method)。")
+        if not event_name:
+            self.logger.error(f"指令 '{command_name}' 的配置不完整 (缺少 event)。")
             return None
 
-        service_instance = self.core.get_service(service_name)
-        if not service_instance:
-            self.logger.warning(f"未找到指令 '{command_name}' 所需的服务 '{service_name}'。")
+        # 检查 EventBus 是否可用
+        if not hasattr(self, "core") or not self.core or not self.core.event_bus:
+            self.logger.warning(f"EventBus 不可用，无法执行指令 '{command_name}'")
             return None
 
-        method_to_call = getattr(service_instance, method_name, None)
-        if not method_to_call or not asyncio.iscoroutinefunction(method_to_call):
-            self.logger.warning(
-                f"服务 '{service_name}' 上的方法 '{method_name}' 不存在或是非异步方法。无法执行指令 '{command_name}'。"
-            )
-            return None
-
+        # 准备事件数据
         args = [arg.strip() for arg in args_str.split(",") if arg.strip()]
+        event_data = {event_key: args[0] if len(args) == 1 else args}
 
-        # 返回协程本身，而不是在此处 await 它
-        return method_to_call(*args)
+        # 发布事件（fire-and-forget）
+        async def emit_event():
+            try:
+                await self.core.event_bus.emit(
+                    f"command_processor.{event_name}",
+                    event_data,
+                    source="CommandProcessor"
+                )
+                self.logger.info(f"指令 '{command_name}' 已发布到事件 '{event_name}'")
+            except Exception as e:
+                self.logger.error(f"发布指令事件失败: {e}", exc_info=True)
+
+        return emit_event()
 
     # on_connect 和 on_disconnect 可以在需要时实现
     # async def on_connect(self) -> None:

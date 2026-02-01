@@ -128,18 +128,19 @@ class BiliBaseMessage:
         # 获取并追加 Prompt 上下文
         modified_template_items = template_items.copy()
 
-        if prompt_ctx_service := core.get_service("prompt_context"):
+        # 使用 ContextManager 获取上下文
+        try:
+            context_manager = core.get_context_manager()
             self.logger.info("正在获取 Prompt 上下文...")
-            try:
-                additional_context = await prompt_ctx_service.get_formatted_context(tags=context_tags)
-                if additional_context:
-                    # 修改主 Prompt
-                    main_prompt_key = "default_generator_prompt"
-                    if main_prompt_key in modified_template_items:
-                        original_prompt = modified_template_items[main_prompt_key]
-                        modified_template_items[main_prompt_key] = additional_context + "\n" + original_prompt
-            except Exception as e:
-                self.logger.error(f"创建模板信息时发生错误: {e}", exc_info=True)
+            additional_context = await context_manager.get_formatted_context(tags=context_tags)
+            if additional_context:
+                # 修改主 Prompt
+                main_prompt_key = "default_generator_prompt"
+                if main_prompt_key in modified_template_items:
+                    original_prompt = modified_template_items[main_prompt_key]
+                    modified_template_items[main_prompt_key] = additional_context + "\n" + original_prompt
+        except Exception as e:
+            self.logger.error(f"创建模板信息时发生错误: {e}", exc_info=True)
 
         return TemplateInfo(
             template_items=modified_template_items,

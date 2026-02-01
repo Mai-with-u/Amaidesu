@@ -28,7 +28,7 @@ class CommandRouterPipeline(MessagePipeline):
 
     async def process_message(self, message: MessageBase) -> Optional[MessageBase]:
         """
-        处理消息，检测命令前缀并发布事件或转发给订阅插件。
+        处理消息，检测命令前缀并发布事件。
 
         Args:
             message: 要处理的消息对象
@@ -68,76 +68,21 @@ class CommandRouterPipeline(MessagePipeline):
             "timestamp": time.time(),
         }
 
-        # 尝试使用事件系统
+        # 使用事件系统发布命令
         if self.use_events and hasattr(self, "core") and self.core:
             try:
                 event_bus = self.core.event_bus
                 if event_bus:
-                    # 使用事件系统（新模式）
+                    # 使用事件系统发布命令事件
                     self.logger.info(f"发布命令事件: {original_text}")
                     await event_bus.emit("command_router.received", command_data, source="CommandRouter")
                 else:
-                    raise AttributeError("EventBus not available")
+                    self.logger.warning("EventBus 不可用，命令将被忽略")
             except (AttributeError, TypeError) as e:
-                self.logger.warning(f"无法使用事件系统，回退到兼容模式: {e}")
-                if self.subscribers:
-                    self.logger.info("使用向后兼容模式，转发消息给订阅插件")
-                    await self._forward_message_to_subscribers(message)
-                else:
-                    self.logger.warning("未启用事件系统且没有配置订阅插件，命令将被忽略")
+                self.logger.error(f"发布命令事件失败: {e}，命令将被忽略", exc_info=True)
         else:
-            # 向后兼容：旧的服务调用方式
-            if self.subscribers:
-                self.logger.info("使用向后兼容模式，转发消息给订阅插件")
-                await self._forward_message_to_subscribers(message)
-            else:
-                self.logger.warning("未启用事件系统且没有配置订阅插件，命令将被忽略")
+            self.logger.warning("未启用事件系统或未连接到 core，命令将被忽略")
 
         # 命令消息被处理，返回None
         self.logger.info("命令消息处理完成")
         return None
-
-    async def _forward_message_to_subscribers(self, message: MessageBase):
-        """
-        将整个消息转发给订阅的插件。
-
-        Args:
-            message: 要转发的消息对象
-        """
-        if not self.subscribers:
-            self.logger.warning("没有配置订阅插件，消息将被忽略")
-            return
-
-        for subscriber in self.subscribers:
-            try:
-                self.logger.debug(f"转发消息给插件 '{subscriber}'")
-                await self._notify_subscriber(subscriber, message)
-            except Exception as e:
-                self.logger.error(f"转发消息给插件 '{subscriber}' 时出错: {e}", exc_info=True)
-
-    async def _notify_subscriber(self, subscriber_name: str, message: MessageBase):
-        """
-        通知订阅插件处理消息。
-
-        Args:
-            subscriber_name: 订阅插件名称
-            message: 要处理的消息对象
-        """
-        if not hasattr(self, "core") or self.core is None:
-            self.logger.warning("无法转发消息：管道未设置core引用")
-            return
-
-        # 通过服务注册机制转发消息
-        service_name = f"{subscriber_name}_command_handler"
-        if command_handler := self.core.get_service(service_name):
-            try:
-                # 调用插件的消息处理方法
-                success = await command_handler(message)
-                if success:
-                    self.logger.info(f"[转发成功] 插件: {subscriber_name}")
-                else:
-                    self.logger.warning(f"[转发失败] 插件: {subscriber_name}")
-            except Exception as e:
-                self.logger.error(f"转发消息时出错: 插件={subscriber_name}, 错误={e}", exc_info=True)
-        else:
-            self.logger.warning(f"未找到插件 '{subscriber_name}' 的命令处理服务 '{service_name}'")
