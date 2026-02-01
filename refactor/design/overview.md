@@ -65,30 +65,42 @@ Plugin = 能力组合（整合 Provider、提供业务场景、不创建 Provide
 2. 插件之间可能绕过 EventBus，直接服务注册
 3. 重蹈重构前的覆辙（24个插件，18个服务注册）
 
-### 5层架构
+### 5层架构（2025年最新版本）
 
 ```
 外部输入（弹幕、游戏、语音）
   ↓
-【Layer 1: Input】多个InputProvider并发采集
-  ↓ RawData
-【Layer 2: Normalization】统一转换为NormalizedMessage
-  ↓ NormalizedMessage
-【Pre-Pipeline】限流、过滤、相似文本检测
-  ↓ NormalizedMessage'
-【Layer 3: Decision】DecisionProvider ⭐ 可替换、可扩展
-  ├─ MaiCoreDecisionProvider (默认，异步+LLM意图解析)
-  ├─ LocalLLMDecisionProvider (可选)
-  └─ RuleEngineDecisionProvider (可选)
-  ↓ Intent
-【Post-Pipeline】格式清理、安全检查（可选）
-  ↓ Intent'
-【Layer 4: Parameters】生成RenderParameters
-  ↓ RenderParameters
-【Layer 5: Rendering】多个OutputProvider并发渲染
-  ↓ 输出
-【插件系统：Plugin】社区开发的插件能力
+【Layer 1-2: Input】RawData → NormalizedMessage
+  ├─ InputProvider: 并发采集 RawData
+  ├─ TextPipeline: 限流、过滤、相似文本检测（可选）
+  └─ InputLayer: 标准化为 NormalizedMessage
+  ↓ normalization.message_ready
+【Layer 3: Decision】NormalizedMessage → Intent
+  ├─ MaiCoreDecisionProvider (默认，WebSocket+LLM意图解析)
+  ├─ LocalLLMDecisionProvider (可选，直接LLM)
+  └─ RuleEngineDecisionProvider (可选，规则引擎)
+  ↓ decision.intent_generated
+【Layer 4-5: Parameters+Rendering】Intent → RenderParameters → 输出
+  ├─ ExpressionGenerator: Intent → RenderParameters
+  └─ OutputProvider: 并发渲染（TTS、字幕、VTS等）
+  ↓
+【插件系统：Plugin】社区扩展能力
 ```
+
+**架构变化说明：**
+
+1. **合并 Layer 1-2**: Input 和 Normalization 合并为 InputLayer
+   - 减少数据转换开销
+   - NormalizedMessage 直接包含 StructuredContent
+
+2. **移除 UnderstandingLayer**: Intent 解析由 DecisionProvider 负责
+   - MaiCoreDecisionProvider 使用 IntentParser (LLM)
+   - LocalLLMDecisionProvider 直接生成响应
+   - RuleEngineDecisionProvider 使用规则匹配
+
+3. **简化 Pipeline**: TextPipeline 集成到 InputLayer
+   - 在 RawData → NormalizedMessage 转换中处理文本
+   - 不再单独的 Pre-Pipeline 层
 
 ---
 

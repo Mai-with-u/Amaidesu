@@ -32,21 +32,51 @@ Amaidesu!
 
 ## 架构概述
 
+### 5层核心数据流（2025年最新版本）
+
+```
+外部输入（弹幕、游戏、语音）
+  ↓
+【Layer 1-2: Input】RawData → NormalizedMessage
+  ├─ InputProvider: 并发采集 RawData
+  ├─ TextPipeline: 限流、过滤、相似文本检测（可选）
+  └─ InputLayer: 标准化为 NormalizedMessage
+  ↓ normalization.message_ready
+【Layer 3: Decision】NormalizedMessage → Intent
+  ├─ MaiCoreDecisionProvider (默认，WebSocket + LLM意图解析)
+  ├─ LocalLLMDecisionProvider (可选，直接LLM)
+  └─ RuleEngineDecisionProvider (可选，规则引擎)
+  ↓ decision.intent_generated
+【Layer 4-5: Parameters+Rendering】Intent → RenderParameters → 输出
+  ├─ ExpressionGenerator: Intent → RenderParameters
+  └─ OutputProvider: 并发渲染（TTS、字幕、VTS等）
+```
+
+### 核心组件
+
 主要由以下几个核心组件构成：
 
-1. **AmaidesuCore**: 核心模块，负责与 MaiCore 的通信，有服务注册与发现、消息分发的功能。
+1. **AmaidesuCore**: 核心模块，负责组件组合（Composition Root）
+   - 管理 EventBus、LLMService、PipelineManager、DecisionManager
+   - 不再负责数据流处理（已迁移到 FlowCoordinator）
 2. **PluginManager**: 插件管理器，负责插件的加载和管理
    - 支持新旧两种插件架构（向后兼容）
    - 新架构：Plugin 协议（推荐），通过 event_bus 和 config 依赖注入
    - 旧架构：BasePlugin（已废弃），通过 self.core 访问核心功能
 3. **EventBus**: 事件总线，提供发布-订阅机制，用于插件间通信
+   - 支持优先级、错误隔离、统计功能
 4. **Provider 接口**: 新架构的核心抽象，封装具体功能
    - InputProvider: 输入数据采集（如弹幕、控制台输入）
-   - OutputProvider: 输出渲染（如 TTS、字幕显示）
-   - DecisionProvider: 消息决策处理（如命令路由）
-5. **PipelineManager**: 管道管理器，负责管道的加载和执行，用于在消息发送到 MaiCore 前进行预处理
-6. **ContextManager**: 上下文管理器，负责管理和聚合来自不同插件的上下文信息，为需要上下文信息的插件提供统一的数据来源。
-7. **插件系统**: 各种功能插件，如 TTS、STT、LLM 等。各个插件可以利用被注入的 AmaidesuCore 实例发送消息给 MaiCore，在 AmaidesuCore接收到消息时，会分发给注册了对应处理类型的插件进行处理。也可以将本插件作为服务注册到 AmaidesuCore 中，供其他插件使用。
+   - DecisionProvider: 决策处理（如 MaiCore、LLM、规则引擎）
+   - OutputProvider: 输出渲染（如 TTS、字幕显示、VTS）
+5. **PipelineManager**: 管道管理器，负责管道的加载和执行
+   - TextPipeline: Layer 1-2 文本预处理（限流、过滤）
+   - MessagePipeline: MaiCore 消息处理（inbound/outbound）
+6. **ContextManager**: 上下文管理器，负责管理和聚合来自不同插件的上下文信息
+7. **FlowCoordinator**: 数据流协调器，负责 Decision → Rendering 之间的数据流
+8. **插件系统**: 各种功能插件，如 TTS、STT、LLM 等
+
+详见：[架构设计文档](./refactor/design/overview.md)
 
 ### 插件架构迁移
 

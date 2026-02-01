@@ -9,22 +9,23 @@
 
 ---
 
-## 📊 决策层位置
+## 📊 决策层位置（5层架构）
 
 ```
-Layer 2: Normalization（NormalizedMessage）
-    ↓
-【Pre-Pipeline】限流、过滤
-    ↓
+Layer 1-2: Input（NormalizedMessage）
+    ↓ normalization.message_ready
 Layer 3: Decision（DecisionProvider）⭐ 可替换、可扩展
-    ├─ MaiCoreDecisionProvider (默认，异步+LLM意图解析)
-    ├─ LocalLLMDecisionProvider (可选)
-    └─ RuleEngineDecisionProvider (可选)
-    ↓ Intent
-【Post-Pipeline】格式清理、安全检查（可选）
-    ↓
-Layer 4: Parameters（生成RenderParameters）
+    ├─ MaiCoreDecisionProvider (默认，WebSocket + LLM意图解析)
+    ├─ LocalLLMDecisionProvider (可选，直接LLM)
+    └─ RuleEngineDecisionProvider (可选，规则引擎)
+    ↓ Intent (decision.intent_generated)
+Layer 4-5: Parameters+Rendering（RenderParameters → 输出）
 ```
+
+**5层架构中的关键变化：**
+- **移除了 UnderstandingLayer**：Intent 解析由 DecisionProvider 内部处理
+- **移除了 Pre-Pipeline 和 Post-Pipeline**：TextPipeline 集成到 InputLayer (Layer 1-2)
+- **简化数据流**：NormalizedMessage → Intent → RenderParameters
 
 ---
 
@@ -35,7 +36,7 @@ Layer 4: Parameters（生成RenderParameters）
 ```python
 from typing import Protocol
 from src.core.event_bus import EventBus
-from src.layers.normalization.normalized_message import NormalizedMessage
+from src.data_types.normalized_message import NormalizedMessage
 from src.layers.decision.intent import Intent
 
 class DecisionProvider(Protocol):
@@ -115,11 +116,11 @@ from typing import Dict, Any, Optional
 from maim_message import MessageBase
 
 from src.core.base.decision_provider import DecisionProvider
-from src.layers.normalization.normalized_message import NormalizedMessage
+from src.data_types.normalized_message import NormalizedMessage
 from src.layers.decision.intent import Intent
 from src.layers.decision.intent_parser import IntentParser
-from src.core.base.websocket_connector import WebSocketConnector
-from src.core.base.router_adapter import RouterAdapter
+from src.core.providers.websocket_connector import WebSocketConnector
+from src.core.providers.router_adapter import RouterAdapter
 from src.utils.logger import get_logger
 
 class MaiCoreDecisionProvider:
