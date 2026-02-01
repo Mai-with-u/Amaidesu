@@ -13,11 +13,11 @@ from .local_llm_decision_provider import LocalLLMDecisionProvider
 from .rule_engine_decision_provider import RuleEngineDecisionProvider
 
 # RawData 和 NormalizedText 从 data_types 导入，避免重复定义
-from src.core.data_types.raw_data import RawData
-from src.core.data_types.normalized_text import NormalizedText
+from src.data_types.raw_data import RawData
+from src.data_types.normalized_text import NormalizedText
 
 # CanonicalMessage 从 canonical 模块导入
-from src.canonical.canonical_message import CanonicalMessage
+from src.layers.canonical.canonical_message import CanonicalMessage
 
 __all__ = [
     # 数据类（从data_types重新导出）

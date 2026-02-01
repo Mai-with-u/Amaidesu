@@ -5,7 +5,7 @@ from typing import Dict, Any, List, Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from src.core.event_bus import EventBus
 
-from src.core.providers.output_provider import OutputProvider
+from src.core.base.output_provider import OutputProvider
 from src.utils.logger import get_logger
 from .providers.tts_output_provider import TTSOutputProvider
 

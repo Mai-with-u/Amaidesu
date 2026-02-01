@@ -19,11 +19,11 @@ from src.core.pipeline_manager import PipelineManager
 from src.core.plugin_manager import PluginManager
 from src.services.config_service import ConfigService
 from src.utils.logger import get_logger
-from src.perception.input_layer import InputLayer
-from src.canonical.canonical_layer import CanonicalLayer
-from src.core.decision_manager import DecisionManager, DecisionProviderFactory
-from src.core.providers.maicore_decision_provider import MaiCoreDecisionProvider
-from src.understanding.understanding_layer import UnderstandingLayer
+from src.layers.input.input_layer import InputLayer
+from src.layers.canonical.canonical_layer import CanonicalLayer
+from src.layers.decision.decision_manager import DecisionManager, DecisionProviderFactory
+from src.layers.decision.providers.maicore_decision_provider import MaiCoreDecisionProvider
+from src.layers.understanding.understanding_layer import UnderstandingLayer
 
 logger = get_logger("Main")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))

@@ -9,8 +9,8 @@ import json
 from pathlib import Path
 from typing import AsyncIterator
 
-from src.core.providers.input_provider import InputProvider
-from src.core.data_types.raw_data import RawData
+from src.core.base.input_provider import InputProvider
+from src.data_types.raw_data import RawData
 from src.utils.logger import get_logger
 
 

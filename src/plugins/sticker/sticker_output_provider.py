@@ -10,8 +10,8 @@ import base64
 import io
 from PIL import Image
 
-from src.core.providers.output_provider import OutputProvider
-from src.core.providers.base import RenderParameters
+from src.core.base.output_provider import OutputProvider
+from src.core.base.base import RenderParameters
 from src.utils.logger import get_logger
 
 

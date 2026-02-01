@@ -9,7 +9,7 @@ from typing import Optional
 
 from openai import AsyncOpenAI
 
-from src.core.providers.decision_provider import DecisionProvider
+from src.core.base.decision_provider import DecisionProvider
 from src.utils.logger import get_logger
 
 

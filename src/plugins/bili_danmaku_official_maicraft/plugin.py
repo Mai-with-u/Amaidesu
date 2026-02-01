@@ -5,7 +5,7 @@ from typing import Dict, Any, List, Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from src.core.event_bus import EventBus
 
-from src.core.providers.input_provider import InputProvider
+from src.core.base.input_provider import InputProvider
 from src.utils.logger import get_logger
 from .providers.bili_official_maicraft_provider import BiliDanmakuOfficialMaiCraftInputProvider
 

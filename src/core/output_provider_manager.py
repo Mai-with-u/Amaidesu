@@ -302,7 +302,7 @@ class OutputProviderManager:
         Returns:
             Provider实例，如果创建失败返回None
         """
-        from src.rendering.provider_registry import ProviderRegistry
+        from src.layers.rendering.provider_registry import ProviderRegistry
 
         # 检查 Provider 是否已注册
         if not ProviderRegistry.is_output_provider_registered(provider_type):

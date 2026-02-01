@@ -17,7 +17,7 @@ except ModuleNotFoundError:
         print("依赖缺失: 请运行 'pip install toml' 来加载 Console Input 插件配置。", file=sys.stderr)
         tomllib = None
 
-from src.core.data_types.raw_data import RawData
+from src.data_types.raw_data import RawData
 from maim_message import MessageBase, BaseMessageInfo, UserInfo, GroupInfo, Seg, FormatInfo, TemplateInfo
 from src.utils.logger import get_logger
 

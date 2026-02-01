@@ -13,7 +13,7 @@ from typing import Dict, Any, Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from src.core.event_bus import EventBus
 
-from src.core.providers.input_provider import InputProvider
+from src.core.base.input_provider import InputProvider
 from src.utils.logger import get_logger
 
 # 导入屏幕分析和读取模块

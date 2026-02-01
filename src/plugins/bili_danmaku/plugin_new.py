@@ -3,7 +3,7 @@
 from typing import Dict, Any, List
 
 # --- Core Imports ---
-from src.core.providers.input_provider import InputProvider
+from src.core.base.input_provider import InputProvider
 from src.utils.logger import get_logger
 
 # --- Provider Imports ---

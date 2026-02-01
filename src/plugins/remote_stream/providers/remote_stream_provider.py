@@ -14,7 +14,7 @@ from enum import Enum
 if TYPE_CHECKING:
     from src.core.event_bus import EventBus
 
-from src.core.providers.output_provider import OutputProvider
+from src.core.base.output_provider import OutputProvider
 from src.utils.logger import get_logger
 
 try:

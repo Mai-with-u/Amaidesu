@@ -6,7 +6,7 @@ if TYPE_CHECKING:
     pass
 
 # --- Core Imports ---
-from src.core.providers.input_provider import InputProvider
+from src.core.base.input_provider import InputProvider
 from src.utils.logger import get_logger
 from .providers.bili_danmaku_provider import BiliDanmakuInputProvider
 
