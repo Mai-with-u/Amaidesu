@@ -386,7 +386,7 @@ graph TB
 
 | 维度 | Pipeline | Provider |
 |------|----------|----------|
-| **位置** | Layer 2和Layer 3之间 | Layer 1（输入）/ Layer 7（输出） |
+| **位置** | Layer 2和Layer 3之间 | Layer 1（输入）/ Layer 5（输出） |
 | **处理数据** | Text | RawData / RenderParameters |
 | **职责** | 文本预处理和过滤 | 数据采集和渲染 |
 | **并发** | 顺序处理（按优先级） | 并发处理 |
@@ -456,6 +456,6 @@ sensitive_words = ["禁词1", "禁词2", "禁词3"]
 
 ## 🔗 相关文档
 
-- [7层架构设计](./layer_refactoring.md)
+- [5层架构设计](./layer_refactoring.md)
 - [多Provider并发设计](./multi_provider.md)
 - [AmaidesuCore重构设计](./core_refactoring.md)

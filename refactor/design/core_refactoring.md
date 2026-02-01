@@ -230,7 +230,9 @@ src/core/
 ```python
 from typing import Dict, Optional
 from src.core.event_bus import EventBus
-from src.core.decision_provider import DecisionProvider, CanonicalMessage
+from src.core.decision_provider import DecisionProvider
+from src.data_types.normalized_message import NormalizedMessage
+from src.layers.decision.intent import Intent
 from src.utils.logger import get_logger
 
 class DecisionManager:
@@ -264,19 +266,19 @@ class DecisionManager:
 
         self.logger.info(f"DecisionProvider已设置: {provider_name}")
 
-    async def decide(self, canonical_message: CanonicalMessage):
+    async def decide(self, message: NormalizedMessage) -> Intent:
         """
         进行决策
 
         Args:
-            canonical_message: 标准化消息
+            message: 标准化消息（NormalizedMessage）
 
         Returns:
-            MessageBase: 决策结果
+            Intent: 决策意图
         """
         if not self._current_provider:
             raise RuntimeError("No decision provider configured")
-        return await self._current_provider.decide(canonical_message)
+        return await self._current_provider.decide(message)
 
     async def switch_provider(self, provider_name: str, config: dict):
         """

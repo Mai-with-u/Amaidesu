@@ -2,7 +2,7 @@
 
 ## 📋 概述
 
-本文档描述如何将旧的 Avatar 系统重构到 6 层架构中，消除职责重复，实现干净的架构设计。
+本文档描述如何将旧的 Avatar 系统重构到 5 层架构中，消除职责重复，实现干净的架构设计。
 
 ---
 
@@ -10,18 +10,18 @@
 
 ### 问题分析
 
-当前 Avatar 系统（`src/core/avatar/`）与 6 层架构存在严重的职责重复：
+当前 Avatar 系统（`src/core/avatar/`）与 5 层架构存在严重的职责重复：
 
-| 功能 | Avatar 系统 | 7层架构 | 问题 |
+| 功能 | Avatar 系统 | 5层架构 | 问题 |
 |------|-------------|---------|------|
-| **情感分析** | `TriggerStrategyEngine` (LLM) | Layer 5 `EmotionAnalyzer` | 两处都做情感分析 |
-| **表情映射** | `SemanticActionMapper` | Layer 6 `EmotionMapper` | 两套映射逻辑 |
+| **情感分析** | `TriggerStrategyEngine` (LLM) | Layer 3 `EmotionAnalyzer` | 两处都做情感分析 |
+| **表情映射** | `SemanticActionMapper` | Layer 4 `EmotionMapper` | 两套映射逻辑 |
 | **VTS控制** | `VTSAdapter` | `VTSOutputProvider` | 两套 VTS 控制代码 |
 
 ### 重构目标
 
 1. **消除重复**：每个功能只在一处实现
-2. **职责清晰**：分析归 Layer 5，映射归 Layer 6，执行归 Layer 7
+2. **职责清晰**：分析归 Layer 3，映射归 Layer 4，执行归 Layer 5
 3. **平台抽象**：保留多平台支持能力（VTS、VRChat、Live2D）
 
 ---
@@ -32,10 +32,10 @@
 
 ```mermaid
 graph TB
-    subgraph "7层架构路径"
-        L5_OLD[Layer 5: Understanding]
-        L6_OLD[Layer 6: Expression]
-        L7_OLD[Layer 7: VTSOutputProvider]
+    subgraph "旧架构路径"
+        L3_OLD[Layer 3: Decision]
+        L4_OLD[Layer 4: Expression]
+        L5_OLD[Layer 5: Rendering]
     end
 
     subgraph "Avatar系统路径（重复）"
@@ -68,17 +68,17 @@ graph TB
 
 ```mermaid
 graph TB
-    subgraph "Layer 5: Understanding"
+    subgraph "Layer 3: Decision"
         INTENT_PARSER[IntentParser]
         EMOTION_ANALYZER[EmotionAnalyzer<br/>统一情感分析]
     end
 
-    subgraph "Layer 6: Expression"
+    subgraph "Layer 4: Parameters"
         EXPR_GEN[ExpressionGenerator]
         EXPR_MAPPER[ExpressionMapper<br/>统一表情映射]
     end
 
-    subgraph "Layer 7: Rendering"
+    subgraph "Layer 5: Rendering"
         AVATAR_PROVIDER[AvatarOutputProvider]
     end
 
@@ -118,17 +118,17 @@ graph TB
 
 ## 🔗 核心设计
 
-### 1. Layer 5: 情感分析（唯一位置）
+### 1. Layer 3: 情感分析（唯一位置）
 
-将 Avatar 的 `TriggerStrategyEngine` 迁移到 Layer 5 的 `EmotionAnalyzer`。
+将 Avatar 的 `TriggerStrategyEngine` 迁移到 Layer 3 的 `EmotionAnalyzer`。
 
 ```python
-# src/understanding/emotion_analyzer.py
+# src/layers/decision/emotion_analyzer.py
 class EmotionAnalyzer:
     """统一的情感分析器
-    
+
     合并原来的：
-    - Layer 5 的情感判断逻辑
+    - Layer 3 的情感判断逻辑
     - Avatar.TriggerStrategyEngine 的 LLM 分析
     """
     
@@ -156,19 +156,19 @@ class EmotionAnalyzer:
         return EmotionResult(emotion=EmotionType.NEUTRAL, confidence=0.5)
 ```
 
-### 2. Layer 6: 表情映射（唯一位置）
+### 2. Layer 4: 表情映射（唯一位置）
 
 合并 `EmotionMapper` 和 `SemanticActionMapper` 为统一的 `ExpressionMapper`。
 
 ```python
-# src/expression/expression_mapper.py
+# src/layers/parameters/expression_mapper.py
 class ExpressionMapper:
     """统一的表情映射器
-    
+
     合并原来的：
-    - Layer 6 的 EmotionMapper
+    - Layer 4 的 EmotionMapper
     - Avatar 的 SemanticActionMapper
-    
+
     输出平台无关的抽象参数，由 PlatformAdapter 翻译为平台特定参数。
     """
     
@@ -238,12 +238,12 @@ class VTSAdapter(PlatformAdapter):
         return vts_params
 ```
 
-### 4. Layer 7: 渲染输出
+### 4. Layer 5: 渲染输出
 
 `AvatarOutputProvider` 使用 `PlatformAdapter` 执行渲染。
 
 ```python
-# src/rendering/providers/avatar_output_provider.py
+# src/layers/rendering/providers/avatar_output_provider.py
 class AvatarOutputProvider(OutputProvider):
     """虚拟形象输出 Provider"""
     
@@ -284,18 +284,18 @@ src/core/avatar/                  # ❌ 整个删除
 
 ```
 src/
-├── understanding/                 # Layer 5
+├── layers/decision/               # Layer 3
 │   ├── intent.py
 │   ├── intent_parser.py
 │   └── emotion_analyzer.py       # 统一的情感分析器
 │
-├── expression/                    # Layer 6
+├── layers/parameters/             # Layer 4
 │   ├── expression_generator.py
 │   ├── expression_mapper.py      # 统一的表情映射器（新）
 │   ├── action_mapper.py
 │   └── render_parameters.py
 │
-├── rendering/                     # Layer 7
+├── layers/rendering/              # Layer 5
 │   └── providers/
 │       ├── tts_output_provider.py
 │       ├── subtitle_output_provider.py
@@ -321,30 +321,30 @@ src/
 ```mermaid
 sequenceDiagram
     participant MC as MaiCore
-    participant L5 as Layer 5<br/>Understanding
-    participant L6 as Layer 6<br/>Expression
-    participant L7 as Layer 7<br/>Rendering
+    participant L3 as Layer 3<br/>Decision
+    participant L4 as Layer 4<br/>Parameters
+    participant L5 as Layer 5<br/>Rendering
     participant PA as PlatformAdapter
     participant VTS as VTube Studio
 
-    MC->>L4: MessageBase
-    
-    Note over L4: IntentParser 解析消息
-    Note over L4: EmotionAnalyzer 分析情感<br/>（统一位置，含可选LLM）
-    
-    L4->>L5: Intent (emotion, text, actions)
-    
-    Note over L5: ExpressionMapper 映射表情<br/>（统一位置）
-    Note over L5: 生成抽象表情参数
-    
-    L5->>L6: ExpressionParameters
-    
-    Note over L6: AvatarOutputProvider
-    
-    L6->>PA: 抽象参数 {smile: 0.8, eye_open: 0.9}
-    
+    MC->>L3: MessageBase
+
+    Note over L3: IntentParser 解析消息
+    Note over L3: EmotionAnalyzer 分析情感<br/>（统一位置，含可选LLM）
+
+    L3->>L4: Intent (emotion, text, actions)
+
+    Note over L4: ExpressionMapper 映射表情<br/>（统一位置）
+    Note over L4: 生成抽象表情参数
+
+    L4->>L5: ExpressionParameters
+
+    Note over L5: AvatarOutputProvider
+
+    L5->>PA: 抽象参数 {smile: 0.8, eye_open: 0.9}
+
     Note over PA: VTSAdapter.translate_params()<br/>翻译为平台参数
-    
+
     PA->>VTS: VTS参数 {MouthSmile: 0.8, EyeOpenLeft: 0.9}
 ```
 
@@ -381,15 +381,15 @@ type = "llm_fast"
 
 ```toml
 # 按层级组织，清晰简洁
-[understanding]
+[decision]
 # 情感分析配置（唯一位置）
-[understanding.emotion_analyzer]
+[decision.emotion_analyzer]
 use_rules = true                    # 使用规则分析
 use_llm = false                     # 使用 LLM 增强（可选）
 
-[expression]
+[parameters]
 # 表情映射自定义（可选覆盖）
-[expression.mappings.happy]
+[parameters.mappings.happy]
 smile = 0.9
 eye_open = 0.95
 
@@ -438,6 +438,6 @@ plugin_name = "Amaidesu"
 
 ## 🔗 相关文档
 
-- [7层架构设计](./layer_refactoring.md)
+- [5层架构设计](./layer_refactoring.md)
 - [决策层设计](./decision_layer.md)
 - [多Provider并发设计](./multi_provider.md)
