@@ -6,6 +6,17 @@
 - 优先级控制(handler可设置priority,数字越小越优先)
 - 统计功能(emit/on调用计数、错误率、执行时间)
 - 生命周期管理(cleanup方法)
+- 类型注解支持(参见 src.core.events.payloads)
+
+类型注解使用示例:
+    from src.core.events.payloads import CommandRouterData
+
+    # 在订阅时添加类型注解
+    def handle_command(event_data: CommandRouterData, **kwargs):
+        command = event_data.command  # IDE 可以自动提示
+        print(f"Received: {command}")
+
+    event_bus.on("command_router.received", handle_command)
 """
 
 from typing import Any, Callable, Dict, List, Optional
