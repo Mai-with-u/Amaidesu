@@ -68,14 +68,11 @@ uv run pytest tests/layers/rendering/test_vts_provider.py -v
 
 ## 待清理的测试
 
-以下测试文件是旧架构的，需要清理或迁移：
+✅ **已完成清理** - 所有过时的测试文件已被删除（2025-02-01）
 
-- `test_bili_danmaku_plugin.py` - 旧插件测试
-- `test_bili_danmaku_official_plugin.py` - 旧插件测试
-- `test_command_processor_plugin.py` - 旧插件测试
-- `test_*.py` - 其他旧插件测试
-- `test_phase*.py` - 旧架构阶段测试
-- `test_canonical_message.py` - 已废弃的数据类型
-- `test_understanding.py` - 已废弃的层
-
-这些测试在迁移完成后将被删除。
+已删除的测试：
+- 21个旧插件和旧架构测试文件
+- 依赖 BasePlugin 的测试
+- 旧架构阶段测试（test_phase*.py）
+- 已废弃的数据类型测试（test_canonical_message.py）
+- 一次性迁移脚本测试（test_config_migration.py）
