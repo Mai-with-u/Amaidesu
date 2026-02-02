@@ -37,8 +37,12 @@ class MockDecisionProvider(DecisionProvider):
             metadata={"mock": True, "call_count": self.call_count}
         )
 
-    async def setup(self) -> None:
+    async def setup(self, event_bus, config: Optional[dict] = None, dependencies: Optional[dict] = None) -> None:
         """设置Provider"""
+        self.event_bus = event_bus
+        if config:
+            self.config = config
+        self._dependencies = dependencies or {}
         self.logger.info("MockDecisionProvider设置完成")
 
     async def cleanup(self) -> None:

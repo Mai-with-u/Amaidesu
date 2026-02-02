@@ -20,8 +20,7 @@ from src.core.pipeline_manager import PipelineManager
 from src.utils.logger import get_logger
 from src.layers.input.input_layer import InputLayer
 from src.layers.input.input_provider_manager import InputProviderManager
-from src.layers.decision.decision_manager import DecisionManager, DecisionProviderFactory
-from src.layers.decision.providers.maicore.maicore_decision_provider import MaiCoreDecisionProvider
+from src.layers.decision.decision_manager import DecisionManager
 
 logger = get_logger("Main")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -281,12 +280,7 @@ async def create_app_components(
         try:
             decision_manager = DecisionManager(event_bus, llm_service)
 
-            # 创建并设置 DecisionProviderFactory
-            factory = DecisionProviderFactory()
-            factory.register("maicore", MaiCoreDecisionProvider)
-            decision_manager.set_factory(factory)
-
-            # 设置决策 Provider
+            # 设置决策 Provider（通过 ProviderRegistry 自动创建）
             provider_name = decision_config.get("provider", "maicore")
             provider_config = decision_config.get(provider_name, {})
             await decision_manager.setup(provider_name, provider_config)

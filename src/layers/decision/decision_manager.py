@@ -3,7 +3,7 @@ DecisionManager - 决策层管理器
 
 职责:
 - 管理DecisionProvider生命周期
-- 支持工厂模式创建Provider
+- 支持通过ProviderRegistry创建Provider
 - 支持运行时切换Provider
 - 异常处理和优雅降级
 """
@@ -21,84 +21,20 @@ if TYPE_CHECKING:
     from src.core.llm_service import LLMService
 
 
-class DecisionProviderFactory:
-    """
-    DecisionProvider工厂
-
-    职责:
-    - 注册DecisionProvider类
-    - 根据名称创建Provider实例
-    """
-
-    def __init__(self):
-        self._providers: Dict[str, type] = {}
-        self.logger = get_logger("DecisionProviderFactory")
-
-    def register(self, name: str, provider_class: type):
-        """
-        注册DecisionProvider类
-
-        Args:
-            name: Provider名称
-            provider_class: Provider类
-        """
-        if name in self._providers:
-            self.logger.warning(f"Provider '{name}' 已被注册，将被覆盖")
-        self._providers[name] = provider_class
-        self.logger.info(f"Provider '{name}' 已注册: {provider_class.__name__}")
-
-    def create(self, name: str, config: dict) -> "DecisionProvider":
-        """
-        创建DecisionProvider实例
-
-        Args:
-            name: Provider名称
-            config: Provider配置
-
-        Returns:
-            DecisionProvider实例
-
-        Raises:
-            ValueError: 如果Provider未找到
-        """
-        provider_class = self._providers.get(name)
-        if not provider_class:
-            available = ", ".join(self._providers.keys())
-            raise ValueError(f"DecisionProvider '{name}' 未找到。可用: {available}")
-
-        self.logger.debug(f"创建DecisionProvider '{name}': {provider_class.__name__}")
-        return provider_class(config)
-
-    def list_providers(self) -> list[str]:
-        """
-        列出所有已注册的Provider
-
-        Returns:
-            Provider名称列表
-        """
-        return list(self._providers.keys())
-
-
 class DecisionManager:
     """
     决策管理器(Layer 3: 决策层)
 
     职责:
     - 管理DecisionProvider生命周期
-    - 支持工厂模式创建Provider
+    - 通过ProviderRegistry创建Provider
     - 支持运行时切换Provider
     - 异常处理和优雅降级
 
     使用示例:
         ```python
         # 初始化
-        manager = DecisionManager(event_bus)
-
-        # 注册Provider
-        factory = DecisionProviderFactory()
-        factory.register("maicore", MaiCoreDecisionProvider)
-        factory.register("local_llm", LocalLLMDecisionProvider)
-        manager.set_factory(factory)
+        manager = DecisionManager(event_bus, llm_service)
 
         # 设置当前Provider
         await manager.setup(provider_name="maicore", config={"host": "localhost", "port": 8000})
@@ -113,6 +49,10 @@ class DecisionManager:
         # 清理
         await manager.cleanup()
         ```
+
+    注意：
+        - DecisionProvider 应预先在各个 Provider 模块的 __init__.py 中注册到 ProviderRegistry
+        - ProviderRegistry 统一管理所有类型的 Provider（Input/Decision/Output）
     """
 
     def __init__(self, event_bus: "EventBus", llm_service: Optional["LLMService"] = None):
@@ -126,20 +66,9 @@ class DecisionManager:
         self.event_bus = event_bus
         self._llm_service = llm_service
         self.logger = get_logger("DecisionManager")
-        self._factory: Optional[DecisionProviderFactory] = None
         self._current_provider: Optional["DecisionProvider"] = None
         self._provider_name: Optional[str] = None
         self._switch_lock = asyncio.Lock()
-
-    def set_factory(self, factory: DecisionProviderFactory):
-        """
-        设置Provider工厂
-
-        Args:
-            factory: DecisionProviderFactory实例
-        """
-        self._factory = factory
-        self.logger.info(f"DecisionProviderFactory 已设置: {len(factory.list_providers())} 个Provider")
 
     async def setup(self, provider_name: str, config: Dict[str, Any]) -> None:
         """
@@ -150,11 +79,10 @@ class DecisionManager:
             config: Provider配置
 
         Raises:
-            ValueError: 如果Factory未设置或Provider未找到
+            ValueError: 如果Provider未注册到ProviderRegistry
             ConnectionError: 如果Provider初始化失败
         """
-        if not self._factory:
-            raise ValueError("DecisionProviderFactory 未设置，请先调用 set_factory()")
+        from src.layers.rendering.provider_registry import ProviderRegistry
 
         async with self._switch_lock:
             # 清理当前Provider
@@ -165,15 +93,15 @@ class DecisionManager:
                 except Exception as e:
                     self.logger.error(f"清理Provider失败: {e}", exc_info=True)
 
-            # 创建新Provider
-            provider_class = self._factory._providers.get(provider_name)
-            if not provider_class:
-                available = ", ".join(self._factory.list_providers())
-                raise ValueError(f"DecisionProvider '{provider_name}' 未找到。可用: {available}")
-
-            self.logger.info(f"创建DecisionProvider: {provider_name}")
-            self._current_provider = provider_class(config)
-            self._provider_name = provider_name
+            # 通过 ProviderRegistry 创建新Provider
+            try:
+                self.logger.info(f"通过 ProviderRegistry 创建 DecisionProvider: {provider_name}")
+                self._current_provider = ProviderRegistry.create_decision(provider_name, config)
+                self._provider_name = provider_name
+            except ValueError as e:
+                available = ", ".join(ProviderRegistry.get_registered_decision_providers())
+                self.logger.error(f"DecisionProvider '{provider_name}' 未找到。可用: {available}")
+                raise ValueError(f"DecisionProvider '{provider_name}' 未找到。可用: {available}") from e
 
             # 初始化Provider
             try:
@@ -290,7 +218,7 @@ class DecisionManager:
         """
         清理资源
 
-        清理当前Provider、取消事件订阅和工厂。
+        清理当前Provider和取消事件订阅。
         """
         # 取消事件订阅
         self.event_bus.off("normalization.message_ready", self._on_normalized_message_ready)
@@ -305,7 +233,6 @@ class DecisionManager:
                 self._current_provider = None
                 self._provider_name = None
 
-            self._factory = None
             self.logger.info("DecisionManager 已清理")
 
     def get_current_provider(self) -> Optional["DecisionProvider"]:
@@ -333,6 +260,5 @@ class DecisionManager:
         Returns:
             Provider名称列表
         """
-        if not self._factory:
-            return []
-        return self._factory.list_providers()
+        from src.layers.rendering.provider_registry import ProviderRegistry
+        return ProviderRegistry.get_registered_decision_providers()

@@ -141,36 +141,39 @@ config.toml（根配置）
 ├── [llm]/[llm_fast]/[vlm] - LLM配置
 ├── [general] - 平台标识
 ├── [maicore] - MaiCore连接配置
-├── [input] - 输入Provider配置
-├── [decision] - 决策Provider配置
-├── [rendering] - 渲染Provider配置
+├── [providers.input] - 输入Provider配置
+├── [providers.decision] - 决策Provider配置
+├── [providers.output] - 渲染Provider配置
 └── [pipelines] - 管道配置
 ```
 
 ### Provider配置格式
 ```toml
 # 输入Provider配置
-[input]
+[providers.input]
 enabled = true
-inputs = ["console", "bili_danmaku", "minecraft"]
+enabled_inputs = ["console_input", "bili_danmaku"]
 
-[input.inputs.console]
-type = "console"
+[providers.input.inputs.console_input]
+type = "console_input"
 enabled = true
 
 # 决策Provider配置
-[decision]
-provider = "maicore"
+[providers.decision]
+enabled = true
+active_provider = "maicore"
+available_providers = ["maicore", "local_llm", "rule_engine"]
 
-[decision.providers.maicore]
+[providers.decision.providers.maicore]
+type = "maicore"
 enabled = true
 
 # 输出Provider配置
-[rendering]
+[providers.output]
 enabled = true
-outputs = ["subtitle", "vts", "tts"]
+enabled_outputs = ["subtitle", "vts", "tts"]
 
-[rendering.outputs.subtitle]
+[providers.output.outputs.subtitle]
 type = "subtitle"
 enabled = true
 ```
@@ -189,7 +192,10 @@ enabled = true
 
    ProviderRegistry.register_output("my_provider", MyProvider, source="builtin:my_provider")
    ```
-4. 在配置中启用：添加到`inputs`/`outputs`列表
+4. 在配置中启用：
+   - InputProvider: 添加到 `[providers.input]` 的 `enabled_inputs` 列表
+   - OutputProvider: 添加到 `[providers.output]` 的 `enabled_outputs` 列表
+   - DecisionProvider: 添加到 `[providers.decision]` 的 `available_providers` 列表
 
 ### 事件使用规范
 - **使用常量**：优先使用`CoreEvents`常量，避免硬编码字符串
@@ -208,23 +214,23 @@ logger.error("错误日志", exc_info=True)
 
 **日志过滤**：使用`--filter`参数时，传入get_logger的第一个参数（类名或模块名）
 
-### 当前架构问题（重要）
-项目处于**重构未完成状态**，详见`refactor/ARCHITECTURE_ISSUES_REPORT.md`：
+### 重构完成状态
+项目已完成**核心架构重构**（2026-02-02），详见`refactor/ARCHITECTURE_ISSUES_REPORT.md`：
 
-**P0级阻塞**（必须先修复）：
-- `main.py:260-265`仍引用已删除的`PluginManager`，需要删除
-- InputProviderManager未正确接入主流程
+**已完成**（P0-P1）：
+- ✅ 插件系统完全移除，Provider由Manager统一管理
+- ✅ Provider自动注册机制（22个Provider全部注册）
+- ✅ InputProviderManager接入主流程
+- ✅ 配置格式统一为`[providers.*]`
+- ✅ LLMService依赖注入重构
 
-**正确的初始化代码**（main.py第256-276行应改为）：
-```python
-input_provider_manager = InputProviderManager(event_bus)
-providers = await input_provider_manager.load_from_config(input_config)
-await input_provider_manager.start_all_providers(providers)
-```
+**待完成**（P2-P3，低优先级）：
+- ⏳ E2E测试用例（MockProvider已就绪）
+- ⏳ 文档完全同步更新
 
 **文档状态**：
 - ✅ 准确：`refactor/design/overview.md`（5层架构设计文档）
-- ❌ 过时：README.md的旧版本（描述7层架构和插件系统）
+- ✅ 当前文档：已更新为5层架构和Provider系统
 
 ### 不推荐的做法
 - ❌ 不要创建新的Plugin（插件系统已移除）

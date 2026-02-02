@@ -287,7 +287,8 @@ class InputProviderManager:
         self.logger.info(f"配置了 {len(inputs)} 个输入Provider: {inputs}")
 
         # 获取各个Provider的配置
-        inputs_config = config.get("inputs", {})
+        # 注意：配置字典应该包含 'inputs_config' 键，值是各个 Provider 的配置字典
+        inputs_config = config.get("inputs_config", config.get("inputs", {}))
 
         # 创建Provider实例
         created_providers = []
