@@ -116,12 +116,12 @@ class InputLayer:
         """
         将RawData转换为NormalizedMessage
 
-        根据raw_data的data_type选择不同的转换策略:
-        - text: 创建TextContent
-        - gift: 创建GiftContent
-        - superchat: 创建SuperChatContent
-        - guard: 创建TextContent(带有特殊标记)
-        - audio, image: 简化为文本描述(暂不处理多模态)
+        使用NormalizerRegistry根据data_type选择对应的Normalizer:
+        - gift: GiftNormalizer
+        - superchat: SuperChatNormalizer
+        - guard: GuardNormalizer
+        - text: TextNormalizer
+        - 其他: 降级为文本
 
         Args:
             raw_data: 原始数据
@@ -130,103 +130,32 @@ class InputLayer:
             NormalizedMessage对象，转换失败返回None
         """
         try:
-            data_type = raw_data.data_type
-            content = raw_data.content
-            metadata = raw_data.metadata.copy()
+            from src.layers.normalization.normalizers import NormalizerRegistry
+            from src.layers.normalization.content import TextContent
 
-            # 添加基本元数据
+            # 查找合适的 Normalizer
+            normalizer = NormalizerRegistry.get_normalizer(raw_data.data_type)
+
+            if normalizer:
+                # 对于 TextNormalizer，需要传递 pipeline_manager
+                if hasattr(normalizer, 'pipeline_manager'):
+                    normalizer.pipeline_manager = self.pipeline_manager
+
+                return await normalizer.normalize(raw_data)
+
+            # 降级处理：未知类型转换为文本
+            text = f"[{raw_data.data_type}] {str(raw_data.content)}"
+            structured_content = TextContent(text=text)
+
+            metadata = raw_data.metadata.copy()
             metadata["source"] = raw_data.source
             metadata["original_timestamp"] = raw_data.timestamp
 
-            # 导入StructuredContent类型
-            from src.layers.normalization.content import (
-                TextContent,
-                GiftContent,
-                SuperChatContent,
-            )
-
-            # 根据数据类型创建对应的StructuredContent
-            structured_content: "StructuredContent"
-
-            if data_type == "gift":
-                # 礼物消息
-                if isinstance(content, dict):
-                    user = content.get("user", "未知用户")
-                    gift_name = content.get("gift_name", "未知礼物")
-                    gift_level = content.get("gift_level", 1)
-                    count = content.get("count", 1)
-                    value = content.get("value", 0.0)
-
-                    structured_content = GiftContent(
-                        user=user,
-                        gift_name=gift_name,
-                        gift_level=gift_level,
-                        count=count,
-                        value=value,
-                    )
-                else:
-                    # 降级为文本
-                    structured_content = TextContent(text=f"有人送出了礼物: {str(content)}")
-
-            elif data_type == "superchat":
-                # 醒目留言
-                if isinstance(content, dict):
-                    user = content.get("user", "未知用户")
-                    sc_content = content.get("content", "")
-                    price = content.get("price", 0.0)
-
-                    structured_content = SuperChatContent(
-                        user=user,
-                        content=sc_content,
-                        price=price,
-                    )
-                else:
-                    structured_content = TextContent(text=f"醒目留言: {str(content)}")
-
-            elif data_type == "guard":
-                # 大航海
-                if isinstance(content, dict):
-                    user = content.get("user", "未知用户")
-                    level = content.get("level", "大航海")
-                    text = f"{user} 开通了{level}"
-                else:
-                    text = f"有人开通了大航海: {str(content)}"
-                structured_content = TextContent(text=text)
-
-            elif data_type == "text":
-                # 文本类型：应用 TextPipeline 预处理
-                # 从 content 中提取文本（支持字典格式和纯文本）
-                if isinstance(content, dict):
-                    text = content.get("text", str(content))
-                else:
-                    text = str(content)
-
-                # 如果配置了 PipelineManager，使用 TextPipeline 处理文本
-                if self.pipeline_manager:
-                    try:
-                        processed_text = await self.pipeline_manager.process_text(text, metadata)
-                        if processed_text is None:
-                            # Pipeline 返回 None 表示丢弃该消息
-                            self.logger.debug(f"文本被Pipeline丢弃: {text[:50]}...")
-                            return None
-                        text = processed_text
-                    except Exception as e:
-                        self.logger.error(f"TextPipeline处理失败: {e}", exc_info=True)
-                        # 出错时使用原文本，不中断流程
-
-                structured_content = TextContent(text=text)
-
-            else:
-                # 未知类型，转换为文本
-                text = f"[{data_type}] {str(content)}"
-                structured_content = TextContent(text=text)
-
-            # 构建NormalizedMessage
             return NormalizedMessage(
                 text=structured_content.get_display_text(),
                 content=structured_content,
                 source=raw_data.source,
-                data_type=data_type,
+                data_type=raw_data.data_type,
                 importance=structured_content.get_importance(),
                 metadata=metadata,
                 timestamp=raw_data.timestamp,

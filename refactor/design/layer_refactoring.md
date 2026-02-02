@@ -81,60 +81,73 @@ graph TB
 
 ```
 src/
-├── data_types/
-│   ├── raw_data.py
-│   └── normalized_message.py
+├── core/                         # 核心基础设施
+│   ├── base/                     # 基础类型定义
+│   │   ├── raw_data.py           # RawData数据类
+│   │   ├── normalized_message.py # NormalizedMessage数据类
+│   │   ├── input_provider.py     # InputProvider基类
+│   │   ├── decision_provider.py  # DecisionProvider基类
+│   │   └── output_provider.py    # OutputProvider基类
+│   ├── events/                   # 事件系统
+│   │   ├── registry.py           # EventRegistry
+│   │   ├── names.py              # CoreEvents常量
+│   │   └── payloads/             # 事件数据契约（Pydantic Model）
+│   ├── providers/                # WebSocket等基础Provider
+│   └── [其他核心模块]            # amaidesu_core, event_bus, llm_service等
 │
-├── layers/
-│   ├── input/                   # Layer 1: 输入感知
-│   │   ├── input_layer.py
-│   │   └── providers/
-│   │       ├── console_input_provider.py
-│   │       └── bili_danmaku_provider.py
+├── layers/                       # 5层架构实现
+│   ├── input/                    # Layer 1: 输入感知
+│   │   ├── input_layer.py        # InputLayer（标准化RawData）
+│   │   ├── input_provider_manager.py
+│   │   └── providers/            # InputProvider实现
+│   │       ├── console_input/
+│   │       ├── bili_danmaku/
+│   │       └── ...
 │   │
-│   ├── normalization/           # Layer 2: 标准化
-│   │   ├── normalization_layer.py
-│   │   ├── normalized_message.py
-│   │   ├── content/            # StructuredContent类型
+│   ├── normalization/            # Layer 2: 标准化（集成在InputLayer）
+│   │   ├── content/              # StructuredContent类型
 │   │   │   ├── base.py
 │   │   │   ├── text_content.py
-│   │   │   ├── gift_content.py
-│   │   │   └── super_chat_content.py
-│   │   └── parsers/            # ContentParser
-│   │       └── content_parser.py
+│   │   │   └── gift_content.py
+│   │   └── [内容处理逻辑]
 │   │
-│   ├── decision/                # Layer 3: 决策
+│   ├── decision/                 # Layer 3: 决策
 │   │   ├── decision_manager.py
-│   │   ├── intent_parser.py    # LLM意图解析器
-│   │   └── providers/
-│   │       ├── maicore_decision_provider.py
-│   │       ├── local_llm_decision_provider.py
-│   │       └── rule_engine_decision_provider.py
+│   │   ├── intent_parser.py      # LLM意图解析器
+│   │   └── providers/            # DecisionProvider实现
+│   │       ├── maicore/
+│   │       ├── local_llm/
+│   │       └── rule_engine/
 │   │
-│   ├── parameters/              # Layer 4: 参数生成
-│   │   ├── parameters_layer.py
-│   │   ├── emotion_mapper.py
-│   │   ├── action_mapper.py
-│   │   └── expression_mapper.py
+│   ├── parameters/               # Layer 4: 参数生成（辅助模块）
+│   │   └── [参数生成逻辑]
 │   │
-│   └── rendering/               # Layer 5: 渲染呈现
-│       ├── rendering_manager.py
-│       └── providers/
-│           ├── tts_provider.py
-│           ├── subtitle_provider.py
-│           └── vts_provider.py
+│   └── rendering/                # Layer 5: 渲染呈现
+│       ├── provider_registry.py  # Provider注册表
+│       ├── output_provider_manager.py
+│       ├── adapters/             # 平台适配器
+│       │   └── vts/
+│       └── providers/            # OutputProvider实现
+│           ├── tts/
+│           ├── subtitle/
+│           ├── vts/
+│           └── sticker/
 │
-└── core/
-    └── pipelines/               # 3类Pipeline系统
-        ├── pre/                 # Pre-Pipeline（处理NormalizedMessage）
-        │   ├── rate_limit_pipeline.py
-        │   ├── filter_pipeline.py
-        │   └── similar_text_pipeline.py
-        ├── post/                # Post-Pipeline（处理Intent，可选）
-        │   └── format_cleanup_pipeline.py
-        └── render/              # Render-Pipeline（处理Intent，可选）
-            └── emotion_smoothing_pipeline.py
+├── pipelines/                    # Pipeline系统（独立模块）
+│   ├── message_logger/           # 消息记录
+│   ├── similar_message_filter/   # 相似消息过滤
+│   └── throttle/                 # 限流
+│
+└── utils/                        # 工具模块
+    ├── logger.py
+    └── [其他工具]
 ```
+
+**关键变化说明**：
+- ✅ `src/core/base/` 替代了 `src/data_types/`（统一管理基础类型和Provider基类）
+- ✅ `src/pipelines/` 独立于 `src/core/`（Pipeline是独立模块）
+- ✅ `src/layers/normalization/` 与 `input/` 协同工作（Normalization集成在InputLayer中）
+- ✅ `src/layers/parameters/` 作为辅助模块，不是独立的Layer
 
 ---
 

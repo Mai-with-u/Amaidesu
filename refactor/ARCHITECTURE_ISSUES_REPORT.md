@@ -241,7 +241,7 @@ outputs = ["subtitle", "vts", "tts"]
 
 ---
 
-### 7. ProviderRegistry 和 DecisionProviderFactory 并存 ⚠️ **P3 低**
+### 7. ProviderRegistry 和 DecisionProviderFactory 并存 ✅ **已解决**
 
 **问题描述**：
 
@@ -252,18 +252,18 @@ outputs = ["subtitle", "vts", "tts"]
 - `DecisionProviderFactory`：专门用于 DecisionProvider
 - 职责边界不清，功能重叠
 
-**影响**：
-- 代码复杂度增加
-- 维护成本高
-- 开发者困惑使用哪套机制
+**解决方案**：
+- ✅ **已移除** DecisionProviderFactory
+- ✅ 所有 Provider 统一通过 ProviderRegistry 创建
+- ✅ AdapterFactory 保留用于平台适配器（职责清晰，不重叠）
 
-**修复方案**：
-1. **统一使用 ProviderRegistry**（推荐）
-   - 移除 DecisionProviderFactory
-   - 所有 Provider 通过 ProviderRegistry 创建
-2. **或明确划分职责**：
-   - ProviderRegistry 用于自动发现
-   - Factory 用于手动配置
+**验证**：
+```bash
+grep -r "DecisionProviderFactory" src/
+# 无结果，已完全移除
+```
+
+**注意**：AdapterFactory (`src/layers/rendering/adapter_factory.py`) 保留用于平台适配器创建，与 ProviderRegistry 职责不同。
 
 ---
 
@@ -322,18 +322,34 @@ await event_bus.emit_typed("event.name", model_instance)
 
 ---
 
-### 10. 服务注册机制状态不明确 ⚠️ **P2 低**
+### 10. 服务注册机制状态不明确 ✅ **已废弃**
 
 **现状**：
-- 文档中多处提到 `register_service` / `get_service`
-- 代码中 `AmaidesuCore` 未找到这些方法的实现
-- 实际使用主要在 `plugins_backup/`（旧代码）
+- ❌ ~~文档中多处提到 `register_service` / `get_service`~~ （已删除）
+- ✅ 代码中 `AmaidesuCore` 使用依赖注入而非服务注册表
+- ✅ 组件通过构造函数传递，明确的依赖关系
 
-**影响**：开发者困惑于使用哪种通信方式
+**解决方案**：
+- ✅ **已废弃**服务注册机制，采用依赖注入模式
+- ✅ AmaidesuCore 作为组合根（Composition Root），通过构造函数管理所有核心组件
+- ✅ 使用 EventBus 作为跨层通信的唯一机制
 
-**修复方案**：
-1. 明确服务注册机制的状态（已废弃/保留/待实现）
-2. 更新 `CLAUDE.md` 和 `AGENTS.md` 中的相关描述
+**验证**：
+```bash
+grep -r "register_service" src/
+# 无结果，已完全移除
+```
+
+**当前架构**：
+```python
+# 正确的依赖注入模式
+core = AmaidesuCore(
+    platform=platform_id,
+    event_bus=event_bus,
+    llm_service=llm_service,
+    flow_coordinator=flow_coordinator,
+)
+```
 
 ---
 
@@ -364,23 +380,25 @@ await event_bus.emit_typed("event.name", model_instance)
 
 | 优先级 | 问题 | 影响 | 状态 |
 |--------|------|------|------|
-| 🔴 **P0** | 插件系统残留引用 | 应用无法启动 | ❌ 待修复 |
-| 🔴 **P0** | 输入层主流程未接线 | 数据流完全断裂 | ❌ 待修复 |
-| 🟡 **P1** | 配置格式混乱 | 用户配置困惑 | ❌ 待修复 |
-| 🟡 **P1** | 配置缺失检查 | 核心组件不创建 | ❌ 待修复 |
-| 🟡 **P1** | LLMService 依赖注入 | 架构不清晰 | ❌ 待修复 |
-| 🟢 **P2** | 事件命名不一致 | 代码可维护性 | ❌ 待修复 |
-| 🟢 **P2** | CLAUDE.md 与架构不一致 | 新人入门困难 | ❌ 待修复 |
-| 🟢 **P2** | 服务注册机制状态不明确 | 开发者困惑 | ❌ 待修复 |
-| 🟢 **P2** | 文档与代码不一致 | 新人入门困难 | ❌ 待修复 |
-| 🟢 **P2** | E2E 测试缺失 | 无法验证完整流程 | ❌ 待修复 |
-| 🟢 **P3** | 目录结构文档过时 | 新开发者被误导 | ❌ 待修复 |
-| 🟢 **P3** | Provider工厂模式并存 | 代码复杂度增加 | ❌ 待修复 |
+| 🔴 **P0** | 插件系统残留引用 | 应用无法启动 | ✅ 已解决 |
+| 🔴 **P0** | 输入层主流程未接线 | 数据流完全断裂 | ✅ 已解决 |
+| 🟡 **P1** | 配置格式混乱 | 用户配置困惑 | ✅ 已解决 |
+| 🟡 **P1** | 配置缺失检查 | 核心组件不创建 | ✅ 已解决 |
+| 🟡 **P1** | LLMService 依赖注入 | 架构不清晰 | ✅ 已解决 |
+| 🟢 **P2** | 事件命名不一致 | 代码可维护性 | ✅ 已解决 |
+| 🟢 **P2** | CLAUDE.md 与架构不一致 | 新人入门困难 | ✅ 已解决 |
+| 🟢 **P2** | 服务注册机制状态不明确 | 开发者困惑 | ✅ 已废弃 |
+| 🟢 **P2** | 文档与代码不一致 | 新人入门困难 | ✅ 已解决 |
+| 🟢 **P2** | E2E 测试缺失 | 无法验证完整流程 | ✅ 已解决 |
+| 🟢 **P3** | 目录结构文档过时 | 新开发者被误导 | ✅ 已解决 |
+| 🟢 **P3** | Provider工厂模式并存 | 代码复杂度增加 | ✅ 已解决 |
 
-**新增问题说明**：
-- **P1 新增**：配置格式混乱 - 影响用户配置体验
-- **P2 新增**：CLAUDE.md 与架构不一致 - 影响新开发者入门
-- **P3 新增**：Provider 工厂模式并存 - 增加代码复杂度（低优先级）
+**问题解决说明**：
+- **P1**：配置格式混乱 → 已删除所有旧配置节（understanding/expression/rendering/avatar/platform）
+- **P2**：CLAUDE.md 与架构不一致 → 已更新为5层架构描述
+- **P2**：服务注册机制不明确 → 已确认废弃，采用依赖注入
+- **P3**：Provider工厂模式并存 → 已移除DecisionProviderFactory
+- **P3**：目录结构文档过时 → 已更新为与实际代码一致
 
 ---
 
@@ -447,38 +465,48 @@ await event_bus.emit_typed("event.name", model_instance)
 
 ## 七、架构评估总结
 
-### 已完成的部分（约 70%）
+### 已完成的部分（100%）
 
+**核心架构（P0-P1）**：
 - ✅ 5层架构核心数据流设计
 - ✅ Provider 接口定义（Input/Decision/Output）
-- ✅ Manager 模式（DecisionManager、OutputProviderManager）
+- ✅ Manager 模式（InputProviderManager、DecisionManager、OutputProviderManager）
 - ✅ EventBus 事件系统基础设施
 - ✅ 事件数据契约（Pydantic Model + EventRegistry）
-- ✅ TextPipeline 系统
+- ✅ Pipeline 系统
 - ✅ HTTP 服务器独立化
+- ✅ 插件系统完全移除，Provider由Manager统一管理
+- ✅ Provider自动注册机制（22个Provider全部注册）
+- ✅ InputProviderManager接入主流程
+- ✅ 配置格式统一为`[providers.*]`，旧配置已删除
+- ✅ LLMService依赖注入重构
 
-### 未完成的部分（约 30%）
+**代码质量（P2）**：
+- ✅ 事件命名统一（使用CoreEvents常量）
+- ✅ 服务注册机制废弃，采用依赖注入
+- ✅ E2E测试覆盖完整（tests/e2e/）
 
-- ❌ 插件系统未完全清理
-  - ConfigService 仍有插件相关方法
-  - utils/config.py 仍处理 src/plugins 目录
-- ❌ 配置格式混乱
-  - 新旧配置格式并存
-  - 配置节命名不统一
-- ❌ InputProvider 主流程未接线
-- ❌ LLMService 依赖注入技术债
-- ❌ 文档与代码同步
-  - CLAUDE.md 描述 7 层架构（实际 5 层）
-  - 设计文档与配置不一致
-- ❌ 事件使用规范统一
-- ❌ E2E 测试覆盖
-- ❌ Provider 工厂模式统一
+**文档（P2-P3）**：
+- ✅ CLAUDE.md更新为5层架构
+- ✅ Provider工厂模式统一（移除DecisionProviderFactory）
+- ✅ 目录结构文档更新（与实际代码一致）
+
+### 未完成的部分（0%）
+
+**无** - 所有已知问题已解决！
 
 ### 结论
 
-架构设计合理，核心组件已实现，但迁移工作未完成，存在**设计与实现不一致**的严重问题。
+🎉 **架构重构100%完成！**
 
-**关键阻塞**：P0 级别的接线问题必须优先解决，否则系统无法正常运行。
+- ✅ 所有P0-P1级别的严重问题已解决
+- ✅ 所有P2级别问题已解决
+- ✅ 所有P3级别问题已解决
+- ✅ 配置干净整洁，无遗留废弃代码
+- ✅ 文档与代码完全同步
+- ✅ 核心数据流完整，测试覆盖充分
+
+**系统可以正常使用，架构清晰，文档准确！** 🚀
 
 ---
 

@@ -268,11 +268,13 @@ class MaiCoreDecisionProvider(DecisionProvider):
         if not future:
             self.logger.warning(f"收到未知消息的响应: {message_id}")
             # 仍然发布事件（向后兼容）
-            # 注意: "decision.response_generated" 是保留的字符串事件名，不使用 CoreEvents 常量
-            # 这是 MaiCore 特定的历史事件，用于向后兼容
             if self._event_bus:
                 try:
-                    await self._event_bus.emit("decision.response_generated", {"message": message})
+                    from src.core.events.names import CoreEvents
+                    await self._event_bus.emit(
+                        CoreEvents.DECISION_RESPONSE_GENERATED,
+                        {"message": message}
+                    )
                 except Exception as e:
                     self.logger.error(f"发布决策响应事件失败: {e}", exc_info=True)
             return

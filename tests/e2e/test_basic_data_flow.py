@@ -7,7 +7,13 @@ Input → Normalization → Decision → Expression → Output
 import asyncio
 import pytest
 
+# 导入所有 Provider 模块以触发注册
+import src.layers.decision.providers  # noqa: F401
+import src.layers.input.providers  # noqa: F401
+import src.layers.rendering.providers  # noqa: F401
+
 from src.core.base.raw_data import RawData
+from src.core.events.names import CoreEvents
 
 
 @pytest.mark.asyncio
@@ -37,17 +43,17 @@ async def test_complete_data_flow_with_mock_providers(
 
     # 3. 等待 normalization.message_ready 事件
     norm_future = asyncio.create_task(
-        wait_for_event(event_bus, "normalization.message_ready")
+        wait_for_event(event_bus, CoreEvents.NORMALIZATION_MESSAGE_READY)
     )
 
     # 4. 等待 decision.intent_generated 事件
     intent_future = asyncio.create_task(
-        wait_for_event(event_bus, "decision.intent_generated")
+        wait_for_event(event_bus, CoreEvents.DECISION_INTENT_GENERATED)
     )
 
     # 5. 发送 RawData
     await event_bus.emit(
-        "perception.raw_data.generated",
+        CoreEvents.PERCEPTION_RAW_DATA_GENERATED,
         {
             "data": sample_raw_data,
             "source": "test"
@@ -57,7 +63,7 @@ async def test_complete_data_flow_with_mock_providers(
 
     # 6. 验证 normalization.message_ready 事件
     event_name, event_data, source = await norm_future
-    assert event_name == "normalization.message_ready"
+    assert event_name == CoreEvents.NORMALIZATION_MESSAGE_READY
     assert "message" in event_data
     normalized_message = event_data["message"]
     assert normalized_message.text == "你好，VTuber"
@@ -65,12 +71,11 @@ async def test_complete_data_flow_with_mock_providers(
 
     # 7. 验证 decision.intent_generated 事件
     event_name, event_data, source = await intent_future
-    assert event_name == "decision.intent_generated"
+    assert event_name == CoreEvents.DECISION_INTENT_GENERATED
     assert "intent" in event_data
     intent = event_data["intent"]
-    assert intent.text == "[模拟回复] 你好，VTuber"
-    assert intent.expression == "neutral"
-    assert intent.confidence == 1.0
+    assert intent.response_text == "[模拟回复] 你好，VTuber"
+    assert intent.emotion.value == "neutral"
 
     # 8. 清理
     await decision_manager.cleanup()
@@ -98,12 +103,12 @@ async def test_input_layer_normalization(
 
     # 等待事件
     future = asyncio.create_task(
-        wait_for_event(event_bus, "normalization.message_ready")
+        wait_for_event(event_bus, CoreEvents.NORMALIZATION_MESSAGE_READY)
     )
 
     # 发送 RawData
     await event_bus.emit(
-        "perception.raw_data.generated",
+        CoreEvents.PERCEPTION_RAW_DATA_GENERATED,
         {
             "data": sample_raw_data,
             "source": "test"
@@ -156,12 +161,12 @@ async def test_decision_provider_creates_intent(
 
     # 等待决策事件
     future = asyncio.create_task(
-        wait_for_event(event_bus, "decision.intent_generated")
+        wait_for_event(event_bus, CoreEvents.DECISION_INTENT_GENERATED)
     )
 
     # 发送 NormalizedMessage
     await event_bus.emit(
-        "normalization.message_ready",
+        CoreEvents.NORMALIZATION_MESSAGE_READY,
         {
             "message": normalized,
             "source": "test"
@@ -173,9 +178,8 @@ async def test_decision_provider_creates_intent(
     event_name, event_data, source = await future
     intent = event_data["intent"]
 
-    assert intent.text == "[模拟回复] 测试消息"
-    assert intent.expression == "neutral"
-    assert intent.confidence == 1.0
+    assert intent.response_text == "[模拟回复] 测试消息"
+    assert intent.emotion.value == "neutral"
     assert intent.metadata["mock"] is True
     assert "call_count" in intent.metadata
 
@@ -212,7 +216,7 @@ async def test_multiple_sequential_messages(
     received_intents = []
 
     async def collect_intents(event_name, event_data, source):
-        received_intents.append(event_data["intent"].text)
+        received_intents.append(event_data["intent"].response_text)
 
     event_bus.on("decision.intent_generated", collect_intents)
 

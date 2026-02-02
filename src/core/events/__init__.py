@@ -30,6 +30,7 @@ def register_core_events() -> None:
     # Layer 3: 决策层
     EventRegistry.register_core_event(CoreEvents.DECISION_REQUEST, DecisionRequestEvent)
     EventRegistry.register_core_event(CoreEvents.DECISION_INTENT_GENERATED, IntentGeneratedEvent)
+    EventRegistry.register_core_event(CoreEvents.DECISION_RESPONSE_GENERATED, DecisionResponseEvent)
 
     # Layer 4-5: 参数和渲染
     EventRegistry.register_core_event(CoreEvents.EXPRESSION_PARAMETERS_GENERATED, ExpressionParametersEvent)

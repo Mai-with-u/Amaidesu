@@ -15,6 +15,7 @@ class CoreEvents:
     # Layer 3: 决策层（Decision）
     DECISION_REQUEST = "decision.request"
     DECISION_INTENT_GENERATED = "decision.intent_generated"  # 5层架构：直接返回Intent
+    DECISION_RESPONSE_GENERATED = "decision.response_generated"  # MaiCore响应事件
     DECISION_PROVIDER_CONNECTED = "decision.provider.connected"
     DECISION_PROVIDER_DISCONNECTED = "decision.provider.disconnected"
 

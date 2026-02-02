@@ -83,30 +83,33 @@ class EventBus:
     - 请求-响应模式(通过request方法)
     """
 
-    def __init__(self, enable_stats: bool = True, enable_validation: bool = False):
+    def __init__(self, enable_stats: bool = True):
         """
         初始化事件总线
 
         Args:
             enable_stats: 是否启用统计功能
-            enable_validation: 是否启用数据验证（建议仅 debug 模式开启）
         """
         self._handlers: Dict[str, List[HandlerWrapper]] = defaultdict(list)
         self._stats: Dict[str, EventStats] = defaultdict(lambda: EventStats())
         self.enable_stats = enable_stats
-        self.enable_validation = enable_validation
+        self.enable_validation = True  # 固定开启验证
         self._is_cleanup = False
         self._pending_requests: Dict[str, asyncio.Future] = {}
         self.logger = get_logger("EventBus")
-        self.logger.debug(f"EventBus 初始化完成 (stats={enable_stats}, validation={enable_validation})")
+        self.logger.debug(f"EventBus 初始化完成 (stats={enable_stats}, validation=enabled)")
 
     async def emit(self, event_name: str, data: Any, source: str = "unknown", error_isolate: bool = True) -> None:
         """
-        发布事件（新增验证逻辑）
+        发布事件
+
+        .. deprecated::
+            请使用 emit_typed() 方法传递 Pydantic Model。
+            字典格式将在未来版本移除。
 
         Args:
             event_name: 事件名称
-            data: 事件数据（推荐使用 Pydantic Model 或 dict）
+            data: 事件数据（推荐使用 Pydantic Model，字典格式已废弃）
             source: 事件源（通常是发布者的类名）
             error_isolate: 是否隔离错误（True 时单个 handler 异常不影响其他）
         """
@@ -114,7 +117,16 @@ class EventBus:
             self.logger.warning(f"EventBus正在清理中，忽略事件: {event_name}")
             return
 
-        # === 新增：数据验证 ===
+        # 废弃警告：如果传入字典，提示使用 emit_typed
+        if isinstance(data, dict) and self.enable_validation:
+            from src.core.events.registry import EventRegistry
+            if EventRegistry.is_registered(event_name):
+                self.logger.warning(
+                    f"事件 '{event_name}' 使用字典格式（已废弃），"
+                    f"请使用 emit_typed() 传递对应的 Pydantic Model"
+                )
+
+        # === 数据验证 ===
         if self.enable_validation:
             self._validate_event_data(event_name, data)
 

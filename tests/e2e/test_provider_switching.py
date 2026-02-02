@@ -6,6 +6,11 @@ E2E Test: Provider Switching
 import asyncio
 import pytest
 
+# 导入所有 Provider 模块以触发注册
+import src.layers.decision.providers  # noqa: F401
+import src.layers.input.providers  # noqa: F401
+import src.layers.rendering.providers  # noqa: F401
+
 from src.core.base.raw_data import RawData
 from src.core.base.normalized_message import NormalizedMessage
 from src.layers.normalization.content import TextContent

@@ -61,7 +61,7 @@ uv run python main.py
 uv run python main.py --debug
 
 # 过滤日志，只显示指定模块（WARNING及以上级别总是显示）
-uv run python main.py --filter StickerPlugin TTSPlugin
+uv run python main.py --filter SubtitleProvider TTSProvider
 
 # 调试模式并过滤特定模块
 uv run python main.py --debug --filter BiliDanmakuProvider
@@ -221,12 +221,13 @@ logger.error("错误日志", exc_info=True)
 - ✅ 插件系统完全移除，Provider由Manager统一管理
 - ✅ Provider自动注册机制（22个Provider全部注册）
 - ✅ InputProviderManager接入主流程
-- ✅ 配置格式统一为`[providers.*]`
+- ✅ 配置格式统一为`[providers.*]`，旧配置已标记为deprecated
 - ✅ LLMService依赖注入重构
+- ✅ E2E测试用例完整（tests/e2e/）
 
-**待完成**（P2-P3，低优先级）：
-- ⏳ E2E测试用例（MockProvider已就绪）
-- ⏳ 文档完全同步更新
+**已完成**（P2）：
+- ✅ 事件命名统一（使用CoreEvents常量）
+- ✅ 配置迁移检测工具
 
 **文档状态**：
 - ✅ 准确：`refactor/design/overview.md`（5层架构设计文档）

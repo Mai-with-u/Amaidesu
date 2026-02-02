@@ -244,9 +244,7 @@ async def create_app_components(
 
     # 事件总线
     logger.info("初始化事件总线、数据流协调器和 AmaidesuCore...")
-    event_bus_config = config.get("event_bus", {})
-    enable_validation = event_bus_config.get("enable_validation", False)
-    event_bus = EventBus(enable_validation=enable_validation)
+    event_bus = EventBus()
 
     register_core_events()
     logger.info("核心事件已注册到 EventRegistry")

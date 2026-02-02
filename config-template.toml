@@ -1,8 +1,24 @@
 # Amaidesu 配置文件
-
+#
+# 📝 配置格式说明（5层架构）
+# ================================
+# 当前使用统一的 [providers.*] 配置格式管理所有Provider：
+#   - [providers.input]    输入Provider（Layer 1: Input）
+#   - [providers.decision] 决策Provider（Layer 3: Decision）
+#   - [providers.output]   输出Provider（Layer 5: Rendering）
+#
+# ⚠️ 以下旧配置节已标记为 DEPRECATED，仅保留向后兼容：
+#   - [understanding]  → 请迁移到 [providers.input]
+#   - [expression]     → 请迁移到 [providers.output.expression_generator]
+#   - [rendering]      → 请迁移到 [providers.output]
+#   - [avatar]         → 请迁移到 [providers.output]
+#   - [platform]       → 请迁移到 [providers.output.outputs.*]
+#
+# 🔄 配置迁移工具
+# 程序启动时会自动检测并提示旧配置的使用，建议尽快迁移到新格式。
+#
 # === 全局 LLM 配置 ===
-# 重要：这是项目通用的 LLM 配置，供所有模块和插件使用
-# Avatar 自动表情、插件等功能都会使用这些配置
+# 重要：这是项目通用的 LLM 配置，供所有模块使用
 [llm]
 # 标准 LLM 配置（用于高质量任务）
 backend = "openai"              # openai | ollama | anthropic
@@ -88,90 +104,7 @@ title_separator = ": "     # 如果添加提供者名称，使用的分隔符
 default_max_length = 1000 # 默认上下文最大长度
 default_priority = 100    # 默认优先级值
 
-# === 事件总线配置 ===
-[event_bus]
-# 是否启用事件数据验证（建议仅 debug 模式开启）
-# 开启后会验证所有已注册事件的数据格式
-enable_validation = false
-
-# ========== 新架构：按层级组织配置 ==========
-
-# === Layer 5: Understanding（表现理解层） ===
-[understanding]
-# 情感分析配置（唯一位置）
-[understanding.emotion_analyzer]
-# 情感分析配置（Layer 5 统一入口）
-use_rules = true              # 使用规则分析（快速、确定性）
-use_llm = false               # 使用 LLM 分析（可选、智能）
-
-# LLM 配置（用于情感分析）
-llm_type = "llm_fast"       # 使用全局配置的哪个 LLM
-# 自定义 LLM 配置（可选，如果不设置则使用全局配置）
-# model = "deepseek-chat"
-# temperature = 0.3
-# max_tokens = 100
-
-# === Layer 6: Expression（表现生成层） ===
-[expression]
-# 表情映射配置（统一位置）
-# 表情映射自定义（可选覆盖）
-[expression.mappings]
-# 覆盖默认情感到抽象参数的映射
-# happy 开心
-[expression.mappings.happy]
-smile = 0.9
-eye_open = 0.95
-
-# sad 悲伤
-[expression.mappings.sad]
-smile = -0.3
-eye_open = 0.7
-
-# surprised 惊讶
-[expression.mappings.surprised]
-smile = 0.2
-eye_open = 1.0
-mouth_open = 0.6
-
-# angry 生气
-[expression.mappings.angry]
-smile = -0.5
-eye_open = 0.6
-brow_down = 0.5
-
-# === Layer 7: Rendering（渲染呈现层） ===
-[rendering]
-# 渲染层配置（已移至 [providers.output]）
-
-# Avatar 输出配置
-[rendering.avatar]
-enabled = true                    # 是否启用虚拟形象输出
-adapter_type = "vts"              # vts | vrchat | live2d
-
-# === Platform Layer（平台抽象层） ===
-[platform]
-# 平台适配器配置
-[platform.vts]
-plugin_name = "Amaidesu_VTS_Adapter"
-developer = "Amaidesu"
-authentication_token_path = "./vts_token.txt"
-vts_host = "localhost"
-vts_port = 8001
-
-# ========== 旧配置兼容性说明 ==========
-# 以下配置节已迁移到新的 [understanding]、[expression]、[platform] 结构
-# 但保留以向后兼容。推荐使用新的 [providers.output] 结构
-# 旧配置节已标记为过时（deprecated）
-
-# 通用虚拟形象控制系统配置（已迁移到 Platform Layer）
-[avatar]
-# 已废弃：请使用新的 [rendering.avatar] + [platform] 配置
-enabled = false
-
-# 默认活跃适配器（已废弃）
-default_adapter = "vts"
-
-# 管道配置
+# ========== 管道配置 ==========
 [pipelines]
 # === TextPipeline（新架构，Layer 2→3 文本预处理） ===
 # TextPipeline 在 NormalizedText → CanonicalMessage 之间执行文本预处理

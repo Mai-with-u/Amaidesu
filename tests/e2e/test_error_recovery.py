@@ -6,7 +6,13 @@ E2E Test: Error Recovery
 import asyncio
 import pytest
 
+# 导入所有 Provider 模块以触发注册
+import src.layers.decision.providers  # noqa: F401
+import src.layers.input.providers  # noqa: F401
+import src.layers.rendering.providers  # noqa: F401
+
 from src.core.base.raw_data import RawData
+from src.core.events.names import CoreEvents
 
 
 @pytest.mark.asyncio
@@ -38,7 +44,8 @@ async def test_decision_provider_failure_isolation(
         content=TextContent(text="正常消息"),
         source="test",
         data_type="text",
-        importance=0.5
+        importance=0.5,
+        metadata={}
     )
 
     intent1 = await decision_manager.decide(normalized)
@@ -63,7 +70,8 @@ async def test_decision_provider_failure_isolation(
         content=TextContent(text="错误消息"),
         source="test",
         data_type="text",
-        importance=0.5
+        importance=0.5,
+        metadata={}
     )
 
     # 这应该会失败
@@ -82,7 +90,8 @@ async def test_decision_provider_failure_isolation(
         content=TextContent(text="恢复正常"),
         source="test",
         data_type="text",
-        importance=0.5
+        importance=0.5,
+        metadata={}
     )
 
     intent2 = await decision_manager.decide(normal_message)
@@ -119,11 +128,11 @@ async def test_invalid_raw_data_handling(
     # 等待可能的事件（可能会被过滤）
     try:
         future = asyncio.create_task(
-            wait_for_event(event_bus, "normalization.message_ready", timeout=1.0)
+            wait_for_event(event_bus, CoreEvents.NORMALIZATION_MESSAGE_READY, timeout=1.0)
         )
 
         await event_bus.emit(
-            "perception.raw_data.generated",
+            CoreEvents.PERCEPTION_RAW_DATA_GENERATED,
             {
                 "data": invalid_data,
                 "source": "test"
