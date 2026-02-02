@@ -207,69 +207,7 @@ priority = 50
 # 可以在此覆盖 command_map
 # command_map = { vts_trigger_hotkey = { service = "vts_control", method = "trigger_hotkey" } }
 
-# 插件全局配置
-[plugins]
-# === 新格式：启用列表 ===
-# 取消注释来启用插件，注释掉来禁用
-enabled = [
-    # 模拟插件（用于测试和演示）
-    "mock_providers",    # 模拟输入、决策、输出三层（推荐用于测试）
-
-    # 基础功能（建议启用）
-    # "console_input",
-    # "keyword_action",
-    # "llm_text_processor", # LLM文本处理器
-
-    # 游戏互动
-    # "mainosaba",        # 魔裁游戏
-    # "arknights",        # 明日方舟
-    # "minecraft",        # 我的世界
-
-    # 输入功能（语音和文本输入）
-    # "stt",              # 语音识别
-    # "funasr_stt",       # FunASR语音识别
-    # "bili_danmaku",     # B站弹幕输入
-    # "bili_danmaku_official",       # B站官方弹幕（不要和bili_danmaku同时启用）
-    # "bili_danmaku_official_maicraft",  # B站弹幕-MaiCraft版（不要和bili_danmaku_selenium同时启用）
-    # "bili_danmaku_selenium",        # B站弹幕-Selenium版
-    # "mock_danmaku",     # 模拟弹幕输入
-    # "read_pingmu",      # 读屏木输入
-    # "message_replayer", # 消息重放器
-
-    # 输出功能（语音和视觉输出）
-    # "tts",              # 语音合成
-    # "gptsovits_tts",    # GPT-SoVITS TTS
-    # "omni_tts",         # Omni TTS
-    # "subtitle",         # 字幕生成
-    # "sticker",          # 贴纸生成
-    # "emotion_judge",    # 情感判断
-
-    # 外部控制和集成
-    # "vtube_studio",     # VTubeStudio控制
-    # "warudo",           # Warudo控制
-    # "obs_control",      # OBS Studio控制
-    # "dg_lab_service",   # DG-Lab服务
-    # "dg-lab-do",        # DG-Lab DO
-    # "vrchat", # VRChat控制
-
-    # 监控和流媒体
-    # "screen_monitor",   # 屏幕监控
-    # "remote_stream",    # 远程串流
-
-    # 游戏相关
-    # "maicraft",         # MaiCraft游戏
-
-    # 系统工具
-    # "command_processor",  # 命令处理器（通常作为管道使用）
-]
-
-# === 旧格式（向后兼容，可选） ===
-# 以下配置仍然有效，但会被enabled列表覆盖
-# enable_console_input = true
-# enable_stt = false
-# ...（保留原有配置作为注释示例）
-
-# ========== 新增：Phase 5 Provider配置 ==========
+# ========== Provider配置 ==========
 
 # Provider配置统一管理
 # 此配置用于统一管理所有Provider（Input、Output、Decision）
@@ -279,7 +217,7 @@ enabled = [
 # 是否启用输入层
 enabled = true
 # 启用的输入Provider列表
-inputs = [
+enabled_inputs = [
     # 控制台输入（开发测试用）
     # "console_input",
 
@@ -317,7 +255,7 @@ concurrent_rendering = true
 error_handling = "continue"
 
 # 启用的输出Provider列表
-outputs = [
+enabled_outputs = [
     # 基础输出（推荐启用）
     "subtitle",     # 字幕
     "vts",          # VTS控制
@@ -459,7 +397,7 @@ enabled = true
 # 当前使用的决策Provider（active provider）
 active_provider = "maicore"
 # 支持的决策Provider列表
-providers = [
+available_providers = [
     "maicore",        # MaiCore决策（默认）
     "rule_engine",    # 规则引擎
     "local_llm",      # 本地LLM
@@ -500,65 +438,4 @@ llm_type = "llm"
 # max_tokens = 1000
 # 系统提示词
 system_prompt = "你是一个友好的AI助手，请简洁地回答用户的问题。"
-
-# ========== 旧配置兼容性说明 ==========
-# 以下配置节已迁移到新的 [providers.*] 结构，但保留以向后兼容
-# [rendering] 节点已迁移到 [providers.output]，但仍可使用（已标记为过时）
-# 推荐使用新的 [providers.*] 结构，未来版本将移除旧的 [rendering] 节点
-
-# ========== 旧Phase 4渲染层配置（已过时，保留以兼容） ==========
-# 注意：此配置节已迁移到 [providers.output]，请使用新配置
-[rendering]
-# 是否启用输出层
-enabled = true
-# 是否并发渲染到所有Provider
-concurrent_rendering = true
-# 错误处理策略：continue（继续）、stop（停止）、drop（丢弃）
-error_handling = "continue"
-
-# 启用的输出Provider列表
-outputs = [
-    # 基础输出（推荐启用）
-    "subtitle",     # 字幕
-    "vts",          # VTS控制
-
-    # TTS输出（选择一个或多个）
-    # "tts",         # Edge TTS
-    # "omni_tts",    # Omni TTS (GPT-SoVITS)
-
-    # 其他输出
-    # "sticker",     # 表情贴纸
-]
-
-# ExpressionGenerator配置
-[rendering.expression_generator]
-# 默认TTS是否启用
-default_tts_enabled = true
-# 默认字幕是否启用
-default_subtitle_enabled = true
-# 默认表情是否启用
-default_expressions_enabled = true
-# 默认热键是否启用
-default_hotkeys_enabled = true
-
-# 各个Provider的详细配置（已迁移到 [providers.output.outputs.xxx]，此处仅作为引用）
-[rendering.outputs.tts]
-type = "tts"
-# 使用 [providers.output.outputs.tts] 的配置
-
-[rendering.outputs.subtitle]
-type = "subtitle"
-# 使用 [providers.output.outputs.subtitle] 的配置
-
-[rendering.outputs.sticker]
-type = "sticker"
-# 使用 [providers.output.outputs.sticker] 的配置
-
-[rendering.outputs.vts]
-type = "vts"
-# 使用 [providers.output.outputs.vts] 的配置
-
-[rendering.outputs.omni_tts]
-type = "omni_tts"
-# 使用 [providers.output.outputs.omni_tts] 的配置
 

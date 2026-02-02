@@ -4,7 +4,7 @@ ConfigService - 统一的配置管理服务
 职责:
 - 提供统一的配置加载接口
 - 集中管理所有配置加载逻辑
-- 支持插件、管道、Provider 等组件的配置获取
+- 支持 Provider、Pipeline 等组件的配置获取
 - 配置合并策略：主配置覆盖组件配置
 """
 
@@ -33,11 +33,14 @@ class ConfigService:
         # 获取主配置
         general_config = config_service.get_section("general")
 
-        # 获取插件配置（已合并全局配置）
-        plugin_config = config_service.get_plugin_config("tts", "/path/to/src/plugins/tts")
+        # 获取输入Provider配置
+        input_config = config_service.get_input_provider_config("console")
 
-        # 获取管道配置（已合并全局配置）
-        pipeline_config = config_service.get_pipeline_config("throttle", "/path/to/src/pipelines/throttle")
+        # 获取输出Provider配置
+        output_config = config_service.get_provider_config("tts")
+
+        # 获取管道配置
+        pipeline_config = config_service.get_pipeline_config("throttle")
     """
 
     def __init__(self, base_dir: str):
@@ -164,53 +167,46 @@ class ConfigService:
         else:
             return self._main_config.get(key, default)
 
-    def get_plugin_config(
+    def get_input_provider_config(
         self,
-        plugin_name: str,
-        plugin_dir_path: Optional[str] = None,
+        provider_name: str,
+        provider_dir_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        获取合并后的插件配置
+        获取输入Provider的配置
 
-        合并顺序（后者覆盖前者）:
-        1. 插件自身目录下的 config.toml
-        2. 主配置文件中 [plugins.plugin_name] 的全局配置
+        从 [providers.input.inputs.{provider_name}] 读取配置。
 
         Args:
-            plugin_name: 插件名称
-            plugin_dir_path: 插件目录的绝对路径（可选，如果未提供则自动查找）
+            provider_name: Provider名称（如 "console", "bili_danmaku", "minecraft"）
+            provider_dir_path: Provider目录的绝对路径（可选，预留用于从目录加载config.toml）
 
         Returns:
-            合并后的插件配置
+            Provider配置字典
 
         Example:
-            # 使用自动查找插件目录
-            tts_config = config_service.get_plugin_config("tts")
+            # 获取控制台输入Provider配置
+            console_config = config_service.get_input_provider_config("console")
 
-            # 使用指定的插件目录路径
-            tts_config = config_service.get_plugin_config("tts", "/path/to/src/plugins/tts")
+            # 获取B站弹幕Provider配置
+            bili_config = config_service.get_input_provider_config("bili_danmaku")
         """
         if not self._initialized:
             self.logger.warning("ConfigService 未初始化，返回空配置")
             return {}
 
-        # 自动查找插件目录
-        if plugin_dir_path is None:
-            plugin_dir_path = os.path.join(self.base_dir, "src", "plugins", plugin_name)
-            if not os.path.isdir(plugin_dir_path):
-                self.logger.warning(f"插件目录不存在: {plugin_dir_path}")
-                return {}
+        # 从 [providers.input.inputs.{provider_name}] 获取配置
+        providers_config = self.get_section("providers", {})
+        input_config = providers_config.get("input", {})
+        inputs_config = input_config.get("inputs", {})
+        provider_config = inputs_config.get(provider_name, {}).copy()
 
-        # 加载插件自身配置
-        plugin_own_config = load_component_specific_config(plugin_dir_path, plugin_name, "插件")
+        # 如果没有配置，返回空配置
+        if not provider_config:
+            self.logger.debug(f"输入Provider '{provider_name}' 没有配置")
+            return {}
 
-        # 获取全局配置覆盖
-        main_provided_config = self.get_section("plugins", {}).get(plugin_name, {}).copy()
-
-        # 合并配置（全局配置覆盖插件配置）
-        final_plugin_config = merge_component_configs(plugin_own_config, main_provided_config, plugin_name, "插件")
-
-        return final_plugin_config
+        return provider_config
 
     def get_pipeline_config(
         self,
@@ -305,38 +301,47 @@ class ConfigService:
 
         return provider_config
 
-    def get_all_plugin_configs(self) -> Dict[str, Dict[str, Any]]:
+    def get_all_provider_configs(self, provider_type: str = "input") -> Dict[str, Dict[str, Any]]:
         """
-        获取所有插件的配置
+        获取所有Provider的配置
+
+        Args:
+            provider_type: Provider类型（"input" 或 "rendering"，默认 "input"）
 
         Returns:
-            字典，键为插件名称，值为该插件的配置
+            字典，键为Provider名称，值为该Provider的配置
 
         Example:
-            all_plugins = config_service.get_all_plugin_configs()
-            for plugin_name, plugin_config in all_plugins.items():
-                print(f"{plugin_name}: {plugin_config}")
+            # 获取所有输入Provider配置
+            all_inputs = config_service.get_all_provider_configs("input")
+            for provider_name, provider_config in all_inputs.items():
+                print(f"{provider_name}: {provider_config}")
+
+            # 获取所有输出Provider配置
+            all_outputs = config_service.get_all_provider_configs("rendering")
         """
         if not self._initialized:
             self.logger.warning("ConfigService 未初始化，返回空配置")
             return {}
 
-        all_plugin_configs = {}
+        all_provider_configs = {}
 
-        # 获取插件目录
-        plugins_dir = os.path.join(self.base_dir, "src", "plugins")
-        if not os.path.isdir(plugins_dir):
-            self.logger.warning(f"插件目录不存在: {plugins_dir}")
-            return all_plugin_configs
+        # 根据Provider类型选择配置节
+        if provider_type == "input":
+            config_section = self.get_section("providers", {}).get("input", {})
+            providers_dict = config_section.get("inputs", {})
+        elif provider_type == "rendering":
+            config_section = self.get_section("rendering", {})
+            providers_dict = config_section.get("outputs", {})
+        else:
+            self.logger.warning(f"未知的Provider类型: {provider_type}")
+            return all_provider_configs
 
-        # 遍历所有插件目录
-        for item in os.listdir(plugins_dir):
-            item_path = os.path.join(plugins_dir, item)
-            if os.path.isdir(item_path) and not item.startswith("__"):
-                plugin_config = self.get_plugin_config(item, item_path)
-                all_plugin_configs[item] = plugin_config
+        # 收集所有Provider配置
+        for provider_name, provider_config in providers_dict.items():
+            all_provider_configs[provider_name] = provider_config.copy()
 
-        return all_plugin_configs
+        return all_provider_configs
 
     def get_all_pipeline_configs(self) -> Dict[str, Dict[str, Any]]:
         """
@@ -371,12 +376,13 @@ class ConfigService:
 
         return all_pipeline_configs
 
-    def is_plugin_enabled(self, plugin_name: str) -> bool:
+    def is_provider_enabled(self, provider_name: str, provider_type: str = "input") -> bool:
         """
-        检查插件是否启用
+        检查Provider是否启用
 
         Args:
-            plugin_name: 插件名称
+            provider_name: Provider名称
+            provider_type: Provider类型（"input" 或 "rendering"，默认 "input"）
 
         Returns:
             是否启用
@@ -385,24 +391,20 @@ class ConfigService:
             self.logger.warning("ConfigService 未初始化，返回 False")
             return False
 
-        plugins_config = self.get_section("plugins", {})
-
-        # 1. 检查 enabled 列表（优先级最高）
-        enabled_list = plugins_config.get("enabled", [])
-        if plugin_name in enabled_list:
-            return True
-
-        # 2. 如果有 enabled 列表但插件不在其中，则禁用
-        if enabled_list:
+        # 根据Provider类型选择配置节
+        if provider_type == "input":
+            config_section = self.get_section("input", {})
+            list_key = "inputs"
+        elif provider_type == "rendering":
+            config_section = self.get_section("rendering", {})
+            list_key = "outputs"
+        else:
+            self.logger.warning(f"未知的Provider类型: {provider_type}")
             return False
 
-        # 3. 向后兼容：检查旧的 enable_xxx 格式
-        old_format_key = f"enable_{plugin_name}"
-        if old_format_key in plugins_config:
-            return plugins_config[old_format_key]
-
-        # 4. 默认行为：如果都没有配置，默认禁用（更安全）
-        return False
+        # 检查是否在启用列表中
+        enabled_list = config_section.get(list_key, [])
+        return provider_name in enabled_list
 
     def is_pipeline_enabled(self, pipeline_name: str) -> bool:
         """
