@@ -24,16 +24,19 @@ class MockDecisionProvider(DecisionProvider):
     async def decide(self, message: NormalizedMessage) -> Optional[Intent]:
         """返回预设的响应"""
         self.call_count += 1
-        
+
         # 简单的模拟逻辑
         response_text = self.default_response
         if message.text:
             response_text = f"[模拟回复] {message.text}"
-        
+
+        from src.layers.decision.intent import Intent, EmotionType
+
         return Intent(
-            text=response_text,
-            expression="neutral",
-            confidence=1.0,
+            original_text=message.text,
+            response_text=response_text,
+            emotion=EmotionType.NEUTRAL,
+            actions=[],
             metadata={"mock": True, "call_count": self.call_count}
         )
 
