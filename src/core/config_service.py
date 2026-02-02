@@ -285,9 +285,9 @@ class ConfigService:
 
         provider_type = provider_type or provider_name
 
-        # 从 rendering.outputs 中获取配置
-        rendering_config = self.get_section("rendering", {})
-        outputs_config = rendering_config.get("outputs", {})
+        # 从 providers.output.outputs 中获取配置
+        output_config = self.get_section("providers.output", {})
+        outputs_config = output_config.get("outputs", {})
         provider_config = outputs_config.get(provider_name, {}).copy()
 
         # 如果没有配置，则返回空配置
@@ -330,8 +330,8 @@ class ConfigService:
         if provider_type == "input":
             config_section = self.get_section("providers", {}).get("input", {})
             providers_dict = config_section.get("inputs", {})
-        elif provider_type == "rendering":
-            config_section = self.get_section("rendering", {})
+        elif provider_type == "rendering" or provider_type == "output":
+            config_section = self.get_section("providers.output", {})
             providers_dict = config_section.get("outputs", {})
         else:
             self.logger.warning(f"未知的Provider类型: {provider_type}")
@@ -393,11 +393,11 @@ class ConfigService:
 
         # 根据Provider类型选择配置节
         if provider_type == "input":
-            config_section = self.get_section("input", {})
-            list_key = "inputs"
-        elif provider_type == "rendering":
-            config_section = self.get_section("rendering", {})
-            list_key = "outputs"
+            config_section = self.get_section("providers.input", {})
+            list_key = "enabled_inputs"
+        elif provider_type == "rendering" or provider_type == "output":
+            config_section = self.get_section("providers.output", {})
+            list_key = "enabled_outputs"
         else:
             self.logger.warning(f"未知的Provider类型: {provider_type}")
             return False

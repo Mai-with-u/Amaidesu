@@ -38,8 +38,8 @@ except ImportError:
     pass
 
 # --- 远程流支持 ---
-# 远程流插件未安装，将禁用远程流功能
-# 如需启用远程流，请安装 remote_stream 插件
+# 远程流 Provider 未安装，将禁用远程流功能
+# 如需启用远程流，请在配置中启用 remote_stream Provider
 REMOTE_STREAM_AVAILABLE = False
 
 # --- 音频流参数 ---

@@ -31,9 +31,9 @@ class MockDanmakuInputProvider(InputProvider):
         self.loop_playback = self.config.get("loop_playback", True)
         self.start_immediately = self.config.get("start_immediately", True)
 
-        # 获取插件目录
-        plugin_dir = Path(__file__).resolve().parent
-        self.data_dir = plugin_dir / "data"
+        # 获取 Provider 目录
+        provider_dir = Path(__file__).resolve().parent
+        self.data_dir = provider_dir / "data"
 
         # 确保data目录存在
         try:

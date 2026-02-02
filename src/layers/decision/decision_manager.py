@@ -12,6 +12,7 @@ import asyncio
 from typing import Dict, Any, Optional, TYPE_CHECKING
 
 from src.utils.logger import get_logger
+from src.core.events.names import CoreEvents
 
 if TYPE_CHECKING:
     from src.core.event_bus import EventBus
@@ -116,8 +117,8 @@ class DecisionManager:
                 raise ConnectionError(f"无法初始化DecisionProvider '{provider_name}': {e}") from e
 
         # 订阅 normalization.message_ready 事件
-        self.event_bus.on("normalization.message_ready", self._on_normalized_message_ready)
-        self.logger.info("DecisionManager 已订阅 normalization.message_ready 事件")
+        self.event_bus.on(CoreEvents.NORMALIZATION_MESSAGE_READY, self._on_normalized_message_ready)
+        self.logger.info(f"DecisionManager 已订阅 '{CoreEvents.NORMALIZATION_MESSAGE_READY}' 事件")
 
     async def decide(self, normalized_message: "NormalizedMessage") -> "Intent":
         """
@@ -157,7 +158,7 @@ class DecisionManager:
         并发布 decision.intent_generated 事件（5层架构）。
 
         Args:
-            event_name: 事件名称
+            event_name: 事件名称 (CoreEvents.NORMALIZATION_MESSAGE_READY)
             event_data: 事件数据，包含 "message" (NormalizedMessage) 和 "source"
             source: 事件源
         """
@@ -221,7 +222,7 @@ class DecisionManager:
         清理当前Provider和取消事件订阅。
         """
         # 取消事件订阅
-        self.event_bus.off("normalization.message_ready", self._on_normalized_message_ready)
+        self.event_bus.off(CoreEvents.NORMALIZATION_MESSAGE_READY, self._on_normalized_message_ready)
 
         async with self._switch_lock:
             if self._current_provider:

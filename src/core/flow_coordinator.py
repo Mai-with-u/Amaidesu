@@ -8,7 +8,7 @@ FlowCoordinator - 数据流协调器（5层架构：Layer 3 → Layer 4-5）
 
 数据流（5层架构）:
     Intent (Layer 3 Decision)
-        ↓ decision.intent_generated
+        ↓ CoreEvents.DECISION_INTENT_GENERATED
     FlowCoordinator
         ↓
     ExpressionGenerator (Layer 4 Parameters)
@@ -87,9 +87,9 @@ class FlowCoordinator:
             await self.output_provider_manager.load_from_config(config, core=None)
 
         # 订阅 Layer 3 (Decision) 的 Intent 事件（5层架构）
-        self.event_bus.on("decision.intent_generated", self._on_intent_ready, priority=50)
+        self.event_bus.on(CoreEvents.DECISION_INTENT_GENERATED, self._on_intent_ready, priority=50)
         self._event_handler_registered = True
-        self.logger.info("已订阅 'decision.intent_generated' 事件")
+        self.logger.info(f"已订阅 '{CoreEvents.DECISION_INTENT_GENERATED}' 事件")
 
         self._is_setup = True
         self.logger.info("数据流协调器设置完成")
@@ -129,7 +129,7 @@ class FlowCoordinator:
         # 取消事件订阅
         if self._event_handler_registered:
             try:
-                self.event_bus.off("decision.intent_generated", self._on_intent_ready)
+                self.event_bus.off(CoreEvents.DECISION_INTENT_GENERATED, self._on_intent_ready)
                 self._event_handler_registered = False
                 self.logger.info("事件订阅已取消")
             except Exception as e:
