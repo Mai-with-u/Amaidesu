@@ -198,16 +198,48 @@ class DecisionManager:
             - 切换时会先清理旧Provider
             - 如果新Provider初始化失败，会回退到旧Provider
         """
+        from src.layers.rendering.provider_registry import ProviderRegistry
+
+        old_provider = self._current_provider
+        old_name = self._provider_name
+
+        self.logger.info(f"切换Provider: {old_name} -> {provider_name}")
+
+        # 使用锁保护切换过程
         async with self._switch_lock:
-            old_provider = self._current_provider
-            old_name = self._provider_name
-
-            self.logger.info(f"切换Provider: {old_name} -> {provider_name}")
-
             try:
-                # 初始化新Provider
-                await self.setup(provider_name, config)
+                # 通过 ProviderRegistry 创建新Provider
+                try:
+                    self.logger.info(f"通过 ProviderRegistry 创建 DecisionProvider: {provider_name}")
+                    new_provider = ProviderRegistry.create_decision(provider_name, config)
+                except ValueError as e:
+                    available = ", ".join(ProviderRegistry.get_registered_decision_providers())
+                    self.logger.error(f"DecisionProvider '{provider_name}' 未找到。可用: {available}")
+                    # 保留原始错误消息格式以兼容测试
+                    raise ValueError(f"DecisionProvider '{provider_name}' 未找到") from e
+
+                # 设置新Provider
+                try:
+                    await new_provider.setup(self.event_bus, config, {})
+                    self.logger.info(f"DecisionProvider '{provider_name}' 初始化成功")
+                except Exception as e:
+                    self.logger.error(f"DecisionProvider '{provider_name}' setup 失败: {e}", exc_info=True)
+                    raise ConnectionError(f"无法初始化DecisionProvider '{provider_name}': {e}") from e
+
+                # 新Provider设置成功后，清理旧Provider
+                if old_provider:
+                    self.logger.info(f"清理旧Provider: {old_name}")
+                    try:
+                        await old_provider.cleanup()
+                    except Exception as e:
+                        self.logger.error(f"清理旧Provider失败: {e}", exc_info=True)
+
+                # 更新当前Provider
+                self._current_provider = new_provider
+                self._provider_name = provider_name
+
                 self.logger.info(f"Provider切换成功: {old_name} -> {provider_name}")
+
             except Exception as e:
                 self.logger.error(f"Provider切换失败，回退到旧Provider: {e}", exc_info=True)
                 # 回退到旧Provider
@@ -221,8 +253,9 @@ class DecisionManager:
 
         清理当前Provider和取消事件订阅。
         """
-        # 取消事件订阅
-        self.event_bus.off(CoreEvents.NORMALIZATION_MESSAGE_READY, self._on_normalized_message_ready)
+        # 取消事件订阅（如果已订阅）
+        if CoreEvents.NORMALIZATION_MESSAGE_READY in self.event_bus._handlers:
+            self.event_bus.off(CoreEvents.NORMALIZATION_MESSAGE_READY, self._on_normalized_message_ready)
 
         async with self._switch_lock:
             if self._current_provider:

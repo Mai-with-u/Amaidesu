@@ -14,7 +14,7 @@ import pytest
 from src.core.event_bus import EventBus
 from src.core.base.raw_data import RawData
 from src.layers.input.input_layer import InputLayer
-from src.layers.input.providers.console_input_provider import ConsoleInputProvider
+from src.layers.input.providers import ConsoleInputProvider
 
 
 # =============================================================================
@@ -35,7 +35,7 @@ async def test_console_input_provider_initialization():
     assert provider is not None
     assert provider.user_id == "test_user_123"
     assert provider.user_nickname == "测试用户"
-    assert provider._running is False
+    assert provider.is_running is False
     assert provider.config == config
 
 

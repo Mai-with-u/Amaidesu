@@ -28,7 +28,7 @@ class SuperChatNormalizer(DataNormalizer):
         structured_content = SuperChatContent(
             user=content.get("user", "未知用户"),
             content=content.get("content", ""),
-            price=content.get("price", 0.0),
+            amount=content.get("price", content.get("amount", 0.0)),
         )
 
         metadata = raw_data.metadata.copy()

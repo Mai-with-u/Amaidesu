@@ -27,9 +27,8 @@ class ConsoleInputProvider(InputProvider):
         Args:
             config: 配置字典
         """
-        self.config = config
+        super().__init__(config)
         self.logger = get_logger("ConsoleInputProvider")
-        self._running = False
 
         # 读取配置
         self.user_id = config.get("user_id", "console_user")

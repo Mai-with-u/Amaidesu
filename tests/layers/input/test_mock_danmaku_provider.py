@@ -14,7 +14,7 @@ import pytest
 from src.core.event_bus import EventBus
 from src.core.base.raw_data import RawData
 from src.layers.input.input_layer import InputLayer
-from src.layers.input.providers.mock_danmaku_provider import MockDanmakuProvider
+from src.layers.input.providers import MockDanmakuInputProvider as MockDanmakuProvider
 
 
 # =============================================================================
@@ -32,7 +32,7 @@ async def test_mock_danmaku_provider_initialization():
     provider = MockDanmakuProvider(config)
 
     assert provider is not None
-    assert provider._running is False
+    assert provider.is_running is False
     assert provider.config == config
 
 

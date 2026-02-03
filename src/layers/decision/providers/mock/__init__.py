@@ -26,9 +26,12 @@ class MockDecisionProvider(DecisionProvider):
         self.call_count += 1
 
         # 简单的模拟逻辑
-        response_text = self.default_response
         if message.text:
+            # 如果有文本，总是使用 "[模拟回复] {message.text}" 格式
             response_text = f"[模拟回复] {message.text}"
+        else:
+            # 如果没有文本，使用 default_response
+            response_text = self.default_response
 
         from src.layers.decision.intent import Intent, EmotionType
 
@@ -45,6 +48,8 @@ class MockDecisionProvider(DecisionProvider):
         self.event_bus = event_bus
         if config:
             self.config = config
+            # 更新 default_response
+            self.default_response = config.get("default_response", "这是模拟的回复")
         self._dependencies = dependencies or {}
         self.logger.info("MockDecisionProvider设置完成")
 

@@ -14,7 +14,7 @@ class MockOutputProvider(OutputProvider):
         super().__init__(config or {})
         self.received_parameters: List[RenderParameters] = []  # 记录收到的参数
 
-    async def render(self, parameters: RenderParameters) -> bool:
+    async def _render_internal(self, parameters: RenderParameters) -> bool:
         """渲染（记录参数）"""
         self.received_parameters.append(parameters)
         return True

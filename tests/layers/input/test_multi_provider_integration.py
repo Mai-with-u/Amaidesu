@@ -14,8 +14,7 @@ import pytest
 from src.core.event_bus import EventBus
 from src.core.base.raw_data import RawData
 from src.layers.input.input_layer import InputLayer
-from src.layers.input.providers.console_input_provider import ConsoleInputProvider
-from src.layers.input.providers.mock_danmaku_provider import MockDanmakuProvider
+from src.layers.input.providers import ConsoleInputProvider, MockDanmakuInputProvider as MockDanmakuProvider
 
 
 @pytest.mark.asyncio

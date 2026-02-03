@@ -13,32 +13,39 @@ class MockInputProvider(InputProvider):
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config or {})
-        self._running = False
         self._test_data_queue: asyncio.Queue = asyncio.Queue()
-
-    async def connect(self):
-        """连接"""
-        self._running = True
-
-    async def disconnect(self):
-        """断开连接"""
-        self._running = False
-
-    async def start(self):
-        """启动"""
-        await self.connect()
-
-    async def stop(self):
-        """停止"""
-        await self.disconnect()
+        self._stop_event = asyncio.Event()
+        # 测试模式：如果为 True，provider 在无数据时自动退出
+        self._auto_exit = config.get("auto_exit", False) if config else False
 
     def add_test_data(self, data: RawData):
         """添加测试数据"""
         self._test_data_queue.put_nowait(data)
 
-    async def _read_data(self):
-        """读取测试数据"""
-        if self._test_data_queue.empty():
-            await asyncio.sleep(0.1)
-            return None
-        return await self._test_data_queue.get()
+    async def _collect_data(self):
+        """采集测试数据"""
+        empty_count = 0
+        while self.is_running:
+            try:
+                # 使用短超时定期检查 is_running
+                data = await asyncio.wait_for(self._test_data_queue.get(), timeout=0.05)
+                empty_count = 0  # 重置计数
+                yield data
+            except asyncio.TimeoutError:
+                # 超时正常，继续循环检查 is_running
+                # 如果启用 auto_exit 且连续多次超时，则退出
+                if self._auto_exit:
+                    empty_count += 1
+                    if empty_count >= 3:  # 连续3次超时（150ms）
+                        break
+
+    async def _cleanup(self):
+        """清理资源"""
+        # 设置停止事件以唤醒所有等待的操作
+        self._stop_event.set()
+        # 清空队列以避免阻塞
+        while not self._test_data_queue.empty():
+            try:
+                self._test_data_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
