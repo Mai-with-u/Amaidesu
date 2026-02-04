@@ -8,7 +8,7 @@ from typing import Any, Mapping, get_type_hints, get_origin, get_args, Type, TYP
 import sys
 
 if TYPE_CHECKING:
-    pass
+    from typing import TypedDict
 
 
 class ParamValidator:
@@ -40,7 +40,9 @@ class ParamValidator:
                 if hasattr(typed_dict_class, "__required_keys__")
                 else set(hints.keys())
             )
-            (typed_dict_class.__optional_keys__ if hasattr(typed_dict_class, "__optional_keys__") else set())
+            optional_keys = (
+                typed_dict_class.__optional_keys__ if hasattr(typed_dict_class, "__optional_keys__") else set()
+            )
 
             # 检查是否缺少必需字段
             for key in required_keys:

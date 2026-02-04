@@ -3,11 +3,11 @@ import random
 import asyncio
 import math
 
-
 class TalkingHead:
     def __init__(self):
         self.is_talking = False
-
+        
+        
     async def send_random_head_action(self):
         t = 0
         while self.is_talking:
@@ -21,9 +21,8 @@ class TalkingHead:
             await action_sender.send_action("head_action", head_dict)
             t += period
             await asyncio.sleep(0.1)
-
+        
         await asyncio.sleep(1)
         await action_sender.send_action("head_action", {"x": 0, "y": 0, "z": 0})
-
 
 talking_head = TalkingHead()

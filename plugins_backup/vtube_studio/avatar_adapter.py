@@ -22,12 +22,15 @@ class VTSAdapter(AvatarAdapter):
         ("EyeOpenRight", "右眼开合度", "face", ["eye"], "控制右眼的开合程度，0为闭眼，1为睁眼"),
         ("EyeX", "眼球水平位置", "face", ["eye"], "眼球水平移动，-1左，1右"),
         ("EyeY", "眼球垂直位置", "face", ["eye"], "眼球垂直移动，-1上，1下"),
+
         # 嘴巴参数
         ("MouthSmile", "微笑程度", "face", ["mouth", "emotion"], "控制微笑程度，负值为皱眉，正值为微笑"),
         ("MouthOpen", "嘴巴张开度", "face", ["mouth"], "控制嘴巴张开程度"),
+
         # 眉毛参数
         ("EyebrowLeft", "左眉位置", "face", ["eyebrow"], "左眉上下移动"),
         ("EyebrowRight", "右眉位置", "face", ["eyebrow"], "右眉上下移动"),
+
         # 头部参数
         ("HeadRotX", "头部俯仰", "body", ["head"], "头部上下旋转（俯仰）"),
         ("HeadRotY", "头部偏航", "body", ["head"], "头部左右旋转（偏航）"),
@@ -52,19 +55,17 @@ class VTSAdapter(AvatarAdapter):
         """注册 VTS 参数元数据"""
         for param_info in self.VTS_PARAMETERS:
             name, display_name, category, tags, description = param_info
-            self.register_parameter(
-                ParameterMetadata(
-                    name=name,
-                    display_name=display_name,
-                    param_type="float",
-                    min_value=-1.0 if "Rot" in name or name in ["EyeX", "EyeY", "MouthSmile"] else 0.0,
-                    max_value=1.0,
-                    default_value=1.0 if "Eye" in name and "Open" in name else 0.0,
-                    description=description,
-                    category=category,
-                    tags=tags,
-                )
-            )
+            self.register_parameter(ParameterMetadata(
+                name=name,
+                display_name=display_name,
+                param_type="float",
+                min_value=-1.0 if "Rot" in name or name in ["EyeX", "EyeY", "MouthSmile"] else 0.0,
+                max_value=1.0,
+                default_value=1.0 if "Eye" in name and "Open" in name else 0.0,
+                description=description,
+                category=category,
+                tags=tags
+            ))
 
         # 注册口型同步参数
         lip_sync_params = [
@@ -77,21 +78,24 @@ class VTSAdapter(AvatarAdapter):
         ]
 
         for name, display_name, category, tags, description in lip_sync_params:
-            self.register_parameter(
-                ParameterMetadata(
-                    name=name,
-                    display_name=display_name,
-                    param_type="float",
-                    min_value=0.0,
-                    max_value=1.0,
-                    default_value=0.0,
-                    description=description,
-                    category=category,
-                    tags=tags,
-                )
-            )
+            self.register_parameter(ParameterMetadata(
+                name=name,
+                display_name=display_name,
+                param_type="float",
+                min_value=0.0,
+                max_value=1.0,
+                default_value=0.0,
+                description=description,
+                category=category,
+                tags=tags
+            ))
 
-    def register_hotkey_as_action(self, hotkey_name: str, display_name: str = None, description: str = ""):
+    def register_hotkey_as_action(
+        self,
+        hotkey_name: str,
+        display_name: str = None,
+        description: str = ""
+    ):
         """注册 VTS 热键作为动作
 
         Args:
@@ -102,14 +106,12 @@ class VTSAdapter(AvatarAdapter):
         if display_name is None:
             display_name = hotkey_name
 
-        self.register_action(
-            ActionMetadata(
-                name=hotkey_name,
-                display_name=display_name,
-                description=description or f"触发热键: {hotkey_name}",
-                category="hotkey",
-            )
-        )
+        self.register_action(ActionMetadata(
+            name=hotkey_name,
+            display_name=display_name,
+            description=description or f"触发热键: {hotkey_name}",
+            category="hotkey"
+        ))
 
     async def connect(self) -> bool:
         """连接到 VTS（实际连接由插件管理）

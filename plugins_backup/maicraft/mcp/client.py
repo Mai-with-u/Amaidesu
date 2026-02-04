@@ -136,7 +136,7 @@ class MCPClient:
     def _diagnose_connection_error(self, error: Exception) -> ConnectionErrorType:
         """诊断连接错误类型"""
         error_str = str(error).lower()
-        type(error).__name__.lower()
+        error_type_str = type(error).__name__.lower()
 
         # 检查依赖缺失错误
         if "npx" in error_str and ("not found" in error_str or "not recognized" in error_str):
@@ -307,8 +307,8 @@ class MCPClient:
             connect_task = self._client.__aenter__()
             try:
                 await asyncio.wait_for(connect_task, timeout=self._connection_timeout)
-            except asyncio.TimeoutError as e:
-                raise Exception(f"连接超时 ({self._connection_timeout}秒)") from e
+            except asyncio.TimeoutError:
+                raise Exception(f"连接超时 ({self._connection_timeout}秒)")
 
             # 更新状态
             self._update_connection_state(ConnectionState.CONNECTED)
@@ -685,7 +685,7 @@ class MCPClient:
                     break
 
                 # 尝试重连
-                self.logger.info("[MCP] 正在尝试重新连接到 MCP 服务器...")
+                self.logger.info(f"[MCP] 正在尝试重新连接到 MCP 服务器...")
                 success = await self.connect(enable_auto_reconnect=False)
 
                 if success:

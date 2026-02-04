@@ -1,75 +1,77 @@
-"""
-DGLabService Plugin - 新Plugin架构实现
-
-提供控制 DG-LAB 硬件的服务。
-"""
+# src/plugins/dg_lab_service/plugin.py
 
 import asyncio
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, Optional
 
-from src.utils.logger import get_logger
+try:
+    import aiohttp
+except ImportError:
+    aiohttp = None
+
+from src.core.plugin_manager import BasePlugin
+from src.core.amaidesu_core import AmaidesuCore
 
 
-class DGLabServiceProvider:
+class DGLabServicePlugin(BasePlugin):
     """
-    DG-LAB 服务提供者
-
-    封装与 DG-LAB 硬件（通过 fucking-3.0 中间件）的 HTTP API 通信逻辑。
+    提供一个用于控制 DG-LAB 硬件的服务。
+    这个插件本身不监听任何消息，只提供一个可供其他插件调用的服务。
     """
 
-    def __init__(self, config: Dict[str, Any]):
-        self.config = config
-        self.logger = get_logger("DGLabServiceProvider")
+    def __init__(self, core: AmaidesuCore, plugin_config: Dict[str, Any]):
+        super().__init__(core, plugin_config)
 
-        # 配置
-        self.api_base_url = config.get("dg_lab_api_base_url", "http://127.0.0.1:8081").rstrip("/")
-        self.default_strength = config.get("target_strength", 10)
-        self.default_waveform = config.get("target_waveform", "big")
-        self.shock_duration = config.get("shock_duration_seconds", 2)
-        self.timeout = config.get("request_timeout", 5)
+        self.config = self.plugin_config
 
-        # 状态
-        self.http_session = None
+        if aiohttp is None:
+            self.logger.error("aiohttp 库未找到，请运行 `pip install aiohttp`。DGLabServicePlugin 已禁用。")
+            return
+
+        # --- 获取配置值 ---
+        self.api_base_url = self.config.get("dg_lab_api_base_url", "http://127.0.0.1:8081").rstrip("/")
+        self.default_strength = self.config.get("target_strength", 10)
+        self.default_waveform = self.config.get("target_waveform", "big")
+        self.shock_duration = self.config.get("shock_duration_seconds", 2)
+        self.timeout = aiohttp.ClientTimeout(total=self.config.get("request_timeout", 5))
+
+        # --- 状态 ---
+        self.http_session: Optional[aiohttp.ClientSession] = None
         self.control_lock = asyncio.Lock()  # 确保同一时间只有一个 shock 序列在运行
 
-        # 检查依赖
-        try:
-            import aiohttp  # noqa: F401
+    async def setup(self):
+        await super().setup()
 
-            self.aiohttp_available = True
-        except ImportError:
-            self.aiohttp_available = False
-            self.logger.error("aiohttp 库未找到，请运行 `pip install aiohttp`。")
+        if not aiohttp:
+            self.logger.error("aiohttp 未安装，插件无法运行。")
+            return
 
-    async def setup(self, event_bus):
-        """设置服务提供者"""
-        self.event_bus = event_bus
-
-        if not self.aiohttp_available:
-            raise ImportError("aiohttp 未安装")
-
-        import aiohttp
-
-        self.http_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout))
+        self.http_session = aiohttp.ClientSession(timeout=self.timeout)
         self.logger.info("aiohttp.ClientSession 已创建。")
 
-        # 订阅事件
-        event_bus.on("dg_lab.trigger_shock", self._handle_trigger_shock, priority=100)
+        # --- 将自身注册为服务 ---
+        self.core.register_service("dg_lab_control", self)
+        self.logger.info("已将自身注册为 'dg_lab_control' 服务。")
 
-    async def _handle_trigger_shock(self, event_name: str, data: Dict[str, Any], source: str):
-        """处理电击触发事件"""
-        strength = data.get("strength")
-        waveform = data.get("waveform")
-        duration = data.get("duration")
-
-        await self.trigger_shock(strength=strength, waveform=waveform, duration=duration)
+    async def cleanup(self):
+        self.logger.info("正在清理 DGLabServicePlugin...")
+        if self.http_session:
+            await self.http_session.close()
+            self.logger.info("aiohttp.ClientSession 已关闭。")
+            self.http_session = None
+        
+        # 理论上服务也应该取消注册，但核心目前没有提供 unregister_service
+        
+        await super().cleanup()
+        self.logger.info("DGLabServicePlugin 清理完成。")
 
     async def trigger_shock(
-        self, strength: Optional[int] = None, waveform: Optional[str] = None, duration: Optional[float] = None
+        self,
+        strength: Optional[int] = None,
+        waveform: Optional[str] = None,
+        duration: Optional[float] = None,
     ):
         """
         触发一次电击序列。
-
         允许覆盖配置中的默认参数。
         """
         if not self.http_session:
@@ -84,7 +86,7 @@ class DGLabServiceProvider:
             strength_to_use = strength if strength is not None else self.default_strength
             waveform_to_use = waveform if waveform is not None else self.default_waveform
             duration_to_use = duration if duration is not None else self.shock_duration
-
+            
             self.logger.info(
                 f"触发电击序列: 强度={strength_to_use}, 波形='{waveform_to_use}', 持续时间={duration_to_use}s"
             )
@@ -93,7 +95,7 @@ class DGLabServiceProvider:
             waveform_url = f"{self.api_base_url}/control/waveform"
             headers = {"Content-Type": "application/json"}
 
-            # 初始设置
+            # --- 初始设置 ---
             initial_tasks = [
                 self._make_api_call(
                     strength_url, {"channel": "a", "strength": strength_to_use}, headers, "设置通道 A 强度"
@@ -110,14 +112,18 @@ class DGLabServiceProvider:
             ]
             await asyncio.gather(*initial_tasks)
 
-            # 等待
+            # --- 等待 ---
             await asyncio.sleep(duration_to_use)
 
-            # 强度归零
+            # --- 强度归零 ---
             self.logger.info("电击持续时间结束，将强度归零。")
             reset_tasks = [
-                self._make_api_call(strength_url, {"channel": "a", "strength": 0}, headers, "重置通道 A 强度"),
-                self._make_api_call(strength_url, {"channel": "b", "strength": 0}, headers, "重置通道 B 强度"),
+                self._make_api_call(
+                    strength_url, {"channel": "a", "strength": 0}, headers, "重置通道 A 强度"
+                ),
+                self._make_api_call(
+                    strength_url, {"channel": "b", "strength": 0}, headers, "重置通道 B 强度"
+                ),
             ]
             await asyncio.gather(*reset_tasks)
 
@@ -126,15 +132,15 @@ class DGLabServiceProvider:
         if not self.http_session:
             return False
         try:
-            import aiohttp
-
             async with self.http_session.post(url, json=payload, headers=headers) as response:
                 if response.status == 200:
                     self.logger.debug(f"API 调用成功: {description}")
                     return True
                 else:
                     error_text = await response.text()
-                    self.logger.error(f"API 调用失败: {description} (状态码: {response.status}, 响应: {error_text})")
+                    self.logger.error(
+                        f"API 调用失败: {description} (状态码: {response.status}, 响应: {error_text})"
+                    )
                     return False
         except aiohttp.ClientConnectorError as e:
             self.logger.error(f"API 连接失败: {description}。无法连接到 {self.api_base_url}。错误: {e}")
@@ -144,107 +150,4 @@ class DGLabServiceProvider:
             return False
         except Exception as e:
             self.logger.error(f"API 调用时发生未知错误: {description}。错误: {e}", exc_info=True)
-            return False
-
-    async def cleanup(self):
-        """清理资源"""
-        self.logger.info("正在清理 DGLabServiceProvider...")
-
-        if self.http_session:
-            await self.http_session.close()
-            self.logger.info("aiohttp.ClientSession 已关闭。")
-            self.http_session = None
-
-        self.logger.info("DGLabServiceProvider 清理完成。")
-
-    def get_info(self) -> Dict[str, Any]:
-        """获取服务提供者信息"""
-        return {
-            "name": "DGLabService",
-            "is_available": self.aiohttp_available,
-            "api_base_url": self.api_base_url,
-        }
-
-
-class DGLabServicePlugin:
-    """
-    DG-Lab Service插件 - 提供控制 DG-LAB 硬件的服务
-
-    迁移到新的Plugin架构，包装DGLabServiceProvider。
-    """
-
-    def __init__(self, config: Dict[str, Any]):
-        self.config = config
-        self.logger = get_logger(self.__class__.__name__)
-        self.logger.info(f"初始化插件: {self.__class__.__name__}")
-
-        self.event_bus = None
-        self._service_provider = None
-
-        # 配置检查
-        self.enabled = self.config.get("enabled", True)
-        if not self.enabled:
-            self.logger.warning("DGLabServicePlugin 在配置中已禁用。")
-            return
-
-    async def setup(self, event_bus, config: Dict[str, Any]) -> List[Any]:
-        """
-        设置插件
-
-        Args:
-            event_bus: 事件总线实例
-            config: 插件配置
-
-        Returns:
-            Provider列表 (空列表，因为这是服务提供者)
-        """
-        self.event_bus = event_bus
-
-        if not self.enabled:
-            return []
-
-        # 创建服务提供者
-        try:
-            self._service_provider = DGLabServiceProvider(self.config)
-            await self._service_provider.setup(event_bus)
-            self.logger.info("DGLabServiceProvider 已创建并设置完成")
-        except Exception as e:
-            self.logger.error(f"创建ServiceProvider失败: {e}", exc_info=True)
-            return []
-
-        # 发布服务可用事件
-        await event_bus.emit(
-            "service.registered",
-            {"service_name": "dg_lab_control", "service": self._service_provider},
-            "DGLabServicePlugin",
-        )
-
-        return []  # 服务提供者不返回Provider列表
-
-    async def cleanup(self):
-        """清理资源"""
-        self.logger.info("开始清理 DGLabServicePlugin...")
-
-        if self._service_provider:
-            try:
-                await self._service_provider.cleanup()
-            except Exception as e:
-                self.logger.error(f"清理ServiceProvider时出错: {e}", exc_info=True)
-
-        self._service_provider = None
-        self.logger.info("DGLabServicePlugin 清理完成")
-
-    def get_info(self) -> Dict[str, Any]:
-        """获取插件信息"""
-        return {
-            "name": "DGLabService",
-            "version": "1.0.0",
-            "author": "Amaidesu Team",
-            "description": "DG-Lab服务插件，提供控制 DG-LAB 硬件的服务",
-            "category": "software",
-            "api_version": "1.0",
-        }
-
-
-# 插件入口点
-plugin_entrypoint = DGLabServicePlugin
+            return False 
