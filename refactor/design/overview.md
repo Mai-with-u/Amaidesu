@@ -186,3 +186,4 @@ class Intent:
 - [Pipeline设计](./pipeline_refactoring.md) - TextPipeline 设计
 - [事件契约](./event_data_contract.md) - 事件类型安全
 - [LLM服务](./llm_service.md) - LLM 基础设施
+- [配置系统](./config_system.md) - Pydantic Schema + 三级配置合并
