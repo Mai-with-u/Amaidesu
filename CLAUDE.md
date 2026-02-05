@@ -4,31 +4,42 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 核心架构
 
-**5层核心数据流架构** - 项目按AI VTuber数据处理流程组织，每层有明确的输入输出：
+**3域数据流架构** - 项目按AI VTuber数据处理流程组织为3个业务域：
 
 ```
 外部输入（弹幕、游戏、语音）
   ↓
-【Layer 1-2: Input】RawData → NormalizedMessage
-  ├─ InputProvider: 并发采集 RawData (console_input, bili_danmaku, minecraft等)
-  ├─ TextPipeline: 限流、过滤、相似文本检测（可选）
-  └─ InputLayer: 标准化为 NormalizedMessage
-  ↓ normalization.message_ready (EventBus事件)
-【Layer 3: Decision】NormalizedMessage → Intent
-  ├─ MaiCoreDecisionProvider (默认，WebSocket+LLM意图解析)
-  ├─ LocalLLMDecisionProvider (可选，直接LLM)
-  └─ RuleEngineDecisionProvider (可选，规则引擎)
-  ↓ decision.intent_generated (EventBus事件)
-【Layer 4-5: Parameters+Rendering】Intent → RenderParameters → 输出
-  ├─ ExpressionGenerator: Intent → RenderParameters
+【Input Domain】外部数据 → NormalizedMessage
+  ├─ InputProvider: 并发采集各类数据
+  ├─ Normalization: 标准化为 NormalizedMessage
+  └─ Pipelines: 预处理（限流、过滤）
+  ↓ EventBus: normalization.message_ready
+【Decision Domain】NormalizedMessage → Intent
+  ├─ MaiCoreDecisionProvider (默认)
+  ├─ LocalLLMDecisionProvider (可选)
+  └─ RuleEngineDecisionProvider (可选)
+  ↓ EventBus: decision.intent_generated
+【Output Domain】Intent → 实际输出
+  ├─ Parameters: 参数生成（情绪→表情等）
   └─ OutputProvider: 并发渲染（TTS、字幕、VTS等）
+```
+
+**目录结构**：
+```
+Amaidesu/
+├── main.py              # CLI入口
+└── src/
+    ├── amaidesu_core.py # 核心协调器
+    ├── core/            # 基础设施（事件、基类、通信、工具）
+    ├── services/        # 共享服务（LLM、配置、上下文）
+    └── domains/         # 业务域（input、decision、output）
 ```
 
 **核心原则**：
 - **插件系统已移除** - Provider由Manager统一管理，配置驱动启用
-- **EventBus通信** - 唯一的跨层通信机制（事件名用点分层，如`normalization.message_ready`）
-- **Provider = 原子能力** - 所有功能模块都是Provider，按数据流层级组织
-- **类型安全** - 事件数据使用Pydantic Model定义契约（见`src/core/events/`）
+- **EventBus通信** - 唯一的跨域通信机制
+- **Provider = 原子能力** - 所有功能模块都是Provider
+- **类型安全** - 事件数据使用Pydantic Model定义契约
 
 ## 常用开发命令
 
@@ -105,58 +116,114 @@ uv run python mock_maicore.py
 
 ## 关键组件说明
 
-### 核心模块（`src/core/`）
-- **AmaidesuCore** (`amaidesu_core.py`): 中央枢纽，管理EventBus、LLMService、PipelineManager、Managers
-- **EventBus** (`event_bus.py`): 增强的事件总线（优先级、错误隔离、统计功能）
-- **ProviderRegistry** (`layers/rendering/provider_registry.py`): 统一管理所有Provider的注册和创建
-- **LLMService** (`llm_service.py`): 管理LLM客户端（llm/llm_fast/vlm）
-- **FlowCoordinator** (`flow_coordinator.py`): 协调Layer 3 → Layer 4-5的数据流
+### 基础设施（`src/core/`）
+- **events/** - 事件子系统（EventBus、事件名、载荷定义）
+- **base/** - Provider基类和数据类型（NormalizedMessage、RawData等）
+- **connectors/** - 通信组件（WebSocketConnector、RouterAdapter）
+- **utils/** - 无状态工具函数（logger、config工具）
 
-### Provider接口（`src/core/base/`）
-**Provider是核心抽象**，封装具体功能：
+### 共享服务（`src/services/`）
+- **llm/** - LLM子系统（LLMService + 各后端实现）
+- **config/** - 配置子系统（ConfigService + Schema定义）
+- **context/** - 上下文子系统（ContextManager）
 
-| Provider类型 | 职责 | 示例实现 |
-|-------------|------|---------|
-| **InputProvider** | 从外部数据源采集RawData | ConsoleInputProvider, BiliDanmakuProvider, MinecraftProvider |
-| **DecisionProvider** | 处理NormalizedMessage并决策 | MaiCoreDecisionProvider, LocalLLMDecisionProvider, RuleEngineDecisionProvider |
-| **OutputProvider** | 渲染到目标设备 | TTSProvider, SubtitleProvider, VTSProvider |
+### 业务域（`src/domains/`）
+
+| Provider类型 | 位置 | 职责 |
+|-------------|------|------|
+| **InputProvider** | `domains/input/providers/` | 采集外部数据 |
+| **DecisionProvider** | `domains/decision/providers/` | 生成Intent |
+| **OutputProvider** | `domains/output/providers/` | 渲染输出 |
 
 ### Manager（管理者）
-- **InputProviderManager** (`src/layers/input/input_provider_manager.py`): 管理输入Provider的生命周期，支持并发启动、优雅停止、错误隔离
-- **DecisionManager** (`src/layers/decision/decision_manager.py`): 管理决策Provider，支持运行时切换
-- **OutputProviderManager** (`src/core/output_provider_manager.py`): 管理输出Provider的生命周期
+- **InputProviderManager** (`domains/input/`): 管理输入Provider，支持并发启动
+- **DecisionManager** (`domains/decision/`): 管理决策Provider，支持运行时切换
+- **OutputProviderManager** (`domains/output/`): 管理输出Provider，支持并发渲染
 
 ### 事件系统（`src/core/events/`）
-- **EventRegistry** (`registry.py`): 事件类型注册表，支持核心事件（只读）和插件事件（开放）
-- **CoreEvents** (`names.py`): 核心事件名称常量（如`CoreEvents.NORMALIZATION_MESSAGE_READY`）
-- **Payloads** (`payloads/`): 事件数据契约（Pydantic Model）
+- **event_bus.py**: 增强的事件总线（优先级、错误隔离）
+- **names.py**: 核心事件名称常量（CoreEvents）
+- **payloads.py**: 事件数据契约（Pydantic Model）
 
-**事件命名规范**：使用点分层，如`perception.raw_data.generated`、`normalization.message_ready`、`decision.intent_generated`
+**事件命名规范**：使用点分层，如`normalization.message_ready`、`decision.intent_generated`
 
 ## 配置文件
 
 ### 配置层次
 ```
-config.toml（根配置）
-├── [llm]/[llm_fast]/[vlm] - LLM配置
+config.toml（主配置，从config-template.toml生成）
+├── [llm]/[llm_fast]/[vlm] - 全局LLM配置
 ├── [general] - 平台标识
 ├── [maicore] - MaiCore连接配置
-├── [providers.input] - 输入Provider配置
-├── [providers.decision] - 决策Provider配置
-├── [providers.output] - 渲染Provider配置
+├── [providers.input] - 输入Provider配置（启用列表）
+├── [providers.decision] - 决策Provider配置（启用列表）
+├── [providers.output] - 输出Provider配置（启用列表）
+├── [providers.*.overrides] - 常用参数覆盖（可选）
 └── [pipelines] - 管道配置
+
+各Provider配置（可选，从Schema自动生成）：
+└── src/domains/*/providers/*/config.toml（本地配置）
 ```
 
-### Provider配置格式
+### Schema-as-Template配置系统
+
+项目采用**Schema-as-Template**配置系统，通过Pydantic Schema类定义Provider配置。
+
+**核心理念**：配置的"事实来源"是代码中的Pydantic Schema类，而非配置文件。
+
+#### 三级配置合并体系
+
+配置加载时的三级合并顺序（后者覆盖前者）：
+
+```
+1. Schema默认值（最低优先级）
+   定义位置：src/core/config/schemas/*.py
+   示例：room_id: int = Field(default=0)
+   ↓ 被2覆盖
+
+2. 主配置覆盖 (config.toml中的[providers.*.overrides])
+   定义位置：config.toml
+   示例：[providers.input.overrides] bili_danmaku.room_id = "123456"
+   ↓ 被3覆盖
+
+3. Provider本地配置 (src/layers/*/providers/{name}/config.toml)
+   定义位置：Provider目录/config.toml
+   优先级最高，用于本地开发配置
+   ↓
+最终生效配置
+```
+
+#### Schema定义示例
+
+每个Provider都有对应的Pydantic Schema类：
+
+```python
+# src/core/config/schemas/input_providers.py
+from pydantic import BaseModel, Field
+
+class BiliDanmakuProviderConfig(BaseProviderConfig):
+    """Bilibili弹幕输入Provider配置"""
+
+    type: Literal["bili_danmaku"] = "bili_danmaku"
+    room_id: int = Field(..., description="直播间ID", gt=0)
+    poll_interval: int = Field(default=3, description="轮询间隔（秒）", ge=1)
+    message_config: dict = Field(default_factory=dict, description="消息配置")
+```
+
+**关键特性**：
+- `Field(...)` 表示必填项
+- `Field(default=...)` 定义默认值
+- `Field(description=...)` 提供配置说明（用于生成注释）
+- `Field(ge=1, gt=0)` 等提供验证规则
+
+#### Provider配置格式
+
+**主配置 (config.toml)**:
 ```toml
 # 输入Provider配置
 [providers.input]
 enabled = true
 enabled_inputs = ["console_input", "bili_danmaku"]
-
-[providers.input.inputs.console_input]
-type = "console_input"
-enabled = true
 
 # 决策Provider配置
 [providers.decision]
@@ -164,35 +231,118 @@ enabled = true
 active_provider = "maicore"
 available_providers = ["maicore", "local_llm", "rule_engine"]
 
-[providers.decision.providers.maicore]
-type = "maicore"
-enabled = true
-
 # 输出Provider配置
 [providers.output]
 enabled = true
 enabled_outputs = ["subtitle", "vts", "tts"]
 
-[providers.output.outputs.subtitle]
-type = "subtitle"
-enabled = true
+# ExpressionGenerator配置
+[providers.output.expression_generator]
+default_tts_enabled = true
+default_subtitle_enabled = true
+
+# 常用参数覆盖（可选）
+[providers.input.overrides]
+bili_danmaku.room_id = "123456"
+
+[providers.output.overrides]
+subtitle.font_size = 32
+vts.vts_host = "192.168.1.100"
+```
+
+**Provider本地配置 (可选)**:
+
+Provider本地配置文件（`src/layers/*/providers/{name}/config.toml`）可以从Schema自动生成。如果不存在，程序会在首次运行时自动生成。
+
+```toml
+# 示例：src/layers/input/providers/bili_danmaku/config.toml
+# 从 BiliDanmakuProviderConfig Schema 自动生成
+
+[bili_danmaku]
+# 直播间ID
+room_id = 0
+# 轮询间隔（秒）
+poll_interval = 3
+# 消息配置
+message_config = {}
+```
+
+#### 配置自动生成
+
+当Provider本地配置不存在时，系统会：
+
+1. 从`PROVIDER_SCHEMA_REGISTRY`查找对应的Schema类
+2. 从Schema生成`config.toml`文件（作为模板）
+3. 返回空字典，让主配置覆盖优先生效
+
+手动生成配置文件：
+```python
+from src.core.config import ensure_provider_config
+from src.core.config.schemas import BiliDanmakuProviderConfig
+
+config_path = ensure_provider_config(
+    provider_name="bili_danmaku",
+    provider_layer="input",
+    schema_class=BiliDanmakuProviderConfig,
+    force_regenerate=True  # 强制重新生成
+)
+```
+
+### 配置验证
+
+程序启动时会自动进行配置验证：
+
+1. **Schema验证** - 使用Pydantic模型验证配置格式和类型
+2. **Provider验证** - 检查启用的Provider是否注册
+3. **依赖验证** - 检查必需的参数和配置项
+4. **连接测试** - 测试外部服务连接（如LLM、MaiCore）
+
+**验证失败示例**：
+```python
+from pydantic import ValidationError
+
+try:
+    config = config_service.get_provider_config_with_defaults(
+        "bili_danmaku",
+        "input",
+        schema_class=BiliDanmakuProviderConfig
+    )
+except ValidationError as e:
+    print(f"配置验证失败: {e}")
+    # Error: room_id必须大于0 (got 0)
 ```
 
 **首次运行**：程序会自动从`config-template.toml`生成`config.toml`，然后退出。请编辑配置文件填入必要信息后重新运行。
 
+详细配置说明见：
+- [CONFIG_FINAL_DESIGN.md](docs/CONFIG_FINAL_DESIGN.md) - Schema-as-Template配置系统设计
+- [CONFIG_UPGRADE_GUIDE.md](docs/CONFIG_UPGRADE_GUIDE.md) - 配置系统升级指南
+- [CONFIG_GENERATOR.md](docs/CONFIG_GENERATOR.md) - 配置生成器使用指南
+
 ## 开发注意事项
 
 ### 添加新Provider
-1. 在对应层创建Provider文件：`src/layers/{layer}/providers/my_provider/my_provider.py`
+1. 在对应域创建Provider目录：`src/domains/{domain}/providers/my_provider/`
 2. 继承对应的Provider基类（InputProvider/DecisionProvider/OutputProvider）
-3. 在Provider的`__init__.py`中注册到ProviderRegistry：
+3. 创建Provider的Schema定义：在`src/services/config/schemas/{domain}_providers.py`中定义
    ```python
-   from src.layers.rendering.provider_registry import ProviderRegistry
+   from pydantic import BaseModel, Field
+
+   class MyProviderConfig(BaseProviderConfig):
+       """MyProvider配置"""
+       type: Literal["my_provider"] = "my_provider"
+       api_key: str = Field(default="your-api-key", description="API密钥")
+       timeout: int = Field(default=30, description="超时时间（秒）", ge=1)
+   ```
+4. 注册Schema到`PROVIDER_SCHEMA_REGISTRY`
+5. 在Provider的`__init__.py`中注册到ProviderRegistry：
+   ```python
+   from src.domains.output.provider_registry import ProviderRegistry
    from .my_provider import MyProvider
 
    ProviderRegistry.register_output("my_provider", MyProvider, source="builtin:my_provider")
    ```
-4. 在配置中启用：
+6. 在主配置中启用：
    - InputProvider: 添加到 `[providers.input]` 的 `enabled_inputs` 列表
    - OutputProvider: 添加到 `[providers.output]` 的 `enabled_outputs` 列表
    - DecisionProvider: 添加到 `[providers.decision]` 的 `available_providers` 列表
@@ -215,23 +365,18 @@ logger.error("错误日志", exc_info=True)
 **日志过滤**：使用`--filter`参数时，传入get_logger的第一个参数（类名或模块名）
 
 ### 重构完成状态
-项目已完成**核心架构重构**（2026-02-02），详见`refactor/ARCHITECTURE_ISSUES_REPORT.md`：
+项目已完成**核心架构重构**，详见`refactor/ARCHITECTURE_ISSUES_REPORT.md`：
 
-**已完成**（P0-P1）：
+**已完成**：
 - ✅ 插件系统完全移除，Provider由Manager统一管理
-- ✅ Provider自动注册机制（22个Provider全部注册）
-- ✅ InputProviderManager接入主流程
-- ✅ 配置格式统一为`[providers.*]`，旧配置已标记为deprecated
-- ✅ LLMService依赖注入重构
-- ✅ E2E测试用例完整（tests/e2e/）
-
-**已完成**（P2）：
+- ✅ Provider自动注册机制
+- ✅ 配置格式统一为`[providers.*]`
 - ✅ 事件命名统一（使用CoreEvents常量）
-- ✅ 配置迁移检测工具
+- ✅ 3域架构设计（Input/Decision/Output）
+- ✅ 目录结构重组（core/services/domains）
 
 **文档状态**：
-- ✅ 准确：`refactor/design/overview.md`（5层架构设计文档）
-- ✅ 当前文档：已更新为5层架构和Provider系统
+- ✅ 当前：`refactor/design/overview.md`（3域架构设计文档）
 
 ### 不推荐的做法
 - ❌ 不要创建新的Plugin（插件系统已移除）
@@ -242,11 +387,12 @@ logger.error("错误日志", exc_info=True)
 ## 架构设计文档
 
 详细的架构设计文档位于`refactor/design/`：
-- [架构总览](refactor/design/overview.md) - 5层架构概述
-- [5层架构设计](refactor/design/layer_refactoring.md) - 核心数据流详细说明
-- [决策层设计](refactor/design/decision_layer.md) - 可替换的决策Provider系统
+- [架构总览](refactor/design/overview.md) - 3域架构概述 + 目录结构设计
+- [决策层设计](refactor/design/decision_layer.md) - Decision Domain 详细设计
 - [多Provider并发设计](refactor/design/multi_provider.md) - 并发处理架构
-- [LLM服务设计](refactor/design/llm_service.md) - LLM调用基础设施
+- [Pipeline设计](refactor/design/pipeline_refactoring.md) - TextPipeline 设计
+- [LLM服务设计](refactor/design/llm_service.md) - LLM 服务设计
+- [配置系统](refactor/design/config_system.md) - Schema-as-Template 配置系统
 
 ## 数据流关键事件
 
@@ -260,14 +406,13 @@ logger.error("错误日志", exc_info=True)
 ## 测试策略
 
 **单元测试**：测试单个Provider或Manager
-- 位置：`tests/layers/{layer}/test_*.py`
+- 位置：`tests/domains/{domain}/test_*.py`
 - 使用Mock隔离外部依赖
 
 **集成测试**：测试多Provider协作
-- 位置：`tests/layers/input/test_multi_provider_integration.py`
 - 测试数据流完整性
 
-**测试覆盖目标**：核心数据流（Layer 1-5）应有E2E测试（当前缺失，见`docs/VTUBER_FLOW_E2E_GAP_ANALYSIS.md`）
+**测试覆盖目标**：核心数据流（Input → Decision → Output）应有E2E测试
 
 ## 项目特定约定
 

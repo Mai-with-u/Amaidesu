@@ -204,11 +204,11 @@ class MyInputProvider(InputProvider):
 输入 Provider 从外部数据源采集数据，继承 `InputProvider` 基类。
 
 ```python
-# src/layers/input/providers/my_provider/my_input_provider.py
+# src/domains/input/providers/my_provider/my_input_provider.py
 from typing import AsyncIterator, Dict, Any
 from src.core.base.input_provider import InputProvider
 from src.core.base.raw_data import RawData
-from src.utils.logger import get_logger
+from src.core.utils.logger import get_logger
 
 class MyInputProvider(InputProvider):
     """自定义输入 Provider"""
@@ -242,12 +242,12 @@ class MyInputProvider(InputProvider):
 决策 Provider 处理 NormalizedMessage 生成 Intent，继承 `DecisionProvider` 基类。
 
 ```python
-# src/layers/decision/providers/my_provider/my_decision_provider.py
+# src/domains/decision/providers/my_provider/my_decision_provider.py
 from typing import Dict, Any
 from src.core.base.decision_provider import DecisionProvider
 from src.core.base.normalized_message import NormalizedMessage
-from src.layers.decision.intent import Intent
-from src.utils.logger import get_logger
+from src.domains.decision.intent import Intent
+from src.core.utils.logger import get_logger
 
 class MyDecisionProvider(DecisionProvider):
     """自定义决策 Provider"""
@@ -271,11 +271,11 @@ class MyDecisionProvider(DecisionProvider):
 输出 Provider 渲染到目标设备，继承 `OutputProvider` 基类。
 
 ```python
-# src/layers/rendering/providers/my_provider/my_output_provider.py
+# src/domains/output/providers/my_provider/my_output_provider.py
 from typing import Dict, Any
 from src.core.base.output_provider import OutputProvider
-from src.core.base.render_parameters import RenderParameters
-from src.utils.logger import get_logger
+from src.domains.output.parameters.render_parameters import RenderParameters
+from src.core.utils.logger import get_logger
 
 class MyOutputProvider(OutputProvider):
     """自定义输出 Provider"""
@@ -295,8 +295,8 @@ class MyOutputProvider(OutputProvider):
 在 Provider 的 `__init__.py` 中注册到 ProviderRegistry：
 
 ```python
-# src/layers/input/providers/my_provider/__init__.py
-from src.layers.rendering.provider_registry import ProviderRegistry
+# src/domains/input/providers/my_provider/__init__.py
+from src.domains.output.provider_registry import ProviderRegistry
 from .my_input_provider import MyInputProvider
 
 ProviderRegistry.register_input("my_provider", MyInputProvider, source="builtin:my_provider")
@@ -336,29 +336,28 @@ type = "my_provider"
 
 ## 管道开发规范
 
-管道用于在消息处理流程中进行预处理和后处理。
+管道用于在消息处理流程中进行预处理，位于 Input Domain 内部。
 
 ### 管道开发
 
-1. 继承 `MessagePipeline` 类
-2. 实现 `process_message()` 方法
-3. 使用 `self.config` 访问配置
-4. 返回 `MessageBase` 继续传递，返回 `None` 丢弃消息
+1. 继承 `TextPipeline` 类
+2. 实现 `process()` 方法
+3. 返回 `NormalizedMessage` 继续传递，返回 `None` 丢弃消息
 
 ```python
-# src/pipelines/my_pipeline/pipeline.py
-from src.core.pipeline_manager import MessagePipeline
-from maim_message import MessageBase
+# src/domains/input/pipelines/my_pipeline/pipeline.py
+from src.domains.input.pipeline_manager import TextPipeline
+from src.core.base.normalized_message import NormalizedMessage
 from typing import Optional, Dict, Any
 
-class MyPipelinePipeline(MessagePipeline):
-    priority = 500  # 类属性的 priority 仅作为文档参考
+class MyPipeline(TextPipeline):
+    priority = 500
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.param = self.config.get("param", "default")
 
-    async def process_message(self, message: MessageBase) -> Optional[MessageBase]:
+    async def process(self, message: NormalizedMessage) -> Optional[NormalizedMessage]:
         # 处理消息
         return message  # 或 return None 丢弃
 ```
@@ -432,7 +431,7 @@ await event_bus.subscribe(CoreEvents.NORMALIZATION_MESSAGE_READY, self.handle_me
 
 ## 通信模式
 
-项目使用 **EventBus** 作为唯一的跨层通信机制：
+项目使用 **EventBus** 作为唯一的跨域通信机制：
 - **事件系统（发布-订阅）**：瞬时通知、广播场景
 - 支持优先级、错误隔离、统计功能
 - 使用 CoreEvents 常量确保类型安全
@@ -443,34 +442,43 @@ await event_bus.subscribe(CoreEvents.NORMALIZATION_MESSAGE_READY, self.handle_me
 - 文档字符串（docstring）和注释应使用清晰、准确的中文
 - 变量名和函数名仍使用英文命名
 
-## 5层架构说明
+## 目录结构
 
-当前架构分为 5 层：
+```
+Amaidesu/
+├── main.py              # CLI入口（参数解析、启动应用）
+└── src/
+    ├── amaidesu_core.py # 核心协调器（管理组件生命周期）
+    ├── core/            # 基础设施（事件、基类、通信、工具）
+    ├── services/        # 共享服务（LLM、配置、上下文）
+    └── domains/         # 业务域（input、decision、output）
+```
 
-| Layer | 职责 | 核心模块 |
-|-------|------|---------|
-| **Layer 1-2: Input** | 输入感知与标准化 | `src/layers/input/` |
-| **Layer 3: Decision** | 决策层（可替换） | `src/layers/decision/` |
-| **Layer 4: Parameters** | 参数生成层 | `src/layers/parameters/` |
-| **Layer 5: Rendering** | 渲染呈现层 | `src/layers/rendering/` |
+## 3域架构说明
+
+| 域 | 职责 | 位置 |
+|----|------|------|
+| **Input Domain** | 数据采集 + 标准化 + 预处理 | `src/domains/input/` |
+| **Decision Domain** | 决策（可替换） | `src/domains/decision/` |
+| **Output Domain** | 参数生成 + 渲染 | `src/domains/output/` |
 
 ### 数据流
 
 ```
 外部输入（弹幕、游戏、语音）
   ↓
-【Layer 1-2: Input】RawData → NormalizedMessage
-  ├─ InputProvider: 并发采集 RawData
-  ├─ TextPipeline: 限流、过滤、相似文本检测（可选）
-  └─ InputLayer: 标准化为 NormalizedMessage
-  ↓ normalization.message_ready
-【Layer 3: Decision】NormalizedMessage → Intent
-  ├─ MaiCoreDecisionProvider (默认，WebSocket + LLM意图解析)
-  ├─ LocalLLMDecisionProvider (可选，直接LLM)
-  └─ RuleEngineDecisionProvider (可选，规则引擎)
-  ↓ decision.intent_generated
-【Layer 4-5: Parameters+Rendering】Intent → RenderParameters → 输出
-  ├─ ExpressionGenerator: Intent → RenderParameters
+【Input Domain】外部数据 → NormalizedMessage
+  ├─ InputProvider: 并发采集数据
+  ├─ Normalization: 标准化
+  └─ Pipelines: 预处理（限流、过滤）
+  ↓ EventBus: normalization.message_ready
+【Decision Domain】NormalizedMessage → Intent
+  ├─ MaiCoreDecisionProvider (默认)
+  ├─ LocalLLMDecisionProvider (可选)
+  └─ RuleEngineDecisionProvider (可选)
+  ↓ EventBus: decision.intent_generated
+【Output Domain】Intent → 实际输出
+  ├─ Parameters: 参数生成（情绪→表情等）
   └─ OutputProvider: 并发渲染（TTS、字幕、VTS等）
 ```
 
@@ -479,7 +487,7 @@ await event_bus.subscribe(CoreEvents.NORMALIZATION_MESSAGE_READY, self.handle_me
 ## 开发注意事项
 
 ### 添加新Provider
-1. 在对应层创建Provider文件：`src/layers/{layer}/providers/my_provider/my_provider.py`
+1. 在对应域创建Provider目录：`src/domains/{domain}/providers/my_provider/`
 2. 继承对应的Provider基类（InputProvider/DecisionProvider/OutputProvider）
 3. 在Provider的`__init__.py`中注册到ProviderRegistry
 4. 在配置中启用：
