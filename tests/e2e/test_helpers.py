@@ -5,7 +5,7 @@ E2E Test Helper Functions
 """
 from src.core.base.normalized_message import NormalizedMessage
 from src.core.base.raw_data import RawData
-from src.layers.normalization.content import TextContent
+from src.domains.normalization.content import TextContent
 
 
 def create_normalized_message(

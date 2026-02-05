@@ -17,12 +17,12 @@ FlowCoordinator - 数据流协调器（5层架构：Layer 3 → Layer 4-5）
 """
 
 from typing import Dict, Any, Optional
-from src.utils.logger import get_logger
+from src.core.utils.logger import get_logger
 
-from .event_bus import EventBus
-from .events.names import CoreEvents
-from src.layers.parameters.expression_generator import ExpressionGenerator
-from .output_provider_manager import OutputProviderManager
+from src.core.event_bus import EventBus
+from src.core.events.names import CoreEvents
+from src.domains.output.parameters.expression_generator import ExpressionGenerator
+from src.domains.output.manager import OutputProviderManager
 
 
 class FlowCoordinator:
@@ -62,12 +62,13 @@ class FlowCoordinator:
 
         self.logger.info("FlowCoordinator 初始化完成")
 
-    async def setup(self, config: Dict[str, Any]):
+    async def setup(self, config: Dict[str, Any], config_service=None):
         """
         设置数据流协调器
 
         Args:
-            config: 渲染配置（来自[rendering]）
+            config: 输出Provider配置（来自[providers.output]）
+            config_service: ConfigService实例（用于三级配置加载）
         """
         self.logger.info("开始设置数据流协调器...")
 
@@ -82,9 +83,9 @@ class FlowCoordinator:
             self.output_provider_manager = OutputProviderManager(config)
             self.logger.info("输出Provider管理器已创建")
 
-        # 从配置加载Provider
+        # 从配置加载Provider（传递config_service以启用三级配置合并）
         if self.output_provider_manager:
-            await self.output_provider_manager.load_from_config(config, core=None)
+            await self.output_provider_manager.load_from_config(config, core=None, config_service=config_service)
 
         # 订阅 Layer 3 (Decision) 的 Intent 事件（5层架构）
         self.event_bus.on(CoreEvents.DECISION_INTENT_GENERATED, self._on_intent_ready, priority=50)
@@ -162,7 +163,7 @@ class FlowCoordinator:
             # Layer 4: Intent → ExpressionParameters
             if self.expression_generator:
                 params = await self.expression_generator.generate(intent)
-                self.logger.info(f"ExpressionParameters生成完成")
+                self.logger.info("ExpressionParameters生成完成")
 
                 # Layer 5: 发布 expression.parameters_generated 事件（事件驱动）
                 # OutputProvider 订阅此事件并响应

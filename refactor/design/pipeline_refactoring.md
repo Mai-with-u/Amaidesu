@@ -1,461 +1,119 @@
-# Pipeline重新设计
+# Pipeline 设计
 
-> **✅ 实现状态**
-> 本文档描述的架构**已完成实现**：
-> - ✅ 限流管道（throttle/RateLimitTextPipeline）已迁移到 TextPipeline 架构
-> - ✅ 相似文本过滤管道（similar_message_filter/SimilarTextFilterPipeline）已迁移到 TextPipeline 架构
-> - ✅ 消息日志管道（message_logger/MessageLoggerPipeline）保留旧架构（用于消息记录）
-> - ✅ 已移除 command_router 和 command_processor 管道（功能由 Provider 系统替代）
-> - ✅ TextPipeline 已接入 Layer 2→3 数据流
->
-> **当前管道列表**：
-> - RateLimitTextPipeline - 限流（新架构）
-> - SimilarTextFilterPipeline - 相似文本过滤（新架构）
-> - MessageLoggerPipeline - 消息日志（旧架构，用于记录）
+## 核心目标
+
+TextPipeline 用于文本的预处理和过滤，位于 Input Domain 内部，在标准化完成后、发送到 Decision Domain 之前。
 
 ---
 
-## 🎯 核心目标
+## 在架构中的位置
 
-重新设计Pipeline系统，从处理MessageBase改为处理Text，位于Layer 2和Layer 3之间，用于Text的预处理和过滤。
-
----
-
-## 📊 设计概览
-
-### 1. 设计背景
-
-**现状**：
-- 现有Pipeline系统处理MessageBase
-- Pipeline位于AmaidesuCore中，用于消息预处理和后处理
-- 新架构中，MaiCore作为DecisionProvider，Pipeline失去触发点
-
-**问题**：
-- Pipeline处理的数据格式与Provider系统不匹配
-- Pipeline在新架构中的定位不明确
-- CommandRouterPipeline、RateLimitPipeline、FilterPipeline的实际使用场景需要重新评估
-
-**解决方案**：
-- 重新定位Pipeline：处理Text，位于Layer 2和Layer 3之间
-- TextPipeline接口：process(text, metadata) -> Optional[str]
-- 保留RateLimitPipeline和FilterPipeline
-- 移除CommandRouterPipeline（用Provider替代）
-
-### 2. 设计原则
-
-1. **数据格式匹配**：Pipeline处理Text，与Provider系统匹配
-2. **职责清晰**：Pipeline用于Text的预处理和过滤
-3. **可扩展性**：易于添加新的Pipeline
-4. **容错性**：单个Pipeline失败不影响其他Pipeline
+```
+InputProvider → RawData
+                  ↓
+              InputLayer（标准化）
+                  ↓
+              NormalizedMessage
+                  ↓
+              TextPipeline（限流、过滤）⭐
+                  ↓
+              EventBus: normalization.message_ready
+                  ↓
+              Decision Domain
+```
 
 ---
 
-## 🏗️ 接口设计
-
-### TextPipeline接口
+## TextPipeline 接口
 
 ```python
-from typing import Optional, Dict, Callable, Any
-from dataclasses import dataclass
-from enum import Enum
-
-class PipelineErrorHandling(str, Enum):
-    """Pipeline错误处理策略"""
-    CONTINUE = "continue"  # 记录日志，继续执行
-    STOP = "stop"          # 停止执行，抛出异常
-    DROP = "drop"          # 丢弃消息，不执行后续Pipeline
-
-@dataclass
-class PipelineConfig:
-    """Pipeline配置"""
-    priority: int
-    enabled: bool = True
-    error_handling: PipelineErrorHandling = PipelineErrorHandling.CONTINUE
-    timeout_seconds: int = 5  # 超时时间
-
-@dataclass
-class PipelineStats:
-    """Pipeline统计"""
-    processed_count: int = 0   # 处理次数
-    dropped_count: int = 0     # 丢弃次数
-    error_count: int = 0       # 错误次数
-    avg_duration_ms: float = 0  # 平均处理时间（毫秒）
-
-class PipelineException(Exception):
-    """Pipeline处理异常"""
-    def __init__(self, pipeline_name: str, message: str, original_error: Optional[Exception] = None):
-        self.pipeline_name = pipeline_name
-        self.message = message
-        self.original_error = original_error
-        super().__init__(f"[{pipeline_name}] {message}")
-
 class TextPipeline(Protocol):
-    """文本处理管道"""
-
-    priority: int
-    enabled: bool = True
-    error_handling: PipelineErrorHandling = PipelineErrorHandling.CONTINUE
-    timeout_seconds: int = 5
-
+    """文本预处理管道"""
+    
+    priority: int  # 执行优先级（数值小优先）
+    
     async def process(
-        self,
-        text: str,
-        metadata: Dict[str, Any]
-    ) -> Optional[str]:
+        self, 
+        message: NormalizedMessage
+    ) -> Optional[NormalizedMessage]:
         """
-        处理文本
-
-        Args:
-            text: 待处理的文本
-            metadata: 元数据
-
+        处理消息
+        
         Returns:
-            处理后的文本，或None表示丢弃
-
-        Raises:
-            PipelineException: Pipeline处理失败（根据error_handling策略）
+            处理后的消息，或 None 表示丢弃
         """
-        ...
-
-    def get_stats(self) -> PipelineStats:
-        """获取Pipeline统计信息"""
-        ...
-
-    async def reset_stats(self):
-        """重置统计信息"""
         ...
 ```
 
 ---
 
-## 💾 实现示例
+## 内置 Pipeline
 
-### PipelineManager实现
+### RateLimitTextPipeline（限流）
 
-```python
-import asyncio
-import time
-from typing import List, Optional, Dict, Any
-
-class PipelineManager:
-    """Pipeline管理器"""
-
-    def __init__(self, config: Dict[str, Any]):
-        self.config = config
-        self.pipelines: List[TextPipeline] = []
-        self._lock = asyncio.Lock()  # 添加锁保护并发处理
-        self.logger = get_logger("PipelineManager")
-
-    async def register_pipeline(self, pipeline: TextPipeline):
-        """注册Pipeline"""
-        self.pipelines.append(pipeline)
-        # 按优先级排序
-        self.pipelines.sort(key=lambda p: p.priority)
-        self.logger.info(f"Pipeline registered: {pipeline.get_info()['name']} (priority={pipeline.priority})")
-
-    async def process_text(self, text: str, metadata: Dict[str, Any]) -> Optional[str]:
-        """
-        按优先级处理文本
-
-        Args:
-            text: 待处理的文本
-            metadata: 元数据
-
-        Returns:
-            处理后的文本，或None表示被某个Pipeline丢弃
-        """
-        # 使用锁保护并发处理
-        async with self._lock:
-            current_text = text
-
-            for pipeline in self.pipelines:
-                if not pipeline.enabled:
-                    continue
-
-                try:
-                    # 记录开始时间
-                    start_time = time.time()
-
-                    # 处理文本
-                    current_text = await asyncio.wait_for(
-                        pipeline.process(current_text, metadata),
-                        timeout=pipeline.timeout_seconds
-                    )
-
-                # 记录处理时间
-                duration_ms = (time.time() - start_time) * 1000
-                self._update_pipeline_stats(pipeline, duration_ms, success=True)
-
-                # 如果返回None，丢弃消息
-                if current_text is None:
-                    self.logger.debug(f"Pipeline {pipeline.get_info()['name']} dropped the message")
-                    self._update_pipeline_stats(pipeline, 0, dropped=True)
-                    return None
-
-            except asyncio.TimeoutError:
-                error = PipelineException(
-                    pipeline.get_info()['name'],
-                    f"Timeout after {pipeline.timeout_seconds}s"
-                )
-                self.logger.error(f"Pipeline timeout: {error}")
-
-                # 根据错误处理策略
-                if pipeline.error_handling == PipelineErrorHandling.STOP:
-                    raise error
-                elif pipeline.error_handling == PipelineErrorHandling.DROP:
-                    self._update_pipeline_stats(pipeline, 0, dropped=True)
-                    return None
-                # CONTINUE: 记录日志，继续执行
-                self._update_pipeline_stats(pipeline, 0, error=True)
-
-            except Exception as e:
-                error = PipelineException(
-                    pipeline.get_info()['name'],
-                    f"Processing failed",
-                    original_error=e
-                )
-                self.logger.error(f"Pipeline error: {error}", exc_info=True)
-
-                # 根据错误处理策略
-                if pipeline.error_handling == PipelineErrorHandling.STOP:
-                    raise error
-                elif pipeline.error_handling == PipelineErrorHandling.DROP:
-                    self._update_pipeline_stats(pipeline, 0, dropped=True)
-                    return None
-                # CONTINUE: 记录日志，继续执行
-                self._update_pipeline_stats(pipeline, 0, error=True)
-
-        return current_text
-
-    def _update_pipeline_stats(self, pipeline: TextPipeline, duration_ms: float, **kwargs):
-        """更新Pipeline统计"""
-        stats = pipeline.get_stats()
-        stats.processed_count += 1
-
-        if kwargs.get('dropped'):
-            stats.dropped_count += 1
-        elif kwargs.get('error'):
-            stats.error_count += 1
-        elif kwargs.get('success'):
-            # 更新平均处理时间
-            stats.avg_duration_ms = (
-                (stats.avg_duration_ms * (stats.processed_count - 1) + duration_ms)
-                / stats.processed_count
-            )
-```
-
-### RateLimitPipeline实现
+控制消息处理频率，防止刷屏：
 
 ```python
-class RateLimitPipeline(TextPipeline):
-    """限流Pipeline"""
-
+class RateLimitTextPipeline(TextPipeline):
     priority = 100
-    enabled = True
-    error_handling = PipelineErrorHandling.CONTINUE
-    timeout_seconds = 1
-
-    def __init__(self, config: PipelineConfig):
-        self.config = config
-        self.logger = get_logger("RateLimitPipeline")
-        self._rate_limiter = RateLimiter(
-            max_requests_per_minute=config.get("max_rpm", 60)
-        )
-        self._stats = PipelineStats()
-
-    async def process(self, text: str, metadata: Dict[str, Any]) -> Optional[str]:
-        # 获取用户
-        user = metadata.get("user", "anonymous")
-
-        # 检查是否限流
-        if self._rate_limiter.is_rate_limited(user):
-            self.logger.debug(f"User {user} is rate limited")
-            return None  # 丢弃
-
-        # 记录请求
-        self._rate_limiter.record_request(user)
-
-        return text
-
-    def get_stats(self) -> PipelineStats:
-        return self._stats
-
-    async def reset_stats(self):
-        self._stats = PipelineStats()
-
-class RateLimiter:
-    """简单限流器"""
-
-    def __init__(self, max_requests_per_minute: int):
-        self.max_rpm = max_requests_per_minute
-        self._requests: Dict[str, List[float]] = {}
-
-    def is_rate_limited(self, user: str) -> bool:
-        """检查用户是否被限流"""
-        if user not in self._requests:
-            return False
-
-        # 清理1分钟前的请求
-        now = time.time()
-        self._requests[user] = [
-            t for t in self._requests[user]
-            if now - t < 60
-        ]
-
-        return len(self._requests[user]) >= self.max_rpm
-
-    def record_request(self, user: str):
-        """记录用户请求"""
-        now = time.time()
-        if user not in self._requests:
-            self._requests[user] = []
-        self._requests[user].append(now)
+    
+    def __init__(self, config):
+        self.max_per_second = config.get("max_per_second", 5)
+        self.cooldown = config.get("cooldown", 0.5)
 ```
 
-### FilterPipeline实现
+### SimilarTextFilterPipeline（相似文本过滤）
+
+过滤短时间内的重复/相似消息：
 
 ```python
-class FilterPipeline(TextPipeline):
-    """过滤Pipeline"""
-
+class SimilarTextFilterPipeline(TextPipeline):
     priority = 200
-    enabled = True
-    error_handling = PipelineErrorHandling.CONTINUE
-    timeout_seconds = 1
-
-    def __init__(self, config: PipelineConfig):
-        self.config = config
-        self.logger = get_logger("FilterPipeline")
-        self._sensitive_words = config.get("sensitive_words", [])
-        self._stats = PipelineStats()
-
-    async def process(self, text: str, metadata: Dict[str, Any]) -> Optional[str]:
-        # 检查敏感词
-        for word in self._sensitive_words:
-            if word.lower() in text.lower():
-                self.logger.debug(f"Message contains sensitive word: {word}")
-                return None  # 丢弃
-
-        return text
-
-    def get_stats(self) -> PipelineStats:
-        return self._stats
-
-    async def reset_stats(self):
-        self._stats = PipelineStats()
+    
+    def __init__(self, config):
+        self.similarity_threshold = config.get("threshold", 0.8)
+        self.window_seconds = config.get("window", 10)
 ```
 
 ---
 
-## 📊 Pipeline在新架构中的定位
+## Pipeline 执行流程
 
-### Pipeline数据流
-
-```mermaid
-graph TB
-    subgraph "Layer 1: 输入感知层"
-        Perception[弹幕/游戏/语音<br/>多个InputProvider并发采集]
-    end
-
-    subgraph "Layer 2: 输入标准化层"
-        Normalization[统一转换为Text]
-    end
-
-    subgraph "Pipeline系统（新增）"
-        RateLimit[RateLimitPipeline<br/>限流]
-        Filter[FilterPipeline<br/>过滤敏感词]
-    end
-
-    subgraph "Layer 3: 中间表示层"
-        Canonical[CanonicalMessage]
-    end
-
-    Perception -->|"Raw Data"| Normalization
-    Normalization -->|"Text"| RateLimit
-    RateLimit -->|"Text'"| Filter
-    Filter -->|"Text''"| Canonical
-
-    style Perception fill:#e1f5ff
-    style Normalization fill:#fff4e1
-    style RateLimit fill:#ffd700
-    style Filter fill:#ffd700
-    style Canonical fill:#f3e5f5
+```python
+class PipelineManager:
+    async def process_text_pipelines(
+        self, 
+        message: NormalizedMessage
+    ) -> Optional[NormalizedMessage]:
+        """按优先级顺序执行所有 Pipeline"""
+        
+        current = message
+        for pipeline in sorted(self._pipelines, key=lambda p: p.priority):
+            if not pipeline.enabled:
+                continue
+            
+            result = await pipeline.process(current)
+            if result is None:
+                return None  # 消息被丢弃
+            current = result
+        
+        return current
 ```
-
-### Pipeline与Provider的职责对比
-
-| 维度 | Pipeline | Provider |
-|------|----------|----------|
-| **位置** | Layer 2和Layer 3之间 | Layer 1（输入）/ Layer 5（输出） |
-| **处理数据** | Text | RawData / RenderParameters |
-| **职责** | 文本预处理和过滤 | 数据采集和渲染 |
-| **并发** | 顺序处理（按优先级） | 并发处理 |
-| **示例** | RateLimit、Filter | ConsoleInput、VTSRenderer |
 
 ---
 
-## 📋 配置示例
-
-### Pipeline配置
+## 配置示例
 
 ```toml
-[pipelines]
-# 启用的Pipeline列表
-enabled = ["rate_limit", "filter"]
-
-# Pipeline配置
 [pipelines.rate_limit]
+enabled = true
 priority = 100
+max_per_second = 5
+cooldown = 0.5
+
+[pipelines.similar_filter]
 enabled = true
-error_handling = "continue"  # continue | stop | drop
-timeout_seconds = 1
-
-[pipelines.rate_limit.config]
-max_rpm = 60  # 每分钟最多60条消息
-
-[pipelines.filter]
 priority = 200
-enabled = true
-error_handling = "continue"
-timeout_seconds = 1
-
-[pipelines.filter.config]
-sensitive_words = ["禁词1", "禁词2", "禁词3"]
+threshold = 0.8
+window = 10
 ```
-
----
-
-## ✅ 关键优势
-
-### 1. 职责清晰
-- ✅ Pipeline处理Text，Provider处理RawData/RenderParameters
-- ✅ 职责不重叠，各司其职
-- ✅ 易于理解和维护
-
-### 2. 数据格式匹配
-- ✅ Pipeline处理Text，与Provider系统匹配
-- ✅ 位于Layer 2和Layer 3之间，位置明确
-- ✅ 数据流向清晰
-
-### 3. 可扩展性
-- ✅ 易于添加新的Pipeline
-- ✅ 支持多种错误处理策略
-- ✅ 支持超时控制
-
-### 4. 容错性
-- ✅ 单个Pipeline失败不影响其他Pipeline
-- ✅ 可配置的错误处理策略
-- ✅ 记录详细的错误日志
-
-### 5. 性能优化
-- ✅ Pipeline按优先级顺序处理
-- ✅ 支持超时控制，避免长时间阻塞
-- ✅ 统计信息完善，便于性能调优
-
----
-
-## 🔗 相关文档
-
-- [5层架构设计](./layer_refactoring.md)
-- [多Provider并发设计](./multi_provider.md)
-- [AmaidesuCore重构设计](./core_refactoring.md)

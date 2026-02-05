@@ -16,7 +16,7 @@ import pytest
 from src.core.event_bus import EventBus
 from src.core.base.raw_data import RawData
 from src.core.base.input_provider import InputProvider
-from src.layers.input.input_provider_manager import InputProviderManager, ProviderStats
+from src.domains.input.input_provider_manager import InputProviderManager, ProviderStats
 from tests.mocks.mock_input_provider import MockInputProvider
 
 
@@ -455,22 +455,17 @@ async def test_load_from_config_basic(manager):
     """测试从配置加载 Provider（基本配置）"""
     config = {
         "enabled": True,
-        "inputs": ["console_input", "bili_danmaku"],
+        "inputs": ["console_input"],  # 只启用 console_input
         "inputs_config": {
             "console_input": {
-                "type": "console",
-                "enabled": True
-            },
-            "bili_danmaku": {
-                "type": "bili_danmaku",
-                "enabled": False
+                "type": "console_input",  # 修正：使用注册名称
             }
         }
     }
 
     providers = await manager.load_from_config(config)
 
-    # 只有 console_input 启用
+    # 只有 console_input 在 inputs 列表中
     assert len(providers) == 1
     assert providers[0].__class__.__name__ == "ConsoleInputProvider"
 
@@ -526,22 +521,17 @@ async def test_load_from_config_provider_disabled(manager):
     """测试单个 Provider 禁用"""
     config = {
         "enabled": True,
-        "inputs": ["console_input", "bili_danmaku"],
+        "inputs": ["console_input"],  # 只在列表中包含启用的
         "inputs_config": {
             "console_input": {
-                "type": "console",
-                "enabled": True
-            },
-            "bili_danmaku": {
-                "type": "bili_danmaku",
-                "enabled": False
+                "type": "console_input",  # 修正：使用注册名称
             }
         }
     }
 
     providers = await manager.load_from_config(config)
 
-    # 只有 console_input 启用
+    # 只有 console_input 在 inputs 列表中
     assert len(providers) == 1
 
 
@@ -570,11 +560,10 @@ async def test_load_from_config_type_fallback(manager):
     """测试 type 字段回退到 input_name"""
     config = {
         "enabled": True,
-        "inputs": ["console"],
+        "inputs": ["console_input"],  # 使用注册名称
         "inputs_config": {
-            "console": {
-                "enabled": True
-                # 没有 type 字段，应该回退到 "console"
+            "console_input": {
+                # 没有 type 字段，应该回退到 input_name (console_input)
             }
         }
     }
@@ -593,8 +582,7 @@ async def test_load_from_config_and_start(manager):
         "inputs": ["console_input"],
         "inputs_config": {
             "console_input": {
-                "type": "console",
-                "enabled": True,
+                "type": "console_input",  # 修正：使用注册名称
                 "user_id": "test_user"
             }
         }

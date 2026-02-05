@@ -9,9 +9,9 @@ import asyncio
 from typing import Dict, Any, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock
 
-from src.layers.decision.intent_parser import IntentParser
-from src.layers.decision.intent import Intent, EmotionType, ActionType, IntentAction
-from src.core.llm_service import LLMResponse
+from src.domains.decision.intent_parser import IntentParser
+from src.domains.decision.intent import Intent, EmotionType, ActionType, IntentAction
+from src.services.llm_service import LLMResponse
 
 
 # =============================================================================

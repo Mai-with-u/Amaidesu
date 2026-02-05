@@ -5,9 +5,9 @@ ExpressionGenerator 测试
 """
 
 import pytest
-from src.layers.parameters.expression_generator import ExpressionGenerator
-from src.layers.parameters.render_parameters import ExpressionParameters
-from src.layers.decision.intent import Intent, EmotionType, ActionType, IntentAction
+from src.domains.parameters.expression_generator import ExpressionGenerator
+from src.domains.output.parameters.render_parameters import ExpressionParameters
+from src.domains.decision.intent import Intent, EmotionType, ActionType, IntentAction
 
 
 @pytest.fixture

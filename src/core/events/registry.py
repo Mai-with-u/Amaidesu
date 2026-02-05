@@ -14,7 +14,7 @@
 from typing import Dict, Type, Optional
 from pydantic import BaseModel
 
-from src.utils.logger import get_logger
+from src.core.utils.logger import get_logger
 
 
 class EventRegistry:

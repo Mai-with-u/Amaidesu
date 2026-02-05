@@ -10,8 +10,8 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 import pytest
-from src.layers.normalization.normalizers import NormalizerRegistry
-from src.layers.normalization.normalizers.base import DataNormalizer
+from src.domains.normalization.normalizers import NormalizerRegistry
+from src.domains.normalization.normalizers.base import DataNormalizer
 from src.core.base.raw_data import RawData
 from src.core.base.normalized_message import NormalizedMessage
 
@@ -31,7 +31,7 @@ class MockNormalizer(DataNormalizer):
         return 50
 
     async def normalize(self, raw_data: RawData):
-        from src.layers.normalization.content import TextContent
+        from src.domains.normalization.content import TextContent
         content = TextContent(text="mock")
         return NormalizedMessage(
             text="mock",
@@ -55,7 +55,7 @@ class AnotherMockNormalizer(DataNormalizer):
         return 75
 
     async def normalize(self, raw_data: RawData):
-        from src.layers.normalization.content import TextContent
+        from src.domains.normalization.content import TextContent
         content = TextContent(text="another")
         return NormalizedMessage(
             text="another",

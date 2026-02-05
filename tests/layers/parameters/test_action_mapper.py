@@ -5,8 +5,8 @@ ActionMapper 测试
 """
 
 import pytest
-from src.layers.parameters.action_mapper import ActionMapper
-from src.layers.decision.intent import ActionType, IntentAction
+from src.domains.parameters.action_mapper import ActionMapper
+from src.domains.decision.intent import ActionType, IntentAction
 
 
 class TestActionMapperInit:

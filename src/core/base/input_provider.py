@@ -1,10 +1,10 @@
 """
 输入Provider接口
 
-定义了输入感知层(Layer 1)的Provider接口。
+定义了输入域(Input Domain)的Provider接口。
 InputProvider负责从外部数据源采集原始数据。
 
-示例实现:
+示例实现：
 - BilibiliDanmakuProvider: 从B站弹幕采集数据
 - MinecraftProvider: 从Minecraft服务器采集游戏事件
 - ConsoleProvider: 从控制台采集用户输入

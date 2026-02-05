@@ -5,8 +5,8 @@ EmotionMapper 测试
 """
 
 import pytest
-from src.layers.parameters.emotion_mapper import EmotionMapper
-from src.layers.decision.intent import EmotionType
+from src.domains.parameters.emotion_mapper import EmotionMapper
+from src.domains.decision.intent import EmotionType
 
 
 class TestEmotionMapperInit:

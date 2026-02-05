@@ -25,29 +25,29 @@ Amaidesu!
 聊天机器人麦麦的[VTubeStudio](https://github.com/DenchiSoft/VTubeStudio) 适配器。
 其聊天核心为[麦麦Bot](https://github.com/MaiM-with-u/MaiBot)，一款专注于 群组聊天 的赛博网友 QQ BOT。
 
-**架构状态**：✅ 核心架构重构已完成（2026-02-02），采用5层架构+Provider系统
+**架构状态**：✅ 核心架构重构已完成（2026-02-02），采用3域架构+Provider系统
 
 </div>
 
 ## 架构概述
 
-### 5层核心数据流（2025年最新版本）
+### 3域架构数据流（最新版本）
 
 ```
 外部输入（弹幕、游戏、语音）
   ↓
-【Layer 1-2: Input】RawData → NormalizedMessage
-  ├─ InputProvider: 并发采集 RawData
-  ├─ TextPipeline: 限流、过滤、相似文本检测（可选）
-  └─ InputLayer: 标准化为 NormalizedMessage
-  ↓ normalization.message_ready
-【Layer 3: Decision】NormalizedMessage → Intent
+【Input Domain】外部数据 → NormalizedMessage
+  ├─ InputProvider: 并发采集外部数据
+  ├─ Normalization: 标准化为 NormalizedMessage
+  └─ Pipelines: 预处理（限流、过滤）
+  ↓ EventBus: normalization.message_ready
+【Decision Domain】NormalizedMessage → Intent
   ├─ MaiCoreDecisionProvider (默认，WebSocket + LLM意图解析)
   ├─ LocalLLMDecisionProvider (可选，直接LLM)
   └─ RuleEngineDecisionProvider (可选，规则引擎)
-  ↓ decision.intent_generated
-【Layer 4-5: Parameters+Rendering】Intent → RenderParameters → 输出
-  ├─ ExpressionGenerator: Intent → RenderParameters
+  ↓ EventBus: decision.intent_generated
+【Output Domain】Intent → 实际输出
+  ├─ Parameters: 参数生成（情绪→表情、动作→热键）
   └─ OutputProvider: 并发渲染（TTS、字幕、VTS等）
 ```
 
@@ -74,8 +74,8 @@ Amaidesu!
    - OutputProviderManager: 管理输出Provider
 
 5. **PipelineManager**: 管道管理器，负责管道的加载和执行
-   - TextPipeline: Layer 1-2 文本预处理（限流、过滤）
-   - MessagePipeline: MaiCore 消息处理（inbound/outbound）
+    - TextPipeline: Input Domain 文本预处理（限流、过滤）
+    - MessagePipeline: MaiCore 消息处理（inbound/outbound）
 
 6. **ContextManager**: 上下文管理器，负责管理和聚合来自不同Provider的上下文信息
 
@@ -181,7 +181,29 @@ python main.py
 
 详见 [MaiBot部署教程](https://docs.mai-mai.org/manual/usage/mmc_q_a) 了解 MaiCore 的部署方法。
 
-## 运行与配置
+## 配置体系重大更新 ⚠️
+
+### 配置格式变更（v1.2.0）
+
+系统已完成从插件系统到Provider架构的重构，**配置文件格式已全面升级**：
+
+#### 新的配置结构
+```toml
+[providers.input]
+enabled = true
+enabled_inputs = ["console_input", "bili_danmaku"]
+
+[providers.decision]
+enabled = true
+active_provider = "maicore"
+available_providers = ["maicore", "local_llm"]
+
+[providers.output]
+enabled = true
+enabled_outputs = ["subtitle", "vts", "tts"]
+```
+
+#### 运行与配置
 
 1.  **首次运行与配置生成**:
     - 在首次运行 `uv run python main.py` 之前，请确保根目录下存在 `config-template.toml`。
@@ -192,10 +214,15 @@ python main.py
       - `[providers.output]` - 输出Provider配置
     - **重要**: 自动生成配置文件后，程序会提示并退出。请务必检查生成的 `config.toml` 文件，填入必要的配置信息（如 API 密钥、设备名称、房间号等），然后再重新运行程序。
 
-2.  **启动程序**:
+2.  **旧配置迁移**:
+    - 系统会自动检测旧配置格式并自动转换为新的配置格式
+    - 如果您有旧配置文件，系统会自动备份并生成新配置
+    - 详细迁移说明请查看：[配置变更通知](./docs/CONFIG_CHANGES.md)
+
+3.  **启动程序**:
     - 配置完成后，使用 `uv run python main.py` 启动应用程序。
 
-3.  **命令行参数**:
+4.  **命令行参数**:
     - `--debug`: 启用详细的 DEBUG 级别日志输出，方便排查问题。
       ```bash
       uv run python main.py --debug
@@ -231,36 +258,35 @@ uv run python mock_maicore.py
 
 #### 输入Provider（InputProvider）
 
-- [console_input](./src/layers/input/providers/console_input/README.md) - 控制台输入
-- [bili_danmaku](./src/layers/input/providers/bili_danmaku/README.md) - B站弹幕（第三方API）
-- [bili_danmaku_official](./src/layers/input/providers/bili_danmaku_official/README.md) - B站弹幕（官方WebSocket）
-- [bili_danmaku_selenium](./src/layers/input/providers/bili_danmaku_selenium/README.md) - B站弹幕（Selenium版）
-- [bili_danmaku_official_maicraft](./src/layers/input/providers/bili_danmaku_official_maicraft) - B站弹幕（Maicraft优化版）
-- [mainosaba](./src/layers/input/providers/mainosaba/README.md) - Mainosaba输入
-- [mock_danmaku](./src/layers/input/providers/mock_danmaku/README.md) - 模拟弹幕（测试用）
-- [read_pingmu](./src/layers/input/providers/read_pingmu/README.md) - PingMu读取
+- [console_input](./src/domains/input/providers/console_input/README.md) - 控制台输入
+- [bili_danmaku](./src/domains/input/providers/bili_danmaku/README.md) - B站弹幕（第三方API）
+- [bili_danmaku_official](./src/domains/input/providers/bili_danmaku_official/README.md) - B站弹幕（官方WebSocket）
+- [bili_danmaku_official_maicraft](./src/domains/input/providers/bili_danmaku_official_maicraft) - B站弹幕（Maicraft优化版）
+- [mainosaba](./src/domains/input/providers/mainosaba/README.md) - Mainosaba输入
+- [mock_danmaku](./src/domains/input/providers/mock_danmaku/README.md) - 模拟弹幕（测试用）
+- [read_pingmu](./src/domains/input/providers/read_pingmu/README.md) - PingMu读取
 
 #### 决策Provider（DecisionProvider）
 
-- [maicore](./src/layers/decision/providers/maicore) - MaiCore决策（默认，WebSocket + LLM意图解析）
-- [local_llm](./src/layers/decision/providers/local_llm) - 本地LLM决策
-- [rule_engine](./src/layers/decision/providers/rule_engine) - 规则引擎决策
-- [emotion_judge](./src/layers/decision/providers/emotion_judge) - 情绪判断决策
-- [mock](./src/layers/decision/providers/mock) - 模拟决策（测试用）
+- [maicore](./src/domains/decision/providers/maicore) - MaiCore决策（默认，WebSocket + LLM意图解析）
+- [local_llm](./src/domains/decision/providers/local_llm) - 本地LLM决策
+- [rule_engine](./src/domains/decision/providers/rule_engine) - 规则引擎决策
+- [emotion_judge](./src/domains/decision/providers/emotion_judge) - 情绪判断决策
+- [mock](./src/domains/decision/providers/mock) - 模拟决策（测试用）
 
 #### 输出Provider（OutputProvider）
 
-- [gptsovits](./src/layers/rendering/providers/gptsovits/README.md) - GPT-SoVITS TTS
-- [omni_tts](./src/layers/rendering/providers/omni_tts/README.md) - Omni TTS
-- [tts](./src/layers/rendering/providers/tts/README.md) - 通用TTS
-- [subtitle](./src/layers/rendering/providers/subtitle/README.md) - 字幕渲染
-- [vts](./src/layers/rendering/providers/vts/README.md) - VTS虚拟形象
-- [avatar](./src/layers/rendering/providers/avatar/README.md) - Avatar控制
-- [sticker](./src/layers/rendering/providers/sticker/README.md) - 贴图/表情
-- [obs_control](./src/layers/rendering/providers/obs_control/README.md) - OBS控制
-- [warudo](./src/layers/rendering/providers/warudo/README.md) - Warudo控制
-- [remote_stream](./src/layers/rendering/providers/remote_stream/README.md) - 远程流输出
-- [mock](./src/layers/rendering/providers/mock) - 模拟输出（测试用）
+- [gptsovits](./src/domains/output/providers/gptsovits/README.md) - GPT-SoVITS TTS
+- [omni_tts](./src/domains/output/providers/omni_tts/README.md) - Omni TTS
+- [tts](./src/domains/output/providers/tts/README.md) - 通用TTS
+- [subtitle](./src/domains/output/providers/subtitle/README.md) - 字幕渲染
+- [vts](./src/domains/output/providers/vts/README.md) - VTS虚拟形象
+- [avatar](./src/domains/output/providers/avatar/README.md) - Avatar控制
+- [sticker](./src/domains/output/providers/sticker/README.md) - 贴图/表情
+- [obs_control](./src/domains/output/providers/obs_control/README.md) - OBS控制
+- [warudo](./src/domains/output/providers/warudo/README.md) - Warudo控制
+- [remote_stream](./src/domains/output/providers/remote_stream/README.md) - 远程流输出
+- [mock](./src/domains/output/providers/mock) - 模拟输出（测试用）
 
 ### Provider依赖关系
 
@@ -313,7 +339,7 @@ flowchart TD
 #### 输入Provider开发
 
 ```python
-# src/layers/input/providers/my_provider/my_provider.py
+# src/domains/input/providers/my_provider/my_provider.py
 from typing import AsyncIterator
 from src.core.base.input_provider import InputProvider
 from src.core.base.raw_data import RawData
@@ -348,10 +374,10 @@ class MyInputProvider(InputProvider):
 #### 决策Provider开发
 
 ```python
-# src/layers/decision/providers/my_provider/my_decision_provider.py
+# src/domains/decision/providers/my_provider/my_decision_provider.py
 from src.core.base.decision_provider import DecisionProvider
 from src.core.base.normalized_message import NormalizedMessage
-from src.layers.decision.intent import Intent
+from src.domains.decision.intent import Intent
 from src.utils.logger import get_logger
 
 class MyDecisionProvider(DecisionProvider):
@@ -374,7 +400,7 @@ class MyDecisionProvider(DecisionProvider):
 #### 输出Provider开发
 
 ```python
-# src/layers/rendering/providers/my_provider/my_output_provider.py
+# src/domains/output/providers/my_provider/my_output_provider.py
 from src.core.base.output_provider import OutputProvider
 from src.core.base.render_parameters import RenderParameters
 from src.utils.logger import get_logger
@@ -397,8 +423,8 @@ class MyOutputProvider(OutputProvider):
 在Provider的`__init__.py`中注册到ProviderRegistry：
 
 ```python
-# src/layers/input/providers/my_provider/__init__.py
-from src.layers.rendering.provider_registry import ProviderRegistry
+# src/domains/input/providers/my_provider/__init__.py
+from src.domains.output.provider_registry import ProviderRegistry
 from .my_provider import MyInputProvider
 
 ProviderRegistry.register_input("my_provider", MyInputProvider, source="builtin:my_provider")
@@ -489,12 +515,12 @@ type = "my_provider"
 
 要创建自定义管道，需遵循以下步骤：
 
-1.  在 `src/pipelines` 目录下创建新的包目录，如 `my_pipeline`。
+1.  在 `src/domains/input/pipelines` 目录下创建新的包目录，如 `my_pipeline`。
 2.  在包目录中创建 `__init__.py` 文件和 `pipeline.py` 文件。
 3.  在 `pipeline.py` 中继承 `MessagePipeline` 基类并实现 `process_message` 方法：
 
 ```python
-# src/pipelines/my_pipeline/pipeline.py
+# src/domains/input/pipelines/my_pipeline/pipeline.py
 from src.core.pipeline_manager import MessagePipeline
 from maim_message import MessageBase
 from typing import Optional, Dict, Any
@@ -518,13 +544,13 @@ class MyPipelinePipeline(MessagePipeline): # 类名约定：驼峰式 + Pipeline
 4.  在 `__init__.py` 中导出管道类：
 
 ```python
-# src/pipelines/my_pipeline/__init__.py
+# src/domains/input/pipelines/my_pipeline/__init__.py
 from .pipeline import MyPipelinePipeline
 
 __all__ = ["MyPipelinePipeline"]
 ```
 
-5.  （可选）创建管道配置模板文件 `config-template.toml` 和默认配置文件 `config.toml` 于 `src/pipelines/my_pipeline/` 目录下。
+5.  （可选）创建管道配置模板文件 `config-template.toml` 和默认配置文件 `config.toml` 于 `src/domains/input/pipelines/my_pipeline/` 目录下。
 
 6.  在主配置文件 `config.toml` 中添加启用配置：
 
@@ -546,7 +572,7 @@ __all__ = ["MyPipelinePipeline"]
 ## 开发注意事项
 
 ### 添加新Provider
-1. 在对应层创建Provider文件：`src/layers/{layer}/providers/my_provider/my_provider.py`
+1. 在对应域创建Provider文件：`src/domains/{domain}/providers/my_provider/my_provider.py`
 2. 继承对应的Provider基类（InputProvider/DecisionProvider/OutputProvider）
 3. 在Provider的`__init__.py`中注册到ProviderRegistry
 4. 在配置中启用：
@@ -580,8 +606,7 @@ logger.error("错误日志", exc_info=True)
 ## 架构设计文档
 
 详细的架构设计文档位于`refactor/design/`：
-- [架构总览](refactor/design/overview.md) - 5层架构概述
-- [5层架构设计](refactor/design/layer_refactoring.md) - 核心数据流详细说明
+- [架构总览](refactor/design/overview.md) - 3域架构概述
 - [决策层设计](refactor/design/decision_layer.md) - 可替换的决策Provider系统
 - [多Provider并发设计](refactor/design/multi_provider.md) - 并发处理架构
 - [LLM服务设计](refactor/design/llm_service.md) - LLM调用基础设施
@@ -598,11 +623,11 @@ logger.error("错误日志", exc_info=True)
 ## 测试策略
 
 **单元测试**：测试单个Provider或Manager
-- 位置：`tests/layers/{layer}/test_*.py`
+- 位置：`tests/domains/{domain}/test_*.py`
 - 使用Mock隔离外部依赖
 
 **集成测试**：测试多Provider协作
-- 位置：`tests/layers/input/test_multi_provider_integration.py`
+- 位置：`tests/domains/input/test_multi_provider_integration.py`
 - 测试数据流完整性
 
 **E2E测试**：测试完整数据流
@@ -616,6 +641,14 @@ logger.error("错误日志", exc_info=True)
 - **异步优先**：所有IO操作都应使用async/await
 - **错误隔离**：单个Provider失败不应影响其他Provider
 - **日志分级**：DEBUG用于开发，INFO用于正常运行，WARNING用于可恢复问题，ERROR用于严重问题
+
+## 📚 更多资源
+
+### 配置相关文档
+- [配置变更通知](./docs/CONFIG_CHANGES.md) - 详细的配置迁移指南和新功能介绍
+- [配置设计提案](./docs/CONFIG_DESIGN_PROPOSAL.md) - 配置体系的设计思路
+- [配置统一总结](./docs/CONFIG_UNIFICATION_SUMMARY.md) - 配置统一的详细说明
+- [配置升级指南](./docs/CONFIG_UPGRADE_GUIDE.md) - 手动升级配置的详细步骤
 
 ## Git工作流
 

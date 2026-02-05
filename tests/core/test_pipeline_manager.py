@@ -18,7 +18,7 @@ from unittest.mock import Mock, MagicMock, AsyncMock
 from maim_message import MessageBase, BaseMessageInfo, Seg, UserInfo
 from maim_message.message_base import FormatInfo
 
-from src.core.pipeline_manager import (
+from src.domains.input.pipelines.manager import (
     PipelineManager,
     MessagePipeline,
     TextPipeline,

@@ -6,7 +6,7 @@
 
 import pytest
 import time
-from src.layers.decision.intent import (
+from src.domains.decision.intent import (
     Intent,
     IntentAction,
     EmotionType,
