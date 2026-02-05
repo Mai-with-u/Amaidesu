@@ -1,7 +1,8 @@
 """Remote Stream Output Provider"""
 
-# 注意：实际的 Provider 实现在 src/layers/input/providers/remote_stream/
+# 注意：实际的 Provider 实现在 src/domains/input/providers/remote_stream/
 # 这是一个临时别名，为了保持 Provider 在正确的位置注册
+# TODO: 将 RemoteStreamProvider 移动到 src/domains/output/providers/remote_stream/
 
 from src.domains.input.providers.remote_stream.remote_stream_provider import RemoteStreamProvider
 from src.core.provider_registry import ProviderRegistry

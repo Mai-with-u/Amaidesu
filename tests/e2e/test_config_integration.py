@@ -249,7 +249,7 @@ async def test_config_service_deep_merge_function():
 @pytest.mark.asyncio
 async def test_input_provider_manager_load_from_config(config_service: ConfigService):
     """测试 InputProviderManager 能从配置加载 Provider"""
-    from src.domains.input.manager import InputProviderManager
+    from src.domains.input.input_provider_manager import InputProviderManager
     from src.core.event_bus import EventBus
 
     event_bus = EventBus()
@@ -298,7 +298,7 @@ async def test_output_provider_manager_load_from_config(config_service: ConfigSe
 @pytest.mark.asyncio
 async def test_enabled_switch_controls_provider_loading(config_service: ConfigService):
     """测试 enabled 开关正确控制 Provider 加载"""
-    from src.domains.input.manager import InputProviderManager
+    from src.domains.input.input_provider_manager import InputProviderManager
     from src.core.event_bus import EventBus
 
     event_bus = EventBus()
@@ -344,7 +344,7 @@ async def test_application_startup_simulation(project_base_dir):
     """模拟应用启动流程，验证所有组件能正常初始化"""
     from src.services.config.service import ConfigService
     from src.core.event_bus import EventBus
-    from src.domains.input.manager import InputProviderManager
+    from src.domains.input.input_provider_manager import InputProviderManager
     from src.domains.output.manager import OutputProviderManager
     from src.domains.decision.decision_manager import DecisionManager
 
@@ -468,7 +468,7 @@ async def test_provider_registry_handles_unknown_provider():
 @pytest.mark.asyncio
 async def test_manager_handles_invalid_provider_type():
     """测试 Manager 正确处理无效的 Provider 类型"""
-    from src.domains.input.manager import InputProviderManager
+    from src.domains.input.input_provider_manager import InputProviderManager
     from src.core.event_bus import EventBus
 
     event_bus = EventBus()

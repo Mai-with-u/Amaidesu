@@ -3,7 +3,7 @@
 """
 import pytest
 from unittest.mock import Mock, MagicMock, patch
-from src.domains.input.manager import InputProviderManager
+from src.domains.input.input_provider_manager import InputProviderManager
 from src.domains.output.manager import OutputProviderManager
 from src.core.event_bus import EventBus
 
@@ -40,7 +40,7 @@ async def test_input_provider_manager_with_config_service(event_bus, config_serv
     }
 
     # Mock ProviderRegistry.create_input
-    with patch("src.layers.rendering.provider_registry.ProviderRegistry") as mock_registry:
+    with patch("src.core.provider_registry.ProviderRegistry") as mock_registry:
         mock_provider = Mock()
         mock_provider.__class__.__name__ = "ConsoleInputProvider"
         mock_registry.create_input.return_value = mock_provider
@@ -76,7 +76,7 @@ async def test_input_provider_manager_fallback(event_bus):
     }
 
     # Mock ProviderRegistry.create_input
-    with patch("src.layers.rendering.provider_registry.ProviderRegistry") as mock_registry:
+    with patch("src.core.provider_registry.ProviderRegistry") as mock_registry:
         mock_provider = Mock()
         mock_provider.__class__.__name__ = "ConsoleInputProvider"
         mock_registry.create_input.return_value = mock_provider
@@ -165,7 +165,7 @@ async def test_input_provider_supports_old_and_new_config_format(event_bus):
     manager = InputProviderManager(event_bus)
 
     # Mock ProviderRegistry.create_input
-    with patch("src.layers.rendering.provider_registry.ProviderRegistry") as mock_registry:
+    with patch("src.core.provider_registry.ProviderRegistry") as mock_registry:
         mock_provider = Mock()
         mock_provider.__class__.__name__ = "ConsoleInputProvider"
         mock_registry.create_input.return_value = mock_provider

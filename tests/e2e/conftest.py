@@ -6,7 +6,7 @@ import pytest
 from typing import AsyncGenerator
 
 from src.core.event_bus import EventBus
-from src.domains.input.manager import InputProviderManager
+from src.domains.input.input_provider_manager import InputProviderManager
 from src.domains.input.input_layer import InputLayer
 from src.domains.decision.decision_manager import DecisionManager
 from src.core.base.raw_data import RawData

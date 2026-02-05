@@ -48,7 +48,7 @@ class TestBackwardCompatibility:
         [providers.input.inputs.console_input]
         type = "console_input"
         """
-        from src.domains.input.manager import InputProviderManager
+        from src.domains.input.input_provider_manager import InputProviderManager
         from src.core.event_bus import EventBus
 
         event_bus = EventBus()
@@ -116,7 +116,7 @@ class TestBackwardCompatibility:
         [providers.input.inputs.console_input]
         type = "console_input"
         """
-        from src.domains.input.manager import InputProviderManager
+        from src.domains.input.input_provider_manager import InputProviderManager
         from src.core.event_bus import EventBus
 
         event_bus = EventBus()
@@ -277,7 +277,7 @@ font_size = 24
         """
         测试当inputs配置不存在时，返回空列表
         """
-        from src.domains.input.manager import InputProviderManager
+        from src.domains.input.input_provider_manager import InputProviderManager
         from src.core.event_bus import EventBus
 
         event_bus = EventBus()
@@ -383,7 +383,7 @@ enabled_outputs = ["subtitle", "tts"]
         """
         测试包含inputs字段的旧配置仍然可以工作
         """
-        from src.domains.input.manager import InputProviderManager
+        from src.domains.input.input_provider_manager import InputProviderManager
         from src.core.event_bus import EventBus
 
         event_bus = EventBus()
@@ -412,7 +412,7 @@ enabled_outputs = ["subtitle", "tts"]
         """
         测试当enabled_inputs不存在时，fallback到inputs字段
         """
-        from src.domains.input.manager import InputProviderManager
+        from src.domains.input.input_provider_manager import InputProviderManager
         from src.core.event_bus import EventBus
 
         event_bus = EventBus()
@@ -440,7 +440,7 @@ enabled_outputs = ["subtitle", "tts"]
         """
         测试当enabled=false时，返回空列表
         """
-        from src.domains.input.manager import InputProviderManager
+        from src.domains.input.input_provider_manager import InputProviderManager
         from src.core.event_bus import EventBus
 
         event_bus = EventBus()

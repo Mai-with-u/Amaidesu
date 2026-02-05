@@ -111,7 +111,7 @@ class TestManagerDeprecationWarnings:
     @pytest.mark.asyncio
     async def test_input_provider_manager_deprecation_warning(self, tmp_path):
         """测试 InputProviderManager 在未传递 config_service 时触发弃用警告"""
-        from src.domains.input.manager import InputProviderManager
+        from src.domains.input.input_provider_manager import InputProviderManager
         from src.core.event_bus import EventBus
 
         # 创建测试配置
