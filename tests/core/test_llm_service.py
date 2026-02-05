@@ -18,8 +18,8 @@ from unittest.mock import AsyncMock, MagicMock, patch, mock_open
 from typing import Dict, Any, List
 import pytest
 
-from src.core.llm_service import LLMService, LLMResponse, RetryConfig
-from src.core.llm_backends.openai_backend import OpenAIBackend
+from src.services.llm.llm_service import LLMService, LLMResponse, RetryConfig
+from src.services.llm.backends.openai_backend import OpenAIBackend
 
 # =============================================================================
 # Test Fixtures
@@ -68,7 +68,7 @@ def llm_service():
 async def setup_llm_service(llm_service: LLMService, mock_config: Dict[str, Any]):
     """初始化 LLMService 实例"""
     # Mock OpenAIBackend to avoid real API calls
-    with patch("src.core.llm_backends.openai_backend.OpenAIBackend") as mock_backend_class:
+    with patch("src.services.llm.backends.openai_backend.OpenAIBackend") as mock_backend_class:
         mock_backend = MagicMock()
         mock_backend.chat = AsyncMock(return_value=LLMResponse(
             success=True,
@@ -93,7 +93,7 @@ async def setup_llm_service(llm_service: LLMService, mock_config: Dict[str, Any]
         mock_backend_class.return_value = mock_backend
 
         # Mock TokenUsageManager
-        with patch("src.core.llm_backends.token_usage_manager.TokenUsageManager") as mock_token_manager:
+        with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager") as mock_token_manager:
             await llm_service.setup(mock_config)
             yield llm_service, mock_backend, mock_token_manager
 
@@ -106,7 +106,7 @@ async def setup_llm_service(llm_service: LLMService, mock_config: Dict[str, Any]
 @pytest.mark.asyncio
 async def test_setup_initializes_backends(llm_service: LLMService, mock_config: Dict[str, Any]):
     """测试 setup 初始化所有后端"""
-    with patch("src.core.llm_backends.openai_backend.OpenAIBackend") as mock_backend_class:
+    with patch("src.services.llm.backends.openai_backend.OpenAIBackend") as mock_backend_class:
         mock_backend = MagicMock()
         mock_backend_class.return_value = mock_backend
 
@@ -132,7 +132,7 @@ async def test_setup_with_custom_config(llm_service: LLMService):
         },
     }
 
-    with patch("src.core.llm_backends.openai_backend.OpenAIBackend") as mock_backend_class:
+    with patch("src.services.llm.backends.openai_backend.OpenAIBackend") as mock_backend_class:
         mock_backend = MagicMock()
         mock_backend_class.return_value = mock_backend
 
@@ -154,7 +154,7 @@ async def test_setup_unknown_backend_falls_back_to_openai(llm_service: LLMServic
     }
 
     with patch("src.core.llm_backends.openai_backend.OpenAIBackend") as mock_openai:
-        with patch("src.core.llm_backends.ollama_backend.OllamaBackend") as mock_ollama:
+        with patch("src.services.llm.backends.ollama_backend.OllamaBackend") as mock_ollama:
             mock_openai.return_value = MagicMock()
 
             with patch("src.core.llm_backends.token_usage_manager.TokenUsageManager"):
@@ -169,7 +169,7 @@ async def test_setup_unknown_backend_falls_back_to_openai(llm_service: LLMServic
 async def test_setup_initializes_token_manager(llm_service: LLMService, mock_config: Dict[str, Any]):
     """测试 setup 初始化 TokenUsageManager"""
     with patch("src.core.llm_backends.openai_backend.OpenAIBackend"):
-        with patch("src.core.llm_backends.token_usage_manager.TokenUsageManager") as mock_token_manager:
+        with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager") as mock_token_manager:
             await llm_service.setup(mock_config)
 
             assert llm_service._token_manager is not None

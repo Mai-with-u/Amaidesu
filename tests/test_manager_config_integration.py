@@ -3,8 +3,8 @@
 """
 import pytest
 from unittest.mock import Mock, MagicMock, patch
-from src.layers.input.input_provider_manager import InputProviderManager
-from src.core.output_provider_manager import OutputProviderManager
+from src.domains.input.manager import InputProviderManager
+from src.domains.output.manager import OutputProviderManager
 from src.core.event_bus import EventBus
 
 

@@ -7,9 +7,9 @@ import asyncio
 import pytest
 
 # 导入所有 Provider 模块以触发注册
-import src.layers.decision.providers  # noqa: F401
-import src.layers.input.providers  # noqa: F401
-import src.layers.rendering.providers  # noqa: F401
+import src.domains.decision.providers  # noqa: F401
+import src.domains.input.providers  # noqa: F401
+import src.domains.output.providers  # noqa: F401
 
 from src.core.base.raw_data import RawData
 from src.core.events.names import CoreEvents
@@ -27,10 +27,10 @@ async def test_decision_provider_failure_isolation(
     1. DecisionProvider 失败不影响其他组件
     2. 系统可以继续处理其他消息
     """
-    from src.layers.input.input_layer import InputLayer
-    from src.layers.decision.decision_manager import DecisionManager
+    from src.domains.input.input_layer import InputLayer
+    from src.domains.decision.decision_manager import DecisionManager
     from src.core.base.normalized_message import NormalizedMessage
-    from src.layers.normalization.content import TextContent
+    from src.domains.normalization.content import TextContent
 
     input_layer = InputLayer(event_bus)
     await input_layer.setup()
@@ -113,7 +113,7 @@ async def test_invalid_raw_data_handling(
     1. 系统能优雅地处理无效数据
     2. 不会崩溃或挂起
     """
-    from src.layers.input.input_layer import InputLayer
+    from src.domains.input.input_layer import InputLayer
 
     input_layer = InputLayer(event_bus)
     await input_layer.setup()
@@ -205,7 +205,7 @@ async def test_provider_initialization_failure(
     1. 初始化失败时不影响系统
     2. 可以尝试初始化其他 Provider
     """
-    from src.layers.decision.decision_manager import DecisionManager
+    from src.domains.decision.decision_manager import DecisionManager
 
     decision_manager = DecisionManager(event_bus, llm_service=None)
 
@@ -238,8 +238,8 @@ async def test_layer_cleanup_on_error(
     1. 即使发生错误，资源也能正确清理
     2. 没有资源泄漏
     """
-    from src.layers.input.input_layer import InputLayer
-    from src.layers.decision.decision_manager import DecisionManager
+    from src.domains.input.input_layer import InputLayer
+    from src.domains.decision.decision_manager import DecisionManager
 
     input_layer = InputLayer(event_bus)
     await input_layer.setup()

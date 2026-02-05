@@ -16,7 +16,7 @@ import pytest
 from src.core.event_bus import EventBus
 from src.core.base.raw_data import RawData
 from src.core.base.input_provider import InputProvider
-from src.layers.input.input_provider_manager import InputProviderManager, ProviderStats
+from src.domains.input.input_provider_manager import InputProviderManager, ProviderStats
 from tests.mocks.mock_input_provider import MockInputProvider
 
 

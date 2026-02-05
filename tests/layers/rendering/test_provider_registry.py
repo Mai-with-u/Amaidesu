@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 import pytest
 from typing import AsyncIterator
 
-from src.layers.rendering.provider_registry import ProviderRegistry
+from src.domains.output.provider_registry import ProviderRegistry
 from src.core.base.input_provider import InputProvider
 from src.core.base.output_provider import OutputProvider
 from src.core.base.decision_provider import DecisionProvider
@@ -58,7 +58,7 @@ class MockDecisionProvider(DecisionProvider):
 
     async def decide(self, message):
         # 简单的实现
-        from src.layers.decision.intent import Intent
+        from src.domains.decision.intent import Intent
         return Intent(text="Test response", emotions=[])
 
 
@@ -607,9 +607,9 @@ def test_builtin_providers_auto_registration():
     ProviderRegistry.clear_all()
 
     # 导入所有 Provider 模块以触发自动注册
-    import src.layers.input.providers
-    import src.layers.decision.providers
-    import src.layers.rendering.providers
+    import src.domains.input.providers
+    import src.domains.decision.providers
+    import src.domains.output.providers
 
     # 验证至少有一些内置 Provider 被注册
     input_providers = ProviderRegistry.get_registered_input_providers()

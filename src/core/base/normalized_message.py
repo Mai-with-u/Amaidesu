@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional, TYPE_CHECKING
 import time
 
 if TYPE_CHECKING:
-    from src.layers.normalization.content.base import StructuredContent
+    from src.domains.input.normalization.content.base import StructuredContent
     from maim_message import MessageBase
 
 

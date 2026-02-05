@@ -21,7 +21,7 @@ import shutil
 from typing import Dict, Any
 from pathlib import Path
 
-from src.core.config_service import ConfigService
+from src.services.config.service import ConfigService
 
 
 # =============================================================================
@@ -945,7 +945,7 @@ field3 = "provider_value3"  # Provider独有字段（应该保留）
     main_override = {"field1": "main_value", "field2": "main_value2"}
 
     # 执行合并（使用 ConfigService 的合并逻辑）
-    from src.utils.config import merge_component_configs
+    from src.core.utils.config import merge_component_configs
     merged = merge_component_configs(provider_config, main_override, "test_provider", "Provider")
 
     # 验证：主配置优先
@@ -1335,7 +1335,7 @@ enabled_inputs = ["auto_provider"]
 
 def test_schema_registry_integration():
     """测试Schema注册表集成"""
-    from src.core.config.schemas import (
+    from src.services.config.schemas import (
         PROVIDER_SCHEMA_REGISTRY,
         get_provider_schema,
         list_all_providers,
@@ -1364,7 +1364,7 @@ def test_schema_registry_integration():
 
 def test_schema_has_no_enabled_field():
     """验证Schema中没有enabled字段（架构要求）"""
-    from src.core.config.schemas import verify_no_enabled_field_in_schemas
+    from src.services.config.schemas import verify_no_enabled_field_in_schemas
 
     # 这是架构强制性检查：Provider的enabled状态由Manager统一管理
     schemas_with_enabled = verify_no_enabled_field_in_schemas()

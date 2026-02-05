@@ -7,16 +7,16 @@ Amaidesu Core - 核心模块（Phase 3-4重构版本）
 
 from typing import Optional, TYPE_CHECKING
 
-from src.utils.logger import get_logger
-from .pipeline_manager import PipelineManager
-from .context_manager import ContextManager
-from .event_bus import EventBus
-from src.layers.decision.decision_manager import DecisionManager
-from .http_server import HttpServer
-from .flow_coordinator import FlowCoordinator
+from src.core.utils.logger import get_logger
+from src.domains.input.pipelines.manager import PipelineManager
+from src.services.context.manager import ContextManager
+from src.core.event_bus import EventBus
+from src.domains.decision.decision_manager import DecisionManager
+from src.core.connectors.http_server import HttpServer
+from src.core.flow_coordinator import FlowCoordinator
 
 # LLM 服务（核心基础设施）
-from .llm_service import LLMService
+from src.services.llm.service import LLMService
 
 # 类型检查时的导入
 if TYPE_CHECKING:

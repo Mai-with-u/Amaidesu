@@ -21,9 +21,9 @@ import pytest
 from src.core.flow_coordinator import FlowCoordinator
 from src.core.event_bus import EventBus
 from src.core.events.names import CoreEvents
-from src.layers.parameters.expression_generator import ExpressionGenerator
-from src.core.output_provider_manager import OutputProviderManager
-from src.layers.decision.intent import Intent, EmotionType, IntentAction, ActionType
+from src.domains.output.parameters.expression_generator import ExpressionGenerator
+from src.domains.output.manager import OutputProviderManager
+from src.domains.decision.intent import Intent, EmotionType, IntentAction, ActionType
 
 
 # =============================================================================
@@ -342,7 +342,7 @@ async def test_on_intent_ready_generates_parameters(
 ):
     """测试 Intent 事件处理生成 ExpressionParameters"""
     # 模拟 generate 返回值
-    from src.layers.parameters.render_parameters import ExpressionParameters
+    from src.domains.output.parameters.render_parameters import ExpressionParameters
 
     mock_params = ExpressionParameters(
         tts_text=sample_intent.response_text,
@@ -372,7 +372,7 @@ async def test_on_intent_ready_emits_parameters_event(
     sample_intent: Intent,
 ):
     """测试 Intent 处理后发布 expression.parameters_generated 事件"""
-    from src.layers.parameters.render_parameters import ExpressionParameters
+    from src.domains.output.parameters.render_parameters import ExpressionParameters
 
     mock_params = ExpressionParameters(
         tts_text=sample_intent.response_text,
@@ -478,7 +478,7 @@ async def test_on_intent_ready_data_flow(
     sample_intent: Intent,
 ):
     """测试完整的数据流：Intent → ExpressionParameters → Event"""
-    from src.layers.parameters.render_parameters import ExpressionParameters
+    from src.domains.output.parameters.render_parameters import ExpressionParameters
 
     # 设置返回值
     mock_params = ExpressionParameters(
@@ -697,7 +697,7 @@ async def test_multiple_intents_sequential(
     sample_config: Dict[str, Any],
 ):
     """测试顺序处理多个 Intent"""
-    from src.layers.parameters.render_parameters import ExpressionParameters
+    from src.domains.output.parameters.render_parameters import ExpressionParameters
 
     await flow_coordinator.setup(sample_config)
 

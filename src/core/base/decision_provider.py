@@ -20,7 +20,7 @@ from abc import ABC, abstractmethod
 
 if TYPE_CHECKING:
     from src.core.base.normalized_message import NormalizedMessage
-    from src.layers.decision.intent import Intent
+    from src.domains.decision.intent import Intent
 
 
 class DecisionProvider(ABC):

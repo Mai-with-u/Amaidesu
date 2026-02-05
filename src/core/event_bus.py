@@ -26,7 +26,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from uuid import uuid4
 
-from src.utils.logger import get_logger
+from src.core.utils.logger import get_logger
 from pydantic import BaseModel, ValidationError
 from src.core.events.registry import EventRegistry
 

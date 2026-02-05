@@ -6,9 +6,9 @@ import pytest
 from typing import AsyncGenerator
 
 from src.core.event_bus import EventBus
-from src.layers.input.input_provider_manager import InputProviderManager
-from src.layers.input.input_layer import InputLayer
-from src.layers.decision.decision_manager import DecisionManager
+from src.domains.input.manager import InputProviderManager
+from src.domains.input.input_layer import InputLayer
+from src.domains.decision.decision_manager import DecisionManager
 from src.core.base.raw_data import RawData
 from src.core.base.normalized_message import NormalizedMessage
 
@@ -22,7 +22,7 @@ def event_bus() -> EventBus:
 @pytest.fixture
 async def input_layer(event_bus: EventBus) -> AsyncGenerator[InputLayer, None]:
     """创建 InputLayer 实例"""
-    from src.layers.input.input_layer import InputLayer
+    from src.domains.input.input_layer import InputLayer
 
     layer = InputLayer(event_bus)
     await layer.setup()
@@ -84,7 +84,7 @@ async def mock_input_provider_manager(event_bus: EventBus) -> InputProviderManag
 @pytest.fixture
 async def mock_output_provider():
     """创建 MockOutputProvider 实例"""
-    from src.layers.rendering.providers.mock import MockOutputProvider
+    from src.domains.output.providers.mock import MockOutputProvider
 
     provider = MockOutputProvider({})
     await provider.setup()

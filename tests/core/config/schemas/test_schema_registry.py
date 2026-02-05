@@ -8,7 +8,7 @@ This module tests:
 """
 
 import pytest
-from src.core.config.schemas import (
+from src.services.config.schemas import (
     PROVIDER_SCHEMA_REGISTRY,
     list_all_providers,
     verify_no_enabled_field_in_schemas,
@@ -109,7 +109,7 @@ class TestNoEnabledField:
 
     def test_specific_schemas_no_enabled(self):
         """测试特定Schema不包含enabled字段"""
-        from src.core.config.schemas import (
+        from src.services.config.schemas import (
             ConsoleInputProviderConfig,
             MaiCoreDecisionProviderConfig,
             SubtitleProviderConfig,
@@ -188,7 +188,7 @@ class TestSchemaValidation:
 
     def test_console_input_schema_validation(self):
         """测试ConsoleInput Schema验证"""
-        from src.core.config.schemas import ConsoleInputProviderConfig
+        from src.services.config.schemas import ConsoleInputProviderConfig
 
         # 有效配置
         config = ConsoleInputProviderConfig(type="console_input")
@@ -200,7 +200,7 @@ class TestSchemaValidation:
 
     def test_maicore_schema_validation(self):
         """测试MaiCore Schema验证"""
-        from src.core.config.schemas import MaiCoreDecisionProviderConfig
+        from src.services.config.schemas import MaiCoreDecisionProviderConfig
 
         config = MaiCoreDecisionProviderConfig(
             type="maicore",
@@ -213,7 +213,7 @@ class TestSchemaValidation:
 
     def test_subtitle_schema_validation(self):
         """测试Subtitle Schema验证"""
-        from src.core.config.schemas import SubtitleProviderConfig
+        from src.services.config.schemas import SubtitleProviderConfig
 
         config = SubtitleProviderConfig(
             window_width=800,
@@ -224,7 +224,7 @@ class TestSchemaValidation:
 
     def test_tts_schema_validation(self):
         """测试TTS Schema验证"""
-        from src.core.config.schemas import TTSProviderConfig
+        from src.services.config.schemas import TTSProviderConfig
 
         config = TTSProviderConfig(
             engine="edge",
@@ -239,7 +239,7 @@ class TestRegistryConsistency:
 
     def test_input_decision_providers_have_type_field(self):
         """测试输入和决策Provider的type字段与注册表键一致"""
-        from src.core.config.schemas import PROVIDER_SCHEMA_REGISTRY
+        from src.services.config.schemas import PROVIDER_SCHEMA_REGISTRY
         from pydantic import ValidationError
 
         # 只检查input和decision providers（它们应该有type字段）
@@ -275,7 +275,7 @@ class TestRegistryConsistency:
 
     def test_registry_is_complete(self):
         """测试注册表包含所有必要的Provider类型"""
-        from src.core.config.schemas import PROVIDER_SCHEMA_REGISTRY
+        from src.services.config.schemas import PROVIDER_SCHEMA_REGISTRY
 
         # 验证关键provider存在
         critical_providers = [
@@ -292,7 +292,7 @@ class TestRegistryConsistency:
 
     def test_output_providers_in_map(self):
         """测试输出Provider在OUTPUT_PROVIDER_CONFIG_MAP中"""
-        from src.core.config.schemas.output_providers import OUTPUT_PROVIDER_CONFIG_MAP
+        from src.services.config.schemas import OUTPUT_PROVIDER_CONFIG_MAP
 
         expected_output_providers = [
             "subtitle", "vts", "tts", "sticker", "warudo",

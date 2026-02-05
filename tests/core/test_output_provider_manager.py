@@ -17,11 +17,11 @@ OutputProviderManager 单元测试
 
 import asyncio
 import pytest
-from typing import Dict, Any, Optional
+from typing import Any
 from unittest.mock import Mock, AsyncMock
 
-from src.core.output_provider_manager import OutputProviderManager
-from src.layers.parameters.render_parameters import RenderParameters
+from src.domains.output.manager import OutputProviderManager
+from src.domains.output.parameters.render_parameters import RenderParameters
 from tests.mocks.mock_output_provider import MockOutputProvider
 
 
@@ -33,7 +33,7 @@ from tests.mocks.mock_output_provider import MockOutputProvider
 class FailingMockOutputProvider(MockOutputProvider):
     """会失败的 Mock Provider 用于测试错误隔离"""
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: dict[str, Any] | None = None):
         super().__init__(config)
         self.should_fail_on_setup = False
         self.should_fail_on_render = False
@@ -61,7 +61,7 @@ class FailingMockOutputProvider(MockOutputProvider):
 class SlowMockOutputProvider(MockOutputProvider):
     """慢速 Mock Provider 用于测试并发"""
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: dict[str, Any] | None = None):
         super().__init__(config)
         self.delay_seconds = config.get("delay_seconds", 0.1) if config else 0.1
 
@@ -907,7 +907,7 @@ async def test_load_from_config_no_outputs_key(manager: OutputProviderManager):
 async def test_load_from_config_with_provider_registry(manager: OutputProviderManager, mock_event_bus):
     """测试从配置加载 Provider（使用 ProviderRegistry）"""
     # 需要先在 ProviderRegistry 中注册 MockOutputProvider
-    from src.layers.rendering.provider_registry import ProviderRegistry
+    from src.domains.output.provider_registry import ProviderRegistry
 
     # 临时注册 MockOutputProvider
     ProviderRegistry.register_output("mock_test", MockOutputProvider, source="test")
@@ -939,7 +939,7 @@ async def test_load_from_config_with_provider_registry(manager: OutputProviderMa
 @pytest.mark.asyncio
 async def test_load_from_config_updates_manager_config(manager: OutputProviderManager):
     """测试加载配置时更新 Manager 配置"""
-    from src.layers.rendering.provider_registry import ProviderRegistry
+    from src.domains.output.provider_registry import ProviderRegistry
 
     # 临时注册 MockOutputProvider
     ProviderRegistry.register_output("mock_test", MockOutputProvider, source="test")
@@ -976,7 +976,7 @@ async def test_load_from_config_unknown_provider_type(manager: OutputProviderMan
 @pytest.mark.asyncio
 async def test_load_from_config_partial_failure(manager: OutputProviderManager):
     """测试部分 Provider 加载失败"""
-    from src.layers.rendering.provider_registry import ProviderRegistry
+    from src.domains.output.provider_registry import ProviderRegistry
 
     # 临时注册 MockOutputProvider
     ProviderRegistry.register_output("mock_test", MockOutputProvider, source="test")

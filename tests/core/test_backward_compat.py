@@ -21,12 +21,12 @@ def register_providers():
     确保ProviderRegistry中有可用的Provider用于测试。
     """
     # 导入输入Provider以触发注册
-    from src.layers.input.providers.console_input import ConsoleInputProvider
-    from src.layers.input.providers.bili_danmaku import BiliDanmakuInputProvider
+    from src.domains.input.providers.console_input import ConsoleInputProvider
+    from src.domains.input.providers.bili_danmaku import BiliDanmakuInputProvider
 
     # 导入输出Provider以触发注册
-    from src.layers.rendering.providers.subtitle import SubtitleOutputProvider
-    from src.layers.rendering.providers.tts import TTSProvider
+    from src.domains.output.providers.subtitle import SubtitleOutputProvider
+    from src.domains.output.providers.tts import TTSProvider
 
     yield
 
@@ -48,7 +48,7 @@ class TestBackwardCompatibility:
         [providers.input.inputs.console_input]
         type = "console_input"
         """
-        from src.layers.input.input_provider_manager import InputProviderManager
+        from src.domains.input.manager import InputProviderManager
         from src.core.event_bus import EventBus
 
         event_bus = EventBus()
@@ -82,7 +82,7 @@ class TestBackwardCompatibility:
         type = "subtitle"
         font_size = 24
         """
-        from src.core.output_provider_manager import OutputProviderManager
+        from src.domains.output.manager import OutputProviderManager
 
         manager = OutputProviderManager()
 
@@ -116,7 +116,7 @@ class TestBackwardCompatibility:
         [providers.input.inputs.console_input]
         type = "console_input"
         """
-        from src.layers.input.input_provider_manager import InputProviderManager
+        from src.domains.input.manager import InputProviderManager
         from src.core.event_bus import EventBus
 
         event_bus = EventBus()
@@ -147,7 +147,7 @@ class TestBackwardCompatibility:
         - 新Provider使用Schema默认值
         - 旧Provider保留主配置中的详细配置
         """
-        from src.core.output_provider_manager import OutputProviderManager
+        from src.domains.output.manager import OutputProviderManager
 
         manager = OutputProviderManager()
 
@@ -177,7 +177,7 @@ class TestBackwardCompatibility:
         """
         测试ConfigService对旧格式输入配置的兼容性
         """
-        from src.core.config_service import ConfigService
+        from src.services.config.service import ConfigService
 
         # 创建临时目录和配置文件
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -224,7 +224,7 @@ type = "console_input"
         """
         测试ConfigService对旧格式输出配置的兼容性
         """
-        from src.core.config_service import ConfigService
+        from src.services.config.service import ConfigService
 
         # 创建临时目录和配置文件
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -277,7 +277,7 @@ font_size = 24
         """
         测试当inputs配置不存在时，返回空列表
         """
-        from src.layers.input.input_provider_manager import InputProviderManager
+        from src.domains.input.manager import InputProviderManager
         from src.core.event_bus import EventBus
 
         event_bus = EventBus()
@@ -301,7 +301,7 @@ font_size = 24
         当enabled_outputs中列出了某个Provider，但没有在outputs中提供详细配置时，
         ProviderRegistry会尝试使用默认配置创建Provider。
         """
-        from src.core.output_provider_manager import OutputProviderManager
+        from src.domains.output.manager import OutputProviderManager
 
         manager = OutputProviderManager()
 
@@ -326,7 +326,7 @@ font_size = 24
         """
         测试ConfigService.is_provider_enabled方法的向后兼容性
         """
-        from src.core.config_service import ConfigService
+        from src.services.config.service import ConfigService
 
         # 创建临时目录和配置文件
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -383,7 +383,7 @@ enabled_outputs = ["subtitle", "tts"]
         """
         测试包含inputs字段的旧配置仍然可以工作
         """
-        from src.layers.input.input_provider_manager import InputProviderManager
+        from src.domains.input.manager import InputProviderManager
         from src.core.event_bus import EventBus
 
         event_bus = EventBus()
@@ -412,7 +412,7 @@ enabled_outputs = ["subtitle", "tts"]
         """
         测试当enabled_inputs不存在时，fallback到inputs字段
         """
-        from src.layers.input.input_provider_manager import InputProviderManager
+        from src.domains.input.manager import InputProviderManager
         from src.core.event_bus import EventBus
 
         event_bus = EventBus()
@@ -440,7 +440,7 @@ enabled_outputs = ["subtitle", "tts"]
         """
         测试当enabled=false时，返回空列表
         """
-        from src.layers.input.input_provider_manager import InputProviderManager
+        from src.domains.input.manager import InputProviderManager
         from src.core.event_bus import EventBus
 
         event_bus = EventBus()
@@ -471,8 +471,8 @@ enabled_outputs = ["subtitle", "tts"]
 
         当Provider没有配置时，系统应该从Schema获取默认值。
         """
-        from src.core.config_service import ConfigService
-        from src.core.config.schemas import ConsoleInputProviderConfig
+        from src.services.config.service import ConfigService
+        from src.services.config.schemas import ConsoleInputProviderConfig
 
         # 创建临时目录和最小配置
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -520,8 +520,8 @@ enabled_inputs = ["console_input"]
 
         验证配置优先级：Schema默认值 < 主配置覆盖
         """
-        from src.core.config_service import ConfigService
-        from src.core.config.schemas import SubtitleProviderConfig
+        from src.services.config.service import ConfigService
+        from src.services.config.schemas import SubtitleProviderConfig
 
         with tempfile.TemporaryDirectory() as temp_dir:
             # 创建带overrides的主配置
@@ -575,8 +575,8 @@ custom_field = "from_main_config"
 
         模拟用户升级场景：旧配置继续工作，新Provider使用Schema。
         """
-        from src.core.config_service import ConfigService
-        from src.core.config.schemas import (
+        from src.services.config.service import ConfigService
+        from src.services.config.schemas import (
             ConsoleInputProviderConfig,
             SubtitleProviderConfig,
         )
@@ -636,7 +636,7 @@ enabled_outputs = ["subtitle"]
 
         验证所有现有Provider都在Schema注册表中。
         """
-        from src.core.config.schemas import (
+        from src.services.config.schemas import (
             PROVIDER_SCHEMA_REGISTRY,
             list_all_providers,
         )
@@ -664,7 +664,7 @@ enabled_outputs = ["subtitle"]
 
         这确保enabled状态完全由Manager统一管理。
         """
-        from src.core.config.schemas import verify_no_enabled_field_in_schemas
+        from src.services.config.schemas import verify_no_enabled_field_in_schemas
 
         # 这是架构强制性检查
         schemas_with_enabled = verify_no_enabled_field_in_schemas()
@@ -681,7 +681,7 @@ enabled_outputs = ["subtitle"]
 
         验证新添加的Provider可以通过Schema获取配置，无需创建config.toml。
         """
-        from src.core.config_service import ConfigService
+        from src.services.config.service import ConfigService
         from pydantic import BaseModel
 
         # 模拟新Provider的Schema

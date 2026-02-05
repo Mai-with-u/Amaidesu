@@ -29,7 +29,7 @@ from maim_message.message_base import BaseMessageInfo, FormatInfo, Seg, UserInfo
 from maim_message import MessageBase
 import tomllib
 from aiohttp import web, WSMsgType
-from src.utils.logger import get_logger
+from src.core.utils.logger import get_logger
 
 logger = get_logger("mock_maicore")
 

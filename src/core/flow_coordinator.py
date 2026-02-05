@@ -17,12 +17,12 @@ FlowCoordinator - 数据流协调器（5层架构：Layer 3 → Layer 4-5）
 """
 
 from typing import Dict, Any, Optional
-from src.utils.logger import get_logger
+from src.core.utils.logger import get_logger
 
-from .event_bus import EventBus
-from .events.names import CoreEvents
-from src.layers.parameters.expression_generator import ExpressionGenerator
-from .output_provider_manager import OutputProviderManager
+from src.core.event_bus import EventBus
+from src.core.events.names import CoreEvents
+from src.domains.output.parameters.expression_generator import ExpressionGenerator
+from src.domains.output.manager import OutputProviderManager
 
 
 class FlowCoordinator:
@@ -163,7 +163,7 @@ class FlowCoordinator:
             # Layer 4: Intent → ExpressionParameters
             if self.expression_generator:
                 params = await self.expression_generator.generate(intent)
-                self.logger.info(f"ExpressionParameters生成完成")
+                self.logger.info("ExpressionParameters生成完成")
 
                 # Layer 5: 发布 expression.parameters_generated 事件（事件驱动）
                 # OutputProvider 订阅此事件并响应

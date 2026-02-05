@@ -13,7 +13,7 @@ import sys
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.core.config_service import ConfigService
+from src.services.config.service import ConfigService
 
 
 class TestConfigServiceDeprecationWarnings:
@@ -111,7 +111,7 @@ class TestManagerDeprecationWarnings:
     @pytest.mark.asyncio
     async def test_input_provider_manager_deprecation_warning(self, tmp_path):
         """测试 InputProviderManager 在未传递 config_service 时触发弃用警告"""
-        from src.layers.input.input_provider_manager import InputProviderManager
+        from src.domains.input.manager import InputProviderManager
         from src.core.event_bus import EventBus
 
         # 创建测试配置
@@ -143,7 +143,7 @@ class TestManagerDeprecationWarnings:
     @pytest.mark.asyncio
     async def test_output_provider_manager_deprecation_warning(self, tmp_path):
         """测试 OutputProviderManager 在未传递 config_service 时触发弃用警告"""
-        from src.core.output_provider_manager import OutputProviderManager
+        from src.domains.output.manager import OutputProviderManager
 
         # 创建测试配置
         config = {

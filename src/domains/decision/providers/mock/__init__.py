@@ -1,0 +1,75 @@
+"""Mock Decision Provider - 用于测试"""
+from typing import Optional
+
+# 必须在类型导入前导入这些
+from src.core.base.decision_provider import DecisionProvider
+from src.core.base.normalized_message import NormalizedMessage
+from src.domains.decision.intent import Intent
+from src.core.utils.logger import get_logger
+from src.core.provider_registry import ProviderRegistry
+
+
+class MockDecisionProvider(DecisionProvider):
+    """
+    模拟决策Provider（用于测试）
+
+    简单返回预设的响应，不进行实际决策逻辑。
+    """
+
+    def __init__(self, config: dict):
+        self.config = config
+        self.logger = get_logger("MockDecisionProvider")
+        self.default_response = config.get("default_response", "这是模拟的回复")
+        self.call_count = 0
+
+        self.logger.info("MockDecisionProvider初始化完成")
+
+    async def decide(self, message: NormalizedMessage) -> Optional[Intent]:
+        """返回预设的响应"""
+        self.call_count += 1
+
+        # 简单的模拟逻辑
+        if message.text:
+            # 如果有文本，总是使用 "[模拟回复] {message.text}" 格式
+            response_text = f"[模拟回复] {message.text}"
+        else:
+            # 如果没有文本，使用 default_response
+            response_text = self.default_response
+
+        from src.domains.decision.intent import Intent, EmotionType
+
+        return Intent(
+            original_text=message.text,
+            response_text=response_text,
+            emotion=EmotionType.NEUTRAL,
+            actions=[],
+            metadata={"mock": True, "call_count": self.call_count}
+        )
+
+    async def setup(self, event_bus, config: Optional[dict] = None, dependencies: Optional[dict] = None) -> None:
+        """设置Provider"""
+        self.event_bus = event_bus
+        if config:
+            self.config = config
+            # 更新 default_response
+            self.default_response = config.get("default_response", "这是模拟的回复")
+        self._dependencies = dependencies or {}
+        self.logger.info("MockDecisionProvider设置完成")
+
+    async def cleanup(self) -> None:
+        """清理Provider"""
+        self.logger.info(f"MockDecisionProvider清理完成，共调用 {self.call_count} 次")
+
+    def get_call_count(self):
+        """获取调用次数（用于测试断言）"""
+        return self.call_count
+
+    def reset_call_count(self):
+        """重置调用次数（用于测试）"""
+        self.call_count = 0
+
+
+# 注册到 ProviderRegistry
+ProviderRegistry.register_decision("mock", MockDecisionProvider, source="builtin:mock")
+
+__all__ = ["MockDecisionProvider"]

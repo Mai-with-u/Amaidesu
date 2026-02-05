@@ -132,8 +132,9 @@ enabled_inputs = [
 # === 输出Provider（Layer 5: Rendering） ===
 [providers.output]
 enabled = true
-concurrent_rendering = true
-error_handling = "continue"  # continue（继续） | stop（停止） | drop（丢弃）
+concurrent_rendering = true          # 是否并发渲染到多个Provider
+error_handling = "continue"          # 错误处理策略: continue（继续） | stop（停止）
+render_timeout = 10.0                # 单个Provider渲染超时（秒），0表示不限制
 
 # 启用的输出Provider列表
 enabled_outputs = [
@@ -168,14 +169,64 @@ default_hotkeys_enabled = true
 enabled = true
 # 当前使用的决策Provider
 active_provider = "maicore"
-# 支持的决策Provider列表
+# 支持的决策Provider列表（用于运行时切换验证）
 available_providers = [
-    "maicore",        # MaiCore决策（默认）
-    "rule_engine",    # 规则引擎
-    "local_llm",      # 本地LLM
+    "maicore",        # MaiCore决策（默认，通过WebSocket连接MaiCore）
+    "rule_engine",    # 规则引擎（本地规则匹配，低延迟）
+    "local_llm",      # 本地LLM（直接调用LLM生成回复）
+    "emotion_judge",  # 情感判断（使用LLM判断情感并触发动作）
+    "mock",           # 模拟Provider（用于测试）
 ]
+
+# MaiCore DecisionProvider 配置
+[providers.decision.maicore]
+# MaiCore WebSocket 服务器地址（继承 [maicore] 配置）
+# host = "127.0.0.1"
+# port = 8000
+
+# LocalLLM DecisionProvider 配置
+[providers.decision.local_llm]
+# 使用的 LLM 客户端类型
+client_type = "llm"  # llm | llm_fast | vlm | llm_local
+# 系统提示词模板
+prompt_template = """你是一个AI VTuber。根据用户消息生成回复。
+
+输出JSON格式：
+{
+  "response": "你的回复文本",
+  "emotion": "happy|sad|angry|neutral|surprised|love",
+  "actions": ["wave", ...]
+}
+
+用户消息: {text}"""
+# 降级模式
+fallback_mode = "simple"  # simple（返回原始文本） | echo（回声） | error（抛出异常）
+
+# RuleEngine DecisionProvider 配置
+[providers.decision.rule_engine]
+# 规则文件路径
+rules_file = "config/rules.json"
+# 默认响应
+default_response = "我不理解你的意思"
+# 是否区分大小写
+case_sensitive = false
+# 匹配模式
+match_mode = "any"  # any（任一关键词匹配） | all（所有关键词匹配）
+
+# EmotionJudge DecisionProvider 配置
+[providers.decision.emotion_judge]
+# LLM 配置（用于情感判断）
+base_url = "https://api.siliconflow.cn/v1/"
+api_key = ""  # 从环境变量 OPENAI_API_KEY 读取
+# 冷却时间（秒）
+cool_down_seconds = 10
+# 模型配置
+[providers.decision.emotion_judge.model]
+name = "Qwen/Qwen2.5-7B-Instruct"
+max_tokens = 10
+temperature = 0.3
 
 # 常用参数覆盖（可选）
 # [providers.decision.overrides]
 # maicore.host = "192.168.1.100"
-# local_llm.system_prompt = "你是一个友善的AI助手"
+# local_llm.client_type = "llm_fast"

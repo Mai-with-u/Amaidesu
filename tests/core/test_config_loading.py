@@ -25,7 +25,7 @@ import tempfile
 import shutil
 from pydantic import BaseModel, ValidationError
 
-from src.core.config_service import ConfigService
+from src.services.config.service import ConfigService
 
 
 # =============================================================================
@@ -190,7 +190,7 @@ enabled_inputs = ["test_input"]
 def test_three_tier_merge_full_flow(temp_base_dir):
     """测试完整的三级配置合并流程（新架构）"""
     # 1. 创建Provider目录
-    provider_dir = os.path.join(temp_base_dir, "src", "layers", "input", "providers", "test_input")
+    provider_dir = os.path.join(temp_base_dir, "src", "domains", "input", "providers", "test_input")
     os.makedirs(provider_dir, exist_ok=True)
 
     # 2. 创建主配置（包含overrides）
@@ -246,7 +246,7 @@ local_field = "from_local"  # 新增字段
 def test_three_tier_merge_with_schema_validation(temp_base_dir):
     """测试三级配置合并 + Schema验证"""
     # 1. 创建Provider目录
-    provider_dir = os.path.join(temp_base_dir, "src", "layers", "rendering", "providers", "test_output")
+    provider_dir = os.path.join(temp_base_dir, "src", "domains", "output", "providers", "test_output")
     os.makedirs(provider_dir, exist_ok=True)
 
     # 2. 创建主配置
@@ -287,7 +287,7 @@ output_format = "wav"
 
 def test_three_tier_merge_schema_validation_error(temp_base_dir):
     """测试Schema验证失败时抛出异常"""
-    provider_dir = os.path.join(temp_base_dir, "src", "layers", "rendering", "providers", "test_output")
+    provider_dir = os.path.join(temp_base_dir, "src", "domains", "output", "providers", "test_output")
     os.makedirs(provider_dir, exist_ok=True)
 
     # 创建本地配置（speed应该是float，但给了string）
@@ -330,7 +330,7 @@ enabled_outputs = ["test_output"]
 
 def test_config_priority_local_overrides_main(temp_base_dir):
     """测试本地配置优先级高于主配置覆盖"""
-    provider_dir = os.path.join(temp_base_dir, "src", "layers", "input", "providers", "test_input")
+    provider_dir = os.path.join(temp_base_dir, "src", "domains", "input", "providers", "test_input")
     os.makedirs(provider_dir, exist_ok=True)
 
     # 主配置覆盖
@@ -676,7 +676,7 @@ enabled_inputs = ["test_input"]
 
 def test_deep_merge_nested_dicts(temp_base_dir):
     """测试深度合并嵌套字典"""
-    provider_dir = os.path.join(temp_base_dir, "src", "layers", "input", "providers", "test_input")
+    provider_dir = os.path.join(temp_base_dir, "src", "domains", "input", "providers", "test_input")
     os.makedirs(provider_dir, exist_ok=True)
 
     # 主配置覆盖（包含嵌套配置）
@@ -790,7 +790,7 @@ api_key = "test"
 
 def test_deep_merge_basic_types():
     """测试深度合并基本类型"""
-    from src.core.config_service import deep_merge_configs
+    from src.services.config.service import deep_merge_configs
 
     base = {"a": 1, "b": 2}
     override = {"b": 20, "c": 3}
@@ -804,7 +804,7 @@ def test_deep_merge_basic_types():
 
 def test_deep_merge_nested_dicts_simple():
     """测试深度合并嵌套字典（简单版本）"""
-    from src.core.config_service import deep_merge_configs
+    from src.services.config.service import deep_merge_configs
 
     base = {"a": 1, "nested": {"x": 10, "y": 20}}
     override = {"nested": {"y": 200, "z": 30}, "b": 2}
@@ -820,7 +820,7 @@ def test_deep_merge_nested_dicts_simple():
 
 def test_deep_merge_lists():
     """测试深度合并列表（后者替换前者）"""
-    from src.core.config_service import deep_merge_configs
+    from src.services.config.service import deep_merge_configs
 
     base = {"items": [1, 2, 3]}
     override = {"items": [4, 5]}
@@ -833,7 +833,7 @@ def test_deep_merge_lists():
 
 def test_deep_merge_none_values():
     """测试None值被跳过"""
-    from src.core.config_service import deep_merge_configs
+    from src.services.config.service import deep_merge_configs
 
     base = {"a": 1, "b": 2}
     override = {"b": None, "c": 3}
@@ -854,7 +854,7 @@ def test_deep_merge_none_values():
 def test_auto_generate_config_from_schema(temp_base_dir):
     """测试自动从Schema生成config.toml文件"""
     # 确保Provider目录不存在（没有本地配置）
-    os.path.join(temp_base_dir, "src", "layers", "input", "providers", "auto_test")
+    os.path.join(temp_base_dir, "src", "domains", "input", "providers", "auto_test")
 
     main_content = """
 [general]
@@ -885,8 +885,8 @@ enabled_inputs = ["auto_test"]
 
 def test_local_config_overrides_schema(temp_base_dir):
     """测试本地配置覆盖Schema默认值"""
-    # 注意：output providers的路径是 src/layers/rendering/providers/
-    provider_dir = os.path.join(temp_base_dir, "src", "layers", "rendering", "providers", "test_output")
+    # 注意：output providers的路径是 src/domains/output/providers/
+    provider_dir = os.path.join(temp_base_dir, "src", "domains", "output", "providers", "test_output")
     os.makedirs(provider_dir, exist_ok=True)
 
     main_content = """

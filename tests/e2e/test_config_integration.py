@@ -23,9 +23,9 @@ import tempfile
 from typing import Dict, Any
 
 # 触发 Provider 注册
-import src.layers.input.providers  # noqa: F401
-import src.layers.rendering.providers  # noqa: F401
-import src.layers.decision.providers  # noqa: F401
+import src.domains.input.providers  # noqa: F401
+import src.domains.output.providers  # noqa: F401
+import src.domains.decision.providers  # noqa: F401
 
 
 @pytest.fixture
@@ -39,7 +39,7 @@ def project_base_dir():
 @pytest.fixture
 def config_service(project_base_dir):
     """创建 ConfigService 实例并初始化"""
-    from src.core.config_service import ConfigService
+    from src.services.config.service import ConfigService
 
     service = ConfigService(base_dir=project_base_dir)
     service.initialize()  # 同步方法，不需要 await
@@ -48,7 +48,7 @@ def config_service(project_base_dir):
 
 
 # 导入类型注解
-from src.core.config_service import ConfigService
+from src.services.config.service import ConfigService
 
 
 # ==================== 测试套件 1: ConfigService 基本功能 ====================
@@ -87,7 +87,7 @@ async def test_config_service_has_required_sections(config_service: ConfigServic
 @pytest.mark.asyncio
 async def test_config_service_no_exceptions_on_init(project_base_dir):
     """测试配置初始化不抛出异常"""
-    from src.core.config_service import ConfigService
+    from src.services.config.service import ConfigService
 
     # 应该能成功初始化，不抛出任何异常
     service = ConfigService(base_dir=project_base_dir)
@@ -105,7 +105,7 @@ async def test_config_service_no_exceptions_on_init(project_base_dir):
 @pytest.mark.asyncio
 async def test_provider_registry_has_all_providers():
     """测试 Provider 注册表包含所有 23 个 Provider"""
-    from src.layers.rendering.provider_registry import ProviderRegistry
+    from src.domains.output.provider_registry import ProviderRegistry
 
     input_providers = ProviderRegistry.get_registered_input_providers()
     output_providers = ProviderRegistry.get_registered_output_providers()
@@ -140,7 +140,7 @@ async def test_provider_registry_has_all_providers():
 @pytest.mark.asyncio
 async def test_provider_registry_can_create_all_providers():
     """测试 Provider 注册表能创建所有已注册的 Provider"""
-    from src.layers.rendering.provider_registry import ProviderRegistry
+    from src.domains.output.provider_registry import ProviderRegistry
 
     input_providers = ProviderRegistry.get_registered_input_providers()
     output_providers = ProviderRegistry.get_registered_output_providers()
@@ -199,7 +199,7 @@ async def test_config_service_three_level_merge(config_service: ConfigService):
     # 这里使用 console_input 作为示例
 
     # 1. 获取合并后的配置（使用Schema）
-    from src.core.config.schemas import ConsoleInputProviderConfig
+    from src.services.config.schemas import ConsoleInputProviderConfig
 
     merged_config = config_service.get_provider_config_with_defaults(
         "console_input",
@@ -220,7 +220,7 @@ async def test_config_service_three_level_merge(config_service: ConfigService):
 @pytest.mark.asyncio
 async def test_config_service_deep_merge_function():
     """测试深度合并函数"""
-    from src.core.config_service import deep_merge_configs
+    from src.services.config.service import deep_merge_configs
 
     # 测试基本合并
     base = {"a": 1, "b": {"x": 10, "y": 20}}
@@ -249,7 +249,7 @@ async def test_config_service_deep_merge_function():
 @pytest.mark.asyncio
 async def test_input_provider_manager_load_from_config(config_service: ConfigService):
     """测试 InputProviderManager 能从配置加载 Provider"""
-    from src.layers.input.input_provider_manager import InputProviderManager
+    from src.domains.input.manager import InputProviderManager
     from src.core.event_bus import EventBus
 
     event_bus = EventBus()
@@ -276,7 +276,7 @@ async def test_input_provider_manager_load_from_config(config_service: ConfigSer
 @pytest.mark.asyncio
 async def test_output_provider_manager_load_from_config(config_service: ConfigService):
     """测试 OutputProviderManager 能从配置加载 Provider"""
-    from src.core.output_provider_manager import OutputProviderManager
+    from src.domains.output.manager import OutputProviderManager
 
     manager = OutputProviderManager()
 
@@ -298,7 +298,7 @@ async def test_output_provider_manager_load_from_config(config_service: ConfigSe
 @pytest.mark.asyncio
 async def test_enabled_switch_controls_provider_loading(config_service: ConfigService):
     """测试 enabled 开关正确控制 Provider 加载"""
-    from src.layers.input.input_provider_manager import InputProviderManager
+    from src.domains.input.manager import InputProviderManager
     from src.core.event_bus import EventBus
 
     event_bus = EventBus()
@@ -342,11 +342,11 @@ async def test_enabled_switch_controls_provider_loading(config_service: ConfigSe
 @pytest.mark.asyncio
 async def test_application_startup_simulation(project_base_dir):
     """模拟应用启动流程，验证所有组件能正常初始化"""
-    from src.core.config_service import ConfigService
+    from src.services.config.service import ConfigService
     from src.core.event_bus import EventBus
-    from src.layers.input.input_provider_manager import InputProviderManager
-    from src.core.output_provider_manager import OutputProviderManager
-    from src.layers.decision.decision_manager import DecisionManager
+    from src.domains.input.manager import InputProviderManager
+    from src.domains.output.manager import OutputProviderManager
+    from src.domains.decision.decision_manager import DecisionManager
 
     # 1. 初始化配置服务
     config_service = ConfigService(base_dir=project_base_dir)
@@ -395,7 +395,7 @@ async def test_application_startup_simulation(project_base_dir):
 @pytest.mark.asyncio
 async def test_config_does_not_throw_exceptions(project_base_dir):
     """测试配置加载不会抛出未捕获的异常"""
-    from src.core.config_service import ConfigService
+    from src.services.config.service import ConfigService
 
     # 尝试初始化配置服务
     try:
@@ -452,7 +452,7 @@ async def test_config_service_handles_missing_sections(config_service: ConfigSer
 @pytest.mark.asyncio
 async def test_provider_registry_handles_unknown_provider():
     """测试 Provider 注册表正确处理未注册的 Provider"""
-    from src.layers.rendering.provider_registry import ProviderRegistry
+    from src.domains.output.provider_registry import ProviderRegistry
 
     # 尝试创建不存在的 Provider
     with pytest.raises(ValueError, match="Unknown input provider"):
@@ -468,7 +468,7 @@ async def test_provider_registry_handles_unknown_provider():
 @pytest.mark.asyncio
 async def test_manager_handles_invalid_provider_type():
     """测试 Manager 正确处理无效的 Provider 类型"""
-    from src.layers.input.input_provider_manager import InputProviderManager
+    from src.domains.input.manager import InputProviderManager
     from src.core.event_bus import EventBus
 
     event_bus = EventBus()
@@ -500,7 +500,7 @@ async def test_manager_handles_invalid_provider_type():
 @pytest.mark.asyncio
 async def test_provider_config_validation():
     """测试 Provider 配置验证"""
-    from src.layers.rendering.provider_registry import ProviderRegistry
+    from src.domains.output.provider_registry import ProviderRegistry
 
     # 测试创建 Provider 时传入空配置
     # 大部分 Provider 应该能使用空配置创建（使用默认值）
@@ -531,7 +531,7 @@ async def test_provider_config_validation():
 async def test_config_service_is_lightweight(project_base_dir):
     """测试 ConfigService 初始化是轻量级的"""
     import time
-    from src.core.config_service import ConfigService
+    from src.services.config.service import ConfigService
 
     start_time = time.time()
 
@@ -547,7 +547,7 @@ async def test_config_service_is_lightweight(project_base_dir):
 @pytest.mark.asyncio
 async def test_provider_registry_has_no_duplicates():
     """测试 Provider 注册表没有重复注册"""
-    from src.layers.rendering.provider_registry import ProviderRegistry
+    from src.domains.output.provider_registry import ProviderRegistry
 
     registry_info = ProviderRegistry.get_registry_info()
 

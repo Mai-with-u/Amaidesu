@@ -10,17 +10,17 @@ import contextlib
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from src.core.amaidesu_core import AmaidesuCore
-from src.core.config_service import ConfigService
-from src.core.context_manager import ContextManager
+from src.services.config.service import ConfigService
+from src.services.context.manager import ContextManager
 from src.core.event_bus import EventBus
 from src.core.events import register_core_events
 from src.core.flow_coordinator import FlowCoordinator
-from src.core.llm_service import LLMService
-from src.core.pipeline_manager import PipelineManager
-from src.utils.logger import get_logger
-from src.layers.input.input_layer import InputLayer
-from src.layers.input.input_provider_manager import InputProviderManager
-from src.layers.decision.decision_manager import DecisionManager
+from src.services.llm.service import LLMService
+from src.domains.input.pipelines.manager import PipelineManager
+from src.core.utils.logger import get_logger
+from src.domains.input.input_layer import InputLayer
+from src.domains.input.input_provider_manager import InputProviderManager
+from src.domains.decision.decision_manager import DecisionManager
 
 logger = get_logger("Main")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -280,10 +280,10 @@ async def create_app_components(
             decision_manager = DecisionManager(event_bus, llm_service)
 
             # 设置决策 Provider（通过 ProviderRegistry 自动创建）
-            provider_name = decision_config.get("provider", "maicore")
-            provider_config = decision_config.get(provider_name, {})
-            await decision_manager.setup(provider_name, provider_config)
-            logger.info(f"DecisionManager 已设置（Provider: {provider_name}）")
+            # 使用新的配置格式：decision_config 包含 active_provider 和 available_providers
+            await decision_manager.setup(decision_config=decision_config)
+            active_provider = decision_manager.get_current_provider_name()
+            logger.info(f"DecisionManager 已设置（Provider: {active_provider}）")
         except Exception as e:
             logger.error(f"设置决策层组件失败: {e}", exc_info=True)
             logger.warning("决策层功能不可用，继续启动其他服务")

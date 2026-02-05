@@ -6,15 +6,15 @@ E2E Test: Smoke Test
 import pytest
 
 # 在模块级别导入，触发 Provider 注册
-import src.layers.input.providers  # noqa: F401
-import src.layers.rendering.providers  # noqa: F401
-import src.layers.decision.providers  # noqa: F401
+import src.domains.input.providers  # noqa: F401
+import src.domains.output.providers  # noqa: F401
+import src.domains.decision.providers  # noqa: F401
 
 
 @pytest.mark.asyncio
 async def test_provider_registry_has_providers():
     """测试 Provider 注册表中有 Provider"""
-    from src.layers.rendering.provider_registry import ProviderRegistry
+    from src.domains.output.provider_registry import ProviderRegistry
 
     input_providers = ProviderRegistry.get_registered_input_providers()
     output_providers = ProviderRegistry.get_registered_output_providers()
@@ -56,9 +56,9 @@ async def test_event_bus_creation():
 @pytest.mark.asyncio
 async def test_mock_decision_provider():
     """测试 MockDecisionProvider 基本功能"""
-    from src.layers.decision.providers.mock import MockDecisionProvider
+    from src.domains.decision.providers.mock import MockDecisionProvider
     from src.core.base.normalized_message import NormalizedMessage
-    from src.layers.normalization.content import TextContent
+    from src.domains.normalization.content import TextContent
     from src.core.event_bus import EventBus
 
     provider = MockDecisionProvider({})

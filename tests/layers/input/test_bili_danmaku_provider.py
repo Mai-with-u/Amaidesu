@@ -5,7 +5,7 @@ BiliDanmakuInputProvider 测试
 import pytest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
-from src.layers.input.providers.bili_danmaku import BiliDanmakuInputProvider
+from src.domains.input.providers.bili_danmaku import BiliDanmakuInputProvider
 from src.core.base.raw_data import RawData
 
 

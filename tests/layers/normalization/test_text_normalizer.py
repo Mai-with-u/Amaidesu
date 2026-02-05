@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 import pytest
 from unittest.mock import Mock, AsyncMock
-from src.layers.normalization.normalizers.text_normalizer import TextNormalizer
+from src.domains.normalization.normalizers.text_normalizer import TextNormalizer
 from src.core.base.raw_data import RawData
 from src.core.base.normalized_message import NormalizedMessage
 

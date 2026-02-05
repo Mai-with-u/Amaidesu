@@ -8,7 +8,7 @@ import io
 import time
 from PIL import Image
 from unittest.mock import AsyncMock, MagicMock, patch
-from src.layers.rendering.providers.sticker import StickerOutputProvider
+from src.domains.output.providers.sticker import StickerOutputProvider
 from src.core.base.base import RenderParameters
 
 

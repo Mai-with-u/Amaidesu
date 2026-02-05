@@ -13,8 +13,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 import pytest
 from src.core.event_bus import EventBus
 from src.core.base.raw_data import RawData
-from src.layers.input.input_layer import InputLayer
-from src.layers.input.providers import MockDanmakuInputProvider as MockDanmakuProvider
+from src.domains.input.input_layer import InputLayer
+from src.domains.input.providers import MockDanmakuInputProvider as MockDanmakuProvider
 
 
 # =============================================================================

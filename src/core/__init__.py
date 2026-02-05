@@ -8,7 +8,7 @@ Amaidesu核心模块
 - PipelineManager: 管道管理器
 """
 
-from src.core.http_server import HttpServer, HttpServerError
+from src.core.connectors.http_server import HttpServer, HttpServerError
 
 __all__ = [
     "HttpServer",

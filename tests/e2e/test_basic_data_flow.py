@@ -8,9 +8,9 @@ import asyncio
 import pytest
 
 # 导入所有 Provider 模块以触发注册
-import src.layers.decision.providers  # noqa: F401
-import src.layers.input.providers  # noqa: F401
-import src.layers.rendering.providers  # noqa: F401
+import src.domains.decision.providers  # noqa: F401
+import src.domains.input.providers  # noqa: F401
+import src.domains.output.providers  # noqa: F401
 
 from src.core.base.raw_data import RawData
 from src.core.events.names import CoreEvents
@@ -30,8 +30,8 @@ async def test_complete_data_flow_with_mock_providers(
     2. 转换为 NormalizedMessage
     3. DecisionProvider 处理并生成 Intent
     """
-    from src.layers.input.input_layer import InputLayer
-    from src.layers.decision.decision_manager import DecisionManager
+    from src.domains.input.input_layer import InputLayer
+    from src.domains.decision.decision_manager import DecisionManager
 
     # 1. 设置 InputLayer
     input_layer = InputLayer(event_bus)
@@ -96,7 +96,7 @@ async def test_input_layer_normalization(
     2. 文本内容正确提取
     3. 元数据正确传递
     """
-    from src.layers.input.input_layer import InputLayer
+    from src.domains.input.input_layer import InputLayer
 
     input_layer = InputLayer(event_bus)
     await input_layer.setup()
@@ -143,8 +143,8 @@ async def test_decision_provider_creates_intent(
     3. 元数据正确传递
     """
     from src.core.base.normalized_message import NormalizedMessage
-    from src.layers.decision.decision_manager import DecisionManager
-    from src.layers.normalization.content import TextContent
+    from src.domains.decision.decision_manager import DecisionManager
+    from src.domains.normalization.content import TextContent
 
     decision_manager = DecisionManager(event_bus, llm_service=None)
     await decision_manager.setup('mock', {'default_response': '默认回复'})
@@ -199,8 +199,8 @@ async def test_multiple_sequential_messages(
     2. 每条消息独立处理
     3. 处理顺序正确
     """
-    from src.layers.input.input_layer import InputLayer
-    from src.layers.decision.decision_manager import DecisionManager
+    from src.domains.input.input_layer import InputLayer
+    from src.domains.decision.decision_manager import DecisionManager
 
     input_layer = InputLayer(event_bus)
     await input_layer.setup()

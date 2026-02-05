@@ -6,7 +6,7 @@ import pytest
 import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
-from src.layers.decision.providers.emotion_judge import EmotionJudgeDecisionProvider
+from src.domains.decision.providers.emotion_judge import EmotionJudgeDecisionProvider
 
 
 @pytest.fixture
