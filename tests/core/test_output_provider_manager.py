@@ -17,8 +17,8 @@ OutputProviderManager 单元测试
 
 import asyncio
 import pytest
-from typing import Dict, Any, Optional, List
-from unittest.mock import Mock, AsyncMock, patch
+from typing import Dict, Any, Optional
+from unittest.mock import Mock, AsyncMock
 
 from src.core.output_provider_manager import OutputProviderManager
 from src.layers.parameters.render_parameters import RenderParameters
@@ -96,7 +96,7 @@ def sample_parameters():
         subtitle_text="你好世界",
         expressions={"smile": 0.8},
         hotkeys=["wave"],
-        metadata={"test": True}
+        metadata={"test": True},
     )
 
 
@@ -116,17 +116,8 @@ def sample_config():
         "enabled": True,
         "concurrent_rendering": True,
         "error_handling": "continue",
-        "outputs": ["mock1", "mock2"],
-        "outputs": {
-            "mock1": {
-                "type": "mock",
-                "delay_seconds": 0.1
-            },
-            "mock2": {
-                "type": "mock",
-                "delay_seconds": 0.2
-            }
-        }
+        "enabled_outputs": ["mock1", "mock2"],
+        "outputs": {"mock1": {"type": "mock", "delay_seconds": 0.1}, "mock2": {"type": "mock", "delay_seconds": 0.2}},
     }
 
 
@@ -146,10 +137,7 @@ def test_manager_initialization():
 
 def test_manager_initialization_with_config():
     """测试带配置的初始化"""
-    config = {
-        "concurrent_rendering": False,
-        "error_handling": "stop"
-    }
+    config = {"concurrent_rendering": False, "error_handling": "stop"}
     manager = OutputProviderManager(config)
 
     assert manager.concurrent_rendering is False
@@ -377,7 +365,9 @@ async def test_render_all_empty(manager: OutputProviderManager, sample_parameter
 
 
 @pytest.mark.asyncio
-async def test_render_all_single_provider(manager: OutputProviderManager, sample_parameters: RenderParameters, mock_event_bus):
+async def test_render_all_single_provider(
+    manager: OutputProviderManager, sample_parameters: RenderParameters, mock_event_bus
+):
     """测试渲染到单个 Provider"""
     provider = MockOutputProvider()
     await manager.register_provider(provider)
@@ -390,7 +380,9 @@ async def test_render_all_single_provider(manager: OutputProviderManager, sample
 
 
 @pytest.mark.asyncio
-async def test_render_all_multiple_providers(manager: OutputProviderManager, sample_parameters: RenderParameters, mock_event_bus):
+async def test_render_all_multiple_providers(
+    manager: OutputProviderManager, sample_parameters: RenderParameters, mock_event_bus
+):
     """测试渲染到多个 Provider"""
     provider1 = MockOutputProvider()
     provider2 = MockOutputProvider()
@@ -414,7 +406,9 @@ async def test_render_all_multiple_providers(manager: OutputProviderManager, sam
 
 
 @pytest.mark.asyncio
-async def test_render_all_concurrent(manager: OutputProviderManager, sample_parameters: RenderParameters, mock_event_bus):
+async def test_render_all_concurrent(
+    manager: OutputProviderManager, sample_parameters: RenderParameters, mock_event_bus
+):
     """测试并发渲染"""
     import time
 
@@ -475,7 +469,9 @@ async def test_render_all_provider_not_setup(manager: OutputProviderManager, sam
 
 
 @pytest.mark.asyncio
-async def test_render_all_partial_failure_continue(manager: OutputProviderManager, sample_parameters: RenderParameters, mock_event_bus):
+async def test_render_all_partial_failure_continue(
+    manager: OutputProviderManager, sample_parameters: RenderParameters, mock_event_bus
+):
     """测试部分 Provider 渲染失败（继续模式）"""
     manager.error_handling = "continue"
 
@@ -501,7 +497,9 @@ async def test_render_all_partial_failure_continue(manager: OutputProviderManage
 
 
 @pytest.mark.asyncio
-async def test_render_all_partial_failure_stop(manager: OutputProviderManager, sample_parameters: RenderParameters, mock_event_bus):
+async def test_render_all_partial_failure_stop(
+    manager: OutputProviderManager, sample_parameters: RenderParameters, mock_event_bus
+):
     """测试部分 Provider 渲染失败（停止模式）"""
     manager.error_handling = "stop"
 
@@ -526,7 +524,9 @@ async def test_render_all_partial_failure_stop(manager: OutputProviderManager, s
 
 
 @pytest.mark.asyncio
-async def test_render_all_serial_mode(manager: OutputProviderManager, sample_parameters: RenderParameters, mock_event_bus):
+async def test_render_all_serial_mode(
+    manager: OutputProviderManager, sample_parameters: RenderParameters, mock_event_bus
+):
     """测试串行渲染模式"""
     manager.concurrent_rendering = False
 
@@ -547,7 +547,9 @@ async def test_render_all_serial_mode(manager: OutputProviderManager, sample_par
 
 
 @pytest.mark.asyncio
-async def test_render_all_serial_with_failure_stop(manager: OutputProviderManager, sample_parameters: RenderParameters, mock_event_bus):
+async def test_render_all_serial_with_failure_stop(
+    manager: OutputProviderManager, sample_parameters: RenderParameters, mock_event_bus
+):
     """测试串行模式下的失败（停止模式）"""
     manager.concurrent_rendering = False
     manager.error_handling = "stop"
@@ -572,7 +574,9 @@ async def test_render_all_serial_with_failure_stop(manager: OutputProviderManage
 
 
 @pytest.mark.asyncio
-async def test_render_all_serial_with_failure_continue(manager: OutputProviderManager, sample_parameters: RenderParameters, mock_event_bus):
+async def test_render_all_serial_with_failure_continue(
+    manager: OutputProviderManager, sample_parameters: RenderParameters, mock_event_bus
+):
     """测试串行模式下的失败（继续模式）"""
     manager.concurrent_rendering = False
     manager.error_handling = "continue"
@@ -719,6 +723,7 @@ def test_get_provider_names_single(manager: OutputProviderManager):
     """测试获取单个 Provider 名称"""
     provider = MockOutputProvider()
     import asyncio
+
     asyncio.run(manager.register_provider(provider))
 
     names = manager.get_provider_names()
@@ -734,6 +739,7 @@ def test_get_provider_names_multiple(manager: OutputProviderManager):
     provider3 = MockOutputProvider()
 
     import asyncio
+
     asyncio.run(manager.register_provider(provider1))
     asyncio.run(manager.register_provider(provider2))
     asyncio.run(manager.register_provider(provider3))
@@ -755,6 +761,7 @@ def test_get_provider_by_name_exists(manager: OutputProviderManager):
     """测试查找存在的 Provider"""
     provider = MockOutputProvider()
     import asyncio
+
     asyncio.run(manager.register_provider(provider))
 
     found = manager.get_provider_by_name("MockOutputProvider")
@@ -767,6 +774,7 @@ def test_get_provider_by_name_not_exists(manager: OutputProviderManager):
     """测试查找不存在的 Provider"""
     provider = MockOutputProvider()
     import asyncio
+
     asyncio.run(manager.register_provider(provider))
 
     found = manager.get_provider_by_name("NonExistentProvider")
@@ -780,6 +788,7 @@ def test_get_provider_by_name_first_match(manager: OutputProviderManager):
     provider2 = MockOutputProvider()
 
     import asyncio
+
     asyncio.run(manager.register_provider(provider1))
     asyncio.run(manager.register_provider(provider2))
 
@@ -804,6 +813,7 @@ def test_get_stats_single_provider(manager: OutputProviderManager):
     """测试获取单个 Provider 的统计信息"""
     provider = MockOutputProvider()
     import asyncio
+
     asyncio.run(manager.register_provider(provider))
 
     stats = manager.get_stats()
@@ -822,12 +832,14 @@ def test_get_stats_multiple_providers(manager: OutputProviderManager, mock_event
     provider3 = MockOutputProvider()
 
     import asyncio
+
     asyncio.run(manager.register_provider(provider1))
     asyncio.run(manager.register_provider(provider2))
     asyncio.run(manager.register_provider(provider3))
 
     # 设置部分 Provider
     import asyncio
+
     asyncio.run(provider1.setup(mock_event_bus))
     asyncio.run(provider2.setup(mock_event_bus))
 
@@ -843,13 +855,11 @@ def test_get_stats_multiple_providers(manager: OutputProviderManager, mock_event
 
 def test_get_stats_with_config(manager: OutputProviderManager):
     """测试获取带配置的 Manager 统计信息"""
-    manager = OutputProviderManager({
-        "concurrent_rendering": False,
-        "error_handling": "stop"
-    })
+    manager = OutputProviderManager({"concurrent_rendering": False, "error_handling": "stop"})
 
     provider = MockOutputProvider()
     import asyncio
+
     asyncio.run(manager.register_provider(provider))
 
     stats = manager.get_stats()
@@ -866,10 +876,7 @@ def test_get_stats_with_config(manager: OutputProviderManager):
 @pytest.mark.asyncio
 async def test_load_from_config_disabled(manager: OutputProviderManager):
     """测试加载禁用的配置"""
-    config = {
-        "enabled": False,
-        "outputs": ["mock1"]
-    }
+    config = {"enabled": False, "enabled_outputs": ["mock1"]}
 
     await manager.load_from_config(config)
 
@@ -879,10 +886,7 @@ async def test_load_from_config_disabled(manager: OutputProviderManager):
 @pytest.mark.asyncio
 async def test_load_from_config_empty_outputs(manager: OutputProviderManager):
     """测试加载空的 outputs 列表"""
-    config = {
-        "enabled": True,
-        "outputs": []
-    }
+    config = {"enabled": True, "enabled_outputs": []}
 
     await manager.load_from_config(config)
 
@@ -892,9 +896,7 @@ async def test_load_from_config_empty_outputs(manager: OutputProviderManager):
 @pytest.mark.asyncio
 async def test_load_from_config_no_outputs_key(manager: OutputProviderManager):
     """测试配置中没有 outputs 键"""
-    config = {
-        "enabled": True
-    }
+    config = {"enabled": True}
 
     await manager.load_from_config(config)
 
@@ -915,17 +917,11 @@ async def test_load_from_config_with_provider_registry(manager: OutputProviderMa
             "enabled": True,
             "concurrent_rendering": True,
             "error_handling": "continue",
-            "outputs": ["mock1", "mock2"],
+            "enabled_outputs": ["mock1", "mock2"],
             "outputs": {
-                "mock1": {
-                    "type": "mock_test",
-                    "test_config": "value1"
-                },
-                "mock2": {
-                    "type": "mock_test",
-                    "test_config": "value2"
-                }
-            }
+                "mock1": {"type": "mock_test", "test_config": "value1"},
+                "mock2": {"type": "mock_test", "test_config": "value2"},
+            },
         }
 
         await manager.load_from_config(config)
@@ -953,12 +949,8 @@ async def test_load_from_config_updates_manager_config(manager: OutputProviderMa
             "enabled": True,
             "concurrent_rendering": False,
             "error_handling": "stop",
-            "outputs": ["mock1"],
-            "outputs": {
-                "mock1": {
-                    "type": "mock_test"
-                }
-            }
+            "enabled_outputs": ["mock1"],
+            "outputs": {"mock1": {"type": "mock_test"}},
         }
 
         await manager.load_from_config(config)
@@ -973,15 +965,7 @@ async def test_load_from_config_updates_manager_config(manager: OutputProviderMa
 @pytest.mark.asyncio
 async def test_load_from_config_unknown_provider_type(manager: OutputProviderManager):
     """测试加载未知的 Provider 类型"""
-    config = {
-        "enabled": True,
-        "outputs": ["unknown"],
-        "outputs": {
-            "unknown": {
-                "type": "nonexistent_provider"
-            }
-        }
-    }
+    config = {"enabled": True, "enabled_outputs": ["unknown"], "outputs": {"unknown": {"type": "nonexistent_provider"}}}
 
     # 不应该抛出异常，只是记录错误
     await manager.load_from_config(config)
@@ -1000,18 +984,12 @@ async def test_load_from_config_partial_failure(manager: OutputProviderManager):
     try:
         config = {
             "enabled": True,
-            "outputs": ["mock1", "unknown", "mock2"],
+            "enabled_outputs": ["mock1", "unknown", "mock2"],
             "outputs": {
-                "mock1": {
-                    "type": "mock_test"
-                },
-                "unknown": {
-                    "type": "nonexistent_provider"
-                },
-                "mock2": {
-                    "type": "mock_test"
-                }
-            }
+                "mock1": {"type": "mock_test"},
+                "unknown": {"type": "nonexistent_provider"},
+                "mock2": {"type": "mock_test"},
+            },
         }
 
         await manager.load_from_config(config)
@@ -1038,10 +1016,7 @@ async def test_concurrent_render_and_stop(manager: OutputProviderManager, mock_e
     params = RenderParameters(tts_text="Test")
 
     # 并发执行渲染和停止
-    tasks = [
-        manager.render_all(params),
-        manager.stop_all_providers()
-    ]
+    tasks = [manager.render_all(params), manager.stop_all_providers()]
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -1058,12 +1033,9 @@ async def test_concurrent_setup_and_render(manager: OutputProviderManager, mock_
     params = RenderParameters(tts_text="Test")
 
     # 并发执行设置和渲染
-    tasks = [
-        manager.setup_all_providers(mock_event_bus),
-        manager.render_all(params)
-    ]
+    tasks = [manager.setup_all_providers(mock_event_bus), manager.render_all(params)]
 
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    await asyncio.gather(*tasks, return_exceptions=True)
 
     # render 应该失败（因为 Provider 可能还未设置完成）
     # setup 应该成功
@@ -1208,7 +1180,9 @@ async def test_multiple_managers_independent(manager: OutputProviderManager):
 
 
 @pytest.mark.asyncio
-async def test_render_error_isolation(manager: OutputProviderManager, sample_parameters: RenderParameters, mock_event_bus):
+async def test_render_error_isolation(
+    manager: OutputProviderManager, sample_parameters: RenderParameters, mock_event_bus
+):
     """测试渲染错误隔离（一个 Provider 失败不影响其他）"""
     provider1 = MockOutputProvider()
     provider2 = FailingMockOutputProvider()

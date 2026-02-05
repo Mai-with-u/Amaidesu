@@ -49,6 +49,7 @@ dependencies = [
     "pyautogui>=0.9.0",
     "python-osc>=1.8.0",
     "pytest>=9.0.2",
+    "tomli-w>=1.2.0",
 ]
 
 [project.optional-dependencies]

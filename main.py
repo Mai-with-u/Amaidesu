@@ -112,17 +112,17 @@ def validate_config(config: Dict[str, Any]) -> None:
     if not config.get("general"):
         errors.append("缺少 [general] 配置段")
 
-    # 检查输入层配置
-    if not config.get("input"):
-        logger.warning("未检测到 [input] 配置，输入层将被禁用")
+    # 检查输入Provider配置（新格式）
+    if not config.get("providers.input"):
+        logger.warning("未检测到 [providers.input] 配置，输入Provider功能将被禁用")
 
-    # 检查决策层配置
-    if not config.get("decision"):
-        logger.warning("未检测到 [decision] 配置，决策层将被禁用")
+    # 检查决策Provider配置（新格式）
+    if not config.get("providers.decision"):
+        logger.warning("未检测到 [providers.decision] 配置，决策Provider功能将被禁用")
 
-    # 检查渲染层配置
-    if not config.get("rendering"):
-        logger.warning("未检测到 [rendering] 配置，渲染层将被禁用")
+    # 检查输出Provider配置（新格式）
+    if not config.get("providers.output"):
+        logger.warning("未检测到 [providers.output] 配置，输出Provider功能将被禁用")
 
     # 如果有严重错误，退出程序
     if errors:
@@ -221,15 +221,16 @@ async def create_app_components(
 ]:
     """创建并连接核心组件（事件总线、输入层、决策层、协调器、核心、插件）。"""
     general_config = config.get("general", {})
-    rendering_config = config.get("rendering", {})
-    decision_config = config.get("decision", {})
-    input_config = config.get("input", {})
+    # 使用新的 [providers.*] 配置格式
+    output_config = config.get("providers.output", {})
+    decision_config = config.get("providers.decision", {})
+    input_config = config.get("providers.input", {})
     platform_id = general_config.get("platform_id", "amaidesu")
 
-    if rendering_config:
-        logger.info("检测到渲染配置，将启用数据流协调器")
+    if output_config:
+        logger.info("检测到输出Provider配置，将启用数据流协调器")
     else:
-        logger.info("未检测到渲染配置，数据流协调器功能将被禁用")
+        logger.info("未检测到输出Provider配置，数据流协调器功能将被禁用")
 
     # 上下文管理器
     context_manager_config = config.get("context_manager", {})
@@ -255,7 +256,7 @@ async def create_app_components(
         logger.info("初始化输入Provider管理器（Layer 1 数据流）...")
         try:
             input_provider_manager = InputProviderManager(event_bus)
-            providers = await input_provider_manager.load_from_config(input_config)
+            providers = await input_provider_manager.load_from_config(input_config, config_service=config_service)
             await input_provider_manager.start_all_providers(providers)
             logger.info(f"InputProviderManager 已设置（已启动 {len(input_provider_manager._providers)} 个Provider）")
         except Exception as e:
@@ -292,10 +293,10 @@ async def create_app_components(
 
     # 数据流协调器 (Layer 4-5)
     logger.info("初始化数据流协调器...")
-    flow_coordinator: Optional[FlowCoordinator] = FlowCoordinator(event_bus) if rendering_config else None
+    flow_coordinator: Optional[FlowCoordinator] = FlowCoordinator(event_bus) if output_config else None
     if flow_coordinator:
         try:
-            await flow_coordinator.setup(rendering_config)
+            await flow_coordinator.setup(output_config, config_service=config_service)
             logger.info("数据流协调器已设置（Layer 4-5）")
         except Exception as e:
             logger.error(f"设置数据流协调器失败: {e}", exc_info=True)

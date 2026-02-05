@@ -181,7 +181,29 @@ python main.py
 
 详见 [MaiBot部署教程](https://docs.mai-mai.org/manual/usage/mmc_q_a) 了解 MaiCore 的部署方法。
 
-## 运行与配置
+## 配置体系重大更新 ⚠️
+
+### 配置格式变更（v1.2.0）
+
+系统已完成从插件系统到Provider架构的重构，**配置文件格式已全面升级**：
+
+#### 新的配置结构
+```toml
+[providers.input]
+enabled = true
+enabled_inputs = ["console_input", "bili_danmaku"]
+
+[providers.decision]
+enabled = true
+active_provider = "maicore"
+available_providers = ["maicore", "local_llm"]
+
+[providers.output]
+enabled = true
+enabled_outputs = ["subtitle", "vts", "tts"]
+```
+
+#### 运行与配置
 
 1.  **首次运行与配置生成**:
     - 在首次运行 `uv run python main.py` 之前，请确保根目录下存在 `config-template.toml`。
@@ -192,10 +214,15 @@ python main.py
       - `[providers.output]` - 输出Provider配置
     - **重要**: 自动生成配置文件后，程序会提示并退出。请务必检查生成的 `config.toml` 文件，填入必要的配置信息（如 API 密钥、设备名称、房间号等），然后再重新运行程序。
 
-2.  **启动程序**:
+2.  **旧配置迁移**:
+    - 系统会自动检测旧配置格式并自动转换为新的配置格式
+    - 如果您有旧配置文件，系统会自动备份并生成新配置
+    - 详细迁移说明请查看：[配置变更通知](./docs/CONFIG_CHANGES.md)
+
+3.  **启动程序**:
     - 配置完成后，使用 `uv run python main.py` 启动应用程序。
 
-3.  **命令行参数**:
+4.  **命令行参数**:
     - `--debug`: 启用详细的 DEBUG 级别日志输出，方便排查问题。
       ```bash
       uv run python main.py --debug
@@ -616,6 +643,14 @@ logger.error("错误日志", exc_info=True)
 - **异步优先**：所有IO操作都应使用async/await
 - **错误隔离**：单个Provider失败不应影响其他Provider
 - **日志分级**：DEBUG用于开发，INFO用于正常运行，WARNING用于可恢复问题，ERROR用于严重问题
+
+## 📚 更多资源
+
+### 配置相关文档
+- [配置变更通知](./docs/CONFIG_CHANGES.md) - 详细的配置迁移指南和新功能介绍
+- [配置设计提案](./docs/CONFIG_DESIGN_PROPOSAL.md) - 配置体系的设计思路
+- [配置统一总结](./docs/CONFIG_UNIFICATION_SUMMARY.md) - 配置统一的详细说明
+- [配置升级指南](./docs/CONFIG_UPGRADE_GUIDE.md) - 手动升级配置的详细步骤
 
 ## Git工作流
 

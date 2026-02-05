@@ -176,9 +176,9 @@ async def test_setup_loads_providers_from_config(
     """测试 setup 从配置加载 Provider"""
     await flow_coordinator.setup(sample_config)
 
-    # 验证 load_from_config 被调用
+    # 验证 load_from_config 被调用（包含config_service参数）
     flow_coordinator.output_provider_manager.load_from_config.assert_called_once_with(
-        sample_config, core=None
+        sample_config, core=None, config_service=None
     )
 
 

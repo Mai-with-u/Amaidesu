@@ -10,6 +10,7 @@ OutputProviderManager - Layer 7 渲染呈现层管理器
 """
 
 import asyncio
+import warnings
 from typing import List, Dict, Any, Optional, TYPE_CHECKING
 from src.utils.logger import get_logger
 
@@ -223,30 +224,30 @@ class OutputProviderManager:
 
     # ==================== Phase 4: 配置加载 ====================
 
-    async def load_from_config(self, config: Dict[str, Any], core=None):
+    async def load_from_config(self, config: Dict[str, Any], core=None, config_service=None):
         """
-        从配置加载并创建所有OutputProvider
+        从配置加载并创建所有OutputProvider（支持三级配置合并）
 
         Args:
-            config: 渲染配置（来自[rendering]）
+            config: 输出Provider配置（来自[providers.output]）
             core: AmaidesuCore实例（可选，用于访问服务）
+            config_service: ConfigService实例（用于三级配置加载）
 
         配置格式:
-            [rendering]
-            outputs = ["tts", "subtitle", "sticker", "vts", "omni_tts"]
+            [providers.output]
+            enabled = true
+            enabled_outputs = ["subtitle", "vts", "tts"]
 
-            [rendering.outputs.tts]
-            type = "tts"
-            engine = "edge"
-            voice = "zh-CN-XiaoxiaoNeural"
-            ...
+            # 可选：常用参数覆盖
+            [providers.output.overrides.subtitle]
+            font_size = 24
         """
         self.logger.info("开始从配置加载OutputProvider...")
 
         # 检查是否启用
         enabled = config.get("enabled", True)
         if not enabled:
-            self.logger.info("渲染层已禁用（enabled=false）")
+            self.logger.info("输出Provider层已禁用（enabled=false）")
             return
 
         # 更新管理器配置
@@ -254,25 +255,50 @@ class OutputProviderManager:
         self.error_handling = config.get("error_handling", "continue")
 
         # 获取Provider列表
-        outputs = config.get("outputs", [])
-        if not outputs:
-            self.logger.warning("未配置任何输出Provider（outputs为空）")
+        enabled_outputs = config.get("enabled_outputs", [])
+        if not enabled_outputs:
+            self.logger.warning("未配置任何输出Provider（enabled_outputs为空）")
             return
 
-        self.logger.info(f"配置了 {len(outputs)} 个输出Provider: {outputs}")
-
-        # 获取各个Provider的配置
-        outputs_config = config.get("outputs", {})
+        self.logger.info(f"配置了 {len(enabled_outputs)} 个输出Provider: {enabled_outputs}")
 
         # 创建Provider实例
         created_count = 0
         failed_count = 0
 
-        for output_name in outputs:
-            provider_config = outputs_config.get(output_name, {})
-            provider_type = provider_config.get("type", output_name)
-
+        for output_name in enabled_outputs:
             try:
+                # 使用新的三级配置加载
+                if config_service is not None:
+                    try:
+                        from src.core.config.schemas import get_provider_schema
+
+                        schema_class = get_provider_schema(output_name, "output")
+                    except (ImportError, AttributeError, KeyError):
+                        # Schema registry未实现或Provider未注册，回退到None
+                        schema_class = None
+
+                    provider_config = config_service.get_provider_config_with_defaults(
+                        provider_name=output_name,
+                        provider_layer="output",
+                        schema_class=schema_class,
+                    )
+                else:
+                    # 回退到旧的配置加载方式（向后兼容）
+                    warnings.warn(
+                        f"OutputProviderManager: Using deprecated configuration loading for '{output_name}'. "
+                        f"Please pass config_service parameter to enable three-level configuration merge. "
+                        f"Old configuration format will be removed in a future version.",
+                        DeprecationWarning,
+                        stacklevel=2,
+                    )
+                    outputs_config = config.get("outputs", {})
+                    provider_config = outputs_config.get(output_name, {}).copy()
+                    provider_config["type"] = provider_config.get("type", output_name)
+
+                provider_type = provider_config.get("type", output_name)
+
+                # 创建Provider（不再检查enabled字段，由enabled_outputs控制）
                 provider = self._create_provider(provider_type, provider_config, core)
                 if provider:
                     await self.register_provider(provider)
@@ -285,7 +311,7 @@ class OutputProviderManager:
                 failed_count += 1
 
         self.logger.info(
-            f"OutputProvider加载完成: 成功={created_count}/{len(outputs)}, 失败={failed_count}/{len(outputs)}"
+            f"OutputProvider加载完成: 成功={created_count}/{len(enabled_outputs)}, 失败={failed_count}/{len(enabled_outputs)}"
         )
 
     def _create_provider(self, provider_type: str, config: Dict[str, Any], core=None) -> Optional[OutputProvider]:
@@ -307,10 +333,7 @@ class OutputProviderManager:
         # 检查 Provider 是否已注册
         if not ProviderRegistry.is_output_provider_registered(provider_type):
             available = ", ".join(ProviderRegistry.get_registered_output_providers())
-            self.logger.error(
-                f"未知的Provider类型: '{provider_type}'. "
-                f"可用的Provider: {available or '无'}"
-            )
+            self.logger.error(f"未知的Provider类型: '{provider_type}'. 可用的Provider: {available or '无'}")
             return None
 
         try:

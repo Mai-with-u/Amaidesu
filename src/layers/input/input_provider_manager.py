@@ -5,6 +5,7 @@ InputProviderManager - 输入Provider管理器
 """
 
 import asyncio
+import warnings
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 import time
@@ -249,24 +250,25 @@ class InputProviderManager:
             self._provider_stats[provider_name].error_count += 1
             # 不重新抛出，避免影响其他Provider
 
-    async def load_from_config(self, config: Dict[str, Any]) -> List[InputProvider]:
+    async def load_from_config(self, config: Dict[str, Any], config_service=None) -> List[InputProvider]:
         """
-        从配置加载并创建所有InputProvider
+        从配置加载并创建所有InputProvider（支持三级配置合并）
 
         Args:
-            config: 输入配置（来自[input]）
+            config: 输入配置（来自[providers.input]）
+            config_service: ConfigService实例（用于三级配置加载）
 
         Returns:
             创建的InputProvider列表
 
         配置格式:
-            [input]
+            [providers.input]
             enabled = true
-            inputs = ["console", "bili_danmaku"]
+            enabled_inputs = ["console_input", "bili_danmaku"]
 
-            [input.inputs.console]
-            type = "console"
-            enabled = true
+            # 可选：常用参数覆盖
+            [providers.input.overrides.console_input]
+            user_id = "custom_user"
         """
         from src.layers.rendering.provider_registry import ProviderRegistry
 
@@ -278,46 +280,71 @@ class InputProviderManager:
             self.logger.info("输入层已禁用（enabled=false）")
             return []
 
-        # 获取Provider列表
-        inputs = config.get("inputs", [])
-        if not inputs:
-            self.logger.warning("未配置任何输入Provider（inputs为空）")
+        # 获取Provider列表（支持新旧配置格式）
+        enabled_inputs = config.get("enabled_inputs", config.get("inputs", []))
+        if not enabled_inputs:
+            self.logger.warning("未配置任何输入Provider（enabled_inputs为空）")
             return []
 
-        self.logger.info(f"配置了 {len(inputs)} 个输入Provider: {inputs}")
-
-        # 获取各个Provider的配置
-        # 注意：配置字典应该包含 'inputs_config' 键，值是各个 Provider 的配置字典
-        inputs_config = config.get("inputs_config", config.get("inputs", {}))
+        self.logger.info(f"配置了 {len(enabled_inputs)} 个输入Provider: {enabled_inputs}")
 
         # 创建Provider实例
         created_providers = []
         failed_count = 0
 
-        for input_name in inputs:
-            provider_config = inputs_config.get(input_name, {})
-            provider_type = provider_config.get("type", input_name)
-
-            # 检查单个Provider是否启用
-            provider_enabled = provider_config.get("enabled", True)
-            if not provider_enabled:
-                self.logger.info(f"Provider {input_name} 已禁用（enabled=false）")
-                continue
-
+        for input_name in enabled_inputs:
             try:
+                # 使用新的三级配置加载
+                if config_service is not None:
+                    try:
+                        from src.core.config.schemas import get_provider_schema
+
+                        schema_class = get_provider_schema(input_name, "input")
+                    except (ImportError, AttributeError, KeyError):
+                        # Schema registry未实现或Provider未注册，回退到None
+                        schema_class = None
+
+                    provider_config = config_service.get_provider_config_with_defaults(
+                        provider_name=input_name,
+                        provider_layer="input",
+                        schema_class=schema_class,
+                    )
+                else:
+                    # 回退到旧的配置加载方式（向后兼容）
+                    warnings.warn(
+                        f"InputProviderManager: Using deprecated configuration loading for '{input_name}'. "
+                        f"Please pass config_service parameter to enable three-level configuration merge. "
+                        f"Old configuration format will be removed in a future version.",
+                        DeprecationWarning,
+                        stacklevel=2,
+                    )
+                    # 支持两种旧格式：
+                    # 1. "inputs_config": {input_name: {...}}
+                    # 2. "inputs": {input_name: {...}}
+                    inputs_config = config.get("inputs_config", config.get("inputs", {}))
+                    # 如果inputs_config是列表（新格式enabled_inputs），则创建空配置
+                    if isinstance(inputs_config, list):
+                        provider_config = {}
+                    else:
+                        provider_config = inputs_config.get(input_name, {}).copy()
+                    provider_config["type"] = provider_config.get("type", input_name)
+
+                provider_type = provider_config.get("type", input_name)
+
+                # 创建Provider（不再检查enabled字段，由enabled_inputs控制）
                 provider = ProviderRegistry.create_input(provider_type, provider_config)
                 created_providers.append(provider)
                 self.logger.info(f"成功创建InputProvider: {input_name} (type={provider_type})")
             except Exception as e:
-                self.logger.error(f"InputProvider创建异常: {input_name} (type={provider_type}) - {e}", exc_info=True)
+                self.logger.error(f"InputProvider创建异常: {input_name} - {e}", exc_info=True)
                 failed_count += 1
 
         if failed_count > 0:
             self.logger.warning(
-                f"InputProvider加载完成: 成功={len(created_providers)}/{len(inputs)}, 失败={failed_count}/{len(inputs)}"
+                f"InputProvider加载完成: 成功={len(created_providers)}/{len(enabled_inputs)}, 失败={failed_count}/{len(enabled_inputs)}"
             )
         else:
-            self.logger.info(f"InputProvider加载完成: 成功={len(created_providers)}/{len(inputs)}")
+            self.logger.info(f"InputProvider加载完成: 成功={len(created_providers)}/{len(enabled_inputs)}")
 
         return created_providers
 

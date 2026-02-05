@@ -62,12 +62,13 @@ class FlowCoordinator:
 
         self.logger.info("FlowCoordinator 初始化完成")
 
-    async def setup(self, config: Dict[str, Any]):
+    async def setup(self, config: Dict[str, Any], config_service=None):
         """
         设置数据流协调器
 
         Args:
-            config: 渲染配置（来自[rendering]）
+            config: 输出Provider配置（来自[providers.output]）
+            config_service: ConfigService实例（用于三级配置加载）
         """
         self.logger.info("开始设置数据流协调器...")
 
@@ -82,9 +83,9 @@ class FlowCoordinator:
             self.output_provider_manager = OutputProviderManager(config)
             self.logger.info("输出Provider管理器已创建")
 
-        # 从配置加载Provider
+        # 从配置加载Provider（传递config_service以启用三级配置合并）
         if self.output_provider_manager:
-            await self.output_provider_manager.load_from_config(config, core=None)
+            await self.output_provider_manager.load_from_config(config, core=None, config_service=config_service)
 
         # 订阅 Layer 3 (Decision) 的 Intent 事件（5层架构）
         self.event_bus.on(CoreEvents.DECISION_INTENT_GENERATED, self._on_intent_ready, priority=50)
