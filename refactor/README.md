@@ -6,15 +6,14 @@
 
 ---
 
-## ⚠️ 当前架构问题
+## ⚠️ 架构说明
 
-> **重要**: 设计与实现存在不一致，详见 [架构问题分析报告](./ARCHITECTURE_ISSUES_REPORT.md)
+> **重要**: 当前架构已稳定运行，采用3域架构设计
 
-| 优先级 | 问题 | 影响 |
-|--------|------|------|
-| 🔴 P0 | 插件系统残留引用 | 应用无法启动 |
-| 🔴 P0 | 输入层主流程未接线 | 数据流完全断裂 |
-| 🟡 P1 | LLMService 依赖注入技术债 | 架构不清晰 |
+| 架构版本 | 说明 |
+|----------|------|
+| v3.0 | 3域架构（Input → Decision → Output） |
+| 移除内容 | 7层/5层架构已废弃 |
 
 ---
 
@@ -22,14 +21,11 @@
 
 ### 我想了解...
 
-**⚠️ 当前有什么问题？**
-→ [架构问题分析报告](./ARCHITECTURE_ISSUES_REPORT.md)（**推荐先看**）
-
 **整体架构是什么？**
 → [设计总览](./design/overview.md)
 
-**5层架构如何工作？**
-→ [5层架构设计](./design/layer_refactoring.md)
+**3域架构如何工作？**
+→ [设计总览](./design/overview.md)
 
 **决策层如何可替换？**
 → [决策层设计](./design/decision_layer.md)
@@ -37,7 +33,7 @@
 **多个Provider如何并发？**
 → [多Provider并发设计](./design/multi_provider.md)
 
-**⚠️ 插件系统为什么移除？**
+**插件系统为什么移除？**
 → [插件系统移除说明](./PLUGIN_SYSTEM_REMOVAL.md)
 
 **AmaidesuCore如何重构？**
@@ -46,9 +42,6 @@
 **HTTP服务器如何管理？**
 → [HTTP服务器设计](./design/http_server.md)
 
-**如何实施重构？**
-→ [5层架构重构实施计划](./plan/5_layer_refactoring_plan.md)
-
 ---
 
 ## 📁 文档结构
@@ -56,12 +49,10 @@
 ```
 refactor/
 ├── README.md                            # 本文件 - 文档索引
-├── ARCHITECTURE_ISSUES_REPORT.md        # ⚠️ 架构问题分析报告（必读）
 ├── PLUGIN_SYSTEM_REMOVAL.md             # 插件系统移除说明
 │
 ├── design/                              # 设计文档
-│   ├── overview.md                       # 架构总览（2025年新架构）
-│   ├── layer_refactoring.md              # 5层架构设计
+│   ├── overview.md                       # 架构总览（3域架构）
 │   ├── decision_layer.md                 # 决策层设计
 │   ├── multi_provider.md                 # 多Provider并发设计
 │   ├── core_refactoring.md               # AmaidesuCore重构设计
@@ -71,39 +62,36 @@ refactor/
 │   ├── pipeline_refactoring.md           # Pipeline重新设计
 │   ├── avatar_refactoring.md             # 虚拟形象重构设计
 │   ├── DESIGN_CONSISTENCY_REPORT.md      # 设计文档一致性检查报告
+│   ├── config_system.md                 # 配置系统设计
 │   └── plugin_system.md                  # ⚠️ 已废弃
 │
 └── plan/                                # 实施计划
-    └── 5_layer_refactoring_plan.md       # 5层架构重构实施计划
+    └── 5_layer_refactoring_plan.md       # 5层架构重构实施计划（已废弃）
 ```
 
 ---
 
 ## 🎯 重构核心要点
 
-### 1. 5层核心数据流（2025年架构）
+### 1. 3域架构数据流（当前架构）
 
 ```
-Layer 1-2: Input（输入感知 + 标准化）
+Input Domain（数据采集 + 标准化）
     ↓ NormalizedMessage
-Layer 3: Decision（决策层，可替换）
+Decision Domain（决策，可替换）
     ↓ Intent
-Layer 4: Parameters（参数生成）
-    ↓ RenderParameters
-Layer 5: Rendering（渲染呈现，多Provider并发）
+Output Domain（参数生成 + 渲染）
+    ↓ 实际输出
 ```
 
 ### 2. 核心变化
 
-| 变化 | 旧架构（7层） | 新架构（5层） |
+| 变化 | 旧架构 | 新架构（3域） |
 |------|-------------|-------------|
-| **层级数** | 7层 | 5层 |
-| **Layer 1-2** | Input + Normalization | 合并为InputLayer |
-| **Layer 3** | Canonical（中间表示） | 移除，功能合并到Layer 2 |
-| **Layer 4** | Decision（决策层） | 不变，可替换 |
-| **Layer 5** | Understanding（理解层） | 移除，功能由DecisionProvider负责 |
-| **Layer 6** | Parameters（参数生成） | 不变 |
-| **Layer 7** | Rendering（渲染层） | 不变，重编号为Layer 5 |
+| **架构类型** | 7层/5层分层架构 | 3域架构 |
+| **Input** | Layer 1-2 (Input + Normalization) | Input Domain（包含标准化） |
+| **Decision** | Layer 3 (Decision) 或 Layer 4 | Decision Domain |
+| **Output** | Layer 5-7 (Parameters + Rendering) | Output Domain（包含参数生成） |
 | **插件系统** | 存在 | **已移除**，采用纯Provider架构 |
 
 ### 3. 为什么移除插件系统？
@@ -128,9 +116,9 @@ Layer 5: Rendering（渲染呈现，多Provider并发）
 
 | 类型 | 位置 | 职责 | 示例 |
 |------|------|------|------|
-| **InputProvider** | Layer 1 | 接收外部数据，生成RawData | ConsoleInputProvider, BiliDanmakuProvider |
-| **DecisionProvider** | Layer 3 | 处理NormalizedMessage，决策并返回Intent | MaiCoreDecisionProvider, LocalLLMDecisionProvider |
-| **OutputProvider** | Layer 5 | 接收渲染参数，执行实际输出 | TTSProvider, SubtitleProvider, VTSProvider |
+| **InputProvider** | Input Domain | 接收外部数据，生成RawData | ConsoleInputProvider, BiliDanmakuProvider |
+| **DecisionProvider** | Decision Domain | 处理NormalizedMessage，决策并返回Intent | MaiCoreDecisionProvider, LocalLLMDecisionProvider |
+| **OutputProvider** | Output Domain | 接收渲染参数，执行实际输出 | TTSProvider, SubtitleProvider, VTSProvider |
 
 ### Manager（管理者）
 
@@ -142,19 +130,19 @@ Layer 5: Rendering（渲染呈现，多Provider并发）
 
 ```toml
 # 输入Provider配置
-[input]
-enabled = ["console", "bili_danmaku", "minecraft"]
+[providers.input]
+enabled_inputs = ["console", "bili_danmaku"]
 
-[input.providers.console]
+[providers.input.providers.console]
 source = "stdin"
 
 # 决策Provider配置
-[decision]
-default_provider = "maicore"
+[providers.decision]
+active_provider = "maicore"
 
 # 输出Provider配置
-[output]
-enabled = ["tts", "subtitle", "vts"]
+[providers.output]
+enabled_outputs = ["tts", "subtitle", "vts"]
 ```
 
 ---
@@ -178,7 +166,7 @@ enabled = ["tts", "subtitle", "vts"]
 - **移除插件系统**
 - Provider由Manager统一管理
 - 配置驱动启用/禁用
-- 5层架构，职责清晰
+- 3域架构，职责清晰
 
 ---
 
@@ -194,10 +182,10 @@ enabled = ["tts", "subtitle", "vts"]
 - ✅ 插件系统已移除，Provider由Manager统一管理
 
 ### 架构指标
-- ✅ 清晰的5层核心数据流架构
+- ✅ 清晰的3域架构数据流
 - ✅ 决策层可替换（支持多种DecisionProvider）
-- ✅ 多Provider并发支持（输入层和输出层）
-- ✅ 层级间依赖关系清晰（单向依赖）
+- ✅ 多Provider并发支持（输入域和输出域）
+- ✅ 域间依赖关系清晰（单向依赖）
 - ✅ EventBus为内部主要通信模式
 - ✅ Provider模式替代重复插件
 - ✅ 配置驱动，无需修改代码即可启用/禁用Provider
@@ -212,13 +200,9 @@ enabled = ["tts", "subtitle", "vts"]
 - [设计文档一致性检查报告](./design/DESIGN_CONSISTENCY_REPORT.md) - 文档一致性验证
 
 ### 设计文档
-- [设计总览](./design/overview.md) - 2025年新架构总览
-- [5层架构设计](./design/layer_refactoring.md) - 详细描述5层核心数据流
+- [设计总览](./design/overview.md) - 3域架构总览
 - [决策层设计](./design/decision_layer.md) - 可替换的决策Provider系统
 - [多Provider并发设计](./design/multi_provider.md) - Provider管理架构
-
-### 实施计划
-- [5层架构重构实施计划](./plan/5_layer_refactoring_plan.md) - 详细的重构步骤
 
 ### 迁移指南
 - [插件系统移除说明](./PLUGIN_SYSTEM_REMOVAL.md) - 配置和代码迁移指南
@@ -231,12 +215,13 @@ enabled = ["tts", "subtitle", "vts"]
 
 ## ❓ 常见问题
 
-### Q: 为什么要从7层改为5层？
+### Q: 为什么要从7层/5层改为3域？
 
 **A**: 简化架构，消除冗余：
-- Layer 2（Normalization）和Layer 3（Canonical）合并
-- Layer 5（Understanding）的功能由DecisionProvider承担
+- Normalization与Input强耦合，合并到Input Domain
+- Parameters与Output强耦合，合并到Output Domain
 - 减少数据转换开销，提高性能
+- 按业务功能组织，而非按技术分层
 
 ### Q: 插件系统为什么要移除？
 
@@ -251,8 +236,8 @@ enabled = ["tts", "subtitle", "vts"]
 
 **A**: 直接添加Provider：
 
-1. 在对应层创建Provider文件：`src/layers/{layer}/providers/my_provider.py`
-2. 在配置中启用：`[input]enabled = ["console", "my_provider"]`
+1. 在对应域创建Provider文件：`src/domains/{domain}/providers/my_provider.py`
+2. 在配置中启用：`[providers.input]enabled_inputs = ["console", "my_provider"]`
 3. 无需创建Plugin
 
 详见：[设计总览 - 社区扩展](./design/overview.md#社区扩展)

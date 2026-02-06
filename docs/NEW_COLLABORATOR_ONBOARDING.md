@@ -15,8 +15,8 @@
   ├─ BasePlugin 插件系统
   └─ 服务注册机制
 
-第二步：了解新架构（15分钟）
-  ├─ 6 层核心数据流
+ 第二步：了解新架构（15分钟）
+  ├─ 3 域核心数据流
   ├─ Provider 接口系统
   ├─ Plugin 协议系统
   └─ EventBus 事件系统
@@ -194,30 +194,23 @@ class MyPlugin(BasePlugin):
 1. **消灭插件化**：核心功能全部模块化，不作为"插件"
 2. **统一接口**：同一功能收敛到 Provider 接口
 3. **消除依赖**：推广 EventBus 通信，替代服务注册
-4. **按数据流组织**：6 层清晰的架构
+4. **按数据流组织**：3 域清晰的架构
 
 **新数据流**：
 ```
 外部输入（弹幕、游戏、语音）
     ↓
-【Layer 1: 输入感知】多个 InputProvider 并发采集
-    ↓ (发布 perception.raw_data.generated 事件)
-【Layer 2: 输入标准化】转换为 NormalizedText
-    ↓ (发布 normalization.text.ready 事件)
-【Layer 3: 中间表示】构建 CanonicalMessage
-    ↓ (发送到决策层)
-【Layer 4: 决策层】DecisionProvider 可替换、可扩展
+【Input Domain】多个 InputProvider 并发采集 → 标准化 → 预处理（Pipelines）
+    ↓ (发布 normalization.message_ready 事件)
+【Decision Domain】DecisionProvider 可替换、可扩展
     ├─ MaiCoreDecisionProvider (默认)
     ├─ LocalLLMDecisionProvider (可选)
     └─ RuleEngineDecisionProvider (可选)
-    ↓ (返回 MessageBase)
-【Layer 5: 表现理解】解析 MessageBase → Intent
-    ↓ (发布 understanding.intent_generated 事件)
-【Layer 6: 表现生成】生成 RenderParameters
-    ↓ (发布 expression.parameters_generated 事件)
-【Layer 7: 渲染呈现】多个 OutputProvider 并发渲染
-    ↓ (字幕、TTS、VTS 等)
-【插件系统：Plugin】社区开发的插件能力
+    ↓ (返回 Intent)
+    ↓ (发布 decision.intent_generated 事件)
+【Output Domain】参数生成 → 多个 OutputProvider 并发渲染
+    ├─ ExpressionGenerator: Intent → RenderParameters
+    └─ OutputProvider: TTS、字幕、VTS 等
 ```
 
 ### 2.2 AmaidesuCore 的简化
@@ -239,9 +232,9 @@ class MyPlugin(BasePlugin):
 - ✅ LLM 客户端管理器
 
 **新增的职责**：
-- ✅ DecisionManager 集成（决策层管理）
-- ✅ OutputProviderManager 集成（输出层管理）
-- ✅ ExpressionGenerator 集成（表现生成）
+- ✅ DecisionManager 集成（决策域管理）
+- ✅ OutputProviderManager 集成（输出域管理）
+- ✅ ExpressionGenerator 集成（参数生成）
 
 ### 2.3 Provider 接口系统
 
@@ -251,9 +244,9 @@ class MyPlugin(BasePlugin):
 
 | 类型 | 位置 | 职责 | 示例 |
 |------|------|------|------|
-| **InputProvider** | Layer 1 | 接收外部数据，生成 RawData | ConsoleInputProvider, BiliDanmakuInputProvider |
-| **OutputProvider** | Layer 7 | 接收渲染参数，执行实际输出 | TTSOutputProvider, SubtitleOutputProvider |
-| **DecisionProvider** | Layer 4: 决策层 | 决策能力接口 | MaiCoreDecisionProvider, LocalLLMDecisionProvider |
+| **InputProvider** | Input Domain | 接收外部数据，生成 RawData | ConsoleInputProvider, BiliDanmakuInputProvider |
+| **OutputProvider** | Output Domain | 接收渲染参数，执行实际输出 | TTSOutputProvider, SubtitleOutputProvider |
+| **DecisionProvider** | Decision Domain | 决策能力接口 | MaiCoreDecisionProvider, LocalLLMDecisionProvider |
 
 **InputProvider 示例**：
 ```python
@@ -392,9 +385,9 @@ event_bus.off("normalization.text.ready", handler)
 
 | 事件名称 | 发布者 | 订阅者 | 数据格式 |
 |---------|--------|--------|---------|
-| `perception.raw_data.generated` | InputProvider | InputLayer | `{"data": RawData, "source": str}` |
-| `normalization.text.ready` | InputLayer | CanonicalMessage | `{"normalized": NormalizedText, ...}` |
-| `understanding.intent_generated` | UnderstandingLayer | ExpressionGenerator | `{"intent": Intent, ...}` |
+| `perception.raw_data.generated` | InputProvider | InputDomain | `{"data": RawData, "source": str}` |
+| `normalization.message_ready` | InputDomain | DecisionDomain | `{"message": NormalizedMessage, ...}` |
+| `decision.intent_generated` | DecisionDomain | OutputDomain | `{"intent": Intent, ...}` |
 | `expression.parameters_generated` | ExpressionGenerator | OutputProviderManager | `{"parameters": RenderParameters, ...}` |
 
 **与旧服务注册的对比**：
@@ -477,11 +470,11 @@ class AmaidesuCore:
         self._llm_service = llm_service
         
         # Phase 3 新增
-        self._decision_manager = decision_manager  # 决策层管理
-        
+        self._decision_manager = decision_manager  # 决策域管理
+
         # Phase 4 新增
-        self._output_provider_manager = output_provider_manager  # 输出层管理
-        self.expression_generator = expression_generator  # 表现生成
+        self._output_provider_manager = output_provider_manager  # 输出域管理
+        self.expression_generator = expression_generator  # 参数生成
     
     # 属性访问
     @property
@@ -493,15 +486,15 @@ class AmaidesuCore:
         return self._avatar
 ```
 
-### 3.3 6 层架构对比
+### 3.3 3 域架构对比
 
 | 方面 | 旧架构 | 新架构 |
 |------|--------|--------|
-| **数据流** | 插件 → AmaidesuCore → MaiCore → 插件 | 6 层清晰的数据流 |
-| **职责分离** | 混合（核心功能也作为插件） | 6 层职责清晰 |
+| **数据流** | 插件 → AmaidesuCore → MaiCore → 插件 | 3 域清晰的数据流 |
+| **职责分离** | 混合（核心功能也作为插件） | 3 域职责清晰 |
 | **依赖管理** | 服务注册（强依赖） | EventBus（松耦合） |
-| **可替换性** | 决策层固定 | 决策层可替换 |
-| **并发性** | 单线程 | 输入/输出层支持并发 |
+| **可替换性** | 决策域固定 | 决策域可替换 |
+| **并发性** | 单线程 | 输入/输出域支持并发 |
 
 ---
 
@@ -650,20 +643,16 @@ class AmaidesuCore:
 - EventBus（新）：松耦合，通过事件通信，更容易测试和扩展
 - EventBus 支持错误隔离（一个处理器失败不影响其他）
 
-**Q4: 如何理解 6 层架构？**
+**Q4: 如何理解 3 域架构？**
 
 **A**: 想象一条"生产线"：
-- Layer 1：原材料采集（输入）
-- Layer 2：原材料预处理（标准化）
-- Layer 3：标准化零件组装（中间表示）
-- 决策层：决策如何使用这些零件
-- Layer 5：生成使用说明书（理解）
-- Layer 6：生成生产计划（参数）
-- Layer 7：执行生产计划（渲染）
+- Input Domain：原材料采集 → 标准化 → 预处理（输入域）
+- Decision Domain：决策如何使用这些原材料（决策域）
+- Output Domain：生成最终产品 → 并发输出（输出域）
 
-**Q5: 决策层为什么可替换？**
+**Q5: 决策域为什么可替换？**
 
-**A**: 
+**A**:
 - 默认实现：MaiCoreDecisionProvider（使用 MaiCore 的 WebSocket）
 - 可选实现：LocalLLMDecisionProvider（使用本地 LLM）
 - 可选实现：RuleEngineDecisionProvider（规则引擎）
@@ -679,7 +668,7 @@ class AmaidesuCore:
 |--------|------|------|----------|
 | **P0** | `refactor/design/overview.md` | 架构总览，了解整体思路 | 5 分钟 |
 | **P0** | `refactor/design/plugin_system.md` | 插件系统设计，Plugin 和 Provider 接口 | 10 分钟 |
-| **P1** | `refactor/design/layer_refactoring.md` | 6 层架构详细设计 | 10 分钟 |
+| **P1** | `refactor/design/layer_refactoring.md` | 3 域架构详细设计 | 10 分钟 |
 | **P1** | `src/core/plugin.py` | Plugin 接口定义（代码注释） | 5 分钟 |
 
 ### 5.2 学习路径
@@ -692,7 +681,7 @@ class AmaidesuCore:
    - `src/plugins/subtitle/plugin.py` - 简单输出插件
 
 **第二阶段（1 小时）**：
-4. 阅读 `refactor/design/layer_refactoring.md` - 了解 6 层详细设计
+4. 阅读 `refactor/design/layer_refactoring.md` - 了解 3 域详细设计
 5. 查看更多插件示例：
    - `src/plugins/bili_danmaku/plugin.py` - B站弹幕输入
    - `src/plugins/tts/plugin.py` - TTS 输出
@@ -700,16 +689,15 @@ class AmaidesuCore:
 
 **第三阶段（按需）**：
 7. 阅读 `src/core/providers/*.py` - Provider 接口定义
-8. 阅读 `src/perception/` - 输入层实现
-9. 阅读 `src/expression/` - 输出层实现
+8. 阅读 `src/domains/input/` - 输入域实现
+9. 阅读 `src/domains/output/` - 输出域实现
 
 ### 5.3 快速参考
 
-**6 层数据流速查表**：
+**3 域数据流速查表**：
 
 ```
-Layer 1 (输入感知) → Layer 2 (输入标准化) → Layer 3 (中间表示) → 
-Layer 4 决策层 → Layer 5 (表现理解) → Layer 6 (表现生成) → Layer 7 (渲染呈现)
+Input Domain (采集+标准化+预处理) → Decision Domain (决策) → Output Domain (参数生成+渲染)
 ```
 
 **关键接口速查表**：
@@ -741,11 +729,11 @@ OutputProvider.cleanup()
 ### 5 分钟快速了解
 
 **新架构一句话总结**：
-> **6 层清晰数据流 + Provider 标准化接口 + Plugin 聚合 + EventBus 松耦合**
+> **3 域清晰数据流 + Provider 标准化接口 + Plugin 聚合 + EventBus 松耦合**
 
 **核心数据流**：
 ```
-外部输入 → Layer 1 → Layer 2 → Layer 3 → Layer 4 决策层 → Layer 5 → Layer 6 → Layer 7 → 最终输出
+外部输入 → Input Domain → Decision Domain → Output Domain → 最终输出
 ```
 
 **三个核心概念**：
@@ -781,7 +769,7 @@ OutputProvider.cleanup()
 
 **新架构**：
 - AmaidesuCore 简化到 341 行
-- 6 层清晰数据流
+- 3 域清晰数据流
 - Provider 标准化接口（输入/输出/决策）
 - Plugin 聚合多个 Provider
 - EventBus 松耦合通信
@@ -789,13 +777,13 @@ OutputProvider.cleanup()
 **关键改进**：
 - ✅ AmaidesuCore 减少 6.6%
 - ✅ 消除依赖地狱（EventBus 代替服务注册）
-- ✅ 决策层可替换
+- ✅ 决策域可替换
 - ✅ 多 Provider 并发支持
 - ✅ 社区开发者更容易上手
 
 **学习建议**：
 1. 先从简单插件开始（console_input, subtitle）
-2. 理解 6 层数据流
+2. 理解 3 域数据流
 3. 理解 Plugin 和 Provider 接口
 4. 阅读设计文档
 5. 实际运行和调试

@@ -1,7 +1,7 @@
 """
 NormalizedMessage数据类型定义
 
-Layer 2: Normalization的输出格式，表示标准化的消息。
+Input Domain中的Normalization模块输出格式，表示标准化的消息。
 
 核心改进：
 - 保留原始结构化数据（不丢失信息）
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 @dataclass
 class NormalizedMessage:
     """
-    标准化消息（Layer 2: Normalization的输出）
+    标准化消息（Input Domain中Normalization的输出）
 
     核心改进：
     - text: 用于LLM处理的文本描述
@@ -105,6 +105,7 @@ class NormalizedMessage:
         except Exception as e:
             # 记录错误但不抛出异常，使用日志
             import logging
+
             logger = logging.getLogger(__name__)
             logger.error(f"转换为MessageBase失败: {e}", exc_info=True)
             return None

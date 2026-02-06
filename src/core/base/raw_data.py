@@ -1,7 +1,7 @@
 """
 RawData数据类定义
 
-Layer 1(输入感知层)的输出格式，表示从外部获取的原始数据。
+Input Domain(输入域)的输出格式，表示从外部获取的原始数据。
 """
 
 from dataclasses import dataclass, field

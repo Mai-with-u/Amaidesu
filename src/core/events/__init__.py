@@ -1,5 +1,5 @@
 """
-事件系统模块（5层架构）
+事件系统模块（3域架构）
 
 提供类型安全的事件数据契约系统。
 
@@ -48,23 +48,24 @@ from .models import (
 
 def register_core_events() -> None:
     """
-    注册所有核心事件（5层架构）
+    注册所有核心事件（3域架构）
 
     在 AmaidesuCore 初始化时调用。
+
     同时注册新的 Payload 类（推荐使用）和旧的 Event 类（向后兼容）。
     """
-    # Layer 1-2: 输入层
+    # Input Domain: 输入域
     EventRegistry.register_core_event(CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload)
     EventRegistry.register_core_event(CoreEvents.NORMALIZATION_MESSAGE_READY, MessageReadyPayload)
 
-    # Layer 3: 决策层
+    # Decision Domain: 决策域
     EventRegistry.register_core_event(CoreEvents.DECISION_REQUEST, DecisionRequestPayload)
     EventRegistry.register_core_event(CoreEvents.DECISION_INTENT_GENERATED, IntentPayload)
     EventRegistry.register_core_event(CoreEvents.DECISION_RESPONSE_GENERATED, DecisionResponsePayload)
     EventRegistry.register_core_event(CoreEvents.DECISION_PROVIDER_CONNECTED, ProviderConnectedPayload)
     EventRegistry.register_core_event(CoreEvents.DECISION_PROVIDER_DISCONNECTED, ProviderDisconnectedPayload)
 
-    # Layer 4-5: 参数和渲染
+    # Output Domain: 输出域
     EventRegistry.register_core_event(CoreEvents.EXPRESSION_PARAMETERS_GENERATED, ParametersGeneratedPayload)
     EventRegistry.register_core_event(CoreEvents.RENDER_COMPLETED, RenderCompletedPayload)
     EventRegistry.register_core_event(CoreEvents.RENDER_FAILED, RenderFailedPayload)
