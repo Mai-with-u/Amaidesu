@@ -1,7 +1,8 @@
 """
-Perception Layer - 输入感知层和输入标准化层
+Input Domain - 输入域
 
-包含Layer 1(输入感知)和Layer 2(输入标准化)的实现。
+包含数据采集和消息标准化的实现。
+负责将外部数据转换为NormalizedMessage。
 """
 
 from .input_layer import InputLayer

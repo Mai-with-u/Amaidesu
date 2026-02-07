@@ -3,10 +3,8 @@ BiliDanmakuOfficialInputProvider 测试
 """
 
 import pytest
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from src.domains.input.providers import BiliDanmakuOfficialInputProvider
-from src.core.base.raw_data import RawData
 
 
 @pytest.fixture

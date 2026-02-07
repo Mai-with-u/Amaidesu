@@ -55,7 +55,7 @@ async def test_console_input_provider_default_config():
 @pytest.mark.asyncio
 async def test_console_input_provider_text_format():
     """测试普通文本 RawData 格式"""
-    provider = ConsoleInputProvider({})
+    ConsoleInputProvider({})
 
     # 测试普通文本 RawData 格式
     raw_data = RawData(
@@ -145,7 +145,7 @@ async def test_console_input_provider_data_flow():
     event_bus.on("normalization.message_ready", on_message_ready, priority=50)
 
     # 模拟 ConsoleInputProvider 发布 RawData
-    provider = ConsoleInputProvider({})
+    ConsoleInputProvider({})
     raw_data = RawData(
         content="你好，Amaidesu",
         source="console",
@@ -186,7 +186,7 @@ async def test_console_provider_gift_command_flow():
     event_bus.on("normalization.message_ready", on_message_ready, priority=50)
 
     # 模拟礼物命令
-    provider = ConsoleInputProvider({})
+    ConsoleInputProvider({})
     raw_data = RawData(
         content={
             "user_name": "张三",

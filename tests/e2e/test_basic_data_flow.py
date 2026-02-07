@@ -1,9 +1,10 @@
 """
 E2E Test: Basic Data Flow
 
-测试完整的 5 层数据流：
+测试完整的 3 域数据流：
 Input → Normalization → Decision → Expression → Output
 """
+
 import asyncio
 import pytest
 
@@ -17,11 +18,7 @@ from src.core.events.names import CoreEvents
 
 
 @pytest.mark.asyncio
-async def test_complete_data_flow_with_mock_providers(
-    event_bus,
-    sample_raw_data,
-    wait_for_event
-):
+async def test_complete_data_flow_with_mock_providers(event_bus, sample_raw_data, wait_for_event):
     """
     测试完整的数据流：从 RawData 输入到 Intent 生成
 
@@ -39,26 +36,17 @@ async def test_complete_data_flow_with_mock_providers(
 
     # 2. 设置 DecisionManager（使用 mock provider）
     decision_manager = DecisionManager(event_bus, llm_service=None)
-    await decision_manager.setup('mock', {'default_response': '测试回复'})
+    await decision_manager.setup("mock", {"default_response": "测试回复"})
 
     # 3. 等待 normalization.message_ready 事件
-    norm_future = asyncio.create_task(
-        wait_for_event(event_bus, CoreEvents.NORMALIZATION_MESSAGE_READY)
-    )
+    norm_future = asyncio.create_task(wait_for_event(event_bus, CoreEvents.NORMALIZATION_MESSAGE_READY))
 
     # 4. 等待 decision.intent_generated 事件
-    intent_future = asyncio.create_task(
-        wait_for_event(event_bus, CoreEvents.DECISION_INTENT_GENERATED)
-    )
+    intent_future = asyncio.create_task(wait_for_event(event_bus, CoreEvents.DECISION_INTENT_GENERATED))
 
     # 5. 发送 RawData
     await event_bus.emit(
-        CoreEvents.PERCEPTION_RAW_DATA_GENERATED,
-        {
-            "data": sample_raw_data,
-            "source": "test"
-        },
-        source="test"
+        CoreEvents.PERCEPTION_RAW_DATA_GENERATED, {"data": sample_raw_data, "source": "test"}, source="test"
     )
 
     # 6. 验证 normalization.message_ready 事件
@@ -83,11 +71,7 @@ async def test_complete_data_flow_with_mock_providers(
 
 
 @pytest.mark.asyncio
-async def test_input_layer_normalization(
-    event_bus,
-    sample_raw_data,
-    wait_for_event
-):
+async def test_input_layer_normalization(event_bus, sample_raw_data, wait_for_event):
     """
     测试 InputLayer 的标准化功能
 
@@ -102,18 +86,11 @@ async def test_input_layer_normalization(
     await input_layer.setup()
 
     # 等待事件
-    future = asyncio.create_task(
-        wait_for_event(event_bus, CoreEvents.NORMALIZATION_MESSAGE_READY)
-    )
+    future = asyncio.create_task(wait_for_event(event_bus, CoreEvents.NORMALIZATION_MESSAGE_READY))
 
     # 发送 RawData
     await event_bus.emit(
-        CoreEvents.PERCEPTION_RAW_DATA_GENERATED,
-        {
-            "data": sample_raw_data,
-            "source": "test"
-        },
-        source="test"
+        CoreEvents.PERCEPTION_RAW_DATA_GENERATED, {"data": sample_raw_data, "source": "test"}, source="test"
     )
 
     # 验证结果
@@ -130,10 +107,7 @@ async def test_input_layer_normalization(
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_creates_intent(
-    event_bus,
-    wait_for_event
-):
+async def test_decision_provider_creates_intent(event_bus, wait_for_event):
     """
     测试 DecisionProvider 创建 Intent
 
@@ -144,10 +118,10 @@ async def test_decision_provider_creates_intent(
     """
     from src.core.base.normalized_message import NormalizedMessage
     from src.domains.decision.decision_manager import DecisionManager
-    from src.domains.normalization.content import TextContent
+    from src.domains.input.normalization.content import TextContent
 
     decision_manager = DecisionManager(event_bus, llm_service=None)
-    await decision_manager.setup('mock', {'default_response': '默认回复'})
+    await decision_manager.setup("mock", {"default_response": "默认回复"})
 
     # 创建 NormalizedMessage
     normalized = NormalizedMessage(
@@ -156,22 +130,15 @@ async def test_decision_provider_creates_intent(
         source="test_user",
         data_type="text",
         importance=0.8,
-        metadata={"test_key": "test_value"}
+        metadata={"test_key": "test_value"},
     )
 
     # 等待决策事件
-    future = asyncio.create_task(
-        wait_for_event(event_bus, CoreEvents.DECISION_INTENT_GENERATED)
-    )
+    future = asyncio.create_task(wait_for_event(event_bus, CoreEvents.DECISION_INTENT_GENERATED))
 
     # 发送 NormalizedMessage
     await event_bus.emit(
-        CoreEvents.NORMALIZATION_MESSAGE_READY,
-        {
-            "message": normalized,
-            "source": "test"
-        },
-        source="test"
+        CoreEvents.NORMALIZATION_MESSAGE_READY, {"message": normalized, "source": "test"}, source="test"
     )
 
     # 验证结果
@@ -187,10 +154,7 @@ async def test_decision_provider_creates_intent(
 
 
 @pytest.mark.asyncio
-async def test_multiple_sequential_messages(
-    event_bus,
-    wait_for_event
-):
+async def test_multiple_sequential_messages(event_bus, wait_for_event):
     """
     测试多条连续消息的处理
 
@@ -206,12 +170,9 @@ async def test_multiple_sequential_messages(
     await input_layer.setup()
 
     decision_manager = DecisionManager(event_bus, llm_service=None)
-    await decision_manager.setup('mock', {})
+    await decision_manager.setup("mock", {})
 
-    messages = [
-        RawData(content=f"消息{i}", data_type="text", source="test")
-        for i in range(3)
-    ]
+    messages = [RawData(content=f"消息{i}", data_type="text", source="test") for i in range(3)]
 
     received_intents = []
 
@@ -222,11 +183,7 @@ async def test_multiple_sequential_messages(
 
     # 连续发送 3 条消息
     for msg in messages:
-        await event_bus.emit(
-            "perception.raw_data.generated",
-            {"data": msg, "source": "test"},
-            source="test"
-        )
+        await event_bus.emit("perception.raw_data.generated", {"data": msg, "source": "test"}, source="test")
         await asyncio.sleep(0.1)  # 等待处理
 
     # 等待所有消息处理完成

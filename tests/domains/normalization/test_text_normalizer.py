@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 import pytest
 from unittest.mock import Mock, AsyncMock
-from src.domains.normalization.normalizers.text_normalizer import TextNormalizer
+from src.domains.input.normalization.normalizers.text_normalizer import TextNormalizer
 from src.core.base.raw_data import RawData
 from src.core.base.normalized_message import NormalizedMessage
 
@@ -19,6 +19,7 @@ from src.core.base.normalized_message import NormalizedMessage
 # =============================================================================
 # 初始化测试
 # =============================================================================
+
 
 def test_text_normalizer_init_without_pipeline():
     """测试 TextNormalizer 初始化（不使用 PipelineManager）"""
@@ -45,17 +46,13 @@ def test_text_normalizer_init_with_pipeline():
 # 文本数据转换测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_text_normalizer_with_string_content():
     """测试处理字符串内容"""
     normalizer = TextNormalizer()
 
-    raw_data = RawData(
-        content="Hello, Amaidesu!",
-        source="test",
-        data_type="text",
-        metadata={}
-    )
+    raw_data = RawData(content="Hello, Amaidesu!", source="test", data_type="text", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -73,12 +70,7 @@ async def test_text_normalizer_with_dict_content():
     """测试处理字典格式内容"""
     normalizer = TextNormalizer()
 
-    raw_data = RawData(
-        content={"text": "Hello from dict!"},
-        source="test",
-        data_type="text",
-        metadata={}
-    )
+    raw_data = RawData(content={"text": "Hello from dict!"}, source="test", data_type="text", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -92,12 +84,7 @@ async def test_text_normalizer_with_dict_without_text_key():
     """测试处理字典格式内容（没有 text 键）"""
     normalizer = TextNormalizer()
 
-    raw_data = RawData(
-        content={"message": "Hello without text key"},
-        source="test",
-        data_type="text",
-        metadata={}
-    )
+    raw_data = RawData(content={"message": "Hello without text key"}, source="test", data_type="text", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -115,7 +102,7 @@ async def test_text_normalizer_metadata_handling():
         content="Test message",
         source="bili_danmaku",
         data_type="text",
-        metadata={"user": "test_user", "user_id": "12345"}
+        metadata={"user": "test_user", "user_id": "12345"},
     )
 
     result = await normalizer.normalize(raw_data)
@@ -131,6 +118,7 @@ async def test_text_normalizer_metadata_handling():
 # PipelineManager 集成测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_text_normalizer_with_pipeline_processing():
     """测试使用 PipelineManager 处理文本"""
@@ -139,12 +127,7 @@ async def test_text_normalizer_with_pipeline_processing():
 
     normalizer = TextNormalizer(pipeline_manager=mock_pipeline)
 
-    raw_data = RawData(
-        content="Hello",
-        source="test",
-        data_type="text",
-        metadata={}
-    )
+    raw_data = RawData(content="Hello", source="test", data_type="text", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -161,12 +144,7 @@ async def test_text_normalizer_with_pipeline_returns_none():
 
     normalizer = TextNormalizer(pipeline_manager=mock_pipeline)
 
-    raw_data = RawData(
-        content="To be filtered",
-        source="test",
-        data_type="text",
-        metadata={}
-    )
+    raw_data = RawData(content="To be filtered", source="test", data_type="text", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -182,12 +160,7 @@ async def test_text_normalizer_with_pipeline_error():
 
     normalizer = TextNormalizer(pipeline_manager=mock_pipeline)
 
-    raw_data = RawData(
-        content="Original text",
-        source="test",
-        data_type="text",
-        metadata={}
-    )
+    raw_data = RawData(content="Original text", source="test", data_type="text", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -201,17 +174,13 @@ async def test_text_normalizer_with_pipeline_error():
 # 边界情况测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_text_normalizer_empty_text():
     """测试空文本"""
     normalizer = TextNormalizer()
 
-    raw_data = RawData(
-        content="",
-        source="test",
-        data_type="text",
-        metadata={}
-    )
+    raw_data = RawData(content="", source="test", data_type="text", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -227,12 +196,7 @@ async def test_text_normalizer_very_long_text():
 
     long_text = "A" * 10000
 
-    raw_data = RawData(
-        content=long_text,
-        source="test",
-        data_type="text",
-        metadata={}
-    )
+    raw_data = RawData(content=long_text, source="test", data_type="text", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -246,12 +210,7 @@ async def test_text_normalizer_unicode_text():
     """测试 Unicode 文本"""
     normalizer = TextNormalizer()
 
-    raw_data = RawData(
-        content="你好世界 🎉 Test 测试",
-        source="test",
-        data_type="text",
-        metadata={}
-    )
+    raw_data = RawData(content="你好世界 🎉 Test 测试", source="test", data_type="text", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -266,12 +225,7 @@ async def test_text_normalizer_numeric_content():
     """测试数字内容"""
     normalizer = TextNormalizer()
 
-    raw_data = RawData(
-        content=12345,
-        source="test",
-        data_type="text",
-        metadata={}
-    )
+    raw_data = RawData(content=12345, source="test", data_type="text", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -284,12 +238,7 @@ async def test_text_normalizer_none_content():
     """测试 None 内容"""
     normalizer = TextNormalizer()
 
-    raw_data = RawData(
-        content=None,
-        source="test",
-        data_type="text",
-        metadata={}
-    )
+    raw_data = RawData(content=None, source="test", data_type="text", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -306,12 +255,7 @@ async def test_text_normalizer_multiline_text():
 Line 2
 Line 3"""
 
-    raw_data = RawData(
-        content=multiline_text,
-        source="test",
-        data_type="text",
-        metadata={}
-    )
+    raw_data = RawData(content=multiline_text, source="test", data_type="text", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -325,17 +269,13 @@ Line 3"""
 # TextContent 相关测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_text_content_get_importance():
     """测试 TextContent 的重要性计算"""
     normalizer = TextNormalizer()
 
-    raw_data = RawData(
-        content="Test",
-        source="test",
-        data_type="text",
-        metadata={}
-    )
+    raw_data = RawData(content="Test", source="test", data_type="text", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -349,12 +289,7 @@ async def test_text_content_get_display_text():
     """测试 TextContent 的显示文本"""
     normalizer = TextNormalizer()
 
-    raw_data = RawData(
-        content="Display this text",
-        source="test",
-        data_type="text",
-        metadata={}
-    )
+    raw_data = RawData(content="Display this text", source="test", data_type="text", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -367,18 +302,13 @@ async def test_text_content_get_display_text():
 # Timestamp 测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_text_normalizer_preserves_timestamp():
     """测试保留原始时间戳"""
     normalizer = TextNormalizer()
 
-    raw_data = RawData(
-        content="Test",
-        source="test",
-        data_type="text",
-        metadata={},
-        timestamp=1234567890.0
-    )
+    raw_data = RawData(content="Test", source="test", data_type="text", metadata={}, timestamp=1234567890.0)
 
     result = await normalizer.normalize(raw_data)
 
@@ -391,6 +321,7 @@ async def test_text_normalizer_preserves_timestamp():
 # 不同数据源测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_text_normalizer_different_sources():
     """测试不同数据源"""
@@ -399,12 +330,7 @@ async def test_text_normalizer_different_sources():
     sources = ["console", "bili_danmaku", "minecraft", "test_source"]
 
     for source in sources:
-        raw_data = RawData(
-            content=f"Message from {source}",
-            source=source,
-            data_type="text",
-            metadata={}
-        )
+        raw_data = RawData(content=f"Message from {source}", source=source, data_type="text", metadata={})
 
         result = await normalizer.normalize(raw_data)
 

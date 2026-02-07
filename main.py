@@ -186,7 +186,7 @@ async def load_pipeline_manager(config: Dict[str, Any]) -> Optional[PipelineMana
         inbound = len(manager._inbound_pipelines)
         outbound = len(manager._outbound_pipelines)
 
-        # 加载 TextPipeline（Layer 1-2 输入层文本预处理，新架构）
+        # 加载 TextPipeline（Input Domain: 文本预处理）
         await manager.load_text_pipelines(pipeline_load_dir, pipeline_config)
         text_pipeline_count = len(manager._text_pipelines)
 
@@ -250,10 +250,10 @@ async def create_app_components(
     register_core_events()
     logger.info("核心事件已注册到 EventRegistry")
 
-    # 输入Provider管理器 (Layer 1)
+    # 输入Provider管理器 (Input Domain)
     input_provider_manager: Optional[InputProviderManager] = None
     if input_config:
-        logger.info("初始化输入Provider管理器（Layer 1 数据流）...")
+        logger.info("初始化输入Provider管理器（Input Domain）...")
         try:
             input_provider_manager = InputProviderManager(event_bus)
             providers = await input_provider_manager.load_from_config(input_config, config_service=config_service)
@@ -266,16 +266,16 @@ async def create_app_components(
     else:
         logger.info("未检测到输入配置，输入Provider功能将被禁用")
 
-    # 输入层 (Layer 1-2)
-    logger.info("初始化输入层组件（Layer 1-2 数据流）...")
+    # 输入层 (Input Domain)
+    logger.info("初始化输入层组件（Input Domain）...")
     input_layer = InputLayer(event_bus, pipeline_manager=pipeline_manager)
     await input_layer.setup()
-    logger.info("InputLayer 已设置（Layer 1-2）")
+    logger.info("InputLayer 已设置（Input Domain）")
 
-    # 决策层 (Layer 3)
+    # 决策层 (Decision Domain)
     decision_manager: Optional[DecisionManager] = None
     if decision_config:
-        logger.info("初始化决策层组件（Layer 3 数据流）...")
+        logger.info("初始化决策层组件（Decision Domain）...")
         try:
             decision_manager = DecisionManager(event_bus, llm_service)
 
@@ -291,13 +291,13 @@ async def create_app_components(
     else:
         logger.info("未检测到决策配置，决策层功能将被禁用")
 
-    # 数据流协调器 (Layer 4-5)
+    # 数据流协调器 (Output Domain)
     logger.info("初始化数据流协调器...")
     flow_coordinator: Optional[FlowCoordinator] = FlowCoordinator(event_bus) if output_config else None
     if flow_coordinator:
         try:
             await flow_coordinator.setup(output_config, config_service=config_service)
-            logger.info("数据流协调器已设置（Layer 4-5）")
+            logger.info("数据流协调器已设置（Output Domain）")
         except Exception as e:
             logger.error(f"设置数据流协调器失败: {e}", exc_info=True)
             logger.warning("数据流协调器功能不可用，继续启动其他服务")

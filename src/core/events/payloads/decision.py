@@ -77,16 +77,16 @@ class IntentPayload(BaseModel):
     意图生成事件 Payload
 
     事件名：CoreEvents.DECISION_INTENT_GENERATED
-    发布者：DecisionManager（Layer 3）
-    订阅者：ExpressionGenerator（Layer 4）
+    发布者：DecisionManager（Decision Domain）
+    订阅者：ExpressionGenerator（Output Domain）
 
-    **5层架构说明**：
+    **3域架构说明**：
     - DecisionProvider.decide() 直接返回 Intent
     - DecisionManager 接收到 Intent 后发布此事件
     - ExpressionGenerator 订阅此事件并生成渲染参数
 
     **废弃说明**：
-    - 旧架构（7层）中，此事件名为 understanding.intent_generated
+    - 旧架构中，此事件可能名为 understanding.intent_generated
     - 由 UnderstandingLayer 发布，现已废弃
     """
 

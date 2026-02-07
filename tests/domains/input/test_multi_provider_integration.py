@@ -34,8 +34,8 @@ async def test_multiple_providers_concurrent():
     event_bus.on("normalization.message_ready", on_message_ready, priority=50)
 
     # 创建两个 Provider
-    console_provider = ConsoleInputProvider({"user_nickname": "控制台用户A"})
-    mock_provider = MockDanmakuProvider({})
+    ConsoleInputProvider({"user_nickname": "控制台用户A"})
+    MockDanmakuProvider({})
 
     # 模拟同时发布多条消息
     raw_data1 = RawData(

@@ -20,8 +20,8 @@ class ParametersGeneratedPayload(BaseModel):
     表情参数生成事件 Payload
 
     事件名：CoreEvents.EXPRESSION_PARAMETERS_GENERATED
-    发布者：ExpressionGenerator（Layer 4）
-    订阅者：OutputProvider（Layer 5）
+    发布者：ExpressionGenerator (Output Domain: 参数生成)
+    订阅者：OutputProvider (Output Domain: 渲染输出)
 
     表示 ExpressionGenerator 已根据 Intent 生成了渲染参数。
     OutputProvider 订阅此事件并执行实际的渲染输出。
@@ -109,7 +109,7 @@ class RenderCompletedPayload(BaseModel):
     渲染完成事件 Payload
 
     事件名：CoreEvents.RENDER_COMPLETED
-    发布者：OutputProvider（Layer 5）
+    发布者：OutputProvider (Output Domain)
     订阅者：任何需要监控渲染状态的组件
 
     表示 OutputProvider 已成功完成渲染输出。
@@ -141,7 +141,7 @@ class RenderFailedPayload(BaseModel):
     渲染失败事件 Payload
 
     事件名：CoreEvents.RENDER_FAILED
-    发布者：OutputProvider（Layer 5）
+    发布者：OutputProvider (Output Domain)
     订阅者：错误处理器、监控组件
 
     表示 OutputProvider 渲染过程中发生错误。

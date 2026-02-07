@@ -1,5 +1,5 @@
 """
-情感映射器 - Layer 6 表现生成层
+情感映射器 - Output Domain: 参数生成
 
 职责:
 - 将Intent中的EmotionType映射到VTS表情参数

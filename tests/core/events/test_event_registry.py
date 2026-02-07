@@ -10,7 +10,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 import pytest
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import Optional
 
 from src.core.events.registry import EventRegistry

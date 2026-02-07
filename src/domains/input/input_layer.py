@@ -1,7 +1,7 @@
 """
-InputLayer - 输入层协调器
+InputLayer - 输入域协调器
 
-负责协调Layer 1(输入感知)和Layer 2(输入标准化)，建立RawData到NormalizedMessage的数据流。
+负责协调输入Provider和标准化，建立RawData到NormalizedMessage的数据流。
 """
 
 from typing import Dict, Any, Optional, TYPE_CHECKING
@@ -18,9 +18,9 @@ if TYPE_CHECKING:
 
 class InputLayer:
     """
-    输入层协调器（5层架构：Layer 1-2）
+    输入域协调器（3域架构：Input Domain）
 
-    负责协调Layer 1(输入感知)和Layer 2(输入标准化)。
+    负责协调输入Provider和消息标准化。
     接收RawData事件，转换为NormalizedMessage，发布到EventBus。
 
     Pipeline 集成：

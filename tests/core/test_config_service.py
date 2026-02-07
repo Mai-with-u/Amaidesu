@@ -18,8 +18,6 @@ import os
 import pytest
 import tempfile
 import shutil
-from typing import Dict, Any
-from pathlib import Path
 
 from src.services.config.service import ConfigService
 
@@ -929,10 +927,6 @@ field1 = "main_value"  # 主配置的值
 field2 = "main_value2"
 """
 
-    provider_own_config = """
-field1 = "provider_value"  # Provider自身的值（应该被覆盖）
-field3 = "provider_value3"  # Provider独有字段（应该保留）
-"""
 
     main_template_path = os.path.join(temp_base_dir, "config-template.toml")
     with open(main_template_path, "w", encoding="utf-8") as f:

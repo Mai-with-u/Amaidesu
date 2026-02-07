@@ -4,8 +4,7 @@ EmotionMapper 测试
 测试 EmotionMapper 的情感映射功能
 """
 
-import pytest
-from src.domains.parameters.emotion_mapper import EmotionMapper
+from src.domains.output.parameters.emotion_mapper import EmotionMapper
 from src.domains.decision.intent import EmotionType
 
 
@@ -258,7 +257,7 @@ class TestEmotionMapperDefaultEmotionMap:
         default_map = EmotionMapper.DEFAULT_EMOTION_MAP
 
         # 检查所有参数值在合理范围内 [0, 1]
-        for emotion, params in default_map.items():
+        for _emotion, params in default_map.items():
             for param_name, param_value in params.items():
                 assert isinstance(param_name, str)
                 assert isinstance(param_value, (int, float))

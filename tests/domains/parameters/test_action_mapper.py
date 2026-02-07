@@ -4,8 +4,7 @@ ActionMapper 测试
 测试 ActionMapper 的动作映射功能
 """
 
-import pytest
-from src.domains.parameters.action_mapper import ActionMapper
+from src.domains.output.parameters.action_mapper import ActionMapper
 from src.domains.decision.intent import ActionType, IntentAction
 
 
@@ -33,13 +32,7 @@ class TestActionMapperMapActions:
     def test_map_single_emoji_action(self):
         """测试映射单个表情动作"""
         mapper = ActionMapper()
-        actions = [
-            IntentAction(
-                type=ActionType.EMOJI,
-                params={"emoji": "😀"},
-                priority=50
-            )
-        ]
+        actions = [IntentAction(type=ActionType.EMOJI, params={"emoji": "😀"}, priority=50)]
         result = mapper.map_actions(actions)
 
         assert len(result["actions"]) == 1
@@ -49,13 +42,7 @@ class TestActionMapperMapActions:
     def test_map_single_hotkey_action(self):
         """测试映射单个热键动作"""
         mapper = ActionMapper()
-        actions = [
-            IntentAction(
-                type=ActionType.HOTKEY,
-                params={"hotkey_id": "test_hotkey_1"},
-                priority=50
-            )
-        ]
+        actions = [IntentAction(type=ActionType.HOTKEY, params={"hotkey_id": "test_hotkey_1"}, priority=50)]
         result = mapper.map_actions(actions)
 
         assert len(result["hotkeys"]) == 1
@@ -66,9 +53,7 @@ class TestActionMapperMapActions:
         mapper = ActionMapper()
         actions = [
             IntentAction(
-                type=ActionType.EXPRESSION,
-                params={"expressions": {"MouthSmile": 0.8, "EyeOpenLeft": 0.9}},
-                priority=50
+                type=ActionType.EXPRESSION, params={"expressions": {"MouthSmile": 0.8, "EyeOpenLeft": 0.9}}, priority=50
             )
         ]
         result = mapper.map_actions(actions)
@@ -79,21 +64,9 @@ class TestActionMapperMapActions:
         """测试映射多个热键动作"""
         mapper = ActionMapper()
         actions = [
-            IntentAction(
-                type=ActionType.HOTKEY,
-                params={"hotkey_id": "hotkey_1"},
-                priority=50
-            ),
-            IntentAction(
-                type=ActionType.HOTKEY,
-                params={"hotkey_id": "hotkey_2"},
-                priority=60
-            ),
-            IntentAction(
-                type=ActionType.HOTKEY,
-                params={"hotkey_id": "hotkey_3"},
-                priority=40
-            ),
+            IntentAction(type=ActionType.HOTKEY, params={"hotkey_id": "hotkey_1"}, priority=50),
+            IntentAction(type=ActionType.HOTKEY, params={"hotkey_id": "hotkey_2"}, priority=60),
+            IntentAction(type=ActionType.HOTKEY, params={"hotkey_id": "hotkey_3"}, priority=40),
         ]
         result = mapper.map_actions(actions)
 
@@ -107,21 +80,9 @@ class TestActionMapperMapActions:
         """测试映射混合类型的动作"""
         mapper = ActionMapper()
         actions = [
-            IntentAction(
-                type=ActionType.HOTKEY,
-                params={"hotkey_id": "hotkey_1"},
-                priority=50
-            ),
-            IntentAction(
-                type=ActionType.EMOJI,
-                params={"emoji": "😀"},
-                priority=60
-            ),
-            IntentAction(
-                type=ActionType.EXPRESSION,
-                params={"expressions": {"MouthSmile": 0.5}},
-                priority=70
-            ),
+            IntentAction(type=ActionType.HOTKEY, params={"hotkey_id": "hotkey_1"}, priority=50),
+            IntentAction(type=ActionType.EMOJI, params={"emoji": "😀"}, priority=60),
+            IntentAction(type=ActionType.EXPRESSION, params={"expressions": {"MouthSmile": 0.5}}, priority=70),
         ]
         result = mapper.map_actions(actions)
 
@@ -136,11 +97,7 @@ class TestActionMapperHandlers:
     def test_handle_emoji_action(self):
         """测试表情动作处理器"""
         mapper = ActionMapper()
-        action = IntentAction(
-            type=ActionType.EMOJI,
-            params={"emoji": "😀", "size": "large"},
-            priority=50
-        )
+        action = IntentAction(type=ActionType.EMOJI, params={"emoji": "😀", "size": "large"}, priority=50)
         result = {"hotkeys": [], "actions": [], "expressions": {}}
 
         mapper.handle_emoji_action(action, result)
@@ -152,11 +109,7 @@ class TestActionMapperHandlers:
     def test_handle_hotkey_action_with_id(self):
         """测试热键动作处理器（有 ID）"""
         mapper = ActionMapper()
-        action = IntentAction(
-            type=ActionType.HOTKEY,
-            params={"hotkey_id": "test_hotkey"},
-            priority=50
-        )
+        action = IntentAction(type=ActionType.HOTKEY, params={"hotkey_id": "test_hotkey"}, priority=50)
         result = {"hotkeys": [], "actions": [], "expressions": {}}
 
         mapper.handle_hotkey_action(action, result)
@@ -170,7 +123,7 @@ class TestActionMapperHandlers:
         action = IntentAction(
             type=ActionType.HOTKEY,
             params={},  # 没有 hotkey_id
-            priority=50
+            priority=50,
         )
         result = {"hotkeys": [], "actions": [], "expressions": {}}
 
@@ -182,9 +135,7 @@ class TestActionMapperHandlers:
         """测试表情参数动作处理器"""
         mapper = ActionMapper()
         action = IntentAction(
-            type=ActionType.EXPRESSION,
-            params={"expressions": {"MouthSmile": 0.8, "EyeOpenLeft": 0.9}},
-            priority=50
+            type=ActionType.EXPRESSION, params={"expressions": {"MouthSmile": 0.8, "EyeOpenLeft": 0.9}}, priority=50
         )
         result = {"hotkeys": [], "actions": [], "expressions": {}}
 
@@ -195,16 +146,8 @@ class TestActionMapperHandlers:
     def test_handle_expression_action_merge(self):
         """测试表情参数合并"""
         mapper = ActionMapper()
-        action1 = IntentAction(
-            type=ActionType.EXPRESSION,
-            params={"expressions": {"MouthSmile": 0.8}},
-            priority=50
-        )
-        action2 = IntentAction(
-            type=ActionType.EXPRESSION,
-            params={"expressions": {"EyeOpenLeft": 0.9}},
-            priority=60
-        )
+        action1 = IntentAction(type=ActionType.EXPRESSION, params={"expressions": {"MouthSmile": 0.8}}, priority=50)
+        action2 = IntentAction(type=ActionType.EXPRESSION, params={"expressions": {"EyeOpenLeft": 0.9}}, priority=60)
         result = {"hotkeys": [], "actions": [], "expressions": {}}
 
         mapper.handle_expression_action(action1, result)
@@ -219,7 +162,7 @@ class TestActionMapperHandlers:
         action = IntentAction(
             type=ActionType.EXPRESSION,  # 使用存在的类型
             params={"text": "test"},
-            priority=50
+            priority=50,
         )
         result = {"hotkeys": [], "actions": [], "expressions": {}}
 
@@ -234,7 +177,7 @@ class TestActionMapperHandlers:
         action = IntentAction(
             type=ActionType.EXPRESSION,  # 使用存在的类型
             params={"motion": "wave"},
-            priority=50
+            priority=50,
         )
         result = {"hotkeys": [], "actions": [], "expressions": {}}
 
@@ -250,7 +193,7 @@ class TestActionMapperHandlers:
         action = IntentAction(
             type=ActionType.EXPRESSION,  # 使用存在的类型
             params={"custom": "value"},
-            priority=50
+            priority=50,
         )
         result = {"hotkeys": [], "actions": [], "expressions": {}}
 
@@ -268,21 +211,9 @@ class TestActionMapperPriority:
         """测试优先级升序排序（数字越小越优先）"""
         mapper = ActionMapper()
         actions = [
-            IntentAction(
-                type=ActionType.HOTKEY,
-                params={"hotkey_id": "priority_50"},
-                priority=50
-            ),
-            IntentAction(
-                type=ActionType.HOTKEY,
-                params={"hotkey_id": "priority_10"},
-                priority=10
-            ),
-            IntentAction(
-                type=ActionType.HOTKEY,
-                params={"hotkey_id": "priority_90"},
-                priority=90
-            ),
+            IntentAction(type=ActionType.HOTKEY, params={"hotkey_id": "priority_50"}, priority=50),
+            IntentAction(type=ActionType.HOTKEY, params={"hotkey_id": "priority_10"}, priority=10),
+            IntentAction(type=ActionType.HOTKEY, params={"hotkey_id": "priority_90"}, priority=90),
         ]
         result = mapper.map_actions(actions)
 
@@ -295,16 +226,8 @@ class TestActionMapperPriority:
         """测试相同优先级的动作"""
         mapper = ActionMapper()
         actions = [
-            IntentAction(
-                type=ActionType.HOTKEY,
-                params={"hotkey_id": "first"},
-                priority=50
-            ),
-            IntentAction(
-                type=ActionType.HOTKEY,
-                params={"hotkey_id": "second"},
-                priority=50
-            ),
+            IntentAction(type=ActionType.HOTKEY, params={"hotkey_id": "first"}, priority=50),
+            IntentAction(type=ActionType.HOTKEY, params={"hotkey_id": "second"}, priority=50),
         ]
         result = mapper.map_actions(actions)
 
@@ -317,21 +240,9 @@ class TestActionMapperPriority:
         """测试极端优先级值"""
         mapper = ActionMapper()
         actions = [
-            IntentAction(
-                type=ActionType.HOTKEY,
-                params={"hotkey_id": "min"},
-                priority=0
-            ),
-            IntentAction(
-                type=ActionType.HOTKEY,
-                params={"hotkey_id": "max"},
-                priority=100
-            ),
-            IntentAction(
-                type=ActionType.HOTKEY,
-                params={"hotkey_id": "mid"},
-                priority=50
-            ),
+            IntentAction(type=ActionType.HOTKEY, params={"hotkey_id": "min"}, priority=0),
+            IntentAction(type=ActionType.HOTKEY, params={"hotkey_id": "max"}, priority=100),
+            IntentAction(type=ActionType.HOTKEY, params={"hotkey_id": "mid"}, priority=50),
         ]
         result = mapper.map_actions(actions)
 
@@ -346,13 +257,7 @@ class TestActionMapperEdgeCases:
     def test_hotkey_action_with_missing_hotkey_id(self):
         """测试热键动作缺少 hotkey_id"""
         mapper = ActionMapper()
-        actions = [
-            IntentAction(
-                type=ActionType.HOTKEY,
-                params={"other_param": "value"},
-                priority=50
-            )
-        ]
+        actions = [IntentAction(type=ActionType.HOTKEY, params={"other_param": "value"}, priority=50)]
         result = mapper.map_actions(actions)
 
         assert len(result["hotkeys"]) == 0
@@ -360,13 +265,7 @@ class TestActionMapperEdgeCases:
     def test_expression_action_with_empty_expressions(self):
         """测试表情动作的 expressions 参数为空"""
         mapper = ActionMapper()
-        actions = [
-            IntentAction(
-                type=ActionType.EXPRESSION,
-                params={"expressions": {}},
-                priority=50
-            )
-        ]
+        actions = [IntentAction(type=ActionType.EXPRESSION, params={"expressions": {}}, priority=50)]
         result = mapper.map_actions(actions)
 
         assert result["expressions"] == {}
@@ -374,13 +273,7 @@ class TestActionMapperEdgeCases:
     def test_expression_action_with_missing_expressions_key(self):
         """测试表情动作缺少 expressions 参数"""
         mapper = ActionMapper()
-        actions = [
-            IntentAction(
-                type=ActionType.EXPRESSION,
-                params={"other_key": "value"},
-                priority=50
-            )
-        ]
+        actions = [IntentAction(type=ActionType.EXPRESSION, params={"other_key": "value"}, priority=50)]
         result = mapper.map_actions(actions)
 
         # 应该使用默认的空字典
@@ -389,13 +282,7 @@ class TestActionMapperEdgeCases:
     def test_action_with_empty_params(self):
         """测试动作的 params 为空字典"""
         mapper = ActionMapper()
-        actions = [
-            IntentAction(
-                type=ActionType.EMOJI,
-                params={},
-                priority=50
-            )
-        ]
+        actions = [IntentAction(type=ActionType.EMOJI, params={}, priority=50)]
         result = mapper.map_actions(actions)
 
         # 仍应创建动作，只是 params 为空
@@ -414,7 +301,7 @@ class TestActionMapperEdgeCases:
             IntentAction(
                 type=ActionType.BLINK,  # 有处理器
                 params={"duration": 0.5},
-                priority=50
+                priority=50,
             ),
         ]
         result = mapper.map_actions(actions)
@@ -426,16 +313,8 @@ class TestActionMapperEdgeCases:
         """测试负数优先级"""
         mapper = ActionMapper()
         actions = [
-            IntentAction(
-                type=ActionType.HOTKEY,
-                params={"hotkey_id": "negative"},
-                priority=-10
-            ),
-            IntentAction(
-                type=ActionType.HOTKEY,
-                params={"hotkey_id": "positive"},
-                priority=10
-            ),
+            IntentAction(type=ActionType.HOTKEY, params={"hotkey_id": "negative"}, priority=-10),
+            IntentAction(type=ActionType.HOTKEY, params={"hotkey_id": "positive"}, priority=10),
         ]
         result = mapper.map_actions(actions)
 
@@ -447,13 +326,7 @@ class TestActionMapperEdgeCases:
         mapper = ActionMapper()
         actions = []
         for i in range(100):
-            actions.append(
-                IntentAction(
-                    type=ActionType.HOTKEY,
-                    params={"hotkey_id": f"hotkey_{i}"},
-                    priority=i
-                )
-            )
+            actions.append(IntentAction(type=ActionType.HOTKEY, params={"hotkey_id": f"hotkey_{i}"}, priority=i))
         result = mapper.map_actions(actions)
 
         assert len(result["hotkeys"]) == 100
@@ -503,14 +376,12 @@ class TestActionMapperMultipleExpressions:
         mapper = ActionMapper()
         actions = [
             IntentAction(
-                type=ActionType.EXPRESSION,
-                params={"expressions": {"MouthSmile": 0.5, "EyeOpenLeft": 0.5}},
-                priority=50
+                type=ActionType.EXPRESSION, params={"expressions": {"MouthSmile": 0.5, "EyeOpenLeft": 0.5}}, priority=50
             ),
             IntentAction(
                 type=ActionType.EXPRESSION,
                 params={"expressions": {"MouthSmile": 0.8, "EyeOpenRight": 0.9}},
-                priority=60
+                priority=60,
             ),
         ]
         result = mapper.map_actions(actions)
@@ -524,21 +395,9 @@ class TestActionMapperMultipleExpressions:
         """测试表情动作与其他动作的组合"""
         mapper = ActionMapper()
         actions = [
-            IntentAction(
-                type=ActionType.EXPRESSION,
-                params={"expressions": {"MouthSmile": 0.5}},
-                priority=50
-            ),
-            IntentAction(
-                type=ActionType.HOTKEY,
-                params={"hotkey_id": "test_hotkey"},
-                priority=60
-            ),
-            IntentAction(
-                type=ActionType.EMOJI,
-                params={"emoji": "😀"},
-                priority=70
-            ),
+            IntentAction(type=ActionType.EXPRESSION, params={"expressions": {"MouthSmile": 0.5}}, priority=50),
+            IntentAction(type=ActionType.HOTKEY, params={"hotkey_id": "test_hotkey"}, priority=60),
+            IntentAction(type=ActionType.EMOJI, params={"emoji": "😀"}, priority=70),
         ]
         result = mapper.map_actions(actions)
 

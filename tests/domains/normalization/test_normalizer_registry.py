@@ -10,8 +10,8 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 import pytest
-from src.domains.normalization.normalizers import NormalizerRegistry
-from src.domains.normalization.normalizers.base import DataNormalizer
+from src.domains.input.normalization.normalizers import NormalizerRegistry
+from src.domains.input.normalization.normalizers.base import DataNormalizer
 from src.core.base.raw_data import RawData
 from src.core.base.normalized_message import NormalizedMessage
 
@@ -19,6 +19,7 @@ from src.core.base.normalized_message import NormalizedMessage
 # =============================================================================
 # Mock Normalizer 类（用于测试）
 # =============================================================================
+
 
 class MockNormalizer(DataNormalizer):
     """Mock DataNormalizer for testing"""
@@ -31,7 +32,8 @@ class MockNormalizer(DataNormalizer):
         return 50
 
     async def normalize(self, raw_data: RawData):
-        from src.domains.normalization.content import TextContent
+        from src.domains.input.normalization.content import TextContent
+
         content = TextContent(text="mock")
         return NormalizedMessage(
             text="mock",
@@ -55,7 +57,8 @@ class AnotherMockNormalizer(DataNormalizer):
         return 75
 
     async def normalize(self, raw_data: RawData):
-        from src.domains.normalization.content import TextContent
+        from src.domains.input.normalization.content import TextContent
+
         content = TextContent(text="another")
         return NormalizedMessage(
             text="another",
@@ -70,12 +73,14 @@ class AnotherMockNormalizer(DataNormalizer):
 
 class InvalidNormalizer:
     """Not a valid normalizer (doesn't inherit from DataNormalizer)"""
+
     pass
 
 
 # =============================================================================
 # 注册功能测试
 # =============================================================================
+
 
 def test_register_normalizer():
     """测试注册 Normalizer"""
@@ -135,6 +140,7 @@ def test_register_multiple_normalizers():
 # 获取 Normalizer 测试
 # =============================================================================
 
+
 def test_get_normalizer_registered():
     """测试获取已注册的 Normalizer"""
     original_normalizers = NormalizerRegistry._normalizers.copy()
@@ -185,6 +191,7 @@ def test_get_normalizer_returns_new_instance():
 # =============================================================================
 # 获取所有 Normalizer 测试
 # =============================================================================
+
 
 def test_get_all_empty():
     """测试获取所有 Normalizer（空注册表）"""
@@ -248,6 +255,7 @@ def test_get_all_returns_copy():
 # 内置 Normalizer 自动注册测试
 # =============================================================================
 
+
 def test_builtin_normalizers_auto_registered():
     """测试内置 Normalizer 自动注册"""
     all_normalizers = NormalizerRegistry.get_all()
@@ -304,6 +312,7 @@ def test_builtin_normalizers_priority():
 # 边界情况和错误处理测试
 # =============================================================================
 
+
 def test_register_with_empty_data_type():
     """测试使用空字符串作为 data_type 注册"""
     original_normalizers = NormalizerRegistry._normalizers.copy()
@@ -352,12 +361,7 @@ async def test_normalizer_normalize_method():
 
         normalizer = NormalizerRegistry.get_normalizer("mock")
 
-        raw_data = RawData(
-            content="test content",
-            source="test",
-            data_type="mock",
-            metadata={}
-        )
+        raw_data = RawData(content="test content", source="test", data_type="mock", metadata={})
 
         result = await normalizer.normalize(raw_data)
 

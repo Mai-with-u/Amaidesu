@@ -107,7 +107,7 @@ priority = 50
 
 # ========== Provider配置 ==========
 
-# === 输入Provider（Layer 1: Perception） ===
+# === 输入Provider（Input Domain: 输入域） ===
 [providers.input]
 enabled = true
 # 启用的输入Provider列表
@@ -129,7 +129,7 @@ enabled_inputs = [
 # [providers.input.overrides]
 # bili_danmaku.room_id = "123456"
 
-# === 输出Provider（Layer 5: Rendering） ===
+# === 输出Provider（Output Domain: 输出域） ===
 [providers.output]
 enabled = true
 concurrent_rendering = true          # 是否并发渲染到多个Provider
@@ -164,7 +164,7 @@ default_hotkeys_enabled = true
 # vts.vts_host = "192.168.1.100"
 # tts.voice = "zh-CN-YunxiNeural"
 
-# === 决策Provider（Layer 3: Decision） ===
+# === 决策Provider（Decision Domain: 决策域） ===
 [providers.decision]
 enabled = true
 # 当前使用的决策Provider

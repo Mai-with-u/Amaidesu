@@ -3,16 +3,13 @@ E2E Test Helper Functions
 
 提供测试辅助函数，简化测试代码
 """
+
 from src.core.base.normalized_message import NormalizedMessage
 from src.core.base.raw_data import RawData
-from src.domains.normalization.content import TextContent
+from src.domains.input.normalization.content import TextContent
 
 
-def create_normalized_message(
-    text: str,
-    source: str = "test",
-    importance: float = 0.5
-) -> NormalizedMessage:
+def create_normalized_message(text: str, source: str = "test", importance: float = 0.5) -> NormalizedMessage:
     """
     创建 NormalizedMessage 的辅助函数
 
@@ -31,15 +28,11 @@ def create_normalized_message(
         data_type="text",
         importance=importance,
         metadata={},
-        timestamp=None
+        timestamp=None,
     )
 
 
-def create_raw_data(
-    content: str,
-    source: str = "test",
-    data_type: str = "text"
-) -> RawData:
+def create_raw_data(content: str, source: str = "test", data_type: str = "text") -> RawData:
     """
     创建 RawData 的辅助函数
 
@@ -51,9 +44,4 @@ def create_raw_data(
     Returns:
         RawData 实例
     """
-    return RawData(
-        content=content,
-        data_type=data_type,
-        source=source,
-        metadata={}
-    )
+    return RawData(content=content, data_type=data_type, source=source, metadata={})

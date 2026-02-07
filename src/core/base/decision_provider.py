@@ -1,7 +1,7 @@
 """
 决策Provider接口
 
-定义了决策层(Layer 3: Decision)的Provider接口。
+定义了决策域（Decision Domain）的Provider接口。
 DecisionProvider负责将NormalizedMessage转换为决策结果(Intent)。
 
 关键变更:

@@ -6,20 +6,21 @@
 
 import pytest
 import asyncio
-from typing import Dict, Any, Optional
-from unittest.mock import AsyncMock, MagicMock, Mock
+from typing import Optional
 
 from src.domains.decision.intent_parser import IntentParser
-from src.domains.decision.intent import Intent, EmotionType, ActionType, IntentAction
-from src.services.llm_service import LLMResponse
+from src.domains.decision.intent import Intent, EmotionType, ActionType
+from src.services.llm.service import LLMResponse
 
 
 # =============================================================================
 # Mock MessageBase
 # =============================================================================
 
+
 class MockMessageContent:
     """Mock message content"""
+
     def __init__(self, content: str):
         self.content = content
 
@@ -37,6 +38,7 @@ class MockMessageBase:
 # =============================================================================
 # Mock LLMService
 # =============================================================================
+
 
 class MockLLMService:
     """Mock LLMService for testing"""
@@ -64,26 +66,25 @@ class MockLLMService:
         system_message: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 1000,
-        **kwargs
+        **kwargs,
     ) -> LLMResponse:
         """模拟 chat 调用"""
-        self.chat_calls.append({
-            "prompt": prompt,
-            "backend": backend,
-            "system_message": system_message,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        })
+        self.chat_calls.append(
+            {
+                "prompt": prompt,
+                "backend": backend,
+                "system_message": system_message,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+        )
 
         if self._should_fail:
-            return LLMResponse(
-                success=False,
-                error=self._fail_message
-            )
+            return LLMResponse(success=False, error=self._fail_message)
 
         # 默认响应（如果未设置）
         if self._response_content is None:
-            content = '''```json
+            content = """```json
 {
   "emotion": "happy",
   "response_text": "你好！很高兴见到你！",
@@ -92,15 +93,12 @@ class MockLLMService:
     {"type": "expression", "params": {"name": "smile"}, "priority": 60}
   ]
 }
-```'''
+```"""
         else:
             content = self._response_content
 
         return LLMResponse(
-            success=True,
-            content=content,
-            model="mock-model",
-            usage={"prompt_tokens": 50, "completion_tokens": 30}
+            success=True, content=content, model="mock-model", usage={"prompt_tokens": 50, "completion_tokens": 30}
         )
 
 
@@ -117,6 +115,7 @@ class MockLLMServiceWithoutFast:
 # =============================================================================
 # Fixtures
 # =============================================================================
+
 
 @pytest.fixture
 def mock_llm_service():
@@ -161,6 +160,7 @@ def sample_message_sad():
 # 初始化和设置测试
 # =============================================================================
 
+
 class TestIntentParserSetup:
     """测试 IntentParser 初始化和设置"""
 
@@ -201,6 +201,7 @@ class TestIntentParserSetup:
 # =============================================================================
 # 文本提取测试 (_extract_text)
 # =============================================================================
+
 
 class TestTextExtraction:
     """测试文本提取功能"""
@@ -278,16 +279,14 @@ class TestTextExtraction:
 # LLM 解析测试 (_parse_with_llm)
 # =============================================================================
 
+
 class TestLLMParsing:
     """测试 LLM 解析功能"""
 
     @pytest.mark.asyncio
     async def test_parse_with_llm_success(self, intent_parser, sample_message):
         """测试成功的 LLM 解析"""
-        intent = await intent_parser._parse_with_llm(
-            "你好，很高兴见到大家！",
-            sample_message
-        )
+        intent = await intent_parser._parse_with_llm("你好，很高兴见到大家！", sample_message)
 
         assert isinstance(intent, Intent)
         assert intent.original_text == "你好，很高兴见到大家！"
@@ -301,7 +300,7 @@ class TestLLMParsing:
     @pytest.mark.asyncio
     async def test_parse_with_llm_custom_response(self, intent_parser, sample_message):
         """测试自定义 LLM 响应"""
-        custom_response = '''```json
+        custom_response = """```json
 {
   "emotion": "sad",
   "response_text": "抱歉听到这个消息",
@@ -309,13 +308,10 @@ class TestLLMParsing:
     {"type": "expression", "params": {"name": "sad"}, "priority": 70}
   ]
 }
-```'''
+```"""
         intent_parser.llm_service.set_response(custom_response)
 
-        intent = await intent_parser._parse_with_llm(
-            "今天很难过",
-            sample_message
-        )
+        intent = await intent_parser._parse_with_llm("今天很难过", sample_message)
 
         assert intent.emotion == EmotionType.SAD
         assert intent.response_text == "抱歉听到这个消息"
@@ -326,17 +322,14 @@ class TestLLMParsing:
     @pytest.mark.asyncio
     async def test_parse_with_llm_json_without_markdown(self, intent_parser, sample_message):
         """测试 LLM 返回不带 markdown 的 JSON"""
-        custom_response = '''{
+        custom_response = """{
   "emotion": "surprised",
   "response_text": "哇！真的吗？",
   "actions": []
-}'''
+}"""
         intent_parser.llm_service.set_response(custom_response)
 
-        intent = await intent_parser._parse_with_llm(
-            "真的吗？",
-            sample_message
-        )
+        intent = await intent_parser._parse_with_llm("真的吗？", sample_message)
 
         assert intent.emotion == EmotionType.SURPRISED
         assert intent.response_text == "哇！真的吗？"
@@ -360,16 +353,13 @@ class TestLLMParsing:
     @pytest.mark.asyncio
     async def test_parse_with_llm_missing_fields(self, intent_parser, sample_message):
         """测试 LLM 返回缺少必要字段"""
-        intent_parser.llm_service.set_response('''```json
+        intent_parser.llm_service.set_response("""```json
 {
   "emotion": "neutral"
 }
-```''')
+```""")
 
-        intent = await intent_parser._parse_with_llm(
-            "测试",
-            sample_message
-        )
+        intent = await intent_parser._parse_with_llm("测试", sample_message)
 
         # 应该使用默认值
         assert intent.emotion == EmotionType.NEUTRAL
@@ -392,7 +382,7 @@ class TestLLMParsing:
     @pytest.mark.asyncio
     async def test_parse_with_llm_complex_actions(self, intent_parser, sample_message):
         """测试解析复杂动作"""
-        custom_response = '''```json
+        custom_response = """```json
 {
   "emotion": "happy",
   "response_text": "谢谢！",
@@ -402,7 +392,7 @@ class TestLLMParsing:
     {"type": "nod", "params": {"count": 3}, "priority": 50}
   ]
 }
-```'''
+```"""
         intent_parser.llm_service.set_response(custom_response)
 
         intent = await intent_parser._parse_with_llm("谢谢大家！", sample_message)
@@ -419,6 +409,7 @@ class TestLLMParsing:
 # =============================================================================
 # 规则引擎解析测试 (_parse_with_rules)
 # =============================================================================
+
 
 class TestRuleBasedParsing:
     """测试规则引擎解析功能"""
@@ -439,13 +430,7 @@ class TestRuleBasedParsing:
         """测试开心关键词识别"""
         parser = IntentParser(mock_llm_service)
 
-        happy_texts = [
-            "我今天好开心啊",
-            "太高兴了！",
-            "哈哈哈真好笑",
-            "今天很快乐",
-            "笑死我了"
-        ]
+        happy_texts = ["我今天好开心啊", "太高兴了！", "哈哈哈真好笑", "今天很快乐", "笑死我了"]
 
         for text in happy_texts:
             message = MockMessageBase(text)
@@ -458,12 +443,7 @@ class TestRuleBasedParsing:
         """测试悲伤关键词识别"""
         parser = IntentParser(mock_llm_service)
 
-        sad_texts = [
-            "我好难过",
-            "太伤心了",
-            "想哭一场",
-            "😢😭"
-        ]
+        sad_texts = ["我好难过", "太伤心了", "想哭一场", "😢😭"]
 
         for text in sad_texts:
             message = MockMessageBase(text)
@@ -476,11 +456,7 @@ class TestRuleBasedParsing:
         """测试生气关键词识别"""
         parser = IntentParser(mock_llm_service)
 
-        angry_texts = [
-            "我很生气",
-            "太愤怒了",
-            "😠😡"
-        ]
+        angry_texts = ["我很生气", "太愤怒了", "😠😡"]
 
         for text in angry_texts:
             message = MockMessageBase(text)
@@ -493,12 +469,7 @@ class TestRuleBasedParsing:
         """测试惊讶关键词识别"""
         parser = IntentParser(mock_llm_service)
 
-        surprised_texts = [
-            "太惊讶了",
-            "好意外",
-            "哇！真的吗？",
-            "😲😱"
-        ]
+        surprised_texts = ["太惊讶了", "好意外", "哇！真的吗？", "😲😱"]
 
         for text in surprised_texts:
             message = MockMessageBase(text)
@@ -511,12 +482,7 @@ class TestRuleBasedParsing:
         """测试喜爱关键词识别"""
         parser = IntentParser(mock_llm_service)
 
-        love_texts = [
-            "我好爱你",
-            "太喜欢了",
-            "❤️💕",
-            "😍"
-        ]
+        love_texts = ["我好爱你", "太喜欢了", "❤️💕", "😍"]
 
         for text in love_texts:
             message = MockMessageBase(text)
@@ -586,11 +552,7 @@ class TestRuleBasedParsing:
         """测试点头动作识别"""
         parser = IntentParser(mock_llm_service)
 
-        nod_texts = [
-            "是的",
-            "对没错",
-            "嗯嗯"
-        ]
+        nod_texts = ["是的", "对没错", "嗯嗯"]
 
         for text in nod_texts:
             message = MockMessageBase(text)
@@ -658,6 +620,7 @@ class TestRuleBasedParsing:
 # 默认 Intent 创建测试 (_create_default_intent)
 # =============================================================================
 
+
 class TestDefaultIntent:
     """测试默认 Intent 创建"""
 
@@ -689,6 +652,7 @@ class TestDefaultIntent:
 # =============================================================================
 # 主解析流程测试 (parse)
 # =============================================================================
+
 
 class TestParseMain:
     """测试主解析流程"""
@@ -775,6 +739,7 @@ class TestParseMain:
 # 集成测试
 # =============================================================================
 
+
 class TestIntegration:
     """集成测试"""
 
@@ -827,10 +792,7 @@ class TestIntegration:
     @pytest.mark.asyncio
     async def test_concurrent_parses(self, intent_parser):
         """测试并发解析"""
-        messages = [
-            MockMessageBase(f"消息{i}")
-            for i in range(10)
-        ]
+        messages = [MockMessageBase(f"消息{i}") for i in range(10)]
 
         tasks = [intent_parser.parse(msg) for msg in messages]
         intents = await asyncio.gather(*tasks)
@@ -842,6 +804,7 @@ class TestIntegration:
 # =============================================================================
 # 边界情况测试
 # =============================================================================
+
 
 class TestEdgeCases:
     """测试边界情况"""
@@ -891,7 +854,7 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_llm_response_with_extra_whitespace(self, intent_parser):
         """测试 LLM 响应包含额外空白"""
-        intent_parser.llm_service.set_response('''
+        intent_parser.llm_service.set_response("""
 
 ```json
 {
@@ -901,7 +864,7 @@ class TestEdgeCases:
 }
 ```
 
-''')
+""")
 
         message = MockMessageBase("测试")
         intent = await intent_parser.parse(message)
@@ -911,13 +874,13 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_llm_response_with_comments(self, intent_parser):
         """测试 LLM 响应包含注释（应该失败）"""
-        intent_parser.llm_service.set_response('''```json
+        intent_parser.llm_service.set_response("""```json
 {
   "emotion": "happy",
   "response_text": "测试",
   "actions": []  // 这是注释
 }
-```''')
+```""")
 
         message = MockMessageBase("测试")
 

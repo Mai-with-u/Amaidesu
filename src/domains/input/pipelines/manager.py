@@ -63,7 +63,7 @@ class PipelineException(Exception):
 @runtime_checkable
 class TextPipeline(Protocol):
     """
-    文本处理管道协议（5层架构：Layer 1-2 输入层的文本预处理）
+    文本处理管道协议（3域架构：Input Domain 的文本预处理）
 
     用于在 InputLayer (RawData → NormalizedMessage) 中处理文本，
     如限流、敏感词过滤、文本清理、相似消息过滤等。
@@ -251,7 +251,7 @@ class PipelineManager:
     """
     管道管理器，负责加载、排序和执行管道。
 
-    5层架构中的Pipeline位置：
+    3域架构中的Pipeline位置：
 
     **MessagePipeline（旧架构，保持向后兼容）**：
         - 处理 MessageBase（MaiCore 格式）
@@ -260,7 +260,7 @@ class PipelineManager:
 
     **TextPipeline（新架构，推荐使用）**：
         - 处理 text + metadata
-        - 用于 InputLayer (Layer 1-2) 中的文本预处理
+        - 用于 InputLayer (Input Domain: 输入域) 中的文本预处理
         - 在 RawData → NormalizedMessage 转换过程中处理文本
         - 示例：限流、相似文本过滤、敏感词过滤
     """
@@ -412,7 +412,7 @@ class PipelineManager:
         """
         按优先级顺序通过所有启用的 TextPipeline 处理文本
 
-        这是 InputLayer (Layer 1-2) 中的文本预处理入口点。
+        这是 InputLayer (Input Domain: 输入域) 中的文本预处理入口点。
         在 RawData → NormalizedMessage 转换过程中调用。
 
         Args:
@@ -673,10 +673,10 @@ class PipelineManager:
         """
         扫描并加载 TextPipeline 类型的管道。
 
-        TextPipeline 用于 InputLayer (Layer 1-2) 中的文本预处理。
+        TextPipeline 用于 InputLayer (Input Domain) 中的文本预处理。
         与 MessagePipeline 不同，TextPipeline 不区分 inbound/outbound，统一按 priority 顺序执行。
 
-        5层架构中的位置：
+        3域架构中的位置：
             - InputLayer.normalize() 方法内部调用
             - 在 RawData → NormalizedMessage 转换过程中处理文本
             - 示例：限流、相似文本过滤、敏感词过滤

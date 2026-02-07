@@ -10,7 +10,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 import pytest
-from src.domains.normalization.normalizers.superchat_normalizer import SuperChatNormalizer
+from src.domains.input.normalization.normalizers.superchat_normalizer import SuperChatNormalizer
 from src.core.base.raw_data import RawData
 from src.core.base.normalized_message import NormalizedMessage
 
@@ -18,6 +18,7 @@ from src.core.base.normalized_message import NormalizedMessage
 # =============================================================================
 # 初始化测试
 # =============================================================================
+
 
 def test_superchat_normalizer_init():
     """测试 SuperChatNormalizer 初始化"""
@@ -34,20 +35,17 @@ def test_superchat_normalizer_init():
 # SuperChat 数据解析测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_superchat_normalizer_basic_superchat():
     """测试基本醒目留言解析"""
     normalizer = SuperChatNormalizer()
 
     raw_data = RawData(
-        content={
-            "user": "张三",
-            "content": "感谢主播的精彩直播！",
-            "price": 10.0
-        },
+        content={"user": "张三", "content": "感谢主播的精彩直播！", "price": 10.0},
         source="bili_danmaku",
         data_type="superchat",
-        metadata={}
+        metadata={},
     )
 
     result = await normalizer.normalize(raw_data)
@@ -69,15 +67,10 @@ async def test_superchat_normalizer_with_user_id():
     normalizer = SuperChatNormalizer()
 
     raw_data = RawData(
-        content={
-            "user": "李四",
-            "user_id": "123456",
-            "content": "继续加油！",
-            "price": 50.0
-        },
+        content={"user": "李四", "user_id": "123456", "content": "继续加油！", "price": 50.0},
         source="bili_danmaku",
         data_type="superchat",
-        metadata={}
+        metadata={},
     )
 
     result = await normalizer.normalize(raw_data)
@@ -94,20 +87,17 @@ async def test_superchat_normalizer_with_user_id():
 # SuperChatContent 创建测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_superchat_content_get_display_text():
     """测试 SuperChatContent 的显示文本"""
     normalizer = SuperChatNormalizer()
 
     raw_data = RawData(
-        content={
-            "user": "张三",
-            "content": "支持主播！",
-            "price": 30.0
-        },
+        content={"user": "张三", "content": "支持主播！", "price": 30.0},
         source="bili_danmaku",
         data_type="superchat",
-        metadata={}
+        metadata={},
     )
 
     result = await normalizer.normalize(raw_data)
@@ -124,14 +114,7 @@ async def test_superchat_content_importance_calculation():
 
     # 低金额醒目留言
     raw_data1 = RawData(
-        content={
-            "user": "用户A",
-            "content": "测试",
-            "price": 10.0
-        },
-        source="test",
-        data_type="superchat",
-        metadata={}
+        content={"user": "用户A", "content": "测试", "price": 10.0}, source="test", data_type="superchat", metadata={}
     )
 
     result1 = await normalizer.normalize(raw_data1)
@@ -140,14 +123,7 @@ async def test_superchat_content_importance_calculation():
 
     # 高金额醒目留言
     raw_data2 = RawData(
-        content={
-            "user": "用户B",
-            "content": "测试",
-            "price": 80.0
-        },
-        source="test",
-        data_type="superchat",
-        metadata={}
+        content={"user": "用户B", "content": "测试", "price": 80.0}, source="test", data_type="superchat", metadata={}
     )
 
     result2 = await normalizer.normalize(raw_data2)
@@ -163,14 +139,7 @@ async def test_superchat_content_requires_special_handling():
 
     # 低金额（<= 50元，不需要特殊处理）
     raw_data1 = RawData(
-        content={
-            "user": "用户A",
-            "content": "测试",
-            "price": 30.0
-        },
-        source="test",
-        data_type="superchat",
-        metadata={}
+        content={"user": "用户A", "content": "测试", "price": 30.0}, source="test", data_type="superchat", metadata={}
     )
 
     result1 = await normalizer.normalize(raw_data1)
@@ -178,14 +147,7 @@ async def test_superchat_content_requires_special_handling():
 
     # 高金额（> 50元，需要特殊处理）
     raw_data2 = RawData(
-        content={
-            "user": "用户B",
-            "content": "测试",
-            "price": 60.0
-        },
-        source="test",
-        data_type="superchat",
-        metadata={}
+        content={"user": "用户B", "content": "测试", "price": 60.0}, source="test", data_type="superchat", metadata={}
     )
 
     result2 = await normalizer.normalize(raw_data2)
@@ -196,30 +158,27 @@ async def test_superchat_content_requires_special_handling():
 # 各种价格层级测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_superchat_normalizer_price_levels():
     """测试不同价格层级的醒目留言"""
     normalizer = SuperChatNormalizer()
 
     test_cases = [
-        (3.0, 0.03),    # 3元 = 0.03 重要性
-        (10.0, 0.1),    # 10元 = 0.1 重要性
-        (20.0, 0.2),    # 20元 = 0.2 重要性
-        (50.0, 0.5),    # 50元 = 0.5 重要性
-        (100.0, 1.0),   # 100元 = 1.0 重要性（上限）
-        (200.0, 1.0),   # 200元 = 1.0 重要性（上限）
+        (3.0, 0.03),  # 3元 = 0.03 重要性
+        (10.0, 0.1),  # 10元 = 0.1 重要性
+        (20.0, 0.2),  # 20元 = 0.2 重要性
+        (50.0, 0.5),  # 50元 = 0.5 重要性
+        (100.0, 1.0),  # 100元 = 1.0 重要性（上限）
+        (200.0, 1.0),  # 200元 = 1.0 重要性（上限）
     ]
 
     for price, expected_importance in test_cases:
         raw_data = RawData(
-            content={
-                "user": "用户",
-                "content": f"{price}元醒目留言",
-                "price": price
-            },
+            content={"user": "用户", "content": f"{price}元醒目留言", "price": price},
             source="test",
             data_type="superchat",
-            metadata={}
+            metadata={},
         )
 
         result = await normalizer.normalize(raw_data)
@@ -235,14 +194,10 @@ async def test_superchat_normalizer_free_superchat():
     normalizer = SuperChatNormalizer()
 
     raw_data = RawData(
-        content={
-            "user": "用户",
-            "content": "免费醒目留言",
-            "price": 0.0
-        },
+        content={"user": "用户", "content": "免费醒目留言", "price": 0.0},
         source="test",
         data_type="superchat",
-        metadata={}
+        metadata={},
     )
 
     result = await normalizer.normalize(raw_data)
@@ -258,14 +213,10 @@ async def test_superchat_normalizer_small_amount():
     normalizer = SuperChatNormalizer()
 
     raw_data = RawData(
-        content={
-            "user": "用户",
-            "content": "小额醒目留言",
-            "price": 0.5
-        },
+        content={"user": "用户", "content": "小额醒目留言", "price": 0.5},
         source="test",
         data_type="superchat",
-        metadata={}
+        metadata={},
     )
 
     result = await normalizer.normalize(raw_data)
@@ -279,17 +230,13 @@ async def test_superchat_normalizer_small_amount():
 # 边界情况和错误处理测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_superchat_normalizer_non_dict_content():
     """测试非字典内容（应该返回 None）"""
     normalizer = SuperChatNormalizer()
 
-    raw_data = RawData(
-        content="Not a dict",
-        source="test",
-        data_type="superchat",
-        metadata={}
-    )
+    raw_data = RawData(content="Not a dict", source="test", data_type="superchat", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -305,7 +252,7 @@ async def test_superchat_normalizer_missing_fields():
         content={},  # 空字典
         source="test",
         data_type="superchat",
-        metadata={}
+        metadata={},
     )
 
     result = await normalizer.normalize(raw_data)
@@ -324,12 +271,12 @@ async def test_superchat_normalizer_partial_fields():
     raw_data = RawData(
         content={
             "user": "张三",
-            "content": "只有留言内容"
+            "content": "只有留言内容",
             # 缺少 price
         },
         source="test",
         data_type="superchat",
-        metadata={}
+        metadata={},
     )
 
     result = await normalizer.normalize(raw_data)
@@ -346,14 +293,7 @@ async def test_superchat_normalizer_negative_price():
     normalizer = SuperChatNormalizer()
 
     raw_data = RawData(
-        content={
-            "user": "用户",
-            "content": "测试",
-            "price": -10.0
-        },
-        source="test",
-        data_type="superchat",
-        metadata={}
+        content={"user": "用户", "content": "测试", "price": -10.0}, source="test", data_type="superchat", metadata={}
     )
 
     result = await normalizer.normalize(raw_data)
@@ -370,14 +310,7 @@ async def test_superchat_normalizer_empty_content():
     normalizer = SuperChatNormalizer()
 
     raw_data = RawData(
-        content={
-            "user": "用户",
-            "content": "",
-            "price": 30.0
-        },
-        source="test",
-        data_type="superchat",
-        metadata={}
+        content={"user": "用户", "content": "", "price": 30.0}, source="test", data_type="superchat", metadata={}
     )
 
     result = await normalizer.normalize(raw_data)
@@ -395,14 +328,10 @@ async def test_superchat_normalizer_very_long_content():
     long_content = "这是一条非常长的醒目留言内容" * 100
 
     raw_data = RawData(
-        content={
-            "user": "用户",
-            "content": long_content,
-            "price": 50.0
-        },
+        content={"user": "用户", "content": long_content, "price": 50.0},
         source="test",
         data_type="superchat",
-        metadata={}
+        metadata={},
     )
 
     result = await normalizer.normalize(raw_data)
@@ -416,24 +345,18 @@ async def test_superchat_normalizer_very_long_content():
 # 元数据测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_superchat_normalizer_metadata_preservation():
     """测试保留原始元数据"""
     normalizer = SuperChatNormalizer()
 
     raw_data = RawData(
-        content={
-            "user": "张三",
-            "content": "感谢！",
-            "price": 50.0
-        },
+        content={"user": "张三", "content": "感谢！", "price": 50.0},
         source="bili_danmaku",
         data_type="superchat",
-        metadata={
-            "room_id": "12345",
-            "extra_info": "test"
-        },
-        timestamp=1234567890.0
+        metadata={"room_id": "12345", "extra_info": "test"},
+        timestamp=1234567890.0,
     )
 
     result = await normalizer.normalize(raw_data)
@@ -450,6 +373,7 @@ async def test_superchat_normalizer_metadata_preservation():
 # 不同数据源测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_superchat_normalizer_different_sources():
     """测试不同数据源"""
@@ -459,14 +383,10 @@ async def test_superchat_normalizer_different_sources():
 
     for source in sources:
         raw_data = RawData(
-            content={
-                "user": "用户",
-                "content": f"来自{source}的醒目留言",
-                "price": 30.0
-            },
+            content={"user": "用户", "content": f"来自{source}的醒目留言", "price": 30.0},
             source=source,
             data_type="superchat",
-            metadata={}
+            metadata={},
         )
 
         result = await normalizer.normalize(raw_data)
@@ -480,20 +400,17 @@ async def test_superchat_normalizer_different_sources():
 # 特殊字符测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_superchat_normalizer_unicode_content():
     """测试 Unicode 留言内容"""
     normalizer = SuperChatNormalizer()
 
     raw_data = RawData(
-        content={
-            "user": "用户",
-            "content": "感谢支持！🎉❤️ 加油！💪",
-            "price": 30.0
-        },
+        content={"user": "用户", "content": "感谢支持！🎉❤️ 加油！💪", "price": 30.0},
         source="test",
         data_type="superchat",
-        metadata={}
+        metadata={},
     )
 
     result = await normalizer.normalize(raw_data)
@@ -514,14 +431,10 @@ async def test_superchat_normalizer_multiline_content():
 第三行"""
 
     raw_data = RawData(
-        content={
-            "user": "用户",
-            "content": multiline_content,
-            "price": 30.0
-        },
+        content={"user": "用户", "content": multiline_content, "price": 30.0},
         source="test",
         data_type="superchat",
-        metadata={}
+        metadata={},
     )
 
     result = await normalizer.normalize(raw_data)

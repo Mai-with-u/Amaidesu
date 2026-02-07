@@ -8,15 +8,13 @@ import asyncio
 import sys
 import os
 from typing import Optional, Dict, Any
-from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 import pytest
 from src.core.event_bus import EventBus
 from src.core.base.raw_data import RawData
-from src.core.base.input_provider import InputProvider
-from src.domains.input.input_provider_manager import InputProviderManager, ProviderStats
+from src.domains.input.input_provider_manager import InputProviderManager
 from tests.mocks.mock_input_provider import MockInputProvider
 
 
@@ -149,7 +147,7 @@ async def test_start_all_providers_success(manager, sample_providers):
     stats = await manager.get_stats()
     assert len(stats) == 3
 
-    for provider_name, provider_stats in stats.items():
+    for _provider_name, provider_stats in stats.items():
         # 由于 auto_exit，provider 应该已经停止
         assert provider_stats["started_at"] is not None
         assert provider_stats["message_count"] == 0
@@ -232,7 +230,7 @@ async def test_stop_all_providers_success(manager, sample_providers):
 
     # 验证统计信息
     stats = await manager.get_stats()
-    for provider_name, provider_stats in stats.items():
+    for _provider_name, provider_stats in stats.items():
         assert provider_stats["is_running"] is False
         assert provider_stats["stopped_at"] is not None
         assert provider_stats["uptime"] is not None
@@ -278,7 +276,7 @@ async def test_stop_all_providers_with_cleanup_failures(manager):
 
     # 验证所有 Provider 的统计信息都标记为停止
     stats = await manager.get_stats()
-    for provider_name, provider_stats in stats.items():
+    for _provider_name, provider_stats in stats.items():
         assert provider_stats["is_running"] is False
         assert provider_stats["stopped_at"] is not None
 
@@ -310,7 +308,7 @@ async def test_get_stats_after_start(manager, sample_providers):
     stats = await manager.get_stats()
 
     assert len(stats) == 3
-    for provider_name, provider_stats in stats.items():
+    for _provider_name, provider_stats in stats.items():
         assert "name" in provider_stats
         assert "started_at" in provider_stats
         assert "stopped_at" in provider_stats
@@ -332,7 +330,7 @@ async def test_get_stats_after_stop(manager, sample_providers):
 
     stats = await manager.get_stats()
 
-    for provider_name, provider_stats in stats.items():
+    for _provider_name, provider_stats in stats.items():
         assert provider_stats["is_running"] is False
         assert provider_stats["stopped_at"] is not None
         assert provider_stats["uptime"] is not None

@@ -1,8 +1,9 @@
 """
 测试Manager与ConfigService的集成
 """
+
 import pytest
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import Mock, patch
 from src.domains.input.input_provider_manager import InputProviderManager
 from src.domains.output.manager import OutputProviderManager
 from src.core.event_bus import EventBus
@@ -67,12 +68,7 @@ async def test_input_provider_manager_fallback(event_bus):
     config = {
         "enabled": True,
         "inputs": ["console"],  # 旧配置格式
-        "inputs": {
-            "console": {
-                "type": "console",
-                "enabled": True
-            }
-        }
+        "providers": {"console": {"type": "console", "enabled": True}},
     }
 
     # Mock ProviderRegistry.create_input
@@ -98,7 +94,7 @@ async def test_output_provider_manager_with_config_service(config_service):
         "enabled": True,
         "enabled_outputs": ["subtitle"],
         "concurrent_rendering": True,
-        "error_handling": "continue"
+        "error_handling": "continue",
     }
 
     # Mock _create_provider方法
@@ -133,12 +129,7 @@ async def test_output_provider_manager_fallback():
     config = {
         "enabled": True,
         "enabled_outputs": ["subtitle"],
-        "outputs": {
-            "subtitle": {
-                "type": "subtitle",
-                "enabled": True
-            }
-        }
+        "outputs": {"subtitle": {"type": "subtitle", "enabled": True}},
     }
 
     # Mock _create_provider方法
@@ -171,10 +162,7 @@ async def test_input_provider_supports_old_and_new_config_format(event_bus):
         mock_registry.create_input.return_value = mock_provider
 
         # 测试新格式（enabled_inputs）
-        new_config = {
-            "enabled": True,
-            "enabled_inputs": ["console_input"]
-        }
+        new_config = {"enabled": True, "enabled_inputs": ["console_input"]}
         providers_new = await manager.load_from_config(new_config, config_service=None)
         assert len(providers_new) == 1
 
@@ -182,31 +170,18 @@ async def test_input_provider_supports_old_and_new_config_format(event_bus):
         manager._providers = []
 
         # 测试旧格式（inputs）
-        old_config = {
-            "enabled": True,
-            "inputs": ["console"],
-            "inputs": {
-                "console": {
-                    "type": "console"
-                }
-            }
-        }
+        old_config = {"enabled": True, "inputs": ["console"], "providers": {"console": {"type": "console"}}}
         providers_old = await manager.load_from_config(old_config, config_service=None)
         assert len(providers_old) == 1
 
 
 def test_enabled_inputs_field_takes_precedence(event_bus):
     """测试enabled_inputs字段优先于inputs字段"""
-    manager = InputProviderManager(event_bus)
-
     config_with_both = {
         "enabled": True,
         "inputs": ["old_format"],
         "enabled_inputs": ["new_format"],
-        "inputs": {
-            "old_format": {"type": "old"},
-            "new_format": {"type": "new"}
-        }
+        "providers": {"old_format": {"type": "old"}, "new_format": {"type": "new"}},
     }
 
     # 读取配置时应该优先使用enabled_inputs

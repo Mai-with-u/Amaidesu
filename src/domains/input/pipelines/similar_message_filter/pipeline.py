@@ -4,8 +4,8 @@
 过滤短时间内内容高度相似的重复消息，减少消息冗余。
 适用于直播弹幕、评论等场景。
 
-5层架构中的位置：
-- Layer 1-2 (InputLayer): 在 RawData → NormalizedMessage 转换中处理文本
+3域架构中的位置：
+- InputLayer (Input Domain): 在 RawData → NormalizedMessage 转换中处理文本
 - 在 InputLayer.normalize() 方法中调用
 - 用于过滤相似输入消息
 

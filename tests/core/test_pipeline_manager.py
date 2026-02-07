@@ -14,14 +14,13 @@ PipelineManager 单元测试
 import asyncio
 import pytest
 from typing import Optional, Dict, Any
-from unittest.mock import Mock, MagicMock, AsyncMock
+from unittest.mock import Mock
 from maim_message import MessageBase, BaseMessageInfo, Seg, UserInfo
 from maim_message.message_base import FormatInfo
 
 from src.domains.input.pipelines.manager import (
     PipelineManager,
     MessagePipeline,
-    TextPipeline,
     TextPipelineBase,
     PipelineErrorHandling,
     PipelineStats,
@@ -277,7 +276,7 @@ async def test_process_outbound_message_multiple_pipelines(pipeline_manager: Pip
     pipeline_manager._register_pipeline(pipeline2, "outbound")
     pipeline_manager._register_pipeline(pipeline3, "outbound")
 
-    result = await pipeline_manager.process_outbound_message(sample_message)
+    await pipeline_manager.process_outbound_message(sample_message)
 
     # 验证所有管道都处理了消息
     assert len(pipeline1.processed_messages) == 1
@@ -481,7 +480,7 @@ async def test_process_text_multiple_pipelines(pipeline_manager: PipelineManager
     pipeline_manager.register_text_pipeline(pipeline2)
     pipeline_manager.register_text_pipeline(pipeline3)
 
-    result = await pipeline_manager.process_text(sample_text, sample_metadata)
+    await pipeline_manager.process_text(sample_text, sample_metadata)
 
     # 所有管道都应该处理
     assert len(pipeline1.processed_texts) == 1
@@ -538,7 +537,7 @@ async def test_process_text_disabled_pipeline(pipeline_manager: PipelineManager,
     pipeline_manager.register_text_pipeline(pipeline1)
     pipeline_manager.register_text_pipeline(pipeline2)
 
-    result = await pipeline_manager.process_text(sample_text, sample_metadata)
+    await pipeline_manager.process_text(sample_text, sample_metadata)
 
     # 只有 pipeline1 处理了
     assert len(pipeline1.processed_texts) == 1

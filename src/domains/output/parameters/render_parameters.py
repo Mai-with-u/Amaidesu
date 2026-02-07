@@ -1,7 +1,7 @@
 """
-渲染参数数据类 - Layer 6 到 Layer 7 的数据格式
+渲染参数数据类 - Output Domain 内部数据格式
 
-定义了从Expression生成层传递到Rendering呈现层的参数结构。
+定义了从参数生成传递到渲染输出的参数结构。
 """
 
 from dataclasses import dataclass, field
@@ -12,7 +12,7 @@ import time
 @dataclass
 class ExpressionParameters:
     """
-    表达参数 - Layer 6 输出给 Layer 7 的完整参数
+    表达参数 - 参数生成输出给渲染输出的完整参数
 
     Attributes:
         tts_text: TTS文本内容

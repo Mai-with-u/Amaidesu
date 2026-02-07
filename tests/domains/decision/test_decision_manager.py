@@ -18,7 +18,7 @@ from src.core.events.names import CoreEvents
 from src.domains.decision.intent import Intent, EmotionType
 from src.core.base.normalized_message import NormalizedMessage
 from src.core.base.decision_provider import DecisionProvider
-from src.domains.normalization.content.base import StructuredContent
+from src.domains.input.normalization.content.base import StructuredContent
 
 # 导入所有 decision providers 以触发注册
 import src.domains.decision.providers  # noqa: F401
@@ -27,6 +27,7 @@ import src.domains.decision.providers  # noqa: F401
 # =============================================================================
 # Mock Provider（用于测试）
 # =============================================================================
+
 
 class MockDecisionProviderForManager(DecisionProvider):
     """Mock DecisionProvider for DecisionManager testing"""
@@ -75,10 +76,12 @@ class MockDecisionProviderForManager(DecisionProvider):
 
     def add_response(self, text: str, emotion: EmotionType = EmotionType.NEUTRAL):
         """Add predefined response"""
-        self.decide_responses.append({
-            "text": text,
-            "emotion": emotion,
-        })
+        self.decide_responses.append(
+            {
+                "text": text,
+                "emotion": emotion,
+            }
+        )
 
 
 class FailingMockDecisionProvider(DecisionProvider):
@@ -123,6 +126,7 @@ class NoneReturningMockProvider(DecisionProvider):
 # Test Content（用于 NormalizedMessage）
 # =============================================================================
 
+
 class MockStructuredContent(StructuredContent):
     """Mock structured content for testing"""
 
@@ -151,6 +155,7 @@ class MockStructuredContent(StructuredContent):
 # =============================================================================
 # Fixtures
 # =============================================================================
+
 
 @pytest.fixture
 async def event_bus():
@@ -185,11 +190,7 @@ async def decision_manager_with_mock(event_bus, mock_provider_class):
     from src.domains.output.provider_registry import ProviderRegistry
 
     # 注册 mock provider
-    ProviderRegistry.register_decision(
-        "mock_decision",
-        mock_provider_class,
-        source="test"
-    )
+    ProviderRegistry.register_decision("mock_decision", mock_provider_class, source="test")
 
     manager = DecisionManager(event_bus)
     config = {"test_key": "test_value"}
@@ -206,6 +207,7 @@ async def decision_manager_with_mock(event_bus, mock_provider_class):
 # =============================================================================
 # 初始化和设置测试
 # =============================================================================
+
 
 @pytest.mark.asyncio
 async def test_decision_manager_initialization(event_bus):
@@ -326,11 +328,7 @@ async def test_setup_subscribes_to_event(event_bus, mock_provider_class):
     await manager.setup("mock_decision", {})
 
     # 触发事件验证订阅成功
-    await event_bus.emit(
-        CoreEvents.NORMALIZATION_MESSAGE_READY,
-        {"message": None},
-        source="test"
-    )
+    await event_bus.emit(CoreEvents.NORMALIZATION_MESSAGE_READY, {"message": None}, source="test")
     await asyncio.sleep(0.1)
 
     assert event_count["count"] > 0
@@ -343,6 +341,7 @@ async def test_setup_subscribes_to_event(event_bus, mock_provider_class):
 # =============================================================================
 # 决策功能测试
 # =============================================================================
+
 
 @pytest.mark.asyncio
 async def test_decide_success(decision_manager_with_mock, sample_normalized_message):
@@ -416,6 +415,7 @@ async def test_decide_preserves_metadata(decision_manager_with_mock, sample_norm
 # 事件处理测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_on_normalized_message_ready_success(decision_manager_with_mock, sample_normalized_message):
     """测试处理 normalization.message_ready 事件"""
@@ -434,9 +434,7 @@ async def test_on_normalized_message_ready_success(decision_manager_with_mock, s
 
     # 触发 normalization.message_ready 事件
     await manager.event_bus.emit(
-        CoreEvents.NORMALIZATION_MESSAGE_READY,
-        {"message": sample_normalized_message},
-        source="test"
+        CoreEvents.NORMALIZATION_MESSAGE_READY, {"message": sample_normalized_message}, source="test"
     )
 
     await asyncio.sleep(0.2)
@@ -454,11 +452,7 @@ async def test_on_normalized_message_ready_empty_message(decision_manager_with_m
     manager = decision_manager_with_mock
 
     # 触发空消息事件
-    await manager.event_bus.emit(
-        CoreEvents.NORMALIZATION_MESSAGE_READY,
-        {"message": None},
-        source="test"
-    )
+    await manager.event_bus.emit(CoreEvents.NORMALIZATION_MESSAGE_READY, {"message": None}, source="test")
 
     await asyncio.sleep(0.1)
 
@@ -475,7 +469,7 @@ async def test_on_normalized_message_ready_missing_message_key(decision_manager_
     await manager.event_bus.emit(
         CoreEvents.NORMALIZATION_MESSAGE_READY,
         {},  # 空字典
-        source="test"
+        source="test",
     )
 
     await asyncio.sleep(0.1)
@@ -499,9 +493,7 @@ async def test_on_normalized_message_ready_event_data_structure(decision_manager
     manager.event_bus.on("decision.intent_generated", intent_handler, priority=50)
 
     await manager.event_bus.emit(
-        CoreEvents.NORMALIZATION_MESSAGE_READY,
-        {"message": sample_normalized_message},
-        source="test"
+        CoreEvents.NORMALIZATION_MESSAGE_READY, {"message": sample_normalized_message}, source="test"
     )
 
     await asyncio.sleep(0.2)
@@ -522,7 +514,9 @@ async def test_on_normalized_message_ready_event_data_structure(decision_manager
 
 
 @pytest.mark.asyncio
-async def test_on_normalized_message_ready_handles_provider_error(decision_manager_with_mock, sample_normalized_message):
+async def test_on_normalized_message_ready_handles_provider_error(
+    decision_manager_with_mock, sample_normalized_message
+):
     """测试处理 Provider 决策失败"""
     manager = decision_manager_with_mock
 
@@ -534,9 +528,7 @@ async def test_on_normalized_message_ready_handles_provider_error(decision_manag
 
     # 应该不抛出异常，只记录错误
     await manager.event_bus.emit(
-        CoreEvents.NORMALIZATION_MESSAGE_READY,
-        {"message": sample_normalized_message},
-        source="test"
+        CoreEvents.NORMALIZATION_MESSAGE_READY, {"message": sample_normalized_message}, source="test"
     )
 
     await asyncio.sleep(0.1)
@@ -547,6 +539,7 @@ async def test_on_normalized_message_ready_handles_provider_error(decision_manag
 # =============================================================================
 # Provider 切换测试
 # =============================================================================
+
 
 @pytest.mark.asyncio
 async def test_switch_provider_success(event_bus, mock_provider_class):
@@ -655,6 +648,7 @@ async def test_switch_provider_from_none(event_bus, mock_provider_class):
 # 清理测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_cleanup_clears_provider(decision_manager_with_mock):
     """测试 cleanup 清理 Provider"""
@@ -694,11 +688,7 @@ async def test_cleanup_unsubscribes_events(event_bus, mock_provider_class):
     manager.event_bus.on(CoreEvents.NORMALIZATION_MESSAGE_READY, test_handler, priority=50)
 
     # 由于 manager 已经 cleanup，它的处理器不应该再被调用
-    await manager.event_bus.emit(
-        CoreEvents.NORMALIZATION_MESSAGE_READY,
-        {"message": None},
-        source="test"
-    )
+    await manager.event_bus.emit(CoreEvents.NORMALIZATION_MESSAGE_READY, {"message": None}, source="test")
 
     await asyncio.sleep(0.1)
 
@@ -760,6 +750,7 @@ async def test_cleanup_handles_provider_error(event_bus, mock_provider_class):
 # =============================================================================
 # 查询方法测试
 # =============================================================================
+
 
 @pytest.mark.asyncio
 async def test_get_current_provider(decision_manager_with_mock):
@@ -836,6 +827,7 @@ async def test_get_available_providers_after_registration(event_bus, mock_provid
 # 并发测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_concurrent_setup_and_switch(event_bus, mock_provider_class):
     """测试并发 setup 和 switch"""
@@ -846,10 +838,7 @@ async def test_concurrent_setup_and_switch(event_bus, mock_provider_class):
     manager = DecisionManager(event_bus)
 
     # 并发执行
-    tasks = [
-        manager.setup("mock_decision", {"index": i})
-        for i in range(5)
-    ]
+    tasks = [manager.setup("mock_decision", {"index": i}) for i in range(5)]
 
     await asyncio.gather(*tasks)
 
@@ -872,10 +861,7 @@ async def test_concurrent_decide_calls(decision_manager_with_mock, sample_normal
         manager._current_provider.add_response(f"回复{i}", EmotionType.NEUTRAL)
 
     # 并发执行
-    tasks = [
-        manager.decide(sample_normalized_message)
-        for _ in range(10)
-    ]
+    tasks = [manager.decide(sample_normalized_message) for _ in range(10)]
 
     results = await asyncio.gather(*tasks)
 
@@ -898,10 +884,7 @@ async def test_switch_lock_prevents_race(event_bus, mock_provider_class):
     await manager.setup("mock_decision", {})
 
     # 并发切换
-    tasks = [
-        manager.switch_provider("mock_decision", {"index": i})
-        for i in range(5)
-    ]
+    tasks = [manager.switch_provider("mock_decision", {"index": i}) for i in range(5)]
 
     await asyncio.gather(*tasks)
 
@@ -917,6 +900,7 @@ async def test_switch_lock_prevents_race(event_bus, mock_provider_class):
 # =============================================================================
 # 边缘情况测试
 # =============================================================================
+
 
 @pytest.mark.asyncio
 async def test_provider_returns_none_from_decide(event_bus):
@@ -994,6 +978,7 @@ async def test_very_long_message_text(decision_manager_with_mock):
 # =============================================================================
 # LLMService 依赖注入测试
 # =============================================================================
+
 
 @pytest.mark.asyncio
 async def test_llm_service_dependency_injection(event_bus, mock_provider_class):

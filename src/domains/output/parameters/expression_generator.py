@@ -1,5 +1,5 @@
 """
-Expression生成器 - Layer 6 表现生成层核心
+Expression生成器 - Output Domain: 参数生成核心
 
 职责:
 - 将Intent转换为ExpressionParameters
@@ -28,7 +28,7 @@ class ExpressionGenerator:
     数据流程:
     Intent → EmotionMapper → VTS表情参数
     Intent → ActionMapper → 动作指令
-    → ExpressionParameters → Layer 7
+    → ExpressionParameters → OutputProvider (Output Domain: 渲染输出)
     """
 
     def __init__(self, config: Dict[str, Any] = None):

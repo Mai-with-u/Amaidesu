@@ -14,17 +14,13 @@ EventBus 单元测试
 """
 
 import asyncio
-import sys
-import os
-from typing import List
 from unittest.mock import patch
 
 import pytest
 from pydantic import BaseModel, Field
 from src.core.event_bus import EventBus, EventStats, HandlerWrapper
-from src.core.events.models import RawDataEvent, NormalizedMessageEvent
+from src.core.events.models import RawDataEvent
 from src.core.events.registry import EventRegistry
-from src.core.events import register_core_events
 
 # =============================================================================
 # Test Fixtures

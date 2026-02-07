@@ -10,7 +10,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 import pytest
-from src.domains.normalization.normalizers.gift_normalizer import GiftNormalizer
+from src.domains.input.normalization.normalizers.gift_normalizer import GiftNormalizer
 from src.core.base.raw_data import RawData
 from src.core.base.normalized_message import NormalizedMessage
 
@@ -18,6 +18,7 @@ from src.core.base.normalized_message import NormalizedMessage
 # =============================================================================
 # 初始化测试
 # =============================================================================
+
 
 def test_gift_normalizer_init():
     """测试 GiftNormalizer 初始化"""
@@ -34,22 +35,17 @@ def test_gift_normalizer_init():
 # 礼物数据解析测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_gift_normalizer_basic_gift():
     """测试基本礼物解析"""
     normalizer = GiftNormalizer()
 
     raw_data = RawData(
-        content={
-            "user": "张三",
-            "gift_name": "小星星",
-            "gift_level": 1,
-            "count": 1,
-            "value": 1.0
-        },
+        content={"user": "张三", "gift_name": "小星星", "gift_level": 1, "count": 1, "value": 1.0},
         source="bili_danmaku",
         data_type="gift",
-        metadata={}
+        metadata={},
     )
 
     result = await normalizer.normalize(raw_data)
@@ -72,16 +68,10 @@ async def test_gift_normalizer_multiple_gifts():
     normalizer = GiftNormalizer()
 
     raw_data = RawData(
-        content={
-            "user": "李四",
-            "gift_name": "花花",
-            "gift_level": 2,
-            "count": 10,
-            "value": 50.0
-        },
+        content={"user": "李四", "gift_name": "花花", "gift_level": 2, "count": 10, "value": 50.0},
         source="bili_danmaku",
         data_type="gift",
-        metadata={}
+        metadata={},
     )
 
     result = await normalizer.normalize(raw_data)
@@ -99,16 +89,10 @@ async def test_gift_normalizer_high_value_gift():
     normalizer = GiftNormalizer()
 
     raw_data = RawData(
-        content={
-            "user": "王五",
-            "gift_name": "超级火箭",
-            "gift_level": 10,
-            "count": 1,
-            "value": 2000.0
-        },
+        content={"user": "王五", "gift_name": "超级火箭", "gift_level": 10, "count": 1, "value": 2000.0},
         source="bili_danmaku",
         data_type="gift",
-        metadata={}
+        metadata={},
     )
 
     result = await normalizer.normalize(raw_data)
@@ -124,22 +108,17 @@ async def test_gift_normalizer_high_value_gift():
 # GiftContent 创建测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_gift_content_get_display_text():
     """测试 GiftContent 的显示文本"""
     normalizer = GiftNormalizer()
 
     raw_data = RawData(
-        content={
-            "user": "张三",
-            "gift_name": "小星星",
-            "gift_level": 1,
-            "count": 5,
-            "value": 5.0
-        },
+        content={"user": "张三", "gift_name": "小星星", "gift_level": 1, "count": 5, "value": 5.0},
         source="bili_danmaku",
         data_type="gift",
-        metadata={}
+        metadata={},
     )
 
     result = await normalizer.normalize(raw_data)
@@ -156,16 +135,10 @@ async def test_gift_content_importance_calculation():
 
     # 低价值礼物
     raw_data1 = RawData(
-        content={
-            "user": "用户A",
-            "gift_name": "低级礼物",
-            "gift_level": 1,
-            "count": 1,
-            "value": 1.0
-        },
+        content={"user": "用户A", "gift_name": "低级礼物", "gift_level": 1, "count": 1, "value": 1.0},
         source="test",
         data_type="gift",
-        metadata={}
+        metadata={},
     )
 
     result1 = await normalizer.normalize(raw_data1)
@@ -173,16 +146,10 @@ async def test_gift_content_importance_calculation():
 
     # 高价值礼物
     raw_data2 = RawData(
-        content={
-            "user": "用户B",
-            "gift_name": "高级礼物",
-            "gift_level": 10,
-            "count": 10,
-            "value": 5000.0
-        },
+        content={"user": "用户B", "gift_name": "高级礼物", "gift_level": 10, "count": 10, "value": 5000.0},
         source="test",
         data_type="gift",
-        metadata={}
+        metadata={},
     )
 
     result2 = await normalizer.normalize(raw_data2)
@@ -196,16 +163,10 @@ async def test_gift_content_requires_special_handling():
 
     # 低价值礼物（不需要特殊处理）
     raw_data1 = RawData(
-        content={
-            "user": "用户A",
-            "gift_name": "低级礼物",
-            "gift_level": 1,
-            "count": 1,
-            "value": 1.0
-        },
+        content={"user": "用户A", "gift_name": "低级礼物", "gift_level": 1, "count": 1, "value": 1.0},
         source="test",
         data_type="gift",
-        metadata={}
+        metadata={},
     )
 
     result1 = await normalizer.normalize(raw_data1)
@@ -213,16 +174,10 @@ async def test_gift_content_requires_special_handling():
 
     # 高价值礼物（需要特殊处理）
     raw_data2 = RawData(
-        content={
-            "user": "用户B",
-            "gift_name": "高级礼物",
-            "gift_level": 10,
-            "count": 10,
-            "value": 10000.0
-        },
+        content={"user": "用户B", "gift_name": "高级礼物", "gift_level": 10, "count": 10, "value": 10000.0},
         source="test",
         data_type="gift",
-        metadata={}
+        metadata={},
     )
 
     result2 = await normalizer.normalize(raw_data2)
@@ -233,22 +188,17 @@ async def test_gift_content_requires_special_handling():
 # 各种礼物类型测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_gift_normalizer_level_1_gift():
     """测试等级1礼物"""
     normalizer = GiftNormalizer()
 
     raw_data = RawData(
-        content={
-            "user": "用户",
-            "gift_name": "爱心",
-            "gift_level": 1,
-            "count": 1,
-            "value": 0.5
-        },
+        content={"user": "用户", "gift_name": "爱心", "gift_level": 1, "count": 1, "value": 0.5},
         source="test",
         data_type="gift",
-        metadata={}
+        metadata={},
     )
 
     result = await normalizer.normalize(raw_data)
@@ -265,16 +215,10 @@ async def test_gift_normalizer_level_5_gift():
     normalizer = GiftNormalizer()
 
     raw_data = RawData(
-        content={
-            "user": "用户",
-            "gift_name": "中级礼物",
-            "gift_level": 5,
-            "count": 1,
-            "value": 50.0
-        },
+        content={"user": "用户", "gift_name": "中级礼物", "gift_level": 5, "count": 1, "value": 50.0},
         source="test",
         data_type="gift",
-        metadata={}
+        metadata={},
     )
 
     result = await normalizer.normalize(raw_data)
@@ -291,16 +235,10 @@ async def test_gift_normalizer_level_10_gift():
     normalizer = GiftNormalizer()
 
     raw_data = RawData(
-        content={
-            "user": "用户",
-            "gift_name": "顶级礼物",
-            "gift_level": 10,
-            "count": 1,
-            "value": 500.0
-        },
+        content={"user": "用户", "gift_name": "顶级礼物", "gift_level": 10, "count": 1, "value": 500.0},
         source="test",
         data_type="gift",
-        metadata={}
+        metadata={},
     )
 
     result = await normalizer.normalize(raw_data)
@@ -317,17 +255,10 @@ async def test_gift_normalizer_with_user_id():
     normalizer = GiftNormalizer()
 
     raw_data = RawData(
-        content={
-            "user": "张三",
-            "user_id": "123456",
-            "gift_name": "礼物",
-            "gift_level": 1,
-            "count": 1,
-            "value": 1.0
-        },
+        content={"user": "张三", "user_id": "123456", "gift_name": "礼物", "gift_level": 1, "count": 1, "value": 1.0},
         source="test",
         data_type="gift",
-        metadata={}
+        metadata={},
     )
 
     result = await normalizer.normalize(raw_data)
@@ -343,17 +274,13 @@ async def test_gift_normalizer_with_user_id():
 # 边界情况和错误处理测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_gift_normalizer_non_dict_content():
     """测试非字典内容（应该返回 None）"""
     normalizer = GiftNormalizer()
 
-    raw_data = RawData(
-        content="Not a dict",
-        source="test",
-        data_type="gift",
-        metadata={}
-    )
+    raw_data = RawData(content="Not a dict", source="test", data_type="gift", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -369,7 +296,7 @@ async def test_gift_normalizer_missing_fields():
         content={},  # 空字典
         source="test",
         data_type="gift",
-        metadata={}
+        metadata={},
     )
 
     result = await normalizer.normalize(raw_data)
@@ -390,12 +317,12 @@ async def test_gift_normalizer_partial_fields():
     raw_data = RawData(
         content={
             "user": "张三",
-            "gift_name": "礼物"
+            "gift_name": "礼物",
             # 缺少其他字段
         },
         source="test",
         data_type="gift",
-        metadata={}
+        metadata={},
     )
 
     result = await normalizer.normalize(raw_data)
@@ -414,16 +341,10 @@ async def test_gift_normalizer_zero_count():
     normalizer = GiftNormalizer()
 
     raw_data = RawData(
-        content={
-            "user": "用户",
-            "gift_name": "礼物",
-            "gift_level": 1,
-            "count": 0,
-            "value": 0.0
-        },
+        content={"user": "用户", "gift_name": "礼物", "gift_level": 1, "count": 0, "value": 0.0},
         source="test",
         data_type="gift",
-        metadata={}
+        metadata={},
     )
 
     result = await normalizer.normalize(raw_data)
@@ -439,16 +360,10 @@ async def test_gift_normalizer_very_large_count():
     normalizer = GiftNormalizer()
 
     raw_data = RawData(
-        content={
-            "user": "土豪",
-            "gift_name": "小星星",
-            "gift_level": 1,
-            "count": 9999,
-            "value": 9999.0
-        },
+        content={"user": "土豪", "gift_name": "小星星", "gift_level": 1, "count": 9999, "value": 9999.0},
         source="test",
         data_type="gift",
-        metadata={}
+        metadata={},
     )
 
     result = await normalizer.normalize(raw_data)
@@ -463,26 +378,18 @@ async def test_gift_normalizer_very_large_count():
 # 元数据测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_gift_normalizer_metadata_preservation():
     """测试保留原始元数据"""
     normalizer = GiftNormalizer()
 
     raw_data = RawData(
-        content={
-            "user": "张三",
-            "gift_name": "礼物",
-            "gift_level": 1,
-            "count": 1,
-            "value": 1.0
-        },
+        content={"user": "张三", "gift_name": "礼物", "gift_level": 1, "count": 1, "value": 1.0},
         source="bili_danmaku",
         data_type="gift",
-        metadata={
-            "room_id": "12345",
-            "extra_info": "test"
-        },
-        timestamp=1234567890.0
+        metadata={"room_id": "12345", "extra_info": "test"},
+        timestamp=1234567890.0,
     )
 
     result = await normalizer.normalize(raw_data)
@@ -499,6 +406,7 @@ async def test_gift_normalizer_metadata_preservation():
 # 不同数据源测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_gift_normalizer_different_sources():
     """测试不同数据源"""
@@ -508,16 +416,10 @@ async def test_gift_normalizer_different_sources():
 
     for source in sources:
         raw_data = RawData(
-            content={
-                "user": "用户",
-                "gift_name": "礼物",
-                "gift_level": 1,
-                "count": 1,
-                "value": 1.0
-            },
+            content={"user": "用户", "gift_name": "礼物", "gift_level": 1, "count": 1, "value": 1.0},
             source=source,
             data_type="gift",
-            metadata={}
+            metadata={},
         )
 
         result = await normalizer.normalize(raw_data)

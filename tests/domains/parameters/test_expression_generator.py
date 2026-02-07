@@ -5,7 +5,7 @@ ExpressionGenerator 测试
 """
 
 import pytest
-from src.domains.parameters.expression_generator import ExpressionGenerator
+from src.domains.output.parameters.expression_generator import ExpressionGenerator
 from src.domains.output.parameters.render_parameters import ExpressionParameters
 from src.domains.decision.intent import Intent, EmotionType, ActionType, IntentAction
 
@@ -35,7 +35,7 @@ def basic_intent():
         response_text="你好！有什么我可以帮助你的吗？",
         emotion=EmotionType.HAPPY,
         actions=[],
-        metadata={"source": "test"}
+        metadata={"source": "test"},
     )
 
 
@@ -45,10 +45,10 @@ class TestExpressionGeneratorInit:
     def test_init_with_default_config(self):
         """测试使用默认配置初始化"""
         generator = ExpressionGenerator()
-        assert generator.default_tts_enabled == True
-        assert generator.default_subtitle_enabled == True
-        assert generator.default_expressions_enabled == True
-        assert generator.default_hotkeys_enabled == True
+        assert generator.default_tts_enabled
+        assert generator.default_subtitle_enabled
+        assert generator.default_expressions_enabled
+        assert generator.default_hotkeys_enabled
 
     def test_init_with_custom_config(self, basic_config):
         """测试使用自定义配置初始化"""
@@ -59,10 +59,10 @@ class TestExpressionGeneratorInit:
             "default_hotkeys_enabled": False,
         }
         generator = ExpressionGenerator(config)
-        assert generator.default_tts_enabled == False
-        assert generator.default_subtitle_enabled == False
-        assert generator.default_expressions_enabled == False
-        assert generator.default_hotkeys_enabled == False
+        assert not generator.default_tts_enabled
+        assert not generator.default_subtitle_enabled
+        assert not generator.default_expressions_enabled
+        assert not generator.default_hotkeys_enabled
 
     def test_init_with_partial_config(self):
         """测试使用部分配置初始化"""
@@ -70,8 +70,8 @@ class TestExpressionGeneratorInit:
             "default_tts_enabled": False,
         }
         generator = ExpressionGenerator(config)
-        assert generator.default_tts_enabled == False
-        assert generator.default_subtitle_enabled == True  # 默认值
+        assert not generator.default_tts_enabled
+        assert generator.default_subtitle_enabled  # 默认值
 
 
 class TestExpressionGeneratorGenerate:
@@ -84,23 +84,19 @@ class TestExpressionGeneratorGenerate:
 
         assert isinstance(params, ExpressionParameters)
         assert params.tts_text == "你好！有什么我可以帮助你的吗？"
-        assert params.tts_enabled == True
+        assert params.tts_enabled
         assert params.subtitle_text == "你好！有什么我可以帮助你的吗？"
-        assert params.subtitle_enabled == True
+        assert params.subtitle_enabled
 
     @pytest.mark.asyncio
     async def test_generate_with_emotion(self, expression_generator):
         """测试带情感的生成"""
         intent = Intent(
-            original_text="真开心",
-            response_text="我也很高兴！",
-            emotion=EmotionType.HAPPY,
-            actions=[],
-            metadata={}
+            original_text="真开心", response_text="我也很高兴！", emotion=EmotionType.HAPPY, actions=[], metadata={}
         )
         params = await expression_generator.generate(intent)
 
-        assert params.expressions_enabled == True
+        assert params.expressions_enabled
         assert len(params.expressions) > 0
         # HAPPY 情感应该有较高的 MouthSmile 值
         assert params.expressions.get("MouthSmile", 0) > 0
@@ -118,16 +114,10 @@ class TestExpressionGeneratorGenerate:
         ]
 
         for emotion in emotions:
-            intent = Intent(
-                original_text="测试",
-                response_text="测试回复",
-                emotion=emotion,
-                actions=[],
-                metadata={}
-            )
+            intent = Intent(original_text="测试", response_text="测试回复", emotion=emotion, actions=[], metadata={})
             params = await expression_generator.generate(intent)
 
-            assert params.expressions_enabled == True
+            assert params.expressions_enabled
             assert len(params.expressions) > 0
             assert params.metadata.get("emotion") == emotion.value
 
@@ -139,17 +129,13 @@ class TestExpressionGeneratorGenerate:
             response_text="测试回复",
             emotion=EmotionType.NEUTRAL,
             actions=[
-                IntentAction(
-                    type=ActionType.HOTKEY,
-                    params={"hotkey_id": "test_hotkey_1"},
-                    priority=50
-                ),
+                IntentAction(type=ActionType.HOTKEY, params={"hotkey_id": "test_hotkey_1"}, priority=50),
             ],
-            metadata={}
+            metadata={},
         )
         params = await expression_generator.generate(intent)
 
-        assert params.hotkeys_enabled == True
+        assert params.hotkeys_enabled
         assert len(params.hotkeys) == 1
         assert params.hotkeys[0] == "test_hotkey_1"
 
@@ -161,31 +147,19 @@ class TestExpressionGeneratorGenerate:
             response_text="测试回复",
             emotion=EmotionType.HAPPY,
             actions=[
-                IntentAction(
-                    type=ActionType.HOTKEY,
-                    params={"hotkey_id": "hotkey_1"},
-                    priority=50
-                ),
-                IntentAction(
-                    type=ActionType.EMOJI,
-                    params={"emoji": "😀"},
-                    priority=60
-                ),
-                IntentAction(
-                    type=ActionType.EXPRESSION,
-                    params={"expressions": {"MouthSmile": 1.0}},
-                    priority=70
-                ),
+                IntentAction(type=ActionType.HOTKEY, params={"hotkey_id": "hotkey_1"}, priority=50),
+                IntentAction(type=ActionType.EMOJI, params={"emoji": "😀"}, priority=60),
+                IntentAction(type=ActionType.EXPRESSION, params={"expressions": {"MouthSmile": 1.0}}, priority=70),
             ],
-            metadata={}
+            metadata={},
         )
         params = await expression_generator.generate(intent)
 
-        assert params.hotkeys_enabled == True
+        assert params.hotkeys_enabled
         assert len(params.hotkeys) == 1
-        assert params.actions_enabled == True
+        assert params.actions_enabled
         assert len(params.actions) == 1  # 只有 EMOJI（EXPRESSION 不添加到 actions）
-        assert params.expressions_enabled == True
+        assert params.expressions_enabled
         assert "MouthSmile" in params.expressions
 
     @pytest.mark.asyncio
@@ -196,17 +170,13 @@ class TestExpressionGeneratorGenerate:
         generator = ExpressionGenerator(config)
 
         intent = Intent(
-            original_text="测试",
-            response_text="测试回复",
-            emotion=EmotionType.NEUTRAL,
-            actions=[],
-            metadata={}
+            original_text="测试", response_text="测试回复", emotion=EmotionType.NEUTRAL, actions=[], metadata={}
         )
         params = await generator.generate(intent)
 
-        assert params.tts_enabled == False
+        assert not params.tts_enabled
         # 字幕应该仍然启用
-        assert params.subtitle_enabled == True
+        assert params.subtitle_enabled
 
     @pytest.mark.asyncio
     async def test_generate_with_subtitle_disabled(self, basic_config):
@@ -216,17 +186,13 @@ class TestExpressionGeneratorGenerate:
         generator = ExpressionGenerator(config)
 
         intent = Intent(
-            original_text="测试",
-            response_text="测试回复",
-            emotion=EmotionType.NEUTRAL,
-            actions=[],
-            metadata={}
+            original_text="测试", response_text="测试回复", emotion=EmotionType.NEUTRAL, actions=[], metadata={}
         )
         params = await generator.generate(intent)
 
-        assert params.subtitle_enabled == False
+        assert not params.subtitle_enabled
         # TTS 应该仍然启用
-        assert params.tts_enabled == True
+        assert params.tts_enabled
 
     @pytest.mark.asyncio
     async def test_generate_with_expressions_disabled(self, basic_config):
@@ -236,32 +202,22 @@ class TestExpressionGeneratorGenerate:
         generator = ExpressionGenerator(config)
 
         intent = Intent(
-            original_text="测试",
-            response_text="测试回复",
-            emotion=EmotionType.HAPPY,
-            actions=[],
-            metadata={}
+            original_text="测试", response_text="测试回复", emotion=EmotionType.HAPPY, actions=[], metadata={}
         )
         params = await generator.generate(intent)
 
-        assert params.expressions_enabled == False
+        assert not params.expressions_enabled
         assert len(params.expressions) == 0
 
     @pytest.mark.asyncio
     async def test_generate_with_empty_response_text(self, expression_generator):
         """测试空响应文本的生成"""
-        intent = Intent(
-            original_text="测试",
-            response_text="",
-            emotion=EmotionType.NEUTRAL,
-            actions=[],
-            metadata={}
-        )
+        intent = Intent(original_text="测试", response_text="", emotion=EmotionType.NEUTRAL, actions=[], metadata={})
         params = await expression_generator.generate(intent)
 
         # 空文本应该禁用 TTS 和字幕
-        assert params.tts_enabled == False
-        assert params.subtitle_enabled == False
+        assert not params.tts_enabled
+        assert not params.subtitle_enabled
 
     @pytest.mark.asyncio
     async def test_generate_metadata(self, expression_generator):
@@ -271,7 +227,7 @@ class TestExpressionGeneratorGenerate:
             response_text="响应文本",
             emotion=EmotionType.HAPPY,
             actions=[],
-            metadata={"key1": "value1", "key2": "value2"}
+            metadata={"key1": "value1", "key2": "value2"},
         )
         params = await expression_generator.generate(intent)
 
@@ -287,23 +243,11 @@ class TestExpressionGeneratorGenerate:
             response_text="测试回复",
             emotion=EmotionType.NEUTRAL,
             actions=[
-                IntentAction(
-                    type=ActionType.HOTKEY,
-                    params={"hotkey_id": "low_priority"},
-                    priority=10
-                ),
-                IntentAction(
-                    type=ActionType.HOTKEY,
-                    params={"hotkey_id": "high_priority"},
-                    priority=90
-                ),
-                IntentAction(
-                    type=ActionType.HOTKEY,
-                    params={"hotkey_id": "mid_priority"},
-                    priority=50
-                ),
+                IntentAction(type=ActionType.HOTKEY, params={"hotkey_id": "low_priority"}, priority=10),
+                IntentAction(type=ActionType.HOTKEY, params={"hotkey_id": "high_priority"}, priority=90),
+                IntentAction(type=ActionType.HOTKEY, params={"hotkey_id": "mid_priority"}, priority=50),
             ],
-            metadata={}
+            metadata={},
         )
         params = await expression_generator.generate(intent)
 
@@ -374,32 +318,28 @@ class TestExpressionGeneratorConfigUpdate:
         }
         await expression_generator.update_config(new_config)
 
-        assert expression_generator.default_tts_enabled == False
-        assert expression_generator.default_subtitle_enabled == False
+        assert not expression_generator.default_tts_enabled
+        assert not expression_generator.default_subtitle_enabled
         # 未更新的配置应保持原值
-        assert expression_generator.default_expressions_enabled == True
+        assert expression_generator.default_expressions_enabled
 
     @pytest.mark.asyncio
     async def test_update_config_affects_generation(self, expression_generator):
         """测试配置更新影响生成结果"""
         intent = Intent(
-            original_text="测试",
-            response_text="测试回复",
-            emotion=EmotionType.NEUTRAL,
-            actions=[],
-            metadata={}
+            original_text="测试", response_text="测试回复", emotion=EmotionType.NEUTRAL, actions=[], metadata={}
         )
 
         # 默认配置下生成
         params1 = await expression_generator.generate(intent)
-        assert params1.tts_enabled == True
+        assert params1.tts_enabled
 
         # 更新配置
         await expression_generator.update_config({"default_tts_enabled": False})
 
         # 新配置下生成
         params2 = await expression_generator.generate(intent)
-        assert params2.tts_enabled == False
+        assert not params2.tts_enabled
 
 
 class TestExpressionGeneratorStats:
@@ -417,14 +357,14 @@ class TestExpressionGeneratorStats:
         assert "default_hotkeys_enabled" in stats
         assert "available_emotions" in stats
 
-        assert stats["default_tts_enabled"] == True
+        assert stats["default_tts_enabled"]
         assert stats["available_emotions"] > 0
 
     def test_get_stats_after_config_update(self, expression_generator):
         """测试配置更新后的统计信息"""
         # 获取初始统计
         stats1 = expression_generator.get_stats()
-        assert stats1["default_tts_enabled"] == True
+        assert stats1["default_tts_enabled"]
 
         # 更新配置（使用同步方式模拟）
         expression_generator.config["default_tts_enabled"] = False
@@ -432,7 +372,7 @@ class TestExpressionGeneratorStats:
 
         # 获取更新后的统计
         stats2 = expression_generator.get_stats()
-        assert stats2["default_tts_enabled"] == False
+        assert not stats2["default_tts_enabled"]
 
 
 class TestExpressionGeneratorEdgeCases:
@@ -446,27 +386,23 @@ class TestExpressionGeneratorEdgeCases:
             response_text="测试回复",
             emotion=EmotionType.NEUTRAL,
             actions=[],  # 使用空列表而不是 None
-            metadata={}
+            metadata={},
         )
         params = await expression_generator.generate(intent)
 
-        assert params.hotkeys_enabled == False
-        assert params.actions_enabled == False
+        assert not params.hotkeys_enabled
+        assert not params.actions_enabled
 
     @pytest.mark.asyncio
     async def test_generate_with_empty_actions(self, expression_generator):
         """测试 actions 为空列表的情况"""
         intent = Intent(
-            original_text="测试",
-            response_text="测试回复",
-            emotion=EmotionType.NEUTRAL,
-            actions=[],
-            metadata={}
+            original_text="测试", response_text="测试回复", emotion=EmotionType.NEUTRAL, actions=[], metadata={}
         )
         params = await expression_generator.generate(intent)
 
-        assert params.hotkeys_enabled == False
-        assert params.actions_enabled == False
+        assert not params.hotkeys_enabled
+        assert not params.actions_enabled
 
     @pytest.mark.asyncio
     async def test_generate_with_action_without_hotkey_id(self, expression_generator):
@@ -479,15 +415,15 @@ class TestExpressionGeneratorEdgeCases:
                 IntentAction(
                     type=ActionType.HOTKEY,
                     params={},  # 没有 hotkey_id
-                    priority=50
+                    priority=50,
                 ),
             ],
-            metadata={}
+            metadata={},
         )
         params = await expression_generator.generate(intent)
 
         # 没有 hotkey_id 的动作不应该被添加到 hotkeys 列表
-        assert params.hotkeys_enabled == False
+        assert not params.hotkeys_enabled
         assert len(params.hotkeys) == 0
 
     @pytest.mark.asyncio
@@ -503,10 +439,10 @@ class TestExpressionGeneratorEdgeCases:
                 IntentAction(
                     type=ActionType.EXPRESSION,  # 已知类型
                     params={"expressions": {"MouthSmile": 0.5}},
-                    priority=50
+                    priority=50,
                 ),
             ],
-            metadata={}
+            metadata={},
         )
         params = await expression_generator.generate(intent)
 

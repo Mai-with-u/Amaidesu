@@ -51,7 +51,7 @@ async def test_mock_danmaku_provider_default_config():
 @pytest.mark.asyncio
 async def test_mock_danmaku_provider_raw_data_format():
     """测试 MockDanmakuProvider 生成的 RawData 格式"""
-    provider = MockDanmakuProvider({})
+    MockDanmakuProvider({})
 
     # 测试弹幕 RawData 格式
     raw_data = RawData(
@@ -92,7 +92,7 @@ async def test_mock_danmaku_provider_data_flow():
     event_bus.on("normalization.message_ready", on_message_ready, priority=50)
 
     # 模拟 MockDanmakuProvider 发布 RawData
-    provider = MockDanmakuProvider({})
+    MockDanmakuProvider({})
     raw_data = RawData(
         content={
             "text": "主播好！",

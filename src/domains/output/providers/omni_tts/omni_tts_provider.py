@@ -1,5 +1,5 @@
 """
-OmniTTS Provider - Layer 7 渲染呈现层实现
+OmniTTS Provider - Output Domain: 渲染输出实现
 
 职责:
 - 使用GPT-SoVITS引擎进行文本转语音

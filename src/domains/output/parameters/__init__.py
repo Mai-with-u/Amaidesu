@@ -1,5 +1,5 @@
 """
-Expression生成层 - Layer 6
+Expression生成层 - Output Domain: 参数生成
 
 职责:
 - 将Intent转换为RenderParameters

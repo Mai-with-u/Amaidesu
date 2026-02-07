@@ -10,7 +10,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 import pytest
-from src.domains.normalization.normalizers.guard_normalizer import GuardNormalizer
+from src.domains.input.normalization.normalizers.guard_normalizer import GuardNormalizer
 from src.core.base.raw_data import RawData
 from src.core.base.normalized_message import NormalizedMessage
 
@@ -18,6 +18,7 @@ from src.core.base.normalized_message import NormalizedMessage
 # =============================================================================
 # 初始化测试
 # =============================================================================
+
 
 def test_guard_normalizer_init():
     """测试 GuardNormalizer 初始化"""
@@ -35,20 +36,13 @@ def test_guard_normalizer_init():
 # Guard 数据解析测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_guard_normalizer_basic_guard():
     """测试基本大航海解析"""
     normalizer = GuardNormalizer()
 
-    raw_data = RawData(
-        content={
-            "user": "张三",
-            "level": "舰长"
-        },
-        source="bili_danmaku",
-        data_type="guard",
-        metadata={}
-    )
+    raw_data = RawData(content={"user": "张三", "level": "舰长"}, source="bili_danmaku", data_type="guard", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -67,15 +61,7 @@ async def test_guard_normalizer_dict_content():
     """测试字典格式的大航海数据"""
     normalizer = GuardNormalizer()
 
-    raw_data = RawData(
-        content={
-            "user": "李四",
-            "level": "总督"
-        },
-        source="bili_danmaku",
-        data_type="guard",
-        metadata={}
-    )
+    raw_data = RawData(content={"user": "李四", "level": "总督"}, source="bili_danmaku", data_type="guard", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -88,20 +74,13 @@ async def test_guard_normalizer_dict_content():
 # GuardContent 创建测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_guard_content_display_text():
     """测试 GuardContent 的显示文本"""
     normalizer = GuardNormalizer()
 
-    raw_data = RawData(
-        content={
-            "user": "王五",
-            "level": "提督"
-        },
-        source="bili_danmaku",
-        data_type="guard",
-        metadata={}
-    )
+    raw_data = RawData(content={"user": "王五", "level": "提督"}, source="bili_danmaku", data_type="guard", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -115,15 +94,7 @@ async def test_guard_content_importance():
     """测试 GuardContent 的重要性"""
     normalizer = GuardNormalizer()
 
-    raw_data = RawData(
-        content={
-            "user": "用户",
-            "level": "舰长"
-        },
-        source="test",
-        data_type="guard",
-        metadata={}
-    )
+    raw_data = RawData(content={"user": "用户", "level": "舰长"}, source="test", data_type="guard", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -136,6 +107,7 @@ async def test_guard_content_importance():
 # =============================================================================
 # 各种 Guard 等级测试
 # =============================================================================
+
 
 @pytest.mark.asyncio
 async def test_guard_normalizer_all_levels():
@@ -150,15 +122,7 @@ async def test_guard_normalizer_all_levels():
     ]
 
     for user, level, expected_text in test_cases:
-        raw_data = RawData(
-            content={
-                "user": user,
-                "level": level
-            },
-            source="test",
-            data_type="guard",
-            metadata={}
-        )
+        raw_data = RawData(content={"user": user, "level": level}, source="test", data_type="guard", metadata={})
 
         result = await normalizer.normalize(raw_data)
 
@@ -173,15 +137,7 @@ async def test_guard_normalizer_custom_level():
     """测试自定义大航海等级"""
     normalizer = GuardNormalizer()
 
-    raw_data = RawData(
-        content={
-            "user": "土豪",
-            "level": "超级总督"
-        },
-        source="test",
-        data_type="guard",
-        metadata={}
-    )
+    raw_data = RawData(content={"user": "土豪", "level": "超级总督"}, source="test", data_type="guard", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -193,17 +149,13 @@ async def test_guard_normalizer_custom_level():
 # 边界情况和错误处理测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_guard_normalizer_non_dict_content():
     """测试非字典内容"""
     normalizer = GuardNormalizer()
 
-    raw_data = RawData(
-        content="Not a dict",
-        source="test",
-        data_type="guard",
-        metadata={}
-    )
+    raw_data = RawData(content="Not a dict", source="test", data_type="guard", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -221,7 +173,7 @@ async def test_guard_normalizer_missing_fields():
         content={},  # 空字典
         source="test",
         data_type="guard",
-        metadata={}
+        metadata={},
     )
 
     result = await normalizer.normalize(raw_data)
@@ -242,7 +194,7 @@ async def test_guard_normalizer_missing_user():
         },
         source="test",
         data_type="guard",
-        metadata={}
+        metadata={},
     )
 
     result = await normalizer.normalize(raw_data)
@@ -263,7 +215,7 @@ async def test_guard_normalizer_missing_level():
         },
         source="test",
         data_type="guard",
-        metadata={}
+        metadata={},
     )
 
     result = await normalizer.normalize(raw_data)
@@ -277,15 +229,7 @@ async def test_guard_normalizer_empty_fields():
     """测试空字段"""
     normalizer = GuardNormalizer()
 
-    raw_data = RawData(
-        content={
-            "user": "",
-            "level": ""
-        },
-        source="test",
-        data_type="guard",
-        metadata={}
-    )
+    raw_data = RawData(content={"user": "", "level": ""}, source="test", data_type="guard", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -298,15 +242,7 @@ async def test_guard_normalizer_none_values():
     """测试 None 值"""
     normalizer = GuardNormalizer()
 
-    raw_data = RawData(
-        content={
-            "user": None,
-            "level": None
-        },
-        source="test",
-        data_type="guard",
-        metadata={}
-    )
+    raw_data = RawData(content={"user": None, "level": None}, source="test", data_type="guard", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -319,20 +255,13 @@ async def test_guard_normalizer_none_values():
 # 特殊字符测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_guard_normalizer_unicode_username():
     """测试 Unicode 用户名"""
     normalizer = GuardNormalizer()
 
-    raw_data = RawData(
-        content={
-            "user": "用户🎉❤️",
-            "level": "舰长"
-        },
-        source="test",
-        data_type="guard",
-        metadata={}
-    )
+    raw_data = RawData(content={"user": "用户🎉❤️", "level": "舰长"}, source="test", data_type="guard", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -346,15 +275,7 @@ async def test_guard_normalizer_special_chars_in_level():
     """测试等级名称中的特殊字符"""
     normalizer = GuardNormalizer()
 
-    raw_data = RawData(
-        content={
-            "user": "用户",
-            "level": "超级总督★"
-        },
-        source="test",
-        data_type="guard",
-        metadata={}
-    )
+    raw_data = RawData(content={"user": "用户", "level": "超级总督★"}, source="test", data_type="guard", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -369,15 +290,7 @@ async def test_guard_normalizer_long_username():
 
     long_username = "A" * 100
 
-    raw_data = RawData(
-        content={
-            "user": long_username,
-            "level": "舰长"
-        },
-        source="test",
-        data_type="guard",
-        metadata={}
-    )
+    raw_data = RawData(content={"user": long_username, "level": "舰长"}, source="test", data_type="guard", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -390,24 +303,18 @@ async def test_guard_normalizer_long_username():
 # 元数据测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_guard_normalizer_metadata_preservation():
     """测试保留原始元数据"""
     normalizer = GuardNormalizer()
 
     raw_data = RawData(
-        content={
-            "user": "张三",
-            "level": "舰长"
-        },
+        content={"user": "张三", "level": "舰长"},
         source="bili_danmaku",
         data_type="guard",
-        metadata={
-            "room_id": "12345",
-            "gift_count": 100,
-            "extra_info": "test"
-        },
-        timestamp=1234567890.0
+        metadata={"room_id": "12345", "gift_count": 100, "extra_info": "test"},
+        timestamp=1234567890.0,
     )
 
     result = await normalizer.normalize(raw_data)
@@ -425,6 +332,7 @@ async def test_guard_normalizer_metadata_preservation():
 # 不同数据源测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_guard_normalizer_different_sources():
     """测试不同数据源"""
@@ -433,15 +341,7 @@ async def test_guard_normalizer_different_sources():
     sources = ["bili_danmaku", "douyu", "huya", "test_source"]
 
     for source in sources:
-        raw_data = RawData(
-            content={
-                "user": "用户",
-                "level": "舰长"
-            },
-            source=source,
-            data_type="guard",
-            metadata={}
-        )
+        raw_data = RawData(content={"user": "用户", "level": "舰长"}, source=source, data_type="guard", metadata={})
 
         result = await normalizer.normalize(raw_data)
 
@@ -454,20 +354,13 @@ async def test_guard_normalizer_different_sources():
 # TextContent 相关测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_guard_content_is_text_content():
     """测试 GuardContent 实际上是 TextContent"""
     normalizer = GuardNormalizer()
 
-    raw_data = RawData(
-        content={
-            "user": "张三",
-            "level": "舰长"
-        },
-        source="test",
-        data_type="guard",
-        metadata={}
-    )
+    raw_data = RawData(content={"user": "张三", "level": "舰长"}, source="test", data_type="guard", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -483,15 +376,7 @@ async def test_guard_content_special_handling():
     """测试 GuardContent 特殊处理判断"""
     normalizer = GuardNormalizer()
 
-    raw_data = RawData(
-        content={
-            "user": "张三",
-            "level": "舰长"
-        },
-        source="test",
-        data_type="guard",
-        metadata={}
-    )
+    raw_data = RawData(content={"user": "张三", "level": "舰长"}, source="test", data_type="guard", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -505,17 +390,13 @@ async def test_guard_content_special_handling():
 # 数字类型内容测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_guard_normalizer_numeric_content():
     """测试数字类型内容"""
     normalizer = GuardNormalizer()
 
-    raw_data = RawData(
-        content=12345,
-        source="test",
-        data_type="guard",
-        metadata={}
-    )
+    raw_data = RawData(content=12345, source="test", data_type="guard", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
@@ -529,15 +410,7 @@ async def test_guard_normalizer_mixed_types():
     normalizer = GuardNormalizer()
 
     # user 是数字，level 是字符串
-    raw_data = RawData(
-        content={
-            "user": 12345,
-            "level": "舰长"
-        },
-        source="test",
-        data_type="guard",
-        metadata={}
-    )
+    raw_data = RawData(content={"user": 12345, "level": "舰长"}, source="test", data_type="guard", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
