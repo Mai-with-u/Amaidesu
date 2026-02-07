@@ -52,6 +52,9 @@ from .llm_providers import (
     LLMLocalConfig,
 )
 
+# Non-provider schemas (system-wide configurations)
+from .logging import LoggingConfig
+
 # Provider Schema Registry
 # Maps provider type to their config schema class
 PROVIDER_SCHEMA_REGISTRY: Dict[str, Type[BaseModel]] = {
@@ -226,6 +229,8 @@ __all__ = [
     "LLMFastConfig",
     "VLMConfig",
     "LLMLocalConfig",
+    # Non-provider configs (system-wide)
+    "LoggingConfig",
     # Registry
     "PROVIDER_SCHEMA_REGISTRY",
     "OUTPUT_PROVIDER_CONFIG_MAP",

@@ -76,6 +76,28 @@ host = "127.0.0.1"
 port = 8080
 callback_path = "/maicore_callback"
 
+# ========== 日志配置 ==========
+
+[logging]
+# 是否启用文件日志
+enabled = true
+# 日志格式: jsonl (JSON Lines) 或 text (纯文本)
+format = "jsonl"
+# 日志文件目录 (相对于项目根目录)
+directory = "logs"
+# 最小日志级别: TRACE | DEBUG | INFO | WARNING | ERROR | CRITICAL
+level = "INFO"
+# 文件轮转触发条件: "10 MB", "1 day", "00:00", "weekly", "monthly"
+rotation = "10 MB"
+# 日志保留时间: "7 days", "1 week", "1 month", "1 year"
+retention = "7 days"
+# 压缩格式: "zip", "gz", "tar", "" (禁用)
+compression = "zip"
+# 是否按会话分割日志文件（默认：false）
+# 启用后，每次启动生成新文件（文件名包含时分秒，如 amaidesu_20260207_150423.jsonl）
+# 禁用时，同一天多次启动会追加到同一文件（如 amaidesu_2026-02-07.jsonl）
+split_by_session = false
+
 # 上下文管理器配置
 [context_manager]
 enabled = true

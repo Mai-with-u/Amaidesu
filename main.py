@@ -18,6 +18,7 @@ from src.core.flow_coordinator import FlowCoordinator
 from src.services.llm.service import LLMService
 from src.domains.input.pipelines.manager import PipelineManager
 from src.core.utils.logger import get_logger
+from loguru import logger as loguru_logger
 from src.domains.input.input_layer import InputLayer
 from src.domains.input.input_provider_manager import InputProviderManager
 from src.domains.decision.decision_manager import DecisionManager
@@ -44,30 +45,45 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def setup_logging(args: argparse.Namespace) -> None:
-    """根据命令行参数配置日志。"""
-    base_level = "DEBUG" if args.debug else "INFO"
-    log_format = "<green>{time:HH:mm:ss.SSS}</green> | <level>{level: <2}</level> | <cyan>{line: <4}</cyan> | <cyan>{extra[module]}</cyan> | <level>{message}</level>"
+def setup_logging(
+    args: argparse.Namespace,
+    logging_config: Optional[Dict[str, Any]] = None
+) -> None:
+    """根据命令行参数和配置文件配置日志。
 
-    logger.remove()
+    Args:
+        args: 命令行参数
+        logging_config: 日志配置字典（从 ConfigService.get_section("logging") 获取）
+    """
+    from src.core.utils.logger import configure_from_config
 
-    module_filter_func: Optional[Callable] = None
+    # 构建配置字典，应用 CLI 覆盖
+    final_config = {}
+
+    if logging_config:
+        final_config.update(logging_config)
+
+    # CLI --debug 覆盖配置级别
+    if args.debug:
+        final_config["level"] = "DEBUG"
+        final_config["console_level"] = "DEBUG"
+
+    # CLI --filter 参数处理（模块过滤）
     if args.filter:
         filtered_modules = set(args.filter)
 
         def filter_logic(record: Dict[str, Any]) -> bool:
-            if record["level"].no >= logger.level("WARNING").no:
+            """只显示指定模块的日志，WARNING 及以上级别总是显示"""
+            if record["level"].no >= loguru_logger.level("WARNING").no:
                 return True
             module_name = record["extra"].get("module")
             return bool(module_name and module_name in filtered_modules)
 
-        module_filter_func = filter_logic
-        logger.add(sys.stderr, level="INFO", format=log_format, colorize=True, filter=None)
-        logger.info(f"日志过滤器已激活，将主要显示来自模块 {list(filtered_modules)} 的日志")
-        logger.remove()
+        final_config["filter"] = filter_logic
 
-    logger.add(sys.stderr, level=base_level, colorize=True, format=log_format, filter=module_filter_func)
+    configure_from_config(final_config)
 
+    # 输出启动信息
     if args.debug:
         logger.info(f"已启用 DEBUG 日志级别{f'，并激活模块过滤器: {list(args.filter)}' if args.filter else '。'}")
     elif args.filter:
@@ -426,9 +442,14 @@ async def run_shutdown(
 async def main() -> None:
     """应用程序主入口点。"""
     args = parse_args()
-    setup_logging(args)
 
     config_service, config, main_cfg_copied, plugin_cfg_copied, pipeline_cfg_copied = load_config()
+
+    # 加载日志配置
+    logging_config = config_service.get_section("logging", default={})
+
+    setup_logging(args, logging_config)
+
     validate_config(config)
     exit_if_config_copied(main_cfg_copied, plugin_cfg_copied, pipeline_cfg_copied)
 

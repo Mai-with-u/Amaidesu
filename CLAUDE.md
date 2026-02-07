@@ -96,6 +96,56 @@ uv run pytest tests/ -v
 uv run pytest -m "not slow"
 ```
 
+### 日志配置
+
+日志系统支持文件输出和多种格式，可通过配置文件或命令行参数控制。
+
+**配置文件** (`config.toml`)：
+```toml
+[logging]
+# 是否启用文件日志
+enabled = true
+# 日志格式: jsonl (JSON Lines) 或 text (纯文本)
+format = "jsonl"
+# 日志文件目录 (相对于项目根目录)
+directory = "logs"
+# 最小日志级别: TRACE | DEBUG | INFO | WARNING | ERROR | CRITICAL
+level = "INFO"
+# 文件轮转触发条件: "10 MB", "1 day", "00:00", "weekly", "monthly"
+rotation = "10 MB"
+# 日志保留时间: "7 days", "1 week", "1 month", "1 year"
+retention = "7 days"
+# 压缩格式: "zip", "gz", "tar", "" (禁用)
+compression = "zip"
+# 是否按会话分割日志文件（默认：false）
+# true: 每次启动生成新文件（文件名包含时分秒，如 `amaidesu_20260207_150423.jsonl`）
+# false: 同一天多次启动追加到同一文件（文件名如 `amaidesu_2026-02-07.jsonl`）
+split_by_session = false
+```
+
+**CLI 参数覆盖**：
+- `--debug`: 强制 DEBUG 级别（覆盖配置文件）
+- `--filter ModuleName`: 只显示指定模块的日志
+
+**示例**：
+```bash
+# 使用配置文件中的日志设置
+uv run python main.py
+
+# 覆盖为 DEBUG 级别
+uv run python main.py --debug
+
+# 只显示特定模块的日志
+uv run python main.py --filter SubtitleProvider TTSProvider
+
+# 组合使用
+uv run python main.py --debug --filter BiliDanmakuProvider
+```
+
+**日志格式**：
+- **JSONL** (默认): 每行一个 JSON 对象，便于日志分析工具解析
+- **text**: 人类可读的纯文本格式，带颜色和时间戳
+
 ### 代码质量
 ```bash
 # 代码检查
