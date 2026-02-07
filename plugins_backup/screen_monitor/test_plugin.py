@@ -13,7 +13,6 @@ Screen Monitor Plugin 测试脚本
 import asyncio
 import logging
 import time
-from typing import Dict, Any
 
 # 模拟核心系统
 class MockAmaidesuCore:
@@ -104,14 +103,14 @@ async def test_screen_monitor_plugin():
             
             await asyncio.sleep(1)
         
-        print(f"\n\n🛑 测试完成!")
+        print("\n\n🛑 测试完成!")
         
         # 显示最终统计
         final_status = plugin.get_plugin_status()
         reader_stats = final_status.get('reader_stats', {})
         analyzer_stats = final_status.get('analyzer_stats', {})
         
-        print(f"\n📊 最终统计:")
+        print("\n📊 最终统计:")
         print(f"  📤 发送消息数: {final_status['messages_sent']}")
         print(f"  🔬 AI分析次数: {reader_stats.get('total_analyses', 0)}")
         print(f"  🎬 拼接分析次数: {reader_stats.get('stitched_analyses_count', 0)}")
@@ -124,7 +123,7 @@ async def test_screen_monitor_plugin():
         for i, msg_data in enumerate(mock_core.messages_received[-5:], 1):  # 显示最后5条
             print(f"  {i}. {msg_data['text'][:80]}...")
         
-        print(f"\n🎯 当前上下文状态:")
+        print("\n🎯 当前上下文状态:")
         if reader_stats:
             print(f"  主上下文: {reader_stats.get('current_main_context', 'N/A')[:50]}...")
             print(f"  当前上下文: {reader_stats.get('current_context', 'N/A')[:50]}...")

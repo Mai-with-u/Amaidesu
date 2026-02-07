@@ -55,6 +55,8 @@ from src.services.config.schemas.schemas import (
     OmniTTSProviderConfig,
     AvatarProviderConfig,
     RemoteStreamOutputProviderConfig,
+    # Non-provider configs (system-wide)
+    LoggingConfig,
 )
 
 __all__ = [
@@ -99,4 +101,6 @@ __all__ = [
     "OmniTTSProviderConfig",
     "AvatarProviderConfig",
     "RemoteStreamOutputProviderConfig",
+    # Non-provider configs (system-wide)
+    "LoggingConfig",
 ]

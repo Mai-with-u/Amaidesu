@@ -136,7 +136,7 @@ class MCPClient:
     def _diagnose_connection_error(self, error: Exception) -> ConnectionErrorType:
         """诊断连接错误类型"""
         error_str = str(error).lower()
-        error_type_str = type(error).__name__.lower()
+        type(error).__name__.lower()
 
         # 检查依赖缺失错误
         if "npx" in error_str and ("not found" in error_str or "not recognized" in error_str):
@@ -685,7 +685,7 @@ class MCPClient:
                     break
 
                 # 尝试重连
-                self.logger.info(f"[MCP] 正在尝试重新连接到 MCP 服务器...")
+                self.logger.info("[MCP] 正在尝试重新连接到 MCP 服务器...")
                 success = await self.connect(enable_auto_reconnect=False)
 
                 if success:

@@ -14,12 +14,11 @@ LLMService 单元测试
 """
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch, mock_open
-from typing import Dict, Any, List
+from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Dict, Any
 import pytest
 
-from src.services.llm.llm_service import LLMService, LLMResponse, RetryConfig
-from src.services.llm.backends.openai_backend import OpenAIBackend
+from src.services.llm.service import LLMService, LLMResponse, RetryConfig
 
 # =============================================================================
 # Test Fixtures
@@ -70,19 +69,23 @@ async def setup_llm_service(llm_service: LLMService, mock_config: Dict[str, Any]
     # Mock OpenAIBackend to avoid real API calls
     with patch("src.services.llm.backends.openai_backend.OpenAIBackend") as mock_backend_class:
         mock_backend = MagicMock()
-        mock_backend.chat = AsyncMock(return_value=LLMResponse(
-            success=True,
-            content="Test response",
-            model="gpt-4o-mini",
-            usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-        ))
+        mock_backend.chat = AsyncMock(
+            return_value=LLMResponse(
+                success=True,
+                content="Test response",
+                model="gpt-4o-mini",
+                usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            )
+        )
         mock_backend.stream_chat = AsyncMock()
-        mock_backend.vision = AsyncMock(return_value=LLMResponse(
-            success=True,
-            content="Image description",
-            model="gpt-4-vision-preview",
-            usage={"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
-        ))
+        mock_backend.vision = AsyncMock(
+            return_value=LLMResponse(
+                success=True,
+                content="Image description",
+                model="gpt-4-vision-preview",
+                usage={"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
+            )
+        )
         mock_backend.cleanup = AsyncMock()
         mock_backend.get_info.return_value = {
             "name": "OpenAIBackend",
@@ -199,10 +202,7 @@ async def test_chat_with_system_message(setup_llm_service):
     """测试带系统消息的聊天"""
     llm_service, mock_backend, _ = setup_llm_service
 
-    response = await llm_service.chat(
-        "Hello",
-        system_message="You are a helpful assistant"
-    )
+    response = await llm_service.chat("Hello", system_message="You are a helpful assistant")
 
     assert response.success is True
     # 验证消息格式正确
@@ -250,7 +250,6 @@ async def test_chat_with_custom_backend(setup_llm_service):
 
     assert response.success is True
     # 验证使用了正确的后端
-    call_args = mock_backend.chat.call_args
 
 
 @pytest.mark.asyncio
@@ -277,6 +276,7 @@ async def test_chat_records_token_usage(setup_llm_service):
 @pytest.mark.asyncio
 async def test_stream_chat_basic(llm_service: LLMService, mock_config: Dict[str, Any]):
     """测试基本流式聊天"""
+
     # Mock stream_chat 后端
     async def mock_stream(**kwargs):
         chunks = ["Hello", " world", "!"]
@@ -301,6 +301,7 @@ async def test_stream_chat_basic(llm_service: LLMService, mock_config: Dict[str,
 @pytest.mark.asyncio
 async def test_stream_chat_with_stop_event(llm_service: LLMService, mock_config: Dict[str, Any]):
     """测试流式聊天支持停止事件"""
+
     async def mock_stream(**kwargs):
         chunks = ["Chunk1", "Chunk2", "Chunk3"]
         for chunk in chunks:
@@ -331,6 +332,7 @@ async def test_stream_chat_with_stop_event(llm_service: LLMService, mock_config:
 @pytest.mark.asyncio
 async def test_stream_chat_with_system_message(llm_service: LLMService, mock_config: Dict[str, Any]):
     """测试流式聊天带系统消息"""
+
     async def mock_stream(**kwargs):
         messages = kwargs.get("messages", [])
         # 验证消息格式
@@ -347,10 +349,7 @@ async def test_stream_chat_with_system_message(llm_service: LLMService, mock_con
             await llm_service.setup(mock_config)
 
             chunks = []
-            async for chunk in llm_service.stream_chat(
-                "Hello",
-                system_message="You are helpful"
-            ):
+            async for chunk in llm_service.stream_chat("Hello", system_message="You are helpful"):
                 chunks.append(chunk)
 
             assert chunks == ["OK"]
@@ -375,10 +374,7 @@ async def test_call_tools_basic(setup_llm_service):
             {
                 "id": "call_123",
                 "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "arguments": '{"location": "Tokyo"}'
-                },
+                "function": {"name": "get_weather", "arguments": '{"location": "Tokyo"}'},
             }
         ],
         usage={"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
@@ -390,13 +386,8 @@ async def test_call_tools_basic(setup_llm_service):
             "function": {
                 "name": "get_weather",
                 "description": "Get weather information",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {"type": "string"}
-                    }
-                }
-            }
+                "parameters": {"type": "object", "properties": {"location": {"type": "string"}}},
+            },
         }
     ]
 
@@ -414,11 +405,7 @@ async def test_call_tools_with_system_message(setup_llm_service):
 
     tools = [{"type": "function", "function": {"name": "test"}}]
 
-    await llm_service.call_tools(
-        "Test",
-        tools,
-        system_message="You are a tool-using assistant"
-    )
+    await llm_service.call_tools("Test", tools, system_message="You are a tool-using assistant")
 
     # 验证消息格式
     call_args = mock_backend.chat.call_args
@@ -432,15 +419,7 @@ async def test_call_tools_passes_tools_parameter(setup_llm_service):
     """测试工具调用正确传递 tools 参数"""
     llm_service, mock_backend, _ = setup_llm_service
 
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "calculate",
-                "description": "Perform calculation"
-            }
-        }
-    ]
+    tools = [{"type": "function", "function": {"name": "calculate", "description": "Perform calculation"}}]
 
     await llm_service.call_tools("Calculate 2+2", tools)
 
@@ -493,9 +472,7 @@ async def test_vision_with_system_message(setup_llm_service):
     llm_service, mock_backend, _ = setup_llm_service
 
     response = await llm_service.vision(
-        "Describe this",
-        ["https://example.com/image.jpg"],
-        system_message="You are a vision expert"
+        "Describe this", ["https://example.com/image.jpg"], system_message="You are a vision expert"
     )
 
     assert response.success is True
@@ -536,11 +513,7 @@ async def test_simple_chat_with_error_returns_error_message(setup_llm_service):
     """测试 simple_chat 错误处理"""
     llm_service, mock_backend, _ = setup_llm_service
 
-    mock_backend.chat.return_value = LLMResponse(
-        success=False,
-        content=None,
-        error="API Error"
-    )
+    mock_backend.chat.return_value = LLMResponse(success=False, content=None, error="API Error")
 
     result = await llm_service.simple_chat("Hello")
 
@@ -562,10 +535,7 @@ async def test_simple_vision_returns_text(setup_llm_service):
     """测试 simple_vision 直接返回文本"""
     llm_service, mock_backend, _ = setup_llm_service
 
-    result = await llm_service.simple_vision(
-        "Describe this",
-        ["image.jpg"]
-    )
+    result = await llm_service.simple_vision("Describe this", ["image.jpg"])
 
     assert result == "Image description"
 
@@ -575,11 +545,7 @@ async def test_simple_vision_with_error_returns_error_message(setup_llm_service)
     """测试 simple_vision 错误处理"""
     llm_service, mock_backend, _ = setup_llm_service
 
-    mock_backend.vision.return_value = LLMResponse(
-        success=False,
-        content=None,
-        error="Vision API Error"
-    )
+    mock_backend.vision.return_value = LLMResponse(success=False, content=None, error="Vision API Error")
 
     result = await llm_service.simple_vision("Test", ["image.jpg"])
 
@@ -625,6 +591,7 @@ async def test_retry_on_failure(llm_service: LLMService, mock_config: Dict[str, 
 @pytest.mark.asyncio
 async def test_retry_exhaustion(llm_service: LLMService, mock_config: Dict[str, Any]):
     """测试重试次数耗尽"""
+
     async def always_failing_chat(**kwargs):
         raise Exception("Persistent API Error")
 
@@ -663,6 +630,7 @@ async def test_retry_with_custom_config(llm_service: LLMService, mock_config: Di
             await llm_service.setup(mock_config)
 
             import time
+
             start = time.time()
             response = await llm_service.chat("Test")
             elapsed = time.time() - start
@@ -713,10 +681,7 @@ async def test_get_token_usage_summary(setup_llm_service):
     llm_service, _, mock_token_manager = setup_llm_service
 
     mock_token_manager.return_value.format_total_cost_summary.return_value = (
-        "=== 所有模型费用汇总 ===\n"
-        "总调用次数: 100\n"
-        "总Token: 50000\n"
-        "总费用: 1.234567"
+        "=== 所有模型费用汇总 ===\n总调用次数: 100\n总Token: 50000\n总费用: 1.234567"
     )
 
     summary = llm_service.get_token_usage_summary()
@@ -760,7 +725,7 @@ async def test_get_backend_info_returns_correct_structure(setup_llm_service):
 
     info = llm_service.get_backend_info()
 
-    for backend_name, backend_info in info.items():
+    for _backend_name, backend_info in info.items():
         assert "name" in backend_info
         assert "model" in backend_info
         assert "base_url" in backend_info
@@ -827,6 +792,7 @@ async def test_cleanup_all_backends(llm_service: LLMService, mock_config: Dict[s
 @pytest.mark.asyncio
 async def test_cleanup_handles_backend_errors(llm_service: LLMService, mock_config: Dict[str, Any]):
     """测试清理时处理单个后端错误"""
+
     async def failing_cleanup():
         raise Exception("Cleanup error")
 
@@ -944,11 +910,7 @@ def test_llm_response_with_all_fields():
 
 def test_llm_response_error_case():
     """测试 LLMResponse 错误情况"""
-    response = LLMResponse(
-        success=False,
-        content=None,
-        error="API Error"
-    )
+    response = LLMResponse(success=False, content=None, error="API Error")
 
     assert response.success is False
     assert response.content is None

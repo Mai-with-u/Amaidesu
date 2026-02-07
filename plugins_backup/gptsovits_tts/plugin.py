@@ -4,15 +4,12 @@ import asyncio
 import logging
 import os
 import sys
-import tempfile
 import struct  # 添加struct模块导入，用于解析WAV数据
 from typing import Dict, Any, Optional
 import numpy as np  # 确保导入 numpy
 from collections import deque
 import base64
-import time
 import re  # 添加正则表达式模块，用于检测英文字符
-from ..warudo.talk_subtitle import ReplyGenerationManager
 
 # --- Dependencies Check (Inform User) ---
 # Try importing required libraries and inform the user if they are missing.

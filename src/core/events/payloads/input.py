@@ -21,7 +21,7 @@ class RawDataPayload(BaseModel):
 
     事件名：CoreEvents.PERCEPTION_RAW_DATA_GENERATED
     发布者：InputProvider
-    订阅者：InputLayer（Layer 1-2）
+    订阅者：InputLayer (Input Domain)
 
     表示 InputProvider 从外部采集到的原始数据。
     """
@@ -74,7 +74,7 @@ class MessageReadyPayload(BaseModel):
 
     事件名：CoreEvents.NORMALIZATION_MESSAGE_READY
     发布者：InputLayer
-    订阅者：DecisionManager（Layer 3）
+    订阅者：DecisionManager (Decision Domain)
 
     表示 InputLayer 完成了数据标准化处理，生成了 NormalizedMessage。
     """

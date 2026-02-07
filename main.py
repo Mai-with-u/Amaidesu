@@ -18,9 +18,14 @@ from src.core.flow_coordinator import FlowCoordinator
 from src.services.llm.service import LLMService
 from src.domains.input.pipelines.manager import PipelineManager
 from src.core.utils.logger import get_logger
+from loguru import logger as loguru_logger
 from src.domains.input.input_layer import InputLayer
 from src.domains.input.input_provider_manager import InputProviderManager
 from src.domains.decision.decision_manager import DecisionManager
+
+# 确保所有Provider都被注册
+from src.domains.input import providers as input_providers
+from src.domains.output import providers as output_providers
 
 logger = get_logger("Main")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -44,30 +49,45 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def setup_logging(args: argparse.Namespace) -> None:
-    """根据命令行参数配置日志。"""
-    base_level = "DEBUG" if args.debug else "INFO"
-    log_format = "<green>{time:HH:mm:ss.SSS}</green> | <level>{level: <2}</level> | <cyan>{line: <4}</cyan> | <cyan>{extra[module]}</cyan> | <level>{message}</level>"
+def setup_logging(
+    args: argparse.Namespace,
+    logging_config: Optional[Dict[str, Any]] = None
+) -> None:
+    """根据命令行参数和配置文件配置日志。
 
-    logger.remove()
+    Args:
+        args: 命令行参数
+        logging_config: 日志配置字典（从 ConfigService.get_section("logging") 获取）
+    """
+    from src.core.utils.logger import configure_from_config
 
-    module_filter_func: Optional[Callable] = None
+    # 构建配置字典，应用 CLI 覆盖
+    final_config = {}
+
+    if logging_config:
+        final_config.update(logging_config)
+
+    # CLI --debug 覆盖配置级别
+    if args.debug:
+        final_config["level"] = "DEBUG"
+        final_config["console_level"] = "DEBUG"
+
+    # CLI --filter 参数处理（模块过滤）
     if args.filter:
         filtered_modules = set(args.filter)
 
         def filter_logic(record: Dict[str, Any]) -> bool:
-            if record["level"].no >= logger.level("WARNING").no:
+            """只显示指定模块的日志，WARNING 及以上级别总是显示"""
+            if record["level"].no >= loguru_logger.level("WARNING").no:
                 return True
             module_name = record["extra"].get("module")
             return bool(module_name and module_name in filtered_modules)
 
-        module_filter_func = filter_logic
-        logger.add(sys.stderr, level="INFO", format=log_format, colorize=True, filter=None)
-        logger.info(f"日志过滤器已激活，将主要显示来自模块 {list(filtered_modules)} 的日志")
-        logger.remove()
+        final_config["filter"] = filter_logic
 
-    logger.add(sys.stderr, level=base_level, colorize=True, format=log_format, filter=module_filter_func)
+    configure_from_config(final_config)
 
+    # 输出启动信息
     if args.debug:
         logger.info(f"已启用 DEBUG 日志级别{f'，并激活模块过滤器: {list(args.filter)}' if args.filter else '。'}")
     elif args.filter:
@@ -113,15 +133,15 @@ def validate_config(config: Dict[str, Any]) -> None:
         errors.append("缺少 [general] 配置段")
 
     # 检查输入Provider配置（新格式）
-    if not config.get("providers.input"):
+    if not config.get("providers", {}).get("input"):
         logger.warning("未检测到 [providers.input] 配置，输入Provider功能将被禁用")
 
     # 检查决策Provider配置（新格式）
-    if not config.get("providers.decision"):
+    if not config.get("providers", {}).get("decision"):
         logger.warning("未检测到 [providers.decision] 配置，决策Provider功能将被禁用")
 
     # 检查输出Provider配置（新格式）
-    if not config.get("providers.output"):
+    if not config.get("providers", {}).get("output"):
         logger.warning("未检测到 [providers.output] 配置，输出Provider功能将被禁用")
 
     # 如果有严重错误，退出程序
@@ -154,7 +174,7 @@ def exit_if_config_copied(main_cfg_copied: bool, plugin_cfg_copied: bool, pipeli
             logger.warning("!! 请检查 src/layers/ 下各插件目录中的 config.toml 文件， !!")
         if pipeline_cfg_copied:
             logger.warning("!! 已根据模板创建了部分管道的 config.toml 文件。          !!")
-            logger.warning("!! 请检查 src/pipelines/ 下各管道目录中的 config.toml 文件，!!")
+            logger.warning("!! 请检查 src/domains/input/pipelines/ 下各管道目录中的 config.toml 文件，!!")
         logger.warning("!! 特别是 API 密钥、房间号、设备名称等需要您修改的配置。   !!")
         logger.warning("!! 修改完成后，请重新运行程序。                           !!")
         logger.warning(box)
@@ -175,7 +195,7 @@ async def load_pipeline_manager(config: Dict[str, Any]) -> Optional[PipelineMana
         logger.info("配置中未启用管道功能")
         return None
 
-    pipeline_load_dir = os.path.join(_BASE_DIR, "src", "pipelines")
+    pipeline_load_dir = os.path.join(_BASE_DIR, "src", "domains", "input", "pipelines")
     logger.info(f"准备加载管道 (从目录: {pipeline_load_dir})...")
 
     try:
@@ -186,7 +206,7 @@ async def load_pipeline_manager(config: Dict[str, Any]) -> Optional[PipelineMana
         inbound = len(manager._inbound_pipelines)
         outbound = len(manager._outbound_pipelines)
 
-        # 加载 TextPipeline（Layer 1-2 输入层文本预处理，新架构）
+        # 加载 TextPipeline（Input Domain: 文本预处理）
         await manager.load_text_pipelines(pipeline_load_dir, pipeline_config)
         text_pipeline_count = len(manager._text_pipelines)
 
@@ -222,9 +242,9 @@ async def create_app_components(
     """创建并连接核心组件（事件总线、输入层、决策层、协调器、核心、插件）。"""
     general_config = config.get("general", {})
     # 使用新的 [providers.*] 配置格式
-    output_config = config.get("providers.output", {})
-    decision_config = config.get("providers.decision", {})
-    input_config = config.get("providers.input", {})
+    output_config = config.get("providers", {}).get("output", {})
+    decision_config = config.get("providers", {}).get("decision", {})
+    input_config = config.get("providers", {}).get("input", {})
     platform_id = general_config.get("platform_id", "amaidesu")
 
     if output_config:
@@ -246,19 +266,16 @@ async def create_app_components(
     # 事件总线
     logger.info("初始化事件总线、数据流协调器和 AmaidesuCore...")
     event_bus = EventBus()
-
     register_core_events()
-    logger.info("核心事件已注册到 EventRegistry")
 
-    # 输入Provider管理器 (Layer 1)
+    # 输入Provider管理器 (Input Domain)
     input_provider_manager: Optional[InputProviderManager] = None
     if input_config:
-        logger.info("初始化输入Provider管理器（Layer 1 数据流）...")
+        logger.info("初始化输入Provider管理器（Input Domain）...")
         try:
             input_provider_manager = InputProviderManager(event_bus)
             providers = await input_provider_manager.load_from_config(input_config, config_service=config_service)
             await input_provider_manager.start_all_providers(providers)
-            logger.info(f"InputProviderManager 已设置（已启动 {len(input_provider_manager._providers)} 个Provider）")
         except Exception as e:
             logger.error(f"设置输入Provider管理器失败: {e}", exc_info=True)
             logger.warning("输入Provider功能不可用，继续启动其他服务")
@@ -266,16 +283,14 @@ async def create_app_components(
     else:
         logger.info("未检测到输入配置，输入Provider功能将被禁用")
 
-    # 输入层 (Layer 1-2)
-    logger.info("初始化输入层组件（Layer 1-2 数据流）...")
+    # 输入层 (Input Domain)
     input_layer = InputLayer(event_bus, pipeline_manager=pipeline_manager)
     await input_layer.setup()
-    logger.info("InputLayer 已设置（Layer 1-2）")
 
-    # 决策层 (Layer 3)
+    # 决策层 (Decision Domain)
     decision_manager: Optional[DecisionManager] = None
     if decision_config:
-        logger.info("初始化决策层组件（Layer 3 数据流）...")
+        logger.info("初始化决策层组件（Decision Domain）...")
         try:
             decision_manager = DecisionManager(event_bus, llm_service)
 
@@ -291,13 +306,13 @@ async def create_app_components(
     else:
         logger.info("未检测到决策配置，决策层功能将被禁用")
 
-    # 数据流协调器 (Layer 4-5)
+    # 数据流协调器 (Output Domain)
     logger.info("初始化数据流协调器...")
     flow_coordinator: Optional[FlowCoordinator] = FlowCoordinator(event_bus) if output_config else None
     if flow_coordinator:
         try:
             await flow_coordinator.setup(output_config, config_service=config_service)
-            logger.info("数据流协调器已设置（Layer 4-5）")
+            logger.info("数据流协调器已设置（Output Domain）")
         except Exception as e:
             logger.error(f"设置数据流协调器失败: {e}", exc_info=True)
             logger.warning("数据流协调器功能不可用，继续启动其他服务")
@@ -426,9 +441,14 @@ async def run_shutdown(
 async def main() -> None:
     """应用程序主入口点。"""
     args = parse_args()
-    setup_logging(args)
 
     config_service, config, main_cfg_copied, plugin_cfg_copied, pipeline_cfg_copied = load_config()
+
+    # 加载日志配置
+    logging_config = config_service.get_section("logging", default={})
+
+    setup_logging(args, logging_config)
+
     validate_config(config)
     exit_if_config_copied(main_cfg_copied, plugin_cfg_copied, pipeline_cfg_copied)
 

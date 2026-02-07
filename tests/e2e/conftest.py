@@ -76,7 +76,7 @@ async def mock_input_provider_manager(event_bus: EventBus) -> InputProviderManag
         }
     }
 
-    providers = await manager.load_from_config(config)
+    await manager.load_from_config(config)
     # 注意：不启动 Provider，只返回已创建的实例
     return manager
 
@@ -95,7 +95,6 @@ async def mock_output_provider():
 @pytest.fixture
 def wait_for_event():
     """辅助函数：等待特定事件"""
-    received = []
 
     async def _waiter(event_bus: EventBus, event_name: str, timeout: float = 2.0):
         """等待事件触发"""

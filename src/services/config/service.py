@@ -110,7 +110,7 @@ class ConfigService:
             main_cfg_name="config.toml",
             main_template_name="config-template.toml",
             plugin_dir_name="src/domains",  # 更新：插件系统已移除，使用domains目录
-            pipeline_dir_name="src/pipelines",
+            pipeline_dir_name="src/domains/input/pipelines",  # 更新：Pipeline已移入Input Domain
         )
 
         self._initialized = True
@@ -246,7 +246,7 @@ class ConfigService:
             throttle_config = config_service.get_pipeline_config("throttle")
 
             # 使用指定的管道目录路径
-            throttle_config = config_service.get_pipeline_config("throttle", "/path/to/src/pipelines/throttle")
+            throttle_config = config_service.get_pipeline_config("throttle", "/path/to/src/domains/input/pipelines/throttle")
         """
         if not self._initialized:
             self.logger.warning("ConfigService 未初始化，返回空配置")
@@ -254,7 +254,7 @@ class ConfigService:
 
         # 自动查找管道目录
         if pipeline_dir_path is None:
-            pipeline_dir_path = os.path.join(self.base_dir, "src", "pipelines", pipeline_name)
+            pipeline_dir_path = os.path.join(self.base_dir, "src", "domains", "input", "pipelines", pipeline_name)
             if not os.path.isdir(pipeline_dir_path):
                 self.logger.warning(f"管道目录不存在: {pipeline_dir_path}")
                 return {}
@@ -386,7 +386,7 @@ class ConfigService:
         all_pipeline_configs = {}
 
         # 获取管道目录
-        pipelines_dir = os.path.join(self.base_dir, "src", "pipelines")
+        pipelines_dir = os.path.join(self.base_dir, "src", "domains", "input", "pipelines")
         if not os.path.isdir(pipelines_dir):
             self.logger.warning(f"管道目录不存在: {pipelines_dir}")
             return all_pipeline_configs

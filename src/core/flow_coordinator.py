@@ -1,19 +1,19 @@
 """
-FlowCoordinator - 数据流协调器（5层架构：Layer 3 → Layer 4-5）
+FlowCoordinator - 数据流协调器（3域架构：Decision Domain → Output Domain）
 
 职责:
-- 协调 Layer 3 (Decision) 到 Layer 4-5 (Parameters+Rendering) 的数据流
+- 协调 Decision Domain 到 Output Domain 的数据流
 - 订阅 Intent 事件并触发 Expression 生成和渲染
 - 初始化输出层（OutputProviderManager 和 ExpressionGenerator）
 
-数据流（5层架构）:
-    Intent (Layer 3 Decision)
+数据流（3域架构）:
+    Intent (Decision Domain)
         ↓ CoreEvents.DECISION_INTENT_GENERATED
     FlowCoordinator
         ↓
-    ExpressionGenerator (Layer 4 Parameters)
+    ExpressionGenerator (Output Domain - Parameters)
         ↓
-    OutputProviderManager (Layer 5 Rendering)
+    OutputProviderManager (Output Domain - Rendering)
 """
 
 from typing import Dict, Any, Optional
@@ -27,15 +27,15 @@ from src.domains.output.manager import OutputProviderManager
 
 class FlowCoordinator:
     """
-    数据流协调器（5层架构）
+    数据流协调器（3域架构）
 
     核心职责:
-    - 协调 Layer 3 (Decision) → Layer 4-5 (Parameters+Rendering) 的数据流
+    - 协调 Decision Domain → Output Domain 的数据流
     - 初始化和管理输出层组件
     - 订阅并处理 Intent 事件
 
-    数据流程（5层架构）:
-    Intent (Layer 3) → ExpressionGenerator (Layer 4) → OutputProviderManager (Layer 5)
+    数据流程（3域架构）:
+    Intent (Decision) → ExpressionGenerator (Output - Parameters) → OutputProviderManager (Output - Rendering)
     """
 
     def __init__(
@@ -87,7 +87,7 @@ class FlowCoordinator:
         if self.output_provider_manager:
             await self.output_provider_manager.load_from_config(config, core=None, config_service=config_service)
 
-        # 订阅 Layer 3 (Decision) 的 Intent 事件（5层架构）
+        # 订阅 Decision Domain 的 Intent 事件（3域架构）
         self.event_bus.on(CoreEvents.DECISION_INTENT_GENERATED, self._on_intent_ready, priority=50)
         self._event_handler_registered = True
         self.logger.info(f"已订阅 '{CoreEvents.DECISION_INTENT_GENERATED}' 事件")
@@ -141,7 +141,7 @@ class FlowCoordinator:
 
     async def _on_intent_ready(self, event_name: str, event_data: Dict[str, Any], source: str):
         """
-        处理Intent事件（Layer 3 Decision → Layer 4-5 Parameters+Rendering）
+        处理Intent事件（Decision Domain → Output Domain）
 
         数据流（事件驱动）:
             Intent → ExpressionParameters → 发布 expression.parameters_generated 事件 → OutputProvider 订阅并渲染
@@ -160,18 +160,14 @@ class FlowCoordinator:
                 self.logger.error("事件数据中缺少intent对象")
                 return
 
-            # Layer 4: Intent → ExpressionParameters
+            # Output Domain - Parameters: Intent → ExpressionParameters
             if self.expression_generator:
                 params = await self.expression_generator.generate(intent)
                 self.logger.info("ExpressionParameters生成完成")
 
-                # Layer 5: 发布 expression.parameters_generated 事件（事件驱动）
+                # 发布 expression.parameters_generated 事件（事件驱动）
                 # OutputProvider 订阅此事件并响应
-                await self.event_bus.emit(
-                    CoreEvents.EXPRESSION_PARAMETERS_GENERATED,
-                    params,
-                    source="FlowCoordinator"
-                )
+                await self.event_bus.emit(CoreEvents.EXPRESSION_PARAMETERS_GENERATED, params, source="FlowCoordinator")
                 self.logger.debug(f"已发布事件: {CoreEvents.EXPRESSION_PARAMETERS_GENERATED}")
             else:
                 self.logger.warning("表达式生成器未初始化，跳过渲染")

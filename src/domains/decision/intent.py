@@ -1,7 +1,7 @@
 """
 Intent数据类型定义
 
-Layer 3: Decision的输出格式，表示决策意图。
+Decision Domain (决策域) 的输出格式，表示决策意图。
 """
 
 from dataclasses import dataclass, field
@@ -60,12 +60,12 @@ class IntentAction:
 @dataclass
 class Intent:
     """
-    意图对象（Layer 3: Decision的输出）
+    意图对象 (Decision Domain 的输出)
 
     核心职责：
     - 表示AI的决策意图
     - 包含回复文本、情感、动作
-    - 作为Layer 4的输入
+    - 作为 Output Domain 的输入
 
     Attributes:
         original_text: 原始输入文本

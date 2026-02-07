@@ -64,7 +64,7 @@ enabled = true
             warnings.simplefilter("always")
 
             # 调用已弃用的方法
-            result = config_service.get_input_provider_config("console_input")
+            config_service.get_input_provider_config("console_input")
 
             # 验证警告被触发
             assert len(w) == 1
@@ -79,7 +79,7 @@ enabled = true
             warnings.simplefilter("always")
 
             # 调用已弃用的方法
-            result = config_service.get_provider_config("subtitle")
+            config_service.get_provider_config("subtitle")
 
             # 验证警告被触发
             assert len(w) == 1
@@ -94,7 +94,7 @@ enabled = true
             warnings.simplefilter("always")
 
             # 调用新方法（不应触发警告）
-            result = config_service.get_provider_config_with_defaults(
+            config_service.get_provider_config_with_defaults(
                 provider_name="console_input",
                 provider_layer="input",
                 schema_class=None,
@@ -132,7 +132,7 @@ class TestManagerDeprecationWarnings:
             warnings.simplefilter("always")
 
             # 不传递 config_service（触发回退）
-            providers = await manager.load_from_config(config, config_service=None)
+            await manager.load_from_config(config, config_service=None)
 
             # 验证警告被触发
             deprecation_warnings = [warning for warning in w if issubclass(warning.category, DeprecationWarning)]

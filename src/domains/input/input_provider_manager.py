@@ -12,6 +12,8 @@ import time
 
 from src.core.event_bus import EventBus
 from src.core.base.input_provider import InputProvider
+from src.core.events.names import CoreEvents
+from src.core.events.payloads.input import RawDataPayload
 from src.core.utils.logger import get_logger
 
 
@@ -96,7 +98,7 @@ class InputProviderManager:
                 name=provider_name, started_at=time.time(), is_running=False
             )
 
-        # 并发启动所有Provider
+        # 并发启动所有Provider（后台运行，不等待完成）
         start_tasks = []
         for provider in providers:
             provider_name = self._get_provider_name(provider)
@@ -106,26 +108,10 @@ class InputProviderManager:
             self._provider_tasks[provider_name] = task
             start_tasks.append(task)
 
-        # 等待所有Provider启动(使用gather包装，错误隔离)
-        results = await asyncio.gather(*start_tasks, return_exceptions=True)
-
-        # 记录启动失败的Provider
-        failed_count = 0
-        for i, result in enumerate(results):
-            provider_name = self._get_provider_name(providers[i])
-            if isinstance(result, Exception):
-                self.logger.error(f"Provider {provider_name} 启动失败: {result}", exc_info=True)
-                self._provider_stats[provider_name].is_running = False
-                failed_count += 1
-            elif isinstance(result, asyncio.CancelledError):
-                self.logger.warning(f"Provider {provider_name} 启动被取消")
-                self._provider_stats[provider_name].is_running = False
-                failed_count += 1
-
-        if failed_count > 0:
-            self.logger.warning(f"{failed_count}个Provider启动失败，{len(providers) - failed_count}个Provider正常运行")
-        else:
-            self.logger.info(f"所有{len(providers)}个Provider启动成功")
+        # Provider任务已创建并开始后台运行
+        # 注意：Provider运行在无限循环中，因此不等待任务完成
+        # 错误隔离已在_run_provider方法中实现
+        self.logger.info(f"所有{len(providers)}个Provider已启动并在后台运行")
 
         self._is_started = True
 
@@ -238,8 +224,10 @@ class InputProviderManager:
                 self._provider_stats[provider_name].last_message_at = time.time()
 
                 # 发布事件
-                await self.event_bus.emit(
-                    "perception.raw_data.generated", {"data": data, "source": provider_name}, source=provider_name
+                await self.event_bus.emit_typed(
+                    CoreEvents.PERCEPTION_RAW_DATA_GENERATED,
+                    RawDataPayload.from_raw_data(data),
+                    source=provider_name,
                 )
 
                 self.logger.debug(f"Provider {provider_name} 生成数据: {data.content}")

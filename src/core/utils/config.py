@@ -107,7 +107,7 @@ def check_and_setup_plugin_configs(plugin_base_dir_name: str = "src/plugins") ->
     return _ensure_component_configs(abs_plugin_base_dir, "插件")
 
 
-def check_and_setup_pipeline_configs(pipeline_base_dir_name: str = "src/pipelines") -> bool:
+def check_and_setup_pipeline_configs(pipeline_base_dir_name: str = "src/domains/input/pipelines") -> bool:
     """
     检查管道目录中的 config.toml。如果不存在但存在 config-template.toml，则复制模板。
     pipeline_base_dir_name 是相对于项目根目录的路径。
@@ -242,7 +242,7 @@ def initialize_configurations(
     main_cfg_name: str = "config.toml",
     main_template_name: str = "config-template.toml",
     plugin_dir_name: str = "src/plugins",
-    pipeline_dir_name: str = "src/pipelines",
+    pipeline_dir_name: str = "src/domains/input/pipelines",
 ) -> tuple[dict, bool, bool, bool]:
     """
     执行所有配置检查和加载步骤。

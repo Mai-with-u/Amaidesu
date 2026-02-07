@@ -1,5 +1,5 @@
 """
-Avatar Output Provider - Layer 7: 虚拟形象输出
+Avatar Output Provider - Output Domain: 虚拟形象输出
 
 职责:
 - 将 ExpressionParameters 渲染到虚拟形象平台

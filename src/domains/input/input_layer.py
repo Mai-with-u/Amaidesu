@@ -1,7 +1,7 @@
 """
-InputLayer - 输入层协调器
+InputLayer - 输入域协调器
 
-负责协调Layer 1(输入感知)和Layer 2(输入标准化)，建立RawData到NormalizedMessage的数据流。
+负责协调输入Provider和标准化，建立RawData到NormalizedMessage的数据流。
 """
 
 from typing import Dict, Any, Optional, TYPE_CHECKING
@@ -18,9 +18,9 @@ if TYPE_CHECKING:
 
 class InputLayer:
     """
-    输入层协调器（5层架构：Layer 1-2）
+    输入域协调器（3域架构：Input Domain）
 
-    负责协调Layer 1(输入感知)和Layer 2(输入标准化)。
+    负责协调输入Provider和消息标准化。
     接收RawData事件，转换为NormalizedMessage，发布到EventBus。
 
     Pipeline 集成：
@@ -56,7 +56,9 @@ class InputLayer:
     async def setup(self):
         """设置InputLayer，订阅事件"""
         # 订阅RawData生成事件
+        self.logger.info("正在订阅 perception.raw_data.generated 事件...")
         self.event_bus.on("perception.raw_data.generated", self.on_raw_data_generated)
+        self.logger.info("成功订阅 perception.raw_data.generated 事件")
 
         self.logger.info("InputLayer设置完成")
 
@@ -73,25 +75,39 @@ class InputLayer:
 
         Args:
             event_name: 事件名称("perception.raw_data.generated")
-            event_data: 事件数据，包含"data"和"source"
+            event_data: 事件数据，包含"content"和"source" (RawDataPayload格式)
             source: 事件源
         """
+        self.logger.info(f"收到 perception.raw_data.generated 事件: source={source}")
         try:
-            raw_data = event_data.get("data")
+            # 新格式：RawDataPayload被序列化为字典，包含content而不是data
+            raw_data = event_data.get("content")
             if not raw_data:
                 self.logger.warning(f"收到空的RawData事件 (source: {source})")
                 return
 
             self._raw_data_count += 1
 
+            # 从event_data中获取元数据
+            payload_source = event_data.get("source", source)
+            data_type = event_data.get("data_type", "unknown")
+
             self.logger.debug(
-                f"收到RawData: source={raw_data.source}, "
-                f"type={raw_data.data_type}, "
-                f"content={str(raw_data.content)[:50]}..."
+                f"收到RawData: source={payload_source}, "
+                f"type={data_type}, "
+                f"content={str(raw_data)[:50]}..."
+            )
+
+            # 创建RawData对象
+            raw_data_obj = RawData(
+                content=raw_data,
+                source=payload_source,
+                data_type=data_type,
+                timestamp=event_data.get("timestamp", 0.0)
             )
 
             # 转换为NormalizedMessage
-            normalized_message = await self.normalize(raw_data)
+            normalized_message = await self.normalize(raw_data_obj)
 
             if normalized_message:
                 self._normalized_message_count += 1
@@ -99,7 +115,7 @@ class InputLayer:
                 # 发布NormalizedMessage就绪事件
                 await self.event_bus.emit(
                     "normalization.message_ready",
-                    {"message": normalized_message, "source": raw_data.source},
+                    {"message": normalized_message, "source": payload_source},
                     source="InputLayer",
                 )
 

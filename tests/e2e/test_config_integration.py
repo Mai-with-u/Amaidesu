@@ -19,8 +19,6 @@ E2E Test: 配置系统集成测试
 """
 import pytest
 import os
-import tempfile
-from typing import Dict, Any
 
 # 触发 Provider 注册
 import src.domains.input.providers  # noqa: F401
@@ -371,7 +369,7 @@ async def test_application_startup_simulation(project_base_dir):
 
     # 5. 创建 DecisionManager（不启动）
     decision_manager = DecisionManager(event_bus, llm_service=None)
-    decision_config = config_service.get_section("providers.decision")
+    config_service.get_section("providers.decision")
     # DecisionManager 的初始化可能在后续版本实现
 
     # 6. 验证所有 Manager 都创建成功

@@ -1,5 +1,5 @@
 """
-核心事件数据模型（5层架构）
+核心事件数据模型（3域架构）
 
 使用 Pydantic BaseModel 定义，提供：
 - 运行时类型验证
@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, ConfigDict
 import time
 
 
-# ==================== Layer 1-2: 输入层 ====================
+# ==================== Input Domain: 输入域 ====================
 
 
 class RawDataEvent(BaseModel):
@@ -22,7 +22,7 @@ class RawDataEvent(BaseModel):
 
     事件名：perception.raw_data.generated
     发布者：InputProvider
-    订阅者：InputLayer（Layer 1-2）
+    订阅者：InputProviderManager（Input Domain）
     """
 
     content: Any = Field(..., description="原始数据内容（bytes, str, dict等）")
@@ -48,11 +48,11 @@ class RawDataEvent(BaseModel):
 
 class NormalizedMessageEvent(BaseModel):
     """
-    标准化消息事件（5层架构）
+    标准化消息事件（3域架构）
 
     事件名：normalization.message_ready
-    发布者：InputLayer
-    订阅者：DecisionManager（Layer 3）
+    发布者：InputProviderManager
+    订阅者：DecisionManager（Decision Domain）
     """
 
     message: Dict[str, Any] = Field(..., description="标准化消息（NormalizedMessage）")
@@ -77,12 +77,12 @@ class NormalizedMessageEvent(BaseModel):
     )
 
 
-# ==================== Layer 3: 决策层（5层架构） ====================
+# ==================== Decision Domain: 决策域 ====================
 
 
 class DecisionRequestEvent(BaseModel):
     """
-    决策请求事件（5层架构 - 可选）
+    决策请求事件（3域架构 - 可选）
 
     事件名：decision.request
     发布者：任何需要决策的组件
@@ -110,7 +110,7 @@ class DecisionRequestEvent(BaseModel):
 
 class DecisionResponseEvent(BaseModel):
     """
-    决策响应事件（5层架构）
+    决策响应事件（3域架构）
 
     ⚠️ 注意：此事件主要在 MaiCoreDecisionProvider 内部使用
 
@@ -118,7 +118,7 @@ class DecisionResponseEvent(BaseModel):
     发布者：DecisionProvider（MaiCore）
     订阅者：MaiCoreDecisionProvider 内部处理（通过 IntentParser 转换为 Intent）
 
-    **5层架构说明**：
+    **3域架构说明**：
     - 在新架构中，DecisionProvider.decide() 直接返回 Intent
     - DecisionManager 负责发布 decision.intent_generated 事件
     - 此事件仅用于 MaiCoreDecisionProvider 内部的异步响应处理
@@ -132,20 +132,16 @@ class DecisionResponseEvent(BaseModel):
 
 class IntentGeneratedEvent(BaseModel):
     """
-    意图生成事件（5层架构）
+    意图生成事件（3域架构）
 
-    事件名：decision.intent_generated（✅ 新架构）
-    发布者：DecisionManager（Layer 3）
-    订阅者：FlowCoordinator（Layer 4-5）
+    事件名：decision.intent_generated
+    发布者：DecisionManager（Decision Domain）
+    订阅者：FlowCoordinator（Output Domain）
 
-    **5层架构说明**：
+    **3域架构说明**：
     - DecisionProvider.decide() 直接返回 Intent
-    - DecisionManager 接收到 Intent 后发布此事件
+    - DecisionManager 接收 Intent 后发布此事件
     - FlowCoordinator 订阅此事件并触发渲染
-
-    **废弃说明**：
-    - 旧架构（7层）中，此事件名为 understanding.intent_generated
-    - 由 UnderstandingLayer 发布，现已废弃
     """
 
     intent: Dict[str, Any] = Field(..., description="意图对象（Intent）")
@@ -172,17 +168,16 @@ class IntentGeneratedEvent(BaseModel):
         }
     )
 
-
-# ==================== Layer 4-5: 参数和渲染 ====================
+    # ==================== Output Domain: 输出域 ====================
 
 
 class ExpressionParametersEvent(BaseModel):
     """
-    表现参数事件（5层架构）
+    表现参数事件（3域架构）
 
     事件名：expression.parameters_generated
-    发布者：ExpressionGenerator
-    订阅者：OutputProvider（Layer 5）
+    发布者：ExpressionGenerator（Output Domain）
+    订阅者：OutputProvider（Output Domain）
     """
 
     tts_text: str = Field(default="", description="TTS 文本")

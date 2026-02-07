@@ -10,7 +10,6 @@
 import pytest
 import tempfile
 import os
-from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
@@ -21,12 +20,8 @@ def register_providers():
     确保ProviderRegistry中有可用的Provider用于测试。
     """
     # 导入输入Provider以触发注册
-    from src.domains.input.providers.console_input import ConsoleInputProvider
-    from src.domains.input.providers.bili_danmaku import BiliDanmakuInputProvider
 
     # 导入输出Provider以触发注册
-    from src.domains.output.providers.subtitle import SubtitleOutputProvider
-    from src.domains.output.providers.tts import TTSProvider
 
     yield
 
@@ -577,7 +572,6 @@ custom_field = "from_main_config"
         """
         from src.services.config.service import ConfigService
         from src.services.config.schemas import (
-            ConsoleInputProviderConfig,
             SubtitleProviderConfig,
         )
 

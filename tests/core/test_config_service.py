@@ -18,8 +18,6 @@ import os
 import pytest
 import tempfile
 import shutil
-from typing import Dict, Any
-from pathlib import Path
 
 from src.services.config.service import ConfigService
 
@@ -929,10 +927,6 @@ field1 = "main_value"  # 主配置的值
 field2 = "main_value2"
 """
 
-    provider_own_config = """
-field1 = "provider_value"  # Provider自身的值（应该被覆盖）
-field3 = "provider_value3"  # Provider独有字段（应该保留）
-"""
 
     main_template_path = os.path.join(temp_base_dir, "config-template.toml")
     with open(main_template_path, "w", encoding="utf-8") as f:
@@ -1132,7 +1126,7 @@ def test_get_provider_config_with_defaults_local_config(config_service, temp_bas
         field2: str = "schema_default"
 
     # 创建Provider目录和本地配置
-    provider_dir = os.path.join(temp_base_dir, "src", "layers", "input", "providers", "test_provider")
+    provider_dir = os.path.join(temp_base_dir, "src", "domains", "input", "providers", "test_provider")
     os.makedirs(provider_dir, exist_ok=True)
 
     local_content = """
@@ -1222,7 +1216,7 @@ speed = 1.5
     assert merged_config["speed"] == 1.5
 
     # 创建Provider目录和错误的本地配置
-    provider_dir = os.path.join(temp_base_dir, "src", "layers", "rendering", "providers", "test_provider")
+    provider_dir = os.path.join(temp_base_dir, "src", "domains", "output", "providers", "test_provider")
     os.makedirs(provider_dir, exist_ok=True)
 
     local_content = """

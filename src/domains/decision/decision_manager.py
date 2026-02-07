@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
 class DecisionManager:
     """
-    决策管理器(Layer 3: 决策层)
+    决策管理器 (Decision Domain: 决策域)
 
     职责:
     - 管理DecisionProvider生命周期
@@ -198,7 +198,7 @@ class DecisionManager:
         处理 normalization.message_ready 事件
 
         当 InputLayer 生成 NormalizedMessage 时，自动调用当前活动的 DecisionProvider 进行决策，
-        并发布 decision.intent_generated 事件（5层架构）。
+        并发布 decision.intent_generated 事件（3域架构）。
 
         Args:
             event_name: 事件名称 (CoreEvents.NORMALIZATION_MESSAGE_READY)
@@ -215,7 +215,7 @@ class DecisionManager:
             # 调用当前活动的 Provider 进行决策
             intent = await self.decide(normalized)
 
-            # 发布 decision.intent_generated 事件（5层架构）
+            # 发布 decision.intent_generated 事件（3域架构）
             from src.core.events.payloads import IntentPayload
 
             await self.event_bus.emit(

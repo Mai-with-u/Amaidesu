@@ -492,7 +492,7 @@ class MyProviderConfig(BaseProviderConfig):
 - [CONFIG_FINAL_DESIGN.md](CONFIG_FINAL_DESIGN.md) - 新配置系统设计
 - [CONFIG_GENERATOR.md](CONFIG_GENERATOR.md) - 配置生成器使用指南
 - [CLAUDE.md](../CLAUDE.md) - 项目配置说明
-- [refactor/design/layer_refactoring.md](../refactor/design/layer_refactoring.md) - 5层架构设计
+- [refactor/design/overview.md](../refactor/design/overview.md) - 3域架构设计
 
 ## 总结
 

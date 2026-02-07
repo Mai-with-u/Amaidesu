@@ -1,10 +1,6 @@
 import asyncio
-import json
 import logging
-import time
-from typing import Dict, Any, Optional
-from enum import Enum
-import websockets
+from typing import Dict, Any
 from .action_sender import action_sender
 import random
 

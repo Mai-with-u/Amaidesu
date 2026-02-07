@@ -171,7 +171,7 @@ class BiliDanmakuPlugin(BasePlugin):
                         # B站时间戳是秒级整数
                         timestamp = item.get("check_info", {}).get("ts")
                         # 尝试获取用户ID (uid)
-                        uid = item.get("uid")
+                        item.get("uid")
 
                         if timestamp and timestamp > self._latest_timestamp:
                             new_danmakus.append(item)

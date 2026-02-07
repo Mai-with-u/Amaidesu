@@ -3,6 +3,7 @@ E2E Test: Error Recovery
 
 测试系统在错误情况下的恢复能力
 """
+
 import asyncio
 import pytest
 
@@ -16,10 +17,7 @@ from src.core.events.names import CoreEvents
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_failure_isolation(
-    event_bus,
-    wait_for_event
-):
+async def test_decision_provider_failure_isolation(event_bus, wait_for_event):
     """
     测试 DecisionProvider 失败时的隔离
 
@@ -30,13 +28,13 @@ async def test_decision_provider_failure_isolation(
     from src.domains.input.input_layer import InputLayer
     from src.domains.decision.decision_manager import DecisionManager
     from src.core.base.normalized_message import NormalizedMessage
-    from src.domains.normalization.content import TextContent
+    from src.domains.input.normalization.content import TextContent
 
     input_layer = InputLayer(event_bus)
     await input_layer.setup()
 
     decision_manager = DecisionManager(event_bus, llm_service=None)
-    await decision_manager.setup('mock', {})
+    await decision_manager.setup("mock", {})
 
     # 正常处理一条消息
     normalized = NormalizedMessage(
@@ -45,7 +43,7 @@ async def test_decision_provider_failure_isolation(
         source="test",
         data_type="text",
         importance=0.5,
-        metadata={}
+        metadata={},
     )
 
     intent1 = await decision_manager.decide(normalized)
@@ -71,13 +69,13 @@ async def test_decision_provider_failure_isolation(
         source="test",
         data_type="text",
         importance=0.5,
-        metadata={}
+        metadata={},
     )
 
     # 这应该会失败
     try:
         await decision_manager.decide(error_message)
-        assert False, "应该抛出异常"
+        raise AssertionError("应该抛出异常")
     except RuntimeError:
         pass  # 预期的异常
 
@@ -91,7 +89,7 @@ async def test_decision_provider_failure_isolation(
         source="test",
         data_type="text",
         importance=0.5,
-        metadata={}
+        metadata={},
     )
 
     intent2 = await decision_manager.decide(normal_message)
@@ -102,10 +100,7 @@ async def test_decision_provider_failure_isolation(
 
 
 @pytest.mark.asyncio
-async def test_invalid_raw_data_handling(
-    event_bus,
-    wait_for_event
-):
+async def test_invalid_raw_data_handling(event_bus, wait_for_event):
     """
     测试无效 RawData 的处理
 
@@ -122,22 +117,15 @@ async def test_invalid_raw_data_handling(
     invalid_data = RawData(
         content=None,  # 无效内容
         data_type="text",
-        source="test"
+        source="test",
     )
 
     # 等待可能的事件（可能会被过滤）
     try:
-        future = asyncio.create_task(
-            wait_for_event(event_bus, CoreEvents.NORMALIZATION_MESSAGE_READY, timeout=1.0)
-        )
+        future = asyncio.create_task(wait_for_event(event_bus, CoreEvents.NORMALIZATION_MESSAGE_READY, timeout=1.0))
 
         await event_bus.emit(
-            CoreEvents.PERCEPTION_RAW_DATA_GENERATED,
-            {
-                "data": invalid_data,
-                "source": "test"
-            },
-            source="test"
+            CoreEvents.PERCEPTION_RAW_DATA_GENERATED, {"data": invalid_data, "source": "test"}, source="test"
         )
 
         # 尝试等待事件（可能超时）
@@ -155,9 +143,7 @@ async def test_invalid_raw_data_handling(
 
 
 @pytest.mark.asyncio
-async def test_event_bus_error_isolation(
-    event_bus
-):
+async def test_event_bus_error_isolation(event_bus):
     """
     测试 EventBus 错误隔离
 
@@ -180,11 +166,7 @@ async def test_event_bus_error_isolation(
     event_bus.on("test.event", normal_listener)
 
     # 发送事件
-    await event_bus.emit(
-        "test.event",
-        {"data": "test"},
-        source="test"
-    )
+    await event_bus.emit("test.event", {"data": "test"}, source="test")
 
     # 验证：failing_listener 被调用了
     assert error_count["count"] == 1
@@ -195,9 +177,7 @@ async def test_event_bus_error_isolation(
 
 
 @pytest.mark.asyncio
-async def test_provider_initialization_failure(
-    event_bus
-):
+async def test_provider_initialization_failure(event_bus):
     """
     测试 Provider 初始化失败的处理
 
@@ -211,8 +191,8 @@ async def test_provider_initialization_failure(
 
     # 尝试初始化不存在的 provider
     try:
-        await decision_manager.setup('nonexistent_provider', {})
-        assert False, "应该抛出异常"
+        await decision_manager.setup("nonexistent_provider", {})
+        raise AssertionError("应该抛出异常")
     except ValueError as e:
         assert "未找到" in str(e)
 
@@ -221,16 +201,14 @@ async def test_provider_initialization_failure(
     assert decision_manager.get_current_provider_name() is None
 
     # 验证：可以成功初始化其他 provider
-    await decision_manager.setup('mock', {})
-    assert decision_manager.get_current_provider_name() == 'mock'
+    await decision_manager.setup("mock", {})
+    assert decision_manager.get_current_provider_name() == "mock"
 
     await decision_manager.cleanup()
 
 
 @pytest.mark.asyncio
-async def test_layer_cleanup_on_error(
-    event_bus
-):
+async def test_layer_cleanup_on_error(event_bus):
     """
     测试错误情况下的资源清理
 
@@ -245,7 +223,7 @@ async def test_layer_cleanup_on_error(
     await input_layer.setup()
 
     decision_manager = DecisionManager(event_bus, llm_service=None)
-    await decision_manager.setup('mock', {})
+    await decision_manager.setup("mock", {})
 
     # 验证已订阅事件
     assert len(event_bus._handlers.get("normalization.message_ready", [])) > 0

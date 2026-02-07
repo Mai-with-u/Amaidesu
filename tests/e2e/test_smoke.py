@@ -3,6 +3,7 @@ E2E Test: Smoke Test
 
 快速验证系统基本功能
 """
+
 import pytest
 
 # 在模块级别导入，触发 Provider 注册
@@ -14,7 +15,7 @@ import src.domains.decision.providers  # noqa: F401
 @pytest.mark.asyncio
 async def test_provider_registry_has_providers():
     """测试 Provider 注册表中有 Provider"""
-    from src.domains.output.provider_registry import ProviderRegistry
+    from src.core.provider_registry import ProviderRegistry
 
     input_providers = ProviderRegistry.get_registered_input_providers()
     output_providers = ProviderRegistry.get_registered_output_providers()
@@ -25,9 +26,9 @@ async def test_provider_registry_has_providers():
     assert len(decision_providers) > 0, "应该有 DecisionProvider"
 
     # 验证特定的 Provider 存在
-    assert 'mock' in decision_providers, "应该有 MockDecisionProvider"
-    assert 'mock' in output_providers, "应该有 MockOutputProvider"
-    assert 'mock_danmaku' in input_providers, "应该有 MockDanmakuInputProvider"
+    assert "mock" in decision_providers, "应该有 MockDecisionProvider"
+    assert "mock" in output_providers, "应该有 MockOutputProvider"
+    assert "mock_danmaku" in input_providers, "应该有 MockDanmakuInputProvider"
 
 
 @pytest.mark.asyncio
@@ -58,7 +59,7 @@ async def test_mock_decision_provider():
     """测试 MockDecisionProvider 基本功能"""
     from src.domains.decision.providers.mock import MockDecisionProvider
     from src.core.base.normalized_message import NormalizedMessage
-    from src.domains.normalization.content import TextContent
+    from src.domains.input.normalization.content import TextContent
     from src.core.event_bus import EventBus
 
     provider = MockDecisionProvider({})
@@ -72,7 +73,7 @@ async def test_mock_decision_provider():
         data_type="text",
         importance=0.5,
         metadata={},
-        timestamp=None
+        timestamp=None,
     )
 
     # 测试决策

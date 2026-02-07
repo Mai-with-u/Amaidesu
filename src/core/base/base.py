@@ -2,12 +2,12 @@
 Provider接口基础数据类定义
 
 定义了新架构中的核心数据结构:
-- NormalizedMessage: 标准化消息(来自Layer 2)
-- RenderParameters: 渲染参数(传递给Layer 5: 渲染呈现层)
+- NormalizedMessage: 标准化消息 (来自 Input Domain)
+- RenderParameters: 渲染参数 (传递给 Output Domain: 渲染输出)
 
 注意:
-- RawData 已移动到 src/data_types/
-- NormalizedMessage 定义在 src/data_types/normalized_message.py
+- RawData 已移动到 src/core/base/raw_data.py
+- NormalizedMessage 定义在 src/core/base/normalized_message.py
 - RenderParameters 定义在 src/domains/output/parameters/render_parameters.py
 """
 
