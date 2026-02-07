@@ -1,7 +1,7 @@
 # src/plugins/vrchat/plugin.py
 
 import asyncio
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import Any, Dict, Optional
 
 from maim_message.message_base import MessageBase
 

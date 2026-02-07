@@ -9,11 +9,8 @@
 # - 自动启动屏幕分析和AI读取
 # - 将AI分析结果发送到核心系统
 
-import asyncio
 import time
-import logging
 from typing import Dict, Any, Optional
-import os
 
 from src.core.plugin_manager import BasePlugin
 from src.core.amaidesu_core import AmaidesuCore

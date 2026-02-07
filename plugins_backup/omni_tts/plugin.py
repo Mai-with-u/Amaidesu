@@ -276,7 +276,7 @@ class OmniTTSPlugin(BasePlugin):
         """尝试播放下一个应该播放的任务"""
         # 检查是否有任务正在播放，如果有则等待
         if self.play_lock.locked():
-            self.logger.debug(f"播放锁被占用，等待当前任务完成")
+            self.logger.debug("播放锁被占用，等待当前任务完成")
             return
             
         async with self.queue_lock:
