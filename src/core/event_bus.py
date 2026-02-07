@@ -99,7 +99,7 @@ class EventBus:
         self.logger = get_logger("EventBus")
         self.logger.debug(f"EventBus 初始化完成 (stats={enable_stats}, validation=enabled)")
 
-    async def emit(self, event_name: str, data: Any, source: str = "unknown", error_isolate: bool = True) -> None:
+    async def emit(self, event_name: str, data: Any, source: str = "unknown", error_isolate: bool = True, _skip_deprecation_warning: bool = False) -> None:
         """
         发布事件
 
@@ -112,13 +112,15 @@ class EventBus:
             data: 事件数据（推荐使用 Pydantic Model，字典格式已废弃）
             source: 事件源（通常是发布者的类名）
             error_isolate: 是否隔离错误（True 时单个 handler 异常不影响其他）
+            _skip_deprecation_warning: 内部使用，跳过字典格式废弃警告
         """
         if self._is_cleanup:
             self.logger.warning(f"EventBus正在清理中，忽略事件: {event_name}")
             return
 
         # 废弃警告：如果传入字典，提示使用 emit_typed
-        if isinstance(data, dict) and self.enable_validation:
+        # 跳过从 emit_typed() 调用的情况（通过 _skip_deprecation_warning 标记）
+        if isinstance(data, dict) and self.enable_validation and not _skip_deprecation_warning:
             from src.core.events.registry import EventRegistry
             if EventRegistry.is_registered(event_name):
                 self.logger.warning(
@@ -357,7 +359,7 @@ class EventBus:
             source: 事件源
             error_isolate: 是否隔离错误
         """
-        await self.emit(event_name, data.model_dump(), source, error_isolate)
+        await self.emit(event_name, data.model_dump(), source, error_isolate, _skip_deprecation_warning=True)
 
     async def request(self, event_name: str, data: Any, timeout: float = 5.0) -> Any:
         """

@@ -631,7 +631,8 @@ class PipelineManager:
                     loaded_pipeline_count += 1
                     # self.logger.info(f"成功加载并设置管道: {pipeline_class.__name__} (来自 {pipeline_name_snake}/pipeline.py, 优先级: {priority})") # register_pipeline 已记录
                 else:
-                    self.logger.error(f"在模块 '{module_import_path}' 中未找到预期的管道类 '{expected_class_name}'。")
+                    # 使用 DEBUG 级别，因为该管道可能是 TextPipeline 而不是 MessagePipeline
+                    self.logger.debug(f"在模块 '{module_import_path}' 中未找到预期的管道类 '{expected_class_name}'（可能是 TextPipeline）")
 
             except ImportError as e:
                 self.logger.error(f"导入管道模块 '{module_import_path}' 失败: {e}", exc_info=True)
