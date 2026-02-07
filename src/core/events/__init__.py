@@ -6,14 +6,13 @@
 模块结构：
 - registry: 事件注册表
 - names: 事件名称常量
-- models: 事件模型（向后兼容）
-- payloads: 按 Domain 组织的 Payload 定义（推荐使用）
+- payloads: 按 Domain 组织的 Payload 定义
 """
 
 from .registry import EventRegistry
-from .names import CoreEvents, PluginEventPrefix
+from .names import CoreEvents
 
-# 导出 Payload（推荐使用）
+# 导出 Payload
 from .payloads import (
     # Input Domain
     RawDataPayload,
@@ -34,25 +33,12 @@ from .payloads import (
     ErrorPayload,
 )
 
-# 导出旧模型（向后兼容）
-from .models import (
-    RawDataEvent,
-    NormalizedMessageEvent,
-    DecisionRequestEvent,
-    DecisionResponseEvent,
-    IntentGeneratedEvent,
-    ExpressionParametersEvent,
-    SystemErrorEvent,
-)
-
 
 def register_core_events() -> None:
     """
     注册所有核心事件（3域架构）
 
     在 AmaidesuCore 初始化时调用。
-
-    同时注册新的 Payload 类（推荐使用）和旧的 Event 类（向后兼容）。
     """
     # Input Domain: 输入域
     EventRegistry.register_core_event(CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload)
@@ -81,8 +67,7 @@ __all__ = [
     "EventRegistry",
     # 事件名常量
     "CoreEvents",
-    "PluginEventPrefix",
-    # Payload（推荐使用）
+    # Payload
     "RawDataPayload",
     "MessageReadyPayload",
     "DecisionRequestPayload",
@@ -96,14 +81,6 @@ __all__ = [
     "StartupPayload",
     "ShutdownPayload",
     "ErrorPayload",
-    # 旧模型（向后兼容）
-    "RawDataEvent",
-    "NormalizedMessageEvent",
-    "DecisionRequestEvent",
-    "DecisionResponseEvent",
-    "IntentGeneratedEvent",
-    "ExpressionParametersEvent",
-    "SystemErrorEvent",
     # 初始化函数
     "register_core_events",
 ]

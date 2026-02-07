@@ -2,6 +2,10 @@
 
 为在此代码库中工作的 AI 编码代理提供指南。
 
+## 重构阶段
+
+当前处于完全重构阶段，在refactor分支中，不需要保留任何向后兼容的代码，需要彻底重构。不必担心会破坏性变更，因为重构完毕之前，都是没有用户在使用的。
+
 ## 构建/检查/测试命令
 
 ### 包管理器
@@ -296,7 +300,7 @@ class MyOutputProvider(OutputProvider):
 
 ```python
 # src/domains/input/providers/my_provider/__init__.py
-from src.domains.output.provider_registry import ProviderRegistry
+from src.core.provider_registry import ProviderRegistry
 from .my_input_provider import MyInputProvider
 
 ProviderRegistry.register_input("my_provider", MyInputProvider, source="builtin:my_provider")
@@ -333,6 +337,7 @@ enabled_outputs = ["subtitle", "my_provider"]
 type = "my_provider"
 # Provider特定配置
 ```
+
 
 ## 管道开发规范
 

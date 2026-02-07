@@ -8,14 +8,16 @@ Output Domain 事件 Payload 定义
 """
 
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import Field, ConfigDict
 import time
+
+from src.core.events.payloads.base import BasePayload
 
 if TYPE_CHECKING:
     from src.domains.output.parameters.render_parameters import ExpressionParameters
 
 
-class ParametersGeneratedPayload(BaseModel):
+class ParametersGeneratedPayload(BasePayload):
     """
     表情参数生成事件 Payload
 
@@ -74,6 +76,15 @@ class ParametersGeneratedPayload(BaseModel):
         }
     )
 
+    def _debug_fields(self) -> List[str]:
+        """返回需要显示的字段"""
+        return [
+            "tts_text", "tts_enabled",
+            "subtitle_text", "subtitle_enabled",
+            "expressions", "expressions_enabled",
+            "hotkeys", "hotkeys_enabled",
+        ]
+
     @classmethod
     def from_parameters(cls, parameters: "ExpressionParameters", source_intent: Optional[Dict[str, Any]] = None) -> "ParametersGeneratedPayload":
         """
@@ -104,7 +115,7 @@ class ParametersGeneratedPayload(BaseModel):
         )
 
 
-class RenderCompletedPayload(BaseModel):
+class RenderCompletedPayload(BasePayload):
     """
     渲染完成事件 Payload
 
@@ -135,8 +146,12 @@ class RenderCompletedPayload(BaseModel):
         }
     )
 
+    def _debug_fields(self) -> List[str]:
+        """返回需要显示的字段"""
+        return ["provider", "output_type", "success", "duration_ms"]
 
-class RenderFailedPayload(BaseModel):
+
+class RenderFailedPayload(BasePayload):
     """
     渲染失败事件 Payload
 
@@ -168,3 +183,7 @@ class RenderFailedPayload(BaseModel):
             }
         }
     )
+
+    def _debug_fields(self) -> List[str]:
+        """返回需要显示的字段"""
+        return ["provider", "output_type", "error_type", "error_message", "recoverable"]

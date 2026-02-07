@@ -271,7 +271,6 @@ uv run python mock_maicore.py
 - [maicore](./src/domains/decision/providers/maicore) - MaiCore决策（默认，WebSocket + LLM意图解析）
 - [local_llm](./src/domains/decision/providers/local_llm) - 本地LLM决策
 - [rule_engine](./src/domains/decision/providers/rule_engine) - 规则引擎决策
-- [emotion_judge](./src/domains/decision/providers/emotion_judge) - 情绪判断决策
 - [mock](./src/domains/decision/providers/mock) - 模拟决策（测试用）
 
 #### 输出Provider（OutputProvider）
@@ -308,7 +307,6 @@ flowchart TD
 
     TTS["TTS<br>(语音合成)"]:::output -->|使用 subtitle_service| Subtitle
 
-    EmotionJudge["Emotion Judge<br>(情感判断)"]:::decision -->|使用 vts_control| VTubeStudio
     Sticker["Sticker<br>(表情贴纸)"]:::output -->|使用 vts_control| VTubeStudio
 
     %% 没有依赖其他服务的独立Provider
@@ -424,7 +422,7 @@ class MyOutputProvider(OutputProvider):
 
 ```python
 # src/domains/input/providers/my_provider/__init__.py
-from src.domains.output.provider_registry import ProviderRegistry
+from src.core.provider_registry import ProviderRegistry
 from .my_provider import MyInputProvider
 
 ProviderRegistry.register_input("my_provider", MyInputProvider, source="builtin:my_provider")

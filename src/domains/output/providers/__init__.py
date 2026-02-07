@@ -11,6 +11,7 @@ Rendering Providers - 渲染输出Provider实现
 - GPTSoVITSOutputProvider: GPT-SoVITS TTS Provider
 - OmniTTSProvider: Omni TTS Provider
 - AvatarOutputProvider: 虚拟形象输出Provider
+- RemoteStreamOutputProvider: 远程流输出Provider
 - MockOutputProvider: 模拟输出Provider（用于测试）
 
 注意：导入这些模块会触发自动注册到 ProviderRegistry
@@ -26,6 +27,7 @@ from . import obs_control  # noqa: F401
 from . import gptsovits  # noqa: F401
 from . import omni_tts  # noqa: F401
 from . import avatar  # noqa: F401
+from . import remote_stream  # noqa: F401
 from . import mock  # noqa: F401
 
 # 同时导出类以便直接使用
@@ -38,6 +40,7 @@ from .obs_control import ObsControlOutputProvider
 from .gptsovits import GPTSoVITSOutputProvider
 from .omni_tts import OmniTTSProvider
 from .avatar import AvatarOutputProvider
+from .remote_stream import RemoteStreamOutputProvider
 from .mock import MockOutputProvider
 
 __all__ = [
@@ -50,5 +53,6 @@ __all__ = [
     "GPTSoVITSOutputProvider",
     "OmniTTSProvider",
     "AvatarOutputProvider",
+    "RemoteStreamOutputProvider",
     "MockOutputProvider",
 ]

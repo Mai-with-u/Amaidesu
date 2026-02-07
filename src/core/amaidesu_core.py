@@ -126,14 +126,6 @@ class AmaidesuCore:
             try:
                 await self._http_server.start()
                 self.logger.info("HTTP服务器已启动")
-
-                # 发布 core.ready 事件
-                if self._event_bus:
-                    await self._event_bus.emit(
-                        "core.ready",
-                        {"core": self},
-                        source="AmaidesuCore",
-                    )
             except Exception as e:
                 self.logger.error(f"启动HTTP服务器失败: {e}", exc_info=True)
                 self.logger.warning("HTTP服务器功能不可用，继续启动其他服务")

@@ -72,6 +72,17 @@ class InputProvider(ABC):
         self.is_running = False
         await self._cleanup()
 
+    async def cleanup(self):
+        """
+        清理资源（公开方法，供外部调用）
+
+        此方法供 InputProviderManager 等外部管理器调用。
+        默认调用内部的 _cleanup() 方法。
+
+        子类可以重写 _cleanup() 方法来实现自定义清理逻辑。
+        """
+        await self._cleanup()
+
     @abstractmethod
     async def _collect_data(self) -> AsyncIterator[RawData]:
         """

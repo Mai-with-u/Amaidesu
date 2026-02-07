@@ -7,8 +7,8 @@
 # 2. Provider启用列表
 # 3. 常用参数覆盖（可选）
 #
-# 各Provider的详细配置在各自的 config-defaults.toml 中：
-# - src/layers/*/providers/*/config-defaults.toml
+# 各Provider的详细配置在各自的 config.toml 中：
+# - src/domains/{domain}/providers/{provider}/config.toml
 
 # ========== 全局LLM配置 ==========
 
@@ -196,7 +196,6 @@ available_providers = [
     "maicore",        # MaiCore决策（默认，通过WebSocket连接MaiCore）
     "rule_engine",    # 规则引擎（本地规则匹配，低延迟）
     "local_llm",      # 本地LLM（直接调用LLM生成回复）
-    "emotion_judge",  # 情感判断（使用LLM判断情感并触发动作）
     "mock",           # 模拟Provider（用于测试）
 ]
 
@@ -235,20 +234,7 @@ case_sensitive = false
 # 匹配模式
 match_mode = "any"  # any（任一关键词匹配） | all（所有关键词匹配）
 
-# EmotionJudge DecisionProvider 配置
-[providers.decision.emotion_judge]
-# LLM 配置（用于情感判断）
-base_url = "https://api.siliconflow.cn/v1/"
-api_key = ""  # 从环境变量 OPENAI_API_KEY 读取
-# 冷却时间（秒）
-cool_down_seconds = 10
-# 模型配置
-[providers.decision.emotion_judge.model]
-name = "Qwen/Qwen2.5-7B-Instruct"
-max_tokens = 10
-temperature = 0.3
-
-# 常用参数覆盖（可选）
+# Mock DecisionProvider 配置
 # [providers.decision.overrides]
 # maicore.host = "192.168.1.100"
 # local_llm.client_type = "llm_fast"

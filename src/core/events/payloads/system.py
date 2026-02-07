@@ -7,9 +7,11 @@
 - ErrorPayload: 系统错误事件
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 from pydantic import BaseModel, Field, ConfigDict
 import time
+
+from src.core.events.payloads.base import BasePayload
 
 
 class StartupPayload(BaseModel):
@@ -74,7 +76,7 @@ class ShutdownPayload(BaseModel):
     )
 
 
-class ErrorPayload(BaseModel):
+class ErrorPayload(BasePayload):
     """
     系统错误事件 Payload
 
@@ -107,6 +109,15 @@ class ErrorPayload(BaseModel):
             }
         }
     )
+
+    def _debug_fields(self) -> List[str]:
+        """
+        返回需要在 debug 日志中显示的字段名列表。
+
+        Returns:
+            字段名列表
+        """
+        return ["error_type", "error_message", "source"]
 
     @classmethod
     def from_exception(

@@ -14,16 +14,6 @@ from typing import Dict, Any, Optional, TYPE_CHECKING
 from src.core.utils.logger import get_logger
 from src.core.events.names import CoreEvents
 
-# 导入所有 DecisionProvider 以确保它们注册到 ProviderRegistry
-# noqa: F401 - 这些导入的副作用（注册）是必需的
-from src.domains.decision.providers import (  # noqa: F401
-    MaiCoreDecisionProvider,
-    LocalLLMDecisionProvider,
-    RuleEngineDecisionProvider,
-    EmotionJudgeDecisionProvider,
-    MockDecisionProvider,
-)
-
 if TYPE_CHECKING:
     from src.core.event_bus import EventBus
     from src.core.base.decision_provider import DecisionProvider
@@ -145,8 +135,8 @@ class DecisionManager:
                 await self._current_provider.setup(self.event_bus, provider_config, dependencies)
                 self.logger.info(f"DecisionProvider '{provider_name}' 初始化成功")
 
-                # 发布Provider连接事件
-                from src.core.events.payloads import ProviderConnectedPayload
+                # 发布Provider连接事件（使用emit）
+                from src.core.events.payloads.decision import ProviderConnectedPayload
 
                 await self.event_bus.emit(
                     CoreEvents.DECISION_PROVIDER_CONNECTED,
@@ -154,7 +144,7 @@ class DecisionManager:
                         provider=provider_name,
                         endpoint=provider_config.get("host") or provider_config.get("ws_url"),
                         metadata={"config": provider_config},
-                    ).model_dump(),
+                    ),
                     source="DecisionManager",
                 )
             except Exception as e:
@@ -202,25 +192,49 @@ class DecisionManager:
 
         Args:
             event_name: 事件名称 (CoreEvents.NORMALIZATION_MESSAGE_READY)
-            event_data: 事件数据，包含 "message" (NormalizedMessage) 和 "source"
+            event_data: 事件数据（MessageReadyPayload 序列化后的字典）
             source: 事件源
         """
-        normalized: "NormalizedMessage" = event_data.get("message")
-        if not normalized:
+        # 从 MessageReadyPayload 中提取 message 字段（字典格式）
+        message_dict = event_data.get("message")
+        if not message_dict:
             self.logger.warning("收到空的 NormalizedMessage 事件")
             return
+
+        # 如果是 NormalizedMessage 对象，直接使用
+        # 如果是字典，需要重新构造 NormalizedMessage
+        if isinstance(message_dict, dict):
+            # 从字典重建 NormalizedMessage（简化版本）
+            # 注意：这里我们使用字典中的 text 字段作为主要数据
+            # 完整的重建需要处理 content 对象的序列化问题
+            from src.core.base.normalized_message import NormalizedMessage
+            from src.domains.input.normalization.content import TextContent
+
+            # 创建一个简化的 NormalizedMessage
+            normalized = NormalizedMessage(
+                text=message_dict.get("text", ""),
+                content=TextContent(text=message_dict.get("text", "")),
+                source=message_dict.get("source", event_data.get("source", "unknown")),
+                data_type=message_dict.get("data_type", "text"),
+                importance=message_dict.get("importance", 0.5),
+                metadata=message_dict.get("metadata", {}),
+                timestamp=message_dict.get("timestamp", 0.0),
+            )
+        else:
+            normalized = message_dict
 
         try:
             self.logger.debug(f"收到 NormalizedMessage: {normalized.text[:50]}...")
             # 调用当前活动的 Provider 进行决策
             intent = await self.decide(normalized)
 
-            # 发布 decision.intent_generated 事件（3域架构）
+            # 发布 decision.intent_generated 事件（3域架构，使用emit）
             from src.core.events.payloads import IntentPayload
+            from src.core.events.names import CoreEvents
 
             await self.event_bus.emit(
-                "decision.intent_generated",
-                IntentPayload.from_intent(intent, self._provider_name or "unknown").model_dump(),
+                CoreEvents.DECISION_INTENT_GENERATED,
+                IntentPayload.from_intent(intent, self._provider_name or "unknown"),
                 source="DecisionManager",
             )
             self.logger.debug(f"已发布 decision.intent_generated 事件: {intent.response_text[:50]}...")
@@ -279,16 +293,16 @@ class DecisionManager:
                 self._current_provider = new_provider
                 self._provider_name = provider_name
 
-                # 发布新Provider连接事件
+                # 发布新Provider连接事件（使用emit）
                 try:
-                    from src.core.events.payloads import ProviderConnectedPayload
+                    from src.core.events.payloads.decision import ProviderConnectedPayload
 
                     await self.event_bus.emit(
                         CoreEvents.DECISION_PROVIDER_CONNECTED,
                         ProviderConnectedPayload(
                             provider=provider_name,
                             metadata={"previous_provider": old_name, "switched": True},
-                        ).model_dump(),
+                        ),
                         source="DecisionManager",
                     )
                 except Exception as e:
@@ -335,7 +349,7 @@ class DecisionManager:
                             provider=provider_name,
                             reason="cleanup",
                             will_retry=False,
-                        ).model_dump(),
+                        ),
                         source="DecisionManager",
                     )
                 except Exception as e:

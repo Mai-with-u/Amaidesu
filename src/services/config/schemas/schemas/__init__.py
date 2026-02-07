@@ -15,7 +15,6 @@ from .input_providers import (
     MockDanmakuProviderConfig,
     ReadPingmuProviderConfig,
     MainosabaProviderConfig,
-    RemoteStreamProviderConfig,
 )
 
 # Decision provider schemas
@@ -23,7 +22,6 @@ from .decision_providers import (
     MaiCoreDecisionProviderConfig,
     LocalLLMDecisionProviderConfig,
     RuleEngineDecisionProviderConfig,
-    EmotionJudgeDecisionProviderConfig,
     MockDecisionProviderConfig,
 )
 
@@ -58,7 +56,7 @@ from .logging import LoggingConfig
 # Provider Schema Registry
 # Maps provider type to their config schema class
 PROVIDER_SCHEMA_REGISTRY: Dict[str, Type[BaseModel]] = {
-    # Input providers (8)
+    # Input providers (7)
     "console_input": ConsoleInputProviderConfig,
     "bili_danmaku": BiliDanmakuProviderConfig,
     "bili_danmaku_official": BiliDanmakuOfficialProviderConfig,
@@ -66,12 +64,10 @@ PROVIDER_SCHEMA_REGISTRY: Dict[str, Type[BaseModel]] = {
     "mock_danmaku": MockDanmakuProviderConfig,
     "read_pingmu": ReadPingmuProviderConfig,
     "mainosaba": MainosabaProviderConfig,
-    "remote_stream": RemoteStreamProviderConfig,
-    # Decision providers (5)
+    # Decision providers (4)
     "maicore": MaiCoreDecisionProviderConfig,
     "local_llm": LocalLLMDecisionProviderConfig,
     "rule_engine": RuleEngineDecisionProviderConfig,
-    "emotion_judge": EmotionJudgeDecisionProviderConfig,
     "mock": MockDecisionProviderConfig,
     # Output providers (10)
     "subtitle": SubtitleProviderConfig,
@@ -83,7 +79,7 @@ PROVIDER_SCHEMA_REGISTRY: Dict[str, Type[BaseModel]] = {
     "gptsovits": GPTSoVITSProviderConfig,
     "omni_tts": OmniTTSProviderConfig,
     "avatar": AvatarProviderConfig,
-    "remote_stream_output": RemoteStreamOutputProviderConfig,
+    "remote_stream": RemoteStreamOutputProviderConfig,
 }
 
 
@@ -148,14 +144,13 @@ def list_all_providers() -> Dict[str, list]:
             "mock_danmaku",
             "read_pingmu",
             "mainosaba",
-            "remote_stream",
         ]
     ]
 
     decision_providers = [
         pt
         for pt in PROVIDER_SCHEMA_REGISTRY.keys()
-        if pt in ["maicore", "local_llm", "rule_engine", "emotion_judge", "mock"]
+        if pt in ["maicore", "local_llm", "rule_engine", "mock"]
     ]
 
     output_providers = [pt for pt in PROVIDER_SCHEMA_REGISTRY.keys() if pt not in input_providers + decision_providers]
@@ -205,12 +200,10 @@ __all__ = [
     "MockDanmakuProviderConfig",
     "ReadPingmuProviderConfig",
     "MainosabaProviderConfig",
-    "RemoteStreamProviderConfig",
     # Decision provider configs
     "MaiCoreDecisionProviderConfig",
     "LocalLLMDecisionProviderConfig",
     "RuleEngineDecisionProviderConfig",
-    "EmotionJudgeDecisionProviderConfig",
     "MockDecisionProviderConfig",
     # Output provider configs
     "SubtitleProviderConfig",

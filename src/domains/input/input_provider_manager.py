@@ -5,7 +5,6 @@ InputProviderManager - 输入Provider管理器
 """
 
 import asyncio
-import warnings
 from typing import Any
 from dataclasses import dataclass
 import time
@@ -224,7 +223,7 @@ class InputProviderManager:
                 self._provider_stats[provider_name].last_message_at = time.time()
 
                 # 发布事件
-                await self.event_bus.emit_typed(
+                await self.event_bus.emit(
                     CoreEvents.PERCEPTION_RAW_DATA_GENERATED,
                     RawDataPayload.from_raw_data(data),
                     source=provider_name,
@@ -238,7 +237,7 @@ class InputProviderManager:
             self._provider_stats[provider_name].error_count += 1
             # 不重新抛出，避免影响其他Provider
 
-    async def load_from_config(self, config: dict[str, Any], config_service=None) -> list[InputProvider]:
+    async def load_from_config(self, config: dict[str, Any], config_service) -> list[InputProvider]:
         """
         从配置加载并创建所有InputProvider（支持三级配置合并）
 
@@ -282,40 +281,20 @@ class InputProviderManager:
 
         for input_name in enabled_inputs:
             try:
-                # 使用新的三级配置加载
-                if config_service is not None:
-                    try:
-                        from src.services.config.schemas import get_provider_schema
+                # 使用三级配置加载
+                try:
+                    from src.services.config.schemas import get_provider_schema
 
-                        schema_class = get_provider_schema(input_name, "input")
-                    except (ImportError, AttributeError, KeyError):
-                        # Schema registry未实现或Provider未注册，回退到None
-                        schema_class = None
+                    schema_class = get_provider_schema(input_name, "input")
+                except (ImportError, AttributeError, KeyError):
+                    # Schema registry未实现或Provider未注册，回退到None
+                    schema_class = None
 
-                    provider_config = config_service.get_provider_config_with_defaults(
-                        provider_name=input_name,
-                        provider_layer="input",
-                        schema_class=schema_class,
-                    )
-                else:
-                    # 回退到旧的配置加载方式（向后兼容）
-                    warnings.warn(
-                        f"InputProviderManager: Using deprecated configuration loading for '{input_name}'. "
-                        f"Please pass config_service parameter to enable three-level configuration merge. "
-                        f"Old configuration format will be removed in a future version.",
-                        DeprecationWarning,
-                        stacklevel=2,
-                    )
-                    # 支持两种旧格式：
-                    # 1. "inputs_config": {input_name: {...}}
-                    # 2. "inputs": {input_name: {...}}
-                    inputs_config = config.get("inputs_config", config.get("inputs", {}))
-                    # 如果inputs_config是列表（新格式enabled_inputs），则创建空配置
-                    if isinstance(inputs_config, list):
-                        provider_config = {}
-                    else:
-                        provider_config = inputs_config.get(input_name, {}).copy()
-                    provider_config["type"] = provider_config.get("type", input_name)
+                provider_config = config_service.get_provider_config_with_defaults(
+                    provider_name=input_name,
+                    provider_layer="input",
+                    schema_class=schema_class,
+                )
 
                 provider_type = provider_config.get("type", input_name)
 

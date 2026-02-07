@@ -15,6 +15,7 @@ import src.domains.output.providers  # noqa: F401
 
 from src.core.base.raw_data import RawData
 from src.core.events.names import CoreEvents
+from src.core.events.payloads.input import RawDataPayload
 
 
 @pytest.mark.asyncio
@@ -183,7 +184,7 @@ async def test_multiple_sequential_messages(event_bus, wait_for_event):
 
     # 连续发送 3 条消息
     for msg in messages:
-        await event_bus.emit("perception.raw_data.generated", {"data": msg, "source": "test"}, source="test")
+        await event_bus.emit("perception.raw_data.generated", RawDataPayload.from_raw_data(msg), source="test")
         await asyncio.sleep(0.1)  # 等待处理
 
     # 等待所有消息处理完成

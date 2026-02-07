@@ -5,16 +5,19 @@ Provider Registry - Provider 注册表
 1. 内置 Provider 自动注册
 2. 第三方插件动态注册自定义 Provider
 3. Provider 自动发现和加载
+4. 配置驱动的 Provider 注册
 
 架构说明：
 - 注册表位于 core（基础设施层），因为它是所有 Provider 的基础注册机制
 - 三个域（input/decision/output）的 Provider 都注册到同一个注册表
 - Provider 在模块导入时自动注册（通过 __init__.py）
 - Manager 通过注册表创建 Provider 实例
+- 配置驱动的注册：只加载配置中启用的 Provider
 """
 
 from typing import Dict, Type, Any, List
 import inspect
+import importlib
 from src.core.utils.logger import get_logger
 
 # 导入 Provider 接口（延迟导入避免循环依赖）
@@ -394,6 +397,189 @@ class ProviderRegistry:
         import json
 
         print(json.dumps(info, indent=2, ensure_ascii=False))
+
+    # ==================== 配置驱动注册方法 ====================
+
+    @classmethod
+    def discover_and_register_providers(cls, config_service, config: Dict[str, Any]) -> Dict[str, int]:
+        """
+        从配置发现并注册 Provider
+
+        只加载并注册配置中启用的 Provider，避免加载不必要的模块。
+
+        Args:
+            config_service: ConfigService 实例
+            config: 配置字典（包含 providers 配置）
+
+        Returns:
+            注册统计字典：{"input": N, "decision": M, "output": K}
+
+        Example:
+            from src.services.config.service import ConfigService
+            config_service = ConfigService(base_dir=".")
+            config, _, _, _ = config_service.initialize()
+            stats = ProviderRegistry.discover_and_register_providers(config_service, config)
+            print(f"注册完成: {stats}")
+        """
+        cls._logger.info("开始配置驱动的 Provider 注册...")
+
+        # 清空现有注册（避免重复注册）
+        # 注意：这会清除之前通过 __init__.py 自动注册的 Provider
+        # cls.clear_all()
+
+        # 从配置字典读取 providers 配置
+        providers_config = config.get("providers", {})
+        input_config = providers_config.get("input", {})
+        decision_config = providers_config.get("decision", {})
+        output_config = providers_config.get("output", {})
+
+        # 从各个域配置中读取启用的 Provider 列表
+        enabled_inputs = input_config.get("enabled_inputs", [])
+        available_decision = decision_config.get("available_providers", [])
+        enabled_outputs = output_config.get("enabled_outputs", [])
+
+        # 按域注册 Provider
+        input_count = cls._register_provider_by_domain(
+            "input",
+            enabled_inputs,
+            config_service
+        )
+        decision_count = cls._register_provider_by_domain(
+            "decision",
+            available_decision,
+            config_service
+        )
+        output_count = cls._register_provider_by_domain(
+            "output",
+            enabled_outputs,
+            config_service
+        )
+
+        stats = {
+            "input": input_count,
+            "decision": decision_count,
+            "output": output_count,
+            "total": input_count + decision_count + output_count
+        }
+
+        cls._logger.info(
+            f"Provider 注册完成: Input={input_count}, "
+            f"Decision={decision_count}, Output={output_count}, "
+            f"Total={stats['total']}"
+        )
+
+        return stats
+
+    @classmethod
+    def _register_provider_by_domain(
+        cls,
+        domain: str,
+        provider_names: List[str],
+        config_service
+    ) -> int:
+        """
+        按域注册 Provider
+
+        Args:
+            domain: 域名称（input/decision/output）
+            provider_names: Provider 名称列表
+            config_service: ConfigService 实例（用于获取自定义模块路径）
+
+        Returns:
+            成功注册的 Provider 数量
+        """
+        registered_count = 0
+
+        if not provider_names:
+            cls._logger.debug(f"域 '{domain}' 没有启用的 Provider")
+            return 0
+
+        cls._logger.info(f"开始注册 {domain} 域的 Provider: {provider_names}")
+
+        for provider_name in provider_names:
+            try:
+                # 获取 Provider 配置（检查是否有自定义模块路径）
+                provider_config = config_service.get(
+                    f"providers.{domain}.{provider_name}",
+                    default={},
+                    section=f"providers.{domain}"
+                )
+
+                # 确定模块导入路径
+                if "module_path" in provider_config:
+                    # 使用自定义模块路径
+                    module_path = provider_config["module_path"]
+                    source = f"custom:{provider_name}"
+                    cls._logger.debug(f"使用自定义模块路径: {provider_name} -> {module_path}")
+                else:
+                    # 使用内置 Provider 路径
+                    module_path = f"src.domains.{domain}.providers.{provider_name}"
+                    source = f"builtin:{provider_name}"
+
+                # 动态导入 Provider 模块
+                # 导入 __init__.py 会自动触发注册
+                importlib.import_module(module_path)
+
+                # 验证是否注册成功
+                is_registered = False
+                if domain == "input":
+                    is_registered = cls.is_input_provider_registered(provider_name)
+                elif domain == "decision":
+                    is_registered = cls.is_decision_provider_registered(provider_name)
+                elif domain == "output":
+                    is_registered = cls.is_output_provider_registered(provider_name)
+
+                if is_registered:
+                    cls._logger.info(f"成功注册 {domain} Provider: {provider_name} (来源: {source})")
+                    registered_count += 1
+                else:
+                    cls._logger.warning(
+                        f"模块导入成功但 {domain} Provider 未注册: {provider_name} "
+                        f"(请检查 __init__.py 是否调用了注册方法)"
+                    )
+
+            except ImportError as e:
+                cls._logger.warning(
+                    f"导入 {domain} Provider 失败: {provider_name} - {e} "
+                    f"(模块路径: {module_path})"
+                )
+            except Exception as e:
+                cls._logger.error(
+                    f"注册 {domain} Provider 时发生错误: {provider_name} - {e}",
+                    exc_info=True
+                )
+
+        cls._logger.info(f"{domain} 域注册完成: {registered_count}/{len(provider_names)} 个成功")
+        return registered_count
+
+    @classmethod
+    def get_registration_stats(cls) -> Dict[str, int]:
+        """
+        获取注册统计信息
+
+        Returns:
+            统计字典：{
+                "input": N,
+                "decision": M,
+                "output": K,
+                "total": T
+            }
+
+        Example:
+            stats = ProviderRegistry.get_registration_stats()
+            print(f"已注册 Provider: Input={stats['input']}, "
+                  f"Decision={stats['decision']}, Output={stats['output']}")
+        """
+        input_count = len(cls._input_providers)
+        decision_count = len(cls._decision_providers)
+        output_count = len(cls._output_providers)
+
+        return {
+            "input": input_count,
+            "decision": decision_count,
+            "output": output_count,
+            "total": input_count + decision_count + output_count
+        }
 
 
 # 便捷导入：从 src.core.provider_registry 导入 ProviderRegistry

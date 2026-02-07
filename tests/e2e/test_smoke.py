@@ -5,11 +5,17 @@ E2E Test: Smoke Test
 """
 
 import pytest
+from pydantic import BaseModel, Field
 
 # 在模块级别导入，触发 Provider 注册
 import src.domains.input.providers  # noqa: F401
 import src.domains.output.providers  # noqa: F401
 import src.domains.decision.providers  # noqa: F401
+
+
+class SimpleTestEvent(BaseModel):
+    """简单测试事件"""
+    data: str = Field(..., description="测试数据")
 
 
 @pytest.mark.asyncio
@@ -46,11 +52,11 @@ async def test_event_bus_creation():
         received.append((event_name, data, source))
 
     bus.on("test.event", listener)
-    await bus.emit("test.event", {"data": "test"}, source="test")
+    await bus.emit("test.event", SimpleTestEvent(data="test"), source="test")
 
     assert len(received) == 1
     assert received[0][0] == "test.event"
-    assert received[0][1]["data"] == "test"
+    assert received[0][1]["data"] == "test"  # 序列化后的dict仍然可以用dict方式访问
     assert received[0][2] == "test"
 
 

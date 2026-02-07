@@ -6,7 +6,7 @@
 
 ### 1.1 虚拟形象控制类（Layer 7 渲染）
 
-#### VTSProvider (`src/layers/rendering/providers/vts/`)
+#### VTSProvider (`src/domains/rendering/providers/vts/`)
 **外部依赖：**
 - VTube Studio 软件（需运行并开启WebSocket服务器）
 - 音频设备（用于口型同步测试）
@@ -40,7 +40,7 @@ llm_matching_enabled = false  # 如需测试需要额外配置LLM
 
 ---
 
-#### WarudoOutputProvider (`src/layers/rendering/providers/warudo/`)
+#### WarudoOutputProvider (`src/domains/rendering/providers/warudo/`)
 **外部依赖：**
 - Warudo 软件（需运行WebSocket服务器）
 
@@ -66,7 +66,7 @@ ws_port = 19190
 
 ---
 
-#### AvatarOutputProvider (`src/layers/rendering/providers/avatar/`)
+#### AvatarOutputProvider (`src/domains/rendering/providers/avatar/`)
 **外部依赖：**
 - 需要查看具体实现（可能是另一种虚拟形象控制）
 
@@ -74,7 +74,7 @@ ws_port = 19190
 
 ### 1.2 TTS语音合成类（Layer 7 渲染）
 
-#### TTSProvider (`src/layers/rendering/providers/tts/`)
+#### TTSProvider (`src/domains/rendering/providers/tts/`)
 **外部依赖：**
 - 音频输出设备（扬声器/耳机）
 - Edge TTS API（在线服务）或 Omni TTS服务
@@ -107,7 +107,7 @@ output_device_name = ""  # 留空使用默认设备
 
 ---
 
-#### GPTSoVITSProvider (`src/layers/rendering/providers/gptsovits/`)
+#### GPTSoVITSProvider (`src/domains/rendering/providers/gptsovits/`)
 **外部依赖：**
 - GPT-SoVITS服务器（本地或远程）
 - 音频输出设备
@@ -142,7 +142,7 @@ output_device_name = ""
 
 ---
 
-#### OmniTTSProvider (`src/layers/rendering/providers/omni_tts/`)
+#### OmniTTSProvider (`src/domains/rendering/providers/omni_tts/`)
 **外部依赖：**
 - Omni TTS服务
 - 音频输出设备
@@ -151,7 +151,7 @@ output_device_name = ""
 
 ### 1.3 字幕显示类（Layer 7 渲染）
 
-#### SubtitleProvider (`src/layers/rendering/providers/subtitle/`)
+#### SubtitleProvider (`src/domains/rendering/providers/subtitle/`)
 **外部依赖：**
 - 图形界面环境（支持GUI）
 - customtkinter库
@@ -185,7 +185,7 @@ font_size = 24
 
 ---
 
-#### StickerOutputProvider (`src/layers/rendering/providers/sticker/`)
+#### StickerOutputProvider (`src/domains/rendering/providers/sticker/`)
 **外部依赖：**
 - VTube Studio（接收贴纸图片）
 
@@ -211,7 +211,7 @@ display_duration_seconds = 3
 
 ### 1.4 直播平台输入类（Layer 1 输入）
 
-#### BiliDanmakuProvider (`src/layers/input/providers/bili_danmaku/`)
+#### BiliDanmakuProvider (`src/domains/input/providers/bili_danmaku/`)
 **外部依赖：**
 - Bilibili直播间（需要有真实room_id）
 - 网络连接
@@ -241,7 +241,7 @@ message_config = {}
 
 ---
 
-#### BiliOfficialProvider (`src/layers/input/providers/bili_danmaku_official/`)
+#### BiliOfficialProvider (`src/domains/input/providers/bili_danmaku_official/`)
 **外部依赖：**
 - Bilibili直播间（需真实room_id）
 - 网络连接
@@ -263,11 +263,11 @@ room_id = 123456
 
 ---
 
-#### ReadPingmuProvider (`src/layers/input/providers/read_pingmu/`)
+#### ReadPingmuProvider (`src/domains/input/providers/read_pingmu/`)
 **外部依赖：**
 - 需要查看具体实现
 
-#### MainosabaProvider (`src/layers/input/providers/mainosaba/`)
+#### MainosabaProvider (`src/domains/input/providers/mainosaba/`)
 **外部依赖：**
 - 需要查看具体实现
 
@@ -275,7 +275,7 @@ room_id = 123456
 
 ### 1.5 决策服务类（Layer 3 决策）
 
-#### MaiCoreDecisionProvider (`src/layers/decision/providers/maicore/`)
+#### MaiCoreDecisionProvider (`src/domains/decision/providers/maicore/`)
 **外部依赖：**
 - MaiCore服务器（WebSocket服务器）
 - maim_message库（Router协议）
@@ -311,7 +311,7 @@ http_callback_path = "/callback"
 
 ### 1.6 OBS控制类（Layer 7 渲染）
 
-#### ObsControlProvider (`src/layers/rendering/providers/obs_control/`)
+#### ObsControlProvider (`src/domains/rendering/providers/obs_control/`)
 **外部依赖：**
 - OBS Studio软件（需开启WebSocket）
 - obsws-python库

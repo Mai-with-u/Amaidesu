@@ -217,32 +217,8 @@ class MainosabaProviderConfig(BaseProviderConfig):
         return v
 
 
-class RemoteStreamProviderConfig(BaseProviderConfig):
-    """远程流媒体Provider配置（注意：实际上是OutputProvider）"""
-
-    type: Literal["remote_stream"] = "remote_stream"
-    server_mode: bool = Field(
-        default=True,
-        description="服务器模式"
-    )
-    host: str = Field(
-        default="0.0.0.0",
-        description="主机地址"
-    )
-    port: int = Field(
-        default=8765,
-        description="端口",
-        ge=1,
-        le=65535
-    )
-    audio_config: dict = Field(
-        default_factory=dict,
-        description="音频配置"
-    )
-    image_config: dict = Field(
-        default_factory=dict,
-        description="图像配置"
-    )
+# 注意：RemoteStreamProvider 已移动到 output 域
+# 请使用 src.services.config.schemas.schemas.output_providers.RemoteStreamOutputProviderConfig
 
 
 # 类型别名，用于导入
@@ -253,6 +229,5 @@ InputProviderConfig = (
     BiliDanmakuOfficialMaiCraftProviderConfig |
     MockDanmakuProviderConfig |
     ReadPingmuProviderConfig |
-    MainosabaProviderConfig |
-    RemoteStreamProviderConfig
+    MainosabaProviderConfig
 )

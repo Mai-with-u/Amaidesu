@@ -161,7 +161,7 @@ def load_component_specific_config(
     加载组件自身目录下的 config.toml。
 
     Args:
-        component_dir_path: 组件包的绝对路径 (例如 /path/to/src/plugins/my_plugin)
+        component_dir_path: 组件包的绝对路径 (例如 /path/to/src/domains/{domain}/providers/{provider})
         component_name: 组件的名称 (例如 my_plugin)
         component_type_name: 组件类型名称，用于日志 (例如 "插件", "管道")
 

@@ -8,8 +8,10 @@ Input Providers - 输入Provider实现
 - BiliDanmakuOfficialInputProvider: B站官方弹幕Provider
 - BiliDanmakuOfficialMaiCraftInputProvider: B站官方弹幕+Minecraft转发Provider
 - ReadPingmuInputProvider: 屏幕读评输入Provider
-- RemoteStreamProvider: 远程流输入Provider
 - MainosabaInputProvider: 游戏画面文本采集Provider
+
+注意：RemoteStreamProvider 已移动到 src/domains/output/providers/remote_stream/
+作为 RemoteStreamOutputProvider，因为它是一个输出Provider。
 """
 
 from .console_input import ConsoleInputProvider
@@ -18,7 +20,6 @@ from .bili_danmaku import BiliDanmakuInputProvider
 from .bili_danmaku_official import BiliDanmakuOfficialInputProvider
 from .bili_danmaku_official_maicraft import BiliDanmakuOfficialMaiCraftInputProvider
 from .read_pingmu import ReadPingmuInputProvider
-from .remote_stream import RemoteStreamProvider
 from .mainosaba import MainosabaInputProvider
 
 __all__ = [
@@ -28,6 +29,5 @@ __all__ = [
     "BiliDanmakuOfficialInputProvider",
     "BiliDanmakuOfficialMaiCraftInputProvider",
     "ReadPingmuInputProvider",
-    "RemoteStreamProvider",
     "MainosabaInputProvider",
 ]

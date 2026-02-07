@@ -11,6 +11,8 @@ from src.core.base.raw_data import RawData
 from src.core.base.normalized_message import NormalizedMessage
 from src.domains.input.input_provider_manager import InputProviderManager
 from src.core.utils.logger import get_logger
+from src.core.events.names import CoreEvents
+from src.core.events.payloads.input import MessageReadyPayload
 
 if TYPE_CHECKING:
     from src.core.pipeline.pipeline_manager import PipelineManager
@@ -112,10 +114,10 @@ class InputLayer:
             if normalized_message:
                 self._normalized_message_count += 1
 
-                # 发布NormalizedMessage就绪事件
+                # 发布NormalizedMessage就绪事件（使用emit）
                 await self.event_bus.emit(
-                    "normalization.message_ready",
-                    {"message": normalized_message, "source": payload_source},
+                    CoreEvents.NORMALIZATION_MESSAGE_READY,
+                    MessageReadyPayload.from_normalized_message(normalized_message),
                     source="InputLayer",
                 )
 

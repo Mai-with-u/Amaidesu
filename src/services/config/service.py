@@ -11,7 +11,6 @@ ConfigService - 统一的配置管理服务
 """
 
 import os
-import warnings
 from typing import Dict, Any, Optional, Literal
 from pathlib import Path
 
@@ -37,11 +36,8 @@ class ConfigService:
         # 获取主配置
         general_config = config_service.get_section("general")
 
-        # 获取输入Provider配置
-        input_config = config_service.get_input_provider_config("console")
-
-        # 获取输出Provider配置
-        output_config = config_service.get_provider_config("tts")
+        # 获取Provider配置（推荐使用新方法）
+        input_config = config_service.get_provider_config_with_defaults("console", "input")
 
         # 获取管道配置
         pipeline_config = config_service.get_pipeline_config("throttle")
@@ -171,57 +167,6 @@ class ConfigService:
         else:
             return self._main_config.get(key, default)
 
-    def get_input_provider_config(
-        self,
-        provider_name: str,
-        provider_dir_path: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """
-        获取输入Provider的配置
-
-        .. deprecated::
-            此方法已弃用。请使用 :meth:`get_provider_config_with_defaults` 代替。
-
-        从 [providers.input.inputs.{provider_name}] 读取配置。
-
-        Args:
-            provider_name: Provider名称（如 "console", "bili_danmaku", "minecraft"）
-            provider_dir_path: Provider目录的绝对路径（可选，预留用于从目录加载config.toml）
-
-        Returns:
-            Provider配置字典
-
-        Example:
-            # 获取控制台输入Provider配置
-            console_config = config_service.get_input_provider_config("console")
-
-            # 获取B站弹幕Provider配置
-            bili_config = config_service.get_input_provider_config("bili_danmaku")
-        """
-        warnings.warn(
-            f"get_input_provider_config() is deprecated and will be removed in a future version. "
-            f"Use get_provider_config_with_defaults(provider_name='{provider_name}', provider_layer='input') instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-        if not self._initialized:
-            self.logger.warning("ConfigService 未初始化，返回空配置")
-            return {}
-
-        # 从 [providers.input.inputs.{provider_name}] 获取配置
-        providers_config = self.get_section("providers", {})
-        input_config = providers_config.get("input", {})
-        inputs_config = input_config.get("inputs", {})
-        provider_config = inputs_config.get(provider_name, {}).copy()
-
-        # 如果没有配置，返回空配置
-        if not provider_config:
-            self.logger.debug(f"输入Provider '{provider_name}' 没有配置")
-            return {}
-
-        return provider_config
-
     def get_pipeline_config(
         self,
         pipeline_name: str,
@@ -271,59 +216,6 @@ class ConfigService:
         )
 
         return final_pipeline_config
-
-    def get_provider_config(
-        self,
-        provider_name: str,
-        provider_type: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """
-        获取 Provider 配置
-
-        .. deprecated::
-            此方法已弃用。请使用 :meth:`get_provider_config_with_defaults` 代替。
-
-        Provider 配置通常位于 [rendering.outputs] 节下。
-
-        Args:
-            provider_name: Provider 名称（如 "tts", "subtitle", "sticker"）
-            provider_type: Provider 类型（可选，如果未提供则使用 provider_name）
-
-        Returns:
-            Provider 配置
-
-        Example:
-            tts_config = config_service.get_provider_config("tts")
-            subtitle_config = config_service.get_provider_config("subtitle")
-        """
-        warnings.warn(
-            f"get_provider_config() is deprecated and will be removed in a future version. "
-            f"Use get_provider_config_with_defaults(provider_name='{provider_name}', provider_layer='output') instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-        if not self._initialized:
-            self.logger.warning("ConfigService 未初始化，返回空配置")
-            return {}
-
-        provider_type = provider_type or provider_name
-
-        # 从 providers.output.outputs 中获取配置
-        output_config = self.get_section("providers.output", {})
-        outputs_config = output_config.get("outputs", {})
-        provider_config = outputs_config.get(provider_name, {}).copy()
-
-        # 如果没有配置，则返回空配置
-        if not provider_config:
-            self.logger.debug(f"Provider '{provider_name}' 没有配置")
-            return {}
-
-        # 添加 type 字段（如果不存在）
-        if "type" not in provider_config:
-            provider_config["type"] = provider_type
-
-        return provider_config
 
     def get_all_provider_configs(self, provider_type: str = "input") -> Dict[str, Dict[str, Any]]:
         """
@@ -466,7 +358,7 @@ class ConfigService:
         新的配置合并顺序（后者覆盖前者）:
         1. Schema默认值（从Pydantic Schema类获取）
         2. 主配置覆盖 (config.toml中的[providers.*.overrides.{provider_name}])
-        3. Provider本地配置 (src/layers/*/providers/{name}/config.toml)
+        3. Provider本地配置 (src/domains/{domain}/providers/{name}/config.toml)
 
         注意: 已移除config-defaults.toml加载逻辑，所有默认值由Schema定义。
 

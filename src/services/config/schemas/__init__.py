@@ -37,12 +37,10 @@ from src.services.config.schemas.schemas import (
     MockDanmakuProviderConfig,
     ReadPingmuProviderConfig,
     MainosabaProviderConfig,
-    RemoteStreamProviderConfig,
     # Decision provider configs
     MaiCoreDecisionProviderConfig,
     LocalLLMDecisionProviderConfig,
     RuleEngineDecisionProviderConfig,
-    EmotionJudgeDecisionProviderConfig,
     MockDecisionProviderConfig,
     # Output provider configs
     SubtitleProviderConfig,
@@ -83,12 +81,10 @@ __all__ = [
     "MockDanmakuProviderConfig",
     "ReadPingmuProviderConfig",
     "MainosabaProviderConfig",
-    "RemoteStreamProviderConfig",
     # Decision provider configs
     "MaiCoreDecisionProviderConfig",
     "LocalLLMDecisionProviderConfig",
     "RuleEngineDecisionProviderConfig",
-    "EmotionJudgeDecisionProviderConfig",
     "MockDecisionProviderConfig",
     # Output provider configs
     "SubtitleProviderConfig",

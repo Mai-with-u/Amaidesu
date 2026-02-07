@@ -29,7 +29,6 @@ class RawData:
         preserve_original: 是否保留原始数据到缓存
         original_data: 原始数据(如果content已经被处理过，这里保存原始数据)
         metadata: 额外的元数据(用于扩展和特殊用途)
-        data_ref: DataCache引用(如果需要缓存原始数据)
     """
 
     content: Any
@@ -39,35 +38,11 @@ class RawData:
     preserve_original: bool = False
     original_data: Optional[Any] = None
     metadata: dict = field(default_factory=dict)
-    data_ref: Optional[str] = None
 
     def __post_init__(self):
         """初始化后处理"""
         if self.metadata is None:
             self.metadata = {}
-
-    def with_data_ref(self, data_ref: str) -> "RawData":
-        """
-        设置DataCache引用并返回新对象
-
-        注意：DataCache功能已移除（未实际使用），此方法保留用于向后兼容。
-
-        Args:
-            data_ref: 数据引用
-
-        Returns:
-            新的RawData对象，带有data_ref
-        """
-        return RawData(
-            content=self.content,
-            source=self.source,
-            data_type=self.data_type,
-            timestamp=self.timestamp,
-            preserve_original=self.preserve_original,
-            original_data=self.original_data,
-            metadata=self.metadata.copy(),
-            data_ref=data_ref,  # 保留字段，但DataCache已移除
-        )
 
     def to_dict(self) -> dict:
         """
@@ -83,6 +58,4 @@ class RawData:
             "timestamp": self.timestamp,
             "preserve_original": self.preserve_original,
             "metadata": self.metadata,
-            # data_ref字段已保留，但DataCache功能已移除（未实际使用）
-            "data_ref": self.data_ref,
         }

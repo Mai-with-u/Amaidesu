@@ -19,9 +19,6 @@ class CoreEvents:
     DECISION_PROVIDER_CONNECTED = "decision.provider.connected"
     DECISION_PROVIDER_DISCONNECTED = "decision.provider.disconnected"
 
-    # 已废弃（旧架构时期）
-    # UNDERSTANDING_INTENT_GENERATED = "understanding.intent_generated"  # 已废弃
-
     # Output Domain: 输出域（参数生成 + 渲染）
     EXPRESSION_PARAMETERS_GENERATED = "expression.parameters_generated"
     RENDER_COMPLETED = "render.completed"
@@ -31,25 +28,3 @@ class CoreEvents:
     CORE_STARTUP = "core.startup"
     CORE_SHUTDOWN = "core.shutdown"
     CORE_ERROR = "core.error"
-
-
-class PluginEventPrefix:
-    """插件事件前缀工具"""
-
-    @staticmethod
-    def create(plugin_name: str, event_name: str) -> str:
-        """
-        创建插件事件名称
-
-        Args:
-            plugin_name: 插件名称（snake_case）
-            event_name: 事件名称
-
-        Returns:
-            完整的插件事件名称
-
-        Example:
-            >>> PluginEventPrefix.create("bili_danmaku", "gift_received")
-            "plugin.bili_danmaku.gift_received"
-        """
-        return f"plugin.{plugin_name}.{event_name}"
