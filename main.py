@@ -23,6 +23,10 @@ from src.domains.input.input_layer import InputLayer
 from src.domains.input.input_provider_manager import InputProviderManager
 from src.domains.decision.decision_manager import DecisionManager
 
+# 确保所有Provider都被注册
+from src.domains.input import providers as input_providers
+from src.domains.output import providers as output_providers
+
 logger = get_logger("Main")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -129,15 +133,15 @@ def validate_config(config: Dict[str, Any]) -> None:
         errors.append("缺少 [general] 配置段")
 
     # 检查输入Provider配置（新格式）
-    if not config.get("providers.input"):
+    if not config.get("providers", {}).get("input"):
         logger.warning("未检测到 [providers.input] 配置，输入Provider功能将被禁用")
 
     # 检查决策Provider配置（新格式）
-    if not config.get("providers.decision"):
+    if not config.get("providers", {}).get("decision"):
         logger.warning("未检测到 [providers.decision] 配置，决策Provider功能将被禁用")
 
     # 检查输出Provider配置（新格式）
-    if not config.get("providers.output"):
+    if not config.get("providers", {}).get("output"):
         logger.warning("未检测到 [providers.output] 配置，输出Provider功能将被禁用")
 
     # 如果有严重错误，退出程序
@@ -238,9 +242,9 @@ async def create_app_components(
     """创建并连接核心组件（事件总线、输入层、决策层、协调器、核心、插件）。"""
     general_config = config.get("general", {})
     # 使用新的 [providers.*] 配置格式
-    output_config = config.get("providers.output", {})
-    decision_config = config.get("providers.decision", {})
-    input_config = config.get("providers.input", {})
+    output_config = config.get("providers", {}).get("output", {})
+    decision_config = config.get("providers", {}).get("decision", {})
+    input_config = config.get("providers", {}).get("input", {})
     platform_id = general_config.get("platform_id", "amaidesu")
 
     if output_config:
@@ -262,9 +266,7 @@ async def create_app_components(
     # 事件总线
     logger.info("初始化事件总线、数据流协调器和 AmaidesuCore...")
     event_bus = EventBus()
-
     register_core_events()
-    logger.info("核心事件已注册到 EventRegistry")
 
     # 输入Provider管理器 (Input Domain)
     input_provider_manager: Optional[InputProviderManager] = None
@@ -274,7 +276,6 @@ async def create_app_components(
             input_provider_manager = InputProviderManager(event_bus)
             providers = await input_provider_manager.load_from_config(input_config, config_service=config_service)
             await input_provider_manager.start_all_providers(providers)
-            logger.info(f"InputProviderManager 已设置（已启动 {len(input_provider_manager._providers)} 个Provider）")
         except Exception as e:
             logger.error(f"设置输入Provider管理器失败: {e}", exc_info=True)
             logger.warning("输入Provider功能不可用，继续启动其他服务")
@@ -283,10 +284,8 @@ async def create_app_components(
         logger.info("未检测到输入配置，输入Provider功能将被禁用")
 
     # 输入层 (Input Domain)
-    logger.info("初始化输入层组件（Input Domain）...")
     input_layer = InputLayer(event_bus, pipeline_manager=pipeline_manager)
     await input_layer.setup()
-    logger.info("InputLayer 已设置（Input Domain）")
 
     # 决策层 (Decision Domain)
     decision_manager: Optional[DecisionManager] = None
