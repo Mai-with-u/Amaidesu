@@ -332,15 +332,11 @@ refactor(final): 3域架构实施与最终文档更新
 
 ## 🔧 执行步骤
 
-### 步骤1: 创建备份分支
+### 步骤1: 创建 refactor-clean 分支
 ```bash
+# 从 refactor 分支创建新分支（refactor 分支本身就是备份）
 git checkout refactor
-git branch backup/refactor-before-squash
-```
-
-### 步骤2: 创建 refactor-clean 分支
-```bash
-git checkout -b refactor-clean refactor
+git checkout -b refactor-clean
 ```
 
 ### 步骤3: 生成交互式rebase脚本
@@ -355,28 +351,35 @@ git checkout -b refactor-clean refactor
 git rebase -i dev
 ```
 
-### 步骤5: 验证结果
+### 步骤4: 验证结果
 ```bash
 git log --oneline --graph -10
 ```
 
-### 步骤6: 对比验证
+### 步骤5: 对比验证
 ```bash
+# 确保代码变更一致
 git diff dev..refactor --stat
 git diff dev..refactor-clean --stat
 # 两者应该相同
 ```
 
-### 步骤7: 推送新分支
+### 步骤6: 推送新分支
 ```bash
 git push origin refactor-clean
+```
+
+### 步骤7: 错误恢复（如果需要）
+```bash
+# 如果 rebase 失败，删除 refactor-clean 并重新创建
+git branch -D refactor-clean
+git checkout -b refactor-clean refactor
 ```
 
 ---
 
 ## ✅ 验证清单
 
-- [ ] 备份分支已创建
 - [ ] refactor-clean 分支基于 refactor 创建
 - [ ] 合并后 commit 数量为 6 个
 - [ ] `git diff dev..refactor --stat` 与 `git diff dev..refactor-clean --stat` 相同
@@ -433,15 +436,16 @@ git push origin refactor-clean
 ## 🚨 风险与注意事项
 
 ### 风险
-1. **rebase 操作不可逆** - 必须先备份
+1. **rebase 操作会重写历史** - 在 refactor-clean 分支上执行，不影响 refactor
 2. **commit 顺序改变** - 可能影响时间轴
 3. **merge commit 可能丢失** - 会变成线性历史
 
 ### 注意事项
-1. 确保远程分支同步
-2. 操作期间不要在 refactor 分支推送新 commit
-3. 如果出错，切回备份分支重来
-4. rebase 完成后需要 force push（如果已推送）
+1. 在 refactor-clean 分支上执行 rebase，不影响 refactor 分支
+2. 确保 refactor 分支与远程同步
+3. 操作期间不要在 refactor 分支推送新 commit（避免混淆）
+4. 如果 rebase 出错，直接删除 refactor-clean 并重新创建
+5. refactor-clean 推送到远程后，如有更新可能需要 force push
 
 ---
 
