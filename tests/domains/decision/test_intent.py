@@ -1,7 +1,7 @@
 """
 测试 Intent 数据结构 (pytest)
 
-运行: uv run pytest tests/layers/decision/test_intent.py -v
+运行: uv run pytest tests/domains/decision/test_intent.py -v
 """
 
 import pytest

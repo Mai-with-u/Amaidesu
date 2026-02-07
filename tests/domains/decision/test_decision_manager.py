@@ -1,7 +1,7 @@
 """
 测试 DecisionManager（pytest）
 
-运行: uv run pytest tests/layers/decision/test_decision_manager.py -v
+运行: uv run pytest tests/domains/decision/test_decision_manager.py -v
 """
 
 import asyncio

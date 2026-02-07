@@ -1,7 +1,7 @@
 """
 测试 InputProviderManager（pytest）
 
-运行: uv run pytest tests/layers/input/test_input_provider_manager.py -v
+运行: uv run pytest tests/domains/input/test_input_provider_manager.py -v
 """
 
 import asyncio

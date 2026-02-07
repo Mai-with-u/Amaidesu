@@ -1,7 +1,7 @@
 """
 测试 SuperChatNormalizer（pytest）
 
-运行: uv run pytest tests/layers/normalization/test_superchat_normalizer.py -v
+运行: uv run pytest tests/domains/normalization/test_superchat_normalizer.py -v
 """
 
 import sys

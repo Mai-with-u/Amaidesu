@@ -1,7 +1,7 @@
 """
 测试 InputLayer 数据流（pytest）
 
-运行: uv run pytest tests/layers/input/test_input_layer.py -v
+运行: uv run pytest tests/domains/input/test_input_layer.py -v
 """
 
 import asyncio

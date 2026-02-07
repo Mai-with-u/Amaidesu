@@ -1,7 +1,7 @@
 """
 测试 MockDanmakuProvider（pytest）
 
-运行: uv run pytest tests/layers/input/test_mock_danmaku_provider.py -v
+运行: uv run pytest tests/domains/input/test_mock_danmaku_provider.py -v
 """
 
 import asyncio

@@ -1,7 +1,7 @@
 """
 测试 IntentParser (pytest)
 
-运行: uv run pytest tests/layers/decision/test_intent_parser.py -v
+运行: uv run pytest tests/domains/decision/test_intent_parser.py -v
 """
 
 import pytest

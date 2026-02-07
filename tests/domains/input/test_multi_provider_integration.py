@@ -1,7 +1,7 @@
 """
 测试多 Provider 集成（pytest）
 
-运行: uv run pytest tests/layers/input/test_multi_provider_integration.py -v
+运行: uv run pytest tests/domains/input/test_multi_provider_integration.py -v
 """
 
 import asyncio

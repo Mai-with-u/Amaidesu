@@ -38,7 +38,7 @@ class TestEmotionJudgeDecisionProvider:
 
     def test_init_with_api_key(self, emotion_config):
         """测试有API key的初始化"""
-        with patch('src.layers.decision.providers.emotion_judge.emotion_judge_decision_provider.AsyncOpenAI'):
+        with patch('src.domains.decision.providers.emotion_judge.emotion_judge_decision_provider.AsyncOpenAI'):
             provider = EmotionJudgeDecisionProvider(emotion_config)
 
             assert provider.api_key == "test_api_key"
@@ -61,7 +61,7 @@ class TestEmotionJudgeDecisionProvider:
         """测试默认配置"""
         config = {}
 
-        with patch('src.layers.decision.providers.emotion_judge.emotion_judge_decision_provider.AsyncOpenAI'):
+        with patch('src.domains.decision.providers.emotion_judge.emotion_judge_decision_provider.AsyncOpenAI'):
             provider = EmotionJudgeDecisionProvider(config)
 
             assert provider.base_url == "https://api.siliconflow.cn/v1/"
@@ -70,7 +70,7 @@ class TestEmotionJudgeDecisionProvider:
     @pytest.mark.asyncio
     async def test_setup_internal(self, emotion_config, mock_event_bus):
         """测试内部设置"""
-        with patch('src.layers.decision.providers.emotion_judge.emotion_judge_decision_provider.AsyncOpenAI'):
+        with patch('src.domains.decision.providers.emotion_judge.emotion_judge_decision_provider.AsyncOpenAI'):
             provider = EmotionJudgeDecisionProvider(emotion_config)
             await provider.setup(mock_event_bus)
 
@@ -84,7 +84,7 @@ class TestEmotionJudgeDecisionProvider:
     @pytest.mark.asyncio
     async def test_decide_returns_none(self, emotion_config):
         """测试decide方法返回None"""
-        with patch('src.layers.decision.providers.emotion_judge.emotion_judge_decision_provider.AsyncOpenAI'):
+        with patch('src.domains.decision.providers.emotion_judge.emotion_judge_decision_provider.AsyncOpenAI'):
             provider = EmotionJudgeDecisionProvider(emotion_config)
 
             # 创建一个mock canonical message
@@ -97,7 +97,7 @@ class TestEmotionJudgeDecisionProvider:
 
     def test_extract_text_from_string(self, emotion_config):
         """测试从字符串提取文本"""
-        with patch('src.layers.decision.providers.emotion_judge.emotion_judge_decision_provider.AsyncOpenAI'):
+        with patch('src.domains.decision.providers.emotion_judge.emotion_judge_decision_provider.AsyncOpenAI'):
             provider = EmotionJudgeDecisionProvider(emotion_config)
 
             text = provider._extract_text("测试文本")
@@ -105,7 +105,7 @@ class TestEmotionJudgeDecisionProvider:
 
     def test_extract_text_from_object_with_text_attr(self, emotion_config):
         """测试从有text属性的对象提取文本"""
-        with patch('src.layers.decision.providers.emotion_judge.emotion_judge_decision_provider.AsyncOpenAI'):
+        with patch('src.domains.decision.providers.emotion_judge.emotion_judge_decision_provider.AsyncOpenAI'):
             provider = EmotionJudgeDecisionProvider(emotion_config)
 
             obj = MagicMock()
@@ -116,7 +116,7 @@ class TestEmotionJudgeDecisionProvider:
 
     def test_extract_text_from_object_with_content_attr(self, emotion_config):
         """测试从有content属性的对象提取文本"""
-        with patch('src.layers.decision.providers.emotion_judge.emotion_judge_decision_provider.AsyncOpenAI'):
+        with patch('src.domains.decision.providers.emotion_judge.emotion_judge_decision_provider.AsyncOpenAI'):
             provider = EmotionJudgeDecisionProvider(emotion_config)
 
             obj = MagicMock()
@@ -132,7 +132,7 @@ class TestEmotionJudgeDecisionProvider:
 
     def test_extract_text_from_dict(self, emotion_config):
         """测试从dict提取文本（应该返回None）"""
-        with patch('src.layers.decision.providers.emotion_judge.emotion_judge_decision_provider.AsyncOpenAI'):
+        with patch('src.domains.decision.providers.emotion_judge.emotion_judge_decision_provider.AsyncOpenAI'):
             provider = EmotionJudgeDecisionProvider(emotion_config)
 
             text = provider._extract_text({"key": "value"})
@@ -141,7 +141,7 @@ class TestEmotionJudgeDecisionProvider:
     @pytest.mark.asyncio
     async def test_handle_canonical_message_in_cooldown(self, emotion_config, mock_event_bus):
         """测试冷却时间内的消息处理"""
-        with patch('src.layers.decision.providers.emotion_judge.emotion_judge_decision_provider.AsyncOpenAI'):
+        with patch('src.domains.decision.providers.emotion_judge.emotion_judge_decision_provider.AsyncOpenAI'):
             provider = EmotionJudgeDecisionProvider(emotion_config)
             await provider.setup(mock_event_bus)
 
@@ -171,7 +171,7 @@ class TestEmotionJudgeDecisionProvider:
     @pytest.mark.asyncio
     async def test_cleanup(self, emotion_config):
         """测试清理资源"""
-        with patch('src.layers.decision.providers.emotion_judge.emotion_judge_decision_provider.AsyncOpenAI') as mock_openai:
+        with patch('src.domains.decision.providers.emotion_judge.emotion_judge_decision_provider.AsyncOpenAI') as mock_openai:
             mock_client = MagicMock()
             mock_client.close = AsyncMock()
             mock_openai.return_value = mock_client
@@ -201,7 +201,7 @@ class TestEmotionJudgeDecisionProvider:
             {"name": "难过", "id": "sad_1"},
         ]
 
-        with patch('src.layers.decision.providers.emotion_judge.emotion_judge_decision_provider.AsyncOpenAI', return_value=mock_client):
+        with patch('src.domains.decision.providers.emotion_judge.emotion_judge_decision_provider.AsyncOpenAI', return_value=mock_client):
             provider = EmotionJudgeDecisionProvider(emotion_config)
             await provider.setup(mock_event_bus)
 

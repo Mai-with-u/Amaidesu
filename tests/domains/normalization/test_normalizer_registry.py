@@ -1,7 +1,7 @@
 """
 测试 NormalizerRegistry（pytest）
 
-运行: uv run pytest tests/layers/normalization/test_normalizer_registry.py -v
+运行: uv run pytest tests/domains/normalization/test_normalizer_registry.py -v
 """
 
 import sys

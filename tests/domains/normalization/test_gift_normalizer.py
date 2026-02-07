@@ -1,7 +1,7 @@
 """
 测试 GiftNormalizer（pytest）
 
-运行: uv run pytest tests/layers/normalization/test_gift_normalizer.py -v
+运行: uv run pytest tests/domains/normalization/test_gift_normalizer.py -v
 """
 
 import sys

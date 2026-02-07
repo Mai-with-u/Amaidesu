@@ -1,7 +1,7 @@
 """
 测试 ProviderRegistry（pytest）
 
-运行: uv run pytest tests/layers/rendering/test_provider_registry.py -v
+运行: uv run pytest tests/domains/rendering/test_provider_registry.py -v
 """
 
 import sys

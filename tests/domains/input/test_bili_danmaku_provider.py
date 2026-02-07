@@ -47,7 +47,7 @@ class TestBiliDanmakuInputProvider:
 
     def test_init_without_aiohttp(self, bili_config):
         """测试缺少aiohttp依赖"""
-        with patch('src.layers.input.providers.bili_danmaku.bili_danmaku_provider.aiohttp', None):
+        with patch('src.domains.input.providers.bili_danmaku.bili_danmaku_provider.aiohttp', None):
             with pytest.raises(ImportError, match="aiohttp is required"):
                 BiliDanmakuInputProvider(bili_config)
 

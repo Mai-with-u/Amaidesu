@@ -1,7 +1,7 @@
 """
 测试 TextNormalizer（pytest）
 
-运行: uv run pytest tests/layers/normalization/test_text_normalizer.py -v
+运行: uv run pytest tests/domains/normalization/test_text_normalizer.py -v
 """
 
 import sys

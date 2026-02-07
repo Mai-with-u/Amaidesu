@@ -1132,7 +1132,7 @@ def test_get_provider_config_with_defaults_local_config(config_service, temp_bas
         field2: str = "schema_default"
 
     # 创建Provider目录和本地配置
-    provider_dir = os.path.join(temp_base_dir, "src", "layers", "input", "providers", "test_provider")
+    provider_dir = os.path.join(temp_base_dir, "src", "domains", "input", "providers", "test_provider")
     os.makedirs(provider_dir, exist_ok=True)
 
     local_content = """
@@ -1222,7 +1222,7 @@ speed = 1.5
     assert merged_config["speed"] == 1.5
 
     # 创建Provider目录和错误的本地配置
-    provider_dir = os.path.join(temp_base_dir, "src", "layers", "rendering", "providers", "test_provider")
+    provider_dir = os.path.join(temp_base_dir, "src", "domains", "output", "providers", "test_provider")
     os.makedirs(provider_dir, exist_ok=True)
 
     local_content = """
