@@ -482,7 +482,7 @@ type = "my_provider"
 # 根目录 config.toml 示例
 
 [pipelines]
-  # "rate_limit" 是管道的蛇形名称 (对应 src/pipelines/rate_limit/ 目录)
+  # "rate_limit" 是管道的蛇形名称 (对应 src/domains/input/pipelines/rate_limit/ 目录)
   [pipelines.rate_limit]
   priority = 100  # 必须: 定义此管道的优先级，并启用它
   # 可选: 全局配置覆盖，见下文
@@ -504,7 +504,7 @@ type = "my_provider"
 
 #### 管道特定配置与全局覆盖
 
-每个管道可以有其自己的配置文件，通常位于其包目录下的 `config.toml`（例如 `src/pipelines/rate_limit/config.toml`）。
+每个管道可以有其自己的配置文件，通常位于其包目录下的 `config.toml`（例如 `src/domains/input/pipelines/rate_limit/config.toml`）。
 
 -   **管道独立配置**：管道在其自身 `config.toml` 文件中定义其特定的配置参数。这个文件可以是一个扁平的键值对集合，或者包含一个与管道蛇形命名同名的表（section）。如果存在同名表，则使用该表的内容作为其独立配置；否则，使用整个文件的内容。
 -   **全局覆盖**：在根 `config.toml` 的 `[pipelines.pipeline_name_snake]` 表中，除了 `priority` 之外的其他键值对，将作为全局配置覆盖管道独立配置文件中的同名项。这允许在项目级别集中管理和调整管道行为，而无需修改管道内部的配置文件。

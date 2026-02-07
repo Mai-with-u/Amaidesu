@@ -30,7 +30,7 @@ JSONL（JSON Lines）格式有以下优势：
 message_logger = 900
 ```
 
-### 管道专用配置 (src/pipelines/message_logger/config.toml)
+### 管道专用配置 (src/domains/input/pipelines/message_logger/config.toml)
 
 ```toml
 [message_logger]

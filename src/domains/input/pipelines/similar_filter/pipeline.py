@@ -22,7 +22,7 @@ from typing import Any, Dict, Optional
 from src.domains.input.pipelines.manager import TextPipelineBase
 
 
-class SimilarTextFilterPipeline(TextPipelineBase):
+class SimilarFilterTextPipeline(TextPipelineBase):
     """
     相似文本过滤管道（TextPipeline 版本）
 
@@ -57,7 +57,7 @@ class SimilarTextFilterPipeline(TextPipelineBase):
         self._last_cleanup_time = time.time()
 
         self.logger.info(
-            f"SimilarTextFilterPipeline 初始化: "
+            f"SimilarFilterTextPipeline 初始化: "
             f"相似度阈值={self._similarity_threshold}, "
             f"时间窗口={self._time_window}秒, "
             f"跨用户过滤={self._cross_user_filter}"
@@ -202,4 +202,4 @@ class SimilarTextFilterPipeline(TextPipelineBase):
         self._text_cache.clear()
         self._last_cleanup_time = time.time()
         self.reset_stats()
-        self.logger.info("SimilarTextFilterPipeline 已重置状态")
+        self.logger.info("SimilarFilterTextPipeline 已重置状态")

@@ -520,14 +520,14 @@ class PipelineManager:
     # ==================== MessagePipeline 加载（旧架构） ====================
 
     async def load_pipelines(
-        self, pipeline_base_dir: str = "src/pipelines", root_config_pipelines_section: Optional[Dict[str, Any]] = None
+        self, pipeline_base_dir: str = "src/domains/input/pipelines", root_config_pipelines_section: Optional[Dict[str, Any]] = None
     ) -> None:
         """
         扫描并加载指定目录下的所有管道。
         采用新的配置结构，从根配置的 [pipelines.pipeline_name_snake] 获取优先级和全局覆盖。
 
         Args:
-            pipeline_base_dir: 管道包的基础目录，默认为 "src/pipelines"
+            pipeline_base_dir: 管道包的基础目录，默认为 "src/domains/input/pipelines"
             root_config_pipelines_section: 根配置文件中 'pipelines' 部分的字典。
                                            例如：config.get('pipelines', {})
         """
@@ -620,10 +620,6 @@ class PipelineManager:
                         if name == expected_class_name:
                             pipeline_class = obj
                             break
-                        # 记录找到但不匹配期望名称的MessagePipeline子类
-                        self.logger.debug(
-                            f"在 {module_import_path} 中找到MessagePipeline子类 '{name}'，但期望的是 '{expected_class_name}'。"
-                        )
 
                 if pipeline_class:
                     # 直接在实例上设置优先级，因为基类构造函数不处理它
@@ -668,7 +664,7 @@ class PipelineManager:
     # ==================== TextPipeline 加载（新架构） ====================
 
     async def load_text_pipelines(
-        self, pipeline_base_dir: str = "src/pipelines", root_config_pipelines_section: Optional[Dict[str, Any]] = None
+        self, pipeline_base_dir: str = "src/domains/input/pipelines", root_config_pipelines_section: Optional[Dict[str, Any]] = None
     ) -> None:
         """
         扫描并加载 TextPipeline 类型的管道。
@@ -682,7 +678,7 @@ class PipelineManager:
             - 示例：限流、相似文本过滤、敏感词过滤
 
         Args:
-            pipeline_base_dir: 管道包的基础目录，默认为 "src/pipelines"
+            pipeline_base_dir: 管道包的基础目录，默认为 "src/domains/input/pipelines"
             root_config_pipelines_section: 根配置文件中 'pipelines' 部分的字典
         """
         self.logger.info(f"开始从目录加载 TextPipeline: {pipeline_base_dir}")
@@ -764,9 +760,6 @@ class PipelineManager:
                         if name == expected_class_name:
                             pipeline_class = obj
                             break
-                        self.logger.debug(
-                            f"在 {module_import_path} 中找到 TextPipelineBase 子类 '{name}'，但期望的是 '{expected_class_name}'。"
-                        )
 
                 if pipeline_class:
                     # 实例化管道
