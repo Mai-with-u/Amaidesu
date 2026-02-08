@@ -201,7 +201,7 @@ def exit_if_config_copied(main_cfg_copied: bool, plugin_cfg_copied: bool, pipeli
 
 
 async def load_pipeline_manager(config: Dict[str, Any]) -> Optional[PipelineManager]:
-    """加载管道管理器，包括 MessagePipeline（旧架构）和 TextPipeline（新架构）。"""
+    """加载管道管理器，仅包含 TextPipeline（Input Domain: 文本预处理）。"""
     pipeline_config = config.get("pipelines", {})
     if not pipeline_config:
         logger.info("配置中未启用管道功能")
@@ -213,22 +213,12 @@ async def load_pipeline_manager(config: Dict[str, Any]) -> Optional[PipelineMana
     try:
         manager = PipelineManager()
 
-        # 加载 MessagePipeline（inbound/outbound，旧架构）
-        await manager.load_pipelines(pipeline_load_dir, pipeline_config)
-        inbound = len(manager._inbound_pipelines)
-        outbound = len(manager._outbound_pipelines)
-
         # 加载 TextPipeline（Input Domain: 文本预处理）
         await manager.load_text_pipelines(pipeline_load_dir, pipeline_config)
         text_pipeline_count = len(manager._text_pipelines)
 
-        total = inbound + outbound + text_pipeline_count
-
-        if total > 0:
-            logger.info(
-                f"管道加载完成，共 {total} 个管道 "
-                f"(入站: {inbound}, 出站: {outbound}, TextPipeline: {text_pipeline_count})。"
-            )
+        if text_pipeline_count > 0:
+            logger.info(f"管道加载完成，共 {text_pipeline_count} 个 TextPipeline。")
         else:
             logger.warning("未找到任何有效的管道，管道功能将被禁用。")
             return None

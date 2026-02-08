@@ -99,24 +99,22 @@ AI VTuber 领域的真实需求（如 Neuro-sama 的脏话过滤）证明了输�
 ### 接口
 
 ```python
-class InputPipeline(Protocol):
-    """输入预处理管道"""
+class TextPipeline(Protocol):
+    """文本处理管道（Input Domain 的文本预处理）"""
 
     priority: int  # 执行优先级（数值小优先）
     enabled: bool
 
-    async def process(
-        self,
-        message: NormalizedMessage
-    ) -> Optional[NormalizedMessage]:
+    async def process(self, text: str, metadata: Dict[str, Any]) -> Optional[str]:
         """
-        处理标准化消息
+        处理文本内容
 
         Args:
-            message: 标准化消息
+            text: 原始文本内容
+            metadata: 消息元数据（用户ID、来源等）
 
         Returns:
-            处理后的消息，或 None 表示丢弃
+            处理后的文本，或 None 表示丢弃
         """
         ...
 ```
@@ -128,7 +126,7 @@ class InputPipeline(Protocol):
 | **RateLimitPipeline** | 100 | 全局+用户级频率限制，防止刷屏 |
 | **SimilarFilterPipeline** | 500 | 过滤短时间内的重复/相似消息 |
 
-### 为什么输入管道处理 NormalizedMessage 而不是原始文本
+### 为什么输入管道处理 (text, metadata) 而不是 NormalizedMessage
 
 | 对比项 | `(str, Dict)` | `NormalizedMessage` |
 |--------|---------------|---------------------|
@@ -137,13 +135,34 @@ class InputPipeline(Protocol):
 | 类型安全 | metadata 无类型 | 有明确属性（user_id、source、data_type 等） |
 | 限流适用性 | 只能限制文本消息 | 可以限制所有类型（礼物刷屏等） |
 
+> **注意**：当前 TextPipeline 处理的是 `(text: str, metadata: Dict[str, Any])`，
+> 升级为处理 `NormalizedMessage` 是计划中的 Phase 3 改进（见下方"演进路线"）。
+
 ### 调用位置
 
 ```python
-# InputLayer.on_raw_data_generated() 中
-normalized_message = await self.normalize(raw_data)  # 纯标准化
-if normalized_message and self.pipeline_manager:
-    normalized_message = await self.pipeline_manager.process(normalized_message)
+# TextNormalizer.normalize() 中
+text, metadata = self._extract_text_and_metadata(raw_data)  # 提取文本和元数据
+if text and self.pipeline_manager:
+    processed_text = await self.pipeline_manager.process_text(text, metadata)
+    if processed_text:
+        normalized_message = NormalizedMessage(
+            text=processed_text,
+            source=metadata.get("source"),
+            user_id=metadata.get("user_id"),
+            data_type=metadata.get("data_type"),
+            importance=metadata.get("importance", 1),
+        )
+    else:
+        normalized_message = None  # 文本被管道丢弃
+else:
+    normalized_message = NormalizedMessage(
+        text=text,
+        source=metadata.get("source"),
+        user_id=metadata.get("user_id"),
+        data_type=metadata.get("data_type"),
+        importance=metadata.get("importance", 1),
+    )
 if normalized_message:
     await self.event_bus.emit(NORMALIZATION_MESSAGE_READY, ...)
 ```
@@ -334,7 +353,7 @@ max_length = 500
 
 ### Phase 3：双管道架构升级
 
-1. **输入管道接口升级**：从 `(text, metadata) → Optional[str]` 改为 `(NormalizedMessage) → Optional[NormalizedMessage]`
+1. **输入管道接口升级**：从 `(text, metadata) → Optional[str` 改为 `(NormalizedMessage) → Optional[NormalizedMessage]`
 2. **输出管道实现**：新增 `OutputPipeline` 接口和 `OutputPipelineBase`，调用点在 `FlowCoordinator`
 3. **管道调用位置调整**：从 TextNormalizer 内部移到 InputLayer 的 `on_raw_data_generated()` 中
 4. **配置格式更新**：`[pipelines.input.*]` 和 `[pipelines.output.*]` 分组

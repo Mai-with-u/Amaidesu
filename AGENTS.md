@@ -6,6 +6,10 @@
 
 当前处于完全重构阶段，在refactor分支中，不需要保留任何向后兼容的代码，需要彻底重构。不必担心会破坏性变更，因为重构完毕之前，都是没有用户在使用的。
 
+## 移动或重命名文件
+
+移动或者重命名文件的时候注意使用git mv保留历史记录
+
 ## 构建/检查/测试命令
 
 ### 包管理器
@@ -133,7 +137,7 @@ def __init__(self, config: Dict[str, Any]):
 ```
 
 ### 命名约定
-- **类名**：PascalCase（如 `AmaidesuCore`, `InputProvider`, `MessagePipeline`）
+- **类名**：PascalCase（如 `AmaidesuCore`, `InputProvider`, `TextPipeline`）
 - **函数/方法名**：snake_case（如 `send_to_maicore`, `register_websocket_handler`）
 - **变量名**：snake_case（如 `provider_config`, `event_bus`）
 - **私有成员**：前导下划线（如 `_message_handlers`, `_is_connected`）

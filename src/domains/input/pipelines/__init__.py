@@ -1,15 +1,14 @@
-# 导出所有管道类，方便导入
-# 新架构管道（TextPipelineBase）
+"""
+TextPipeline 导出
+
+TextPipeline 用于 Input Domain 中的文本预处理，
+在 RawData → NormalizedMessage 转换过程中处理文本。
+"""
+
 from src.domains.input.pipelines.rate_limit.pipeline import RateLimitTextPipeline
 from src.domains.input.pipelines.similar_filter.pipeline import SimilarFilterTextPipeline
 
-# 旧架构管道（MessagePipeline）- 保留用于消息日志记录
-from src.domains.input.pipelines.message_logger.pipeline import MessageLoggerPipeline
-
 __all__ = [
-    # 新架构管道
     "RateLimitTextPipeline",
     "SimilarFilterTextPipeline",
-    # 旧架构管道
-    "MessageLoggerPipeline",
 ]

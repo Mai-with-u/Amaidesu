@@ -15,7 +15,7 @@ from src.core.events.names import CoreEvents
 from src.core.events.payloads.input import MessageReadyPayload
 
 if TYPE_CHECKING:
-    from src.core.pipeline.pipeline_manager import PipelineManager
+    from src.domains.input.pipelines.manager import PipelineManager
 
 
 class InputDomain:

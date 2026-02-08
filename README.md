@@ -75,7 +75,7 @@ Amaidesu!
 
 5. **PipelineManager**: 管道管理器，负责管道的加载和执行
     - TextPipeline: Input Domain 文本预处理（限流、过滤）
-    - MessagePipeline: MaiCore 消息处理（inbound/outbound）
+    - 旧版 MessagePipeline: MaiCore 消息处理（inbound/outbound，保留用于向后兼容）
 
 6. **ContextManager**: 上下文管理器，负责管理和聚合来自不同Provider的上下文信息
 
@@ -515,15 +515,14 @@ type = "my_provider"
 
 1.  在 `src/domains/input/pipelines` 目录下创建新的包目录，如 `my_pipeline`。
 2.  在包目录中创建 `__init__.py` 文件和 `pipeline.py` 文件。
-3.  在 `pipeline.py` 中继承 `MessagePipeline` 基类并实现 `process_message` 方法：
+3.  在 `pipeline.py` 中继承 `TextPipeline` 基类并实现 `process` 方法：
 
 ```python
 # src/domains/input/pipelines/my_pipeline/pipeline.py
-from src.core.pipeline_manager import MessagePipeline
-from maim_message import MessageBase
+from src.domains.input.pipelines.manager import TextPipeline
 from typing import Optional, Dict, Any
 
-class MyPipelinePipeline(MessagePipeline): # 类名约定：驼峰式 + Pipeline 后缀
+class MyPipelinePipeline(TextPipeline): # 类名约定：驼峰式 + Pipeline 后缀
     priority = 500  # 类属性的 priority 仅作为文档参考
 
     def __init__(self, config: Dict[str, Any]):
@@ -532,11 +531,11 @@ class MyPipelinePipeline(MessagePipeline): # 类名约定：驼峰式 + Pipeline
         self.param1 = self.config.get("param1", "default value")
         self.logger.info(f"MyPipelinePipeline initialized with param1='{self.param1}'")
 
-    async def process_message(self, message: MessageBase) -> Optional[MessageBase]:
-        # 处理消息的逻辑
-        self.logger.debug(f"MyPipelinePipeline processing message")
-        # 返回处理后的消息，或返回 None 表示丢弃该消息
-        return message
+    async def process(self, text: str, metadata: Dict[str, Any]) -> Optional[str]:
+        # 处理文本的逻辑
+        self.logger.debug(f"MyPipelinePipeline processing text: {text}")
+        # 返回处理后的文本，或返回 None 表示丢弃该消息
+        return text
 ```
 
 4.  在 `__init__.py` 中导出管道类：

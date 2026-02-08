@@ -2,11 +2,10 @@
 PipelineManager 单元测试
 
 测试 PipelineManager 的所有核心功能：
-- MessagePipeline 管理（注册、处理、优先级排序）
 - TextPipeline 管理（注册、处理、优先级排序）
-- 连接/断开通知
 - 统计信息
 - 错误处理
+- 并发处理
 
 运行: uv run pytest tests/core/test_pipeline_manager.py -v
 """
@@ -14,13 +13,9 @@ PipelineManager 单元测试
 import asyncio
 import pytest
 from typing import Optional, Dict, Any
-from unittest.mock import Mock
-from maim_message import MessageBase, BaseMessageInfo, Seg, UserInfo
-from maim_message.message_base import FormatInfo
 
 from src.domains.input.pipelines.manager import (
     PipelineManager,
-    MessagePipeline,
     TextPipelineBase,
     PipelineErrorHandling,
     PipelineStats,
@@ -29,78 +24,8 @@ from src.domains.input.pipelines.manager import (
 
 
 # =============================================================================
-# Mock MessageBase 创建辅助函数
-# =============================================================================
-
-
-def create_mock_message(content: str = "test message") -> MessageBase:
-    """创建用于测试的 Mock MessageBase 对象"""
-    # 创建 UserInfo
-    user_info = UserInfo(
-        platform="test",
-        user_id="test_user",
-        user_nickname="Test User",
-    )
-
-    # 创建 FormatInfo (使用正确的参数)
-    format_info = FormatInfo(
-        content_format=None,
-        accept_format=None,
-    )
-
-    # 创建 BaseMessageInfo (移除 reply 参数)
-    message_info = BaseMessageInfo(
-        message_id="test_msg_123",
-        platform="test",
-        time=1234567890,
-        user_info=user_info,
-        format_info=format_info,
-    )
-
-    # 创建 Seg (text 类型，移除 extra 参数)
-    seg = Seg(type="text", data=content)
-
-    return MessageBase(
-        message_info=message_info,
-        message_segment=seg,
-        raw_message=content,
-    )
-
-
-# =============================================================================
 # Mock Pipeline 实现
 # =============================================================================
-
-
-class MockMessagePipeline(MessagePipeline):
-    """Mock MessagePipeline 用于测试"""
-
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        self.processed_messages = []
-        self.connect_called = False
-        self.disconnect_called = False
-        self.should_drop = False
-        self.should_fail = False
-
-    async def process_message(self, message: MessageBase) -> Optional[MessageBase]:
-        """记录处理过的消息"""
-        self.processed_messages.append(message)
-        if self.should_fail:
-            raise ValueError("Mock pipeline failure")
-        if self.should_drop:
-            return None
-        return message
-
-    async def on_connect(self) -> None:
-        """记录连接调用"""
-        self.connect_called = True
-        await super().on_connect()
-
-    async def on_disconnect(self) -> None:
-        """记录断开调用"""
-        self.disconnect_called = True
-        await super().on_disconnect()
 
 
 class MockTextPipeline(TextPipelineBase):
@@ -157,12 +82,6 @@ def pipeline_manager():
 
 
 @pytest.fixture
-def sample_message():
-    """创建示例 MessageBase"""
-    return create_mock_message("test message")
-
-
-@pytest.fixture
 def sample_text():
     """创建示例文本"""
     return "hello world"
@@ -172,246 +91,6 @@ def sample_text():
 def sample_metadata():
     """创建示例元数据"""
     return {"user_id": "test_user", "source": "test"}
-
-
-# =============================================================================
-# MessagePipeline 注册测试
-# =============================================================================
-
-
-@pytest.mark.asyncio
-async def test_register_inbound_pipeline(pipeline_manager: PipelineManager):
-    """测试注册入站 MessagePipeline"""
-    pipeline = MockMessagePipeline({})
-    pipeline_manager._register_pipeline(pipeline, "inbound")
-
-    assert len(pipeline_manager._inbound_pipelines) == 1
-    assert pipeline_manager._inbound_pipelines[0] == pipeline
-    assert not pipeline_manager._inbound_sorted
-    # pipeline_manager.core 为 None，所以 pipeline.core 也为 None
-    assert pipeline.core is None
-
-
-@pytest.mark.asyncio
-async def test_register_outbound_pipeline(pipeline_manager: PipelineManager):
-    """测试注册出站 MessagePipeline"""
-    pipeline = MockMessagePipeline({})
-    pipeline_manager._register_pipeline(pipeline, "outbound")
-
-    assert len(pipeline_manager._outbound_pipelines) == 1
-    assert pipeline_manager._outbound_pipelines[0] == pipeline
-    assert not pipeline_manager._outbound_sorted
-
-
-@pytest.mark.asyncio
-async def test_register_multiple_pipelines(pipeline_manager: PipelineManager):
-    """测试注册多个 MessagePipeline"""
-    pipeline1 = MockMessagePipeline({})
-    pipeline2 = MockMessagePipeline({})
-    pipeline3 = MockMessagePipeline({})
-
-    pipeline_manager._register_pipeline(pipeline1, "inbound")
-    pipeline_manager._register_pipeline(pipeline2, "outbound")
-    pipeline_manager._register_pipeline(pipeline3, "inbound")
-
-    assert len(pipeline_manager._inbound_pipelines) == 2
-    assert len(pipeline_manager._outbound_pipelines) == 1
-
-
-@pytest.mark.asyncio
-async def test_register_pipeline_with_core(pipeline_manager: PipelineManager):
-    """测试注册时设置 core 引用"""
-    mock_core = Mock()
-    manager_with_core = PipelineManager(core=mock_core)
-
-    pipeline = MockMessagePipeline({})
-    manager_with_core._register_pipeline(pipeline, "inbound")
-
-    assert pipeline.core == mock_core
-
-
-# =============================================================================
-# MessagePipeline 处理测试
-# =============================================================================
-
-
-@pytest.mark.asyncio
-async def test_process_outbound_message_single_pipeline(pipeline_manager: PipelineManager, sample_message: MessageBase):
-    """测试单个出站管道处理消息"""
-    pipeline = MockMessagePipeline({})
-    pipeline.priority = 100
-    pipeline_manager._register_pipeline(pipeline, "outbound")
-
-    result = await pipeline_manager.process_outbound_message(sample_message)
-
-    assert result is not None
-    assert len(pipeline.processed_messages) == 1
-    assert pipeline.processed_messages[0] == sample_message
-
-
-@pytest.mark.asyncio
-async def test_process_inbound_message_single_pipeline(pipeline_manager: PipelineManager, sample_message: MessageBase):
-    """测试单个入站管道处理消息"""
-    pipeline = MockMessagePipeline({})
-    pipeline.priority = 100
-    pipeline_manager._register_pipeline(pipeline, "inbound")
-
-    result = await pipeline_manager.process_inbound_message(sample_message)
-
-    assert result is not None
-    assert len(pipeline.processed_messages) == 1
-
-
-@pytest.mark.asyncio
-async def test_process_outbound_message_multiple_pipelines(pipeline_manager: PipelineManager, sample_message: MessageBase):
-    """测试多个出站管道按优先级处理消息"""
-    pipeline1 = MockMessagePipeline({})
-    pipeline1.priority = 100
-    pipeline2 = MockMessagePipeline({})
-    pipeline2.priority = 50
-    pipeline3 = MockMessagePipeline({})
-    pipeline3.priority = 200
-
-    pipeline_manager._register_pipeline(pipeline1, "outbound")
-    pipeline_manager._register_pipeline(pipeline2, "outbound")
-    pipeline_manager._register_pipeline(pipeline3, "outbound")
-
-    await pipeline_manager.process_outbound_message(sample_message)
-
-    # 验证所有管道都处理了消息
-    assert len(pipeline1.processed_messages) == 1
-    assert len(pipeline2.processed_messages) == 1
-    assert len(pipeline3.processed_messages) == 1
-
-    # 验证处理顺序（按优先级：50 -> 100 -> 200）
-    processed_in_order = []
-    for p in [pipeline1, pipeline2, pipeline3]:
-        processed_in_order.extend(p.processed_messages)
-    assert processed_in_order == [sample_message, sample_message, sample_message]
-
-
-@pytest.mark.asyncio
-async def test_process_outbound_message_pipeline_drops_message(pipeline_manager: PipelineManager, sample_message: MessageBase):
-    """测试管道丢弃消息"""
-    pipeline1 = MockMessagePipeline({})
-    pipeline1.priority = 100
-    pipeline2 = MockMessagePipeline({})
-    pipeline2.priority = 200
-    pipeline2.should_drop = True
-
-    pipeline_manager._register_pipeline(pipeline1, "outbound")
-    pipeline_manager._register_pipeline(pipeline2, "outbound")
-
-    result = await pipeline_manager.process_outbound_message(sample_message)
-
-    # pipeline2 丢弃消息，应返回 None
-    assert result is None
-    assert len(pipeline1.processed_messages) == 1
-    assert len(pipeline2.processed_messages) == 1
-
-
-@pytest.mark.asyncio
-async def test_process_outbound_message_pipeline_fails(pipeline_manager: PipelineManager, sample_message: MessageBase):
-    """测试管道处理失败（继续处理下一个管道）"""
-    pipeline1 = MockMessagePipeline({})
-    pipeline1.priority = 100
-    pipeline2 = MockMessagePipeline({})
-    pipeline2.priority = 200
-    pipeline2.should_fail = True
-
-    pipeline_manager._register_pipeline(pipeline1, "outbound")
-    pipeline_manager._register_pipeline(pipeline2, "outbound")
-
-    result = await pipeline_manager.process_outbound_message(sample_message)
-
-    # pipeline2 失败，但 pipeline1 应该已处理，返回结果
-    assert result is not None
-    assert len(pipeline1.processed_messages) == 1
-    assert len(pipeline2.processed_messages) == 1
-
-
-@pytest.mark.asyncio
-async def test_process_inbound_message_empty_pipeline_list(pipeline_manager: PipelineManager, sample_message: MessageBase):
-    """测试空管道列表处理入站消息"""
-    result = await pipeline_manager.process_inbound_message(sample_message)
-
-    assert result == sample_message
-
-
-@pytest.mark.asyncio
-async def test_process_outbound_message_empty_pipeline_list(pipeline_manager: PipelineManager, sample_message: MessageBase):
-    """测试空管道列表处理出站消息"""
-    result = await pipeline_manager.process_outbound_message(sample_message)
-
-    assert result == sample_message
-
-
-# =============================================================================
-# MessagePipeline 优先级排序测试
-# =============================================================================
-
-
-@pytest.mark.asyncio
-async def test_pipeline_priority_sorting_outbound(pipeline_manager: PipelineManager, sample_message: MessageBase):
-    """测试出站管道按优先级排序"""
-    execution_order = []
-
-    class OrderedPipeline(MockMessagePipeline):
-        def __init__(self, config: Dict[str, Any], name: str):
-            super().__init__(config)
-            self.name = name
-
-        async def process_message(self, message: MessageBase) -> Optional[MessageBase]:
-            execution_order.append(self.name)
-            return message
-
-    pipeline1 = OrderedPipeline({}, "pipeline1")
-    pipeline1.priority = 100
-    pipeline2 = OrderedPipeline({}, "pipeline2")
-    pipeline2.priority = 50
-    pipeline3 = OrderedPipeline({}, "pipeline3")
-    pipeline3.priority = 150
-
-    pipeline_manager._register_pipeline(pipeline1, "outbound")
-    pipeline_manager._register_pipeline(pipeline2, "outbound")
-    pipeline_manager._register_pipeline(pipeline3, "outbound")
-
-    # 处理消息，触发排序
-    await pipeline_manager.process_outbound_message(sample_message)
-
-    # 验证执行顺序：50 -> 100 -> 150
-    assert execution_order == ["pipeline2", "pipeline1", "pipeline3"]
-
-
-@pytest.mark.asyncio
-async def test_pipeline_priority_sorting_inbound(pipeline_manager: PipelineManager, sample_message: MessageBase):
-    """测试入站管道按优先级排序"""
-    execution_order = []
-
-    class OrderedPipeline(MockMessagePipeline):
-        def __init__(self, config: Dict[str, Any], name: str):
-            super().__init__(config)
-            self.name = name
-
-        async def process_message(self, message: MessageBase) -> Optional[MessageBase]:
-            execution_order.append(self.name)
-            return message
-
-    pipeline1 = OrderedPipeline({}, "pipeline1")
-    pipeline1.priority = 200
-    pipeline2 = OrderedPipeline({}, "pipeline2")
-    pipeline2.priority = 100
-    pipeline3 = OrderedPipeline({}, "pipeline3")
-    pipeline3.priority = 50
-
-    pipeline_manager._register_pipeline(pipeline1, "inbound")
-    pipeline_manager._register_pipeline(pipeline2, "inbound")
-    pipeline_manager._register_pipeline(pipeline3, "inbound")
-
-    await pipeline_manager.process_inbound_message(sample_message)
-
-    # 验证执行顺序：50 -> 100 -> 200
-    assert execution_order == ["pipeline3", "pipeline2", "pipeline1"]
 
 
 # =============================================================================
@@ -699,91 +378,6 @@ async def test_text_pipeline_priority_sorting(pipeline_manager: PipelineManager,
 
 
 # =============================================================================
-# 连接/断开通知测试
-# =============================================================================
-
-
-@pytest.mark.asyncio
-async def test_notify_connect(pipeline_manager: PipelineManager):
-    """测试通知所有管道连接"""
-    pipeline1 = MockMessagePipeline({})
-    pipeline2 = MockMessagePipeline({})
-    pipeline3 = MockMessagePipeline({})
-
-    pipeline_manager._register_pipeline(pipeline1, "inbound")
-    pipeline_manager._register_pipeline(pipeline2, "outbound")
-    pipeline_manager._register_pipeline(pipeline3, "inbound")
-
-    await pipeline_manager.notify_connect()
-
-    assert pipeline1.connect_called is True
-    assert pipeline2.connect_called is True
-    assert pipeline3.connect_called is True
-
-
-@pytest.mark.asyncio
-async def test_notify_disconnect(pipeline_manager: PipelineManager):
-    """测试通知所有管道断开"""
-    pipeline1 = MockMessagePipeline({})
-    pipeline2 = MockMessagePipeline({})
-    pipeline3 = MockMessagePipeline({})
-
-    pipeline_manager._register_pipeline(pipeline1, "inbound")
-    pipeline_manager._register_pipeline(pipeline2, "outbound")
-    pipeline_manager._register_pipeline(pipeline3, "inbound")
-
-    await pipeline_manager.notify_disconnect()
-
-    assert pipeline1.disconnect_called is True
-    assert pipeline2.disconnect_called is True
-    assert pipeline3.disconnect_called is True
-
-
-@pytest.mark.asyncio
-async def test_notify_connect_with_error(pipeline_manager: PipelineManager):
-    """测试通知连接时管道出错（不影响其他管道）"""
-    error_pipeline = MockMessagePipeline({})
-
-    async def failing_on_connect():
-        raise ValueError("Connection error")
-
-    error_pipeline.on_connect = failing_on_connect
-
-    normal_pipeline = MockMessagePipeline({})
-
-    pipeline_manager._register_pipeline(error_pipeline, "inbound")
-    pipeline_manager._register_pipeline(normal_pipeline, "outbound")
-
-    # 不应抛出异常
-    await pipeline_manager.notify_connect()
-
-    # normal_pipeline 应该仍被通知
-    assert normal_pipeline.connect_called is True
-
-
-@pytest.mark.asyncio
-async def test_notify_disconnect_with_error(pipeline_manager: PipelineManager):
-    """测试通知断开时管道出错（不影响其他管道）"""
-    error_pipeline = MockMessagePipeline({})
-
-    async def failing_on_disconnect():
-        raise ValueError("Disconnection error")
-
-    error_pipeline.on_disconnect = failing_on_disconnect
-
-    normal_pipeline = MockMessagePipeline({})
-
-    pipeline_manager._register_pipeline(error_pipeline, "inbound")
-    pipeline_manager._register_pipeline(normal_pipeline, "outbound")
-
-    # 不应抛出异常
-    await pipeline_manager.notify_disconnect()
-
-    # normal_pipeline 应该仍被通知
-    assert normal_pipeline.disconnect_called is True
-
-
-# =============================================================================
 # 统计信息测试
 # =============================================================================
 
@@ -971,21 +565,6 @@ async def test_process_text_with_unicode(pipeline_manager: PipelineManager, samp
 
     assert result is not None
     assert "你好世界" in result or "MockTextPipeline" in result
-
-
-@pytest.mark.asyncio
-async def test_process_outbound_message_none_message(pipeline_manager: PipelineManager):
-    """测试处理 None 消息"""
-    pipeline = MockMessagePipeline({})
-    pipeline.priority = 100
-
-    pipeline_manager._register_pipeline(pipeline, "outbound")
-
-    result = await pipeline_manager.process_outbound_message(None)
-
-    # 消息为 None，应在第一个管道前返回 None
-    assert result is None
-    assert len(pipeline.processed_messages) == 0
 
 
 # =============================================================================

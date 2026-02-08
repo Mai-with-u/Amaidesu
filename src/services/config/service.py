@@ -201,7 +201,7 @@ class ConfigService:
         2. 主配置文件中 [pipelines.pipeline_name] 的全局配置
 
         Args:
-            pipeline_name: 管道名称（如 "throttle", "message_logger"）
+            pipeline_name: 管道名称（如 "rate_limit", "similar_filter"）
             pipeline_dir_path: 管道目录的绝对路径（可选，如果未提供则自动查找）
 
         Returns:
