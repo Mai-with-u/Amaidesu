@@ -13,7 +13,7 @@ FlowCoordinator 单元测试
 """
 
 import asyncio
-from unittest.mock import AsyncMock
+from unittest.mock import MagicMock, AsyncMock
 from typing import Dict, Any
 
 import pytest
@@ -45,15 +45,16 @@ def event_bus():
 @pytest.fixture
 def mock_expression_generator():
     """创建模拟的 ExpressionGenerator"""
-    mock_gen = AsyncMock(spec=ExpressionGenerator)
-    mock_gen.generate = AsyncMock()
+    mock_gen = MagicMock(spec=ExpressionGenerator)
+    mock_gen.generate = MagicMock()
     return mock_gen
 
 
 @pytest.fixture
 def mock_output_provider_manager():
     """创建模拟的 OutputProviderManager"""
-    mock_mgr = AsyncMock(spec=OutputProviderManager)
+    mock_mgr = MagicMock(spec=OutputProviderManager)
+    # 异步方法需要使用 AsyncMock
     mock_mgr.load_from_config = AsyncMock()
     mock_mgr.setup_all_providers = AsyncMock()
     mock_mgr.stop_all_providers = AsyncMock()
@@ -98,8 +99,8 @@ def sample_intent():
 @pytest.fixture
 def flow_coordinator(
     event_bus: EventBus,
-    mock_expression_generator: AsyncMock,
-    mock_output_provider_manager: AsyncMock,
+    mock_expression_generator: MagicMock,
+    mock_output_provider_manager: MagicMock,
 ):
     """创建 FlowCoordinator 实例"""
     return FlowCoordinator(
@@ -129,8 +130,8 @@ async def test_flow_coordinator_initialization(event_bus: EventBus):
 @pytest.mark.asyncio
 async def test_flow_coordinator_initialization_with_dependencies(
     event_bus: EventBus,
-    mock_expression_generator: AsyncMock,
-    mock_output_provider_manager: AsyncMock,
+    mock_expression_generator: MagicMock,
+    mock_output_provider_manager: MagicMock,
 ):
     """测试带依赖注入的初始化"""
     coordinator = FlowCoordinator(
@@ -205,8 +206,8 @@ async def test_setup_subscribes_to_intent_event(
 async def test_setup_with_existing_dependencies(
     flow_coordinator: FlowCoordinator,
     sample_config: Dict[str, Any],
-    mock_expression_generator: AsyncMock,
-    mock_output_provider_manager: AsyncMock,
+    mock_expression_generator: MagicMock,
+    mock_output_provider_manager: MagicMock,
 ):
     """测试使用已注入的依赖进行 setup"""
     await flow_coordinator.setup(sample_config)
@@ -421,13 +422,18 @@ async def test_on_intent_ready_missing_intent(
     await flow_coordinator.setup(sample_config)
 
     # 发布缺少必要字段的 IntentPayload
-    # 使用 IntentPayload 但不包含必要的信息（比如空字符串）
+    # 使用 IntentPayload 但 intent_data 包含空字符串
     from src.core.events.payloads.decision import IntentPayload
 
     incomplete_payload = IntentPayload(
-        original_text="",
-        response_text="",
-        emotion="neutral",
+        intent_data={
+            "original_text": "",
+            "response_text": "",
+            "emotion": "neutral",
+            "actions": [],
+            "metadata": {},
+            "timestamp": 0,
+        },
         provider="test",
     )
 
@@ -628,7 +634,7 @@ async def test_full_lifecycle_with_cleanup(
 @pytest.mark.asyncio
 async def test_get_expression_generator(
     flow_coordinator: FlowCoordinator,
-    mock_expression_generator: AsyncMock,
+    mock_expression_generator: MagicMock,
 ):
     """测试获取 ExpressionGenerator"""
     result = flow_coordinator.get_expression_generator()
@@ -649,7 +655,7 @@ async def test_get_expression_generator_when_none(event_bus: EventBus):
 @pytest.mark.asyncio
 async def test_get_output_provider_manager(
     flow_coordinator: FlowCoordinator,
-    mock_output_provider_manager: AsyncMock,
+    mock_output_provider_manager: MagicMock,
 ):
     """测试获取 OutputProviderManager"""
     result = flow_coordinator.get_output_provider_manager()
@@ -791,14 +797,14 @@ async def test_intent_event_with_none_data(
     flow_coordinator: FlowCoordinator,
     sample_config: Dict[str, Any],
 ):
-    """测试 Intent 事件数据为 None"""
+    """测试 Intent 事件数据为空"""
     await flow_coordinator.setup(sample_config)
 
     # 不应该抛出异常
     # 注意：EventBus 现在强制要求 Pydantic BaseModel，不再支持 None
     # 这个测试现在验证 FlowCoordinator 能正确处理 Payload
     # 但由于 Payload 是强类型的，None 会在 EventBus 层被拒绝
-    # 所以这个测试现在只是验证系统不会崩溃
+    # 所以这个测试现在只是验证系统能处理空内容的 Payload
 
     # 由于 FlowCoordinator 订阅的是 CoreEvents.DECISION_INTENT_GENERATED
     # 它期望接收 IntentPayload，所以我们需要发送一个有效的 Payload
@@ -807,9 +813,14 @@ async def test_intent_event_with_none_data(
     from src.core.events.payloads.decision import IntentPayload
 
     empty_payload = IntentPayload(
-        original_text="",
-        response_text="",
-        emotion="neutral",
+        intent_data={
+            "original_text": "",
+            "response_text": "",
+            "emotion": "neutral",
+            "actions": [],
+            "metadata": {},
+            "timestamp": 0,
+        },
         provider="test",
     )
 

@@ -1328,27 +1328,42 @@ enabled_inputs = ["auto_provider"]
 
 
 def test_schema_registry_integration():
-    """测试Schema注册表集成"""
+    """测试Schema注册表集成（100%迁移到ProviderRegistry）"""
     from src.services.config.schemas import (
         PROVIDER_SCHEMA_REGISTRY,
         get_provider_schema,
         list_all_providers,
     )
+    from src.core.provider_registry import ProviderRegistry
 
-    # 验证注册表不为空
-    assert len(PROVIDER_SCHEMA_REGISTRY) > 0
+    # 导入provider模块以注册到ProviderRegistry
+    from src.domains.input.providers import console_input
+    from src.domains.output.providers import subtitle, tts
+    from src.domains.decision.providers import maicore
 
-    # 验证关键Provider已注册
-    assert "console_input" in PROVIDER_SCHEMA_REGISTRY
-    assert "subtitle" in PROVIDER_SCHEMA_REGISTRY
-    assert "tts" in PROVIDER_SCHEMA_REGISTRY
-    assert "maicore" in PROVIDER_SCHEMA_REGISTRY
+    # 验证集中式注册表为空（所有Provider已迁移）
+    assert len(PROVIDER_SCHEMA_REGISTRY) == 0
 
-    # 测试get_provider_schema
+    # 验证关键Provider不在集中式注册表中
+    assert "console_input" not in PROVIDER_SCHEMA_REGISTRY
+    assert "subtitle" not in PROVIDER_SCHEMA_REGISTRY
+    assert "tts" not in PROVIDER_SCHEMA_REGISTRY
+    assert "maicore" not in PROVIDER_SCHEMA_REGISTRY
+
+    # 测试get_provider_schema（从ProviderRegistry获取）
     schema = get_provider_schema("console_input")
     assert schema is not None
 
-    # 测试list_all_providers
+    schema = get_provider_schema("subtitle")
+    assert schema is not None
+
+    schema = get_provider_schema("tts")
+    assert schema is not None
+
+    schema = get_provider_schema("maicore")
+    assert schema is not None
+
+    # 测试list_all_providers（从ProviderRegistry获取）
     all_providers = list_all_providers()
     assert "input" in all_providers
     assert "decision" in all_providers

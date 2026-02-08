@@ -15,7 +15,6 @@ import time
 
 if TYPE_CHECKING:
     from src.domains.input.normalization.content.base import StructuredContent
-    from maim_message import MessageBase
 
 
 @dataclass
@@ -66,49 +65,6 @@ class NormalizedMessage:
     def display_text(self) -> str:
         """获取显示文本（便捷方法）"""
         return self.content.get_display_text()
-
-    def to_message_base(self) -> Optional["MessageBase"]:
-        """
-        转换为MessageBase（仅用于MaiCoreDecisionProvider）
-
-        将NormalizedMessage转换为MaiCore需要的MessageBase格式。
-
-        Returns:
-            MessageBase实例，如果转换失败返回None
-        """
-        try:
-            from maim_message import MessageBase, BaseMessageInfo, UserInfo, Seg, FormatInfo
-
-            # 构建UserInfo
-            user_id = self.user_id or "unknown"
-            nickname = self.metadata.get("user_nickname", self.source)
-            user_info = UserInfo(user_id=user_id, nickname=nickname)
-
-            # 构建FormatInfo
-            format_info = FormatInfo(font=None, color=None, size=None)
-
-            # 构建Seg（文本片段）
-            seg = Seg(type="text", data=self.text, format=format_info)
-
-            # 构建MessageBase
-            message = MessageBase(
-                message_info=BaseMessageInfo(
-                    message_id=f"normalized_{int(self.timestamp)}",
-                    platform=self.source,
-                    sender=user_info,
-                    timestamp=self.timestamp,
-                ),
-                message_segment=seg,
-            )
-
-            return message
-        except Exception as e:
-            # 记录错误但不抛出异常，使用日志
-            import logging
-
-            logger = logging.getLogger(__name__)
-            logger.error(f"转换为MessageBase失败: {e}", exc_info=True)
-            return None
 
     def to_dict(self) -> dict:
         """
@@ -170,4 +126,93 @@ class NormalizedMessage:
             data_type=content.type,
             importance=importance,
             metadata=metadata,
+        )
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "NormalizedMessage":
+        """
+        从字典创建NormalizedMessage（支持跨域反序列化）
+
+        此方法用于从字典重建NormalizedMessage对象，特别适用于跨域事件传递的场景。
+        支持自动重建TextContent、GiftContent、SuperChatContent等StructuredContent对象。
+
+        Args:
+            data: 字典数据，通常来自MessageReadyPayload的message字段
+
+        Returns:
+            NormalizedMessage对象
+
+        Raises:
+            ValueError: 如果data_type未知或缺少必要字段
+
+        Example:
+            >>> message_dict = {
+            ...     "text": "hello",
+            ...     "source": "console",
+            ...     "data_type": "text",
+            ...     "importance": 0.5,
+            ...     "metadata": {},
+            ...     "timestamp": 1234567890.0,
+            ...     "content": {"type": "text", "text": "hello"}
+            ... }
+            >>> normalized = NormalizedMessage.from_dict(message_dict)
+        """
+        from src.domains.input.normalization.content import (
+            TextContent,
+            GiftContent,
+            SuperChatContent,
+        )
+
+        # 提取基本字段
+        text = data.get("text", "")
+        source = data.get("source", "unknown")
+        data_type = data.get("data_type", "text")
+        importance = data.get("importance", 0.5)
+        metadata = data.get("metadata", {})
+        timestamp = data.get("timestamp", 0.0)
+
+        # 重建content对象
+        content_dict = data.get("content")
+        if not content_dict or not isinstance(content_dict, dict):
+            # 如果没有content信息，创建一个默认的TextContent
+            content = TextContent(text=text)
+        else:
+            content_type = content_dict.get("type", data_type)
+
+            # 根据type重建对应的StructuredContent
+            if content_type == "text":
+                content = TextContent(
+                    text=content_dict.get("text", text),
+                    user=content_dict.get("user"),
+                    user_id=content_dict.get("user_id"),
+                )
+            elif content_type == "gift":
+                content = GiftContent(
+                    user=content_dict.get("user", ""),
+                    user_id=content_dict.get("user_id", ""),
+                    gift_name=content_dict.get("gift_name", ""),
+                    gift_level=content_dict.get("gift_level", 1),
+                    count=content_dict.get("count", 1),
+                    value=content_dict.get("value", 0.0),
+                )
+            elif content_type == "super_chat":
+                content = SuperChatContent(
+                    user=content_dict.get("user", ""),
+                    user_id=content_dict.get("user_id", ""),
+                    amount=content_dict.get("amount", 0.0),
+                    content=content_dict.get("content", text),
+                )
+            else:
+                # 未知类型，使用TextContent作为fallback
+                content = TextContent(text=text)
+
+        # 创建NormalizedMessage对象
+        return cls(
+            text=text,
+            content=content,
+            source=source,
+            data_type=data_type,
+            importance=importance,
+            metadata=metadata,
+            timestamp=timestamp,
         )

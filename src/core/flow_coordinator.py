@@ -166,51 +166,16 @@ class FlowCoordinator:
         self.logger.info(f"收到Intent事件: {event_name}")
 
         try:
-            # 从 IntentPayload 重建 Intent 对象
-            from src.domains.decision.intent import Intent, IntentAction, EmotionType
+            # 从事件数据重建 Intent 对象（使用 Intent.from_dict）
+            from src.domains.decision.intent import Intent
 
-            # 提取 IntentPayload 的字段
-            original_text = event_data.get("original_text", "")
-            response_text = event_data.get("response_text", "")
-            emotion_str = event_data.get("emotion", "neutral")
-            actions_data = event_data.get("actions", [])
-            metadata = event_data.get("metadata", {})
-            timestamp = event_data.get("timestamp", 0)
-
-            # 转换 emotion 字符串为 EmotionType
-            try:
-                emotion = EmotionType(emotion_str)
-            except ValueError:
-                emotion = EmotionType.NEUTRAL
-
-            # 转换 actions 数据为 IntentAction 对象
-            actions = []
-            for action_data in actions_data:
-                try:
-                    from src.domains.decision.intent import ActionType
-
-                    action = IntentAction(
-                        type=ActionType(action_data.get("type", "text")),
-                        params=action_data.get("params", {}),
-                        priority=action_data.get("priority", 100),
-                    )
-                    actions.append(action)
-                except Exception as e:
-                    self.logger.warning(f"跳过无效的 IntentAction: {e}")
-
-            # 重建 Intent 对象
-            intent = Intent(
-                original_text=original_text,
-                response_text=response_text,
-                emotion=emotion,
-                actions=actions,
-                metadata=metadata,
-                timestamp=timestamp,
-            )
+            # 如果 event_data 包含 intent_data 字段，使用它；否则直接使用 event_data
+            intent_source = event_data.get("intent_data", event_data)
+            intent = Intent.from_dict(intent_source)
 
             # Output Domain - Parameters: Intent → ExpressionParameters
             if self.expression_generator:
-                params = await self.expression_generator.generate(intent)
+                params = self.expression_generator.generate(intent)  # 同步方法，不需要 await
                 self.logger.info("ExpressionParameters生成完成")
 
                 # OutputPipeline 处理（参数后处理）

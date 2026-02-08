@@ -440,7 +440,7 @@ async def test_on_normalized_message_ready_success(decision_manager_with_mock, s
 
     async def intent_handler(event_name: str, event_data: dict, source: str):
         # event_data 是 IntentPayload 序列化后的字典
-        # 包含字段: original_text, response_text, emotion, actions, metadata, timestamp, provider
+        # 包含字段: intent_data (嵌套字典), provider
         intent_results.append(event_data)
 
     # 订阅 intent_generated 事件
@@ -457,8 +457,10 @@ async def test_on_normalized_message_ready_success(decision_manager_with_mock, s
 
     # 验证结果
     assert len(intent_results) == 1
-    assert intent_results[0]["response_text"] == "事件回复"
-    assert intent_results[0]["emotion"] == "love"  # EmotionType.LOVE 的值是 "love"
+    # IntentPayload 使用 intent_data 嵌套字典存储 Intent 数据
+    assert intent_results[0]["intent_data"]["response_text"] == "事件回复"
+    assert intent_results[0]["intent_data"]["emotion"] == "love"  # EmotionType.LOVE 的值是 "love"
+    assert intent_results[0]["provider"] == "mock_decision"
     assert manager._current_provider.call_count == 1
 
 
@@ -524,13 +526,15 @@ async def test_on_normalized_message_ready_event_data_structure(decision_manager
     assert len(event_data_received) == 1
     event_data = event_data_received[0]
 
-    # IntentPayload 包含字段: original_text, response_text, emotion, actions, metadata, timestamp, provider
-    assert "original_text" in event_data
-    assert "response_text" in event_data
-    assert "emotion" in event_data
+    # IntentPayload 包含字段: intent_data (嵌套字典), provider
+    assert "intent_data" in event_data
     assert "provider" in event_data
+    # intent_data 包含 Intent 的所有字段
+    assert "original_text" in event_data["intent_data"]
+    assert "response_text" in event_data["intent_data"]
+    assert "emotion" in event_data["intent_data"]
 
-    assert event_data["original_text"] == sample_normalized_message.text
+    assert event_data["intent_data"]["original_text"] == sample_normalized_message.text
     assert event_data["provider"] == "mock_decision"
     # source 是作为参数传递给 handler 的，不在 event_data 里
     assert source_received[0] == "DecisionManager"

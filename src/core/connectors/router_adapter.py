@@ -15,6 +15,7 @@ from src.core.utils.logger import get_logger
 if TYPE_CHECKING:
     from maim_message import Router
     from src.core.event_bus import EventBus
+    from src.domains.decision.intent import Intent
 
 
 class RouterAdapter:
@@ -85,6 +86,30 @@ class RouterAdapter:
 
         self._router.register_class_handler(handler)
         self.logger.info("消息处理器已注册")
+
+    async def send_action_suggestion(self, intent: "Intent") -> None:
+        """
+        发送 Action 建议到 MaiBot（fire-and-forget）
+
+        Args:
+            intent: Intent 对象，包含建议的动作列表
+        """
+        from src.core.connectors.maibot_message_schema import ActionSuggestionMessage
+
+        if not intent.suggested_actions:
+            self.logger.debug("Intent 无建议动作，跳过发送")
+            return
+
+        message = ActionSuggestionMessage(
+            intent_id=intent.id,
+            original_text=intent.original_text,
+            response_text=intent.response_text,
+            emotion=intent.emotion.value,
+            suggested_actions=[sa.model_dump() for sa in intent.suggested_actions],
+        )
+
+        await self.send(message.to_message_base())
+        self.logger.info(f"已发送 Action 建议: {len(intent.suggested_actions)} 个动作")
 
     @property
     def router(self) -> Optional["Router"]:

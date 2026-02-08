@@ -39,6 +39,21 @@ class ActionMapper:
         """
         pass
 
+    def _get_expression_map(self) -> Dict[str, Dict[str, Any]]:
+        """
+        获取语义名称到VTS参数的映射表
+
+        Returns:
+            语义名称 → VTS参数字典的映射
+        """
+        return {
+            "smile": {"mouth_opening": 0.5, "cheek_puffing": 0.2},
+            "sad": {"eyebrow_troubled_left": 0.3, "eyebrow_troubled_right": 0.3, "mouth_opening": 0.3},
+            "angry": {"eyebrow_troubled_left": 0.8, "eyebrow_troubled_right": 0.8},
+            "surprised": {"mouth_opening": 0.8, "eye_opening": 0.8},
+            "neutral": {},
+        }
+
     def map_actions(self, actions: List[IntentAction]) -> Dict[str, Any]:
         """
         将动作列表映射为渲染参数
@@ -104,7 +119,8 @@ class ActionMapper:
             action: IntentAction
             result: 结果字典
         """
-        hotkey_id = action.params.get("hotkey_id")
+        # 兼容两种参数名: "key" (LLM生成的语义格式) 和 "hotkey_id" (VTS格式)
+        hotkey_id = action.params.get("key") or action.params.get("hotkey_id")
         if hotkey_id:
             result["hotkeys"].append(hotkey_id)
 
@@ -148,9 +164,17 @@ class ActionMapper:
             action: IntentAction
             result: 结果字典
         """
-        # 表情参数直接合并到expressions字典
-        expression_params = action.params.get("expressions", {})
-        result["expressions"].update(expression_params)
+        # 支持 {"name": "smile"} 语义格式（LLM生成）
+        name = action.params.get("name")
+        if name:
+            # 语义名称 → VTS 参数映射
+            expression_map = self._get_expression_map()
+            if name in expression_map:
+                result["expressions"].update(expression_map[name])
+
+        # 也支持直接传递 VTS 参数格式
+        expressions = action.params.get("expressions", {})
+        result["expressions"].update(expressions)
 
     def handle_motion_action(self, action: IntentAction, result: Dict[str, Any]):
         """
@@ -167,6 +191,73 @@ class ActionMapper:
                 "params": action.params,
             }
         )
+
+    def handle_blink_action(self, action: IntentAction, result: Dict[str, Any]):
+        """
+        处理眨眼动作
+
+        Args:
+            action: IntentAction
+            result: 结果字典
+        """
+        result["actions"].append(
+            {
+                "type": "blink",
+                "params": {"duration": 0.15},
+            }
+        )
+
+    def handle_nod_action(self, action: IntentAction, result: Dict[str, Any]):
+        """
+        处理点头动作
+
+        Args:
+            action: IntentAction
+            result: 结果字典
+        """
+        result["actions"].append(
+            {
+                "type": "nod",
+                "params": {"intensity": 0.5},
+            }
+        )
+
+    def handle_shake_action(self, action: IntentAction, result: Dict[str, Any]):
+        """
+        处理摇头动作
+
+        Args:
+            action: IntentAction
+            result: 结果字典
+        """
+        result["actions"].append(
+            {
+                "type": "shake",
+                "params": {"intensity": 0.4},
+            }
+        )
+
+    def handle_wave_action(self, action: IntentAction, result: Dict[str, Any]):
+        """
+        处理挥手动作
+
+        Args:
+            action: IntentAction
+            result: 结果字典
+        """
+        hotkey = action.params.get("hotkey", "wave_animation")
+        result["hotkeys"].append(hotkey)
+
+    def handle_clap_action(self, action: IntentAction, result: Dict[str, Any]):
+        """
+        处理鼓掌动作
+
+        Args:
+            action: IntentAction
+            result: 结果字典
+        """
+        hotkey = action.params.get("hotkey", "clap_animation")
+        result["hotkeys"].append(hotkey)
 
     def handle_custom_action(self, action: IntentAction, result: Dict[str, Any]):
         """

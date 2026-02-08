@@ -235,6 +235,14 @@ available_providers = [
 # host = "127.0.0.1"
 # port = 8000
 
+# MaiCore DecisionProvider 子配置
+[providers.decision.providers.maicore]
+# Action 建议配置
+# action_suggestions_enabled = false  # 是否启用 MaiBot Action 建议（默认关闭）
+# action_confidence_threshold = 0.6   # 最低置信度阈值（0.0-1.0）
+# action_cooldown_seconds = 5.0       # 同一 Action 的最小间隔（秒）
+# max_suggested_actions = 3           # 每条消息最大建议数量
+
 # LocalLLM DecisionProvider 配置
 [providers.decision.local_llm]
 # 使用的 LLM 客户端类型

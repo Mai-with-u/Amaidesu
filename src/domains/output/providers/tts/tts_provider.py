@@ -15,6 +15,7 @@ from pydantic import Field
 
 from src.core.base.output_provider import OutputProvider
 from src.domains.output.parameters.render_parameters import ExpressionParameters
+from src.core.events.names import CoreEvents
 from src.core.utils.logger import get_logger
 from src.services.config.schemas.schemas.base import BaseProviderConfig
 
@@ -104,7 +105,7 @@ class TTSProvider(OutputProvider):
 
         # 订阅 expression.parameters_generated 事件（事件驱动架构）
         if self.event_bus:
-            self.event_bus.on("expression.parameters_generated", self._on_parameters_ready, priority=50)
+            self.event_bus.on(CoreEvents.EXPRESSION_PARAMETERS_GENERATED, self._on_parameters_ready, priority=50)
             self.logger.info("TTSProvider 已订阅 expression.parameters_generated 事件")
 
         self.logger.info("TTSProvider设置完成")
@@ -307,7 +308,7 @@ class TTSProvider(OutputProvider):
         # 取消事件订阅
         if self.event_bus:
             try:
-                self.event_bus.off("expression.parameters_generated", self._on_parameters_ready)
+                self.event_bus.off(CoreEvents.EXPRESSION_PARAMETERS_GENERATED, self._on_parameters_ready)
                 self.logger.debug("TTSProvider 已取消事件订阅")
             except Exception as e:
                 self.logger.warning(f"取消事件订阅失败: {e}")

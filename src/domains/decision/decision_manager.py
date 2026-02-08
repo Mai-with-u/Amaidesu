@@ -70,8 +70,14 @@ class DecisionManager:
         self._current_provider: Optional["DecisionProvider"] = None
         self._provider_name: Optional[str] = None
         self._switch_lock = asyncio.Lock()
+        self._event_subscribed = False
 
-    async def setup(self, provider_name: Optional[str] = None, config: Optional[Dict[str, Any]] = None, decision_config: Optional[Dict[str, Any]] = None) -> None:
+    async def setup(
+        self,
+        provider_name: Optional[str] = None,
+        config: Optional[Dict[str, Any]] = None,
+        decision_config: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """
         设置决策Provider
 
@@ -153,9 +159,13 @@ class DecisionManager:
                 self._provider_name = None
                 raise ConnectionError(f"无法初始化DecisionProvider '{provider_name}': {e}") from e
 
-        # 订阅 normalization.message_ready 事件
-        self.event_bus.on(CoreEvents.NORMALIZATION_MESSAGE_READY, self._on_normalized_message_ready)
-        self.logger.info(f"DecisionManager 已订阅 '{CoreEvents.NORMALIZATION_MESSAGE_READY}' 事件")
+        # 订阅 normalization.message_ready 事件（防止重复订阅）
+        if not self._event_subscribed:
+            self.event_bus.on(CoreEvents.NORMALIZATION_MESSAGE_READY, self._on_normalized_message_ready)
+            self._event_subscribed = True
+            self.logger.info(f"DecisionManager 已订阅 '{CoreEvents.NORMALIZATION_MESSAGE_READY}' 事件")
+        else:
+            self.logger.debug(f"DecisionManager 已订阅过 '{CoreEvents.NORMALIZATION_MESSAGE_READY}' 事件，跳过重复订阅")
 
     async def decide(self, normalized_message: "NormalizedMessage") -> "Intent":
         """
@@ -202,31 +212,37 @@ class DecisionManager:
             return
 
         # 如果是 NormalizedMessage 对象，直接使用
-        # 如果是字典，需要重新构造 NormalizedMessage
+        # 如果是字典，使用 from_dict() 重建 NormalizedMessage
         if isinstance(message_dict, dict):
-            # 从字典重建 NormalizedMessage（简化版本）
-            # 注意：这里我们使用字典中的 text 字段作为主要数据
-            # 完整的重建需要处理 content 对象的序列化问题
+            # 使用 NormalizedMessage.from_dict() 工厂方法重建对象
+            # 此方法支持自动重建 TextContent、GiftContent、SuperChatContent
             from src.core.base.normalized_message import NormalizedMessage
-            from src.domains.input.normalization.content import TextContent
 
-            # 创建一个简化的 NormalizedMessage
-            normalized = NormalizedMessage(
-                text=message_dict.get("text", ""),
-                content=TextContent(text=message_dict.get("text", "")),
-                source=message_dict.get("source", event_data.get("source", "unknown")),
-                data_type=message_dict.get("data_type", "text"),
-                importance=message_dict.get("importance", 0.5),
-                metadata=message_dict.get("metadata", {}),
-                timestamp=message_dict.get("timestamp", 0.0),
-            )
+            normalized = NormalizedMessage.from_dict(message_dict)
         else:
             normalized = message_dict
 
         try:
             self.logger.debug(f"收到 NormalizedMessage: {normalized.text[:50]}...")
+
+            # 构建 SourceContext（在决策前）
+            from src.domains.decision.intent import SourceContext
+
+            source_context = SourceContext(
+                source=normalized.source,
+                data_type=normalized.data_type,
+                user_id=normalized.user_id,
+                user_nickname=normalized.metadata.get("user_nickname"),
+                importance=normalized.importance,
+                extra={k: v for k, v in normalized.metadata.items() if k not in ("type", "timestamp", "source")},
+            )
+
             # 调用当前活动的 Provider 进行决策
             intent = await self.decide(normalized)
+
+            # 注入 source_context（如果 Provider 未设置）
+            if intent.source_context is None:
+                intent.source_context = source_context
 
             # 发布 decision.intent_generated 事件（3域架构，使用emit）
             from src.core.events.payloads import IntentPayload
@@ -324,8 +340,10 @@ class DecisionManager:
         清理当前Provider和取消事件订阅。
         """
         # 取消事件订阅（如果已订阅）
-        if CoreEvents.NORMALIZATION_MESSAGE_READY in self.event_bus._handlers:
+        if self._event_subscribed:
             self.event_bus.off(CoreEvents.NORMALIZATION_MESSAGE_READY, self._on_normalized_message_ready)
+            self._event_subscribed = False
+            self.logger.debug("DecisionManager 已取消事件订阅")
 
         provider_name = self._provider_name
 

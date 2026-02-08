@@ -573,21 +573,21 @@ class ConfigService:
         provider_layer: Literal["input", "output", "decision"],
     ) -> Optional[type]:
         """
-        从Schema Registry查找Provider的Schema类
+        从ProviderRegistry查找Provider的Schema类
+
+        所有Provider已完成迁移到自管理Schema架构，
+        直接从ProviderRegistry._config_schemas获取。
 
         Args:
             provider_name: Provider名称
-            provider_layer: Provider层级
+            provider_layer: Provider层级（保留用于日志和验证）
 
         Returns:
             Schema类，如果找不到返回None
         """
-        try:
-            from src.services.config.schemas import PROVIDER_SCHEMA_REGISTRY
+        from src.core.provider_registry import ProviderRegistry
 
-            return PROVIDER_SCHEMA_REGISTRY.get(provider_name)
-        except (ImportError, AttributeError):
-            return None
+        return ProviderRegistry.get_config_schema(provider_name)
 
     def _generate_config_from_schema(
         self,

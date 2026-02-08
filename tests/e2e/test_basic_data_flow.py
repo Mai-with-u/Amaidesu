@@ -65,10 +65,11 @@ async def test_complete_data_flow_with_mock_providers(event_bus, sample_raw_data
     # 7. 验证 decision.intent_generated 事件
     event_name, event_data, source = await intent_future
     assert event_name == CoreEvents.DECISION_INTENT_GENERATED
-    assert "original_text" in event_data
-    assert "response_text" in event_data
-    assert event_data["response_text"] == "[模拟回复] 你好，VTuber"
-    assert event_data["emotion"] == "neutral"
+    # IntentPayload 使用 intent_data 嵌套字典
+    assert "intent_data" in event_data
+    assert "provider" in event_data
+    assert event_data["intent_data"]["response_text"] == "[模拟回复] 你好，VTuber"
+    assert event_data["intent_data"]["emotion"] == "neutral"
 
     # 8. 清理
     await decision_manager.cleanup()
@@ -151,13 +152,17 @@ async def test_decision_provider_creates_intent(event_bus, wait_for_event):
 
     # 验证结果
     event_name, event_data, source = await future
-    assert "response_text" in event_data
-    assert "emotion" in event_data
+    # 新结构：数据在 intent_data 中
+    assert "intent_data" in event_data
+    intent_data = event_data["intent_data"]
 
-    assert event_data["response_text"] == "[模拟回复] 测试消息"
-    assert event_data["emotion"] == "neutral"
-    assert event_data["metadata"]["mock"] is True
-    assert "call_count" in event_data["metadata"]
+    assert "response_text" in intent_data
+    assert "emotion" in intent_data
+
+    assert intent_data["response_text"] == "[模拟回复] 测试消息"
+    assert intent_data["emotion"] == "neutral"
+    assert intent_data["metadata"]["mock"] is True
+    assert "call_count" in intent_data["metadata"]
 
     await decision_manager.cleanup()
 
@@ -186,8 +191,9 @@ async def test_multiple_sequential_messages(event_bus, wait_for_event):
     received_intents = []
 
     async def collect_intents(event_name, event_data, source):
-        assert "response_text" in event_data
-        received_intents.append(event_data["response_text"])
+        assert "intent_data" in event_data
+        assert "response_text" in event_data["intent_data"]
+        received_intents.append(event_data["intent_data"]["response_text"])
 
     event_bus.on("decision.intent_generated", collect_intents)
 

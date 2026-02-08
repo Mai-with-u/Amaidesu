@@ -1,8 +1,13 @@
 """Mock Output Provider - 用于测试"""
+from typing import Literal
+
+from pydantic import Field
+
 from src.core.base.output_provider import OutputProvider
 from src.core.provider_registry import ProviderRegistry
 from src.core.utils.logger import get_logger
 from src.domains.output.parameters.render_parameters import RenderParameters
+from src.services.config.schemas.schemas.base import BaseProviderConfig
 
 
 class MockOutputProvider(OutputProvider):
@@ -11,6 +16,12 @@ class MockOutputProvider(OutputProvider):
 
     记录收到的所有 RenderParameters，不进行实际渲染。
     """
+
+    class ConfigSchema(BaseProviderConfig):
+        """模拟输出Provider配置（用于测试）"""
+
+        type: Literal["mock"] = "mock"
+        log_received: bool = Field(default=True, description="是否记录收到的参数")
 
     def __init__(self, config: dict):
         self.config = config

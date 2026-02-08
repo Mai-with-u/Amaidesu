@@ -23,6 +23,7 @@ from pydantic import Field
 
 from src.core.base.output_provider import OutputProvider
 from src.core.base.base import RenderParameters
+from src.core.events.names import CoreEvents
 from src.core.utils.logger import get_logger
 from src.services.config.schemas.schemas.base import BaseProviderConfig
 

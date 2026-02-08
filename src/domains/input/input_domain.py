@@ -59,7 +59,7 @@ class InputDomain:
         """设置InputDomain，订阅事件"""
         # 订阅RawData生成事件
         self.logger.info("正在订阅 perception.raw_data.generated 事件...")
-        self.event_bus.on("perception.raw_data.generated", self.on_raw_data_generated)
+        self.event_bus.on(CoreEvents.PERCEPTION_RAW_DATA_GENERATED, self.on_raw_data_generated)
         self.logger.info("成功订阅 perception.raw_data.generated 事件")
 
         self.logger.info("InputDomain设置完成")
@@ -67,7 +67,7 @@ class InputDomain:
     async def cleanup(self):
         """清理InputDomain"""
         # 取消订阅
-        self.event_bus.off("perception.raw_data.generated", self.on_raw_data_generated)
+        self.event_bus.off(CoreEvents.PERCEPTION_RAW_DATA_GENERATED, self.on_raw_data_generated)
 
         self.logger.info("InputDomain清理完成")
 

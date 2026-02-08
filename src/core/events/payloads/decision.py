@@ -94,41 +94,57 @@ class IntentPayload(BasePayload):
     - DecisionProvider.decide() 直接返回 Intent
     - DecisionManager 接收到 Intent 后发布此事件
     - ExpressionGenerator 订阅此事件并生成渲染参数
+
+    **简化设计**：
+    - 使用 Pydantic 的自动序列化（model_dump/model_validate）
+    - Intent 数据存储为字典，避免重复字段定义
+    - 提供便捷方法与 Intent 对象互转
     """
 
-    original_text: str = Field(..., description="原始输入文本")
-    response_text: str = Field(..., description="AI回复文本")
-    emotion: str = Field(default="neutral", description="情感类型（如 'happy', 'sad', 'angry'）")
-    actions: List[IntentActionPayload] = Field(default_factory=list, description="动作列表")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="元数据")
-    timestamp: float = Field(default_factory=time.time, description="时间戳")
+    intent_data: Dict[str, Any] = Field(..., description="Intent 序列化数据")
     provider: str = Field(..., description="决策Provider名称")
 
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "original_text": "你好",
-                "response_text": "你好！很高兴见到你~",
-                "emotion": "happy",
-                "actions": [
-                    {"type": "blink", "params": {"count": 2}, "priority": 30},
-                    {"type": "wave", "params": {"duration": 1.0}, "priority": 50},
-                ],
-                "metadata": {"confidence": 0.95},
-                "timestamp": 1706745600.0,
+                "intent_data": {
+                    "original_text": "你好",
+                    "response_text": "你好！很高兴见到你~",
+                    "emotion": "happy",
+                    "actions": [
+                        {"type": "blink", "params": {"count": 2}, "priority": 30},
+                        {"type": "wave", "params": {"duration": 1.0}, "priority": 50},
+                    ],
+                    "metadata": {"confidence": 0.95},
+                    "timestamp": 1706745600.0,
+                },
                 "provider": "maicore",
             }
         }
     )
 
+    def __getattr__(self, name: str) -> Any:
+        """代理访问 intent_data 中的字段，用于调试显示"""
+        if name in ["original_text", "response_text", "emotion", "actions"]:
+            return self.intent_data.get(name, "")
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+
     def _debug_fields(self) -> List[str]:
         """返回需要显示的字段"""
-        return ["provider", "original_text", "response_text", "emotion", "actions"]
+        return [
+            "provider",
+            "original_text",
+            "response_text",
+            "emotion",
+            "actions",
+        ]
 
     @classmethod
     def from_intent(cls, intent: "Intent", provider: str) -> "IntentPayload":
         """
         从 Intent 对象创建 Payload
+
+        使用 Pydantic 的自动序列化，将 Intent 转换为字典存储。
 
         Args:
             intent: Intent 对象
@@ -137,24 +153,20 @@ class IntentPayload(BasePayload):
         Returns:
             IntentPayload 实例
         """
-        actions = [
-            IntentActionPayload(
-                type=action.type.value,
-                params=action.params,
-                priority=action.priority,
-            )
-            for action in intent.actions
-        ]
+        return cls(intent_data=intent.model_dump(mode="json"), provider=provider)
 
-        return cls(
-            original_text=intent.original_text,
-            response_text=intent.response_text,
-            emotion=intent.emotion.value,
-            actions=actions,
-            metadata=intent.metadata.copy(),
-            timestamp=intent.timestamp,
-            provider=provider,
-        )
+    def to_intent(self) -> "Intent":
+        """
+        转换为 Intent 对象
+
+        使用 Pydantic 的自动反序列化，从字典还原 Intent。
+
+        Returns:
+            Intent 实例
+        """
+        from src.domains.decision.intent import Intent
+
+        return Intent.model_validate(self.intent_data)
 
 
 class DecisionResponsePayload(BasePayload):

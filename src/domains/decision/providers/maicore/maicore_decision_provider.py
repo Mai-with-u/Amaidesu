@@ -75,7 +75,16 @@ class MaiCoreDecisionProvider(DecisionProvider):
         connect_timeout: float = Field(default=10.0, description="连接超时时间（秒）", gt=0)
         reconnect_interval: float = Field(default=5.0, description="重连间隔时间（秒）", gt=0)
 
+        # Action 建议配置
+        action_suggestions_enabled: bool = Field(default=False, description="是否启用 MaiBot Action 建议")
+        action_confidence_threshold: float = Field(
+            default=0.6, ge=0.0, le=1.0, description="Action 建议的最低置信度阈值"
+        )
+        action_cooldown_seconds: float = Field(default=5.0, gt=0.0, description="同一 Action 的最小间隔（秒）")
+        max_suggested_actions: int = Field(default=3, ge=1, le=10, description="每条消息最大建议数量")
+
     def __init__(self, config: Dict[str, Any]):
+        self.provider_name = "maicore"
         """
         初始化 MaiCoreDecisionProvider
 
@@ -187,6 +196,45 @@ class MaiCoreDecisionProvider(DecisionProvider):
         if self._ws_connector:
             await self._ws_connector.disconnect()
 
+    def _normalized_to_message_base(self, normalized: "NormalizedMessage") -> Optional["MessageBase"]:
+        """
+        转换 NormalizedMessage 为 MessageBase
+
+        将 NormalizedMessage 转换为 MaiCore 需要的 MessageBase 格式。
+
+        Args:
+            normalized: 标准化消息
+
+        Returns:
+            MessageBase 实例，如果转换失败返回 None
+        """
+        try:
+            from maim_message import MessageBase, BaseMessageInfo, UserInfo, Seg
+
+            # 构建UserInfo
+            user_id = normalized.user_id or "unknown"
+            nickname = normalized.metadata.get("user_nickname", normalized.source)
+            user_info = UserInfo(user_id=user_id, user_nickname=nickname)
+
+            # 构建Seg（文本片段）
+            seg = Seg(type="text", data=normalized.text)
+
+            # 构建MessageBase
+            message = MessageBase(
+                message_info=BaseMessageInfo(
+                    message_id=f"normalized_{int(normalized.timestamp)}",
+                    platform=normalized.source,
+                    user_info=user_info,
+                    time=normalized.timestamp,
+                ),
+                message_segment=seg,
+            )
+
+            return message
+        except Exception as e:
+            self.logger.error(f"转换为 MessageBase 失败: {e}", exc_info=True)
+            return None
+
     async def decide(self, normalized_message: "NormalizedMessage") -> Intent:
         """
         进行决策（发送消息到 MaiCore）
@@ -205,7 +253,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
             raise RuntimeError("MaiCore 未连接，无法发送消息")
 
         # 转换 NormalizedMessage 为 MessageBase
-        message = normalized_message.to_message_base()
+        message = self._normalized_to_message_base(normalized_message)
         if not message:
             self.logger.error("转换为 MessageBase 失败，无法发送消息")
             raise RuntimeError("无法将 NormalizedMessage 转换为 MessageBase")
@@ -231,6 +279,11 @@ class MaiCoreDecisionProvider(DecisionProvider):
             # 等待响应（超时30秒）
             intent = await asyncio.wait_for(future, timeout=30.0)
             self.logger.info(f"消息 {message_id} 的 Intent 解析完成")
+
+            # 异步发送 Action 建议（不阻塞主流程）
+            if self.typed_config.action_suggestions_enabled and intent.suggested_actions and self._router_adapter:
+                asyncio.create_task(self._safe_send_suggestion(intent))
+
             return intent
 
         except asyncio.TimeoutError:
@@ -292,6 +345,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
                 try:
                     from src.core.events.names import CoreEvents
                     from src.core.events.payloads.decision import DecisionResponsePayload
+
                     await self._event_bus.emit(
                         CoreEvents.DECISION_RESPONSE_GENERATED,
                         DecisionResponsePayload(
@@ -346,6 +400,25 @@ class MaiCoreDecisionProvider(DecisionProvider):
             actions=[IntentAction(type=ActionType.BLINK, params={}, priority=30)],
             metadata={"fallback_reason": reason, "parser": "fallback"},
         )
+
+    async def _safe_send_suggestion(self, intent: Intent) -> None:
+        """
+        安全发送 Action 建议（捕获异常）
+
+        异步发送 MaiBot Action 建议，任何错误都不会影响主流程。
+
+        Args:
+            intent: 包含建议动作的 Intent 对象
+        """
+        try:
+            if not self._router_adapter:
+                self.logger.warning("RouterAdapter 未初始化，无法发送 Action 建议")
+                return
+
+            await self._router_adapter.send_action_suggestion(intent)
+            self.logger.debug(f"Action 建议发送成功: {len(intent.suggested_actions)} 个动作")
+        except Exception as e:
+            self.logger.warning(f"发送 Action 建议失败: {e}", exc_info=True)
 
     async def cleanup(self) -> None:
         """

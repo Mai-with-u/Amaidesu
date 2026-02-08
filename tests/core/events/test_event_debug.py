@@ -189,20 +189,24 @@ class TestDecisionPayloads:
 
     def test_intent_payload_debug_string(self):
         """测试 IntentPayload 的字符串表示"""
-        payload = IntentPayload(
+        from src.domains.decision.intent import Intent, IntentAction, ActionType, EmotionType
+
+        # 使用 from_intent 方法创建 Payload
+        intent = Intent(
             original_text="你好",
             response_text="你好！很高兴见到你~",
-            emotion="happy",
+            emotion=EmotionType.HAPPY,
             actions=[
-                IntentActionPayload(type="blink", params={"count": 2}, priority=30)
+                IntentAction(type=ActionType.BLINK, params={"count": 2}, priority=30)
             ],
-            provider="maicore"
         )
+        payload = IntentPayload.from_intent(intent, provider="maicore")
         debug_str = str(payload)
 
         assert "IntentPayload" in debug_str
         assert 'original_text="你好"' in debug_str
         assert 'response_text="你好！很高兴见到你~"' in debug_str
+        # 序列化后 emotion 是字符串值
         assert 'emotion="happy"' in debug_str
         assert 'provider="maicore"' in debug_str
         assert "actions=" in debug_str
@@ -509,15 +513,17 @@ class TestEventBusDebugLog:
             event_bus.on("test.complex", handler)
 
             # 发布复杂的 Payload
-            payload = IntentPayload(
+            from src.domains.decision.intent import Intent, IntentAction, ActionType, EmotionType
+
+            intent = Intent(
                 original_text="你好",
                 response_text="你好！很高兴见到你~",
-                emotion="happy",
+                emotion=EmotionType.HAPPY,
                 actions=[
-                    IntentActionPayload(type="blink", params={"count": 2}, priority=30)
+                    IntentAction(type=ActionType.BLINK, params={"count": 2}, priority=30)
                 ],
-                provider="maicore"
             )
+            payload = IntentPayload.from_intent(intent, provider="maicore")
 
             await event_bus.emit("test.complex", payload, source="test")
 

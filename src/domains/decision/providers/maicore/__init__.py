@@ -1,4 +1,5 @@
 """MaiCore Decision Provider"""
+
 from .maicore_decision_provider import MaiCoreDecisionProvider
 from src.core.provider_registry import ProviderRegistry
 
