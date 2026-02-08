@@ -201,14 +201,11 @@ def ensure_provider_config(
         ...     provider_name="console_input",
         ...     provider_layer="input",
         ...     schema_class=ConsoleInputConfig,
-        ...     base_dir="/path/to/project"
+        ...     base_dir="/path/to/project",
         ... )
 
         >>> # 检查配置文件是否存在（不生成）
-        >>> config_path = ensure_provider_config(
-        ...     provider_name="tts",
-        ...     provider_layer="output"
-        ... )
+        >>> config_path = ensure_provider_config(provider_name="tts", provider_layer="output")
     """
     # 确定项目根目录
     if base_dir is None:
@@ -366,7 +363,13 @@ def _detect_project_root() -> str:
     current_dir = Path(__file__).parent.absolute()
 
     # 向上查找项目根目录（查找 pyproject.toml）
-    for parent in [current_dir, current_dir.parent, current_dir.parent.parent, current_dir.parent.parent.parent, current_dir.parent.parent.parent.parent]:
+    for parent in [
+        current_dir,
+        current_dir.parent,
+        current_dir.parent.parent,
+        current_dir.parent.parent.parent,
+        current_dir.parent.parent.parent.parent,
+    ]:
         if (parent / "pyproject.toml").exists():
             return str(parent)
 

@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from src.core.base.decision_provider import DecisionProvider
     from src.core.base.normalized_message import NormalizedMessage
     from src.domains.decision.intent import Intent
-    from src.services.llm.service import LLMService
+    from src.services.llm.manager import LLMManager
 
 
 class DecisionManager:
@@ -35,7 +35,7 @@ class DecisionManager:
     使用示例:
         ```python
         # 初始化
-        manager = DecisionManager(event_bus, llm_service)
+        manager = DecisionManager(event_bus, llm_manager)
 
         # 设置当前Provider
         await manager.setup(provider_name="maicore", config={"host": "localhost", "port": 8000})
@@ -56,13 +56,13 @@ class DecisionManager:
         - ProviderRegistry 统一管理所有类型的 Provider（Input/Decision/Output）
     """
 
-    def __init__(self, event_bus: "EventBus", llm_service: Optional["LLMService"] = None):
+    def __init__(self, event_bus: "EventBus", llm_service: Optional["LLMManager"] = None):
         """
         初始化DecisionManager
 
         Args:
             event_bus: EventBus实例
-            llm_service: 可选的LLMService实例，将作为依赖注入到DecisionProvider
+            llm_service: 可选的LLMManager实例，将作为依赖注入到DecisionProvider
         """
         self.event_bus = event_bus
         self._llm_service = llm_service
@@ -161,9 +161,15 @@ class DecisionManager:
 
         # 订阅 normalization.message_ready 事件（防止重复订阅）
         if not self._event_subscribed:
-            self.event_bus.on(CoreEvents.NORMALIZATION_MESSAGE_READY, self._on_normalized_message_ready)
+            from src.core.events.payloads.input import MessageReadyPayload
+
+            self.event_bus.on_typed(
+                CoreEvents.NORMALIZATION_MESSAGE_READY,
+                self._on_normalized_message_ready,
+                MessageReadyPayload,
+            )
             self._event_subscribed = True
-            self.logger.info(f"DecisionManager 已订阅 '{CoreEvents.NORMALIZATION_MESSAGE_READY}' 事件")
+            self.logger.info(f"DecisionManager 已订阅 '{CoreEvents.NORMALIZATION_MESSAGE_READY}' 事件（类型化）")
         else:
             self.logger.debug(f"DecisionManager 已订阅过 '{CoreEvents.NORMALIZATION_MESSAGE_READY}' 事件，跳过重复订阅")
 
@@ -193,37 +199,73 @@ class DecisionManager:
             # 优雅降级: 抛出异常让上层处理
             raise
 
-    async def _on_normalized_message_ready(self, event_name: str, event_data: dict, source: str):
+    async def _on_normalized_message_ready(self, event_name: str, payload: "MessageReadyPayload", source: str):
         """
-        处理 normalization.message_ready 事件
+        处理 normalization.message_ready 事件（类型化）
 
         当 InputDomain 生成 NormalizedMessage 时，自动调用当前活动的 DecisionProvider 进行决策，
         并发布 decision.intent_generated 事件（3域架构）。
 
         Args:
             event_name: 事件名称 (CoreEvents.NORMALIZATION_MESSAGE_READY)
-            event_data: 事件数据（MessageReadyPayload 序列化后的字典）
+            payload: 类型化的事件数据（MessageReadyPayload 对象，自动反序列化）
             source: 事件源
         """
-        # 从 MessageReadyPayload 中提取 message 字段（字典格式）
-        message_dict = event_data.get("message")
-        if not message_dict:
+        # 直接从 payload.message 获取 NormalizedMessage 对象
+        # message 现在是 Union[NormalizedMessage, Dict[str, Any]] 以兼容序列化
+        message_data = payload.message
+        if not message_data:
             self.logger.warning("收到空的 NormalizedMessage 事件")
             return
 
-        # 如果是 NormalizedMessage 对象，直接使用
-        # 如果是字典，使用 from_dict() 重建 NormalizedMessage
-        if isinstance(message_dict, dict):
-            # 使用 NormalizedMessage.from_dict() 工厂方法重建对象
-            # 此方法支持自动重建 TextContent、GiftContent、SuperChatContent
-            from src.core.base.normalized_message import NormalizedMessage
+        # 兼容处理：message 字段可以是 NormalizedMessage 对象或字典
+        # 由于序列化限制，通常是字典格式
+        from src.core.base.normalized_message import NormalizedMessage
 
-            normalized = NormalizedMessage.from_dict(message_dict)
+        if isinstance(message_data, dict):
+            # 字典格式：使用 from_dict 方法重建（如果存在）或直接使用字典
+            # 由于 NormalizedMessage 的 content 字段包含不可序列化对象，
+            # model_validate 可能无法正确重建，所以我们暂时使用字典访问
+            normalized_dict = message_data
+            # 使用字典访问方式
+            text = normalized_dict.get("text", "")
+            source = normalized_dict.get("source", "")
+            data_type = normalized_dict.get("data_type", "")
+            importance = normalized_dict.get("importance", 0.5)
+            metadata = normalized_dict.get("metadata", {})
+            user_id = normalized_dict.get("user_id")  # 从字典获取
+            user_nickname = metadata.get("user_nickname")
+
+            # 构建 SourceContext
+            from src.domains.decision.intent import SourceContext
+
+            source_context = SourceContext(
+                source=source,
+                data_type=data_type,
+                user_id=user_id,
+                user_nickname=user_nickname,
+                importance=importance,
+                extra={k: v for k, v in metadata.items() if k not in ("type", "timestamp", "source")},
+            )
+
+            # 尝试重建 NormalizedMessage 对象用于决策
+            try:
+                normalized = NormalizedMessage.model_validate(normalized_dict)
+            except Exception:
+                # 如果重建失败，使用字典数据创建一个临时对象
+                # 注意：这可能不完整，但至少能处理基本字段
+                normalized = NormalizedMessage(
+                    text=text,
+                    content=None,  # content 无法从字典重建
+                    source=source,
+                    data_type=data_type,
+                    importance=importance,
+                    metadata=metadata,
+                    timestamp=normalized_dict.get("timestamp", 0.0),
+                )
         else:
-            normalized = message_dict
-
-        try:
-            self.logger.debug(f"收到 NormalizedMessage: {normalized.text[:50]}...")
+            # 对象格式：直接使用
+            normalized = message_data
 
             # 构建 SourceContext（在决策前）
             from src.domains.decision.intent import SourceContext
@@ -231,11 +273,14 @@ class DecisionManager:
             source_context = SourceContext(
                 source=normalized.source,
                 data_type=normalized.data_type,
-                user_id=normalized.user_id,
+                user_id=normalized.user_id if hasattr(normalized, "user_id") else None,
                 user_nickname=normalized.metadata.get("user_nickname"),
                 importance=normalized.importance,
                 extra={k: v for k, v in normalized.metadata.items() if k not in ("type", "timestamp", "source")},
             )
+
+        try:
+            self.logger.debug(f"收到 NormalizedMessage: {normalized.text[:50]}...")
 
             # 调用当前活动的 Provider 进行决策
             intent = await self.decide(normalized)

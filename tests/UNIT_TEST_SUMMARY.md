@@ -66,7 +66,7 @@
 - Provider查询
 - 内置Provider自动注册
 
-#### 4. LLMService 测试（45个测试）
+#### 4. LLMManager 测试（45个测试）
 **文件**：`tests/core/test_llm_service.py`
 
 **测试覆盖**：
@@ -242,7 +242,7 @@
 | **核心（src/core/）** | | |
 | EventBus | test_event_bus.py | 43 |
 | EventRegistry | test_event_registry.py | 26 |
-| LLMService | test_llm_service.py | 45 |
+| LLMManager | test_llm_service.py | 45 |
 | PipelineManager | test_pipeline_manager.py | 42 |
 | OutputProviderManager | test_output_provider_manager.py | 62 |
 | FlowCoordinator | test_flow_coordinator.py | 34 |

@@ -4,11 +4,10 @@ LLM 模型配置类
 用于配置单个 LLM 后端的参数
 """
 
-from dataclasses import dataclass
+from pydantic import BaseModel
 
 
-@dataclass
-class ModelConfig:
+class ModelConfig(BaseModel):
     """LLM 模型配置"""
 
     model_name: str

@@ -10,7 +10,7 @@ from typing import Optional
 
 from src.domains.decision.intent_parser import IntentParser
 from src.domains.decision.intent import Intent, EmotionType, ActionType
-from src.services.llm.service import LLMResponse
+from src.services.llm.manager import LLMResponse
 
 
 # =============================================================================
@@ -41,14 +41,18 @@ class MockMessageBase:
 
 
 class MockLLMService:
-    """Mock LLMService for testing"""
+    """Mock LLMManager for testing"""
 
     def __init__(self):
-        self._backends = {"llm_fast": True}  # 模拟后端已配置
+        self._clients = {"llm_fast": True}  # 模拟客户端已配置
         self.chat_calls = []
         self._should_fail = False
         self._fail_message = "Mock LLM failure"
         self._response_content = None
+
+    def has_client(self, client_type: str) -> bool:
+        """检查客户端是否存在"""
+        return client_type in self._clients
 
     def set_response(self, content: str):
         """设置LLM响应内容"""
@@ -62,7 +66,7 @@ class MockLLMService:
     async def chat(
         self,
         prompt: str,
-        backend: str = "llm_fast",
+        client_type: str = "llm_fast",
         system_message: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 1000,
@@ -72,7 +76,7 @@ class MockLLMService:
         self.chat_calls.append(
             {
                 "prompt": prompt,
-                "backend": backend,
+                "client_type": client_type,
                 "system_message": system_message,
                 "temperature": temperature,
                 "max_tokens": max_tokens,
@@ -103,10 +107,14 @@ class MockLLMService:
 
 
 class MockLLMServiceWithoutFast:
-    """Mock LLMService without llm_fast backend"""
+    """Mock LLMManager without llm_fast client"""
 
     def __init__(self):
-        self._backends = {}  # 没有 llm_fast
+        self._clients = {}  # 没有 llm_fast
+
+    def has_client(self, client_type: str) -> bool:
+        """检查客户端是否存在"""
+        return client_type in self._clients
 
     async def chat(self, **kwargs) -> LLMResponse:
         return LLMResponse(success=True, content="fallback")
@@ -373,7 +381,7 @@ class TestLLMParsing:
 
         call = intent_parser.llm_service.chat_calls[0]
 
-        assert call["backend"] == "llm_fast"
+        assert call["client_type"] == "llm_fast"
         assert call["temperature"] == 0.3
         assert call["max_tokens"] == 200
         assert "请分析以下AI VTuber的回复消息" in call["prompt"]

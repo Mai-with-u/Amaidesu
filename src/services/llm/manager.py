@@ -1,36 +1,34 @@
 """
-LLM 服务 - 核心基础设施
+LLM 管理器 - 核心基础设施
 
 提供统一的 LLM 调用接口，管理多个 LLM 客户端类型（llm, llm_fast, vlm 等）
 
-设计文档: refactor/design/llm_service.md
+设计文档: refactor/design/llm_manager.md
 """
 
 import asyncio
 import os
-from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List, AsyncIterator
+from pydantic import BaseModel, Field
 from src.core.utils.logger import get_logger
 
 
 # === 数据类定义 ===
 
 
-@dataclass
-class LLMResponse:
+class LLMResponse(BaseModel):
     """LLM 响应结果"""
 
     success: bool
     content: Optional[str] = None
     model: Optional[str] = None
     usage: Optional[Dict[str, int]] = None
-    tool_calls: Optional[List[Dict[str, Any]]] = field(default_factory=list)
+    tool_calls: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     reasoning_content: Optional[str] = None
     error: Optional[str] = None
 
 
-@dataclass
-class RetryConfig:
+class RetryConfig(BaseModel):
     """LLM 调用重试配置"""
 
     max_retries: int = 3
@@ -71,9 +69,9 @@ class ClientType:
         return purpose_map.get(purpose.lower(), cls.LLM)
 
 
-class LLMService:
+class LLMManager:
     """
-    LLM 服务管理器 - 多客户端架构
+    LLM 管理器 - 多客户端架构
 
     核心基础设施服务，与 EventBus 同级。
 
@@ -87,20 +85,20 @@ class LLMService:
     使用示例：
         ```python
         # 在 main.py 中初始化
-        llm_service = LLMService()
-        await llm_service.setup(config)
+        llm_manager = LLMManager()
+        await llm_manager.setup(config)
 
         # 使用标准 LLM 客户端
-        response = await llm_service.chat("你好")
+        response = await llm_manager.chat("你好")
 
         # 使用快速 LLM 客户端
-        response = await llm_service.chat_fast("解析意图")
+        response = await llm_manager.chat_fast("解析意图")
 
         # 使用视觉语言模型
-        response = await llm_service.chat_vision("描述图片", images=["path/to/image.jpg"])
+        response = await llm_manager.chat_vision("描述图片", images=["path/to/image.jpg"])
 
         # 使用 messages 格式
-        response = await llm_service.chat_messages(
+        response = await llm_manager.chat_messages(
             [{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": "Hello!"}],
             client_type="llm_fast",
         )
@@ -116,7 +114,7 @@ class LLMService:
     }
 
     def __init__(self):
-        self.logger = get_logger("LLMService")
+        self.logger = get_logger("LLMManager")
         self._clients: Dict[str, Any] = {}  # client_type -> backend_instance
         self._client_configs: Dict[str, Dict[str, Any]] = {}  # client_type -> config
         self._config: Dict[str, Any] = {}
@@ -165,7 +163,7 @@ class LLMService:
 
         self._token_manager = TokenUsageManager(use_global=True)
 
-        self.logger.info(f"LLMService 初始化完成，已配置客户端: {list(self._clients.keys())}")
+        self.logger.info(f"LLMManager 初始化完成，已配置客户端: {list(self._clients.keys())}")
 
     async def _init_client(self, client_type: str, client_config: Dict[str, Any]) -> None:
         """
@@ -179,51 +177,51 @@ class LLMService:
         backend_type = client_config.get("backend", self.DEFAULT_BACKENDS.get(client_type, "openai"))
 
         # 动态导入后端实现
-        backend_class = self._get_backend_class(backend_type)
+        client_class = self._get_client_class(backend_type)
 
         # 应用环境变量覆盖（API Key 等）
         enriched_config = self._enrich_config_with_env(client_config, backend_type)
 
         # 创建后端实例
-        self._clients[client_type] = backend_class(enriched_config)
+        self._clients[client_type] = client_class(enriched_config)
         self._client_configs[client_type] = enriched_config
 
         self.logger.info(
             f"已初始化客户端 '{client_type}' (后端: {backend_type}, 模型: {enriched_config.get('model', 'N/A')})"
         )
 
-    def _get_backend_class(self, backend_type: str) -> type:
+    def _get_client_class(self, backend_type: str) -> type:
         """
-        动态导入后端类
+        动态导入客户端类
 
         Args:
-            backend_type: 后端类型 (openai, ollama, anthropic)
+            backend_type: 客户端类型 (openai, ollama, anthropic)
 
         Returns:
-            后端类
+            客户端类
 
         Raises:
-            ValueError: 如果后端类型不支持
+            ValueError: 如果客户端类型不支持
         """
         if backend_type == "openai":
-            from src.services.llm.backends.openai_backend import OpenAIBackend
+            from src.services.llm.backends.openai_client import OpenAIClient
 
-            return OpenAIBackend
+            return OpenAIClient
         elif backend_type == "ollama":
-            from src.services.llm.backends.ollama_backend import OllamaBackend
+            from src.services.llm.backends.ollama_client import OllamaClient
 
-            return OllamaBackend
+            return OllamaClient
         elif backend_type == "anthropic":
-            # 未来可以添加 Anthropic 后端
-            from src.services.llm.backends.openai_backend import OpenAIBackend
+            # 未来可以添加 Anthropic 客户端
+            from src.services.llm.backends.openai_client import OpenAIClient
 
-            self.logger.warning("Anthropic 后端暂未实现，降级到 OpenAI 后端")
-            return OpenAIBackend
+            self.logger.warning("Anthropic 客户端暂未实现，降级到 OpenAI 客户端")
+            return OpenAIClient
         else:
-            self.logger.warning(f"未知的后端类型 '{backend_type}'，降级到 OpenAI 后端")
-            from src.services.llm.backends.openai_backend import OpenAIBackend
+            self.logger.warning(f"未知的客户端类型 '{backend_type}'，降级到 OpenAI 客户端")
+            from src.services.llm.backends.openai_client import OpenAIClient
 
-            return OpenAIBackend
+            return OpenAIClient
 
     def _enrich_config_with_env(self, config: Dict[str, Any], backend_type: str) -> Dict[str, Any]:
         """

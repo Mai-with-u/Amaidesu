@@ -14,10 +14,11 @@ from typing import TYPE_CHECKING
 
 from src.domains.decision.intent import Intent, EmotionType, ActionType, IntentAction
 from src.core.utils.logger import get_logger
+from src.prompts import get_prompt_manager
 
 if TYPE_CHECKING:
     from maim_message import MessageBase
-    from src.services.llm.service import LLMService
+    from src.services.llm.manager import LLMManager
 
 
 class IntentParser:
@@ -37,7 +38,7 @@ class IntentParser:
 
     使用示例：
         ```python
-        parser = IntentParser(llm_service)
+        parser = IntentParser(llm_manager)
         await parser.setup()
 
         # 解析MessageBase
@@ -48,45 +49,6 @@ class IntentParser:
         ```
     """
 
-    # LLM系统提示词
-    SYSTEM_PROMPT = """你是一个AI VTuber的意图分析助手。你的任务是将AI的回复消息解析为结构化的意图(Intent)。
-
-分析消息内容并提取：
-1. **情感(EmotionType)**: neutral/happy/sad/angry/surprised/love
-2. **回复文本**: 提取主要回复内容
-3. **动作(IntentAction)**: 识别应该执行的表现动作
-
-动作类型说明：
-- expression: 表情（params: {"name": "表情名称"}）
-- hotkey: 热键（params: {"key": "按键名称"}）
-- emoji: emoji表情（params: {"emoji": "实际emoji"}）
-- blink: 眨眼
-- nod: 点头
-- shake: 摇头
-- wave: 挥手
-- clap: 鼓掌
-- none: 无动作
-
-输出格式（严格JSON）：
-```json
-{
-  "emotion": "happy",
-  "response_text": "回复内容",
-  "actions": [
-    {"type": "expression", "params": {"name": "smile"}, "priority": 50}
-  ]
-}
-```
-
-注意：
-- emotion: 必须是预定义的6种之一
-- response_text: 提取消息的主要文本内容
-- actions: 数组，每个action包含type、params、priority(0-100)
-- params: 根据type不同而不同
-- 如果无法确定情感，默认使用"neutral"
-- 如果没有明显动作，返回空数组
-- 严格按照JSON格式输出，不要添加其他内容"""
-
     # 规则引擎的关键词映射
     EMOTION_KEYWORDS = {
         EmotionType.HAPPY: ["开心", "高兴", "哈哈", "快乐", "笑", "😊", "😄", "🎉"],
@@ -96,12 +58,12 @@ class IntentParser:
         EmotionType.LOVE: ["爱", "喜欢", "❤️", "💕", "😍"],
     }
 
-    def __init__(self, llm_service: "LLMService"):
+    def __init__(self, llm_service: "LLMManager"):
         """
         初始化IntentParser
 
         Args:
-            llm_service: LLM服务实例
+            llm_service: LLM管理器实例
         """
         self.llm_service = llm_service
         self.logger = get_logger("IntentParser")
@@ -185,7 +147,7 @@ class IntentParser:
         response = await self.llm_service.chat(
             prompt=f"请分析以下AI VTuber的回复消息，提取情感、回复文本和动作：\n\n{text}",
             client_type="llm_fast",
-            system_message=self.SYSTEM_PROMPT,
+            system_message=get_prompt_manager().get_raw("decision/intent_parser"),
             temperature=0.3,  # 低温度，保证稳定输出
             max_tokens=200,
         )

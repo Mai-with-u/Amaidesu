@@ -16,7 +16,7 @@ def bili_config():
         "message_config": {
             "platform": "bilibili",
             "default_user_id": "test_user",
-        }
+        },
     }
 
 
@@ -45,7 +45,7 @@ class TestBiliDanmakuInputProvider:
 
     def test_init_without_aiohttp(self, bili_config):
         """测试缺少aiohttp依赖"""
-        with patch('src.domains.input.providers.bili_danmaku.bili_danmaku_provider.aiohttp', None):
+        with patch("src.domains.input.providers.bili_danmaku.bili_danmaku_provider.aiohttp", None):
             with pytest.raises(ImportError, match="aiohttp is required"):
                 BiliDanmakuInputProvider(bili_config)
 
@@ -55,14 +55,7 @@ class TestBiliDanmakuInputProvider:
         provider = BiliDanmakuInputProvider(bili_config)
 
         # 模拟API返回的弹幕数据
-        api_danmaku = {
-            "text": "测试弹幕",
-            "nickname": "测试用户",
-            "uid": 12345,
-            "check_info": {
-                "ts": 1234567890.0
-            }
-        }
+        api_danmaku = {"text": "测试弹幕", "nickname": "测试用户", "uid": 12345, "check_info": {"ts": 1234567890.0}}
 
         raw_data = await provider._create_danmaku_raw_data(api_danmaku)
 
@@ -80,12 +73,7 @@ class TestBiliDanmakuInputProvider:
         """测试空文本弹幕"""
         provider = BiliDanmakuInputProvider(bili_config)
 
-        api_danmaku = {
-            "text": "",
-            "nickname": "测试用户",
-            "uid": 12345,
-            "check_info": {"ts": 1234567890.0}
-        }
+        api_danmaku = {"text": "", "nickname": "测试用户", "uid": 12345, "check_info": {"ts": 1234567890.0}}
 
         raw_data = await provider._create_danmaku_raw_data(api_danmaku)
 
@@ -95,22 +83,19 @@ class TestBiliDanmakuInputProvider:
     @pytest.mark.asyncio
     async def test_create_danmaku_raw_data_with_message_config(self, bili_config):
         """测试带完整消息配置的RawData创建"""
-        bili_config["message_config"].update({
-            "enable_group_info": True,
-            "group_id": "test_group",
-            "group_name": "测试群组",
-            "content_format": ["text", "emoji"],
-            "accept_format": ["text"],
-        })
+        bili_config["message_config"].update(
+            {
+                "enable_group_info": True,
+                "group_id": "test_group",
+                "group_name": "测试群组",
+                "content_format": ["text", "emoji"],
+                "accept_format": ["text"],
+            }
+        )
 
         provider = BiliDanmakuInputProvider(bili_config)
 
-        api_danmaku = {
-            "text": "带配置的弹幕",
-            "nickname": "配置用户",
-            "uid": 67890,
-            "check_info": {"ts": 1234567890.0}
-        }
+        api_danmaku = {"text": "带配置的弹幕", "nickname": "配置用户", "uid": 67890, "check_info": {"ts": 1234567890.0}}
 
         raw_data = await provider._create_danmaku_raw_data(api_danmaku)
 
@@ -134,24 +119,9 @@ class TestBiliDanmakuInputProvider:
 
         # 模拟多个API弹幕数据
         api_danmakus = [
-            {
-                "text": "弹幕1",
-                "nickname": "用户1",
-                "uid": 111,
-                "check_info": {"ts": 1500.0}
-            },
-            {
-                "text": "弹幕2",
-                "nickname": "用户2",
-                "uid": 222,
-                "check_info": {"ts": 2000.0}
-            },
-            {
-                "text": "弹幕3",
-                "nickname": "用户3",
-                "uid": 333,
-                "check_info": {"ts": 2500.0}
-            }
+            {"text": "弹幕1", "nickname": "用户1", "uid": 111, "check_info": {"ts": 1500.0}},
+            {"text": "弹幕2", "nickname": "用户2", "uid": 222, "check_info": {"ts": 2000.0}},
+            {"text": "弹幕3", "nickname": "用户3", "uid": 333, "check_info": {"ts": 2500.0}},
         ]
 
         raw_data_list = []

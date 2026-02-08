@@ -1,4 +1,5 @@
 """Console Input Provider"""
+
 from .console_input_provider import ConsoleInputProvider
 from src.core.provider_registry import ProviderRegistry
 

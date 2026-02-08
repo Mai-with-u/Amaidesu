@@ -1,14 +1,14 @@
 """
 结构化内容基类
 
-定义StructuredContent抽象基类，支持方法多态。
+定义StructuredContent基类（Pydantic），支持方法多态。
 """
 
-from abc import ABC, abstractmethod
 from typing import Optional
+from pydantic import BaseModel
 
 
-class StructuredContent(ABC):
+class StructuredContent(BaseModel):
     """
     结构化内容基类（方法多态）
 
@@ -23,25 +23,29 @@ class StructuredContent(ABC):
 
     type: str
 
-    @abstractmethod
     def get_importance(self) -> float:
         """
         获取重要性（0-1）
 
         Returns:
             float: 重要性值，范围0-1
-        """
-        pass
 
-    @abstractmethod
+        Raises:
+            NotImplementedError: 子类必须实现此方法
+        """
+        raise NotImplementedError
+
     def get_display_text(self) -> str:
         """
         获取显示文本
 
         Returns:
             str: 用于显示的文本描述
+
+        Raises:
+            NotImplementedError: 子类必须实现此方法
         """
-        pass
+        raise NotImplementedError
 
     def get_user_id(self) -> Optional[str]:
         """

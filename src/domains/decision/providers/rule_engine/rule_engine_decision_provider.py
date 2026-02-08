@@ -73,16 +73,10 @@ class RuleEngineDecisionProvider(DecisionProvider):
         """
 
         type: Literal["rule_engine"] = "rule_engine"
-        rules_file: str = Field(
-            default="config/rules.json", description="规则文件路径（JSON或YAML格式）"
-        )
-        default_response: str = Field(
-            default="我不理解你的意思", description="默认响应文本"
-        )
+        rules_file: str = Field(default="config/rules.json", description="规则文件路径（JSON或YAML格式）")
+        default_response: str = Field(default="我不理解你的意思", description="默认响应文本")
         case_sensitive: bool = Field(default=False, description="是否区分大小写")
-        match_mode: Literal["any", "all"] = Field(
-            default="any", description="匹配模式"
-        )
+        match_mode: Literal["any", "all"] = Field(default="any", description="匹配模式")
 
     def __init__(self, config: Dict[str, Any]):
         """
@@ -112,7 +106,9 @@ class RuleEngineDecisionProvider(DecisionProvider):
         # EventBus引用（用于事件通知）
         self._event_bus: Optional["EventBus"] = None
 
-    async def setup(self, event_bus: "EventBus", config: Dict[str, Any], dependencies: Optional[Dict[str, Any]] = None) -> None:
+    async def setup(
+        self, event_bus: "EventBus", config: Dict[str, Any], dependencies: Optional[Dict[str, Any]] = None
+    ) -> None:
         """
         设置RuleEngineDecisionProvider
 

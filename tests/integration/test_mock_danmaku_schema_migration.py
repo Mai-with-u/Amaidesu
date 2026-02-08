@@ -103,7 +103,7 @@ def test_config_schema_generates_valid_toml():
     """测试 ConfigSchema 能生成有效的 TOML 配置"""
     schema = MockDanmakuInputProvider.ConfigSchema
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.toml', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
         temp_path = Path(f.name)
 
     try:
@@ -114,7 +114,7 @@ def test_config_schema_generates_valid_toml():
         assert temp_path.exists()
 
         # 读取并验证内容
-        content = temp_path.read_text(encoding='utf-8')
+        content = temp_path.read_text(encoding="utf-8")
         assert "mock_danmaku" in content
         assert 'log_file_path = "msg_default.jsonl"' in content
         assert "send_interval = 1.0" in content

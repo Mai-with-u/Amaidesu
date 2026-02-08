@@ -15,7 +15,7 @@ DecisionProvider负责将NormalizedMessage转换为决策结果(Intent)。
 - RuleEngineDecisionProvider: 使用本地规则引擎
 """
 
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING, Dict, Any
 from abc import ABC, abstractmethod
 
 if TYPE_CHECKING:
@@ -108,3 +108,35 @@ class DecisionProvider(ABC):
         """内部清理逻辑(子类可选重写)"""
         # 子类可以重写此方法来执行清理逻辑,如关闭连接、释放资源等。
         ...
+
+    @classmethod
+    def get_registration_info(cls) -> Dict[str, Any]:
+        """
+        获取 Provider 注册信息（子类重写）
+
+        用于显式注册模式，避免模块导入时的自动注册。
+
+        Returns:
+            注册信息字典，包含:
+            - layer: "decision"
+            - name: Provider 名称（唯一标识符）
+            - class: Provider 类
+            - source: 注册来源（如 "builtin:maicore"）
+
+        Raises:
+            NotImplementedError: 如果子类未实现此方法
+
+        Example:
+            @classmethod
+            def get_registration_info(cls):
+                return {
+                    "layer": "decision",
+                    "name": "maicore",
+                    "class": cls,
+                    "source": "builtin:maicore"
+                }
+        """
+        raise NotImplementedError(
+            f"{cls.__name__} 必须实现 get_registration_info() 类方法以支持显式注册。"
+            "如果使用自动注册模式，可以在 __init__.py 中直接调用 ProviderRegistry.register_decision()。"
+        )

@@ -1,4 +1,5 @@
 """Mock Output Provider - 用于测试"""
+
 from typing import Literal
 
 from pydantic import Field

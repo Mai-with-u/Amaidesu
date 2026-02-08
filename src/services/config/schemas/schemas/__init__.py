@@ -64,6 +64,7 @@ def get_provider_schema(provider_type: str, provider_layer: str = None) -> Type[
         provider_layer参数保留用于API向后兼容，但实际查找使用全局注册表。
     """
     from src.core.provider_registry import ProviderRegistry
+
     schema = ProviderRegistry.get_config_schema(provider_type)
     if schema is not None:
         return schema

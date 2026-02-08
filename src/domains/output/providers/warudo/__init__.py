@@ -1,4 +1,5 @@
 """Warudo Output Provider"""
+
 from .warudo_provider import WarudoOutputProvider
 from src.core.provider_registry import ProviderRegistry
 

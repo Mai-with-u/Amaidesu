@@ -114,6 +114,7 @@ class WebSocketConnector:
                 if self._event_bus:
                     try:
                         from src.core.events.payloads.decision import ProviderConnectedPayload
+
                         await self._event_bus.emit(
                             CoreEvents.DECISION_PROVIDER_CONNECTED,
                             ProviderConnectedPayload(provider=self.provider_name),
@@ -139,6 +140,7 @@ class WebSocketConnector:
             if self._is_connected and self._event_bus:
                 try:
                     from src.core.events.payloads.decision import ProviderDisconnectedPayload
+
                     await self._event_bus.emit(
                         CoreEvents.DECISION_PROVIDER_DISCONNECTED,
                         ProviderDisconnectedPayload(provider=self.provider_name),

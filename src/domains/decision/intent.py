@@ -31,14 +31,14 @@ class ActionType(str, Enum):
     """动作类型枚举"""
 
     EXPRESSION = "expression"  # 表情
-    HOTKEY = "hotkey"          # 热键
-    EMOJI = "emoji"            # emoji表情
-    BLINK = "blink"            # 眨眼
-    NOD = "nod"                # 点头
-    SHAKE = "shake"            # 摇头
-    WAVE = "wave"              # 挥手
-    CLAP = "clap"              # 鼓掌
-    NONE = "none"              # 无动作
+    HOTKEY = "hotkey"  # 热键
+    EMOJI = "emoji"  # emoji表情
+    BLINK = "blink"  # 眨眼
+    NOD = "nod"  # 点头
+    SHAKE = "shake"  # 摇头
+    WAVE = "wave"  # 挥手
+    CLAP = "clap"  # 鼓掌
+    NONE = "none"  # 无动作
 
 
 class SourceContext(BaseModel):
@@ -89,90 +89,6 @@ class Intent(BaseModel):
     suggested_actions: Optional[List[ActionSuggestion]] = Field(default=None, description="建议的动作列表")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="元数据")
     timestamp: float = Field(default_factory=time.time, description="时间戳")
-
-    def to_dict(self) -> Dict[str, Any]:
-        """
-        转换为字典
-
-        Returns:
-            Intent的字典表示
-        """
-        result = {
-            "id": self.id,
-            "original_text": self.original_text,
-            "response_text": self.response_text,
-            "emotion": self.emotion.value if isinstance(self.emotion, EmotionType) else self.emotion,
-            "actions": [
-                {
-                    "type": action.type.value if isinstance(action.type, ActionType) else action.type,
-                    "params": action.params,
-                    "priority": action.priority,
-                }
-                for action in self.actions
-            ],
-            "metadata": self.metadata.copy(),
-            "timestamp": self.timestamp,
-        }
-        if self.source_context:
-            result["source_context"] = self.source_context.model_dump()
-        if self.suggested_actions:
-            result["suggested_actions"] = [
-                {
-                    "action_name": sa.action_name,
-                    "priority": sa.priority,
-                    "parameters": sa.parameters,
-                    "reason": sa.reason,
-                    "confidence": sa.confidence,
-                }
-                for sa in self.suggested_actions
-            ]
-        return result
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Intent":
-        """
-        从字典创建Intent
-
-        Args:
-            data: 字典数据
-
-        Returns:
-            Intent实例
-        """
-        actions = []
-        for action_data in data.get("actions", []):
-            actions.append(
-                IntentAction(
-                    type=ActionType(action_data["type"]),
-                    params=action_data["params"],
-                    priority=action_data.get("priority", 50),
-                )
-            )
-
-        source_context = None
-        if "source_context" in data and data["source_context"]:
-            source_context = SourceContext(**data["source_context"])
-
-        suggested_actions = None
-        if "suggested_actions" in data and data["suggested_actions"]:
-            suggested_actions = [ActionSuggestion(**sa) for sa in data["suggested_actions"]]
-
-        kwargs = {
-            "source_context": source_context,
-            "original_text": data.get("original_text", ""),
-            "response_text": data.get("response_text", ""),
-            "emotion": EmotionType(data.get("emotion", "neutral")),
-            "actions": actions,
-            "suggested_actions": suggested_actions,
-            "metadata": data.get("metadata", {}),
-            "timestamp": data.get("timestamp", time.time()),
-        }
-
-        # 只有当 id 存在时才传递，否则使用 default_factory
-        if "id" in data and data["id"] is not None:
-            kwargs["id"] = data["id"]
-
-        return cls(**kwargs)
 
     def __repr__(self) -> str:
         """字符串表示"""

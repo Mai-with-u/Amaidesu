@@ -10,7 +10,7 @@ logger = logging.getLogger("reply_web")
 
 class ReplyGenerationManager:
     """回复生成实时展示管理器"""
-    
+
     def __init__(self, port: int = 8767, show_status: bool = False, logger: logging.Logger = logger):
         self.logger = logger
         self.port = port
@@ -21,53 +21,53 @@ class ReplyGenerationManager:
         self.site = None
         self._server_starting = False
         self.current_reply = ""  # 当前正在生成的回复内容
-        self.current_user = ""   # 当前正在回复的用户
+        self.current_user = ""  # 当前正在回复的用户
         self.logger = logger
-        
+
     async def start_server(self):
         """启动回复生成web服务器"""
         if self.site is not None:
             logger.debug("回复生成Web服务器已经启动，跳过重复启动")
             return
-            
+
         if self._server_starting:
             logger.debug("回复生成Web服务器正在启动中，等待启动完成...")
             while self._server_starting and self.site is None:
                 await asyncio.sleep(0.1)
             return
-            
+
         self._server_starting = True
-        
+
         try:
             self.app = web.Application()
-            
+
             # 设置CORS
-            cors = aiohttp_cors.setup(self.app, defaults={
-                "*": aiohttp_cors.ResourceOptions(
-                    allow_credentials=True,
-                    expose_headers="*",
-                    allow_headers="*",
-                    allow_methods="*"
-                )
-            })
-            
+            cors = aiohttp_cors.setup(
+                self.app,
+                defaults={
+                    "*": aiohttp_cors.ResourceOptions(
+                        allow_credentials=True, expose_headers="*", allow_headers="*", allow_methods="*"
+                    )
+                },
+            )
+
             # 添加路由
-            self.app.router.add_get('/', self.reply_index_handler)
-            self.app.router.add_get('/ws', self.reply_websocket_handler)
-            self.app.router.add_get('/api/current-reply', self.get_current_reply_handler)
-            
+            self.app.router.add_get("/", self.reply_index_handler)
+            self.app.router.add_get("/ws", self.reply_websocket_handler)
+            self.app.router.add_get("/api/current-reply", self.get_current_reply_handler)
+
             # 为所有路由添加CORS
             for route in list(self.app.router.routes()):
                 cors.add(route)
-            
+
             self.runner = web.AppRunner(self.app)
             await self.runner.setup()
-            
-            self.site = web.TCPSite(self.runner, 'localhost', self.port)
+
+            self.site = web.TCPSite(self.runner, "localhost", self.port)
             await self.site.start()
-            
+
             logger.info(f"🌐 回复生成网页服务器启动成功在 http://localhost:{self.port}")
-            
+
         except Exception as e:
             logger.error(f"❌ 启动回复生成Web服务器失败: {e}")
             if self.runner:
@@ -78,11 +78,11 @@ class ReplyGenerationManager:
             raise
         finally:
             self._server_starting = False
-    
+
     async def stop_server(self):
         """停止回复生成web服务器"""
         logger.info("正在停止回复生成Web服务器...")
-        
+
         try:
             # 首先关闭所有WebSocket连接
             websockets_copy = self.websockets.copy()
@@ -90,18 +90,18 @@ class ReplyGenerationManager:
             for ws in websockets_copy:
                 if not ws.closed:
                     close_tasks.append(asyncio.create_task(self._close_websocket_safely(ws)))
-            
+
             # 等待所有WebSocket关闭，但设置超时
             if close_tasks:
                 try:
                     await asyncio.wait_for(asyncio.gather(*close_tasks, return_exceptions=True), timeout=3.0)
                 except asyncio.TimeoutError:
                     self.logger.warning("WebSocket关闭超时，强制继续")
-            
+
             # 清空WebSocket列表
             self.websockets.clear()
             self.logger.debug("已清空所有WebSocket连接")
-            
+
             # 停止服务器
             if self.site:
                 try:
@@ -109,14 +109,14 @@ class ReplyGenerationManager:
                     self.logger.debug("TCPSite已停止")
                 except asyncio.TimeoutError:
                     self.logger.warning("TCPSite停止超时，强制继续")
-            
+
             if self.runner:
                 try:
                     await asyncio.wait_for(self.runner.cleanup(), timeout=3.0)
                     self.logger.debug("AppRunner已清理")
                 except asyncio.TimeoutError:
                     self.logger.warning("AppRunner清理超时，强制继续")
-            
+
         except Exception as e:
             logger.error(f"停止服务器时出现异常: {e}")
         finally:
@@ -125,9 +125,9 @@ class ReplyGenerationManager:
             self.runner = None
             self.site = None
             self._server_starting = False
-            
+
             self.logger.info("回复生成Web服务器已完全停止")
-    
+
     async def _close_websocket_safely(self, ws):
         """安全关闭WebSocket连接"""
         try:
@@ -135,10 +135,10 @@ class ReplyGenerationManager:
             self.logger.debug("关闭WebSocket连接")
         except Exception as e:
             self.logger.error(f"关闭WebSocket连接时出错: {e}")
-    
+
     async def reply_index_handler(self, request):
         """回复生成主页处理器"""
-        html_content = f'''
+        html_content = f"""
 <!DOCTYPE html>
 <html>
 <head>
@@ -175,7 +175,7 @@ class ReplyGenerationManager:
             border-radius: 20px;
             backdrop-filter: blur(10px);
             z-index: 1000;
-            display: {'block' if self.show_status else 'none'};
+            display: {"block" if self.show_status else "none"};
         }}
         .user-info {{
             display: none;  /* 完全隐藏包含状态点的区域 */
@@ -217,7 +217,7 @@ class ReplyGenerationManager:
 </head>
 <body>
     <div class="container">
-        <div class="status" id="status">{'正在连接...' if self.show_status else ''}</div>
+        <div class="status" id="status">{"正在连接..." if self.show_status else ""}</div>
         <div class="user-info" id="user-info">
             <div class="status-dot idle" id="status-dot"></div>
         </div>
@@ -236,7 +236,7 @@ class ReplyGenerationManager:
             
             ws.onopen = function() {{
                 console.log('WebSocket连接已建立');
-                {('const statusEl = document.getElementById("status"); if (statusEl && statusEl.style.display !== "none") {{ statusEl.textContent = "✅ 已连接"; statusEl.style.color = "#ff8800"; }}' if self.show_status else '')}
+                {('const statusEl = document.getElementById("status"); if (statusEl && statusEl.style.display !== "none") {{ statusEl.textContent = "✅ 已连接"; statusEl.style.color = "#ff8800"; }}' if self.show_status else "")}
                 if (reconnectInterval) {{
                     clearInterval(reconnectInterval);
                     reconnectInterval = null;
@@ -255,7 +255,7 @@ class ReplyGenerationManager:
             
             ws.onclose = function(event) {{
                 console.log('WebSocket连接关闭:', event.code, event.reason);
-                {('const statusEl = document.getElementById("status"); if (statusEl && statusEl.style.display !== "none") {{ statusEl.textContent = "❌ 连接断开，正在重连..."; statusEl.style.color = "#ff6b6b"; }}' if self.show_status else '')}
+                {('const statusEl = document.getElementById("status"); if (statusEl && statusEl.style.display !== "none") {{ statusEl.textContent = "❌ 连接断开，正在重连..."; statusEl.style.color = "#ff6b6b"; }}' if self.show_status else "")}
                 
                 if (!reconnectInterval) {{
                     reconnectInterval = setInterval(connectWebSocket, 3000);
@@ -264,7 +264,7 @@ class ReplyGenerationManager:
             
             ws.onerror = function(error) {{
                 console.error('WebSocket错误:', error);
-                {('const statusEl = document.getElementById("status"); if (statusEl && statusEl.style.display !== "none") {{ statusEl.textContent = "❌ 连接错误"; statusEl.style.color = "#ff6b6b"; }}' if self.show_status else '')}
+                {('const statusEl = document.getElementById("status"); if (statusEl && statusEl.style.display !== "none") {{ statusEl.textContent = "❌ 连接错误"; statusEl.style.color = "#ff6b6b"; }}' if self.show_status else "")}
             }};
         }}
         
@@ -307,96 +307,80 @@ class ReplyGenerationManager:
     </script>
 </body>
 </html>
-        '''
-        return web.Response(text=html_content, content_type='text/html')
-    
+        """
+        return web.Response(text=html_content, content_type="text/html")
+
     async def reply_websocket_handler(self, request):
         """回复生成WebSocket处理器"""
         ws = web.WebSocketResponse()
         await ws.prepare(request)
-        
+
         self.websockets.append(ws)
         self.logger.debug(f"回复生成WebSocket连接建立，当前连接数: {len(self.websockets)}")
-        
+
         async for msg in ws:
             if msg.type == WSMsgType.ERROR:
-                self.logger.error(f'回复生成WebSocket错误: {ws.exception()}')
+                self.logger.error(f"回复生成WebSocket错误: {ws.exception()}")
                 break
-                
+
         # 清理断开的连接
         if ws in self.websockets:
             self.websockets.remove(ws)
         self.logger.debug(f"回复生成WebSocket连接断开，当前连接数: {len(self.websockets)}")
-        
+
         return ws
-    
+
     async def get_current_reply_handler(self, request):
         """获取当前回复状态API"""
         if self.current_reply:
-            return web.json_response({
-                "action": "chunk",
-                "user_name": self.current_user,
-                "content": self.current_reply
-            })
+            return web.json_response({"action": "chunk", "user_name": self.current_user, "content": self.current_reply})
         else:
-            return web.json_response({
-                "action": "clear"
-            })
-    
+            return web.json_response({"action": "clear"})
+
     async def start_generation(self, user_name: str):
         """开始新的回复生成"""
         # 先清空之前的内容
         await self.clear_generation()
-        
+
         self.current_user = user_name
         self.current_reply = ""
-        
-        data = {
-            "action": "start",
-            "user_name": user_name
-        }
+
+        data = {"action": "start", "user_name": user_name}
         await self._broadcast_to_websockets(data)
         self.logger.info(f"开始为用户 {user_name} 生成回复")
-    
+
     async def add_chunk(self, chunk: str):
         """添加回复内容块"""
         self.current_reply += chunk
-        
-        data = {
-            "action": "chunk",
-            "content": chunk
-        }
+
+        data = {"action": "chunk", "content": chunk}
         await self._broadcast_to_websockets(data)
         self.logger.debug(f"添加回复块: {chunk}")
-    
+
     async def complete_generation(self):
         """完成回复生成"""
-        data = {
-            "action": "complete"
-        }
+        data = {"action": "complete"}
         await self._broadcast_to_websockets(data)
         self.logger.info(f"完成回复生成，总长度: {len(self.current_reply)}")
-    
+
     async def clear_generation(self):
         """清空当前生成内容"""
         self.current_reply = ""
         self.current_user = ""
-        
-        data = {
-            "action": "clear"
-        }
+
+        data = {"action": "clear"}
         await self._broadcast_to_websockets(data)
         self.logger.info("清空回复生成内容")
-    
+
     async def _broadcast_to_websockets(self, data: dict):
         """向所有WebSocket连接广播数据"""
         if not self.websockets:
             return
-            
+
         message = json.dumps(data, ensure_ascii=False)
         websockets_copy = self.websockets.copy()
         removed_count = 0
-        
+
         for ws in websockets_copy:
             if ws.closed:
                 if ws in self.websockets:
@@ -410,7 +394,7 @@ class ReplyGenerationManager:
                     if ws in self.websockets:
                         self.websockets.remove(ws)
                         removed_count += 1
-        
+
         if removed_count > 0:
             self.logger.debug(f"清理了 {removed_count} 个断开的回复生成WebSocket连接")
 

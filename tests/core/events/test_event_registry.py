@@ -19,8 +19,10 @@ from src.core.events.registry import EventRegistry
 # 测试数据模型
 # =============================================================================
 
+
 class CoreEventData(BaseModel):
     """核心事件测试数据"""
+
     message: str
     timestamp: float
 
@@ -28,6 +30,7 @@ class CoreEventData(BaseModel):
 # =============================================================================
 # Fixture
 # =============================================================================
+
 
 @pytest.fixture(autouse=True)
 def reset_registry():
@@ -44,6 +47,7 @@ def reset_registry():
 # =============================================================================
 # 核心事件注册测试
 # =============================================================================
+
 
 def test_register_core_event_valid():
     """测试注册有效的核心事件"""
@@ -102,6 +106,7 @@ def test_register_core_event_duplicate():
 # 事件查询测试
 # =============================================================================
 
+
 def test_get_event():
     """测试获取已注册的事件"""
     EventRegistry.register_core_event("core.event1", CoreEventData)
@@ -128,6 +133,7 @@ def test_is_registered():
 # 事件列表测试
 # =============================================================================
 
+
 def test_list_all_events():
     """测试列出所有事件"""
     EventRegistry.register_core_event("core.event1", CoreEventData)
@@ -148,6 +154,7 @@ def test_list_all_events():
 # =============================================================================
 # 边界情况测试
 # =============================================================================
+
 
 def test_empty_registry():
     """测试空注册表的行为"""

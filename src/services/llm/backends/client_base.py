@@ -1,7 +1,7 @@
 """
-LLM 后端抽象基类
+LLM 客户端抽象基类
 
-定义统一的 LLM 后端接口，不同的 LLM 提供商实现此接口。
+定义统一的 LLM 客户端接口，不同的 LLM 提供商实现此接口。
 """
 
 import asyncio
@@ -11,14 +11,14 @@ from typing import Dict, Any, Optional, List, AsyncIterator, Union
 from src.core.utils.logger import get_logger
 
 
-class LLMBackend(ABC):
+class LLMClient(ABC):
     """
-    LLM 后端抽象基类
+    LLM 客户端抽象基类
 
     不同的 LLM 提供商实现此接口：
-    - OpenAIBackend: OpenAI 兼容 API（包括 SiliconFlow、DeepSeek 等）
-    - OllamaBackend: 本地 Ollama
-    - AnthropicBackend: Claude API
+    - OpenAIClient: OpenAI 兼容 API（包括 SiliconFlow、DeepSeek 等）
+    - OllamaClient: 本地 Ollama
+    - AnthropicClient: Claude API
     """
 
     def __init__(self, config: Dict[str, Any]):
@@ -100,10 +100,10 @@ class LLMBackend(ABC):
 
     def get_info(self) -> Dict[str, Any]:
         """
-        获取后端信息
+        获取客户端信息
 
         Returns:
-            后端信息字典
+            客户端信息字典
         """
         return {
             "name": self.__class__.__name__,

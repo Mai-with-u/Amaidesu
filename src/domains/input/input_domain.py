@@ -5,17 +5,25 @@ InputDomain - 输入域协调器
 """
 
 from typing import Dict, Any, Optional, TYPE_CHECKING
+from pydantic import BaseModel
 
 from src.core.event_bus import EventBus
 from src.core.base.raw_data import RawData
 from src.core.base.normalized_message import NormalizedMessage
-from src.domains.input.input_provider_manager import InputProviderManager
 from src.core.utils.logger import get_logger
 from src.core.events.names import CoreEvents
 from src.core.events.payloads.input import MessageReadyPayload
 
 if TYPE_CHECKING:
     from src.domains.input.pipelines.manager import PipelineManager
+
+
+class NormalizationResult(BaseModel):
+    """标准化结果"""
+
+    success: bool
+    message: Optional[NormalizedMessage]
+    error: Optional[str] = None
 
 
 class InputDomain:
@@ -33,7 +41,6 @@ class InputDomain:
     def __init__(
         self,
         event_bus: EventBus,
-        input_provider_manager: Optional[InputProviderManager] = None,
         pipeline_manager: Optional["PipelineManager"] = None,
     ):
         """
@@ -41,17 +48,16 @@ class InputDomain:
 
         Args:
             event_bus: 事件总线实例
-            input_provider_manager: InputProviderManager实例（可选，如果不提供则只监听事件）
             pipeline_manager: PipelineManager实例（可选，用于文本预处理）
         """
         self.event_bus = event_bus
-        self.input_provider_manager = input_provider_manager
         self.pipeline_manager = pipeline_manager
         self.logger = get_logger("InputDomain")
 
         # 统计信息
         self._raw_data_count = 0
         self._normalized_message_count = 0
+        self._normalization_error_count = 0
 
         self.logger.debug("InputDomain初始化完成")
 
@@ -95,42 +101,42 @@ class InputDomain:
             data_type = event_data.get("data_type", "unknown")
 
             self.logger.debug(
-                f"收到RawData: source={payload_source}, "
-                f"type={data_type}, "
-                f"content={str(raw_data)[:50]}..."
+                f"收到RawData: source={payload_source}, type={data_type}, content={str(raw_data)[:50]}..."
             )
 
             # 创建RawData对象
             raw_data_obj = RawData(
-                content=raw_data,
-                source=payload_source,
-                data_type=data_type,
-                timestamp=event_data.get("timestamp", 0.0)
+                content=raw_data, source=payload_source, data_type=data_type, timestamp=event_data.get("timestamp", 0.0)
             )
 
             # 转换为NormalizedMessage
-            normalized_message = await self.normalize(raw_data_obj)
+            result = await self.normalize(raw_data_obj)
 
-            if normalized_message:
+            if result.success:
                 self._normalized_message_count += 1
 
                 # 发布NormalizedMessage就绪事件（使用emit）
                 await self.event_bus.emit(
                     CoreEvents.NORMALIZATION_MESSAGE_READY,
-                    MessageReadyPayload.from_normalized_message(normalized_message),
+                    MessageReadyPayload.from_normalized_message(result.message),
                     source="InputDomain",
                 )
 
                 self.logger.debug(
-                    f"生成NormalizedMessage: text={normalized_message.text[:50]}..., "
-                    f"source={normalized_message.source}, "
-                    f"importance={normalized_message.importance:.2f}"
+                    f"生成NormalizedMessage: text={result.message.text[:50]}..., "
+                    f"source={result.message.source}, "
+                    f"importance={result.message.importance:.2f}"
+                )
+            else:
+                self._normalization_error_count += 1
+                self.logger.warning(
+                    f"标准化失败: source={raw_data_obj.source}, type={raw_data_obj.data_type}, error={result.error}"
                 )
 
         except Exception as e:
             self.logger.error(f"处理RawData事件时出错 (source: {source}): {e}", exc_info=True)
 
-    async def normalize(self, raw_data: RawData) -> Optional[NormalizedMessage]:
+    async def normalize(self, raw_data: RawData) -> NormalizationResult:
         """
         将RawData转换为NormalizedMessage
 
@@ -145,7 +151,7 @@ class InputDomain:
             raw_data: 原始数据
 
         Returns:
-            NormalizedMessage对象，转换失败返回None
+            NormalizationResult对象，包含成功状态、消息和错误信息
         """
         try:
             from src.domains.input.normalization.normalizers import NormalizerRegistry
@@ -156,10 +162,11 @@ class InputDomain:
 
             if normalizer:
                 # 对于 TextNormalizer，需要传递 pipeline_manager
-                if hasattr(normalizer, 'pipeline_manager'):
+                if hasattr(normalizer, "pipeline_manager"):
                     normalizer.pipeline_manager = self.pipeline_manager
 
-                return await normalizer.normalize(raw_data)
+                normalized_message = await normalizer.normalize(raw_data)
+                return NormalizationResult(success=True, message=normalized_message)
 
             # 降级处理：未知类型转换为文本
             text = f"[{raw_data.data_type}] {str(raw_data.content)}"
@@ -169,7 +176,7 @@ class InputDomain:
             metadata["source"] = raw_data.source
             metadata["original_timestamp"] = raw_data.timestamp
 
-            return NormalizedMessage(
+            normalized_message = NormalizedMessage(
                 text=structured_content.get_display_text(),
                 content=structured_content,
                 source=raw_data.source,
@@ -178,23 +185,28 @@ class InputDomain:
                 metadata=metadata,
                 timestamp=raw_data.timestamp,
             )
+            return NormalizationResult(success=True, message=normalized_message)
         except Exception as e:
-            self.logger.error(f"转换RawData为NormalizedMessage时出错: {e}", exc_info=True)
-            return None
+            error_msg = f"转换RawData为NormalizedMessage时出错: {e}"
+            self.logger.error(error_msg, exc_info=True)
+            return NormalizationResult(success=False, message=None, error=str(e))
 
     async def get_stats(self) -> Dict[str, Any]:
         """
         获取统计信息
 
         Returns:
-            统计信息字典
+            统计信息字典，包含成功率、失败率等
         """
+        total_processed = self._normalized_message_count + self._normalization_error_count
+        success_rate = self._normalized_message_count / total_processed if total_processed > 0 else 0.0
+        failure_rate = self._normalization_error_count / total_processed if total_processed > 0 else 0.0
+
         return {
             "raw_data_count": self._raw_data_count,
             "normalized_message_count": self._normalized_message_count,
-            "success_rate": (
-                self._normalized_message_count / self._raw_data_count
-                if self._raw_data_count > 0
-                else 0.0
-            ),
+            "normalization_error_count": self._normalization_error_count,
+            "total_processed": total_processed,
+            "success_rate": success_rate,
+            "failure_rate": failure_rate,
         }

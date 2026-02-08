@@ -429,7 +429,7 @@ def test_get_provider_config_auto_type(config_service, temp_base_dir, full_main_
     template_path = os.path.join(temp_base_dir, "config-template.toml")
     with open(template_path, "w", encoding="utf-8") as f:
         # 配置中不包含 type 字段
-        config_without_type = full_main_config.replace('type = "subtitle"', '')
+        config_without_type = full_main_config.replace('type = "subtitle"', "")
         f.write(config_without_type)
 
     config_service.initialize()
@@ -506,7 +506,9 @@ enabled = true
 # =============================================================================
 
 
-def test_get_pipeline_config_with_main_override(config_service, temp_base_dir, full_main_config, pipeline_template_config):
+def test_get_pipeline_config_with_main_override(
+    config_service, temp_base_dir, full_main_config, pipeline_template_config
+):
     """测试Pipeline配置合并（主配置覆盖Pipeline自身配置）"""
     # 创建主配置模板
     main_template_path = os.path.join(temp_base_dir, "config-template.toml")
@@ -532,7 +534,9 @@ def test_get_pipeline_config_with_main_override(config_service, temp_base_dir, f
     assert pipeline_config["default_field"] == "pipeline_default"  # Pipeline自身的字段保留
 
 
-def test_get_pipeline_config_without_main_override(config_service, temp_base_dir, minimal_main_config, pipeline_template_config):
+def test_get_pipeline_config_without_main_override(
+    config_service, temp_base_dir, minimal_main_config, pipeline_template_config
+):
     """测试Pipeline配置无主配置覆盖的情况"""
     # 创建主配置模板（不包含test_pipeline配置）
     main_template_path = os.path.join(temp_base_dir, "config-template.toml")
@@ -927,7 +931,6 @@ field1 = "main_value"  # 主配置的值
 field2 = "main_value2"
 """
 
-
     main_template_path = os.path.join(temp_base_dir, "config-template.toml")
     with open(main_template_path, "w", encoding="utf-8") as f:
         f.write(main_config_content)
@@ -940,6 +943,7 @@ field2 = "main_value2"
 
     # 执行合并（使用 ConfigService 的合并逻辑）
     from src.core.utils.config import merge_component_configs
+
     merged = merge_component_configs(provider_config, main_override, "test_provider", "Provider")
 
     # 验证：主配置优先
@@ -1061,9 +1065,7 @@ enabled_inputs = ["test_provider"]
     config_service.initialize()
 
     # 获取配置（只使用Schema默认值）
-    merged_config = config_service.get_provider_config_with_defaults(
-        "test_provider", "input", TestProviderConfig
-    )
+    merged_config = config_service.get_provider_config_with_defaults("test_provider", "input", TestProviderConfig)
 
     assert merged_config["type"] == "test_provider"
     assert merged_config["priority"] == 100
@@ -1103,9 +1105,7 @@ new_field = "from_main"
 
     config_service.initialize()
 
-    merged_config = config_service.get_provider_config_with_defaults(
-        "test_provider", "input", TestProviderConfig
-    )
+    merged_config = config_service.get_provider_config_with_defaults("test_provider", "input", TestProviderConfig)
 
     # 主配置覆盖应该生效
     assert merged_config["priority"] == 200
@@ -1162,9 +1162,7 @@ override_field = "from_main"
 
     config_service.initialize()
 
-    merged_config = config_service.get_provider_config_with_defaults(
-        "test_provider", "input", TestProviderConfig
-    )
+    merged_config = config_service.get_provider_config_with_defaults("test_provider", "input", TestProviderConfig)
 
     # 验证三级合并优先级：Schema < 主配置覆盖 < 本地配置
     assert merged_config["priority"] == 300  # 本地配置优先级最高
@@ -1209,9 +1207,7 @@ speed = 1.5
     config_service.initialize()
 
     # 正确的配置应该通过验证
-    merged_config = config_service.get_provider_config_with_defaults(
-        "test_provider", "output", StrictProviderConfig
-    )
+    merged_config = config_service.get_provider_config_with_defaults("test_provider", "output", StrictProviderConfig)
     assert merged_config["priority"] == 200
     assert merged_config["speed"] == 1.5
 
@@ -1232,9 +1228,7 @@ speed = "invalid_string"  # 类型错误：应该是float
 
     # 应该抛出ValidationError
     with pytest.raises(ValidationError):
-        config_service2.get_provider_config_with_defaults(
-            "test_provider", "output", StrictProviderConfig
-        )
+        config_service2.get_provider_config_with_defaults("test_provider", "output", StrictProviderConfig)
 
 
 def test_load_global_overrides(config_service, temp_base_dir):
@@ -1319,9 +1313,7 @@ enabled_inputs = ["auto_provider"]
     config_service.initialize()
 
     # Provider目录不存在，应该返回空配置（没有Schema时无法生成）
-    merged_config = config_service.get_provider_config_with_defaults(
-        "auto_provider", "input"
-    )
+    merged_config = config_service.get_provider_config_with_defaults("auto_provider", "input")
 
     # 由于没有提供Schema，无法生成配置
     assert merged_config == {}
@@ -1379,9 +1371,7 @@ def test_schema_has_no_enabled_field():
     schemas_with_enabled = verify_no_enabled_field_in_schemas()
 
     # 应该返回空列表（没有Schema包含enabled字段）
-    assert schemas_with_enabled == [], (
-        f"以下Schema包含enabled字段，违反架构要求: {schemas_with_enabled}"
-    )
+    assert schemas_with_enabled == [], f"以下Schema包含enabled字段，违反架构要求: {schemas_with_enabled}"
 
 
 # =============================================================================

@@ -108,6 +108,7 @@ class TestBiliDanmakuOfficialInputProvider:
 
         # 收集yield的RawData
         raw_data_list = []
+
         async def collect_raw_data():
             async for raw_data in provider._handle_message_from_bili(message_data):
                 raw_data_list.append(raw_data)
@@ -140,6 +141,7 @@ class TestBiliDanmakuOfficialInputProvider:
 
         # 收集yield的RawData
         raw_data_list = []
+
         async def collect_raw_data():
             async for raw_data in provider._handle_message_from_bili(message_data):
                 raw_data_list.append(raw_data)
@@ -165,6 +167,7 @@ class TestBiliDanmakuOfficialInputProvider:
 
         # 应该不抛出异常，只记录错误
         raw_data_list = []
+
         async def collect_raw_data():
             async for raw_data in provider._handle_message_from_bili(message_data):
                 raw_data_list.append(raw_data)

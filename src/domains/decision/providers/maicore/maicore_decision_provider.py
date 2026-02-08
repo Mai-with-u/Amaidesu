@@ -83,6 +83,15 @@ class MaiCoreDecisionProvider(DecisionProvider):
         action_cooldown_seconds: float = Field(default=5.0, gt=0.0, description="同一 Action 的最小间隔（秒）")
         max_suggested_actions: int = Field(default=3, ge=1, le=10, description="每条消息最大建议数量")
 
+    @classmethod
+    def get_registration_info(cls) -> Dict[str, Any]:
+        """
+        获取 Provider 注册信息
+
+        用于显式注册模式，避免模块导入时的自动注册。
+        """
+        return {"layer": "decision", "name": "maicore", "class": cls, "source": "builtin:maicore"}
+
     def __init__(self, config: Dict[str, Any]):
         self.provider_name = "maicore"
         """
@@ -160,7 +169,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
             ws_url=self.ws_url, router=self._router, event_bus=event_bus, provider_name="maicore"
         )
 
-        # 初始化 IntentParser（需要LLMService）
+        # 初始化 IntentParser（需要LLMManager）
         llm_service = dependencies.get("llm_service") if dependencies else None
         if llm_service:
             from src.domains.decision.intent_parser import IntentParser
@@ -169,7 +178,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
             await self._intent_parser.setup()
             self.logger.info("IntentParser初始化成功")
         else:
-            self.logger.warning("LLMService未找到，IntentParser功能将不可用")
+            self.logger.warning("LLMManager未找到，IntentParser功能将不可用")
 
         self.logger.info("MaiCoreDecisionProvider 初始化完成")
 

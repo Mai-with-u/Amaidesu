@@ -14,19 +14,11 @@ EventBus 单元测试
 """
 
 import asyncio
-from unittest.mock import patch
-from uuid import uuid4
 
 import pytest
 from pydantic import BaseModel, Field
 from src.core.event_bus import EventBus, EventStats, HandlerWrapper
 from src.core.events.payloads import RawDataPayload
-from src.core.events.payloads import (
-    MessageReadyPayload,
-    IntentPayload,
-    DecisionRequestPayload,
-)
-from src.core.events.names import CoreEvents
 from src.core.events.registry import EventRegistry
 
 # =============================================================================
@@ -36,12 +28,14 @@ from src.core.events.registry import EventRegistry
 
 class SimpleTestEvent(BaseModel):
     """简单测试事件 Model"""
+
     message: str = Field(default="test", description="测试消息")
     id: int = Field(default=0, description="ID")
 
 
 class TestRequestEvent(BaseModel):
     """请求测试事件 Model"""
+
     query: str = Field(..., description="查询内容")
 
 
@@ -300,11 +294,7 @@ async def test_event_validation_with_registered_event(event_bus: EventBus):
     event_bus.on("core.test.validation.event", handler)
 
     # 发布符合验证的数据（使用 Payload 类）
-    valid_data = RawDataPayload(
-        content="test content",
-        source="test_source",
-        data_type="text"
-    )
+    valid_data = RawDataPayload(content="test content", source="test_source", data_type="text")
     await event_bus.emit("core.test.validation.event", valid_data, source="test")
     await asyncio.sleep(0.1)
 
@@ -447,6 +437,7 @@ async def test_error_isolation_false_propagates_error(event_bus: EventBus):
 @pytest.mark.asyncio
 async def test_error_count_incremented(event_bus: EventBus):
     """测试处理器包装器的错误计数递增"""
+
     async def failing_handler(event_name, data, source):
         raise ValueError("Test error")
 
@@ -467,6 +458,7 @@ async def test_error_count_incremented(event_bus: EventBus):
 @pytest.mark.asyncio
 async def test_error_stats_updated(event_bus: EventBus):
     """测试事件统计中的错误计数更新"""
+
     async def failing_handler(event_name, data, source):
         raise ValueError("Test error")
 
@@ -510,6 +502,7 @@ async def test_stats_disabled(event_bus_no_stats: EventBus):
 @pytest.mark.asyncio
 async def test_get_stats_single_event(event_bus: EventBus):
     """测试获取单个事件的统计"""
+
     async def handler(event_name, data, source):
         pass
 
@@ -528,6 +521,7 @@ async def test_get_stats_single_event(event_bus: EventBus):
 @pytest.mark.asyncio
 async def test_get_all_stats(event_bus: EventBus):
     """测试获取所有事件的统计"""
+
     async def handler1(event_name, data, source):
         pass
 
@@ -552,6 +546,7 @@ async def test_get_all_stats(event_bus: EventBus):
 @pytest.mark.asyncio
 async def test_reset_stats_single_event(event_bus: EventBus):
     """测试重置单个事件的统计"""
+
     async def handler(event_name, data, source):
         pass
 
@@ -572,6 +567,7 @@ async def test_reset_stats_single_event(event_bus: EventBus):
 @pytest.mark.asyncio
 async def test_reset_stats_all_events(event_bus: EventBus):
     """测试重置所有事件的统计"""
+
     async def handler(event_name, data, source):
         pass
 
@@ -591,6 +587,7 @@ async def test_reset_stats_all_events(event_bus: EventBus):
 @pytest.mark.asyncio
 async def test_stats_execution_time(event_bus: EventBus):
     """测试统计执行时间"""
+
     async def slow_handler(event_name, data, source):
         await asyncio.sleep(0.05)  # 50ms
 
@@ -612,6 +609,7 @@ async def test_stats_execution_time(event_bus: EventBus):
 @pytest.mark.asyncio
 async def test_request_response_basic(event_bus: EventBus):
     """测试基本的请求-响应模式"""
+
     # 设置响应处理器
     async def response_handler(event_name, data, source):
         response_payload = SimpleTestEvent(message="success")
@@ -639,6 +637,7 @@ async def test_request_timeout(event_bus: EventBus):
 @pytest.mark.asyncio
 async def test_request_with_custom_timeout(event_bus: EventBus):
     """测试自定义超时时间"""
+
     async def slow_handler(event_name, data, source):
         await asyncio.sleep(0.2)
 
@@ -668,6 +667,7 @@ async def test_request_during_cleanup(event_bus: EventBus):
 @pytest.mark.asyncio
 async def test_clear_removes_all_handlers(event_bus: EventBus):
     """测试 clear() 清除所有处理器"""
+
     async def handler1(event_name, data, source):
         pass
 
@@ -690,6 +690,7 @@ async def test_clear_removes_all_handlers(event_bus: EventBus):
 @pytest.mark.asyncio
 async def test_clear_removes_all_stats(event_bus: EventBus):
     """测试 clear() 清除所有统计"""
+
     async def handler(event_name, data, source):
         pass
 
@@ -733,6 +734,7 @@ async def test_cleanup_clears_pending_requests(event_bus: EventBus):
 @pytest.mark.asyncio
 async def test_emit_during_cleanup_ignored(event_bus: EventBus):
     """测试 cleanup 期间的事件发布被忽略"""
+
     async def handler(event_name, data, source):
         pass
 
@@ -757,6 +759,7 @@ async def test_emit_during_cleanup_ignored(event_bus: EventBus):
 @pytest.mark.asyncio
 async def test_get_listeners_count(event_bus: EventBus):
     """测试获取监听器数量"""
+
     async def handler1(event_name, data, source):
         pass
 
@@ -775,6 +778,7 @@ async def test_get_listeners_count(event_bus: EventBus):
 @pytest.mark.asyncio
 async def test_list_events(event_bus: EventBus):
     """测试列出所有已注册的事件"""
+
     async def handler(event_name, data, source):
         pass
 
@@ -856,6 +860,7 @@ async def test_concurrent_handlers(event_bus: EventBus):
 @pytest.mark.asyncio
 async def test_empty_event_name(event_bus: EventBus):
     """测试空事件名称"""
+
     async def handler(event_name, data, source):
         pass
 
@@ -876,6 +881,7 @@ async def test_empty_event_name(event_bus: EventBus):
 @pytest.mark.asyncio
 async def test_handler_wrapper_defaults():
     """测试 HandlerWrapper 默认值"""
+
     async def handler(event_name, data, source):
         pass
 
@@ -898,6 +904,160 @@ async def test_event_stats_defaults():
     assert stats.last_emit_time == 0
     assert stats.last_error_time == 0
     assert stats.total_execution_time_ms == 0
+
+
+# =============================================================================
+# 活跃 emit 跟踪测试（问题 #2 修复验证）
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_active_emits_tracked(event_bus: EventBus):
+    """测试 cleanup 时正确跟踪活跃的 emit"""
+    results = []
+    handler_started = asyncio.Event()
+    handler_should_finish = asyncio.Event()
+
+    async def slow_handler(event_name, data, source):
+        handler_started.set()
+        # 等待外部信号，模拟长时间运行的事件处理
+        await handler_should_finish.wait()
+        results.append(event_name)
+
+    event_bus.on("test.event", slow_handler)
+
+    # 启动一个 emit，但不等待它完成
+    task = asyncio.create_task(event_bus.emit("test.event", SimpleTestEvent(message="test"), source="test"))
+    await handler_started.wait()
+
+    # 应该有一个活跃的 emit
+    assert len(event_bus._active_emits) > 0
+
+    # 清理时应该等待这个 emit 完成
+    handler_should_finish.set()
+    await event_bus.cleanup()
+
+    # 等待 emit 任务完成
+    await task
+
+    # 所有 emit 应该完成
+    assert len(event_bus._active_emits) == 0
+    # 事件应该被处理
+    assert len(results) == 1
+
+
+@pytest.mark.asyncio
+async def test_cleanup_waits_for_active_emits(event_bus: EventBus):
+    """测试 cleanup 会等待所有活跃 emit 完成"""
+    results = []
+    handlers_finished = []
+
+    async def medium_handler(event_name, data, source):
+        await asyncio.sleep(0.1)  # 模拟 100ms 的处理时间
+        results.append(event_name)
+        handlers_finished.append(event_name)
+
+    event_bus.on("test.event", medium_handler)
+
+    # 并发启动多个 emit
+    tasks = [asyncio.create_task(event_bus.emit("test.event", SimpleTestEvent(id=i), source="test")) for i in range(3)]
+
+    # 稍作延迟，让 emit 开始执行
+    await asyncio.sleep(0.05)
+
+    # 应该有活跃的 emit
+    active_count = len(event_bus._active_emits)
+    assert active_count > 0
+
+    # cleanup 应该等待所有 emit 完成
+    start = asyncio.get_event_loop().time()
+    await event_bus.cleanup()
+    elapsed = asyncio.get_event_loop().time() - start
+
+    # 等待所有任务完成
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+    # 所有事件都应该被处理
+    assert len(results) == 3
+    assert len(event_bus._active_emits) == 0
+
+    # cleanup 应该等待所有 handler 完成
+    # 由于 emit 是后台任务，cleanup 会等待它们完成
+    # 应该等待一些时间（至少 40ms，略小于 50ms 以容忍时间测量误差）
+    assert elapsed >= 0.04
+    assert elapsed < 5.0
+
+
+@pytest.mark.asyncio
+async def test_cleanup_timeout_on_slow_handlers(event_bus: EventBus):
+    """测试 cleanup 在超时后会继续"""
+    handler_started = asyncio.Event()
+
+    async def very_slow_handler(event_name, data, source):
+        handler_started.set()
+        # 模拟一个非常慢的 handler（超过超时时间）
+        await asyncio.sleep(10)
+
+    event_bus.on("test.event", very_slow_handler)
+
+    # 启动一个慢的 emit
+    task = asyncio.create_task(event_bus.emit("test.event", SimpleTestEvent(message="test"), source="test"))
+    await handler_started.wait()
+
+    # cleanup 应该在 5 秒超时后继续
+    start = asyncio.get_event_loop().time()
+    await event_bus.cleanup()
+    elapsed = asyncio.get_event_loop().time() - start
+
+    # 应该等待约 5 秒（超时限制）
+    assert 4.5 < elapsed < 6.0
+
+    # 取消慢任务
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_emit_cleanup_race_condition(event_bus: EventBus):
+    """测试 emit 和 cleanup 之间的竞态条件修复"""
+    results = []
+    emit_count = 0
+    max_emits = 10
+
+    async def counting_handler(event_name, data, source):
+        nonlocal emit_count
+        await asyncio.sleep(0.05)
+        results.append(data["id"])
+        emit_count += 1
+
+    event_bus.on("test.event", counting_handler)
+
+    # 并发启动多个 emit
+    tasks = []
+    for i in range(max_emits):
+        task = asyncio.create_task(event_bus.emit("test.event", SimpleTestEvent(id=i), source="test"))
+        tasks.append(task)
+        # 错开启动时间，模拟真实场景
+        await asyncio.sleep(0.01)
+
+    # 立即开始 cleanup（不应该有竞态条件）
+    await event_bus.cleanup()
+
+    # 等待所有任务完成
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+    # 等待所有 handler 完成
+    await asyncio.sleep(0.2)
+
+    # 所有 emit 应该被追踪并完成
+    assert len(event_bus._active_emits) == 0
+
+    # 所有事件应该被处理（即使 cleanup 发生在 emit 过程中）
+    assert emit_count == max_emits
+    assert len(results) == max_emits
 
 
 # =============================================================================

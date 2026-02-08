@@ -168,6 +168,7 @@ def configure_from_config(config_dict: dict | None = None) -> None:
             if split_by_session:
                 # 按会话分割：每次启动生成新文件
                 import datetime
+
                 time_suffix = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 file_path = os.path.join(directory, f"amaidesu_{time_suffix}.log")
             else:

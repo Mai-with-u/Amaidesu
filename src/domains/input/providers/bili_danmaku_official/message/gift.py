@@ -1,11 +1,12 @@
 from typing import Dict, Any, Optional
-from dataclasses import dataclass
+from pydantic import BaseModel
 from maim_message import MessageBase, Seg
 from .base import BiliBaseMessage
 
 
-@dataclass
-class AnchorInfo:
+class AnchorInfo(BaseModel):
+    """主播信息"""
+
     uid: int  # 收礼主播uid
     open_id: str  # 收礼主播唯一标识
     union_id: str  # 用户在同一个开发者下的唯一标识(默认为空，根据业务需求单独申请开通)
@@ -13,21 +14,22 @@ class AnchorInfo:
     uface: str  # 收礼主播头像
 
 
-@dataclass
-class ComboInfo:
+class ComboInfo(BaseModel):
+    """连击信息"""
+
     combo_base_num: int  # 每次连击赠送的道具数量
     combo_count: int  # 连击次数
     combo_id: str  # 连击id
     combo_timeout: int  # 连击有效期秒
 
 
-@dataclass
-class BlindGift:
+class BlindGift(BaseModel):
+    """盲盒信息"""
+
     blind_gift_id: int  # 盲盒id
     status: bool  # 是否是盲盒
 
 
-@dataclass
 class GiftMessage(BiliBaseMessage):
     """礼物消息 - LIVE_OPEN_PLATFORM_SEND_GIFT"""
 

@@ -34,27 +34,11 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
         app_id: str = Field(..., description="应用ID")
         access_key: str = Field(..., description="访问密钥")
         access_key_secret: str = Field(..., description="访问密钥Secret")
-        api_host: str = Field(
-            default="https://live-open.biliapi.com",
-            description="API主机地址"
-        )
-        message_cache_size: int = Field(
-            default=1000,
-            description="消息缓存大小",
-            ge=1
-        )
-        context_tags: Optional[list] = Field(
-            default=None,
-            description="Prompt上下文标签"
-        )
-        enable_template_info: bool = Field(
-            default=False,
-            description="启用模板信息"
-        )
-        template_items: dict = Field(
-            default_factory=dict,
-            description="模板项"
-        )
+        api_host: str = Field(default="https://live-open.biliapi.com", description="API主机地址")
+        message_cache_size: int = Field(default=1000, description="消息缓存大小", ge=1)
+        context_tags: Optional[list] = Field(default=None, description="Prompt上下文标签")
+        enable_template_info: bool = Field(default=False, description="启用模板信息")
+        template_items: dict = Field(default_factory=dict, description="模板项")
 
     def __init__(self, config: dict):
         super().__init__(config)

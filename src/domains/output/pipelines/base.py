@@ -5,12 +5,12 @@ OutputPipeline 基类和协议定义
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, Any, Optional, Protocol, runtime_checkable
 
 from src.core.utils.logger import get_logger
 from src.domains.output.parameters.render_parameters import ExpressionParameters
+from src.core.base.pipeline_stats import PipelineStats
 
 
 class PipelineErrorHandling(str, Enum):
@@ -19,24 +19,6 @@ class PipelineErrorHandling(str, Enum):
     CONTINUE = "continue"  # 记录日志，继续执行下一个 Pipeline
     STOP = "stop"  # 停止执行，抛出异常
     DROP = "drop"  # 丢弃消息，不执行后续 Pipeline
-
-
-@dataclass
-class PipelineStats:
-    """Pipeline 统计信息"""
-
-    processed_count: int = 0  # 处理次数
-    dropped_count: int = 0  # 丢弃次数
-    error_count: int = 0  # 错误次数
-    total_duration_ms: float = 0  # 总处理时间（毫秒）
-    filtered_words_count: int = 0  # 过滤的敏感词数量（仅用于统计）
-
-    @property
-    def avg_duration_ms(self) -> float:
-        """平均处理时间（毫秒）"""
-        if self.processed_count == 0:
-            return 0.0
-        return self.total_duration_ms / self.processed_count
 
 
 class PipelineException(Exception):

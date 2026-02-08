@@ -1,16 +1,60 @@
 from abc import ABC, abstractmethod
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 import importlib
 import inspect
 import os
 import sys
 import time
-from typing import Dict, List, Optional, Any, Type, Protocol, runtime_checkable
+from typing import Callable, Dict, List, Optional, Any, Type, Protocol, runtime_checkable
 
 from src.core.utils.logger import get_logger
 from src.core.utils.config import load_component_specific_config, merge_component_configs
+from src.core.base.pipeline_stats import PipelineStats
+
+
+# ==================== PipelineContext（支持回滚的执行上下文） ====================
+
+
+@dataclass
+class PipelineContext:
+    """
+    管道执行上下文，支持回滚
+
+    用于在管道执行失败时恢复到原始状态，防止数据损坏。
+    问题#4修复：在CONTINUE模式下，管道失败后需要回滚副作用，避免文本处于部分修改状态。
+    """
+
+    original_text: str
+    original_metadata: Dict[str, Any]
+    rollback_actions: List[Callable] = field(default_factory=list)
+
+    def add_rollback(self, action: Callable) -> None:
+        """
+        添加回滚动作
+
+        Args:
+            action: 回滚函数，可以是同步或异步函数
+        """
+        self.rollback_actions.append(action)
+
+    async def rollback(self) -> None:
+        """
+        执行所有回滚动作（逆序执行）
+
+        回滚动作按添加的逆序执行，确保正确的状态恢复。
+        """
+        logger = get_logger("PipelineContext")
+        for action in reversed(self.rollback_actions):
+            try:
+                if asyncio.iscoroutinefunction(action):
+                    await action()
+                else:
+                    action()
+            except Exception as e:
+                # 回滚失败不应该中断整体回滚流程
+                logger.warning(f"回滚动作执行失败: {e}", exc_info=True)
 
 
 # ==================== TextPipeline 接口（新架构） ====================
@@ -22,23 +66,6 @@ class PipelineErrorHandling(str, Enum):
     CONTINUE = "continue"  # 记录日志，继续执行下一个 Pipeline
     STOP = "stop"  # 停止执行，抛出异常
     DROP = "drop"  # 丢弃消息，不执行后续 Pipeline
-
-
-@dataclass
-class PipelineStats:
-    """Pipeline 统计信息"""
-
-    processed_count: int = 0  # 处理次数
-    dropped_count: int = 0  # 丢弃次数
-    error_count: int = 0  # 错误次数
-    total_duration_ms: float = 0  # 总处理时间（毫秒）
-
-    @property
-    def avg_duration_ms(self) -> float:
-        """平均处理时间（毫秒）"""
-        if self.processed_count == 0:
-            return 0.0
-        return self.total_duration_ms / self.processed_count
 
 
 class PipelineException(Exception):
@@ -68,6 +95,9 @@ class TextPipeline(Protocol):
         - InputDomain.normalize() 方法内部调用
         - 在创建 NormalizedMessage 之前对文本进行预处理
         - 可返回 None 表示丢弃该消息
+
+    问题#4修复：process() 方法现在可以接收可选的 PipelineContext 参数，
+    用于在管道失败时支持回滚操作。
     """
 
     priority: int
@@ -75,13 +105,16 @@ class TextPipeline(Protocol):
     error_handling: PipelineErrorHandling
     timeout_seconds: float
 
-    async def process(self, text: str, metadata: Dict[str, Any]) -> Optional[str]:
+    async def process(
+        self, text: str, metadata: Dict[str, Any], context: Optional["PipelineContext"] = None
+    ) -> Optional[str]:
         """
         处理文本
 
         Args:
             text: 待处理的文本
             metadata: 元数据（如 user_id、source 等）
+            context: 可选的执行上下文，用于支持回滚（问题#4新增）
 
         Returns:
             处理后的文本，或 None 表示丢弃该消息
@@ -106,6 +139,9 @@ class TextPipelineBase(ABC):
     TextPipeline 基类
 
     提供默认实现，子类只需实现 _process() 方法。
+
+    问题#4修复：process() 方法现在可以接收可选的 PipelineContext 参数，
+    子类可以通过 context.add_rollback() 注册回滚动作。
     """
 
     priority: int = 500
@@ -137,11 +173,25 @@ class TextPipelineBase(ABC):
                 self.logger.warning(f"无效的 error_handling 值: {error_handling_str}，使用默认值 CONTINUE")
                 self.error_handling = PipelineErrorHandling.CONTINUE
 
-    async def process(self, text: str, metadata: Dict[str, Any]) -> Optional[str]:
-        """处理文本（包装 _process 并记录统计）"""
+    async def process(
+        self, text: str, metadata: Dict[str, Any], context: Optional[PipelineContext] = None
+    ) -> Optional[str]:
+        """
+        处理文本（包装 _process 并记录统计）
+
+        问题#4修复：添加可选的 context 参数，传递给子类的 _process() 方法。
+
+        Args:
+            text: 待处理的文本
+            metadata: 元数据
+            context: 可选的执行上下文，用于支持回滚
+
+        Returns:
+            处理后的文本，或 None 表示丢弃
+        """
         start_time = time.time()
         try:
-            result = await self._process(text, metadata)
+            result = await self._process(text, metadata, context)
             duration_ms = (time.time() - start_time) * 1000
             self._stats.processed_count += 1
             self._stats.total_duration_ms += duration_ms
@@ -151,13 +201,19 @@ class TextPipelineBase(ABC):
             raise
 
     @abstractmethod
-    async def _process(self, text: str, metadata: Dict[str, Any]) -> Optional[str]:
+    async def _process(
+        self, text: str, metadata: Dict[str, Any], context: Optional[PipelineContext] = None
+    ) -> Optional[str]:
         """
         实际处理文本（子类实现）
+
+        问题#4修复：添加可选的 context 参数，子类可以使用 context.add_rollback()
+        注册回滚动作，以便在管道失败时恢复状态。
 
         Args:
             text: 待处理的文本
             metadata: 元数据
+            context: 可选的执行上下文，用于支持回滚
 
         Returns:
             处理后的文本，或 None 表示丢弃
@@ -183,7 +239,6 @@ class TextPipelineBase(ABC):
         self._stats = PipelineStats()
 
 
-
 class PipelineManager:
     """
     管道管理器，负责 TextPipeline 的加载、排序和执行。
@@ -207,7 +262,6 @@ class PipelineManager:
 
         self.logger = get_logger("PipelineManager")
         # 注意：完全移除 self.core = core（TextPipeline 不使用）
-
 
     # ==================== TextPipeline 方法（新架构） ====================
 
@@ -241,6 +295,8 @@ class PipelineManager:
         这是 InputDomain (Input Domain: 输入域) 中的文本预处理入口点。
         在 RawData → NormalizedMessage 转换过程中调用。
 
+        问题#4修复：使用 PipelineContext 支持回滚，防止管道失败时数据损坏。
+
         Args:
             text: 待处理的文本
             metadata: 元数据（如 user_id、source 等）
@@ -257,6 +313,8 @@ class PipelineManager:
         async with self._text_pipeline_lock:
             self._ensure_text_pipelines_sorted()
 
+            # 创建执行上下文，保存原始状态用于回滚
+            context = PipelineContext(original_text=text, original_metadata=metadata.copy())
             current_text = text
 
             for pipeline in self._text_pipelines:
@@ -273,7 +331,7 @@ class PipelineManager:
                     # 带超时的处理（current_text 在此处保证非 None，因为 None 会提前返回）
                     assert current_text is not None
                     result = await asyncio.wait_for(
-                        pipeline.process(current_text, metadata),
+                        pipeline.process(current_text, metadata, context),
                         timeout=pipeline.timeout_seconds,
                     )
                     current_text = result
@@ -285,6 +343,8 @@ class PipelineManager:
                         self.logger.debug(f"TextPipeline {pipeline_name} 丢弃了消息 (耗时 {duration_ms:.2f}ms)")
                         stats = pipeline.get_stats()
                         stats.dropped_count += 1
+                        # DROP模式：回滚所有副作用
+                        await context.rollback()
                         return None
 
                     self.logger.debug(f"TextPipeline {pipeline_name} 处理完成 (耗时 {duration_ms:.2f}ms)")
@@ -297,14 +357,22 @@ class PipelineManager:
                     stats.error_count += 1
 
                     if pipeline.error_handling == PipelineErrorHandling.STOP:
+                        # STOP模式：回滚所有副作用后抛出异常
+                        await context.rollback()
                         raise error from timeout_error
                     elif pipeline.error_handling == PipelineErrorHandling.DROP:
+                        # DROP模式：回滚所有副作用后丢弃消息
                         stats.dropped_count += 1
+                        await context.rollback()
                         return None
-                    # CONTINUE: 继续执行下一个 Pipeline
+                    else:
+                        # CONTINUE模式：回滚当前管道的副作用，使用原始文本继续
+                        await context.rollback()
+                        current_text = context.original_text
 
                 except PipelineException:
-                    raise  # 直接向上抛出
+                    # PipelineException 直接向上抛出
+                    raise
 
                 except Exception as e:
                     error = PipelineException(pipeline_name, f"处理失败: {e}", original_error=e)
@@ -314,11 +382,18 @@ class PipelineManager:
                     stats.error_count += 1
 
                     if pipeline.error_handling == PipelineErrorHandling.STOP:
+                        # STOP模式：回滚所有副作用后抛出异常
+                        await context.rollback()
                         raise error from e
                     elif pipeline.error_handling == PipelineErrorHandling.DROP:
+                        # DROP模式：回滚所有副作用后丢弃消息
                         stats.dropped_count += 1
+                        await context.rollback()
                         return None
-                    # CONTINUE: 继续执行下一个 Pipeline
+                    else:
+                        # CONTINUE模式：回滚当前管道的副作用，使用原始文本继续
+                        await context.rollback()
+                        current_text = context.original_text
 
             return current_text
 
@@ -346,7 +421,9 @@ class PipelineManager:
     # ==================== TextPipeline 加载 ====================
 
     async def load_text_pipelines(
-        self, pipeline_base_dir: str = "src/domains/input/pipelines", root_config_pipelines_section: Optional[Dict[str, Any]] = None
+        self,
+        pipeline_base_dir: str = "src/domains/input/pipelines",
+        root_config_pipelines_section: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
         扫描并加载 TextPipeline 类型的管道。

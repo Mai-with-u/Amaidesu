@@ -9,7 +9,7 @@ import time
 import threading
 import queue
 import tkinter as tk
-from typing import Optional
+from typing import Optional, Dict, Any
 
 try:
     import customtkinter as ctk
@@ -23,7 +23,6 @@ from pydantic import Field
 
 from src.core.base.output_provider import OutputProvider
 from src.core.base.base import RenderParameters
-from src.core.events.names import CoreEvents
 from src.core.utils.logger import get_logger
 from src.services.config.schemas.schemas.base import BaseProviderConfig
 
@@ -247,7 +246,16 @@ class SubtitleOutputProvider(OutputProvider):
         always_show_window: bool = Field(default=True, description="是否始终显示窗口")
         show_in_taskbar: bool = Field(default=True, description="是否在任务栏显示")
         window_minimizable: bool = Field(default=True, description="窗口是否可最小化")
-        show_waiting_text: bool = Field(default=False, description="是否显示等待文本")
+        show_waiting_text: bool = Field(default=False, description="是否显示等待文字（设为 false 在无内容时透明）")
+
+    @classmethod
+    def get_registration_info(cls) -> Dict[str, Any]:
+        """
+        获取 Provider 注册信息
+
+        用于显式注册模式，避免模块导入时的自动注册。
+        """
+        return {"layer": "output", "name": "subtitle", "class": cls, "source": "builtin:subtitle"}
 
     def __init__(self, config: dict):
         super().__init__(config)

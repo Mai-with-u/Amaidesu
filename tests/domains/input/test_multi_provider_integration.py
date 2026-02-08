@@ -43,25 +43,15 @@ async def test_multiple_providers_concurrent():
         content="来自控制台的消息",
         source="console",
         data_type="text",
-        metadata={"user": "控制台用户A", "user_id": "console_user"}
+        metadata={"user": "控制台用户A", "user_id": "console_user"},
     )
     raw_data2 = RawData(
-        content={
-            "text": "来自弹幕的消息",
-            "user_name": "粉丝B",
-            "user_id": "111"
-        },
+        content={"text": "来自弹幕的消息", "user_name": "粉丝B", "user_id": "111"},
         source="mock_danmaku",
-        data_type="danmaku"
+        data_type="danmaku",
     )
     raw_data3 = RawData(
-        content={
-            "user_name": "用户C",
-            "gift_name": "礼物D",
-            "count": 1
-        },
-        source="console",
-        data_type="gift"
+        content={"user_name": "用户C", "gift_name": "礼物D", "count": 1}, source="console", data_type="gift"
     )
 
     # 并发发布

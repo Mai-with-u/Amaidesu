@@ -19,9 +19,10 @@ from maim_message import MessageBase, BaseMessageInfo, UserInfo, Seg, FormatInfo
 
 class ControlMethod(Enum):
     """游戏控制方式枚举"""
+
     MOUSE_CLICK = "mouse_click"  # 鼠标单击
-    ENTER_KEY = "enter_key"      # Enter键
-    SPACE_KEY = "space_key"      # 空格键
+    ENTER_KEY = "enter_key"  # Enter键
+    SPACE_KEY = "space_key"  # 空格键
 
 
 class MainosabaPlugin(BasePlugin):
@@ -128,7 +129,7 @@ class MainosabaPlugin(BasePlugin):
                     self.logger.info("开始截屏识别...")
                     game_text = await self.capture_and_recognize()
                     self.logger.info(f"识别完成，结果: {game_text[:50] if game_text else 'None'}...")
-                    
+
                     if game_text is None:
                         self.logger.info("未识别到有效文本，继续监听")
                     elif game_text == self.last_game_text:
@@ -184,7 +185,7 @@ class MainosabaPlugin(BasePlugin):
         if not self.vlm_client:
             self.logger.warning("VLM 客户端未初始化，无法识别文本")
             return None
-        
+
         try:
             # 构建 prompt
             prompt = """请识别这张游戏截图中的对话文本。
@@ -200,30 +201,26 @@ class MainosabaPlugin(BasePlugin):
 或者
 游戏角色名:(角色心理描写)
 """
-            
+
             # 构建图像 URL（LLMClient 支持 base64 格式）
             image_data_url = f"data:image/png;base64,{image_base64}"
-            
+
             # 调用 VLM（自动处理 HTTP 请求、错误、Token 统计）
-            result = await self.vlm_client.vision_completion(
-                prompt=prompt,
-                images=image_data_url,
-                max_tokens=500
-            )
-            
+            result = await self.vlm_client.vision_completion(prompt=prompt, images=image_data_url, max_tokens=500)
+
             if not result["success"]:
                 self.logger.error(f"VLM识别失败: {result.get('error')}")
                 return None
-            
+
             content = result["content"].strip()
-            
+
             # 过滤无效响应
             if content in ["无对话文本", "没有对话文本", "No dialogue text", ""]:
                 return None
-            
+
             self.logger.info(f"VLM识别结果: {content[:100]}...")
             return content
-            
+
         except Exception as e:
             self.logger.error(f"识别游戏文本出错: {e}", exc_info=True)
             return None

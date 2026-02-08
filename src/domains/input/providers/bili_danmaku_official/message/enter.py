@@ -1,10 +1,8 @@
 from typing import Dict, Any, Optional
-from dataclasses import dataclass
 from maim_message import MessageBase, Seg
 from .base import BiliBaseMessage
 
 
-@dataclass
 class EnterMessage(BiliBaseMessage):
     """
     进入直播间消息 - LIVE_OPEN_PLATFORM_LIVE_ROOM_ENTER

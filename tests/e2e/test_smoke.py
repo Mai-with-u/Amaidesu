@@ -15,6 +15,7 @@ import src.domains.decision.providers  # noqa: F401
 
 class SimpleTestEvent(BaseModel):
     """简单测试事件"""
+
     data: str = Field(..., description="测试数据")
 
 

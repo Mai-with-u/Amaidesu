@@ -1,18 +1,18 @@
 from typing import Dict, Any, Optional
-from dataclasses import dataclass
+from pydantic import BaseModel
 from maim_message import MessageBase, Seg
 from .base import BiliBaseMessage
 
 
-@dataclass
-class UserInfo:
+class UserInfo(BaseModel):
+    """用户信息"""
+
     open_id: str  # 用户唯一标识
     union_id: str  # 用户在同一个开发者下的唯一标识(默认为空，根据业务需求单独申请开通)
     uname: str  # 用户昵称
     uface: str  # 用户头像
 
 
-@dataclass
 class GuardMessage(BiliBaseMessage):
     """大航海消息 - LIVE_OPEN_PLATFORM_GUARD"""
 

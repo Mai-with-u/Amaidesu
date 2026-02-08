@@ -39,39 +39,13 @@ class ReadPingmuInputProvider(InputProvider):
 
         type: Literal["read_pingmu"] = "read_pingmu"
         api_key: str = Field(default="", description="API密钥")
-        base_url: str = Field(
-            default="https://dashscope.aliyuncs.com/compatible-mode/v1",
-            description="API基础URL"
-        )
-        model_name: str = Field(
-            default="qwen2.5-vl-72b-instruct",
-            description="模型名称"
-        )
-        screenshot_interval: float = Field(
-            default=0.3,
-            description="截图间隔（秒）",
-            ge=0.1
-        )
-        diff_threshold: float = Field(
-            default=25.0,
-            description="差异阈值",
-            ge=0.0
-        )
-        check_window: int = Field(
-            default=3,
-            description="检查窗口",
-            ge=1
-        )
-        max_cache_size: int = Field(
-            default=5,
-            description="最大缓存大小",
-            ge=1
-        )
-        max_cached_images: int = Field(
-            default=5,
-            description="最大缓存图像数",
-            ge=1
-        )
+        base_url: str = Field(default="https://dashscope.aliyuncs.com/compatible-mode/v1", description="API基础URL")
+        model_name: str = Field(default="qwen2.5-vl-72b-instruct", description="模型名称")
+        screenshot_interval: float = Field(default=0.3, description="截图间隔（秒）", ge=0.1)
+        diff_threshold: float = Field(default=25.0, description="差异阈值", ge=0.0)
+        check_window: int = Field(default=3, description="检查窗口", ge=1)
+        max_cache_size: int = Field(default=5, description="最大缓存大小", ge=1)
+        max_cached_images: int = Field(default=5, description="最大缓存图像数", ge=1)
 
     def __init__(self, config: Dict[str, Any]):
         """
@@ -148,7 +122,9 @@ class ReadPingmuInputProvider(InputProvider):
             # 启动后台任务
             self._monitor_task = asyncio.create_task(self._monitoring_loop(), name="ScreenMonitorLoop")
 
-            self.logger.info(f"ReadPingmuInputProvider 已启动 (间隔: {self.typed_config.screenshot_interval}s, 阈值: {self.typed_config.diff_threshold})")
+            self.logger.info(
+                f"ReadPingmuInputProvider 已启动 (间隔: {self.typed_config.screenshot_interval}s, 阈值: {self.typed_config.diff_threshold})"
+            )
 
         except Exception as e:
             self.logger.error(f"启动 ReadPingmuInputProvider 失败: {e}", exc_info=True)

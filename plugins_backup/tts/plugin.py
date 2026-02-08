@@ -66,8 +66,10 @@ class TTSPlugin(BasePlugin):
         self.output_device_name = self.tts_config.get("output_device_name") or None
         self.output_device_index = self._find_device_index(self.output_device_name, kind="output")
         self.tts_lock = asyncio.Lock()
-        
-        self.logger.info(f"TTS 初始化完成，Edge TTS 语音: {self.voice}, 输出设备: {self.output_device_name or '默认设备'}")
+
+        self.logger.info(
+            f"TTS 初始化完成，Edge TTS 语音: {self.voice}, 输出设备: {self.output_device_name or '默认设备'}"
+        )
 
         # --- UDP 广播配置 ---
         udp_config = self.tts_config.get("udp_broadcast", {})
@@ -122,6 +124,7 @@ class TTSPlugin(BasePlugin):
     async def setup(self):
         """注册处理来自 MaiCore 的 'text' 类型消息"""
         await super().setup()
+
         # 创建包装函数来返回 Task 而不是 Coroutine
         def websocket_handler_wrapper(message):
             return asyncio.create_task(self.handle_maicore_message(message))
@@ -279,66 +282,82 @@ class TTSPlugin(BasePlugin):
                         sd.play(audio_array, samplerate=samplerate, device=self.output_device_index, blocking=True)
                 else:
                     try:
-                        expected_duration = duration_seconds if duration_seconds is not None else len(audio_array) / samplerate
+                        expected_duration = (
+                            duration_seconds if duration_seconds is not None else len(audio_array) / samplerate
+                        )
                         self.logger.debug(f"预期播放时长: {expected_duration:.3f} 秒")
-                        
+
                         # 停止所有现有播放
                         try:
                             sd.stop()
                         except:
                             pass
-                        
+
                         import time
+
                         actual_start_time = time.time()
-                        
+
                         # 使用非阻塞播放 + 手动等待
                         sd.play(audio_array, samplerate=samplerate, device=self.output_device_index)
-                        
+
                         # 手动等待完整的音频时长 + 缓冲时间
                         wait_time = expected_duration + 0.3
                         self.logger.debug(f"手动等待音频播放: {wait_time:.3f} 秒")
                         await asyncio.sleep(wait_time)
-                        
+
                         # 确保播放停止
                         sd.stop()
-                        
+
                         actual_end_time = time.time()
                         actual_total_time = actual_end_time - actual_start_time
                         self.logger.info(f"TTS 播放完成，总耗时: {actual_total_time:.3f} 秒")
-                        
+
                     except Exception as play_error:
                         self.logger.error(f"TTS 播放失败: {play_error}")
                         # 备用播放方案
                         try:
                             self.logger.info("尝试 TTS 备用播放方案")
-                            backup_filename = tmp_filename if tmp_filename else f"backup_tts_audio_{int(time.time())}.mp3"
+                            backup_filename = (
+                                tmp_filename if tmp_filename else f"backup_tts_audio_{int(time.time())}.mp3"
+                            )
                             if not os.path.exists(backup_filename):
                                 sf.write(backup_filename, audio_array, samplerate)
-                            
+
                             import subprocess
                             import platform
-                            
+
                             if platform.system() == "Windows":
-                                cmd = ['powershell', '-c', f'(New-Object Media.SoundPlayer "{backup_filename}").PlaySync()']
-                                process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                cmd = [
+                                    "powershell",
+                                    "-c",
+                                    f'(New-Object Media.SoundPlayer "{backup_filename}").PlaySync()',
+                                ]
+                                process = await asyncio.create_subprocess_exec(
+                                    *cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                                )
                                 await process.wait()
                             else:
-                                for player in ['aplay', 'paplay', 'afplay']:
+                                for player in ["aplay", "paplay", "afplay"]:
                                     try:
-                                        process = await asyncio.create_subprocess_exec(player, backup_filename, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                        process = await asyncio.create_subprocess_exec(
+                                            player,
+                                            backup_filename,
+                                            stdout=subprocess.DEVNULL,
+                                            stderr=subprocess.DEVNULL,
+                                        )
                                         await process.wait()
                                         break
                                     except FileNotFoundError:
                                         continue
-                            
+
                             self.logger.info("TTS 备用播放完成")
-                            
+
                             if backup_filename != tmp_filename:
                                 try:
                                     os.remove(backup_filename)
                                 except:
                                     pass
-                                    
+
                         except Exception as backup_error:
                             self.logger.error(f"TTS 备用播放也失败: {backup_error}")
                             raise play_error

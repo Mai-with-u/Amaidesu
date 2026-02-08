@@ -17,6 +17,7 @@ E2E Test: 配置系统集成测试
 - 验证Schema-based配置合并逻辑
 - 验证Manager能正确加载Provider
 """
+
 import pytest
 import os
 
@@ -50,6 +51,7 @@ from src.services.config.service import ConfigService
 
 
 # ==================== 测试套件 1: ConfigService 基本功能 ====================
+
 
 @pytest.mark.asyncio
 async def test_config_service_initialization(config_service: ConfigService):
@@ -99,6 +101,7 @@ async def test_config_service_no_exceptions_on_init(project_base_dir):
 
 
 # ==================== 测试套件 2: Provider 注册表完整性 ====================
+
 
 @pytest.mark.asyncio
 async def test_provider_registry_has_all_providers():
@@ -185,10 +188,13 @@ async def test_provider_registry_can_create_all_providers():
     total_registered = len(input_providers) + len(output_providers) + len(decision_providers)
 
     success_rate = total_created / total_registered if total_registered > 0 else 0
-    assert success_rate >= 0.5, f"Provider 创建成功率过低: {success_rate:.2%}, 失败: {failed_input + failed_output + failed_decision}"
+    assert success_rate >= 0.5, (
+        f"Provider 创建成功率过低: {success_rate:.2%}, 失败: {failed_input + failed_output + failed_decision}"
+    )
 
 
 # ==================== 测试套件 3: 配置合并功能 ====================
+
 
 @pytest.mark.asyncio
 async def test_config_service_three_level_merge(config_service: ConfigService):
@@ -202,7 +208,7 @@ async def test_config_service_three_level_merge(config_service: ConfigService):
     merged_config = config_service.get_provider_config_with_defaults(
         "console_input",
         "input",
-        schema_class=ConsoleInputProviderConfig  # 使用 Schema 验证
+        schema_class=ConsoleInputProviderConfig,  # 使用 Schema 验证
     )
 
     assert merged_config is not None
@@ -243,6 +249,7 @@ async def test_config_service_deep_merge_function():
 
 
 # ==================== 测试套件 4: Provider 生命周期管理 ====================
+
 
 @pytest.mark.asyncio
 async def test_input_provider_manager_load_from_config(config_service: ConfigService):
@@ -304,11 +311,9 @@ async def test_enabled_switch_controls_provider_loading(config_service: ConfigSe
 
     # 测试 enabled = false 的情况
     config_disabled = {
-        'enabled': False,
-        'inputs': ['console_input'],
-        'inputs_config': {
-            'console_input': {'type': 'console_input'}
-        }
+        "enabled": False,
+        "inputs": ["console_input"],
+        "inputs_config": {"console_input": {"type": "console_input"}},
     }
 
     providers = await manager.load_from_config(config_disabled)
@@ -316,11 +321,9 @@ async def test_enabled_switch_controls_provider_loading(config_service: ConfigSe
 
     # 测试 enabled = true 的情况
     config_enabled = {
-        'enabled': True,
-        'inputs': ['console_input'],
-        'inputs_config': {
-            'console_input': {'type': 'console_input'}
-        }
+        "enabled": True,
+        "inputs": ["console_input"],
+        "inputs_config": {"console_input": {"type": "console_input"}},
     }
 
     providers = await manager.load_from_config(config_enabled)
@@ -336,6 +339,7 @@ async def test_enabled_switch_controls_provider_loading(config_service: ConfigSe
 
 
 # ==================== 测试套件 5: 应用启动模拟 ====================
+
 
 @pytest.mark.asyncio
 async def test_application_startup_simulation(project_base_dir):
@@ -408,6 +412,7 @@ async def test_config_does_not_throw_exceptions(project_base_dir):
 
         # 使用新的配置API获取 Provider 配置
         from src.services.config.schemas import ConsoleInputProviderConfig, TTSProviderConfig
+
         _ = service.get_provider_config_with_defaults("console_input", "input", schema_class=ConsoleInputProviderConfig)
         _ = service.get_provider_config_with_defaults("tts", "output", schema_class=TTSProviderConfig)
 
@@ -419,6 +424,7 @@ async def test_config_does_not_throw_exceptions(project_base_dir):
 
 
 # ==================== 测试套件 6: 配置迁移检测 ====================
+
 
 @pytest.mark.asyncio
 async def test_config_migration_detection(config_service: ConfigService):
@@ -435,6 +441,7 @@ async def test_config_migration_detection(config_service: ConfigService):
 
 
 # ==================== 测试套件 7: 错误处理 ====================
+
 
 @pytest.mark.asyncio
 async def test_config_service_handles_missing_sections(config_service: ConfigService):
@@ -482,11 +489,9 @@ async def test_manager_handles_invalid_provider_type():
 
     # 尝试加载不存在的 Provider 类型
     config = {
-        'enabled': True,
-        'inputs': ['non_existent_provider'],
-        'inputs_config': {
-            'non_existent_provider': {'type': 'non_existent_provider', 'enabled': True}
-        }
+        "enabled": True,
+        "inputs": ["non_existent_provider"],
+        "inputs_config": {"non_existent_provider": {"type": "non_existent_provider", "enabled": True}},
     }
 
     # 应该不抛出异常，而是跳过无效的 Provider
@@ -502,6 +507,7 @@ async def test_manager_handles_invalid_provider_type():
 
 
 # ==================== 测试套件 8: 配置验证 ====================
+
 
 @pytest.mark.asyncio
 async def test_provider_config_validation():
@@ -532,6 +538,7 @@ async def test_provider_config_validation():
 
 
 # ==================== 测试套件 9: 性能和资源管理 ====================
+
 
 @pytest.mark.asyncio
 async def test_config_service_is_lightweight(project_base_dir):

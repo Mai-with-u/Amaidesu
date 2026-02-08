@@ -1,4 +1,5 @@
 """Rule Engine Decision Provider"""
+
 from .rule_engine_decision_provider import RuleEngineDecisionProvider
 from src.core.provider_registry import ProviderRegistry
 

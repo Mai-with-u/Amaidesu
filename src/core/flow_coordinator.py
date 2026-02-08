@@ -18,7 +18,8 @@ FlowCoordinator - 数据流协调器（3域架构：Decision Domain → Output D
     OutputProviderManager (Output Domain - Rendering)
 """
 
-from typing import Dict, Any, Optional
+import os
+from typing import Dict, Any, Optional, TYPE_CHECKING
 from src.core.utils.logger import get_logger
 
 from src.core.event_bus import EventBus
@@ -27,6 +28,9 @@ from src.domains.output.parameters.expression_generator import ExpressionGenerat
 from src.domains.output.manager import OutputProviderManager
 from src.core.events.payloads import ParametersGeneratedPayload
 from src.domains.output.pipelines.manager import OutputPipelineManager
+
+if TYPE_CHECKING:
+    from src.core.events.payloads import IntentPayload
 
 
 class FlowCoordinator:
@@ -69,13 +73,14 @@ class FlowCoordinator:
 
         self.logger.info("FlowCoordinator 初始化完成")
 
-    async def setup(self, config: Dict[str, Any], config_service=None):
+    async def setup(self, config: Dict[str, Any], config_service=None, root_config: Optional[Dict[str, Any]] = None):
         """
         设置数据流协调器
 
         Args:
             config: 输出Provider配置（来自[providers.output]）
             config_service: ConfigService实例（用于三级配置加载）
+            root_config: 根配置字典（包含 pipelines 配置）
         """
         self.logger.info("开始设置数据流协调器...")
 
@@ -95,14 +100,41 @@ class FlowCoordinator:
             self.output_pipeline_manager = OutputPipelineManager()
             self.logger.info("输出Pipeline管理器已创建")
 
+            # 从配置加载输出Pipeline
+            pipeline_config = root_config.get("pipelines", {}) if root_config else {}
+            if pipeline_config:
+                # 构建管道加载目录路径：src/domains/output/pipelines
+                pipeline_load_dir = os.path.join(os.path.dirname(__file__), "..", "domains", "output", "pipelines")
+                pipeline_load_dir = os.path.abspath(pipeline_load_dir)
+                self.logger.info(f"准备加载输出Pipeline (从目录: {pipeline_load_dir})...")
+
+                try:
+                    await self.output_pipeline_manager.load_output_pipelines(pipeline_load_dir, pipeline_config)
+                    pipeline_count = len(self.output_pipeline_manager._pipelines)
+                    if pipeline_count > 0:
+                        self.logger.info(f"输出Pipeline加载完成，共 {pipeline_count} 个管道。")
+                    else:
+                        self.logger.info("未找到任何有效的输出Pipeline。")
+                except Exception as e:
+                    self.logger.error(f"加载输出Pipeline时出错: {e}", exc_info=True)
+            else:
+                self.logger.info("配置中未启用管道功能")
+
         # 从配置加载Provider（传递config_service以启用三级配置合并）
         if self.output_provider_manager:
             await self.output_provider_manager.load_from_config(config, core=None, config_service=config_service)
 
-        # 订阅 Decision Domain 的 Intent 事件（3域架构）
-        self.event_bus.on(CoreEvents.DECISION_INTENT_GENERATED, self._on_intent_ready, priority=50)
+        # 订阅 Decision Domain 的 Intent 事件（3域架构，类型化）
+        from src.core.events.payloads.decision import IntentPayload
+
+        self.event_bus.on_typed(
+            CoreEvents.DECISION_INTENT_GENERATED,
+            self._on_intent_ready,
+            IntentPayload,
+            priority=50,
+        )
         self._event_handler_registered = True
-        self.logger.info(f"已订阅 '{CoreEvents.DECISION_INTENT_GENERATED}' 事件")
+        self.logger.info(f"已订阅 '{CoreEvents.DECISION_INTENT_GENERATED}' 事件（类型化）")
 
         self._is_setup = True
         self.logger.info("数据流协调器设置完成")
@@ -151,27 +183,23 @@ class FlowCoordinator:
         self._is_setup = False
         self.logger.info("数据流协调器清理完成")
 
-    async def _on_intent_ready(self, event_name: str, event_data: Dict[str, Any], source: str):
+    async def _on_intent_ready(self, event_name: str, payload: "IntentPayload", source: str):
         """
-        处理Intent事件（Decision Domain → Output Domain）
+        处理Intent事件（Decision Domain → Output Domain，类型化）
 
         数据流（事件驱动）:
             IntentPayload → Intent → ExpressionParameters → OutputPipeline处理 → 发布 expression.parameters_generated 事件 → OutputProvider 订阅并渲染
 
         Args:
             event_name: 事件名称（decision.intent_generated）
-            event_data: 事件数据（IntentPayload 格式）
+            payload: 类型化的事件数据（IntentPayload 对象，自动反序列化）
             source: 事件源
         """
         self.logger.info(f"收到Intent事件: {event_name}")
 
         try:
-            # 从事件数据重建 Intent 对象（使用 Intent.from_dict）
-            from src.domains.decision.intent import Intent
-
-            # 如果 event_data 包含 intent_data 字段，使用它；否则直接使用 event_data
-            intent_source = event_data.get("intent_data", event_data)
-            intent = Intent.from_dict(intent_source)
+            # 使用 IntentPayload.to_intent() 方法转换为 Intent 对象
+            intent = payload.to_intent()
 
             # Output Domain - Parameters: Intent → ExpressionParameters
             if self.expression_generator:
@@ -189,7 +217,9 @@ class FlowCoordinator:
                 # 发布 expression.parameters_generated 事件（事件驱动）
                 # OutputProvider 订阅此事件并响应
                 # 将 ExpressionParameters (dataclass) 转换为 ParametersGeneratedPayload (Pydantic Model)
-                payload = ParametersGeneratedPayload.from_parameters(params, source_intent=intent.to_dict())
+                payload = ParametersGeneratedPayload.from_parameters(
+                    params, source_intent=intent.model_dump(mode="json")
+                )
                 await self.event_bus.emit(CoreEvents.EXPRESSION_PARAMETERS_GENERATED, payload, source="FlowCoordinator")
                 self.logger.debug(f"已发布事件: {CoreEvents.EXPRESSION_PARAMETERS_GENERATED}")
             else:

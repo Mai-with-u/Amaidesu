@@ -12,7 +12,7 @@ OutputProviderManager - Output Domain: 渲染输出管理器
 
 import asyncio
 from typing import Any, TYPE_CHECKING
-from dataclasses import dataclass, field
+from pydantic import BaseModel, Field
 from src.core.utils.logger import get_logger
 
 from src.core.base.output_provider import OutputProvider
@@ -23,8 +23,7 @@ if TYPE_CHECKING:
     pass
 
 
-@dataclass
-class RenderResult:
+class RenderResult(BaseModel):
     """
     渲染结果
 
@@ -35,6 +34,7 @@ class RenderResult:
         timeout: 是否超时
         duration: 渲染耗时（秒）
     """
+
     provider_name: str
     success: bool
     error: str | None = None
@@ -42,8 +42,7 @@ class RenderResult:
     duration: float = 0.0
 
 
-@dataclass
-class RenderStats:
+class RenderStats(BaseModel):
     """
     渲染统计信息
 
@@ -54,11 +53,12 @@ class RenderStats:
         timeout_count: 超时次数
         provider_stats: 各Provider统计 {provider_name: RenderStats}
     """
+
     total_renders: int = 0
     success_count: int = 0
     error_count: int = 0
     timeout_count: int = 0
-    provider_stats: dict[str, dict[str, int]] = field(default_factory=dict)
+    provider_stats: dict[str, dict[str, int]] = Field(default_factory=dict)
 
 
 class OutputProviderManager:
@@ -180,9 +180,7 @@ class OutputProviderManager:
             return []
 
         if len(active_providers) < len(self.providers):
-            self.logger.warning(
-                f"部分Provider未启动: {len(active_providers)}/{len(self.providers)} 已就绪"
-            )
+            self.logger.warning(f"部分Provider未启动: {len(active_providers)}/{len(self.providers)} 已就绪")
 
         if self.concurrent_rendering:
             # 并发渲染：使用_safe_render包装每个Provider
@@ -199,10 +197,7 @@ class OutputProviderManager:
         timeout_count = sum(1 for r in results if r.timeout)
         error_count = sum(1 for r in results if not r.success and not r.timeout)
 
-        self.logger.info(
-            f"渲染完成: 成功={success_count}/{len(results)}, "
-            f"超时={timeout_count}, 失败={error_count}"
-        )
+        self.logger.info(f"渲染完成: 成功={success_count}/{len(results)}, 超时={timeout_count}, 失败={error_count}")
 
         return results
 
@@ -226,10 +221,7 @@ class OutputProviderManager:
         render_tasks = []
         for provider in providers:
             provider_name = provider.get_info()["name"]
-            task = asyncio.create_task(
-                self._safe_render(provider, parameters),
-                name=f"render-{provider_name}"
-            )
+            task = asyncio.create_task(self._safe_render(provider, parameters), name=f"render-{provider_name}")
             render_tasks.append((provider_name, task))
 
         # 等待所有任务完成（return_exceptions=True确保异常不会传播）
@@ -241,10 +233,7 @@ class OutputProviderManager:
 
                 # 根据error_handling配置决定是否继续
                 if not result.success and self.error_handling == "stop":
-                    self.logger.error(
-                        f"停止渲染流程（错误处理策略: stop, "
-                        f"失败Provider: {provider_name}）"
-                    )
+                    self.logger.error(f"停止渲染流程（错误处理策略: stop, 失败Provider: {provider_name}）")
                     # 取消剩余任务
                     for _remaining_name, remaining_task in render_tasks:
                         if not remaining_task.done():
@@ -255,11 +244,7 @@ class OutputProviderManager:
             except Exception as e:
                 # 理论上不应到达这里（_safe_render已捕获异常）
                 self.logger.error(f"渲染任务意外异常: {provider_name} - {e}")
-                results.append(RenderResult(
-                    provider_name=provider_name,
-                    success=False,
-                    error=str(e)
-                ))
+                results.append(RenderResult(provider_name=provider_name, success=False, error=str(e)))
 
         return results
 
@@ -283,17 +268,12 @@ class OutputProviderManager:
 
             # 根据error_handling配置决定是否继续
             if not result.success and self.error_handling == "stop":
-                self.logger.error(
-                    f"停止渲染流程（错误处理策略: stop, "
-                    f"失败Provider: {result.provider_name}）"
-                )
+                self.logger.error(f"停止渲染流程（错误处理策略: stop, 失败Provider: {result.provider_name}）")
                 break
 
         return results
 
-    async def _safe_render(
-        self, provider: OutputProvider, parameters: RenderParameters
-    ) -> RenderResult:
+    async def _safe_render(self, provider: OutputProvider, parameters: RenderParameters) -> RenderResult:
         """
         安全渲染到单个Provider
 
@@ -310,59 +290,42 @@ class OutputProviderManager:
             RenderResult: 渲染结果
         """
         import time
+
         provider_name = provider.get_info()["name"]
         start_time = time.time()
 
         try:
             # 执行渲染（带超时）
             if self.render_timeout > 0:
-                await asyncio.wait_for(
-                    provider.render(parameters),
-                    timeout=self.render_timeout
-                )
+                await asyncio.wait_for(provider.render(parameters), timeout=self.render_timeout)
             else:
                 await provider.render(parameters)
 
             duration = time.time() - start_time
-            self.logger.debug(
-                f"Provider渲染成功: {provider_name} "
-                f"(耗时: {duration:.3f}s)"
-            )
+            self.logger.debug(f"Provider渲染成功: {provider_name} (耗时: {duration:.3f}s)")
 
-            return RenderResult(
-                provider_name=provider_name,
-                success=True,
-                duration=duration
-            )
+            return RenderResult(provider_name=provider_name, success=True, duration=duration)
 
         except TimeoutError:
             duration = time.time() - start_time
-            self.logger.warning(
-                f"Provider渲染超时: {provider_name} "
-                f"(超时限制: {self.render_timeout}s)"
-            )
+            self.logger.warning(f"Provider渲染超时: {provider_name} (超时限制: {self.render_timeout}s)")
 
             return RenderResult(
                 provider_name=provider_name,
                 success=False,
                 timeout=True,
                 error=f"渲染超时（限制: {self.render_timeout}s）",
-                duration=duration
+                duration=duration,
             )
 
         except Exception as e:
             duration = time.time() - start_time
             self.logger.error(
                 f"Provider渲染失败: {provider_name} - {e}",
-                exc_info=False  # 不打印完整堆栈，避免日志冗长
+                exc_info=False,  # 不打印完整堆栈，避免日志冗长
             )
 
-            return RenderResult(
-                provider_name=provider_name,
-                success=False,
-                error=str(e),
-                duration=duration
-            )
+            return RenderResult(provider_name=provider_name, success=False, error=str(e), duration=duration)
 
     def _update_render_stats(self, results: list[RenderResult]) -> None:
         """
@@ -374,11 +337,7 @@ class OutputProviderManager:
         for result in results:
             # 初始化Provider统计
             if result.provider_name not in self._render_stats.provider_stats:
-                self._render_stats.provider_stats[result.provider_name] = {
-                    "success": 0,
-                    "error": 0,
-                    "timeout": 0
-                }
+                self._render_stats.provider_stats[result.provider_name] = {"success": 0, "error": 0, "timeout": 0}
 
             # 更新全局统计
             if result.success:
@@ -454,11 +413,7 @@ class OutputProviderManager:
                 "is_setup": provider_info.get("is_setup", False),
                 "type": provider_info.get("type", "unknown"),
                 # 添加渲染统计
-                **self._render_stats.provider_stats.get(provider_name, {
-                    "success": 0,
-                    "error": 0,
-                    "timeout": 0
-                })
+                **self._render_stats.provider_stats.get(provider_name, {"success": 0, "error": 0, "timeout": 0}),
             }
 
         return {

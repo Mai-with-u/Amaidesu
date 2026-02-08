@@ -1,7 +1,7 @@
 """
-LLMService 单元测试
+LLMManager 单元测试
 
-测试 LLMService 的所有核心功能：
+测试 LLMManager 的所有核心功能：
 - 初始化和配置
 - 聊天接口（chat、stream_chat）
 - 工具调用（call_tools）
@@ -10,7 +10,7 @@ LLMService 单元测试
 - 重试机制（_call_with_retry）
 - 统计信息（token usage、backend info）
 
-运行: uv run pytest tests/core/test_llm_service.py -v
+运行: uv run pytest tests/core/test_llm_manager.py -v
 """
 
 import asyncio
@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from typing import Dict, Any
 import pytest
 
-from src.services.llm.service import LLMService, LLMResponse, RetryConfig
+from src.services.llm.manager import LLMManager, LLMResponse, RetryConfig
 
 # =============================================================================
 # Test Fixtures
@@ -57,17 +57,17 @@ def mock_config():
 
 
 @pytest.fixture
-def llm_service():
-    """创建 LLMService 实例"""
-    service = LLMService()
-    return service
+def llm_manager():
+    """创建 LLMManager 实例"""
+    manager = LLMManager()
+    return manager
 
 
 @pytest.fixture
-async def setup_llm_service(llm_service: LLMService, mock_config: Dict[str, Any]):
-    """初始化 LLMService 实例"""
-    # Mock OpenAIBackend to avoid real API calls
-    with patch("src.services.llm.backends.openai_backend.OpenAIBackend") as mock_backend_class:
+async def setup_llm_manager(llm_manager: LLMManager, mock_config: Dict[str, Any]):
+    """初始化 LLMManager 实例"""
+    # Mock OpenAIClient to avoid real API calls
+    with patch("src.services.llm.backends.openai_client.OpenAIClient") as mock_backend_class:
         mock_backend = MagicMock()
         mock_backend.chat = AsyncMock(
             return_value=LLMResponse(
@@ -88,7 +88,7 @@ async def setup_llm_service(llm_service: LLMService, mock_config: Dict[str, Any]
         )
         mock_backend.cleanup = AsyncMock()
         mock_backend.get_info.return_value = {
-            "name": "OpenAIBackend",
+            "name": "OpenAIClient",
             "model": "gpt-4o-mini",
             "base_url": "https://api.test.com/v1",
         }
@@ -97,8 +97,8 @@ async def setup_llm_service(llm_service: LLMService, mock_config: Dict[str, Any]
 
         # Mock TokenUsageManager
         with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager") as mock_token_manager:
-            await llm_service.setup(mock_config)
-            yield llm_service, mock_backend, mock_token_manager
+            await llm_manager.setup(mock_config)
+            yield llm_manager, mock_backend, mock_token_manager
 
 
 # =============================================================================
@@ -107,24 +107,24 @@ async def setup_llm_service(llm_service: LLMService, mock_config: Dict[str, Any]
 
 
 @pytest.mark.asyncio
-async def test_setup_initializes_backends(llm_service: LLMService, mock_config: Dict[str, Any]):
+async def test_setup_initializes_backends(llm_manager: LLMManager, mock_config: Dict[str, Any]):
     """测试 setup 初始化所有后端"""
-    with patch("src.services.llm.backends.openai_backend.OpenAIBackend") as mock_backend_class:
+    with patch("src.services.llm.backends.openai_client.OpenAIClient") as mock_backend_class:
         mock_backend = MagicMock()
         mock_backend_class.return_value = mock_backend
 
-        with patch("src.core.llm_backends.token_usage_manager.TokenUsageManager"):
-            await llm_service.setup(mock_config)
+        with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager"):
+            await llm_manager.setup(mock_config)
 
             # 验证三个后端都被初始化
             assert mock_backend_class.call_count == 3
-            assert "llm" in llm_service._backends
-            assert "llm_fast" in llm_service._backends
-            assert "vlm" in llm_service._backends
+            assert "llm" in llm_manager._clients
+            assert "llm_fast" in llm_manager._clients
+            assert "vlm" in llm_manager._clients
 
 
 @pytest.mark.asyncio
-async def test_setup_with_custom_config(llm_service: LLMService):
+async def test_setup_with_custom_config(llm_manager: LLMManager):
     """测试使用自定义配置初始化"""
     config = {
         "llm": {
@@ -135,20 +135,20 @@ async def test_setup_with_custom_config(llm_service: LLMService):
         },
     }
 
-    with patch("src.services.llm.backends.openai_backend.OpenAIBackend") as mock_backend_class:
+    with patch("src.services.llm.backends.openai_client.OpenAIClient") as mock_backend_class:
         mock_backend = MagicMock()
         mock_backend_class.return_value = mock_backend
 
-        with patch("src.core.llm_backends.token_usage_manager.TokenUsageManager"):
-            await llm_service.setup(config)
+        with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager"):
+            await llm_manager.setup(config)
 
             # 验证配置传递正确
             mock_backend_class.assert_called_with(config["llm"])
 
 
 @pytest.mark.asyncio
-async def test_setup_unknown_backend_falls_back_to_openai(llm_service: LLMService):
-    """测试未知后端类型降级到 OpenAI"""
+async def test_setup_unknown_backend_falls_back_to_openai(llm_manager: LLMManager):
+    """测试未知客户端类型降级到 OpenAI"""
     config = {
         "llm": {
             "backend": "unknown_backend",
@@ -156,12 +156,12 @@ async def test_setup_unknown_backend_falls_back_to_openai(llm_service: LLMServic
         },
     }
 
-    with patch("src.core.llm_backends.openai_backend.OpenAIBackend") as mock_openai:
-        with patch("src.services.llm.backends.ollama_backend.OllamaBackend") as mock_ollama:
+    with patch("src.services.llm.backends.openai_client.OpenAIClient") as mock_openai:
+        with patch("src.services.llm.backends.ollama_client.OllamaClient") as mock_ollama:
             mock_openai.return_value = MagicMock()
 
-            with patch("src.core.llm_backends.token_usage_manager.TokenUsageManager"):
-                await llm_service.setup(config)
+            with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager"):
+                await llm_manager.setup(config)
 
                 # 应该使用 OpenAI 而不是 Ollama
                 mock_openai.assert_called_once()
@@ -169,13 +169,13 @@ async def test_setup_unknown_backend_falls_back_to_openai(llm_service: LLMServic
 
 
 @pytest.mark.asyncio
-async def test_setup_initializes_token_manager(llm_service: LLMService, mock_config: Dict[str, Any]):
+async def test_setup_initializes_token_manager(llm_manager: LLMManager, mock_config: Dict[str, Any]):
     """测试 setup 初始化 TokenUsageManager"""
-    with patch("src.core.llm_backends.openai_backend.OpenAIBackend"):
+    with patch("src.services.llm.backends.openai_client.OpenAIClient"):
         with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager") as mock_token_manager:
-            await llm_service.setup(mock_config)
+            await llm_manager.setup(mock_config)
 
-            assert llm_service._token_manager is not None
+            assert llm_manager._token_manager is not None
             mock_token_manager.assert_called_once_with(use_global=True)
 
 
@@ -185,11 +185,11 @@ async def test_setup_initializes_token_manager(llm_service: LLMService, mock_con
 
 
 @pytest.mark.asyncio
-async def test_chat_basic(setup_llm_service):
+async def test_chat_basic(setup_llm_manager):
     """测试基本聊天功能"""
-    llm_service, mock_backend, _ = setup_llm_service
+    llm_manager, mock_backend, _ = setup_llm_manager
 
-    response = await llm_service.chat("Hello, world!")
+    response = await llm_manager.chat("Hello, world!")
 
     assert response.success is True
     assert response.content == "Test response"
@@ -198,11 +198,11 @@ async def test_chat_basic(setup_llm_service):
 
 
 @pytest.mark.asyncio
-async def test_chat_with_system_message(setup_llm_service):
+async def test_chat_with_system_message(setup_llm_manager):
     """测试带系统消息的聊天"""
-    llm_service, mock_backend, _ = setup_llm_service
+    llm_manager, mock_backend, _ = setup_llm_manager
 
-    response = await llm_service.chat("Hello", system_message="You are a helpful assistant")
+    response = await llm_manager.chat("Hello", system_message="You are a helpful assistant")
 
     assert response.success is True
     # 验证消息格式正确
@@ -216,11 +216,11 @@ async def test_chat_with_system_message(setup_llm_service):
 
 
 @pytest.mark.asyncio
-async def test_chat_with_temperature(setup_llm_service):
+async def test_chat_with_temperature(setup_llm_manager):
     """测试带温度参数的聊天"""
-    llm_service, mock_backend, _ = setup_llm_service
+    llm_manager, mock_backend, _ = setup_llm_manager
 
-    response = await llm_service.chat("Hello", temperature=0.9)
+    response = await llm_manager.chat("Hello", temperature=0.9)
 
     assert response.success is True
     # 验证温度参数传递
@@ -229,11 +229,11 @@ async def test_chat_with_temperature(setup_llm_service):
 
 
 @pytest.mark.asyncio
-async def test_chat_with_max_tokens(setup_llm_service):
+async def test_chat_with_max_tokens(setup_llm_manager):
     """测试带 max_tokens 参数的聊天"""
-    llm_service, mock_backend, _ = setup_llm_service
+    llm_manager, mock_backend, _ = setup_llm_manager
 
-    response = await llm_service.chat("Hello", max_tokens=100)
+    response = await llm_manager.chat("Hello", max_tokens=100)
 
     assert response.success is True
     # 验证 max_tokens 参数传递
@@ -242,22 +242,22 @@ async def test_chat_with_max_tokens(setup_llm_service):
 
 
 @pytest.mark.asyncio
-async def test_chat_with_custom_backend(setup_llm_service):
-    """测试使用自定义后端"""
-    llm_service, mock_backend, _ = setup_llm_service
+async def test_chat_with_custom_backend(setup_llm_manager):
+    """测试使用自定义客户端"""
+    llm_manager, mock_backend, _ = setup_llm_manager
 
-    response = await llm_service.chat("Hello", backend="llm_fast")
+    response = await llm_manager.chat("Hello", client_type="llm_fast")
 
     assert response.success is True
-    # 验证使用了正确的后端
+    # 验证使用了正确的客户端
 
 
 @pytest.mark.asyncio
-async def test_chat_records_token_usage(setup_llm_service):
+async def test_chat_records_token_usage(setup_llm_manager):
     """测试聊天记录 token 使用量"""
-    llm_service, mock_backend, mock_token_manager = setup_llm_service
+    llm_manager, mock_backend, mock_token_manager = setup_llm_manager
 
-    await llm_service.chat("Hello")
+    await llm_manager.chat("Hello")
 
     # 验证 token 使用量被记录
     mock_token_manager.return_value.record_usage.assert_called_once_with(
@@ -274,7 +274,7 @@ async def test_chat_records_token_usage(setup_llm_service):
 
 
 @pytest.mark.asyncio
-async def test_stream_chat_basic(llm_service: LLMService, mock_config: Dict[str, Any]):
+async def test_stream_chat_basic(llm_manager: LLMManager, mock_config: Dict[str, Any]):
     """测试基本流式聊天"""
 
     # Mock stream_chat 后端
@@ -285,21 +285,21 @@ async def test_stream_chat_basic(llm_service: LLMService, mock_config: Dict[str,
 
     mock_backend = MagicMock()
     mock_backend.stream_chat = mock_stream
-    mock_backend.get_info.return_value = {"name": "OpenAIBackend"}
+    mock_backend.get_info.return_value = {"name": "OpenAIClient"}
 
-    with patch("src.core.llm_backends.openai_backend.OpenAIBackend", return_value=mock_backend):
-        with patch("src.core.llm_backends.token_usage_manager.TokenUsageManager"):
-            await llm_service.setup(mock_config)
+    with patch("src.services.llm.backends.openai_client.OpenAIClient", return_value=mock_backend):
+        with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager"):
+            await llm_manager.setup(mock_config)
 
             chunks = []
-            async for chunk in llm_service.stream_chat("Tell me a story"):
+            async for chunk in llm_manager.stream_chat("Tell me a story"):
                 chunks.append(chunk)
 
             assert chunks == ["Hello", " world", "!"]
 
 
 @pytest.mark.asyncio
-async def test_stream_chat_with_stop_event(llm_service: LLMService, mock_config: Dict[str, Any]):
+async def test_stream_chat_with_stop_event(llm_manager: LLMManager, mock_config: Dict[str, Any]):
     """测试流式聊天支持停止事件"""
 
     async def mock_stream(**kwargs):
@@ -314,14 +314,14 @@ async def test_stream_chat_with_stop_event(llm_service: LLMService, mock_config:
     mock_backend = MagicMock()
     mock_backend.stream_chat = mock_stream
 
-    with patch("src.core.llm_backends.openai_backend.OpenAIBackend", return_value=mock_backend):
-        with patch("src.core.llm_backends.token_usage_manager.TokenUsageManager"):
-            await llm_service.setup(mock_config)
+    with patch("src.services.llm.backends.openai_client.OpenAIClient", return_value=mock_backend):
+        with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager"):
+            await llm_manager.setup(mock_config)
 
             stop_event = asyncio.Event()
             chunks = []
 
-            async for chunk in llm_service.stream_chat("Test", stop_event=stop_event):
+            async for chunk in llm_manager.stream_chat("Test", stop_event=stop_event):
                 chunks.append(chunk)
                 if len(chunks) == 2:
                     stop_event.set()  # 在第二个 chunk 后停止
@@ -330,7 +330,7 @@ async def test_stream_chat_with_stop_event(llm_service: LLMService, mock_config:
 
 
 @pytest.mark.asyncio
-async def test_stream_chat_with_system_message(llm_service: LLMService, mock_config: Dict[str, Any]):
+async def test_stream_chat_with_system_message(llm_manager: LLMManager, mock_config: Dict[str, Any]):
     """测试流式聊天带系统消息"""
 
     async def mock_stream(**kwargs):
@@ -344,12 +344,12 @@ async def test_stream_chat_with_system_message(llm_service: LLMService, mock_con
     mock_backend = MagicMock()
     mock_backend.stream_chat = mock_stream
 
-    with patch("src.core.llm_backends.openai_backend.OpenAIBackend", return_value=mock_backend):
-        with patch("src.core.llm_backends.token_usage_manager.TokenUsageManager"):
-            await llm_service.setup(mock_config)
+    with patch("src.services.llm.backends.openai_client.OpenAIClient", return_value=mock_backend):
+        with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager"):
+            await llm_manager.setup(mock_config)
 
             chunks = []
-            async for chunk in llm_service.stream_chat("Hello", system_message="You are helpful"):
+            async for chunk in llm_manager.stream_chat("Hello", system_message="You are helpful"):
                 chunks.append(chunk)
 
             assert chunks == ["OK"]
@@ -361,9 +361,9 @@ async def test_stream_chat_with_system_message(llm_service: LLMService, mock_con
 
 
 @pytest.mark.asyncio
-async def test_call_tools_basic(setup_llm_service):
+async def test_call_tools_basic(setup_llm_manager):
     """测试基本工具调用"""
-    llm_service, mock_backend, _ = setup_llm_service
+    llm_manager, mock_backend, _ = setup_llm_manager
 
     # Mock 工具调用响应
     mock_backend.chat.return_value = LLMResponse(
@@ -391,7 +391,7 @@ async def test_call_tools_basic(setup_llm_service):
         }
     ]
 
-    response = await llm_service.call_tools("What's the weather in Tokyo?", tools)
+    response = await llm_manager.call_tools("What's the weather in Tokyo?", tools)
 
     assert response.success is True
     assert len(response.tool_calls) == 1
@@ -399,13 +399,13 @@ async def test_call_tools_basic(setup_llm_service):
 
 
 @pytest.mark.asyncio
-async def test_call_tools_with_system_message(setup_llm_service):
+async def test_call_tools_with_system_message(setup_llm_manager):
     """测试工具调用带系统消息"""
-    llm_service, mock_backend, _ = setup_llm_service
+    llm_manager, mock_backend, _ = setup_llm_manager
 
     tools = [{"type": "function", "function": {"name": "test"}}]
 
-    await llm_service.call_tools("Test", tools, system_message="You are a tool-using assistant")
+    await llm_manager.call_tools("Test", tools, system_message="You are a tool-using assistant")
 
     # 验证消息格式
     call_args = mock_backend.chat.call_args
@@ -415,13 +415,13 @@ async def test_call_tools_with_system_message(setup_llm_service):
 
 
 @pytest.mark.asyncio
-async def test_call_tools_passes_tools_parameter(setup_llm_service):
+async def test_call_tools_passes_tools_parameter(setup_llm_manager):
     """测试工具调用正确传递 tools 参数"""
-    llm_service, mock_backend, _ = setup_llm_service
+    llm_manager, mock_backend, _ = setup_llm_manager
 
     tools = [{"type": "function", "function": {"name": "calculate", "description": "Perform calculation"}}]
 
-    await llm_service.call_tools("Calculate 2+2", tools)
+    await llm_manager.call_tools("Calculate 2+2", tools)
 
     # 验证 tools 参数被传递
     call_args = mock_backend.chat.call_args
@@ -435,13 +435,13 @@ async def test_call_tools_passes_tools_parameter(setup_llm_service):
 
 
 @pytest.mark.asyncio
-async def test_vision_basic(setup_llm_service):
+async def test_vision_basic(setup_llm_manager):
     """测试基本视觉理解"""
-    llm_service, mock_backend, _ = setup_llm_service
+    llm_manager, mock_backend, _ = setup_llm_manager
 
     images = ["https://example.com/image.jpg"]
 
-    response = await llm_service.vision("Describe this image", images)
+    response = await llm_manager.chat_vision("Describe this image", images)
 
     assert response.success is True
     assert response.content == "Image description"
@@ -449,16 +449,16 @@ async def test_vision_basic(setup_llm_service):
 
 
 @pytest.mark.asyncio
-async def test_vision_with_multiple_images(setup_llm_service):
+async def test_vision_with_multiple_images(setup_llm_manager):
     """测试多图片视觉理解"""
-    llm_service, mock_backend, _ = setup_llm_service
+    llm_manager, mock_backend, _ = setup_llm_manager
 
     images = [
         "https://example.com/image1.jpg",
         "https://example.com/image2.jpg",
     ]
 
-    response = await llm_service.vision("Compare these images", images)
+    response = await llm_manager.chat_vision("Compare these images", images)
 
     assert response.success is True
     # 验证图片列表被传递
@@ -467,11 +467,11 @@ async def test_vision_with_multiple_images(setup_llm_service):
 
 
 @pytest.mark.asyncio
-async def test_vision_with_system_message(setup_llm_service):
+async def test_vision_with_system_message(setup_llm_manager):
     """测试视觉理解带系统消息"""
-    llm_service, mock_backend, _ = setup_llm_service
+    llm_manager, mock_backend, _ = setup_llm_manager
 
-    response = await llm_service.vision(
+    response = await llm_manager.chat_vision(
         "Describe this", ["https://example.com/image.jpg"], system_message="You are a vision expert"
     )
 
@@ -483,13 +483,13 @@ async def test_vision_with_system_message(setup_llm_service):
 
 
 @pytest.mark.asyncio
-async def test_vision_uses_vlm_backend_by_default(setup_llm_service):
-    """测试 vision 默认使用 vlm 后端"""
-    llm_service, mock_backend, _ = setup_llm_service
+async def test_vision_uses_vlm_backend_by_default(setup_llm_manager):
+    """测试 vision 默认使用 vlm 客户端"""
+    llm_manager, mock_backend, _ = setup_llm_manager
 
-    await llm_service.vision("Test", ["image.jpg"])
+    await llm_manager.chat_vision("Test", ["image.jpg"])
 
-    # 验证使用了 vision 方法（这是后端的选择）
+    # 验证使用了 vision 方法（这是客户端的选择）
     mock_backend.vision.assert_called_once()
 
 
@@ -499,55 +499,55 @@ async def test_vision_uses_vlm_backend_by_default(setup_llm_service):
 
 
 @pytest.mark.asyncio
-async def test_simple_chat_returns_text(setup_llm_service):
+async def test_simple_chat_returns_text(setup_llm_manager):
     """测试 simple_chat 直接返回文本"""
-    llm_service, mock_backend, _ = setup_llm_service
+    llm_manager, mock_backend, _ = setup_llm_manager
 
-    result = await llm_service.simple_chat("Hello")
+    result = await llm_manager.simple_chat("Hello")
 
     assert result == "Test response"
 
 
 @pytest.mark.asyncio
-async def test_simple_chat_with_error_returns_error_message(setup_llm_service):
+async def test_simple_chat_with_error_returns_error_message(setup_llm_manager):
     """测试 simple_chat 错误处理"""
-    llm_service, mock_backend, _ = setup_llm_service
+    llm_manager, mock_backend, _ = setup_llm_manager
 
     mock_backend.chat.return_value = LLMResponse(success=False, content=None, error="API Error")
 
-    result = await llm_service.simple_chat("Hello")
+    result = await llm_manager.simple_chat("Hello")
 
     assert result == "错误: API Error"
 
 
 @pytest.mark.asyncio
-async def test_simple_chat_with_backend_parameter(setup_llm_service):
-    """测试 simple_chat 支持后端参数"""
-    llm_service, mock_backend, _ = setup_llm_service
+async def test_simple_chat_with_backend_parameter(setup_llm_manager):
+    """测试 simple_chat 支持客户端参数"""
+    llm_manager, mock_backend, _ = setup_llm_manager
 
-    result = await llm_service.simple_chat("Test", backend="llm_fast")
+    result = await llm_manager.simple_chat("Test", client_type="llm_fast")
 
     assert result == "Test response"
 
 
 @pytest.mark.asyncio
-async def test_simple_vision_returns_text(setup_llm_service):
+async def test_simple_vision_returns_text(setup_llm_manager):
     """测试 simple_vision 直接返回文本"""
-    llm_service, mock_backend, _ = setup_llm_service
+    llm_manager, mock_backend, _ = setup_llm_manager
 
-    result = await llm_service.simple_vision("Describe this", ["image.jpg"])
+    result = await llm_manager.simple_vision("Describe this", ["image.jpg"])
 
     assert result == "Image description"
 
 
 @pytest.mark.asyncio
-async def test_simple_vision_with_error_returns_error_message(setup_llm_service):
+async def test_simple_vision_with_error_returns_error_message(setup_llm_manager):
     """测试 simple_vision 错误处理"""
-    llm_service, mock_backend, _ = setup_llm_service
+    llm_manager, mock_backend, _ = setup_llm_manager
 
     mock_backend.vision.return_value = LLMResponse(success=False, content=None, error="Vision API Error")
 
-    result = await llm_service.simple_vision("Test", ["image.jpg"])
+    result = await llm_manager.simple_vision("Test", ["image.jpg"])
 
     assert result == "错误: Vision API Error"
 
@@ -558,7 +558,7 @@ async def test_simple_vision_with_error_returns_error_message(setup_llm_service)
 
 
 @pytest.mark.asyncio
-async def test_retry_on_failure(llm_service: LLMService, mock_config: Dict[str, Any]):
+async def test_retry_on_failure(llm_manager: LLMManager, mock_config: Dict[str, Any]):
     """测试失败时自动重试"""
     call_count = 0
 
@@ -576,20 +576,20 @@ async def test_retry_on_failure(llm_service: LLMService, mock_config: Dict[str, 
 
     mock_backend = MagicMock()
     mock_backend.chat = failing_chat
-    mock_backend.get_info.return_value = {"name": "OpenAIBackend"}
+    mock_backend.get_info.return_value = {"name": "OpenAIClient"}
 
-    with patch("src.core.llm_backends.openai_backend.OpenAIBackend", return_value=mock_backend):
-        with patch("src.core.llm_backends.token_usage_manager.TokenUsageManager"):
-            await llm_service.setup(mock_config)
+    with patch("src.services.llm.backends.openai_client.OpenAIClient", return_value=mock_backend):
+        with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager"):
+            await llm_manager.setup(mock_config)
 
-            response = await llm_service.chat("Test")
+            response = await llm_manager.chat("Test")
 
             assert response.success is True
             assert call_count == 3  # 失败2次，第3次成功
 
 
 @pytest.mark.asyncio
-async def test_retry_exhaustion(llm_service: LLMService, mock_config: Dict[str, Any]):
+async def test_retry_exhaustion(llm_manager: LLMManager, mock_config: Dict[str, Any]):
     """测试重试次数耗尽"""
 
     async def always_failing_chat(**kwargs):
@@ -599,20 +599,20 @@ async def test_retry_exhaustion(llm_service: LLMService, mock_config: Dict[str, 
     mock_backend.chat = always_failing_chat
     mock_backend.get_info.return_value = {"name": "OpenAIBackend"}
 
-    with patch("src.core.llm_backends.openai_backend.OpenAIBackend", return_value=mock_backend):
-        with patch("src.core.llm_backends.token_usage_manager.TokenUsageManager"):
-            await llm_service.setup(mock_config)
+    with patch("src.services.llm.backends.openai_client.OpenAIClient", return_value=mock_backend):
+        with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager"):
+            await llm_manager.setup(mock_config)
 
-            response = await llm_service.chat("Test")
+            response = await llm_manager.chat("Test")
 
             assert response.success is False
             assert "Persistent API Error" in response.error
 
 
 @pytest.mark.asyncio
-async def test_retry_with_custom_config(llm_service: LLMService, mock_config: Dict[str, Any]):
+async def test_retry_with_custom_config(llm_manager: LLMManager, mock_config: Dict[str, Any]):
     """测试自定义重试配置"""
-    llm_service._retry_config = RetryConfig(max_retries=2, base_delay=0.1)
+    llm_manager._retry_config = RetryConfig(max_retries=2, base_delay=0.1)
 
     call_count = 0
 
@@ -623,16 +623,16 @@ async def test_retry_with_custom_config(llm_service: LLMService, mock_config: Di
 
     mock_backend = MagicMock()
     mock_backend.chat = failing_chat
-    mock_backend.get_info.return_value = {"name": "OpenAIBackend"}
+    mock_backend.get_info.return_value = {"name": "OpenAIClient"}
 
-    with patch("src.core.llm_backends.openai_backend.OpenAIBackend", return_value=mock_backend):
-        with patch("src.core.llm_backends.token_usage_manager.TokenUsageManager"):
-            await llm_service.setup(mock_config)
+    with patch("src.services.llm.backends.openai_client.OpenAIClient", return_value=mock_backend):
+        with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager"):
+            await llm_manager.setup(mock_config)
 
             import time
 
             start = time.time()
-            response = await llm_service.chat("Test")
+            response = await llm_manager.chat("Test")
             elapsed = time.time() - start
 
             assert response.success is False
@@ -642,9 +642,9 @@ async def test_retry_with_custom_config(llm_service: LLMService, mock_config: Di
 
 
 @pytest.mark.asyncio
-async def test_retry_exponential_backoff(llm_service: LLMService, mock_config: Dict[str, Any]):
+async def test_retry_exponential_backoff(llm_manager: LLMManager, mock_config: Dict[str, Any]):
     """测试指数退避"""
-    llm_service._retry_config = RetryConfig(max_retries=3, base_delay=0.1)
+    llm_manager._retry_config = RetryConfig(max_retries=3, base_delay=0.1)
 
     call_times = []
 
@@ -654,13 +654,13 @@ async def test_retry_exponential_backoff(llm_service: LLMService, mock_config: D
 
     mock_backend = MagicMock()
     mock_backend.chat = failing_chat
-    mock_backend.get_info.return_value = {"name": "OpenAIBackend"}
+    mock_backend.get_info.return_value = {"name": "OpenAIClient"}
 
-    with patch("src.core.llm_backends.openai_backend.OpenAIBackend", return_value=mock_backend):
-        with patch("src.core.llm_backends.token_usage_manager.TokenUsageManager"):
-            await llm_service.setup(mock_config)
+    with patch("src.services.llm.backends.openai_client.OpenAIClient", return_value=mock_backend):
+        with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager"):
+            await llm_manager.setup(mock_config)
 
-            await llm_service.chat("Test")
+            await llm_manager.chat("Test")
 
             # 验证延迟逐渐增加（指数退避）
             assert len(call_times) == 3
@@ -676,15 +676,15 @@ async def test_retry_exponential_backoff(llm_service: LLMService, mock_config: D
 
 
 @pytest.mark.asyncio
-async def test_get_token_usage_summary(setup_llm_service):
+async def test_get_token_usage_summary(setup_llm_manager):
     """测试获取 token 使用摘要"""
-    llm_service, _, mock_token_manager = setup_llm_service
+    llm_manager, _, mock_token_manager = setup_llm_manager
 
     mock_token_manager.return_value.format_total_cost_summary.return_value = (
         "=== 所有模型费用汇总 ===\n总调用次数: 100\n总Token: 50000\n总费用: 1.234567"
     )
 
-    summary = llm_service.get_token_usage_summary()
+    summary = llm_manager.get_token_usage_summary()
 
     assert "100" in summary
     assert "50000" in summary
@@ -692,43 +692,39 @@ async def test_get_token_usage_summary(setup_llm_service):
 
 
 @pytest.mark.asyncio
-async def test_get_token_usage_summary_when_not_initialized(llm_service: LLMService):
+async def test_get_token_usage_summary_when_not_initialized(llm_manager: LLMManager):
     """测试 token 管理器未初始化时的摘要"""
-    summary = llm_service.get_token_usage_summary()
+    summary = llm_manager.get_token_usage_summary()
 
     assert summary == "Token 管理器未初始化"
 
 
 @pytest.mark.asyncio
-async def test_get_backend_info(setup_llm_service):
-    """测试获取后端信息"""
-    llm_service, mock_backend, _ = setup_llm_service
+async def test_get_client_info(setup_llm_manager):
+    """测试获取客户端信息"""
+    llm_manager, mock_backend, _ = setup_llm_manager
 
-    mock_backend.get_info.return_value = {
-        "name": "OpenAIBackend",
-        "model": "gpt-4o-mini",
-        "base_url": "https://api.test.com/v1",
-    }
-
-    info = llm_service.get_backend_info()
+    info = llm_manager.get_client_info()
 
     assert isinstance(info, dict)
     assert "llm" in info
     assert "llm_fast" in info
     assert "vlm" in info
+    # 验证信息结构
+    assert "backend" in info["llm"]
+    assert "config" in info["llm"]
 
 
 @pytest.mark.asyncio
-async def test_get_backend_info_returns_correct_structure(setup_llm_service):
-    """测试后端信息结构"""
-    llm_service, mock_backend, _ = setup_llm_service
+async def test_get_client_info_returns_correct_structure(setup_llm_manager):
+    """测试客户端信息结构"""
+    llm_manager, mock_backend, _ = setup_llm_manager
 
-    info = llm_service.get_backend_info()
+    info = llm_manager.get_client_info()
 
-    for _backend_name, backend_info in info.items():
-        assert "name" in backend_info
-        assert "model" in backend_info
-        assert "base_url" in backend_info
+    for _client_name, client_info in info.items():
+        assert "backend" in client_info
+        assert "config" in client_info
 
 
 # =============================================================================
@@ -737,30 +733,30 @@ async def test_get_backend_info_returns_correct_structure(setup_llm_service):
 
 
 @pytest.mark.asyncio
-async def test_get_nonexistent_backend_raises_error(setup_llm_service):
-    """测试获取不存在的后端抛出错误"""
-    llm_service, _, _ = setup_llm_service
+async def test_get_nonexistent_backend_raises_error(setup_llm_manager):
+    """测试获取不存在的客户端抛出错误"""
+    llm_manager, _, _ = setup_llm_manager
 
-    with pytest.raises(ValueError, match="LLM 后端 'nonexistent' 未配置"):
-        llm_service._get_backend("nonexistent")
-
-
-@pytest.mark.asyncio
-async def test_chat_with_nonexistent_backend(setup_llm_service):
-    """测试使用不存在的后端进行聊天"""
-    llm_service, _, _ = setup_llm_service
-
-    with pytest.raises(ValueError, match="LLM 后端 'unknown_backend' 未配置"):
-        await llm_service.chat("Test", backend="unknown_backend")
+    with pytest.raises(ValueError, match="LLM 客户端 'nonexistent' 未配置"):
+        llm_manager._get_client("nonexistent")
 
 
 @pytest.mark.asyncio
-async def test_vision_with_nonexistent_backend(setup_llm_service):
-    """测试使用不存在的后端进行视觉理解"""
-    llm_service, _, _ = setup_llm_service
+async def test_chat_with_nonexistent_backend(setup_llm_manager):
+    """测试使用不存在的客户端进行聊天"""
+    llm_manager, _, _ = setup_llm_manager
 
-    with pytest.raises(ValueError, match="LLM 后端 'unknown_backend' 未配置"):
-        await llm_service.vision("Test", ["image.jpg"], backend="unknown_backend")
+    with pytest.raises(ValueError, match="LLM 客户端 'unknown_backend' 未配置"):
+        await llm_manager.chat("Test", client_type="unknown_backend")
+
+
+@pytest.mark.asyncio
+async def test_vision_with_nonexistent_backend(setup_llm_manager):
+    """测试使用不存在的客户端进行视觉理解"""
+    llm_manager, _, _ = setup_llm_manager
+
+    with pytest.raises(ValueError, match="LLM 客户端 'unknown_backend' 未配置"):
+        await llm_manager.chat_vision("Test", ["image.jpg"], client_type="unknown_backend")
 
 
 # =============================================================================
@@ -769,29 +765,29 @@ async def test_vision_with_nonexistent_backend(setup_llm_service):
 
 
 @pytest.mark.asyncio
-async def test_cleanup_all_backends(llm_service: LLMService, mock_config: Dict[str, Any]):
-    """测试清理所有后端"""
+async def test_cleanup_all_backends(llm_manager: LLMManager, mock_config: Dict[str, Any]):
+    """测试清理所有客户端"""
     mock_backend = MagicMock()
     mock_backend.cleanup = AsyncMock()
-    mock_backend.get_info.return_value = {"name": "OpenAIBackend"}
+    mock_backend.get_info.return_value = {"name": "OpenAIClient"}
 
-    with patch("src.core.llm_backends.openai_backend.OpenAIBackend", return_value=mock_backend):
-        with patch("src.core.llm_backends.token_usage_manager.TokenUsageManager"):
-            await llm_service.setup(mock_config)
+    with patch("src.services.llm.backends.openai_client.OpenAIClient", return_value=mock_backend):
+        with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager"):
+            await llm_manager.setup(mock_config)
 
-            # 验证后端已初始化
-            assert len(llm_service._backends) == 3
+            # 验证客户端已初始化
+            assert len(llm_manager._clients) == 3
 
-            await llm_service.cleanup()
+            await llm_manager.cleanup()
 
-            # 验证每个后端的 cleanup 被调用
+            # 验证每个客户端的 cleanup 被调用
             assert mock_backend.cleanup.call_count == 3
-            assert len(llm_service._backends) == 0  # 后端被清空
+            assert len(llm_manager._clients) == 0  # 客户端被清空
 
 
 @pytest.mark.asyncio
-async def test_cleanup_handles_backend_errors(llm_service: LLMService, mock_config: Dict[str, Any]):
-    """测试清理时处理单个后端错误"""
+async def test_cleanup_handles_backend_errors(llm_manager: LLMManager, mock_config: Dict[str, Any]):
+    """测试清理时处理单个客户端错误"""
 
     async def failing_cleanup():
         raise Exception("Cleanup error")
@@ -804,16 +800,16 @@ async def test_cleanup_handles_backend_errors(llm_service: LLMService, mock_conf
     mock_backend2.cleanup = AsyncMock()
     mock_backend2.get_info.return_value = {"name": "Backend2"}
 
-    with patch("src.core.llm_backends.openai_backend.OpenAIBackend", side_effect=[mock_backend1, mock_backend2]):
-        with patch("src.core.llm_backends.token_usage_manager.TokenUsageManager"):
-            # 创建只有两个后端的配置
+    with patch("src.services.llm.backends.openai_client.OpenAIClient", side_effect=[mock_backend1, mock_backend2]):
+        with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager"):
+            # 创建只有两个客户端的配置
             config = {"llm": {"backend": "openai", "model": "test"}}
-            await llm_service.setup(config)
+            await llm_manager.setup(config)
 
-            # 应该不抛出异常，继续清理其他后端
-            await llm_service.cleanup()
+            # 应该不抛出异常，继续清理其他客户端
+            await llm_manager.cleanup()
 
-            assert len(llm_service._backends) == 0
+            assert len(llm_manager._clients) == 0
 
 
 # =============================================================================
@@ -822,11 +818,11 @@ async def test_cleanup_handles_backend_errors(llm_service: LLMService, mock_conf
 
 
 @pytest.mark.asyncio
-async def test_build_messages_without_system(setup_llm_service):
+async def test_build_messages_without_system(setup_llm_manager):
     """测试不带系统消息的消息构建"""
-    llm_service, _, _ = setup_llm_service
+    llm_manager, _, _ = setup_llm_manager
 
-    messages = llm_service._build_messages("Hello", None)
+    messages = llm_manager._build_messages("Hello", None)
 
     assert len(messages) == 1
     assert messages[0]["role"] == "user"
@@ -834,11 +830,11 @@ async def test_build_messages_without_system(setup_llm_service):
 
 
 @pytest.mark.asyncio
-async def test_build_messages_with_system(setup_llm_service):
+async def test_build_messages_with_system(setup_llm_manager):
     """测试带系统消息的消息构建"""
-    llm_service, _, _ = setup_llm_service
+    llm_manager, _, _ = setup_llm_manager
 
-    messages = llm_service._build_messages("Hello", "You are helpful")
+    messages = llm_manager._build_messages("Hello", "You are helpful")
 
     assert len(messages) == 2
     assert messages[0]["role"] == "system"

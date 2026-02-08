@@ -79,14 +79,20 @@ class ParametersGeneratedPayload(BasePayload):
     def _debug_fields(self) -> List[str]:
         """返回需要显示的字段"""
         return [
-            "tts_text", "tts_enabled",
-            "subtitle_text", "subtitle_enabled",
-            "expressions", "expressions_enabled",
-            "hotkeys", "hotkeys_enabled",
+            "tts_text",
+            "tts_enabled",
+            "subtitle_text",
+            "subtitle_enabled",
+            "expressions",
+            "expressions_enabled",
+            "hotkeys",
+            "hotkeys_enabled",
         ]
 
     @classmethod
-    def from_parameters(cls, parameters: "ExpressionParameters", source_intent: Optional[Dict[str, Any]] = None) -> "ParametersGeneratedPayload":
+    def from_parameters(
+        cls, parameters: "ExpressionParameters", source_intent: Optional[Dict[str, Any]] = None
+    ) -> "ParametersGeneratedPayload":
         """
         从 ExpressionParameters 对象创建 Payload
 

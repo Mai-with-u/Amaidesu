@@ -1,4 +1,5 @@
 """Avatar Output Provider"""
+
 from .avatar_output_provider import AvatarOutputProvider
 from src.core.provider_registry import ProviderRegistry
 
