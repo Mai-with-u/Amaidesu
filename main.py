@@ -9,6 +9,7 @@ import contextlib
 from typing import Any, Dict, Optional, Tuple
 
 from src.core.amaidesu_core import AmaidesuCore
+from src.core.provider_registry import ProviderRegistry
 from src.services.config.service import ConfigService
 from src.services.context.manager import ContextManager
 from src.core.event_bus import EventBus
@@ -465,11 +466,15 @@ async def main() -> None:
     logging_config = config_service.get_section("logging", default={})
     setup_logging(args, logging_config)
 
-    # 5. 现在日志已配置完毕，可以导入providers了
-    #    确保所有Provider都被注册（此时日志配置已生效）
-    #    导入这些模块是为了触发副作用（注册到ProviderRegistry）
-    import src.domains.input.providers as input_providers  # noqa: F401
-    import src.domains.output.providers as output_providers  # noqa: F401
+    # 5. 配置驱动的Provider注册（按需加载）
+    #    根据配置文件中启用的Provider动态导入和注册
+    logger.info("开始注册Provider...")
+    stats = ProviderRegistry.discover_and_register_providers(config_service, config)
+    logger.info(
+        f"Provider注册完成: Input={stats['input']}, "
+        f"Decision={stats['decision']}, Output={stats['output']}, "
+        f"Total={stats['total']}"
+    )
 
     validate_config(config)
     exit_if_config_copied(main_cfg_copied, plugin_cfg_copied, pipeline_cfg_copied)

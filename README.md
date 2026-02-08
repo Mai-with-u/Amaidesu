@@ -307,7 +307,6 @@ flowchart TD
 
     TTS["TTS<br>(语音合成)"]:::output -->|使用 subtitle_service| Subtitle
 
-    EmotionJudge["Emotion Judge<br>(情感判断)"]:::decision -->|使用 vts_control| VTubeStudio
     Sticker["Sticker<br>(表情贴纸)"]:::output -->|使用 vts_control| VTubeStudio
 
     %% 没有依赖其他服务的独立Provider

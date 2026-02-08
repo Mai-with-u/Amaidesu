@@ -32,7 +32,7 @@
 | **Layer 1 输入** | ConsoleInputProvider, MockDanmakuProvider, BiliDanmakuInputProvider | ✅ 已实现 |
 | **Layer 1 管理** | InputProviderManager（start_all_providers / stop_all_providers） | ✅ 已实现 |
 | **Layer 2** | InputLayer（RawData → NormalizedMessage） | ✅ 已实现 |
-| **Layer 3 决策** | MaiCoreDecisionProvider, RuleEngineDecisionProvider, EmotionJudgeDecisionProvider | ✅ 已实现 |
+| **Layer 3 决策** | MaiCoreDecisionProvider, RuleEngineDecisionProvider, LocalLLMDecisionProvider | ✅ 已实现 |
 | **Layer 3 管理** | DecisionManager（订阅 normalization.message_ready，发布 decision.intent_generated） | ✅ 已实现 |
 | **Layer 4-5** | ExpressionGenerator, FlowCoordinator, OutputProviderManager | ✅ 已实现 |
 | **Layer 7 渲染** | TTSProvider, SubtitleProvider, StickerOutputProvider, VTSProvider, OmniTTSProvider, AvatarOutputProvider | ✅ 已实现（含 Registry） |
