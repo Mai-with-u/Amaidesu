@@ -29,8 +29,8 @@ from src.services.config.schemas.schemas import (
     verify_no_enabled_field_in_schemas,
     get_output_provider_config,
     OUTPUT_PROVIDER_CONFIG_MAP,
-    # Input provider configs
-    ConsoleInputProviderConfig,
+    # Input provider configs（已迁移的自管理 Schema 不再导出）
+    # ConsoleInputProviderConfig,  # 已迁移到自管理 Schema
     BiliDanmakuProviderConfig,
     BiliDanmakuOfficialProviderConfig,
     BiliDanmakuOfficialMaiCraftProviderConfig,
@@ -41,10 +41,10 @@ from src.services.config.schemas.schemas import (
     LocalLLMDecisionProviderConfig,
     RuleEngineDecisionProviderConfig,
     MockDecisionProviderConfig,
-    # Output provider configs
-    SubtitleProviderConfig,
-    VTSProviderConfig,
-    TTSProviderConfig,
+    # Output provider configs（已迁移的自管理 Schema 不再导出）
+    # SubtitleProviderConfig,  # 已迁移到自管理 Schema
+    # VTSProviderConfig,  # 已迁移到自管理 Schema
+    # TTSProviderConfig,  # 已迁移到自管理 Schema
     StickerProviderConfig,
     WarudoProviderConfig,
     ObsControlProviderConfig,
@@ -72,8 +72,8 @@ __all__ = [
     "verify_no_enabled_field_in_schemas",
     "get_output_provider_config",
     "OUTPUT_PROVIDER_CONFIG_MAP",
-    # Input provider configs
-    "ConsoleInputProviderConfig",
+    # Input provider configs（已迁移的自管理 Schema 不再导出）
+    # "ConsoleInputProviderConfig",  # 已迁移到自管理 Schema
     "BiliDanmakuProviderConfig",
     "BiliDanmakuOfficialProviderConfig",
     "BiliDanmakuOfficialMaiCraftProviderConfig",
@@ -84,10 +84,10 @@ __all__ = [
     "LocalLLMDecisionProviderConfig",
     "RuleEngineDecisionProviderConfig",
     "MockDecisionProviderConfig",
-    # Output provider configs
-    "SubtitleProviderConfig",
-    "VTSProviderConfig",
-    "TTSProviderConfig",
+    # Output provider configs（已迁移的自管理 Schema 不再导出）
+    # "SubtitleProviderConfig",  # 已迁移到自管理 Schema
+    # "VTSProviderConfig",  # 已迁移到自管理 Schema
+    # "TTSProviderConfig",  # 已迁移到自管理 Schema
     "StickerProviderConfig",
     "WarudoProviderConfig",
     "ObsControlProviderConfig",

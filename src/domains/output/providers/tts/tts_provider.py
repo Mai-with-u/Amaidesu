@@ -11,9 +11,12 @@ import tempfile
 from typing import Optional, Dict, Any
 import numpy as np
 
+from pydantic import Field
+
 from src.core.base.output_provider import OutputProvider
 from src.domains.output.parameters.render_parameters import ExpressionParameters
 from src.core.utils.logger import get_logger
+from src.services.config.schemas.schemas.base import BaseProviderConfig
 
 # 检查依赖
 DEPENDENCIES_OK = True
@@ -38,6 +41,21 @@ class TTSProvider(OutputProvider):
     - 错误处理和降级方案
     """
 
+    class ConfigSchema(BaseProviderConfig):
+        """TTS输出Provider配置"""
+
+        type: str = "tts"
+
+        # 引擎选择
+        engine: str = Field(default="edge", pattern=r"^(edge|omni)$", description="TTS引擎类型")
+
+        # Edge TTS配置
+        voice: str = Field(default="zh-CN-XiaoxiaoNeural", description="Edge TTS语音")
+        output_device_name: Optional[str] = Field(default=None, description="音频输出设备名称")
+
+        # Omni TTS配置
+        omni_config: Dict[str, Any] = Field(default_factory=dict, description="Omni TTS配置")
+
     def __init__(self, config: Dict[str, Any]):
         """
         初始化TTS Provider
@@ -48,17 +66,20 @@ class TTSProvider(OutputProvider):
         super().__init__(config)
         self.logger = get_logger("TTSProvider")
 
+        # 使用 ConfigSchema 验证配置，获得类型安全的配置对象
+        self.typed_config = self.ConfigSchema(**config)
+
         # 引擎选择
-        self.tts_engine = self.config.get("engine", "edge")  # "edge" or "omni"
+        self.tts_engine = self.typed_config.engine  # "edge" or "omni"
 
         # Edge TTS配置
-        self.voice = self.config.get("voice", "zh-CN-XiaoxiaoNeural")
-        self.output_device_name = self.config.get("output_device_name", "")
+        self.voice = self.typed_config.voice
+        self.output_device_name = self.typed_config.output_device_name or ""
         self.output_device_index = None  # 延迟初始化
 
         # Omni TTS配置
         self.omni_enabled = self.tts_engine == "omni"
-        self.omni_config = self.config.get("omni", {})
+        self.omni_config = self.typed_config.omni_config
 
         # 音频播放配置
         self.tts_lock = asyncio.Lock()

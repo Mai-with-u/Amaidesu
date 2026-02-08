@@ -6,11 +6,14 @@ ConsoleInputProvider - 控制台输入Provider
 
 import sys
 import asyncio
-from typing import AsyncIterator, Optional, List
+from typing import AsyncIterator, Optional, List, Literal
+
+from pydantic import Field
 
 from src.core.base.input_provider import InputProvider
 from src.core.base.raw_data import RawData
 from src.core.utils.logger import get_logger
+from src.services.config.schemas.schemas.base import BaseProviderConfig
 
 
 class ConsoleInputProvider(InputProvider):
@@ -19,6 +22,13 @@ class ConsoleInputProvider(InputProvider):
 
     从标准输入读取文本，支持命令处理(exit, gift, sc, guard)。
     """
+
+    class ConfigSchema(BaseProviderConfig):
+        """控制台输入Provider配置"""
+
+        type: Literal["console_input"] = "console_input"
+        user_id: str = Field(default="console_user", description="用户ID")
+        user_nickname: str = Field(default="控制台", description="用户昵称")
 
     def __init__(self, config: dict):
         """
@@ -30,9 +40,12 @@ class ConsoleInputProvider(InputProvider):
         super().__init__(config)
         self.logger = get_logger("ConsoleInputProvider")
 
-        # 读取配置
-        self.user_id = config.get("user_id", "console_user")
-        self.user_nickname = config.get("user_nickname", "控制台")
+        # 使用 ConfigSchema 验证配置，获得类型安全的配置对象
+        self.typed_config = self.ConfigSchema(**config)
+
+        # 从类型安全的配置对象读取参数
+        self.user_id = self.typed_config.user_id
+        self.user_nickname = self.typed_config.user_nickname
 
         self.logger.info(f"ConsoleInputProvider初始化完成 (user: {self.user_nickname})")
 

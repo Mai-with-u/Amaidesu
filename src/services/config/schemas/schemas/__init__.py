@@ -8,7 +8,7 @@ from .base import BaseProviderConfig
 
 # Input provider schemas
 from .input_providers import (
-    ConsoleInputProviderConfig,
+    # ConsoleInputProviderConfig,  # 已迁移到自管理 Schema
     BiliDanmakuProviderConfig,
     BiliDanmakuOfficialProviderConfig,
     BiliDanmakuOfficialMaiCraftProviderConfig,
@@ -26,9 +26,9 @@ from .decision_providers import (
 
 # Output provider schemas
 from .output_providers import (
-    SubtitleProviderConfig,
-    VTSProviderConfig,
-    TTSProviderConfig,
+    # SubtitleProviderConfig,  # 已迁移到自管理 Schema
+    # VTSProviderConfig,  # 已迁移到自管理 Schema
+    # TTSProviderConfig,  # 已迁移到自管理 Schema
     StickerProviderConfig,
     WarudoProviderConfig,
     ObsControlProviderConfig,
@@ -46,8 +46,8 @@ from .logging import LoggingConfig
 # Provider Schema Registry
 # Maps provider type to their config schema class
 PROVIDER_SCHEMA_REGISTRY: Dict[str, Type[BaseModel]] = {
-    # Input providers (6)
-    "console_input": ConsoleInputProviderConfig,
+    # Input providers (5) - console_input 已迁移到自管理 Schema
+    # "console_input": ConsoleInputProviderConfig,  # 已迁移到自管理 Schema
     "bili_danmaku": BiliDanmakuProviderConfig,
     "bili_danmaku_official": BiliDanmakuOfficialProviderConfig,
     "bili_danmaku_official_maicraft": BiliDanmakuOfficialMaiCraftProviderConfig,
@@ -58,10 +58,10 @@ PROVIDER_SCHEMA_REGISTRY: Dict[str, Type[BaseModel]] = {
     "local_llm": LocalLLMDecisionProviderConfig,
     "rule_engine": RuleEngineDecisionProviderConfig,
     "mock": MockDecisionProviderConfig,
-    # Output providers (10)
-    "subtitle": SubtitleProviderConfig,
-    "vts": VTSProviderConfig,
-    "tts": TTSProviderConfig,
+    # Output providers (7) - subtitle, vts, tts 已迁移到自管理 Schema
+    # "subtitle": SubtitleProviderConfig,  # 已迁移到自管理 Schema
+    # "vts": VTSProviderConfig,  # 已迁移到自管理 Schema
+    # "tts": TTSProviderConfig,  # 已迁移到自管理 Schema
     "sticker": StickerProviderConfig,
     "warudo": WarudoProviderConfig,
     "obs_control": ObsControlProviderConfig,
@@ -183,8 +183,8 @@ def verify_no_enabled_field_in_schemas() -> list:
 __all__ = [
     # Base schemas
     "BaseProviderConfig",
-    # Input provider schemas
-    "ConsoleInputProviderConfig",
+    # Input provider schemas（已迁移的自管理 Schema 不再导出）
+    # "ConsoleInputProviderConfig",  # 已迁移到自管理 Schema
     "BiliDanmakuProviderConfig",
     "BiliDanmakuOfficialProviderConfig",
     "BiliDanmakuOfficialMaiCraftProviderConfig",
@@ -195,10 +195,10 @@ __all__ = [
     "LocalLLMDecisionProviderConfig",
     "RuleEngineDecisionProviderConfig",
     "MockDecisionProviderConfig",
-    # Output provider schemas
-    "SubtitleProviderConfig",
-    "VTSProviderConfig",
-    "TTSProviderConfig",
+    # Output provider schemas（已迁移的自管理 Schema 不再导出）
+    # "SubtitleProviderConfig",  # 已迁移到自管理 Schema
+    # "VTSProviderConfig",  # 已迁移到自管理 Schema
+    # "TTSProviderConfig",  # 已迁移到自管理 Schema
     "StickerProviderConfig",
     "WarudoProviderConfig",
     "ObsControlProviderConfig",

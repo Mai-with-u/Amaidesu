@@ -3,24 +3,24 @@
 import pytest
 from typing import Dict, Any
 from src.core.provider_registry import ProviderRegistry
-from src.domains.input.providers.mock_danmaku.mock_danmaku_provider import MockDanmakuInputProvider
 
 
 @pytest.fixture(autouse=True, scope="module")
 def register_test_providers() -> None:
     """Register test providers before integration tests run.
 
-    This fixture ensures that the mock_danmaku provider is available
-    for all integration tests that require it.
+    This fixture ensures that the providers are available for all integration tests.
+    Since other test files may clear ProviderRegistry, we re-import provider modules
+    to trigger auto-registration.
+
+    Scope "module" ensures this runs once per test module, not before every test.
     """
-    # Check if mock_danmaku provider is already registered
-    if "mock_danmaku" not in ProviderRegistry._input_providers:
-        # Register the mock_danmaku provider
-        ProviderRegistry.register_input(
-            "mock_danmaku",
-            MockDanmakuInputProvider,
-            source="test:mock_danmaku"
-        )
+    # Import built-in providers to trigger auto-registration
+    # Input Providers
+    from src.domains.input.providers import console_input, mock_danmaku
+
+    # Output Providers
+    from src.domains.output.providers import subtitle, tts, vts
 
     # Yield to allow tests to run
     yield

@@ -9,12 +9,8 @@ from pydantic import Field, field_validator
 from .base import BaseProviderConfig
 
 
-class ConsoleInputProviderConfig(BaseProviderConfig):
-    """控制台输入Provider配置"""
-
-    type: Literal["console_input"] = "console_input"
-    user_id: str = Field(default="console_user", description="用户ID")
-    user_nickname: str = Field(default="控制台", description="用户昵称")
+# 注意：ConsoleInputProvider 已迁移到自管理 Schema 架构
+# 配置定义位于：src/domains/input/providers/console_input/console_input_provider.py
 
 
 class BiliDanmakuProviderConfig(BaseProviderConfig):
@@ -200,7 +196,7 @@ class MainosabaProviderConfig(BaseProviderConfig):
 
 # 类型别名，用于导入
 InputProviderConfig = (
-    ConsoleInputProviderConfig |
+    # ConsoleInputProviderConfig |  # 已迁移到自管理 Schema
     BiliDanmakuProviderConfig |
     BiliDanmakuOfficialProviderConfig |
     BiliDanmakuOfficialMaiCraftProviderConfig |

@@ -4,117 +4,17 @@
 定义所有输出Provider的Pydantic配置模型。
 """
 
-from typing import Optional, Dict, List, Any
-from pydantic import BaseModel, Field, field_validator
+from typing import Optional, Dict, Any
+from pydantic import BaseModel, Field
 
 from .base import BaseProviderConfig
 
 
-class SubtitleProviderConfig(BaseProviderConfig):
-    """字幕输出Provider配置"""
-
-    type: str = "subtitle"
-
-    # GUI配置
-    window_width: int = Field(default=800, ge=100, le=3840, description="字幕窗口宽度")
-    window_height: int = Field(default=100, ge=50, le=2160, description="字幕窗口高度")
-    window_offset_y: int = Field(default=100, ge=0, le=2160, description="字幕窗口距离底部的偏移")
-    font_family: str = Field(default="Microsoft YaHei UI", description="字体名称")
-    font_size: int = Field(default=28, ge=10, le=100, description="字体大小")
-    font_weight: str = Field(default="bold", description="字体粗细")
-    text_color: str = Field(default="white", pattern=r"^[a-zA-Z#]+$", description="文字颜色")
-
-    # 描边配置
-    outline_enabled: bool = Field(default=True, description="是否启用描边")
-    outline_color: str = Field(default="black", pattern=r"^[a-zA-Z#]+$", description="描边颜色")
-    outline_width: int = Field(default=2, ge=0, le=10, description="描边宽度")
-
-    # 背景配置
-    background_color: str = Field(default="#FFFFFF", pattern=r"^#[0-9A-Fa-f]{6}$", description="背景颜色")
-
-    # 行为配置
-    fade_delay_seconds: int = Field(default=5, ge=0, le=300, description="淡出延迟（秒）")
-    auto_hide: bool = Field(default=True, description="是否自动隐藏")
-    window_alpha: float = Field(default=0.95, ge=0.0, le=1.0, description="窗口透明度")
-    always_on_top: bool = Field(default=False, description="是否置顶")
-
-    # OBS集成配置
-    obs_friendly_mode: bool = Field(default=True, description="OBS友好模式")
-    window_title: str = Field(default="Amaidesu-Subtitle-OBS", description="窗口标题")
-    use_chroma_key: bool = Field(default=False, description="是否使用色度键")
-    chroma_key_color: str = Field(default="#00FF00", pattern=r"^#[0-9A-Fa-f]{6}$", description="色度键颜色")
-
-    # 窗口显示配置
-    always_show_window: bool = Field(default=True, description="是否始终显示窗口")
-    show_in_taskbar: bool = Field(default=True, description="是否在任务栏显示")
-    window_minimizable: bool = Field(default=True, description="窗口是否可最小化")
-    show_waiting_text: bool = Field(default=False, description="是否显示等待文本")
-
-
-class VTSProviderConfig(BaseProviderConfig):
-    """VTS输出Provider配置"""
-
-    type: str = "vts"
-
-    # VTS连接配置
-    vts_host: str = Field(default="localhost", description="VTS WebSocket主机地址")
-    vts_port: int = Field(default=8001, ge=1, le=65535, description="VTS WebSocket端口")
-
-    # LLM智能匹配配置
-    llm_matching_enabled: bool = Field(default=False, description="是否启用LLM智能热键匹配")
-    llm_api_key: Optional[str] = Field(default=None, description="LLM API密钥")
-    llm_base_url: Optional[str] = Field(default=None, description="LLM API地址")
-    llm_model: str = Field(default="deepseek-chat", description="LLM模型名称")
-    llm_temperature: float = Field(default=0.1, ge=0.0, le=2.0, description="LLM温度参数")
-    llm_max_tokens: int = Field(default=100, ge=1, le=4096, description="LLM最大token数")
-    llm_prompt_prefix: Optional[str] = Field(
-        default=None,
-        description="LLM提示词前缀"
-    )
-
-    # 情感热键映射
-    emotion_hotkey_mapping: Dict[str, List[str]] = Field(
-        default={
-            "happy": ["微笑", "笑", "开心", "高兴", "愉快", "喜悦"],
-            "surprised": ["惊讶", "吃惊", "震惊", "意外"],
-            "sad": ["难过", "伤心", "悲伤", "沮丧", "失落"],
-            "angry": ["生气", "愤怒", "不满", "恼火"],
-            "shy": ["害羞", "脸红", "羞涩", "不好意思"],
-            "wink": ["眨眼", "wink", "眨眨眼"],
-        },
-        description="情感热键映射"
-    )
-
-    # 口型同步配置
-    lip_sync_enabled: bool = Field(default=True, description="是否启用口型同步")
-    volume_threshold: float = Field(default=0.01, ge=0.0, le=1.0, description="音量阈值")
-    smoothing_factor: float = Field(default=0.3, ge=0.0, le=1.0, description="平滑因子")
-    vowel_detection_sensitivity: float = Field(default=0.5, ge=0.0, le=2.0, description="元音检测敏感度")
-    sample_rate: int = Field(default=32000, ge=8000, le=48000, description="采样率")
-
-    @field_validator("llm_api_key")
-    @classmethod
-    def validate_llm_api_key(cls, v: Optional[str], info) -> Optional[str]:
-        """验证LLM API密钥"""
-        if info.data.get("llm_matching_enabled") and not v:
-            raise ValueError("启用LLM匹配时必须提供API密钥")
-        return v
-
-
-class TTSProviderConfig(BaseProviderConfig):
-    """TTS输出Provider配置"""
-
-    type: str = "tts"
-
-    # 引擎选择
-    engine: str = Field(default="edge", pattern=r"^(edge|omni)$", description="TTS引擎类型")
-
-    # Edge TTS配置
-    voice: str = Field(default="zh-CN-XiaoxiaoNeural", description="Edge TTS语音")
-    output_device_name: Optional[str] = Field(default=None, description="音频输出设备名称")
-
-    # Omni TTS配置
-    omni_config: Dict[str, Any] = Field(default_factory=dict, description="Omni TTS配置")
+# 注意：SubtitleProvider, VTSProvider, TTSProvider 已迁移到自管理 Schema 架构
+# 配置定义位于：
+# - SubtitleProvider: src/domains/output/providers/subtitle/subtitle_provider.py
+# - VTSProvider: src/domains/output/providers/vts/vts_provider.py
+# - TTSProvider: src/domains/output/providers/tts/tts_provider.py
 
 
 class StickerProviderConfig(BaseProviderConfig):
@@ -254,9 +154,9 @@ class RemoteStreamOutputProviderConfig(BaseProviderConfig):
 
 # Provider类型映射（用于工厂模式）
 OUTPUT_PROVIDER_CONFIG_MAP = {
-    "subtitle": SubtitleProviderConfig,
-    "vts": VTSProviderConfig,
-    "tts": TTSProviderConfig,
+    # "subtitle": SubtitleProviderConfig,  # 已迁移到自管理 Schema
+    # "vts": VTSProviderConfig,  # 已迁移到自管理 Schema
+    # "tts": TTSProviderConfig,  # 已迁移到自管理 Schema
     "sticker": StickerProviderConfig,
     "warudo": WarudoProviderConfig,
     "obs_control": ObsControlProviderConfig,
@@ -289,10 +189,10 @@ def get_output_provider_config(provider_type: str, config: Dict[str, Any]) -> Ba
 
 
 __all__ = [
-    # Provider配置类
-    "SubtitleProviderConfig",
-    "VTSProviderConfig",
-    "TTSProviderConfig",
+    # Provider配置类（已迁移的自管理 Schema 不再导出）
+    # "SubtitleProviderConfig",  # 已迁移到自管理 Schema
+    # "VTSProviderConfig",  # 已迁移到自管理 Schema
+    # "TTSProviderConfig",  # 已迁移到自管理 Schema
     "StickerProviderConfig",
     "WarudoProviderConfig",
     "ObsControlProviderConfig",

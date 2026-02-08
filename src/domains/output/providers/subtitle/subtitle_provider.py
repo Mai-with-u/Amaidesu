@@ -19,9 +19,12 @@ except ImportError:
     ctk = None
     CTK_AVAILABLE = False
 
+from pydantic import Field
+
 from src.core.base.output_provider import OutputProvider
 from src.core.base.base import RenderParameters
 from src.core.utils.logger import get_logger
+from src.services.config.schemas.schemas.base import BaseProviderConfig
 
 
 class OutlineLabel:
@@ -205,6 +208,46 @@ class SubtitleOutputProvider(OutputProvider):
     使用CustomTkinter显示字幕窗口，支持描边和半透明背景。
     """
 
+    class ConfigSchema(BaseProviderConfig):
+        """字幕输出Provider配置"""
+
+        type: str = "subtitle"
+
+        # GUI配置
+        window_width: int = Field(default=800, ge=100, le=3840, description="字幕窗口宽度")
+        window_height: int = Field(default=100, ge=50, le=2160, description="字幕窗口高度")
+        window_offset_y: int = Field(default=100, ge=0, le=2160, description="字幕窗口距离底部的偏移")
+        font_family: str = Field(default="Microsoft YaHei UI", description="字体名称")
+        font_size: int = Field(default=28, ge=10, le=100, description="字体大小")
+        font_weight: str = Field(default="bold", description="字体粗细")
+        text_color: str = Field(default="white", pattern=r"^[a-zA-Z#]+$", description="文字颜色")
+
+        # 描边配置
+        outline_enabled: bool = Field(default=True, description="是否启用描边")
+        outline_color: str = Field(default="black", pattern=r"^[a-zA-Z#]+$", description="描边颜色")
+        outline_width: int = Field(default=2, ge=0, le=10, description="描边宽度")
+
+        # 背景配置
+        background_color: str = Field(default="#FFFFFF", pattern=r"^#[0-9A-Fa-f]{6}$", description="背景颜色")
+
+        # 行为配置
+        fade_delay_seconds: int = Field(default=5, ge=0, le=300, description="淡出延迟（秒）")
+        auto_hide: bool = Field(default=True, description="是否自动隐藏")
+        window_alpha: float = Field(default=0.95, ge=0.0, le=1.0, description="窗口透明度")
+        always_on_top: bool = Field(default=False, description="是否置顶")
+
+        # OBS集成配置
+        obs_friendly_mode: bool = Field(default=True, description="OBS友好模式")
+        window_title: str = Field(default="Amaidesu-Subtitle-OBS", description="窗口标题")
+        use_chroma_key: bool = Field(default=False, description="是否使用色度键")
+        chroma_key_color: str = Field(default="#00FF00", pattern=r"^#[0-9A-Fa-f]{6}$", description="色度键颜色")
+
+        # 窗口显示配置
+        always_show_window: bool = Field(default=True, description="是否始终显示窗口")
+        show_in_taskbar: bool = Field(default=True, description="是否在任务栏显示")
+        window_minimizable: bool = Field(default=True, description="窗口是否可最小化")
+        show_waiting_text: bool = Field(default=False, description="是否显示等待文本")
+
     def __init__(self, config: dict):
         super().__init__(config)
         self.logger = get_logger("SubtitleOutputProvider")
@@ -214,40 +257,43 @@ class SubtitleOutputProvider(OutputProvider):
             self.enabled = False
             return
 
+        # 使用 ConfigSchema 验证配置，获得类型安全的配置对象
+        self.typed_config = self.ConfigSchema(**config)
+
         # GUI 配置
-        self.window_width = self.config.get("window_width", 800)
-        self.window_height = self.config.get("window_height", 100)
-        self.window_offset_y = self.config.get("window_offset_y", 100)
-        self.font_family = self.config.get("font_family", "Microsoft YaHei UI")
-        self.font_size = self.config.get("font_size", 28)
-        self.font_weight = self.config.get("font_weight", "bold")
-        self.text_color = self.config.get("text_color", "white")
+        self.window_width = self.typed_config.window_width
+        self.window_height = self.typed_config.window_height
+        self.window_offset_y = self.typed_config.window_offset_y
+        self.font_family = self.typed_config.font_family
+        self.font_size = self.typed_config.font_size
+        self.font_weight = self.typed_config.font_weight
+        self.text_color = self.typed_config.text_color
 
         # 描边配置
-        self.outline_enabled = self.config.get("outline_enabled", True)
-        self.outline_color = self.config.get("outline_color", "black")
-        self.outline_width = self.config.get("outline_width", 2)
+        self.outline_enabled = self.typed_config.outline_enabled
+        self.outline_color = self.typed_config.outline_color
+        self.outline_width = self.typed_config.outline_width
 
         # 背景配置
-        self.background_color = self.config.get("background_color", "#FFFFFF")
+        self.background_color = self.typed_config.background_color
 
         # 行为配置
-        self.fade_delay_seconds = self.config.get("fade_delay_seconds", 5)
-        self.auto_hide = self.config.get("auto_hide", True)
-        self.window_alpha = self.config.get("window_alpha", 0.95)
-        self.always_on_top = self.config.get("always_on_top", False)
+        self.fade_delay_seconds = self.typed_config.fade_delay_seconds
+        self.auto_hide = self.typed_config.auto_hide
+        self.window_alpha = self.typed_config.window_alpha
+        self.always_on_top = self.typed_config.always_on_top
 
         # OBS 集成配置
-        self.obs_friendly_mode = self.config.get("obs_friendly_mode", True)
-        self.window_title = self.config.get("window_title", "Amaidesu-Subtitle-OBS")
-        self.use_chroma_key = self.config.get("use_chroma_key", False)
-        self.chroma_key_color = self.config.get("chroma_key_color", "#00FF00")
+        self.obs_friendly_mode = self.typed_config.obs_friendly_mode
+        self.window_title = self.typed_config.window_title
+        self.use_chroma_key = self.typed_config.use_chroma_key
+        self.chroma_key_color = self.typed_config.chroma_key_color
 
         # 窗口显示配置
-        self.always_show_window = self.config.get("always_show_window", True)
-        self.show_in_taskbar = self.config.get("show_in_taskbar", True)
-        self.window_minimizable = self.config.get("window_minimizable", True)
-        self.show_waiting_text = self.config.get("show_waiting_text", False)
+        self.always_show_window = self.typed_config.always_show_window
+        self.show_in_taskbar = self.typed_config.show_in_taskbar
+        self.window_minimizable = self.typed_config.window_minimizable
+        self.show_waiting_text = self.typed_config.show_waiting_text
 
         # 线程和状态
         self.text_queue = queue.Queue()
