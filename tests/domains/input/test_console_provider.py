@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 import pytest
 from src.core.event_bus import EventBus
 from src.core.base.raw_data import RawData
-from src.domains.input.input_layer import InputLayer
+from src.domains.input.input_domain import InputDomain
 from src.domains.input.providers import ConsoleInputProvider
 from src.core.events.payloads import RawDataPayload
 from src.core.events.names import CoreEvents
@@ -134,8 +134,8 @@ async def test_console_input_provider_guard_format():
 async def test_console_input_provider_data_flow():
     """测试 ConsoleInputProvider 完整数据流"""
     event_bus = EventBus()
-    input_layer = InputLayer(event_bus)
-    await input_layer.setup()
+    input_domain = InputDomain(event_bus)
+    await input_domain.setup()
 
     collected_messages = []
 
@@ -170,15 +170,15 @@ async def test_console_input_provider_data_flow():
     assert collected_messages[0]["text"] == "你好，Amaidesu"
     assert collected_messages[0]["source"] == "console"
 
-    await input_layer.cleanup()
+    await input_domain.cleanup()
 
 
 @pytest.mark.asyncio
 async def test_console_provider_gift_command_flow():
     """测试 ConsoleInputProvider 礼物命令数据流"""
     event_bus = EventBus()
-    input_layer = InputLayer(event_bus)
-    await input_layer.setup()
+    input_domain = InputDomain(event_bus)
+    await input_domain.setup()
 
     collected_messages = []
 
@@ -214,12 +214,12 @@ async def test_console_provider_gift_command_flow():
     # 验证礼物消息
     assert len(collected_messages) == 1
     assert collected_messages[0]["data_type"] == "gift"
-    # InputLayer 处理 gift 时，如果 content 中有 "user_name" 字段
+    # InputDomain 处理 gift 时，如果 content 中有 "user_name" 字段
     # 会提取出来，但文本可能显示 "未知用户"（因为字段映射问题）
     # 只要礼物名称正确即可
     assert "小星星" in collected_messages[0]["text"]
 
-    await input_layer.cleanup()
+    await input_domain.cleanup()
 
 
 if __name__ == "__main__":

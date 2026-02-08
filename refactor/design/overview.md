@@ -1,4 +1,4 @@
-# Amaidesu 3层架构设计
+# Amaidesu 3域架构设计
 
 ## 核心理念
 
@@ -193,6 +193,112 @@ class Intent:
     actions: List[IntentAction]   # 动作列表
     metadata: Dict[str, Any]
 ```
+
+---
+
+## 架构约束与规则
+
+### 硬性约束：域间数据流方向
+
+**原则：3域架构的单向数据流**
+
+```
+Input Domain → Decision Domain → Output Domain
+     ↓                ↓                   ↓
+NormalizedMessage   Intent           实际输出
+```
+
+#### 禁止模式
+
+❌ **Output Domain 绝不应该直接订阅 Input Domain 的事件**
+
+```python
+# ❌ 错误：Output Provider 直接订阅 Input 事件
+class MyOutputProvider(OutputProvider):
+    async def initialize(self):
+        # 错误！绕过了 Decision Domain
+        await self.event_bus.subscribe(
+            CoreEvents.NORMALIZATION_MESSAGE_READY,  # Input 事件
+            self.handle_message
+        )
+```
+
+**为什么这是错误的？**
+1. **破坏架构分层**：Output 不应该知道 Input 的存在
+2. **绕过决策逻辑**：消息没有经过 Decision Provider 处理
+3. **无法保证类型安全**：NormalizedMessage ≠ Intent，数据类型不匹配
+4. **违反单一职责**：Output 的职责是渲染 Intent，而不是处理原始消息
+
+#### 正确模式
+
+✅ **严格遵守事件流向：Input → Decision → Output**
+
+```python
+# ✅ 正确：Input 发布标准化消息
+class InputDomain:
+    async def process_and_publish(self, raw_data: RawData):
+        normalized = await self.normalize(raw_data)
+        await self.event_bus.emit(
+            CoreEvents.NORMALIZATION_MESSAGE_READY,
+            MessageReadyPayload(message=normalized)
+        )
+
+# ✅ 正确：Decision 订阅 Input 事件
+class DecisionManager:
+    async def initialize(self):
+        await self.event_bus.subscribe(
+            CoreEvents.NORMALIZATION_MESSAGE_READY,
+            self.handle_message
+        )
+
+    async def handle_message(self, payload: MessageReadyPayload):
+        intent = await self.decision_provider.decide(payload.message)
+        await self.event_bus.emit(
+            CoreEvents.DECISION_INTENT_GENERATED,
+            IntentPayload(intent=intent)
+        )
+
+# ✅ 正确：Output 订阅 Decision 事件
+class OutputProviderManager:
+    async def initialize(self):
+        await self.event_bus.subscribe(
+            CoreEvents.DECISION_INTENT_GENERATED,
+            self.handle_intent
+        )
+
+    async def handle_intent(self, payload: IntentPayload):
+        # 渲染 Intent 到实际设备
+        await self.render_to_all_providers(payload.intent)
+```
+
+#### EventBus 的能力 ≠ 应该使用的能力
+
+虽然 EventBus 技术上允许任何订阅，但这是一种**基础设施能力**，不是**设计模式**。
+
+| 能力 | 是否允许 | 说明 |
+|------|---------|------|
+| EventBus 订阅任何事件 | ✅ 技术上可行 | 基础设施提供的通用能力 |
+| Output 订阅 Input 事件 | ❌ 架构禁止 | 违反分层原则 |
+| Decision 订阅 Output 事件 | ❌ 架构禁止 | 创建循环依赖 |
+| 同域内订阅 | ✅ 允许 | 如 InputLayer 订阅 RAW_DATA_GENERATED |
+
+#### 事件流向规则
+
+| 发布者 | 事件 | 订阅者 | 是否允许 |
+|--------|------|--------|---------|
+| InputProvider | `RAW_DATA_GENERATED` | InputLayer | ✅ |
+| InputLayer | `NORMALIZATION_MESSAGE_READY` | DecisionManager | ✅ |
+| DecisionManager | `DECISION_INTENT_GENERATED` | OutputManager | ✅ |
+| OutputProvider | `RENDER_COMPLETED` | （监听/日志） | ✅ |
+| OutputProvider | `RENDER_COMPLETED` | DecisionManager | ❌ |
+| OutputProvider | `NORMALIZATION_MESSAGE_READY` | OutputManager | ❌ |
+
+#### 测试验证
+
+架构测试（`tests/architecture/test_event_flow_constraints.py`）会自动验证：
+- Output Provider 不订阅 Input 事件
+- Decision Provider 不订阅 Output 事件
+- 事件流向严格遵守单向数据流
 
 ---
 

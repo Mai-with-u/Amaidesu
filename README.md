@@ -108,15 +108,15 @@ Amaidesu!
 sequenceDiagram
     participant User
     participant InputProvider
-    participant InputLayer
+    participant InputDomain
     participant EventBus
     participant DecisionProvider
     participant OutputProvider
 
     User->>InputProvider: 输入消息
     InputProvider->>EventBus: 发布 perception.raw_data.generated
-    EventBus->>InputLayer: 订阅处理
-    InputLayer->>EventBus: 发布 normalization.message_ready
+    EventBus->>InputDomain: 订阅处理
+    InputDomain->>EventBus: 发布 normalization.message_ready
     EventBus->>DecisionProvider: 订阅处理
     DecisionProvider->>EventBus: 发布 decision.intent_generated
     EventBus->>OutputProvider: 订阅处理
@@ -614,7 +614,7 @@ logger.error("错误日志", exc_info=True)
 | 事件名 | 触发时机 | 数据格式 |
 |--------|---------|---------|
 | `perception.raw_data.generated` | InputProvider采集到数据 | `{"data": RawData, "source": str}` |
-| `normalization.message_ready` | InputLayer完成标准化 | NormalizedMessage |
+| `normalization.message_ready` | InputDomain完成标准化 | NormalizedMessage |
 | `decision.intent_generated` | DecisionProvider完成决策 | Intent |
 | `expression.parameters_generated` | ExpressionGenerator生成参数 | RenderParameters |
 

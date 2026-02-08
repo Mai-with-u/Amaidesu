@@ -187,7 +187,7 @@ class DecisionManager:
         """
         处理 normalization.message_ready 事件
 
-        当 InputLayer 生成 NormalizedMessage 时，自动调用当前活动的 DecisionProvider 进行决策，
+        当 InputDomain 生成 NormalizedMessage 时，自动调用当前活动的 DecisionProvider 进行决策，
         并发布 decision.intent_generated 事件（3域架构）。
 
         Args:

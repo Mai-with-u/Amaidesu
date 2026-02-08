@@ -34,7 +34,7 @@
 
 - **conftest.py** - pytest fixtures
   - `event_bus` - EventBus 实例
-  - `input_layer` - InputLayer 实例
+  - `input_layer` - InputDomain 实例
   - `decision_manager` - DecisionManager 实例
   - `sample_raw_data` - 示例 RawData
   - `sample_normalized_message` - 示例 NormalizedMessage

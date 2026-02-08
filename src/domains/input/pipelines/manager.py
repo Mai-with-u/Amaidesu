@@ -65,11 +65,11 @@ class TextPipeline(Protocol):
     """
     文本处理管道协议（3域架构：Input Domain 的文本预处理）
 
-    用于在 InputLayer (RawData → NormalizedMessage) 中处理文本，
+    用于在 InputDomain (RawData → NormalizedMessage) 中处理文本，
     如限流、敏感词过滤、文本清理、相似消息过滤等。
 
     位置：
-        - InputLayer.normalize() 方法内部调用
+        - InputDomain.normalize() 方法内部调用
         - 在创建 NormalizedMessage 之前对文本进行预处理
         - 可返回 None 表示丢弃该消息
     """
@@ -260,7 +260,7 @@ class PipelineManager:
 
     **TextPipeline（新架构，推荐使用）**：
         - 处理 text + metadata
-        - 用于 InputLayer (Input Domain: 输入域) 中的文本预处理
+        - 用于 InputDomain (Input Domain: 输入域) 中的文本预处理
         - 在 RawData → NormalizedMessage 转换过程中处理文本
         - 示例：限流、相似文本过滤、敏感词过滤
     """
@@ -412,7 +412,7 @@ class PipelineManager:
         """
         按优先级顺序通过所有启用的 TextPipeline 处理文本
 
-        这是 InputLayer (Input Domain: 输入域) 中的文本预处理入口点。
+        这是 InputDomain (Input Domain: 输入域) 中的文本预处理入口点。
         在 RawData → NormalizedMessage 转换过程中调用。
 
         Args:
@@ -670,11 +670,11 @@ class PipelineManager:
         """
         扫描并加载 TextPipeline 类型的管道。
 
-        TextPipeline 用于 InputLayer (Input Domain) 中的文本预处理。
+        TextPipeline 用于 InputDomain (Input Domain) 中的文本预处理。
         与 MessagePipeline 不同，TextPipeline 不区分 inbound/outbound，统一按 priority 顺序执行。
 
         3域架构中的位置：
-            - InputLayer.normalize() 方法内部调用
+            - InputDomain.normalize() 方法内部调用
             - 在 RawData → NormalizedMessage 转换过程中处理文本
             - 示例：限流、相似文本过滤、敏感词过滤
 

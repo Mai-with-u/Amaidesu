@@ -7,7 +7,7 @@ from typing import AsyncGenerator
 
 from src.core.event_bus import EventBus
 from src.domains.input.input_provider_manager import InputProviderManager
-from src.domains.input.input_layer import InputLayer
+from src.domains.input.input_domain import InputDomain
 from src.domains.decision.decision_manager import DecisionManager
 from src.core.base.raw_data import RawData
 from src.core.base.normalized_message import NormalizedMessage
@@ -20,14 +20,14 @@ def event_bus() -> EventBus:
 
 
 @pytest.fixture
-async def input_layer(event_bus: EventBus) -> AsyncGenerator[InputLayer, None]:
-    """创建 InputLayer 实例"""
-    from src.domains.input.input_layer import InputLayer
+async def input_domain(event_bus: EventBus) -> AsyncGenerator[InputDomain, None]:
+    """创建 InputDomain 实例"""
+    from src.domains.input.input_domain import InputDomain
 
-    layer = InputLayer(event_bus)
-    await layer.setup()
-    yield layer
-    await layer.cleanup()
+    domain = InputDomain(event_bus)
+    await domain.setup()
+    yield domain
+    await domain.cleanup()
 
 
 @pytest.fixture

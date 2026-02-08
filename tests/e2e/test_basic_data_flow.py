@@ -28,16 +28,16 @@ async def test_complete_data_flow_with_mock_providers(event_bus, sample_raw_data
     测试完整的数据流：从 RawData 输入到 Intent 生成
 
     验证：
-    1. InputLayer 接收 RawData
+    1. InputDomain 接收 RawData
     2. 转换为 NormalizedMessage
     3. DecisionProvider 处理并生成 Intent
     """
-    from src.domains.input.input_layer import InputLayer
+    from src.domains.input.input_domain import InputDomain
     from src.domains.decision.decision_manager import DecisionManager
 
-    # 1. 设置 InputLayer
-    input_layer = InputLayer(event_bus)
-    await input_layer.setup()
+    # 1. 设置 InputDomain
+    input_domain = InputDomain(event_bus)
+    await input_domain.setup()
 
     # 2. 设置 DecisionManager（使用 mock provider）
     decision_manager = DecisionManager(event_bus, llm_service=None)
@@ -72,23 +72,23 @@ async def test_complete_data_flow_with_mock_providers(event_bus, sample_raw_data
 
     # 8. 清理
     await decision_manager.cleanup()
-    await input_layer.cleanup()
+    await input_domain.cleanup()
 
 
 @pytest.mark.asyncio
-async def test_input_layer_normalization(event_bus, sample_raw_data, wait_for_event):
+async def test_input_domain_normalization(event_bus, sample_raw_data, wait_for_event):
     """
-    测试 InputLayer 的标准化功能
+    测试 InputDomain 的标准化功能
 
     验证：
     1. RawData 正确转换为 NormalizedMessage
     2. 文本内容正确提取
     3. 元数据正确传递
     """
-    from src.domains.input.input_layer import InputLayer
+    from src.domains.input.input_domain import InputDomain
 
-    input_layer = InputLayer(event_bus)
-    await input_layer.setup()
+    input_domain = InputDomain(event_bus)
+    await input_domain.setup()
 
     # 等待事件
     future = asyncio.create_task(wait_for_event(event_bus, CoreEvents.NORMALIZATION_MESSAGE_READY))
@@ -111,7 +111,7 @@ async def test_input_layer_normalization(event_bus, sample_raw_data, wait_for_ev
     assert "source" in normalized["metadata"]
     assert "timestamp" in normalized["metadata"]
 
-    await input_layer.cleanup()
+    await input_domain.cleanup()
 
 
 @pytest.mark.asyncio
@@ -172,11 +172,11 @@ async def test_multiple_sequential_messages(event_bus, wait_for_event):
     2. 每条消息独立处理
     3. 处理顺序正确
     """
-    from src.domains.input.input_layer import InputLayer
+    from src.domains.input.input_domain import InputDomain
     from src.domains.decision.decision_manager import DecisionManager
 
-    input_layer = InputLayer(event_bus)
-    await input_layer.setup()
+    input_domain = InputDomain(event_bus)
+    await input_domain.setup()
 
     decision_manager = DecisionManager(event_bus, llm_service=None)
     await decision_manager.setup("mock", {})
@@ -204,4 +204,4 @@ async def test_multiple_sequential_messages(event_bus, wait_for_event):
     assert all("[模拟回复]" in text for text in received_intents)
 
     await decision_manager.cleanup()
-    await input_layer.cleanup()
+    await input_domain.cleanup()

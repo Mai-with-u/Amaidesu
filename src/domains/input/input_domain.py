@@ -1,5 +1,5 @@
 """
-InputLayer - 输入域协调器
+InputDomain - 输入域协调器
 
 负责协调输入Provider和标准化，建立RawData到NormalizedMessage的数据流。
 """
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from src.core.pipeline.pipeline_manager import PipelineManager
 
 
-class InputLayer:
+class InputDomain:
     """
     输入域协调器（3域架构：Input Domain）
 
@@ -37,7 +37,7 @@ class InputLayer:
         pipeline_manager: Optional["PipelineManager"] = None,
     ):
         """
-        初始化InputLayer
+        初始化InputDomain
 
         Args:
             event_bus: 事件总线实例
@@ -47,29 +47,29 @@ class InputLayer:
         self.event_bus = event_bus
         self.input_provider_manager = input_provider_manager
         self.pipeline_manager = pipeline_manager
-        self.logger = get_logger("InputLayer")
+        self.logger = get_logger("InputDomain")
 
         # 统计信息
         self._raw_data_count = 0
         self._normalized_message_count = 0
 
-        self.logger.debug("InputLayer初始化完成")
+        self.logger.debug("InputDomain初始化完成")
 
     async def setup(self):
-        """设置InputLayer，订阅事件"""
+        """设置InputDomain，订阅事件"""
         # 订阅RawData生成事件
         self.logger.info("正在订阅 perception.raw_data.generated 事件...")
         self.event_bus.on("perception.raw_data.generated", self.on_raw_data_generated)
         self.logger.info("成功订阅 perception.raw_data.generated 事件")
 
-        self.logger.info("InputLayer设置完成")
+        self.logger.info("InputDomain设置完成")
 
     async def cleanup(self):
-        """清理InputLayer"""
+        """清理InputDomain"""
         # 取消订阅
         self.event_bus.off("perception.raw_data.generated", self.on_raw_data_generated)
 
-        self.logger.info("InputLayer清理完成")
+        self.logger.info("InputDomain清理完成")
 
     async def on_raw_data_generated(self, event_name: str, event_data: Dict[str, Any], source: str):
         """
@@ -118,7 +118,7 @@ class InputLayer:
                 await self.event_bus.emit(
                     CoreEvents.NORMALIZATION_MESSAGE_READY,
                     MessageReadyPayload.from_normalized_message(normalized_message),
-                    source="InputLayer",
+                    source="InputDomain",
                 )
 
                 self.logger.debug(

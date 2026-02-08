@@ -23,7 +23,7 @@ class RawDataPayload(BasePayload):
 
     事件名：CoreEvents.PERCEPTION_RAW_DATA_GENERATED
     发布者：InputProvider
-    订阅者：InputLayer (Input Domain)
+    订阅者：InputDomain (Input Domain)
 
     表示 InputProvider 从外部采集到的原始数据。
     """
@@ -79,10 +79,10 @@ class MessageReadyPayload(BasePayload):
     标准化消息就绪事件 Payload
 
     事件名：CoreEvents.NORMALIZATION_MESSAGE_READY
-    发布者：InputLayer
+    发布者：InputDomain
     订阅者：DecisionManager (Decision Domain)
 
-    表示 InputLayer 完成了数据标准化处理，生成了 NormalizedMessage。
+    表示 InputDomain 完成了数据标准化处理，生成了 NormalizedMessage。
     """
 
     message: Dict[str, Any] = Field(..., description="标准化消息（NormalizedMessage 序列化）")
