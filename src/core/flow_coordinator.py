@@ -4,7 +4,7 @@ FlowCoordinator - 数据流协调器（3域架构：Decision Domain → Output D
 职责:
 - 协调 Decision Domain 到 Output Domain 的数据流
 - 订阅 Intent 事件并触发 Expression 生成和渲染
-- 初始化输出层（OutputProviderManager 和 ExpressionGenerator）
+- 初始化输出层（OutputProviderManager、ExpressionGenerator 和 OutputPipelineManager）
 
 数据流（3域架构）:
     Intent (Decision Domain)
@@ -12,6 +12,8 @@ FlowCoordinator - 数据流协调器（3域架构：Decision Domain → Output D
     FlowCoordinator
         ↓
     ExpressionGenerator (Output Domain - Parameters)
+        ↓
+    OutputPipelineManager (Output Domain - Pipeline Processing)
         ↓
     OutputProviderManager (Output Domain - Rendering)
 """
@@ -24,6 +26,7 @@ from src.core.events.names import CoreEvents
 from src.domains.output.parameters.expression_generator import ExpressionGenerator
 from src.domains.output.manager import OutputProviderManager
 from src.core.events.payloads import ParametersGeneratedPayload
+from src.domains.output.pipelines.manager import OutputPipelineManager
 
 
 class FlowCoordinator:
@@ -36,7 +39,7 @@ class FlowCoordinator:
     - 订阅并处理 Intent 事件
 
     数据流程（3域架构）:
-    Intent (Decision) → ExpressionGenerator (Output - Parameters) → OutputProviderManager (Output - Rendering)
+    Intent (Decision) → ExpressionGenerator (Output - Parameters) → OutputPipelineManager (Output - Pipeline) → OutputProviderManager (Output - Rendering)
     """
 
     def __init__(
@@ -44,6 +47,7 @@ class FlowCoordinator:
         event_bus: EventBus,
         expression_generator: Optional[ExpressionGenerator] = None,
         output_provider_manager: Optional[OutputProviderManager] = None,
+        output_pipeline_manager: Optional[OutputPipelineManager] = None,
     ):
         """
         初始化数据流协调器
@@ -52,10 +56,12 @@ class FlowCoordinator:
             event_bus: 事件总线实例
             expression_generator: (可选) 表达式生成器实例
             output_provider_manager: (可选) 输出Provider管理器实例
+            output_pipeline_manager: (可选) 输出Pipeline管理器实例
         """
         self.event_bus = event_bus
         self.expression_generator = expression_generator
         self.output_provider_manager = output_provider_manager
+        self.output_pipeline_manager = output_pipeline_manager
         self.logger = get_logger("FlowCoordinator")
 
         self._is_setup = False
@@ -83,6 +89,11 @@ class FlowCoordinator:
         if self.output_provider_manager is None:
             self.output_provider_manager = OutputProviderManager(config)
             self.logger.info("输出Provider管理器已创建")
+
+        # 创建输出Pipeline管理器（如果未提供）
+        if self.output_pipeline_manager is None:
+            self.output_pipeline_manager = OutputPipelineManager()
+            self.logger.info("输出Pipeline管理器已创建")
 
         # 从配置加载Provider（传递config_service以启用三级配置合并）
         if self.output_provider_manager:
@@ -145,7 +156,7 @@ class FlowCoordinator:
         处理Intent事件（Decision Domain → Output Domain）
 
         数据流（事件驱动）:
-            IntentPayload → Intent → ExpressionParameters → 发布 expression.parameters_generated 事件 → OutputProvider 订阅并渲染
+            IntentPayload → Intent → ExpressionParameters → OutputPipeline处理 → 发布 expression.parameters_generated 事件 → OutputProvider 订阅并渲染
 
         Args:
             event_name: 事件名称（decision.intent_generated）
@@ -177,6 +188,7 @@ class FlowCoordinator:
             for action_data in actions_data:
                 try:
                     from src.domains.decision.intent import ActionType
+
                     action = IntentAction(
                         type=ActionType(action_data.get("type", "text")),
                         params=action_data.get("params", {}),
@@ -201,6 +213,14 @@ class FlowCoordinator:
                 params = await self.expression_generator.generate(intent)
                 self.logger.info("ExpressionParameters生成完成")
 
+                # OutputPipeline 处理（参数后处理）
+                if self.output_pipeline_manager:
+                    params = await self.output_pipeline_manager.process(params)
+                    if params is None:  # 被管道丢弃
+                        self.logger.info("OutputParameters 被 Pipeline 丢弃，取消本次输出")
+                        return
+                    self.logger.debug("OutputPipeline 处理完成")
+
                 # 发布 expression.parameters_generated 事件（事件驱动）
                 # OutputProvider 订阅此事件并响应
                 # 将 ExpressionParameters (dataclass) 转换为 ParametersGeneratedPayload (Pydantic Model)
@@ -220,3 +240,7 @@ class FlowCoordinator:
     def get_output_provider_manager(self) -> Optional[OutputProviderManager]:
         """获取输出Provider管理器实例"""
         return self.output_provider_manager
+
+    def get_output_pipeline_manager(self) -> Optional[OutputPipelineManager]:
+        """获取输出Pipeline管理器实例"""
+        return self.output_pipeline_manager
