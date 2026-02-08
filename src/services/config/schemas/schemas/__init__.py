@@ -23,7 +23,6 @@ from .decision_providers import (
     MaiCoreDecisionProviderConfig,
     LocalLLMDecisionProviderConfig,
     RuleEngineDecisionProviderConfig,
-    EmotionJudgeDecisionProviderConfig,
     MockDecisionProviderConfig,
 )
 
@@ -67,11 +66,10 @@ PROVIDER_SCHEMA_REGISTRY: Dict[str, Type[BaseModel]] = {
     "read_pingmu": ReadPingmuProviderConfig,
     "mainosaba": MainosabaProviderConfig,
     "remote_stream": RemoteStreamProviderConfig,
-    # Decision providers (5)
+    # Decision providers (4)
     "maicore": MaiCoreDecisionProviderConfig,
     "local_llm": LocalLLMDecisionProviderConfig,
     "rule_engine": RuleEngineDecisionProviderConfig,
-    "emotion_judge": EmotionJudgeDecisionProviderConfig,
     "mock": MockDecisionProviderConfig,
     # Output providers (10)
     "subtitle": SubtitleProviderConfig,
@@ -155,7 +153,7 @@ def list_all_providers() -> Dict[str, list]:
     decision_providers = [
         pt
         for pt in PROVIDER_SCHEMA_REGISTRY.keys()
-        if pt in ["maicore", "local_llm", "rule_engine", "emotion_judge", "mock"]
+        if pt in ["maicore", "local_llm", "rule_engine", "mock"]
     ]
 
     output_providers = [pt for pt in PROVIDER_SCHEMA_REGISTRY.keys() if pt not in input_providers + decision_providers]
@@ -210,7 +208,6 @@ __all__ = [
     "MaiCoreDecisionProviderConfig",
     "LocalLLMDecisionProviderConfig",
     "RuleEngineDecisionProviderConfig",
-    "EmotionJudgeDecisionProviderConfig",
     "MockDecisionProviderConfig",
     # Output provider configs
     "SubtitleProviderConfig",

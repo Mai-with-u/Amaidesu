@@ -271,7 +271,6 @@ uv run python mock_maicore.py
 - [maicore](./src/domains/decision/providers/maicore) - MaiCore决策（默认，WebSocket + LLM意图解析）
 - [local_llm](./src/domains/decision/providers/local_llm) - 本地LLM决策
 - [rule_engine](./src/domains/decision/providers/rule_engine) - 规则引擎决策
-- [emotion_judge](./src/domains/decision/providers/emotion_judge) - 情绪判断决策
 - [mock](./src/domains/decision/providers/mock) - 模拟决策（测试用）
 
 #### 输出Provider（OutputProvider）

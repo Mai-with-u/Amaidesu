@@ -42,7 +42,6 @@ from src.services.config.schemas.schemas import (
     MaiCoreDecisionProviderConfig,
     LocalLLMDecisionProviderConfig,
     RuleEngineDecisionProviderConfig,
-    EmotionJudgeDecisionProviderConfig,
     MockDecisionProviderConfig,
     # Output provider configs
     SubtitleProviderConfig,
@@ -88,7 +87,6 @@ __all__ = [
     "MaiCoreDecisionProviderConfig",
     "LocalLLMDecisionProviderConfig",
     "RuleEngineDecisionProviderConfig",
-    "EmotionJudgeDecisionProviderConfig",
     "MockDecisionProviderConfig",
     # Output provider configs
     "SubtitleProviderConfig",
