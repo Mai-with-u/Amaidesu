@@ -9,10 +9,12 @@ import time
 import base64
 import io
 from PIL import Image
+from pydantic import Field
 
 from src.core.base.output_provider import OutputProvider
 from src.core.base.base import RenderParameters
 from src.core.utils.logger import get_logger
+from src.services.config.schemas.schemas.base import BaseProviderConfig
 
 
 class StickerOutputProvider(OutputProvider):
@@ -22,24 +24,46 @@ class StickerOutputProvider(OutputProvider):
     处理表情图片，调整大小并发送到VTS显示。
     """
 
+    class ConfigSchema(BaseProviderConfig):
+        """贴纸输出Provider配置"""
+
+        type: str = "sticker"
+
+        # 表情贴纸配置
+        sticker_size: float = Field(default=0.33, ge=0.0, le=1.0, description="贴纸大小")
+        sticker_rotation: int = Field(default=90, ge=0, le=360, description="贴纸旋转角度")
+        sticker_position_x: float = Field(default=0.0, ge=-1.0, le=1.0, description="贴纸X位置")
+        sticker_position_y: float = Field(default=0.0, ge=-1.0, le=1.0, description="贴纸Y位置")
+
+        # 图片处理配置
+        image_width: int = Field(default=256, ge=0, le=4096, description="图片宽度")
+        image_height: int = Field(default=256, ge=0, le=4096, description="图片高度")
+
+        # 冷却时间和显示时长
+        cool_down_seconds: float = Field(default=5.0, ge=0.0, le=300.0, description="冷却时间（秒）")
+        display_duration_seconds: float = Field(default=3.0, ge=0.0, le=300.0, description="显示时长（秒）")
+
     def __init__(self, config: dict):
         super().__init__(config)
         self.logger = get_logger("StickerOutputProvider")
 
+        # 使用 ConfigSchema 验证配置，获得类型安全的配置对象
+        self.typed_config = self.ConfigSchema(**config)
+
         # 表情贴纸配置
-        self.sticker_size = self.config.get("sticker_size", 0.33)
-        self.sticker_rotation = self.config.get("sticker_rotation", 90)
-        self.sticker_position_x = self.config.get("sticker_position_x", 0)
-        self.sticker_position_y = self.config.get("sticker_position_y", 0)
+        self.sticker_size = self.typed_config.sticker_size
+        self.sticker_rotation = self.typed_config.sticker_rotation
+        self.sticker_position_x = self.typed_config.sticker_position_x
+        self.sticker_position_y = self.typed_config.sticker_position_y
 
         # 图片处理配置
-        self.image_width = self.config.get("image_width", 256)
-        self.image_height = self.config.get("image_height", 256)
+        self.image_width = self.typed_config.image_width
+        self.image_height = self.typed_config.image_height
 
         # 冷却时间和显示时长
-        self.cool_down_seconds = self.config.get("cool_down_seconds", 5)
+        self.cool_down_seconds = self.typed_config.cool_down_seconds
         self.last_trigger_time: float = 0.0
-        self.display_duration_seconds = self.config.get("display_duration_seconds", 3)
+        self.display_duration_seconds = self.typed_config.display_duration_seconds
 
     async def _setup_internal(self):
         """内部设置"""

@@ -7,16 +7,27 @@ Warudo OutputProvider - Warudo虚拟形象控制Provider
 """
 
 from typing import Dict, Any, TYPE_CHECKING
+from pydantic import Field
 
 if TYPE_CHECKING:
     from src.core.event_bus import EventBus
 
 from src.core.base.output_provider import OutputProvider
 from src.core.utils.logger import get_logger
+from src.services.config.schemas.schemas.base import BaseProviderConfig
 
 
 class WarudoOutputProvider(OutputProvider):
     """Warudo虚拟形象控制Provider"""
+
+    class ConfigSchema(BaseProviderConfig):
+        """Warudo输出Provider配置"""
+
+        type: str = "warudo"
+
+        # WebSocket配置
+        ws_host: str = Field(default="localhost", description="WebSocket主机地址")
+        ws_port: int = Field(default=19190, ge=1, le=65535, description="WebSocket端口")
 
     def __init__(self, config: Dict[str, Any]):
         """
@@ -30,9 +41,12 @@ class WarudoOutputProvider(OutputProvider):
         super().__init__(config)
         self.logger = get_logger("WarudoOutputProvider")
 
+        # 使用 ConfigSchema 验证配置，获得类型安全的配置对象
+        self.typed_config = self.ConfigSchema(**config)
+
         # WebSocket配置
-        self.ws_host = config.get("ws_host", "localhost")
-        self.ws_port = config.get("ws_port", 19190)
+        self.ws_host = self.typed_config.ws_host
+        self.ws_port = self.typed_config.ws_port
         self.websocket = None
         self._is_connected = False
 

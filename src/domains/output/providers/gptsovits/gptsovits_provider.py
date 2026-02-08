@@ -17,12 +17,14 @@ import sys
 from typing import Dict, Any, Optional, TYPE_CHECKING
 from collections import deque
 import re
+from pydantic import Field
 
 import numpy as np
 
 from src.core.base.output_provider import OutputProvider
 from src.domains.output.parameters.render_parameters import RenderParameters
 from src.core.utils.logger import get_logger
+from src.services.config.schemas.schemas.base import BaseProviderConfig
 
 if TYPE_CHECKING:
     pass
@@ -60,6 +62,39 @@ class GPTSoVITSOutputProvider(OutputProvider):
     - 集成text_cleanup、vts_lip_sync、subtitle_service等服务
     """
 
+    class ConfigSchema(BaseProviderConfig):
+        """GPT-SoVITS输出Provider配置"""
+
+        type: str = "gptsovits"
+
+        # API配置
+        host: str = Field(default="127.0.0.1", description="API主机地址")
+        port: int = Field(default=9880, ge=1, le=65535, description="API端口")
+
+        # 参考音频配置
+        ref_audio_path: str = Field(default="", description="参考音频路径")
+        prompt_text: str = Field(default="", description="提示文本")
+
+        # TTS参数
+        text_language: str = Field(default="zh", pattern=r"^(zh|en|ja|auto)$", description="文本语言")
+        prompt_language: str = Field(default="zh", pattern=r"^(zh|en|ja)$", description="提示语言")
+        top_k: int = Field(default=20, ge=1, le=100, description="Top-K采样")
+        top_p: float = Field(default=0.6, ge=0.0, le=1.0, description="Top-P采样")
+        temperature: float = Field(default=0.3, ge=0.0, le=2.0, description="温度参数")
+        speed_factor: float = Field(default=1.0, ge=0.1, le=3.0, description="语速因子")
+        streaming_mode: bool = Field(default=True, description="是否启用流式模式")
+        media_type: str = Field(default="wav", pattern=r"^(wav|mp3|ogg)$", description="媒体类型")
+        text_split_method: str = Field(default="latency", pattern=r"^(latency|punctuation)$", description="文本分割方法")
+        batch_size: int = Field(default=1, ge=1, le=10, description="批处理大小")
+        batch_threshold: float = Field(default=0.7, ge=0.0, le=1.0, description="批处理阈值")
+        repetition_penalty: float = Field(default=1.0, ge=0.5, le=2.0, description="重复惩罚")
+        sample_steps: int = Field(default=10, ge=1, le=50, description="采样步数")
+        super_sampling: bool = Field(default=True, description="是否启用超采样")
+
+        # 音频输出配置
+        output_device_name: Optional[str] = Field(default=None, description="音频输出设备名称")
+        sample_rate: int = Field(default=32000, ge=8000, le=48000, description="采样率")
+
     def __init__(self, config: Dict[str, Any]):
         """
         初始化GPTSoVITS OutputProvider
@@ -70,35 +105,38 @@ class GPTSoVITSOutputProvider(OutputProvider):
         super().__init__(config)
         self.logger = get_logger("GPTSoVITSOutputProvider")
 
+        # 使用 ConfigSchema 验证配置，获得类型安全的配置对象
+        self.typed_config = self.ConfigSchema(**config)
+
         # GPT-SoVITS API配置
-        self.host = config.get("host", "127.0.0.1")
-        self.port = config.get("port", 9880)
+        self.host = self.typed_config.host
+        self.port = self.typed_config.port
         self.base_url = f"http://{self.host}:{self.port}"
 
         # 参考音频配置
-        self.ref_audio_path = config.get("ref_audio_path", "")
-        self.prompt_text = config.get("prompt_text", "")
+        self.ref_audio_path = self.typed_config.ref_audio_path
+        self.prompt_text = self.typed_config.prompt_text
 
         # TTS参数
-        self.text_language = config.get("text_language", "zh")
-        self.prompt_language = config.get("prompt_language", "zh")
-        self.top_k = config.get("top_k", 20)
-        self.top_p = config.get("top_p", 0.6)
-        self.temperature = config.get("temperature", 0.3)
-        self.speed_factor = config.get("speed_factor", 1.0)
-        self.streaming_mode = config.get("streaming_mode", True)
-        self.media_type = config.get("media_type", "wav")
-        self.text_split_method = config.get("text_split_method", "latency")
-        self.batch_size = config.get("batch_size", 1)
-        self.batch_threshold = config.get("batch_threshold", 0.7)
-        self.repetition_penalty = config.get("repetition_penalty", 1.0)
-        self.sample_steps = config.get("sample_steps", 10)
-        self.super_sampling = config.get("super_sampling", True)
+        self.text_language = self.typed_config.text_language
+        self.prompt_language = self.typed_config.prompt_language
+        self.top_k = self.typed_config.top_k
+        self.top_p = self.typed_config.top_p
+        self.temperature = self.typed_config.temperature
+        self.speed_factor = self.typed_config.speed_factor
+        self.streaming_mode = self.typed_config.streaming_mode
+        self.media_type = self.typed_config.media_type
+        self.text_split_method = self.typed_config.text_split_method
+        self.batch_size = self.typed_config.batch_size
+        self.batch_threshold = self.typed_config.batch_threshold
+        self.repetition_penalty = self.typed_config.repetition_penalty
+        self.sample_steps = self.typed_config.sample_steps
+        self.super_sampling = self.typed_config.super_sampling
 
         # 音频输出配置
-        self.output_device_name = config.get("output_device_name", "")
+        self.output_device_name = self.typed_config.output_device_name
         self.output_device_index = None
-        self.sample_rate = config.get("sample_rate", 32000)
+        self.sample_rate = self.typed_config.sample_rate
         self.channels = 1
         self.dtype = np.int16
 

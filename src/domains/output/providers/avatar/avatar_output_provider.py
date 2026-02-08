@@ -8,12 +8,14 @@ Avatar Output Provider - Output Domain: 虚拟形象输出
 """
 
 from typing import Optional, Dict, Any
+from pydantic import Field
 
 from src.core.base.output_provider import OutputProvider
 from src.core.base.base import RenderParameters
 from src.domains.output.adapters import PlatformAdapter
 from src.domains.output.adapter_factory import AdapterFactory
 from src.core.utils.logger import get_logger
+from src.services.config.schemas.schemas.base import BaseProviderConfig
 
 
 class AvatarOutputProvider(OutputProvider):
@@ -22,12 +24,26 @@ class AvatarOutputProvider(OutputProvider):
     使用 PlatformAdapter 执行渲染，支持多个平台。
     """
 
+    class ConfigSchema(BaseProviderConfig):
+        """虚拟形象输出Provider配置"""
+
+        type: str = "avatar"
+
+        adapter_type: str = Field(
+            default="vts",
+            pattern=r"^(vts|vrchat|live2d)$",
+            description="平台适配器类型"
+        )
+
     def __init__(self, config: dict):
         super().__init__(config)
         self.logger = get_logger("AvatarOutputProvider")
 
+        # 使用 ConfigSchema 验证配置，获得类型安全的配置对象
+        self.typed_config = self.ConfigSchema(**config)
+
         self.adapter: Optional[PlatformAdapter] = None
-        self.adapter_type = config.get("adapter_type", "vts")
+        self.adapter_type = self.typed_config.adapter_type
 
     async def _setup_internal(self):
         """初始化适配器"""

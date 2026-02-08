@@ -6,36 +6,26 @@ from pydantic import BaseModel
 # Base schema
 from .base import BaseProviderConfig
 
-# Input provider schemas
-from .input_providers import (
-    # ConsoleInputProviderConfig,  # 已迁移到自管理 Schema
-    BiliDanmakuProviderConfig,
-    BiliDanmakuOfficialProviderConfig,
-    BiliDanmakuOfficialMaiCraftProviderConfig,
-    ReadPingmuProviderConfig,
-    MainosabaProviderConfig,
-)
+# Input provider schemas（已迁移到自管理 Schema，不再导入）
+# from .input_providers import (
+#     # ConsoleInputProviderConfig,  # 已迁移到自管理 Schema
+#     # BiliDanmakuProviderConfig,  # 已迁移到自管理 Schema
+#     # BiliDanmakuOfficialProviderConfig,  # 已迁移到自管理 Schema
+#     # BiliDanmakuOfficialMaiCraftProviderConfig,  # 已迁移到自管理 Schema
+#     # ReadPingmuProviderConfig,  # 已迁移到自管理 Schema
+#     # MainosabaProviderConfig,  # 已迁移到自管理 Schema
+# )
 
-# Decision provider schemas
-from .decision_providers import (
-    MaiCoreDecisionProviderConfig,
-    LocalLLMDecisionProviderConfig,
-    RuleEngineDecisionProviderConfig,
-    MockDecisionProviderConfig,
-)
+# Decision provider schemas（已迁移到自管理 Schema，不再导入）
+# from .decision_providers import (
+#     MaiCoreDecisionProviderConfig,  # 已迁移到自管理 Schema
+#     LocalLLMDecisionProviderConfig,  # 已迁移到自管理 Schema
+#     RuleEngineDecisionProviderConfig,  # 已迁移到自管理 Schema
+#     MockDecisionProviderConfig,  # 已迁移到自管理 Schema
+# )
 
-# Output provider schemas
+# Output provider schemas（所有已迁移到自管理 Schema，只导入工厂函数）
 from .output_providers import (
-    # SubtitleProviderConfig,  # 已迁移到自管理 Schema
-    # VTSProviderConfig,  # 已迁移到自管理 Schema
-    # TTSProviderConfig,  # 已迁移到自管理 Schema
-    StickerProviderConfig,
-    WarudoProviderConfig,
-    ObsControlProviderConfig,
-    GPTSoVITSProviderConfig,
-    OmniTTSProviderConfig,
-    AvatarProviderConfig,
-    RemoteStreamOutputProviderConfig,
     OUTPUT_PROVIDER_CONFIG_MAP,
     get_output_provider_config,
 )
@@ -44,32 +34,9 @@ from .output_providers import (
 from .logging import LoggingConfig
 
 # Provider Schema Registry
-# Maps provider type to their config schema class
-PROVIDER_SCHEMA_REGISTRY: Dict[str, Type[BaseModel]] = {
-    # Input providers (5) - console_input 已迁移到自管理 Schema
-    # "console_input": ConsoleInputProviderConfig,  # 已迁移到自管理 Schema
-    "bili_danmaku": BiliDanmakuProviderConfig,
-    "bili_danmaku_official": BiliDanmakuOfficialProviderConfig,
-    "bili_danmaku_official_maicraft": BiliDanmakuOfficialMaiCraftProviderConfig,
-    "read_pingmu": ReadPingmuProviderConfig,
-    "mainosaba": MainosabaProviderConfig,
-    # Decision providers (4)
-    "maicore": MaiCoreDecisionProviderConfig,
-    "local_llm": LocalLLMDecisionProviderConfig,
-    "rule_engine": RuleEngineDecisionProviderConfig,
-    "mock": MockDecisionProviderConfig,
-    # Output providers (7) - subtitle, vts, tts 已迁移到自管理 Schema
-    # "subtitle": SubtitleProviderConfig,  # 已迁移到自管理 Schema
-    # "vts": VTSProviderConfig,  # 已迁移到自管理 Schema
-    # "tts": TTSProviderConfig,  # 已迁移到自管理 Schema
-    "sticker": StickerProviderConfig,
-    "warudo": WarudoProviderConfig,
-    "obs_control": ObsControlProviderConfig,
-    "gptsovits": GPTSoVITSProviderConfig,
-    "omni_tts": OmniTTSProviderConfig,
-    "avatar": AvatarProviderConfig,
-    "remote_stream": RemoteStreamOutputProviderConfig,
-}
+# 所有Provider已迁移到自管理Schema架构，此注册表保留为空用于向后兼容
+# 实际请使用 ProviderRegistry.get_config_schema()
+PROVIDER_SCHEMA_REGISTRY: Dict[str, Type[BaseModel]] = {}
 
 
 # Helper functions
@@ -184,33 +151,13 @@ __all__ = [
     # Base schemas
     "BaseProviderConfig",
     # Input provider schemas（已迁移的自管理 Schema 不再导出）
-    # "ConsoleInputProviderConfig",  # 已迁移到自管理 Schema
-    "BiliDanmakuProviderConfig",
-    "BiliDanmakuOfficialProviderConfig",
-    "BiliDanmakuOfficialMaiCraftProviderConfig",
-    "ReadPingmuProviderConfig",
-    "MainosabaProviderConfig",
-    # Decision provider schemas
-    "MaiCoreDecisionProviderConfig",
-    "LocalLLMDecisionProviderConfig",
-    "RuleEngineDecisionProviderConfig",
-    "MockDecisionProviderConfig",
-    # Output provider schemas（已迁移的自管理 Schema 不再导出）
-    # "SubtitleProviderConfig",  # 已迁移到自管理 Schema
-    # "VTSProviderConfig",  # 已迁移到自管理 Schema
-    # "TTSProviderConfig",  # 已迁移到自管理 Schema
-    "StickerProviderConfig",
-    "WarudoProviderConfig",
-    "ObsControlProviderConfig",
-    "GPTSoVITSProviderConfig",
-    "OmniTTSProviderConfig",
-    "AvatarProviderConfig",
-    "RemoteStreamOutputProviderConfig",
+    # Decision provider schemas（已迁移的自管理 Schema 不再导出）
+    # Output provider schemas（所有已迁移的自管理 Schema 不再导出）
     "OUTPUT_PROVIDER_CONFIG_MAP",
     "get_output_provider_config",
     # Non-provider schemas
     "LoggingConfig",
-    # Registry
+    # Registry（空，所有Provider已迁移）
     "PROVIDER_SCHEMA_REGISTRY",
     # Helper functions
     "get_provider_schema",

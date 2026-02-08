@@ -6,16 +6,19 @@ Bilibili 弹幕 InputProvider
 
 import asyncio
 import time
-from typing import AsyncIterator, Dict, Any, Optional
+from typing import AsyncIterator, Dict, Any, Optional, Literal
 
 try:
     import aiohttp
 except ImportError:
     aiohttp = None
 
+from pydantic import Field
+
 from src.core.base.input_provider import InputProvider
 from src.core.base.raw_data import RawData
 from src.core.utils.logger import get_logger
+from src.services.config.schemas.schemas.base import BaseProviderConfig
 
 
 class BiliDanmakuInputProvider(InputProvider):
@@ -24,6 +27,14 @@ class BiliDanmakuInputProvider(InputProvider):
 
     通过轮询 Bilibili API 获取直播间的弹幕信息。
     """
+
+    class ConfigSchema(BaseProviderConfig):
+        """Bilibili弹幕输入Provider配置"""
+
+        type: Literal["bili_danmaku"] = "bili_danmaku"
+        room_id: int = Field(..., description="直播间ID", gt=0)
+        poll_interval: int = Field(default=3, description="轮询间隔（秒）", ge=1)
+        message_config: dict = Field(default_factory=dict, description="消息配置")
 
     def __init__(self, config: dict):
         super().__init__(config)
@@ -36,15 +47,11 @@ class BiliDanmakuInputProvider(InputProvider):
             raise ImportError("aiohttp is required for BiliDanmakuInputProvider")
 
         # 配置
-        self.room_id = self.config.get("room_id")
-        if not self.room_id or not isinstance(self.room_id, int) or self.room_id <= 0:
-            raise ValueError(f"Invalid or missing 'room_id' in config: {self.room_id}")
-
-        self.poll_interval = max(1, self.config.get("poll_interval", 3))
+        self.typed_config = self.ConfigSchema(**config)
+        self.room_id = self.typed_config.room_id
+        self.poll_interval = self.typed_config.poll_interval
+        self.message_config = self.typed_config.message_config
         self.api_url = f"https://api.live.bilibili.com/xlive/web-room/v1/dM/gethistory?roomid={self.room_id}"
-
-        # 消息配置
-        self.message_config = self.config.get("message_config", {})
 
         # 状态变量
         self._latest_timestamp: float = time.time()

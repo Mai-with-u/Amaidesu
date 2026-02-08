@@ -12,7 +12,9 @@ MaiCoreDecisionProvider - MaiCore决策提供者
 """
 
 import asyncio
-from typing import Dict, Any, Optional, TYPE_CHECKING
+from typing import Dict, Any, Optional, TYPE_CHECKING, Literal
+
+from pydantic import Field
 
 from maim_message import Router, RouteConfig, TargetConfig, MessageBase
 
@@ -21,6 +23,7 @@ from src.core.connectors.websocket_connector import WebSocketConnector
 from src.core.connectors.router_adapter import RouterAdapter
 from src.domains.decision.intent import Intent
 from src.core.utils.logger import get_logger
+from src.services.config.schemas.schemas.base import BaseProviderConfig
 
 if TYPE_CHECKING:
     from src.core.event_bus import EventBus
@@ -56,6 +59,22 @@ class MaiCoreDecisionProvider(DecisionProvider):
         4. 设置 Future 结果，decide() 返回 Intent
     """
 
+    class ConfigSchema(BaseProviderConfig):
+        """MaiCore决策Provider配置Schema
+
+        通过WebSocket与MaiCore通信进行决策。
+        """
+
+        type: Literal["maicore"] = "maicore"
+        host: str = Field(default="localhost", description="MaiCore WebSocket服务器主机地址")
+        port: int = Field(default=8000, description="MaiCore WebSocket服务器端口", ge=1, le=65535)
+        platform: str = Field(default="amaidesu", description="平台标识符")
+        http_host: Optional[str] = Field(default=None, description="HTTP服务器主机（可选）")
+        http_port: Optional[int] = Field(default=None, description="HTTP服务器端口", ge=1, le=65535)
+        http_callback_path: str = Field(default="/callback", description="HTTP回调路径")
+        connect_timeout: float = Field(default=10.0, description="连接超时时间（秒）", gt=0)
+        reconnect_interval: float = Field(default=5.0, description="重连间隔时间（秒）", gt=0)
+
     def __init__(self, config: Dict[str, Any]):
         """
         初始化 MaiCoreDecisionProvider
@@ -69,19 +88,20 @@ class MaiCoreDecisionProvider(DecisionProvider):
                 - http_port: (可选) HTTP 服务器端口
                 - http_callback_path: (可选) HTTP 回调路径，默认"/callback"
         """
-        self.config = config
+        # 使用 Pydantic Schema 验证配置
+        self.typed_config = self.ConfigSchema(**config)
         self.logger = get_logger("MaiCoreDecisionProvider")
 
         # WebSocket 配置
-        self.host = config.get("host", "localhost")
-        self.port = config.get("port", 8000)
-        self.platform = config.get("platform", "amaidesu")
+        self.host = self.typed_config.host
+        self.port = self.typed_config.port
+        self.platform = self.typed_config.platform
         self.ws_url = f"ws://{self.host}:{self.port}/ws"
 
         # HTTP 配置
-        self.http_host = config.get("http_host")
-        self.http_port = config.get("http_port")
-        self.http_callback_path = config.get("http_callback_path", "/callback")
+        self.http_host = self.typed_config.http_host
+        self.http_port = self.typed_config.http_port
+        self.http_callback_path = self.typed_config.http_callback_path
 
         # Router
         self._router: Optional[Router] = None

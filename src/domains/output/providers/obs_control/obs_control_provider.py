@@ -6,13 +6,15 @@ OBS Control OutputProvider - OBS控制Provider
 - 接收文本更新事件并发送到OBS
 """
 
-from typing import Dict, Any, TYPE_CHECKING
+from typing import Dict, Any, Optional, TYPE_CHECKING
+from pydantic import Field
 
 if TYPE_CHECKING:
     from src.core.event_bus import EventBus
 
 from src.core.base.output_provider import OutputProvider
 from src.core.utils.logger import get_logger
+from src.services.config.schemas.schemas.base import BaseProviderConfig
 
 try:
     import obsws_python as obs
@@ -23,27 +25,39 @@ except ImportError:
 class ObsControlOutputProvider(OutputProvider):
     """OBS控制Provider"""
 
+    class ConfigSchema(BaseProviderConfig):
+        """OBS控制输出Provider配置"""
+
+        type: str = "obs_control"
+
+        # OBS配置
+        host: str = Field(default="localhost", description="OBS WebSocket主机地址")
+        port: int = Field(default=4455, ge=1, le=65535, description="OBS WebSocket端口")
+        password: Optional[str] = Field(default=None, description="OBS WebSocket密码")
+        text_source_name: str = Field(default="text", description="文本源名称")
+
     def __init__(self, config: Dict[str, Any]):
         """
         初始化OBS Control Provider
 
         Args:
             config: 配置字典，包含:
-                - obs: OBS配置字典
-                    - host: OBS WebSocket主机地址 (默认: localhost)
-                    - port: OBS WebSocket端口 (默认: 4455)
-                    - password: OBS WebSocket密码 (默认: "")
-                    - text_source_name: 文本源名称 (默认: "text")
+                - host: OBS WebSocket主机地址 (默认: localhost)
+                - port: OBS WebSocket端口 (默认: 4455)
+                - password: OBS WebSocket密码 (默认: "")
+                - text_source_name: 文本源名称 (默认: "text")
         """
         super().__init__(config)
         self.logger = get_logger("ObsControlOutputProvider")
 
+        # 使用 ConfigSchema 验证配置，获得类型安全的配置对象
+        self.typed_config = self.ConfigSchema(**config)
+
         # OBS配置
-        obs_config = config.get("obs", {})
-        self.host = obs_config.get("host", "localhost")
-        self.port = obs_config.get("port", 4455)
-        self.password = obs_config.get("password", "")
-        self.text_source_name = obs_config.get("text_source_name", "text")
+        self.host = self.typed_config.host
+        self.port = self.typed_config.port
+        self.password = self.typed_config.password
+        self.text_source_name = self.typed_config.text_source_name
 
         self.obs_connection = None
         self.event_bus = None
