@@ -34,7 +34,6 @@ from src.services.config.schemas.schemas import (
     BiliDanmakuProviderConfig,
     BiliDanmakuOfficialProviderConfig,
     BiliDanmakuOfficialMaiCraftProviderConfig,
-    MockDanmakuProviderConfig,
     ReadPingmuProviderConfig,
     MainosabaProviderConfig,
     # Decision provider configs
@@ -78,7 +77,6 @@ __all__ = [
     "BiliDanmakuProviderConfig",
     "BiliDanmakuOfficialProviderConfig",
     "BiliDanmakuOfficialMaiCraftProviderConfig",
-    "MockDanmakuProviderConfig",
     "ReadPingmuProviderConfig",
     "MainosabaProviderConfig",
     # Decision provider configs
