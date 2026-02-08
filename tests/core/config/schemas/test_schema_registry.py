@@ -25,7 +25,7 @@ class TestSchemaRegistry:
         providers = list_all_providers()
 
         # 验证总数 (7 input + 4 decision + 10 output = 21)
-        assert providers["total"] == 21, f"Expected 21 providers, got {providers['total']}"
+        assert providers["total"] == 21, f"Expected 22 providers, got {providers['total']}"
 
         # 验证分类数量
         assert len(providers["input"]) == 7, f"Expected 7 input providers, got {len(providers['input'])}"
