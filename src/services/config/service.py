@@ -358,7 +358,7 @@ class ConfigService:
         新的配置合并顺序（后者覆盖前者）:
         1. Schema默认值（从Pydantic Schema类获取）
         2. 主配置覆盖 (config.toml中的[providers.*.overrides.{provider_name}])
-        3. Provider本地配置 (src/layers/*/providers/{name}/config.toml)
+        3. Provider本地配置 (src/domains/{domain}/providers/{name}/config.toml)
 
         注意: 已移除config-defaults.toml加载逻辑，所有默认值由Schema定义。
 

@@ -1,4 +1,4 @@
-# src/plugins/bili_danmaku_official/utils/__init__.py
+# src/domains/input/providers/bili_danmaku_official_maicraft/service/__init__.py
 
 from .message_cache import MessageCacheService
 

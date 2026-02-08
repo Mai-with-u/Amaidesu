@@ -1,4 +1,4 @@
-# src/plugins/bili_danmaku_official/models/__init__.py
+# src/domains/input/providers/bili_danmaku_official/message/__init__.py
 
 from .base import BiliBaseMessage
 from .danmaku import DanmakuMessage

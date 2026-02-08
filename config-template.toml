@@ -7,8 +7,8 @@
 # 2. Provider启用列表
 # 3. 常用参数覆盖（可选）
 #
-# 各Provider的详细配置在各自的 config-defaults.toml 中：
-# - src/layers/*/providers/*/config-defaults.toml
+# 各Provider的详细配置在各自的 config.toml 中：
+# - src/domains/{domain}/providers/{provider}/config.toml
 
 # ========== 全局LLM配置 ==========
 

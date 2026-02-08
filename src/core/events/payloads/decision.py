@@ -10,7 +10,7 @@ Decision Domain 事件 Payload 定义
 """
 
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import Field, ConfigDict
 import time
 
 from src.core.events.payloads.base import BasePayload
@@ -94,10 +94,6 @@ class IntentPayload(BasePayload):
     - DecisionProvider.decide() 直接返回 Intent
     - DecisionManager 接收到 Intent 后发布此事件
     - ExpressionGenerator 订阅此事件并生成渲染参数
-
-    **废弃说明**：
-    - 旧架构中，此事件可能名为 understanding.intent_generated
-    - 由 UnderstandingLayer 发布，现已废弃
     """
 
     original_text: str = Field(..., description="原始输入文本")

@@ -301,10 +301,10 @@ bili_danmaku.poll_interval = 5
 
 ### Provider本地配置
 
-Provider本地配置（`src/layers/*/providers/{name}/config.toml`）格式保持不变：
+Provider本地配置（`src/domains/*/providers/{name}/config.toml`）格式保持不变：
 
 ```toml
-# src/layers/input/providers/bili_danmaku/config.toml
+# src/domains/input/providers/bili_danmaku/config.toml
 [bili_danmaku]
 room_id = 123456
 poll_interval = 5
@@ -378,7 +378,7 @@ uv run pytest tests/layers/
 
 2. **恢复旧代码**：
    ```bash
-   git checkout HEAD -- src/layers/*/providers/
+   git checkout HEAD -- src/domains/*/providers/
    ```
 
 3. **重新创建config-defaults.toml**（如果需要）：

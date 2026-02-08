@@ -10,7 +10,7 @@
 """
 
 from .registry import EventRegistry
-from .names import CoreEvents, PluginEventPrefix
+from .names import CoreEvents
 
 # 导出 Payload
 from .payloads import (
@@ -67,7 +67,6 @@ __all__ = [
     "EventRegistry",
     # 事件名常量
     "CoreEvents",
-    "PluginEventPrefix",
     # Payload
     "RawDataPayload",
     "MessageReadyPayload",

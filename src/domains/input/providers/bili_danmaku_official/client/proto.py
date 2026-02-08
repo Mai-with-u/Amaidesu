@@ -1,4 +1,4 @@
-# src/plugins/bili_danmaku_official/client/proto.py
+# src/domains/input/providers/bili_danmaku_official/client/proto.py
 
 import struct
 import logging

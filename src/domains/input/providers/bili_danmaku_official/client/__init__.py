@@ -1,4 +1,4 @@
-# src/plugins/bili_danmaku_official/client/__init__.py
+# src/domains/input/providers/bili_danmaku_official/client/__init__.py
 
 from .websocket_client import BiliWebSocketClient
 from .proto import Proto

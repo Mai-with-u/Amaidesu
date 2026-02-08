@@ -1,4 +1,4 @@
-# src/plugins/bili_danmaku_official/client/websocket_client.py
+# src/domains/input/providers/bili_danmaku_official/client/websocket_client.py
 
 import asyncio
 import contextlib

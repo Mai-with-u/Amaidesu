@@ -2,7 +2,7 @@
 测试Provider Schema注册表和enabled字段检测
 
 This module tests:
-1. Schema registry completeness (all 22 providers registered)
+1. Schema registry completeness (all 21 providers registered)
 2. No 'enabled' field in any schema (architecture requirement)
 3. Schema validation functionality
 """
@@ -21,14 +21,14 @@ class TestSchemaRegistry:
     """测试Schema注册表"""
 
     def test_schema_registry_contains_all_providers(self):
-        """测试注册表包含全部22个Provider"""
+        """测试注册表包含全部21个Provider"""
         providers = list_all_providers()
 
-        # 验证总数
-        assert providers["total"] == 22, f"Expected 22 providers, got {providers['total']}"
+        # 验证总数 (7 input + 4 decision + 10 output = 21)
+        assert providers["total"] == 21, f"Expected 21 providers, got {providers['total']}"
 
         # 验证分类数量
-        assert len(providers["input"]) == 8, f"Expected 8 input providers, got {len(providers['input'])}"
+        assert len(providers["input"]) == 7, f"Expected 7 input providers, got {len(providers['input'])}"
         assert len(providers["decision"]) == 4, f"Expected 4 decision providers, got {len(providers['decision'])}"
         assert len(providers["output"]) == 10, f"Expected 10 output providers, got {len(providers['output'])}"
 
@@ -38,6 +38,8 @@ class TestSchemaRegistry:
         assert "maicore" in PROVIDER_SCHEMA_REGISTRY
         assert "subtitle" in PROVIDER_SCHEMA_REGISTRY
         assert "tts" in PROVIDER_SCHEMA_REGISTRY
+        # RemoteStream现在是一个output provider
+        assert "remote_stream" in PROVIDER_SCHEMA_REGISTRY
 
     def test_input_providers_registry(self):
         """测试输入Provider注册完整"""
@@ -49,7 +51,6 @@ class TestSchemaRegistry:
             "mock_danmaku",
             "read_pingmu",
             "mainosaba",
-            "remote_stream",
         ]
 
         for provider in input_providers:
@@ -79,7 +80,7 @@ class TestSchemaRegistry:
             "gptsovits",
             "omni_tts",
             "avatar",
-            "remote_stream_output",
+            "remote_stream",
         ]
 
         for provider in output_providers:

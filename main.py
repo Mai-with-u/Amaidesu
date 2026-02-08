@@ -183,7 +183,7 @@ def exit_if_config_copied(main_cfg_copied: bool, plugin_cfg_copied: bool, pipeli
         logger.warning(box)
         if plugin_cfg_copied:
             logger.warning("!! 已根据模板创建了部分插件的 config.toml 文件。          !!")
-            logger.warning("!! 请检查 src/layers/ 下各插件目录中的 config.toml 文件， !!")
+            logger.warning("!! 请检查 src/domains/ 下各Provider目录中的 config.toml 文件， !!")
         if pipeline_cfg_copied:
             logger.warning("!! 已根据模板创建了部分管道的 config.toml 文件。          !!")
             logger.warning("!! 请检查 src/domains/input/pipelines/ 下各管道目录中的 config.toml 文件，!!")

@@ -240,12 +240,16 @@ class AvatarProviderConfig(BaseProviderConfig):
 class RemoteStreamOutputProviderConfig(BaseProviderConfig):
     """远程流输出Provider配置"""
 
-    type: str = "remote_stream_output"
+    type: str = "remote_stream"
 
-    # 注意：remote_stream输出provider使用input provider的实现
-    # 这里定义输出相关的配置
-    stream_url: Optional[str] = Field(default=None, description="流媒体URL")
-    stream_key: Optional[str] = Field(default=None, description="流媒体密钥")
+    # WebSocket配置
+    server_mode: bool = Field(default=True, description="服务器模式")
+    host: str = Field(default="0.0.0.0", description="主机地址")
+    port: int = Field(default=8765, ge=1, le=65535, description="端口")
+
+    # 音频/图像配置
+    audio_config: Dict[str, Any] = Field(default_factory=dict, description="音频配置")
+    image_config: Dict[str, Any] = Field(default_factory=dict, description="图像配置")
 
 
 # Provider类型映射（用于工厂模式）

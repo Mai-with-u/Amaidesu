@@ -1,4 +1,4 @@
-# src/plugins/bili_danmaku_official/message_handler.py
+# src/domains/input/providers/bili_danmaku_official_maicraft/service/message_handler.py
 
 import json
 from typing import Dict, Any, Optional, List

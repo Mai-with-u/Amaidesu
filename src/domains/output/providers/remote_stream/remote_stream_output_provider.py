@@ -1,5 +1,5 @@
 """
-RemoteStream Provider - 远程流媒体Provider
+RemoteStream Output Provider - 远程流媒体输出Provider
 
 职责:
 - 通过WebSocket实现与边缘设备的音视频双向传输
@@ -7,14 +7,12 @@ RemoteStream Provider - 远程流媒体Provider
 """
 
 import json
-from typing import Dict, Any, List, Callable, TYPE_CHECKING
+from typing import Dict, Any, List, Callable
 from dataclasses import dataclass, asdict
 from enum import Enum
 
-if TYPE_CHECKING:
-    from src.core.event_bus import EventBus
-
 from src.core.base.output_provider import OutputProvider
+from src.core.base.base import RenderParameters
 from src.core.utils.logger import get_logger
 
 try:
@@ -59,12 +57,12 @@ class StreamMessage:
         return cls(**data)
 
 
-class RemoteStreamProvider(OutputProvider):
-    """远程流媒体Provider"""
+class RemoteStreamOutputProvider(OutputProvider):
+    """远程流媒体输出Provider"""
 
     def __init__(self, config: Dict[str, Any]):
         """
-        初始化RemoteStream Provider
+        初始化RemoteStream输出Provider
 
         Args:
             config: 配置字典，包含:
@@ -75,7 +73,7 @@ class RemoteStreamProvider(OutputProvider):
                 - image: 图像配置
         """
         super().__init__(config)
-        self.logger = get_logger("RemoteStreamProvider")
+        self.logger = get_logger("RemoteStreamOutputProvider")
 
         # WebSocket配置
         self.server_mode = config.get("server_mode", True)
@@ -96,30 +94,32 @@ class RemoteStreamProvider(OutputProvider):
         self.audio_callbacks: Dict[str, List[Callable]] = {"data": []}
         self.image_callbacks: Dict[str, List[Callable]] = {"data": []}
 
-        self.event_bus = None
-
-    async def setup(self, event_bus: "EventBus"):
-        """
-        设置Provider
-
-        Args:
-            event_bus: 事件总线实例
-        """
-        self.event_bus = event_bus
-
+    async def _setup_internal(self):
+        """内部设置逻辑"""
         # 检查依赖
         if websockets is None:
-            self.logger.error("websockets库未安装")
+            self.logger.error("websockets库未安装，请使用 'uv add websockets' 安装")
             return
 
         # 注册事件监听
-        self.event_bus.on("remote_stream.request_image", self._handle_image_request)
-        self.event_bus.on("remote_stream.send_tts", self._handle_tts_request)
+        if self.event_bus:
+            self.event_bus.on("remote_stream.request_image", self._handle_image_request)
+            self.event_bus.on("remote_stream.send_tts", self._handle_tts_request)
 
-        self.logger.info("RemoteStreamProvider 已设置")
+        self.logger.info("RemoteStreamOutputProvider 已设置")
 
-    async def cleanup(self):
-        """清理资源"""
+    async def _render_internal(self, parameters: RenderParameters):
+        """
+        内部渲染逻辑
+
+        Args:
+            parameters: 渲染参数
+        """
+        # TODO: 实现实际的渲染逻辑
+        self.logger.debug(f"渲染参数: {parameters}")
+
+    async def _cleanup_internal(self):
+        """内部清理逻辑"""
         # 关闭WebSocket连接
         if self.server:
             self.server.close()
@@ -132,7 +132,7 @@ class RemoteStreamProvider(OutputProvider):
             self.event_bus.off("remote_stream.request_image", self._handle_image_request)
             self.event_bus.off("remote_stream.send_tts", self._handle_tts_request)
 
-        self.logger.info("RemoteStreamProvider 已清理")
+        self.logger.info("RemoteStreamOutputProvider 已清理")
 
     def register_audio_callback(self, event: str, callback: Callable):
         """注册音频回调"""
@@ -153,3 +153,19 @@ class RemoteStreamProvider(OutputProvider):
         """处理TTS发送请求事件"""
         self.logger.debug(f"收到TTS发送请求: {data}")
         # TODO: 实现实际的TTS发送逻辑
+
+    def get_info(self) -> Dict[str, Any]:
+        """
+        获取Provider信息
+
+        Returns:
+            Provider信息字典
+        """
+        return {
+            "name": self.__class__.__name__,
+            "is_setup": self.is_setup,
+            "type": "output_provider",
+            "server_mode": self.server_mode,
+            "host": self.host,
+            "port": self.port,
+        }

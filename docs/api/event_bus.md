@@ -41,7 +41,6 @@ event_bus.on("test.event", handle_event, priority=50)
 - `tts.audio_ready`: TTS 音频数据就绪
 - `canonical.message`: 规范消息准备
 - `expression.parameters_generated`: 表达参数已生成
-- `understanding.intent_generated`: Intent已生成
 - `decision.response_generated`: 决策响应已生成
 
 ## 事件生命周期
