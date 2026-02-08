@@ -10,11 +10,14 @@ RuleEngineDecisionProvider - 规则引擎决策提供者
 
 import json
 import re
-from typing import Dict, Any, List, Optional, TYPE_CHECKING
+from typing import Dict, Any, List, Optional, TYPE_CHECKING, Literal
+
+from pydantic import Field
 
 from src.core.base.decision_provider import DecisionProvider
 from src.domains.decision.intent import Intent, EmotionType, ActionType, IntentAction
 from src.core.utils.logger import get_logger
+from src.services.config.schemas.schemas.base import BaseProviderConfig
 
 if TYPE_CHECKING:
     from src.core.event_bus import EventBus
@@ -63,6 +66,24 @@ class RuleEngineDecisionProvider(DecisionProvider):
         match_mode: 匹配模式（"any" 或 "all"）
     """
 
+    class ConfigSchema(BaseProviderConfig):
+        """规则引擎决策Provider配置Schema
+
+        使用本地规则进行决策，无需外部API。
+        """
+
+        type: Literal["rule_engine"] = "rule_engine"
+        rules_file: str = Field(
+            default="config/rules.json", description="规则文件路径（JSON或YAML格式）"
+        )
+        default_response: str = Field(
+            default="我不理解你的意思", description="默认响应文本"
+        )
+        case_sensitive: bool = Field(default=False, description="是否区分大小写")
+        match_mode: Literal["any", "all"] = Field(
+            default="any", description="匹配模式"
+        )
+
     def __init__(self, config: Dict[str, Any]):
         """
         初始化RuleEngineDecisionProvider
@@ -70,14 +91,15 @@ class RuleEngineDecisionProvider(DecisionProvider):
         Args:
             config: 配置字典
         """
-        self.config = config
+        # 使用 Pydantic Schema 验证配置
+        self.typed_config = self.ConfigSchema(**config)
         self.logger = get_logger("RuleEngineDecisionProvider")
 
         # 规则配置
-        self.rules_file = config.get("rules_file", "config/rules.json")
-        self.default_response = config.get("default_response", "我不理解你的意思")
-        self.case_sensitive = config.get("case_sensitive", False)
-        self.match_mode = config.get("match_mode", "any")  # "any" 或 "all"
+        self.rules_file = self.typed_config.rules_file
+        self.default_response = self.typed_config.default_response
+        self.case_sensitive = self.typed_config.case_sensitive
+        self.match_mode = self.typed_config.match_mode
 
         # 规则列表
         self.rules: List[Dict[str, Any]] = []

@@ -10,10 +10,12 @@ import json
 from typing import Dict, Any, List, Callable
 from dataclasses import dataclass, asdict
 from enum import Enum
+from pydantic import Field
 
 from src.core.base.output_provider import OutputProvider
 from src.core.base.base import RenderParameters
 from src.core.utils.logger import get_logger
+from src.services.config.schemas.schemas.base import BaseProviderConfig
 
 try:
     import websockets
@@ -60,6 +62,20 @@ class StreamMessage:
 class RemoteStreamOutputProvider(OutputProvider):
     """远程流媒体输出Provider"""
 
+    class ConfigSchema(BaseProviderConfig):
+        """远程流输出Provider配置"""
+
+        type: str = "remote_stream"
+
+        # WebSocket配置
+        server_mode: bool = Field(default=True, description="服务器模式")
+        host: str = Field(default="0.0.0.0", description="主机地址")
+        port: int = Field(default=8765, ge=1, le=65535, description="端口")
+
+        # 音频/图像配置
+        audio_config: Dict[str, Any] = Field(default_factory=dict, description="音频配置")
+        image_config: Dict[str, Any] = Field(default_factory=dict, description="图像配置")
+
     def __init__(self, config: Dict[str, Any]):
         """
         初始化RemoteStream输出Provider
@@ -75,14 +91,17 @@ class RemoteStreamOutputProvider(OutputProvider):
         super().__init__(config)
         self.logger = get_logger("RemoteStreamOutputProvider")
 
+        # 使用 ConfigSchema 验证配置，获得类型安全的配置对象
+        self.typed_config = self.ConfigSchema(**config)
+
         # WebSocket配置
-        self.server_mode = config.get("server_mode", True)
-        self.host = config.get("host", "0.0.0.0" if self.server_mode else "127.0.0.1")
-        self.port = config.get("port", 8765)
+        self.server_mode = self.typed_config.server_mode
+        self.host = self.typed_config.host
+        self.port = self.typed_config.port
 
         # 音频/图像配置
-        self.audio_config = config.get("audio", {})
-        self.image_config = config.get("image", {})
+        self.audio_config = self.typed_config.audio_config
+        self.image_config = self.typed_config.image_config
 
         # WebSocket连接
         self.server = None

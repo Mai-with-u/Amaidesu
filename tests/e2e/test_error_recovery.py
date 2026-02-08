@@ -15,6 +15,7 @@ import src.domains.output.providers  # noqa: F401
 
 from src.core.base.raw_data import RawData
 from src.core.events.names import CoreEvents
+from src.core.events.payloads import RawDataPayload
 
 
 class SimpleTestEvent(BaseModel):
@@ -31,13 +32,13 @@ async def test_decision_provider_failure_isolation(event_bus, wait_for_event):
     1. DecisionProvider 失败不影响其他组件
     2. 系统可以继续处理其他消息
     """
-    from src.domains.input.input_layer import InputLayer
+    from src.domains.input.input_domain import InputDomain
     from src.domains.decision.decision_manager import DecisionManager
     from src.core.base.normalized_message import NormalizedMessage
     from src.domains.input.normalization.content import TextContent
 
-    input_layer = InputLayer(event_bus)
-    await input_layer.setup()
+    input_domain = InputDomain(event_bus)
+    await input_domain.setup()
 
     decision_manager = DecisionManager(event_bus, llm_service=None)
     await decision_manager.setup("mock", {})
@@ -102,7 +103,7 @@ async def test_decision_provider_failure_isolation(event_bus, wait_for_event):
     assert intent2 is not None
 
     await decision_manager.cleanup()
-    await input_layer.cleanup()
+    await input_domain.cleanup()
 
 
 @pytest.mark.asyncio
@@ -114,10 +115,10 @@ async def test_invalid_raw_data_handling(event_bus, wait_for_event):
     1. 系统能优雅地处理无效数据
     2. 不会崩溃或挂起
     """
-    from src.domains.input.input_layer import InputLayer
+    from src.domains.input.input_domain import InputDomain
 
-    input_layer = InputLayer(event_bus)
-    await input_layer.setup()
+    input_domain = InputDomain(event_bus)
+    await input_domain.setup()
 
     # 发送无效的 RawData（缺失必要字段）
     invalid_data = RawData(
@@ -131,7 +132,7 @@ async def test_invalid_raw_data_handling(event_bus, wait_for_event):
         future = asyncio.create_task(wait_for_event(event_bus, CoreEvents.NORMALIZATION_MESSAGE_READY, timeout=1.0))
 
         await event_bus.emit(
-            CoreEvents.PERCEPTION_RAW_DATA_GENERATED, {"data": invalid_data, "source": "test"}, source="test"
+            CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload.from_raw_data(invalid_data), source="test"
         )
 
         # 尝试等待事件（可能超时）
@@ -145,7 +146,7 @@ async def test_invalid_raw_data_handling(event_bus, wait_for_event):
         pytest.fail(f"处理无效数据时不应抛出异常: {e}")
 
     finally:
-        await input_layer.cleanup()
+        await input_domain.cleanup()
 
 
 @pytest.mark.asyncio
@@ -222,11 +223,11 @@ async def test_layer_cleanup_on_error(event_bus):
     1. 即使发生错误，资源也能正确清理
     2. 没有资源泄漏
     """
-    from src.domains.input.input_layer import InputLayer
+    from src.domains.input.input_domain import InputDomain
     from src.domains.decision.decision_manager import DecisionManager
 
-    input_layer = InputLayer(event_bus)
-    await input_layer.setup()
+    input_domain = InputDomain(event_bus)
+    await input_domain.setup()
 
     decision_manager = DecisionManager(event_bus, llm_service=None)
     await decision_manager.setup("mock", {})
@@ -236,7 +237,7 @@ async def test_layer_cleanup_on_error(event_bus):
 
     # 清理
     await decision_manager.cleanup()
-    await input_layer.cleanup()
+    await input_domain.cleanup()
 
     # 验证事件订阅已清理
     # 注意：EventBus 的 _handlers 是私有的，这里只验证组件状态

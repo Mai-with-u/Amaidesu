@@ -29,30 +29,29 @@ from src.services.config.schemas.schemas import (
     verify_no_enabled_field_in_schemas,
     get_output_provider_config,
     OUTPUT_PROVIDER_CONFIG_MAP,
-    # Input provider configs
-    ConsoleInputProviderConfig,
-    BiliDanmakuProviderConfig,
-    BiliDanmakuOfficialProviderConfig,
-    BiliDanmakuOfficialMaiCraftProviderConfig,
-    MockDanmakuProviderConfig,
-    ReadPingmuProviderConfig,
-    MainosabaProviderConfig,
-    # Decision provider configs
-    MaiCoreDecisionProviderConfig,
-    LocalLLMDecisionProviderConfig,
-    RuleEngineDecisionProviderConfig,
-    MockDecisionProviderConfig,
-    # Output provider configs
-    SubtitleProviderConfig,
-    VTSProviderConfig,
-    TTSProviderConfig,
-    StickerProviderConfig,
-    WarudoProviderConfig,
-    ObsControlProviderConfig,
-    GPTSoVITSProviderConfig,
-    OmniTTSProviderConfig,
-    AvatarProviderConfig,
-    RemoteStreamOutputProviderConfig,
+    # Input provider configs（已迁移的自管理 Schema 不再导出）
+    # ConsoleInputProviderConfig,  # 已迁移到自管理 Schema
+    # BiliDanmakuProviderConfig,  # 已迁移到自管理 Schema
+    # BiliDanmakuOfficialProviderConfig,  # 已迁移到自管理 Schema
+    # BiliDanmakuOfficialMaiCraftProviderConfig,  # 已迁移到自管理 Schema
+    # ReadPingmuProviderConfig,  # 已迁移到自管理 Schema
+    # MainosabaProviderConfig,  # 已迁移到自管理 Schema
+    # Decision provider configs（已迁移的自管理 Schema 不再导出）
+    # MaiCoreDecisionProviderConfig,  # 已迁移到自管理 Schema
+    # LocalLLMDecisionProviderConfig,  # 已迁移到自管理 Schema
+    # RuleEngineDecisionProviderConfig,  # 已迁移到自管理 Schema
+    # MockDecisionProviderConfig,  # 已迁移到自管理 Schema
+    # Output provider configs（所有已迁移到自管理 Schema，不再导出）
+    # SubtitleProviderConfig,  # 已迁移到自管理 Schema
+    # VTSProviderConfig,  # 已迁移到自管理 Schema
+    # TTSProviderConfig,  # 已迁移到自管理 Schema
+    # StickerProviderConfig,  # 已迁移到自管理 Schema
+    # WarudoProviderConfig,  # 已迁移到自管理 Schema
+    # ObsControlProviderConfig,  # 已迁移到自管理 Schema
+    # GPTSoVITSProviderConfig,  # 已迁移到自管理 Schema
+    # OmniTTSProviderConfig,  # 已迁移到自管理 Schema
+    # AvatarProviderConfig,  # 已迁移到自管理 Schema
+    # RemoteStreamOutputProviderConfig,  # 已迁移到自管理 Schema
     # Non-provider configs (system-wide)
     LoggingConfig,
 )
@@ -73,30 +72,29 @@ __all__ = [
     "verify_no_enabled_field_in_schemas",
     "get_output_provider_config",
     "OUTPUT_PROVIDER_CONFIG_MAP",
-    # Input provider configs
-    "ConsoleInputProviderConfig",
-    "BiliDanmakuProviderConfig",
-    "BiliDanmakuOfficialProviderConfig",
-    "BiliDanmakuOfficialMaiCraftProviderConfig",
-    "MockDanmakuProviderConfig",
-    "ReadPingmuProviderConfig",
-    "MainosabaProviderConfig",
-    # Decision provider configs
-    "MaiCoreDecisionProviderConfig",
-    "LocalLLMDecisionProviderConfig",
-    "RuleEngineDecisionProviderConfig",
-    "MockDecisionProviderConfig",
-    # Output provider configs
-    "SubtitleProviderConfig",
-    "VTSProviderConfig",
-    "TTSProviderConfig",
-    "StickerProviderConfig",
-    "WarudoProviderConfig",
-    "ObsControlProviderConfig",
-    "GPTSoVITSProviderConfig",
-    "OmniTTSProviderConfig",
-    "AvatarProviderConfig",
-    "RemoteStreamOutputProviderConfig",
+    # Input provider configs（已迁移的自管理 Schema 不再导出）
+    # "ConsoleInputProviderConfig",  # 已迁移到自管理 Schema
+    # "BiliDanmakuProviderConfig",  # 已迁移到自管理 Schema
+    # "BiliDanmakuOfficialProviderConfig",  # 已迁移到自管理 Schema
+    # "BiliDanmakuOfficialMaiCraftProviderConfig",  # 已迁移到自管理 Schema
+    # "ReadPingmuProviderConfig",  # 已迁移到自管理 Schema
+    # "MainosabaProviderConfig",  # 已迁移到自管理 Schema
+    # Decision provider configs（已迁移的自管理 Schema 不再导出）
+    # "MaiCoreDecisionProviderConfig",  # 已迁移到自管理 Schema
+    # "LocalLLMDecisionProviderConfig",  # 已迁移到自管理 Schema
+    # "RuleEngineDecisionProviderConfig",  # 已迁移到自管理 Schema
+    # "MockDecisionProviderConfig",  # 已迁移到自管理 Schema
+    # Output provider configs（所有已迁移到自管理 Schema，不再导出）
+    # "SubtitleProviderConfig",  # 已迁移到自管理 Schema
+    # "VTSProviderConfig",  # 已迁移到自管理 Schema
+    # "TTSProviderConfig",  # 已迁移到自管理 Schema
+    # "StickerProviderConfig",  # 已迁移到自管理 Schema
+    # "WarudoProviderConfig",  # 已迁移到自管理 Schema
+    # "ObsControlProviderConfig",  # 已迁移到自管理 Schema
+    # "GPTSoVITSProviderConfig",  # 已迁移到自管理 Schema
+    # "OmniTTSProviderConfig",  # 已迁移到自管理 Schema
+    # "AvatarProviderConfig",  # 已迁移到自管理 Schema
+    # "RemoteStreamOutputProviderConfig",  # 已迁移到自管理 Schema
     # Non-provider configs (system-wide)
     "LoggingConfig",
 ]

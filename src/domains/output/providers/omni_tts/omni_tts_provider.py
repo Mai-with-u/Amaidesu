@@ -15,12 +15,14 @@ import asyncio
 import base64
 from typing import Dict, Any, Optional
 from collections import deque
+from pydantic import Field
 
 import numpy as np
 
 from src.core.base.output_provider import OutputProvider
 from src.domains.output.parameters.render_parameters import RenderParameters
 from src.core.utils.logger import get_logger
+from src.services.config.schemas.schemas.base import BaseProviderConfig
 
 # 检查依赖
 TTS_DEPENDENCIES_OK = False
@@ -44,6 +46,37 @@ class OmniTTSProvider(OutputProvider):
     - 集成text_cleanup、vts_lip_sync、subtitle_service等服务
     """
 
+    class ConfigSchema(BaseProviderConfig):
+        """Omni TTS输出Provider配置"""
+
+        type: str = "omni_tts"
+
+        # GPT-SoVITS API配置
+        host: str = Field(default="127.0.0.1", description="API主机地址")
+        port: int = Field(default=9880, ge=1, le=65535, description="API端口")
+
+        # 参考音频配置
+        ref_audio_path: str = Field(default="", description="参考音频路径")
+        prompt_text: str = Field(default="", description="提示文本")
+
+        # TTS参数
+        text_language: str = Field(default="zh", pattern=r"^(zh|en|ja|auto)$", description="文本语言")
+        prompt_language: str = Field(default="zh", pattern=r"^(zh|en|ja)$", description="提示语言")
+        top_k: int = Field(default=20, ge=1, le=100, description="Top-K采样")
+        top_p: float = Field(default=0.6, ge=0.0, le=1.0, description="Top-P采样")
+        temperature: float = Field(default=0.3, ge=0.0, le=2.0, description="温度参数")
+        speed_factor: float = Field(default=1.0, ge=0.1, le=3.0, description="语速因子")
+        streaming_mode: bool = Field(default=True, description="是否启用流式模式")
+
+        # 音频输出配置
+        output_device_name: Optional[str] = Field(default=None, description="音频输出设备名称")
+        sample_rate: int = Field(default=32000, ge=8000, le=48000, description="采样率")
+
+        # 服务集成配置
+        use_text_cleanup: bool = Field(default=True, description="是否使用文本清理")
+        use_vts_lip_sync: bool = Field(default=True, description="是否使用VTS口型同步")
+        use_subtitle: bool = Field(default=True, description="是否使用字幕")
+
     def __init__(self, config: Dict[str, Any]):
         """
         初始化OmniTTS Provider
@@ -54,35 +87,38 @@ class OmniTTSProvider(OutputProvider):
         super().__init__(config)
         self.logger = get_logger("OmniTTSProvider")
 
+        # 使用 ConfigSchema 验证配置，获得类型安全的配置对象
+        self.typed_config = self.ConfigSchema(**config)
+
         # GPT-SoVITS API配置
-        self.host = config.get("host", "127.0.0.1")
-        self.port = config.get("port", 9880)
+        self.host = self.typed_config.host
+        self.port = self.typed_config.port
         self.base_url = f"http://{self.host}:{self.port}"
 
         # 参考音频配置
-        self.ref_audio_path = config.get("ref_audio_path", "")
-        self.prompt_text = config.get("prompt_text", "")
+        self.ref_audio_path = self.typed_config.ref_audio_path
+        self.prompt_text = self.typed_config.prompt_text
 
         # TTS参数
-        self.text_language = config.get("text_language", "zh")
-        self.prompt_language = config.get("prompt_language", "zh")
-        self.top_k = config.get("top_k", 20)
-        self.top_p = config.get("top_p", 0.6)
-        self.temperature = config.get("temperature", 0.3)
-        self.speed_factor = config.get("speed_factor", 1.0)
-        self.streaming_mode = config.get("streaming_mode", True)
+        self.text_language = self.typed_config.text_language
+        self.prompt_language = self.typed_config.prompt_language
+        self.top_k = self.typed_config.top_k
+        self.top_p = self.typed_config.top_p
+        self.temperature = self.typed_config.temperature
+        self.speed_factor = self.typed_config.speed_factor
+        self.streaming_mode = self.typed_config.streaming_mode
 
         # 音频输出配置
-        self.output_device_name = config.get("output_device_name", "")
+        self.output_device_name = self.typed_config.output_device_name
         self.output_device_index = None
-        self.sample_rate = config.get("sample_rate", 32000)
+        self.sample_rate = self.typed_config.sample_rate
         self.channels = 1
         self.dtype = np.int16
 
         # 服务集成配置
-        self.use_text_cleanup = config.get("use_text_cleanup", True)
-        self.use_vts_lip_sync = config.get("use_vts_lip_sync", True)
-        self.use_subtitle = config.get("use_subtitle", True)
+        self.use_text_cleanup = self.typed_config.use_text_cleanup
+        self.use_vts_lip_sync = self.typed_config.use_vts_lip_sync
+        self.use_subtitle = self.typed_config.use_subtitle
 
         # TTS锁
         self.tts_lock = asyncio.Lock()

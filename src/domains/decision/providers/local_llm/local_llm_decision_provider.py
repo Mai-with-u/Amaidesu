@@ -7,11 +7,14 @@ LocalLLMDecisionProvider - 本地LLM决策提供者
 - 错误处理和降级机制
 """
 
-from typing import Dict, Any, Optional, TYPE_CHECKING
+from typing import Dict, Any, Optional, TYPE_CHECKING, Literal
+
+from pydantic import Field, field_validator
 
 from src.core.base.decision_provider import DecisionProvider
 from src.domains.decision.intent import Intent, EmotionType, ActionType, IntentAction
 from src.core.utils.logger import get_logger
+from src.services.config.schemas.schemas.base import BaseProviderConfig
 
 if TYPE_CHECKING:
     from src.core.event_bus import EventBus
@@ -28,16 +31,43 @@ class LocalLLMDecisionProvider(DecisionProvider):
     配置示例:
         ```toml
         [local_llm]
-        client_type = "llm_fast"  # 使用的 LLM 客户端类型（llm, llm_fast, vlm）
+        backend = "llm"  # 使用的 LLM 后端（llm, llm_fast, vlm）
         prompt_template = "You are a helpful assistant. User: {text}"
         fallback_mode = "simple"
         ```
 
     属性:
-        client_type: 使用的 LLM 客户端类型
+        backend: 使用的 LLM 后端
         prompt_template: Prompt模板，使用{text}占位符
         fallback_mode: 降级模式（"simple"返回简单响应，"error"抛出异常）
     """
+
+    class ConfigSchema(BaseProviderConfig):
+        """本地LLM决策Provider配置Schema
+
+        使用LLM Service统一接口进行决策。
+        """
+
+        type: Literal["local_llm"] = "local_llm"
+        backend: Literal["llm", "llm_fast", "vlm"] = Field(
+            default="llm", description="使用的LLM后端名称"
+        )
+        prompt_template: str = Field(
+            default="You are a helpful AI assistant. Please respond to the user's message.\n\nUser: {text}\n\nAssistant:",
+            description="Prompt模板，使用{text}占位符"
+        )
+        fallback_mode: Literal["simple", "echo", "error"] = Field(
+            default="simple", description="降级模式"
+        )
+
+        @field_validator("prompt_template")
+        @classmethod
+        def validate_prompt_template(cls, v: str) -> str:
+            """验证prompt_template包含{text}占位符"""
+            if "{text}" not in v:
+                # 尝试自动修复
+                v = v.replace("{}", "{text}")
+            return v
 
     def __init__(self, config: Dict[str, Any]):
         """
@@ -46,23 +76,21 @@ class LocalLLMDecisionProvider(DecisionProvider):
         Args:
             config: 配置字典
         """
-        self.config = config
+        # 使用 Pydantic Schema 验证配置
+        self.typed_config = self.ConfigSchema(**config)
         self.logger = get_logger("LocalLLMDecisionProvider")
 
         # LLM Service 引用（通过 setup 注入）
         self._llm_service: Optional["LLMService"] = None
 
         # LLM 配置
-        self.client_type = config.get("client_type", "llm")  # 使用的客户端类型
+        self.client_type = self.typed_config.backend  # 使用的后端类型
 
         # Prompt 配置
-        self.prompt_template = config.get(
-            "prompt_template",
-            "You are a helpful AI assistant. Please respond to the user's message.\n\nUser: {text}\n\nAssistant:",
-        )
+        self.prompt_template = self.typed_config.prompt_template
 
         # 降级模式配置
-        self.fallback_mode = config.get("fallback_mode", "simple")
+        self.fallback_mode = self.typed_config.fallback_mode
 
         # 统计信息
         self._total_requests = 0

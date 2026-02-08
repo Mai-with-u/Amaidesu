@@ -6,6 +6,10 @@
 
 当前处于完全重构阶段，在refactor分支中，不需要保留任何向后兼容的代码，需要彻底重构。不必担心会破坏性变更，因为重构完毕之前，都是没有用户在使用的。
 
+## 移动或重命名文件
+
+移动或者重命名文件的时候注意使用git mv保留历史记录
+
 ## 构建/检查/测试命令
 
 ### 包管理器
@@ -133,7 +137,7 @@ def __init__(self, config: Dict[str, Any]):
 ```
 
 ### 命名约定
-- **类名**：PascalCase（如 `AmaidesuCore`, `InputProvider`, `MessagePipeline`）
+- **类名**：PascalCase（如 `AmaidesuCore`, `InputProvider`, `TextPipeline`）
 - **函数/方法名**：snake_case（如 `send_to_maicore`, `register_websocket_handler`）
 - **变量名**：snake_case（如 `provider_config`, `event_bus`）
 - **私有成员**：前导下划线（如 `_message_handlers`, `_is_connected`）
@@ -422,6 +426,99 @@ await event_bus.emit(CoreEvents.NORMALIZATION_MESSAGE_READY, normalized_message)
 await event_bus.subscribe(CoreEvents.NORMALIZATION_MESSAGE_READY, self.handle_message)
 ```
 
+## 架构约束：3域数据流规则
+
+### 核心原则
+
+**严格遵守单向数据流：Input Domain → Decision Domain → Output Domain**
+
+虽然 EventBus 技术上允许任何订阅模式，但架构层面强制约束事件订阅关系。
+
+### 禁止模式
+
+| 模式 | 说明 |
+|------|------|
+| ❌ Output Provider 直接订阅 Input 事件 | 绕过 Decision Domain，破坏分层 |
+| ❌ Decision Provider 订阅 Output 事件 | 创建循环依赖 |
+| ❌ Input Provider 订阅 Decision/Output 事件 | Input 应只发布，不订阅下游 |
+
+```python
+# ❌ 错误示例
+class MyOutputProvider(OutputProvider):
+    async def initialize(self):
+        # 禁止！绕过了 Decision Domain
+        await self.event_bus.subscribe(
+            CoreEvents.NORMALIZATION_MESSAGE_READY,  # Input 事件
+            self.handler
+        )
+
+# ❌ 错误示例
+class MyDecisionProvider(DecisionProvider):
+    async def initialize(self):
+        # 禁止！创建循环依赖
+        await self.event_bus.subscribe(
+            CoreEvents.RENDER_COMPLETED,  # Output 事件
+            self.handler
+        )
+```
+
+### 正确模式
+
+```python
+# ✅ 正确：Input 发布标准化消息
+class InputDomain:
+    async def process_and_publish(self, raw_data: RawData):
+        normalized = await self.normalize(raw_data)
+        await self.event_bus.emit(
+            CoreEvents.NORMALIZATION_MESSAGE_READY,
+            MessageReadyPayload(message=normalized)
+        )
+
+# ✅ 正确：Decision 订阅 Input 事件
+class DecisionManager:
+    async def initialize(self):
+        await self.event_bus.subscribe(
+            CoreEvents.NORMALIZATION_MESSAGE_READY,  # Input 事件
+            self.handle_message
+        )
+
+    async def handle_message(self, payload: MessageReadyPayload):
+        intent = await self.decision_provider.decide(payload.message)
+        await self.event_bus.emit(
+            CoreEvents.DECISION_INTENT_GENERATED,
+            IntentPayload(intent=intent)
+        )
+
+# ✅ 正确：Output 订阅 Decision 事件
+class OutputProviderManager:
+    async def initialize(self):
+        await self.event_bus.subscribe(
+            CoreEvents.DECISION_INTENT_GENERATED,  # Decision 事件
+            self.handle_intent
+        )
+```
+
+### 允许的事件订阅
+
+| 订阅者 | 可以订阅的事件 | 禁止订阅的事件 |
+|--------|---------------|---------------|
+| **Input Domain** | 无（仅发布） | Decision/Output 事件 |
+| **Decision Domain** | `NORMALIZATION_MESSAGE_READY` | `RENDER_*` 事件 |
+| **Output Domain** | `DECISION_INTENT_GENERATED` | **`NORMALIZATION_*` 事件** |
+
+### 架构测试
+
+项目包含架构测试（`tests/architecture/test_event_flow_constraints.py`）自动验证：
+- Output Domain 不订阅 Input Domain 事件
+- Decision Domain 不订阅 Output Domain 事件
+- Input Domain 不订阅下游事件
+- 事件流向严格遵守单向原则
+
+**在提交代码前运行：**
+```bash
+uv run pytest tests/architecture/test_event_flow_constraints.py -v
+```
+
 ## 禁止事项
 
 - ❌ 不要创建新的 Plugin（插件系统已移除）
@@ -433,6 +530,9 @@ await event_bus.subscribe(CoreEvents.NORMALIZATION_MESSAGE_READY, self.handle_me
 - ❌ 不要提交未验证的代码（没有运行测试和 lint）
 - ❌ 不要在类变量中存储可变对象（如 `dict` 或 `list`）
 - ❌ 不要直接在 main.py 中创建 Provider，用 Manager + 配置驱动
+- ❌ **不要让 Output Provider 直接订阅 Input 事件**（违反架构分层）
+- ❌ **不要让 Decision Provider 订阅 Output 事件**（创建循环依赖）
+- ❌ **不要让 Input Provider 订阅 Decision/Output 事件**（Input 应只发布）
 
 ## 通信模式
 

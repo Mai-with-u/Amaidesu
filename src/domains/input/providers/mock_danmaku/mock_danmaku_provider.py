@@ -7,11 +7,14 @@ Mock Danmaku Input Provider
 import asyncio
 import json
 from pathlib import Path
-from typing import AsyncIterator
+from typing import AsyncIterator, Literal
+
+from pydantic import Field
 
 from src.core.base.input_provider import InputProvider
 from src.core.base.raw_data import RawData
 from src.core.utils.logger import get_logger
+from src.services.config.schemas.schemas.base import BaseProviderConfig
 
 
 class MockDanmakuInputProvider(InputProvider):
@@ -21,15 +24,27 @@ class MockDanmakuInputProvider(InputProvider):
     从JSONL文件读取消息并按设定速率发送到EventBus。
     """
 
+    class ConfigSchema(BaseProviderConfig):
+        """模拟弹幕输入Provider配置"""
+
+        type: Literal["mock_danmaku"] = "mock_danmaku"
+        log_file_path: str = Field(default="msg_default.jsonl", description="日志文件路径")
+        send_interval: float = Field(default=1.0, description="发送间隔（秒）", ge=0.1)
+        loop_playback: bool = Field(default=True, description="循环播放")
+        start_immediately: bool = Field(default=True, description="立即开始")
+
     def __init__(self, config: dict):
         super().__init__(config)
         self.logger = get_logger("MockDanmakuInputProvider")
 
-        # 从配置中读取参数
-        self.log_filename = self.config.get("log_file_path", "msg_default.jsonl")
-        self.send_interval = max(0.1, self.config.get("send_interval", 1.0))
-        self.loop_playback = self.config.get("loop_playback", True)
-        self.start_immediately = self.config.get("start_immediately", True)
+        # 使用 ConfigSchema 验证配置，获得类型安全的配置对象
+        self.typed_config = self.ConfigSchema(**config)
+
+        # 从类型安全的配置对象读取参数
+        self.log_filename = self.typed_config.log_file_path
+        self.send_interval = max(0.1, self.typed_config.send_interval)
+        self.loop_playback = self.typed_config.loop_playback
+        self.start_immediately = self.typed_config.start_immediately
 
         # 获取 Provider 目录
         provider_dir = Path(__file__).resolve().parent

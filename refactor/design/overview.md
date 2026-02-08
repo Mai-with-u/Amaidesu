@@ -1,4 +1,4 @@
-# Amaidesu 3层架构设计
+# Amaidesu 3域架构设计
 
 ## 核心理念
 
@@ -46,6 +46,7 @@
 │  │  Output Domain  │  Intent → 实际输出                         │
 │  │                 │                                            │
 │  │  • Parameters: 参数生成（情绪→表情、动作→热键）              │
+│  │  • Pipelines: 输出后处理（敏感词过滤、长度限制）             │
 │  │  • OutputProvider: 实际渲染（TTS、字幕、VTS 等）             │
 │  │                                                              │
 │  │  配置: [providers.output]                                    │
@@ -160,7 +161,8 @@ Amaidesu/
 | **按子系统组织** | 高内聚：事件系统、LLM系统各自内聚，便于理解和维护 |
 | **normalization 放入 Input** | 与输入源强耦合，是 Input Domain 的内部实现 |
 | **parameters 放入 Output** | 与输出设备强耦合，是 Output Domain 的内部模块 |
-| **pipelines 放入 Input** | 预处理管道是 Input 的一部分，处理标准化后的消息 |
+| **输入 pipelines 放入 Input** | 输入预处理管道（限流、过滤）是 Input Domain 的一部分 |
+| **输出 pipelines 由 FlowCoordinator 管理** | 输出后处理管道（敏感词过滤）在参数生成后、渲染前执行 |
 | **rendering → output** | 命名与 3 域架构一致 |
 | **connectors 独立** | 原 `core/providers` 命名有误导，拆分为通信组件 |
 | **utils 放入 core** | 无状态工具是基础设施的一部分 |
@@ -196,6 +198,112 @@ class Intent:
 
 ---
 
+## 架构约束与规则
+
+### 硬性约束：域间数据流方向
+
+**原则：3域架构的单向数据流**
+
+```
+Input Domain → Decision Domain → Output Domain
+     ↓                ↓                   ↓
+NormalizedMessage   Intent           实际输出
+```
+
+#### 禁止模式
+
+❌ **Output Domain 绝不应该直接订阅 Input Domain 的事件**
+
+```python
+# ❌ 错误：Output Provider 直接订阅 Input 事件
+class MyOutputProvider(OutputProvider):
+    async def initialize(self):
+        # 错误！绕过了 Decision Domain
+        await self.event_bus.subscribe(
+            CoreEvents.NORMALIZATION_MESSAGE_READY,  # Input 事件
+            self.handle_message
+        )
+```
+
+**为什么这是错误的？**
+1. **破坏架构分层**：Output 不应该知道 Input 的存在
+2. **绕过决策逻辑**：消息没有经过 Decision Provider 处理
+3. **无法保证类型安全**：NormalizedMessage ≠ Intent，数据类型不匹配
+4. **违反单一职责**：Output 的职责是渲染 Intent，而不是处理原始消息
+
+#### 正确模式
+
+✅ **严格遵守事件流向：Input → Decision → Output**
+
+```python
+# ✅ 正确：Input 发布标准化消息
+class InputDomain:
+    async def process_and_publish(self, raw_data: RawData):
+        normalized = await self.normalize(raw_data)
+        await self.event_bus.emit(
+            CoreEvents.NORMALIZATION_MESSAGE_READY,
+            MessageReadyPayload(message=normalized)
+        )
+
+# ✅ 正确：Decision 订阅 Input 事件
+class DecisionManager:
+    async def initialize(self):
+        await self.event_bus.subscribe(
+            CoreEvents.NORMALIZATION_MESSAGE_READY,
+            self.handle_message
+        )
+
+    async def handle_message(self, payload: MessageReadyPayload):
+        intent = await self.decision_provider.decide(payload.message)
+        await self.event_bus.emit(
+            CoreEvents.DECISION_INTENT_GENERATED,
+            IntentPayload(intent=intent)
+        )
+
+# ✅ 正确：Output 订阅 Decision 事件
+class OutputProviderManager:
+    async def initialize(self):
+        await self.event_bus.subscribe(
+            CoreEvents.DECISION_INTENT_GENERATED,
+            self.handle_intent
+        )
+
+    async def handle_intent(self, payload: IntentPayload):
+        # 渲染 Intent 到实际设备
+        await self.render_to_all_providers(payload.intent)
+```
+
+#### EventBus 的能力 ≠ 应该使用的能力
+
+虽然 EventBus 技术上允许任何订阅，但这是一种**基础设施能力**，不是**设计模式**。
+
+| 能力 | 是否允许 | 说明 |
+|------|---------|------|
+| EventBus 订阅任何事件 | ✅ 技术上可行 | 基础设施提供的通用能力 |
+| Output 订阅 Input 事件 | ❌ 架构禁止 | 违反分层原则 |
+| Decision 订阅 Output 事件 | ❌ 架构禁止 | 创建循环依赖 |
+| 同域内订阅 | ✅ 允许 | 如 InputLayer 订阅 RAW_DATA_GENERATED |
+
+#### 事件流向规则
+
+| 发布者 | 事件 | 订阅者 | 是否允许 |
+|--------|------|--------|---------|
+| InputProvider | `RAW_DATA_GENERATED` | InputLayer | ✅ |
+| InputLayer | `NORMALIZATION_MESSAGE_READY` | DecisionManager | ✅ |
+| DecisionManager | `DECISION_INTENT_GENERATED` | OutputManager | ✅ |
+| OutputProvider | `RENDER_COMPLETED` | （监听/日志） | ✅ |
+| OutputProvider | `RENDER_COMPLETED` | DecisionManager | ❌ |
+| OutputProvider | `NORMALIZATION_MESSAGE_READY` | OutputManager | ❌ |
+
+#### 测试验证
+
+架构测试（`tests/architecture/test_event_flow_constraints.py`）会自动验证：
+- Output Provider 不订阅 Input 事件
+- Decision Provider 不订阅 Output 事件
+- 事件流向严格遵守单向数据流
+
+---
+
 ## 扩展指南
 
 ### 添加新的 InputProvider
@@ -226,7 +334,7 @@ class Intent:
 
 - [决策层设计](./decision_layer.md) - Decision Domain 详细设计
 - [多Provider并发](./multi_provider.md) - 并发处理设计
-- [Pipeline设计](./pipeline_refactoring.md) - TextPipeline 设计
+- [Pipeline设计](./pipeline_refactoring.md) - 双管道架构（输入管道 + 输出管道）
 - [事件契约](./event_data_contract.md) - 事件类型安全
 - [LLM服务](./llm_service.md) - LLM 服务设计
 - [配置系统](./config_system.md) - Pydantic Schema + 三级配置合并

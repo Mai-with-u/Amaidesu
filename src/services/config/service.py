@@ -123,8 +123,13 @@ class ConfigService:
         """
         获取配置节
 
+        支持点分路径访问嵌套配置节，例如：
+        - "providers" → config["providers"]
+        - "providers.input" → config["providers"]["input"]
+        - "providers.decision.maicore" → config["providers"]["decision"]["maicore"]
+
         Args:
-            section: 配置节名称（如 "general", "plugins", "pipelines", "rendering"）
+            section: 配置节名称（如 "general", "plugins", "providers.input"）
             default: 如果配置节不存在，返回的默认值
 
         Returns:
@@ -132,18 +137,34 @@ class ConfigService:
 
         Example:
             general_config = config_service.get_section("general")
-            plugins_config = config_service.get_section("plugins")
+            input_config = config_service.get_section("providers.input")
+            maicore_config = config_service.get_section("providers.decision.maicore")
         """
         if not self._initialized:
             self.logger.warning("ConfigService 未初始化，返回空配置")
             return {} if default is None else default
 
-        result = self._main_config.get(section, default)
-        if result is None:
-            self.logger.warning(f"配置节 '{section}' 不存在")
-            return {}
+        # 支持点分路径（如 "providers.input"）
+        if "." in section:
+            parts = section.split(".")
+            current = self._main_config
 
-        return result
+            for part in parts:
+                if isinstance(current, dict) and part in current:
+                    current = current[part]
+                else:
+                    self.logger.debug(f"配置节 '{section}' 不存在（在 '{part}' 处中断）")
+                    return {} if default is None else default
+
+            return current if isinstance(current, dict) else {}
+        else:
+            # 单层路径（原有逻辑）
+            result = self._main_config.get(section, default)
+            if result is None:
+                self.logger.warning(f"配置节 '{section}' 不存在")
+                return {}
+
+            return result
 
     def get(self, key: str, default: Any = None, section: str = None) -> Any:
         """
@@ -180,7 +201,7 @@ class ConfigService:
         2. 主配置文件中 [pipelines.pipeline_name] 的全局配置
 
         Args:
-            pipeline_name: 管道名称（如 "throttle", "message_logger"）
+            pipeline_name: 管道名称（如 "rate_limit", "similar_filter"）
             pipeline_dir_path: 管道目录的绝对路径（可选，如果未提供则自动查找）
 
         Returns:
@@ -244,7 +265,7 @@ class ConfigService:
 
         # 根据Provider类型选择配置节
         if provider_type == "input":
-            config_section = self.get_section("providers", {}).get("input", {})
+            config_section = self.get_section("providers.input", {})
             providers_dict = config_section.get("inputs", {})
         elif provider_type == "rendering" or provider_type == "output":
             config_section = self.get_section("providers.output", {})
@@ -552,21 +573,21 @@ class ConfigService:
         provider_layer: Literal["input", "output", "decision"],
     ) -> Optional[type]:
         """
-        从Schema Registry查找Provider的Schema类
+        从ProviderRegistry查找Provider的Schema类
+
+        所有Provider已完成迁移到自管理Schema架构，
+        直接从ProviderRegistry._config_schemas获取。
 
         Args:
             provider_name: Provider名称
-            provider_layer: Provider层级
+            provider_layer: Provider层级（保留用于日志和验证）
 
         Returns:
             Schema类，如果找不到返回None
         """
-        try:
-            from src.services.config.schemas import PROVIDER_SCHEMA_REGISTRY
+        from src.core.provider_registry import ProviderRegistry
 
-            return PROVIDER_SCHEMA_REGISTRY.get(provider_name)
-        except (ImportError, AttributeError):
-            return None
+        return ProviderRegistry.get_config_schema(provider_name)
 
     def _generate_config_from_schema(
         self,

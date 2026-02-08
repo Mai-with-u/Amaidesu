@@ -59,8 +59,10 @@ class TestEmotionMapperMapEmotion:
 
         assert isinstance(params, dict)
         assert params["MouthSmile"] == 0.8
-        assert params["EyeOpenLeft"] == 0.9
-        assert params["EyeOpenRight"] == 0.9
+        assert params["EyeOpenLeft"] == 0.85
+        assert params["EyeOpenRight"] == 0.85
+        assert params["BrowLeftY"] == 0.2
+        assert params["BrowRightY"] == 0.2
 
     def test_map_sad_emotion(self):
         """测试映射 SAD 情感"""
@@ -68,9 +70,11 @@ class TestEmotionMapperMapEmotion:
         params = mapper.map_emotion(EmotionType.SAD)
 
         assert isinstance(params, dict)
-        assert params["MouthSmile"] == 0.0
-        assert params["EyeOpenLeft"] == 0.8
-        assert params["EyeOpenRight"] == 0.8
+        assert params["MouthSmile"] == -0.3
+        assert params["EyeOpenLeft"] == 0.7
+        assert params["EyeOpenRight"] == 0.7
+        assert params["BrowLeftY"] == -0.4
+        assert params["BrowRightY"] == -0.4
 
     def test_map_angry_emotion(self):
         """测试映射 ANGRY 情感"""
@@ -78,9 +82,11 @@ class TestEmotionMapperMapEmotion:
         params = mapper.map_emotion(EmotionType.ANGRY)
 
         assert isinstance(params, dict)
-        assert params["MouthSmile"] == 0.0
-        assert params["EyeOpenLeft"] == 0.7
-        assert params["EyeOpenRight"] == 0.7
+        assert params["MouthSmile"] == -0.2
+        assert params["EyeOpenLeft"] == 0.9
+        assert params["EyeOpenRight"] == 0.9
+        assert params["BrowLeftY"] == -0.6
+        assert params["BrowRightY"] == -0.6
 
     def test_map_surprised_emotion(self):
         """测试映射 SURPRISED 情感"""
@@ -89,8 +95,11 @@ class TestEmotionMapperMapEmotion:
 
         assert isinstance(params, dict)
         assert params["MouthSmile"] == 0.1
-        assert params["EyeOpenLeft"] == 1.0
-        assert params["EyeOpenRight"] == 1.0
+        assert params["MouthOpen"] == 0.5
+        assert params["EyeOpenLeft"] == 1.2
+        assert params["EyeOpenRight"] == 1.2
+        assert params["BrowLeftY"] == 0.5
+        assert params["BrowRightY"] == 0.5
 
     def test_map_love_emotion(self):
         """测试映射 LOVE 情感"""
@@ -99,8 +108,9 @@ class TestEmotionMapperMapEmotion:
 
         assert isinstance(params, dict)
         assert params["MouthSmile"] == 0.7
-        assert params["EyeOpenLeft"] == 0.95
-        assert params["EyeOpenRight"] == 0.95
+        assert params["EyeOpenLeft"] == 0.8
+        assert params["EyeOpenRight"] == 0.8
+        assert params["CheekPuff"] == 0.3
 
     def test_map_emotion_returns_copy(self):
         """测试映射返回的是副本，不是原始字典的引用"""
@@ -218,6 +228,10 @@ class TestEmotionMapperGetAvailableEmotions:
         assert EmotionType.ANGRY in emotions
         assert EmotionType.SURPRISED in emotions
         assert EmotionType.LOVE in emotions
+        assert EmotionType.SHY in emotions
+        assert EmotionType.EXCITED in emotions
+        assert EmotionType.CONFUSED in emotions
+        assert EmotionType.SCARED in emotions
 
     def test_get_available_emotions_after_modification(self):
         """测试修改后的情感列表"""
@@ -246,6 +260,10 @@ class TestEmotionMapperDefaultEmotionMap:
             EmotionType.ANGRY,
             EmotionType.SURPRISED,
             EmotionType.LOVE,
+            EmotionType.SHY,
+            EmotionType.EXCITED,
+            EmotionType.CONFUSED,
+            EmotionType.SCARED,
         ]
 
         for emotion in all_emotion_types:
@@ -256,12 +274,12 @@ class TestEmotionMapperDefaultEmotionMap:
         """测试默认映射参数的合理性"""
         default_map = EmotionMapper.DEFAULT_EMOTION_MAP
 
-        # 检查所有参数值在合理范围内 [0, 1]
+        # 检查所有参数值在合理范围内 [-1.0, 2.0]（VTS参数可以超出[0,1]范围）
         for _emotion, params in default_map.items():
             for param_name, param_value in params.items():
                 assert isinstance(param_name, str)
                 assert isinstance(param_value, (int, float))
-                assert 0 <= param_value <= 1, f"参数 {param_name} 的值 {param_value} 超出范围 [0, 1]"
+                assert -1.0 <= param_value <= 2.0, f"参数 {param_name} 的值 {param_value} 超出范围 [-1.0, 2.0]"
 
     def test_default_emotion_map_has_common_parameters(self):
         """测试默认映射包含常见的表情参数"""

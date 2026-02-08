@@ -406,9 +406,10 @@ async def test_config_does_not_throw_exceptions(project_base_dir):
         _ = service.get_section("providers.output")
         _ = service.get_section("providers.decision")
 
-        # 尝试获取 Provider 配置
-        _ = service.get_input_provider_config("console_input")
-        _ = service.get_provider_config("tts")
+        # 使用新的配置API获取 Provider 配置
+        from src.services.config.schemas import ConsoleInputProviderConfig, TTSProviderConfig
+        _ = service.get_provider_config_with_defaults("console_input", "input", schema_class=ConsoleInputProviderConfig)
+        _ = service.get_provider_config_with_defaults("tts", "output", schema_class=TTSProviderConfig)
 
         # 如果没有抛出异常，测试通过
         assert True
@@ -468,9 +469,16 @@ async def test_manager_handles_invalid_provider_type():
     """测试 Manager 正确处理无效的 Provider 类型"""
     from src.domains.input.input_provider_manager import InputProviderManager
     from src.core.event_bus import EventBus
+    from src.services.config.service import ConfigService
+    import os
 
     event_bus = EventBus()
     manager = InputProviderManager(event_bus)
+
+    # 创建 ConfigService 实例
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    config_service = ConfigService(base_dir=base_dir)
+    config_service.initialize()
 
     # 尝试加载不存在的 Provider 类型
     config = {
@@ -482,7 +490,7 @@ async def test_manager_handles_invalid_provider_type():
     }
 
     # 应该不抛出异常，而是跳过无效的 Provider
-    providers = await manager.load_from_config(config)
+    providers = await manager.load_from_config(config, config_service=config_service)
     assert len(providers) == 0
 
     # 清理

@@ -9,15 +9,18 @@ import asyncio
 import time
 import io
 import base64
-from typing import Dict, Any, Optional, AsyncIterator
+from typing import Dict, Any, Optional, AsyncIterator, Literal, List
 from enum import Enum
 from PIL import ImageGrab
 import pyautogui
+
+from pydantic import Field, field_validator
 
 from src.core.base.input_provider import InputProvider
 from src.core.base.raw_data import RawData
 from src.core.event_bus import EventBus
 from src.core.utils.logger import get_logger
+from src.services.config.schemas.schemas.base import BaseProviderConfig
 
 
 class ControlMethod(Enum):
@@ -38,6 +41,63 @@ class MainosabaInputProvider(InputProvider):
     - 产生RawData供后续处理
     """
 
+    class ConfigSchema(BaseProviderConfig):
+        """Mainosaba游戏画面采集输入Provider配置"""
+
+        type: Literal["mainosaba"] = "mainosaba"
+        full_screen: bool = Field(
+            default=True,
+            description="全屏截图"
+        )
+        game_region: Optional[List[int]] = Field(
+            default=None,
+            description="游戏区域 [x1, y1, x2, y2]"
+        )
+        check_interval: int = Field(
+            default=1,
+            description="检查间隔（秒）",
+            ge=1
+        )
+        screenshot_min_interval: float = Field(
+            default=0.5,
+            description="最小截图间隔（秒）",
+            ge=0.1
+        )
+        response_timeout: int = Field(
+            default=10,
+            description="响应超时（秒）",
+            ge=1
+        )
+        control_method: Literal["mouse_click", "enter_key", "space_key"] = Field(
+            default="mouse_click",
+            description="游戏控制方式"
+        )
+        click_position: List[int] = Field(
+            default_factory=lambda: [1920 // 2, 1080 // 2],
+            description="点击位置 [x, y]"
+        )
+
+        @field_validator("game_region")
+        @classmethod
+        def validate_game_region(cls, v: Optional[List[int]]) -> Optional[List[int]]:
+            """验证游戏区域格式"""
+            if v is not None:
+                if len(v) != 4:
+                    raise ValueError("game_region必须包含4个值 [x1, y1, x2, y2]")
+                if any(x < 0 for x in v):
+                    raise ValueError("game_region坐标不能为负数")
+            return v
+
+        @field_validator("click_position")
+        @classmethod
+        def validate_click_position(cls, v: List[int]) -> List[int]:
+            """验证点击位置格式"""
+            if len(v) != 2:
+                raise ValueError("click_position必须包含2个值 [x, y]")
+            if any(x < 0 for x in v):
+                raise ValueError("click_position坐标不能为负数")
+            return v
+
     def __init__(self, config: Dict[str, Any], vlm_client=None, event_bus: Optional[EventBus] = None):
         super().__init__(config)
         self.logger = get_logger("MainosabaInputProvider")
@@ -45,10 +105,11 @@ class MainosabaInputProvider(InputProvider):
         self.event_bus = event_bus
 
         # 游戏配置
-        self.full_screen = config.get("full_screen", True)
-        self.game_region = config.get("game_region", None)
-        self.check_interval = config.get("check_interval", 1)
-        self.screenshot_min_interval = config.get("screenshot_min_interval", 0.5)
+        self.typed_config = self.ConfigSchema(**config)
+        self.full_screen = self.typed_config.full_screen
+        self.game_region = self.typed_config.game_region
+        self.check_interval = self.typed_config.check_interval
+        self.screenshot_min_interval = self.typed_config.screenshot_min_interval
 
         # 状态
         self.last_screenshot_time = 0
@@ -65,7 +126,7 @@ class MainosabaInputProvider(InputProvider):
                 # 检查是否在等待回应
                 if self.waiting_for_response:
                     # 检查是否超时
-                    if time.time() - self.last_message_time > self.config.get("response_timeout", 10):
+                    if time.time() - self.last_message_time > self.typed_config.response_timeout:
                         self.logger.info("等待回应超时，继续游戏")
                         await self.advance_game()
                         self.waiting_for_response = False
@@ -184,14 +245,14 @@ class MainosabaInputProvider(InputProvider):
     async def advance_game(self) -> None:
         """推进游戏到下一句对话"""
         try:
-            control_method_str = self.config.get("control_method", "mouse_click")
+            control_method_str = self.typed_config.control_method
             try:
                 control_method = ControlMethod(control_method_str)
             except ValueError:
                 self.logger.warning(f"未知的控制方式: {control_method_str}，使用默认值 mouse_click")
                 control_method = ControlMethod.MOUSE_CLICK
 
-            click_position = self.config.get("click_position", [1920 // 2, 1080 // 2])
+            click_position = self.typed_config.click_position
 
             if control_method == ControlMethod.MOUSE_CLICK:
                 # 鼠标点击指定位置

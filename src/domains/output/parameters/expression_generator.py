@@ -53,7 +53,7 @@ class ExpressionGenerator:
 
         self.logger.info("ExpressionGenerator初始化完成")
 
-    async def generate(self, intent: Intent) -> ExpressionParameters:
+    def generate(self, intent: Intent) -> ExpressionParameters:
         """
         从Intent生成ExpressionParameters
 

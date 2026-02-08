@@ -5,7 +5,9 @@ Bilibili 官方弹幕 InputProvider
 """
 
 import asyncio
-from typing import AsyncIterator, Dict, Any, Optional
+from typing import AsyncIterator, Dict, Any, Optional, Literal
+
+from pydantic import Field
 
 from .client.websocket_client import BiliWebSocketClient
 from .service.message_cache import MessageCacheService
@@ -14,6 +16,7 @@ from .service.message_handler import BiliMessageHandler
 from src.core.base.input_provider import InputProvider
 from src.core.base.raw_data import RawData
 from src.core.utils.logger import get_logger
+from src.services.config.schemas.schemas.base import BaseProviderConfig
 
 
 class BiliDanmakuOfficialInputProvider(InputProvider):
@@ -23,21 +26,47 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
     使用官方WebSocket API获取实时弹幕。
     """
 
+    class ConfigSchema(BaseProviderConfig):
+        """Bilibili官方弹幕输入Provider配置"""
+
+        type: Literal["bili_danmaku_official"] = "bili_danmaku_official"
+        id_code: str = Field(..., description="直播间ID代码")
+        app_id: str = Field(..., description="应用ID")
+        access_key: str = Field(..., description="访问密钥")
+        access_key_secret: str = Field(..., description="访问密钥Secret")
+        api_host: str = Field(
+            default="https://live-open.biliapi.com",
+            description="API主机地址"
+        )
+        message_cache_size: int = Field(
+            default=1000,
+            description="消息缓存大小",
+            ge=1
+        )
+        context_tags: Optional[list] = Field(
+            default=None,
+            description="Prompt上下文标签"
+        )
+        enable_template_info: bool = Field(
+            default=False,
+            description="启用模板信息"
+        )
+        template_items: dict = Field(
+            default_factory=dict,
+            description="模板项"
+        )
+
     def __init__(self, config: dict):
         super().__init__(config)
         self.logger = get_logger(self.__class__.__name__)
 
         # 配置
-        self.id_code = config.get("id_code")
-        self.app_id = config.get("app_id")
-        self.access_key = config.get("access_key")
-        self.access_key_secret = config.get("access_key_secret")
-        self.api_host = config.get("api_host", "https://live-open.biliapi.com")
-
-        # 验证必需配置
-        required_configs = ["id_code", "app_id", "access_key", "access_key_secret"]
-        if missing_configs := [key for key in required_configs if not config.get(key)]:
-            raise ValueError(f"缺少必需的配置项: {missing_configs}")
+        self.typed_config = self.ConfigSchema(**config)
+        self.id_code = self.typed_config.id_code
+        self.app_id = self.typed_config.app_id
+        self.access_key = self.typed_config.access_key
+        self.access_key_secret = self.typed_config.access_key_secret
+        self.api_host = self.typed_config.api_host
 
         # 状态变量
         self.websocket_client = None
@@ -46,7 +75,7 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
         self._stop_event = asyncio.Event()
 
         # Prompt Context Tags
-        self.context_tags: Optional[list] = config.get("context_tags")
+        self.context_tags: Optional[list] = self.typed_config.context_tags
         if not isinstance(self.context_tags, list):
             if self.context_tags is not None:
                 self.logger.warning(f"配置 'context_tags' 不是列表类型 ({type(self.context_tags)}), 将获取所有上下文。")
@@ -59,8 +88,8 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
 
         # Template Items
         self.template_items = None
-        if config.get("enable_template_info", False):
-            self.template_items = config.get("template_items", {})
+        if self.typed_config.enable_template_info:
+            self.template_items = self.typed_config.template_items
             if not self.template_items:
                 self.logger.warning(
                     "BiliDanmakuOfficial 配置启用了 template_info，但在 config.toml 中未找到 template_items。"
@@ -69,8 +98,7 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
     async def _collect_data(self) -> AsyncIterator[RawData]:
         """采集弹幕数据"""
         # 初始化消息缓存服务
-        cache_size = self.config.get("message_cache_size", 1000)
-        self.message_cache_service = MessageCacheService(max_cache_size=cache_size)
+        self.message_cache_service = MessageCacheService(max_cache_size=self.typed_config.message_cache_size)
 
         # 初始化WebSocket客户端
         self.websocket_client = BiliWebSocketClient(
@@ -119,7 +147,7 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
                     timestamp=message.message_info.time,
                     metadata={
                         "message_id": message.message_info.message_id,
-                        "room_id": self.config.get("id_code"),
+                        "room_id": self.id_code,
                     },
                 )
                 yield raw_data

@@ -1,5 +1,7 @@
 """Mock Decision Provider - 用于测试"""
-from typing import Optional
+from typing import Optional, Literal
+
+from pydantic import Field
 
 # 必须在类型导入前导入这些
 from src.core.base.decision_provider import DecisionProvider
@@ -7,6 +9,7 @@ from src.core.base.normalized_message import NormalizedMessage
 from src.domains.decision.intent import Intent
 from src.core.utils.logger import get_logger
 from src.core.provider_registry import ProviderRegistry
+from src.services.config.schemas.schemas.base import BaseProviderConfig
 
 
 class MockDecisionProvider(DecisionProvider):
@@ -14,12 +17,30 @@ class MockDecisionProvider(DecisionProvider):
     模拟决策Provider（用于测试）
 
     简单返回预设的响应，不进行实际决策逻辑。
+
+    配置示例:
+        ```toml
+        [decision.mock]
+        default_response = "这是模拟的回复"
+        ```
     """
 
+    class ConfigSchema(BaseProviderConfig):
+        """模拟决策Provider配置Schema
+
+        用于测试的模拟Provider，返回预设响应。
+        """
+
+        type: Literal["mock"] = "mock"
+        default_response: str = Field(
+            default="这是模拟的回复", description="默认响应文本"
+        )
+
     def __init__(self, config: dict):
-        self.config = config
+        # 使用 Pydantic Schema 验证配置
+        self.typed_config = self.ConfigSchema(**config)
         self.logger = get_logger("MockDecisionProvider")
-        self.default_response = config.get("default_response", "这是模拟的回复")
+        self.default_response = self.typed_config.default_response
         self.call_count = 0
 
         self.logger.info("MockDecisionProvider初始化完成")
@@ -50,9 +71,10 @@ class MockDecisionProvider(DecisionProvider):
         """设置Provider"""
         self.event_bus = event_bus
         if config:
-            self.config = config
+            # 使用 Pydantic Schema 验证配置
+            self.typed_config = self.ConfigSchema(**config)
             # 更新 default_response
-            self.default_response = config.get("default_response", "这是模拟的回复")
+            self.default_response = self.typed_config.default_response
         self._dependencies = dependencies or {}
         self.logger.info("MockDecisionProvider设置完成")
 

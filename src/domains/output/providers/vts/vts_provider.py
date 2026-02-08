@@ -12,9 +12,12 @@ import asyncio
 import time
 from typing import Dict, Any, Optional, List
 
+from pydantic import Field, field_validator
+
 from src.core.base.output_provider import OutputProvider
 from src.domains.output.parameters.render_parameters import RenderParameters
 from src.core.utils.logger import get_logger
+from src.services.config.schemas.schemas.base import BaseProviderConfig
 
 # LLM匹配依赖
 LLM_AVAILABLE = False
@@ -37,6 +40,55 @@ class VTSProvider(OutputProvider):
     - 向后兼容vts_control服务
     """
 
+    class ConfigSchema(BaseProviderConfig):
+        """VTS输出Provider配置"""
+
+        type: str = "vts"
+
+        # VTS连接配置
+        vts_host: str = Field(default="localhost", description="VTS WebSocket主机地址")
+        vts_port: int = Field(default=8001, ge=1, le=65535, description="VTS WebSocket端口")
+
+        # LLM智能匹配配置
+        llm_matching_enabled: bool = Field(default=False, description="是否启用LLM智能热键匹配")
+        llm_api_key: Optional[str] = Field(default=None, description="LLM API密钥")
+        llm_base_url: Optional[str] = Field(default=None, description="LLM API地址")
+        llm_model: str = Field(default="deepseek-chat", description="LLM模型名称")
+        llm_temperature: float = Field(default=0.1, ge=0.0, le=2.0, description="LLM温度参数")
+        llm_max_tokens: int = Field(default=100, ge=1, le=4096, description="LLM最大token数")
+        llm_prompt_prefix: Optional[str] = Field(
+            default=None,
+            description="LLM提示词前缀"
+        )
+
+        # 情感热键映射
+        emotion_hotkey_mapping: Dict[str, List[str]] = Field(
+            default={
+                "happy": ["微笑", "笑", "开心", "高兴", "愉快", "喜悦"],
+                "surprised": ["惊讶", "吃惊", "震惊", "意外"],
+                "sad": ["难过", "伤心", "悲伤", "沮丧", "失落"],
+                "angry": ["生气", "愤怒", "不满", "恼火"],
+                "shy": ["害羞", "脸红", "羞涩", "不好意思"],
+                "wink": ["眨眼", "wink", "眨眨眼"],
+            },
+            description="情感热键映射"
+        )
+
+        # 口型同步配置
+        lip_sync_enabled: bool = Field(default=True, description="是否启用口型同步")
+        volume_threshold: float = Field(default=0.01, ge=0.0, le=1.0, description="音量阈值")
+        smoothing_factor: float = Field(default=0.3, ge=0.0, le=1.0, description="平滑因子")
+        vowel_detection_sensitivity: float = Field(default=0.5, ge=0.0, le=2.0, description="元音检测敏感度")
+        sample_rate: int = Field(default=32000, ge=8000, le=48000, description="采样率")
+
+        @field_validator("llm_api_key")
+        @classmethod
+        def validate_llm_api_key(cls, v: Optional[str], info) -> Optional[str]:
+            """验证LLM API密钥"""
+            if info.data.get("llm_matching_enabled") and not v:
+                raise ValueError("启用LLM匹配时必须提供API密钥")
+            return v
+
     # VTS参数名定义
     PARAM_MOUTH_SMILE = "MouthSmile"
     PARAM_MOUTH_OPEN = "MouthOpen"
@@ -53,17 +105,20 @@ class VTSProvider(OutputProvider):
         super().__init__(config)
         self.logger = get_logger("VTSProvider")
 
+        # 使用 ConfigSchema 验证配置，获得类型安全的配置对象
+        self.typed_config = self.ConfigSchema(**config)
+
         # VTS连接配置
-        self.vts_host = config.get("vts_host", "localhost")
-        self.vts_port = config.get("vts_port", 8001)
+        self.vts_host = self.typed_config.vts_host
+        self.vts_port = self.typed_config.vts_port
 
         # LLM智能匹配配置
-        self.llm_matching_enabled = config.get("llm_matching_enabled", False)
-        self.llm_api_key = config.get("llm_api_key", "")
-        self.llm_base_url = config.get("llm_base_url", "")
-        self.llm_model = config.get("llm_model", "deepseek-chat")
-        self.llm_temperature = config.get("llm_temperature", 0.1)
-        self.llm_max_tokens = config.get("llm_max_tokens", 100)
+        self.llm_matching_enabled = self.typed_config.llm_matching_enabled
+        self.llm_api_key = self.typed_config.llm_api_key or ""
+        self.llm_base_url = self.typed_config.llm_base_url or ""
+        self.llm_model = self.typed_config.llm_model
+        self.llm_temperature = self.typed_config.llm_temperature
+        self.llm_max_tokens = self.typed_config.llm_max_tokens
 
         # 初始化LLM客户端
         self.openai_client = None
@@ -75,34 +130,26 @@ class VTSProvider(OutputProvider):
                 self.logger.info("LLM客户端初始化成功")
             except Exception as e:
                 self.logger.warning(f"LLM客户端初始化失败: {e}")
-        self.llm_prompt_prefix = config.get(
-            "llm_prompt_prefix",
-            '你是一个VTube Studio热键匹配助手。根据用户的文本内容，从提供的热键列表中选择最合适的热键。\n\n用户文本: "{text}"\n\n可用的热键列表:\n{hotkey_list_str}\n\n规则:\n1. 仔细分析用户文本的情感和动作意图\n2. 从热键列表中选择最匹配的一个热键名称\n3. 如果没有合适的匹配，返回 "NONE"\n4. 只返回热键名称或"NONE"，不要其他解释\n\n你的选择:',
+        self.llm_prompt_prefix = self.typed_config.llm_prompt_prefix or (
+            '你是一个VTube Studio热键匹配助手。根据用户的文本内容，从提供的热键列表中选择最合适的热键。\n\n'
+            '用户文本: "{text}"\n\n可用的热键列表:\n{hotkey_list_str}\n\n规则:\n'
+            '1. 仔细分析用户文本的情感和动作意图\n2. 从热键列表中选择最匹配的一个热键名称\n'
+            '3. 如果没有合适的匹配，返回 "NONE"\n4. 只返回热键名称或"NONE"，不要其他解释\n\n你的选择:'
         )
 
         # 情感热键映射
-        self.emotion_hotkey_mapping = config.get(
-            "emotion_hotkey_mapping",
-            {
-                "happy": ["微笑", "笑", "开心", "高兴", "愉快", "喜悦"],
-                "surprised": ["惊讶", "吃惊", "震惊", "意外"],
-                "sad": ["难过", "伤心", "悲伤", "沮丧", "失落"],
-                "angry": ["生气", "愤怒", "不满", "恼火"],
-                "shy": ["害羞", "脸红", "羞涩", "不好意思"],
-                "wink": ["眨眼", "wink", "眨眨眼"],
-            },
-        )
+        self.emotion_hotkey_mapping = self.typed_config.emotion_hotkey_mapping
 
         # 缓存热键列表
         self.hotkey_list: List[Dict[str, Any]] = []
         self.hotkey_list_last_update: float = 0.0
 
         # 口型同步配置
-        self.lip_sync_enabled = config.get("lip_sync_enabled", True)
-        self.volume_threshold = config.get("volume_threshold", 0.01)
-        self.smoothing_factor = config.get("smoothing_factor", 0.3)
-        self.vowel_detection_sensitivity = config.get("vowel_detection_sensitivity", 0.5)
-        self.sample_rate = config.get("sample_rate", 32000)
+        self.lip_sync_enabled = self.typed_config.lip_sync_enabled
+        self.volume_threshold = self.typed_config.volume_threshold
+        self.smoothing_factor = self.typed_config.smoothing_factor
+        self.vowel_detection_sensitivity = self.typed_config.vowel_detection_sensitivity
+        self.sample_rate = self.typed_config.sample_rate
 
         # 音频分析状态
         self.is_speaking = False

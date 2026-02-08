@@ -2,9 +2,12 @@
 测试Provider Schema注册表和enabled字段检测
 
 This module tests:
-1. Schema registry completeness (all 21 providers registered)
+1. Schema registry completeness (all providers registered to ProviderRegistry)
 2. No 'enabled' field in any schema (architecture requirement)
 3. Schema validation functionality
+
+注意：所有Provider已100%迁移到自管理Schema架构（commit 8af0e6e）
+集中式PROVIDER_SCHEMA_REGISTRY保留为空仅用于向后兼容
 """
 
 import pytest
@@ -15,34 +18,58 @@ from src.services.config.schemas import (
     get_provider_schema,
     validate_provider_config,
 )
+from src.core.provider_registry import ProviderRegistry
 
 
 class TestSchemaRegistry:
     """测试Schema注册表"""
 
     def test_schema_registry_contains_all_providers(self):
-        """测试注册表包含全部21个Provider"""
+        """测试注册表包含全部Provider（100%迁移到自管理Schema架构）"""
+        # 需要先导入provider模块，ProviderRegistry才会注册它们
+        from src.domains.input.providers import console_input, mock_danmaku, bili_danmaku
+        from src.domains.decision.providers import maicore
+        from src.domains.output.providers import subtitle, vts, tts
+
         providers = list_all_providers()
 
-        # 验证总数 (7 input + 4 decision + 10 output = 21)
-        assert providers["total"] == 21, f"Expected 21 providers, got {providers['total']}"
+        # 验证集中式注册表为空（所有Provider已迁移）
+        assert len(PROVIDER_SCHEMA_REGISTRY) == 0, "Centralized registry should be empty after 100% migration"
 
-        # 验证分类数量
-        assert len(providers["input"]) == 7, f"Expected 7 input providers, got {len(providers['input'])}"
-        assert len(providers["decision"]) == 4, f"Expected 4 decision providers, got {len(providers['decision'])}"
-        assert len(providers["output"]) == 10, f"Expected 10 output providers, got {len(providers['output'])}"
+        # 验证list_all_providers从ProviderRegistry获取数据
+        assert providers["total"] > 0, "Should have providers in ProviderRegistry"
 
-        # 验证特定provider存在
-        assert "console_input" in PROVIDER_SCHEMA_REGISTRY
-        assert "bili_danmaku" in PROVIDER_SCHEMA_REGISTRY
-        assert "maicore" in PROVIDER_SCHEMA_REGISTRY
-        assert "subtitle" in PROVIDER_SCHEMA_REGISTRY
-        assert "tts" in PROVIDER_SCHEMA_REGISTRY
-        # RemoteStream现在是一个output provider
-        assert "remote_stream" in PROVIDER_SCHEMA_REGISTRY
+        # 验证分类
+        assert isinstance(providers["input"], list)
+        assert isinstance(providers["decision"], list)
+        assert isinstance(providers["output"], list)
+
+        # 验证关键Provider在ProviderRegistry中（不在集中式注册表）
+        assert "console_input" not in PROVIDER_SCHEMA_REGISTRY
+        assert "mock_danmaku" not in PROVIDER_SCHEMA_REGISTRY
+        assert "subtitle" not in PROVIDER_SCHEMA_REGISTRY
+        assert "vts" not in PROVIDER_SCHEMA_REGISTRY
+        assert "tts" not in PROVIDER_SCHEMA_REGISTRY
+        assert "bili_danmaku" not in PROVIDER_SCHEMA_REGISTRY
+        assert "maicore" not in PROVIDER_SCHEMA_REGISTRY
+
+        # 但它们应该在ProviderRegistry中
+        assert ProviderRegistry.get_config_schema("console_input") is not None
+        assert ProviderRegistry.get_config_schema("mock_danmaku") is not None
+        assert ProviderRegistry.get_config_schema("bili_danmaku") is not None
+        assert ProviderRegistry.get_config_schema("maicore") is not None
+        assert ProviderRegistry.get_config_schema("subtitle") is not None
+        assert ProviderRegistry.get_config_schema("vts") is not None
+        assert ProviderRegistry.get_config_schema("tts") is not None
 
     def test_input_providers_registry(self):
-        """测试输入Provider注册完整"""
+        """测试输入Provider注册完整（100%迁移到自管理Schema）"""
+        from src.domains.input.providers import (
+            console_input, bili_danmaku, bili_danmaku_official,
+            bili_danmaku_official_maicraft, mock_danmaku,
+            read_pingmu, mainosaba
+        )
+
         input_providers = [
             "console_input",
             "bili_danmaku",
@@ -54,10 +81,18 @@ class TestSchemaRegistry:
         ]
 
         for provider in input_providers:
-            assert provider in PROVIDER_SCHEMA_REGISTRY, f"Input provider '{provider}' not in registry"
+            # 验证不在集中式注册表
+            assert provider not in PROVIDER_SCHEMA_REGISTRY, f"{provider} should not be in centralized registry"
+            # 验证在ProviderRegistry中
+            schema = ProviderRegistry.get_config_schema(provider)
+            assert schema is not None, f"Input provider '{provider}' not in ProviderRegistry"
 
     def test_decision_providers_registry(self):
-        """测试决策Provider注册完整"""
+        """测试决策Provider注册完整（100%迁移到自管理Schema）"""
+        from src.domains.decision.providers import (
+            maicore, local_llm, rule_engine, mock
+        )
+
         decision_providers = [
             "maicore",
             "local_llm",
@@ -66,10 +101,19 @@ class TestSchemaRegistry:
         ]
 
         for provider in decision_providers:
-            assert provider in PROVIDER_SCHEMA_REGISTRY, f"Decision provider '{provider}' not in registry"
+            # 验证不在集中式注册表
+            assert provider not in PROVIDER_SCHEMA_REGISTRY, f"{provider} should not be in centralized registry"
+            # 验证在ProviderRegistry中
+            schema = ProviderRegistry.get_config_schema(provider)
+            assert schema is not None, f"Decision provider '{provider}' not in ProviderRegistry"
 
     def test_output_providers_registry(self):
-        """测试输出Provider注册完整"""
+        """测试输出Provider注册完整（100%迁移到自管理Schema）"""
+        from src.domains.output.providers import (
+            subtitle, vts, tts, sticker, warudo,
+            obs_control, gptsovits, omni_tts, avatar, remote_stream
+        )
+
         output_providers = [
             "subtitle",
             "vts",
@@ -84,7 +128,11 @@ class TestSchemaRegistry:
         ]
 
         for provider in output_providers:
-            assert provider in PROVIDER_SCHEMA_REGISTRY, f"Output provider '{provider}' not in registry"
+            # 验证不在集中式注册表
+            assert provider not in PROVIDER_SCHEMA_REGISTRY, f"{provider} should not be in centralized registry"
+            # 验证在ProviderRegistry中
+            schema = ProviderRegistry.get_config_schema(provider)
+            assert schema is not None, f"Output provider '{provider}' not in ProviderRegistry"
 
 
 class TestNoEnabledField:
@@ -108,20 +156,18 @@ class TestNoEnabledField:
         )
 
     def test_specific_schemas_no_enabled(self):
-        """测试特定Schema不包含enabled字段"""
-        from src.services.config.schemas import (
-            ConsoleInputProviderConfig,
-            MaiCoreDecisionProviderConfig,
-            SubtitleProviderConfig,
-            TTSProviderConfig,
-        )
+        """测试特定Schema不包含enabled字段（100%迁移到自管理Schema）"""
+        from src.domains.input.providers.console_input import ConsoleInputProvider
+        from src.domains.decision.providers.maicore.maicore_decision_provider import MaiCoreDecisionProvider
+        from src.domains.output.providers.subtitle import SubtitleOutputProvider
+        from src.domains.output.providers.tts import TTSProvider
 
-        # 检查几个关键schema
+        # 检查几个关键schema（使用自管理Schema的Provider）
         schemas_to_check = [
-            ConsoleInputProviderConfig,
-            MaiCoreDecisionProviderConfig,
-            SubtitleProviderConfig,
-            TTSProviderConfig,
+            ConsoleInputProvider.ConfigSchema,
+            MaiCoreDecisionProvider.ConfigSchema,
+            SubtitleOutputProvider.ConfigSchema,
+            TTSProvider.ConfigSchema,
         ]
 
         for schema_class in schemas_to_check:
@@ -141,10 +187,24 @@ class TestSchemaHelperFunctions:
     """测试Schema辅助函数"""
 
     def test_get_provider_schema_valid(self):
-        """测试获取存在的Provider Schema"""
+        """测试获取存在的Provider Schema（100%迁移到ProviderRegistry）"""
+        # 需要先导入provider模块
+        from src.domains.input.providers import console_input, bili_danmaku
+        from src.domains.decision.providers import maicore
+        from src.domains.output.providers import subtitle
+
+        # 测试从ProviderRegistry获取自管理Schema
         schema = get_provider_schema("console_input")
         assert schema is not None
-        assert schema.__name__ == "ConsoleInputProviderConfig"
+
+        schema = get_provider_schema("bili_danmaku")
+        assert schema is not None
+
+        schema = get_provider_schema("maicore")
+        assert schema is not None
+
+        schema = get_provider_schema("subtitle")
+        assert schema is not None
 
     def test_get_provider_schema_invalid(self):
         """测试获取不存在的Provider Schema抛出异常"""
@@ -152,18 +212,38 @@ class TestSchemaHelperFunctions:
             get_provider_schema("nonexistent_provider")
 
     def test_validate_provider_config_valid(self):
-        """测试验证有效的Provider配置"""
+        """测试验证有效的Provider配置（100%迁移到自管理Schema）"""
+        # 导入provider模块
+        from src.domains.input.providers import console_input, bili_danmaku
+        from src.domains.decision.providers import maicore
+
+        # 测试console_input配置验证
         config = {"type": "console_input", "user_id": "test_user"}
         validated = validate_provider_config("console_input", config)
-
         assert validated.type == "console_input"
         assert validated.user_id == "test_user"
 
+        # 测试bili_danmaku配置验证
+        config = {"type": "bili_danmaku", "room_id": 12345}
+        validated = validate_provider_config("bili_danmaku", config)
+        assert validated.type == "bili_danmaku"
+        assert validated.room_id == 12345
+
+        # 测试maicore配置验证
+        config = {"type": "maicore", "host": "localhost", "port": 8000}
+        validated = validate_provider_config("maicore", config)
+        assert validated.type == "maicore"
+        assert validated.host == "localhost"
+        assert validated.port == 8000
+
     def test_validate_provider_config_invalid(self):
         """测试验证无效的Provider配置抛出异常"""
+        # 导入provider模块
+        from src.domains.input.providers import bili_danmaku
+
         # 无效的配置（缺少必需字段）
         with pytest.raises(Exception):  # ValidationError from pydantic
-            validate_provider_config("bili_danmaku", {})  # room_id is required
+            validate_provider_config("bili_danmaku", {})  # type and room_id are required
 
     def test_list_all_providers_structure(self):
         """测试list_all_providers返回结构正确"""
@@ -187,22 +267,24 @@ class TestSchemaValidation:
     """测试Schema验证功能"""
 
     def test_console_input_schema_validation(self):
-        """测试ConsoleInput Schema验证"""
-        from src.services.config.schemas import ConsoleInputProviderConfig
+        """测试ConsoleInput Schema验证（自管理Schema）"""
+        from src.domains.input.providers.console_input import ConsoleInputProvider
 
         # 有效配置
-        config = ConsoleInputProviderConfig(type="console_input")
+        config = ConsoleInputProvider.ConfigSchema(type="console_input")
         assert config.type == "console_input"
 
         # 带额外字段
-        config = ConsoleInputProviderConfig(type="console_input", user_id="test")
+        config = ConsoleInputProvider.ConfigSchema(type="console_input", user_id="test")
         assert config.user_id == "test"
 
     def test_maicore_schema_validation(self):
-        """测试MaiCore Schema验证"""
-        from src.services.config.schemas import MaiCoreDecisionProviderConfig
+        """测试MaiCore Schema验证（自管理Schema）"""
+        from src.domains.decision.providers.maicore.maicore_decision_provider import (
+            MaiCoreDecisionProvider,
+        )
 
-        config = MaiCoreDecisionProviderConfig(
+        config = MaiCoreDecisionProvider.ConfigSchema(
             type="maicore",
             host="localhost",
             port=8000,
@@ -212,10 +294,10 @@ class TestSchemaValidation:
         assert config.port == 8000
 
     def test_subtitle_schema_validation(self):
-        """测试Subtitle Schema验证"""
-        from src.services.config.schemas import SubtitleProviderConfig
+        """测试Subtitle Schema验证（自管理Schema）"""
+        from src.domains.output.providers.subtitle import SubtitleOutputProvider
 
-        config = SubtitleProviderConfig(
+        config = SubtitleOutputProvider.ConfigSchema(
             window_width=800,
             window_height=100,
         )
@@ -223,10 +305,10 @@ class TestSchemaValidation:
         assert config.window_height == 100
 
     def test_tts_schema_validation(self):
-        """测试TTS Schema验证"""
-        from src.services.config.schemas import TTSProviderConfig
+        """测试TTS Schema验证（自管理Schema）"""
+        from src.domains.output.providers.tts import TTSProvider
 
-        config = TTSProviderConfig(
+        config = TTSProvider.ConfigSchema(
             engine="edge",
             voice="zh-CN-XiaoxiaoNeural",
         )
@@ -238,20 +320,29 @@ class TestRegistryConsistency:
     """测试注册表一致性"""
 
     def test_input_decision_providers_have_type_field(self):
-        """测试输入和决策Provider的type字段与注册表键一致"""
-        from src.services.config.schemas import PROVIDER_SCHEMA_REGISTRY
+        """测试输入和决策Provider的type字段与注册表键一致（100%迁移到ProviderRegistry）"""
         from pydantic import ValidationError
+        from src.domains.input.providers import (
+            console_input, bili_danmaku, bili_danmaku_official,
+            bili_danmaku_official_maicraft, mock_danmaku,
+            read_pingmu, mainosaba
+        )
+        from src.domains.decision.providers import (
+            maicore, local_llm, rule_engine, mock
+        )
 
-        # 只检查input和decision providers（它们应该有type字段）
+        # 检查所有input和decision providers（都应该有type字段）
         providers_with_type = [
             "console_input", "bili_danmaku", "bili_danmaku_official",
             "bili_danmaku_official_maicraft", "mock_danmaku",
-            "read_pingmu", "mainosaba", "remote_stream",
+            "read_pingmu", "mainosaba",
             "maicore", "local_llm", "rule_engine", "mock",
         ]
 
         for provider_type in providers_with_type:
-            schema_class = PROVIDER_SCHEMA_REGISTRY[provider_type]
+            schema_class = ProviderRegistry.get_config_schema(provider_type)
+            assert schema_class is not None, f"{provider_type} not found in ProviderRegistry"
+
             try:
                 # 尝试创建实例（有些schema有必需字段）
                 instance = schema_class()
@@ -274,13 +365,15 @@ class TestRegistryConsistency:
                 )
 
     def test_registry_is_complete(self):
-        """测试注册表包含所有必要的Provider类型"""
-        from src.services.config.schemas import PROVIDER_SCHEMA_REGISTRY
+        """测试注册表包含所有必要的Provider类型（100%迁移到ProviderRegistry）"""
+        # 导入所有provider模块
+        from src.domains.input.providers import console_input, mock_danmaku, bili_danmaku
+        from src.domains.output.providers import subtitle, vts, tts, gptsovits
 
-        # 验证关键provider存在
+        # 验证关键provider在ProviderRegistry中
         critical_providers = [
             # Input
-            "console_input", "bili_danmaku",
+            "console_input", "bili_danmaku", "mock_danmaku",
             # Decision
             "maicore", "local_llm", "rule_engine",
             # Output
@@ -288,16 +381,28 @@ class TestRegistryConsistency:
         ]
 
         for provider in critical_providers:
-            assert provider in PROVIDER_SCHEMA_REGISTRY, f"Critical provider '{provider}' not in registry"
+            schema = ProviderRegistry.get_config_schema(provider)
+            assert schema is not None, f"Critical provider '{provider}' not in ProviderRegistry"
 
     def test_output_providers_in_map(self):
-        """测试输出Provider在OUTPUT_PROVIDER_CONFIG_MAP中"""
+        """测试输出Provider在OUTPUT_PROVIDER_CONFIG_MAP中（100%迁移后此映射已废弃）"""
         from src.services.config.schemas import OUTPUT_PROVIDER_CONFIG_MAP
 
-        expected_output_providers = [
+        # 所有output provider已迁移到自管理Schema
+        # OUTPUT_PROVIDER_CONFIG_MAP保留为空仅用于向后兼容
+        assert len(OUTPUT_PROVIDER_CONFIG_MAP) == 0, "OUTPUT_PROVIDER_CONFIG_MAP should be empty after 100% migration"
+
+        # 验证所有output providers在ProviderRegistry中
+        from src.domains.output.providers import (
+            subtitle, vts, tts, sticker, warudo,
+            obs_control, gptsovits, omni_tts, avatar, remote_stream
+        )
+
+        output_providers = [
             "subtitle", "vts", "tts", "sticker", "warudo",
             "obs_control", "gptsovits", "omni_tts", "avatar", "remote_stream",
         ]
 
-        for provider in expected_output_providers:
-            assert provider in OUTPUT_PROVIDER_CONFIG_MAP, f"Output provider '{provider}' not in OUTPUT_PROVIDER_CONFIG_MAP"
+        for provider in output_providers:
+            schema = ProviderRegistry.get_config_schema(provider)
+            assert schema is not None, f"Output provider '{provider}' not in ProviderRegistry"

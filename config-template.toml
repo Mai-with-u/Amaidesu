@@ -121,11 +121,41 @@ default_priority = 100     # 默认优先级值
 # user_rate_limit = 10     # 每个用户每分钟最大消息数
 # window_size = 60         # 滑动窗口大小（秒）
 
-# MessagePipeline 示例：命令处理器
-[pipelines.command_processor]
-priority = 50
-# 可以在此覆盖 command_map
-# command_map = { vts_trigger_hotkey = { service = "vts_control", method = "trigger_hotkey" } }
+# TextPipeline 示例：限流
+[pipelines.rate_limit]
+priority = 100
+enabled = true
+global_rate_limit = 100
+user_rate_limit = 10
+window_size = 60
+
+# TextPipeline 示例：相似消息过滤
+[pipelines.similar_filter]
+priority = 500
+enabled = true
+similarity_threshold = 0.85
+time_window = 5.0
+
+# === 输出管道（OutputPipeline）===
+# OutputPipeline 示例：敏感词过滤
+[pipelines.profanity_filter]
+# OutputPipeline 配置
+[pipelines.profanity_filter.output]
+enabled = true
+priority = 100
+# 敏感词列表
+words = ["测试脏话", "示例敏感词"]
+replacement = "***"
+# 可选：从文件加载
+# wordlist_file = "data/profanity_words.txt"
+# 是否过滤 TTS 文本（默认：true）
+filter_tts = true
+# 是否过滤字幕文本（默认：true）
+filter_subtitle = true
+# 是否区分大小写（默认：false）
+case_sensitive = false
+# 匹配到敏感词是否丢弃整个消息（默认：false）
+drop_on_match = false
 
 # ========== Provider配置 ==========
 
@@ -204,6 +234,14 @@ available_providers = [
 # MaiCore WebSocket 服务器地址（继承 [maicore] 配置）
 # host = "127.0.0.1"
 # port = 8000
+
+# MaiCore DecisionProvider 子配置
+[providers.decision.providers.maicore]
+# Action 建议配置
+# action_suggestions_enabled = false  # 是否启用 MaiBot Action 建议（默认关闭）
+# action_confidence_threshold = 0.6   # 最低置信度阈值（0.0-1.0）
+# action_cooldown_seconds = 5.0       # 同一 Action 的最小间隔（秒）
+# max_suggested_actions = 3           # 每条消息最大建议数量
 
 # LocalLLM DecisionProvider 配置
 [providers.decision.local_llm]

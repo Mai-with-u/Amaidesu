@@ -404,3 +404,116 @@ class TestActionMapperMultipleExpressions:
         assert len(result["expressions"]) == 1
         assert len(result["hotkeys"]) == 1
         assert len(result["actions"]) == 1
+
+
+class TestActionMapperSemanticFormat:
+    """测试语义格式支持（LLM生成的格式）"""
+
+    def test_handle_hotkey_action_with_key(self):
+        """测试热键动作处理器（语义格式 key）"""
+        mapper = ActionMapper()
+        action = IntentAction(type=ActionType.HOTKEY, params={"key": "test_hotkey"}, priority=50)
+        result = {"hotkeys": [], "actions": [], "expressions": {}}
+
+        mapper.handle_hotkey_action(action, result)
+
+        assert len(result["hotkeys"]) == 1
+        assert result["hotkeys"][0] == "test_hotkey"
+
+    def test_handle_hotkey_action_key_fallback(self):
+        """测试热键动作处理器（key 优先，fallback 到 hotkey_id）"""
+        mapper = ActionMapper()
+        action = IntentAction(type=ActionType.HOTKEY, params={"key": "primary", "hotkey_id": "fallback"}, priority=50)
+        result = {"hotkeys": [], "actions": [], "expressions": {}}
+
+        mapper.handle_hotkey_action(action, result)
+
+        # key 优先
+        assert len(result["hotkeys"]) == 1
+        assert result["hotkeys"][0] == "primary"
+
+    def test_handle_hotkey_action_hotkey_id_only(self):
+        """测试热键动作处理器（仅 hotkey_id，向后兼容）"""
+        mapper = ActionMapper()
+        action = IntentAction(type=ActionType.HOTKEY, params={"hotkey_id": "test_hotkey"}, priority=50)
+        result = {"hotkeys": [], "actions": [], "expressions": {}}
+
+        mapper.handle_hotkey_action(action, result)
+
+        assert len(result["hotkeys"]) == 1
+        assert result["hotkeys"][0] == "test_hotkey"
+
+    def test_handle_expression_action_with_name(self):
+        """测试表情动作处理器（语义格式 name）"""
+        mapper = ActionMapper()
+        action = IntentAction(type=ActionType.EXPRESSION, params={"name": "smile"}, priority=50)
+        result = {"hotkeys": [], "actions": [], "expressions": {}}
+
+        mapper.handle_expression_action(action, result)
+
+        # 应该映射到 VTS 参数
+        assert "mouth_opening" in result["expressions"]
+        assert result["expressions"]["mouth_opening"] == 0.5
+        assert result["expressions"]["cheek_puffing"] == 0.2
+
+    def test_handle_expression_action_with_unknown_name(self):
+        """测试表情动作处理器（未知的 name）"""
+        mapper = ActionMapper()
+        action = IntentAction(type=ActionType.EXPRESSION, params={"name": "unknown_expression"}, priority=50)
+        result = {"hotkeys": [], "actions": [], "expressions": {}}
+
+        mapper.handle_expression_action(action, result)
+
+        # 未知的 name 不应该添加任何参数
+        assert result["expressions"] == {}
+
+    def test_handle_expression_action_name_and_expressions(self):
+        """测试表情动作处理器（同时包含 name 和 expressions）"""
+        mapper = ActionMapper()
+        action = IntentAction(
+            type=ActionType.EXPRESSION,
+            params={"name": "smile", "expressions": {"custom_param": 0.7}},
+            priority=50,
+        )
+        result = {"hotkeys": [], "actions": [], "expressions": {}}
+
+        mapper.handle_expression_action(action, result)
+
+        # 应该包含映射参数和自定义参数
+        assert result["expressions"]["mouth_opening"] == 0.5
+        assert result["expressions"]["custom_param"] == 0.7
+
+    def test_handle_expression_action_expressions_only(self):
+        """测试表情动作处理器（仅 expressions，向后兼容）"""
+        mapper = ActionMapper()
+        action = IntentAction(
+            type=ActionType.EXPRESSION, params={"expressions": {"MouthSmile": 0.8, "EyeOpenLeft": 0.9}}, priority=50
+        )
+        result = {"hotkeys": [], "actions": [], "expressions": {}}
+
+        mapper.handle_expression_action(action, result)
+
+        assert result["expressions"] == {"MouthSmile": 0.8, "EyeOpenLeft": 0.9}
+
+    def test_expression_map_contains_all_basic_emotions(self):
+        """测试表达式映射包含所有基本情绪"""
+        mapper = ActionMapper()
+        expression_map = mapper._get_expression_map()
+
+        # 验证基本情绪存在
+        assert "smile" in expression_map
+        assert "sad" in expression_map
+        assert "angry" in expression_map
+        assert "surprised" in expression_map
+        assert "neutral" in expression_map
+
+    def test_expression_map_values_are_dicts(self):
+        """测试表达式映射的值都是字典"""
+        mapper = ActionMapper()
+        expression_map = mapper._get_expression_map()
+
+        for _name, params in expression_map.items():
+            assert isinstance(params, dict)
+            # 所有参数值应该是数值（VTS 参数范围通常是 0-1）
+            for param_value in params.values():
+                assert isinstance(param_value, (int, float))

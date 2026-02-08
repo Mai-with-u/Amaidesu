@@ -5,8 +5,8 @@
 适用于直播弹幕、评论等场景。
 
 3域架构中的位置：
-- InputLayer (Input Domain): 在 RawData → NormalizedMessage 转换中处理文本
-- 在 InputLayer.normalize() 方法中调用
+- InputDomain (Input Domain): 在 RawData → NormalizedMessage 转换中处理文本
+- 在 InputDomain.normalize() 方法中调用
 - 用于过滤相似输入消息
 
 这是 SimilarMessageFilterPipeline 的现代化版本，使用 TextPipeline 接口。
