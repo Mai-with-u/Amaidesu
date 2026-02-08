@@ -46,6 +46,7 @@
 │  │  Output Domain  │  Intent → 实际输出                         │
 │  │                 │                                            │
 │  │  • Parameters: 参数生成（情绪→表情、动作→热键）              │
+│  │  • Pipelines: 输出后处理（敏感词过滤、长度限制）             │
 │  │  • OutputProvider: 实际渲染（TTS、字幕、VTS 等）             │
 │  │                                                              │
 │  │  配置: [providers.output]                                    │
@@ -160,7 +161,8 @@ Amaidesu/
 | **按子系统组织** | 高内聚：事件系统、LLM系统各自内聚，便于理解和维护 |
 | **normalization 放入 Input** | 与输入源强耦合，是 Input Domain 的内部实现 |
 | **parameters 放入 Output** | 与输出设备强耦合，是 Output Domain 的内部模块 |
-| **pipelines 放入 Input** | 预处理管道是 Input 的一部分，处理标准化后的消息 |
+| **输入 pipelines 放入 Input** | 输入预处理管道（限流、过滤）是 Input Domain 的一部分 |
+| **输出 pipelines 由 FlowCoordinator 管理** | 输出后处理管道（敏感词过滤）在参数生成后、渲染前执行 |
 | **rendering → output** | 命名与 3 域架构一致 |
 | **connectors 独立** | 原 `core/providers` 命名有误导，拆分为通信组件 |
 | **utils 放入 core** | 无状态工具是基础设施的一部分 |
@@ -332,7 +334,7 @@ class OutputProviderManager:
 
 - [决策层设计](./decision_layer.md) - Decision Domain 详细设计
 - [多Provider并发](./multi_provider.md) - 并发处理设计
-- [Pipeline设计](./pipeline_refactoring.md) - TextPipeline 设计
+- [Pipeline设计](./pipeline_refactoring.md) - 双管道架构（输入管道 + 输出管道）
 - [事件契约](./event_data_contract.md) - 事件类型安全
 - [LLM服务](./llm_service.md) - LLM 服务设计
 - [配置系统](./config_system.md) - Pydantic Schema + 三级配置合并
