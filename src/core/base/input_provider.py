@@ -11,7 +11,7 @@ InputProvider负责从外部数据源采集原始数据。
 - VoiceProvider: 从麦克风采集语音数据
 """
 
-from typing import AsyncIterator
+from typing import AsyncIterator, Dict, Any
 from abc import ABC, abstractmethod
 
 from src.core.base.raw_data import RawData
@@ -103,3 +103,35 @@ class InputProvider(ABC):
         如关闭连接、释放文件句柄等。
         """
         pass
+
+    @classmethod
+    def get_registration_info(cls) -> Dict[str, Any]:
+        """
+        获取 Provider 注册信息（子类重写）
+
+        用于显式注册模式，避免模块导入时的自动注册。
+
+        Returns:
+            注册信息字典，包含:
+            - layer: "input"
+            - name: Provider 名称（唯一标识符）
+            - class: Provider 类
+            - source: 注册来源（如 "builtin:console_input"）
+
+        Raises:
+            NotImplementedError: 如果子类未实现此方法
+
+        Example:
+            @classmethod
+            def get_registration_info(cls):
+                return {
+                    "layer": "input",
+                    "name": "console_input",
+                    "class": cls,
+                    "source": "builtin:console_input"
+                }
+        """
+        raise NotImplementedError(
+            f"{cls.__name__} 必须实现 get_registration_info() 类方法以支持显式注册。"
+            "如果使用自动注册模式，可以在 __init__.py 中直接调用 ProviderRegistry.register_input()。"
+        )

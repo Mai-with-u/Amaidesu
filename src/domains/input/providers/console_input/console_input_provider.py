@@ -6,7 +6,7 @@ ConsoleInputProvider - 控制台输入Provider
 
 import sys
 import asyncio
-from typing import AsyncIterator, Optional, List, Literal
+from typing import AsyncIterator, Optional, List, Literal, Dict, Any
 
 from pydantic import Field
 
@@ -29,6 +29,20 @@ class ConsoleInputProvider(InputProvider):
         type: Literal["console_input"] = "console_input"
         user_id: str = Field(default="console_user", description="用户ID")
         user_nickname: str = Field(default="控制台", description="用户昵称")
+
+    @classmethod
+    def get_registration_info(cls) -> Dict[str, Any]:
+        """
+        获取 Provider 注册信息
+
+        用于显式注册模式，避免模块导入时的自动注册。
+        """
+        return {
+            "layer": "input",
+            "name": "console_input",
+            "class": cls,
+            "source": "builtin:console_input"
+        }
 
     def __init__(self, config: dict):
         """

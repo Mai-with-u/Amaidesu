@@ -6,6 +6,7 @@ ProviderRegistry 测试
 2. Provider 创建
 3. Provider 查询
 4. 错误处理
+5. 显式注册模式（新增）
 """
 
 import pytest
@@ -27,6 +28,16 @@ class MockInputProvider(InputProvider):
         """收集数据（必须实现的抽象方法）"""
         return RawData(content="test", data_type="text", metadata={})
 
+    @classmethod
+    def get_registration_info(cls):
+        """获取注册信息"""
+        return {
+            "layer": "input",
+            "name": "mock_input_explicit",
+            "class": cls,
+            "source": "test:mock_input"
+        }
+
 
 class MockDecisionProvider(DecisionProvider):
     """模拟 DecisionProvider 用于测试"""
@@ -44,6 +55,16 @@ class MockDecisionProvider(DecisionProvider):
     async def cleanup(self):
         pass
 
+    @classmethod
+    def get_registration_info(cls):
+        """获取注册信息"""
+        return {
+            "layer": "decision",
+            "name": "mock_decision_explicit",
+            "class": cls,
+            "source": "test:mock_decision"
+        }
+
 
 class MockOutputProvider(OutputProvider):
     """模拟 OutputProvider 用于测试"""
@@ -54,6 +75,16 @@ class MockOutputProvider(OutputProvider):
 
     async def _render_internal(self, parameters):
         pass
+
+    @classmethod
+    def get_registration_info(cls):
+        """获取注册信息"""
+        return {
+            "layer": "output",
+            "name": "mock_output_explicit",
+            "class": cls,
+            "source": "test:mock_output"
+        }
 
 
 @pytest.fixture(autouse=True)
@@ -236,3 +267,100 @@ class TestClearAll:
         assert len(ProviderRegistry.get_registered_input_providers()) == 0
         assert len(ProviderRegistry.get_registered_decision_providers()) == 0
         assert len(ProviderRegistry.get_registered_output_providers()) == 0
+
+
+class TestExplicitRegistration:
+    """测试显式注册模式（新增功能）"""
+
+    def test_register_from_info_input(self):
+        """测试从注册信息字典注册 InputProvider"""
+        info = MockInputProvider.get_registration_info()
+        ProviderRegistry.register_from_info(info)
+
+        assert ProviderRegistry.is_input_provider_registered("mock_input_explicit")
+
+        # 验证可以创建实例
+        provider = ProviderRegistry.create_input("mock_input_explicit", {})
+        assert isinstance(provider, MockInputProvider)
+
+    def test_register_from_info_decision(self):
+        """测试从注册信息字典注册 DecisionProvider"""
+        info = MockDecisionProvider.get_registration_info()
+        ProviderRegistry.register_from_info(info)
+
+        assert ProviderRegistry.is_decision_provider_registered("mock_decision_explicit")
+
+        # 验证可以创建实例
+        provider = ProviderRegistry.create_decision("mock_decision_explicit", {})
+        assert isinstance(provider, MockDecisionProvider)
+
+    def test_register_from_info_output(self):
+        """测试从注册信息字典注册 OutputProvider"""
+        info = MockOutputProvider.get_registration_info()
+        ProviderRegistry.register_from_info(info)
+
+        assert ProviderRegistry.is_output_provider_registered("mock_output_explicit")
+
+        # 验证可以创建实例
+        provider = ProviderRegistry.create_output("mock_output_explicit", {})
+        assert isinstance(provider, MockOutputProvider)
+
+    def test_register_from_info_missing_field(self):
+        """测试注册信息缺少必需字段"""
+        incomplete_info = {
+            "layer": "input",
+            "name": "test"
+            # 缺少 "class" 字段
+        }
+
+        with pytest.raises(ValueError, match="注册信息缺少必需字段"):
+            ProviderRegistry.register_from_info(incomplete_info)
+
+    def test_register_from_info_invalid_layer(self):
+        """测试无效的 Provider 域"""
+        invalid_info = {
+            "layer": "invalid_layer",
+            "name": "test",
+            "class": MockInputProvider
+        }
+
+        with pytest.raises(ValueError, match="无效的 Provider 域"):
+            ProviderRegistry.register_from_info(invalid_info)
+
+    def test_register_provider_class(self):
+        """测试直接从 Provider 类注册（便捷方法）"""
+        ProviderRegistry.register_provider_class(MockInputProvider)
+
+        assert ProviderRegistry.is_input_provider_registered("mock_input_explicit")
+
+        # 验证可以创建实例
+        provider = ProviderRegistry.create_input("mock_input_explicit", {})
+        assert isinstance(provider, MockInputProvider)
+
+    def test_register_provider_class_no_method(self):
+        """测试 Provider 类未实现 get_registration_info()"""
+        class IncompleteProvider(InputProvider):
+            def __init__(self, config: dict):
+                super().__init__(config)
+
+            async def _collect_data(self):
+                return RawData(content="test", data_type="text", metadata={})
+
+        with pytest.raises(NotImplementedError, match="get_registration_info"):
+            ProviderRegistry.register_provider_class(IncompleteProvider)
+
+    def test_explicit_registration_isolation(self):
+        """测试显式注册支持隔离（多次调用不会冲突）"""
+        # 第一次注册
+        info1 = MockInputProvider.get_registration_info()
+        ProviderRegistry.register_from_info(info1)
+        assert ProviderRegistry.is_input_provider_registered("mock_input_explicit")
+
+        # 清空
+        ProviderRegistry.clear_all()
+        assert not ProviderRegistry.is_input_provider_registered("mock_input_explicit")
+
+        # 第二次注册（应该成功）
+        info2 = MockInputProvider.get_registration_info()
+        ProviderRegistry.register_from_info(info2)
+        assert ProviderRegistry.is_input_provider_registered("mock_input_explicit")

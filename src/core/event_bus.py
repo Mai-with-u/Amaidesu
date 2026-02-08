@@ -19,7 +19,7 @@
     event_bus.on("command_router.received", handle_command)
 """
 
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
 import asyncio
 import time
 from collections import defaultdict
@@ -29,6 +29,8 @@ from uuid import uuid4
 from src.core.utils.logger import get_logger
 from pydantic import BaseModel, ValidationError
 from src.core.events.registry import EventRegistry
+
+T = TypeVar('T', bound=BaseModel)
 
 
 @dataclass
@@ -59,15 +61,18 @@ class HandlerWrapper:
     事件处理器包装器
 
     包含处理器函数和元数据:
+    - handler: 处理器函数
     - priority: 优先级(数字越小越优先)
     - error_count: 错误次数
     - last_error: 最后错误信息
+    - original_handler: 原始处理器函数（用于 on_typed 的取消订阅）
     """
 
     handler: Callable
     priority: int = 100
     error_count: int = 0
     last_error: Optional[str] = None
+    original_handler: Optional[Callable] = None  # 用于 on_typed，存储用户提供的原始处理器
 
 
 class EventBus:
@@ -96,6 +101,7 @@ class EventBus:
         self.enable_validation = True  # 固定开启验证
         self._is_cleanup = False
         self._pending_requests: Dict[str, asyncio.Future] = {}
+        self._active_emits: Dict[str, asyncio.Event] = {}  # 跟踪活跃的 emit 操作
         self.logger = get_logger("EventBus")
         self.logger.debug(f"EventBus 初始化完成 (stats={enable_stats}, validation=enabled)")
 
@@ -151,19 +157,36 @@ class EventBus:
 
         start_time = time.time()
 
-        # 并发执行所有处理器
-        tasks = []
-        for wrapper in handlers:
-            task = asyncio.create_task(self._call_handler(wrapper, event_name, dict_data, source, error_isolate))
-            tasks.append(task)
+        # 创建跟踪事件
+        complete_event = asyncio.Event()
+        emit_id = f"{event_name}_{id(complete_event)}"
+        self._active_emits[emit_id] = complete_event
 
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        # 定义带跟踪的 emit 逻辑
+        async def emit_with_tracking():
+            try:
+                # 并发执行所有处理器
+                tasks = []
+                for wrapper in handlers:
+                    task = asyncio.create_task(
+                        self._call_handler(wrapper, event_name, dict_data, source, error_isolate)
+                    )
+                    tasks.append(task)
 
-        # 更新统计
-        if self.enable_stats:
-            execution_time = (time.time() - start_time) * 1000
-            self._stats[event_name].total_execution_time_ms += execution_time
+                if tasks:
+                    await asyncio.gather(*tasks, return_exceptions=True)
+
+                # 更新统计
+                if self.enable_stats:
+                    execution_time = (time.time() - start_time) * 1000
+                    self._stats[event_name].total_execution_time_ms += execution_time
+            finally:
+                # 标记完成并从活跃列表中移除
+                complete_event.set()
+                self._active_emits.pop(emit_id, None)
+
+        # 在后台任务中执行
+        asyncio.create_task(emit_with_tracking())
 
     async def _call_handler(
         self, wrapper: HandlerWrapper, event_name: str, data: Any, source: str, error_isolate: bool
@@ -211,17 +234,84 @@ class EventBus:
         self._handlers[event_name].append(wrapper)
         self.logger.debug(f"注册事件监听器: {event_name} -> {handler.__name__} (优先级: {priority})")
 
+    def on_typed(self, event_name: str, handler: Callable, model_class: Type[T], priority: int = 100) -> None:
+        """
+        订阅类型化事件（自动反序列化）
+
+        处理器将接收类型化的 Pydantic Model 对象，而不是字典。
+        EventBus 会自动将字典数据反序列化为指定的模型类型。
+
+        Args:
+            event_name: 要监听的事件名称
+            handler: 事件处理器函数（接收 typed_data: BaseModel 对象）
+            model_class: 期望的数据模型类型（必须是 BaseModel 子类）
+            priority: 优先级(数字越小越优先,默认100)
+
+        Example:
+            ```python
+            # 定义处理器（接收类型化对象）
+            async def handle_message(event_name: str, data: MessageReadyPayload, source: str):
+                message = data.message  # 直接访问字段，无需手动反序列化
+                print(f"收到消息: {message}")
+
+            # 订阅类型化事件
+            event_bus.on_typed(
+                CoreEvents.NORMALIZATION_MESSAGE_READY,
+                handle_message,
+                MessageReadyPayload
+            )
+            ```
+        """
+        # 尝试注册事件类型到 EventRegistry（仅对核心事件）
+        try:
+            EventRegistry.register_core_event(event_name, model_class)
+        except ValueError:
+            # 如果事件名不符合核心事件命名规范，仅记录调试日志
+            self.logger.debug(f"事件 '{event_name}' 不符合核心事件命名规范，跳过注册到 EventRegistry")
+
+        # 创建包装器，自动反序列化
+        async def typed_wrapper(event_name: str, dict_data: Dict[str, Any], source: str):
+            try:
+                # 将字典反序列化为类型化对象
+                typed_data = model_class.model_validate(dict_data)
+
+                # 调用用户处理器
+                if asyncio.iscoroutinefunction(handler):
+                    await handler(event_name, typed_data, source)
+                else:
+                    handler(event_name, typed_data, source)
+            except ValidationError as e:
+                self.logger.error(
+                    f"类型化事件反序列化失败 ({event_name}): {e}",
+                    exc_info=True
+                )
+            except Exception as e:
+                self.logger.error(
+                    f"类型化事件处理器执行错误 ({event_name}): {e}",
+                    exc_info=True
+                )
+                raise
+
+        # 注册包装器
+        wrapper = HandlerWrapper(handler=typed_wrapper, priority=priority, original_handler=handler)
+        self._handlers[event_name].append(wrapper)
+        self.logger.debug(
+            f"注册类型化事件监听器: {event_name} -> {handler.__name__} "
+            f"(类型: {model_class.__name__}, 优先级: {priority})"
+        )
+
     def off(self, event_name: str, handler: Callable) -> None:
         """
         取消订阅
 
         Args:
             event_name: 事件名称
-            handler: 要移除的事件处理器函数
+            handler: 要移除的事件处理器函数（可以是原始处理器或包装后的处理器）
         """
         handlers = self._handlers.get(event_name, [])
         for i, wrapper in enumerate(handlers):
-            if wrapper.handler == handler:
+            # 检查是否匹配（支持 on_typed 的原始处理器）
+            if wrapper.handler == handler or wrapper.original_handler == handler:
                 handlers.pop(i)
                 self.logger.debug(f"移除事件监听器: {event_name} -> {handler.__name__}")
                 break
@@ -242,16 +332,29 @@ class EventBus:
         """
         清理EventBus
 
-        标记为清理中，并清除所有监听器和统计信息。
+        标记为清理中，等待所有活跃的 emit 完成，然后清除所有监听器和统计信息。
         """
         self._is_cleanup = True
 
+        # 取消所有待处理的请求
         for future in self._pending_requests.values():
             if not future.done():
                 future.cancel()
         self._pending_requests.clear()
 
-        await asyncio.sleep(0.1)  # 等待处理的事件完成
+        # 等待所有活跃的 emit 完成
+        if self._active_emits:
+            active_count = len(self._active_emits)
+            self.logger.info(f"等待 {active_count} 个活跃的 emit 完成...")
+            try:
+                tasks = [event.wait() for event in self._active_emits.values()]
+                await asyncio.wait_for(asyncio.gather(*tasks), timeout=5.0)
+                self.logger.info(f"所有 {active_count} 个 emit 已完成")
+            except asyncio.TimeoutError:
+                self.logger.warning(f"等待 emit 完成超时（5秒），仍有 {len(self._active_emits)} 个活跃")
+            except Exception as e:
+                self.logger.error(f"等待 emit 完成时发生错误: {e}", exc_info=True)
+
         self.clear()
         self.logger.info("EventBus已清理")
 

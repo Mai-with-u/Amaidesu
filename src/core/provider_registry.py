@@ -652,6 +652,85 @@ class ProviderRegistry:
         """
         return cls._config_schemas.get(name)
 
+    # ==================== 显式注册方法 ====================
+
+    @classmethod
+    def register_from_info(cls, info: Dict[str, Any]) -> None:
+        """
+        从注册信息字典注册 Provider
+
+        这是显式注册模式的核心方法，与 Provider.get_registration_info() 配合使用。
+        避免了模块导入时的自动注册，使测试更容易隔离。
+
+        Args:
+            info: 注册信息字典（来自 Provider.get_registration_info()）
+                - layer: "input", "decision", 或 "output"
+                - name: Provider 名称
+                - class: Provider 类
+                - source: 注册来源（可选）
+
+        Raises:
+            ValueError: 如果注册信息无效
+            TypeError: 如果 Provider 类型不匹配
+
+        Example:
+            # 在 main.py 中显式注册
+            from src.domains.input.providers.console_input import ConsoleInputProvider
+
+            info = ConsoleInputProvider.get_registration_info()
+            ProviderRegistry.register_from_info(info)
+        """
+        # 验证必需字段
+        required_fields = ["layer", "name", "class"]
+        for field in required_fields:
+            if field not in info:
+                raise ValueError(f"注册信息缺少必需字段: {field}")
+
+        layer = info["layer"]
+        name = info["name"]
+        provider_class = info["class"]
+        source = info.get("source", "manual")
+
+        # 根据域类型调用对应的注册方法
+        if layer == "input":
+            cls.register_input(name, provider_class, source=source)
+        elif layer == "decision":
+            cls.register_decision(name, provider_class, source=source)
+        elif layer == "output":
+            cls.register_output(name, provider_class, source=source)
+        else:
+            raise ValueError(
+                f"无效的 Provider 域: {layer}. "
+                f"必须是 'input', 'decision', 或 'output'"
+            )
+
+    @classmethod
+    def register_provider_class(cls, provider_class: Type) -> None:
+        """
+        直接从 Provider 类注册（便捷方法）
+
+        自动调用 Provider.get_registration_info() 并注册。
+
+        Args:
+            provider_class: Provider 类
+
+        Raises:
+            NotImplementedError: 如果 Provider 未实现 get_registration_info()
+            ValueError/TypeError: 如果注册信息无效
+
+        Example:
+            from src.domains.input.providers.console_input import ConsoleInputProvider
+            ProviderRegistry.register_provider_class(ConsoleInputProvider)
+        """
+        if not hasattr(provider_class, "get_registration_info"):
+            raise NotImplementedError(
+                f"{provider_class.__name__} 未实现 get_registration_info() 类方法。"
+                "请先在 Provider 类中实现此方法，或使用传统的 register_input/output/decision() 方法。"
+            )
+
+        info = provider_class.get_registration_info()
+        cls.register_from_info(info)
+
 
 # 便捷导入：从 src.core.provider_registry 导入 ProviderRegistry
 __all__ = ["ProviderRegistry"]

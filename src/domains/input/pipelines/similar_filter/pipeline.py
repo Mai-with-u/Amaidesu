@@ -12,6 +12,8 @@
 这是 SimilarMessageFilterPipeline 的现代化版本，使用 TextPipeline 接口。
 
 原理：保留第一条消息，丢弃后来的相似消息。
+
+问题#4修复：支持 PipelineContext 回滚，防止管道失败时数据损坏。
 """
 
 import difflib
@@ -19,7 +21,7 @@ import time
 from collections import defaultdict, deque
 from typing import Any, Dict, Optional
 
-from src.domains.input.pipelines.manager import TextPipelineBase
+from src.domains.input.pipelines.manager import TextPipelineBase, PipelineContext
 
 
 class SimilarFilterTextPipeline(TextPipelineBase):
@@ -63,13 +65,18 @@ class SimilarFilterTextPipeline(TextPipelineBase):
             f"跨用户过滤={self._cross_user_filter}"
         )
 
-    async def _process(self, text: str, metadata: Dict[str, Any]) -> Optional[str]:
+    async def _process(
+        self, text: str, metadata: Dict[str, Any], context: Optional[PipelineContext] = None
+    ) -> Optional[str]:
         """
         处理文本，检查是否需要过滤
+
+        问题#4修复：添加 context 参数支持回滚。
 
         Args:
             text: 待处理的文本
             metadata: 元数据（需要 user_id、group_id）
+            context: 可选的执行上下文，用于支持回滚
 
         Returns:
             原始文本（允许通过）或 None（相似消息被过滤）
@@ -97,6 +104,20 @@ class SimilarFilterTextPipeline(TextPipelineBase):
 
         # 添加到缓存
         self._text_cache[group_id].append((now, text, user_id))
+
+        # 问题#4修复：注册回滚动作，在管道失败时移除添加的文本
+        if context is not None:
+
+            def rollback():
+                # 移除最后添加的文本
+                if self._text_cache[group_id] and self._text_cache[group_id][-1] == (now, text, user_id):
+                    self._text_cache[group_id].pop()
+                    # 如果组为空，清理字典
+                    if not self._text_cache[group_id]:
+                        del self._text_cache[group_id]
+
+            context.add_rollback(rollback)
+
         self.logger.debug(f"文本通过过滤并添加到缓存: '{text[:30]}...'")
 
         return text

@@ -83,6 +83,20 @@ class MaiCoreDecisionProvider(DecisionProvider):
         action_cooldown_seconds: float = Field(default=5.0, gt=0.0, description="同一 Action 的最小间隔（秒）")
         max_suggested_actions: int = Field(default=3, ge=1, le=10, description="每条消息最大建议数量")
 
+    @classmethod
+    def get_registration_info(cls) -> Dict[str, Any]:
+        """
+        获取 Provider 注册信息
+
+        用于显式注册模式，避免模块导入时的自动注册。
+        """
+        return {
+            "layer": "decision",
+            "name": "maicore",
+            "class": cls,
+            "source": "builtin:maicore"
+        }
+
     def __init__(self, config: Dict[str, Any]):
         self.provider_name = "maicore"
         """

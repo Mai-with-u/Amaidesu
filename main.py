@@ -42,6 +42,11 @@ def parse_args() -> argparse.Namespace:
         metavar="MODULE_NAME",
         help="仅显示指定模块的 INFO/DEBUG 级别日志 (WARNING 及以上级别总是显示)",
     )
+    parser.add_argument(
+        "--arch-validate",
+        action="store_true",
+        help="启用架构约束运行时验证（防止违反3域分层原则）",
+    )
     return parser.parse_args()
 
 
@@ -233,6 +238,7 @@ async def create_app_components(
     config: Dict[str, Any],
     pipeline_manager: Optional[PipelineManager],
     config_service: ConfigService,
+    arch_validate: bool = False,
 ) -> Tuple[
     AmaidesuCore,
     Optional[FlowCoordinator],
@@ -269,6 +275,14 @@ async def create_app_components(
     logger.info("初始化事件总线、数据流协调器和 AmaidesuCore...")
     event_bus = EventBus()
     register_core_events()
+
+    # 启用架构验证（如果指定了 --arch-validate 参数）
+    if arch_validate:
+        from src.core.events.architectural_validator import ArchitecturalValidator
+        validator = ArchitecturalValidator(event_bus, enabled=True, strict=False)
+        # 保存引用防止被垃圾回收
+        event_bus._arch_validator = validator
+        logger.info("已启用架构约束运行时验证器")
 
     # 输入Provider管理器 (Input Domain)
     input_provider_manager: Optional[InputProviderManager] = None
@@ -313,7 +327,7 @@ async def create_app_components(
     flow_coordinator: Optional[FlowCoordinator] = FlowCoordinator(event_bus) if output_config else None
     if flow_coordinator:
         try:
-            await flow_coordinator.setup(output_config, config_service=config_service)
+            await flow_coordinator.setup(output_config, config_service=config_service, root_config=config)
             logger.info("数据流协调器已设置（Output Domain）")
         except Exception as e:
             logger.error(f"设置数据流协调器失败: {e}", exc_info=True)
@@ -386,7 +400,28 @@ async def run_shutdown(
     decision_manager: Optional[DecisionManager],
     input_provider_manager: Optional[InputProviderManager],
 ) -> None:
-    """按顺序执行关闭与清理。"""
+    """按顺序执行关闭与清理。
+
+    关闭顺序（关键）：
+    1. 先停止数据生产者（InputProvider）
+    2. 等待待处理事件完成（grace period）
+    3. 清理消费者（FlowCoordinator、DecisionManager）
+    4. 清理基础设施（InputDomain、LLM、Core）
+    """
+    # 1. 先停止输入Provider（数据生产者）
+    if input_provider_manager:
+        logger.info("正在停止输入Provider（数据生产者）...")
+        try:
+            await input_provider_manager.stop_all_providers()
+            logger.info("输入Provider已停止")
+        except Exception as e:
+            logger.error(f"停止输入Provider时出错: {e}")
+
+    # 2. 等待待处理事件完成（grace period）
+    logger.info("等待待处理事件完成...")
+    await asyncio.sleep(1.0)
+
+    # 3. 清理消费者
     if flow_coordinator:
         logger.info("正在清理数据流协调器...")
         try:
@@ -404,15 +439,7 @@ async def run_shutdown(
         except Exception as e:
             logger.error(f"清理决策管理器时出错: {e}")
 
-    # 停止输入Provider
-    if input_provider_manager:
-        logger.info("正在停止输入Provider...")
-        try:
-            await input_provider_manager.stop_all_providers()
-            logger.info("输入Provider已停止")
-        except Exception as e:
-            logger.error(f"停止输入Provider时出错: {e}")
-
+    # 4. 清理基础设施
     logger.info("正在清理输入域组件...")
     try:
         await input_domain.cleanup()
@@ -478,7 +505,7 @@ async def main() -> None:
         llm_service,
         decision_manager,
         input_provider_manager,
-    ) = await create_app_components(config, pipeline_manager, config_service)
+    ) = await create_app_components(config, pipeline_manager, config_service, args.arch_validate)
 
     stop_event = asyncio.Event()
     orig_sigint, orig_sigterm = setup_signal_handlers(stop_event)

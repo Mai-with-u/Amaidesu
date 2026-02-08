@@ -161,9 +161,15 @@ class DecisionManager:
 
         # 订阅 normalization.message_ready 事件（防止重复订阅）
         if not self._event_subscribed:
-            self.event_bus.on(CoreEvents.NORMALIZATION_MESSAGE_READY, self._on_normalized_message_ready)
+            from src.core.events.payloads.input import MessageReadyPayload
+
+            self.event_bus.on_typed(
+                CoreEvents.NORMALIZATION_MESSAGE_READY,
+                self._on_normalized_message_ready,
+                MessageReadyPayload,
+            )
             self._event_subscribed = True
-            self.logger.info(f"DecisionManager 已订阅 '{CoreEvents.NORMALIZATION_MESSAGE_READY}' 事件")
+            self.logger.info(f"DecisionManager 已订阅 '{CoreEvents.NORMALIZATION_MESSAGE_READY}' 事件（类型化）")
         else:
             self.logger.debug(f"DecisionManager 已订阅过 '{CoreEvents.NORMALIZATION_MESSAGE_READY}' 事件，跳过重复订阅")
 
@@ -193,34 +199,29 @@ class DecisionManager:
             # 优雅降级: 抛出异常让上层处理
             raise
 
-    async def _on_normalized_message_ready(self, event_name: str, event_data: dict, source: str):
+    async def _on_normalized_message_ready(self, event_name: str, payload: "MessageReadyPayload", source: str):
         """
-        处理 normalization.message_ready 事件
+        处理 normalization.message_ready 事件（类型化）
 
         当 InputDomain 生成 NormalizedMessage 时，自动调用当前活动的 DecisionProvider 进行决策，
         并发布 decision.intent_generated 事件（3域架构）。
 
         Args:
             event_name: 事件名称 (CoreEvents.NORMALIZATION_MESSAGE_READY)
-            event_data: 事件数据（MessageReadyPayload 序列化后的字典）
+            payload: 类型化的事件数据（MessageReadyPayload 对象，自动反序列化）
             source: 事件源
         """
         # 从 MessageReadyPayload 中提取 message 字段（字典格式）
-        message_dict = event_data.get("message")
+        message_dict = payload.message
         if not message_dict:
             self.logger.warning("收到空的 NormalizedMessage 事件")
             return
 
-        # 如果是 NormalizedMessage 对象，直接使用
-        # 如果是字典，使用 from_dict() 重建 NormalizedMessage
-        if isinstance(message_dict, dict):
-            # 使用 NormalizedMessage.from_dict() 工厂方法重建对象
-            # 此方法支持自动重建 TextContent、GiftContent、SuperChatContent
-            from src.core.base.normalized_message import NormalizedMessage
+        # 使用 NormalizedMessage.from_dict() 工厂方法重建对象
+        # 此方法支持自动重建 TextContent、GiftContent、SuperChatContent
+        from src.core.base.normalized_message import NormalizedMessage
 
-            normalized = NormalizedMessage.from_dict(message_dict)
-        else:
-            normalized = message_dict
+        normalized = NormalizedMessage.from_dict(message_dict)
 
         try:
             self.logger.debug(f"收到 NormalizedMessage: {normalized.text[:50]}...")
