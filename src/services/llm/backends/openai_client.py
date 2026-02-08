@@ -1,7 +1,7 @@
 """
-OpenAI 后端实现
+OpenAI 客户端实现
 
-从 src/openai_client/llm_request.py 的 LLMClient 重构而来，适配 LLMBackend 接口。
+从 src/openai_client/llm_request.py 的 LLMClient 重构而来，适配 LLMClient 接口。
 """
 
 import asyncio
@@ -13,13 +13,13 @@ from typing import List, Dict, Any, Optional, AsyncIterator, Union
 from openai import AsyncOpenAI
 from PIL import Image
 
-from src.services.llm.backends.base import LLMBackend
-from src.services.llm.service import LLMResponse
+from src.services.llm.backends.client_base import LLMClient
+from src.services.llm.manager import LLMResponse
 
 
-class OpenAIBackend(LLMBackend):
+class OpenAIClient(LLMClient):
     """
-    OpenAI 兼容 API 后端
+    OpenAI 兼容 API 客户端
 
     支持的提供商：
     - OpenAI 官方 API
@@ -46,7 +46,7 @@ class OpenAIBackend(LLMBackend):
         self.max_tokens = config.get("max_tokens", 1024)
         self.temperature = config.get("temperature", 0.2)
 
-        self.logger.info(f"OpenAI 后端初始化完成 (模型: {self.model})")
+        self.logger.info(f"OpenAI 客户端初始化完成 (模型: {self.model})")
 
     def _infer_mime_from_bytes(self, data: bytes) -> str:
         """根据图片字节推断 MIME 类型，默认 image/png"""

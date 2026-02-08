@@ -56,7 +56,7 @@ Amaidesu!
 主要由以下几个核心组件构成：
 
 1. **AmaidesuCore**: 核心模块，负责组件组合（Composition Root）
-   - 管理 EventBus、LLMService、PipelineManager、DecisionManager
+   - 管理 EventBus、LLMManager、PipelineManager、DecisionManager
    - 不再负责数据流处理（已迁移到 FlowCoordinator）
 
 2. **EventBus**: 事件总线，提供发布-订阅机制，用于组件间通信
@@ -81,7 +81,7 @@ Amaidesu!
 
 7. **FlowCoordinator**: 数据流协调器，负责 Decision → Rendering 之间的数据流
 
-8. **LLMService**: LLM服务，统一的LLM调用基础设施
+8. **LLMManager**: LLM服务，统一的LLM调用基础设施
    - 管理多个LLM客户端（llm/llm_fast/vlm）
    - 提供统一的调用接口
 

@@ -15,7 +15,7 @@ from src.services.context.manager import ContextManager
 from src.core.event_bus import EventBus
 from src.core.events import register_core_events
 from src.core.flow_coordinator import FlowCoordinator
-from src.services.llm.service import LLMService
+from src.services.llm.manager import LLMManager
 from src.domains.input.pipelines.manager import PipelineManager
 from src.core.utils.logger import get_logger
 from loguru import logger as loguru_logger
@@ -243,7 +243,7 @@ async def create_app_components(
     AmaidesuCore,
     Optional[FlowCoordinator],
     InputDomain,
-    LLMService,
+    LLMManager,
     Optional[DecisionManager],
     Optional[InputProviderManager],
 ]:
@@ -267,7 +267,7 @@ async def create_app_components(
 
     # LLM 服务
     logger.info("初始化 LLM 服务...")
-    llm_service = LLMService()
+    llm_service = LLMManager()
     await llm_service.setup(config)
     logger.info("已创建 LLM 服务实例")
 
@@ -395,7 +395,7 @@ def restore_signal_handlers(original_sigint: Optional[Any], original_sigterm: Op
 async def run_shutdown(
     flow_coordinator: Optional[FlowCoordinator],
     input_domain: InputDomain,
-    llm_service: LLMService,
+    llm_service: LLMManager,
     core: AmaidesuCore,
     decision_manager: Optional[DecisionManager],
     input_provider_manager: Optional[InputProviderManager],

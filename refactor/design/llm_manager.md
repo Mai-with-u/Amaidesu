@@ -2,15 +2,15 @@
 
 ## 核心目标
 
-LLMService 是**核心基础设施**，与 EventBus 同级，为所有需要 AI 能力的模块提供统一的 LLM 调用接口。
+LLMManager 是**核心基础设施**，与 EventBus 同级，为所有需要 AI 能力的模块提供统一的 LLM 调用接口。
 
 ---
 
 ## 定位说明
 
-**LLMService 不是 Provider**：
+**LLMManager 不是 Provider**：
 
-| 概念 | Provider | LLMService |
+| 概念 | Provider | LLMManager |
 |------|----------|------------|
 | 定位 | 数据流中的节点 | 基础设施服务 |
 | 职责 | 处理特定数据 | 提供 AI 能力 |
@@ -25,7 +25,7 @@ LLMService 是**核心基础设施**，与 EventBus 同级，为所有需要 AI 
 ┌─────────────────────────────────────────────┐
 │              基础设施层                      │
 │  ┌─────────┐  ┌─────────┐  ┌─────────┐     │
-│  │EventBus │  │LLMService│  │ Logger │     │
+│  │EventBus │  │LLMManager│  │ Logger │     │
 │  └─────────┘  └─────────┘  └─────────┘     │
 └─────────────────────────────────────────────┘
                     ↑
@@ -39,7 +39,7 @@ LLMService 是**核心基础设施**，与 EventBus 同级，为所有需要 AI 
 ## 核心接口
 
 ```python
-class LLMService:
+class LLMManager:
     """统一的 LLM 调用服务"""
     
     async def setup(self, config: Dict[str, Any]) -> None:
@@ -83,7 +83,7 @@ class LLMService:
 
 ```python
 class LocalLLMDecisionProvider(DecisionProvider):
-    def __init__(self, llm_service: LLMService):
+    def __init__(self, llm_service: LLMManager):
         self.llm = llm_service
     
     async def decide(self, message: NormalizedMessage) -> Intent:
@@ -102,7 +102,7 @@ class LocalLLMDecisionProvider(DecisionProvider):
 
 ```python
 class IntentParser:
-    def __init__(self, llm_service: LLMService):
+    def __init__(self, llm_service: LLMManager):
         self.llm = llm_service
     
     async def parse(self, text: str) -> Intent:

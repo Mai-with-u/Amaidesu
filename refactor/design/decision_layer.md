@@ -117,7 +117,7 @@ Intent
 ```
 NormalizedMessage
     ↓
-LLMService.chat()
+LLMManager.chat()
     ↓ 同时返回回复和意图
 Intent
 ```

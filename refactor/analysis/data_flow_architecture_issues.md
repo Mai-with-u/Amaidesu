@@ -695,7 +695,7 @@ main() [main.py:443]
   │       └─ ❌ 问题 #1: 未加载 Output Pipeline
   └─ create_app_components() [472-481]
       ├─ 创建 ContextManager
-      ├─ 创建 LLMService
+      ├─ 创建 LLMManager
       ├─ 创建 EventBus
       ├─ 创建 InputProviderManager
       │   └─ await load_from_config() [277-280]

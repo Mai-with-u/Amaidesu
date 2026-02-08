@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from src.core.base.decision_provider import DecisionProvider
     from src.core.base.normalized_message import NormalizedMessage
     from src.domains.decision.intent import Intent
-    from src.services.llm.service import LLMService
+    from src.services.llm.manager import LLMManager
 
 
 class DecisionManager:
@@ -35,7 +35,7 @@ class DecisionManager:
     使用示例:
         ```python
         # 初始化
-        manager = DecisionManager(event_bus, llm_service)
+        manager = DecisionManager(event_bus, llm_manager)
 
         # 设置当前Provider
         await manager.setup(provider_name="maicore", config={"host": "localhost", "port": 8000})
@@ -56,13 +56,13 @@ class DecisionManager:
         - ProviderRegistry 统一管理所有类型的 Provider（Input/Decision/Output）
     """
 
-    def __init__(self, event_bus: "EventBus", llm_service: Optional["LLMService"] = None):
+    def __init__(self, event_bus: "EventBus", llm_service: Optional["LLMManager"] = None):
         """
         初始化DecisionManager
 
         Args:
             event_bus: EventBus实例
-            llm_service: 可选的LLMService实例，将作为依赖注入到DecisionProvider
+            llm_service: 可选的LLMManager实例，将作为依赖注入到DecisionProvider
         """
         self.event_bus = event_bus
         self._llm_service = llm_service

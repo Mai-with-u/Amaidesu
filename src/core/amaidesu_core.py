@@ -16,7 +16,7 @@ from src.core.connectors.http_server import HttpServer
 from src.core.flow_coordinator import FlowCoordinator
 
 # LLM 服务（核心基础设施）
-from src.services.llm.service import LLMService
+from src.services.llm.manager import LLMManager
 
 # 类型检查时的导入
 if TYPE_CHECKING:
@@ -32,7 +32,7 @@ class AmaidesuCore:
         return self._event_bus
 
     @property
-    def llm_service(self) -> Optional[LLMService]:
+    def llm_service(self) -> Optional[LLMManager]:
         """获取 LLM 服务实例"""
         return self._llm_service
 
@@ -52,7 +52,7 @@ class AmaidesuCore:
         pipeline_manager: Optional[PipelineManager] = None,
         context_manager: Optional[ContextManager] = None,
         event_bus: Optional[EventBus] = None,
-        llm_service: Optional[LLMService] = None,
+        llm_service: Optional[LLMManager] = None,
         decision_manager: Optional[DecisionManager] = None,
         flow_coordinator: Optional[FlowCoordinator] = None,
         http_server: Optional[HttpServer] = None,

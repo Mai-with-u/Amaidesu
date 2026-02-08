@@ -54,7 +54,7 @@
 │                                                                 │
 ├─────────────────────────────────────────────────────────────────┤
 │  core（基础设施）: EventBus, Connectors, Base Classes           │
-│  services（共享服务）: LLMService, ConfigService, Context       │
+│  services（共享服务）: LLMManager, ConfigService, Context       │
 └─────────────────────────────────────────────────────────────────┘
 ```
 

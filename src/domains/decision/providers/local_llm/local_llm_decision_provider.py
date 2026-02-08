@@ -18,7 +18,7 @@ from src.services.config.schemas.schemas.base import BaseProviderConfig
 
 if TYPE_CHECKING:
     from src.core.event_bus import EventBus
-    from src.services.llm.service import LLMService
+    from src.services.llm.manager import LLMManager
     from src.core.base.normalized_message import NormalizedMessage
 
 
@@ -80,8 +80,8 @@ class LocalLLMDecisionProvider(DecisionProvider):
         self.typed_config = self.ConfigSchema(**config)
         self.logger = get_logger("LocalLLMDecisionProvider")
 
-        # LLM Service 引用（通过 setup 注入）
-        self._llm_service: Optional["LLMService"] = None
+        # LLM Manager 引用（通过 setup 注入）
+        self._llm_service: Optional["LLMManager"] = None
 
         # LLM 配置
         self.client_type = self.typed_config.backend  # 使用的后端类型
@@ -117,12 +117,12 @@ class LocalLLMDecisionProvider(DecisionProvider):
         self._event_bus = event_bus
         self.logger.info("初始化 LocalLLMDecisionProvider...")
 
-        # 从依赖注入中获取 LLMService
+        # 从依赖注入中获取 LLMManager
         if dependencies and "llm_service" in dependencies:
             self._llm_service = dependencies["llm_service"]
-            self.logger.info("LLMService 已从依赖注入中获取")
+            self.logger.info("LLMManager 已从依赖注入中获取")
         else:
-            self.logger.warning("LLMService 未通过依赖注入提供，决策功能将不可用")
+            self.logger.warning("LLMManager 未通过依赖注入提供，决策功能将不可用")
 
         # 验证 prompt 模板包含 {text} 占位符
         if "{text}" not in self.prompt_template:
@@ -145,7 +145,7 @@ class LocalLLMDecisionProvider(DecisionProvider):
             RuntimeError: 如果所有重试失败且 fallback_mode 为 "error"
         """
         if self._llm_service is None:
-            raise RuntimeError("LLM Service 未注入！请确保在 setup 中正确配置。")
+            raise RuntimeError("LLM Manager 未注入！请确保在 setup 中正确配置。")
 
         self._total_requests += 1
 

@@ -174,7 +174,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
             ws_url=self.ws_url, router=self._router, event_bus=event_bus, provider_name="maicore"
         )
 
-        # 初始化 IntentParser（需要LLMService）
+        # 初始化 IntentParser（需要LLMManager）
         llm_service = dependencies.get("llm_service") if dependencies else None
         if llm_service:
             from src.domains.decision.intent_parser import IntentParser
@@ -183,7 +183,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
             await self._intent_parser.setup()
             self.logger.info("IntentParser初始化成功")
         else:
-            self.logger.warning("LLMService未找到，IntentParser功能将不可用")
+            self.logger.warning("LLMManager未找到，IntentParser功能将不可用")
 
         self.logger.info("MaiCoreDecisionProvider 初始化完成")
 

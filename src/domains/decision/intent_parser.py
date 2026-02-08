@@ -17,7 +17,7 @@ from src.core.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from maim_message import MessageBase
-    from src.services.llm.service import LLMService
+    from src.services.llm.manager import LLMManager
 
 
 class IntentParser:
@@ -37,7 +37,7 @@ class IntentParser:
 
     使用示例：
         ```python
-        parser = IntentParser(llm_service)
+        parser = IntentParser(llm_manager)
         await parser.setup()
 
         # 解析MessageBase
@@ -96,12 +96,12 @@ class IntentParser:
         EmotionType.LOVE: ["爱", "喜欢", "❤️", "💕", "😍"],
     }
 
-    def __init__(self, llm_service: "LLMService"):
+    def __init__(self, llm_service: "LLMManager"):
         """
         初始化IntentParser
 
         Args:
-            llm_service: LLM服务实例
+            llm_service: LLM管理器实例
         """
         self.llm_service = llm_service
         self.logger = get_logger("IntentParser")

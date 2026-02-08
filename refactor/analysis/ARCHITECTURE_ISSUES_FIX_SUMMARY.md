@@ -82,7 +82,7 @@
    - 先停止 InputProvider（数据生产者）
    - 等待待处理事件完成（1秒 grace period）
    - 清理消费者（FlowCoordinator, DecisionManager）
-   - 清理基础设施（InputDomain, LLMService, Core）
+   - 清理基础设施（InputDomain, LLMManager, Core）
 
 **验证**: 关闭流程平滑有序，无消息丢失
 

@@ -115,14 +115,14 @@ ffe92c8 refactor: optimize service calls with cached references in TTS providers
 b458d96 refactor: enhance EventBus with type-safe event data contracts
 ae99bb8 refactor: 项目统一为uv管理依赖
 0a7d6cf chore: update dependencies and clean up imports
-3349599 refactor: 重构 AvatarManager 使用新的 LLMService
+3349599 refactor: 重构 AvatarManager 使用新的 LLMManager
 3a2b97f refactor: Avatar 系统重构到 6 层架构
 6301f07 refactor: 补充 Avatar 系统重构文件
 4d76d07 refactor: 清理 .vscode/settings.json 符号链接
 27325b2 refactor: 完成 LLM 系统迁移并清理旧系统
 a1f4959 docs: 更新 REFACTOR_OPTIMIZATION_ANALYSIS.md - 标记 LLM 系统迁移已完成
 e98dcae refactor: complete optimization items - EmotionAnalyzer, Provider, docs
-30a6d44 docs: 更新文档中 LLMClientManager 旧命名为 LLMService
+30a6d44 docs: 更新文档中 LLMClientManager 旧命名为 LLMManager
 ```
 
 **合并后的 commit message**:
