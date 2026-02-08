@@ -15,6 +15,7 @@ import src.domains.output.providers  # noqa: F401
 
 from src.core.base.raw_data import RawData
 from src.core.events.names import CoreEvents
+from src.core.events.payloads import RawDataPayload
 
 
 class SimpleTestEvent(BaseModel):
@@ -131,7 +132,7 @@ async def test_invalid_raw_data_handling(event_bus, wait_for_event):
         future = asyncio.create_task(wait_for_event(event_bus, CoreEvents.NORMALIZATION_MESSAGE_READY, timeout=1.0))
 
         await event_bus.emit(
-            CoreEvents.PERCEPTION_RAW_DATA_GENERATED, {"data": invalid_data, "source": "test"}, source="test"
+            CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload.from_raw_data(invalid_data), source="test"
         )
 
         # 尝试等待事件（可能超时）

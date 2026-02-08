@@ -15,6 +15,8 @@ from src.core.event_bus import EventBus
 from src.core.base.raw_data import RawData
 from src.domains.input.input_layer import InputLayer
 from src.domains.input.providers import MockDanmakuInputProvider as MockDanmakuProvider
+from src.core.events.payloads import RawDataPayload
+from src.core.events.names import CoreEvents
 
 
 # =============================================================================
@@ -85,9 +87,11 @@ async def test_mock_danmaku_provider_data_flow():
     collected_messages = []
 
     async def on_message_ready(event_name: str, event_data: dict, source: str):
-        message = event_data.get("message")
-        if message:
-            collected_messages.append(message)
+        # event_data 是 MessageReadyPayload 序列化后的字典
+        # message 字段是 NormalizedMessage 序列化后的字典
+        message_dict = event_data.get("message")
+        if message_dict:
+            collected_messages.append(message_dict)
 
     event_bus.on("normalization.message_ready", on_message_ready, priority=50)
 
@@ -104,8 +108,8 @@ async def test_mock_danmaku_provider_data_flow():
     )
 
     await event_bus.emit(
-        "perception.raw_data.generated",
-        {"data": raw_data},
+        CoreEvents.PERCEPTION_RAW_DATA_GENERATED,
+        RawDataPayload.from_raw_data(raw_data),
         source="MockDanmakuProvider"
     )
 
@@ -113,8 +117,8 @@ async def test_mock_danmaku_provider_data_flow():
 
     # 验证数据流
     assert len(collected_messages) == 1
-    assert "主播好！" in collected_messages[0].text
-    assert collected_messages[0].source == "mock_danmaku"
+    assert "主播好！" in collected_messages[0]["text"]
+    assert collected_messages[0]["source"] == "mock_danmaku"
     # metadata 可能不包含 user_name，因为它在 content 中
     # 只验证基本属性即可
 

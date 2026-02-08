@@ -15,6 +15,11 @@ import pytest
 from src.core.event_bus import EventBus
 from src.domains.decision.decision_manager import DecisionManager
 from src.core.events.names import CoreEvents
+from src.core.events.payloads import (
+    MessageReadyPayload,
+    DecisionRequestPayload,
+    IntentPayload,
+)
 from src.domains.decision.intent import Intent, EmotionType
 from src.core.base.normalized_message import NormalizedMessage
 from src.core.base.decision_provider import DecisionProvider
@@ -328,7 +333,16 @@ async def test_setup_subscribes_to_event(event_bus, mock_provider_class):
     await manager.setup("mock_decision", {})
 
     # 触发事件验证订阅成功
-    await event_bus.emit(CoreEvents.NORMALIZATION_MESSAGE_READY, {"message": None}, source="test")
+    # Note: MessageReadyPayload.message 是必需字段，不能为 None
+    # 这里我们创建一个空的 NormalizedMessage 字典用于测试
+    await event_bus.emit(
+        CoreEvents.NORMALIZATION_MESSAGE_READY,
+        MessageReadyPayload(
+            message={"text": "", "source": "test", "data_type": "text", "content": {}, "importance": 0.0, "metadata": {}, "timestamp": 0.0},
+            source="test"
+        ),
+        source="test"
+    )
     await asyncio.sleep(0.1)
 
     assert event_count["count"] > 0
@@ -425,39 +439,40 @@ async def test_on_normalized_message_ready_success(decision_manager_with_mock, s
     intent_results = []
 
     async def intent_handler(event_name: str, event_data: dict, source: str):
-        intent = event_data.get("intent")
-        if intent:
-            intent_results.append(intent)
+        # event_data 是 IntentPayload 序列化后的字典
+        # 包含字段: original_text, response_text, emotion, actions, metadata, timestamp, provider
+        intent_results.append(event_data)
 
     # 订阅 intent_generated 事件
     manager.event_bus.on("decision.intent_generated", intent_handler, priority=50)
 
     # 触发 normalization.message_ready 事件
     await manager.event_bus.emit(
-        CoreEvents.NORMALIZATION_MESSAGE_READY, {"message": sample_normalized_message}, source="test"
+        CoreEvents.NORMALIZATION_MESSAGE_READY,
+        MessageReadyPayload.from_normalized_message(sample_normalized_message),
+        source="test"
     )
 
     await asyncio.sleep(0.2)
 
     # 验证结果
     assert len(intent_results) == 1
-    assert intent_results[0].response_text == "事件回复"
-    assert intent_results[0].emotion == EmotionType.LOVE
+    assert intent_results[0]["response_text"] == "事件回复"
+    assert intent_results[0]["emotion"] == "love"  # EmotionType.LOVE 的值是 "love"
     assert manager._current_provider.call_count == 1
 
 
+@pytest.mark.skip(reason="MessageReadyPayload 不支持 None 值，此测试场景已不再适用")
 @pytest.mark.asyncio
 async def test_on_normalized_message_ready_empty_message(decision_manager_with_mock):
-    """测试处理空消息（应忽略）"""
-    manager = decision_manager_with_mock
+    """测试处理空消息（应忽略）
 
-    # 触发空消息事件
-    await manager.event_bus.emit(CoreEvents.NORMALIZATION_MESSAGE_READY, {"message": None}, source="test")
-
-    await asyncio.sleep(0.1)
-
-    # 验证 decide 未被调用
-    assert manager._current_provider.call_count == 0
+    注意：由于 MessageReadyPayload.message 是必需字段，无法传递 None。
+    此测试已不再适用，因为 Payload API 强制类型安全。
+    """
+    # 此测试已被跳过，因为无法使用 MessageReadyPayload 创建 message=None 的事件
+    # 原始测试使用 {"message": None} 格式，但这违反了 Payload 的类型约束
+    pass
 
 
 @pytest.mark.asyncio
@@ -466,9 +481,14 @@ async def test_on_normalized_message_ready_missing_message_key(decision_manager_
     manager = decision_manager_with_mock
 
     # 触发缺少 message 键的事件
+    # Note: MessageReadyPayload 要求 message 字段，但我们测试 DecisionManager 如何处理
+    # 通过传入一个空的 message 字典来模拟边缘情况
     await manager.event_bus.emit(
         CoreEvents.NORMALIZATION_MESSAGE_READY,
-        {},  # 空字典
+        MessageReadyPayload(
+            message={},  # 空字典模拟缺失/无效数据
+            source="test"
+        ),
         source="test",
     )
 
@@ -493,7 +513,9 @@ async def test_on_normalized_message_ready_event_data_structure(decision_manager
     manager.event_bus.on("decision.intent_generated", intent_handler, priority=50)
 
     await manager.event_bus.emit(
-        CoreEvents.NORMALIZATION_MESSAGE_READY, {"message": sample_normalized_message}, source="test"
+        CoreEvents.NORMALIZATION_MESSAGE_READY,
+        MessageReadyPayload.from_normalized_message(sample_normalized_message),
+        source="test"
     )
 
     await asyncio.sleep(0.2)
@@ -502,12 +524,13 @@ async def test_on_normalized_message_ready_event_data_structure(decision_manager
     assert len(event_data_received) == 1
     event_data = event_data_received[0]
 
-    assert "intent" in event_data
-    assert "original_message" in event_data
+    # IntentPayload 包含字段: original_text, response_text, emotion, actions, metadata, timestamp, provider
+    assert "original_text" in event_data
+    assert "response_text" in event_data
+    assert "emotion" in event_data
     assert "provider" in event_data
 
-    assert isinstance(event_data["intent"], Intent)
-    assert event_data["original_message"] == sample_normalized_message
+    assert event_data["original_text"] == sample_normalized_message.text
     assert event_data["provider"] == "mock_decision"
     # source 是作为参数传递给 handler 的，不在 event_data 里
     assert source_received[0] == "DecisionManager"
@@ -528,7 +551,9 @@ async def test_on_normalized_message_ready_handles_provider_error(
 
     # 应该不抛出异常，只记录错误
     await manager.event_bus.emit(
-        CoreEvents.NORMALIZATION_MESSAGE_READY, {"message": sample_normalized_message}, source="test"
+        CoreEvents.NORMALIZATION_MESSAGE_READY,
+        MessageReadyPayload.from_normalized_message(sample_normalized_message),
+        source="test"
     )
 
     await asyncio.sleep(0.1)
@@ -688,7 +713,14 @@ async def test_cleanup_unsubscribes_events(event_bus, mock_provider_class):
     manager.event_bus.on(CoreEvents.NORMALIZATION_MESSAGE_READY, test_handler, priority=50)
 
     # 由于 manager 已经 cleanup，它的处理器不应该再被调用
-    await manager.event_bus.emit(CoreEvents.NORMALIZATION_MESSAGE_READY, {"message": None}, source="test")
+    await manager.event_bus.emit(
+        CoreEvents.NORMALIZATION_MESSAGE_READY,
+        MessageReadyPayload(
+            message={"text": "", "source": "test", "data_type": "text", "content": {}, "importance": 0.0, "metadata": {}, "timestamp": 0.0},
+            source="test"
+        ),
+        source="test"
+    )
 
     await asyncio.sleep(0.1)
 

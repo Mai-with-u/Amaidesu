@@ -21,6 +21,12 @@ import pytest
 from pydantic import BaseModel, Field
 from src.core.event_bus import EventBus, EventStats, HandlerWrapper
 from src.core.events.payloads import RawDataPayload
+from src.core.events.payloads import (
+    MessageReadyPayload,
+    IntentPayload,
+    DecisionRequestPayload,
+)
+from src.core.events.names import CoreEvents
 from src.core.events.registry import EventRegistry
 
 # =============================================================================

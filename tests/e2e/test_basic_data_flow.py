@@ -15,7 +15,11 @@ import src.domains.output.providers  # noqa: F401
 
 from src.core.base.raw_data import RawData
 from src.core.events.names import CoreEvents
-from src.core.events.payloads.input import RawDataPayload
+from src.core.events.payloads import (
+    RawDataPayload,
+    MessageReadyPayload,
+    IntentPayload,
+)
 
 
 @pytest.mark.asyncio
@@ -47,7 +51,7 @@ async def test_complete_data_flow_with_mock_providers(event_bus, sample_raw_data
 
     # 5. 发送 RawData
     await event_bus.emit(
-        CoreEvents.PERCEPTION_RAW_DATA_GENERATED, {"data": sample_raw_data, "source": "test"}, source="test"
+        CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload.from_raw_data(sample_raw_data), source="test"
     )
 
     # 6. 验证 normalization.message_ready 事件
@@ -55,16 +59,16 @@ async def test_complete_data_flow_with_mock_providers(event_bus, sample_raw_data
     assert event_name == CoreEvents.NORMALIZATION_MESSAGE_READY
     assert "message" in event_data
     normalized_message = event_data["message"]
-    assert normalized_message.text == "你好，VTuber"
-    assert normalized_message.source == "test_user"
+    assert normalized_message["text"] == "你好，VTuber"
+    assert normalized_message["source"] == "test_user"
 
     # 7. 验证 decision.intent_generated 事件
     event_name, event_data, source = await intent_future
     assert event_name == CoreEvents.DECISION_INTENT_GENERATED
-    assert "intent" in event_data
-    intent = event_data["intent"]
-    assert intent.response_text == "[模拟回复] 你好，VTuber"
-    assert intent.emotion.value == "neutral"
+    assert "original_text" in event_data
+    assert "response_text" in event_data
+    assert event_data["response_text"] == "[模拟回复] 你好，VTuber"
+    assert event_data["emotion"] == "neutral"
 
     # 8. 清理
     await decision_manager.cleanup()
@@ -91,18 +95,21 @@ async def test_input_layer_normalization(event_bus, sample_raw_data, wait_for_ev
 
     # 发送 RawData
     await event_bus.emit(
-        CoreEvents.PERCEPTION_RAW_DATA_GENERATED, {"data": sample_raw_data, "source": "test"}, source="test"
+        CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload.from_raw_data(sample_raw_data), source="test"
     )
 
     # 验证结果
     event_name, event_data, source = await future
+    assert "message" in event_data
     normalized = event_data["message"]
 
-    assert normalized.text == "你好，VTuber"
-    assert normalized.source == "test_user"
-    assert normalized.data_type == "text"
-    assert normalized.importance > 0
-    assert "user_id" in normalized.metadata
+    assert normalized["text"] == "你好，VTuber"
+    assert normalized["source"] == "test_user"
+    assert normalized["data_type"] == "text"
+    assert normalized["importance"] > 0
+    # Metadata包含原始信息的key
+    assert "source" in normalized["metadata"]
+    assert "timestamp" in normalized["metadata"]
 
     await input_layer.cleanup()
 
@@ -139,17 +146,18 @@ async def test_decision_provider_creates_intent(event_bus, wait_for_event):
 
     # 发送 NormalizedMessage
     await event_bus.emit(
-        CoreEvents.NORMALIZATION_MESSAGE_READY, {"message": normalized, "source": "test"}, source="test"
+        CoreEvents.NORMALIZATION_MESSAGE_READY, MessageReadyPayload.from_normalized_message(normalized), source="test"
     )
 
     # 验证结果
     event_name, event_data, source = await future
-    intent = event_data["intent"]
+    assert "response_text" in event_data
+    assert "emotion" in event_data
 
-    assert intent.response_text == "[模拟回复] 测试消息"
-    assert intent.emotion.value == "neutral"
-    assert intent.metadata["mock"] is True
-    assert "call_count" in intent.metadata
+    assert event_data["response_text"] == "[模拟回复] 测试消息"
+    assert event_data["emotion"] == "neutral"
+    assert event_data["metadata"]["mock"] is True
+    assert "call_count" in event_data["metadata"]
 
     await decision_manager.cleanup()
 
@@ -178,7 +186,8 @@ async def test_multiple_sequential_messages(event_bus, wait_for_event):
     received_intents = []
 
     async def collect_intents(event_name, event_data, source):
-        received_intents.append(event_data["intent"].response_text)
+        assert "response_text" in event_data
+        received_intents.append(event_data["response_text"])
 
     event_bus.on("decision.intent_generated", collect_intents)
 

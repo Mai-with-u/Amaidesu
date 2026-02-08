@@ -15,6 +15,8 @@ from src.core.event_bus import EventBus
 from src.core.base.raw_data import RawData
 from src.domains.input.input_layer import InputLayer
 from src.domains.input.providers import ConsoleInputProvider
+from src.core.events.payloads import RawDataPayload
+from src.core.events.names import CoreEvents
 
 
 # =============================================================================
@@ -138,9 +140,11 @@ async def test_console_input_provider_data_flow():
     collected_messages = []
 
     async def on_message_ready(event_name: str, event_data: dict, source: str):
-        message = event_data.get("message")
-        if message:
-            collected_messages.append(message)
+        # event_data 是 MessageReadyPayload 序列化后的字典
+        # message 字段是 NormalizedMessage 序列化后的字典
+        message_dict = event_data.get("message")
+        if message_dict:
+            collected_messages.append(message_dict)
 
     event_bus.on("normalization.message_ready", on_message_ready, priority=50)
 
@@ -154,8 +158,8 @@ async def test_console_input_provider_data_flow():
     )
 
     await event_bus.emit(
-        "perception.raw_data.generated",
-        {"data": raw_data},
+        CoreEvents.PERCEPTION_RAW_DATA_GENERATED,
+        RawDataPayload.from_raw_data(raw_data),
         source="ConsoleInputProvider"
     )
 
@@ -163,8 +167,8 @@ async def test_console_input_provider_data_flow():
 
     # 验证数据流
     assert len(collected_messages) == 1
-    assert collected_messages[0].text == "你好，Amaidesu"
-    assert collected_messages[0].source == "console"
+    assert collected_messages[0]["text"] == "你好，Amaidesu"
+    assert collected_messages[0]["source"] == "console"
 
     await input_layer.cleanup()
 
@@ -179,9 +183,11 @@ async def test_console_provider_gift_command_flow():
     collected_messages = []
 
     async def on_message_ready(event_name: str, event_data: dict, source: str):
-        message = event_data.get("message")
-        if message:
-            collected_messages.append(message)
+        # event_data 是 MessageReadyPayload 序列化后的字典
+        # message 字段是 NormalizedMessage 序列化后的字典
+        message_dict = event_data.get("message")
+        if message_dict:
+            collected_messages.append(message_dict)
 
     event_bus.on("normalization.message_ready", on_message_ready, priority=50)
 
@@ -198,8 +204,8 @@ async def test_console_provider_gift_command_flow():
     )
 
     await event_bus.emit(
-        "perception.raw_data.generated",
-        {"data": raw_data},
+        CoreEvents.PERCEPTION_RAW_DATA_GENERATED,
+        RawDataPayload.from_raw_data(raw_data),
         source="ConsoleInputProvider"
     )
 
@@ -207,11 +213,11 @@ async def test_console_provider_gift_command_flow():
 
     # 验证礼物消息
     assert len(collected_messages) == 1
-    assert collected_messages[0].data_type == "gift"
+    assert collected_messages[0]["data_type"] == "gift"
     # InputLayer 处理 gift 时，如果 content 中有 "user_name" 字段
     # 会提取出来，但文本可能显示 "未知用户"（因为字段映射问题）
     # 只要礼物名称正确即可
-    assert "小星星" in collected_messages[0].text
+    assert "小星星" in collected_messages[0]["text"]
 
     await input_layer.cleanup()
 
