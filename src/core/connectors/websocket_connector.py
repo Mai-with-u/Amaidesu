@@ -110,11 +110,11 @@ class WebSocketConnector:
                 self.logger.info(f"{self.provider_name} WebSocket 连接初步建立，标记为已连接。")
                 self._is_connected = True
 
-                # 通过 EventBus 发布连接事件（使用emit_typed）
+                # 通过 EventBus 发布连接事件（使用emit）
                 if self._event_bus:
                     try:
                         from src.core.events.payloads.decision import ProviderConnectedPayload
-                        await self._event_bus.emit_typed(
+                        await self._event_bus.emit(
                             CoreEvents.DECISION_PROVIDER_CONNECTED,
                             ProviderConnectedPayload(provider=self.provider_name),
                             source=self.provider_name,
@@ -135,11 +135,11 @@ class WebSocketConnector:
         except Exception as e:
             self.logger.error(f"{self.provider_name} WebSocket 连接监控任务异常退出: {e}", exc_info=True)
         finally:
-            # 通过 EventBus 发布断开事件（使用emit_typed）
+            # 通过 EventBus 发布断开事件（使用emit）
             if self._is_connected and self._event_bus:
                 try:
                     from src.core.events.payloads.decision import ProviderDisconnectedPayload
-                    await self._event_bus.emit_typed(
+                    await self._event_bus.emit(
                         CoreEvents.DECISION_PROVIDER_DISCONNECTED,
                         ProviderDisconnectedPayload(provider=self.provider_name),
                         source=self.provider_name,

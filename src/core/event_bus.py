@@ -99,38 +99,37 @@ class EventBus:
         self.logger = get_logger("EventBus")
         self.logger.debug(f"EventBus 初始化完成 (stats={enable_stats}, validation=enabled)")
 
-    async def emit(self, event_name: str, data: Any, source: str = "unknown", error_isolate: bool = True, _skip_deprecation_warning: bool = False) -> None:
+    async def emit(self, event_name: str, data: BaseModel, source: str = "unknown", error_isolate: bool = True) -> None:
         """
-        发布事件
-
-        .. deprecated::
-            请使用 emit_typed() 方法传递 Pydantic Model。
-            字典格式将在未来版本移除。
+        发布类型安全的事件
 
         Args:
             event_name: 事件名称
-            data: 事件数据（推荐使用 Pydantic Model，字典格式已废弃）
+            data: Pydantic Model 实例（自动序列化为 dict）
             source: 事件源（通常是发布者的类名）
             error_isolate: 是否隔离错误（True 时单个 handler 异常不影响其他）
-            _skip_deprecation_warning: 内部使用，跳过字典格式废弃警告
+
+        Raises:
+            TypeError: 如果 data 不是 BaseModel 实例
         """
         if self._is_cleanup:
             self.logger.warning(f"EventBus正在清理中，忽略事件: {event_name}")
             return
 
-        # 废弃警告：如果传入字典，提示使用 emit_typed
-        # 跳过从 emit_typed() 调用的情况（通过 _skip_deprecation_warning 标记）
-        if isinstance(data, dict) and self.enable_validation and not _skip_deprecation_warning:
-            from src.core.events.registry import EventRegistry
-            if EventRegistry.is_registered(event_name):
-                self.logger.warning(
-                    f"事件 '{event_name}' 使用字典格式（已废弃），"
-                    f"请使用 emit_typed() 传递对应的 Pydantic Model"
-                )
+        # 强制类型检查
+        if not isinstance(data, BaseModel):
+            raise TypeError(
+                f"EventBus.emit() 要求 data 参数必须是 Pydantic BaseModel 实例，"
+                f"收到类型: {type(data).__name__}。"
+                f"请使用对应的事件 Payload 类（如 src.core.events.payloads 中定义的类）"
+            )
+
+        # 将 Pydantic Model 序列化为 dict
+        dict_data = data.model_dump()
 
         # === 数据验证 ===
         if self.enable_validation:
-            self._validate_event_data(event_name, data)
+            self._validate_event_data(event_name, dict_data)
 
         handlers = self._handlers.get(event_name, [])
         if not handlers:
@@ -153,7 +152,7 @@ class EventBus:
         # 并发执行所有处理器
         tasks = []
         for wrapper in handlers:
-            task = asyncio.create_task(self._call_handler(wrapper, event_name, data, source, error_isolate))
+            task = asyncio.create_task(self._call_handler(wrapper, event_name, dict_data, source, error_isolate))
             tasks.append(task)
 
         if tasks:
@@ -343,25 +342,7 @@ class EventBus:
             for error in e.errors():
                 self.logger.debug(f"  - {error['loc']}: {error['msg']}")
 
-    async def emit_typed(
-        self,
-        event_name: str,
-        data: BaseModel,
-        source: str = "unknown",
-        error_isolate: bool = True,
-    ) -> None:
-        """
-        发布类型安全的事件（推荐使用）
-
-        Args:
-            event_name: 事件名称
-            data: Pydantic Model 实例（自动序列化为 dict）
-            source: 事件源
-            error_isolate: 是否隔离错误
-        """
-        await self.emit(event_name, data.model_dump(), source, error_isolate, _skip_deprecation_warning=True)
-
-    async def request(self, event_name: str, data: Any, timeout: float = 5.0) -> Any:
+    async def request(self, event_name: str, data: BaseModel, timeout: float = 5.0) -> Any:
         """
         请求-响应模式（带超时）
 
@@ -369,7 +350,7 @@ class EventBus:
 
         Args:
             event_name: 请求事件名称
-            data: 请求数据
+            data: 请求数据（Pydantic Model）
             timeout: 超时时间（秒），默认 5.0
 
         Returns:
@@ -377,6 +358,7 @@ class EventBus:
 
         Raises:
             asyncio.TimeoutError: 请求超时
+            TypeError: 如果 data 不是 BaseModel 实例
         """
         if self._is_cleanup:
             self.logger.warning(f"EventBus正在清理中，忽略请求: {event_name}")
@@ -385,14 +367,14 @@ class EventBus:
         response_event = f"{event_name}.response.{uuid4()}"
         future = asyncio.Future()
 
-        def handler(name, data, source):
-            future.set_result(data)
+        def handler(name, event_data, source):
+            future.set_result(event_data)
 
         self.on(response_event, handler)
         self._pending_requests[response_event] = future
 
         try:
-            await self.emit(event_name, {**data, "response_event": response_event})
+            await self.emit(event_name, data, source="EventBus.request")
             return await asyncio.wait_for(future, timeout)
         finally:
             self.off(response_event, handler)

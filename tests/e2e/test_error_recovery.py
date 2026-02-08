@@ -6,6 +6,7 @@ E2E Test: Error Recovery
 
 import asyncio
 import pytest
+from pydantic import BaseModel, Field
 
 # 导入所有 Provider 模块以触发注册
 import src.domains.decision.providers  # noqa: F401
@@ -14,6 +15,11 @@ import src.domains.output.providers  # noqa: F401
 
 from src.core.base.raw_data import RawData
 from src.core.events.names import CoreEvents
+
+
+class SimpleTestEvent(BaseModel):
+    """简单测试事件"""
+    data: str = Field(..., description="测试数据")
 
 
 @pytest.mark.asyncio
@@ -166,7 +172,7 @@ async def test_event_bus_error_isolation(event_bus):
     event_bus.on("test.event", normal_listener)
 
     # 发送事件
-    await event_bus.emit("test.event", {"data": "test"}, source="test")
+    await event_bus.emit("test.event", SimpleTestEvent(data="test"), source="test")
 
     # 验证：failing_listener 被调用了
     assert error_count["count"] == 1

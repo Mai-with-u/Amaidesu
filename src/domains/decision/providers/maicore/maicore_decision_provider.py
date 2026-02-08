@@ -271,9 +271,14 @@ class MaiCoreDecisionProvider(DecisionProvider):
             if self._event_bus:
                 try:
                     from src.core.events.names import CoreEvents
+                    from src.core.events.payloads.decision import DecisionResponsePayload
                     await self._event_bus.emit(
                         CoreEvents.DECISION_RESPONSE_GENERATED,
-                        {"message": message}
+                        DecisionResponsePayload(
+                            response=message.model_dump(),
+                            provider=self.provider_name,
+                        ),
+                        source=self.provider_name,
                     )
                 except Exception as e:
                     self.logger.error(f"发布决策响应事件失败: {e}", exc_info=True)

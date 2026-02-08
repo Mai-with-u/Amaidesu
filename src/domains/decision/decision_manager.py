@@ -145,10 +145,10 @@ class DecisionManager:
                 await self._current_provider.setup(self.event_bus, provider_config, dependencies)
                 self.logger.info(f"DecisionProvider '{provider_name}' 初始化成功")
 
-                # 发布Provider连接事件（使用emit_typed）
+                # 发布Provider连接事件（使用emit）
                 from src.core.events.payloads.decision import ProviderConnectedPayload
 
-                await self.event_bus.emit_typed(
+                await self.event_bus.emit(
                     CoreEvents.DECISION_PROVIDER_CONNECTED,
                     ProviderConnectedPayload(
                         provider=provider_name,
@@ -238,11 +238,11 @@ class DecisionManager:
             # 调用当前活动的 Provider 进行决策
             intent = await self.decide(normalized)
 
-            # 发布 decision.intent_generated 事件（3域架构，使用emit_typed）
+            # 发布 decision.intent_generated 事件（3域架构，使用emit）
             from src.core.events.payloads import IntentPayload
             from src.core.events.names import CoreEvents
 
-            await self.event_bus.emit_typed(
+            await self.event_bus.emit(
                 CoreEvents.DECISION_INTENT_GENERATED,
                 IntentPayload.from_intent(intent, self._provider_name or "unknown"),
                 source="DecisionManager",
@@ -303,11 +303,11 @@ class DecisionManager:
                 self._current_provider = new_provider
                 self._provider_name = provider_name
 
-                # 发布新Provider连接事件（使用emit_typed）
+                # 发布新Provider连接事件（使用emit）
                 try:
                     from src.core.events.payloads.decision import ProviderConnectedPayload
 
-                    await self.event_bus.emit_typed(
+                    await self.event_bus.emit(
                         CoreEvents.DECISION_PROVIDER_CONNECTED,
                         ProviderConnectedPayload(
                             provider=provider_name,
@@ -359,7 +359,7 @@ class DecisionManager:
                             provider=provider_name,
                             reason="cleanup",
                             will_retry=False,
-                        ).model_dump(),
+                        ),
                         source="DecisionManager",
                     )
                 except Exception as e:

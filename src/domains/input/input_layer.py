@@ -114,8 +114,8 @@ class InputLayer:
             if normalized_message:
                 self._normalized_message_count += 1
 
-                # 发布NormalizedMessage就绪事件（使用emit_typed）
-                await self.event_bus.emit_typed(
+                # 发布NormalizedMessage就绪事件（使用emit）
+                await self.event_bus.emit(
                     CoreEvents.NORMALIZATION_MESSAGE_READY,
                     MessageReadyPayload.from_normalized_message(normalized_message),
                     source="InputLayer",

@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 import pytest
 from src.core.event_bus import EventBus
 from src.core.base.raw_data import RawData
+from src.core.events.payloads.input import RawDataPayload
 from src.domains.input.input_layer import InputLayer
 from src.domains.input.providers import ConsoleInputProvider, MockDanmakuInputProvider as MockDanmakuProvider
 
@@ -65,9 +66,9 @@ async def test_multiple_providers_concurrent():
 
     # 并发发布
     await asyncio.gather(
-        event_bus.emit("perception.raw_data.generated", {"data": raw_data1}, source="Console"),
-        event_bus.emit("perception.raw_data.generated", {"data": raw_data2}, source="Danmaku"),
-        event_bus.emit("perception.raw_data.generated", {"data": raw_data3}, source="Console"),
+        event_bus.emit("perception.raw_data.generated", RawDataPayload.from_raw_data(raw_data1), source="Console"),
+        event_bus.emit("perception.raw_data.generated", RawDataPayload.from_raw_data(raw_data2), source="Danmaku"),
+        event_bus.emit("perception.raw_data.generated", RawDataPayload.from_raw_data(raw_data3), source="Console"),
     )
 
     await asyncio.sleep(0.3)

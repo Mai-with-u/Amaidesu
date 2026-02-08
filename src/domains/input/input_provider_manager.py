@@ -224,7 +224,7 @@ class InputProviderManager:
                 self._provider_stats[provider_name].last_message_at = time.time()
 
                 # 发布事件
-                await self.event_bus.emit_typed(
+                await self.event_bus.emit(
                     CoreEvents.PERCEPTION_RAW_DATA_GENERATED,
                     RawDataPayload.from_raw_data(data),
                     source=provider_name,
