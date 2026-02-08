@@ -23,7 +23,7 @@ from src.core.event_bus import EventBus
 from src.core.events.names import CoreEvents
 from src.domains.output.parameters.expression_generator import ExpressionGenerator
 from src.domains.output.manager import OutputProviderManager
-from src.core.events.models import ExpressionParametersEvent
+from src.core.events.payloads import ParametersGeneratedPayload
 
 
 class FlowCoordinator:
@@ -203,9 +203,9 @@ class FlowCoordinator:
 
                 # 发布 expression.parameters_generated 事件（事件驱动）
                 # OutputProvider 订阅此事件并响应
-                # 将 ExpressionParameters (dataclass) 转换为 ExpressionParametersEvent (Pydantic Model)
-                event_data = ExpressionParametersEvent(**params.to_dict())
-                await self.event_bus.emit(CoreEvents.EXPRESSION_PARAMETERS_GENERATED, event_data, source="FlowCoordinator")
+                # 将 ExpressionParameters (dataclass) 转换为 ParametersGeneratedPayload (Pydantic Model)
+                payload = ParametersGeneratedPayload.from_parameters(params, source_intent=intent.to_dict())
+                await self.event_bus.emit(CoreEvents.EXPRESSION_PARAMETERS_GENERATED, payload, source="FlowCoordinator")
                 self.logger.debug(f"已发布事件: {CoreEvents.EXPRESSION_PARAMETERS_GENERATED}")
             else:
                 self.logger.warning("表达式生成器未初始化，跳过渲染")

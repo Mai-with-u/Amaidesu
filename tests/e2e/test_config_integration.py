@@ -103,7 +103,7 @@ async def test_config_service_no_exceptions_on_init(project_base_dir):
 @pytest.mark.asyncio
 async def test_provider_registry_has_all_providers():
     """测试 Provider 注册表包含所有 23 个 Provider"""
-    from src.domains.output.provider_registry import ProviderRegistry
+    from src.core.provider_registry import ProviderRegistry
 
     input_providers = ProviderRegistry.get_registered_input_providers()
     output_providers = ProviderRegistry.get_registered_output_providers()
@@ -138,7 +138,7 @@ async def test_provider_registry_has_all_providers():
 @pytest.mark.asyncio
 async def test_provider_registry_can_create_all_providers():
     """测试 Provider 注册表能创建所有已注册的 Provider"""
-    from src.domains.output.provider_registry import ProviderRegistry
+    from src.core.provider_registry import ProviderRegistry
 
     input_providers = ProviderRegistry.get_registered_input_providers()
     output_providers = ProviderRegistry.get_registered_output_providers()
@@ -450,7 +450,7 @@ async def test_config_service_handles_missing_sections(config_service: ConfigSer
 @pytest.mark.asyncio
 async def test_provider_registry_handles_unknown_provider():
     """测试 Provider 注册表正确处理未注册的 Provider"""
-    from src.domains.output.provider_registry import ProviderRegistry
+    from src.core.provider_registry import ProviderRegistry
 
     # 尝试创建不存在的 Provider
     with pytest.raises(ValueError, match="Unknown input provider"):
@@ -498,7 +498,7 @@ async def test_manager_handles_invalid_provider_type():
 @pytest.mark.asyncio
 async def test_provider_config_validation():
     """测试 Provider 配置验证"""
-    from src.domains.output.provider_registry import ProviderRegistry
+    from src.core.provider_registry import ProviderRegistry
 
     # 测试创建 Provider 时传入空配置
     # 大部分 Provider 应该能使用空配置创建（使用默认值）
@@ -545,7 +545,7 @@ async def test_config_service_is_lightweight(project_base_dir):
 @pytest.mark.asyncio
 async def test_provider_registry_has_no_duplicates():
     """测试 Provider 注册表没有重复注册"""
-    from src.domains.output.provider_registry import ProviderRegistry
+    from src.core.provider_registry import ProviderRegistry
 
     registry_info = ProviderRegistry.get_registry_info()
 

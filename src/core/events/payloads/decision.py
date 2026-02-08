@@ -13,11 +13,13 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from pydantic import BaseModel, Field, ConfigDict
 import time
 
+from src.core.events.payloads.base import BasePayload
+
 if TYPE_CHECKING:
     from src.domains.decision.intent import Intent
 
 
-class DecisionRequestPayload(BaseModel):
+class DecisionRequestPayload(BasePayload):
     """
     决策请求事件 Payload
 
@@ -49,8 +51,12 @@ class DecisionRequestPayload(BaseModel):
         }
     )
 
+    def _debug_fields(self) -> List[str]:
+        """返回需要显示的字段"""
+        return ["priority", "timestamp"]
 
-class IntentActionPayload(BaseModel):
+
+class IntentActionPayload(BasePayload):
     """
     意图动作 Payload
 
@@ -71,8 +77,12 @@ class IntentActionPayload(BaseModel):
         }
     )
 
+    def _debug_fields(self) -> List[str]:
+        """返回需要显示的字段"""
+        return ["type", "params", "priority"]
 
-class IntentPayload(BaseModel):
+
+class IntentPayload(BasePayload):
     """
     意图生成事件 Payload
 
@@ -115,6 +125,10 @@ class IntentPayload(BaseModel):
         }
     )
 
+    def _debug_fields(self) -> List[str]:
+        """返回需要显示的字段"""
+        return ["provider", "original_text", "response_text", "emotion", "actions"]
+
     @classmethod
     def from_intent(cls, intent: "Intent", provider: str) -> "IntentPayload":
         """
@@ -147,7 +161,7 @@ class IntentPayload(BaseModel):
         )
 
 
-class DecisionResponsePayload(BaseModel):
+class DecisionResponsePayload(BasePayload):
     """
     决策响应事件 Payload
 
@@ -184,8 +198,12 @@ class DecisionResponsePayload(BaseModel):
         }
     )
 
+    def _debug_fields(self) -> List[str]:
+        """返回需要显示的字段"""
+        return ["provider", "latency_ms"]
 
-class ProviderConnectedPayload(BaseModel):
+
+class ProviderConnectedPayload(BasePayload):
     """
     Provider 连接成功事件 Payload
 
@@ -212,8 +230,12 @@ class ProviderConnectedPayload(BaseModel):
         }
     )
 
+    def _debug_fields(self) -> List[str]:
+        """返回需要显示的字段"""
+        return ["provider", "endpoint"]
 
-class ProviderDisconnectedPayload(BaseModel):
+
+class ProviderDisconnectedPayload(BasePayload):
     """
     Provider 断开连接事件 Payload
 
@@ -241,3 +263,7 @@ class ProviderDisconnectedPayload(BaseModel):
             }
         }
     )
+
+    def _debug_fields(self) -> List[str]:
+        """返回需要显示的字段"""
+        return ["provider", "reason", "will_retry"]

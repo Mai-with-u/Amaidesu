@@ -33,6 +33,7 @@ from .input import (
 from .decision import (
     DecisionRequestPayload,
     IntentPayload,
+    IntentActionPayload,
     DecisionResponsePayload,
     ProviderConnectedPayload,
     ProviderDisconnectedPayload,
@@ -55,6 +56,7 @@ __all__ = [
     # Decision Domain
     "DecisionRequestPayload",
     "IntentPayload",
+    "IntentActionPayload",
     "DecisionResponsePayload",
     "ProviderConnectedPayload",
     "ProviderDisconnectedPayload",

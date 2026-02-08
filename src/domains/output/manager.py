@@ -11,7 +11,6 @@ OutputProviderManager - Output Domain: 渲染输出管理器
 """
 
 import asyncio
-import warnings
 from typing import Any, TYPE_CHECKING
 from dataclasses import dataclass, field
 from src.core.utils.logger import get_logger
@@ -493,7 +492,7 @@ class OutputProviderManager:
 
     # ==================== Phase 4: 配置加载 ====================
 
-    async def load_from_config(self, config: dict[str, Any], core=None, config_service=None):
+    async def load_from_config(self, config: dict[str, Any], config_service, core=None):
         """
         从配置加载并创建所有OutputProvider（支持三级配置合并）
 
@@ -545,33 +544,20 @@ class OutputProviderManager:
 
         for output_name in enabled_outputs:
             try:
-                # 使用新的三级配置加载
-                if config_service is not None:
-                    try:
-                        from src.services.config.schemas import get_provider_schema
+                # 使用三级配置加载
+                try:
+                    from src.services.config.schemas import get_provider_schema
 
-                        schema_class = get_provider_schema(output_name, "output")
-                    except (ImportError, AttributeError, KeyError):
-                        # Schema registry未实现或Provider未注册，回退到None
-                        schema_class = None
+                    schema_class = get_provider_schema(output_name, "output")
+                except (ImportError, AttributeError, KeyError):
+                    # Schema registry未实现或Provider未注册，回退到None
+                    schema_class = None
 
-                    provider_config = config_service.get_provider_config_with_defaults(
-                        provider_name=output_name,
-                        provider_layer="output",
-                        schema_class=schema_class,
-                    )
-                else:
-                    # 回退到旧的配置加载方式（向后兼容）
-                    warnings.warn(
-                        f"OutputProviderManager: Using deprecated configuration loading for '{output_name}'. "
-                        f"Please pass config_service parameter to enable three-level configuration merge. "
-                        f"Old configuration format will be removed in a future version.",
-                        DeprecationWarning,
-                        stacklevel=2,
-                    )
-                    outputs_config = config.get("outputs", {})
-                    provider_config = outputs_config.get(output_name, {}).copy()
-                    provider_config["type"] = provider_config.get("type", output_name)
+                provider_config = config_service.get_provider_config_with_defaults(
+                    provider_name=output_name,
+                    provider_layer="output",
+                    schema_class=schema_class,
+                )
 
                 provider_type = provider_config.get("type", output_name)
 

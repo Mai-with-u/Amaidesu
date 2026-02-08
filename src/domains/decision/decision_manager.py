@@ -14,16 +14,6 @@ from typing import Dict, Any, Optional, TYPE_CHECKING
 from src.core.utils.logger import get_logger
 from src.core.events.names import CoreEvents
 
-# 导入所有 DecisionProvider 以确保它们注册到 ProviderRegistry
-# noqa: F401 - 这些导入的副作用（注册）是必需的
-from src.domains.decision.providers import (  # noqa: F401
-    MaiCoreDecisionProvider,
-    LocalLLMDecisionProvider,
-    RuleEngineDecisionProvider,
-    EmotionJudgeDecisionProvider,
-    MockDecisionProvider,
-)
-
 if TYPE_CHECKING:
     from src.core.event_bus import EventBus
     from src.core.base.decision_provider import DecisionProvider

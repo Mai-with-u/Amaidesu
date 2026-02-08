@@ -187,7 +187,7 @@ def sample_normalized_message():
 @pytest.fixture
 async def decision_manager_with_mock(event_bus, mock_provider_class):
     """创建并设置 DecisionManager（使用 Mock Provider）"""
-    from src.domains.output.provider_registry import ProviderRegistry
+    from src.core.provider_registry import ProviderRegistry
 
     # 注册 mock provider
     ProviderRegistry.register_decision("mock_decision", mock_provider_class, source="test")
@@ -233,7 +233,7 @@ async def test_decision_manager_initialization_with_llm_service(event_bus):
 @pytest.mark.asyncio
 async def test_setup_provider_success(event_bus, mock_provider_class):
     """测试成功设置 Provider"""
-    from src.domains.output.provider_registry import ProviderRegistry
+    from src.core.provider_registry import ProviderRegistry
 
     ProviderRegistry.register_decision("mock_decision", mock_provider_class, source="test")
 
@@ -265,7 +265,7 @@ async def test_setup_provider_not_registered(event_bus):
 @pytest.mark.asyncio
 async def test_setup_provider_setup_failure(event_bus):
     """测试 Provider setup 失败"""
-    from src.domains.output.provider_registry import ProviderRegistry
+    from src.core.provider_registry import ProviderRegistry
 
     ProviderRegistry.register_decision("failing_provider", FailingMockDecisionProvider, source="test")
 
@@ -284,7 +284,7 @@ async def test_setup_provider_setup_failure(event_bus):
 @pytest.mark.asyncio
 async def test_setup_replace_existing_provider(event_bus, mock_provider_class):
     """测试替换已存在的 Provider"""
-    from src.domains.output.provider_registry import ProviderRegistry
+    from src.core.provider_registry import ProviderRegistry
 
     ProviderRegistry.register_decision("mock_decision", mock_provider_class, source="test")
 
@@ -310,7 +310,7 @@ async def test_setup_replace_existing_provider(event_bus, mock_provider_class):
 @pytest.mark.asyncio
 async def test_setup_subscribes_to_event(event_bus, mock_provider_class):
     """测试 setup 订阅事件"""
-    from src.domains.output.provider_registry import ProviderRegistry
+    from src.core.provider_registry import ProviderRegistry
 
     ProviderRegistry.register_decision("mock_decision", mock_provider_class, source="test")
 
@@ -544,7 +544,7 @@ async def test_on_normalized_message_ready_handles_provider_error(
 @pytest.mark.asyncio
 async def test_switch_provider_success(event_bus, mock_provider_class):
     """测试成功切换 Provider"""
-    from src.domains.output.provider_registry import ProviderRegistry
+    from src.core.provider_registry import ProviderRegistry
 
     ProviderRegistry.register_decision("mock_decision", mock_provider_class, source="test")
 
@@ -571,7 +571,7 @@ async def test_switch_provider_success(event_bus, mock_provider_class):
 @pytest.mark.asyncio
 async def test_switch_provider_failure_rollback(event_bus, mock_provider_class):
     """测试切换失败时回退到旧 Provider"""
-    from src.domains.output.provider_registry import ProviderRegistry
+    from src.core.provider_registry import ProviderRegistry
 
     ProviderRegistry.register_decision("mock_decision", mock_provider_class, source="test")
     ProviderRegistry.register_decision("failing_provider", FailingMockDecisionProvider, source="test")
@@ -600,7 +600,7 @@ async def test_switch_provider_failure_rollback(event_bus, mock_provider_class):
 @pytest.mark.asyncio
 async def test_switch_provider_nonexistent(event_bus, mock_provider_class):
     """测试切换到不存在的 Provider"""
-    from src.domains.output.provider_registry import ProviderRegistry
+    from src.core.provider_registry import ProviderRegistry
 
     ProviderRegistry.register_decision("mock_decision", mock_provider_class, source="test")
 
@@ -626,7 +626,7 @@ async def test_switch_provider_nonexistent(event_bus, mock_provider_class):
 @pytest.mark.asyncio
 async def test_switch_provider_from_none(event_bus, mock_provider_class):
     """从未设置 Provider 开始切换（相当于首次 setup）"""
-    from src.domains.output.provider_registry import ProviderRegistry
+    from src.core.provider_registry import ProviderRegistry
 
     ProviderRegistry.register_decision("mock_decision", mock_provider_class, source="test")
 
@@ -669,7 +669,7 @@ async def test_cleanup_clears_provider(decision_manager_with_mock):
 @pytest.mark.asyncio
 async def test_cleanup_unsubscribes_events(event_bus, mock_provider_class):
     """测试 cleanup 取消事件订阅"""
-    from src.domains.output.provider_registry import ProviderRegistry
+    from src.core.provider_registry import ProviderRegistry
 
     ProviderRegistry.register_decision("mock_decision", mock_provider_class, source="test")
 
@@ -712,7 +712,7 @@ async def test_cleanup_without_setup(event_bus):
 @pytest.mark.asyncio
 async def test_cleanup_handles_provider_error(event_bus, mock_provider_class):
     """测试 cleanup 处理 Provider 清理失败"""
-    from src.domains.output.provider_registry import ProviderRegistry
+    from src.core.provider_registry import ProviderRegistry
 
     class FailingCleanupProvider(DecisionProvider):
         def __init__(self, config: Dict[str, Any] = None):
@@ -810,7 +810,7 @@ async def test_get_available_providers(event_bus):
 @pytest.mark.asyncio
 async def test_get_available_providers_after_registration(event_bus, mock_provider_class):
     """测试注册后获取可用 Provider"""
-    from src.domains.output.provider_registry import ProviderRegistry
+    from src.core.provider_registry import ProviderRegistry
 
     ProviderRegistry.register_decision("test_mock", mock_provider_class, source="test")
 
@@ -831,7 +831,7 @@ async def test_get_available_providers_after_registration(event_bus, mock_provid
 @pytest.mark.asyncio
 async def test_concurrent_setup_and_switch(event_bus, mock_provider_class):
     """测试并发 setup 和 switch"""
-    from src.domains.output.provider_registry import ProviderRegistry
+    from src.core.provider_registry import ProviderRegistry
 
     ProviderRegistry.register_decision("mock_decision", mock_provider_class, source="test")
 
@@ -874,7 +874,7 @@ async def test_concurrent_decide_calls(decision_manager_with_mock, sample_normal
 @pytest.mark.asyncio
 async def test_switch_lock_prevents_race(event_bus, mock_provider_class):
     """测试切换锁防止竞态条件"""
-    from src.domains.output.provider_registry import ProviderRegistry
+    from src.core.provider_registry import ProviderRegistry
 
     ProviderRegistry.register_decision("mock_decision", mock_provider_class, source="test")
 
@@ -905,7 +905,7 @@ async def test_switch_lock_prevents_race(event_bus, mock_provider_class):
 @pytest.mark.asyncio
 async def test_provider_returns_none_from_decide(event_bus):
     """测试 Provider 返回 None"""
-    from src.domains.output.provider_registry import ProviderRegistry
+    from src.core.provider_registry import ProviderRegistry
 
     ProviderRegistry.register_decision("none_provider", NoneReturningMockProvider, source="test")
 
@@ -983,7 +983,7 @@ async def test_very_long_message_text(decision_manager_with_mock):
 @pytest.mark.asyncio
 async def test_llm_service_dependency_injection(event_bus, mock_provider_class):
     """测试 LLMService 依赖注入"""
-    from src.domains.output.provider_registry import ProviderRegistry
+    from src.core.provider_registry import ProviderRegistry
 
     ProviderRegistry.register_decision("mock_decision", mock_provider_class, source="test")
 
@@ -1004,7 +1004,7 @@ async def test_llm_service_dependency_injection(event_bus, mock_provider_class):
 @pytest.mark.asyncio
 async def test_llm_service_none_no_dependency(event_bus, mock_provider_class):
     """测试 LLMService 为 None 时不注入依赖"""
-    from src.domains.output.provider_registry import ProviderRegistry
+    from src.core.provider_registry import ProviderRegistry
 
     ProviderRegistry.register_decision("mock_decision", mock_provider_class, source="test")
 

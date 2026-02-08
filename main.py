@@ -1,13 +1,12 @@
 """Amaidesu 应用程序主入口。"""
 
-
 import asyncio
 import signal
 import sys
 import os
 import argparse
 import contextlib
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from src.core.amaidesu_core import AmaidesuCore
 from src.services.config.service import ConfigService
@@ -22,10 +21,6 @@ from loguru import logger as loguru_logger
 from src.domains.input.input_layer import InputLayer
 from src.domains.input.input_provider_manager import InputProviderManager
 from src.domains.decision.decision_manager import DecisionManager
-
-# 确保所有Provider都被注册
-from src.domains.input import providers as input_providers
-from src.domains.output import providers as output_providers
 
 logger = get_logger("Main")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -49,10 +44,26 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def setup_logging(
-    args: argparse.Namespace,
-    logging_config: Optional[Dict[str, Any]] = None
-) -> None:
+def setup_logging_early(args: argparse.Namespace) -> None:
+    """早期日志配置，在导入providers之前调用。
+
+    使用默认的INFO级别，避免DEBUG日志过早输出。
+    完整的日志配置会在load_config后再次调用。
+    """
+    from src.core.utils.logger import configure_from_config
+
+    # 使用默认INFO级别配置
+    default_config = {"level": "INFO", "console_level": "INFO"}
+
+    # 如果--debug参数，使用DEBUG级别
+    if args.debug:
+        default_config["level"] = "DEBUG"
+        default_config["console_level"] = "DEBUG"
+
+    configure_from_config(default_config)
+
+
+def setup_logging(args: argparse.Namespace, logging_config: Optional[Dict[str, Any]] = None) -> None:
     """根据命令行参数和配置文件配置日志。
 
     Args:
@@ -440,23 +451,39 @@ async def run_shutdown(
 
 async def main() -> None:
     """应用程序主入口点。"""
+    # 1. 解析命令行参数
     args = parse_args()
 
+    # 2. 早期日志配置（使用默认INFO级别）
+    #    这必须在导入providers之前完成，避免过早的DEBUG日志输出
+    setup_logging_early(args)
+
+    # 3. 加载配置文件
     config_service, config, main_cfg_copied, plugin_cfg_copied, pipeline_cfg_copied = load_config()
 
-    # 加载日志配置
+    # 4. 获取完整的日志配置并重新配置日志（应用完整配置）
     logging_config = config_service.get_section("logging", default={})
-
     setup_logging(args, logging_config)
+
+    # 5. 现在日志已配置完毕，可以导入providers了
+    #    确保所有Provider都被注册（此时日志配置已生效）
+    #    导入这些模块是为了触发副作用（注册到ProviderRegistry）
+    import src.domains.input.providers as input_providers  # noqa: F401
+    import src.domains.output.providers as output_providers  # noqa: F401
 
     validate_config(config)
     exit_if_config_copied(main_cfg_copied, plugin_cfg_copied, pipeline_cfg_copied)
 
     pipeline_manager = await load_pipeline_manager(config)
 
-    core, flow_coordinator, input_layer, llm_service, decision_manager, input_provider_manager = await create_app_components(
-        config, pipeline_manager, config_service
-    )
+    (
+        core,
+        flow_coordinator,
+        input_layer,
+        llm_service,
+        decision_manager,
+        input_provider_manager,
+    ) = await create_app_components(config, pipeline_manager, config_service)
 
     stop_event = asyncio.Event()
     orig_sigint, orig_sigterm = setup_signal_handlers(stop_event)

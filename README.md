@@ -424,7 +424,7 @@ class MyOutputProvider(OutputProvider):
 
 ```python
 # src/domains/input/providers/my_provider/__init__.py
-from src.domains.output.provider_registry import ProviderRegistry
+from src.core.provider_registry import ProviderRegistry
 from .my_provider import MyInputProvider
 
 ProviderRegistry.register_input("my_provider", MyInputProvider, source="builtin:my_provider")

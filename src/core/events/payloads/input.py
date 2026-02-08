@@ -6,16 +6,18 @@ Input Domain 事件 Payload 定义
 - MessageReadyPayload: 标准化消息就绪事件
 """
 
-from typing import Any, Dict, Optional, TYPE_CHECKING
-from pydantic import BaseModel, Field, ConfigDict
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from pydantic import Field, ConfigDict
 import time
+
+from src.core.events.payloads.base import BasePayload
 
 if TYPE_CHECKING:
     from src.core.base.normalized_message import NormalizedMessage
     from src.core.base.raw_data import RawData
 
 
-class RawDataPayload(BaseModel):
+class RawDataPayload(BasePayload):
     """
     原始数据事件 Payload
 
@@ -46,6 +48,10 @@ class RawDataPayload(BaseModel):
         }
     )
 
+    def _debug_fields(self) -> List[str]:
+        """返回需要显示的字段"""
+        return ["source", "data_type", "content"]
+
     @classmethod
     def from_raw_data(cls, raw_data: "RawData") -> "RawDataPayload":
         """
@@ -68,7 +74,7 @@ class RawDataPayload(BaseModel):
         )
 
 
-class MessageReadyPayload(BaseModel):
+class MessageReadyPayload(BasePayload):
     """
     标准化消息就绪事件 Payload
 
@@ -102,6 +108,26 @@ class MessageReadyPayload(BaseModel):
             }
         }
     )
+
+    def _debug_fields(self) -> List[str]:
+        """返回需要显示的字段"""
+        # message 是字典，只显示关键字段避免输出过长
+        return ["source", "message"]
+
+    def _format_field_value(self, value: Any, indent: int = 0) -> str:
+        """格式化字段值，对 message 字段进行特殊处理"""
+        # 对于 message 字段（Dict[str, Any]），只显示 text 和 source
+        if isinstance(value, dict) and "text" in value:
+            # 提取关键信息
+            text = value.get("text", "")
+            source = value.get("source", "")
+            data_type = value.get("data_type", "")
+            # 截断长文本
+            if len(text) > 30:
+                text = text[:27] + "..."
+            return f'{{text="{text}", source="{source}", type="{data_type}"}}'
+        # 其他字段使用基类默认格式化
+        return super()._format_field_value(value, indent)
 
     @classmethod
     def from_normalized_message(cls, normalized_message: "NormalizedMessage", **extra_metadata) -> "MessageReadyPayload":

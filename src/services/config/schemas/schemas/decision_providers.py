@@ -104,40 +104,6 @@ class RuleEngineDecisionProviderConfig(BaseProviderConfig):
     model_config = {"extra": "ignore"}
 
 
-class EmotionJudgeDecisionProviderConfig(BaseProviderConfig):
-    """情感判断决策Provider配置
-
-    使用LLM分析文本情感并触发热键。
-
-    Attributes:
-        type: Provider类型标识，必须为"emotion_judge"
-        base_url: LLM API基础URL
-        api_key: LLM API密钥
-        model: 模型配置（包含name、system_prompt、max_tokens、temperature等）
-        cool_down_seconds: 冷却时间（秒）
-    """
-
-    type: Literal["emotion_judge"] = "emotion_judge"
-    base_url: str = Field(
-        default="https://api.siliconflow.cn/v1/", description="LLM API基础URL"
-    )
-    api_key: str = Field(default="", description="LLM API密钥")
-    model: dict = Field(
-        default_factory=lambda: {
-            "name": "Qwen/Qwen2.5-7B-Instruct",
-            "system_prompt": "你是一个主播的助手，根据主播的文本内容，判断主播的情感状态，确定触发哪一个Live2D热键以帮助主播更好地表达情感。只输出热键名称，不要包含其他任何文字或解释。",
-            "max_tokens": 10,
-            "temperature": 0.3
-        },
-        description="模型配置"
-    )
-    cool_down_seconds: int = Field(
-        default=10, description="冷却时间（秒）", ge=0
-    )
-
-    model_config = {"extra": "ignore"}
-
-
 class MockDecisionProviderConfig(BaseProviderConfig):
     """模拟决策Provider配置
 
@@ -161,6 +127,5 @@ __all__ = [
     "MaiCoreDecisionProviderConfig",
     "LocalLLMDecisionProviderConfig",
     "RuleEngineDecisionProviderConfig",
-    "EmotionJudgeDecisionProviderConfig",
     "MockDecisionProviderConfig",
 ]

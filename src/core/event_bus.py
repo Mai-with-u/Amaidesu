@@ -139,7 +139,9 @@ class EventBus:
         # 按优先级排序（数字越小越优先）
         handlers = sorted(handlers, key=lambda h: h.priority)
 
-        self.logger.info(f"发布事件 {event_name} (来源: {source}, 监听器: {len(handlers)})")
+        self.logger.debug(f"发布事件 {event_name} (来源: {source}, 监听器: {len(handlers)})")
+        # 新增：debug 日志显示事件内容
+        self.logger.debug(f"事件内容: {data}")
 
         # 更新统计
         if self.enable_stats:
