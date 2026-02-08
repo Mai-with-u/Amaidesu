@@ -96,29 +96,6 @@ class BiliDanmakuOfficialMaiCraftProviderConfig(BaseProviderConfig):
         return v
 
 
-class MockDanmakuProviderConfig(BaseProviderConfig):
-    """模拟弹幕输入Provider配置"""
-
-    type: Literal["mock_danmaku"] = "mock_danmaku"
-    log_file_path: str = Field(
-        default="msg_default.jsonl",
-        description="日志文件路径"
-    )
-    send_interval: float = Field(
-        default=1.0,
-        description="发送间隔（秒）",
-        ge=0.1
-    )
-    loop_playback: bool = Field(
-        default=True,
-        description="循环播放"
-    )
-    start_immediately: bool = Field(
-        default=True,
-        description="立即开始"
-    )
-
-
 class ReadPingmuProviderConfig(BaseProviderConfig):
     """屏幕读评输入Provider配置"""
 
@@ -227,7 +204,6 @@ InputProviderConfig = (
     BiliDanmakuProviderConfig |
     BiliDanmakuOfficialProviderConfig |
     BiliDanmakuOfficialMaiCraftProviderConfig |
-    MockDanmakuProviderConfig |
     ReadPingmuProviderConfig |
     MainosabaProviderConfig
 )
