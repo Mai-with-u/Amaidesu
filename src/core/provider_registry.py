@@ -15,13 +15,14 @@ Provider Registry - Provider 注册表
 - 配置驱动的注册：只加载配置中启用的 Provider
 """
 
-from typing import Dict, Type, Any, List
+from typing import Dict, Type, Any, List, Optional
 import inspect
 import importlib
 from src.core.utils.logger import get_logger
 
 # 导入 Provider 接口（延迟导入避免循环依赖）
 # 实际类型检查在运行时进行
+# BaseProviderConfig 延迟到需要时再导入，避免循环依赖
 
 
 class ProviderRegistry:
@@ -51,6 +52,9 @@ class ProviderRegistry:
 
     # 已注册的 Provider 来源（用于调试）
     _provider_sources: Dict[str, str] = {}
+
+    # Config Schema 注册表（由 Provider 注册时自动填充）
+    _config_schemas: Dict[str, Type] = {}
 
     _logger = get_logger("ProviderRegistry")
 
@@ -94,6 +98,22 @@ class ProviderRegistry:
         cls._provider_sources[name] = source
         cls._logger.debug(f"Registered InputProvider: {name} from {source}")
 
+        # 自动提取并注册 ConfigSchema
+        if hasattr(provider_class, "ConfigSchema"):
+            schema_cls = provider_class.ConfigSchema
+            # 延迟导入 BaseProviderConfig 避免循环依赖
+            from src.services.config.schemas.schemas.base import BaseProviderConfig
+            try:
+                if issubclass(schema_cls, BaseProviderConfig):
+                    cls._config_schemas[name] = schema_cls
+                    cls._logger.debug(f"自动注册 ConfigSchema: {name} -> {schema_cls.__name__}")
+                else:
+                    cls._logger.warning(
+                        f"Provider '{name}' 有 ConfigSchema 但不是 BaseProviderConfig 的子类"
+                    )
+            except TypeError:
+                cls._logger.warning(f"Provider '{name}' 的 ConfigSchema 不是有效的类")
+
     @classmethod
     def register_output(
         cls,
@@ -133,6 +153,22 @@ class ProviderRegistry:
         cls._provider_sources[name] = source
         cls._logger.debug(f"Registered OutputProvider: {name} from {source}")
 
+        # 自动提取并注册 ConfigSchema
+        if hasattr(provider_class, "ConfigSchema"):
+            schema_cls = provider_class.ConfigSchema
+            # 延迟导入 BaseProviderConfig 避免循环依赖
+            from src.services.config.schemas.schemas.base import BaseProviderConfig
+            try:
+                if issubclass(schema_cls, BaseProviderConfig):
+                    cls._config_schemas[name] = schema_cls
+                    cls._logger.debug(f"自动注册 ConfigSchema: {name} -> {schema_cls.__name__}")
+                else:
+                    cls._logger.warning(
+                        f"Provider '{name}' 有 ConfigSchema 但不是 BaseProviderConfig 的子类"
+                    )
+            except TypeError:
+                cls._logger.warning(f"Provider '{name}' 的 ConfigSchema 不是有效的类")
+
     @classmethod
     def register_decision(
         cls,
@@ -171,6 +207,22 @@ class ProviderRegistry:
         cls._decision_providers[name] = provider_class
         cls._provider_sources[name] = source
         cls._logger.debug(f"Registered DecisionProvider: {name} from {source}")
+
+        # 自动提取并注册 ConfigSchema
+        if hasattr(provider_class, "ConfigSchema"):
+            schema_cls = provider_class.ConfigSchema
+            # 延迟导入 BaseProviderConfig 避免循环依赖
+            from src.services.config.schemas.schemas.base import BaseProviderConfig
+            try:
+                if issubclass(schema_cls, BaseProviderConfig):
+                    cls._config_schemas[name] = schema_cls
+                    cls._logger.debug(f"自动注册 ConfigSchema: {name} -> {schema_cls.__name__}")
+                else:
+                    cls._logger.warning(
+                        f"Provider '{name}' 有 ConfigSchema 但不是 BaseProviderConfig 的子类"
+                    )
+            except TypeError:
+                cls._logger.warning(f"Provider '{name}' 的 ConfigSchema 不是有效的类")
 
     @classmethod
     def create_input(cls, name: str, config: Dict[str, Any]):
@@ -351,6 +403,7 @@ class ProviderRegistry:
         cls._output_providers.clear()
         cls._decision_providers.clear()
         cls._provider_sources.clear()
+        cls._config_schemas.clear()
         cls._logger.debug("Cleared all registered providers")
 
     # ==================== 调试方法 ====================
@@ -580,6 +633,24 @@ class ProviderRegistry:
             "output": output_count,
             "total": input_count + decision_count + output_count
         }
+
+    @classmethod
+    def get_config_schema(cls, name: str) -> Optional[Type]:
+        """
+        获取 Provider 的配置 Schema
+
+        Args:
+            name: Provider 名称
+
+        Returns:
+            ConfigSchema 类，如果 Provider 没有定义 Schema 则返回 None
+
+        Example:
+            schema = ProviderRegistry.get_config_schema("mock_danmaku")
+            if schema:
+                config_instance = schema(**config_dict)
+        """
+        return cls._config_schemas.get(name)
 
 
 # 便捷导入：从 src.core.provider_registry 导入 ProviderRegistry
