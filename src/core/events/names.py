@@ -28,3 +28,40 @@ class CoreEvents:
     CORE_STARTUP = "core.startup"
     CORE_SHUTDOWN = "core.shutdown"
     CORE_ERROR = "core.error"
+
+    # STT (语音识别) 事件
+    STT_AUDIO_RECEIVED = "stt.audio.received"
+    STT_SPEECH_STARTED = "stt.speech.started"
+    STT_SPEECH_ENDED = "stt.speech.ended"
+
+    # 屏幕上下文事件
+    SCREEN_CONTEXT_UPDATED = "screen.context.updated"
+    SCREEN_CHANGED = "screen.changed"
+
+    # 关键词匹配事件
+    KEYWORD_MATCHED = "keyword.matched"
+
+    # VRChat 事件
+    VRCHAT_CONNECTED = "vrchat.connected"
+    VRCHAT_DISCONNECTED = "vrchat.disconnected"
+    VRCHAT_PARAMETER_SENT = "vrchat.parameter.sent"
+
+    # Output Domain: 渲染相关事件
+    RENDER_SUBTITLE = "render.subtitle"
+    RENDER_STICKER = "render.sticker"
+
+    # OBS 控制事件
+    OBS_SEND_TEXT = "obs.send_text"
+    OBS_SWITCH_SCENE = "obs.switch_scene"
+    OBS_SET_SOURCE_VISIBILITY = "obs.set_source_visibility"
+
+    # 远程流事件
+    REMOTE_STREAM_REQUEST_IMAGE = "remote_stream.request_image"
+    REMOTE_STREAM_SEND_TTS = "remote_stream.send_tts"
+
+    # VTS 相关事件（跨 Provider 通信）
+    VTS_SEND_EMOTION = "vts.send_emotion"
+    VTS_SEND_STATE = "vts.send_state"
+
+    # TTS 相关事件
+    TTS_AUDIO_READY = "tts.audio_ready"

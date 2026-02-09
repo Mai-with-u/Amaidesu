@@ -7,7 +7,7 @@
 
 from enum import Enum
 from typing import Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class EmotionType(str, Enum):
@@ -41,6 +41,10 @@ class ActionType(str, Enum):
     SHAKE = "shake"  # 摇头
     WAVE = "wave"  # 挥手
     CLAP = "clap"  # 鼓掌
+    STICKER = "sticker"  # 贴图
+    MOTION = "motion"  # 动作
+    CUSTOM = "custom"  # 自定义
+    GAME_ACTION = "game_action"  # 游戏动作
     NONE = "none"  # 无动作
 
     @classmethod
@@ -52,12 +56,11 @@ class ActionType(str, Enum):
 class IntentAction(BaseModel):
     """意图动作"""
 
+    model_config = ConfigDict(use_enum_values=True)
+
     type: ActionType = Field(..., description="动作类型")
     params: Dict[str, Any] = Field(default_factory=dict, description="动作参数")
     priority: int = Field(default=50, ge=0, le=100, description="优先级（越高越优先）")
-
-    class Config:
-        use_enum_values = True
 
 
 __all__ = ["EmotionType", "ActionType", "IntentAction"]

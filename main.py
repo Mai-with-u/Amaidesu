@@ -24,6 +24,15 @@ from src.domains.input.provider_manager import InputProviderManager
 from src.domains.decision import DecisionProviderManager
 
 logger = get_logger("Main")
+
+# 可选服务导入
+try:
+    from src.services.dg_lab import DGLabService, DGLabConfig
+
+    DG_LAB_AVAILABLE = True
+except ImportError:
+    DG_LAB_AVAILABLE = False
+    logger.debug("DGLab 服务不可用（aiohttp 未安装）")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -246,6 +255,7 @@ async def create_app_components(
     LLMManager,
     Optional[DecisionProviderManager],
     Optional[InputProviderManager],
+    Optional[DGLabService],
 ]:
     """创建并连接核心组件（事件总线、输入域、决策域、协调器、核心、插件）。"""
     general_config = config.get("general", {})
@@ -270,6 +280,25 @@ async def create_app_components(
     llm_service = LLMManager()
     await llm_service.setup(config)
     logger.info("已创建 LLM 服务实例")
+
+    # DGLab 服务（可选）
+    dg_lab_service: Optional[DGLabService] = None
+    dg_lab_config = config.get("dg_lab", {})
+    if dg_lab_config and DG_LAB_AVAILABLE:
+        try:
+            logger.info("初始化 DGLab 服务...")
+            dg_lab_config_obj = DGLabConfig(**dg_lab_config)
+            dg_lab_service = DGLabService(dg_lab_config_obj)
+            await dg_lab_service.setup()
+            logger.info("DGLab 服务已初始化")
+        except Exception as e:
+            logger.error(f"初始化 DGLab 服务失败: {e}", exc_info=True)
+            logger.warning("DGLab 服务不可用，继续启动其他服务")
+            dg_lab_service = None
+    elif dg_lab_config and not DG_LAB_AVAILABLE:
+        logger.warning("配置中启用了 DGLab 服务，但 aiohttp 未安装。请运行 `uv add aiohttp`")
+    else:
+        logger.info("未检测到 DGLab 配置，DGLab 服务将被禁用")
 
     # 事件总线
     logger.info("初始化事件总线、数据流协调器和 AmaidesuCore...")
@@ -348,7 +377,20 @@ async def create_app_components(
 
     await core.connect()
 
-    return core, output_coordinator, input_coordinator, llm_service, decision_provider_manager, input_provider_manager
+    # 注册 DGLab 服务到服务管理器
+    if dg_lab_service:
+        core.register_service("dg_lab", dg_lab_service)
+        logger.info("DGLab 服务已注册到服务管理器")
+
+    return (
+        core,
+        output_coordinator,
+        input_coordinator,
+        llm_service,
+        decision_provider_manager,
+        input_provider_manager,
+        dg_lab_service,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -401,6 +443,7 @@ async def run_shutdown(
     core: AmaidesuCore,
     decision_provider_manager: Optional[DecisionProviderManager],
     input_provider_manager: Optional[InputProviderManager],
+    dg_lab_service: Optional[DGLabService] = None,
 ) -> None:
     """按顺序执行关闭与清理。
 
@@ -408,7 +451,7 @@ async def run_shutdown(
     1. 先停止数据生产者（InputProvider）
     2. 等待待处理事件完成（grace period）
     3. 清理消费者（OutputCoordinator、DecisionProviderManager）
-    4. 清理基础设施（InputDomain、LLM、Core）
+    4. 清理基础设施（InputDomain、LLM、Core、DGLab）
     """
     # 1. 先停止输入Provider（数据生产者）
     if input_provider_manager:
@@ -451,6 +494,9 @@ async def run_shutdown(
 
     logger.info("正在关闭核心服务...")
     try:
+        # 注意：DGLab 服务现在由服务管理器自动清理
+        # 不需要在这里手动清理
+
         if llm_service:
             await llm_service.cleanup()
             logger.info("LLM 服务已清理")
@@ -507,6 +553,7 @@ async def main() -> None:
         llm_service,
         decision_provider_manager,
         input_provider_manager,
+        dg_lab_service,
     ) = await create_app_components(config, input_pipeline_manager, config_service, args.arch_validate)
 
     stop_event = asyncio.Event()
@@ -522,7 +569,13 @@ async def main() -> None:
 
     restore_signal_handlers(orig_sigint, orig_sigterm)
     await run_shutdown(
-        output_coordinator, input_coordinator, llm_service, core, decision_provider_manager, input_provider_manager
+        output_coordinator,
+        input_coordinator,
+        llm_service,
+        core,
+        decision_provider_manager,
+        input_provider_manager,
+        dg_lab_service,
     )
 
 

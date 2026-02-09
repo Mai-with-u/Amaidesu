@@ -22,6 +22,7 @@ except ImportError:
 from pydantic import Field
 
 from src.core.base.output_provider import OutputProvider
+from src.core.events.names import CoreEvents
 from src.domains.output.parameters.render_parameters import RenderParameters
 from src.core.utils.logger import get_logger
 from src.services.config.schemas.schemas.base import BaseProviderConfig
@@ -317,7 +318,7 @@ class SubtitleOutputProvider(OutputProvider):
         """内部设置"""
         # 注册事件监听器
         if self.event_bus:
-            self.event_bus.on("render.subtitle", self._handle_render_request, priority=50)
+            self.event_bus.on(CoreEvents.RENDER_SUBTITLE, self._handle_render_request, priority=50)
             self.logger.info("已注册 subtitle 渲染事件监听器")
 
     async def _render_internal(self, parameters: RenderParameters):

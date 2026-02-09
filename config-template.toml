@@ -48,6 +48,25 @@ model = "llama3"
 api_base = "http://localhost:11434/v1"
 api_key = "sk-dummy"            # Ollama 不需要真实 API key
 
+# ========== 共享服务配置 ==========
+
+# DG-Lab 硬件控制服务
+[dg_lab]
+# DG-Lab API 地址
+api_base_url = "http://127.0.0.1:8081"
+# 默认强度 (0-200)
+default_strength = 10
+# 默认波形预设: small | medium | big | random
+default_waveform = "big"
+# 默认电击持续时间（秒）
+shock_duration_seconds = 2.0
+# HTTP 请求超时时间（秒）
+request_timeout = 5.0
+# 最大强度限制（安全保护）
+max_strength = 50
+# 是否启用安全限制（推荐启用）
+enable_safety_limit = true
+
 # ========== Amaidesu核心配置 ==========
 
 [general]
@@ -170,11 +189,15 @@ enabled_inputs = [
     # B站弹幕输入
     # "bili_danmaku",           # 普通B站弹幕
     # "bili_danmaku_official",  # B站官方弹幕（不要和bili_danmaku同时启用）
-    # "bili_danmaku_selenium",  # B站弹幕-Selenium版
+    # "bili_danmaku_official_maicraft",  # B站官方弹幕（MaiCraft专用）
+
+    # 语音输入
+    # "stt",                   # 语音转文字（讯飞ASR + Silero VAD）
 
     # 其他输入
     # "mock_danmaku",           # 模拟弹幕
     # "read_pingmu",            # 读屏木
+    # "mainosaba",              # Mainosaba读屏
 ]
 
 # 常用参数覆盖（可选）
@@ -198,8 +221,16 @@ enabled_outputs = [
     # "tts",         # Edge TTS
     # "omni_tts",    # Omni TTS (GPT-SoVITS)
 
+    # 虚拟形象输出
+    # "avatar",      # 虚拟形象输出（支持VTS/VRChat/Live2D）
+
+    # OBS控制
+    # "obs_control", # OBS控制（文本显示、场景切换）
+
     # 其他输出
     # "sticker",     # 表情贴纸
+    # "remote_stream",  # 远程流媒体输出
+    # "warudo",      # Warudo控制
 ]
 
 # ExpressionGenerator配置
@@ -226,6 +257,8 @@ available_providers = [
     "maicore",        # MaiCore决策（默认，通过WebSocket连接MaiCore）
     "rule_engine",    # 规则引擎（本地规则匹配，低延迟）
     "local_llm",      # 本地LLM（直接调用LLM生成回复）
+    "keyword_action", # 关键词动作决策（基于规则的关键词匹配）
+    "maicraft",       # MaiCraft弹幕游戏决策
     "mock",           # 模拟Provider（用于测试）
 ]
 
@@ -276,3 +309,154 @@ match_mode = "any"  # any（任一关键词匹配） | all（所有关键词匹�
 # [providers.decision.overrides]
 # maicore.host = "192.168.1.100"
 # local_llm.client_type = "llm_fast"
+
+# ========== 新增 Provider 配置示例 ==========
+
+# --- STTInputProvider: 语音转文字 ---
+# [providers.input.inputs.stt]
+# type = "stt"
+#
+# # 音频配置
+# [providers.input.inputs.stt.audio]
+# sample_rate = 16000
+# channels = 1
+# dtype = "int16"
+# stt_input_device_name = "麦克风名称"  # 可选，留空使用默认设备
+# use_remote_stream = false  # 使用远程音频流
+#
+# # VAD 配置
+# [providers.input.inputs.stt.vad]
+# enable = true
+# vad_threshold = 0.5
+# silence_seconds = 1.0
+#
+# # 讯飞 ASR 配置
+# [providers.input.inputs.stt.iflytek_asr]
+# host = "wss://istream-iflytek.xf-yun.com"
+# path = "/v2/iat"
+# appid = "your_appid"
+# api_secret = "your_api_secret"
+# api_key = "your_api_key"
+# language = "zh_cn"
+# domain = "iat"
+#
+# # 消息配置
+# [providers.input.inputs.stt.message_config]
+# user_id = "stt_user"
+# user_nickname = "语音"
+
+# --- BiliDanmakuOfficialInputProvider: B站官方弹幕 ---
+# [providers.input.inputs.bili_danmaku_official]
+# type = "bili_danmaku_official"
+# id_code = "直播间ID代码"
+# app_id = "应用ID"
+# access_key = "访问密钥"
+# access_key_secret = "访问密钥Secret"
+# api_host = "https://live-open.biliapi.com"
+# message_cache_size = 1000
+#
+# # 上下文过滤（可选）
+# context_tags = ["游戏", "互动"]
+#
+# # 模板信息（可选）
+# enable_template_info = false
+# template_items = {}
+
+# --- KeywordActionDecisionProvider: 关键词动作决策 ---
+# [providers.decision.keyword_action]
+# type = "keyword_action"
+# global_cooldown = 1.0
+# default_response = ""
+#
+# [[providers.decision.keyword_action.actions]]
+# name = "微笑动作"
+# enabled = true
+# keywords = ["微笑", "smile", "😊"]
+# match_mode = "anywhere"
+# cooldown = 3.0
+# action_type = "hotkey"
+# action_params = { key = "smile" }
+# priority = 50
+
+# --- MaicraftDecisionProvider: 弹幕互动游戏决策 ---
+# [providers.decision.maicraft]
+# enabled = true
+# factory_type = "log"  # log | mcp
+# command_prefix = "!"
+#
+# [providers.decision.maicraft.command_mappings]
+# chat = "chat"
+# attack = "attack"
+
+# --- AvatarOutputProvider: 虚拟形象输出 ---
+# [providers.output.outputs.avatar]
+# type = "avatar"
+# adapter_type = "vts"  # vts | vrchat | live2d
+#
+# # VTS 特定配置
+# vts_host = "127.0.0.1"
+# vts_port = 8000
+#
+# # VRChat 特定配置
+# vrc_host = "127.0.0.1"
+# vrc_in_port = 9001
+# vrc_out_port = 9000
+# enable_server = false
+
+# --- GPTSoVITSOutputProvider: GPT-SoVITS 语音合成 ---
+# [providers.output.outputs.gptsovits]
+# type = "gptsovits"
+# host = "127.0.0.1"
+# port = 9880
+# ref_audio_path = "path/to/reference.wav"
+# prompt_text = "参考文本"
+# text_language = "zh"
+# prompt_language = "zh"
+# top_k = 20
+# top_p = 0.6
+# temperature = 0.3
+# speed_factor = 1.0
+# streaming_mode = true
+# sample_rate = 32000
+# output_device_name = "扬声器名称"
+
+# --- ObsControlOutputProvider: OBS 控制 ---
+# [providers.output.outputs.obs_control]
+# type = "obs_control"
+# host = "localhost"
+# port = 4455
+# password = "your_password"  # 可选
+# text_source_name = "text"
+# typewriter_enabled = false
+# typewriter_speed = 0.1
+# typewriter_delay = 0.5
+# test_on_connect = true
+
+# --- StickerOutputProvider: 贴纸输出 ---
+# [providers.output.outputs.sticker]
+# type = "sticker"
+# sticker_size = 0.33
+# sticker_rotation = 90
+# sticker_position_x = 0.0
+# sticker_position_y = 0.0
+# image_width = 256
+# image_height = 256
+# cool_down_seconds = 5.0
+# display_duration_seconds = 3.0
+
+# --- RemoteStreamOutputProvider: 远程流媒体输出 ---
+# [providers.output.outputs.remote_stream]
+# type = "remote_stream"
+# server_mode = true
+# host = "0.0.0.0"
+# port = 8765
+# audio_sample_rate = 16000
+# audio_channels = 1
+# audio_format = "int16"
+# audio_chunk_size = 1024
+# image_width = 640
+# image_height = 480
+# image_format = "jpeg"
+# image_quality = 80
+# reconnect_delay = 5
+# max_reconnect_attempts = -1  # -1 表示无限

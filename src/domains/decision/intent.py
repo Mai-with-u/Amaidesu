@@ -11,7 +11,7 @@ import time
 from pydantic import BaseModel, Field
 
 # 从 core.types 导入共享类型
-from src.core.types import EmotionType, ActionType, IntentAction
+from src.core.types import EmotionType, IntentAction
 
 
 class SourceContext(BaseModel):

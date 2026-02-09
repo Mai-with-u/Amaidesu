@@ -5,13 +5,15 @@ Sticker Output Provider
 """
 
 import time
-
 import base64
 import io
+from typing import Optional, Any
+
 from PIL import Image
 from pydantic import Field
 
 from src.core.base.output_provider import OutputProvider
+from src.core.events.names import CoreEvents
 from src.domains.output.parameters.render_parameters import RenderParameters
 from src.core.utils.logger import get_logger
 from src.services.config.schemas.schemas.base import BaseProviderConfig
@@ -65,12 +67,26 @@ class StickerOutputProvider(OutputProvider):
         self.last_trigger_time: float = 0.0
         self.display_duration_seconds = self.typed_config.display_duration_seconds
 
+        # VTS Provider 引用（延迟初始化）
+        self._vts_provider: Optional[Any] = None
+
+        # 当前加载的贴纸实例ID（用于卸载）
+        self._current_sticker_id: Optional[str] = None
+        self._unload_task: Optional[Any] = None
+
     async def _setup_internal(self):
         """内部设置"""
         # 注册事件监听器
         if self.event_bus:
-            self.event_bus.on("render.sticker", self._handle_render_request, priority=50)
+            self.event_bus.on(CoreEvents.RENDER_STICKER, self._handle_render_request, priority=50)
             self.logger.info("已注册 sticker 渲染事件监听器")
+
+        # 查找 VTS Provider（通过 ProviderManager）
+        self._vts_provider = await self._find_vts_provider()
+        if self._vts_provider:
+            self.logger.info("已找到 VTS Provider，贴纸功能已启用")
+        else:
+            self.logger.warning("未找到 VTS Provider，贴纸功能将被禁用")
 
     async def _render_internal(self, parameters: RenderParameters):
         """
@@ -80,6 +96,11 @@ class StickerOutputProvider(OutputProvider):
             parameters: 渲染参数，图片base64数据通过metadata传递
                       metadata: {"sticker_image": "base64_data"}
         """
+        # 检查 VTS Provider 是否可用
+        if not self._vts_provider:
+            self.logger.warning("VTS Provider 不可用，无法显示贴纸")
+            return
+
         # 检查冷却时间
         current_time = time.monotonic()
         if current_time - self.last_trigger_time < self.cool_down_seconds:
@@ -93,14 +114,17 @@ class StickerOutputProvider(OutputProvider):
             self.logger.warning("未提供图片数据（metadata.sticker_image），跳过渲染。")
             return
 
-        # 调整图片大小
-        resized_image_base64 = self._resize_image_base64(image_base64)
+        try:
+            # 调整图片大小
+            resized_image_base64 = self._resize_image_base64(image_base64)
 
-        # 发送到VTS
-        await self._send_to_vts(resized_image_base64)
+            # 发送到VTS
+            await self._send_to_vts(resized_image_base64)
 
-        # 更新冷却时间
-        self.last_trigger_time = time.monotonic()
+            # 更新冷却时间
+            self.last_trigger_time = time.monotonic()
+        except Exception as e:
+            self.logger.error(f"渲染贴纸失败: {e}", exc_info=True)
 
     def _resize_image_base64(self, base64_str: str) -> str:
         """
@@ -154,13 +178,99 @@ class StickerOutputProvider(OutputProvider):
         Args:
             image_base64: base64编码的图片数据
         """
-        # 由于当前架构限制，我们暂时通过事件发送请求
-        # 未来可能需要更完善的服务注册机制
-        self.logger.debug(f"发送贴纸到VTS (大小: {self.sticker_size}, 旋转: {self.sticker_rotation})")
+        try:
+            # 取消之前的卸载任务（如果存在）
+            if self._unload_task and not self._unload_task.done():
+                self._unload_task.cancel()
+                self.logger.debug("取消之前的卸载任务")
+
+            # 如果已有贴纸，先卸载
+            if self._current_sticker_id:
+                await self._unload_current_sticker()
+
+            # 使用 VTS Provider 的 load_item 方法加载贴纸
+            if hasattr(self._vts_provider, "load_item"):
+                instance_id = await self._vts_provider.load_item(
+                    file_name="sticker.png",  # 使用固定文件名，因为数据在 custom_data_base64
+                    position_x=self.sticker_position_x,
+                    position_y=self.sticker_position_y,
+                    size=self.sticker_size,
+                    rotation=self.sticker_rotation,
+                    fade_time=0.5,  # 淡入时间
+                    order=10,  # 较高的层级，确保在模型上方
+                    custom_data_base64=image_base64,
+                )
+
+                if instance_id:
+                    self._current_sticker_id = instance_id
+                    self.logger.info(f"贴纸已加载到VTS: {instance_id}")
+
+                    # 设置自动卸载任务
+                    import asyncio
+
+                    self._unload_task = asyncio.create_task(self._delayed_unload())
+                else:
+                    self.logger.error("贴纸加载失败")
+            else:
+                self.logger.error("VTS Provider 不支持 load_item 方法")
+
+        except Exception as e:
+            self.logger.error(f"发送贴纸到VTS失败: {e}", exc_info=True)
+
+    async def _unload_current_sticker(self):
+        """卸载当前贴纸"""
+        if self._current_sticker_id and hasattr(self._vts_provider, "unload_item"):
+            try:
+                success = await self._vts_provider.unload_item(item_instance_id_list=[self._current_sticker_id])
+                if success:
+                    self.logger.debug(f"贴纸已卸载: {self._current_sticker_id}")
+                self._current_sticker_id = None
+            except Exception as e:
+                self.logger.error(f"卸载贴纸失败: {e}")
+
+    async def _delayed_unload(self):
+        """延迟卸载贴纸"""
+        import asyncio
+
+        try:
+            await asyncio.sleep(self.display_duration_seconds)
+            await self._unload_current_sticker()
+        except asyncio.CancelledError:
+            self.logger.debug("延迟卸载任务被取消")
+        except Exception as e:
+            self.logger.error(f"延迟卸载失败: {e}")
+
+    async def _find_vts_provider(self) -> Optional[Any]:
+        """
+        查找 VTS Provider
+
+        Returns:
+            VTS Provider 实例或 None
+        """
+        # TODO: 通过 ProviderManager 或其他方式获取 VTS Provider
+        # 当前返回 None，需要集成实际的 Provider 查找逻辑
+        return None
 
     async def _cleanup_internal(self):
         """内部清理"""
-        pass
+        # 取消卸载任务
+        if self._unload_task and not self._unload_task.done():
+            self._unload_task.cancel()
+            try:
+                await self._unload_task
+            except Exception:
+                pass
+
+        # 卸载当前贴纸
+        await self._unload_current_sticker()
+
+        # 取消事件订阅
+        if self.event_bus:
+            try:
+                self.event_bus.off(CoreEvents.RENDER_STICKER, self._handle_render_request)
+                self.logger.debug("已取消 sticker 渲染事件监听器")
+            except Exception as e:
+                self.logger.warning(f"取消事件订阅失败: {e}")
 
     async def _handle_render_request(self, event_name: str, data: RenderParameters, source: str):
         """处理贴纸渲染请求"""
