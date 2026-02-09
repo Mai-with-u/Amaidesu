@@ -189,10 +189,10 @@ class ConsoleInputPlugin(BasePlugin):
         parts = cmd_line[1:].strip().split()
         if not parts:
             return None
-            
+
         cmd_name = parts[0].lower()
         args = parts[1:]
-        
+
         # 显示帮助
         if cmd_name == "help":
             help_text = """
@@ -210,19 +210,19 @@ class ConsoleInputPlugin(BasePlugin):
             """
             print(help_text)
             return None
-            
+
         # 礼物命令
         elif cmd_name == "gift":
             return await self._create_gift_message(args)
-            
+
         # 醒目留言命令
         elif cmd_name == "sc":
             return await self._create_sc_message(args)
-            
+
         # 大航海命令
         elif cmd_name == "guard":
             return await self._create_guard_message(args)
-            
+
         else:
             print(f"未知命令: {cmd_name}。输入 '/help' 查看可用命令。")
             return None
@@ -233,36 +233,33 @@ class ConsoleInputPlugin(BasePlugin):
         username = args[0] if len(args) > 0 else "测试用户"
         gift_name = args[1] if len(args) > 1 else "辣条"
         gift_count = args[2] if len(args) > 2 else "1"
-        
+
         try:
             count = int(gift_count)
         except ValueError:
             print(f"礼物数量必须是数字，当前输入: {gift_count}")
             return None
-            
+
         if count <= 0:
             print(f"礼物数量必须大于0，当前输入: {count}")
             return None
-            
+
         messages = []
         base_timestamp = time.time()
         user_id = f"test_gift_{hash(username) % 10000}"
-        
+
         print(f"💝 发送礼物测试: {username} -> {count}个{gift_name} (将发送{count}次)")
-        
+
         # 创建指定数量的独立礼物消息
         for i in range(count):
             timestamp = base_timestamp + i * 0.01  # 每个消息间隔0.1秒的时间戳
             message_id = f"test_gift_{int(timestamp * 1000)}_{i}"
-            
+
             # User Info
             user_info = UserInfo(
-                platform=self.core.platform,
-                user_id=user_id,
-                user_nickname=username,
-                user_cardname=username
+                platform=self.core.platform, user_id=user_id, user_nickname=username, user_cardname=username
             )
-            
+
             # Group Info (可选)
             group_info: Optional[GroupInfo] = None
             if self.message_config.get("enable_group_info", False):
@@ -271,16 +268,13 @@ class ConsoleInputPlugin(BasePlugin):
                     group_id=self.message_config.get("group_id", 0),
                     group_name=self.message_config.get("group_name", "default"),
                 )
-            
+
             # Format Info
-            format_info = FormatInfo(
-                content_format=["text", "gift"],
-                accept_format=["text", "gift"]
-            )
-            
+            format_info = FormatInfo(content_format=["text", "gift"], accept_format=["text", "gift"])
+
             # Additional Config
             additional_config = {"source": "console_gift_test", "sender_name": username}
-            
+
             # Message Info
             message_info = BaseMessageInfo(
                 platform=self.core.platform,
@@ -292,21 +286,21 @@ class ConsoleInputPlugin(BasePlugin):
                 format_info=format_info,
                 additional_config=additional_config,
             )
-            
+
             # Message Segment - 单个礼物消息
             message_segment = Seg(
                 "seglist",
                 [
                     Seg(type="gift", data=f"{gift_name}:1"),  # 每次都是1个
-                    Seg("priority_info", {"message_type": "vip", "priority": 1})
-                ]
+                    Seg("priority_info", {"message_type": "vip", "priority": 1}),
+                ],
             )
-            
+
             raw_message = f"{username} 送出了 1 个 {gift_name}"
-            
+
             message = MessageBase(message_info=message_info, message_segment=message_segment, raw_message=raw_message)
             messages.append(message)
-        
+
         # 如果只有一个礼物，返回单个消息；否则返回消息列表
         return messages[0] if count == 1 else messages
 
@@ -315,21 +309,18 @@ class ConsoleInputPlugin(BasePlugin):
         # 默认参数
         username = args[0] if len(args) > 0 else "SC大佬"
         content = " ".join(args[1:]) if len(args) > 1 else "这是一条测试醒目留言！"
-        
+
         data = f"{args[2]}:{args[1]}"
-        
+
         timestamp = time.time()
         user_id = f"test_sc_{hash(username) % 10000}"
         message_id = f"test_sc_{int(timestamp * 1000)}"
-        
+
         # User Info
         user_info = UserInfo(
-            platform=self.core.platform,
-            user_id=user_id,
-            user_nickname=username,
-            user_cardname=username
+            platform=self.core.platform, user_id=user_id, user_nickname=username, user_cardname=username
         )
-        
+
         # Group Info (可选)
         group_info: Optional[GroupInfo] = None
         if self.message_config.get("enable_group_info", False):
@@ -338,16 +329,13 @@ class ConsoleInputPlugin(BasePlugin):
                 group_id=self.message_config.get("group_id", 0),
                 group_name=self.message_config.get("group_name", "default"),
             )
-        
+
         # Format Info
-        format_info = FormatInfo(
-            content_format=["text"],
-            accept_format=["text"]
-        )
-        
+        format_info = FormatInfo(content_format=["text"], accept_format=["text"])
+
         # Additional Config
         additional_config = {"source": "console_sc_test", "sender_name": username}
-        
+
         # Message Info
         message_info = BaseMessageInfo(
             platform=self.core.platform,
@@ -359,19 +347,16 @@ class ConsoleInputPlugin(BasePlugin):
             format_info=format_info,
             additional_config=additional_config,
         )
-        
+
         # Message Segment - 醒目留言
         message_segment = Seg(
             "seglist",
-            [
-                Seg(type="superchat", data=data),
-                Seg("priority_info", {"message_type": "super_vip", "priority": 2})
-            ]
+            [Seg(type="superchat", data=data), Seg("priority_info", {"message_type": "super_vip", "priority": 2})],
         )
-        
+
         raw_message = f"{username} 发送了醒目留言：{content}"
         print(f"⭐ 发送醒目留言测试: {raw_message}")
-        
+
         return MessageBase(message_info=message_info, message_segment=message_segment, raw_message=raw_message)
 
     async def _create_guard_message(self, args: List[str]) -> Optional[MessageBase]:
@@ -379,25 +364,22 @@ class ConsoleInputPlugin(BasePlugin):
         # 默认参数
         username = args[0] if len(args) > 0 else "大航海"
         guard_level = args[1] if len(args) > 1 else "舰长"
-        
+
         # 验证大航海等级
         valid_levels = ["舰长", "提督", "总督"]
         if guard_level not in valid_levels:
             print(f"大航海等级必须是以下之一: {valid_levels}，当前输入: {guard_level}")
             return None
-        
+
         timestamp = time.time()
         user_id = f"test_guard_{hash(username) % 10000}"
         message_id = f"test_guard_{int(timestamp * 1000)}"
-        
+
         # User Info
         user_info = UserInfo(
-            platform=self.core.platform,
-            user_id=user_id,
-            user_nickname=username,
-            user_cardname=username
+            platform=self.core.platform, user_id=user_id, user_nickname=username, user_cardname=username
         )
-        
+
         # Group Info (可选)
         group_info: Optional[GroupInfo] = None
         if self.message_config.get("enable_group_info", False):
@@ -406,16 +388,13 @@ class ConsoleInputPlugin(BasePlugin):
                 group_id=self.message_config.get("group_id", 0),
                 group_name=self.message_config.get("group_name", "default"),
             )
-        
+
         # Format Info
-        format_info = FormatInfo(
-            content_format=["text"],
-            accept_format=["text"]
-        )
-        
+        format_info = FormatInfo(content_format=["text"], accept_format=["text"])
+
         # Additional Config
         additional_config = {"source": "console_guard_test", "sender_name": username}
-        
+
         # Message Info
         message_info = BaseMessageInfo(
             platform=self.core.platform,
@@ -427,19 +406,19 @@ class ConsoleInputPlugin(BasePlugin):
             format_info=format_info,
             additional_config=additional_config,
         )
-        
+
         # Message Segment - 大航海
         message_segment = Seg(
             "seglist",
             [
                 Seg(type="text", data=f"开通了{guard_level}"),
-                Seg("priority_info", {"message_type": "super_vip", "priority": 3})
-            ]
+                Seg("priority_info", {"message_type": "super_vip", "priority": 3}),
+            ],
         )
-        
+
         raw_message = f"{username} 开通了{guard_level}"
         print(f"⚓ 发送大航海测试: {raw_message}")
-        
+
         return MessageBase(message_info=message_info, message_segment=message_segment, raw_message=raw_message)
 
     async def _create_console_message(self, text: str) -> MessageBase:
@@ -465,8 +444,6 @@ class ConsoleInputPlugin(BasePlugin):
                 group_id=cfg.get("group_id", 0),
                 group_name=cfg.get("group_name", "default"),
             )
-            
-            
 
         # --- Format Info ---
         format_info = FormatInfo(

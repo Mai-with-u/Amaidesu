@@ -58,9 +58,9 @@ class DGLabServicePlugin(BasePlugin):
             await self.http_session.close()
             self.logger.info("aiohttp.ClientSession 已关闭。")
             self.http_session = None
-        
+
         # 理论上服务也应该取消注册，但核心目前没有提供 unregister_service
-        
+
         await super().cleanup()
         self.logger.info("DGLabServicePlugin 清理完成。")
 
@@ -86,7 +86,7 @@ class DGLabServicePlugin(BasePlugin):
             strength_to_use = strength if strength is not None else self.default_strength
             waveform_to_use = waveform if waveform is not None else self.default_waveform
             duration_to_use = duration if duration is not None else self.shock_duration
-            
+
             self.logger.info(
                 f"触发电击序列: 强度={strength_to_use}, 波形='{waveform_to_use}', 持续时间={duration_to_use}s"
             )
@@ -118,12 +118,8 @@ class DGLabServicePlugin(BasePlugin):
             # --- 强度归零 ---
             self.logger.info("电击持续时间结束，将强度归零。")
             reset_tasks = [
-                self._make_api_call(
-                    strength_url, {"channel": "a", "strength": 0}, headers, "重置通道 A 强度"
-                ),
-                self._make_api_call(
-                    strength_url, {"channel": "b", "strength": 0}, headers, "重置通道 B 强度"
-                ),
+                self._make_api_call(strength_url, {"channel": "a", "strength": 0}, headers, "重置通道 A 强度"),
+                self._make_api_call(strength_url, {"channel": "b", "strength": 0}, headers, "重置通道 B 强度"),
             ]
             await asyncio.gather(*reset_tasks)
 
@@ -138,9 +134,7 @@ class DGLabServicePlugin(BasePlugin):
                     return True
                 else:
                     error_text = await response.text()
-                    self.logger.error(
-                        f"API 调用失败: {description} (状态码: {response.status}, 响应: {error_text})"
-                    )
+                    self.logger.error(f"API 调用失败: {description} (状态码: {response.status}, 响应: {error_text})")
                     return False
         except aiohttp.ClientConnectorError as e:
             self.logger.error(f"API 连接失败: {description}。无法连接到 {self.api_base_url}。错误: {e}")
@@ -150,4 +144,4 @@ class DGLabServicePlugin(BasePlugin):
             return False
         except Exception as e:
             self.logger.error(f"API 调用时发生未知错误: {description}。错误: {e}", exc_info=True)
-            return False 
+            return False

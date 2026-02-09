@@ -613,12 +613,10 @@ class TTSPlugin(BasePlugin):
         self.input_pcm_queue = deque(b"")
         # 为音频数据队列添加最大长度限制，防止内存占用过高
         self.audio_data_queue = deque(maxlen=1000)  # 限制缓冲区大小，防止内存占用过高
-        
-        
+
         # 当前处理消息数据
         self.msg_id = ""
         self.message = None
-        
 
         self.stream = None
 
@@ -725,7 +723,9 @@ class TTSPlugin(BasePlugin):
                 try:
                     # 异步发送音频数据进行口型同步分析
                     self.logger.debug(f"发送音频数据进行口型同步分析: {len(pcm_data)}")
-                    await self.vts_lip_sync_service.process_tts_audio(pcm_data, sample_rate=self.tts_config.tts.sample_rate)
+                    await self.vts_lip_sync_service.process_tts_audio(
+                        pcm_data, sample_rate=self.tts_config.tts.sample_rate
+                    )
                 except Exception as e:
                     self.logger.debug(f"口型同步处理失败: {e}")
 
@@ -841,7 +841,7 @@ class TTSPlugin(BasePlugin):
                         text += process_seg(s)
                 elif seg.type == "tts_text":
                     # 用冒号分割，取第一个和后面的所有
-                    msg_id, text = seg.data.split(':', 1)
+                    msg_id, text = seg.data.split(":", 1)
                     self.msg_id = msg_id
                     self.logger.info(f"收到TTS文本消息，msg_id: {msg_id}, text: {text}")
                 elif seg.type == "reply":
@@ -867,7 +867,7 @@ class TTSPlugin(BasePlugin):
                 return text
 
             self.message = message
-            
+
             if message.message_segment:
                 original_text = process_seg(message.message_segment)
                 if not isinstance(original_text, str) or not original_text.strip():
@@ -980,7 +980,7 @@ class TTSPlugin(BasePlugin):
                 # 👇 第一次收到有效音频块时，立即发送字幕
                 if not subtitle_sent:
                     self.logger.debug("收到首个音频块，触发字幕显示")
-                    
+
                     # 发送 OBS 字幕
                     obs_service = self.core.get_service("obs_control")
                     if obs_service:
@@ -995,9 +995,7 @@ class TTSPlugin(BasePlugin):
                         try:
                             # 动态估算时长
                             estimated_duration = max(3.0, len(text) * 0.3)
-                            asyncio.create_task(
-                                subtitle_service.record_speech(text, estimated_duration)
-                            )
+                            asyncio.create_task(subtitle_service.record_speech(text, estimated_duration))
                         except Exception as e:
                             self.logger.error(f"调用 subtitle_service 出错: {e}", exc_info=True)
 
@@ -1017,5 +1015,6 @@ class TTSPlugin(BasePlugin):
                     self.logger.debug("回复生成页面已完成")
                 except Exception as e:
                     self.logger.debug(f"停止口型同步失败: {e}")
+
 
 plugin_entrypoint = TTSPlugin
