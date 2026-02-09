@@ -9,12 +9,13 @@ LocalLLMDecisionProvider - 本地LLM决策提供者
 
 from typing import Dict, Any, Optional, TYPE_CHECKING, Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field
 
 from src.core.base.decision_provider import DecisionProvider
 from src.domains.decision.intent import Intent, EmotionType, ActionType, IntentAction
 from src.core.utils.logger import get_logger
 from src.services.config.schemas.schemas.base import BaseProviderConfig
+from src.prompts import get_prompt_manager
 
 if TYPE_CHECKING:
     from src.core.event_bus import EventBus
@@ -32,13 +33,11 @@ class LocalLLMDecisionProvider(DecisionProvider):
         ```toml
         [local_llm]
         backend = "llm"  # 使用的 LLM 后端（llm, llm_fast, vlm）
-        prompt_template = "You are a helpful assistant. User: {text}"
         fallback_mode = "simple"
         ```
 
     属性:
         backend: 使用的 LLM 后端
-        prompt_template: Prompt模板，使用{text}占位符
         fallback_mode: 降级模式（"simple"返回简单响应，"error"抛出异常）
     """
 
@@ -50,20 +49,7 @@ class LocalLLMDecisionProvider(DecisionProvider):
 
         type: Literal["local_llm"] = "local_llm"
         backend: Literal["llm", "llm_fast", "vlm"] = Field(default="llm", description="使用的LLM后端名称")
-        prompt_template: str = Field(
-            default="You are a helpful AI assistant. Please respond to the user's message.\n\nUser: {text}\n\nAssistant:",
-            description="Prompt模板，使用{text}占位符",
-        )
         fallback_mode: Literal["simple", "echo", "error"] = Field(default="simple", description="降级模式")
-
-        @field_validator("prompt_template")
-        @classmethod
-        def validate_prompt_template(cls, v: str) -> str:
-            """验证prompt_template包含{text}占位符"""
-            if "{text}" not in v:
-                # 尝试自动修复
-                v = v.replace("{}", "{text}")
-            return v
 
     def __init__(self, config: Dict[str, Any]):
         """
@@ -81,9 +67,6 @@ class LocalLLMDecisionProvider(DecisionProvider):
 
         # LLM 配置
         self.client_type = self.typed_config.backend  # 使用的后端类型
-
-        # Prompt 配置
-        self.prompt_template = self.typed_config.prompt_template
 
         # 降级模式配置
         self.fallback_mode = self.typed_config.fallback_mode
@@ -120,11 +103,6 @@ class LocalLLMDecisionProvider(DecisionProvider):
         else:
             self.logger.warning("LLMManager 未通过依赖注入提供，决策功能将不可用")
 
-        # 验证 prompt 模板包含 {text} 占位符
-        if "{text}" not in self.prompt_template:
-            self.logger.warning("prompt_template 中未包含 {text} 占位符，将直接替换")
-            self.prompt_template = self.prompt_template.replace("{}", "{text}")
-
         self.logger.info(f"LocalLLMDecisionProvider 初始化完成 (Client: {self.client_type})")
 
     async def decide(self, normalized_message: "NormalizedMessage") -> Intent:
@@ -145,8 +123,8 @@ class LocalLLMDecisionProvider(DecisionProvider):
 
         self._total_requests += 1
 
-        # 构建提示词
-        prompt = self.prompt_template.format(text=normalized_message.text)
+        # 构建提示词（使用 PromptManager 渲染模板）
+        prompt = get_prompt_manager().render("decision/local_llm", text=normalized_message.text)
 
         try:
             # 使用 LLM Service 进行调用
@@ -230,9 +208,7 @@ class LocalLLMDecisionProvider(DecisionProvider):
             "name": "LocalLLMDecisionProvider",
             "version": "1.0.0",
             "client_type": self.client_type,
-            "prompt_template": self.prompt_template[:50] + "..."
-            if len(self.prompt_template) > 50
-            else self.prompt_template,
+            "template_name": "decision/local_llm",
             "fallback_mode": self.fallback_mode,
             "total_requests": self._total_requests,
             "successful_requests": self._successful_requests,

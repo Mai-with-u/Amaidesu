@@ -21,6 +21,7 @@ from src.core.base.raw_data import RawData
 from src.core.event_bus import EventBus
 from src.core.utils.logger import get_logger
 from src.services.config.schemas.schemas.base import BaseProviderConfig
+from src.prompts import get_prompt_manager
 
 
 class ControlMethod(Enum):
@@ -182,20 +183,8 @@ class MainosabaInputProvider(InputProvider):
             return None
 
         try:
-            # 构建 prompt
-            prompt = """请识别这张游戏截图中的对话文本。
-这是《魔法少女的魔女裁判》游戏的界面。
-
-请仔细识别并提取游戏中的对话内容，只返回角色说的台词文本。
-如果是系统提示或界面元素，请忽略。
-如果没有对话文本，才返回对画面的描述。
-
-请以纯文本形式返回识别到的对话内容，如果没有角色只有旁白，那么就以"旁白"作为角色名。格式为：
-
-游戏角色名:发言内容
-或者
-游戏角色名:(角色心理描写)
-"""
+            # 构建 prompt（从集中管理的模板获取）
+            prompt = get_prompt_manager().get_raw("input/mainosaba_ocr")
 
             # 构建图像 URL（LLMClient 支持 base64 格式）
             image_data_url = f"data:image/png;base64,{image_base64}"
