@@ -19,8 +19,7 @@ from pydantic import Field
 from maim_message import Router, RouteConfig, TargetConfig, MessageBase
 
 from src.core.base.decision_provider import DecisionProvider
-from src.core.connectors.websocket_connector import WebSocketConnector
-from src.core.connectors.router_adapter import RouterAdapter
+from .router_adapter import RouterAdapter
 from src.domains.decision.intent import Intent
 from src.core.utils.logger import get_logger
 from src.services.config.schemas.schemas.base import BaseProviderConfig
@@ -38,7 +37,8 @@ class MaiCoreDecisionProvider(DecisionProvider):
 
     职责:
     - 决策逻辑 (decide)
-    - 协调 WebSocketConnector 和 RouterAdapter
+    - 直接使用 Router 管理 WebSocket 连接
+    - 使用 RouterAdapter 发送消息到 MaiCore
     - 使用 IntentParser 解析 MaiCore 响应为 Intent
 
     配置示例:
@@ -123,9 +123,9 @@ class MaiCoreDecisionProvider(DecisionProvider):
 
         # Router
         self._router: Optional[Router] = None
+        self._router_task: Optional[asyncio.Task] = None
 
         # 组件
-        self._ws_connector: Optional[WebSocketConnector] = None
         self._router_adapter: Optional[RouterAdapter] = None
         self._intent_parser = None  # IntentParser实例
 
@@ -164,11 +164,6 @@ class MaiCoreDecisionProvider(DecisionProvider):
         self._router_adapter = RouterAdapter(self._router, event_bus)
         self._router_adapter.register_message_handler(self._handle_maicore_message)
 
-        # 创建 WebSocketConnector
-        self._ws_connector = WebSocketConnector(
-            ws_url=self.ws_url, router=self._router, event_bus=event_bus, provider_name="maicore"
-        )
-
         # 初始化 IntentParser（需要LLMManager）
         llm_service = dependencies.get("llm_service") if dependencies else None
         if llm_service:
@@ -196,14 +191,35 @@ class MaiCoreDecisionProvider(DecisionProvider):
         self.logger.info(f"Router 配置完成，目标 MaiCore: {self.ws_url}")
 
     async def connect(self):
-        """启动 WebSocket 连接"""
-        if self._ws_connector:
-            await self._ws_connector.connect()
+        """启动 WebSocket 连接 - 直接使用 Router"""
+        if self._router:
+            # 创建 Router 运行任务
+            self._router_task = asyncio.create_task(self._router.run())
+            self.logger.info("MaiCore Router 运行任务已创建")
+
+            # 等待连接建立
+            await asyncio.sleep(1)
+
+            # 检查连接状态
+            if self._router.check_connection(self.platform):
+                self.logger.info("MaiCore WebSocket 连接初步建立")
+            else:
+                self.logger.warning("MaiCore WebSocket 连接尚未建立，Router 将在后台继续重试")
 
     async def disconnect(self):
-        """断开 WebSocket 连接"""
-        if self._ws_connector:
-            await self._ws_connector.disconnect()
+        """断开 WebSocket 连接 - 直接使用 Router"""
+        if self._router:
+            # 停止 Router（会断开所有连接）
+            await self._router.stop()
+            self.logger.info("MaiCore Router 已停止")
+
+        # 取消运行任务
+        if hasattr(self, "_router_task") and self._router_task:
+            self._router_task.cancel()
+            try:
+                await self._router_task
+            except asyncio.CancelledError:
+                pass
 
     def _normalized_to_message_base(self, normalized: "NormalizedMessage") -> Optional["MessageBase"]:
         """
@@ -258,7 +274,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
             RuntimeError: 如果未连接
             ConnectionError: 如果发送失败
         """
-        if not self._ws_connector or not self._ws_connector.is_connected:
+        if not self._is_router_connected:
             raise RuntimeError("MaiCore 未连接，无法发送消息")
 
         # 转换 NormalizedMessage 为 MessageBase
@@ -454,8 +470,13 @@ class MaiCoreDecisionProvider(DecisionProvider):
     @property
     def is_connected(self) -> bool:
         """获取连接状态"""
-        if self._ws_connector:
-            return self._ws_connector.is_connected
+        return self._is_router_connected
+
+    @property
+    def _is_router_connected(self) -> bool:
+        """检查 Router 是否已连接"""
+        if self._router:
+            return self._router.check_connection(self.platform)
         return False
 
     @property
