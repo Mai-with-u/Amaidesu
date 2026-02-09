@@ -56,10 +56,7 @@ class VTSProvider(OutputProvider):
         llm_model: str = Field(default="deepseek-chat", description="LLM模型名称")
         llm_temperature: float = Field(default=0.1, ge=0.0, le=2.0, description="LLM温度参数")
         llm_max_tokens: int = Field(default=100, ge=1, le=4096, description="LLM最大token数")
-        llm_prompt_prefix: Optional[str] = Field(
-            default=None,
-            description="LLM提示词前缀"
-        )
+        llm_prompt_prefix: Optional[str] = Field(default=None, description="LLM提示词前缀")
 
         # 情感热键映射
         emotion_hotkey_mapping: Dict[str, List[str]] = Field(
@@ -71,7 +68,7 @@ class VTSProvider(OutputProvider):
                 "shy": ["害羞", "脸红", "羞涩", "不好意思"],
                 "wink": ["眨眼", "wink", "眨眨眼"],
             },
-            description="情感热键映射"
+            description="情感热键映射",
         )
 
         # 口型同步配置
@@ -131,9 +128,9 @@ class VTSProvider(OutputProvider):
             except Exception as e:
                 self.logger.warning(f"LLM客户端初始化失败: {e}")
         self.llm_prompt_prefix = self.typed_config.llm_prompt_prefix or (
-            '你是一个VTube Studio热键匹配助手。根据用户的文本内容，从提供的热键列表中选择最合适的热键。\n\n'
+            "你是一个VTube Studio热键匹配助手。根据用户的文本内容，从提供的热键列表中选择最合适的热键。\n\n"
             '用户文本: "{text}"\n\n可用的热键列表:\n{hotkey_list_str}\n\n规则:\n'
-            '1. 仔细分析用户文本的情感和动作意图\n2. 从热键列表中选择最匹配的一个热键名称\n'
+            "1. 仔细分析用户文本的情感和动作意图\n2. 从热键列表中选择最匹配的一个热键名称\n"
             '3. 如果没有合适的匹配，返回 "NONE"\n4. 只返回热键名称或"NONE"，不要其他解释\n\n你的选择:'
         )
 

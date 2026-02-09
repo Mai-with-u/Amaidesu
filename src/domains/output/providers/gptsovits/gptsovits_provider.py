@@ -84,7 +84,9 @@ class GPTSoVITSOutputProvider(OutputProvider):
         speed_factor: float = Field(default=1.0, ge=0.1, le=3.0, description="语速因子")
         streaming_mode: bool = Field(default=True, description="是否启用流式模式")
         media_type: str = Field(default="wav", pattern=r"^(wav|mp3|ogg)$", description="媒体类型")
-        text_split_method: str = Field(default="latency", pattern=r"^(latency|punctuation)$", description="文本分割方法")
+        text_split_method: str = Field(
+            default="latency", pattern=r"^(latency|punctuation)$", description="文本分割方法"
+        )
         batch_size: int = Field(default=1, ge=1, le=10, description="批处理大小")
         batch_threshold: float = Field(default=0.7, ge=0.0, le=1.0, description="批处理阈值")
         repetition_penalty: float = Field(default=1.0, ge=0.5, le=2.0, description="重复惩罚")

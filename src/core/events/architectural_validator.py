@@ -22,11 +22,7 @@ class ArchitecturalViolationError(Exception):
         self.subscriber = subscriber
         self.event_name = event_name
         self.reason = reason
-        super().__init__(
-            f"{subscriber} 不允许订阅 {event_name}。\n"
-            f"原因: {reason}\n"
-            f"这违反了3域架构的分层约束。"
-        )
+        super().__init__(f"{subscriber} 不允许订阅 {event_name}。\n原因: {reason}\n这违反了3域架构的分层约束。")
 
 
 class ArchitecturalValidator:
@@ -62,14 +58,12 @@ class ArchitecturalValidator:
         "InputDomain": None,  # 纯粹的数据生产者
         "InputProvider": None,  # 所有输入 Provider 的基类
         "InputProviderManager": None,  # 输入 Provider 管理器
-
         # === Input Domain Pipelines ===
         "PipelineManager": None,  # 管道管理器
         "TextPipeline": None,  # 所有文本管道基类
         "SimilarTextFilterPipeline": None,
         "RateLimitPipeline": None,
         "MessageLoggerPipeline": None,
-
         # === Decision Domain (可订阅 Input，不可订阅 Output) ===
         "DecisionManager": [
             "normalization.message_ready",
@@ -82,7 +76,6 @@ class ArchitecturalValidator:
         "MaiCoreDecisionProvider": None,  # 具体实现不应该直接订阅
         "LocalLLMDecisionProvider": None,
         "RuleEngineDecisionProvider": None,
-
         # === Core Orchestrator (协调跨域) ===
         "FlowCoordinator": [
             "decision.intent_generated",
@@ -91,7 +84,6 @@ class ArchitecturalValidator:
             "core.startup",
             "core.shutdown",
         ],
-
         # === Output Domain (可订阅 Decision，不可订阅 Input) ===
         "OutputProviderManager": [
             "decision.intent_generated",
@@ -104,7 +96,6 @@ class ArchitecturalValidator:
             "decision.intent_generated",
             "decision.response_generated",
         ],
-
         # === Output Providers (可订阅 Decision/Expression 事件) ===
         "OutputProvider": [
             "expression.*",  # 允许所有 expression.* 事件
@@ -129,10 +120,8 @@ class ArchitecturalValidator:
             "render.completed",
             "render.failed",
         ],
-
         # === Expression Generator (纯函数，不订阅) ===
         "ExpressionGenerator": None,
-
         # === Core ===
         "AmaidesuCore": [
             "core.*",
@@ -158,13 +147,16 @@ class ArchitecturalValidator:
         self.strict = strict
 
         # 保存原始方法的引用
-        self._original_on = event_bus.on.__func__ if hasattr(event_bus.on, '__func__') else event_bus.on
-        self._original_on_typed = event_bus.on_typed.__func__ if hasattr(event_bus.on_typed, '__func__') else event_bus.on_typed
+        self._original_on = event_bus.on.__func__ if hasattr(event_bus.on, "__func__") else event_bus.on
+        self._original_on_typed = (
+            event_bus.on_typed.__func__ if hasattr(event_bus.on_typed, "__func__") else event_bus.on_typed
+        )
 
         if self.enabled:
             # 包装原始订阅方法
             # 使用 types.MethodType 确保绑定方法正确包装
             import types
+
             event_bus.on = types.MethodType(self._validated_on, event_bus)
             event_bus.on_typed = types.MethodType(self._validated_on_typed, event_bus)
 
@@ -252,12 +244,18 @@ class ArchitecturalValidator:
 
                 # 跳过验证器内部的方法
                 frame_name = caller_frame.f_code.co_name
-                if frame_name in ('_validated_on', '_validated_on_typed', '_get_subscriber_name',
-                                  'on', 'on_typed', 'emit'):
+                if frame_name in (
+                    "_validated_on",
+                    "_validated_on_typed",
+                    "_get_subscriber_name",
+                    "on",
+                    "on_typed",
+                    "emit",
+                ):
                     continue
 
                 # 检查这个栈帧是否有 self 对象
-                caller_self = caller_frame.f_locals.get('self')
+                caller_self = caller_frame.f_locals.get("self")
                 if caller_self is not None:
                     # 找到了！返回类名
                     class_name = caller_self.__class__.__name__
@@ -265,7 +263,7 @@ class ArchitecturalValidator:
 
                 # 如果没有 self，可能是模块级别的调用
                 # 检查是否在 try_subscribe 等测试方法中
-                if 'test' in frame_name or 'try_subscribe' in frame_name:
+                if "test" in frame_name or "try_subscribe" in frame_name:
                     # 尝试从函数名推断类名
                     # 例如：MockInputProvider.try_subscribe
                     return frame_name  # 返回函数名，后续会通过基类匹配
@@ -297,9 +295,7 @@ class ArchitecturalValidator:
                 return
             else:
                 raise ArchitecturalViolationError(
-                    subscriber=subscriber,
-                    event_name=event_name,
-                    reason=f"{subscriber} 不应该订阅任何事件（仅发布）"
+                    subscriber=subscriber, event_name=event_name, reason=f"{subscriber} 不应该订阅任何事件（仅发布）"
                 )
 
         # 空列表表示允许所有事件（用于向后兼容）
@@ -309,9 +305,7 @@ class ArchitecturalValidator:
         # 检查是否允许订阅该事件
         if not self._is_event_allowed(event_name, allowed_events):
             raise ArchitecturalViolationError(
-                subscriber=subscriber,
-                event_name=event_name,
-                reason=f"允许的事件: {allowed_events}"
+                subscriber=subscriber, event_name=event_name, reason=f"允许的事件: {allowed_events}"
             )
 
     def _get_allowed_events(self, subscriber: str) -> Optional[List[str]]:
@@ -407,19 +401,16 @@ class ArchitecturalValidator:
             "GameProvider": {"InputProvider"},
             "VoiceInputProvider": {"InputProvider"},
             "MockInputProvider": {"InputProvider"},  # 测试类
-
             # Decision Providers
             "MaiCoreDecisionProvider": {"DecisionProvider"},
             "LocalLLMDecisionProvider": {"DecisionProvider"},
             "RuleEngineDecisionProvider": {"DecisionProvider"},
             "MockDecisionProvider": {"DecisionProvider"},  # 测试类
-
             # Output Providers
             "VTSProvider": {"OutputProvider"},
             "TTSProvider": {"OutputProvider"},
             "SubtitleProvider": {"OutputProvider"},
             "MockOutputProvider": {"OutputProvider"},  # 测试类
-
             # Pipelines
             "SimilarTextFilterPipeline": {"TextPipeline"},
             "RateLimitPipeline": {"TextPipeline"},
@@ -433,6 +424,7 @@ class ArchitecturalValidator:
         if self.enabled:
             self.enabled = False
             import types
+
             self.event_bus.on = types.MethodType(self._original_on, self.event_bus)
             self.event_bus.on_typed = types.MethodType(self._original_on_typed, self.event_bus)
 
@@ -441,5 +433,6 @@ class ArchitecturalValidator:
         if not self.enabled:
             self.enabled = True
             import types
+
             self.event_bus.on = types.MethodType(self._validated_on, self.event_bus)
             self.event_bus.on_typed = types.MethodType(self._validated_on_typed, self.event_bus)

@@ -23,13 +23,11 @@ from src.core.events.names import CoreEvents
 # 初始化测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_mock_danmaku_provider_initialization():
     """测试 MockDanmakuProvider 初始化"""
-    config = {
-        "interval": 3,
-        "messages": ["测试消息1", "测试消息2", "测试消息3"]
-    }
+    config = {"interval": 3, "messages": ["测试消息1", "测试消息2", "测试消息3"]}
 
     provider = MockDanmakuProvider(config)
 
@@ -50,6 +48,7 @@ async def test_mock_danmaku_provider_default_config():
 # RawData 格式测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_mock_danmaku_provider_raw_data_format():
     """测试 MockDanmakuProvider 生成的 RawData 格式"""
@@ -57,13 +56,9 @@ async def test_mock_danmaku_provider_raw_data_format():
 
     # 测试弹幕 RawData 格式
     raw_data = RawData(
-        content={
-            "text": "测试弹幕消息",
-            "user_name": "测试用户",
-            "user_id": "12345"
-        },
+        content={"text": "测试弹幕消息", "user_name": "测试用户", "user_id": "12345"},
         source="mock_danmaku",
-        data_type="danmaku"
+        data_type="danmaku",
     )
 
     assert raw_data.content["text"] == "测试弹幕消息"
@@ -76,6 +71,7 @@ async def test_mock_danmaku_provider_raw_data_format():
 # =============================================================================
 # 数据流测试
 # =============================================================================
+
 
 @pytest.mark.asyncio
 async def test_mock_danmaku_provider_data_flow():
@@ -98,19 +94,13 @@ async def test_mock_danmaku_provider_data_flow():
     # 模拟 MockDanmakuProvider 发布 RawData
     MockDanmakuProvider({})
     raw_data = RawData(
-        content={
-            "text": "主播好！",
-            "user_name": "测试粉丝",
-            "user_id": "67890"
-        },
+        content={"text": "主播好！", "user_name": "测试粉丝", "user_id": "67890"},
         source="mock_danmaku",
-        data_type="danmaku"
+        data_type="danmaku",
     )
 
     await event_bus.emit(
-        CoreEvents.PERCEPTION_RAW_DATA_GENERATED,
-        RawDataPayload.from_raw_data(raw_data),
-        source="MockDanmakuProvider"
+        CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload.from_raw_data(raw_data), source="MockDanmakuProvider"
     )
 
     await asyncio.sleep(0.2)

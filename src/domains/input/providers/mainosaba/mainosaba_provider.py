@@ -45,37 +45,15 @@ class MainosabaInputProvider(InputProvider):
         """Mainosaba游戏画面采集输入Provider配置"""
 
         type: Literal["mainosaba"] = "mainosaba"
-        full_screen: bool = Field(
-            default=True,
-            description="全屏截图"
-        )
-        game_region: Optional[List[int]] = Field(
-            default=None,
-            description="游戏区域 [x1, y1, x2, y2]"
-        )
-        check_interval: int = Field(
-            default=1,
-            description="检查间隔（秒）",
-            ge=1
-        )
-        screenshot_min_interval: float = Field(
-            default=0.5,
-            description="最小截图间隔（秒）",
-            ge=0.1
-        )
-        response_timeout: int = Field(
-            default=10,
-            description="响应超时（秒）",
-            ge=1
-        )
+        full_screen: bool = Field(default=True, description="全屏截图")
+        game_region: Optional[List[int]] = Field(default=None, description="游戏区域 [x1, y1, x2, y2]")
+        check_interval: int = Field(default=1, description="检查间隔（秒）", ge=1)
+        screenshot_min_interval: float = Field(default=0.5, description="最小截图间隔（秒）", ge=0.1)
+        response_timeout: int = Field(default=10, description="响应超时（秒）", ge=1)
         control_method: Literal["mouse_click", "enter_key", "space_key"] = Field(
-            default="mouse_click",
-            description="游戏控制方式"
+            default="mouse_click", description="游戏控制方式"
         )
-        click_position: List[int] = Field(
-            default_factory=lambda: [1920 // 2, 1080 // 2],
-            description="点击位置 [x, y]"
-        )
+        click_position: List[int] = Field(default_factory=lambda: [1920 // 2, 1080 // 2], description="点击位置 [x, y]")
 
         @field_validator("game_region")
         @classmethod

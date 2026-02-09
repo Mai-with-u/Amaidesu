@@ -49,16 +49,12 @@ class LocalLLMDecisionProvider(DecisionProvider):
         """
 
         type: Literal["local_llm"] = "local_llm"
-        backend: Literal["llm", "llm_fast", "vlm"] = Field(
-            default="llm", description="使用的LLM后端名称"
-        )
+        backend: Literal["llm", "llm_fast", "vlm"] = Field(default="llm", description="使用的LLM后端名称")
         prompt_template: str = Field(
             default="You are a helpful AI assistant. Please respond to the user's message.\n\nUser: {text}\n\nAssistant:",
-            description="Prompt模板，使用{text}占位符"
+            description="Prompt模板，使用{text}占位符",
         )
-        fallback_mode: Literal["simple", "echo", "error"] = Field(
-            default="simple", description="降级模式"
-        )
+        fallback_mode: Literal["simple", "echo", "error"] = Field(default="simple", description="降级模式")
 
         @field_validator("prompt_template")
         @classmethod

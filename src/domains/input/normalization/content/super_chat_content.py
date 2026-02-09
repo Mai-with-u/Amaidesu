@@ -4,12 +4,11 @@
 表示醒目留言（Super Chat）消息。
 """
 
-from dataclasses import dataclass
-from typing import Optional
+from typing import Literal, Optional
+from pydantic import Field
 from .base import StructuredContent
 
 
-@dataclass
 class SuperChatContent(StructuredContent):
     """
     醒目留言内容
@@ -25,11 +24,11 @@ class SuperChatContent(StructuredContent):
         content: 留言内容
     """
 
-    type: str = "super_chat"
-    user: str = ""
-    user_id: str = ""
-    amount: float = 0.0
-    content: str = ""
+    type: Literal["super_chat"] = "super_chat"
+    user: str = Field(default="")
+    user_id: str = Field(default="")
+    amount: float = Field(default=0.0)
+    content: str = Field(default="")
 
     def get_importance(self) -> float:
         """

@@ -5,7 +5,7 @@ InputDomain - 输入域协调器
 """
 
 from typing import Dict, Any, Optional, TYPE_CHECKING
-from dataclasses import dataclass
+from pydantic import BaseModel
 
 from src.core.event_bus import EventBus
 from src.core.base.raw_data import RawData
@@ -18,8 +18,7 @@ if TYPE_CHECKING:
     from src.domains.input.pipelines.manager import PipelineManager
 
 
-@dataclass
-class NormalizationResult:
+class NormalizationResult(BaseModel):
     """标准化结果"""
 
     success: bool

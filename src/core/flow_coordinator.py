@@ -217,7 +217,9 @@ class FlowCoordinator:
                 # 发布 expression.parameters_generated 事件（事件驱动）
                 # OutputProvider 订阅此事件并响应
                 # 将 ExpressionParameters (dataclass) 转换为 ParametersGeneratedPayload (Pydantic Model)
-                payload = ParametersGeneratedPayload.from_parameters(params, source_intent=intent.to_dict())
+                payload = ParametersGeneratedPayload.from_parameters(
+                    params, source_intent=intent.model_dump(mode="json")
+                )
                 await self.event_bus.emit(CoreEvents.EXPRESSION_PARAMETERS_GENERATED, payload, source="FlowCoordinator")
                 self.logger.debug(f"已发布事件: {CoreEvents.EXPRESSION_PARAMETERS_GENERATED}")
             else:

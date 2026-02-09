@@ -8,29 +8,27 @@ LLM 管理器 - 核心基础设施
 
 import asyncio
 import os
-from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List, AsyncIterator
+from pydantic import BaseModel, Field
 from src.core.utils.logger import get_logger
 
 
 # === 数据类定义 ===
 
 
-@dataclass
-class LLMResponse:
+class LLMResponse(BaseModel):
     """LLM 响应结果"""
 
     success: bool
     content: Optional[str] = None
     model: Optional[str] = None
     usage: Optional[Dict[str, int]] = None
-    tool_calls: Optional[List[Dict[str, Any]]] = field(default_factory=list)
+    tool_calls: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     reasoning_content: Optional[str] = None
     error: Optional[str] = None
 
 
-@dataclass
-class RetryConfig:
+class RetryConfig(BaseModel):
     """LLM 调用重试配置"""
 
     max_retries: int = 3

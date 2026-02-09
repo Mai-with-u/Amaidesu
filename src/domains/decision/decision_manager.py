@@ -211,20 +211,61 @@ class DecisionManager:
             payload: 类型化的事件数据（MessageReadyPayload 对象，自动反序列化）
             source: 事件源
         """
-        # 从 MessageReadyPayload 中提取 message 字段（字典格式）
-        message_dict = payload.message
-        if not message_dict:
+        # 直接从 payload.message 获取 NormalizedMessage 对象
+        # message 现在是 Union[NormalizedMessage, Dict[str, Any]] 以兼容序列化
+        message_data = payload.message
+        if not message_data:
             self.logger.warning("收到空的 NormalizedMessage 事件")
             return
 
-        # 使用 NormalizedMessage.from_dict() 工厂方法重建对象
-        # 此方法支持自动重建 TextContent、GiftContent、SuperChatContent
+        # 兼容处理：message 字段可以是 NormalizedMessage 对象或字典
+        # 由于序列化限制，通常是字典格式
         from src.core.base.normalized_message import NormalizedMessage
 
-        normalized = NormalizedMessage.from_dict(message_dict)
+        if isinstance(message_data, dict):
+            # 字典格式：使用 from_dict 方法重建（如果存在）或直接使用字典
+            # 由于 NormalizedMessage 的 content 字段包含不可序列化对象，
+            # model_validate 可能无法正确重建，所以我们暂时使用字典访问
+            normalized_dict = message_data
+            # 使用字典访问方式
+            text = normalized_dict.get("text", "")
+            source = normalized_dict.get("source", "")
+            data_type = normalized_dict.get("data_type", "")
+            importance = normalized_dict.get("importance", 0.5)
+            metadata = normalized_dict.get("metadata", {})
+            user_id = normalized_dict.get("user_id")  # 从字典获取
+            user_nickname = metadata.get("user_nickname")
 
-        try:
-            self.logger.debug(f"收到 NormalizedMessage: {normalized.text[:50]}...")
+            # 构建 SourceContext
+            from src.domains.decision.intent import SourceContext
+
+            source_context = SourceContext(
+                source=source,
+                data_type=data_type,
+                user_id=user_id,
+                user_nickname=user_nickname,
+                importance=importance,
+                extra={k: v for k, v in metadata.items() if k not in ("type", "timestamp", "source")},
+            )
+
+            # 尝试重建 NormalizedMessage 对象用于决策
+            try:
+                normalized = NormalizedMessage.model_validate(normalized_dict)
+            except Exception:
+                # 如果重建失败，使用字典数据创建一个临时对象
+                # 注意：这可能不完整，但至少能处理基本字段
+                normalized = NormalizedMessage(
+                    text=text,
+                    content=None,  # content 无法从字典重建
+                    source=source,
+                    data_type=data_type,
+                    importance=importance,
+                    metadata=metadata,
+                    timestamp=normalized_dict.get("timestamp", 0.0),
+                )
+        else:
+            # 对象格式：直接使用
+            normalized = message_data
 
             # 构建 SourceContext（在决策前）
             from src.domains.decision.intent import SourceContext
@@ -232,11 +273,14 @@ class DecisionManager:
             source_context = SourceContext(
                 source=normalized.source,
                 data_type=normalized.data_type,
-                user_id=normalized.user_id,
+                user_id=normalized.user_id if hasattr(normalized, "user_id") else None,
                 user_nickname=normalized.metadata.get("user_nickname"),
                 importance=normalized.importance,
                 extra={k: v for k, v in normalized.metadata.items() if k not in ("type", "timestamp", "source")},
             )
+
+        try:
+            self.logger.debug(f"收到 NormalizedMessage: {normalized.text[:50]}...")
 
             # 调用当前活动的 Provider 进行决策
             intent = await self.decide(normalized)

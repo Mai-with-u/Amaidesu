@@ -31,11 +31,13 @@ from src.core.event_bus import EventBus
 # 测试 BasePayload 基类
 # =============================================================================
 
+
 class TestBasePayload:
     """测试 BasePayload 基类的核心功能"""
 
     def test_basic_string_representation(self):
         """测试基本的字符串表示"""
+
         class TestPayload(BasePayload):
             name: str
             value: int
@@ -49,6 +51,7 @@ class TestBasePayload:
 
     def test_default_debug_fields_returns_all_fields(self):
         """测试默认 _debug_fields 返回所有字段"""
+
         class TestPayload(BasePayload):
             field1: str
             field2: int
@@ -61,6 +64,7 @@ class TestBasePayload:
 
     def test_custom_debug_fields(self):
         """测试自定义 _debug_fields 方法"""
+
         class TestPayload(BasePayload):
             name: str
             value: int
@@ -79,6 +83,7 @@ class TestBasePayload:
 
     def test_nested_payload_object(self):
         """测试嵌套的 Payload 对象格式化"""
+
         class InnerPayload(BasePayload):
             data: str
 
@@ -99,16 +104,13 @@ class TestBasePayload:
 # 测试 Input Domain Payload
 # =============================================================================
 
+
 class TestInputPayloads:
     """测试 Input Domain Payload 的字符串表示"""
 
     def test_raw_data_payload_debug_string(self):
         """测试 RawDataPayload 的字符串表示"""
-        payload = RawDataPayload(
-            content="测试消息",
-            source="console_input",
-            data_type="text"
-        )
+        payload = RawDataPayload(content="测试消息", source="console_input", data_type="text")
         debug_str = str(payload)
 
         assert "RawDataPayload" in debug_str
@@ -122,7 +124,7 @@ class TestInputPayloads:
             content="用户输入的文本",
             source="bili_danmaku",
             data_type="text",
-            metadata={"user_id": "12345", "username": "观众A"}
+            metadata={"user_id": "12345", "username": "观众A"},
         )
         debug_str = str(payload)
 
@@ -138,7 +140,7 @@ class TestInputPayloads:
                 "source": "bili_danmaku",
                 "data_type": "text",
             },
-            source="bili_danmaku"
+            source="bili_danmaku",
         )
         debug_str = str(payload)
 
@@ -156,7 +158,7 @@ class TestInputPayloads:
                 "source": "test",
                 "data_type": "text",
             },
-            source="test"
+            source="test",
         )
         debug_str = str(payload)
 
@@ -170,16 +172,13 @@ class TestInputPayloads:
 # 测试 Decision Domain Payload
 # =============================================================================
 
+
 class TestDecisionPayloads:
     """测试 Decision Domain Payload 的字符串表示"""
 
     def test_intent_action_payload_debug_string(self):
         """测试 IntentActionPayload 的字符串表示"""
-        payload = IntentActionPayload(
-            type="blink",
-            params={"count": 2},
-            priority=30
-        )
+        payload = IntentActionPayload(type="blink", params={"count": 2}, priority=30)
         debug_str = str(payload)
 
         assert "IntentActionPayload" in debug_str
@@ -196,9 +195,7 @@ class TestDecisionPayloads:
             original_text="你好",
             response_text="你好！很高兴见到你~",
             emotion=EmotionType.HAPPY,
-            actions=[
-                IntentAction(type=ActionType.BLINK, params={"count": 2}, priority=30)
-            ],
+            actions=[IntentAction(type=ActionType.BLINK, params={"count": 2}, priority=30)],
         )
         payload = IntentPayload.from_intent(intent, provider="maicore")
         debug_str = str(payload)
@@ -213,10 +210,7 @@ class TestDecisionPayloads:
 
     def test_decision_request_payload_debug_string(self):
         """测试 DecisionRequestPayload 的字符串表示"""
-        payload = DecisionRequestPayload(
-            normalized_message={"text": "测试", "source": "test"},
-            priority=100
-        )
+        payload = DecisionRequestPayload(normalized_message={"text": "测试", "source": "test"}, priority=100)
         debug_str = str(payload)
 
         assert "DecisionRequestPayload" in debug_str
@@ -226,10 +220,7 @@ class TestDecisionPayloads:
 
     def test_provider_connected_payload_debug_string(self):
         """测试 ProviderConnectedPayload 的字符串表示"""
-        payload = ProviderConnectedPayload(
-            provider="maicore",
-            endpoint="ws://localhost:8000/ws"
-        )
+        payload = ProviderConnectedPayload(provider="maicore", endpoint="ws://localhost:8000/ws")
         debug_str = str(payload)
 
         assert "ProviderConnectedPayload" in debug_str
@@ -238,11 +229,7 @@ class TestDecisionPayloads:
 
     def test_provider_disconnected_payload_debug_string(self):
         """测试 ProviderDisconnectedPayload 的字符串表示"""
-        payload = ProviderDisconnectedPayload(
-            provider="maicore",
-            reason="connection_lost",
-            will_retry=True
-        )
+        payload = ProviderDisconnectedPayload(provider="maicore", reason="connection_lost", will_retry=True)
         debug_str = str(payload)
 
         assert "ProviderDisconnectedPayload" in debug_str
@@ -254,6 +241,7 @@ class TestDecisionPayloads:
 # =============================================================================
 # 测试 Output Domain Payload
 # =============================================================================
+
 
 class TestOutputPayloads:
     """测试 Output Domain Payload 的字符串表示"""
@@ -268,7 +256,7 @@ class TestOutputPayloads:
             expressions={"happy": 0.8, "surprised": 0.2},
             expressions_enabled=True,
             hotkeys=["wave"],
-            hotkeys_enabled=True
+            hotkeys_enabled=True,
         )
         debug_str = str(payload)
 
@@ -281,12 +269,7 @@ class TestOutputPayloads:
 
     def test_render_completed_payload_debug_string(self):
         """测试 RenderCompletedPayload 的字符串表示"""
-        payload = RenderCompletedPayload(
-            provider="tts",
-            output_type="audio",
-            success=True,
-            duration_ms=500.0
-        )
+        payload = RenderCompletedPayload(provider="tts", output_type="audio", success=True, duration_ms=500.0)
         debug_str = str(payload)
 
         assert "RenderCompletedPayload" in debug_str
@@ -302,7 +285,7 @@ class TestOutputPayloads:
             output_type="audio",
             error_type="ConnectionError",
             error_message="无法连接到 TTS 服务",
-            recoverable=True
+            recoverable=True,
         )
         debug_str = str(payload)
 
@@ -318,6 +301,7 @@ class TestOutputPayloads:
 # 测试 System Payload
 # =============================================================================
 
+
 class TestSystemPayloads:
     """测试 System Payload 的字符串表示"""
 
@@ -327,7 +311,7 @@ class TestSystemPayloads:
             error_type="ConnectionError",
             error_message="无法连接到 MaiCore 服务",
             source="MaiCoreDecisionProvider",
-            recoverable=True
+            recoverable=True,
         )
         debug_str = str(payload)
 
@@ -343,11 +327,13 @@ class TestSystemPayloads:
 # 测试字段格式化功能
 # =============================================================================
 
+
 class TestFieldFormatting:
     """测试字段值的格式化功能"""
 
     def test_string_truncation(self):
         """测试长字符串的截断"""
+
         class TestPayload(BasePayload):
             content: str
 
@@ -361,6 +347,7 @@ class TestFieldFormatting:
 
     def test_empty_dict_formatting(self):
         """测试空字典的格式化"""
+
         class TestPayload(BasePayload):
             data: dict
 
@@ -371,15 +358,11 @@ class TestFieldFormatting:
 
     def test_nested_dict_formatting(self):
         """测试嵌套字典的格式化"""
+
         class TestPayload(BasePayload):
             config: dict
 
-        payload = TestPayload(
-            config={
-                "server": {"host": "localhost", "port": 8000},
-                "debug": True
-            }
-        )
+        payload = TestPayload(config={"server": {"host": "localhost", "port": 8000}, "debug": True})
         debug_str = str(payload)
 
         assert "config=" in debug_str
@@ -389,6 +372,7 @@ class TestFieldFormatting:
 
     def test_empty_list_formatting(self):
         """测试空列表的格式化"""
+
         class TestPayload(BasePayload):
             items: list
 
@@ -399,6 +383,7 @@ class TestFieldFormatting:
 
     def test_list_formatting(self):
         """测试列表的格式化"""
+
         class TestPayload(BasePayload):
             items: list
 
@@ -409,6 +394,7 @@ class TestFieldFormatting:
 
     def test_list_of_payloads_formatting(self):
         """测试 Payload 列表的格式化"""
+
         class InnerPayload(BasePayload):
             value: int
 
@@ -428,6 +414,7 @@ class TestFieldFormatting:
 
     def test_boolean_formatting(self):
         """测试布尔值的格式化"""
+
         class TestPayload(BasePayload):
             flag: bool
 
@@ -438,6 +425,7 @@ class TestFieldFormatting:
 
     def test_none_value_formatting(self):
         """测试 None 值的格式化"""
+
         class TestPayload(BasePayload):
             value: str
 
@@ -450,6 +438,7 @@ class TestFieldFormatting:
 # =============================================================================
 # 测试 EventBus 的 debug 日志
 # =============================================================================
+
 
 class TestEventBusDebugLog:
     """测试 EventBus 的 debug 日志输出"""
@@ -477,11 +466,7 @@ class TestEventBusDebugLog:
             event_bus.on("test.event", handler)
 
             # 发布事件
-            payload = RawDataPayload(
-                content="测试消息",
-                source="test",
-                data_type="text"
-            )
+            payload = RawDataPayload(content="测试消息", source="test", data_type="text")
 
             await event_bus.emit("test.event", payload, source="test_source")
 
@@ -519,9 +504,7 @@ class TestEventBusDebugLog:
                 original_text="你好",
                 response_text="你好！很高兴见到你~",
                 emotion=EmotionType.HAPPY,
-                actions=[
-                    IntentAction(type=ActionType.BLINK, params={"count": 2}, priority=30)
-                ],
+                actions=[IntentAction(type=ActionType.BLINK, params={"count": 2}, priority=30)],
             )
             payload = IntentPayload.from_intent(intent, provider="maicore")
 

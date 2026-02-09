@@ -1,10 +1,8 @@
 from typing import Dict, Any, Optional
-from dataclasses import dataclass
 from maim_message import MessageBase, Seg
 from .base import BiliBaseMessage
 
 
-@dataclass
 class SuperChatMessage(BiliBaseMessage):
     """醒目留言消息 - LIVE_OPEN_PLATFORM_SUPER_CHAT"""
 

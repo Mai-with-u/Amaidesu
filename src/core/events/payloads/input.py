@@ -6,7 +6,7 @@ Input Domain 事件 Payload 定义
 - MessageReadyPayload: 标准化消息就绪事件
 """
 
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union
 from pydantic import Field, ConfigDict
 import time
 
@@ -83,9 +83,13 @@ class MessageReadyPayload(BasePayload):
     订阅者：DecisionManager (Decision Domain)
 
     表示 InputDomain 完成了数据标准化处理，生成了 NormalizedMessage。
+
+    注意：message 字段使用 Dict[str, Any] 而不是 NormalizedMessage 对象，
+    因为 NormalizedMessage.content 包含不可序列化的 StructuredContent 对象。
     """
 
-    message: Dict[str, Any] = Field(..., description="标准化消息（NormalizedMessage 序列化）")
+    # 使用 Dict 格式，因为 NormalizedMessage.content 包含不可序列化的对象
+    message: Dict[str, Any] = Field(..., description="标准化消息（NormalizedMessage 序列化后的字典）")
     source: str = Field(..., min_length=1, description="数据源")
     timestamp: float = Field(default_factory=time.time, description="时间戳")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="额外元数据")
@@ -116,9 +120,18 @@ class MessageReadyPayload(BasePayload):
 
     def _format_field_value(self, value: Any, indent: int = 0) -> str:
         """格式化字段值，对 message 字段进行特殊处理"""
-        # 对于 message 字段（Dict[str, Any]），只显示 text 和 source
-        if isinstance(value, dict) and "text" in value:
-            # 提取关键信息
+        # 对于 message 字段（NormalizedMessage 对象或 Dict），提取关键信息
+        if hasattr(value, "text"):
+            # NormalizedMessage 对象
+            text = value.text if hasattr(value, "text") else ""
+            source = value.source if hasattr(value, "source") else ""
+            data_type = value.data_type if hasattr(value, "data_type") else ""
+            # 截断长文本
+            if len(text) > 30:
+                text = text[:27] + "..."
+            return f'{{text="{text}", source="{source}", type="{data_type}"}}'
+        elif isinstance(value, dict) and "text" in value:
+            # 字典格式（向后兼容）
             text = value.get("text", "")
             source = value.get("source", "")
             data_type = value.get("data_type", "")
@@ -130,7 +143,9 @@ class MessageReadyPayload(BasePayload):
         return super()._format_field_value(value, indent)
 
     @classmethod
-    def from_normalized_message(cls, normalized_message: "NormalizedMessage", **extra_metadata) -> "MessageReadyPayload":
+    def from_normalized_message(
+        cls, normalized_message: "NormalizedMessage", **extra_metadata
+    ) -> "MessageReadyPayload":
         """
         从 NormalizedMessage 对象创建 Payload
 
@@ -141,12 +156,13 @@ class MessageReadyPayload(BasePayload):
         Returns:
             MessageReadyPayload 实例
         """
-        # 将 NormalizedMessage 转换为字典
+        # 使用 model_dump() 序列化 NormalizedMessage (Python 模式)
+        # mode='python' 保留 Python 对象，mode='json' 转换为 JSON 兼容格式
         metadata = normalized_message.metadata.copy()
         metadata.update(extra_metadata)
 
         return cls(
-            message=normalized_message.to_dict(),
+            message=normalized_message.model_dump(mode="python"),
             source=normalized_message.source,
             timestamp=normalized_message.timestamp,
             metadata=metadata,

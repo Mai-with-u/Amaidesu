@@ -30,7 +30,7 @@ from src.core.utils.logger import get_logger
 from pydantic import BaseModel, ValidationError
 from src.core.events.registry import EventRegistry
 
-T = TypeVar('T', bound=BaseModel)
+T = TypeVar("T", bound=BaseModel)
 
 
 @dataclass
@@ -254,12 +254,9 @@ class EventBus:
                 message = data.message  # 直接访问字段，无需手动反序列化
                 print(f"收到消息: {message}")
 
+
             # 订阅类型化事件
-            event_bus.on_typed(
-                CoreEvents.NORMALIZATION_MESSAGE_READY,
-                handle_message,
-                MessageReadyPayload
-            )
+            event_bus.on_typed(CoreEvents.NORMALIZATION_MESSAGE_READY, handle_message, MessageReadyPayload)
             ```
         """
         # 尝试注册事件类型到 EventRegistry（仅对核心事件）
@@ -281,15 +278,9 @@ class EventBus:
                 else:
                     handler(event_name, typed_data, source)
             except ValidationError as e:
-                self.logger.error(
-                    f"类型化事件反序列化失败 ({event_name}): {e}",
-                    exc_info=True
-                )
+                self.logger.error(f"类型化事件反序列化失败 ({event_name}): {e}", exc_info=True)
             except Exception as e:
-                self.logger.error(
-                    f"类型化事件处理器执行错误 ({event_name}): {e}",
-                    exc_info=True
-                )
+                self.logger.error(f"类型化事件处理器执行错误 ({event_name}): {e}", exc_info=True)
                 raise
 
         # 注册包装器

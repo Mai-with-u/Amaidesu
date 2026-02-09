@@ -279,6 +279,7 @@ async def create_app_components(
     # 启用架构验证（如果指定了 --arch-validate 参数）
     if arch_validate:
         from src.core.events.architectural_validator import ArchitecturalValidator
+
         validator = ArchitecturalValidator(event_bus, enabled=True, strict=False)
         # 保存引用防止被垃圾回收
         event_bus._arch_validator = validator

@@ -1,4 +1,5 @@
 """OBS Control Output Provider"""
+
 from .obs_control_provider import ObsControlOutputProvider
 from src.core.provider_registry import ProviderRegistry
 

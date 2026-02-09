@@ -2,6 +2,7 @@
 
 定义所有Provider配置的抽象基类。
 """
+
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ class BaseProviderConfig(BaseModel):
     - 此基类不包含'enabled'字段，该字段由Manager统一管理
     - Provider本地配置文件禁止包含'enabled'字段
     """
+
     type: str = Field(description="Provider类型标识")
 
     model_config = {"extra": "ignore"}  # Pydantic v2 语法

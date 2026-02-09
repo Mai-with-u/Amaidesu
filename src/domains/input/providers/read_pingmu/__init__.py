@@ -1,4 +1,5 @@
 """ReadPingmu Input Provider"""
+
 from .read_pingmu_provider import ReadPingmuInputProvider
 from src.core.provider_registry import ProviderRegistry
 

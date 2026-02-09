@@ -104,6 +104,75 @@ uv run python mock_maicore.py
 
 ## 代码风格指南
 
+### 数据类型选用规范
+
+项目统一使用 **Pydantic BaseModel** 作为主要数据结构类型。
+
+| 类型 | 使用场景 | 示例 |
+|------|----------|------|
+| **Pydantic BaseModel** | 所有数据模型、配置 Schema、事件 Payload | `class UserConfig(BaseModel)` |
+| **dataclass** | 仅用于简单的内部统计/包装类，不涉及数据验证 | `@dataclass class PipelineStats` |
+| **TypedDict** | 不推荐使用，已弃用 | - |
+| **Protocol** | 定义接口协议 | `class TextPipeline(Protocol)` |
+
+#### Pydantic BaseModel 使用指南
+
+```python
+from pydantic import BaseModel, Field, ConfigDict
+
+class UserConfig(BaseModel):
+    """用户配置"""
+
+    name: str = Field(description="用户名")
+    age: int = Field(default=0, ge=0, le=150)
+    enabled: bool = True
+
+    # Pydantic v2 配置风格
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "name": "amaidesu",
+                "age": 18,
+                "enabled": True
+            }
+        }
+    )
+```
+
+#### 何时使用 dataclass
+
+仅当满足以下所有条件时使用 `@dataclass`：
+1. 简单的数据容器，无需验证
+2. 内部使用，不对外暴露 API
+3. 不需要序列化/反序列化
+
+```python
+from dataclasses import dataclass
+
+# ✅ 合理使用：内部统计类
+@dataclass
+class PipelineStats:
+    processed_count: int = 0
+    error_count: int = 0
+```
+
+#### 类型选用决策树
+
+```
+需要定义数据结构？
+│
+├─ 是 → 需要数据验证/序列化？
+│   │
+│   ├─ 是 → 使用 Pydantic BaseModel
+│   │
+│   └─ 否 → 仅内部简单数据？
+│       │
+│       ├─ 是 → 使用 dataclass
+│       └─ 否 → 使用 Protocol（接口定义）
+│
+└─ 否 → 使用 Protocol 或 ABC（抽象接口）
+```
+
 ### 导入语句组织
 1. 标准库导入（如 `asyncio`, `typing`, `os`）
 2. 第三方库导入（如 `aiohttp`, `loguru`）

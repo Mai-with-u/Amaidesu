@@ -326,6 +326,7 @@ def initialize_configurations(
 
 # ==================== 版本检查和自动更新功能 ====================
 
+
 def _get_version_from_toml(toml_path: str) -> Optional[str]:
     """从TOML文件中获取版本号"""
     try:
@@ -522,9 +523,7 @@ def _update_config_from_template(config_path: str, template_path: str) -> None:
         raise
 
 
-def check_and_update_config_with_version(
-    config_path: str, template_path: str
-) -> bool:
+def check_and_update_config_with_version(config_path: str, template_path: str) -> bool:
     """检查配置文件版本，如果需要则从模板更新
 
     Args:

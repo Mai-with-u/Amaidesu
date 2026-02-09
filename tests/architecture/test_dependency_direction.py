@@ -14,6 +14,7 @@ Key Principles:
 2. Domains should not directly import from peer or higher domains
 3. Dependencies should flow through the event system, not direct imports
 """
+
 import ast
 from collections import defaultdict
 from pathlib import Path
@@ -99,27 +100,31 @@ class ImportVisitor(ast.NodeVisitor):
         """Handle 'import x' statements."""
         is_local_import = len(self.scope_stack) > 0
         for alias in node.names:
-            self.imports.append({
-                "module": alias.name,
-                "line": node.lineno,
-                "type": "import",
-                "is_type_checking": self.in_type_checking_block,
-                "is_local_import": is_local_import  # Inside function/class
-            })
+            self.imports.append(
+                {
+                    "module": alias.name,
+                    "line": node.lineno,
+                    "type": "import",
+                    "is_type_checking": self.in_type_checking_block,
+                    "is_local_import": is_local_import,  # Inside function/class
+                }
+            )
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         """Handle 'from x import y' statements."""
         if node.module:
             is_local_import = len(self.scope_stack) > 0
-            self.imports.append({
-                "module": node.module,
-                "names": [alias.name for alias in node.names],
-                "line": node.lineno,
-                "type": "from_import",
-                "is_type_checking": self.in_type_checking_block,
-                "is_local_import": is_local_import  # Inside function/class
-            })
+            self.imports.append(
+                {
+                    "module": node.module,
+                    "names": [alias.name for alias in node.names],
+                    "line": node.lineno,
+                    "type": "from_import",
+                    "is_type_checking": self.in_type_checking_block,
+                    "is_local_import": is_local_import,  # Inside function/class
+                }
+            )
         self.generic_visit(node)
 
 
@@ -243,12 +248,9 @@ def analyze_layer_dependencies(layer: str) -> Dict[str, List[Dict]]:
             if target_layer == layer:
                 continue
 
-            dependencies[target_layer].append({
-                "file": str(file_path),
-                "module": imp["module"],
-                "line": imp["line"],
-                "type": imp["type"]
-            })
+            dependencies[target_layer].append(
+                {"file": str(file_path), "module": imp["module"], "line": imp["line"], "type": imp["type"]}
+            )
 
     return dict(dependencies)
 
@@ -269,28 +271,16 @@ class TestDependencyDirection:
 
         # Check for Decision imports
         for dep in dependencies.get("decision", []):
-            violations.append({
-                "target": "decision",
-                "file": dep["file"],
-                "module": dep["module"],
-                "line": dep["line"]
-            })
+            violations.append({"target": "decision", "file": dep["file"], "module": dep["module"], "line": dep["line"]})
 
         # Check for Output imports
         for dep in dependencies.get("output", []):
-            violations.append({
-                "target": "output",
-                "file": dep["file"],
-                "module": dep["module"],
-                "line": dep["line"]
-            })
+            violations.append({"target": "output", "file": dep["file"], "module": dep["module"], "line": dep["line"]})
 
         if violations:
-            violation_details = "\n".join([
-                f"  - {v['file']}:{v['line']} "
-                f"imports from {v['target']} (module: {v['module']})"
-                for v in violations
-            ])
+            violation_details = "\n".join(
+                [f"  - {v['file']}:{v['line']} imports from {v['target']} (module: {v['module']})" for v in violations]
+            )
             raise AssertionError(
                 f"Input Domain MUST NOT directly import Decision or Output Domain modules.\n"
                 f"Found {len(violations)} violation(s):\n"
@@ -312,18 +302,12 @@ class TestDependencyDirection:
 
         # Check for Output imports
         for dep in dependencies.get("output", []):
-            violations.append({
-                "file": dep["file"],
-                "module": dep["module"],
-                "line": dep["line"]
-            })
+            violations.append({"file": dep["file"], "module": dep["module"], "line": dep["line"]})
 
         if violations:
-            violation_details = "\n".join([
-                f"  - {v['file']}:{v['line']} "
-                f"imports from Output (module: {v['module']})"
-                for v in violations
-            ])
+            violation_details = "\n".join(
+                [f"  - {v['file']}:{v['line']} imports from Output (module: {v['module']})" for v in violations]
+            )
             raise AssertionError(
                 f"Decision Domain MUST NOT directly import Output Domain modules.\n"
                 f"Found {len(violations)} violation(s):\n"
@@ -352,24 +336,24 @@ class TestDependencyDirection:
                 # Skip the known re-export module (technical debt)
                 # Normalize path for Windows compatibility
                 import os
+
                 normalized_path = os.path.normpath(dep["file"])
-                if normalized_path.endswith("src/core/base/base.py") or \
-                   normalized_path.endswith("src\\core\\base\\base.py"):
+                if normalized_path.endswith("src/core/base/base.py") or normalized_path.endswith(
+                    "src\\core\\base\\base.py"
+                ):
                     continue
 
-                violations.append({
-                    "target": target_layer,
-                    "file": dep["file"],
-                    "module": dep["module"],
-                    "line": dep["line"]
-                })
+                violations.append(
+                    {"target": target_layer, "file": dep["file"], "module": dep["module"], "line": dep["line"]}
+                )
 
         if violations:
-            violation_details = "\n".join([
-                f"  - {v['file']}:{v['line']} "
-                f"imports from {v['target']} domain (module: {v['module']})"
-                for v in violations
-            ])
+            violation_details = "\n".join(
+                [
+                    f"  - {v['file']}:{v['line']} imports from {v['target']} domain (module: {v['module']})"
+                    for v in violations
+                ]
+            )
             raise AssertionError(
                 f"Core layer MUST NOT depend on any Domain modules.\n"
                 f"Found {len(violations)} violation(s):\n"
@@ -390,10 +374,7 @@ class TestDependencyDirection:
         for layer in ["input", "decision", "output"]:
             dependencies = analyze_layer_dependencies(layer)
             # Filter to only domain-to-domain dependencies
-            domain_deps = [
-                target for target in dependencies.keys()
-                if target in ["input", "decision", "output"]
-            ]
+            domain_deps = [target for target in dependencies.keys() if target in ["input", "decision", "output"]]
             graph[layer] = set(domain_deps)
 
         # Check for cycles using DFS
@@ -443,19 +424,17 @@ class TestDependencyDirection:
         # Check for any domain imports
         for target_layer in ["input", "decision", "output"]:
             for dep in dependencies.get(target_layer, []):
-                violations.append({
-                    "target": target_layer,
-                    "file": dep["file"],
-                    "module": dep["module"],
-                    "line": dep["line"]
-                })
+                violations.append(
+                    {"target": target_layer, "file": dep["file"], "module": dep["module"], "line": dep["line"]}
+                )
 
         if violations:
-            violation_details = "\n".join([
-                f"  - {v['file']}:{v['line']} "
-                f"imports from {v['target']} domain (module: {v['module']})"
-                for v in violations
-            ])
+            violation_details = "\n".join(
+                [
+                    f"  - {v['file']}:{v['line']} imports from {v['target']} domain (module: {v['module']})"
+                    for v in violations
+                ]
+            )
             raise AssertionError(
                 f"Services layer MUST NOT depend on Domain modules.\n"
                 f"Found {len(violations)} violation(s):\n"
@@ -473,13 +452,7 @@ class TestDependencyDirection:
         Higher layers can depend on lower layers, but lower layers cannot
         depend on higher layers.
         """
-        layer_rank = {
-            "core": 0,
-            "services": 0,
-            "input": 1,
-            "decision": 2,
-            "output": 3
-        }
+        layer_rank = {"core": 0, "services": 0, "input": 1, "decision": 2, "output": 3}
 
         violations = []
 
@@ -493,20 +466,23 @@ class TestDependencyDirection:
                 # Check if dependency violates hierarchy
                 if layer_rank[layer] < layer_rank[target_layer]:
                     for dep in deps:
-                        violations.append({
-                            "source": layer,
-                            "target": target_layer,
-                            "file": dep["file"],
-                            "module": dep["module"],
-                            "line": dep["line"]
-                        })
+                        violations.append(
+                            {
+                                "source": layer,
+                                "target": target_layer,
+                                "file": dep["file"],
+                                "module": dep["module"],
+                                "line": dep["line"],
+                            }
+                        )
 
         if violations:
-            violation_details = "\n".join([
-                f"  - {v['source']} → {v['target']}: "
-                f"{v['file']}:{v['line']} (module: {v['module']})"
-                for v in violations
-            ])
+            violation_details = "\n".join(
+                [
+                    f"  - {v['source']} → {v['target']}: {v['file']}:{v['line']} (module: {v['module']})"
+                    for v in violations
+                ]
+            )
             raise AssertionError(
                 f"Dependencies must follow the layer hierarchy.\n"
                 f"Hierarchy: Core/Services (0) → Input (1) → Decision (2) → Output (3)\n"
@@ -562,9 +538,14 @@ class TestDependencyDirection:
                 rel_path = py_file.relative_to(src_path)
                 # Use os.path.normpath to handle both forward and backward slashes
                 import os
+
                 normalized_path = os.path.normpath(str(rel_path))
-                if normalized_path not in ["core\\amaidesu_core.py", "core/amaidesu_core.py",
-                                          "core\\flow_coordinator.py", "core/flow_coordinator.py"]:
+                if normalized_path not in [
+                    "core\\amaidesu_core.py",
+                    "core/amaidesu_core.py",
+                    "core\\flow_coordinator.py",
+                    "core/flow_coordinator.py",
+                ]:
                     orchestrator_files.append(str(py_file))
 
         if orchestrator_files:

@@ -31,7 +31,7 @@ def sticker_config():
 def sample_image_base64():
     """创建一个简单的测试图片base64"""
     # 创建一个简单的红色图片
-    img = Image.new('RGB', (256, 256), color='red')
+    img = Image.new("RGB", (256, 256), color="red")
     buffered = io.BytesIO()
     img.save(buffered, format="PNG")
     return base64.b64encode(buffered.getvalue()).decode("utf-8")
@@ -82,11 +82,7 @@ class TestStickerOutputProvider:
         await provider.setup(mock_event_bus)
 
         # 验证事件监听器已注册
-        mock_event_bus.on.assert_called_once_with(
-            "render.sticker",
-            provider._handle_render_request,
-            priority=50
-        )
+        mock_event_bus.on.assert_called_once_with("render.sticker", provider._handle_render_request, priority=50)
 
     def test_resize_image_base64_with_both_dimensions(self, sticker_config, sample_image_base64):
         """测试同时设置宽高的图片调整"""

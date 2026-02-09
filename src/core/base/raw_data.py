@@ -4,13 +4,12 @@ RawData数据类定义
 Input Domain(输入域)的输出格式，表示从外部获取的原始数据。
 """
 
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Dict
+from pydantic import BaseModel, Field
 import time
 
 
-@dataclass
-class RawData:
+class RawData(BaseModel):
     """
     原始数据
 
@@ -34,28 +33,7 @@ class RawData:
     content: Any
     source: str
     data_type: str
-    timestamp: float = field(default_factory=time.time)
+    timestamp: float = Field(default_factory=time.time)
     preserve_original: bool = False
-    original_data: Optional[Any] = None
-    metadata: dict = field(default_factory=dict)
-
-    def __post_init__(self):
-        """初始化后处理"""
-        if self.metadata is None:
-            self.metadata = {}
-
-    def to_dict(self) -> dict:
-        """
-        转换为字典
-
-        Returns:
-            字典表示的RawData
-        """
-        return {
-            "content": self.content,
-            "source": self.source,
-            "data_type": self.data_type,
-            "timestamp": self.timestamp,
-            "preserve_original": self.preserve_original,
-            "metadata": self.metadata,
-        }
+    original_data: Any = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)

@@ -90,12 +90,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
 
         用于显式注册模式，避免模块导入时的自动注册。
         """
-        return {
-            "layer": "decision",
-            "name": "maicore",
-            "class": cls,
-            "source": "builtin:maicore"
-        }
+        return {"layer": "decision", "name": "maicore", "class": cls, "source": "builtin:maicore"}
 
     def __init__(self, config: Dict[str, Any]):
         self.provider_name = "maicore"

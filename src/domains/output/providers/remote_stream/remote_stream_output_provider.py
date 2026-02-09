@@ -6,11 +6,9 @@ RemoteStream Output Provider - 远程流媒体输出Provider
 - 处理图像请求和TTS发送请求
 """
 
-import json
 from typing import Dict, Any, List, Callable
-from dataclasses import dataclass, asdict
 from enum import Enum
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from src.core.base.output_provider import OutputProvider
 from src.core.base.base import RenderParameters
@@ -37,26 +35,18 @@ class MessageType(str, Enum):
     ERROR = "error"
 
 
-@dataclass
-class StreamMessage:
+class StreamMessage(BaseModel):
     type: str
     data: Dict[str, Any]
     timestamp: float = 0.0
     sequence: int = 0
 
-    def __post_init__(self):
-        if self.timestamp == 0.0:
-            import time
-
-            self.timestamp = time.time()
-
     def to_json(self) -> str:
-        return json.dumps(asdict(self))
+        return self.model_dump_json()
 
     @classmethod
     def from_json(cls, json_str: str) -> "StreamMessage":
-        data = json.loads(json_str)
-        return cls(**data)
+        return cls.model_validate_json(json_str)
 
 
 class RemoteStreamOutputProvider(OutputProvider):

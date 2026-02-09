@@ -267,9 +267,7 @@ async def test_start_after_setup(
     await flow_coordinator.start()
 
     # 验证 setup_all_providers 被调用
-    flow_coordinator.output_provider_manager.setup_all_providers.assert_called_once_with(
-        flow_coordinator.event_bus
-    )
+    flow_coordinator.output_provider_manager.setup_all_providers.assert_called_once_with(flow_coordinator.event_bus)
 
 
 @pytest.mark.asyncio
@@ -279,9 +277,7 @@ async def test_start_with_provider_failure(
 ):
     """测试 Provider 启动失败时的错误处理"""
     # 模拟启动失败
-    flow_coordinator.output_provider_manager.setup_all_providers.side_effect = Exception(
-        "Provider startup failed"
-    )
+    flow_coordinator.output_provider_manager.setup_all_providers.side_effect = Exception("Provider startup failed")
 
     await flow_coordinator.setup(sample_config)
 
@@ -309,9 +305,7 @@ async def test_stop_with_provider_failure(
 ):
     """测试 Provider 停止失败时的错误处理"""
     # 模拟停止失败
-    flow_coordinator.output_provider_manager.stop_all_providers.side_effect = Exception(
-        "Provider stop failed"
-    )
+    flow_coordinator.output_provider_manager.stop_all_providers.side_effect = Exception("Provider stop failed")
 
     await flow_coordinator.setup(sample_config)
 
@@ -390,12 +384,11 @@ async def test_on_intent_ready_emits_parameters_event(
 
     # 监听 expression.parameters_generated 事件
     received_params = []
+
     async def on_params_generated(event_name, data, source):
         received_params.append(data)
 
-    flow_coordinator.event_bus.on(
-        CoreEvents.EXPRESSION_PARAMETERS_GENERATED, on_params_generated
-    )
+    flow_coordinator.event_bus.on(CoreEvents.EXPRESSION_PARAMETERS_GENERATED, on_params_generated)
 
     # 发布 Intent 事件
     await flow_coordinator.event_bus.emit(
@@ -516,12 +509,11 @@ async def test_on_intent_ready_data_flow(
 
     # 记录事件发布
     emitted_events = []
+
     async def track_events(event_name, data, source):
         emitted_events.append({"name": event_name, "data": data, "source": source})
 
-    flow_coordinator.event_bus.on(
-        CoreEvents.EXPRESSION_PARAMETERS_GENERATED, track_events
-    )
+    flow_coordinator.event_bus.on(CoreEvents.EXPRESSION_PARAMETERS_GENERATED, track_events)
 
     # 触发数据流
     await flow_coordinator.event_bus.emit(
@@ -691,6 +683,7 @@ async def test_full_integration_with_real_dependencies(
 
     # 监听输出事件
     received_params = []
+
     async def on_params(event_name, data, source):
         received_params.append(data)
 
@@ -731,12 +724,11 @@ async def test_multiple_intents_sequential(
 
     # 监听输出事件
     received_count = []
+
     async def on_params(event_name, data, source):
         received_count.append(1)
 
-    flow_coordinator.event_bus.on(
-        CoreEvents.EXPRESSION_PARAMETERS_GENERATED, on_params
-    )
+    flow_coordinator.event_bus.on(CoreEvents.EXPRESSION_PARAMETERS_GENERATED, on_params)
 
     # 模拟 generate 返回
     flow_coordinator.expression_generator.generate.return_value = ExpressionParameters()

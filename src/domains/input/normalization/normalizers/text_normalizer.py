@@ -48,6 +48,7 @@ class TextNormalizer(DataNormalizer):
             except Exception as e:
                 # 出错时使用原文本，不中断流程
                 from src.core.utils.logger import get_logger
+
                 logger = get_logger("TextNormalizer")
                 logger.error(f"TextPipeline处理失败: {e}", exc_info=True)
 

@@ -4,12 +4,11 @@
 表示礼物消息，自动计算重要性。
 """
 
-from dataclasses import dataclass
-from typing import Optional
+from typing import Literal, Optional
+from pydantic import Field, model_validator
 from .base import StructuredContent
 
 
-@dataclass
 class GiftContent(StructuredContent):
     """
     礼物内容
@@ -28,16 +27,17 @@ class GiftContent(StructuredContent):
         importance: 重要性（自动计算）
     """
 
-    type: str = "gift"
-    user: str = ""
-    user_id: str = ""
-    gift_name: str = ""
-    gift_level: int = 1
-    count: int = 1
-    value: float = 0.0
-    importance: float = 0.0
+    type: Literal["gift"] = "gift"
+    user: str = Field(default="")
+    user_id: str = Field(default="")
+    gift_name: str = Field(default="")
+    gift_level: int = Field(default=1)
+    count: int = Field(default=1)
+    value: float = Field(default=0.0)
+    importance: float = Field(default=0.0)
 
-    def __post_init__(self):
+    @model_validator(mode="after")
+    def compute_importance(self) -> "GiftContent":
         """自动计算重要性"""
         # 基础重要性：基于等级
         base = min(self.gift_level / 10, 1.0)
@@ -50,6 +50,7 @@ class GiftContent(StructuredContent):
 
         # 计算最终重要性
         self.importance = min(base + value_boost + count_boost, 1.0)
+        return self
 
     def get_importance(self) -> float:
         """

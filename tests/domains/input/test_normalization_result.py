@@ -22,6 +22,7 @@ from src.core.events.names import CoreEvents
 # Fixtures
 # =============================================================================
 
+
 @pytest.fixture
 async def event_bus():
     """创建事件总线"""
@@ -42,6 +43,7 @@ async def input_domain(event_bus):
 # NormalizationResult 数据类测试
 # =============================================================================
 
+
 def test_normalization_result_success():
     """测试成功的 NormalizationResult"""
     from src.core.base.normalized_message import NormalizedMessage
@@ -54,7 +56,7 @@ def test_normalization_result_success():
         data_type="text",
         importance=0.5,
         metadata={},
-        timestamp=0.0
+        timestamp=0.0,
     )
 
     result = NormalizationResult(success=True, message=message, error=None)
@@ -67,11 +69,7 @@ def test_normalization_result_success():
 
 def test_normalization_result_failure():
     """测试失败的 NormalizationResult"""
-    result = NormalizationResult(
-        success=False,
-        message=None,
-        error="转换失败：缺少必要字段"
-    )
+    result = NormalizationResult(success=False, message=None, error="转换失败：缺少必要字段")
 
     assert result.success is False
     assert result.message is None
@@ -81,6 +79,7 @@ def test_normalization_result_failure():
 # =============================================================================
 # InputDomain 失败统计测试
 # =============================================================================
+
 
 @pytest.mark.asyncio
 async def test_normalization_error_tracking(input_domain):
@@ -95,16 +94,10 @@ async def test_normalization_error_tracking(input_domain):
     input_domain.event_bus.on("normalization.message_ready", on_message_ready, priority=50)
 
     # 发送正常消息
-    raw_data = RawData(
-        content={"text": "正常消息"},
-        source="test",
-        data_type="text"
-    )
+    raw_data = RawData(content={"text": "正常消息"}, source="test", data_type="text")
 
     await input_domain.event_bus.emit(
-        CoreEvents.PERCEPTION_RAW_DATA_GENERATED,
-        RawDataPayload.from_raw_data(raw_data),
-        source="test"
+        CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload.from_raw_data(raw_data), source="test"
     )
 
     await asyncio.sleep(0.1)
@@ -123,11 +116,7 @@ async def test_normalization_error_tracking(input_domain):
 @pytest.mark.asyncio
 async def test_normalize_returns_result_object(input_domain):
     """测试 normalize() 方法返回 NormalizationResult 对象"""
-    raw_data = RawData(
-        content={"text": "测试消息"},
-        source="test",
-        data_type="text"
-    )
+    raw_data = RawData(content={"text": "测试消息"}, source="test", data_type="text")
 
     result = await input_domain.normalize(raw_data)
 
@@ -146,11 +135,7 @@ async def test_normalize_with_invalid_data(input_domain):
     # 注意：实际测试中需要模拟 Normalizer 抛出异常的情况
     # 这里我们测试数据类型降级处理
 
-    raw_data = RawData(
-        content="未知类型的内容",
-        source="test",
-        data_type="unknown_type"
-    )
+    raw_data = RawData(content="未知类型的内容", source="test", data_type="unknown_type")
 
     result = await input_domain.normalize(raw_data)
 
@@ -197,15 +182,9 @@ async def test_multiple_messages_with_stats(input_domain):
 
     # 发送多条消息
     for i in range(5):
-        raw_data = RawData(
-            content={"text": f"消息{i}"},
-            source="test",
-            data_type="text"
-        )
+        raw_data = RawData(content={"text": f"消息{i}"}, source="test", data_type="text")
         await input_domain.event_bus.emit(
-            CoreEvents.PERCEPTION_RAW_DATA_GENERATED,
-            RawDataPayload.from_raw_data(raw_data),
-            source="test"
+            CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload.from_raw_data(raw_data), source="test"
         )
         await asyncio.sleep(0.05)
 

@@ -1,4 +1,5 @@
 """GPT-SoVITS Output Provider"""
+
 from .gptsovits_provider import GPTSoVITSOutputProvider
 from src.core.provider_registry import ProviderRegistry
 

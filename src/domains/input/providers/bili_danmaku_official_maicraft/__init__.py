@@ -4,6 +4,10 @@ from .bili_official_maicraft_provider import BiliDanmakuOfficialMaiCraftInputPro
 from src.core.provider_registry import ProviderRegistry
 
 # 注册到 ProviderRegistry
-ProviderRegistry.register_input("bili_danmaku_official_maicraft", BiliDanmakuOfficialMaiCraftInputProvider, source="builtin:bili_danmaku_official_maicraft")
+ProviderRegistry.register_input(
+    "bili_danmaku_official_maicraft",
+    BiliDanmakuOfficialMaiCraftInputProvider,
+    source="builtin:bili_danmaku_official_maicraft",
+)
 
 __all__ = ["BiliDanmakuOfficialMaiCraftInputProvider"]

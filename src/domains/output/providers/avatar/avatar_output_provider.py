@@ -29,11 +29,7 @@ class AvatarOutputProvider(OutputProvider):
 
         type: str = "avatar"
 
-        adapter_type: str = Field(
-            default="vts",
-            pattern=r"^(vts|vrchat|live2d)$",
-            description="平台适配器类型"
-        )
+        adapter_type: str = Field(default="vts", pattern=r"^(vts|vrchat|live2d)$", description="平台适配器类型")
 
     def __init__(self, config: dict):
         super().__init__(config)

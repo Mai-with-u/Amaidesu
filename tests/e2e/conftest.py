@@ -1,6 +1,7 @@
 """
 Pytest configuration and fixtures for E2E tests
 """
+
 import asyncio
 import pytest
 from typing import AsyncGenerator
@@ -47,7 +48,7 @@ def sample_raw_data() -> RawData:
         content="你好，VTuber",
         data_type="text",
         source="test_user",
-        metadata={"user_id": "test_user", "user_nickname": "测试用户"}
+        metadata={"user_id": "test_user", "user_nickname": "测试用户"},
     )
 
 
@@ -55,6 +56,7 @@ def sample_raw_data() -> RawData:
 def sample_normalized_message() -> NormalizedMessage:
     """创建示例 NormalizedMessage"""
     from tests.e2e.test_helpers import create_normalized_message
+
     return create_normalized_message("你好，VTuber", "test_user", 0.8)
 
 
@@ -65,15 +67,9 @@ async def mock_input_provider_manager(event_bus: EventBus) -> InputProviderManag
 
     # 加载配置（使用 mock_danmaku）
     config = {
-        'enabled': True,
-        'inputs': ['mock_danmaku'],
-        'inputs_config': {
-            'mock_danmaku': {
-                'type': 'mock_danmaku',
-                'enabled': True,
-                'interval': 5.0
-            }
-        }
+        "enabled": True,
+        "inputs": ["mock_danmaku"],
+        "inputs_config": {"mock_danmaku": {"type": "mock_danmaku", "enabled": True, "interval": 5.0}},
     }
 
     await manager.load_from_config(config)

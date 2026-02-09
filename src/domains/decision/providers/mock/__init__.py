@@ -1,4 +1,5 @@
 """Mock Decision Provider - 用于测试"""
+
 from typing import Optional, Literal
 
 from pydantic import Field
@@ -32,9 +33,7 @@ class MockDecisionProvider(DecisionProvider):
         """
 
         type: Literal["mock"] = "mock"
-        default_response: str = Field(
-            default="这是模拟的回复", description="默认响应文本"
-        )
+        default_response: str = Field(default="这是模拟的回复", description="默认响应文本")
 
     def __init__(self, config: dict):
         # 使用 Pydantic Schema 验证配置
@@ -64,7 +63,7 @@ class MockDecisionProvider(DecisionProvider):
             response_text=response_text,
             emotion=EmotionType.NEUTRAL,
             actions=[],
-            metadata={"mock": True, "call_count": self.call_count}
+            metadata={"mock": True, "call_count": self.call_count},
         )
 
     async def setup(self, event_bus, config: Optional[dict] = None, dependencies: Optional[dict] = None) -> None:

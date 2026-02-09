@@ -37,12 +37,7 @@ class ConsoleInputProvider(InputProvider):
 
         用于显式注册模式，避免模块导入时的自动注册。
         """
-        return {
-            "layer": "input",
-            "name": "console_input",
-            "class": cls,
-            "source": "builtin:console_input"
-        }
+        return {"layer": "input", "name": "console_input", "class": cls, "source": "builtin:console_input"}
 
     def __init__(self, config: dict):
         """

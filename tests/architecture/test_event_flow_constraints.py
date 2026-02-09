@@ -4,6 +4,7 @@ Architecture tests to enforce proper data flow constraints.
 These tests verify that the 3-domain architecture maintains proper separation
 and follows the unidirectional data flow: Input → Decision → Output
 """
+
 import ast
 from pathlib import Path
 from typing import Dict, List
@@ -65,12 +66,14 @@ def extract_event_subscriptions(file_path: Path) -> List[Dict]:
                             event_name = event_arg.value
                             # Find the class containing this call
                             class_name = find_containing_class(tree, node)
-                            subscriptions.append({
-                                "class_name": class_name,
-                                "event_name": event_name,
-                                "line_number": node.lineno,
-                                "file_path": str(file_path),
-                            })
+                            subscriptions.append(
+                                {
+                                    "class_name": class_name,
+                                    "event_name": event_name,
+                                    "line_number": node.lineno,
+                                    "file_path": str(file_path),
+                                }
+                            )
 
                         # Attribute access: subscribe(CoreEvents.EVENT_NAME)
                         elif isinstance(event_arg, ast.Attribute):
@@ -78,12 +81,14 @@ def extract_event_subscriptions(file_path: Path) -> List[Dict]:
                                 if event_arg.value.id == "CoreEvents":
                                     event_name = event_arg.attr
                                     class_name = find_containing_class(tree, node)
-                                    subscriptions.append({
-                                        "class_name": class_name,
-                                        "event_name": event_name,
-                                        "line_number": node.lineno,
-                                        "file_path": str(file_path),
-                                    })
+                                    subscriptions.append(
+                                        {
+                                            "class_name": class_name,
+                                            "event_name": event_name,
+                                            "line_number": node.lineno,
+                                            "file_path": str(file_path),
+                                        }
+                                    )
 
     return subscriptions
 
@@ -156,19 +161,19 @@ class TestEventFlowConstraints:
 
             # Check if this is an Input domain event
             if event_name in INPUT_EVENTS:
-                violations.append({
-                    "class": sub["class_name"],
-                    "event": event_name,
-                    "file": sub["file_path"],
-                    "line": sub["line_number"],
-                })
+                violations.append(
+                    {
+                        "class": sub["class_name"],
+                        "event": event_name,
+                        "file": sub["file_path"],
+                        "line": sub["line_number"],
+                    }
+                )
 
         if violations:
-            violation_details = "\n".join([
-                f"  - {v['class']} in {v['file']}:{v['line']} "
-                f"subscribes to {v['event']}"
-                for v in violations
-            ])
+            violation_details = "\n".join(
+                [f"  - {v['class']} in {v['file']}:{v['line']} subscribes to {v['event']}" for v in violations]
+            )
             raise AssertionError(
                 f"Output Domain MUST NOT subscribe to Input Domain events.\n"
                 f"Found {len(violations)} violation(s):\n"
@@ -191,19 +196,19 @@ class TestEventFlowConstraints:
 
             # Check if this is an Output domain event
             if event_name in OUTPUT_EVENTS:
-                violations.append({
-                    "class": sub["class_name"],
-                    "event": event_name,
-                    "file": sub["file_path"],
-                    "line": sub["line_number"],
-                })
+                violations.append(
+                    {
+                        "class": sub["class_name"],
+                        "event": event_name,
+                        "file": sub["file_path"],
+                        "line": sub["line_number"],
+                    }
+                )
 
         if violations:
-            violation_details = "\n".join([
-                f"  - {v['class']} in {v['file']}:{v['line']} "
-                f"subscribes to {v['event']}"
-                for v in violations
-            ])
+            violation_details = "\n".join(
+                [f"  - {v['class']} in {v['file']}:{v['line']} subscribes to {v['event']}" for v in violations]
+            )
             raise AssertionError(
                 f"Decision Domain MUST NOT subscribe to Output Domain events.\n"
                 f"Found {len(violations)} violation(s):\n"
@@ -225,19 +230,19 @@ class TestEventFlowConstraints:
 
             # Check if this is a Decision or Output domain event
             if event_name in DECISION_EVENTS or event_name in OUTPUT_EVENTS:
-                violations.append({
-                    "class": sub["class_name"],
-                    "event": event_name,
-                    "file": sub["file_path"],
-                    "line": sub["line_number"],
-                })
+                violations.append(
+                    {
+                        "class": sub["class_name"],
+                        "event": event_name,
+                        "file": sub["file_path"],
+                        "line": sub["line_number"],
+                    }
+                )
 
         if violations:
-            violation_details = "\n".join([
-                f"  - {v['class']} in {v['file']}:{v['line']} "
-                f"subscribes to {v['event']}"
-                for v in violations
-            ])
+            violation_details = "\n".join(
+                [f"  - {v['class']} in {v['file']}:{v['line']} subscribes to {v['event']}" for v in violations]
+            )
             raise AssertionError(
                 f"Input Domain MUST NOT subscribe to Decision or Output events.\n"
                 f"Found {len(violations)} violation(s):\n"
@@ -264,23 +269,16 @@ class TestEventFlowConstraints:
         """
         # Check that Decision subscribes to Input's event
         decision_subscriptions = get_all_subscriptions_in_domain("decision")
-        decision_subscribes_to_input = any(
-            sub["event_name"] in INPUT_EVENTS
-            for sub in decision_subscriptions
-        )
+        decision_subscribes_to_input = any(sub["event_name"] in INPUT_EVENTS for sub in decision_subscriptions)
 
         # Check that Output or Core orchestrator subscribes to Decision's event
         output_subscriptions = get_all_subscriptions_in_domain("output")
         core_orchestrator_subscriptions = self._get_core_orchestrator_subscriptions()
 
-        output_subscribes_to_decision = any(
-            sub["event_name"] in DECISION_EVENTS
-            for sub in output_subscriptions
-        )
+        output_subscribes_to_decision = any(sub["event_name"] in DECISION_EVENTS for sub in output_subscriptions)
 
         orchestrator_subscribes_to_decision = any(
-            sub["event_name"] in DECISION_EVENTS
-            for sub in core_orchestrator_subscriptions
+            sub["event_name"] in DECISION_EVENTS for sub in core_orchestrator_subscriptions
         )
 
         # If either subscription exists, verify the chain is complete
@@ -355,21 +353,24 @@ class TestEventFlowConstraints:
                         violation = f"Output Domain subscribing to {event_name}"
 
                 if violation:
-                    all_violations.append({
-                        "domain": domain,
-                        "class": sub["class_name"],
-                        "event": event_name,
-                        "file": sub["file_path"],
-                        "line": sub["line_number"],
-                        "violation": violation,
-                    })
+                    all_violations.append(
+                        {
+                            "domain": domain,
+                            "class": sub["class_name"],
+                            "event": event_name,
+                            "file": sub["file_path"],
+                            "line": sub["line_number"],
+                            "violation": violation,
+                        }
+                    )
 
         if all_violations:
-            violation_details = "\n".join([
-                f"  - [{v['domain']}] {v['class']} in {v['file']}:{v['line']}: "
-                f"{v['violation']}"
-                for v in all_violations
-            ])
+            violation_details = "\n".join(
+                [
+                    f"  - [{v['domain']}] {v['class']} in {v['file']}:{v['line']}: {v['violation']}"
+                    for v in all_violations
+                ]
+            )
             raise AssertionError(
                 f"Found {len(all_violations)} domain boundary violation(s):\n"
                 f"{violation_details}\n\n"

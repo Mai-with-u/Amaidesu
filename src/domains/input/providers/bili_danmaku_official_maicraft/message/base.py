@@ -1,5 +1,6 @@
 from typing import Optional, Dict, Any
-from dataclasses import dataclass
+from functools import cached_property
+from pydantic import BaseModel, ConfigDict
 from maim_message import MessageBase, UserInfo, BaseMessageInfo, GroupInfo, FormatInfo
 from enum import Enum
 import time
@@ -16,16 +17,18 @@ class BiliMessageType(Enum):
     SUPER_CHAT = "LIVE_OPEN_PLATFORM_SUPER_CHAT"  # 醒目留言
 
 
-@dataclass
-class BiliBaseMessage:
+class BiliBaseMessage(BaseModel):
     """所有bilibili消息类型的基类"""
+
+    model_config = ConfigDict(ignored_types=(cached_property,))
 
     cmd: str
     raw_data: Dict[str, Any]
 
-    def __post_init__(self):
-        """dataclass 初始化后调用，设置logger等基础属性"""
-        self.logger = get_logger(self.__class__.__name__)
+    @cached_property
+    def logger(self):
+        """获取logger实例（延迟初始化）"""
+        return get_logger(self.__class__.__name__)
 
     def to_message_base(
         self,

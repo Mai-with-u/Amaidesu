@@ -338,10 +338,18 @@ async def test_setup_subscribes_to_event(event_bus, mock_provider_class):
     await event_bus.emit(
         CoreEvents.NORMALIZATION_MESSAGE_READY,
         MessageReadyPayload(
-            message={"text": "", "source": "test", "data_type": "text", "content": {}, "importance": 0.0, "metadata": {}, "timestamp": 0.0},
-            source="test"
+            message={
+                "text": "",
+                "source": "test",
+                "data_type": "text",
+                "content": {},
+                "importance": 0.0,
+                "metadata": {},
+                "timestamp": 0.0,
+            },
+            source="test",
         ),
-        source="test"
+        source="test",
     )
     await asyncio.sleep(0.1)
 
@@ -450,7 +458,7 @@ async def test_on_normalized_message_ready_success(decision_manager_with_mock, s
     await manager.event_bus.emit(
         CoreEvents.NORMALIZATION_MESSAGE_READY,
         MessageReadyPayload.from_normalized_message(sample_normalized_message),
-        source="test"
+        source="test",
     )
 
     await asyncio.sleep(0.2)
@@ -489,7 +497,7 @@ async def test_on_normalized_message_ready_missing_message_key(decision_manager_
         CoreEvents.NORMALIZATION_MESSAGE_READY,
         MessageReadyPayload(
             message={},  # 空字典模拟缺失/无效数据
-            source="test"
+            source="test",
         ),
         source="test",
     )
@@ -517,7 +525,7 @@ async def test_on_normalized_message_ready_event_data_structure(decision_manager
     await manager.event_bus.emit(
         CoreEvents.NORMALIZATION_MESSAGE_READY,
         MessageReadyPayload.from_normalized_message(sample_normalized_message),
-        source="test"
+        source="test",
     )
 
     await asyncio.sleep(0.2)
@@ -557,7 +565,7 @@ async def test_on_normalized_message_ready_handles_provider_error(
     await manager.event_bus.emit(
         CoreEvents.NORMALIZATION_MESSAGE_READY,
         MessageReadyPayload.from_normalized_message(sample_normalized_message),
-        source="test"
+        source="test",
     )
 
     await asyncio.sleep(0.1)
@@ -720,10 +728,18 @@ async def test_cleanup_unsubscribes_events(event_bus, mock_provider_class):
     await manager.event_bus.emit(
         CoreEvents.NORMALIZATION_MESSAGE_READY,
         MessageReadyPayload(
-            message={"text": "", "source": "test", "data_type": "text", "content": {}, "importance": 0.0, "metadata": {}, "timestamp": 0.0},
-            source="test"
+            message={
+                "text": "",
+                "source": "test",
+                "data_type": "text",
+                "content": {},
+                "importance": 0.0,
+                "metadata": {},
+                "timestamp": 0.0,
+            },
+            source="test",
         ),
-        source="test"
+        source="test",
     )
 
     await asyncio.sleep(0.1)

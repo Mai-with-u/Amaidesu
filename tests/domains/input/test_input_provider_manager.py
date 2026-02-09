@@ -22,6 +22,7 @@ from tests.mocks.mock_input_provider import MockInputProvider
 # Mock Provider 扩展（支持失败场景）
 # =============================================================================
 
+
 class FailingMockInputProvider(MockInputProvider):
     """模拟启动失败的 Provider"""
 
@@ -63,6 +64,7 @@ class CleanupFailingMockInputProvider(MockInputProvider):
 # Fixtures
 # =============================================================================
 
+
 @pytest.fixture
 def event_bus():
     """创建 EventBus 实例"""
@@ -78,6 +80,7 @@ def manager(event_bus):
 @pytest.fixture
 def sample_providers():
     """创建一组示例 Provider"""
+
     # 使用子类来避免名称冲突
     class MockInputProvider1(MockInputProvider):
         pass
@@ -109,6 +112,7 @@ def failing_providers():
 # 初始化测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_manager_initialization(manager):
     """测试 InputProviderManager 初始化"""
@@ -132,6 +136,7 @@ async def test_manager_initialization_with_event_bus():
 # =============================================================================
 # 并发启动测试
 # =============================================================================
+
 
 @pytest.mark.asyncio
 async def test_start_all_providers_success(manager, sample_providers):
@@ -219,6 +224,7 @@ async def test_start_all_providers_concurrent(manager):
 # 优雅停止测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_stop_all_providers_success(manager, sample_providers):
     """测试成功停止所有 Provider"""
@@ -292,6 +298,7 @@ async def test_stop_all_providers_timeout(manager):
 # 统计信息测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_get_stats_initial(manager):
     """测试初始统计信息"""
@@ -356,11 +363,7 @@ async def test_stats_message_count(manager, event_bus):
 
     # 添加测试数据
     for i in range(3):
-        raw_data = RawData(
-            content=f"测试消息{i}",
-            source="test",
-            data_type="text"
-        )
+        raw_data = RawData(content=f"测试消息{i}", source="test", data_type="text")
         provider.add_test_data(raw_data)
 
     await asyncio.sleep(0.5)  # 等待消息处理
@@ -394,6 +397,7 @@ async def test_stats_error_count(manager):
 # =============================================================================
 # Provider 查找测试
 # =============================================================================
+
 
 @pytest.mark.asyncio
 async def test_get_provider_by_source_success(manager, sample_providers):
@@ -448,6 +452,7 @@ async def test_get_provider_by_source_case_sensitive(manager, sample_providers):
 # 从配置加载测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_load_from_config_basic(manager):
     """测试从配置加载 Provider（基本配置）"""
@@ -458,7 +463,7 @@ async def test_load_from_config_basic(manager):
             "console_input": {
                 "type": "console_input",  # 修正：使用注册名称
             }
-        }
+        },
     }
 
     providers = await manager.load_from_config(config)
@@ -474,12 +479,7 @@ async def test_load_from_config_disabled(manager):
     config = {
         "enabled": False,
         "inputs": ["console_input"],
-        "inputs_config": {
-            "console_input": {
-                "type": "console",
-                "enabled": True
-            }
-        }
+        "inputs_config": {"console_input": {"type": "console", "enabled": True}},
     }
 
     providers = await manager.load_from_config(config)
@@ -490,11 +490,7 @@ async def test_load_from_config_disabled(manager):
 @pytest.mark.asyncio
 async def test_load_from_config_empty_inputs(manager):
     """测试空 inputs 列表"""
-    config = {
-        "enabled": True,
-        "inputs": [],
-        "inputs_config": {}
-    }
+    config = {"enabled": True, "inputs": [], "inputs_config": {}}
 
     providers = await manager.load_from_config(config)
 
@@ -504,10 +500,7 @@ async def test_load_from_config_empty_inputs(manager):
 @pytest.mark.asyncio
 async def test_load_from_config_no_inputs_key(manager):
     """测试缺少 inputs 键"""
-    config = {
-        "enabled": True,
-        "inputs_config": {}
-    }
+    config = {"enabled": True, "inputs_config": {}}
 
     providers = await manager.load_from_config(config)
 
@@ -524,7 +517,7 @@ async def test_load_from_config_provider_disabled(manager):
             "console_input": {
                 "type": "console_input",  # 修正：使用注册名称
             }
-        }
+        },
     }
 
     providers = await manager.load_from_config(config)
@@ -539,12 +532,7 @@ async def test_load_from_config_invalid_provider_type(manager):
     config = {
         "enabled": True,
         "inputs": ["invalid_provider"],
-        "inputs_config": {
-            "invalid_provider": {
-                "type": "invalid_type",
-                "enabled": True
-            }
-        }
+        "inputs_config": {"invalid_provider": {"type": "invalid_type", "enabled": True}},
     }
 
     # 不应该抛出异常，而是返回空列表
@@ -563,7 +551,7 @@ async def test_load_from_config_type_fallback(manager):
             "console_input": {
                 # 没有 type 字段，应该回退到 input_name (console_input)
             }
-        }
+        },
     }
 
     providers = await manager.load_from_config(config)
@@ -581,9 +569,9 @@ async def test_load_from_config_and_start(manager):
         "inputs_config": {
             "console_input": {
                 "type": "console_input",  # 修正：使用注册名称
-                "user_id": "test_user"
+                "user_id": "test_user",
             }
-        }
+        },
     }
 
     providers = await manager.load_from_config(config)
@@ -602,17 +590,14 @@ async def test_load_from_config_and_start(manager):
 # 数据流测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_provider_data_flow_to_event_bus(manager, event_bus):
     """测试 Provider 数据通过 EventBus 传递"""
     collected_events = []
 
     async def on_raw_data(event_name: str, event_data: dict, source: str):
-        collected_events.append({
-            "event_name": event_name,
-            "data": event_data.get("data"),
-            "source": source
-        })
+        collected_events.append({"event_name": event_name, "data": event_data.get("data"), "source": source})
 
     event_bus.on("perception.raw_data.generated", on_raw_data)
 
@@ -621,11 +606,7 @@ async def test_provider_data_flow_to_event_bus(manager, event_bus):
     await manager.start_all_providers([provider])
 
     # 添加测试数据
-    raw_data = RawData(
-        content="测试消息",
-        source="test",
-        data_type="text"
-    )
+    raw_data = RawData(content="测试消息", source="test", data_type="text")
     provider.add_test_data(raw_data)
 
     await asyncio.sleep(0.3)
@@ -645,10 +626,7 @@ async def test_multiple_providers_data_isolation(manager, event_bus):
     collected_events = []
 
     async def on_raw_data(event_name: str, event_data: dict, source: str):
-        collected_events.append({
-            "data": event_data.get("data"),
-            "source": source
-        })
+        collected_events.append({"data": event_data.get("data"), "source": source})
 
     event_bus.on("perception.raw_data.generated", on_raw_data)
 
@@ -675,6 +653,7 @@ async def test_multiple_providers_data_isolation(manager, event_bus):
 # =============================================================================
 # 错误隔离测试
 # =============================================================================
+
 
 @pytest.mark.asyncio
 async def test_single_provider_failure_does_not_affect_others(manager, event_bus):
@@ -733,6 +712,7 @@ async def test_provider_runtime_error_isolation(manager, event_bus):
 # =============================================================================
 # 边界情况测试
 # =============================================================================
+
 
 @pytest.mark.asyncio
 async def test_manager_with_zero_providers(manager):

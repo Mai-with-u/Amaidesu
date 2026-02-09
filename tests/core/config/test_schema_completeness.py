@@ -46,9 +46,7 @@ class TestProviderSchemaCompleteness:
                 # 验证 ConfigSchema 继承 BaseProviderConfig
                 schema_cls = provider_class.ConfigSchema
                 if not issubclass(schema_cls, BaseProviderConfig):
-                    missing_schemas.append(
-                        f"Input Provider '{name}' ConfigSchema does not inherit BaseProviderConfig"
-                    )
+                    missing_schemas.append(f"Input Provider '{name}' ConfigSchema does not inherit BaseProviderConfig")
 
         # 检查 Output Providers
         for name, info in registry_info["output_providers"].items():
@@ -58,9 +56,7 @@ class TestProviderSchemaCompleteness:
             else:
                 schema_cls = provider_class.ConfigSchema
                 if not issubclass(schema_cls, BaseProviderConfig):
-                    missing_schemas.append(
-                        f"Output Provider '{name}' ConfigSchema does not inherit BaseProviderConfig"
-                    )
+                    missing_schemas.append(f"Output Provider '{name}' ConfigSchema does not inherit BaseProviderConfig")
 
         # 检查 Decision Providers
         for name, info in registry_info["decision_providers"].items():
@@ -106,9 +102,7 @@ class TestProviderSchemaCompleteness:
                     # 验证 get_config_schema 能正确获取
                     schema = ProviderRegistry.get_config_schema(name)
                     if schema is None:
-                        unregistered_schemas.append(
-                            f"Input Provider '{name}' get_config_schema() returned None"
-                        )
+                        unregistered_schemas.append(f"Input Provider '{name}' get_config_schema() returned None")
 
         # 检查 Output Providers
         for name in registry_info["output_providers"].keys():
@@ -119,9 +113,7 @@ class TestProviderSchemaCompleteness:
                 else:
                     schema = ProviderRegistry.get_config_schema(name)
                     if schema is None:
-                        unregistered_schemas.append(
-                            f"Output Provider '{name}' get_config_schema() returned None"
-                        )
+                        unregistered_schemas.append(f"Output Provider '{name}' get_config_schema() returned None")
 
         # 检查 Decision Providers
         for name in registry_info["decision_providers"].keys():
@@ -132,9 +124,7 @@ class TestProviderSchemaCompleteness:
                 else:
                     schema = ProviderRegistry.get_config_schema(name)
                     if schema is None:
-                        unregistered_schemas.append(
-                            f"Decision Provider '{name}' get_config_schema() returned None"
-                        )
+                        unregistered_schemas.append(f"Decision Provider '{name}' get_config_schema() returned None")
 
         # 断言：所有 ConfigSchema 都应已注册
         assert len(unregistered_schemas) == 0, (
@@ -489,9 +479,7 @@ class TestSchemaIntegration:
                 assert schema is not None, f"Provider '{provider_name}' schema not found"
 
                 # 生成临时 TOML
-                with tempfile.NamedTemporaryFile(
-                    mode="w", suffix=f".{provider_name}.toml", delete=False
-                ) as f:
+                with tempfile.NamedTemporaryFile(mode="w", suffix=f".{provider_name}.toml", delete=False) as f:
                     temp_path = f.name
                     temp_files.append(temp_path)
 

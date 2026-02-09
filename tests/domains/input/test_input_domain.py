@@ -22,6 +22,7 @@ from src.core.events.names import CoreEvents
 # Fixtures
 # =============================================================================
 
+
 @pytest.fixture
 async def event_bus():
     """创建事件总线"""
@@ -41,6 +42,7 @@ async def input_domain(event_bus):
 # =============================================================================
 # InputDomain 核心功能测试
 # =============================================================================
+
 
 @pytest.mark.asyncio
 async def test_input_domain_setup(input_domain):
@@ -64,16 +66,10 @@ async def test_raw_data_to_normalized_message(input_domain):
     input_domain.event_bus.on("normalization.message_ready", on_message_ready, priority=50)
 
     # 发布测试数据
-    raw_data = RawData(
-        content={"text": "测试消息"},
-        source="test_source",
-        data_type="text"
-    )
+    raw_data = RawData(content={"text": "测试消息"}, source="test_source", data_type="text")
 
     await input_domain.event_bus.emit(
-        CoreEvents.PERCEPTION_RAW_DATA_GENERATED,
-        RawDataPayload.from_raw_data(raw_data),
-        source="test"
+        CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload.from_raw_data(raw_data), source="test"
     )
 
     # 等待事件处理
@@ -103,15 +99,9 @@ async def test_input_domain_multiple_messages(input_domain):
     test_messages = ["消息1", "消息2", "消息3"]
 
     for msg in test_messages:
-        raw_data = RawData(
-            content={"text": msg},
-            source="test",
-            data_type="text"
-        )
+        raw_data = RawData(content={"text": msg}, source="test", data_type="text")
         await input_domain.event_bus.emit(
-            CoreEvents.PERCEPTION_RAW_DATA_GENERATED,
-            RawDataPayload.from_raw_data(raw_data),
-            source="test"
+            CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload.from_raw_data(raw_data), source="test"
         )
         await asyncio.sleep(0.1)
 
@@ -155,19 +145,13 @@ async def test_full_data_flow():
 
     # 模拟弹幕数据
     raw_data = RawData(
-        content={
-            "text": "主播好！",
-            "user_name": "测试粉丝",
-            "user_id": "12345"
-        },
+        content={"text": "主播好！", "user_name": "测试粉丝", "user_id": "12345"},
         source="bili_danmaku",
-        data_type="danmaku"
+        data_type="danmaku",
     )
 
     await event_bus.emit(
-        CoreEvents.PERCEPTION_RAW_DATA_GENERATED,
-        RawDataPayload.from_raw_data(raw_data),
-        source="test"
+        CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload.from_raw_data(raw_data), source="test"
     )
 
     await asyncio.sleep(0.2)

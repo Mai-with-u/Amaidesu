@@ -102,27 +102,11 @@ class BiliDanmakuOfficialMaiCraftInputProvider(InputProvider):
         app_id: str = Field(..., description="应用ID")
         access_key: str = Field(..., description="访问密钥")
         access_key_secret: str = Field(..., description="访问密钥Secret")
-        api_host: str = Field(
-            default="https://live-open.biliapi.com",
-            description="API主机地址"
-        )
-        message_cache_size: int = Field(
-            default=1000,
-            description="消息缓存大小",
-            ge=1
-        )
-        context_tags: Optional[list] = Field(
-            default=None,
-            description="Prompt上下文标签"
-        )
-        forward_ws_url: Optional[str] = Field(
-            default=None,
-            description="转发目标WebSocket URL"
-        )
-        forward_enabled: bool = Field(
-            default=True,
-            description="启用WebSocket转发"
-        )
+        api_host: str = Field(default="https://live-open.biliapi.com", description="API主机地址")
+        message_cache_size: int = Field(default=1000, description="消息缓存大小", ge=1)
+        context_tags: Optional[list] = Field(default=None, description="Prompt上下文标签")
+        forward_ws_url: Optional[str] = Field(default=None, description="转发目标WebSocket URL")
+        forward_enabled: bool = Field(default=True, description="启用WebSocket转发")
 
         @field_validator("forward_ws_url")
         @classmethod

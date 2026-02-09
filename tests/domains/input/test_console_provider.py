@@ -23,13 +23,11 @@ from src.core.events.names import CoreEvents
 # 初始化测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_console_input_provider_initialization():
     """测试 ConsoleInputProvider 初始化"""
-    config = {
-        "user_id": "test_user_123",
-        "user_nickname": "测试用户"
-    }
+    config = {"user_id": "test_user_123", "user_nickname": "测试用户"}
 
     provider = ConsoleInputProvider(config)
 
@@ -54,6 +52,7 @@ async def test_console_input_provider_default_config():
 # RawData 格式测试
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_console_input_provider_text_format():
     """测试普通文本 RawData 格式"""
@@ -61,10 +60,7 @@ async def test_console_input_provider_text_format():
 
     # 测试普通文本 RawData 格式
     raw_data = RawData(
-        content="测试消息",
-        source="console",
-        data_type="text",
-        metadata={"user": "控制台", "user_id": "console_user"}
+        content="测试消息", source="console", data_type="text", metadata={"user": "控制台", "user_id": "console_user"}
     )
 
     assert raw_data.content == "测试消息"
@@ -77,13 +73,7 @@ async def test_console_input_provider_text_format():
 async def test_console_input_provider_gift_format():
     """测试礼物 RawData 格式"""
     raw_data = RawData(
-        content={
-            "user_name": "张三",
-            "gift_name": "小星星",
-            "count": 10
-        },
-        source="console",
-        data_type="gift"
+        content={"user_name": "张三", "gift_name": "小星星", "count": 10}, source="console", data_type="gift"
     )
 
     assert raw_data.data_type == "gift"
@@ -96,12 +86,7 @@ async def test_console_input_provider_gift_format():
 async def test_console_input_provider_superchat_format():
     """测试醒目留言 RawData 格式"""
     raw_data = RawData(
-        content={
-            "user_name": "李四",
-            "content": "醒目留言内容"
-        },
-        source="console",
-        data_type="superchat"
+        content={"user_name": "李四", "content": "醒目留言内容"}, source="console", data_type="superchat"
     )
 
     assert raw_data.data_type == "superchat"
@@ -112,14 +97,7 @@ async def test_console_input_provider_superchat_format():
 @pytest.mark.asyncio
 async def test_console_input_provider_guard_format():
     """测试大航海 RawData 格式"""
-    raw_data = RawData(
-        content={
-            "user_name": "王五",
-            "level": "舰长"
-        },
-        source="console",
-        data_type="guard"
-    )
+    raw_data = RawData(content={"user_name": "王五", "level": "舰长"}, source="console", data_type="guard")
 
     assert raw_data.data_type == "guard"
     assert raw_data.content["user_name"] == "王五"
@@ -129,6 +107,7 @@ async def test_console_input_provider_guard_format():
 # =============================================================================
 # 数据流测试
 # =============================================================================
+
 
 @pytest.mark.asyncio
 async def test_console_input_provider_data_flow():
@@ -154,13 +133,11 @@ async def test_console_input_provider_data_flow():
         content="你好，Amaidesu",
         source="console",
         data_type="text",
-        metadata={"user": "控制台", "user_id": "console_user"}
+        metadata={"user": "控制台", "user_id": "console_user"},
     )
 
     await event_bus.emit(
-        CoreEvents.PERCEPTION_RAW_DATA_GENERATED,
-        RawDataPayload.from_raw_data(raw_data),
-        source="ConsoleInputProvider"
+        CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload.from_raw_data(raw_data), source="ConsoleInputProvider"
     )
 
     await asyncio.sleep(0.2)
@@ -194,19 +171,11 @@ async def test_console_provider_gift_command_flow():
     # 模拟礼物命令
     ConsoleInputProvider({})
     raw_data = RawData(
-        content={
-            "user_name": "张三",
-            "gift_name": "小星星",
-            "count": 5
-        },
-        source="console",
-        data_type="gift"
+        content={"user_name": "张三", "gift_name": "小星星", "count": 5}, source="console", data_type="gift"
     )
 
     await event_bus.emit(
-        CoreEvents.PERCEPTION_RAW_DATA_GENERATED,
-        RawDataPayload.from_raw_data(raw_data),
-        source="ConsoleInputProvider"
+        CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload.from_raw_data(raw_data), source="ConsoleInputProvider"
     )
 
     await asyncio.sleep(0.2)

@@ -20,6 +20,7 @@ from src.core.events.payloads import RawDataPayload
 
 class SimpleTestEvent(BaseModel):
     """简单测试事件"""
+
     data: str = Field(..., description="测试数据")
 
 

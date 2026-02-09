@@ -19,10 +19,12 @@ class MockDecisionProvider(DecisionProvider):
 
     def add_response(self, text: str, emotion: EmotionType = EmotionType.NEUTRAL):
         """添加预设响应"""
-        self.responses.append({
-            "text": text,
-            "emotion": emotion,
-        })
+        self.responses.append(
+            {
+                "text": text,
+                "emotion": emotion,
+            }
+        )
 
     async def decide(self, message: NormalizedMessage) -> Optional[Intent]:
         """决策（返回预设响应或默认响应）"""

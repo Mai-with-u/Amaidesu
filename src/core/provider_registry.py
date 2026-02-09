@@ -59,12 +59,7 @@ class ProviderRegistry:
     _logger = get_logger("ProviderRegistry")
 
     @classmethod
-    def register_input(
-        cls,
-        name: str,
-        provider_class: Type,
-        source: str = "unknown"
-    ) -> None:
+    def register_input(cls, name: str, provider_class: Type, source: str = "unknown") -> None:
         """
         注册输入 Provider
 
@@ -83,10 +78,7 @@ class ProviderRegistry:
         from src.core.base.input_provider import InputProvider
 
         if not issubclass(provider_class, InputProvider):
-            raise TypeError(
-                f"{name} must be a subclass of InputProvider, "
-                f"got {provider_class.__mro__}"
-            )
+            raise TypeError(f"{name} must be a subclass of InputProvider, got {provider_class.__mro__}")
 
         if name in cls._input_providers:
             cls._logger.warning(
@@ -103,24 +95,18 @@ class ProviderRegistry:
             schema_cls = provider_class.ConfigSchema
             # 延迟导入 BaseProviderConfig 避免循环依赖
             from src.services.config.schemas.schemas.base import BaseProviderConfig
+
             try:
                 if issubclass(schema_cls, BaseProviderConfig):
                     cls._config_schemas[name] = schema_cls
                     cls._logger.debug(f"自动注册 ConfigSchema: {name} -> {schema_cls.__name__}")
                 else:
-                    cls._logger.warning(
-                        f"Provider '{name}' 有 ConfigSchema 但不是 BaseProviderConfig 的子类"
-                    )
+                    cls._logger.warning(f"Provider '{name}' 有 ConfigSchema 但不是 BaseProviderConfig 的子类")
             except TypeError:
                 cls._logger.warning(f"Provider '{name}' 的 ConfigSchema 不是有效的类")
 
     @classmethod
-    def register_output(
-        cls,
-        name: str,
-        provider_class: Type,
-        source: str = "unknown"
-    ) -> None:
+    def register_output(cls, name: str, provider_class: Type, source: str = "unknown") -> None:
         """
         注册输出 Provider
 
@@ -138,10 +124,7 @@ class ProviderRegistry:
         from src.core.base.output_provider import OutputProvider
 
         if not issubclass(provider_class, OutputProvider):
-            raise TypeError(
-                f"{name} must be a subclass of OutputProvider, "
-                f"got {provider_class.__mro__}"
-            )
+            raise TypeError(f"{name} must be a subclass of OutputProvider, got {provider_class.__mro__}")
 
         if name in cls._output_providers:
             cls._logger.warning(
@@ -158,24 +141,18 @@ class ProviderRegistry:
             schema_cls = provider_class.ConfigSchema
             # 延迟导入 BaseProviderConfig 避免循环依赖
             from src.services.config.schemas.schemas.base import BaseProviderConfig
+
             try:
                 if issubclass(schema_cls, BaseProviderConfig):
                     cls._config_schemas[name] = schema_cls
                     cls._logger.debug(f"自动注册 ConfigSchema: {name} -> {schema_cls.__name__}")
                 else:
-                    cls._logger.warning(
-                        f"Provider '{name}' 有 ConfigSchema 但不是 BaseProviderConfig 的子类"
-                    )
+                    cls._logger.warning(f"Provider '{name}' 有 ConfigSchema 但不是 BaseProviderConfig 的子类")
             except TypeError:
                 cls._logger.warning(f"Provider '{name}' 的 ConfigSchema 不是有效的类")
 
     @classmethod
-    def register_decision(
-        cls,
-        name: str,
-        provider_class: Type,
-        source: str = "unknown"
-    ) -> None:
+    def register_decision(cls, name: str, provider_class: Type, source: str = "unknown") -> None:
         """
         注册决策 Provider
 
@@ -193,10 +170,7 @@ class ProviderRegistry:
         from src.core.base.decision_provider import DecisionProvider
 
         if not issubclass(provider_class, DecisionProvider):
-            raise TypeError(
-                f"{name} must be a subclass of DecisionProvider, "
-                f"got {provider_class.__mro__}"
-            )
+            raise TypeError(f"{name} must be a subclass of DecisionProvider, got {provider_class.__mro__}")
 
         if name in cls._decision_providers:
             cls._logger.warning(
@@ -213,14 +187,13 @@ class ProviderRegistry:
             schema_cls = provider_class.ConfigSchema
             # 延迟导入 BaseProviderConfig 避免循环依赖
             from src.services.config.schemas.schemas.base import BaseProviderConfig
+
             try:
                 if issubclass(schema_cls, BaseProviderConfig):
                     cls._config_schemas[name] = schema_cls
                     cls._logger.debug(f"自动注册 ConfigSchema: {name} -> {schema_cls.__name__}")
                 else:
-                    cls._logger.warning(
-                        f"Provider '{name}' 有 ConfigSchema 但不是 BaseProviderConfig 的子类"
-                    )
+                    cls._logger.warning(f"Provider '{name}' 有 ConfigSchema 但不是 BaseProviderConfig 的子类")
             except TypeError:
                 cls._logger.warning(f"Provider '{name}' 的 ConfigSchema 不是有效的类")
 
@@ -241,10 +214,7 @@ class ProviderRegistry:
         """
         if name not in cls._input_providers:
             available = ", ".join(cls._input_providers.keys())
-            raise ValueError(
-                f"Unknown input provider: '{name}'. "
-                f"Available providers: {available or 'none'}"
-            )
+            raise ValueError(f"Unknown input provider: '{name}'. Available providers: {available or 'none'}")
 
         provider_class = cls._input_providers[name]
         return provider_class(config)
@@ -266,10 +236,7 @@ class ProviderRegistry:
         """
         if name not in cls._output_providers:
             available = ", ".join(cls._output_providers.keys())
-            raise ValueError(
-                f"Unknown output provider: '{name}'. "
-                f"Available providers: {available or 'none'}"
-            )
+            raise ValueError(f"Unknown output provider: '{name}'. Available providers: {available or 'none'}")
 
         provider_class = cls._output_providers[name]
         return provider_class(config)
@@ -291,10 +258,7 @@ class ProviderRegistry:
         """
         if name not in cls._decision_providers:
             available = ", ".join(cls._decision_providers.keys())
-            raise ValueError(
-                f"Unknown decision provider: '{name}'. "
-                f"Available providers: {available or 'none'}"
-            )
+            raise ValueError(f"Unknown decision provider: '{name}'. Available providers: {available or 'none'}")
 
         provider_class = cls._decision_providers[name]
         return provider_class(config)
@@ -492,27 +456,15 @@ class ProviderRegistry:
         enabled_outputs = output_config.get("enabled_outputs", [])
 
         # 按域注册 Provider
-        input_count = cls._register_provider_by_domain(
-            "input",
-            enabled_inputs,
-            config_service
-        )
-        decision_count = cls._register_provider_by_domain(
-            "decision",
-            available_decision,
-            config_service
-        )
-        output_count = cls._register_provider_by_domain(
-            "output",
-            enabled_outputs,
-            config_service
-        )
+        input_count = cls._register_provider_by_domain("input", enabled_inputs, config_service)
+        decision_count = cls._register_provider_by_domain("decision", available_decision, config_service)
+        output_count = cls._register_provider_by_domain("output", enabled_outputs, config_service)
 
         stats = {
             "input": input_count,
             "decision": decision_count,
             "output": output_count,
-            "total": input_count + decision_count + output_count
+            "total": input_count + decision_count + output_count,
         }
 
         cls._logger.info(
@@ -524,12 +476,7 @@ class ProviderRegistry:
         return stats
 
     @classmethod
-    def _register_provider_by_domain(
-        cls,
-        domain: str,
-        provider_names: List[str],
-        config_service
-    ) -> int:
+    def _register_provider_by_domain(cls, domain: str, provider_names: List[str], config_service) -> int:
         """
         按域注册 Provider
 
@@ -553,9 +500,7 @@ class ProviderRegistry:
             try:
                 # 获取 Provider 配置（检查是否有自定义模块路径）
                 provider_config = config_service.get(
-                    f"providers.{domain}.{provider_name}",
-                    default={},
-                    section=f"providers.{domain}"
+                    f"providers.{domain}.{provider_name}", default={}, section=f"providers.{domain}"
                 )
 
                 # 确定模块导入路径
@@ -592,15 +537,9 @@ class ProviderRegistry:
                     )
 
             except ImportError as e:
-                cls._logger.warning(
-                    f"导入 {domain} Provider 失败: {provider_name} - {e} "
-                    f"(模块路径: {module_path})"
-                )
+                cls._logger.warning(f"导入 {domain} Provider 失败: {provider_name} - {e} (模块路径: {module_path})")
             except Exception as e:
-                cls._logger.error(
-                    f"注册 {domain} Provider 时发生错误: {provider_name} - {e}",
-                    exc_info=True
-                )
+                cls._logger.error(f"注册 {domain} Provider 时发生错误: {provider_name} - {e}", exc_info=True)
 
         cls._logger.info(f"{domain} 域注册完成: {registered_count}/{len(provider_names)} 个成功")
         return registered_count
@@ -631,7 +570,7 @@ class ProviderRegistry:
             "input": input_count,
             "decision": decision_count,
             "output": output_count,
-            "total": input_count + decision_count + output_count
+            "total": input_count + decision_count + output_count,
         }
 
     @classmethod
@@ -699,10 +638,7 @@ class ProviderRegistry:
         elif layer == "output":
             cls.register_output(name, provider_class, source=source)
         else:
-            raise ValueError(
-                f"无效的 Provider 域: {layer}. "
-                f"必须是 'input', 'decision', 或 'output'"
-            )
+            raise ValueError(f"无效的 Provider 域: {layer}. 必须是 'input', 'decision', 或 'output'")
 
     @classmethod
     def register_provider_class(cls, provider_class: Type) -> None:

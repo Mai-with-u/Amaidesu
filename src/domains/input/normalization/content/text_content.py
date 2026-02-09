@@ -4,12 +4,11 @@
 表示普通文本消息。
 """
 
-from dataclasses import dataclass
-from typing import Optional
+from typing import Literal, Optional
+from pydantic import Field
 from .base import StructuredContent
 
 
-@dataclass
 class TextContent(StructuredContent):
     """
     文本内容
@@ -23,10 +22,10 @@ class TextContent(StructuredContent):
         user_id: 用户ID（可选）
     """
 
-    type: str = "text"
-    text: str = ""
-    user: Optional[str] = None
-    user_id: Optional[str] = None
+    type: Literal["text"] = "text"
+    text: str = Field(default="")
+    user: Optional[str] = Field(default=None)
+    user_id: Optional[str] = Field(default=None)
 
     def get_importance(self) -> float:
         """

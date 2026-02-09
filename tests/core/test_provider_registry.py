@@ -31,12 +31,7 @@ class MockInputProvider(InputProvider):
     @classmethod
     def get_registration_info(cls):
         """获取注册信息"""
-        return {
-            "layer": "input",
-            "name": "mock_input_explicit",
-            "class": cls,
-            "source": "test:mock_input"
-        }
+        return {"layer": "input", "name": "mock_input_explicit", "class": cls, "source": "test:mock_input"}
 
 
 class MockDecisionProvider(DecisionProvider):
@@ -58,12 +53,7 @@ class MockDecisionProvider(DecisionProvider):
     @classmethod
     def get_registration_info(cls):
         """获取注册信息"""
-        return {
-            "layer": "decision",
-            "name": "mock_decision_explicit",
-            "class": cls,
-            "source": "test:mock_decision"
-        }
+        return {"layer": "decision", "name": "mock_decision_explicit", "class": cls, "source": "test:mock_decision"}
 
 
 class MockOutputProvider(OutputProvider):
@@ -79,12 +69,7 @@ class MockOutputProvider(OutputProvider):
     @classmethod
     def get_registration_info(cls):
         """获取注册信息"""
-        return {
-            "layer": "output",
-            "name": "mock_output_explicit",
-            "class": cls,
-            "source": "test:mock_output"
-        }
+        return {"layer": "output", "name": "mock_output_explicit", "class": cls, "source": "test:mock_output"}
 
 
 @pytest.fixture(autouse=True)
@@ -309,7 +294,7 @@ class TestExplicitRegistration:
         """测试注册信息缺少必需字段"""
         incomplete_info = {
             "layer": "input",
-            "name": "test"
+            "name": "test",
             # 缺少 "class" 字段
         }
 
@@ -318,11 +303,7 @@ class TestExplicitRegistration:
 
     def test_register_from_info_invalid_layer(self):
         """测试无效的 Provider 域"""
-        invalid_info = {
-            "layer": "invalid_layer",
-            "name": "test",
-            "class": MockInputProvider
-        }
+        invalid_info = {"layer": "invalid_layer", "name": "test", "class": MockInputProvider}
 
         with pytest.raises(ValueError, match="无效的 Provider 域"):
             ProviderRegistry.register_from_info(invalid_info)
@@ -339,6 +320,7 @@ class TestExplicitRegistration:
 
     def test_register_provider_class_no_method(self):
         """测试 Provider 类未实现 get_registration_info()"""
+
         class IncompleteProvider(InputProvider):
             def __init__(self, config: dict):
                 super().__init__(config)
