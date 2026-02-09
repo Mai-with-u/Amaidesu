@@ -12,7 +12,6 @@ from src.domains.input.pipelines.manager import InputPipelineManager
 from src.services.context.manager import ContextManager
 from src.core.event_bus import EventBus
 from src.domains.decision import DecisionProviderManager
-from src.core.connectors.http_server import HttpServer
 from src.domains.output import OutputCoordinator
 
 # LLM 服务（核心基础设施）
@@ -37,11 +36,6 @@ class AmaidesuCore:
         return self._llm_service
 
     @property
-    def http_server(self) -> Optional[HttpServer]:
-        """获取HTTP服务器实例"""
-        return self._http_server
-
-    @property
     def input_pipeline_manager(self) -> Optional[InputPipelineManager]:
         """获取输入管道管理器实例"""
         return self._input_pipeline_manager
@@ -60,7 +54,6 @@ class AmaidesuCore:
         llm_service: Optional[LLMManager] = None,
         decision_provider_manager: Optional[DecisionProviderManager] = None,
         output_coordinator: Optional[OutputCoordinator] = None,
-        http_server: Optional[HttpServer] = None,
     ):
         """
         初始化 Amaidesu Core（A-01重构版本 - 纯组合根）。
@@ -73,17 +66,11 @@ class AmaidesuCore:
             llm_service: (可选) 已配置的 LLM 服务。
             decision_provider_manager: (可选) 已配置的决策Provider管理器。
             output_coordinator: (可选) 已配置的输出协调器。
-            http_server: (可选) 已配置的HTTP服务器。
         """
         self.logger = get_logger("AmaidesuCore")
         self.logger.debug("AmaidesuCore 初始化开始")
 
         self.platform = platform
-
-        # HTTP服务器
-        self._http_server = http_server
-        if http_server is not None:
-            self.logger.info("已使用外部提供的HTTP服务器")
 
         # 输入管道管理器
         self._input_pipeline_manager = pipeline_manager
@@ -124,15 +111,6 @@ class AmaidesuCore:
 
     async def connect(self):
         """启动核心服务"""
-        # 启动HTTP服务器（如果已配置）
-        if self._http_server and self._http_server.is_available:
-            try:
-                await self._http_server.start()
-                self.logger.info("HTTP服务器已启动")
-            except Exception as e:
-                self.logger.error(f"启动HTTP服务器失败: {e}", exc_info=True)
-                self.logger.warning("HTTP服务器功能不可用，继续启动其他服务")
-
         # 启动决策Provider（如果已配置）
         if self._decision_provider_manager:
             provider = self._decision_provider_manager.get_current_provider()
@@ -170,14 +148,6 @@ class AmaidesuCore:
                     self.logger.info("决策Provider连接已断开")
                 except Exception as e:
                     self.logger.error(f"决策Provider断开失败: {e}", exc_info=True)
-
-        # 停止HTTP服务器
-        if self._http_server and self._http_server.is_running:
-            try:
-                await self._http_server.stop()
-                self.logger.info("HTTP服务器已停止")
-            except Exception as e:
-                self.logger.error(f"停止HTTP服务器失败: {e}", exc_info=True)
 
         self.logger.info("核心服务已停止")
 
