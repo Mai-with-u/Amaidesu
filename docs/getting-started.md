@@ -165,6 +165,40 @@ Amaidesu/
 - 阅读 [开发规范](development-guide.md) 了解代码风格
 - 阅读 [3域架构总览](architecture/overview.md) 理解项目架构
 - 阅读 [Provider 开发指南](development/provider-guide.md) 学习如何开发新功能
+- 查看 [插件迁移完成文档](../plugins_backup/MIGRATION_COMPLETE.md) 了解架构迁移历史
+
+## 新增 Provider（2026-02-09）
+
+项目已完成从插件系统到 Provider 架构的重构，新增以下 Provider：
+
+### 输入 Provider
+- **STTInputProvider**: 语音转文字（讯飞ASR + Silero VAD）
+- **BiliDanmakuOfficialInputProvider**: B站官方弹幕
+- **ReadPingmuInputProvider**: 读屏木输入
+- **BiliDanmakuOfficialMaicraftInputProvider**: B站官方弹幕 Maicraft 版本
+
+### 决策 Provider
+- **KeywordActionDecisionProvider**: 关键词动作决策
+- **MaicraftDecisionProvider**: 弹幕互动游戏决策
+
+### 输出 Provider
+- **GPTSoVITSOutputProvider**: GPT-SoVITS 高质量语音合成
+- **AvatarOutputProvider**: 虚拟形象输出（支持VTS/VRChat/Live2D）
+- **ObsControlOutputProvider**: OBS 控制（文本显示、场景切换）
+- **StickerOutputProvider**: 贴纸输出
+- **RemoteStreamOutputProvider**: 远程流媒体输出
+- **OmniTTSOutputProvider**: Fish TTS 语音合成
+- **WarudoOutputProvider**: Warudo 虚拟主播控制
+
+### 共享服务
+- **DGLabService**: DG-LAB 硬件控制服务
+
+### 平台适配器
+- **VRChatAdapter**: VRChat OSC 协议适配器
+
+详细的配置示例和使用说明，请参考：
+- [Provider 开发指南 - 新增 Provider 详细说明](development/provider-guide.md#新增-provider-详细说明)
+- [config-template.toml](../config-template.toml) 中的配置示例
 
 ## 遇到问题？
 

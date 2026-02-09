@@ -18,9 +18,23 @@
 
 ## 重构阶段
 
-当前处于完全重构阶段，在 `refactor` 分支中，不需要保留任何向后兼容的代码，需要彻底重构。
+**✅ 重构已完成**：所有插件已成功迁移到 Provider 系统，`refactor` 分支中的代码已稳定。
 
-**不必担心会破坏性变更**，因为重构完毕之前，都是没有用户在使用的。
+### 迁移状态
+
+- **Input Provider**：8 个全部完成迁移
+- **Decision Provider**：6 个已迁移完成（含新增）
+- **Output Provider**：11 个完成迁移（含新增）
+- **Service**：1 个完成迁移
+
+### 旧插件备份
+
+旧插件代码已归档到 `plugins_backup/` 目录：
+- 保留作为历史参考
+- 包含完整的迁移对照表
+- 请参考 `plugins_backup/MIGRATION_COMPLETE.md`
+
+**不必担心会破坏性变更**，因为重构已经完成，所有功能都已在新架构中正常工作。
 
 ## 核心规范
 
@@ -195,9 +209,9 @@ async def handle_message(self, message):
 
 | 类型 | 职责 | 位置 | 示例 |
 |------|------|------|------|
-| **InputProvider** | 从外部数据源采集数据 | `src/domains/input/providers/` | ConsoleInputProvider, BiliDanmakuInputProvider |
-| **DecisionProvider** | 处理 NormalizedMessage 生成 Intent | `src/domains/decision/providers/` | MaiCoreDecisionProvider, LocalLLMDecisionProvider |
-| **OutputProvider** | 渲染到目标设备 | `src/domains/output/providers/` | TTSOutputProvider, SubtitleOutputProvider, VTSOutputProvider |
+| **InputProvider** | 从外部数据源采集数据 | `src/domains/input/providers/` | ConsoleInputProvider, BiliDanmakuInputProvider, STTInputProvider, BiliDanmakuOfficialInputProvider |
+| **DecisionProvider** | 处理 NormalizedMessage 生成 Intent | `src/domains/decision/providers/` | MaiCoreDecisionProvider, LocalLLMDecisionProvider, KeywordActionDecisionProvider, MaicraftDecisionProvider |
+| **OutputProvider** | 渲染到目标设备 | `src/domains/output/providers/` | TTSOutputProvider, GPTSoVITSOutputProvider, AvatarOutputProvider, ObsControlOutputProvider, StickerOutputProvider |
 
 ### Provider 生命周期方法
 
@@ -211,6 +225,14 @@ async def handle_message(self, message):
 而 Decision/OutputProvider 使用 `setup()`/`cleanup()` 是因为它们是事件订阅者。
 
 InputProvider 也提供了 `setup()` 方法作为接口一致性，但它是空实现，实际启动数据流必须使用 `start()`。
+
+### Provider 生命周期快速参考
+
+| 类型 | 启动 | 停止 | 内部初始化 | 内部清理 |
+|------|-----|------|----------|----------|
+| InputProvider | `start()` | `stop()` + `cleanup()` | `_setup_internal()` | `_cleanup_internal()` |
+| DecisionProvider | `setup()` | `cleanup()` | `_setup_internal()` | `_cleanup_internal()` |
+| OutputProvider | `setup()` | `cleanup()` | `_setup_internal()` | `_cleanup_internal()` |
 
 ### 添加新 Provider
 
@@ -439,6 +461,28 @@ Amaidesu/
 - [提示词管理](docs/development/prompt-management.md) - PromptManager 使用
 - [测试指南](docs/development/testing-guide.md) - 测试规范和最佳实践
 
+### 迁移文档
+- [插件迁移完成文档](plugins_backup/MIGRATION_COMPLETE.md) - 插件系统到 Provider 架构的迁移状态
+
 ---
 
 *最后更新：2026-02-09*
+
+## 迁移完成状态（2026-02-09）
+
+✅ **插件系统到 Provider 架构重构已完成**
+
+所有功能已成功从旧插件系统迁移到新的 Provider 架构：
+
+- **8 个 Input Provider** 已迁移完成
+- **6 个 Decision Provider** 已迁移完成（含新增）
+- **11 个 Output Provider** 已迁移完成（含新增）
+- **1 个共享服务** (DGLabService) 已迁移完成
+
+新架构优势：
+- 类型安全：所有 Provider 都继承基类，提供统一的接口
+- 配置驱动：通过 TOML 配置文件启用/禁用 Provider
+- 生命周期管理：由 ProviderManager 统一管理
+- 错误隔离：单个 Provider 不会影响其他 Provider
+
+旧的插件代码已归档到 `plugins_backup/` 目录，仅供参考。所有后续开发都应基于新的 Provider 架构进行。

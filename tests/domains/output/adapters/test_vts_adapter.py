@@ -313,9 +313,7 @@ async def test_set_parameters_success(vts_config, mock_pyvts):
     mock_vts_instance.vts_request.requestSetParameterValue = Mock(
         return_value={"messageType": "InjectParameterDataResponse"}
     )
-    mock_vts_instance.request = AsyncMock(
-        return_value={"messageType": "InjectParameterDataResponse"}
-    )
+    mock_vts_instance.request = AsyncMock(return_value={"messageType": "InjectParameterDataResponse"})
     mock_pyvts.vts = Mock(return_value=mock_vts_instance)
 
     from src.domains.output.adapters.vts.vts_adapter import VTSAdapter
@@ -355,12 +353,8 @@ async def test_set_parameters_failure_response(vts_config, mock_pyvts):
     # Mock pyvts
     mock_vts_instance = AsyncMock()
     mock_vts_instance.vts_request = Mock()
-    mock_vts_instance.vts_request.requestSetParameterValue = Mock(
-        return_value={"messageType": "ErrorResponse"}
-    )
-    mock_vts_instance.request = AsyncMock(
-        return_value={"messageType": "ErrorResponse"}
-    )
+    mock_vts_instance.vts_request.requestSetParameterValue = Mock(return_value={"messageType": "ErrorResponse"})
+    mock_vts_instance.request = AsyncMock(return_value={"messageType": "ErrorResponse"})
     mock_pyvts.vts = Mock(return_value=mock_vts_instance)
 
     from src.domains.output.adapters.vts.vts_adapter import VTSAdapter

@@ -84,14 +84,8 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
         # 初始化消息缓存服务
         self.message_cache_service = MessageCacheService(max_cache_size=self.typed_config.message_cache_size)
 
-        # 初始化WebSocket客户端
-        self.websocket_client = BiliWebSocketClient(
-            id_code=self.id_code,
-            app_id=self.app_id,
-            access_key=self.access_key,
-            access_key_secret=self.access_key_secret,
-            api_host=self.api_host,
-        )
+        # 创建队列用于接收消息
+        message_queue = asyncio.Queue()
 
         # 初始化消息处理器
         self.message_handler = BiliMessageHandler(
@@ -101,17 +95,56 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
             message_cache_service=self.message_cache_service,
         )
 
+        # 初始化WebSocket客户端
+        self.websocket_client = BiliWebSocketClient(
+            id_code=self.id_code,
+            app_id=self.app_id,
+            access_key=self.access_key,
+            access_key_secret=self.access_key_secret,
+            api_host=self.api_host,
+        )
+
         self.logger.info("开始采集 Bilibili 官方弹幕数据...")
 
-        # 运行WebSocket连接
+        # 创建WebSocket任务
+        ws_task = asyncio.create_task(self._run_websocket(message_queue))
+
         try:
-            await self.websocket_client.run(self._handle_message_from_bili)
+            # 从队列中获取消息并yield
+            while self.is_running:
+                try:
+                    # 设置超时以避免永久阻塞
+                    raw_data = await asyncio.wait_for(message_queue.get(), timeout=1.0)
+                    yield raw_data
+                except asyncio.TimeoutError:
+                    # 超时继续循环，检查is_running
+                    continue
+                except Exception as e:
+                    self.logger.error(f"从队列获取消息时出错: {e}", exc_info=True)
+                    break
+
+        except Exception as e:
+            self.logger.error(f"数据采集出错: {e}", exc_info=True)
+        finally:
+            # 停止WebSocket任务
+            ws_task.cancel()
+            try:
+                await ws_task
+            except asyncio.CancelledError:
+                pass
+            self.logger.info("Bilibili 官方弹幕采集已停止")
+
+    async def _run_websocket(self, message_queue: asyncio.Queue):
+        """运行WebSocket连接并将消息放入队列"""
+        try:
+            await self.websocket_client.run(self._handle_message_from_bili, message_queue)
         except Exception as e:
             self.logger.error(f"WebSocket运行出错: {e}", exc_info=True)
+        finally:
+            # 通知队列结束
+            await message_queue.put(None)
 
-        self.logger.info("Bilibili 官方弹幕采集已停止")
-
-    async def _handle_message_from_bili(self, message_data: Dict[str, Any]):
+    async def _handle_message_from_bili(self, message_data: Dict[str, Any], message_queue: asyncio.Queue):
         """处理从Bilibili接收到的消息"""
         try:
             message = await self.message_handler.create_message_base(message_data)
@@ -124,7 +157,9 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
                 raw_data = RawData(
                     content={
                         "message": message,
-                        "message_config": self.message_handler.get_message_config(),
+                        "message_config": self.message_handler.get_message_config()
+                        if hasattr(self.message_handler, "get_message_config")
+                        else {},
                     },
                     source="bili_danmaku_official",
                     data_type="text",
@@ -134,12 +169,13 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
                         "room_id": self.id_code,
                     },
                 )
-                yield raw_data
+                await message_queue.put(raw_data)
 
-        except Exception as e:
-            self.logger.error(f"处理消息时出错: {message_data} - {e}", exc_info=True)
+        except Exception:
+            # 捕获异常并记录，避免格式化问题
+            self.logger.error("处理消息时出错", exc_info=True)
 
-    async def _cleanup(self):
+    async def _cleanup_internal(self):
         """清理资源"""
         # 清理WebSocket客户端
         if self.websocket_client:

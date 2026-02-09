@@ -4,7 +4,6 @@ import json
 from typing import Dict, Any, Optional, List
 
 from maim_message import MessageBase
-from src.core.amaidesu_core import AmaidesuCore
 from src.core.utils.logger import get_logger
 from .message_cache import MessageCacheService
 from ..message.base import BiliBaseMessage, BiliMessageType
@@ -20,13 +19,11 @@ class BiliMessageHandler:
 
     def __init__(
         self,
-        core: AmaidesuCore,
         config: Dict[str, Any],
-        context_tags: Optional[List[str]],
-        template_items: Optional[Dict[str, Any]],
-        message_cache_service: MessageCacheService,
+        context_tags: Optional[List[str]] = None,
+        template_items: Optional[Dict[str, Any]] = None,
+        message_cache_service: Optional[MessageCacheService] = None,
     ):
-        self.core = core
         self.config = config
         self.context_tags = context_tags
         self.template_items = template_items
@@ -70,11 +67,25 @@ class BiliMessageHandler:
                 f"处理bilibili直播间消息【{cmd}】: {json.dumps(message_data, ensure_ascii=False, indent=2)}"
             )
 
+            # 创建一个简单的core对象用于消息构建
+            # 注意：这里不使用真实的AmaidesuCore实例，避免循环依赖
+            from types import SimpleNamespace
+
+            mock_core = SimpleNamespace(platform="bilibili_live")
+
+            # 如果启用了template_info且有template_items，需要context_manager
+            # 这里简化处理，如果需要完整功能，应该从外部注入core
+            if self.config.get("enable_template_info", False) and self.template_items:
+                self.logger.warning("template_info功能需要完整的core实例，当前已禁用")
+                # 临时禁用template_info
+                self.config = self.config.copy()
+                self.config["enable_template_info"] = False
+
             # 调用消息类自身的to_message_base方法
-            return await bili_message.to_message_base(self.core, self.config, self.context_tags, self.template_items)
+            return await bili_message.to_message_base(mock_core, self.config, self.context_tags, self.template_items)
 
         except Exception as e:
-            self.logger.exception(f"处理消息时发生错误: {e}", exc_info=True)
+            self.logger.error(f"处理消息时发生错误: {e}", exc_info=True)
             return None
 
     @staticmethod

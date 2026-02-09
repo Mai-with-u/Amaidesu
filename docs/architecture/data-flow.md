@@ -36,9 +36,9 @@
 ```python
 # ❌ 错误示例
 class MyOutputProvider(OutputProvider):
-    async def initialize(self):
+    async def setup(self):
         # 禁止！绕过了 Decision Domain
-        await self.event_bus.subscribe(
+        self.event_bus.on(
             CoreEvents.NORMALIZATION_MESSAGE_READY,  # Input 事件
             self.handler
         )
@@ -51,9 +51,9 @@ class MyOutputProvider(OutputProvider):
 ```python
 # ❌ 错误示例
 class MyDecisionProvider(DecisionProvider):
-    async def initialize(self):
+    async def setup(self):
         # 禁止！创建循环依赖
-        await self.event_bus.subscribe(
+        self.event_bus.on(
             CoreEvents.RENDER_COMPLETED,  # Output 事件
             self.handler
         )
@@ -66,9 +66,9 @@ class MyDecisionProvider(DecisionProvider):
 ```python
 # ❌ 错误示例
 class MyInputProvider(InputProvider):
-    async def initialize(self):
+    async def setup(self):
         # 禁止！Input 应只发布，不订阅下游
-        await self.event_bus.subscribe(
+        self.event_bus.on(
             CoreEvents.DECISION_INTENT_GENERATED,
             self.handler
         )
@@ -90,12 +90,13 @@ class MyInputProvider(InputProvider):
 
 ```python
 # ✅ 正确：Input 发布标准化消息
-class InputDomain:
+class InputCoordinator:
     async def process_and_publish(self, raw_data: RawData):
         normalized = await self.normalize(raw_data)
         await self.event_bus.emit(
             CoreEvents.NORMALIZATION_MESSAGE_READY,
-            MessageReadyPayload(message=normalized)
+            MessageReadyPayload(message=normalized),
+            source="InputCoordinator"
         )
 ```
 
@@ -103,18 +104,19 @@ class InputDomain:
 
 ```python
 # ✅ 正确：Decision 订阅 Input 事件
-class DecisionManager:
-    async def initialize(self):
-        await self.event_bus.subscribe(
+class DecisionCoordinator:
+    async def setup(self):
+        self.event_bus.on(
             CoreEvents.NORMALIZATION_MESSAGE_READY,  # Input 事件
             self.handle_message
         )
 
-    async def handle_message(self, payload: MessageReadyPayload):
+    async def handle_message(self, event_name: str, payload: MessageReadyPayload, source: str):
         intent = await self.decision_provider.decide(payload.message)
         await self.event_bus.emit(
             CoreEvents.DECISION_INTENT_GENERATED,
-            IntentPayload(intent=intent)
+            IntentPayload(intent=intent),
+            source="DecisionCoordinator"
         )
 ```
 
@@ -122,9 +124,9 @@ class DecisionManager:
 
 ```python
 # ✅ 正确：Output 订阅 Decision 事件
-class OutputProviderManager:
-    async def initialize(self):
-        await self.event_bus.subscribe(
+class OutputCoordinator:
+    async def setup(self):
+        self.event_bus.on(
             CoreEvents.DECISION_INTENT_GENERATED,  # Decision 事件
             self.handle_intent
         )
@@ -133,13 +135,6 @@ class OutputProviderManager:
 ## 架构验证器
 
 项目包含运行时架构验证器，自动检测违反分层原则的订阅。
-
-### 启用验证
-
-```bash
-# 通过命令行参数启用
-uv run python main.py --arch-validate
-```
 
 ### 代码中启用
 
@@ -156,9 +151,9 @@ validator = ArchitecturalValidator(event_bus, enabled=True)
 ```python
 # ❌ 错误：InputProvider 不应该订阅任何事件
 class MyInputProvider(InputProvider):
-    async def initialize(self):
+    async def setup(self):
         # 这会抛出 ArchitecturalViolationError
-        await self.event_bus.subscribe(
+        self.event_bus.on(
             CoreEvents.DECISION_INTENT_GENERATED,
             self.handler
         )
@@ -270,4 +265,4 @@ A: 通过 FlowCoordinator（核心协调器）：
 
 ---
 
-*最后更新：2026-02-09*
+*最后更新：2026-02-10*

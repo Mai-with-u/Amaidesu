@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from src.core.event_bus import EventBus
 
 from src.core.base.output_provider import OutputProvider
+from src.core.events.names import CoreEvents
 from src.core.utils.logger import get_logger
 from src.services.config.schemas.schemas.base import BaseProviderConfig
 
@@ -62,9 +63,9 @@ class WarudoOutputProvider(OutputProvider):
         self.event_bus = event_bus
 
         # 注册事件监听
-        self.event_bus.on("vts.send_emotion", self._handle_emotion)
-        self.event_bus.on("vts.send_state", self._handle_state)
-        self.event_bus.on("tts.audio_ready", self._handle_tts_audio)
+        self.event_bus.on(CoreEvents.VTS_SEND_EMOTION, self._handle_emotion)
+        self.event_bus.on(CoreEvents.VTS_SEND_STATE, self._handle_state)
+        self.event_bus.on(CoreEvents.TTS_AUDIO_READY, self._handle_tts_audio)
 
         # 启动WebSocket连接
         await self._connect_websocket()
@@ -75,9 +76,9 @@ class WarudoOutputProvider(OutputProvider):
         """清理资源"""
         # 取消事件监听
         if self.event_bus:
-            self.event_bus.off("vts.send_emotion", self._handle_emotion)
-            self.event_bus.off("vts.send_state", self._handle_state)
-            self.event_bus.off("tts.audio_ready", self._handle_tts_audio)
+            self.event_bus.off(CoreEvents.VTS_SEND_EMOTION, self._handle_emotion)
+            self.event_bus.off(CoreEvents.VTS_SEND_STATE, self._handle_state)
+            self.event_bus.off(CoreEvents.TTS_AUDIO_READY, self._handle_tts_audio)
 
         # 关闭WebSocket连接
         if self.websocket:
@@ -102,13 +103,16 @@ class WarudoOutputProvider(OutputProvider):
         """处理表情事件"""
         self.logger.debug(f"收到表情事件: {data}")
         # TODO: 实现实际的表情发送逻辑
+        # STATUS: PENDING - Warudo API 待调研
 
     async def _handle_state(self, event_name: str, data: Any, source: str):
         """处理状态事件"""
         self.logger.debug(f"收到状态事件: {data}")
         # TODO: 实现实际的状态发送逻辑
+        # STATUS: PENDING - Warudo API 待调研
 
     async def _handle_tts_audio(self, event_name: str, data: Any, source: str):
         """处理TTS音频事件"""
         self.logger.debug("收到TTS音频事件")
         # TODO: 实现实际的TTS音频同步逻辑
+        # STATUS: PENDING - Warudo API 待调研

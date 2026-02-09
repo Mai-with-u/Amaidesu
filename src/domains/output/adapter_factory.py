@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional
 
 from .adapters.base import PlatformAdapter
 from .adapters.vts.vts_adapter import VTSAdapter
+from .adapters.vrchat.vrchat_adapter import VRChatAdapter
 
 from src.core.utils.logger import get_logger
 
@@ -18,8 +19,9 @@ class AdapterFactory:
 
     _adapters: Dict[str, type] = {
         "vts": VTSAdapter,
+        "vrchat": VRChatAdapter,
+        "vrc": VRChatAdapter,  # 别名
         # 未来可以添加更多平台
-        # "vrc": VRCAdapter,
         # "live2d": Live2DAdapter,
     }
 

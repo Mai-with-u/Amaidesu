@@ -235,7 +235,7 @@ class BiliDanmakuOfficialMaiCraftInputProvider(InputProvider):
         except Exception as e:
             self.logger.error(f"处理消息时出错: {message_data} - {e}", exc_info=True)
 
-    async def _cleanup(self):
+    async def _cleanup_internal(self):
         """清理资源"""
         # 关闭WebSocket客户端
         if self.websocket_client:

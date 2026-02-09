@@ -39,7 +39,7 @@ class MockInputProvider(InputProvider):
                     if empty_count >= 3:  # 连续3次超时（150ms）
                         break
 
-    async def _cleanup(self):
+    async def _cleanup_internal(self):
         """清理资源"""
         # 设置停止事件以唤醒所有等待的操作
         self._stop_event.set()

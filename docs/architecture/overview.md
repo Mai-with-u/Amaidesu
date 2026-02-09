@@ -41,6 +41,16 @@ Amaidesu 采用 3 域架构，实现清晰的数据流和职责分离。
 - `InputProvider` - 数据采集接口
 - `TextPipeline` - 消息预处理管道
 
+**可用的 InputProvider**：
+- `ConsoleInputProvider` - 控制台输入（用于开发调试）
+- `BiliDanmakuInputProvider` - B站弹幕（第三方API）
+- `BiliDanmakuOfficialInputProvider` - B站官方弹幕
+- `BiliDanmakuOfficialMaicraftInputProvider` - B站官方弹幕（Maicraft版本）
+- `STTInputProvider` - 语音转文字（讯飞ASR + Silero VAD）
+- `ReadPingmuInputProvider` - 读屏木输入
+- `MainosabaInputProvider` - 游戏画面文本采集
+- `MockDanmakuInputProvider` - 模拟弹幕（用于测试）
+
 **数据输出**：`NormalizedMessage`
 
 ### Decision Domain（决策域）
@@ -59,6 +69,9 @@ Amaidesu 采用 3 域架构，实现清晰的数据流和职责分离。
 - `MaiCoreDecisionProvider` - 默认，使用 MaiCore WebSocket
 - `LocalLLMDecisionProvider` - 使用本地 LLM API
 - `RuleEngineDecisionProvider` - 规则引擎
+- `KeywordActionDecisionProvider` - 关键词动作决策
+- `MaicraftDecisionProvider` - 弹幕互动游戏决策
+- `MockDecisionProvider` - 模拟决策（用于测试）
 
 **数据输出**：`Intent`
 
@@ -80,6 +93,13 @@ Amaidesu 采用 3 域架构，实现清晰的数据流和职责分离。
 - `SubtitleOutputProvider` - 字幕显示
 - `VTSOutputProvider` - VTube Studio 控制
 - `StickerOutputProvider` - 贴纸显示
+- `OmniTTSOutputProvider` - Fish TTS
+- `WarudoOutputProvider` - Warudo 虚拟主播
+- `GPTSoVITSOutputProvider` - GPT-SoVITS 语音合成
+- `AvatarOutputProvider` - 虚拟形象输出
+- `ObsControlOutputProvider` - OBS 控制
+- `RemoteStreamOutputProvider` - 远程流媒体输出
+- `MockOutputProvider` - 模拟输出（用于测试）
 
 ## 数据流
 

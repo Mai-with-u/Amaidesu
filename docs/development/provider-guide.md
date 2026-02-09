@@ -8,9 +8,9 @@ Provider 是项目的核心组件，负责具体的数据处理功能。本指�
 
 | 类型 | 位置 | 职责 | 示例 |
 |------|------|------|------|
-| **InputProvider** | Input Domain | 从外部数据源采集数据 | ConsoleInputProvider, BiliDanmakuInputProvider |
-| **DecisionProvider** | Decision Domain | 夳策能力接口 | MaiCoreDecisionProvider, LocalLLMDecisionProvider |
-| **OutputProvider** | Output Domain | 渲染到目标设备 | TTSOutputProvider, SubtitleOutputProvider, VTSOutputProvider |
+| **InputProvider** | Input Domain | 从外部数据源采集数据 | ConsoleInputProvider, BiliDanmakuInputProvider, STTInputProvider, BiliDanmakuOfficialInputProvider |
+| **DecisionProvider** | Decision Domain | 决策能力接口 | MaiCoreDecisionProvider, LocalLLMDecisionProvider, KeywordActionDecisionProvider, MaicraftDecisionProvider |
+| **OutputProvider** | Output Domain | 渲染到目标设备 | TTSOutputProvider, GPTSoVITSOutputProvider, AvatarOutputProvider, ObsControlOutputProvider, StickerOutputProvider |
 
 ### Provider 系统特点
 
@@ -72,6 +72,17 @@ class MyInputProvider(InputProvider):
 | `stop()` | 停止数据采集 | ❌（默认实现） |
 | `cleanup()` | 清理资源 | ❌（可选） |
 
+### InputProvider 生命周期方法
+
+| 方法 | 说明 | 必须实现 | 调用时机 |
+|------|------|----------|----------|
+| `_collect_data()` | 采集数据，返回 AsyncIterator[RawData] | ✅ | `start()` 调用后 |
+| `_setup_internal()` | 内部初始化逻辑 | ❌ | `start()` 开始时 |
+| `_cleanup_internal()` | 内部清理逻辑 | ❌ | `stop()`/`cleanup()` 调用时 |
+| `start()` | 启动数据采集 | ❌（默认实现） | Manager 启动时 |
+| `stop()` | 停止数据采集 | ❌（默认实现） | Manager 停止时 |
+| `cleanup()` | 清理资源 | ❌（默认实现） | Manager 清理时 |
+
 ### RawData 结构
 
 ```python
@@ -96,6 +107,7 @@ DecisionProvider 处理 `NormalizedMessage` 生成 `Intent`。
 from typing import Dict, Any
 from src.core.base.decision_provider import DecisionProvider
 from src.core.base.normalized_message import NormalizedMessage
+from src.core.types import EmotionType, ActionType, IntentAction
 from src.domains.decision.intent import Intent
 from src.utils.logger import get_logger
 
@@ -111,10 +123,11 @@ class MyDecisionProvider(DecisionProvider):
         """决策逻辑"""
         # 实现决策逻辑
         return Intent(
-            type="response",
-            content="响应内容",
-            emotion="happy",
-            parameters={},
+            original_text=message.text,
+            response_text="响应内容",
+            emotion=EmotionType.HAPPY,
+            actions=[IntentAction(type=ActionType.EXPRESSION, params={"name": "smile"})],
+            metadata={},
         )
 ```
 
@@ -123,20 +136,26 @@ class MyDecisionProvider(DecisionProvider):
 | 方法 | 说明 | 必须实现 |
 |------|------|----------|
 | `decide()` | 决策方法，NormalizedMessage → Intent | ✅ |
-| `initialize()` | 初始化 Provider | ❌（可选） |
+| `setup()` | 设置 Provider（注册事件订阅） | ❌（默认实现） |
 | `cleanup()` | 清理资源 | ❌（可选） |
+| `_setup_internal()` | 内部初始化逻辑 | ❌（可选） |
+| `_cleanup_internal()` | 内部清理逻辑 | ❌（可选） |
 
 ### Intent 结构
 
 ```python
+from src.core.types import EmotionType, ActionType, IntentAction
 from src.domains.decision.intent import Intent
 
 intent = Intent(
-    type="response",                 # Intent 类型
-    content="回复内容",               # 响应内容
-    emotion="happy",                 # 情感
-    emotion_value=0.8,               # 情感强度
-    parameters={                     # 额外参数
+    original_text="用户消息",           # 原始输入文本
+    response_text="回复内容",           # 响应内容
+    emotion=EmotionType.HAPPY,         # 情感类型（枚举）
+    actions=[                          # 动作列表
+        IntentAction(type=ActionType.EXPRESSION, params={"name": "smile"}),
+        IntentAction(type=ActionType.HOTKEY, params={"key": "wave"}),
+    ],
+    metadata={                         # 额外元数据
         "tts_enabled": True,
         "subtitle_enabled": True,
     }
@@ -419,6 +438,41 @@ class MyProviderConfig(BaseModel):
         return v
 ```
 
+## Provider 生命周期方法说明
+
+### 内部方法命名约定
+
+所有 Provider 类型的内部扩展方法使用统一的 `_xxx_internal()` 命名约定：
+
+| Provider 类型 | 内部初始化 | 内部清理 |
+|--------------|-----------|----------|
+| InputProvider | `_setup_internal()` | `_cleanup_internal()` |
+| DecisionProvider | `_setup_internal()` | `_cleanup_internal()` |
+| OutputProvider | `_setup_internal()` | `_cleanup_internal()` |
+
+子类可以重写这些内部方法来实现自定义的初始化和清理逻辑。
+
+### 公共 API 差异说明
+
+不同类型的 Provider 使用不同的公共生命周期方法，这反映了它们不同的语义：
+
+| Provider 类型 | 启动方法 | 停止方法 | 内部方法 | 原因 |
+|--------------|---------|---------|----------|------|
+| InputProvider | `start()` | `stop()` + `cleanup()` | `_setup_internal()` / `_cleanup_internal()` | 返回异步数据流 (AsyncIterator) |
+| DecisionProvider | `setup()` | `cleanup()` | `_setup_internal()` / `_cleanup_internal()` | 注册到 EventBus 作为事件订阅者 |
+| OutputProvider | `setup()` | `cleanup()` | `_setup_internal()` / `_cleanup_internal()` | 注册到 EventBus 作为事件订阅者 |
+
+**为什么不能统一公共 API？**
+
+InputProvider 的 `start()` 方法必须返回 `AsyncIterator[RawData]`：
+- 这是 Python 异步生成器的语法要求
+- `setup()` 方法无法返回 AsyncIterator
+- 使用 `start()` 更符合"启动流式数据源"的语义
+
+Decision/OutputProvider 的 `setup()` 方法用于注册事件订阅：
+- 它们是事件消费者，而非数据生产者
+- 使用 `setup()` 更符合"配置事件处理器"的语义
+
 ## 测试
 
 ### 单元测试
@@ -444,12 +498,511 @@ async def test_my_input_provider():
             await provider.stop()
 ```
 
+## 新增 Provider 详细说明
+
+### STTInputProvider - 语音转文字
+
+语音转文字输入 Provider，使用讯飞流式 ASR 和 Silero VAD 实现实时语音识别。
+
+**功能特性：**
+- 本地麦克风输入
+- 远程音频流支持 (RemoteStream)
+- Silero VAD 语音活动检测
+- 讯飞流式 ASR
+- 自定义 torch 缓存目录（避免 Windows 中文用户名问题）
+
+**配置示例：**
+```toml
+[providers.input.inputs.stt]
+type = "stt"
+
+# 音频配置
+audio.sample_rate = 16000
+audio.channels = 1
+audio.dtype = "int16"
+audio.stt_input_device_name = "麦克风名称"  # 可选
+audio.use_remote_stream = false  # 使用远程音频流
+
+# VAD 配置
+vad.enable = true
+vad.vad_threshold = 0.5
+vad.silence_seconds = 1.0
+
+# 讯飞 ASR 配置
+iflytek_asr.host = "wss://istream-iflytek.xf-yun.com"
+iflytek_asr.path = "/v2/iat"
+iflytek_asr.appid = "your_appid"
+iflytek_asr.api_secret = "your_api_secret"
+iflytek_asr.api_key = "your_api_key"
+iflytek_asr.language = "zh_cn"
+iflytek_asr.domain = "iat"
+
+# 消息配置
+message_config.user_id = "stt_user"
+message_config.user_nickname = "语音"
+```
+
+**依赖安装：**
+```bash
+uv add torch sounddevice aiohttp
+```
+
+### KeywordActionDecisionProvider - 关键词动作决策
+
+基于规则的关键词匹配决策 Provider，根据配置的关键词规则生成包含动作的 Intent。
+
+**功能特性：**
+- 支持多种匹配模式（精确/前缀/后缀/包含）
+- 冷却时间管理（全局和单个规则）
+- 通过 Intent.actions 传递动作到 Output Domain
+- 优先级控制
+
+**配置示例：**
+```toml
+[providers.decision.keyword_action]
+type = "keyword_action"
+global_cooldown = 1.0
+default_response = ""
+
+[[providers.decision.keyword_action.actions]]
+name = "微笑动作"
+enabled = true
+keywords = ["微笑", "smile", "😊"]
+match_mode = "anywhere"
+cooldown = 3.0
+action_type = "hotkey"
+action_params = { key = "smile" }
+priority = 50
+
+[[providers.decision.keyword_action.actions]]
+name = "打招呼"
+enabled = true
+keywords = ["你好", "hello", "hi"]
+match_mode = "exact"
+cooldown = 5.0
+action_type = "expression"
+action_params = { name = "smile" }
+priority = 60
+```
+
+### MaicraftDecisionProvider - 弹幕互动游戏决策
+
+基于抽象工厂模式的弹幕互动游戏决策 Provider，支持通过配置切换不同的动作实现系列。
+
+**功能特性：**
+- 弹幕命令解析
+- 工厂模式创建动作（Log、MCP）
+- 支持多种游戏操作（聊天、攻击等）
+- 可扩展的动作注册系统
+
+**配置示例：**
+```toml
+[providers.decision.maicraft]
+enabled = true
+factory_type = "log"  # 或 "mcp"
+command_prefix = "!"
+
+[providers.decision.maicraft.command_mappings]
+chat = "chat"
+attack = "attack"
+```
+
+### AvatarOutputProvider - 虚拟形象输出
+
+虚拟形象输出 Provider，使用 PlatformAdapter 执行渲染，支持多个平台。
+
+**功能特性：**
+- 支持多平台适配器（VTS、VRChat、Live2D）
+- 抽象参数自动翻译为平台特定参数
+- 统一的接口管理不同平台
+
+**配置示例：**
+```toml
+[providers.output.outputs.avatar]
+type = "avatar"
+adapter_type = "vts"  # vts | vrchat | live2d
+
+# VTS 特定配置
+vts_host = "127.0.0.1"
+vts_port = 8000
+
+# VRChat 特定配置
+vrc_host = "127.0.0.1"
+vrc_in_port = 9001
+vrc_out_port = 9000
+enable_server = false
+```
+
+### GPTSoVITSOutputProvider - GPT-SoVITS 语音合成
+
+使用 GPT-SoVITS 引擎进行高质量文本转语音。
+
+**功能特性：**
+- 流式 TTS 和音频播放
+- 参考音频管理
+- 音频设备管理
+- 丰富的 TTS 参数配置
+
+**配置示例：**
+```toml
+[providers.output.outputs.gptsovits]
+type = "gptsovits"
+host = "127.0.0.1"
+port = 9880
+
+# 参考音频
+ref_audio_path = "path/to/reference.wav"
+prompt_text = "参考文本"
+
+# TTS 参数
+text_language = "zh"
+prompt_language = "zh"
+top_k = 20
+top_p = 0.6
+temperature = 0.3
+speed_factor = 1.0
+streaming_mode = true
+
+# 音频输出
+sample_rate = 32000
+output_device_name = "扬声器名称"
+```
+
+### ObsControlOutputProvider - OBS 控制
+
+通过 WebSocket 连接到 OBS，支持文本显示和场景控制。
+
+**功能特性：**
+- 文本显示到 OBS 文本源
+- 逐字打印效果
+- 场景切换
+- 源可见性控制
+
+**配置示例：**
+```toml
+[providers.output.outputs.obs_control]
+type = "obs_control"
+host = "localhost"
+port = 4455
+password = "your_password"  # 可选
+text_source_name = "text"
+
+# 逐字效果配置
+typewriter_enabled = false
+typewriter_speed = 0.1
+typewriter_delay = 0.5
+
+# 连接测试
+test_on_connect = true
+```
+
+### StickerOutputProvider - 贴纸输出
+
+处理表情图片并发送到 VTS 显示。
+
+**功能特性：**
+- 图片大小调整
+- 冷却时间控制
+- 自动卸载
+- 与 VTS Provider 集成
+
+**配置示例：**
+```toml
+[providers.output.outputs.sticker]
+type = "sticker"
+
+# 贴纸配置
+sticker_size = 0.33
+sticker_rotation = 90
+sticker_position_x = 0.0
+sticker_position_y = 0.0
+
+# 图片处理
+image_width = 256
+image_height = 256
+
+# 时间控制
+cool_down_seconds = 5.0
+display_duration_seconds = 3.0
+```
+
+### RemoteStreamOutputProvider - 远程流媒体输出
+
+通过 WebSocket 实现与边缘设备的音视频双向传输。
+
+**功能特性：**
+- WebSocket 服务器/客户端模式
+- 音频数据传输
+- 图像数据传输
+- 自动重连
+
+**配置示例：**
+```toml
+[providers.output.outputs.remote_stream]
+type = "remote_stream"
+server_mode = true
+host = "0.0.0.0"
+port = 8765
+
+# 音频配置
+audio_sample_rate = 16000
+audio_channels = 1
+audio_format = "int16"
+audio_chunk_size = 1024
+
+# 图像配置
+image_width = 640
+image_height = 480
+image_format = "jpeg"
+image_quality = 80
+
+# 重连配置
+reconnect_delay = 5
+max_reconnect_attempts = -1  # -1 表示无限
+```
+
+### BiliDanmakuOfficialInputProvider - B站官方弹幕
+
+从 Bilibili 官方开放平台 WebSocket API 采集弹幕数据。
+
+**功能特性：**
+- 官方 WebSocket API
+- 消息缓存服务
+- 上下文标签过滤
+- 模板信息支持
+
+**配置示例：**
+```toml
+[providers.input.inputs.bili_danmaku_official]
+type = "bili_danmaku_official"
+id_code = "直播间ID代码"
+app_id = "应用ID"
+access_key = "访问密钥"
+access_key_secret = "访问密钥Secret"
+api_host = "https://live-open.biliapi.com"
+message_cache_size = 1000
+
+# 上下文过滤（可选）
+context_tags = ["游戏", "互动"]
+
+# 模板信息（可选）
+enable_template_info = false
+template_items = {}
+```
+
+### ReadPingmuInputProvider - 读屏木输入
+
+通过 ReadPingmu 服务采集屏幕内容，支持 OCR 文字识别和图像理解。
+
+**功能特性：**
+- 通过 ReadPingmu 服务采集屏幕内容
+- 支持 OCR 文字识别
+- 支持图像理解
+
+**配置示例：**
+```toml
+[providers.input.inputs.read_pingmu]
+type = "read_pingmu"
+api_base_url = "http://127.0.0.1:8080"
+```
+
+### BiliDanmakuOfficialMaicraftInputProvider - B站官方弹幕（Maicraft版本）
+
+专为 Maicraft 弹幕互动游戏优化的 B站官方弹幕输入 Provider。
+
+**与 BiliDanmakuOfficialInputProvider 的区别：**
+- 针对游戏场景优化的事件处理
+- 支持弹幕命令解析
+- 与 MaicraftDecisionProvider 配合使用
+
+**功能特性：**
+- 官方 WebSocket API
+- 消息缓存服务
+- 上下文标签过滤
+- 模板信息支持
+- 弹幕命令解析
+
+**配置示例：**
+```toml
+[providers.input.inputs.bili_danmaku_official_maicraft]
+type = "bili_danmaku_official_maicraft"
+id_code = "直播间ID代码"
+app_id = "应用ID"
+access_key = "访问密钥"
+access_key_secret = "访问密钥Secret"
+api_host = "https://live-open.biliapi.com"
+message_cache_size = 1000
+
+# 上下文过滤（可选）
+context_tags = ["游戏", "互动"]
+
+# 模板信息（可选）
+enable_template_info = false
+template_items = {}
+```
+
+### OmniTTSOutputProvider - Fish TTS 语音合成
+
+使用 Fish Audio TTS API 进行高质量语音合成。
+
+**功能特性：**
+- 使用 Fish Audio TTS API
+- 高质量语音合成
+- 支持多音色
+- 流式音频输出
+
+**配置示例：**
+```toml
+[providers.output.outputs.omni_tts]
+type = "omni_tts"
+api_key = "your_api_key"
+api_url = "https://api.fish.audio"
+voice = "narration"  # 音色ID
+speed = 1.0
+```
+
+**依赖安装：**
+```bash
+uv add aiohttp
+```
+
+### WarudoOutputProvider - Warudo 虚拟主播
+
+通过 WebSocket 与 Warudo 虚拟主播软件通信，控制虚拟形象。
+
+**功能特性：**
+- 通过 WebSocket 与 Warudo 通信
+- 支持参数控制（表情、手势等）
+- 支持热键触发
+- 支持场景切换
+
+**配置示例：**
+```toml
+[providers.output.outputs.warudo]
+type = "warudo"
+host = "127.0.0.1"
+port = 10800
+```
+
+## 共享服务
+
+### DGLabService - DG-Lab 硬件控制
+
+提供 DG-LAB 硬件控制服务，支持电击强度、波形和持续时间控制。
+
+**注意：** 这是一个共享服务，不是 Provider。它不产生数据流，不订阅事件，提供共享 API 供其他组件调用。
+
+**配置示例：**
+```toml
+[dg_lab]
+api_base_url = "http://127.0.0.1:8081"
+default_strength = 10
+default_waveform = "big"  # small | medium | big | random
+shock_duration_seconds = 2.0
+request_timeout = 5.0
+max_strength = 50
+enable_safety_limit = true
+```
+
+**使用方式：**
+```python
+from src.services.manager import ServiceManager
+
+# 获取服务
+dg_lab_service = ServiceManager.get_service("dg_lab")
+
+# 触发电击
+await dg_lab_service.trigger_shock(
+    strength=20,
+    waveform="medium",
+    duration=2.0
+)
+```
+
+### VRChatAdapter - VRChat 适配器
+
+VRChat 平台适配器，通过 OSC 协议与 VRChat 通信。
+
+**功能特性：**
+- OSC 客户端发送参数控制命令
+- OSC 服务器（可选）接收数据
+- 参数映射（抽象参数 → VRChat Avatar Parameters）
+- 热键/手势触发
+
+**支持的手势：**
+- Neutral, Wave, Peace, ThumbsUp, RocknRoll, HandGun, Point, Victory, Cross
+
+**参数映射：**
+```python
+PARAM_TRANSLATION = {
+    "smile": "MouthSmile",
+    "eye_open": "EyeOpen",
+    "mouth_open": "MouthOpen",
+    "brow_down": "BrowDownLeft",
+    "brow_up": "BrowUpLeft",
+    "eye_x": "EyeX",
+    "eye_y": "EyeY",
+}
+```
+
+## 新提示词
+
+### input/screen_description.md - 屏幕内容描述
+
+屏幕视觉理解助手提示词，分析屏幕截图并生成内容描述。
+
+**变量：**
+- `image_base64`: 屏幕截图（base64编码）
+- `context`: 上一时刻屏幕的内容
+- `images_count`: 图像数量（用于检测是否为多张拼接）
+
+**使用示例：**
+```python
+from src.prompts import get_prompt_manager
+
+prompt = get_prompt_manager().render(
+    "input/screen_description",
+    image_base64=image_base64,
+    context="上一时刻的屏幕内容",
+    images_count=1
+)
+```
+
+### input/screen_context.md - 屏幕上下文分析
+
+屏幕上下文分析助手提示词，理解当前屏幕状态和用户意图。
+
+**变量：**
+- `image`: 屏幕截图
+- `context`: 当前上下文信息
+
+**分析任务：**
+1. 识别屏幕上的主要内容元素
+2. 理解当前的应用程序或界面类型
+3. 分析用户可能的操作意图
+4. 识别关键的可交互元素
+
+### output/avatar_expression.md - 虚拟形象表情生成
+
+虚拟形象表情生成助手提示词，根据文本内容和表情列表选择最合适的表情。
+
+**变量：**
+- `text`: 用户文本
+- `emotion_list`: 可选表情列表
+
+**输出格式：**
+```
+表情名称: [选择的脸部表情名称]
+说明: [为什么选择这个表情的理由]
+```
+
 ## 相关文档
 
 - [InputProvider API](../api/input_provider.md)
 - [OutputProvider API](../api/output_provider.md)
 - [DecisionProvider API](../api/decision_provider.md)
 - [测试规范](testing-guide.md)
+- [提示词管理](prompt-management.md)
 
 ---
 

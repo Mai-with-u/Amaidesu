@@ -245,6 +245,7 @@ class TTSProvider(OutputProvider):
         self.logger.info(f"Omni TTS合成: {text[:30]}...")
 
         # TODO: 集成实际的Omni TTS API
+        # STATUS: PENDING - Omni TTS API 待集成
         # 当前返回静音作为占位符
         self.logger.warning("Omni TTS引擎集成待实现")
         return np.zeros(44100, dtype=np.float32), 16000

@@ -2,6 +2,7 @@
 BiliDanmakuOfficialInputProvider 测试
 """
 
+import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 from src.domains.input.providers import BiliDanmakuOfficialInputProvider
@@ -37,10 +38,12 @@ class TestBiliDanmakuOfficialInputProvider:
 
     def test_init_with_missing_required_config(self):
         """测试缺少必需配置"""
-        with pytest.raises(ValueError, match="缺少必需的配置项"):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
             BiliDanmakuOfficialInputProvider({})
 
-        with pytest.raises(ValueError, match="缺少必需的配置项"):
+        with pytest.raises(ValidationError):
             BiliDanmakuOfficialInputProvider({"id_code": "test"})
 
     def test_init_with_default_api_host(self):
@@ -56,14 +59,15 @@ class TestBiliDanmakuOfficialInputProvider:
         assert provider.api_host == "https://live-open.biliapi.com"
 
     def test_init_with_invalid_context_tags(self, bili_official_config):
-        """测试无效的context_tags"""
+        """测试无效的context_tags - Pydantic会验证类型"""
+        from pydantic import ValidationError
+
         config = bili_official_config.copy()
         config["context_tags"] = "not_a_list"  # 应该是列表
 
-        provider = BiliDanmakuOfficialInputProvider(config)
-
-        # 无效的context_tags应该被设置为None
-        assert provider.context_tags is None
+        # Pydantic会验证并抛出ValidationError
+        with pytest.raises(ValidationError):
+            BiliDanmakuOfficialInputProvider(config)
 
     def test_init_with_empty_context_tags(self, bili_official_config):
         """测试空的context_tags列表"""
@@ -97,30 +101,28 @@ class TestBiliDanmakuOfficialInputProvider:
 
         provider.message_handler = MagicMock()
         provider.message_handler.create_message_base = AsyncMock(return_value=mock_message)
-        provider.message_handler.get_message_config = MagicMock(return_value={"test": "config"})
 
         # Mock message_cache_service
         provider.message_cache_service = MagicMock()
         provider.message_cache_service.cache_message = MagicMock()
 
+        # 创建队列
+        message_queue = asyncio.Queue()
+
         # 模拟消息数据
         message_data = {"test": "data"}
 
-        # 收集yield的RawData
-        raw_data_list = []
+        # 调用处理方法
+        await provider._handle_message_from_bili(message_data, message_queue)
 
-        async def collect_raw_data():
-            async for raw_data in provider._handle_message_from_bili(message_data):
-                raw_data_list.append(raw_data)
-
-        await collect_raw_data()
+        # 从队列获取结果
+        raw_data = await message_queue.get()
 
         # 验证
-        assert len(raw_data_list) == 1
-        assert raw_data_list[0].source == "bili_danmaku_official"
-        assert raw_data_list[0].data_type == "text"
-        assert raw_data_list[0].metadata["message_id"] == "test_msg_123"
-        assert raw_data_list[0].metadata["room_id"] == "test_room_id"
+        assert raw_data.source == "bili_danmaku_official"
+        assert raw_data.data_type == "text"
+        assert raw_data.metadata["message_id"] == "test_msg_123"
+        assert raw_data.metadata["room_id"] == "test_room_id"
 
         # 验证消息被缓存
         provider.message_cache_service.cache_message.assert_called_once_with(mock_message)
@@ -136,20 +138,19 @@ class TestBiliDanmakuOfficialInputProvider:
 
         provider.message_cache_service = MagicMock()
 
+        # 创建队列
+        message_queue = asyncio.Queue()
+
         # 模拟消息数据
         message_data = {"test": "data"}
 
-        # 收集yield的RawData
-        raw_data_list = []
+        # 调用处理方法
+        await provider._handle_message_from_bili(message_data, message_queue)
 
-        async def collect_raw_data():
-            async for raw_data in provider._handle_message_from_bili(message_data):
-                raw_data_list.append(raw_data)
+        # 验证队列中没有数据（使用非阻塞get）
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(message_queue.get(), timeout=0.1)
 
-        await collect_raw_data()
-
-        # 验证没有yield任何数据
-        assert len(raw_data_list) == 0
         # 验证没有缓存消息
         provider.message_cache_service.cache_message.assert_not_called()
 
@@ -160,22 +161,21 @@ class TestBiliDanmakuOfficialInputProvider:
 
         # Mock message_handler抛出异常
         provider.message_handler = MagicMock()
-        provider.message_handler.create_message_base = AsyncMock(side_effect=Exception("Test error"))
+        test_exception = RuntimeError("Test error without format strings")
+        provider.message_handler.create_message_base = AsyncMock(side_effect=test_exception)
 
-        # 模拟消息数据（使用简单的字符串避免loguru格式化问题）
-        message_data = "test_data"
+        # 创建队列
+        message_queue = asyncio.Queue()
 
-        # 应该不抛出异常，只记录错误
-        raw_data_list = []
+        # 模拟消息数据
+        message_data = {"test": "data"}
 
-        async def collect_raw_data():
-            async for raw_data in provider._handle_message_from_bili(message_data):
-                raw_data_list.append(raw_data)
+        # 调用处理方法（应该不抛出异常，只记录错误）
+        await provider._handle_message_from_bili(message_data, message_queue)
 
-        await collect_raw_data()
-
-        # 验证没有yield任何数据
-        assert len(raw_data_list) == 0
+        # 验证队列中没有数据（使用非阻塞get）
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(message_queue.get(), timeout=0.1)
 
     @pytest.mark.asyncio
     async def test_cleanup_with_websocket_client(self, bili_official_config):

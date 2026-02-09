@@ -9,7 +9,7 @@ import hmac
 import random
 import urllib3
 from hashlib import sha256
-from typing import Dict, Any, Optional, Callable, Awaitable
+from typing import Dict, Optional, Callable
 import websockets
 import requests
 from src.core.utils.logger import get_logger
@@ -38,8 +38,13 @@ class BiliWebSocketClient:
         self.app_heartbeat_task = None
         self.recv_task = None
 
-    async def run(self, message_handler: Callable[[Dict[str, Any]], Awaitable[None]]):
-        """运行WebSocket客户端"""
+    async def run(self, message_handler: Callable, queue: asyncio.Queue = None):
+        """运行WebSocket客户端
+
+        Args:
+            message_handler: 消息处理回调函数
+            queue: 可选的消息队列，如果提供则传递给handler
+        """
         if self.is_running:
             return
 
@@ -54,7 +59,7 @@ class BiliWebSocketClient:
 
             # 启动后台任务
             tasks = [
-                asyncio.create_task(self._recv_loop(message_handler), name="WebSocket接收循环"),
+                asyncio.create_task(self._recv_loop(message_handler, queue), name="WebSocket接收循环"),
                 asyncio.create_task(self._heartbeat_loop(), name="WebSocket心跳"),
                 asyncio.create_task(self._app_heartbeat_loop(), name="应用心跳"),
             ]
@@ -284,7 +289,7 @@ class BiliWebSocketClient:
                 self.logger.warning(f"应用心跳循环出错: {e}")
                 break
 
-    async def _recv_loop(self, message_handler: Callable[[Dict[str, Any]], Awaitable[None]]):
+    async def _recv_loop(self, message_handler: Callable, queue: asyncio.Queue = None):
         """接收消息循环"""
         while self.is_running and self.websocket:
             try:
@@ -295,7 +300,11 @@ class BiliWebSocketClient:
                 if proto.op == 5:  # 消息通知
                     try:
                         message_data = json.loads(proto.body)
-                        await message_handler(message_data)
+                        # 调用handler，传入queue（如果提供）
+                        if queue is not None:
+                            await message_handler(message_data, queue)
+                        else:
+                            await message_handler(message_data)
                     except json.JSONDecodeError as e:
                         self.logger.warning(f"解析消息JSON失败: {e}, 原始数据: {proto.body}")
                     except Exception as e:

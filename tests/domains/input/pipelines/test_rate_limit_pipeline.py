@@ -133,10 +133,7 @@ async def test_process_message_different_users(rate_limit_pipeline):
 async def test_process_with_context_rollback(rate_limit_pipeline, basic_metadata):
     """测试 PipelineContext 回滚功能"""
     # 创建 context 时需要传入 original_text 和 original_metadata
-    context = PipelineContext(
-        original_text="测试消息",
-        original_metadata=basic_metadata
-    )
+    context = PipelineContext(original_text="测试消息", original_metadata=basic_metadata)
 
     # 正常处理消息
     text = "测试消息"

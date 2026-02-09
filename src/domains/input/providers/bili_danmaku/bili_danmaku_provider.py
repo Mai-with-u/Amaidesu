@@ -221,7 +221,7 @@ class BiliDanmakuInputProvider(InputProvider):
 
         return raw_data
 
-    async def _cleanup(self):
+    async def _cleanup_internal(self):
         """清理资源"""
         if self._session and not self._session.closed:
             await self._session.close()
