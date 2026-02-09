@@ -18,7 +18,6 @@ from src.core.events.names import CoreEvents
 from src.core.events.payloads import (
     RawDataPayload,
     MessageReadyPayload,
-    IntentPayload,
 )
 
 
@@ -32,12 +31,12 @@ async def test_complete_data_flow_with_mock_providers(event_bus, sample_raw_data
     2. 转换为 NormalizedMessage
     3. DecisionProvider 处理并生成 Intent
     """
-    from src.domains.input.input_domain import InputDomain
-    from src.domains.decision.decision_manager import DecisionManager
+    from src.domains.input.coordinator import InputCoordinator
+    from src.domains.decision.provider_manager import DecisionProviderManager as DecisionManager
 
     # 1. 设置 InputDomain
-    input_domain = InputDomain(event_bus)
-    await input_domain.setup()
+    input_coordinator = InputCoordinator(event_bus)
+    await input_coordinator.setup()
 
     # 2. 设置 DecisionManager（使用 mock provider）
     decision_manager = DecisionManager(event_bus, llm_service=None)
@@ -73,7 +72,7 @@ async def test_complete_data_flow_with_mock_providers(event_bus, sample_raw_data
 
     # 8. 清理
     await decision_manager.cleanup()
-    await input_domain.cleanup()
+    await input_coordinator.cleanup()
 
 
 @pytest.mark.asyncio
@@ -86,10 +85,10 @@ async def test_input_domain_normalization(event_bus, sample_raw_data, wait_for_e
     2. 文本内容正确提取
     3. 元数据正确传递
     """
-    from src.domains.input.input_domain import InputDomain
+    from src.domains.input.coordinator import InputCoordinator
 
-    input_domain = InputDomain(event_bus)
-    await input_domain.setup()
+    input_coordinator = InputCoordinator(event_bus)
+    await input_coordinator.setup()
 
     # 等待事件
     future = asyncio.create_task(wait_for_event(event_bus, CoreEvents.NORMALIZATION_MESSAGE_READY))
@@ -112,7 +111,7 @@ async def test_input_domain_normalization(event_bus, sample_raw_data, wait_for_e
     assert "source" in normalized["metadata"]
     assert "timestamp" in normalized["metadata"]
 
-    await input_domain.cleanup()
+    await input_coordinator.cleanup()
 
 
 @pytest.mark.asyncio
@@ -126,7 +125,7 @@ async def test_decision_provider_creates_intent(event_bus, wait_for_event):
     3. 元数据正确传递
     """
     from src.core.base.normalized_message import NormalizedMessage
-    from src.domains.decision.decision_manager import DecisionManager
+    from src.domains.decision.provider_manager import DecisionProviderManager as DecisionManager
     from src.domains.input.normalization.content import TextContent
 
     decision_manager = DecisionManager(event_bus, llm_service=None)
@@ -177,11 +176,11 @@ async def test_multiple_sequential_messages(event_bus, wait_for_event):
     2. 每条消息独立处理
     3. 处理顺序正确
     """
-    from src.domains.input.input_domain import InputDomain
-    from src.domains.decision.decision_manager import DecisionManager
+    from src.domains.input.coordinator import InputCoordinator
+    from src.domains.decision.provider_manager import DecisionProviderManager as DecisionManager
 
-    input_domain = InputDomain(event_bus)
-    await input_domain.setup()
+    input_coordinator = InputCoordinator(event_bus)
+    await input_coordinator.setup()
 
     decision_manager = DecisionManager(event_bus, llm_service=None)
     await decision_manager.setup("mock", {})
@@ -210,4 +209,4 @@ async def test_multiple_sequential_messages(event_bus, wait_for_event):
     assert all("[模拟回复]" in text for text in received_intents)
 
     await decision_manager.cleanup()
-    await input_domain.cleanup()
+    await input_coordinator.cleanup()

@@ -1326,12 +1326,8 @@ def test_schema_registry_integration():
         get_provider_schema,
         list_all_providers,
     )
-    from src.core.provider_registry import ProviderRegistry
 
     # 导入provider模块以注册到ProviderRegistry
-    from src.domains.input.providers import console_input
-    from src.domains.output.providers import subtitle, tts
-    from src.domains.decision.providers import maicore
 
     # 验证集中式注册表为空（所有Provider已迁移）
     assert len(PROVIDER_SCHEMA_REGISTRY) == 0

@@ -5,7 +5,7 @@ Input Domain - 输入域
 负责将外部数据转换为NormalizedMessage。
 """
 
-from .input_domain import InputDomain
-from .input_provider_manager import InputProviderManager
+from .coordinator import InputCoordinator
+from .provider_manager import InputProviderManager
 
-__all__ = ["InputDomain", "InputProviderManager"]
+__all__ = ["InputCoordinator", "InputProviderManager"]

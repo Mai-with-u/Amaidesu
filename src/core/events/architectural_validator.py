@@ -55,17 +55,22 @@ class ArchitecturalValidator:
     # 非 None 非空列表表示只允许列表中的事件（支持通配符）
     ALLOWED_SUBSCRIPTIONS: Dict[str, Optional[List[str]]] = {
         # === Input Domain (只发布，不订阅) ===
-        "InputDomain": None,  # 纯粹的数据生产者
+        "InputCoordinator": None,  # Input Domain 协调器
         "InputProvider": None,  # 所有输入 Provider 的基类
-        "InputProviderManager": None,  # 输入 Provider 管理器
+        "InputProviderManager": None,  # Input Provider 管理器
         # === Input Domain Pipelines ===
-        "PipelineManager": None,  # 管道管理器
+        "InputPipelineManager": None,  # Input Pipeline 管理器
         "TextPipeline": None,  # 所有文本管道基类
         "SimilarTextFilterPipeline": None,
         "RateLimitPipeline": None,
         "MessageLoggerPipeline": None,
         # === Decision Domain (可订阅 Input，不可订阅 Output) ===
-        "DecisionManager": [
+        "DecisionCoordinator": [
+            "normalization.message_ready",
+            "core.startup",
+            "core.shutdown",
+        ],
+        "DecisionProviderManager": [
             "normalization.message_ready",
             "core.startup",
             "core.shutdown",
@@ -76,8 +81,8 @@ class ArchitecturalValidator:
         "MaiCoreDecisionProvider": None,  # 具体实现不应该直接订阅
         "LocalLLMDecisionProvider": None,
         "RuleEngineDecisionProvider": None,
-        # === Core Orchestrator (协调跨域) ===
-        "FlowCoordinator": [
+        # === Output Domain (可订阅 Decision，不可订阅 Input) ===
+        "OutputCoordinator": [  # Output Domain 协调器
             "decision.intent_generated",
             "decision.response_generated",
             "expression.parameters_generated",

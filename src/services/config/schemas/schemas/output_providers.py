@@ -16,8 +16,8 @@
 - RemoteStreamProvider: src/domains/output/providers/remote_stream/remote_stream_output_provider.py
 """
 
-from typing import Optional, Dict, Any
-from pydantic import BaseModel, Field
+from typing import Dict, Any
+from pydantic import BaseModel
 
 from .base import BaseProviderConfig
 

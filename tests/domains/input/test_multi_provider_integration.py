@@ -14,7 +14,7 @@ import pytest
 from src.core.event_bus import EventBus
 from src.core.base.raw_data import RawData
 from src.core.events.payloads.input import RawDataPayload
-from src.domains.input.input_domain import InputDomain
+from src.domains.input.coordinator import InputCoordinator
 from src.domains.input.providers import ConsoleInputProvider, MockDanmakuInputProvider as MockDanmakuProvider
 
 
@@ -22,8 +22,8 @@ from src.domains.input.providers import ConsoleInputProvider, MockDanmakuInputPr
 async def test_multiple_providers_concurrent():
     """测试多个 Provider 并发工作"""
     event_bus = EventBus()
-    input_domain = InputDomain(event_bus)
-    await input_domain.setup()
+    input_coordinator = InputCoordinator(event_bus)
+    await input_coordinator.setup()
 
     collected_messages = []
 
@@ -71,7 +71,7 @@ async def test_multiple_providers_concurrent():
     assert "console" in sources
     assert "mock_danmaku" in sources
 
-    await input_domain.cleanup()
+    await input_coordinator.cleanup()
 
 
 if __name__ == "__main__":

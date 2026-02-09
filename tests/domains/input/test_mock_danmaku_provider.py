@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 import pytest
 from src.core.event_bus import EventBus
 from src.core.base.raw_data import RawData
-from src.domains.input.input_domain import InputDomain
+from src.domains.input.coordinator import InputCoordinator
 from src.domains.input.providers import MockDanmakuInputProvider as MockDanmakuProvider
 from src.core.events.payloads import RawDataPayload
 from src.core.events.names import CoreEvents
@@ -77,8 +77,8 @@ async def test_mock_danmaku_provider_raw_data_format():
 async def test_mock_danmaku_provider_data_flow():
     """测试 MockDanmakuProvider 完整数据流"""
     event_bus = EventBus()
-    input_domain = InputDomain(event_bus)
-    await input_domain.setup()
+    input_coordinator = InputCoordinator(event_bus)
+    await input_coordinator.setup()
 
     collected_messages = []
 
@@ -112,7 +112,7 @@ async def test_mock_danmaku_provider_data_flow():
     # metadata 可能不包含 user_name，因为它在 content 中
     # 只验证基本属性即可
 
-    await input_domain.cleanup()
+    await input_coordinator.cleanup()
 
 
 if __name__ == "__main__":

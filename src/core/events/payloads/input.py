@@ -6,7 +6,7 @@ Input Domain 事件 Payload 定义
 - MessageReadyPayload: 标准化消息就绪事件
 """
 
-from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from pydantic import Field, ConfigDict
 import time
 

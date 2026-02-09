@@ -27,9 +27,6 @@ class TestSchemaRegistry:
     def test_schema_registry_contains_all_providers(self):
         """测试注册表包含全部Provider（100%迁移到自管理Schema架构）"""
         # 需要先导入provider模块，ProviderRegistry才会注册它们
-        from src.domains.input.providers import console_input, mock_danmaku, bili_danmaku
-        from src.domains.decision.providers import maicore
-        from src.domains.output.providers import subtitle, vts, tts
 
         providers = list_all_providers()
 
@@ -64,15 +61,6 @@ class TestSchemaRegistry:
 
     def test_input_providers_registry(self):
         """测试输入Provider注册完整（100%迁移到自管理Schema）"""
-        from src.domains.input.providers import (
-            console_input,
-            bili_danmaku,
-            bili_danmaku_official,
-            bili_danmaku_official_maicraft,
-            mock_danmaku,
-            read_pingmu,
-            mainosaba,
-        )
 
         input_providers = [
             "console_input",
@@ -93,7 +81,6 @@ class TestSchemaRegistry:
 
     def test_decision_providers_registry(self):
         """测试决策Provider注册完整（100%迁移到自管理Schema）"""
-        from src.domains.decision.providers import maicore, local_llm, rule_engine, mock
 
         decision_providers = [
             "maicore",
@@ -111,18 +98,6 @@ class TestSchemaRegistry:
 
     def test_output_providers_registry(self):
         """测试输出Provider注册完整（100%迁移到自管理Schema）"""
-        from src.domains.output.providers import (
-            subtitle,
-            vts,
-            tts,
-            sticker,
-            warudo,
-            obs_control,
-            gptsovits,
-            omni_tts,
-            avatar,
-            remote_stream,
-        )
 
         output_providers = [
             "subtitle",
@@ -199,9 +174,6 @@ class TestSchemaHelperFunctions:
     def test_get_provider_schema_valid(self):
         """测试获取存在的Provider Schema（100%迁移到ProviderRegistry）"""
         # 需要先导入provider模块
-        from src.domains.input.providers import console_input, bili_danmaku
-        from src.domains.decision.providers import maicore
-        from src.domains.output.providers import subtitle
 
         # 测试从ProviderRegistry获取自管理Schema
         schema = get_provider_schema("console_input")
@@ -224,8 +196,6 @@ class TestSchemaHelperFunctions:
     def test_validate_provider_config_valid(self):
         """测试验证有效的Provider配置（100%迁移到自管理Schema）"""
         # 导入provider模块
-        from src.domains.input.providers import console_input, bili_danmaku
-        from src.domains.decision.providers import maicore
 
         # 测试console_input配置验证
         config = {"type": "console_input", "user_id": "test_user"}
@@ -249,7 +219,6 @@ class TestSchemaHelperFunctions:
     def test_validate_provider_config_invalid(self):
         """测试验证无效的Provider配置抛出异常"""
         # 导入provider模块
-        from src.domains.input.providers import bili_danmaku
 
         # 无效的配置（缺少必需字段）
         with pytest.raises(Exception):  # ValidationError from pydantic
@@ -332,16 +301,6 @@ class TestRegistryConsistency:
     def test_input_decision_providers_have_type_field(self):
         """测试输入和决策Provider的type字段与注册表键一致（100%迁移到ProviderRegistry）"""
         from pydantic import ValidationError
-        from src.domains.input.providers import (
-            console_input,
-            bili_danmaku,
-            bili_danmaku_official,
-            bili_danmaku_official_maicraft,
-            mock_danmaku,
-            read_pingmu,
-            mainosaba,
-        )
-        from src.domains.decision.providers import maicore, local_llm, rule_engine, mock
 
         # 检查所有input和decision providers（都应该有type字段）
         providers_with_type = [
@@ -384,8 +343,6 @@ class TestRegistryConsistency:
     def test_registry_is_complete(self):
         """测试注册表包含所有必要的Provider类型（100%迁移到ProviderRegistry）"""
         # 导入所有provider模块
-        from src.domains.input.providers import console_input, mock_danmaku, bili_danmaku
-        from src.domains.output.providers import subtitle, vts, tts, gptsovits
 
         # 验证关键provider在ProviderRegistry中
         critical_providers = [
@@ -417,18 +374,6 @@ class TestRegistryConsistency:
         assert len(OUTPUT_PROVIDER_CONFIG_MAP) == 0, "OUTPUT_PROVIDER_CONFIG_MAP should be empty after 100% migration"
 
         # 验证所有output providers在ProviderRegistry中
-        from src.domains.output.providers import (
-            subtitle,
-            vts,
-            tts,
-            sticker,
-            warudo,
-            obs_control,
-            gptsovits,
-            omni_tts,
-            avatar,
-            remote_stream,
-        )
 
         output_providers = [
             "subtitle",

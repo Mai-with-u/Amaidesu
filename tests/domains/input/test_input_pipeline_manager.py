@@ -1,7 +1,7 @@
 """
-PipelineManager 单元测试
+InputPipelineManager 单元测试
 
-测试 PipelineManager 的所有核心功能：
+测试 InputPipelineManager 的所有核心功能：
 - TextPipeline 管理（注册、处理、优先级排序）
 - 统计信息
 - 错误处理
@@ -15,7 +15,7 @@ import pytest
 from typing import Optional, Dict, Any
 
 from src.domains.input.pipelines.manager import (
-    PipelineManager,
+    InputPipelineManager,
     TextPipelineBase,
     PipelineErrorHandling,
     PipelineStats,
@@ -88,8 +88,8 @@ class SlowMockTextPipeline(TextPipelineBase):
 
 @pytest.fixture
 def pipeline_manager():
-    """创建 PipelineManager 实例"""
-    return PipelineManager()
+    """创建 InputPipelineManager 实例"""
+    return InputPipelineManager()
 
 
 @pytest.fixture
@@ -110,7 +110,7 @@ def sample_metadata():
 
 
 @pytest.mark.asyncio
-async def test_register_text_pipeline(pipeline_manager: PipelineManager):
+async def test_register_text_pipeline(pipeline_manager: InputPipelineManager):
     """测试注册 TextPipeline"""
     pipeline = MockTextPipeline({})
     pipeline.priority = 100
@@ -123,7 +123,7 @@ async def test_register_text_pipeline(pipeline_manager: PipelineManager):
 
 
 @pytest.mark.asyncio
-async def test_register_multiple_text_pipelines(pipeline_manager: PipelineManager):
+async def test_register_multiple_text_pipelines(pipeline_manager: InputPipelineManager):
     """测试注册多个 TextPipeline"""
     pipeline1 = MockTextPipeline({})
     pipeline2 = MockTextPipeline({})
@@ -143,7 +143,7 @@ async def test_register_multiple_text_pipelines(pipeline_manager: PipelineManage
 
 @pytest.mark.asyncio
 async def test_process_text_single_pipeline(
-    pipeline_manager: PipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
+    pipeline_manager: InputPipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
 ):
     """测试单个 TextPipeline 处理文本"""
     pipeline = MockTextPipeline({})
@@ -160,7 +160,7 @@ async def test_process_text_single_pipeline(
 
 @pytest.mark.asyncio
 async def test_process_text_multiple_pipelines(
-    pipeline_manager: PipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
+    pipeline_manager: InputPipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
 ):
     """测试多个 TextPipeline 处理文本"""
     pipeline1 = MockTextPipeline({})
@@ -189,7 +189,7 @@ async def test_process_text_multiple_pipelines(
 
 @pytest.mark.asyncio
 async def test_process_text_pipeline_drops_message(
-    pipeline_manager: PipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
+    pipeline_manager: InputPipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
 ):
     """测试 TextPipeline 丢弃消息"""
     pipeline1 = MockTextPipeline({})
@@ -215,7 +215,7 @@ async def test_process_text_pipeline_drops_message(
 
 @pytest.mark.asyncio
 async def test_process_text_empty_pipeline_list(
-    pipeline_manager: PipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
+    pipeline_manager: InputPipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
 ):
     """测试空 TextPipeline 列表"""
     result = await pipeline_manager.process_text(sample_text, sample_metadata)
@@ -225,7 +225,7 @@ async def test_process_text_empty_pipeline_list(
 
 @pytest.mark.asyncio
 async def test_process_text_disabled_pipeline(
-    pipeline_manager: PipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
+    pipeline_manager: InputPipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
 ):
     """测试禁用的 TextPipeline 不处理"""
     pipeline1 = MockTextPipeline({})
@@ -251,7 +251,7 @@ async def test_process_text_disabled_pipeline(
 
 @pytest.mark.asyncio
 async def test_process_text_pipeline_error_continue(
-    pipeline_manager: PipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
+    pipeline_manager: InputPipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
 ):
     """测试 TextPipeline 错误处理：CONTINUE"""
     pipeline1 = MockTextPipeline({})
@@ -278,7 +278,7 @@ async def test_process_text_pipeline_error_continue(
 
 @pytest.mark.asyncio
 async def test_process_text_pipeline_error_stop(
-    pipeline_manager: PipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
+    pipeline_manager: InputPipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
 ):
     """测试 TextPipeline 错误处理：STOP"""
     pipeline = MockTextPipeline({})
@@ -297,7 +297,7 @@ async def test_process_text_pipeline_error_stop(
 
 @pytest.mark.asyncio
 async def test_process_text_pipeline_error_drop(
-    pipeline_manager: PipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
+    pipeline_manager: InputPipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
 ):
     """测试 TextPipeline 错误处理：DROP"""
     pipeline1 = MockTextPipeline({})
@@ -323,7 +323,7 @@ async def test_process_text_pipeline_error_drop(
 
 @pytest.mark.asyncio
 async def test_process_text_pipeline_timeout_continue(
-    pipeline_manager: PipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
+    pipeline_manager: InputPipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
 ):
     """测试 TextPipeline 超时：CONTINUE"""
     pipeline1 = MockTextPipeline({})
@@ -348,7 +348,7 @@ async def test_process_text_pipeline_timeout_continue(
 
 @pytest.mark.asyncio
 async def test_process_text_pipeline_timeout_drop(
-    pipeline_manager: PipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
+    pipeline_manager: InputPipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
 ):
     """测试 TextPipeline 超时：DROP"""
     pipeline1 = MockTextPipeline({})
@@ -379,7 +379,7 @@ async def test_process_text_pipeline_timeout_drop(
 
 @pytest.mark.asyncio
 async def test_text_pipeline_priority_sorting(
-    pipeline_manager: PipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
+    pipeline_manager: InputPipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
 ):
     """测试 TextPipeline 按优先级排序"""
     execution_order = []
@@ -419,7 +419,7 @@ async def test_text_pipeline_priority_sorting(
 
 @pytest.mark.asyncio
 async def test_get_text_pipeline_stats(
-    pipeline_manager: PipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
+    pipeline_manager: InputPipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
 ):
     """测试获取 TextPipeline 统计信息"""
     pipeline1 = MockTextPipeline({})
@@ -452,7 +452,7 @@ async def test_get_text_pipeline_stats(
 
 @pytest.mark.asyncio
 async def test_get_text_pipeline_stats_with_drops(
-    pipeline_manager: PipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
+    pipeline_manager: InputPipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
 ):
     """测试统计信息包含丢弃计数"""
     pipeline = MockTextPipeline({})
@@ -470,7 +470,7 @@ async def test_get_text_pipeline_stats_with_drops(
 
 @pytest.mark.asyncio
 async def test_get_text_pipeline_stats_with_errors(
-    pipeline_manager: PipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
+    pipeline_manager: InputPipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
 ):
     """测试统计信息包含错误计数"""
     pipeline = MockTextPipeline({})
@@ -490,7 +490,7 @@ async def test_get_text_pipeline_stats_with_errors(
 
 @pytest.mark.asyncio
 async def test_get_text_pipeline_stats_avg_duration(
-    pipeline_manager: PipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
+    pipeline_manager: InputPipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
 ):
     """测试统计信息包含平均处理时间"""
     pipeline = MockTextPipeline({})
@@ -509,7 +509,7 @@ async def test_get_text_pipeline_stats_avg_duration(
 
 
 @pytest.mark.asyncio
-async def test_get_text_pipeline_stats_empty(pipeline_manager: PipelineManager):
+async def test_get_text_pipeline_stats_empty(pipeline_manager: InputPipelineManager):
     """测试空 TextPipeline 列表的统计"""
     stats = pipeline_manager.get_text_pipeline_stats()
 
@@ -555,7 +555,7 @@ def test_pipeline_stats_avg_duration_with_processed():
 
 @pytest.mark.asyncio
 async def test_concurrent_text_processing(
-    pipeline_manager: PipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
+    pipeline_manager: InputPipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
 ):
     """测试并发处理多个文本"""
     pipeline = MockTextPipeline({})
@@ -580,7 +580,7 @@ async def test_concurrent_text_processing(
 
 
 @pytest.mark.asyncio
-async def test_process_text_empty_string(pipeline_manager: PipelineManager, sample_metadata: Dict[str, Any]):
+async def test_process_text_empty_string(pipeline_manager: InputPipelineManager, sample_metadata: Dict[str, Any]):
     """测试处理空字符串"""
     pipeline = MockTextPipeline({})
     pipeline.priority = 100
@@ -595,7 +595,7 @@ async def test_process_text_empty_string(pipeline_manager: PipelineManager, samp
 
 
 @pytest.mark.asyncio
-async def test_process_text_with_unicode(pipeline_manager: PipelineManager, sample_metadata: Dict[str, Any]):
+async def test_process_text_with_unicode(pipeline_manager: InputPipelineManager, sample_metadata: Dict[str, Any]):
     """测试处理 Unicode 文本"""
     pipeline = MockTextPipeline({})
     pipeline.priority = 100

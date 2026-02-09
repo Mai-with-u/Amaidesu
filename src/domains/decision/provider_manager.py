@@ -1,10 +1,11 @@
 """
-DecisionManager - 决策层管理器
+DecisionProviderManager - 决策Provider管理器
 
 职责:
 - 管理DecisionProvider生命周期
 - 支持通过ProviderRegistry创建Provider
 - 支持运行时切换Provider
+- 提供decide()方法供DecisionCoordinator调用
 - 异常处理和优雅降级
 """
 
@@ -22,43 +23,26 @@ if TYPE_CHECKING:
     from src.services.llm.manager import LLMManager
 
 
-class DecisionManager:
+class DecisionProviderManager:
     """
-    决策管理器 (Decision Domain: 决策域)
+    决策Provider管理器 (Decision Domain: Provider管理)
 
     职责:
     - 管理DecisionProvider生命周期
     - 通过ProviderRegistry创建Provider
     - 支持运行时切换Provider
+    - 提供decide()方法进行决策
     - 异常处理和优雅降级
-
-    使用示例:
-        ```python
-        # 初始化
-        manager = DecisionManager(event_bus, llm_manager)
-
-        # 设置当前Provider
-        await manager.setup(provider_name="maicore", config={"host": "localhost", "port": 8000})
-
-        # 进行决策
-        normalized_message = NormalizedMessage(...)
-        result = await manager.decide(normalized_message)
-
-        # 运行时切换Provider
-        await manager.switch_provider(provider_name="local_llm", config={"model": "gpt-4", "api_key": "..."})
-
-        # 清理
-        await manager.cleanup()
-        ```
 
     注意：
         - DecisionProvider 应预先在各个 Provider 模块的 __init__.py 中注册到 ProviderRegistry
         - ProviderRegistry 统一管理所有类型的 Provider（Input/Decision/Output）
+        - 事件处理逻辑由 DecisionCoordinator 负责
     """
 
     def __init__(self, event_bus: "EventBus", llm_service: Optional["LLMManager"] = None):
         """
-        初始化DecisionManager
+        初始化DecisionProviderManager
 
         Args:
             event_bus: EventBus实例
@@ -66,11 +50,10 @@ class DecisionManager:
         """
         self.event_bus = event_bus
         self._llm_service = llm_service
-        self.logger = get_logger("DecisionManager")
+        self.logger = get_logger("DecisionProviderManager")
         self._current_provider: Optional["DecisionProvider"] = None
         self._provider_name: Optional[str] = None
         self._switch_lock = asyncio.Lock()
-        self._event_subscribed = False
 
     async def setup(
         self,
@@ -151,27 +134,13 @@ class DecisionManager:
                         endpoint=provider_config.get("host") or provider_config.get("ws_url"),
                         metadata={"config": provider_config},
                     ),
-                    source="DecisionManager",
+                    source="DecisionProviderManager",
                 )
             except Exception as e:
                 self.logger.error(f"DecisionProvider '{provider_name}' 初始化失败: {e}", exc_info=True)
                 self._current_provider = None
                 self._provider_name = None
                 raise ConnectionError(f"无法初始化DecisionProvider '{provider_name}': {e}") from e
-
-        # 订阅 normalization.message_ready 事件（防止重复订阅）
-        if not self._event_subscribed:
-            from src.core.events.payloads.input import MessageReadyPayload
-
-            self.event_bus.on_typed(
-                CoreEvents.NORMALIZATION_MESSAGE_READY,
-                self._on_normalized_message_ready,
-                MessageReadyPayload,
-            )
-            self._event_subscribed = True
-            self.logger.info(f"DecisionManager 已订阅 '{CoreEvents.NORMALIZATION_MESSAGE_READY}' 事件（类型化）")
-        else:
-            self.logger.debug(f"DecisionManager 已订阅过 '{CoreEvents.NORMALIZATION_MESSAGE_READY}' 事件，跳过重复订阅")
 
     async def decide(self, normalized_message: "NormalizedMessage") -> "Intent":
         """
@@ -198,109 +167,6 @@ class DecisionManager:
             self.logger.error(f"决策失败: {e}", exc_info=True)
             # 优雅降级: 抛出异常让上层处理
             raise
-
-    async def _on_normalized_message_ready(self, event_name: str, payload: "MessageReadyPayload", source: str):
-        """
-        处理 normalization.message_ready 事件（类型化）
-
-        当 InputDomain 生成 NormalizedMessage 时，自动调用当前活动的 DecisionProvider 进行决策，
-        并发布 decision.intent_generated 事件（3域架构）。
-
-        Args:
-            event_name: 事件名称 (CoreEvents.NORMALIZATION_MESSAGE_READY)
-            payload: 类型化的事件数据（MessageReadyPayload 对象，自动反序列化）
-            source: 事件源
-        """
-        # 直接从 payload.message 获取 NormalizedMessage 对象
-        # message 现在是 Union[NormalizedMessage, Dict[str, Any]] 以兼容序列化
-        message_data = payload.message
-        if not message_data:
-            self.logger.warning("收到空的 NormalizedMessage 事件")
-            return
-
-        # 兼容处理：message 字段可以是 NormalizedMessage 对象或字典
-        # 由于序列化限制，通常是字典格式
-        from src.core.base.normalized_message import NormalizedMessage
-
-        if isinstance(message_data, dict):
-            # 字典格式：使用 from_dict 方法重建（如果存在）或直接使用字典
-            # 由于 NormalizedMessage 的 content 字段包含不可序列化对象，
-            # model_validate 可能无法正确重建，所以我们暂时使用字典访问
-            normalized_dict = message_data
-            # 使用字典访问方式
-            text = normalized_dict.get("text", "")
-            source = normalized_dict.get("source", "")
-            data_type = normalized_dict.get("data_type", "")
-            importance = normalized_dict.get("importance", 0.5)
-            metadata = normalized_dict.get("metadata", {})
-            user_id = normalized_dict.get("user_id")  # 从字典获取
-            user_nickname = metadata.get("user_nickname")
-
-            # 构建 SourceContext
-            from src.domains.decision.intent import SourceContext
-
-            source_context = SourceContext(
-                source=source,
-                data_type=data_type,
-                user_id=user_id,
-                user_nickname=user_nickname,
-                importance=importance,
-                extra={k: v for k, v in metadata.items() if k not in ("type", "timestamp", "source")},
-            )
-
-            # 尝试重建 NormalizedMessage 对象用于决策
-            try:
-                normalized = NormalizedMessage.model_validate(normalized_dict)
-            except Exception:
-                # 如果重建失败，使用字典数据创建一个临时对象
-                # 注意：这可能不完整，但至少能处理基本字段
-                normalized = NormalizedMessage(
-                    text=text,
-                    content=None,  # content 无法从字典重建
-                    source=source,
-                    data_type=data_type,
-                    importance=importance,
-                    metadata=metadata,
-                    timestamp=normalized_dict.get("timestamp", 0.0),
-                )
-        else:
-            # 对象格式：直接使用
-            normalized = message_data
-
-            # 构建 SourceContext（在决策前）
-            from src.domains.decision.intent import SourceContext
-
-            source_context = SourceContext(
-                source=normalized.source,
-                data_type=normalized.data_type,
-                user_id=normalized.user_id if hasattr(normalized, "user_id") else None,
-                user_nickname=normalized.metadata.get("user_nickname"),
-                importance=normalized.importance,
-                extra={k: v for k, v in normalized.metadata.items() if k not in ("type", "timestamp", "source")},
-            )
-
-        try:
-            self.logger.debug(f"收到 NormalizedMessage: {normalized.text[:50]}...")
-
-            # 调用当前活动的 Provider 进行决策
-            intent = await self.decide(normalized)
-
-            # 注入 source_context（如果 Provider 未设置）
-            if intent.source_context is None:
-                intent.source_context = source_context
-
-            # 发布 decision.intent_generated 事件（3域架构，使用emit）
-            from src.core.events.payloads import IntentPayload
-            from src.core.events.names import CoreEvents
-
-            await self.event_bus.emit(
-                CoreEvents.DECISION_INTENT_GENERATED,
-                IntentPayload.from_intent(intent, self._provider_name or "unknown"),
-                source="DecisionManager",
-            )
-            self.logger.debug(f"已发布 decision.intent_generated 事件: {intent.response_text[:50]}...")
-        except Exception as e:
-            self.logger.error(f"处理 NormalizedMessage 时出错: {e}", exc_info=True)
 
     async def switch_provider(self, provider_name: str, config: Dict[str, Any]) -> None:
         """
@@ -364,7 +230,7 @@ class DecisionManager:
                             provider=provider_name,
                             metadata={"previous_provider": old_name, "switched": True},
                         ),
-                        source="DecisionManager",
+                        source="DecisionProviderManager",
                     )
                 except Exception as e:
                     self.logger.warning(f"发布Provider连接事件失败: {e}")
@@ -382,14 +248,8 @@ class DecisionManager:
         """
         清理资源
 
-        清理当前Provider和取消事件订阅。
+        清理当前Provider。
         """
-        # 取消事件订阅（如果已订阅）
-        if self._event_subscribed:
-            self.event_bus.off(CoreEvents.NORMALIZATION_MESSAGE_READY, self._on_normalized_message_ready)
-            self._event_subscribed = False
-            self.logger.debug("DecisionManager 已取消事件订阅")
-
         provider_name = self._provider_name
 
         async with self._switch_lock:
@@ -413,12 +273,12 @@ class DecisionManager:
                             reason="cleanup",
                             will_retry=False,
                         ),
-                        source="DecisionManager",
+                        source="DecisionProviderManager",
                     )
                 except Exception as e:
                     self.logger.warning(f"发布Provider断开事件失败: {e}")
 
-            self.logger.info("DecisionManager 已清理")
+            self.logger.info("DecisionProviderManager 已清理")
 
     def get_current_provider(self) -> Optional["DecisionProvider"]:
         """

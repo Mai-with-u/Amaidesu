@@ -10,7 +10,6 @@
 import pytest
 import asyncio
 from pydantic import BaseModel, Field
-from typing import Dict, Any
 
 from src.core.event_bus import EventBus
 from src.core.events.payloads.input import MessageReadyPayload

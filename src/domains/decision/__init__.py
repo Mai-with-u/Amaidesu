@@ -12,7 +12,11 @@ from .intent import (
     SourceContext,
     ActionSuggestion,
 )
-from .decision_manager import DecisionManager
+from .provider_manager import DecisionProviderManager
+from .coordinator import DecisionCoordinator
+
+# 向后兼容：DecisionManager 作为 DecisionProviderManager 的别名
+DecisionManager = DecisionProviderManager
 
 __all__ = [
     "Intent",
@@ -21,5 +25,7 @@ __all__ = [
     "IntentAction",
     "SourceContext",
     "ActionSuggestion",
-    "DecisionManager",
+    "DecisionProviderManager",
+    "DecisionCoordinator",
+    "DecisionManager",  # 向后兼容
 ]

@@ -22,7 +22,7 @@ from src.core.base.normalized_message import NormalizedMessage
 
 
 def test_text_normalizer_init_without_pipeline():
-    """测试 TextNormalizer 初始化（不使用 PipelineManager）"""
+    """测试 TextNormalizer 初始化（不使用 InputPipelineManager）"""
     normalizer = TextNormalizer()
 
     assert normalizer is not None
@@ -33,7 +33,7 @@ def test_text_normalizer_init_without_pipeline():
 
 
 def test_text_normalizer_init_with_pipeline():
-    """测试 TextNormalizer 初始化（使用 PipelineManager）"""
+    """测试 TextNormalizer 初始化（使用 InputPipelineManager）"""
     mock_pipeline = Mock()
 
     normalizer = TextNormalizer(pipeline_manager=mock_pipeline)
@@ -115,13 +115,13 @@ async def test_text_normalizer_metadata_handling():
 
 
 # =============================================================================
-# PipelineManager 集成测试
+# InputPipelineManager 集成测试
 # =============================================================================
 
 
 @pytest.mark.asyncio
 async def test_text_normalizer_with_pipeline_processing():
-    """测试使用 PipelineManager 处理文本"""
+    """测试使用 InputPipelineManager 处理文本"""
     mock_pipeline = Mock()
     mock_pipeline.process_text = AsyncMock(return_value="Processed: Hello")
 
@@ -138,7 +138,7 @@ async def test_text_normalizer_with_pipeline_processing():
 
 @pytest.mark.asyncio
 async def test_text_normalizer_with_pipeline_returns_none():
-    """测试 PipelineManager 返回 None（应该丢弃消息）"""
+    """测试 InputPipelineManager 返回 None（应该丢弃消息）"""
     mock_pipeline = Mock()
     mock_pipeline.process_text = AsyncMock(return_value=None)
 
@@ -154,7 +154,7 @@ async def test_text_normalizer_with_pipeline_returns_none():
 
 @pytest.mark.asyncio
 async def test_text_normalizer_with_pipeline_error():
-    """测试 PipelineManager 抛出异常（应该使用原文本）"""
+    """测试 InputPipelineManager 抛出异常（应该使用原文本）"""
     mock_pipeline = Mock()
     mock_pipeline.process_text = AsyncMock(side_effect=Exception("Pipeline error"))
 

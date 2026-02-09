@@ -20,7 +20,7 @@ import pytest
 from typing import Any
 from unittest.mock import Mock, AsyncMock
 
-from src.domains.output.manager import OutputProviderManager
+from src.domains.output.provider_manager import OutputProviderManager
 from src.domains.output.parameters.render_parameters import RenderParameters
 from tests.mocks.mock_output_provider import MockOutputProvider
 

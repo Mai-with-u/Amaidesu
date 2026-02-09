@@ -46,10 +46,6 @@ def config_service(project_base_dir):
     # ConfigService 没有需要清理的资源
 
 
-# 导入类型注解
-from src.services.config.service import ConfigService
-
-
 # ==================== 测试套件 1: ConfigService 基本功能 ====================
 
 
@@ -281,7 +277,7 @@ async def test_input_provider_manager_load_from_config(config_service: ConfigSer
 @pytest.mark.asyncio
 async def test_output_provider_manager_load_from_config(config_service: ConfigService):
     """测试 OutputProviderManager 能从配置加载 Provider"""
-    from src.domains.output.manager import OutputProviderManager
+    from src.domains.output.provider_manager import OutputProviderManager
 
     manager = OutputProviderManager()
 
@@ -347,8 +343,8 @@ async def test_application_startup_simulation(project_base_dir):
     from src.services.config.service import ConfigService
     from src.core.event_bus import EventBus
     from src.domains.input.input_provider_manager import InputProviderManager
-    from src.domains.output.manager import OutputProviderManager
-    from src.domains.decision.decision_manager import DecisionManager
+    from src.domains.output.provider_manager import OutputProviderManager
+    from src.domains.decision.provider_manager import DecisionProviderManager as DecisionManager
 
     # 1. 初始化配置服务
     config_service = ConfigService(base_dir=project_base_dir)

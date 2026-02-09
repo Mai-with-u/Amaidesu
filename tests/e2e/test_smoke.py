@@ -4,6 +4,7 @@ E2E Test: Smoke Test
 快速验证系统基本功能
 """
 
+import time
 import pytest
 from pydantic import BaseModel, Field
 
@@ -80,7 +81,7 @@ async def test_mock_decision_provider():
         data_type="text",
         importance=0.5,
         metadata={},
-        timestamp=None,
+        timestamp=time.time(),
     )
 
     # 测试决策

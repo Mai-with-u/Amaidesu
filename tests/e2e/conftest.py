@@ -7,9 +7,9 @@ import pytest
 from typing import AsyncGenerator
 
 from src.core.event_bus import EventBus
-from src.domains.input.input_provider_manager import InputProviderManager
-from src.domains.input.input_domain import InputDomain
-from src.domains.decision.decision_manager import DecisionManager
+from src.domains.input.provider_manager import InputProviderManager
+from src.domains.input.coordinator import InputCoordinator
+from src.domains.decision.provider_manager import DecisionProviderManager as DecisionManager
 from src.core.base.raw_data import RawData
 from src.core.base.normalized_message import NormalizedMessage
 
@@ -21,14 +21,14 @@ def event_bus() -> EventBus:
 
 
 @pytest.fixture
-async def input_domain(event_bus: EventBus) -> AsyncGenerator[InputDomain, None]:
-    """创建 InputDomain 实例"""
-    from src.domains.input.input_domain import InputDomain
+async def input_coordinator(event_bus: EventBus) -> AsyncGenerator[InputCoordinator, None]:
+    """创建 InputCoordinator 实例"""
+    from src.domains.input.coordinator import InputCoordinator
 
-    domain = InputDomain(event_bus)
-    await domain.setup()
-    yield domain
-    await domain.cleanup()
+    coordinator = InputCoordinator(event_bus)
+    await coordinator.setup()
+    yield coordinator
+    await coordinator.cleanup()
 
 
 @pytest.fixture

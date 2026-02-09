@@ -14,14 +14,14 @@ from src.services.config.service import ConfigService
 from src.services.context.manager import ContextManager
 from src.core.event_bus import EventBus
 from src.core.events import register_core_events
-from src.core.flow_coordinator import FlowCoordinator
+from src.domains.output import OutputCoordinator
 from src.services.llm.manager import LLMManager
-from src.domains.input.pipelines.manager import PipelineManager
+from src.domains.input.pipelines.manager import InputPipelineManager
 from src.core.utils.logger import get_logger
 from loguru import logger as loguru_logger
-from src.domains.input.input_domain import InputDomain
-from src.domains.input.input_provider_manager import InputProviderManager
-from src.domains.decision.decision_manager import DecisionManager
+from src.domains.input.coordinator import InputCoordinator
+from src.domains.input.provider_manager import InputProviderManager
+from src.domains.decision import DecisionProviderManager
 
 logger = get_logger("Main")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -205,8 +205,8 @@ def exit_if_config_copied(main_cfg_copied: bool, plugin_cfg_copied: bool, pipeli
 # ---------------------------------------------------------------------------
 
 
-async def load_pipeline_manager(config: Dict[str, Any]) -> Optional[PipelineManager]:
-    """加载管道管理器，仅包含 TextPipeline（Input Domain: 文本预处理）。"""
+async def load_pipeline_manager(config: Dict[str, Any]) -> Optional[InputPipelineManager]:
+    """加载输入管道管理器，仅包含 TextPipeline（Input Domain: 文本预处理）。"""
     pipeline_config = config.get("pipelines", {})
     if not pipeline_config:
         logger.info("配置中未启用管道功能")
@@ -216,7 +216,7 @@ async def load_pipeline_manager(config: Dict[str, Any]) -> Optional[PipelineMana
     logger.info(f"准备加载管道 (从目录: {pipeline_load_dir})...")
 
     try:
-        manager = PipelineManager()
+        manager = InputPipelineManager()
 
         # 加载 TextPipeline（Input Domain: 文本预处理）
         await manager.load_text_pipelines(pipeline_load_dir, pipeline_config)
@@ -236,15 +236,15 @@ async def load_pipeline_manager(config: Dict[str, Any]) -> Optional[PipelineMana
 
 async def create_app_components(
     config: Dict[str, Any],
-    pipeline_manager: Optional[PipelineManager],
+    input_pipeline_manager: Optional[InputPipelineManager],
     config_service: ConfigService,
     arch_validate: bool = False,
 ) -> Tuple[
     AmaidesuCore,
-    Optional[FlowCoordinator],
-    InputDomain,
+    Optional[OutputCoordinator],
+    InputCoordinator,
     LLMManager,
-    Optional[DecisionManager],
+    Optional[DecisionProviderManager],
     Optional[InputProviderManager],
 ]:
     """创建并连接核心组件（事件总线、输入域、决策域、协调器、核心、插件）。"""
@@ -256,9 +256,9 @@ async def create_app_components(
     platform_id = general_config.get("platform_id", "amaidesu")
 
     if output_config:
-        logger.info("检测到输出Provider配置，将启用数据流协调器")
+        logger.info("检测到输出Provider配置，将启用输出协调器")
     else:
-        logger.info("未检测到输出Provider配置，数据流协调器功能将被禁用")
+        logger.info("未检测到输出Provider配置，输出协调器功能将被禁用")
 
     # 上下文管理器
     context_manager_config = config.get("context_manager", {})
@@ -301,53 +301,54 @@ async def create_app_components(
         logger.info("未检测到输入配置，输入Provider功能将被禁用")
 
     # 输入域 (Input Domain)
-    input_domain = InputDomain(event_bus, pipeline_manager=pipeline_manager)
-    await input_domain.setup()
+    input_coordinator = InputCoordinator(event_bus, pipeline_manager=input_pipeline_manager)
+    await input_coordinator.setup()
 
     # 决策域 (Decision Domain)
-    decision_manager: Optional[DecisionManager] = None
+    decision_provider_manager: Optional[DecisionProviderManager] = None
     if decision_config:
         logger.info("初始化决策域组件（Decision Domain）...")
         try:
-            decision_manager = DecisionManager(event_bus, llm_service)
+            decision_provider_manager = DecisionProviderManager(event_bus, llm_service)
 
-            # 设置决策 Provider（通过 ProviderRegistry 自动创建）
+            # 设置决策Provider（通过 ProviderRegistry 自动创建）
             # 使用新的配置格式：decision_config 包含 active_provider 和 available_providers
-            await decision_manager.setup(decision_config=decision_config)
-            active_provider = decision_manager.get_current_provider_name()
-            logger.info(f"DecisionManager 已设置（Provider: {active_provider}）")
+            await decision_provider_manager.setup(decision_config=decision_config)
+            active_provider = decision_provider_manager.get_current_provider_name()
+            logger.info(f"DecisionProviderManager 已设置（Provider: {active_provider}）")
         except Exception as e:
             logger.error(f"设置决策域组件失败: {e}", exc_info=True)
             logger.warning("决策域功能不可用，继续启动其他服务")
-            decision_manager = None
+            decision_provider_manager = None
     else:
         logger.info("未检测到决策配置，决策域功能将被禁用")
 
-    # 数据流协调器 (Output Domain)
-    logger.info("初始化数据流协调器...")
-    flow_coordinator: Optional[FlowCoordinator] = FlowCoordinator(event_bus) if output_config else None
-    if flow_coordinator:
+    # 输出协调器 (Output Domain)
+    logger.info("初始化输出协调器...")
+    output_coordinator: Optional[OutputCoordinator] = OutputCoordinator(event_bus) if output_config else None
+    if output_coordinator:
         try:
-            await flow_coordinator.setup(output_config, config_service=config_service, root_config=config)
-            logger.info("数据流协调器已设置（Output Domain）")
+            await output_coordinator.setup(output_config, config_service=config_service, root_config=config)
+            logger.info("输出协调器已设置（Output Domain）")
         except Exception as e:
-            logger.error(f"设置数据流协调器失败: {e}", exc_info=True)
-            logger.warning("数据流协调器功能不可用，继续启动其他服务")
-            flow_coordinator = None
+            logger.error(f"设置输出协调器失败: {e}", exc_info=True)
+            logger.warning("输出协调器功能不可用，继续启动其他服务")
+            output_coordinator = None
 
     # 核心
     core = AmaidesuCore(
         platform=platform_id,
-        pipeline_manager=pipeline_manager,
+        pipeline_manager=input_pipeline_manager,
         context_manager=context_manager,
         event_bus=event_bus,
         llm_service=llm_service,
-        flow_coordinator=flow_coordinator,
+        decision_provider_manager=decision_provider_manager,
+        output_coordinator=output_coordinator,
     )
 
     await core.connect()
 
-    return core, flow_coordinator, input_domain, llm_service, decision_manager, input_provider_manager
+    return core, output_coordinator, input_coordinator, llm_service, decision_provider_manager, input_provider_manager
 
 
 # ---------------------------------------------------------------------------
@@ -394,11 +395,11 @@ def restore_signal_handlers(original_sigint: Optional[Any], original_sigterm: Op
 
 
 async def run_shutdown(
-    flow_coordinator: Optional[FlowCoordinator],
-    input_domain: InputDomain,
+    output_coordinator: Optional[OutputCoordinator],
+    input_coordinator: InputCoordinator,
     llm_service: LLMManager,
     core: AmaidesuCore,
-    decision_manager: Optional[DecisionManager],
+    decision_provider_manager: Optional[DecisionProviderManager],
     input_provider_manager: Optional[InputProviderManager],
 ) -> None:
     """按顺序执行关闭与清理。
@@ -406,7 +407,7 @@ async def run_shutdown(
     关闭顺序（关键）：
     1. 先停止数据生产者（InputProvider）
     2. 等待待处理事件完成（grace period）
-    3. 清理消费者（FlowCoordinator、DecisionManager）
+    3. 清理消费者（OutputCoordinator、DecisionProviderManager）
     4. 清理基础设施（InputDomain、LLM、Core）
     """
     # 1. 先停止输入Provider（数据生产者）
@@ -423,27 +424,27 @@ async def run_shutdown(
     await asyncio.sleep(1.0)
 
     # 3. 清理消费者
-    if flow_coordinator:
-        logger.info("正在清理数据流协调器...")
+    if output_coordinator:
+        logger.info("正在清理输出协调器...")
         try:
-            await flow_coordinator.cleanup()
-            logger.info("数据流协调器清理完成")
+            await output_coordinator.cleanup()
+            logger.info("输出协调器清理完成")
         except Exception as e:
-            logger.error(f"清理数据流协调器时出错: {e}")
+            logger.error(f"清理输出协调器时出错: {e}")
 
     # 清理决策域
-    if decision_manager:
-        logger.info("正在清理决策管理器...")
+    if decision_provider_manager:
+        logger.info("正在清理决策Provider管理器...")
         try:
-            await decision_manager.cleanup()
-            logger.info("决策管理器清理完成")
+            await decision_provider_manager.cleanup()
+            logger.info("决策Provider管理器清理完成")
         except Exception as e:
-            logger.error(f"清理决策管理器时出错: {e}")
+            logger.error(f"清理决策Provider管理器时出错: {e}")
 
     # 4. 清理基础设施
     logger.info("正在清理输入域组件...")
     try:
-        await input_domain.cleanup()
+        await input_coordinator.cleanup()
         logger.info("输入域组件清理完成")
     except Exception as e:
         logger.error(f"清理输入域组件时出错: {e}")
@@ -497,16 +498,16 @@ async def main() -> None:
     validate_config(config)
     exit_if_config_copied(main_cfg_copied, plugin_cfg_copied, pipeline_cfg_copied)
 
-    pipeline_manager = await load_pipeline_manager(config)
+    input_pipeline_manager = await load_pipeline_manager(config)
 
     (
         core,
-        flow_coordinator,
-        input_domain,
+        output_coordinator,
+        input_coordinator,
         llm_service,
-        decision_manager,
+        decision_provider_manager,
         input_provider_manager,
-    ) = await create_app_components(config, pipeline_manager, config_service, args.arch_validate)
+    ) = await create_app_components(config, input_pipeline_manager, config_service, args.arch_validate)
 
     stop_event = asyncio.Event()
     orig_sigint, orig_sigterm = setup_signal_handlers(stop_event)
@@ -520,7 +521,9 @@ async def main() -> None:
         logger.info("检测到 KeyboardInterrupt，开始清理...")
 
     restore_signal_handlers(orig_sigint, orig_sigterm)
-    await run_shutdown(flow_coordinator, input_domain, llm_service, core, decision_manager, input_provider_manager)
+    await run_shutdown(
+        output_coordinator, input_coordinator, llm_service, core, decision_provider_manager, input_provider_manager
+    )
 
 
 if __name__ == "__main__":

@@ -1,8 +1,6 @@
 """Pytest configuration and fixtures for integration tests."""
 
 import pytest
-from typing import Dict, Any
-from src.core.provider_registry import ProviderRegistry
 
 
 @pytest.fixture(autouse=True, scope="module")
@@ -17,10 +15,8 @@ def register_test_providers() -> None:
     """
     # Import built-in providers to trigger auto-registration
     # Input Providers
-    from src.domains.input.providers import console_input, mock_danmaku
 
     # Output Providers
-    from src.domains.output.providers import subtitle, tts, vts
 
     # Yield to allow tests to run
     yield

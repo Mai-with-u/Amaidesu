@@ -33,13 +33,13 @@ async def test_decision_provider_failure_isolation(event_bus, wait_for_event):
     1. DecisionProvider 失败不影响其他组件
     2. 系统可以继续处理其他消息
     """
-    from src.domains.input.input_domain import InputDomain
-    from src.domains.decision.decision_manager import DecisionManager
+    from src.domains.input.coordinator import InputCoordinator
+    from src.domains.decision.provider_manager import DecisionProviderManager as DecisionManager
     from src.core.base.normalized_message import NormalizedMessage
     from src.domains.input.normalization.content import TextContent
 
-    input_domain = InputDomain(event_bus)
-    await input_domain.setup()
+    input_coordinator = InputCoordinator(event_bus)
+    await input_coordinator.setup()
 
     decision_manager = DecisionManager(event_bus, llm_service=None)
     await decision_manager.setup("mock", {})
@@ -104,7 +104,7 @@ async def test_decision_provider_failure_isolation(event_bus, wait_for_event):
     assert intent2 is not None
 
     await decision_manager.cleanup()
-    await input_domain.cleanup()
+    await input_coordinator.cleanup()
 
 
 @pytest.mark.asyncio
@@ -116,10 +116,10 @@ async def test_invalid_raw_data_handling(event_bus, wait_for_event):
     1. 系统能优雅地处理无效数据
     2. 不会崩溃或挂起
     """
-    from src.domains.input.input_domain import InputDomain
+    from src.domains.input.coordinator import InputCoordinator
 
-    input_domain = InputDomain(event_bus)
-    await input_domain.setup()
+    input_coordinator = InputCoordinator(event_bus)
+    await input_coordinator.setup()
 
     # 发送无效的 RawData（缺失必要字段）
     invalid_data = RawData(
@@ -147,7 +147,7 @@ async def test_invalid_raw_data_handling(event_bus, wait_for_event):
         pytest.fail(f"处理无效数据时不应抛出异常: {e}")
 
     finally:
-        await input_domain.cleanup()
+        await input_coordinator.cleanup()
 
 
 @pytest.mark.asyncio
@@ -193,7 +193,7 @@ async def test_provider_initialization_failure(event_bus):
     1. 初始化失败时不影响系统
     2. 可以尝试初始化其他 Provider
     """
-    from src.domains.decision.decision_manager import DecisionManager
+    from src.domains.decision.provider_manager import DecisionProviderManager as DecisionManager
 
     decision_manager = DecisionManager(event_bus, llm_service=None)
 
@@ -224,11 +224,11 @@ async def test_layer_cleanup_on_error(event_bus):
     1. 即使发生错误，资源也能正确清理
     2. 没有资源泄漏
     """
-    from src.domains.input.input_domain import InputDomain
-    from src.domains.decision.decision_manager import DecisionManager
+    from src.domains.input.coordinator import InputCoordinator
+    from src.domains.decision.provider_manager import DecisionProviderManager as DecisionManager
 
-    input_domain = InputDomain(event_bus)
-    await input_domain.setup()
+    input_coordinator = InputCoordinator(event_bus)
+    await input_coordinator.setup()
 
     decision_manager = DecisionManager(event_bus, llm_service=None)
     await decision_manager.setup("mock", {})
@@ -238,7 +238,7 @@ async def test_layer_cleanup_on_error(event_bus):
 
     # 清理
     await decision_manager.cleanup()
-    await input_domain.cleanup()
+    await input_coordinator.cleanup()
 
     # 验证事件订阅已清理
     # 注意：EventBus 的 _handlers 是私有的，这里只验证组件状态
