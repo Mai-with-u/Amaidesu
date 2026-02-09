@@ -32,6 +32,12 @@ class InputProvider(ABC):
     原因: InputProvider 是异步数据流生成器,需要返回 AsyncIterator
     而 Decision/OutputProvider 是事件订阅者,使用 setup() 注册到 EventBus
 
+    内部方法约定:
+    - _setup_internal(): 内部初始化方法,在start()开始时调用
+    - _cleanup_internal(): 内部清理方法,在stop()时调用
+    - _cleanup(): _cleanup_internal()的别名,保持向后兼容
+    - _collect_data(): 子类必须实现,返回AsyncIterator[RawData]
+
     Attributes:
         config: Provider配置(来自新配置格式)
         is_running: 是否正在运行
@@ -60,6 +66,7 @@ class InputProvider(ABC):
         Raises:
             ConnectionError: 如果无法连接到数据源
         """
+        await self._setup_internal()
         self.is_running = True
         try:
             async for data in self._collect_data():
@@ -81,11 +88,21 @@ class InputProvider(ABC):
         清理资源（公开方法，供外部调用）
 
         此方法供 InputProviderManager 等外部管理器调用。
-        默认调用内部的 _cleanup() 方法。
+        默认调用 _cleanup() 方法（该方法会调用 _cleanup_internal()）。
 
-        子类可以重写 _cleanup() 方法来实现自定义清理逻辑。
+        子类可以重写 _cleanup() 或 _cleanup_internal() 方法来实现自定义清理逻辑。
         """
         await self._cleanup()
+
+    async def _setup_internal(self):  # noqa: B027
+        """
+        内部初始化方法(子类可选重写)
+
+        子类可以重写此方法来执行初始化逻辑,
+        如建立连接、打开文件句柄等。
+        此方法在start()开始时调用。
+        """
+        pass
 
     @abstractmethod
     async def _collect_data(self) -> AsyncIterator[RawData]:
@@ -99,14 +116,24 @@ class InputProvider(ABC):
         """
         pass
 
-    async def _cleanup(self):  # noqa: B027
+    async def _cleanup_internal(self):  # noqa: B027
         """
-        清理资源(子类可选重写)
+        内部清理方法(子类可选重写)
 
         子类可以重写此方法来执行清理逻辑,
         如关闭连接、释放文件句柄等。
+        此方法在stop()时调用。
         """
         pass
+
+    async def _cleanup(self):  # noqa: B027
+        """
+        清理资源别名方法(向后兼容)
+
+        此方法调用 _cleanup_internal() 以保持向后兼容性。
+        子类应该重写 _cleanup_internal() 而非此方法。
+        """
+        await self._cleanup_internal()
 
     async def setup(self, event_bus=None, dependencies=None):  # noqa: B027
         """
