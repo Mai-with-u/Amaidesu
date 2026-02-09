@@ -172,6 +172,19 @@ async def handle_message(self, message):
 | **DecisionProvider** | 处理 NormalizedMessage 生成 Intent | `src/domains/decision/providers/` | MaiCoreDecisionProvider, LocalLLMDecisionProvider |
 | **OutputProvider** | 渲染到目标设备 | `src/domains/output/providers/` | TTSOutputProvider, SubtitleOutputProvider, VTSOutputProvider |
 
+### Provider 生命周期方法
+
+| Provider 类型 | 启动方法 | 停止方法 | 说明 |
+|--------------|---------|---------|------|
+| InputProvider | `start()` | `stop()` | 返回 AsyncIterator，用于数据流生成 |
+| DecisionProvider | `setup()` | `cleanup()` | 注册到 EventBus，处理消息 |
+| OutputProvider | `setup()` | `cleanup()` | 注册到 EventBus，渲染参数 |
+
+**注意**: InputProvider 使用 `start()`/`stop()` 是因为它需要返回异步生成器（AsyncIterator），
+而 Decision/OutputProvider 使用 `setup()`/`cleanup()` 是因为它们是事件订阅者。
+
+InputProvider 也提供了 `setup()` 方法作为接口一致性，但它是空实现，实际启动数据流必须使用 `start()`。
+
 ### 添加新 Provider
 
 1. 继承对应的 Provider 基类（InputProvider/DecisionProvider/OutputProvider）

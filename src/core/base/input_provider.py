@@ -28,6 +28,10 @@ class InputProvider(ABC):
     2. 启动(start()) - 返回异步生成器,产生RawData
     3. 停止(stop()) - 清理资源
 
+    注意: InputProvider 使用 start()/stop() 而非 setup()/cleanup()
+    原因: InputProvider 是异步数据流生成器,需要返回 AsyncIterator
+    而 Decision/OutputProvider 是事件订阅者,使用 setup() 注册到 EventBus
+
     Attributes:
         config: Provider配置(来自新配置格式)
         is_running: 是否正在运行
@@ -102,6 +106,24 @@ class InputProvider(ABC):
         子类可以重写此方法来执行清理逻辑,
         如关闭连接、释放文件句柄等。
         """
+        pass
+
+    async def setup(self, event_bus=None, dependencies=None):  # noqa: B027
+        """
+        setup() 别名 - 为了与其他 Provider 保持一致
+
+        注意: InputProvider 的 setup() 不返回 AsyncIterator,
+        如果需要数据流,必须使用 start() 方法。
+
+        此方法是为了接口一致性提供的空实现。
+        InputProvider 不需要 setup(),因为它是数据生产者而非事件订阅者。
+
+        Args:
+            event_bus: EventBus实例(未使用,仅为了接口一致性)
+            dependencies: 可选的依赖注入(未使用,仅为了接口一致性)
+        """
+        # InputProvider 不需要 setup(),因为它是数据生产者
+        # 这个方法只是为了接口一致性
         pass
 
     @classmethod

@@ -8,7 +8,7 @@
 """
 
 from typing import Dict
-from src.domains.decision.intent import EmotionType
+from src.core.types import EmotionType
 
 
 class EmotionMapper:

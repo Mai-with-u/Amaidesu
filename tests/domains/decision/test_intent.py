@@ -6,12 +6,8 @@
 
 import pytest
 import time
-from src.domains.decision.intent import (
-    Intent,
-    IntentAction,
-    EmotionType,
-    ActionType,
-)
+from src.domains.decision.intent import Intent
+from src.core.types import IntentAction, EmotionType, ActionType
 
 
 # =============================================================================

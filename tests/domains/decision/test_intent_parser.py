@@ -9,7 +9,8 @@ import asyncio
 from typing import Optional
 
 from src.domains.decision.intent_parser import IntentParser
-from src.domains.decision.intent import Intent, EmotionType, ActionType
+from src.domains.decision.intent import Intent
+from src.core.types import EmotionType, ActionType
 from src.services.llm.manager import LLMResponse
 
 

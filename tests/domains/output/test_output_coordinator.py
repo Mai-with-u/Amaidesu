@@ -26,7 +26,8 @@ from src.core.events.payloads import (
 )
 from src.domains.output.parameters.expression_generator import ExpressionGenerator
 from src.domains.output.provider_manager import OutputProviderManager
-from src.domains.decision.intent import Intent, EmotionType, IntentAction, ActionType
+from src.domains.decision.intent import Intent
+from src.core.types import EmotionType, IntentAction, ActionType
 
 
 # =============================================================================

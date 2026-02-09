@@ -12,7 +12,8 @@ IntentParser - LLM意图解析器
 import json
 from typing import TYPE_CHECKING
 
-from src.domains.decision.intent import Intent, EmotionType, ActionType, IntentAction
+from src.domains.decision.intent import Intent
+from src.core.types import EmotionType, ActionType, IntentAction
 from src.core.utils.logger import get_logger
 from src.prompts import get_prompt_manager
 

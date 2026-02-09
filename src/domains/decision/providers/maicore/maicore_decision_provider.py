@@ -416,7 +416,8 @@ class MaiCoreDecisionProvider(DecisionProvider):
         Returns:
             默认 Intent
         """
-        from src.domains.decision.intent import EmotionType, ActionType, IntentAction
+        from src.domains.decision.intent import Intent
+        from src.core.types import EmotionType, ActionType, IntentAction
 
         return Intent(
             original_text=text,

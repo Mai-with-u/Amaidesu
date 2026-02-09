@@ -10,7 +10,7 @@ Expression Mapper - Output Domain: 表情映射（统一入口）
 
 from typing import Dict, Optional
 
-from src.domains.decision.intent import EmotionType
+from src.core.types import EmotionType
 from src.core.utils.logger import get_logger
 
 

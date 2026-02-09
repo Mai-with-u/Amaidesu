@@ -56,7 +56,8 @@ class MockDecisionProvider(DecisionProvider):
             # 如果没有文本，使用 default_response
             response_text = self.default_response
 
-        from src.domains.decision.intent import Intent, EmotionType
+        from src.domains.decision.intent import Intent
+        from src.core.types import EmotionType
 
         return Intent(
             original_text=message.text,

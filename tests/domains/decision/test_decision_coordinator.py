@@ -19,7 +19,8 @@ from src.core.event_bus import EventBus
 from src.core.events.names import CoreEvents
 from src.core.events.payloads import MessageReadyPayload
 from src.domains.decision.coordinator import DecisionCoordinator
-from src.domains.decision.intent import EmotionType, Intent
+from src.domains.decision.intent import Intent
+from src.core.types import EmotionType
 from src.domains.decision.provider_manager import DecisionProviderManager
 from src.domains.input.normalization.content.base import StructuredContent
 
