@@ -7,19 +7,20 @@ Provider抽象基类
 - OutputProvider: 输出Provider抽象基类
 
 以及核心数据类型：
-- RenderParameters: 渲染参数
 - NormalizedMessage: 标准化消息
+
+注意:
+- RenderParameters 已移至 src.domains.output.parameters.render_parameters (直接从那里导入)
 """
 
 from .input_provider import InputProvider
 from .decision_provider import DecisionProvider
 from .output_provider import OutputProvider
-from .base import RenderParameters, NormalizedMessage
+from .base import NormalizedMessage
 
 __all__ = [
     "InputProvider",
     "DecisionProvider",
     "OutputProvider",
-    "RenderParameters",
     "NormalizedMessage",
 ]

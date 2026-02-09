@@ -11,10 +11,11 @@ OutputProvider负责将RenderParameters渲染到目标设备。
 - StickerProvider: 显示表情贴纸
 """
 
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, TYPE_CHECKING
 from abc import ABC, abstractmethod
 
-from .base import RenderParameters
+if TYPE_CHECKING:
+    from src.domains.output.parameters.render_parameters import RenderParameters
 
 
 class OutputProvider(ABC):
@@ -62,7 +63,7 @@ class OutputProvider(ABC):
         await self._setup_internal()
         self.is_setup = True
 
-    async def render(self, parameters: RenderParameters):
+    async def render(self, parameters: "RenderParameters"):
         """
         渲染参数
 
@@ -83,7 +84,7 @@ class OutputProvider(ABC):
         ...
 
     @abstractmethod
-    async def _render_internal(self, parameters: RenderParameters):
+    async def _render_internal(self, parameters: "RenderParameters"):
         """
         内部渲染逻辑(子类必须实现)
 

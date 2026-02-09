@@ -9,7 +9,7 @@ import time
 from PIL import Image
 from unittest.mock import AsyncMock, MagicMock
 from src.domains.output.providers.sticker import StickerOutputProvider
-from src.core.base.base import RenderParameters
+from src.domains.output.parameters.render_parameters import RenderParameters
 
 
 @pytest.fixture

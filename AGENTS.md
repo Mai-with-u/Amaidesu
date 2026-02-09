@@ -60,6 +60,33 @@
 uv run pytest tests/architecture/test_event_flow_constraints.py -v
 ```
 
+### 共享类型
+
+以下类型被多个 Domain 共享，因此放在 `src/core/types/` 中避免循环依赖：
+
+| 类型 | 用途 | 定义位置 |
+|------|------|---------|
+| `EmotionType` | 情感类型枚举 | `src/core/types/intent.py` |
+| `ActionType` | 动作类型枚举 | `src/core/types/intent.py` |
+| `IntentAction` | 意图动作模型 | `src/core/types/intent.py` |
+
+**为什么这些类型在 Core 层？**
+- 被 Input/Decision/Output 多个 Domain 使用
+- 如果放在任何一个 Domain 中，会导致其他 Domain 依赖它
+- 放在 Core 层可以避免循环依赖
+
+**Decision Domain 特定的类型**：
+以下类型保留在 `src/domains/decision/intent.py` 中：
+- `Intent`: 完整的决策意图类（Decision Domain 的核心输出）
+- `ActionSuggestion`: MaiBot 特定的建议格式
+- `SourceContext`: 输入源上下文
+
+**如何添加新的共享类型？**
+1. 评估类型是否真的需要跨多个 Domain 使用
+2. 如果是，添加到 `src/core/types/` 中的合适文件
+3. 更新相关 Domain 的导入语句
+4. 运行架构测试验证
+
 ## 常用命令
 
 ### 包管理器
@@ -191,6 +218,32 @@ InputProvider 也提供了 `setup()` 方法作为接口一致性，但它是空�
 2. 在 Provider 的 `__init__.py` 中注册到 ProviderRegistry
 3. 在配置中启用
 
+### 架构验证器配置
+
+**重要**: 添加新的 Provider 时，需要更新架构验证器配置。
+
+**配置位置**: `src/core/events/architectural_validator.py`
+
+**需要更新的配置**：
+1. `ALLOWED_SUBSCRIPTIONS`: 添加新 Provider 允许订阅的事件
+2. `inheritance_map`: 如果有新的基类，添加到继承映射中
+
+**示例**：
+```python
+# 添加新的 InputProvider 子类
+ALLOWED_SUBSCRIPTIONS["MyNewInputProvider"] = {
+    "allowed_events": ["perception.raw_data.generated"],
+    "base_class": "InputProvider",
+    "description": "新的输入Provider"
+}
+```
+
+**验证配置**：
+```bash
+# 运行架构测试
+uv run pytest tests/architecture/ -v
+```
+
 **详细指南**：[Provider 开发](docs/development/provider-guide.md)
 
 ### 配置示例
@@ -292,6 +345,24 @@ await event_bus.subscribe(CoreEvents.NORMALIZATION_MESSAGE_READY, self.handle_me
 ```
 
 **详细文档**：[3域架构](docs/architecture/overview.md)
+
+### Core 层职责边界
+
+**Core 层的职责**：
+- 定义基础接口（Provider 基类、事件系统）
+- 提供共享工具（日志、配置管理）
+- 存放跨域共享的类型（避免循环依赖）
+- 组合根（AmaidesuCore）协调组件
+
+**Core 层不应该**：
+- 从 Domain 层导入类型并重导出
+- 依赖任何 Domain 的具体实现
+- 包含业务逻辑
+
+**示例**：
+- ✓ `src/core/base/raw_data.py`: 定义 RawData 基础类型
+- ✓ `src/core/types/intent.py`: 共享的枚举类型
+- ✗ `src/core/base/base.py`: 重导出 `RenderParameters`（违规）
 
 ## 日志使用
 

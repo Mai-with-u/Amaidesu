@@ -11,7 +11,7 @@ from enum import Enum
 from pydantic import BaseModel, Field
 
 from src.core.base.output_provider import OutputProvider
-from src.core.base.base import RenderParameters
+from src.domains.output.parameters.render_parameters import RenderParameters
 from src.core.utils.logger import get_logger
 from src.services.config.schemas.schemas.base import BaseProviderConfig
 
