@@ -72,6 +72,17 @@ class MyInputProvider(InputProvider):
 | `stop()` | 停止数据采集 | ❌（默认实现） |
 | `cleanup()` | 清理资源 | ❌（可选） |
 
+### InputProvider 生命周期方法
+
+| 方法 | 说明 | 必须实现 | 调用时机 |
+|------|------|----------|----------|
+| `_collect_data()` | 采集数据，返回 AsyncIterator[RawData] | ✅ | `start()` 调用后 |
+| `_setup_internal()` | 内部初始化逻辑 | ❌ | `start()` 开始时 |
+| `_cleanup_internal()` | 内部清理逻辑 | ❌ | `stop()`/`cleanup()` 调用时 |
+| `start()` | 启动数据采集 | ❌（默认实现） | Manager 启动时 |
+| `stop()` | 停止数据采集 | ❌（默认实现） | Manager 停止时 |
+| `cleanup()` | 清理资源 | ❌（默认实现） | Manager 清理时 |
+
 ### RawData 结构
 
 ```python
@@ -418,6 +429,41 @@ class MyProviderConfig(BaseModel):
             raise ValueError("API URL 必须以 http:// 或 https:// 开头")
         return v
 ```
+
+## Provider 生命周期方法说明
+
+### 内部方法命名约定
+
+所有 Provider 类型的内部扩展方法使用统一的 `_xxx_internal()` 命名约定：
+
+| Provider 类型 | 内部初始化 | 内部清理 |
+|--------------|-----------|----------|
+| InputProvider | `_setup_internal()` | `_cleanup_internal()` |
+| DecisionProvider | `_setup_internal()` | `_cleanup_internal()` |
+| OutputProvider | `_setup_internal()` | `_cleanup_internal()` |
+
+子类可以重写这些内部方法来实现自定义的初始化和清理逻辑。
+
+### 公共 API 差异说明
+
+不同类型的 Provider 使用不同的公共生命周期方法，这反映了它们不同的语义：
+
+| Provider 类型 | 启动方法 | 停止方法 | 原因 |
+|--------------|---------|---------|------|
+| InputProvider | `start()` | `stop()` + `cleanup()` | 返回异步数据流 (AsyncIterator) |
+| DecisionProvider | `setup()` | `cleanup()` | 注册到 EventBus 作为事件订阅者 |
+| OutputProvider | `setup()` | `cleanup()` | 注册到 EventBus 作为事件订阅者 |
+
+**为什么不能统一公共 API？**
+
+InputProvider 的 `start()` 方法必须返回 `AsyncIterator[RawData]`：
+- 这是 Python 异步生成器的语法要求
+- `setup()` 方法无法返回 AsyncIterator
+- 使用 `start()` 更符合"启动流式数据源"的语义
+
+Decision/OutputProvider 的 `setup()` 方法用于注册事件订阅：
+- 它们是事件消费者，而非数据生产者
+- 使用 `setup()` 更符合"配置事件处理器"的语义
 
 ## 测试
 

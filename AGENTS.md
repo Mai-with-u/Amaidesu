@@ -226,6 +226,14 @@ async def handle_message(self, message):
 
 InputProvider 也提供了 `setup()` 方法作为接口一致性，但它是空实现，实际启动数据流必须使用 `start()`。
 
+### Provider 生命周期快速参考
+
+| 类型 | 启动 | 停止 | 内部初始化 | 内部清理 |
+|------|-----|------|----------|----------|
+| InputProvider | `start()` | `stop()` + `cleanup()` | `_setup_internal()` | `_cleanup_internal()` |
+| DecisionProvider | `setup()` | `cleanup()` | `_setup_internal()` | `_cleanup_internal()` |
+| OutputProvider | `setup()` | `cleanup()` | `_setup_internal()` | `_cleanup_internal()` |
+
 ### 添加新 Provider
 
 1. 继承对应的 Provider 基类（InputProvider/DecisionProvider/OutputProvider）
