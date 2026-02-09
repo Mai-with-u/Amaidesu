@@ -188,7 +188,8 @@ class TestDecisionPayloads:
 
     def test_intent_payload_debug_string(self):
         """测试 IntentPayload 的字符串表示"""
-        from src.domains.decision.intent import Intent, IntentAction, ActionType, EmotionType
+        from src.domains.decision.intent import Intent
+        from src.core.types import IntentAction, ActionType, EmotionType
 
         # 使用 from_intent 方法创建 Payload
         intent = Intent(
@@ -498,7 +499,8 @@ class TestEventBusDebugLog:
             event_bus.on("test.complex", handler)
 
             # 发布复杂的 Payload
-            from src.domains.decision.intent import Intent, IntentAction, ActionType, EmotionType
+            from src.domains.decision.intent import Intent
+            from src.core.types import IntentAction, ActionType, EmotionType
 
             intent = Intent(
                 original_text="你好",

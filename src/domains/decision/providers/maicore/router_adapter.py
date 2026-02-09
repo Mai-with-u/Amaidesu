@@ -94,7 +94,7 @@ class RouterAdapter:
         Args:
             intent: Intent 对象，包含建议的动作列表
         """
-        from src.core.connectors.maibot_message_schema import ActionSuggestionMessage
+        from .message_schema import ActionSuggestionMessage
 
         if not intent.suggested_actions:
             self.logger.debug("Intent 无建议动作，跳过发送")

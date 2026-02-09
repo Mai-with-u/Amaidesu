@@ -7,13 +7,16 @@ Expression生成器 - Output Domain: 参数生成核心
 - 生成完整的渲染参数
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, TYPE_CHECKING
 from src.core.utils.logger import get_logger
 
 from .render_parameters import ExpressionParameters
 from .emotion_mapper import EmotionMapper
 from .action_mapper import ActionMapper
-from src.domains.decision.intent import Intent, EmotionType
+from src.core.types import EmotionType
+
+if TYPE_CHECKING:
+    from src.domains.decision.intent import Intent
 
 
 class ExpressionGenerator:
@@ -53,7 +56,7 @@ class ExpressionGenerator:
 
         self.logger.info("ExpressionGenerator初始化完成")
 
-    def generate(self, intent: Intent) -> ExpressionParameters:
+    def generate(self, intent: "Intent") -> ExpressionParameters:
         """
         从Intent生成ExpressionParameters
 

@@ -10,7 +10,7 @@ import pytest
 from typing import Optional, Dict, Any
 
 from src.domains.input.pipelines.manager import (
-    PipelineManager,
+    InputPipelineManager,
     TextPipelineBase,
     PipelineErrorHandling,
     PipelineContext,
@@ -92,8 +92,8 @@ class ModifyingTextPipeline(TextPipelineBase):
 
 @pytest.fixture
 def pipeline_manager():
-    """创建 PipelineManager 实例"""
-    return PipelineManager()
+    """创建 InputPipelineManager 实例"""
+    return InputPipelineManager()
 
 
 @pytest.fixture
@@ -115,7 +115,7 @@ def sample_metadata():
 
 @pytest.mark.asyncio
 async def test_pipeline_rollback_on_continue_error(
-    pipeline_manager: PipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
+    pipeline_manager: InputPipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
 ):
     """测试 CONTINUE 模式下管道失败时回滚所有副作用并使用原始文本继续"""
     # 注意：CONTINUE 模式下，当某个管道失败时：
@@ -155,7 +155,7 @@ async def test_pipeline_rollback_on_continue_error(
 
 @pytest.mark.asyncio
 async def test_pipeline_rollback_on_drop_error(
-    pipeline_manager: PipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
+    pipeline_manager: InputPipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
 ):
     """测试 DROP 模式下管道失败时回滚所有状态"""
     pipeline1 = StatefulTextPipeline({})
@@ -182,7 +182,7 @@ async def test_pipeline_rollback_on_drop_error(
 
 @pytest.mark.asyncio
 async def test_pipeline_rollback_on_stop_error(
-    pipeline_manager: PipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
+    pipeline_manager: InputPipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
 ):
     """测试 STOP 模式下管道失败时回滚所有状态并抛出异常"""
     pipeline1 = StatefulTextPipeline({})
@@ -206,7 +206,7 @@ async def test_pipeline_rollback_on_stop_error(
 
 @pytest.mark.asyncio
 async def test_pipeline_rollback_on_normal_drop(
-    pipeline_manager: PipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
+    pipeline_manager: InputPipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
 ):
     """测试管道正常返回 None 时回滚所有状态"""
     pipeline1 = StatefulTextPipeline({})
@@ -239,7 +239,7 @@ async def test_pipeline_rollback_on_normal_drop(
 
 @pytest.mark.asyncio
 async def test_pipeline_context_multiple_rollback_actions(
-    pipeline_manager: PipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
+    pipeline_manager: InputPipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
 ):
     """测试单个管道注册多个回滚动作"""
 
@@ -282,7 +282,7 @@ async def test_pipeline_context_multiple_rollback_actions(
 
 @pytest.mark.asyncio
 async def test_pipeline_rollback_preserves_original_text(
-    pipeline_manager: PipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
+    pipeline_manager: InputPipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
 ):
     """测试 CONTINUE 模式下失败后使用原始文本继续"""
     pipeline1 = ModifyingTextPipeline({"prefix": "FIRST"})
@@ -313,7 +313,7 @@ async def test_pipeline_rollback_preserves_original_text(
 
 @pytest.mark.asyncio
 async def test_pipeline_no_rollback_on_success(
-    pipeline_manager: PipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
+    pipeline_manager: InputPipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
 ):
     """测试管道成功时不执行回滚"""
     pipeline = StatefulTextPipeline({})
@@ -331,7 +331,7 @@ async def test_pipeline_no_rollback_on_success(
 
 @pytest.mark.asyncio
 async def test_pipeline_rollback_execution_order(
-    pipeline_manager: PipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
+    pipeline_manager: InputPipelineManager, sample_text: str, sample_metadata: Dict[str, Any]
 ):
     """测试回滚动作按逆序执行"""
     order = []

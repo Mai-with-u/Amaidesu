@@ -12,7 +12,8 @@ from typing import Dict, Any, Optional, TYPE_CHECKING, Literal
 from pydantic import Field
 
 from src.core.base.decision_provider import DecisionProvider
-from src.domains.decision.intent import Intent, EmotionType, ActionType, IntentAction
+from src.domains.decision.intent import Intent
+from src.core.types import EmotionType, ActionType, IntentAction
 from src.core.utils.logger import get_logger
 from src.services.config.schemas.schemas.base import BaseProviderConfig
 from src.prompts import get_prompt_manager

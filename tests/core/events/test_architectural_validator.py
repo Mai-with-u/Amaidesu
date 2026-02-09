@@ -285,3 +285,50 @@ class TestArchitecturalValidator:
         # 非严格模式下，未知订阅者应该被允许
         subscriber.try_subscribe()
         assert event_bus.get_listeners_count(CoreEvents.NORMALIZATION_MESSAGE_READY) == 1
+
+    def test_architectural_validator_config_complete(self):
+        """验证：架构验证器配置包含所有已注册的 Provider"""
+        from src.core.events.architectural_validator import ArchitecturalValidator
+
+        # 创建验证器实例
+        validator = ArchitecturalValidator(EventBus(), enabled=False)
+
+        # 测试所有已知的 Provider 类都能通过 _get_base_classes 找到基类
+        # 这确保 inheritance_map 配置是完整的
+        known_providers = [
+            # Input Providers
+            "ConsoleInputProvider",
+            "BiliDanmakuInputProvider",
+            "BiliDanmakuOfficialInputProvider",
+            "BiliDanmakuOfficialMaiCraftInputProvider",
+            "MainosabaInputProvider",
+            "ReadPingmuInputProvider",
+            "MockDanmakuInputProvider",
+            # Decision Providers
+            "MaiCoreDecisionProvider",
+            "LocalLLMDecisionProvider",
+            "RuleEngineDecisionProvider",
+            "MockDecisionProvider",
+            # Output Providers
+            "VTSProvider",
+            "TTSProvider",
+            "SubtitleOutputProvider",
+            "AvatarOutputProvider",
+            "GPTSoVITSOutputProvider",
+            "OmniTTSProvider",
+            "StickerOutputProvider",
+            "RemoteStreamOutputProvider",
+            "WarudoOutputProvider",
+            "ObsControlOutputProvider",
+            "MockOutputProvider",
+        ]
+
+        for provider_class in known_providers:
+            base_classes = validator._get_base_classes(provider_class)
+            # 每个 Provider 应该至少有一个基类
+            assert len(base_classes) > 0, f"{provider_class} 没有在 inheritance_map 中配置基类"
+
+        # 验证核心基类能够被识别
+        assert validator._is_provider_base_class("InputProvider")
+        assert validator._is_provider_base_class("DecisionProvider")
+        assert validator._is_provider_base_class("OutputProvider")

@@ -239,9 +239,9 @@ class TextPipelineBase(ABC):
         self._stats = PipelineStats()
 
 
-class PipelineManager:
+class InputPipelineManager:
     """
-    管道管理器，负责 TextPipeline 的加载、排序和执行。
+    输入管道管理器，负责 TextPipeline 的加载、排序和执行。
 
     TextPipeline 位置（3域架构）：
         - InputDomain: 在 RawData → NormalizedMessage 转换中处理文本
@@ -260,7 +260,7 @@ class PipelineManager:
         self._text_pipelines_sorted: bool = True
         self._text_pipeline_lock = asyncio.Lock()
 
-        self.logger = get_logger("PipelineManager")
+        self.logger = get_logger("InputPipelineManager")
         # 注意：完全移除 self.core = core（TextPipeline 不使用）
 
     # ==================== TextPipeline 方法（新架构） ====================

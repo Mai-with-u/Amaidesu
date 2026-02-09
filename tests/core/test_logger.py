@@ -13,9 +13,7 @@
 
 import json
 import os
-import sys
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from loguru import logger
@@ -395,11 +393,9 @@ class TestImportTimeSideEffects:
     def test_import_time_side_effects_removed(self):
         """验证导入时不添加处理器。"""
         # 重新导入模块以测试干净的导入
-        import importlib
         from src.core.utils import logger as logger_module
 
         # 保存当前状态
-        import sys
 
         # 检查导入前的处理器数量
         handlers_before = len(list(logger._core.handlers.keys()))

@@ -1,5 +1,5 @@
 """
-FlowCoordinator - 数据流协调器（3域架构：Decision Domain → Output Domain）
+OutputCoordinator - 数据流协调器（3域架构：Decision Domain → Output Domain）
 
 职责:
 - 协调 Decision Domain 到 Output Domain 的数据流
@@ -9,7 +9,7 @@ FlowCoordinator - 数据流协调器（3域架构：Decision Domain → Output D
 数据流（3域架构）:
     Intent (Decision Domain)
         ↓ CoreEvents.DECISION_INTENT_GENERATED
-    FlowCoordinator
+    OutputCoordinator
         ↓
     ExpressionGenerator (Output Domain - Parameters)
         ↓
@@ -25,7 +25,7 @@ from src.core.utils.logger import get_logger
 from src.core.event_bus import EventBus
 from src.core.events.names import CoreEvents
 from src.domains.output.parameters.expression_generator import ExpressionGenerator
-from src.domains.output.manager import OutputProviderManager
+from src.domains.output.provider_manager import OutputProviderManager
 from src.core.events.payloads import ParametersGeneratedPayload
 from src.domains.output.pipelines.manager import OutputPipelineManager
 
@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from src.core.events.payloads import IntentPayload
 
 
-class FlowCoordinator:
+class OutputCoordinator:
     """
     数据流协调器（3域架构）
 
@@ -66,12 +66,12 @@ class FlowCoordinator:
         self.expression_generator = expression_generator
         self.output_provider_manager = output_provider_manager
         self.output_pipeline_manager = output_pipeline_manager
-        self.logger = get_logger("FlowCoordinator")
+        self.logger = get_logger("OutputCoordinator")
 
         self._is_setup = False
         self._event_handler_registered = False
 
-        self.logger.info("FlowCoordinator 初始化完成")
+        self.logger.info("OutputCoordinator 初始化完成")
 
     async def setup(self, config: Dict[str, Any], config_service=None, root_config: Optional[Dict[str, Any]] = None):
         """
@@ -104,7 +104,7 @@ class FlowCoordinator:
             pipeline_config = root_config.get("pipelines", {}) if root_config else {}
             if pipeline_config:
                 # 构建管道加载目录路径：src/domains/output/pipelines
-                pipeline_load_dir = os.path.join(os.path.dirname(__file__), "..", "domains", "output", "pipelines")
+                pipeline_load_dir = os.path.join(os.path.dirname(__file__), "pipelines")
                 pipeline_load_dir = os.path.abspath(pipeline_load_dir)
                 self.logger.info(f"准备加载输出Pipeline (从目录: {pipeline_load_dir})...")
 
@@ -220,7 +220,9 @@ class FlowCoordinator:
                 payload = ParametersGeneratedPayload.from_parameters(
                     params, source_intent=intent.model_dump(mode="json")
                 )
-                await self.event_bus.emit(CoreEvents.EXPRESSION_PARAMETERS_GENERATED, payload, source="FlowCoordinator")
+                await self.event_bus.emit(
+                    CoreEvents.EXPRESSION_PARAMETERS_GENERATED, payload, source="OutputCoordinator"
+                )
                 self.logger.debug(f"已发布事件: {CoreEvents.EXPRESSION_PARAMETERS_GENERATED}")
             else:
                 self.logger.warning("表达式生成器未初始化，跳过渲染")

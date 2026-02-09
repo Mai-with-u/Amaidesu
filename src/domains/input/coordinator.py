@@ -15,7 +15,7 @@ from src.core.events.names import CoreEvents
 from src.core.events.payloads.input import MessageReadyPayload
 
 if TYPE_CHECKING:
-    from src.domains.input.pipelines.manager import PipelineManager
+    from src.domains.input.pipelines.manager import InputPipelineManager
 
 
 class NormalizationResult(BaseModel):
@@ -26,7 +26,7 @@ class NormalizationResult(BaseModel):
     error: Optional[str] = None
 
 
-class InputDomain:
+class InputCoordinator:
     """
     输入域协调器（3域架构：Input Domain）
 
@@ -35,47 +35,47 @@ class InputDomain:
 
     Pipeline 集成：
         - 在 normalize() 方法中使用 TextPipeline 进行文本预处理
-        - PipelineManager 由外部注入（可选）
+        - InputPipelineManager 由外部注入（可选）
     """
 
     def __init__(
         self,
         event_bus: EventBus,
-        pipeline_manager: Optional["PipelineManager"] = None,
+        pipeline_manager: Optional["InputPipelineManager"] = None,
     ):
         """
-        初始化InputDomain
+        初始化InputCoordinator
 
         Args:
             event_bus: 事件总线实例
-            pipeline_manager: PipelineManager实例（可选，用于文本预处理）
+            pipeline_manager: InputPipelineManager实例（可选，用于文本预处理）
         """
         self.event_bus = event_bus
         self.pipeline_manager = pipeline_manager
-        self.logger = get_logger("InputDomain")
+        self.logger = get_logger("InputCoordinator")
 
         # 统计信息
         self._raw_data_count = 0
         self._normalized_message_count = 0
         self._normalization_error_count = 0
 
-        self.logger.debug("InputDomain初始化完成")
+        self.logger.debug("InputCoordinator初始化完成")
 
     async def setup(self):
-        """设置InputDomain，订阅事件"""
+        """设置InputCoordinator，订阅事件"""
         # 订阅RawData生成事件
         self.logger.info("正在订阅 perception.raw_data.generated 事件...")
         self.event_bus.on(CoreEvents.PERCEPTION_RAW_DATA_GENERATED, self.on_raw_data_generated)
         self.logger.info("成功订阅 perception.raw_data.generated 事件")
 
-        self.logger.info("InputDomain设置完成")
+        self.logger.info("InputCoordinator设置完成")
 
     async def cleanup(self):
-        """清理InputDomain"""
+        """清理InputCoordinator"""
         # 取消订阅
         self.event_bus.off(CoreEvents.PERCEPTION_RAW_DATA_GENERATED, self.on_raw_data_generated)
 
-        self.logger.info("InputDomain清理完成")
+        self.logger.info("InputCoordinator清理完成")
 
     async def on_raw_data_generated(self, event_name: str, event_data: Dict[str, Any], source: str):
         """
@@ -119,7 +119,7 @@ class InputDomain:
                 await self.event_bus.emit(
                     CoreEvents.NORMALIZATION_MESSAGE_READY,
                     MessageReadyPayload.from_normalized_message(result.message),
-                    source="InputDomain",
+                    source="InputCoordinator",
                 )
 
                 self.logger.debug(

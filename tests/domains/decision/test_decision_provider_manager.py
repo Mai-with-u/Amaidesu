@@ -12,21 +12,22 @@ from typing import Dict, Any
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 import pytest
-from src.core.event_bus import EventBus
-from src.domains.decision.decision_manager import DecisionManager
-from src.core.events.names import CoreEvents
-from src.core.events.payloads import (
-    MessageReadyPayload,
-    DecisionRequestPayload,
-    IntentPayload,
-)
-from src.domains.decision.intent import Intent, EmotionType
-from src.core.base.normalized_message import NormalizedMessage
+
 from src.core.base.decision_provider import DecisionProvider
+from src.core.base.normalized_message import NormalizedMessage
+from src.core.event_bus import EventBus
+from src.core.events.names import CoreEvents
+from src.core.events.payloads import MessageReadyPayload
+from src.domains.decision.intent import Intent
+from src.core.types import EmotionType
+from src.domains.decision.provider_manager import DecisionProviderManager
 from src.domains.input.normalization.content.base import StructuredContent
 
 # 导入所有 decision providers 以触发注册
 import src.domains.decision.providers  # noqa: F401
+
+# 向后兼容别名
+DecisionManager = DecisionProviderManager
 
 
 # =============================================================================
@@ -438,9 +439,14 @@ async def test_decide_preserves_metadata(decision_manager_with_mock, sample_norm
 # =============================================================================
 
 
+@pytest.mark.skip(reason="事件处理已移至 DecisionCoordinator，见 test_decision_coordinator.py")
 @pytest.mark.asyncio
 async def test_on_normalized_message_ready_success(decision_manager_with_mock, sample_normalized_message):
-    """测试处理 normalization.message_ready 事件"""
+    """测试处理 normalization.message_ready 事件
+
+    注意：此测试已跳过，因为事件处理逻辑已移至 DecisionCoordinator。
+    相应的测试在 test_decision_coordinator.py 中。
+    """
     manager = decision_manager_with_mock
     manager._current_provider.add_response("事件回复", EmotionType.LOVE)
 
@@ -508,9 +514,14 @@ async def test_on_normalized_message_ready_missing_message_key(decision_manager_
     assert manager._current_provider.call_count == 0
 
 
+@pytest.mark.skip(reason="事件处理已移至 DecisionCoordinator，见 test_decision_coordinator.py")
 @pytest.mark.asyncio
 async def test_on_normalized_message_ready_event_data_structure(decision_manager_with_mock, sample_normalized_message):
-    """测试 intent_generated 事件的数据结构"""
+    """测试 intent_generated 事件的数据结构
+
+    注意：此测试已跳过，因为事件处理逻辑已移至 DecisionCoordinator。
+    相应的测试在 test_decision_coordinator.py 中。
+    """
     manager = decision_manager_with_mock
 
     event_data_received = []

@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 import pytest
 from src.core.event_bus import EventBus
 from src.core.base.raw_data import RawData
-from src.domains.input.input_provider_manager import InputProviderManager
+from src.domains.input.provider_manager import InputProviderManager
 from tests.mocks.mock_input_provider import MockInputProvider
 
 

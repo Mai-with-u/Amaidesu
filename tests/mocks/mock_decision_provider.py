@@ -5,7 +5,8 @@ Mock 决策 Provider（用于测试）
 from typing import Optional, List, Dict, Any
 from src.core.base.decision_provider import DecisionProvider
 from src.core.base.normalized_message import NormalizedMessage
-from src.domains.decision.intent import Intent, EmotionType
+from src.domains.decision.intent import Intent
+from src.core.types import EmotionType
 
 
 class MockDecisionProvider(DecisionProvider):

@@ -11,7 +11,7 @@ from typing import Optional, Dict, Any
 from pydantic import Field
 
 from src.core.base.output_provider import OutputProvider
-from src.core.base.base import RenderParameters
+from src.domains.output.parameters.render_parameters import RenderParameters
 from src.domains.output.adapters import PlatformAdapter
 from src.domains.output.adapter_factory import AdapterFactory
 from src.core.utils.logger import get_logger

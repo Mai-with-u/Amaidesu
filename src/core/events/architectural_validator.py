@@ -55,17 +55,22 @@ class ArchitecturalValidator:
     # 非 None 非空列表表示只允许列表中的事件（支持通配符）
     ALLOWED_SUBSCRIPTIONS: Dict[str, Optional[List[str]]] = {
         # === Input Domain (只发布，不订阅) ===
-        "InputDomain": None,  # 纯粹的数据生产者
+        "InputCoordinator": None,  # Input Domain 协调器
         "InputProvider": None,  # 所有输入 Provider 的基类
-        "InputProviderManager": None,  # 输入 Provider 管理器
+        "InputProviderManager": None,  # Input Provider 管理器
         # === Input Domain Pipelines ===
-        "PipelineManager": None,  # 管道管理器
+        "InputPipelineManager": None,  # Input Pipeline 管理器
         "TextPipeline": None,  # 所有文本管道基类
         "SimilarTextFilterPipeline": None,
         "RateLimitPipeline": None,
         "MessageLoggerPipeline": None,
         # === Decision Domain (可订阅 Input，不可订阅 Output) ===
-        "DecisionManager": [
+        "DecisionCoordinator": [
+            "normalization.message_ready",
+            "core.startup",
+            "core.shutdown",
+        ],
+        "DecisionProviderManager": [
             "normalization.message_ready",
             "core.startup",
             "core.shutdown",
@@ -76,8 +81,8 @@ class ArchitecturalValidator:
         "MaiCoreDecisionProvider": None,  # 具体实现不应该直接订阅
         "LocalLLMDecisionProvider": None,
         "RuleEngineDecisionProvider": None,
-        # === Core Orchestrator (协调跨域) ===
-        "FlowCoordinator": [
+        # === Output Domain (可订阅 Decision，不可订阅 Input) ===
+        "OutputCoordinator": [  # Output Domain 协调器
             "decision.intent_generated",
             "decision.response_generated",
             "expression.parameters_generated",
@@ -394,24 +399,39 @@ class ArchitecturalValidator:
             基类名称集合
         """
         # 已知的继承关系映射
+        # 注意：这个映射用于架构验证器快速查找基类，完整的继承关系应由各域的 __init__.py 维护
         inheritance_map = {
-            # Input Providers
+            # === Input Providers ===
             "ConsoleInputProvider": {"InputProvider"},
-            "DanmakuProvider": {"InputProvider"},
-            "GameProvider": {"InputProvider"},
-            "VoiceInputProvider": {"InputProvider"},
-            "MockInputProvider": {"InputProvider"},  # 测试类
-            # Decision Providers
+            "BiliDanmakuInputProvider": {"InputProvider"},
+            "BiliDanmakuOfficialInputProvider": {"InputProvider"},
+            "BiliDanmakuOfficialMaiCraftInputProvider": {"InputProvider"},
+            "MainosabaInputProvider": {"InputProvider"},
+            "ReadPingmuInputProvider": {"InputProvider"},
+            "MockDanmakuInputProvider": {"InputProvider"},  # 测试类
+            "MockInputProvider": {"InputProvider"},  # 测试类（旧名称，保留兼容性）
+            "DanmakuProvider": {"InputProvider"},  # 旧名称，保留兼容性
+            "GameProvider": {"InputProvider"},  # 旧名称，保留兼容性
+            "VoiceInputProvider": {"InputProvider"},  # 旧名称，保留兼容性
+            # === Decision Providers ===
             "MaiCoreDecisionProvider": {"DecisionProvider"},
             "LocalLLMDecisionProvider": {"DecisionProvider"},
             "RuleEngineDecisionProvider": {"DecisionProvider"},
             "MockDecisionProvider": {"DecisionProvider"},  # 测试类
-            # Output Providers
+            # === Output Providers ===
             "VTSProvider": {"OutputProvider"},
             "TTSProvider": {"OutputProvider"},
-            "SubtitleProvider": {"OutputProvider"},
+            "SubtitleProvider": {"OutputProvider"},  # 别名：SubtitleOutputProvider
+            "SubtitleOutputProvider": {"OutputProvider"},
+            "AvatarOutputProvider": {"OutputProvider"},
+            "GPTSoVITSOutputProvider": {"OutputProvider"},
+            "OmniTTSProvider": {"OutputProvider"},
+            "StickerOutputProvider": {"OutputProvider"},
+            "RemoteStreamOutputProvider": {"OutputProvider"},
+            "WarudoOutputProvider": {"OutputProvider"},
+            "ObsControlOutputProvider": {"OutputProvider"},
             "MockOutputProvider": {"OutputProvider"},  # 测试类
-            # Pipelines
+            # === Pipelines ===
             "SimilarTextFilterPipeline": {"TextPipeline"},
             "RateLimitPipeline": {"TextPipeline"},
             "MessageLoggerPipeline": {"TextPipeline"},

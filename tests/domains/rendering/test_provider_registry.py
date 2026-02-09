@@ -17,7 +17,7 @@ from src.core.base.input_provider import InputProvider
 from src.core.base.output_provider import OutputProvider
 from src.core.base.decision_provider import DecisionProvider
 from src.core.base.raw_data import RawData
-from src.core.base.base import RenderParameters
+from src.domains.output.parameters.render_parameters import RenderParameters
 
 
 # =============================================================================

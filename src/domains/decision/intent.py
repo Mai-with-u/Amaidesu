@@ -4,41 +4,14 @@ Intent数据类型定义
 Decision Domain (决策域) 的输出格式，表示决策意图。
 """
 
-from enum import Enum
 from typing import List, Dict, Any, Optional
 from uuid import uuid4
 import time
 
 from pydantic import BaseModel, Field
 
-
-class EmotionType(str, Enum):
-    """情感类型枚举"""
-
-    NEUTRAL = "neutral"
-    HAPPY = "happy"
-    SAD = "sad"
-    ANGRY = "angry"
-    SURPRISED = "surprised"
-    LOVE = "love"
-    SHY = "shy"
-    EXCITED = "excited"
-    CONFUSED = "confused"
-    SCARED = "scared"
-
-
-class ActionType(str, Enum):
-    """动作类型枚举"""
-
-    EXPRESSION = "expression"  # 表情
-    HOTKEY = "hotkey"  # 热键
-    EMOJI = "emoji"  # emoji表情
-    BLINK = "blink"  # 眨眼
-    NOD = "nod"  # 点头
-    SHAKE = "shake"  # 摇头
-    WAVE = "wave"  # 挥手
-    CLAP = "clap"  # 鼓掌
-    NONE = "none"  # 无动作
+# 从 core.types 导入共享类型
+from src.core.types import EmotionType, ActionType, IntentAction
 
 
 class SourceContext(BaseModel):
@@ -50,14 +23,6 @@ class SourceContext(BaseModel):
     user_nickname: Optional[str] = Field(default=None, description="用户昵称")
     importance: float = Field(default=0.5, ge=0.0, le=1.0, description="重要性评分")
     extra: Dict[str, Any] = Field(default_factory=dict, description="额外上下文信息")
-
-
-class IntentAction(BaseModel):
-    """意图动作"""
-
-    type: ActionType = Field(..., description="动作类型")
-    params: Dict[str, Any] = Field(default_factory=dict, description="动作参数")
-    priority: int = Field(default=50, ge=0, le=100, description="优先级（越高越优先）")
 
 
 class ActionSuggestion(BaseModel):

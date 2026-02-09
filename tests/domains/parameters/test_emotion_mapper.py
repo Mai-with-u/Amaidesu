@@ -5,7 +5,7 @@ EmotionMapper 测试
 """
 
 from src.domains.output.parameters.emotion_mapper import EmotionMapper
-from src.domains.decision.intent import EmotionType
+from src.core.types import EmotionType
 
 
 class TestEmotionMapperInit:

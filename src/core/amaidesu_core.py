@@ -2,18 +2,17 @@
 Amaidesu Core - 核心模块（Phase 3-4重构版本）
 
 职责: 组件组合（Composition Root）
-注意: 数据流处理已迁移到FlowCoordinator（A-01重构完成）
+注意: 数据流处理已迁移到OutputCoordinator（A-01重构完成）
 """
 
 from typing import Optional, TYPE_CHECKING
 
 from src.core.utils.logger import get_logger
-from src.domains.input.pipelines.manager import PipelineManager
+from src.domains.input.pipelines.manager import InputPipelineManager
 from src.services.context.manager import ContextManager
 from src.core.event_bus import EventBus
-from src.domains.decision.decision_manager import DecisionManager
-from src.core.connectors.http_server import HttpServer
-from src.core.flow_coordinator import FlowCoordinator
+from src.domains.decision import DecisionProviderManager
+from src.domains.output import OutputCoordinator
 
 # LLM 服务（核心基础设施）
 from src.services.llm.manager import LLMManager
@@ -37,55 +36,48 @@ class AmaidesuCore:
         return self._llm_service
 
     @property
-    def http_server(self) -> Optional[HttpServer]:
-        """获取HTTP服务器实例"""
-        return self._http_server
+    def input_pipeline_manager(self) -> Optional[InputPipelineManager]:
+        """获取输入管道管理器实例"""
+        return self._input_pipeline_manager
 
     @property
-    def flow_coordinator(self) -> Optional[FlowCoordinator]:
-        """获取数据流协调器实例"""
-        return self._flow_coordinator
+    def output_coordinator(self) -> Optional[OutputCoordinator]:
+        """获取输出协调器实例"""
+        return self._output_coordinator
 
     def __init__(
         self,
         platform: str,
-        pipeline_manager: Optional[PipelineManager] = None,
+        pipeline_manager: Optional[InputPipelineManager] = None,
         context_manager: Optional[ContextManager] = None,
         event_bus: Optional[EventBus] = None,
         llm_service: Optional[LLMManager] = None,
-        decision_manager: Optional[DecisionManager] = None,
-        flow_coordinator: Optional[FlowCoordinator] = None,
-        http_server: Optional[HttpServer] = None,
+        decision_provider_manager: Optional[DecisionProviderManager] = None,
+        output_coordinator: Optional[OutputCoordinator] = None,
     ):
         """
         初始化 Amaidesu Core（A-01重构版本 - 纯组合根）。
 
         Args:
             platform: 平台标识符 (例如 "amaidesu")。
-            pipeline_manager: (可选) 已配置的管道管理器。
+            pipeline_manager: (可选) 已配置的输入管道管理器。
             context_manager: (可选) 已配置的上下文管理器。
             event_bus: (可选) 已配置的事件总线。
             llm_service: (可选) 已配置的 LLM 服务。
-            decision_manager: (可选) 已配置的决策管理器。
-            flow_coordinator: (可选) 已配置的数据流协调器（A-01新增）。
-            http_server: (可选) 已配置的HTTP服务器。
+            decision_provider_manager: (可选) 已配置的决策Provider管理器。
+            output_coordinator: (可选) 已配置的输出协调器。
         """
         self.logger = get_logger("AmaidesuCore")
         self.logger.debug("AmaidesuCore 初始化开始")
 
         self.platform = platform
 
-        # HTTP服务器
-        self._http_server = http_server
-        if http_server is not None:
-            self.logger.info("已使用外部提供的HTTP服务器")
-
-        # 管道管理器
-        self._pipeline_manager = pipeline_manager
-        if self._pipeline_manager is None:
-            self.logger.info("管道处理功能已禁用")
+        # 输入管道管理器
+        self._input_pipeline_manager = pipeline_manager
+        if self._input_pipeline_manager is None:
+            self.logger.info("输入管道处理功能已禁用")
         else:
-            self.logger.info("管道处理功能已启用")
+            self.logger.info("输入管道处理功能已启用")
 
         # 设置上下文管理器
         self._context_manager = context_manager if context_manager is not None else ContextManager({})
@@ -105,74 +97,57 @@ class AmaidesuCore:
         else:
             self.logger.warning("未提供 LLM 服务，LLM 相关功能将不可用")
 
-        # 设置决策管理器
-        self._decision_manager = decision_manager
-        if decision_manager is not None:
-            self.logger.info("已使用外部提供的决策管理器")
+        # 设置决策Provider管理器
+        self._decision_provider_manager = decision_provider_manager
+        if decision_provider_manager is not None:
+            self.logger.info("已使用外部提供的决策Provider管理器")
 
-        # 设置数据流协调器（A-01新增）
-        self._flow_coordinator = flow_coordinator
-        if flow_coordinator is not None:
-            self.logger.info("已使用外部提供的数据流协调器")
+        # 设置输出协调器
+        self._output_coordinator = output_coordinator
+        if output_coordinator is not None:
+            self.logger.info("已使用外部提供的输出协调器")
 
         self.logger.debug("AmaidesuCore 初始化完成")
 
     async def connect(self):
         """启动核心服务"""
-        # 启动HTTP服务器（如果已配置）
-        if self._http_server and self._http_server.is_available:
-            try:
-                await self._http_server.start()
-                self.logger.info("HTTP服务器已启动")
-            except Exception as e:
-                self.logger.error(f"启动HTTP服务器失败: {e}", exc_info=True)
-                self.logger.warning("HTTP服务器功能不可用，继续启动其他服务")
-
-        # 启动DecisionProvider（如果已配置）
-        if self._decision_manager:
-            provider = self._decision_manager.get_current_provider()
+        # 启动决策Provider（如果已配置）
+        if self._decision_provider_manager:
+            provider = self._decision_provider_manager.get_current_provider()
             if hasattr(provider, "connect"):
                 try:
                     await provider.connect()
-                    self.logger.info("DecisionProvider 连接已启动")
+                    self.logger.info("决策Provider连接已启动")
                 except Exception as e:
-                    self.logger.error(f"DecisionProvider 连接失败: {e}", exc_info=True)
+                    self.logger.error(f"决策Provider连接失败: {e}", exc_info=True)
 
-        # 启动数据流协调器（A-01新增）
-        if self._flow_coordinator:
+        # 启动输出协调器
+        if self._output_coordinator:
             try:
-                await self._flow_coordinator.start()
-                self.logger.info("数据流协调器已启动")
+                await self._output_coordinator.start()
+                self.logger.info("输出协调器已启动")
             except Exception as e:
-                self.logger.error(f"启动数据流协调器失败: {e}", exc_info=True)
+                self.logger.error(f"启动输出协调器失败: {e}", exc_info=True)
 
     async def disconnect(self):
         """停止核心服务"""
-        # 停止数据流协调器（A-01新增）
-        if self._flow_coordinator:
+        # 停止输出协调器
+        if self._output_coordinator:
             try:
-                await self._flow_coordinator.stop()
-                self.logger.info("数据流协调器已停止")
+                await self._output_coordinator.stop()
+                self.logger.info("输出协调器已停止")
             except Exception as e:
-                self.logger.error(f"停止数据流协调器失败: {e}", exc_info=True)
+                self.logger.error(f"停止输出协调器失败: {e}", exc_info=True)
 
-        # 停止DecisionProvider
-        if self._decision_manager:
-            provider = self._decision_manager.get_current_provider()
+        # 停止决策Provider
+        if self._decision_provider_manager:
+            provider = self._decision_provider_manager.get_current_provider()
             if hasattr(provider, "disconnect"):
                 try:
                     await provider.disconnect()
-                    self.logger.info("DecisionProvider 连接已断开")
+                    self.logger.info("决策Provider连接已断开")
                 except Exception as e:
-                    self.logger.error(f"DecisionProvider 断开失败: {e}", exc_info=True)
-
-        # 停止HTTP服务器
-        if self._http_server and self._http_server.is_running:
-            try:
-                await self._http_server.stop()
-                self.logger.info("HTTP服务器已停止")
-            except Exception as e:
-                self.logger.error(f"停止HTTP服务器失败: {e}", exc_info=True)
+                    self.logger.error(f"决策Provider断开失败: {e}", exc_info=True)
 
         self.logger.info("核心服务已停止")
 
@@ -181,11 +156,21 @@ class AmaidesuCore:
         return self._context_manager
 
     @property
-    def decision_manager(self) -> Optional[DecisionManager]:
-        """获取决策管理器实例"""
-        return self._decision_manager
+    def decision_provider_manager(self) -> Optional[DecisionProviderManager]:
+        """获取决策Provider管理器实例"""
+        return self._decision_provider_manager
 
-    def set_decision_manager(self, decision_manager: DecisionManager):
-        """设置决策管理器"""
-        self._decision_manager = decision_manager
-        self.logger.info("决策管理器已设置")
+    def set_decision_provider_manager(self, decision_provider_manager: DecisionProviderManager):
+        """设置决策Provider管理器"""
+        self._decision_provider_manager = decision_provider_manager
+        self.logger.info("决策Provider管理器已设置")
+
+    # 向后兼容属性
+    @property
+    def decision_manager(self) -> Optional[DecisionProviderManager]:
+        """获取决策Provider管理器实例（向后兼容别名）"""
+        return self._decision_provider_manager
+
+    def set_decision_manager(self, decision_manager: DecisionProviderManager):
+        """设置决策Provider管理器（向后兼容别名）"""
+        self.set_decision_provider_manager(decision_manager)

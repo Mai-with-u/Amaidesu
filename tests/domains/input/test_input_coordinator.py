@@ -1,5 +1,5 @@
 """
-测试 InputDomain 数据流（pytest）
+测试 InputCoordinator 数据流（pytest）
 
 运行: uv run pytest tests/domains/input/test_input_domain.py -v
 """
@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 import pytest
 from src.core.event_bus import EventBus
 from src.core.base.raw_data import RawData
-from src.domains.input.input_domain import InputDomain
+from src.domains.input.coordinator import InputCoordinator
 from src.core.events.payloads import RawDataPayload
 from src.core.events.names import CoreEvents
 
@@ -31,28 +31,28 @@ async def event_bus():
 
 
 @pytest.fixture
-async def input_domain(event_bus):
-    """创建 InputDomain"""
-    domain = InputDomain(event_bus)
-    await domain.setup()
-    yield domain
-    await domain.cleanup()
+async def input_coordinator(event_bus):
+    """创建 InputCoordinator"""
+    coordinator = InputCoordinator(event_bus)
+    await coordinator.setup()
+    yield coordinator
+    await coordinator.cleanup()
 
 
 # =============================================================================
-# InputDomain 核心功能测试
+# InputCoordinator 核心功能测试
 # =============================================================================
 
 
 @pytest.mark.asyncio
-async def test_input_domain_setup(input_domain):
-    """测试 InputDomain 初始化"""
-    assert input_domain is not None
-    assert input_domain.event_bus is not None
+async def test_input_coordinator_setup(input_coordinator):
+    """测试 InputCoordinator 初始化"""
+    assert input_coordinator is not None
+    assert input_coordinator.event_bus is not None
 
 
 @pytest.mark.asyncio
-async def test_raw_data_to_normalized_message(input_domain):
+async def test_raw_data_to_normalized_message(input_coordinator):
     """测试 RawData 转换为 NormalizedMessage"""
     results = []
 
@@ -63,12 +63,12 @@ async def test_raw_data_to_normalized_message(input_domain):
         if message_dict:
             results.append(message_dict)
 
-    input_domain.event_bus.on("normalization.message_ready", on_message_ready, priority=50)
+    input_coordinator.event_bus.on("normalization.message_ready", on_message_ready, priority=50)
 
     # 发布测试数据
     raw_data = RawData(content={"text": "测试消息"}, source="test_source", data_type="text")
 
-    await input_domain.event_bus.emit(
+    await input_coordinator.event_bus.emit(
         CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload.from_raw_data(raw_data), source="test"
     )
 
@@ -82,7 +82,7 @@ async def test_raw_data_to_normalized_message(input_domain):
 
 
 @pytest.mark.asyncio
-async def test_input_domain_multiple_messages(input_domain):
+async def test_input_coordinator_multiple_messages(input_coordinator):
     """测试多条消息的连续处理"""
     results = []
 
@@ -93,14 +93,14 @@ async def test_input_domain_multiple_messages(input_domain):
         if message_dict:
             results.append(message_dict)
 
-    input_domain.event_bus.on("normalization.message_ready", on_message_ready, priority=50)
+    input_coordinator.event_bus.on("normalization.message_ready", on_message_ready, priority=50)
 
     # 发送多条消息
     test_messages = ["消息1", "消息2", "消息3"]
 
     for msg in test_messages:
         raw_data = RawData(content={"text": msg}, source="test", data_type="text")
-        await input_domain.event_bus.emit(
+        await input_coordinator.event_bus.emit(
             CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload.from_raw_data(raw_data), source="test"
         )
         await asyncio.sleep(0.1)
@@ -112,16 +112,16 @@ async def test_input_domain_multiple_messages(input_domain):
     assert [r["text"] for r in results] == test_messages
 
 
-@pytest.mark.skip(reason="InputDomain 过滤空内容，此测试需要重新评估预期行为")
+@pytest.mark.skip(reason="InputCoordinator 过滤空内容，此测试需要重新评估预期行为")
 @pytest.mark.asyncio
-async def test_input_domain_empty_content(input_domain):
+async def test_input_coordinator_empty_content(input_coordinator):
     """测试空内容处理
 
     注意：此测试在迁移前就已经失败。
-    InputDomain 会过滤掉空内容（content={}），导致不会生成 NormalizedMessage。
+    InputCoordinator 会过滤掉空内容（content={}），导致不会生成 NormalizedMessage。
     需要重新评估此测试的预期行为。
     """
-    # InputDomain 会过滤空内容，因此此测试需要重新设计
+    # InputCoordinator 会过滤空内容，因此此测试需要重新设计
     pass
 
 
@@ -129,8 +129,8 @@ async def test_input_domain_empty_content(input_domain):
 async def test_full_data_flow():
     """测试完整数据流：RawData -> NormalizedMessage"""
     event_bus = EventBus()
-    input_domain = InputDomain(event_bus)
-    await input_domain.setup()
+    input_coordinator = InputCoordinator(event_bus)
+    await input_coordinator.setup()
 
     results = []
 
@@ -161,7 +161,7 @@ async def test_full_data_flow():
     assert results[0]["source"] == "bili_danmaku"
     assert "主播好！" in results[0]["text"] or results[0]["text"] == "主播好！"
 
-    await input_domain.cleanup()
+    await input_coordinator.cleanup()
 
 
 if __name__ == "__main__":

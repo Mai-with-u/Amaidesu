@@ -8,13 +8,11 @@ Provider Schema 完整性测试
 4. 三级配置合并机制正确
 """
 
-from typing import Dict, List, Set, Type
 import pytest
 from pathlib import Path
 
 from src.core.provider_registry import ProviderRegistry
 from src.services.config.schemas.schemas.base import BaseProviderConfig
-from src.services.config.service import ConfigService
 
 
 class TestProviderSchemaCompleteness:
@@ -28,9 +26,6 @@ class TestProviderSchemaCompleteness:
         - ConfigSchema 必须继承 BaseProviderConfig
         - ConfigSchema 在 Provider 注册时自动提取
         """
-        from src.core.base.input_provider import InputProvider
-        from src.core.base.output_provider import OutputProvider
-        from src.core.base.decision_provider import DecisionProvider
 
         # 获取所有已注册的 Provider
         registry_info = ProviderRegistry.get_registry_info()

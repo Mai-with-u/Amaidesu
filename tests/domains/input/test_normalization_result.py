@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 import pytest
 from src.core.event_bus import EventBus
 from src.core.base.raw_data import RawData
-from src.domains.input.input_domain import InputDomain, NormalizationResult
+from src.domains.input.coordinator import InputCoordinator, NormalizationResult
 from src.core.events.payloads import RawDataPayload
 from src.core.events.names import CoreEvents
 
@@ -31,12 +31,12 @@ async def event_bus():
 
 
 @pytest.fixture
-async def input_domain(event_bus):
-    """创建 InputDomain"""
-    domain = InputDomain(event_bus)
-    await domain.setup()
-    yield domain
-    await domain.cleanup()
+async def input_coordinator(event_bus):
+    """创建 InputCoordinator"""
+    coordinator = InputCoordinator(event_bus)
+    await coordinator.setup()
+    yield coordinator
+    await coordinator.cleanup()
 
 
 # =============================================================================
@@ -82,7 +82,7 @@ def test_normalization_result_failure():
 
 
 @pytest.mark.asyncio
-async def test_normalization_error_tracking(input_domain):
+async def test_normalization_error_tracking(input_coordinator):
     """测试标准化错误统计"""
     results = []
 
@@ -91,19 +91,19 @@ async def test_normalization_error_tracking(input_domain):
         if message_dict:
             results.append(message_dict)
 
-    input_domain.event_bus.on("normalization.message_ready", on_message_ready, priority=50)
+    input_coordinator.event_bus.on("normalization.message_ready", on_message_ready, priority=50)
 
     # 发送正常消息
     raw_data = RawData(content={"text": "正常消息"}, source="test", data_type="text")
 
-    await input_domain.event_bus.emit(
+    await input_coordinator.event_bus.emit(
         CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload.from_raw_data(raw_data), source="test"
     )
 
     await asyncio.sleep(0.1)
 
     # 获取统计信息
-    stats = await input_domain.get_stats()
+    stats = await input_coordinator.get_stats()
 
     assert stats["raw_data_count"] == 1
     assert stats["normalized_message_count"] == 1
@@ -114,11 +114,11 @@ async def test_normalization_error_tracking(input_domain):
 
 
 @pytest.mark.asyncio
-async def test_normalize_returns_result_object(input_domain):
+async def test_normalize_returns_result_object(input_coordinator):
     """测试 normalize() 方法返回 NormalizationResult 对象"""
     raw_data = RawData(content={"text": "测试消息"}, source="test", data_type="text")
 
-    result = await input_domain.normalize(raw_data)
+    result = await input_coordinator.normalize(raw_data)
 
     # 验证返回类型是 NormalizationResult
     assert isinstance(result, NormalizationResult)
@@ -129,7 +129,7 @@ async def test_normalize_returns_result_object(input_domain):
 
 
 @pytest.mark.asyncio
-async def test_normalize_with_invalid_data(input_domain):
+async def test_normalize_with_invalid_data(input_coordinator):
     """测试 normalize() 处理无效数据"""
     # 创建一个可能导致错误的数据
     # 注意：实际测试中需要模拟 Normalizer 抛出异常的情况
@@ -137,7 +137,7 @@ async def test_normalize_with_invalid_data(input_domain):
 
     raw_data = RawData(content="未知类型的内容", source="test", data_type="unknown_type")
 
-    result = await input_domain.normalize(raw_data)
+    result = await input_coordinator.normalize(raw_data)
 
     # 降级处理应该成功
     assert isinstance(result, NormalizationResult)
@@ -147,10 +147,10 @@ async def test_normalize_with_invalid_data(input_domain):
 
 
 @pytest.mark.asyncio
-async def test_get_stats_includes_error_tracking(input_domain):
+async def test_get_stats_includes_error_tracking(input_coordinator):
     """测试 get_stats() 包含错误追踪信息"""
     # 初始状态
-    stats = await input_domain.get_stats()
+    stats = await input_coordinator.get_stats()
 
     assert "raw_data_count" in stats
     assert "normalized_message_count" in stats
@@ -169,7 +169,7 @@ async def test_get_stats_includes_error_tracking(input_domain):
 
 
 @pytest.mark.asyncio
-async def test_multiple_messages_with_stats(input_domain):
+async def test_multiple_messages_with_stats(input_coordinator):
     """测试多条消息的统计"""
     results = []
 
@@ -178,12 +178,12 @@ async def test_multiple_messages_with_stats(input_domain):
         if message_dict:
             results.append(message_dict)
 
-    input_domain.event_bus.on("normalization.message_ready", on_message_ready, priority=50)
+    input_coordinator.event_bus.on("normalization.message_ready", on_message_ready, priority=50)
 
     # 发送多条消息
     for i in range(5):
         raw_data = RawData(content={"text": f"消息{i}"}, source="test", data_type="text")
-        await input_domain.event_bus.emit(
+        await input_coordinator.event_bus.emit(
             CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload.from_raw_data(raw_data), source="test"
         )
         await asyncio.sleep(0.05)
@@ -191,7 +191,7 @@ async def test_multiple_messages_with_stats(input_domain):
     await asyncio.sleep(0.2)
 
     # 获取统计信息
-    stats = await input_domain.get_stats()
+    stats = await input_coordinator.get_stats()
 
     assert stats["raw_data_count"] == 5
     assert stats["normalized_message_count"] == 5

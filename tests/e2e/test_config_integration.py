@@ -46,15 +46,11 @@ def config_service(project_base_dir):
     # ConfigService 没有需要清理的资源
 
 
-# 导入类型注解
-from src.services.config.service import ConfigService
-
-
 # ==================== 测试套件 1: ConfigService 基本功能 ====================
 
 
 @pytest.mark.asyncio
-async def test_config_service_initialization(config_service: ConfigService):
+async def test_config_service_initialization(config_service):
     """测试 ConfigService 能正常初始化"""
     assert config_service is not None
     assert config_service._initialized is True
@@ -63,7 +59,7 @@ async def test_config_service_initialization(config_service: ConfigService):
 
 
 @pytest.mark.asyncio
-async def test_config_service_has_required_sections(config_service: ConfigService):
+async def test_config_service_has_required_sections(config_service):
     """测试配置文件包含必需的配置节"""
     # 验证主要配置节存在
     general = config_service.get_section("general")
@@ -197,7 +193,7 @@ async def test_provider_registry_can_create_all_providers():
 
 
 @pytest.mark.asyncio
-async def test_config_service_three_level_merge(config_service: ConfigService):
+async def test_config_service_three_level_merge(config_service):
     """测试三级配置合并功能（Schema默认值 → 主配置覆盖 → 本地配置）"""
     # 测试Schema-based配置合并
     # 这里使用 console_input 作为示例
@@ -252,7 +248,7 @@ async def test_config_service_deep_merge_function():
 
 
 @pytest.mark.asyncio
-async def test_input_provider_manager_load_from_config(config_service: ConfigService):
+async def test_input_provider_manager_load_from_config(config_service):
     """测试 InputProviderManager 能从配置加载 Provider"""
     from src.domains.input.input_provider_manager import InputProviderManager
     from src.core.event_bus import EventBus
@@ -279,9 +275,9 @@ async def test_input_provider_manager_load_from_config(config_service: ConfigSer
 
 
 @pytest.mark.asyncio
-async def test_output_provider_manager_load_from_config(config_service: ConfigService):
+async def test_output_provider_manager_load_from_config(config_service):
     """测试 OutputProviderManager 能从配置加载 Provider"""
-    from src.domains.output.manager import OutputProviderManager
+    from src.domains.output.provider_manager import OutputProviderManager
 
     manager = OutputProviderManager()
 
@@ -301,7 +297,7 @@ async def test_output_provider_manager_load_from_config(config_service: ConfigSe
 
 
 @pytest.mark.asyncio
-async def test_enabled_switch_controls_provider_loading(config_service: ConfigService):
+async def test_enabled_switch_controls_provider_loading(config_service):
     """测试 enabled 开关正确控制 Provider 加载"""
     from src.domains.input.input_provider_manager import InputProviderManager
     from src.core.event_bus import EventBus
@@ -347,8 +343,8 @@ async def test_application_startup_simulation(project_base_dir):
     from src.services.config.service import ConfigService
     from src.core.event_bus import EventBus
     from src.domains.input.input_provider_manager import InputProviderManager
-    from src.domains.output.manager import OutputProviderManager
-    from src.domains.decision.decision_manager import DecisionManager
+    from src.domains.output.provider_manager import OutputProviderManager
+    from src.domains.decision.provider_manager import DecisionProviderManager as DecisionManager
 
     # 1. 初始化配置服务
     config_service = ConfigService(base_dir=project_base_dir)
@@ -427,7 +423,7 @@ async def test_config_does_not_throw_exceptions(project_base_dir):
 
 
 @pytest.mark.asyncio
-async def test_config_migration_detection(config_service: ConfigService):
+async def test_config_migration_detection(config_service):
     """测试配置迁移检测功能"""
     # ConfigService 的 initialize 方法返回迁移状态
     # 注意：config_service fixture 已经初始化过了，这里不需要再次初始化
@@ -444,7 +440,7 @@ async def test_config_migration_detection(config_service: ConfigService):
 
 
 @pytest.mark.asyncio
-async def test_config_service_handles_missing_sections(config_service: ConfigService):
+async def test_config_service_handles_missing_sections(config_service):
     """测试 ConfigService 正确处理缺失的配置节"""
     # 尝试获取不存在的配置节
     missing_section = config_service.get_section("non_existent_section")
