@@ -53,9 +53,9 @@ class SlowMockInputProvider(MockInputProvider):
 class CleanupFailingMockInputProvider(MockInputProvider):
     """模拟清理失败的 Provider"""
 
-    async def _cleanup(self):
+    async def _cleanup_internal(self):
         # 先调用父类的清理（虽然父类什么也不做）
-        await super()._cleanup()
+        await super()._cleanup_internal()
         # 然后抛出异常
         raise RuntimeError("模拟清理失败")
 

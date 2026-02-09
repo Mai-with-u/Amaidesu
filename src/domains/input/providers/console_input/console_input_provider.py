@@ -133,6 +133,8 @@ class ConsoleInputProvider(InputProvider):
 
     async def cleanup(self):
         """清理资源"""
+        # 调用父类的清理方法
+        await super().cleanup()
         self.logger.info("ConsoleInputProvider cleanup完成")
 
     async def _handle_command(self, cmd_line: str) -> Optional[List[RawData]]:

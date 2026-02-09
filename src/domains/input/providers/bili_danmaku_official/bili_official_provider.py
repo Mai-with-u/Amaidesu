@@ -173,7 +173,7 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
             # 捕获异常并记录，避免格式化问题
             self.logger.error("处理消息时出错", exc_info=True)
 
-    async def _cleanup(self):
+    async def _cleanup_internal(self):
         """清理资源"""
         # 清理WebSocket客户端
         if self.websocket_client:
