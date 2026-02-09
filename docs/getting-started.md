@@ -1,0 +1,178 @@
+# 快速开始
+
+本文档帮助你快速设置开发环境并运行 Amaidesu 项目。
+
+## 前置要求
+
+- Python 3.10+
+- [uv](https://docs.astral.sh/uv/) - Python 包管理器
+
+## 安装步骤
+
+### 1. 安装 uv
+
+**Windows (PowerShell)**:
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+**macOS/Linux**:
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+### 2. 克隆项目
+
+```bash
+git clone <repository-url>
+cd Amaidesu
+```
+
+### 3. 同步依赖
+
+```bash
+# 基础依赖
+uv sync
+
+# 包含语音识别（STT）
+uv sync --extra stt
+
+# 所有可选依赖
+uv sync --all-extras
+```
+
+### 4. 配置项目
+
+首次运行会自动生成配置文件：
+
+```bash
+# 生成默认配置
+cp config-template.toml config.toml
+
+# 编辑配置
+# 根据需要修改 config.toml
+```
+
+## 运行项目
+
+### 正常运行
+
+```bash
+uv run python main.py
+```
+
+### 调试模式
+
+```bash
+# 显示详细日志
+uv run python main.py --debug
+
+# 过滤特定模块的日志（只显示指定模块）
+uv run python main.py --filter TTSProvider SubtitleProvider
+
+# 调试模式并过滤特定模块
+uv run python main.py --debug --filter VTSProvider
+```
+
+## 测试
+
+### 运行所有测试
+
+```bash
+uv run pytest tests/
+```
+
+### 运行特定测试
+
+```bash
+# 特定文件
+uv run pytest tests/layers/input/test_console_provider.py
+
+# 特定用例
+uv run pytest tests/layers/input/test_console_provider.py::test_console_provider_basic
+
+# 详细输出
+uv run pytest tests/ -v
+
+# 只运行标记的测试
+uv run pytest -m "not slow"
+```
+
+## 代码质量
+
+### 代码检查
+
+```bash
+uv run ruff check .
+```
+
+### 代码格式化
+
+```bash
+uv run ruff format .
+```
+
+### 自动修复
+
+```bash
+uv run ruff check --fix .
+```
+
+## 常用命令
+
+### 包管理
+
+```bash
+# 添加新依赖
+uv add package-name
+
+# 添加开发依赖
+uv add --dev package-name
+
+# 移除依赖
+uv remove package-name
+
+# 升级特定依赖
+uv lock --upgrade-package package-name
+```
+
+### 运行特定脚本
+
+```bash
+# 模拟服务器（没有MaiCore时使用）
+uv run python mock_maicore.py
+```
+
+## 目录结构
+
+```
+Amaidesu/
+├── main.py              # CLI 入口
+├── config-template.toml # 配置模板
+├── config.toml          # 实际配置（首次运行生成）
+├── src/                 # 源代码
+│   ├── amaidesu_core.py # 核心协调器
+│   ├── core/            # 基础设施
+│   ├── services/        # 共享服务
+│   └── domains/         # 业务域（input/decision/output）
+├── tests/               # 测试
+├── docs/                # 文档
+└── refactor/            # 重构设计文档
+```
+
+## 下一步
+
+- 阅读 [开发规范](development-guide.md) 了解代码风格
+- 阅读 [3域架构总览](architecture/overview.md) 理解项目架构
+- 阅读 [Provider 开发指南](development/provider-guide.md) 学习如何开发新功能
+
+## 遇到问题？
+
+1. **依赖安装失败** → 确保 uv 和 Python 版本正确
+2. **配置文件问题** → 检查 `config.toml` 格式
+3. **运行时错误** → 使用 `--debug` 模式查看详细日志
+4. **测试失败** → 运行 `uv run pytest tests/ -v` 查看详细输出
+
+---
+
+*更多详细信息，参见其他文档。*

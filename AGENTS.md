@@ -2,89 +2,112 @@
 
 为在此代码库中工作的 AI 编码代理提供指南。
 
+**本文档已重构为渐进式披露格式**：核心规则在此文件，详细指南请查看 `docs/` 目录。
+
+## 快速导航
+
+| 我想... | 查看文档 |
+|---------|---------|
+| 快速上手项目 | [快速开始](docs/getting-started.md) |
+| 了解代码规范 | [开发规范](docs/development-guide.md) |
+| 理解架构设计 | [3域架构](docs/architecture/overview.md) |
+| 开发 Provider | [Provider 开发](docs/development/provider-guide.md) |
+| 开发 Pipeline | [管道开发](docs/development/pipeline-guide.md) |
+| 管理提示词 | [提示词管理](docs/development/prompt-management.md) |
+| 编写测试 | [测试指南](docs/development/testing-guide.md) |
+
 ## 重构阶段
 
-当前处于完全重构阶段，在refactor分支中，不需要保留任何向后兼容的代码，需要彻底重构。不必担心会破坏性变更，因为重构完毕之前，都是没有用户在使用的。
+当前处于完全重构阶段，在 `refactor` 分支中，不需要保留任何向后兼容的代码，需要彻底重构。
+
+**不必担心会破坏性变更**，因为重构完毕之前，都是没有用户在使用的。
 
 ## 核心规范
 
-- 移动或者重命名文件的时候注意使用git mv保留历史记录
+### 必须遵守
+
+- 移动或者重命名文件的时候注意使用 `git mv` 保留历史记录
 - 使用中文和用户沟通以及编写文档、注释
 - 需要如实汇报自己的工作进度，不得隐瞒问题不报，不得在未经用户允许的情况下降低任务达成标准
+- **提交代码前运行测试**：`uv run pytest tests/` 和 `uv run ruff check .`
+- **提交代码前进行格式化**: `uv run ruff format .`
 
-## 构建/检查/测试命令
+### 禁止事项
+
+| 禁止 | 原因 | 替代方案 |
+|------|------|----------|
+| ❌ 创建新的 Plugin（插件系统已移除） | 架构已重构为 Provider 系统 | 创建 Provider |
+| ❌ 使用服务注册机制（已废弃） | 使用 EventBus | EventBus 事件系统 |
+| ❌ 硬编码事件名字符串 | 避免拼写错误 | 使用 `CoreEvents` 常量 |
+| ❌ 使用空的 except 块 | 隐藏错误 | 记录日志并处理 |
+| ❌ 删除失败的测试来"通过" | 自欺欺人 | 修复代码或测试 |
+| ❌ 在修复 bug 时进行大规模重构 | 扩大风险范围 | 只修复 bug |
+| ❌ 提交未验证的代码 | 可能破坏构建 | 先运行测试和 lint |
+| ❌ 类变量中存储可变对象 | 共享状态问题 | 使用 `__init__` 初始化 |
+
+### 架构约束：3域数据流规则
+
+**严格遵守单向数据流：Input Domain → Decision Domain → Output Domain**
+
+| 禁止模式 | 说明 | 详细规则 |
+|---------|------|----------|
+| ❌ Output Provider 订阅 Input 事件 | 绕过 Decision Domain，破坏分层 | [数据流规则](docs/architecture/data-flow.md) |
+| ❌ Decision Provider 订阅 Output 事件 | 创建循环依赖 | 同上 |
+| ❌ Input Provider 订阅 Decision/Output 事件 | Input 应只发布，不订阅下游 | 同上 |
+
+**在提交代码前运行架构测试**：
+```bash
+uv run pytest tests/architecture/test_event_flow_constraints.py -v
+```
+
+## 常用命令
 
 ### 包管理器
 
 本项目使用 [uv](https://docs.astral.sh/uv/) 作为 Python 包管理器。
 
 ```bash
-# 安装 uv（如果尚未安装）
-# Windows (PowerShell)
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-
-# macOS/Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-### 开发环境设置
-```bash
-# 同步依赖（自动创建虚拟环境并安装所有依赖）
+# 同步依赖
 uv sync
-
-# 安装包含语音识别（STT）的依赖
-uv sync --extra stt
-
-# 安装所有可选依赖
-uv sync --all-extras
 
 # 添加新依赖
 uv add package-name
 
-# 添加开发依赖
-uv add --dev package-name
-
 # 移除依赖
 uv remove package-name
-
-# 升级特定依赖
-uv lock --upgrade-package package-name
 ```
 
-### 运行应用程序
+### 运行应用
+
 ```bash
 # 正常运行
 uv run python main.py
 
-# 调试模式（显示详细日志）
+# 调试模式
 uv run python main.py --debug
 
-# 过滤日志，只显示指定模块（除了WARNING及以上级别的日志）
+# 过滤日志（只显示指定模块）
 uv run python main.py --filter TTSProvider SubtitleProvider
-
-# 调试模式并过滤特定模块
-uv run python main.py --debug --filter VTSProvider
 ```
 
 ### 测试
+
 ```bash
 # 运行所有测试
 uv run pytest tests/
 
-# 运行特定测试文件
+# 运行特定测试
 uv run pytest tests/layers/input/test_console_provider.py
 
-# 运行特定测试用例
-uv run pytest tests/layers/input/test_console_provider.py::test_console_provider_basic
-
-# 详细输出模式
+# 详细输出
 uv run pytest tests/ -v
 
-# 只运行标记的测试
+# 排除慢速测试
 uv run pytest -m "not slow"
 ```
 
 ### 代码质量
+
 ```bash
 # 代码检查
 uv run ruff check .
@@ -92,545 +115,150 @@ uv run ruff check .
 # 代码格式化
 uv run ruff format .
 
-# 自动修复可修复的问题
+# 自动修复
 uv run ruff check --fix .
 ```
 
-### 模拟服务器
-```bash
-# 当没有部署MaiCore时，使用模拟服务器测试
-uv run python mock_maicore.py
-```
+## 数据类型选用规范
 
-## 代码风格指南
-
-### 数据类型选用规范
-
-项目统一使用 **Pydantic BaseModel** 作为主要数据结构类型。
+### 统一使用 Pydantic BaseModel
 
 | 类型 | 使用场景 | 示例 |
 |------|----------|------|
 | **Pydantic BaseModel** | 所有数据模型、配置 Schema、事件 Payload | `class UserConfig(BaseModel)` |
-| **dataclass** | 仅用于简单的内部统计/包装类，不涉及数据验证 | `@dataclass class PipelineStats` |
-| **TypedDict** | 不推荐使用，已弃用 | - |
+| **dataclass** | 仅用于简单的内部统计/包装类 | `@dataclass class PipelineStats` |
 | **Protocol** | 定义接口协议 | `class TextPipeline(Protocol)` |
 
-#### Pydantic BaseModel 使用指南
-
-```python
-from pydantic import BaseModel, Field, ConfigDict
-
-class UserConfig(BaseModel):
-    """用户配置"""
-
-    name: str = Field(description="用户名")
-    age: int = Field(default=0, ge=0, le=150)
-    enabled: bool = True
-
-    # Pydantic v2 配置风格
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "name": "amaidesu",
-                "age": 18,
-                "enabled": True
-            }
-        }
-    )
-```
-
-#### 何时使用 dataclass
-
-仅当满足以下所有条件时使用 `@dataclass`：
-1. 简单的数据容器，无需验证
-2. 内部使用，不对外暴露 API
-3. 不需要序列化/反序列化
-
-```python
-from dataclasses import dataclass
-
-# ✅ 合理使用：内部统计类
-@dataclass
-class PipelineStats:
-    processed_count: int = 0
-    error_count: int = 0
-```
-
-#### 类型选用决策树
-
-```
-需要定义数据结构？
-│
-├─ 是 → 需要数据验证/序列化？
-│   │
-│   ├─ 是 → 使用 Pydantic BaseModel
-│   │
-│   └─ 否 → 仅内部简单数据？
-│       │
-│       ├─ 是 → 使用 dataclass
-│       └─ 否 → 使用 Protocol（接口定义）
-│
-└─ 否 → 使用 Protocol 或 ABC（抽象接口）
-```
-
-### 导入语句组织
-1. 标准库导入（如 `asyncio`, `typing`, `os`）
-2. 第三方库导入（如 `aiohttp`, `loguru`）
-3. 本地项目导入（从 `src` 开始）
-4. 使用 `TYPE_CHECKING` 避免循环导入
-
-```python
-import asyncio
-from typing import TYPE_CHECKING, Any, Dict, Optional
-
-from aiohttp import web
-from loguru import logger
-
-from src.core.amaidesu_core import AmaidesuCore
-from src.utils.logger import get_logger
-
-if TYPE_CHECKING:
-    from .some_module import SomeClass
-```
+**详细规范**：[开发规范 - 数据类型选用](docs/development-guide.md#数据类型选用规范)
 
 ### 类型注解
-- 总是使用类型注解：函数参数、返回值、类属性
-- 使用 `typing` 模块中的类型：`Dict`, `List`, `Optional`, `Union`, `Any`
-- 类型参数使用小写：`Dict[str, Any]`, `Optional[str]`
 
 ```python
+# ✅ 正确：总是使用类型注解
 async def handle_message(self, message: MessageBase) -> Optional[MessageBase]:
     """处理消息并返回处理结果"""
     pass
 
 def __init__(self, config: Dict[str, Any]):
     self.logger = get_logger(self.__class__.__name__)
+
+# ❌ 错误：缺少类型注解
+async def handle_message(self, message):
+    pass
 ```
 
 ### 命名约定
-- **类名**：PascalCase（如 `AmaidesuCore`, `InputProvider`, `TextPipeline`）
-- **函数/方法名**：snake_case（如 `send_to_maicore`, `register_websocket_handler`）
-- **变量名**：snake_case（如 `provider_config`, `event_bus`）
-- **私有成员**：前导下划线（如 `_message_handlers`, `_is_connected`）
-- **Provider类**：以 `Provider` 结尾（如 `ConsoleInputProvider`, `TTSSProvider`）
-- **管道类**：以 `Pipeline` 结尾（如 `RateLimitPipeline`, `SimilarTextFilterPipeline`, `MessageLoggerPipeline`）
 
-### 格式化规范（基于 pyproject.toml）
-- 行长度：120 字符
-- 字符串引号：双引号（`"`）
-- 缩进：4 个空格（不使用 Tab）
-- 保留尾随逗号（用于多行列表/字典）
-- 自动检测换行符（LF/CRLF）
+| 类型 | 命名风格 | 示例 |
+|------|---------|------|
+| 类名 | PascalCase | `AmaidesuCore`, `InputProvider`, `TextPipeline` |
+| 函数/方法名 | snake_case | `send_to_maicore`, `register_websocket_handler` |
+| 变量名 | snake_case | `provider_config`, `event_bus` |
+| 私有成员 | 前导下划线 | `_message_handlers`, `_is_connected` |
+| Provider 类 | 以 `Provider` 结尾 | `ConsoleInputProvider`, `TTSSProvider` |
+| 管道类 | 以 `Pipeline` 结尾 | `RateLimitPipeline`, `SimilarTextFilterPipeline` |
 
-### Async/Await 模式
-- 所有 I/O 操作使用 `async/await`
-- 处理器必须是异步函数：`async def handler(...):`
-- 使用 `asyncio.create_task()` 创建后台任务
-- 使用 `asyncio.Lock()` 保护共享资源
-- 优先使用 `asyncio.gather()` 并发执行多个异步操作
+**详细规范**：[开发规范](docs/development-guide.md)
 
-```python
-async def process_messages(self):
-    tasks = []
-    for message in messages:
-        tasks.append(self.handle_message(message))
-    await asyncio.gather(*tasks, return_exceptions=True)
-```
-
-### 错误处理
-- 使用 try-except 捕获异常，并在 except 中记录日志时使用 `exc_info=True`
-- 不要使用空的 except 块：`except: pass` 是反模式
-- 对可预期的错误提供有意义的错误消息
-- 使用特定异常类型（如 `ValueError`, `ConnectionError`）
-
-```python
-try:
-    result = await some_async_operation()
-except Exception as e:
-    self.logger.error(f"操作失败: {e}", exc_info=True)
-    raise ConnectionError(f"无法连接到服务: {e}") from e
-```
-
-### 日志记录
-- 使用 `get_logger(module_name)` 获取 logger 实例
-- 模块名通常使用类名（如 `get_logger("AmaidesuCore")`）
-- 日志级别：`DEBUG`, `INFO`, `WARNING`, `ERROR`
-- 重要操作始终记录日志（启动、连接、错误、清理）
-
-```python
-from src.utils.logger import get_logger
-
-class MyInputProvider(InputProvider):
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        self.logger = get_logger(self.__class__.__name__)
-        self.logger.info("Provider初始化")
-```
-
-## Provider 开发规范
-
-### 概述
+## Provider 开发
 
 项目使用 Provider 系统封装具体功能，由 Manager 统一管理，配置驱动启用。
 
-**Provider 类型**：
-- **InputProvider**: 输入 Provider，从外部数据源采集数据
-- **DecisionProvider**: 决策 Provider，处理 NormalizedMessage 生成 Intent
-- **OutputProvider**: 输出 Provider，渲染到目标设备
+### Provider 类型
 
-### InputProvider 开发
+| 类型 | 职责 | 位置 | 示例 |
+|------|------|------|------|
+| **InputProvider** | 从外部数据源采集数据 | `src/domains/input/providers/` | ConsoleInputProvider, BiliDanmakuInputProvider |
+| **DecisionProvider** | 处理 NormalizedMessage 生成 Intent | `src/domains/decision/providers/` | MaiCoreDecisionProvider, LocalLLMDecisionProvider |
+| **OutputProvider** | 渲染到目标设备 | `src/domains/output/providers/` | TTSOutputProvider, SubtitleOutputProvider, VTSOutputProvider |
 
-输入 Provider 从外部数据源采集数据，继承 `InputProvider` 基类。
+### 添加新 Provider
 
-```python
-# src/domains/input/providers/my_provider/my_input_provider.py
-from typing import AsyncIterator, Dict, Any
-from src.core.base.input_provider import InputProvider
-from src.core.base.raw_data import RawData
-from src.core.utils.logger import get_logger
+1. 继承对应的 Provider 基类（InputProvider/DecisionProvider/OutputProvider）
+2. 在 Provider 的 `__init__.py` 中注册到 ProviderRegistry
+3. 在配置中启用
 
-class MyInputProvider(InputProvider):
-    """自定义输入 Provider"""
+**详细指南**：[Provider 开发](docs/development/provider-guide.md)
 
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        self.logger = get_logger(self.__class__.__name__)
-        # 初始化逻辑
-
-    async def _collect_data(self) -> AsyncIterator[RawData]:
-        """采集数据"""
-        while self.is_running:
-            # 采集数据逻辑
-            data = await self._fetch_data()
-            if data:
-                yield RawData(
-                    content={"data": data},
-                    source="my_provider",
-                    data_type="text",
-                )
-            await self._sleep_if_running(1.0)
-
-    async def _fetch_data(self):
-        """实现具体的数据采集逻辑"""
-        # ... 实现细节
-        pass
-```
-
-### DecisionProvider 开发
-
-决策 Provider 处理 NormalizedMessage 生成 Intent，继承 `DecisionProvider` 基类。
-
-```python
-# src/domains/decision/providers/my_provider/my_decision_provider.py
-from typing import Dict, Any
-from src.core.base.decision_provider import DecisionProvider
-from src.core.base.normalized_message import NormalizedMessage
-from src.domains.decision.intent import Intent
-from src.core.utils.logger import get_logger
-
-class MyDecisionProvider(DecisionProvider):
-    """自定义决策 Provider"""
-
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        self.logger = get_logger(self.__class__.__name__)
-
-    async def decide(self, message: NormalizedMessage) -> Intent:
-        """决策逻辑"""
-        # 实现决策逻辑
-        return Intent(
-            type="response",
-            content="响应内容",
-            parameters={},
-        )
-```
-
-### OutputProvider 开发
-
-输出 Provider 渲染到目标设备，继承 `OutputProvider` 基类。
-
-```python
-# src/domains/output/providers/my_provider/my_output_provider.py
-from typing import Dict, Any
-from src.core.base.output_provider import OutputProvider
-from src.domains.output.parameters.render_parameters import RenderParameters
-from src.core.utils.logger import get_logger
-
-class MyOutputProvider(OutputProvider):
-    """自定义输出 Provider"""
-
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        self.logger = get_logger(self.__class__.__name__)
-
-    async def render(self, parameters: RenderParameters):
-        """渲染逻辑"""
-        # 实现渲染逻辑
-        self.logger.info(f"渲染参数: {parameters}")
-```
-
-### Provider 注册
-
-在 Provider 的 `__init__.py` 中注册到 ProviderRegistry：
-
-```python
-# src/domains/input/providers/my_provider/__init__.py
-from src.core.provider_registry import ProviderRegistry
-from .my_input_provider import MyInputProvider
-
-ProviderRegistry.register_input("my_provider", MyInputProvider, source="builtin:my_provider")
-```
-
-### 配置启用
-
-在配置文件中启用 Provider：
+### 配置示例
 
 ```toml
 # 输入Provider
 [providers.input]
-enabled_inputs = ["console_input", "my_provider"]
-
-[providers.input.inputs.my_provider]
-type = "my_provider"
-# Provider特定配置
-api_url = "https://api.example.com"
+enabled_inputs = ["console_input", "bili_danmaku"]
 
 # 决策Provider
 [providers.decision]
-active_provider = "my_provider"
-available_providers = ["maicore", "my_provider"]
-
-[providers.decision.providers.my_provider]
-type = "my_provider"
-# Provider特定配置
+active_provider = "maicore"
 
 # 输出Provider
 [providers.output]
-enabled_outputs = ["subtitle", "my_provider"]
-
-[providers.output.outputs.my_provider]
-type = "my_provider"
-# Provider特定配置
+enabled_outputs = ["tts", "subtitle", "vts"]
 ```
 
-
-## 管道开发规范
+## 管道开发
 
 管道用于在消息处理流程中进行预处理，位于 Input Domain 内部。
 
-### 管道开发
+### 添加新 Pipeline
 
 1. 继承 `TextPipeline` 类
 2. 实现 `process()` 方法
 3. 返回 `NormalizedMessage` 继续传递，返回 `None` 丢弃消息
 
-```python
-# src/domains/input/pipelines/my_pipeline/pipeline.py
-from src.domains.input.pipeline_manager import TextPipeline
-from src.core.base.normalized_message import NormalizedMessage
-from typing import Optional, Dict, Any
+**详细指南**：[管道开发](docs/development/pipeline-guide.md)
 
-class MyPipeline(TextPipeline):
-    priority = 500
+## 提示词管理
 
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        self.param = self.config.get("param", "default")
+项目使用 **PromptManager** 统一管理所有 LLM 提示词。
 
-    async def process(self, message: NormalizedMessage) -> Optional[NormalizedMessage]:
-        # 处理消息
-        return message  # 或 return None 丢弃
-```
-
-### 管道配置
-
-```toml
-# 根 config.toml
-[pipelines]
-  [pipelines.my_pipeline]
-  priority = 500
-```
-
-## 配置文件
-
-- 配置文件使用 TOML 格式
-- Provider 配置：`[providers.input]`, `[providers.decision]`, `[providers.output]`
-- 管道配置：`[pipelines.*]`
-- 根配置：根目录的 `config-template.toml`
-- 首次运行会自动从模板生成 `config.toml`
-
-## 测试规范
-
-- 使用 pytest 编写测试
-- 测试文件名：`test_*.py`
-- 测试函数名：`async def test_*():`
-- 使用 `assert` 进行断言
-- 异步测试函数必须使用 `asyncio.run()` 或 pytest-asyncio
+### 基本使用
 
 ```python
-import asyncio
-import pytest
+from src.prompts import get_prompt_manager
 
-async def test_something():
-    result = await some_async_function()
-    assert result is not None
-    assert result.value == "expected"
+# 获取提示词
+prompt = get_prompt_manager().get_raw("decision/intent_parser")
 
-# 使用 pytest-asyncio
-@pytest.mark.asyncio
-async def test_with_marker():
-    pass
+# 渲染提示词
+prompt = get_prompt_manager().render(
+    "output/vts_hotkey",
+    text="用户消息",
+    hotkey_list_str="smile, wave",
+)
 ```
+
+**详细指南**：[提示词管理](docs/development/prompt-management.md)
 
 ## 事件系统
 
-- 组件通过 EventBus 发布和订阅事件
-- 优先使用 `CoreEvents` 常量，避免硬编码字符串
-- 核心事件使用 Pydantic Model 确保类型安全
+项目使用 **EventBus** 作为唯一的跨域通信机制。
+
+### 基本使用
 
 ```python
-# 发布事件
 from src.core.events.names import CoreEvents
+
+# 发布事件
 await event_bus.emit(CoreEvents.NORMALIZATION_MESSAGE_READY, normalized_message)
 
 # 订阅事件
 await event_bus.subscribe(CoreEvents.NORMALIZATION_MESSAGE_READY, self.handle_message)
 ```
 
-## 架构约束：3域数据流规则
+**详细文档**：
+- [事件系统](docs/architecture/event-system.md)
+- [数据流规则](docs/architecture/data-flow.md)
 
-### 核心原则
+### 核心事件
 
-**严格遵守单向数据流：Input Domain → Decision Domain → Output Domain**
+| 事件名 | 发布者 | 订阅者 | 数据类型 |
+|--------|--------|--------|---------|
+| `normalization.message_ready` | Input Domain | Decision Domain | `NormalizedMessage` |
+| `decision.intent_generated` | Decision Domain | Output Domain | `Intent` |
+| `expression.parameters_generated` | ExpressionGenerator | OutputProviders | `RenderParameters` |
 
-虽然 EventBus 技术上允许任何订阅模式，但架构层面强制约束事件订阅关系。
-
-### 禁止模式
-
-| 模式 | 说明 |
-|------|------|
-| ❌ Output Provider 直接订阅 Input 事件 | 绕过 Decision Domain，破坏分层 |
-| ❌ Decision Provider 订阅 Output 事件 | 创建循环依赖 |
-| ❌ Input Provider 订阅 Decision/Output 事件 | Input 应只发布，不订阅下游 |
-
-```python
-# ❌ 错误示例
-class MyOutputProvider(OutputProvider):
-    async def initialize(self):
-        # 禁止！绕过了 Decision Domain
-        await self.event_bus.subscribe(
-            CoreEvents.NORMALIZATION_MESSAGE_READY,  # Input 事件
-            self.handler
-        )
-
-# ❌ 错误示例
-class MyDecisionProvider(DecisionProvider):
-    async def initialize(self):
-        # 禁止！创建循环依赖
-        await self.event_bus.subscribe(
-            CoreEvents.RENDER_COMPLETED,  # Output 事件
-            self.handler
-        )
-```
-
-### 正确模式
-
-```python
-# ✅ 正确：Input 发布标准化消息
-class InputDomain:
-    async def process_and_publish(self, raw_data: RawData):
-        normalized = await self.normalize(raw_data)
-        await self.event_bus.emit(
-            CoreEvents.NORMALIZATION_MESSAGE_READY,
-            MessageReadyPayload(message=normalized)
-        )
-
-# ✅ 正确：Decision 订阅 Input 事件
-class DecisionManager:
-    async def initialize(self):
-        await self.event_bus.subscribe(
-            CoreEvents.NORMALIZATION_MESSAGE_READY,  # Input 事件
-            self.handle_message
-        )
-
-    async def handle_message(self, payload: MessageReadyPayload):
-        intent = await self.decision_provider.decide(payload.message)
-        await self.event_bus.emit(
-            CoreEvents.DECISION_INTENT_GENERATED,
-            IntentPayload(intent=intent)
-        )
-
-# ✅ 正确：Output 订阅 Decision 事件
-class OutputProviderManager:
-    async def initialize(self):
-        await self.event_bus.subscribe(
-            CoreEvents.DECISION_INTENT_GENERATED,  # Decision 事件
-            self.handle_intent
-        )
-```
-
-### 允许的事件订阅
-
-| 订阅者 | 可以订阅的事件 | 禁止订阅的事件 |
-|--------|---------------|---------------|
-| **Input Domain** | 无（仅发布） | Decision/Output 事件 |
-| **Decision Domain** | `NORMALIZATION_MESSAGE_READY` | `RENDER_*` 事件 |
-| **Output Domain** | `DECISION_INTENT_GENERATED` | **`NORMALIZATION_*` 事件** |
-
-### 架构测试
-
-项目包含架构测试（`tests/architecture/test_event_flow_constraints.py`）自动验证：
-- Output Domain 不订阅 Input Domain 事件
-- Decision Domain 不订阅 Output Domain 事件
-- Input Domain 不订阅下游事件
-- 事件流向严格遵守单向原则
-
-**在提交代码前运行：**
-```bash
-uv run pytest tests/architecture/test_event_flow_constraints.py -v
-```
-
-## 禁止事项
-
-- ❌ 不要创建新的 Plugin（插件系统已移除）
-- ❌ 不要使用服务注册机制（已废弃），用 EventBus
-- ❌ 不要硬编码事件名字符串，使用 CoreEvents 常量
-- ❌ 不要使用空的 except 块
-- ❌ 不要删除失败的测试来"通过"
-- ❌ 不要在修复 bug 时进行大规模重构
-- ❌ 不要提交未验证的代码（没有运行测试和 lint）
-- ❌ 不要在类变量中存储可变对象（如 `dict` 或 `list`）
-- ❌ 不要直接在 main.py 中创建 Provider，用 Manager + 配置驱动
-- ❌ **不要让 Output Provider 直接订阅 Input 事件**（违反架构分层）
-- ❌ **不要让 Decision Provider 订阅 Output 事件**（创建循环依赖）
-- ❌ **不要让 Input Provider 订阅 Decision/Output 事件**（Input 应只发布）
-
-## 通信模式
-
-项目使用 **EventBus** 作为唯一的跨域通信机制：
-- **事件系统（发布-订阅）**：瞬时通知、广播场景
-- 支持优先级、错误隔离、统计功能
-- 使用 CoreEvents 常量确保类型安全
-
-## 中文注释和文档
-
-- 项目使用中文作为注释和用户界面语言
-- 文档字符串（docstring）和注释应使用清晰、准确的中文
-- 变量名和函数名仍使用英文命名
-
-## 目录结构
-
-```
-Amaidesu/
-├── main.py              # CLI入口（参数解析、启动应用）
-└── src/
-    ├── amaidesu_core.py # 核心协调器（管理组件生命周期）
-    ├── core/            # 基础设施（事件、基类、通信、工具）
-    ├── services/        # 共享服务（LLM、配置、上下文）
-    └── domains/         # 业务域（input、decision、output）
-```
-
-## 3域架构说明
+## 3域架构
 
 | 域 | 职责 | 位置 |
 |----|------|------|
@@ -644,39 +272,16 @@ Amaidesu/
 外部输入（弹幕、游戏、语音）
   ↓
 【Input Domain】外部数据 → NormalizedMessage
-  ├─ InputProvider: 并发采集数据
-  ├─ Normalization: 标准化
-  └─ Pipelines: 预处理（限流、过滤）
   ↓ EventBus: normalization.message_ready
 【Decision Domain】NormalizedMessage → Intent
-  ├─ MaiCoreDecisionProvider (默认)
-  ├─ LocalLLMDecisionProvider (可选)
-  └─ RuleEngineDecisionProvider (可选)
   ↓ EventBus: decision.intent_generated
 【Output Domain】Intent → 实际输出
-  ├─ Parameters: 参数生成（情绪→表情等）
-  └─ OutputProvider: 并发渲染（TTS、字幕、VTS等）
 ```
 
-详细设计文档见：`refactor/design/overview.md`
+**详细文档**：[3域架构](docs/architecture/overview.md)
 
-## 开发注意事项
+## 日志使用
 
-### 添加新Provider
-1. 在对应域创建Provider目录：`src/domains/{domain}/providers/my_provider/`
-2. 继承对应的Provider基类（InputProvider/DecisionProvider/OutputProvider）
-3. 在Provider的`__init__.py`中注册到ProviderRegistry
-4. 在配置中启用：
-   - InputProvider: 添加到 `[providers.input]` 的 `enabled_inputs` 列表
-   - OutputProvider: 添加到 `[providers.output]` 的 `enabled_outputs` 列表
-   - DecisionProvider: 添加到 `[providers.decision]` 的 `available_providers` 列表
-
-### 事件使用规范
-- **使用常量**：优先使用`CoreEvents`常量，避免硬编码字符串
-- **核心事件用Pydantic Model**：确保类型安全
-- **事件名分层**：使用点分层（如`decision.intent_generated`）
-
-### 日志使用
 ```python
 from src.utils.logger import get_logger
 
@@ -686,4 +291,70 @@ logger.debug("调试日志", extra_context={"key": "value"})
 logger.error("错误日志", exc_info=True)
 ```
 
-**日志过滤**：使用`--filter`参数时，传入get_logger的第一个参数（类名或模块名）
+**日志过滤**：使用 `--filter` 参数时，传入 get_logger 的第一个参数（类名或模块名）
+
+## 测试规范
+
+- 使用 pytest 编写测试
+- 测试文件名：`test_*.py`
+- 测试函数名：`async def test_*():`
+- 异步测试使用 `@pytest.mark.asyncio` 装饰器
+
+**详细指南**：[测试指南](docs/development/testing-guide.md)
+
+## 配置文件
+
+- 配置文件使用 TOML 格式
+- Provider 配置：`[providers.input]`, `[providers.decision]`, `[providers.output]`
+- 管道配置：`[pipelines.*]`
+- 根配置：根目录的 `config-template.toml`
+- 首次运行会自动从模板生成 `config.toml`
+
+## 目录结构
+
+```
+Amaidesu/
+├── main.py              # CLI入口（参数解析、启动应用）
+├── AGENTS.md            # 本文件（AI 代理核心规则）
+├── CLAUDE.md            # Claude Code 专属规则
+├── docs/                # 项目文档（渐进式披露）
+│   ├── README.md        # 文档导航
+│   ├── getting-started.md
+│   ├── development-guide.md
+│   ├── architecture/    # 架构文档
+│   └── development/     # 开发指南
+└── src/
+    ├── amaidesu_core.py # 核心协调器（管理组件生命周期）
+    ├── core/            # 基础设施（事件、基类、通信、工具）
+    ├── services/        # 共享服务（LLM、配置、上下文）
+    ├── prompts/         # 提示词管理
+    └── domains/         # 业务域（input、decision、output）
+```
+
+## 通信模式
+
+项目使用 **EventBus** 作为唯一的跨域通信机制：
+- **事件系统（发布-订阅）**：瞬时通知、广播场景
+- 支持优先级、错误隔离、统计功能
+- 使用 CoreEvents 常量确保类型安全
+
+## 相关文档
+
+### 新手入门
+- [快速开始](docs/getting-started.md) - 环境搭建和基本使用
+
+### 架构理解
+- [3域架构总览](docs/architecture/overview.md) - 3域架构详解
+- [数据流规则](docs/architecture/data-flow.md) - 数据流约束和规则
+- [事件系统](docs/architecture/event-system.md) - EventBus 使用指南
+
+### 开发指南
+- [开发规范](docs/development-guide.md) - 代码风格和约定
+- [Provider 开发](docs/development/provider-guide.md) - Provider 开发详解
+- [管道开发](docs/development/pipeline-guide.md) - Pipeline 开发详解
+- [提示词管理](docs/development/prompt-management.md) - PromptManager 使用
+- [测试指南](docs/development/testing-guide.md) - 测试规范和最佳实践
+
+---
+
+*最后更新：2026-02-09*
