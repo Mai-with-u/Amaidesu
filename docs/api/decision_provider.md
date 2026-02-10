@@ -42,11 +42,11 @@ NormalizedMessage  →  DecisionProvider.decide()  →  Intent
 **示例**：
 
 ```python
-from src.core.base.decision_provider import DecisionProvider
-from src.core.base.normalized_message import NormalizedMessage
+from src.modules.types.base.decision_provider import DecisionProvider
+from src.modules.types.base.normalized_message import NormalizedMessage
 from src.domains.decision.intent import Intent
-from src.core.types import EmotionType, ActionType, IntentAction
-from src.core.utils.logger import get_logger
+from src.modules.types import EmotionType, ActionType, IntentAction
+from src.modules.logging import get_logger
 
 class SimpleDecisionProvider(DecisionProvider):
     """简单的决策 Provider 示例"""
@@ -250,102 +250,7 @@ class ActionType(str, Enum):
 
 ## 完整示例
 
-### 示例 1：关键词动作决策 Provider
-
-```python
-"""
-KeywordActionDecisionProvider - 基于关键词匹配的决策Provider
-"""
-
-import time
-from typing import Dict, Any, List
-from src.core.base.decision_provider import DecisionProvider
-from src.core.base.normalized_message import NormalizedMessage
-from src.domains.decision.intent import Intent, SourceContext
-from src.core.types import EmotionType, ActionType, IntentAction
-from src.core.utils.logger import get_logger
-
-class KeywordActionDecisionProvider(DecisionProvider):
-    """关键词动作决策Provider"""
-
-    def __init__(self, config: dict):
-        super().__init__(config)
-        self.logger = get_logger("KeywordActionDecisionProvider")
-
-        # 配置：关键词规则
-        self.rules = config.get("rules", [])
-
-        # 状态追踪
-        self.last_triggered: Dict[str, float] = {}
-        self.match_count = 0
-
-    async def _setup_internal(self):
-        """初始化"""
-        self.logger.info(f"加载了 {len(self.rules)} 个关键词规则")
-
-    async def decide(self, message: NormalizedMessage) -> Intent:
-        """根据关键词匹配生成Intent"""
-
-        text = message.text.strip().lower()
-        current_time = time.time()
-
-        # 遍历规则（按优先级排序）
-        for rule in sorted(self.rules, key=lambda r: r.get("priority", 50), reverse=True):
-            # 检查冷却时间
-            action_name = rule["name"]
-            cooldown = rule.get("cooldown", 1.0)
-
-            if action_name in self.last_triggered:
-                if current_time - self.last_triggered[action_name] < cooldown:
-                    continue  # 仍在冷却中
-
-            # 检查关键词匹配
-            keywords = rule.get("keywords", [])
-            if any(kw.lower() in text for kw in keywords):
-                self.last_triggered[action_name] = current_time
-                self.match_count += 1
-
-                return Intent(
-                    original_text=message.text,
-                    response_text=rule.get("response", f"触发动作: {action_name}"),
-                    emotion=EmotionType.NEUTRAL,
-                    actions=[
-                        IntentAction(
-                            type=ActionType(rule.get("action_type", "hotkey")),
-                            params=rule.get("action_params", {}),
-                            priority=rule.get("priority", 50)
-                        )
-                    ],
-                    source_context=SourceContext(
-                        source=message.source,
-                        data_type=message.data_type,
-                        user_id=message.user_id,
-                        importance=message.importance
-                    ),
-                    metadata={"provider": "keyword_action", "rule": action_name}
-                )
-
-        # 没有匹配，返回空 Intent
-        return Intent(
-            original_text=message.text,
-            response_text=message.text,
-            emotion=EmotionType.NEUTRAL,
-            actions=[],
-            source_context=SourceContext(
-                source=message.source,
-                data_type=message.data_type,
-                user_id=message.user_id,
-                importance=message.importance
-            ),
-            metadata={"provider": "keyword_action", "matched": False}
-        )
-
-    async def _cleanup_internal(self):
-        """清理"""
-        self.logger.info(f"匹配次数: {self.match_count}")
-```
-
-### 示例 2：本地 LLM 决策 Provider
+### 示例 1：本地 LLM 决策 Provider
 
 ```python
 """
@@ -353,11 +258,11 @@ LocalLLMDecisionProvider - 使用本地 LLM 进行决策
 """
 
 from typing import Dict, Any, Optional
-from src.core.base.decision_provider import DecisionProvider
-from src.core.base.normalized_message import NormalizedMessage
-from src.domains.decision.intent import Intent, SourceContext
-from src.core.types import EmotionType, ActionType, IntentAction
-from src.core.utils.logger import get_logger
+from src/modules/types/base/decision_provider import DecisionProvider
+from src/modules/types/base/normalized_message import NormalizedMessage
+from src/domains/decision/intent import Intent, SourceContext
+from src/modules/types import EmotionType, ActionType, IntentAction
+from src/modules/logging import get_logger
 from src.prompts import get_prompt_manager
 
 class LocalLLMDecisionProvider(DecisionProvider):
@@ -485,7 +390,7 @@ class LocalLLMDecisionProvider(DecisionProvider):
         )
 ```
 
-### 示例 3：规则引擎决策 Provider
+### 示例 2：规则引擎决策 Provider
 
 ```python
 """
@@ -493,11 +398,11 @@ RuleEngineDecisionProvider - 基于规则引擎的决策Provider
 """
 
 from typing import Dict, Any, List
-from src.core.base.decision_provider import DecisionProvider
-from src.core.base.normalized_message import NormalizedMessage
-from src.domains.decision.intent import Intent, SourceContext
-from src.core.types import EmotionType, ActionType, IntentAction
-from src.core.utils.logger import get_logger
+from src/modules/types/base/decision_provider import DecisionProvider
+from src/modules/types/base/normalized_message import NormalizedMessage
+from src/domains/decision/intent import Intent, SourceContext
+from src/modules/types import EmotionType, ActionType, IntentAction
+from src/modules/logging import get_logger
 
 class RuleEngineDecisionProvider(DecisionProvider):
     """规则引擎决策 Provider"""
@@ -591,23 +496,23 @@ class RuleEngineDecisionProvider(DecisionProvider):
 
 ```python
 # 基类
-from src.core.base.decision_provider import DecisionProvider
+from src.modules.types.base.decision_provider import DecisionProvider
 
 # 数据类型
-from src.core.base.normalized_message import NormalizedMessage
+from src.modules.types.base.normalized_message import NormalizedMessage
 from src.domains.decision.intent import Intent, SourceContext, ActionSuggestion
 
 # 枚举类型
-from src.core.types import EmotionType, ActionType, IntentAction
+from src.modules.types import EmotionType, ActionType, IntentAction
 
 # 事件
-from src.core.events.names import CoreEvents
+from src/modules/events/names import CoreEvents
 
 # 日志
-from src.core.utils.logger import get_logger
+from src.modules.logging import get_logger
 
 # 提示词管理
-from src.prompts import get_prompt_manager
+from src/modules/prompts import get_prompt_manager
 ```
 
 ---
@@ -642,21 +547,6 @@ active_provider = "local_llm"
 type = "local_llm"
 backend = "llm"           # 使用的 LLM 后端 (llm, llm_fast, vlm)
 fallback_mode = "simple"  # 降级模式 (simple, echo, error)
-
-# KeywordAction 配置
-[providers.decision.keyword_action]
-type = "keyword_action"
-global_cooldown = 1.0
-
-[[providers.decision.keyword_action.actions]]
-name = "微笑"
-enabled = true
-keywords = ["微笑", "smile", "😊"]
-match_mode = "anywhere"
-cooldown = 3.0
-action_type = "hotkey"
-action_params = { key = "smile" }
-priority = 50
 
 # RuleEngine 配置
 [providers.decision.rule_engine]

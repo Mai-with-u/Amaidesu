@@ -1,6 +1,7 @@
 """测试 MaiCoreDecisionProvider 配置 Schema"""
 
 import pytest
+
 from src.domains.decision.providers.maicore.maicore_decision_provider import MaiCoreDecisionProvider
 
 

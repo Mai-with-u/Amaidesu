@@ -1,10 +1,12 @@
 """VTS Provider 测试"""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
-from src.domains.output.providers.avatar.vts.vts_provider import VTSProvider
-from src.core.types import EmotionType, ActionType, IntentAction
+
+import pytest
+
 from src.domains.decision.intent import Intent
+from src.domains.output.providers.avatar.vts.vts_provider import VTSProvider
+from src.modules.types import ActionType, EmotionType, IntentAction
 
 
 @pytest.fixture

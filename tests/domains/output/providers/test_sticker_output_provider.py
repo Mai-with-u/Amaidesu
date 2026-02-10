@@ -2,14 +2,16 @@
 StickerOutputProvider 测试
 """
 
-import pytest
 import base64
 import io
 import time
-from PIL import Image
 from unittest.mock import AsyncMock, MagicMock
-from src.domains.output.providers.sticker import StickerOutputProvider
+
+import pytest
+from PIL import Image
+
 from src.domains.output.parameters.render_parameters import RenderParameters
+from src.domains.output.providers.sticker import StickerOutputProvider
 
 
 @pytest.fixture

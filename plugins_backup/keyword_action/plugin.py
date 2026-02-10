@@ -4,9 +4,9 @@ import importlib
 import time
 from typing import Any, Dict, List
 
-from src.core.plugin_manager import BasePlugin
-from src.core.amaidesu_core import AmaidesuCore
 from maim_message import MessageBase
+from src.core.amaidesu_core import AmaidesuCore
+from src.core.plugin_manager import BasePlugin
 
 
 class KeywordActionPlugin(BasePlugin):

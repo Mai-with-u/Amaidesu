@@ -1,7 +1,8 @@
 import asyncio
 import logging
-from .mai_state import WarudoStateManager
+
 from .action_sender import action_sender
+from .mai_state import WarudoStateManager
 from .small_actions.talking_head import talking_head
 from .small_actions.throw_fish import throw_fish
 from .small_actions.typing_action import typing_action

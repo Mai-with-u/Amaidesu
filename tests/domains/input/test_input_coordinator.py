@@ -5,18 +5,18 @@
 """
 
 import asyncio
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 import pytest
-from src.core.event_bus import EventBus
-from src.core.base.raw_data import RawData
-from src.domains.input.coordinator import InputCoordinator
-from src.core.events.payloads import RawDataPayload
-from src.core.events.names import CoreEvents
 
+from src.domains.input.coordinator import InputCoordinator
+from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import RawDataPayload
+from src.modules.types.base.raw_data import RawData
 
 # =============================================================================
 # Fixtures

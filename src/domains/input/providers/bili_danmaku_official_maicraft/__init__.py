@@ -1,7 +1,8 @@
 # providers/__init__.py
 
+from src.modules.registry import ProviderRegistry
+
 from .bili_official_maicraft_provider import BiliDanmakuOfficialMaiCraftInputProvider
-from src.core.provider_registry import ProviderRegistry
 
 # 注册到 ProviderRegistry
 ProviderRegistry.register_input(

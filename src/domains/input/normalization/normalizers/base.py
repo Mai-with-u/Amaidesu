@@ -4,8 +4,9 @@
 
 from abc import ABC, abstractmethod
 from typing import Optional
-from src.core.base.raw_data import RawData
-from src.core.base.normalized_message import NormalizedMessage
+
+from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.types.base.raw_data import RawData
 
 
 class DataNormalizer(ABC):

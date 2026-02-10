@@ -1,12 +1,12 @@
 # src/plugins/vtube_studio/plugin.py
 
 import asyncio
-from typing import Any, Dict, Optional, TYPE_CHECKING, List
-import numpy as np
 import threading
 import time
 from collections import deque
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+import numpy as np
 from maim_message.message_base import MessageBase
 
 # 尝试导入 openai，如果失败则设为 None
@@ -37,9 +37,8 @@ if TYPE_CHECKING and pyvts is not None:
     pass  # 暂时不需要特定的类型导入
 
 # 从 core 导入基类和核心类
-from src.core.plugin_manager import BasePlugin
 from src.core.amaidesu_core import AmaidesuCore
-
+from src.core.plugin_manager import BasePlugin
 
 # --- Helper Function ---
 

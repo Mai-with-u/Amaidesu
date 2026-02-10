@@ -13,13 +13,14 @@ import json
 from typing import TYPE_CHECKING
 
 from src.domains.decision.intent import Intent
-from src.core.types import EmotionType, ActionType, IntentAction
-from src.core.utils.logger import get_logger
-from src.prompts import get_prompt_manager
+from src.modules.logging import get_logger
+from src.modules.prompts import get_prompt_manager
+from src.modules.types import ActionType, EmotionType, IntentAction
 
 if TYPE_CHECKING:
     from maim_message import MessageBase
-    from src.services.llm.manager import LLMManager
+
+    from src.modules.llm.manager import LLMManager
 
 
 class IntentParser:

@@ -5,6 +5,7 @@ E2E Test: Error Recovery
 """
 
 import asyncio
+
 import pytest
 from pydantic import BaseModel, Field
 
@@ -12,10 +13,9 @@ from pydantic import BaseModel, Field
 import src.domains.decision.providers  # noqa: F401
 import src.domains.input.providers  # noqa: F401
 import src.domains.output.providers  # noqa: F401
-
-from src.core.base.raw_data import RawData
-from src.core.events.names import CoreEvents
-from src.core.events.payloads import RawDataPayload
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import RawDataPayload
+from src.modules.types.base.raw_data import RawData
 
 
 class SimpleTestEvent(BaseModel):
@@ -33,10 +33,10 @@ async def test_decision_provider_failure_isolation(event_bus, wait_for_event):
     1. DecisionProvider 失败不影响其他组件
     2. 系统可以继续处理其他消息
     """
-    from src.domains.input.coordinator import InputCoordinator
     from src.domains.decision.provider_manager import DecisionProviderManager as DecisionManager
-    from src.core.base.normalized_message import NormalizedMessage
+    from src.domains.input.coordinator import InputCoordinator
     from src.domains.input.normalization.content import TextContent
+    from src.modules.types.base.normalized_message import NormalizedMessage
 
     input_coordinator = InputCoordinator(event_bus)
     await input_coordinator.setup()
@@ -224,8 +224,8 @@ async def test_layer_cleanup_on_error(event_bus):
     1. 即使发生错误，资源也能正确清理
     2. 没有资源泄漏
     """
-    from src.domains.input.coordinator import InputCoordinator
     from src.domains.decision.provider_manager import DecisionProviderManager as DecisionManager
+    from src.domains.input.coordinator import InputCoordinator
 
     input_coordinator = InputCoordinator(event_bus)
     await input_coordinator.setup()

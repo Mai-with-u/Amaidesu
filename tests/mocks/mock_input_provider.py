@@ -2,10 +2,11 @@
 Mock 输入 Provider（用于测试）
 """
 
-from typing import Optional, Dict, Any
 import asyncio
-from src.core.base.input_provider import InputProvider
-from src.core.base.raw_data import RawData
+from typing import Any, Dict, Optional
+
+from src.modules.types.base.input_provider import InputProvider
+from src.modules.types.base.raw_data import RawData
 
 
 class MockInputProvider(InputProvider):

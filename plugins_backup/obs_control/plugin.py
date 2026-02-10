@@ -1,10 +1,11 @@
 # src/plugins/obs_control/obs_control_plugin.py
-from src.core.plugin_manager import BasePlugin
-from src.core.amaidesu_core import AmaidesuCore
-from typing import Dict, Any
-from maim_message.message_base import MessageBase
 import asyncio
+from typing import Any, Dict
+
 import obsws_python as obs
+from maim_message.message_base import MessageBase
+from src.core.amaidesu_core import AmaidesuCore
+from src.core.plugin_manager import BasePlugin
 
 
 class ObsControlPlugin(BasePlugin):

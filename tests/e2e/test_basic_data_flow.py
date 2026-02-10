@@ -6,19 +6,19 @@ Input → Normalization → Decision → Expression → Output
 """
 
 import asyncio
+
 import pytest
 
 # 导入所有 Provider 模块以触发注册
 import src.domains.decision.providers  # noqa: F401
 import src.domains.input.providers  # noqa: F401
 import src.domains.output.providers  # noqa: F401
-
-from src.core.base.raw_data import RawData
-from src.core.events.names import CoreEvents
-from src.core.events.payloads import (
-    RawDataPayload,
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import (
     MessageReadyPayload,
+    RawDataPayload,
 )
+from src.modules.types.base.raw_data import RawData
 
 
 @pytest.mark.asyncio
@@ -31,8 +31,8 @@ async def test_complete_data_flow_with_mock_providers(event_bus, sample_raw_data
     2. 转换为 NormalizedMessage
     3. DecisionProvider 处理并生成 Intent
     """
-    from src.domains.input.coordinator import InputCoordinator
     from src.domains.decision.provider_manager import DecisionProviderManager as DecisionManager
+    from src.domains.input.coordinator import InputCoordinator
 
     # 1. 设置 InputDomain
     input_coordinator = InputCoordinator(event_bus)
@@ -124,9 +124,9 @@ async def test_decision_provider_creates_intent(event_bus, wait_for_event):
     2. 生成的 Intent 包含正确的字段
     3. 元数据正确传递
     """
-    from src.core.base.normalized_message import NormalizedMessage
     from src.domains.decision.provider_manager import DecisionProviderManager as DecisionManager
     from src.domains.input.normalization.content import TextContent
+    from src.modules.types.base.normalized_message import NormalizedMessage
 
     decision_manager = DecisionManager(event_bus, llm_service=None)
     await decision_manager.setup("mock", {"default_response": "默认回复"})
@@ -176,8 +176,8 @@ async def test_multiple_sequential_messages(event_bus, wait_for_event):
     2. 每条消息独立处理
     3. 处理顺序正确
     """
-    from src.domains.input.coordinator import InputCoordinator
     from src.domains.decision.provider_manager import DecisionProviderManager as DecisionManager
+    from src.domains.input.coordinator import InputCoordinator
 
     input_coordinator = InputCoordinator(event_bus)
     await input_coordinator.setup()

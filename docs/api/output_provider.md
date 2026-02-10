@@ -4,7 +4,7 @@
 
 `OutputProvider` 是输出域（Output Domain）的 Provider 抽象基类，负责将 `ExpressionParameters` 渲染到目标设备（如 TTS 播放、字幕显示、虚拟形象控制等）。
 
-**位置**: `src/core/base/output_provider.py`
+**位置**: `src/modules/types/base/output_provider.py`
 
 ## 核心概念
 
@@ -46,8 +46,8 @@ async def _setup_internal(self):
 
 **示例**:
 ```python
-from src.core.base.output_provider import OutputProvider
-from src.utils.logger import get_logger
+from src/modules/types/base/output_provider import OutputProvider
+from src/modules/logging import get_logger
 
 class MyOutputProvider(OutputProvider):
     def __init__(self, config: dict):
@@ -81,7 +81,7 @@ class MyOutputProvider(OutputProvider):
 
 **示例**:
 ```python
-from src.core.events.names import CoreEvents
+from src/modules/events/names import CoreEvents
 
 async def _setup_internal(self):
     """初始化音频设备并订阅事件"""
@@ -140,7 +140,7 @@ async def _on_parameters_ready(
 
 **示例**:
 ```python
-from src.domains.output.parameters.render_parameters import ExpressionParameters
+from src/domains/output/parameters/render_parameters import ExpressionParameters
 
 async def _render_internal(self, parameters: ExpressionParameters):
     """渲染 TTS 输出"""
@@ -172,7 +172,7 @@ async def _render_internal(self, parameters: ExpressionParameters):
 
 **示例**:
 ```python
-from src.core.events.names import CoreEvents
+from src/modules/events/names import CoreEvents
 
 async def _cleanup_internal(self):
     """清理资源"""
@@ -202,7 +202,7 @@ async def _cleanup_internal(self):
 
 **导入**:
 ```python
-from src.domains.output.parameters.render_parameters import ExpressionParameters
+from src/domains/output/parameters/render_parameters import ExpressionParameters
 # 或者使用别名（向后兼容）
 from src.domains.output.parameters.render_parameters import RenderParameters
 # RenderParameters = ExpressionParameters
@@ -228,7 +228,7 @@ from src.domains.output.parameters.render_parameters import RenderParameters
 
 **使用示例**:
 ```python
-from src.domains.output.parameters.render_parameters import ExpressionParameters
+from src/domains/output/parameters/render_parameters import ExpressionParameters
 
 async def _render_internal(self, parameters: ExpressionParameters):
     # TTS 相关
@@ -263,7 +263,7 @@ async def _render_internal(self, parameters: ExpressionParameters):
 **示例**:
 ```python
 from pydantic import Field
-from src.services.config.schemas.schemas.base import BaseProviderConfig
+from src/modules/services/config/schemas/schemas/base import BaseProviderConfig
 
 class MyOutputProvider(OutputProvider):
 
@@ -326,7 +326,7 @@ from . import my_output  # noqa: F401
 
 在 `src/domains/output/providers/__init__.py` 中手动注册：
 ```python
-from src.core.providers.provider_registry import ProviderRegistry
+from src/modules/providers/provider_registry import ProviderRegistry
 from .my_output import MyOutputProvider
 
 ProviderRegistry.register_output(
@@ -349,11 +349,11 @@ import asyncio
 from typing import Optional, Dict, Any
 from pydantic import Field
 
-from src.core.base.output_provider import OutputProvider
-from src.domains.output.parameters.render_parameters import ExpressionParameters
-from src.core.events.names import CoreEvents
-from src.core.utils.logger import get_logger
-from src.services.config.schemas.schemas.base import BaseProviderConfig
+from src.modules.types.base.output_provider import OutputProvider
+from src/domains/output/parameters/render_parameters import ExpressionParameters
+from src.modules.events.names import CoreEvents
+from src.modules.logging import get_logger
+from src.modules.services.config.schemas.schemas.base import BaseProviderConfig
 
 
 class SimpleTTSProvider(OutputProvider):
@@ -470,11 +470,11 @@ import threading
 from typing import Optional, Dict, Any
 from pydantic import Field
 
-from src.core.base.output_provider import OutputProvider
-from src.domains.output.parameters.render_parameters import ExpressionParameters
-from src.core.events.names import CoreEvents
-from src.core.utils.logger import get_logger
-from src.services.config.schemas.schemas.base import BaseProviderConfig
+from src.modules.types.base.output_provider import OutputProvider
+from src/domains/output/parameters/render_parameters import ExpressionParameters
+from src/modules/events/names import CoreEvents
+from src.modules.logging import get_logger
+from src/modules/services/config/schemas/schemas/base import BaseProviderConfig
 
 
 class SubtitleOutputProvider(OutputProvider):
@@ -637,11 +637,11 @@ class SubtitleOutputProvider(OutputProvider):
 from typing import Optional, Dict, Any
 from pydantic import Field
 
-from src.core.base.output_provider import OutputProvider
-from src.domains.output.parameters.render_parameters import ExpressionParameters
-from src.core.events.names import CoreEvents
-from src.core.utils.logger import get_logger
-from src.services.config.schemas.schemas.base import BaseProviderConfig
+from src.modules.types.base.output_provider import OutputProvider
+from src/domains/output/parameters/render_parameters import ExpressionParameters
+from src/modules/events/names import CoreEvents
+from src.modules.logging import get_logger
+from src/modules/services/config/schemas/schemas/base import BaseProviderConfig
 
 
 class AvatarOutputProvider(OutputProvider):

@@ -6,7 +6,7 @@ Bilibili 弹幕 InputProvider
 
 import asyncio
 import time
-from typing import AsyncIterator, Dict, Any, Optional, Literal
+from typing import Any, AsyncIterator, Dict, Literal, Optional
 
 try:
     import aiohttp
@@ -15,10 +15,10 @@ except ImportError:
 
 from pydantic import Field
 
-from src.core.base.input_provider import InputProvider
-from src.core.base.raw_data import RawData
-from src.core.utils.logger import get_logger
-from src.services.config.schemas.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.base import BaseProviderConfig
+from src.modules.logging import get_logger
+from src.modules.types.base.input_provider import InputProvider
+from src.modules.types.base.raw_data import RawData
 
 
 class BiliDanmakuInputProvider(InputProvider):

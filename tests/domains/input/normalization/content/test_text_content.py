@@ -5,8 +5,8 @@
 """
 
 import pytest
-from src.domains.input.normalization.content.text_content import TextContent
 
+from src.domains.input.normalization.content.text_content import TextContent
 
 # =============================================================================
 # 创建和基本功能测试

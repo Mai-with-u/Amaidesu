@@ -5,15 +5,16 @@ Pytest 全局共享 fixtures
 如果某个 fixture 只在特定 domain 使用，应该放在该 domain 的 conftest.py 中。
 """
 
-import pytest
-import tempfile
 import shutil
+import tempfile
 from pathlib import Path
 from typing import AsyncGenerator, Generator
 
-from src.core.event_bus import EventBus
-from src.services.config.service import ConfigService
-from src.services.llm.manager import LLMManager
+import pytest
+
+from src.modules.config.service import ConfigService
+from src.modules.events.event_bus import EventBus
+from src.modules.llm.manager import LLMManager
 
 
 @pytest.fixture

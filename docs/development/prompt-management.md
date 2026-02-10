@@ -6,7 +6,7 @@
 
 ### 核心原则
 
-- **集中管理**：所有提示词在 `src/prompts/templates/` 目录
+- **集中管理**：所有提示词在 `src/modules/prompts/templates/` 目录
 - **易于维护**：Markdown 格式，支持 YAML frontmatter 元数据
 - **零冲突语法**：`$variable` 语法与 JSON 零冲突
 - **配置覆盖**：支持配置文件覆盖模板，保持向后兼容
@@ -28,7 +28,7 @@
 ### 基本用法
 
 ```python
-from src.prompts import get_prompt_manager
+from src/modules/prompts import get_prompt_manager
 
 # 获取无变量提示词（原始模板）
 system_prompt = get_prompt_manager().get_raw("decision/intent_parser")
@@ -61,16 +61,16 @@ prompt = get_prompt_manager().render_safe(
 模板名称与文件路径对应：
 
 ```
-src/prompts/templates/decision/intent_parser.md  →  "decision/intent_parser"
-src/prompts/templates/output/vts_hotkey.md       →  "output/vts_hotkey"
-src/prompts/templates/input/mainosaba_ocr.md     →  "input/mainosaba_ocr"
+src/modules/prompts/templates/decision/intent_parser.md  →  "decision/intent_parser"
+src/modules/prompts/templates/output/vts_hotkey.md       →  "output/vts_hotkey"
+src/modules/prompts/templates/input/mainosaba_ocr.md     →  "input/mainosaba_ocr"
 ```
 
 ## 创建新提示词模板
 
 ### 步骤 1：创建模板文件
 
-在 `src/prompts/templates/` 下创建 `.md` 文件：
+在 `src/modules/prompts/templates/` 下创建 `.md` 文件：
 
 ```markdown
 ---
@@ -92,7 +92,7 @@ tags: ["tag1", "tag2"]
 ### 步骤 2：使用模板
 
 ```python
-from src.prompts import get_prompt_manager
+from src/modules/prompts import get_prompt_manager
 
 class MyProvider:
     async def process(self, user_input: str) -> str:
@@ -163,14 +163,14 @@ tags: ["tag1", "tag2"]
 
 ```
 优先级 1（最高）: Provider 配置字段覆盖
-优先级 2: 模板文件（src/prompts/templates/*.md）
+优先级 2: 模板文件（src/modules/prompts/templates/*.md）
 优先级 3（最低）: 硬编码兜底
 ```
 
 ### 实现配置覆盖
 
 ```python
-from src.prompts import get_prompt_manager
+from src/modules/prompts import get_prompt_manager
 
 class MyProvider:
     def __init__(self, config: Dict[str, Any]):
@@ -207,7 +207,7 @@ prompt_template = "自定义提示词..."
 
 ```python
 import pytest
-from src.prompts import get_prompt_manager, reset_prompt_manager
+from src/modules/prompts import get_prompt_manager, reset_prompt_manager
 
 def test_prompt_manager():
     # 重置单例，加载测试模板
@@ -253,7 +253,7 @@ def test_something(monkeypatch):
 ## 目录结构
 
 ```
-src/prompts/
+src/modules/prompts/
 ├── __init__.py                     # 导出 get_prompt_manager()
 ├── manager.py                      # PromptManager 实现
 └── templates/                      # 提示词模板
@@ -272,7 +272,7 @@ src/prompts/
 
 ```python
 # ✅ 正确：按域组织模板
-src/prompts/templates/
+src/modules/prompts/templates/
 ├── decision/
 │   ├── intent_parser.md
 │   └── local_llm.md
@@ -283,7 +283,7 @@ src/prompts/templates/
     └── ocr.md
 
 # ❌ 错误：所有模板平铺
-src/prompts/templates/
+src/modules/prompts/templates/
 ├── intent_parser.md
 ├── local_llm.md
 ├── vts_hotkey.md
@@ -356,7 +356,7 @@ A: `string.Template` 足够简单且满足需求：
 ### Q: 如何迁移现有硬编码提示词？
 
 A:
-1. 在 `src/prompts/templates/` 创建对应 `.md` 文件
+1. 在 `src/modules/prompts/templates/` 创建对应 `.md` 文件
 2. 将硬编码提示词复制到文件
 3. 使用 `get_prompt_manager().get_raw()` 替换硬编码
 4. （可选）保留配置覆盖，确保向后兼容

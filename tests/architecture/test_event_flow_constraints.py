@@ -9,7 +9,6 @@ import ast
 from pathlib import Path
 from typing import Dict, List
 
-
 # Event names by domain
 INPUT_EVENTS = {
     "PERCEPTION_RAW_DATA_GENERATED",

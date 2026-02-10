@@ -2,16 +2,17 @@
 大模型音频生成模块 - 使用阿里云Qwen-Omni模型实现文本到语音的转换
 """
 
-import os
-import json
-import aiohttp
 import base64
-from typing import List, Optional, AsyncGenerator
 import io
-import numpy as np
-import soundfile as sf
+import json
+import os
 import random
 from datetime import datetime
+from typing import AsyncGenerator, List, Optional
+
+import aiohttp
+import numpy as np
+import soundfile as sf
 
 # 导入音频处理库
 try:

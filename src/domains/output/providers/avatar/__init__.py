@@ -9,8 +9,11 @@
 """
 
 # 导入子模块以触发注册
-from . import vts  # noqa: F401
-from . import warudo  # noqa: F401
+from . import (
+    vts,  # noqa: F401
+    warudo,  # noqa: F401
+    vrchat,  # noqa: F401
+)
 
 # 导出基类供外部使用
 from .base import AvatarProviderBase

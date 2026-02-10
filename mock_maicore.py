@@ -14,21 +14,21 @@ python mock_maicore.py
 --filter   仅显示指定模块的INFO/DEBUG级别日志
 """
 
+import argparse  # 导入 argparse
 import asyncio
+import base64
 import json
-import uuid
-import time
 import os
 import random
-import base64
 import sys
-import argparse  # 导入 argparse
-from typing import Set, Dict, Callable, List, Any, Optional
-
-from maim_message.message_base import BaseMessageInfo, FormatInfo, Seg, UserInfo
-from maim_message import MessageBase
+import time
 import tomllib
-from aiohttp import web, WSMsgType
+import uuid
+from typing import Any, Callable, Dict, List, Optional, Set
+
+from aiohttp import WSMsgType, web
+from maim_message import MessageBase
+from maim_message.message_base import BaseMessageInfo, FormatInfo, Seg, UserInfo
 from src.core.utils.logger import get_logger
 
 logger = get_logger("mock_maicore")

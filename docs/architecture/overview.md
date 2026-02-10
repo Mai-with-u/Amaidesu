@@ -41,11 +41,11 @@ Amaidesu 采用 3 域架构，实现清晰的数据流和职责分离。
 - `InputProvider` - 数据采集接口
 - `TextPipeline` - 消息预处理管道
 
-**可用的 InputProvider**：
+**可用的 InputProvider**（8个）：
 - `ConsoleInputProvider` - 控制台输入（用于开发调试）
 - `BiliDanmakuInputProvider` - B站弹幕（第三方API）
 - `BiliDanmakuOfficialInputProvider` - B站官方弹幕
-- `BiliDanmakuOfficialMaicraftInputProvider` - B站官方弹幕（Maicraft版本）
+- `BiliDanmakuOfficialMaiCraftInputProvider` - B站官方弹幕（Maicraft版本）
 - `STTInputProvider` - 语音转文字（讯飞ASR + Silero VAD）
 - `ReadPingmuInputProvider` - 读屏木输入
 - `MainosabaInputProvider` - 游戏画面文本采集
@@ -62,16 +62,13 @@ Amaidesu 采用 3 域架构，实现清晰的数据流和职责分离。
 - 可替换：支持多种决策引擎（MaiCore、本地LLM、规则引擎）
 
 **核心组件**：
-- `DecisionManager` - 管理决策 Provider
+- `DecisionProviderManager` - 管理决策 Provider
 - `DecisionProvider` - 决策接口
 
-**可用的 DecisionProvider**：
+**可用的 DecisionProvider**（3个）：
 - `MaiCoreDecisionProvider` - 默认，使用 MaiCore WebSocket
-- `LocalLLMDecisionProvider` - 使用本地 LLM API
-- `RuleEngineDecisionProvider` - 规则引擎
-- `KeywordActionDecisionProvider` - 关键词动作决策
+- `LLMDecisionProvider` - 使用本地 LLM API
 - `MaicraftDecisionProvider` - 弹幕互动游戏决策
-- `MockDecisionProvider` - 模拟决策（用于测试）
 
 **数据输出**：`Intent`
 
@@ -88,15 +85,14 @@ Amaidesu 采用 3 域架构，实现清晰的数据流和职责分离。
 - `ExpressionGenerator` - 参数生成器
 - `OutputProvider` - 渲染接口
 
-**可用的 OutputProvider**：
-- `TTSOutputProvider` - 语音合成
+**可用的 OutputProvider**（10个，部分归类在子目录中）：
+- `EdgeTTSProvider` - Edge TTS 语音合成
 - `SubtitleOutputProvider` - 字幕显示
-- `VTSOutputProvider` - VTube Studio 控制
+- `VTSProvider` - VTube Studio 控制（avatar/vts/）
+- `WarudoOutputProvider` - Warudo 虚拟主播（avatar/warudo/）
 - `StickerOutputProvider` - 贴纸显示
-- `OmniTTSOutputProvider` - Fish TTS
-- `WarudoOutputProvider` - Warudo 虚拟主播
-- `GPTSoVITSOutputProvider` - GPT-SoVITS 语音合成
-- `AvatarOutputProvider` - 虚拟形象输出
+- `OmniTTSProvider` - Fish TTS 语音合成（audio/）
+- `GPTSoVITSOutputProvider` - GPT-SoVITS 语音合成（audio/）
 - `ObsControlOutputProvider` - OBS 控制
 - `RemoteStreamOutputProvider` - 远程流媒体输出
 - `MockOutputProvider` - 模拟输出（用于测试）
@@ -113,8 +109,8 @@ Amaidesu 采用 3 域架构，实现清晰的数据流和职责分离。
   ↓ EventBus: normalization.message_ready
 【Decision Domain】NormalizedMessage → Intent
   ├─ MaiCoreDecisionProvider (默认)
-  ├─ LocalLLMDecisionProvider (可选)
-  └─ RuleEngineDecisionProvider (可选)
+  ├─ LLMDecisionProvider (可选)
+  └─ MaicraftDecisionProvider (可选)
   ↓ EventBus: decision.intent_generated
 【Output Domain】Intent → 实际输出
   ├─ ExpressionGenerator: 参数生成（情绪→表情等）
@@ -169,7 +165,7 @@ enabled_outputs = ["tts", "subtitle", "vts"]
 
 ```python
 # 发布事件
-from src.core.events.names import CoreEvents
+from src.modules.events.names import CoreEvents
 await event_bus.emit(CoreEvents.NORMALIZATION_MESSAGE_READY, message)
 
 # 订阅事件
@@ -189,13 +185,13 @@ await event_bus.subscribe(CoreEvents.NORMALIZATION_MESSAGE_READY, self.handle_me
 [providers.decision]
 active_provider = "maicore"
 
-# 使用本地 LLM
+# 使用 LLM
 [providers.decision]
-active_provider = "local_llm"
+active_provider = "llm"
 
-# 使用规则引擎
+# 使用 Maicraft
 [providers.decision]
-active_provider = "rule_engine"
+active_provider = "maicraft"
 ```
 
 ### Output Provider 可扩展
@@ -226,4 +222,4 @@ uv run pytest tests/architecture/test_event_flow_constraints.py -v
 
 ---
 
-*最后更新：2026-02-09*
+*最后更新：2026-02-10*

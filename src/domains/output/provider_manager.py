@@ -11,12 +11,13 @@ OutputProviderManager - Output Domain: 渲染输出管理器
 """
 
 import asyncio
-from typing import Any, Dict, Optional, TYPE_CHECKING
-from pydantic import BaseModel, Field
-from src.core.utils.logger import get_logger
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from src.core.base.output_provider import OutputProvider
+from pydantic import BaseModel, Field
+
 from src.domains.output.parameters.render_parameters import RenderParameters
+from src.modules.logging import get_logger
+from src.modules.types.base.output_provider import OutputProvider
 
 # 类型检查时的导入
 if TYPE_CHECKING:
@@ -508,7 +509,7 @@ class OutputProviderManager:
             try:
                 # 使用三级配置加载
                 try:
-                    from src.services.config.schemas import get_provider_schema
+                    from src.modules.config.schemas import get_provider_schema
 
                     schema_class = get_provider_schema(output_name, "output")
                 except (ImportError, AttributeError, KeyError):
@@ -558,7 +559,7 @@ class OutputProviderManager:
         Returns:
             Provider实例，如果创建失败返回None
         """
-        from src.core.provider_registry import ProviderRegistry
+        from src.modules.registry import ProviderRegistry
 
         # 检查 Provider 是否已注册
         if not ProviderRegistry.is_output_provider_registered(provider_type):

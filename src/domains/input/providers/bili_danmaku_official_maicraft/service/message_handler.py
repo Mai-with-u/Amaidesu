@@ -1,17 +1,19 @@
 # src/domains/input/providers/bili_danmaku_official_maicraft/service/message_handler.py
 
 import json
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
 
 from maim_message import MessageBase
-from src.core.utils.logger import get_logger
-from .message_cache import MessageCacheService
+
+from src.modules.logging import get_logger
+
 from ..message.base import BiliBaseMessage, BiliMessageType
 from ..message.danmaku import DanmakuMessage
 from ..message.enter import EnterMessage
 from ..message.gift import GiftMessage
 from ..message.guard import GuardMessage
 from ..message.superchat import SuperChatMessage
+from .message_cache import MessageCacheService
 
 
 class BiliMessageHandler:

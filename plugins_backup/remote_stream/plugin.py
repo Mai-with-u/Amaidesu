@@ -18,9 +18,9 @@ import io
 import json
 import sys
 import time
-from typing import Dict, Any, Optional, List, Callable
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from enum import Enum
+from typing import Any, Callable, Dict, List, Optional
 
 # WebSocket服务器依赖
 try:
@@ -44,8 +44,8 @@ try:
 except ImportError:
     print("依赖缺失: 请运行 'pip install Pillow' 来处理图像数据", file=sys.stderr)
     Image = None
-from src.core.plugin_manager import BasePlugin
 from src.core.amaidesu_core import AmaidesuCore
+from src.core.plugin_manager import BasePlugin
 
 
 # 消息类型枚举

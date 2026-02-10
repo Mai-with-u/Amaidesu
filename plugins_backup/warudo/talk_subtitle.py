@@ -1,9 +1,10 @@
 import asyncio
 import json
-from typing import List, Optional
-from aiohttp import web, WSMsgType
-import aiohttp_cors
 import logging
+from typing import List, Optional
+
+import aiohttp_cors
+from aiohttp import WSMsgType, web
 
 logger = logging.getLogger("reply_web")
 

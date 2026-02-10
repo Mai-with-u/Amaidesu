@@ -11,12 +11,12 @@ Intent 类型单元测试
 运行: uv run pytest tests/core/types/test_intent.py -v
 """
 
-import pytest
 import time
 
-from src.core.types import EmotionType, ActionType, IntentAction
-from src.domains.decision.intent import Intent, SourceContext, ActionSuggestion
+import pytest
 
+from src.domains.decision.intent import ActionSuggestion, Intent, SourceContext
+from src.modules.types import ActionType, EmotionType, IntentAction
 
 # =============================================================================
 # EmotionType 测试

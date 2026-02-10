@@ -15,13 +15,13 @@ Input Providers - 输入Provider实现
 作为 RemoteStreamOutputProvider，因为它是一个输出Provider。
 """
 
-from .console_input import ConsoleInputProvider
-from .mock_danmaku import MockDanmakuInputProvider
 from .bili_danmaku import BiliDanmakuInputProvider
 from .bili_danmaku_official import BiliDanmakuOfficialInputProvider
 from .bili_danmaku_official_maicraft import BiliDanmakuOfficialMaiCraftInputProvider
-from .read_pingmu import ReadPingmuInputProvider
+from .console_input import ConsoleInputProvider
 from .mainosaba import MainosabaInputProvider
+from .mock_danmaku import MockDanmakuInputProvider
+from .read_pingmu import ReadPingmuInputProvider
 from .stt import STTInputProvider
 
 __all__ = [

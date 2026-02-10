@@ -17,9 +17,8 @@ from typing import AsyncIterator
 
 import pytest
 
-from src.core.base.input_provider import InputProvider
-from src.core.base.raw_data import RawData
-
+from src.modules.types.base.input_provider import InputProvider
+from src.modules.types.base.raw_data import RawData
 
 # =============================================================================
 # 测试用的 InputProvider 实现

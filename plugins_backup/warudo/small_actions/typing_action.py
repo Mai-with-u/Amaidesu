@@ -1,7 +1,8 @@
-from ..action_sender import action_sender
-import random
-import math
 import asyncio
+import math
+import random
+
+from ..action_sender import action_sender
 
 
 class TypingAction:

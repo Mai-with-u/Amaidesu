@@ -2,11 +2,13 @@
 
 import asyncio
 import json
-from typing import Any, Dict, Optional
-import numpy as np
 import threading
 from collections import deque
+from typing import Any, Dict, Optional
+
+import numpy as np
 import websockets
+
 from .action_sender import action_sender
 
 # 尝试导入音频分析相关库
@@ -21,21 +23,21 @@ except ImportError:
     AUDIO_ANALYSIS_AVAILABLE = False
 
 # 从 core 导入基类和核心类
-from src.core.plugin_manager import BasePlugin
-from src.core.amaidesu_core import AmaidesuCore
 from maim_message.message_base import MessageBase
+from src.core.amaidesu_core import AmaidesuCore
+from src.core.plugin_manager import BasePlugin
 
 # 导入状态管理模块
-from .mai_state import WarudoStateManager, MoodStateManager
+from .mai_state import MoodStateManager, WarudoStateManager
+
+# 导入回复状态管理器
+from .reply_state import ReplyState
 
 # 导入眨眼任务
 from .small_actions.blink_action import BlinkTask
 
 # 导入眼部移动任务
 from .small_actions.shift_action import ShiftTask
-
-# 导入回复状态管理器
-from .reply_state import ReplyState
 
 
 class WarudoPlugin(BasePlugin):

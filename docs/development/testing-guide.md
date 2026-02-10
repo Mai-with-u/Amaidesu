@@ -55,7 +55,7 @@ async def test_async_function():
 
 ```python
 import pytest
-from src.domains.input.providers.console_input import ConsoleInputProvider
+from src/domains/input/providers/console_input import ConsoleInputProvider
 
 @pytest.mark.asyncio
 async def test_console_provider_init():
@@ -120,7 +120,7 @@ def test_sync_wrapper():
 
 ```python
 import pytest
-from src.core.events.event_bus import EventBus
+from src.modules.events.event_bus import EventBus
 
 @pytest.fixture
 async def event_bus():
@@ -148,7 +148,7 @@ async def test_with_event_bus(event_bus):
 ```python
 # tests/conftest.py
 import pytest
-from src.core.events.event_bus import EventBus
+from src.modules.events.event_bus import EventBus
 
 @pytest.fixture
 async def global_event_bus():
@@ -345,7 +345,7 @@ async def test_provider():
 ```python
 import pytest
 from src.domains.input.providers.my_provider import MyInputProvider
-from src.core.base.raw_data import RawData
+from src.modules.types.base.raw_data import RawData
 
 @pytest.mark.asyncio
 async def test_input_provider_collect_data():
@@ -368,7 +368,7 @@ async def test_input_provider_collect_data():
 ```python
 import pytest
 from src.domains.decision.providers.my_provider import MyDecisionProvider
-from src.core.base.normalized_message import NormalizedMessage
+from src.modules.types.base.normalized_message import NormalizedMessage
 from src.domains.decision.intent import Intent
 
 @pytest.mark.asyncio
@@ -417,7 +417,7 @@ async def test_output_provider_render():
 ```python
 import pytest
 from src.domains.input.pipelines.my_pipeline import MyPipeline
-from src.core.base.normalized_message import NormalizedMessage
+from src.modules.types.base.normalized_message import NormalizedMessage
 
 @pytest.mark.asyncio
 async def test_pipeline_process():

@@ -20,8 +20,8 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 from aiohttp import web
 from loguru import logger
 
-from src.core.event_bus import EventBus
-from src.utils.logger import get_logger
+from src/modules/events/event_bus import EventBus
+from src/modules/logging import get_logger
 
 if TYPE_CHECKING:
     from .some_module import SomeClass
@@ -151,7 +151,7 @@ except Exception as e:
 ### 获取 Logger
 
 ```python
-from src.utils.logger import get_logger
+from src.modules.logging import get_logger
 
 logger = get_logger("MyClassName")  # 使用类名或模块名
 ```
@@ -213,7 +213,7 @@ class MyInputProvider(InputProvider):
 
 ```python
 # 发布事件
-from src.core.events.names import CoreEvents
+from src.modules.events.names import CoreEvents
 await event_bus.emit(CoreEvents.NORMALIZATION_MESSAGE_READY, normalized_message)
 
 # 订阅事件

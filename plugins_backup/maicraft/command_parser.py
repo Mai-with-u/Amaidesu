@@ -1,9 +1,11 @@
 import re
 import shlex
 from typing import Optional
+
 from maim_message import MessageBase
-from .command import Command
 from src.utils.logger import get_logger
+
+from .command import Command
 
 
 class CommandParser:

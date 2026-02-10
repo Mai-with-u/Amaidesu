@@ -5,13 +5,15 @@ E2E Test: Smoke Test
 """
 
 import time
+
 import pytest
 from pydantic import BaseModel, Field
+
+import src.domains.decision.providers  # noqa: F401
 
 # 在模块级别导入，触发 Provider 注册
 import src.domains.input.providers  # noqa: F401
 import src.domains.output.providers  # noqa: F401
-import src.domains.decision.providers  # noqa: F401
 
 
 class SimpleTestEvent(BaseModel):
@@ -23,7 +25,7 @@ class SimpleTestEvent(BaseModel):
 @pytest.mark.asyncio
 async def test_provider_registry_has_providers():
     """测试 Provider 注册表中有 Provider"""
-    from src.core.provider_registry import ProviderRegistry
+    from src.modules.registry import ProviderRegistry
 
     input_providers = ProviderRegistry.get_registered_input_providers()
     output_providers = ProviderRegistry.get_registered_output_providers()
@@ -42,8 +44,9 @@ async def test_provider_registry_has_providers():
 @pytest.mark.asyncio
 async def test_event_bus_creation():
     """测试 EventBus 可以正常创建"""
-    from src.core.event_bus import EventBus
     import asyncio
+
+    from src.modules.events.event_bus import EventBus
 
     bus = EventBus()
     assert bus is not None
@@ -70,9 +73,9 @@ async def test_event_bus_creation():
 async def test_mock_decision_provider():
     """测试 MockDecisionProvider 基本功能"""
     from src.domains.decision.providers.mock import MockDecisionProvider
-    from src.core.base.normalized_message import NormalizedMessage
     from src.domains.input.normalization.content import TextContent
-    from src.core.event_bus import EventBus
+    from src.modules.events.event_bus import EventBus
+    from src.modules.types.base.normalized_message import NormalizedMessage
 
     provider = MockDecisionProvider({})
     await provider.setup(EventBus(), {}, {})

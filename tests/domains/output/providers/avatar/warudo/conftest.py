@@ -1,7 +1,8 @@
 """Warudo Provider 测试共享 fixtures"""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 
 @pytest.fixture

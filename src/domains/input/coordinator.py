@@ -4,15 +4,16 @@ InputDomain - 输入域协调器
 负责协调输入Provider和标准化，建立RawData到NormalizedMessage的数据流。
 """
 
-from typing import Dict, Any, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
 from pydantic import BaseModel
 
-from src.core.event_bus import EventBus
-from src.core.base.raw_data import RawData
-from src.core.base.normalized_message import NormalizedMessage
-from src.core.utils.logger import get_logger
-from src.core.events.names import CoreEvents
-from src.core.events.payloads.input import MessageReadyPayload
+from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.input import MessageReadyPayload
+from src.modules.logging import get_logger
+from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.types.base.raw_data import RawData
 
 if TYPE_CHECKING:
     from src.domains.input.pipelines.manager import InputPipelineManager
@@ -154,8 +155,8 @@ class InputCoordinator:
             NormalizationResult对象，包含成功状态、消息和错误信息
         """
         try:
-            from src.domains.input.normalization.normalizers import NormalizerRegistry
             from src.domains.input.normalization.content import TextContent
+            from src.domains.input.normalization.normalizers import NormalizerRegistry
 
             # 查找合适的 Normalizer
             normalizer = NormalizerRegistry.get_normalizer(raw_data.data_type)

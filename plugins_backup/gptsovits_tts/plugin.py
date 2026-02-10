@@ -1,15 +1,16 @@
 # Amaidesu TTS Plugin: src/plugins/tts/plugin.py
 
 import asyncio
+import base64
 import logging
 import os
-import sys
-import struct  # 添加struct模块导入，用于解析WAV数据
-from typing import Dict, Any, Optional
-import numpy as np  # 确保导入 numpy
-from collections import deque
-import base64
 import re  # 添加正则表达式模块，用于检测英文字符
+import struct  # 添加struct模块导入，用于解析WAV数据
+import sys
+from collections import deque
+from typing import Any, Dict, Optional
+
+import numpy as np  # 确保导入 numpy
 
 # --- Dependencies Check (Inform User) ---
 # Try importing required libraries and inform the user if they are missing.
@@ -24,7 +25,7 @@ except ImportError:
 
 # --- 远程流支持 ---
 try:
-    from src.plugins.remote_stream.plugin import RemoteStreamService, StreamMessage, MessageType
+    from src.plugins.remote_stream.plugin import MessageType, RemoteStreamService, StreamMessage
 
     REMOTE_STREAM_AVAILABLE = True
 except ImportError:
@@ -48,9 +49,9 @@ except ModuleNotFoundError:
         dependencies_ok = False
 
 # --- Amaidesu Core Imports ---
-from src.core.plugin_manager import BasePlugin
-from src.core.amaidesu_core import AmaidesuCore
 from maim_message import MessageBase, Seg  # Import MessageBase for type hint
+from src.core.amaidesu_core import AmaidesuCore
+from src.core.plugin_manager import BasePlugin
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,7 @@ BUFFER_REQUIRED_BYTES = BLOCKSIZE * CHANNELS * SAMPLE_SIZE
 
 from dataclasses import dataclass
 from typing import List
+
 import toml
 
 
@@ -223,9 +225,10 @@ def get_default_config() -> Config:
     return Config(str(config_path))
 
 
-import requests
 import os
-from typing import Dict, Any
+from typing import Any, Dict
+
+import requests
 
 
 class TTSModel:

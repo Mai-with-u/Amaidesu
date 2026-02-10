@@ -2,9 +2,11 @@
 BiliDanmakuInputProvider 测试
 """
 
+from unittest.mock import patch
+
 import pytest
 from pydantic import ValidationError
-from unittest.mock import patch
+
 from src.domains.input.providers.bili_danmaku import BiliDanmakuInputProvider
 
 

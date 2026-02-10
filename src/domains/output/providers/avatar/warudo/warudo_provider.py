@@ -11,13 +11,13 @@ Warudo OutputProvider - Warudo虚拟形象控制Provider
 
 import asyncio
 import json
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
 from pydantic import Field
 
 from src.domains.output.providers.avatar.base import AvatarProviderBase
-from src.core.utils.logger import get_logger
-from src.services.config.schemas.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.base import BaseProviderConfig
+from src.modules.logging import get_logger
 
 
 class WarudoOutputProvider(AvatarProviderBase):
@@ -128,7 +128,7 @@ class WarudoOutputProvider(AvatarProviderBase):
             - expressions: Dict[str, float] - 表情参数
             - hotkeys: List[str] - 热键ID列表
         """
-        from src.core.types import EmotionType
+        from src.modules.types import EmotionType
 
         result = {
             "expressions": {},

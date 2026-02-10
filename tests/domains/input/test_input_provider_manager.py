@@ -5,18 +5,18 @@
 """
 
 import asyncio
-import sys
 import os
-from typing import Optional, Dict, Any
+import sys
+from typing import Any, Dict, Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 import pytest
-from src.core.event_bus import EventBus
-from src.core.base.raw_data import RawData
-from src.domains.input.provider_manager import InputProviderManager
-from tests.mocks.mock_input_provider import MockInputProvider
 
+from src.domains.input.provider_manager import InputProviderManager
+from src.modules.events.event_bus import EventBus
+from src.modules.types.base.raw_data import RawData
+from tests.mocks.mock_input_provider import MockInputProvider
 
 # =============================================================================
 # Mock Provider 扩展（支持失败场景）

@@ -1,20 +1,22 @@
 """Warudo 状态管理器测试"""
 
-import pytest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
 from src.domains.output.providers.avatar.warudo.state.warudo_state_manager import (
-    SightState,
+    ALL_EYE_STATE,
+    ALL_EYEBROW_STATE,
+    ALL_MOUTH_STATE,
+    ALL_PUPIL_STATE,
+    ALL_SIGHT_STATE,
     EyebrowState,
     EyeState,
-    PupilState,
     MouthState,
+    PupilState,
+    SightState,
     WarudoStateManager,
-    ALL_SIGHT_STATE,
-    ALL_EYEBROW_STATE,
-    ALL_EYE_STATE,
-    ALL_PUPIL_STATE,
-    ALL_MOUTH_STATE,
 )
 
 

@@ -1,17 +1,16 @@
 # src/plugins/vtube_studio/plugin.py
 import asyncio
-from typing import Any, Dict
-import time
-from PIL import Image
-import io
 import base64
+import io
+import time
+from typing import Any, Dict
 
 from maim_message.message_base import MessageBase
+from PIL import Image
+from src.core.amaidesu_core import AmaidesuCore
 
 # 从 core 导入基类和核心类
 from src.core.plugin_manager import BasePlugin
-from src.core.amaidesu_core import AmaidesuCore
-
 
 # --- Helper Function ---
 

@@ -5,22 +5,22 @@ STTInputProvider - 语音转文字 Provider
 """
 
 import asyncio
-import os
-import time
 import base64
 import hashlib
 import hmac
 import json
+import os
 import ssl
+import time
 from datetime import datetime
-from typing import AsyncIterator, Optional, Dict, Any
+from typing import Any, AsyncIterator, Dict, Optional
 from urllib.parse import urlencode
 
 import numpy as np
 
-from src.core.base.input_provider import InputProvider
-from src.core.base.raw_data import RawData
-from src.core.utils.logger import get_logger
+from src.modules.logging import get_logger
+from src.modules.types.base.input_provider import InputProvider
+from src.modules.types.base.raw_data import RawData
 
 from .config import STTInputProviderConfig
 

@@ -2,10 +2,12 @@
 AudioDeviceManager 测试
 """
 
-import pytest
-import numpy as np
 from unittest.mock import MagicMock, patch
-from src.services.tts.audio_device_manager import AudioDeviceManager, DEPENDENCIES_OK
+
+import numpy as np
+import pytest
+
+from src.modules.tts.audio_device_manager import DEPENDENCIES_OK, AudioDeviceManager
 
 
 @pytest.fixture

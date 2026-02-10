@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.core.base.normalized_message import NormalizedMessage
+    from src.modules.types.base.normalized_message import NormalizedMessage
 
 
 @dataclass

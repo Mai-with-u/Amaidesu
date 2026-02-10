@@ -10,7 +10,7 @@ Expression生成层 - Output Domain: 参数生成
 - 每个Provider内部实现自己的Intent到平台参数的适配逻辑
 """
 
-from .render_parameters import RenderParameters
 from .action_mapper import ActionMapper
+from .render_parameters import RenderParameters
 
 __all__ = ["RenderParameters", "ActionMapper"]

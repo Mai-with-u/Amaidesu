@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from src.core.base.output_provider import OutputProvider
+from src.modules.types.base.output_provider import OutputProvider
 
 if TYPE_CHECKING:
     from src.domains.output.parameters.render_parameters import RenderParameters

@@ -2,13 +2,14 @@
 
 import asyncio
 import os
-import sys
 import socket
+import sys
 import tempfile
-from typing import Dict, Any, Optional
-import numpy as np
-from dataclasses import dataclass
 from collections import deque
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
+
+import numpy as np
 
 # --- Dependencies Check ---
 dependencies_ok = True
@@ -37,9 +38,9 @@ except ModuleNotFoundError:
         dependencies_ok = False
 
 # --- Amaidesu Core Imports ---
-from src.core.plugin_manager import BasePlugin
-from src.core.amaidesu_core import AmaidesuCore
 from maim_message import MessageBase
+from src.core.amaidesu_core import AmaidesuCore
+from src.core.plugin_manager import BasePlugin
 
 # --- Omni TTS Engine ---
 try:
@@ -420,8 +421,8 @@ class OmniTTSPlugin(BasePlugin):
                     if not os.path.exists(backup_filename):
                         sf.write(backup_filename, audio_array, samplerate)
 
-                    import subprocess
                     import platform
+                    import subprocess
 
                     if platform.system() == "Windows":
                         cmd = ["powershell", "-c", f'(New-Object Media.SoundPlayer "{backup_filename}").PlaySync()']

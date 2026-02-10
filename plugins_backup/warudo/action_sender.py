@@ -1,5 +1,6 @@
 import json
 from typing import Optional
+
 import websockets
 
 debug_log_actions = [

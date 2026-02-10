@@ -14,15 +14,15 @@ Remote Stream 客户端测试脚本
 python test_client.py --host localhost --port 8765 --mode audio,image
 """
 
+import argparse
 import asyncio
 import base64
 import json
 import sys
 import time
-import argparse
-from typing import Dict, Any
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from enum import Enum
+from typing import Any, Dict
 
 # WebSocket客户端依赖
 try:
@@ -46,8 +46,8 @@ except ImportError:
 
 # 图像处理依赖
 try:
-    from PIL import Image
     import cv2
+    from PIL import Image
 except ImportError:
     print("依赖缺失: 请运行 'pip install Pillow opencv-python' 来处理图像", file=sys.stderr)
     Image = None

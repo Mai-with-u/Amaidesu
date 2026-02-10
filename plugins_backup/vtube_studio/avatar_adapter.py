@@ -5,7 +5,8 @@ VTube Studio 适配器
 """
 
 from typing import Dict, Optional
-from src.core.avatar.adapter_base import AvatarAdapter, ParameterMetadata, ActionMetadata
+
+from src.core.avatar.adapter_base import ActionMetadata, AvatarAdapter, ParameterMetadata
 from src.utils.logger import get_logger
 
 

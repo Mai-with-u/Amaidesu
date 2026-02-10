@@ -15,12 +15,12 @@ ConfigService 单元测试
 """
 
 import os
-import pytest
-import tempfile
 import shutil
+import tempfile
 
-from src.services.config.service import ConfigService
+import pytest
 
+from src.modules.config.service import ConfigService
 
 # =============================================================================
 # Test Fixtures
@@ -942,7 +942,7 @@ field2 = "main_value2"
     main_override = {"field1": "main_value", "field2": "main_value2"}
 
     # 执行合并（使用 ConfigService 的合并逻辑）
-    from src.core.utils.config import merge_component_configs
+    from src.modules.config.config_utils import merge_component_configs
 
     merged = merge_component_configs(provider_config, main_override, "test_provider", "Provider")
 
@@ -1321,13 +1321,16 @@ enabled_inputs = ["auto_provider"]
 
 def test_schema_registry_integration():
     """测试Schema注册表集成（100%迁移到ProviderRegistry）"""
-    from src.services.config.schemas import (
+    # 导入provider模块以注册到ProviderRegistry（必须先导入才能使用get_provider_schema）
+    import src.domains.decision.providers  # noqa: F401
+    import src.domains.input.providers  # noqa: F401
+    import src.domains.output.providers  # noqa: F401
+
+    from src.modules.config.schemas import (
         PROVIDER_SCHEMA_REGISTRY,
         get_provider_schema,
         list_all_providers,
     )
-
-    # 导入provider模块以注册到ProviderRegistry
 
     # 验证集中式注册表为空（所有Provider已迁移）
     assert len(PROVIDER_SCHEMA_REGISTRY) == 0
@@ -1335,7 +1338,7 @@ def test_schema_registry_integration():
     # 验证关键Provider不在集中式注册表中
     assert "console_input" not in PROVIDER_SCHEMA_REGISTRY
     assert "subtitle" not in PROVIDER_SCHEMA_REGISTRY
-    assert "tts" not in PROVIDER_SCHEMA_REGISTRY
+    assert "edge_tts" not in PROVIDER_SCHEMA_REGISTRY
     assert "maicore" not in PROVIDER_SCHEMA_REGISTRY
 
     # 测试get_provider_schema（从ProviderRegistry获取）
@@ -1345,7 +1348,7 @@ def test_schema_registry_integration():
     schema = get_provider_schema("subtitle")
     assert schema is not None
 
-    schema = get_provider_schema("tts")
+    schema = get_provider_schema("edge_tts")
     assert schema is not None
 
     schema = get_provider_schema("maicore")
@@ -1361,7 +1364,7 @@ def test_schema_registry_integration():
 
 def test_schema_has_no_enabled_field():
     """验证Schema中没有enabled字段（架构要求）"""
-    from src.services.config.schemas import verify_no_enabled_field_in_schemas
+    from src.modules.config.schemas import verify_no_enabled_field_in_schemas
 
     # 这是架构强制性检查：Provider的enabled状态由Manager统一管理
     schemas_with_enabled = verify_no_enabled_field_in_schemas()

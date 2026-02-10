@@ -26,18 +26,18 @@ OutputCoordinator - 数据流协调器（3域架构：Decision Domain → Output
 """
 
 import os
-from typing import Dict, Any, Optional, TYPE_CHECKING
-from src.core.utils.logger import get_logger
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from src.core.event_bus import EventBus
-from src.core.events.names import CoreEvents
-from src.domains.output.provider_manager import OutputProviderManager
-from src.core.events.payloads import ParametersGeneratedPayload
-from src.domains.output.pipelines.manager import OutputPipelineManager
 from src.domains.output.parameters.render_parameters import RenderParameters
+from src.domains.output.pipelines.manager import OutputPipelineManager
+from src.domains.output.provider_manager import OutputProviderManager
+from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import ParametersGeneratedPayload
+from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
-    from src.core.events.payloads import IntentPayload
+    from src.modules.events.payloads import IntentPayload
 
 
 class OutputCoordinator:
@@ -135,7 +135,7 @@ class OutputCoordinator:
             await self.output_provider_manager.load_from_config(config, core=None, config_service=config_service)
 
         # 订阅 Decision Domain 的 Intent 事件（3域架构，类型化）
-        from src.core.events.payloads.decision import IntentPayload
+        from src.modules.events.payloads.decision import IntentPayload
 
         self.event_bus.on(
             CoreEvents.DECISION_INTENT_GENERATED,

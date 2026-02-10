@@ -4,10 +4,11 @@
 运行: uv run pytest tests/domains/output/parameters/test_render_parameters.py -v
 """
 
-import pytest
 import time
-from src.domains.output.parameters.render_parameters import ExpressionParameters
 
+import pytest
+
+from src.domains.output.parameters.render_parameters import ExpressionParameters
 
 # =============================================================================
 # 创建和默认值测试

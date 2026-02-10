@@ -17,23 +17,25 @@ Rendering Providers - 渲染输出Provider实现
 """
 
 # 导入所有 Provider 子模块以触发自动注册（导入__init__.py会触发注册）
-from . import subtitle  # noqa: F401
-from . import audio  # noqa: F401 (包含 EdgeTTSProvider, GPTSoVITSOutputProvider, OmniTTSProvider)
-from . import sticker  # noqa: F401
-from . import obs_control  # noqa: F401
-from . import avatar  # noqa: F401 (包含所有Avatar Provider，包括VTSProvider, WarudoOutputProvider)
-from . import remote_stream  # noqa: F401
-from . import mock  # noqa: F401
-
-# 同时导出类以便直接使用
-from .subtitle import SubtitleOutputProvider
+from . import (
+    audio,  # noqa: F401 (包含 EdgeTTSProvider, GPTSoVITSOutputProvider, OmniTTSProvider)
+    avatar,  # noqa: F401 (包含所有Avatar Provider，包括VTSProvider, WarudoOutputProvider)
+    mock,  # noqa: F401
+    obs_control,  # noqa: F401
+    remote_stream,  # noqa: F401
+    sticker,  # noqa: F401
+    subtitle,  # noqa: F401
+)
 from .audio import EdgeTTSProvider, GPTSoVITSOutputProvider, OmniTTSProvider
 from .avatar.vts import VTSProvider
 from .avatar.warudo import WarudoOutputProvider
-from .sticker import StickerOutputProvider
+from .mock import MockOutputProvider
 from .obs_control import ObsControlOutputProvider
 from .remote_stream import RemoteStreamOutputProvider
-from .mock import MockOutputProvider
+from .sticker import StickerOutputProvider
+
+# 同时导出类以便直接使用
+from .subtitle import SubtitleOutputProvider
 
 __all__ = [
     "SubtitleOutputProvider",

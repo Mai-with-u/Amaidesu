@@ -8,13 +8,13 @@
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from src.core.types import IntentAction
-from src.core.utils.logger import get_logger
+from src.modules.logging import get_logger
+from src.modules.types import IntentAction
 
 from .action_types import MaicraftActionType
 
 if TYPE_CHECKING:
-    from src.core.base.normalized_message import NormalizedMessage
+    from src.modules.types.base.normalized_message import NormalizedMessage
 
 
 class AbstractActionFactory(ABC):

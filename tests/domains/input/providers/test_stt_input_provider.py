@@ -2,8 +2,9 @@
 STTInputProvider 测试
 """
 
-import pytest
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 
 @pytest.fixture
@@ -133,8 +134,9 @@ class TestSTTInputProvider:
     @patch("src.domains.input.providers.stt.stt_input_provider.STTInputProvider._check_dependencies")
     def test_iflytek_frame_building(self, mock_deps, stt_config):
         """测试讯飞帧构建"""
-        from src.domains.input.providers.stt import STTInputProvider
         import json
+
+        from src.domains.input.providers.stt import STTInputProvider
 
         provider = STTInputProvider(stt_config)
 

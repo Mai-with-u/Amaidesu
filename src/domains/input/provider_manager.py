@@ -5,15 +5,15 @@ InputProviderManager - 输入Provider管理器
 """
 
 import asyncio
-from typing import Any
-from dataclasses import dataclass
 import time
+from dataclasses import dataclass
+from typing import Any
 
-from src.core.event_bus import EventBus
-from src.core.base.input_provider import InputProvider
-from src.core.events.names import CoreEvents
-from src.core.events.payloads.input import RawDataPayload
-from src.core.utils.logger import get_logger
+from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.input import RawDataPayload
+from src.modules.logging import get_logger
+from src.modules.types.base.input_provider import InputProvider
 
 
 @dataclass
@@ -257,7 +257,7 @@ class InputProviderManager:
             [providers.input.overrides.console_input]
             user_id = "custom_user"
         """
-        from src.core.provider_registry import ProviderRegistry
+        from src.modules.registry import ProviderRegistry
 
         self.logger.info("开始从配置加载InputProvider...")
 
@@ -283,7 +283,7 @@ class InputProviderManager:
             try:
                 # 使用三级配置加载
                 try:
-                    from src.services.config.schemas import get_provider_schema
+                    from src.modules.config.schemas import get_provider_schema
 
                     schema_class = get_provider_schema(input_name, "input")
                 except (ImportError, AttributeError, KeyError):

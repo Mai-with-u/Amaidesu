@@ -9,7 +9,7 @@
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Mapping
+from typing import Any, Dict, Mapping
 
 
 class IAction(ABC):

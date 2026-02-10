@@ -3,10 +3,10 @@ DGLab 服务单元测试
 """
 
 import asyncio
-import pytest
 from unittest.mock import AsyncMock, patch
 
-from src.services.dg_lab import DGLabService, DGLabConfig, WaveformPreset
+import pytest
+from src.services.dg_lab import DGLabConfig, DGLabService, WaveformPreset
 
 
 def create_mock_response(status=200, text=""):

@@ -8,13 +8,13 @@
 # - PIL/Pillow: 如果不安装，将禁用图像拼接功能，只使用最新图像
 
 import asyncio
-import time
-import logging
-from typing import Optional, List, Dict, Any, Callable
-from dataclasses import dataclass
-from collections import deque
 import base64
 import io
+import logging
+import time
+from collections import deque
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional
 
 # OpenAI 兼容客户端
 try:

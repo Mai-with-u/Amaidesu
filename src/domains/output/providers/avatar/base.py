@@ -9,13 +9,14 @@ AvatarProviderBase - 虚拟形象 Provider 抽象基类
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, TYPE_CHECKING
-from src.core.base.output_provider import OutputProvider
-from src.core.utils.logger import get_logger
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
+from src.modules.logging import get_logger
+from src.modules.types.base.output_provider import OutputProvider
 
 if TYPE_CHECKING:
-    from src.core.event_bus import EventBus
     from src.domains.decision.intent import Intent
+    from src.modules.events.event_bus import EventBus
 
 
 class AvatarProviderBase(OutputProvider, ABC):
@@ -43,7 +44,7 @@ class AvatarProviderBase(OutputProvider, ABC):
             event_bus: EventBus 实例
             dependencies: 可选的依赖注入（替代 core）
         """
-        from src.core.events.names import CoreEvents
+        from src.modules.events.names import CoreEvents
 
         self.event_bus = event_bus
         self._dependencies = dependencies or {}
@@ -58,7 +59,7 @@ class AvatarProviderBase(OutputProvider, ABC):
 
     async def cleanup(self):
         """清理资源（通用逻辑）"""
-        from src.core.events.names import CoreEvents
+        from src.modules.events.names import CoreEvents
 
         if self.event_bus:
             self.event_bus.off(CoreEvents.DECISION_INTENT_GENERATED, self._on_intent_ready)
@@ -75,7 +76,7 @@ class AvatarProviderBase(OutputProvider, ABC):
         Args:
             intent: 平台无关的 Intent
         """
-        from src.core.events.payloads.decision import IntentPayload
+        from src.modules.events.payloads.decision import IntentPayload
 
         if isinstance(payload, IntentPayload):
             intent = payload.to_intent()

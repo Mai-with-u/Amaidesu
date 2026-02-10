@@ -2,14 +2,14 @@
 
 import asyncio
 import contextlib
-import signal
 import json
+import signal
+from typing import Any, Dict, List, Optional
 
-from typing import Dict, Any, Optional, List
+from src.core.amaidesu_core import AmaidesuCore
 
 # --- Amaidesu Core Imports ---
 from src.core.plugin_manager import BasePlugin
-from src.core.amaidesu_core import AmaidesuCore
 
 # --- Local Imports ---
 from .client.websocket_client import BiliWebSocketClient

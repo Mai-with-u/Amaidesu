@@ -5,7 +5,7 @@ Maicraft Decision Provider
 支持通过配置切换不同的动作实现系列（如 Log、MCP 等）。
 """
 
-from src.core.provider_registry import ProviderRegistry
+from src.modules.registry import ProviderRegistry
 
 from .action_registry import ActionRegistry
 from .action_types import MaicraftActionType

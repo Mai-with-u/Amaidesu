@@ -1,13 +1,14 @@
 """AvatarProviderBase 测试"""
 
-import pytest
 from typing import Any, Dict
 from unittest.mock import MagicMock
 
-from src.domains.output.providers.avatar.base import AvatarProviderBase
+import pytest
+
 from src.domains.decision.intent import Intent, SourceContext
-from src.core.events.payloads.decision import IntentPayload
-from src.core.types import EmotionType, ActionType, IntentAction
+from src.domains.output.providers.avatar.base import AvatarProviderBase
+from src.modules.events.payloads.decision import IntentPayload
+from src.modules.types import ActionType, EmotionType, IntentAction
 
 
 @pytest.fixture
@@ -101,7 +102,7 @@ class TestAvatarProviderBaseAbstract:
 class TestAvatarProviderBaseSetup:
     @pytest.mark.asyncio
     async def test_setup_subscribes_to_intent_event(self, mock_event_bus):
-        from src.core.events.names import CoreEvents
+        from src.modules.events.names import CoreEvents
 
         provider = MockAvatarProvider({})
         await provider.setup(mock_event_bus)

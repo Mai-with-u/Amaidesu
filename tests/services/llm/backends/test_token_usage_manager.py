@@ -14,19 +14,19 @@ TokenUsageManager 单元测试
 运行: uv run pytest tests/services/llm/backends/test_token_usage_manager.py -v
 """
 
-import pytest
-import tempfile
-import shutil
 import json
+import shutil
+import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from src.services.llm.backends.token_usage_manager import (
+import pytest
+
+from src.modules.llm.clients.token_usage_manager import (
     TokenUsageManager,
     get_global_token_manager,
     set_global_token_manager_callback,
 )
-
 
 # =============================================================================
 # Test Fixtures
@@ -511,7 +511,7 @@ def test_get_total_cost_summary_empty(token_manager):
 def test_get_global_token_manager():
     """测试获取全局实例"""
     # 清除全局实例
-    import src.services.llm.backends.token_usage_manager as tum_module
+    import src.modules.llm.clients.token_usage_manager as tum_module
 
     tum_module.global_token_manager = None
 
@@ -525,7 +525,7 @@ def test_get_global_token_manager():
 def test_set_global_token_manager_callback():
     """测试设置全局回调"""
     # 清除全局实例
-    import src.services.llm.backends.token_usage_manager as tum_module
+    import src.modules.llm.clients.token_usage_manager as tum_module
 
     tum_module.global_token_manager = None
 

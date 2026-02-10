@@ -1,8 +1,9 @@
 """MaiBot Action 建议消息格式定义"""
 
-from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Literal
 import time
+from typing import Any, Dict, List, Literal
+
+from pydantic import BaseModel, Field
 
 
 class ActionSuggestionMessage(BaseModel):
@@ -19,7 +20,7 @@ class ActionSuggestionMessage(BaseModel):
 
     def to_message_base(self):
         """转换为 maim_message MessageBase 格式"""
-        from maim_message import MessageBase, BaseMessageInfo, Seg, UserInfo
+        from maim_message import BaseMessageInfo, MessageBase, Seg, UserInfo
 
         user_info = UserInfo(user_id="amaidesu", user_nickname="Amaidesu")
         message_info = BaseMessageInfo(

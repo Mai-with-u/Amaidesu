@@ -13,21 +13,20 @@ OutputCoordinator 单元测试
 """
 
 import asyncio
-from unittest.mock import MagicMock, AsyncMock
-from typing import Dict, Any
+from typing import Any, Dict
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.domains.decision.intent import Intent
 from src.domains.output import OutputCoordinator
-from src.core.event_bus import EventBus
-from src.core.events.names import CoreEvents
-from src.core.events.payloads import (
+from src.domains.output.provider_manager import OutputProviderManager
+from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import (
     IntentPayload,
 )
-from src.domains.output.provider_manager import OutputProviderManager
-from src.domains.decision.intent import Intent
-from src.core.types import EmotionType, IntentAction, ActionType
-
+from src.modules.types import ActionType, EmotionType, IntentAction
 
 # =============================================================================
 # Test Fixtures
@@ -539,7 +538,7 @@ async def test_intent_event_with_none_data(
     # 它期望接收 IntentPayload，所以我们需要发送一个有效的 Payload
     # 但不包含实际的处理逻辑（比如 response_text 为空）
 
-    from src.core.events.payloads.decision import IntentPayload
+    from src.modules.events.payloads.decision import IntentPayload
 
     empty_payload = IntentPayload(
         intent_data={

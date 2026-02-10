@@ -10,18 +10,19 @@ VTS Provider - Output Domain: VTS虚拟形象渲染实现
 
 import asyncio
 import time
-from typing import Dict, Any, Optional, List, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from pydantic import Field, field_validator
 
 from src.domains.output.providers.avatar.base import AvatarProviderBase as BaseAvatarProvider
-from src.core.utils.logger import get_logger
-from src.services.config.schemas.schemas.base import BaseProviderConfig
-from src.prompts import get_prompt_manager
+from src.modules.config.schemas.base import BaseProviderConfig
+from src.modules.logging import get_logger
+from src.modules.prompts import get_prompt_manager
 
 if TYPE_CHECKING:
+    from src.modules.streaming.audio_chunk import AudioChunk, AudioMetadata
+
     from src.domains.decision.intent import Intent
-    from src.core.streaming.audio_chunk import AudioMetadata, AudioChunk
 
 # LLM匹配依赖
 LLM_AVAILABLE = False
@@ -282,7 +283,7 @@ class VTSProvider(BaseAvatarProvider):
             - expressions: Dict[str, float] - VTS参数值
             - hotkeys: List[str] - 热键ID列表
         """
-        from src.core.types import EmotionType
+        from src.modules.types import EmotionType
 
         result = {
             "expressions": {},
@@ -376,7 +377,7 @@ class VTSProvider(BaseAvatarProvider):
                     self._dependencies.get("audio_stream_channel") if hasattr(self, "_dependencies") else None
                 )
                 if audio_channel and self.lip_sync_enabled:
-                    from src.core.streaming.backpressure import SubscriberConfig, BackpressureStrategy
+                    from src.modules.streaming.backpressure import BackpressureStrategy, SubscriberConfig
 
                     self._vts_subscription_id = await audio_channel.subscribe(
                         name="vts_lip_sync",
@@ -757,7 +758,7 @@ class VTSProvider(BaseAvatarProvider):
 
         try:
             # 重采样到 VTS 期望的采样率
-            from src.core.streaming.audio_utils import resample_audio
+            from src.modules.streaming.audio_utils import resample_audio
 
             audio_data = resample_audio(chunk.data, chunk.sample_rate, self.sample_rate)
             await self.process_tts_audio(audio_data, self.sample_rate)

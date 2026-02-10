@@ -5,8 +5,8 @@
 """
 
 import pytest
-from src.domains.input.normalization.content.base import StructuredContent
 
+from src.domains.input.normalization.content.base import StructuredContent
 
 # =============================================================================
 # 抽象方法测试

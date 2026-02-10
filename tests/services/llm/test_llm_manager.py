@@ -14,11 +14,12 @@ LLMManager 单元测试
 """
 
 import asyncio
+from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch
-from typing import Dict, Any
+
 import pytest
 
-from src.services.llm.manager import LLMManager, LLMResponse, RetryConfig
+from src.modules.llm.manager import LLMManager, LLMResponse, RetryConfig
 
 # =============================================================================
 # Test Fixtures

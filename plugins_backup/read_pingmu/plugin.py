@@ -1,12 +1,12 @@
 import asyncio
+import base64
 
 # import logging # 移除标准logging导入
 import sys
 import time
-import base64
+from dataclasses import dataclass
 from io import BytesIO
 from typing import Any, Dict, Optional
-from dataclasses import dataclass
 
 # 导入全局logger - 在确认不再需要后移除
 # from src.utils.logger import logger # 将在确认后移除
@@ -46,9 +46,9 @@ try:
 except ImportError:
     obswspy = None
 
-from src.core.plugin_manager import BasePlugin
+from maim_message import BaseMessageInfo, FormatInfo, GroupInfo, MessageBase, Seg, TemplateInfo, UserInfo
 from src.core.amaidesu_core import AmaidesuCore
-from maim_message import MessageBase, UserInfo, BaseMessageInfo, GroupInfo, FormatInfo, Seg, TemplateInfo
+from src.core.plugin_manager import BasePlugin
 from src.utils.logger import get_logger
 
 

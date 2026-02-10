@@ -12,23 +12,24 @@ import base64
 import io
 import json
 import time
-from typing import Dict, Any, List, Callable, Optional, TYPE_CHECKING
 from enum import Enum
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+
 from pydantic import BaseModel, Field
 
-from src.core.base.output_provider import OutputProvider
-from src.core.events.names import CoreEvents
 from src.domains.output.parameters.render_parameters import RenderParameters
-from src.core.utils.logger import get_logger
-from src.services.config.schemas.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.base import BaseProviderConfig
+from src.modules.events.names import CoreEvents
+from src.modules.logging import get_logger
+from src.modules.types.base.output_provider import OutputProvider
 
 if TYPE_CHECKING:
-    from src.core.streaming.audio_chunk import AudioMetadata, AudioChunk
+    from src.modules.streaming.audio_chunk import AudioChunk, AudioMetadata
 
 try:
     import websockets
-    from websockets.server import WebSocketServerProtocol
     from websockets.exceptions import ConnectionClosed
+    from websockets.server import WebSocketServerProtocol
 except ImportError:
     websockets = None
     WebSocketServerProtocol = None
@@ -198,7 +199,7 @@ class RemoteStreamOutputProvider(OutputProvider):
         # 注册 AudioStreamChannel 订阅
         audio_channel = self._dependencies.get("audio_stream_channel") if hasattr(self, "_dependencies") else None
         if audio_channel:
-            from src.core.streaming.backpressure import SubscriberConfig, BackpressureStrategy
+            from src.modules.streaming.backpressure import BackpressureStrategy, SubscriberConfig
 
             self._remote_subscription_id = await audio_channel.subscribe(
                 name="remote_stream",
@@ -665,7 +666,7 @@ class RemoteStreamOutputProvider(OutputProvider):
         """AudioStreamChannel: 音频块回调"""
         try:
             # RemoteStream 期望 16000 Hz
-            from src.core.streaming.audio_utils import resample_audio
+            from src.modules.streaming.audio_utils import resample_audio
 
             audio_data = resample_audio(chunk.data, chunk.sample_rate, 16000)
             await self.send_tts_audio(audio_data)

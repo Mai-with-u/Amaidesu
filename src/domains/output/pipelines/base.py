@@ -6,11 +6,11 @@ OutputPipeline 基类和协议定义
 
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Dict, Any, Optional, Protocol, runtime_checkable
+from typing import Any, Dict, Optional, Protocol, runtime_checkable
 
-from src.core.utils.logger import get_logger
 from src.domains.output.parameters.render_parameters import ExpressionParameters
-from src.core.base.pipeline_stats import PipelineStats
+from src.modules.logging import get_logger
+from src.modules.types.base.pipeline_stats import PipelineStats
 
 
 class PipelineErrorHandling(str, Enum):

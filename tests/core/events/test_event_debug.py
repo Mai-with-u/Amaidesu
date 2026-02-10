@@ -4,28 +4,28 @@ Event debug 功能单元测试
 测试 BasePayload 基类的字符串表示功能，以及各类 Payload 的调试输出。
 """
 
-import pytest
-import sys
 import os
+import sys
+
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../.."))
 
-from src.core.events.payloads.base import BasePayload
-from src.core.events.payloads import (
-    RawDataPayload,
-    MessageReadyPayload,
+from src.modules.events.event_bus import EventBus
+from src.modules.events.payloads import (
     DecisionRequestPayload,
+    ErrorPayload,
     IntentActionPayload,
     IntentPayload,
+    MessageReadyPayload,
+    ParametersGeneratedPayload,
     ProviderConnectedPayload,
     ProviderDisconnectedPayload,
-    ParametersGeneratedPayload,
+    RawDataPayload,
     RenderCompletedPayload,
     RenderFailedPayload,
-    ErrorPayload,
 )
-from src.core.event_bus import EventBus
-
+from src.modules.events.payloads.base import BasePayload
 
 # =============================================================================
 # 测试 BasePayload 基类
@@ -189,7 +189,7 @@ class TestDecisionPayloads:
     def test_intent_payload_debug_string(self):
         """测试 IntentPayload 的字符串表示"""
         from src.domains.decision.intent import Intent
-        from src.core.types import IntentAction, ActionType, EmotionType
+        from src.modules.types import ActionType, EmotionType, IntentAction
 
         # 使用 from_intent 方法创建 Payload
         intent = Intent(
@@ -448,6 +448,7 @@ class TestEventBusDebugLog:
     async def test_eventbus_debug_log_output(self):
         """测试 EventBus 的 debug 日志输出"""
         import io
+
         from loguru import logger
 
         # 捕获 loguru 日志
@@ -483,6 +484,7 @@ class TestEventBusDebugLog:
     async def test_eventbus_debug_log_with_complex_payload(self):
         """测试复杂 Payload 的 debug 日志输出"""
         import io
+
         from loguru import logger
 
         # 捕获 loguru 日志
@@ -500,7 +502,7 @@ class TestEventBusDebugLog:
 
             # 发布复杂的 Payload
             from src.domains.decision.intent import Intent
-            from src.core.types import IntentAction, ActionType, EmotionType
+            from src.modules.types import ActionType, EmotionType, IntentAction
 
             intent = Intent(
                 original_text="你好",

@@ -4,16 +4,15 @@
 运行: uv run pytest tests/core/events/test_event_registry.py -v
 """
 
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 import pytest
 from pydantic import BaseModel
 
-from src.core.events.registry import EventRegistry
-
+from src.modules.events.registry import EventRegistry
 
 # =============================================================================
 # 测试数据模型

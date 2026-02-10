@@ -4,8 +4,8 @@
 提供基于 TypedDict 的自动参数验证功能。
 """
 
-from typing import Any, Mapping, get_type_hints, get_origin, get_args, Type, TYPE_CHECKING, Optional
 import sys
+from typing import TYPE_CHECKING, Any, Mapping, Optional, Type, get_args, get_origin, get_type_hints
 
 if TYPE_CHECKING:
     pass

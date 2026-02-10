@@ -10,17 +10,17 @@ GPTSoVITS OutputProvider - Output Domain: 渲染输出实现
 
 import asyncio
 import time
-from typing import Dict, Any, Optional
 from collections import deque
+from typing import Any, Dict, Optional
 
 import numpy as np
 from pydantic import Field
 
-from src.core.base.output_provider import OutputProvider
 from src.domains.output.parameters.render_parameters import RenderParameters
-from src.core.utils.logger import get_logger
-from src.services.config.schemas.schemas.base import BaseProviderConfig
-from src.services.tts import GPTSoVITSClient, AudioDeviceManager
+from src.modules.config.schemas.base import BaseProviderConfig
+from src.modules.logging import get_logger
+from src.modules.tts import AudioDeviceManager, GPTSoVITSClient
+from src.modules.types.base.output_provider import OutputProvider
 
 # 导入工具函数
 from .utils.wav_decoder import decode_wav_chunk
@@ -202,7 +202,7 @@ class GPTSoVITSOutputProvider(OutputProvider):
                 # 通知订阅者: 音频开始
                 audio_channel = getattr(self, "audio_stream_channel", None)
                 if audio_channel:
-                    from src.core.streaming.audio_chunk import AudioMetadata
+                    from src.modules.streaming.audio_chunk import AudioMetadata
 
                     await audio_channel.notify_start(
                         AudioMetadata(text=final_text, sample_rate=self.sample_rate, channels=CHANNELS)
@@ -233,7 +233,7 @@ class GPTSoVITSOutputProvider(OutputProvider):
                     if chunk is not None:
                         # 发布音频块
                         if audio_channel:
-                            from src.core.streaming.audio_chunk import AudioChunk
+                            from src.modules.streaming.audio_chunk import AudioChunk
 
                             audio_chunk = AudioChunk(
                                 data=chunk.tobytes(),
@@ -254,7 +254,7 @@ class GPTSoVITSOutputProvider(OutputProvider):
 
                 # 通知订阅者: 音频结束
                 if audio_channel:
-                    from src.core.streaming.audio_chunk import AudioMetadata
+                    from src.modules.streaming.audio_chunk import AudioMetadata
 
                     await audio_channel.notify_end(
                         AudioMetadata(text=final_text, sample_rate=self.sample_rate, channels=CHANNELS)

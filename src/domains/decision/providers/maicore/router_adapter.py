@@ -6,16 +6,17 @@ Router 适配器
 - 提供简化的发送/接收接口
 """
 
-from typing import Callable, Dict, Any, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
 
 from maim_message import MessageBase
 
-from src.core.utils.logger import get_logger
+from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
     from maim_message import Router
-    from src.core.event_bus import EventBus
+
     from src.domains.decision.intent import Intent
+    from src.modules.events.event_bus import EventBus
 
 
 class RouterAdapter:

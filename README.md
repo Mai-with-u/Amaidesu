@@ -234,7 +234,7 @@ enabled_outputs = ["subtitle", "vts", "tts"]
       # 同时启用 DEBUG 并过滤
       uv run python main.py --debug --filter EdgeTTSProvider
       ```
-      *   模块名通常是 `src/utils/logger.py` 中 `get_logger("模块名")` 使用的名称，可以通过查看日志输出中的模块名来确定。
+      *   模块名通常是 `src/modules/logging/` 中 `get_logger("模块名")` 使用的名称，可以通过查看日志输出中的模块名来确定。
 
 ## 模拟MaiCore
 
@@ -327,9 +327,9 @@ flowchart TD
 ```python
 # src/domains/input/providers/my_provider/my_provider.py
 from typing import AsyncIterator
-from src.core.base.input_provider import InputProvider
-from src.core.base.raw_data import RawData
-from src.utils.logger import get_logger
+from src.modules.types.base.input_provider import InputProvider
+from src.modules.types.base.raw_data import RawData
+from src.modules.logging import get_logger
 
 class MyInputProvider(InputProvider):
     """自定义输入Provider"""
@@ -361,10 +361,10 @@ class MyInputProvider(InputProvider):
 
 ```python
 # src/domains/decision/providers/my_provider/my_decision_provider.py
-from src.core.base.decision_provider import DecisionProvider
-from src.core.base.normalized_message import NormalizedMessage
+from src.modules.types.base.decision_provider import DecisionProvider
+from src.modules.types.base.normalized_message import NormalizedMessage
 from src.domains.decision.intent import Intent
-from src.utils.logger import get_logger
+from src.modules.logging import get_logger
 
 class MyDecisionProvider(DecisionProvider):
     """自定义决策Provider"""
@@ -387,9 +387,9 @@ class MyDecisionProvider(DecisionProvider):
 
 ```python
 # src/domains/output/providers/my_provider/my_output_provider.py
-from src.core.base.output_provider import OutputProvider
-from src.core.base.render_parameters import RenderParameters
-from src.utils.logger import get_logger
+from src.modules.types.base.output_provider import OutputProvider
+from src.modules.types.base.render_parameters import RenderParameters
+from src.modules.logging import get_logger
 
 class MyOutputProvider(OutputProvider):
     """自定义输出Provider"""
@@ -572,7 +572,7 @@ __all__ = ["MyPipelinePipeline"]
 
 ### 日志使用
 ```python
-from src.utils.logger import get_logger
+from src.modules.logging import get_logger
 
 logger = get_logger("MyClassName")  # 使用类名或模块名
 logger.info("信息日志")

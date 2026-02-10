@@ -29,13 +29,13 @@ class RawData:
     metadata: Dict[str, Any] = {}  # 元数据
 ```
 
-**位置**: `src/core/base/raw_data.py`
+**位置**: `src/modules/types/base/raw_data.py`
 
 **示例**:
 ```python
 from typing import AsyncIterator
-from src.core.base.input_provider import InputProvider
-from src.core.base.raw_data import RawData
+from src.modules.types.base.input_provider import InputProvider
+from src.modules.types.base.raw_data import RawData
 
 class MyInputProvider(InputProvider):
     async def _collect_data(self) -> AsyncIterator[RawData]:
@@ -116,9 +116,9 @@ Logger 实例。
 ```python
 import asyncio
 from typing import AsyncIterator
-from src.core.base.input_provider import InputProvider
-from src.core.base.raw_data import RawData
-from src.utils.logger import get_logger
+from src/modules/types/base/input_provider import InputProvider
+from src/modules/types/base/raw_data import RawData
+from src/modules/logging import get_logger
 
 class MyInputProvider(InputProvider):
     """简单的输入 Provider 示例"""
@@ -148,9 +148,9 @@ class MyInputProvider(InputProvider):
 import aiohttp
 import asyncio
 from typing import AsyncIterator
-from src.core.base.input_provider import InputProvider
-from src.core.base.raw_data import RawData
-from src.utils.logger import get_logger
+from src/modules/types/base/input_provider import InputProvider
+from src/modules/types/base/raw_data import RawData
+from src/modules/logging import get_logger
 
 class APIInputProvider(InputProvider):
     """从API获取数据的输入 Provider"""

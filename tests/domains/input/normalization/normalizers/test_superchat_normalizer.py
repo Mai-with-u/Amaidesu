@@ -4,16 +4,16 @@
 运行: uv run pytest tests/domains/normalization/test_superchat_normalizer.py -v
 """
 
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 import pytest
-from src.domains.input.normalization.normalizers.superchat_normalizer import SuperChatNormalizer
-from src.core.base.raw_data import RawData
-from src.core.base.normalized_message import NormalizedMessage
 
+from src.domains.input.normalization.normalizers.superchat_normalizer import SuperChatNormalizer
+from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.types.base.raw_data import RawData
 
 # =============================================================================
 # 初始化测试

@@ -2,11 +2,13 @@
 GPTSoVITSOutputProvider 测试
 """
 
-import pytest
-import numpy as np
 from unittest.mock import AsyncMock, MagicMock
-from src.domains.output.providers.audio import GPTSoVITSOutputProvider
+
+import numpy as np
+import pytest
+
 from src.domains.output.parameters.render_parameters import RenderParameters
+from src.domains.output.providers.audio import GPTSoVITSOutputProvider
 
 
 @pytest.fixture

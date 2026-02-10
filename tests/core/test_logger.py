@@ -30,7 +30,7 @@ def temp_log_dir(tmp_path):
 @pytest.fixture(autouse=True)
 def reset_logger_state():
     """测试间重置 logger 状态。"""
-    from src.core.utils import logger as logger_module
+    from src.modules.logging import logger as logger_module
 
     # 保存初始状态
     old_configured = logger_module._CONFIGURED
@@ -55,7 +55,7 @@ class TestJSONLFormat:
 
     def test_jsonl_format(self, temp_log_dir):
         """验证 JSONL 输出为清晰 JSON 格式。"""
-        from src.core.utils.logger import configure_from_config, get_logger
+        from src.modules.logging import configure_from_config, get_logger
 
         config = {
             "enabled": True,
@@ -91,7 +91,7 @@ class TestJSONLFormat:
 
     def test_jsonl_multiple_entries(self, temp_log_dir):
         """验证 JSONL 文件中多个条目被正确分隔。"""
-        from src.core.utils.logger import configure_from_config, get_logger
+        from src.modules.logging import configure_from_config, get_logger
 
         config = {
             "enabled": True,
@@ -128,7 +128,7 @@ class TestTextFormat:
 
     def test_text_format(self, temp_log_dir):
         """验证文本输出格式。"""
-        from src.core.utils.logger import configure_from_config, get_logger
+        from src.modules.logging import configure_from_config, get_logger
 
         config = {
             "enabled": True,
@@ -157,7 +157,7 @@ class TestTextFormat:
 
     def test_text_format_timestamp(self, temp_log_dir):
         """验证文本格式包含时间戳。"""
-        from src.core.utils.logger import configure_from_config, get_logger
+        from src.modules.logging import configure_from_config, get_logger
 
         config = {
             "enabled": True,
@@ -186,7 +186,7 @@ class TestConsoleOnly:
 
     def test_console_only(self, temp_log_dir, capsys):
         """验证 enabled=False 时不创建文件。"""
-        from src.core.utils.logger import configure_from_config, get_logger
+        from src.modules.logging import configure_from_config, get_logger
 
         config = {
             "enabled": False,
@@ -213,7 +213,7 @@ class TestDirectoryCreation:
 
     def test_directory_creation(self, tmp_path):
         """验证缺失时创建目录。"""
-        from src.core.utils.logger import configure_from_config
+        from src.modules.logging import configure_from_config
 
         non_existent_dir = str(tmp_path / "new_logs_dir")
         assert not os.path.exists(non_existent_dir), "目录不应预先存在"
@@ -230,7 +230,7 @@ class TestDirectoryCreation:
 
     def test_directory_creation_permission_error(self, tmp_path):
         """验证目录创建失败时的回退行为。"""
-        from src.core.utils.logger import configure_from_config, get_logger
+        from src.modules.logging import configure_from_config, get_logger
 
         # 使用一个不太可能成功创建的路径
         # 在 Windows 上，某些特殊路径会失败
@@ -255,7 +255,7 @@ class TestRotationConfig:
 
     def test_rotation_config(self, temp_log_dir):
         """验证轮转设置生效。"""
-        from src.core.utils.logger import configure_from_config
+        from src.modules.logging import configure_from_config
 
         config = {
             "enabled": True,
@@ -269,7 +269,7 @@ class TestRotationConfig:
         configure_from_config(config)
 
         # 验证处理器已添加
-        from src.core.utils import logger as logger_module
+        from src.modules.logging import logger as logger_module
 
         assert len(logger_module._HANDLER_IDS) == 2, "应有 2 个处理器（stderr + 文件）"
 
@@ -283,7 +283,7 @@ class TestBackwardCompatibility:
 
     def test_get_logger_backward_compat(self, temp_log_dir):
         """验证旧 API 仍可用。"""
-        from src.core.utils.logger import get_logger
+        from src.modules.logging import get_logger
 
         # 即使不调用 configure_from_config，get_logger 也应工作
         test_logger = get_logger("compat_test")
@@ -300,8 +300,8 @@ class TestDefaultBehavior:
 
     def test_default_behavior_without_config(self):
         """验证未提供配置时的行为（延迟默认处理器）。"""
-        from src.core.utils import logger as logger_module
-        from src.core.utils.logger import get_logger
+        from src.modules.logging import logger as logger_module
+        from src.modules.logging import get_logger
 
         # 保存当前默认处理器 ID（如果存在）
         original_default_id = logger_module._DEFAULT_HANDLER_ID
@@ -324,12 +324,12 @@ class TestDefaultBehavior:
 
     def test_default_behavior_with_none_config(self):
         """验证传入 None 配置时的行为。"""
-        from src.core.utils.logger import configure_from_config
+        from src.modules.logging import configure_from_config
 
         # 传入 None 应使用默认值
         configure_from_config(None)
 
-        from src.core.utils import logger as logger_module
+        from src.modules.logging import logger as logger_module
 
         assert logger_module._CONFIGURED, "应标记为已配置"
 
@@ -339,7 +339,7 @@ class TestHandlerCleanup:
 
     def test_handler_cleanup(self, temp_log_dir):
         """验证重新配置前正确移除处理器。"""
-        from src.core.utils.logger import configure_from_config
+        from src.modules.logging import configure_from_config
 
         # 第一次配置
         config1 = {
@@ -351,7 +351,7 @@ class TestHandlerCleanup:
 
         configure_from_config(config1)
 
-        from src.core.utils import logger as logger_module
+        from src.modules.logging import logger as logger_module
 
         first_handler_count = len(logger_module._HANDLER_IDS)
         assert first_handler_count == 2, "首次配置应有 2 个处理器"
@@ -376,13 +376,13 @@ class TestHandlerCleanup:
 
     def test_default_handler_removed_on_configure(self, capsys):
         """验证配置时移除默认处理器。"""
-        from src.core.utils.logger import configure_from_config, get_logger
+        from src.modules.logging import configure_from_config, get_logger
 
         # 触发默认处理器创建
         test_logger = get_logger("test")
         test_logger.info("Before configure")
 
-        from src.core.utils import logger as logger_module
+        from src.modules.logging import logger as logger_module
 
         assert logger_module._DEFAULT_HANDLER_ID is not None, "应创建默认处理器"
 
@@ -399,7 +399,7 @@ class TestImportTimeSideEffects:
     def test_import_time_side_effects_removed(self):
         """验证导入时不添加处理器。"""
         # 重新导入模块以测试干净的导入
-        from src.core.utils import logger as logger_module
+        from src.modules.logging import logger as logger_module
 
         # 保存当前状态
 
@@ -422,8 +422,8 @@ class TestImportTimeSideEffects:
 
     def test_configure_called_explicitly(self, temp_log_dir):
         """验证只有显式调用 configure_from_config 才会添加处理器。"""
-        from src.core.utils import logger as logger_module
-        from src.core.utils.logger import configure_from_config
+        from src.modules.logging import logger as logger_module
+        from src.modules.logging import configure_from_config
 
         # 重置状态
         logger_module._CONFIGURED = False
@@ -445,7 +445,7 @@ class TestModuleBinding:
 
     def test_module_binding(self, temp_log_dir):
         """验证 get_logger 正确绑定模块名。"""
-        from src.core.utils.logger import configure_from_config, get_logger
+        from src.modules.logging import configure_from_config, get_logger
 
         # 使用 JSONL 格式来验证模块名被正确记录
         configure_from_config({"enabled": True, "format": "jsonl", "directory": temp_log_dir})
@@ -470,7 +470,7 @@ class TestModuleBinding:
 
     def test_logger_reuse(self, temp_log_dir):
         """验证同一模块名返回一致的行为。"""
-        from src.core.utils.logger import configure_from_config, get_logger
+        from src.modules.logging import configure_from_config, get_logger
 
         configure_from_config({"enabled": True, "format": "jsonl", "directory": temp_log_dir})
 
@@ -499,7 +499,7 @@ class TestLogLevelFiltering:
 
     def test_level_filtering(self, temp_log_dir):
         """验证日志级别过滤正确工作。"""
-        from src.core.utils.logger import configure_from_config, get_logger
+        from src.modules.logging import configure_from_config, get_logger
 
         config = {
             "enabled": True,
@@ -537,7 +537,7 @@ class TestConsoleLevelConfiguration:
 
     def test_console_level(self, temp_log_dir, capsys):
         """验证控制台级别可独立配置。"""
-        from src.core.utils.logger import configure_from_config, get_logger
+        from src.modules.logging import configure_from_config, get_logger
 
         config = {
             "enabled": True,

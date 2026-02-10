@@ -5,13 +5,13 @@
 """
 
 import pytest
+
+from src.domains.output.parameters.render_parameters import ExpressionParameters
 from src.domains.output.pipelines.base import (
     OutputPipelineBase,
     PipelineErrorHandling,
     PipelineException,
 )
-from src.domains.output.parameters.render_parameters import ExpressionParameters
-
 
 # =============================================================================
 # 测试用 Pipeline

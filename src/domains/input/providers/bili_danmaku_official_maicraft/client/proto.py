@@ -1,7 +1,7 @@
 # src/domains/input/providers/bili_danmaku_official_maicraft/client/proto.py
 
-import struct
 import logging
+import struct
 
 
 class Proto:

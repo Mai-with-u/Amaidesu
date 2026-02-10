@@ -4,11 +4,11 @@ from typing import Literal
 
 from pydantic import Field
 
-from src.core.base.output_provider import OutputProvider
-from src.core.provider_registry import ProviderRegistry
-from src.core.utils.logger import get_logger
 from src.domains.output.parameters.render_parameters import RenderParameters
-from src.services.config.schemas.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.base import BaseProviderConfig
+from src.modules.logging import get_logger
+from src.modules.registry import ProviderRegistry
+from src.modules.types.base.output_provider import OutputProvider
 
 
 class MockOutputProvider(OutputProvider):

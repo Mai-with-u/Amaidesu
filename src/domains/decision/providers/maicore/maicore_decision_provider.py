@@ -12,21 +12,21 @@ MaiCoreDecisionProvider - MaiCore决策提供者
 """
 
 import asyncio
-from typing import Dict, Any, Optional, TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
 
+from maim_message import MessageBase, RouteConfig, Router, TargetConfig
 from pydantic import Field
 
-from maim_message import Router, RouteConfig, TargetConfig, MessageBase
-
-from src.core.base.decision_provider import DecisionProvider
-from .router_adapter import RouterAdapter
 from src.domains.decision.intent import Intent
-from src.core.utils.logger import get_logger
-from src.services.config.schemas.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.base import BaseProviderConfig
+from src.modules.logging import get_logger
+from src.modules.types.base.decision_provider import DecisionProvider
+
+from .router_adapter import RouterAdapter
 
 if TYPE_CHECKING:
-    from src.core.event_bus import EventBus
-    from src.core.base.normalized_message import NormalizedMessage
+    from src.modules.events.event_bus import EventBus
+    from src.modules.types.base.normalized_message import NormalizedMessage
 
 
 class MaiCoreDecisionProvider(DecisionProvider):
@@ -240,7 +240,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
             MessageBase 实例，如果转换失败返回 None
         """
         try:
-            from maim_message import MessageBase, BaseMessageInfo, UserInfo, Seg
+            from maim_message import BaseMessageInfo, MessageBase, Seg, UserInfo
 
             # 构建UserInfo
             user_id = normalized.user_id or "unknown"
@@ -380,8 +380,8 @@ class MaiCoreDecisionProvider(DecisionProvider):
             # 仍然发布事件（向后兼容）
             if self._event_bus:
                 try:
-                    from src.core.events.names import CoreEvents
-                    from src.core.events.payloads.decision import DecisionResponsePayload
+                    from src.modules.events.names import CoreEvents
+                    from src.modules.events.payloads.decision import DecisionResponsePayload
 
                     await self._event_bus.emit(
                         CoreEvents.DECISION_RESPONSE_GENERATED,
@@ -429,7 +429,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
             默认 Intent
         """
         from src.domains.decision.intent import Intent
-        from src.core.types import EmotionType, ActionType, IntentAction
+        from src.modules.types import ActionType, EmotionType, IntentAction
 
         return Intent(
             original_text=text,

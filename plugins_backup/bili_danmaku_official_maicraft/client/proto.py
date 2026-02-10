@@ -1,7 +1,7 @@
 # src/plugins/bili_danmaku_official/client/proto.py
 
-import struct
 import logging
+import struct
 
 
 class Proto:

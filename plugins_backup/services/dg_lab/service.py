@@ -5,18 +5,17 @@ DGLab 服务实现
 """
 
 import asyncio
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 try:
     import aiohttp
-    from aiohttp import ClientTimeout, ClientConnectorError
+    from aiohttp import ClientConnectorError, ClientTimeout
 except ImportError:
     aiohttp = None
     ClientTimeout = None
     ClientConnectorError = None
 
 from pydantic import BaseModel, Field
-
 from src.core.utils.logger import get_logger
 from src.services.dg_lab.config import DGLabConfig, WaveformPreset
 

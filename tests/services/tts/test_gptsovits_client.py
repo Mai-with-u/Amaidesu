@@ -2,9 +2,11 @@
 GPTSoVITSClient 测试
 """
 
-import pytest
 from unittest.mock import MagicMock, patch
-from src.services.tts.gptsovits_client import GPTSoVITSClient
+
+import pytest
+
+from src.modules.tts.gptsovits_client import GPTSoVITSClient
 
 
 @pytest.fixture

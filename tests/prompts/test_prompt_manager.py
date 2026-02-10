@@ -5,7 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from src.prompts import PromptManager, PromptTemplate, TemplateMetadata, get_prompt_manager, reset_prompt_manager
+from src.modules.prompts import (
+    PromptManager,
+    PromptTemplate,
+    TemplateMetadata,
+    get_prompt_manager,
+    reset_prompt_manager,
+)
 
 
 class TestPromptManager:
