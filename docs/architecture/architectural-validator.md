@@ -26,7 +26,7 @@ uv run python main.py --arch-validate
 ### 2. 在代码中手动启用
 
 ```python
-from src.core.events.architectural_validator import ArchitecturalValidator
+from src.modules.events.architectural_validator import ArchitecturalValidator
 
 # 创建 EventBus
 event_bus = EventBus()

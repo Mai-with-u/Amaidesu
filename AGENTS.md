@@ -23,7 +23,7 @@
 ### 迁移状态
 
 - **Input Provider**：8 个全部完成迁移
-- **Decision Provider**：6 个已迁移完成（含新增）
+- **Decision Provider**：3 个已迁移完成
 - **Output Provider**：11 个完成迁移（含新增）
 - **Service**：1 个完成迁移
 
@@ -142,18 +142,18 @@ self.audio_stream_channel = self._dependencies.get("audio_stream_channel")
 
 ### 共享类型
 
-以下类型被多个 Domain 共享，因此放在 `src/core/types/` 中避免循环依赖：
+以下类型被多个 Domain 共享，因此放在 `src/modules/types/` 中避免循环依赖：
 
 | 类型 | 用途 | 定义位置 |
 |------|------|---------|
-| `EmotionType` | 情感类型枚举 | `src/core/types/intent.py` |
-| `ActionType` | 动作类型枚举 | `src/core/types/intent.py` |
-| `IntentAction` | 意图动作模型 | `src/core/types/intent.py` |
+| `EmotionType` | 情感类型枚举 | `src/modules/types/intent.py` |
+| `ActionType` | 动作类型枚举 | `src/modules/types/intent.py` |
+| `IntentAction` | 意图动作模型 | `src/modules/types/intent.py` |
 
-**为什么这些类型在 Core 层？**
+**为什么这些类型在 Modules 层？**
 - 被 Input/Decision/Output 多个 Domain 使用
 - 如果放在任何一个 Domain 中，会导致其他 Domain 依赖它
-- 放在 Core 层可以避免循环依赖
+- 放在 Modules 层可以避免循环依赖
 
 **Decision Domain 特定的类型**：
 以下类型保留在 `src/domains/decision/intent.py` 中：
@@ -163,7 +163,7 @@ self.audio_stream_channel = self._dependencies.get("audio_stream_channel")
 
 **如何添加新的共享类型？**
 1. 评估类型是否真的需要跨多个 Domain 使用
-2. 如果是，添加到 `src/core/types/` 中的合适文件
+2. 如果是，添加到 `src/modules/types/` 中的合适文件
 3. 更新相关 Domain 的导入语句
 4. 运行架构测试验证
 
@@ -276,7 +276,7 @@ async def handle_message(self, message):
 | 类型 | 职责 | 位置 | 示例 |
 |------|------|------|------|
 | **InputProvider** | 从外部数据源采集数据 | `src/domains/input/providers/` | ConsoleInputProvider, BiliDanmakuInputProvider, STTInputProvider, BiliDanmakuOfficialInputProvider |
-| **DecisionProvider** | 处理 NormalizedMessage 生成 Intent | `src/domains/decision/providers/` | MaiCoreDecisionProvider, LocalLLMDecisionProvider, KeywordActionDecisionProvider, MaicraftDecisionProvider |
+| **DecisionProvider** | 处理 NormalizedMessage 生成 Intent | `src/domains/decision/providers/` | MaiCoreDecisionProvider, LLMDecisionProvider, MaicraftDecisionProvider |
 | **OutputProvider** | 渲染到目标设备 | `src/domains/output/providers/` | TTSOutputProvider, GPTSoVITSOutputProvider, AvatarOutputProvider, ObsControlOutputProvider, StickerOutputProvider |
 
 ### Provider 生命周期方法
@@ -310,7 +310,7 @@ InputProvider 也提供了 `setup()` 方法作为接口一致性，但它是空�
 
 **重要**: 添加新的 Provider 时，需要更新架构验证器配置。
 
-**配置位置**: `src/core/events/architectural_validator.py`
+**配置位置**: `src/modules/events/architectural_validator.py`
 
 **需要更新的配置**：
 1. `ALLOWED_SUBSCRIPTIONS`: 添加新 Provider 允许订阅的事件
@@ -369,7 +369,7 @@ enabled_outputs = ["tts", "subtitle", "vts"]
 ### 基本使用
 
 ```python
-from src.prompts import get_prompt_manager
+from src.modules.prompts import get_prompt_manager
 
 # 获取提示词
 prompt = get_prompt_manager().get_raw("decision/intent_parser")
@@ -391,7 +391,7 @@ prompt = get_prompt_manager().render(
 ### 基本使用
 
 ```python
-from src.core.events.names import CoreEvents
+from src.modules.events.names import CoreEvents
 
 # 发布事件
 await event_bus.emit(CoreEvents.NORMALIZATION_MESSAGE_READY, normalized_message)
@@ -462,14 +462,14 @@ ContextService 提供对话历史管理和多会话支持。
 - 包含业务逻辑
 
 **示例**：
-- ✓ `src/core/base/raw_data.py`: 定义 RawData 基础类型
-- ✓ `src/core/types/intent.py`: 共享的枚举类型
-- ✗ `src/core/base/base.py`: 重导出 `RenderParameters`（违规）
+- ✓ `src/modules/base/raw_data.py`: 定义 RawData 基础类型
+- ✓ `src/modules/types/intent.py`: 共享的枚举类型
+- ✗ `src/modules/base/base.py`: 重导出 `RenderParameters`（违规）
 
 ## 日志使用
 
 ```python
-from src.utils.logger import get_logger
+from src.modules.logging import get_logger
 
 logger = get_logger("MyClassName")  # 使用类名或模块名
 logger.info("信息日志")
@@ -510,9 +510,9 @@ logger.error("错误日志", exc_info=True)
 - 包含业务逻辑
 
 **示例**：
-- ✓ `src/core/base/raw_data.py`: 定义 RawData 基础类型
-- ✓ `src/core/types/intent.py`: 共享的枚举类型
-- ✗ `src/core/base/base.py`: 重导出 `RenderParameters`（违规）
+- ✓ `src/modules/base/raw_data.py`: 定义 RawData 基础类型
+- ✓ `src/modules/types/intent.py`: 共享的枚举类型
+- ✗ `src/modules/base/base.py`: 重导出 `RenderParameters`（违规）
 
 ## 目录结构
 
@@ -573,7 +573,7 @@ Amaidesu/
 所有功能已成功从旧插件系统迁移到新的 Provider 架构：
 
 - **8 个 Input Provider** 已迁移完成
-- **6 个 Decision Provider** 已迁移完成（含新增）
+- **3 个 Decision Provider** 已迁移完成
 - **11 个 Output Provider** 已迁移完成（含新增）
 - **1 个共享服务** (DGLabService) 已迁移完成
 

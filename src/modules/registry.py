@@ -435,7 +435,7 @@ class ProviderRegistry:
         Example:
             from src.modules.config.service import ConfigService
             config_service = ConfigService(base_dir=".")
-            config, _, _, _ = config_service.initialize()
+            config, _, _, _, _ = config_service.initialize()
             stats = ProviderRegistry.discover_and_register_providers(config_service, config)
             cls._logger.debug(f"注册完成: {stats}")
         """

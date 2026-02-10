@@ -35,8 +35,8 @@ EventBus 是项目的核心通信机制，支持：
 ### 发布事件
 
 ```python
-from src.core.events.names import CoreEvents
-from src.core.events.payloads import MessageReadyPayload, IntentPayload
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import MessageReadyPayload, IntentPayload
 
 # 发布事件（必须使用 Pydantic BaseModel）
 await event_bus.emit(
@@ -56,8 +56,8 @@ await event_bus.emit(
 ### 订阅事件
 
 ```python
-from src.core.events.names import CoreEvents
-from src.core.events.payloads import MessageReadyPayload, IntentPayload
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import MessageReadyPayload, IntentPayload
 
 # 订阅事件（on() 是同步方法）
 event_bus.on(
@@ -105,7 +105,7 @@ event_bus.off(
 使用 `CoreEvents` 常量避免硬编码字符串：
 
 ```python
-from src.core.events.names import CoreEvents
+from src.modules.events.names import CoreEvents
 
 # ✅ 正确：使用常量
 await event_bus.emit(CoreEvents.NORMALIZATION_MESSAGE_READY, data)
@@ -122,7 +122,7 @@ await event_bus.emit("normalization.message_ready", data)
 
 ```python
 from pydantic import BaseModel
-from src.core.events.payloads import MessageReadyPayload
+from src.modules.events.payloads import MessageReadyPayload
 
 class MessageReadyPayload(BaseModel):
     """消息就绪事件 Payload"""
@@ -260,7 +260,7 @@ async def conditional_handler(self, event_name: str, payload: dict, source: str)
 
 ```python
 # ✅ 正确
-from src.core.events.names import CoreEvents
+from src.modules.events.names import CoreEvents
 await event_bus.emit(CoreEvents.NORMALIZATION_MESSAGE_READY, data)
 
 # ❌ 错误
@@ -271,7 +271,7 @@ await event_bus.emit("normalization.message_ready", data)
 
 ```python
 # ✅ 正确
-from src.core.events.payloads import MessageReadyPayload
+from src.modules.events.payloads import MessageReadyPayload
 await event_bus.emit(
     CoreEvents.NORMALIZATION_MESSAGE_READY,
     MessageReadyPayload(message=msg),

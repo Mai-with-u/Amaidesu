@@ -139,7 +139,7 @@ class OutputCoordinator:
 ### 代码中启用
 
 ```python
-from src.core.events.architectural_validator import ArchitecturalValidator
+from src.modules.events.architectural_validator import ArchitecturalValidator
 
 validator = ArchitecturalValidator(event_bus, enabled=True)
 ```

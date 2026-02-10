@@ -152,8 +152,9 @@ Amaidesu/
 ├── config.toml          # 实际配置（首次运行生成）
 ├── src/                 # 源代码
 │   ├── amaidesu_core.py # 核心协调器
-│   ├── core/            # 基础设施
-│   ├── services/        # 共享服务
+│   ├── modules/         # 核心基础设施（跨域共享）
+│   ├── services/        # 共享服务（LLM、配置、上下文）
+│   ├── prompts/         # 提示词管理
 │   └── domains/         # 业务域（input/decision/output）
 ├── tests/               # 测试
 ├── docs/                # 文档
@@ -178,17 +179,21 @@ Amaidesu/
 - **BiliDanmakuOfficialMaicraftInputProvider**: B站官方弹幕 Maicraft 版本
 
 ### 决策 Provider
-- **KeywordActionDecisionProvider**: 关键词动作决策
+- **MaiCoreDecisionProvider**: MaiBot 核心决策
+- **LLMDecisionProvider**: 本地 LLM 决策
 - **MaicraftDecisionProvider**: 弹幕互动游戏决策
 
 ### 输出 Provider
+- **EdgeTTSProvider**: Edge TTS 语音合成
 - **GPTSoVITSOutputProvider**: GPT-SoVITS 高质量语音合成
-- **AvatarOutputProvider**: 虚拟形象输出（支持VTS/VRChat/Live2D）
-- **ObsControlOutputProvider**: OBS 控制（文本显示、场景切换）
-- **StickerOutputProvider**: 贴纸输出
-- **RemoteStreamOutputProvider**: 远程流媒体输出
-- **OmniTTSOutputProvider**: Fish TTS 语音合成
+- **OmniTTSProvider**: Fish TTS 语音合成
+- **VTSProvider**: VTS 虚拟形象控制
+- **VRChatProvider**: VRChat OSC 协议控制
 - **WarudoOutputProvider**: Warudo 虚拟主播控制
+- **SubtitleOutputProvider**: 字幕输出
+- **StickerOutputProvider**: 贴纸输出
+- **ObsControlOutputProvider**: OBS 控制（文本显示、场景切换）
+- **RemoteStreamOutputProvider**: 远程流媒体输出
 
 ### 共享服务
 - **DGLabService**: DG-LAB 硬件控制服务

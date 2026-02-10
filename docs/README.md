@@ -120,11 +120,59 @@ docs/
 
 项目采用 **3域架构**（Input → Decision → Output）：
 
-- **Input Domain**: 数据采集 + 标准化 + 预处理
-- **Decision Domain**: 决策（可替换）
-- **Output Domain**: 参数生成 + 渲染
+```
+src/
+├── modules/               # 核心基础设施（跨域共享）
+│   ├── types/            # 共享类型定义（intent.py, base/）
+│   ├── events/           # 事件系统（EventBus, CoreEvents）
+│   ├── logging/          # 日志系统
+│   ├── context/          # 上下文服务
+│   ├── llm/              # LLM 客户端
+│   ├── tts/              # TTS 引擎
+│   ├── streaming/        # 音频流通道
+│   ├── config/           # 配置管理
+│   └── prompts/          # 提示词管理
+│
+├── domains/
+│   ├── input/            # Input Domain
+│   │   ├── providers/    # 8 个输入 Provider
+│   │   │   ├── bili_danmaku/
+│   │   │   ├── bili_danmaku_official/
+│   │   │   ├── bili_danmaku_official_maicraft/
+│   │   │   ├── console_input/
+│   │   │   ├── mainosaba/
+│   │   │   ├── mock_danmaku/
+│   │   │   ├── read_pingmu/
+│   │   │   ├── remote_stream/
+│   │   │   └── stt/
+│   │   └── pipelines/    # 文本预处理管道
+│   │
+│   ├── decision/         # Decision Domain
+│   │   └── providers/    # 3 个决策 Provider
+│   │       ├── llm/
+│   │       ├── maicore/
+│   │       └── maicraft/
+│   │
+│   └── output/           # Output Domain
+│       └── providers/    # 10 个输出 Provider
+│           ├── audio/           # TTS 音频输出
+│           ├── avatar/          # 虚拟形象控制
+│           │   ├── vts/
+│           │   ├── warudo/
+│           │   └── vrchat/
+│           ├── subtitle/        # 字幕输出
+│           ├── sticker/         # 贴图输出
+│           ├── obs_control/     # OBS 控制
+│           ├── remote_stream/   # 远程流输出
+│           ├── warudo/          # Warudo 协议
+│           └── mock/            # 模拟输出
+│
+└── amaidesu_core.py      # 核心协调器（组合根）
+```
 
-详细设计：[refactor/design/overview.md](../refactor/design/overview.md)
+**数据流**：Input Domain → Decision Domain → Output Domain（单向）
+
+详细设计：[架构总览](architecture/overview.md)
 
 ### 已废弃的功能
 

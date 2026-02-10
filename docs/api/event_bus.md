@@ -17,13 +17,13 @@ EventBus 是一个类型安全的发布-订阅事件总线，用于跨域通信�
 
 ```python
 # EventBus 类
-from src.core.event_bus import EventBus
+from src/modules/events/event_bus import EventBus
 
 # 事件名称常量（避免硬编码字符串）
-from src.core.events.names import CoreEvents
+from src/modules/events/names import CoreEvents
 
 # 事件 Payload 类型（Pydantic BaseModel）
-from src.core.events.payloads import (
+from src/modules/events/payloads import (
     RawDataPayload,
     MessageReadyPayload,
     IntentPayload,
@@ -34,9 +34,9 @@ from src.core.events.payloads import (
 ### 基本用法
 
 ```python
-from src.core.event_bus import EventBus
-from src.core.events.names import CoreEvents
-from src.core.events.payloads import MessageReadyPayload
+from src/modules/events/event_bus import EventBus
+from src/modules/events/names import CoreEvents
+from src.modules.events.payloads import MessageReadyPayload
 
 # 创建 EventBus 实例
 event_bus = EventBus(enable_stats=True)
@@ -91,8 +91,8 @@ async def emit(
 
 **示例**：
 ```python
-from src.core.events.names import CoreEvents
-from src.core.events.payloads import RawDataPayload
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import RawDataPayload
 
 # 发布原始数据事件
 await event_bus.emit(
@@ -185,7 +185,7 @@ def on_typed(
 
 **示例**：
 ```python
-from src.core.events.payloads import MessageReadyPayload
+from src.modules.events.payloads import MessageReadyPayload
 
 # 定义处理器（接收类型化对象）
 async def handle_message(event_name: str, payload: MessageReadyPayload, source: str):
@@ -324,7 +324,7 @@ print(f"已注册事件: {events}")
 
 **示例**：
 ```python
-from src.core.events.payloads import RawDataPayload
+from src.modules.events.payloads import RawDataPayload
 
 # 发布原始数据
 await event_bus.emit(
@@ -348,7 +348,7 @@ await event_bus.emit(
 
 **示例**：
 ```python
-from src.core.events.payloads import IntentPayload
+from src.modules.events.payloads import IntentPayload
 
 # 发布意图
 await event_bus.emit(
@@ -378,7 +378,7 @@ await event_bus.emit(
 | 关闭 | `CoreEvents.CORE_SHUTDOWN` | `ShutdownPayload` | 系统关闭时 |
 | 错误 | `CoreEvents.CORE_ERROR` | `ErrorPayload` | 系统错误时 |
 
-完整的事件列表请查看 `src/core/events/names.py`。
+完整的事件列表请查看 `src/modules/events/names.py`。
 
 ## 高级用法
 
@@ -464,7 +464,7 @@ print(f"结果: {results}")
 
 ```python
 from pydantic import BaseModel, Field
-from src.core.events.payloads.base import BasePayload
+from src/modules/events/payloads/base import BasePayload
 
 class MyCustomPayload(BasePayload):
     """自定义事件 Payload"""
@@ -540,7 +540,7 @@ await event_bus.cleanup()  # 等待约 2 秒
 await event_bus.emit("normalization.message_ready", payload)
 
 # ✅ 正确：使用常量
-from src.core.events.names import CoreEvents
+from src/modules/events/names import CoreEvents
 await event_bus.emit(CoreEvents.NORMALIZATION_MESSAGE_READY, payload)
 ```
 
@@ -570,7 +570,7 @@ class MyEvent(BaseModel):
     message: str
 
 # ✅ 推荐：继承 BasePayload（获得调试输出）
-from src.core.events.payloads.base import BasePayload
+from src/modules/events/payloads/base import BasePayload
 
 class MyEvent(BasePayload):
     message: str
@@ -657,7 +657,7 @@ for event_name, stat in stats.items():
 
 ## 源码参考
 
-- **EventBus 实现**：`src/core/event_bus.py`
-- **事件名称常量**：`src/core/events/names.py`
-- **Payload 定义**：`src/core/events/payloads/`
-- **单元测试**：`tests/core/test_event_bus.py`
+- **EventBus 实现**：`src/modules/events/event_bus.py`
+- **事件名称常量**：`src/modules/events/names.py`
+- **Payload 定义**：`src/modules/events/payloads/`
+- **单元测试**：`tests/modules/events/test_event_bus.py`

@@ -9,7 +9,7 @@ Provider 是项目的核心组件，负责具体的数据处理功能。本指�
 | 类型 | 位置 | 职责 | 示例 |
 |------|------|------|------|
 | **InputProvider** | Input Domain | 从外部数据源采集数据 | ConsoleInputProvider, BiliDanmakuInputProvider, STTInputProvider, BiliDanmakuOfficialInputProvider |
-| **DecisionProvider** | Decision Domain | 决策能力接口 | MaiCoreDecisionProvider, LocalLLMDecisionProvider, KeywordActionDecisionProvider, MaicraftDecisionProvider |
+| **DecisionProvider** | Decision Domain | 决策能力接口 | MaiCoreDecisionProvider, LocalLLMDecisionProvider, MaicraftDecisionProvider |
 | **OutputProvider** | Output Domain | 渲染到目标设备 | TTSOutputProvider, GPTSoVITSOutputProvider, AvatarOutputProvider, ObsControlOutputProvider, StickerOutputProvider |
 
 ### Provider 系统特点
@@ -27,9 +27,9 @@ InputProvider 从外部数据源采集数据，生成 `RawData` 流。
 
 ```python
 from typing import AsyncIterator, Dict, Any
-from src.core.base.input_provider import InputProvider
-from src.core.base.raw_data import RawData
-from src.utils.logger import get_logger
+from src/modules/types/base/input_provider import InputProvider
+from src/modules/types/base/raw_data import RawData
+from src/modules/logging import get_logger
 
 class MyInputProvider(InputProvider):
     """自定义输入 Provider"""
@@ -86,7 +86,7 @@ class MyInputProvider(InputProvider):
 ### RawData 结构
 
 ```python
-from src.core.base.raw_data import RawData
+from src/modules/types/base/raw_data import RawData
 
 raw_data = RawData(
     content={"text": "用户消息", "user": "nickname"},  # 原始数据
@@ -105,11 +105,11 @@ DecisionProvider 处理 `NormalizedMessage` 生成 `Intent`。
 
 ```python
 from typing import Dict, Any
-from src.core.base.decision_provider import DecisionProvider
-from src.core.base.normalized_message import NormalizedMessage
-from src.core.types import EmotionType, ActionType, IntentAction
+from src.modules.types.base.decision_provider import DecisionProvider
+from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.types import EmotionType, ActionType, IntentAction
 from src.domains.decision.intent import Intent
-from src.utils.logger import get_logger
+from src.modules.logging import get_logger
 
 class MyDecisionProvider(DecisionProvider):
     """自定义决策 Provider"""
@@ -144,7 +144,7 @@ class MyDecisionProvider(DecisionProvider):
 ### Intent 结构
 
 ```python
-from src.core.types import EmotionType, ActionType, IntentAction
+from src.modules.types import EmotionType, ActionType, IntentAction
 from src.domains.decision.intent import Intent
 
 intent = Intent(
@@ -170,9 +170,9 @@ OutputProvider 渲染到目标设备。
 
 ```python
 from typing import Dict, Any
-from src.core.base.output_provider import OutputProvider
+from src.modules.types.base.output_provider import OutputProvider
 from src.domains.output.parameters.render_parameters import RenderParameters
-from src.utils.logger import get_logger
+from src.modules.logging import get_logger
 
 class MyOutputProvider(OutputProvider):
     """自定义输出 Provider"""
@@ -222,7 +222,7 @@ params = RenderParameters(
 
 ```python
 # src/domains/input/providers/my_provider/__init__.py
-from src.core.provider_registry import ProviderRegistry
+from src.modules.provider_registry import ProviderRegistry
 from .my_input_provider import MyInputProvider
 
 ProviderRegistry.register_input(
@@ -293,9 +293,9 @@ volume = 0.8
 
 ```python
 from typing import AsyncIterator, Dict, Any
-from src.core.base.input_provider import InputProvider
-from src.core.base.raw_data import RawData
-from src.utils.logger import get_logger
+from src/modules/types/base/input_provider import InputProvider
+from src/modules/types/base/raw_data import RawData
+from src/modules/logging import get_logger
 
 class BiliDanmakuInputProvider(InputProvider):
     """Bilibili 弹幕输入 Provider"""
@@ -336,9 +336,9 @@ class BiliDanmakuInputProvider(InputProvider):
 
 ```python
 from typing import Dict, Any
-from src.core.base.output_provider import OutputProvider
+from src.modules.types.base.output_provider import OutputProvider
 from src.domains.output.parameters.render_parameters import RenderParameters
-from src.utils.logger import get_logger
+from src.modules.logging import get_logger
 
 class TTSOutputProvider(OutputProvider):
     """TTS 输出 Provider"""
@@ -545,44 +545,6 @@ message_config.user_nickname = "语音"
 **依赖安装：**
 ```bash
 uv add torch sounddevice aiohttp
-```
-
-### KeywordActionDecisionProvider - 关键词动作决策
-
-基于规则的关键词匹配决策 Provider，根据配置的关键词规则生成包含动作的 Intent。
-
-**功能特性：**
-- 支持多种匹配模式（精确/前缀/后缀/包含）
-- 冷却时间管理（全局和单个规则）
-- 通过 Intent.actions 传递动作到 Output Domain
-- 优先级控制
-
-**配置示例：**
-```toml
-[providers.decision.keyword_action]
-type = "keyword_action"
-global_cooldown = 1.0
-default_response = ""
-
-[[providers.decision.keyword_action.actions]]
-name = "微笑动作"
-enabled = true
-keywords = ["微笑", "smile", "😊"]
-match_mode = "anywhere"
-cooldown = 3.0
-action_type = "hotkey"
-action_params = { key = "smile" }
-priority = 50
-
-[[providers.decision.keyword_action.actions]]
-name = "打招呼"
-enabled = true
-keywords = ["你好", "hello", "hi"]
-match_mode = "exact"
-cooldown = 5.0
-action_type = "expression"
-action_params = { name = "smile" }
-priority = 60
 ```
 
 ### MaicraftDecisionProvider - 弹幕互动游戏决策
@@ -959,4 +921,4 @@ prompt = get_prompt_manager().render(
 
 ---
 
-*最后更新：2026-02-09*
+*最后更新：2026-02-10*
