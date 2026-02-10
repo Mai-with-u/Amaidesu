@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from packaging import version
 
-from src.modules.logging import get_logger  # 假设 logger 初始化已在外部完成或以其他方式处理
+from src.modules.logging import get_logger
 
 logger = get_logger("ConfigManager")
 
@@ -329,10 +329,18 @@ def initialize_configurations(
 
 
 def _get_version_from_toml(toml_path: str) -> Optional[str]:
-    """从TOML文件中获取版本号"""
+    """从TOML文件中获取版本号
+
+    优先从 [meta.version] 获取，兼容旧的 [inner.version]
+    """
     try:
         with open(toml_path, "rb") as f:
             data = tomllib.load(f)
+        # 优先使用新的 [meta.version]
+        version = data.get("meta", {}).get("version")
+        if version:
+            return version
+        # 兼容旧的 [inner.version]
         return data.get("inner", {}).get("version")
     except Exception:
         return None
@@ -501,7 +509,7 @@ def _update_config_from_template(config_path: str, template_path: str) -> None:
                         and key in existing_data[section]
                         and existing_data[section][key] != template_value
                         and not (key == "api_key" and existing_data[section][key] == "your-api-key")
-                        and not (section == "inner" and key == "version")
+                        and not (section in ("inner", "meta") and key == "version")
                     ):
                         merged_data[section][key] = existing_data[section][key]
                         logger.info(f"[配置更新] 保留用户设置: {section}.{key} = {existing_data[section][key]}")

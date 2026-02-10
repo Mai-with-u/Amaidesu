@@ -31,7 +31,7 @@ class ConfigService:
     使用示例:
         # 初始化配置服务
         config_service = ConfigService(base_dir="/path/to/project")
-        config, main_copied, plugin_copied, pipeline_copied = await config_service.initialize()
+        config, main_copied, plugin_copied, pipeline_copied, config_updated = await config_service.initialize()
 
         # 获取主配置
         general_config = config_service.get_section("general")
@@ -57,6 +57,10 @@ class ConfigService:
         self._pipeline_configs_copied = False
         self._initialized = False
         self.logger = get_logger("ConfigService")
+
+        # 版本管理器（待 ConfigVersionManager 完成开发后启用）
+        self.version_manager = None
+
         self.logger.debug("ConfigService 初始化完成")
 
     @property
@@ -72,7 +76,7 @@ class ConfigService:
             return {}
         return self._main_config
 
-    def initialize(self) -> tuple[Dict[str, Any], bool, bool, bool]:
+    def initialize(self) -> tuple[Dict[str, Any], bool, bool, bool, bool]:
         """
         初始化所有配置文件
 
@@ -81,9 +85,11 @@ class ConfigService:
         2. 加载主配置
         3. 检查并设置插件配置文件
         4. 检查并设置管道配置文件
+        5. 检查并更新配置版本
 
         Returns:
-            (main_config, main_config_copied, plugin_configs_copied, pipeline_configs_copied)
+            (main_config, main_config_copied, plugin_configs_copied,
+             pipeline_configs_copied, main_config_updated)
         """
         if self._initialized:
             self.logger.warning("ConfigService 已经初始化，跳过重复初始化")
@@ -92,6 +98,7 @@ class ConfigService:
                 self._main_config_copied,
                 self._plugin_configs_copied,
                 self._pipeline_configs_copied,
+                False,
             )
 
         self.logger.info("开始初始化配置服务...")
@@ -109,6 +116,26 @@ class ConfigService:
             pipeline_dir_name="src/domains/input/pipelines",  # 更新：Pipeline已移入Input Domain
         )
 
+        # 新增：检查并更新配置版本
+        # 仅当配置已存在（未从模板复制）时才检查版本
+        main_config_updated = False
+        if not self._main_config_copied and self.version_manager is not None:
+            needs_update, message = self.version_manager.check_main_config()
+
+            if needs_update:
+                self.logger.info(f"配置文件需要更新: {message}")
+                updated, message = self.version_manager.update_main_config()
+
+                if updated:
+                    self.logger.info(f"配置文件已更新: {message}")
+                    # 重新加载更新后的配置
+                    from src.modules.config.config_utils import load_config
+
+                    self._main_config = load_config("config.toml", self.base_dir)
+                    main_config_updated = True
+                else:
+                    self.logger.warning(f"配置文件更新失败: {message}")
+
         self._initialized = True
         self.logger.info("配置服务初始化完成")
 
@@ -117,6 +144,7 @@ class ConfigService:
             self._main_config_copied,
             self._plugin_configs_copied,
             self._pipeline_configs_copied,
+            main_config_updated,
         )
 
     def get_section(self, section: str, default: Any = None) -> Dict[str, Any]:
