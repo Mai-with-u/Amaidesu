@@ -38,7 +38,7 @@ def register_core_events() -> None:
     """
     注册所有核心事件（3域架构）
 
-    在 AmaidesuCore 初始化时调用。
+    在 main.py 中初始化 EventBus 后调用。
     """
     # Input Domain: 输入域
     EventRegistry.register_core_event(CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload)

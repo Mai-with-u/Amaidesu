@@ -886,64 +886,17 @@ port = 10800
 
 ## 共享服务
 
-### DGLabService - DG-Lab 硬件控制
-
-提供 DG-LAB 硬件控制服务，支持电击强度、波形和持续时间控制。
-
-**注意：** 这是一个共享服务，不是 Provider。它不产生数据流，不订阅事件，提供共享 API 供其他组件调用。
-
-**配置示例：**
-```toml
-[dg_lab]
-api_base_url = "http://127.0.0.1:8081"
-default_strength = 10
-default_waveform = "big"  # small | medium | big | random
-shock_duration_seconds = 2.0
-request_timeout = 5.0
-max_strength = 50
-enable_safety_limit = true
-```
-
-**使用方式：**
-```python
-from src.services.manager import ServiceManager
-
-# 获取服务
-dg_lab_service = ServiceManager.get_service("dg_lab")
-
-# 触发电击
-await dg_lab_service.trigger_shock(
-    strength=20,
-    waveform="medium",
-    duration=2.0
-)
-```
-
-### VRChatAdapter - VRChat 适配器
-
-VRChat 平台适配器，通过 OSC 协议与 VRChat 通信。
-
-**功能特性：**
-- OSC 客户端发送参数控制命令
-- OSC 服务器（可选）接收数据
-- 参数映射（抽象参数 → VRChat Avatar Parameters）
-- 热键/手势触发
-
-**支持的手势：**
-- Neutral, Wave, Peace, ThumbsUp, RocknRoll, HandGun, Point, Victory, Cross
-
-**参数映射：**
-```python
-PARAM_TRANSLATION = {
-    "smile": "MouthSmile",
-    "eye_open": "EyeOpen",
-    "mouth_open": "MouthOpen",
-    "brow_down": "BrowDownLeft",
-    "brow_up": "BrowUpLeft",
-    "eye_x": "EyeX",
-    "eye_y": "EyeY",
-}
-```
+> **⚠️ 已废弃（A-02 重构）**
+>
+> 服务注册机制（ServiceManager）已完全移除。
+> 所有共享服务（如 DGLabService）已迁移到 Provider 架构或移至 `plugins_backup/` 作为历史参考。
+>
+> 如果需要共享功能，请：
+> 1. 创建对应的 Provider（InputProvider/DecisionProvider/OutputProvider）
+> 2. 在 Provider 内部实现所需功能
+> 3. 通过 EventBus 进行跨 Provider 通信
+>
+> 参见：[Provider 开发](#provider-开发)、[事件系统](../architecture/event-system.md)
 
 ## 新提示词
 

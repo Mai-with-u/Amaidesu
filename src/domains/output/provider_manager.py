@@ -460,7 +460,7 @@ class OutputProviderManager:
 
         Args:
             config: 输出Provider配置（来自[providers.output]）
-            core: AmaidesuCore实例（可选，用于访问服务）
+            core: 已废弃参数（保留以兼容旧代码，不再使用）
             config_service: ConfigService实例（用于三级配置加载）
 
         配置格式:
@@ -553,7 +553,7 @@ class OutputProviderManager:
         Args:
             provider_type: Provider类型（"tts", "subtitle", "sticker", "vts", "omni_tts", "avatar"等）
             config: Provider配置
-            core: AmaidesuCore实例（可选）
+            core: 已废弃参数（保留以兼容旧代码，不再使用）
 
         Returns:
             Provider实例，如果创建失败返回None

@@ -5,6 +5,4 @@
 所有服务应直接在 main.py 中创建和管理。
 """
 
-from typing import Optional, Any
-
 __all__ = []
