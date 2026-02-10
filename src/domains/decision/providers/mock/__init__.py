@@ -1,16 +1,17 @@
 """Mock Decision Provider - 用于测试"""
 
-from typing import Optional, Literal
+from typing import Literal, Optional
 
 from pydantic import Field
 
-# 必须在类型导入前导入这些
-from src.core.base.decision_provider import DecisionProvider
-from src.core.base.normalized_message import NormalizedMessage
 from src.domains.decision.intent import Intent
-from src.core.utils.logger import get_logger
-from src.core.provider_registry import ProviderRegistry
-from src.services.config.schemas.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+from src.modules.logging import get_logger
+from src.modules.registry import ProviderRegistry
+
+# 必须在类型导入前导入这些
+from src.modules.types.base.decision_provider import DecisionProvider
+from src.modules.types.base.normalized_message import NormalizedMessage
 
 
 class MockDecisionProvider(DecisionProvider):
@@ -57,7 +58,7 @@ class MockDecisionProvider(DecisionProvider):
             response_text = self.default_response
 
         from src.domains.decision.intent import Intent
-        from src.core.types import EmotionType
+        from src.modules.types import EmotionType
 
         return Intent(
             original_text=message.text,

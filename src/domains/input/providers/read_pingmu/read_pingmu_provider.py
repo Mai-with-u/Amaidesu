@@ -8,16 +8,16 @@ ReadPingmu InputProvider - 屏幕读评输入Provider
 
 import asyncio
 import time
-from typing import Dict, Any, Optional, TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
 
 if TYPE_CHECKING:
-    from src.core.event_bus import EventBus
+    from src.modules.events.event_bus import EventBus
 
 from pydantic import Field
 
-from src.core.base.input_provider import InputProvider
-from src.core.utils.logger import get_logger
-from src.services.config.schemas.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+from src.modules.logging import get_logger
+from src.modules.types.base.input_provider import InputProvider
 
 # 导入屏幕分析和读取模块
 try:

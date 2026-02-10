@@ -16,8 +16,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from src.core.base.decision_provider import DecisionProvider
-from src.core.base.normalized_message import NormalizedMessage
+from src.modules.types.base.decision_provider import DecisionProvider
+from src.modules.types.base.normalized_message import NormalizedMessage
 
 if TYPE_CHECKING:
     from src.domains.decision.intent import Intent

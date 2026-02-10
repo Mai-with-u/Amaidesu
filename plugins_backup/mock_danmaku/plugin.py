@@ -1,11 +1,11 @@
 # src/plugins/mock_danmaku/plugin.py
 
 import asyncio
-import os
 import json
-from pathlib import Path
-from typing import Dict, Any, Optional, List
+import os
 import traceback  # 导入 traceback 用于详细错误日志记录
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 # --- 依赖检查 & TOML ---
 # (保留 TOML 加载部分，它很有用)
@@ -18,11 +18,10 @@ except ModuleNotFoundError:
         tomllib = None
 
 # --- Amaidesu 核心导入 ---
-from src.core.plugin_manager import BasePlugin
-from src.core.amaidesu_core import AmaidesuCore
-
 # 直接导入 MessageBase 及其组件以供 from_dict 使用
 from maim_message import MessageBase
+from src.core.amaidesu_core import AmaidesuCore
+from src.core.plugin_manager import BasePlugin
 
 # 已移除导入: from src.utils.message_utils import deserialize_messagebase
 # 移除多余的 get_logger 和 logger 初始化

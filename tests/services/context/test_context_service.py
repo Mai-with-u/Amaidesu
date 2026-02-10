@@ -14,15 +14,16 @@ ContextService 单元测试
 """
 
 import time
+
 import pytest
-from src.services.context import (
+
+from src.modules.context import (
     ContextService,
+    ContextServiceConfig,
     ConversationMessage,
     MessageRole,
-    ContextServiceConfig,
     SessionInfo,  # noqa: F401 - Part of public API, used for documentation
 )
-
 
 # =============================================================================
 # Test Fixtures

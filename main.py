@@ -1,25 +1,26 @@
 """Amaidesu 应用程序主入口。"""
 
+import argparse
 import asyncio
+import contextlib
+import os
 import signal
 import sys
-import os
-import argparse
-import contextlib
 from typing import Any, Dict, Optional, Tuple
 
-from src.core.provider_registry import ProviderRegistry
-from src.services.config.service import ConfigService
-from src.core.event_bus import EventBus
-from src.core.events import register_core_events
-from src.domains.output import OutputCoordinator
-from src.services.llm.manager import LLMManager
-from src.domains.input.pipelines.manager import InputPipelineManager
-from src.core.utils.logger import get_logger
 from loguru import logger as loguru_logger
-from src.domains.input.coordinator import InputCoordinator
-from src.domains.input.provider_manager import InputProviderManager
+from src.core.event_bus import EventBus
+from src.core.provider_registry import ProviderRegistry
+from src.core.utils.logger import get_logger
+from src.services.config.service import ConfigService
+from src.services.llm.manager import LLMManager
+
+from src.core.events import register_core_events
 from src.domains.decision import DecisionProviderManager
+from src.domains.input.coordinator import InputCoordinator
+from src.domains.input.pipelines.manager import InputPipelineManager
+from src.domains.input.provider_manager import InputProviderManager
+from src.domains.output import OutputCoordinator
 from src.services.context import ContextService, ContextServiceConfig
 
 logger = get_logger("Main")

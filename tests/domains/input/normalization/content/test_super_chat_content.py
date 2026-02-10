@@ -5,8 +5,8 @@
 """
 
 import pytest
-from src.domains.input.normalization.content.super_chat_content import SuperChatContent
 
+from src.domains.input.normalization.content.super_chat_content import SuperChatContent
 
 # =============================================================================
 # 创建和基本功能测试

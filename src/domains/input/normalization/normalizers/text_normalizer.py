@@ -3,10 +3,12 @@
 """
 
 from typing import Optional
-from .base import DataNormalizer
-from src.core.base.raw_data import RawData
-from src.core.base.normalized_message import NormalizedMessage
+
 from src.domains.input.normalization.content import TextContent
+from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.types.base.raw_data import RawData
+
+from .base import DataNormalizer
 
 
 class TextNormalizer(DataNormalizer):
@@ -47,7 +49,7 @@ class TextNormalizer(DataNormalizer):
                 text = processed_text
             except Exception as e:
                 # 出错时使用原文本，不中断流程
-                from src.core.utils.logger import get_logger
+                from src.modules.logging import get_logger
 
                 logger = get_logger("TextNormalizer")
                 logger.error(f"TextPipeline处理失败: {e}", exc_info=True)

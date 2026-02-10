@@ -2,20 +2,21 @@
 RemoteStreamOutputProvider 测试
 """
 
-import pytest
 import base64
 import io
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 from PIL import Image
 
+from src.domains.output.parameters.render_parameters import RenderParameters
 from src.domains.output.providers.remote_stream import RemoteStreamOutputProvider
 from src.domains.output.providers.remote_stream.remote_stream_output_provider import (
-    MessageType,
-    StreamMessage,
     AudioConfig,
     ImageConfig,
+    MessageType,
+    StreamMessage,
 )
-from src.domains.output.parameters.render_parameters import RenderParameters
 
 
 @pytest.fixture
@@ -513,7 +514,7 @@ class TestRemoteStreamOutputProvider:
     @pytest.mark.asyncio
     async def test_audio_stream_channel_callback(self, remote_stream_config, sample_audio_data):
         """测试 AudioStreamChannel 音频块回调"""
-        from src.core.streaming.audio_chunk import AudioChunk
+        from src.modules.streaming.audio_chunk import AudioChunk
 
         provider = RemoteStreamOutputProvider(remote_stream_config)
 

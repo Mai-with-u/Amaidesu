@@ -4,9 +4,9 @@ E2E Test Helper Functions
 提供测试辅助函数，简化测试代码
 """
 
-from src.core.base.normalized_message import NormalizedMessage
-from src.core.base.raw_data import RawData
 from src.domains.input.normalization.content import TextContent
+from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.types.base.raw_data import RawData
 
 
 def create_normalized_message(text: str, source: str = "test", importance: float = 0.5) -> NormalizedMessage:

@@ -6,15 +6,16 @@ MainosabaPlugin - 《魔法少女的魔女裁判》游戏助手插件
 """
 
 import asyncio
-import time
-import io
 import base64
-from typing import Optional, Dict, Any
+import io
+import time
 from enum import Enum
-from PIL import ImageGrab
+from typing import Any, Dict, Optional
+
 import pyautogui
+from maim_message import BaseMessageInfo, FormatInfo, MessageBase, Seg, UserInfo
+from PIL import ImageGrab
 from src.core.plugin_manager import BasePlugin
-from maim_message import MessageBase, BaseMessageInfo, UserInfo, Seg, FormatInfo
 
 
 class ControlMethod(Enum):

@@ -42,16 +42,16 @@ KeywordActionDecisionProvider - 关键词动作决策Provider
 """
 
 import time
-from typing import Optional, List, Dict, Any, Literal
+from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-from src.core.base.decision_provider import DecisionProvider
-from src.core.base.normalized_message import NormalizedMessage
 from src.domains.decision.intent import Intent
-from src.core.types import ActionType, IntentAction, EmotionType
-from src.core.utils.logger import get_logger
-from src.services.config.schemas.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+from src.modules.logging import get_logger
+from src.modules.types import ActionType, EmotionType, IntentAction
+from src.modules.types.base.decision_provider import DecisionProvider
+from src.modules.types.base.normalized_message import NormalizedMessage
 
 
 class ActionRule(BaseModel):

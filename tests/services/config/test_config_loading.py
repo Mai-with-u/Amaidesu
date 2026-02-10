@@ -20,13 +20,13 @@
 """
 
 import os
-import pytest
-import tempfile
 import shutil
+import tempfile
+
+import pytest
 from pydantic import BaseModel, ValidationError
 
-from src.services.config.service import ConfigService
-
+from src.modules.config.service import ConfigService
 
 # =============================================================================
 # Test Fixtures - Pydantic Schemas
@@ -790,7 +790,7 @@ api_key = "test"
 
 def test_deep_merge_basic_types():
     """测试深度合并基本类型"""
-    from src.services.config.service import deep_merge_configs
+    from src.modules.config.service import deep_merge_configs
 
     base = {"a": 1, "b": 2}
     override = {"b": 20, "c": 3}
@@ -804,7 +804,7 @@ def test_deep_merge_basic_types():
 
 def test_deep_merge_nested_dicts_simple():
     """测试深度合并嵌套字典（简单版本）"""
-    from src.services.config.service import deep_merge_configs
+    from src.modules.config.service import deep_merge_configs
 
     base = {"a": 1, "nested": {"x": 10, "y": 20}}
     override = {"nested": {"y": 200, "z": 30}, "b": 2}
@@ -820,7 +820,7 @@ def test_deep_merge_nested_dicts_simple():
 
 def test_deep_merge_lists():
     """测试深度合并列表（后者替换前者）"""
-    from src.services.config.service import deep_merge_configs
+    from src.modules.config.service import deep_merge_configs
 
     base = {"items": [1, 2, 3]}
     override = {"items": [4, 5]}
@@ -833,7 +833,7 @@ def test_deep_merge_lists():
 
 def test_deep_merge_none_values():
     """测试None值被跳过"""
-    from src.services.config.service import deep_merge_configs
+    from src.modules.config.service import deep_merge_configs
 
     base = {"a": 1, "b": 2}
     override = {"b": None, "c": 3}

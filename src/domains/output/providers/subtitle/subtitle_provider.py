@@ -5,11 +5,11 @@ Subtitle Output Provider
 """
 
 import contextlib
-import time
-import threading
 import queue
+import threading
+import time
 import tkinter as tk
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 try:
     import customtkinter as ctk
@@ -21,11 +21,11 @@ except ImportError:
 
 from pydantic import Field
 
-from src.core.base.output_provider import OutputProvider
-from src.core.events.names import CoreEvents
 from src.domains.output.parameters.render_parameters import RenderParameters
-from src.core.utils.logger import get_logger
-from src.services.config.schemas.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+from src.modules.events.names import CoreEvents
+from src.modules.logging import get_logger
+from src.modules.types.base.output_provider import OutputProvider
 
 
 class OutlineLabel:

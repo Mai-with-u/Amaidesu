@@ -7,14 +7,15 @@
 - 无需手动 from_dict() 调用
 """
 
-import pytest
 import asyncio
+
+import pytest
 from pydantic import BaseModel, Field
 
-from src.core.event_bus import EventBus
-from src.core.events.payloads.input import MessageReadyPayload
-from src.core.events.payloads.decision import IntentPayload
-from src.core.events.names import CoreEvents
+from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.decision import IntentPayload
+from src.modules.events.payloads.input import MessageReadyPayload
 
 
 class TestTypedEventHandler:

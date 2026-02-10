@@ -12,13 +12,12 @@ RawData 单元测试
 运行: uv run pytest tests/core/base/test_raw_data.py -v
 """
 
-import time
 import json
+import time
 
 import pytest
 
-from src.core.base.raw_data import RawData
-
+from src.modules.types.base.raw_data import RawData
 
 # =============================================================================
 # 测试 Fixture

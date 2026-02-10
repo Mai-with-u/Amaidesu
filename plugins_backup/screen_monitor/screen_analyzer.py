@@ -1,11 +1,11 @@
 import asyncio
-import time
 import base64
-from io import BytesIO
-from typing import Optional, Dict, Any
-from dataclasses import dataclass
-from collections import deque
 import logging
+import time
+from collections import deque
+from dataclasses import dataclass
+from io import BytesIO
+from typing import Any, Dict, Optional
 
 # 依赖检查
 try:
@@ -15,8 +15,8 @@ except ImportError:
     mss = None
 
 try:
-    from PIL import Image
     import numpy as np
+    from PIL import Image
 except ImportError:
     Image = None
     np = None

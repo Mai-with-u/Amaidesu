@@ -4,19 +4,19 @@ Sticker Output Provider
 贴纸输出Provider，处理表情图片并发送到VTS。
 """
 
-import time
 import base64
 import io
-from typing import Optional, Any
+import time
+from typing import Any, Optional
 
 from PIL import Image
 from pydantic import Field
 
-from src.core.base.output_provider import OutputProvider
-from src.core.events.names import CoreEvents
 from src.domains.output.parameters.render_parameters import RenderParameters
-from src.core.utils.logger import get_logger
-from src.services.config.schemas.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+from src.modules.events.names import CoreEvents
+from src.modules.logging import get_logger
+from src.modules.types.base.output_provider import OutputProvider
 
 
 class StickerOutputProvider(OutputProvider):

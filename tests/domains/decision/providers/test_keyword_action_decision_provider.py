@@ -3,8 +3,9 @@ KeywordActionDecisionProvider 测试
 """
 
 import pytest
+
 from src.domains.decision.providers.keyword_action import KeywordActionDecisionProvider
-from src.core.base.normalized_message import NormalizedMessage
+from src.modules.types.base.normalized_message import NormalizedMessage
 
 
 @pytest.fixture

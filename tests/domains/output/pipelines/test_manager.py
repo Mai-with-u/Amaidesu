@@ -4,16 +4,16 @@
 运行: uv run pytest tests/domains/output/pipelines/test_manager.py -v
 """
 
-import pytest
 import asyncio
 
-from src.domains.output.pipelines.manager import OutputPipelineManager
+import pytest
+
+from src.domains.output.parameters.render_parameters import ExpressionParameters
 from src.domains.output.pipelines.base import (
     OutputPipelineBase,
     PipelineException,
 )
-from src.domains.output.parameters.render_parameters import ExpressionParameters
-
+from src.domains.output.pipelines.manager import OutputPipelineManager
 
 # =============================================================================
 # 测试用 Pipeline

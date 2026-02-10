@@ -1,8 +1,8 @@
 """Warudo Avatar Provider"""
 
-from .warudo_provider import WarudoOutputProvider
+from src.modules.registry import ProviderRegistry
 
-from src.core.provider_registry import ProviderRegistry
+from .warudo_provider import WarudoOutputProvider
 
 # 注册到 ProviderRegistry
 ProviderRegistry.register_output("warudo", WarudoOutputProvider, source="builtin:warudo")

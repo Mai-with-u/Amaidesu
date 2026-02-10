@@ -5,25 +5,24 @@
 """
 
 import asyncio
-import sys
 import os
+import sys
 from typing import Any, Dict
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 import pytest
 
-from src.core.base.decision_provider import DecisionProvider
-from src.core.base.normalized_message import NormalizedMessage
-from src.core.event_bus import EventBus
-from src.core.events.names import CoreEvents
-from src.core.events.payloads import MessageReadyPayload
 from src.domains.decision.coordinator import DecisionCoordinator
 from src.domains.decision.intent import Intent
-from src.core.types import EmotionType
 from src.domains.decision.provider_manager import DecisionProviderManager
 from src.domains.input.normalization.content.base import StructuredContent
-
+from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import MessageReadyPayload
+from src.modules.types import EmotionType
+from src.modules.types.base.decision_provider import DecisionProvider
+from src.modules.types.base.normalized_message import NormalizedMessage
 
 # =============================================================================
 # Mock DecisionProvider（用于测试）

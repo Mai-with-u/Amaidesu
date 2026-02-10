@@ -10,17 +10,18 @@ OBS Control OutputProvider - OBS控制Provider
 """
 
 import asyncio
-from typing import Dict, Any, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
 from pydantic import Field, field_validator
 
 if TYPE_CHECKING:
     pass
 
-from src.core.base.output_provider import OutputProvider
-from src.core.events.names import CoreEvents
-from src.core.utils.logger import get_logger
-from src.services.config.schemas.schemas.base import BaseProviderConfig
 from src.domains.output.parameters.render_parameters import RenderParameters
+from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+from src.modules.events.names import CoreEvents
+from src.modules.logging import get_logger
+from src.modules.types.base.output_provider import OutputProvider
 
 try:
     import obsws_python as obs

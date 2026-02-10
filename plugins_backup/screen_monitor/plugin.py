@@ -10,11 +10,11 @@
 # - 将AI分析结果发送到核心系统
 
 import time
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
-from src.core.plugin_manager import BasePlugin
+from maim_message import BaseMessageInfo, FormatInfo, GroupInfo, MessageBase, Seg, TemplateInfo, UserInfo
 from src.core.amaidesu_core import AmaidesuCore
-from maim_message import MessageBase, Seg, UserInfo, GroupInfo, FormatInfo, TemplateInfo, BaseMessageInfo
+from src.core.plugin_manager import BasePlugin
 
 # 导入屏幕分析和读取模块
 try:

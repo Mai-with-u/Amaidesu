@@ -8,9 +8,10 @@ MCP 版本的攻击动作实现
 from __future__ import annotations  # ✅ 延迟类型注解求值
 
 from src.utils.logger import get_logger
+
+from ....mcp.client import global_mcp_client
 from ...interfaces import IAttackAction
 from ...interfaces.attack_action import AttackActionParams
-from ....mcp.client import global_mcp_client
 
 
 class McpAttackAction(IAttackAction):

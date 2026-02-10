@@ -6,14 +6,14 @@
 
 import pytest
 from pydantic_core import ValidationError
-from src.domains.input.providers.stt.config import (
-    STTInputProviderConfig,
-    IflytekAsrConfig,
-    VadConfig,
-    AudioConfig,
-    MessageConfig,
-)
 
+from src.domains.input.providers.stt.config import (
+    AudioConfig,
+    IflytekAsrConfig,
+    MessageConfig,
+    STTInputProviderConfig,
+    VadConfig,
+)
 
 # =============================================================================
 # IflytekAsrConfig 测试

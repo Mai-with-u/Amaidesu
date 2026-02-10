@@ -7,7 +7,7 @@
 - OmniTTSProvider: Omni TTS文本转语音
 """
 
-from src.core.provider_registry import ProviderRegistry
+from src.modules.registry import ProviderRegistry
 
 from .edge_tts_provider import EdgeTTSProvider
 from .gptsovits_provider import GPTSoVITSOutputProvider

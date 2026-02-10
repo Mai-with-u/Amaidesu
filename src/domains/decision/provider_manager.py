@@ -10,19 +10,19 @@ DecisionProviderManager - 决策Provider管理器
 """
 
 import asyncio
-from typing import Dict, Any, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from src.core.utils.logger import get_logger
-from src.core.events.names import CoreEvents
+from src.modules.events.names import CoreEvents
+from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
-    from src.core.event_bus import EventBus
-    from src.core.base.decision_provider import DecisionProvider
-    from src.core.base.normalized_message import NormalizedMessage
     from src.domains.decision.intent import Intent
-    from src.services.llm.manager import LLMManager
-    from src.services.config.service import ConfigService
-    from src.services.context.service import ContextService
+    from src.modules.config.service import ConfigService
+    from src.modules.context.service import ContextService
+    from src.modules.events.event_bus import EventBus
+    from src.modules.llm.manager import LLMManager
+    from src.modules.types.base.decision_provider import DecisionProvider
+    from src.modules.types.base.normalized_message import NormalizedMessage
 
 
 class DecisionProviderManager:
@@ -88,7 +88,7 @@ class DecisionProviderManager:
         # 确保所有 Provider 已注册
         await self.ensure_providers_registered()
 
-        from src.core.provider_registry import ProviderRegistry
+        from src.modules.registry import ProviderRegistry
 
         # 确定配置来源
         if decision_config is None:
@@ -143,7 +143,7 @@ class DecisionProviderManager:
                 self.logger.info(f"DecisionProvider '{provider_name}' 初始化成功")
 
                 # 发布Provider连接事件（使用emit）
-                from src.core.events.payloads.decision import ProviderConnectedPayload
+                from src.modules.events.payloads.decision import ProviderConnectedPayload
 
                 await self.event_bus.emit(
                     CoreEvents.DECISION_PROVIDER_CONNECTED,
@@ -198,7 +198,7 @@ class DecisionProviderManager:
             - 切换时会先清理旧Provider
             - 如果新Provider初始化失败，会回退到旧Provider
         """
-        from src.core.provider_registry import ProviderRegistry
+        from src.modules.registry import ProviderRegistry
 
         old_provider = self._current_provider
         old_name = self._provider_name
@@ -240,7 +240,7 @@ class DecisionProviderManager:
 
                 # 发布新Provider连接事件（使用emit）
                 try:
-                    from src.core.events.payloads.decision import ProviderConnectedPayload
+                    from src.modules.events.payloads.decision import ProviderConnectedPayload
 
                     await self.event_bus.emit(
                         CoreEvents.DECISION_PROVIDER_CONNECTED,
@@ -282,7 +282,7 @@ class DecisionProviderManager:
 
                 # 发布Provider断开事件
                 try:
-                    from src.core.events.payloads import ProviderDisconnectedPayload
+                    from src.modules.events.payloads import ProviderDisconnectedPayload
 
                     await self.event_bus.emit(
                         CoreEvents.DECISION_PROVIDER_DISCONNECTED,
@@ -323,7 +323,7 @@ class DecisionProviderManager:
         Returns:
             Provider名称列表
         """
-        from src.core.provider_registry import ProviderRegistry
+        from src.modules.registry import ProviderRegistry
 
         return ProviderRegistry.get_registered_decision_providers()
 
@@ -334,7 +334,7 @@ class DecisionProviderManager:
         Provider 在模块导入时已自动注册（通过 __init__.py）。
         此方法仅用于验证。
         """
-        from src.core.provider_registry import ProviderRegistry
+        from src.modules.registry import ProviderRegistry
 
         # 导入已在模块级别完成，这里仅验证
         registered = ProviderRegistry.get_registered_decision_providers()

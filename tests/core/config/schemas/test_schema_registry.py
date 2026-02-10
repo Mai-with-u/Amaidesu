@@ -12,19 +12,19 @@ This module tests:
 
 import pytest
 
+import src.domains.decision.providers  # noqa: F401
+
 # 触发 Provider 注册（必须在导入之前执行）
 import src.domains.input.providers  # noqa: F401
 import src.domains.output.providers  # noqa: F401
-import src.domains.decision.providers  # noqa: F401
-
-from src.services.config.schemas import (
+from src.modules.config.schemas.schemas import (
     PROVIDER_SCHEMA_REGISTRY,
-    list_all_providers,
-    verify_no_enabled_field_in_schemas,
     get_provider_schema,
+    list_all_providers,
     validate_provider_config,
+    verify_no_enabled_field_in_schemas,
 )
-from src.core.provider_registry import ProviderRegistry
+from src.modules.registry import ProviderRegistry
 
 
 class TestSchemaRegistry:
@@ -148,10 +148,10 @@ class TestNoEnabledField:
 
     def test_specific_schemas_no_enabled(self):
         """测试特定Schema不包含enabled字段（100%迁移到自管理Schema）"""
-        from src.domains.input.providers.console_input import ConsoleInputProvider
         from src.domains.decision.providers.maicore.maicore_decision_provider import MaiCoreDecisionProvider
-        from src.domains.output.providers.subtitle import SubtitleOutputProvider
+        from src.domains.input.providers.console_input import ConsoleInputProvider
         from src.domains.output.providers.audio import EdgeTTSProvider
+        from src.domains.output.providers.subtitle import SubtitleOutputProvider
 
         # 检查几个关键schema（使用自管理Schema的Provider）
         schemas_to_check = [
@@ -372,7 +372,7 @@ class TestRegistryConsistency:
 
     def test_output_providers_in_map(self):
         """测试输出Provider在OUTPUT_PROVIDER_CONFIG_MAP中（100%迁移后此映射已废弃）"""
-        from src.services.config.schemas import OUTPUT_PROVIDER_CONFIG_MAP
+        from src.modules.config.schemas.schemas import OUTPUT_PROVIDER_CONFIG_MAP
 
         # 所有output provider已迁移到自管理Schema
         # OUTPUT_PROVIDER_CONFIG_MAP保留为空仅用于向后兼容

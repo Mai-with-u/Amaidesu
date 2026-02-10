@@ -4,17 +4,18 @@
 运行: uv run pytest tests/domains/normalization/test_text_normalizer.py -v
 """
 
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
-import pytest
-from unittest.mock import Mock, AsyncMock
-from src.domains.input.normalization.normalizers.text_normalizer import TextNormalizer
-from src.core.base.raw_data import RawData
-from src.core.base.normalized_message import NormalizedMessage
+from unittest.mock import AsyncMock, Mock
 
+import pytest
+
+from src.domains.input.normalization.normalizers.text_normalizer import TextNormalizer
+from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.types.base.raw_data import RawData
 
 # =============================================================================
 # 初始化测试

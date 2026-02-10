@@ -6,13 +6,12 @@
 
 import pytest
 
-from src.core.events.architectural_validator import (
+from src.modules.events.architectural_validator import (
     ArchitecturalValidator,
     ArchitecturalViolationError,
 )
-from src.core.event_bus import EventBus
-from src.core.events.names import CoreEvents
-
+from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
 
 # ============================================================================
 # 测试辅助类
@@ -288,7 +287,7 @@ class TestArchitecturalValidator:
 
     def test_architectural_validator_config_complete(self):
         """验证：架构验证器配置包含所有已注册的 Provider"""
-        from src.core.events.architectural_validator import ArchitecturalValidator
+        from src.modules.events.architectural_validator import ArchitecturalValidator
 
         # 创建验证器实例
         validator = ArchitecturalValidator(EventBus(), enabled=False)

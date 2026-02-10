@@ -4,9 +4,10 @@
 运行: uv run pytest tests/domains/decision/providers/test_maicore_memory_leak.py -v
 """
 
-import pytest
 import asyncio
-from unittest.mock import Mock, AsyncMock
+from unittest.mock import AsyncMock, Mock
+
+import pytest
 
 from src.domains.decision.providers.maicore.maicore_decision_provider import MaiCoreDecisionProvider
 

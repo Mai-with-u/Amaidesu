@@ -17,9 +17,10 @@ import sys
 import time
 from typing import Any, Dict, List, Optional
 
-from src.core.utils.logger import get_logger
-from src.core.utils.config import load_component_specific_config, merge_component_configs
 from src.domains.output.parameters.render_parameters import ExpressionParameters
+from src.modules.config.config_utils import load_component_specific_config, merge_component_configs
+from src.modules.logging import get_logger
+
 from .base import OutputPipeline, PipelineErrorHandling, PipelineException
 
 

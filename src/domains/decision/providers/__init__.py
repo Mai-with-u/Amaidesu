@@ -10,12 +10,12 @@ Decision Providers - 决策Provider实现
 - MaicraftDecisionProvider: 弹幕游戏互动决策
 """
 
-from .maicore import MaiCoreDecisionProvider
-from .local_llm import LocalLLMDecisionProvider
-from .rule_engine import RuleEngineDecisionProvider
 from .keyword_action import KeywordActionDecisionProvider
-from .mock import MockDecisionProvider
+from .local_llm import LocalLLMDecisionProvider
+from .maicore import MaiCoreDecisionProvider
 from .maicraft import MaicraftDecisionProvider
+from .mock import MockDecisionProvider
+from .rule_engine import RuleEngineDecisionProvider
 
 __all__ = [
     "MaiCoreDecisionProvider",

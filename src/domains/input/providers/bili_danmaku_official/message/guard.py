@@ -1,6 +1,8 @@
-from typing import Dict, Any, Optional
-from pydantic import BaseModel
+from typing import Any, Dict, Optional
+
 from maim_message import MessageBase, Seg
+from pydantic import BaseModel
+
 from .base import BiliBaseMessage
 
 

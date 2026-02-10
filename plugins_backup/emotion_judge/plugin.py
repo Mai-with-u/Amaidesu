@@ -1,13 +1,13 @@
 # src/plugins/vtube_studio/plugin.py
-from typing import Any, Dict, Optional
 import time
-from openai import AsyncOpenAI
+from typing import Any, Dict, Optional
 
 from maim_message.message_base import MessageBase
+from openai import AsyncOpenAI
+from src.core.amaidesu_core import AmaidesuCore
 
 # 从 core 导入基类和核心类
 from src.core.plugin_manager import BasePlugin
-from src.core.amaidesu_core import AmaidesuCore
 
 # logger = get_logger("EmotionJudgePlugin")
 

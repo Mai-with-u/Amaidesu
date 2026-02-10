@@ -4,16 +4,16 @@ ConsoleInputProvider - 控制台输入Provider
 从控制台接收用户输入并生成RawData。
 """
 
-import sys
 import asyncio
-from typing import AsyncIterator, Optional, List, Literal, Dict, Any
+import sys
+from typing import Any, AsyncIterator, Dict, List, Literal, Optional
 
 from pydantic import Field
 
-from src.core.base.input_provider import InputProvider
-from src.core.base.raw_data import RawData
-from src.core.utils.logger import get_logger
-from src.services.config.schemas.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+from src.modules.logging import get_logger
+from src.modules.types.base.input_provider import InputProvider
+from src.modules.types.base.raw_data import RawData
 
 
 class ConsoleInputProvider(InputProvider):

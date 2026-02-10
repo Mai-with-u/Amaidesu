@@ -1,5 +1,7 @@
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
+
 from maim_message import MessageBase, Seg
+
 from .base import BiliBaseMessage
 
 

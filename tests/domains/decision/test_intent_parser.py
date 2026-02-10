@@ -4,15 +4,15 @@
 运行: uv run pytest tests/domains/decision/test_intent_parser.py -v
 """
 
-import pytest
 import asyncio
 from typing import Optional
 
-from src.domains.decision.intent_parser import IntentParser
-from src.domains.decision.intent import Intent
-from src.core.types import EmotionType, ActionType
-from src.services.llm.manager import LLMResponse
+import pytest
 
+from src.domains.decision.intent import Intent
+from src.domains.decision.intent_parser import IntentParser
+from src.modules.llm.manager import LLMResponse
+from src.modules.types import ActionType, EmotionType
 
 # =============================================================================
 # Mock MessageBase

@@ -10,19 +10,19 @@ RuleEngineDecisionProvider - 规则引擎决策提供者
 
 import json
 import re
-from typing import Dict, Any, List, Optional, TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 from pydantic import Field
 
-from src.core.base.decision_provider import DecisionProvider
 from src.domains.decision.intent import Intent
-from src.core.types import EmotionType, ActionType, IntentAction
-from src.core.utils.logger import get_logger
-from src.services.config.schemas.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+from src.modules.logging import get_logger
+from src.modules.types import ActionType, EmotionType, IntentAction
+from src.modules.types.base.decision_provider import DecisionProvider
 
 if TYPE_CHECKING:
-    from src.core.event_bus import EventBus
-    from src.core.base.normalized_message import NormalizedMessage
+    from src.modules.events.event_bus import EventBus
+    from src.modules.types.base.normalized_message import NormalizedMessage
 
 
 class RuleEngineDecisionProvider(DecisionProvider):

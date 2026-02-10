@@ -2,8 +2,9 @@
 Bilibili 官方弹幕输入Provider
 """
 
+from src.modules.registry import ProviderRegistry
+
 from .bili_official_provider import BiliDanmakuOfficialInputProvider
-from src.core.provider_registry import ProviderRegistry
 
 # 注册到 ProviderRegistry
 ProviderRegistry.register_input(

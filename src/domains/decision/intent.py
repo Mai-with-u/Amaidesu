@@ -4,14 +4,14 @@ Intent数据类型定义
 Decision Domain (决策域) 的输出格式，表示决策意图。
 """
 
-from typing import List, Dict, Any, Optional
-from uuid import uuid4
 import time
+from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-# 从 core.types 导入共享类型
-from src.core.types import EmotionType, IntentAction
+# 从 modules.types 导入共享类型
+from src.modules.types import EmotionType, IntentAction
 
 
 class SourceContext(BaseModel):

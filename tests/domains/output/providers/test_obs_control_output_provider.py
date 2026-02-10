@@ -2,11 +2,13 @@
 ObsControlOutputProvider 测试
 """
 
-import pytest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
-from src.domains.output.providers.obs_control import ObsControlOutputProvider
+
+import pytest
+
 from src.domains.output.parameters.render_parameters import RenderParameters
+from src.domains.output.providers.obs_control import ObsControlOutputProvider
 
 
 @pytest.fixture

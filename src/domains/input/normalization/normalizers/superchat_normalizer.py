@@ -3,10 +3,12 @@
 """
 
 from typing import Optional
-from .base import DataNormalizer
-from src.core.base.raw_data import RawData
-from src.core.base.normalized_message import NormalizedMessage
+
 from src.domains.input.normalization.content import SuperChatContent
+from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.types.base.raw_data import RawData
+
+from .base import DataNormalizer
 
 
 class SuperChatNormalizer(DataNormalizer):

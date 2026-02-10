@@ -10,11 +10,12 @@ ProviderRegistry 测试
 """
 
 import pytest
-from src.core.provider_registry import ProviderRegistry
-from src.core.base.input_provider import InputProvider
-from src.core.base.decision_provider import DecisionProvider
-from src.core.base.output_provider import OutputProvider
-from src.core.base.raw_data import RawData
+
+from src.modules.registry import ProviderRegistry
+from src.modules.types.base.decision_provider import DecisionProvider
+from src.modules.types.base.input_provider import InputProvider
+from src.modules.types.base.output_provider import OutputProvider
+from src.modules.types.base.raw_data import RawData
 
 
 class MockInputProvider(InputProvider):
@@ -110,8 +111,8 @@ class TestInputProviderRegistry:
 
     def test_register_input_provider_overwrites(self):
         """测试覆盖已注册的 Provider"""
-        from src.core.base.input_provider import InputProvider
-        from src.core.base.raw_data import RawData
+        from src.modules.types.base.input_provider import InputProvider
+        from src.modules.types.base.raw_data import RawData
 
         class AnotherInputProvider(InputProvider):
             def __init__(self, config: dict):

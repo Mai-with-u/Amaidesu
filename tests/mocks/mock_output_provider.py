@@ -3,8 +3,9 @@ Mock 输出 Provider（用于测试）
 """
 
 from typing import Any
-from src.core.base.output_provider import OutputProvider
+
 from src.domains.output.parameters.render_parameters import RenderParameters
+from src.modules.types.base.output_provider import OutputProvider
 
 
 class MockOutputProvider(OutputProvider):

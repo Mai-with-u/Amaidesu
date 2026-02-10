@@ -4,11 +4,12 @@
 运行: uv run pytest tests/domains/decision/test_intent.py -v
 """
 
-import pytest
 import time
-from src.domains.decision.intent import Intent
-from src.core.types import IntentAction, EmotionType, ActionType
 
+import pytest
+
+from src.domains.decision.intent import Intent
+from src.modules.types import ActionType, EmotionType, IntentAction
 
 # =============================================================================
 # EmotionType 枚举测试

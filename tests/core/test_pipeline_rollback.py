@@ -6,16 +6,16 @@ Pipeline 回滚功能测试（问题#4修复验证）
 运行: uv run pytest tests/core/test_pipeline_rollback.py -v
 """
 
+from typing import Any, Dict, Optional
+
 import pytest
-from typing import Optional, Dict, Any
 
 from src.domains.input.pipelines.manager import (
     InputPipelineManager,
-    TextPipelineBase,
-    PipelineErrorHandling,
     PipelineContext,
+    PipelineErrorHandling,
+    TextPipelineBase,
 )
-
 
 # =============================================================================
 # Mock Pipeline 实现（支持回滚）

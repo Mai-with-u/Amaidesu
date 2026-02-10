@@ -15,11 +15,11 @@ from typing import Dict, Literal, Optional
 
 from pydantic import Field, ValidationError
 
-from src.core.base.decision_provider import DecisionProvider
-from src.core.types import EmotionType
-from src.core.utils.logger import get_logger
 from src.domains.decision.intent import Intent
-from src.services.config.schemas.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+from src.modules.logging import get_logger
+from src.modules.types import EmotionType
+from src.modules.types.base.decision_provider import DecisionProvider
 
 from .action_registry import ActionRegistry
 from .action_types import MaicraftActionType

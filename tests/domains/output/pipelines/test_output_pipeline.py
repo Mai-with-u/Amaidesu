@@ -3,6 +3,8 @@
 """
 
 import pytest
+
+from src.domains.output.parameters.render_parameters import ExpressionParameters
 from src.domains.output.pipelines import (
     OutputPipelineBase,
     OutputPipelineManager,
@@ -10,7 +12,6 @@ from src.domains.output.pipelines import (
     PipelineException,
     PipelineStats,
 )
-from src.domains.output.parameters.render_parameters import ExpressionParameters
 
 
 class DummyOutputPipeline(OutputPipelineBase):

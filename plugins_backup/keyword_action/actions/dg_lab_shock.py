@@ -3,8 +3,8 @@
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.core.amaidesu_core import AmaidesuCore
     from maim_message import MessageBase
+    from src.core.amaidesu_core import AmaidesuCore
 
 
 async def execute(core: "AmaidesuCore", message: "MessageBase"):

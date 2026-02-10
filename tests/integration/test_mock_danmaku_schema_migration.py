@@ -1,14 +1,15 @@
 """测试 mock_danmaku Provider 自管理 Schema 集成"""
 
-import pytest
-from pathlib import Path
 import tempfile
+from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
 
 from src.domains.input.providers.mock_danmaku import MockDanmakuInputProvider
-from src.core.provider_registry import ProviderRegistry
-from src.services.config.schemas.schemas import get_provider_schema
-from src.services.config.schemas.schemas.base import BaseProviderConfig
-from pydantic import ValidationError
+from src.modules.config.schemas.schemas import get_provider_schema
+from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+from src.modules.registry import ProviderRegistry
 
 
 def test_mock_danmaku_has_config_schema():

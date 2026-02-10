@@ -7,23 +7,23 @@ LocalLLMDecisionProvider - 本地LLM决策提供者
 - 错误处理和降级机制
 """
 
-from typing import Dict, Any, Optional, TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
 
 from pydantic import Field
 
-from src.core.base.decision_provider import DecisionProvider
 from src.domains.decision.intent import Intent
-from src.core.types import EmotionType, ActionType, IntentAction
-from src.core.utils.logger import get_logger
-from src.services.config.schemas.schemas.base import BaseProviderConfig
-from src.prompts import get_prompt_manager
-from src.services.context import MessageRole
+from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+from src.modules.context import MessageRole
+from src.modules.logging import get_logger
+from src.modules.prompts import get_prompt_manager
+from src.modules.types import ActionType, EmotionType, IntentAction
+from src.modules.types.base.decision_provider import DecisionProvider
 
 if TYPE_CHECKING:
-    from src.core.event_bus import EventBus
-    from src.services.llm.manager import LLMManager
-    from src.core.base.normalized_message import NormalizedMessage
-    from src.services.context import ContextService
+    from src.modules.context import ContextService
+    from src.modules.events.event_bus import EventBus
+    from src.modules.llm.manager import LLMManager
+    from src.modules.types.base.normalized_message import NormalizedMessage
 
 
 class LocalLLMDecisionProvider(DecisionProvider):

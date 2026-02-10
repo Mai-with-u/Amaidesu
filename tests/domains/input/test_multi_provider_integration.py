@@ -5,17 +5,19 @@
 """
 
 import asyncio
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 import pytest
-from src.core.event_bus import EventBus
-from src.core.base.raw_data import RawData
-from src.core.events.payloads.input import RawDataPayload
+
 from src.domains.input.coordinator import InputCoordinator
-from src.domains.input.providers import ConsoleInputProvider, MockDanmakuInputProvider as MockDanmakuProvider
+from src.domains.input.providers import ConsoleInputProvider
+from src.domains.input.providers import MockDanmakuInputProvider as MockDanmakuProvider
+from src.modules.events.event_bus import EventBus
+from src.modules.events.payloads.input import RawDataPayload
+from src.modules.types.base.raw_data import RawData
 
 
 @pytest.mark.asyncio

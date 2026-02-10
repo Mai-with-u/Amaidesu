@@ -1,8 +1,9 @@
 import asyncio
 import logging
-from typing import Dict, Any
-from .action_sender import action_sender
 import random
+from typing import Any, Dict
+
+from .action_sender import action_sender
 
 ALL_SIGHT_STATE = {
     "camera": 0.0,

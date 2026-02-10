@@ -5,7 +5,9 @@
 """
 
 from typing import Literal, Optional
+
 from pydantic import Field, model_validator
+
 from .base import StructuredContent
 
 

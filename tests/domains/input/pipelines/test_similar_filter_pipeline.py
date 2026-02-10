@@ -5,9 +5,9 @@
 """
 
 import pytest
-from src.domains.input.pipelines.similar_filter.pipeline import SimilarFilterTextPipeline
-from src.domains.input.pipelines.manager import PipelineContext
 
+from src.domains.input.pipelines.manager import PipelineContext
+from src.domains.input.pipelines.similar_filter.pipeline import SimilarFilterTextPipeline
 
 # =============================================================================
 # Fixtures

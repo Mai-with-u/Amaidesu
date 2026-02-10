@@ -2,17 +2,19 @@
 
 import asyncio
 import contextlib
-import json
-import time
 import hashlib
 import hmac
+import json
 import random
-import urllib3
+import time
 from hashlib import sha256
-from typing import Dict, Optional, Callable
-import websockets
+from typing import Callable, Dict, Optional
+
 import requests
-from src.core.utils.logger import get_logger
+import urllib3
+import websockets
+
+from src.modules.logging import get_logger
 
 from .proto import Proto
 

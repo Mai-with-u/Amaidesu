@@ -5,18 +5,18 @@
 """
 
 import asyncio
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 import pytest
-from src.core.event_bus import EventBus
-from src.core.base.raw_data import RawData
-from src.domains.input.coordinator import InputCoordinator, NormalizationResult
-from src.core.events.payloads import RawDataPayload
-from src.core.events.names import CoreEvents
 
+from src.domains.input.coordinator import InputCoordinator, NormalizationResult
+from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import RawDataPayload
+from src.modules.types.base.raw_data import RawData
 
 # =============================================================================
 # Fixtures
@@ -46,8 +46,8 @@ async def input_coordinator(event_bus):
 
 def test_normalization_result_success():
     """测试成功的 NormalizationResult"""
-    from src.core.base.normalized_message import NormalizedMessage
     from src.domains.input.normalization.content import TextContent
+    from src.modules.types.base.normalized_message import NormalizedMessage
 
     message = NormalizedMessage(
         text="测试消息",

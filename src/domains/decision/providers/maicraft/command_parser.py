@@ -8,12 +8,12 @@ import re
 import shlex
 from typing import TYPE_CHECKING, Optional
 
-from src.core.utils.logger import get_logger
+from src.modules.logging import get_logger
 
 from .command import Command
 
 if TYPE_CHECKING:
-    from src.core.base.normalized_message import NormalizedMessage
+    from src.modules.types.base.normalized_message import NormalizedMessage
 
 
 class CommandParser:

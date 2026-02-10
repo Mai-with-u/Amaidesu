@@ -1,7 +1,9 @@
 """Warudo 心情管理器测试"""
 
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
+
 from src.domains.output.providers.avatar.warudo.state.mood_manager import MoodManager
 from src.domains.output.providers.avatar.warudo.state.warudo_state_manager import WarudoStateManager
 

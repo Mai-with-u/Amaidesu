@@ -14,7 +14,7 @@ OutputPipeline 用于在 ExpressionParameters 生成后、发布事件前对参�
     - OutputPipeline: 处理参数 (ExpressionParameters) → 返回参数或 None
 """
 
-from .base import OutputPipelineBase, OutputPipeline, PipelineErrorHandling, PipelineException, PipelineStats
+from .base import OutputPipeline, OutputPipelineBase, PipelineErrorHandling, PipelineException, PipelineStats
 from .manager import OutputPipelineManager
 from .profanity_filter import ProfanityFilterOutputPipeline
 

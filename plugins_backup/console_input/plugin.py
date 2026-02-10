@@ -3,7 +3,7 @@ import asyncio
 # import logging
 import sys
 import time
-from typing import Dict, Any, Optional, List, Union
+from typing import Any, Dict, List, Optional, Union
 
 # --- Dependency Check & TOML ---
 try:
@@ -16,9 +16,9 @@ except ModuleNotFoundError:
         tomllib = None
 
 # --- Amaidesu Core Imports ---
-from src.core.plugin_manager import BasePlugin
+from maim_message import BaseMessageInfo, FormatInfo, GroupInfo, MessageBase, Seg, TemplateInfo, UserInfo
 from src.core.amaidesu_core import AmaidesuCore
-from maim_message import MessageBase, BaseMessageInfo, UserInfo, GroupInfo, Seg, FormatInfo, TemplateInfo
+from src.core.plugin_manager import BasePlugin
 
 # --- Plugin Configuration Loading ---
 # _PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))

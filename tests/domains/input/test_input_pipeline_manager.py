@@ -11,18 +11,18 @@ InputPipelineManager 单元测试
 """
 
 import asyncio
+from typing import Any, Dict, Optional
+
 import pytest
-from typing import Optional, Dict, Any
 
 from src.domains.input.pipelines.manager import (
     InputPipelineManager,
-    TextPipelineBase,
-    PipelineErrorHandling,
-    PipelineStats,
-    PipelineException,
     PipelineContext,
+    PipelineErrorHandling,
+    PipelineException,
+    PipelineStats,
+    TextPipelineBase,
 )
-
 
 # =============================================================================
 # Mock Pipeline 实现

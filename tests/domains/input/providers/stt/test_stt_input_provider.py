@@ -6,9 +6,10 @@
 注意：此测试使用 Mock 避免真实的音频设备和 API 调用
 """
 
-import pytest
 import asyncio
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
 
 # 由于 STTInputProvider 有很多外部依赖，我们使用 Mock 进行测试
 
@@ -286,8 +287,9 @@ async def test_cleanup(stt_config):
 @pytest.mark.skip(reason="需要真实的依赖包")
 def test_invalid_config():
     """测试无效配置"""
-    from src.domains.input.providers.stt.stt_input_provider import STTInputProvider
     from pydantic import ValidationError
+
+    from src.domains.input.providers.stt.stt_input_provider import STTInputProvider
 
     invalid_config = {
         "type": "stt",

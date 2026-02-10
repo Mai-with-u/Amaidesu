@@ -1,6 +1,7 @@
-from ..action_sender import action_sender
-import time
 import random
+import time
+
+from ..action_sender import action_sender
 
 
 class ThrowFish:

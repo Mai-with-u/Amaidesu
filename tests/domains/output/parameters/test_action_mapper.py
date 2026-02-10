@@ -5,7 +5,7 @@ ActionMapper 测试
 """
 
 from src.domains.output.parameters.action_mapper import ActionMapper
-from src.core.types import ActionType, IntentAction
+from src.modules.types import ActionType, IntentAction
 
 
 class TestActionMapperInit:

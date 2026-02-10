@@ -9,15 +9,15 @@ DecisionCoordinator - 决策域协调器
 - 确保 3 域架构的数据流正确性
 """
 
-from typing import TYPE_CHECKING, Dict, Any
+from typing import TYPE_CHECKING, Any, Dict
 
-from src.core.utils.logger import get_logger
-from src.core.events.names import CoreEvents
+from src.modules.events.names import CoreEvents
+from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
-    from src.core.event_bus import EventBus
-    from src.core.events.payloads.input import MessageReadyPayload
     from src.domains.decision.provider_manager import DecisionProviderManager
+    from src.modules.events.event_bus import EventBus
+    from src.modules.events.payloads.input import MessageReadyPayload
 
 
 class DecisionCoordinator:
@@ -76,7 +76,7 @@ class DecisionCoordinator:
         订阅 normalization.message_ready 事件（防止重复订阅）。
         """
         if not self._event_subscribed:
-            from src.core.events.payloads.input import MessageReadyPayload
+            from src.modules.events.payloads.input import MessageReadyPayload
 
             self.event_bus.on(
                 CoreEvents.NORMALIZATION_MESSAGE_READY,
@@ -146,7 +146,7 @@ class DecisionCoordinator:
             payload: 类型化的事件数据（MessageReadyPayload 对象）
             source: 事件源
         """
-        from src.core.base.normalized_message import NormalizedMessage
+        from src.modules.types.base.normalized_message import NormalizedMessage
 
         # 获取消息数据（字典格式）
         message_data = payload.message
@@ -194,7 +194,7 @@ class DecisionCoordinator:
             provider_name = self._provider_manager.get_current_provider_name() or "unknown"
 
             # 发布 decision.intent_generated 事件（3域架构）
-            from src.core.events.payloads import IntentPayload
+            from src.modules.events.payloads import IntentPayload
 
             await self.event_bus.emit(
                 CoreEvents.DECISION_INTENT_GENERATED,

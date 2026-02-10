@@ -1,8 +1,9 @@
 """Golden Dataset 测试运行器"""
 
-import pytest
 import json
 from pathlib import Path
+
+import pytest
 
 # 测试数据路径
 GOLDEN_DATASETS_DIR = Path(__file__).parent / "golden_datasets"

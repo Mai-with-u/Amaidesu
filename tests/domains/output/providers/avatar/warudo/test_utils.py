@@ -1,10 +1,12 @@
 """Warudo 工具模块测试"""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
 from src.domains.output.providers.avatar.warudo.utils import IntentEmotionAdapter
 from src.domains.output.providers.avatar.warudo.warudo_sender import ActionSender
-from src.core.types.intent import EmotionType
+from src.modules.types.intent import EmotionType
 
 
 class TestIntentEmotionAdapter:

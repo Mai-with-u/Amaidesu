@@ -11,29 +11,29 @@
 运行: uv run pytest tests/core/events/test_payloads.py -v
 """
 
-import pytest
 import time
 
-from src.core.events.payloads.base import BasePayload
-from src.core.events.payloads.input import RawDataPayload, MessageReadyPayload
-from src.core.events.payloads.decision import (
+import pytest
+
+from src.domains.decision.intent import Intent
+from src.modules.events.payloads.base import BasePayload
+from src.modules.events.payloads.decision import (
     DecisionRequestPayload,
+    DecisionResponsePayload,
     IntentActionPayload,
     IntentPayload,
-    DecisionResponsePayload,
     ProviderConnectedPayload,
     ProviderDisconnectedPayload,
 )
-from src.core.events.payloads.output import (
+from src.modules.events.payloads.input import MessageReadyPayload, RawDataPayload
+from src.modules.events.payloads.output import (
     ParametersGeneratedPayload,
     RenderCompletedPayload,
     RenderFailedPayload,
 )
-from src.core.events.payloads.system import StartupPayload, ShutdownPayload, ErrorPayload
-from src.domains.decision.intent import Intent
-from src.core.types import EmotionType, ActionType, IntentAction
-from src.core.base.raw_data import RawData
-
+from src.modules.events.payloads.system import ErrorPayload, ShutdownPayload, StartupPayload
+from src.modules.types import ActionType, EmotionType, IntentAction
+from src.modules.types.base.raw_data import RawData
 
 # =============================================================================
 # BasePayload 测试
@@ -209,7 +209,7 @@ class TestMessageReadyPayload:
 
     def test_message_ready_payload_from_normalized_message(self):
         """测试 from_normalized_message 工厂方法"""
-        from src.core.base import NormalizedMessage
+        from src.modules.types.base.normalized_message import NormalizedMessage
         from src.domains.input.normalization.content.text_content import TextContent
 
         msg = NormalizedMessage(
@@ -225,7 +225,7 @@ class TestMessageReadyPayload:
 
     def test_message_ready_payload_with_extra_metadata(self):
         """测试带额外元数据的 from_normalized_message"""
-        from src.core.base import NormalizedMessage
+        from src.modules.types.base.normalized_message import NormalizedMessage
         from src.domains.input.normalization.content.text_content import TextContent
 
         msg = NormalizedMessage(

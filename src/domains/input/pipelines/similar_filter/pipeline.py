@@ -21,7 +21,7 @@ import time
 from collections import defaultdict, deque
 from typing import Any, Dict, Optional
 
-from src.domains.input.pipelines.manager import TextPipelineBase, PipelineContext
+from src.domains.input.pipelines.manager import PipelineContext, TextPipelineBase
 
 
 class SimilarFilterTextPipeline(TextPipelineBase):

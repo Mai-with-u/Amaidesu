@@ -1,6 +1,7 @@
 # src/domains/input/providers/bili_danmaku_official/service/message_cache.py
 
 from typing import Dict, List, Optional
+
 from maim_message import MessageBase
 
 

@@ -6,22 +6,22 @@ Mainosaba InputProvider - 从游戏画面采集文本数据
 """
 
 import asyncio
-import time
-import io
 import base64
-from typing import Dict, Any, Optional, AsyncIterator, Literal, List
+import io
+import time
 from enum import Enum
-from PIL import ImageGrab
-import pyautogui
+from typing import Any, AsyncIterator, Dict, List, Literal, Optional
 
+import pyautogui
+from PIL import ImageGrab
 from pydantic import Field, field_validator
 
-from src.core.base.input_provider import InputProvider
-from src.core.base.raw_data import RawData
-from src.core.event_bus import EventBus
-from src.core.utils.logger import get_logger
-from src.services.config.schemas.schemas.base import BaseProviderConfig
-from src.prompts import get_prompt_manager
+from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+from src.modules.events.event_bus import EventBus
+from src.modules.logging import get_logger
+from src.modules.prompts import get_prompt_manager
+from src.modules.types.base.input_provider import InputProvider
+from src.modules.types.base.raw_data import RawData
 
 
 class ControlMethod(Enum):

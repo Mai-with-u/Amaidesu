@@ -14,19 +14,19 @@ TokenUsageManager 单元测试
 运行: uv run pytest tests/services/llm/backends/test_token_usage_manager.py -v
 """
 
-import pytest
-import tempfile
-import shutil
 import json
+import shutil
+import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from src.services.llm.backends.token_usage_manager import (
+import pytest
+
+from src.modules.llm.backends.backends.token_usage_manager import (
     TokenUsageManager,
     get_global_token_manager,
     set_global_token_manager_callback,
 )
-
 
 # =============================================================================
 # Test Fixtures

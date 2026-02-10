@@ -4,8 +4,8 @@ ProfanityFilterOutputPipeline 测试
 
 import pytest
 
-from src.domains.output.pipelines.profanity_filter.pipeline import ProfanityFilterOutputPipeline
 from src.domains.output.parameters.render_parameters import ExpressionParameters
+from src.domains.output.pipelines.profanity_filter.pipeline import ProfanityFilterOutputPipeline
 
 
 @pytest.mark.asyncio

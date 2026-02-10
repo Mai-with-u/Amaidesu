@@ -6,18 +6,18 @@ Bilibili 官方弹幕+Minecraft转发 InputProvider
 
 import asyncio
 import contextlib
-from typing import AsyncIterator, Dict, Any, Optional, Literal
+from typing import Any, AsyncIterator, Dict, Literal, Optional
 
 from pydantic import Field, field_validator
+
+from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+from src.modules.logging import get_logger
+from src.modules.types.base.input_provider import InputProvider
+from src.modules.types.base.raw_data import RawData
 
 from .client.websocket_client import BiliWebSocketClient
 from .service.message_cache import MessageCacheService
 from .service.message_handler import BiliMessageHandler
-
-from src.core.base.input_provider import InputProvider
-from src.core.base.raw_data import RawData
-from src.core.utils.logger import get_logger
-from src.services.config.schemas.schemas.base import BaseProviderConfig
 
 
 class ForwardWebSocketClient:

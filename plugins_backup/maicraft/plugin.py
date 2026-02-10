@@ -5,13 +5,15 @@ Maicraft 插件主模块
 支持通过配置切换不同的动作实现系列（如 Log、MCP 等）。
 """
 
-from typing import Dict, Any, Optional
-from src.core.plugin_manager import BasePlugin
-from src.core.amaidesu_core import AmaidesuCore
+from typing import Any, Dict, Optional
+
 from maim_message import MessageBase
-from .command_parser import CommandParser
+from src.core.amaidesu_core import AmaidesuCore
+from src.core.plugin_manager import BasePlugin
+
 from .action_registry import ActionRegistry
 from .action_types import ActionType
+from .command_parser import CommandParser
 from .factories import AbstractActionFactory, LogActionFactory, McpActionFactory
 
 

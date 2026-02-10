@@ -4,10 +4,11 @@ STTInputProvider 配置 Schema
 定义了语音转文字 Provider 的嵌套配置结构。
 """
 
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, List, Optional
+
 from pydantic import BaseModel, Field
 
-from src.services.config.schemas.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
 
 
 class IflytekAsrConfig(BaseModel):

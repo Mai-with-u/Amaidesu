@@ -6,7 +6,8 @@
 """
 
 from abc import ABC, abstractmethod
-from ..actions.interfaces import IChatAction, IAttackAction
+
+from ..actions.interfaces import IAttackAction, IChatAction
 
 
 class AbstractActionFactory(ABC):

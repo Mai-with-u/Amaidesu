@@ -1,23 +1,24 @@
 # Amaidesu STT Plugin: src/plugins/stt/plugin.py
 
 import asyncio
-
-# import logging
-import os
-import sys
 import base64
 import hashlib
 import hmac
 import json
+
+# import logging
+import os
 import ssl
+import sys
 import time
-import numpy as np
 from datetime import datetime
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
-from typing import Dict, Any, Optional, List
-from src.core.plugin_manager import BasePlugin
+
+import numpy as np
+from maim_message import BaseMessageInfo, FormatInfo, GroupInfo, MessageBase, Seg, UserInfo
 from src.core.amaidesu_core import AmaidesuCore
-from maim_message import MessageBase, BaseMessageInfo, UserInfo, GroupInfo, Seg, FormatInfo
+from src.core.plugin_manager import BasePlugin
 
 # --- 解决Windows中文用户名路径编码问题 ---
 # 设置环境变量确保PyTorch和其他库能正确处理路径
@@ -34,7 +35,7 @@ if os.name == "nt":  # Windows系统
 # --- Remote Stream 支持 ---
 # 检查是否安装了remote_stream依赖
 try:
-    from src.plugins.remote_stream.plugin import RemoteStreamService, StreamMessage, MessageType
+    from src.plugins.remote_stream.plugin import MessageType, RemoteStreamService, StreamMessage
 
     REMOTE_STREAM_AVAILABLE = True
 except ImportError:

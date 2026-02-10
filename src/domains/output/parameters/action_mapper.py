@@ -7,8 +7,9 @@
 - 生成可执行的渲染参数
 """
 
-from typing import Dict, Any, List
-from src.core.types import ActionType, IntentAction
+from typing import Any, Dict, List
+
+from src.modules.types import ActionType, IntentAction
 
 
 class ActionMapper:

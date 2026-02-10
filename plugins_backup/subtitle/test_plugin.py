@@ -6,7 +6,7 @@
 """
 
 import asyncio
-from unittest.mock import Mock, MagicMock
+from unittest.mock import MagicMock, Mock
 
 
 def test_subtitle_plugin():

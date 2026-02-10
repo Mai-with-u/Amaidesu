@@ -2,12 +2,13 @@
 数据标准化器注册表
 """
 
-from typing import Dict, Type, Optional
+from typing import Dict, Optional, Type
+
 from .base import DataNormalizer
 from .gift_normalizer import GiftNormalizer
+from .guard_normalizer import GuardNormalizer
 from .superchat_normalizer import SuperChatNormalizer
 from .text_normalizer import TextNormalizer
-from .guard_normalizer import GuardNormalizer
 
 
 class NormalizerRegistry:

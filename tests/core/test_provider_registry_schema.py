@@ -1,10 +1,11 @@
 """测试 ProviderRegistry ConfigSchema 自动提取功能"""
 
 import pytest
-from src.core.provider_registry import ProviderRegistry
-from src.core.base.input_provider import InputProvider
-from src.services.config.schemas.schemas.base import BaseProviderConfig
 from pydantic import Field
+
+from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+from src.modules.registry import ProviderRegistry
+from src.modules.types.base.input_provider import InputProvider
 
 
 @pytest.fixture(autouse=True)

@@ -6,11 +6,13 @@ MCP 动作工厂
 """
 
 from typing import Optional
+
 from src.utils.logger import get_logger
-from .abstract_factory import AbstractActionFactory
-from ..actions.interfaces import IChatAction, IAttackAction
-from ..actions.impl.mcp import McpChatAction, McpAttackAction
+
+from ..actions.impl.mcp import McpAttackAction, McpChatAction
+from ..actions.interfaces import IAttackAction, IChatAction
 from ..mcp.client import MCPClient
+from .abstract_factory import AbstractActionFactory
 
 
 class McpActionFactory(AbstractActionFactory):

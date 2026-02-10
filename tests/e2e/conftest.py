@@ -3,15 +3,16 @@ Pytest configuration and fixtures for E2E tests
 """
 
 import asyncio
-import pytest
 from typing import AsyncGenerator
 
-from src.core.event_bus import EventBus
-from src.domains.input.provider_manager import InputProviderManager
-from src.domains.input.coordinator import InputCoordinator
+import pytest
+
 from src.domains.decision.provider_manager import DecisionProviderManager as DecisionManager
-from src.core.base.raw_data import RawData
-from src.core.base.normalized_message import NormalizedMessage
+from src.domains.input.coordinator import InputCoordinator
+from src.domains.input.provider_manager import InputProviderManager
+from src.modules.events.event_bus import EventBus
+from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.types.base.raw_data import RawData
 
 
 @pytest.fixture

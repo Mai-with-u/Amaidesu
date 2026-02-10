@@ -5,10 +5,11 @@
 """
 
 import asyncio
-import pytest
-from src.domains.input.pipelines.rate_limit.pipeline import RateLimitTextPipeline
-from src.domains.input.pipelines.manager import PipelineContext
 
+import pytest
+
+from src.domains.input.pipelines.manager import PipelineContext
+from src.domains.input.pipelines.rate_limit.pipeline import RateLimitTextPipeline
 
 # =============================================================================
 # Fixtures

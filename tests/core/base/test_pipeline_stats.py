@@ -14,8 +14,7 @@ import json
 
 import pytest
 
-from src.core.base.pipeline_stats import PipelineStats
-
+from src.modules.types.base.pipeline_stats import PipelineStats
 
 # =============================================================================
 # 实例创建和基本属性测试

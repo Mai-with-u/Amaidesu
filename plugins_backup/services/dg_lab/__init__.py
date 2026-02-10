@@ -32,8 +32,8 @@ DGLab 服务模块
     ```
 """
 
-from src.services.dg_lab.service import DGLabService
 from src.services.dg_lab.config import DGLabConfig, WaveformPreset
+from src.services.dg_lab.service import DGLabService
 
 __all__ = [
     "DGLabService",

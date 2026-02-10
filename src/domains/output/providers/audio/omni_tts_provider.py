@@ -14,17 +14,17 @@ OmniTTS Provider - Output Domain: 渲染输出实现
 import asyncio
 import base64
 import time
-from typing import Dict, Any, Optional
 from collections import deque
-from pydantic import Field
+from typing import Any, Dict, Optional
 
 import numpy as np
+from pydantic import Field
 
-from src.core.base.output_provider import OutputProvider
 from src.domains.output.parameters.render_parameters import RenderParameters
-from src.core.utils.logger import get_logger
-from src.services.config.schemas.schemas.base import BaseProviderConfig
-from src.services.tts import AudioDeviceManager
+from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+from src.modules.logging import get_logger
+from src.modules.tts import AudioDeviceManager
+from src.modules.types.base.output_provider import OutputProvider
 
 # 导入工具函数
 from .utils.device_finder import find_device_index
@@ -197,7 +197,7 @@ class OmniTTSProvider(OutputProvider):
         async with self.tts_lock:
             # 通知订阅者: 音频开始
             if self.audio_stream_channel:
-                from src.core.streaming.audio_chunk import AudioMetadata
+                from src.modules.streaming.audio_chunk import AudioMetadata
 
                 await self.audio_stream_channel.notify_start(
                     AudioMetadata(text=text, sample_rate=self.sample_rate, channels=self.channels)
@@ -225,7 +225,7 @@ class OmniTTSProvider(OutputProvider):
             finally:
                 # 通知订阅者: 音频结束
                 if self.audio_stream_channel:
-                    from src.core.streaming.audio_chunk import AudioMetadata
+                    from src.modules.streaming.audio_chunk import AudioMetadata
 
                     await self.audio_stream_channel.notify_end(
                         AudioMetadata(text=text, sample_rate=self.sample_rate, channels=self.channels)
@@ -294,7 +294,7 @@ class OmniTTSProvider(OutputProvider):
 
                 # 发布音频块
                 if self.audio_stream_channel:
-                    from src.core.streaming.audio_chunk import AudioChunk
+                    from src.modules.streaming.audio_chunk import AudioChunk
 
                     chunk = AudioChunk(
                         data=raw_block,

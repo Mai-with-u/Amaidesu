@@ -7,7 +7,6 @@ import asyncio
 import logging
 from typing import Dict, Optional
 
-
 # ==================== 常量定义 ====================
 
 ALL_SIGHT_STATE = {

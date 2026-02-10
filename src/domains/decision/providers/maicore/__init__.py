@@ -1,9 +1,10 @@
 """MaiCore Decision Provider"""
 
+from src.modules.registry import ProviderRegistry
+
 from .maicore_decision_provider import MaiCoreDecisionProvider
-from .router_adapter import RouterAdapter
 from .message_schema import ActionSuggestionMessage
-from src.core.provider_registry import ProviderRegistry
+from .router_adapter import RouterAdapter
 
 # 注册到 ProviderRegistry
 ProviderRegistry.register_decision("maicore", MaiCoreDecisionProvider, source="builtin:maicore")

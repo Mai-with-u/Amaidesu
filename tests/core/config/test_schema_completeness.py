@@ -8,16 +8,17 @@ Provider Schema 完整性测试
 4. 三级配置合并机制正确
 """
 
-import pytest
 from pathlib import Path
+
+import pytest
+
+import src.domains.decision.providers  # noqa: F401
 
 # 触发 Provider 注册（必须在导入之前执行）
 import src.domains.input.providers  # noqa: F401
 import src.domains.output.providers  # noqa: F401
-import src.domains.decision.providers  # noqa: F401
-
-from src.core.provider_registry import ProviderRegistry
-from src.services.config.schemas.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+from src.modules.registry import ProviderRegistry
 
 
 class TestProviderSchemaCompleteness:
@@ -84,7 +85,7 @@ class TestProviderSchemaCompleteness:
         - ConfigSchema 存储在 ProviderRegistry._config_schemas
         - 可以通过 get_config_schema() 获取
         """
-        from src.core.provider_registry import ProviderRegistry
+        from src.modules.registry import ProviderRegistry
 
         # 获取所有已注册的 Provider
         registry_info = ProviderRegistry.get_registry_info()
@@ -139,7 +140,7 @@ class TestProviderSchemaCompleteness:
         - _config_schemas 中的 Schema 类与 Provider.ConfigSchema 一致
         - Schema 名称正确对应 Provider 名称
         """
-        from src.core.provider_registry import ProviderRegistry
+        from src.modules.registry import ProviderRegistry
 
         inconsistencies = []
 
@@ -178,12 +179,12 @@ class TestConfigValidation:
 
     def test_valid_config_passes_validation(self):
         """测试有效配置能通过验证"""
-        from src.domains.input.providers.console_input import ConsoleInputProvider
-        from src.domains.output.providers.subtitle import SubtitleOutputProvider
-        from src.domains.output.providers.audio import EdgeTTSProvider
         from src.domains.decision.providers.maicore.maicore_decision_provider import (
             MaiCoreDecisionProvider,
         )
+        from src.domains.input.providers.console_input import ConsoleInputProvider
+        from src.domains.output.providers.audio import EdgeTTSProvider
+        from src.domains.output.providers.subtitle import SubtitleOutputProvider
 
         # 测试 ConsoleInput (自管理 Schema)
         schema = ConsoleInputProvider.ConfigSchema
@@ -212,8 +213,9 @@ class TestConfigValidation:
 
     def test_invalid_config_rejected(self):
         """测试无效配置会被拒绝"""
-        from src.domains.input.providers.console_input import ConsoleInputProvider
         from pydantic import ValidationError
+
+        from src.domains.input.providers.console_input import ConsoleInputProvider
 
         # 测试类型错误
         with pytest.raises(ValidationError):
@@ -435,8 +437,9 @@ class TestSchemaIntegration:
 
     def test_schema_generates_valid_toml(self):
         """测试 Schema 能生成有效的 TOML 配置"""
-        from src.domains.input.providers.console_input import ConsoleInputProvider
         import tempfile
+
+        from src.domains.input.providers.console_input import ConsoleInputProvider
 
         # 生成临时 TOML 文件
         with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:

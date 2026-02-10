@@ -1,10 +1,12 @@
 """Warudo Provider 测试"""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from src.domains.output.providers.avatar.warudo.warudo_provider import WarudoOutputProvider
-from src.core.types import EmotionType, ActionType, IntentAction
+
+import pytest
+
 from src.domains.decision.intent import Intent
+from src.domains.output.providers.avatar.warudo.warudo_provider import WarudoOutputProvider
+from src.modules.types import ActionType, EmotionType, IntentAction
 
 
 @pytest.fixture

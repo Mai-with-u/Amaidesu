@@ -5,8 +5,9 @@
 """
 
 from typing import TypedDict
-from .base import IAction
+
 from ..param_validator import ValidatedAction
+from .base import IAction
 
 
 class AttackActionParams(TypedDict):

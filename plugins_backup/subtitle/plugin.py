@@ -1,11 +1,11 @@
 # Amaidesu Subtitle Plugin (Screen Display): src/plugins/subtitle/plugin.py
 
 import contextlib
-import time
-import threading  # 用于运行 GUI
 import queue  # 用于线程间通信
-from typing import Any, Dict, Optional
+import threading  # 用于运行 GUI
+import time
 import tkinter as tk
+from typing import Any, Dict, Optional
 
 try:
     import customtkinter as ctk
@@ -15,8 +15,8 @@ except ImportError:
     ctk = None
     CTK_AVAILABLE = False
 
-from src.core.plugin_manager import BasePlugin
 from src.core.amaidesu_core import AmaidesuCore
+from src.core.plugin_manager import BasePlugin
 
 
 class OutlineLabel:

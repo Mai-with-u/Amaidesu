@@ -5,8 +5,8 @@
 """
 
 import pytest
-from src.domains.input.normalization.content.gift_content import GiftContent
 
+from src.domains.input.normalization.content.gift_content import GiftContent
 
 # =============================================================================
 # 创建和基本功能测试

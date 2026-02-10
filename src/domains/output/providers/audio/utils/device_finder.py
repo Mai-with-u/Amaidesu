@@ -5,8 +5,10 @@
 """
 
 from typing import Optional
+
 import numpy as np
-from src.services.tts import AudioDeviceManager
+
+from src.modules.tts import AudioDeviceManager
 
 
 def find_device_index(

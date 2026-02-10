@@ -3,7 +3,8 @@ Warudo Provider 工具模块
 """
 
 from typing import Dict
-from src.core.types.intent import EmotionType
+
+from src.modules.types.intent import EmotionType
 
 
 class IntentEmotionAdapter:

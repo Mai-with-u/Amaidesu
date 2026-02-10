@@ -7,7 +7,7 @@
 
 from typing import Dict, Optional
 
-from src.core.utils.logger import get_logger
+from src.modules.logging import get_logger
 
 from .action_types import MaicraftActionType
 

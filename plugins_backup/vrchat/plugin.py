@@ -7,9 +7,9 @@ from maim_message.message_base import MessageBase
 
 # 尝试导入 python-osc 库
 try:
-    from pythonosc.udp_client import SimpleUDPClient
     from pythonosc.dispatcher import Dispatcher
     from pythonosc.osc_server import ThreadingOSCUDPServer
+    from pythonosc.udp_client import SimpleUDPClient
 
     PYTHON_OSC_AVAILABLE = True
 except ImportError:
@@ -19,8 +19,8 @@ except ImportError:
     ThreadingOSCUDPServer = None
 
 # 从 core 导入基类和核心类
-from src.core.plugin_manager import BasePlugin
 from src.core.amaidesu_core import AmaidesuCore
+from src.core.plugin_manager import BasePlugin
 
 # 导入适配器
 from src.plugins.vrchat.avatar_adapter import VRCAdapter
