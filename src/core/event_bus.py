@@ -6,17 +6,24 @@
 - 优先级控制(handler可设置priority,数字越小越优先)
 - 统计功能(emit/on调用计数、错误率、执行时间)
 - 生命周期管理(cleanup方法)
-- 类型注解支持(参见 src.core.events.payloads)
+- 类型化订阅支持(通过 model_class 参数自动反序列化)
 
-类型注解使用示例:
+类型化订阅使用示例:
     from src.core.events.payloads import CommandRouterData
 
-    # 在订阅时添加类型注解
-    def handle_command(event_data: CommandRouterData, **kwargs):
-        command = event_data.command  # IDE 可以自动提示
-        print(f"Received: {command}")
+    # 普通订阅（接收字典）
+    def handle_command(event_name: str, data: dict, source: str):
+        command = data.get("command")
+        logger.debug(f"Received: {command}")
 
     event_bus.on("command_router.received", handle_command)
+
+    # 类型化订阅（接收 Pydantic Model 对象）
+    async def handle_command_typed(event_name: str, data: CommandRouterData, source: str):
+        command = data.command  # IDE 可以自动提示
+        logger.debug(f"Received: {command}")
+
+    event_bus.on("command_router.received", handle_command_typed, model_class=CommandRouterData)
 """
 
 from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
@@ -29,6 +36,7 @@ from uuid import uuid4
 from src.core.utils.logger import get_logger
 from pydantic import BaseModel, ValidationError
 from src.core.events.registry import EventRegistry
+from src.core.events.names import CoreEvents
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -188,6 +196,84 @@ class EventBus:
         # 在后台任务中执行
         asyncio.create_task(emit_with_tracking())
 
+    async def emit_sync(
+        self, event_name: str, data: BaseModel, source: str = "unknown", error_isolate: bool = True
+    ) -> None:
+        """
+        同步版本的事件发布，主要用于测试场景
+
+        与 emit() 的区别：
+        - emit(): 后台执行，不等待监听器完成（生产环境推荐）
+        - emit_sync(): 等待所有监听器执行完成（测试环境使用）
+
+        Args:
+            event_name: 事件名称
+            data: 事件数据（必须是 Pydantic BaseModel）
+            source: 事件源标识
+            error_isolate: 是否隔离错误（True 时单个监听器错误不影响其他）
+        """
+        # === 1. 事件名称验证 ===
+        if not isinstance(event_name, str):
+            raise TypeError(f"事件名称必须是字符串，当前类型: {type(event_name)}")
+
+        if not event_name:
+            raise ValueError("事件名称不能为空")
+
+        if event_name not in CoreEvents.ALL_EVENTS:
+            self.logger.warning(
+                f"发布的事件 '{event_name}' 不在 CoreEvents 定义中。"
+                f"请使用对应的事件 Payload 类（如 src.core.events.payloads 中定义的类）"
+            )
+
+        # === 2. 数据序列化 ===
+        dict_data = data.model_dump()
+
+        # === 3. 数据验证 ===
+        if self.enable_validation:
+            self._validate_event_data(event_name, dict_data)
+
+        handlers = self._handlers.get(event_name, [])
+        if not handlers:
+            self.logger.debug(f"事件 {event_name} 没有监听器")
+            return
+
+        # 按优先级排序（数字越小越优先）
+        handlers = sorted(handlers, key=lambda h: h.priority)
+
+        self.logger.debug(f"发布事件 {event_name} (来源: {source}, 监听器: {len(handlers)})")
+
+        # === 4. 更新统计 ===
+        if self.enable_stats:
+            self._stats[event_name].emit_count += 1
+            self._stats[event_name].last_emit_time = time.time()
+            self._stats[event_name].listener_count = len(handlers)
+
+        start_time = time.time()
+
+        # === 5. 创建跟踪事件（复用现有机制）===
+        complete_event = asyncio.Event()
+        emit_id = f"{event_name}_{id(complete_event)}"
+        self._active_emits[emit_id] = complete_event
+
+        try:
+            # === 6. 并发执行所有处理器 ===
+            tasks = []
+            for wrapper in handlers:
+                task = asyncio.create_task(self._call_handler(wrapper, event_name, dict_data, source, error_isolate))
+                tasks.append(task)
+
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+            # === 7. 更新统计 ===
+            if self.enable_stats:
+                execution_time = (time.time() - start_time) * 1000
+                self._stats[event_name].total_execution_time_ms += execution_time
+        finally:
+            # 标记完成并从活跃列表中移除
+            complete_event.set()
+            self._active_emits.pop(emit_id, None)
+
     async def _call_handler(
         self, wrapper: HandlerWrapper, event_name: str, data: Any, source: str, error_isolate: bool
     ):
@@ -221,58 +307,72 @@ class EventBus:
             else:
                 raise
 
-    def on(self, event_name: str, handler: Callable, priority: int = 100) -> None:
+    def on(
+        self, event_name: str, handler: Callable, model_class: Optional[Type[T]] = None, priority: int = 100
+    ) -> None:
         """
-        订阅事件
+        订阅事件（统一API）
 
         Args:
             event_name: 要监听的事件名称
             handler: 事件处理器函数
+            model_class: (可选) 期望的数据模型类型（必须是 BaseModel 子类）
+                         如果提供，EventBus 会自动将字典数据反序列化为该类型
             priority: 优先级(数字越小越优先,默认100)
+
+        Example:
+            ```python
+            # 普通订阅（接收字典）
+            event_bus.on("event.name", handler)
+
+            # 类型化订阅（接收 Pydantic Model 对象）
+            event_bus.on("event.name", handler, model_class=MessageReadyPayload)
+            ```
         """
-        wrapper = HandlerWrapper(handler=handler, priority=priority)
-        self._handlers[event_name].append(wrapper)
-        self.logger.debug(f"注册事件监听器: {event_name} -> {handler.__name__} (优先级: {priority})")
+        if model_class is not None:
+            return self._on_typed_impl(event_name, handler, model_class, priority)
+        else:
+            return self._on_raw_impl(event_name, handler, priority)
 
     def on_typed(self, event_name: str, handler: Callable, model_class: Type[T], priority: int = 100) -> None:
         """
-        订阅类型化事件（自动反序列化）
+        订阅类型化事件（便捷方法）
 
-        处理器将接收类型化的 Pydantic Model 对象，而不是字典。
-        EventBus 会自动将字典数据反序列化为指定的模型类型。
+        这是 on() 方法的便捷版本，专门用于类型化订阅。
+        等价于：event_bus.on(event_name, handler, model_class=model_class)
 
         Args:
             event_name: 要监听的事件名称
-            handler: 事件处理器函数（接收 typed_data: BaseModel 对象）
+            handler: 事件处理器函数
             model_class: 期望的数据模型类型（必须是 BaseModel 子类）
             priority: 优先级(数字越小越优先,默认100)
 
         Example:
             ```python
-            # 定义处理器（接收类型化对象）
-            async def handle_message(event_name: str, data: MessageReadyPayload, source: str):
-                message = data.message  # 直接访问字段，无需手动反序列化
-                print(f"收到消息: {message}")
-
-
-            # 订阅类型化事件
-            event_bus.on_typed(CoreEvents.NORMALIZATION_MESSAGE_READY, handle_message, MessageReadyPayload)
+            event_bus.on_typed("event.name", handler, MessageReadyPayload)
             ```
         """
-        # 尝试注册事件类型到 EventRegistry（仅对核心事件）
+        # 委托给 on() 方法，确保经过架构验证器
+        return self.on(event_name, handler, model_class=model_class, priority=priority)
+
+    def _on_raw_impl(self, event_name: str, handler: Callable, priority: int) -> None:
+        """普通订阅实现"""
+        wrapper = HandlerWrapper(handler=handler, priority=priority)
+        self._handlers[event_name].append(wrapper)
+        self.logger.debug(f"注册事件监听器: {event_name} -> {handler.__name__} (优先级: {priority})")
+
+    def _on_typed_impl(self, event_name: str, handler: Callable, model_class: Type[T], priority: int) -> None:
+        """类型化订阅实现（自动反序列化）"""
+        # 注册事件类型到 EventRegistry
         try:
             EventRegistry.register_core_event(event_name, model_class)
         except ValueError:
-            # 如果事件名不符合核心事件命名规范，仅记录调试日志
-            self.logger.debug(f"事件 '{event_name}' 不符合核心事件命名规范，跳过注册到 EventRegistry")
+            self.logger.debug(f"事件 '{event_name}' 不符合核心事件命名规范")
 
         # 创建包装器，自动反序列化
         async def typed_wrapper(event_name: str, dict_data: Dict[str, Any], source: str):
             try:
-                # 将字典反序列化为类型化对象
                 typed_data = model_class.model_validate(dict_data)
-
-                # 调用用户处理器
                 if asyncio.iscoroutinefunction(handler):
                     await handler(event_name, typed_data, source)
                 else:
@@ -283,7 +383,6 @@ class EventBus:
                 self.logger.error(f"类型化事件处理器执行错误 ({event_name}): {e}", exc_info=True)
                 raise
 
-        # 注册包装器
         wrapper = HandlerWrapper(handler=typed_wrapper, priority=priority, original_handler=handler)
         self._handlers[event_name].append(wrapper)
         self.logger.debug(

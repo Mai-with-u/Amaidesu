@@ -6,7 +6,6 @@
 
 import asyncio
 import pytest
-import time
 from src.domains.input.pipelines.rate_limit.pipeline import RateLimitTextPipeline
 from src.domains.input.pipelines.manager import PipelineContext
 

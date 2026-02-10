@@ -252,7 +252,7 @@ class ConfigService:
             # 获取所有输入Provider配置
             all_inputs = config_service.get_all_provider_configs("input")
             for provider_name, provider_config in all_inputs.items():
-                print(f"{provider_name}: {provider_config}")
+                logger.debug(f"{provider_name}: {provider_config}")
 
             # 获取所有输出Provider配置
             all_outputs = config_service.get_all_provider_configs("rendering")
@@ -290,7 +290,7 @@ class ConfigService:
         Example:
             all_pipelines = config_service.get_all_pipeline_configs()
             for pipeline_name, pipeline_config in all_pipelines.items():
-                print(f"{pipeline_name}: {pipeline_config}")
+                logger.debug(f"{pipeline_name}: {pipeline_config}")
         """
         if not self._initialized:
             self.logger.warning("ConfigService 未初始化，返回空配置")

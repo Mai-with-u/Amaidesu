@@ -3,6 +3,7 @@ BiliDanmakuInputProvider 测试
 """
 
 import pytest
+from pydantic import ValidationError
 from unittest.mock import patch
 from src.domains.input.providers.bili_danmaku import BiliDanmakuInputProvider
 
@@ -34,13 +35,13 @@ class TestBiliDanmakuInputProvider:
 
     def test_init_with_invalid_room_id(self):
         """测试无效room_id"""
-        with pytest.raises(ValueError, match="Invalid or missing 'room_id'"):
+        with pytest.raises(ValidationError):
             BiliDanmakuInputProvider({"room_id": -1})
 
-        with pytest.raises(ValueError, match="Invalid or missing 'room_id'"):
+        with pytest.raises(ValidationError):
             BiliDanmakuInputProvider({"room_id": "abc"})
 
-        with pytest.raises(ValueError, match="Invalid or missing 'room_id'"):
+        with pytest.raises(ValidationError):
             BiliDanmakuInputProvider({})
 
     def test_init_without_aiohttp(self, bili_config):

@@ -13,7 +13,6 @@ Intent 类型单元测试
 
 import pytest
 import time
-from typing import Dict, Any
 
 from src.core.types import EmotionType, ActionType, IntentAction
 from src.domains.decision.intent import Intent, SourceContext, ActionSuggestion

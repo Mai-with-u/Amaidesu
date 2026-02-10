@@ -12,7 +12,7 @@ AmaidesuCore 单元测试
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from src.core.amaidesu_core import AmaidesuCore
 from src.core.event_bus import EventBus

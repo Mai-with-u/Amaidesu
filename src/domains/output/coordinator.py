@@ -127,10 +127,10 @@ class OutputCoordinator:
         # 订阅 Decision Domain 的 Intent 事件（3域架构，类型化）
         from src.core.events.payloads.decision import IntentPayload
 
-        self.event_bus.on_typed(
+        self.event_bus.on(
             CoreEvents.DECISION_INTENT_GENERATED,
             self._on_intent_ready,
-            IntentPayload,
+            model_class=IntentPayload,
             priority=50,
         )
         self._event_handler_registered = True

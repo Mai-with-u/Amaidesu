@@ -78,10 +78,10 @@ class DecisionCoordinator:
         if not self._event_subscribed:
             from src.core.events.payloads.input import MessageReadyPayload
 
-            self.event_bus.on_typed(
+            self.event_bus.on(
                 CoreEvents.NORMALIZATION_MESSAGE_READY,
                 self._on_normalized_message_ready,
-                MessageReadyPayload,
+                model_class=MessageReadyPayload,
             )
             self._event_subscribed = True
             self.logger.info(f"DecisionCoordinator 已订阅 '{CoreEvents.NORMALIZATION_MESSAGE_READY}' 事件（类型化）")

@@ -6,12 +6,10 @@
 
 import pytest
 import asyncio
-from unittest.mock import Mock, AsyncMock
 
 from src.domains.output.pipelines.manager import OutputPipelineManager
 from src.domains.output.pipelines.base import (
     OutputPipelineBase,
-    PipelineErrorHandling,
     PipelineException,
 )
 from src.domains.output.parameters.render_parameters import ExpressionParameters

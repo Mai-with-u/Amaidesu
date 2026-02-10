@@ -43,6 +43,7 @@ async def test_provider_registry_has_providers():
 async def test_event_bus_creation():
     """测试 EventBus 可以正常创建"""
     from src.core.event_bus import EventBus
+    import asyncio
 
     bus = EventBus()
     assert bus is not None
@@ -55,6 +56,9 @@ async def test_event_bus_creation():
 
     bus.on("test.event", listener)
     await bus.emit("test.event", SimpleTestEvent(data="test"), source="test")
+
+    # emit() 是后台异步执行，需要等待一下让事件处理完成
+    await asyncio.sleep(0.1)
 
     assert len(received) == 1
     assert received[0][0] == "test.event"

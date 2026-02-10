@@ -13,7 +13,6 @@ NormalizedMessage 单元测试
 """
 
 import time
-from typing import Any
 
 import pytest
 

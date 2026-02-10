@@ -13,7 +13,7 @@ except ModuleNotFoundError:
     except ModuleNotFoundError:
         # 这个错误理论上不应该在这里触发，因为主程序入口会先检查
         # 但为了模块的独立性，保留一个基本的提示
-        print("错误：TOML 解析库缺失。请在主程序环境中安装 'toml'。", file=sys.stderr)
+        logger.error("错误：TOML 解析库缺失。请在主程序环境中安装 'toml'。")
         # 此处不直接 sys.exit(1)，让调用方处理初始化失败
         raise
 
