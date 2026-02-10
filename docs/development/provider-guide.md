@@ -107,6 +107,7 @@ DecisionProvider 处理 `NormalizedMessage` 生成 `Intent`。
 from typing import Dict, Any
 from src.core.base.decision_provider import DecisionProvider
 from src.core.base.normalized_message import NormalizedMessage
+from src.core.types import EmotionType, ActionType, IntentAction
 from src.domains.decision.intent import Intent
 from src.utils.logger import get_logger
 
@@ -122,10 +123,11 @@ class MyDecisionProvider(DecisionProvider):
         """决策逻辑"""
         # 实现决策逻辑
         return Intent(
-            type="response",
-            content="响应内容",
-            emotion="happy",
-            parameters={},
+            original_text=message.text,
+            response_text="响应内容",
+            emotion=EmotionType.HAPPY,
+            actions=[IntentAction(type=ActionType.EXPRESSION, params={"name": "smile"})],
+            metadata={},
         )
 ```
 
@@ -134,20 +136,26 @@ class MyDecisionProvider(DecisionProvider):
 | 方法 | 说明 | 必须实现 |
 |------|------|----------|
 | `decide()` | 决策方法，NormalizedMessage → Intent | ✅ |
-| `initialize()` | 初始化 Provider | ❌（可选） |
+| `setup()` | 设置 Provider（注册事件订阅） | ❌（默认实现） |
 | `cleanup()` | 清理资源 | ❌（可选） |
+| `_setup_internal()` | 内部初始化逻辑 | ❌（可选） |
+| `_cleanup_internal()` | 内部清理逻辑 | ❌（可选） |
 
 ### Intent 结构
 
 ```python
+from src.core.types import EmotionType, ActionType, IntentAction
 from src.domains.decision.intent import Intent
 
 intent = Intent(
-    type="response",                 # Intent 类型
-    content="回复内容",               # 响应内容
-    emotion="happy",                 # 情感
-    emotion_value=0.8,               # 情感强度
-    parameters={                     # 额外参数
+    original_text="用户消息",           # 原始输入文本
+    response_text="回复内容",           # 响应内容
+    emotion=EmotionType.HAPPY,         # 情感类型（枚举）
+    actions=[                          # 动作列表
+        IntentAction(type=ActionType.EXPRESSION, params={"name": "smile"}),
+        IntentAction(type=ActionType.HOTKEY, params={"key": "wave"}),
+    ],
+    metadata={                         # 额外元数据
         "tts_enabled": True,
         "subtitle_enabled": True,
     }
@@ -448,11 +456,11 @@ class MyProviderConfig(BaseModel):
 
 不同类型的 Provider 使用不同的公共生命周期方法，这反映了它们不同的语义：
 
-| Provider 类型 | 启动方法 | 停止方法 | 原因 |
-|--------------|---------|---------|------|
-| InputProvider | `start()` | `stop()` + `cleanup()` | 返回异步数据流 (AsyncIterator) |
-| DecisionProvider | `setup()` | `cleanup()` | 注册到 EventBus 作为事件订阅者 |
-| OutputProvider | `setup()` | `cleanup()` | 注册到 EventBus 作为事件订阅者 |
+| Provider 类型 | 启动方法 | 停止方法 | 内部方法 | 原因 |
+|--------------|---------|---------|----------|------|
+| InputProvider | `start()` | `stop()` + `cleanup()` | `_setup_internal()` / `_cleanup_internal()` | 返回异步数据流 (AsyncIterator) |
+| DecisionProvider | `setup()` | `cleanup()` | `_setup_internal()` / `_cleanup_internal()` | 注册到 EventBus 作为事件订阅者 |
+| OutputProvider | `setup()` | `cleanup()` | `_setup_internal()` / `_cleanup_internal()` | 注册到 EventBus 作为事件订阅者 |
 
 **为什么不能统一公共 API？**
 
@@ -780,6 +788,100 @@ context_tags = ["游戏", "互动"]
 # 模板信息（可选）
 enable_template_info = false
 template_items = {}
+```
+
+### ReadPingmuInputProvider - 读屏木输入
+
+通过 ReadPingmu 服务采集屏幕内容，支持 OCR 文字识别和图像理解。
+
+**功能特性：**
+- 通过 ReadPingmu 服务采集屏幕内容
+- 支持 OCR 文字识别
+- 支持图像理解
+
+**配置示例：**
+```toml
+[providers.input.inputs.read_pingmu]
+type = "read_pingmu"
+api_base_url = "http://127.0.0.1:8080"
+```
+
+### BiliDanmakuOfficialMaicraftInputProvider - B站官方弹幕（Maicraft版本）
+
+专为 Maicraft 弹幕互动游戏优化的 B站官方弹幕输入 Provider。
+
+**与 BiliDanmakuOfficialInputProvider 的区别：**
+- 针对游戏场景优化的事件处理
+- 支持弹幕命令解析
+- 与 MaicraftDecisionProvider 配合使用
+
+**功能特性：**
+- 官方 WebSocket API
+- 消息缓存服务
+- 上下文标签过滤
+- 模板信息支持
+- 弹幕命令解析
+
+**配置示例：**
+```toml
+[providers.input.inputs.bili_danmaku_official_maicraft]
+type = "bili_danmaku_official_maicraft"
+id_code = "直播间ID代码"
+app_id = "应用ID"
+access_key = "访问密钥"
+access_key_secret = "访问密钥Secret"
+api_host = "https://live-open.biliapi.com"
+message_cache_size = 1000
+
+# 上下文过滤（可选）
+context_tags = ["游戏", "互动"]
+
+# 模板信息（可选）
+enable_template_info = false
+template_items = {}
+```
+
+### OmniTTSOutputProvider - Fish TTS 语音合成
+
+使用 Fish Audio TTS API 进行高质量语音合成。
+
+**功能特性：**
+- 使用 Fish Audio TTS API
+- 高质量语音合成
+- 支持多音色
+- 流式音频输出
+
+**配置示例：**
+```toml
+[providers.output.outputs.omni_tts]
+type = "omni_tts"
+api_key = "your_api_key"
+api_url = "https://api.fish.audio"
+voice = "narration"  # 音色ID
+speed = 1.0
+```
+
+**依赖安装：**
+```bash
+uv add aiohttp
+```
+
+### WarudoOutputProvider - Warudo 虚拟主播
+
+通过 WebSocket 与 Warudo 虚拟主播软件通信，控制虚拟形象。
+
+**功能特性：**
+- 通过 WebSocket 与 Warudo 通信
+- 支持参数控制（表情、手势等）
+- 支持热键触发
+- 支持场景切换
+
+**配置示例：**
+```toml
+[providers.output.outputs.warudo]
+type = "warudo"
+host = "127.0.0.1"
+port = 10800
 ```
 
 ## 共享服务

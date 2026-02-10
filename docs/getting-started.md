@@ -174,6 +174,8 @@ Amaidesu/
 ### 输入 Provider
 - **STTInputProvider**: 语音转文字（讯飞ASR + Silero VAD）
 - **BiliDanmakuOfficialInputProvider**: B站官方弹幕
+- **ReadPingmuInputProvider**: 读屏木输入
+- **BiliDanmakuOfficialMaicraftInputProvider**: B站官方弹幕 Maicraft 版本
 
 ### 决策 Provider
 - **KeywordActionDecisionProvider**: 关键词动作决策
@@ -185,6 +187,8 @@ Amaidesu/
 - **ObsControlOutputProvider**: OBS 控制（文本显示、场景切换）
 - **StickerOutputProvider**: 贴纸输出
 - **RemoteStreamOutputProvider**: 远程流媒体输出
+- **OmniTTSOutputProvider**: Fish TTS 语音合成
+- **WarudoOutputProvider**: Warudo 虚拟主播控制
 
 ### 共享服务
 - **DGLabService**: DG-LAB 硬件控制服务

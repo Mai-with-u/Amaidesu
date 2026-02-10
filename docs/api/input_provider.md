@@ -11,7 +11,7 @@ InputProvider 是输入 Provider 的抽象基类，用于从外部数据源采�
 
 **实现要求**:
 - 必须是异步生成器（async generator）
-- 定期检查 `_stop_event` 事件以优雅停止
+- 定期检查 `is_running` 属性以优雅停止
 - 每次 yield 一个 RawData 对象
 
 **参数**: 无
@@ -29,15 +29,17 @@ class RawData:
     metadata: Dict[str, Any] = {}  # 元数据
 ```
 
+**位置**: `src/core/base/raw_data.py`
+
 **示例**:
 ```python
 from typing import AsyncIterator
-from src.core.providers.input_provider import InputProvider
-from src.core.data_types.raw_data import RawData
+from src.core.base.input_provider import InputProvider
+from src.core.base.raw_data import RawData
 
 class MyInputProvider(InputProvider):
     async def _collect_data(self) -> AsyncIterator[RawData]:
-        while not self._stop_event.is_set():
+        while self.is_running:
             try:
                 # 采集数据
                 data = await self._fetch_data()
@@ -54,21 +56,46 @@ class MyInputProvider(InputProvider):
 ```
 
 ### `_cleanup(self)`
-清理资源。
+清理资源的向后兼容方法。
 
-**调用时机**: 
-- 插件 cleanup 时
+**说明**:
+- 这是 `_cleanup_internal()` 的别名
+- 子类应重写 `_cleanup_internal()` 而不是 `_cleanup()`
+- 在 `_cleanup()` 中调用 `await super()._cleanup()` 以确保内部清理
+
+**调用时机**:
 - 提供者停止时
+- 由 ProviderManager 调用
 
 **示例**:
 ```python
 async def _cleanup(self):
-    # 关闭连接
+    # 调用父类清理
+    await super()._cleanup()
+
+    # 子类特定的清理逻辑
     if hasattr(self, 'connection'):
         await self.connection.close()
-    
+
     # 清理资源
     self.logger.info("MyInputProvider 清理完成")
+```
+
+### `_cleanup_internal(self)`
+内部清理方法（子类重写）。
+
+**说明**:
+- 子类应该重写此方法来清理特定资源
+- 由 `_cleanup()` 调用，不直接由外部调用
+
+**示例**:
+```python
+async def _cleanup_internal(self):
+    # 子类特定的清理逻辑
+    if hasattr(self, 'connection'):
+        await self.connection.close()
+
+    self.logger.info("MyInputProvider 内部清理完成")
 ```
 
 ## 属性
@@ -79,8 +106,8 @@ Provider 配置。
 ### `logger: Logger`
 Logger 实例。
 
-### `_stop_event: asyncio.Event`
-停止事件，用于优雅停止数据采集。
+### `is_running: bool`
+运行状态标志，用于优雅停止数据采集。
 
 ## 完整示例
 
@@ -89,8 +116,8 @@ Logger 实例。
 ```python
 import asyncio
 from typing import AsyncIterator
-from src.core.providers.input_provider import InputProvider
-from src.core.data_types.raw_data import RawData
+from src.core.base.input_provider import InputProvider
+from src.core.base.raw_data import RawData
 from src.utils.logger import get_logger
 
 class MyInputProvider(InputProvider):
@@ -98,7 +125,7 @@ class MyInputProvider(InputProvider):
 
     async def _collect_data(self) -> AsyncIterator[RawData]:
         counter = 0
-        while not self._stop_event.is_set():
+        while self.is_running:
             # 生成模拟数据
             data = f"Message {counter}"
             raw_data = RawData(
@@ -121,8 +148,8 @@ class MyInputProvider(InputProvider):
 import aiohttp
 import asyncio
 from typing import AsyncIterator
-from src.core.providers.input_provider import InputProvider
-from src.core.data_types.raw_data import RawData
+from src.core.base.input_provider import InputProvider
+from src.core.base.raw_data import RawData
 from src.utils.logger import get_logger
 
 class APIInputProvider(InputProvider):
@@ -139,7 +166,7 @@ class APIInputProvider(InputProvider):
         await super()._setup_internal()
 
     async def _collect_data(self) -> AsyncIterator[RawData]:
-        while not self._self._stop_event.is_set():
+        while self.is_running:
             try:
                 async with self.session.get(self.api_url) as response:
                     data = await response.json()
@@ -163,13 +190,14 @@ class APIInputProvider(InputProvider):
 ## 注意事项
 
 1. **错误处理**: 所有网络请求和 I/O 操作都需要 try-except
-2. **优雅停止**: 必须定期检查 `_stop_event`
-3. **资源清理**: 在 `_cleanup()` 中正确关闭连接和会话
+2. **优雅停止**: 必须定期检查 `is_running` 属性
+3. **资源清理**: 在 `_cleanup_internal()` 中正确关闭连接和会话
 4. **日志记录**: 重要操作都需要记录日志
 
 ---
 
 **相关文档**:
-- [Plugin Protocol](./plugin_protocol.md)
+- [Provider 开发指南](../development/provider-guide.md)
+- [DecisionProvider API](./decision_provider.md)
 - [OutputProvider API](./output_provider.md)
 - [EventBus API](./event_bus.md)

@@ -22,9 +22,9 @@
 
 ### 迁移状态
 
-- **Input Provider**：7 个全部完成迁移
-- **Decision Provider**：2 个完成迁移，1 个不迁移（emotion_judge 已合并到 MaiCore）
-- **Output Provider**：11 个完成迁移（包括 avatar 合并）
+- **Input Provider**：8 个全部完成迁移
+- **Decision Provider**：6 个已迁移完成（含新增）
+- **Output Provider**：11 个完成迁移（含新增）
 - **Service**：1 个完成迁移
 
 ### 旧插件备份
@@ -474,9 +474,9 @@ Amaidesu/
 
 所有功能已成功从旧插件系统迁移到新的 Provider 架构：
 
-- **7 个 Input Provider** 已迁移完成
-- **4 个 Decision Provider** 已迁移完成（含新增）
-- **10 个 Output Provider** 已迁移完成（含新增）
+- **8 个 Input Provider** 已迁移完成
+- **6 个 Decision Provider** 已迁移完成（含新增）
+- **11 个 Output Provider** 已迁移完成（含新增）
 - **1 个共享服务** (DGLabService) 已迁移完成
 
 新架构优势：

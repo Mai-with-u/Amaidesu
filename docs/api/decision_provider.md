@@ -2,234 +2,775 @@
 
 ## 概述
 
-DecisionProvider 是决策 Provider 的抽象基类，负责将 CanonicalMessage 转换为 MessageBase。
+`DecisionProvider` 是决策域（Decision Domain）的抽象基类，负责将 `NormalizedMessage` 转换为 `Intent`。
 
-## 核心方法
+### 核心职责
 
-### `async def decide(self, canonical_message: CanonicalMessage) -> MessageBase`
-决策核心方法。
+- **输入**：接收来自 Input Domain 的 `NormalizedMessage`
+- **处理**：根据业务逻辑生成决策意图
+- **输出**：返回 `Intent` 对象，包含回复文本、情感、动作等
 
-**参数**:
-- canonical_message: 标准消息对象
+### 数据流
 
-**返回**: MessageBase 对象（决策结果）
-
-**示例**:
-```python
-from src.core.providers.decision_provider import DecisionProvider
-from src.canonical.canonical_message import CanonicalMessage
-from maim_message import MessageBase
-from src.utils.logger import get_logger
-
-class MyDecisionProvider(DecisionProvider):
-    """简单的决策 Provider 示例"""
-
-    async def decide(self, canonical_message: CanonicalMessage) -> MessageBase:
-        text = canonical_message.text
-        
-        # 简单决策：直接返回文本消息
-        message_segment = MessageSegment(
-            type="text",
-            data=text
-        )
-        
-        return MessageBase(message_segment=message_segment)
 ```
-
-## 辅助方法
-
-### `_setup_internal(self)`（可选）
-内部设置逻辑，子类可以重写。
-
-**默认行为**: 无操作
-
-**示例**:
-```python
-class MyDecisionProvider(DecisionProvider):
-    def __init__(self, config):
-        super().__init__(config)
-        self.api_client = None
-
-    async def _setup_internal(self):  # noqa: B027
-        """初始化 API 客户端"""
-        import httpx
-        self.api_client = httpx.Client()
-        await super()._setup_internal()
-
-    async def decide(self, canonical_message: CanonicalMessage) -> MessageBase:
-        response = await self.api_client.post(
-            "https://api.example.com/decide",
-            json={"text": canonical_message.text}
-        )
-        
-        # 返回决策结果
-        message_segment = MessageSegment(
-            type="text",
-            data=response.text
-        )
-        
-        return MessageBase(message_segment=message_segment)
-```
-
-### `_cleanup_internal(self)`（可选）
-内部清理逻辑，子类可以重写。
-
-**默认行为**: 无操作
-
-**示例**:
-```python
-class MyDecisionProvider(DecisionProvider):
-    async def _cleanup_internal(self):  # noqa: B027
-        """清理 API 客户端"""
-        if self.api_client:
-            await self.api_client.aclose()
-        await super()._cleanup_internal()
-```
-
-## 属性
-
-### `config: Dict[str, Any]`
-Provider 配置。
-
-### `event_bus: Optional[EventBus]`
-事件总线实例（可选，用于事件通信）。
-
-### `is_setup: bool`
-是否已完成设置。
-
-## 完整示例
-
-### MaiCore 决策 Provider
-
-```python
-import aiohttp
-from typing import Optional
-from src.core.providers.decision_provider import DecisionProvider
-from src.canonical.canonical_message import CanonicalMessage
-from maim_message import MessageBase, MessageSegment, MessageInfo, FormatInfo
-from src.utils.logger import get_logger
-
-class MaiCoreDecisionProvider(DecisionProvider):
-    """使用 MaiCore WebSocket 的决策 Provider"""
-
-    def __init__(self, config: dict, event_bus: Optional = None):
-        super().__init__(config, event_bus)
-        self.host = config.get("host", "localhost")
-        self.port = config.get("port", 8000)
-        self.ws: Optional[aiohttp.ClientWebSocketResponse] = None
-        self.session: Optional[aiohttp.ClientSession] = None
-
-    async def _setup_internal(self):  # noqa: B027
-        """连接到 MaiCore WebSocket"""
-        uri = f"ws://{self.host}:{self.port}"
-        self.session = aiohttp.ClientSession()
-        self.ws = await self.session.ws_connect(uri)
-        await super()._setup_internal()
-        self.logger.info(f"连接到 MaiCore: {uri}")
-
-    async def decide(self, canonical_message: CanonicalMessage) -> MessageBase:
-        """发送消息到 MaiCore 并获取响应"""
-        try:
-            # 构造消息
-            message = {
-                "text": canonical_message.text,
-                "user": canonical_message.user.nickname if canonical_message.user else "user",
-            }
-            
-            await self.ws.send_json(message)
-            
-            # 等待响应
-            response = await self.ws.receive_json()
-            
-            # 构造返回消息
-            message_info = MessageInfo(
-                user=response.get("user", "user"),
-                message_segment=MessageSegment(
-                    type="text",
-                    data=response.get("text", "")
-                )
-            )
-            
-            return MessageBase(message_info=message_info)
-            
-        except Exception as e:
-            self.logger.error(f"决策失败: {e}", exc_info=True)
-            raise
-
-    async def _cleanup_internal(self): # noqa: B027
-        """断开 WebSocket 连接"""
-        if self.ws:
-            await self.ws.close()
-        if self.session:
-            await self.session.close()
-        await super()._cleanup_internal()
-```
-
-### 本地 LLM 决策 Provider
-
-```python
-from src.core.providers.decision_provider import DecisionProvider
-from src.canonical.canonical_message import CanonicalMessage
-from maim_message import MessageBase, MessageSegment, MessageInfo
-from src.utils.logger import get_logger
-
-class LocalLLMDecisionProvider(DecisionProvider):
-    """使用本地 LLM API 的决策 Provider"""
-
-    def __init__(self, config: dict, event_bus: Optional = None]):
-        super().__init__(config, event_bus)
-        self.model = config.get("model", "gpt-4")
-        self.api_key = config.get("api_key")
-        self.api_url = config.get("api_url", "https://api.openai.com/v1")
-
-    async def decide(self, canonical_message: CanonicalMessage) -> MessageBase:
-        """使用本地 LLM 生成响应"""
-        import httpx
-        
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        payload = {
-            "model": self.model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": canonical_message.text
-                }
-            ]
-        }
-        
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self.api_url}/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=30
-            )
-            
-            result = response.json()
-            text = result["choices"][0]["message"]["content"]
-            
-            message_segment = MessageSegment(
-                type="text",
-                data=text
-            )
-            
-            message_info = MessageInfo(user="local_llm")
-            
-            return MessageBase(message_info=message_info, message_segment=message_segment)
-
-    async def _cleanup_internal(self):  # noqa: B027
-        """无资源需要清理"""
-        await super()._cleanup_internal()
+Input Domain           Decision Domain          Output Domain
+─────────────────      ─────────────────        ────────────────
+NormalizedMessage  →  DecisionProvider.decide()  →  Intent
+                          ↓
+                    DECISION_INTENT_GENERATED 事件
+                          ↓
+                    Output Domain 接收并处理
 ```
 
 ---
 
-**相关文档**:
-- [Plugin Protocol](./plugin_protocol.md)
+## 核心方法
+
+### `async def decide(self, message: NormalizedMessage) -> Intent`
+
+决策核心方法（抽象方法，必须实现）。
+
+**参数**：
+- `message` (`NormalizedMessage`): 标准化消息对象
+
+**返回**：`Intent` - 决策意图对象
+
+**异常**：
+- `ValueError`: 如果输入消息无效
+- `Exception`: 决策过程中的其他错误
+
+**示例**：
+
+```python
+from src.core.base.decision_provider import DecisionProvider
+from src.core.base.normalized_message import NormalizedMessage
+from src.domains.decision.intent import Intent
+from src.core.types import EmotionType, ActionType, IntentAction
+from src.core.utils.logger import get_logger
+
+class SimpleDecisionProvider(DecisionProvider):
+    """简单的决策 Provider 示例"""
+
+    def __init__(self, config: dict):
+        super().__init__(config)
+        self.logger = get_logger("SimpleDecisionProvider")
+
+    async def decide(self, message: NormalizedMessage) -> Intent:
+        """根据消息生成简单的响应"""
+
+        # 简单的回声逻辑
+        response_text = f"你说：{message.text}"
+
+        # 生成决策意图
+        return Intent(
+            original_text=message.text,
+            response_text=response_text,
+            emotion=EmotionType.NEUTRAL,
+            actions=[
+                IntentAction(
+                    type=ActionType.BLINK,
+                    params={},
+                    priority=30
+                )
+            ],
+            metadata={"provider": "simple"}
+        )
+```
+
+---
+
+## 生命周期方法
+
+### `async def setup(self, event_bus, config, dependencies)`
+
+设置 Provider，初始化资源并注册到 EventBus。
+
+**参数**：
+- `event_bus` (`EventBus`): EventBus 实例
+- `config` (`dict`, 可选): Provider 配置（如果传入则覆盖构造时的配置）
+- `dependencies` (`dict`, 可选): 依赖注入字典（如 `llm_service` 等）
+
+**默认行为**：
+1. 保存 `event_bus` 和 `config`
+2. 保存 `dependencies`
+3. 调用 `_setup_internal()` 执行子类特定的初始化
+4. 设置 `is_setup = True`
+
+**示例**：
+
+```python
+class MyDecisionProvider(DecisionProvider):
+    def __init__(self, config: dict):
+        super().__init__(config)
+        self.api_client = None
+        self.logger = get_logger("MyDecisionProvider")
+
+    async def _setup_internal(self):
+        """初始化 API 客户端"""
+        import httpx
+        self.api_client = httpx.AsyncClient(
+            base_url=self.config.get("api_url", "https://api.example.com")
+        )
+        self.logger.info("API 客户端已初始化")
+
+    async def decide(self, message: NormalizedMessage) -> Intent:
+        response = await self.api_client.post(
+            "/decide",
+            json={"text": message.text}
+        )
+        data = response.json()
+
+        return Intent(
+            original_text=message.text,
+            response_text=data["response"],
+            emotion=EmotionType(data.get("emotion", "neutral")),
+            actions=[],
+            metadata={"provider": "my_api"}
+        )
+```
+
+### `async def cleanup(self)`
+
+清理资源，停止 Provider。
+
+**默认行为**：
+1. 调用 `_cleanup_internal()` 执行子类特定的清理
+2. 设置 `is_setup = False`
+
+**示例**：
+
+```python
+class MyDecisionProvider(DecisionProvider):
+    async def _cleanup_internal(self):
+        """清理 API 客户端"""
+        if self.api_client:
+            await self.api_client.aclose()
+            self.logger.info("API 客户端已关闭")
+```
+
+### `async def _setup_internal(self)`（可选）
+
+内部设置逻辑，子类可以重写。
+
+**默认行为**：无操作
+
+**用途**：
+- 连接到外部服务
+- 加载模型或配置
+- 初始化内部状态
+
+### `async def _cleanup_internal(self)`（可选）
+
+内部清理逻辑，子类可以重写。
+
+**默认行为**：无操作
+
+**用途**：
+- 关闭连接
+- 释放资源
+- 保存状态
+
+---
+
+## 属性
+
+### `config: Dict[str, Any]`
+
+Provider 配置（来自 `config.toml` 中的 `[providers.decision.xxx]` 配置）。
+
+### `event_bus: Optional[EventBus]`
+
+EventBus 实例（可选，用于事件通信）。
+
+### `is_setup: bool`
+
+是否已完成设置。
+
+---
+
+## Intent 结构
+
+`Intent` 是 DecisionProvider 的输出类型，包含以下字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `id` | `str` | 否 | 唯一标识符（自动生成） |
+| `original_text` | `str` | 是 | 原始输入文本 |
+| `response_text` | `str` | 是 | AI 回复文本 |
+| `emotion` | `EmotionType` | 否 | 情感类型（默认 `NEUTRAL`） |
+| `actions` | `List[IntentAction]` | 否 | 动作列表（默认空） |
+| `source_context` | `SourceContext` | 否 | 输入源上下文 |
+| `metadata` | `Dict[str, Any]` | 否 | 元数据 |
+| `timestamp` | `float` | 否 | 时间戳（自动生成） |
+
+### IntentAction 结构
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `type` | `ActionType` | 是 | 动作类型 |
+| `params` | `Dict[str, Any]` | 否 | 动作参数 |
+| `priority` | `int` | 否 | 优先级（0-100，默认 50） |
+
+### EmotionType 枚举
+
+```python
+class EmotionType(str, Enum):
+    NEUTRAL = "neutral"
+    HAPPY = "happy"
+    SAD = "sad"
+    ANGRY = "angry"
+    SURPRISED = "surprised"
+    LOVE = "love"
+    SHY = "shy"
+    EXCITED = "excited"
+    CONFUSED = "confused"
+    SCARED = "scared"
+```
+
+### ActionType 枚举
+
+```python
+class ActionType(str, Enum):
+    EXPRESSION = "expression"      # 表情
+    HOTKEY = "hotkey"              # 热键
+    EMOJI = "emoji"                # emoji表情
+    BLINK = "blink"                # 眨眼
+    NOD = "nod"                    # 点头
+    SHAKE = "shake"                # 摇头
+    WAVE = "wave"                  # 挥手
+    CLAP = "clap"                  # 鼓掌
+    STICKER = "sticker"            # 贴图
+    MOTION = "motion"              # 动作
+    CUSTOM = "custom"              # 自定义
+    GAME_ACTION = "game_action"    # 游戏动作
+    NONE = "none"                  # 无动作
+```
+
+---
+
+## 完整示例
+
+### 示例 1：关键词动作决策 Provider
+
+```python
+"""
+KeywordActionDecisionProvider - 基于关键词匹配的决策Provider
+"""
+
+import time
+from typing import Dict, Any, List
+from src.core.base.decision_provider import DecisionProvider
+from src.core.base.normalized_message import NormalizedMessage
+from src.domains.decision.intent import Intent, SourceContext
+from src.core.types import EmotionType, ActionType, IntentAction
+from src.core.utils.logger import get_logger
+
+class KeywordActionDecisionProvider(DecisionProvider):
+    """关键词动作决策Provider"""
+
+    def __init__(self, config: dict):
+        super().__init__(config)
+        self.logger = get_logger("KeywordActionDecisionProvider")
+
+        # 配置：关键词规则
+        self.rules = config.get("rules", [])
+
+        # 状态追踪
+        self.last_triggered: Dict[str, float] = {}
+        self.match_count = 0
+
+    async def _setup_internal(self):
+        """初始化"""
+        self.logger.info(f"加载了 {len(self.rules)} 个关键词规则")
+
+    async def decide(self, message: NormalizedMessage) -> Intent:
+        """根据关键词匹配生成Intent"""
+
+        text = message.text.strip().lower()
+        current_time = time.time()
+
+        # 遍历规则（按优先级排序）
+        for rule in sorted(self.rules, key=lambda r: r.get("priority", 50), reverse=True):
+            # 检查冷却时间
+            action_name = rule["name"]
+            cooldown = rule.get("cooldown", 1.0)
+
+            if action_name in self.last_triggered:
+                if current_time - self.last_triggered[action_name] < cooldown:
+                    continue  # 仍在冷却中
+
+            # 检查关键词匹配
+            keywords = rule.get("keywords", [])
+            if any(kw.lower() in text for kw in keywords):
+                self.last_triggered[action_name] = current_time
+                self.match_count += 1
+
+                return Intent(
+                    original_text=message.text,
+                    response_text=rule.get("response", f"触发动作: {action_name}"),
+                    emotion=EmotionType.NEUTRAL,
+                    actions=[
+                        IntentAction(
+                            type=ActionType(rule.get("action_type", "hotkey")),
+                            params=rule.get("action_params", {}),
+                            priority=rule.get("priority", 50)
+                        )
+                    ],
+                    source_context=SourceContext(
+                        source=message.source,
+                        data_type=message.data_type,
+                        user_id=message.user_id,
+                        importance=message.importance
+                    ),
+                    metadata={"provider": "keyword_action", "rule": action_name}
+                )
+
+        # 没有匹配，返回空 Intent
+        return Intent(
+            original_text=message.text,
+            response_text=message.text,
+            emotion=EmotionType.NEUTRAL,
+            actions=[],
+            source_context=SourceContext(
+                source=message.source,
+                data_type=message.data_type,
+                user_id=message.user_id,
+                importance=message.importance
+            ),
+            metadata={"provider": "keyword_action", "matched": False}
+        )
+
+    async def _cleanup_internal(self):
+        """清理"""
+        self.logger.info(f"匹配次数: {self.match_count}")
+```
+
+### 示例 2：本地 LLM 决策 Provider
+
+```python
+"""
+LocalLLMDecisionProvider - 使用本地 LLM 进行决策
+"""
+
+from typing import Dict, Any, Optional
+from src.core.base.decision_provider import DecisionProvider
+from src.core.base.normalized_message import NormalizedMessage
+from src.domains.decision.intent import Intent, SourceContext
+from src.core.types import EmotionType, ActionType, IntentAction
+from src.core.utils.logger import get_logger
+from src.prompts import get_prompt_manager
+
+class LocalLLMDecisionProvider(DecisionProvider):
+    """本地 LLM 决策 Provider"""
+
+    def __init__(self, config: dict):
+        super().__init__(config)
+        self.logger = get_logger("LocalLLMDecisionProvider")
+
+        # 配置
+        self.backend = config.get("backend", "llm")
+        self.fallback_mode = config.get("fallback_mode", "simple")
+
+        # LLM Service（通过依赖注入）
+        self._llm_service = None
+
+        # 统计
+        self._total_requests = 0
+        self._successful_requests = 0
+        self._failed_requests = 0
+
+    async def setup(
+        self,
+        event_bus,
+        config: Dict[str, Any],
+        dependencies: Optional[Dict[str, Any]] = None
+    ):
+        """设置 Provider"""
+        await super().setup(event_bus, config, dependencies)
+
+        # 从依赖注入中获取 LLM Service
+        if dependencies and "llm_service" in dependencies:
+            self._llm_service = dependencies["llm_service"]
+            self.logger.info("LLM Service 已注入")
+        else:
+            self.logger.warning("LLM Service 未注入，决策功能将不可用")
+
+    async def decide(self, message: NormalizedMessage) -> Intent:
+        """使用 LLM 生成响应"""
+
+        if self._llm_service is None:
+            raise RuntimeError("LLM Service 未注入！")
+
+        self._total_requests += 1
+
+        # 构建提示词
+        prompt = get_prompt_manager().render(
+            "decision/local_llm",
+            text=message.text
+        )
+
+        try:
+            # 调用 LLM
+            response = await self._llm_service.chat(
+                prompt=prompt,
+                client_type=self.backend
+            )
+
+            if not response.success:
+                self._failed_requests += 1
+                self.logger.error(f"LLM 调用失败: {response.error}")
+                return self._handle_fallback(message)
+
+            self._successful_requests += 1
+
+            # 创建 Intent
+            return Intent(
+                original_text=message.text,
+                response_text=response.content,
+                emotion=EmotionType.NEUTRAL,
+                actions=[
+                    IntentAction(
+                        type=ActionType.BLINK,
+                        params={},
+                        priority=30
+                    )
+                ],
+                source_context=SourceContext(
+                    source=message.source,
+                    data_type=message.data_type,
+                    user_id=message.user_id,
+                    importance=message.importance
+                ),
+                metadata={"provider": "local_llm"}
+            )
+
+        except Exception as e:
+            self._failed_requests += 1
+            self.logger.error(f"LLM 调用异常: {e}", exc_info=True)
+            return self._handle_fallback(message)
+
+    def _handle_fallback(self, message: NormalizedMessage) -> Intent:
+        """降级处理"""
+        if self.fallback_mode == "simple":
+            return Intent(
+                original_text=message.text,
+                response_text=message.text,
+                emotion=EmotionType.NEUTRAL,
+                actions=[],
+                metadata={"provider": "local_llm", "fallback": True}
+            )
+        elif self.fallback_mode == "echo":
+            return Intent(
+                original_text=message.text,
+                response_text=f"你说：{message.text}",
+                emotion=EmotionType.NEUTRAL,
+                actions=[],
+                metadata={"provider": "local_llm", "fallback": True}
+            )
+        else:
+            raise RuntimeError("LLM 请求失败，且未配置降级模式")
+
+    async def cleanup(self):
+        """清理资源"""
+        success_rate = (
+            self._successful_requests / self._total_requests * 100
+            if self._total_requests > 0
+            else 0
+        )
+        self.logger.info(
+            f"统计: 总请求={self._total_requests}, "
+            f"成功={self._successful_requests}, "
+            f"失败={self._failed_requests}, "
+            f"成功率={success_rate:.1f}%"
+        )
+```
+
+### 示例 3：规则引擎决策 Provider
+
+```python
+"""
+RuleEngineDecisionProvider - 基于规则引擎的决策Provider
+"""
+
+from typing import Dict, Any, List
+from src.core.base.decision_provider import DecisionProvider
+from src.core.base.normalized_message import NormalizedMessage
+from src.domains.decision.intent import Intent, SourceContext
+from src.core.types import EmotionType, ActionType, IntentAction
+from src.core.utils.logger import get_logger
+
+class RuleEngineDecisionProvider(DecisionProvider):
+    """规则引擎决策 Provider"""
+
+    def __init__(self, config: dict):
+        super().__init__(config)
+        self.logger = get_logger("RuleEngineDecisionProvider")
+
+        # 加载规则
+        self.rules = config.get("rules", [])
+        self.logger.info(f"加载了 {len(self.rules)} 条规则")
+
+    async def decide(self, message: NormalizedMessage) -> Intent:
+        """根据规则匹配生成响应"""
+
+        # 默认响应
+        default_response = "我听到了"
+
+        # 遍历规则
+        for rule in self.rules:
+            if self._match_rule(message, rule):
+                self.logger.info(f"匹配规则: {rule['name']}")
+
+                return Intent(
+                    original_text=message.text,
+                    response_text=rule.get("response", default_response),
+                    emotion=EmotionType(rule.get("emotion", "neutral")),
+                    actions=[
+                        IntentAction(
+                            type=ActionType(action["type"]),
+                            params=action.get("params", {}),
+                            priority=action.get("priority", 50)
+                        )
+                        for action in rule.get("actions", [])
+                    ],
+                    source_context=SourceContext(
+                        source=message.source,
+                        data_type=message.data_type,
+                        user_id=message.user_id,
+                        importance=message.importance
+                    ),
+                    metadata={"provider": "rule_engine", "rule": rule["name"]}
+                )
+
+        # 没有匹配规则
+        return Intent(
+            original_text=message.text,
+            response_text=default_response,
+            emotion=EmotionType.NEUTRAL,
+            actions=[],
+            source_context=SourceContext(
+                source=message.source,
+                data_type=message.data_type,
+                user_id=message.user_id,
+                importance=message.importance
+            ),
+            metadata={"provider": "rule_engine", "matched": False}
+        )
+
+    def _match_rule(self, message: NormalizedMessage, rule: Dict[str, Any]) -> bool:
+        """检查消息是否匹配规则"""
+        conditions = rule.get("conditions", {})
+
+        # 检查数据类型
+        if "data_type" in conditions:
+            if message.data_type != conditions["data_type"]:
+                return False
+
+        # 检查重要性
+        if "min_importance" in conditions:
+            if message.importance < conditions["min_importance"]:
+                return False
+
+        # 检查关键词
+        if "keywords" in conditions:
+            text = message.text.lower()
+            if not all(kw.lower() in text for kw in conditions["keywords"]):
+                return False
+
+        # 检查来源
+        if "sources" in conditions:
+            if message.source not in conditions["sources"]:
+                return False
+
+        return True
+```
+
+---
+
+## 导入路径
+
+```python
+# 基类
+from src.core.base.decision_provider import DecisionProvider
+
+# 数据类型
+from src.core.base.normalized_message import NormalizedMessage
+from src.domains.decision.intent import Intent, SourceContext, ActionSuggestion
+
+# 枚举类型
+from src.core.types import EmotionType, ActionType, IntentAction
+
+# 事件
+from src.core.events.names import CoreEvents
+
+# 日志
+from src.core.utils.logger import get_logger
+
+# 提示词管理
+from src.prompts import get_prompt_manager
+```
+
+---
+
+## 事件订阅
+
+DecisionProvider 通常订阅以下事件：
+
+| 事件名 | 常量 | 数据类型 | 说明 |
+|--------|------|---------|------|
+| `normalization.message_ready` | `CoreEvents.NORMALIZATION_MESSAGE_READY` | `NormalizedMessage` | Input Domain 生成标准化消息 |
+
+DecisionProvider 发布以下事件：
+
+| 事件名 | 常量 | 数据类型 | 说明 |
+|--------|------|---------|------|
+| `decision.intent_generated` | `CoreEvents.DECISION_INTENT_GENERATED` | `Intent` | 生成决策意图 |
+
+**注意**：DecisionProvider 通常不需要手动订阅事件，由 `DecisionCoordinator` 统一管理。
+
+---
+
+## 配置示例
+
+```toml
+[providers.decision]
+# 激活的决策 Provider
+active_provider = "local_llm"
+
+# LocalLLM 配置
+[providers.decision.local_llm]
+type = "local_llm"
+backend = "llm"           # 使用的 LLM 后端 (llm, llm_fast, vlm)
+fallback_mode = "simple"  # 降级模式 (simple, echo, error)
+
+# KeywordAction 配置
+[providers.decision.keyword_action]
+type = "keyword_action"
+global_cooldown = 1.0
+
+[[providers.decision.keyword_action.actions]]
+name = "微笑"
+enabled = true
+keywords = ["微笑", "smile", "😊"]
+match_mode = "anywhere"
+cooldown = 3.0
+action_type = "hotkey"
+action_params = { key = "smile" }
+priority = 50
+
+# RuleEngine 配置
+[providers.decision.rule_engine]
+type = "rule_engine"
+
+[[providers.decision.rule_engine.rules]]
+name = "打招呼"
+response = "你好呀！"
+emotion = "happy"
+
+[[providers.decision.rule_engine.rules.actions]]
+type = "expression"
+params = { name = "smile" }
+priority = 60
+
+[providers.decision.rule_engine.rules.conditions]
+keywords = ["你好", "hello", "hi"]
+```
+
+---
+
+## 最佳实践
+
+### 1. 错误处理
+
+```python
+async def decide(self, message: NormalizedMessage) -> Intent:
+    try:
+        # 决策逻辑
+        result = await self._make_decision(message)
+        return result
+    except Exception as e:
+        self.logger.error(f"决策失败: {e}", exc_info=True)
+        # 返回降级 Intent
+        return self._create_fallback_intent(message)
+```
+
+### 2. 使用依赖注入
+
+```python
+async def setup(self, event_bus, config, dependencies):
+    await super().setup(event_bus, config, dependencies)
+
+    # 从依赖注入中获取服务
+    if dependencies and "llm_service" in dependencies:
+        self._llm_service = dependencies["llm_service"]
+```
+
+### 3. 统计信息
+
+```python
+def __init__(self, config: dict):
+    super().__init__(config)
+    self._total_requests = 0
+    self._successful_requests = 0
+    self._failed_requests = 0
+
+async def cleanup(self):
+    # 输出统计信息
+    self.logger.info(f"总请求: {self._total_requests}")
+    self.logger.info(f"成功: {self._successful_requests}")
+    self.logger.info(f"失败: {self._failed_requests}")
+```
+
+### 4. 使用提示词模板
+
+```python
+async def decide(self, message: NormalizedMessage) -> Intent:
+    # 使用 PromptManager 渲染模板
+    prompt = get_prompt_manager().render(
+        "decision/my_provider",
+        text=message.text,
+        user_name=message.user_id
+    )
+
+    response = await self._llm_service.chat(prompt=prompt)
+    # ...
+```
+
+### 5. 降级策略
+
+```python
+def _handle_fallback(self, message: NormalizedMessage) -> Intent:
+    """降级处理"""
+    fallback_mode = self.config.get("fallback_mode", "simple")
+
+    if fallback_mode == "simple":
+        # 返回原始文本
+        return Intent(
+            original_text=message.text,
+            response_text=message.text,
+            emotion=EmotionType.NEUTRAL,
+            actions=[]
+        )
+    elif fallback_mode == "echo":
+        # 回声模式
+        return Intent(
+            original_text=message.text,
+            response_text=f"你说：{message.text}",
+            emotion=EmotionType.NEUTRAL,
+            actions=[]
+        )
+    else:
+        # 抛出异常
+        raise RuntimeError("决策失败且未配置降级模式")
+```
+
+---
+
+## 相关文档
+
+- [Provider 开发指南](../development/provider.md)
+- [3域架构](../architecture/overview.md)
+- [数据流规则](../architecture/data-flow.md)
+- [事件系统](../architecture/event-system.md)
 - [InputProvider API](./input_provider.md)
 - [OutputProvider API](./output_provider.md)
-- [EventBus API](./event_bus.md)

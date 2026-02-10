@@ -36,17 +36,20 @@ EventBus 是项目的核心通信机制，支持：
 
 ```python
 from src.core.events.names import CoreEvents
+from src.core.events.payloads import MessageReadyPayload, IntentPayload
 
-# 发布简单事件
+# 发布事件（必须使用 Pydantic BaseModel）
 await event_bus.emit(
     CoreEvents.NORMALIZATION_MESSAGE_READY,
-    {"message": normalized_message}
+    MessageReadyPayload(message=normalized_message),
+    source="MyInputProvider"
 )
 
-# 发布带类型的事件
-await event_bus.emit_typed(
+# 所有事件都需要 source 参数
+await event_bus.emit(
     CoreEvents.DECISION_INTENT_GENERATED,
-    IntentPayload(intent=intent)
+    IntentPayload(intent=intent),
+    source="MyDecisionProvider"
 )
 ```
 
@@ -54,21 +57,23 @@ await event_bus.emit_typed(
 
 ```python
 from src.core.events.names import CoreEvents
+from src.core.events.payloads import MessageReadyPayload, IntentPayload
 
-# 订阅事件
-await event_bus.subscribe(
+# 订阅事件（on() 是同步方法）
+event_bus.on(
     CoreEvents.NORMALIZATION_MESSAGE_READY,
     self.handle_message
 )
 
-# 订阅带类型的事件
-await event_bus.subscribe_typed(
+# 订阅类型化事件（自动反序列化）
+event_bus.on_typed(
     CoreEvents.DECISION_INTENT_GENERATED,
     self.handle_intent,
     IntentPayload
 )
 
-async def handle_message(self, payload):
+# 新的事件处理器签名
+async def handle_message(self, event_name: str, payload: MessageReadyPayload, source: str):
     message = payload.message
     # 处理消息
 ```
@@ -77,7 +82,7 @@ async def handle_message(self, payload):
 
 ```python
 # 取消订阅
-event_bus.unsubscribe(
+event_bus.off(
     CoreEvents.NORMALIZATION_MESSAGE_READY,
     self.handle_message
 )
@@ -89,10 +94,10 @@ event_bus.unsubscribe(
 
 | 事件名 | 发布者 | 订阅者 | 数据类型 |
 |--------|--------|--------|---------|
-| `perception.raw_data.generated` | InputProvider | InputDomain | `RawDataPayload` |
-| `normalization.message_ready` | InputDomain | DecisionManager | `MessageReadyPayload` |
-| `decision.intent_generated` | DecisionManager | ExpressionGenerator | `IntentPayload` |
-| `expression.parameters_generated` | ExpressionGenerator | OutputProviderManager | `ExpressionParametersPayload` |
+| `perception.raw_data.generated` | InputProvider | InputCoordinator | `RawDataPayload` |
+| `normalization.message_ready` | InputCoordinator | DecisionCoordinator | `MessageReadyPayload` |
+| `decision.intent_generated` | DecisionCoordinator | ExpressionGenerator | `IntentPayload` |
+| `expression.parameters_generated` | ExpressionGenerator | OutputCoordinator | `ParametersGeneratedPayload` |
 | `render.completed` | OutputProvider | - | `RenderCompletedPayload` |
 
 ### 事件常量
@@ -125,14 +130,14 @@ class MessageReadyPayload(BaseModel):
     source: str
     timestamp: float = Field(default_factory=time.time)
 
-# 订阅时指定类型
-await event_bus.subscribe_typed(
+# 订阅时指定类型（on_typed 自动反序列化）
+event_bus.on_typed(
     CoreEvents.NORMALIZATION_MESSAGE_READY,
     self.handle_message,
-    MessageReadyPayload  # 类型检查
+    MessageReadyPayload
 )
 
-async def handle_message(self, payload: MessageReadyPayload):
+async def handle_message(self, event_name: str, payload: MessageReadyPayload, source: str):
     # payload 类型已知，IDE 有自动补全
     message = payload.message
 ```
@@ -143,21 +148,21 @@ async def handle_message(self, payload: MessageReadyPayload):
 
 ```python
 # 高优先级订阅（先处理）
-await event_bus.subscribe(
+event_bus.on(
     CoreEvents.NORMALIZATION_MESSAGE_READY,
     self.handle_critical,
     priority=100
 )
 
 # 普通优先级
-await event_bus.subscribe(
+event_bus.on(
     CoreEvents.NORMALIZATION_MESSAGE_READY,
     self.handle_normal,
     priority=50  # 默认值
 )
 
 # 低优先级订阅（后处理）
-await event_bus.subscribe(
+event_bus.on(
     CoreEvents.NORMALIZATION_MESSAGE_READY,
     self.handle_logging,
     priority=10
@@ -199,7 +204,7 @@ async def handler_b(self, payload):
 async def on_error(error_event):
     print(f"EventBus 错误: {error_event.error}")
 
-await event_bus.subscribe("eventbus.error", on_error)
+event_bus.on("eventbus.error", on_error)
 ```
 
 ## 统计功能
@@ -222,22 +227,6 @@ event_bus.reset_stats()
 
 ## 高级用法
 
-### 通配符订阅
-
-```python
-# 订阅所有 decision.* 事件
-await event_bus.subscribe(
-    "decision.*",
-    self.handle_all_decision_events
-)
-
-# 订阅所有事件（谨慎使用）
-await event_bus.subscribe(
-    "*",
-    self.handle_all_events
-)
-```
-
 ### 一次性订阅
 
 ```python
@@ -245,10 +234,10 @@ await event_bus.subscribe(
 async def handle_once():
     future = asyncio.Future()
 
-    async def callback(payload):
+    async def callback(event_name: str, payload: dict, source: str):
         future.set_result(payload)
 
-    await event_bus.subscribe(
+    event_bus.on(
         CoreEvents.NORMALIZATION_MESSAGE_READY,
         callback
     )
@@ -259,9 +248,9 @@ async def handle_once():
 ### 条件订阅
 
 ```python
-async def conditional_handler(self, payload):
+async def conditional_handler(self, event_name: str, payload: dict, source: str):
     # 只处理特定条件的事件
-    if payload.source == "bili_danmaku":
+    if source == "bili_danmaku":
         await self.handle_bili_danmaku(payload)
 ```
 
@@ -283,15 +272,17 @@ await event_bus.emit("normalization.message_ready", data)
 ```python
 # ✅ 正确
 from src.core.events.payloads import MessageReadyPayload
-await event_bus.emit_typed(
+await event_bus.emit(
     CoreEvents.NORMALIZATION_MESSAGE_READY,
-    MessageReadyPayload(message=msg)
+    MessageReadyPayload(message=msg),
+    source="MyProvider"
 )
 
 # ❌ 错误
 await event_bus.emit(
     CoreEvents.NORMALIZATION_MESSAGE_READY,
-    {"message": msg}  # 无类型检查
+    {"message": msg},  # 无类型检查，会抛出 TypeError
+    source="MyProvider"
 )
 ```
 
@@ -299,11 +290,11 @@ await event_bus.emit(
 
 ```python
 # ✅ 正确：异步处理
-async def handle_message(self, payload):
+async def handle_message(self, event_name: str, payload: dict, source: str):
     await self.process_async(payload)
 
 # ❌ 错误：阻塞事件循环
-def handle_message(self, payload):
+def handle_message(self, event_name: str, payload: dict, source: str):
     time.sleep(10)  # 阻塞
 ```
 
@@ -311,14 +302,14 @@ def handle_message(self, payload):
 
 ```python
 # ✅ 正确：捕获异常
-async def handle_message(self, payload):
+async def handle_message(self, event_name: str, payload: dict, source: str):
     try:
         await self.process(payload)
     except Exception as e:
         self.logger.error(f"处理失败: {e}", exc_info=True)
 
 # ❌ 错误：未处理异常
-async def handle_message(self, payload):
+async def handle_message(self, event_name: str, payload: dict, source: str):
     await self.process(payload)  # 可能抛出异常
 ```
 
@@ -340,4 +331,4 @@ EventBus 技术上允许任何订阅模式，但架构层面强制约束：
 
 ---
 
-*最后更新：2026-02-09*
+*最后更新：2026-02-10*
