@@ -3,19 +3,26 @@ OutputCoordinator - 数据流协调器（3域架构：Decision Domain → Output
 
 职责:
 - 协调 Decision Domain 到 Output Domain 的数据流
-- 订阅 Intent 事件并触发 Expression 生成和渲染
-- 初始化输出层（OutputProviderManager、ExpressionGenerator 和 OutputPipelineManager）
+- 订阅 Intent 事件并生成 RenderParameters（用于 TTS/Subtitle）
+- 初始化输出层（OutputProviderManager 和 OutputPipelineManager）
 
-数据流（3域架构）:
+新架构事件流:
     Intent (Decision Domain)
-        ↓ CoreEvents.DECISION_INTENT_GENERATED
-    OutputCoordinator
-        ↓
-    ExpressionGenerator (Output Domain - Parameters)
-        ↓
-    OutputPipelineManager (Output Domain - Pipeline Processing)
-        ↓
-    OutputProviderManager (Output Domain - Rendering)
+        ↓ EventBus: DECISION_INTENT_GENERATED
+        ├─────────────────────────────────────────────┐
+        ↓                                             ↓
+    Avatar Providers (直接订阅)                  OutputCoordinator
+    (VTSProvider, WarudoProvider...)                     ↓
+        ↓                                         RenderParameters
+    平台特定参数                                    (TTS/Subtitle)
+    ↓                                              ↓
+    平台渲染                                  EXPRESSION_PARAMETERS_GENERATED
+                                                ↓
+                                            TTS/Subtitle Providers
+
+注意:
+- Avatar Provider 直接订阅 DECISION_INTENT_GENERATED，在内部实现 Intent → 平台参数的适配
+- OutputCoordinator 只为 TTS/Subtitle 生成 RenderParameters
 """
 
 import os
@@ -24,10 +31,11 @@ from src.core.utils.logger import get_logger
 
 from src.core.event_bus import EventBus
 from src.core.events.names import CoreEvents
-from src.domains.output.parameters.expression_generator import ExpressionGenerator
 from src.domains.output.provider_manager import OutputProviderManager
 from src.core.events.payloads import ParametersGeneratedPayload
 from src.domains.output.pipelines.manager import OutputPipelineManager
+from src.domains.output.parameters.render_parameters import RenderParameters
+from src.domains.decision.intent import Intent
 
 if TYPE_CHECKING:
     from src.core.events.payloads import IntentPayload
@@ -40,16 +48,16 @@ class OutputCoordinator:
     核心职责:
     - 协调 Decision Domain → Output Domain 的数据流
     - 初始化和管理输出层组件
-    - 订阅并处理 Intent 事件
+    - 订阅并处理 Intent 事件，为 TTS/Subtitle 生成参数
 
-    数据流程（3域架构）:
-    Intent (Decision) → ExpressionGenerator (Output - Parameters) → OutputPipelineManager (Output - Pipeline) → OutputProviderManager (Output - Rendering)
+    数据流程（3域架构 - 重构后）:
+    Intent (Decision) → Avatar Providers (直接订阅 DECISION_INTENT_GENERATED)
+                     → OutputCoordinator → RenderParameters (TTS/Subtitle) → TTS/Subtitle Providers
     """
 
     def __init__(
         self,
         event_bus: EventBus,
-        expression_generator: Optional[ExpressionGenerator] = None,
         output_provider_manager: Optional[OutputProviderManager] = None,
         output_pipeline_manager: Optional[OutputPipelineManager] = None,
     ):
@@ -58,12 +66,10 @@ class OutputCoordinator:
 
         Args:
             event_bus: 事件总线实例
-            expression_generator: (可选) 表达式生成器实例
             output_provider_manager: (可选) 输出Provider管理器实例
             output_pipeline_manager: (可选) 输出Pipeline管理器实例
         """
         self.event_bus = event_bus
-        self.expression_generator = expression_generator
         self.output_provider_manager = output_provider_manager
         self.output_pipeline_manager = output_pipeline_manager
         self.logger = get_logger("OutputCoordinator")
@@ -83,12 +89,6 @@ class OutputCoordinator:
             root_config: 根配置字典（包含 pipelines 配置）
         """
         self.logger.info("开始设置数据流协调器...")
-
-        # 创建表达式生成器（如果未提供）
-        if self.expression_generator is None:
-            expression_config = config.get("expression_generator", {})
-            self.expression_generator = ExpressionGenerator(expression_config)
-            self.logger.info("表达式生成器已创建")
 
         # 创建输出Provider管理器（如果未提供）
         if self.output_provider_manager is None:
@@ -187,8 +187,10 @@ class OutputCoordinator:
         """
         处理Intent事件（Decision Domain → Output Domain，类型化）
 
-        数据流（事件驱动）:
-            IntentPayload → Intent → ExpressionParameters → OutputPipeline处理 → 发布 expression.parameters_generated 事件 → OutputProvider 订阅并渲染
+        数据流（重构后）:
+            IntentPayload → Intent → RenderParameters (TTS/Subtitle) → OutputPipeline处理 → 发布 EXPRESSION_PARAMETERS_GENERATED 事件 → TTS/Subtitle Providers
+
+        注意: Avatar Providers 直接订阅 DECISION_INTENT_GENERATED 事件，不经过此方法
 
         Args:
             event_name: 事件名称（decision.intent_generated）
@@ -201,38 +203,36 @@ class OutputCoordinator:
             # 使用 IntentPayload.to_intent() 方法转换为 Intent 对象
             intent = payload.to_intent()
 
-            # Output Domain - Parameters: Intent → ExpressionParameters
-            if self.expression_generator:
-                params = self.expression_generator.generate(intent)  # 同步方法，不需要 await
-                self.logger.info("ExpressionParameters生成完成")
+            # 直接生成 RenderParameters（仅用于 TTS/Subtitle）
+            # Avatar Provider 已在各自的 _on_intent_ready 中处理 Intent
+            params = RenderParameters(
+                text=intent.response_text,
+                tts_text=intent.response_text,
+                emotion=None,  # TTS/Subtitle 不需要情感参数
+                vts_hotkey=None,
+            )
+            self.logger.info("RenderParameters生成完成（TTS/Subtitle）")
 
-                # OutputPipeline 处理（参数后处理）
-                if self.output_pipeline_manager:
-                    params = await self.output_pipeline_manager.process(params)
-                    if params is None:  # 被管道丢弃
-                        self.logger.info("OutputParameters 被 Pipeline 丢弃，取消本次输出")
-                        return
-                    self.logger.debug("OutputPipeline 处理完成")
+            # OutputPipeline 处理（参数后处理）
+            if self.output_pipeline_manager:
+                params = await self.output_pipeline_manager.process(params)
+                if params is None:  # 被管道丢弃
+                    self.logger.info("RenderParameters 被 Pipeline 丢弃，取消本次输出")
+                    return
+                self.logger.debug("OutputPipeline 处理完成")
 
-                # 发布 expression.parameters_generated 事件（事件驱动）
-                # OutputProvider 订阅此事件并响应
-                # 将 ExpressionParameters (dataclass) 转换为 ParametersGeneratedPayload (Pydantic Model)
-                payload = ParametersGeneratedPayload.from_parameters(
-                    params, source_intent=intent.model_dump(mode="json")
-                )
-                await self.event_bus.emit(
-                    CoreEvents.EXPRESSION_PARAMETERS_GENERATED, payload, source="OutputCoordinator"
-                )
-                self.logger.debug(f"已发布事件: {CoreEvents.EXPRESSION_PARAMETERS_GENERATED}")
-            else:
-                self.logger.warning("表达式生成器未初始化，跳过渲染")
+            # 发布 EXPRESSION_PARAMETERS_GENERATED 事件（事件驱动）
+            # TTS/Subtitle Provider 订阅此事件并响应
+            payload = ParametersGeneratedPayload.from_parameters(
+                params, source_intent=intent.model_dump(mode="json")
+            )
+            await self.event_bus.emit(
+                CoreEvents.EXPRESSION_PARAMETERS_GENERATED, payload, source="OutputCoordinator"
+            )
+            self.logger.debug(f"已发布事件: {CoreEvents.EXPRESSION_PARAMETERS_GENERATED}")
 
         except Exception as e:
             self.logger.error(f"处理Intent事件时出错: {e}", exc_info=True)
-
-    def get_expression_generator(self) -> Optional[ExpressionGenerator]:
-        """获取表达式生成器实例"""
-        return self.expression_generator
 
     def get_output_provider_manager(self) -> Optional[OutputProviderManager]:
         """获取输出Provider管理器实例"""

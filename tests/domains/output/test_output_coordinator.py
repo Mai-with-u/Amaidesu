@@ -24,7 +24,6 @@ from src.core.events.names import CoreEvents
 from src.core.events.payloads import (
     IntentPayload,
 )
-from src.domains.output.parameters.expression_generator import ExpressionGenerator
 from src.domains.output.provider_manager import OutputProviderManager
 from src.domains.decision.intent import Intent
 from src.core.types import EmotionType, IntentAction, ActionType
@@ -40,13 +39,6 @@ def event_bus():
     """创建 EventBus 实例"""
     return EventBus(enable_stats=True)
 
-
-@pytest.fixture
-def mock_expression_generator():
-    """创建模拟的 ExpressionGenerator"""
-    mock_gen = MagicMock(spec=ExpressionGenerator)
-    mock_gen.generate = MagicMock()
-    return mock_gen
 
 
 @pytest.fixture
@@ -98,13 +90,11 @@ def sample_intent():
 @pytest.fixture
 def output_coordinator(
     event_bus: EventBus,
-    mock_expression_generator: MagicMock,
     mock_output_provider_manager: MagicMock,
 ):
     """创建 OutputCoordinator 实例"""
     return OutputCoordinator(
         event_bus=event_bus,
-        expression_generator=mock_expression_generator,
         output_provider_manager=mock_output_provider_manager,
     )
 
@@ -120,7 +110,7 @@ async def test_flow_coordinator_initialization(event_bus: EventBus):
     coordinator = OutputCoordinator(event_bus=event_bus)
 
     assert coordinator.event_bus == event_bus
-    assert coordinator.expression_generator is None
+    # assert coordinator.expression_generator is None  # Removed: ExpressionGenerator deleted
     assert coordinator.output_provider_manager is None
     assert coordinator._is_setup is False
     assert coordinator._event_handler_registered is False
@@ -129,33 +119,16 @@ async def test_flow_coordinator_initialization(event_bus: EventBus):
 @pytest.mark.asyncio
 async def test_flow_coordinator_initialization_with_dependencies(
     event_bus: EventBus,
-    mock_expression_generator: MagicMock,
     mock_output_provider_manager: MagicMock,
 ):
     """测试带依赖注入的初始化"""
     coordinator = OutputCoordinator(
         event_bus=event_bus,
-        expression_generator=mock_expression_generator,
         output_provider_manager=mock_output_provider_manager,
     )
 
-    assert coordinator.expression_generator == mock_expression_generator
     assert coordinator.output_provider_manager == mock_output_provider_manager
 
-
-@pytest.mark.asyncio
-async def test_setup_creates_expression_generator_if_not_provided(
-    event_bus: EventBus,
-    sample_config: Dict[str, Any],
-):
-    """测试 setup 在未提供 ExpressionGenerator 时创建默认实例"""
-    coordinator = OutputCoordinator(event_bus=event_bus)
-
-    await coordinator.setup(sample_config)
-
-    assert coordinator.expression_generator is not None
-    assert isinstance(coordinator.expression_generator, ExpressionGenerator)
-    assert coordinator._is_setup is True
 
 
 @pytest.mark.asyncio
@@ -205,14 +178,12 @@ async def test_setup_subscribes_to_intent_event(
 async def test_setup_with_existing_dependencies(
     output_coordinator: OutputCoordinator,
     sample_config: Dict[str, Any],
-    mock_expression_generator: MagicMock,
     mock_output_provider_manager: MagicMock,
 ):
     """测试使用已注入的依赖进行 setup"""
     await output_coordinator.setup(sample_config)
 
     # 验证使用的是注入的依赖，而不是创建新的
-    assert output_coordinator.expression_generator == mock_expression_generator
     assert output_coordinator.output_provider_manager == mock_output_provider_manager
 
 
@@ -333,113 +304,7 @@ async def test_lifecycle_flow(
 # =============================================================================
 
 
-@pytest.mark.asyncio
-async def test_on_intent_ready_generates_parameters(
-    output_coordinator: OutputCoordinator,
-    sample_config: Dict[str, Any],
-    sample_intent: Intent,
-):
-    """测试 Intent 事件处理生成 ExpressionParameters"""
-    # 模拟 generate 返回值
-    from src.domains.output.parameters.render_parameters import ExpressionParameters
 
-    mock_params = ExpressionParameters(
-        tts_text=sample_intent.response_text,
-        subtitle_text=sample_intent.response_text,
-    )
-    output_coordinator.expression_generator.generate.return_value = mock_params
-
-    await output_coordinator.setup(sample_config)
-
-    # 发布 Intent 事件
-    await output_coordinator.event_bus.emit(
-        CoreEvents.DECISION_INTENT_GENERATED,
-        IntentPayload.from_intent(sample_intent, provider="DecisionProvider"),
-        source="DecisionProvider",
-    )
-
-    await asyncio.sleep(0.1)  # 等待异步处理
-
-    # 验证 generate 被调用
-    output_coordinator.expression_generator.generate.assert_called_once_with(sample_intent)
-
-
-@pytest.mark.asyncio
-async def test_on_intent_ready_emits_parameters_event(
-    output_coordinator: OutputCoordinator,
-    sample_config: Dict[str, Any],
-    sample_intent: Intent,
-):
-    """测试 Intent 处理后发布 expression.parameters_generated 事件"""
-    from src.domains.output.parameters.render_parameters import ExpressionParameters
-
-    mock_params = ExpressionParameters(
-        tts_text=sample_intent.response_text,
-        subtitle_text=sample_intent.response_text,
-    )
-    output_coordinator.expression_generator.generate.return_value = mock_params
-
-    await output_coordinator.setup(sample_config)
-
-    # 监听 expression.parameters_generated 事件
-    received_params = []
-
-    async def on_params_generated(event_name, data, source):
-        received_params.append(data)
-
-    output_coordinator.event_bus.on(CoreEvents.EXPRESSION_PARAMETERS_GENERATED, on_params_generated)
-
-    # 发布 Intent 事件
-    await output_coordinator.event_bus.emit(
-        CoreEvents.DECISION_INTENT_GENERATED,
-        IntentPayload.from_intent(sample_intent, provider="DecisionProvider"),
-        source="DecisionProvider",
-    )
-
-    await asyncio.sleep(0.1)  # 等待异步处理
-
-    # 验证参数事件被发布
-    assert len(received_params) == 1
-    # received_params[0] 是 dict（EventBus 自动转换），需要检查关键字段
-    assert received_params[0]["tts_text"] == mock_params.tts_text
-    assert received_params[0]["subtitle_text"] == mock_params.subtitle_text
-
-
-@pytest.mark.asyncio
-async def test_on_intent_ready_missing_intent(
-    output_coordinator: OutputCoordinator,
-    sample_config: Dict[str, Any],
-):
-    """测试 Intent 事件数据中缺少必要字段"""
-    await output_coordinator.setup(sample_config)
-
-    # 发布缺少必要字段的 IntentPayload
-    # 使用 IntentPayload 但 intent_data 包含空字符串
-    from src.core.events.payloads.decision import IntentPayload
-
-    incomplete_payload = IntentPayload(
-        intent_data={
-            "original_text": "",
-            "response_text": "",
-            "emotion": "neutral",
-            "actions": [],
-            "metadata": {},
-            "timestamp": 0,
-        },
-        provider="test",
-    )
-
-    await output_coordinator.event_bus.emit(
-        CoreEvents.DECISION_INTENT_GENERATED,
-        incomplete_payload,
-        source="DecisionProvider",
-    )
-
-    await asyncio.sleep(0.1)  # 等待异步处理
-
-    # 验证 generate 仍然会被调用（因为 OutputCoordinator 会尝试处理所有 IntentPayload）
-    # 但生成的 ExpressionParameters 可能是空的
-    output_coordinator.expression_generator.generate.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -465,72 +330,6 @@ async def test_on_intent_ready_no_expression_generator(
     # 应该正常执行，不抛出异常
 
 
-@pytest.mark.asyncio
-async def test_on_intent_ready_with_exception(
-    output_coordinator: OutputCoordinator,
-    sample_config: Dict[str, Any],
-    sample_intent: Intent,
-):
-    """测试 Intent 处理过程中的异常处理"""
-    # 模拟 generate 抛出异常
-    output_coordinator.expression_generator.generate.side_effect = Exception("Generation failed")
-
-    await output_coordinator.setup(sample_config)
-
-    # 应该不抛出异常，而是记录错误
-    await output_coordinator.event_bus.emit(
-        CoreEvents.DECISION_INTENT_GENERATED,
-        IntentPayload.from_intent(sample_intent, provider="DecisionProvider"),
-        source="DecisionProvider",
-    )
-
-    await asyncio.sleep(0.1)  # 等待异步处理
-
-
-@pytest.mark.asyncio
-async def test_on_intent_ready_data_flow(
-    output_coordinator: OutputCoordinator,
-    sample_config: Dict[str, Any],
-    sample_intent: Intent,
-):
-    """测试完整的数据流：Intent → ExpressionParameters → Event"""
-    from src.domains.output.parameters.render_parameters import ExpressionParameters
-
-    # 设置返回值
-    mock_params = ExpressionParameters(
-        tts_text=sample_intent.response_text,
-        subtitle_text=sample_intent.response_text,
-        expressions={"happy": 1.0},
-    )
-    output_coordinator.expression_generator.generate.return_value = mock_params
-
-    await output_coordinator.setup(sample_config)
-
-    # 记录事件发布
-    emitted_events = []
-
-    async def track_events(event_name, data, source):
-        emitted_events.append({"name": event_name, "data": data, "source": source})
-
-    output_coordinator.event_bus.on(CoreEvents.EXPRESSION_PARAMETERS_GENERATED, track_events)
-
-    # 触发数据流
-    await output_coordinator.event_bus.emit(
-        CoreEvents.DECISION_INTENT_GENERATED,
-        IntentPayload.from_intent(sample_intent, provider="DecisionProvider"),
-        source="DecisionProvider",
-    )
-
-    await asyncio.sleep(0.1)
-
-    # 验证完整数据流
-    assert len(emitted_events) == 1
-    assert emitted_events[0]["name"] == CoreEvents.EXPRESSION_PARAMETERS_GENERATED
-    assert emitted_events[0]["source"] == "OutputCoordinator"
-    # emitted_events[0]["data"] 是 dict（EventBus 自动转换），需要检查关键字段
-    assert emitted_events[0]["data"]["tts_text"] == mock_params.tts_text
-    assert emitted_events[0]["data"]["subtitle_text"] == mock_params.subtitle_text
-    assert emitted_events[0]["data"]["expressions"] == mock_params.expressions
 
 
 # =============================================================================
@@ -623,24 +422,12 @@ async def test_full_lifecycle_with_cleanup(
 
 
 @pytest.mark.asyncio
-async def test_get_expression_generator(
-    output_coordinator: OutputCoordinator,
-    mock_expression_generator: MagicMock,
-):
-    """测试获取 ExpressionGenerator"""
-    result = output_coordinator.get_expression_generator()
-
-    assert result == mock_expression_generator
-
-
-@pytest.mark.asyncio
 async def test_get_expression_generator_when_none(event_bus: EventBus):
-    """测试获取未初始化的 ExpressionGenerator"""
+    """测试获取未初始化的 ExpressionGenerator - 已移除此方法"""
     coordinator = OutputCoordinator(event_bus=event_bus)
 
-    result = coordinator.get_expression_generator()
-
-    assert result is None
+    # ExpressionGenerator 已被删除，此测试仅验证 coordinator 能正常初始化
+    assert coordinator is not None
 
 
 @pytest.mark.asyncio
@@ -711,47 +498,6 @@ async def test_full_integration_with_real_dependencies(
     await coordinator.cleanup()
 
 
-@pytest.mark.asyncio
-async def test_multiple_intents_sequential(
-    output_coordinator: OutputCoordinator,
-    sample_config: Dict[str, Any],
-):
-    """测试顺序处理多个 Intent"""
-    from src.domains.output.parameters.render_parameters import ExpressionParameters
-
-    await output_coordinator.setup(sample_config)
-
-    # 监听输出事件
-    received_count = []
-
-    async def on_params(event_name, data, source):
-        received_count.append(1)
-
-    output_coordinator.event_bus.on(CoreEvents.EXPRESSION_PARAMETERS_GENERATED, on_params)
-
-    # 模拟 generate 返回
-    output_coordinator.expression_generator.generate.return_value = ExpressionParameters()
-
-    # 发布多个 Intent
-    for i in range(3):
-        intent = Intent(
-            original_text=f"测试{i}",
-            response_text=f"回复{i}",
-            emotion=EmotionType.HAPPY,
-            actions=[],
-            metadata={},
-        )
-        await output_coordinator.event_bus.emit(
-            CoreEvents.DECISION_INTENT_GENERATED,
-            IntentPayload.from_intent(intent, provider="DecisionProvider"),
-            source="DecisionProvider",
-        )
-
-    await asyncio.sleep(0.2)
-
-    # 验证所有 Intent 都被处理
-    assert len(received_count) == 3
-
 
 # =============================================================================
 # 边界情况测试
@@ -766,7 +512,7 @@ async def test_setup_with_empty_config(event_bus: EventBus):
     await coordinator.setup({})
 
     assert coordinator._is_setup is True
-    assert coordinator.expression_generator is not None
+    # assert coordinator.expression_generator is not None  # Removed: ExpressionGenerator deleted
     assert coordinator.output_provider_manager is not None
 
 
@@ -780,7 +526,7 @@ async def test_setup_with_none_expression_generator_config(
     config = {"expression_generator": None}
     await coordinator.setup(config)
 
-    assert coordinator.expression_generator is not None
+    # assert coordinator.expression_generator is not None  # Removed: ExpressionGenerator deleted
 
 
 @pytest.mark.asyncio

@@ -447,7 +447,7 @@ class OutputProviderManager:
 
     # ==================== Phase 4: 配置加载 ====================
 
-    async def load_from_config(self, config: dict[str, Any], config_service, core=None):
+    async def load_from_config(self, config: dict[str, Any], config_service=None, core=None):
         """
         从配置加载并创建所有OutputProvider（支持三级配置合并）
 
@@ -508,11 +508,15 @@ class OutputProviderManager:
                     # Schema registry未实现或Provider未注册，回退到None
                     schema_class = None
 
-                provider_config = config_service.get_provider_config_with_defaults(
-                    provider_name=output_name,
-                    provider_layer="output",
-                    schema_class=schema_class,
-                )
+                if config_service:
+                    provider_config = config_service.get_provider_config_with_defaults(
+                        provider_name=output_name,
+                        provider_layer="output",
+                        schema_class=schema_class,
+                    )
+                else:
+                    # 向后兼容：直接从配置中读取
+                    provider_config = config.get("outputs_config", {}).get(output_name, {})
 
                 provider_type = provider_config.get("type", output_name)
 

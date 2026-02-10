@@ -110,8 +110,15 @@ class ArchitecturalValidator:
             "render.completed",
             "render.failed",
         ],
+        # === Avatar Providers (直接订阅 Decision 事件) ===
+        "AvatarProviderBase": [
+            "decision.intent_generated",  # Avatar Provider 直接订阅 Intent 事件
+            "decision.response_generated",
+            "render.completed",
+            "render.failed",
+        ],
         "VTSProvider": [
-            "expression.parameters_generated",
+            "decision.intent_generated",  # VTSProvider 继承 AvatarProviderBase，直接订阅 Intent
             "render.completed",
             "render.failed",
         ],
@@ -389,16 +396,16 @@ class ArchitecturalValidator:
             "RuleEngineDecisionProvider": {"DecisionProvider"},
             "MockDecisionProvider": {"DecisionProvider"},  # 测试类
             # === Output Providers ===
-            "VTSProvider": {"OutputProvider"},
+            "VTSProvider": {"AvatarProviderBase", "OutputProvider"},  # VTSProvider 继承 AvatarProviderBase
+            "WarudoOutputProvider": {"AvatarProviderBase", "OutputProvider"},  # Warudo 也继承 AvatarProviderBase
+            "AvatarProviderBase": {"OutputProvider"},  # AvatarProviderBase 继承 OutputProvider
             "EdgeTTSProvider": {"OutputProvider"},
             "SubtitleProvider": {"OutputProvider"},  # 别名：SubtitleOutputProvider
             "SubtitleOutputProvider": {"OutputProvider"},
-            "AvatarOutputProvider": {"OutputProvider"},
             "GPTSoVITSOutputProvider": {"OutputProvider"},
             "OmniTTSProvider": {"OutputProvider"},
             "StickerOutputProvider": {"OutputProvider"},
             "RemoteStreamOutputProvider": {"OutputProvider"},
-            "WarudoOutputProvider": {"OutputProvider"},
             "ObsControlOutputProvider": {"OutputProvider"},
             "MockOutputProvider": {"OutputProvider"},  # 测试类
             # === Pipelines ===
