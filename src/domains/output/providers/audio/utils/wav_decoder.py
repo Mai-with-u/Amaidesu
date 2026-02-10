@@ -71,5 +71,4 @@ async def decode_wav_chunk(wav_chunk: bytes, dtype=np.int16) -> Optional[np.ndar
         return audio_array
 
     except Exception:
-        # 解码失败
         return None

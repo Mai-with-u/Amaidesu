@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.domains.decision.intent import Intent
+from src.modules.types import Intent
 from src.domains.output import OutputCoordinator
 from src.domains.output.provider_manager import OutputProviderManager
 from src.modules.events.event_bus import EventBus

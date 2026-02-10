@@ -36,9 +36,11 @@ try:
         set_version,
         merge_toml_documents,
     )
+
     TOML_UTILS_READY = True
 except ImportError:
     TOML_UTILS_READY = False
+
     # 创建 mock 函数
     def read_toml_preserve(file_path: str):
         with open(file_path, "r", encoding="utf-8") as f:
@@ -47,11 +49,13 @@ except ImportError:
 
     def read_toml_fast(file_path: str):
         import tomllib
+
         with open(file_path, "rb") as f:
             return tomllib.load(f)
 
     def write_toml_preserve(file_path: str, data, create_backup: bool = True):
         import shutil
+
         if create_backup and os.path.exists(file_path):
             backup_path = file_path + ".backup"
             shutil.copy2(file_path, backup_path)
@@ -525,11 +529,7 @@ items = ["c", "d"]
         user_config = tomlkit.loads(user_content)
 
         # 传入 array_merge_config 参数（当前未使用）
-        merged = merge_toml_documents(
-            template,
-            user_config,
-            array_merge_config={"list.items": "union"}
-        )
+        merged = merge_toml_documents(template, user_config, array_merge_config={"list.items": "union"})
 
         # 验证不会报错（当前行为是用户覆盖）
         assert merged["list"]["items"] == ["c", "d"]
@@ -881,7 +881,7 @@ custom_field = "keep_this"
             provider_name="test_provider",
             config_path="/path/to/config.toml",
             template_path="/path/to/template.toml",
-            current_version="1.0.0"
+            current_version="1.0.0",
         )
 
         assert info.domain == "input"
@@ -892,10 +892,7 @@ custom_field = "keep_this"
 
         # 测试无模板的情况
         info_no_template = ProviderConfigInfo(
-            domain="output",
-            provider_name="no_template",
-            config_path="/path/to/config.toml",
-            template_path=None
+            domain="output", provider_name="no_template", config_path="/path/to/config.toml", template_path=None
         )
 
         assert info_no_template.template_path is None

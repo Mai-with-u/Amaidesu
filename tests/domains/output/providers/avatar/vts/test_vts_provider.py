@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.domains.decision.intent import Intent
+from src.modules.types import Intent
 from src.domains.output.providers.avatar.vts.vts_provider import VTSProvider
 from src.modules.types import ActionType, EmotionType, IntentAction
 

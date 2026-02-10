@@ -9,7 +9,7 @@ from typing import Optional
 
 import pytest
 
-from src.domains.decision.intent import Intent
+from src.modules.types import Intent
 from src.domains.decision.intent_parser import IntentParser
 from src.modules.llm.manager import LLMResponse
 from src.modules.types import ActionType, EmotionType

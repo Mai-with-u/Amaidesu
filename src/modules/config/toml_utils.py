@@ -437,6 +437,8 @@ def compare_versions(template_version: str, config_version: str) -> bool:
 
         return pkg_version.parse(template_version) > pkg_version.parse(config_version)
     except Exception:
+        logger.warning("版本号格式比较失败，默认认为需要更新", exc_info=True)
+        # 默认认为需要更新
         return True
 
 

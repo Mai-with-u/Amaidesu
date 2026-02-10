@@ -1,7 +1,7 @@
 # Amaidesu 配置文件元信息
 
 [meta]
-version = "1.0.0"  # 配置模板版本，用于自动更新检测
+version = "0.1.0"  # 配置模板版本，用于自动更新检测
 
 # Amaidesu 配置文件
 #
@@ -83,7 +83,7 @@ platform_id = "amaidesu"
 # 被 LocalLLMDecisionProvider 等使用 LLM 的 Provider 引用
 [persona]
 # VTuber 名字
-bot_name = "爱德丝"
+bot_name = "麦麦"
 
 # 性格描述（50字以内）
 personality = "活泼开朗，有些调皮，喜欢和观众互动"

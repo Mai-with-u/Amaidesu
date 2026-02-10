@@ -5,14 +5,15 @@ Decision Layer
 """
 
 # 从 core.types 导入共享类型
-from src.modules.types import ActionType, EmotionType, IntentAction
-
-from .coordinator import DecisionCoordinator
-from .intent import (
-    ActionSuggestion,
+from src.modules.types import (
+    ActionType,
+    EmotionType,
     Intent,
+    IntentAction,
     SourceContext,
 )
+
+from .coordinator import DecisionCoordinator
 from .provider_manager import DecisionProviderManager
 
 # 向后兼容：DecisionManager 作为 DecisionProviderManager 的别名
@@ -24,7 +25,6 @@ __all__ = [
     "ActionType",
     "IntentAction",
     "SourceContext",
-    "ActionSuggestion",
     "DecisionProviderManager",
     "DecisionCoordinator",
     "DecisionManager",  # 向后兼容

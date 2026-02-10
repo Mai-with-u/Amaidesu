@@ -87,7 +87,7 @@ class InputCoordinator:
             event_data: 事件数据，包含"content"和"source" (RawDataPayload格式)
             source: 事件源
         """
-        self.logger.info(f"收到 perception.raw_data.generated 事件: source={source}")
+        self.logger.debug(f"收到 perception.raw_data.generated 事件: source={source}")
         try:
             # 新格式：RawDataPayload被序列化为字典，包含content而不是data
             raw_data = event_data.get("content")

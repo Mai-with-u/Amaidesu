@@ -12,7 +12,7 @@ import asyncio
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from pydantic import Field, field_validator
+from pydantic import Field
 
 from src.domains.output.providers.avatar.base import AvatarProviderBase as BaseAvatarProvider
 from src.modules.config.schemas.base import BaseProviderConfig
@@ -22,7 +22,7 @@ from src.modules.prompts import get_prompt_manager
 if TYPE_CHECKING:
     from src.modules.streaming.audio_chunk import AudioChunk, AudioMetadata
 
-    from src.domains.decision.intent import Intent
+    from src.modules.types import Intent
 
 # LLM匹配依赖
 LLM_AVAILABLE = False
@@ -46,67 +46,7 @@ class VTSProvider(BaseAvatarProvider):
 
     # ==================== 情感和动作映射配置 ====================
 
-    # 情感到VTS参数的映射
-    EMOTION_MAP: Dict[str, Dict[str, Any]] = {
-        "happy": {
-            "MouthSmile": 1.0,
-        },
-        "surprised": {
-            "EyeOpenLeft": 1.0,
-            "EyeOpenRight": 1.0,
-            "MouthOpen": 0.5,
-        },
-        "sad": {
-            "MouthSmile": -0.3,
-            "EyeOpenLeft": 0.7,
-            "EyeOpenRight": 0.7,
-        },
-        "angry": {
-            "EyeOpenLeft": 0.6,
-            "EyeOpenRight": 0.6,
-            "MouthSmile": -0.5,
-        },
-        "shy": {
-            "MouthSmile": 0.3,
-            "EyeOpenLeft": 0.8,
-            "EyeOpenRight": 0.8,
-        },
-        "love": {
-            "MouthSmile": 0.8,
-            "EyeOpenLeft": 0.9,
-            "EyeOpenRight": 0.9,
-        },
-        "excited": {
-            "MouthSmile": 1.0,
-            "EyeOpenLeft": 1.0,
-            "EyeOpenRight": 1.0,
-        },
-        "confused": {
-            "EyeOpenLeft": 0.7,
-            "EyeOpenRight": 0.7,
-            "MouthOpen": 0.2,
-        },
-        "scared": {
-            "EyeOpenLeft": 0.5,
-            "EyeOpenRight": 0.5,
-            "MouthOpen": 0.3,
-        },
-        "neutral": {
-            # 默认状态，不设置参数
-        },
-    }
-
-    # 动作类型到热键ID前缀的映射
-    ACTION_HOTKEY_MAP: Dict[str, str] = {
-        "blink": "Blink",
-        "nod": "Nod",
-        "shake": "Shake",
-        "wave": "Wave",
-        "clap": "Clap",
-        "motion": "Motion",
-    }
-
-    # VTS参数名定义
+    # VTS参数名定义（常量）
     PARAM_MOUTH_SMILE = "MouthSmile"
     PARAM_MOUTH_OPEN = "MouthOpen"
     PARAM_EYE_OPEN_LEFT = "EyeOpenLeft"
@@ -123,39 +63,6 @@ class VTSProvider(BaseAvatarProvider):
 
         # LLM智能匹配配置
         llm_matching_enabled: bool = Field(default=False, description="是否启用LLM智能热键匹配")
-        llm_api_key: Optional[str] = Field(default=None, description="LLM API密钥")
-        llm_base_url: Optional[str] = Field(default=None, description="LLM API地址")
-        llm_model: str = Field(default="deepseek-chat", description="LLM模型名称")
-        llm_temperature: float = Field(default=0.1, ge=0.0, le=2.0, description="LLM温度参数")
-        llm_max_tokens: int = Field(default=100, ge=1, le=4096, description="LLM最大token数")
-
-        # 情感热键映射
-        emotion_hotkey_mapping: Dict[str, List[str]] = Field(
-            default={
-                "happy": ["微笑", "笑", "开心", "高兴", "愉快", "喜悦"],
-                "surprised": ["惊讶", "吃惊", "震惊", "意外"],
-                "sad": ["难过", "伤心", "悲伤", "沮丧", "失落"],
-                "angry": ["生气", "愤怒", "不满", "恼火"],
-                "shy": ["害羞", "脸红", "羞涩", "不好意思"],
-                "wink": ["眨眼", "wink", "眨眨眼"],
-            },
-            description="情感热键映射",
-        )
-
-        # 口型同步配置
-        lip_sync_enabled: bool = Field(default=True, description="是否启用口型同步")
-        volume_threshold: float = Field(default=0.01, ge=0.0, le=1.0, description="音量阈值")
-        smoothing_factor: float = Field(default=0.3, ge=0.0, le=1.0, description="平滑因子")
-        vowel_detection_sensitivity: float = Field(default=0.5, ge=0.0, le=2.0, description="元音检测敏感度")
-        sample_rate: int = Field(default=32000, ge=8000, le=48000, description="采样率")
-
-        @field_validator("llm_api_key")
-        @classmethod
-        def validate_llm_api_key(cls, v: Optional[str], info) -> Optional[str]:
-            """验证LLM API密钥"""
-            if info.data.get("llm_matching_enabled") and not v:
-                raise ValueError("启用LLM匹配时必须提供API密钥")
-            return v
 
     def __init__(self, config: Dict[str, Any]):
         """
@@ -181,6 +88,64 @@ class VTSProvider(BaseAvatarProvider):
         self.llm_model = self.typed_config.llm_model
         self.llm_temperature = self.typed_config.llm_temperature
         self.llm_max_tokens = self.typed_config.llm_max_tokens
+
+        # 创建实例级别的可变对象，避免类变量存储可变对象的违规
+        self._emotion_map = {
+            "happy": {
+                "MouthSmile": 1.0,
+            },
+            "surprised": {
+                "EyeOpenLeft": 1.0,
+                "EyeOpenRight": 1.0,
+                "MouthOpen": 0.5,
+            },
+            "sad": {
+                "MouthSmile": -0.3,
+                "EyeOpenLeft": 0.7,
+                "EyeOpenRight": 0.7,
+            },
+            "angry": {
+                "EyeOpenLeft": 0.6,
+                "EyeOpenRight": 0.6,
+                "MouthSmile": -0.5,
+            },
+            "shy": {
+                "MouthSmile": 0.3,
+                "EyeOpenLeft": 0.8,
+                "EyeOpenRight": 0.8,
+            },
+            "love": {
+                "MouthSmile": 0.8,
+                "EyeOpenLeft": 0.9,
+                "EyeOpenRight": 0.9,
+            },
+            "excited": {
+                "MouthSmile": 1.0,
+                "EyeOpenLeft": 1.0,
+                "EyeOpenRight": 1.0,
+            },
+            "confused": {
+                "EyeOpenLeft": 0.7,
+                "EyeOpenRight": 0.7,
+                "MouthOpen": 0.2,
+            },
+            "scared": {
+                "EyeOpenLeft": 0.5,
+                "EyeOpenRight": 0.5,
+                "MouthOpen": 0.3,
+            },
+            "neutral": {
+                # 默认状态，不设置参数
+            },
+        }
+        self._action_hotkey_map = {
+            "blink": "Blink",
+            "nod": "Nod",
+            "shake": "Shake",
+            "wave": "Wave",
+            "clap": "Clap",
+            "motion": "Motion",
+        }
 
         # 初始化LLM客户端
         self.openai_client = None
@@ -291,26 +256,25 @@ class VTSProvider(BaseAvatarProvider):
         }
 
         # 1. 适配情感为VTS参数
+        from src.modules.types import ActionType
+
         emotion_str = intent.emotion.value if isinstance(intent.emotion, EmotionType) else str(intent.emotion)
-        if emotion_str in self.EMOTION_MAP:
-            result["expressions"].update(self.EMOTION_MAP[emotion_str])
-            self.logger.debug(f"情感映射: {emotion_str} -> {self.EMOTION_MAP[emotion_str]}")
+        if emotion_str in self._emotion_map:
+            result["expressions"].update(self._emotion_map[emotion_str])
+            self.logger.debug(f"情感映射: {emotion_str} -> {self._emotion_map[emotion_str]}")
 
         # 2. 适配动作为热键
-        for action in intent.actions:
-            action_type_str = action.type.value if hasattr(action.type, "value") else str(action.type)
-            action_name = action.params.get("name", "")
+        if intent.actions:
+            for action in intent.actions:
+                action_type_str = action.type.value if isinstance(action.type, ActionType) else str(action.type)
+                action_name = action.name if action.name else None
 
-            # 如果动作参数中直接指定了热键ID
-            if "hotkey_id" in action.params:
-                result["hotkeys"].append(action.params["hotkey_id"])
-            # 否则使用映射
-            elif action_type_str in self.ACTION_HOTKEY_MAP:
-                hotkey_prefix = self.ACTION_HOTKEY_MAP[action_type_str]
-                # 尝试匹配完整热键名称
-                matched_hotkey = self._find_hotkey_by_name(hotkey_prefix, action_name)
-                if matched_hotkey:
-                    result["hotkeys"].append(matched_hotkey)
+                if action_type_str in self._action_hotkey_map:
+                    hotkey_prefix = self._action_hotkey_map[action_type_str]
+                    # 尝试匹配完整热键名称
+                    matched_hotkey = self._find_hotkey_by_name(hotkey_prefix, action_name)
+                    if matched_hotkey:
+                        result["hotkeys"].append(matched_hotkey)
 
         self.logger.debug(f"Intent适配结果: expressions={result['expressions']}, hotkeys={result['hotkeys']}")
         return result

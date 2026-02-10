@@ -15,7 +15,7 @@ import time
 
 import pytest
 
-from src.domains.decision.intent import Intent
+from src.modules.types import Intent
 from src.modules.events.payloads.base import BasePayload
 from src.modules.events.payloads.decision import (
     DecisionRequestPayload,

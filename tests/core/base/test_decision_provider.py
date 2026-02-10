@@ -20,7 +20,7 @@ from src.modules.types.base.decision_provider import DecisionProvider
 from src.modules.types.base.normalized_message import NormalizedMessage
 
 if TYPE_CHECKING:
-    from src.domains.decision.intent import Intent
+    from src.modules.types import Intent
 
 
 # =============================================================================

@@ -15,7 +15,7 @@ from src.modules.logging import get_logger
 from src.modules.types.base.output_provider import OutputProvider
 
 if TYPE_CHECKING:
-    from src.domains.decision.intent import Intent
+    from src.modules.types import Intent
     from src.modules.events.event_bus import EventBus
 
 

@@ -17,7 +17,7 @@ from pydantic import ConfigDict, Field
 from src.modules.events.payloads.base import BasePayload
 
 if TYPE_CHECKING:
-    from src.domains.decision.intent import Intent
+    from src.modules.types import Intent
 
 
 class DecisionRequestPayload(BasePayload):
@@ -165,7 +165,7 @@ class IntentPayload(BasePayload):
         Returns:
             Intent 实例
         """
-        from src.domains.decision.intent import Intent
+        from src.modules.types import Intent
 
         return Intent.model_validate(self.intent_data)
 

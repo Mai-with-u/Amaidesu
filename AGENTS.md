@@ -153,7 +153,6 @@ self.audio_stream_channel = self._dependencies.get("audio_stream_channel")
 **Decision Domain 特定的类型**：
 以下类型保留在 `src/domains/decision/intent.py` 中：
 - `Intent`: 完整的决策意图类（Decision Domain 的核心输出）
-- `ActionSuggestion`: MaiBot 特定的建议格式
 - `SourceContext`: 输入源上下文
 
 **如何添加新的共享类型？**

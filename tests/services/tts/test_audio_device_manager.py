@@ -28,7 +28,7 @@ class TestAudioDeviceManager:
         assert manager.output_device_index is None
         assert not manager.is_playing
 
-    @patch("src.services.tts.audio_device_manager.sd")
+    @patch("src.modules.tts.audio_device_manager.sd")
     def test_find_device_index_by_name(self, mock_sd, manager):
         """测试通过名称查找设备索引"""
         device1 = MagicMock()
@@ -45,7 +45,7 @@ class TestAudioDeviceManager:
 
         assert index == 1
 
-    @patch("src.services.tts.audio_device_manager.sd")
+    @patch("src.modules.tts.audio_device_manager.sd")
     def test_find_device_index_default(self, mock_sd, manager):
         """测试查找默认设备"""
         device = MagicMock()
@@ -59,7 +59,7 @@ class TestAudioDeviceManager:
 
         assert index == 0
 
-    @patch("src.services.tts.audio_device_manager.sd")
+    @patch("src.modules.tts.audio_device_manager.sd")
     def test_find_device_index_not_found(self, mock_sd, manager):
         """测试查找设备未找到"""
         device = MagicMock()
@@ -73,7 +73,7 @@ class TestAudioDeviceManager:
 
         assert index is None
 
-    @patch("src.services.tts.audio_device_manager.sd")
+    @patch("src.modules.tts.audio_device_manager.sd")
     def test_set_output_device_by_name(self, mock_sd, manager):
         """测试通过名称设置输出设备"""
         device = MagicMock()
@@ -87,7 +87,7 @@ class TestAudioDeviceManager:
         assert manager.output_device_name == "My Device"
         assert manager.output_device_index == 0
 
-    @patch("src.services.tts.audio_device_manager.sd")
+    @patch("src.modules.tts.audio_device_manager.sd")
     def test_set_output_device_by_index(self, mock_sd, manager):
         """测试通过索引设置输出设备"""
         manager.set_output_device(device_index=5)
@@ -95,7 +95,7 @@ class TestAudioDeviceManager:
         assert manager.output_device_index == 5
         assert manager.output_device_name is None
 
-    @patch("src.services.tts.audio_device_manager.sd")
+    @patch("src.modules.tts.audio_device_manager.sd")
     def test_list_output_devices(self, mock_sd, manager):
         """测试列出输出设备"""
         device1 = MagicMock()
@@ -122,8 +122,8 @@ class TestAudioDeviceManager:
         assert devices[1]["name"] == "Device 3"
 
     @pytest.mark.asyncio
-    @patch("src.services.tts.audio_device_manager.sd")
-    @patch("src.services.tts.audio_device_manager.asyncio.sleep")
+    @patch("src.modules.tts.audio_device_manager.sd")
+    @patch("src.modules.tts.audio_device_manager.asyncio.sleep")
     async def test_play_audio_success(self, mock_sleep, mock_sd, manager):
         """测试播放音频成功"""
         audio_array = np.array([1, 2, 3, 4, 5], dtype=np.int16)
@@ -144,14 +144,14 @@ class TestAudioDeviceManager:
         with pytest.raises(RuntimeError, match="音频依赖缺失"):
             await manager.play_audio(audio_array)
 
-    @patch("src.services.tts.audio_device_manager.sd")
+    @patch("src.modules.tts.audio_device_manager.sd")
     def test_stop_audio(self, mock_sd, manager):
         """测试停止音频播放"""
         manager.stop_audio()
 
         mock_sd.stop.assert_called_once()
 
-    @patch("src.services.tts.audio_device_manager.sd")
+    @patch("src.modules.tts.audio_device_manager.sd")
     def test_get_device_info(self, mock_sd, manager):
         """测试获取设备信息"""
         manager.output_device_index = 2
@@ -171,7 +171,7 @@ class TestAudioDeviceManager:
         assert info["max_input_channels"] == 1
         assert info["default_samplerate"] == 48000
 
-    @patch("src.services.tts.audio_device_manager.sd")
+    @patch("src.modules.tts.audio_device_manager.sd")
     def test_get_device_info_default(self, mock_sd, manager):
         """测试获取默认设备信息"""
         mock_device = MagicMock()
@@ -188,7 +188,7 @@ class TestAudioDeviceManager:
         assert info["index"] == 0
         assert info["name"] == "Default Device"
 
-    @patch("src.services.tts.audio_device_manager.sd")
+    @patch("src.modules.tts.audio_device_manager.sd")
     def test_get_device_info_no_default(self, mock_sd, manager):
         """测试在没有默认设备时获取设备信息"""
         mock_sd.query_devices.return_value = {}

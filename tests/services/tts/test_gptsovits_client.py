@@ -60,7 +60,7 @@ class TestGPTSoVITSClient:
         with pytest.raises(ValueError, match="prompt_text 不能为空"):
             client.set_refer_audio("/path/to/audio.wav", "")
 
-    @patch("src.services.tts.gptsovits_client.requests.get")
+    @patch("src.modules.tts.gptsovits_client.requests.get")
     def test_set_gpt_weights_success(self, mock_get, client):
         """测试设置 GPT 权重成功"""
         mock_response = MagicMock()
@@ -73,7 +73,7 @@ class TestGPTSoVITSClient:
         call_args = mock_get.call_args
         assert "set_gpt_weights" in call_args[0][0]
 
-    @patch("src.services.tts.gptsovits_client.requests.get")
+    @patch("src.modules.tts.gptsovits_client.requests.get")
     def test_set_gpt_weights_failure(self, mock_get, client):
         """测试设置 GPT 权重失败"""
         mock_response = MagicMock()
@@ -84,7 +84,7 @@ class TestGPTSoVITSClient:
         with pytest.raises(Exception, match="设置 GPT 权重失败"):
             client.set_gpt_weights("/path/to/weights.pth")
 
-    @patch("src.services.tts.gptsovits_client.requests.get")
+    @patch("src.modules.tts.gptsovits_client.requests.get")
     def test_set_sovits_weights_success(self, mock_get, client):
         """测试设置 SoVITS 权重成功"""
         mock_response = MagicMock()
@@ -97,7 +97,7 @@ class TestGPTSoVITSClient:
         call_args = mock_get.call_args
         assert "set_sovits_weights" in call_args[0][0]
 
-    @patch("src.services.tts.gptsovits_client.requests.get")
+    @patch("src.modules.tts.gptsovits_client.requests.get")
     def test_set_sovits_weights_failure(self, mock_get, client):
         """测试设置 SoVITS 权重失败"""
         mock_response = MagicMock()
@@ -144,7 +144,7 @@ class TestGPTSoVITSClient:
         with pytest.raises(ValueError, match="未设置参考音频"):
             client._build_params(text="测试文本")
 
-    @patch("src.services.tts.gptsovits_client.requests.get")
+    @patch("src.modules.tts.gptsovits_client.requests.get")
     def test_tts_success(self, mock_get, client):
         """测试同步 TTS 成功"""
         client.set_refer_audio("/path/to/audio.wav", "测试文本")
@@ -158,7 +158,7 @@ class TestGPTSoVITSClient:
 
         assert result == b"fake_audio_data"
 
-    @patch("src.services.tts.gptsovits_client.requests.get")
+    @patch("src.modules.tts.gptsovits_client.requests.get")
     def test_tts_failure(self, mock_get, client):
         """测试同步 TTS 失败"""
         client.set_refer_audio("/path/to/audio.wav", "测试文本")
@@ -171,7 +171,7 @@ class TestGPTSoVITSClient:
         with pytest.raises(Exception, match="TTS 请求失败"):
             client.tts(text="测试文本", text_lang="zh")
 
-    @patch("src.services.tts.gptsovits_client.requests.get")
+    @patch("src.modules.tts.gptsovits_client.requests.get")
     def test_tts_stream_success(self, mock_get, client):
         """测试流式 TTS 成功"""
         client.set_refer_audio("/path/to/audio.wav", "测试文本")
@@ -186,7 +186,7 @@ class TestGPTSoVITSClient:
         chunks = list(result)
         assert chunks == [b"chunk1", b"chunk2"]
 
-    @patch("src.services.tts.gptsovits_client.requests.get")
+    @patch("src.modules.tts.gptsovits_client.requests.get")
     def test_tts_stream_failure(self, mock_get, client):
         """测试流式 TTS 失败"""
         client.set_refer_audio("/path/to/audio.wav", "测试文本")
@@ -200,7 +200,7 @@ class TestGPTSoVITSClient:
             result = client.tts_stream(text="测试文本", text_lang="zh")
             list(result)  # 触发迭代器
 
-    @patch("src.services.tts.gptsovits_client.requests.get")
+    @patch("src.modules.tts.gptsovits_client.requests.get")
     def test_check_connection_success(self, mock_get, client):
         """测试检查连接成功"""
         mock_response = MagicMock()
@@ -210,7 +210,7 @@ class TestGPTSoVITSClient:
         result = client.check_connection()
         assert result is True
 
-    @patch("src.services.tts.gptsovits_client.requests.get")
+    @patch("src.modules.tts.gptsovits_client.requests.get")
     def test_check_connection_failure(self, mock_get, client):
         """测试检查连接失败"""
         mock_get.side_effect = Exception("连接失败")

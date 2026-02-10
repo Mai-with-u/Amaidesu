@@ -12,7 +12,7 @@ IntentParser - LLM意图解析器
 import json
 from typing import TYPE_CHECKING
 
-from src.domains.decision.intent import Intent
+from src.modules.types import Intent
 from src.modules.logging import get_logger
 from src.modules.prompts import get_prompt_manager
 from src.modules.types import ActionType, EmotionType, IntentAction
@@ -51,15 +51,6 @@ class IntentParser:
         ```
     """
 
-    # 规则引擎的关键词映射
-    EMOTION_KEYWORDS = {
-        EmotionType.HAPPY: ["开心", "高兴", "哈哈", "快乐", "笑", "😊", "😄", "🎉"],
-        EmotionType.SAD: ["难过", "伤心", "哭", "😢", "😭", "💔"],
-        EmotionType.ANGRY: ["生气", "愤怒", "😠", "😡", "🔥"],
-        EmotionType.SURPRISED: ["惊讶", "意外", "哇", "😲", "😱"],
-        EmotionType.LOVE: ["爱", "喜欢", "❤️", "💕", "😍"],
-    }
-
     def __init__(self, llm_service: "LLMManager"):
         """
         初始化IntentParser
@@ -73,6 +64,15 @@ class IntentParser:
 
     async def setup(self):
         """设置IntentParser"""
+        # 创建实例级别的可变对象，避免类变量存储可变对象的违规
+        self._emotion_keywords = {
+            EmotionType.HAPPY: ["开心", "高兴", "哈哈", "笑", "😊", "😄", "🎉"],
+            EmotionType.SAD: ["难过", "伤心", "哭", "😢", "😭", "💔"],
+            EmotionType.ANGRY: ["生气", "愤怒", "😡", "🔥"],
+            EmotionType.SURPRISED: ["惊讶", "意外", "哇", "😲", "😱"],
+            EmotionType.LOVE: ["爱", "喜欢", "❤️", "💕", "😍"],
+        }
+
         # 检查llm_fast是否可用
         if not self.llm_service.has_client("llm_fast"):
             self.logger.warning("llm_fast客户端未配置，IntentParser将使用规则引擎降级")
@@ -203,7 +203,7 @@ class IntentParser:
         """
         # 情感识别（关键词匹配）
         emotion = EmotionType.NEUTRAL
-        for emo, keywords in self.EMOTION_KEYWORDS.items():
+        for emo, keywords in self._emotion_keywords.items():
             if any(keyword in text for keyword in keywords):
                 emotion = emo
                 break

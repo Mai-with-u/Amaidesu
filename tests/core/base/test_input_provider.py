@@ -173,7 +173,7 @@ async def test_input_provider_start_continuous():
     provider = MockInputProvider({}, auto_stop=False)
 
     count = 0
-    async for raw_data in provider.start():
+    async for _raw_data in provider.start():
         count += 1
         if count >= 5:  # 手动停止
             await provider.stop()

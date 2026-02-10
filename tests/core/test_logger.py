@@ -1,6 +1,6 @@
 """日志系统单元测试。
 
-测试 src.core.utils.logger 模块的功能，包括：
+测试 src.modules.logging 模块的功能，包括：
 - JSONL 和文本格式输出
 - 控制台专用模式
 - 目录创建
@@ -404,7 +404,7 @@ class TestImportTimeSideEffects:
         # 保存当前状态
 
         # 检查导入前的处理器数量
-        handlers_before = len(list(logger._core.handlers.keys()))
+        len(list(logger._core.handlers.keys()))
 
         # 重新加载模块
         # 注意：这在测试环境中可能不会完美工作，因为模块已被导入
@@ -557,7 +557,7 @@ class TestConsoleLevelConfiguration:
 
         # 控制台应只显示 ERROR
         captured = capsys.readouterr()
-        output = captured.err + captured.out
+        captured.err + captured.out
 
         # 注意：这个测试可能不太可靠，因为 capsys 可能捕获不到 loguru 的输出
         # 但至少验证配置不抛出异常

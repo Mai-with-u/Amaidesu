@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from src.domains.decision.intent import Intent
+from src.modules.types import Intent
 from src.modules.types import ActionType, EmotionType, IntentAction
 
 # =============================================================================

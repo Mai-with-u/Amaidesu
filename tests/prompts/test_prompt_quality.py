@@ -3,7 +3,6 @@
 import json
 from pathlib import Path
 
-import pytest
 
 # 测试数据路径
 GOLDEN_DATASETS_DIR = Path(__file__).parent / "golden_datasets"
@@ -27,7 +26,7 @@ def test_vts_hotkey_dataset_exists():
 def test_intent_parser_dataset_format():
     """测试 intent_parser.jsonl 格式正确"""
     with open(GOLDEN_DATASETS_DIR / "intent_parser.jsonl", "r", encoding="utf-8") as f:
-        for line_num, line in enumerate(f, 1):
+        for _line_num, line in enumerate(f, 1):
             if line.strip():
                 data = json.loads(line)
                 assert "input" in data
@@ -37,7 +36,7 @@ def test_intent_parser_dataset_format():
 def test_local_llm_dataset_format():
     """测试 local_llm.jsonl 格式正确"""
     with open(GOLDEN_DATASETS_DIR / "local_llm.jsonl", "r", encoding="utf-8") as f:
-        for line_num, line in enumerate(f, 1):
+        for _line_num, line in enumerate(f, 1):
             if line.strip():
                 data = json.loads(line)
                 assert "input" in data
@@ -48,7 +47,7 @@ def test_local_llm_dataset_format():
 def test_vts_hotkey_dataset_format():
     """测试 vts_hotkey.jsonl 格式正确"""
     with open(GOLDEN_DATASETS_DIR / "vts_hotkey.jsonl", "r", encoding="utf-8") as f:
-        for line_num, line in enumerate(f, 1):
+        for _line_num, line in enumerate(f, 1):
             if line.strip():
                 data = json.loads(line)
                 assert "input" in data

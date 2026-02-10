@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
 from maim_message import MessageBase, RouteConfig, Router, TargetConfig
 from pydantic import Field
 
-from src.domains.decision.intent import Intent
+from src.modules.types import Intent
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 from src.modules.types.base.decision_provider import DecisionProvider
@@ -428,7 +428,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
         Returns:
             默认 Intent
         """
-        from src.domains.decision.intent import Intent
+        from src.modules.types import Intent
         from src.modules.types import ActionType, EmotionType, IntentAction
 
         return Intent(
@@ -454,7 +454,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
                 return
 
             await self._router_adapter.send_action_suggestion(intent)
-            self.logger.debug(f"Action 建议发送成功: {len(intent.suggested_actions)} 个动作")
+            self.logger.debug(f"Action 发送成功: {len(intent.actions)} 个动作")
         except Exception as e:
             self.logger.warning(f"发送 Action 建议失败: {e}", exc_info=True)
 

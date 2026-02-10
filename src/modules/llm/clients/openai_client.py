@@ -62,6 +62,7 @@ class OpenAIClient(LLMClient):
                 return format_to_mime.get(img.format, "image/png")
         except Exception:
             return "image/png"
+            # 图片格式转换失败，返回默认类型
 
     def _path_or_url_to_data_url(self, image: Union[str, bytes]) -> str:
         """将 URL/本地路径/字节 转为 URL 或 data URL"""
@@ -193,7 +194,6 @@ class OpenAIClient(LLMClient):
             async for chunk in stream:
                 if stop_event is not None and stop_event.is_set():
                     break
-
                 # 内容增量
                 try:
                     delta = chunk.choices[0].delta
@@ -201,7 +201,7 @@ class OpenAIClient(LLMClient):
                     if text_piece:
                         yield text_piece
                 except Exception:
-                    pass
+                    yield ""  # 图片格式转换失败时返回空内容
 
         except Exception as e:
             self.logger.error(f"流式 LLM 请求失败: {e}")
@@ -210,7 +210,7 @@ class OpenAIClient(LLMClient):
                 try:
                     await stream.aclose()
                 except Exception:
-                    pass
+                    pass  # 关闭流失败，忽略错误
 
     async def vision(
         self,
