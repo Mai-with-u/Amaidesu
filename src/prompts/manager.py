@@ -70,6 +70,56 @@ class PromptTemplate(BaseModel):
         template = Template(self.content)
         return template.safe_substitute(**kwargs)
 
+    def extract_section(self, section_name: str, **kwargs: Any) -> str:
+        """提取并渲染模板中的特定section
+
+        Args:
+            section_name: section名称（如 "User Message"）
+            **kwargs: 模板变量
+
+        Returns:
+            提取并渲染后的section内容，如果section不存在则返回空字符串
+
+        Example:
+            提取 "## User Message" section
+        """
+        import re
+
+        # 先渲染整个模板
+        rendered = self.render(**kwargs)
+
+        # 提取指定section
+        pattern = rf"## {re.escape(section_name)}\s*\n(.*?)(?=\n## |\Z)"
+        match = re.search(pattern, rendered, re.DOTALL)
+
+        if match:
+            return match.group(1).strip()
+        return ""
+
+    def extract_content_without_section(self, section_name: str, **kwargs: Any) -> str:
+        """提取模板内容，排除指定的section
+
+        Args:
+            section_name: 要排除的section名称（如 "User Message"）
+            **kwargs: 模板变量
+
+        Returns:
+            渲染后的模板内容（排除指定section）
+
+        Example:
+            获取系统消息（排除 "User Message" section）
+        """
+        import re
+
+        # 先渲染整个模板
+        rendered = self.render(**kwargs)
+
+        # 移除指定section
+        pattern = rf"## {re.escape(section_name)}\s*\n.*?(?=\n## |\Z)"
+        result = re.sub(pattern, "", rendered, flags=re.DOTALL)
+
+        return result.strip()
+
 
 # === Prompt 管理器 ===
 
@@ -335,6 +385,48 @@ class PromptManager:
         """
         template = self._get_template(template_name)
         return template.metadata
+
+    def extract_section(self, template_name: str, section_name: str, **kwargs: Any) -> str:
+        """
+        提取并渲染模板中的特定section
+
+        Args:
+            template_name: 模板名称
+            section_name: section名称（如 "User Message"）
+            **kwargs: 模板变量
+
+        Returns:
+            提取并渲染后的section内容，如果section不存在则返回空字符串
+
+        Raises:
+            KeyError: 如果模板不存在
+
+        Example:
+            提取 "## User Message" section
+        """
+        template = self._get_template(template_name)
+        return template.extract_section(section_name, **kwargs)
+
+    def extract_content_without_section(self, template_name: str, section_name: str, **kwargs: Any) -> str:
+        """
+        提取模板内容，排除指定的section
+
+        Args:
+            template_name: 模板名称
+            section_name: 要排除的section名称（如 "User Message"）
+            **kwargs: 模板变量
+
+        Returns:
+            渲染后的模板内容（排除指定section）
+
+        Raises:
+            KeyError: 如果模板不存在
+
+        Example:
+            获取系统消息（排除 "User Message" section）
+        """
+        template = self._get_template(template_name)
+        return template.extract_content_without_section(section_name, **kwargs)
 
     def list_templates(self) -> list[str]:
         """

@@ -43,3 +43,9 @@ tags: [decision, intent, parser]
 - 如果无法确定情感，默认使用"neutral"
 - 如果没有明显动作，返回空数组
 - 严格按照JSON格式输出，不要添加其他内容
+
+## User Message
+
+请分析以下AI VTuber的回复消息，提取情感、回复文本和动作：
+
+$text
