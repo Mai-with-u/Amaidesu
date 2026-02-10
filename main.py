@@ -449,9 +449,15 @@ async def run_shutdown(
 
     关闭顺序（关键）：
     1. 先停止数据生产者（InputProvider）
-    2. 等待待处理事件完成（grace period）
-    3. 清理消费者（OutputCoordinator、DecisionProviderManager）
-    4. 清理基础设施（InputDomain、LLM、Core、DGLab）
+    2. 组件取消订阅（InputCoordinator、OutputCoordinator、DecisionProviderManager）- 在 EventBus.cleanup 之前
+    2.4 清理 OutputProvider（必须在 EventBus.cleanup 之前，因为会调用 event_bus.off()）
+    3. 等待待处理事件完成（EventBus.cleanup）- 清除所有监听器
+    4. 清理基础设施（LLM、Core等）
+
+    关键原则：
+    - 所有订阅者的 cleanup() 必须在 EventBus.cleanup() 之前执行
+    - 否则 cleanup() 中的 event_bus.off() 会因为监听器已被清除而失败
+    - OutputProvider 的 cleanup() 也会调用 event_bus.off()，因此必须在步骤 2.4 中清理
     """
     # 1. 先停止输入Provider（数据生产者）
     if input_provider_manager:
@@ -462,37 +468,58 @@ async def run_shutdown(
         except Exception as e:
             logger.error(f"停止输入Provider时出错: {e}")
 
-    # 2. 等待待处理事件完成（grace period）
-    logger.info("等待待处理事件完成...")
-    await asyncio.sleep(1.0)
+    # 2. 组件取消订阅（必须在 EventBus.cleanup 之前）
+    # 这样组件可以正确地移除它们的监听器
 
-    # 3. 清理消费者
+    # 2.1 清理输入域协调器（取消订阅 perception.raw_data.generated）
+    if input_coordinator:
+        logger.info("正在清理输入域协调器（取消订阅）...")
+        try:
+            await input_coordinator.cleanup()
+            logger.info("输入域协调器清理完成")
+        except Exception as e:
+            logger.error(f"清理输入域协调器时出错: {e}")
+
+    # 2.2 清理输出协调器（取消订阅 decision.intent_generated）
     if output_coordinator:
-        logger.info("正在清理输出协调器...")
+        logger.info("正在清理输出协调器（取消订阅）...")
         try:
             await output_coordinator.cleanup()
             logger.info("输出协调器清理完成")
         except Exception as e:
             logger.error(f"清理输出协调器时出错: {e}")
 
-    # 清理决策域
+    # 2.3 清理决策Provider管理器（取消订阅 normalization.message_ready）
     if decision_provider_manager:
-        logger.info("正在清理决策Provider管理器...")
+        logger.info("正在清理决策Provider管理器（取消订阅）...")
         try:
             await decision_provider_manager.cleanup()
             logger.info("决策Provider管理器清理完成")
         except Exception as e:
             logger.error(f"清理决策Provider管理器时出错: {e}")
 
-    # 4. 清理基础设施
-    logger.info("正在清理输入域组件...")
-    try:
-        await input_coordinator.cleanup()
-        logger.info("输入域组件清理完成")
-    except Exception as e:
-        logger.error(f"清理输入域组件时出错: {e}")
+    # 2.4 清理 OutputProvider（必须在 EventBus.cleanup 之前）
+    #     因为 OutputProvider.cleanup() 会调用 event_bus.off()
+    #     而这需要在 EventBus 清理监听器之前完成
+    if output_coordinator and output_coordinator.output_provider_manager:
+        logger.info("正在清理 OutputProvider...")
+        try:
+            await output_coordinator.output_provider_manager.stop_all_providers()
+            logger.info("OutputProvider 已清理")
+        except Exception as e:
+            logger.error(f"清理 OutputProvider 失败: {e}")
 
-    logger.info("正在关闭核心服务...")
+    # 3. 等待待处理事件完成并清除所有监听器（EventBus 清理）
+    logger.info("等待待处理事件完成...")
+    if core and core.event_bus:
+        try:
+            await core.event_bus.cleanup()
+            logger.info("EventBus 清理完成")
+        except Exception as e:
+            logger.error(f"EventBus 清理失败: {e}")
+
+    # 4. 清理基础设施（LLM、Core等）
+    logger.info("正在清理核心服务...")
     try:
         # 注意：DGLab 服务现在由服务管理器自动清理
         # 不需要在这里手动清理

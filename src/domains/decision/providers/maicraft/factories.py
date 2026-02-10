@@ -188,6 +188,7 @@ class McpActionFactory(AbstractActionFactory):
             是否初始化成功
         """
         # TODO: 实现 MCP 连接初始化
+        # STATUS: PENDING - MCP 协议待实现
         # 目前只做日志记录
         self.logger.info("MCP 工厂初始化（当前为模拟模式）")
         self.is_connected = True

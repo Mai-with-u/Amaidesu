@@ -248,6 +248,7 @@ class StickerOutputProvider(OutputProvider):
             VTS Provider 实例或 None
         """
         # TODO: 通过 ProviderManager 或其他方式获取 VTS Provider
+        # STATUS: PENDING - 依赖注入方案待确定
         # 当前返回 None，需要集成实际的 Provider 查找逻辑
         return None
 

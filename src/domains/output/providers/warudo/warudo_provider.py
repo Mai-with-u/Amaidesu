@@ -103,13 +103,16 @@ class WarudoOutputProvider(OutputProvider):
         """处理表情事件"""
         self.logger.debug(f"收到表情事件: {data}")
         # TODO: 实现实际的表情发送逻辑
+        # STATUS: PENDING - Warudo API 待调研
 
     async def _handle_state(self, event_name: str, data: Any, source: str):
         """处理状态事件"""
         self.logger.debug(f"收到状态事件: {data}")
         # TODO: 实现实际的状态发送逻辑
+        # STATUS: PENDING - Warudo API 待调研
 
     async def _handle_tts_audio(self, event_name: str, data: Any, source: str):
         """处理TTS音频事件"""
         self.logger.debug("收到TTS音频事件")
         # TODO: 实现实际的TTS音频同步逻辑
+        # STATUS: PENDING - Warudo API 待调研

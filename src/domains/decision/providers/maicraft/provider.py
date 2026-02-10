@@ -11,14 +11,15 @@ Maicraft Decision Provider
 - 不直接触发 Output Provider（遵守 3 域数据流规则）
 """
 
-from typing import Optional
+from typing import Dict, Literal, Optional
 
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 
 from src.core.base.decision_provider import DecisionProvider
 from src.core.types import EmotionType
 from src.core.utils.logger import get_logger
 from src.domains.decision.intent import Intent
+from src.services.config.schemas.schemas.base import BaseProviderConfig
 
 from .action_registry import ActionRegistry
 from .action_types import MaicraftActionType
@@ -46,6 +47,32 @@ class MaicraftDecisionProvider(DecisionProvider):
     command_mappings = { "chat" = "chat", "attack" = "attack" }
     ```
     """
+
+    class ConfigSchema(BaseProviderConfig):
+        """Maicraft决策Provider配置Schema
+
+        基于抽象工厂模式的弹幕互动游戏决策Provider。
+        支持通过配置切换不同的动作实现系列（如 Log、MCP 等）。
+        """
+
+        type: Literal["maicraft"] = "maicraft"
+        factory_type: Literal["log", "mcp"] = Field(
+            default="log", description="工厂类型：log（测试用）或 mcp（生产环境）"
+        )
+        command_mappings: Dict[str, str] = Field(
+            default_factory=lambda: {
+                "chat": "chat",
+                "say": "chat",
+                "聊天": "chat",
+                "attack": "attack",
+                "攻击": "attack",
+            },
+            description='命令映射配置，格式: {"聊天": "chat", "攻击": "attack"}',
+        )
+        command_prefix: str = Field(default="/", description="命令前缀")
+        mcp_server_url: Optional[str] = Field(default=None, description="MCP服务器URL（当factory_type为mcp时使用）")
+        mcp_timeout: int = Field(default=30, description="MCP超时时间（秒）")
+        verbose_logging: bool = Field(default=False, description="是否输出详细日志")
 
     def __init__(self, config: dict):
         super().__init__(config)
