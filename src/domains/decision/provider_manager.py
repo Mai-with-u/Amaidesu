@@ -16,7 +16,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
-    from src.domains.decision.intent import Intent
+    from src.modules.types import Intent
     from src.modules.config.service import ConfigService
     from src.modules.context.service import ContextService
     from src.modules.events.event_bus import EventBus

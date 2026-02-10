@@ -15,7 +15,7 @@ import time
 
 import pytest
 
-from src.domains.decision.intent import ActionSuggestion, Intent, SourceContext
+from src.modules.types import Intent, SourceContext
 from src.modules.types import ActionType, EmotionType, IntentAction
 
 # =============================================================================
@@ -279,54 +279,6 @@ class TestSourceContext:
 
 
 # =============================================================================
-# ActionSuggestion 测试
-# =============================================================================
-
-
-class TestActionSuggestion:
-    """测试 ActionSuggestion 类"""
-
-    def test_action_suggestion_creation(self):
-        """测试创建 ActionSuggestion"""
-        suggestion = ActionSuggestion(
-            action_name="wave",
-            priority=50,
-            parameters={"duration": 1.0},
-            reason="用户打招呼",
-            confidence=0.9,
-        )
-        assert suggestion.action_name == "wave"
-        assert suggestion.priority == 50
-        assert suggestion.parameters == {"duration": 1.0}
-        assert suggestion.reason == "用户打招呼"
-        assert suggestion.confidence == 0.9
-
-    def test_action_suggestion_defaults(self):
-        """测试默认字段值"""
-        suggestion = ActionSuggestion(action_name="smile")
-        assert suggestion.priority == 50
-        assert suggestion.parameters == {}
-        assert suggestion.reason == ""
-        assert suggestion.confidence == 0.5
-
-    def test_action_suggestion_priority_validation(self):
-        """测试 priority 字段验证 (0-100)"""
-        suggestion = ActionSuggestion(
-            action_name="test",
-            priority=75,
-        )
-        assert suggestion.priority == 75
-
-    def test_action_suggestion_confidence_validation(self):
-        """测试 confidence 字段验证 (0.0-1.0)"""
-        suggestion = ActionSuggestion(
-            action_name="test",
-            confidence=0.8,
-        )
-        assert suggestion.confidence == 0.8
-
-
-# =============================================================================
 # Intent 测试
 # =============================================================================
 
@@ -395,21 +347,6 @@ class TestIntent:
         )
         after = time.time()
         assert before <= intent.timestamp <= after
-
-    def test_intent_suggested_actions(self):
-        """测试建议的动作列表"""
-        suggestions = [
-            ActionSuggestion(action_name="smile", reason="表示友好"),
-            ActionSuggestion(action_name="wave", reason="打招呼"),
-        ]
-        intent = Intent(
-            original_text="你好",
-            response_text="你好呀~",
-            suggested_actions=suggestions,
-        )
-        assert intent.suggested_actions is not None
-        assert len(intent.suggested_actions) == 2
-        assert intent.suggested_actions[0].action_name == "smile"
 
     def test_intent_actions_mutation(self):
         """测试 actions 列表可变性"""

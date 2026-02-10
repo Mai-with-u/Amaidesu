@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 import pytest
 
 from src.domains.decision.coordinator import DecisionCoordinator
-from src.domains.decision.intent import Intent
+from src.modules.types import Intent
 from src.domains.decision.provider_manager import DecisionProviderManager
 from src.domains.input.normalization.content.base import StructuredContent
 from src.modules.events.event_bus import EventBus

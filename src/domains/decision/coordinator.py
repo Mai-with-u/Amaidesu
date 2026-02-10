@@ -111,7 +111,7 @@ class DecisionCoordinator:
         Returns:
             SourceContext 对象
         """
-        from src.domains.decision.intent import SourceContext
+        from src.modules.types import SourceContext
 
         source = normalized_dict.get("source", "")
         data_type = normalized_dict.get("data_type", "")

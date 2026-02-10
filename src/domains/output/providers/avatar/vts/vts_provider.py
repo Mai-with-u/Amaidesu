@@ -22,7 +22,7 @@ from src.modules.prompts import get_prompt_manager
 if TYPE_CHECKING:
     from src.modules.streaming.audio_chunk import AudioChunk, AudioMetadata
 
-    from src.domains.decision.intent import Intent
+    from src.modules.types import Intent
 
 # LLM匹配依赖
 LLM_AVAILABLE = False

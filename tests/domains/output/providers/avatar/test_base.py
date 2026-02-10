@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.domains.decision.intent import Intent, SourceContext
+from src.modules.types import Intent, SourceContext
 from src.domains.output.providers.avatar.base import AvatarProviderBase
 from src.modules.events.payloads.decision import IntentPayload
 from src.modules.types import ActionType, EmotionType, IntentAction

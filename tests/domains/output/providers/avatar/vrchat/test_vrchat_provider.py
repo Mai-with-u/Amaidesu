@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.domains.decision.intent import Intent
+from src.modules.types import Intent
 from src.domains.output.providers.avatar.vrchat.vrchat_provider import (
     VRChatProvider,
 )

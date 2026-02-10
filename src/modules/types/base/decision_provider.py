@@ -19,7 +19,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 if TYPE_CHECKING:
-    from src.domains.decision.intent import Intent
+    from src.modules.types import Intent
     from src.modules.types.base.normalized_message import NormalizedMessage
 
 

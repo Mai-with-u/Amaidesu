@@ -500,7 +500,7 @@ from src.modules.types.base.decision_provider import DecisionProvider
 
 # 数据类型
 from src.modules.types.base.normalized_message import NormalizedMessage
-from src.domains.decision.intent import Intent, SourceContext, ActionSuggestion
+from src.domains.decision.intent import Intent, SourceContext
 
 # 枚举类型
 from src.modules.types import EmotionType, ActionType, IntentAction

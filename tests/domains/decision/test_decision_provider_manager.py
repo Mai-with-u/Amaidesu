@@ -15,7 +15,7 @@ import pytest
 
 # 导入所有 decision providers 以触发注册
 import src.domains.decision.providers  # noqa: F401
-from src.domains.decision.intent import Intent
+from src.modules.types import Intent
 from src.domains.decision.provider_manager import DecisionProviderManager
 from src.domains.input.normalization.content.base import StructuredContent
 from src.modules.events.event_bus import EventBus

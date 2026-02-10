@@ -17,7 +17,7 @@ from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
-    from src.domains.decision.intent import Intent
+    from src.modules.types import Intent
 
 # python-osc 软降级
 try:

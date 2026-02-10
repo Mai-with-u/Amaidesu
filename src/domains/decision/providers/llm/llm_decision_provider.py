@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
 
 from pydantic import Field
 
-from src.domains.decision.intent import Intent
+from src.modules.types import Intent
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.context import MessageRole
 from src.modules.logging import get_logger
