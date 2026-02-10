@@ -1,5 +1,5 @@
 """
-LocalLLMDecisionProvider - 本地LLM决策提供者
+LLMPDecisionProvider - LLM决策提供者
 
 职责:
 - 使用 LLM Service 进行决策
@@ -26,44 +26,44 @@ if TYPE_CHECKING:
     from src.modules.types.base.normalized_message import NormalizedMessage
 
 
-class LocalLLMDecisionProvider(DecisionProvider):
+class LLMPDecisionProvider(DecisionProvider):
     """
-    本地LLM决策提供者
+    LLM决策提供者
 
     使用 LLM Service 统一接口进行决策。
 
     配置示例:
         ```toml
-        [local_llm]
-        backend = "llm"  # 使用的 LLM 后端（llm, llm_fast, vlm）
+        [llm]
+        backend = "llm"  # 使用的 LLM 客户端（llm, llm_fast, vlm）
         fallback_mode = "simple"
         ```
 
     属性:
-        backend: 使用的 LLM 后端
+        backend: 使用的 LLM 客户端
         fallback_mode: 降级模式（"simple"返回简单响应，"error"抛出异常）
     """
 
     class ConfigSchema(BaseProviderConfig):
-        """本地LLM决策Provider配置Schema
+        """LLM决策Provider配置Schema
 
         使用LLM Service统一接口进行决策。
         """
 
-        type: Literal["local_llm"] = "local_llm"
-        backend: Literal["llm", "llm_fast", "vlm"] = Field(default="llm", description="使用的LLM后端名称")
+        type: Literal["llm"] = "llm"
+        backend: Literal["llm", "llm_fast", "vlm"] = Field(default="llm", description="使用的LLM客户端名称")
         fallback_mode: Literal["simple", "echo", "error"] = Field(default="simple", description="降级模式")
 
     def __init__(self, config: Dict[str, Any]):
         """
-        初始化 LocalLLMDecisionProvider
+        初始化 LLMPDecisionProvider
 
         Args:
             config: 配置字典
         """
         # 使用 Pydantic Schema 验证配置
         self.typed_config = self.ConfigSchema(**config)
-        self.logger = get_logger("LocalLLMDecisionProvider")
+        self.logger = get_logger("LLMPDecisionProvider")
 
         # LLM Manager 引用（通过 setup 注入）
         self._llm_service: Optional["LLMManager"] = None
@@ -95,7 +95,7 @@ class LocalLLMDecisionProvider(DecisionProvider):
         dependencies: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
-        设置 LocalLLMDecisionProvider
+        设置 LLMPDecisionProvider
 
         Args:
             event_bus: EventBus 实例
@@ -103,7 +103,7 @@ class LocalLLMDecisionProvider(DecisionProvider):
             dependencies: 依赖注入字典，必须包含 llm_service
         """
         self._event_bus = event_bus
-        self.logger.info("初始化 LocalLLMDecisionProvider...")
+        self.logger.info("初始化 LLMPDecisionProvider...")
 
         # 从依赖注入中获取 LLMManager
         if dependencies and "llm_service" in dependencies:
@@ -126,7 +126,7 @@ class LocalLLMDecisionProvider(DecisionProvider):
         else:
             self.logger.warning("ContextService 未通过依赖注入提供，将使用无状态模式")
 
-        self.logger.info(f"LocalLLMDecisionProvider 初始化完成 (Client: {self.client_type})")
+        self.logger.info(f"LLMPDecisionProvider 初始化完成 (Client: {self.client_type})")
 
     def _get_persona_config(self) -> Dict[str, Any]:
         """获取 VTuber 人设配置
@@ -201,7 +201,7 @@ class LocalLLMDecisionProvider(DecisionProvider):
         # 构建 prompt（使用 PromptManager 渲染模板）
         # 如果有历史上下文，可以将其注入到 prompt 中
         prompt = get_prompt_manager().render_safe(
-            "decision/local_llm",
+            "decision/llm",
             text=normalized_message.text,
             bot_name=persona_config.get("bot_name", "爱德丝"),
             personality=persona_config.get("personality", "活泼开朗，有些调皮，喜欢和观众互动"),
@@ -278,7 +278,7 @@ class LocalLLMDecisionProvider(DecisionProvider):
             response_text=text,
             emotion=EmotionType.NEUTRAL,
             actions=[IntentAction(type=ActionType.BLINK, params={}, priority=30)],
-            metadata={"parser": "local_llm"},
+            metadata={"parser": "llm"},
         )
 
     async def cleanup(self) -> None:
@@ -287,7 +287,7 @@ class LocalLLMDecisionProvider(DecisionProvider):
 
         输出统计信息。
         """
-        self.logger.info("清理LocalLLMDecisionProvider...")
+        self.logger.info("清理LLMPDecisionProvider...")
 
         # 输出统计信息
         success_rate = self._successful_requests / self._total_requests * 100 if self._total_requests > 0 else 0
@@ -296,7 +296,7 @@ class LocalLLMDecisionProvider(DecisionProvider):
             f"失败={self._failed_requests}, 成功率={success_rate:.1f}%"
         )
 
-        self.logger.info("LocalLLMDecisionProvider已清理")
+        self.logger.info("LLMPDecisionProvider已清理")
 
     def get_statistics(self) -> Dict[str, Any]:
         """
@@ -324,9 +324,9 @@ class LocalLLMDecisionProvider(DecisionProvider):
             Provider 信息字典（静态配置）
         """
         return {
-            "name": "LocalLLMDecisionProvider",
+            "name": "LLMPDecisionProvider",
             "version": "1.0.0",
             "client_type": self.client_type,
-            "template_name": "decision/local_llm",
+            "template_name": "decision/llm",
             "fallback_mode": self.fallback_mode,
         }

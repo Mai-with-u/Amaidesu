@@ -158,7 +158,7 @@ class ProviderRegistry:
         注册决策 Provider
 
         Args:
-            name: Provider 名称（唯一标识符，如 "maicore", "local_llm"）
+            name: Provider 名称（唯一标识符，如 "maicore", "llm"）
             provider_class: Provider 类
             source: 注册来源（用于调试）
 

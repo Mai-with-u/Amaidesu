@@ -160,7 +160,7 @@ class LLMManager:
             await self._init_client(ClientType.DEFAULT, self._get_default_config(ClientType.DEFAULT))
 
         # 初始化 token 管理器
-        from src.modules.llm.backends.backends.token_usage_manager import TokenUsageManager
+        from src.modules.llm.clients.token_usage_manager import TokenUsageManager
 
         self._token_manager = TokenUsageManager(use_global=True)
 
@@ -205,22 +205,22 @@ class LLMManager:
             ValueError: 如果客户端类型不支持
         """
         if backend_type == "openai":
-            from src.modules.llm.backends.backends.openai_client import OpenAIClient
+            from src.modules.llm.clients.openai_client import OpenAIClient
 
             return OpenAIClient
         elif backend_type == "ollama":
-            from src.modules.llm.backends.backends.ollama_client import OllamaClient
+            from src.modules.llm.clients.ollama_client import OllamaClient
 
             return OllamaClient
         elif backend_type == "anthropic":
             # 未来可以添加 Anthropic 客户端
-            from src.modules.llm.backends.backends.openai_client import OpenAIClient
+            from src.modules.llm.clients.openai_client import OpenAIClient
 
             self.logger.warning("Anthropic 客户端暂未实现，降级到 OpenAI 客户端")
             return OpenAIClient
         else:
             self.logger.warning(f"未知的客户端类型 '{backend_type}'，降级到 OpenAI 客户端")
-            from src.modules.llm.backends.backends.openai_client import OpenAIClient
+            from src.modules.llm.clients.openai_client import OpenAIClient
 
             return OpenAIClient
 

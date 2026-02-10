@@ -13,7 +13,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Union
 from openai import AsyncOpenAI
 from PIL import Image
 
-from src.modules.llm.backends.backends.client_base import LLMClient
+from src.modules.llm.clients.client_base import LLMClient
 from src.modules.llm.manager import LLMResponse
 
 

@@ -11,7 +11,7 @@ DecisionProvider负责将NormalizedMessage转换为决策结果(Intent)。
 
 示例实现:
 - MaiCoreDecisionProvider: 使用WebSocket连接到MaiCore (异步+LLM意图解析)
-- LocalLLMDecisionProvider: 使用本地LLM API (直接生成Intent)
+- LLMPDecisionProvider: 使用LLM API (直接生成Intent)
 - RuleEngineDecisionProvider: 使用本地规则引擎
 """
 

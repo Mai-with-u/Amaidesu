@@ -79,7 +79,7 @@ class ArchitecturalValidator:
             "normalization.message_ready",  # DecisionProvider 可以订阅 Input 事件
         ],
         "MaiCoreDecisionProvider": None,  # 具体实现不应该直接订阅
-        "LocalLLMDecisionProvider": None,
+        "LLMPDecisionProvider": None,
         "RuleEngineDecisionProvider": None,
         # === Output Domain (可订阅 Decision，不可订阅 Input) ===
         "OutputCoordinator": [  # Output Domain 协调器
@@ -390,7 +390,7 @@ class ArchitecturalValidator:
             "VoiceInputProvider": {"InputProvider"},  # 旧名称，保留兼容性
             # === Decision Providers ===
             "MaiCoreDecisionProvider": {"DecisionProvider"},
-            "LocalLLMDecisionProvider": {"DecisionProvider"},
+            "LLMPDecisionProvider": {"DecisionProvider"},
             "RuleEngineDecisionProvider": {"DecisionProvider"},
             "MockDecisionProvider": {"DecisionProvider"},  # 测试类
             # === Output Providers ===

@@ -6,10 +6,10 @@
 - OllamaClient: Ollama 本地模型客户端
 """
 
-from . import backends
+from . import clients
 from .manager import LLMManager
 
 __all__ = [
     "LLMManager",
-    "backends",
+    "clients",
 ]

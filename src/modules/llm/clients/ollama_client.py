@@ -7,7 +7,7 @@ Ollama 客户端实现（占位符）
 import asyncio
 from typing import Any, Dict, List, Optional, Union
 
-from src.modules.llm.backends.backends.client_base import LLMClient
+from src.modules.llm.clients.client_base import LLMClient
 
 
 class OllamaClient(LLMClient):
