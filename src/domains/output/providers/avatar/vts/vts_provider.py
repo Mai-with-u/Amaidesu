@@ -21,6 +21,7 @@ from src.prompts import get_prompt_manager
 
 if TYPE_CHECKING:
     from src.domains.decision.intent import Intent
+    from src.core.streaming.audio_chunk import AudioMetadata, AudioChunk
 
 # LLM匹配依赖
 LLM_AVAILABLE = False
@@ -224,6 +225,9 @@ class VTSProvider(BaseAvatarProvider):
         self._vts = None
         self._is_connecting = False
 
+        # AudioStreamChannel 订阅
+        self._vts_subscription_id: Optional[str] = None
+
         # 统计信息
         self.render_count = 0
         self.error_count = 0
@@ -367,6 +371,23 @@ class VTSProvider(BaseAvatarProvider):
                 # 加载热键列表
                 await self._load_hotkeys()
 
+                # 注册 AudioStreamChannel 订阅（如果启用口型同步）
+                audio_channel = self._dependencies.get("audio_stream_channel") if hasattr(self, "_dependencies") else None
+                if audio_channel and self.lip_sync_enabled:
+                    from src.core.streaming.backpressure import SubscriberConfig, BackpressureStrategy
+
+                    self._vts_subscription_id = await audio_channel.subscribe(
+                        name="vts_lip_sync",
+                        on_audio_start=self._on_lip_sync_start,
+                        on_audio_chunk=self._on_lip_sync_chunk,
+                        on_audio_end=self._on_lip_sync_end,
+                        config=SubscriberConfig(
+                            queue_size=100,
+                            backpressure_strategy=BackpressureStrategy.DROP_NEWEST,
+                        ),
+                    )
+                    self.logger.info("VTS 口型同步已订阅 AudioStreamChannel")
+
                 # 测试微笑
                 await self.smile(0)
                 await self.close_eyes()
@@ -387,6 +408,17 @@ class VTSProvider(BaseAvatarProvider):
 
     async def _disconnect(self) -> None:
         """断开VTS平台连接"""
+        # 取消 AudioStreamChannel 订阅
+        audio_channel = self._dependencies.get("audio_stream_channel") if hasattr(self, "_dependencies") else None
+        if audio_channel and self._vts_subscription_id:
+            try:
+                await audio_channel.unsubscribe(self._vts_subscription_id)
+                self.logger.info("VTS 口型同步已取消订阅 AudioStreamChannel")
+            except Exception as e:
+                self.logger.error(f"取消 AudioStreamChannel 订阅失败: {e}")
+            finally:
+                self._vts_subscription_id = None
+
         if self._vts:
             self.logger.info("正在断开VTS连接...")
             try:
@@ -705,6 +737,38 @@ class VTSProvider(BaseAvatarProvider):
         except Exception as e:
             self.logger.error(f"卸载道具失败: {e}")
             return False
+
+    # ==================== AudioStreamChannel 回调 ====================
+
+    async def _on_lip_sync_start(self, metadata: "AudioMetadata"):
+        """AudioStreamChannel: 音频流开始回调"""
+        if not self.lip_sync_enabled or not self._is_connected:
+            return
+
+        self.logger.debug(f"收到音频流开始通知: {metadata.text[:30]}...")
+        await self.start_lip_sync_session(metadata.text)
+
+    async def _on_lip_sync_chunk(self, chunk: "AudioChunk"):
+        """AudioStreamChannel: 音频块回调"""
+        if not self.lip_sync_enabled or not self._is_connected:
+            return
+
+        try:
+            # 重采样到 VTS 期望的采样率
+            from src.core.streaming.audio_utils import resample_audio
+
+            audio_data = resample_audio(chunk.data, chunk.sample_rate, self.sample_rate)
+            await self.process_tts_audio(audio_data, self.sample_rate)
+        except Exception as e:
+            self.logger.error(f"处理音频块失败: {e}")
+
+    async def _on_lip_sync_end(self, metadata: "AudioMetadata"):
+        """AudioStreamChannel: 音频流结束回调"""
+        if not self.lip_sync_enabled or not self._is_connected:
+            return
+
+        self.logger.debug("收到音频流结束通知")
+        await self.stop_lip_sync_session()
 
     # ==================== 口型同步 ====================
 

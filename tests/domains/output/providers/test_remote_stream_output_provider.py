@@ -178,8 +178,8 @@ class TestRemoteStreamOutputProvider:
 
             await provider._setup_internal()
 
-            # 验证事件监听器已注册
-            assert mock_event_bus.on.call_count == 2
+            # 验证事件监听器已注册（现在只有 REMOTE_STREAM_REQUEST_IMAGE）
+            assert mock_event_bus.on.call_count == 1
 
     @pytest.mark.asyncio
     async def test_cleanup_internal(self, remote_stream_config):
@@ -511,19 +511,33 @@ class TestRemoteStreamOutputProvider:
         provider.request_image.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_handle_tts_request_event(self, remote_stream_config, mock_event_bus, sample_audio_data):
-        """测试处理TTS发送请求事件"""
+    async def test_audio_stream_channel_callback(self, remote_stream_config, sample_audio_data):
+        """测试 AudioStreamChannel 音频块回调"""
+        from src.core.streaming.audio_chunk import AudioChunk
+
         provider = RemoteStreamOutputProvider(remote_stream_config)
-        await provider.setup(mock_event_bus)
 
         # Mock send_tts_audio
         provider.send_tts_audio = AsyncMock(return_value=True)
 
-        # 触发事件
-        await provider._handle_tts_request("remote_stream.send_tts", {"audio_data": sample_audio_data}, "test")
+        # 创建音频块
+        chunk = AudioChunk(
+            data=sample_audio_data,
+            sample_rate=16000,
+            channels=1,
+            sequence=0,
+            timestamp=0.0,
+        )
 
-        # 验证send_tts_audio被调用
-        provider.send_tts_audio.assert_called_once_with(sample_audio_data)
+        # 调用回调
+        await provider._on_audio_chunk_received(chunk)
+
+        # 验证 send_tts_audio 被调用
+        provider.send_tts_audio.assert_called_once()
+
+        # 获取调用参数
+        call_args = provider.send_tts_audio.call_args
+        assert call_args is not None
 
     @pytest.mark.asyncio
     async def test_notify_audio_callbacks_sync(self, remote_stream_config):

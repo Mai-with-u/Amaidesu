@@ -173,6 +173,8 @@ class TestGPTSoVITSOutputProvider:
         # 手动注入 mocks
         provider.tts_client = mock_tts_client
         provider.audio_manager = mock_audio_manager
+        # 设置 _dependencies 以避免 AttributeError
+        provider._dependencies = {}
 
         # 创建有文本的参数
         render_params = RenderParameters(tts_enabled=True, tts_text="测试文本")
@@ -200,6 +202,8 @@ class TestGPTSoVITSOutputProvider:
         # 手动注入 mocks
         provider.tts_client = mock_tts_client
         provider.audio_manager = mock_audio_manager
+        # 设置 _dependencies 以避免 AttributeError
+        provider._dependencies = {}
 
         # 创建有文本的参数
         render_params = RenderParameters(tts_enabled=True, tts_text="测试文本")
@@ -246,6 +250,8 @@ class TestGPTSoVITSOutputProvider:
         # 手动注入 mocks (在 setup 之前)
         provider.tts_client = mock_tts_client
         provider.audio_manager = mock_audio_manager
+        # 设置 _dependencies 以避免 AttributeError
+        provider._dependencies = {}
 
         # 直接调用 render，跳过 setup 以避免创建真实客户端
         # 创建渲染参数

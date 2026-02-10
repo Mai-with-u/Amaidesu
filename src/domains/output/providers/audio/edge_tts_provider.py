@@ -7,6 +7,7 @@ EdgeTTS Provider - Output Domain: 渲染输出实现
 
 import asyncio
 import tempfile
+import time
 from typing import Optional, Dict, Any
 import numpy as np
 
@@ -94,6 +95,9 @@ class EdgeTTSProvider(OutputProvider):
 
         self.audio_manager = AudioDeviceManager(sample_rate=sample_rate, channels=channels, dtype=dtype)
 
+        # 从 dependencies 获取 AudioStreamChannel
+        self.audio_stream_channel = self._dependencies.get("audio_stream_channel")
+
         # 设置输出设备
         if self.output_device_name:
             device_index = find_device_index(
@@ -137,6 +141,12 @@ class EdgeTTSProvider(OutputProvider):
             text: 要合成的文本
         """
         async with self.tts_lock:
+            # 通知订阅者: 音频开始
+            if self.audio_stream_channel:
+                from src.core.streaming.audio_chunk import AudioMetadata
+
+                await self.audio_stream_channel.notify_start(AudioMetadata(text=text, sample_rate=48000, channels=1))
+
             tmp_filename = None
             try:
                 # 合成语音
@@ -145,6 +155,22 @@ class EdgeTTSProvider(OutputProvider):
                 # 计算音频时长
                 duration_seconds = len(audio_array) / samplerate if samplerate > 0 else 3.0
                 self.logger.info(f"音频时长: {duration_seconds:.3f}秒")
+
+                # 发布音频块
+                chunk_size = 1024
+                for i in range(0, len(audio_array), chunk_size):
+                    chunk_data = audio_array[i : i + chunk_size]
+                    if self.audio_stream_channel:
+                        from src.core.streaming.audio_chunk import AudioChunk
+
+                        chunk = AudioChunk(
+                            data=chunk_data.tobytes(),
+                            sample_rate=samplerate,
+                            channels=1,
+                            sequence=i // chunk_size,
+                            timestamp=time.time(),
+                        )
+                        await self.audio_stream_channel.publish(chunk)
 
                 # 播放音频
                 self.logger.info("开始播放音频...")
@@ -155,6 +181,12 @@ class EdgeTTSProvider(OutputProvider):
                 raise RuntimeError(f"TTS渲染失败: {e}") from e
 
             finally:
+                # 通知订阅者: 音频结束
+                if self.audio_stream_channel:
+                    from src.core.streaming.audio_chunk import AudioMetadata
+
+                    await self.audio_stream_channel.notify_end(AudioMetadata(text=text, sample_rate=48000, channels=1))
+
                 # 清理临时文件
                 if tmp_filename and tmp_filename.startswith(tempfile.gettempdir()):
                     try:

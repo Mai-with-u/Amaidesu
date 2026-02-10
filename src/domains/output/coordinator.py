@@ -35,7 +35,6 @@ from src.domains.output.provider_manager import OutputProviderManager
 from src.core.events.payloads import ParametersGeneratedPayload
 from src.domains.output.pipelines.manager import OutputPipelineManager
 from src.domains.output.parameters.render_parameters import RenderParameters
-from src.domains.decision.intent import Intent
 
 if TYPE_CHECKING:
     from src.core.events.payloads import IntentPayload
@@ -76,10 +75,17 @@ class OutputCoordinator:
 
         self._is_setup = False
         self._event_handler_registered = False
+        self._audio_stream_channel = None
 
         self.logger.info("OutputCoordinator 初始化完成")
 
-    async def setup(self, config: Dict[str, Any], config_service=None, root_config: Optional[Dict[str, Any]] = None):
+    async def setup(
+        self,
+        config: Dict[str, Any],
+        config_service=None,
+        root_config: Optional[Dict[str, Any]] = None,
+        audio_stream_channel=None,
+    ) -> None:
         """
         设置数据流协调器
 
@@ -87,8 +93,12 @@ class OutputCoordinator:
             config: 输出Provider配置（来自[providers.output]）
             config_service: ConfigService实例（用于三级配置加载）
             root_config: 根配置字典（包含 pipelines 配置）
+            audio_stream_channel: AudioStreamChannel 实例（从 AmaidesuCore 注入）
         """
         self.logger.info("开始设置数据流协调器...")
+
+        # 保存 AudioStreamChannel 引用
+        self._audio_stream_channel = audio_stream_channel
 
         # 创建输出Provider管理器（如果未提供）
         if self.output_provider_manager is None:
@@ -147,10 +157,15 @@ class OutputCoordinator:
 
         self.logger.info("启动数据流协调器...")
 
-        # 启动OutputProvider
+        # 启动 OutputProvider，注入 AudioStreamChannel
         if self.output_provider_manager:
             try:
-                await self.output_provider_manager.setup_all_providers(self.event_bus)
+                # 构建 dependencies 字典
+                dependencies = {}
+                if self._audio_stream_channel:
+                    dependencies["audio_stream_channel"] = self._audio_stream_channel
+
+                await self.output_provider_manager.setup_all_providers(self.event_bus, dependencies=dependencies)
                 self.logger.info("OutputProvider 已启动")
             except Exception as e:
                 self.logger.error(f"启动 OutputProvider 失败: {e}", exc_info=True)

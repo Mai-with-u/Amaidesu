@@ -323,11 +323,61 @@ EventBus 技术上允许任何订阅模式，但架构层面强制约束：
 
 详细规则见：[数据流规则](data-flow.md)
 
+## AudioStreamChannel 与 EventBus 的协作
+
+AudioStreamChannel 是专门的音频数据传输通道，与 EventBus 配合使用：
+
+### 职责分离
+
+- **EventBus**: 元数据事件（开始/结束/状态通知）
+- **AudioStreamChannel**: 音频数据流（chunk 数据传输）
+
+### 为什么需要分离？
+
+音频数据量大，通过 EventBus 传输会：
+- 序列化开销大（EventBus 支持持久化，需要序列化）
+- 不适合高频大块数据传输
+- 缺乏背压机制
+
+AudioStreamChannel 提供：
+- 低开销进程内队列传输（传递 Python 对象引用）
+- 背压策略（BLOCK/DROP_NEWEST/DROP_OLDEST/FAIL_FAST）
+- 音频专用功能（重采样、采样率转换）
+
+### 使用示例
+
+```python
+# EventBus: 发布 TTS 触发事件
+await event_bus.emit(
+    CoreEvents.EXPRESSION_PARAMETERS_GENERATED,
+    ExpressionParametersPayload(parameters=expr_params),
+    source="ExpressionGenerator"
+)
+
+# AudioStreamChannel: TTS Provider 发布音频数据
+await audio_channel.notify_start(AudioMetadata(text=text, sample_rate=48000))
+for chunk in audio_chunks:
+    await audio_channel.publish(AudioChunk(data=chunk, sample_rate=48000))
+await audio_channel.notify_end(AudioMetadata(text=text, sample_rate=48000))
+
+# VTS Provider: 订阅音频数据用于口型同步
+await audio_channel.subscribe(
+    name="vts_lip_sync",
+    on_audio_chunk=self._on_lip_sync_chunk,
+    config=SubscriberConfig(
+        queue_size=100,
+        backpressure_strategy=BackpressureStrategy.DROP_NEWEST
+    )
+)
+```
+
+详细文档见：[AGENTS.md - AudioStreamChannel](../../AGENTS.md#audiostreamchannel-音频流系统)
+
 ## 相关文档
 
 - [数据流规则](data-flow.md) - 事件订阅约束
-- [架构验证器](../architectural_validator.md) - 运行时验证
-- [EventBus API](../api/event_bus.md) - API 参考
+- [架构验证器](architectural-validator.md) - 运行时验证
+- [AGENTS.md - AudioStreamChannel](../../AGENTS.md#audiostreamchannel-音频流系统) - 音频流系统
 
 ---
 

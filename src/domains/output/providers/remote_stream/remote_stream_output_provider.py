@@ -23,7 +23,7 @@ from src.core.utils.logger import get_logger
 from src.services.config.schemas.schemas.base import BaseProviderConfig
 
 if TYPE_CHECKING:
-    pass
+    from src.core.streaming.audio_chunk import AudioMetadata, AudioChunk
 
 try:
     import websockets
@@ -181,6 +181,9 @@ class RemoteStreamOutputProvider(OutputProvider):
         self.audio_callbacks: Dict[str, List[Callable]] = {"data": []}
         self.image_callbacks: Dict[str, List[Callable]] = {"data": []}
 
+        # AudioStreamChannel 订阅
+        self._remote_subscription_id: Optional[str] = None
+
     async def _setup_internal(self):
         """内部设置逻辑"""
         # 检查依赖
@@ -191,7 +194,20 @@ class RemoteStreamOutputProvider(OutputProvider):
         # 注册事件监听
         if self.event_bus:
             self.event_bus.on(CoreEvents.REMOTE_STREAM_REQUEST_IMAGE, self._handle_image_request)
-            self.event_bus.on(CoreEvents.REMOTE_STREAM_SEND_TTS, self._handle_tts_request)
+
+        # 注册 AudioStreamChannel 订阅
+        audio_channel = self._dependencies.get("audio_stream_channel") if hasattr(self, "_dependencies") else None
+        if audio_channel:
+            from src.core.streaming.backpressure import SubscriberConfig, BackpressureStrategy
+
+            self._remote_subscription_id = await audio_channel.subscribe(
+                name="remote_stream",
+                on_audio_chunk=self._on_audio_chunk_received,
+                on_audio_start=self._on_audio_start,
+                on_audio_end=self._on_audio_end,
+                config=SubscriberConfig(queue_size=200, backpressure_strategy=BackpressureStrategy.DROP_NEWEST),
+            )
+            self.logger.info("RemoteStream 已订阅 AudioStreamChannel")
 
         # 启动WebSocket服务器或客户端
         if self.server_mode:
@@ -222,6 +238,17 @@ class RemoteStreamOutputProvider(OutputProvider):
     async def _cleanup_internal(self):
         """内部清理逻辑"""
         self.logger.info("正在清理RemoteStreamOutputProvider...")
+
+        # 取消 AudioStreamChannel 订阅
+        audio_channel = self._dependencies.get("audio_stream_channel") if hasattr(self, "_dependencies") else None
+        if audio_channel and self._remote_subscription_id:
+            try:
+                await audio_channel.unsubscribe(self._remote_subscription_id)
+                self.logger.info("RemoteStream 已取消订阅 AudioStreamChannel")
+            except Exception as e:
+                self.logger.error(f"取消 AudioStreamChannel 订阅失败: {e}")
+            finally:
+                self._remote_subscription_id = None
 
         # 取消自动重连
         self.should_reconnect = False
@@ -259,7 +286,6 @@ class RemoteStreamOutputProvider(OutputProvider):
         # 取消事件监听
         if self.event_bus:
             self.event_bus.off(CoreEvents.REMOTE_STREAM_REQUEST_IMAGE, self._handle_image_request)
-            self.event_bus.off(CoreEvents.REMOTE_STREAM_SEND_TTS, self._handle_tts_request)
 
         self._is_connected = False
         self.logger.info("RemoteStreamOutputProvider 已清理")
@@ -626,14 +652,30 @@ class RemoteStreamOutputProvider(OutputProvider):
         # 转发为实际的图像请求消息
         await self.request_image()
 
-    async def _handle_tts_request(self, event_name: str, data: Any, source: str):
-        """处理TTS发送请求事件"""
-        self.logger.debug(f"收到TTS发送请求: {data}")
+    # 注意: _handle_tts_request 已移除，TTS 音频现在通过 AudioStreamChannel 传输
 
-        # 从data中提取音频数据
-        audio_data = data.get("audio_data") if isinstance(data, dict) else None
-        if audio_data and isinstance(audio_data, bytes):
+    # ===== AudioStreamChannel 回调 =====
+
+    async def _on_audio_start(self, metadata: "AudioMetadata"):
+        """AudioStreamChannel: 音频流开始回调（可选实现）"""
+        self.logger.debug(f"收到音频流开始通知: {metadata.text[:30] if metadata.text else '(empty)'}...")
+        # 可选：实现开始处理逻辑（如通知远程设备准备接收）
+
+    async def _on_audio_chunk_received(self, chunk: "AudioChunk"):
+        """AudioStreamChannel: 音频块回调"""
+        try:
+            # RemoteStream 期望 16000 Hz
+            from src.core.streaming.audio_utils import resample_audio
+
+            audio_data = resample_audio(chunk.data, chunk.sample_rate, 16000)
             await self.send_tts_audio(audio_data)
+        except Exception as e:
+            self.logger.error(f"处理音频块失败: {e}")
+
+    async def _on_audio_end(self, metadata: "AudioMetadata"):
+        """AudioStreamChannel: 音频流结束回调（可选实现）"""
+        self.logger.debug("收到音频流结束通知")
+        # 可选：实现结束处理逻辑（如通知远程设备音频传输完成）
 
     # ===== 信息获取 =====
 

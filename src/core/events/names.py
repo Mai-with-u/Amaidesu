@@ -57,11 +57,7 @@ class CoreEvents:
 
     # 远程流事件
     REMOTE_STREAM_REQUEST_IMAGE = "remote_stream.request_image"
-    REMOTE_STREAM_SEND_TTS = "remote_stream.send_tts"
 
     # VTS 相关事件（跨 Provider 通信）
     VTS_SEND_EMOTION = "vts.send_emotion"
     VTS_SEND_STATE = "vts.send_state"
-
-    # TTS 相关事件
-    TTS_AUDIO_READY = "tts.audio_ready"

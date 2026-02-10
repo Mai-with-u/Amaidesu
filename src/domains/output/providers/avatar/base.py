@@ -9,7 +9,7 @@ AvatarProviderBase - 虚拟形象 Provider 抽象基类
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, TYPE_CHECKING
+from typing import Dict, Any, Optional, TYPE_CHECKING
 from src.core.base.output_provider import OutputProvider
 from src.core.utils.logger import get_logger
 
@@ -29,12 +29,24 @@ class AvatarProviderBase(OutputProvider, ABC):
         super().__init__(config)
         self.logger = get_logger(self.__class__.__name__)
         self._is_connected = False
+        self._dependencies: Dict[str, Any] = {}
 
-    async def setup(self, event_bus: "EventBus"):
-        """设置 Provider（通用逻辑）"""
+    async def setup(
+        self,
+        event_bus: "EventBus",
+        dependencies: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        设置 Provider
+
+        Args:
+            event_bus: EventBus 实例
+            dependencies: 可选的依赖注入（替代 core）
+        """
         from src.core.events.names import CoreEvents
 
         self.event_bus = event_bus
+        self._dependencies = dependencies or {}
 
         # 订阅 DECISION_INTENT_GENERATED 事件
         event_bus.on(CoreEvents.DECISION_INTENT_GENERATED, self._on_intent_ready)

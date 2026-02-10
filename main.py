@@ -269,6 +269,14 @@ async def create_app_components(
     else:
         logger.info("未检测到输出Provider配置，输出协调器功能将被禁用")
 
+    # 创建 AudioStreamChannel
+    from src.core.streaming.audio_stream_channel import AudioStreamChannel
+
+    logger.info("初始化 AudioStreamChannel...")
+    audio_stream_channel = AudioStreamChannel("tts")
+    await audio_stream_channel.start()
+    logger.info("AudioStreamChannel 已创建并启动")
+
     # LLM 服务
     logger.info("初始化 LLM 服务...")
     llm_service = LLMManager()
@@ -351,7 +359,12 @@ async def create_app_components(
     output_coordinator: Optional[OutputCoordinator] = OutputCoordinator(event_bus) if output_config else None
     if output_coordinator:
         try:
-            await output_coordinator.setup(output_config, config_service=config_service, root_config=config)
+            await output_coordinator.setup(
+                output_config,
+                config_service=config_service,
+                root_config=config,
+                audio_stream_channel=audio_stream_channel,
+            )
             logger.info("输出协调器已设置（Output Domain）")
         except Exception as e:
             logger.error(f"设置输出协调器失败: {e}", exc_info=True)
