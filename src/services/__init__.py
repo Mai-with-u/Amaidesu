@@ -8,7 +8,6 @@
 - llm: LLM 服务 (LLMManager)
 - dg_lab: DG-LAB 硬件控制服务 (DGLabService)
 - config: 配置服务 (ConfigService)
-- context: 上下文管理器 (ContextManager)
 
 使用示例:
     ```python

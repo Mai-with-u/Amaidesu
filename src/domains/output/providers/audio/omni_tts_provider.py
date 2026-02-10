@@ -23,13 +23,16 @@ from src.core.base.output_provider import OutputProvider
 from src.domains.output.parameters.render_parameters import RenderParameters
 from src.core.utils.logger import get_logger
 from src.services.config.schemas.schemas.base import BaseProviderConfig
+from src.services.tts import AudioDeviceManager
+
+# 导入工具函数
+from .utils.device_finder import find_device_index
+from .utils.wav_decoder import extract_pcm_from_wav
 
 # 检查依赖
 TTS_DEPENDENCIES_OK = False
 try:
     import requests
-    import sounddevice as sd
-    import soundfile as sf  # noqa: F401
 
     TTS_DEPENDENCIES_OK = True
 except ImportError:
@@ -110,10 +113,12 @@ class OmniTTSProvider(OutputProvider):
 
         # 音频输出配置
         self.output_device_name = self.typed_config.output_device_name
-        self.output_device_index = None
         self.sample_rate = self.typed_config.sample_rate
         self.channels = 1
         self.dtype = np.int16
+
+        # 音频设备管理器（在_setup_internal中初始化）
+        self.audio_manager: Optional[AudioDeviceManager] = None
 
         # 服务集成配置
         self.use_text_cleanup = self.typed_config.use_text_cleanup
@@ -137,56 +142,25 @@ class OmniTTSProvider(OutputProvider):
     async def _setup_internal(self):
         """内部设置逻辑"""
         if not TTS_DEPENDENCIES_OK:
-            self.logger.error("TTS依赖缺失，请安装: pip install requests sounddevice soundfile")
+            self.logger.error("TTS依赖缺失，请安装: pip install requests")
             raise ImportError("TTS dependencies not available")
 
-        # 查找音频设备
-        self.output_device_index = self._find_device_index(self.output_device_name)
+        # 初始化音频设备管理器
+        self.audio_manager = AudioDeviceManager(sample_rate=self.sample_rate, channels=self.channels, dtype=self.dtype)
 
-        if self.output_device_index is None:
-            self.logger.warning(f"未找到音频设备 '{self.output_device_name}'，使用默认设备")
-        else:
-            self.logger.info(f"使用音频设备索引: {self.output_device_index}")
-
-        # 初始化音频流
-        self.stream = sd.OutputStream(
-            samplerate=self.sample_rate,
-            channels=self.channels,
-            dtype=self.dtype,
-            device=self.output_device_index,
-            callback=self._audio_callback,
-            blocksize=1024,
-        )
+        # 设置输出设备
+        if self.output_device_name:
+            device_index = find_device_index(
+                device_name=self.output_device_name,
+                logger=self.logger,
+                sample_rate=self.sample_rate,
+                channels=self.channels,
+                dtype=self.dtype,
+            )
+            if device_index is not None:
+                self.audio_manager.set_output_device(device_index=device_index)
 
         self.logger.info("OmniTTSProvider设置完成")
-
-    def _find_device_index(self, device_name: Optional[str]) -> Optional[int]:
-        """查找音频设备索引"""
-        if not device_name:
-            return None
-
-        try:
-            devices = sd.query_devices()
-            for i, device in enumerate(devices):
-                if device_name.lower() in device["name"].lower() and device["max_output_channels"] > 0:
-                    self.logger.info(f"找到音频设备 '{device['name']}'，索引: {i}")
-                    return i
-            self.logger.warning(f"未找到音频设备 '{device_name}'")
-            return None
-        except Exception as e:
-            self.logger.error(f"查找音频设备失败: {e}")
-            return None
-
-    def _audio_callback(self, outdata, frames, time_info, status):
-        """音频播放回调"""
-        try:
-            if len(self.audio_data_queue) > 0:
-                data = self.audio_data_queue.popleft()
-                outdata[:] = np.frombuffer(data, dtype=self.dtype).reshape(frames, self.channels)
-            else:
-                outdata[:] = 0  # 静音
-        except Exception as e:
-            self.logger.error(f"音频回调失败: {e}")
 
     async def _render_internal(self, parameters: RenderParameters):
         """
@@ -202,10 +176,6 @@ class OmniTTSProvider(OutputProvider):
         text = parameters.tts_text
 
         try:
-            # 启动音频流
-            if self.stream and not self.stream.active:
-                self.stream.start()
-
             # 执行TTS
             await self._speak(text)
 
@@ -281,7 +251,7 @@ class OmniTTSProvider(OutputProvider):
                 wav_data = wav_chunk
 
             # 提取PCM数据
-            pcm_data = self._extract_pcm_from_wav(wav_data)
+            pcm_data = extract_pcm_from_wav(wav_data)
 
             # 缓冲PCM数据
             async with self.input_pcm_queue_lock:
@@ -299,34 +269,13 @@ class OmniTTSProvider(OutputProvider):
         except Exception as e:
             self.logger.error(f"解码音频数据失败: {e}")
 
-    def _extract_pcm_from_wav(self, wav_data: bytes) -> bytes:
-        """从WAV数据中提取PCM数据"""
-        try:
-            # WAV header is at least 44 bytes
-            if len(wav_data) < 44:
-                return wav_data
-
-            # Find "data" chunk
-            data_pos = wav_data.find(b"data")
-            if data_pos == -1:
-                return wav_data[44:]  # Skip standard header
-
-            # Skip "data" marker and size (4 + 4 = 8 bytes)
-            pcm_start = data_pos + 8
-            return wav_data[pcm_start:]
-
-        except Exception as e:
-            self.logger.error(f"提取PCM数据失败: {e}")
-            return wav_data
-
     async def _cleanup_internal(self):
         """内部清理逻辑"""
         self.logger.info("OmniTTSProvider清理中...")
 
-        # 停止音频流
-        if self.stream and self.stream.active:
-            self.stream.stop()
-            self.stream.close()
+        # 停止音频播放
+        if self.audio_manager:
+            self.audio_manager.stop_audio()
 
         # 清空缓冲区
         self.input_pcm_queue.clear()
@@ -341,6 +290,5 @@ class OmniTTSProvider(OutputProvider):
             "is_connected": True,
             "render_count": self.render_count,
             "error_count": self.error_count,
-            "stream_active": self.stream.active if self.stream else False,
             "buffer_size": len(self.input_pcm_queue),
         }

@@ -4,7 +4,6 @@
 运行: uv run pytest tests/domains/input/pipelines/test_similar_filter_pipeline.py -v
 """
 
-import asyncio
 import pytest
 from src.domains.input.pipelines.similar_filter.pipeline import SimilarFilterTextPipeline
 from src.domains.input.pipelines.manager import PipelineContext

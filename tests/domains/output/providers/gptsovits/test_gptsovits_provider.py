@@ -5,7 +5,7 @@ GPTSoVITSOutputProvider 测试
 import pytest
 import numpy as np
 from unittest.mock import AsyncMock, MagicMock
-from src.domains.output.providers.gptsovits import GPTSoVITSOutputProvider
+from src.domains.output.providers.audio import GPTSoVITSOutputProvider
 from src.domains.output.parameters.render_parameters import RenderParameters
 
 
@@ -212,34 +212,6 @@ class TestGPTSoVITSOutputProvider:
         # 验证错误计数增加
         assert provider.error_count == 1
         assert provider.render_count == 0
-
-    @pytest.mark.asyncio
-    async def test_decode_wav_chunk_base64(self, gptsovits_config):
-        """测试解码 base64 编码的 WAV 块"""
-        import base64
-
-        provider = GPTSoVITSOutputProvider(gptsovits_config)
-
-        # 创建一个简单的 WAV 数据
-        wav_data = b"RIFF" + b"\x00" * 40 + b"data" + b"\x00" * 4 + b"PCM_DATA"
-        base64_data = base64.b64encode(wav_data).decode("utf-8")
-
-        result = await provider._decode_wav_chunk(base64_data)
-
-        assert result is not None
-        assert isinstance(result, np.ndarray)
-
-    @pytest.mark.asyncio
-    async def test_decode_wav_chunk_raw(self, gptsovits_config):
-        """测试解码原始 WAV 块"""
-        provider = GPTSoVITSOutputProvider(gptsovits_config)
-
-        # 创建原始 PCM 数据
-        pcm_data = b"\x00\x01" * 100
-        result = await provider._decode_wav_chunk(pcm_data)
-
-        assert result is not None
-        assert len(result) == 100
 
     @pytest.mark.asyncio
     async def test_process_audio_stream(self, gptsovits_config, mock_tts_client, mock_audio_manager):

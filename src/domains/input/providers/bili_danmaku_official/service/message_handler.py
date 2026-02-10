@@ -73,7 +73,7 @@ class BiliMessageHandler:
 
             mock_core = SimpleNamespace(platform="bilibili_live")
 
-            # 如果启用了template_info且有template_items，需要context_manager
+            # 如果启用了template_info且有template_items
             # 这里简化处理，如果需要完整功能，应该从外部注入core
             if self.config.get("enable_template_info", False) and self.template_items:
                 self.logger.warning("template_info功能需要完整的core实例，当前已禁用")

@@ -11,7 +11,6 @@ from typing import Any, Dict, Optional, Tuple
 from src.core.amaidesu_core import AmaidesuCore
 from src.core.provider_registry import ProviderRegistry
 from src.services.config.service import ConfigService
-from src.services.context.manager import ContextManager
 from src.core.event_bus import EventBus
 from src.core.events import register_core_events
 from src.domains.output import OutputCoordinator
@@ -270,11 +269,6 @@ async def create_app_components(
     else:
         logger.info("未检测到输出Provider配置，输出协调器功能将被禁用")
 
-    # 上下文管理器
-    context_manager_config = config.get("context_manager", {})
-    context_manager = ContextManager(context_manager_config)
-    logger.info("已创建上下文管理器实例")
-
     # LLM 服务
     logger.info("初始化 LLM 服务...")
     llm_service = LLMManager()
@@ -368,7 +362,6 @@ async def create_app_components(
     core = AmaidesuCore(
         platform=platform_id,
         pipeline_manager=input_pipeline_manager,
-        context_manager=context_manager,
         event_bus=event_bus,
         llm_service=llm_service,
         decision_provider_manager=decision_provider_manager,

@@ -171,7 +171,6 @@ DGLabService 不符合 Provider 的定义：
 
 类似的共享服务包括：
 - `LLMManager`: 提供 LLM 调用接口
-- `ContextManager`: 管理上下文数据
 - `ConfigService`: 提供配置访问
 
 ### 集成方式

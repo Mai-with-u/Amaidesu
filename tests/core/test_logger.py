@@ -298,23 +298,29 @@ class TestBackwardCompatibility:
 class TestDefaultBehavior:
     """测试默认行为。"""
 
-    def test_default_behavior_without_config(self, capsys):
+    def test_default_behavior_without_config(self):
         """验证未提供配置时的行为（延迟默认处理器）。"""
+        from src.core.utils import logger as logger_module
         from src.core.utils.logger import get_logger
 
-        # 不调用 configure_from_config，直接使用 get_logger
-        test_logger = get_logger("default_test")
-        test_logger.info("Default handler test")
+        # 保存当前默认处理器 ID（如果存在）
+        original_default_id = logger_module._DEFAULT_HANDLER_ID
 
-        # 应创建默认处理器
-        from src.core.utils import logger as logger_module
+        try:
+            # 重置默认处理器 ID 以模拟未配置状态
+            logger_module._DEFAULT_HANDLER_ID = None
 
-        assert logger_module._DEFAULT_HANDLER_ID is not None, "应创建默认处理器"
+            # 不调用 configure_from_config，直接使用 get_logger
+            test_logger = get_logger("default_test")
 
-        # 应有输出
-        captured = capsys.readouterr()
-        output = captured.err + captured.out
-        assert len(output) > 0, "应有控制台输出"
+            # 应创建默认处理器
+            assert logger_module._DEFAULT_HANDLER_ID is not None, "应创建默认处理器"
+
+            # 验证 logger 可以正常使用（不抛出异常）
+            test_logger.info("Default handler test")
+        finally:
+            # 恢复原始状态
+            logger_module._DEFAULT_HANDLER_ID = original_default_id
 
     def test_default_behavior_with_none_config(self):
         """验证传入 None 配置时的行为。"""

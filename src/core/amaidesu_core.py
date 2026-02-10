@@ -9,7 +9,6 @@ from typing import Optional, Any
 
 from src.core.utils.logger import get_logger
 from src.domains.input.pipelines.manager import InputPipelineManager
-from src.services.context.manager import ContextManager
 from src.core.event_bus import EventBus
 from src.domains.decision import DecisionProviderManager
 from src.domains.output import OutputCoordinator
@@ -53,7 +52,6 @@ class AmaidesuCore:
         self,
         platform: str,
         pipeline_manager: Optional[InputPipelineManager] = None,
-        context_manager: Optional[ContextManager] = None,
         event_bus: Optional[EventBus] = None,
         llm_service: Optional[LLMManager] = None,
         decision_provider_manager: Optional[DecisionProviderManager] = None,
@@ -65,7 +63,6 @@ class AmaidesuCore:
         Args:
             platform: 平台标识符 (例如 "amaidesu")。
             pipeline_manager: (可选) 已配置的输入管道管理器。
-            context_manager: (可选) 已配置的上下文管理器。
             event_bus: (可选) 已配置的事件总线。
             llm_service: (可选) 已配置的 LLM 服务。
             decision_provider_manager: (可选) 已配置的决策Provider管理器。
@@ -86,9 +83,6 @@ class AmaidesuCore:
             self.logger.info("输入管道处理功能已禁用")
         else:
             self.logger.info("输入管道处理功能已启用")
-
-        # 设置上下文管理器
-        self._context_manager = context_manager if context_manager is not None else ContextManager({})
 
         # 设置事件总线
         self._event_bus = event_bus
@@ -167,10 +161,6 @@ class AmaidesuCore:
             self.logger.error(f"清理服务时出错: {e}", exc_info=True)
 
         self.logger.info("核心服务已停止")
-
-    def get_context_manager(self) -> ContextManager:
-        """获取上下文管理器实例"""
-        return self._context_manager
 
     @property
     def decision_provider_manager(self) -> Optional[DecisionProviderManager]:

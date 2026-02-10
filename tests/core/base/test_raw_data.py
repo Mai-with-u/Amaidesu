@@ -14,10 +14,8 @@ RawData 单元测试
 
 import time
 import json
-from typing import Dict, Any
 
 import pytest
-from pydantic import ValidationError
 
 from src.core.base.raw_data import RawData
 

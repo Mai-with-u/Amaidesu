@@ -120,6 +120,11 @@ class ArchitecturalValidator:
             "render.completed",
             "render.failed",
         ],
+        "EdgeTTSProvider": [  # 与 TTSProvider 相同（TTSProvider 是其别名）
+            "expression.parameters_generated",
+            "render.completed",
+            "render.failed",
+        ],
         "SubtitleProvider": [
             "expression.parameters_generated",
             "render.completed",
@@ -153,9 +158,6 @@ class ArchitecturalValidator:
 
         # 保存原始方法的引用
         self._original_on = event_bus.on.__func__ if hasattr(event_bus.on, "__func__") else event_bus.on
-        self._original_on_typed = (
-            event_bus.on_typed.__func__ if hasattr(event_bus.on_typed, "__func__") else event_bus.on_typed
-        )
 
         if self.enabled:
             # 包装原始订阅方法
@@ -163,9 +165,10 @@ class ArchitecturalValidator:
             import types
 
             event_bus.on = types.MethodType(self._validated_on, event_bus)
-            event_bus.on_typed = types.MethodType(self._validated_on_typed, event_bus)
 
-    def _validated_on(self, event_bus_instance, event_name: str, handler: Callable, priority: int = 100) -> None:
+    def _validated_on(
+        self, event_bus_instance, event_name: str, handler: Callable, model_class=None, priority: int = 100
+    ) -> None:
         """
         验证后的 on() 方法
 
@@ -175,10 +178,11 @@ class ArchitecturalValidator:
             event_bus_instance: EventBus 实例（通过 MethodType 绑定）
             event_name: 事件名称
             handler: 事件处理器
+            model_class: 模型类（可选）
             priority: 优先级
         """
         if not self.enabled:
-            return self._original_on(event_bus_instance, event_name, handler, priority)
+            return self._original_on(event_bus_instance, event_name, handler, model_class, priority)
 
         # 获取调用者的类名
         subscriber_name = self._get_subscriber_name()
@@ -187,34 +191,7 @@ class ArchitecturalValidator:
         self._validate_subscription(subscriber_name, event_name)
 
         # 调用原始方法
-        return self._original_on(event_bus_instance, event_name, handler, priority)
-
-    def _validated_on_typed(
-        self, event_bus_instance, event_name: str, handler: Callable, model_class, priority: int = 100
-    ) -> None:
-        """
-        验证后的 on_typed() 方法
-
-        在调用原始 on_typed() 方法前，先验证订阅关系是否符合架构约束。
-
-        Args:
-            event_bus_instance: EventBus 实例（通过 MethodType 绑定）
-            event_name: 事件名称
-            handler: 事件处理器
-            model_class: 模型类
-            priority: 优先级
-        """
-        if not self.enabled:
-            return self._original_on_typed(event_bus_instance, event_name, handler, model_class, priority)
-
-        # 获取调用者的类名
-        subscriber_name = self._get_subscriber_name()
-
-        # 验证订阅
-        self._validate_subscription(subscriber_name, event_name)
-
-        # 调用原始方法
-        return self._original_on_typed(event_bus_instance, event_name, handler, model_class, priority)
+        return self._original_on(event_bus_instance, event_name, handler, model_class, priority)
 
     def _get_subscriber_name(self) -> str:
         """
@@ -233,8 +210,8 @@ class ArchitecturalValidator:
 
             # 向上遍历调用栈，跳过：
             # 1. _get_subscriber_name 本身
-            # 2. _validated_on 或 _validated_on_typed
-            # 3. event_bus.on/on_typed (原始方法)
+            # 2. _validated_on
+            # 3. event_bus.on (原始方法)
             # 直到找到实际调用者
             stack_depth = 0
             max_depth = 10  # 防止无限循环
@@ -251,10 +228,8 @@ class ArchitecturalValidator:
                 frame_name = caller_frame.f_code.co_name
                 if frame_name in (
                     "_validated_on",
-                    "_validated_on_typed",
                     "_get_subscriber_name",
                     "on",
-                    "on_typed",
                     "emit",
                 ):
                     continue
@@ -420,7 +395,8 @@ class ArchitecturalValidator:
             "MockDecisionProvider": {"DecisionProvider"},  # 测试类
             # === Output Providers ===
             "VTSProvider": {"OutputProvider"},
-            "TTSProvider": {"OutputProvider"},
+            "TTSProvider": {"OutputProvider"},  # EdgeTTSProvider 别名（向后兼容）
+            "EdgeTTSProvider": {"OutputProvider"},
             "SubtitleProvider": {"OutputProvider"},  # 别名：SubtitleOutputProvider
             "SubtitleOutputProvider": {"OutputProvider"},
             "AvatarOutputProvider": {"OutputProvider"},
@@ -446,7 +422,6 @@ class ArchitecturalValidator:
             import types
 
             self.event_bus.on = types.MethodType(self._original_on, self.event_bus)
-            self.event_bus.on_typed = types.MethodType(self._original_on_typed, self.event_bus)
 
     def enable(self) -> None:
         """启用验证器（重新包装方法）"""
@@ -455,4 +430,3 @@ class ArchitecturalValidator:
             import types
 
             self.event_bus.on = types.MethodType(self._validated_on, self.event_bus)
-            self.event_bus.on_typed = types.MethodType(self._validated_on_typed, self.event_bus)

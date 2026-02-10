@@ -233,8 +233,12 @@ async def test_layer_cleanup_on_error(event_bus):
     decision_manager = DecisionManager(event_bus, llm_service=None)
     await decision_manager.setup("mock", {})
 
-    # 验证已订阅事件
-    assert len(event_bus._handlers.get("normalization.message_ready", [])) > 0
+    # 验证InputCoordinator已订阅事件
+    assert len(event_bus._handlers.get("perception.raw_data.generated", [])) > 0
+
+    # 验证DecisionProvider已初始化
+    assert decision_manager.get_current_provider() is not None
+    assert decision_manager.get_current_provider_name() == "mock"
 
     # 清理
     await decision_manager.cleanup()

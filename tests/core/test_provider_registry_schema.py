@@ -1,9 +1,35 @@
 """测试 ProviderRegistry ConfigSchema 自动提取功能"""
 
+import pytest
 from src.core.provider_registry import ProviderRegistry
 from src.core.base.input_provider import InputProvider
 from src.services.config.schemas.schemas.base import BaseProviderConfig
 from pydantic import Field
+
+
+@pytest.fixture(autouse=True)
+def clear_registry():
+    """每个测试前清空注册表并在测试后恢复"""
+    # 保存当前的注册状态
+    saved_input = dict(ProviderRegistry._input_providers)
+    saved_decision = dict(ProviderRegistry._decision_providers)
+    saved_output = dict(ProviderRegistry._output_providers)
+    saved_schemas = dict(ProviderRegistry._config_schemas)
+
+    # 清空注册表
+    ProviderRegistry.clear_all()
+    yield
+
+    # 恢复注册状态
+    ProviderRegistry._input_providers.clear()
+    ProviderRegistry._decision_providers.clear()
+    ProviderRegistry._output_providers.clear()
+    ProviderRegistry._config_schemas.clear()
+
+    ProviderRegistry._input_providers.update(saved_input)
+    ProviderRegistry._decision_providers.update(saved_decision)
+    ProviderRegistry._output_providers.update(saved_output)
+    ProviderRegistry._config_schemas.update(saved_schemas)
 
 
 class MockTestProviderWithSchema(InputProvider):
@@ -26,9 +52,6 @@ class MockTestProviderWithoutSchema(InputProvider):
 
 def test_schema_auto_extraction_on_register():
     """测试注册 Provider 时自动提取 ConfigSchema"""
-    # 清空注册表
-    ProviderRegistry.clear_all()
-
     # 注册带 Schema 的 Provider
     ProviderRegistry.register_input("mock_test_with_schema", MockTestProviderWithSchema)
 
@@ -41,8 +64,6 @@ def test_schema_auto_extraction_on_register():
 
 def test_get_schema_returns_none_for_provider_without_schema():
     """测试没有 ConfigSchema 的 Provider 返回 None"""
-    ProviderRegistry.clear_all()
-
     # 注册不带 Schema 的 Provider
     ProviderRegistry.register_input("mock_test_without_schema", MockTestProviderWithoutSchema)
 
@@ -53,15 +74,12 @@ def test_get_schema_returns_none_for_provider_without_schema():
 
 def test_get_schema_returns_none_for_nonexistent_provider():
     """测试不存在的 Provider 返回 None"""
-    ProviderRegistry.clear_all()
-
     schema = ProviderRegistry.get_config_schema("nonexistent_provider")
     assert schema is None
 
 
 def test_schema_validation_works():
     """测试 ConfigSchema 能正确验证配置"""
-    ProviderRegistry.clear_all()
     ProviderRegistry.register_input("mock_test_with_schema", MockTestProviderWithSchema)
 
     schema = ProviderRegistry.get_config_schema("mock_test_with_schema")
@@ -79,7 +97,6 @@ def test_schema_validation_works():
 
 def test_clear_all_clears_schemas():
     """测试 clear_all() 清空 Schema 注册表"""
-    ProviderRegistry.clear_all()
     ProviderRegistry.register_input("mock_test_with_schema", MockTestProviderWithSchema)
 
     # 确认 Schema 已注册

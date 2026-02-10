@@ -74,14 +74,30 @@ class MockOutputProvider(OutputProvider):
 
 @pytest.fixture(autouse=True)
 def clear_registry():
-    """每个测试前清空注册表
+    """每个测试前清空注册表并在测试后恢复
 
-    注意：此清空会影响其他测试文件，因为它不会自动恢复内置 Provider。
-    如果测试失败，可能是因为注册表被清空导致其他测试无法找到 Provider。
+    注意：此清空会影响其他测试文件，因此我们在测试后恢复内置 Provider。
     """
+    # 保存当前的注册状态
+    saved_input = dict(ProviderRegistry._input_providers)
+    saved_decision = dict(ProviderRegistry._decision_providers)
+    saved_output = dict(ProviderRegistry._output_providers)
+    saved_schemas = dict(ProviderRegistry._config_schemas)
+
+    # 清空注册表
     ProviderRegistry.clear_all()
     yield
-    # 不在测试后清空，避免影响其他测试文件
+
+    # 恢复注册状态
+    ProviderRegistry._input_providers.clear()
+    ProviderRegistry._decision_providers.clear()
+    ProviderRegistry._output_providers.clear()
+    ProviderRegistry._config_schemas.clear()
+
+    ProviderRegistry._input_providers.update(saved_input)
+    ProviderRegistry._decision_providers.update(saved_decision)
+    ProviderRegistry._output_providers.update(saved_output)
+    ProviderRegistry._config_schemas.update(saved_schemas)
 
 
 class TestInputProviderRegistry:

@@ -13,7 +13,6 @@
 
 import pytest
 import time
-from typing import Dict, Any
 
 from src.core.events.payloads.base import BasePayload
 from src.core.events.payloads.input import RawDataPayload, MessageReadyPayload
@@ -31,7 +30,7 @@ from src.core.events.payloads.output import (
     RenderFailedPayload,
 )
 from src.core.events.payloads.system import StartupPayload, ShutdownPayload, ErrorPayload
-from src.domains.decision.intent import Intent, SourceContext
+from src.domains.decision.intent import Intent
 from src.core.types import EmotionType, ActionType, IntentAction
 from src.core.base.raw_data import RawData
 

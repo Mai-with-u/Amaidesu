@@ -12,7 +12,6 @@ DecisionProvider 单元测试
 运行: uv run pytest tests/core/base/test_decision_provider.py -v
 """
 
-import asyncio
 from typing import TYPE_CHECKING
 
 import pytest

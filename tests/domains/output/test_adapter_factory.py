@@ -5,7 +5,7 @@
 """
 
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from src.domains.output.adapter_factory import AdapterFactory
 from src.domains.output.adapters.base import PlatformAdapter

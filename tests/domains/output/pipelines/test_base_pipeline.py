@@ -5,10 +5,8 @@
 """
 
 import pytest
-import time
 from src.domains.output.pipelines.base import (
     OutputPipelineBase,
-    OutputPipeline,
     PipelineErrorHandling,
     PipelineException,
 )

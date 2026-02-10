@@ -23,8 +23,12 @@
     @event_bus.on(CoreEvents.NORMALIZATION_MESSAGE_READY)
     async def handle_message(payload: MessageReadyPayload):
         message = payload.message
-        print(f"收到消息: {message.text}")
+        logger.debug(f"收到消息: {message.text}")
 """
+
+from src.core.utils.logger import get_logger
+
+logger = get_logger("Payloads")
 
 from .input import (
     RawDataPayload,

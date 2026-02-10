@@ -413,7 +413,7 @@ class ProviderRegistry:
         info = cls.get_registry_info()
         import json
 
-        print(json.dumps(info, indent=2, ensure_ascii=False))
+        cls._logger.debug(json.dumps(info, indent=2, ensure_ascii=False))
 
     # ==================== 配置驱动注册方法 ====================
 
@@ -436,7 +436,7 @@ class ProviderRegistry:
             config_service = ConfigService(base_dir=".")
             config, _, _, _ = config_service.initialize()
             stats = ProviderRegistry.discover_and_register_providers(config_service, config)
-            print(f"注册完成: {stats}")
+            cls._logger.debug(f"注册完成: {stats}")
         """
         cls._logger.info("开始配置驱动的 Provider 注册...")
 
@@ -559,8 +559,8 @@ class ProviderRegistry:
 
         Example:
             stats = ProviderRegistry.get_registration_stats()
-            print(f"已注册 Provider: Input={stats['input']}, "
-                  f"Decision={stats['decision']}, Output={stats['output']}")
+            cls._logger.debug(f"已注册 Provider: Input={stats['input']}, "
+                             f"Decision={stats['decision']}, Output={stats['output']}")
         """
         input_count = len(cls._input_providers)
         decision_count = len(cls._decision_providers)

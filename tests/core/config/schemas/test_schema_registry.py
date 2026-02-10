@@ -11,6 +11,12 @@ This module tests:
 """
 
 import pytest
+
+# 触发 Provider 注册（必须在导入之前执行）
+import src.domains.input.providers  # noqa: F401
+import src.domains.output.providers  # noqa: F401
+import src.domains.decision.providers  # noqa: F401
+
 from src.services.config.schemas import (
     PROVIDER_SCHEMA_REGISTRY,
     list_all_providers,
@@ -145,7 +151,7 @@ class TestNoEnabledField:
         from src.domains.input.providers.console_input import ConsoleInputProvider
         from src.domains.decision.providers.maicore.maicore_decision_provider import MaiCoreDecisionProvider
         from src.domains.output.providers.subtitle import SubtitleOutputProvider
-        from src.domains.output.providers.tts import TTSProvider
+        from src.domains.output.providers.audio import TTSProvider
 
         # 检查几个关键schema（使用自管理Schema的Provider）
         schemas_to_check = [
@@ -284,14 +290,13 @@ class TestSchemaValidation:
         assert config.window_height == 100
 
     def test_tts_schema_validation(self):
-        """测试TTS Schema验证（自管理Schema）"""
-        from src.domains.output.providers.tts import TTSProvider
+        """测试TTS Schema验证（自管理Schema，EdgeTTSProvider 别名）"""
+        from src.domains.output.providers.audio import TTSProvider
 
         config = TTSProvider.ConfigSchema(
-            engine="edge",
             voice="zh-CN-XiaoxiaoNeural",
         )
-        assert config.engine == "edge"
+        assert config.type == "edge_tts"
         assert config.voice == "zh-CN-XiaoxiaoNeural"
 
 
