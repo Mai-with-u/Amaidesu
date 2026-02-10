@@ -140,14 +140,7 @@ class ArchitecturalValidator:
         # === Expression Generator (纯函数，不订阅) ===
         "ExpressionGenerator": None,
         # === Core ===
-        "AmaidesuCore": [
-            "core.*",
-            "perception.*",
-            "normalization.*",
-            "decision.*",
-            "expression.*",
-            "render.*",
-        ],
+        # 注意：组合根在 main.py 中，不需要订阅事件
     }
 
     def __init__(self, event_bus, enabled: bool = True, strict: bool = False):

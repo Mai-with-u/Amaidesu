@@ -4,7 +4,6 @@ import json
 from typing import Dict, Any, Optional, List
 
 from maim_message import MessageBase
-from src.core.amaidesu_core import AmaidesuCore
 from src.core.utils.logger import get_logger
 from .message_cache import MessageCacheService
 from ..message.base import BiliBaseMessage, BiliMessageType
@@ -20,12 +19,12 @@ class BiliMessageHandler:
 
     def __init__(
         self,
-        core: AmaidesuCore,
+        platform: str,
         config: Dict[str, Any],
         context_tags: Optional[List[str]],
         message_cache_service: MessageCacheService,
     ):
-        self.core = core
+        self.platform = platform
         self.config = config
         self.context_tags = context_tags
         self.message_cache_service = message_cache_service
@@ -69,7 +68,7 @@ class BiliMessageHandler:
             )
 
             # 调用消息类自身的to_message_base方法（已移除模板参数）
-            return await bili_message.to_message_base(self.core, self.config, self.context_tags)
+            return await bili_message.to_message_base(self.platform, self.config, self.context_tags)
 
         except Exception as e:
             self.logger.exception(f"处理消息时发生错误: {e}", exc_info=True)

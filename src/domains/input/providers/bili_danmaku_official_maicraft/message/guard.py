@@ -55,14 +55,14 @@ class GuardMessage(BiliBaseMessage):
 
     async def to_message_base(
         self,
-        core,
+        platform: str,
         config: Dict[str, Any],
         context_tags: Optional[list] = None,
     ) -> MessageBase:
         """构建大航海消息的MessageBase对象"""
 
         # 创建基础消息信息
-        message_info = await self._create_base_message_info(core, config, context_tags, 1)
+        message_info = await self._create_base_message_info(platform, config, context_tags, 1)
 
         # 创建消息段 - 大航海消息
         guard_level_map = {

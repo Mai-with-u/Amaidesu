@@ -258,7 +258,7 @@ async def handle_message(self, message):
 
 | 类型 | 命名风格 | 示例 |
 |------|---------|------|
-| 类名 | PascalCase | `AmaidesuCore`, `InputProvider`, `TextPipeline` |
+| 类名 | PascalCase | `EventBus`, `InputProvider`, `TextPipeline` |
 | 函数/方法名 | snake_case | `send_to_maicore`, `register_websocket_handler` |
 | 变量名 | snake_case | `provider_config`, `event_bus` |
 | 私有成员 | 前导下划线 | `_message_handlers`, `_is_connected` |
@@ -440,7 +440,7 @@ await event_bus.subscribe(CoreEvents.NORMALIZATION_MESSAGE_READY, self.handle_me
 - 定义基础接口（Provider 基类、事件系统）
 - 提供共享工具（日志、配置管理）
 - 存放跨域共享的类型（避免循环依赖）
-- 组合根（AmaidesuCore）协调组件
+- 组合根（main.py）协调组件生命周期
 
 **Core 层不应该**：
 - 从 Domain 层导入类型并重导出

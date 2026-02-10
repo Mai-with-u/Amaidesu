@@ -93,7 +93,7 @@ class OutputCoordinator:
             config: 输出Provider配置（来自[providers.output]）
             config_service: ConfigService实例（用于三级配置加载）
             root_config: 根配置字典（包含 pipelines 配置）
-            audio_stream_channel: AudioStreamChannel 实例（从 AmaidesuCore 注入）
+            audio_stream_channel: AudioStreamChannel 实例（在 main.py 中创建）
         """
         self.logger.info("开始设置数据流协调器...")
 

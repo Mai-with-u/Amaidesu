@@ -32,7 +32,7 @@ class BiliBaseMessage(BaseModel):
 
     def to_message_base(
         self,
-        core,
+        platform: str,
         config: Dict[str, Any],
         context_tags: Optional[list] = None,
     ) -> MessageBase:
@@ -41,14 +41,14 @@ class BiliBaseMessage(BaseModel):
         """
         raise NotImplementedError("子类必须实现 to_message_base 方法")
 
-    def _create_user_info(self, core) -> UserInfo:
+    def _create_user_info(self, platform: str) -> UserInfo:
         """创建用户信息对象"""
         uname = self.uname if hasattr(self, "uname") else "未知用户"
         uid = self.open_id if hasattr(self, "open_id") else 0
         user_id = str(uid) if uid else f"bili_{uname}"
 
         return UserInfo(
-            platform=core.platform,
+            platform=platform,
             user_id=user_id,
             user_nickname=uname,
             user_cardname=uname,
@@ -68,14 +68,14 @@ class BiliBaseMessage(BaseModel):
 
     async def _create_base_message_info(
         self,
-        core,
+        platform: str,
         config: Dict[str, Any],
         context_tags: Optional[list] = None,
         maimcore_reply_probability_gain: float = 0,
     ) -> BaseMessageInfo:
         """创建基础消息信息对象"""
 
-        user_info = self._create_user_info(core)
+        user_info = self._create_user_info(platform)
         message_id = self._generate_message_id()
         room_id = self.room_id if hasattr(self, "room_id") else ""
         timestamp = self.timestamp if hasattr(self, "timestamp") else int(time.time())
@@ -84,7 +84,7 @@ class BiliBaseMessage(BaseModel):
         group_info = None
         if config.get("enable_group_info", False):
             group_info = GroupInfo(
-                platform=core.platform,
+                platform=platform,
                 group_id=config.get("group_id", str(room_id)),
                 group_name=config.get("group_name", f"bili_{room_id}"),
             )
@@ -104,7 +104,7 @@ class BiliBaseMessage(BaseModel):
         template_info = None
 
         return BaseMessageInfo(
-            platform=core.platform,
+            platform=platform,
             message_id=message_id,
             time=timestamp,
             user_info=user_info,

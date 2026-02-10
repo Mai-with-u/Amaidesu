@@ -372,7 +372,9 @@ class VTSProvider(BaseAvatarProvider):
                 await self._load_hotkeys()
 
                 # 注册 AudioStreamChannel 订阅（如果启用口型同步）
-                audio_channel = self._dependencies.get("audio_stream_channel") if hasattr(self, "_dependencies") else None
+                audio_channel = (
+                    self._dependencies.get("audio_stream_channel") if hasattr(self, "_dependencies") else None
+                )
                 if audio_channel and self.lip_sync_enabled:
                     from src.core.streaming.backpressure import SubscriberConfig, BackpressureStrategy
 

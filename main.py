@@ -8,7 +8,6 @@ import argparse
 import contextlib
 from typing import Any, Dict, Optional, Tuple
 
-from src.core.amaidesu_core import AmaidesuCore
 from src.core.provider_registry import ProviderRegistry
 from src.services.config.service import ConfigService
 from src.core.event_bus import EventBus
@@ -23,15 +22,6 @@ from src.domains.input.provider_manager import InputProviderManager
 from src.domains.decision import DecisionProviderManager
 
 logger = get_logger("Main")
-
-# 可选服务导入
-try:
-    from src.services.dg_lab import DGLabService, DGLabConfig
-
-    DG_LAB_AVAILABLE = True
-except ImportError:
-    DG_LAB_AVAILABLE = False
-    logger.debug("DGLab 服务不可用（aiohttp 未安装）")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -248,21 +238,18 @@ async def create_app_components(
     config_service: ConfigService,
     arch_validate: bool = False,
 ) -> Tuple[
-    AmaidesuCore,
+    EventBus,
     Optional[OutputCoordinator],
     InputCoordinator,
     LLMManager,
     Optional[DecisionProviderManager],
     Optional[InputProviderManager],
-    Optional[DGLabService],
 ]:
-    """创建并连接核心组件（事件总线、输入域、决策域、协调器、核心、插件）。"""
-    general_config = config.get("general", {})
+    """创建并连接核心组件（事件总线、输入域、决策域、输出协调器）。"""
     # 使用新的 [providers.*] 配置格式
     output_config = config.get("providers", {}).get("output", {})
     decision_config = config.get("providers", {}).get("decision", {})
     input_config = config.get("providers", {}).get("input", {})
-    platform_id = general_config.get("platform_id", "amaidesu")
 
     if output_config:
         logger.info("检测到输出Provider配置，将启用输出协调器")
@@ -283,27 +270,8 @@ async def create_app_components(
     await llm_service.setup(config)
     logger.info("已创建 LLM 服务实例")
 
-    # DGLab 服务（可选）
-    dg_lab_service: Optional[DGLabService] = None
-    dg_lab_config = config.get("dg_lab", {})
-    if dg_lab_config and DG_LAB_AVAILABLE:
-        try:
-            logger.info("初始化 DGLab 服务...")
-            dg_lab_config_obj = DGLabConfig(**dg_lab_config)
-            dg_lab_service = DGLabService(dg_lab_config_obj)
-            await dg_lab_service.setup()
-            logger.info("DGLab 服务已初始化")
-        except Exception as e:
-            logger.error(f"初始化 DGLab 服务失败: {e}", exc_info=True)
-            logger.warning("DGLab 服务不可用，继续启动其他服务")
-            dg_lab_service = None
-    elif dg_lab_config and not DG_LAB_AVAILABLE:
-        logger.warning("配置中启用了 DGLab 服务，但 aiohttp 未安装。请运行 `uv add aiohttp`")
-    else:
-        logger.info("未检测到 DGLab 配置，DGLab 服务将被禁用")
-
     # 事件总线
-    logger.info("初始化事件总线、数据流协调器和 AmaidesuCore...")
+    logger.info("初始化事件总线和数据流协调器...")
     event_bus = EventBus()
     register_core_events()
 
@@ -371,31 +339,13 @@ async def create_app_components(
             logger.warning("输出协调器功能不可用，继续启动其他服务")
             output_coordinator = None
 
-    # 核心
-    core = AmaidesuCore(
-        platform=platform_id,
-        pipeline_manager=input_pipeline_manager,
-        event_bus=event_bus,
-        llm_service=llm_service,
-        decision_provider_manager=decision_provider_manager,
-        output_coordinator=output_coordinator,
-    )
-
-    await core.connect()
-
-    # 注册 DGLab 服务到服务管理器
-    if dg_lab_service:
-        core.register_service("dg_lab", dg_lab_service)
-        logger.info("DGLab 服务已注册到服务管理器")
-
     return (
-        core,
+        event_bus,
         output_coordinator,
         input_coordinator,
         llm_service,
         decision_provider_manager,
         input_provider_manager,
-        dg_lab_service,
     )
 
 
@@ -446,10 +396,9 @@ async def run_shutdown(
     output_coordinator: Optional[OutputCoordinator],
     input_coordinator: InputCoordinator,
     llm_service: LLMManager,
-    core: AmaidesuCore,
+    event_bus: EventBus,
     decision_provider_manager: Optional[DecisionProviderManager],
     input_provider_manager: Optional[InputProviderManager],
-    dg_lab_service: Optional[DGLabService] = None,
 ) -> None:
     """按顺序执行关闭与清理。
 
@@ -458,7 +407,7 @@ async def run_shutdown(
     2. 组件取消订阅（InputCoordinator、OutputCoordinator、DecisionProviderManager）- 在 EventBus.cleanup 之前
     2.4 清理 OutputProvider（必须在 EventBus.cleanup 之前，因为会调用 event_bus.off()）
     3. 等待待处理事件完成（EventBus.cleanup）- 清除所有监听器
-    4. 清理基础设施（LLM、Core等）
+    4. 清理基础设施（LLM等）
 
     关键原则：
     - 所有订阅者的 cleanup() 必须在 EventBus.cleanup() 之前执行
@@ -517,26 +466,20 @@ async def run_shutdown(
 
     # 3. 等待待处理事件完成并清除所有监听器（EventBus 清理）
     logger.info("等待待处理事件完成...")
-    if core and core.event_bus:
+    if event_bus:
         try:
-            await core.event_bus.cleanup()
+            await event_bus.cleanup()
             logger.info("EventBus 清理完成")
         except Exception as e:
             logger.error(f"EventBus 清理失败: {e}")
 
-    # 4. 清理基础设施（LLM、Core等）
+    # 4. 清理基础设施（LLM等）
     logger.info("正在清理核心服务...")
     try:
-        # 注意：DGLab 服务现在由服务管理器自动清理
-        # 不需要在这里手动清理
-
         if llm_service:
             await llm_service.cleanup()
             logger.info("LLM 服务已清理")
-        await asyncio.wait_for(core.disconnect(), timeout=2.0)
         logger.info("核心服务关闭完成")
-    except asyncio.TimeoutError:
-        logger.warning("核心服务关闭超时，强制退出")
     except Exception as e:
         logger.error(f"核心服务关闭时出错: {e}")
 
@@ -580,13 +523,12 @@ async def main() -> None:
     input_pipeline_manager = await load_pipeline_manager(config)
 
     (
-        core,
+        event_bus,
         output_coordinator,
         input_coordinator,
         llm_service,
         decision_provider_manager,
         input_provider_manager,
-        dg_lab_service,
     ) = await create_app_components(config, input_pipeline_manager, config_service, args.arch_validate)
 
     stop_event = asyncio.Event()
@@ -605,10 +547,9 @@ async def main() -> None:
         output_coordinator,
         input_coordinator,
         llm_service,
-        core,
+        event_bus,
         decision_provider_manager,
         input_provider_manager,
-        dg_lab_service,
     )
 
 

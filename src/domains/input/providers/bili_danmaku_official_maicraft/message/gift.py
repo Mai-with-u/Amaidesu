@@ -103,14 +103,14 @@ class GiftMessage(BiliBaseMessage):
 
     async def to_message_base(
         self,
-        core,
+        platform: str,
         config: Dict[str, Any],
         context_tags: Optional[list] = None,
     ) -> MessageBase:
         """构建礼物消息的MessageBase对象"""
 
         # 创建基础消息信息
-        message_info = await self._create_base_message_info(core, config, context_tags, 0.7)
+        message_info = await self._create_base_message_info(platform, config, context_tags, 0.7)
 
         # 创建消息段 - 礼物消息
         gift_name = self.gift_name or "礼物"
