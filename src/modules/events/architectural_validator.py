@@ -396,6 +396,7 @@ class ArchitecturalValidator:
             # === Output Providers ===
             "VTSProvider": {"AvatarProviderBase", "OutputProvider"},  # VTSProvider 继承 AvatarProviderBase
             "WarudoOutputProvider": {"AvatarProviderBase", "OutputProvider"},  # Warudo 继承 AvatarProviderBase
+            "VRChatProvider": {"AvatarProviderBase", "OutputProvider"},
             "AvatarProviderBase": {"OutputProvider"},  # AvatarProviderBase 继承 OutputProvider
             "EdgeTTSProvider": {"OutputProvider"},
             "SubtitleProvider": {"OutputProvider"},  # 别名：SubtitleOutputProvider

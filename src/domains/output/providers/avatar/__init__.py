@@ -12,6 +12,7 @@
 from . import (
     vts,  # noqa: F401
     warudo,  # noqa: F401
+    vrchat,  # noqa: F401
 )
 
 # 导出基类供外部使用
