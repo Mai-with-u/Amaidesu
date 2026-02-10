@@ -308,7 +308,7 @@ async def create_app_components(
     if decision_config:
         logger.info("初始化决策域组件（Decision Domain）...")
         try:
-            decision_provider_manager = DecisionProviderManager(event_bus, llm_service)
+            decision_provider_manager = DecisionProviderManager(event_bus, llm_service, config_service)
 
             # 设置决策Provider（通过 ProviderRegistry 自动创建）
             # 使用新的配置格式：decision_config 包含 active_provider 和 available_providers

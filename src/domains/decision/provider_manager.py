@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from src.core.base.normalized_message import NormalizedMessage
     from src.domains.decision.intent import Intent
     from src.services.llm.manager import LLMManager
+    from src.services.config.service import ConfigService
 
 
 class DecisionProviderManager:
@@ -40,16 +41,23 @@ class DecisionProviderManager:
         - 事件处理逻辑由 DecisionCoordinator 负责
     """
 
-    def __init__(self, event_bus: "EventBus", llm_service: Optional["LLMManager"] = None):
+    def __init__(
+        self,
+        event_bus: "EventBus",
+        llm_service: Optional["LLMManager"] = None,
+        config_service: Optional["ConfigService"] = None,
+    ):
         """
         初始化DecisionProviderManager
 
         Args:
             event_bus: EventBus实例
             llm_service: 可选的LLMManager实例，将作为依赖注入到DecisionProvider
+            config_service: 可选的ConfigService实例，将作为依赖注入到DecisionProvider
         """
         self.event_bus = event_bus
         self._llm_service = llm_service
+        self._config_service = config_service
         self.logger = get_logger("DecisionProviderManager")
         self._current_provider: Optional["DecisionProvider"] = None
         self._provider_name: Optional[str] = None
@@ -120,7 +128,11 @@ class DecisionProviderManager:
             # 初始化Provider
             try:
                 # 准备依赖注入
-                dependencies = {"llm_service": self._llm_service} if self._llm_service else {}
+                dependencies = {}
+                if self._llm_service:
+                    dependencies["llm_service"] = self._llm_service
+                if self._config_service:
+                    dependencies["config_service"] = self._config_service
                 await self._current_provider.setup(self.event_bus, provider_config, dependencies)
                 self.logger.info(f"DecisionProvider '{provider_name}' 初始化成功")
 
