@@ -236,7 +236,6 @@ class TestGPTSoVITSOutputProvider:
 
         # 模拟音频流 - 使用有效的 PCM 数据
         async def mock_audio_gen():
-
             audio_data = np.zeros(1000, dtype=np.int16).tobytes()
             yield audio_data
 

@@ -17,11 +17,7 @@ class TestMaiCoreMemoryLeak:
     @pytest.mark.asyncio
     async def test_pending_futures_initial_state(self):
         """测试初始状态"""
-        provider = MaiCoreDecisionProvider({
-            "host": "localhost",
-            "port": 8000,
-            "platform": "test"
-        })
+        provider = MaiCoreDecisionProvider({"host": "localhost", "port": 8000, "platform": "test"})
 
         # 模拟事件总线
         event_bus = Mock()
@@ -35,11 +31,7 @@ class TestMaiCoreMemoryLeak:
     @pytest.mark.asyncio
     async def test_passive_cleanup_of_completed_futures(self):
         """测试被动清理已完成的 Future"""
-        provider = MaiCoreDecisionProvider({
-            "host": "localhost",
-            "port": 8000,
-            "platform": "test"
-        })
+        provider = MaiCoreDecisionProvider({"host": "localhost", "port": 8000, "platform": "test"})
 
         event_bus = Mock()
         event_bus.emit = AsyncMock()
@@ -62,10 +54,7 @@ class TestMaiCoreMemoryLeak:
 
         # 模拟 decide() 中的被动清理（清理已完成的 Future）
         async with provider._futures_lock:
-            completed_ids = [
-                msg_id for msg_id, fut in provider._pending_futures.items()
-                if fut.done()
-            ]
+            completed_ids = [msg_id for msg_id, fut in provider._pending_futures.items() if fut.done()]
             for msg_id in completed_ids:
                 provider._pending_futures.pop(msg_id, None)
 
@@ -76,11 +65,7 @@ class TestMaiCoreMemoryLeak:
     @pytest.mark.asyncio
     async def test_cancel_old_future_on_duplicate_message_id(self):
         """测试同名 message_id 时取消旧 Future"""
-        provider = MaiCoreDecisionProvider({
-            "host": "localhost",
-            "port": 8000,
-            "platform": "test"
-        })
+        provider = MaiCoreDecisionProvider({"host": "localhost", "port": 8000, "platform": "test"})
 
         event_bus = Mock()
         event_bus.emit = AsyncMock()
@@ -107,11 +92,7 @@ class TestMaiCoreMemoryLeak:
     @pytest.mark.asyncio
     async def test_get_statistics(self):
         """测试获取统计信息"""
-        provider = MaiCoreDecisionProvider({
-            "host": "localhost",
-            "port": 8000,
-            "platform": "test"
-        })
+        provider = MaiCoreDecisionProvider({"host": "localhost", "port": 8000, "platform": "test"})
 
         event_bus = Mock()
         await provider.setup(event_bus, None, None)
@@ -126,11 +107,13 @@ class TestMaiCoreMemoryLeak:
     @pytest.mark.asyncio
     async def test_decision_timeout_config(self):
         """测试 decision_timeout 配置"""
-        provider = MaiCoreDecisionProvider({
-            "host": "localhost",
-            "port": 8000,
-            "platform": "test",
-            "decision_timeout": 60.0  # 自定义超时时间
-        })
+        provider = MaiCoreDecisionProvider(
+            {
+                "host": "localhost",
+                "port": 8000,
+                "platform": "test",
+                "decision_timeout": 60.0,  # 自定义超时时间
+            }
+        )
 
         assert provider._decision_timeout == 60.0

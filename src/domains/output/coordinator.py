@@ -223,12 +223,8 @@ class OutputCoordinator:
 
             # 发布 EXPRESSION_PARAMETERS_GENERATED 事件（事件驱动）
             # TTS/Subtitle Provider 订阅此事件并响应
-            payload = ParametersGeneratedPayload.from_parameters(
-                params, source_intent=intent.model_dump(mode="json")
-            )
-            await self.event_bus.emit(
-                CoreEvents.EXPRESSION_PARAMETERS_GENERATED, payload, source="OutputCoordinator"
-            )
+            payload = ParametersGeneratedPayload.from_parameters(params, source_intent=intent.model_dump(mode="json"))
+            await self.event_bus.emit(CoreEvents.EXPRESSION_PARAMETERS_GENERATED, payload, source="OutputCoordinator")
             self.logger.debug(f"已发布事件: {CoreEvents.EXPRESSION_PARAMETERS_GENERATED}")
 
         except Exception as e:

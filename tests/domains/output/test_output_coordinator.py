@@ -40,7 +40,6 @@ def event_bus():
     return EventBus(enable_stats=True)
 
 
-
 @pytest.fixture
 def mock_output_provider_manager():
     """创建模拟的 OutputProviderManager"""
@@ -128,7 +127,6 @@ async def test_flow_coordinator_initialization_with_dependencies(
     )
 
     assert coordinator.output_provider_manager == mock_output_provider_manager
-
 
 
 @pytest.mark.asyncio
@@ -304,9 +302,6 @@ async def test_lifecycle_flow(
 # =============================================================================
 
 
-
-
-
 @pytest.mark.asyncio
 async def test_on_intent_ready_no_expression_generator(
     event_bus: EventBus,
@@ -328,8 +323,6 @@ async def test_on_intent_ready_no_expression_generator(
     await asyncio.sleep(0.1)  # 等待异步处理
 
     # 应该正常执行，不抛出异常
-
-
 
 
 # =============================================================================
@@ -496,7 +489,6 @@ async def test_full_integration_with_real_dependencies(
     # 清理
     await coordinator.stop()
     await coordinator.cleanup()
-
 
 
 # =============================================================================

@@ -148,7 +148,9 @@ class IntentParser:
         response = await self.llm_service.chat(
             prompt=get_prompt_manager().extract_section("decision/intent_parser", "User Message", text=text),
             client_type="llm_fast",
-            system_message=get_prompt_manager().extract_content_without_section("decision/intent_parser", "User Message", text=text),
+            system_message=get_prompt_manager().extract_content_without_section(
+                "decision/intent_parser", "User Message", text=text
+            ),
             temperature=0.3,  # 低温度，保证稳定输出
             max_tokens=200,
         )
