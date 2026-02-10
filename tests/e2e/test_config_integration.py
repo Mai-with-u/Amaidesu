@@ -89,13 +89,14 @@ async def test_config_service_no_exceptions_on_init(project_base_dir):
 
     # 应该能成功初始化，不抛出任何异常
     service = ConfigService(base_dir=project_base_dir)
-    main_config, main_copied, plugin_copied, pipeline_copied = service.initialize()
+    main_config, main_copied, input_copied, decision_copied, output_copied = service.initialize()
 
     # 验证返回值
     assert main_config is not None
     assert isinstance(main_copied, bool)
-    assert isinstance(plugin_copied, bool)
-    assert isinstance(pipeline_copied, bool)
+    assert isinstance(input_copied, bool)
+    assert isinstance(decision_copied, bool)
+    assert isinstance(output_copied, bool)
 
 
 # ==================== 测试套件 2: Provider 注册表完整性 ====================
@@ -201,7 +202,7 @@ async def test_config_service_three_level_merge(config_service):
     # 这里使用 console_input 作为示例
 
     # 1. 获取合并后的配置（使用Schema）
-    from src.modules.config.schemas.schemas import ConsoleInputProviderConfig
+    from src.modules.config.schemas import ConsoleInputProviderConfig
 
     merged_config = config_service.get_provider_config_with_defaults(
         "console_input",
@@ -353,7 +354,7 @@ async def test_application_startup_simulation(project_base_dir):
 
     # 1. 初始化配置服务
     config_service = ConfigService(base_dir=project_base_dir)
-    main_config, main_copied, _, _ = config_service.initialize()
+    main_config, main_copied, _, _, _ = config_service.initialize()
     assert main_config is not None
 
     # 2. 创建 EventBus
@@ -413,7 +414,7 @@ async def test_config_does_not_throw_exceptions(project_base_dir):
 
         # 使用新的配置API获取 Provider 配置
         from src.domains.output.providers.audio import EdgeTTSProvider
-        from src.modules.config.schemas.schemas import ConsoleInputProviderConfig
+        from src.modules.config.schemas import ConsoleInputProviderConfig
 
         _ = service.get_provider_config_with_defaults("console_input", "input", schema_class=ConsoleInputProviderConfig)
         _ = service.get_provider_config_with_defaults("edge_tts", "output", schema_class=EdgeTTSProvider.ConfigSchema)

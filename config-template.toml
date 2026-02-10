@@ -279,12 +279,10 @@ enabled = true
 active_provider = "maicore"
 # 支持的决策Provider列表（用于运行时切换验证）
 available_providers = [
-    "maicore",        # MaiCore决策（默认，通过WebSocket连接MaiCore）
-    "rule_engine",    # 规则引擎（本地规则匹配，低延迟）
-    "local_llm",      # 本地LLM（直接调用LLM生成回复）
-    "keyword_action", # 关键词动作决策（基于规则的关键词匹配）
-    "maicraft",       # MaiCraft弹幕游戏决策
-    "mock",           # 模拟Provider（用于测试）
+    "maicore",  # MaiCore决策（默认，通过WebSocket连接MaiCore）
+    "llm",      # LLM（直接调用LLM生成回复）
+    "maicraft", # MaiCraft弹幕游戏决策
+    "mock",     # 模拟Provider（用于测试）
 ]
 
 # MaiCore DecisionProvider 配置
@@ -301,28 +299,17 @@ available_providers = [
 # action_cooldown_seconds = 5.0       # 同一 Action 的最小间隔（秒）
 # max_suggested_actions = 3           # 每条消息最大建议数量
 
-# LocalLLM DecisionProvider 配置
-[providers.decision.local_llm]
+# LLM DecisionProvider 配置
+[providers.decision.llm]
 # 降级模式（LLM调用失败时的行为）
 fallback_mode = "simple"  # simple（返回原始文本） | echo（回声） | error（抛出异常）
 # 注意：prompt_template 和 client_type 已移至 PromptManager 统一管理
-# 提示词位置：src/prompts/templates/decision/local_llm_intent_parser.md.j2
-
-# RuleEngine DecisionProvider 配置
-[providers.decision.rule_engine]
-# 规则文件路径
-rules_file = "config/rules.json"
-# 默认响应
-default_response = "我不理解你的意思"
-# 是否区分大小写
-case_sensitive = false
-# 匹配模式
-match_mode = "any"  # any（任一关键词匹配） | all（所有关键词匹配）
+# 提示词位置：src/prompts/templates/decision/llm_intent_parser.md.j2
 
 # Mock DecisionProvider 配置
 # [providers.decision.overrides]
 # maicore.host = "192.168.1.100"
-# local_llm.client_type = "llm_fast"
+# llm.client_type = "llm_fast"
 
 # ========== 新增 Provider 配置示例 ==========
 
@@ -375,22 +362,6 @@ match_mode = "any"  # any（任一关键词匹配） | all（所有关键词匹�
 # # 模板信息（可选）
 # enable_template_info = false
 # template_items = {}
-
-# --- KeywordActionDecisionProvider: 关键词动作决策 ---
-# [providers.decision.keyword_action]
-# type = "keyword_action"
-# global_cooldown = 1.0
-# default_response = ""
-#
-# [[providers.decision.keyword_action.actions]]
-# name = "微笑动作"
-# enabled = true
-# keywords = ["微笑", "smile", "😊"]
-# match_mode = "anywhere"
-# cooldown = 3.0
-# action_type = "hotkey"
-# action_params = { key = "smile" }
-# priority = 50
 
 # --- MaicraftDecisionProvider: 弹幕互动游戏决策 ---
 # [providers.decision.maicraft]

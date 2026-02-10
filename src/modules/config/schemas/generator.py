@@ -8,7 +8,7 @@
 - ensure_provider_config(): 确保 Provider 配置文件存在
 
 使用示例:
-    from src.modules.config.schemas.schemas.generator import generate_toml, ensure_provider_config
+    from src.modules.config.schemas.generator import generate_toml, ensure_provider_config
     from pydantic import BaseModel
 
     class MyProviderConfig(BaseModel):

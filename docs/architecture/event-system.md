@@ -376,7 +376,6 @@ await audio_channel.subscribe(
 ## 相关文档
 
 - [数据流规则](data-flow.md) - 事件订阅约束
-- [架构验证器](architectural-validator.md) - 运行时验证
 - [AGENTS.md - AudioStreamChannel](../../AGENTS.md#audiostreamchannel-音频流系统) - 音频流系统
 
 ---

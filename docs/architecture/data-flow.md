@@ -132,35 +132,6 @@ class OutputCoordinator:
         )
 ```
 
-## 架构验证器
-
-项目包含运行时架构验证器，自动检测违反分层原则的订阅。
-
-### 代码中启用
-
-```python
-from src.modules.events.architectural_validator import ArchitecturalValidator
-
-validator = ArchitecturalValidator(event_bus, enabled=True)
-```
-
-### 错误示例
-
-当尝试违反架构约束时，会抛出 `ArchitecturalViolationError`：
-
-```python
-# ❌ 错误：InputProvider 不应该订阅任何事件
-class MyInputProvider(InputProvider):
-    async def setup(self):
-        # 这会抛出 ArchitecturalViolationError
-        self.event_bus.on(
-            CoreEvents.DECISION_INTENT_GENERATED,
-            self.handler
-        )
-```
-
-详细文档：[架构验证器](../architectural_validator.md)
-
 ## 架构测试
 
 项目包含架构测试自动验证：
@@ -284,7 +255,6 @@ TTS Provider (EdgeTTS/GPTSoVITS/OmniTTS)
 
 - [3域架构总览](overview.md)
 - [事件系统](event-system.md)
-- [架构验证器](architectural-validator.md)
 - [AGENTS.md - AudioStreamChannel](../../AGENTS.md#audiostreamchannel-音频流系统)
 
 ---

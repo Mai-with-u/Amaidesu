@@ -69,11 +69,6 @@
 | ❌ Decision Provider 订阅 Output 事件 | 创建循环依赖 | 同上 |
 | ❌ Input Provider 订阅 Decision/Output 事件 | Input 应只发布，不订阅下游 | 同上 |
 
-**在提交代码前运行架构测试**：
-```bash
-uv run pytest tests/architecture/test_event_flow_constraints.py -v
-```
-
 ## AudioStreamChannel 音频流系统
 
 AudioStreamChannel 是专门的音频数据传输通道，与 EventBus 分离，用于高效传输大量音频数据。
@@ -305,32 +300,6 @@ InputProvider 也提供了 `setup()` 方法作为接口一致性，但它是空�
 1. 继承对应的 Provider 基类（InputProvider/DecisionProvider/OutputProvider）
 2. 在 Provider 的 `__init__.py` 中注册到 ProviderRegistry
 3. 在配置中启用
-
-### 架构验证器配置
-
-**重要**: 添加新的 Provider 时，需要更新架构验证器配置。
-
-**配置位置**: `src/modules/events/architectural_validator.py`
-
-**需要更新的配置**：
-1. `ALLOWED_SUBSCRIPTIONS`: 添加新 Provider 允许订阅的事件
-2. `inheritance_map`: 如果有新的基类，添加到继承映射中
-
-**示例**：
-```python
-# 添加新的 InputProvider 子类
-ALLOWED_SUBSCRIPTIONS["MyNewInputProvider"] = {
-    "allowed_events": ["perception.raw_data.generated"],
-    "base_class": "InputProvider",
-    "description": "新的输入Provider"
-}
-```
-
-**验证配置**：
-```bash
-# 运行架构测试
-uv run pytest tests/architecture/ -v
-```
 
 **详细指南**：[Provider 开发](docs/development/provider-guide.md)
 

@@ -43,11 +43,6 @@ def parse_args() -> argparse.Namespace:
         help="仅显示指定模块的 INFO/DEBUG 级别日志 (WARNING 及以上级别总是显示)",
     )
     parser.add_argument(
-        "--arch-validate",
-        action="store_true",
-        help="启用架构约束运行时验证（防止违反3域分层原则）",
-    )
-    parser.add_argument(
         "--update-configs",
         action="store_true",
         help="更新所有配置文件到最新版本",
@@ -288,7 +283,6 @@ async def create_app_components(
     config: Dict[str, Any],
     input_pipeline_manager: Optional[InputPipelineManager],
     config_service: ConfigService,
-    arch_validate: bool = False,
 ) -> Tuple[
     ContextService,
     EventBus,
@@ -355,15 +349,6 @@ async def create_app_components(
     logger.info("初始化事件总线和数据流协调器...")
     event_bus = EventBus()
     register_core_events()
-
-    # 启用架构验证（如果指定了 --arch-validate 参数）
-    if arch_validate:
-        from src.core.events.architectural_validator import ArchitecturalValidator
-
-        validator = ArchitecturalValidator(event_bus, enabled=True, strict=False)
-        # 保存引用防止被垃圾回收
-        event_bus._arch_validator = validator
-        logger.info("已启用架构约束运行时验证器")
 
     # 输入Provider管理器 (Input Domain)
     input_provider_manager: Optional[InputProviderManager] = None
@@ -639,7 +624,7 @@ async def main() -> None:
         llm_service,
         decision_provider_manager,
         input_provider_manager,
-    ) = await create_app_components(config, input_pipeline_manager, config_service, args.arch_validate)
+    ) = await create_app_components(config, input_pipeline_manager, config_service)
 
     stop_event = asyncio.Event()
     orig_sigint, orig_sigterm = setup_signal_handlers(stop_event)

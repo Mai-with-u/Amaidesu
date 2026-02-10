@@ -90,9 +90,8 @@ class TestSchemaRegistry:
 
         decision_providers = [
             "maicore",
-            "local_llm",
-            "rule_engine",
-            "mock",
+            "llm",
+            "maicraft",
         ]
 
         for provider in decision_providers:
@@ -114,7 +113,7 @@ class TestSchemaRegistry:
             "obs_control",
             "gptsovits",
             "omni_tts",
-            "avatar",
+            "vrchat",
             "remote_stream",
         ]
 
@@ -317,9 +316,8 @@ class TestRegistryConsistency:
             "read_pingmu",
             "mainosaba",
             "maicore",
-            "local_llm",
-            "rule_engine",
-            "mock",
+            "llm",
+            "maicraft",
         ]
 
         for provider_type in providers_with_type:
@@ -357,8 +355,8 @@ class TestRegistryConsistency:
             "mock_danmaku",
             # Decision
             "maicore",
-            "local_llm",
-            "rule_engine",
+            "llm",
+            "maicraft",
             # Output
             "subtitle",
             "vts",
@@ -389,7 +387,7 @@ class TestRegistryConsistency:
             "obs_control",
             "gptsovits",
             "omni_tts",
-            "avatar",
+            "vrchat",
             "remote_stream",
         ]
 

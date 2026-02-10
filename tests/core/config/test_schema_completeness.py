@@ -359,7 +359,7 @@ class TestCriticalProviders:
 
     def test_vts_schema_complete(self):
         """测试 VTSProvider Schema 完整"""
-        from src.domains.output.providers.vts import VTSProvider
+        from src.domains.output.providers.avatar.vts.vts_provider import VTSProvider
 
         # 验证 ConfigSchema 存在
         assert hasattr(VTSProvider, "ConfigSchema")
