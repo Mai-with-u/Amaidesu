@@ -122,6 +122,11 @@ class ArchitecturalValidator:
             "render.completed",
             "render.failed",
         ],
+        "WarudoOutputProvider": [
+            "decision.intent_generated",  # WarudoOutputProvider 继承 AvatarProviderBase
+            "render.completed",
+            "render.failed",
+        ],
         "EdgeTTSProvider": [
             "expression.parameters_generated",
             "render.completed",
@@ -397,7 +402,7 @@ class ArchitecturalValidator:
             "MockDecisionProvider": {"DecisionProvider"},  # 测试类
             # === Output Providers ===
             "VTSProvider": {"AvatarProviderBase", "OutputProvider"},  # VTSProvider 继承 AvatarProviderBase
-            "WarudoOutputProvider": {"AvatarProviderBase", "OutputProvider"},  # Warudo 也继承 AvatarProviderBase
+            "WarudoOutputProvider": {"AvatarProviderBase", "OutputProvider"},  # Warudo 继承 AvatarProviderBase
             "AvatarProviderBase": {"OutputProvider"},  # AvatarProviderBase 继承 OutputProvider
             "EdgeTTSProvider": {"OutputProvider"},
             "SubtitleProvider": {"OutputProvider"},  # 别名：SubtitleOutputProvider

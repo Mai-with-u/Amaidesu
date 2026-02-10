@@ -1,6 +1,7 @@
-"""Warudo Output Provider"""
+"""Warudo Avatar Provider"""
 
 from .warudo_provider import WarudoOutputProvider
+
 from src.core.provider_registry import ProviderRegistry
 
 # 注册到 ProviderRegistry
