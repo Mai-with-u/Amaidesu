@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from pydantic import Field, field_validator
 
 from src.domains.output.providers.avatar.base import AvatarProviderBase as BaseAvatarProvider
-from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 from src.modules.prompts import get_prompt_manager
 

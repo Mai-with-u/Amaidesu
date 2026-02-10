@@ -3,7 +3,7 @@
 import pytest
 from pydantic import Field
 
-from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.registry import ProviderRegistry
 from src.modules.types.base.input_provider import InputProvider
 

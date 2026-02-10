@@ -10,7 +10,7 @@ from typing import Any, AsyncIterator, Dict, List, Literal, Optional
 
 from pydantic import Field
 
-from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 from src.modules.types.base.input_provider import InputProvider
 from src.modules.types.base.raw_data import RawData

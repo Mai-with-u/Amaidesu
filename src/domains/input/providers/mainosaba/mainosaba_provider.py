@@ -16,7 +16,7 @@ import pyautogui
 from PIL import ImageGrab
 from pydantic import Field, field_validator
 
-from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
 from src.modules.prompts import get_prompt_manager

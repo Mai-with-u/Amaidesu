@@ -16,7 +16,7 @@ from typing import Any, Dict, Optional
 from pydantic import Field
 
 from src.domains.output.providers.avatar.base import AvatarProviderBase
-from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 
 

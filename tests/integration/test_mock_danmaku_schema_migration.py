@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from src.domains.input.providers.mock_danmaku import MockDanmakuInputProvider
 from src.modules.config.schemas.schemas import get_provider_schema
-from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.registry import ProviderRegistry
 
 

@@ -18,7 +18,7 @@ from maim_message import MessageBase, RouteConfig, Router, TargetConfig
 from pydantic import Field
 
 from src.domains.decision.intent import Intent
-from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 from src.modules.types.base.decision_provider import DecisionProvider
 

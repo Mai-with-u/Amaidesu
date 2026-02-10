@@ -95,7 +95,7 @@ class ProviderRegistry:
         if hasattr(provider_class, "ConfigSchema"):
             schema_cls = provider_class.ConfigSchema
             # 延迟导入 BaseProviderConfig 避免循环依赖
-            from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+            from src.modules.config.schemas.base import BaseProviderConfig
 
             try:
                 if issubclass(schema_cls, BaseProviderConfig):
@@ -141,7 +141,7 @@ class ProviderRegistry:
         if hasattr(provider_class, "ConfigSchema"):
             schema_cls = provider_class.ConfigSchema
             # 延迟导入 BaseProviderConfig 避免循环依赖
-            from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+            from src.modules.config.schemas.base import BaseProviderConfig
 
             try:
                 if issubclass(schema_cls, BaseProviderConfig):
@@ -187,7 +187,7 @@ class ProviderRegistry:
         if hasattr(provider_class, "ConfigSchema"):
             schema_cls = provider_class.ConfigSchema
             # 延迟导入 BaseProviderConfig 避免循环依赖
-            from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+            from src.modules.config.schemas.base import BaseProviderConfig
 
             try:
                 if issubclass(schema_cls, BaseProviderConfig):

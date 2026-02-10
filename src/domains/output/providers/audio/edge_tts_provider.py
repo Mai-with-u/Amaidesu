@@ -14,7 +14,7 @@ import numpy as np
 from pydantic import Field
 
 from src.domains.output.parameters.render_parameters import ExpressionParameters
-from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
 from src.modules.tts import AudioDeviceManager

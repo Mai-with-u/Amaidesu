@@ -16,7 +16,7 @@ from typing import Dict, Literal, Optional
 from pydantic import Field, ValidationError
 
 from src.domains.decision.intent import Intent
-from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 from src.modules.types import EmotionType
 from src.modules.types.base.decision_provider import DecisionProvider

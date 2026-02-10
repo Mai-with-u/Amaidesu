@@ -17,7 +17,7 @@ import numpy as np
 from pydantic import Field
 
 from src.domains.output.parameters.render_parameters import RenderParameters
-from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 from src.modules.tts import AudioDeviceManager, GPTSoVITSClient
 from src.modules.types.base.output_provider import OutputProvider

@@ -17,7 +17,7 @@ import src.domains.decision.providers  # noqa: F401
 # 触发 Provider 注册（必须在导入之前执行）
 import src.domains.input.providers  # noqa: F401
 import src.domains.output.providers  # noqa: F401
-from src.modules.config.schemas.schemas.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.registry import ProviderRegistry
 
 

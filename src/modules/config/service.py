@@ -426,7 +426,7 @@ class ConfigService:
 
         Example:
             # 获取输入Provider配置（带Schema验证）
-            from src.modules.config.schemas.schemas.schemas.input_providers import ConsoleInputProviderConfig
+            from src.modules.config.schemas.input_providers import ConsoleInputProviderConfig
             config = config_service.get_provider_config_with_defaults(
                 "console_input", "input", ConsoleInputProviderConfig
             )

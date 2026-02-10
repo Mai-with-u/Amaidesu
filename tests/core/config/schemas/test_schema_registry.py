@@ -17,7 +17,7 @@ import src.domains.decision.providers  # noqa: F401
 # 触发 Provider 注册（必须在导入之前执行）
 import src.domains.input.providers  # noqa: F401
 import src.domains.output.providers  # noqa: F401
-from src.modules.config.schemas.schemas import (
+from src.modules.config.schemas import (
     PROVIDER_SCHEMA_REGISTRY,
     get_provider_schema,
     list_all_providers,
@@ -372,7 +372,7 @@ class TestRegistryConsistency:
 
     def test_output_providers_in_map(self):
         """测试输出Provider在OUTPUT_PROVIDER_CONFIG_MAP中（100%迁移后此映射已废弃）"""
-        from src.modules.config.schemas.schemas import OUTPUT_PROVIDER_CONFIG_MAP
+        from src.modules.config.schemas import OUTPUT_PROVIDER_CONFIG_MAP
 
         # 所有output provider已迁移到自管理Schema
         # OUTPUT_PROVIDER_CONFIG_MAP保留为空仅用于向后兼容
