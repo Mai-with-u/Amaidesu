@@ -14,7 +14,7 @@
 
 # 标准 LLM 配置（用于高质量任务）
 [llm]
-backend = "openai"              # openai | ollama | anthropic
+client = "openai"              # openai | ollama | anthropic
 model = "Pro/deepseek-ai/DeepSeek-V3.2"
 temperature = 0.2
 api_key = "your-api-key"                    # 可选，如果不设置将使用环境变量
@@ -25,7 +25,7 @@ retry_delay = 1.0               # 可选，默认 1.0
 
 # 快速 LLM 配置（用于低延迟任务，如 Avatar 表情分析）
 [llm_fast]
-backend = "openai"
+client = "openai"
 model = "Qwen/Qwen3-8B"
 temperature = 0.2
 api_key = "your-api-key"
@@ -34,7 +34,7 @@ max_tokens = 1024
 
 # 视觉语言模型配置（用于图像理解任务）
 [vlm]
-backend = "openai"
+client = "openai"
 model = "zai-org/GLM-4.6V"
 temperature = 0.3
 api_key = "your-api-key"
@@ -43,7 +43,7 @@ max_tokens = 1024
 
 # 本地 Ollama 配置（可选）
 [llm_local]
-backend = "ollama"
+client = "ollama"
 model = "llama3"
 api_base = "http://localhost:11434/v1"
 api_key = "sk-dummy"            # Ollama 不需要真实 API key

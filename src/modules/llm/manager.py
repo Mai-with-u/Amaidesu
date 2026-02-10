@@ -116,7 +116,7 @@ class LLMManager:
 
     def __init__(self):
         self.logger = get_logger("LLMManager")
-        self._clients: Dict[str, Any] = {}  # client_type -> backend_instance
+        self._clients: Dict[str, Any] = {}  # client_type -> client_instance
         self._client_configs: Dict[str, Dict[str, Any]] = {}  # client_type -> config
         self._config: Dict[str, Any] = {}
         self._token_manager = None
@@ -132,17 +132,17 @@ class LLMManager:
         配置示例：
             ```toml
             [llm]
-            backend = "openai"
+            client = "openai"
             model = "gpt-4"
             api_key = "your-api-key"
 
             [llm_fast]
-            backend = "openai"
+            client = "openai"
             model = "gpt-3.5-turbo"
             api_key = "your-api-key"
 
             [vlm]
-            backend = "openai"
+            client = "openai"
             model = "gpt-4-vision-preview"
             api_key = "your-api-key"
             ```
@@ -174,29 +174,29 @@ class LLMManager:
             client_type: 客户端类型 (llm, llm_fast, vlm, llm_local)
             client_config: 客户端配置
         """
-        # 获取后端类型，默认从配置或使用默认值
-        backend_type = client_config.get("backend", self.DEFAULT_BACKENDS.get(client_type, "openai"))
+        # 获取客户端类型，默认从配置或使用默认值
+        client_impl = client_config.get("client", self.DEFAULT_BACKENDS.get(client_type, "openai"))
 
-        # 动态导入后端实现
-        client_class = self._get_client_class(backend_type)
+        # 动态导入客户端实现
+        client_class = self._get_client_class(client_impl)
 
         # 应用环境变量覆盖（API Key 等）
-        enriched_config = self._enrich_config_with_env(client_config, backend_type)
+        enriched_config = self._enrich_config_with_env(client_config, client_impl)
 
-        # 创建后端实例
+        # 创建客户端实例
         self._clients[client_type] = client_class(enriched_config)
         self._client_configs[client_type] = enriched_config
 
         self.logger.info(
-            f"已初始化客户端 '{client_type}' (后端: {backend_type}, 模型: {enriched_config.get('model', 'N/A')})"
+            f"已初始化客户端 '{client_type}' (客户端: {client_impl}, 模型: {enriched_config.get('model', 'N/A')})"
         )
 
-    def _get_client_class(self, backend_type: str) -> type:
+    def _get_client_class(self, client_impl: str) -> type:
         """
         动态导入客户端类
 
         Args:
-            backend_type: 客户端类型 (openai, ollama, anthropic)
+            client_impl: 客户端实现类型 (openai, ollama, anthropic)
 
         Returns:
             客户端类
@@ -204,27 +204,27 @@ class LLMManager:
         Raises:
             ValueError: 如果客户端类型不支持
         """
-        if backend_type == "openai":
+        if client_impl == "openai":
             from src.modules.llm.clients.openai_client import OpenAIClient
 
             return OpenAIClient
-        elif backend_type == "ollama":
+        elif client_impl == "ollama":
             from src.modules.llm.clients.ollama_client import OllamaClient
 
             return OllamaClient
-        elif backend_type == "anthropic":
+        elif client_impl == "anthropic":
             # 未来可以添加 Anthropic 客户端
             from src.modules.llm.clients.openai_client import OpenAIClient
 
             self.logger.warning("Anthropic 客户端暂未实现，降级到 OpenAI 客户端")
             return OpenAIClient
         else:
-            self.logger.warning(f"未知的客户端类型 '{backend_type}'，降级到 OpenAI 客户端")
+            self.logger.warning(f"未知的客户端类型 '{client_impl}'，降级到 OpenAI 客户端")
             from src.modules.llm.clients.openai_client import OpenAIClient
 
             return OpenAIClient
 
-    def _enrich_config_with_env(self, config: Dict[str, Any], backend_type: str) -> Dict[str, Any]:
+    def _enrich_config_with_env(self, config: Dict[str, Any], client_impl: str) -> Dict[str, Any]:
         """
         使用环境变量丰富配置
 
@@ -232,7 +232,7 @@ class LLMManager:
 
         Args:
             config: 原始配置
-            backend_type: 后端类型
+            client_impl: 客户端实现类型
 
         Returns:
             丰富后的配置
@@ -246,16 +246,16 @@ class LLMManager:
             "anthropic": "ANTHROPIC_API_KEY",
         }
 
-        env_key = env_key_map.get(backend_type)
+        env_key = env_key_map.get(client_impl)
         if env_key and not enriched.get("api_key"):
             enriched["api_key"] = os.environ.get(env_key, "sk-dummy")
 
         # Base URL 环境变量
-        if not enriched.get("base_url") and backend_type == "openai":
+        if not enriched.get("base_url") and client_impl == "openai":
             enriched["base_url"] = os.environ.get("OPENAI_BASE_URL")
 
         # Ollama 特殊处理
-        if backend_type == "ollama" and not enriched.get("base_url"):
+        if client_impl == "ollama" and not enriched.get("base_url"):
             enriched["base_url"] = os.environ.get(
                 "OLLAMA_BASE_URL", enriched.get("api_base", "http://localhost:11434/v1")
             )
@@ -274,25 +274,25 @@ class LLMManager:
         """
         defaults = {
             ClientType.LLM: {
-                "backend": "openai",
+                "client": "openai",
                 "model": "gpt-4o-mini",
                 "temperature": 0.2,
                 "max_tokens": 1024,
             },
             ClientType.LLM_FAST: {
-                "backend": "openai",
+                "client": "openai",
                 "model": "gpt-3.5-turbo",
                 "temperature": 0.2,
                 "max_tokens": 512,
             },
             ClientType.VLM: {
-                "backend": "openai",
+                "client": "openai",
                 "model": "gpt-4-vision-preview",
                 "temperature": 0.3,
                 "max_tokens": 1024,
             },
             ClientType.LLM_LOCAL: {
-                "backend": "ollama",
+                "client": "ollama",
                 "model": "llama3",
                 "base_url": "http://localhost:11434/v1",
             },
@@ -716,7 +716,7 @@ class LLMManager:
         """
         return {
             name: {
-                "backend": client.__class__.__name__,
+                "client": client.__class__.__name__,
                 "config": self._client_configs.get(name, {}),
             }
             for name, client in self._clients.items()

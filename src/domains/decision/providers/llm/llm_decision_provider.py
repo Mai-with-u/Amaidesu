@@ -35,12 +35,12 @@ class LLMPDecisionProvider(DecisionProvider):
     配置示例:
         ```toml
         [llm]
-        backend = "llm"  # 使用的 LLM 客户端（llm, llm_fast, vlm）
+        client = "llm"  # 使用的 LLM 客户端（llm, llm_fast, vlm）
         fallback_mode = "simple"
         ```
 
     属性:
-        backend: 使用的 LLM 客户端
+        client: 使用的 LLM 客户端
         fallback_mode: 降级模式（"simple"返回简单响应，"error"抛出异常）
     """
 
@@ -51,7 +51,7 @@ class LLMPDecisionProvider(DecisionProvider):
         """
 
         type: Literal["llm"] = "llm"
-        backend: Literal["llm", "llm_fast", "vlm"] = Field(default="llm", description="使用的LLM客户端名称")
+        client: Literal["llm", "llm_fast", "vlm"] = Field(default="llm", description="使用的LLM客户端名称")
         fallback_mode: Literal["simple", "echo", "error"] = Field(default="simple", description="降级模式")
 
     def __init__(self, config: Dict[str, Any]):
@@ -75,7 +75,7 @@ class LLMPDecisionProvider(DecisionProvider):
         self._context_service: Optional["ContextService"] = None
 
         # LLM 配置
-        self.client_type = self.typed_config.backend  # 使用的后端类型
+        self.client_type = self.typed_config.client  # 使用的客户端类型
 
         # 降级模式配置
         self.fallback_mode = self.typed_config.fallback_mode
