@@ -74,6 +74,72 @@
 uv run pytest tests/architecture/test_event_flow_constraints.py -v
 ```
 
+## AudioStreamChannel 音频流系统
+
+AudioStreamChannel 是专门的音频数据传输通道，与 EventBus 分离，用于高效传输大量音频数据。
+
+### 与 EventBus 的关系
+
+- **EventBus**: 用于元数据事件（开始/结束/状态通知）
+- **AudioStreamChannel**: 用于音频数据流（chunk 数据传输）
+
+### 发布者（TTS Provider）
+
+所有 TTS Provider 在 `_setup_internal()` 中从 `self._dependencies` 获取 AudioStreamChannel：
+
+```python
+self.audio_stream_channel = self._dependencies.get("audio_stream_channel")
+```
+
+在音频生成时：
+1. 调用 `notify_start(AudioMetadata(text=text, sample_rate=...))` 通知开始
+2. 循环调用 `publish(AudioChunk(data=chunk_bytes, ...))` 发布音频块
+3. 调用 `notify_end(AudioMetadata(...))` 通知结束
+
+### 订阅者（Avatar Provider, Remote Stream Provider）
+
+订阅者在连接/设置阶段注册回调函数：
+
+```python
+await audio_channel.subscribe(
+    name="provider_name",
+    on_audio_start=self._on_audio_start,
+    on_audio_chunk=self._on_audio_chunk,
+    on_audio_end=self._on_audio_end,
+    config=SubscriberConfig(
+        queue_size=100,
+        backpressure_strategy=BackpressureStrategy.DROP_NEWEST,
+    ),
+)
+```
+
+回调方法负责：
+- 接收 AudioChunk
+- 重采样到目标采样率（使用 `resample_audio()`）
+- 处理音频数据（口型同步、网络传输等）
+
+### 背压策略
+
+- **BLOCK**: 队列满时阻塞等待
+- **DROP_NEWEST**: 丢弃新数据（默认，不阻塞 TTS）
+- **DROP_OLDEST**: 替换最旧的数据
+- **FAIL_FAST**: 队列满时抛出异常
+
+### 依赖注入链路
+
+```python
+# main.py
+audio_stream_channel = AudioStreamChannel("tts")
+await output_coordinator.setup(..., audio_stream_channel=audio_stream_channel)
+
+# OutputCoordinator → OutputProviderManager
+dependencies = {"audio_stream_channel": self._audio_stream_channel}
+await self.output_provider_manager.setup_all_providers(event_bus, dependencies)
+
+# Provider
+self.audio_stream_channel = self._dependencies.get("audio_stream_channel")
+```
+
 ### 共享类型
 
 以下类型被多个 Domain 共享，因此放在 `src/core/types/` 中避免循环依赖：
@@ -192,7 +258,7 @@ async def handle_message(self, message):
 
 | 类型 | 命名风格 | 示例 |
 |------|---------|------|
-| 类名 | PascalCase | `AmaidesuCore`, `InputProvider`, `TextPipeline` |
+| 类名 | PascalCase | `EventBus`, `InputProvider`, `TextPipeline` |
 | 函数/方法名 | snake_case | `send_to_maicore`, `register_websocket_handler` |
 | 变量名 | snake_case | `provider_config`, `event_bus` |
 | 私有成员 | 前导下划线 | `_message_handlers`, `_is_connected` |
@@ -346,6 +412,20 @@ await event_bus.subscribe(CoreEvents.NORMALIZATION_MESSAGE_READY, self.handle_me
 | `decision.intent_generated` | Decision Domain | Output Domain | `Intent` |
 | `expression.parameters_generated` | ExpressionGenerator | OutputProviders | `RenderParameters` |
 
+## ContextService 上下文管理
+
+ContextService 提供对话历史管理和多会话支持。
+
+### 用途
+
+- 管理对话历史（内存存储）
+- 支持多会话隔离（通过 session_id）
+- 为 DecisionProvider 提供上下文
+
+### 使用示例
+
+见 `docs/development/context-service.md`（待创建）
+
 ## 3域架构
 
 | 域 | 职责 | 位置 |
@@ -374,7 +454,7 @@ await event_bus.subscribe(CoreEvents.NORMALIZATION_MESSAGE_READY, self.handle_me
 - 定义基础接口（Provider 基类、事件系统）
 - 提供共享工具（日志、配置管理）
 - 存放跨域共享的类型（避免循环依赖）
-- 组合根（AmaidesuCore）协调组件
+- 组合根（main.py）协调组件生命周期
 
 **Core 层不应该**：
 - 从 Domain 层导入类型并重导出
@@ -415,6 +495,24 @@ logger.error("错误日志", exc_info=True)
 - 管道配置：`[pipelines.*]`
 - 根配置：根目录的 `config-template.toml`
 - 首次运行会自动从模板生成 `config.toml`
+
+## Core 层职责边界
+
+**Core 层的职责**：
+- 定义基础接口（Provider 基类、事件系统）
+- 提供共享工具（日志、配置管理）
+- 存放跨域共享的类型（避免循环依赖）
+- 组合根（AmaidesuCore）协调组件
+
+**Core 层不应该**：
+- 从 Domain 层导入类型并重导出
+- 依赖任何 Domain 的具体实现
+- 包含业务逻辑
+
+**示例**：
+- ✓ `src/core/base/raw_data.py`: 定义 RawData 基础类型
+- ✓ `src/core/types/intent.py`: 共享的枚举类型
+- ✗ `src/core/base/base.py`: 重导出 `RenderParameters`（违规）
 
 ## 目录结构
 

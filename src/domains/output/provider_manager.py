@@ -11,7 +11,7 @@ OutputProviderManager - Output Domain: 渲染输出管理器
 """
 
 import asyncio
-from typing import Any, TYPE_CHECKING
+from typing import Any, Dict, Optional, TYPE_CHECKING
 from pydantic import BaseModel, Field
 from src.core.utils.logger import get_logger
 
@@ -116,12 +116,17 @@ class OutputProviderManager:
         self.providers.append(provider)
         self.logger.info(f"Provider已注册: {provider.get_info()['name']}")
 
-    async def setup_all_providers(self, event_bus):
+    async def setup_all_providers(
+        self,
+        event_bus,
+        dependencies: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """
         启动所有Provider
 
         Args:
             event_bus: EventBus实例
+            dependencies: 可选的依赖注入
         """
         self.logger.info(f"正在启动 {len(self.providers)} 个Provider...")
 
@@ -129,14 +134,16 @@ class OutputProviderManager:
             # 并发启动所有Provider
             setup_tasks = []
             for provider in self.providers:
-                setup_tasks.append(provider.setup(event_bus))
+                # 传递 dependencies 给每个 Provider
+                setup_tasks.append(provider.setup(event_bus, dependencies=dependencies))
 
             await asyncio.gather(*setup_tasks, return_exceptions=True)
         else:
             # 串行启动（用于调试）
             for provider in self.providers:
                 try:
-                    await provider.setup(event_bus)
+                    # 传递 dependencies 给每个 Provider
+                    await provider.setup(event_bus, dependencies=dependencies)
                 except Exception as e:
                     self.logger.error(f"Provider启动失败: {provider.get_info()['name']} - {e}")
 
@@ -453,7 +460,7 @@ class OutputProviderManager:
 
         Args:
             config: 输出Provider配置（来自[providers.output]）
-            core: AmaidesuCore实例（可选，用于访问服务）
+            core: 已废弃参数（保留以兼容旧代码，不再使用）
             config_service: ConfigService实例（用于三级配置加载）
 
         配置格式:
@@ -546,7 +553,7 @@ class OutputProviderManager:
         Args:
             provider_type: Provider类型（"tts", "subtitle", "sticker", "vts", "omni_tts", "avatar"等）
             config: Provider配置
-            core: AmaidesuCore实例（可选）
+            core: 已废弃参数（保留以兼容旧代码，不再使用）
 
         Returns:
             Provider实例，如果创建失败返回None

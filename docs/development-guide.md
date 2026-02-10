@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 from aiohttp import web
 from loguru import logger
 
-from src.core.amaidesu_core import AmaidesuCore
+from src.core.event_bus import EventBus
 from src.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -46,7 +46,7 @@ def __init__(self, config: Dict[str, Any]):
 
 | 类型 | 规范 | 示例 |
 |------|------|------|
-| **类名** | PascalCase | `AmaidesuCore`, `InputProvider` |
+| **类名** | PascalCase | `EventBus`, `InputProvider` |
 | **函数/方法名** | snake_case | `send_to_maicore`, `register_websocket_handler` |
 | **变量名** | snake_case | `provider_config`, `event_bus` |
 | **私有成员** | 前导下划线 | `_message_handlers`, `_is_connected` |

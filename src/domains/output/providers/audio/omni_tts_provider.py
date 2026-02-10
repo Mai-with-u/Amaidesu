@@ -13,6 +13,7 @@ OmniTTS Provider - Output Domain: 渲染输出实现
 
 import asyncio
 import base64
+import time
 from typing import Dict, Any, Optional
 from collections import deque
 from pydantic import Field
@@ -137,6 +138,9 @@ class OmniTTSProvider(OutputProvider):
         self.render_count = 0
         self.error_count = 0
 
+        # 音频序列计数器（用于 AudioStreamChannel）
+        self.sequence_count = 0
+
         self.logger.info("OmniTTSProvider初始化完成")
 
     async def _setup_internal(self):
@@ -159,6 +163,9 @@ class OmniTTSProvider(OutputProvider):
             )
             if device_index is not None:
                 self.audio_manager.set_output_device(device_index=device_index)
+
+        # 从 dependencies 获取 AudioStreamChannel
+        self.audio_stream_channel = self._dependencies.get("audio_stream_channel")
 
         self.logger.info("OmniTTSProvider设置完成")
 
@@ -188,6 +195,17 @@ class OmniTTSProvider(OutputProvider):
     async def _speak(self, text: str):
         """执行TTS并播放"""
         async with self.tts_lock:
+            # 通知订阅者: 音频开始
+            if self.audio_stream_channel:
+                from src.core.streaming.audio_chunk import AudioMetadata
+
+                await self.audio_stream_channel.notify_start(
+                    AudioMetadata(text=text, sample_rate=self.sample_rate, channels=self.channels)
+                )
+
+            # 重置序列计数器
+            self.sequence_count = 0
+
             try:
                 # 发起流式TTS请求
                 audio_stream = self._tts_stream(text)
@@ -203,6 +221,15 @@ class OmniTTSProvider(OutputProvider):
             except Exception as e:
                 self.logger.error(f"TTS播放失败: {e}")
                 raise
+
+            finally:
+                # 通知订阅者: 音频结束
+                if self.audio_stream_channel:
+                    from src.core.streaming.audio_chunk import AudioMetadata
+
+                    await self.audio_stream_channel.notify_end(
+                        AudioMetadata(text=text, sample_rate=self.sample_rate, channels=self.channels)
+                    )
 
     def _tts_stream(self, text: str):
         """发起流式TTS请求"""
@@ -264,6 +291,21 @@ class OmniTTSProvider(OutputProvider):
                 async with self.input_pcm_queue_lock:
                     for _ in range(block_size):
                         raw_block += bytes([self.input_pcm_queue.popleft()])
+
+                # 发布音频块
+                if self.audio_stream_channel:
+                    from src.core.streaming.audio_chunk import AudioChunk
+
+                    chunk = AudioChunk(
+                        data=raw_block,
+                        sample_rate=self.sample_rate,
+                        channels=self.channels,
+                        sequence=self.sequence_count,
+                        timestamp=time.time(),
+                    )
+                    await self.audio_stream_channel.publish(chunk)
+                    self.sequence_count += 1
+
                 self.audio_data_queue.append(raw_block)
 
         except Exception as e:

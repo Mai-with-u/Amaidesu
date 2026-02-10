@@ -9,6 +9,7 @@ GPTSoVITS OutputProvider - Output Domain: 渲染输出实现
 """
 
 import asyncio
+import time
 from typing import Dict, Any, Optional
 from collections import deque
 
@@ -155,6 +156,9 @@ class GPTSoVITSOutputProvider(OutputProvider):
         # 加载默认预设
         self.tts_client.load_preset("default")
 
+        # 从 dependencies 获取 AudioStreamChannel
+        self.audio_stream_channel = self._dependencies.get("audio_stream_channel")
+
         self.logger.info("GPTSoVITSOutputProvider设置完成")
 
     async def _cleanup_internal(self):
@@ -195,6 +199,15 @@ class GPTSoVITSOutputProvider(OutputProvider):
 
         try:
             async with self.tts_lock:
+                # 通知订阅者: 音频开始
+                audio_channel = getattr(self, "audio_stream_channel", None)
+                if audio_channel:
+                    from src.core.streaming.audio_chunk import AudioMetadata
+
+                    await audio_channel.notify_start(
+                        AudioMetadata(text=final_text, sample_rate=self.sample_rate, channels=CHANNELS)
+                    )
+
                 # 执行TTS（流式）
                 audio_stream = self.tts_client.tts_stream(
                     text=final_text,
@@ -215,14 +228,37 @@ class GPTSoVITSOutputProvider(OutputProvider):
 
                 # 音频处理和播放
                 all_audio_chunks = []
+                chunk_index = 0
                 async for chunk in self._process_audio_stream(audio_stream):
                     if chunk is not None:
+                        # 发布音频块
+                        if audio_channel:
+                            from src.core.streaming.audio_chunk import AudioChunk
+
+                            audio_chunk = AudioChunk(
+                                data=chunk.tobytes(),
+                                sample_rate=self.sample_rate,
+                                channels=CHANNELS,
+                                sequence=chunk_index,
+                                timestamp=time.time(),
+                            )
+                            await audio_channel.publish(audio_chunk)
+
                         all_audio_chunks.append(chunk)
+                        chunk_index += 1
 
                 # 播放所有音频
                 if all_audio_chunks:
                     full_audio = np.concatenate(all_audio_chunks)
                     await self.audio_manager.play_audio(full_audio)
+
+                # 通知订阅者: 音频结束
+                if audio_channel:
+                    from src.core.streaming.audio_chunk import AudioMetadata
+
+                    await audio_channel.notify_end(
+                        AudioMetadata(text=final_text, sample_rate=self.sample_rate, channels=CHANNELS)
+                    )
 
             self.logger.info(f"TTS播放完成: '{final_text[:30]}...'")
             self.render_count += 1

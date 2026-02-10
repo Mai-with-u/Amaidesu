@@ -32,14 +32,14 @@ class EnterMessage(BiliBaseMessage):
 
     async def to_message_base(
         self,
-        core,
+        platform: str,
         config: Dict[str, Any],
         context_tags: Optional[list] = None,
     ) -> MessageBase:
         """构建进入直播间消息的MessageBase对象"""
 
         # 创建基础消息信息
-        message_info = await self._create_base_message_info(core, config, context_tags)
+        message_info = await self._create_base_message_info(platform, config, context_tags)
 
         # 创建消息段 - 进入直播间消息
         text = f"{self.uname} 进入了直播间"

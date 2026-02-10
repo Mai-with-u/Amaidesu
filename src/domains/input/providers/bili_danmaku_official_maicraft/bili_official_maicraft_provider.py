@@ -98,6 +98,7 @@ class BiliDanmakuOfficialMaiCraftInputProvider(InputProvider):
         """Bilibili官方弹幕+Minecraft转发输入Provider配置"""
 
         type: Literal["bili_danmaku_official_maicraft"] = "bili_danmaku_official_maicraft"
+        platform: str = Field(default="bili_live", description="平台标识")
         id_code: str = Field(..., description="直播间ID代码")
         app_id: str = Field(..., description="应用ID")
         access_key: str = Field(..., description="访问密钥")
@@ -122,6 +123,7 @@ class BiliDanmakuOfficialMaiCraftInputProvider(InputProvider):
 
         # 配置
         self.typed_config = self.ConfigSchema(**config)
+        self.platform = self.typed_config.platform
         self.id_code = self.typed_config.id_code
         self.app_id = self.typed_config.app_id
         self.access_key = self.typed_config.access_key
@@ -168,9 +170,9 @@ class BiliDanmakuOfficialMaiCraftInputProvider(InputProvider):
 
         # 初始化消息处理器
         self.message_handler = BiliMessageHandler(
+            platform=self.platform,
             config=self.config,
             context_tags=self.context_tags,
-            template_items=self.template_items,
             message_cache_service=self.message_cache_service,
         )
 

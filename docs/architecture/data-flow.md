@@ -257,11 +257,35 @@ A: 通过 FlowCoordinator（核心协调器）：
 - 但不直接修改数据流
 - 保持单向原则
 
+## Output Domain 内部的音频流
+
+在 Output Domain 内部，音频数据通过 AudioStreamChannel 传输：
+
+```
+TTS Provider (EdgeTTS/GPTSoVITS/OmniTTS)
+    │
+    ├─ EventBus: expression.parameters_generated (触发 TTS)
+    │
+    └─ AudioStreamChannel: AudioChunk 数据流
+            │
+            ├─> VTSProvider (口型同步)
+            └─> RemoteStreamOutputProvider (网络传输)
+```
+
+### 关键点
+
+- **跨域通信**：仍然通过 EventBus（Input → Decision → Output）
+- **域内音频流**：通过 AudioStreamChannel（TTS → Avatar/RemoteStream）
+- **不违反分层**：AudioStreamChannel 只在 Output Domain 内部使用
+
+详细文档：[AGENTS.md - AudioStreamChannel](../../AGENTS.md#audiostreamchannel-音频流系统)
+
 ## 相关文档
 
 - [3域架构总览](overview.md)
 - [事件系统](event-system.md)
-- [架构验证器](../architectural_validator.md)
+- [架构验证器](architectural-validator.md)
+- [AGENTS.md - AudioStreamChannel](../../AGENTS.md#audiostreamchannel-音频流系统)
 
 ---
 
