@@ -117,6 +117,16 @@ host = "127.0.0.1"
 port = 8080
 callback_path = "/maicore_callback"
 
+# ========== 上下文管理器配置 ==========
+
+[context]
+# 上下文管理器配置
+storage_type = "memory"  # 存储类型: memory 或 file
+max_messages_per_session = 50  # 每个会话保留的最大消息数
+max_sessions = 100  # 最大会话数
+session_timeout_seconds = 3600  # 会话超时时间（秒）
+enable_persistence = false  # 启用持久化（暂未实现）
+
 # ========== 日志配置 ==========
 
 [logging]

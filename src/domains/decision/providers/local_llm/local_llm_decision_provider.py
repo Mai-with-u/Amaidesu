@@ -17,11 +17,13 @@ from src.core.types import EmotionType, ActionType, IntentAction
 from src.core.utils.logger import get_logger
 from src.services.config.schemas.schemas.base import BaseProviderConfig
 from src.prompts import get_prompt_manager
+from src.services.context import MessageRole
 
 if TYPE_CHECKING:
     from src.core.event_bus import EventBus
     from src.services.llm.manager import LLMManager
     from src.core.base.normalized_message import NormalizedMessage
+    from src.services.context import ContextService
 
 
 class LocalLLMDecisionProvider(DecisionProvider):
@@ -69,6 +71,9 @@ class LocalLLMDecisionProvider(DecisionProvider):
         # ConfigService 引用（通过 setup 注入）
         self._config_service = None
 
+        # ContextService 引用（通过 setup 注入）
+        self._context_service: Optional["ContextService"] = None
+
         # LLM 配置
         self.client_type = self.typed_config.backend  # 使用的后端类型
 
@@ -114,6 +119,13 @@ class LocalLLMDecisionProvider(DecisionProvider):
         else:
             self.logger.warning("ConfigService 未通过依赖注入提供，将使用默认人设")
 
+        # 从依赖注入中获取 ContextService
+        if dependencies and "context_service" in dependencies:
+            self._context_service = dependencies["context_service"]
+            self.logger.info("ContextService 已从依赖注入中获取")
+        else:
+            self.logger.warning("ContextService 未通过依赖注入提供，将使用无状态模式")
+
         self.logger.info(f"LocalLLMDecisionProvider 初始化完成 (Client: {self.client_type})")
 
     def _get_persona_config(self) -> Dict[str, Any]:
@@ -136,6 +148,8 @@ class LocalLLMDecisionProvider(DecisionProvider):
         """
         进行决策（通过 LLM 生成响应）
 
+        新增：使用 ContextService 管理对话历史
+
         Args:
             normalized_message: 标准化消息
 
@@ -150,10 +164,42 @@ class LocalLLMDecisionProvider(DecisionProvider):
 
         self._total_requests += 1
 
+        # 获取 session_id（使用 normalized_message.source）
+        session_id = normalized_message.source  # 如 "console_input", "bili_danmaku"
+        self.logger.debug(f"使用 session_id: {session_id}")
+
+        # 保存用户消息到上下文
+        if self._context_service:
+            try:
+                await self._context_service.add_message(
+                    session_id=session_id,
+                    role=MessageRole.USER,
+                    content=normalized_message.text,
+                )
+                self.logger.debug(f"已保存用户消息到上下文 (session: {session_id})")
+            except Exception as e:
+                self.logger.warning(f"保存用户消息到上下文失败: {e}")
+
         # 读取 persona 配置（带默认值）
         persona_config = self._get_persona_config()
 
-        # 构建提示词（使用 PromptManager 渲染模板，传递人设变量）
+        # 获取历史上下文用于构建 prompt
+        history_context = []
+        if self._context_service:
+            try:
+                # 获取最近10条历史消息
+                history = await self._context_service.get_history(session_id, limit=10)
+                # 转换为 OpenAI 格式（排除刚保存的当前用户消息，避免重复）
+                history_context = [
+                    {"role": msg.role.value, "content": msg.content}
+                    for msg in history[:-1]  # 排除刚刚添加的用户消息
+                ]
+                self.logger.debug(f"历史上下文: {len(history_context)} 条消息")
+            except Exception as e:
+                self.logger.warning(f"获取历史上下文失败: {e}")
+
+        # 构建 prompt（使用 PromptManager 渲染模板）
+        # 如果有历史上下文，可以将其注入到 prompt 中
         prompt = get_prompt_manager().render_safe(
             "decision/local_llm",
             text=normalized_message.text,
@@ -164,6 +210,8 @@ class LocalLLMDecisionProvider(DecisionProvider):
             ),
             user_name=persona_config.get("user_name", "大家"),
             max_length=persona_config.get("max_response_length", 50),
+            # 可选：传递历史上下文用于 prompt 模板
+            history=history_context if history_context else [],
         )
 
         try:
@@ -180,6 +228,19 @@ class LocalLLMDecisionProvider(DecisionProvider):
                 return self._handle_fallback(normalized_message)
 
             self._successful_requests += 1
+
+            # 保存助手回复到上下文
+            if self._context_service:
+                try:
+                    await self._context_service.add_message(
+                        session_id=session_id,
+                        role=MessageRole.ASSISTANT,
+                        content=response.content,
+                    )
+                    self.logger.debug(f"已保存助手回复到上下文 (session: {session_id})")
+                except Exception as e:
+                    self.logger.warning(f"保存助手回复到上下文失败: {e}")
+
             return self._create_intent(response.content, normalized_message)
 
         except Exception as e:

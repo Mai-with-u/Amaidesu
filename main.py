@@ -20,6 +20,7 @@ from loguru import logger as loguru_logger
 from src.domains.input.coordinator import InputCoordinator
 from src.domains.input.provider_manager import InputProviderManager
 from src.domains.decision import DecisionProviderManager
+from src.services.context import ContextService, ContextServiceConfig
 
 logger = get_logger("Main")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -238,6 +239,7 @@ async def create_app_components(
     config_service: ConfigService,
     arch_validate: bool = False,
 ) -> Tuple[
+    ContextService,
     EventBus,
     Optional[OutputCoordinator],
     InputCoordinator,
@@ -245,7 +247,27 @@ async def create_app_components(
     Optional[DecisionProviderManager],
     Optional[InputProviderManager],
 ]:
-    """创建并连接核心组件（事件总线、输入域、决策域、输出协调器）。"""
+    """创建并连接核心组件。
+
+    创建顺序：
+    1. AudioStreamChannel
+    2. LLMManager
+    3. ContextService（新增，在 EventBus 之前）
+    4. EventBus
+    5. InputProviderManager
+    6. InputCoordinator
+    7. DecisionProviderManager
+    8. OutputCoordinator
+
+    返回顺序（7个）：
+    1. ContextService
+    2. EventBus
+    3. OutputCoordinator
+    4. InputCoordinator
+    5. LLMManager
+    6. DecisionProviderManager
+    7. InputProviderManager
+    """
     # 使用新的 [providers.*] 配置格式
     output_config = config.get("providers", {}).get("output", {})
     decision_config = config.get("providers", {}).get("decision", {})
@@ -269,6 +291,14 @@ async def create_app_components(
     llm_service = LLMManager()
     await llm_service.setup(config)
     logger.info("已创建 LLM 服务实例")
+
+    # 上下文服务（在 EventBus 之前创建）
+    logger.info("初始化上下文服务...")
+    context_config = config.get("context", {})
+    context_service_config = ContextServiceConfig(**context_config)
+    context_service = ContextService(config=context_service_config)
+    await context_service.initialize()
+    logger.info("已创建上下文服务实例")
 
     # 事件总线
     logger.info("初始化事件总线和数据流协调器...")
@@ -308,7 +338,9 @@ async def create_app_components(
     if decision_config:
         logger.info("初始化决策域组件（Decision Domain）...")
         try:
-            decision_provider_manager = DecisionProviderManager(event_bus, llm_service, config_service)
+            decision_provider_manager = DecisionProviderManager(
+                event_bus, llm_service, config_service, context_service
+            )
 
             # 设置决策Provider（通过 ProviderRegistry 自动创建）
             # 使用新的配置格式：decision_config 包含 active_provider 和 available_providers
@@ -340,6 +372,7 @@ async def create_app_components(
             output_coordinator = None
 
     return (
+        context_service,
         event_bus,
         output_coordinator,
         input_coordinator,
@@ -393,6 +426,7 @@ def restore_signal_handlers(original_sigint: Optional[Any], original_sigterm: Op
 
 
 async def run_shutdown(
+    context_service: "ContextService",
     output_coordinator: Optional[OutputCoordinator],
     input_coordinator: InputCoordinator,
     llm_service: LLMManager,
@@ -483,6 +517,15 @@ async def run_shutdown(
     except Exception as e:
         logger.error(f"核心服务关闭时出错: {e}")
 
+    # 5. 清理上下文服务
+    logger.info("正在清理上下文服务...")
+    try:
+        if context_service:
+            await context_service.cleanup()
+            logger.info("上下文服务已清理")
+    except Exception as e:
+        logger.error(f"清理上下文服务失败: {e}")
+
     logger.info("Amaidesu 应用程序已关闭。")
 
 
@@ -523,6 +566,7 @@ async def main() -> None:
     input_pipeline_manager = await load_pipeline_manager(config)
 
     (
+        context_service,
         event_bus,
         output_coordinator,
         input_coordinator,
@@ -544,6 +588,7 @@ async def main() -> None:
 
     restore_signal_handlers(orig_sigint, orig_sigterm)
     await run_shutdown(
+        context_service,
         output_coordinator,
         input_coordinator,
         llm_service,

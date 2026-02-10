@@ -412,6 +412,20 @@ await event_bus.subscribe(CoreEvents.NORMALIZATION_MESSAGE_READY, self.handle_me
 | `decision.intent_generated` | Decision Domain | Output Domain | `Intent` |
 | `expression.parameters_generated` | ExpressionGenerator | OutputProviders | `RenderParameters` |
 
+## ContextService 上下文管理
+
+ContextService 提供对话历史管理和多会话支持。
+
+### 用途
+
+- 管理对话历史（内存存储）
+- 支持多会话隔离（通过 session_id）
+- 为 DecisionProvider 提供上下文
+
+### 使用示例
+
+见 `docs/development/context-service.md`（待创建）
+
 ## 3域架构
 
 | 域 | 职责 | 位置 |
@@ -481,6 +495,24 @@ logger.error("错误日志", exc_info=True)
 - 管道配置：`[pipelines.*]`
 - 根配置：根目录的 `config-template.toml`
 - 首次运行会自动从模板生成 `config.toml`
+
+## Core 层职责边界
+
+**Core 层的职责**：
+- 定义基础接口（Provider 基类、事件系统）
+- 提供共享工具（日志、配置管理）
+- 存放跨域共享的类型（避免循环依赖）
+- 组合根（AmaidesuCore）协调组件
+
+**Core 层不应该**：
+- 从 Domain 层导入类型并重导出
+- 依赖任何 Domain 的具体实现
+- 包含业务逻辑
+
+**示例**：
+- ✓ `src/core/base/raw_data.py`: 定义 RawData 基础类型
+- ✓ `src/core/types/intent.py`: 共享的枚举类型
+- ✗ `src/core/base/base.py`: 重导出 `RenderParameters`（违规）
 
 ## 目录结构
 
