@@ -50,7 +50,7 @@ def __init__(self, config: Dict[str, Any]):
 | **函数/方法名** | snake_case | `send_to_maicore`, `register_websocket_handler` |
 | **变量名** | snake_case | `provider_config`, `event_bus` |
 | **私有成员** | 前导下划线 | `_message_handlers`, `_is_connected` |
-| **Provider 类** | 以 `Provider` 结尾 | `ConsoleInputProvider`, `TTSProvider` |
+| **Provider 类** | 以 `Provider` 结尾 | `ConsoleInputProvider`, `EdgeTTSProvider` |
 | **管道类** | 以 `Pipeline` 结尾 | `RateLimitPipeline`, `SimilarTextFilterPipeline` |
 
 ### 格式化规范
@@ -168,8 +168,8 @@ logger = get_logger("MyClassName")  # 使用类名或模块名
 使用 `--filter` 参数时，传入 `get_logger` 的第一个参数（类名或模块名）：
 
 ```bash
-# 只显示 TTSProvider 和 SubtitleProvider 的日志
-uv run python main.py --filter TTSProvider SubtitleProvider
+# 只显示 EdgeTTSProvider 和 SubtitleProvider 的日志
+uv run python main.py --filter EdgeTTSProvider SubtitleProvider
 ```
 
 ### 日志最佳实践

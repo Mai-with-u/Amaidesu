@@ -1,3 +1,28 @@
+<!--
+TODO: 此模板当前未被使用
+
+预期用途: 根据对话内容分析并推荐合适的虚拟形象表情
+集成位置: AvatarOutputProvider 或 VTSProvider
+集成方式: 在渲染表情前调用 LLM 分析文本情感和语境，从可用表情列表中推荐最合适的表情
+
+预期变量:
+  - text: 对话文本内容
+  - current_expression: 当前表情名称
+  - available_expressions: 可用表情列表（如 ["smile", "sad", "angry", "surprised"]）
+
+输出格式: JSON
+{
+  "expression": "smile",
+  "confidence": 0.9,
+  "reason": "用户表达开心情绪"
+}
+
+预计集成时间: 待定（需要在 AvatarProviderBase 中添加 LLM 调用逻辑）
+负责人: TBD
+
+注意: 当前系统使用 Intent.emotion 直接映射到表情，暂不需要 LLM 驱动的表情选择
+-->
+
 ---
 name: avatar_expression
 version: "1.0"

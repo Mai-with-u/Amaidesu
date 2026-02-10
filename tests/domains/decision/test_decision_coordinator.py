@@ -286,3 +286,61 @@ async def test_coordinator_handles_decide_errors(event_bus, decision_manager_wit
     assert len(intent_results) == 0
 
     await coordinator.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_extract_source_context_from_dict(event_bus, decision_manager_with_mock):
+    """测试从字典提取 SourceContext"""
+    coordinator = DecisionCoordinator(event_bus, decision_manager_with_mock)
+
+    dict_message = {
+        "text": "测试字典消息",
+        "source": "console",
+        "data_type": "text",
+        "importance": 0.8,
+        "metadata": {"user_nickname": "TestUser"},
+    }
+
+    source_context = coordinator._extract_source_context_from_dict(dict_message)
+
+    assert source_context.source == "console"
+    assert source_context.data_type == "text"
+    assert source_context.user_nickname == "TestUser"
+    assert source_context.importance == 0.8
+
+
+@pytest.mark.asyncio
+async def test_on_normalized_message_ready_full_flow(event_bus, decision_manager_with_mock):
+    """测试完整的 _on_normalized_message_ready 流程"""
+    coordinator = DecisionCoordinator(event_bus, decision_manager_with_mock)
+
+    # 模拟字典格式的消息
+    dict_message = {
+        "text": "测试消息",
+        "source": "test",
+        "data_type": "text",
+        "importance": 0.5,
+        "metadata": {},
+        "timestamp": 1234567890.0,
+    }
+
+    payload = MessageReadyPayload(message=dict_message, source="test_source")
+
+    # 监听发布的事件
+    published_events = []
+
+    async def mock_emit(event_name, payload, source):
+        published_events.append((event_name, payload, source))
+
+    event_bus.emit = mock_emit
+
+    # 执行
+    await coordinator._on_normalized_message_ready(
+        CoreEvents.NORMALIZATION_MESSAGE_READY,
+        payload,
+        "test",
+    )
+
+    # 验证：事件已发布
+    assert len(published_events) == 1
+    assert published_events[0][0] == CoreEvents.DECISION_INTENT_GENERATED

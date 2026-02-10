@@ -66,6 +66,9 @@ class LocalLLMDecisionProvider(DecisionProvider):
         # LLM Manager 引用（通过 setup 注入）
         self._llm_service: Optional["LLMManager"] = None
 
+        # ConfigService 引用（通过 setup 注入）
+        self._config_service = None
+
         # LLM 配置
         self.client_type = self.typed_config.backend  # 使用的后端类型
 
@@ -104,7 +107,30 @@ class LocalLLMDecisionProvider(DecisionProvider):
         else:
             self.logger.warning("LLMManager 未通过依赖注入提供，决策功能将不可用")
 
+        # 从依赖注入中获取 ConfigService
+        if dependencies and "config_service" in dependencies:
+            self._config_service = dependencies["config_service"]
+            self.logger.info("ConfigService 已从依赖注入中获取")
+        else:
+            self.logger.warning("ConfigService 未通过依赖注入提供，将使用默认人设")
+
         self.logger.info(f"LocalLLMDecisionProvider 初始化完成 (Client: {self.client_type})")
+
+    def _get_persona_config(self) -> Dict[str, Any]:
+        """获取 VTuber 人设配置
+
+        Returns:
+            人设配置字典，如果无法获取则返回空字典
+        """
+        if self._config_service is None:
+            return {}
+
+        try:
+            persona_config = self._config_service.get_section("persona", {})
+            return persona_config
+        except Exception as e:
+            self.logger.warning(f"读取 persona 配置失败: {e}")
+            return {}
 
     async def decide(self, normalized_message: "NormalizedMessage") -> Intent:
         """
@@ -124,8 +150,21 @@ class LocalLLMDecisionProvider(DecisionProvider):
 
         self._total_requests += 1
 
-        # 构建提示词（使用 PromptManager 渲染模板）
-        prompt = get_prompt_manager().render("decision/local_llm", text=normalized_message.text)
+        # 读取 persona 配置（带默认值）
+        persona_config = self._get_persona_config()
+
+        # 构建提示词（使用 PromptManager 渲染模板，传递人设变量）
+        prompt = get_prompt_manager().render_safe(
+            "decision/local_llm",
+            text=normalized_message.text,
+            bot_name=persona_config.get("bot_name", "爱德丝"),
+            personality=persona_config.get("personality", "活泼开朗，有些调皮，喜欢和观众互动"),
+            style_constraints=persona_config.get(
+                "style_constraints", "口语化，使用网络流行语，避免机械式回复，适当使用emoji"
+            ),
+            user_name=persona_config.get("user_name", "大家"),
+            max_length=persona_config.get("max_response_length", 50),
+        )
 
         try:
             # 使用 LLM Service 进行调用
@@ -198,12 +237,30 @@ class LocalLLMDecisionProvider(DecisionProvider):
 
         self.logger.info("LocalLLMDecisionProvider已清理")
 
-    def get_info(self) -> Dict[str, Any]:
+    def get_statistics(self) -> Dict[str, Any]:
         """
-        获取Provider信息
+        获取运行时统计信息
 
         Returns:
-            Provider信息字典
+            统计信息字典
+        """
+        success_rate = self._successful_requests / self._total_requests * 100 if self._total_requests > 0 else 0
+
+        return {
+            "total_requests": self._total_requests,
+            "successful_requests": self._successful_requests,
+            "failed_requests": self._failed_requests,
+            "success_rate": round(success_rate, 1),
+            "client_type": self.client_type,
+            "fallback_mode": self.fallback_mode,
+        }
+
+    def get_info(self) -> Dict[str, Any]:
+        """
+        获取 Provider 配置信息
+
+        Returns:
+            Provider 信息字典（静态配置）
         """
         return {
             "name": "LocalLLMDecisionProvider",
@@ -211,7 +268,4 @@ class LocalLLMDecisionProvider(DecisionProvider):
             "client_type": self.client_type,
             "template_name": "decision/local_llm",
             "fallback_mode": self.fallback_mode,
-            "total_requests": self._total_requests,
-            "successful_requests": self._successful_requests,
-            "failed_requests": self._failed_requests,
         }

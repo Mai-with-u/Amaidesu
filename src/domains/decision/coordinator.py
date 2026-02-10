@@ -9,7 +9,7 @@ DecisionCoordinator - 决策域协调器
 - 确保 3 域架构的数据流正确性
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict, Any
 
 from src.core.utils.logger import get_logger
 from src.core.events.names import CoreEvents
@@ -101,79 +101,84 @@ class DecisionCoordinator:
             self._event_subscribed = False
             self.logger.debug("DecisionCoordinator 已取消事件订阅")
 
+    def _extract_source_context_from_dict(self, normalized_dict: Dict[str, Any]):
+        """
+        从字典格式的 NormalizedMessage 提取 SourceContext
+
+        Args:
+            normalized_dict: NormalizedMessage 字典格式
+
+        Returns:
+            SourceContext 对象
+        """
+        from src.domains.decision.intent import SourceContext
+
+        source = normalized_dict.get("source", "")
+        data_type = normalized_dict.get("data_type", "")
+        importance = normalized_dict.get("importance", 0.5)
+        metadata = normalized_dict.get("metadata", {})
+        user_id = normalized_dict.get("user_id")
+        user_nickname = metadata.get("user_nickname")
+
+        return SourceContext(
+            source=source,
+            data_type=data_type,
+            user_id=user_id,
+            user_nickname=user_nickname,
+            importance=importance,
+            extra={k: v for k, v in metadata.items() if k not in ("type", "timestamp", "source")},
+        )
+
     async def _on_normalized_message_ready(self, event_name: str, payload: "MessageReadyPayload", source: str):
         """
         处理 normalization.message_ready 事件（类型化）
 
         当 InputDomain 生成 NormalizedMessage 时：
-        1. 构建 SourceContext
-        2. 调用 DecisionProviderManager.decide()
-        3. 将 SourceContext 注入 Intent
-        4. 发布 decision.intent_generated 事件（3域架构）
+        1. 从字典格式的 payload.message 提取数据
+        2. 重建 NormalizedMessage 对象
+        3. 提取 SourceContext
+        4. 调用 DecisionProviderManager.decide()
+        5. 将 SourceContext 注入 Intent
+        6. 发布 decision.intent_generated 事件（3域架构）
 
         Args:
             event_name: 事件名称 (CoreEvents.NORMALIZATION_MESSAGE_READY)
             payload: 类型化的事件数据（MessageReadyPayload 对象）
             source: 事件源
         """
-        # 直接从 payload.message 获取 NormalizedMessage 对象
+        from src.core.base.normalized_message import NormalizedMessage
+
+        # 获取消息数据（字典格式）
         message_data = payload.message
         if not message_data:
             self.logger.warning("收到空的 NormalizedMessage 事件")
             return
 
-        # 兼容处理：message 字段可以是 NormalizedMessage 对象或字典
-        from src.core.base.normalized_message import NormalizedMessage
-        from src.domains.decision.intent import SourceContext
-
+        # 字典格式处理（MessageReadyPayload.message 定义为 Dict[str, Any]）
         if isinstance(message_data, dict):
-            # 字典格式：使用 from_dict 方法重建或直接使用字典
             normalized_dict = message_data
-            text = normalized_dict.get("text", "")
-            source = normalized_dict.get("source", "")
-            data_type = normalized_dict.get("data_type", "")
-            importance = normalized_dict.get("importance", 0.5)
-            metadata = normalized_dict.get("metadata", {})
-            user_id = normalized_dict.get("user_id")
-            user_nickname = metadata.get("user_nickname")
 
-            # 构建 SourceContext
-            source_context = SourceContext(
-                source=source,
-                data_type=data_type,
-                user_id=user_id,
-                user_nickname=user_nickname,
-                importance=importance,
-                extra={k: v for k, v in metadata.items() if k not in ("type", "timestamp", "source")},
-            )
+            # 提取 SourceContext
+            source_context = self._extract_source_context_from_dict(normalized_dict)
 
-            # 尝试重建 NormalizedMessage 对象用于决策
+            # 重建 NormalizedMessage 对象
             try:
                 normalized = NormalizedMessage.model_validate(normalized_dict)
             except Exception:
-                # 如果重建失败，使用字典数据创建一个临时对象
+                # 如果重建失败，创建临时对象
                 normalized = NormalizedMessage(
-                    text=text,
+                    text=normalized_dict.get("text", ""),
                     content=None,
-                    source=source,
-                    data_type=data_type,
-                    importance=importance,
-                    metadata=metadata,
+                    source=normalized_dict.get("source", ""),
+                    data_type=normalized_dict.get("data_type", ""),
+                    importance=normalized_dict.get("importance", 0.5),
+                    metadata=normalized_dict.get("metadata", {}),
                     timestamp=normalized_dict.get("timestamp", 0.0),
                 )
         else:
-            # 对象格式：直接使用
-            normalized = message_data
-
-            # 构建 SourceContext
-            source_context = SourceContext(
-                source=normalized.source,
-                data_type=normalized.data_type,
-                user_id=normalized.user_id if hasattr(normalized, "user_id") else None,
-                user_nickname=normalized.metadata.get("user_nickname"),
-                importance=normalized.importance,
-                extra={k: v for k, v in normalized.metadata.items() if k not in ("type", "timestamp", "source")},
-            )
+            # 错误处理：不支持的消息类型
+            self.logger.warning(f"不支持的消息数据类型: {type(message_data)}，期望 Dict[str, Any]")
+            return
 
         try:
             self.logger.debug(f"收到 NormalizedMessage: {normalized.text[:50]}...")

@@ -73,6 +73,28 @@ enable_safety_limit = true
 # Amaidesu 在 MaiCore 中注册的平台标识符
 platform_id = "amaidesu"
 
+# ========== VTuber 人设配置 ==========
+# 此配置段用于定义 VTuber 的性格和说话风格
+# 被 LocalLLMDecisionProvider 等使用 LLM 的 Provider 引用
+[persona]
+# VTuber 名字
+bot_name = "爱德丝"
+
+# 性格描述（50字以内）
+personality = "活泼开朗，有些调皮，喜欢和观众互动"
+
+# 说话风格约束（指导 LLM 生成回复的风格）
+style_constraints = "口语化，使用网络流行语，避免机械式回复，适当使用emoji"
+
+# 用户称呼
+user_name = "大家"
+
+# 回复长度限制（字数）
+max_response_length = 50
+
+# 情感表达强度 (1-10, 1=平淡, 10=丰富)
+emotion_intensity = 7
+
 [maicore]
 # MaiCore WebSocket 服务器地址
 host = "127.0.0.1"
@@ -266,21 +288,10 @@ available_providers = [
 
 # LocalLLM DecisionProvider 配置
 [providers.decision.local_llm]
-# 使用的 LLM 客户端类型
-client_type = "llm"  # llm | llm_fast | vlm | llm_local
-# 系统提示词模板
-prompt_template = """你是一个AI VTuber。根据用户消息生成回复。
-
-输出JSON格式：
-{
-  "response": "你的回复文本",
-  "emotion": "happy|sad|angry|neutral|surprised|love",
-  "actions": ["wave", ...]
-}
-
-用户消息: {text}"""
-# 降级模式
+# 降级模式（LLM调用失败时的行为）
 fallback_mode = "simple"  # simple（返回原始文本） | echo（回声） | error（抛出异常）
+# 注意：prompt_template 和 client_type 已移至 PromptManager 统一管理
+# 提示词位置：src/prompts/templates/decision/local_llm_intent_parser.md.j2
 
 # RuleEngine DecisionProvider 配置
 [providers.decision.rule_engine]

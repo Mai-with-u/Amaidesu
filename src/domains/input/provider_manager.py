@@ -237,7 +237,7 @@ class InputProviderManager:
             self._provider_stats[provider_name].error_count += 1
             # 不重新抛出，避免影响其他Provider
 
-    async def load_from_config(self, config: dict[str, Any], config_service) -> list[InputProvider]:
+    async def load_from_config(self, config: dict[str, Any], config_service=None) -> list[InputProvider]:
         """
         从配置加载并创建所有InputProvider（支持三级配置合并）
 

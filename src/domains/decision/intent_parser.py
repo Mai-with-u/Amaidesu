@@ -146,9 +146,11 @@ class IntentParser:
         """
         # 调用LLM
         response = await self.llm_service.chat(
-            prompt=f"请分析以下AI VTuber的回复消息，提取情感、回复文本和动作：\n\n{text}",
+            prompt=get_prompt_manager().extract_section("decision/intent_parser", "User Message", text=text),
             client_type="llm_fast",
-            system_message=get_prompt_manager().get_raw("decision/intent_parser"),
+            system_message=get_prompt_manager().extract_content_without_section(
+                "decision/intent_parser", "User Message", text=text
+            ),
             temperature=0.3,  # 低温度，保证稳定输出
             max_tokens=200,
         )

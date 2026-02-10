@@ -374,6 +374,114 @@ prompt = get_prompt_manager().render("my_prompt", var=value)
 self.logger.debug(f"渲染后的提示词:\n{prompt}")
 ```
 
+## 提示词最佳实践
+
+### 结构模板
+
+所有提示词应遵循以下结构：
+
+1. **YAML Frontmatter**: name, version, description, tags, variables
+2. **角色定义**: 你是什么，负责什么
+3. **任务说明**: 需要完成什么任务
+4. **输入描述**: 输入数据的格式和含义
+5. **输出格式**: 期望的输出格式（JSON/文本）
+6. **示例**: 至少 2-3 个示例（对于复杂任务）
+7. **注意事项**: 边界情况处理
+
+**示例**:
+```markdown
+---
+name: example_prompt
+version: "2.0"
+description: "描述"
+variables:
+  - input_var
+  - optional_var  # 可选变量
+tags: [domain, purpose]
+---
+
+你是一个[角色]。
+
+## 任务
+[任务说明]
+
+## 输入
+$input_var
+
+## 输出格式
+[明确的输出格式说明]
+
+## 示例
+示例 1:
+输入: [示例输入]
+输出: [示例输出]
+```
+
+### 变量命名规范
+
+- 使用 snake_case 命名变量
+- 变量名应具有描述性
+- 必需变量在 YAML `variables` 中标记
+- 可选变量使用 `render_safe()` 渲染
+- 在 YAML 中添加注释说明变量用途
+
+### 输出格式规范
+
+- **JSON 输出**:
+  - 明确禁止 markdown 包装（不要使用 \`\`\`json ... \`\`\`）
+  - 提供 JSON schema 示例
+  - 添加字段说明
+- **纯文本输出**:
+  - 说明是否需要前缀/后缀
+  - 明确是否需要解释
+- **添加 negative examples**: 说明什么是错误的输出
+
+### TODO 管理
+
+未使用的模板应添加 TODO 注释，包含：
+
+- **预期用途**: 清晰描述模板的预期功能
+- **集成位置**: 哪个 Provider/模块会使用
+- **集成方式**: 如何集成到代码中
+- **预期变量**: 列出所有预期的输入变量
+- **输出格式**: 说明输出格式
+- **预计集成时间**: 待定或具体时间
+- **负责人**: TBD 或具体负责人
+
+**TODO 模板**:
+```markdown
+<!--
+TODO: 此模板当前未被使用
+
+预期用途: [描述]
+集成位置: [Provider/模块]
+集成方式: [如何集成]
+
+预期变量:
+  - var1: [说明]
+  - var2: [说明]
+
+输出格式: [说明]
+
+预计集成时间: 待定
+负责人: TBD
+-->
+```
+
+### 版本管理
+
+- 使用语义化版本号（Semantic Versioning）
+- **1.0 → 2.0**: 重大更新（添加新变量、改变输出格式）
+- **2.0 → 2.1**: 小更新（添加示例、改进说明）
+- 在 YAML frontmatter 中更新 version 字段
+
+### 测试策略
+
+- 为关键提示词创建 Golden Dataset
+- 测试数据存储在 `tests/prompts/golden_datasets/`
+- 使用 JSONL 格式便于扩展
+- 每个数据集至少包含 5 条测试用例
+
 ## 相关文档
 
 - [Provider 开发](provider-guide.md) - Provider 中使用 PromptManager
@@ -382,4 +490,4 @@ self.logger.debug(f"渲染后的提示词:\n{prompt}")
 
 ---
 
-*最后更新：2026-02-09*
+*最后更新：2026-02-10*

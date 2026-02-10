@@ -1,24 +1,26 @@
 """
-VTS Provider - Output Domain: 渲染输出实现
+VTS Provider - Output Domain: VTS虚拟形象渲染实现
 
 职责:
-- 将ExpressionParameters中的表情和动作参数渲染到VTS
+- 接收Intent并适配为VTS特定参数
+- 渲染到VTube Studio
 - 保留所有现有VTS插件功能
 - 热键触发、表情控制、口型同步、道具管理、LLM智能热键匹配
-- 向后兼容vts_control服务
 """
 
 import asyncio
 import time
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, TYPE_CHECKING
 
 from pydantic import Field, field_validator
 
-from src.core.base.output_provider import OutputProvider
-from src.domains.output.parameters.render_parameters import RenderParameters
+from src.domains.output.providers.avatar.base import AvatarProviderBase as BaseAvatarProvider
 from src.core.utils.logger import get_logger
 from src.services.config.schemas.schemas.base import BaseProviderConfig
 from src.prompts import get_prompt_manager
+
+if TYPE_CHECKING:
+    from src.domains.decision.intent import Intent
 
 # LLM匹配依赖
 LLM_AVAILABLE = False
@@ -28,7 +30,7 @@ except ImportError:
     pass
 
 
-class VTSProvider(OutputProvider):
+class VTSProvider(BaseAvatarProvider):
     """
     VTS Provider实现
 
@@ -38,8 +40,75 @@ class VTSProvider(OutputProvider):
     - 口型同步（VTS口型参数更新）
     - 道具管理（加载、卸载、更新）
     - LLM智能热键匹配
-    - 向后兼容vts_control服务
     """
+
+    # ==================== 情感和动作映射配置 ====================
+
+    # 情感到VTS参数的映射
+    EMOTION_MAP: Dict[str, Dict[str, Any]] = {
+        "happy": {
+            "MouthSmile": 1.0,
+        },
+        "surprised": {
+            "EyeOpenLeft": 1.0,
+            "EyeOpenRight": 1.0,
+            "MouthOpen": 0.5,
+        },
+        "sad": {
+            "MouthSmile": -0.3,
+            "EyeOpenLeft": 0.7,
+            "EyeOpenRight": 0.7,
+        },
+        "angry": {
+            "EyeOpenLeft": 0.6,
+            "EyeOpenRight": 0.6,
+            "MouthSmile": -0.5,
+        },
+        "shy": {
+            "MouthSmile": 0.3,
+            "EyeOpenLeft": 0.8,
+            "EyeOpenRight": 0.8,
+        },
+        "love": {
+            "MouthSmile": 0.8,
+            "EyeOpenLeft": 0.9,
+            "EyeOpenRight": 0.9,
+        },
+        "excited": {
+            "MouthSmile": 1.0,
+            "EyeOpenLeft": 1.0,
+            "EyeOpenRight": 1.0,
+        },
+        "confused": {
+            "EyeOpenLeft": 0.7,
+            "EyeOpenRight": 0.7,
+            "MouthOpen": 0.2,
+        },
+        "scared": {
+            "EyeOpenLeft": 0.5,
+            "EyeOpenRight": 0.5,
+            "MouthOpen": 0.3,
+        },
+        "neutral": {
+            # 默认状态，不设置参数
+        },
+    }
+
+    # 动作类型到热键ID前缀的映射
+    ACTION_HOTKEY_MAP: Dict[str, str] = {
+        "blink": "Blink",
+        "nod": "Nod",
+        "shake": "Shake",
+        "wave": "Wave",
+        "clap": "Clap",
+        "motion": "Motion",
+    }
+
+    # VTS参数名定义
+    PARAM_MOUTH_SMILE = "MouthSmile"
+    PARAM_MOUTH_OPEN = "MouthOpen"
+    PARAM_EYE_OPEN_LEFT = "EyeOpenLeft"
+    PARAM_EYE_OPEN_RIGHT = "EyeOpenRight"
 
     class ConfigSchema(BaseProviderConfig):
         """VTS输出Provider配置"""
@@ -86,12 +155,6 @@ class VTSProvider(OutputProvider):
                 raise ValueError("启用LLM匹配时必须提供API密钥")
             return v
 
-    # VTS参数名定义
-    PARAM_MOUTH_SMILE = "MouthSmile"
-    PARAM_MOUTH_OPEN = "MouthOpen"
-    PARAM_EYE_OPEN_LEFT = "EyeOpenLeft"
-    PARAM_EYE_OPEN_RIGHT = "EyeOpenRight"
-
     def __init__(self, config: Dict[str, Any]):
         """
         初始化VTS Provider
@@ -100,7 +163,7 @@ class VTSProvider(OutputProvider):
             config: Provider配置（来自[rendering.outputs.vts]）
         """
         super().__init__(config)
-        self.logger = get_logger("VTSProvider")
+        self.logger = get_logger(self.__class__.__name__)
 
         # 使用 ConfigSchema 验证配置，获得类型安全的配置对象
         self.typed_config = self.ConfigSchema(**config)
@@ -157,8 +220,7 @@ class VTSProvider(OutputProvider):
             "O": [570, 840],  # /o/ 的第一和第二共振峰
         }
 
-        # 状态
-        self._is_connected_and_authenticated = False
+        # VTS连接状态
         self._vts = None
         self._is_connecting = False
 
@@ -170,8 +232,7 @@ class VTSProvider(OutputProvider):
 
     async def _setup_internal(self):
         """内部设置逻辑"""
-        # 初始化pyvts（已移到独立模块）
-
+        # 初始化pyvts
         try:
             import pyvts  # noqa: F401
             from pyvts import vts, vts_request  # noqa: F401
@@ -203,105 +264,129 @@ class VTSProvider(OutputProvider):
         self.accumulation_start_time = None
         self.audio_playback_start_time = None
 
-    async def _render_internal(self, parameters: RenderParameters):
+    # ==================== AvatarProviderBase 抽象方法实现 ====================
+
+    def _adapt_intent(self, intent: "Intent") -> Dict[str, Any]:
         """
-        渲染VTS输出
+        适配 Intent 为 VTS 特定参数
 
         Args:
-            parameters: RenderParameters对象
+            intent: 平台无关的 Intent
+
+        Returns:
+            VTS参数字典，包含:
+            - expressions: Dict[str, float] - VTS参数值
+            - hotkeys: List[str] - 热键ID列表
+        """
+        from src.core.types import EmotionType
+
+        result = {
+            "expressions": {},
+            "hotkeys": [],
+        }
+
+        # 1. 适配情感为VTS参数
+        emotion_str = intent.emotion.value if isinstance(intent.emotion, EmotionType) else str(intent.emotion)
+        if emotion_str in self.EMOTION_MAP:
+            result["expressions"].update(self.EMOTION_MAP[emotion_str])
+            self.logger.debug(f"情感映射: {emotion_str} -> {self.EMOTION_MAP[emotion_str]}")
+
+        # 2. 适配动作为热键
+        for action in intent.actions:
+            action_type_str = action.type.value if hasattr(action.type, "value") else str(action.type)
+            action_name = action.params.get("name", "")
+
+            # 如果动作参数中直接指定了热键ID
+            if "hotkey_id" in action.params:
+                result["hotkeys"].append(action.params["hotkey_id"])
+            # 否则使用映射
+            elif action_type_str in self.ACTION_HOTKEY_MAP:
+                hotkey_prefix = self.ACTION_HOTKEY_MAP[action_type_str]
+                # 尝试匹配完整热键名称
+                matched_hotkey = self._find_hotkey_by_name(hotkey_prefix, action_name)
+                if matched_hotkey:
+                    result["hotkeys"].append(matched_hotkey)
+
+        self.logger.debug(f"Intent适配结果: expressions={result['expressions']}, hotkeys={result['hotkeys']}")
+        return result
+
+    async def _render_internal(self, params: Dict[str, Any]) -> None:
+        """
+        渲染到VTS平台
+
+        Args:
+            params: _adapt_intent() 返回的VTS参数字典
         """
         try:
+            expressions = params.get("expressions", {})
+            hotkeys = params.get("hotkeys", [])
+
             # 1. 应用VTS表情参数
-            if parameters.expressions_enabled:
-                for param_name, param_value in parameters.expressions.items():
-                    await self.set_parameter_value(param_name, param_value)
-                    self.logger.debug(f"设置VTS参数: {param_name} = {param_value}")
+            for param_name, param_value in expressions.items():
+                await self.set_parameter_value(param_name, param_value)
+                self.logger.debug(f"设置VTS参数: {param_name} = {param_value}")
 
             # 2. 触发热键
-            if parameters.hotkeys_enabled and parameters.hotkeys:
-                for hotkey in parameters.hotkeys:
-                    await self.trigger_hotkey(hotkey)
+            for hotkey in hotkeys:
+                await self.trigger_hotkey(hotkey)
 
             # 3. 更新音频分析状态（如果正在TTS播放）
             if self.lip_sync_enabled:
                 await self._check_audio_state()
 
+            self.render_count += 1
+
         except Exception as e:
             self.logger.error(f"VTS渲染失败: {e}", exc_info=True)
+            self.error_count += 1
             raise RuntimeError(f"VTS渲染失败: {e}") from e
 
-    async def _cleanup_internal(self):
-        """内部清理逻辑"""
-        self.logger.info("VTSProvider清理中...")
+    async def _connect(self) -> None:
+        """连接到VTS平台"""
+        if not self._vts or self._is_connecting:
+            return
 
-        # 停止所有热键列表任务
-        self.hotkey_list.clear()
+        self._is_connecting = True
 
-        # 清理音频分析状态
-        self.accumulated_audio = bytearray()
-        self.accumulation_start_time = None
-        self.audio_playback_start_time = None
+        try:
+            self.logger.info(f"正在连接到VTS Studio... (Host: {self.vts_host}, Port: {self.vts_port})")
+            await self._vts.connect()
 
-        # 断开VTS连接
-        if self._vts:
-            try:
-                await self._vts.close()
-                self.logger.info("VTS连接已关闭")
-            except Exception as e:
-                self.logger.error(f"关闭VTS连接失败: {e}")
+            # 请求认证token
+            self.logger.info("请求认证token...")
+            await self._vts.request_authenticate_token()
 
-        self._is_connected_and_authenticated = False
-        self._vts = None
-        self._is_connecting = False
+            # 认证
+            self.logger.info("正在使用token进行认证...")
+            authenticated = await self._vts.request_authenticate()
 
-        self.logger.info("VTSProvider清理完成")
+            if authenticated:
+                self.logger.info("VTS Studio认证成功!")
+                self._is_connected = True
 
-    # ==================== VTS连接管理 ====================
+                # 加载热键列表
+                await self._load_hotkeys()
 
-    async def connect(self):
-        """启动VTS连接和认证"""
-        if not self._vts or not self._is_connecting:
-            self._is_connecting = True
+                # 测试微笑
+                await self.smile(0)
+                await self.close_eyes()
+                # 重新睁眼
+                await self.open_eyes()
+            else:
+                self.logger.error("VTS Studio认证失败")
+                self._is_connected = False
 
-            try:
-                self.logger.info(f"正在连接到VTS Studio... (Host: {self.vts_host}, Port: {self.vts_port})")
-                await self._vts.connect()
+        except ConnectionRefusedError:
+            self.logger.error("VTS连接被拒绝，请确保VTS Studio正在运行并启用了API")
+        except asyncio.TimeoutError:
+            self.logger.error("VTS连接或认证超时")
+        except Exception as e:
+            self.logger.error(f"VTS连接或认证失败: {e}", exc_info=True)
+        finally:
+            self._is_connecting = False
 
-                # 请求认证token
-                self.logger.info("请求认证token...")
-                await self._vts.request_authenticate_token()
-
-                # 认证
-                self.logger.info("正在使用token进行认证...")
-                authenticated = await self._vts.request_authenticate()
-
-                if authenticated:
-                    self.logger.info("VTS Studio认证成功!")
-                    self._is_connected_and_authenticated = True
-
-                    # 加载热键列表
-                    await self._load_hotkeys()
-
-                    # 测试微笑
-                    await self.smile(0)
-                    await self.close_eyes()
-                    # 重新睁眼
-                    await self.open_eyes()
-                else:
-                    self.logger.error("VTS Studio认证失败")
-                    self._is_connected_and_authenticated = False
-
-            except ConnectionRefusedError:
-                self.logger.error("VTS连接被拒绝，请确保VTS Studio正在运行并启用了API")
-            except asyncio.TimeoutError:
-                self.logger.error("VTS连接或认证超时")
-            except Exception as e:
-                self.logger.error(f"VTS连接或认证失败: {e}", exc_info=True)
-            finally:
-                self._is_connecting = False
-
-    async def disconnect(self):
-        """断开VTS连接"""
+    async def _disconnect(self) -> None:
+        """断开VTS平台连接"""
         if self._vts:
             self.logger.info("正在断开VTS连接...")
             try:
@@ -310,14 +395,70 @@ class VTSProvider(OutputProvider):
             except Exception as e:
                 self.logger.error(f"断开VTS连接失败: {e}")
 
-        self._is_connected_and_authenticated = False
+        self._is_connected = False
         self._is_connecting = False
 
-        # ==================== 热键管理 ====================
+        # 清理热键列表
+        self.hotkey_list.clear()
+
+        # 清理音频分析状态
+        self.accumulated_audio = bytearray()
+        self.accumulation_start_time = None
+        self.audio_playback_start_time = None
+
+    # ==================== 辅助方法 ====================
+
+    def _find_hotkey_by_name(self, prefix: str, suffix: str = "") -> Optional[str]:
+        """
+        根据前缀和后缀查找热键
+
+        Args:
+            prefix: 热键名称前缀
+            suffix: 热键名称后缀
+
+        Returns:
+            匹配的热键ID，如果未找到返回None
+        """
+        if not self.hotkey_list:
+            return None
+
+        # 尝试精确匹配
+        target_name = f"{prefix}_{suffix}" if suffix else prefix
+        for hotkey in self.hotkey_list:
+            if hotkey.get("name") == target_name:
+                return hotkey.get("hotkeyID")
+
+        # 尝试前缀匹配
+        for hotkey in self.hotkey_list:
+            name = hotkey.get("name", "")
+            if name.startswith(prefix):
+                if not suffix or suffix in name:
+                    return hotkey.get("hotkeyID")
+
+        return None
+
+    # ==================== 向后兼容方法 ====================
+
+    @property
+    def _is_connected_and_authenticated(self) -> bool:
+        """向后兼容的属性"""
+        return self._is_connected
+
+    # ==================== 旧的连接管理方法（向后兼容） ====================
+
+    async def connect(self):
+        """启动VTS连接和认证（向后兼容方法）"""
+        await self._connect()
+
+    async def disconnect(self):
+        """断开VTS连接（向后兼容方法）"""
+        await self._disconnect()
+
+    # ==================== 热键管理 ====================
 
     async def _load_hotkeys(self):
         """获取VTS热键列表"""
-        if not self._is_connected_and_authenticated or not self._vts:
+        if not self._is_connected or not self._vts:
             self.logger.warning("VTS未连接，跳过加载热键列表")
             return
 
@@ -339,7 +480,7 @@ class VTSProvider(OutputProvider):
 
     async def trigger_hotkey(self, hotkey_id: str) -> bool:
         """触发热键"""
-        if not self._is_connected_and_authenticated:
+        if not self._is_connected:
             self.logger.warning(f"VTS未连接，无法触发热键: {hotkey_id}")
             return False
 
@@ -364,7 +505,7 @@ class VTSProvider(OutputProvider):
 
     async def smile(self, value: float = 1) -> bool:
         """控制微笑"""
-        if not self._is_connected_and_authenticated:
+        if not self._is_connected:
             return False
 
         try:
@@ -375,7 +516,7 @@ class VTSProvider(OutputProvider):
 
     async def close_eyes(self) -> bool:
         """闭眼"""
-        if not self._is_connected_and_authenticated:
+        if not self._is_connected:
             return False
 
         try:
@@ -389,7 +530,7 @@ class VTSProvider(OutputProvider):
 
     async def open_eyes(self) -> bool:
         """睁眼"""
-        if not self._is_connected_and_authenticated:
+        if not self._is_connected:
             return False
 
         try:
@@ -405,7 +546,7 @@ class VTSProvider(OutputProvider):
 
     async def set_parameter_value(self, parameter_name: str, value: float, weight: float = 1) -> bool:
         """设置VTS参数值"""
-        if not self._is_connected_and_authenticated:
+        if not self._is_connected:
             self.logger.warning(f"VTS未连接，无法设置参数: {parameter_name} = {value}")
             return False
 
@@ -426,7 +567,7 @@ class VTSProvider(OutputProvider):
 
     async def get_parameter_value(self, parameter_name: str) -> Optional[float]:
         """获取VTS参数值"""
-        if not self._is_connected_and_authenticated:
+        if not self._is_connected:
             return None
 
         try:
@@ -488,7 +629,7 @@ class VTSProvider(OutputProvider):
         Returns:
             道具实例ID，如果加载失败返回None
         """
-        if not self._is_connected_and_authenticated:
+        if not self._is_connected:
             self.logger.warning("VTS未连接，无法加载道具")
             return None
 
@@ -537,7 +678,7 @@ class VTSProvider(OutputProvider):
         self, item_instance_id_list: Optional[List[str]] = None, file_name_list: Optional[List[str]] = None
     ) -> bool:
         """根据文件名卸载道具"""
-        if not self._is_connected_and_authenticated:
+        if not self._is_connected:
             self.logger.warning("VTS未连接，无法卸载道具")
             return False
 
@@ -579,7 +720,7 @@ class VTSProvider(OutputProvider):
 
     async def start_lip_sync_session(self, text: str = ""):
         """启动口型同步会话"""
-        if not self.lip_sync_enabled or not self._is_connected_and_authenticated:
+        if not self.lip_sync_enabled or not self._is_connected:
             return
 
         self.logger.info(f"启动口型同步会话: {text[:30]}...")
@@ -601,7 +742,7 @@ class VTSProvider(OutputProvider):
             audio_data: 音频数据字节
             sample_rate: 采样率（默认32000）
         """
-        if not self.lip_sync_enabled or not self._is_connected_and_authenticated:
+        if not self.lip_sync_enabled or not self._is_connected:
             return
 
         try:
@@ -656,7 +797,7 @@ class VTSProvider(OutputProvider):
 
     async def _update_lip_sync_parameters(self, volume: float, vowel_values: Dict[str, float]):
         """更新VTS口型参数"""
-        if not self._is_connected_and_authenticated:
+        if not self._is_connected:
             return
 
         # 更新音量参数
@@ -684,7 +825,7 @@ class VTSProvider(OutputProvider):
 
     async def stop_lip_sync_session(self):
         """停止口型同步会话"""
-        if not self.lip_sync_enabled or not self._is_connected_and_authenticated:
+        if not self.lip_sync_enabled or not self._is_connected:
             return
 
         self.is_speaking = False
@@ -769,7 +910,7 @@ class VTSProvider(OutputProvider):
         """获取Provider统计信息"""
         return {
             "name": self.__class__.__name__,
-            "is_connected": self._is_connected_and_authenticated,
+            "is_connected": self._is_connected,
             "render_count": self.render_count,
             "error_count": self.error_count,
             "hotkey_count": len(self.hotkey_list),

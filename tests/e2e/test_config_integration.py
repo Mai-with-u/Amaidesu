@@ -124,7 +124,7 @@ async def test_provider_registry_has_all_providers():
         assert provider_name in input_providers, f"缺少 InputProvider: {provider_name}"
 
     # 验证关键的 OutputProvider 存在
-    expected_output_providers = ["tts", "subtitle", "mock", "vts"]
+    expected_output_providers = ["edge_tts", "subtitle", "mock", "vts"]
     for provider_name in expected_output_providers:
         assert provider_name in output_providers, f"缺少 OutputProvider: {provider_name}"
 
@@ -407,10 +407,11 @@ async def test_config_does_not_throw_exceptions(project_base_dir):
         _ = service.get_section("providers.decision")
 
         # 使用新的配置API获取 Provider 配置
-        from src.services.config.schemas import ConsoleInputProviderConfig, TTSProviderConfig
+        from src.services.config.schemas import ConsoleInputProviderConfig
+        from src.domains.output.providers.audio import EdgeTTSProvider
 
         _ = service.get_provider_config_with_defaults("console_input", "input", schema_class=ConsoleInputProviderConfig)
-        _ = service.get_provider_config_with_defaults("tts", "output", schema_class=TTSProviderConfig)
+        _ = service.get_provider_config_with_defaults("edge_tts", "output", schema_class=EdgeTTSProvider.ConfigSchema)
 
         # 如果没有抛出异常，测试通过
         assert True

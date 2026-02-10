@@ -180,7 +180,7 @@ class TestConfigValidation:
         """测试有效配置能通过验证"""
         from src.domains.input.providers.console_input import ConsoleInputProvider
         from src.domains.output.providers.subtitle import SubtitleOutputProvider
-        from src.domains.output.providers.audio import TTSProvider
+        from src.domains.output.providers.audio import EdgeTTSProvider
         from src.domains.decision.providers.maicore.maicore_decision_provider import (
             MaiCoreDecisionProvider,
         )
@@ -197,8 +197,8 @@ class TestConfigValidation:
         assert config.window_width == 800
         assert config.window_height == 100
 
-        # 测试 TTS (自管理 Schema，EdgeTTSProvider 别名)
-        schema = TTSProvider.ConfigSchema
+        # 测试 EdgeTTS (自管理 Schema)
+        schema = EdgeTTSProvider.ConfigSchema
         config = schema(voice="zh-CN-XiaoxiaoNeural")
         assert config.type == "edge_tts"
         assert config.voice == "zh-CN-XiaoxiaoNeural"
@@ -337,23 +337,23 @@ class TestCriticalProviders:
         assert "window_height" in SubtitleOutputProvider.ConfigSchema.model_fields
 
     def test_tts_schema_complete(self):
-        """测试 TTSProvider Schema 完整"""
-        from src.domains.output.providers.audio import TTSProvider
+        """测试 EdgeTTSProvider Schema 完整"""
+        from src.domains.output.providers.audio import EdgeTTSProvider
 
         # 验证 ConfigSchema 存在
-        assert hasattr(TTSProvider, "ConfigSchema")
+        assert hasattr(EdgeTTSProvider, "ConfigSchema")
 
         # 验证继承 BaseProviderConfig
-        assert issubclass(TTSProvider.ConfigSchema, BaseProviderConfig)
+        assert issubclass(EdgeTTSProvider.ConfigSchema, BaseProviderConfig)
 
         # 验证注册
-        schema = ProviderRegistry.get_config_schema("tts")
+        schema = ProviderRegistry.get_config_schema("edge_tts")
         assert schema is not None
-        assert schema == TTSProvider.ConfigSchema
+        assert schema == EdgeTTSProvider.ConfigSchema
 
-        # 验证字段（EdgeTTSProvider 没有 engine 字段）
-        assert "voice" in TTSProvider.ConfigSchema.model_fields
-        assert "type" in TTSProvider.ConfigSchema.model_fields
+        # 验证字段
+        assert "voice" in EdgeTTSProvider.ConfigSchema.model_fields
+        assert "type" in EdgeTTSProvider.ConfigSchema.model_fields
 
     def test_vts_schema_complete(self):
         """测试 VTSProvider Schema 完整"""
@@ -465,7 +465,7 @@ class TestSchemaIntegration:
         critical_providers = [
             ("console_input", "input"),
             ("subtitle", "output"),
-            ("tts", "output"),
+            ("edge_tts", "output"),
             ("vts", "output"),
             ("maicore", "decision"),
         ]
