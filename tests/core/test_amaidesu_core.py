@@ -19,7 +19,6 @@ from src.core.event_bus import EventBus
 from src.services.llm.manager import LLMManager
 from src.services.manager import ServiceManager
 from src.domains.input.pipelines.manager import InputPipelineManager
-from src.services.context.manager import ContextManager
 from src.domains.decision import DecisionProviderManager
 from src.domains.output import OutputCoordinator
 
@@ -52,13 +51,6 @@ def mock_llm_manager():
 def mock_input_pipeline_manager():
     """创建模拟的 InputPipelineManager"""
     manager = MagicMock(spec=InputPipelineManager)
-    return manager
-
-
-@pytest.fixture
-def mock_context_manager():
-    """创建模拟的 ContextManager"""
-    manager = MagicMock(spec=ContextManager)
     return manager
 
 
@@ -117,12 +109,6 @@ class TestAmaidesuCoreInitialization:
         )
         assert core.input_pipeline_manager == mock_input_pipeline_manager
 
-    def test_initialization_with_context_manager(self, mock_context_manager):
-        """测试传入 ContextManager 的初始化"""
-        core = AmaidesuCore(platform="test", context_manager=mock_context_manager)
-        context_manager = core.get_context_manager()
-        assert context_manager == mock_context_manager
-
     def test_initialization_with_decision_provider_manager(self, mock_decision_provider_manager):
         """测试传入 DecisionProviderManager 的初始化"""
         core = AmaidesuCore(
@@ -144,7 +130,6 @@ class TestAmaidesuCoreInitialization:
         mock_event_bus,
         mock_llm_manager,
         mock_input_pipeline_manager,
-        mock_context_manager,
         mock_decision_provider_manager,
         mock_output_coordinator,
     ):
@@ -152,7 +137,6 @@ class TestAmaidesuCoreInitialization:
         core = AmaidesuCore(
             platform="test",
             pipeline_manager=mock_input_pipeline_manager,
-            context_manager=mock_context_manager,
             event_bus=mock_event_bus,
             llm_service=mock_llm_manager,
             decision_provider_manager=mock_decision_provider_manager,
@@ -319,28 +303,6 @@ class TestAmaidesuCoreServiceManagement:
         assert "service1" in services
         assert "service2" in services
         assert "service3" in services
-
-
-# =============================================================================
-# ContextManager 测试
-# =============================================================================
-
-
-class TestAmaidesuCoreContextManager:
-    """测试 AmaidesuCore ContextManager 功能"""
-
-    def test_get_context_manager_default(self):
-        """测试获取默认创建的 ContextManager"""
-        core = AmaidesuCore(platform="test")
-        context_manager = core.get_context_manager()
-        assert context_manager is not None
-        assert isinstance(context_manager, ContextManager)
-
-    def test_get_context_manager_custom(self, mock_context_manager):
-        """测试获取自定义的 ContextManager"""
-        core = AmaidesuCore(platform="test", context_manager=mock_context_manager)
-        context_manager = core.get_context_manager()
-        assert context_manager == mock_context_manager
 
 
 # =============================================================================

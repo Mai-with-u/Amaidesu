@@ -117,18 +117,6 @@ compression = "zip"
 # 禁用时，同一天多次启动会追加到同一文件（如 amaidesu_2026-02-07.jsonl）
 split_by_session = false
 
-# 上下文管理器配置
-[context_manager]
-enabled = true
-
-[context_manager.formatting]
-separator = "\n"           # 上下文项之间的分隔符
-add_provider_title = false # 是否在上下文前添加提供者名称
-title_separator = ": "     # 如果添加提供者名称，使用的分隔符
-
-[context_manager.limits]
-default_max_length = 1000  # 默认上下文最大长度
-default_priority = 100     # 默认优先级值
 
 # ========== 管道配置 ==========
 

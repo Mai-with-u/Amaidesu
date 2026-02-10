@@ -124,29 +124,18 @@ class BiliBaseMessage(BaseModel):
         template_items: Optional[Dict[str, Any]] = None,
         room_id: str = "",
     ) -> Optional[TemplateInfo]:
-        """创建模板信息对象"""
+        """创建模板信息对象
+
+        注意: 此方法已简化，不再动态获取上下文。
+        如需动态上下文，请在配置中使用 PromptManager 模板变量，
+        例如在 template_items 中使用 {{context.summary}} 等占位符。
+        """
         if not config.get("enable_template_info", False) or not template_items:
             return None
 
-        # 获取并追加 Prompt 上下文
-        modified_template_items = template_items.copy()
-
-        # 使用 ContextManager 获取上下文
-        try:
-            context_manager = core.get_context_manager()
-            self.logger.info("正在获取 Prompt 上下文...")
-            additional_context = await context_manager.get_formatted_context(tags=context_tags)
-            if additional_context:
-                # 修改主 Prompt
-                main_prompt_key = "default_generator_prompt"
-                if main_prompt_key in modified_template_items:
-                    original_prompt = modified_template_items[main_prompt_key]
-                    modified_template_items[main_prompt_key] = additional_context + "\n" + original_prompt
-        except Exception as e:
-            self.logger.error(f"创建模板信息时发生错误: {e}", exc_info=True)
-
+        # 直接使用 template_items，不再调用 ContextManager
         return TemplateInfo(
-            template_items=modified_template_items,
+            template_items=template_items,
             template_name=config.get("template_name", f"bili_official_{room_id}"),
             template_default=False,
         )

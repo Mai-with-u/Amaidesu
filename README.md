@@ -77,7 +77,6 @@ Amaidesu!
     - TextPipeline: Input Domain 文本预处理（限流、过滤）
     - 旧版 MessagePipeline: MaiCore 消息处理（inbound/outbound，保留用于向后兼容）
 
-6. **ContextManager**: 上下文管理器，负责管理和聚合来自不同Provider的上下文信息
 
 7. **FlowCoordinator**: 数据流协调器，负责 Decision → Rendering 之间的数据流
 
@@ -293,18 +292,7 @@ uv run python mock_maicore.py
 
 ```mermaid
 flowchart TD
-    %% 核心服务
-    ContextManager["Context Manager<br>(上下文核心服务)"]:::core_service
-
-    %% 服务Provider
-    VTubeStudio["VTube Studio<br>(虚拟形象控制)"]:::output
-    Subtitle["Subtitle<br>(字幕服务)"]:::output
-
-    %% 服务依赖关系
-    BiliDanmaku["Bili Danmaku<br>(B站弹幕)"]:::input -->|使用| ContextManager
-    ReadPingmu["Read Pingmu<br>(屏幕监控)"]:::input -->|使用| ContextManager
-    VTubeStudio -->|使用| ContextManager
-
+  
     TTS["TTS<br>(语音合成)"]:::output -->|使用 subtitle_service| Subtitle
 
     Sticker["Sticker<br>(表情贴纸)"]:::output -->|使用 vts_control| VTubeStudio

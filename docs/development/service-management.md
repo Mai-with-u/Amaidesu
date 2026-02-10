@@ -158,7 +158,6 @@ await core.service_manager.cleanup_all()
 | `llm` | LLMManager | LLM 客户端管理器 |
 | `dg_lab` | DGLabService | DG-LAB 硬件控制服务 |
 | `config` | ConfigService | 配置服务 |
-| `context` | ContextManager | 上下文管理器 |
 
 ## 最佳实践
 
