@@ -37,9 +37,7 @@ def test_iflytek_asr_config_creation():
 
 def test_iflytek_asr_config_defaults():
     """测试讯飞 ASR 配置默认值"""
-    config = IflytekAsrConfig(
-        appid="test_appid", api_secret="test_secret", api_key="test_key"
-    )
+    config = IflytekAsrConfig(appid="test_appid", api_secret="test_secret", api_key="test_key")
 
     assert config.host == "iat-api.xfyun.cn"
     assert config.path == "/v2/iat"

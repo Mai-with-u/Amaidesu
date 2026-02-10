@@ -158,10 +158,7 @@ async def test_process_no_cross_user_filter(similar_filter_pipeline):
 async def test_process_with_context_rollback(similar_filter_pipeline, basic_metadata):
     """测试 PipelineContext 回滚功能"""
     # 创建 context 时需要传入 original_text 和 original_metadata
-    context = PipelineContext(
-        original_text="测试消息",
-        original_metadata=basic_metadata
-    )
+    context = PipelineContext(original_text="测试消息", original_metadata=basic_metadata)
 
     text = "测试消息"
     result = await similar_filter_pipeline._process(text, basic_metadata, context)

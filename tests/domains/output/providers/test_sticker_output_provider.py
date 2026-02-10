@@ -229,9 +229,9 @@ class TestStickerOutputProvider:
         mock_vts.load_item.assert_called_once()
         # 验证参数正确
         call_args = mock_vts.load_item.call_args
-        assert call_args[1]['custom_data_base64'] == sample_image_base64
-        assert call_args[1]['size'] == 0.5
-        assert call_args[1]['rotation'] == 90
+        assert call_args[1]["custom_data_base64"] == sample_image_base64
+        assert call_args[1]["size"] == 0.5
+        assert call_args[1]["rotation"] == 90
 
     @pytest.mark.asyncio
     async def test_cleanup_internal(self, sticker_config):

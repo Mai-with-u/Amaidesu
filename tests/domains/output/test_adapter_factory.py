@@ -131,6 +131,7 @@ def test_register_adapter():
 
 def test_register_adapter_not_subclass():
     """测试注册非 PlatformAdapter 子类"""
+
     class NotAnAdapter:
         pass
 

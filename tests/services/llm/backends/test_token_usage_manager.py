@@ -390,6 +390,7 @@ def test_record_usage_with_callback(token_manager):
 
 def test_record_usage_callback_exception(token_manager):
     """测试回调异常不影响记录"""
+
     def failing_callback(model_name, usage_data):
         raise ValueError("测试异常")
 
@@ -511,6 +512,7 @@ def test_get_global_token_manager():
     """测试获取全局实例"""
     # 清除全局实例
     import src.services.llm.backends.token_usage_manager as tum_module
+
     tum_module.global_token_manager = None
 
     manager1 = get_global_token_manager()
@@ -524,6 +526,7 @@ def test_set_global_token_manager_callback():
     """测试设置全局回调"""
     # 清除全局实例
     import src.services.llm.backends.token_usage_manager as tum_module
+
     tum_module.global_token_manager = None
 
     callback_called = []

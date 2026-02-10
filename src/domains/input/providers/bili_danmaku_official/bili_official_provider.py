@@ -157,7 +157,9 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
                 raw_data = RawData(
                     content={
                         "message": message,
-                        "message_config": self.message_handler.get_message_config() if hasattr(self.message_handler, 'get_message_config') else {},
+                        "message_config": self.message_handler.get_message_config()
+                        if hasattr(self.message_handler, "get_message_config")
+                        else {},
                     },
                     source="bili_danmaku_official",
                     data_type="text",

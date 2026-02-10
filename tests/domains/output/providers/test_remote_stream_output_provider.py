@@ -207,7 +207,7 @@ class TestRemoteStreamOutputProvider:
         mock_ws.closed = False
 
         # 检查是否有其他属性会被优先检查
-        assert hasattr(mock_ws, 'closed')
+        assert hasattr(mock_ws, "closed")
         # 因为MagicMock默认会创建所有属性访问，所以需要更精确的mock
         # 实际测试中，真实的WebSocket对象会有这些属性
 
@@ -340,10 +340,7 @@ class TestRemoteStreamOutputProvider:
         """测试处理Hello消息"""
         provider = RemoteStreamOutputProvider(remote_stream_config)
 
-        message = StreamMessage(
-            type=MessageType.HELLO,
-            data={"client_info": "test_client"}
-        )
+        message = StreamMessage(type=MessageType.HELLO, data={"client_info": "test_client"})
 
         # 处理消息（应该不抛出异常）
         await provider._process_message(message, None)
@@ -353,13 +350,12 @@ class TestRemoteStreamOutputProvider:
         """测试处理配置消息"""
         provider = RemoteStreamOutputProvider(remote_stream_config)
 
-
         message = StreamMessage(
             type=MessageType.CONFIG,
             data={
                 "audio": {"sample_rate": 22050, "channels": 2, "format": "float32", "chunk_size": 2048},
-                "image": {"width": 1280, "height": 720, "format": "png", "quality": 95}
-            }
+                "image": {"width": 1280, "height": 720, "format": "png", "quality": 95},
+            },
         )
 
         await provider._process_message(message, None)
@@ -380,10 +376,7 @@ class TestRemoteStreamOutputProvider:
         # 编码音频数据
         encoded_audio = base64.b64encode(sample_audio_data).decode("utf-8")
 
-        message = StreamMessage(
-            type=MessageType.AUDIO_DATA,
-            data={"audio": encoded_audio}
-        )
+        message = StreamMessage(type=MessageType.AUDIO_DATA, data={"audio": encoded_audio})
 
         await provider._process_message(message, None)
 
@@ -402,10 +395,7 @@ class TestRemoteStreamOutputProvider:
         callback_mock = AsyncMock()
         provider.image_callbacks["data"].append(callback_mock)
 
-        message = StreamMessage(
-            type=MessageType.IMAGE_DATA,
-            data={"image": sample_image_base64}
-        )
+        message = StreamMessage(type=MessageType.IMAGE_DATA, data={"image": sample_image_base64})
 
         await provider._process_message(message, None)
 
@@ -420,10 +410,7 @@ class TestRemoteStreamOutputProvider:
         """测试处理错误消息"""
         provider = RemoteStreamOutputProvider(remote_stream_config)
 
-        message = StreamMessage(
-            type=MessageType.ERROR,
-            data={"message": "Test error"}
-        )
+        message = StreamMessage(type=MessageType.ERROR, data={"message": "Test error"})
 
         # 处理消息（应该记录错误）
         await provider._process_message(message, None)
@@ -451,6 +438,7 @@ class TestRemoteStreamOutputProvider:
 
         def callback(x):
             return x
+
         provider.register_audio_callback("data", callback)
 
         assert callback in provider.audio_callbacks["data"]
@@ -461,6 +449,7 @@ class TestRemoteStreamOutputProvider:
 
         def callback(x):
             return x
+
         # 应该记录错误但不注册
         provider.register_audio_callback("invalid_event", callback)
 
@@ -473,6 +462,7 @@ class TestRemoteStreamOutputProvider:
 
         def callback(x):
             return x
+
         provider.audio_callbacks["data"].append(callback)
 
         result = provider.unregister_audio_callback("data", callback)
@@ -486,6 +476,7 @@ class TestRemoteStreamOutputProvider:
 
         def callback(x):
             return x
+
         provider.register_image_callback("data", callback)
 
         assert callback in provider.image_callbacks["data"]
@@ -497,6 +488,7 @@ class TestRemoteStreamOutputProvider:
 
         def callback(x):
             return x
+
         provider.image_callbacks["data"].append(callback)
 
         result = provider.unregister_image_callback("data", callback)

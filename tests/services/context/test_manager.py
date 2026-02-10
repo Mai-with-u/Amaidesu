@@ -520,6 +520,7 @@ async def test_get_formatted_context_empty_providers(context_manager):
 @pytest.mark.asyncio
 async def test_async_context_provider(context_manager):
     """测试异步函数作为上下文提供者"""
+
     async def async_provider():
         return "异步生成的上下文"
 
@@ -536,6 +537,7 @@ async def test_async_context_provider(context_manager):
 @pytest.mark.asyncio
 async def test_async_context_provider_with_exception(context_manager):
     """测试异步提供者抛出异常"""
+
     async def failing_provider():
         raise ValueError("测试异常")
 
@@ -553,6 +555,7 @@ async def test_async_context_provider_with_exception(context_manager):
 @pytest.mark.asyncio
 async def test_sync_callable_provider(context_manager):
     """测试同步可调用对象（应该被跳过）"""
+
     def sync_provider():
         return "同步上下文"
 
@@ -570,6 +573,7 @@ async def test_sync_callable_provider(context_manager):
 @pytest.mark.asyncio
 async def test_mixed_sync_and_async_providers(context_manager):
     """测试混合字符串和异步提供者"""
+
     async def async_provider():
         return "异步"
 

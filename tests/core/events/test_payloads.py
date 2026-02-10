@@ -236,9 +236,7 @@ class TestMessageReadyPayload:
             content=TextContent(text="测试消息"),
             importance=0.5,
         )
-        payload = MessageReadyPayload.from_normalized_message(
-            msg, room_id="123456", extra_info="test"
-        )
+        payload = MessageReadyPayload.from_normalized_message(msg, room_id="123456", extra_info="test")
         assert payload.metadata.get("room_id") == "123456"
         assert payload.metadata.get("extra_info") == "test"
 

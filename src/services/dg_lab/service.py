@@ -77,9 +77,7 @@ class DGLabService:
 
         # 检查依赖
         if aiohttp is None:
-            self.logger.error(
-                "aiohttp 库未找到，请运行 `uv add aiohttp`。DGLabService 将无法正常工作。"
-            )
+            self.logger.error("aiohttp 库未找到，请运行 `uv add aiohttp`。DGLabService 将无法正常工作。")
 
     async def setup(self) -> None:
         """
@@ -165,9 +163,7 @@ class DGLabService:
 
         # 验证波形
         if effective_waveform not in WaveformPreset.ALL:
-            self.logger.error(
-                f"无效的波形预设 '{effective_waveform}'，可选: {WaveformPreset.ALL}"
-            )
+            self.logger.error(f"无效的波形预设 '{effective_waveform}'，可选: {WaveformPreset.ALL}")
             return False
 
         async with self._control_lock:
@@ -176,8 +172,7 @@ class DGLabService:
             self._status.current_waveform = effective_waveform
 
             self.logger.info(
-                f"触发电击序列: 强度={effective_strength}, 波形='{effective_waveform}', "
-                f"持续时间={effective_duration}s"
+                f"触发电击序列: 强度={effective_strength}, 波形='{effective_waveform}', 持续时间={effective_duration}s"
             )
 
             try:
@@ -288,16 +283,11 @@ class DGLabService:
                     return True
                 else:
                     error_text = await response.text()
-                    self.logger.error(
-                        f"API 调用失败: {description} "
-                        f"(状态码: {response.status}, 响应: {error_text})"
-                    )
+                    self.logger.error(f"API 调用失败: {description} (状态码: {response.status}, 响应: {error_text})")
                     return False
 
         except ClientConnectorError as e:
-            self.logger.error(
-                f"API 连接失败: {description}。无法连接到 {self.config.api_base_url}。错误: {e}"
-            )
+            self.logger.error(f"API 连接失败: {description}。无法连接到 {self.config.api_base_url}。错误: {e}")
             return False
 
         except asyncio.TimeoutError:

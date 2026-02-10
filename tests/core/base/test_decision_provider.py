@@ -216,9 +216,7 @@ async def test_decision_provider_setup_without_dependencies():
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_decide_basic(
-    mock_provider, mock_normalized_message
-):
+async def test_decision_provider_decide_basic(mock_provider, mock_normalized_message):
     """测试 decide() 基本功能"""
     # 先 setup
     await mock_provider.setup(event_bus=object())
@@ -235,9 +233,7 @@ async def test_decision_provider_decide_basic(
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_decide_multiple_calls(
-    mock_provider, mock_normalized_message
-):
+async def test_decision_provider_decide_multiple_calls(mock_provider, mock_normalized_message):
     """测试 decide() 可以多次调用"""
     await mock_provider.setup(event_bus=object())
 
@@ -253,9 +249,7 @@ async def test_decision_provider_decide_multiple_calls(
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_decide_before_setup(
-    mock_provider, mock_normalized_message
-):
+async def test_decision_provider_decide_before_setup(mock_provider, mock_normalized_message):
     """测试未 setup 时调用 decide() 仍然可以工作"""
     # decide() 方法不检查 is_setup，所以可以调用
     intent = await mock_provider.decide(mock_normalized_message)
@@ -265,9 +259,7 @@ async def test_decision_provider_decide_before_setup(
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_decide_with_error(
-    error_provider, mock_normalized_message
-):
+async def test_decision_provider_decide_with_error(error_provider, mock_normalized_message):
     """测试 decide() 抛出错误的情况"""
     await error_provider.setup(event_bus=object())
 

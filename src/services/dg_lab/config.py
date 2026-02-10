@@ -83,9 +83,7 @@ class DGLabConfig(BaseModel):
     def validate_waveform(cls, v: str) -> str:
         """验证波形预设"""
         if v not in WaveformPreset.ALL:
-            raise ValueError(
-                f"无效的波形预设 '{v}'，可选值: {', '.join(WaveformPreset.ALL)}"
-            )
+            raise ValueError(f"无效的波形预设 '{v}'，可选值: {', '.join(WaveformPreset.ALL)}")
         return v
 
     @field_validator("default_strength")

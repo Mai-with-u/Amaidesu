@@ -70,6 +70,7 @@ class BiliMessageHandler:
             # 创建一个简单的core对象用于消息构建
             # 注意：这里不使用真实的AmaidesuCore实例，避免循环依赖
             from types import SimpleNamespace
+
             mock_core = SimpleNamespace(platform="bilibili_live")
 
             # 如果启用了template_info且有template_items，需要context_manager

@@ -247,6 +247,7 @@ def test_custom_translate_params():
 @pytest.mark.asyncio
 async def test_connect_failure():
     """测试连接失败处理"""
+
     class FailingAdapter(MockPlatformAdapter):
         async def connect(self) -> bool:
             self._is_connected = False  # 连接失败
@@ -262,6 +263,7 @@ async def test_connect_failure():
 @pytest.mark.asyncio
 async def test_disconnect_failure():
     """测试断开失败处理"""
+
     class FailingDisconnectAdapter(MockPlatformAdapter):
         async def disconnect(self) -> bool:
             # 断开失败但状态未改变

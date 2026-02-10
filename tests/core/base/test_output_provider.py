@@ -215,9 +215,7 @@ async def test_output_provider_render_basic(mock_provider, mock_render_parameter
 
 
 @pytest.mark.asyncio
-async def test_output_provider_render_multiple_calls(
-    mock_provider, mock_render_parameters
-):
+async def test_output_provider_render_multiple_calls(mock_provider, mock_render_parameters):
     """测试 render() 可以多次调用"""
     await mock_provider.setup(event_bus=object())
 
@@ -230,9 +228,7 @@ async def test_output_provider_render_multiple_calls(
 
 
 @pytest.mark.asyncio
-async def test_output_provider_render_before_setup_raises_error(
-    mock_provider, mock_render_parameters
-):
+async def test_output_provider_render_before_setup_raises_error(mock_provider, mock_render_parameters):
     """测试未 setup 时调用 render() 抛出 RuntimeError"""
     # 不调用 setup，直接 render
     with pytest.raises(RuntimeError) as exc_info:
@@ -243,9 +239,7 @@ async def test_output_provider_render_before_setup_raises_error(
 
 
 @pytest.mark.asyncio
-async def test_output_provider_render_with_error(
-    error_provider, mock_render_parameters
-):
+async def test_output_provider_render_with_error(error_provider, mock_render_parameters):
     """测试 render() 抛出错误的情况"""
     await error_provider.setup(event_bus=object())
 

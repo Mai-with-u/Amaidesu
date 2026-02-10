@@ -128,11 +128,7 @@ class TestObsControlOutputProvider:
             await provider.setup(mock_event_bus)
 
             # 验证OBS连接已创建
-            mock_obs.ReqClient.assert_called_once_with(
-                host="localhost",
-                port=4455,
-                password="test_password"
-            )
+            mock_obs.ReqClient.assert_called_once_with(host="localhost", port=4455, password="test_password")
 
             # 验证事件监听器已注册
             assert mock_event_bus.on.call_count == 3
@@ -170,10 +166,7 @@ class TestObsControlOutputProvider:
             await provider.setup(mock_event_bus)
 
             # 创建渲染参数
-            render_params = RenderParameters(
-                subtitle_text="测试字幕",
-                subtitle_enabled=True
-            )
+            render_params = RenderParameters(subtitle_text="测试字幕", subtitle_enabled=True)
 
             # Mock _send_text_to_obs
             provider._send_text_to_obs = AsyncMock()
@@ -194,9 +187,7 @@ class TestObsControlOutputProvider:
             await provider.setup(mock_event_bus)
 
             # 创建渲染参数（元数据包含文本）
-            render_params = RenderParameters(
-                metadata={"obs_text": "元数据文本"}
-            )
+            render_params = RenderParameters(metadata={"obs_text": "元数据文本"})
 
             # Mock _send_text_to_obs
             provider._send_text_to_obs = AsyncMock()
@@ -218,11 +209,7 @@ class TestObsControlOutputProvider:
 
             # 创建渲染参数（动作包含文本）
             render_params = RenderParameters(
-                actions_enabled=True,
-                actions=[
-                    {"type": "other_action"},
-                    {"type": "obs_send_text", "text": "动作文本"}
-                ]
+                actions_enabled=True, actions=[{"type": "other_action"}, {"type": "obs_send_text", "text": "动作文本"}]
             )
 
             # Mock _send_text_to_obs
@@ -283,11 +270,7 @@ class TestObsControlOutputProvider:
         await provider._set_text_source("测试文本")
 
         # 验证调用
-        mock_obs_client.set_input_settings.assert_called_once_with(
-            "text_source",
-            {"text": "测试文本"},
-            True
-        )
+        mock_obs_client.set_input_settings.assert_called_once_with("text_source", {"text": "测试文本"}, True)
 
     @pytest.mark.asyncio
     async def test_set_text_source_not_connected(self, obs_config):
@@ -483,9 +466,7 @@ class TestObsControlOutputProvider:
 
         # 触发事件
         await provider._handle_send_text_event(
-            "obs.send_text",
-            {"text": "事件文本", "typewriter": False},
-            "test_source"
+            "obs.send_text", {"text": "事件文本", "typewriter": False}, "test_source"
         )
 
         # 验证调用
@@ -519,11 +500,7 @@ class TestObsControlOutputProvider:
         provider.logger.warning = MagicMock()
 
         # 触发事件（空文本）
-        await provider._handle_send_text_event(
-            "obs.send_text",
-            {"text": ""},
-            "test_source"
-        )
+        await provider._handle_send_text_event("obs.send_text", {"text": ""}, "test_source")
 
         # 验证未调用发送
         provider._send_text_to_obs.assert_not_called()
@@ -542,11 +519,7 @@ class TestObsControlOutputProvider:
         provider.switch_scene = AsyncMock(return_value=True)
 
         # 触发事件
-        await provider._handle_switch_scene_event(
-            "obs.switch_scene",
-            {"scene_name": "目标场景"},
-            "test_source"
-        )
+        await provider._handle_switch_scene_event("obs.switch_scene", {"scene_name": "目标场景"}, "test_source")
 
         # 验证调用
         provider.switch_scene.assert_called_once_with("目标场景")
@@ -577,9 +550,7 @@ class TestObsControlOutputProvider:
 
         # 触发事件
         await provider._handle_set_source_visibility_event(
-            "obs.set_source_visibility",
-            {"source_name": "测试源", "visible": True},
-            "test_source"
+            "obs.set_source_visibility", {"source_name": "测试源", "visible": True}, "test_source"
         )
 
         # 验证调用
