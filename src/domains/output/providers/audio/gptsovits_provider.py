@@ -9,8 +9,6 @@ GPTSoVITS OutputProvider - Output Domain: 渲染输出实现
 """
 
 import asyncio
-import base64
-import struct
 from typing import Dict, Any, Optional
 from collections import deque
 
@@ -22,6 +20,9 @@ from src.domains.output.parameters.render_parameters import RenderParameters
 from src.core.utils.logger import get_logger
 from src.services.config.schemas.schemas.base import BaseProviderConfig
 from src.services.tts import GPTSoVITSClient, AudioDeviceManager
+
+# 导入工具函数
+from .utils.wav_decoder import decode_wav_chunk
 
 # --- 音频流参数 ---
 CHANNELS = 1
@@ -251,7 +252,7 @@ class GPTSoVITSOutputProvider(OutputProvider):
                         continue
 
                     # 解析WAV数据
-                    audio_chunk = await self._decode_wav_chunk(chunk)
+                    audio_chunk = await decode_wav_chunk(chunk, dtype=DTYPE)
                     if audio_chunk is not None:
                         yield audio_chunk
             else:
@@ -262,70 +263,10 @@ class GPTSoVITSOutputProvider(OutputProvider):
                         continue
 
                     # 解析WAV数据
-                    audio_chunk = await self._decode_wav_chunk(chunk)
+                    audio_chunk = await decode_wav_chunk(chunk, dtype=DTYPE)
                     if audio_chunk is not None:
                         yield audio_chunk
 
         except Exception as e:
             self.logger.error(f"处理音频流失败: {e}", exc_info=True)
             raise
-
-    async def _decode_wav_chunk(self, wav_chunk: bytes) -> Optional[np.ndarray]:
-        """
-        解码WAV数据块
-
-        Args:
-            wav_chunk: WAV数据块
-
-        Returns:
-            numpy数组或None
-        """
-        try:
-            # 处理base64编码
-            if isinstance(wav_chunk, str):
-                wav_data = base64.b64decode(wav_chunk)
-            else:
-                wav_data = wav_chunk
-
-            async with self.input_pcm_queue_lock:
-                is_first_chunk = len(self.input_pcm_queue) == 0
-
-            # 解析WAV头部（第一个块）
-            if is_first_chunk and len(wav_data) >= 44:
-                if wav_data[:4] == b"RIFF" and wav_data[8:12] == b"WAVE":
-                    self.logger.debug(f"检测到WAV头部，正在解析第一个块，大小: {len(wav_data)} 字节")
-
-                    pos = 12
-                    data_found = False
-                    while pos < len(wav_data) - 8:
-                        chunk_id = wav_data[pos : pos + 4]
-                        if chunk_id == b"data":
-                            data_found = True
-                            break
-                        pos += 8
-
-                    if data_found:
-                        chunk_size = struct.unpack("<I", wav_data[pos + 4 : pos + 8])[0]
-                        data_start = pos + 8
-                        data_end = data_start + chunk_size
-
-                        if data_end > len(wav_data):
-                            pcm_data = wav_data[data_start:]
-                            self.logger.debug(f"从第一个WAV块中提取了 {len(pcm_data)} 字节的PCM数据")
-                        else:
-                            pcm_data = wav_data[data_start:data_end]
-                            self.logger.debug(f"从WAV中提取了 {len(pcm_data)} 字节的PCM数据")
-                    else:
-                        pcm_data = wav_data
-                else:
-                    pcm_data = wav_data
-            else:
-                pcm_data = wav_data
-
-            # 转换为numpy数组
-            audio_array = np.frombuffer(pcm_data, dtype=DTYPE)
-            return audio_array
-
-        except Exception as e:
-            self.logger.error(f"解码WAV数据块失败: {e}")
-            return None
