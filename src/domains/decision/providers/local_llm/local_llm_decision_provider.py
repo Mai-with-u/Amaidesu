@@ -198,12 +198,30 @@ class LocalLLMDecisionProvider(DecisionProvider):
 
         self.logger.info("LocalLLMDecisionProvider已清理")
 
-    def get_info(self) -> Dict[str, Any]:
+    def get_statistics(self) -> Dict[str, Any]:
         """
-        获取Provider信息
+        获取运行时统计信息
 
         Returns:
-            Provider信息字典
+            统计信息字典
+        """
+        success_rate = self._successful_requests / self._total_requests * 100 if self._total_requests > 0 else 0
+
+        return {
+            "total_requests": self._total_requests,
+            "successful_requests": self._successful_requests,
+            "failed_requests": self._failed_requests,
+            "success_rate": round(success_rate, 1),
+            "client_type": self.client_type,
+            "fallback_mode": self.fallback_mode,
+        }
+
+    def get_info(self) -> Dict[str, Any]:
+        """
+        获取 Provider 配置信息
+
+        Returns:
+            Provider 信息字典（静态配置）
         """
         return {
             "name": "LocalLLMDecisionProvider",
@@ -211,7 +229,4 @@ class LocalLLMDecisionProvider(DecisionProvider):
             "client_type": self.client_type,
             "template_name": "decision/local_llm",
             "fallback_mode": self.fallback_mode,
-            "total_requests": self._total_requests,
-            "successful_requests": self._successful_requests,
-            "failed_requests": self._failed_requests,
         }
