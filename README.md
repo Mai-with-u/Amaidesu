@@ -228,11 +228,11 @@ enabled_outputs = ["subtitle", "vts", "tts"]
       ```
     - `--filter <MODULE_NAME> [<MODULE_NAME> ...]`: 过滤日志输出，只显示指定模块的 INFO/DEBUG 级别日志。WARNING 及以上级别的日志总是会显示。可以指定一个或多个模块名。
       ```bash
-      # 只显示来自 SubtitleProvider 和 TTSProvider 模块的 INFO/DEBUG 日志 (以及所有模块的 WARN+ 日志)
-      uv run python main.py --filter SubtitleProvider TTSProvider
+      # 只显示来自 SubtitleProvider 和 EdgeTTSProvider 模块的 INFO/DEBUG 日志 (以及所有模块的 WARN+ 日志)
+      uv run python main.py --filter SubtitleProvider EdgeTTSProvider
 
       # 同时启用 DEBUG 并过滤
-      uv run python main.py --debug --filter TTSProvider
+      uv run python main.py --debug --filter EdgeTTSProvider
       ```
       *   模块名通常是 `src/utils/logger.py` 中 `get_logger("模块名")` 使用的名称，可以通过查看日志输出中的模块名来确定。
 

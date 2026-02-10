@@ -233,7 +233,3 @@ class EdgeTTSProvider(OutputProvider):
             self.audio_manager.stop_audio()
 
         self.logger.info("EdgeTTSProvider清理完成")
-
-
-# 向后兼容的类别名
-TTSProvider = EdgeTTSProvider

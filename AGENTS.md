@@ -128,7 +128,7 @@ uv run python main.py
 uv run python main.py --debug
 
 # 过滤日志（只显示指定模块）
-uv run python main.py --filter TTSProvider SubtitleProvider
+uv run python main.py --filter EdgeTTSProvider SubtitleProvider
 ```
 
 ### 测试

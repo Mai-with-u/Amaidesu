@@ -52,7 +52,7 @@ class TestSchemaRegistry:
         assert "mock_danmaku" not in PROVIDER_SCHEMA_REGISTRY
         assert "subtitle" not in PROVIDER_SCHEMA_REGISTRY
         assert "vts" not in PROVIDER_SCHEMA_REGISTRY
-        assert "tts" not in PROVIDER_SCHEMA_REGISTRY
+        assert "edge_tts" not in PROVIDER_SCHEMA_REGISTRY
         assert "bili_danmaku" not in PROVIDER_SCHEMA_REGISTRY
         assert "maicore" not in PROVIDER_SCHEMA_REGISTRY
 
@@ -63,7 +63,7 @@ class TestSchemaRegistry:
         assert ProviderRegistry.get_config_schema("maicore") is not None
         assert ProviderRegistry.get_config_schema("subtitle") is not None
         assert ProviderRegistry.get_config_schema("vts") is not None
-        assert ProviderRegistry.get_config_schema("tts") is not None
+        assert ProviderRegistry.get_config_schema("edge_tts") is not None
 
     def test_input_providers_registry(self):
         """测试输入Provider注册完整（100%迁移到自管理Schema）"""
@@ -108,7 +108,7 @@ class TestSchemaRegistry:
         output_providers = [
             "subtitle",
             "vts",
-            "tts",
+            "edge_tts",
             "sticker",
             "warudo",
             "obs_control",
@@ -151,14 +151,14 @@ class TestNoEnabledField:
         from src.domains.input.providers.console_input import ConsoleInputProvider
         from src.domains.decision.providers.maicore.maicore_decision_provider import MaiCoreDecisionProvider
         from src.domains.output.providers.subtitle import SubtitleOutputProvider
-        from src.domains.output.providers.audio import TTSProvider
+        from src.domains.output.providers.audio import EdgeTTSProvider
 
         # 检查几个关键schema（使用自管理Schema的Provider）
         schemas_to_check = [
             ConsoleInputProvider.ConfigSchema,
             MaiCoreDecisionProvider.ConfigSchema,
             SubtitleOutputProvider.ConfigSchema,
-            TTSProvider.ConfigSchema,
+            EdgeTTSProvider.ConfigSchema,
         ]
 
         for schema_class in schemas_to_check:
@@ -290,10 +290,10 @@ class TestSchemaValidation:
         assert config.window_height == 100
 
     def test_tts_schema_validation(self):
-        """测试TTS Schema验证（自管理Schema，EdgeTTSProvider 别名）"""
-        from src.domains.output.providers.audio import TTSProvider
+        """测试TTS Schema验证（自管理Schema）"""
+        from src.domains.output.providers.audio import EdgeTTSProvider
 
-        config = TTSProvider.ConfigSchema(
+        config = EdgeTTSProvider.ConfigSchema(
             voice="zh-CN-XiaoxiaoNeural",
         )
         assert config.type == "edge_tts"
@@ -362,7 +362,7 @@ class TestRegistryConsistency:
             # Output
             "subtitle",
             "vts",
-            "tts",
+            "edge_tts",
             "gptsovits",
         ]
 
@@ -383,7 +383,7 @@ class TestRegistryConsistency:
         output_providers = [
             "subtitle",
             "vts",
-            "tts",
+            "edge_tts",
             "sticker",
             "warudo",
             "obs_control",

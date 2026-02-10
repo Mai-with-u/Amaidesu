@@ -162,7 +162,6 @@ class TestGPTSoVITSOutputProvider:
         # 模拟音频流 - 使用偶数长度的有效 PCM 数据
         async def mock_audio_gen():
             # 创建有效的 int16 PCM 数据（2字节）
-            import numpy as np
 
             audio_data = np.zeros(1000, dtype=np.int16).tobytes()
             yield audio_data
@@ -237,7 +236,6 @@ class TestGPTSoVITSOutputProvider:
 
         # 模拟音频流 - 使用有效的 PCM 数据
         async def mock_audio_gen():
-            import numpy as np
 
             audio_data = np.zeros(1000, dtype=np.int16).tobytes()
             yield audio_data

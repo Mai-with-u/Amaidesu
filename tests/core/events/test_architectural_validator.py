@@ -311,7 +311,6 @@ class TestArchitecturalValidator:
             "MockDecisionProvider",
             # Output Providers
             "VTSProvider",
-            "TTSProvider",  # EdgeTTSProvider 别名
             "EdgeTTSProvider",
             "SubtitleOutputProvider",
             "AvatarOutputProvider",

@@ -68,7 +68,7 @@ uv run python main.py
 uv run python main.py --debug
 
 # 过滤特定模块的日志（只显示指定模块）
-uv run python main.py --filter TTSProvider SubtitleProvider
+uv run python main.py --filter EdgeTTSProvider SubtitleProvider
 
 # 调试模式并过滤特定模块
 uv run python main.py --debug --filter VTSProvider

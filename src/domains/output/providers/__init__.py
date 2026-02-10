@@ -3,7 +3,6 @@ Rendering Providers - 渲染输出Provider实现
 
 包含各种 OutputProvider 的具体实现：
 - SubtitleOutputProvider: 字幕输出Provider
-- TTSProvider: TTS语音输出Provider (EdgeTTSProvider 的别名)
 - EdgeTTSProvider: Edge TTS语音输出Provider
 - GPTSoVITSOutputProvider: GPT-SoVITS TTS Provider
 - OmniTTSProvider: Omni TTS Provider
@@ -20,7 +19,7 @@ Rendering Providers - 渲染输出Provider实现
 
 # 导入所有 Provider 子模块以触发自动注册（导入__init__.py会触发注册）
 from . import subtitle  # noqa: F401
-from . import audio  # noqa: F401 (包含 TTSProvider, EdgeTTSProvider, GPTSoVITSOutputProvider, OmniTTSProvider)
+from . import audio  # noqa: F401 (包含 EdgeTTSProvider, GPTSoVITSOutputProvider, OmniTTSProvider)
 from . import vts  # noqa: F401
 from . import sticker  # noqa: F401
 from . import warudo  # noqa: F401
@@ -31,7 +30,7 @@ from . import mock  # noqa: F401
 
 # 同时导出类以便直接使用
 from .subtitle import SubtitleOutputProvider
-from .audio import TTSProvider, EdgeTTSProvider, GPTSoVITSOutputProvider, OmniTTSProvider
+from .audio import EdgeTTSProvider, GPTSoVITSOutputProvider, OmniTTSProvider
 from .vts import VTSProvider
 from .sticker import StickerOutputProvider
 from .warudo import WarudoOutputProvider
@@ -42,7 +41,6 @@ from .mock import MockOutputProvider
 
 __all__ = [
     "SubtitleOutputProvider",
-    "TTSProvider",
     "EdgeTTSProvider",
     "GPTSoVITSOutputProvider",
     "OmniTTSProvider",

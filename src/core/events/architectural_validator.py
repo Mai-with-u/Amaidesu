@@ -115,12 +115,7 @@ class ArchitecturalValidator:
             "render.completed",
             "render.failed",
         ],
-        "TTSProvider": [
-            "expression.parameters_generated",
-            "render.completed",
-            "render.failed",
-        ],
-        "EdgeTTSProvider": [  # 与 TTSProvider 相同（TTSProvider 是其别名）
+        "EdgeTTSProvider": [
             "expression.parameters_generated",
             "render.completed",
             "render.failed",
@@ -395,7 +390,6 @@ class ArchitecturalValidator:
             "MockDecisionProvider": {"DecisionProvider"},  # 测试类
             # === Output Providers ===
             "VTSProvider": {"OutputProvider"},
-            "TTSProvider": {"OutputProvider"},  # EdgeTTSProvider 别名（向后兼容）
             "EdgeTTSProvider": {"OutputProvider"},
             "SubtitleProvider": {"OutputProvider"},  # 别名：SubtitleOutputProvider
             "SubtitleOutputProvider": {"OutputProvider"},
