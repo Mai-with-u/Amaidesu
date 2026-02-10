@@ -75,6 +75,9 @@ class MaiCoreDecisionProvider(DecisionProvider):
         connect_timeout: float = Field(default=10.0, description="连接超时时间（秒）", gt=0)
         reconnect_interval: float = Field(default=5.0, description="重连间隔时间（秒）", gt=0)
 
+        # Decision 超时配置
+        decision_timeout: float = Field(default=30.0, description="等待 MaiCore 响应的超时时间（秒）", gt=0)
+
         # Action 建议配置
         action_suggestions_enabled: bool = Field(default=False, description="是否启用 MaiBot Action 建议")
         action_confidence_threshold: float = Field(
@@ -120,6 +123,9 @@ class MaiCoreDecisionProvider(DecisionProvider):
         self.http_host = self.typed_config.http_host
         self.http_port = self.typed_config.http_port
         self.http_callback_path = self.typed_config.http_callback_path
+
+        # Decision 超时配置
+        self._decision_timeout = self.typed_config.decision_timeout
 
         # Router
         self._router: Optional[Router] = None
@@ -214,7 +220,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
             self.logger.info("MaiCore Router 已停止")
 
         # 取消运行任务
-        if hasattr(self, "_router_task") and self._router_task:
+        if self._router_task is not None and not self._router_task.done():
             self._router_task.cancel()
             try:
                 await self._router_task
@@ -292,8 +298,14 @@ class MaiCoreDecisionProvider(DecisionProvider):
         future: asyncio.Future[Intent] = asyncio.Future()
         message_id = message.message_info.message_id
 
-        # 注册 Future
+        # 注册 Future（被动清理：清理超时的旧 Future）
         async with self._futures_lock:
+            # 被动清理：检查是否有同名 message_id 的旧 Future
+            old_future = self._pending_futures.get(message_id)
+            if old_future and not old_future.done():
+                old_future.cancel()
+                self.logger.debug(f"取消同名消息的旧 Future: {message_id}")
+
             self._pending_futures[message_id] = future
 
         try:
@@ -301,8 +313,8 @@ class MaiCoreDecisionProvider(DecisionProvider):
             await self._router_adapter.send(message)
             self.logger.info(f"消息 {message_id} 已发送至 MaiCore，等待 Intent 解析...")
 
-            # 等待响应（超时30秒）
-            intent = await asyncio.wait_for(future, timeout=30.0)
+            # 等待响应（使用配置的超时时间）
+            intent = await asyncio.wait_for(future, timeout=self._decision_timeout)
             self.logger.info(f"消息 {message_id} 的 Intent 解析完成")
 
             # 异步发送 Action 建议（不阻塞主流程）
@@ -501,4 +513,17 @@ class MaiCoreDecisionProvider(DecisionProvider):
             "http_host": self.http_host,
             "http_port": self.http_port,
             "is_connected": self.is_connected,
+        }
+
+    def get_statistics(self) -> Dict[str, Any]:
+        """
+        获取运行时统计信息
+
+        Returns:
+            统计信息字典
+        """
+        return {
+            "pending_futures_count": len(self._pending_futures),
+            "is_connected": self.is_connected,
+            "router_running": self._router_task is not None and not self._router_task.done(),
         }
