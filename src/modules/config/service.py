@@ -58,8 +58,10 @@ class ConfigService:
         self._initialized = False
         self.logger = get_logger("ConfigService")
 
-        # 版本管理器（待 ConfigVersionManager 完成开发后启用）
-        self.version_manager = None
+        # 版本管理器
+        from src.modules.config.version_manager import ConfigVersionManager
+
+        self.version_manager = ConfigVersionManager(base_dir)
 
         self.logger.debug("ConfigService 初始化完成")
 
