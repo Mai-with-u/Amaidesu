@@ -6,8 +6,6 @@ InputDomain - 输入域协调器
 
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from pydantic import BaseModel
-
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.input import MessageReadyPayload
@@ -17,14 +15,6 @@ from src.modules.types.base.raw_data import RawData
 
 if TYPE_CHECKING:
     from src.domains.input.pipelines.manager import InputPipelineManager
-
-
-class NormalizationResult(BaseModel):
-    """标准化结果"""
-
-    success: bool
-    message: Optional[NormalizedMessage]
-    error: Optional[str] = None
 
 
 class InputCoordinator:
@@ -54,11 +44,6 @@ class InputCoordinator:
         self.event_bus = event_bus
         self.pipeline_manager = pipeline_manager
         self.logger = get_logger("InputCoordinator")
-
-        # 统计信息
-        self._raw_data_count = 0
-        self._normalized_message_count = 0
-        self._normalization_error_count = 0
 
         self.logger.debug("InputCoordinator初始化完成")
 
@@ -95,8 +80,6 @@ class InputCoordinator:
                 self.logger.warning(f"收到空的RawData事件 (source: {source})")
                 return
 
-            self._raw_data_count += 1
-
             # 从event_data中获取元数据
             payload_source = event_data.get("source", source)
             data_type = event_data.get("data_type", "unknown")
@@ -114,8 +97,6 @@ class InputCoordinator:
             result = await self.normalize(raw_data_obj)
 
             if result.success:
-                self._normalized_message_count += 1
-
                 # 发布NormalizedMessage就绪事件（使用emit）
                 await self.event_bus.emit(
                     CoreEvents.DATA_MESSAGE,
@@ -125,7 +106,6 @@ class InputCoordinator:
 
                 self.logger.debug(f"生成NormalizedMessage: {result.message}")
             else:
-                self._normalization_error_count += 1
                 self.logger.warning(
                     f"标准化失败: source={raw_data_obj.source}, type={raw_data_obj.data_type}, error={result.error}"
                 )
@@ -133,7 +113,7 @@ class InputCoordinator:
         except Exception as e:
             self.logger.error(f"处理RawData事件时出错 (source: {source}): {e}", exc_info=True)
 
-    async def normalize(self, raw_data: RawData) -> NormalizationResult:
+    async def normalize(self, raw_data: RawData):
         """
         将RawData转换为NormalizedMessage
 
@@ -150,10 +130,20 @@ class InputCoordinator:
         Returns:
             NormalizationResult对象，包含成功状态、消息和错误信息
         """
-        try:
-            from src.domains.input.normalization.content import TextContent
-            from src.domains.input.normalization.normalizers import NormalizerRegistry
+        from pydantic import BaseModel
 
+        from src.domains.input.normalization.content import TextContent
+        from src.domains.input.normalization.normalizers import NormalizerRegistry
+
+        # 内部定义结果类型
+        class NormalizationResult(BaseModel):
+            """标准化结果"""
+
+            success: bool
+            message: Optional[NormalizedMessage]
+            error: Optional[str] = None
+
+        try:
             # 查找合适的 Normalizer
             normalizer = NormalizerRegistry.get_normalizer(raw_data.data_type)
 
@@ -187,23 +177,3 @@ class InputCoordinator:
             error_msg = f"转换RawData为NormalizedMessage时出错: {e}"
             self.logger.error(error_msg, exc_info=True)
             return NormalizationResult(success=False, message=None, error=str(e))
-
-    async def get_stats(self) -> Dict[str, Any]:
-        """
-        获取统计信息
-
-        Returns:
-            统计信息字典，包含成功率、失败率等
-        """
-        total_processed = self._normalized_message_count + self._normalization_error_count
-        success_rate = self._normalized_message_count / total_processed if total_processed > 0 else 0.0
-        failure_rate = self._normalization_error_count / total_processed if total_processed > 0 else 0.0
-
-        return {
-            "raw_data_count": self._raw_data_count,
-            "normalized_message_count": self._normalized_message_count,
-            "normalization_error_count": self._normalization_error_count,
-            "total_processed": total_processed,
-            "success_rate": success_rate,
-            "failure_rate": failure_rate,
-        }

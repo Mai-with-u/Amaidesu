@@ -28,13 +28,13 @@ OutputCoordinator - 数据流协调器（3域架构：Decision Domain → Output
 import os
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from src.modules.types import ExpressionParameters
 from src.domains.output.pipelines.manager import OutputPipelineManager
 from src.domains.output.provider_manager import OutputProviderManager
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import ParametersGeneratedPayload
 from src.modules.logging import get_logger
+from src.modules.types import ExpressionParameters
 
 if TYPE_CHECKING:
     from src.modules.events.payloads import IntentPayload

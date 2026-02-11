@@ -1,12 +1,10 @@
 """
 InputProviderManager - 输入Provider管理器
 
-负责管理多个InputProvider的生命周期、错误隔离和统计信息。
+负责管理多个InputProvider的生命周期和错误隔离。
 """
 
 import asyncio
-import time
-from dataclasses import dataclass
 from typing import Any
 
 from src.modules.events.event_bus import EventBus
@@ -16,32 +14,11 @@ from src.modules.logging import get_logger
 from src.modules.types.base.input_provider import InputProvider
 
 
-@dataclass
-class ProviderStats:
-    """Provider统计信息"""
-
-    name: str
-    started_at: float | None = None
-    stopped_at: float | None = None
-    message_count: int = 0
-    error_count: int = 0
-    is_running: bool = False
-    last_message_at: float | None = None
-
-    @property
-    def uptime(self) -> float | None:
-        """运行时长(秒)"""
-        if not self.started_at:
-            return None
-        end_time = self.stopped_at or time.time()
-        return end_time - self.started_at
-
-
 class InputProviderManager:
     """
     输入Provider管理器
 
-    负责管理多个InputProvider的生命周期、错误隔离和统计信息。
+    负责管理多个InputProvider的生命周期、错误隔离。
     支持并发启动、优雅停止、错误隔离等功能。
     """
 
@@ -60,9 +37,6 @@ class InputProviderManager:
 
         # Provider任务字典 {provider_name: task}
         self._provider_tasks: dict[str, asyncio.Task] = {}
-
-        # Provider统计信息字典 {provider_name: stats}
-        self._provider_stats: dict[str, ProviderStats] = {}
 
         # 停止事件
         self._stop_event = asyncio.Event()
@@ -89,13 +63,6 @@ class InputProviderManager:
         self._stop_event.clear()
 
         self.logger.info(f"开始启动{len(providers)}个InputProvider...")
-
-        # 初始化Provider统计信息（初始状态为未运行）
-        for provider in providers:
-            provider_name = self._get_provider_name(provider)
-            self._provider_stats[provider_name] = ProviderStats(
-                name=provider_name, started_at=time.time(), is_running=False
-            )
 
         # 并发启动所有Provider（后台运行，不等待完成）
         start_tasks = []
@@ -137,8 +104,6 @@ class InputProviderManager:
             provider_name = self._get_provider_name(provider)
             try:
                 await provider.stop()
-                self._provider_stats[provider_name].stopped_at = time.time()
-                self._provider_stats[provider_name].is_running = False
             except Exception as e:
                 self.logger.error(f"停止Provider {provider_name}时出错: {e}", exc_info=True)
 
@@ -158,35 +123,12 @@ class InputProviderManager:
         for provider in self._providers:
             provider_name = self._get_provider_name(provider)
             try:
-                await provider.cleanup()
+                await provider.stop()
             except Exception as e:
                 self.logger.error(f"清理Provider {provider_name}时出错: {e}", exc_info=True)
 
         self._is_started = False
         self.logger.info("所有InputProvider已停止")
-
-    async def get_stats(self) -> dict[str, Any]:
-        """
-        获取所有Provider的统计信息
-
-        Returns:
-            统计信息字典
-        """
-        stats_summary = {}
-
-        for provider_name, stats in self._provider_stats.items():
-            stats_summary[provider_name] = {
-                "name": stats.name,
-                "started_at": stats.started_at,
-                "stopped_at": stats.stopped_at,
-                "uptime": stats.uptime,
-                "message_count": stats.message_count,
-                "error_count": stats.error_count,
-                "is_running": stats.is_running,
-                "last_message_at": stats.last_message_at,
-            }
-
-        return stats_summary
 
     def get_provider_by_source(self, source: str) -> InputProvider | None:
         """
@@ -216,12 +158,7 @@ class InputProviderManager:
         """
         try:
             self.logger.info(f"Provider {provider_name} 开始运行")
-            self._provider_stats[provider_name].is_running = True
             async for data in provider.start():
-                # 更新统计信息
-                self._provider_stats[provider_name].message_count += 1
-                self._provider_stats[provider_name].last_message_at = time.time()
-
                 # 发布事件
                 await self.event_bus.emit(
                     CoreEvents.DATA_RAW,
@@ -234,7 +171,6 @@ class InputProviderManager:
             self.logger.info(f"Provider {provider_name} 被取消")
         except Exception as e:
             self.logger.error(f"Provider {provider_name} 运行时出错: {e}", exc_info=True)
-            self._provider_stats[provider_name].error_count += 1
             # 不重新抛出，避免影响其他Provider
 
     async def load_from_config(self, config: dict[str, Any], config_service=None) -> list[InputProvider]:
@@ -267,8 +203,8 @@ class InputProviderManager:
             self.logger.info("输入层已禁用（enabled=false）")
             return []
 
-        # 获取Provider列表（支持新旧配置格式）
-        enabled_inputs = config.get("enabled_inputs", config.get("inputs", []))
+        # 获取Provider列表
+        enabled_inputs = config.get("enabled_inputs")
         if not enabled_inputs:
             self.logger.warning("未配置任何输入Provider（enabled_inputs为空）")
             return []
