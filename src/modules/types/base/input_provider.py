@@ -28,10 +28,6 @@ class InputProvider(ABC):
     2. 启动(start()) - 返回异步生成器,产生RawData
     3. 停止(stop()) - 清理资源
 
-    注意: InputProvider 使用 start()/stop() 而非 setup()/cleanup()
-    原因: InputProvider 是异步数据流生成器,需要返回 AsyncIterator
-    而 Decision/OutputProvider 是事件订阅者,使用 setup() 注册到 EventBus
-
     内部方法约定:
     - _setup_internal(): 内部初始化方法,在start()开始时调用
     - _cleanup_internal(): 内部清理方法,在stop()时调用
@@ -134,53 +130,3 @@ class InputProvider(ABC):
         子类应该重写 _cleanup_internal() 而非此方法。
         """
         await self._cleanup_internal()
-
-    async def setup(self, event_bus=None, dependencies=None):  # noqa: B027
-        """
-        setup() 别名 - 为了与其他 Provider 保持一致
-
-        注意: InputProvider 的 setup() 不返回 AsyncIterator,
-        如果需要数据流,必须使用 start() 方法。
-
-        此方法是为了接口一致性提供的空实现。
-        InputProvider 不需要 setup(),因为它是数据生产者而非事件订阅者。
-
-        Args:
-            event_bus: EventBus实例(未使用,仅为了接口一致性)
-            dependencies: 可选的依赖注入(未使用,仅为了接口一致性)
-        """
-        # InputProvider 不需要 setup(),因为它是数据生产者
-        # 这个方法只是为了接口一致性
-        pass
-
-    @classmethod
-    def get_registration_info(cls) -> Dict[str, Any]:
-        """
-        获取 Provider 注册信息（子类重写）
-
-        用于显式注册模式，避免模块导入时的自动注册。
-
-        Returns:
-            注册信息字典，包含:
-            - layer: "input"
-            - name: Provider 名称（唯一标识符）
-            - class: Provider 类
-            - source: 注册来源（如 "builtin:console_input"）
-
-        Raises:
-            NotImplementedError: 如果子类未实现此方法
-
-        Example:
-            @classmethod
-            def get_registration_info(cls):
-                return {
-                    "layer": "input",
-                    "name": "console_input",
-                    "class": cls,
-                    "source": "builtin:console_input"
-                }
-        """
-        raise NotImplementedError(
-            f"{cls.__name__} 必须实现 get_registration_info() 类方法以支持显式注册。"
-            "如果使用自动注册模式，可以在 __init__.py 中直接调用 ProviderRegistry.register_input()。"
-        )
