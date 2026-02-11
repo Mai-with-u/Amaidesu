@@ -86,9 +86,7 @@ class DecisionCoordinator:
             self._event_subscribed = True
             self.logger.info(f"DecisionCoordinator 已订阅 '{CoreEvents.DATA_MESSAGE}' 事件（类型化）")
         else:
-            self.logger.debug(
-                f"DecisionCoordinator 已订阅过 '{CoreEvents.DATA_MESSAGE}' 事件，跳过重复订阅"
-            )
+            self.logger.debug(f"DecisionCoordinator 已订阅过 '{CoreEvents.DATA_MESSAGE}' 事件，跳过重复订阅")
 
     async def cleanup(self) -> None:
         """
@@ -181,7 +179,7 @@ class DecisionCoordinator:
             return
 
         try:
-            self.logger.info(f'收到消息: "{normalized.text[:50]}..." (来源: {normalized.source})')
+            self.logger.debug(f'收到消息: "{normalized.text[:50]}..." (来源: {normalized.source})')
 
             # 调用 DecisionProviderManager 进行决策
             intent = await self._provider_manager.decide(normalized)
@@ -201,6 +199,11 @@ class DecisionCoordinator:
                 IntentPayload.from_intent(intent, provider_name),
                 source="DecisionCoordinator",
             )
-            self.logger.info(f'生成响应: "{intent.response_text[:50]}..." (动作: {intent.action.type.value})')
+
+            if intent.actions:
+                first_action = intent.actions[0]
+                self.logger.info(f'生成响应: "{intent.response_text[:50]}..." (动作: {first_action.type})')
+            else:
+                self.logger.info(f'生成响应: "{intent.response_text[:50]}..." (无动作)')
         except Exception as e:
             self.logger.error(f"处理 NormalizedMessage 时出错: {e}", exc_info=True)

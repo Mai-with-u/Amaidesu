@@ -179,7 +179,16 @@ class EventBus:
         # 打印事件信息（INFO 级别，简洁格式）
         # 为 RawDataPayload 添加特殊处理，提取用户名
         short_name = self._short_event_name(event_name)
-        if isinstance(data, __import__("src.modules.events.payloads.input", "RawDataPayload")):
+
+        # 动态导入 RawDataPayload 进行类型检查（避免循环导入）
+        try:
+            from src.modules.events.payloads.input import RawDataPayload
+
+            is_raw_data = isinstance(data, RawDataPayload)
+        except ImportError:
+            is_raw_data = False
+
+        if is_raw_data:
             # RawDataPayload: 从 content 中提取用户名
             if isinstance(data.content, dict):
                 user_name = data.content.get("user_name", "")

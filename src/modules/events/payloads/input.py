@@ -50,30 +50,23 @@ class RawDataPayload(BasePayload):
     )
 
     def __str__(self) -> str:
-        """简化格式：直接显示消息内容"""
+        """简化格式：[data_type] "content" (user_name)"""
         # 提取 content 中的关键信息
         if isinstance(self.content, dict):
             text = self.content.get("text", "")
             user_name = self.content.get("user_name", "")
-        elif isinstance(self.message, dict):
-            # NormalizedMessage 对象
-            text = self.message.get("text", "")
-            user_name = self.message.get("user_name", "")
-        elif isinstance(self.message, str):
-            text = self.message
+        elif isinstance(self.content, str):
+            text = self.content
             user_name = ""
         else:
             text = str(self.content)
             user_name = ""
 
-        # 截断长文本
-        if len(text) > 50:
-            text = text[:47] + "..."
-
-        # 构建格式：text (user_name)
+        # 构建格式：[data_type] "content" (user_name)
+        result = f'[{self.data_type}] "{text}"'
         if user_name:
-            return f'{text} ({user_name})'
-        return text
+            result += f" ({user_name})"
+        return result
 
     def _debug_fields(self) -> List[str]:
         """返回需要显示的字段"""
@@ -159,7 +152,7 @@ class MessageReadyPayload(BasePayload):
 
         # 返回格式：text (user_name)
         if user_name:
-            return f'{text} ({user_name})'
+            return f"{text} ({user_name})"
         return text
 
     def _debug_fields(self) -> List[str]:
@@ -175,14 +168,14 @@ class MessageReadyPayload(BasePayload):
             text = value.text if hasattr(value, "text") else ""
             user_name = value.user_name if hasattr(value, "user_name") else ""
             if user_name:
-                return f'{text} ({user_name})'
+                return f"{text} ({user_name})"
             return text
         elif isinstance(value, dict) and "text" in value:
             # 字典格式（向后兼容）
             text = value.get("text", "")
             user_name = value.get("user_name", "")
             if user_name:
-                return f'{text} ({user_name})'
+                return f"{text} ({user_name})"
             return text
         # 其他字段使用基类默认格式化
         return super()._format_field_value(value, indent)
