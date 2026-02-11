@@ -67,7 +67,7 @@ class CoreEvents:
     VTS_SEND_EMOTION = "vts.send_emotion"
     VTS_SEND_STATE = "vts.send_state"
 
-    # 所有事件名集合（用于 emit_sync 校验等）
+    # 所有事件名集合（用于事件验证等）
     ALL_EVENTS = (
         # 新事件命名（3域核心事件）
         DATA_RAW,
