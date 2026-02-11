@@ -490,29 +490,6 @@ async def test_clear_removes_all_handlers(event_bus: EventBus):
     assert len(event_bus.list_events()) == 0
 
 
-@pytest.mark.asyncio
-async def test_clear_removes_all_handlers(event_bus: EventBus):
-    """测试 clear() 清除所有处理器"""
-
-    async def handler1(event_name, data, source):
-        pass
-
-    async def handler2(event_name, data, source):
-        pass
-
-    event_bus.on("event1", handler1)
-    event_bus.on("event2", handler2)
-
-    assert event_bus.get_listeners_count("event1") == 1
-    assert event_bus.get_listeners_count("event2") == 1
-
-    event_bus.clear()
-
-    assert event_bus.get_listeners_count("event1") == 0
-    assert event_bus.get_listeners_count("event2") == 0
-    assert len(event_bus.list_events()) == 0
-
-
 # =============================================================================
 # 辅助方法测试
 # =============================================================================
