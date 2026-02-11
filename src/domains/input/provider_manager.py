@@ -195,6 +195,14 @@ class InputProviderManager:
         """
         from src.modules.registry import ProviderRegistry
 
+        # 确保所有 Provider 模块已导入（触发 Schema 注册）
+        # 导入 providers 包会执行 __init__.py，注册所有 Provider
+        try:
+            from src.domains.input import providers
+            self.logger.debug("已导入 providers 包，所有 Provider 应已注册")
+        except ImportError as e:
+            self.logger.warning(f"导入 providers 包失败: {e}")
+
         self.logger.info("开始从配置加载InputProvider...")
 
         # 检查是否启用
@@ -217,19 +225,6 @@ class InputProviderManager:
 
         for input_name in enabled_inputs:
             try:
-                # 确保Provider模块已导入（触发注册）
-                # 在调用get_provider_schema之前导入模块，确保Schema已注册
-                try:
-                    import importlib
-
-                    module_path = f"src.domains.input.providers.{input_name}"
-                    importlib.import_module(module_path)
-                    self.logger.debug(f"已导入Provider模块: {module_path}")
-                except ImportError as e:
-                    self.logger.warning(
-                        f"无法导入Provider模块 '{input_name}': {e}，将尝试使用已注册的Provider"
-                    )
-
                 # 使用三级配置加载
                 try:
                     from src.modules.config.schemas import get_provider_schema

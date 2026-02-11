@@ -369,6 +369,14 @@ class OutputProviderManager:
         """
         self.logger.info("开始从配置加载OutputProvider...")
 
+        # 确保所有 Provider 模块已导入（触发 Schema 注册）
+        # 导入 providers 包会执行 __init__.py，注册所有 Provider
+        try:
+            from src.domains.output import providers
+            self.logger.debug("已导入 providers 包，所有 Provider 应已注册")
+        except ImportError as e:
+            self.logger.warning(f"导入 providers 包失败: {e}")
+
         # 检查是否启用
         enabled = config.get("enabled", True)
         if not enabled:
@@ -401,19 +409,6 @@ class OutputProviderManager:
 
         for output_name in enabled_outputs:
             try:
-                # 确保Provider模块已导入（触发注册）
-                # 在调用get_provider_schema之前导入模块，确保Schema已注册
-                try:
-                    import importlib
-
-                    module_path = f"src.domains.output.providers.{output_name}"
-                    importlib.import_module(module_path)
-                    self.logger.debug(f"已导入Provider模块: {module_path}")
-                except ImportError as e:
-                    self.logger.warning(
-                        f"无法导入Provider模块 '{output_name}': {e}，将尝试使用已注册的Provider"
-                    )
-
                 # 使用三级配置加载
                 try:
                     from src.modules.config.schemas import get_provider_schema
