@@ -128,9 +128,25 @@ class IntentPayload(BasePayload):
 
     def __getattr__(self, name: str) -> Any:
         """代理访问 intent_data 中的字段，用于调试显示"""
-        if name in ["original_text", "response_text", "emotion", "actions"]:
-            return self.intent_data.get(name, "")
-        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+        # 只代理已知的字段，其他字段抛出 AttributeError
+        KNOWN_FIELDS = [
+            "original_text",
+            "response_text",
+            "emotion",
+            "actions",
+            "metadata",  # 添加缺失的字段
+            "timestamp",  # 添加缺失的字段
+        ]
+        if name in KNOWN_FIELDS:
+            value = self.intent_data.get(name, "")
+            # metadata 默认返回空字典而非空字符串
+            if name == "metadata" and value == "":
+                return {}
+            return value
+        raise AttributeError(
+            f"'{type(self).__name__}' object has no attribute '{name}'. "
+            f"可用字段: {KNOWN_FIELDS}"
+        )
 
     def __str__(self) -> str:
         """
