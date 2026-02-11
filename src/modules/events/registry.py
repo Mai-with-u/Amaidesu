@@ -57,6 +57,24 @@ class EventRegistry:
         cls._core_events[event_name] = model
         cls._logger.debug(f"注册核心事件: {event_name} -> {model.__name__}")
 
+    @classmethod
+    def unregister_core_event(cls, event_name: str) -> bool:
+        """
+        移除核心事件注册
+
+        Args:
+            event_name: 事件名称
+
+        Returns:
+            是否成功移除（False 表示事件未注册）
+        """
+        if event_name in cls._core_events:
+            del cls._core_events[event_name]
+            cls._logger.debug(f"移除核心事件: {event_name}")
+            return True
+        cls._logger.debug(f"尝试移除未注册的事件: {event_name}")
+        return False
+
     # ==================== 查询 API ====================
 
     @classmethod
