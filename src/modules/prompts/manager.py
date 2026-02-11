@@ -227,6 +227,8 @@ class PromptManager:
         """
         解析 YAML frontmatter
 
+        使用 python-frontmatter 库解析，替代自定义正则解析。
+
         Args:
             content: 原始文件内容
 
@@ -239,81 +241,20 @@ class PromptManager:
             ---
             实际内容
         """
-        import re
+        import frontmatter
 
-        # 匹配 frontmatter
-        pattern = r"^---\s*\n(.*?)\n---\s*\n(.*)$"
-        match = re.match(pattern, content, re.DOTALL)
+        try:
+            post = frontmatter.loads(content)
+            metadata = dict(post.metadata)
 
-        if match:
-            yaml_str = match.group(1)
-            body = match.group(2).strip()
+            # 处理类型转换（frontmatter 可能将 "1.0" 解析为 float）
+            if "version" in metadata and isinstance(metadata["version"], float):
+                metadata["version"] = str(metadata["version"])
 
-            # 解析 YAML（支持多行列表）
-            frontmatter: Dict[str, Any] = {}
-            current_key: Optional[str] = None
-            in_list = False
-            list_values: list[str] = []
-
-            for line in yaml_str.split("\n"):
-                line = line.rstrip()
-
-                # 空行：结束当前列表
-                if not line.strip():
-                    if in_list and current_key:
-                        frontmatter[current_key] = list_values
-                        list_values = []
-                        in_list = False
-                        current_key = None
-                    continue
-
-                # 列表项（以 - 开头）
-                if line.strip().startswith("- "):
-                    list_value = line.strip()[2:].strip().strip("\"'")
-                    list_values.append(list_value)
-                    in_list = True
-                    continue
-
-                # 键值对（包含 :）
-                if ":" in line:
-                    # 先保存之前的列表
-                    if in_list and current_key:
-                        frontmatter[current_key] = list_values
-                        list_values = []
-                        in_list = False
-
-                    key, value = line.split(":", 1)
-                    key = key.strip()
-                    value = value.strip()
-
-                    # 处理行内列表格式 [item1, item2]
-                    if value.startswith("[") and value.endswith("]"):
-                        list_content = value[1:-1].strip()
-                        if list_content:
-                            frontmatter[key] = [v.strip().strip("\"'") for v in list_content.split(",")]
-                        else:
-                            frontmatter[key] = []
-                        current_key = None
-                        in_list = False
-                    # 处理字符串值
-                    elif value:
-                        frontmatter[key] = value.strip("\"'")
-                        current_key = None
-                        in_list = False
-                    # 空值，可能是多行列表的开始
-                    else:
-                        current_key = key
-                        in_list = True
-                        list_values = []
-
-            # 处理最后的列表
-            if in_list and current_key:
-                frontmatter[current_key] = list_values
-
-            return frontmatter, body
-
-        # 没有 frontmatter
-        return {}, content
+            return metadata, post.content
+        except Exception as e:
+            self.logger.warning(f"frontmatter 解析失败，使用原始内容: {e}")
+            return {}, content
 
     # === 渲染接口 ===
 

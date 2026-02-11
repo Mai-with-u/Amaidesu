@@ -51,6 +51,7 @@ dependencies = [
     "pytest>=9.0.2",
     "tomli-w>=1.2.0",
     "tomlkit>=0.14.0",
+    "python-frontmatter>=1.1.0",
 ]
 
 [project.optional-dependencies]
