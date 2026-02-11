@@ -197,7 +197,7 @@ class RemoteStreamOutputProvider(OutputProvider):
             self.event_bus.on(CoreEvents.REMOTE_STREAM_REQUEST_IMAGE, self._handle_image_request)
 
         # 注册 AudioStreamChannel 订阅
-        audio_channel = self._dependencies.get("audio_stream_channel") if hasattr(self, "_dependencies") else None
+        audio_channel = self.audio_stream_channel
         if audio_channel:
             from src.modules.streaming.backpressure import BackpressureStrategy, SubscriberConfig
 
@@ -241,7 +241,7 @@ class RemoteStreamOutputProvider(OutputProvider):
         self.logger.info("正在清理RemoteStreamOutputProvider...")
 
         # 取消 AudioStreamChannel 订阅
-        audio_channel = self._dependencies.get("audio_stream_channel") if hasattr(self, "_dependencies") else None
+        audio_channel = self.audio_stream_channel
         if audio_channel and self._remote_subscription_id:
             try:
                 await audio_channel.unsubscribe(self._remote_subscription_id)

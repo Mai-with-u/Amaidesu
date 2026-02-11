@@ -30,7 +30,6 @@ class AvatarProviderBase(OutputProvider, ABC):
         super().__init__(config)
         self.logger = get_logger(self.__class__.__name__)
         self._is_connected = False
-        self._dependencies: Dict[str, Any] = {}
 
     async def setup(
         self,
@@ -42,12 +41,11 @@ class AvatarProviderBase(OutputProvider, ABC):
 
         Args:
             event_bus: EventBus 实例
-            dependencies: 可选的依赖注入（替代 core）
+            dependencies: 可选的依赖注入（已废弃，保留以兼容旧代码）
         """
         from src.modules.events.names import CoreEvents
 
         self.event_bus = event_bus
-        self._dependencies = dependencies or {}
 
         # 订阅 DECISION_INTENT 事件
         event_bus.on(CoreEvents.DECISION_INTENT, self._on_intent_ready)

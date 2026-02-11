@@ -160,12 +160,7 @@ class OutputCoordinator:
         # 启动 OutputProvider，注入 AudioStreamChannel
         if self.output_provider_manager:
             try:
-                # 构建 dependencies 字典
-                dependencies = {}
-                if self._audio_stream_channel:
-                    dependencies["audio_stream_channel"] = self._audio_stream_channel
-
-                await self.output_provider_manager.setup_all_providers(self.event_bus, dependencies=dependencies)
+                await self.output_provider_manager.setup_all_providers(self.event_bus, audio_stream_channel=self._audio_stream_channel)
                 self.logger.info("OutputProvider 已启动")
             except Exception as e:
                 self.logger.error(f"启动 OutputProvider 失败: {e}", exc_info=True)

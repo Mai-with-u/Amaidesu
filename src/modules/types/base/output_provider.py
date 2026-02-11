@@ -15,6 +15,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 if TYPE_CHECKING:
+    from src.modules.streaming.audio_stream_channel import AudioStreamChannel
     from src.modules.types import RenderParameters
 
 
@@ -34,6 +35,7 @@ class OutputProvider(ABC):
         config: Provider配置(来自rendering.outputs.xxx配置)
         event_bus: EventBus实例(可选,用于事件通信)
         is_started: 是否已启动
+        audio_stream_channel: AudioStreamChannel实例(可选,用于音频流传输)
     """
 
     def __init__(self, config: dict):
@@ -46,22 +48,33 @@ class OutputProvider(ABC):
         self.config = config
         self.event_bus = None
         self.is_started = False
+        self._audio_stream_channel: Optional["AudioStreamChannel"] = None
 
-    async def start(self, event_bus, dependencies: Optional[Dict[str, Any]] = None):
+    @property
+    def audio_stream_channel(self) -> Optional["AudioStreamChannel"]:
+        """获取 AudioStreamChannel 实例"""
+        return self._audio_stream_channel
+
+    async def start(self, event_bus, audio_stream_channel: Optional["AudioStreamChannel"] = None):
         """
         启动Provider
 
         Args:
             event_bus: EventBus实例
-            dependencies: 可选的依赖注入（替代 core）
+            audio_stream_channel: 可选的AudioStreamChannel实例（用于音频流传输）
 
         Raises:
             ConnectionError: 如果无法连接到目标设备
         """
         self.event_bus = event_bus
-        self._dependencies = dependencies or {}
-        await self._start_internal()
-        self.is_started = True
+        self._audio_stream_channel = audio_stream_channel
+        try:
+            await self._start_internal()
+            self.is_started = True
+        except Exception:
+            # 如果启动失败，保持当前状态不变
+            # 由调用者决定如何处理错误
+            raise
 
     async def render(self, parameters: "RenderParameters"):
         """
@@ -101,8 +114,17 @@ class OutputProvider(ABC):
 
         停止Provider并释放所有资源。
         """
-        await self._stop_internal()
-        self.is_started = False
+        # 如果已经停止，直接返回
+        if not self.is_started:
+            return
+
+        try:
+            await self._stop_internal()
+            self.is_started = False
+        except Exception:
+            # 如果停止失败，保持当前状态不变
+            # 不重新抛出异常，允许错误隔离
+            pass
 
     def get_info(self) -> Dict[str, Any]:
         """

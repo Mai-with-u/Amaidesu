@@ -98,14 +98,14 @@ class OutputProviderManager:
     async def setup_all_providers(
         self,
         event_bus,
-        dependencies: Optional[Dict[str, Any]] = None,
+        audio_stream_channel=None,
     ) -> None:
         """
         启动所有Provider
 
         Args:
             event_bus: EventBus实例
-            dependencies: 可选的依赖注入
+            audio_stream_channel: 可选的AudioStreamChannel实例
         """
         self.logger.info(f"正在启动 {len(self.providers)} 个Provider...")
 
@@ -113,16 +113,16 @@ class OutputProviderManager:
             # 并发启动所有Provider
             setup_tasks = []
             for provider in self.providers:
-                # 传递 dependencies 给每个 Provider
-                setup_tasks.append(provider.start(event_bus, dependencies=dependencies))
+                # 传递 audio_stream_channel 给每个 Provider
+                setup_tasks.append(provider.start(event_bus, audio_stream_channel=audio_stream_channel))
 
             await asyncio.gather(*setup_tasks, return_exceptions=True)
         else:
             # 串行启动（用于调试）
             for provider in self.providers:
                 try:
-                    # 传递 dependencies 给每个 Provider
-                    await provider.start(event_bus, dependencies=dependencies)
+                    # 传递 audio_stream_channel 给每个 Provider
+                    await provider.start(event_bus, audio_stream_channel=audio_stream_channel)
                 except Exception as e:
                     self.logger.error(f"Provider启动失败: {provider.get_info()['name']} - {e}")
 
@@ -131,7 +131,7 @@ class OutputProviderManager:
         if all_setup:
             self.logger.info(f"所有 {len(self.providers)} 个Provider已启动")
         else:
-            setup_count = sum(1 for p in self.providers if p.is_setup)
+            setup_count = sum(1 for p in self.providers if p.is_started)
             self.logger.warning(f"部分Provider启动失败: {setup_count}/{len(self.providers)}")
 
     async def render_all(self, parameters: RenderParameters) -> list[RenderResult]:
@@ -155,10 +155,10 @@ class OutputProviderManager:
             self.logger.warning("没有已注册的Provider")
             return []
 
-        # 获取已设置（is_setup=True）的Provider
-        active_providers = [p for p in self.providers if p.is_setup]
+        # 获取已启动（is_started=True）的Provider
+        active_providers = [p for p in self.providers if p.is_started]
         if not active_providers:
-            self.logger.warning("没有已启动的Provider（is_setup=False）")
+            self.logger.warning("没有已启动的Provider（is_started=False）")
             return []
 
         if len(active_providers) < len(self.providers):
@@ -317,7 +317,7 @@ class OutputProviderManager:
             if provider.is_started:
                 try:
                     # Provider的cleanup方法会处理停止逻辑
-                    await provider.stop()
+                    await provider.cleanup()
                 except Exception as e:
                     self.logger.error(f"Provider停止失败: {provider.get_info()['name']} - {e}")
 
@@ -475,3 +475,51 @@ class OutputProviderManager:
         except Exception as e:
             self.logger.error(f"Provider实例化失败: {provider_type} - {e}", exc_info=True)
             return None
+
+    def get_stats(self) -> dict[str, Any]:
+        """
+        获取管理器的统计信息
+
+        Returns:
+            包含统计信息的字典：
+            - total_providers: 总Provider数量
+            - setup_providers: 已启动的Provider数量
+            - concurrent_rendering: 是否并发渲染
+            - error_handling: 错误处理策略
+            - provider_stats: 每个Provider的详细信息
+        """
+        stats = {
+            "total_providers": len(self.providers),
+            "setup_providers": sum(1 for p in self.providers if p.is_started),
+            "concurrent_rendering": self.concurrent_rendering,
+            "error_handling": self.error_handling,
+            "provider_stats": {},
+        }
+
+        # 收集每个Provider的统计信息
+        provider_count = {}
+        for provider in self.providers:
+            provider_name = provider.get_info()["name"]
+            if provider_name not in stats["provider_stats"]:
+                # 如果是同名的Provider，使用从0开始的编号
+                if provider_name in provider_count:
+                    provider_count[provider_name] += 1
+                    numbered_name = f"{provider_name}_{provider_count[provider_name]}"
+                else:
+                    provider_count[provider_name] = 0
+                    numbered_name = provider_name
+
+                stats["provider_stats"][numbered_name] = {
+                    "is_started": provider.is_started,
+                    "type": "output_provider",
+                }
+            else:
+                # 如果已经存在，增加计数器
+                provider_count[provider_name] = provider_count.get(provider_name, 0) + 1
+                numbered_name = f"{provider_name}_{provider_count[provider_name]}"
+                stats["provider_stats"][numbered_name] = {
+                    "is_started": provider.is_started,
+                    "type": "output_provider",
+                }
+
+        return stats

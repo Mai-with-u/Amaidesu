@@ -337,9 +337,7 @@ class VTSProvider(BaseAvatarProvider):
                 await self._load_hotkeys()
 
                 # 注册 AudioStreamChannel 订阅（如果启用口型同步）
-                audio_channel = (
-                    self._dependencies.get("audio_stream_channel") if hasattr(self, "_dependencies") else None
-                )
+                audio_channel = self.audio_stream_channel
                 if audio_channel and self.lip_sync_enabled:
                     from src.modules.streaming.backpressure import BackpressureStrategy, SubscriberConfig
 
@@ -376,7 +374,7 @@ class VTSProvider(BaseAvatarProvider):
     async def _disconnect(self) -> None:
         """断开VTS平台连接"""
         # 取消 AudioStreamChannel 订阅
-        audio_channel = self._dependencies.get("audio_stream_channel") if hasattr(self, "_dependencies") else None
+        audio_channel = self.audio_stream_channel
         if audio_channel and self._vts_subscription_id:
             try:
                 await audio_channel.unsubscribe(self._vts_subscription_id)
