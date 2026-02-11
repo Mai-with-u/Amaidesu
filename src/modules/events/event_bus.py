@@ -27,6 +27,7 @@
 """
 
 import asyncio
+import copy
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -34,8 +35,6 @@ from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-# 导入 payload 类型用于日志格式化
-from src.modules.events.payloads.input import MessageReadyPayload, RawDataPayload
 from src.modules.events.registry import EventRegistry
 from src.modules.logging import get_logger
 
@@ -109,8 +108,24 @@ class EventBus:
         self.enable_validation = True  # 固定开启验证
         self._is_cleanup = False
         self._active_emits: Dict[str, asyncio.Event] = {}  # 跟踪活跃的 emit 操作
+        self._background_tasks: set = set()  # 跟踪后台任务
+        self._stats_lock = asyncio.Lock()  # 保护统计数据的并发访问
         self.logger = get_logger("EventBus")
         self.logger.debug(f"EventBus 初始化完成 (stats={enable_stats}, validation=enabled)")
+
+    def _format_event_log(self, event_name: str, data: BaseModel, source: str) -> str:
+        """格式化事件日志"""
+        # 尝试使用 Payload 的 get_log_format() 方法
+        if hasattr(data, "get_log_format"):
+            result = data.get_log_format()
+            if result is not None:
+                text, user_name, extra = result
+                user_part = f" [{user_name}]" if user_name else ""
+                extra_part = f" {extra}" if extra else ""
+                return f"[{event_name}] {data.source}{user_part}: {text}{extra_part}"
+
+        # 默认格式
+        return f"[{event_name}] {source}: {data}"
 
     async def emit(
         self, event_name: str, data: BaseModel, source: str = "unknown", error_isolate: bool = True, wait: bool = False
@@ -122,11 +137,16 @@ class EventBus:
             event_name: 事件名称
             data: Pydantic Model 实例（自动序列化为 dict）
             source: 事件源（通常是发布者的类名）
-            error_isolate: 是否隔离错误（True 时单个 handler 异常不影响其他）
-            wait: 是否等待所有监听器执行完成（False 时后台执行，True 时等待完成）
+            error_isolate: 错误隔离策略
+                - True: 错误被隔离并记录，单个 handler 异常不会影响其他 handler 的执行
+                - False: 第一个异常会传播到调用者，中断所有 handler 的执行
+            wait: 是否等待所有监听器执行完成
+                - False: 在后台任务中执行，不等待完成（默认）
+                - True: 等待所有监听器执行完成后再返回
 
         Raises:
             TypeError: 如果 data 不是 BaseModel 实例
+            Exception: 当 error_isolate=False 且处理器执行出错时抛出
         """
         if self._is_cleanup:
             self.logger.warning(f"EventBus正在清理中，忽略事件: {event_name}")
@@ -156,63 +176,15 @@ class EventBus:
         handlers = sorted(handlers, key=lambda h: h.priority)
 
         # 打印事件信息（INFO 级别）
-        # 为 RawDataPayload 和 MessageReadyPayload 添加特殊处理，提取用户名
+        log_message = self._format_event_log(event_name, data, source)
+        self.logger.info(log_message)
 
-        # 类型检查（直接使用顶部导入的类型，避免动态导入失败）
-        is_raw_data = isinstance(data, RawDataPayload)
-        is_message_ready = isinstance(data, MessageReadyPayload)
-
-        if is_raw_data:
-            # RawDataPayload: 从 content 中提取用户名
-            if isinstance(data.content, dict):
-                user_name = data.content.get("user_name", "")
-                text = data.content.get("text", str(data.content))
-            else:
-                user_name = ""
-                text = str(data.content)
-
-            # 格式化用户名
-            user_part = f" [{user_name}]" if user_name else ""
-
-            # 截断长文本
-            if len(text) > 50:
-                text = text[:47] + "..."
-
-            # 格式: [event] source [user_name]: text
-            self.logger.info(f"[{event_name}] {data.source}{user_part}: {text}")
-        elif is_message_ready:
-            # MessageReadyPayload: 从 message 字典中提取用户名和文本
-            if isinstance(data.message, dict):
-                # 文本直接在 message 字典的 "text" 键中
-                text = data.message.get("text", "")
-                # 用户名可能在 metadata 中（因为 NormalizedMessage 的 user_name 通过 metadata 传递）
-                metadata = data.message.get("metadata", {})
-                user_name = metadata.get("user_name", "")
-            elif isinstance(data.message, str):
-                user_name = ""
-                text = data.message
-            else:
-                user_name = ""
-                text = str(data.message)
-
-            # 格式化用户名
-            user_part = f" [{user_name}]" if user_name else ""
-
-            # 截断长文本
-            if len(text) > 50:
-                text = text[:47] + "..."
-
-            # 格式: [event] source [user_name]: text
-            self.logger.info(f"[{event_name}] {data.source}{user_part}: {text}")
-        else:
-            # 其他 Payload 使用默认格式
-            self.logger.info(f"[{event_name}] {source}: {data}")
-
-        # 更新统计
+        # 更新统计（使用锁保护）
         if self.enable_stats:
-            self._stats[event_name].emit_count += 1
-            self._stats[event_name].last_emit_time = time.time()
-            self._stats[event_name].listener_count = len(handlers)
+            async with self._stats_lock:
+                self._stats[event_name].emit_count += 1
+                self._stats[event_name].last_emit_time = time.time()
+                self._stats[event_name].listener_count = len(handlers)
 
         start_time = time.time()
 
@@ -233,12 +205,24 @@ class EventBus:
                     tasks.append(task)
 
                 if tasks:
-                    await asyncio.gather(*tasks, return_exceptions=True)
+                    if error_isolate:
+                        # 错误隔离模式：捕获所有异常，但不重新抛出
+                        results = await asyncio.gather(*tasks, return_exceptions=True)
+                        # 检查是否有异常（仅用于统计）
+                        for result in results:
+                            if isinstance(result, Exception):
+                                # 异常已在 _call_handler 中处理，这里不需要额外操作
+                                pass
+                    else:
+                        # 非隔离模式：让第一个异常传播到调用者
+                        results = await asyncio.gather(*tasks, return_exceptions=False)
+                        # 如果有异常，gather 会自动抛出，不需要额外处理
 
-                # 更新统计
+                # 更新统计（使用锁保护）
                 if self.enable_stats:
                     execution_time = (time.time() - start_time) * 1000
-                    self._stats[event_name].total_execution_time_ms += execution_time
+                    async with self._stats_lock:
+                        self._stats[event_name].total_execution_time_ms += execution_time
             finally:
                 # 标记完成并从活跃列表中移除
                 complete_event.set()
@@ -249,8 +233,10 @@ class EventBus:
             # 等待完成
             await emit_with_tracking()
         else:
-            # 在后台任务中执行
-            asyncio.create_task(emit_with_tracking())
+            # 在后台任务中执行并跟踪
+            task = asyncio.create_task(emit_with_tracking())
+            self._background_tasks.add(task)
+            task.add_done_callback(lambda t: self._background_tasks.discard(t))
 
     async def _call_handler(
         self, wrapper: HandlerWrapper, event_name: str, data: Any, source: str, error_isolate: bool
@@ -273,15 +259,17 @@ class EventBus:
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(None, wrapper.handler, event_name, data, source)
         except Exception as e:
+            # 更新处理器级别的错误统计（不需要锁，因为每个 handler 独立）
             wrapper.error_count += 1
             wrapper.last_error = str(e)
 
             if error_isolate:
                 self.logger.error(f"事件处理器执行错误 (事件: {event_name}, 来源: {source}): {e}", exc_info=True)
-                # 更新统计
+                # 更新统计（使用锁保护）
                 if self.enable_stats:
-                    self._stats[event_name].error_count += 1
-                    self._stats[event_name].last_error_time = time.time()
+                    async with self._stats_lock:
+                        self._stats[event_name].error_count += 1
+                        self._stats[event_name].last_error_time = time.time()
             else:
                 raise
 
@@ -356,10 +344,18 @@ class EventBus:
                 else:
                     handler(event_name, typed_data, source)
             except ValidationError as e:
-                self.logger.error(f"类型化事件反序列化失败 ({event_name}): {e}", exc_info=True)
+                # 验证错误：数据格式不匹配
+                self.logger.error(
+                    f"类型化事件数据验证失败 ({event_name}, 期望类型: {model_class.__name__}): {e}",
+                    exc_info=False,  # 不需要完整堆栈，ValidationError 已包含详细信息
+                )
             except Exception as e:
-                self.logger.error(f"类型化事件处理器执行错误 ({event_name}): {e}", exc_info=True)
-                raise
+                # 处理器执行错误：记录但不传播（保持与其他处理器一致）
+                self.logger.error(
+                    f"类型化事件处理器执行错误 ({event_name}, 处理器: {handler.__name__}): {e}", exc_info=True
+                )
+                # 注意：这里不重新抛出异常，保持与 error_isolate=True 一致的行为
+                # 如果需要传播异常，应该通过 error_isolate 参数控制
 
         wrapper = HandlerWrapper(handler=typed_wrapper, priority=priority, original_handler=handler)
         self._handlers[event_name].append(wrapper)
@@ -396,11 +392,16 @@ class EventBus:
         self._stats.clear()
         self.logger.info("已清除所有事件监听器和统计信息")
 
-    async def cleanup(self):
+    async def cleanup(self, timeout: float = 5.0, force: bool = False):
         """
-        清理EventBus
+        清理 EventBus
 
-        标记为清理中，等待所有活跃的 emit 完成，然后清除所有监听器和统计信息。
+        Args:
+            timeout: 等待活跃 emit 完成的超时时间（秒）
+                     如果某些 emit 操作需要较长时间完成，可以增加此值
+            force: 是否强制清理（即使有活跃任务）
+                   - False: 等待所有活跃 emit 完成（默认）
+                   - True: 即使有活跃 emit 也立即清理，可能中断正在进行的操作
         """
         self._is_cleanup = True
 
@@ -410,12 +411,32 @@ class EventBus:
             self.logger.info(f"等待 {active_count} 个活跃的 emit 完成...")
             try:
                 tasks = [event.wait() for event in self._active_emits.values()]
-                await asyncio.wait_for(asyncio.gather(*tasks), timeout=5.0)
+                await asyncio.wait_for(asyncio.gather(*tasks), timeout=timeout)
                 self.logger.info(f"所有 {active_count} 个 emit 已完成")
             except asyncio.TimeoutError:
-                self.logger.warning(f"等待 emit 完成超时（5秒），仍有 {len(self._active_emits)} 个活跃")
+                remaining = len(self._active_emits)
+                if not force:
+                    self.logger.error(
+                        f"等待 emit 完成超时（{timeout}秒），仍有 {remaining} 个活跃。"
+                        f"如需强制清理，请调用 cleanup(force=True)"
+                    )
+                    # 不继续清理，恢复状态
+                    self._is_cleanup = False
+                    return
+                else:
+                    self.logger.warning(f"等待 emit 完成超时（{timeout}秒），强制清理 {remaining} 个活跃任务")
             except Exception as e:
                 self.logger.error(f"等待 emit 完成时发生错误: {e}", exc_info=True)
+
+        # 后台任务处理
+        if self._background_tasks:
+            bg_count = len(self._background_tasks)
+            self.logger.warning(f"cleanup 时仍有 {bg_count} 个后台任务未完成，可能被取消")
+            try:
+                await asyncio.wait_for(asyncio.gather(*self._background_tasks, return_exceptions=True), timeout=2.0)
+                self.logger.info("所有后台任务已完成")
+            except asyncio.TimeoutError:
+                self.logger.warning("等待后台任务超时")
 
         self.clear()
         self.logger.info("EventBus已清理")
@@ -449,22 +470,27 @@ class EventBus:
             event_name: 事件名称
 
         Returns:
-            事件统计信息(如果启用统计)
+            事件统计信息的深拷贝(如果启用统计)，避免外部修改
         """
         if not self.enable_stats:
             return None
-        return self._stats.get(event_name)
+        stats = self._stats.get(event_name)
+        if stats is None:
+            return None
+        # 返回深拷贝以避免外部修改影响内部数据
+        return copy.deepcopy(stats)
 
     def get_all_stats(self) -> Dict[str, EventStats]:
         """
         获取所有事件统计信息
 
         Returns:
-            所有事件统计信息
+            所有事件统计信息的深拷贝字典，避免外部修改
         """
         if not self.enable_stats:
             return {}
-        return dict(self._stats)
+        # 返回深拷贝以避免外部修改影响内部数据
+        return {k: copy.deepcopy(v) for k, v in self._stats.items()}
 
     def reset_stats(self, event_name: Optional[str] = None):
         """

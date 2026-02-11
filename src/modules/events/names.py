@@ -67,38 +67,32 @@ class CoreEvents:
     VTS_SEND_EMOTION = "vts.send_emotion"
     VTS_SEND_STATE = "vts.send_state"
 
+    @classmethod
+    def get_all_events(cls) -> tuple[str, ...]:
+        """
+        获取所有定义的事件名
+
+        通过反射自动收集所有符合命名规范的事件常量。
+        筛选条件：
+        1. 不以下划线开头（排除私有属性）
+        2. 值为字符串
+        3. 值为小写（排除类名等）
+        4. 包含点号或以 CORE_ 开头（事件特征）
+        """
+        return tuple(
+            value
+            for name, value in vars(cls).items()
+            if not name.startswith("_")
+            and isinstance(value, str)
+            and value.islower()
+            and ("." in value or name.startswith("CORE_"))
+        )
+
     # 所有事件名集合（用于事件验证等）
-    ALL_EVENTS = (
-        # 新事件命名（3域核心事件）
-        DATA_RAW,
-        DATA_MESSAGE,
-        DECISION_INTENT,
-        OUTPUT_PARAMS,
-        # 其他事件
-        DECISION_REQUEST,
-        DECISION_RESPONSE_GENERATED,
-        DECISION_PROVIDER_CONNECTED,
-        DECISION_PROVIDER_DISCONNECTED,
-        RENDER_COMPLETED,
-        RENDER_FAILED,
-        CORE_STARTUP,
-        CORE_SHUTDOWN,
-        CORE_ERROR,
-        STT_AUDIO_RECEIVED,
-        STT_SPEECH_STARTED,
-        STT_SPEECH_ENDED,
-        SCREEN_CONTEXT_UPDATED,
-        SCREEN_CHANGED,
-        KEYWORD_MATCHED,
-        VRCHAT_CONNECTED,
-        VRCHAT_DISCONNECTED,
-        VRCHAT_PARAMETER_SENT,
-        RENDER_SUBTITLE,
-        RENDER_STICKER,
-        OBS_SEND_TEXT,
-        OBS_SWITCH_SCENE,
-        OBS_SET_SOURCE_VISIBILITY,
-        REMOTE_STREAM_REQUEST_IMAGE,
-        VTS_SEND_EMOTION,
-        VTS_SEND_STATE,
-    )
+    # 注意：此属性在模块加载时自动更新，保持向后兼容性
+    ALL_EVENTS = ()  # 占位符，模块末尾会被更新
+
+
+# 在类定义后，模块级别自动更新 ALL_EVENTS
+# 这样既能使用自动生成，又能保持向后兼容性
+CoreEvents.ALL_EVENTS = CoreEvents.get_all_events()

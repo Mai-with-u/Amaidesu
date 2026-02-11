@@ -7,7 +7,7 @@ Input Domain 事件 Payload 定义
 """
 
 import time
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 from pydantic import ConfigDict, Field
 
@@ -48,6 +48,23 @@ class RawDataPayload(BasePayload):
             }
         }
     )
+
+    def get_log_format(self) -> Optional[Tuple[str, str, Optional[str]]]:
+        """返回日志格式化信息"""
+        if isinstance(self.content, dict):
+            text = self.content.get("text", str(self.content))
+            user_name = self.content.get("user_name", "")
+        elif isinstance(self.content, str):
+            text = self.content
+            user_name = ""
+        else:
+            text = str(self.content)
+            user_name = ""
+
+        # 截断长文本
+        if len(text) > 50:
+            text = text[:47] + "..."
+        return text, user_name, None
 
     def __str__(self) -> str:
         """简化格式：[data_type] "content" (user_name)"""
@@ -128,6 +145,24 @@ class MessageReadyPayload(BasePayload):
             }
         }
     )
+
+    def get_log_format(self) -> Optional[Tuple[str, str, Optional[str]]]:
+        """返回日志格式化信息"""
+        if isinstance(self.message, dict):
+            text = self.message.get("text", "")
+            metadata = self.message.get("metadata", {})
+            user_name = metadata.get("user_name", "")
+        elif isinstance(self.message, str):
+            text = self.message
+            user_name = ""
+        else:
+            text = str(self.message)
+            user_name = ""
+
+        # 截断长文本
+        if len(text) > 50:
+            text = text[:47] + "..."
+        return text, user_name, None
 
     def __str__(self) -> str:
         """简化格式：直接显示消息内容"""
