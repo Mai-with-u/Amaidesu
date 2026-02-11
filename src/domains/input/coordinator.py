@@ -32,7 +32,7 @@ class InputCoordinator:
     输入域协调器（3域架构：Input Domain）
 
     负责协调输入Provider和消息标准化。
-    接收RawData事件，转换为NormalizedMessage，发布到EventBus。
+    接收RawData事件（data.raw），转换为NormalizedMessage，发布到EventBus（data.message）。
 
     Pipeline 集成：
         - 在 normalize() 方法中使用 TextPipeline 进行文本预处理
@@ -65,29 +65,29 @@ class InputCoordinator:
     async def setup(self):
         """设置InputCoordinator，订阅事件"""
         # 订阅RawData生成事件
-        self.logger.info("正在订阅 perception.raw_data.generated 事件...")
-        self.event_bus.on(CoreEvents.PERCEPTION_RAW_DATA_GENERATED, self.on_raw_data_generated)
-        self.logger.info("成功订阅 perception.raw_data.generated 事件")
+        self.logger.info("正在订阅 data.raw 事件...")
+        self.event_bus.on(CoreEvents.DATA_RAW, self.on_data_raw)
+        self.logger.info("成功订阅 data.raw 事件")
 
         self.logger.info("InputCoordinator设置完成")
 
     async def cleanup(self):
         """清理InputCoordinator"""
         # 取消订阅
-        self.event_bus.off(CoreEvents.PERCEPTION_RAW_DATA_GENERATED, self.on_raw_data_generated)
+        self.event_bus.off(CoreEvents.DATA_RAW, self.on_data_raw)
 
         self.logger.info("InputCoordinator清理完成")
 
-    async def on_raw_data_generated(self, event_name: str, event_data: Dict[str, Any], source: str):
+    async def on_data_raw(self, event_name: str, event_data: Dict[str, Any], source: str):
         """
         处理RawData生成事件
 
         Args:
-            event_name: 事件名称("perception.raw_data.generated")
+            event_name: 事件名称("data.raw")
             event_data: 事件数据，包含"content"和"source" (RawDataPayload格式)
             source: 事件源
         """
-        self.logger.debug(f"收到 perception.raw_data.generated 事件: source={source}")
+        self.logger.debug(f"收到 data.raw 事件: source={source}")
         try:
             # 新格式：RawDataPayload被序列化为字典，包含content而不是data
             raw_data = event_data.get("content")
@@ -118,16 +118,12 @@ class InputCoordinator:
 
                 # 发布NormalizedMessage就绪事件（使用emit）
                 await self.event_bus.emit(
-                    CoreEvents.NORMALIZATION_MESSAGE_READY,
+                    CoreEvents.DATA_MESSAGE,
                     MessageReadyPayload.from_normalized_message(result.message),
                     source="InputCoordinator",
                 )
 
-                self.logger.debug(
-                    f"生成NormalizedMessage: text={result.message.text[:50]}..., "
-                    f"source={result.message.source}, "
-                    f"importance={result.message.importance:.2f}"
-                )
+                self.logger.debug(f"生成NormalizedMessage: {result.message}")
             else:
                 self._normalization_error_count += 1
                 self.logger.warning(

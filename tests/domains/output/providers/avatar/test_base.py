@@ -108,7 +108,7 @@ class TestAvatarProviderBaseSetup:
         await provider.setup(mock_event_bus)
         mock_event_bus.on.assert_called_once()
         call_args = mock_event_bus.on.call_args
-        assert call_args[0][0] == CoreEvents.DECISION_INTENT_GENERATED
+        assert call_args[0][0] == CoreEvents.DECISION_INTENT
 
     @pytest.mark.asyncio
     async def test_setup_connects_to_platform(self, mock_event_bus):

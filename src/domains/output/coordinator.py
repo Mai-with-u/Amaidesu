@@ -8,7 +8,7 @@ OutputCoordinator - 数据流协调器（3域架构：Decision Domain → Output
 
 新架构事件流:
     Intent (Decision Domain)
-        ↓ EventBus: DECISION_INTENT_GENERATED
+        ↓ EventBus: DECISION_INTENT
         ├─────────────────────────────────────────────┐
         ↓                                             ↓
     Avatar Providers (直接订阅)                  OutputCoordinator
@@ -16,19 +16,19 @@ OutputCoordinator - 数据流协调器（3域架构：Decision Domain → Output
         ↓                                         RenderParameters
     平台特定参数                                    (TTS/Subtitle)
     ↓                                              ↓
-    平台渲染                                  EXPRESSION_PARAMETERS_GENERATED
+    平台渲染                                  OUTPUT_PARAMS
                                                 ↓
                                             TTS/Subtitle Providers
 
 注意:
-- Avatar Provider 直接订阅 DECISION_INTENT_GENERATED，在内部实现 Intent → 平台参数的适配
+- Avatar Provider 直接订阅 DECISION_INTENT，在内部实现 Intent → 平台参数的适配
 - OutputCoordinator 只为 TTS/Subtitle 生成 RenderParameters
 """
 
 import os
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from src.modules.types import RenderParameters
+from src.modules.types import ExpressionParameters
 from src.domains.output.pipelines.manager import OutputPipelineManager
 from src.domains.output.provider_manager import OutputProviderManager
 from src.modules.events.event_bus import EventBus
@@ -50,7 +50,7 @@ class OutputCoordinator:
     - 订阅并处理 Intent 事件，为 TTS/Subtitle 生成参数
 
     数据流程（3域架构 - 重构后）:
-    Intent (Decision) → Avatar Providers (直接订阅 DECISION_INTENT_GENERATED)
+    Intent (Decision) → Avatar Providers (直接订阅 DECISION_INTENT)
                      → OutputCoordinator → RenderParameters (TTS/Subtitle) → TTS/Subtitle Providers
     """
 
@@ -138,13 +138,13 @@ class OutputCoordinator:
         from src.modules.events.payloads.decision import IntentPayload
 
         self.event_bus.on(
-            CoreEvents.DECISION_INTENT_GENERATED,
+            CoreEvents.DECISION_INTENT,
             self._on_intent_ready,
             model_class=IntentPayload,
             priority=50,
         )
         self._event_handler_registered = True
-        self.logger.info(f"已订阅 '{CoreEvents.DECISION_INTENT_GENERATED}' 事件（类型化）")
+        self.logger.info(f"已订阅 '{CoreEvents.DECISION_INTENT}' 事件（类型化）")
 
         self._is_setup = True
         self.logger.info("数据流协调器设置完成")
@@ -189,7 +189,7 @@ class OutputCoordinator:
         # 取消事件订阅
         if self._event_handler_registered:
             try:
-                self.event_bus.off(CoreEvents.DECISION_INTENT_GENERATED, self._on_intent_ready)
+                self.event_bus.off(CoreEvents.DECISION_INTENT, self._on_intent_ready)
                 self._event_handler_registered = False
                 self.logger.info("事件订阅已取消")
             except Exception as e:
@@ -203,33 +203,34 @@ class OutputCoordinator:
         处理Intent事件（Decision Domain → Output Domain，类型化）
 
         数据流（重构后）:
-            IntentPayload → Intent → RenderParameters (TTS/Subtitle) → OutputPipeline处理 → 发布 EXPRESSION_PARAMETERS_GENERATED 事件 → TTS/Subtitle Providers
+            IntentPayload → Intent → RenderParameters (TTS/Subtitle) → OutputPipeline处理 → 发布 OUTPUT_PARAMS 事件 → TTS/Subtitle Providers
 
-        注意: Avatar Providers 直接订阅 DECISION_INTENT_GENERATED 事件，不经过此方法
+        注意: Avatar Providers 直接订阅 DECISION_INTENT 事件，不经过此方法
 
         Args:
-            event_name: 事件名称（decision.intent_generated）
+            event_name: 事件名称（decision.intent）
             payload: 类型化的事件数据（IntentPayload 对象，自动反序列化）
             source: 事件源
         """
         # 使用 IntentPayload.to_intent() 方法转换为 Intent 对象
         intent = payload.to_intent()
 
-        self.logger.info(
-            f'收到Intent事件: {event_name}, 响应: "{intent.response_text[:50]}...", 动作: {intent.action.type.value}'
-        )
+        # 获取第一个动作的类型（如果有）
+        # 注意：由于 IntentAction 使用了 use_enum_values=True，type 已经是字符串
+        action_type = intent.actions[0].type if intent.actions else "none"
+        self.logger.info(f'收到Intent事件: {event_name}, 响应: "{intent.response_text[:50]}...", 动作: {action_type}')
 
         try:
-            # 直接生成 RenderParameters（仅用于 TTS/Subtitle）
+            # 直接生成 ExpressionParameters（仅用于 TTS/Subtitle）
             # Avatar Provider 已在各自的 _on_intent_ready 中处理 Intent
-            params = RenderParameters(
-                text=intent.response_text,
+            params = ExpressionParameters(
                 tts_text=intent.response_text,
-                emotion=None,  # TTS/Subtitle 不需要情感参数
-                vts_hotkey=None,
+                subtitle_text=intent.response_text,
+                tts_enabled=True,
+                subtitle_enabled=True,
             )
             self.logger.info(
-                f'生成参数: text="{params.text[:30]}...", enable_tts={params.enable_tts}, enable_subtitle={params.enable_subtitle}'
+                f'生成参数: tts_text="{params.tts_text[:30]}...", tts_enabled={params.tts_enabled}, subtitle_enabled={params.subtitle_enabled}'
             )
 
             # OutputPipeline 处理（参数后处理）
@@ -240,11 +241,11 @@ class OutputCoordinator:
                     return
                 self.logger.debug("OutputPipeline 处理完成")
 
-            # 发布 EXPRESSION_PARAMETERS_GENERATED 事件（事件驱动）
+            # 发布 OUTPUT_PARAMS 事件（事件驱动）
             # TTS/Subtitle Provider 订阅此事件并响应
             payload = ParametersGeneratedPayload.from_parameters(params, source_intent=intent.model_dump(mode="json"))
-            await self.event_bus.emit(CoreEvents.EXPRESSION_PARAMETERS_GENERATED, payload, source="OutputCoordinator")
-            self.logger.debug(f"已发布事件: {CoreEvents.EXPRESSION_PARAMETERS_GENERATED}")
+            await self.event_bus.emit(CoreEvents.OUTPUT_PARAMS, payload, source="OutputCoordinator")
+            self.logger.debug(f"已发布事件: {CoreEvents.OUTPUT_PARAMS}")
 
         except Exception as e:
             self.logger.error(f"处理Intent事件时出错: {e}", exc_info=True)

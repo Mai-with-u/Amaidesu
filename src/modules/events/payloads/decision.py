@@ -87,7 +87,7 @@ class IntentPayload(BasePayload):
     """
     意图生成事件 Payload
 
-    事件名：CoreEvents.DECISION_INTENT_GENERATED
+    事件名：CoreEvents.DECISION_INTENT
     发布者：DecisionManager（Decision Domain）
     订阅者：ExpressionGenerator（Output Domain）
 
@@ -129,6 +129,17 @@ class IntentPayload(BasePayload):
         if name in ["original_text", "response_text", "emotion", "actions"]:
             return self.intent_data.get(name, "")
         raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+
+    def _format_field_value(self, value: Any, indent: int = 0) -> str:
+        """格式化字段值，对 actions 字段进行特殊处理"""
+        if isinstance(value, list) and value and isinstance(value[0], dict):
+            # actions 列表，只显示类型和数量
+            types = [item.get("type", "?") for item in value[:3]]
+            if len(value) > 3:
+                types.append("...")
+            return f"[{', '.join(types)}]"
+        # 其他字段使用基类默认格式化
+        return super()._format_field_value(value, indent)
 
     def _debug_fields(self) -> List[str]:
         """返回需要显示的字段"""

@@ -130,10 +130,10 @@ async def test_invalid_raw_data_handling(event_bus, wait_for_event):
 
     # 等待可能的事件（可能会被过滤）
     try:
-        future = asyncio.create_task(wait_for_event(event_bus, CoreEvents.NORMALIZATION_MESSAGE_READY, timeout=1.0))
+        future = asyncio.create_task(wait_for_event(event_bus, CoreEvents.DATA_MESSAGE, timeout=1.0))
 
         await event_bus.emit(
-            CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload.from_raw_data(invalid_data), source="test"
+            CoreEvents.DATA_RAW, RawDataPayload.from_raw_data(invalid_data), source="test"
         )
 
         # 尝试等待事件（可能超时）
@@ -234,7 +234,7 @@ async def test_layer_cleanup_on_error(event_bus):
     await decision_manager.setup("mock", {})
 
     # 验证InputCoordinator已订阅事件
-    assert len(event_bus._handlers.get("perception.raw_data.generated", [])) > 0
+    assert len(event_bus._handlers.get("data.raw", [])) > 0
 
     # 验证DecisionProvider已初始化
     assert decision_manager.get_current_provider() is not None

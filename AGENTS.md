@@ -362,10 +362,10 @@ prompt = get_prompt_manager().render(
 from src.modules.events.names import CoreEvents
 
 # 发布事件
-await event_bus.emit(CoreEvents.NORMALIZATION_MESSAGE_READY, normalized_message)
+await event_bus.emit(CoreEvents.DATA_MESSAGE, normalized_message)
 
 # 订阅事件
-await event_bus.subscribe(CoreEvents.NORMALIZATION_MESSAGE_READY, self.handle_message)
+await event_bus.subscribe(CoreEvents.DATA_MESSAGE, self.handle_message)
 ```
 
 **详细文档**：
@@ -376,9 +376,9 @@ await event_bus.subscribe(CoreEvents.NORMALIZATION_MESSAGE_READY, self.handle_me
 
 | 事件名 | 发布者 | 订阅者 | 数据类型 |
 |--------|--------|--------|---------|
-| `normalization.message_ready` | Input Domain | Decision Domain | `NormalizedMessage` |
-| `decision.intent_generated` | Decision Domain | Output Domain | `Intent` |
-| `expression.parameters_generated` | ExpressionGenerator | OutputProviders | `RenderParameters` |
+| `data.message` | Input Domain | Decision Domain | `NormalizedMessage` |
+| `decision.intent` | Decision Domain | Output Domain | `Intent` |
+| `output.params` | ExpressionGenerator | OutputProviders | `RenderParameters` |
 
 ## ContextService 上下文管理
 
@@ -408,9 +408,9 @@ ContextService 提供对话历史管理和多会话支持。
 外部输入（弹幕、游戏、语音）
   ↓
 【Input Domain】外部数据 → NormalizedMessage
-  ↓ EventBus: normalization.message_ready
+  ↓ EventBus: data.message
 【Decision Domain】NormalizedMessage → Intent
-  ↓ EventBus: decision.intent_generated
+  ↓ EventBus: decision.intent
 【Output Domain】Intent → 实际输出
 ```
 

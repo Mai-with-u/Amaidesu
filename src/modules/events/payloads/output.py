@@ -22,7 +22,7 @@ class ParametersGeneratedPayload(BasePayload):
     """
     表情参数生成事件 Payload
 
-    事件名：CoreEvents.EXPRESSION_PARAMETERS_GENERATED
+    事件名：CoreEvents.OUTPUT_PARAMS
     发布者：ExpressionGenerator (Output Domain: 参数生成)
     订阅者：OutputProvider (Output Domain: 渲染输出)
 

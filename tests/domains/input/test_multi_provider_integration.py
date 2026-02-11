@@ -58,9 +58,9 @@ async def test_multiple_providers_concurrent():
 
     # 并发发布
     await asyncio.gather(
-        event_bus.emit("perception.raw_data.generated", RawDataPayload.from_raw_data(raw_data1), source="Console"),
-        event_bus.emit("perception.raw_data.generated", RawDataPayload.from_raw_data(raw_data2), source="Danmaku"),
-        event_bus.emit("perception.raw_data.generated", RawDataPayload.from_raw_data(raw_data3), source="Console"),
+        event_bus.emit("data.raw", RawDataPayload.from_raw_data(raw_data1), source="Console"),
+        event_bus.emit("data.raw", RawDataPayload.from_raw_data(raw_data2), source="Danmaku"),
+        event_bus.emit("data.raw", RawDataPayload.from_raw_data(raw_data3), source="Console"),
     )
 
     await asyncio.sleep(0.3)

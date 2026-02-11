@@ -15,12 +15,12 @@
 
     # 发送事件
     await event_bus.emit(
-        CoreEvents.PERCEPTION_RAW_DATA_GENERATED,
+        CoreEvents.DATA_RAW,
         RawDataPayload(content=data, source="console_input", data_type="text")
     )
 
     # 订阅事件（类型提示）
-    @event_bus.on(CoreEvents.NORMALIZATION_MESSAGE_READY)
+    @event_bus.on(CoreEvents.DATA_MESSAGE)
     async def handle_message(payload: MessageReadyPayload):
         message = payload.message
         logger.debug(f"收到消息: {message.text}")

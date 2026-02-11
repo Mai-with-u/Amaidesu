@@ -282,7 +282,6 @@ available_providers = [
     "maicore",  # MaiCore决策（默认，通过WebSocket连接MaiCore）
     "llm",      # LLM（直接调用LLM生成回复）
     "maicraft", # MaiCraft弹幕游戏决策
-    "mock",     # 模拟Provider（用于测试）
 ]
 
 # MaiCore DecisionProvider 配置

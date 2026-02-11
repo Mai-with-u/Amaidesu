@@ -42,28 +42,28 @@ async def test_complete_data_flow_with_mock_providers(event_bus, sample_raw_data
     decision_manager = DecisionManager(event_bus, llm_service=None)
     await decision_manager.setup("mock", {"default_response": "测试回复"})
 
-    # 3. 等待 normalization.message_ready 事件
-    norm_future = asyncio.create_task(wait_for_event(event_bus, CoreEvents.NORMALIZATION_MESSAGE_READY))
+    # 3. 等待 data.message 事件
+    norm_future = asyncio.create_task(wait_for_event(event_bus, CoreEvents.DATA_MESSAGE))
 
-    # 4. 等待 decision.intent_generated 事件
-    intent_future = asyncio.create_task(wait_for_event(event_bus, CoreEvents.DECISION_INTENT_GENERATED))
+    # 4. 等待 decision.intent 事件
+    intent_future = asyncio.create_task(wait_for_event(event_bus, CoreEvents.DECISION_INTENT))
 
     # 5. 发送 RawData
     await event_bus.emit(
-        CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload.from_raw_data(sample_raw_data), source="test"
+        CoreEvents.DATA_RAW, RawDataPayload.from_raw_data(sample_raw_data), source="test"
     )
 
-    # 6. 验证 normalization.message_ready 事件
+    # 6. 验证 data.message 事件
     event_name, event_data, source = await norm_future
-    assert event_name == CoreEvents.NORMALIZATION_MESSAGE_READY
+    assert event_name == CoreEvents.DATA_MESSAGE
     assert "message" in event_data
     normalized_message = event_data["message"]
     assert normalized_message["text"] == "你好，VTuber"
     assert normalized_message["source"] == "test_user"
 
-    # 7. 验证 decision.intent_generated 事件
+    # 7. 验证 decision.intent 事件
     event_name, event_data, source = await intent_future
-    assert event_name == CoreEvents.DECISION_INTENT_GENERATED
+    assert event_name == CoreEvents.DECISION_INTENT
     # IntentPayload 使用 intent_data 嵌套字典
     assert "intent_data" in event_data
     assert "provider" in event_data
@@ -91,11 +91,11 @@ async def test_input_domain_normalization(event_bus, sample_raw_data, wait_for_e
     await input_coordinator.setup()
 
     # 等待事件
-    future = asyncio.create_task(wait_for_event(event_bus, CoreEvents.NORMALIZATION_MESSAGE_READY))
+    future = asyncio.create_task(wait_for_event(event_bus, CoreEvents.DATA_MESSAGE))
 
     # 发送 RawData
     await event_bus.emit(
-        CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload.from_raw_data(sample_raw_data), source="test"
+        CoreEvents.DATA_RAW, RawDataPayload.from_raw_data(sample_raw_data), source="test"
     )
 
     # 验证结果
@@ -142,11 +142,11 @@ async def test_decision_provider_creates_intent(event_bus, wait_for_event):
     )
 
     # 等待决策事件
-    future = asyncio.create_task(wait_for_event(event_bus, CoreEvents.DECISION_INTENT_GENERATED))
+    future = asyncio.create_task(wait_for_event(event_bus, CoreEvents.DECISION_INTENT))
 
     # 发送 NormalizedMessage
     await event_bus.emit(
-        CoreEvents.NORMALIZATION_MESSAGE_READY, MessageReadyPayload.from_normalized_message(normalized), source="test"
+        CoreEvents.DATA_MESSAGE, MessageReadyPayload.from_normalized_message(normalized), source="test"
     )
 
     # 验证结果
@@ -198,7 +198,7 @@ async def test_multiple_sequential_messages(event_bus, wait_for_event):
 
     # 连续发送 3 条消息
     for msg in messages:
-        await event_bus.emit("perception.raw_data.generated", RawDataPayload.from_raw_data(msg), source="test")
+        await event_bus.emit("data.raw", RawDataPayload.from_raw_data(msg), source="test")
         await asyncio.sleep(0.1)  # 等待处理
 
     # 等待所有消息处理完成

@@ -42,7 +42,7 @@ class BasePayload(BaseModel):
 
     def _format_field_value(self, value: Any, indent: int = 0) -> str:
         """
-        格式化字段值用于显示。
+        格式化字段值用于显示（单行模式）。
 
         Args:
             value: 字段值
@@ -51,8 +51,6 @@ class BasePayload(BaseModel):
         Returns:
             格式化后的字符串
         """
-        prefix = "  " * indent
-
         # 处理嵌套的 Payload 对象（BaseModel 子类）
         if isinstance(value, BaseModel):
             return str(value)
@@ -60,17 +58,26 @@ class BasePayload(BaseModel):
         if isinstance(value, dict):
             if not value:
                 return "{}"
-            items = [f"{k}: {self._format_field_value(v, 0)}" for k, v in value.items()]
-            return "{\n" + "\n".join(prefix + "  " + item for item in items) + "\n" + prefix + "}"
+            # 单行格式化，只显示前几个键值对
+            items = []
+            for k, v in list(value.items())[:3]:  # 最多显示 3 个键值对
+                formatted_v = self._format_field_value(v, 0)
+                items.append(f'"{k}": {formatted_v}')
+            if len(value) > 3:
+                items.append("...")
+            return "{" + ", ".join(items) + "}"
         elif isinstance(value, list):
             if not value:
                 return "[]"
-            items = [self._format_field_value(item, 0) for item in value]
+            # 单行格式化，只显示前几个元素
+            items = [self._format_field_value(item, 0) for item in value[:3]]
+            if len(value) > 3:
+                items.append("...")
             return "[" + ", ".join(items) + "]"
         elif isinstance(value, str):
-            # 限制字符串长度
-            if len(value) > 50:
-                return f'"{value[:47]}..."'
+            # 限制字符串长度（更短，适合单行日志）
+            if len(value) > 30:
+                return f'"{value[:27]}..."'
             return f'"{value}"'
         else:
             return str(value)

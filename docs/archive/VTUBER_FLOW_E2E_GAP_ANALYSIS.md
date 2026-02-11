@@ -8,18 +8,18 @@
 
 ```
 1. InputProvider 产生 RawData
-   → InputProviderManager 发布 perception.raw_data.generated
+   → InputProviderManager 发布 data.raw
 
-2. InputLayer 订阅 perception.raw_data.generated
-   → 转为 NormalizedMessage → 发布 normalization.message_ready
+2. InputLayer 订阅 data.raw
+   → 转为 NormalizedMessage → 发布 data.message
 
-3. DecisionManager 订阅 normalization.message_ready
-   → DecisionProvider.decide() → 发布 decision.intent_generated（带 Intent）
+3. DecisionManager 订阅 data.message
+   → DecisionProvider.decide() → 发布 decision.intent（带 Intent）
 
-4. FlowCoordinator 订阅 decision.intent_generated
-   → ExpressionGenerator.generate(intent) → 发布 expression.parameters_generated（ExpressionParameters）
+4. FlowCoordinator 订阅 decision.intent
+   → ExpressionGenerator.generate(intent) → 发布 output.params（ExpressionParameters）
 
-5. 各 OutputProvider 订阅 expression.parameters_generated
+5. 各 OutputProvider 订阅 output.params
    → render(parameters)
 ```
 
@@ -33,7 +33,7 @@
 | **Layer 1 管理** | InputProviderManager（start_all_providers / stop_all_providers） | ✅ 已实现 |
 | **Layer 2** | InputLayer（RawData → NormalizedMessage） | ✅ 已实现 |
 | **Layer 3 决策** | MaiCoreDecisionProvider, RuleEngineDecisionProvider, LocalLLMDecisionProvider | ✅ 已实现 |
-| **Layer 3 管理** | DecisionManager（订阅 normalization.message_ready，发布 decision.intent_generated） | ✅ 已实现 |
+| **Layer 3 管理** | DecisionManager（订阅 data.message，发布 decision.intent） | ✅ 已实现 |
 | **Layer 4-5** | ExpressionGenerator, FlowCoordinator, OutputProviderManager | ✅ 已实现 |
 | **Layer 7 渲染** | TTSProvider, SubtitleProvider, StickerOutputProvider, VTSProvider, OmniTTSProvider, AvatarOutputProvider | ✅ 已实现（含 Registry） |
 
@@ -43,7 +43,7 @@
 
 **现象**：`main.py` 未创建 `InputProviderManager`，也未在任何地方调用 `start_all_providers()`。
 
-- `InputLayer` 只订阅了 `perception.raw_data.generated`，但**没有任何东西在生产环境发布该事件**（除非插件内部自己发，且插件目录 `src/plugins` 当前不存在，只有 `plugins_backup`）。
+- `InputLayer` 只订阅了 `data.raw`，但**没有任何东西在生产环境发布该事件**（除非插件内部自己发，且插件目录 `src/plugins` 当前不存在，只有 `plugins_backup`）。
 - 因此**整条链路从第一步就断掉**：没有 RawData → 没有 NormalizedMessage → 决策和渲染都不会被触发。
 
 **需要补的代码**：
@@ -71,8 +71,8 @@
 
 **现象**：`create_app_components()` 使用 `config.get("decision", {})` 和 `config.get("rendering", {})`。若 `config.toml` 中没有这两段，则：
 
-- `decision_manager = None` → 无人订阅 `normalization.message_ready`，也不会发布 `decision.intent_generated`。
-- `flow_coordinator = None` → 无人订阅 `decision.intent_generated`，也不会发布 `expression.parameters_generated`。
+- `decision_manager = None` → 无人订阅 `data.message`，也不会发布 `decision.intent`。
+- `flow_coordinator = None` → 无人订阅 `decision.intent`，也不会发布 `output.params`。
 
 **需要补的配置**（可参考 `config-template.toml`）：
 
@@ -100,9 +100,9 @@
 
 ### 2. MockOutputProvider（可选）
 
-- **作用**：只订阅 `expression.parameters_generated`，把收到的 `ExpressionParameters` 追加到列表，测试里对列表做 assert（例如是否收到、条数、关键字段）。
+- **作用**：只订阅 `output.params`，把收到的 `ExpressionParameters` 追加到列表，测试里对列表做 assert（例如是否收到、条数、关键字段）。
 - **实现要点**：
-  - 继承 `OutputProvider`，在 `setup()` 里 `event_bus.on("expression.parameters_generated", self._on_params)`。
+  - 继承 `OutputProvider`，在 `setup()` 里 `event_bus.on("output.params", self._on_params)`。
   - `_on_params` 里把 event_data 中的参数 append 到 `self.received_params`。
   - `render()` 可空实现或仅记录。
 
@@ -115,10 +115,10 @@
   1. 搭建：EventBus、InputLayer、DecisionManager（使用 MockDecisionProvider 或 RuleEngineDecisionProvider）、FlowCoordinator（可挂 1 个 MockOutputProvider）。
   2. 启动：InputLayer.setup()、DecisionManager 订阅、FlowCoordinator.setup() + start()、MockOutputProvider.setup()。
   3. 触发输入（二选一）：
-     - 直接 `await event_bus.emit("perception.raw_data.generated", {"data": raw_data, "source": "test"}, source="test")`；
+     - 直接 `await event_bus.emit("data.raw", {"data": raw_data, "source": "test"}, source="test")`；
      - 或启动 MockDanmakuProvider + InputProviderManager，等一条模拟弹幕。
   4. 等待/断言：
-     - 可等待 `decision.intent_generated` 或 `expression.parameters_generated` 被调用（例如用 asyncio.Event 或 mock 回调计数）；
+     - 可等待 `decision.intent` 或 `output.params` 被调用（例如用 asyncio.Event 或 mock 回调计数）；
      - 断言 MockOutputProvider 的 `received_params` 非空且包含预期字段（如 `tts_text`、`subtitle_text`）。
 - **位置建议**：例如 `tests/e2e/test_vtuber_flow_e2e.py` 或 `tests/layers/test_full_flow_integration.py`。
 

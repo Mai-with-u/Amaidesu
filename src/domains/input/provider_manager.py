@@ -224,7 +224,7 @@ class InputProviderManager:
 
                 # 发布事件
                 await self.event_bus.emit(
-                    CoreEvents.PERCEPTION_RAW_DATA_GENERATED,
+                    CoreEvents.DATA_RAW,
                     RawDataPayload.from_raw_data(data),
                     source=provider_name,
                 )

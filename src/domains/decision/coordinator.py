@@ -2,10 +2,10 @@
 DecisionCoordinator - 决策域协调器
 
 职责:
-- 订阅 Input Domain 的 NORMALIZATION_MESSAGE_READY 事件
+- 订阅 Input Domain 的 DATA_MESSAGE 事件
 - 构建 SourceContext
 - 调用 DecisionProviderManager 进行决策
-- 发布 DECISION_INTENT_GENERATED 事件到 Output Domain
+- 发布 DECISION_INTENT 事件到 Output Domain
 - 确保 3 域架构的数据流正确性
 """
 
@@ -25,10 +25,10 @@ class DecisionCoordinator:
     决策协调器 (Decision Domain: 协调器)
 
     职责:
-    - 订阅 normalization.message_ready 事件（来自 Input Domain）
+    - 订阅 data.message 事件（来自 Input Domain）
     - 构建 SourceContext 传递消息来源信息
     - 调用 DecisionProviderManager.decide() 进行决策
-    - 发布 decision.intent_generated 事件（到 Output Domain）
+    - 发布 decision.intent 事件（到 Output Domain）
 
     架构约束（3域架构）:
     - 只订阅 Input Domain 的事件
@@ -45,7 +45,7 @@ class DecisionCoordinator:
         await coordinator.setup()
 
         # 自动处理 NormalizedMessage
-        # EventBus.emit(NORMALIZATION_MESSAGE_READY) -> coordinator._on_normalized_message_ready()
+        # EventBus.emit(DATA_MESSAGE) -> coordinator._on_data_message()
 
         # 清理
         await coordinator.cleanup()
@@ -73,21 +73,21 @@ class DecisionCoordinator:
         """
         启动协调器
 
-        订阅 normalization.message_ready 事件（防止重复订阅）。
+        订阅 data.message 事件（防止重复订阅）。
         """
         if not self._event_subscribed:
             from src.modules.events.payloads.input import MessageReadyPayload
 
             self.event_bus.on(
-                CoreEvents.NORMALIZATION_MESSAGE_READY,
-                self._on_normalized_message_ready,
+                CoreEvents.DATA_MESSAGE,
+                self._on_data_message,
                 model_class=MessageReadyPayload,
             )
             self._event_subscribed = True
-            self.logger.info(f"DecisionCoordinator 已订阅 '{CoreEvents.NORMALIZATION_MESSAGE_READY}' 事件（类型化）")
+            self.logger.info(f"DecisionCoordinator 已订阅 '{CoreEvents.DATA_MESSAGE}' 事件（类型化）")
         else:
             self.logger.debug(
-                f"DecisionCoordinator 已订阅过 '{CoreEvents.NORMALIZATION_MESSAGE_READY}' 事件，跳过重复订阅"
+                f"DecisionCoordinator 已订阅过 '{CoreEvents.DATA_MESSAGE}' 事件，跳过重复订阅"
             )
 
     async def cleanup(self) -> None:
@@ -97,7 +97,7 @@ class DecisionCoordinator:
         取消事件订阅。
         """
         if self._event_subscribed:
-            self.event_bus.off(CoreEvents.NORMALIZATION_MESSAGE_READY, self._on_normalized_message_ready)
+            self.event_bus.off(CoreEvents.DATA_MESSAGE, self._on_data_message)
             self._event_subscribed = False
             self.logger.debug("DecisionCoordinator 已取消事件订阅")
 
@@ -129,9 +129,9 @@ class DecisionCoordinator:
             extra={k: v for k, v in metadata.items() if k not in ("type", "timestamp", "source")},
         )
 
-    async def _on_normalized_message_ready(self, event_name: str, payload: "MessageReadyPayload", source: str):
+    async def _on_data_message(self, event_name: str, payload: "MessageReadyPayload", source: str):
         """
-        处理 normalization.message_ready 事件（类型化）
+        处理 data.message 事件（类型化）
 
         当 InputDomain 生成 NormalizedMessage 时：
         1. 从字典格式的 payload.message 提取数据
@@ -139,10 +139,10 @@ class DecisionCoordinator:
         3. 提取 SourceContext
         4. 调用 DecisionProviderManager.decide()
         5. 将 SourceContext 注入 Intent
-        6. 发布 decision.intent_generated 事件（3域架构）
+        6. 发布 decision.intent 事件（3域架构）
 
         Args:
-            event_name: 事件名称 (CoreEvents.NORMALIZATION_MESSAGE_READY)
+            event_name: 事件名称 (CoreEvents.DATA_MESSAGE)
             payload: 类型化的事件数据（MessageReadyPayload 对象）
             source: 事件源
         """
@@ -193,11 +193,11 @@ class DecisionCoordinator:
             # 获取当前 Provider 名称
             provider_name = self._provider_manager.get_current_provider_name() or "unknown"
 
-            # 发布 decision.intent_generated 事件（3域架构）
+            # 发布 decision.intent 事件（3域架构）
             from src.modules.events.payloads import IntentPayload
 
             await self.event_bus.emit(
-                CoreEvents.DECISION_INTENT_GENERATED,
+                CoreEvents.DECISION_INTENT,
                 IntentPayload.from_intent(intent, provider_name),
                 source="DecisionCoordinator",
             )

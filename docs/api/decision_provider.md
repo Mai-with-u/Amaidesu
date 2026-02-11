@@ -17,7 +17,7 @@ Input Domain           Decision Domain          Output Domain
 ─────────────────      ─────────────────        ────────────────
 NormalizedMessage  →  DecisionProvider.decide()  →  Intent
                           ↓
-                    DECISION_INTENT_GENERATED 事件
+                    DECISION_INTENT 事件
                           ↓
                     Output Domain 接收并处理
 ```
@@ -523,13 +523,13 @@ DecisionProvider 通常订阅以下事件：
 
 | 事件名 | 常量 | 数据类型 | 说明 |
 |--------|------|---------|------|
-| `normalization.message_ready` | `CoreEvents.NORMALIZATION_MESSAGE_READY` | `NormalizedMessage` | Input Domain 生成标准化消息 |
+| `data.message` | `CoreEvents.DATA_MESSAGE` | `NormalizedMessage` | Input Domain 生成标准化消息 |
 
 DecisionProvider 发布以下事件：
 
 | 事件名 | 常量 | 数据类型 | 说明 |
 |--------|------|---------|------|
-| `decision.intent_generated` | `CoreEvents.DECISION_INTENT_GENERATED` | `Intent` | 生成决策意图 |
+| `decision.intent` | `CoreEvents.DECISION_INTENT` | `Intent` | 生成决策意图 |
 
 **注意**：DecisionProvider 通常不需要手动订阅事件，由 `DecisionCoordinator` 统一管理。
 

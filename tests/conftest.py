@@ -43,8 +43,13 @@ async def event_bus() -> AsyncGenerator[EventBus, None]:
     Yields:
         EventBus: 新的事件总线实例
     """
+    from src.modules.events.registry import EventRegistry, register_core_events
+
+    # 只在第一次调用时注册核心事件
+    if not EventRegistry.list_all_events():
+        register_core_events()
+
     bus = EventBus()
-    await bus.initialize()
     yield bus
     await bus.cleanup()
 

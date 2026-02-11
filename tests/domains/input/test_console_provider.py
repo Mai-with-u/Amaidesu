@@ -125,7 +125,7 @@ async def test_console_input_provider_data_flow():
         if message_dict:
             collected_messages.append(message_dict)
 
-    event_bus.on("normalization.message_ready", on_message_ready, priority=50)
+    event_bus.on(CoreEvents.DATA_MESSAGE, on_message_ready, priority=50)
 
     # 模拟 ConsoleInputProvider 发布 RawData
     ConsoleInputProvider({})
@@ -137,7 +137,7 @@ async def test_console_input_provider_data_flow():
     )
 
     await event_bus.emit(
-        CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload.from_raw_data(raw_data), source="ConsoleInputProvider"
+        CoreEvents.DATA_RAW, RawDataPayload.from_raw_data(raw_data), source="ConsoleInputProvider"
     )
 
     await asyncio.sleep(0.2)
@@ -166,7 +166,7 @@ async def test_console_provider_gift_command_flow():
         if message_dict:
             collected_messages.append(message_dict)
 
-    event_bus.on("normalization.message_ready", on_message_ready, priority=50)
+    event_bus.on(CoreEvents.DATA_MESSAGE, on_message_ready, priority=50)
 
     # 模拟礼物命令
     ConsoleInputProvider({})
@@ -175,7 +175,7 @@ async def test_console_provider_gift_command_flow():
     )
 
     await event_bus.emit(
-        CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload.from_raw_data(raw_data), source="ConsoleInputProvider"
+        CoreEvents.DATA_RAW, RawDataPayload.from_raw_data(raw_data), source="ConsoleInputProvider"
     )
 
     await asyncio.sleep(0.2)

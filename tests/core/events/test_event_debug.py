@@ -113,10 +113,9 @@ class TestInputPayloads:
         payload = RawDataPayload(content="测试消息", source="console_input", data_type="text")
         debug_str = str(payload)
 
-        assert "RawDataPayload" in debug_str
-        assert 'source="console_input"' in debug_str
-        assert 'data_type="text"' in debug_str
-        assert 'content="测试消息"' in debug_str
+        # 新格式: [text] "测试消息"
+        assert "[text]" in debug_str
+        assert "测试消息" in debug_str
 
     def test_raw_data_payload_with_metadata(self):
         """测试带元数据的 RawDataPayload"""
@@ -474,8 +473,11 @@ class TestEventBusDebugLog:
 
             # 验证日志输出包含事件内容
             log_output = log_capture.getvalue()
-            assert "事件内容:" in log_output
-            assert "RawDataPayload" in log_output
+            # 新格式: [event] source: [type] "text"
+            # 注意: 事件名被简化为最后一段，test.event -> event
+            assert "[event]" in log_output
+            assert "test_source" in log_output
+            assert "测试消息" in log_output
         finally:
             # 清理 log handler
             logger.remove(handler_id)

@@ -114,6 +114,28 @@ class EventBus:
         self.logger = get_logger("EventBus")
         self.logger.debug(f"EventBus 初始化完成 (stats={enable_stats}, validation=enabled)")
 
+    def _short_event_name(self, event_name: str) -> str:
+        """
+        将事件名称转换为简短形式
+
+        映射规则：
+        - data.raw -> data
+        - data.message -> message
+        - decision.intent -> intent
+        - output.params -> params
+
+        Args:
+            event_name: 完整事件名称（如 "data.raw.generated"）
+
+        Returns:
+            简短名称（如 "raw"）
+        """
+        parts = event_name.split(".")
+        if len(parts) >= 2:
+            # 返回第二部分（例如：data.raw -> raw, decision.intent -> intent）
+            return parts[1]
+        return event_name
+
     async def emit(self, event_name: str, data: BaseModel, source: str = "unknown", error_isolate: bool = True) -> None:
         """
         发布类型安全的事件
@@ -154,9 +176,30 @@ class EventBus:
         # 按优先级排序（数字越小越优先）
         handlers = sorted(handlers, key=lambda h: h.priority)
 
-        self.logger.debug(f"发布事件 {event_name} (来源: {source}, 监听器: {len(handlers)})")
-        # 新增：debug 日志显示事件内容
-        self.logger.debug(f"事件内容: {data}")
+        # 打印事件信息（INFO 级别，简洁格式）
+        # 为 RawDataPayload 添加特殊处理，提取用户名
+        short_name = self._short_event_name(event_name)
+        if isinstance(data, __import__("src.modules.events.payloads.input", "RawDataPayload")):
+            # RawDataPayload: 从 content 中提取用户名
+            if isinstance(data.content, dict):
+                user_name = data.content.get("user_name", "")
+                text = data.content.get("text", str(data.content))
+            else:
+                user_name = ""
+                text = str(data.content)
+
+            # 格式化用户名
+            user_part = f" [{user_name}]" if user_name else ""
+
+            # 截断长文本
+            if len(text) > 50:
+                text = text[:47] + "..."
+
+            # 格式: [event] source [user_name]: text
+            self.logger.info(f"[{short_name}] {data.source}{user_part}: {text}")
+        else:
+            # 其他 Payload 使用默认格式
+            self.logger.info(f"[{short_name}] {source}: {data}")
 
         # 更新统计
         if self.enable_stats:
@@ -241,7 +284,9 @@ class EventBus:
         # 按优先级排序（数字越小越优先）
         handlers = sorted(handlers, key=lambda h: h.priority)
 
-        self.logger.debug(f"发布事件 {event_name} (来源: {source}, 监听器: {len(handlers)})")
+        # 打印事件信息（INFO 级别，简洁格式）
+        short_name = self._short_event_name(event_name)
+        self.logger.info(f"[{short_name}] {source}: {data}")
 
         # === 4. 更新统计 ===
         if self.enable_stats:

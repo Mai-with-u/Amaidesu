@@ -28,7 +28,7 @@
 │  │                                                              │
 │  │  配置: [providers.input]                                     │
 │  └────────┬────────┘                                            │
-│           │ EventBus: normalization.message_ready               │
+│           │ EventBus: data.message               │
 │           ▼                                                     │
 │  ┌─────────────────┐                                            │
 │  │ Decision Domain │  NormalizedMessage → Intent                │
@@ -40,7 +40,7 @@
 │  │                                                              │
 │  │  配置: [providers.decision]                                  │
 │  └────────┬────────┘                                            │
-│           │ EventBus: decision.intent_generated                 │
+│           │ EventBus: decision.intent                 │
 │           ▼                                                     │
 │  ┌─────────────────┐                                            │
 │  │  Output Domain  │  Intent → 实际输出                         │
@@ -220,7 +220,7 @@ class MyOutputProvider(OutputProvider):
     async def initialize(self):
         # 错误！绕过了 Decision Domain
         await self.event_bus.subscribe(
-            CoreEvents.NORMALIZATION_MESSAGE_READY,  # Input 事件
+            CoreEvents.DATA_MESSAGE,  # Input 事件
             self.handle_message
         )
 ```
@@ -241,7 +241,7 @@ class InputDomain:
     async def process_and_publish(self, raw_data: RawData):
         normalized = await self.normalize(raw_data)
         await self.event_bus.emit(
-            CoreEvents.NORMALIZATION_MESSAGE_READY,
+            CoreEvents.DATA_MESSAGE,
             MessageReadyPayload(message=normalized)
         )
 
@@ -249,14 +249,14 @@ class InputDomain:
 class DecisionManager:
     async def initialize(self):
         await self.event_bus.subscribe(
-            CoreEvents.NORMALIZATION_MESSAGE_READY,
+            CoreEvents.DATA_MESSAGE,
             self.handle_message
         )
 
     async def handle_message(self, payload: MessageReadyPayload):
         intent = await self.decision_provider.decide(payload.message)
         await self.event_bus.emit(
-            CoreEvents.DECISION_INTENT_GENERATED,
+            CoreEvents.DECISION_INTENT,
             IntentPayload(intent=intent)
         )
 
@@ -264,7 +264,7 @@ class DecisionManager:
 class OutputProviderManager:
     async def initialize(self):
         await self.event_bus.subscribe(
-            CoreEvents.DECISION_INTENT_GENERATED,
+            CoreEvents.DECISION_INTENT,
             self.handle_intent
         )
 
@@ -288,12 +288,12 @@ class OutputProviderManager:
 
 | 发布者 | 事件 | 订阅者 | 是否允许 |
 |--------|------|--------|---------|
-| InputProvider | `RAW_DATA_GENERATED` | InputLayer | ✅ |
-| InputLayer | `NORMALIZATION_MESSAGE_READY` | DecisionManager | ✅ |
-| DecisionManager | `DECISION_INTENT_GENERATED` | OutputManager | ✅ |
+| InputProvider | `DATA_RAW` | InputLayer | ✅ |
+| InputLayer | `DATA_MESSAGE` | DecisionManager | ✅ |
+| DecisionManager | `DECISION_INTENT` | OutputManager | ✅ |
 | OutputProvider | `RENDER_COMPLETED` | （监听/日志） | ✅ |
 | OutputProvider | `RENDER_COMPLETED` | DecisionManager | ❌ |
-| OutputProvider | `NORMALIZATION_MESSAGE_READY` | OutputManager | ❌ |
+| OutputProvider | `DATA_MESSAGE` | OutputManager | ❌ |
 
 #### 测试验证
 
