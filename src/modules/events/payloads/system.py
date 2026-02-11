@@ -8,7 +8,7 @@
 """
 
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -111,14 +111,9 @@ class ErrorPayload(BasePayload):
         }
     )
 
-    def _debug_fields(self) -> List[str]:
-        """
-        返回需要在 debug 日志中显示的字段名列表。
-
-        Returns:
-            字段名列表
-        """
-        return ["error_type", "error_message", "source"]
+    def __str__(self) -> str:
+        """自定义字符串表示，只显示关键字段（排除 stack_trace）"""
+        return f'ErrorPayload(error_type="{self.error_type}", error_message="{self.error_message}", source="{self.source}")'
 
     @classmethod
     def from_exception(

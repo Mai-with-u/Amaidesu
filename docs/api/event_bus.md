@@ -473,9 +473,10 @@ class MyCustomPayload(BasePayload):
     count: int = Field(default=0, description="计数")
     user_id: str = Field(..., description="用户ID")
 
-    def _debug_fields(self):
-        """自定义调试输出字段"""
-        return ["message", "count"]
+    def __str__(self) -> str:
+        """自定义调试输出格式（覆盖默认实现）"""
+        # 只显示 message 和 count，不显示 user_id
+        return f'MyCustomPayload(message="{self.message}", count={self.count})'
 
 # 使用自定义 Payload
 await event_bus.emit(
@@ -570,13 +571,14 @@ class MyEvent(BaseModel):
     message: str
 
 # ✅ 推荐：继承 BasePayload（获得调试输出）
-from src/modules/events/payloads/base import BasePayload
+from src.modules.events/payloads.base import BasePayload
 
 class MyEvent(BasePayload):
     message: str
 
-    def _debug_fields(self):
-        return ["message"]
+    def __str__(self) -> str:
+        """自定义格式化输出（可选）"""
+        return f'MyEvent(message="{self.message}")'
 ```
 
 ### 4. 提供有意义的 source

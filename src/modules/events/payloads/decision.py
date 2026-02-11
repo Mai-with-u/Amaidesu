@@ -10,7 +10,7 @@ Decision Domain 事件 Payload 定义
 """
 
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from pydantic import ConfigDict, Field
 
@@ -52,9 +52,10 @@ class DecisionRequestPayload(BasePayload):
         }
     )
 
-    def _debug_fields(self) -> List[str]:
-        """返回需要显示的字段"""
-        return ["priority", "timestamp"]
+    def __str__(self) -> str:
+        """简化格式：只显示关键字段"""
+        class_name = self.__class__.__name__
+        return f"{class_name}(priority={self.priority}, timestamp={self.timestamp:.0f})"
 
 
 class IntentActionPayload(BasePayload):
@@ -78,9 +79,10 @@ class IntentActionPayload(BasePayload):
         }
     )
 
-    def _debug_fields(self) -> List[str]:
-        """返回需要显示的字段"""
-        return ["type", "params", "priority"]
+    def __str__(self) -> str:
+        """简化格式：显示动作类型和参数"""
+        class_name = self.__class__.__name__
+        return f'{class_name}(type="{self.type}", params={self._format_field_value(self.params)}, priority={self.priority})'
 
 
 class IntentPayload(BasePayload):
@@ -130,26 +132,27 @@ class IntentPayload(BasePayload):
             return self.intent_data.get(name, "")
         raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
 
-    def _format_field_value(self, value: Any, indent: int = 0) -> str:
-        """格式化字段值，对 actions 字段进行特殊处理"""
-        if isinstance(value, list) and value and isinstance(value[0], dict):
-            # actions 列表，只显示类型和数量
-            types = [item.get("type", "?") for item in value[:3]]
-            if len(value) > 3:
-                types.append("...")
-            return f"[{', '.join(types)}]"
-        # 其他字段使用基类默认格式化
-        return super()._format_field_value(value, indent)
+    def __str__(self) -> str:
+        """
+        自定义字符串表示，显示 intent_data 中的关键字段。
 
-    def _debug_fields(self) -> List[str]:
-        """返回需要显示的字段"""
-        return [
-            "provider",
-            "original_text",
-            "response_text",
-            "emotion",
-            "actions",
+        Returns:
+            调试字符串
+        """
+        parts = [
+            f'provider="{self.provider}"',
+            f'original_text="{self.intent_data.get("original_text", "")}"',
+            f'response_text="{self.intent_data.get("response_text", "")}"',
+            f'emotion="{self.intent_data.get("emotion", "")}"',
         ]
+        # 格式化 actions
+        actions = self.intent_data.get("actions", [])
+        if actions:
+            types = [a.get("type", "?") for a in actions[:3]]
+            if len(actions) > 3:
+                types.append("...")
+            parts.append(f"actions=[{', '.join(types)}]")
+        return f"IntentPayload({', '.join(parts)})"
 
     @classmethod
     def from_intent(cls, intent: "Intent", provider: str) -> "IntentPayload":
@@ -218,9 +221,10 @@ class DecisionResponsePayload(BasePayload):
         }
     )
 
-    def _debug_fields(self) -> List[str]:
-        """返回需要显示的字段"""
-        return ["provider", "latency_ms"]
+    def __str__(self) -> str:
+        """简化格式：显示响应信息"""
+        class_name = self.__class__.__name__
+        return f'{class_name}(provider="{self.provider}", latency_ms={self.latency_ms:.1f})'
 
 
 class ProviderConnectedPayload(BasePayload):
@@ -250,9 +254,9 @@ class ProviderConnectedPayload(BasePayload):
         }
     )
 
-    def _debug_fields(self) -> List[str]:
-        """返回需要显示的字段"""
-        return ["provider", "endpoint"]
+    def __str__(self) -> str:
+        """自定义字符串表示，只显示关键字段"""
+        return f'ProviderConnectedPayload(provider="{self.provider}", endpoint="{self.endpoint}")'
 
 
 class ProviderDisconnectedPayload(BasePayload):
@@ -284,6 +288,6 @@ class ProviderDisconnectedPayload(BasePayload):
         }
     )
 
-    def _debug_fields(self) -> List[str]:
-        """返回需要显示的字段"""
-        return ["provider", "reason", "will_retry"]
+    def __str__(self) -> str:
+        """自定义字符串表示，只显示关键字段"""
+        return f'ProviderDisconnectedPayload(provider="{self.provider}", reason="{self.reason}", will_retry={self.will_retry})'

@@ -7,7 +7,7 @@ Input Domain 事件 Payload 定义
 """
 
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from pydantic import ConfigDict, Field
 
@@ -67,10 +67,6 @@ class RawDataPayload(BasePayload):
         if user_name:
             result += f" ({user_name})"
         return result
-
-    def _debug_fields(self) -> List[str]:
-        """返回需要显示的字段"""
-        return ["source", "data_type", "content"]
 
     @classmethod
     def from_raw_data(cls, raw_data: "RawData") -> "RawDataPayload":
@@ -154,11 +150,6 @@ class MessageReadyPayload(BasePayload):
         if user_name:
             return f"{text} ({user_name})"
         return text
-
-    def _debug_fields(self) -> List[str]:
-        """返回需要显示的字段"""
-        # 只显示 message 字段（因为 __str__ 已自定义）
-        return ["message"]
 
     def _format_field_value(self, value: Any, indent: int = 0) -> str:
         """格式化字段值，对 message 字段进行特殊处理（单行格式）"""

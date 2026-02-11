@@ -108,7 +108,7 @@ class MockDanmakuInputProvider(InputProvider):
 
                 # 创建RawData
                 raw_data = RawData(
-                    content=data, source="mock_danmaku", data_type="message", timestamp=asyncio.get_event_loop().time()
+                    content=data, source="mock_danmaku", data_type="text", timestamp=asyncio.get_event_loop().time()
                 )
 
                 self.logger.debug(f"发送模拟消息 (行 {self._current_line_index}): {str(data)[:50]}...")

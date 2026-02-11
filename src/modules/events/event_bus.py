@@ -38,6 +38,8 @@ from pydantic import BaseModel, ValidationError
 from src.modules.events.names import CoreEvents
 from src.modules.events.registry import EventRegistry
 from src.modules.logging import get_logger
+# 导入 payload 类型用于日志格式化
+from src.modules.events.payloads.input import RawDataPayload, MessageReadyPayload
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -114,28 +116,7 @@ class EventBus:
         self.logger = get_logger("EventBus")
         self.logger.debug(f"EventBus 初始化完成 (stats={enable_stats}, validation=enabled)")
 
-    def _short_event_name(self, event_name: str) -> str:
-        """
-        将事件名称转换为简短形式
-
-        映射规则：
-        - data.raw -> data
-        - data.message -> message
-        - decision.intent -> intent
-        - output.params -> params
-
-        Args:
-            event_name: 完整事件名称（如 "data.raw.generated"）
-
-        Returns:
-            简短名称（如 "raw"）
-        """
-        parts = event_name.split(".")
-        if len(parts) >= 2:
-            # 返回第二部分（例如：data.raw -> raw, decision.intent -> intent）
-            return parts[1]
-        return event_name
-
+  
     async def emit(self, event_name: str, data: BaseModel, source: str = "unknown", error_isolate: bool = True) -> None:
         """
         发布类型安全的事件
@@ -176,17 +157,12 @@ class EventBus:
         # 按优先级排序（数字越小越优先）
         handlers = sorted(handlers, key=lambda h: h.priority)
 
-        # 打印事件信息（INFO 级别，简洁格式）
-        # 为 RawDataPayload 添加特殊处理，提取用户名
-        short_name = self._short_event_name(event_name)
+        # 打印事件信息（INFO 级别）
+        # 为 RawDataPayload 和 MessageReadyPayload 添加特殊处理，提取用户名
 
-        # 动态导入 RawDataPayload 进行类型检查（避免循环导入）
-        try:
-            from src.modules.events.payloads.input import RawDataPayload
-
-            is_raw_data = isinstance(data, RawDataPayload)
-        except ImportError:
-            is_raw_data = False
+        # 类型检查（直接使用顶部导入的类型，避免动态导入失败）
+        is_raw_data = isinstance(data, RawDataPayload)
+        is_message_ready = isinstance(data, MessageReadyPayload)
 
         if is_raw_data:
             # RawDataPayload: 从 content 中提取用户名
@@ -205,10 +181,34 @@ class EventBus:
                 text = text[:47] + "..."
 
             # 格式: [event] source [user_name]: text
-            self.logger.info(f"[{short_name}] {data.source}{user_part}: {text}")
+            self.logger.info(f"[{event_name}] {data.source}{user_part}: {text}")
+        elif is_message_ready:
+            # MessageReadyPayload: 从 message 字典中提取用户名和文本
+            if isinstance(data.message, dict):
+                # 文本直接在 message 字典的 "text" 键中
+                text = data.message.get("text", "")
+                # 用户名可能在 metadata 中（因为 NormalizedMessage 的 user_name 通过 metadata 传递）
+                metadata = data.message.get("metadata", {})
+                user_name = metadata.get("user_name", "")
+            elif isinstance(data.message, str):
+                user_name = ""
+                text = data.message
+            else:
+                user_name = ""
+                text = str(data.message)
+
+            # 格式化用户名
+            user_part = f" [{user_name}]" if user_name else ""
+
+            # 截断长文本
+            if len(text) > 50:
+                text = text[:47] + "..."
+
+            # 格式: [event] source [user_name]: text
+            self.logger.info(f"[{event_name}] {data.source}{user_part}: {text}")
         else:
             # 其他 Payload 使用默认格式
-            self.logger.info(f"[{short_name}] {source}: {data}")
+            self.logger.info(f"[{event_name}] {source}: {data}")
 
         # 更新统计
         if self.enable_stats:
@@ -294,8 +294,8 @@ class EventBus:
         handlers = sorted(handlers, key=lambda h: h.priority)
 
         # 打印事件信息（INFO 级别，简洁格式）
-        short_name = self._short_event_name(event_name)
-        self.logger.info(f"[{short_name}] {source}: {data}")
+        event_name = self._short_event_name(event_name)
+        self.logger.info(f"[{event_name}] {source}: {data}")
 
         # === 4. 更新统计 ===
         if self.enable_stats:
