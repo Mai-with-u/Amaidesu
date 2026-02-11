@@ -612,13 +612,6 @@ class ProviderRegistry:
         Raises:
             ValueError: 如果注册信息无效
             TypeError: 如果 Provider 类型不匹配
-
-        Example:
-            # 在 main.py 中显式注册
-            from src.domains.input.providers.console_input import ConsoleInputProvider
-
-            info = ConsoleInputProvider.get_registration_info()
-            ProviderRegistry.register_from_info(info)
         """
         # 验证必需字段
         required_fields = ["layer", "name", "class"]
@@ -655,9 +648,6 @@ class ProviderRegistry:
             NotImplementedError: 如果 Provider 未实现 get_registration_info()
             ValueError/TypeError: 如果注册信息无效
 
-        Example:
-            from src.domains.input.providers.console_input import ConsoleInputProvider
-            ProviderRegistry.register_provider_class(ConsoleInputProvider)
         """
         if not hasattr(provider_class, "get_registration_info"):
             raise NotImplementedError(
