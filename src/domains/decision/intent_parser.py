@@ -51,14 +51,18 @@ class IntentParser:
         ```
     """
 
-    # 规则引擎的关键词映射
-    EMOTION_KEYWORDS = {
-        EmotionType.HAPPY: ["开心", "高兴", "哈哈", "快乐", "笑", "😊", "😄", "🎉"],
-        EmotionType.SAD: ["难过", "伤心", "哭", "😢", "😭", "💔"],
-        EmotionType.ANGRY: ["生气", "愤怒", "😠", "😡", "🔥"],
-        EmotionType.SURPRISED: ["惊讶", "意外", "哇", "😲", "😱"],
-        EmotionType.LOVE: ["爱", "喜欢", "❤️", "💕", "😍"],
-    }
+    async def setup(self):
+        """设置IntentParser"""
+        # 创建实例级别的可变对象，避免类变量存储可变对象的违规
+        self._enabled = True
+        self._emotion_keywords = {
+            EmotionType.HAPPY: ["开心", "高兴", "哈哈", "笑", "😊", "😄", "🎉"],
+            EmotionType.SAD: ["难过", "伤心", "哭", "😢", "😭", "💔"],
+            EmotionType.ANGRY: ["生气", "愤怒", "😡", "🔥"],
+            EmotionType.SURPRISED: ["惊讶", "意外", "哇", "😲", "😱"],
+            EmotionType.LOVE: ["爱", "喜欢", "❤️", "💕", "😍"],
+        }
+        self.logger.info("IntentParser 初始化完成")
 
     def __init__(self, llm_service: "LLMManager"):
         """

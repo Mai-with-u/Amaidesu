@@ -436,7 +436,9 @@ def compare_versions(template_version: str, config_version: str) -> bool:
         from packaging import version as pkg_version
 
         return pkg_version.parse(template_version) > pkg_version.parse(config_version)
-    except Exception:
+     except Exception:
+        self.logger.warning(f"版本号格式比较失败: {e}", exc_info=True)
+        # 默认认为需要更新
         return True
 
 

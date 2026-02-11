@@ -259,8 +259,8 @@ class StickerOutputProvider(OutputProvider):
             self._unload_task.cancel()
             try:
                 await self._unload_task
-            except Exception:
-                pass
+            except Exception as e:
+                self.logger.warning(f"取消卸载任务失败: {e}")
 
         # 卸载当前贴纸
         await self._unload_current_sticker()

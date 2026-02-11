@@ -81,9 +81,9 @@ def _ensure_component_configs(component_base_dir: str, component_type_name: str)
                             f"在{component_type_name} '{item_name}' 中: config.toml 不存在，已从 config-template.toml 复制。"
                         )
                         config_copied = True
-                    except Exception as e:
-                        logger.error(f"在{component_type_name} '{item_name}' 中: 从模板复制配置文件失败: {e}")
-                        # 考虑是否应该在这里抛出异常，或者让上层决定
+     except Exception as e:
+        logger.error(f"在{component_type_name} '{item_name}' 中: 从模板复制配置文件失败: {e}", exc_info=True)
+        # 考虑是否应该在这里抛出异常，或者让上层决定
                 elif not template_exists and not config_exists:
                     logger.debug(
                         f"在{component_type_name} '{item_name}' 中: 未找到 config.toml 或 config-template.toml。"
