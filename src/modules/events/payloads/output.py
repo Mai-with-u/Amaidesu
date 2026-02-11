@@ -15,7 +15,7 @@ from pydantic import ConfigDict, Field
 from src.modules.events.payloads.base import BasePayload
 
 if TYPE_CHECKING:
-    from src.domains.output.parameters.render_parameters import ExpressionParameters
+    from src.modules.types import ExpressionParameters
 
 
 class ParametersGeneratedPayload(BasePayload):

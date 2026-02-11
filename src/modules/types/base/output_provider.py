@@ -15,7 +15,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 if TYPE_CHECKING:
-    from src.domains.output.parameters.render_parameters import RenderParameters
+    from src.modules.types import RenderParameters
 
 
 class OutputProvider(ABC):

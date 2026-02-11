@@ -28,7 +28,7 @@ OutputCoordinator - 数据流协调器（3域架构：Decision Domain → Output
 import os
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from src.domains.output.parameters.render_parameters import RenderParameters
+from src.modules.types import RenderParameters
 from src.domains.output.pipelines.manager import OutputPipelineManager
 from src.domains.output.provider_manager import OutputProviderManager
 from src.modules.events.event_bus import EventBus
