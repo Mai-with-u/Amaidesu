@@ -212,12 +212,14 @@ class OutputCoordinator:
             payload: 类型化的事件数据（IntentPayload 对象，自动反序列化）
             source: 事件源
         """
-        self.logger.info(f"收到Intent事件: {event_name}")
+        # 使用 IntentPayload.to_intent() 方法转换为 Intent 对象
+        intent = payload.to_intent()
+
+        self.logger.info(
+            f'收到Intent事件: {event_name}, 响应: "{intent.response_text[:50]}...", 动作: {intent.action.type.value}'
+        )
 
         try:
-            # 使用 IntentPayload.to_intent() 方法转换为 Intent 对象
-            intent = payload.to_intent()
-
             # 直接生成 RenderParameters（仅用于 TTS/Subtitle）
             # Avatar Provider 已在各自的 _on_intent_ready 中处理 Intent
             params = RenderParameters(
@@ -226,7 +228,9 @@ class OutputCoordinator:
                 emotion=None,  # TTS/Subtitle 不需要情感参数
                 vts_hotkey=None,
             )
-            self.logger.info("RenderParameters生成完成（TTS/Subtitle）")
+            self.logger.info(
+                f'生成参数: text="{params.text[:30]}...", enable_tts={params.enable_tts}, enable_subtitle={params.enable_subtitle}'
+            )
 
             # OutputPipeline 处理（参数后处理）
             if self.output_pipeline_manager:

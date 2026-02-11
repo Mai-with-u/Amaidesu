@@ -181,7 +181,7 @@ class DecisionCoordinator:
             return
 
         try:
-            self.logger.debug(f"收到 NormalizedMessage: {normalized.text[:50]}...")
+            self.logger.info(f'收到消息: "{normalized.text[:50]}..." (来源: {normalized.source})')
 
             # 调用 DecisionProviderManager 进行决策
             intent = await self._provider_manager.decide(normalized)
@@ -201,6 +201,6 @@ class DecisionCoordinator:
                 IntentPayload.from_intent(intent, provider_name),
                 source="DecisionCoordinator",
             )
-            self.logger.debug(f"已发布 decision.intent_generated 事件: {intent.response_text[:50]}...")
+            self.logger.info(f'生成响应: "{intent.response_text[:50]}..." (动作: {intent.action.type.value})')
         except Exception as e:
             self.logger.error(f"处理 NormalizedMessage 时出错: {e}", exc_info=True)
