@@ -19,7 +19,7 @@ version = "0.1.0"  # 配置模板版本，用于自动更新检测
 
 # 标准 LLM 配置（用于高质量任务）
 [llm]
-client = "openai"              # openai | ollama | anthropic
+client = "openai"              # openai（所有提供 OpenAI 兼容 API 的服务，如 Ollama、LM Studio、vLLAM 等）
 model = "Pro/deepseek-ai/DeepSeek-V3.2"
 temperature = 0.2
 api_key = "your-api-key"                    # 可选，如果不设置将使用环境变量
@@ -47,11 +47,12 @@ base_url = "https://api.siliconflow.cn/v1/"
 max_tokens = 1024
 
 # 本地 Ollama 配置（可选）
+# 注意：Ollama、LM Studio、vLLAM 等都提供 OpenAI 兼容 API，使用 client = "openai" 并配置 base_url 即可
 [llm_local]
-client = "ollama"
+client = "openai"
 model = "llama3"
-api_base = "http://localhost:11434/v1"
-api_key = "sk-dummy"            # Ollama 不需要真实 API key
+base_url = "http://localhost:11434/v1"  # Ollama 默认地址
+api_key = "sk-dummy"  # Ollama 不需要真实 API key
 
 # ========== 共享服务配置 ==========
 

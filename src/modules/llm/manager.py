@@ -111,7 +111,7 @@ class LLMManager:
         ClientType.LLM: "openai",
         ClientType.LLM_FAST: "openai",
         ClientType.VLM: "openai",
-        ClientType.LLM_LOCAL: "ollama",
+        ClientType.LLM_LOCAL: "openai",  # 本地模型使用 OpenAI 兼容 API
     }
 
     def __init__(self):
@@ -196,7 +196,7 @@ class LLMManager:
         动态导入客户端类
 
         Args:
-            client_impl: 客户端实现类型 (openai, ollama, anthropic)
+            client_impl: 客户端实现类型 (openai)
 
         Returns:
             客户端类
@@ -208,10 +208,6 @@ class LLMManager:
             from src.modules.llm.clients.openai_client import OpenAIClient
 
             return OpenAIClient
-        elif client_impl == "ollama":
-            from src.modules.llm.clients.ollama_client import OllamaClient
-
-            return OllamaClient
         elif client_impl == "anthropic":
             # 未来可以添加 Anthropic 客户端
             from src.modules.llm.clients.openai_client import OpenAIClient
@@ -242,7 +238,6 @@ class LLMManager:
         # API Key 环境变量映射
         env_key_map = {
             "openai": "OPENAI_API_KEY",
-            "ollama": "OLLAMA_API_KEY",
             "anthropic": "ANTHROPIC_API_KEY",
         }
 
@@ -251,14 +246,8 @@ class LLMManager:
             enriched["api_key"] = os.environ.get(env_key, "sk-dummy")
 
         # Base URL 环境变量
-        if not enriched.get("base_url") and client_impl == "openai":
+        if not enriched.get("base_url"):
             enriched["base_url"] = os.environ.get("OPENAI_BASE_URL")
-
-        # Ollama 特殊处理
-        if client_impl == "ollama" and not enriched.get("base_url"):
-            enriched["base_url"] = os.environ.get(
-                "OLLAMA_BASE_URL", enriched.get("api_base", "http://localhost:11434/v1")
-            )
 
         return enriched
 
@@ -292,9 +281,10 @@ class LLMManager:
                 "max_tokens": 1024,
             },
             ClientType.LLM_LOCAL: {
-                "client": "ollama",
+                "client": "openai",
                 "model": "llama3",
-                "base_url": "http://localhost:11434/v1",
+                "base_url": "http://localhost:11434/v1",  # Ollama 默认地址
+                "api_key": "sk-dummy",  # Ollama 不需要真实 API key
             },
         }
         return defaults.get(client_type, {})
