@@ -463,17 +463,11 @@ class ConfigService:
 
         # 步骤1: 获取Schema默认值（第一优先级最低，是基础层）
         result = self._get_schema_defaults(schema_class, provider_name)
-        if result:
-            self.logger.debug(f"从Schema获取默认值: {provider_name}, result={result}")
-        else:
-            self.logger.warning(f"Schema默认值为空 (provider_name={provider_name}, schema_class={schema_class})")
 
         # 步骤2: 应用主配置覆盖 ([providers.*.overrides.{provider_name}])
         global_override = self.load_global_overrides(config_section, provider_name)
-        self.logger.debug(f"load_global_overrides 返回: {provider_name}, override={global_override}")
         if global_override:
             result = deep_merge_configs(result, global_override)
-            self.logger.debug(f"应用主配置覆盖后: {provider_name}, result={result}, keys={list(result.keys())}")
         else:
             self.logger.debug(f"主配置覆盖为空: {provider_name}")
 
