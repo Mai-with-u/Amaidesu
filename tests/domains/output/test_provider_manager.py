@@ -39,11 +39,11 @@ class FailingMockOutputProvider(MockOutputProvider):
         self.should_fail_on_render = False
         self.should_fail_on_cleanup = False
 
-    async def _setup_internal(self):
-        """设置（可能失败）"""
+    async def _start_internal(self):
+        """启动（可能失败）"""
         if self.should_fail_on_setup:
             raise RuntimeError("Setup failed")
-        await super()._setup_internal()
+        await super()._start_internal()
 
     async def _render_internal(self, parameters: RenderParameters) -> bool:
         """渲染（可能失败）"""
@@ -238,7 +238,7 @@ async def test_setup_all_providers_single(manager: OutputProviderManager, mock_e
 
     await manager.setup_all_providers(mock_event_bus)
 
-    assert provider.is_setup is True
+    assert provider.is_started is True
     assert provider.event_bus == mock_event_bus
 
 
@@ -255,9 +255,9 @@ async def test_setup_all_providers_multiple(manager: OutputProviderManager, mock
 
     await manager.setup_all_providers(mock_event_bus)
 
-    assert provider1.is_setup is True
-    assert provider2.is_setup is True
-    assert provider3.is_setup is True
+    assert provider1.is_started is True
+    assert provider2.is_started is True
+    assert provider3.is_started is True
 
     assert provider1.event_bus == mock_event_bus
     assert provider2.event_bus == mock_event_bus
@@ -283,9 +283,9 @@ async def test_setup_all_providers_concurrent(manager: OutputProviderManager, mo
 
     # 并发执行，应该远小于串行的 0.3 秒
     assert elapsed_time < 0.25
-    assert slow_provider1.is_setup is True
-    assert slow_provider2.is_setup is True
-    assert slow_provider3.is_setup is True
+    assert slow_provider1.is_started is True
+    assert slow_provider2.is_started is True
+    assert slow_provider3.is_started is True
 
 
 @pytest.mark.asyncio
@@ -303,11 +303,11 @@ async def test_setup_all_providers_partial_failure(manager: OutputProviderManage
     await manager.setup_all_providers(mock_event_bus)
 
     # provider1 和 provider3 应该成功
-    assert provider1.is_setup is True
-    assert provider3.is_setup is True
+    assert provider1.is_started is True
+    assert provider3.is_started is True
 
     # provider2 应该失败
-    assert provider2.is_setup is False
+    assert provider2.is_started is False
 
 
 @pytest.mark.asyncio
@@ -325,9 +325,9 @@ async def test_setup_all_providers_serial_mode(manager: OutputProviderManager, m
 
     await manager.setup_all_providers(mock_event_bus)
 
-    assert provider1.is_setup is True
-    assert provider2.is_setup is True
-    assert provider3.is_setup is True
+    assert provider1.is_started is True
+    assert provider2.is_started is True
+    assert provider3.is_started is True
 
 
 @pytest.mark.asyncio
@@ -347,9 +347,9 @@ async def test_setup_all_providers_serial_with_failure(manager: OutputProviderMa
     await manager.setup_all_providers(mock_event_bus)
 
     # provider1 和 provider3 应该继续设置（错误隔离）
-    assert provider1.is_setup is True
-    assert provider3.is_setup is True
-    assert provider2.is_setup is False
+    assert provider1.is_started is True
+    assert provider3.is_started is True
+    assert provider2.is_started is False
 
 
 # =============================================================================
@@ -617,11 +617,11 @@ async def test_stop_all_providers_single(manager: OutputProviderManager, mock_ev
     await manager.register_provider(provider)
     await manager.setup_all_providers(mock_event_bus)
 
-    assert provider.is_setup is True
+    assert provider.is_started is True
 
     await manager.stop_all_providers()
 
-    assert provider.is_setup is False
+    assert provider.is_started is False
 
 
 @pytest.mark.asyncio
@@ -636,15 +636,15 @@ async def test_stop_all_providers_multiple(manager: OutputProviderManager, mock_
     await manager.register_provider(provider3)
     await manager.setup_all_providers(mock_event_bus)
 
-    assert provider1.is_setup is True
-    assert provider2.is_setup is True
-    assert provider3.is_setup is True
+    assert provider1.is_started is True
+    assert provider2.is_started is True
+    assert provider3.is_started is True
 
     await manager.stop_all_providers()
 
-    assert provider1.is_setup is False
-    assert provider2.is_setup is False
-    assert provider3.is_setup is False
+    assert provider1.is_started is False
+    assert provider2.is_started is False
+    assert provider3.is_started is False
 
 
 @pytest.mark.asyncio
@@ -664,11 +664,11 @@ async def test_stop_all_providers_partial_failure(manager: OutputProviderManager
     await manager.stop_all_providers()
 
     # provider1 和 provider3 应该成功停止
-    assert provider1.is_setup is False
-    assert provider3.is_setup is False
+    assert provider1.is_started is False
+    assert provider3.is_started is False
 
-    # provider2 清理失败，is_setup 保持为 True（因为 cleanup() 异常退出了）
-    assert provider2.is_setup is True
+    # provider2 清理失败，is_started 保持为 True（因为 cleanup() 异常退出了）
+    assert provider2.is_started is True
 
 
 @pytest.mark.asyncio
@@ -680,16 +680,16 @@ async def test_stop_all_providers_only_setup_providers(manager: OutputProviderMa
     await manager.register_provider(provider1)
     await manager.register_provider(provider2)
 
-    # 只设置 provider1
-    await provider1.setup(mock_event_bus)
+    # 只启动 provider1
+    await provider1.start(mock_event_bus)
 
     await manager.stop_all_providers()
 
     # provider1 应该被停止
-    assert provider1.is_setup is False
+    assert provider1.is_started is False
 
     # provider2 未设置，不应该被停止
-    assert provider2.is_setup is False
+    assert provider2.is_started is False
 
 
 @pytest.mark.asyncio
@@ -704,7 +704,7 @@ async def test_stop_all_providers_idempotent(manager: OutputProviderManager, moc
     await manager.stop_all_providers()
 
     # 多次停止不应该报错
-    assert provider.is_setup is False
+    assert provider.is_started is False
 
 
 # =============================================================================
@@ -821,7 +821,7 @@ def test_get_stats_single_provider(manager: OutputProviderManager):
     assert stats["total_providers"] == 1
     assert stats["setup_providers"] == 0
     assert "MockOutputProvider" in stats["provider_stats"]
-    assert stats["provider_stats"]["MockOutputProvider"]["is_setup"] is False
+    assert stats["provider_stats"]["MockOutputProvider"]["is_started"] is False
     assert stats["provider_stats"]["MockOutputProvider"]["type"] == "output_provider"
 
 
@@ -837,11 +837,11 @@ def test_get_stats_multiple_providers(manager: OutputProviderManager, mock_event
     asyncio.run(manager.register_provider(provider2))
     asyncio.run(manager.register_provider(provider3))
 
-    # 设置部分 Provider
+    # 启动部分 Provider
     import asyncio
 
-    asyncio.run(provider1.setup(mock_event_bus))
-    asyncio.run(provider2.setup(mock_event_bus))
+    asyncio.run(provider1.start(mock_event_bus))
+    asyncio.run(provider2.start(mock_event_bus))
 
     stats = manager.get_stats()
 
@@ -918,7 +918,7 @@ async def test_load_from_config_with_provider_registry(manager: OutputProviderMa
             "concurrent_rendering": True,
             "error_handling": "continue",
             "enabled_outputs": ["mock1", "mock2"],
-            "outputs": {
+            "outputs_config": {
                 "mock1": {"type": "mock_test", "test_config": "value1"},
                 "mock2": {"type": "mock_test", "test_config": "value2"},
             },
@@ -985,7 +985,7 @@ async def test_load_from_config_partial_failure(manager: OutputProviderManager):
         config = {
             "enabled": True,
             "enabled_outputs": ["mock1", "unknown", "mock2"],
-            "outputs": {
+            "outputs_config": {
                 "mock1": {"type": "mock_test"},
                 "unknown": {"type": "nonexistent_provider"},
                 "mock2": {"type": "mock_test"},
@@ -1039,7 +1039,7 @@ async def test_concurrent_setup_and_render(manager: OutputProviderManager, mock_
 
     # render 应该失败（因为 Provider 可能还未设置完成）
     # setup 应该成功
-    assert provider.is_setup is True
+    assert provider.is_started is True
 
 
 @pytest.mark.asyncio
@@ -1130,7 +1130,7 @@ async def test_stop_all_without_prior_setup(manager: OutputProviderManager):
     # 不应该报错（只是没有已设置的 Provider 需要停止）
     await manager.stop_all_providers()
 
-    assert provider.is_setup is False
+    assert provider.is_started is False
 
 
 @pytest.mark.asyncio
@@ -1140,11 +1140,11 @@ async def test_provider_lifecycle_complete(manager: OutputProviderManager, mock_
     await manager.register_provider(provider)
 
     # 初始状态
-    assert provider.is_setup is False
+    assert provider.is_started is False
 
     # 设置
     await manager.setup_all_providers(mock_event_bus)
-    assert provider.is_setup is True
+    assert provider.is_started is True
 
     # 渲染
     params = RenderParameters(tts_text="Test")
@@ -1153,7 +1153,7 @@ async def test_provider_lifecycle_complete(manager: OutputProviderManager, mock_
 
     # 停止
     await manager.stop_all_providers()
-    assert provider.is_setup is False
+    assert provider.is_started is False
 
 
 @pytest.mark.asyncio
@@ -1218,9 +1218,9 @@ async def test_setup_error_isolation(manager: OutputProviderManager, mock_event_
     await manager.setup_all_providers(mock_event_bus)
 
     # provider1 和 provider3 应该成功设置
-    assert provider1.is_setup is True
-    assert provider3.is_setup is True
-    assert provider2.is_setup is False
+    assert provider1.is_started is True
+    assert provider3.is_started is True
+    assert provider2.is_started is False
 
 
 @pytest.mark.asyncio
@@ -1240,11 +1240,11 @@ async def test_cleanup_error_isolation(manager: OutputProviderManager, mock_even
     await manager.stop_all_providers()
 
     # provider1 和 provider3 应该成功停止
-    assert provider1.is_setup is False
-    assert provider3.is_setup is False
+    assert provider1.is_started is False
+    assert provider3.is_started is False
 
-    # provider2 清理失败，is_setup 保持为 True（错误隔离，但状态未改变）
-    assert provider2.is_setup is True
+    # provider2 清理失败，is_started 保持为 True（错误隔离，但状态未改变）
+    assert provider2.is_started is True
 
 
 # =============================================================================

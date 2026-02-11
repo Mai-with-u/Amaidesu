@@ -31,3 +31,7 @@ class MockOutputProvider(OutputProvider):
     def clear(self):
         """清空记录"""
         self.received_parameters.clear()
+
+    async def cleanup(self):
+        """清理方法（兼容性）"""
+        await self.stop()

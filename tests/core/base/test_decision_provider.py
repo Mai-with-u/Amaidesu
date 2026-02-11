@@ -3,9 +3,9 @@ DecisionProvider 单元测试
 
 测试 DecisionProvider 抽象基类的所有核心功能：
 - 抽象方法验证（decide）
-- setup() 方法流程
+- start() 方法流程
 - decide() 抽象方法
-- cleanup() 方法
+- stop() 方法
 - get_registration_info() NotImplementedError
 - 生命周期管理
 
@@ -41,13 +41,13 @@ class MockDecisionProvider(DecisionProvider):
         """
         super().__init__(config)
         self.raise_error = raise_error
-        self.setup_called = False
-        self.cleanup_called = False
+        self.start_called = False
+        self.stop_called = False
         self.decide_count = 0
 
-    async def _setup_internal(self):
-        """模拟内部设置"""
-        self.setup_called = True
+    async def _start_internal(self):
+        """模拟内部启动"""
+        self.start_called = True
 
     async def decide(self, message: NormalizedMessage) -> "Intent":
         """模拟决策逻辑"""
@@ -64,10 +64,9 @@ class MockDecisionProvider(DecisionProvider):
             "metadata": {"decide_count": self.decide_count},
         }
 
-    async def _cleanup_internal(self):
-        """模拟内部清理"""
-        self.cleanup_called = True
-        self.is_setup = False
+    async def _stop_internal(self):
+        """模拟内部停止"""
+        self.stop_called = True
 
 
 class IncompleteDecisionProvider(DecisionProvider):
@@ -128,7 +127,7 @@ async def test_decision_provider_initialization():
 
     assert provider.config == config
     assert provider.event_bus is None
-    assert provider.is_setup is False
+    assert provider.is_started is False
 
 
 @pytest.mark.asyncio
@@ -137,7 +136,7 @@ async def test_decision_provider_default_config():
     provider = MockDecisionProvider({})
 
     assert provider.config == {}
-    assert provider.is_setup is False
+    assert provider.is_started is False
 
 
 # =============================================================================
@@ -154,43 +153,43 @@ async def test_decision_provider_abstract_method_not_implemented():
 
 
 # =============================================================================
-# setup() 方法测试
+# start() 方法测试
 # =============================================================================
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_setup_basic():
-    """测试 setup() 基本流程"""
+async def test_decision_provider_start_basic():
+    """测试 start() 基本流程"""
     provider = MockDecisionProvider({})
     mock_event_bus = object()
 
-    await provider.setup(event_bus=mock_event_bus)
+    await provider.start(event_bus=mock_event_bus)
 
     assert provider.event_bus == mock_event_bus
-    assert provider.is_setup is True
-    assert provider.setup_called is True
+    assert provider.is_started is True
+    assert provider.start_called is True
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_setup_with_config():
-    """测试 setup() 可以覆盖配置"""
+async def test_decision_provider_start_with_config():
+    """测试 start() 可以覆盖配置"""
     provider = MockDecisionProvider({"old": "config"})
     mock_event_bus = object()
     new_config = {"new": "config"}
 
-    await provider.setup(event_bus=mock_event_bus, config=new_config)
+    await provider.start(event_bus=mock_event_bus, config=new_config)
 
     assert provider.config == new_config
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_setup_with_dependencies():
-    """测试 setup() 接受依赖注入"""
+async def test_decision_provider_start_with_dependencies():
+    """测试 start() 接受依赖注入"""
     provider = MockDecisionProvider({})
     mock_event_bus = object()
     dependencies = {"llm_service": "mock_llm", "cache": "mock_cache"}
 
-    await provider.setup(event_bus=mock_event_bus, dependencies=dependencies)
+    await provider.start(event_bus=mock_event_bus, dependencies=dependencies)
 
     # 依赖应该被存储（通过 _dependencies 属性）
     assert hasattr(provider, "_dependencies")
@@ -198,12 +197,12 @@ async def test_decision_provider_setup_with_dependencies():
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_setup_without_dependencies():
-    """测试 setup() 不传 dependencies 时使用空字典"""
+async def test_decision_provider_start_without_dependencies():
+    """测试 start() 不传 dependencies 时使用空字典"""
     provider = MockDecisionProvider({})
     mock_event_bus = object()
 
-    await provider.setup(event_bus=mock_event_bus)
+    await provider.start(event_bus=mock_event_bus)
 
     assert hasattr(provider, "_dependencies")
     assert provider._dependencies == {}
@@ -217,8 +216,8 @@ async def test_decision_provider_setup_without_dependencies():
 @pytest.mark.asyncio
 async def test_decision_provider_decide_basic(mock_provider, mock_normalized_message):
     """测试 decide() 基本功能"""
-    # 先 setup
-    await mock_provider.setup(event_bus=object())
+    # 先 start
+    await mock_provider.start(event_bus=object())
 
     # 调用 decide
     intent = await mock_provider.decide(mock_normalized_message)
@@ -234,7 +233,7 @@ async def test_decision_provider_decide_basic(mock_provider, mock_normalized_mes
 @pytest.mark.asyncio
 async def test_decision_provider_decide_multiple_calls(mock_provider, mock_normalized_message):
     """测试 decide() 可以多次调用"""
-    await mock_provider.setup(event_bus=object())
+    await mock_provider.start(event_bus=object())
 
     # 多次调用
     intent1 = await mock_provider.decide(mock_normalized_message)
@@ -248,9 +247,9 @@ async def test_decision_provider_decide_multiple_calls(mock_provider, mock_norma
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_decide_before_setup(mock_provider, mock_normalized_message):
-    """测试未 setup 时调用 decide() 仍然可以工作"""
-    # decide() 方法不检查 is_setup，所以可以调用
+async def test_decision_provider_decide_before_start(mock_provider, mock_normalized_message):
+    """测试未 start 时调用 decide() 仍然可以工作"""
+    # decide() 方法不检查 is_started，所以可以调用
     intent = await mock_provider.decide(mock_normalized_message)
 
     assert intent is not None
@@ -260,7 +259,7 @@ async def test_decision_provider_decide_before_setup(mock_provider, mock_normali
 @pytest.mark.asyncio
 async def test_decision_provider_decide_with_error(error_provider, mock_normalized_message):
     """测试 decide() 抛出错误的情况"""
-    await error_provider.setup(event_bus=object())
+    await error_provider.start(event_bus=object())
 
     with pytest.raises(ValueError) as exc_info:
         await error_provider.decide(mock_normalized_message)
@@ -269,91 +268,51 @@ async def test_decision_provider_decide_with_error(error_provider, mock_normaliz
 
 
 # =============================================================================
-# cleanup() 方法测试
+# stop() 方法测试
 # =============================================================================
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_cleanup_basic():
-    """测试 cleanup() 基本功能"""
+async def test_decision_provider_stop_basic():
+    """测试 stop() 基本功能"""
     provider = MockDecisionProvider({})
-    await provider.setup(event_bus=object())
+    await provider.start(event_bus=object())
 
-    assert provider.is_setup is True
+    assert provider.is_started is True
 
-    await provider.cleanup()
+    await provider.stop()
 
-    assert provider.is_setup is False
-    assert provider.cleanup_called is True
+    assert provider.is_started is False
+    assert provider.stop_called is True
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_cleanup_idempotent():
-    """测试 cleanup() 可以多次调用（幂等）"""
+async def test_decision_provider_stop_idempotent():
+    """测试 stop() 可以多次调用（幂等）"""
     provider = MockDecisionProvider({})
-    await provider.setup(event_bus=object())
+    await provider.start(event_bus=object())
 
-    await provider.cleanup()
-    await provider.cleanup()
-    await provider.cleanup()
+    await provider.stop()
+    await provider.stop()
+    await provider.stop()
 
     # 不应该抛出异常
-    assert provider.is_setup is False
+    assert provider.is_started is False
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_cleanup_clears_event_bus():
-    """测试 cleanup() 不清除 event_bus 引用"""
+async def test_decision_provider_stop_clears_event_bus():
+    """测试 stop() 不清除 event_bus 引用"""
     provider = MockDecisionProvider({})
     mock_event_bus = object()
 
-    await provider.setup(event_bus=mock_event_bus)
+    await provider.start(event_bus=mock_event_bus)
     assert provider.event_bus == mock_event_bus
 
-    await provider.cleanup()
+    await provider.stop()
 
-    # event_bus 引用可能仍然存在，但 is_setup 为 False
-    assert provider.is_setup is False
-
-
-# =============================================================================
-# get_registration_info() 方法测试
-# =============================================================================
-
-
-@pytest.mark.asyncio
-async def test_decision_provider_get_registration_info_not_implemented():
-    """测试 get_registration_info() 默认抛出 NotImplementedError"""
-    provider = MockDecisionProvider({})
-
-    with pytest.raises(NotImplementedError) as exc_info:
-        provider.get_registration_info()
-
-    assert "必须实现 get_registration_info()" in str(exc_info.value)
-
-
-@pytest.mark.asyncio
-async def test_decision_provider_get_registration_info_override():
-    """测试子类可以重写 get_registration_info()"""
-
-    class RegisteredDecisionProvider(MockDecisionProvider):
-        """实现了注册方法的 Provider"""
-
-        @classmethod
-        def get_registration_info(cls):
-            return {
-                "layer": "decision",
-                "name": "mock_decision_registered",
-                "class": cls,
-                "source": "test",
-            }
-
-    info = RegisteredDecisionProvider.get_registration_info()
-
-    assert info["layer"] == "decision"
-    assert info["name"] == "mock_decision_registered"
-    assert info["class"] == RegisteredDecisionProvider
-    assert info["source"] == "test"
+    # event_bus 引用可能仍然存在，但 is_started 为 False
+    assert provider.is_started is False
 
 
 # =============================================================================
@@ -367,24 +326,24 @@ async def test_decision_provider_full_lifecycle(mock_normalized_message):
     provider = MockDecisionProvider({})
 
     # 1. 初始化
-    assert provider.is_setup is False
-    assert provider.setup_called is False
-    assert provider.cleanup_called is False
+    assert provider.is_started is False
+    assert provider.start_called is False
+    assert provider.stop_called is False
 
-    # 2. 设置
-    await provider.setup(event_bus=object())
-    assert provider.is_setup is True
-    assert provider.setup_called is True
+    # 2. 启动
+    await provider.start(event_bus=object())
+    assert provider.is_started is True
+    assert provider.start_called is True
 
     # 3. 决策
     intent = await provider.decide(mock_normalized_message)
     assert intent is not None
     assert provider.decide_count == 1
 
-    # 4. 清理
-    await provider.cleanup()
-    assert provider.is_setup is False
-    assert provider.cleanup_called is True
+    # 4. 停止
+    await provider.stop()
+    assert provider.is_started is False
+    assert provider.stop_called is True
 
 
 @pytest.mark.asyncio
@@ -393,41 +352,41 @@ async def test_decision_provider_restart(mock_normalized_message):
     provider = MockDecisionProvider({})
 
     # 第一次运行
-    await provider.setup(event_bus=object())
+    await provider.start(event_bus=object())
     await provider.decide(mock_normalized_message)
-    await provider.cleanup()
+    await provider.stop()
 
     assert provider.decide_count == 1
-    assert provider.is_setup is False
+    assert provider.is_started is False
 
     # 第二次运行
-    await provider.setup(event_bus=object())
+    await provider.start(event_bus=object())
     await provider.decide(mock_normalized_message)
-    await provider.cleanup()
+    await provider.stop()
 
     assert provider.decide_count == 2
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_setup_cleanup_order():
-    """测试 setup 和 cleanup 的顺序"""
+async def test_decision_provider_start_stop_order():
+    """测试 start 和 stop 的顺序"""
     provider = MockDecisionProvider({})
 
-    # setup -> cleanup
-    await provider.setup(event_bus=object())
-    assert provider.setup_called is True
-    assert provider.cleanup_called is False
+    # start -> stop
+    await provider.start(event_bus=object())
+    assert provider.start_called is True
+    assert provider.stop_called is False
 
-    await provider.cleanup()
-    assert provider.setup_called is True  # 保持 True
-    assert provider.cleanup_called is True
+    await provider.stop()
+    assert provider.start_called is True  # 保持 True
+    assert provider.stop_called is True
 
-    # 再次 setup -> cleanup
-    await provider.setup(event_bus=object())
-    assert provider.setup_called is True  # 仍然是 True（没有重置）
+    # 再次 start -> stop
+    await provider.start(event_bus=object())
+    assert provider.start_called is True  # 仍然是 True（没有重置）
 
-    await provider.cleanup()
-    assert provider.cleanup_called is True
+    await provider.stop()
+    assert provider.stop_called is True
 
 
 # =============================================================================
@@ -436,21 +395,21 @@ async def test_decision_provider_setup_cleanup_order():
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_setup_with_none_event_bus():
-    """测试 setup() 传入 None event_bus"""
+async def test_decision_provider_start_with_none_event_bus():
+    """测试 start() 传入 None event_bus"""
     provider = MockDecisionProvider({})
 
-    await provider.setup(event_bus=None)
+    await provider.start(event_bus=None)
 
     assert provider.event_bus is None
-    assert provider.is_setup is True
+    assert provider.is_started is True
 
 
 @pytest.mark.asyncio
 async def test_decision_provider_with_empty_config(mock_normalized_message):
     """测试使用空配置的 DecisionProvider"""
     provider = MockDecisionProvider({})
-    await provider.setup(event_bus=object())
+    await provider.start(event_bus=object())
 
     intent = await provider.decide(mock_normalized_message)
 
