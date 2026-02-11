@@ -70,6 +70,5 @@ async def decode_wav_chunk(wav_chunk: bytes, dtype=np.int16) -> Optional[np.ndar
         audio_array = np.frombuffer(pcm_data, dtype=dtype)
         return audio_array
 
-     except Exception:
-        self.logger.error(f"提取 PCM 数据失败: {e}", exc_info=True)
+    except Exception:
         return None

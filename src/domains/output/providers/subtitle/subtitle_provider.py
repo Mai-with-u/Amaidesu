@@ -382,7 +382,7 @@ class SubtitleOutputProvider(OutputProvider):
                 try:
                     self.root.attributes("-toolwindow", True)
                 except Exception:
-                    self.logger.error(f"设置工具窗口属性失败", exc_info=True)
+                    self.logger.error("设置工具窗口属性失败", exc_info=True)
 
             # 窗口大小和位置
             screen_width = self.root.winfo_screenwidth()
@@ -396,12 +396,12 @@ class SubtitleOutputProvider(OutputProvider):
                 try:
                     self.root.configure(fg_color=self.chroma_key_color)
                 except Exception:
-                    self.logger.error(f"设置色度颜色失败", exc_info=True)
+                    self.logger.error("设置色度颜色失败", exc_info=True)
             else:
                 try:
                     self.root.configure(fg_color=self.background_color)
                 except Exception:
-                    self.logger.error(f"设置背景颜色失败", exc_info=True)
+                    self.logger.error("设置背景颜色失败", exc_info=True)
 
             # 创建文本标签
             font_tuple = (self.font_family, self.font_size, self.font_weight)

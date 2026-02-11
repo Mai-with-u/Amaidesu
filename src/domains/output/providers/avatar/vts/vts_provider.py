@@ -262,10 +262,10 @@ class VTSProvider(BaseAvatarProvider):
             self.logger.debug(f"情感映射: {emotion_str} -> {self._emotion_map[emotion_str]}")
         elif action_type_str in self._action_hotkey_map:
             hotkey_prefix = self._action_hotkey_map[action_type_str]
-                # 尝试匹配完整热键名称
-                matched_hotkey = self._find_hotkey_by_name(hotkey_prefix, action_name)
-                if matched_hotkey:
-                    result["hotkeys"].append(matched_hotkey)
+            # 尝试匹配完整热键名称
+            matched_hotkey = self._find_hotkey_by_name(hotkey_prefix, action_name)
+            if matched_hotkey:
+                result["hotkeys"].append(matched_hotkey)
 
         self.logger.debug(f"Intent适配结果: expressions={result['expressions']}, hotkeys={result['hotkeys']}")
         return result

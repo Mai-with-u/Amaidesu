@@ -3,7 +3,6 @@
 import json
 from pathlib import Path
 
-import pytest
 
 # 测试数据路径
 GOLDEN_DATASETS_DIR = Path(__file__).parent / "golden_datasets"

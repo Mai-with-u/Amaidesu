@@ -194,24 +194,23 @@ class OpenAIClient(LLMClient):
             async for chunk in stream:
                 if stop_event is not None and stop_event.is_set():
                     break
-
-                    # 内容增量
-                    try:
-                        delta = chunk.choices[0].delta
-                        text_piece = getattr(delta, "content", None)
-                        if text_piece:
-                            yield text_piece
-                    except Exception:
-                        yield ""  # 图片格式转换失败时返回空内容
+                # 内容增量
+                try:
+                    delta = chunk.choices[0].delta
+                    text_piece = getattr(delta, "content", None)
+                    if text_piece:
+                        yield text_piece
+                except Exception:
+                    yield ""  # 图片格式转换失败时返回空内容
 
         except Exception as e:
             self.logger.error(f"流式 LLM 请求失败: {e}")
-                    finally:
-                if stream is not None:
-                    try:
-                        await stream.aclose()
-                    except Exception:
-                        pass  # 关闭流失败，忽略错误
+        finally:
+            if stream is not None:
+                try:
+                    await stream.aclose()
+                except Exception:
+                    pass  # 关闭流失败，忽略错误
 
     async def vision(
         self,

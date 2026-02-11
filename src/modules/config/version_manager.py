@@ -291,9 +291,9 @@ class ConfigVersionManager:
             try:
                 config = read_toml_fast(str(config_path))
                 current_version = config.get("meta", {}).get("version")
-                 except Exception:
-                     self.logger.error(f"读取配置文件 '{config_path}' 失败", exc_info=True)
-                     # 返回 None，让调用者处理
+            except Exception:
+                self.logger.error(f"读取配置文件 '{config_path}' 失败", exc_info=True)
+                # 返回 None，让调用者处理
 
         info = ProviderConfigInfo(
             domain=domain,

@@ -81,9 +81,8 @@ def _ensure_component_configs(component_base_dir: str, component_type_name: str)
                             f"在{component_type_name} '{item_name}' 中: config.toml 不存在，已从 config-template.toml 复制。"
                         )
                         config_copied = True
-     except Exception as e:
-        logger.error(f"在{component_type_name} '{item_name}' 中: 从模板复制配置文件失败: {e}", exc_info=True)
-        # 考虑是否应该在这里抛出异常，或者让上层决定
+                    except Exception as e:
+                        logger.error(f"在{component_type_name} '{item_name}' 中: 从模板复制配置文件失败: {e}", exc_info=True)
                 elif not template_exists and not config_exists:
                     logger.debug(
                         f"在{component_type_name} '{item_name}' 中: 未找到 config.toml 或 config-template.toml。"
@@ -96,7 +95,6 @@ def _ensure_component_configs(component_base_dir: str, component_type_name: str)
     except Exception as e:
         logger.error(f"检查{component_type_name}配置文件时出错: {e}", exc_info=True)
         return False
-
 
 def check_and_setup_plugin_configs(plugin_base_dir_name: str = "src/plugins") -> bool:
     """
@@ -144,12 +142,6 @@ def check_and_setup_main_config(
             raise IOError(f"无法复制主配置文件 {config_filename} 从模板 {template_filename}: {e}") from e
     elif not config_exists and not template_exists:
         logger.error(f"主配置文件 '{config_filename}' 和模板 '{template_filename}' 均未找到于 '{base_dir}'。")
-        # 这个错误会在 load_config 中被 FileNotFoundError 捕获，但提前记录更清晰
-        # 不在此处 raise，让 load_config 统一处理
-    elif not config_exists and template_exists:  # 这种情况被上面 if template_exists and not config_exists 覆盖
-        pass
-    else:  # config_exists is True
-        logger.debug(f"主配置文件 '{config_filename}' 已存在于 '{base_dir}'.")
 
     logger.info("主配置文件检查完成。")
     return config_copied
