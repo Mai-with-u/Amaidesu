@@ -4,7 +4,7 @@
 为所有事件 Payload 提供统一的字符串表示，用于 EventBus 的 debug 日志。
 """
 
-from typing import Any
+from typing import Any, Optional, Tuple
 
 from pydantic import BaseModel
 
@@ -60,6 +60,18 @@ class BasePayload(BaseModel):
             return f'"{value}"'
         else:
             return str(value)
+
+    def get_log_format(self) -> Optional[Tuple[str, str, Optional[str]]]:
+        """
+        返回日志格式化的信息
+
+        Returns:
+            (text, user_name, extra) 元组，如果不需要特殊格式则返回 None
+            - text: 要显示的文本内容（会被截断到 50 字符）
+            - user_name: 用户名（可为空）
+            - extra: 额外信息（可为空）
+        """
+        return None
 
     def __str__(self) -> str:
         """

@@ -10,12 +10,12 @@
 import time
 from typing import Any, Dict, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 
 from src.modules.events.payloads.base import BasePayload
 
 
-class StartupPayload(BaseModel):
+class StartupPayload(BasePayload):
     """
     系统启动事件 Payload
 
@@ -49,7 +49,7 @@ class StartupPayload(BaseModel):
     )
 
 
-class ShutdownPayload(BaseModel):
+class ShutdownPayload(BasePayload):
     """
     系统关闭事件 Payload
 
