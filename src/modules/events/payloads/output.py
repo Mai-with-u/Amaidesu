@@ -22,7 +22,7 @@ class ParametersGeneratedPayload(BasePayload):
     """
     表情参数生成事件 Payload
 
-    事件名：CoreEvents.EXPRESSION_PARAMETERS_GENERATED
+    事件名：CoreEvents.OUTPUT_PARAMS
     发布者：ExpressionGenerator (Output Domain: 参数生成)
     订阅者：OutputProvider (Output Domain: 渲染输出)
 
@@ -77,18 +77,22 @@ class ParametersGeneratedPayload(BasePayload):
         }
     )
 
-    def _debug_fields(self) -> List[str]:
-        """返回需要显示的字段"""
-        return [
-            "tts_text",
-            "tts_enabled",
-            "subtitle_text",
-            "subtitle_enabled",
-            "expressions",
-            "expressions_enabled",
-            "hotkeys",
-            "hotkeys_enabled",
+    def __str__(self) -> str:
+        """简化格式：显示生成的参数"""
+        class_name = self.__class__.__name__
+        parts = [
+            f'tts_text="{self.tts_text[:30]}..."' if len(self.tts_text) > 30 else f'tts_text="{self.tts_text}"',
+            f"tts_enabled={self.tts_enabled}",
+            f'subtitle_text="{self.subtitle_text[:30]}..."'
+            if len(self.subtitle_text) > 30
+            else f'subtitle_text="{self.subtitle_text}"',
+            f"subtitle_enabled={self.subtitle_enabled}",
+            f"expressions={self._format_field_value(self.expressions)}",
+            f"expressions_enabled={self.expressions_enabled}",
+            f"hotkeys={self._format_field_value(self.hotkeys)}",
+            f"hotkeys_enabled={self.hotkeys_enabled}",
         ]
+        return f"{class_name}({', '.join(parts)})"
 
     @classmethod
     def from_parameters(
@@ -153,9 +157,10 @@ class RenderCompletedPayload(BasePayload):
         }
     )
 
-    def _debug_fields(self) -> List[str]:
-        """返回需要显示的字段"""
-        return ["provider", "output_type", "success", "duration_ms"]
+    def __str__(self) -> str:
+        """简化格式：显示渲染完成信息"""
+        class_name = self.__class__.__name__
+        return f'{class_name}(provider="{self.provider}", output_type="{self.output_type}", success={self.success}, duration_ms={self.duration_ms:.0f})'
 
 
 class RenderFailedPayload(BasePayload):
@@ -191,6 +196,8 @@ class RenderFailedPayload(BasePayload):
         }
     )
 
-    def _debug_fields(self) -> List[str]:
-        """返回需要显示的字段"""
-        return ["provider", "output_type", "error_type", "error_message", "recoverable"]
+    def __str__(self) -> str:
+        """简化格式：显示渲染失败信息"""
+        class_name = self.__class__.__name__
+        error_msg = self.error_message[:30] + "..." if len(self.error_message) > 30 else self.error_message
+        return f'{class_name}(provider="{self.provider}", output_type="{self.output_type}", error_type="{self.error_type}", error_message="{error_msg}", recoverable={self.recoverable})'

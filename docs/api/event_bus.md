@@ -46,14 +46,14 @@ async def handle_message(event_name: str, payload: MessageReadyPayload, source: 
     print(f"收到消息: {payload.message['text']}")
 
 event_bus.on_typed(
-    CoreEvents.NORMALIZATION_MESSAGE_READY,
+    CoreEvents.DATA_MESSAGE,
     handle_message,
     MessageReadyPayload
 )
 
 # 发布事件（必须使用 Pydantic BaseModel）
 await event_bus.emit(
-    CoreEvents.NORMALIZATION_MESSAGE_READY,
+    CoreEvents.DATA_MESSAGE,
     MessageReadyPayload(
         message={"text": "你好", "source": "console"},
         source="console"
@@ -96,7 +96,7 @@ from src.modules.events.payloads import RawDataPayload
 
 # 发布原始数据事件
 await event_bus.emit(
-    CoreEvents.PERCEPTION_RAW_DATA_GENERATED,
+    CoreEvents.DATA_RAW,
     RawDataPayload(
         content="用户输入的文本",
         source="console_input",
@@ -152,7 +152,7 @@ async def handle_message(event_name: str, data: dict, source: str):
     print(f"收到消息: {text}")
 
 # 订阅事件
-event_bus.on(CoreEvents.NORMALIZATION_MESSAGE_READY, handle_message)
+event_bus.on(CoreEvents.DATA_MESSAGE, handle_message)
 ```
 
 ### on_typed() - 订阅类型化事件（推荐）
@@ -195,7 +195,7 @@ async def handle_message(event_name: str, payload: MessageReadyPayload, source: 
 
 # 订阅类型化事件
 event_bus.on_typed(
-    CoreEvents.NORMALIZATION_MESSAGE_READY,
+    CoreEvents.DATA_MESSAGE,
     handle_message,
     MessageReadyPayload
 )
@@ -319,8 +319,8 @@ print(f"已注册事件: {events}")
 
 | 事件名 | 常量 | Payload | 发布者 | 订阅者 |
 |--------|------|---------|--------|--------|
-| 原始数据生成 | `CoreEvents.PERCEPTION_RAW_DATA_GENERATED` | `RawDataPayload` | InputProvider | InputDomain |
-| 消息就绪 | `CoreEvents.NORMALIZATION_MESSAGE_READY` | `MessageReadyPayload` | InputDomain | DecisionManager |
+| 原始数据生成 | `CoreEvents.DATA_RAW` | `RawDataPayload` | InputProvider | InputDomain |
+| 消息就绪 | `CoreEvents.DATA_MESSAGE` | `MessageReadyPayload` | InputDomain | DecisionManager |
 
 **示例**：
 ```python
@@ -328,7 +328,7 @@ from src.modules.events.payloads import RawDataPayload
 
 # 发布原始数据
 await event_bus.emit(
-    CoreEvents.PERCEPTION_RAW_DATA_GENERATED,
+    CoreEvents.DATA_RAW,
     RawDataPayload(
         content="用户输入",
         source="console_input",
@@ -343,7 +343,7 @@ await event_bus.emit(
 | 事件名 | 常量 | Payload | 发布者 | 订阅者 |
 |--------|------|---------|--------|--------|
 | 决策请求 | `CoreEvents.DECISION_REQUEST` | `DecisionRequestPayload` | DecisionManager | DecisionProvider |
-| 意图生成 | `CoreEvents.DECISION_INTENT_GENERATED` | `IntentPayload` | DecisionProvider | ExpressionGenerator |
+| 意图生成 | `CoreEvents.DECISION_INTENT` | `IntentPayload` | DecisionProvider | ExpressionGenerator |
 | 响应生成 | `CoreEvents.DECISION_RESPONSE_GENERATED` | `DecisionResponsePayload` | MaiCoreDecisionProvider | - |
 
 **示例**：
@@ -352,7 +352,7 @@ from src.modules.events.payloads import IntentPayload
 
 # 发布意图
 await event_bus.emit(
-    CoreEvents.DECISION_INTENT_GENERATED,
+    CoreEvents.DECISION_INTENT,
     IntentPayload(
         intent_id="intent_123",
         action="reply",
@@ -366,7 +366,7 @@ await event_bus.emit(
 
 | 事件名 | 常量 | Payload | 发布者 | 订阅者 |
 |--------|------|---------|--------|--------|
-| 参数生成 | `CoreEvents.EXPRESSION_PARAMETERS_GENERATED` | `ParametersGeneratedPayload` | ExpressionGenerator | OutputProvider |
+| 参数生成 | `CoreEvents.OUTPUT_PARAMS` | `ParametersGeneratedPayload` | ExpressionGenerator | OutputProvider |
 | 渲染完成 | `CoreEvents.RENDER_COMPLETED` | `RenderCompletedPayload` | OutputProvider | - |
 | 渲染失败 | `CoreEvents.RENDER_FAILED` | `RenderFailedPayload` | OutputProvider | - |
 
@@ -473,9 +473,10 @@ class MyCustomPayload(BasePayload):
     count: int = Field(default=0, description="计数")
     user_id: str = Field(..., description="用户ID")
 
-    def _debug_fields(self):
-        """自定义调试输出字段"""
-        return ["message", "count"]
+    def __str__(self) -> str:
+        """自定义调试输出格式（覆盖默认实现）"""
+        # 只显示 message 和 count，不显示 user_id
+        return f'MyCustomPayload(message="{self.message}", count={self.count})'
 
 # 使用自定义 Payload
 await event_bus.emit(
@@ -537,11 +538,11 @@ await event_bus.cleanup()  # 等待约 2 秒
 
 ```python
 # ❌ 错误：硬编码字符串
-await event_bus.emit("normalization.message_ready", payload)
+await event_bus.emit("data.message", payload)
 
 # ✅ 正确：使用常量
 from src/modules/events/names import CoreEvents
-await event_bus.emit(CoreEvents.NORMALIZATION_MESSAGE_READY, payload)
+await event_bus.emit(CoreEvents.DATA_MESSAGE, payload)
 ```
 
 ### 2. 使用 on_typed() 获取类型提示
@@ -570,13 +571,14 @@ class MyEvent(BaseModel):
     message: str
 
 # ✅ 推荐：继承 BasePayload（获得调试输出）
-from src/modules/events/payloads/base import BasePayload
+from src.modules.events/payloads.base import BasePayload
 
 class MyEvent(BasePayload):
     message: str
 
-    def _debug_fields(self):
-        return ["message"]
+    def __str__(self) -> str:
+        """自定义格式化输出（可选）"""
+        return f'MyEvent(message="{self.message}")'
 ```
 
 ### 4. 提供有意义的 source

@@ -490,14 +490,14 @@ else:
 
 ```python
 # decision_manager.py:164 - 虽然符合架构，但没有强制检查
-self.event_bus.on(CoreEvents.NORMALIZATION_MESSAGE_READY, self._on_normalized_message_ready)
+self.event_bus.on(CoreEvents.DATA_MESSAGE, self._on_normalized_message_ready)
 
 # 任何人都可以写出这样的代码（违反架构）：
 class MyOutputProvider(OutputProvider):
     async def initialize(self):
         # ❌ 违反架构，但技术上可行！
         await self.event_bus.subscribe(
-            CoreEvents.NORMALIZATION_MESSAGE_READY,
+            CoreEvents.DATA_MESSAGE,
             self.handler
         )
 ```
@@ -519,9 +519,9 @@ class ArchitecturalValidator:
     # 定义允许的订阅关系
     ALLOWED_SUBSCRIPTIONS = {
         "InputDomain": [],  # Input 不订阅任何事件
-        "DecisionManager": ["normalization.message_ready"],
-        "FlowCoordinator": ["decision.intent_generated"],
-        "OutputProvider": ["expression.parameters_generated"],
+        "DecisionManager": ["data.message"],
+        "FlowCoordinator": ["decision.intent"],
+        "OutputProvider": ["output.params"],
     }
 
     def __init__(self, event_bus: EventBus):
@@ -705,12 +705,12 @@ main() [main.py:443]
       ├─ 创建 DecisionManager
       │   └─ await setup() [299-301]
       │       ├─ ProviderRegistry.create_decision() [128]
-      │       └─ event_bus.on(NORMALIZATION_MESSAGE_READY) [162]
+      │       └─ event_bus.on(DATA_MESSAGE) [162]
       │           └─ ❌ 问题 #8: 无架构约束检查
       └─ 创建 FlowCoordinator
           ├─ 创建 OutputPipelineManager
           │   └─ ❌ 问题 #1: 从未调用 load_output_pipelines()
-          └─ event_bus.on(DECISION_INTENT_GENERATED) [101]
+          └─ event_bus.on(DECISION_INTENT) [101]
 ```
 
 ### 2. 运行时数据流
@@ -720,7 +720,7 @@ InputProvider._collect_data() [异步生成器]
   ↓
 InputProviderManager._run_provider() [manager.py:207-238]
   ↓ 发布 RawDataPayload
-EventBus.emit(PERCEPTION_RAW_DATA_GENERATED) [event_bus.py:102]
+EventBus.emit(DATA_RAW) [event_bus.py:102]
   ├─ ✅ 类型检查: BaseModel
   └─ 转换为 dict → handler(event_name, dict_data, source)
   ↓
@@ -734,14 +734,14 @@ InputDomain.normalize() [input_domain.py:133-183]
           ├─ 遍历所有 TextPipeline
           └─ ❌ 问题 #4: CONTINUE 模式可能导致数据损坏
   ↓ 发布 MessageReadyPayload
-EventBus.emit(NORMALIZATION_MESSAGE_READY)
+EventBus.emit(DATA_MESSAGE)
   ↓ 转换为 dict
 DecisionManager._on_normalized_message_ready() [decision_manager.py:196-258]
   ├─ ❌ 问题 #6: 手动 from_dict() 重建 NormalizedMessage
   ├─ await self.decide(normalized) [241]
   │   └─ DecisionProvider.decide()
   └─ 发布 IntentPayload
-      ↓ EventBus.emit(DECISION_INTENT_GENERATED)
+      ↓ EventBus.emit(DECISION_INTENT)
       ↓ 转换为 dict
 FlowCoordinator._on_intent_ready() [flow_coordinator.py:154-199]
   ├─ ❌ 问题 #6: 手动 from_dict() 重建 Intent
@@ -750,7 +750,7 @@ FlowCoordinator._on_intent_ready() [flow_coordinator.py:154-199]
   ├─ OutputPipelineManager.process() [181]
   │   └─ ❌ 问题 #1: OutputPipeline 列表为空，永远不会执行
   └─ 发布 ParametersGeneratedPayload
-      ↓ EventBus.emit(EXPRESSION_PARAMETERS_GENERATED)
+      ↓ EventBus.emit(OUTPUT_PARAMS)
       ↓ 转换为 dict
 OutputProvider.render() [各个 OutputProvider]
   └─ 实际渲染（TTS、字幕、VTS 等）
@@ -762,14 +762,14 @@ OutputProvider.render() [各个 OutputProvider]
 run_shutdown() [main.py:381-436]
   ├─ ❌ 问题 #5: 错误的关闭顺序
   ├─ flow_coordinator.cleanup() [390-396]
-  │   └─ event_bus.off(DECISION_INTENT_GENERATED) [143]
+  │   └─ event_bus.off(DECISION_INTENT) [143]
   ├─ decision_manager.cleanup() [398-405]
-  │   └─ event_bus.off(NORMALIZATION_MESSAGE_READY) [342]
+  │   └─ event_bus.off(DATA_MESSAGE) [342]
   ├─ input_provider_manager.stop_all_providers() [408-414]
   │   └─ 设置 _stop_event [133]
   │   └─ asyncio.wait_for(gather(...), timeout=10.0) [146-150]
   ├─ input_domain.cleanup() [416-421]
-  │   └─ event_bus.off(PERCEPTION_RAW_DATA_GENERATED) [68]
+  │   └─ event_bus.off(DATA_RAW) [68]
   ├─ llm_service.cleanup() [423-427]
   └─ core.disconnect() [426-433]
       └─ event_bus.cleanup() [隐式调用]

@@ -8,19 +8,24 @@
 class CoreEvents:
     """核心事件名称常量（3域架构）"""
 
-    # Input Domain: 输入域（数据采集 + 标准化）
-    PERCEPTION_RAW_DATA_GENERATED = "perception.raw_data.generated"
-    NORMALIZATION_MESSAGE_READY = "normalization.message_ready"
+    # ========== 新的事件命名（简化版） ==========
+    # Data Domain: 数据域
+    DATA_RAW = "data.raw"
+    DATA_MESSAGE = "data.message"
 
-    # Decision Domain: 决策域（意图生成）
+    # Decision Domain: 决策域
+    DECISION_INTENT = "decision.intent"
+
+    # Output Domain: 输出域
+    OUTPUT_PARAMS = "output.params"
+
+    # ========== Decision Domain 事件 ==========
     DECISION_REQUEST = "decision.request"
-    DECISION_INTENT_GENERATED = "decision.intent_generated"
     DECISION_RESPONSE_GENERATED = "decision.response_generated"  # MaiCore响应事件
     DECISION_PROVIDER_CONNECTED = "decision.provider.connected"
     DECISION_PROVIDER_DISCONNECTED = "decision.provider.disconnected"
 
-    # Output Domain: 输出域（参数生成 + 渲染）
-    EXPRESSION_PARAMETERS_GENERATED = "expression.parameters_generated"
+    # ========== Output Domain 事件 ==========
     RENDER_COMPLETED = "render.completed"
     RENDER_FAILED = "render.failed"
 
@@ -62,16 +67,18 @@ class CoreEvents:
     VTS_SEND_EMOTION = "vts.send_emotion"
     VTS_SEND_STATE = "vts.send_state"
 
-    # 所有事件名集合（用于 emit_sync 校验等）
+    # 所有事件名集合（用于事件验证等）
     ALL_EVENTS = (
-        PERCEPTION_RAW_DATA_GENERATED,
-        NORMALIZATION_MESSAGE_READY,
+        # 新事件命名（3域核心事件）
+        DATA_RAW,
+        DATA_MESSAGE,
+        DECISION_INTENT,
+        OUTPUT_PARAMS,
+        # 其他事件
         DECISION_REQUEST,
-        DECISION_INTENT_GENERATED,
         DECISION_RESPONSE_GENERATED,
         DECISION_PROVIDER_CONNECTED,
         DECISION_PROVIDER_DISCONNECTED,
-        EXPRESSION_PARAMETERS_GENERATED,
         RENDER_COMPLETED,
         RENDER_FAILED,
         CORE_STARTUP,

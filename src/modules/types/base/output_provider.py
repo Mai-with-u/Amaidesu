@@ -15,6 +15,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 if TYPE_CHECKING:
+    from src.modules.streaming.audio_stream_channel import AudioStreamChannel
     from src.modules.types import RenderParameters
 
 
@@ -26,14 +27,15 @@ class OutputProvider(ABC):
 
     生命周期:
     1. 实例化(__init__)
-    2. 设置(setup()) - 注册到EventBus
+    2. 启动(start()) - 注册到EventBus
     3. 渲染(render()) - 执行渲染
-    4. 清理(cleanup()) - 释放资源
+    4. 停止(stop()) - 释放资源
 
     Attributes:
         config: Provider配置(来自rendering.outputs.xxx配置)
         event_bus: EventBus实例(可选,用于事件通信)
-        is_setup: 是否已完成设置
+        is_started: 是否已启动
+        audio_stream_channel: AudioStreamChannel实例(可选,用于音频流传输)
     """
 
     def __init__(self, config: dict):
@@ -45,23 +47,34 @@ class OutputProvider(ABC):
         """
         self.config = config
         self.event_bus = None
-        self.is_setup = False
+        self.is_started = False
+        self._audio_stream_channel: Optional["AudioStreamChannel"] = None
 
-    async def setup(self, event_bus, dependencies: Optional[Dict[str, Any]] = None):
+    @property
+    def audio_stream_channel(self) -> Optional["AudioStreamChannel"]:
+        """获取 AudioStreamChannel 实例"""
+        return self._audio_stream_channel
+
+    async def start(self, event_bus, audio_stream_channel: Optional["AudioStreamChannel"] = None):
         """
-        设置Provider
+        启动Provider
 
         Args:
             event_bus: EventBus实例
-            dependencies: 可选的依赖注入（替代 core）
+            audio_stream_channel: 可选的AudioStreamChannel实例（用于音频流传输）
 
         Raises:
             ConnectionError: 如果无法连接到目标设备
         """
         self.event_bus = event_bus
-        self._dependencies = dependencies or {}
-        await self._setup_internal()
-        self.is_setup = True
+        self._audio_stream_channel = audio_stream_channel
+        try:
+            await self._start_internal()
+            self.is_started = True
+        except Exception:
+            # 如果启动失败，保持当前状态不变
+            # 由调用者决定如何处理错误
+            raise
 
     async def render(self, parameters: "RenderParameters"):
         """
@@ -71,16 +84,16 @@ class OutputProvider(ABC):
             parameters: 渲染参数
 
         Raises:
-            RuntimeError: 如果Provider未设置
+            RuntimeError: 如果Provider未启动
             Exception: 渲染过程中的错误
         """
-        if not self.is_setup:
-            raise RuntimeError("Provider not setup, call setup() first")
+        if not self.is_started:
+            raise RuntimeError("Provider not started, call start() first")
         await self._render_internal(parameters)
 
-    async def _setup_internal(self):  # noqa: B027
-        """内部设置逻辑(子类可选重写)"""
-        # 子类可以重写此方法来执行初始化逻辑,如连接到设备、加载资源等。
+    async def _start_internal(self):  # noqa: B027
+        """内部启动逻辑(子类可选重写)"""
+        # 子类可以重写此方法来执行启动逻辑,如连接到设备、加载资源等。
         ...
 
     @abstractmethod
@@ -95,14 +108,23 @@ class OutputProvider(ABC):
         """
         pass
 
-    async def cleanup(self):
+    async def stop(self):
         """
-        清理资源
+        停止Provider并清理资源
 
         停止Provider并释放所有资源。
         """
-        await self._cleanup_internal()
-        self.is_setup = False
+        # 如果已经停止，直接返回
+        if not self.is_started:
+            return
+
+        try:
+            await self._stop_internal()
+            self.is_started = False
+        except Exception:
+            # 如果停止失败，保持当前状态不变
+            # 不重新抛出异常，允许错误隔离
+            pass
 
     def get_info(self) -> Dict[str, Any]:
         """
@@ -111,48 +133,16 @@ class OutputProvider(ABC):
         Returns:
             Provider信息字典，包含:
             - name: Provider名称
-            - is_setup: 是否已完成设置
+            - is_started: 是否已启动
             - type: Provider类型
         """
         return {
             "name": self.__class__.__name__,
-            "is_setup": self.is_setup,
+            "is_started": self.is_started,
             "type": "output_provider",
         }
 
-    async def _cleanup_internal(self):  # noqa: B027
-        """内部清理逻辑(子类可选重写)"""
-        # 子类可以重写此方法来执行清理逻辑,如关闭连接、释放资源等。
+    async def _stop_internal(self):  # noqa: B027
+        """内部停止逻辑(子类可选重写)"""
+        # 子类可以重写此方法来执行停止逻辑,如关闭连接、释放资源等。
         ...
-
-    @classmethod
-    def get_registration_info(cls) -> Dict[str, Any]:
-        """
-        获取 Provider 注册信息（子类重写）
-
-        用于显式注册模式，避免模块导入时的自动注册。
-
-        Returns:
-            注册信息字典，包含:
-            - layer: "output"
-            - name: Provider 名称（唯一标识符）
-            - class: Provider 类
-            - source: 注册来源（如 "builtin:subtitle"）
-
-        Raises:
-            NotImplementedError: 如果子类未实现此方法
-
-        Example:
-            @classmethod
-            def get_registration_info(cls):
-                return {
-                    "layer": "output",
-                    "name": "subtitle",
-                    "class": cls,
-                    "source": "builtin:subtitle"
-                }
-        """
-        raise NotImplementedError(
-            f"{cls.__name__} 必须实现 get_registration_info() 类方法以支持显式注册。"
-            "如果使用自动注册模式，可以在 __init__.py 中直接调用 ProviderRegistry.register_output()。"
-        )

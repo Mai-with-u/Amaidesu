@@ -2,7 +2,7 @@
 AvatarProviderBase - 虚拟形象 Provider 抽象基类
 
 定义了所有 Avatar Provider 的通用处理流程:
-1. 订阅 DECISION_INTENT_GENERATED 事件
+1. 订阅 DECISION_INTENT 事件
 2. 适配 Intent 为平台参数 (_adapt_intent)
 3. 渲染到平台 (_render_internal)
 4. 连接/断开管理
@@ -30,7 +30,6 @@ class AvatarProviderBase(OutputProvider, ABC):
         super().__init__(config)
         self.logger = get_logger(self.__class__.__name__)
         self._is_connected = False
-        self._dependencies: Dict[str, Any] = {}
 
     async def setup(
         self,
@@ -42,15 +41,14 @@ class AvatarProviderBase(OutputProvider, ABC):
 
         Args:
             event_bus: EventBus 实例
-            dependencies: 可选的依赖注入（替代 core）
+            dependencies: 可选的依赖注入（已废弃，保留以兼容旧代码）
         """
         from src.modules.events.names import CoreEvents
 
         self.event_bus = event_bus
-        self._dependencies = dependencies or {}
 
-        # 订阅 DECISION_INTENT_GENERATED 事件
-        event_bus.on(CoreEvents.DECISION_INTENT_GENERATED, self._on_intent_ready)
+        # 订阅 DECISION_INTENT 事件
+        event_bus.on(CoreEvents.DECISION_INTENT, self._on_intent_ready)
 
         # 连接平台
         await self._connect()
@@ -62,7 +60,7 @@ class AvatarProviderBase(OutputProvider, ABC):
         from src.modules.events.names import CoreEvents
 
         if self.event_bus:
-            self.event_bus.off(CoreEvents.DECISION_INTENT_GENERATED, self._on_intent_ready)
+            self.event_bus.off(CoreEvents.DECISION_INTENT, self._on_intent_ready)
 
         # 断开连接
         await self._disconnect()

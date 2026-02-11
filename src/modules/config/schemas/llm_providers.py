@@ -17,7 +17,7 @@ class LLMClientConfig(BaseModel):
     定义单个LLM客户端的通用配置参数。
 
     Attributes:
-        backend: 后端类型 (openai, ollama, anthropic)
+        backend: 后端类型 (openai - 支持 OpenAI、Ollama、LM Studio、vLLAM 等所有兼容 API)
         model: 模型名称
         api_key: API密钥（可选，优先使用环境变量）
         base_url: API基础URL（可选）
@@ -27,7 +27,7 @@ class LLMClientConfig(BaseModel):
         retry_delay: 重试延迟（秒）
     """
 
-    backend: Literal["openai", "ollama", "anthropic"] = Field(default="openai", description="LLM后端类型")
+    backend: Literal["openai", "anthropic"] = Field(default="openai", description="LLM后端类型")
     model: str = Field(default="gpt-4o-mini", description="模型名称")
     api_key: Optional[str] = Field(default=None, description="API密钥（可选，优先使用环境变量）")
     base_url: Optional[str] = Field(default=None, description="API基础URL（可选，用于自定义端点）")
@@ -93,16 +93,17 @@ class VLMConfig(LLMClientConfig):
 class LLMLocalConfig(LLMClientConfig):
     """本地LLM客户端配置
 
-    用于本地Ollama等本地模型的配置。
+    用于本地 Ollama、LM Studio、vLLAM 等提供 OpenAI 兼容 API 的本地模型配置。
+    只需配置 base_url 指向本地服务即可。
 
     Attributes:
         type: 客户端类型标识，固定为"llm_local"
     """
 
     type: Literal["llm_local"] = "llm_local"
-    backend: Literal["ollama"] = Field(default="ollama", description="本地后端类型")
+    backend: Literal["openai"] = Field(default="openai", description="使用 OpenAI 兼容 API")
     model: str = Field(default="llama3", description="本地模型名称")
-    api_base: Optional[str] = Field(default="http://localhost:11434/v1", description="本地API地址")
+    base_url: Optional[str] = Field(default="http://localhost:11434/v1", description="本地API地址")
 
     model_config = {"extra": "ignore"}
 

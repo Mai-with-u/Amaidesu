@@ -91,13 +91,13 @@ async def test_normalization_error_tracking(input_coordinator):
         if message_dict:
             results.append(message_dict)
 
-    input_coordinator.event_bus.on("normalization.message_ready", on_message_ready, priority=50)
+    input_coordinator.event_bus.on(CoreEvents.DATA_MESSAGE, on_message_ready, priority=50)
 
     # 发送正常消息
     raw_data = RawData(content={"text": "正常消息"}, source="test", data_type="text")
 
     await input_coordinator.event_bus.emit(
-        CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload.from_raw_data(raw_data), source="test"
+        CoreEvents.DATA_RAW, RawDataPayload.from_raw_data(raw_data), source="test"
     )
 
     await asyncio.sleep(0.1)
@@ -178,13 +178,13 @@ async def test_multiple_messages_with_stats(input_coordinator):
         if message_dict:
             results.append(message_dict)
 
-    input_coordinator.event_bus.on("normalization.message_ready", on_message_ready, priority=50)
+    input_coordinator.event_bus.on(CoreEvents.DATA_MESSAGE, on_message_ready, priority=50)
 
     # 发送多条消息
     for i in range(5):
         raw_data = RawData(content={"text": f"消息{i}"}, source="test", data_type="text")
         await input_coordinator.event_bus.emit(
-            CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload.from_raw_data(raw_data), source="test"
+            CoreEvents.DATA_RAW, RawDataPayload.from_raw_data(raw_data), source="test"
         )
         await asyncio.sleep(0.05)
 

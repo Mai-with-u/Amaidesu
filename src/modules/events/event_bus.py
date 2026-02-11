@@ -31,11 +31,11 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
-from uuid import uuid4
 
 from pydantic import BaseModel, ValidationError
 
-from src.modules.events.names import CoreEvents
+# 导入 payload 类型用于日志格式化
+from src.modules.events.payloads.input import MessageReadyPayload, RawDataPayload
 from src.modules.events.registry import EventRegistry
 from src.modules.logging import get_logger
 
@@ -94,7 +94,6 @@ class EventBus:
     - 优先级控制(按priority排序执行)
     - 统计功能(跟踪emit、错误、执行时间)
     - 生命周期管理(cleanup方法)
-    - 请求-响应模式(通过request方法)
     """
 
     def __init__(self, enable_stats: bool = True):
@@ -109,12 +108,13 @@ class EventBus:
         self.enable_stats = enable_stats
         self.enable_validation = True  # 固定开启验证
         self._is_cleanup = False
-        self._pending_requests: Dict[str, asyncio.Future] = {}
         self._active_emits: Dict[str, asyncio.Event] = {}  # 跟踪活跃的 emit 操作
         self.logger = get_logger("EventBus")
         self.logger.debug(f"EventBus 初始化完成 (stats={enable_stats}, validation=enabled)")
 
-    async def emit(self, event_name: str, data: BaseModel, source: str = "unknown", error_isolate: bool = True) -> None:
+    async def emit(
+        self, event_name: str, data: BaseModel, source: str = "unknown", error_isolate: bool = True, wait: bool = False
+    ) -> None:
         """
         发布类型安全的事件
 
@@ -123,6 +123,7 @@ class EventBus:
             data: Pydantic Model 实例（自动序列化为 dict）
             source: 事件源（通常是发布者的类名）
             error_isolate: 是否隔离错误（True 时单个 handler 异常不影响其他）
+            wait: 是否等待所有监听器执行完成（False 时后台执行，True 时等待完成）
 
         Raises:
             TypeError: 如果 data 不是 BaseModel 实例
@@ -154,9 +155,58 @@ class EventBus:
         # 按优先级排序（数字越小越优先）
         handlers = sorted(handlers, key=lambda h: h.priority)
 
-        self.logger.debug(f"发布事件 {event_name} (来源: {source}, 监听器: {len(handlers)})")
-        # 新增：debug 日志显示事件内容
-        self.logger.debug(f"事件内容: {data}")
+        # 打印事件信息（INFO 级别）
+        # 为 RawDataPayload 和 MessageReadyPayload 添加特殊处理，提取用户名
+
+        # 类型检查（直接使用顶部导入的类型，避免动态导入失败）
+        is_raw_data = isinstance(data, RawDataPayload)
+        is_message_ready = isinstance(data, MessageReadyPayload)
+
+        if is_raw_data:
+            # RawDataPayload: 从 content 中提取用户名
+            if isinstance(data.content, dict):
+                user_name = data.content.get("user_name", "")
+                text = data.content.get("text", str(data.content))
+            else:
+                user_name = ""
+                text = str(data.content)
+
+            # 格式化用户名
+            user_part = f" [{user_name}]" if user_name else ""
+
+            # 截断长文本
+            if len(text) > 50:
+                text = text[:47] + "..."
+
+            # 格式: [event] source [user_name]: text
+            self.logger.info(f"[{event_name}] {data.source}{user_part}: {text}")
+        elif is_message_ready:
+            # MessageReadyPayload: 从 message 字典中提取用户名和文本
+            if isinstance(data.message, dict):
+                # 文本直接在 message 字典的 "text" 键中
+                text = data.message.get("text", "")
+                # 用户名可能在 metadata 中（因为 NormalizedMessage 的 user_name 通过 metadata 传递）
+                metadata = data.message.get("metadata", {})
+                user_name = metadata.get("user_name", "")
+            elif isinstance(data.message, str):
+                user_name = ""
+                text = data.message
+            else:
+                user_name = ""
+                text = str(data.message)
+
+            # 格式化用户名
+            user_part = f" [{user_name}]" if user_name else ""
+
+            # 截断长文本
+            if len(text) > 50:
+                text = text[:47] + "..."
+
+            # 格式: [event] source [user_name]: text
+            self.logger.info(f"[{event_name}] {data.source}{user_part}: {text}")
+        else:
+            # 其他 Payload 使用默认格式
+            self.logger.info(f"[{event_name}] {source}: {data}")
 
         # 更新统计
         if self.enable_stats:
@@ -194,86 +244,13 @@ class EventBus:
                 complete_event.set()
                 self._active_emits.pop(emit_id, None)
 
-        # 在后台任务中执行
-        asyncio.create_task(emit_with_tracking())
-
-    async def emit_sync(
-        self, event_name: str, data: BaseModel, source: str = "unknown", error_isolate: bool = True
-    ) -> None:
-        """
-        同步版本的事件发布，主要用于测试场景
-
-        与 emit() 的区别：
-        - emit(): 后台执行，不等待监听器完成（生产环境推荐）
-        - emit_sync(): 等待所有监听器执行完成（测试环境使用）
-
-        Args:
-            event_name: 事件名称
-            data: 事件数据（必须是 Pydantic BaseModel）
-            source: 事件源标识
-            error_isolate: 是否隔离错误（True 时单个监听器错误不影响其他）
-        """
-        # === 1. 事件名称验证 ===
-        if not isinstance(event_name, str):
-            raise TypeError(f"事件名称必须是字符串，当前类型: {type(event_name)}")
-
-        if not event_name:
-            raise ValueError("事件名称不能为空")
-
-        if event_name not in CoreEvents.ALL_EVENTS:
-            self.logger.warning(
-                f"发布的事件 '{event_name}' 不在 CoreEvents 定义中。"
-                f"请使用对应的事件 Payload 类（如 src.core.events.payloads 中定义的类）"
-            )
-
-        # === 2. 数据序列化 ===
-        dict_data = data.model_dump()
-
-        # === 3. 数据验证 ===
-        if self.enable_validation:
-            self._validate_event_data(event_name, dict_data)
-
-        handlers = self._handlers.get(event_name, [])
-        if not handlers:
-            self.logger.debug(f"事件 {event_name} 没有监听器")
-            return
-
-        # 按优先级排序（数字越小越优先）
-        handlers = sorted(handlers, key=lambda h: h.priority)
-
-        self.logger.debug(f"发布事件 {event_name} (来源: {source}, 监听器: {len(handlers)})")
-
-        # === 4. 更新统计 ===
-        if self.enable_stats:
-            self._stats[event_name].emit_count += 1
-            self._stats[event_name].last_emit_time = time.time()
-            self._stats[event_name].listener_count = len(handlers)
-
-        start_time = time.time()
-
-        # === 5. 创建跟踪事件（复用现有机制）===
-        complete_event = asyncio.Event()
-        emit_id = f"{event_name}_{id(complete_event)}"
-        self._active_emits[emit_id] = complete_event
-
-        try:
-            # === 6. 并发执行所有处理器 ===
-            tasks = []
-            for wrapper in handlers:
-                task = asyncio.create_task(self._call_handler(wrapper, event_name, dict_data, source, error_isolate))
-                tasks.append(task)
-
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
-
-            # === 7. 更新统计 ===
-            if self.enable_stats:
-                execution_time = (time.time() - start_time) * 1000
-                self._stats[event_name].total_execution_time_ms += execution_time
-        finally:
-            # 标记完成并从活跃列表中移除
-            complete_event.set()
-            self._active_emits.pop(emit_id, None)
+        # 根据 wait 参数决定执行方式
+        if wait:
+            # 等待完成
+            await emit_with_tracking()
+        else:
+            # 在后台任务中执行
+            asyncio.create_task(emit_with_tracking())
 
     async def _call_handler(
         self, wrapper: HandlerWrapper, event_name: str, data: Any, source: str, error_isolate: bool
@@ -427,12 +404,6 @@ class EventBus:
         """
         self._is_cleanup = True
 
-        # 取消所有待处理的请求
-        for future in self._pending_requests.values():
-            if not future.done():
-                future.cancel()
-        self._pending_requests.clear()
-
         # 等待所有活跃的 emit 完成
         if self._active_emits:
             active_count = len(self._active_emits)
@@ -537,41 +508,3 @@ class EventBus:
             self.logger.warning(f"事件数据验证失败 ({event_name}): {e.error_count()} 个错误")
             for error in e.errors():
                 self.logger.debug(f"  - {error['loc']}: {error['msg']}")
-
-    async def request(self, event_name: str, data: BaseModel, timeout: float = 5.0) -> Any:
-        """
-        请求-响应模式（带超时）
-
-        通过 EventBus 发送请求并等待响应。响应事件名格式为 "{event_name}.response.{uuid}"。
-
-        Args:
-            event_name: 请求事件名称
-            data: 请求数据（Pydantic Model）
-            timeout: 超时时间（秒），默认 5.0
-
-        Returns:
-            响应数据
-
-        Raises:
-            asyncio.TimeoutError: 请求超时
-            TypeError: 如果 data 不是 BaseModel 实例
-        """
-        if self._is_cleanup:
-            self.logger.warning(f"EventBus正在清理中，忽略请求: {event_name}")
-            return None
-
-        response_event = f"{event_name}.response.{uuid4()}"
-        future = asyncio.Future()
-
-        def handler(name, event_data, source):
-            future.set_result(event_data)
-
-        self.on(response_event, handler)
-        self._pending_requests[response_event] = future
-
-        try:
-            await self.emit(event_name, data, source="EventBus.request")
-            return await asyncio.wait_for(future, timeout)
-        finally:
-            self.off(response_event, handler)
-            self._pending_requests.pop(response_event, None)

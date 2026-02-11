@@ -7,7 +7,7 @@ Input Domain 事件 Payload 定义
 """
 
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from pydantic import ConfigDict, Field
 
@@ -22,7 +22,7 @@ class RawDataPayload(BasePayload):
     """
     原始数据事件 Payload
 
-    事件名：CoreEvents.PERCEPTION_RAW_DATA_GENERATED
+    事件名：CoreEvents.DATA_RAW
     发布者：InputProvider
     订阅者：InputDomain (Input Domain)
 
@@ -49,9 +49,24 @@ class RawDataPayload(BasePayload):
         }
     )
 
-    def _debug_fields(self) -> List[str]:
-        """返回需要显示的字段"""
-        return ["source", "data_type", "content"]
+    def __str__(self) -> str:
+        """简化格式：[data_type] "content" (user_name)"""
+        # 提取 content 中的关键信息
+        if isinstance(self.content, dict):
+            text = self.content.get("text", "")
+            user_name = self.content.get("user_name", "")
+        elif isinstance(self.content, str):
+            text = self.content
+            user_name = ""
+        else:
+            text = str(self.content)
+            user_name = ""
+
+        # 构建格式：[data_type] "content" (user_name)
+        result = f'[{self.data_type}] "{text}"'
+        if user_name:
+            result += f" ({user_name})"
+        return result
 
     @classmethod
     def from_raw_data(cls, raw_data: "RawData") -> "RawDataPayload":
@@ -79,7 +94,7 @@ class MessageReadyPayload(BasePayload):
     """
     标准化消息就绪事件 Payload
 
-    事件名：CoreEvents.NORMALIZATION_MESSAGE_READY
+    事件名：CoreEvents.DATA_MESSAGE
     发布者：InputDomain
     订阅者：DecisionManager (Decision Domain)
 
@@ -114,32 +129,45 @@ class MessageReadyPayload(BasePayload):
         }
     )
 
-    def _debug_fields(self) -> List[str]:
-        """返回需要显示的字段"""
-        # message 是字典，只显示关键字段避免输出过长
-        return ["source", "message"]
+    def __str__(self) -> str:
+        """简化格式：直接显示消息内容"""
+        # 提取 text 和 user_name
+        if isinstance(self.message, dict):
+            text = self.message.get("text", "")
+            user_name = self.message.get("user_name", "")
+        elif isinstance(self.message, str):
+            text = self.message
+            user_name = ""
+        else:
+            text = str(self.message)
+            user_name = ""
+
+        # 截断长文本
+        if len(text) > 50:
+            text = text[:47] + "..."
+
+        # 返回格式：text (user_name)
+        if user_name:
+            return f"{text} ({user_name})"
+        return text
 
     def _format_field_value(self, value: Any, indent: int = 0) -> str:
-        """格式化字段值，对 message 字段进行特殊处理"""
-        # 对于 message 字段（NormalizedMessage 对象或 Dict），提取关键信息
+        """格式化字段值，对 message 字段进行特殊处理（单行格式）"""
+        # 对于 message 字段（NormalizedMessage 对象或 Dict），直接返回文本内容
         if hasattr(value, "text"):
-            # NormalizedMessage 对象
+            # NormalizedMessage 对象 - 直接返回文本和用户名
             text = value.text if hasattr(value, "text") else ""
-            source = value.source if hasattr(value, "source") else ""
-            data_type = value.data_type if hasattr(value, "data_type") else ""
-            # 截断长文本
-            if len(text) > 30:
-                text = text[:27] + "..."
-            return f'{{text="{text}", source="{source}", type="{data_type}"}}'
+            user_name = value.user_name if hasattr(value, "user_name") else ""
+            if user_name:
+                return f"{text} ({user_name})"
+            return text
         elif isinstance(value, dict) and "text" in value:
             # 字典格式（向后兼容）
             text = value.get("text", "")
-            source = value.get("source", "")
-            data_type = value.get("data_type", "")
-            # 截断长文本
-            if len(text) > 30:
-                text = text[:27] + "..."
-            return f'{{text="{text}", source="{source}", type="{data_type}"}}'
+            user_name = value.get("user_name", "")
+            if user_name:
+                return f"{text} ({user_name})"
+            return text
         # 其他字段使用基类默认格式化
         return super()._format_field_value(value, indent)
 

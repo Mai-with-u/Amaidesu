@@ -168,7 +168,7 @@ async def test_setup_subscribes_to_intent_event(
 
     assert output_coordinator._event_handler_registered is True
     # 验证事件订阅
-    assert event_bus.get_listeners_count(CoreEvents.DECISION_INTENT_GENERATED) == 1
+    assert event_bus.get_listeners_count(CoreEvents.DECISION_INTENT) == 1
 
 
 @pytest.mark.asyncio
@@ -192,10 +192,10 @@ async def test_setup_can_be_called_multiple_times(
 ):
     """测试 setup 可以被多次调用（但会重复订阅事件）"""
     await output_coordinator.setup(sample_config)
-    first_listener_count = event_bus.get_listeners_count(CoreEvents.DECISION_INTENT_GENERATED)
+    first_listener_count = event_bus.get_listeners_count(CoreEvents.DECISION_INTENT)
 
     await output_coordinator.setup(sample_config)
-    second_listener_count = event_bus.get_listeners_count(CoreEvents.DECISION_INTENT_GENERATED)
+    second_listener_count = event_bus.get_listeners_count(CoreEvents.DECISION_INTENT)
 
     # 当前实现：每次 setup 都会订阅事件（会重复）
     # 这是已知行为，需要在 OutputCoordinator 实现中添加防重复订阅逻辑
@@ -204,7 +204,7 @@ async def test_setup_can_be_called_multiple_times(
 
     # cleanup 应该取消所有订阅
     await output_coordinator.cleanup()
-    final_count = event_bus.get_listeners_count(CoreEvents.DECISION_INTENT_GENERATED)
+    final_count = event_bus.get_listeners_count(CoreEvents.DECISION_INTENT)
     # 注意：cleanup 只取消一次订阅，所以还有一个残留
     # 这证明了重复订阅的问题
     assert final_count == 1
@@ -233,8 +233,12 @@ async def test_start_after_setup(
     await output_coordinator.setup(sample_config)
     await output_coordinator.start()
 
-    # 验证 setup_all_providers 被调用
-    output_coordinator.output_provider_manager.setup_all_providers.assert_called_once_with(output_coordinator.event_bus)
+    # 验证 setup_all_providers 被调用（注意：实际调用时会传递 dependencies 参数）
+    output_coordinator.output_provider_manager.setup_all_providers.assert_called_once()
+    # 验证调用时包含了正确的 event_bus 参数
+    call_args = output_coordinator.output_provider_manager.setup_all_providers.call_args
+    assert call_args[0][0] == output_coordinator.event_bus
+    assert call_args[1]["dependencies"] == {}  # dependencies 参数应为空字典
 
 
 @pytest.mark.asyncio
@@ -314,7 +318,7 @@ async def test_on_intent_ready_no_expression_generator(
 
     # 发布 Intent 事件
     await event_bus.emit(
-        CoreEvents.DECISION_INTENT_GENERATED,
+        CoreEvents.DECISION_INTENT,
         IntentPayload.from_intent(sample_intent, provider="DecisionProvider"),
         source="DecisionProvider",
     )
@@ -339,12 +343,12 @@ async def test_cleanup_unsubscribes_event_handler(
     await output_coordinator.setup(sample_config)
 
     # 验证事件已订阅
-    assert event_bus.get_listeners_count(CoreEvents.DECISION_INTENT_GENERATED) == 1
+    assert event_bus.get_listeners_count(CoreEvents.DECISION_INTENT) == 1
 
     await output_coordinator.cleanup()
 
     # 验证事件已取消订阅
-    assert event_bus.get_listeners_count(CoreEvents.DECISION_INTENT_GENERATED) == 0
+    assert event_bus.get_listeners_count(CoreEvents.DECISION_INTENT) == 0
     assert output_coordinator._event_handler_registered is False
 
 
@@ -465,14 +469,14 @@ async def test_full_integration_with_real_dependencies(
     async def on_params(event_name, data, source):
         received_params.append(data)
 
-    event_bus.on(CoreEvents.EXPRESSION_PARAMETERS_GENERATED, on_params)
+    event_bus.on(CoreEvents.OUTPUT_PARAMS, on_params)
 
     # 启动
     await coordinator.start()
 
     # 发布 Intent 事件
     await event_bus.emit(
-        CoreEvents.DECISION_INTENT_GENERATED,
+        CoreEvents.DECISION_INTENT,
         IntentPayload.from_intent(sample_intent, provider="DecisionProvider"),
         source="DecisionProvider",
     )
@@ -534,7 +538,7 @@ async def test_intent_event_with_none_data(
     # 但由于 Payload 是强类型的，None 会在 EventBus 层被拒绝
     # 所以这个测试现在只是验证系统能处理空内容的 Payload
 
-    # 由于 OutputCoordinator 订阅的是 CoreEvents.DECISION_INTENT_GENERATED
+    # 由于 OutputCoordinator 订阅的是 CoreEvents.DECISION_INTENT
     # 它期望接收 IntentPayload，所以我们需要发送一个有效的 Payload
     # 但不包含实际的处理逻辑（比如 response_text 为空）
 
@@ -554,7 +558,7 @@ async def test_intent_event_with_none_data(
 
     # 发送空 Payload - OutputCoordinator 应该能处理而不崩溃
     await output_coordinator.event_bus.emit(
-        CoreEvents.DECISION_INTENT_GENERATED,
+        CoreEvents.DECISION_INTENT,
         empty_payload,
         source="DecisionProvider",
     )

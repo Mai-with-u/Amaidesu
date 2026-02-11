@@ -95,8 +95,7 @@ class EdgeTTSProvider(OutputProvider):
 
         self.audio_manager = AudioDeviceManager(sample_rate=sample_rate, channels=channels, dtype=dtype)
 
-        # 从 dependencies 获取 AudioStreamChannel
-        self.audio_stream_channel = self._dependencies.get("audio_stream_channel")
+        # AudioStreamChannel 已由基类设置，通过属性访问
 
         # 设置输出设备
         if self.output_device_name:
@@ -112,7 +111,7 @@ class EdgeTTSProvider(OutputProvider):
 
         # 订阅 expression.parameters_generated 事件（事件驱动架构）
         if self.event_bus:
-            self.event_bus.on(CoreEvents.EXPRESSION_PARAMETERS_GENERATED, self._on_parameters_ready, priority=50)
+            self.event_bus.on(CoreEvents.OUTPUT_PARAMS, self._on_parameters_ready, priority=50)
             self.logger.info("EdgeTTSProvider 已订阅 expression.parameters_generated 事件")
 
         self.logger.info("EdgeTTSProvider设置完成")
@@ -255,7 +254,7 @@ class EdgeTTSProvider(OutputProvider):
         # 取消事件订阅
         if self.event_bus:
             try:
-                self.event_bus.off(CoreEvents.EXPRESSION_PARAMETERS_GENERATED, self._on_parameters_ready)
+                self.event_bus.off(CoreEvents.OUTPUT_PARAMS, self._on_parameters_ready)
                 self.logger.debug("EdgeTTSProvider 已取消事件订阅")
             except Exception as e:
                 self.logger.warning(f"取消事件订阅失败: {e}")

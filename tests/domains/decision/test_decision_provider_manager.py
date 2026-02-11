@@ -328,7 +328,7 @@ async def test_setup_subscribes_to_event(event_bus, mock_provider_class):
         event_count["count"] += 1
 
     # 在 setup 之前订阅同一个事件
-    event_bus.on(CoreEvents.NORMALIZATION_MESSAGE_READY, test_handler, priority=50)
+    event_bus.on(CoreEvents.DATA_MESSAGE, test_handler, priority=50)
 
     await manager.setup("mock_decision", {})
 
@@ -336,7 +336,7 @@ async def test_setup_subscribes_to_event(event_bus, mock_provider_class):
     # Note: MessageReadyPayload.message 是必需字段，不能为 None
     # 这里我们创建一个空的 NormalizedMessage 字典用于测试
     await event_bus.emit(
-        CoreEvents.NORMALIZATION_MESSAGE_READY,
+        CoreEvents.DATA_MESSAGE,
         MessageReadyPayload(
             message={
                 "text": "",
@@ -461,7 +461,7 @@ async def test_on_normalized_message_ready_success(decision_manager_with_mock, s
 
     # 触发 normalization.message_ready 事件
     await manager.event_bus.emit(
-        CoreEvents.NORMALIZATION_MESSAGE_READY,
+        CoreEvents.DATA_MESSAGE,
         MessageReadyPayload.from_normalized_message(sample_normalized_message),
         source="test",
     )
@@ -499,7 +499,7 @@ async def test_on_normalized_message_ready_missing_message_key(decision_manager_
     # Note: MessageReadyPayload 要求 message 字段，但我们测试 DecisionManager 如何处理
     # 通过传入一个空的 message 字典来模拟边缘情况
     await manager.event_bus.emit(
-        CoreEvents.NORMALIZATION_MESSAGE_READY,
+        CoreEvents.DATA_MESSAGE,
         MessageReadyPayload(
             message={},  # 空字典模拟缺失/无效数据
             source="test",
@@ -533,7 +533,7 @@ async def test_on_normalized_message_ready_event_data_structure(decision_manager
     manager.event_bus.on("decision.intent_generated", intent_handler, priority=50)
 
     await manager.event_bus.emit(
-        CoreEvents.NORMALIZATION_MESSAGE_READY,
+        CoreEvents.DATA_MESSAGE,
         MessageReadyPayload.from_normalized_message(sample_normalized_message),
         source="test",
     )
@@ -573,7 +573,7 @@ async def test_on_normalized_message_ready_handles_provider_error(
 
     # 应该不抛出异常，只记录错误
     await manager.event_bus.emit(
-        CoreEvents.NORMALIZATION_MESSAGE_READY,
+        CoreEvents.DATA_MESSAGE,
         MessageReadyPayload.from_normalized_message(sample_normalized_message),
         source="test",
     )
@@ -732,11 +732,11 @@ async def test_cleanup_unsubscribes_events(event_bus, mock_provider_class):
     async def test_handler(event_name, event_data, source):
         call_count["count"] += 1
 
-    manager.event_bus.on(CoreEvents.NORMALIZATION_MESSAGE_READY, test_handler, priority=50)
+    manager.event_bus.on(CoreEvents.DATA_MESSAGE, test_handler, priority=50)
 
     # 由于 manager 已经 cleanup，它的处理器不应该再被调用
     await manager.event_bus.emit(
-        CoreEvents.NORMALIZATION_MESSAGE_READY,
+        CoreEvents.DATA_MESSAGE,
         MessageReadyPayload(
             message={
                 "text": "",

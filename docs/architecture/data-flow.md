@@ -15,13 +15,13 @@
 │ Input Domain    │
 │ (只发布)         │
 └────────┬────────┘
-         │ normalization.message_ready
+         │ data.message
          ▼
 ┌─────────────────┐
 │ Decision Domain │
 │ (订阅 Input)     │
 └────────┬────────┘
-         │ decision.intent_generated
+         │ decision.intent
          ▼
 ┌─────────────────┐
 │ Output Domain   │
@@ -39,7 +39,7 @@ class MyOutputProvider(OutputProvider):
     async def setup(self):
         # 禁止！绕过了 Decision Domain
         self.event_bus.on(
-            CoreEvents.NORMALIZATION_MESSAGE_READY,  # Input 事件
+            CoreEvents.DATA_MESSAGE,  # Input 事件
             self.handler
         )
 ```
@@ -69,7 +69,7 @@ class MyInputProvider(InputProvider):
     async def setup(self):
         # 禁止！Input 应只发布，不订阅下游
         self.event_bus.on(
-            CoreEvents.DECISION_INTENT_GENERATED,
+            CoreEvents.DECISION_INTENT,
             self.handler
         )
 ```
@@ -81,8 +81,8 @@ class MyInputProvider(InputProvider):
 | 订阅者 | 可以订阅的事件 | 禁止订阅的事件 |
 |--------|---------------|---------------|
 | **Input Domain** | 无（仅发布） | Decision/Output 事件 |
-| **Decision Domain** | `NORMALIZATION_MESSAGE_READY` | `RENDER_*` 事件 |
-| **Output Domain** | `DECISION_INTENT_GENERATED` | **`NORMALIZATION_*` 事件** |
+| **Decision Domain** | `DATA_MESSAGE` | `RENDER_*` 事件 |
+| **Output Domain** | `DECISION_INTENT` | **`NORMALIZATION_*` 事件** |
 
 ## 正确的事件使用
 
@@ -94,7 +94,7 @@ class InputCoordinator:
     async def process_and_publish(self, raw_data: RawData):
         normalized = await self.normalize(raw_data)
         await self.event_bus.emit(
-            CoreEvents.NORMALIZATION_MESSAGE_READY,
+            CoreEvents.DATA_MESSAGE,
             MessageReadyPayload(message=normalized),
             source="InputCoordinator"
         )
@@ -107,14 +107,14 @@ class InputCoordinator:
 class DecisionCoordinator:
     async def setup(self):
         self.event_bus.on(
-            CoreEvents.NORMALIZATION_MESSAGE_READY,  # Input 事件
+            CoreEvents.DATA_MESSAGE,  # Input 事件
             self.handle_message
         )
 
     async def handle_message(self, event_name: str, payload: MessageReadyPayload, source: str):
         intent = await self.decision_provider.decide(payload.message)
         await self.event_bus.emit(
-            CoreEvents.DECISION_INTENT_GENERATED,
+            CoreEvents.DECISION_INTENT,
             IntentPayload(intent=intent),
             source="DecisionCoordinator"
         )
@@ -127,7 +127,7 @@ class DecisionCoordinator:
 class OutputCoordinator:
     async def setup(self):
         self.event_bus.on(
-            CoreEvents.DECISION_INTENT_GENERATED,  # Decision 事件
+            CoreEvents.DECISION_INTENT,  # Decision 事件
             self.handle_intent
         )
 ```
@@ -235,7 +235,7 @@ A: 通过 FlowCoordinator（核心协调器）：
 ```
 TTS Provider (EdgeTTS/GPTSoVITS/OmniTTS)
     │
-    ├─ EventBus: expression.parameters_generated (触发 TTS)
+    ├─ EventBus: output.params (触发 TTS)
     │
     └─ AudioStreamChannel: AudioChunk 数据流
             │

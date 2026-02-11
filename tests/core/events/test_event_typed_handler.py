@@ -79,7 +79,7 @@ class TestTypedEventHandler:
 
         # 订阅类型化事件
         event_bus.on_typed(
-            CoreEvents.NORMALIZATION_MESSAGE_READY,
+            CoreEvents.DATA_MESSAGE,
             message_handler,
             MessageReadyPayload,
         )
@@ -89,7 +89,7 @@ class TestTypedEventHandler:
             message={"text": "测试消息", "source": "test"},
             source="test_source",
         )
-        await event_bus.emit(CoreEvents.NORMALIZATION_MESSAGE_READY, payload, source="test")
+        await event_bus.emit(CoreEvents.DATA_MESSAGE, payload, source="test")
 
         # 等待事件处理完成
         await asyncio.sleep(0.1)
@@ -118,7 +118,7 @@ class TestTypedEventHandler:
 
         # 订阅类型化事件
         event_bus.on_typed(
-            CoreEvents.DECISION_INTENT_GENERATED,
+            CoreEvents.DECISION_INTENT,
             intent_handler,
             IntentPayload,
         )
@@ -133,7 +133,7 @@ class TestTypedEventHandler:
             },
             provider="test_provider",
         )
-        await event_bus.emit(CoreEvents.DECISION_INTENT_GENERATED, payload, source="test")
+        await event_bus.emit(CoreEvents.DECISION_INTENT, payload, source="test")
 
         # 等待事件处理完成
         await asyncio.sleep(0.1)

@@ -12,9 +12,9 @@
 
 ```
 Decision Domain (Intent)
-    ↓ EventBus: decision.intent_generated
+    ↓ EventBus: decision.intent
 ExpressionGenerator
-    ↓ EventBus: expression.parameters_generated
+    ↓ EventBus: output.params
 OutputProvider (订阅事件并渲染)
     ↓
 目标设备 (TTS/字幕/VTS/OBS等)
@@ -22,14 +22,14 @@ OutputProvider (订阅事件并渲染)
 
 ### 事件驱动架构
 
-OutputProvider 通过订阅 `expression.parameters_generated` 事件来接收渲染参数，而不是直接调用 `render()` 方法。
+OutputProvider 通过订阅 `output.params` 事件来接收渲染参数，而不是直接调用 `render()` 方法。
 
 **推荐模式**:
 ```python
 async def _setup_internal(self):
     if self.event_bus:
         self.event_bus.on(
-            CoreEvents.EXPRESSION_PARAMETERS_GENERATED,
+            CoreEvents.OUTPUT_PARAMS,
             self._on_parameters_ready,
             priority=50
         )
@@ -93,7 +93,7 @@ async def _setup_internal(self):
     # 订阅事件
     if self.event_bus:
         self.event_bus.on(
-            CoreEvents.EXPRESSION_PARAMETERS_GENERATED,
+            CoreEvents.OUTPUT_PARAMS,
             self._on_parameters_ready,
             priority=50
         )
@@ -182,7 +182,7 @@ async def _cleanup_internal(self):
     if self.event_bus:
         try:
             self.event_bus.off(
-                CoreEvents.EXPRESSION_PARAMETERS_GENERATED,
+                CoreEvents.OUTPUT_PARAMS,
                 self._on_parameters_ready
             )
         except Exception as e:
@@ -385,11 +385,11 @@ class SimpleTTSProvider(OutputProvider):
         # 订阅事件
         if self.event_bus:
             self.event_bus.on(
-                CoreEvents.EXPRESSION_PARAMETERS_GENERATED,
+                CoreEvents.OUTPUT_PARAMS,
                 self._on_parameters_ready,
                 priority=50
             )
-            self.logger.info("已订阅 expression.parameters_generated 事件")
+            self.logger.info("已订阅 output.params 事件")
 
     async def _render_internal(self, parameters: ExpressionParameters):
         """渲染 TTS 输出"""
@@ -438,7 +438,7 @@ class SimpleTTSProvider(OutputProvider):
         if self.event_bus:
             try:
                 self.event_bus.off(
-                    CoreEvents.EXPRESSION_PARAMETERS_GENERATED,
+                    CoreEvents.OUTPUT_PARAMS,
                     self._on_parameters_ready
                 )
             except Exception as e:
@@ -520,11 +520,11 @@ class SubtitleOutputProvider(OutputProvider):
         # 订阅事件
         if self.event_bus:
             self.event_bus.on(
-                CoreEvents.EXPRESSION_PARAMETERS_GENERATED,
+                CoreEvents.OUTPUT_PARAMS,
                 self._on_parameters_ready,
                 priority=50
             )
-            self.logger.info("已订阅 expression.parameters_generated 事件")
+            self.logger.info("已订阅 output.params 事件")
 
         # 启动 GUI 线程（GUI 必须在主线程）
         self.gui_thread = threading.Thread(target=self._run_gui, daemon=True)
@@ -685,11 +685,11 @@ class AvatarOutputProvider(OutputProvider):
         # 订阅事件
         if self.event_bus:
             self.event_bus.on(
-                CoreEvents.EXPRESSION_PARAMETERS_GENERATED,
+                CoreEvents.OUTPUT_PARAMS,
                 self._on_parameters_ready,
                 priority=50
             )
-            self.logger.info("已订阅 expression.parameters_generated 事件")
+            self.logger.info("已订阅 output.params 事件")
 
     async def _render_internal(self, parameters: ExpressionParameters):
         """渲染表情参数"""
@@ -736,7 +736,7 @@ class AvatarOutputProvider(OutputProvider):
         if self.event_bus:
             try:
                 self.event_bus.off(
-                    CoreEvents.EXPRESSION_PARAMETERS_GENERATED,
+                    CoreEvents.OUTPUT_PARAMS,
                     self._on_parameters_ready
                 )
             except Exception as e:
@@ -763,7 +763,7 @@ class AvatarOutputProvider(OutputProvider):
 
 ## 事件订阅模式
 
-### 推荐模式：订阅 `expression.parameters_generated`
+### 推荐模式：订阅 `output.params`
 
 这是最常见的方式，Provider 会在参数生成后自动渲染。
 
@@ -771,7 +771,7 @@ class AvatarOutputProvider(OutputProvider):
 async def _setup_internal(self):
     if self.event_bus:
         self.event_bus.on(
-            CoreEvents.EXPRESSION_PARAMETERS_GENERATED,
+            CoreEvents.OUTPUT_PARAMS,
             self._on_parameters_ready,
             priority=50
         )
@@ -857,13 +857,13 @@ def __init__(self, config: dict):
 
 ### 2. 事件驱动
 
-订阅 `expression.parameters_generated` 事件，而不是直接调用 `render()`：
+订阅 `output.params` 事件，而不是直接调用 `render()`：
 
 ```python
 async def _setup_internal(self):
     if self.event_bus:
         self.event_bus.on(
-            CoreEvents.EXPRESSION_PARAMETERS_GENERATED,
+            CoreEvents.OUTPUT_PARAMS,
             self._on_parameters_ready,
             priority=50
         )
@@ -889,7 +889,7 @@ async def _on_parameters_ready(self, event_name: str, event_data: ExpressionPara
 async def _cleanup_internal(self):
     # 取消事件订阅
     if self.event_bus:
-        self.event_bus.off(CoreEvents.EXPRESSION_PARAMETERS_GENERATED, self._on_parameters_ready)
+        self.event_bus.off(CoreEvents.OUTPUT_PARAMS, self._on_parameters_ready)
 
     # 关闭连接
     if self.client:

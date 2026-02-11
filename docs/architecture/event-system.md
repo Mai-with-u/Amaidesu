@@ -40,14 +40,14 @@ from src.modules.events.payloads import MessageReadyPayload, IntentPayload
 
 # 发布事件（必须使用 Pydantic BaseModel）
 await event_bus.emit(
-    CoreEvents.NORMALIZATION_MESSAGE_READY,
+    CoreEvents.DATA_MESSAGE,
     MessageReadyPayload(message=normalized_message),
     source="MyInputProvider"
 )
 
 # 所有事件都需要 source 参数
 await event_bus.emit(
-    CoreEvents.DECISION_INTENT_GENERATED,
+    CoreEvents.DECISION_INTENT,
     IntentPayload(intent=intent),
     source="MyDecisionProvider"
 )
@@ -61,13 +61,13 @@ from src.modules.events.payloads import MessageReadyPayload, IntentPayload
 
 # 订阅事件（on() 是同步方法）
 event_bus.on(
-    CoreEvents.NORMALIZATION_MESSAGE_READY,
+    CoreEvents.DATA_MESSAGE,
     self.handle_message
 )
 
 # 订阅类型化事件（自动反序列化）
 event_bus.on_typed(
-    CoreEvents.DECISION_INTENT_GENERATED,
+    CoreEvents.DECISION_INTENT,
     self.handle_intent,
     IntentPayload
 )
@@ -83,7 +83,7 @@ async def handle_message(self, event_name: str, payload: MessageReadyPayload, so
 ```python
 # 取消订阅
 event_bus.off(
-    CoreEvents.NORMALIZATION_MESSAGE_READY,
+    CoreEvents.DATA_MESSAGE,
     self.handle_message
 )
 ```
@@ -94,10 +94,10 @@ event_bus.off(
 
 | 事件名 | 发布者 | 订阅者 | 数据类型 |
 |--------|--------|--------|---------|
-| `perception.raw_data.generated` | InputProvider | InputCoordinator | `RawDataPayload` |
-| `normalization.message_ready` | InputCoordinator | DecisionCoordinator | `MessageReadyPayload` |
-| `decision.intent_generated` | DecisionCoordinator | ExpressionGenerator | `IntentPayload` |
-| `expression.parameters_generated` | ExpressionGenerator | OutputCoordinator | `ParametersGeneratedPayload` |
+| `data.raw` | InputProvider | InputCoordinator | `RawDataPayload` |
+| `data.message` | InputCoordinator | DecisionCoordinator | `MessageReadyPayload` |
+| `decision.intent` | DecisionCoordinator | ExpressionGenerator | `IntentPayload` |
+| `output.params` | ExpressionGenerator | OutputCoordinator | `ParametersGeneratedPayload` |
 | `render.completed` | OutputProvider | - | `RenderCompletedPayload` |
 
 ### 事件常量
@@ -108,10 +108,10 @@ event_bus.off(
 from src.modules.events.names import CoreEvents
 
 # ✅ 正确：使用常量
-await event_bus.emit(CoreEvents.NORMALIZATION_MESSAGE_READY, data)
+await event_bus.emit(CoreEvents.DATA_MESSAGE, data)
 
 # ❌ 错误：硬编码字符串
-await event_bus.emit("normalization.message_ready", data)
+await event_bus.emit("data.message", data)
 ```
 
 ## 类型安全
@@ -132,7 +132,7 @@ class MessageReadyPayload(BaseModel):
 
 # 订阅时指定类型（on_typed 自动反序列化）
 event_bus.on_typed(
-    CoreEvents.NORMALIZATION_MESSAGE_READY,
+    CoreEvents.DATA_MESSAGE,
     self.handle_message,
     MessageReadyPayload
 )
@@ -149,21 +149,21 @@ async def handle_message(self, event_name: str, payload: MessageReadyPayload, so
 ```python
 # 高优先级订阅（先处理）
 event_bus.on(
-    CoreEvents.NORMALIZATION_MESSAGE_READY,
+    CoreEvents.DATA_MESSAGE,
     self.handle_critical,
     priority=100
 )
 
 # 普通优先级
 event_bus.on(
-    CoreEvents.NORMALIZATION_MESSAGE_READY,
+    CoreEvents.DATA_MESSAGE,
     self.handle_normal,
     priority=50  # 默认值
 )
 
 # 低优先级订阅（后处理）
 event_bus.on(
-    CoreEvents.NORMALIZATION_MESSAGE_READY,
+    CoreEvents.DATA_MESSAGE,
     self.handle_logging,
     priority=10
 )
@@ -238,7 +238,7 @@ async def handle_once():
         future.set_result(payload)
 
     event_bus.on(
-        CoreEvents.NORMALIZATION_MESSAGE_READY,
+        CoreEvents.DATA_MESSAGE,
         callback
     )
 
@@ -261,10 +261,10 @@ async def conditional_handler(self, event_name: str, payload: dict, source: str)
 ```python
 # ✅ 正确
 from src.modules.events.names import CoreEvents
-await event_bus.emit(CoreEvents.NORMALIZATION_MESSAGE_READY, data)
+await event_bus.emit(CoreEvents.DATA_MESSAGE, data)
 
 # ❌ 错误
-await event_bus.emit("normalization.message_ready", data)
+await event_bus.emit("data.message", data)
 ```
 
 ### 2. 使用类型安全的 Payload
@@ -273,14 +273,14 @@ await event_bus.emit("normalization.message_ready", data)
 # ✅ 正确
 from src.modules.events.payloads import MessageReadyPayload
 await event_bus.emit(
-    CoreEvents.NORMALIZATION_MESSAGE_READY,
+    CoreEvents.DATA_MESSAGE,
     MessageReadyPayload(message=msg),
     source="MyProvider"
 )
 
 # ❌ 错误
 await event_bus.emit(
-    CoreEvents.NORMALIZATION_MESSAGE_READY,
+    CoreEvents.DATA_MESSAGE,
     {"message": msg},  # 无类型检查，会抛出 TypeError
     source="MyProvider"
 )
@@ -349,7 +349,7 @@ AudioStreamChannel 提供：
 ```python
 # EventBus: 发布 TTS 触发事件
 await event_bus.emit(
-    CoreEvents.EXPRESSION_PARAMETERS_GENERATED,
+    CoreEvents.OUTPUT_PARAMS,
     ExpressionParametersPayload(parameters=expr_params),
     source="ExpressionGenerator"
 )

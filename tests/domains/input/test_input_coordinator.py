@@ -63,13 +63,13 @@ async def test_raw_data_to_normalized_message(input_coordinator):
         if message_dict:
             results.append(message_dict)
 
-    input_coordinator.event_bus.on("normalization.message_ready", on_message_ready, priority=50)
+    input_coordinator.event_bus.on(CoreEvents.DATA_MESSAGE, on_message_ready, priority=50)
 
     # 发布测试数据
     raw_data = RawData(content={"text": "测试消息"}, source="test_source", data_type="text")
 
     await input_coordinator.event_bus.emit(
-        CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload.from_raw_data(raw_data), source="test"
+        CoreEvents.DATA_RAW, RawDataPayload.from_raw_data(raw_data), source="test"
     )
 
     # 等待事件处理
@@ -93,7 +93,7 @@ async def test_input_coordinator_multiple_messages(input_coordinator):
         if message_dict:
             results.append(message_dict)
 
-    input_coordinator.event_bus.on("normalization.message_ready", on_message_ready, priority=50)
+    input_coordinator.event_bus.on(CoreEvents.DATA_MESSAGE, on_message_ready, priority=50)
 
     # 发送多条消息
     test_messages = ["消息1", "消息2", "消息3"]
@@ -101,7 +101,7 @@ async def test_input_coordinator_multiple_messages(input_coordinator):
     for msg in test_messages:
         raw_data = RawData(content={"text": msg}, source="test", data_type="text")
         await input_coordinator.event_bus.emit(
-            CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload.from_raw_data(raw_data), source="test"
+            CoreEvents.DATA_RAW, RawDataPayload.from_raw_data(raw_data), source="test"
         )
         await asyncio.sleep(0.1)
 
@@ -141,7 +141,7 @@ async def test_full_data_flow():
         if message_dict:
             results.append(message_dict)
 
-    event_bus.on("normalization.message_ready", on_message_ready, priority=50)
+    event_bus.on(CoreEvents.DATA_MESSAGE, on_message_ready, priority=50)
 
     # 模拟弹幕数据
     raw_data = RawData(
@@ -151,7 +151,7 @@ async def test_full_data_flow():
     )
 
     await event_bus.emit(
-        CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload.from_raw_data(raw_data), source="test"
+        CoreEvents.DATA_RAW, RawDataPayload.from_raw_data(raw_data), source="test"
     )
 
     await asyncio.sleep(0.2)

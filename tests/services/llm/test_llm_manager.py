@@ -158,15 +158,13 @@ async def test_setup_unknown_backend_falls_back_to_openai(llm_manager: LLMManage
     }
 
     with patch("src.modules.llm.clients.openai_client.OpenAIClient") as mock_openai:
-        with patch("src.modules.llm.clients.ollama_client.OllamaClient") as mock_ollama:
-            mock_openai.return_value = MagicMock()
+        mock_openai.return_value = MagicMock()
 
-            with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
-                await llm_manager.setup(config)
+        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
+            await llm_manager.setup(config)
 
-                # 应该使用 OpenAI 而不是 Ollama
-                mock_openai.assert_called_once()
-                mock_ollama.assert_not_called()
+            # 应该使用 OpenAI（降级处理）
+            mock_openai.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -712,7 +710,7 @@ async def test_get_client_info(setup_llm_manager):
     assert "llm_fast" in info
     assert "vlm" in info
     # 验证信息结构
-    assert "backend" in info["llm"]
+    assert "client" in info["llm"]
     assert "config" in info["llm"]
 
 
@@ -724,7 +722,7 @@ async def test_get_client_info_returns_correct_structure(setup_llm_manager):
     info = llm_manager.get_client_info()
 
     for _client_name, client_info in info.items():
-        assert "backend" in client_info
+        assert "client" in client_info
         assert "config" in client_info
 
 

@@ -6,7 +6,7 @@ Expression生成层 - Output Domain: 参数生成
 - ActionMapper: 动作映射器
 
 注意: ExpressionGenerator、EmotionMapper、ExpressionMapper 已移除
-- Avatar Provider 现在直接订阅 DECISION_INTENT_GENERATED 事件
+- Avatar Provider 现在直接订阅 DECISION_INTENT 事件
 - 每个Provider内部实现自己的Intent到平台参数的适配逻辑
 """
 

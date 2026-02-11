@@ -39,9 +39,11 @@ class EventRegistry:
         """
         # 验证命名规范
         valid_prefixes = (
+            "data.",
             "perception.",
             "normalization.",
             "decision.",
+            "output.",
             "expression.",
             "render.",
             "core.",
@@ -100,14 +102,15 @@ def register_core_events() -> None:
     )
     from src.modules.events.payloads.system import ErrorPayload, ShutdownPayload, StartupPayload
 
-    EventRegistry.register_core_event(CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload)
-    EventRegistry.register_core_event(CoreEvents.NORMALIZATION_MESSAGE_READY, MessageReadyPayload)
+    # 核心事件注册
+    EventRegistry.register_core_event(CoreEvents.DATA_RAW, RawDataPayload)
+    EventRegistry.register_core_event(CoreEvents.DATA_MESSAGE, MessageReadyPayload)
     EventRegistry.register_core_event(CoreEvents.DECISION_REQUEST, DecisionRequestPayload)
-    EventRegistry.register_core_event(CoreEvents.DECISION_INTENT_GENERATED, IntentPayload)
+    EventRegistry.register_core_event(CoreEvents.DECISION_INTENT, IntentPayload)
     EventRegistry.register_core_event(CoreEvents.DECISION_RESPONSE_GENERATED, DecisionResponsePayload)
     EventRegistry.register_core_event(CoreEvents.DECISION_PROVIDER_CONNECTED, ProviderConnectedPayload)
     EventRegistry.register_core_event(CoreEvents.DECISION_PROVIDER_DISCONNECTED, ProviderDisconnectedPayload)
-    EventRegistry.register_core_event(CoreEvents.EXPRESSION_PARAMETERS_GENERATED, ParametersGeneratedPayload)
+    EventRegistry.register_core_event(CoreEvents.OUTPUT_PARAMS, ParametersGeneratedPayload)
     EventRegistry.register_core_event(CoreEvents.RENDER_COMPLETED, RenderCompletedPayload)
     EventRegistry.register_core_event(CoreEvents.RENDER_FAILED, RenderFailedPayload)
     EventRegistry.register_core_event(CoreEvents.CORE_STARTUP, StartupPayload)

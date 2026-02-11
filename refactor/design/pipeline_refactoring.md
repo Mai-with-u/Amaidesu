@@ -38,11 +38,11 @@ AI VTuber 领域的真实需求（如 Neuro-sama 的脏话过滤）证明了输�
                                      │  输入管道链 (Input) │  限流、去重、相似过滤
                                      └────────┬───────────┘
                                               ↓
-                                     emit(normalization.message_ready)
+                                     emit(data.message)
                                               ↓
                                        DecisionManager → LLM / MaiCore
                                               ↓
-                                     emit(decision.intent_generated)
+                                     emit(decision.intent)
                                               ↓
                                      ExpressionGenerator
                                               ↓
@@ -52,7 +52,7 @@ AI VTuber 领域的真实需求（如 Neuro-sama 的脏话过滤）证明了输�
                                      │ 输出管道链 (Output)  │  敏感词过滤、文本长度限制
                                      └────────┬────────────┘
                                               ↓
-                                     emit(expression.parameters_generated)
+                                     emit(output.params)
                                               ↓
                                      OutputProviders (TTS, 字幕, VTS...)
 ```
@@ -164,7 +164,7 @@ else:
         importance=metadata.get("importance", 1),
     )
 if normalized_message:
-    await self.event_bus.emit(NORMALIZATION_MESSAGE_READY, ...)
+    await self.event_bus.emit(DATA_MESSAGE, ...)
 ```
 
 ---
@@ -229,7 +229,7 @@ params = await self.expression_generator.generate(intent)
 if self.output_pipeline_manager:
     params = await self.output_pipeline_manager.process(params)
 if params:
-    await self.event_bus.emit(EXPRESSION_PARAMETERS_GENERATED, ...)
+    await self.event_bus.emit(OUTPUT_PARAMS, ...)
 ```
 
 ---

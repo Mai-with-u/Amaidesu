@@ -194,13 +194,13 @@ async def test_on_normalized_message_ready_success(event_bus, decision_manager_w
         intent_results.append(event_data)
 
     # 订阅 intent_generated 事件
-    event_bus.on(CoreEvents.DECISION_INTENT_GENERATED, intent_handler, priority=50)
+    event_bus.on(CoreEvents.DECISION_INTENT, intent_handler, priority=50)
 
     await coordinator.setup()
 
     # 触发 normalization.message_ready 事件
     await event_bus.emit(
-        CoreEvents.NORMALIZATION_MESSAGE_READY,
+        CoreEvents.DATA_MESSAGE,
         MessageReadyPayload.from_normalized_message(sample_normalized_message),
         source="test",
     )
@@ -230,12 +230,12 @@ async def test_on_normalized_message_ready_injects_source_context(
     async def intent_handler(event_name: str, event_data: dict, source: str):
         intent_results.append(event_data)
 
-    event_bus.on(CoreEvents.DECISION_INTENT_GENERATED, intent_handler, priority=50)
+    event_bus.on(CoreEvents.DECISION_INTENT, intent_handler, priority=50)
 
     await coordinator.setup()
 
     await event_bus.emit(
-        CoreEvents.NORMALIZATION_MESSAGE_READY,
+        CoreEvents.DATA_MESSAGE,
         MessageReadyPayload.from_normalized_message(sample_normalized_message),
         source="test",
     )
@@ -268,13 +268,13 @@ async def test_coordinator_handles_decide_errors(event_bus, decision_manager_wit
     async def intent_handler(event_name: str, event_data: dict, source: str):
         intent_results.append(event_data)
 
-    event_bus.on(CoreEvents.DECISION_INTENT_GENERATED, intent_handler, priority=50)
+    event_bus.on(CoreEvents.DECISION_INTENT, intent_handler, priority=50)
 
     await coordinator.setup()
 
     # 触发事件（应该不会崩溃）
     await event_bus.emit(
-        CoreEvents.NORMALIZATION_MESSAGE_READY,
+        CoreEvents.DATA_MESSAGE,
         MessageReadyPayload.from_normalized_message(sample_normalized_message),
         source="test",
     )
@@ -310,7 +310,7 @@ async def test_extract_source_context_from_dict(event_bus, decision_manager_with
 
 @pytest.mark.asyncio
 async def test_on_normalized_message_ready_full_flow(event_bus, decision_manager_with_mock):
-    """测试完整的 _on_normalized_message_ready 流程"""
+    """测试完整的 _on_data_message 流程"""
     coordinator = DecisionCoordinator(event_bus, decision_manager_with_mock)
 
     # 模拟字典格式的消息
@@ -333,13 +333,13 @@ async def test_on_normalized_message_ready_full_flow(event_bus, decision_manager
 
     event_bus.emit = mock_emit
 
-    # 执行
-    await coordinator._on_normalized_message_ready(
-        CoreEvents.NORMALIZATION_MESSAGE_READY,
+    # 执行（使用新方法名）
+    await coordinator._on_data_message(
+        CoreEvents.DATA_MESSAGE,
         payload,
         "test",
     )
 
-    # 验证：事件已发布
+    # 验证：事件已发布（使用新事件名）
     assert len(published_events) == 1
-    assert published_events[0][0] == CoreEvents.DECISION_INTENT_GENERATED
+    assert published_events[0][0] == CoreEvents.DECISION_INTENT

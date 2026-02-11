@@ -567,7 +567,7 @@ class ConfigService:
         provider_name: str,
     ) -> Dict[str, Any]:
         """
-        加载本地配置文件
+        加载本地配置文件（统一使用 tomlkit）
 
         Args:
             config_path: 配置文件路径
@@ -577,18 +577,10 @@ class ConfigService:
             配置字典
         """
         try:
-            # 尝试使用tomllib (Python 3.11+)
-            try:
-                import tomllib
+            import tomlkit
 
-                with open(config_path, "rb") as f:
-                    local_config = tomllib.load(f)
-            except ImportError:
-                # 回退到toml
-                import toml
-
-                with open(config_path, "r", encoding="utf-8") as f:
-                    local_config = toml.load(f)
+            with open(config_path, "r", encoding="utf-8") as f:
+                local_config = tomlkit.load(f)
 
             # 提取Provider配置（支持 [provider_name] 节或直接使用根配置）
             provider_local = local_config.get(provider_name, local_config)
@@ -648,29 +640,11 @@ class ConfigService:
             output_file = Path(output_path)
             output_file.parent.mkdir(parents=True, exist_ok=True)
 
-            # 生成TOML文件（仅作为模板）
-            try:
-                import tomllib
+            # 统一使用 tomlkit 生成TOML文件（保留注释和格式）
+            import tomlkit
 
-                # Python 3.13+ 有 tomllib.write
-                if hasattr(tomllib, "write"):
-                    with open(output_path, "wb") as f:
-                        tomllib.write(f, {provider_name: config_data})
-                else:
-                    raise AttributeError("tomllib.write not available")
-            except (ImportError, AttributeError):
-                # 回退到tomli_w或toml
-                try:
-                    import tomli_w
-
-                    with open(output_path, "wb") as f:
-                        tomli_w.dump({provider_name: config_data}, f)
-                except ImportError:
-                    # 使用简单的TOML写入
-                    import toml
-
-                    with open(output_path, "w", encoding="utf-8") as f:
-                        toml.dump({provider_name: config_data}, f)
+            with open(output_path, "w", encoding="utf-8") as f:
+                tomlkit.dump({provider_name: config_data}, f)
 
             self.logger.info(f"已从Schema自动生成配置文件模板: {output_path}")
             # 返回空字典，让全局覆盖优先生效

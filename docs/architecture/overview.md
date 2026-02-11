@@ -106,12 +106,12 @@ Amaidesu 采用 3 域架构，实现清晰的数据流和职责分离。
   ├─ InputProvider: 并发采集数据
   ├─ Normalization: 标准化
   └─ Pipelines: 预处理（限流、过滤）
-  ↓ EventBus: normalization.message_ready
+  ↓ EventBus: data.message
 【Decision Domain】NormalizedMessage → Intent
   ├─ MaiCoreDecisionProvider (默认)
   ├─ LLMDecisionProvider (可选)
   └─ MaicraftDecisionProvider (可选)
-  ↓ EventBus: decision.intent_generated
+  ↓ EventBus: decision.intent
 【Output Domain】Intent → 实际输出
   ├─ ExpressionGenerator: 参数生成（情绪→表情等）
   └─ OutputProvider: 并发渲染（TTS、字幕、VTS等）
@@ -157,19 +157,19 @@ enabled_outputs = ["tts", "subtitle", "vts"]
 
 | 事件名 | 发布者 | 订阅者 | 数据 |
 |--------|--------|--------|------|
-| `normalization.message_ready` | Input Domain | Decision Domain | `NormalizedMessage` |
-| `decision.intent_generated` | Decision Domain | Output Domain | `Intent` |
-| `expression.parameters_generated` | ExpressionGenerator | OutputProviders | `RenderParameters` |
+| `data.message` | Input Domain | Decision Domain | `NormalizedMessage` |
+| `decision.intent` | Decision Domain | Output Domain | `Intent` |
+| `output.params` | ExpressionGenerator | OutputProviders | `RenderParameters` |
 
 ### 事件使用
 
 ```python
 # 发布事件
 from src.modules.events.names import CoreEvents
-await event_bus.emit(CoreEvents.NORMALIZATION_MESSAGE_READY, message)
+await event_bus.emit(CoreEvents.DATA_MESSAGE, message)
 
 # 订阅事件
-await event_bus.subscribe(CoreEvents.NORMALIZATION_MESSAGE_READY, self.handle_message)
+await event_bus.subscribe(CoreEvents.DATA_MESSAGE, self.handle_message)
 ```
 
 详细事件系统见：[事件系统](event-system.md)

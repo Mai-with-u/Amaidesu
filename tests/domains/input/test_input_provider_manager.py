@@ -66,12 +66,6 @@ class CleanupFailingMockInputProvider(MockInputProvider):
 
 
 @pytest.fixture
-def event_bus():
-    """创建 EventBus 实例"""
-    return EventBus()
-
-
-@pytest.fixture
 def manager(event_bus):
     """创建 InputProviderManager 实例"""
     return InputProviderManager(event_bus)
@@ -360,7 +354,7 @@ async def test_stats_message_count(manager, event_bus):
         if data:
             collected_data.append(data)
 
-    event_bus.on("perception.raw_data.generated", on_raw_data)
+    event_bus.on("data.raw", on_raw_data)
 
     await manager.start_all_providers([provider])
 
@@ -600,9 +594,9 @@ async def test_provider_data_flow_to_event_bus(manager, event_bus):
     collected_events = []
 
     async def on_raw_data(event_name: str, event_data: dict, source: str):
-        collected_events.append({"event_name": event_name, "data": event_data.get("data"), "source": source})
+        collected_events.append({"event_name": event_name, "data": event_data, "source": source})
 
-    event_bus.on("perception.raw_data.generated", on_raw_data)
+    event_bus.on("data.raw", on_raw_data)
 
     provider = MockInputProvider({"name": "test_provider"})
 
@@ -616,8 +610,8 @@ async def test_provider_data_flow_to_event_bus(manager, event_bus):
 
     # 验证事件
     assert len(collected_events) == 1
-    assert collected_events[0]["event_name"] == "perception.raw_data.generated"
-    assert collected_events[0]["data"].content == "测试消息"
+    assert collected_events[0]["event_name"] == "data.raw"
+    assert collected_events[0]["data"]["content"] == "测试消息"
     assert collected_events[0]["source"] == "MockInputProvider"
 
     await manager.stop_all_providers()
@@ -631,7 +625,7 @@ async def test_multiple_providers_data_isolation(manager, event_bus):
     async def on_raw_data(event_name: str, event_data: dict, source: str):
         collected_events.append({"data": event_data.get("data"), "source": source})
 
-    event_bus.on("perception.raw_data.generated", on_raw_data)
+    event_bus.on("data.raw", on_raw_data)
 
     provider1 = MockInputProvider({"name": "provider1"})
     provider2 = MockInputProvider({"name": "provider2"})
@@ -672,7 +666,7 @@ async def test_single_provider_failure_does_not_affect_others(manager, event_bus
     async def on_raw_data(event_name: str, event_data: dict, source: str):
         collected_events.append(event_data)
 
-    event_bus.on("perception.raw_data.generated", on_raw_data)
+    event_bus.on("data.raw", on_raw_data)
 
     await manager.start_all_providers(providers)
 

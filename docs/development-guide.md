@@ -214,10 +214,10 @@ class MyInputProvider(InputProvider):
 ```python
 # 发布事件
 from src.modules.events.names import CoreEvents
-await event_bus.emit(CoreEvents.NORMALIZATION_MESSAGE_READY, normalized_message)
+await event_bus.emit(CoreEvents.DATA_MESSAGE, normalized_message)
 
 # 订阅事件
-await event_bus.subscribe(CoreEvents.NORMALIZATION_MESSAGE_READY, self.handle_message)
+await event_bus.subscribe(CoreEvents.DATA_MESSAGE, self.handle_message)
 ```
 
 ## 中文注释和文档

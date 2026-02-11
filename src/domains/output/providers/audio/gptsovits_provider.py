@@ -156,9 +156,7 @@ class GPTSoVITSOutputProvider(OutputProvider):
         # 加载默认预设
         self.tts_client.load_preset("default")
 
-        # 从 dependencies 获取 AudioStreamChannel
-        self.audio_stream_channel = self._dependencies.get("audio_stream_channel")
-
+        # AudioStreamChannel 已由基类设置，通过属性访问
         self.logger.info("GPTSoVITSOutputProvider设置完成")
 
     async def _cleanup_internal(self):

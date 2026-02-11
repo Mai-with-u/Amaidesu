@@ -23,7 +23,7 @@ await event_bus.emit(
 ```python
 # 方案：Pydantic Model + 事件常量
 await event_bus.emit(
-    CoreEvents.RAW_DATA_GENERATED,  # 常量
+    CoreEvents.DATA_RAW,  # 常量
     RawDataPayload(data=raw_data),  # 类型安全
 )
 ```
@@ -38,12 +38,12 @@ await event_bus.emit(
 # src/core/events/names.py
 class CoreEvents:
     # Input Domain
-    RAW_DATA_GENERATED = "perception.raw_data.generated"
-    MESSAGE_READY = "normalization.message_ready"
-    
+    DATA_RAW = "data.raw"
+    MESSAGE_READY = "data.message"
+
     # Decision Domain
-    INTENT_GENERATED = "decision.intent_generated"
-    
+    INTENT_GENERATED = "decision.intent"
+
     # Output Domain
     RENDER_COMPLETED = "rendering.completed"
 ```
@@ -91,7 +91,7 @@ from src.core.events.names import CoreEvents
 from src.core.events.payloads import RawDataPayload
 
 await event_bus.emit(
-    CoreEvents.RAW_DATA_GENERATED,
+    CoreEvents.DATA_RAW,
     RawDataPayload(data=raw_data, source="bili_danmaku")
 )
 ```
@@ -99,7 +99,7 @@ await event_bus.emit(
 ### 订阅事件
 
 ```python
-@event_bus.on(CoreEvents.MESSAGE_READY)
+@event_bus.on(CoreEvents.DATA_MESSAGE)
 async def handle_message(payload: MessageReadyPayload):
     message = payload.message
     # 有完整的类型提示
@@ -116,8 +116,8 @@ async def handle_message(payload: MessageReadyPayload):
 | 订阅者 | 可以订阅的事件 | 禁止订阅的事件 |
 |--------|---------------|---------------|
 | **Input Domain** | 无（仅发布） | Decision/Output 事件 |
-| **Decision Domain** | `NORMALIZATION_MESSAGE_READY` | `RENDER_*` 事件 |
-| **Output Domain** | `DECISION_INTENT_GENERATED` | **`NORMALIZATION_*` 事件** |
+| **Decision Domain** | `DATA_MESSAGE` | `RENDER_*` 事件 |
+| **Output Domain** | `DECISION_INTENT` | **`DATA_*` 事件** |
 
 ### 禁止的订阅模式
 
@@ -127,7 +127,7 @@ class MyOutputProvider(OutputProvider):
     async def initialize(self):
         # 禁止！绕过了 Decision Domain
         await self.event_bus.subscribe(
-            CoreEvents.NORMALIZATION_MESSAGE_READY,
+            CoreEvents.DATA_MESSAGE,
             self.handler
         )
 
@@ -171,7 +171,7 @@ Input Domain          Decision Domain       Output Domain
 
 | 事件名 | Payload | 触发时机 |
 |--------|---------|----------|
-| `perception.raw_data.generated` | RawDataPayload | InputProvider 采集到数据 |
-| `normalization.message_ready` | MessageReadyPayload | InputDomain 完成标准化 |
-| `decision.intent_generated` | IntentPayload | DecisionProvider 生成意图 |
+| `data.raw` | RawDataPayload | InputProvider 采集到数据 |
+| `data.message` | MessageReadyPayload | InputDomain 完成标准化 |
+| `decision.intent` | IntentPayload | DecisionProvider 生成意图 |
 | `rendering.completed` | RenderCompletedPayload | OutputProvider 完成渲染 |

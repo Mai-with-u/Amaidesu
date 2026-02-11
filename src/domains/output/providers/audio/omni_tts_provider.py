@@ -164,9 +164,7 @@ class OmniTTSProvider(OutputProvider):
             if device_index is not None:
                 self.audio_manager.set_output_device(device_index=device_index)
 
-        # 从 dependencies 获取 AudioStreamChannel
-        self.audio_stream_channel = self._dependencies.get("audio_stream_channel")
-
+        # AudioStreamChannel 已由基类设置，通过属性访问
         self.logger.info("OmniTTSProvider设置完成")
 
     async def _render_internal(self, parameters: RenderParameters):

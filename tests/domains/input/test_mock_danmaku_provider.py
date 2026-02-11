@@ -89,7 +89,7 @@ async def test_mock_danmaku_provider_data_flow():
         if message_dict:
             collected_messages.append(message_dict)
 
-    event_bus.on("normalization.message_ready", on_message_ready, priority=50)
+    event_bus.on(CoreEvents.DATA_MESSAGE, on_message_ready, priority=50)
 
     # 模拟 MockDanmakuProvider 发布 RawData
     MockDanmakuProvider({})
@@ -100,7 +100,7 @@ async def test_mock_danmaku_provider_data_flow():
     )
 
     await event_bus.emit(
-        CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload.from_raw_data(raw_data), source="MockDanmakuProvider"
+        CoreEvents.DATA_RAW, RawDataPayload.from_raw_data(raw_data), source="MockDanmakuProvider"
     )
 
     await asyncio.sleep(0.2)

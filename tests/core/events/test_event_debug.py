@@ -49,8 +49,8 @@ class TestBasePayload:
         assert 'name="test"' in debug_str
         assert "value=42" in debug_str
 
-    def test_default_debug_fields_returns_all_fields(self):
-        """测试默认 _debug_fields 返回所有字段"""
+    def test_default_str_shows_all_fields(self):
+        """测试默认 __str__ 方法显示所有字段"""
 
         class TestPayload(BasePayload):
             field1: str
@@ -58,20 +58,27 @@ class TestBasePayload:
             field3: bool
 
         payload = TestPayload(field1="a", field2=1, field3=True)
-        fields = payload._debug_fields()
+        debug_str = str(payload)
 
-        assert set(fields) == {"field1", "field2", "field3"}
+        # 所有字段都应该出现在字符串中
+        assert "field1=" in debug_str
+        assert "field2=" in debug_str
+        assert "field3=" in debug_str
+        assert '"a"' in debug_str
+        assert "1" in debug_str
+        assert "True" in debug_str
 
-    def test_custom_debug_fields(self):
-        """测试自定义 _debug_fields 方法"""
+    def test_custom_str_method(self):
+        """测试自定义 __str__ 方法可以覆盖默认实现"""
 
         class TestPayload(BasePayload):
             name: str
             value: int
             secret: str
 
-            def _debug_fields(self):
-                return ["name", "value"]  # 排除 secret 字段
+            def __str__(self):
+                # 自定义实现，排除 secret 字段
+                return f'TestPayload(name="{self.name}", value={self.value})'
 
         payload = TestPayload(name="test", value=42, secret="hidden")
         debug_str = str(payload)
@@ -113,10 +120,9 @@ class TestInputPayloads:
         payload = RawDataPayload(content="测试消息", source="console_input", data_type="text")
         debug_str = str(payload)
 
-        assert "RawDataPayload" in debug_str
-        assert 'source="console_input"' in debug_str
-        assert 'data_type="text"' in debug_str
-        assert 'content="测试消息"' in debug_str
+        # 新格式: [text] "测试消息"
+        assert "[text]" in debug_str
+        assert "测试消息" in debug_str
 
     def test_raw_data_payload_with_metadata(self):
         """测试带元数据的 RawDataPayload"""
@@ -128,9 +134,9 @@ class TestInputPayloads:
         )
         debug_str = str(payload)
 
-        # metadata 不应出现在调试输出中（不在 _debug_fields 中）
-        assert "metadata" not in debug_str
-        assert "user_id" not in debug_str
+        # RawDataPayload 有自定义的 __str__ 方法，格式为 [data_type] "content" (user_name)
+        assert "[text]" in debug_str
+        assert "用户输入的文本" in debug_str
 
     def test_message_ready_payload_debug_string(self):
         """测试 MessageReadyPayload 的字符串表示"""
@@ -144,10 +150,8 @@ class TestInputPayloads:
         )
         debug_str = str(payload)
 
-        assert "MessageReadyPayload" in debug_str
-        assert 'source="bili_danmaku"' in debug_str
-        # message 字段应该被特殊格式化
-        assert "message=" in debug_str
+        # MessageReadyPayload 有自定义的 __str__ 方法
+        assert "你好，今天天气怎么样？" in debug_str
 
     def test_message_ready_payload_long_text_truncation(self):
         """测试 MessageReadyPayload 对长文本的截断"""
@@ -201,23 +205,25 @@ class TestDecisionPayloads:
         payload = IntentPayload.from_intent(intent, provider="maicore")
         debug_str = str(payload)
 
+        # IntentPayload 有自定义的 __str__ 方法
         assert "IntentPayload" in debug_str
+        assert 'provider="maicore"' in debug_str
         assert 'original_text="你好"' in debug_str
         assert 'response_text="你好！很高兴见到你~"' in debug_str
-        # 序列化后 emotion 是字符串值
         assert 'emotion="happy"' in debug_str
-        assert 'provider="maicore"' in debug_str
-        assert "actions=" in debug_str
+        assert "actions=[blink]" in debug_str
 
     def test_decision_request_payload_debug_string(self):
-        """测试 DecisionRequestPayload 的字符串表示"""
+        """测试 DecisionRequestPayload 的字符串表示（自定义实现，只显示关键字段）"""
         payload = DecisionRequestPayload(normalized_message={"text": "测试", "source": "test"}, priority=100)
         debug_str = str(payload)
 
+        # 使用自定义的 __str__ 实现，只显示 priority 和 timestamp
         assert "DecisionRequestPayload" in debug_str
         assert "priority=100" in debug_str
-        # normalized_message 不在 _debug_fields 中
-        assert "normalized_message" not in debug_str
+        assert "timestamp=" in debug_str
+        # normalized_message 不在自定义 __str__ 中
+        assert "normalized_message=" not in debug_str
 
     def test_provider_connected_payload_debug_string(self):
         """测试 ProviderConnectedPayload 的字符串表示"""
@@ -277,7 +283,8 @@ class TestOutputPayloads:
         assert 'provider="tts"' in debug_str
         assert 'output_type="audio"' in debug_str
         assert "success=True" in debug_str
-        assert "duration_ms=500.0" in debug_str
+        # duration_ms 使用 :.0f 格式化，没有小数点
+        assert "duration_ms=500" in debug_str
 
     def test_render_failed_payload_debug_string(self):
         """测试 RenderFailedPayload 的字符串表示"""
@@ -316,11 +323,12 @@ class TestSystemPayloads:
         )
         debug_str = str(payload)
 
+        # ErrorPayload 有自定义的 __str__ 方法，只显示关键字段
         assert "ErrorPayload" in debug_str
         assert 'error_type="ConnectionError"' in debug_str
         assert 'error_message="无法连接到 MaiCore 服务"' in debug_str
         assert 'source="MaiCoreDecisionProvider"' in debug_str
-        # stack_trace 不应该在调试输出中
+        # stack_trace 不应该在调试输出中（被自定义 __str__ 排除）
         assert "stack_trace" not in debug_str
 
 
@@ -474,8 +482,11 @@ class TestEventBusDebugLog:
 
             # 验证日志输出包含事件内容
             log_output = log_capture.getvalue()
-            assert "事件内容:" in log_output
-            assert "RawDataPayload" in log_output
+            # RawDataPayload 的特殊格式: [test.event] test_source: text
+            # 注意: 现在使用完整事件名，不再简化
+            assert "[test.event]" in log_output
+            # source 是 "test_source"
+            assert ": 测试消息" in log_output
         finally:
             # 清理 log handler
             logger.remove(handler_id)

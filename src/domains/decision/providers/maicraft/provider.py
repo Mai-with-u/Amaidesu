@@ -5,7 +5,7 @@ Maicraft Decision Provider
 支持通过配置切换不同的动作实现系列（如 Log、MCP 等）。
 
 架构要点:
-- 订阅 CoreEvents.NORMALIZATION_MESSAGE_READY 事件
+- 订阅 CoreEvents.DATA_MESSAGE 事件
 - 解析弹幕命令并生成游戏操作 Intent
 - 通过 Intent.actions 传递动作给 Output Domain
 - 不直接触发 Output Provider（遵守 3 域数据流规则）

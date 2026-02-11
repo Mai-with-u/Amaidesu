@@ -5,7 +5,6 @@
 - Payload 类的创建和字段验证
 - 序列化/反序列化
 - from_* 工厂方法
-- _debug_fields() 方法
 - __str__ 方法格式化
 
 运行: uv run pytest tests/core/events/test_payloads.py -v
@@ -48,34 +47,38 @@ class TestBasePayload:
         payload = BasePayload()
         assert payload is not None
 
-    def test_debug_fields_default(self):
-        """测试 _debug_fields() 默认返回所有字段"""
+    def test_str_shows_all_fields_default(self):
+        """测试默认 __str__() 显示所有字段"""
 
         class TestPayload(BasePayload):
             name: str
             value: int
 
         payload = TestPayload(name="test", value=42)
-        fields = payload._debug_fields()
-        assert "name" in fields
-        assert "value" in fields
+        str_repr = str(payload)
+        assert "name=" in str_repr
+        assert "value=" in str_repr
+        assert "test" in str_repr
+        assert "42" in str_repr
 
-    def test_debug_fields_custom(self):
-        """测试自定义 _debug_fields() 方法"""
+    def test_custom_str_method(self):
+        """测试自定义 __str__() 方法可以排除字段"""
 
         class TestPayload(BasePayload):
             name: str
             value: int
             secret: str
 
-            def _debug_fields(self):
-                return ["name", "value"]  # 不显示 secret
+            def __str__(self):
+                # 自定义实现，排除 secret 字段
+                return f'TestPayload(name="{self.name}", value={self.value})'
 
         payload = TestPayload(name="test", value=42, secret="hidden")
-        fields = payload._debug_fields()
-        assert "name" in fields
-        assert "value" in fields
-        assert "secret" not in fields
+        str_repr = str(payload)
+        assert "name" in str_repr
+        assert "value" in str_repr
+        assert "secret" not in str_repr
+        assert "hidden" not in str_repr
 
     def test_str_formatting(self):
         """测试 __str__ 方法格式化"""
@@ -157,18 +160,6 @@ class TestRawDataPayload:
         assert payload.source == "console_input"
         assert payload.data_type == "text"
 
-    def test_raw_data_payload_debug_fields(self):
-        """测试 _debug_fields() 方法"""
-        payload = RawDataPayload(
-            content="测试内容",
-            source="console_input",
-            data_type="text",
-        )
-        fields = payload._debug_fields()
-        assert "source" in fields
-        assert "data_type" in fields
-        assert "content" in fields
-
     def test_raw_data_payload_serialization(self):
         """测试序列化"""
         payload = RawDataPayload(
@@ -239,17 +230,17 @@ class TestMessageReadyPayload:
         assert payload.metadata.get("room_id") == "123456"
         assert payload.metadata.get("extra_info") == "test"
 
-    def test_message_ready_payload_debug_fields(self):
-        """测试 _debug_fields() 方法"""
+    def test_message_ready_payload_str(self):
+        """测试 __str__() 方法"""
         message_dict = {
             "text": "测试",
             "source": "test",
             "data_type": "text",
         }
         payload = MessageReadyPayload(message=message_dict, source="test")
-        fields = payload._debug_fields()
-        assert "source" in fields
-        assert "message" in fields
+        str_repr = str(payload)
+        # MessageReadyPayload 有自定义的 __str__ 方法
+        assert "测试" in str_repr
 
 
 # =============================================================================
@@ -333,16 +324,18 @@ class TestIntentActionPayload:
         )
         assert payload.priority == 50
 
-    def test_intent_action_payload_debug_fields(self):
-        """测试 _debug_fields() 方法"""
+    def test_intent_action_payload_str(self):
+        """测试 __str__() 方法（使用默认实现，显示所有字段）"""
         payload = IntentActionPayload(
             type="blink",
             params={"count": 2},
         )
-        fields = payload._debug_fields()
-        assert "type" in fields
-        assert "params" in fields
-        assert "priority" in fields
+        str_repr = str(payload)
+        # 使用默认的 __str__ 实现，显示所有字段
+        assert "type=" in str_repr
+        assert "blink" in str_repr
+        assert "params=" in str_repr
+        assert "priority=" in str_repr
 
 
 # =============================================================================
@@ -409,8 +402,8 @@ class TestIntentPayload:
         assert payload.response_text == "回复文本"
         assert payload.emotion == "happy"
 
-    def test_intent_payload_debug_fields(self):
-        """测试 _debug_fields() 方法"""
+    def test_intent_payload_str(self):
+        """测试 __str__() 方法"""
         intent_data = {
             "original_text": "测试",
             "response_text": "回复",
@@ -418,12 +411,11 @@ class TestIntentPayload:
             "actions": [],
         }
         payload = IntentPayload(intent_data=intent_data, provider="test")
-        fields = payload._debug_fields()
-        assert "provider" in fields
-        assert "original_text" in fields
-        assert "response_text" in fields
-        assert "emotion" in fields
-        assert "actions" in fields
+        str_repr = str(payload)
+        # IntentPayload 有自定义的 __str__ 方法
+        assert "IntentPayload" in str_repr
+        assert 'provider="test"' in str_repr
+        assert 'original_text="测试"' in str_repr
 
 
 # =============================================================================
@@ -468,16 +460,17 @@ class TestDecisionResponsePayload:
         )
         assert payload.latency_ms == 100
 
-    def test_decision_response_payload_debug_fields(self):
-        """测试 _debug_fields() 方法"""
+    def test_decision_response_payload_str(self):
+        """测试 __str__() 方法（使用默认实现，显示所有字段）"""
         payload = DecisionResponsePayload(
             response={},
             provider="maicore",
             latency_ms=200,
         )
-        fields = payload._debug_fields()
-        assert "provider" in fields
-        assert "latency_ms" in fields
+        str_repr = str(payload)
+        # 使用默认的 __str__ 实现，显示所有字段
+        assert "provider=" in str_repr
+        assert "latency_ms=" in str_repr
 
 
 # =============================================================================
@@ -513,15 +506,16 @@ class TestProviderConnectedPayload:
         after = time.time()
         assert before <= payload.timestamp <= after
 
-    def test_provider_connected_payload_debug_fields(self):
-        """测试 _debug_fields() 方法"""
+    def test_provider_connected_payload_str(self):
+        """测试 __str__() 方法"""
         payload = ProviderConnectedPayload(
             provider="maicore",
             endpoint="ws://localhost:8000/ws",
         )
-        fields = payload._debug_fields()
-        assert "provider" in fields
-        assert "endpoint" in fields
+        str_repr = str(payload)
+        # ProviderConnectedPayload 有自定义的 __str__ 方法
+        assert 'provider="maicore"' in str_repr
+        assert 'endpoint="ws://localhost:8000/ws"' in str_repr
 
 
 # =============================================================================
@@ -557,17 +551,18 @@ class TestProviderDisconnectedPayload:
         )
         assert payload.metadata == metadata
 
-    def test_provider_disconnected_payload_debug_fields(self):
-        """测试 _debug_fields() 方法"""
+    def test_provider_disconnected_payload_str(self):
+        """测试 __str__() 方法"""
         payload = ProviderDisconnectedPayload(
             provider="maicore",
             reason="timeout",
             will_retry=True,
         )
-        fields = payload._debug_fields()
-        assert "provider" in fields
-        assert "reason" in fields
-        assert "will_retry" in fields
+        str_repr = str(payload)
+        # ProviderDisconnectedPayload 有自定义的 __str__ 方法
+        assert 'provider="maicore"' in str_repr
+        assert 'reason="timeout"' in str_repr
+        assert "will_retry=True" in str_repr
 
 
 # =============================================================================
@@ -609,19 +604,6 @@ class TestParametersGeneratedPayload:
         payload = ParametersGeneratedPayload(priority=50)
         assert payload.priority == 50
 
-    def test_parameters_generated_payload_debug_fields(self):
-        """测试 _debug_fields() 方法"""
-        payload = ParametersGeneratedPayload(
-            tts_text="测试",
-            subtitle_text="测试",
-            expressions={"happy": 0.5},
-        )
-        fields = payload._debug_fields()
-        assert "tts_text" in fields
-        assert "tts_enabled" in fields
-        assert "subtitle_text" in fields
-        assert "subtitle_enabled" in fields
-        assert "expressions" in fields
 
 
 # =============================================================================
@@ -663,19 +645,6 @@ class TestRenderCompletedPayload:
         )
         assert payload.duration_ms == 1000
 
-    def test_render_completed_payload_debug_fields(self):
-        """测试 _debug_fields() 方法"""
-        payload = RenderCompletedPayload(
-            provider="vts",
-            output_type="expression",
-            success=True,
-            duration_ms=100,
-        )
-        fields = payload._debug_fields()
-        assert "provider" in fields
-        assert "output_type" in fields
-        assert "success" in fields
-        assert "duration_ms" in fields
 
 
 # =============================================================================
@@ -722,21 +691,6 @@ class TestRenderFailedPayload:
         )
         assert payload.metadata == metadata
 
-    def test_render_failed_payload_debug_fields(self):
-        """测试 _debug_fields() 方法"""
-        payload = RenderFailedPayload(
-            provider="vts",
-            output_type="expression",
-            error_type="TimeoutError",
-            error_message="连接超时",
-            recoverable=False,
-        )
-        fields = payload._debug_fields()
-        assert "provider" in fields
-        assert "output_type" in fields
-        assert "error_type" in fields
-        assert "error_message" in fields
-        assert "recoverable" in fields
 
 
 # =============================================================================
@@ -862,17 +816,170 @@ class TestErrorPayload:
         )
         assert payload.severity == "critical"
 
-    def test_error_payload_debug_fields(self):
-        """测试 _debug_fields() 方法"""
+    def test_error_payload_str(self):
+        """测试 __str__() 方法"""
         payload = ErrorPayload(
             error_type="TestError",
             error_message="测试错误",
             source="test",
         )
-        fields = payload._debug_fields()
-        assert "error_type" in fields
-        assert "error_message" in fields
-        assert "source" in fields
+        str_repr = str(payload)
+        # ErrorPayload 有自定义的 __str__ 方法
+        assert 'error_type="TestError"' in str_repr
+        assert 'error_message="测试错误"' in str_repr
+        assert 'source="test"' in str_repr
+
+
+# =============================================================================
+# Payload String Formatting 测试
+# =============================================================================
+
+
+class TestPayloadStringFormatting:
+    """测试 Payload 的 __str__() 格式化输出"""
+
+    def test_decision_request_payload_str_format(self):
+        """测试 DecisionRequestPayload 的 __str__() 格式"""
+        payload = DecisionRequestPayload(
+            normalized_message={"text": "测试消息", "source": "console"},
+            priority=100,
+        )
+        str_repr = str(payload)
+        # DecisionRequestPayload 有自定义的 __str__ 方法，只显示 priority 和 timestamp
+        assert "DecisionRequestPayload" in str_repr
+        assert "priority=100" in str_repr
+        assert "timestamp=" in str_repr
+
+    def test_intent_action_payload_str_format(self):
+        """测试 IntentActionPayload 的 __str__() 格式"""
+        payload = IntentActionPayload(
+            type="blink",
+            params={"count": 2},
+            priority=30,
+        )
+        str_repr = str(payload)
+        # 验证包含关键字段
+        assert "IntentActionPayload" in str_repr
+        assert "type=" in str_repr
+        assert "blink" in str_repr
+        assert "params=" in str_repr
+        assert "priority=" in str_repr
+
+    def test_intent_payload_str_format(self):
+        """测试 IntentPayload 的 __str__() 格式"""
+        intent_data = {
+            "original_text": "原始文本",
+            "response_text": "回复文本",
+            "emotion": "happy",
+            "actions": [],
+            "timestamp": time.time(),
+        }
+        payload = IntentPayload(intent_data=intent_data, provider="maicore")
+        str_repr = str(payload)
+        # IntentPayload 有自定义的 __str__ 方法
+        assert "IntentPayload" in str_repr
+        assert 'provider="maicore"' in str_repr
+        assert 'original_text="原始文本"' in str_repr
+
+    def test_decision_response_payload_str_format(self):
+        """测试 DecisionResponsePayload 的 __str__() 格式"""
+        response = {"message_text": "回复消息", "emotion": "happy"}
+        payload = DecisionResponsePayload(
+            response=response,
+            provider="maicore",
+            latency_ms=150.5,
+        )
+        str_repr = str(payload)
+        # DecisionResponsePayload 有自定义的 __str__ 方法
+        assert "DecisionResponsePayload" in str_repr
+        assert 'provider="maicore"' in str_repr
+        assert "latency_ms=150.5" in str_repr
+
+    def test_provider_connected_payload_str_format(self):
+        """测试 ProviderConnectedPayload 的 __str__() 格式"""
+        payload = ProviderConnectedPayload(
+            provider="maicore",
+            endpoint="ws://localhost:8000/ws",
+        )
+        str_repr = str(payload)
+        # ProviderConnectedPayload 有自定义的 __str__ 方法
+        assert "ProviderConnectedPayload" in str_repr
+        assert 'provider="maicore"' in str_repr
+        assert 'endpoint="ws://localhost:8000/ws"' in str_repr
+
+    def test_provider_disconnected_payload_str_format(self):
+        """测试 ProviderDisconnectedPayload 的 __str__() 格式"""
+        payload = ProviderDisconnectedPayload(
+            provider="maicore",
+            reason="timeout",
+            will_retry=True,
+        )
+        str_repr = str(payload)
+        # ProviderDisconnectedPayload 有自定义的 __str__ 方法
+        assert "ProviderDisconnectedPayload" in str_repr
+        assert 'provider="maicore"' in str_repr
+        assert 'reason="timeout"' in str_repr
+        assert "will_retry=True" in str_repr
+
+    def test_parameters_generated_payload_str_format(self):
+        """测试 ParametersGeneratedPayload 的 __str__() 格式"""
+        payload = ParametersGeneratedPayload(
+            tts_text="测试语音",
+            subtitle_text="测试字幕",
+            expressions={"happy": 0.8},
+        )
+        str_repr = str(payload)
+        # ParametersGeneratedPayload 有自定义的 __str__ 方法
+        assert "ParametersGeneratedPayload" in str_repr
+        assert 'tts_text="测试语音"' in str_repr
+        assert 'subtitle_text="测试字幕"' in str_repr
+        assert "expressions=" in str_repr
+
+    def test_render_completed_payload_str_format(self):
+        """测试 RenderCompletedPayload 的 __str__() 格式"""
+        payload = RenderCompletedPayload(
+            provider="tts",
+            output_type="audio",
+            success=True,
+            duration_ms=500,
+        )
+        str_repr = str(payload)
+        # RenderCompletedPayload 有自定义的 __str__ 方法
+        assert "RenderCompletedPayload" in str_repr
+        assert 'provider="tts"' in str_repr
+        assert 'output_type="audio"' in str_repr
+        assert "success=True" in str_repr
+        assert "duration_ms=500" in str_repr
+
+    def test_render_failed_payload_str_format(self):
+        """测试 RenderFailedPayload 的 __str__() 格式"""
+        payload = RenderFailedPayload(
+            provider="tts",
+            output_type="audio",
+            error_type="ConnectionError",
+            error_message="连接失败",
+        )
+        str_repr = str(payload)
+        # RenderFailedPayload 有自定义的 __str__ 方法
+        assert "RenderFailedPayload" in str_repr
+        assert 'provider="tts"' in str_repr
+        assert 'output_type="audio"' in str_repr
+        assert 'error_type="ConnectionError"' in str_repr
+        assert 'error_message="连接失败"' in str_repr
+
+    def test_error_payload_str_format(self):
+        """测试 ErrorPayload 的 __str__() 格式"""
+        payload = ErrorPayload(
+            error_type="TestError",
+            error_message="测试错误",
+            source="test_provider",
+        )
+        str_repr = str(payload)
+        # ErrorPayload 有自定义的 __str__ 方法
+        assert "ErrorPayload" in str_repr
+        assert 'error_type="TestError"' in str_repr
+        assert 'error_message="测试错误"' in str_repr
+        assert 'source="test_provider"' in str_repr
 
 
 # =============================================================================

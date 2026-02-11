@@ -260,7 +260,7 @@ async def on_message(self, raw_message):
 
     # 2. 通过 EventBus 发送
     await event_bus.emit(
-        CoreEvents.NORMALIZATION_MESSAGE_READY,
+        CoreEvents.DATA_MESSAGE,
         normalized
     )
 ```

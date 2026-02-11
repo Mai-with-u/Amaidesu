@@ -11,20 +11,20 @@ from typing import Dict, List
 
 # Event names by domain
 INPUT_EVENTS = {
-    "PERCEPTION_RAW_DATA_GENERATED",
-    "NORMALIZATION_MESSAGE_READY",
+    "DATA_RAW",
+    "DATA_MESSAGE",
 }
 
 DECISION_EVENTS = {
     "DECISION_REQUEST",
-    "DECISION_INTENT_GENERATED",
+    "DECISION_INTENT",
     "DECISION_RESPONSE_GENERATED",
     "DECISION_PROVIDER_CONNECTED",
     "DECISION_PROVIDER_DISCONNECTED",
 }
 
 OUTPUT_EVENTS = {
-    "EXPRESSION_PARAMETERS_GENERATED",
+    "OUTPUT_PARAMS",
     "RENDER_COMPLETED",
     "RENDER_FAILED",
 }
@@ -178,7 +178,7 @@ class TestEventFlowConstraints:
                 f"Found {len(violations)} violation(s):\n"
                 f"{violation_details}\n\n"
                 f"Correct pattern: Output should only subscribe to "
-                f"DECISION_INTENT_GENERATED events."
+                f"DECISION_INTENT events."
             )
 
     def test_decision_domain_does_not_subscribe_to_output_events(self):
@@ -254,10 +254,10 @@ class TestEventFlowConstraints:
         Test that the proper event chain exists: Input → Decision → Output.
 
         This verifies that:
-        1. Input Domain publishes NORMALIZATION_MESSAGE_READY
-        2. Decision Domain subscribes to NORMALIZATION_MESSAGE_READY
-        3. Decision Domain publishes DECISION_INTENT_GENERATED
-        4. Core orchestrator (FlowCoordinator) or Output Domain subscribes to DECISION_INTENT_GENERATED
+        1. Input Domain publishes DATA_MESSAGE
+        2. Decision Domain subscribes to DATA_MESSAGE
+        3. Decision Domain publishes DECISION_INTENT
+        4. Core orchestrator (FlowCoordinator) or Output Domain subscribes to DECISION_INTENT
 
         Note: During refactoring, this test provides guidance but doesn't fail
         if subscriptions aren't implemented yet. The critical tests are the
@@ -285,14 +285,14 @@ class TestEventFlowConstraints:
             if not decision_subscribes_to_input:
                 raise AssertionError(
                     "Decision Domain should subscribe to Input Domain events "
-                    "(NORMALIZATION_MESSAGE_READY) when Output/orchestrator subscribes to Decision events. "
+                    "(DATA_MESSAGE) when Output/orchestrator subscribes to Decision events. "
                     "Data flow: Input → Decision → Output"
                 )
 
             if not output_subscribes_to_decision and not orchestrator_subscribes_to_decision:
                 raise AssertionError(
                     "Output Domain or Core orchestrator should subscribe to Decision Domain events "
-                    "(DECISION_INTENT_GENERATED) when Decision subscribes to Input events. "
+                    "(DECISION_INTENT) when Decision subscribes to Input events. "
                     "Data flow: Input → Decision → Output"
                 )
 

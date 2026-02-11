@@ -50,21 +50,20 @@ def reset_registry():
 
 def test_register_core_event_valid():
     """测试注册有效的核心事件"""
-    EventRegistry.register_core_event("perception.raw_data.generated", CoreEventData)
+    EventRegistry.register_core_event("data.raw", CoreEventData)
 
-    assert EventRegistry.is_registered("perception.raw_data.generated")
-    assert EventRegistry.get("perception.raw_data.generated") == CoreEventData
+    assert EventRegistry.is_registered("data.raw")
+    assert EventRegistry.get("data.raw") == CoreEventData
 
 
 def test_register_core_event_multiple_valid_prefixes():
     """测试注册所有有效前缀的核心事件"""
     valid_events = [
-        ("perception.raw_data.generated", CoreEventData),
-        ("normalization.message_ready", CoreEventData),
-        ("decision.intent_generated", CoreEventData),
-        ("expression.parameters_generated", CoreEventData),
-        ("render.frame_ready", CoreEventData),
-        ("core.system_started", CoreEventData),
+        ("data.raw", CoreEventData),
+        ("data.message", CoreEventData),
+        ("decision.intent", CoreEventData),
+        ("output.params", CoreEventData),
+        ("core.startup", CoreEventData),
     ]
 
     for event_name, model in valid_events:
@@ -87,18 +86,18 @@ def test_register_core_event_invalid_prefix():
         EventRegistry.register_core_event("custom.event", CoreEventData)
 
     with pytest.raises(ValueError, match="核心事件名必须以"):
-        EventRegistry.register_core_event("understanding.intent_generated", CoreEventData)
+        EventRegistry.register_core_event("old.domain.event", CoreEventData)
 
 
 def test_register_core_event_duplicate():
     """测试重复注册核心事件（应覆盖并警告）"""
-    EventRegistry.register_core_event("perception.test_event", CoreEventData)
+    EventRegistry.register_core_event("data.test", CoreEventData)
 
     # 重复注册应该覆盖（记录警告但不抛出异常）
-    EventRegistry.register_core_event("perception.test_event", CoreEventData)
+    EventRegistry.register_core_event("data.test", CoreEventData)
 
     # 验证仍然可以获取
-    assert EventRegistry.get("perception.test_event") == CoreEventData
+    assert EventRegistry.get("data.test") == CoreEventData
 
 
 # =============================================================================
@@ -178,9 +177,13 @@ def test_mixed_operations():
 
 def test_event_name_with_dots():
     """测试包含多个点的事件名"""
-    # 核心事件
-    EventRegistry.register_core_event("perception.raw_data.generated", CoreEventData)
-    assert EventRegistry.is_registered("perception.raw_data.generated")
+    # 核心事件（使用简化命名）
+    EventRegistry.register_core_event("data.raw", CoreEventData)
+    assert EventRegistry.is_registered("data.raw")
+
+    # 也可以注册更深层级的事件（使用 core. 前缀）
+    EventRegistry.register_core_event("core.test.nested.event", CoreEventData)
+    assert EventRegistry.is_registered("core.test.nested.event")
 
 
 if __name__ == "__main__":
