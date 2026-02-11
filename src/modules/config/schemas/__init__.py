@@ -68,6 +68,24 @@ def get_provider_schema(provider_type: str, provider_layer: str = None) -> Type[
     if schema is not None:
         return schema
 
+    # 如果找不到Schema，尝试导入 providers 包以触发注册
+    # 这发生在 get_provider_config_with_defaults 被调用时，
+    # providers 包的 __init__.py 可能还没有被执行
+    try:
+        if provider_layer == "input":
+            from src.domains.input import providers
+        elif provider_layer == "output":
+            from src.domains.output import providers
+        elif provider_layer == "decision":
+            from src.domains.decision import providers
+    except ImportError:
+        pass
+
+        # 重新尝试获取
+        schema = ProviderRegistry.get_config_schema(provider_type)
+        if schema is not None:
+            return schema
+
     raise KeyError(f"未注册的Provider类型: {provider_type} (layer: {provider_layer})")
 
 
