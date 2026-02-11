@@ -586,7 +586,7 @@ enabled = true
 active_provider = "test_decision"
 available_providers = ["test_decision"]
 
-[providers.decision.overrides.test_decision]
+[providers.decision.test_decision]
 max_tokens = 2048
 """
     template_path = os.path.join(temp_base_dir, "config-template.toml")

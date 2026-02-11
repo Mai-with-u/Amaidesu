@@ -195,6 +195,14 @@ class InputProviderManager:
         """
         from src.modules.registry import ProviderRegistry
 
+        # 确保所有 Provider 模块已导入（触发 Schema 注册）
+        # 导入 providers 包会执行 __init__.py，注册所有 Provider
+        try:
+            from src.domains.input import providers
+            self.logger.debug("已导入 providers 包，所有 Provider 应已注册")
+        except ImportError as e:
+            self.logger.warning(f"导入 providers 包失败: {e}")
+
         self.logger.info("开始从配置加载InputProvider...")
 
         # 检查是否启用
@@ -222,8 +230,12 @@ class InputProviderManager:
                     from src.modules.config.schemas import get_provider_schema
 
                     schema_class = get_provider_schema(input_name, "input")
-                except (ImportError, AttributeError, KeyError):
-                    # Schema registry未实现或Provider未注册，回退到None
+                except KeyError:
+                    # Provider未注册（模块未导入），回退到None
+                    self.logger.debug(
+                        f"Provider '{input_name}' Schema未注册（模块可能未导入），"
+                        f"将使用无Schema方式加载配置"
+                    )
                     schema_class = None
 
                 provider_config = config_service.get_provider_config_with_defaults(

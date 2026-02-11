@@ -331,12 +331,17 @@ class DecisionProviderManager:
         """
         确保所有 DecisionProvider 已注册
 
-        Provider 在模块导入时已自动注册（通过 __init__.py）。
-        此方法仅用于验证。
+        通过导入 providers 包触发所有 Provider 的 Schema 注册。
         """
         from src.modules.registry import ProviderRegistry
 
-        # 导入已在模块级别完成，这里仅验证
+        # 导入 providers 包会执行 __init__.py，注册所有 Provider
+        try:
+            from src.domains.decision import providers
+            self.logger.debug("已导入 decision providers 包，所有 Provider 应已注册")
+        except ImportError as e:
+            self.logger.warning(f"导入 decision providers 包失败: {e}")
+
         registered = ProviderRegistry.get_registered_decision_providers()
         self.logger.debug(f"已注册的 DecisionProvider: {registered}")
 

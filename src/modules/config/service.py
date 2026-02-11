@@ -463,21 +463,13 @@ class ConfigService:
 
         # 步骤1: 获取Schema默认值（第一优先级最低，是基础层）
         result = self._get_schema_defaults(schema_class, provider_name)
-        if result:
-            self.logger.debug(f"从Schema获取默认值: {provider_name}")
 
         # 步骤2: 应用主配置覆盖 ([providers.*.overrides.{provider_name}])
         global_override = self.load_global_overrides(config_section, provider_name)
         if global_override:
             result = deep_merge_configs(result, global_override)
-            self.logger.debug(f"应用主配置覆盖: {provider_name}")
-
-        # 步骤3: 加载Provider本地配置 (config.toml，优先级最高)
-        # 如果本地配置不存在，尝试从Schema自动生成
-        local_config = self._load_or_generate_local_config(provider_dir, provider_name, schema_class, provider_layer)
-        if local_config:
-            result = deep_merge_configs(result, local_config)
-            self.logger.debug(f"加载本地配置: {provider_name}")
+        else:
+            self.logger.debug(f"主配置覆盖为空: {provider_name}")
 
         # 步骤4: Schema验证（如果提供）
         # 注意：我们保留额外字段（不在Schema中定义的字段）
@@ -522,7 +514,8 @@ class ConfigService:
         try:
             # 创建Schema实例获取默认值
             schema_instance = schema_class()
-            return schema_instance.model_dump(exclude_unset=True)
+            # 使用 exclude_unset=False 以包含所有字段，包括有默认值的字段
+            return schema_instance.model_dump(exclude_unset=False)
         except Exception as e:
             self.logger.warning(f"Schema默认值获取失败 ({provider_name}): {e}")
             return {}
