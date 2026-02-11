@@ -476,7 +476,7 @@ class TestSchemaIntegration:
         temp_files = []
 
         try:
-            for provider_name, domain in critical_providers:
+            for provider_name, _domain in critical_providers:
                 # 获取 Schema
                 schema = ProviderRegistry.get_config_schema(provider_name)
                 assert schema is not None, f"Provider '{provider_name}' schema not found"
