@@ -519,7 +519,8 @@ class ConfigService:
         try:
             # 创建Schema实例获取默认值
             schema_instance = schema_class()
-            return schema_instance.model_dump(exclude_unset=True)
+            # 使用 exclude_unset=False 以包含所有字段，包括有默认值的字段
+            return schema_instance.model_dump(exclude_unset=False)
         except Exception as e:
             self.logger.warning(f"Schema默认值获取失败 ({provider_name}): {e}")
             return {}
