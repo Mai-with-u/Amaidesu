@@ -67,7 +67,7 @@ class MaicraftDecisionProvider(DecisionProvider):
                 "attack": "attack",
                 "攻击": "attack",
             },
-            description='命令映射配置，格式: {"聊天": "chat", "攻击": "attack"}',
+            description="命令映射配置，将中文命令映射到英文动作类型",
         )
         command_prefix: str = Field(default="/", description="命令前缀")
         mcp_server_url: Optional[str] = Field(default=None, description="MCP服务器URL（当factory_type为mcp时使用）")

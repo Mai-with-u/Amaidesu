@@ -115,6 +115,9 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
                 try:
                     # 设置超时以避免永久阻塞
                     raw_data = await asyncio.wait_for(message_queue.get(), timeout=1.0)
+                    if raw_data is None:
+                        self.logger.info("收到结束信号，停止数据采集")
+                        break
                     yield raw_data
                 except asyncio.TimeoutError:
                     # 超时继续循环，检查is_running
