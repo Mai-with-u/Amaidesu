@@ -6,7 +6,6 @@
 
 import pytest
 
-from src.domains.input.pipelines.manager import PipelineContext
 from src.domains.input.pipelines.similar_filter.pipeline import SimilarFilterTextPipeline
 
 # =============================================================================
@@ -151,32 +150,6 @@ async def test_process_no_cross_user_filter(similar_filter_pipeline):
     # 用户2发送相同消息（跨用户过滤禁用）
     result2 = await pipeline._process(text, user2_metadata)
     assert result2 == text  # 应该通过
-
-
-@pytest.mark.asyncio
-async def test_process_with_context_rollback(similar_filter_pipeline, basic_metadata):
-    """测试 PipelineContext 回滚功能"""
-    # 创建 context 时需要传入 original_text 和 original_metadata
-    context = PipelineContext(original_text="测试消息", original_metadata=basic_metadata)
-
-    text = "测试消息"
-    result = await similar_filter_pipeline._process(text, basic_metadata, context)
-
-    assert result == text
-    # rollback_actions 是公共属性
-    assert len(context.rollback_actions) > 0
-
-    # 执行回滚前检查缓存大小
-    group_id = basic_metadata["group_id"]
-    cache_size_before = len(similar_filter_pipeline._text_cache.get(group_id, []))
-
-    # 执行回滚
-    await context.rollback()
-
-    # 回滚后缓存应该减少
-    cache_size_after = len(similar_filter_pipeline._text_cache.get(group_id, []))
-    if cache_size_before > 0:
-        assert cache_size_after == cache_size_before - 1
 
 
 # =============================================================================

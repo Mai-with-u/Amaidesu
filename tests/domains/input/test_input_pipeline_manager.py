@@ -17,7 +17,6 @@ import pytest
 
 from src.domains.input.pipelines.manager import (
     InputPipelineManager,
-    PipelineContext,
     PipelineErrorHandling,
     PipelineException,
     PipelineStats,
@@ -30,10 +29,7 @@ from src.domains.input.pipelines.manager import (
 
 
 class MockTextPipeline(TextPipelineBase):
-    """Mock TextPipeline 用于测试
-
-    问题#4修复：添加 context 参数支持
-    """
+    """Mock TextPipeline 用于测试"""
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
@@ -44,7 +40,7 @@ class MockTextPipeline(TextPipelineBase):
         self.delay_ms = 0
 
     async def _process(
-        self, text: str, metadata: Dict[str, Any], context: Optional[PipelineContext] = None
+        self, text: str, metadata: Dict[str, Any]
     ) -> Optional[str]:
         """处理文本"""
         self.processed_texts.append((text, metadata))
@@ -65,17 +61,14 @@ class MockTextPipeline(TextPipelineBase):
 
 
 class SlowMockTextPipeline(TextPipelineBase):
-    """慢速 Mock TextPipeline 用于测试超时
-
-    问题#4修复：添加 context 参数支持
-    """
+    """慢速 Mock TextPipeline 用于测试超时"""
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.sleep_time = config.get("sleep_time", 1.0)
 
     async def _process(
-        self, text: str, metadata: Dict[str, Any], context: Optional[PipelineContext] = None
+        self, text: str, metadata: Dict[str, Any]
     ) -> Optional[str]:
         await asyncio.sleep(self.sleep_time)
         return f"[Slow] {text}"
@@ -390,7 +383,7 @@ async def test_text_pipeline_priority_sorting(
             self.name = name
 
         async def _process(
-            self, text: str, metadata: Dict[str, Any], context: Optional[PipelineContext] = None
+            self, text: str, metadata: Dict[str, Any]
         ) -> Optional[str]:
             execution_order.append(self.name)
             return f"[{self.name}] {text}"

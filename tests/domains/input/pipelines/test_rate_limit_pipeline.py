@@ -8,7 +8,6 @@ import asyncio
 
 import pytest
 
-from src.domains.input.pipelines.manager import PipelineContext
 from src.domains.input.pipelines.rate_limit.pipeline import RateLimitTextPipeline
 
 # =============================================================================
@@ -127,29 +126,6 @@ async def test_process_message_different_users(rate_limit_pipeline):
     # 用户2应该还能发送消息（独立计数）
     result = await rate_limit_pipeline._process("用户2消息0", user2_metadata)
     assert result is not None
-
-
-@pytest.mark.asyncio
-async def test_process_with_context_rollback(rate_limit_pipeline, basic_metadata):
-    """测试 PipelineContext 回滚功能"""
-    # 创建 context 时需要传入 original_text 和 original_metadata
-    context = PipelineContext(original_text="测试消息", original_metadata=basic_metadata)
-
-    # 正常处理消息
-    text = "测试消息"
-    result = await rate_limit_pipeline._process(text, basic_metadata, context)
-
-    assert result == text
-    # rollback_actions 是公共属性
-    assert len(context.rollback_actions) > 0
-
-    # 执行回滚
-    global_count_before = len(rate_limit_pipeline._global_timestamps)
-    await context.rollback()
-    global_count_after = len(rate_limit_pipeline._global_timestamps)
-
-    # 回滚后应该少一条记录
-    assert global_count_after == global_count_before - 1
 
 
 # =============================================================================
