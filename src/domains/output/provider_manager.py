@@ -401,13 +401,30 @@ class OutputProviderManager:
 
         for output_name in enabled_outputs:
             try:
+                # 确保Provider模块已导入（触发注册）
+                # 在调用get_provider_schema之前导入模块，确保Schema已注册
+                try:
+                    import importlib
+
+                    module_path = f"src.domains.output.providers.{output_name}"
+                    importlib.import_module(module_path)
+                    self.logger.debug(f"已导入Provider模块: {module_path}")
+                except ImportError as e:
+                    self.logger.warning(
+                        f"无法导入Provider模块 '{output_name}': {e}，将尝试使用已注册的Provider"
+                    )
+
                 # 使用三级配置加载
                 try:
                     from src.modules.config.schemas import get_provider_schema
 
                     schema_class = get_provider_schema(output_name, "output")
-                except (ImportError, AttributeError, KeyError):
-                    # Schema registry未实现或Provider未注册，回退到None
+                except KeyError:
+                    # Provider未注册（模块未导入），回退到None
+                    self.logger.debug(
+                        f"Provider '{output_name}' Schema未注册（模块可能未导入），"
+                        f"将使用无Schema方式加载配置"
+                    )
                     schema_class = None
 
                 if config_service:

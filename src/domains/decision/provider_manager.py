@@ -331,14 +331,31 @@ class DecisionProviderManager:
         """
         确保所有 DecisionProvider 已注册
 
-        Provider 在模块导入时已自动注册（通过 __init__.py）。
-        此方法仅用于验证。
+        如果 Provider 未注册（模块未导入），则尝试导入对应模块。
         """
         from src.modules.registry import ProviderRegistry
+        import importlib
 
-        # 导入已在模块级别完成，这里仅验证
         registered = ProviderRegistry.get_registered_decision_providers()
         self.logger.debug(f"已注册的 DecisionProvider: {registered}")
+
+        # 如果没有注册任何Provider，尝试导入所有Decision Provider模块
+        if not registered:
+            self.logger.info("未发现已注册的DecisionProvider，尝试导入模块...")
+            # 常见的Decision Provider列表
+            decision_providers = ["maicore", "llm", "maicraft"]
+
+            for provider_name in decision_providers:
+                try:
+                    module_path = f"src.domains.decision.providers.{provider_name}"
+                    importlib.import_module(module_path)
+                    self.logger.debug(f"已导入Decision Provider模块: {module_path}")
+                except ImportError as e:
+                    self.logger.debug(f"无法导入Decision Provider模块 '{provider_name}': {e}")
+
+            # 重新检查注册状态
+            registered = ProviderRegistry.get_registered_decision_providers()
+            self.logger.info(f"导入后已注册的 DecisionProvider: {registered}")
 
     async def set_active_provider(self, provider_name: str, config: Optional[Dict[str, Any]] = None) -> None:
         """
