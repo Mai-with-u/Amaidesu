@@ -1,6 +1,6 @@
 """日志系统单元测试。
 
-测试 src.core.utils.logger 模块的功能，包括：
+测试 src.modules.logging 模块的功能，包括：
 - JSONL 和文本格式输出
 - 控制台专用模式
 - 目录创建

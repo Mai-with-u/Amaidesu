@@ -68,7 +68,7 @@ def llm_manager():
 async def setup_llm_manager(llm_manager: LLMManager, mock_config: Dict[str, Any]):
     """初始化 LLMManager 实例"""
     # Mock OpenAIClient to avoid real API calls
-    with patch("src.services.llm.backends.openai_client.OpenAIClient") as mock_backend_class:
+    with patch("src.modules.llm.clients.openai_client.OpenAIClient") as mock_backend_class:
         mock_backend = MagicMock()
         mock_backend.chat = AsyncMock(
             return_value=LLMResponse(
@@ -97,7 +97,7 @@ async def setup_llm_manager(llm_manager: LLMManager, mock_config: Dict[str, Any]
         mock_backend_class.return_value = mock_backend
 
         # Mock TokenUsageManager
-        with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager") as mock_token_manager:
+        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager") as mock_token_manager:
             await llm_manager.setup(mock_config)
             yield llm_manager, mock_backend, mock_token_manager
 
@@ -110,11 +110,11 @@ async def setup_llm_manager(llm_manager: LLMManager, mock_config: Dict[str, Any]
 @pytest.mark.asyncio
 async def test_setup_initializes_backends(llm_manager: LLMManager, mock_config: Dict[str, Any]):
     """测试 setup 初始化所有后端"""
-    with patch("src.services.llm.backends.openai_client.OpenAIClient") as mock_backend_class:
+    with patch("src.modules.llm.clients.openai_client.OpenAIClient") as mock_backend_class:
         mock_backend = MagicMock()
         mock_backend_class.return_value = mock_backend
 
-        with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager"):
+        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
             await llm_manager.setup(mock_config)
 
             # 验证三个后端都被初始化
@@ -136,11 +136,11 @@ async def test_setup_with_custom_config(llm_manager: LLMManager):
         },
     }
 
-    with patch("src.services.llm.backends.openai_client.OpenAIClient") as mock_backend_class:
+    with patch("src.modules.llm.clients.openai_client.OpenAIClient") as mock_backend_class:
         mock_backend = MagicMock()
         mock_backend_class.return_value = mock_backend
 
-        with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager"):
+        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
             await llm_manager.setup(config)
 
             # 验证配置传递正确
@@ -157,11 +157,11 @@ async def test_setup_unknown_backend_falls_back_to_openai(llm_manager: LLMManage
         },
     }
 
-    with patch("src.services.llm.backends.openai_client.OpenAIClient") as mock_openai:
-        with patch("src.services.llm.backends.ollama_client.OllamaClient") as mock_ollama:
+    with patch("src.modules.llm.clients.openai_client.OpenAIClient") as mock_openai:
+        with patch("src.modules.llm.clients.ollama_client.OllamaClient") as mock_ollama:
             mock_openai.return_value = MagicMock()
 
-            with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager"):
+            with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
                 await llm_manager.setup(config)
 
                 # 应该使用 OpenAI 而不是 Ollama
@@ -172,8 +172,8 @@ async def test_setup_unknown_backend_falls_back_to_openai(llm_manager: LLMManage
 @pytest.mark.asyncio
 async def test_setup_initializes_token_manager(llm_manager: LLMManager, mock_config: Dict[str, Any]):
     """测试 setup 初始化 TokenUsageManager"""
-    with patch("src.services.llm.backends.openai_client.OpenAIClient"):
-        with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager") as mock_token_manager:
+    with patch("src.modules.llm.clients.openai_client.OpenAIClient"):
+        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager") as mock_token_manager:
             await llm_manager.setup(mock_config)
 
             assert llm_manager._token_manager is not None
@@ -288,8 +288,8 @@ async def test_stream_chat_basic(llm_manager: LLMManager, mock_config: Dict[str,
     mock_backend.stream_chat = mock_stream
     mock_backend.get_info.return_value = {"name": "OpenAIClient"}
 
-    with patch("src.services.llm.backends.openai_client.OpenAIClient", return_value=mock_backend):
-        with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager"):
+    with patch("src.modules.llm.clients.openai_client.OpenAIClient", return_value=mock_backend):
+        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
             await llm_manager.setup(mock_config)
 
             chunks = []
@@ -315,8 +315,8 @@ async def test_stream_chat_with_stop_event(llm_manager: LLMManager, mock_config:
     mock_backend = MagicMock()
     mock_backend.stream_chat = mock_stream
 
-    with patch("src.services.llm.backends.openai_client.OpenAIClient", return_value=mock_backend):
-        with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager"):
+    with patch("src.modules.llm.clients.openai_client.OpenAIClient", return_value=mock_backend):
+        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
             await llm_manager.setup(mock_config)
 
             stop_event = asyncio.Event()
@@ -345,8 +345,8 @@ async def test_stream_chat_with_system_message(llm_manager: LLMManager, mock_con
     mock_backend = MagicMock()
     mock_backend.stream_chat = mock_stream
 
-    with patch("src.services.llm.backends.openai_client.OpenAIClient", return_value=mock_backend):
-        with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager"):
+    with patch("src.modules.llm.clients.openai_client.OpenAIClient", return_value=mock_backend):
+        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
             await llm_manager.setup(mock_config)
 
             chunks = []
@@ -579,8 +579,8 @@ async def test_retry_on_failure(llm_manager: LLMManager, mock_config: Dict[str, 
     mock_backend.chat = failing_chat
     mock_backend.get_info.return_value = {"name": "OpenAIClient"}
 
-    with patch("src.services.llm.backends.openai_client.OpenAIClient", return_value=mock_backend):
-        with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager"):
+    with patch("src.modules.llm.clients.openai_client.OpenAIClient", return_value=mock_backend):
+        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
             await llm_manager.setup(mock_config)
 
             response = await llm_manager.chat("Test")
@@ -600,8 +600,8 @@ async def test_retry_exhaustion(llm_manager: LLMManager, mock_config: Dict[str, 
     mock_backend.chat = always_failing_chat
     mock_backend.get_info.return_value = {"name": "OpenAIBackend"}
 
-    with patch("src.services.llm.backends.openai_client.OpenAIClient", return_value=mock_backend):
-        with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager"):
+    with patch("src.modules.llm.clients.openai_client.OpenAIClient", return_value=mock_backend):
+        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
             await llm_manager.setup(mock_config)
 
             response = await llm_manager.chat("Test")
@@ -626,8 +626,8 @@ async def test_retry_with_custom_config(llm_manager: LLMManager, mock_config: Di
     mock_backend.chat = failing_chat
     mock_backend.get_info.return_value = {"name": "OpenAIClient"}
 
-    with patch("src.services.llm.backends.openai_client.OpenAIClient", return_value=mock_backend):
-        with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager"):
+    with patch("src.modules.llm.clients.openai_client.OpenAIClient", return_value=mock_backend):
+        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
             await llm_manager.setup(mock_config)
 
             import time
@@ -657,8 +657,8 @@ async def test_retry_exponential_backoff(llm_manager: LLMManager, mock_config: D
     mock_backend.chat = failing_chat
     mock_backend.get_info.return_value = {"name": "OpenAIClient"}
 
-    with patch("src.services.llm.backends.openai_client.OpenAIClient", return_value=mock_backend):
-        with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager"):
+    with patch("src.modules.llm.clients.openai_client.OpenAIClient", return_value=mock_backend):
+        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
             await llm_manager.setup(mock_config)
 
             await llm_manager.chat("Test")
@@ -772,8 +772,8 @@ async def test_cleanup_all_backends(llm_manager: LLMManager, mock_config: Dict[s
     mock_backend.cleanup = AsyncMock()
     mock_backend.get_info.return_value = {"name": "OpenAIClient"}
 
-    with patch("src.services.llm.backends.openai_client.OpenAIClient", return_value=mock_backend):
-        with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager"):
+    with patch("src.modules.llm.clients.openai_client.OpenAIClient", return_value=mock_backend):
+        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
             await llm_manager.setup(mock_config)
 
             # 验证客户端已初始化
@@ -801,8 +801,8 @@ async def test_cleanup_handles_backend_errors(llm_manager: LLMManager, mock_conf
     mock_backend2.cleanup = AsyncMock()
     mock_backend2.get_info.return_value = {"name": "Backend2"}
 
-    with patch("src.services.llm.backends.openai_client.OpenAIClient", side_effect=[mock_backend1, mock_backend2]):
-        with patch("src.services.llm.backends.token_usage_manager.TokenUsageManager"):
+    with patch("src.modules.llm.clients.openai_client.OpenAIClient", side_effect=[mock_backend1, mock_backend2]):
+        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
             # 创建只有两个客户端的配置
             config = {"llm": {"backend": "openai", "model": "test"}}
             await llm_manager.setup(config)

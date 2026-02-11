@@ -144,18 +144,14 @@ class TestVRChatProviderAdaptIntent:
     def test_adapt_intent_with_neutral_emotion(self, vrchat_config):
         """测试 neutral 情感适配（应返回空表情）"""
         provider = VRChatProvider(vrchat_config)
-        intent = Intent(
-            original_text="你好", response_text="你好", emotion=EmotionType.NEUTRAL, actions=[]
-        )
+        intent = Intent(original_text="你好", response_text="你好", emotion=EmotionType.NEUTRAL, actions=[])
         result = provider._adapt_intent(intent)
         assert result["expressions"] == {}
 
     def test_adapt_intent_with_sad_emotion(self, vrchat_config):
         """测试 sad 情感适配"""
         provider = VRChatProvider(vrchat_config)
-        intent = Intent(
-            original_text="呜呜", response_text="好难过", emotion=EmotionType.SAD, actions=[]
-        )
+        intent = Intent(original_text="呜呜", response_text="好难过", emotion=EmotionType.SAD, actions=[])
         result = provider._adapt_intent(intent)
         assert result["expressions"]["MouthSmile"] == -0.3
         assert result["expressions"]["EyeOpen"] == 0.7
@@ -163,9 +159,7 @@ class TestVRChatProviderAdaptIntent:
     def test_adapt_intent_with_custom_action_gesture(self, vrchat_config):
         """测试 CUSTOM 类型的动作为手势"""
         provider = VRChatProvider(vrchat_config)
-        action = IntentAction(
-            type=ActionType.CUSTOM, params={"gesture_name": "Wave"}
-        )
+        action = IntentAction(type=ActionType.CUSTOM, params={"gesture_name": "Wave"})
         intent = Intent(
             original_text="测试",
             response_text="测试",
@@ -179,9 +173,7 @@ class TestVRChatProviderAdaptIntent:
     def test_adapt_intent_with_hotkey_action_gesture(self, vrchat_config):
         """测试 HOTKEY 类型的动作为手势"""
         provider = VRChatProvider(vrchat_config)
-        action = IntentAction(
-            type=ActionType.HOTKEY, params={"gesture_name": "Peace"}
-        )
+        action = IntentAction(type=ActionType.HOTKEY, params={"gesture_name": "Peace"})
         intent = Intent(
             original_text="测试",
             response_text="测试",
@@ -213,9 +205,7 @@ class TestVRChatProviderAdaptIntent:
     def test_adapt_intent_with_emotion_and_gesture(self, vrchat_config):
         """测试情感和手势同时存在"""
         provider = VRChatProvider(vrchat_config)
-        action = IntentAction(
-            type=ActionType.CUSTOM, params={"gesture_name": "Point"}
-        )
+        action = IntentAction(type=ActionType.CUSTOM, params={"gesture_name": "Point"})
         intent = Intent(
             original_text="你好",
             response_text="你好啊！",
@@ -424,9 +414,7 @@ class TestVRChatProviderRendering:
         mock_logger.warning.assert_called()
 
     @pytest.mark.asyncio
-    async def test_render_internal_handles_send_exception(
-        self, vrchat_config, mock_logger
-    ):
+    async def test_render_internal_handles_send_exception(self, vrchat_config, mock_logger):
         """测试渲染时处理发送异常（_send_parameter 内部捕获异常）"""
         provider = VRChatProvider(vrchat_config)
         provider._osc_enabled = True
@@ -518,9 +506,7 @@ class TestVRChatProviderGestures:
         provider._trigger_gesture("Wave")
 
         # 验证发送了正确的 OSC 消息
-        mock_osc_client.send_message.assert_called_once_with(
-            "/avatar/parameters/VRCEmote", 1
-        )
+        mock_osc_client.send_message.assert_called_once_with("/avatar/parameters/VRCEmote", 1)
 
     @pytest.mark.asyncio
     async def test_trigger_unknown_gesture(self, vrchat_config, mock_osc_client, mock_logger):
@@ -562,7 +548,9 @@ class TestVRChatProviderSoftFallback:
     def test_warning_logged_when_osc_unavailable(self, vrchat_config, mock_logger):
         """测试 OSC 不可用时记录警告日志"""
         with patch("src.domains.output.providers.avatar.vrchat.vrchat_provider.PYTHON_OSC_AVAILABLE", False):
-            with patch("src.domains.output.providers.avatar.vrchat.vrchat_provider.get_logger", return_value=mock_logger):
+            with patch(
+                "src.domains.output.providers.avatar.vrchat.vrchat_provider.get_logger", return_value=mock_logger
+            ):
                 # 实例化 Provider 应该触发警告日志
                 VRChatProvider(vrchat_config)
                 # 应该记录警告
@@ -627,9 +615,7 @@ class TestVRChatProviderSendParameter:
 
         provider._send_parameter("MouthSmile", 0.8)
 
-        mock_osc_client.send_message.assert_called_once_with(
-            "/avatar/parameters/MouthSmile", 0.8
-        )
+        mock_osc_client.send_message.assert_called_once_with("/avatar/parameters/MouthSmile", 0.8)
 
     def test_send_parameter_when_not_connected(self, vrchat_config, mock_logger):
         """测试未连接时发送参数"""

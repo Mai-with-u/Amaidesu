@@ -9,19 +9,18 @@ import sys
 from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger as loguru_logger
-from src.core.event_bus import EventBus
-from src.core.provider_registry import ProviderRegistry
-from src.core.utils.logger import get_logger
-from src.services.config.service import ConfigService
-from src.services.llm.manager import LLMManager
+from src.modules.events import EventBus, register_core_events
+from src.modules.logging import get_logger
+from src.modules.registry import ProviderRegistry
+from src.modules.config.service import ConfigService
+from src.modules.llm.manager import LLMManager
+from src.modules.context import ContextService, ContextServiceConfig
 
-from src.core.events import register_core_events
 from src.domains.decision import DecisionProviderManager
 from src.domains.input.coordinator import InputCoordinator
 from src.domains.input.pipelines.manager import InputPipelineManager
 from src.domains.input.provider_manager import InputProviderManager
 from src.domains.output import OutputCoordinator
-from src.services.context import ContextService, ContextServiceConfig
 
 logger = get_logger("Main")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -56,7 +55,7 @@ def setup_logging_early(args: argparse.Namespace) -> None:
     使用默认的INFO级别，避免DEBUG日志过早输出。
     完整的日志配置会在load_config后再次调用。
     """
-    from src.core.utils.logger import configure_from_config
+    from src.modules.logging import configure_from_config
 
     # 使用默认INFO级别配置
     default_config = {"level": "INFO", "console_level": "INFO"}
@@ -76,7 +75,7 @@ def setup_logging(args: argparse.Namespace, logging_config: Optional[Dict[str, A
         args: 命令行参数
         logging_config: 日志配置字典（从 ConfigService.get_section("logging") 获取）
     """
-    from src.core.utils.logger import configure_from_config
+    from src.modules.logging import configure_from_config
 
     # 构建配置字典，应用 CLI 覆盖
     final_config = {}
@@ -324,7 +323,7 @@ async def create_app_components(
         logger.info("未检测到输出Provider配置，输出协调器功能将被禁用")
 
     # 创建 AudioStreamChannel
-    from src.core.streaming.audio_stream_channel import AudioStreamChannel
+    from src.modules.streaming.audio_stream_channel import AudioStreamChannel
 
     logger.info("初始化 AudioStreamChannel...")
     audio_stream_channel = AudioStreamChannel("tts")

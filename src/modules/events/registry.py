@@ -81,3 +81,35 @@ class EventRegistry:
     def list_all_events(cls) -> Dict[str, Type[BaseModel]]:
         """列出所有注册的事件"""
         return cls._core_events.copy()
+
+
+def register_core_events() -> None:
+    """注册所有核心事件名与 Payload 类型的映射，供 EventBus 校验使用。"""
+    from src.modules.events.names import CoreEvents
+    from src.modules.events.payloads import (
+        DecisionRequestPayload,
+        DecisionResponsePayload,
+        IntentPayload,
+        MessageReadyPayload,
+        ParametersGeneratedPayload,
+        ProviderConnectedPayload,
+        ProviderDisconnectedPayload,
+        RawDataPayload,
+        RenderCompletedPayload,
+        RenderFailedPayload,
+    )
+    from src.modules.events.payloads.system import ErrorPayload, ShutdownPayload, StartupPayload
+
+    EventRegistry.register_core_event(CoreEvents.PERCEPTION_RAW_DATA_GENERATED, RawDataPayload)
+    EventRegistry.register_core_event(CoreEvents.NORMALIZATION_MESSAGE_READY, MessageReadyPayload)
+    EventRegistry.register_core_event(CoreEvents.DECISION_REQUEST, DecisionRequestPayload)
+    EventRegistry.register_core_event(CoreEvents.DECISION_INTENT_GENERATED, IntentPayload)
+    EventRegistry.register_core_event(CoreEvents.DECISION_RESPONSE_GENERATED, DecisionResponsePayload)
+    EventRegistry.register_core_event(CoreEvents.DECISION_PROVIDER_CONNECTED, ProviderConnectedPayload)
+    EventRegistry.register_core_event(CoreEvents.DECISION_PROVIDER_DISCONNECTED, ProviderDisconnectedPayload)
+    EventRegistry.register_core_event(CoreEvents.EXPRESSION_PARAMETERS_GENERATED, ParametersGeneratedPayload)
+    EventRegistry.register_core_event(CoreEvents.RENDER_COMPLETED, RenderCompletedPayload)
+    EventRegistry.register_core_event(CoreEvents.RENDER_FAILED, RenderFailedPayload)
+    EventRegistry.register_core_event(CoreEvents.CORE_STARTUP, StartupPayload)
+    EventRegistry.register_core_event(CoreEvents.CORE_SHUTDOWN, ShutdownPayload)
+    EventRegistry.register_core_event(CoreEvents.CORE_ERROR, ErrorPayload)
