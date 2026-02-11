@@ -207,7 +207,7 @@ class IntentParser:
         """
         # 情感识别（关键词匹配）
         emotion = EmotionType.NEUTRAL
-        for emo, keywords in self.EMOTION_KEYWORDS.items():
+        for emo, keywords in self._emotion_keywords.items():
             if any(keyword in text for keyword in keywords):
                 emotion = emo
                 break
