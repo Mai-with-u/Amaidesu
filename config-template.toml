@@ -1,29 +1,32 @@
-# Amaidesu 配置文件元信息
-
-[meta]
-version = "0.1.0"  # 配置模板版本，用于自动更新检测
-
-# Amaidesu 配置文件
+# Amaidesu 配置文件模板
 #
-# 📝 配置层次说明
+# 配置层次说明
 # ================================
 # 此配置文件是用户主配置，包含：
 # 1. 全局配置（LLM、MaiCore连接等）
-# 2. Provider启用列表
-# 3. 常用参数覆盖（可选）
+# 2. Provider启用列表和配置
+# 3. Pipeline配置
 #
 # 各Provider的详细配置在各自的 config.toml 中：
 # - src/domains/{domain}/providers/{provider}/config.toml
+#
+# 配置路径结构（简洁且语义清晰）：
+# - [providers.input.{provider_name}] - Input Provider 配置
+# - [providers.output.{provider_name}] - Output Provider 配置
+# - [providers.decision.{provider_name}] - Decision Provider 配置
+
+[meta]
+version = "0.2.0"  # 配置模板版本，用于自动更新检测
 
 # ========== 全局LLM配置 ==========
 
 # 标准 LLM 配置（用于高质量任务）
 [llm]
-client = "openai"              # openai（所有提供 OpenAI 兼容 API 的服务，如 Ollama、LM Studio、vLLAM 等）
-model = "Pro/deepseek-ai/DeepSeek-V3.2"
+client = "openai"              # openai（所有提供 OpenAI 兼容 API 的服务，如 Ollama、LM Studio、vLLM 等）
+model = "gpt-4"
 temperature = 0.2
 api_key = "your-api-key"                    # 可选，如果不设置将使用环境变量
-base_url = "https://api.siliconflow.cn/v1/" # 可选，用于自定义API端点
+base_url = "https://api.openai.com/v1"      # 可选，用于自定义API端点
 max_tokens = 1024
 max_retries = 3                 # 可选，默认 3
 retry_delay = 1.0               # 可选，默认 1.0
@@ -31,23 +34,23 @@ retry_delay = 1.0               # 可选，默认 1.0
 # 快速 LLM 配置（用于低延迟任务，如 Avatar 表情分析）
 [llm_fast]
 client = "openai"
-model = "Qwen/Qwen3-8B"
+model = "gpt-3.5-turbo"
 temperature = 0.2
 api_key = "your-api-key"
-base_url = "https://api.siliconflow.cn/v1/"
+base_url = "https://api.openai.com/v1"
 max_tokens = 1024
 
 # 视觉语言模型配置（用于图像理解任务）
 [vlm]
 client = "openai"
-model = "zai-org/GLM-4.6V"
+model = "gpt-4-vision-preview"
 temperature = 0.3
 api_key = "your-api-key"
-base_url = "https://api.siliconflow.cn/v1/"
+base_url = "https://api.openai.com/v1"
 max_tokens = 1024
 
 # 本地 Ollama 配置（可选）
-# 注意：Ollama、LM Studio、vLLAM 等都提供 OpenAI 兼容 API，使用 client = "openai" 并配置 base_url 即可
+# 注意：Ollama、LM Studio、vLLM 等都提供 OpenAI 兼容 API，使用 client = "openai" 并配置 base_url 即可
 [llm_local]
 client = "openai"
 model = "llama3"
@@ -155,7 +158,6 @@ compression = "zip"
 # 禁用时，同一天多次启动会追加到同一文件（如 amaidesu_2026-02-07.jsonl）
 split_by_session = false
 
-
 # ========== 管道配置 ==========
 
 [pipelines]
@@ -204,7 +206,7 @@ drop_on_match = false
 
 # ========== Provider配置 ==========
 
-# === 输入Provider（Input Domain: 输入域） ===
+# === 输入Provider（Input Domain） ===
 [providers.input]
 enabled = true
 # 启用的输入Provider列表
@@ -226,11 +228,7 @@ enabled_inputs = [
     # "mainosaba",              # Mainosaba读屏
 ]
 
-# 常用参数覆盖（可选）
-# [providers.input.overrides]
-# bili_danmaku.room_id = "123456"
-
-# === 输出Provider（Output Domain: 输出域） ===
+# === 输出Provider（Output Domain） ===
 [providers.output]
 enabled = true
 concurrent_rendering = true          # 是否并发渲染到多个Provider
@@ -266,14 +264,7 @@ default_subtitle_enabled = true
 default_expressions_enabled = true
 default_hotkeys_enabled = true
 
-# 常用参数覆盖（可选）
-# [providers.output.overrides]
-# subtitle.font_size = 32
-# subtitle.window_width = 1000
-# vts.vts_host = "192.168.1.100"
-# tts.voice = "zh-CN-YunxiNeural"
-
-# === 决策Provider（Decision Domain: 决策域） ===
+# === 决策Provider（Decision Domain） ===
 [providers.decision]
 enabled = true
 # 当前使用的决策Provider
@@ -285,163 +276,47 @@ available_providers = [
     "maicraft", # MaiCraft弹幕游戏决策
 ]
 
-# MaiCore DecisionProvider 配置
-[providers.decision.maicore]
-# MaiCore WebSocket 服务器地址（继承 [maicore] 配置）
+# ========== Provider配置示例 ==========
+# 以下为各 Provider 的配置示例，取消注释并填写相应参数即可启用
+
+# --- BiliDanmakuOfficialInputProvider ---
+# [providers.input.bili_danmaku_official]
+# id_code = "your_id_code"
+# app_id = "your_app_id"
+# access_key = "your_access_key"
+# access_key_secret = "your_access_key_secret"
+
+# --- MaiCore DecisionProvider ---
+# [providers.decision.maicore]
 # host = "127.0.0.1"
 # port = 8000
+# connect_timeout = 10.0
+# reconnect_interval = 5.0
 
-# MaiCore DecisionProvider 子配置
-[providers.decision.providers.maicore]
-# Action 建议配置
-# action_suggestions_enabled = false  # 是否启用 MaiBot Action 建议（默认关闭）
-# action_confidence_threshold = 0.6   # 最低置信度阈值（0.0-1.0）
-# action_cooldown_seconds = 5.0       # 同一 Action 的最小间隔（秒）
-# max_suggested_actions = 3           # 每条消息最大建议数量
+# --- LLM DecisionProvider ---
+# [providers.decision.llm]
+# fallback_mode = "simple"  # simple | echo | error
 
-# LLM DecisionProvider 配置
-[providers.decision.llm]
-# 降级模式（LLM调用失败时的行为）
-fallback_mode = "simple"  # simple（返回原始文本） | echo（回声） | error（抛出异常）
-# 注意：prompt_template 和 client_type 已移至 PromptManager 统一管理
-# 提示词位置：src/prompts/templates/decision/llm_intent_parser.md.j2
+# --- Subtitle OutputProvider ---
+# [providers.output.subtitle]
+# font_size = 32
+# window_width = 1000
+# window_height = 720
 
-# Mock DecisionProvider 配置
-# [providers.decision.overrides]
-# maicore.host = "192.168.1.100"
-# llm.client_type = "llm_fast"
-
-# ========== 新增 Provider 配置示例 ==========
-
-# --- STTInputProvider: 语音转文字 ---
-# [providers.input.inputs.stt]
-# type = "stt"
-#
-# # 音频配置
-# [providers.input.inputs.stt.audio]
-# sample_rate = 16000
-# channels = 1
-# dtype = "int16"
-# stt_input_device_name = "麦克风名称"  # 可选，留空使用默认设备
-# use_remote_stream = false  # 使用远程音频流
-#
-# # VAD 配置
-# [providers.input.inputs.stt.vad]
-# enable = true
-# vad_threshold = 0.5
-# silence_seconds = 1.0
-#
-# # 讯飞 ASR 配置
-# [providers.input.inputs.stt.iflytek_asr]
-# host = "wss://istream-iflytek.xf-yun.com"
-# path = "/v2/iat"
-# appid = "your_appid"
-# api_secret = "your_api_secret"
-# api_key = "your_api_key"
-# language = "zh_cn"
-# domain = "iat"
-#
-# # 消息配置
-# [providers.input.inputs.stt.message_config]
-# user_id = "stt_user"
-# user_nickname = "语音"
-
-# --- BiliDanmakuOfficialInputProvider: B站官方弹幕 ---
-# [providers.input.inputs.bili_danmaku_official]
-# type = "bili_danmaku_official"
-# id_code = "直播间ID代码"
-# app_id = "应用ID"
-# access_key = "访问密钥"
-# access_key_secret = "访问密钥Secret"
-# api_host = "https://live-open.biliapi.com"
-# message_cache_size = 1000
-#
-# # 上下文过滤（可选）
-# context_tags = ["游戏", "互动"]
-#
-# # 模板信息（可选）
-# enable_template_info = false
-# template_items = {}
-
-# --- MaicraftDecisionProvider: 弹幕互动游戏决策 ---
-# [providers.decision.maicraft]
-# enabled = true
-# factory_type = "log"  # log | mcp
-# command_prefix = "!"
-#
-# [providers.decision.maicraft.command_mappings]
-# chat = "chat"
-# attack = "attack"
-
-# --- AvatarOutputProvider: 虚拟形象输出 ---
-# [providers.output.outputs.avatar]
-# type = "avatar"
-# adapter_type = "vts"  # vts | vrchat | live2d
-#
-# # VTS 特定配置
+# --- VTS OutputProvider ---
+# [providers.output.vts]
 # vts_host = "127.0.0.1"
 # vts_port = 8000
-#
-# # VRChat 特定配置
-# vrc_host = "127.0.0.1"
-# vrc_in_port = 9001
-# vrc_out_port = 9000
-# enable_server = false
 
-# --- GPTSoVITSOutputProvider: GPT-SoVITS 语音合成 ---
-# [providers.output.outputs.gptsovits]
-# type = "gptsovits"
-# host = "127.0.0.1"
-# port = 9880
-# ref_audio_path = "path/to/reference.wav"
-# prompt_text = "参考文本"
-# text_language = "zh"
-# prompt_language = "zh"
-# top_k = 20
-# top_p = 0.6
-# temperature = 0.3
-# speed_factor = 1.0
-# streaming_mode = true
-# sample_rate = 32000
-# output_device_name = "扬声器名称"
+# --- TTS OutputProvider ---
+# [providers.output.tts]
+# voice = "zh-CN-YunxiNeural"
+# rate = "+0%"
+# volume = "+0%"
 
-# --- ObsControlOutputProvider: OBS 控制 ---
-# [providers.output.outputs.obs_control]
-# type = "obs_control"
-# host = "localhost"
-# port = 4455
-# password = "your_password"  # 可选
-# text_source_name = "text"
-# typewriter_enabled = false
-# typewriter_speed = 0.1
-# typewriter_delay = 0.5
-# test_on_connect = true
+# ========== 事件总线配置 ==========
 
-# --- StickerOutputProvider: 贴纸输出 ---
-# [providers.output.outputs.sticker]
-# type = "sticker"
-# sticker_size = 0.33
-# sticker_rotation = 90
-# sticker_position_x = 0.0
-# sticker_position_y = 0.0
-# image_width = 256
-# image_height = 256
-# cool_down_seconds = 5.0
-# display_duration_seconds = 3.0
-
-# --- RemoteStreamOutputProvider: 远程流媒体输出 ---
-# [providers.output.outputs.remote_stream]
-# type = "remote_stream"
-# server_mode = true
-# host = "0.0.0.0"
-# port = 8765
-# audio_sample_rate = 16000
-# audio_channels = 1
-# audio_format = "int16"
-# audio_chunk_size = 1024
-# image_width = 640
-# image_height = 480
-# image_format = "jpeg"
-# image_quality = 80
-# reconnect_delay = 5
-# max_reconnect_attempts = -1  # -1 表示无限
+[event_bus]
+# 是否启用事件数据验证（建议仅 debug 模式开启）
+# 开启后会验证所有已注册事件的数据格式
+enable_validation = false

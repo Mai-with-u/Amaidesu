@@ -11,7 +11,7 @@ OutputProviderManager - Output Domain: 渲染输出管理器
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
@@ -364,7 +364,7 @@ class OutputProviderManager:
             enabled_outputs = ["subtitle", "vts", "tts"]
 
             # 可选：常用参数覆盖
-            [providers.output.overrides.subtitle]
+            [providers.output.subtitle]
             font_size = 24
         """
         self.logger.info("开始从配置加载OutputProvider...")

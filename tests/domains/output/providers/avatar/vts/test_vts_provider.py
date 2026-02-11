@@ -27,17 +27,20 @@ def mock_vts_plugin():
 
 
 class TestVTSProviderEmotionMap:
-    def test_emotion_map_exists(self):
-        assert hasattr(VTSProvider, "EMOTION_MAP")
-        assert isinstance(VTSProvider.EMOTION_MAP, dict)
+    def test_emotion_map_exists(self, vts_config):
+        provider = VTSProvider(vts_config)
+        assert hasattr(provider, "_emotion_map")
+        assert isinstance(provider._emotion_map, dict)
 
-    def test_emotion_map_has_required_emotions(self):
+    def test_emotion_map_has_required_emotions(self, vts_config):
+        provider = VTSProvider(vts_config)
         required = ["happy", "sad", "angry", "surprised", "shy", "love", "neutral"]
         for emotion in required:
-            assert emotion in VTSProvider.EMOTION_MAP
+            assert emotion in provider._emotion_map
 
-    def test_emotion_map_happy(self):
-        assert VTSProvider.EMOTION_MAP["happy"]["MouthSmile"] == 1.0
+    def test_emotion_map_happy(self, vts_config):
+        provider = VTSProvider(vts_config)
+        assert provider._emotion_map["happy"]["MouthSmile"] == 1.0
 
 
 class TestVTSProviderAdaptIntent:

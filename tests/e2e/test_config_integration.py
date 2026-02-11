@@ -253,7 +253,7 @@ async def test_config_service_deep_merge_function():
 @pytest.mark.asyncio
 async def test_input_provider_manager_load_from_config(config_service):
     """测试 InputProviderManager 能从配置加载 Provider"""
-    from src.domains.input.input_provider_manager import InputProviderManager
+    from src.domains.input.provider_manager import InputProviderManager
 
     from src.modules.events.event_bus import EventBus
 

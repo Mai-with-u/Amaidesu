@@ -63,6 +63,21 @@ class VTSProvider(BaseAvatarProvider):
 
         # LLM智能匹配配置
         llm_matching_enabled: bool = Field(default=False, description="是否启用LLM智能热键匹配")
+        llm_api_key: Optional[str] = Field(default=None, description="LLM API密钥")
+        llm_base_url: Optional[str] = Field(default=None, description="LLM API地址")
+        llm_model: str = Field(default="gpt-4o-mini", description="LLM模型")
+        llm_temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="LLM温度")
+        llm_max_tokens: int = Field(default=50, ge=1, le=200, description="LLM最大token数")
+
+        # 情感热键映射
+        emotion_hotkey_mapping: Dict[str, str] = Field(default_factory=dict, description="情感到热键的映射")
+
+        # 口型同步配置
+        lip_sync_enabled: bool = Field(default=True, description="是否启用口型同步")
+        volume_threshold: float = Field(default=0.01, ge=0.0, le=1.0, description="音量阈值")
+        smoothing_factor: float = Field(default=0.3, ge=0.0, le=1.0, description="平滑因子")
+        vowel_detection_sensitivity: float = Field(default=0.5, ge=0.0, le=1.0, description="元音检测灵敏度")
+        sample_rate: int = Field(default=16000, ge=8000, le=48000, description="音频采样率")
 
     def __init__(self, config: Dict[str, Any]):
         """
