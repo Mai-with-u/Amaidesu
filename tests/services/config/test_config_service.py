@@ -58,7 +58,7 @@ api_key = "test-key"
 enabled = true
 enabled_inputs = ["console_input"]
 
-[providers.input.inputs.console_input]
+[providers.input.console_input]
 type = "console_input"
 enabled = true
 
@@ -66,7 +66,7 @@ enabled = true
 enabled = true
 enabled_outputs = ["subtitle"]
 
-[providers.output.outputs.subtitle]
+[providers.output.subtitle]
 type = "subtitle"
 enabled = true
 """
@@ -74,7 +74,7 @@ enabled = true
 
 @pytest.fixture
 def full_main_config():
-    """完整主配置内容（包含Provider覆盖配置）"""
+    """完整主配置内容（包含Provider配置）"""
     return """
 [general]
 platform_id = "test_platform"
@@ -88,11 +88,11 @@ api_key = "test-key"
 enabled = true
 enabled_inputs = ["console_input", "test_provider"]
 
-[providers.input.inputs.console_input]
+[providers.input.console_input]
 type = "console_input"
 enabled = true
 
-[providers.input.inputs.test_provider]
+[providers.input.test_provider]
 type = "test_provider"
 enabled = true
 custom_field = "main_config_value"
@@ -102,12 +102,12 @@ priority = 100
 enabled = true
 enabled_outputs = ["subtitle", "tts"]
 
-[providers.output.outputs.subtitle]
+[providers.output.subtitle]
 type = "subtitle"
 enabled = true
 max_length = 50
 
-[providers.output.outputs.tts]
+[providers.output.tts]
 type = "tts"
 enabled = true
 voice = "custom_voice"
@@ -190,7 +190,7 @@ def test_config_service_initialize_with_template(config_service, temp_base_dir, 
         f.write(minimal_main_config)
 
     # 初始化应该自动复制模板
-    main_config, main_copied, plugin_copied, pipeline_copied = config_service.initialize()
+    main_config, main_copied, plugin_copied, pipeline_copied, config_updated = config_service.initialize()
 
     assert config_service._initialized is True
     assert main_copied is True  # 应该从模板复制
@@ -212,7 +212,7 @@ def test_config_service_initialize_with_existing_config(config_service, temp_bas
         f.write(minimal_main_config)
 
     # 初始化
-    main_config, main_copied, plugin_copied, pipeline_copied = config_service.initialize()
+    main_config, main_copied, plugin_copied, pipeline_copied, config_updated = config_service.initialize()
 
     assert config_service._initialized is True
     assert main_copied is False  # 不需要复制，配置已存在
@@ -226,7 +226,7 @@ def test_config_service_double_initialize(config_service, temp_base_dir, minimal
         f.write(minimal_main_config)
 
     # 第一次初始化
-    main_config1, copied1, _, _ = config_service.initialize()
+    main_config1, copied1, _, _, _ = config_service.initialize()
     assert copied1 is True
 
     # 第二次初始化（应该跳过）
@@ -477,7 +477,7 @@ api_key = "test"
 enabled = true
 enabled_outputs = ["custom_provider"]
 
-[providers.output.outputs.custom_provider]
+[providers.output.custom_provider]
 custom_type_field = "custom_type"
 enabled = true
 """
@@ -494,8 +494,7 @@ enabled = true
     # Test that config structure is correct (manual access)
     providers_config = config_service.get_section("providers", {})
     output_config = providers_config.get("output", {})
-    outputs_config = output_config.get("outputs", {})
-    custom_config = outputs_config.get("custom_provider", {})
+    custom_config = output_config.get("custom_provider", {})
 
     assert custom_config["custom_type_field"] == "custom_type"
     assert custom_config["enabled"] is True
@@ -805,15 +804,16 @@ api_key = "test"
 enabled = true
 enabled_inputs = ["console"]
 
-[providers.input.inputs.console]
+[providers.input.console]
 type = "console"
 enabled = true
 
-# 旧格式（可能同时存在）
-[rendering]
+# 新格式（output）
+[providers.output]
 enabled = true
+enabled_outputs = ["subtitle"]
 
-[rendering.outputs.subtitle]
+[providers.output.subtitle]
 type = "subtitle"
 enabled = true
 """
@@ -823,9 +823,8 @@ enabled = true
 
     main_config, _, _, _ = config_service.initialize()
 
-    # 两种格式都应该被加载
+    # 新格式应该被加载
     assert "providers" in main_config
-    assert "rendering" in main_config
 
 
 # =============================================================================
@@ -925,7 +924,7 @@ backend = "openai"
 model = "test"
 api_key = "test"
 
-[providers.input.inputs.test_provider]
+[providers.input.test_provider]
 type = "test"
 field1 = "main_value"  # 主配置的值
 field2 = "main_value2"
@@ -1009,7 +1008,7 @@ api_key = "test"
 enabled = true
 enabled_inputs = ["test_provider"]
 
-[providers.input.inputs.test_provider]
+[providers.input.test_provider]
 type = "test"
 # 没有 enabled 字段
 """
@@ -1020,14 +1019,13 @@ type = "test"
     config_service.initialize()
 
     # is_provider_enabled 应该基于 enabled_inputs 列表，而不是配置中的 enabled 字段
-    # But due to the dotted path bug, it returns False
     providers_config = config_service.get_section("providers", {})
     input_config = providers_config.get("input", {})
     enabled_inputs = input_config.get("enabled_inputs", [])
     assert "test_provider" in enabled_inputs  # Config is correct
 
-    # Actual method behavior (buggy)
-    assert config_service.is_provider_enabled("test_provider", "input") is False
+    # With new structure, this should work correctly
+    assert config_service.is_provider_enabled("test_provider", "input") is True
 
 
 # =============================================================================

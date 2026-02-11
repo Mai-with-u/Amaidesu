@@ -455,17 +455,15 @@ async def test_load_from_config_basic(manager):
     """测试从配置加载 Provider（基本配置）"""
     config = {
         "enabled": True,
-        "inputs": ["console_input"],  # 只启用 console_input
-        "inputs_config": {
-            "console_input": {
-                "type": "console_input",  # 修正：使用注册名称
-            }
+        "enabled_inputs": ["console_input"],  # 使用新配置格式：enabled_inputs
+        "console_input": {
+            "type": "console_input",  # 修正：使用注册名称
         },
     }
 
     providers = await manager.load_from_config(config)
 
-    # 只有 console_input 在 inputs 列表中
+    # 只有 console_input 在 enabled_inputs 列表中
     assert len(providers) == 1
     assert providers[0].__class__.__name__ == "ConsoleInputProvider"
 
@@ -475,8 +473,8 @@ async def test_load_from_config_disabled(manager):
     """测试禁用配置"""
     config = {
         "enabled": False,
-        "inputs": ["console_input"],
-        "inputs_config": {"console_input": {"type": "console", "enabled": True}},
+        "enabled_inputs": ["console_input"],
+        "console_input": {"type": "console"},
     }
 
     providers = await manager.load_from_config(config)
@@ -486,8 +484,8 @@ async def test_load_from_config_disabled(manager):
 
 @pytest.mark.asyncio
 async def test_load_from_config_empty_inputs(manager):
-    """测试空 inputs 列表"""
-    config = {"enabled": True, "inputs": [], "inputs_config": {}}
+    """测试空 enabled_inputs 列表"""
+    config = {"enabled": True, "enabled_inputs": []}
 
     providers = await manager.load_from_config(config)
 
@@ -496,8 +494,8 @@ async def test_load_from_config_empty_inputs(manager):
 
 @pytest.mark.asyncio
 async def test_load_from_config_no_inputs_key(manager):
-    """测试缺少 inputs 键"""
-    config = {"enabled": True, "inputs_config": {}}
+    """测试缺少 enabled_inputs 键"""
+    config = {"enabled": True}
 
     providers = await manager.load_from_config(config)
 
@@ -509,17 +507,15 @@ async def test_load_from_config_provider_disabled(manager):
     """测试单个 Provider 禁用"""
     config = {
         "enabled": True,
-        "inputs": ["console_input"],  # 只在列表中包含启用的
-        "inputs_config": {
-            "console_input": {
-                "type": "console_input",  # 修正：使用注册名称
-            }
+        "enabled_inputs": ["console_input"],  # 只在列表中包含启用的
+        "console_input": {
+            "type": "console_input",  # 修正：使用注册名称
         },
     }
 
     providers = await manager.load_from_config(config)
 
-    # 只有 console_input 在 inputs 列表中
+    # 只有 console_input 在 enabled_inputs 列表中
     assert len(providers) == 1
 
 
@@ -528,8 +524,8 @@ async def test_load_from_config_invalid_provider_type(manager):
     """测试无效的 Provider 类型（失败处理）"""
     config = {
         "enabled": True,
-        "inputs": ["invalid_provider"],
-        "inputs_config": {"invalid_provider": {"type": "invalid_type", "enabled": True}},
+        "enabled_inputs": ["invalid_provider"],
+        "invalid_provider": {"type": "invalid_type"},
     }
 
     # 不应该抛出异常，而是返回空列表
@@ -540,14 +536,12 @@ async def test_load_from_config_invalid_provider_type(manager):
 
 @pytest.mark.asyncio
 async def test_load_from_config_type_fallback(manager):
-    """测试 type 字段回退到 input_name"""
+    """测试 type 字段回退到 provider_name"""
     config = {
         "enabled": True,
-        "inputs": ["console_input"],  # 使用注册名称
-        "inputs_config": {
-            "console_input": {
-                # 没有 type 字段，应该回退到 input_name (console_input)
-            }
+        "enabled_inputs": ["console_input"],  # 使用注册名称
+        "console_input": {
+            # 没有 type 字段，应该回退到 provider_name (console_input)
         },
     }
 
@@ -562,12 +556,10 @@ async def test_load_from_config_and_start(manager):
     """测试从配置加载并启动 Provider"""
     config = {
         "enabled": True,
-        "inputs": ["console_input"],
-        "inputs_config": {
-            "console_input": {
-                "type": "console_input",  # 修正：使用注册名称
-                "user_id": "test_user",
-            }
+        "enabled_inputs": ["console_input"],
+        "console_input": {
+            "type": "console_input",  # 修正：使用注册名称
+            "user_id": "test_user",
         },
     }
 

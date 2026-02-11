@@ -273,7 +273,7 @@ class ConfigService:
         获取所有Provider的配置
 
         Args:
-            provider_type: Provider类型（"input" 或 "rendering"，默认 "input"）
+            provider_type: Provider类型（"input"、"output" 或 "decision"，默认 "input"）
 
         Returns:
             字典，键为Provider名称，值为该Provider的配置
@@ -285,7 +285,10 @@ class ConfigService:
                 logger.debug(f"{provider_name}: {provider_config}")
 
             # 获取所有输出Provider配置
-            all_outputs = config_service.get_all_provider_configs("rendering")
+            all_outputs = config_service.get_all_provider_configs("output")
+
+            # 获取所有决策Provider配置
+            all_decisions = config_service.get_all_provider_configs("decision")
         """
         if not self._initialized:
             self.logger.warning("ConfigService 未初始化，返回空配置")
@@ -294,19 +297,23 @@ class ConfigService:
         all_provider_configs = {}
 
         # 根据Provider类型选择配置节
-        if provider_type == "input":
-            config_section = self.get_section("providers.input", {})
-            providers_dict = config_section.get("inputs", {})
-        elif provider_type == "rendering" or provider_type == "output":
-            config_section = self.get_section("providers.output", {})
-            providers_dict = config_section.get("outputs", {})
+        # 新配置结构: [providers.{domain}.{provider_name}]
+        if provider_type in ("input", "output", "decision"):
+            config_section = self.get_section(f"providers.{provider_type}", {})
+            # 收集所有Provider配置（排除元数据字段如 enabled、enabled_inputs 等）
+            metadata_fields = {
+                "input": ["enabled", "enabled_inputs"],
+                "output": ["enabled", "enabled_outputs", "concurrent_rendering", "error_handling", "render_timeout"],
+                "decision": ["enabled", "active_provider", "available_providers"],
+            }
+            exclude_fields = metadata_fields.get(provider_type, [])
+
+            for provider_name, provider_config in config_section.items():
+                if provider_name not in exclude_fields:
+                    all_provider_configs[provider_name] = provider_config.copy()
         else:
             self.logger.warning(f"未知的Provider类型: {provider_type}")
             return all_provider_configs
-
-        # 收集所有Provider配置
-        for provider_name, provider_config in providers_dict.items():
-            all_provider_configs[provider_name] = provider_config.copy()
 
         return all_provider_configs
 
@@ -660,7 +667,19 @@ class ConfigService:
         provider_name: str,
     ) -> Dict[str, Any]:
         """
-        加载主配置覆盖 ([providers.*.overrides])
+        加载主配置覆盖
+
+        新配置结构（推荐使用）：
+        - [providers.input.{provider_name}] - Input Provider 配置
+        - [providers.output.{provider_name}] - Output Provider 配置
+        - [providers.decision.{provider_name}] - Decision Provider 配置
+
+        向后兼容旧配置结构（已废弃，但仍支持）：
+        - [providers.input.inputs.{provider_name}]
+        - [providers.input.overrides.{provider_name}]
+        - [providers.output.outputs.{provider_name}]
+        - [providers.output.overrides.{provider_name}]
+        - [providers.decision.providers.{provider_name}]
 
         Args:
             config_section: 配置节名称（如 "providers.input"）
@@ -670,26 +689,57 @@ class ConfigService:
             主配置覆盖字典（如果不存在则返回空字典）
 
         Example:
+            # 新配置结构（推荐）
             overrides = config_service.load_global_overrides(
-                "providers.input", "console_input"
+                "providers.input", "bili_danmaku_official"
             )
+
+            # 读取 [providers.input.bili_danmaku_official] 配置
         """
         # 处理点分路径 (如 "providers.input")
         parts = config_section.split(".")
-        current = self._main_config
-
-        for part in parts:
-            if isinstance(current, dict) and part in current:
-                current = current[part]
-            else:
-                return {}
-
-        if not isinstance(current, dict):
+        if len(parts) != 2 or parts[0] != "providers":
+            self.logger.warning(f"无效的配置节路径: {config_section}")
             return {}
 
-        overrides = current.get("overrides", {})
-        provider_override = overrides.get(provider_name, {})
-        return provider_override
+        domain = parts[1]  # input, output, decision
+        if domain not in ("input", "output", "decision"):
+            self.logger.warning(f"未知的Provider域: {domain}")
+            return {}
+
+        # 获取 providers.{domain} 配置节
+        domain_config = self._main_config.get("providers", {}).get(domain, {})
+        if not isinstance(domain_config, dict):
+            return {}
+
+        # 优先使用新配置结构：[providers.{domain}.{provider_name}]
+        provider_config = domain_config.get(provider_name, {})
+
+        # 向后兼容旧配置结构（已废弃，但仍支持）
+        if not provider_config:
+            # 尝试读取旧路径
+            if domain == "input":
+                # [providers.input.inputs.{provider_name}]（已废弃）
+                inputs = domain_config.get("inputs", {})
+                provider_config = inputs.get(provider_name, {})
+                if not provider_config:
+                    # [providers.input.overrides.{provider_name}]（已废弃）
+                    overrides = domain_config.get("overrides", {})
+                    provider_config = overrides.get(provider_name, {})
+            elif domain == "output":
+                # [providers.output.outputs.{provider_name}]（已废弃）
+                outputs = domain_config.get("outputs", {})
+                provider_config = outputs.get(provider_name, {})
+                if not provider_config:
+                    # [providers.output.overrides.{provider_name}]（已废弃）
+                    overrides = domain_config.get("overrides", {})
+                    provider_config = overrides.get(provider_name, {})
+            elif domain == "decision":
+                # [providers.decision.providers.{provider_name}]（已废弃）
+                providers = domain_config.get("providers", {})
+                provider_config = providers.get(provider_name, {})
+
+        return provider_config.copy() if isinstance(provider_config, dict) else {}
 
 
 def deep_merge_configs(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:

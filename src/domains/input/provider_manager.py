@@ -190,7 +190,7 @@ class InputProviderManager:
             enabled_inputs = ["console_input", "bili_danmaku"]
 
             # 可选：常用参数覆盖
-            [providers.input.overrides.console_input]
+            [providers.input.console_input]
             user_id = "custom_user"
         """
         from src.modules.registry import ProviderRegistry

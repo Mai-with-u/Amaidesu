@@ -17,8 +17,6 @@
 - 使用 TextPipeline 接口（处理 text + metadata）
 - 从 metadata 中提取 user_id
 - 支持错误处理策略和超时控制
-
-问题#4修复：支持 PipelineContext 回滚，防止管道失败时数据损坏。
 """
 
 import asyncio
@@ -26,7 +24,7 @@ import time
 from collections import defaultdict, deque
 from typing import Any, Dict, Optional
 
-from src.domains.input.pipelines.manager import PipelineContext, TextPipelineBase
+from src.domains.input.pipelines.manager import TextPipelineBase
 
 
 class RateLimitTextPipeline(TextPipelineBase):
@@ -71,17 +69,14 @@ class RateLimitTextPipeline(TextPipelineBase):
         )
 
     async def _process(
-        self, text: str, metadata: Dict[str, Any], context: Optional[PipelineContext] = None
+        self, text: str, metadata: Dict[str, Any]
     ) -> Optional[str]:
         """
         处理文本，根据限流规则决定是否允许继续传递
 
-        问题#4修复：添加 context 参数支持回滚。
-
         Args:
             text: 待处理的文本
             metadata: 元数据（需要 user_id）
-            context: 可选的执行上下文，用于支持回滚
 
         Returns:
             原始文本（允许通过）或 None（限流丢弃）
@@ -101,7 +96,7 @@ class RateLimitTextPipeline(TextPipelineBase):
             return None  # 丢弃该消息
 
         # 记录通过的消息
-        await self._record_message(user_id, current_time, context)
+        await self._record_message(user_id, current_time)
 
         # 返回原始文本，允许继续处理
         return text
@@ -162,40 +157,18 @@ class RateLimitTextPipeline(TextPipelineBase):
             return False
 
     async def _record_message(
-        self, user_id: str, current_time: float, context: Optional[PipelineContext] = None
+        self, user_id: str, current_time: float
     ) -> None:
         """
         记录消息的发送时间到对应队列
 
-        问题#4修复：添加 context 参数，注册回滚动作以移除添加的时间戳。
-
         Args:
             user_id: 用户ID
             current_time: 当前时间戳
-            context: 可选的执行上下文，用于支持回滚
         """
         async with self._lock:
             self._global_timestamps.append(current_time)
             self._user_timestamps[user_id].append(current_time)
-
-            # 问题#4修复：注册回滚动作，在管道失败时移除添加的时间戳
-            if context is not None:
-
-                async def rollback():
-                    async with self._lock:
-                        # 移除全局时间戳
-                        if self._global_timestamps and self._global_timestamps[-1] == current_time:
-                            self._global_timestamps.pop()
-
-                        # 移除用户时间戳
-                        user_queue = self._user_timestamps.get(user_id)
-                        if user_queue and user_queue[-1] == current_time:
-                            user_queue.pop()
-                            # 如果用户队列为空，清理字典
-                            if not user_queue:
-                                del self._user_timestamps[user_id]
-
-                context.add_rollback(rollback)
 
     def get_info(self) -> Dict[str, Any]:
         """获取 Pipeline 信息"""
