@@ -147,7 +147,6 @@ class TestRawDataPayload:
         assert payload.preserve_original is True
         assert payload.original_data == "原始内容"
 
-    
     def test_raw_data_payload_serialization(self):
         """测试序列化"""
         payload = RawDataPayload(

@@ -17,7 +17,6 @@ from src.modules.llm.manager import LLMManager
 from src.modules.context import ContextService, ContextServiceConfig
 
 from src.domains.decision import DecisionProviderManager, DecisionCoordinator
-from src.domains.input.coordinator import InputCoordinator
 from src.domains.input.pipelines.manager import InputPipelineManager
 from src.domains.input.provider_manager import InputProviderManager
 from src.domains.output import OutputCoordinator
@@ -286,10 +285,9 @@ async def create_app_components(
     ContextService,
     EventBus,
     Optional[OutputCoordinator],
-    InputCoordinator,
+    Optional[InputProviderManager],
     LLMManager,
     Optional[DecisionProviderManager],
-    Optional[InputProviderManager],
     Optional[DecisionCoordinator],
 ]:
     """创建并连接核心组件。
@@ -300,20 +298,18 @@ async def create_app_components(
     3. ContextService（新增，在 EventBus 之前）
     4. EventBus
     5. InputProviderManager
-    6. InputCoordinator
-    7. DecisionProviderManager
-    8. DecisionCoordinator
-    9. OutputCoordinator
+    6. DecisionProviderManager
+    7. DecisionCoordinator
+    8. OutputCoordinator
 
     返回顺序（8个）：
     1. ContextService
     2. EventBus
     3. OutputCoordinator
-    4. InputCoordinator
+    4. InputProviderManager
     5. LLMManager
     6. DecisionProviderManager
-    7. InputProviderManager
-    8. DecisionCoordinator
+    7. DecisionCoordinator
     """
     # 使用新的 [providers.*] 配置格式
     output_config = config.get("providers", {}).get("output", {})
@@ -367,9 +363,8 @@ async def create_app_components(
     else:
         logger.info("未检测到输入配置，输入Provider功能将被禁用")
 
-    # 输入域 (Input Domain)
-    input_coordinator = InputCoordinator(event_bus, pipeline_manager=input_pipeline_manager)
-    await input_coordinator.setup()
+    # InputProviderManager 直接订阅事件，无需协调器
+    # input_coordinator 已被移除
 
     # 决策域 (Decision Domain)
     decision_provider_manager: Optional[DecisionProviderManager] = None
@@ -424,10 +419,9 @@ async def create_app_components(
         context_service,
         event_bus,
         output_coordinator,
-        input_coordinator,
+        input_provider_manager,
         llm_service,
         decision_provider_manager,
-        input_provider_manager,
         decision_coordinator,
     )
 
@@ -478,18 +472,17 @@ def restore_signal_handlers(original_sigint: Optional[Any], original_sigterm: Op
 async def run_shutdown(
     context_service: "ContextService",
     output_coordinator: Optional[OutputCoordinator],
-    input_coordinator: InputCoordinator,
+    input_provider_manager: Optional[InputProviderManager],
     llm_service: LLMManager,
     event_bus: EventBus,
     decision_provider_manager: Optional[DecisionProviderManager],
-    input_provider_manager: Optional[InputProviderManager],
     decision_coordinator: Optional[DecisionCoordinator],
 ) -> None:
     """按顺序执行关闭与清理。
 
     关闭顺序（关键）：
     1. 先停止数据生产者（InputProvider）
-    2. 组件取消订阅（InputCoordinator、DecisionCoordinator、OutputCoordinator、DecisionProviderManager）- 在 EventBus.cleanup 之前
+    2. 组件取消订阅（InputProviderManager、DecisionCoordinator、OutputCoordinator、DecisionProviderManager）- 在 EventBus.cleanup 之前
        2.1 清理输入域协调器（取消订阅 data.raw）
        2.2 清理决策协调器（取消订阅 data.message）
        2.3 清理输出协调器（取消订阅 decision.intent）
@@ -515,16 +508,7 @@ async def run_shutdown(
     # 2. 组件取消订阅（必须在 EventBus.cleanup 之前）
     # 这样组件可以正确地移除它们的监听器
 
-    # 2.1 清理输入域协调器（取消订阅 data.raw）
-    if input_coordinator:
-        logger.info("正在清理输入域协调器（取消订阅）...")
-        try:
-            await input_coordinator.cleanup()
-            logger.info("输入域协调器清理完成")
-        except Exception as e:
-            logger.error(f"清理输入域协调器时出错: {e}")
-
-    # 2.2 清理决策协调器（取消订阅 data.message）
+    # 2.1 清理决策协调器（取消订阅 data.message）
     if decision_coordinator:
         logger.info("正在清理决策协调器（取消订阅）...")
         try:
@@ -650,10 +634,9 @@ async def main() -> None:
         context_service,
         event_bus,
         output_coordinator,
-        input_coordinator,
+        input_provider_manager,
         llm_service,
         decision_provider_manager,
-        input_provider_manager,
         decision_coordinator,
     ) = await create_app_components(config, input_pipeline_manager, config_service)
 
@@ -672,11 +655,10 @@ async def main() -> None:
     await run_shutdown(
         context_service,
         output_coordinator,
-        input_coordinator,
+        input_provider_manager,
         llm_service,
         event_bus,
         decision_provider_manager,
-        input_provider_manager,
         decision_coordinator,
     )
 
