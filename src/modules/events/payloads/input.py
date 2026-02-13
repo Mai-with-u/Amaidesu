@@ -222,7 +222,13 @@ class MessageReadyPayload(BasePayload):
         """
         # 使用 model_dump() 序列化 NormalizedMessage (Python 模式)
         # mode='python' 保留 Python 对象，mode='json' 转换为 JSON 兼容格式
-        metadata = normalized_message.metadata.copy()
+
+        # 构建 metadata：从 NormalizedMessage 中提取用户信息
+        metadata = {}
+        if hasattr(normalized_message, "user_id") and normalized_message.user_id:
+            metadata["user_id"] = normalized_message.user_id
+        if hasattr(normalized_message, "user_name") and normalized_message.user_name:
+            metadata["user_name"] = normalized_message.user_name
         metadata.update(extra_metadata)
 
         return cls(
