@@ -22,7 +22,6 @@ from src.modules.logging import get_logger
 from src.modules.prompts import get_prompt_manager
 from src.modules.types.base.input_provider import InputProvider
 from src.modules.types.base.normalized_message import NormalizedMessage
-from src.domains.input.normalization.content import TextContent
 
 
 class ControlMethod(Enum):
@@ -126,23 +125,18 @@ class MainosabaInputProvider(InputProvider):
                             self.logger.debug("识别到的文本与上次相同，跳过")
                         else:
                             self.logger.info(f"检测到新游戏文本: {game_text[:50]}...")
-                            # 创建 TextContent
-                            content = TextContent(
-                                text=game_text,
-                                user="Mainosaba游戏",
-                                user_id="mainosaba_game",
-                            )
-                            # 产生 NormalizedMessage
+                            # 直接创建 NormalizedMessage
                             yield NormalizedMessage(
-                                text=content.text,
-                                content=content,
+                                text=game_text,
                                 source="mainosaba_game",
-                                data_type=content.type,
-                                importance=content.get_importance(),
-                                metadata={
+                                data_type="text",
+                                importance=0.5,
+                                raw={
                                     "platform": "mainosaba",
                                     "source": "manosaba_game",
                                     "maimcore_reply_probability_gain": 1.5,
+                                    "user": "Mainosaba游戏",
+                                    "user_id": "mainosaba_game",
                                 },
                             )
                             self.last_game_text = game_text

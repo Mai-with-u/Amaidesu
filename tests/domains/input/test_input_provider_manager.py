@@ -13,7 +13,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 import pytest
 
-from src.domains.input.normalization.content import TextContent
 from src.domains.input.provider_manager import InputProviderManager
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -401,7 +400,6 @@ async def test_provider_data_flow_to_event_bus(manager, event_bus):
     # 添加测试数据
     normalized_msg = NormalizedMessage(
         text="测试消息",
-        content=TextContent(text="测试消息"),
         source="test",
         data_type="text",
         importance=0.3,
@@ -438,14 +436,12 @@ async def test_multiple_providers_data_isolation(manager, event_bus):
     # 添加不同的数据
     msg1 = NormalizedMessage(
         text="消息1",
-        content=TextContent(text="消息1"),
         source="test",
         data_type="text",
         importance=0.3,
     )
     msg2 = NormalizedMessage(
         text="消息2",
-        content=TextContent(text="消息2"),
         source="test",
         data_type="text",
         importance=0.3,

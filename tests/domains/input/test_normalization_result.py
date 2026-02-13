@@ -59,17 +59,13 @@ async def input_coordinator(event_bus):
 
 def test_normalization_result_success():
     """测试成功的 NormalizationResult"""
-    from src.domains.input.normalization.content import TextContent
     from src.modules.types.base.normalized_message import NormalizedMessage
 
     message = NormalizedMessage(
         text="测试消息",
-        content=TextContent(text="测试消息"),
         source="test",
         data_type="text",
         importance=0.5,
-        metadata={},
-        timestamp=0.0,
     )
 
     result = NormalizationResult(success=True, message=message, error=None)

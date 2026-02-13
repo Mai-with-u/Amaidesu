@@ -188,13 +188,11 @@ class TestMessageReadyPayload:
     def test_message_ready_payload_from_normalized_message(self):
         """测试 from_normalized_message 工厂方法"""
         from src.modules.types.base.normalized_message import NormalizedMessage
-        from src.domains.input.normalization.content.text_content import TextContent
 
         msg = NormalizedMessage(
             text="测试消息",
             source="bili_danmaku",
             data_type="text",
-            content=TextContent(text="测试消息"),
             importance=0.5,
         )
         payload = MessageReadyPayload.from_normalized_message(msg)
@@ -204,13 +202,11 @@ class TestMessageReadyPayload:
     def test_message_ready_payload_with_extra_metadata(self):
         """测试带额外元数据的 from_normalized_message"""
         from src.modules.types.base.normalized_message import NormalizedMessage
-        from src.domains.input.normalization.content.text_content import TextContent
 
         msg = NormalizedMessage(
             text="测试消息",
             source="test",
             data_type="text",
-            content=TextContent(text="测试消息"),
             importance=0.5,
         )
         payload = MessageReadyPayload.from_normalized_message(msg, room_id="123456", extra_info="test")

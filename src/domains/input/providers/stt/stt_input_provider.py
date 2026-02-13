@@ -21,7 +21,6 @@ import numpy as np
 from src.modules.logging import get_logger
 from src.modules.types.base.input_provider import InputProvider
 from src.modules.types.base.normalized_message import NormalizedMessage
-from src.domains.input.normalization.content import TextContent
 
 from .config import STTInputProviderConfig
 
@@ -632,18 +631,16 @@ class STTInputProvider(InputProvider):
 
                             if full_text and not utterance_failed:
                                 # 将结果放入队列
-                                content = TextContent(
-                                    text=full_text,
-                                    user=self.message_config.get("user_nickname", "语音"),
-                                    user_id=self.message_config.get("user_id", "stt_user"),
-                                )
                                 await self._result_queue.put(
                                     NormalizedMessage(
-                                        text=content.text,
-                                        content=content,
+                                        text=full_text,
                                         source="stt",
-                                        data_type=content.type,
-                                        importance=content.get_importance(),
+                                        data_type="text",
+                                        importance=0.5,
+                                        raw={
+                                            "user": self.message_config.get("user_nickname", "语音"),
+                                            "user_id": self.message_config.get("user_id", "stt_user"),
+                                        },
                                     )
                                 )
                                 self.full_text = ""

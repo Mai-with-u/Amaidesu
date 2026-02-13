@@ -19,7 +19,6 @@ from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 from src.modules.types.base.input_provider import InputProvider
 from src.modules.types.base.normalized_message import NormalizedMessage
-from src.domains.input.normalization.content import TextContent
 
 # 导入屏幕分析和读取模块
 try:
@@ -187,23 +186,17 @@ class ReadPingmuInputProvider(InputProvider):
             if not new_context:
                 return
 
-            # 创建 TextContent
-            content = TextContent(
-                text=new_context,
-                user="屏幕分析",
-                user_id="screen_analyzer",
-            )
-
-            # 创建 NormalizedMessage
+            # 直接创建 NormalizedMessage
             normalized_msg = NormalizedMessage(
-                text=content.text,
-                content=content,
+                text=new_context,
                 source="read_pingmu",
-                data_type=content.type,
-                importance=content.get_importance(),
-                metadata={
+                data_type="text",
+                importance=0.5,
+                raw={
                     "images_processed": images_processed,
                     "statistics": data.get("statistics", {}),
+                    "user": "屏幕分析",
+                    "user_id": "screen_analyzer",
                 },
             )
 

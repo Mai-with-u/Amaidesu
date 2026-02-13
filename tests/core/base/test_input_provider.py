@@ -17,7 +17,6 @@ import pytest
 
 from src.modules.types.base.input_provider import InputProvider
 from src.modules.types.base.normalized_message import NormalizedMessage
-from src.domains.input.normalization.content import TextContent
 
 # =============================================================================
 # 测试用的 InputProvider 实现
@@ -52,13 +51,12 @@ class MockInputProvider(InputProvider):
 
             for i in range(max_items):
                 self.collected_count += 1
-                content = TextContent(text=f"测试消息 {i}", user="MockUser", user_id="mock_id")
                 yield NormalizedMessage(
-                    text=content.text,
-                    content=content,
+                    text=f"测试消息 {i}",
                     source="mock",
-                    data_type=content.type,
-                    importance=content.get_importance(),
+                    data_type="text",
+                    importance=0.5,
+                    raw={"user": "MockUser", "user_id": "mock_id"},
                 )
                 await asyncio.sleep(0.01)  # 模拟异步操作
         finally:

@@ -15,7 +15,6 @@ from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 from src.modules.types.base.input_provider import InputProvider
 from src.modules.types.base.normalized_message import NormalizedMessage
-from src.domains.input.normalization.content import TextContent
 
 
 class MockDanmakuInputProvider(InputProvider):
@@ -117,14 +116,15 @@ class MockDanmakuInputProvider(InputProvider):
                     user = data.get("user", "未知用户")
                     user_id = data.get("user_id", "")
 
-                    content = TextContent(text=text, user=user, user_id=user_id)
-
                     message = NormalizedMessage(
-                        text=content.text,
-                        content=content,
+                        text=text,
                         source="mock_danmaku",
-                        data_type=content.type,
-                        importance=content.get_importance(),
+                        data_type="text",
+                        importance=0.5,
+                        raw={
+                            "user": user,
+                            "user_id": user_id,
+                        },
                     )
 
                     self.logger.debug(f"发送模拟消息 (行 {self._current_line_index}): {str(data)[:50]}...")

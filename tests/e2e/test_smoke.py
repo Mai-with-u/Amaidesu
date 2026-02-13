@@ -4,8 +4,6 @@ E2E Test: Smoke Test
 快速验证系统基本功能
 """
 
-import time
-
 import pytest
 from pydantic import BaseModel, Field
 
@@ -73,7 +71,6 @@ async def test_event_bus_creation():
 async def test_mock_decision_provider():
     """测试 MockDecisionProvider 基本功能"""
     from src.domains.decision.providers.mock import MockDecisionProvider
-    from src.domains.input.normalization.content import TextContent
     from src.modules.events.event_bus import EventBus
     from src.modules.types.base.normalized_message import NormalizedMessage
 
@@ -83,12 +80,9 @@ async def test_mock_decision_provider():
     # 创建测试消息
     message = NormalizedMessage(
         text="测试消息",
-        content=TextContent(text="测试消息"),
         source="test",
         data_type="text",
         importance=0.5,
-        metadata={},
-        timestamp=time.time(),
     )
 
     # 测试决策

@@ -121,7 +121,6 @@ async def test_decision_provider_creates_intent(event_bus, wait_for_event):
     3. 元数据正确传递
     """
     from src.domains.decision.provider_manager import DecisionProviderManager as DecisionManager
-    from src.domains.input.normalization.content import TextContent
     from src.modules.types.base.normalized_message import NormalizedMessage
 
     decision_manager = DecisionManager(event_bus, llm_service=None)
@@ -130,11 +129,9 @@ async def test_decision_provider_creates_intent(event_bus, wait_for_event):
     # 创建 NormalizedMessage
     normalized = NormalizedMessage(
         text="测试消息",
-        content=TextContent(text="测试消息"),
         source="test_user",
         data_type="text",
         importance=0.8,
-        metadata={"test_key": "test_value"},
     )
 
     # 等待决策事件

@@ -35,7 +35,6 @@ async def test_decision_provider_failure_isolation(event_bus, wait_for_event):
     """
     from src.domains.decision.provider_manager import DecisionProviderManager as DecisionManager
     from src.domains.input.coordinator import InputCoordinator
-    from src.domains.input.normalization.content import TextContent
     from src.modules.types.base.normalized_message import NormalizedMessage
 
     input_coordinator = InputCoordinator(event_bus)
@@ -47,11 +46,9 @@ async def test_decision_provider_failure_isolation(event_bus, wait_for_event):
     # 正常处理一条消息
     normalized = NormalizedMessage(
         text="正常消息",
-        content=TextContent(text="正常消息"),
         source="test",
         data_type="text",
         importance=0.5,
-        metadata={},
     )
 
     intent1 = await decision_manager.decide(normalized)
@@ -73,11 +70,9 @@ async def test_decision_provider_failure_isolation(event_bus, wait_for_event):
     # 发送会导致失败的消息
     error_message = NormalizedMessage(
         text="错误消息",
-        content=TextContent(text="错误消息"),
         source="test",
         data_type="text",
         importance=0.5,
-        metadata={},
     )
 
     # 这应该会失败
@@ -93,11 +88,9 @@ async def test_decision_provider_failure_isolation(event_bus, wait_for_event):
     # 验证可以继续处理其他消息
     normal_message = NormalizedMessage(
         text="恢复正常",
-        content=TextContent(text="恢复正常"),
         source="test",
         data_type="text",
         importance=0.5,
-        metadata={},
     )
 
     intent2 = await decision_manager.decide(normal_message)
