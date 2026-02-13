@@ -69,7 +69,11 @@ tags: [decision, llm, structured, json]
 - `sad` - 悲伤
 - `angry` - 生气
 - `surprised` - 惊讶
-- `fear` - 恐惧
+- `love` - 喜欢
+- `shy` - 害羞
+- `excited` - 兴奋
+- `confused` - 困惑
+- `scared` - 恐惧
 
 #### actions（必需）
 动作数组，每个动作包含：

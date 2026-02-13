@@ -207,7 +207,7 @@ class DecisionResponsePayload(BasePayload):
 
     **注意**：此事件主要在 MaiCoreDecisionProvider 内部使用
     - MaiCore 返回的是 MessageBase 格式的响应
-    - MaiCoreDecisionProvider 通过 IntentParser 转换为 Intent
+    - MaiCoreDecisionProvider 自己解析为 Intent（使用 _parse_intent_from_maicore_response）
     - 然后发布 decision.intent_generated 事件
 
     此事件用于 MaiCoreDecisionProvider 内部的异步响应处理。
