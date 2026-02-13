@@ -246,7 +246,7 @@ class BiliDanmakuOfficialMaiCraftInputProvider(InputProvider):
                         "room_id": self.id_code,
                         "forward_enabled": self.forward_enabled,
                         "forward_url": self.forward_ws_url if self.forward_enabled else None,
-                        "message_base": message,
+                        "message_base": message.model_dump(),
                     },
                 )
 

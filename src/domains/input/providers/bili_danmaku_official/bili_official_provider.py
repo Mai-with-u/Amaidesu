@@ -177,6 +177,7 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
                 )
 
                 # 创建 NormalizedMessage
+                # 将 MessageBase 转换为字典以避免序列化问题
                 normalized_msg = NormalizedMessage(
                     text=content.text,
                     content=content,
@@ -186,7 +187,7 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
                     metadata={
                         "message_id": message.message_info.message_id,
                         "room_id": self.id_code,
-                        "message_base": message,
+                        "message_base": message.model_dump(),
                     },
                 )
                 await message_queue.put(normalized_msg)
