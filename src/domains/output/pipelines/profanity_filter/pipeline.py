@@ -1,34 +1,28 @@
 """
-脏话过滤管道（OutputPipeline 版本）
+脏话过滤管道
 
-过滤输出文本中的敏感词，适用于 TTS 和字幕输出。
+过滤 Intent 中的敏感词，适用于所有输出。
 
 3域架构中的位置：
-- Output Domain (Output Domain): 在 ExpressionParameters → OutputProvider 转换中处理文本
-- 在 ExpressionGenerator.generate() 之后、OutputProvider.render() 之前调用
-- 用于过滤输出文本中的脏话和敏感词
-
-功能：
-- 过滤中文脏话
-- 支持自定义敏感词列表
-- 支持从文件加载敏感词
-- 替换为自定义文本（默认：【已过滤】）
-- 同时处理 tts_text 和 subtitle_text
+- Output Domain: 在 Intent → OutputProvider 转换中处理 Intent
+- 在 OutputProviderManager._on_decision_intent() 之后、Provider 之前调用
 """
 
 import os
-from typing import Any, Dict, Optional, Set
+from typing import TYPE_CHECKING, Any, Dict, Optional, Set
 
-from src.domains.output.parameters.render_parameters import ExpressionParameters
-from src.domains.output.pipelines.base import OutputPipelineBase, PipelineStats
+from src.domains.output.pipelines.base import OutputPipelineBase
+from src.modules.types.base.pipeline_stats import PipelineStats
+
+if TYPE_CHECKING:
+    from src.modules.types import Intent
 
 
-class ProfanityFilterOutputPipeline(OutputPipelineBase):
+class ProfanityFilterPipeline(OutputPipelineBase):
     """
-    敏感词过滤管道（OutputPipeline 版本）
+    敏感词过滤管道
 
-    检测并过滤 ExpressionParameters 中的敏感词。
-    支持从配置或文件加载敏感词列表。
+    检测并过滤 Intent 中的敏感词。
     """
 
     priority = 100  # 高优先级，确保在输出前过滤
@@ -48,16 +42,12 @@ class ProfanityFilterOutputPipeline(OutputPipelineBase):
                 words (List[str]): 敏感词列表
                 replacement (str): 替换文本 (默认: "【已过滤】")
                 words_file (str): 敏感词文件路径（每行一个词）
-                filter_tts (bool): 是否过滤TTS文本 (默认: True)
-                filter_subtitle (bool): 是否过滤字幕文本 (默认: True)
                 case_sensitive (bool): 是否区分大小写 (默认: False)
                 drop_on_match (bool): 匹配到敏感词是否丢弃整个消息 (默认: False)
         """
         super().__init__(config)
 
         self._replacement = self.config.get("replacement", "【已过滤】")
-        self._filter_tts = self.config.get("filter_tts", True)
-        self._filter_subtitle = self.config.get("filter_subtitle", True)
         self._case_sensitive = self.config.get("case_sensitive", False)
         self._drop_on_match = self.config.get("drop_on_match", False)
 
@@ -69,11 +59,9 @@ class ProfanityFilterOutputPipeline(OutputPipelineBase):
         self._load_profanity_words()
 
         self.logger.info(
-            f"ProfanityFilterOutputPipeline 初始化: "
+            f"ProfanityFilterPipeline 初始化: "
             f"敏感词数量={len(self._profanity_words)}, "
             f"替换文本='{self._replacement}', "
-            f"过滤TTS={self._filter_tts}, "
-            f"过滤字幕={self._filter_subtitle}, "
             f"丢弃消息={self._drop_on_match}"
         )
 
@@ -103,33 +91,25 @@ class ProfanityFilterOutputPipeline(OutputPipelineBase):
         if not self._case_sensitive:
             self._profanity_words = {word.lower() for word in self._profanity_words}
 
-    async def _process(self, params: ExpressionParameters) -> Optional[ExpressionParameters]:
+    async def _process(self, intent: "Intent") -> Optional["Intent"]:
         """
-        处理参数，过滤敏感词
+        处理 Intent，过滤敏感词
 
         Args:
-            params: 待处理的 ExpressionParameters
+            intent: 待处理的 Intent
 
         Returns:
-            处理后的 ExpressionParameters，或 None（如果配置了 drop_on_match）
+            处理后的 Intent，或 None（如果配置了 drop_on_match）
         """
         has_match = False
 
-        # 过滤 TTS 文本
-        if self._filter_tts and params.tts_text:
-            filtered_text, tts_has_match = self._filter_text(params.tts_text)
-            if tts_has_match:
+        # 过滤 response_text
+        if intent.response_text:
+            filtered_text, text_has_match = self._filter_text(intent.response_text)
+            if text_has_match:
                 has_match = True
-                params.tts_text = filtered_text
-                self.logger.debug(f"TTS文本已过滤: '{filtered_text}'")
-
-        # 过滤字幕文本
-        if self._filter_subtitle and params.subtitle_text:
-            filtered_text, subtitle_has_match = self._filter_text(params.subtitle_text)
-            if subtitle_has_match:
-                has_match = True
-                params.subtitle_text = filtered_text
-                self.logger.debug(f"字幕文本已过滤: '{filtered_text}'")
+                intent.response_text = filtered_text
+                self.logger.debug(f"response_text 已过滤: '{filtered_text}'")
 
         # 如果匹配到敏感词且配置了丢弃
         if has_match and self._drop_on_match:
@@ -137,7 +117,7 @@ class ProfanityFilterOutputPipeline(OutputPipelineBase):
             self.logger.info("敏感词过滤: 消息已丢弃（配置了 drop_on_match）")
             return None
 
-        return params
+        return intent
 
     def _filter_text(self, text: str) -> tuple[str, bool]:
         """
@@ -186,8 +166,6 @@ class ProfanityFilterOutputPipeline(OutputPipelineBase):
         info.update(
             {
                 "replacement": self._replacement,
-                "filter_tts": self._filter_tts,
-                "filter_subtitle": self._filter_subtitle,
                 "case_sensitive": self._case_sensitive,
                 "drop_on_match": self._drop_on_match,
                 "profanity_words_count": len(self._profanity_words),

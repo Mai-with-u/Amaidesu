@@ -159,7 +159,7 @@ self.audio_stream_channel = self._dependencies.get("audio_stream_channel")
 - 放在 Modules 层可以避免循环依赖
 
 **Decision Domain 特定的类型**：
-以下类型保留在 `src/domains/decision/intent.py` 中：
+以下类型位于 `src/modules/types/intent.py` 中（共享类型）：
 - `Intent`: 完整的决策意图类（Decision Domain 的核心输出）
 - `SourceContext`: 输入源上下文
 

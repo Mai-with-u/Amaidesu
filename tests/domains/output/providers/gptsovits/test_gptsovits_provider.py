@@ -7,8 +7,9 @@ from unittest.mock import AsyncMock, MagicMock
 import numpy as np
 import pytest
 
-from src.domains.output.parameters.render_parameters import RenderParameters
+from src.modules.types.intent import Intent
 from src.domains.output.providers.audio import GPTSoVITSOutputProvider
+from src.modules.types import EmotionType
 
 
 @pytest.fixture
@@ -148,11 +149,11 @@ class TestGPTSoVITSOutputProvider:
         provider.tts_client = mock_tts_client
         provider.audio_manager = mock_audio_manager
 
-        # 创建没有文本的参数
-        render_params = RenderParameters(tts_enabled=False, tts_text="")
+        # 创建没有响应文本的 Intent
+        intent = Intent(original_text="", response_text="", emotion=EmotionType.NEUTRAL, actions=[])
 
         # 渲染应该直接返回
-        await provider._render_internal(render_params)
+        await provider._render_internal(intent)
 
         # TTS 客户端不应该被调用
         mock_tts_client.tts_stream.assert_not_called()
@@ -178,11 +179,11 @@ class TestGPTSoVITSOutputProvider:
         # 设置 _dependencies 以避免 AttributeError
         provider._dependencies = {}
 
-        # 创建有文本的参数
-        render_params = RenderParameters(tts_enabled=True, tts_text="测试文本")
+        # 创建有响应文本的 Intent
+        intent = Intent(original_text="你好", response_text="测试文本", emotion=EmotionType.HAPPY, actions=[])
 
         # 渲染
-        await provider._render_internal(render_params)
+        await provider._render_internal(intent)
 
         # 验证 TTS 被调用
         mock_tts_client.tts_stream.assert_called_once()
@@ -207,12 +208,12 @@ class TestGPTSoVITSOutputProvider:
         # 设置 _dependencies 以避免 AttributeError
         provider._dependencies = {}
 
-        # 创建有文本的参数
-        render_params = RenderParameters(tts_enabled=True, tts_text="测试文本")
+        # 创建有响应文本的 Intent
+        intent = Intent(original_text="你好", response_text="测试文本", emotion=EmotionType.HAPPY, actions=[])
 
         # 渲染应该抛出异常
         with pytest.raises(Exception, match="TTS 失败"):
-            await provider._render_internal(render_params)
+            await provider._render_internal(intent)
 
         # 验证错误计数增加
         assert provider.error_count == 1
@@ -249,18 +250,18 @@ class TestGPTSoVITSOutputProvider:
 
         provider = GPTSoVITSOutputProvider(gptsovits_config)
 
-        # 手动注入 mocks (在 setup 之前)
+        # 手动注入 mocks (在 start 之前)
         provider.tts_client = mock_tts_client
         provider.audio_manager = mock_audio_manager
         # 设置 _dependencies 以避免 AttributeError
         provider._dependencies = {}
 
-        # 直接调用 render，跳过 setup 以避免创建真实客户端
-        # 创建渲染参数
-        render_params = RenderParameters(tts_enabled=True, tts_text="完整工作流测试")
+        # 直接调用 _render_internal，跳过 setup 以避免创建真实客户端
+        # 创建 Intent
+        intent = Intent(original_text="你好", response_text="完整工作流测试", emotion=EmotionType.HAPPY, actions=[])
 
         # 执行渲染
-        await provider._render_internal(render_params)
+        await provider._render_internal(intent)
 
         # 验证音频被播放
         mock_audio_manager.play_audio.assert_called_once()

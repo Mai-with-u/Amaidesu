@@ -11,13 +11,16 @@ Warudo OutputProvider - Warudo虚拟形象控制Provider
 
 import asyncio
 import json
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from pydantic import Field
 
 from src.domains.output.providers.avatar.base import AvatarProviderBase
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
+
+if TYPE_CHECKING:
+    from src.modules.types import Intent
 
 
 class WarudoOutputProvider(AvatarProviderBase):
@@ -116,7 +119,7 @@ class WarudoOutputProvider(AvatarProviderBase):
 
     # ==================== AvatarProviderBase 抽象方法实现 ====================
 
-    def _adapt_intent(self, intent: Any) -> Dict[str, Any]:
+    def _adapt_intent(self, intent: "Intent") -> Dict[str, Any]:
         """
         适配 Intent 为 Warudo 参数
 
@@ -155,7 +158,7 @@ class WarudoOutputProvider(AvatarProviderBase):
         self.logger.debug(f"Intent适配结果: expressions={result['expressions']}, hotkeys={result['hotkeys']}")
         return result
 
-    async def _render_internal(self, params: Dict[str, Any]) -> None:
+    async def _render_to_platform(self, params: Dict[str, Any]) -> None:
         """
         渲染到Warudo平台
 

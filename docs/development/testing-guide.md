@@ -369,7 +369,7 @@ async def test_input_provider_collect_data():
 import pytest
 from src.domains.decision.providers.my_provider import MyDecisionProvider
 from src.modules.types.base.normalized_message import NormalizedMessage
-from src.domains.decision.intent import Intent
+from src.modules.types import Intent
 
 @pytest.mark.asyncio
 async def test_decision_provider_decide():

@@ -8,17 +8,18 @@ EdgeTTS Provider - Output Domain: 渲染输出实现
 import asyncio
 import tempfile
 import time
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import numpy as np
 from pydantic import Field
 
-from src.domains.output.parameters.render_parameters import ExpressionParameters
 from src.modules.config.schemas.base import BaseProviderConfig
-from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
 from src.modules.tts import AudioDeviceManager
 from src.modules.types.base.output_provider import OutputProvider
+
+if TYPE_CHECKING:
+    from src.modules.types import Intent
 
 # 导入工具函数
 from .utils.device_finder import find_device_index
@@ -71,7 +72,7 @@ class EdgeTTSProvider(OutputProvider):
         self.voice = self.typed_config.voice
         self.output_device_name = self.typed_config.output_device_name or ""
 
-        # 音频设备管理器（在_setup_internal中初始化）
+        # 音频设备管理器（在_start_internal中初始化）
         self.audio_manager: Optional[AudioDeviceManager] = None
 
         # 音频播放配置
@@ -79,8 +80,8 @@ class EdgeTTSProvider(OutputProvider):
 
         self.logger.info(f"EdgeTTSProvider初始化完成，语音: {self.voice}")
 
-    async def _setup_internal(self):
-        """内部设置逻辑"""
+    async def _start_internal(self):
+        """内部启动逻辑"""
         # 验证依赖
         if not DEPENDENCIES_OK:
             raise RuntimeError("缺少必要的依赖: soundfile")
@@ -109,27 +110,21 @@ class EdgeTTSProvider(OutputProvider):
             if device_index is not None:
                 self.audio_manager.set_output_device(device_index=device_index)
 
-        # 订阅 expression.parameters_generated 事件（事件驱动架构）
-        if self.event_bus:
-            self.event_bus.on(CoreEvents.OUTPUT_PARAMS, self._on_parameters_ready, priority=50)
-            self.logger.info("EdgeTTSProvider 已订阅 expression.parameters_generated 事件")
+        self.logger.info("EdgeTTSProvider启动完成")
 
-        self.logger.info("EdgeTTSProvider设置完成")
-
-    async def _render_internal(self, parameters: ExpressionParameters):
+    async def _render_internal(self, intent: "Intent"):
         """
         渲染TTS输出
 
         Args:
-            parameters: ExpressionParameters对象
+            intent: Intent对象
         """
-        if not parameters.tts_enabled or not parameters.tts_text:
-            self.logger.debug("TTS未启用或文本为空，跳过渲染")
+        text = intent.response_text
+        if not text:
+            self.logger.debug("TTS文本为空，跳过渲染")
             return
 
-        text = parameters.tts_text
         self.logger.info(f"开始TTS渲染: '{text[:30]}...'")
-
         await self._speak(text)
 
     async def _speak(self, text: str):
@@ -229,38 +224,12 @@ class EdgeTTSProvider(OutputProvider):
             # 返回静音作为降级方案
             return np.zeros(44100, dtype=np.float32), 16000
 
-    async def _on_parameters_ready(self, event_name: str, event_data: ExpressionParameters, source: str):
-        """
-        处理 expression.parameters_generated 事件（事件驱动架构）
-
-        Args:
-            event_name: 事件名称
-            event_data: ExpressionParameters 对象
-            source: 事件源
-        """
-        # 检查是否启用 TTS
-        if not event_data.tts_enabled or not event_data.tts_text:
-            return
-
-        try:
-            await self._render_internal(event_data)
-        except Exception as e:
-            self.logger.error(f"TTS 渲染失败: {e}", exc_info=True)
-
-    async def _cleanup_internal(self):
-        """内部清理逻辑"""
-        self.logger.info("EdgeTTSProvider清理中...")
-
-        # 取消事件订阅
-        if self.event_bus:
-            try:
-                self.event_bus.off(CoreEvents.OUTPUT_PARAMS, self._on_parameters_ready)
-                self.logger.debug("EdgeTTSProvider 已取消事件订阅")
-            except Exception as e:
-                self.logger.warning(f"取消事件订阅失败: {e}")
+    async def _stop_internal(self):
+        """内部停止逻辑"""
+        self.logger.info("EdgeTTSProvider停止中...")
 
         # 停止所有播放
         if self.audio_manager:
             self.audio_manager.stop_audio()
 
-        self.logger.info("EdgeTTSProvider清理完成")
+        self.logger.info("EdgeTTSProvider停止完成")

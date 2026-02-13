@@ -10,8 +10,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from PIL import Image
 
-from src.domains.output.parameters.render_parameters import RenderParameters
 from src.domains.output.providers.sticker import StickerOutputProvider
+from src.modules.types import ActionType, Intent, IntentAction
 
 
 @pytest.fixture
@@ -48,6 +48,31 @@ def mock_event_bus():
     return event_bus
 
 
+@pytest.fixture
+def sample_intent_with_sticker(sample_image_base64):
+    """创建带有 STICKER 动作的 Intent"""
+    return Intent(
+        original_text="测试贴纸",
+        response_text="这是测试回复",
+        actions=[
+            IntentAction(
+                type=ActionType.STICKER,
+                params={"sticker_image": sample_image_base64},
+            )
+        ],
+    )
+
+
+@pytest.fixture
+def sample_intent_without_sticker():
+    """创建没有 STICKER 动作的 Intent"""
+    return Intent(
+        original_text="测试文本",
+        response_text="这是测试回复",
+        actions=[],
+    )
+
+
 class TestStickerOutputProvider:
     """测试 StickerOutputProvider"""
 
@@ -76,15 +101,6 @@ class TestStickerOutputProvider:
         assert provider.image_height == 128
         assert provider.cool_down_seconds == 3
         assert provider.display_duration_seconds == 5
-
-    @pytest.mark.asyncio
-    async def test_setup_internal(self, sticker_config, mock_event_bus):
-        """测试内部设置"""
-        provider = StickerOutputProvider(sticker_config)
-        await provider.setup(mock_event_bus)
-
-        # 验证事件监听器已注册
-        mock_event_bus.on.assert_called_once_with("render.sticker", provider._handle_render_request, priority=50)
 
     def test_resize_image_base64_with_both_dimensions(self, sticker_config, sample_image_base64):
         """测试同时设置宽高的图片调整"""
@@ -150,49 +166,48 @@ class TestStickerOutputProvider:
         assert resized == invalid_base64
 
     @pytest.mark.asyncio
-    async def test_render_internal_in_cooldown(self, sticker_config, mock_event_bus, sample_image_base64):
+    async def test_start_internal(self, sticker_config):
+        """测试内部启动逻辑"""
+        provider = StickerOutputProvider(sticker_config)
+        # _find_vts_provider 返回 None，所以不会有 VTS Provider
+        await provider._start_internal()
+        # 不应该抛出异常
+
+    @pytest.mark.asyncio
+    async def test_render_internal_in_cooldown(self, sticker_config, sample_intent_with_sticker):
         """测试冷却期内的渲染"""
         provider = StickerOutputProvider(sticker_config)
-        await provider.setup(mock_event_bus)
 
         # 设置最近触发时间
         provider.last_trigger_time = time.monotonic()
 
-        # 创建渲染参数（通过metadata传递图片）
-        render_params = RenderParameters(metadata={"sticker_image": sample_image_base64})
-
         # 尝试渲染
-        await provider._render_internal(render_params)
+        await provider._render_internal(sample_intent_with_sticker)
 
         # 由于在冷却期内，send_to_vts不应该被调用
         # 我们可以验证last_trigger_time没有更新太多
 
     @pytest.mark.asyncio
-    async def test_render_internal_without_content(self, sticker_config, mock_event_bus):
-        """测试没有内容的渲染"""
+    async def test_render_internal_without_sticker_action(self, sticker_config, sample_intent_without_sticker):
+        """测试没有 STICKER 动作的渲染"""
         provider = StickerOutputProvider(sticker_config)
-        await provider.setup(mock_event_bus)
 
         # 确保不在冷却期
         provider.last_trigger_time = 0
-
-        # 创建没有图片数据的渲染参数
-        render_params = RenderParameters(metadata={})
 
         # Mock _send_to_vts
         provider._send_to_vts = AsyncMock()
 
         # 尝试渲染
-        await provider._render_internal(render_params)
+        await provider._render_internal(sample_intent_without_sticker)
 
         # send_to_vts不应该被调用
         provider._send_to_vts.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_render_internal_success(self, sticker_config, mock_event_bus, sample_image_base64):
+    async def test_render_internal_success(self, sticker_config, sample_intent_with_sticker):
         """测试成功的渲染"""
         provider = StickerOutputProvider(sticker_config)
-        await provider.setup(mock_event_bus)
 
         # Mock VTS Provider
         provider._vts_provider = AsyncMock()
@@ -202,11 +217,8 @@ class TestStickerOutputProvider:
         # 确保不在冷却期
         provider.last_trigger_time = 0
 
-        # 创建渲染参数（通过metadata传递图片）
-        render_params = RenderParameters(metadata={"sticker_image": sample_image_base64})
-
         # 执行渲染
-        await provider._render_internal(render_params)
+        await provider._render_internal(sample_intent_with_sticker)
 
         # 验证load_item被调用
         provider._vts_provider.load_item.assert_called_once()
@@ -236,39 +248,17 @@ class TestStickerOutputProvider:
         assert call_args[1]["rotation"] == 90
 
     @pytest.mark.asyncio
-    async def test_cleanup_internal(self, sticker_config):
-        """测试内部清理"""
+    async def test_stop_internal(self, sticker_config):
+        """测试内部停止逻辑"""
         provider = StickerOutputProvider(sticker_config)
 
         # 清理不应该抛出异常
-        await provider._cleanup_internal()
+        await provider._stop_internal()
 
     @pytest.mark.asyncio
-    async def test_handle_render_request(self, sticker_config, mock_event_bus, sample_image_base64):
-        """测试处理渲染请求"""
-        provider = StickerOutputProvider(sticker_config)
-        await provider.setup(mock_event_bus)
-
-        # 确保不在冷却期
-        provider.last_trigger_time = 0
-
-        # Mock render方法
-        provider.render = AsyncMock()
-
-        # 创建渲染参数（通过metadata传递图片）
-        render_params = RenderParameters(metadata={"sticker_image": sample_image_base64})
-
-        # 处理渲染请求
-        await provider._handle_render_request("render.sticker", render_params, "test_source")
-
-        # 验证render被调用
-        provider.render.assert_called_once_with(render_params)
-
-    @pytest.mark.asyncio
-    async def test_full_render_workflow(self, sticker_config, mock_event_bus, sample_image_base64):
+    async def test_full_render_workflow(self, sticker_config, sample_intent_with_sticker):
         """测试完整的渲染工作流"""
         provider = StickerOutputProvider(sticker_config)
-        await provider.setup(mock_event_bus)
 
         # Mock VTS Provider
         provider._vts_provider = AsyncMock()
@@ -278,13 +268,28 @@ class TestStickerOutputProvider:
         # 确保不在冷却期
         provider.last_trigger_time = 0
 
-        # 创建渲染参数（通过metadata传递图片）
-        render_params = RenderParameters(metadata={"sticker_image": sample_image_base64})
-
-        # 执行渲染（通过render方法）
-        await provider.render(render_params)
+        # 执行渲染
+        await provider._render_internal(sample_intent_with_sticker)
 
         # 验证load_item被调用
         provider._vts_provider.load_item.assert_called_once()
         # 验证冷却时间已更新
         assert provider.last_trigger_time > 0
+
+    @pytest.mark.asyncio
+    async def test_render_without_vts_provider(self, sticker_config, sample_intent_with_sticker):
+        """测试没有 VTS Provider 时的渲染"""
+        provider = StickerOutputProvider(sticker_config)
+        # _vts_provider 默认为 None
+
+        # 确保不在冷却期
+        provider.last_trigger_time = 0
+
+        # Mock _send_to_vts
+        provider._send_to_vts = AsyncMock()
+
+        # 执行渲染
+        await provider._render_internal(sample_intent_with_sticker)
+
+        # send_to_vts不应该被调用
+        provider._send_to_vts.assert_not_called()

@@ -228,13 +228,14 @@ async def test_on_intent_ready(
     with patch.object(manager, "load_from_config", new_callable=AsyncMock):
         await manager.setup(sample_config)
 
-        # 监听输出事件
-        received_params = []
+        # 监听输出事件（新架构使用 OUTPUT_INTENT）
+        received_payloads = []
 
-        async def on_params(event_name, data, source):
-            received_params.append(data)
+        async def on_output_intent(event_name, data, source):
+            received_payloads.append(data)
 
-        event_bus.on(CoreEvents.OUTPUT_PARAMS, on_params)
+        # 使用类型化事件监听
+        event_bus.on(CoreEvents.OUTPUT_INTENT, on_output_intent, model_class=IntentPayload)
 
         # 发布 Intent 事件
         await event_bus.emit(
@@ -245,10 +246,11 @@ async def test_on_intent_ready(
 
         await asyncio.sleep(0.1)  # 等待异步处理
 
-        # 验证参数生成
-        assert len(received_params) == 1
-        assert received_params[0]["tts_text"] == sample_intent.response_text
-        assert received_params[0]["subtitle_text"] == sample_intent.response_text
+        # 验证 IntentPayload 转发
+        assert len(received_payloads) == 1
+        # 验证 payload 包含正确的 Intent 数据
+        assert received_payloads[0].provider == "DecisionProvider"
+        assert received_payloads[0].intent_data["response_text"] == sample_intent.response_text
 
 
 @pytest.mark.asyncio
@@ -404,13 +406,14 @@ async def test_full_integration(
     with patch.object(manager, "load_from_config", new_callable=AsyncMock):
         await manager.setup(sample_config)
 
-        # 监听输出事件
-        received_params = []
+        # 监听输出事件（新架构使用 OUTPUT_INTENT）
+        received_payloads = []
 
-        async def on_params(event_name, data, source):
-            received_params.append(data)
+        async def on_output_intent(event_name, data, source):
+            received_payloads.append(data)
 
-        event_bus.on(CoreEvents.OUTPUT_PARAMS, on_params)
+        # 使用类型化事件监听
+        event_bus.on(CoreEvents.OUTPUT_INTENT, on_output_intent, model_class=IntentPayload)
 
         # 启动
         await manager.start()
@@ -424,9 +427,10 @@ async def test_full_integration(
 
         await asyncio.sleep(0.2)  # 等待处理完成
 
-        # 验证参数生成
-        assert len(received_params) == 1
-        assert received_params[0]["tts_text"] == sample_intent.response_text
+        # 验证 IntentPayload 转发
+        assert len(received_payloads) == 1
+        assert received_payloads[0].provider == "DecisionProvider"
+        assert received_payloads[0].intent_data["response_text"] == sample_intent.response_text
 
         # 清理
         await manager.stop()

@@ -128,6 +128,9 @@ def register_core_events() -> None:
     EventRegistry.register_core_event(CoreEvents.DECISION_RESPONSE_GENERATED, DecisionResponsePayload)
     EventRegistry.register_core_event(CoreEvents.DECISION_PROVIDER_CONNECTED, ProviderConnectedPayload)
     EventRegistry.register_core_event(CoreEvents.DECISION_PROVIDER_DISCONNECTED, ProviderDisconnectedPayload)
+    # Output Domain 事件
+    EventRegistry.register_core_event(CoreEvents.OUTPUT_INTENT, IntentPayload)  # 过滤后的 Intent
+    # @deprecated: OUTPUT_PARAMS 已废弃，保留仅为向后兼容
     EventRegistry.register_core_event(CoreEvents.OUTPUT_PARAMS, ParametersGeneratedPayload)
     EventRegistry.register_core_event(CoreEvents.RENDER_COMPLETED, RenderCompletedPayload)
     EventRegistry.register_core_event(CoreEvents.RENDER_FAILED, RenderFailedPayload)

@@ -1,16 +1,20 @@
 """
 OutputPipeline 基类和协议定义
 
-类似于 Input Domain 的 TextPipeline，但处理 ExpressionParameters 对象。
+处理 Intent 的管道，在 Intent 分发给 OutputProvider 前执行过滤。
 """
 
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any, Dict, Optional, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Dict, Optional, Protocol, runtime_checkable
 
-from src.domains.output.parameters.render_parameters import ExpressionParameters
+import time
+
 from src.modules.logging import get_logger
 from src.modules.types.base.pipeline_stats import PipelineStats
+
+if TYPE_CHECKING:
+    from src.modules.types import Intent
 
 
 class PipelineErrorHandling(str, Enum):
@@ -34,23 +38,20 @@ class PipelineException(Exception):
         self.message = message
         self.original_error = original_error
         super().__init__(f"[{pipeline_name}] {message}")
+        # 设置异常链，使 __cause__ 可用
+        if original_error is not None:
+            self.__cause__ = original_error
 
 
 @runtime_checkable
 class OutputPipeline(Protocol):
     """
-    输出参数处理管道协议（3域架构：Output Domain 的参数后处理）
+    输出管道协议（与 InputPipeline 对称）
 
-    用于在 OutputDomain (ExpressionParameters → EventBus) 中处理参数，
-    如参数过滤、修改、增强、条件渲染等。
-
-    位置：
-        - OutputDomain: FlowCoordinator._on_intent_ready() 方法内部调用
-        - 在 ExpressionGenerator.generate() 之后、发布事件之前
-        - 可返回 None 表示丢弃该输出
+    处理 Intent，在分发给 OutputProvider 前执行过滤/修改/丢弃。
 
     数据流：
-        ExpressionParameters → OutputPipeline.process() → ExpressionParameters | None
+        Intent → OutputPipeline.process() → Intent | None
     """
 
     priority: int
@@ -58,20 +59,12 @@ class OutputPipeline(Protocol):
     error_handling: PipelineErrorHandling
     timeout_seconds: float
 
-    async def process(self, params: ExpressionParameters) -> Optional[ExpressionParameters]:
-        """
-        处理 ExpressionParameters
-
-        Args:
-            params: 待处理的参数对象
-
-        Returns:
-            处理后的参数对象，或 None 表示丢弃该输出
-        """
+    async def process(self, intent: "Intent") -> Optional["Intent"]:
+        """处理 Intent，返回 None 表示丢弃"""
         ...
 
     def get_info(self) -> Dict[str, Any]:
-        """获取 Pipeline 信息（名称、版本等）"""
+        """获取 Pipeline 信息"""
         ...
 
     def get_stats(self) -> PipelineStats:
@@ -79,7 +72,7 @@ class OutputPipeline(Protocol):
         ...
 
     def reset_stats(self) -> None:
-        """重置统计信息"""
+        """重置统计"""
         ...
 
 
@@ -96,17 +89,11 @@ class OutputPipelineBase(ABC):
     timeout_seconds: float = 5.0
 
     def __init__(self, config: Dict[str, Any]):
-        """
-        初始化 OutputPipeline
-
-        Args:
-            config: Pipeline 配置
-        """
         self.config = config
         self.logger = get_logger(self.__class__.__name__)
         self._stats = PipelineStats()
 
-        # 从配置中读取可选参数
+        # 从配置读取可选参数
         self.priority = config.get("priority", self.priority)
         self.enabled = config.get("enabled", self.enabled)
         self.timeout_seconds = config.get("timeout_seconds", self.timeout_seconds)
@@ -116,16 +103,14 @@ class OutputPipelineBase(ABC):
             try:
                 self.error_handling = PipelineErrorHandling(error_handling_str)
             except ValueError:
-                self.logger.warning(f"无效的 error_handling 值: {error_handling_str}，使用默认值 CONTINUE")
+                self.logger.warning(f"无效的 error_handling 值: {error_handling_str}")
                 self.error_handling = PipelineErrorHandling.CONTINUE
 
-    async def process(self, params: ExpressionParameters) -> Optional[ExpressionParameters]:
-        """处理参数（包装 _process 并记录统计）"""
-        import time
-
+    async def process(self, intent: "Intent") -> Optional["Intent"]:
+        """处理 Intent（包装 _process 并记录统计）"""
         start_time = time.time()
         try:
-            result = await self._process(params)
+            result = await self._process(intent)
             duration_ms = (time.time() - start_time) * 1000
             self._stats.processed_count += 1
             self._stats.total_duration_ms += duration_ms
@@ -135,20 +120,11 @@ class OutputPipelineBase(ABC):
             raise
 
     @abstractmethod
-    async def _process(self, params: ExpressionParameters) -> Optional[ExpressionParameters]:
-        """
-        实际处理参数（子类实现）
-
-        Args:
-            params: 待处理的参数对象
-
-        Returns:
-            处理后的参数对象，或 None 表示丢弃
-        """
+    async def _process(self, intent: "Intent") -> Optional["Intent"]:
+        """实际处理 Intent（子类实现）"""
         pass
 
     def get_info(self) -> Dict[str, Any]:
-        """获取 Pipeline 信息"""
         return {
             "name": self.__class__.__name__,
             "priority": self.priority,
@@ -158,9 +134,7 @@ class OutputPipelineBase(ABC):
         }
 
     def get_stats(self) -> PipelineStats:
-        """获取统计信息"""
         return self._stats
 
     def reset_stats(self) -> None:
-        """重置统计信息"""
         self._stats = PipelineStats()

@@ -19,13 +19,16 @@ except ImportError:
     ctk = None
     CTK_AVAILABLE = False
 
+from typing import TYPE_CHECKING
+
 from pydantic import Field
 
-from src.domains.output.parameters.render_parameters import RenderParameters
 from src.modules.config.schemas.base import BaseProviderConfig
-from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
 from src.modules.types.base.output_provider import OutputProvider
+
+if TYPE_CHECKING:
+    from src.domains.decision.intent import Intent
 
 
 class OutlineLabel:
@@ -315,21 +318,20 @@ class SubtitleOutputProvider(OutputProvider):
         self.is_running = True
         self.is_visible = False
 
-    async def _setup_internal(self):
-        """内部设置"""
-        # 注册事件监听器
-        if self.event_bus:
-            self.event_bus.on(CoreEvents.RENDER_SUBTITLE, self._handle_render_request, priority=50)
-            self.logger.info("已注册 subtitle 渲染事件监听器")
+    async def _start_internal(self):
+        """内部启动 - 基类已订阅 OUTPUT_INTENT 事件"""
 
-    async def _render_internal(self, parameters: RenderParameters):
+    async def _render_internal(self, intent: "Intent"):
         """
         内部渲染逻辑
 
         Args:
-            parameters: 渲染参数，包含content(文本内容)
+            intent: 决策意图，包含response_text(文本内容)
         """
-        text = parameters.content if parameters.content else ""
+        text = intent.response_text if intent.response_text else ""
+        if not text:
+            return
+
         self.logger.debug(f"收到字幕渲染请求: {text[:30]}...")
 
         # 将文本放入队列
@@ -338,8 +340,8 @@ class SubtitleOutputProvider(OutputProvider):
         except Exception as e:
             self.logger.error(f"放入字幕队列时出错: {e}", exc_info=True)
 
-    async def _cleanup_internal(self):
-        """内部清理"""
+    async def _stop_internal(self):
+        """内部停止"""
         self.logger.info("正在清理 SubtitleOutputProvider...")
         self.is_running = False
 
@@ -534,7 +536,3 @@ class SubtitleOutputProvider(OutputProvider):
             except Exception as e:
                 self.logger.warning(f"销毁 subtitle 窗口时出错: {e}", exc_info=True)
         self.root = None
-
-    async def _handle_render_request(self, event_name: str, data: RenderParameters, source: str):
-        """处理字幕渲染请求"""
-        await self.render(data)

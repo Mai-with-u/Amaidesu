@@ -5,7 +5,6 @@ Mock 输入 Provider（用于测试）
 import asyncio
 from typing import Any, AsyncIterator, Dict, Optional
 
-from src.domains.input.normalization.content import TextContent
 from src.modules.types.base.input_provider import InputProvider
 from src.modules.types.base.normalized_message import NormalizedMessage
 

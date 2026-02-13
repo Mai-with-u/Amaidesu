@@ -14,12 +14,6 @@ from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 from src.modules.types.base.input_provider import InputProvider
 from src.modules.types.base.normalized_message import NormalizedMessage
-from src.domains.input.normalization.content import (
-    TextContent,
-    GiftContent,
-    SuperChatContent,
-    GuardContent,
-)
 
 
 class ConsoleInputProvider(InputProvider):
@@ -105,17 +99,15 @@ class ConsoleInputProvider(InputProvider):
                             yield message
                     else:
                         # 普通文本消息，直接构造 NormalizedMessage
-                        content = TextContent(
-                            text=text,
-                            user=self.user_nickname,
-                            user_id=self.user_id,
-                        )
+                        import time
+
                         yield NormalizedMessage(
-                            text=content.text,
-                            content=content,
+                            text=text,
                             source="console",
-                            data_type=content.type,
-                            importance=content.get_importance(),
+                            data_type="text",
+                            importance=0.5,
+                            timestamp=time.time(),
+                            raw=None,
                         )
 
                 except asyncio.CancelledError:
@@ -188,6 +180,8 @@ class ConsoleInputProvider(InputProvider):
 
     async def _create_gift_message(self, args: List[str]) -> Optional[NormalizedMessage]:
         """创建礼物 NormalizedMessage"""
+        import time
+
         username = args[0] if len(args) > 0 else "测试用户"
         gift_name = args[1] if len(args) > 1 else "辣条"
         gift_count = int(args[2]) if len(args) > 2 and args[2].isdigit() else 1
@@ -196,47 +190,40 @@ class ConsoleInputProvider(InputProvider):
             print(f"礼物数量必须大于0，当前输入: {gift_count}")
             return None
 
-        # 对于礼物，只发送一条消息（即使数量>1）
-        content = GiftContent(
-            user=username,
-            user_id="",  # 控制台输入没有真实的 user_id
-            gift_name=gift_name,
-            gift_level=1,
-            count=gift_count,
-        )
+        description = f"{username} 送出了 {gift_count} 个 {gift_name}"
+        importance = min(0.3 + gift_count * 0.05, 1.0)
 
         print(f"发送礼物测试: {username} -> {gift_count}个{gift_name}")
         return NormalizedMessage(
-            text=content.get_display_text(),
-            content=content,
+            text=description,
             source="console",
-            data_type=content.type,
-            importance=content.get_importance(),
+            data_type="gift",
+            importance=importance,
+            timestamp=time.time(),
+            raw=None,
         )
 
     async def _create_sc_message(self, args: List[str]) -> Optional[NormalizedMessage]:
         """创建醒目留言 NormalizedMessage"""
+        import time
+
         username = args[0] if len(args) > 0 else "SC大佬"
         content_text = " ".join(args[1:]) if len(args) > 1 else "这是一条测试醒目留言！"
 
-        content = SuperChatContent(
-            user=username,
-            user_id="",
-            content=content_text,
-            price=10.0,  # 默认价格
-        )
-
         print(f"发送醒目留言测试: {username} - {content_text}")
         return NormalizedMessage(
-            text=content.content,
-            content=content,
+            text=content_text,
             source="console",
-            data_type=content.type,
-            importance=content.get_importance(),
+            data_type="super_chat",
+            importance=0.7,
+            timestamp=time.time(),
+            raw=None,
         )
 
     async def _create_guard_message(self, args: List[str]) -> Optional[NormalizedMessage]:
         """创建大航海 NormalizedMessage"""
+        import time
+
         username = args[0] if len(args) > 0 else "大航海"
         guard_level = args[1] if len(args) > 1 else "舰长"
 
@@ -245,17 +232,16 @@ class ConsoleInputProvider(InputProvider):
             print(f"大航海等级必须是以下之一: {valid_levels}，当前输入: {guard_level}")
             return None
 
-        content = GuardContent(
-            user=username,
-            user_id="",
-            level=guard_level,
-        )
+        description = f"{username} 开通了{guard_level}"
+        importance_scores = {"总督": 1.0, "提督": 0.9, "舰长": 0.8}
+        importance = importance_scores.get(guard_level, 0.8)
 
         print(f"发送大航海测试: {username} 开通了{guard_level}")
         return NormalizedMessage(
-            text=content.get_display_text(),
-            content=content,
+            text=description,
             source="console",
-            data_type=content.type,
-            importance=content.get_importance(),
+            data_type="guard",
+            importance=importance,
+            timestamp=time.time(),
+            raw=None,
         )

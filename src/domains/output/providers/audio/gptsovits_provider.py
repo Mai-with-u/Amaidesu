@@ -16,8 +16,8 @@ from typing import Any, Dict, Optional
 import numpy as np
 from pydantic import Field
 
-from src.domains.output.parameters.render_parameters import RenderParameters
 from src.modules.config.schemas.base import BaseProviderConfig
+from src.modules.types.intent import Intent
 from src.modules.logging import get_logger
 from src.modules.tts import AudioDeviceManager, GPTSoVITSClient
 from src.modules.types.base.output_provider import OutputProvider
@@ -174,17 +174,15 @@ class GPTSoVITSOutputProvider(OutputProvider):
 
         self.logger.info("GPTSoVITSOutputProvider清理完成")
 
-    async def _render_internal(self, parameters: RenderParameters):
+    async def _render_internal(self, intent: "Intent"):
         """
         内部渲染逻辑
 
         Args:
-            parameters: RenderParameters对象
+            intent: Intent对象，从 response_text 获取 TTS 文本
         """
-        # 提取TTS文本
-        text = None
-        if parameters.tts_enabled:
-            text = parameters.tts_text
+        # 从 Intent 获取 TTS 文本
+        text = intent.response_text
 
         if not text or not text.strip():
             self.logger.debug("TTS文本为空，跳过渲染")

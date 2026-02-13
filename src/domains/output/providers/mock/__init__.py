@@ -1,21 +1,23 @@
 """Mock Output Provider - 用于测试"""
 
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import Field
 
-from src.domains.output.parameters.render_parameters import RenderParameters
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 from src.modules.registry import ProviderRegistry
 from src.modules.types.base.output_provider import OutputProvider
+
+if TYPE_CHECKING:
+    from src.modules.types import Intent
 
 
 class MockOutputProvider(OutputProvider):
     """
     模拟输出Provider（用于测试）
 
-    记录收到的所有 RenderParameters，不进行实际渲染。
+    记录收到的所有 Intent，不进行实际渲染。
     """
 
     class ConfigSchema(BaseProviderConfig):
@@ -27,30 +29,35 @@ class MockOutputProvider(OutputProvider):
     def __init__(self, config: dict):
         self.config = config
         self.logger = get_logger("MockOutputProvider")
-        self.received_params = []
+        self.received_intents = []
 
         self.logger.info("MockOutputProvider初始化完成")
 
-    async def _render_internal(self, params: RenderParameters) -> None:
-        """记录收到的参数（内部渲染逻辑）"""
-        self.received_params.append(params)
-        self.logger.debug(f"收到参数: {params.expression}, text={params.text[:50] if params.text else ''}...")
+    async def _render_internal(self, intent: "Intent") -> None:
+        """记录收到的 Intent（内部渲染逻辑）"""
+        self.received_intents.append(intent)
+        response_text = intent.response_text[:50] if intent.response_text else ""
+        self.logger.debug(f"收到 Intent: response_text={response_text}...")
 
-    async def _setup_internal(self) -> None:
-        """设置Provider（内部设置逻辑）"""
-        self.logger.info("MockOutputProvider设置完成")
+    async def _start_internal(self) -> None:
+        """启动Provider（内部启动逻辑）"""
+        self.logger.info("MockOutputProvider启动完成")
+
+    async def _stop_internal(self) -> None:
+        """停止Provider（内部停止逻辑）"""
+        self.logger.info("MockOutputProvider停止完成")
 
     async def cleanup(self) -> None:
         """清理Provider"""
-        self.logger.info(f"MockOutputProvider清理完成，共收到 {len(self.received_params)} 条参数")
+        self.logger.info(f"MockOutputProvider清理完成，共收到 {len(self.received_intents)} 条 Intent")
 
-    def get_received_params(self):
-        """获取收到的所有参数（用于测试断言）"""
-        return self.received_params
+    def get_received_intents(self):
+        """获取收到的所有 Intent（用于测试断言）"""
+        return self.received_intents
 
-    def clear_received_params(self):
+    def clear_received_intents(self):
         """清空记录（用于测试）"""
-        self.received_params.clear()
+        self.received_intents.clear()
 
 
 # 注册到 ProviderRegistry

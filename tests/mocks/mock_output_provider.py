@@ -2,10 +2,12 @@
 Mock 输出 Provider（用于测试）
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from src.domains.output.parameters.render_parameters import RenderParameters
 from src.modules.types.base.output_provider import OutputProvider
+
+if TYPE_CHECKING:
+    from src.modules.types import Intent
 
 
 class MockOutputProvider(OutputProvider):
@@ -13,24 +15,29 @@ class MockOutputProvider(OutputProvider):
 
     def __init__(self, config: dict[str, Any] | None = None):
         super().__init__(config or {})
-        self.received_parameters: list[RenderParameters] = []  # 记录收到的参数
+        self.received_intents: list["Intent"] = []  # 记录收到的 Intent
 
-    async def _render_internal(self, parameters: RenderParameters) -> bool:
-        """渲染（记录参数）"""
-        self.received_parameters.append(parameters)
+    @property
+    def received_parameters(self) -> list["Intent"]:
+        """向后兼容属性：返回 received_intents"""
+        return self.received_intents
+
+    async def _render_internal(self, intent: "Intent") -> bool:
+        """渲染（记录 Intent）"""
+        self.received_intents.append(intent)
         return True
 
-    def get_last_parameters(self) -> RenderParameters | None:
-        """获取最后一次收到的参数"""
-        return self.received_parameters[-1] if self.received_parameters else None
+    def get_last_intent(self) -> "Intent | None":
+        """获取最后一次收到的 Intent"""
+        return self.received_intents[-1] if self.received_intents else None
 
-    def get_all_parameters(self) -> list[RenderParameters]:
-        """获取所有收到的参数"""
-        return self.received_parameters.copy()
+    def get_all_intents(self) -> list["Intent"]:
+        """获取所有收到的 Intent"""
+        return self.received_intents.copy()
 
     def clear(self):
         """清空记录"""
-        self.received_parameters.clear()
+        self.received_intents.clear()
 
     async def cleanup(self):
         """清理方法（兼容性）"""

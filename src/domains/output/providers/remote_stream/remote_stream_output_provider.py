@@ -17,11 +17,11 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from src.domains.output.parameters.render_parameters import RenderParameters
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
 from src.modules.types.base.output_provider import OutputProvider
+from src.modules.types.intent import Intent
 
 if TYPE_CHECKING:
     from src.modules.streaming.audio_chunk import AudioChunk, AudioMetadata
@@ -220,21 +220,18 @@ class RemoteStreamOutputProvider(OutputProvider):
 
         self.logger.info("RemoteStreamOutputProvider 已设置")
 
-    async def _render_internal(self, parameters: RenderParameters):
+    async def _render_internal(self, intent: Intent):
         """
         内部渲染逻辑
 
         Args:
-            parameters: 渲染参数
+            intent: 决策意图
         """
-        # 如果有TTS数据，发送到远程设备
-        if parameters.tts_text and parameters.tts_enabled:
-            # 这里通常由TTS Provider生成音频，我们只是负责传输
-            self.logger.debug(f"准备发送TTS数据: {parameters.tts_text[:50]}...")
-
-        # 如果有字幕数据，可以发送到远程设备显示
-        if parameters.subtitle_text and parameters.subtitle_enabled:
-            await self._send_subtitle(parameters.subtitle_text)
+        # 如果有回复文本，发送到远程设备
+        if intent.response_text:
+            # TTS 音频通过 AudioStreamChannel 传输，这里只发送字幕
+            self.logger.debug(f"准备发送字幕数据: {intent.response_text[:50]}...")
+            await self._send_subtitle(intent.response_text)
 
     async def _cleanup_internal(self):
         """内部清理逻辑"""

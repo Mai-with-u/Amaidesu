@@ -47,7 +47,7 @@ class MockAvatarProvider(AvatarProviderBase):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.adapt_intent_calls = []
-        self.render_internal_calls = []
+        self.render_to_platform_calls = []
         self.connect_calls = []
         self.disconnect_calls = []
 
@@ -55,8 +55,8 @@ class MockAvatarProvider(AvatarProviderBase):
         self.adapt_intent_calls.append(intent)
         return {"emotion": intent.emotion.value, "actions": len(intent.actions), "response": intent.response_text}
 
-    async def _render_internal(self, params: Any) -> None:
-        self.render_internal_calls.append(params)
+    async def _render_to_platform(self, params: Any) -> None:
+        self.render_to_platform_calls.append(params)
 
     async def _connect(self) -> None:
         self.connect_calls.append(True)
@@ -99,100 +99,102 @@ class TestAvatarProviderBaseAbstract:
         assert provider._is_connected is False
 
 
-class TestAvatarProviderBaseSetup:
+class TestAvatarProviderBaseStart:
     @pytest.mark.asyncio
-    async def test_setup_subscribes_to_intent_event(self, mock_event_bus):
+    async def test_start_subscribes_to_intent_event(self, mock_event_bus):
         from src.modules.events.names import CoreEvents
 
         provider = MockAvatarProvider({})
-        await provider.setup(mock_event_bus)
+        await provider.start(mock_event_bus)
         mock_event_bus.on.assert_called_once()
         call_args = mock_event_bus.on.call_args
-        assert call_args[0][0] == CoreEvents.DECISION_INTENT
+        assert call_args[0][0] == CoreEvents.OUTPUT_INTENT
 
     @pytest.mark.asyncio
-    async def test_setup_connects_to_platform(self, mock_event_bus):
+    async def test_start_connects_to_platform(self, mock_event_bus):
         provider = MockAvatarProvider({})
-        await provider.setup(mock_event_bus)
+        await provider.start(mock_event_bus)
         assert len(provider.connect_calls) == 1
         assert provider._is_connected is True
 
     @pytest.mark.asyncio
-    async def test_setup_stores_event_bus_reference(self, mock_event_bus):
+    async def test_start_stores_event_bus_reference(self, mock_event_bus):
         provider = MockAvatarProvider({})
-        await provider.setup(mock_event_bus)
+        await provider.start(mock_event_bus)
         assert provider.event_bus is mock_event_bus
 
 
-class TestAvatarProviderBaseCleanup:
+class TestAvatarProviderBaseStop:
     @pytest.mark.asyncio
-    async def test_cleanup_unsubscribes_from_intent_event(self, mock_event_bus):
+    async def test_stop_unsubscribes_from_intent_event(self, mock_event_bus):
         provider = MockAvatarProvider({})
-        await provider.setup(mock_event_bus)
-        await provider.cleanup()
+        await provider.start(mock_event_bus)
+        await provider.stop()
         mock_event_bus.off.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_cleanup_disconnects_from_platform(self, mock_event_bus):
+    async def test_stop_disconnects_from_platform(self, mock_event_bus):
         provider = MockAvatarProvider({})
-        await provider.setup(mock_event_bus)
-        await provider.cleanup()
+        await provider.start(mock_event_bus)
+        await provider.stop()
         assert len(provider.disconnect_calls) == 1
         assert provider._is_connected is False
 
     @pytest.mark.asyncio
-    async def test_cleanup_without_setup(self, mock_event_bus):
+    async def test_stop_without_start(self, mock_event_bus):
         provider = MockAvatarProvider({})
-        await provider.cleanup()
-        assert len(provider.disconnect_calls) == 1
+        await provider.stop()
+        assert len(provider.disconnect_calls) == 0
 
 
 class TestAvatarProviderBaseIntentProcessing:
     @pytest.mark.asyncio
-    async def test_on_intent_ready_calls_adapt_and_render(self, mock_event_bus, sample_intent_payload, sample_intent):
+    async def test_on_intent_calls_adapt_and_render(self, mock_event_bus, sample_intent_payload, sample_intent):
         provider = MockAvatarProvider({})
-        await provider.setup(mock_event_bus)
-        await provider._on_intent_ready("test_event", sample_intent_payload, "test_source")
+        await provider.start(mock_event_bus)
+        await provider._on_intent("test_event", sample_intent_payload, "test_source")
         assert len(provider.adapt_intent_calls) == 1
-        assert len(provider.render_internal_calls) == 1
-        assert provider.render_internal_calls[0]["emotion"] == "happy"
+        assert len(provider.render_to_platform_calls) == 1
+        assert provider.render_to_platform_calls[0]["emotion"] == "happy"
 
     @pytest.mark.asyncio
-    async def test_on_intent_ready_skips_when_not_connected(self, mock_event_bus, sample_intent_payload):
+    async def test_on_intent_skips_when_not_connected(self, mock_event_bus, sample_intent_payload):
         provider = MockAvatarProvider({})
-        await provider.setup(mock_event_bus)
+        await provider.start(mock_event_bus)
         provider._is_connected = False
-        await provider._on_intent_ready("test_event", sample_intent_payload, "test_source")
+        await provider._on_intent("test_event", sample_intent_payload, "test_source")
         assert len(provider.adapt_intent_calls) == 0
 
     @pytest.mark.asyncio
-    async def test_on_intent_ready_handles_invalid_payload(self, mock_event_bus):
+    async def test_on_intent_handles_invalid_payload(self, mock_event_bus):
         provider = MockAvatarProvider({})
-        await provider.setup(mock_event_bus)
-        await provider._on_intent_ready("test_event", {"invalid": "payload"}, "test_source")
-        assert len(provider.adapt_intent_calls) == 0
+        await provider.start(mock_event_bus)
+        # Invalid payload - not an IntentPayload
+        with pytest.raises(Exception):
+            await provider._on_intent("test_event", {"invalid": "payload"}, "test_source")
 
     @pytest.mark.asyncio
-    async def test_on_intent_ready_handles_rendering_errors(self, mock_event_bus, sample_intent_payload):
+    async def test_on_intent_handles_rendering_errors(self, mock_event_bus, sample_intent_payload):
         class ErrorAvatarProvider(MockAvatarProvider):
-            async def _render_internal(self, params: Any) -> None:
+            async def _render_to_platform(self, params: Any) -> None:
                 raise RuntimeError("渲染失败测试")
 
         provider = ErrorAvatarProvider({})
-        await provider.setup(mock_event_bus)
-        await provider._on_intent_ready("test_event", sample_intent_payload, "test_source")
+        await provider.start(mock_event_bus)
+        # Should catch and log error, not propagate
+        await provider._on_intent("test_event", sample_intent_payload, "test_source")
         assert len(provider.adapt_intent_calls) == 1
 
     @pytest.mark.asyncio
-    async def test_on_intent_ready_handles_adaptation_errors(self, mock_event_bus, sample_intent_payload):
+    async def test_on_intent_handles_adaptation_errors(self, mock_event_bus, sample_intent_payload):
         class ErrorAdaptProvider(MockAvatarProvider):
             def _adapt_intent(self, intent: Intent) -> Dict[str, Any]:
                 raise ValueError("适配失败测试")
 
         provider = ErrorAdaptProvider({})
-        await provider.setup(mock_event_bus)
-        await provider._on_intent_ready("test_event", sample_intent_payload, "test_source")
-        assert len(provider.render_internal_calls) == 0
+        await provider.start(mock_event_bus)
+        await provider._on_intent("test_event", sample_intent_payload, "test_source")
+        assert len(provider.render_to_platform_calls) == 0
 
 
 class TestAvatarProviderBaseConnectionState:
@@ -202,16 +204,16 @@ class TestAvatarProviderBaseConnectionState:
         assert provider._is_connected is False
 
     @pytest.mark.asyncio
-    async def test_connection_state_becomes_true_after_setup(self, mock_event_bus):
+    async def test_connection_state_becomes_true_after_start(self, mock_event_bus):
         provider = MockAvatarProvider({})
-        await provider.setup(mock_event_bus)
+        await provider.start(mock_event_bus)
         assert provider._is_connected is True
 
     @pytest.mark.asyncio
-    async def test_connection_state_becomes_false_after_cleanup(self, mock_event_bus):
+    async def test_connection_state_becomes_false_after_stop(self, mock_event_bus):
         provider = MockAvatarProvider({})
-        await provider.setup(mock_event_bus)
-        await provider.cleanup()
+        await provider.start(mock_event_bus)
+        await provider.stop()
         assert provider._is_connected is False
 
 
@@ -219,12 +221,12 @@ class TestAvatarProviderBaseIntegration:
     @pytest.mark.asyncio
     async def test_full_lifecycle(self, mock_event_bus, sample_intent):
         provider = MockAvatarProvider({})
-        await provider.setup(mock_event_bus)
+        await provider.start(mock_event_bus)
         for _i in range(3):
             payload = IntentPayload.from_intent(sample_intent, provider="test")
-            await provider._on_intent_ready("test", payload, "test")
+            await provider._on_intent("test", payload, "test")
         assert len(provider.adapt_intent_calls) == 3
-        await provider.cleanup()
+        await provider.stop()
         assert provider._is_connected is False
 
 

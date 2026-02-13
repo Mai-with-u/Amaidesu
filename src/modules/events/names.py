@@ -17,7 +17,8 @@ class CoreEvents:
     DECISION_INTENT = "decision.intent"
 
     # Output Domain: 输出域
-    OUTPUT_PARAMS = "output.params"
+    OUTPUT_INTENT = "output.intent"  # 过滤后的 Intent（新架构）
+    OUTPUT_PARAMS = "output.params"  # @deprecated: 将在迁移完成后删除
 
     # ========== Decision Domain 事件 ==========
     DECISION_REQUEST = "decision.request"

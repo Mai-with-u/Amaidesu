@@ -31,7 +31,6 @@ import asyncio
 from src.modules.types.base.input_provider import InputProvider
 from src.modules.types.base.normalized_message import NormalizedMessage
 from src.modules.logging import get_logger
-from src.domains.input.normalization.content import TextContent
 
 class MyInputProvider(InputProvider):
     """自定义输入 Provider"""
@@ -54,18 +53,16 @@ class MyInputProvider(InputProvider):
                     # 采集数据
                     data = await self._fetch_data()
                     if data:
-                        # 直接构造 NormalizedMessage（无需 RawData）
-                        content = TextContent(
-                            text=data["text"],
-                            user=data.get("user", "未知用户"),
-                            user_id=data.get("user_id", "unknown"),
-                        )
+                        # 直接构造 NormalizedMessage
                         yield NormalizedMessage(
-                            text=content.text,
-                            content=content,
+                            text=data["text"],
                             source="my_provider",
-                            data_type=content.type,
-                            importance=content.get_importance(),
+                            data_type="text",
+                            importance=0.5,
+                            raw={
+                                "user": data.get("user", "未知用户"),
+                                "user_id": data.get("user_id", "unknown"),
+                            },
                         )
 
                     # 等待下一次采集
@@ -106,34 +103,19 @@ class MyInputProvider(InputProvider):
 
 ```python
 from src.modules.types.base.normalized_message import NormalizedMessage
-from src.domains.input.normalization.content import TextContent
 
-# 创建内容对象
-content = TextContent(
-    text="用户消息",
-    user="用户昵称",
-    user_id="user_id",
-)
-
-# 构造 NormalizedMessage
+# 直接构造 NormalizedMessage
 normalized_message = NormalizedMessage(
-    text=content.text,              # 文本描述（用于LLM处理）
-    content=content,               # 结构化内容（保留原始数据）
+    text="用户消息",              # 文本描述（用于LLM处理）
     source="my_provider",          # 数据源标识
-    data_type=content.type,        # 数据类型
-    importance=content.get_importance(),  # 重要性（0-1）
-    metadata={},                  # 额外元数据（可选）
+    data_type="text",              # 数据类型
+    importance=0.5,                # 重要性（0-1）
+    raw={                          # 原始数据（可选）
+        "user": "用户昵称",
+        "user_id": "user_id",
+    },
 )
 ```
-
-### 内容类型（StructuredContent）
-
-| 类型 | 用途 | 类名 |
-|------|------|------|
-| 文本 | 普通文本消息 | `TextContent` |
-| 礼物 | 礼物消息 | `GiftContent` |
-| 醒目留言 | SC 消息 | `SuperChatContent` |
-| 大航海 | 舰长/提督/总督 | `GuardContent` |
 
 ## DecisionProvider 开发
 
@@ -146,7 +128,7 @@ from typing import Dict, Any
 from src.modules.types.base.decision_provider import DecisionProvider
 from src.modules.types.base.normalized_message import NormalizedMessage
 from src.modules.types import EmotionType, ActionType, IntentAction
-from src.domains.decision.intent import Intent
+from src.modules.types import Intent
 from src.modules.logging import get_logger
 
 class MyDecisionProvider(DecisionProvider):
@@ -183,7 +165,7 @@ class MyDecisionProvider(DecisionProvider):
 
 ```python
 from src.modules.types import EmotionType, ActionType, IntentAction
-from src.domains.decision.intent import Intent
+from src.modules.types import Intent
 
 intent = Intent(
     original_text="用户消息",           # 原始输入文本
@@ -331,11 +313,10 @@ volume = 0.8
 
 ```python
 from typing import AsyncIterator, Dict, Any
-from src/modules/types/base/input_provider import InputProvider
+from src.modules/types/base/input_provider import InputProvider
 import asyncio
-from src/modules/types/base.normalized_message import NormalizedMessage
-from src/domains/input.normalization.content import TextContent
-from src/modules/logging import get_logger
+from src.modules/types/base.normalized_message import NormalizedMessage
+from src.modules.logging import get_logger
 
 class BiliDanmakuInputProvider(InputProvider):
     """Bilibili 弹幕输入 Provider"""
@@ -358,18 +339,16 @@ class BiliDanmakuInputProvider(InputProvider):
                     danmaku_list = await self._fetch_danmaku()
                     for danmaku in danmaku_list:
                         # 直接构造 NormalizedMessage
-                        content = TextContent(
-                            text=danmaku.text,
-                            user=danmaku.nickname,
-                            user_id=danmaku.user_id,
-                        )
                         yield NormalizedMessage(
-                            text=content.text,
-                            content=content,
+                            text=danmaku.text,
                             source="bili_danmaku",
-                            data_type=content.type,
-                            importance=content.get_importance(),
-                            metadata={"room_id": self.room_id}
+                            data_type="text",
+                            importance=0.5,
+                            raw={
+                                "user": danmaku.nickname,
+                                "user_id": danmaku.user_id,
+                                "room_id": self.room_id,
+                            },
                         )
                     await asyncio.sleep(self.poll_interval)
                 except Exception as e:

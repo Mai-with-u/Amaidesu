@@ -294,7 +294,7 @@ class VTSProvider(BaseAvatarProvider):
         self.logger.debug(f"Intent适配结果: expressions={result['expressions']}, hotkeys={result['hotkeys']}")
         return result
 
-    async def _render_internal(self, params: Dict[str, Any]) -> None:
+    async def _render_to_platform(self, params: Dict[str, Any]) -> None:
         """
         渲染到VTS平台
 

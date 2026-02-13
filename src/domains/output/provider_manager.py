@@ -3,7 +3,7 @@ OutputProviderManager - Output Domain: 输出Provider管理器（重构后）
 
 职责:
 - 协调 Decision Domain → Output Domain 的数据流
-- 订阅 Intent 事件并生成 RenderParameters（用于 TTS/Subtitle）
+- 订阅 DECISION_INTENT 事件，通过 OutputPipeline 处理后发布 OUTPUT_INTENT 事件
 - 管理多个 OutputProvider
 - 支持并发渲染
 - 错误隔离（单个Provider失败不影响其他）
@@ -13,32 +13,31 @@ OutputProviderManager - Output Domain: 输出Provider管理器（重构后）
 - Pipeline 集成（OutputPipeline）
 
 数据流（3域架构 - 重构后）:
-    Intent (Decision) → Avatar Providers (直接订阅 DECISION_INTENT)
-                     → OutputProviderManager → RenderParameters (TTS/Subtitle) → TTS/Subtitle Providers
+    Intent (Decision) → OutputProviderManager → OutputPipeline 过滤 → OUTPUT_INTENT 事件
+                     → Output Providers (TTS/Subtitle/Avatar/Sticker 等)
 
 注意:
-- Avatar Provider 直接订阅 DECISION_INTENT，在内部实现 Intent → 平台参数的适配
-- OutputProviderManager 只为 TTS/Subtitle 生成 RenderParameters
+- OutputProviderManager 负责过滤 Intent 并分发
+- 所有 OutputProvider 订阅 OUTPUT_INTENT 事件
 """
 
 import asyncio
 import os
+import warnings
 from typing import TYPE_CHECKING, Any, Optional
 
 from pydantic import BaseModel
 
-from src.domains.output.parameters.render_parameters import RenderParameters
 from src.domains.output.pipelines.manager import OutputPipelineManager
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads import ParametersGeneratedPayload
 from src.modules.logging import get_logger
-from src.modules.types import ExpressionParameters
 from src.modules.types.base.output_provider import OutputProvider
 
 # 类型检查时的导入
 if TYPE_CHECKING:
     from src.modules.events.payloads import IntentPayload
+    from src.modules.types import Intent
 
 
 class RenderResult(BaseModel):
@@ -66,7 +65,7 @@ class OutputProviderManager:
 
     核心职责:
     - 协调 Decision Domain → Output Domain 的数据流
-    - 订阅 Intent 事件并生成 RenderParameters（用于 TTS/Subtitle）
+    - 订阅 DECISION_INTENT 事件，通过 OutputPipeline 过滤后发布 OUTPUT_INTENT 事件
     - 管理多个 OutputProvider 实例
     - 并发渲染到所有 Provider
     - 错误隔离（单个 Provider 失败不影响其他）
@@ -170,7 +169,7 @@ class OutputProviderManager:
 
         self.event_bus.on(
             CoreEvents.DECISION_INTENT,
-            self._on_intent_ready,
+            self._on_decision_intent,
             model_class=IntentPayload,
             priority=50,
         )
@@ -213,7 +212,7 @@ class OutputProviderManager:
         # 取消事件订阅
         if self._event_handler_registered:
             try:
-                self.event_bus.off(CoreEvents.DECISION_INTENT, self._on_intent_ready)
+                self.event_bus.off(CoreEvents.DECISION_INTENT, self._on_decision_intent)
                 self._event_handler_registered = False
                 self.logger.info("事件订阅已取消")
             except Exception as e:
@@ -222,14 +221,12 @@ class OutputProviderManager:
         self._is_setup = False
         self.logger.info("输出Provider管理器清理完成")
 
-    async def _on_intent_ready(self, event_name: str, payload: "IntentPayload", source: str):
+    async def _on_decision_intent(self, event_name: str, payload: "IntentPayload", source: str):
         """
         处理Intent事件（Decision Domain → Output Domain，类型化）
 
         数据流（重构后）:
-            IntentPayload → Intent → RenderParameters (TTS/Subtitle) → OutputPipeline处理 → 发布 OUTPUT_PARAMS 事件 → TTS/Subtitle Providers
-
-        注意: Avatar Providers 直接订阅 DECISION_INTENT 事件，不经过此方法
+            IntentPayload → Intent → OutputPipeline 过滤 → 发布 OUTPUT_INTENT 事件 → Output Providers
 
         Args:
             event_name: 事件名称（decision.intent）
@@ -245,33 +242,26 @@ class OutputProviderManager:
         self.logger.info(f'收到Intent事件: {event_name}, 响应: "{intent.response_text[:50]}...", 动作: {action_type}')
 
         try:
-            # 直接生成 ExpressionParameters（仅用于 TTS/Subtitle）
-            # Avatar Provider 已在各自的 _on_intent_ready 中处理 Intent
-            params = ExpressionParameters(
-                tts_text=intent.response_text,
-                subtitle_text=intent.response_text,
-                tts_enabled=True,
-                subtitle_enabled=True,
-            )
-            self.logger.info(
-                f'生成参数: tts_text="{params.tts_text[:30]}...", tts_enabled={params.tts_enabled}, subtitle_enabled={params.subtitle_enabled}'
-            )
-
-            # OutputPipeline 处理（参数后处理）
+            # OutputPipeline 处理（Intent 过滤）
             if self.pipeline_manager:
-                params = await self.pipeline_manager.process(params)
-                if params is None:  # 被管道丢弃
-                    self.logger.info("RenderParameters 被 Pipeline 丢弃，取消本次输出")
+                intent = await self.pipeline_manager.process(intent)
+                if intent is None:  # 被管道丢弃
+                    self.logger.info("Intent 被 Pipeline 丢弃，取消本次输出")
                     return
                 self.logger.debug("OutputPipeline 处理完成")
 
-            # 发布 OUTPUT_PARAMS 事件（事件驱动）
-            # TTS/Subtitle Provider 订阅此事件并响应
-            event_payload = ParametersGeneratedPayload.from_parameters(
-                params, source_intent=intent.model_dump(mode="json")
+            # 发布 OUTPUT_INTENT 事件（事件驱动）
+            # 所有 Output Provider 订阅此事件并响应
+            # 使用处理后的 Intent 创建新的 IntentPayload
+            from src.modules.events.payloads.decision import IntentPayload
+
+            output_payload = IntentPayload.from_intent(intent, payload.provider)
+            await self.event_bus.emit(
+                CoreEvents.OUTPUT_INTENT,
+                output_payload,
+                source="OutputProviderManager",
             )
-            await self.event_bus.emit(CoreEvents.OUTPUT_PARAMS, event_payload, source="OutputProviderManager")
-            self.logger.debug(f"已发布事件: {CoreEvents.OUTPUT_PARAMS}")
+            self.logger.debug(f"已发布事件: {CoreEvents.OUTPUT_INTENT}")
 
         except Exception as e:
             self.logger.error(f"处理Intent事件时出错: {e}", exc_info=True)
@@ -327,8 +317,11 @@ class OutputProviderManager:
             setup_count = sum(1 for p in self.providers if p.is_started)
             self.logger.warning(f"部分Provider启动失败: {setup_count}/{len(self.providers)}")
 
-    async def render_all(self, parameters: RenderParameters) -> list[RenderResult]:
+    async def render_all(self, intent: "Intent") -> list[RenderResult]:
         """
+        @deprecated 此方法已废弃，新架构使用事件驱动（OUTPUT_INTENT）。
+        请勿使用此方法，它仅为向后兼容保留。
+
         并发渲染到所有Provider
 
         核心特性:
@@ -337,10 +330,22 @@ class OutputProviderManager:
         - 错误隔离（单个Provider失败不影响其他）
 
         Args:
-            parameters: RenderParameters对象
+            intent: Intent对象
 
         Returns:
             List[RenderResult]: 每个Provider的渲染结果
+        """
+        warnings.warn(
+            "render_all() 已废弃，新架构使用事件驱动。请勿直接调用此方法。",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        # 委托给实际渲染逻辑（保持向后兼容）
+        return await self._render_deprecated(intent)
+
+    async def _render_deprecated(self, intent: "Intent") -> list[RenderResult]:
+        """
+        @deprecated 内部方法，已废弃。
         """
         self.logger.info(f"正在渲染到 {len(self.providers)} 个Provider...")
 
@@ -359,10 +364,10 @@ class OutputProviderManager:
 
         if self.concurrent_rendering:
             # 并发渲染：使用_safe_render包装每个Provider
-            results = await self._render_concurrent(active_providers, parameters)
+            results = await self._render_concurrent(active_providers, intent)
         else:
             # 串行渲染（用于调试）
-            results = await self._render_sequential(active_providers, parameters)
+            results = await self._render_sequential(active_providers, intent)
 
         # 记录结果
         success_count = sum(1 for r in results if r.success)
@@ -374,9 +379,11 @@ class OutputProviderManager:
         return results
 
     async def _render_concurrent(
-        self, providers: list[OutputProvider], parameters: RenderParameters
+        self, providers: list[OutputProvider], intent: "Intent"
     ) -> list[RenderResult]:
         """
+        @deprecated 内部方法，已废弃。
+
         并发渲染到多个Provider
 
         使用asyncio.gather并发执行所有渲染任务。
@@ -384,7 +391,7 @@ class OutputProviderManager:
 
         Args:
             providers: Provider列表
-            parameters: 渲染参数
+            intent: Intent对象
 
         Returns:
             List[RenderResult]: 渲染结果列表
@@ -393,7 +400,7 @@ class OutputProviderManager:
         render_tasks = []
         for provider in providers:
             provider_name = provider.get_info()["name"]
-            task = asyncio.create_task(self._safe_render(provider, parameters), name=f"render-{provider_name}")
+            task = asyncio.create_task(self._safe_render(provider, intent), name=f"render-{provider_name}")
             render_tasks.append((provider_name, task))
 
         # 等待所有任务完成（return_exceptions=True确保异常不会传播）
@@ -421,21 +428,23 @@ class OutputProviderManager:
         return results
 
     async def _render_sequential(
-        self, providers: list[OutputProvider], parameters: RenderParameters
+        self, providers: list[OutputProvider], intent: "Intent"
     ) -> list[RenderResult]:
         """
+        @deprecated 内部方法，已废弃。
+
         串行渲染到多个Provider（用于调试）
 
         Args:
             providers: Provider列表
-            parameters: 渲染参数
+            intent: Intent对象
 
         Returns:
             List[RenderResult]: 渲染结果列表
         """
         results = []
         for provider in providers:
-            result = await self._safe_render(provider, parameters)
+            result = await self._safe_render(provider, intent)
             results.append(result)
 
             # 根据error_handling配置决定是否继续
@@ -445,8 +454,10 @@ class OutputProviderManager:
 
         return results
 
-    async def _safe_render(self, provider: OutputProvider, parameters: RenderParameters) -> RenderResult:
+    async def _safe_render(self, provider: OutputProvider, intent: "Intent") -> RenderResult:
         """
+        @deprecated 内部方法，已废弃。
+
         安全渲染到单个Provider
 
         核心特性:
@@ -456,7 +467,7 @@ class OutputProviderManager:
 
         Args:
             provider: OutputProvider实例
-            parameters: RenderParameters对象
+            intent: Intent对象
 
         Returns:
             RenderResult: 渲染结果
@@ -467,11 +478,11 @@ class OutputProviderManager:
         start_time = time.time()
 
         try:
-            # 执行渲染（带超时）
+            # 执行渲染（带超时）- 使用 _render_internal 而非已废弃的 render()
             if self.render_timeout > 0:
-                await asyncio.wait_for(provider.render(parameters), timeout=self.render_timeout)
+                await asyncio.wait_for(provider._render_internal(intent), timeout=self.render_timeout)
             else:
-                await provider.render(parameters)
+                await provider._render_internal(intent)
 
             duration = time.time() - start_time
             self.logger.debug(f"Provider渲染成功: {provider_name} (耗时: {duration:.3f}s)")
