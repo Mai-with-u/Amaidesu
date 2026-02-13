@@ -11,11 +11,6 @@ Expression生成层 - Output Domain: 参数生成
    - 动作映射器，将高层动作转换为平台特定指令
    - 这是 Output Domain 的核心功能之一
 
-2. RenderParameters (向后兼容重导出)
-   - 渲染参数数据类
-   - ⚠️  实际定义已迁移到 src/modules/types/render_parameters.py
-   - 此处保留是为了向后兼容性
-
 ══════════════════════════════════════════════════════════════════════════════
 🏗️  架构变更历史 (Architecture Changes)
 ══════════════════════════════════════════════════════════════════════════════
@@ -36,15 +31,11 @@ Expression生成层 - Output Domain: 参数生成
 
 ✅ 推荐导入:
     from src.domains.output.parameters import ActionMapper
-    from src.modules.types import RenderParameters  # 使用 Modules 层
-
-⚠️  兼容导入（仍然有效）:
-    from src.domains.output.parameters import RenderParameters
+    from src.modules.types import ExpressionParameters  # 使用 Modules 层
 
 ══════════════════════════════════════════════════════════════════════════════
 """
 
 from .action_mapper import ActionMapper
-from .render_parameters import RenderParameters
 
-__all__ = ["RenderParameters", "ActionMapper"]
+__all__ = ["ActionMapper"]

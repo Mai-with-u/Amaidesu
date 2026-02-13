@@ -5,10 +5,6 @@ OmniTTS Provider - Output Domain: 渲染输出实现
 - 使用GPT-SoVITS引擎进行文本转语音
 - 支持流式TTS和音频播放
 - 集成text_cleanup、vts_lip_sync、subtitle_service等服务
-- 向后兼容现有TTS插件功能
-
-注意: 这是一个简化版本的Provider,专注于核心TTS功能
-如果需要完整功能(如远程流、UDP广播等),请继续使用原有的TTS插件
 """
 
 import asyncio
@@ -118,7 +114,7 @@ class OmniTTSProvider(OutputProvider):
         self.channels = 1
         self.dtype = np.int16
 
-        # 音频设备管理器（在_setup_internal中初始化）
+        # 音频设备管理器（在 init 中初始化）
         self.audio_manager: Optional[AudioDeviceManager] = None
 
         # 服务集成配置
@@ -143,8 +139,8 @@ class OmniTTSProvider(OutputProvider):
 
         self.logger.info("OmniTTSProvider初始化完成")
 
-    async def _setup_internal(self):
-        """内部设置逻辑"""
+    async def init(self):
+        """初始化逻辑"""
         if not TTS_DEPENDENCIES_OK:
             self.logger.error("TTS依赖缺失，请安装: pip install requests")
             raise ImportError("TTS dependencies not available")
@@ -167,9 +163,9 @@ class OmniTTSProvider(OutputProvider):
         # AudioStreamChannel 已由基类设置，通过属性访问
         self.logger.info("OmniTTSProvider设置完成")
 
-    async def _render_internal(self, intent: Intent):
+    async def execute(self, intent: Intent):
         """
-        渲染TTS输出
+        执行 TTS 输出
 
         Args:
             intent: Intent对象
@@ -308,8 +304,8 @@ class OmniTTSProvider(OutputProvider):
         except Exception as e:
             self.logger.error(f"解码音频数据失败: {e}")
 
-    async def _cleanup_internal(self):
-        """内部清理逻辑"""
+    async def cleanup(self):
+        """清理资源"""
         self.logger.info("OmniTTSProvider清理中...")
 
         # 停止音频播放

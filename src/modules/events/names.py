@@ -8,17 +8,14 @@
 class CoreEvents:
     """核心事件名称常量（3域架构）"""
 
-    # ========== 新的事件命名（简化版） ==========
-    # Data Domain: 数据域
-    DATA_RAW = "data.raw"  # @deprecated: 已废弃，Provider 直接构造 NormalizedMessage
+    # ========== Data Domain: 数据域 ==========
     DATA_MESSAGE = "data.message"
 
-    # Decision Domain: 决策域
+    # ========== Decision Domain: 决策域 ==========
     DECISION_INTENT = "decision.intent"
 
-    # Output Domain: 输出域
+    # ========== Output Domain: 输出域 ==========
     OUTPUT_INTENT = "output.intent"  # 过滤后的 Intent（新架构）
-    OUTPUT_PARAMS = "output.params"  # @deprecated: 将在迁移完成后删除
 
     # ========== Decision Domain 事件 ==========
     DECISION_REQUEST = "decision.request"
@@ -90,10 +87,9 @@ class CoreEvents:
         )
 
     # 所有事件名集合（用于事件验证等）
-    # 注意：此属性在模块加载时自动更新，保持向后兼容性
+    # 模块加载时自动更新
     ALL_EVENTS = ()  # 占位符，模块末尾会被更新
 
 
 # 在类定义后，模块级别自动更新 ALL_EVENTS
-# 这样既能使用自动生成，又能保持向后兼容性
 CoreEvents.ALL_EVENTS = CoreEvents.get_all_events()

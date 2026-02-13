@@ -215,8 +215,8 @@ class VTSProvider(BaseAvatarProvider):
 
         self.logger.info("VTSProvider初始化完成")
 
-    async def _setup_internal(self):
-        """内部设置逻辑"""
+    async def init(self):
+        """初始化逻辑"""
         # 初始化pyvts
         try:
             import pyvts  # noqa: F401
@@ -225,7 +225,7 @@ class VTSProvider(BaseAvatarProvider):
             plugin_info = {
                 "plugin_name": "Amaidesu_VTS_OutputProvider",
                 "developer": "Phase 4 Implementation",
-                "authentication_token_path": "./refactor/vts_token.txt",
+                "authentication_token_path": "./vts_token.txt",
                 "vts_host": self.vts_host,
                 "vts_port": self.vts_port,
             }
@@ -448,23 +448,6 @@ class VTSProvider(BaseAvatarProvider):
                     return hotkey.get("hotkeyID")
 
         return None
-
-    # ==================== 向后兼容方法 ====================
-
-    @property
-    def _is_connected_and_authenticated(self) -> bool:
-        """向后兼容的属性"""
-        return self._is_connected
-
-    # ==================== 旧的连接管理方法（向后兼容） ====================
-
-    async def connect(self):
-        """启动VTS连接和认证（向后兼容方法）"""
-        await self._connect()
-
-    async def disconnect(self):
-        """断开VTS连接（向后兼容方法）"""
-        await self._disconnect()
 
     # ==================== 热键管理 ====================
 

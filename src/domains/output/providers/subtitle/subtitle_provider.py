@@ -318,12 +318,12 @@ class SubtitleOutputProvider(OutputProvider):
         self.is_running = True
         self.is_visible = False
 
-    async def _start_internal(self):
-        """内部启动 - 基类已订阅 OUTPUT_INTENT 事件"""
+    async def init(self):
+        """初始化 Provider"""
 
-    async def _render_internal(self, intent: "Intent"):
+    async def execute(self, intent: "Intent"):
         """
-        内部渲染逻辑
+        执行意图
 
         Args:
             intent: 决策意图，包含response_text(文本内容)
@@ -340,8 +340,8 @@ class SubtitleOutputProvider(OutputProvider):
         except Exception as e:
             self.logger.error(f"放入字幕队列时出错: {e}", exc_info=True)
 
-    async def _stop_internal(self):
-        """内部停止"""
+    async def cleanup(self):
+        """清理资源"""
         self.logger.info("正在清理 SubtitleOutputProvider...")
         self.is_running = False
 

@@ -59,7 +59,7 @@ class ConsoleInputProvider(InputProvider):
 
         self.logger.info(f"ConsoleInputProvider初始化完成 (user: {self.user_nickname})")
 
-    async def start(self) -> AsyncIterator[NormalizedMessage]:
+    async def generate(self) -> AsyncIterator[NormalizedMessage]:
         """
         启动控制台输入，直接返回 NormalizedMessage 流
 
@@ -72,7 +72,6 @@ class ConsoleInputProvider(InputProvider):
         Yields:
             NormalizedMessage: 标准化消息
         """
-        await self._setup_internal()
         self.is_running = True
 
         try:
@@ -121,7 +120,6 @@ class ConsoleInputProvider(InputProvider):
 
         finally:
             self.is_running = False
-            await self._cleanup_internal()
 
     async def stop(self):
         """停止输入"""

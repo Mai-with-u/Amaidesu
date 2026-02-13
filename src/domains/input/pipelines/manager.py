@@ -759,19 +759,10 @@ class InputPipelineManager:
             - 示例：限流、相似文本过滤、敏感词过滤
 
         配置格式：
-            新格式（推荐）：
             ```toml
             [pipelines.rate_limit]
             input.priority = 100    # input. 前缀
             input.enabled = true
-            global_rate_limit = 100
-            ```
-
-            旧格式（向后兼容）：
-            ```toml
-            [pipelines.rate_limit]
-            priority = 100          # 无前缀
-            enabled = true
             global_rate_limit = 100
             ```
 
@@ -802,7 +793,6 @@ class InputPipelineManager:
             if not isinstance(pipeline_global_settings, dict):
                 continue
 
-            # ========== 向后兼容逻辑 ==========
             # 检查是否有 input 子配置（新格式）
             if "input" in pipeline_global_settings:
                 # 新格式：[pipelines.xxx.input.priority]
@@ -816,13 +806,8 @@ class InputPipelineManager:
                     k: v for k, v in input_settings.items() if k not in ["priority", "enabled"]
                 }
             else:
-                # 旧格式（向后兼容）：[pipelines.xxx.priority]
-                priority = pipeline_global_settings.get("priority")
-                enabled = pipeline_global_settings.get("enabled", True)
-                # 提取顶层配置中的其他参数作为全局覆盖
-                global_override_config = {
-                    k: v for k, v in pipeline_global_settings.items() if k not in ["priority", "enabled"]
-                }
+                # 未找到有效配置，跳过
+                continue
 
             if not isinstance(priority, int):
                 continue
@@ -830,7 +815,6 @@ class InputPipelineManager:
             if not enabled:
                 self.logger.debug(f"MessagePipeline '{pipeline_name_snake}' 已禁用，跳过加载。")
                 continue
-            # ========== 向后兼容逻辑结束 ==========
 
             pipeline_package_path = os.path.join(pipeline_dir_abs, pipeline_name_snake)
 

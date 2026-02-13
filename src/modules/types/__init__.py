@@ -10,10 +10,7 @@ from .intent import (
     IntentAction,
     SourceContext,
 )
-from .render_parameters import (
-    ExpressionParameters,
-    RenderParameters,
-)
+from .render_parameters import ExpressionParameters
 
 __all__ = [
     "EmotionType",
@@ -22,5 +19,4 @@ __all__ = [
     "SourceContext",
     "Intent",
     "ExpressionParameters",
-    "RenderParameters",
 ]

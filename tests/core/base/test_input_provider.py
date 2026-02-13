@@ -17,7 +17,6 @@ import pytest
 
 from src.modules.types.base.input_provider import InputProvider
 from src.modules.types.base.normalized_message import NormalizedMessage
-from src.domains.input.normalization.content import TextContent
 
 # =============================================================================
 # 测试用的 InputProvider 实现
@@ -40,34 +39,30 @@ class MockInputProvider(InputProvider):
         self.collected_count = 0
         self.cleanup_called = False
 
-    async def start(self) -> AsyncIterator[NormalizedMessage]:
+    async def generate(self) -> AsyncIterator[NormalizedMessage]:
         """
-        启动 Provider 并返回 NormalizedMessage 流
+        生成 NormalizedMessage 数据流
         """
-        await self._setup_internal()
-        self.is_running = True
+        max_items = 3 if self.auto_stop else 10
 
-        try:
-            max_items = 3 if self.auto_stop else 10
-
-            for i in range(max_items):
-                self.collected_count += 1
-                content = TextContent(text=f"测试消息 {i}", user="MockUser", user_id="mock_id")
-                yield NormalizedMessage(
-                    text=content.text,
-                    content=content,
-                    source="mock",
-                    data_type=content.type,
-                    importance=content.get_importance(),
-                )
-                await asyncio.sleep(0.01)  # 模拟异步操作
-        finally:
-            self.is_running = False
-            await self._cleanup_internal()
+        for i in range(max_items):
+            self.collected_count += 1
+            yield NormalizedMessage(
+                text=f"测试消息 {i}",
+                source="mock",
+                data_type="text",
+                importance=0.5,
+                raw={"user": "MockUser", "user_id": "mock_id"},
+            )
+            await asyncio.sleep(0.01)  # 模拟异步操作
 
     async def _cleanup_internal(self):
         """模拟清理资源"""
         self.cleanup_called = True
+
+    async def cleanup(self) -> None:
+        """重写 cleanup 方法以调用 _cleanup_internal"""
+        await self._cleanup_internal()
 
 
 class IncompleteInputProvider(InputProvider):

@@ -17,7 +17,6 @@ import pytest
 import src.domains.decision.providers  # noqa: F401
 from src.modules.types import Intent
 from src.domains.decision.provider_manager import DecisionProviderManager
-from src.domains.input.normalization.content.base import StructuredContent
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import MessageReadyPayload
@@ -45,11 +44,9 @@ class MockDecisionProviderForManager(DecisionProvider):
         self.call_count = 0
         self.last_message = None
 
-    async def setup(self, event_bus, config, dependencies):
-        """Setup method"""
+    async def init(self):
+        """Init method"""
         self.setup_called = True
-        self.event_bus = event_bus
-        self.config = config
 
     async def cleanup(self):
         """Cleanup method"""
@@ -90,13 +87,13 @@ class MockDecisionProviderForManager(DecisionProvider):
 
 
 class FailingMockDecisionProvider(DecisionProvider):
-    """Mock provider that fails during setup"""
+    """Mock provider that fails during init"""
 
     def __init__(self, config: Dict[str, Any] = None):
         super().__init__(config or {})
 
-    async def setup(self, event_bus, config, dependencies):
-        raise ConnectionError("Setup failed")
+    async def init(self):
+        raise ConnectionError("Init failed")
 
     async def cleanup(self):
         pass
@@ -117,7 +114,7 @@ class NoneReturningMockProvider(DecisionProvider):
     def __init__(self, config: Dict[str, Any] = None):
         super().__init__(config or {})
 
-    async def setup(self, event_bus, config, dependencies):
+    async def init(self):
         pass
 
     async def cleanup(self):
@@ -125,36 +122,6 @@ class NoneReturningMockProvider(DecisionProvider):
 
     async def decide(self, message):
         return None
-
-
-# =============================================================================
-# Test Content（用于 NormalizedMessage）
-# =============================================================================
-
-
-class MockStructuredContent(StructuredContent):
-    """Mock structured content for testing"""
-
-    def __init__(self, text: str, content_type: str = "text"):
-        self._text = text
-        self._type = content_type
-        self._data = {"text": text}
-
-    def get_display_text(self) -> str:
-        return self._text
-
-    def get_user_id(self) -> str:
-        return "test_user_123"
-
-    def get_importance(self) -> float:
-        return 0.5
-
-    def to_dict(self) -> Dict[str, Any]:
-        return self._data
-
-    @property
-    def type(self) -> str:
-        return self._type
 
 
 # =============================================================================
@@ -178,14 +145,11 @@ def mock_provider_class():
 @pytest.fixture
 def sample_normalized_message():
     """创建示例 NormalizedMessage"""
-    content = MockStructuredContent("测试消息")
     return NormalizedMessage(
         text="测试消息",
-        content=content,
         source="test_source",
         data_type="text",
         importance=0.5,
-        metadata={"user_id": "test_user_123"},
     )
 
 
@@ -776,7 +740,7 @@ async def test_cleanup_handles_provider_error(event_bus, mock_provider_class):
         def __init__(self, config: Dict[str, Any] = None):
             super().__init__(config or {})
 
-        async def setup(self, event_bus, config, dependencies):
+        async def init(self):
             pass
 
         async def cleanup(self):
@@ -970,14 +934,11 @@ async def test_provider_returns_none_from_decide(event_bus):
     manager = DecisionManager(event_bus)
     await manager.setup("none_provider", {})
 
-    content = MockStructuredContent("测试")
     message = NormalizedMessage(
         text="测试",
-        content=content,
         source="test",
         data_type="text",
         importance=0.5,
-        metadata={},
     )
 
     # decide 返回 None，但不会抛出异常
@@ -995,14 +956,11 @@ async def test_empty_normalized_message_text(decision_manager_with_mock):
     """测试空文本的 NormalizedMessage"""
     manager = decision_manager_with_mock
 
-    content = MockStructuredContent("")
     message = NormalizedMessage(
         text="",
-        content=content,
         source="test",
         data_type="text",
         importance=0.0,
-        metadata={},
     )
 
     result = await manager.decide(message)
@@ -1017,14 +975,11 @@ async def test_very_long_message_text(decision_manager_with_mock):
     manager = decision_manager_with_mock
 
     long_text = "测试" * 10000  # 40000 个字符
-    content = MockStructuredContent(long_text)
     message = NormalizedMessage(
         text=long_text,
-        content=content,
         source="test",
         data_type="text",
         importance=0.5,
-        metadata={},
     )
 
     result = await manager.decide(message)

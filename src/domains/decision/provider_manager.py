@@ -157,7 +157,7 @@ class DecisionProviderManager:
                     dependencies["config_service"] = self._config_service
                 if self._context_service:
                     dependencies["context_service"] = self._context_service
-                await self._current_provider.setup(self.event_bus, provider_config, dependencies)
+                await self._current_provider.start(self.event_bus, provider_config, dependencies)
                 self.logger.info(f"DecisionProvider '{provider_name}' 初始化成功")
 
                 # 发布Provider连接事件（使用emit）
@@ -241,7 +241,7 @@ class DecisionProviderManager:
 
                 # 设置新Provider
                 try:
-                    await new_provider.setup(self.event_bus, config, {})
+                    await new_provider.start(self.event_bus, config, {})
                     self.logger.info(f"DecisionProvider '{provider_name}' 初始化成功")
                 except Exception as e:
                     self.logger.error(f"DecisionProvider '{provider_name}' setup 失败: {e}", exc_info=True)
@@ -369,50 +369,6 @@ class DecisionProviderManager:
 
         registered = ProviderRegistry.get_registered_decision_providers()
         self.logger.debug(f"已注册的 DecisionProvider: {registered}")
-
-    async def set_active_provider(self, provider_name: str, config: Optional[Dict[str, Any]] = None) -> None:
-        """
-        运行时切换活跃的DecisionProvider（便捷方法）
-
-        这是 switch_provider 的别名，提供更直观的命名。
-
-        Args:
-            provider_name: 新Provider名称
-            config: 可选的Provider配置
-
-        Raises:
-            ValueError: 如果Provider未注册
-            ConnectionError: 如果Provider初始化失败
-        """
-        if config is None:
-            config = {}
-        await self.switch_provider(provider_name, config)
-
-    def get_active_provider(self) -> Optional["DecisionProvider"]:
-        """
-        获取当前活跃的Provider实例（便捷方法）
-
-        Returns:
-            当前Provider实例，如果未设置则返回None
-        """
-        return self._current_provider
-
-    async def make_decision(self, normalized_message: "NormalizedMessage") -> "Intent":
-        """
-        使用当前活跃Provider进行决策（便捷方法）
-
-        这是 decide 的别名，提供更直观的命名。
-
-        Args:
-            normalized_message: 标准化消息
-
-        Returns:
-            Intent: 决策意图
-
-        Raises:
-            RuntimeError: 如果当前Provider未设置
-        """
-        return await self.decide(normalized_message)
 
     # =========================================================================
     # 事件处理（原 DecisionCoordinator 功能）

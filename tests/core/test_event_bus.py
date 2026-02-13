@@ -66,11 +66,11 @@ async def test_on_register_handler(event_bus: EventBus):
     """测试注册事件处理器"""
     call_count = 0
 
-    async def test_handler(event_name, data, source):
+    async def test_handler(event_name, payload: SimpleTestEvent, source: str):
         nonlocal call_count
         call_count += 1
 
-    event_bus.on("test.event", test_handler)
+    event_bus.on("test.event", test_handler, SimpleTestEvent)
     assert event_bus.get_listeners_count("test.event") == 1
 
 
@@ -80,14 +80,14 @@ async def test_on_multiple_handlers(event_bus: EventBus):
     handler1_calls = []
     handler2_calls = []
 
-    async def handler1(event_name, data, source):
+    async def handler1(event_name, payload: SimpleTestEvent, source: str):
         handler1_calls.append(1)
 
-    async def handler2(event_name, data, source):
+    async def handler2(event_name, payload: SimpleTestEvent, source: str):
         handler2_calls.append(2)
 
-    event_bus.on("test.event", handler1)
-    event_bus.on("test.event", handler2)
+    event_bus.on("test.event", handler1, SimpleTestEvent)
+    event_bus.on("test.event", handler2, SimpleTestEvent)
 
     assert event_bus.get_listeners_count("test.event") == 2
 
@@ -105,11 +105,11 @@ async def test_off_remove_handler(event_bus: EventBus):
     """测试取消订阅"""
     call_count = 0
 
-    async def test_handler(event_name, data, source):
+    async def test_handler(event_name, payload: SimpleTestEvent, source: str):
         nonlocal call_count
         call_count += 1
 
-    event_bus.on("test.event", test_handler)
+    event_bus.on("test.event", test_handler, SimpleTestEvent)
     assert event_bus.get_listeners_count("test.event") == 1
 
     event_bus.off("test.event", test_handler)
@@ -126,14 +126,14 @@ async def test_off_remove_handler(event_bus: EventBus):
 async def test_off_non_existent_handler(event_bus: EventBus):
     """测试移除不存在的处理器（不应报错）"""
 
-    async def test_handler(event_name, data, source):
+    async def test_handler(event_name, payload: SimpleTestEvent, source: str):
         pass
 
-    event_bus.on("test.event", test_handler)
+    event_bus.on("test.event", test_handler, SimpleTestEvent)
     initial_count = event_bus.get_listeners_count("test.event")
 
     # 尝试移除未注册的处理器
-    async def another_handler(event_name, data, source):
+    async def another_handler(event_name, payload: SimpleTestEvent, source: str):
         pass
 
     event_bus.off("test.event", another_handler)
@@ -146,10 +146,10 @@ async def test_off_non_existent_handler(event_bus: EventBus):
 async def test_off_removes_event_entry_when_empty(event_bus: EventBus):
     """测试移除最后一个处理器后删除事件条目"""
 
-    async def test_handler(event_name, data, source):
+    async def test_handler(event_name, payload: SimpleTestEvent, source: str):
         pass
 
-    event_bus.on("test.event", test_handler)
+    event_bus.on("test.event", test_handler, SimpleTestEvent)
     assert "test.event" in event_bus.list_events()
 
     event_bus.off("test.event", test_handler)
@@ -166,16 +166,16 @@ async def test_emit_dict_data(event_bus: EventBus):
     """测试发布字典格式数据"""
     received_data = []
 
-    async def handler(event_name, data, source):
-        received_data.append(data)
+    async def handler(event_name, payload: SimpleTestEvent, source: str):
+        received_data.append(payload)
 
-    event_bus.on("test.event", handler)
+    event_bus.on("test.event", handler, SimpleTestEvent)
     await event_bus.emit("test.event", SimpleTestEvent(message="hello"), source="test")
 
     await asyncio.sleep(0.1)
 
     assert len(received_data) == 1
-    assert received_data[0]["message"] == "hello"
+    assert received_data[0].message == "hello"
 
 
 @pytest.mark.asyncio
@@ -191,10 +191,10 @@ async def test_emit_with_sync_handler(event_bus: EventBus):
     """测试同步处理器在事件总线中的执行"""
     result = []
 
-    def sync_handler(event_name, data, source):
+    def sync_handler(event_name, payload: SimpleTestEvent, source: str):
         result.append("sync")
 
-    event_bus.on("test.event", sync_handler)
+    event_bus.on("test.event", sync_handler, SimpleTestEvent)
     await event_bus.emit("test.event", SimpleTestEvent(message="test"), source="test")
 
     await asyncio.sleep(0.1)
@@ -208,11 +208,11 @@ async def test_emit_async_handler(event_bus: EventBus):
     """测试异步处理器在事件总线中的执行"""
     result = []
 
-    async def async_handler(event_name, data, source):
+    async def async_handler(event_name, payload: SimpleTestEvent, source: str):
         await asyncio.sleep(0.01)
         result.append("async")
 
-    event_bus.on("test.event", async_handler)
+    event_bus.on("test.event", async_handler, SimpleTestEvent)
     await event_bus.emit("test.event", SimpleTestEvent(message="test"), source="test")
 
     await asyncio.sleep(0.1)
@@ -226,10 +226,10 @@ async def test_emit_with_pydantic_model(event_bus: EventBus, sample_event_model)
     """测试使用 emit 发布 Pydantic Model"""
     received_data = []
 
-    async def handler(event_name, data, source):
-        received_data.append(data)
+    async def handler(event_name, payload: sample_event_model, source: str):
+        received_data.append(payload)
 
-    event_bus.on("test.event", handler)
+    event_bus.on("test.event", handler, sample_event_model)
 
     # 创建 Pydantic Model 实例
     event_data = sample_event_model(message="test message", count=42)
@@ -238,8 +238,8 @@ async def test_emit_with_pydantic_model(event_bus: EventBus, sample_event_model)
     await asyncio.sleep(0.1)
 
     assert len(received_data) == 1
-    assert received_data[0]["message"] == "test message"
-    assert received_data[0]["count"] == 42
+    assert received_data[0].message == "test message"
+    assert received_data[0].count == 42
 
 
 @pytest.mark.asyncio
@@ -247,27 +247,18 @@ async def test_emit_with_dict_and_pydantic_model(event_bus: EventBus, sample_eve
     """测试 emit 既支持 dict 也支持 Pydantic Model"""
     received_data = []
 
-    async def handler(event_name, data, source):
-        received_data.append(data)
+    async def handler(event_name, payload: sample_event_model, source: str):
+        received_data.append(payload)
 
-    event_bus.on("test.event", handler)
+    event_bus.on("test.event", handler, sample_event_model)
 
-    # 测试使用 dict（向后兼容）
-    await event_bus.emit("test.event", SimpleTestEvent(message="dict test", count=1), source="test")
-    await asyncio.sleep(0.1)
-    assert len(received_data) == 1
-    assert received_data[0]["message"] == "dict test"
-
-    # 清空数据
-    received_data.clear()
-
-    # 测试使用 Pydantic Model（推荐）
+    # 测试使用 Pydantic Model
     event_data = sample_event_model(message="model test", count=2)
     await event_bus.emit("test.event", event_data, source="test")
     await asyncio.sleep(0.1)
     assert len(received_data) == 1
-    assert received_data[0]["message"] == "model test"
-    assert received_data[0]["count"] == 2
+    assert received_data[0].message == "model test"
+    assert received_data[0].count == 2
 
 
 @pytest.mark.asyncio
@@ -275,12 +266,12 @@ async def test_event_validation_with_registered_event(event_bus: EventBus):
     """测试已注册事件的验证功能"""
     received_data = []
 
-    async def handler(event_name, data, source):
-        received_data.append(data)
+    async def handler(event_name, payload: RawDataPayload, source: str):
+        received_data.append(payload)
 
     # 注册核心事件（必须以 core. 开头）
     EventRegistry.register_core_event("core.test.validation.event", RawDataPayload)
-    event_bus.on("core.test.validation.event", handler)
+    event_bus.on("core.test.validation.event", handler, RawDataPayload)
 
     # 发布符合验证的数据（使用 Payload 类）
     valid_data = RawDataPayload(content="test content", source="test_source", data_type="text")
@@ -288,7 +279,7 @@ async def test_event_validation_with_registered_event(event_bus: EventBus):
     await asyncio.sleep(0.1)
 
     assert len(received_data) == 1
-    assert received_data[0]["content"] == "test content"
+    assert received_data[0].content == "test content"
 
     # 清理
     EventRegistry._core_events.pop("core.test.validation.event", None)
@@ -304,19 +295,19 @@ async def test_priority_execution_order(event_bus: EventBus):
     """测试处理器按优先级顺序执行"""
     execution_order = []
 
-    async def high_priority_handler(event_name, data, source):
+    async def high_priority_handler(event_name, payload: SimpleTestEvent, source: str):
         execution_order.append("high")
 
-    async def medium_priority_handler(event_name, data, source):
+    async def medium_priority_handler(event_name, payload: SimpleTestEvent, source: str):
         execution_order.append("medium")
 
-    async def low_priority_handler(event_name, data, source):
+    async def low_priority_handler(event_name, payload: SimpleTestEvent, source: str):
         execution_order.append("low")
 
     # 以不同顺序注册（priority 数值越小越优先）
-    event_bus.on("test.event", medium_priority_handler, priority=50)
-    event_bus.on("test.event", high_priority_handler, priority=10)
-    event_bus.on("test.event", low_priority_handler, priority=100)
+    event_bus.on("test.event", medium_priority_handler, SimpleTestEvent, priority=50)
+    event_bus.on("test.event", high_priority_handler, SimpleTestEvent, priority=10)
+    event_bus.on("test.event", low_priority_handler, SimpleTestEvent, priority=100)
 
     await event_bus.emit("test.event", SimpleTestEvent(message="test"), source="test")
     await asyncio.sleep(0.1)
@@ -330,19 +321,19 @@ async def test_same_priority_registration_order(event_bus: EventBus):
     """测试同优先级按注册顺序执行"""
     execution_order = []
 
-    async def handler1(event_name, data, source):
+    async def handler1(event_name, payload: SimpleTestEvent, source: str):
         execution_order.append("handler1")
 
-    async def handler2(event_name, data, source):
+    async def handler2(event_name, payload: SimpleTestEvent, source: str):
         execution_order.append("handler2")
 
-    async def handler3(event_name, data, source):
+    async def handler3(event_name, payload: SimpleTestEvent, source: str):
         execution_order.append("handler3")
 
     # 同优先级，按注册顺序
-    event_bus.on("test.event", handler1, priority=50)
-    event_bus.on("test.event", handler2, priority=50)
-    event_bus.on("test.event", handler3, priority=50)
+    event_bus.on("test.event", handler1, SimpleTestEvent, priority=50)
+    event_bus.on("test.event", handler2, SimpleTestEvent, priority=50)
+    event_bus.on("test.event", handler3, SimpleTestEvent, priority=50)
 
     await event_bus.emit("test.event", SimpleTestEvent(message="test"), source="test")
     await asyncio.sleep(0.1)
@@ -355,14 +346,14 @@ async def test_default_priority(event_bus: EventBus):
     """测试默认优先级为 100"""
     execution_order = []
 
-    async def default_handler(event_name, data, source):
+    async def default_handler(event_name, payload: SimpleTestEvent, source: str):
         execution_order.append("default")
 
-    async def high_priority_handler(event_name, data, source):
+    async def high_priority_handler(event_name, payload: SimpleTestEvent, source: str):
         execution_order.append("high")
 
-    event_bus.on("test.event", default_handler)  # 默认 priority=100
-    event_bus.on("test.event", high_priority_handler, priority=50)
+    event_bus.on("test.event", default_handler, SimpleTestEvent)  # 默认 priority=100
+    event_bus.on("test.event", high_priority_handler, SimpleTestEvent, priority=50)
 
     await event_bus.emit("test.event", SimpleTestEvent(message="test"), source="test")
     await asyncio.sleep(0.1)
@@ -381,15 +372,15 @@ async def test_error_isolation_one_handler_fails(event_bus: EventBus):
     """测试单个处理器失败不影响其他处理器"""
     results = []
 
-    async def failing_handler(event_name, data, source):
+    async def failing_handler(event_name, payload: SimpleTestEvent, source: str):
         results.append("before_error")
         raise ValueError("Test error")
 
-    async def normal_handler(event_name, data, source):
+    async def normal_handler(event_name, payload: SimpleTestEvent, source: str):
         results.append("normal")
 
-    event_bus.on("test.event", failing_handler, priority=10)
-    event_bus.on("test.event", normal_handler, priority=20)
+    event_bus.on("test.event", failing_handler, SimpleTestEvent, priority=10)
+    event_bus.on("test.event", normal_handler, SimpleTestEvent, priority=20)
 
     await event_bus.emit("test.event", SimpleTestEvent(message="test"), source="test", error_isolate=True)
     await asyncio.sleep(0.1)
@@ -406,10 +397,10 @@ async def test_error_isolation_false_propagates_error(event_bus: EventBus):
     # 错误也会被 asyncio.gather(return_exceptions=True) 捕获
     # 所以这个测试验证的是在 gather 之后的错误处理行为
 
-    async def failing_handler(event_name, data, source):
+    async def failing_handler(event_name, payload: SimpleTestEvent, source: str):
         raise ValueError("Test error")
 
-    event_bus.on("test.event", failing_handler)
+    event_bus.on("test.event", failing_handler, SimpleTestEvent)
 
     # 由于 asyncio.gather 使用 return_exceptions=True，
     # 错误不会直接传播，但会被记录到 handler wrapper 中
@@ -427,10 +418,10 @@ async def test_error_isolation_false_propagates_error(event_bus: EventBus):
 async def test_error_count_incremented(event_bus: EventBus):
     """测试处理器包装器的错误计数递增"""
 
-    async def failing_handler(event_name, data, source):
+    async def failing_handler(event_name, payload: SimpleTestEvent, source: str):
         raise ValueError("Test error")
 
-    event_bus.on("test.event", failing_handler, priority=10)
+    event_bus.on("test.event", failing_handler, SimpleTestEvent, priority=10)
 
     # 获取 handler wrapper
     handlers = event_bus._handlers.get("test.event", [])
@@ -448,10 +439,10 @@ async def test_error_count_incremented(event_bus: EventBus):
 async def test_error_stats_updated(event_bus: EventBus):
     """测试事件统计中的错误计数更新"""
 
-    async def failing_handler(event_name, data, source):
+    async def failing_handler(event_name, payload: SimpleTestEvent, source: str):
         raise ValueError("Test error")
 
-    event_bus.on("test.event", failing_handler)
+    event_bus.on("test.event", failing_handler, SimpleTestEvent)
 
     await event_bus.emit("test.event", SimpleTestEvent(message="test"), source="test", error_isolate=True)
     await asyncio.sleep(0.1)
@@ -471,14 +462,14 @@ async def test_error_stats_updated(event_bus: EventBus):
 async def test_clear_removes_all_handlers(event_bus: EventBus):
     """测试 clear() 清除所有处理器"""
 
-    async def handler1(event_name, data, source):
+    async def handler1(event_name, payload: SimpleTestEvent, source: str):
         pass
 
-    async def handler2(event_name, data, source):
+    async def handler2(event_name, payload: SimpleTestEvent, source: str):
         pass
 
-    event_bus.on("event1", handler1)
-    event_bus.on("event2", handler2)
+    event_bus.on("event1", handler1, SimpleTestEvent)
+    event_bus.on("event2", handler2, SimpleTestEvent)
 
     assert event_bus.get_listeners_count("event1") == 1
     assert event_bus.get_listeners_count("event2") == 1
@@ -499,18 +490,18 @@ async def test_clear_removes_all_handlers(event_bus: EventBus):
 async def test_get_listeners_count(event_bus: EventBus):
     """测试获取监听器数量"""
 
-    async def handler1(event_name, data, source):
+    async def handler1(event_name, payload: SimpleTestEvent, source: str):
         pass
 
-    async def handler2(event_name, data, source):
+    async def handler2(event_name, payload: SimpleTestEvent, source: str):
         pass
 
     assert event_bus.get_listeners_count("test.event") == 0
 
-    event_bus.on("test.event", handler1)
+    event_bus.on("test.event", handler1, SimpleTestEvent)
     assert event_bus.get_listeners_count("test.event") == 1
 
-    event_bus.on("test.event", handler2)
+    event_bus.on("test.event", handler2, SimpleTestEvent)
     assert event_bus.get_listeners_count("test.event") == 2
 
 
@@ -518,12 +509,12 @@ async def test_get_listeners_count(event_bus: EventBus):
 async def test_list_events(event_bus: EventBus):
     """测试列出所有已注册的事件"""
 
-    async def handler(event_name, data, source):
+    async def handler(event_name, payload: SimpleTestEvent, source: str):
         pass
 
-    event_bus.on("event1", handler)
-    event_bus.on("event2", handler)
-    event_bus.on("event3", handler)
+    event_bus.on("event1", handler, SimpleTestEvent)
+    event_bus.on("event2", handler, SimpleTestEvent)
+    event_bus.on("event3", handler, SimpleTestEvent)
 
     events = event_bus.list_events()
     assert len(events) == 3
@@ -542,11 +533,11 @@ async def test_concurrent_emits(event_bus: EventBus):
     """测试并发发布多个事件"""
     results = []
 
-    async def handler(event_name, data, source):
+    async def handler(event_name, payload: SimpleTestEvent, source: str):
         results.append(event_name)
         await asyncio.sleep(0.01)
 
-    event_bus.on("test.event", handler)
+    event_bus.on("test.event", handler, SimpleTestEvent)
 
     # 并发发布 10 个事件
     tasks = [event_bus.emit("test.event", SimpleTestEvent(id=i), source="test") for i in range(10)]
@@ -562,24 +553,24 @@ async def test_concurrent_handlers(event_bus: EventBus):
     execution_order = []
     delays = []
 
-    async def handler1(event_name, data, source):
+    async def handler1(event_name, payload: SimpleTestEvent, source: str):
         delays.append(0.05)
         await asyncio.sleep(0.05)
         execution_order.append("handler1")
 
-    async def handler2(event_name, data, source):
+    async def handler2(event_name, payload: SimpleTestEvent, source: str):
         delays.append(0.02)
         await asyncio.sleep(0.02)
         execution_order.append("handler2")
 
-    async def handler3(event_name, data, source):
+    async def handler3(event_name, payload: SimpleTestEvent, source: str):
         delays.append(0.01)
         await asyncio.sleep(0.01)
         execution_order.append("handler3")
 
-    event_bus.on("test.event", handler1)
-    event_bus.on("test.event", handler2)
-    event_bus.on("test.event", handler3)
+    event_bus.on("test.event", handler1, SimpleTestEvent)
+    event_bus.on("test.event", handler2, SimpleTestEvent)
+    event_bus.on("test.event", handler3, SimpleTestEvent)
 
     await event_bus.emit("test.event", SimpleTestEvent(message="test"), source="test")
     await asyncio.sleep(0.1)
@@ -600,10 +591,10 @@ async def test_concurrent_handlers(event_bus: EventBus):
 async def test_empty_event_name(event_bus: EventBus):
     """测试空事件名称"""
 
-    async def handler(event_name, data, source):
+    async def handler(event_name, payload: SimpleTestEvent, source: str):
         pass
 
-    event_bus.on("", handler)
+    event_bus.on("", handler, SimpleTestEvent)
     assert event_bus.get_listeners_count("") == 1
 
     await event_bus.emit("", SimpleTestEvent(message="test"), source="test")

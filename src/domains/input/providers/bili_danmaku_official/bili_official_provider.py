@@ -89,9 +89,8 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
                     "BiliDanmakuOfficial 配置启用了 template_info，但在 config.toml 中未找到 template_items。"
                 )
 
-    async def start(self) -> AsyncIterator[NormalizedMessage]:
+    async def generate(self) -> AsyncIterator[NormalizedMessage]:
         """采集弹幕数据"""
-        await self._setup_internal()
         self.is_running = True
 
         # 创建队列用于接收消息
@@ -140,7 +139,6 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
                 await ws_task
             except asyncio.CancelledError:
                 pass
-            await self._cleanup_internal()
             self.logger.info("Bilibili 官方弹幕采集已停止")
 
     async def _run_websocket(self, message_queue: asyncio.Queue):
@@ -289,7 +287,7 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
         paid_bonus = 0.1 if msg.paid else 0
         return min(base + quantity_bonus + paid_bonus, 1.0)
 
-    async def _cleanup_internal(self):
+    async def cleanup(self):
         """清理资源"""
         # 清理WebSocket客户端
         if self.websocket_client:

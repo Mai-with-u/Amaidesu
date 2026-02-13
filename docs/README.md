@@ -19,6 +19,18 @@
 - [提示词管理](development/prompt-management.md) - PromptManager 使用
 - [测试规范](development/testing-guide.md) - 测试编写规范
 
+### 核心模块
+- [事件系统](modules/events.md) - EventBus 事件总线
+- [配置管理](modules/config.md) - 配置加载和验证
+- [对话上下文](modules/context.md) - 会话管理和历史
+- [LLM 客户端](modules/llm.md) - 大语言模型调用
+- [日志系统](modules/logging.md) - 统一日志配置
+- [提示词管理](modules/prompts.md) - PromptManager 使用
+- [音频流传输](modules/streaming.md) - 音频数据传输
+- [TTS 服务](modules/tts.md) - 语音合成管理
+- [核心类型](modules/types.md) - 共享类型定义
+- [Provider 注册表](modules/registry.md) - Provider 注册
+
 ### API 参考
 - [InputProvider API](api/input_provider.md)
 - [OutputProvider API](api/output_provider.md)
@@ -29,12 +41,6 @@
 ### 工具和验证
 - [架构验证器](architecture/architectural-validator.md) - 运行时架构约束验证
 - [人工测试需求](development/manual-testing-requirements.md) - 需要真实环境测试的组件
-
-### 历史归档
-- [配置迁移指南](archive/CONFIG_UPGRADE_GUIDE.md) - 旧配置系统迁移（历史参考）
-- [E2E测试缺口分析](archive/VTUBER_FLOW_E2E_GAP_ANALYSIS.md) - E2E测试分析（历史参考）
-- [Git历史重组计划](archive/git-history-squash-plan.md) - Git历史整理计划（历史参考）
-- [重构优化分析](archive/refactor-optimization-analysis.md) - 已完成的重构项记录
 
 ## 🎯 按需求查找
 
@@ -74,18 +80,27 @@ docs/
 │   ├── prompt-management.md           # 提示词管理
 │   ├── testing-guide.md               # 测试规范
 │   └── manual-testing-requirements.md # 人工测试需求
+├── modules/                           # 核心模块文档
+│   ├── events.md                      # 事件系统
+│   ├── config.md                      # 配置管理
+│   ├── context.md                     # 对话上下文
+│   ├── llm.md                        # LLM 客户端
+│   ├── logging.md                    # 日志系统
+│   ├── prompts.md                     # 提示词管理
+│   ├── streaming.md                   # 音频流传输
+│   ├── tts.md                        # TTS 服务
+│   ├── types.md                      # 核心类型
+│   └── registry.md                   # Provider 注册表
 ├── api/                               # API 参考
 │   ├── input_provider.md
 │   ├── output_provider.md
 │   ├── decision_provider.md
 │   ├── event_bus.md
 │   └── maibot_action_integration.md
-└── archive/                           # 历史归档
-    ├── CONFIG_UPGRADE_GUIDE.md
-    ├── VTUBER_FLOW_E2E_GAP_ANALYSIS.md
-    ├── git-history-squash-plan.md
-    └── refactor-optimization-analysis.md
+└── configuration/                      # 配置示例
+    └── examples.md
 ```
+
 
 ## 🚀 快速开始
 
@@ -213,7 +228,6 @@ src/
 ## 🔗 相关链接
 
 - **AGENTS.md** - 给 AI 代理的完整指南（项目根目录）
-- **refactor/design/** - 架构设计文档
 - **CLAUDE.md** - Claude Code 专属规则
 
 ---

@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from src.domains.output.parameters.render_parameters import RenderParameters
+from src.modules.types import ExpressionParameters as RenderParameters
 from src.domains.output.provider_manager import OutputProviderManager
 from src.modules.events.event_bus import EventBus
 from tests.mocks.mock_output_provider import MockOutputProvider
@@ -40,17 +40,17 @@ class FailingMockOutputProvider(MockOutputProvider):
         self.should_fail_on_render = False
         self.should_fail_on_cleanup = False
 
-    async def _start_internal(self):
-        """启动（可能失败）"""
+    async def init(self):
+        """初始化（可能失败）"""
         if self.should_fail_on_setup:
             raise RuntimeError("Setup failed")
-        await super()._start_internal()
+        await super().init()
 
-    async def _render_internal(self, parameters: RenderParameters) -> bool:
-        """渲染（可能失败）"""
+    async def execute(self, intent) -> bool:
+        """执行（可能失败）"""
         if self.should_fail_on_render:
             raise RuntimeError("Render failed")
-        return await super()._render_internal(parameters)
+        return await super().execute(intent)
 
     async def cleanup(self):
         """清理（可能失败）"""
@@ -66,10 +66,10 @@ class SlowMockOutputProvider(MockOutputProvider):
         super().__init__(config)
         self.delay_seconds = config.get("delay_seconds", 0.1) if config else 0.1
 
-    async def _render_internal(self, parameters: RenderParameters) -> bool:
-        """渲染（延迟）"""
+    async def execute(self, intent) -> bool:
+        """执行（延迟）"""
         await asyncio.sleep(self.delay_seconds)
-        return await super()._render_internal(parameters)
+        return await super().execute(intent)
 
 
 # =============================================================================

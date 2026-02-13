@@ -15,7 +15,6 @@ from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 from src.modules.types.base.input_provider import InputProvider
 from src.modules.types.base.normalized_message import NormalizedMessage
-from src.domains.input.normalization.content import TextContent
 
 
 class MockDanmakuInputProvider(InputProvider):
@@ -66,14 +65,13 @@ class MockDanmakuInputProvider(InputProvider):
         self._current_line_index: int = 0
         self._stop_event = asyncio.Event()
 
-    async def start(self) -> AsyncIterator[NormalizedMessage]:
+    async def generate(self) -> AsyncIterator[NormalizedMessage]:
         """
         启动模拟弹幕发送循环，直接返回 NormalizedMessage 流
 
         Yields:
             NormalizedMessage: 标准化消息
         """
-        await self._setup_internal()
         self.is_running = True
 
         try:
@@ -117,14 +115,15 @@ class MockDanmakuInputProvider(InputProvider):
                     user = data.get("user", "未知用户")
                     user_id = data.get("user_id", "")
 
-                    content = TextContent(text=text, user=user, user_id=user_id)
-
                     message = NormalizedMessage(
-                        text=content.text,
-                        content=content,
+                        text=text,
                         source="mock_danmaku",
-                        data_type=content.type,
-                        importance=content.get_importance(),
+                        data_type="text",
+                        importance=0.5,
+                        raw={
+                            "user": user,
+                            "user_id": user_id,
+                        },
                     )
 
                     self.logger.debug(f"发送模拟消息 (行 {self._current_line_index}): {str(data)[:50]}...")
@@ -147,7 +146,6 @@ class MockDanmakuInputProvider(InputProvider):
 
         finally:
             self.is_running = False
-            await self._cleanup_internal()
 
     async def _load_message_lines(self):
         """从 JSONL 文件加载消息行。"""
@@ -166,7 +164,7 @@ class MockDanmakuInputProvider(InputProvider):
             self.logger.error(f"读取日志文件时出错: {self.log_file_path}: {e}", exc_info=True)
             self._message_lines = []
 
-    async def _cleanup_internal(self):
+    async def cleanup(self):
         """清理资源"""
         self._stop_event.set()
         self._message_lines = []

@@ -23,7 +23,6 @@ OutputProviderManager - Output Domain: 输出Provider管理器（重构后）
 
 import asyncio
 import os
-import warnings
 from typing import TYPE_CHECKING, Any, Optional
 
 from pydantic import BaseModel
@@ -34,10 +33,8 @@ from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
 from src.modules.types.base.output_provider import OutputProvider
 
-# 类型检查时的导入
 if TYPE_CHECKING:
     from src.modules.events.payloads import IntentPayload
-    from src.modules.types import Intent
 
 
 class RenderResult(BaseModel):
@@ -162,7 +159,7 @@ class OutputProviderManager:
             self.logger.info("配置中未启用管道功能")
 
         # 从配置加载Provider
-        await self.load_from_config(config, core=None, config_service=config_service)
+        await self.load_from_config(config, config_service=config_service)
 
         # 订阅 Decision Domain 的 Intent 事件（3域架构，类型化）
         from src.modules.events.payloads.decision import IntentPayload
@@ -317,199 +314,6 @@ class OutputProviderManager:
             setup_count = sum(1 for p in self.providers if p.is_started)
             self.logger.warning(f"部分Provider启动失败: {setup_count}/{len(self.providers)}")
 
-    async def render_all(self, intent: "Intent") -> list[RenderResult]:
-        """
-        @deprecated 此方法已废弃，新架构使用事件驱动（OUTPUT_INTENT）。
-        请勿使用此方法，它仅为向后兼容保留。
-
-        并发渲染到所有Provider
-
-        核心特性:
-        - 并发执行所有Provider的渲染（使用asyncio.gather）
-        - 超时控制（单个Provider超时不影响其他）
-        - 错误隔离（单个Provider失败不影响其他）
-
-        Args:
-            intent: Intent对象
-
-        Returns:
-            List[RenderResult]: 每个Provider的渲染结果
-        """
-        warnings.warn(
-            "render_all() 已废弃，新架构使用事件驱动。请勿直接调用此方法。",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        # 委托给实际渲染逻辑（保持向后兼容）
-        return await self._render_deprecated(intent)
-
-    async def _render_deprecated(self, intent: "Intent") -> list[RenderResult]:
-        """
-        @deprecated 内部方法，已废弃。
-        """
-        self.logger.info(f"正在渲染到 {len(self.providers)} 个Provider...")
-
-        if not self.providers:
-            self.logger.warning("没有已注册的Provider")
-            return []
-
-        # 获取已启动（is_started=True）的Provider
-        active_providers = [p for p in self.providers if p.is_started]
-        if not active_providers:
-            self.logger.warning("没有已启动的Provider（is_started=False）")
-            return []
-
-        if len(active_providers) < len(self.providers):
-            self.logger.warning(f"部分Provider未启动: {len(active_providers)}/{len(self.providers)} 已就绪")
-
-        if self.concurrent_rendering:
-            # 并发渲染：使用_safe_render包装每个Provider
-            results = await self._render_concurrent(active_providers, intent)
-        else:
-            # 串行渲染（用于调试）
-            results = await self._render_sequential(active_providers, intent)
-
-        # 记录结果
-        success_count = sum(1 for r in results if r.success)
-        timeout_count = sum(1 for r in results if r.timeout)
-        error_count = sum(1 for r in results if not r.success and not r.timeout)
-
-        self.logger.info(f"渲染完成: 成功={success_count}/{len(results)}, 超时={timeout_count}, 失败={error_count}")
-
-        return results
-
-    async def _render_concurrent(
-        self, providers: list[OutputProvider], intent: "Intent"
-    ) -> list[RenderResult]:
-        """
-        @deprecated 内部方法，已废弃。
-
-        并发渲染到多个Provider
-
-        使用asyncio.gather并发执行所有渲染任务。
-        每个任务都被_safe_render包装，提供超时和异常隔离。
-
-        Args:
-            providers: Provider列表
-            intent: Intent对象
-
-        Returns:
-            List[RenderResult]: 渲染结果列表
-        """
-        # 创建渲染任务
-        render_tasks = []
-        for provider in providers:
-            provider_name = provider.get_info()["name"]
-            task = asyncio.create_task(self._safe_render(provider, intent), name=f"render-{provider_name}")
-            render_tasks.append((provider_name, task))
-
-        # 等待所有任务完成（return_exceptions=True确保异常不会传播）
-        results = []
-        for provider_name, task in render_tasks:
-            try:
-                result = await task
-                results.append(result)
-
-                # 根据error_handling配置决定是否继续
-                if not result.success and self.error_handling == "stop":
-                    self.logger.error(f"停止渲染流程（错误处理策略: stop, 失败Provider: {provider_name}）")
-                    # 取消剩余任务
-                    for _remaining_name, remaining_task in render_tasks:
-                        if not remaining_task.done():
-                            remaining_task.cancel()
-                    break
-            except asyncio.CancelledError:
-                self.logger.debug(f"渲染任务被取消: {provider_name}")
-            except Exception as e:
-                # 理论上不应到达这里（_safe_render已捕获异常）
-                self.logger.error(f"渲染任务意外异常: {provider_name} - {e}")
-                results.append(RenderResult(provider_name=provider_name, success=False, error=str(e)))
-
-        return results
-
-    async def _render_sequential(
-        self, providers: list[OutputProvider], intent: "Intent"
-    ) -> list[RenderResult]:
-        """
-        @deprecated 内部方法，已废弃。
-
-        串行渲染到多个Provider（用于调试）
-
-        Args:
-            providers: Provider列表
-            intent: Intent对象
-
-        Returns:
-            List[RenderResult]: 渲染结果列表
-        """
-        results = []
-        for provider in providers:
-            result = await self._safe_render(provider, intent)
-            results.append(result)
-
-            # 根据error_handling配置决定是否继续
-            if not result.success and self.error_handling == "stop":
-                self.logger.error(f"停止渲染流程（错误处理策略: stop, 失败Provider: {result.provider_name}）")
-                break
-
-        return results
-
-    async def _safe_render(self, provider: OutputProvider, intent: "Intent") -> RenderResult:
-        """
-        @deprecated 内部方法，已废弃。
-
-        安全渲染到单个Provider
-
-        核心特性:
-        - 超时控制（使用asyncio.wait_for）
-        - 异常捕获（任何异常都被捕获并返回结果）
-        - 性能计时（记录渲染耗时）
-
-        Args:
-            provider: OutputProvider实例
-            intent: Intent对象
-
-        Returns:
-            RenderResult: 渲染结果
-        """
-        import time
-
-        provider_name = provider.get_info()["name"]
-        start_time = time.time()
-
-        try:
-            # 执行渲染（带超时）- 使用 _render_internal 而非已废弃的 render()
-            if self.render_timeout > 0:
-                await asyncio.wait_for(provider._render_internal(intent), timeout=self.render_timeout)
-            else:
-                await provider._render_internal(intent)
-
-            duration = time.time() - start_time
-            self.logger.debug(f"Provider渲染成功: {provider_name} (耗时: {duration:.3f}s)")
-
-            return RenderResult(provider_name=provider_name, success=True, duration=duration)
-
-        except TimeoutError:
-            duration = time.time() - start_time
-            self.logger.warning(f"Provider渲染超时: {provider_name} (超时限制: {self.render_timeout}s)")
-
-            return RenderResult(
-                provider_name=provider_name,
-                success=False,
-                timeout=True,
-                error=f"渲染超时（限制: {self.render_timeout}s）",
-                duration=duration,
-            )
-
-        except Exception as e:
-            duration = time.time() - start_time
-            self.logger.error(
-                f"Provider渲染失败: {provider_name} - {e}",
-                exc_info=False,  # 不打印完整堆栈，避免日志冗长
-            )
-
-            return RenderResult(provider_name=provider_name, success=False, error=str(e), duration=duration)
-
     async def stop_all_providers(self):
         """
         停止所有Provider
@@ -520,8 +324,8 @@ class OutputProviderManager:
         for provider in self.providers:
             if provider.is_started:
                 try:
-                    # Provider的cleanup方法会处理停止逻辑
-                    await provider.cleanup()
+                    # 调用 stop 方法，它会调用 cleanup 并设置 is_started = False
+                    await provider.stop()
                 except Exception as e:
                     self.logger.error(f"Provider停止失败: {provider.get_info()['name']} - {e}")
 
@@ -553,13 +357,12 @@ class OutputProviderManager:
 
     # ==================== Phase 4: 配置加载 ====================
 
-    async def load_from_config(self, config: dict[str, Any], config_service=None, core=None):
+    async def load_from_config(self, config: dict[str, Any], config_service=None):
         """
         从配置加载并创建所有OutputProvider（支持三级配置合并）
 
         Args:
             config: 输出Provider配置（来自[providers.output]）
-            core: 已废弃参数（保留以兼容旧代码，不再使用）
             config_service: ConfigService实例（用于三级配置加载）
 
         配置格式:
@@ -639,7 +442,7 @@ class OutputProviderManager:
                 provider_type = provider_config.get("type", output_name)
 
                 # 创建Provider（不再检查enabled字段，由enabled_outputs控制）
-                provider = self._create_provider(provider_type, provider_config, core)
+                provider = self._create_provider(provider_type, provider_config)
                 if provider:
                     await self.register_provider(provider)
                     created_count += 1
@@ -655,16 +458,15 @@ class OutputProviderManager:
             f"失败={failed_count}/{len(enabled_outputs)}"
         )
 
-    def _create_provider(self, provider_type: str, config: dict[str, Any], core=None) -> OutputProvider | None:
+    def _create_provider(self, provider_type: str, config: dict[str, Any]) -> OutputProvider | None:
         """
         Provider工厂方法：根据类型创建Provider实例
 
-        使用 ProviderRegistry 来创建 Provider，替代之前的硬编码映射。
+        使用 ProviderRegistry 来创建 Provider。
 
         Args:
             provider_type: Provider类型（"tts", "subtitle", "sticker", "vts", "omni_tts", "avatar"等）
             config: Provider配置
-            core: 已废弃参数（保留以兼容旧代码，不再使用）
 
         Returns:
             Provider实例，如果创建失败返回None

@@ -84,8 +84,6 @@ Amaidesu!
    - 管理多个LLM客户端（llm/llm_fast/vlm）
    - 提供统一的调用接口
 
-详见：[架构设计文档](./refactor/design/overview.md)
-
 ### Provider系统（替代插件系统）
 
 系统已完成从插件系统到Provider系统的重构：
@@ -587,14 +585,6 @@ logger.error("错误日志", exc_info=True)
 - ❌ 不要使用服务注册机制，用EventBus
 - ❌ 不要硬编码事件名字符串，使用CoreEvents常量
 - ❌ 不要直接在main.py中创建Provider，用Manager + 配置驱动
-
-## 架构设计文档
-
-详细的架构设计文档位于`refactor/design/`：
-- [架构总览](refactor/design/overview.md) - 3域架构概述
-- [决策层设计](refactor/design/decision_layer.md) - 可替换的决策Provider系统
-- [多Provider并发设计](refactor/design/multi_provider.md) - 并发处理架构
-- [LLM服务设计](refactor/design/llm_service.md) - LLM调用基础设施
 
 ## 数据流关键事件
 

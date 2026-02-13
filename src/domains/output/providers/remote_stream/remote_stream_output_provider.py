@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import RemoteStreamRequestImagePayload
 from src.modules.logging import get_logger
 from src.modules.types.base.output_provider import OutputProvider
 from src.modules.types.intent import Intent
@@ -139,6 +140,9 @@ class RemoteStreamOutputProvider(OutputProvider):
         super().__init__(config)
         self.logger = get_logger("RemoteStreamOutputProvider")
 
+        # 设置状态
+        self.is_setup = False
+
         # 使用 ConfigSchema 验证配置，获得类型安全的配置对象
         self.typed_config = self.ConfigSchema(**config)
 
@@ -185,8 +189,8 @@ class RemoteStreamOutputProvider(OutputProvider):
         # AudioStreamChannel 订阅
         self._remote_subscription_id: Optional[str] = None
 
-    async def _setup_internal(self):
-        """内部设置逻辑"""
+    async def init(self):
+        """初始化 Provider"""
         # 检查依赖
         if websockets is None:
             self.logger.error("websockets库未安装，请使用 'uv add websockets' 安装")
@@ -194,7 +198,11 @@ class RemoteStreamOutputProvider(OutputProvider):
 
         # 注册事件监听
         if self.event_bus:
-            self.event_bus.on(CoreEvents.REMOTE_STREAM_REQUEST_IMAGE, self._handle_image_request)
+            self.event_bus.on(
+                CoreEvents.REMOTE_STREAM_REQUEST_IMAGE,
+                self._handle_image_request,
+                RemoteStreamRequestImagePayload,
+            )
 
         # 注册 AudioStreamChannel 订阅
         audio_channel = self.audio_stream_channel
@@ -210,6 +218,8 @@ class RemoteStreamOutputProvider(OutputProvider):
             )
             self.logger.info("RemoteStream 已订阅 AudioStreamChannel")
 
+        self.is_setup = True
+
         # 启动WebSocket服务器或客户端
         if self.server_mode:
             self.server_task = asyncio.create_task(self._run_server())
@@ -220,9 +230,9 @@ class RemoteStreamOutputProvider(OutputProvider):
 
         self.logger.info("RemoteStreamOutputProvider 已设置")
 
-    async def _render_internal(self, intent: Intent):
+    async def execute(self, intent: Intent):
         """
-        内部渲染逻辑
+        执行意图
 
         Args:
             intent: 决策意图
@@ -233,8 +243,8 @@ class RemoteStreamOutputProvider(OutputProvider):
             self.logger.debug(f"准备发送字幕数据: {intent.response_text[:50]}...")
             await self._send_subtitle(intent.response_text)
 
-    async def _cleanup_internal(self):
-        """内部清理逻辑"""
+    async def cleanup(self):
+        """清理资源"""
         self.logger.info("正在清理RemoteStreamOutputProvider...")
 
         # 取消 AudioStreamChannel 订阅
@@ -283,9 +293,14 @@ class RemoteStreamOutputProvider(OutputProvider):
 
         # 取消事件监听
         if self.event_bus:
-            self.event_bus.off(CoreEvents.REMOTE_STREAM_REQUEST_IMAGE, self._handle_image_request)
+            self.event_bus.off(
+                CoreEvents.REMOTE_STREAM_REQUEST_IMAGE,
+                self._handle_image_request,
+                RemoteStreamRequestImagePayload,
+            )
 
         self._is_connected = False
+        self.is_setup = False
         self.logger.info("RemoteStreamOutputProvider 已清理")
 
     # ===== 连接管理 =====
@@ -474,7 +489,8 @@ class RemoteStreamOutputProvider(OutputProvider):
             self.logger.debug("收到图像请求")
             # 触发图像请求事件
             if self.event_bus:
-                await self.event_bus.emit(CoreEvents.REMOTE_STREAM_REQUEST_IMAGE, message.data)
+                payload = RemoteStreamRequestImagePayload(timestamp=message.data.get("timestamp", time.time()))
+                await self.event_bus.emit(CoreEvents.REMOTE_STREAM_REQUEST_IMAGE, payload)
 
         elif message_type == MessageType.TTS_DATA:
             # 服务器向边缘设备发送的TTS数据（在客户端模式下会收到）
@@ -644,9 +660,9 @@ class RemoteStreamOutputProvider(OutputProvider):
 
     # ===== 事件处理 =====
 
-    async def _handle_image_request(self, event_name: str, data: Any, source: str):
+    async def _handle_image_request(self, payload: RemoteStreamRequestImagePayload):
         """处理图像请求事件"""
-        self.logger.debug(f"收到图像请求: {data}")
+        self.logger.debug(f"收到图像请求: {payload}")
         # 转发为实际的图像请求消息
         await self.request_image()
 

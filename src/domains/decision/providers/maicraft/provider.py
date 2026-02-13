@@ -144,8 +144,8 @@ class MaicraftDecisionProvider(DecisionProvider):
             self.logger.error(f"注册命令映射失败: {e}", exc_info=True)
             raise
 
-    async def _setup_internal(self) -> None:
-        """内部设置逻辑"""
+    async def init(self) -> None:
+        """初始化逻辑"""
         # 初始化工厂
         if self.action_factory:
             success = await self.action_factory.initialize()
@@ -155,8 +155,8 @@ class MaicraftDecisionProvider(DecisionProvider):
 
         self.logger.info("MaicraftDecisionProvider 设置完成")
 
-    async def _cleanup_internal(self) -> None:
-        """内部清理逻辑"""
+    async def cleanup(self) -> None:
+        """清理资源"""
         if self.action_factory:
             await self.action_factory.cleanup()
 

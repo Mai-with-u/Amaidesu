@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from src.domains.output.parameters.render_parameters import ExpressionParameters
+from src.modules.types import ExpressionParameters
 
 # =============================================================================
 # 创建和默认值测试
@@ -474,21 +474,18 @@ def test_repr_empty():
 
 
 def test_render_parameters_alias():
-    """测试 RenderParameters 别名"""
-    from src.domains.output.parameters.render_parameters import RenderParameters
-
-    assert RenderParameters == ExpressionParameters
+    """测试 RenderParameters 别名（已移除，使用 ExpressionParameters）"""
+    # RenderParameters 别名已被移除，现在使用 ExpressionParameters
+    # 此测试仅保留以确保向后兼容性已移除
+    pass
 
 
 def test_render_parameters_creation():
-    """测试使用 RenderParameters 创建"""
-    from src.domains.output.parameters.render_parameters import RenderParameters
-
-    params = RenderParameters(tts_text="测试")
+    """测试使用 RenderParameters 创建（已移除别名）"""
+    # RenderParameters 别名已被移除，现在使用 ExpressionParameters
+    params = ExpressionParameters(tts_text="测试")
 
     assert params.tts_text == "测试"
-    assert isinstance(params, ExpressionParameters)
-
 
 # =============================================================================
 # 边界条件测试

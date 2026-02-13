@@ -165,9 +165,8 @@ class BiliDanmakuOfficialMaiCraftInputProvider(InputProvider):
         self.forward_client: Optional[ForwardWebSocketClient] = None
         self._stop_event = asyncio.Event()
 
-    async def start(self) -> AsyncIterator[NormalizedMessage]:
+    async def generate(self) -> AsyncIterator[NormalizedMessage]:
         """采集弹幕数据"""
-        await self._setup_internal()
         self.is_running = True
 
         # 初始化WebSocket客户端
@@ -199,7 +198,6 @@ class BiliDanmakuOfficialMaiCraftInputProvider(InputProvider):
             self.logger.error(f"WebSocket运行出错: {e}", exc_info=True)
         finally:
             self.is_running = False
-            await self._cleanup_internal()
             self.logger.info("Bilibili 官方弹幕采集已停止")
 
     async def _handle_message_from_bili(self, message_data: Dict[str, Any]):
@@ -380,7 +378,7 @@ class BiliDanmakuOfficialMaiCraftInputProvider(InputProvider):
 
         return importance
 
-    async def _cleanup_internal(self):
+    async def cleanup(self):
         """清理资源"""
         # 关闭WebSocket客户端
         if self.websocket_client:

@@ -19,7 +19,6 @@ from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 from src.modules.types.base.input_provider import InputProvider
 from src.modules.types.base.normalized_message import NormalizedMessage
-from src.domains.input.normalization.content import TextContent
 
 
 class BiliDanmakuInputProvider(InputProvider):
@@ -58,14 +57,13 @@ class BiliDanmakuInputProvider(InputProvider):
         self._latest_timestamp: float = time.time()
         self._session: Optional[aiohttp.ClientSession] = None
 
-    async def start(self) -> AsyncIterator[NormalizedMessage]:
+    async def generate(self) -> AsyncIterator[NormalizedMessage]:
         """
         采集弹幕数据
 
         Yields:
             NormalizedMessage: 弹幕标准化消息
         """
-        await self._setup_internal()
         self.is_running = True
 
         try:
@@ -99,7 +97,6 @@ class BiliDanmakuInputProvider(InputProvider):
             self.logger.error(f"数据采集出错: {e}", exc_info=True)
         finally:
             self.is_running = False
-            await self._cleanup_internal()
             self.logger.info("Bilibili 弹幕采集已停止")
 
     async def _fetch_and_process(self):
@@ -183,21 +180,13 @@ class BiliDanmakuInputProvider(InputProvider):
         if not text:
             return None
 
-        # 创建 TextContent
-        content = TextContent(
-            text=text,
-            user=nickname,
-            user_id=str(user_id),
-        )
-
-        # 创建 NormalizedMessage
+        # 直接创建 NormalizedMessage
         return NormalizedMessage(
-            text=content.text,
-            content=content,
+            text=text,
             source="bili_danmaku",
-            data_type=content.type,
-            importance=content.get_importance(),
-            metadata={
+            data_type="text",
+            importance=0.5,
+            raw={
                 "nickname": nickname,
                 "user_id": str(user_id),
                 "uid": item.get("uid"),
@@ -207,7 +196,7 @@ class BiliDanmakuInputProvider(InputProvider):
             },
         )
 
-    async def _cleanup_internal(self):
+    async def cleanup(self):
         """清理资源"""
         if self._session and not self._session.closed:
             await self._session.close()

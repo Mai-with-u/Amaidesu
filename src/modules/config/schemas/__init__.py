@@ -10,31 +10,13 @@ from .base import BaseProviderConfig
 # Non-provider schemas (system-wide configurations)
 from .logging import LoggingConfig
 
-# Input provider schemas（已迁移到自管理 Schema，不再导入）
-# from .input_providers import (
-#     # ConsoleInputProviderConfig,  # 已迁移到自管理 Schema
-#     # BiliDanmakuProviderConfig,  # 已迁移到自管理 Schema
-#     # BiliDanmakuOfficialProviderConfig,  # 已迁移到自管理 Schema
-#     # BiliDanmakuOfficialMaiCraftProviderConfig,  # 已迁移到自管理 Schema
-#     # ReadPingmuProviderConfig,  # 已迁移到自管理 Schema
-#     # MainosabaProviderConfig,  # 已迁移到自管理 Schema
-# )
-# Decision provider schemas（已迁移到自管理 Schema，不再导入）
-# from .decision_providers import (
-#     MaiCoreDecisionProviderConfig,  # 已迁移到自管理 Schema
-#     LocalLLMDecisionProviderConfig,  # 已迁移到自管理 Schema
-#     RuleEngineDecisionProviderConfig,  # 已迁移到自管理 Schema
-#     MockDecisionProviderConfig,  # 已迁移到自管理 Schema
-# )
-# Output provider schemas（所有已迁移到自管理 Schema，只导入工厂函数）
+# Output provider schemas
 from .output_providers import (
     OUTPUT_PROVIDER_CONFIG_MAP,
     get_output_provider_config,
 )
 
 # Provider Schema Registry
-# 所有Provider已迁移到自管理Schema架构，此注册表保留为空用于向后兼容
-# 实际请使用 ProviderRegistry.get_config_schema()
 PROVIDER_SCHEMA_REGISTRY: Dict[str, Type[BaseModel]] = {}
 
 
@@ -43,24 +25,17 @@ def get_provider_schema(provider_type: str, provider_layer: str = None) -> Type[
     """
     获取Provider的Schema类
 
-    从 ProviderRegistry 获取（Provider 自管理 Schema 架构）。
-
-    所有Provider已完成迁移到自管理Schema架构（100%迁移完成），
-    不再需要集中式注册表fallback机制。
+    从 ProviderRegistry 获取。
 
     Args:
         provider_type: Provider类型标识
-        provider_layer: Provider层级（可选，保留用于向后兼容）
+        provider_layer: Provider层级（可选）
 
     Returns:
         对应的Schema类
 
     Raises:
         KeyError: 如果provider_type未注册
-
-    Note:
-        所有Provider的Schema通过Provider注册时自动注册到ProviderRegistry._config_schemas。
-        provider_layer参数保留用于API向后兼容，但实际查找使用全局注册表。
     """
     from src.modules.registry import ProviderRegistry
 
@@ -73,18 +48,18 @@ def get_provider_schema(provider_type: str, provider_layer: str = None) -> Type[
     # providers 包的 __init__.py 可能还没有被执行
     try:
         if provider_layer == "input":
-            from src.domains.input import providers
+            from src.domains.input import providers as _  # noqa: F401
         elif provider_layer == "output":
-            from src.domains.output import providers
+            from src.domains.output import providers as _  # noqa: F401
         elif provider_layer == "decision":
-            from src.domains.decision import providers
+            from src.domains.decision import providers as _  # noqa: F401
     except ImportError:
         pass
 
-        # 重新尝试获取
-        schema = ProviderRegistry.get_config_schema(provider_type)
-        if schema is not None:
-            return schema
+    # 重新尝试获取
+    schema = ProviderRegistry.get_config_schema(provider_type)
+    if schema is not None:
+        return schema
 
     raise KeyError(f"未注册的Provider类型: {provider_type} (layer: {provider_layer})")
 
@@ -169,14 +144,12 @@ def verify_no_enabled_field_in_schemas() -> list:
 __all__ = [
     # Base schemas
     "BaseProviderConfig",
-    # Input provider schemas（已迁移的自管理 Schema 不再导出）
-    # Decision provider schemas（已迁移的自管理 Schema 不再导出）
-    # Output provider schemas（所有已迁移的自管理 Schema 不再导出）
+    # Output provider schemas
     "OUTPUT_PROVIDER_CONFIG_MAP",
     "get_output_provider_config",
     # Non-provider schemas
     "LoggingConfig",
-    # Registry（空，所有Provider已迁移）
+    # Registry
     "PROVIDER_SCHEMA_REGISTRY",
     # Helper functions
     "get_provider_schema",

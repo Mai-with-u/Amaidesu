@@ -2,142 +2,16 @@
 Output Domain 事件 Payload 定义
 
 定义 Output Domain 相关的事件 Payload 类型。
-- ParametersGeneratedPayload: @deprecated 表情参数生成事件（已废弃，使用 IntentPayload 替代）
 - RenderCompletedPayload: 渲染完成事件
 - RenderFailedPayload: 渲染失败事件
 """
 
 import time
-import warnings
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import Any, Dict
 
 from pydantic import ConfigDict, Field
 
 from src.modules.events.payloads.base import BasePayload
-
-if TYPE_CHECKING:
-    from src.modules.types import ExpressionParameters
-
-
-class ParametersGeneratedPayload(BasePayload):
-    """
-    表情参数生成事件 Payload
-
-    @deprecated 此 Payload 已废弃，请使用 IntentPayload 替代。
-    事件名：CoreEvents.OUTPUT_PARAMS（已废弃）
-    发布者：无（已迁移到 Intent 事件驱动架构）
-    订阅者：无（OutputProvider 现在订阅 OUTPUT_INTENT 事件）
-
-    表示 ExpressionGenerator 已根据 Intent 生成了渲染参数。
-    OutputProvider 订阅此事件并执行实际的渲染输出。
-
-    迁移说明：
-    - 新架构使用 Intent 直接传递，无需中间转换
-    - 使用 CoreEvents.DECISION_INTENT 和 OUTPUT_INTENT 替代
-    - IntentPayload 包含所有必要信息
-    """
-
-    # TTS 相关
-    tts_text: str = Field(default="", description="TTS 文本内容")
-    tts_enabled: bool = Field(default=True, description="是否启用 TTS")
-
-    # 字幕相关
-    subtitle_text: str = Field(default="", description="字幕文本内容")
-    subtitle_enabled: bool = Field(default=True, description="是否启用字幕")
-
-    # VTS 表情相关
-    expressions: Dict[str, float] = Field(default_factory=dict, description="VTS 表情参数字典")
-    expressions_enabled: bool = Field(default=True, description="是否启用表情")
-
-    # 热键相关
-    hotkeys: List[str] = Field(default_factory=list, description="热键列表")
-    hotkeys_enabled: bool = Field(default=True, description="是否启用热键")
-
-    # 动作相关
-    actions: List[Dict[str, Any]] = Field(default_factory=list, description="动作列表")
-    actions_enabled: bool = Field(default=True, description="是否启用动作")
-
-    # 元数据
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="扩展元数据")
-    priority: int = Field(default=100, ge=0, description="优先级（数字越小越优先）")
-    timestamp: float = Field(default_factory=time.time, description="时间戳")
-
-    # 来源信息
-    source_intent: Optional[Dict[str, Any]] = Field(default=None, description="来源 Intent（用于追踪）")
-
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "tts_text": "你好呀~",
-                "tts_enabled": True,
-                "subtitle_text": "你好呀~",
-                "subtitle_enabled": True,
-                "expressions": {"happy": 0.8, "surprised": 0.2},
-                "expressions_enabled": True,
-                "hotkeys": ["wave"],
-                "hotkeys_enabled": True,
-                "actions": [{"type": "blink", "params": {"count": 2}}],
-                "actions_enabled": True,
-                "priority": 100,
-                "timestamp": 1706745600.0,
-            }
-        }
-    )
-
-    def __str__(self) -> str:
-        """简化格式：显示生成的参数"""
-        class_name = self.__class__.__name__
-        parts = [
-            f'tts_text="{self.tts_text[:30]}..."' if len(self.tts_text) > 30 else f'tts_text="{self.tts_text}"',
-            f"tts_enabled={self.tts_enabled}",
-            f'subtitle_text="{self.subtitle_text[:30]}..."'
-            if len(self.subtitle_text) > 30
-            else f'subtitle_text="{self.subtitle_text}"',
-            f"subtitle_enabled={self.subtitle_enabled}",
-            f"expressions={self._format_field_value(self.expressions)}",
-            f"expressions_enabled={self.expressions_enabled}",
-            f"hotkeys={self._format_field_value(self.hotkeys)}",
-            f"hotkeys_enabled={self.hotkeys_enabled}",
-        ]
-        return f"{class_name}({', '.join(parts)})"
-
-    @classmethod
-    def from_parameters(
-        cls, parameters: "ExpressionParameters", source_intent: Optional[Dict[str, Any]] = None
-    ) -> "ParametersGeneratedPayload":
-        """
-        从 ExpressionParameters 对象创建 Payload
-
-        @deprecated 此方法已废弃，请直接使用 IntentPayload。
-
-        Args:
-            parameters: ExpressionParameters 对象
-            source_intent: 来源 Intent（可选）
-
-        Returns:
-            ParametersGeneratedPayload 实例
-        """
-        warnings.warn(
-            "ParametersGeneratedPayload.from_parameters() 已废弃，请使用 IntentPayload",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return cls(
-            tts_text=parameters.tts_text,
-            tts_enabled=parameters.tts_enabled,
-            subtitle_text=parameters.subtitle_text,
-            subtitle_enabled=parameters.subtitle_enabled,
-            expressions=parameters.expressions.copy(),
-            expressions_enabled=parameters.expressions_enabled,
-            hotkeys=parameters.hotkeys.copy(),
-            hotkeys_enabled=parameters.hotkeys_enabled,
-            actions=parameters.actions.copy(),
-            actions_enabled=parameters.actions_enabled,
-            metadata=parameters.metadata.copy(),
-            priority=parameters.priority,
-            timestamp=parameters.timestamp,
-            source_intent=source_intent,
-        )
 
 
 class RenderCompletedPayload(BasePayload):
@@ -215,3 +89,126 @@ class RenderFailedPayload(BasePayload):
         class_name = self.__class__.__name__
         error_msg = self.error_message[:30] + "..." if len(self.error_message) > 30 else self.error_message
         return f'{class_name}(provider="{self.provider}", output_type="{self.output_type}", error_type="{self.error_type}", error_message="{error_msg}", recoverable={self.recoverable})'
+
+
+class OBSSendTextPayload(BasePayload):
+    """
+    OBS 发送文本事件 Payload
+
+    事件名：CoreEvents.OBS_SEND_TEXT（待定义）
+    发布者：OBS 控制相关组件
+    订阅者：OBSOutputProvider
+
+    用于向 OBS 文本源发送文本内容。
+    """
+
+    text: str = Field(..., description="要发送的文本")
+    source_name: str = Field(default="文本", description="OBS 源名称")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "text": "Hello World",
+                "source_name": "文本",
+            }
+        }
+    )
+
+    def __str__(self) -> str:
+        """简化格式：显示发送文本信息"""
+        class_name = self.__class__.__name__
+        text_preview = self.text[:20] + "..." if len(self.text) > 20 else self.text
+        return f'{class_name}(source_name="{self.source_name}", text="{text_preview}")'
+
+
+class OBSSwitchScenePayload(BasePayload):
+    """
+    OBS 切换场景事件 Payload
+
+    事件名：CoreEvents.OBS_SWITCH_SCENE（待定义）
+    发布者：场景切换相关组件
+    订阅者：OBSOutputProvider
+
+    用于切换 OBS 中的场景。
+    """
+
+    scene_name: str = Field(..., description="目标场景名称")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "scene_name": "主场景",
+            }
+        }
+    )
+
+    def __str__(self) -> str:
+        """简化格式：显示场景切换信息"""
+        class_name = self.__class__.__name__
+        return f'{class_name}(scene_name="{self.scene_name}")'
+
+
+class OBSSetSourceVisibilityPayload(BasePayload):
+    """
+    OBS 设置源可见性事件 Payload
+
+    事件名：CoreEvents.OBS_SET_SOURCE_VISIBILITY（待定义）
+    发布者：源可见性控制相关组件
+    订阅者：OBSOutputProvider
+
+    用于设置 OBS 中源的可见性。
+    """
+
+    source_name: str = Field(..., description="OBS 源名称")
+    visible: bool = Field(..., description="是否可见")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "source_name": "摄像头",
+                "visible": True,
+            }
+        }
+    )
+
+    def __str__(self) -> str:
+        """简化格式：显示源可见性信息"""
+        class_name = self.__class__.__name__
+        return f'{class_name}(source_name="{self.source_name}", visible={self.visible})'
+
+
+class RemoteStreamRequestImagePayload(BasePayload):
+    """
+    远程流请求图像事件 Payload
+
+    事件名：CoreEvents.REMOTE_STREAM_REQUEST_IMAGE
+    发布者：RemoteStreamOutputProvider
+    订阅者：需要响应图像请求的组件（如 AvatarOutputProvider）
+
+    当边缘设备向服务器请求一帧图像时触发。
+    """
+
+    timestamp: float = Field(default_factory=time.time, description="请求时间戳")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "timestamp": 1706745600.0,
+            }
+        }
+    )
+
+    def __str__(self) -> str:
+        """简化格式：显示图像请求信息"""
+        class_name = self.__class__.__name__
+        return f'{class_name}(timestamp={self.timestamp})'
+
+
+__all__ = [
+    "RenderCompletedPayload",
+    "RenderFailedPayload",
+    "OBSSendTextPayload",
+    "OBSSwitchScenePayload",
+    "OBSSetSourceVisibilityPayload",
+    "RemoteStreamRequestImagePayload",
+]

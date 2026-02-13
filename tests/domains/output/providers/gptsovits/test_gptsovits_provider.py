@@ -141,7 +141,7 @@ class TestGPTSoVITSOutputProvider:
         mock_audio_manager.stop_audio.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_render_internal_no_text(self, gptsovits_config, mock_tts_client, mock_audio_manager):
+    async def testexecute_no_text(self, gptsovits_config, mock_tts_client, mock_audio_manager):
         """测试没有文本时的渲染"""
         provider = GPTSoVITSOutputProvider(gptsovits_config)
 
@@ -153,13 +153,13 @@ class TestGPTSoVITSOutputProvider:
         intent = Intent(original_text="", response_text="", emotion=EmotionType.NEUTRAL, actions=[])
 
         # 渲染应该直接返回
-        await provider._render_internal(intent)
+        await provider.execute(intent)
 
         # TTS 客户端不应该被调用
         mock_tts_client.tts_stream.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_render_internal_success(self, gptsovits_config, mock_tts_client, mock_audio_manager):
+    async def testexecute_success(self, gptsovits_config, mock_tts_client, mock_audio_manager):
         """测试成功的渲染"""
 
         # 模拟音频流 - 使用偶数长度的有效 PCM 数据
@@ -183,7 +183,7 @@ class TestGPTSoVITSOutputProvider:
         intent = Intent(original_text="你好", response_text="测试文本", emotion=EmotionType.HAPPY, actions=[])
 
         # 渲染
-        await provider._render_internal(intent)
+        await provider.execute(intent)
 
         # 验证 TTS 被调用
         mock_tts_client.tts_stream.assert_called_once()
@@ -196,7 +196,7 @@ class TestGPTSoVITSOutputProvider:
         assert provider.error_count == 0
 
     @pytest.mark.asyncio
-    async def test_render_internal_failure(self, gptsovits_config, mock_tts_client, mock_audio_manager):
+    async def testexecute_failure(self, gptsovits_config, mock_tts_client, mock_audio_manager):
         """测试渲染失败"""
         mock_tts_client.tts_stream.side_effect = Exception("TTS 失败")
 
@@ -213,7 +213,7 @@ class TestGPTSoVITSOutputProvider:
 
         # 渲染应该抛出异常
         with pytest.raises(Exception, match="TTS 失败"):
-            await provider._render_internal(intent)
+            await provider.execute(intent)
 
         # 验证错误计数增加
         assert provider.error_count == 1
@@ -256,12 +256,12 @@ class TestGPTSoVITSOutputProvider:
         # 设置 _dependencies 以避免 AttributeError
         provider._dependencies = {}
 
-        # 直接调用 _render_internal，跳过 setup 以避免创建真实客户端
+        # 直接调用 execute，跳过 setup 以避免创建真实客户端
         # 创建 Intent
         intent = Intent(original_text="你好", response_text="完整工作流测试", emotion=EmotionType.HAPPY, actions=[])
 
         # 执行渲染
-        await provider._render_internal(intent)
+        await provider.execute(intent)
 
         # 验证音频被播放
         mock_audio_manager.play_audio.assert_called_once()

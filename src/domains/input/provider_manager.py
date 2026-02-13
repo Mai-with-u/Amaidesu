@@ -131,13 +131,8 @@ class InputProviderManager:
                     if not task.done():
                         task.cancel()
 
-        # 4. 调用每个Provider的cleanup()方法
-        for provider in self._providers:
-            provider_name = self._get_provider_name(provider)
-            try:
-                await provider.stop()
-            except Exception as e:
-                self.logger.error(f"清理Provider {provider_name}时出错: {e}", exc_info=True)
+        # 注意：stop() 方法已经调用了 cleanup()，所以不需要额外清理
+        # 步骤 2 中的 stop() 已经完成了所有清理工作
 
         self._is_started = False
         self.logger.info("所有InputProvider已停止")

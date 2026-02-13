@@ -45,8 +45,8 @@ class MockDecisionProvider(DecisionProvider):
         self.stop_called = False
         self.decide_count = 0
 
-    async def _start_internal(self):
-        """模拟内部启动"""
+    async def init(self):
+        """模拟初始化"""
         self.start_called = True
 
     async def decide(self, message: NormalizedMessage) -> "Intent":
@@ -64,8 +64,8 @@ class MockDecisionProvider(DecisionProvider):
             "metadata": {"decide_count": self.decide_count},
         }
 
-    async def _stop_internal(self):
-        """模拟内部停止"""
+    async def cleanup(self):
+        """模拟清理"""
         self.stop_called = True
 
 

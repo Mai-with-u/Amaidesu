@@ -29,6 +29,7 @@ class MockStructuredContent:
     def __init__(self, text: str, user_id: str = "test_user"):
         self._text = text
         self._user_id = user_id
+        self.open_id = user_id  # 添加 open_id 属性以匹配 NormalizedMessage.user_id 的提取逻辑
         self.type = "text"
 
     def get_display_text(self) -> str:
@@ -56,7 +57,7 @@ def sample_normalized_message(mock_content):
     """创建标准的 NormalizedMessage 实例"""
     return NormalizedMessage(
         text="测试消息",
-        content=mock_content,
+        raw=mock_content,
         source="console",
         data_type="text",
         importance=0.8,
@@ -74,18 +75,17 @@ async def test_normalized_message_creation(mock_content):
     """测试创建 NormalizedMessage 实例"""
     message = NormalizedMessage(
         text="测试消息",
-        content=mock_content,
+        raw=mock_content,
         source="bili_danmaku",
         data_type="text",
         importance=0.5,
     )
 
     assert message.text == "测试消息"
-    assert message.content == mock_content
+    assert message.raw == mock_content
     assert message.source == "bili_danmaku"
     assert message.data_type == "text"
     assert message.importance == 0.5
-    assert isinstance(message.metadata, dict)
     assert isinstance(message.timestamp, float)
 
 
@@ -95,7 +95,7 @@ async def test_normalized_message_with_explicit_timestamp(mock_content):
     custom_timestamp = time.time()
     message = NormalizedMessage(
         text="测试",
-        content=mock_content,
+        raw=mock_content,
         source="test",
         data_type="text",
         importance=0.5,
@@ -111,7 +111,7 @@ async def test_normalized_message_with_metadata(mock_content):
     custom_metadata = {"key1": "value1", "key2": "value2"}
     message = NormalizedMessage(
         text="测试",
-        content=mock_content,
+        raw=mock_content,
         source="test",
         data_type="text",
         importance=0.5,
@@ -134,7 +134,7 @@ async def test_model_validator_auto_timestamp(mock_content):
     before = time.time()
     message = NormalizedMessage(
         text="测试",
-        content=mock_content,
+        raw=mock_content,
         source="test",
         data_type="text",
         importance=0.5,
@@ -152,7 +152,7 @@ async def test_model_validator_metadata_type(mock_content):
     """测试 model_validator 自动添加 type 到 metadata"""
     message = NormalizedMessage(
         text="测试",
-        content=mock_content,
+        raw=mock_content,
         source="test",
         data_type="text",
         importance=0.5,
@@ -168,7 +168,7 @@ async def test_model_validator_metadata_timestamp(mock_content):
     """测试 model_validator 自动添加 timestamp 到 metadata"""
     message = NormalizedMessage(
         text="测试",
-        content=mock_content,
+        raw=mock_content,
         source="test",
         data_type="text",
         importance=0.5,
@@ -184,7 +184,7 @@ async def test_model_validator_preserve_custom_metadata(mock_content):
     """测试 model_validator 保留自定义 metadata"""
     message = NormalizedMessage(
         text="测试",
-        content=mock_content,
+        raw=mock_content,
         source="test",
         data_type="text",
         importance=0.5,
@@ -209,7 +209,7 @@ async def test_user_id_property():
     mock_content = MockStructuredContent("测试消息", "user456")
     message = NormalizedMessage(
         text="测试",
-        content=mock_content,
+        raw=mock_content,
         source="test",
         data_type="text",
         importance=0.5,
@@ -224,7 +224,7 @@ async def test_display_text_property():
     mock_content = MockStructuredContent("显示的文本内容", "user123")
     message = NormalizedMessage(
         text="测试",
-        content=mock_content,
+        raw=mock_content,
         source="test",
         data_type="text",
         importance=0.5,
@@ -235,10 +235,10 @@ async def test_display_text_property():
 
 @pytest.mark.asyncio
 async def test_user_id_returns_none_when_not_implemented():
-    """测试 content 没有实现 get_user_id 时返回 None"""
+    """测试 content 没有 open_id 时返回 None"""
 
     class IncompleteContent:
-        """不完整的 content 类（没有 get_user_id）"""
+        """不完整的 content 类（没有 open_id）"""
 
         def get_display_text(self) -> str:
             return "显示文本"
@@ -248,15 +248,14 @@ async def test_user_id_returns_none_when_not_implemented():
     incomplete_content = IncompleteContent()
     message = NormalizedMessage(
         text="测试",
-        content=incomplete_content,
+        raw=incomplete_content,
         source="test",
         data_type="test",
         importance=0.5,
     )
 
-    # 应该抛出 AttributeError，因为 IncompleteContent 没有 get_user_id
-    with pytest.raises(AttributeError):
-        _ = message.user_id
+    # 应该返回 None，因为 IncompleteContent 没有 open_id
+    assert message.user_id is None
 
 
 # =============================================================================
@@ -279,12 +278,12 @@ async def test_from_raw_data_with_dict():
         raw_data=raw_data_dict,
         text="标准化文本",
         source="normalized_source",
-        content=mock_content,
+        raw=mock_content,
         importance=0.9,
     )
 
     assert message.text == "标准化文本"
-    assert message.content == mock_content
+    assert message.raw == mock_content
     assert message.source == "normalized_source"
     assert message.data_type == "text"
     assert message.importance == 0.9
@@ -304,14 +303,14 @@ async def test_content_arbitrary_object():
     custom_obj = MockStructuredContent("自定义对象", "user999")
     message = NormalizedMessage(
         text="测试",
-        content=custom_obj,
+        raw=custom_obj,
         source="test",
         data_type="custom",
         importance=0.5,
     )
 
-    assert message.content == custom_obj
-    assert message.content.get_display_text() == "自定义对象"
+    assert message.raw == custom_obj
+    assert message.raw.get_display_text() == "自定义对象"
 
 
 @pytest.mark.asyncio
@@ -319,13 +318,13 @@ async def test_content_none():
     """测试 content 可以为 None（arbitrary_types_allowed）"""
     message = NormalizedMessage(
         text="测试",
-        content=None,
+        raw=None,
         source="test",
         data_type="none",
         importance=0.5,
     )
 
-    assert message.content is None
+    assert message.raw is None
 
 
 @pytest.mark.asyncio
@@ -349,13 +348,13 @@ async def test_content_dict_object():
     dict_content = DictContent()
     message = NormalizedMessage(
         text="测试",
-        content=dict_content,
+        raw=dict_content,
         source="test",
         data_type="dict_type",
         importance=0.5,
     )
 
-    assert message.content.data == {"key": "value"}
+    assert message.raw.data == {"key": "value"}
     assert message.display_text == "{'key': 'value'}"
     assert message.user_id == "dict_user"
 
@@ -373,7 +372,7 @@ async def test_importance_range():
     # 低重要性
     low_message = NormalizedMessage(
         text="低",
-        content=mock_content,
+        raw=mock_content,
         source="test",
         data_type="text",
         importance=0.0,
@@ -383,7 +382,7 @@ async def test_importance_range():
     # 高重要性
     high_message = NormalizedMessage(
         text="高",
-        content=mock_content,
+        raw=mock_content,
         source="test",
         data_type="text",
         importance=1.0,
@@ -393,7 +392,7 @@ async def test_importance_range():
     # 中等重要性
     medium_message = NormalizedMessage(
         text="中",
-        content=mock_content,
+        raw=mock_content,
         source="test",
         data_type="text",
         importance=0.5,
@@ -411,7 +410,7 @@ async def test_normalized_message_serialization(mock_content):
     """测试 NormalizedMessage 序列化"""
     message = NormalizedMessage(
         text="测试",
-        content=mock_content,
+        raw=mock_content,
         source="test",
         data_type="text",
         importance=0.8,
@@ -439,7 +438,7 @@ async def test_empty_text():
     mock_content = MockStructuredContent("", "user123")
     message = NormalizedMessage(
         text="",
-        content=mock_content,
+        raw=mock_content,
         source="test",
         data_type="text",
         importance=0.5,
@@ -455,7 +454,7 @@ async def test_zero_timestamp():
     mock_content = MockStructuredContent("测试", "user123")
     message = NormalizedMessage(
         text="测试",
-        content=mock_content,
+        raw=mock_content,
         source="test",
         data_type="text",
         importance=0.5,

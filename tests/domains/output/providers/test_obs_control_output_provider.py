@@ -112,7 +112,7 @@ class TestObsControlOutputProvider:
             ObsControlOutputProvider(invalid_config)
 
     @pytest.mark.asyncio
-    async def test_start_internal_without_obs_library(self, obs_config, mock_event_bus):
+    async def testinit_without_obs_library(self, obs_config, mock_event_bus):
         """测试没有obsws-python库时的设置"""
         with patch("src.domains.output.providers.obs_control.obs_control_provider.obs", None):
             provider = ObsControlOutputProvider(obs_config)
@@ -121,7 +121,7 @@ class TestObsControlOutputProvider:
                 await provider.start(mock_event_bus)
 
     @pytest.mark.asyncio
-    async def test_start_internal_success(self, obs_config, mock_event_bus, mock_obs_client):
+    async def testinit_success(self, obs_config, mock_event_bus, mock_obs_client):
         """测试成功设置"""
         with patch("src.domains.output.providers.obs_control.obs_control_provider.obs") as mock_obs:
             mock_obs.ReqClient.return_value = mock_obs_client
@@ -146,7 +146,7 @@ class TestObsControlOutputProvider:
             assert provider.obs_connection == mock_obs_client
 
     @pytest.mark.asyncio
-    async def test_start_internal_connection_failure(self, obs_config, mock_event_bus):
+    async def testinit_connection_failure(self, obs_config, mock_event_bus):
         """测试连接失败"""
         with patch("src.domains.output.providers.obs_control.obs_control_provider.obs") as mock_obs:
             mock_obs.ReqClient.side_effect = Exception("Connection failed")
@@ -159,7 +159,7 @@ class TestObsControlOutputProvider:
             assert provider.obs_connection is None
 
     @pytest.mark.asyncio
-    async def test_render_internal_with_response_text(self, obs_config, mock_event_bus, mock_obs_client):
+    async def testexecute_with_response_text(self, obs_config, mock_event_bus, mock_obs_client):
         """测试渲染响应文本"""
         with patch("src.domains.output.providers.obs_control.obs_control_provider.obs") as mock_obs:
             mock_obs.ReqClient.return_value = mock_obs_client
@@ -177,13 +177,13 @@ class TestObsControlOutputProvider:
             provider._send_text_to_obs = AsyncMock()
 
             # 执行渲染
-            await provider._render_internal(intent)
+            await provider.execute(intent)
 
             # 验证发送文本被调用
             provider._send_text_to_obs.assert_called_once_with("测试回复文本")
 
     @pytest.mark.asyncio
-    async def test_render_internal_with_metadata_text(self, obs_config, mock_event_bus, mock_obs_client):
+    async def testexecute_with_metadata_text(self, obs_config, mock_event_bus, mock_obs_client):
         """测试从元数据渲染文本"""
         with patch("src.domains.output.providers.obs_control.obs_control_provider.obs") as mock_obs:
             mock_obs.ReqClient.return_value = mock_obs_client
@@ -202,13 +202,13 @@ class TestObsControlOutputProvider:
             provider._send_text_to_obs = AsyncMock()
 
             # 执行渲染
-            await provider._render_internal(intent)
+            await provider.execute(intent)
 
             # 验证发送文本被调用
             provider._send_text_to_obs.assert_called_once_with("元数据文本")
 
     @pytest.mark.asyncio
-    async def test_render_internal_with_action_text(self, obs_config, mock_event_bus, mock_obs_client):
+    async def testexecute_with_action_text(self, obs_config, mock_event_bus, mock_obs_client):
         """测试从动作渲染文本"""
         with patch("src.domains.output.providers.obs_control.obs_control_provider.obs") as mock_obs:
             mock_obs.ReqClient.return_value = mock_obs_client
@@ -229,13 +229,13 @@ class TestObsControlOutputProvider:
             provider._send_text_to_obs = AsyncMock()
 
             # 执行渲染
-            await provider._render_internal(intent)
+            await provider.execute(intent)
 
             # 验证发送文本被调用
             provider._send_text_to_obs.assert_called_once_with("动作文本")
 
     @pytest.mark.asyncio
-    async def test_render_internal_without_text(self, obs_config, mock_event_bus, mock_obs_client):
+    async def testexecute_without_text(self, obs_config, mock_event_bus, mock_obs_client):
         """测试没有文本时的渲染"""
         with patch("src.domains.output.providers.obs_control.obs_control_provider.obs") as mock_obs:
             mock_obs.ReqClient.return_value = mock_obs_client
@@ -253,13 +253,13 @@ class TestObsControlOutputProvider:
             provider._send_text_to_obs = AsyncMock()
 
             # 执行渲染
-            await provider._render_internal(intent)
+            await provider.execute(intent)
 
             # 验证发送文本未被调用
             provider._send_text_to_obs.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_render_internal_not_connected(self, obs_config, mock_event_bus):
+    async def testexecute_not_connected(self, obs_config, mock_event_bus):
         """测试未连接时的渲染"""
         provider = ObsControlOutputProvider(obs_config)
         provider.is_connected = False
@@ -275,7 +275,7 @@ class TestObsControlOutputProvider:
         provider.logger.warning = MagicMock()
 
         # 执行渲染（不应抛出异常）
-        await provider._render_internal(intent)
+        await provider.execute(intent)
 
         # 验证警告日志
         provider.logger.warning.assert_called_once()
@@ -576,7 +576,7 @@ class TestObsControlOutputProvider:
         provider.set_source_visibility.assert_called_once_with("测试源", True)
 
     @pytest.mark.asyncio
-    async def test_stop_internal(self, obs_config, mock_event_bus, mock_obs_client):
+    async def testcleanup(self, obs_config, mock_event_bus, mock_obs_client):
         """测试内部停止"""
         with patch("src.domains.output.providers.obs_control.obs_control_provider.obs") as mock_obs:
             mock_obs.ReqClient.return_value = mock_obs_client
@@ -598,7 +598,7 @@ class TestObsControlOutputProvider:
             assert provider.is_connected is False
 
     @pytest.mark.asyncio
-    async def test_stop_internal_with_disconnect_error(self, obs_config, mock_event_bus, mock_obs_client):
+    async def testcleanup_with_disconnect_error(self, obs_config, mock_event_bus, mock_obs_client):
         """测试断开连接出错时的停止"""
         with patch("src.domains.output.providers.obs_control.obs_control_provider.obs") as mock_obs:
             mock_obs.ReqClient.return_value = mock_obs_client
@@ -638,7 +638,7 @@ class TestObsControlOutputProvider:
                 response_text="完整测试",
             )
             provider._send_text_to_obs = AsyncMock()
-            await provider._render_internal(intent)
+            await provider.execute(intent)
             provider._send_text_to_obs.assert_called_once()
 
             # 3. 场景切换

@@ -13,14 +13,6 @@ Decision Layer
 
 from .provider_manager import DecisionProviderManager
 
-# 向后兼容：DecisionManager 作为 DecisionProviderManager 的别名
-DecisionManager = DecisionProviderManager
-
-# 向后兼容：DecisionCoordinator 作为 DecisionProviderManager 的别名
-DecisionCoordinator = DecisionProviderManager
-
 __all__ = [
     "DecisionProviderManager",
-    "DecisionManager",  # 向后兼容
-    "DecisionCoordinator",  # 向后兼容
 ]

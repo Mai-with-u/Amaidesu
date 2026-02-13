@@ -31,9 +31,9 @@ class AvatarProviderBase(OutputProvider, ABC):
         self.logger = get_logger(self.__class__.__name__)
         self._is_connected = False
 
-    async def _render_internal(self, intent: "Intent"):
+    async def execute(self, intent: "Intent"):
         """
-        统一接收 Intent，适配后渲染到平台
+        执行意图，适配后渲染到平台
 
         Args:
             intent: 平台无关的 Intent
@@ -76,13 +76,13 @@ class AvatarProviderBase(OutputProvider, ABC):
 
     # ==================== 生命周期方法 ====================
 
-    async def _start_internal(self):
-        """内部启动逻辑：连接平台"""
+    async def init(self):
+        """初始化 Provider：连接平台"""
         await self._connect()
         self.logger.info(f"{self.__class__.__name__} 已启动")
 
-    async def _stop_internal(self):
-        """内部停止逻辑：断开连接"""
+    async def cleanup(self):
+        """清理资源：断开连接"""
         await self._disconnect()
         self.logger.info(f"{self.__class__.__name__} 已停止")
 

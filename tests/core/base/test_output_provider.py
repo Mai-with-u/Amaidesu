@@ -2,9 +2,9 @@
 OutputProvider 单元测试
 
 测试 OutputProvider 抽象基类的所有核心功能：
-- 抽象方法验证（_render_internal）
+- 抽象方法验证（execute）
 - start() 方法流程
-- _render_internal() 抽象方法
+- execute() 抽象方法
 - stop() 方法
 - get_info() 方法
 - 生命周期管理
@@ -46,34 +46,40 @@ class MockOutputProvider(OutputProvider):
 
         Args:
             config: Provider 配置
-            raise_error: 是否在 render 时抛出错误
+            raise_error: 是否在 execute 时抛出错误
         """
         super().__init__(config)
         self.raise_error = raise_error
+        self.init_called = False
         self.start_called = False
+        self.cleanup_called = False
         self.stop_called = False
+        self.execute_count = 0
         self.render_count = 0
         self.last_intent = None
 
-    async def _start_internal(self):
-        """模拟内部启动"""
+    async def init(self):
+        """模拟初始化"""
+        self.init_called = True
         self.start_called = True
 
-    async def _render_internal(self, intent: Intent):
-        """模拟内部渲染逻辑"""
-        self.render_count += 1
+    async def execute(self, intent: Intent):
+        """执行意图"""
+        self.execute_count += 1
+        self.render_count = self.execute_count  # 别名
         self.last_intent = intent
 
         if self.raise_error:
             raise ValueError("模拟渲染错误")
 
-    async def _stop_internal(self):
-        """模拟内部停止"""
+    async def cleanup(self):
+        """清理资源"""
+        self.cleanup_called = True
         self.stop_called = True
 
 
 class IncompleteOutputProvider(OutputProvider):
-    """不完整的 OutputProvider（未实现 _render_internal）"""
+    """不完整的 OutputProvider（未实现 execute）"""
 
     pass
 
@@ -148,7 +154,7 @@ async def test_output_provider_default_config():
 async def test_output_provider_abstract_method_not_implemented():
     """测试未实现抽象方法的子类无法实例化"""
     with pytest.raises(TypeError):
-        # IncompleteOutputProvider 未实现 _render_internal
+        # IncompleteOutputProvider 未实现 execute
         _ = IncompleteOutputProvider({})
 
 
@@ -205,36 +211,36 @@ async def test_output_provider_start_multiple_calls(event_bus):
 
 
 # =============================================================================
-# _render_internal() 方法测试（直接调用）
+# execute() 方法测试（直接调用）
 # =============================================================================
 
 
 @pytest.mark.asyncio
-async def test_output_provider_render_internal_basic(mock_provider, test_intent):
-    """测试 _render_internal() 基本功能"""
-    # 直接调用 _render_internal
-    await mock_provider._render_internal(test_intent)
+async def test_output_providerexecute_basic(mock_provider, test_intent):
+    """测试 execute() 基本功能"""
+    # 直接调用 execute
+    await mock_provider.execute(test_intent)
 
     assert mock_provider.render_count == 1
     assert mock_provider.last_intent == test_intent
 
 
 @pytest.mark.asyncio
-async def test_output_provider_render_internal_multiple_calls(mock_provider, test_intent):
-    """测试 _render_internal() 可以多次调用"""
+async def test_output_providerexecute_multiple_calls(mock_provider, test_intent):
+    """测试 execute() 可以多次调用"""
     # 多次调用
-    await mock_provider._render_internal(test_intent)
-    await mock_provider._render_internal(test_intent)
-    await mock_provider._render_internal(test_intent)
+    await mock_provider.execute(test_intent)
+    await mock_provider.execute(test_intent)
+    await mock_provider.execute(test_intent)
 
     assert mock_provider.render_count == 3
 
 
 @pytest.mark.asyncio
-async def test_output_provider_render_internal_with_error(error_provider, test_intent):
-    """测试 _render_internal() 抛出错误的情况"""
+async def test_output_providerexecute_with_error(error_provider, test_intent):
+    """测试 execute() 抛出错误的情况"""
     with pytest.raises(ValueError) as exc_info:
-        await error_provider._render_internal(test_intent)
+        await error_provider.execute(test_intent)
 
     assert "模拟渲染错误" in str(exc_info.value)
 
@@ -320,7 +326,7 @@ async def test_output_provider_stop_after_render(event_bus, test_intent):
     """测试渲染后 stop() 正常工作"""
     provider = MockOutputProvider({})
     await provider.start(event_bus=event_bus)
-    await provider._render_internal(test_intent)
+    await provider.execute(test_intent)
 
     assert provider.render_count == 1
 
@@ -423,7 +429,7 @@ async def test_output_provider_full_lifecycle(event_bus, test_intent):
     assert provider.start_called is True
 
     # 3. 渲染
-    await provider._render_internal(test_intent)
+    await provider.execute(test_intent)
     assert provider.render_count == 1
 
     # 4. 停止
@@ -439,7 +445,7 @@ async def test_output_provider_restart(event_bus, test_intent):
 
     # 第一次运行
     await provider.start(event_bus=event_bus)
-    await provider._render_internal(test_intent)
+    await provider.execute(test_intent)
     await provider.stop()
 
     assert provider.render_count == 1
@@ -447,7 +453,7 @@ async def test_output_provider_restart(event_bus, test_intent):
 
     # 第二次运行
     await provider.start(event_bus=event_bus)
-    await provider._render_internal(test_intent)
+    await provider.execute(test_intent)
     await provider.stop()
 
     assert provider.render_count == 2
@@ -508,7 +514,7 @@ async def test_output_provider_with_empty_config(test_intent):
     """测试使用空配置的 OutputProvider"""
     provider = MockOutputProvider({})
 
-    await provider._render_internal(test_intent)
+    await provider.execute(test_intent)
 
     assert provider.render_count == 1
     assert provider.config == {}

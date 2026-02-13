@@ -19,7 +19,6 @@ from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 from src.modules.types.base.input_provider import InputProvider
 from src.modules.types.base.normalized_message import NormalizedMessage
-from src.domains.input.normalization.content import TextContent
 
 # 导入屏幕分析和读取模块
 try:
@@ -83,14 +82,13 @@ class ReadPingmuInputProvider(InputProvider):
         # 消息队列（用于将回调转换为异步生成器）
         self._message_queue: Optional[asyncio.Queue] = None
 
-    async def start(self) -> AsyncIterator[NormalizedMessage]:
+    async def generate(self) -> AsyncIterator[NormalizedMessage]:
         """
         启动 Provider 并返回 NormalizedMessage 流
 
         Yields:
             NormalizedMessage: 屏幕描述消息
         """
-        await self._setup_internal()
         self.is_running = True
 
         # 创建消息队列
@@ -148,7 +146,6 @@ class ReadPingmuInputProvider(InputProvider):
             self.logger.error(f"数据采集出错: {e}", exc_info=True)
         finally:
             self.is_running = False
-            await self._cleanup_internal()
             self.logger.info("ReadPingmuInputProvider 已停止")
 
     async def _monitoring_loop(self):
@@ -187,23 +184,17 @@ class ReadPingmuInputProvider(InputProvider):
             if not new_context:
                 return
 
-            # 创建 TextContent
-            content = TextContent(
-                text=new_context,
-                user="屏幕分析",
-                user_id="screen_analyzer",
-            )
-
-            # 创建 NormalizedMessage
+            # 直接创建 NormalizedMessage
             normalized_msg = NormalizedMessage(
-                text=content.text,
-                content=content,
+                text=new_context,
                 source="read_pingmu",
-                data_type=content.type,
-                importance=content.get_importance(),
-                metadata={
+                data_type="text",
+                importance=0.5,
+                raw={
                     "images_processed": images_processed,
                     "statistics": data.get("statistics", {}),
+                    "user": "屏幕分析",
+                    "user_id": "screen_analyzer",
                 },
             )
 
@@ -219,7 +210,7 @@ class ReadPingmuInputProvider(InputProvider):
         except Exception as e:
             self.logger.error(f"创建屏幕描述消息失败: {e}", exc_info=True)
 
-    async def _cleanup_internal(self):
+    async def cleanup(self):
         """清理资源"""
         if self._running and self.screen_analyzer:
             self.logger.info("正在停止屏幕监控...")

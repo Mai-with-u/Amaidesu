@@ -5,10 +5,6 @@ MaiCoreDecisionProvider - MaiCore决策提供者
 - 将 NormalizedMessage 转换为 Intent
 - 通过 WebSocket 与 MaiCore 通信
 - 自己解析 MaiCore 响应为 Intent（支持 LLM 和规则两种方式）
-
-事件说明:
-- "decision.response_generated": 保留字符串形式的事件名，用于向后兼容
-  该事件不在 CoreEvents 中定义，因为它是 MaiCore 特定的历史事件
 """
 
 import asyncio
@@ -145,27 +141,17 @@ class MaiCoreDecisionProvider(DecisionProvider):
         self._pending_futures: Dict[str, asyncio.Future] = {}
         self._futures_lock = asyncio.Lock()
 
-    async def setup(
-        self,
-        event_bus: "EventBus",
-        config: Optional[Dict[str, Any]] = None,
-        dependencies: Optional[Dict[str, Any]] = None,
-    ) -> None:
+    async def init(self) -> None:
         """
-        设置 MaiCoreDecisionProvider
+        初始化 MaiCoreDecisionProvider
 
-        Args:
-            event_bus: EventBus 实例
-            config: Provider 配置（忽略，使用 __init__ 传入的 config）
-            dependencies: 依赖注入字典，可能包含 llm_service
+        配置 Router 并创建 RouterAdapter。
         """
-        self._event_bus = event_bus
         self.logger.info("初始化 MaiCoreDecisionProvider...")
 
         # 保存依赖注入
-        if dependencies:
-            self._dependencies.update(dependencies)
-            llm_service = dependencies.get("llm_service")
+        if self._dependencies:
+            llm_service = self._dependencies.get("llm_service")
             if llm_service:
                 self.logger.info("LLMService 已注入，将使用 LLM 进行 Intent 解析")
             else:
@@ -179,7 +165,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
             raise RuntimeError("Router 初始化失败")
 
         # 创建 RouterAdapter
-        self._router_adapter = RouterAdapter(self._router, event_bus)
+        self._router_adapter = RouterAdapter(self._router, self.event_bus)
         self._router_adapter.register_message_handler(self._handle_maicore_message)
 
         self.logger.info("MaiCoreDecisionProvider 初始化完成")
@@ -379,22 +365,6 @@ class MaiCoreDecisionProvider(DecisionProvider):
 
         if not future:
             self.logger.warning(f"收到未知消息的响应: {message_id}")
-            # 仍然发布事件（向后兼容）
-            if self._event_bus:
-                try:
-                    from src.modules.events.names import CoreEvents
-                    from src.modules.events.payloads.decision import DecisionResponsePayload
-
-                    await self._event_bus.emit(
-                        CoreEvents.DECISION_RESPONSE_GENERATED,
-                        DecisionResponsePayload(
-                            response=message.model_dump(),
-                            provider=self.provider_name,
-                        ),
-                        source=self.provider_name,
-                    )
-                except Exception as e:
-                    self.logger.error(f"发布决策响应事件失败: {e}", exc_info=True)
             return
 
         try:

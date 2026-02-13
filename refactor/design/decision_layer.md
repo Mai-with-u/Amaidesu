@@ -7,8 +7,8 @@
 | Provider | 特点 | 适用场景 |
 |----------|------|----------|
 | **MaiCoreDecisionProvider** | WebSocket + LLM意图解析 | 默认，与 MaiCore 集成 |
-| **LocalLLMDecisionProvider** | 直接调用 LLM | 独立部署 |
-| **RuleEngineDecisionProvider** | 规则匹配 | 简单场景、低延迟 |
+| **LLMPDecisionProvider** | 直接调用 LLM | 独立部署，使用 PromptManager |
+| **MaicraftDecisionProvider** | 弹幕游戏规则引擎 | 简单场景、低延迟，支持命令解析 |
 
 ---
 

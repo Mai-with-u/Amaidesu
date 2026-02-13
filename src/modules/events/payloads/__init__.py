@@ -41,7 +41,10 @@ from .input import (
     RawDataPayload,
 )
 from .output import (
-    ParametersGeneratedPayload,
+    OBSSendTextPayload,
+    OBSSetSourceVisibilityPayload,
+    OBSSwitchScenePayload,
+    RemoteStreamRequestImagePayload,
     RenderCompletedPayload,
     RenderFailedPayload,
 )
@@ -65,9 +68,12 @@ __all__ = [
     "ProviderConnectedPayload",
     "ProviderDisconnectedPayload",
     # Output Domain
-    "ParametersGeneratedPayload",
     "RenderCompletedPayload",
     "RenderFailedPayload",
+    "OBSSendTextPayload",
+    "OBSSwitchScenePayload",
+    "OBSSetSourceVisibilityPayload",
+    "RemoteStreamRequestImagePayload",
     # System
     "StartupPayload",
     "ShutdownPayload",

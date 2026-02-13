@@ -8,7 +8,7 @@ import asyncio
 
 import pytest
 
-from src.domains.output.parameters.render_parameters import ExpressionParameters
+from src.modules.types import ExpressionParameters
 from src.domains.output.pipelines.base import (
     OutputPipelineBase,
     PipelineException,

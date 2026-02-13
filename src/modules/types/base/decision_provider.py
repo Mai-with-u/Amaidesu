@@ -16,7 +16,7 @@ DecisionProvider负责将NormalizedMessage转换为决策结果(Intent)。
 """
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from src.modules.types import Intent
@@ -52,9 +52,23 @@ class DecisionProvider(ABC):
         self.event_bus = None
         self.is_started = False
 
-    async def start(self, event_bus, config: Optional[dict] = None, dependencies: Optional[dict] = None):
+    async def init(self) -> None:  # noqa: B027
         """
-        启动Provider
+        初始化 Provider（子类可重写）
+
+        执行初始化逻辑，如建立连接、加载模型等。
+        子类应重写此方法来实现具体的初始化逻辑。
+        """
+        pass
+
+    async def start(
+        self,
+        event_bus,
+        config: Optional[dict] = None,
+        dependencies: Optional[dict] = None,
+    ) -> None:
+        """
+        启动 Provider
 
         Args:
             event_bus: EventBus实例
@@ -68,8 +82,26 @@ class DecisionProvider(ABC):
         if config:
             self.config = config
         self._dependencies = dependencies or {}
-        await self._start_internal()
+        await self.init()
         self.is_started = True
+
+    async def stop(self) -> None:
+        """
+        停止 Provider
+
+        停止Provider并释放所有资源。
+        """
+        await self.cleanup()
+        self.is_started = False
+
+    async def cleanup(self) -> None:  # noqa: B027
+        """
+        清理资源（子类可重写）
+
+        执行清理逻辑，如关闭连接、释放资源等。
+        子类应重写此方法来实现具体的清理逻辑。
+        """
+        pass
 
     @abstractmethod
     async def decide(self, message: "NormalizedMessage") -> "Intent":
@@ -89,22 +121,3 @@ class DecisionProvider(ABC):
             Exception: 决策过程中的错误
         """
         pass
-
-    async def _start_internal(self):  # noqa: B027
-        """内部启动逻辑(子类可选重写)"""
-        # 子类可以重写此方法来执行启动逻辑,如连接到服务、加载模型等。
-        ...
-
-    async def stop(self):
-        """
-        停止Provider并清理资源
-
-        停止Provider并释放所有资源。
-        """
-        await self._stop_internal()
-        self.is_started = False
-
-    async def _stop_internal(self):  # noqa: B027
-        """内部停止逻辑(子类可选重写)"""
-        # 子类可以重写此方法来执行停止逻辑,如关闭连接、释放资源等。
-        ...
