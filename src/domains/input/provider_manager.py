@@ -5,13 +5,14 @@ InputProviderManager - 输入Provider管理器
 """
 
 import asyncio
-from typing import Any
+from typing import Any, Optional
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.input import MessageReadyPayload
 from src.modules.logging import get_logger
 from src.modules.types.base.input_provider import InputProvider
+from src.domains.input.pipelines.manager import InputPipelineManager
 
 
 class InputProviderManager:
@@ -22,14 +23,20 @@ class InputProviderManager:
     支持并发启动、优雅停止、错误隔离、Pipeline过滤等功能。
     """
 
-    def __init__(self, event_bus: EventBus):
+    def __init__(
+        self,
+        event_bus: EventBus,
+        pipeline_manager: Optional[InputPipelineManager] = None,
+    ):
         """
         初始化InputProviderManager
 
         Args:
             event_bus: 事件总线实例
+            pipeline_manager: Pipeline 管理器实例（可选）
         """
         self.event_bus = event_bus
+        self.pipeline_manager = pipeline_manager
         self.logger = get_logger("InputProviderManager")
 
         # Provider列表
@@ -44,30 +51,12 @@ class InputProviderManager:
         # 是否已启动
         self._is_started = False
 
-        # Pipeline管理器（可选）
-        self.pipeline_manager = None
-
-        self.logger.debug("InputProviderManager初始化完成")
-
-    async def setup_all_providers(
-        self,
-        event_bus: EventBus,
-        dependencies: dict[str, Any],
-    ) -> None:
-        """
-        设置所有Provider
-
-        Args:
-            event_bus: 事件总线
-            dependencies: 依赖注入（包括 pipeline_manager）
-        """
-        self.event_bus = event_bus
-        self.pipeline_manager = dependencies.get("pipeline_manager")
-
         if self.pipeline_manager:
             self.logger.info("已集成 Pipeline 到 ProviderManager")
         else:
             self.logger.debug("未提供 Pipeline，跳过消息过滤")
+
+        self.logger.debug("InputProviderManager初始化完成")
 
     async def start_all_providers(self, providers: list[InputProvider]) -> None:
         """

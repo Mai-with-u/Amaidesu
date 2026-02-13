@@ -158,30 +158,26 @@ compression = "zip"
 # 禁用时，同一天多次启动会追加到同一文件（如 amaidesu_2026-02-07.jsonl）
 split_by_session = false
 
-# ========== 管道配置 ==========
+# ============================================================
+# Pipeline 配置
+# ============================================================
 
-[pipelines]
-# TextPipeline 示例：限流
-# [pipelines.rate_limit]
-# priority = 100
-# global_rate_limit = 100  # 全局每分钟最大消息数
-# user_rate_limit = 10     # 每个用户每分钟最大消息数
-# window_size = 60         # 滑动窗口大小（秒）
-
-# TextPipeline 示例：限流
+# 限流管道 - 限制消息发送频率
 [pipelines.rate_limit]
 priority = 100
 enabled = true
-global_rate_limit = 100
-user_rate_limit = 10
-window_size = 60
+global_rate_limit = 100  # 全局每分钟最大消息数
+user_rate_limit = 10     # 每用户每分钟最大消息数
+window_size = 60         # 滑动窗口大小（秒）
 
-# TextPipeline 示例：相似消息过滤
+# 相似文本过滤管道 - 过滤重复消息
 [pipelines.similar_filter]
 priority = 500
 enabled = true
-similarity_threshold = 0.85
-time_window = 5.0
+similarity_threshold = 0.85  # 相似度阈值 (0.0-1.0)
+time_window = 5.0            # 检查窗口时间范围（秒）
+min_text_length = 3          # 最小处理文本长度
+cross_user_filter = true     # 是否跨用户过滤相似消息
 
 # === 输出管道（OutputPipeline）===
 # OutputPipeline 示例：敏感词过滤

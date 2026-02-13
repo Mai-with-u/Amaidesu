@@ -249,7 +249,7 @@ def log_config_update(main_cfg_updated: bool) -> None:
 
 
 async def load_pipeline_manager(config: Dict[str, Any]) -> Optional[InputPipelineManager]:
-    """加载输入管道管理器，仅包含 TextPipeline（Input Domain: 文本预处理）。"""
+    """加载输入管道管理器，包含 MessagePipeline（Input Domain: 消息预处理）。"""
     pipeline_config = config.get("pipelines", {})
     if not pipeline_config:
         logger.info("配置中未启用管道功能")
@@ -261,16 +261,21 @@ async def load_pipeline_manager(config: Dict[str, Any]) -> Optional[InputPipelin
     try:
         manager = InputPipelineManager()
 
-        # 加载 TextPipeline（Input Domain: 文本预处理）
+        # 加载 MessagePipeline（Input Domain: 消息预处理）
+        await manager.load_message_pipelines(pipeline_load_dir, pipeline_config)
+        message_pipeline_count = len(manager._message_pipelines)
+
+        # 同时加载 TextPipeline（保持兼容）
         await manager.load_text_pipelines(pipeline_load_dir, pipeline_config)
         text_pipeline_count = len(manager._text_pipelines)
 
-        if text_pipeline_count > 0:
-            logger.info(f"管道加载完成，共 {text_pipeline_count} 个 TextPipeline。")
+        total_pipelines = message_pipeline_count + text_pipeline_count
+        if total_pipelines > 0:
+            logger.info(f"管道加载完成，共 {message_pipeline_count} 个 MessagePipeline，{text_pipeline_count} 个 TextPipeline。")
+            return manager
         else:
             logger.warning("未找到任何有效的管道，管道功能将被禁用。")
             return None
-        return manager
     except Exception as e:
         logger.error(f"加载管道时出错: {e}", exc_info=True)
         logger.warning("由于加载失败，管道处理功能将被禁用")
@@ -350,7 +355,15 @@ async def create_app_components(
     if input_config:
         logger.info("初始化输入Provider管理器（Input Domain）...")
         try:
-            input_provider_manager = InputProviderManager(event_bus)
+            # 直接参数注入：在构造时传入 pipeline_manager
+            input_provider_manager = InputProviderManager(
+                event_bus=event_bus,
+                pipeline_manager=input_pipeline_manager,
+            )
+            if input_pipeline_manager:
+                logger.info("已注入 InputPipelineManager 到 InputProviderManager")
+
+            # 加载并启动 Provider
             providers = await input_provider_manager.load_from_config(input_config, config_service=config_service)
             await input_provider_manager.start_all_providers(providers)
         except Exception as e:
