@@ -1,122 +1,62 @@
 """
-NormalizedMessage数据类型定义
+标准化消息类型
 
-Input Domain中的Normalization模块输出格式，表示标准化的消息。
-
-核心改进：
-- 保留原始结构化数据（不丢失信息）
-- 提供文本描述（用于LLM处理）
-- 自动计算重要性（0-1）
-- 使用 Pydantic BaseModel 自动序列化
+所有 Provider 产出的统一消息格式。
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, Field
+
+# Forward reference for BiliRawMessage - 避免循环导入
+BiliRawMessage = Any  # 实际类型在运行时动态绑定
 
 
 class NormalizedMessage(BaseModel):
     """
-    标准化消息（Input Domain中Normalization的输出）
+    标准化消息
 
-    核心改进：
-    - text: 用于LLM处理的文本描述
-    - content: 保留原始结构化数据（不丢失信息）
-    - importance: 预计算的重要性（0-1）
-    - 使用 Pydantic 自动序列化/反序列化
+    所有 Provider 产出的统一消息格式，包含文本描述、数据类型、重要性和原始消息。
 
     Attributes:
-        text: 文本描述（用于LLM处理）
-        content: 结构化内容（StructuredContent的任意子类）
-        source: 数据来源（弹幕/控制台/等）
-        data_type: 数据类型（text/gift/super_chat等）
-        importance: 重要性（0-1，自动计算）
-        metadata: 额外的元数据
-        timestamp: 时间戳（Unix时间戳，秒）
+        text: 用于 LLM 处理的文本描述
+        source: 数据来源标识（如 "bili_danmaku_official", "console"）
+        data_type: 数据类型（text, gift, super_chat, guard, enter）
+        importance: 重要性评分（0-1），用于过滤和优先级排序
+        timestamp: 消息时间戳
+        raw: 平台原始消息对象（类型安全，可选）
     """
 
-    model_config = ConfigDict(
-        arbitrary_types_allowed=True,
-        # 使用枚举值而非对象
-        use_enum_values=True,
-    )
-
-    text: str
-    content: Any  # StructuredContent 的任意子类（避免循环导入）
-    source: str
-    data_type: str
-    importance: float
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-    timestamp: float = 0.0  # 初始化时会被 model_validator 设置
-
-    @model_validator(mode="after")
-    def set_defaults_and_metadata(self) -> "NormalizedMessage":
-        """初始化后处理：设置默认时间戳和元数据"""
-        import time
-
-        # 设置时间戳（如果未提供）
-        if self.timestamp == 0.0:
-            self.timestamp = time.time()
-
-        # 确保元数据包含基本字段
-        if "type" not in self.metadata:
-            self.metadata["type"] = self.data_type
-        if "timestamp" not in self.metadata:
-            self.metadata["timestamp"] = self.timestamp
-
-        return self
+    text: str = Field(description="用于 LLM 处理的文本描述")
+    source: str = Field(description="数据来源标识")
+    data_type: str = Field(default="text", description="数据类型")
+    importance: float = Field(default=0.5, ge=0.0, le=1.0, description="重要性评分")
+    timestamp: float = Field(default=0.0, description="消息时间戳")
+    raw: Optional[BiliRawMessage] = Field(default=None, description="平台原始消息")
 
     @property
     def user_id(self) -> Optional[str]:
-        """获取用户ID（便捷方法）"""
-        return self.content.get_user_id()
+        """从 raw 中提取用户 ID"""
+        if self.raw is None:
+            return None
+        return getattr(self.raw, "open_id", None)
 
     @property
-    def display_text(self) -> str:
-        """获取显示文本（便捷方法）"""
-        return self.content.get_display_text()
+    def user_name(self) -> Optional[str]:
+        """从 raw 中提取用户名"""
+        if self.raw is None:
+            return None
+        return getattr(self.raw, "uname", None)
 
-    @classmethod
-    def from_raw_data(
-        cls,
-        raw_data: Any,
-        text: str,
-        source: str,
-        content: Any,  # StructuredContent 的任意子类
-        importance: float = 0.0,
-    ) -> "NormalizedMessage":
-        """
-        从RawData创建NormalizedMessage
-
-        Args:
-            raw_data: 原始数据对象（RawData或dict）
-            text: 标准化后的文本
-            source: 数据源
-            content: 结构化内容
-            importance: 重要性
-
-        Returns:
-            NormalizedMessage对象
-        """
-        import time
-
-        # 处理metadata（使用copy避免修改原始对象）
-        if isinstance(raw_data, dict):
-            metadata = raw_data.get("metadata", {}).copy()
-        else:
-            # 假设是RawData对象
-            metadata = getattr(raw_data, "metadata", {}).copy()
-
-        # 添加基本元数据
-        metadata["source"] = source
-        metadata["type"] = content.type
-        metadata["timestamp"] = time.time()
-
-        return cls(
-            text=text,
-            content=content,
-            source=source,
-            data_type=content.type,
-            importance=importance,
-            metadata=metadata,
-        )
+    def to_dict(self) -> dict:
+        """转换为字典（用于序列化）"""
+        result = {
+            "text": self.text,
+            "source": self.source,
+            "data_type": self.data_type,
+            "importance": self.importance,
+            "timestamp": self.timestamp,
+        }
+        if self.raw is not None:
+            result["raw_data"] = self.raw.model_dump()
+        return result

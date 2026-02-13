@@ -5,19 +5,27 @@ Bilibili 官方弹幕 InputProvider
 """
 
 import asyncio
+import time
 from typing import Any, AsyncIterator, Dict, Literal, Optional
 
 from pydantic import Field
 
+from src.domains.input.shared.bili_messages import (
+    BiliBaseMessage,
+    BiliMessageType,
+    BiliMessageTypeConfig,
+    DanmakuMessage,
+    EnterMessage,
+    GiftMessage,
+    GuardMessage,
+    SuperChatMessage,
+)
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 from src.modules.types.base.input_provider import InputProvider
 from src.modules.types.base.normalized_message import NormalizedMessage
-from src.domains.input.normalization.content import TextContent
 
 from .client.websocket_client import BiliWebSocketClient
-from .service.message_cache import MessageCacheService
-from .service.message_handler import BiliMessageHandler
 
 
 class BiliDanmakuOfficialInputProvider(InputProvider):
@@ -53,10 +61,11 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
         self.access_key_secret = self.typed_config.access_key_secret
         self.api_host = self.typed_config.api_host
 
+        # 消息类型配置
+        self.message_type_config = BiliMessageTypeConfig(config)
+
         # 状态变量
         self.websocket_client = None
-        self.message_handler = None
-        self.message_cache_service = None
         self._stop_event = asyncio.Event()
 
         # Prompt Context Tags
@@ -85,19 +94,8 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
         await self._setup_internal()
         self.is_running = True
 
-        # 初始化消息缓存服务
-        self.message_cache_service = MessageCacheService(max_cache_size=self.typed_config.message_cache_size)
-
         # 创建队列用于接收消息
         message_queue = asyncio.Queue()
-
-        # 初始化消息处理器
-        self.message_handler = BiliMessageHandler(
-            config=self.config,
-            context_tags=self.context_tags,
-            template_items=self.template_items,
-            message_cache_service=self.message_cache_service,
-        )
 
         # 初始化WebSocket客户端
         self.websocket_client = BiliWebSocketClient(
@@ -156,46 +154,140 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
             await message_queue.put(None)
 
     async def _handle_message_from_bili(self, message_data: Dict[str, Any], message_queue: asyncio.Queue):
-        """处理从Bilibili接收到的消息"""
+        """处理从 Bilibili 接收到的消息"""
         try:
-            message = await self.message_handler.create_message_base(message_data)
-            if message:
-                # 缓存消息
-                self.message_cache_service.cache_message(message)
-                self.logger.debug(f"消息已缓存: {message.message_info.message_id}")
+            cmd = message_data.get("cmd", "")
 
-                # 从 message 中提取文本和用户信息
-                text = message.content.text if hasattr(message.content, "text") else str(message.content)
-                user = message.message_info.sender_name
-                user_id = message.message_info.sender_id
+            # 使用消息类型配置进行过滤
+            if not self.message_type_config.should_handle(cmd):
+                return
 
-                # 创建 TextContent
-                content = TextContent(
-                    text=text,
-                    user=user,
-                    user_id=user_id,
-                )
+            # 从字典创建消息对象
+            bili_message = self._create_message_from_dict(message_data)
+            if not bili_message:
+                self.logger.debug(f"无法解析消息类型: {cmd}")
+                return
 
-                # 创建 NormalizedMessage
-                # 将 MessageBase 转换为字典以避免序列化问题
-                normalized_msg = NormalizedMessage(
-                    text=content.text,
-                    content=content,
-                    source="bili_danmaku_official",
-                    data_type=content.type,
-                    importance=content.get_importance(),
-                    metadata={
-                        "message_id": message.message_info.message_id,
-                        "room_id": self.id_code,
-                        "message_base": message.model_dump(),
-                    },
-                )
-                await message_queue.put(normalized_msg)
+            # 直接构造 NormalizedMessage
+            normalized_msg = self._create_normalized_message(bili_message)
+
+            self.logger.debug(f"消息已处理: {normalized_msg.text[:50]}...")
+            await message_queue.put(normalized_msg)
 
         except Exception as e:
-            # 捕获异常并记录详细信息
-            self.logger.error(f"处理消息时出错: {type(e).__name__}: {e}", exc_info=True)
-            self.logger.debug(f"失败消息数据: cmd={message_data.get('cmd')}, data keys={list(message_data.get('data', {}).keys())[:5] if 'data' in message_data else 'N/A'}")
+            self.logger.error(f"处理消息时出错: {e}", exc_info=True)
+            self.logger.debug(f"失败消息数据: cmd={message_data.get('cmd')}")
+
+    def _create_message_from_dict(self, data: Dict[str, Any]) -> Optional[BiliBaseMessage]:
+        """从字典创建对应的消息对象"""
+        cmd = data.get("cmd", "")
+
+        if cmd == BiliMessageType.DANMAKU.value:
+            return DanmakuMessage.from_dict(data)
+        elif cmd == BiliMessageType.ENTER.value:
+            return EnterMessage.from_dict(data)
+        elif cmd == BiliMessageType.GIFT.value:
+            return GiftMessage.from_dict(data)
+        elif cmd == BiliMessageType.GUARD.value:
+            return GuardMessage.from_dict(data)
+        elif cmd == BiliMessageType.SUPER_CHAT.value:
+            return SuperChatMessage.from_dict(data)
+        else:
+            return None
+
+    def _create_normalized_message(self, bili_msg: BiliBaseMessage) -> NormalizedMessage:
+        """从 B 站消息构造 NormalizedMessage"""
+        if isinstance(bili_msg, DanmakuMessage):
+            self.logger.info(f"[弹幕] {bili_msg.uname}: {bili_msg.msg}")
+            return NormalizedMessage(
+                text=bili_msg.msg,
+                source="bili_danmaku_official",
+                data_type="text",
+                importance=self._calculate_danmaku_importance(bili_msg),
+                timestamp=bili_msg.timestamp or time.time(),
+                raw=bili_msg,
+            )
+
+        elif isinstance(bili_msg, EnterMessage):
+            self.logger.info(f"[进入] {bili_msg.uname} 进入了直播间")
+            return NormalizedMessage(
+                text=f"{bili_msg.uname} 进入了直播间",
+                source="bili_danmaku_official",
+                data_type="enter",
+                importance=0.1,
+                timestamp=bili_msg.timestamp or time.time(),
+                raw=bili_msg,
+            )
+
+        elif isinstance(bili_msg, GiftMessage):
+            gift_name = bili_msg.gift_name or "礼物"
+            description = f"{bili_msg.uname} 送出了 {bili_msg.gift_num} 个 {gift_name}"
+            self.logger.info(f"[礼物] {description}")
+            return NormalizedMessage(
+                text=description,
+                source="bili_danmaku_official",
+                data_type="gift",
+                importance=self._calculate_gift_importance(bili_msg),
+                timestamp=bili_msg.timestamp or time.time(),
+                raw=bili_msg,
+            )
+
+        elif isinstance(bili_msg, GuardMessage):
+            guard_level_map = {1: "总督", 2: "提督", 3: "舰长"}
+            guard_name = guard_level_map.get(bili_msg.guard_level, "大航海")
+            description = f"{bili_msg.uname} 开通了 {guard_name}"
+            self.logger.info(f"[大航海] {description}")
+            importance_scores = {1: 1.0, 2: 0.9, 3: 0.8}
+            return NormalizedMessage(
+                text=description,
+                source="bili_danmaku_official",
+                data_type="guard",
+                importance=importance_scores.get(bili_msg.guard_level, 0.7),
+                timestamp=bili_msg.timestamp or time.time(),
+                raw=bili_msg,
+            )
+
+        elif isinstance(bili_msg, SuperChatMessage):
+            if bili_msg.message.strip():
+                description = f"[SC {bili_msg.rmb}元] {bili_msg.uname}: {bili_msg.message}"
+                text = bili_msg.message
+            else:
+                description = f"[SC {bili_msg.rmb}元] {bili_msg.uname} 发送了醒目留言"
+                text = description
+            self.logger.info(f"[SC] {description}")
+            importance = min(0.5 + bili_msg.rmb / 100, 1.0)
+            return NormalizedMessage(
+                text=text,
+                source="bili_danmaku_official",
+                data_type="super_chat",
+                importance=importance,
+                timestamp=bili_msg.timestamp or time.time(),
+                raw=bili_msg,
+            )
+
+        else:
+            return NormalizedMessage(
+                text=str(bili_msg.raw_data),
+                source="bili_danmaku_official",
+                data_type="unknown",
+                importance=0.1,
+                timestamp=time.time(),
+                raw=bili_msg,
+            )
+
+    def _calculate_danmaku_importance(self, msg: DanmakuMessage) -> float:
+        """计算弹幕重要性"""
+        base = 0.5
+        medal_bonus = min(msg.fans_medal_level / 40, 0.2)
+        guard_bonus = {1: 0.3, 2: 0.2, 3: 0.1}.get(msg.guard_level, 0)
+        return min(base + medal_bonus + guard_bonus, 1.0)
+
+    def _calculate_gift_importance(self, msg: GiftMessage) -> float:
+        """计算礼物重要性"""
+        base = min(msg.price / 10000, 0.5)
+        quantity_bonus = min(msg.gift_num / 10, 0.3)
+        paid_bonus = 0.1 if msg.paid else 0
+        return min(base + quantity_bonus + paid_bonus, 1.0)
 
     async def _cleanup_internal(self):
         """清理资源"""
@@ -209,13 +301,5 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
                 self.logger.error(f"关闭WebSocket客户端时发生异常: {e}")
             finally:
                 self.websocket_client = None
-
-        # 清理缓存服务
-        if self.message_cache_service:
-            try:
-                self.message_cache_service.clear_cache()
-                self.logger.info("消息缓存已清理")
-            except Exception as e:
-                self.logger.warning(f"清理消息缓存时出错: {e}")
 
         self.logger.info("BiliDanmakuOfficialInputProvider 已清理")
