@@ -16,10 +16,10 @@ from src.modules.config.service import ConfigService
 from src.modules.llm.manager import LLMManager
 from src.modules.context import ContextService, ContextServiceConfig
 
-from src.domains.decision import DecisionProviderManager, DecisionCoordinator
+from src.domains.decision import DecisionProviderManager
 from src.domains.input.pipelines.manager import InputPipelineManager
 from src.domains.input.provider_manager import InputProviderManager
-from src.domains.output import OutputCoordinator
+from src.domains.output import OutputProviderManager
 
 logger = get_logger("Main")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -284,11 +284,10 @@ async def create_app_components(
 ) -> Tuple[
     ContextService,
     EventBus,
-    Optional[OutputCoordinator],
+    Optional[OutputProviderManager],
     Optional[InputProviderManager],
     LLMManager,
     Optional[DecisionProviderManager],
-    Optional[DecisionCoordinator],
 ]:
     """创建并连接核心组件。
 
@@ -299,17 +298,15 @@ async def create_app_components(
     4. EventBus
     5. InputProviderManager
     6. DecisionProviderManager
-    7. DecisionCoordinator
-    8. OutputCoordinator
+    7. OutputProviderManager
 
-    返回顺序（8个）：
+    返回顺序（6个）：
     1. ContextService
     2. EventBus
-    3. OutputCoordinator
+    3. OutputProviderManager
     4. InputProviderManager
     5. LLMManager
     6. DecisionProviderManager
-    7. DecisionCoordinator
     """
     # 使用新的 [providers.*] 配置格式
     output_config = config.get("providers", {}).get("output", {})
@@ -368,7 +365,6 @@ async def create_app_components(
 
     # 决策域 (Decision Domain)
     decision_provider_manager: Optional[DecisionProviderManager] = None
-    decision_coordinator: Optional[DecisionCoordinator] = None
     if decision_config:
         logger.info("初始化决策域组件（Decision Domain）...")
         try:
@@ -386,43 +382,31 @@ async def create_app_components(
     else:
         logger.info("未检测到决策配置，决策域功能将被禁用")
 
-    # 决策协调器 (Decision Domain)
-    if decision_provider_manager:
-        logger.info("初始化决策协调器（Decision Domain）...")
+    # 输出Provider管理器 (Output Domain)
+    logger.info("初始化输出Provider管理器...")
+    output_provider_manager: Optional[OutputProviderManager] = OutputProviderManager(event_bus) if output_config else None
+    if output_provider_manager:
         try:
-            decision_coordinator = DecisionCoordinator(event_bus, decision_provider_manager)
-            await decision_coordinator.setup()
-            logger.info("决策协调器已设置（Decision Domain）")
-        except Exception as e:
-            logger.error(f"设置决策协调器失败: {e}", exc_info=True)
-            logger.warning("决策协调器功能不可用，继续启动其他服务")
-            decision_coordinator = None
-
-    # 输出协调器 (Output Domain)
-    logger.info("初始化输出协调器...")
-    output_coordinator: Optional[OutputCoordinator] = OutputCoordinator(event_bus) if output_config else None
-    if output_coordinator:
-        try:
-            await output_coordinator.setup(
+            await output_provider_manager.setup(
                 output_config,
                 config_service=config_service,
                 root_config=config,
                 audio_stream_channel=audio_stream_channel,
             )
-            logger.info("输出协调器已设置（Output Domain）")
+            await output_provider_manager.start()
+            logger.info("输出Provider管理器已设置（Output Domain）")
         except Exception as e:
-            logger.error(f"设置输出协调器失败: {e}", exc_info=True)
-            logger.warning("输出协调器功能不可用，继续启动其他服务")
-            output_coordinator = None
+            logger.error(f"设置输出Provider管理器失败: {e}", exc_info=True)
+            logger.warning("输出Provider管理器功能不可用，继续启动其他服务")
+            output_provider_manager = None
 
     return (
         context_service,
         event_bus,
-        output_coordinator,
+        output_provider_manager,
         input_provider_manager,
         llm_service,
         decision_provider_manager,
-        decision_coordinator,
     )
 
 
@@ -471,30 +455,28 @@ def restore_signal_handlers(original_sigint: Optional[Any], original_sigterm: Op
 
 async def run_shutdown(
     context_service: "ContextService",
-    output_coordinator: Optional[OutputCoordinator],
+    output_provider_manager: Optional[OutputProviderManager],
     input_provider_manager: Optional[InputProviderManager],
     llm_service: LLMManager,
     event_bus: EventBus,
     decision_provider_manager: Optional[DecisionProviderManager],
-    decision_coordinator: Optional[DecisionCoordinator],
 ) -> None:
     """按顺序执行关闭与清理。
 
     关闭顺序（关键）：
     1. 先停止数据生产者（InputProvider）
-    2. 组件取消订阅（InputProviderManager、DecisionCoordinator、OutputCoordinator、DecisionProviderManager）- 在 EventBus.cleanup 之前
+    2. 组件取消订阅（InputProviderManager、DecisionProviderManager、OutputProviderManager）- 在 EventBus.cleanup 之前
        2.1 清理输入域协调器（取消订阅 data.raw）
-       2.2 清理决策协调器（取消订阅 data.message）
-       2.3 清理输出协调器（取消订阅 decision.intent）
-       2.4 清理决策Provider管理器（取消订阅相关事件）
-       2.5 清理 OutputProvider（必须在 EventBus.cleanup 之前，因为会调用 event_bus.off()）
+       2.2 清理决策Provider管理器（取消订阅 data.message 和 decision.intent）
+       2.3 清理输出Provider管理器（取消订阅 decision.intent）
+       2.4 清理 OutputProvider（必须在 EventBus.cleanup 之前，因为会调用 event_bus.off()）
     3. 等待待处理事件完成（EventBus.cleanup）- 清除所有监听器
     4. 清理基础设施（LLM等）
 
     关键原则：
     - 所有订阅者的 cleanup() 必须在 EventBus.cleanup() 之前执行
     - 否则 cleanup() 中的 event_bus.off() 会因为监听器已被清除而失败
-    - OutputProvider 的 cleanup() 也会调用 event_bus.off()，因此必须在步骤 2.5 中清理
+    - OutputProvider 的 cleanup() 也会调用 event_bus.off()，因此必须在步骤 2.4 中清理
     """
     # 1. 先停止输入Provider（数据生产者）
     if input_provider_manager:
@@ -508,25 +490,7 @@ async def run_shutdown(
     # 2. 组件取消订阅（必须在 EventBus.cleanup 之前）
     # 这样组件可以正确地移除它们的监听器
 
-    # 2.1 清理决策协调器（取消订阅 data.message）
-    if decision_coordinator:
-        logger.info("正在清理决策协调器（取消订阅）...")
-        try:
-            await decision_coordinator.cleanup()
-            logger.info("决策协调器清理完成")
-        except Exception as e:
-            logger.error(f"清理决策协调器时出错: {e}")
-
-    # 2.3 清理输出协调器（取消订阅 decision.intent）
-    if output_coordinator:
-        logger.info("正在清理输出协调器（取消订阅）...")
-        try:
-            await output_coordinator.cleanup()
-            logger.info("输出协调器清理完成")
-        except Exception as e:
-            logger.error(f"清理输出协调器时出错: {e}")
-
-    # 2.4 清理决策Provider管理器（取消订阅相关事件）
+    # 2.1 清理决策Provider管理器（取消订阅 data.message）
     if decision_provider_manager:
         logger.info("正在清理决策Provider管理器（取消订阅）...")
         try:
@@ -535,13 +499,22 @@ async def run_shutdown(
         except Exception as e:
             logger.error(f"清理决策Provider管理器时出错: {e}")
 
-    # 2.5 清理 OutputProvider（必须在 EventBus.cleanup 之前）
+    # 2.2 清理输出Provider管理器（取消订阅 decision.intent）
+    if output_provider_manager:
+        logger.info("正在清理输出Provider管理器（取消订阅）...")
+        try:
+            await output_provider_manager.cleanup()
+            logger.info("输出Provider管理器清理完成")
+        except Exception as e:
+            logger.error(f"清理输出Provider管理器时出错: {e}")
+
+    # 2.3 清理 OutputProvider（必须在 EventBus.cleanup 之前）
     #     因为 OutputProvider.cleanup() 会调用 event_bus.off()
     #     而这需要在 EventBus 清理监听器之前完成
-    if output_coordinator and output_coordinator.output_provider_manager:
+    if output_provider_manager:
         logger.info("正在清理 OutputProvider...")
         try:
-            await output_coordinator.output_provider_manager.stop_all_providers()
+            await output_provider_manager.stop_all_providers()
             logger.info("OutputProvider 已清理")
         except Exception as e:
             logger.error(f"清理 OutputProvider 失败: {e}")
@@ -633,11 +606,10 @@ async def main() -> None:
     (
         context_service,
         event_bus,
-        output_coordinator,
+        output_provider_manager,
         input_provider_manager,
         llm_service,
         decision_provider_manager,
-        decision_coordinator,
     ) = await create_app_components(config, input_pipeline_manager, config_service)
 
     stop_event = asyncio.Event()
@@ -654,12 +626,11 @@ async def main() -> None:
     restore_signal_handlers(orig_sigint, orig_sigterm)
     await run_shutdown(
         context_service,
-        output_coordinator,
+        output_provider_manager,
         input_provider_manager,
         llm_service,
         event_bus,
         decision_provider_manager,
-        decision_coordinator,
     )
 
 

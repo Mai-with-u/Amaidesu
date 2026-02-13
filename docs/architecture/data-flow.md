@@ -163,7 +163,7 @@ class DecisionCoordinator:
 
 ```python
 # ✅ 正确：Output 订阅 Decision 事件
-class OutputCoordinator:
+class OutputProviderManager:
     async def setup(self):
         self.event_bus.on(
             CoreEvents.DECISION_INTENT,  # Decision 事件
