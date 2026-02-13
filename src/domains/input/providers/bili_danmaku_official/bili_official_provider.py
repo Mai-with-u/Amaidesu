@@ -192,9 +192,10 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
                 )
                 await message_queue.put(normalized_msg)
 
-        except Exception:
-            # 捕获异常并记录，避免格式化问题
-            self.logger.error("处理消息时出错", exc_info=True)
+        except Exception as e:
+            # 捕获异常并记录详细信息
+            self.logger.error(f"处理消息时出错: {type(e).__name__}: {e}", exc_info=True)
+            self.logger.debug(f"失败消息数据: cmd={message_data.get('cmd')}, data keys={list(message_data.get('data', {}).keys())[:5] if 'data' in message_data else 'N/A'}")
 
     async def _cleanup_internal(self):
         """清理资源"""
