@@ -6,7 +6,7 @@ VRChatProvider 单元测试
 2. Intent 适配 (_adapt_intent)
 3. 配置验证 (ConfigSchema)
 4. OSC 连接管理 (_connect, _disconnect)
-5. 渲染功能 (_render_internal)
+5. 渲染功能 (_render_to_platform)
 6. 手势映射 (GESTURE_MAP)
 7. 软降级模式 (python-osc 不可用)
 """
@@ -343,7 +343,7 @@ class TestVRChatProviderRendering:
     """测试渲染功能"""
 
     @pytest.mark.asyncio
-    async def test_render_internal_with_expressions(self, vrchat_config, mock_osc_client):
+    async def test_render_to_platform_with_expressions(self, vrchat_config, mock_osc_client):
         """测试渲染表情参数"""
         provider = VRChatProvider(vrchat_config)
         provider._osc_enabled = True
@@ -351,13 +351,13 @@ class TestVRChatProviderRendering:
         provider.osc_client = mock_osc_client
 
         params = {"expressions": {"MouthSmile": 0.8, "EyeOpen": 0.9}, "gestures": []}
-        await provider._render_internal(params)
+        await provider._render_to_platform(params)
 
         assert mock_osc_client.send_message.call_count == 2
         assert provider.render_count == 1
 
     @pytest.mark.asyncio
-    async def test_render_internal_with_gestures(self, vrchat_config, mock_osc_client):
+    async def test_render_to_platform_with_gestures(self, vrchat_config, mock_osc_client):
         """测试渲染手势"""
         provider = VRChatProvider(vrchat_config)
         provider._osc_enabled = True
@@ -365,14 +365,14 @@ class TestVRChatProviderRendering:
         provider.osc_client = mock_osc_client
 
         params = {"expressions": {}, "gestures": ["Wave", "Peace"]}
-        await provider._render_internal(params)
+        await provider._render_to_platform(params)
 
         # 应该发送两个 VRCEmote 消息
         assert mock_osc_client.send_message.call_count == 2
         assert provider.render_count == 1
 
     @pytest.mark.asyncio
-    async def test_render_internal_updates_render_count(self, vrchat_config, mock_osc_client):
+    async def test_render_to_platform_updates_render_count(self, vrchat_config, mock_osc_client):
         """测试 render_count 更新"""
         provider = VRChatProvider(vrchat_config)
         provider._osc_enabled = True
@@ -382,11 +382,11 @@ class TestVRChatProviderRendering:
         params = {"expressions": {"MouthSmile": 1.0}, "gestures": []}
 
         initial_count = provider.render_count
-        await provider._render_internal(params)
+        await provider._render_to_platform(params)
         assert provider.render_count == initial_count + 1
 
     @pytest.mark.asyncio
-    async def test_render_internal_when_not_connected(self, vrchat_config, mock_logger):
+    async def test_render_to_platform_when_not_connected(self, vrchat_config, mock_logger):
         """测试未连接时的渲染行为"""
         provider = VRChatProvider(vrchat_config)
         provider._osc_enabled = True
@@ -394,13 +394,13 @@ class TestVRChatProviderRendering:
         provider.logger = mock_logger
 
         params = {"expressions": {"MouthSmile": 1.0}, "gestures": []}
-        await provider._render_internal(params)
+        await provider._render_to_platform(params)
 
         # 应该记录警告，但不抛出异常
         mock_logger.warning.assert_called()
 
     @pytest.mark.asyncio
-    async def test_render_internal_when_osc_disabled(self, vrchat_config, mock_logger):
+    async def test_render_to_platform_when_osc_disabled(self, vrchat_config, mock_logger):
         """测试 OSC 禁用时的渲染行为"""
         provider = VRChatProvider(vrchat_config)
         provider._osc_enabled = False
@@ -408,13 +408,13 @@ class TestVRChatProviderRendering:
         provider.logger = mock_logger
 
         params = {"expressions": {"MouthSmile": 1.0}, "gestures": []}
-        await provider._render_internal(params)
+        await provider._render_to_platform(params)
 
         # 应该记录警告，但不抛出异常
         mock_logger.warning.assert_called()
 
     @pytest.mark.asyncio
-    async def test_render_internal_handles_send_exception(self, vrchat_config, mock_logger):
+    async def test_render_to_platform_handles_send_exception(self, vrchat_config, mock_logger):
         """测试渲染时处理发送异常（_send_parameter 内部捕获异常）"""
         provider = VRChatProvider(vrchat_config)
         provider._osc_enabled = True
@@ -426,9 +426,9 @@ class TestVRChatProviderRendering:
 
         params = {"expressions": {"MouthSmile": 1.0}, "gestures": []}
 
-        # _send_parameter 内部会捕获异常，不会传播到 _render_internal
+        # _send_parameter 内部会捕获异常，不会传播到 _render_to_platform
         # 所以这里不会抛出 RuntimeError
-        await provider._render_internal(params)
+        await provider._render_to_platform(params)
 
         # 应该记录错误日志（通过 _send_parameter 的 except 块）
         # 注意：由于 mock_logger 只是 MagicMock，我们可以检查是否有错误日志调用
@@ -567,12 +567,12 @@ class TestVRChatProviderSoftFallback:
 
     @pytest.mark.asyncio
     async def test_render_gracefully_handles_unavailable_osc(self, vrchat_config):
-        """测试 _render_internal 在 OSC 不可用时优雅处理"""
+        """测试 _render_to_platform 在 OSC 不可用时优雅处理"""
         with patch("src.domains.output.providers.avatar.vrchat.vrchat_provider.PYTHON_OSC_AVAILABLE", False):
             provider = VRChatProvider(vrchat_config)
             params = {"expressions": {"MouthSmile": 1.0}, "gestures": []}
             # 应该不抛出异常
-            await provider._render_internal(params)
+            await provider._render_to_platform(params)
 
 
 class TestVRChatProviderStats:

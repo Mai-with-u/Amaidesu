@@ -6,39 +6,49 @@
 
 import pytest
 
-from src.domains.output.parameters.render_parameters import ExpressionParameters
 from src.domains.output.pipelines.base import (
     OutputPipelineBase,
     PipelineErrorHandling,
     PipelineException,
 )
+from src.modules.types import ActionType, EmotionType, Intent, IntentAction
 
 # =============================================================================
 # 测试用 Pipeline
 # =============================================================================
 
 
+def create_test_intent(response_text: str = "测试响应") -> Intent:
+    """创建测试用的 Intent"""
+    return Intent(
+        original_text="测试输入",
+        response_text=response_text,
+        actions=[IntentAction(type=ActionType.NONE)],
+        emotion=EmotionType.NEUTRAL,
+    )
+
+
 class SimpleTestPipeline(OutputPipelineBase):
     """简单的测试 Pipeline"""
 
-    async def _process(self, params: ExpressionParameters):
-        """直接返回参数"""
-        return params
+    async def _process(self, intent: Intent):
+        """直接返回 Intent"""
+        return intent
 
 
 class ModifyingTestPipeline(OutputPipelineBase):
-    """修改参数的测试 Pipeline"""
+    """修改 Intent 的测试 Pipeline"""
 
-    async def _process(self, params: ExpressionParameters):
-        """修改文本内容"""
-        params.tts_text = params.tts_text + " [已修改]"
-        return params
+    async def _process(self, intent: Intent):
+        """修改响应文本"""
+        intent.response_text = intent.response_text + " [已修改]"
+        return intent
 
 
 class DroppingTestPipeline(OutputPipelineBase):
-    """丢弃参数的测试 Pipeline"""
+    """丢弃 Intent 的测试 Pipeline"""
 
-    async def _process(self, params: ExpressionParameters):
+    async def _process(self, intent: Intent):
         """返回 None 表示丢弃"""
         return None
 
@@ -46,7 +56,7 @@ class DroppingTestPipeline(OutputPipelineBase):
 class FailingTestPipeline(OutputPipelineBase):
     """抛出异常的测试 Pipeline"""
 
-    async def _process(self, params: ExpressionParameters):
+    async def _process(self, intent: Intent):
         """总是抛出异常"""
         raise ValueError("测试异常")
 
@@ -104,11 +114,11 @@ async def test_process_success():
     """测试成功处理"""
     pipeline = SimpleTestPipeline(config={})
 
-    params = ExpressionParameters(tts_text="测试消息")
-    result = await pipeline.process(params)
+    intent = create_test_intent("测试消息")
+    result = await pipeline.process(intent)
 
     assert result is not None
-    assert result.tts_text == "测试消息"
+    assert result.response_text == "测试消息"
 
 
 @pytest.mark.asyncio
@@ -116,11 +126,11 @@ async def test_process_modification():
     """测试参数修改"""
     pipeline = ModifyingTestPipeline(config={})
 
-    params = ExpressionParameters(tts_text="测试消息")
-    result = await pipeline.process(params)
+    intent = create_test_intent("测试消息")
+    result = await pipeline.process(intent)
 
     assert result is not None
-    assert result.tts_text == "测试消息 [已修改]"
+    assert result.response_text == "测试消息 [已修改]"
 
 
 @pytest.mark.asyncio
@@ -128,8 +138,8 @@ async def test_process_dropping():
     """测试丢弃参数"""
     pipeline = DroppingTestPipeline(config={})
 
-    params = ExpressionParameters(tts_text="测试消息")
-    result = await pipeline.process(params)
+    intent = create_test_intent("测试消息")
+    result = await pipeline.process(intent)
 
     assert result is None
 
@@ -139,10 +149,10 @@ async def test_process_exception():
     """测试处理异常"""
     pipeline = FailingTestPipeline(config={"error_handling": "continue"})
 
-    params = ExpressionParameters(tts_text="测试消息")
+    intent = create_test_intent("测试消息")
 
     with pytest.raises(ValueError, match="测试异常"):
-        await pipeline.process(params)
+        await pipeline.process(intent)
 
 
 # =============================================================================
@@ -155,11 +165,11 @@ async def test_statistics_processing():
     """测试处理计数"""
     pipeline = SimpleTestPipeline(config={})
 
-    params = ExpressionParameters(tts_text="测试")
+    intent = create_test_intent()
 
     # 处理多次
     for _ in range(5):
-        await pipeline.process(params)
+        await pipeline.process(intent)
 
     stats = pipeline.get_stats()
     assert stats.processed_count == 5
@@ -170,12 +180,12 @@ async def test_statistics_error():
     """测试错误计数"""
     pipeline = FailingTestPipeline(config={"error_handling": "continue"})
 
-    params = ExpressionParameters(tts_text="测试")
+    intent = create_test_intent()
 
     # 处理多次（都会失败）
     for _ in range(3):
         try:
-            await pipeline.process(params)
+            await pipeline.process(intent)
         except ValueError:
             pass
 
@@ -188,11 +198,11 @@ async def test_statistics_average_duration():
     """测试平均处理时间"""
     pipeline = SimpleTestPipeline(config={})
 
-    params = ExpressionParameters(tts_text="测试")
+    intent = create_test_intent()
 
     # 处理几次
     for _ in range(3):
-        await pipeline.process(params)
+        await pipeline.process(intent)
 
     stats = pipeline.get_stats()
     assert stats.processed_count == 3
@@ -233,11 +243,11 @@ async def test_reset_stats():
     """测试重置统计信息"""
     pipeline = SimpleTestPipeline(config={})
 
-    params = ExpressionParameters(tts_text="测试")
+    intent = create_test_intent()
 
     # 处理几次
     for _ in range(5):
-        await pipeline.process(params)
+        await pipeline.process(intent)
 
     stats_before = pipeline.get_stats()
     assert stats_before.processed_count == 5
@@ -329,27 +339,27 @@ def test_simple_test_pipeline_is_output_pipeline():
 
 
 @pytest.mark.asyncio
-async def test_process_empty_params():
-    """测试处理空参数"""
+async def test_process_empty_intent():
+    """测试处理空 Intent"""
     pipeline = SimpleTestPipeline(config={})
 
-    params = ExpressionParameters()  # 空参数
-    result = await pipeline.process(params)
+    intent = create_test_intent()  # 默认 Intent
+    result = await pipeline.process(intent)
 
     assert result is not None
 
 
 @pytest.mark.asyncio
-async def test_process_large_params():
-    """测试处理大型参数"""
+async def test_process_large_intent():
+    """测试处理大型 Intent"""
     pipeline = SimpleTestPipeline(config={})
 
     long_text = "a" * 100000
-    params = ExpressionParameters(tts_text=long_text)
-    result = await pipeline.process(params)
+    intent = create_test_intent(long_text)
+    result = await pipeline.process(intent)
 
     assert result is not None
-    assert result.tts_text == long_text
+    assert result.response_text == long_text
 
 
 if __name__ == "__main__":

@@ -7,16 +7,17 @@ Sticker Output Provider
 import base64
 import io
 import time
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from PIL import Image
 from pydantic import Field
 
-from src.domains.output.parameters.render_parameters import RenderParameters
 from src.modules.config.schemas.base import BaseProviderConfig
-from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
 from src.modules.types.base.output_provider import OutputProvider
+
+if TYPE_CHECKING:
+    from src.modules.types import Intent
 
 
 class StickerOutputProvider(OutputProvider):
@@ -74,13 +75,8 @@ class StickerOutputProvider(OutputProvider):
         self._current_sticker_id: Optional[str] = None
         self._unload_task: Optional[Any] = None
 
-    async def _setup_internal(self):
-        """内部设置"""
-        # 注册事件监听器
-        if self.event_bus:
-            self.event_bus.on(CoreEvents.RENDER_STICKER, self._handle_render_request, priority=50)
-            self.logger.info("已注册 sticker 渲染事件监听器")
-
+    async def _start_internal(self):
+        """内部启动逻辑"""
         # 查找 VTS Provider（通过 ProviderManager）
         self._vts_provider = await self._find_vts_provider()
         if self._vts_provider:
@@ -88,14 +84,15 @@ class StickerOutputProvider(OutputProvider):
         else:
             self.logger.warning("未找到 VTS Provider，贴纸功能将被禁用")
 
-    async def _render_internal(self, parameters: RenderParameters):
+    async def _render_internal(self, intent: "Intent"):
         """
         内部渲染逻辑
 
         Args:
-            parameters: 渲染参数，图片base64数据通过metadata传递
-                      metadata: {"sticker_image": "base64_data"}
+            intent: 意图对象，从 intent.actions 中获取 ActionType.STICKER 类型的动作
         """
+        from src.modules.types import ActionType
+
         # 检查 VTS Provider 是否可用
         if not self._vts_provider:
             self.logger.warning("VTS Provider 不可用，无法显示贴纸")
@@ -108,10 +105,21 @@ class StickerOutputProvider(OutputProvider):
             self.logger.debug(f"表情贴纸冷却中，跳过渲染。剩余 {remaining_cooldown:.1f} 秒")
             return
 
-        # 从metadata获取图片base64数据
-        image_base64 = parameters.metadata.get("sticker_image") if parameters.metadata else None
+        # 从 intent.actions 中获取 STICKER 类型的动作
+        sticker_action = None
+        for action in intent.actions:
+            if action.type == ActionType.STICKER:
+                sticker_action = action
+                break
+
+        if not sticker_action:
+            self.logger.debug("Intent 中没有 STICKER 动作，跳过渲染")
+            return
+
+        # 从 action.params 获取图片base64数据
+        image_base64 = sticker_action.params.get("sticker_image")
         if not image_base64:
-            self.logger.warning("未提供图片数据（metadata.sticker_image），跳过渲染。")
+            self.logger.warning("未提供图片数据（action.params.sticker_image），跳过渲染")
             return
 
         try:
@@ -252,8 +260,8 @@ class StickerOutputProvider(OutputProvider):
         # 当前返回 None，需要集成实际的 Provider 查找逻辑
         return None
 
-    async def _cleanup_internal(self):
-        """内部清理"""
+    async def _stop_internal(self):
+        """内部停止逻辑"""
         # 取消卸载任务
         if self._unload_task and not self._unload_task.done():
             self._unload_task.cancel()
@@ -264,15 +272,3 @@ class StickerOutputProvider(OutputProvider):
 
         # 卸载当前贴纸
         await self._unload_current_sticker()
-
-        # 取消事件订阅
-        if self.event_bus:
-            try:
-                self.event_bus.off(CoreEvents.RENDER_STICKER, self._handle_render_request)
-                self.logger.debug("已取消 sticker 渲染事件监听器")
-            except Exception as e:
-                self.logger.warning(f"取消事件订阅失败: {e}")
-
-    async def _handle_render_request(self, event_name: str, data: RenderParameters, source: str):
-        """处理贴纸渲染请求"""
-        await self.render(data)

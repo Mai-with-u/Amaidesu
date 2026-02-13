@@ -1,5 +1,5 @@
-"""敏感词过滤管道 - Output Domain 参数预处理管道"""
+"""敏感词过滤管道 - Output Domain Intent 后处理管道"""
 
-from .pipeline import ProfanityFilterOutputPipeline
+from .pipeline import ProfanityFilterPipeline
 
-__all__ = ["ProfanityFilterOutputPipeline"]
+__all__ = ["ProfanityFilterPipeline"]

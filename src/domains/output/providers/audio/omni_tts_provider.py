@@ -20,11 +20,11 @@ from typing import Any, Dict, Optional
 import numpy as np
 from pydantic import Field
 
-from src.domains.output.parameters.render_parameters import RenderParameters
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 from src.modules.tts import AudioDeviceManager
 from src.modules.types.base.output_provider import OutputProvider
+from src.modules.types.intent import Intent
 
 # 导入工具函数
 from .utils.device_finder import find_device_index
@@ -167,18 +167,17 @@ class OmniTTSProvider(OutputProvider):
         # AudioStreamChannel 已由基类设置，通过属性访问
         self.logger.info("OmniTTSProvider设置完成")
 
-    async def _render_internal(self, parameters: RenderParameters):
+    async def _render_internal(self, intent: Intent):
         """
         渲染TTS输出
 
         Args:
-            parameters: RenderParameters对象
+            intent: Intent对象
         """
-        if not parameters.tts_enabled or not parameters.tts_text:
-            self.logger.debug("TTS未启用或文本为空，跳过渲染")
+        text = intent.response_text
+        if not text:
+            self.logger.debug("回复文本为空，跳过TTS渲染")
             return
-
-        text = parameters.tts_text
 
         try:
             # 执行TTS

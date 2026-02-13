@@ -96,8 +96,14 @@ class TestWarudoProviderRendering:
         provider.websocket = mock_ws
         provider._is_connected = True
 
-        params = {"expressions": {"mouthSmile": 0.8}, "hotkeys": []}
-        await provider._render_internal(params)
+        # 使用 Intent 调用基类的 _render_internal
+        intent = Intent(
+            original_text="测试",
+            response_text="测试",
+            emotion=EmotionType.HAPPY,
+            actions=[],
+        )
+        await provider._render_internal(intent)
 
         assert mock_ws.send_json.call_count >= 1
 
@@ -106,9 +112,15 @@ class TestWarudoProviderRendering:
         provider = WarudoOutputProvider(warudo_config)
         provider._is_connected = False
 
-        params = {"expressions": {"mouthSmile": 0.8}, "hotkeys": []}
+        # 使用 Intent 调用基类的 _render_internal
+        intent = Intent(
+            original_text="测试",
+            response_text="测试",
+            emotion=EmotionType.HAPPY,
+            actions=[],
+        )
         # 应该不抛出异常，只是跳过渲染
-        await provider._render_internal(params)
+        await provider._render_internal(intent)
 
 
 class TestWarudoProviderMoodManagement:
@@ -205,18 +217,24 @@ class TestWarudoProviderStatistics:
 
     def test_get_stats_after_render(self, warudo_config, mock_websocket):
         """测试渲染后的统计信息"""
+        import asyncio
+
         provider = WarudoOutputProvider(warudo_config)
-        provider.websocket = mock_websocket
         provider._is_connected = True
 
         # 执行一次渲染
-        import asyncio
-
         mock_ws = MagicMock()
         mock_ws.send_json = AsyncMock()
         provider.websocket = mock_ws
 
-        asyncio.run(provider._render_internal({"expressions": {"mouthSmile": 0.8}, "hotkeys": []}))
+        # 使用 Intent 调用基类的 _render_internal
+        intent = Intent(
+            original_text="测试",
+            response_text="测试",
+            emotion=EmotionType.HAPPY,
+            actions=[],
+        )
+        asyncio.run(provider._render_internal(intent))
 
         stats = provider.get_stats()
         assert stats["render_count"] == 1
