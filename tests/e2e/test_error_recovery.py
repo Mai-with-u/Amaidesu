@@ -132,9 +132,7 @@ async def test_invalid_raw_data_handling(event_bus, wait_for_event):
     try:
         future = asyncio.create_task(wait_for_event(event_bus, CoreEvents.DATA_MESSAGE, timeout=1.0))
 
-        await event_bus.emit(
-            CoreEvents.DATA_RAW, RawDataPayload.from_raw_data(invalid_data), source="test"
-        )
+        await event_bus.emit(CoreEvents.DATA_RAW, RawDataPayload.from_raw_data(invalid_data), source="test")
 
         # 尝试等待事件（可能超时）
         try:

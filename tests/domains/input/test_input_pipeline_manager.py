@@ -39,9 +39,7 @@ class MockTextPipeline(TextPipelineBase):
         self.should_timeout = False
         self.delay_ms = 0
 
-    async def _process(
-        self, text: str, metadata: Dict[str, Any]
-    ) -> Optional[str]:
+    async def _process(self, text: str, metadata: Dict[str, Any]) -> Optional[str]:
         """处理文本"""
         self.processed_texts.append((text, metadata))
 
@@ -67,9 +65,7 @@ class SlowMockTextPipeline(TextPipelineBase):
         super().__init__(config)
         self.sleep_time = config.get("sleep_time", 1.0)
 
-    async def _process(
-        self, text: str, metadata: Dict[str, Any]
-    ) -> Optional[str]:
+    async def _process(self, text: str, metadata: Dict[str, Any]) -> Optional[str]:
         await asyncio.sleep(self.sleep_time)
         return f"[Slow] {text}"
 
@@ -382,9 +378,7 @@ async def test_text_pipeline_priority_sorting(
             super().__init__(config)
             self.name = name
 
-        async def _process(
-            self, text: str, metadata: Dict[str, Any]
-        ) -> Optional[str]:
+        async def _process(self, text: str, metadata: Dict[str, Any]) -> Optional[str]:
             execution_order.append(self.name)
             return f"[{self.name}] {text}"
 

@@ -512,8 +512,8 @@ class ConfigService:
             return {}
 
         try:
-            # 创建Schema实例获取默认值
-            schema_instance = schema_class()
+            # 使用 model_construct 安全创建Schema实例，避免required字段的验证错误
+            schema_instance = schema_class.model_construct()
             # 使用 exclude_unset=False 以包含所有字段，包括有默认值的字段
             return schema_instance.model_dump(exclude_unset=False)
         except Exception as e:

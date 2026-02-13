@@ -605,7 +605,6 @@ class TestParametersGeneratedPayload:
         assert payload.priority == 50
 
 
-
 # =============================================================================
 # RenderCompletedPayload 测试
 # =============================================================================
@@ -644,7 +643,6 @@ class TestRenderCompletedPayload:
             duration_ms=1000,
         )
         assert payload.duration_ms == 1000
-
 
 
 # =============================================================================
@@ -690,7 +688,6 @@ class TestRenderFailedPayload:
             metadata=metadata,
         )
         assert payload.metadata == metadata
-
 
 
 # =============================================================================

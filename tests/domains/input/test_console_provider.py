@@ -136,9 +136,7 @@ async def test_console_input_provider_data_flow():
         metadata={"user": "控制台", "user_id": "console_user"},
     )
 
-    await event_bus.emit(
-        CoreEvents.DATA_RAW, RawDataPayload.from_raw_data(raw_data), source="ConsoleInputProvider"
-    )
+    await event_bus.emit(CoreEvents.DATA_RAW, RawDataPayload.from_raw_data(raw_data), source="ConsoleInputProvider")
 
     await asyncio.sleep(0.2)
 
@@ -174,9 +172,7 @@ async def test_console_provider_gift_command_flow():
         content={"user_name": "张三", "gift_name": "小星星", "count": 5}, source="console", data_type="gift"
     )
 
-    await event_bus.emit(
-        CoreEvents.DATA_RAW, RawDataPayload.from_raw_data(raw_data), source="ConsoleInputProvider"
-    )
+    await event_bus.emit(CoreEvents.DATA_RAW, RawDataPayload.from_raw_data(raw_data), source="ConsoleInputProvider")
 
     await asyncio.sleep(0.2)
 

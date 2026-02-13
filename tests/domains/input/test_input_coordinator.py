@@ -68,9 +68,7 @@ async def test_raw_data_to_normalized_message(input_coordinator):
     # 发布测试数据
     raw_data = RawData(content={"text": "测试消息"}, source="test_source", data_type="text")
 
-    await input_coordinator.event_bus.emit(
-        CoreEvents.DATA_RAW, RawDataPayload.from_raw_data(raw_data), source="test"
-    )
+    await input_coordinator.event_bus.emit(CoreEvents.DATA_RAW, RawDataPayload.from_raw_data(raw_data), source="test")
 
     # 等待事件处理
     await asyncio.sleep(0.2)
@@ -150,9 +148,7 @@ async def test_full_data_flow():
         data_type="danmaku",
     )
 
-    await event_bus.emit(
-        CoreEvents.DATA_RAW, RawDataPayload.from_raw_data(raw_data), source="test"
-    )
+    await event_bus.emit(CoreEvents.DATA_RAW, RawDataPayload.from_raw_data(raw_data), source="test")
 
     await asyncio.sleep(0.2)
 

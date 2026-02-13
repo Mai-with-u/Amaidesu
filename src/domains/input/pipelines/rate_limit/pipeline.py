@@ -68,9 +68,7 @@ class RateLimitTextPipeline(TextPipelineBase):
             f"窗口={self._window_size}秒"
         )
 
-    async def _process(
-        self, text: str, metadata: Dict[str, Any]
-    ) -> Optional[str]:
+    async def _process(self, text: str, metadata: Dict[str, Any]) -> Optional[str]:
         """
         处理文本，根据限流规则决定是否允许继续传递
 
@@ -156,9 +154,7 @@ class RateLimitTextPipeline(TextPipelineBase):
 
             return False
 
-    async def _record_message(
-        self, user_id: str, current_time: float
-    ) -> None:
+    async def _record_message(self, user_id: str, current_time: float) -> None:
         """
         记录消息的发送时间到对应队列
 

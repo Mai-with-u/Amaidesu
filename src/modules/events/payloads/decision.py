@@ -143,10 +143,7 @@ class IntentPayload(BasePayload):
             if name == "metadata" and value == "":
                 return {}
             return value
-        raise AttributeError(
-            f"'{type(self).__name__}' object has no attribute '{name}'. "
-            f"可用字段: {KNOWN_FIELDS}"
-        )
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'. 可用字段: {KNOWN_FIELDS}")
 
     def __str__(self) -> str:
         """

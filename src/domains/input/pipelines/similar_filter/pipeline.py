@@ -63,9 +63,7 @@ class SimilarFilterTextPipeline(TextPipelineBase):
             f"跨用户过滤={self._cross_user_filter}"
         )
 
-    async def _process(
-        self, text: str, metadata: Dict[str, Any]
-    ) -> Optional[str]:
+    async def _process(self, text: str, metadata: Dict[str, Any]) -> Optional[str]:
         """
         处理文本，检查是否需要过滤
 
