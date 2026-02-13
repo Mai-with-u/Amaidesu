@@ -4,28 +4,37 @@ OutputProvider 单元测试
 测试 OutputProvider 抽象基类的所有核心功能：
 - 抽象方法验证（_render_internal）
 - start() 方法流程
-- render() 方法（未 start 时抛出 RuntimeError）
 - _render_internal() 抽象方法
 - stop() 方法
 - get_info() 方法
 - 生命周期管理
+- 事件驱动渲染
 
 运行: uv run pytest tests/core/base/test_output_provider.py -v
 """
 
-from typing import TYPE_CHECKING
-
 import pytest
 
+from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.decision import IntentPayload
+from src.modules.types import ActionType, EmotionType, Intent, IntentAction
 from src.modules.types.base.output_provider import OutputProvider
-
-if TYPE_CHECKING:
-    from src.domains.output.parameters.render_parameters import RenderParameters
 
 
 # =============================================================================
 # 测试用的 OutputProvider 实现
 # =============================================================================
+
+
+def create_test_intent(response_text: str = "测试响应") -> Intent:
+    """创建测试用的 Intent"""
+    return Intent(
+        original_text="测试输入",
+        response_text=response_text,
+        actions=[IntentAction(type=ActionType.NONE)],
+        emotion=EmotionType.NEUTRAL,
+    )
 
 
 class MockOutputProvider(OutputProvider):
@@ -44,16 +53,16 @@ class MockOutputProvider(OutputProvider):
         self.start_called = False
         self.stop_called = False
         self.render_count = 0
-        self.last_parameters = None
+        self.last_intent = None
 
     async def _start_internal(self):
         """模拟内部启动"""
         self.start_called = True
 
-    async def _render_internal(self, parameters: "RenderParameters"):
+    async def _render_internal(self, intent: Intent):
         """模拟内部渲染逻辑"""
         self.render_count += 1
-        self.last_parameters = parameters
+        self.last_intent = intent
 
         if self.raise_error:
             raise ValueError("模拟渲染错误")
@@ -87,14 +96,21 @@ def error_provider():
 
 
 @pytest.fixture
-def mock_render_parameters():
-    """创建模拟的 RenderParameters（使用字典）"""
-    return {
-        "text": "测试文本",
-        "emotion": "happy",
-        "action": "wave",
-        "metadata": {"test": "data"},
-    }
+def event_bus():
+    """创建 EventBus 实例"""
+    from src.modules.events.registry import EventRegistry, register_core_events
+
+    # 确保核心事件已注册
+    if not EventRegistry.is_registered(CoreEvents.OUTPUT_INTENT):
+        register_core_events()
+
+    return EventBus()
+
+
+@pytest.fixture
+def test_intent():
+    """创建测试用的 Intent"""
+    return create_test_intent("测试响应")
 
 
 # =============================================================================
@@ -142,107 +158,128 @@ async def test_output_provider_abstract_method_not_implemented():
 
 
 @pytest.mark.asyncio
-async def test_output_provider_start_basic():
+async def test_output_provider_start_basic(event_bus):
     """测试 start() 基本流程"""
     provider = MockOutputProvider({})
-    mock_event_bus = object()
 
-    await provider.start(event_bus=mock_event_bus)
+    await provider.start(event_bus=event_bus)
 
-    assert provider.event_bus == mock_event_bus
+    assert provider.event_bus == event_bus
     assert provider.is_started is True
     assert provider.start_called is True
 
 
 @pytest.mark.asyncio
-async def test_output_provider_start_with_audio_stream_channel():
+async def test_output_provider_start_with_audio_stream_channel(event_bus):
     """测试 start() 接受 AudioStreamChannel"""
     provider = MockOutputProvider({})
-    mock_event_bus = object()
     mock_audio_channel = object()
 
-    await provider.start(event_bus=mock_event_bus, audio_stream_channel=mock_audio_channel)
+    await provider.start(event_bus=event_bus, audio_stream_channel=mock_audio_channel)
 
     # AudioStreamChannel 应该被存储
     assert provider.audio_stream_channel == mock_audio_channel
 
 
 @pytest.mark.asyncio
-async def test_output_provider_start_without_audio_stream_channel():
+async def test_output_provider_start_without_audio_stream_channel(event_bus):
     """测试 start() 不传 audio_stream_channel 时为 None"""
     provider = MockOutputProvider({})
-    mock_event_bus = object()
 
-    await provider.start(event_bus=mock_event_bus)
+    await provider.start(event_bus=event_bus)
 
     assert provider.audio_stream_channel is None
 
 
 @pytest.mark.asyncio
-async def test_output_provider_start_multiple_calls():
+async def test_output_provider_start_multiple_calls(event_bus):
     """测试 start() 可以多次调用"""
     provider = MockOutputProvider({})
-    mock_event_bus = object()
 
-    await provider.start(event_bus=mock_event_bus)
+    await provider.start(event_bus=event_bus)
     assert provider.is_started is True
 
     # 再次调用（不应该抛出异常）
-    await provider.start(event_bus=mock_event_bus)
+    await provider.start(event_bus=event_bus)
     assert provider.is_started is True
 
 
 # =============================================================================
-# render() 方法测试
+# _render_internal() 方法测试（直接调用）
 # =============================================================================
 
 
 @pytest.mark.asyncio
-async def test_output_provider_render_basic(mock_provider, mock_render_parameters):
-    """测试 render() 基本功能"""
-    # 先 start
-    await mock_provider.start(event_bus=object())
-
-    # 调用 render
-    await mock_provider.render(mock_render_parameters)
+async def test_output_provider_render_internal_basic(mock_provider, test_intent):
+    """测试 _render_internal() 基本功能"""
+    # 直接调用 _render_internal
+    await mock_provider._render_internal(test_intent)
 
     assert mock_provider.render_count == 1
-    assert mock_provider.last_parameters == mock_render_parameters
+    assert mock_provider.last_intent == test_intent
 
 
 @pytest.mark.asyncio
-async def test_output_provider_render_multiple_calls(mock_provider, mock_render_parameters):
-    """测试 render() 可以多次调用"""
-    await mock_provider.start(event_bus=object())
-
+async def test_output_provider_render_internal_multiple_calls(mock_provider, test_intent):
+    """测试 _render_internal() 可以多次调用"""
     # 多次调用
-    await mock_provider.render(mock_render_parameters)
-    await mock_provider.render(mock_render_parameters)
-    await mock_provider.render(mock_render_parameters)
+    await mock_provider._render_internal(test_intent)
+    await mock_provider._render_internal(test_intent)
+    await mock_provider._render_internal(test_intent)
 
     assert mock_provider.render_count == 3
 
 
 @pytest.mark.asyncio
-async def test_output_provider_render_before_start_raises_error(mock_provider, mock_render_parameters):
-    """测试未 start 时调用 render() 抛出 RuntimeError"""
-    # 不调用 start，直接 render
-    with pytest.raises(RuntimeError) as exc_info:
-        await mock_provider.render(mock_render_parameters)
+async def test_output_provider_render_internal_with_error(error_provider, test_intent):
+    """测试 _render_internal() 抛出错误的情况"""
+    with pytest.raises(ValueError) as exc_info:
+        await error_provider._render_internal(test_intent)
 
-    assert "not started" in str(exc_info.value).lower()
-    assert "call start() first" in str(exc_info.value).lower()
+    assert "模拟渲染错误" in str(exc_info.value)
+
+
+# =============================================================================
+# 事件驱动渲染测试
+# =============================================================================
 
 
 @pytest.mark.asyncio
-async def test_output_provider_render_with_error(error_provider, mock_render_parameters):
-    """测试 render() 抛出错误的情况"""
-    await error_provider.start(event_bus=object())
+async def test_output_provider_event_driven_render(event_bus, mock_provider, test_intent):
+    """测试通过事件驱动渲染"""
+    # 启动 Provider（会订阅 OUTPUT_INTENT 事件）
+    await mock_provider.start(event_bus=event_bus)
 
-    with pytest.raises(ValueError) as exc_info:
-        await error_provider.render(mock_render_parameters)
+    # 创建 IntentPayload 并发送事件
+    payload = IntentPayload.from_intent(test_intent, "test_provider")
+    await event_bus.emit(CoreEvents.OUTPUT_INTENT, payload, source="test")
 
-    assert "模拟渲染错误" in str(exc_info.value)
+    # 等待事件处理
+    import asyncio
+
+    await asyncio.sleep(0.1)
+
+    # Provider 应该收到了 Intent
+    assert mock_provider.render_count == 1
+    assert mock_provider.last_intent.response_text == test_intent.response_text
+
+
+@pytest.mark.asyncio
+async def test_output_provider_event_driven_multiple_renders(event_bus, mock_provider, test_intent):
+    """测试多次事件驱动渲染"""
+    await mock_provider.start(event_bus=event_bus)
+
+    # 发送多个事件
+    for i in range(3):
+        intent = create_test_intent(f"响应 {i}")
+        payload = IntentPayload.from_intent(intent, "test_provider")
+        await event_bus.emit(CoreEvents.OUTPUT_INTENT, payload, source="test")
+
+    import asyncio
+
+    await asyncio.sleep(0.1)
+
+    assert mock_provider.render_count == 3
 
 
 # =============================================================================
@@ -251,10 +288,10 @@ async def test_output_provider_render_with_error(error_provider, mock_render_par
 
 
 @pytest.mark.asyncio
-async def test_output_provider_stop_basic():
+async def test_output_provider_stop_basic(event_bus):
     """测试 stop() 基本功能"""
     provider = MockOutputProvider({})
-    await provider.start(event_bus=object())
+    await provider.start(event_bus=event_bus)
 
     assert provider.is_started is True
 
@@ -265,10 +302,10 @@ async def test_output_provider_stop_basic():
 
 
 @pytest.mark.asyncio
-async def test_output_provider_stop_idempotent():
+async def test_output_provider_stop_idempotent(event_bus):
     """测试 stop() 可以多次调用（幂等）"""
     provider = MockOutputProvider({})
-    await provider.start(event_bus=object())
+    await provider.start(event_bus=event_bus)
 
     await provider.stop()
     await provider.stop()
@@ -279,17 +316,45 @@ async def test_output_provider_stop_idempotent():
 
 
 @pytest.mark.asyncio
-async def test_output_provider_stop_after_render(mock_provider, mock_render_parameters):
-    """测试 render() 后 stop() 正常工作"""
-    await mock_provider.start(event_bus=object())
-    await mock_provider.render(mock_render_parameters)
+async def test_output_provider_stop_after_render(event_bus, test_intent):
+    """测试渲染后 stop() 正常工作"""
+    provider = MockOutputProvider({})
+    await provider.start(event_bus=event_bus)
+    await provider._render_internal(test_intent)
 
+    assert provider.render_count == 1
+
+    await provider.stop()
+
+    assert provider.is_started is False
+    assert provider.stop_called is True
+
+
+@pytest.mark.asyncio
+async def test_output_provider_stop_unsubscribes_from_events(event_bus, mock_provider, test_intent):
+    """测试 stop() 后不再接收事件"""
+    await mock_provider.start(event_bus=event_bus)
+
+    # 发送事件，应该收到
+    payload = IntentPayload.from_intent(test_intent, "test_provider")
+    await event_bus.emit(CoreEvents.OUTPUT_INTENT, payload, source="test")
+
+    import asyncio
+
+    await asyncio.sleep(0.1)
     assert mock_provider.render_count == 1
 
+    # 停止
     await mock_provider.stop()
 
-    assert mock_provider.is_started is False
-    assert mock_provider.stop_called is True
+    # 重置计数
+    mock_provider.render_count = 0
+
+    # 再次发送事件，不应该收到
+    await event_bus.emit(CoreEvents.OUTPUT_INTENT, payload, source="test")
+    await asyncio.sleep(0.1)
+
+    assert mock_provider.render_count == 0
 
 
 # =============================================================================
@@ -310,10 +375,10 @@ async def test_output_provider_get_info_basic():
 
 
 @pytest.mark.asyncio
-async def test_output_provider_get_info_after_start():
+async def test_output_provider_get_info_after_start(event_bus):
     """测试 start() 后 get_info() 返回正确的状态"""
     provider = MockOutputProvider({})
-    await provider.start(event_bus=object())
+    await provider.start(event_bus=event_bus)
 
     info = provider.get_info()
 
@@ -323,10 +388,10 @@ async def test_output_provider_get_info_after_start():
 
 
 @pytest.mark.asyncio
-async def test_output_provider_get_info_after_stop():
+async def test_output_provider_get_info_after_stop(event_bus):
     """测试 stop() 后 get_info() 返回正确的状态"""
     provider = MockOutputProvider({})
-    await provider.start(event_bus=object())
+    await provider.start(event_bus=event_bus)
     await provider.stop()
 
     info = provider.get_info()
@@ -342,7 +407,7 @@ async def test_output_provider_get_info_after_stop():
 
 
 @pytest.mark.asyncio
-async def test_output_provider_full_lifecycle(mock_render_parameters):
+async def test_output_provider_full_lifecycle(event_bus, test_intent):
     """测试 OutputProvider 完整生命周期"""
     provider = MockOutputProvider({})
 
@@ -353,12 +418,12 @@ async def test_output_provider_full_lifecycle(mock_render_parameters):
     assert provider.render_count == 0
 
     # 2. 启动
-    await provider.start(event_bus=object())
+    await provider.start(event_bus=event_bus)
     assert provider.is_started is True
     assert provider.start_called is True
 
     # 3. 渲染
-    await provider.render(mock_render_parameters)
+    await provider._render_internal(test_intent)
     assert provider.render_count == 1
 
     # 4. 停止
@@ -368,28 +433,28 @@ async def test_output_provider_full_lifecycle(mock_render_parameters):
 
 
 @pytest.mark.asyncio
-async def test_output_provider_restart(mock_render_parameters):
+async def test_output_provider_restart(event_bus, test_intent):
     """测试 OutputProvider 可以重新启动"""
     provider = MockOutputProvider({})
 
     # 第一次运行
-    await provider.start(event_bus=object())
-    await provider.render(mock_render_parameters)
+    await provider.start(event_bus=event_bus)
+    await provider._render_internal(test_intent)
     await provider.stop()
 
     assert provider.render_count == 1
     assert provider.is_started is False
 
     # 第二次运行
-    await provider.start(event_bus=object())
-    await provider.render(mock_render_parameters)
+    await provider.start(event_bus=event_bus)
+    await provider._render_internal(test_intent)
     await provider.stop()
 
     assert provider.render_count == 2
 
 
 @pytest.mark.asyncio
-async def test_output_provider_lifecycle_state_transitions(mock_render_parameters):
+async def test_output_provider_lifecycle_state_transitions(event_bus):
     """测试生命周期状态转换"""
     provider = MockOutputProvider({})
 
@@ -398,7 +463,7 @@ async def test_output_provider_lifecycle_state_transitions(mock_render_parameter
     assert info["is_started"] is False
 
     # start 后
-    await provider.start(event_bus=object())
+    await provider.start(event_bus=event_bus)
     info = provider.get_info()
     assert info["is_started"] is True
 
@@ -408,7 +473,7 @@ async def test_output_provider_lifecycle_state_transitions(mock_render_parameter
     assert info["is_started"] is False
 
     # 再次 start
-    await provider.start(event_bus=object())
+    await provider.start(event_bus=event_bus)
     info = provider.get_info()
     assert info["is_started"] is True
 
@@ -419,40 +484,34 @@ async def test_output_provider_lifecycle_state_transitions(mock_render_parameter
 
 
 @pytest.mark.asyncio
-async def test_output_provider_start_with_none_event_bus():
-    """测试 start() 传入 None event_bus"""
+async def test_output_provider_start_with_mock_event_bus():
+    """测试 start() 使用 mock event_bus（没有 on 方法）"""
     provider = MockOutputProvider({})
 
-    await provider.start(event_bus=None)
+    # 使用一个简单的 mock 对象，提供 on 方法
+    class MockEventBus:
+        def on(self, *args, **kwargs):
+            pass
 
-    assert provider.event_bus is None
+        def off(self, *args, **kwargs):
+            pass
+
+    mock_bus = MockEventBus()
+    await provider.start(event_bus=mock_bus)
+
+    assert provider.event_bus == mock_bus
     assert provider.is_started is True
 
 
 @pytest.mark.asyncio
-async def test_output_provider_with_empty_config(mock_render_parameters):
+async def test_output_provider_with_empty_config(test_intent):
     """测试使用空配置的 OutputProvider"""
     provider = MockOutputProvider({})
-    await provider.start(event_bus=object())
 
-    await provider.render(mock_render_parameters)
+    await provider._render_internal(test_intent)
 
     assert provider.render_count == 1
     assert provider.config == {}
-
-
-@pytest.mark.asyncio
-async def test_output_provider_render_after_stop(mock_provider, mock_render_parameters):
-    """测试 stop() 后 render() 抛出错误"""
-    await mock_provider.start(event_bus=object())
-    await mock_provider.render(mock_render_parameters)
-    await mock_provider.stop()
-
-    # stop 后 render 应该抛出错误
-    with pytest.raises(RuntimeError) as exc_info:
-        await mock_provider.render(mock_render_parameters)
-
-    assert "not started" in str(exc_info.value).lower()
 
 
 # =============================================================================

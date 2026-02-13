@@ -2,12 +2,13 @@
 Output Domain 事件 Payload 定义
 
 定义 Output Domain 相关的事件 Payload 类型。
-- ParametersGeneratedPayload: 表情参数生成事件
+- ParametersGeneratedPayload: @deprecated 表情参数生成事件（已废弃，使用 IntentPayload 替代）
 - RenderCompletedPayload: 渲染完成事件
 - RenderFailedPayload: 渲染失败事件
 """
 
 import time
+import warnings
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from pydantic import ConfigDict, Field
@@ -22,12 +23,18 @@ class ParametersGeneratedPayload(BasePayload):
     """
     表情参数生成事件 Payload
 
-    事件名：CoreEvents.OUTPUT_PARAMS
-    发布者：ExpressionGenerator (Output Domain: 参数生成)
-    订阅者：OutputProvider (Output Domain: 渲染输出)
+    @deprecated 此 Payload 已废弃，请使用 IntentPayload 替代。
+    事件名：CoreEvents.OUTPUT_PARAMS（已废弃）
+    发布者：无（已迁移到 Intent 事件驱动架构）
+    订阅者：无（OutputProvider 现在订阅 OUTPUT_INTENT 事件）
 
     表示 ExpressionGenerator 已根据 Intent 生成了渲染参数。
     OutputProvider 订阅此事件并执行实际的渲染输出。
+
+    迁移说明：
+    - 新架构使用 Intent 直接传递，无需中间转换
+    - 使用 CoreEvents.DECISION_INTENT 和 OUTPUT_INTENT 替代
+    - IntentPayload 包含所有必要信息
     """
 
     # TTS 相关
@@ -101,6 +108,8 @@ class ParametersGeneratedPayload(BasePayload):
         """
         从 ExpressionParameters 对象创建 Payload
 
+        @deprecated 此方法已废弃，请直接使用 IntentPayload。
+
         Args:
             parameters: ExpressionParameters 对象
             source_intent: 来源 Intent（可选）
@@ -108,6 +117,11 @@ class ParametersGeneratedPayload(BasePayload):
         Returns:
             ParametersGeneratedPayload 实例
         """
+        warnings.warn(
+            "ParametersGeneratedPayload.from_parameters() 已废弃，请使用 IntentPayload",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return cls(
             tts_text=parameters.tts_text,
             tts_enabled=parameters.tts_enabled,

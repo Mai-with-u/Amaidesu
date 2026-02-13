@@ -15,9 +15,8 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 from pydantic import Field, field_validator
 
 if TYPE_CHECKING:
-    pass
+    from src.modules.types import Intent
 
-from src.domains.output.parameters.render_parameters import RenderParameters
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
@@ -120,8 +119,8 @@ class ObsControlOutputProvider(OutputProvider):
             f"逐字效果: {'启用' if self.typewriter_enabled else '禁用'}"
         )
 
-    async def _setup_internal(self):
-        """内部设置逻辑"""
+    async def _start_internal(self):
+        """内部启动逻辑 - 基类已订阅 OUTPUT_INTENT 事件"""
         if obs is None:
             self.logger.error("obsws-python库未安装，请运行: uv add obsws-python")
             raise RuntimeError("obsws-python库未安装")
@@ -129,19 +128,19 @@ class ObsControlOutputProvider(OutputProvider):
         # 连接OBS
         await self._connect_obs()
 
-        # 注册事件监听（用于外部直接调用）
+        # 注册事件监听（用于外部直接调用，不属于 OUTPUT_INTENT 事件）
         self.event_bus.on(CoreEvents.OBS_SEND_TEXT, self._handle_send_text_event)
         self.event_bus.on(CoreEvents.OBS_SWITCH_SCENE, self._handle_switch_scene_event)
         self.event_bus.on(CoreEvents.OBS_SET_SOURCE_VISIBILITY, self._handle_set_source_visibility_event)
 
-    async def _render_internal(self, parameters: RenderParameters):
+    async def _render_internal(self, intent: "Intent"):
         """
         内部渲染逻辑
 
-        从RenderParameters中提取文本并发送到OBS
+        从Intent中提取文本并发送到OBS
 
         Args:
-            parameters: 渲染参数，从subtitle_text或metadata中提取文本
+            intent: 决策意图，包含response_text和actions
         """
         if not self.is_connected or not self.obs_connection:
             self.logger.warning("OBS未连接，跳过渲染")
@@ -150,20 +149,23 @@ class ObsControlOutputProvider(OutputProvider):
         # 从多个可能的来源提取文本
         text = None
 
-        # 1. 从字幕文本提取
-        if parameters.subtitle_enabled and parameters.subtitle_text:
-            text = parameters.subtitle_text
+        # 1. 从回复文本提取
+        if intent.response_text:
+            text = intent.response_text
 
         # 2. 从元数据提取（兼容旧插件）
-        if not text and "obs_text" in parameters.metadata:
-            text = parameters.metadata["obs_text"]
+        if not text and "obs_text" in intent.metadata:
+            text = intent.metadata["obs_text"]
 
         # 3. 从动作提取（支持特殊动作）
-        if not text and parameters.actions_enabled:
-            for action in parameters.actions:
-                if action.get("type") == "obs_send_text":
-                    text = action.get("text")
-                    break
+        if not text:
+            for action in intent.actions:
+                # action.type 已经是字符串值（由于 use_enum_values=True）
+                action_type = action.type if isinstance(action.type, str) else action.type.value
+                if action_type == "obs_send_text" or action_type == "custom":
+                    if "text" in action.params:
+                        text = action.params["text"]
+                        break
 
         if not text:
             self.logger.debug("没有需要显示的文本内容")
@@ -406,9 +408,9 @@ class ObsControlOutputProvider(OutputProvider):
         else:
             self.logger.warning("事件数据中未包含源名称")
 
-    async def _cleanup_internal(self):
-        """内部清理逻辑"""
-        # 取消事件监听
+    async def _stop_internal(self):
+        """内部停止逻辑"""
+        # 取消事件监听（OBS特有的事件，不属于 OUTPUT_INTENT）
         if self.event_bus:
             self.event_bus.off(CoreEvents.OBS_SEND_TEXT, self._handle_send_text_event)
             self.event_bus.off(CoreEvents.OBS_SWITCH_SCENE, self._handle_switch_scene_event)
