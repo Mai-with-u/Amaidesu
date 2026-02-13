@@ -363,7 +363,7 @@ class MyInputProvider(InputProvider):
 # src/domains/decision/providers/my_provider/my_decision_provider.py
 from src.modules.types.base.decision_provider import DecisionProvider
 from src.modules.types.base.normalized_message import NormalizedMessage
-from src.domains.decision.intent import Intent
+from src.modules.types import Intent
 from src.modules.logging import get_logger
 
 class MyDecisionProvider(DecisionProvider):

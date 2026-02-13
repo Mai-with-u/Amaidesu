@@ -44,7 +44,7 @@ NormalizedMessage  →  DecisionProvider.decide()  →  Intent
 ```python
 from src.modules.types.base.decision_provider import DecisionProvider
 from src.modules.types.base.normalized_message import NormalizedMessage
-from src.domains.decision.intent import Intent
+from src.modules.types import Intent
 from src.modules.types import EmotionType, ActionType, IntentAction
 from src.modules.logging import get_logger
 
@@ -260,7 +260,7 @@ LocalLLMDecisionProvider - 使用本地 LLM 进行决策
 from typing import Dict, Any, Optional
 from src/modules/types/base/decision_provider import DecisionProvider
 from src/modules/types/base/normalized_message import NormalizedMessage
-from src/domains/decision/intent import Intent, SourceContext
+from src/modules/types import Intent, SourceContext
 from src/modules/types import EmotionType, ActionType, IntentAction
 from src/modules/logging import get_logger
 from src.prompts import get_prompt_manager
@@ -400,7 +400,7 @@ RuleEngineDecisionProvider - 基于规则引擎的决策Provider
 from typing import Dict, Any, List
 from src/modules/types/base/decision_provider import DecisionProvider
 from src/modules/types/base/normalized_message import NormalizedMessage
-from src/domains/decision/intent import Intent, SourceContext
+from src/modules/types import Intent, SourceContext
 from src/modules/types import EmotionType, ActionType, IntentAction
 from src/modules/logging import get_logger
 
@@ -500,7 +500,7 @@ from src.modules.types.base.decision_provider import DecisionProvider
 
 # 数据类型
 from src.modules.types.base.normalized_message import NormalizedMessage
-from src.domains.decision.intent import Intent, SourceContext
+from src.modules.types import Intent, SourceContext
 
 # 枚举类型
 from src.modules.types import EmotionType, ActionType, IntentAction
