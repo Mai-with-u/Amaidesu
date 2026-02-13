@@ -143,10 +143,7 @@ class IntentPayload(BasePayload):
             if name == "metadata" and value == "":
                 return {}
             return value
-        raise AttributeError(
-            f"'{type(self).__name__}' object has no attribute '{name}'. "
-            f"可用字段: {KNOWN_FIELDS}"
-        )
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'. 可用字段: {KNOWN_FIELDS}")
 
     def __str__(self) -> str:
         """
@@ -210,7 +207,7 @@ class DecisionResponsePayload(BasePayload):
 
     **注意**：此事件主要在 MaiCoreDecisionProvider 内部使用
     - MaiCore 返回的是 MessageBase 格式的响应
-    - MaiCoreDecisionProvider 通过 IntentParser 转换为 Intent
+    - MaiCoreDecisionProvider 自己解析为 Intent（使用 _parse_intent_from_maicore_response）
     - 然后发布 decision.intent_generated 事件
 
     此事件用于 MaiCoreDecisionProvider 内部的异步响应处理。

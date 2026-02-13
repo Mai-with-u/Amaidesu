@@ -10,16 +10,21 @@ from pydantic import Field
 
 from .base import StructuredContent
 from .gift_content import GiftContent
+from .guard_content import GuardContent
 from .super_chat_content import SuperChatContent
 from .text_content import TextContent
 
 # Discriminated Union - 根据 "type" 字段自动分发
-ContentType = Annotated[Union[TextContent, GiftContent, SuperChatContent], Field(discriminator="type")]
+ContentType = Annotated[
+    Union[TextContent, GiftContent, SuperChatContent, GuardContent],
+    Field(discriminator="type"),
+]
 
 __all__ = [
     "StructuredContent",
     "TextContent",
     "GiftContent",
     "SuperChatContent",
+    "GuardContent",
     "ContentType",
 ]

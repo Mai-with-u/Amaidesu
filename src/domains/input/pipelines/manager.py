@@ -57,9 +57,7 @@ class TextPipeline(Protocol):
     error_handling: PipelineErrorHandling
     timeout_seconds: float
 
-    async def process(
-        self, text: str, metadata: Dict[str, Any]
-    ) -> Optional[str]:
+    async def process(self, text: str, metadata: Dict[str, Any]) -> Optional[str]:
         """
         处理文本
 
@@ -121,9 +119,7 @@ class TextPipelineBase(ABC):
                 self.logger.warning(f"无效的 error_handling 值: {error_handling_str}，使用默认值 CONTINUE")
                 self.error_handling = PipelineErrorHandling.CONTINUE
 
-    async def process(
-        self, text: str, metadata: Dict[str, Any]
-    ) -> Optional[str]:
+    async def process(self, text: str, metadata: Dict[str, Any]) -> Optional[str]:
         """
         处理文本（包装 _process 并记录统计）
 
@@ -146,9 +142,7 @@ class TextPipelineBase(ABC):
             raise
 
     @abstractmethod
-    async def _process(
-        self, text: str, metadata: Dict[str, Any]
-    ) -> Optional[str]:
+    async def _process(self, text: str, metadata: Dict[str, Any]) -> Optional[str]:
         """
         实际处理文本（子类实现）
 

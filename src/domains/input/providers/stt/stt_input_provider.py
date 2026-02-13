@@ -20,7 +20,8 @@ import numpy as np
 
 from src.modules.logging import get_logger
 from src.modules.types.base.input_provider import InputProvider
-from src.modules.types.base.raw_data import RawData
+from src.modules.types.base.normalized_message import NormalizedMessage
+from src.domains.input.normalization.content import TextContent
 
 from .config import STTInputProviderConfig
 
@@ -239,7 +240,7 @@ class STTInputProvider(InputProvider):
 
         return None
 
-    async def _collect_data(self) -> AsyncIterator[RawData]:
+    async def start(self) -> AsyncIterator[NormalizedMessage]:
         """
         采集语音数据并生成 RawData
 
@@ -473,7 +474,7 @@ class STTInputProvider(InputProvider):
             await self._close_iflytek_connection(send_last_frame=False)
 
     async def _read_results(self):
-        """从结果队列读取并返回 RawData"""
+        """从结果队列读取并返回 NormalizedMessage"""
         try:
             while self.is_running:
                 try:
@@ -631,15 +632,18 @@ class STTInputProvider(InputProvider):
 
                             if full_text and not utterance_failed:
                                 # 将结果放入队列
+                                content = TextContent(
+                                    text=full_text,
+                                    user=self.message_config.get("user_nickname", "语音"),
+                                    user_id=self.message_config.get("user_id", "stt_user"),
+                                )
                                 await self._result_queue.put(
-                                    RawData(
-                                        content=full_text,
+                                    NormalizedMessage(
+                                        text=content.text,
+                                        content=content,
                                         source="stt",
-                                        data_type="text",
-                                        metadata={
-                                            "user_id": self.message_config.get("user_id", "stt_user"),
-                                            "user_nickname": self.message_config.get("user_nickname", "语音"),
-                                        },
+                                        data_type=content.type,
+                                        importance=content.get_importance(),
                                     )
                                 )
                                 self.full_text = ""

@@ -373,6 +373,7 @@ class OutputProviderManager:
         # 导入 providers 包会执行 __init__.py，注册所有 Provider
         try:
             from src.domains.output import providers
+
             self.logger.debug("已导入 providers 包，所有 Provider 应已注册")
         except ImportError as e:
             self.logger.warning(f"导入 providers 包失败: {e}")
@@ -417,8 +418,7 @@ class OutputProviderManager:
                 except KeyError:
                     # Provider未注册（模块未导入），回退到None
                     self.logger.debug(
-                        f"Provider '{output_name}' Schema未注册（模块可能未导入），"
-                        f"将使用无Schema方式加载配置"
+                        f"Provider '{output_name}' Schema未注册（模块可能未导入），将使用无Schema方式加载配置"
                     )
                     schema_class = None
 

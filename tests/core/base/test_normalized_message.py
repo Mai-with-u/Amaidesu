@@ -17,7 +17,6 @@ import time
 import pytest
 
 from src.modules.types.base.normalized_message import NormalizedMessage
-from src.modules.types.base.raw_data import RawData
 
 # =============================================================================
 # 测试 Mock 类
@@ -292,85 +291,6 @@ async def test_from_raw_data_with_dict():
     # metadata 应该包含原始数据的信息
     assert message.metadata["original_key"] == "original_value"
     assert message.metadata["source"] == "normalized_source"
-
-
-@pytest.mark.asyncio
-async def test_from_raw_data_with_raw_data_object():
-    """测试从 RawData 对象创建 NormalizedMessage"""
-    raw_data = RawData(
-        content="原始内容",
-        source="bili_danmaku",
-        data_type="text",
-        metadata={"user": "原始用户", "user_id": "user789"},
-    )
-
-    mock_content = MockStructuredContent("标准化文本", "user789")
-    message = NormalizedMessage.from_raw_data(
-        raw_data=raw_data,
-        text="标准化文本",
-        source="normalized_source",
-        content=mock_content,
-        importance=0.7,
-    )
-
-    assert message.text == "标准化文本"
-    assert message.content == mock_content
-    assert message.source == "normalized_source"
-    assert message.importance == 0.7
-    # metadata 应该包含原始数据的信息
-    assert message.metadata["user"] == "原始用户"
-    assert message.metadata["user_id"] == "user789"
-
-
-@pytest.mark.asyncio
-async def test_from_raw_data_metadata_isolation():
-    """测试 from_raw_data 隔离 metadata（不影响原始对象）"""
-    raw_data = RawData(
-        content="原始内容",
-        source="test",
-        data_type="text",
-        metadata={"key": "value"},
-    )
-
-    mock_content = MockStructuredContent("标准化文本", "user123")
-    message = NormalizedMessage.from_raw_data(
-        raw_data=raw_data,
-        text="标准化文本",
-        source="normalized",
-        content=mock_content,
-        importance=0.5,
-    )
-
-    # 修改 message 的 metadata
-    message.metadata["new_key"] = "new_value"
-
-    # 原始 raw_data 的 metadata 不应该被修改
-    assert "new_key" not in raw_data.metadata
-    assert raw_data.metadata == {"key": "value"}
-
-
-@pytest.mark.asyncio
-async def test_from_raw_data_auto_add_metadata():
-    """测试 from_raw_data 自动添加基本元数据"""
-    raw_data = RawData(
-        content="原始内容",
-        source="test",
-        data_type="text",
-    )
-
-    mock_content = MockStructuredContent("标准化文本", "user123")
-    message = NormalizedMessage.from_raw_data(
-        raw_data=raw_data,
-        text="标准化文本",
-        source="normalized",
-        content=mock_content,
-        importance=0.5,
-    )
-
-    # metadata 应该包含自动添加的字段
-    assert message.metadata["source"] == "normalized"
-    assert message.metadata["type"] == "text"
-    assert "timestamp" in message.metadata
 
 
 # =============================================================================

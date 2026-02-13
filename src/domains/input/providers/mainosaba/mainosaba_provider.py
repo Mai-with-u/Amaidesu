@@ -21,7 +21,8 @@ from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
 from src.modules.prompts import get_prompt_manager
 from src.modules.types.base.input_provider import InputProvider
-from src.modules.types.base.raw_data import RawData
+from src.modules.types.base.normalized_message import NormalizedMessage
+from src.domains.input.normalization.content import TextContent
 
 
 class ControlMethod(Enum):
@@ -96,56 +97,71 @@ class MainosabaInputProvider(InputProvider):
         self.waiting_for_response = False
         self.last_message_time = 0
 
-    async def _collect_data(self) -> AsyncIterator[RawData]:
+    async def start(self) -> AsyncIterator[NormalizedMessage]:
         """采集游戏文本数据"""
-        self.logger.info("开始采集游戏文本数据...")
+        await self._setup_internal()
+        self.is_running = True
 
-        while self.is_running:
-            try:
-                # 检查是否在等待回应
-                if self.waiting_for_response:
-                    # 检查是否超时
-                    if time.time() - self.last_message_time > self.typed_config.response_timeout:
-                        self.logger.info("等待回应超时，继续游戏")
-                        await self.advance_game()
-                        self.waiting_for_response = False
-                else:
-                    # 正常监听游戏文本
-                    self.logger.debug("开始截屏识别...")
-                    game_text = await self.capture_and_recognize()
-                    self.logger.debug(f"识别完成，结果: {game_text[:50] if game_text else 'None'}...")
+        try:
+            self.logger.info("开始采集游戏文本数据...")
 
-                    if game_text is None:
-                        self.logger.debug("未识别到有效文本，继续监听")
-                    elif game_text == self.last_game_text:
-                        self.logger.debug("识别到的文本与上次相同，跳过")
+            while self.is_running:
+                try:
+                    # 检查是否在等待回应
+                    if self.waiting_for_response:
+                        # 检查是否超时
+                        if time.time() - self.last_message_time > self.typed_config.response_timeout:
+                            self.logger.info("等待回应超时，继续游戏")
+                            await self.advance_game()
+                            self.waiting_for_response = False
                     else:
-                        self.logger.info(f"检测到新游戏文本: {game_text[:50]}...")
-                        # 产生RawData
-                        yield RawData(
-                            source="mainosaba_game",
-                            content=game_text,
-                            data_type="text",
-                            timestamp=time.time(),
-                            metadata={
-                                "platform": "mainosaba",
-                                "source": "manosaba_game",
-                                "maimcore_reply_probability_gain": 1.5,
-                            },
-                        )
-                        self.last_game_text = game_text
-                        self.last_message_time = time.time()
-                        self.waiting_for_response = True
+                        # 正常监听游戏文本
+                        self.logger.debug("开始截屏识别...")
+                        game_text = await self.capture_and_recognize()
+                        self.logger.debug(f"识别完成，结果: {game_text[:50] if game_text else 'None'}...")
 
-                await asyncio.sleep(self.check_interval)
+                        if game_text is None:
+                            self.logger.debug("未识别到有效文本，继续监听")
+                        elif game_text == self.last_game_text:
+                            self.logger.debug("识别到的文本与上次相同，跳过")
+                        else:
+                            self.logger.info(f"检测到新游戏文本: {game_text[:50]}...")
+                            # 创建 TextContent
+                            content = TextContent(
+                                text=game_text,
+                                user="Mainosaba游戏",
+                                user_id="mainosaba_game",
+                            )
+                            # 产生 NormalizedMessage
+                            yield NormalizedMessage(
+                                text=content.text,
+                                content=content,
+                                source="mainosaba_game",
+                                data_type=content.type,
+                                importance=content.get_importance(),
+                                metadata={
+                                    "platform": "mainosaba",
+                                    "source": "manosaba_game",
+                                    "maimcore_reply_probability_gain": 1.5,
+                                },
+                            )
+                            self.last_game_text = game_text
+                            self.last_message_time = time.time()
+                            self.waiting_for_response = True
 
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                self.logger.error(f"游戏监听循环出错: {e}", exc_info=True)
-                await asyncio.sleep(5)  # 出错时等待5秒再继续
+                    await asyncio.sleep(self.check_interval)
 
-        self.logger.info("游戏文本采集结束")
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    self.logger.error(f"游戏监听循环出错: {e}", exc_info=True)
+                    await asyncio.sleep(5)  # 出错时等待5秒再继续
+
+            self.logger.info("游戏文本采集结束")
+
+        finally:
+            self.is_running = False
+            await self._cleanup_internal()
 
     async def capture_and_recognize(self) -> Optional[str]:
         """截取屏幕并识别游戏文本"""

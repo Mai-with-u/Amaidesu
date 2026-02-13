@@ -99,9 +99,7 @@ async def test_mock_danmaku_provider_data_flow():
         data_type="danmaku",
     )
 
-    await event_bus.emit(
-        CoreEvents.DATA_RAW, RawDataPayload.from_raw_data(raw_data), source="MockDanmakuProvider"
-    )
+    await event_bus.emit(CoreEvents.DATA_RAW, RawDataPayload.from_raw_data(raw_data), source="MockDanmakuProvider")
 
     await asyncio.sleep(0.2)
 

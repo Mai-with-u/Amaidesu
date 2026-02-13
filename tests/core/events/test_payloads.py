@@ -32,7 +32,6 @@ from src.modules.events.payloads.output import (
 )
 from src.modules.events.payloads.system import ErrorPayload, ShutdownPayload, StartupPayload
 from src.modules.types import ActionType, EmotionType, IntentAction
-from src.modules.types.base.raw_data import RawData
 
 # =============================================================================
 # BasePayload 测试
@@ -147,18 +146,6 @@ class TestRawDataPayload:
         )
         assert payload.preserve_original is True
         assert payload.original_data == "原始内容"
-
-    def test_raw_data_payload_from_raw_data(self):
-        """测试 from_raw_data 工厂方法"""
-        raw_data = RawData(
-            content="原始数据",
-            source="console_input",
-            data_type="text",
-        )
-        payload = RawDataPayload.from_raw_data(raw_data)
-        assert payload.content == "原始数据"
-        assert payload.source == "console_input"
-        assert payload.data_type == "text"
 
     def test_raw_data_payload_serialization(self):
         """测试序列化"""
@@ -605,7 +592,6 @@ class TestParametersGeneratedPayload:
         assert payload.priority == 50
 
 
-
 # =============================================================================
 # RenderCompletedPayload 测试
 # =============================================================================
@@ -644,7 +630,6 @@ class TestRenderCompletedPayload:
             duration_ms=1000,
         )
         assert payload.duration_ms == 1000
-
 
 
 # =============================================================================
@@ -690,7 +675,6 @@ class TestRenderFailedPayload:
             metadata=metadata,
         )
         assert payload.metadata == metadata
-
 
 
 # =============================================================================

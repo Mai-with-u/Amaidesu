@@ -146,15 +146,16 @@ class LLMPDecisionProvider(DecisionProvider):
 
     async def decide(self, normalized_message: "NormalizedMessage") -> Intent:
         """
-        进行决策（通过 LLM 生成响应）
+        进行决策（通过 LLM 生成完整 Intent）
 
-        新增：使用 ContextService 管理对话历史
+        使用 ContextService 管理对话历史，使用结构化 prompt 模板，
+        对 LLM 返回的 JSON 进行清理和解析，构造完整 Intent（含 emotion/actions）。
 
         Args:
             normalized_message: 标准化消息
 
         Returns:
-            Intent: 决策意图（LLM 生成的响应）
+            Intent: 决策意图（LLM 生成的完整响应）
 
         Raises:
             RuntimeError: 如果所有重试失败且 fallback_mode 为 "error"
@@ -165,7 +166,7 @@ class LLMPDecisionProvider(DecisionProvider):
         self._total_requests += 1
 
         # 获取 session_id（使用 normalized_message.source）
-        session_id = normalized_message.source  # 如 "console_input", "bili_danmaku"
+        session_id = normalized_message.source
         self.logger.debug(f"使用 session_id: {session_id}")
 
         # 保存用户消息到上下文
@@ -189,33 +190,33 @@ class LLMPDecisionProvider(DecisionProvider):
             try:
                 # 获取最近10条历史消息
                 history = await self._context_service.get_history(session_id, limit=10)
-                # 转换为 OpenAI 格式（排除刚保存的当前用户消息，避免重复）
-                history_context = [
-                    {"role": msg.role.value, "content": msg.content}
-                    for msg in history[:-1]  # 排除刚刚添加的用户消息
-                ]
+                # 转换为字符串格式（排除刚保存的当前用户消息，避免重复）
+                history_items = []
+                for msg in history[:-1]:  # 排除刚刚添加的用户消息
+                    role_name = "用户" if msg.role.value == "user" else "助手"
+                    history_items.append(f"{role_name}: {msg.content}")
+                history_context = history_items
                 self.logger.debug(f"历史上下文: {len(history_context)} 条消息")
             except Exception as e:
                 self.logger.warning(f"获取历史上下文失败: {e}")
 
-        # 构建 prompt（使用 PromptManager 渲染模板）
-        # 如果有历史上下文，可以将其注入到 prompt 中
+        # 构建历史文本（用于 prompt 模板）
+        history_text = "\n".join(history_context) if history_context else ""
+
+        # 构建 prompt（使用 PromptManager 渲染结构化模板）
         prompt = get_prompt_manager().render_safe(
-            "decision/llm",
+            "decision/llm_structured",
             text=normalized_message.text,
             bot_name=persona_config.get("bot_name", "爱德丝"),
             personality=persona_config.get("personality", "活泼开朗，有些调皮，喜欢和观众互动"),
             style_constraints=persona_config.get(
                 "style_constraints", "口语化，使用网络流行语，避免机械式回复，适当使用emoji"
             ),
-            user_name=persona_config.get("user_name", "大家"),
-            max_length=persona_config.get("max_response_length", 50),
-            # 可选：传递历史上下文用于 prompt 模板
-            history=history_context if history_context else [],
+            history=history_text,
         )
 
         try:
-            # 使用 LLM Service 进行调用
+            # 使用 LLM Service 进行调用（不使用 response_format，因为该参数不存在）
             response = await self._llm_service.chat(
                 prompt=prompt,
                 client_type=self.client_type,
@@ -229,19 +230,39 @@ class LLMPDecisionProvider(DecisionProvider):
 
             self._successful_requests += 1
 
-            # 保存助手回复到上下文
-            if self._context_service:
-                try:
-                    await self._context_service.add_message(
-                        session_id=session_id,
-                        role=MessageRole.ASSISTANT,
-                        content=response.content,
-                    )
-                    self.logger.debug(f"已保存助手回复到上下文 (session: {session_id})")
-                except Exception as e:
-                    self.logger.warning(f"保存助手回复到上下文失败: {e}")
+            # 清理和解析 LLM 返回的 JSON
+            cleaned_json = self._clean_llm_json(response.content)
 
-            return self._create_intent(response.content, normalized_message)
+            try:
+                # 解析 JSON
+                import json
+
+                parsed_data = json.loads(cleaned_json)
+
+                # 构造完整 Intent
+                intent = self._create_full_intent(
+                    parsed_data=parsed_data,
+                    normalized_message=normalized_message,
+                )
+
+                # 保存助手回复到上下文（保存 response_text）
+                if self._context_service:
+                    try:
+                        await self._context_service.add_message(
+                            session_id=session_id,
+                            role=MessageRole.ASSISTANT,
+                            content=intent.response_text,
+                        )
+                        self.logger.debug(f"已保存助手回复到上下文 (session: {session_id})")
+                    except Exception as e:
+                        self.logger.warning(f"保存助手回复到上下文失败: {e}")
+
+                return intent
+
+            except json.JSONDecodeError as e:
+                self.logger.error(f"JSON 解析失败: {e}, 清理后的内容: {cleaned_json[:200]}")
+                # 使用降级策略
+                return self._handle_fallback(normalized_message)
 
         except Exception as e:
             self._failed_requests += 1
@@ -249,8 +270,133 @@ class LLMPDecisionProvider(DecisionProvider):
             # 使用降级策略
             return self._handle_fallback(normalized_message)
 
+    def _clean_llm_json(self, raw_output: str) -> str:
+        """
+        清理 LLM 返回的 JSON 字符串（与 MaiCore 一致）
+
+        三步清理：
+        1. 移除 ```json 或 ``` 代码块
+        2. 截取第一个 { 到最后一个 }
+        3. 去掉尾逗号
+
+        Args:
+            raw_output: LLM 原始输出
+
+        Returns:
+            清理后的 JSON 字符串
+        """
+        import re
+
+        # 第一步：移除 ```json 或 ``` 代码块标记
+        cleaned = raw_output.strip()
+        # 移除开头的 ```json 或 ```
+        cleaned = re.sub(r"^```json\s*", "", cleaned)
+        cleaned = re.sub(r"^```\s*", "", cleaned)
+        # 移除结尾的 ```
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+        cleaned = cleaned.strip()
+
+        # 第二步：截取第一个 { 到最后一个 }
+        first_brace = cleaned.find("{")
+        last_brace = cleaned.rfind("}")
+        if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+            cleaned = cleaned[first_brace : last_brace + 1]
+
+        # 第三步：去掉尾逗号（在 } 前的 ,）
+        cleaned = re.sub(r",\s*}", "}", cleaned)
+        cleaned = re.sub(r",\s*]", "]", cleaned)
+
+        return cleaned
+
+    def _create_full_intent(self, parsed_data: Dict[str, Any], normalized_message: "NormalizedMessage") -> Intent:
+        """
+        从解析的 JSON 数据创建完整 Intent
+
+        Args:
+            parsed_data: LLM 返回的解析后 JSON 数据
+            normalized_message: 原始 NormalizedMessage
+
+        Returns:
+            完整的 Intent 对象（含 emotion/actions）
+        """
+        # 提取字段
+        text = parsed_data.get("text", "")
+        emotion_str = parsed_data.get("emotion", "neutral").lower()
+        actions_data = parsed_data.get("actions", [])
+
+        # 解析 emotion
+        try:
+            emotion = EmotionType(emotion_str)
+        except ValueError:
+            self.logger.warning(f"无效的情感类型: {emotion_str}, 使用默认 NEUTRAL")
+            emotion = EmotionType.NEUTRAL
+
+        # 解析 actions
+        actions = []
+        for action_data in actions_data:
+            try:
+                action_type_str = action_data.get("type", "none").lower()
+                params = action_data.get("params", {})
+                priority = action_data.get("priority", 50)
+
+                # 映射 action type
+                action_type = self._map_action_type(action_type_str)
+                actions.append(IntentAction(type=action_type, params=params, priority=priority))
+            except Exception as e:
+                self.logger.warning(f"解析动作失败: {e}, 跳过该动作")
+
+        # 如果没有动作，添加默认眨眼动作
+        if not actions:
+            actions.append(IntentAction(type=ActionType.BLINK, params={}, priority=30))
+
+        # 创建 Intent
+        return Intent(
+            original_text=normalized_message.text,
+            response_text=text,
+            emotion=emotion,
+            actions=actions,
+            metadata={"parser": "llm_structured"},
+        )
+
+    def _map_action_type(self, type_str: str) -> ActionType:
+        """
+        映射动作类型字符串到 ActionType 枚举
+
+        Args:
+            type_str: 动作类型字符串
+
+        Returns:
+            ActionType 枚举值
+        """
+        type_mapping = {
+            "expression": ActionType.EXPRESSION,
+            "hotkey": ActionType.HOTKEY,
+            "emoji": ActionType.EMOJI,
+            "blink": ActionType.BLINK,
+            "nod": ActionType.NOD,
+            "shake": ActionType.SHAKE,
+            "wave": ActionType.WAVE,
+            "clap": ActionType.CLAP,
+            "sticker": ActionType.STICKER,
+            "motion": ActionType.MOTION,
+            "custom": ActionType.CUSTOM,
+            "game_action": ActionType.GAME_ACTION,
+            "none": ActionType.NONE,
+            "speak": ActionType.EXPRESSION,  # speak 映射到 expression
+            "gesture": ActionType.EXPRESSION,  # gesture 映射到 expression
+        }
+
+        return type_mapping.get(type_str, ActionType.NONE)
+
     def _handle_fallback(self, normalized_message: "NormalizedMessage") -> Intent:
-        """处理降级逻辑"""
+        """
+        处理降级逻辑
+
+        保留 fallback_mode 配置：
+        - simple: 简单回复
+        - echo: 复读用户输入
+        - error: 抛异常
+        """
         if self.fallback_mode == "simple":
             # 简单降级：返回原始文本
             return self._create_intent(normalized_message.text, normalized_message)
@@ -263,22 +409,21 @@ class LLMPDecisionProvider(DecisionProvider):
 
     def _create_intent(self, text: str, normalized_message: "NormalizedMessage") -> Intent:
         """
-        创建Intent对象
+        创建简单 Intent（用于降级场景）
 
         Args:
             text: 响应文本
-            normalized_message: 原始NormalizedMessage
+            normalized_message: 原始 NormalizedMessage
 
         Returns:
-            Intent实例
+            Intent 实例（简单实现：中性情感 + 眨眼动作）
         """
-        # 简单实现：默认中性情感，眨眼动作
         return Intent(
             original_text=normalized_message.text,
             response_text=text,
             emotion=EmotionType.NEUTRAL,
             actions=[IntentAction(type=ActionType.BLINK, params={}, priority=30)],
-            metadata={"parser": "llm"},
+            metadata={"parser": "llm_fallback"},
         )
 
     async def cleanup(self) -> None:

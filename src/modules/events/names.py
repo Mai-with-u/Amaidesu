@@ -10,7 +10,7 @@ class CoreEvents:
 
     # ========== 新的事件命名（简化版） ==========
     # Data Domain: 数据域
-    DATA_RAW = "data.raw"
+    DATA_RAW = "data.raw"  # @deprecated: 已废弃，Provider 直接构造 NormalizedMessage
     DATA_MESSAGE = "data.message"
 
     # Decision Domain: 决策域

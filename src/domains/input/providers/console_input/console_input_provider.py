@@ -1,7 +1,7 @@
 """
 ConsoleInputProvider - 控制台输入Provider
 
-从控制台接收用户输入并生成RawData。
+从控制台接收用户输入并直接构造 NormalizedMessage。
 """
 
 import asyncio
@@ -13,14 +13,21 @@ from pydantic import Field
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 from src.modules.types.base.input_provider import InputProvider
-from src.modules.types.base.raw_data import RawData
+from src.modules.types.base.normalized_message import NormalizedMessage
+from src.domains.input.normalization.content import (
+    TextContent,
+    GiftContent,
+    SuperChatContent,
+    GuardContent,
+)
 
 
 class ConsoleInputProvider(InputProvider):
     """
-    控制台输入Provider
+    控制台输入Provider（重构后）
 
     从标准输入读取文本，支持命令处理(exit, gift, sc, guard)。
+    直接构造 NormalizedMessage，无需中间数据结构。
     """
 
     class ConfigSchema(BaseProviderConfig):
@@ -58,9 +65,9 @@ class ConsoleInputProvider(InputProvider):
 
         self.logger.info(f"ConsoleInputProvider初始化完成 (user: {self.user_nickname})")
 
-    async def start(self) -> AsyncIterator[RawData]:
+    async def start(self) -> AsyncIterator[NormalizedMessage]:
         """
-        启动控制台输入，返回RawData流
+        启动控制台输入，直接返回 NormalizedMessage 流
 
         支持的命令:
         - exit(): 退出
@@ -69,62 +76,60 @@ class ConsoleInputProvider(InputProvider):
         - /guard [用户名] [等级]: 发送大航海消息
 
         Yields:
-            RawData: 原始数据
+            NormalizedMessage: 标准化消息
         """
-        # 使用基类的 start() 方法，由 _collect_data() 实现数据采集逻辑
-        async for data in super().start():
-            yield data
+        await self._setup_internal()
+        self.is_running = True
 
-    async def _collect_data(self) -> AsyncIterator[RawData]:
-        """
-        从标准输入采集数据
+        try:
+            loop = asyncio.get_event_loop()
+            self.logger.info("控制台输入已准备就绪。输入 'exit()' 来停止。")
 
-        Yields:
-            RawData: 原始数据
-        """
-        loop = asyncio.get_event_loop()
+            while self.is_running:
+                try:
+                    # 从标准输入读取
+                    line = await loop.run_in_executor(None, sys.stdin.readline)
+                    text = line.strip()
 
-        self.logger.info("控制台输入已准备就绪。输入 'exit()' 来停止。")
+                    if not text:
+                        continue
 
-        while self.is_running:
-            try:
-                # 从标准输入读取
-                line = await loop.run_in_executor(None, sys.stdin.readline)
-                text = line.strip()
+                    if text.lower() == "exit()":
+                        self.logger.info("收到 'exit()' 命令，正在停止...")
+                        break
 
-                if not text:
-                    continue
+                    # 检查是否为命令
+                    if text.startswith("/"):
+                        message = await self._handle_command(text)
+                        if message:
+                            yield message
+                    else:
+                        # 普通文本消息，直接构造 NormalizedMessage
+                        content = TextContent(
+                            text=text,
+                            user=self.user_nickname,
+                            user_id=self.user_id,
+                        )
+                        yield NormalizedMessage(
+                            text=content.text,
+                            content=content,
+                            source="console",
+                            data_type=content.type,
+                            importance=content.get_importance(),
+                        )
 
-                if text.lower() == "exit()":
-                    self.logger.info("收到 'exit()' 命令，正在停止...")
-                    # 设置 is_running 为 False，让循环退出
-                    # 注意：父类的 start() 会在 finally 中再次设置，但这是安全的
+                except asyncio.CancelledError:
+                    self.logger.info("控制台输入循环被取消")
                     break
+                except Exception as e:
+                    self.logger.error(f"控制台输入循环出错: {e}", exc_info=True)
+                    await asyncio.sleep(1)
 
-                # 检查是否为命令
-                if text.startswith("/"):
-                    commands_data = await self._handle_command(text)
-                    if commands_data is not None:
-                        # 处理可能返回的多个数据（现在总是返回列表）
-                        for data in commands_data:
-                            yield data
-                else:
-                    # 创建普通文本数据
-                    yield RawData(
-                        content=text,
-                        source="console",
-                        data_type="text",
-                        metadata={"user": self.user_nickname, "user_id": self.user_id},
-                    )
+            self.logger.info("控制台输入循环结束")
 
-            except asyncio.CancelledError:
-                self.logger.info("控制台输入循环被取消")
-                break
-            except Exception as e:
-                self.logger.error(f"控制台输入循环出错: {e}", exc_info=True)
-                await asyncio.sleep(1)
-
-        self.logger.info("控制台输入循环结束")
+        finally:
+            self.is_running = False
+            await self._cleanup_internal()
 
     async def stop(self):
         """停止输入"""
@@ -137,7 +142,7 @@ class ConsoleInputProvider(InputProvider):
         await super().cleanup()
         self.logger.info("ConsoleInputProvider cleanup完成")
 
-    async def _handle_command(self, cmd_line: str) -> Optional[List[RawData]]:
+    async def _handle_command(self, cmd_line: str) -> Optional[NormalizedMessage]:
         """
         处理命令行输入
 
@@ -145,7 +150,7 @@ class ConsoleInputProvider(InputProvider):
             cmd_line: 命令行
 
         Returns:
-            RawData列表，None表示命令不需要生成数据
+            NormalizedMessage: 构造好的标准化消息，None 表示命令不需要生成数据
         """
         parts = cmd_line[1:].strip().split()
         if not parts:
@@ -167,23 +172,22 @@ class ConsoleInputProvider(InputProvider):
             return None
 
         # 礼物命令
-        elif cmd_name == "gift":
-            return await self._create_gift_data(args)
+        if cmd_name == "gift":
+            return await self._create_gift_message(args)
 
         # 醒目留言命令
-        elif cmd_name == "sc":
-            return await self._create_sc_data(args)
+        if cmd_name == "sc":
+            return await self._create_sc_message(args)
 
         # 大航海命令
-        elif cmd_name == "guard":
-            return await self._create_guard_data(args)
+        if cmd_name == "guard":
+            return await self._create_guard_message(args)
 
-        else:
-            print(f"未知命令: {cmd_name}。输入 '/help' 查看可用命令。")
-            return None
+        print(f"未知命令: {cmd_name}。输入 '/help' 查看可用命令。")
+        return None
 
-    async def _create_gift_data(self, args: List[str]) -> Optional[List[RawData]]:
-        """创建礼物数据"""
+    async def _create_gift_message(self, args: List[str]) -> Optional[NormalizedMessage]:
+        """创建礼物 NormalizedMessage"""
         username = args[0] if len(args) > 0 else "测试用户"
         gift_name = args[1] if len(args) > 1 else "辣条"
         gift_count = int(args[2]) if len(args) > 2 and args[2].isdigit() else 1
@@ -192,36 +196,47 @@ class ConsoleInputProvider(InputProvider):
             print(f"礼物数量必须大于0，当前输入: {gift_count}")
             return None
 
-        data_list = []
-        for i in range(gift_count):
-            data = RawData(
-                content={"type": "gift", "gift_name": gift_name, "count": 1, "user": username},
-                source="console",
-                data_type="gift",
-                metadata={"user": username, "gift_name": gift_name, "count": 1, "index": i},
-            )
-            data_list.append(data)
-
-        print(f"发送礼物测试: {username} -> {gift_count}个{gift_name}")
-        return data_list
-
-    async def _create_sc_data(self, args: List[str]) -> Optional[RawData]:
-        """创建醒目留言数据"""
-        username = args[0] if len(args) > 0 else "SC大佬"
-        content = " ".join(args[1:]) if len(args) > 1 else "这是一条测试醒目留言！"
-
-        data = RawData(
-            content={"type": "superchat", "user": username, "content": content},
-            source="console",
-            data_type="superchat",
-            metadata={"user": username, "content": content},
+        # 对于礼物，只发送一条消息（即使数量>1）
+        content = GiftContent(
+            user=username,
+            user_id="",  # 控制台输入没有真实的 user_id
+            gift_name=gift_name,
+            gift_level=1,
+            count=gift_count,
         )
 
-        print(f"发送醒目留言测试: {username} - {content}")
-        return [data]
+        print(f"发送礼物测试: {username} -> {gift_count}个{gift_name}")
+        return NormalizedMessage(
+            text=content.get_display_text(),
+            content=content,
+            source="console",
+            data_type=content.type,
+            importance=content.get_importance(),
+        )
 
-    async def _create_guard_data(self, args: List[str]) -> Optional[List[RawData]]:
-        """创建大航海数据"""
+    async def _create_sc_message(self, args: List[str]) -> Optional[NormalizedMessage]:
+        """创建醒目留言 NormalizedMessage"""
+        username = args[0] if len(args) > 0 else "SC大佬"
+        content_text = " ".join(args[1:]) if len(args) > 1 else "这是一条测试醒目留言！"
+
+        content = SuperChatContent(
+            user=username,
+            user_id="",
+            content=content_text,
+            price=10.0,  # 默认价格
+        )
+
+        print(f"发送醒目留言测试: {username} - {content_text}")
+        return NormalizedMessage(
+            text=content.content,
+            content=content,
+            source="console",
+            data_type=content.type,
+            importance=content.get_importance(),
+        )
+
+    async def _create_guard_message(self, args: List[str]) -> Optional[NormalizedMessage]:
+        """创建大航海 NormalizedMessage"""
         username = args[0] if len(args) > 0 else "大航海"
         guard_level = args[1] if len(args) > 1 else "舰长"
 
@@ -230,12 +245,17 @@ class ConsoleInputProvider(InputProvider):
             print(f"大航海等级必须是以下之一: {valid_levels}，当前输入: {guard_level}")
             return None
 
-        data = RawData(
-            content={"type": "guard", "user": username, "level": guard_level},
-            source="console",
-            data_type="guard",
-            metadata={"user": username, "level": guard_level},
+        content = GuardContent(
+            user=username,
+            user_id="",
+            level=guard_level,
         )
 
         print(f"发送大航海测试: {username} 开通了{guard_level}")
-        return [data]
+        return NormalizedMessage(
+            text=content.get_display_text(),
+            content=content,
+            source="console",
+            data_type=content.type,
+            importance=content.get_importance(),
+        )

@@ -13,7 +13,8 @@ from pydantic import Field, field_validator
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 from src.modules.types.base.input_provider import InputProvider
-from src.modules.types.base.raw_data import RawData
+from src.modules.types.base.normalized_message import NormalizedMessage
+from src.domains.input.normalization.content import TextContent
 
 from .client.websocket_client import BiliWebSocketClient
 from .service.message_cache import MessageCacheService
@@ -154,8 +155,11 @@ class BiliDanmakuOfficialMaiCraftInputProvider(InputProvider):
         self.forward_client: Optional[ForwardWebSocketClient] = None
         self._stop_event = asyncio.Event()
 
-    async def _collect_data(self) -> AsyncIterator[RawData]:
+    async def start(self) -> AsyncIterator[NormalizedMessage]:
         """采集弹幕数据"""
+        await self._setup_internal()
+        self.is_running = True
+
         # 初始化消息缓存服务
         self.message_cache_service = MessageCacheService(max_cache_size=self.typed_config.message_cache_size)
 
@@ -194,8 +198,10 @@ class BiliDanmakuOfficialMaiCraftInputProvider(InputProvider):
             await self.websocket_client.run(self._handle_message_from_bili)
         except Exception as e:
             self.logger.error(f"WebSocket运行出错: {e}", exc_info=True)
-
-        self.logger.info("Bilibili 官方弹幕采集已停止")
+        finally:
+            self.is_running = False
+            await self._cleanup_internal()
+            self.logger.info("Bilibili 官方弹幕采集已停止")
 
     async def _handle_message_from_bili(self, message_data: Dict[str, Any]):
         """处理从Bilibili接收到的消息"""
@@ -216,23 +222,33 @@ class BiliDanmakuOfficialMaiCraftInputProvider(InputProvider):
                     except Exception as e:
                         self.logger.error(f"外发消息序列化或发送失败: {e}")
 
-                # 创建RawData
-                raw_data = RawData(
-                    content={
-                        "message": message,
-                        "message_config": self.message_handler.get_message_config(),
-                        "forward_url": self.forward_ws_url if self.forward_enabled else None,
-                    },
+                # 从 message 中提取文本和用户信息
+                text = message.content.text if hasattr(message.content, "text") else str(message.content)
+                user = message.message_info.sender_name
+                user_id = message.message_info.sender_id
+
+                # 创建 TextContent
+                content = TextContent(
+                    text=text,
+                    user=user,
+                    user_id=user_id,
+                )
+
+                # 创建 NormalizedMessage
+                yield NormalizedMessage(
+                    text=content.text,
+                    content=content,
                     source="bili_danmaku_official_maicraft",
-                    data_type="text",
-                    timestamp=message.message_info.time,
+                    data_type=content.type,
+                    importance=content.get_importance(),
                     metadata={
                         "message_id": message.message_info.message_id,
                         "room_id": self.id_code,
                         "forward_enabled": self.forward_enabled,
+                        "forward_url": self.forward_ws_url if self.forward_enabled else None,
+                        "message_base": message.model_dump(),
                     },
                 )
-                yield raw_data
 
         except Exception as e:
             self.logger.error(f"处理消息时出错: {message_data} - {e}", exc_info=True)

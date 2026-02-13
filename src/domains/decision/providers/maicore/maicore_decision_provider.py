@@ -4,7 +4,7 @@ MaiCoreDecisionProvider - MaiCore决策提供者
 职责:
 - 将 NormalizedMessage 转换为 Intent
 - 通过 WebSocket 与 MaiCore 通信
-- 使用 IntentParser 解析 MaiCore 响应
+- 自己解析 MaiCore 响应为 Intent（支持 LLM 和规则两种方式）
 
 事件说明:
 - "decision.response_generated": 保留字符串形式的事件名，用于向后兼容
@@ -12,15 +12,18 @@ MaiCoreDecisionProvider - MaiCore决策提供者
 """
 
 import asyncio
+import json
+import re
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
 
 from maim_message import MessageBase, RouteConfig, Router, TargetConfig
 from pydantic import Field
 
-from src.modules.types import Intent
+from src.modules.types import ActionType, EmotionType, Intent, IntentAction, SourceContext
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 from src.modules.types.base.decision_provider import DecisionProvider
+from src.modules.prompts import get_prompt_manager
 
 from .router_adapter import RouterAdapter
 
@@ -39,7 +42,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
     - 决策逻辑 (decide)
     - 直接使用 Router 管理 WebSocket 连接
     - 使用 RouterAdapter 发送消息到 MaiCore
-    - 使用 IntentParser 解析 MaiCore 响应为 Intent
+    - 自己解析 MaiCore 响应为 Intent（支持 LLM 和规则两种方式）
 
     配置示例:
         ```toml
@@ -55,7 +58,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
     异步处理流程:
         1. decide() 被调用，创建 asyncio.Future
         2. 发送消息到 MaiCore
-        3. MaiCore 响应到达时，通过 IntentParser 解析为 Intent
+        3. MaiCore 响应到达时，解析为 Intent（优先 LLM，失败时降级到规则）
         4. 设置 Future 结果，decide() 返回 Intent
     """
 
@@ -133,7 +136,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
 
         # 组件
         self._router_adapter: Optional[RouterAdapter] = None
-        self._intent_parser = None  # IntentParser实例
+        self._dependencies: Dict[str, Any] = {}  # 依赖注入（包括 llm_service）
 
         # EventBus 引用（用于事件通知）
         self._event_bus: Optional["EventBus"] = None
@@ -159,6 +162,15 @@ class MaiCoreDecisionProvider(DecisionProvider):
         self._event_bus = event_bus
         self.logger.info("初始化 MaiCoreDecisionProvider...")
 
+        # 保存依赖注入
+        if dependencies:
+            self._dependencies.update(dependencies)
+            llm_service = dependencies.get("llm_service")
+            if llm_service:
+                self.logger.info("LLMService 已注入，将使用 LLM 进行 Intent 解析")
+            else:
+                self.logger.info("LLMService 未注入，将使用规则解析")
+
         # 配置 Router
         self._setup_router()
 
@@ -169,17 +181,6 @@ class MaiCoreDecisionProvider(DecisionProvider):
         # 创建 RouterAdapter
         self._router_adapter = RouterAdapter(self._router, event_bus)
         self._router_adapter.register_message_handler(self._handle_maicore_message)
-
-        # 初始化 IntentParser（需要LLMManager）
-        llm_service = dependencies.get("llm_service") if dependencies else None
-        if llm_service:
-            from src.domains.decision.intent_parser import IntentParser
-
-            self._intent_parser = IntentParser(llm_service)
-            await self._intent_parser.setup()
-            self.logger.info("IntentParser初始化成功")
-        else:
-            self.logger.warning("LLMManager未找到，IntentParser功能将不可用")
 
         self.logger.info("MaiCoreDecisionProvider 初始化完成")
 
@@ -278,6 +279,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
 
         Raises:
             RuntimeError: 如果未连接
+            TimeoutError: 如果 MaiCore 响应超时
             ConnectionError: 如果发送失败
         """
         if not self._is_router_connected:
@@ -318,7 +320,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
             self.logger.info(f"消息 {message_id} 的 Intent 解析完成")
 
             # 异步发送 Action 建议（不阻塞主流程）
-            if self.typed_config.action_suggestions_enabled and intent.suggested_actions and self._router_adapter:
+            if self.typed_config.action_suggestions_enabled and intent.actions and self._router_adapter:
                 asyncio.create_task(self._safe_send_suggestion(intent))
 
             return intent
@@ -328,8 +330,8 @@ class MaiCoreDecisionProvider(DecisionProvider):
             # 清理 Future
             async with self._futures_lock:
                 self._pending_futures.pop(message_id, None)
-            # 返回默认 Intent
-            return self._create_fallback_intent(normalized_message.text, "timeout")
+            # 抛出超时异常（不降级）
+            raise TimeoutError(f"MaiCore 响应超时（{self._decision_timeout}秒）") from None
         except Exception as e:
             self.logger.error(f"发送消息到 MaiCore 时发生错误: {e}", exc_info=True)
             # 清理 Future
@@ -354,7 +356,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
         异步处理从 MaiCore 接收到的消息
 
         1. 解析为 MessageBase
-        2. 使用 IntentParser 解析为 Intent
+        2. 调用 _parse_intent_from_maicore_response() 构造 Intent
         3. 设置 Future 结果
 
         Args:
@@ -396,15 +398,9 @@ class MaiCoreDecisionProvider(DecisionProvider):
             return
 
         try:
-            # 使用 IntentParser 解析 MessageBase → Intent
-            if self._intent_parser:
-                intent = await self._intent_parser.parse(message)
-                self.logger.debug(f"Intent解析成功: {intent}")
-            else:
-                # 降级：创建简单的 Intent
-                text = str(message)
-                intent = self._create_fallback_intent(text, "no_parser")
-                self.logger.warning("IntentParser未初始化，使用降级方案")
+            # 解析 MessageBase → Intent
+            intent = self._parse_intent_from_maicore_response(message)
+            self.logger.debug(f"Intent解析成功: {intent}")
 
             # 设置 Future 结果
             if not future.done():
@@ -417,26 +413,224 @@ class MaiCoreDecisionProvider(DecisionProvider):
             if not future.done():
                 future.set_exception(e)
 
-    def _create_fallback_intent(self, text: str, reason: str) -> Intent:
+    def _parse_intent_from_maicore_response(self, response: MessageBase) -> Intent:
         """
-        创建降级 Intent
+        从 MaiCore 响应解析 Intent
+
+        优先使用 LLM 解析，失败时降级到规则解析。
 
         Args:
-            text: 消息文本
-            reason: 降级原因
+            response: MaiCore 返回的 MessageBase
 
         Returns:
-            默认 Intent
+            解析后的 Intent
         """
-        from src.modules.types import Intent
-        from src.modules.types import ActionType, EmotionType, IntentAction
+        # 提取文本
+        text = self._extract_text_from_response(response)
+
+        # 尝试使用 LLM 解析
+        llm_service = self._dependencies.get("llm_service")
+        if llm_service:
+            try:
+                return self._parse_with_llm(text, response, llm_service)
+            except Exception as e:
+                self.logger.warning(f"LLM 解析失败，降级到规则解析: {e}")
+
+        # 降级到规则解析
+        return self._parse_with_rules(text, response)
+
+    def _extract_text_from_response(self, response: MessageBase) -> str:
+        """
+        从 MessageBase 提取文本内容
+
+        Args:
+            response: MaiCore 返回的 MessageBase
+
+        Returns:
+            提取的文本字符串
+        """
+        seg = response.message_segment
+        if seg.type == "text":
+            return seg.data
+        else:
+            # 非文本类型，返回类型+数据
+            return f"[{seg.type}] {seg.data}"
+
+    def _parse_with_llm(self, text: str, response: MessageBase, llm_service) -> Intent:
+        """
+        使用 LLM 解析 Intent
+
+        Args:
+            text: 提取的文本
+            response: MaiCore 返回的 MessageBase
+            llm_service: LLM 服务实例
+
+        Returns:
+            解析后的 Intent
+
+        Raises:
+            ValueError: 如果 LLM 返回的内容无法解析为 JSON
+        """
+        # 使用 decision/intent_parser prompt
+        prompt_manager = get_prompt_manager()
+        prompt = prompt_manager.render("decision/intent_parser", text=text)
+
+        # 调用 LLM
+        llm_manager = llm_service
+        llm_result = llm_manager.chat_fast(prompt)
+
+        if not llm_result.success:
+            raise ValueError(f"LLM 调用失败: {llm_result.error}")
+
+        content = llm_result.content
+
+        # 完整的 JSON 清理逻辑
+        # 1. 去掉外层 ```json / ``` 代码块
+        content = re.sub(r"^```json\s*", "", content.strip())
+        content = re.sub(r"^```\s*", "", content.strip())
+        content = re.sub(r"\s*```\s*$", "", content.strip())
+
+        # 2. 截取第一个 { 到最后一个 }
+        first_brace = content.find("{")
+        last_brace = content.rfind("}")
+        if first_brace == -1 or last_brace == -1:
+            raise ValueError("LLM 返回内容中未找到 JSON 对象")
+        content = content[first_brace : last_brace + 1]
+
+        # 3. 去掉尾逗号
+        content = re.sub(r",(\s*[}\]])", r"\1", content)
+
+        # 解析 JSON
+        try:
+            intent_data = json.loads(content)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"无法解析 LLM 返回的 JSON: {e}\n内容: {content}") from e
+
+        # 构造 Intent
+        response_text = intent_data.get("response_text", text)
+        emotion_str = intent_data.get("emotion", "neutral")
+        try:
+            emotion = EmotionType(emotion_str)
+        except ValueError:
+            emotion = EmotionType.NEUTRAL
+
+        # 解析 actions
+        actions = []
+        for action_data in intent_data.get("actions", []):
+            try:
+                action_type_str = action_data.get("type", "none")
+                try:
+                    action_type = ActionType(action_type_str)
+                except ValueError:
+                    action_type = ActionType.NONE
+
+                action = IntentAction(
+                    type=action_type,
+                    params=action_data.get("params", {}),
+                    priority=action_data.get("priority", 50),
+                )
+                actions.append(action)
+            except Exception as e:
+                self.logger.warning(f"解析 action 失败: {e}, action_data: {action_data}")
+
+        # 构造 SourceContext
+        source_context = SourceContext(
+            source=response.message_info.platform if response.message_info else "maicore",
+            data_type="text",
+            user_id=response.message_info.user_info.user_id
+            if response.message_info and response.message_info.user_info
+            else None,
+            user_nickname=response.message_info.user_info.user_nickname
+            if response.message_info and response.message_info.user_info
+            else None,
+        )
+
+        return Intent(
+            original_text=text,
+            response_text=response_text,
+            emotion=emotion,
+            actions=actions,
+            source_context=source_context,
+            metadata={
+                "llm_model": llm_result.model,
+                "parser": "llm",
+            },
+        )
+
+    def _parse_with_rules(self, text: str, response: MessageBase) -> Intent:
+        """
+        使用规则解析 Intent
+
+        简单的关键词匹配，保证最坏情况下也能给出合理的 emotion 和基础动作。
+
+        Args:
+            text: 提取的文本
+            response: MaiCore 返回的 MessageBase
+
+        Returns:
+            解析后的 Intent
+        """
+        # 情感关键词表
+        emotion_keywords = {
+            EmotionType.HAPPY: ["开心", "哈哈", "太棒了", "好玩", "高兴", "快乐", "欢乐", "喜"],
+            EmotionType.SAD: ["难过", "伤心", "哎", "可惜", "遗憾", "悲伤"],
+            EmotionType.ANGRY: ["生气", "愤怒", "讨厌", "烦", "气死"],
+            EmotionType.SURPRISED: ["哇", "天啊", "竟然", "真的吗", "没想到"],
+            EmotionType.LOVE: ["爱", "喜欢", "谢谢", "感谢", "支持"],
+            EmotionType.SHY: ["害羞", "不好意思"],
+            EmotionType.EXCITED: ["激动", "兴奋"],
+        }
+
+        # 检测情感
+        emotion = EmotionType.NEUTRAL
+        for emo, keywords in emotion_keywords.items():
+            if any(keyword in text for keyword in keywords):
+                emotion = emo
+                break
+
+        # 动作规则
+        actions = []
+
+        # 感谢 → clap + 表情
+        if any(word in text for word in ["感谢", "谢谢", "多谢"]):
+            actions.append(IntentAction(type=ActionType.CLAP, params={}, priority=60))
+            actions.append(IntentAction(type=ActionType.EXPRESSION, params={"name": "thank"}, priority=70))
+
+        # 打招呼 → wave
+        if any(word in text for word in ["你好", "大家好", "嗨", "哈喽"]):
+            actions.append(IntentAction(type=ActionType.WAVE, params={}, priority=60))
+
+        # 同意 → nod
+        if any(word in text for word in ["是的", "对", "嗯", "好的", "可以"]):
+            actions.append(IntentAction(type=ActionType.NOD, params={}, priority=50))
+
+        # 不同意 → shake
+        if any(word in text for word in ["不", "不是", "不行"]):
+            actions.append(IntentAction(type=ActionType.SHAKE, params={}, priority=50))
+
+        # 如果没有任何动作，添加低优先级眨眼
+        if not actions:
+            actions.append(IntentAction(type=ActionType.BLINK, params={}, priority=30))
+
+        # 构造 SourceContext
+        source_context = SourceContext(
+            source=response.message_info.platform if response.message_info else "maicore",
+            data_type="text",
+            user_id=response.message_info.user_info.user_id
+            if response.message_info and response.message_info.user_info
+            else None,
+            user_nickname=response.message_info.user_info.user_nickname
+            if response.message_info and response.message_info.user_info
+            else None,
+        )
 
         return Intent(
             original_text=text,
             response_text=text,
-            emotion=EmotionType.NEUTRAL,
-            actions=[IntentAction(type=ActionType.BLINK, params={}, priority=30)],
-            metadata={"fallback_reason": reason, "parser": "fallback"},
+            emotion=emotion,
+            actions=actions,
+            source_context=source_context,
+            metadata={"parser": "rule_based"},
         )
 
     async def _safe_send_suggestion(self, intent: Intent) -> None:
@@ -465,10 +659,6 @@ class MaiCoreDecisionProvider(DecisionProvider):
         断开连接并清理所有资源。
         """
         self.logger.info("清理 MaiCoreDecisionProvider...")
-
-        # 清理 IntentParser
-        if self._intent_parser:
-            await self._intent_parser.cleanup()
 
         # 取消所有待处理的 Future
         async with self._futures_lock:

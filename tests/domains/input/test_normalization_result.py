@@ -30,6 +30,7 @@ class NormalizationResult(BaseModel):
     message: Optional[NormalizedMessage]
     error: Optional[str] = None
 
+
 # =============================================================================
 # Fixtures
 # =============================================================================

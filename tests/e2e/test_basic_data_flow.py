@@ -49,9 +49,7 @@ async def test_complete_data_flow_with_mock_providers(event_bus, sample_raw_data
     intent_future = asyncio.create_task(wait_for_event(event_bus, CoreEvents.DECISION_INTENT))
 
     # 5. 发送 RawData
-    await event_bus.emit(
-        CoreEvents.DATA_RAW, RawDataPayload.from_raw_data(sample_raw_data), source="test"
-    )
+    await event_bus.emit(CoreEvents.DATA_RAW, RawDataPayload.from_raw_data(sample_raw_data), source="test")
 
     # 6. 验证 data.message 事件
     event_name, event_data, source = await norm_future
@@ -94,9 +92,7 @@ async def test_input_domain_normalization(event_bus, sample_raw_data, wait_for_e
     future = asyncio.create_task(wait_for_event(event_bus, CoreEvents.DATA_MESSAGE))
 
     # 发送 RawData
-    await event_bus.emit(
-        CoreEvents.DATA_RAW, RawDataPayload.from_raw_data(sample_raw_data), source="test"
-    )
+    await event_bus.emit(CoreEvents.DATA_RAW, RawDataPayload.from_raw_data(sample_raw_data), source="test")
 
     # 验证结果
     event_name, event_data, source = await future

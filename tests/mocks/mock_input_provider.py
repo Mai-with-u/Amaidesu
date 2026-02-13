@@ -3,10 +3,11 @@ Mock 输入 Provider（用于测试）
 """
 
 import asyncio
-from typing import Any, Dict, Optional
+from typing import Any, AsyncIterator, Dict, Optional
 
+from src.domains.input.normalization.content import TextContent
 from src.modules.types.base.input_provider import InputProvider
-from src.modules.types.base.raw_data import RawData
+from src.modules.types.base.normalized_message import NormalizedMessage
 
 
 class MockInputProvider(InputProvider):
@@ -19,12 +20,17 @@ class MockInputProvider(InputProvider):
         # 测试模式：如果为 True，provider 在无数据时自动退出
         self._auto_exit = config.get("auto_exit", False) if config else False
 
-    def add_test_data(self, data: RawData):
+    def add_test_data(self, data: NormalizedMessage):
         """添加测试数据"""
         self._test_data_queue.put_nowait(data)
 
-    async def _collect_data(self):
-        """采集测试数据"""
+    async def start(self) -> AsyncIterator[NormalizedMessage]:
+        """
+        启动 Provider 并返回 NormalizedMessage 流
+        """
+        self.is_running = True
+        await self._setup_internal()
+
         empty_count = 0
         while self.is_running:
             try:
