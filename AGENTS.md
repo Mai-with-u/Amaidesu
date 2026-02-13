@@ -134,11 +134,10 @@ await audio_channel.subscribe(
 ```python
 # main.py
 audio_stream_channel = AudioStreamChannel("tts")
-await output_coordinator.setup(..., audio_stream_channel=audio_stream_channel)
+await output_provider_manager.setup(..., audio_stream_channel=audio_stream_channel)
 
-# OutputCoordinator → OutputProviderManager
-dependencies = {"audio_stream_channel": self._audio_stream_channel}
-await self.output_provider_manager.setup_all_providers(event_bus, dependencies)
+# OutputProviderManager 内部
+await self.setup_all_providers(event_bus, audio_stream_channel=audio_stream_channel)
 
 # Provider
 self.audio_stream_channel = self._dependencies.get("audio_stream_channel")

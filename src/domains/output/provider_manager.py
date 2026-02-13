@@ -1,27 +1,44 @@
 """
-OutputProviderManager - Output Domain: 渲染输出管理器
+OutputProviderManager - Output Domain: 输出Provider管理器（重构后）
 
 职责:
-- 管理多个OutputProvider
+- 协调 Decision Domain → Output Domain 的数据流
+- 订阅 Intent 事件并生成 RenderParameters（用于 TTS/Subtitle）
+- 管理多个 OutputProvider
 - 支持并发渲染
 - 错误隔离（单个Provider失败不影响其他）
 - 超时控制（防止单个Provider阻塞）
 - 生命周期管理（启动、停止、清理）
 - 从配置加载Provider
+- Pipeline 集成（OutputPipeline）
+
+数据流（3域架构 - 重构后）:
+    Intent (Decision) → Avatar Providers (直接订阅 DECISION_INTENT)
+                     → OutputProviderManager → RenderParameters (TTS/Subtitle) → TTS/Subtitle Providers
+
+注意:
+- Avatar Provider 直接订阅 DECISION_INTENT，在内部实现 Intent → 平台参数的适配
+- OutputProviderManager 只为 TTS/Subtitle 生成 RenderParameters
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Any
+import os
+from typing import TYPE_CHECKING, Any, Optional
 
 from pydantic import BaseModel
 
 from src.domains.output.parameters.render_parameters import RenderParameters
+from src.domains.output.pipelines.manager import OutputPipelineManager
+from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import ParametersGeneratedPayload
 from src.modules.logging import get_logger
+from src.modules.types import ExpressionParameters
 from src.modules.types.base.output_provider import OutputProvider
 
 # 类型检查时的导入
 if TYPE_CHECKING:
-    pass
+    from src.modules.events.payloads import IntentPayload
 
 
 class RenderResult(BaseModel):
@@ -45,26 +62,31 @@ class RenderResult(BaseModel):
 
 class OutputProviderManager:
     """
-    输出Provider管理器
+    输出Provider管理器（重构后）
 
     核心职责:
-    - 管理多个OutputProvider实例
-    - 并发渲染到所有Provider
-    - 错误隔离（单个Provider失败不影响其他）
-    - 超时控制（防止单个Provider阻塞）
+    - 协调 Decision Domain → Output Domain 的数据流
+    - 订阅 Intent 事件并生成 RenderParameters（用于 TTS/Subtitle）
+    - 管理多个 OutputProvider 实例
+    - 并发渲染到所有 Provider
+    - 错误隔离（单个 Provider 失败不影响其他）
+    - 超时控制（防止单个 Provider 阻塞）
     - 生命周期管理
+    - Pipeline 集成
     """
 
-    def __init__(self, config: dict[str, Any] = None):
+    def __init__(self, event_bus: EventBus, config: dict[str, Any] = None):
         """
-        初始化Provider管理器
+        初始化 Provider 管理器
 
         Args:
+            event_bus: 事件总线实例
             config: 配置字典，支持:
                 - concurrent_rendering: bool = True  # 是否并发渲染
                 - error_handling: str = "continue"  # 错误处理策略: continue/stop/drop
                 - render_timeout: float = 10.0  # 单个Provider渲染超时（秒）
         """
+        self.event_bus = event_bus
         self.config = config or {}
         self.providers: list[OutputProvider] = []
         self.logger = get_logger("OutputProviderManager")
@@ -78,12 +100,183 @@ class OutputProviderManager:
         # 渲染超时时间（秒），0表示不限制
         self.render_timeout = float(self.config.get("render_timeout", 10.0))
 
+        # Pipeline 管理器
+        self.pipeline_manager: Optional[OutputPipelineManager] = None
+
+        # 状态标记
+        self._is_setup = False
+        self._event_handler_registered = False
+        self._audio_stream_channel = None
+
         self.logger.info(
             f"OutputProviderManager初始化完成 "
             f"(concurrent={self.concurrent_rendering}, "
             f"error_handling={self.error_handling}, "
             f"timeout={self.render_timeout}s)"
         )
+
+    # ==================== 生命周期管理 ====================
+
+    async def setup(
+        self,
+        config: dict[str, Any],
+        config_service=None,
+        root_config: Optional[dict[str, Any]] = None,
+        audio_stream_channel=None,
+    ) -> None:
+        """
+        设置输出Provider管理器
+
+        Args:
+            config: 输出Provider配置（来自[providers.output]）
+            config_service: ConfigService实例（用于三级配置加载）
+            root_config: 根配置字典（包含 pipelines 配置）
+            audio_stream_channel: AudioStreamChannel 实例
+        """
+        self.logger.info("开始设置输出Provider管理器...")
+
+        # 保存 AudioStreamChannel 引用
+        self._audio_stream_channel = audio_stream_channel
+
+        # 创建输出Pipeline管理器
+        self.pipeline_manager = OutputPipelineManager()
+        self.logger.info("输出Pipeline管理器已创建")
+
+        # 从配置加载输出Pipeline
+        pipeline_config = root_config.get("pipelines", {}) if root_config else {}
+        if pipeline_config:
+            # 构建管道加载目录路径：src/domains/output/pipelines
+            pipeline_load_dir = os.path.join(os.path.dirname(__file__), "pipelines")
+            pipeline_load_dir = os.path.abspath(pipeline_load_dir)
+            self.logger.info(f"准备加载输出Pipeline (从目录: {pipeline_load_dir})...")
+
+            try:
+                await self.pipeline_manager.load_output_pipelines(pipeline_load_dir, pipeline_config)
+                pipeline_count = len(self.pipeline_manager._pipelines)
+                if pipeline_count > 0:
+                    self.logger.info(f"输出Pipeline加载完成，共 {pipeline_count} 个管道。")
+                else:
+                    self.logger.info("未找到任何有效的输出Pipeline。")
+            except Exception as e:
+                self.logger.error(f"加载输出Pipeline时出错: {e}", exc_info=True)
+        else:
+            self.logger.info("配置中未启用管道功能")
+
+        # 从配置加载Provider
+        await self.load_from_config(config, core=None, config_service=config_service)
+
+        # 订阅 Decision Domain 的 Intent 事件（3域架构，类型化）
+        from src.modules.events.payloads.decision import IntentPayload
+
+        self.event_bus.on(
+            CoreEvents.DECISION_INTENT,
+            self._on_intent_ready,
+            model_class=IntentPayload,
+            priority=50,
+        )
+        self._event_handler_registered = True
+        self.logger.info(f"已订阅 '{CoreEvents.DECISION_INTENT}' 事件（类型化）")
+
+        self._is_setup = True
+        self.logger.info("输出Provider管理器设置完成")
+
+    async def start(self):
+        """启动输出Provider管理器"""
+        if not self._is_setup:
+            self.logger.warning("OutputProviderManager 未设置，无法启动")
+            return
+
+        self.logger.info("启动输出Provider管理器...")
+
+        # 启动 OutputProvider，注入 AudioStreamChannel
+        try:
+            await self.setup_all_providers(self.event_bus, audio_stream_channel=self._audio_stream_channel)
+            self.logger.info("OutputProvider 已启动")
+        except Exception as e:
+            self.logger.error(f"启动 OutputProvider 失败: {e}", exc_info=True)
+
+    async def stop(self):
+        """停止输出Provider管理器"""
+        self.logger.info("停止输出Provider管理器...")
+
+        # 停止 OutputProvider
+        try:
+            await self.stop_all_providers()
+            self.logger.info("OutputProvider 已停止")
+        except Exception as e:
+            self.logger.error(f"停止 OutputProvider 失败: {e}", exc_info=True)
+
+    async def cleanup(self):
+        """清理资源"""
+        self.logger.info("清理输出Provider管理器...")
+
+        # 取消事件订阅
+        if self._event_handler_registered:
+            try:
+                self.event_bus.off(CoreEvents.DECISION_INTENT, self._on_intent_ready)
+                self._event_handler_registered = False
+                self.logger.info("事件订阅已取消")
+            except Exception as e:
+                self.logger.error(f"取消事件订阅失败: {e}", exc_info=True)
+
+        self._is_setup = False
+        self.logger.info("输出Provider管理器清理完成")
+
+    async def _on_intent_ready(self, event_name: str, payload: "IntentPayload", source: str):
+        """
+        处理Intent事件（Decision Domain → Output Domain，类型化）
+
+        数据流（重构后）:
+            IntentPayload → Intent → RenderParameters (TTS/Subtitle) → OutputPipeline处理 → 发布 OUTPUT_PARAMS 事件 → TTS/Subtitle Providers
+
+        注意: Avatar Providers 直接订阅 DECISION_INTENT 事件，不经过此方法
+
+        Args:
+            event_name: 事件名称（decision.intent）
+            payload: 类型化的事件数据（IntentPayload 对象，自动反序列化）
+            source: 事件源
+        """
+        # 使用 IntentPayload.to_intent() 方法转换为 Intent 对象
+        intent = payload.to_intent()
+
+        # 获取第一个动作的类型（如果有）
+        # 注意：由于 IntentAction 使用了 use_enum_values=True，type 已经是字符串
+        action_type = intent.actions[0].type if intent.actions else "none"
+        self.logger.info(f'收到Intent事件: {event_name}, 响应: "{intent.response_text[:50]}...", 动作: {action_type}')
+
+        try:
+            # 直接生成 ExpressionParameters（仅用于 TTS/Subtitle）
+            # Avatar Provider 已在各自的 _on_intent_ready 中处理 Intent
+            params = ExpressionParameters(
+                tts_text=intent.response_text,
+                subtitle_text=intent.response_text,
+                tts_enabled=True,
+                subtitle_enabled=True,
+            )
+            self.logger.info(
+                f'生成参数: tts_text="{params.tts_text[:30]}...", tts_enabled={params.tts_enabled}, subtitle_enabled={params.subtitle_enabled}'
+            )
+
+            # OutputPipeline 处理（参数后处理）
+            if self.pipeline_manager:
+                params = await self.pipeline_manager.process(params)
+                if params is None:  # 被管道丢弃
+                    self.logger.info("RenderParameters 被 Pipeline 丢弃，取消本次输出")
+                    return
+                self.logger.debug("OutputPipeline 处理完成")
+
+            # 发布 OUTPUT_PARAMS 事件（事件驱动）
+            # TTS/Subtitle Provider 订阅此事件并响应
+            event_payload = ParametersGeneratedPayload.from_parameters(
+                params, source_intent=intent.model_dump(mode="json")
+            )
+            await self.event_bus.emit(CoreEvents.OUTPUT_PARAMS, event_payload, source="OutputProviderManager")
+            self.logger.debug(f"已发布事件: {CoreEvents.OUTPUT_PARAMS}")
+
+        except Exception as e:
+            self.logger.error(f"处理Intent事件时出错: {e}", exc_info=True)
+
+    # ==================== Provider 管理 ====================
 
     async def register_provider(self, provider: OutputProvider):
         """
@@ -372,7 +565,7 @@ class OutputProviderManager:
         # 确保所有 Provider 模块已导入（触发 Schema 注册）
         # 导入 providers 包会执行 __init__.py，注册所有 Provider
         try:
-            from src.domains.output import providers
+            from src.domains.output import providers  # noqa: F401
 
             self.logger.debug("已导入 providers 包，所有 Provider 应已注册")
         except ImportError as e:

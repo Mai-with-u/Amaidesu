@@ -12,7 +12,7 @@ OutputProviderManager 单元测试
 - 错误隔离
 - 边界情况
 
-运行: uv run pytest tests/core/test_output_provider_manager.py -v
+运行: uv run pytest tests/domains/output/test_provider_manager.py -v
 """
 
 import asyncio
@@ -23,6 +23,7 @@ import pytest
 
 from src.domains.output.parameters.render_parameters import RenderParameters
 from src.domains.output.provider_manager import OutputProviderManager
+from src.modules.events.event_bus import EventBus
 from tests.mocks.mock_output_provider import MockOutputProvider
 
 # =============================================================================
@@ -77,15 +78,23 @@ class SlowMockOutputProvider(MockOutputProvider):
 
 
 @pytest.fixture
-def manager():
-    """创建 OutputProviderManager 实例"""
-    return OutputProviderManager()
+def event_bus():
+    """创建 EventBus 实例"""
+    return EventBus(enable_stats=True)
 
 
 @pytest.fixture
-def manager_with_config():
+def manager(event_bus):
+    """创建 OutputProviderManager 实例"""
+    return OutputProviderManager(event_bus=event_bus)
+
+
+@pytest.fixture
+def manager_with_config(event_bus):
     """创建带配置的 OutputProviderManager 实例"""
-    return OutputProviderManager(config={"concurrent_rendering": True, "error_handling": "continue"})
+    return OutputProviderManager(
+        event_bus=event_bus, config={"concurrent_rendering": True, "error_handling": "continue"}
+    )
 
 
 @pytest.fixture
@@ -126,27 +135,27 @@ def sample_config():
 # =============================================================================
 
 
-def test_manager_initialization():
+def test_manager_initialization(event_bus):
     """测试 OutputProviderManager 初始化"""
-    manager = OutputProviderManager()
+    manager = OutputProviderManager(event_bus=event_bus)
 
     assert manager.providers == []
     assert manager.concurrent_rendering is True
     assert manager.error_handling == "continue"
 
 
-def test_manager_initialization_with_config():
+def test_manager_initialization_with_config(event_bus):
     """测试带配置的初始化"""
     config = {"concurrent_rendering": False, "error_handling": "stop"}
-    manager = OutputProviderManager(config)
+    manager = OutputProviderManager(event_bus=event_bus, config=config)
 
     assert manager.concurrent_rendering is False
     assert manager.error_handling == "stop"
 
 
-def test_manager_initialization_with_empty_config():
+def test_manager_initialization_with_empty_config(event_bus):
     """测试空配置"""
-    manager = OutputProviderManager({})
+    manager = OutputProviderManager(event_bus=event_bus, config={})
 
     assert manager.providers == []
     assert manager.concurrent_rendering is True  # 默认值
@@ -853,9 +862,11 @@ def test_get_stats_multiple_providers(manager: OutputProviderManager, mock_event
     assert "MockOutputProvider" in stats["provider_stats"]
 
 
-def test_get_stats_with_config(manager: OutputProviderManager):
+def test_get_stats_with_config(event_bus: EventBus):
     """测试获取带配置的 Manager 统计信息"""
-    manager = OutputProviderManager({"concurrent_rendering": False, "error_handling": "stop"})
+    manager = OutputProviderManager(
+        event_bus=event_bus, config={"concurrent_rendering": False, "error_handling": "stop"}
+    )
 
     provider = MockOutputProvider()
     import asyncio
@@ -1157,10 +1168,10 @@ async def test_provider_lifecycle_complete(manager: OutputProviderManager, mock_
 
 
 @pytest.mark.asyncio
-async def test_multiple_managers_independent(manager: OutputProviderManager):
+async def test_multiple_managers_independent(event_bus: EventBus):
     """测试多个 Manager 实例的独立性"""
-    manager1 = OutputProviderManager()
-    manager2 = OutputProviderManager()
+    manager1 = OutputProviderManager(event_bus=event_bus)
+    manager2 = OutputProviderManager(event_bus=event_bus)
 
     provider1 = MockOutputProvider()
     provider2 = MockOutputProvider()

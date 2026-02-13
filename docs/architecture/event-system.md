@@ -96,8 +96,8 @@ event_bus.off(
 |--------|--------|--------|---------|
 | `data.raw` | InputProvider | InputCoordinator | `RawDataPayload` |
 | `data.message` | InputCoordinator | DecisionCoordinator | `MessageReadyPayload` |
-| `decision.intent` | DecisionCoordinator | ExpressionGenerator | `IntentPayload` |
-| `output.params` | ExpressionGenerator | OutputCoordinator | `ParametersGeneratedPayload` |
+| `decision.intent` | DecisionCoordinator | OutputProviderManager | `IntentPayload` |
+| `output.params` | OutputProviderManager | TTS/Subtitle Providers | `ParametersGeneratedPayload` |
 | `render.completed` | OutputProvider | - | `RenderCompletedPayload` |
 
 ### 事件常量

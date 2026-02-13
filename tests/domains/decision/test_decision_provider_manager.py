@@ -438,13 +438,11 @@ async def test_decide_preserves_metadata(decision_manager_with_mock, sample_norm
 # =============================================================================
 
 
-@pytest.mark.skip(reason="事件处理已移至 DecisionCoordinator，见 test_decision_coordinator.py")
 @pytest.mark.asyncio
 async def test_on_normalized_message_ready_success(decision_manager_with_mock, sample_normalized_message):
-    """测试处理 normalization.message_ready 事件
+    """测试处理 data.message 事件
 
-    注意：此测试已跳过，因为事件处理逻辑已移至 DecisionCoordinator。
-    相应的测试在 test_decision_coordinator.py 中。
+    事件处理逻辑已合并到 DecisionProviderManager。
     """
     manager = decision_manager_with_mock
     manager._current_provider.add_response("事件回复", EmotionType.LOVE)
@@ -456,10 +454,10 @@ async def test_on_normalized_message_ready_success(decision_manager_with_mock, s
         # 包含字段: intent_data (嵌套字典), provider
         intent_results.append(event_data)
 
-    # 订阅 intent_generated 事件
-    manager.event_bus.on("decision.intent_generated", intent_handler, priority=50)
+    # 订阅 decision.intent 事件
+    manager.event_bus.on(CoreEvents.DECISION_INTENT, intent_handler, priority=50)
 
-    # 触发 normalization.message_ready 事件
+    # 触发 data.message 事件
     await manager.event_bus.emit(
         CoreEvents.DATA_MESSAGE,
         MessageReadyPayload.from_normalized_message(sample_normalized_message),
@@ -513,13 +511,11 @@ async def test_on_normalized_message_ready_missing_message_key(decision_manager_
     assert manager._current_provider.call_count == 0
 
 
-@pytest.mark.skip(reason="事件处理已移至 DecisionCoordinator，见 test_decision_coordinator.py")
 @pytest.mark.asyncio
 async def test_on_normalized_message_ready_event_data_structure(decision_manager_with_mock, sample_normalized_message):
-    """测试 intent_generated 事件的数据结构
+    """测试 decision.intent 事件的数据结构
 
-    注意：此测试已跳过，因为事件处理逻辑已移至 DecisionCoordinator。
-    相应的测试在 test_decision_coordinator.py 中。
+    事件处理逻辑已合并到 DecisionProviderManager。
     """
     manager = decision_manager_with_mock
 
@@ -530,7 +526,7 @@ async def test_on_normalized_message_ready_event_data_structure(decision_manager
         event_data_received.append(event_data)
         source_received.append(source)
 
-    manager.event_bus.on("decision.intent_generated", intent_handler, priority=50)
+    manager.event_bus.on(CoreEvents.DECISION_INTENT, intent_handler, priority=50)
 
     await manager.event_bus.emit(
         CoreEvents.DATA_MESSAGE,
@@ -555,7 +551,7 @@ async def test_on_normalized_message_ready_event_data_structure(decision_manager
     assert event_data["intent_data"]["original_text"] == sample_normalized_message.text
     assert event_data["provider"] == "mock_decision"
     # source 是作为参数传递给 handler 的，不在 event_data 里
-    assert source_received[0] == "DecisionManager"
+    assert source_received[0] == "DecisionProviderManager"
 
 
 @pytest.mark.asyncio
