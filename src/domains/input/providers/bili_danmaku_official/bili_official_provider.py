@@ -12,7 +12,8 @@ from pydantic import Field
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 from src.modules.types.base.input_provider import InputProvider
-from src.modules.types.base.raw_data import RawData
+from src.modules.types.base.normalized_message import NormalizedMessage
+from src.domains.input.normalization.content import TextContent
 
 from .client.websocket_client import BiliWebSocketClient
 from .service.message_cache import MessageCacheService
@@ -79,8 +80,11 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
                     "BiliDanmakuOfficial 配置启用了 template_info，但在 config.toml 中未找到 template_items。"
                 )
 
-    async def _collect_data(self) -> AsyncIterator[RawData]:
+    async def start(self) -> AsyncIterator[NormalizedMessage]:
         """采集弹幕数据"""
+        await self._setup_internal()
+        self.is_running = True
+
         # 初始化消息缓存服务
         self.message_cache_service = MessageCacheService(max_cache_size=self.typed_config.message_cache_size)
 
@@ -114,11 +118,11 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
             while self.is_running:
                 try:
                     # 设置超时以避免永久阻塞
-                    raw_data = await asyncio.wait_for(message_queue.get(), timeout=1.0)
-                    if raw_data is None:
+                    normalized_msg = await asyncio.wait_for(message_queue.get(), timeout=1.0)
+                    if normalized_msg is None:
                         self.logger.info("收到结束信号，停止数据采集")
                         break
-                    yield raw_data
+                    yield normalized_msg
                 except asyncio.TimeoutError:
                     # 超时继续循环，检查is_running
                     continue
@@ -126,15 +130,19 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
                     self.logger.error(f"从队列获取消息时出错: {e}", exc_info=True)
                     break
 
+        except asyncio.CancelledError:
+            self.logger.info("采集被取消")
         except Exception as e:
             self.logger.error(f"数据采集出错: {e}", exc_info=True)
         finally:
+            self.is_running = False
             # 停止WebSocket任务
             ws_task.cancel()
             try:
                 await ws_task
             except asyncio.CancelledError:
                 pass
+            await self._cleanup_internal()
             self.logger.info("Bilibili 官方弹幕采集已停止")
 
     async def _run_websocket(self, message_queue: asyncio.Queue):
@@ -156,23 +164,32 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
                 self.message_cache_service.cache_message(message)
                 self.logger.debug(f"消息已缓存: {message.message_info.message_id}")
 
-                # 创建RawData
-                raw_data = RawData(
-                    content={
-                        "message": message,
-                        "message_config": self.message_handler.get_message_config()
-                        if hasattr(self.message_handler, "get_message_config")
-                        else {},
-                    },
+                # 从 message 中提取文本和用户信息
+                text = message.content.text if hasattr(message.content, "text") else str(message.content)
+                user = message.message_info.sender_name
+                user_id = message.message_info.sender_id
+
+                # 创建 TextContent
+                content = TextContent(
+                    text=text,
+                    user=user,
+                    user_id=user_id,
+                )
+
+                # 创建 NormalizedMessage
+                normalized_msg = NormalizedMessage(
+                    text=content.text,
+                    content=content,
                     source="bili_danmaku_official",
-                    data_type="text",
-                    timestamp=message.message_info.time,
+                    data_type=content.type,
+                    importance=content.get_importance(),
                     metadata={
                         "message_id": message.message_info.message_id,
                         "room_id": self.id_code,
+                        "message_base": message,
                     },
                 )
-                await message_queue.put(raw_data)
+                await message_queue.put(normalized_msg)
 
         except Exception:
             # 捕获异常并记录，避免格式化问题

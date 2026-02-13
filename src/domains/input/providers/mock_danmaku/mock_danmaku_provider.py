@@ -1,7 +1,7 @@
 """
 Mock Danmaku Input Provider
 
-模拟弹幕输入Provider，从JSONL文件读取消息并发送到EventBus。
+模拟弹幕输入Provider，从JSONL文件读取消息并直接构造 NormalizedMessage。
 """
 
 import asyncio
@@ -14,14 +14,16 @@ from pydantic import Field
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 from src.modules.types.base.input_provider import InputProvider
-from src.modules.types.base.raw_data import RawData
+from src.modules.types.base.normalized_message import NormalizedMessage
+from src.domains.input.normalization.content import TextContent
 
 
 class MockDanmakuInputProvider(InputProvider):
     """
-    模拟弹幕输入Provider
+    模拟弹幕输入Provider（重构后）
 
-    从JSONL文件读取消息并按设定速率发送到EventBus。
+    从JSONL文件读取消息并按设定速率发送。
+    直接构造 NormalizedMessage，无需中间数据结构。
     """
 
     class ConfigSchema(BaseProviderConfig):
@@ -64,70 +66,88 @@ class MockDanmakuInputProvider(InputProvider):
         self._current_line_index: int = 0
         self._stop_event = asyncio.Event()
 
-    async def _collect_data(self) -> AsyncIterator[RawData]:
+    async def start(self) -> AsyncIterator[NormalizedMessage]:
         """
-        从JSONL文件采集数据
+        启动模拟弹幕发送循环，直接返回 NormalizedMessage 流
 
         Yields:
-            RawData: 包含JSON消息的原始数据
+            NormalizedMessage: 标准化消息
         """
-        # 加载消息
-        await self._load_message_lines()
+        await self._setup_internal()
+        self.is_running = True
 
-        if not self._message_lines:
-            self.logger.warning(f"未从 '{self.log_file_path}' 加载任何消息。")
-            return
+        try:
+            # 加载消息
+            await self._load_message_lines()
 
-        self.logger.info(f"模拟弹幕发送循环开始 (源: {self.log_file_path.name})")
-
-        while not self._stop_event.is_set():
             if not self._message_lines:
-                self.logger.warning("消息列表为空，停止发送循环。")
-                break
+                self.logger.warning(f"未从 '{self.log_file_path}' 加载任何消息。")
+                return
 
-            # 检查是否到达文件末尾
-            if self._current_line_index >= len(self._message_lines):
-                if self.loop_playback:
-                    self.logger.info("到达文件末尾，循环播放已启用，重置索引。")
-                    self._current_line_index = 0
-                else:
-                    self.logger.info("到达文件末尾，循环播放已禁用，停止发送。")
+            self.logger.info(f"模拟弹幕发送循环开始 (源: {self.log_file_path.name})")
+
+            while not self._stop_event.is_set():
+                if not self._message_lines:
+                    self.logger.warning("消息列表为空，停止发送循环。")
                     break
 
-            # 重置后再次检查索引
-            if self._current_line_index >= len(self._message_lines):
-                self.logger.warning("索引仍然超出范围，停止循环。")
-                break
+                # 检查是否到达文件末尾
+                if self._current_line_index >= len(self._message_lines):
+                    if self.loop_playback:
+                        self.logger.info("到达文件末尾，循环播放已启用，重置索引。")
+                        self._current_line_index = 0
+                    else:
+                        self.logger.info("到达文件末尾，循环播放已禁用，停止发送。")
+                        break
 
-            line = self._message_lines[self._current_line_index]
-            self._current_line_index += 1
+                # 重置后再次检查索引
+                if self._current_line_index >= len(self._message_lines):
+                    self.logger.warning("索引仍然超出范围，停止循环。")
+                    break
 
-            try:
-                # 解析JSON
-                data = json.loads(line)
+                line = self._message_lines[self._current_line_index]
+                self._current_line_index += 1
 
-                # 创建RawData
-                raw_data = RawData(
-                    content=data, source="mock_danmaku", data_type="text", timestamp=asyncio.get_event_loop().time()
-                )
+                try:
+                    # 解析JSON
+                    data = json.loads(line)
 
-                self.logger.debug(f"发送模拟消息 (行 {self._current_line_index}): {str(data)[:50]}...")
+                    # 直接构造 NormalizedMessage
+                    text = data.get("text", "")
+                    user = data.get("user", "未知用户")
+                    user_id = data.get("user_id", "")
 
-                # 返回数据
-                yield raw_data
+                    content = TextContent(text=text, user=user, user_id=user_id)
 
-                # 等待间隔时间
-                await asyncio.sleep(self.send_interval)
+                    message = NormalizedMessage(
+                        text=content.text,
+                        content=content,
+                        source="mock_danmaku",
+                        data_type=content.type,
+                        importance=content.get_importance(),
+                    )
 
-            except asyncio.CancelledError:
-                self.logger.info("模拟弹幕发送循环被取消。")
-                break
-            except json.JSONDecodeError as e:
-                self.logger.error(f"JSON 解析错误: {e}. 行内容: {line[:100]}...")
-            except Exception as e:
-                self.logger.error(f"发送模拟消息时发生错误: {e}", exc_info=True)
+                    self.logger.debug(f"发送模拟消息 (行 {self._current_line_index}): {str(data)[:50]}...")
 
-        self.logger.info("模拟弹幕发送循环已结束。")
+                    # 返回消息
+                    yield message
+
+                    # 等待间隔时间
+                    await asyncio.sleep(self.send_interval)
+
+                except asyncio.CancelledError:
+                    self.logger.info("模拟弹幕发送循环被取消。")
+                    break
+                except json.JSONDecodeError as e:
+                    self.logger.error(f"JSON 解析错误: {e}. 行内容: {line[:100]}...")
+                except Exception as e:
+                    self.logger.error(f"发送模拟消息时发生错误: {e}", exc_info=True)
+
+            self.logger.info("模拟弹幕发送循环已结束。")
+
+        finally:
+            self.is_running = False
+            await self._cleanup_internal()
 
     async def _load_message_lines(self):
         """从 JSONL 文件加载消息行。"""

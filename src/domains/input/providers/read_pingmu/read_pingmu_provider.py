@@ -8,16 +8,18 @@ ReadPingmu InputProvider - 屏幕读评输入Provider
 
 import asyncio
 import time
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Literal, Optional
 
 if TYPE_CHECKING:
-    from src.modules.events.event_bus import EventBus
+    pass
 
 from pydantic import Field
 
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 from src.modules.types.base.input_provider import InputProvider
+from src.modules.types.base.normalized_message import NormalizedMessage
+from src.domains.input.normalization.content import TextContent
 
 # 导入屏幕分析和读取模块
 try:
@@ -78,16 +80,21 @@ class ReadPingmuInputProvider(InputProvider):
         self.messages_sent = 0
         self.last_message_time = 0.0
 
-        self.event_bus = None
+        # 消息队列（用于将回调转换为异步生成器）
+        self._message_queue: Optional[asyncio.Queue] = None
 
-    async def setup(self, event_bus: "EventBus"):
+    async def start(self) -> AsyncIterator[NormalizedMessage]:
         """
-        设置Provider
+        启动 Provider 并返回 NormalizedMessage 流
 
-        Args:
-            event_bus: 事件总线实例
+        Yields:
+            NormalizedMessage: 屏幕描述消息
         """
-        self.event_bus = event_bus
+        await self._setup_internal()
+        self.is_running = True
+
+        # 创建消息队列
+        self._message_queue = asyncio.Queue()
 
         # 检查依赖
         if not SCREEN_MODULES_AVAILABLE:
@@ -126,25 +133,23 @@ class ReadPingmuInputProvider(InputProvider):
                 f"ReadPingmuInputProvider 已启动 (间隔: {self.typed_config.screenshot_interval}s, 阈值: {self.typed_config.diff_threshold})"
             )
 
+            # 从队列中获取消息并yield
+            while self.is_running:
+                try:
+                    normalized_msg = await asyncio.wait_for(self._message_queue.get(), timeout=1.0)
+                    yield normalized_msg
+                except asyncio.TimeoutError:
+                    # 超时继续循环，检查is_running
+                    continue
+
+        except asyncio.CancelledError:
+            self.logger.info("采集被取消")
         except Exception as e:
-            self.logger.error(f"启动 ReadPingmuInputProvider 失败: {e}", exc_info=True)
-
-    async def cleanup(self):
-        """清理资源"""
-        if self._running and self.screen_analyzer:
-            self.logger.info("正在停止屏幕监控...")
-            await self.screen_analyzer.stop()
-            self._running = False
-
-        # 取消后台任务
-        if self._monitor_task and not self._monitor_task.done():
-            self._monitor_task.cancel()
-            try:
-                await self._monitor_task
-            except asyncio.CancelledError:
-                pass
-
-        self.logger.info("ReadPingmuInputProvider 已停止")
+            self.logger.error(f"数据采集出错: {e}", exc_info=True)
+        finally:
+            self.is_running = False
+            await self._cleanup_internal()
+            self.logger.info("ReadPingmuInputProvider 已停止")
 
     async def _monitoring_loop(self):
         """后台监控循环"""
@@ -169,7 +174,7 @@ class ReadPingmuInputProvider(InputProvider):
             self.logger.error(f"处理屏幕变化时出错: {e}", exc_info=True)
 
     async def _on_context_update(self, data: Dict[str, Any]):
-        """处理上下文更新 - 发送消息到核心系统"""
+        """处理上下文更新 - 创建 NormalizedMessage 并放入队列"""
         try:
             # 提取分析结果
             analysis_result = data.get("analysis_result")
@@ -179,23 +184,54 @@ class ReadPingmuInputProvider(InputProvider):
             new_context = analysis_result.new_current_context
             images_processed = data.get("images_processed", 1)
 
-            # 通过EventBus发送事件
-            if self.event_bus:
-                await self.event_bus.emit(
-                    "screen_monitor.update",
-                    {
-                        "description": new_context,
-                        "images_processed": images_processed,
-                        "statistics": data.get("statistics", {}),
-                        "timestamp": time.time(),
-                    },
-                    source="read_pingmu",
-                )
+            if not new_context:
+                return
+
+            # 创建 TextContent
+            content = TextContent(
+                text=new_context,
+                user="屏幕分析",
+                user_id="screen_analyzer",
+            )
+
+            # 创建 NormalizedMessage
+            normalized_msg = NormalizedMessage(
+                text=content.text,
+                content=content,
+                source="read_pingmu",
+                data_type=content.type,
+                importance=content.get_importance(),
+                metadata={
+                    "images_processed": images_processed,
+                    "statistics": data.get("statistics", {}),
+                },
+            )
+
+            # 放入队列
+            if self._message_queue:
+                await self._message_queue.put(normalized_msg)
 
             self.messages_sent += 1
             self.last_message_time = time.time()
 
-            self.logger.info(f"屏幕描述消息已发送: {new_context[:50]}...")
+            self.logger.info(f"屏幕描述消息已创建: {new_context[:50]}...")
 
         except Exception as e:
-            self.logger.error(f"发送屏幕描述消息失败: {e}", exc_info=True)
+            self.logger.error(f"创建屏幕描述消息失败: {e}", exc_info=True)
+
+    async def _cleanup_internal(self):
+        """清理资源"""
+        if self._running and self.screen_analyzer:
+            self.logger.info("正在停止屏幕监控...")
+            await self.screen_analyzer.stop()
+            self._running = False
+
+        # 取消后台任务
+        if self._monitor_task and not self._monitor_task.done():
+            self._monitor_task.cancel()
+            try:
+                await self._monitor_task
+            except asyncio.CancelledError:
+                pass
+
+        self.logger.info("ReadPingmuInputProvider 已清理")

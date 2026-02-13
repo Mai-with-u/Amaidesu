@@ -11,22 +11,44 @@
 ## 数据流向图
 
 ```
-┌─────────────────┐
-│ Input Domain    │
-│ (只发布)         │
-└────────┬────────┘
-         │ data.message
-         ▼
-┌─────────────────┐
-│ Decision Domain │
-│ (订阅 Input)     │
-└────────┬────────┘
-         │ decision.intent
-         ▼
-┌─────────────────┐
-│ Output Domain   │
-│ (订阅 Decision)  │
-└─────────────────┘
+┌─────────────────────────────────┐
+│ Input Domain                   │
+│ (InputProvider 直接构造)        │
+│                                │
+│ InputProvider.start()           │
+│    ↓                           │
+│ NormalizedMessage               │
+└────────────┬────────────────────┘
+             │ data.message
+             ▼
+┌─────────────────────────────────┐
+│ Decision Domain                │
+│ (订阅 Input)                    │
+└────────────┬────────────────────┘
+             │ decision.intent
+             ▼
+┌─────────────────────────────────┐
+│ Output Domain                  │
+│ (订阅 Decision)                 │
+└─────────────────────────────────┘
+```
+
+### Input Domain 内部流程
+
+```
+┌─────────────────────────────────┐
+│ InputProvider                  │
+│ (数据采集 + 自我标准化)         │
+└────────────┬────────────────────┘
+             │ AsyncIterator[NormalizedMessage]
+             ▼
+┌─────────────────────────────────┐
+│ InputProviderManager           │
+│ (错误隔离 + Pipeline过滤)      │
+└────────────┬────────────────────┘
+             │ data.message
+             ▼
+         EventBus
 ```
 
 ## 禁止的订阅模式
@@ -89,16 +111,33 @@ class MyInputProvider(InputProvider):
 ### Input Domain（只发布）
 
 ```python
-# ✅ 正确：Input 发布标准化消息
-class InputCoordinator:
-    async def process_and_publish(self, raw_data: RawData):
-        normalized = await self.normalize(raw_data)
-        await self.event_bus.emit(
-            CoreEvents.DATA_MESSAGE,
-            MessageReadyPayload(message=normalized),
-            source="InputCoordinator"
-        )
+# ✅ 正确：InputProvider 直接构造 NormalizedMessage
+class ConsoleInputProvider(InputProvider):
+    async def start(self) -> AsyncIterator[NormalizedMessage]:
+        """直接返回 NormalizedMessage 流"""
+        while self.is_running:
+            # 采集数据
+            text = await self._fetch_data()
+
+            # 直接构造 NormalizedMessage（无需中间数据结构）
+            content = TextContent(
+                text=text,
+                user="用户昵称",
+                user_id="user_id",
+            )
+            yield NormalizedMessage(
+                text=content.text,
+                content=content,
+                source="console",
+                data_type=content.type,
+                importance=content.get_importance(),
+            )
 ```
+
+**关键点**：
+- InputProvider 的 `start()` 方法直接返回 `AsyncIterator[NormalizedMessage]`
+- 不再构造 RawData
+- InputCoordinator 和 Normalizer 已删除
 
 ### Decision Domain（订阅 Input，发布 Decision）
 
@@ -148,23 +187,47 @@ uv run pytest tests/architecture/test_event_flow_constraints.py -v
 
 ## 数据转换
 
-### RawData → NormalizedMessage
+### 外部数据 → NormalizedMessage
 
 ```python
-# Input Domain 负责标准化
-raw_data = RawData(
-    content={"text": "用户消息"},
-    source="bili_danmaku",
-    data_type="text"
+# Input Provider 负责自我标准化（重构后）
+# 直接从外部数据源构造 NormalizedMessage，无需中间数据结构
+
+# 示例：控制台输入
+content = TextContent(
+    text="用户消息",
+    user="用户昵称",
+    user_id="user_id",
+)
+normalized_message = NormalizedMessage(
+    text=content.text,
+    content=content,
+    source="console",
+    data_type=content.type,
+    importance=content.get_importance(),
 )
 
-# 标准化为
+# 示例：弹幕输入
+content = TextContent(
+    text="弹幕内容",
+    user="观众昵称",
+    user_id="user_id",
+)
 normalized_message = NormalizedMessage(
-    text="用户消息",
-    user=User(nickname="观众"),
-    source="bili_danmaku"
+    text=content.text,
+    content=content,
+    source="bili_danmaku",
+    data_type=content.type,
+    importance=content.get_importance(),
 )
 ```
+
+**重构变化**：
+- **删除**：`RawData` 中间数据结构
+- **删除**：`InputCoordinator` 协调器
+- **删除**：`Normalizer` 标准化系统
+- **新增**：Provider 自我标准化（直接构造 `NormalizedMessage`）
+- **新增**：`InputProviderManager` 层的 Pipeline 过滤
 
 ### NormalizedMessage → Intent
 
@@ -259,4 +322,4 @@ TTS Provider (EdgeTTS/GPTSoVITS/OmniTTS)
 
 ---
 
-*最后更新：2026-02-10*
+*最后更新：2026-02-13*

@@ -18,14 +18,23 @@
 
 ## 重构阶段
 
-**✅ 重构已完成**：所有插件已成功迁移到 Provider 系统，`refactor` 分支中的代码已稳定。
+**✅ 重构已完成（Iteration 3）**：Provider 自我标准化重构已完成，所有 Provider 直接构造 NormalizedMessage。
 
-### 迁移状态
+### 重构状态
 
-- **Input Provider**：8 个全部完成迁移
+- **Input Provider**：8 个全部完成迁移并完成自我标准化重构
+  - 删除 InputCoordinator 和 Normalizer 系统
+  - Provider 直接构造 NormalizedMessage
+  - Pipeline 移至 ProviderManager 层面统一过滤
 - **Decision Provider**：3 个已迁移完成
 - **Output Provider**：11 个完成迁移（含新增）
 - **Service**：1 个完成迁移
+
+### 架构变更
+
+**重构前**：`Provider → RawData → InputCoordinator → NormalizerRegistry → NormalizedMessage`
+
+**重构后**：`Provider → NormalizedMessage → ProviderManager (Pipeline过滤) → data.message 事件`
 
 ### 旧插件备份
 

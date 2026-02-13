@@ -9,17 +9,17 @@ from typing import Any
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.input import RawDataPayload
+from src.modules.events.payloads.input import MessageReadyPayload
 from src.modules.logging import get_logger
 from src.modules.types.base.input_provider import InputProvider
 
 
 class InputProviderManager:
     """
-    输入Provider管理器
+    输入Provider管理器（重构后）
 
     负责管理多个InputProvider的生命周期、错误隔离。
-    支持并发启动、优雅停止、错误隔离等功能。
+    支持并发启动、优雅停止、错误隔离、Pipeline过滤等功能。
     """
 
     def __init__(self, event_bus: EventBus):
@@ -44,7 +44,30 @@ class InputProviderManager:
         # 是否已启动
         self._is_started = False
 
+        # Pipeline管理器（可选）
+        self.pipeline_manager = None
+
         self.logger.debug("InputProviderManager初始化完成")
+
+    async def setup_all_providers(
+        self,
+        event_bus: EventBus,
+        dependencies: dict[str, Any],
+    ) -> None:
+        """
+        设置所有Provider
+
+        Args:
+            event_bus: 事件总线
+            dependencies: 依赖注入（包括 pipeline_manager）
+        """
+        self.event_bus = event_bus
+        self.pipeline_manager = dependencies.get("pipeline_manager")
+
+        if self.pipeline_manager:
+            self.logger.info("已集成 Pipeline 到 ProviderManager")
+        else:
+            self.logger.debug("未提供 Pipeline，跳过消息过滤")
 
     async def start_all_providers(self, providers: list[InputProvider]) -> None:
         """
@@ -150,6 +173,11 @@ class InputProviderManager:
         """
         运行单个Provider，错误隔离
 
+        重构后：
+        1. Provider.start() 直接返回 NormalizedMessage
+        2. 通过 Pipeline 过滤（如果有）
+        3. 发布 DATA_MESSAGE 事件
+
         捕获所有异常，避免单个Provider失败影响其他Provider。
 
         Args:
@@ -158,15 +186,23 @@ class InputProviderManager:
         """
         try:
             self.logger.info(f"Provider {provider_name} 开始运行")
-            async for data in provider.start():
+            async for message in provider.start():
+                # Pipeline 过滤处理（如果有）
+                if self.pipeline_manager:
+                    message = await self.pipeline_manager.process(message)
+                    # Pipeline 可能返回 None 表示过滤掉
+                    if message is None:
+                        self.logger.debug(f"Provider {provider_name} 消息被 Pipeline 过滤")
+                        continue
+
                 # 发布事件
                 await self.event_bus.emit(
-                    CoreEvents.DATA_RAW,
-                    RawDataPayload.from_raw_data(data),
+                    CoreEvents.DATA_MESSAGE,
+                    MessageReadyPayload.from_normalized_message(message),
                     source=provider_name,
                 )
 
-                self.logger.debug(f"Provider {provider_name} 生成数据: {data.content}")
+                self.logger.debug(f"Provider {provider_name} 生成消息: {message.text}")
         except asyncio.CancelledError:
             self.logger.info(f"Provider {provider_name} 被取消")
         except Exception as e:
@@ -198,7 +234,7 @@ class InputProviderManager:
         # 确保所有 Provider 模块已导入（触发 Schema 注册）
         # 导入 providers 包会执行 __init__.py，注册所有 Provider
         try:
-            from src.domains.input import providers
+            from src.domains.input import providers  # noqa: F401
 
             self.logger.debug("已导入 providers 包，所有 Provider 应已注册")
         except ImportError as e:

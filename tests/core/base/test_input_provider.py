@@ -2,11 +2,9 @@
 InputProvider 单元测试
 
 测试 InputProvider 抽象基类的所有核心功能：
-- 抽象方法验证（_collect_data）
-- start() 返回 AsyncIterator
+- 抽象方法验证（start）
+- start() 返回 AsyncIterator[NormalizedMessage]
 - stop() 和 cleanup() 调用
-- setup() 空实现
-- get_registration_info() NotImplementedError
 - 生命周期管理
 
 运行: uv run pytest tests/core/base/test_input_provider.py -v
@@ -18,7 +16,8 @@ from typing import AsyncIterator
 import pytest
 
 from src.modules.types.base.input_provider import InputProvider
-from src.modules.types.base.raw_data import RawData
+from src.modules.types.base.normalized_message import NormalizedMessage
+from src.domains.input.normalization.content import TextContent
 
 # =============================================================================
 # 测试用的 InputProvider 实现
@@ -28,7 +27,7 @@ from src.modules.types.base.raw_data import RawData
 class MockInputProvider(InputProvider):
     """模拟的 InputProvider 实现（用于测试）"""
 
-    def __init__(self, config: dict, auto_stop: bool = False):
+    def __init__(self, config: dict = None, auto_stop: bool = False):
         """
         初始化 Mock InputProvider
 
@@ -36,33 +35,43 @@ class MockInputProvider(InputProvider):
             config: Provider 配置
             auto_stop: 是否在生成一定数量后自动停止
         """
-        super().__init__(config)
+        super().__init__(config or {})
         self.auto_stop = auto_stop
         self.collected_count = 0
         self.cleanup_called = False
 
-    async def _collect_data(self) -> AsyncIterator[RawData]:
-        """模拟数据采集"""
-        max_items = 3 if self.auto_stop else 10
+    async def start(self) -> AsyncIterator[NormalizedMessage]:
+        """
+        启动 Provider 并返回 NormalizedMessage 流
+        """
+        await self._setup_internal()
+        self.is_running = True
 
-        for i in range(max_items):
-            self.collected_count += 1
-            yield RawData(
-                content=f"测试消息 {i}",
-                source="mock",
-                data_type="text",
-                metadata={"index": i},
-            )
-            await asyncio.sleep(0.01)  # 模拟异步操作
+        try:
+            max_items = 3 if self.auto_stop else 10
 
-    async def _cleanup(self):
+            for i in range(max_items):
+                self.collected_count += 1
+                content = TextContent(text=f"测试消息 {i}", user="MockUser", user_id="mock_id")
+                yield NormalizedMessage(
+                    text=content.text,
+                    content=content,
+                    source="mock",
+                    data_type=content.type,
+                    importance=content.get_importance(),
+                )
+                await asyncio.sleep(0.01)  # 模拟异步操作
+        finally:
+            self.is_running = False
+            await self._cleanup_internal()
+
+    async def _cleanup_internal(self):
         """模拟清理资源"""
         self.cleanup_called = True
-        self.is_running = False
 
 
 class IncompleteInputProvider(InputProvider):
-    """不完整的 InputProvider（未实现 _collect_data）"""
+    """不完整的 InputProvider（未实现 start）"""
 
     pass
 
@@ -117,7 +126,7 @@ async def test_input_provider_default_config():
 async def test_input_provider_abstract_method_not_implemented():
     """测试未实现抽象方法的子类无法实例化"""
     with pytest.raises(TypeError):
-        # IncompleteInputProvider 未实现 _collect_data
+        # IncompleteInputProvider 未实现 start()
         _ = IncompleteInputProvider({})
 
 
@@ -138,14 +147,14 @@ async def test_input_provider_start_returns_async_iterator(auto_stop_provider):
 
 
 @pytest.mark.asyncio
-async def test_input_provider_start_yields_raw_data(auto_stop_provider):
-    """测试 start() 生成 RawData"""
+async def test_input_provider_start_yields_normalized_message(auto_stop_provider):
+    """测试 start() 生成 NormalizedMessage"""
     count = 0
-    async for raw_data in auto_stop_provider.start():
-        assert isinstance(raw_data, RawData)
-        assert raw_data.source == "mock"
-        assert raw_data.data_type == "text"
-        assert "测试消息" in raw_data.content
+    async for message in auto_stop_provider.start():
+        assert isinstance(message, NormalizedMessage)
+        assert message.source == "mock"
+        assert message.data_type == "text"
+        assert "测试消息" in message.text
         count += 1
 
     # 验证生成的数据数量

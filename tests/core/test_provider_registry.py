@@ -10,12 +10,13 @@ ProviderRegistry 测试
 """
 
 import pytest
+from typing import AsyncIterator
 
 from src.modules.registry import ProviderRegistry
 from src.modules.types.base.decision_provider import DecisionProvider
 from src.modules.types.base.input_provider import InputProvider
 from src.modules.types.base.output_provider import OutputProvider
-from src.modules.types.base.raw_data import RawData
+from src.modules.types.base.normalized_message import NormalizedMessage
 
 
 class MockInputProvider(InputProvider):
@@ -25,9 +26,21 @@ class MockInputProvider(InputProvider):
         super().__init__(config)
         self.provider_type = "mock_input"
 
-    async def _collect_data(self) -> RawData:
-        """收集数据（必须实现的抽象方法）"""
-        return RawData(content="test", data_type="text", metadata={})
+    async def start(self) -> AsyncIterator[NormalizedMessage]:
+        """启动 Provider 并返回数据流"""
+        await self._setup_internal()
+        self.is_running = True
+        try:
+            yield NormalizedMessage(
+                text="test",
+                content="test",
+                source="mock",
+                data_type="text",
+                importance=0.5,
+            )
+        finally:
+            self.is_running = False
+            await self._cleanup_internal()
 
     @classmethod
     def get_registration_info(cls):
@@ -112,14 +125,25 @@ class TestInputProviderRegistry:
     def test_register_input_provider_overwrites(self):
         """测试覆盖已注册的 Provider"""
         from src.modules.types.base.input_provider import InputProvider
-        from src.modules.types.base.raw_data import RawData
 
         class AnotherInputProvider(InputProvider):
             def __init__(self, config: dict):
                 super().__init__(config)
 
-            async def _collect_data(self) -> RawData:
-                return RawData(content="test", data_type="text", metadata={})
+            async def start(self) -> AsyncIterator[NormalizedMessage]:
+                await self._setup_internal()
+                self.is_running = True
+                try:
+                    yield NormalizedMessage(
+                        text="test",
+                        content="test",
+                        source="mock",
+                        data_type="text",
+                        importance=0.5,
+                    )
+                finally:
+                    self.is_running = False
+                    await self._cleanup_internal()
 
         ProviderRegistry.register_input("test_input", MockInputProvider, source="test1")
         ProviderRegistry.register_input("test_input", AnotherInputProvider, source="test2")

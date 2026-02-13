@@ -18,7 +18,8 @@ from pydantic import Field
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 from src.modules.types.base.input_provider import InputProvider
-from src.modules.types.base.raw_data import RawData
+from src.modules.types.base.normalized_message import NormalizedMessage
+from src.domains.input.normalization.content import TextContent
 
 
 class BiliDanmakuInputProvider(InputProvider):
@@ -56,47 +57,56 @@ class BiliDanmakuInputProvider(InputProvider):
         # 状态变量
         self._latest_timestamp: float = time.time()
         self._session: Optional[aiohttp.ClientSession] = None
-        self._stop_event = asyncio.Event()
 
-    async def _collect_data(self) -> AsyncIterator[RawData]:
+    async def start(self) -> AsyncIterator[NormalizedMessage]:
         """
         采集弹幕数据
 
         Yields:
-            RawData: 弹幕原始数据
+            NormalizedMessage: 弹幕标准化消息
         """
-        self.logger.info("开始采集 Bilibili 弹幕数据...")
+        await self._setup_internal()
+        self.is_running = True
 
-        # 创建 aiohttp session
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-            "Referer": f"https://live.bilibili.com/{self.room_id}",
-            "Accept": "application/json",
-        }
+        try:
+            self.logger.info("开始采集 Bilibili 弹幕数据...")
 
-        async with aiohttp.ClientSession(headers=headers) as session:
-            self._session = session
+            # 创建 aiohttp session
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                "Referer": f"https://live.bilibili.com/{self.room_id}",
+                "Accept": "application/json",
+            }
 
-            while not self._stop_event.is_set():
-                try:
-                    await self._fetch_and_process()
-                except Exception as e:
-                    self.logger.error(f"采集弹幕时出错: {e}", exc_info=True)
+            async with aiohttp.ClientSession(headers=headers) as session:
+                self._session = session
 
-                # 等待下次轮询
-                try:
-                    await asyncio.wait_for(self._stop_event.wait(), timeout=self.poll_interval)
-                    break
-                except asyncio.TimeoutError:
-                    pass  # 正常超时，继续循环
+                while self.is_running:
+                    try:
+                        await self._fetch_and_process()
+                    except Exception as e:
+                        self.logger.error(f"采集弹幕时出错: {e}", exc_info=True)
 
-        self.logger.info("Bilibili 弹幕采集已停止")
+                    # 等待下次轮询
+                    try:
+                        await asyncio.wait_for(asyncio.sleep(self.poll_interval), timeout=None)
+                    except asyncio.CancelledError:
+                        break
+
+        except asyncio.CancelledError:
+            self.logger.info("采集被取消")
+        except Exception as e:
+            self.logger.error(f"数据采集出错: {e}", exc_info=True)
+        finally:
+            self.is_running = False
+            await self._cleanup_internal()
+            self.logger.info("Bilibili 弹幕采集已停止")
 
     async def _fetch_and_process(self):
         """
         获取并处理弹幕
 
-        从 Bilibili API 获取弹幕，过滤新弹幕并转换为 RawData。
+        从 Bilibili API 获取弹幕，过滤新弹幕并转换为 NormalizedMessage。
         """
         if not self._session or self._session.closed:
             self.logger.warning("aiohttp session 未初始化或已关闭，跳过本次轮询。")
@@ -135,9 +145,9 @@ class BiliDanmakuInputProvider(InputProvider):
                         self.logger.info(f"收到 {len(new_danmakus)} 条新弹幕")
 
                         for item in new_danmakus:
-                            raw_data = await self._create_danmaku_raw_data(item)
-                            if raw_data:
-                                yield raw_data
+                            normalized_msg = await self._create_danmaku_message(item)
+                            if normalized_msg:
+                                yield normalized_msg
                     else:
                         self.logger.debug("没有新的弹幕")
 
@@ -154,19 +164,18 @@ class BiliDanmakuInputProvider(InputProvider):
         except Exception as e:
             self.logger.exception(f"处理 Bilibili 弹幕时发生未知错误: {e}")
 
-    async def _create_danmaku_raw_data(self, item: Dict[str, Any]) -> Optional[RawData]:
+    async def _create_danmaku_message(self, item: Dict[str, Any]) -> Optional[NormalizedMessage]:
         """
-        创建弹幕 RawData
+        创建弹幕 NormalizedMessage
 
         Args:
             item: Bilibili API 返回的弹幕项
 
         Returns:
-            RawData: 弹幕原始数据
+            NormalizedMessage: 弹幕标准化消息
         """
         text = item.get("text", "")
         nickname = item.get("nickname", "未知用户")
-        timestamp = item.get("check_info", {}).get("ts", time.time())
 
         # 默认 user_id
         user_id = item.get("uid") or self.message_config.get("default_user_id", f"bili_{nickname}")
@@ -174,52 +183,29 @@ class BiliDanmakuInputProvider(InputProvider):
         if not text:
             return None
 
-        # 创建 RawData
-        raw_data = RawData(
-            content={
-                "text": text,
-                "nickname": nickname,
-                "user_id": str(user_id),
-                "uid": item.get("uid"),
-                "timestamp": timestamp,
-                # 包含完整消息配置信息
-                "message_config": {
-                    "user_info": {
-                        "platform": self.message_config.get("platform", "bilibili"),
-                        "user_id": str(user_id),
-                        "user_nickname": nickname,
-                        "user_cardname": self.message_config.get("user_cardname", ""),
-                    },
-                    "group_info": self.message_config.get("enable_group_info", False)
-                    and {
-                        "platform": self.message_config.get("platform", "bilibili"),
-                        "group_id": self.message_config.get("group_id", self.room_id),
-                        "group_name": self.message_config.get("group_name", f"bili_{self.room_id}"),
-                    },
-                    "format_info": {
-                        "content_format": self.message_config.get("content_format", ["text"]),
-                        "accept_format": self.message_config.get("accept_format", ["text"]),
-                    },
-                    "additional_config": {
-                        "source": "bili_danmaku_plugin",
-                        "sender_name": nickname,
-                        "bili_uid": str(user_id) if item.get("uid") else None,
-                        "maimcore_reply_probability_gain": 1,
-                    },
-                },
-            },
+        # 创建 TextContent
+        content = TextContent(
+            text=text,
+            user=nickname,
+            user_id=str(user_id),
+        )
+
+        # 创建 NormalizedMessage
+        return NormalizedMessage(
+            text=content.text,
+            content=content,
             source="bili_danmaku",
-            data_type="text",
-            timestamp=timestamp,
+            data_type=content.type,
+            importance=content.get_importance(),
             metadata={
                 "nickname": nickname,
                 "user_id": str(user_id),
                 "uid": item.get("uid"),
                 "room_id": self.room_id,
+                "platform": self.message_config.get("platform", "bilibili"),
+                "maimcore_reply_probability_gain": 1,
             },
         )
-
-        return raw_data
 
     async def _cleanup_internal(self):
         """清理资源"""

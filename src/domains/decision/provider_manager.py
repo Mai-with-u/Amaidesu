@@ -337,7 +337,7 @@ class DecisionProviderManager:
 
         # 导入 providers 包会执行 __init__.py，注册所有 Provider
         try:
-            from src.domains.decision import providers
+            from src.domains.decision import providers  # noqa: F401
 
             self.logger.debug("已导入 decision providers 包，所有 Provider 应已注册")
         except ImportError as e:

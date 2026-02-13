@@ -23,13 +23,15 @@ Provider 是项目的核心组件，负责具体的数据处理功能。本指�
 
 ### 基本结构
 
-InputProvider 从外部数据源采集数据，生成 `RawData` 流。
+InputProvider 从外部数据源采集数据，**直接构造 `NormalizedMessage`**（重构后）。
 
 ```python
 from typing import AsyncIterator, Dict, Any
-from src/modules/types/base/input_provider import InputProvider
-from src/modules/types/base/raw_data import RawData
-from src/modules/logging import get_logger
+import asyncio
+from src.modules.types.base.input_provider import InputProvider
+from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.logging import get_logger
+from src.domains.input.normalization.content import TextContent
 
 class MyInputProvider(InputProvider):
     """自定义输入 Provider"""
@@ -41,21 +43,38 @@ class MyInputProvider(InputProvider):
         self.api_url = config.get("api_url")
         self.poll_interval = config.get("poll_interval", 5)
 
-    async def _collect_data(self) -> AsyncIterator[RawData]:
-        """采集数据"""
-        while self.is_running:
-            try:
-                # 采集数据逻辑
-                data = await self._fetch_data()
-                if data:
-                    yield RawData(
-                        content={"data": data},
-                        source="my_provider",
-                        data_type="text",
-                    )
-                await self._sleep_if_running(self.poll_interval)
-            except Exception as e:
-                self.logger.error(f"采集数据失败: {e}", exc_info=True)
+    async def start(self) -> AsyncIterator[NormalizedMessage]:
+        """启动 Provider，直接返回 NormalizedMessage 流"""
+        await self._setup_internal()
+        self.is_running = True
+
+        try:
+            while self.is_running:
+                try:
+                    # 采集数据
+                    data = await self._fetch_data()
+                    if data:
+                        # 直接构造 NormalizedMessage（无需 RawData）
+                        content = TextContent(
+                            text=data["text"],
+                            user=data.get("user", "未知用户"),
+                            user_id=data.get("user_id", "unknown"),
+                        )
+                        yield NormalizedMessage(
+                            text=content.text,
+                            content=content,
+                            source="my_provider",
+                            data_type=content.type,
+                            importance=content.get_importance(),
+                        )
+
+                    # 等待下一次采集
+                    await asyncio.sleep(self.poll_interval)
+                except Exception as e:
+                    self.logger.error(f"采集数据失败: {e}", exc_info=True)
+        finally:
+            self.is_running = False
+            await self._cleanup_internal()
 
     async def _fetch_data(self):
         """实现具体的数据采集逻辑"""
@@ -67,35 +86,54 @@ class MyInputProvider(InputProvider):
 
 | 方法 | 说明 | 必须实现 |
 |------|------|----------|
-| `_collect_data()` | 采集数据，返回 AsyncIterator[RawData] | ✅ |
-| `start()` | 启动数据采集 | ❌（默认实现） |
+| `start()` | 启动数据采集，返回 AsyncIterator[NormalizedMessage] | ✅ |
 | `stop()` | 停止数据采集 | ❌（默认实现） |
 | `cleanup()` | 清理资源 | ❌（可选） |
+| `_setup_internal()` | 内部初始化逻辑 | ❌ |
+| `_cleanup_internal()` | 内部清理逻辑 | ❌ |
 
 ### InputProvider 生命周期方法
 
 | 方法 | 说明 | 必须实现 | 调用时机 |
 |------|------|----------|----------|
-| `_collect_data()` | 采集数据，返回 AsyncIterator[RawData] | ✅ | `start()` 调用后 |
+| `start()` | 启动数据采集，返回 AsyncIterator[NormalizedMessage] | ✅ | Manager 启动时 |
 | `_setup_internal()` | 内部初始化逻辑 | ❌ | `start()` 开始时 |
 | `_cleanup_internal()` | 内部清理逻辑 | ❌ | `stop()`/`cleanup()` 调用时 |
-| `start()` | 启动数据采集 | ❌（默认实现） | Manager 启动时 |
 | `stop()` | 停止数据采集 | ❌（默认实现） | Manager 停止时 |
 | `cleanup()` | 清理资源 | ❌（默认实现） | Manager 清理时 |
 
-### RawData 结构
+### NormalizedMessage 结构
 
 ```python
-from src/modules/types/base/raw_data import RawData
+from src.modules.types.base.normalized_message import NormalizedMessage
+from src.domains.input.normalization.content import TextContent
 
-raw_data = RawData(
-    content={"text": "用户消息", "user": "nickname"},  # 原始数据
-    source="bili_danmaku",                           # 数据源标识
-    data_type="text",                                # 数据类型
-    timestamp=time.time(),                           # 时间戳
-    metadata={"room_id": 123456}                     # 元数据
+# 创建内容对象
+content = TextContent(
+    text="用户消息",
+    user="用户昵称",
+    user_id="user_id",
+)
+
+# 构造 NormalizedMessage
+normalized_message = NormalizedMessage(
+    text=content.text,              # 文本描述（用于LLM处理）
+    content=content,               # 结构化内容（保留原始数据）
+    source="my_provider",          # 数据源标识
+    data_type=content.type,        # 数据类型
+    importance=content.get_importance(),  # 重要性（0-1）
+    metadata={},                  # 额外元数据（可选）
 )
 ```
+
+### 内容类型（StructuredContent）
+
+| 类型 | 用途 | 类名 |
+|------|------|------|
+| 文本 | 普通文本消息 | `TextContent` |
+| 礼物 | 礼物消息 | `GiftContent` |
+| 醒目留言 | SC 消息 | `SuperChatContent` |
+| 大航海 | 舰长/提督/总督 | `GuardContent` |
 
 ## DecisionProvider 开发
 
@@ -294,7 +332,9 @@ volume = 0.8
 ```python
 from typing import AsyncIterator, Dict, Any
 from src/modules/types/base/input_provider import InputProvider
-from src/modules/types/base/raw_data import RawData
+import asyncio
+from src/modules/types/base.normalized_message import NormalizedMessage
+from src/domains/input.normalization.content import TextContent
 from src/modules/logging import get_logger
 
 class BiliDanmakuInputProvider(InputProvider):
@@ -306,25 +346,37 @@ class BiliDanmakuInputProvider(InputProvider):
         self.room_id = config.get("room_id", 0)
         self.poll_interval = config.get("poll_interval", 3)
 
-    async def _collect_data(self) -> AsyncIterator[RawData]:
-        """采集弹幕"""
-        while self.is_running:
-            try:
-                # 调用 Bilibili API
-                danmaku_list = await self._fetch_danmaku()
-                for danmaku in danmaku_list:
-                    yield RawData(
-                        content={
-                            "text": danmaku.text,
-                            "user": danmaku.nickname,
-                        },
-                        source="bili_danmaku",
-                        data_type="text",
-                        metadata={"room_id": self.room_id}
-                    )
-                await self._sleep_if_running(self.poll_interval)
-            except Exception as e:
-                self.logger.error(f"采集弹幕失败: {e}", exc_info=True)
+    async def start(self) -> AsyncIterator[NormalizedMessage]:
+        """采集弹幕，直接返回 NormalizedMessage"""
+        await self._setup_internal()
+        self.is_running = True
+
+        try:
+            while self.is_running:
+                try:
+                    # 调用 Bilibili API
+                    danmaku_list = await self._fetch_danmaku()
+                    for danmaku in danmaku_list:
+                        # 直接构造 NormalizedMessage
+                        content = TextContent(
+                            text=danmaku.text,
+                            user=danmaku.nickname,
+                            user_id=danmaku.user_id,
+                        )
+                        yield NormalizedMessage(
+                            text=content.text,
+                            content=content,
+                            source="bili_danmaku",
+                            data_type=content.type,
+                            importance=content.get_importance(),
+                            metadata={"room_id": self.room_id}
+                        )
+                    await asyncio.sleep(self.poll_interval)
+                except Exception as e:
+                    self.logger.error(f"采集弹幕失败: {e}", exc_info=True)
+        finally:
+            self.is_running = False
+            await self._cleanup_internal()
 
     async def _fetch_danmaku(self):
         """获取弹幕列表"""
@@ -380,15 +432,23 @@ class TTSOutputProvider(OutputProvider):
 ### 1. 错误处理
 
 ```python
-async def _collect_data(self) -> AsyncIterator[RawData]:
-    while self.is_running:
-        try:
-            data = await self._fetch_data()
-            yield RawData(...)
-        except Exception as e:
-            self.logger.error(f"采集失败: {e}", exc_info=True)
-            # 错误后等待一段时间再重试
-            await self._sleep_if_running(5)
+async def start(self) -> AsyncIterator[NormalizedMessage]:
+    await self._setup_internal()
+    self.is_running = True
+
+    try:
+        while self.is_running:
+            try:
+                data = await self._fetch_data()
+                # 构造并 yield NormalizedMessage
+                yield NormalizedMessage(...)
+            except Exception as e:
+                self.logger.error(f"采集失败: {e}", exc_info=True)
+                # 错误后等待一段时间再重试
+                await asyncio.sleep(5)
+    finally:
+        self.is_running = False
+        await self._cleanup_internal()
 ```
 
 ### 2. 日志记录
@@ -464,7 +524,7 @@ class MyProviderConfig(BaseModel):
 
 **为什么不能统一公共 API？**
 
-InputProvider 的 `start()` 方法必须返回 `AsyncIterator[RawData]`：
+InputProvider 的 `start()` 方法必须返回 `AsyncIterator[NormalizedMessage]`：
 - 这是 Python 异步生成器的语法要求
 - `setup()` 方法无法返回 AsyncIterator
 - 使用 `start()` 更符合"启动流式数据源"的语义
@@ -491,9 +551,10 @@ async def test_my_input_provider():
 
     # 测试数据采集
     data_count = 0
-    async for raw_data in provider._collect_data():
+    async for message in provider.start():
         data_count += 1
-        assert raw_data.source == "my_provider"
+        assert message.source == "my_provider"
+        assert isinstance(message, NormalizedMessage)
         if data_count >= 3:
             await provider.stop()
 ```
@@ -921,4 +982,4 @@ prompt = get_prompt_manager().render(
 
 ---
 
-*最后更新：2026-02-10*
+*最后更新：2026-02-13*
