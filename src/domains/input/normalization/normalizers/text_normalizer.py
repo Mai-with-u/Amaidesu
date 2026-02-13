@@ -32,16 +32,46 @@ class TextNormalizer(DataNormalizer):
 
     async def normalize(self, raw_data: RawData) -> Optional[NormalizedMessage]:
         """将文本 RawData 转换为 NormalizedMessage"""
-        # 从 content 中提取文本（支持字典格式和纯文本）
+        # 从 content 中提取文本（支持多种格式）
+        text = None
+        message_base = None
+
         if isinstance(raw_data.content, dict):
-            text = raw_data.content.get("text", str(raw_data.content))
+            # 检查是否是 MessageBase 格式（来自 BiliDanmakuOfficialInputProvider 等）
+            if "message" in raw_data.content:
+                message_base = raw_data.content["message"]
+                # 从 MessageBase.raw_message 提取文本
+                if hasattr(message_base, "raw_message"):
+                    text = message_base.raw_message
+                else:
+                    # 降级处理：使用字符串表示
+                    text = str(message_base)
+            else:
+                # 普通字典格式，尝试获取 "text" 键
+                text = raw_data.content.get("text", str(raw_data.content))
         else:
+            # 纯文本格式
             text = str(raw_data.content)
+
+        # 准备 metadata，包含原始 metadata
+        metadata = raw_data.metadata.copy()
+        metadata["source"] = raw_data.source
+        metadata["original_timestamp"] = raw_data.timestamp
+
+        # 从 MessageBase 中提取用户信息到 metadata
+        if message_base and hasattr(message_base, "message_info"):
+            message_info = message_base.message_info
+            if hasattr(message_info, "user_info") and message_info.user_info:
+                metadata["user_id"] = message_info.user_info.user_id
+                metadata["user_nickname"] = getattr(message_info.user_info, "user_nickname", None)
+
+            if hasattr(message_info, "group_info") and message_info.group_info:
+                metadata["group_id"] = message_info.group_info.group_id
+                metadata["group_name"] = getattr(message_info.group_info, "group_name", None)
 
         # 如果配置了 PipelineManager，使用 TextPipeline 处理文本
         if self.pipeline_manager:
             try:
-                metadata = raw_data.metadata.copy()
                 processed_text = await self.pipeline_manager.process_text(text, metadata)
                 if processed_text is None:
                     # Pipeline 返回 None 表示丢弃该消息
@@ -55,10 +85,6 @@ class TextNormalizer(DataNormalizer):
                 logger.error(f"TextPipeline处理失败: {e}", exc_info=True)
 
         structured_content = TextContent(text=text)
-
-        metadata = raw_data.metadata.copy()
-        metadata["source"] = raw_data.source
-        metadata["original_timestamp"] = raw_data.timestamp
 
         return NormalizedMessage(
             text=structured_content.get_display_text(),

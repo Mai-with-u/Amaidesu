@@ -85,13 +85,14 @@ async def test_text_normalizer_with_dict_without_text_key():
     """测试处理字典格式内容（没有 text 键）"""
     normalizer = TextNormalizer()
 
-    raw_data = RawData(content={"message": "Hello without text key"}, source="test", data_type="text", metadata={})
+    # 使用其他键（非 message），确保不会触发 MessageBase 逻辑
+    raw_data = RawData(content={"data": "Hello without text key"}, source="test", data_type="text", metadata={})
 
     result = await normalizer.normalize(raw_data)
 
     assert result is not None
-    # 应该使用字典的字符串表示
-    assert "message" in result.text
+    # 应该使用字典的字符串表示（因为没有 text 或 message 键）
+    assert "data" in result.text
 
 
 @pytest.mark.asyncio
@@ -338,6 +339,61 @@ async def test_text_normalizer_different_sources():
         assert result is not None
         assert result.source == source
         assert result.metadata["source"] == source
+
+
+# =============================================================================
+# MessageBase 格式测试
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_text_normalizer_with_message_base_format():
+    """测试处理 MessageBase 格式（来自 BiliDanmakuOfficialInputProvider）"""
+    from unittest.mock import MagicMock
+
+    normalizer = TextNormalizer()
+
+    # 创建模拟的 MessageBase 对象
+    mock_message_base = MagicMock()
+    mock_message_base.raw_message = "弹幕消息内容"
+    mock_message_base.message_info.user_info.user_id = "test_user_123"
+    mock_message_base.message_info.user_info.user_nickname = "测试用户"
+    mock_message_base.message_info.group_info.group_id = "test_group_456"
+    mock_message_base.message_info.group_info.group_name = "测试群组"
+
+    raw_data = RawData(
+        content={"message": mock_message_base, "message_config": {}},
+        source="bili_danmaku_official",
+        data_type="text",
+        metadata={"message_id": "msg_001", "room_id": "room_123"},
+    )
+
+    result = await normalizer.normalize(raw_data)
+
+    assert result is not None
+    assert result.text == "弹幕消息内容"
+    assert result.metadata["user_id"] == "test_user_123"
+    assert result.metadata["user_nickname"] == "测试用户"
+    assert result.metadata["group_id"] == "test_group_456"
+    assert result.metadata["group_name"] == "测试群组"
+    assert result.metadata["message_id"] == "msg_001"
+    assert result.metadata["room_id"] == "room_123"
+    assert result.metadata["source"] == "bili_danmaku_official"
+
+
+@pytest.mark.asyncio
+async def test_text_normalizer_with_message_base_string_value():
+    """测试处理 dict 中 message 键为字符串的情况（降级处理）"""
+    normalizer = TextNormalizer()
+
+    # message 值是字符串（不是 MessageBase 对象）
+    raw_data = RawData(content={"message": "Hello from message key"}, source="test", data_type="text", metadata={})
+
+    result = await normalizer.normalize(raw_data)
+
+    assert result is not None
+    # 应该使用字符串值本身（str() 对字符串返回相同值）
+    assert result.text == "Hello from message key"
 
 
 if __name__ == "__main__":
