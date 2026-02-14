@@ -5,10 +5,6 @@ OmniTTS Provider - Output Domain: 渲染输出实现
 - 使用GPT-SoVITS引擎进行文本转语音
 - 支持流式TTS和音频播放
 - 集成text_cleanup、vts_lip_sync、subtitle_service等服务
-- 向后兼容现有TTS插件功能
-
-注意: 这是一个简化版本的Provider,专注于核心TTS功能
-如果需要完整功能(如远程流、UDP广播等),请继续使用原有的TTS插件
 """
 
 import asyncio

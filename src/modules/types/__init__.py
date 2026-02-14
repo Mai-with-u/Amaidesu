@@ -12,9 +12,6 @@ from .intent import (
 )
 from .render_parameters import ExpressionParameters
 
-# 向后兼容别名（保留以支持现有代码）
-RenderParameters = ExpressionParameters
-
 __all__ = [
     "EmotionType",
     "ActionType",
@@ -22,5 +19,4 @@ __all__ = [
     "SourceContext",
     "Intent",
     "ExpressionParameters",
-    "RenderParameters",
 ]

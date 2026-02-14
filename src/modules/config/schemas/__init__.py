@@ -10,13 +10,13 @@ from .base import BaseProviderConfig
 # Non-provider schemas (system-wide configurations)
 from .logging import LoggingConfig
 
-# Output provider schemas（已废弃）
+# Output provider schemas
 from .output_providers import (
     OUTPUT_PROVIDER_CONFIG_MAP,
     get_output_provider_config,
 )
 
-# Provider Schema Registry（已废弃，所有Provider使用自管理Schema）
+# Provider Schema Registry
 PROVIDER_SCHEMA_REGISTRY: Dict[str, Type[BaseModel]] = {}
 
 
@@ -25,24 +25,17 @@ def get_provider_schema(provider_type: str, provider_layer: str = None) -> Type[
     """
     获取Provider的Schema类
 
-    从 ProviderRegistry 获取（Provider 自管理 Schema 架构）。
-
-    所有Provider已完成迁移到自管理Schema架构（100%迁移完成），
-    不再需要集中式注册表fallback机制。
+    从 ProviderRegistry 获取。
 
     Args:
         provider_type: Provider类型标识
-        provider_layer: Provider层级（可选，保留用于向后兼容）
+        provider_layer: Provider层级（可选）
 
     Returns:
         对应的Schema类
 
     Raises:
         KeyError: 如果provider_type未注册
-
-    Note:
-        所有Provider的Schema通过Provider注册时自动注册到ProviderRegistry._config_schemas。
-        provider_layer参数保留用于API向后兼容，但实际查找使用全局注册表。
     """
     from src.modules.registry import ProviderRegistry
 
@@ -151,12 +144,12 @@ def verify_no_enabled_field_in_schemas() -> list:
 __all__ = [
     # Base schemas
     "BaseProviderConfig",
-    # Output provider schemas（已废弃）
+    # Output provider schemas
     "OUTPUT_PROVIDER_CONFIG_MAP",
     "get_output_provider_config",
     # Non-provider schemas
     "LoggingConfig",
-    # Registry（已废弃）
+    # Registry
     "PROVIDER_SCHEMA_REGISTRY",
     # Helper functions
     "get_provider_schema",

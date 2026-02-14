@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from src.domains.output.parameters.render_parameters import RenderParameters
+from src.modules.types import ExpressionParameters as RenderParameters
 from src.domains.output.provider_manager import OutputProviderManager
 from src.modules.events.event_bus import EventBus
 from tests.mocks.mock_output_provider import MockOutputProvider

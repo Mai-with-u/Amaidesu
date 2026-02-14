@@ -159,7 +159,7 @@ class OutputProviderManager:
             self.logger.info("配置中未启用管道功能")
 
         # 从配置加载Provider
-        await self.load_from_config(config, core=None, config_service=config_service)
+        await self.load_from_config(config, config_service=config_service)
 
         # 订阅 Decision Domain 的 Intent 事件（3域架构，类型化）
         from src.modules.events.payloads.decision import IntentPayload
@@ -357,13 +357,12 @@ class OutputProviderManager:
 
     # ==================== Phase 4: 配置加载 ====================
 
-    async def load_from_config(self, config: dict[str, Any], config_service=None, core=None):
+    async def load_from_config(self, config: dict[str, Any], config_service=None):
         """
         从配置加载并创建所有OutputProvider（支持三级配置合并）
 
         Args:
             config: 输出Provider配置（来自[providers.output]）
-            core: 已废弃参数（保留以兼容旧代码，不再使用）
             config_service: ConfigService实例（用于三级配置加载）
 
         配置格式:
@@ -443,7 +442,7 @@ class OutputProviderManager:
                 provider_type = provider_config.get("type", output_name)
 
                 # 创建Provider（不再检查enabled字段，由enabled_outputs控制）
-                provider = self._create_provider(provider_type, provider_config, core)
+                provider = self._create_provider(provider_type, provider_config)
                 if provider:
                     await self.register_provider(provider)
                     created_count += 1
@@ -459,16 +458,15 @@ class OutputProviderManager:
             f"失败={failed_count}/{len(enabled_outputs)}"
         )
 
-    def _create_provider(self, provider_type: str, config: dict[str, Any], core=None) -> OutputProvider | None:
+    def _create_provider(self, provider_type: str, config: dict[str, Any]) -> OutputProvider | None:
         """
         Provider工厂方法：根据类型创建Provider实例
 
-        使用 ProviderRegistry 来创建 Provider，替代之前的硬编码映射。
+        使用 ProviderRegistry 来创建 Provider。
 
         Args:
             provider_type: Provider类型（"tts", "subtitle", "sticker", "vts", "omni_tts", "avatar"等）
             config: Provider配置
-            core: 已废弃参数（保留以兼容旧代码，不再使用）
 
         Returns:
             Provider实例，如果创建失败返回None

@@ -197,7 +197,7 @@ class MessageReadyPayload(BasePayload):
                 return f"{text} ({user_name})"
             return text
         elif isinstance(value, dict) and "text" in value:
-            # 字典格式（向后兼容）
+            # 字典格式
             text = value.get("text", "")
             user_name = value.get("user_name", "")
             if user_name:

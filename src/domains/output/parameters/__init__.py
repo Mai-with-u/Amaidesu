@@ -19,7 +19,6 @@ Expression生成层 - Output Domain: 参数生成
 - ExpressionGenerator: 已迁移到 src/modules/expression/generator.py
 - EmotionMapper: 已迁移到 src/modules/expression/mappers.py
 - ExpressionMapper: 已迁移到 src/modules/expression/mappers.py
-- RenderParameters: 已迁移到 src/modules/types/render_parameters.py
 
 迁移原因:
 - Avatar Provider 现在直接订阅 DECISION_INTENT 事件

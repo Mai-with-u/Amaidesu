@@ -87,10 +87,9 @@ class CoreEvents:
         )
 
     # 所有事件名集合（用于事件验证等）
-    # 注意：此属性在模块加载时自动更新，保持向后兼容性
+    # 模块加载时自动更新
     ALL_EVENTS = ()  # 占位符，模块末尾会被更新
 
 
 # 在类定义后，模块级别自动更新 ALL_EVENTS
-# 这样既能使用自动生成，又能保持向后兼容性
 CoreEvents.ALL_EVENTS = CoreEvents.get_all_events()

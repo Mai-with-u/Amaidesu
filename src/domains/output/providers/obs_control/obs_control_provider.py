@@ -6,7 +6,6 @@ OBS Control OutputProvider - OBS控制Provider
 - 支持文本显示（包含逐字打印效果）
 - 场景切换
 - 源设置控制
-- 向后兼容 obs_control 插件
 """
 
 import asyncio

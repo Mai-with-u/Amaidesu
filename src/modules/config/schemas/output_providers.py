@@ -2,8 +2,6 @@
 输出Provider配置Schema
 
 定义所有输出Provider的Pydantic配置模型。
-
-注意：所有Provider已迁移到自管理Schema架构。
 """
 
 from typing import Any, Dict
@@ -13,15 +11,13 @@ from pydantic import BaseModel
 from .base import BaseProviderConfig
 
 
-# 空的映射（已废弃）
+# Provider 配置映射
 OUTPUT_PROVIDER_CONFIG_MAP: Dict[str, BaseProviderConfig] = {}
 
 
 def get_output_provider_config(provider_type: str, config: Dict[str, Any]) -> BaseModel:
     """
-    获取输出Provider配置对象（已废弃）
-
-    请使用 ProviderRegistry.get_config_schema()
+    获取输出Provider配置对象
 
     Args:
         provider_type: Provider类型
