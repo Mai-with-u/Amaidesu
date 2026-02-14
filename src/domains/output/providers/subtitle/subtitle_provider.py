@@ -321,6 +321,11 @@ class SubtitleOutputProvider(OutputProvider):
 
     async def init(self):
         """初始化 Provider"""
+        # 启动 GUI 线程
+        if not self.gui_thread or not self.gui_thread.is_alive():
+            self.gui_thread = threading.Thread(target=self._run_gui, daemon=True)
+            self.gui_thread.start()
+            self.logger.info("字幕 GUI 线程已启动")
 
     async def execute(self, intent: "Intent"):
         """

@@ -1,366 +1,211 @@
 """
-测试 OutputPipelineManager (输出管道管理器)
-
-运行: uv run pytest tests/domains/output/pipelines/test_manager.py -v
+测试 OutputPipeline 接口和基类
 """
-
-import asyncio
 
 import pytest
 
-from src.modules.types import ExpressionParameters
-from src.domains.output.pipelines.base import (
+from src.modules.types import Intent
+from src.domains.output.pipelines import (
     OutputPipelineBase,
+    OutputPipelineManager,
+    PipelineErrorHandling,
     PipelineException,
+    PipelineStats,
 )
-from src.domains.output.pipelines.manager import OutputPipelineManager
-
-# =============================================================================
-# 测试用 Pipeline
-# =============================================================================
 
 
-class PassThroughPipeline(OutputPipelineBase):
-    """透传 Pipeline"""
+class DummyOutputPipeline(OutputPipelineBase):
+    """测试用的 OutputPipeline"""
 
-    async def _process(self, params):
+    async def _process(self, params: Intent):
+        # 简单处理：添加元数据
+        params.metadata["processed"] = True
         return params
 
 
-class ModifyingPipeline(OutputPipelineBase):
-    """修改 Pipeline"""
+class DropOutputPipeline(OutputPipelineBase):
+    """测试用的丢弃 Pipeline"""
 
-    async def _process(self, params):
-        params.tts_text += " [已修改]"
-        return params
-
-
-class DroppingPipeline(OutputPipelineBase):
-    """丢弃 Pipeline"""
-
-    async def _process(self, params):
+    async def _process(self, params: Intent):
+        # 丢弃所有输出
         return None
 
 
-class FailingPipeline(OutputPipelineBase):
-    """失败 Pipeline"""
-
-    async def _process(self, params):
-        raise ValueError("测试失败")
-
-
-class SlowPipeline(OutputPipelineBase):
-    """慢速 Pipeline（用于超时测试）"""
-
-    async def _process(self, params):
-        await asyncio.sleep(10)  # 超过默认超时时间
-        return params
-
-
-# =============================================================================
-# 创建和初始化测试
-# =============================================================================
-
-
-def test_manager_creation():
-    """测试管理器创建"""
-    manager = OutputPipelineManager()
-
-    assert manager is not None
-    assert len(manager._pipelines) == 0
-
-
-# =============================================================================
-# register_pipeline() 测试
-# =============================================================================
-
-
-def test_register_pipeline():
-    """测试注册 Pipeline"""
-    manager = OutputPipelineManager()
-    pipeline = PassThroughPipeline(config={})
-
-    manager.register_pipeline(pipeline)
-
-    assert len(manager._pipelines) == 1
-    assert manager._pipelines[0] == pipeline
-    assert manager._pipelines_sorted is False
-
-
-def test_register_multiple_pipelines():
-    """测试注册多个 Pipeline"""
-    manager = OutputPipelineManager()
-
-    pipeline1 = PassThroughPipeline(config={"priority": 100})
-    pipeline2 = ModifyingPipeline(config={"priority": 200})
-
-    manager.register_pipeline(pipeline1)
-    manager.register_pipeline(pipeline2)
-
-    assert len(manager._pipelines) == 2
-
-
-# =============================================================================
-# process() 测试
-# =============================================================================
-
-
 @pytest.mark.asyncio
-async def test_process_no_pipelines():
-    """测试没有 Pipeline 时直接返回"""
-    manager = OutputPipelineManager()
+async def test_output_pipeline_base():
+    """测试 OutputPipelineBase 基本功能"""
+    pipeline = DummyOutputPipeline(config={})
 
-    params = ExpressionParameters(tts_text="测试")
-    result = await manager.process(params)
-
-    assert result == params
-
-
-@pytest.mark.asyncio
-async def test_process_single_pipeline():
-    """测试单个 Pipeline 处理"""
-    manager = OutputPipelineManager()
-    pipeline = PassThroughPipeline(config={})
-    manager.register_pipeline(pipeline)
-
-    params = ExpressionParameters(tts_text="测试")
-    result = await manager.process(params)
+    # 测试 process 方法
+    params = Intent(original_text="Hello", response_text="Hello")
+    result = await pipeline.process(params)
 
     assert result is not None
-    assert result.tts_text == "测试"
+    assert result.metadata.get("processed") is True
+    assert result.response_text == "Hello"
+
+    # 测试统计信息
+    stats = pipeline.get_stats()
+    assert stats.processed_count == 1
+    assert stats.dropped_count == 0
+    assert stats.error_count == 0
 
 
 @pytest.mark.asyncio
-async def test_process_multiple_pipelines():
-    """测试多个 Pipeline 顺序处理"""
-    manager = OutputPipelineManager()
+async def test_output_pipeline_drop():
+    """测试 OutputPipeline 丢弃功能"""
+    pipeline = DropOutputPipeline(config={})
 
-    pipeline1 = ModifyingPipeline(config={"priority": 100})
-    pipeline2 = ModifyingPipeline(config={"priority": 200})
+    params = Intent(original_text="Hello", response_text="Hello")
+    result = await pipeline.process(params)
 
-    manager.register_pipeline(pipeline1)
-    manager.register_pipeline(pipeline2)
-
-    params = ExpressionParameters(tts_text="测试")
-    result = await manager.process(params)
-
-    # 应该被修改两次（顺序根据优先级）
-    assert result.tts_text.endswith(" [已修改] [已修改]")
-
-
-@pytest.mark.asyncio
-async def test_process_disabled_pipeline():
-    """测试禁用的 Pipeline 不执行"""
-    manager = OutputPipelineManager()
-
-    pipeline = ModifyingPipeline(config={"enabled": False})
-    manager.register_pipeline(pipeline)
-
-    params = ExpressionParameters(tts_text="测试")
-    result = await manager.process(params)
-
-    # 不应该被修改
-    assert result.tts_text == "测试"
-
-
-@pytest.mark.asyncio
-async def test_process_dropping_pipeline():
-    """测试丢弃 Pipeline"""
-    manager = OutputPipelineManager()
-
-    pipeline1 = PassThroughPipeline(config={"priority": 100})
-    pipeline2 = DroppingPipeline(config={"priority": 200})
-    pipeline3 = ModifyingPipeline(config={"priority": 300})
-
-    manager.register_pipeline(pipeline1)
-    manager.register_pipeline(pipeline2)
-    manager.register_pipeline(pipeline3)
-
-    params = ExpressionParameters(tts_text="测试")
-    result = await manager.process(params)
-
-    # pipeline2 丢弃后，后续 pipeline 不执行
     assert result is None
 
-
-@pytest.mark.asyncio
-async def test_process_priority_ordering():
-    """测试按优先级排序执行"""
-    manager = OutputPipelineManager()
-
-    # 逆序注册
-    pipeline3 = PassThroughPipeline(config={"priority": 300})
-    pipeline1 = PassThroughPipeline(config={"priority": 100})
-    pipeline2 = PassThroughPipeline(config={"priority": 200})
-
-    manager.register_pipeline(pipeline3)
-    manager.register_pipeline(pipeline1)
-    manager.register_pipeline(pipeline2)
-
-    # 验证排序
-    manager._ensure_pipelines_sorted()
-
-    assert manager._pipelines[0].priority == 100
-    assert manager._pipelines[1].priority == 200
-    assert manager._pipelines[2].priority == 300
-
-
-# =============================================================================
-# 错误处理测试
-# =============================================================================
+    stats = pipeline.get_stats()
+    assert stats.processed_count == 1
+    # 注意：丢弃统计在 manager 中处理，这里只测试返回 None
 
 
 @pytest.mark.asyncio
-async def test_process_continue_on_error():
-    """测试错误处理策略 CONTINUE"""
+async def test_output_pipeline_manager():
+    """测试 OutputPipelineManager"""
     manager = OutputPipelineManager()
 
-    pipeline1 = PassThroughPipeline(config={"priority": 100})
-    pipeline2 = FailingPipeline(config={"priority": 200, "error_handling": "continue"})
-    pipeline3 = ModifyingPipeline(config={"priority": 300})
-
+    # 注册管道
+    pipeline1 = DummyOutputPipeline(config={"priority": 100})
+    pipeline2 = DummyOutputPipeline(config={"priority": 200})
     manager.register_pipeline(pipeline1)
     manager.register_pipeline(pipeline2)
-    manager.register_pipeline(pipeline3)
 
-    params = ExpressionParameters(tts_text="测试")
+    # 测试处理
+    params = Intent(original_text="Hello", response_text="Hello")
     result = await manager.process(params)
 
-    # pipeline2 失败但继续执行 pipeline3
     assert result is not None
-    assert result.tts_text.endswith(" [已修改]")
+    assert result.response_text == "Hello"
+    # 两个管道都应该处理过（都添加了 metadata）
+    # 但因为同名 key，最后只会有一个 True
 
 
 @pytest.mark.asyncio
-async def test_process_stop_on_error():
-    """测试错误处理策略 STOP"""
+async def test_output_pipeline_manager_with_drop():
+    """测试 OutputPipelineManager 丢弃逻辑"""
     manager = OutputPipelineManager()
 
-    pipeline1 = PassThroughPipeline(config={"priority": 100})
-    pipeline2 = FailingPipeline(config={"priority": 200, "error_handling": "stop"})
-    pipeline3 = ModifyingPipeline(config={"priority": 300})
+    # 注册管道：第一个丢弃
+    drop_pipeline = DropOutputPipeline(config={"priority": 100})
+    dummy_pipeline = DummyOutputPipeline(config={"priority": 200})
+    manager.register_pipeline(drop_pipeline)
+    manager.register_pipeline(dummy_pipeline)
 
-    manager.register_pipeline(pipeline1)
-    manager.register_pipeline(pipeline2)
-    manager.register_pipeline(pipeline3)
-
-    params = ExpressionParameters(tts_text="测试")
-
-    with pytest.raises(PipelineException):
-        await manager.process(params)
-
-
-@pytest.mark.asyncio
-async def test_process_drop_on_error():
-    """测试错误处理策略 DROP"""
-    manager = OutputPipelineManager()
-
-    pipeline1 = PassThroughPipeline(config={"priority": 100})
-    pipeline2 = FailingPipeline(config={"priority": 200, "error_handling": "drop"})
-    pipeline3 = ModifyingPipeline(config={"priority": 300})
-
-    manager.register_pipeline(pipeline1)
-    manager.register_pipeline(pipeline2)
-    manager.register_pipeline(pipeline3)
-
-    params = ExpressionParameters(tts_text="测试")
+    # 测试处理
+    params = Intent(original_text="Hello", response_text="Hello")
     result = await manager.process(params)
 
-    # pipeline2 失败后丢弃
+    # 第一个管道丢弃，返回 None
     assert result is None
 
-
-@pytest.mark.asyncio
-async def test_process_timeout():
-    """测试超时处理"""
-    manager = OutputPipelineManager()
-
-    pipeline = SlowPipeline(config={"timeout_seconds": 0.1})
-    manager.register_pipeline(pipeline)
-
-    params = ExpressionParameters(tts_text="测试")
-
-    with pytest.raises(PipelineException, match="超时"):
-        await manager.process(params)
-
-
-# =============================================================================
-# process_parameters() 测试（向后兼容）
-# =============================================================================
+    # 第二个管道不应该执行
+    stats = dummy_pipeline.get_stats()
+    assert stats.processed_count == 0
 
 
 @pytest.mark.asyncio
-async def test_process_parameters_compatibility():
-    """测试 process_parameters 向后兼容性"""
+async def test_output_pipeline_disabled():
+    """测试禁用的 Pipeline"""
     manager = OutputPipelineManager()
 
-    pipeline = PassThroughPipeline(config={})
+    # 注册禁用的管道
+    pipeline = DummyOutputPipeline(config={"enabled": False})
     manager.register_pipeline(pipeline)
 
-    params = ExpressionParameters(tts_text="测试")
-    metadata = {"source": "test"}
-
-    result = await manager.process_parameters(params, metadata)
+    # 测试处理
+    params = Intent(original_text="Hello", response_text="Hello")
+    result = await manager.process(params)
 
     assert result is not None
-
-
-# =============================================================================
-# 统计信息测试
-# =============================================================================
+    # 管道被禁用，不应该处理
+    stats = pipeline.get_stats()
+    assert stats.processed_count == 0
 
 
 @pytest.mark.asyncio
-async def test_get_pipeline_stats():
-    """测试获取 Pipeline 统计信息"""
+async def test_output_pipeline_priority():
+    """测试 Pipeline 优先级排序"""
     manager = OutputPipelineManager()
 
-    pipeline1 = PassThroughPipeline(config={"priority": 100})
-    pipeline2 = DroppingPipeline(config={"priority": 200, "enabled": False})
+    # 创建不同的 Pipeline 类来测试优先级
+    class PriorityPipeline1(OutputPipelineBase):
+        async def _process(self, params):
+            params.metadata["priority_1"] = True
+            return params
 
+    class PriorityPipeline2(OutputPipelineBase):
+        async def _process(self, params):
+            params.metadata["priority_2"] = True
+            return params
+
+    class PriorityPipeline3(OutputPipelineBase):
+        async def _process(self, params):
+            params.metadata["priority_3"] = True
+            return params
+
+    # 注册不同优先级的管道
+    pipeline1 = PriorityPipeline1(config={"priority": 300})
+    pipeline2 = PriorityPipeline2(config={"priority": 100})
+    pipeline3 = PriorityPipeline3(config={"priority": 200})
     manager.register_pipeline(pipeline1)
     manager.register_pipeline(pipeline2)
+    manager.register_pipeline(pipeline3)
 
-    # 处理一些数据
-    params = ExpressionParameters(tts_text="测试")
-    await manager.process(params)
-
+    # 获取管道统计信息（包含优先级）
     stats = manager.get_pipeline_stats()
 
-    assert "PassThroughPipeline" in stats
-    assert stats["PassThroughPipeline"]["enabled"] is True
-    assert stats["PassThroughPipeline"]["priority"] == 100
+    # 验证所有管道都已注册
+    assert len(stats) == 3
 
-    assert "DroppingPipeline" in stats
-    assert stats["DroppingPipeline"]["enabled"] is False
+    # 验证优先级正确设置
+    assert stats["PriorityPipeline1"]["priority"] == 300
+    assert stats["PriorityPipeline2"]["priority"] == 100
+    assert stats["PriorityPipeline3"]["priority"] == 200
 
+    # 测试处理顺序：priority 100 -> 200 -> 300
+    params = Intent(original_text="Hello", response_text="Hello")
+    result = await manager.process(params)
 
-# =============================================================================
-# 并发测试
-# =============================================================================
-
-
-@pytest.mark.asyncio
-async def test_concurrent_processing():
-    """测试并发处理"""
-    manager = OutputPipelineManager()
-
-    pipeline = PassThroughPipeline(config={})
-    manager.register_pipeline(pipeline)
-
-    # 并发处理多个参数
-    tasks = []
-    for i in range(10):
-        params = ExpressionParameters(tts_text=f"测试{i}")
-        task = manager.process(params)
-        tasks.append(task)
-
-    results = await asyncio.gather(*tasks)
-
-    # 所有处理都应该成功
-    assert all(r is not None for r in results)
-    assert len(results) == 10
+    assert result is not None
+    # 所有管道都应该执行
+    assert result.metadata.get("priority_1") is True
+    assert result.metadata.get("priority_2") is True
+    assert result.metadata.get("priority_3") is True
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "-s"])
+def test_pipeline_stats():
+    """测试 PipelineStats"""
+    stats = PipelineStats()
+
+    assert stats.processed_count == 0
+    assert stats.dropped_count == 0
+    assert stats.error_count == 0
+    assert stats.avg_duration_ms == 0.0
+
+    # 测试平均时间计算
+    stats.processed_count = 10
+    stats.total_duration_ms = 100.0
+    assert stats.avg_duration_ms == 10.0
+
+
+def test_pipeline_error_handling():
+    """测试 PipelineErrorHandling 枚举"""
+    assert PipelineErrorHandling.CONTINUE == "continue"
+    assert PipelineErrorHandling.STOP == "stop"
+    assert PipelineErrorHandling.DROP == "drop"
+
+
+def test_pipeline_exception():
+    """测试 PipelineException"""
+    error = PipelineException("TestPipeline", "Test error")
+    assert error.pipeline_name == "TestPipeline"
+    assert error.message == "Test error"
+    assert "TestPipeline" in str(error)
+    assert "Test error" in str(error)

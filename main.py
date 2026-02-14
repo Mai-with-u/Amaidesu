@@ -15,6 +15,7 @@ from src.modules.registry import ProviderRegistry
 from src.modules.config.service import ConfigService
 from src.modules.llm.manager import LLMManager
 from src.modules.context import ContextService, ContextServiceConfig
+from src.modules.prompts import get_prompt_manager
 
 from src.domains.decision import DecisionProviderManager
 from src.domains.input.pipelines.manager import InputPipelineManager
@@ -375,10 +376,16 @@ async def create_app_components(
 
     # 决策域 (Decision Domain)
     decision_provider_manager: Optional[DecisionProviderManager] = None
+
+    # 初始化 prompt_manager（供 decision 和 output domain 使用）
+    prompt_manager = get_prompt_manager()
+
     if decision_config:
         logger.info("初始化决策域组件（Decision Domain）...")
         try:
-            decision_provider_manager = DecisionProviderManager(event_bus, llm_service, config_service, context_service)
+            decision_provider_manager = DecisionProviderManager(
+                event_bus, llm_service, config_service, context_service, prompt_manager
+            )
 
             # 设置决策Provider（通过 ProviderRegistry 自动创建）
             # 使用新的配置格式：decision_config 包含 active_provider 和 available_providers
@@ -395,7 +402,7 @@ async def create_app_components(
     # 输出Provider管理器 (Output Domain)
     logger.info("初始化输出Provider管理器...")
     output_provider_manager: Optional[OutputProviderManager] = (
-        OutputProviderManager(event_bus) if output_config else None
+        OutputProviderManager(event_bus, prompt_manager=prompt_manager) if output_config else None
     )
     if output_provider_manager:
         try:
@@ -404,6 +411,7 @@ async def create_app_components(
                 config_service=config_service,
                 root_config=config,
                 audio_stream_channel=audio_stream_channel,
+                prompt_manager=prompt_manager,
             )
             await output_provider_manager.start()
             logger.info("输出Provider管理器已设置（Output Domain）")

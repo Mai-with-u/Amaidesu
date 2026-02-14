@@ -84,16 +84,6 @@ class OutputProvider(ABC):
 
         await self.init()
         self.is_started = True
-        if actual_event_bus:
-            actual_event_bus.on(
-                CoreEvents.OUTPUT_INTENT,
-                self._on_intent,
-                model_class=IntentPayload,
-                priority=self.priority,
-            )
-
-        await self.init()
-        self.is_started = True
 
     async def _on_intent(self, event_name: str, payload: "IntentPayload", source: str):
         """
