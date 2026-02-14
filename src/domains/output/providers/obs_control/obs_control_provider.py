@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 from pydantic import Field, field_validator
 
 if TYPE_CHECKING:
+    from src.modules.di.context import ProviderContext
     from src.modules.types import Intent
 
 from src.modules.config.schemas.base import BaseProviderConfig
@@ -71,7 +72,7 @@ class ObsControlOutputProvider(OutputProvider):
                 return v
             return v
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], context: "ProviderContext"):
         """
         初始化OBS Control Provider
 
@@ -86,7 +87,7 @@ class ObsControlOutputProvider(OutputProvider):
                 - typewriter_delay: 显示后延迟 (默认: 0.5)
                 - test_on_connect: 连接时测试 (默认: True)
         """
-        super().__init__(config)
+        super().__init__(config, context)
         self.logger = get_logger("ObsControlOutputProvider")
 
         # 使用 ConfigSchema 验证配置，获得类型安全的配置对象

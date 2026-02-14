@@ -29,7 +29,7 @@ from src.modules.types.base.output_provider import OutputProvider
 
 if TYPE_CHECKING:
     from src.modules.di.context import ProviderContext
-    from src.domains.decision.intent import Intent
+    from src.modules.types import Intent
 
 
 class OutlineLabel:
@@ -263,7 +263,7 @@ class SubtitleOutputProvider(OutputProvider):
         """
         return {"layer": "output", "name": "subtitle", "class": cls, "source": "builtin:subtitle"}
 
-    def __init__(self, config: dict, context: "ProviderContext" = None):
+    def __init__(self, config: dict, context: "ProviderContext"):
         super().__init__(config, context)
         self.logger = get_logger("SubtitleOutputProvider")
 

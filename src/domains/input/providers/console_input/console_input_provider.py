@@ -45,7 +45,7 @@ class ConsoleInputProvider(InputProvider):
         """
         return {"layer": "input", "name": "console_input", "class": cls, "source": "builtin:console_input"}
 
-    def __init__(self, config: dict, context: "ProviderContext" = None):
+    def __init__(self, config: dict, context: "ProviderContext"):
         """
         初始化ConsoleInputProvider
 

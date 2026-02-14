@@ -27,7 +27,7 @@ class MockOutputProvider(OutputProvider):
         type: Literal["mock"] = "mock"
         log_received: bool = Field(default=True, description="是否记录收到的参数")
 
-    def __init__(self, config: dict, context: "ProviderContext" = None):
+    def __init__(self, config: dict, context: "ProviderContext"):
         super().__init__(config, context)
         self.logger = get_logger("MockOutputProvider")
         self.received_intents = []

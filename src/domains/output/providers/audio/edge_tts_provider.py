@@ -19,6 +19,7 @@ from src.modules.tts import AudioDeviceManager
 from src.modules.types.base.output_provider import OutputProvider
 
 if TYPE_CHECKING:
+    from src.modules.di.context import ProviderContext
     from src.modules.types import Intent
 
 # 导入工具函数
@@ -55,14 +56,14 @@ class EdgeTTSProvider(OutputProvider):
         voice: str = Field(default="zh-CN-XiaoxiaoNeural", description="Edge TTS语音")
         output_device_name: Optional[str] = Field(default=None, description="音频输出设备名称")
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], context: "ProviderContext"):
         """
         初始化EdgeTTS Provider
 
         Args:
             config: Provider配置（来自[providers.output.edge_tts]）
         """
-        super().__init__(config)
+        super().__init__(config, context)
         self.logger = get_logger("EdgeTTSProvider")
 
         # 使用 ConfigSchema 验证配置，获得类型安全的配置对象

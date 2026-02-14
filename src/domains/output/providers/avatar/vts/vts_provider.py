@@ -19,6 +19,7 @@ from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
+    from src.modules.di.context import ProviderContext
     from src.modules.streaming.audio_chunk import AudioChunk, AudioMetadata
 
     from src.modules.types import Intent
@@ -78,14 +79,14 @@ class VTSProvider(BaseAvatarProvider):
         vowel_detection_sensitivity: float = Field(default=0.5, ge=0.0, le=1.0, description="元音检测灵敏度")
         sample_rate: int = Field(default=16000, ge=8000, le=48000, description="音频采样率")
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], context: "ProviderContext"):
         """
         初始化VTS Provider
 
         Args:
             config: Provider配置（来自[rendering.outputs.vts]）
         """
-        super().__init__(config)
+        super().__init__(config, context)
         self.logger = get_logger(self.__class__.__name__)
 
         # 使用 ConfigSchema 验证配置，获得类型安全的配置对象

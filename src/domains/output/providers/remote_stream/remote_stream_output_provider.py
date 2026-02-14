@@ -25,6 +25,7 @@ from src.modules.types.base.output_provider import OutputProvider
 from src.modules.types.intent import Intent
 
 if TYPE_CHECKING:
+    from src.modules.di.context import ProviderContext
     from src.modules.streaming.audio_chunk import AudioChunk, AudioMetadata
 
 try:
@@ -125,7 +126,7 @@ class RemoteStreamOutputProvider(OutputProvider):
         reconnect_delay: int = Field(default=5, description="重连延迟(秒)")
         max_reconnect_attempts: int = Field(default=-1, description="最大重连次数(-1表示无限)")
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], context: "ProviderContext"):
         """
         初始化RemoteStream输出Provider
 
@@ -137,7 +138,7 @@ class RemoteStreamOutputProvider(OutputProvider):
                 - audio_sample_rate, audio_channels, etc.: 音频配置
                 - image_width, image_height, etc.: 图像配置
         """
-        super().__init__(config)
+        super().__init__(config, context)
         self.logger = get_logger("RemoteStreamOutputProvider")
 
         # 设置状态

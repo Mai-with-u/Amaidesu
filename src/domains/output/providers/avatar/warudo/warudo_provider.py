@@ -20,6 +20,7 @@ from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
+    from src.modules.di.context import ProviderContext
     from src.modules.types import Intent
 
 
@@ -57,14 +58,14 @@ class WarudoOutputProvider(AvatarProviderBase):
         "clap": "clap",
     }
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], context: "ProviderContext"):
         """
         初始化Warudo Provider
 
         Args:
             config: Provider配置字典
         """
-        super().__init__(config)
+        super().__init__(config, context)
         self.logger = get_logger(self.__class__.__name__)
 
         # 使用 ConfigSchema 验证配置

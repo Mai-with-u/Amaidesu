@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from src.modules.di.context import ProviderContext
 from src.modules.types.base.decision_provider import DecisionProvider
 from src.modules.types.base.normalized_message import NormalizedMessage
 
@@ -31,19 +32,21 @@ if TYPE_CHECKING:
 class MockDecisionProvider(DecisionProvider):
     """模拟的 DecisionProvider 实现（用于测试）"""
 
-    def __init__(self, config: dict, raise_error: bool = False):
+    def __init__(self, config: dict, context: ProviderContext = None, raise_error: bool = False):
         """
         初始化 Mock DecisionProvider
 
         Args:
             config: Provider 配置
+            context: Provider 上下文（必填）
             raise_error: 是否在 decide 时抛出错误
         """
-        super().__init__(config)
+        super().__init__(config, context)
         self.raise_error = raise_error
         self.start_called = False
         self.stop_called = False
         self.decide_count = 0
+        self._dependencies = {}  # 初始化依赖字典
 
     async def init(self):
         """模拟初始化"""
@@ -81,15 +84,21 @@ class IncompleteDecisionProvider(DecisionProvider):
 
 
 @pytest.fixture
-def mock_provider():
-    """创建标准的 MockDecisionProvider 实例"""
-    return MockDecisionProvider(config={"model": "test"})
+def mock_context():
+    """创建用于测试的 Mock ProviderContext"""
+    return ProviderContext()
 
 
 @pytest.fixture
-def error_provider():
+def mock_provider(mock_context):
+    """创建标准的 MockDecisionProvider 实例"""
+    return MockDecisionProvider(config={"model": "test"}, context=mock_context)
+
+
+@pytest.fixture
+def error_provider(mock_context):
     """创建会抛出错误的 DecisionProvider"""
-    return MockDecisionProvider(config={}, raise_error=True)
+    return MockDecisionProvider(config={}, context=mock_context, raise_error=True)
 
 
 @pytest.fixture
@@ -120,10 +129,10 @@ def mock_normalized_message():
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_initialization():
+async def test_decision_provider_initialization(mock_context):
     """测试 DecisionProvider 初始化"""
     config = {"model": "gpt-4", "api_key": "test_key"}
-    provider = MockDecisionProvider(config)
+    provider = MockDecisionProvider(config, mock_context)
 
     assert provider.config == config
     assert provider.event_bus is None
@@ -131,9 +140,9 @@ async def test_decision_provider_initialization():
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_default_config():
+async def test_decision_provider_default_config(mock_context):
     """测试使用默认配置初始化"""
-    provider = MockDecisionProvider({})
+    provider = MockDecisionProvider({}, mock_context)
 
     assert provider.config == {}
     assert provider.is_started is False
@@ -158,9 +167,9 @@ async def test_decision_provider_abstract_method_not_implemented():
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_start_basic():
+async def test_decision_provider_start_basic(mock_context):
     """测试 start() 基本流程"""
-    provider = MockDecisionProvider({})
+    provider = MockDecisionProvider({}, mock_context)
     mock_event_bus = object()
 
     await provider.start(event_bus=mock_event_bus)
@@ -171,9 +180,9 @@ async def test_decision_provider_start_basic():
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_start_with_config():
+async def test_decision_provider_start_with_config(mock_context):
     """测试 start() 可以覆盖配置"""
-    provider = MockDecisionProvider({"old": "config"})
+    provider = MockDecisionProvider({"old": "config"}, mock_context)
     mock_event_bus = object()
     new_config = {"new": "config"}
 
@@ -183,9 +192,9 @@ async def test_decision_provider_start_with_config():
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_start_with_dependencies():
+async def test_decision_provider_start_with_dependencies(mock_context):
     """测试 start() 接受依赖注入"""
-    provider = MockDecisionProvider({})
+    provider = MockDecisionProvider({}, mock_context)
     mock_event_bus = object()
     dependencies = {"llm_service": "mock_llm", "cache": "mock_cache"}
 
@@ -197,9 +206,9 @@ async def test_decision_provider_start_with_dependencies():
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_start_without_dependencies():
+async def test_decision_provider_start_without_dependencies(mock_context):
     """测试 start() 不传 dependencies 时使用空字典"""
-    provider = MockDecisionProvider({})
+    provider = MockDecisionProvider({}, mock_context)
     mock_event_bus = object()
 
     await provider.start(event_bus=mock_event_bus)
@@ -273,9 +282,9 @@ async def test_decision_provider_decide_with_error(error_provider, mock_normaliz
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_stop_basic():
+async def test_decision_provider_stop_basic(mock_context):
     """测试 stop() 基本功能"""
-    provider = MockDecisionProvider({})
+    provider = MockDecisionProvider({}, mock_context)
     await provider.start(event_bus=object())
 
     assert provider.is_started is True
@@ -287,9 +296,9 @@ async def test_decision_provider_stop_basic():
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_stop_idempotent():
+async def test_decision_provider_stop_idempotent(mock_context):
     """测试 stop() 可以多次调用（幂等）"""
-    provider = MockDecisionProvider({})
+    provider = MockDecisionProvider({}, mock_context)
     await provider.start(event_bus=object())
 
     await provider.stop()
@@ -301,9 +310,9 @@ async def test_decision_provider_stop_idempotent():
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_stop_clears_event_bus():
+async def test_decision_provider_stop_clears_event_bus(mock_context):
     """测试 stop() 不清除 event_bus 引用"""
-    provider = MockDecisionProvider({})
+    provider = MockDecisionProvider({}, mock_context)
     mock_event_bus = object()
 
     await provider.start(event_bus=mock_event_bus)
@@ -321,9 +330,9 @@ async def test_decision_provider_stop_clears_event_bus():
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_full_lifecycle(mock_normalized_message):
+async def test_decision_provider_full_lifecycle(mock_context, mock_normalized_message):
     """测试 DecisionProvider 完整生命周期"""
-    provider = MockDecisionProvider({})
+    provider = MockDecisionProvider({}, mock_context)
 
     # 1. 初始化
     assert provider.is_started is False
@@ -347,9 +356,9 @@ async def test_decision_provider_full_lifecycle(mock_normalized_message):
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_restart(mock_normalized_message):
+async def test_decision_provider_restart(mock_context, mock_normalized_message):
     """测试 DecisionProvider 可以重新启动"""
-    provider = MockDecisionProvider({})
+    provider = MockDecisionProvider({}, mock_context)
 
     # 第一次运行
     await provider.start(event_bus=object())
@@ -368,9 +377,9 @@ async def test_decision_provider_restart(mock_normalized_message):
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_start_stop_order():
+async def test_decision_provider_start_stop_order(mock_context):
     """测试 start 和 stop 的顺序"""
-    provider = MockDecisionProvider({})
+    provider = MockDecisionProvider({}, mock_context)
 
     # start -> stop
     await provider.start(event_bus=object())
@@ -395,9 +404,9 @@ async def test_decision_provider_start_stop_order():
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_start_with_none_event_bus():
+async def test_decision_provider_start_with_none_event_bus(mock_context):
     """测试 start() 传入 None event_bus"""
-    provider = MockDecisionProvider({})
+    provider = MockDecisionProvider({}, mock_context)
 
     await provider.start(event_bus=None)
 
@@ -406,9 +415,9 @@ async def test_decision_provider_start_with_none_event_bus():
 
 
 @pytest.mark.asyncio
-async def test_decision_provider_with_empty_config(mock_normalized_message):
+async def test_decision_provider_with_empty_config(mock_context, mock_normalized_message):
     """测试使用空配置的 DecisionProvider"""
-    provider = MockDecisionProvider({})
+    provider = MockDecisionProvider({}, mock_context)
     await provider.start(event_bus=object())
 
     intent = await provider.decide(mock_normalized_message)

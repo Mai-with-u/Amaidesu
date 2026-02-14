@@ -54,7 +54,7 @@ class LLMPDecisionProvider(DecisionProvider):
         client: Literal["llm", "llm_fast", "vlm"] = Field(default="llm", description="使用的LLM客户端名称")
         fallback_mode: Literal["simple", "echo", "error"] = Field(default="simple", description="降级模式")
 
-    def __init__(self, config: Dict[str, Any], context: "ProviderContext" = None):
+    def __init__(self, config: Dict[str, Any], context: "ProviderContext"):
         """
         初始化 LLMPDecisionProvider
 

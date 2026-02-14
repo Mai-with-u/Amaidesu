@@ -59,7 +59,7 @@ class STTInputProvider(InputProvider):
         """获取 Provider 注册信息"""
         return {"layer": "input", "name": "stt", "class": cls, "source": "builtin:stt"}
 
-    def __init__(self, config: dict, context: "ProviderContext" = None):
+    def __init__(self, config: dict, context: "ProviderContext"):
         """
         初始化 STTInputProvider
 

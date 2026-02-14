@@ -75,7 +75,7 @@ class MaicraftDecisionProvider(DecisionProvider):
         mcp_timeout: int = Field(default=30, description="MCP超时时间（秒）")
         verbose_logging: bool = Field(default=False, description="是否输出详细日志")
 
-    def __init__(self, config: dict, context: "ProviderContext" = None):
+    def __init__(self, config: dict, context: "ProviderContext"):
         super().__init__(config, context)
 
         self.logger = get_logger(self.__class__.__name__)

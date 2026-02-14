@@ -135,7 +135,7 @@ class BiliDanmakuOfficialMaiCraftInputProvider(InputProvider):
                 raise ValueError("forward_ws_url必须以ws://或wss://开头")
             return v
 
-    def __init__(self, config: dict, context: "ProviderContext" = None):
+    def __init__(self, config: dict, context: "ProviderContext"):
         super().__init__(config, context)
         self.logger = get_logger(self.__class__.__name__)
 

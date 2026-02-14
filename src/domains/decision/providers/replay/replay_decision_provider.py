@@ -51,7 +51,7 @@ class ReplayDecisionProvider(DecisionProvider):
         type: Literal["replay"] = "replay"
         add_default_action: bool = Field(default=True, description="是否添加默认动作（眨眼）")
 
-    def __init__(self, config: Dict[str, Any], context: "ProviderContext" = None):
+    def __init__(self, config: Dict[str, Any], context: "ProviderContext"):
         """
         初始化 ReplayDecisionProvider
 

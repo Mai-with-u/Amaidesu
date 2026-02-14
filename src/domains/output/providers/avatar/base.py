@@ -27,7 +27,7 @@ class AvatarProviderBase(OutputProvider, ABC):
     子类只需实现平台特定的适配和渲染逻辑。
     """
 
-    def __init__(self, config: dict, context: "ProviderContext" = None):
+    def __init__(self, config: dict, context: "ProviderContext"):
         super().__init__(config, context)
         self.logger = get_logger(self.__class__.__name__)
         self._is_connected = False

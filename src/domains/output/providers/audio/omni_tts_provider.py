@@ -11,7 +11,10 @@ import asyncio
 import base64
 import time
 from collections import deque
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
+if TYPE_CHECKING:
+    from src.modules.di.context import ProviderContext
 
 import numpy as np
 from pydantic import Field
@@ -77,14 +80,14 @@ class OmniTTSProvider(OutputProvider):
         use_vts_lip_sync: bool = Field(default=True, description="是否使用VTS口型同步")
         use_subtitle: bool = Field(default=True, description="是否使用字幕")
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], context: "ProviderContext"):
         """
         初始化OmniTTS Provider
 
         Args:
             config: Provider配置（来自[rendering.outputs.omni_tts]）
         """
-        super().__init__(config)
+        super().__init__(config, context)
         self.logger = get_logger("OmniTTSProvider")
 
         # 使用 ConfigSchema 验证配置，获得类型安全的配置对象

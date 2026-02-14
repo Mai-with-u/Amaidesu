@@ -90,7 +90,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
         """
         return {"layer": "decision", "name": "maicore", "class": cls, "source": "builtin:maicore"}
 
-    def __init__(self, config: Dict[str, Any], context: "ProviderContext" = None):
+    def __init__(self, config: Dict[str, Any], context: "ProviderContext"):
         """
         初始化 MaiCoreDecisionProvider
 

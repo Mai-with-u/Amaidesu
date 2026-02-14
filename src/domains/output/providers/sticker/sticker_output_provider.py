@@ -47,7 +47,7 @@ class StickerOutputProvider(OutputProvider):
         cool_down_seconds: float = Field(default=5.0, ge=0.0, le=300.0, description="冷却时间（秒）")
         display_duration_seconds: float = Field(default=3.0, ge=0.0, le=300.0, description="显示时长（秒）")
 
-    def __init__(self, config: dict, context: "ProviderContext" = None):
+    def __init__(self, config: dict, context: "ProviderContext"):
         super().__init__(config, context)
         self.logger = get_logger("StickerOutputProvider")
 

@@ -16,7 +16,7 @@ DecisionProvider负责将NormalizedMessage转换为决策结果(Intent)。
 """
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from src.modules.di.context import ProviderContext
 
@@ -45,10 +45,14 @@ class DecisionProvider(ABC):
         self.config = config
         self.context = context
         self.is_started = False
+        self._override_event_bus = None  # 用于测试时覆盖 event_bus
 
     @property
     def event_bus(self):
         """EventBus实例"""
+        # 优先使用覆盖值（用于测试）
+        if self._override_event_bus is not None:
+            return self._override_event_bus
         return self.context.event_bus
 
     async def init(self) -> None:  # noqa: B027
@@ -60,15 +64,32 @@ class DecisionProvider(ABC):
         """
         pass
 
-    async def start(self) -> None:
+    async def start(self, event_bus=None, config=None, dependencies=None) -> None:
         """
         启动 Provider
 
         依赖已在构造时通过 context 注入，此方法仅进行初始化。
 
+        Args:
+            event_bus: 可选的 EventBus 实例（用于测试兼容性）
+            config: 可选的配置覆盖（用于测试）
+            dependencies: 可选的依赖注入（用于测试）
+
         Raises:
             ConnectionError: 如果无法连接到决策服务
         """
+        # 如果传入 event_bus，设置覆盖值
+        if event_bus is not None:
+            self._override_event_bus = event_bus
+
+        # 允许测试时注入依赖
+        if dependencies is not None:
+            self._dependencies = dependencies
+
+        # 允许测试时覆盖配置
+        if config is not None:
+            self.config = config
+
         await self.init()
         self.is_started = True
 

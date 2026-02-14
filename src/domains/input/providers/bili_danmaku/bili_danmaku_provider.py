@@ -41,7 +41,7 @@ class BiliDanmakuInputProvider(InputProvider):
         poll_interval: int = Field(default=3, description="轮询间隔（秒）", ge=1)
         message_config: dict = Field(default_factory=dict, description="消息配置")
 
-    def __init__(self, config: dict, context: "ProviderContext" = None):
+    def __init__(self, config: dict, context: "ProviderContext"):
         super().__init__(config, context)
 
         self.logger = get_logger(self.__class__.__name__)
