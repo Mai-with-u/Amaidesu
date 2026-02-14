@@ -198,3 +198,4 @@ MineLand/
 .omn/
 .cursor/
 nul
+*.torch_cache/
