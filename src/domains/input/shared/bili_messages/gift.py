@@ -11,6 +11,7 @@ from .base import BiliBaseMessage
 
 class AnchorInfo(BaseModel):
     """主播信息"""
+
     uid: int = 0
     open_id: str = ""
     union_id: str = ""
@@ -20,6 +21,7 @@ class AnchorInfo(BaseModel):
 
 class ComboInfo(BaseModel):
     """连击信息"""
+
     combo_base_num: int = 0
     combo_count: int = 0
     combo_id: str = ""
@@ -28,6 +30,7 @@ class ComboInfo(BaseModel):
 
 class BlindGift(BaseModel):
     """盲盒信息"""
+
     blind_gift_id: int = 0
     status: bool = False
 

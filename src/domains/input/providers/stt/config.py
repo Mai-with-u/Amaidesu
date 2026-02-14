@@ -61,7 +61,6 @@ class MessageConfig(BaseModel):
     template_items: Dict[str, Any] = Field(default_factory=dict, description="模板项")
     main_prompt_key: str = Field(default="reasoning_prompt_main", description="主提示词键")
     context_tags: Optional[List[str]] = Field(default=None, description="上下文标签")
-    enable_correction: bool = Field(default=True, description="是否启用文本修正")
     additional_config: Dict[str, Any] = Field(default_factory=dict, description="额外配置")
 
 
