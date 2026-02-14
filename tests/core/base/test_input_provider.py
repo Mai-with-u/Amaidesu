@@ -131,10 +131,22 @@ async def test_input_provider_abstract_method_not_implemented():
 
 
 @pytest.mark.asyncio
-async def test_input_provider_start_returns_async_iterator(auto_stop_provider):
-    """测试 start() 返回 AsyncIterator"""
-    # start() 返回异步生成器，不需要 await
-    data_stream = auto_stop_provider.start()
+async def test_input_provider_start_returns_none(auto_stop_provider):
+    """测试 start() 返回 None"""
+    # start() 返回 None，需要 await
+    result = await auto_stop_provider.start()
+    assert result is None
+    assert auto_stop_provider.is_running is True
+
+
+@pytest.mark.asyncio
+async def test_input_provider_stream_returns_async_iterator(auto_stop_provider):
+    """测试 stream() 返回 AsyncIterator"""
+    # 先启动
+    await auto_stop_provider.start()
+
+    # stream() 返回异步迭代器
+    data_stream = auto_stop_provider.stream()
 
     # 验证返回的是异步迭代器
     assert hasattr(data_stream, "__aiter__")
@@ -142,10 +154,13 @@ async def test_input_provider_start_returns_async_iterator(auto_stop_provider):
 
 
 @pytest.mark.asyncio
-async def test_input_provider_start_yields_normalized_message(auto_stop_provider):
-    """测试 start() 生成 NormalizedMessage"""
+async def test_input_provider_stream_yields_normalized_message(auto_stop_provider):
+    """测试 stream() 生成 NormalizedMessage"""
+    # 先启动
+    await auto_stop_provider.start()
+
     count = 0
-    async for message in auto_stop_provider.start():
+    async for message in auto_stop_provider.stream():
         assert isinstance(message, NormalizedMessage)
         assert message.source == "mock"
         assert message.data_type == "text"
@@ -163,8 +178,14 @@ async def test_input_provider_start_sets_is_running():
 
     assert provider.is_running is False
 
-    # 启动并等待完成
-    async for _ in provider.start():
+    # 启动 Provider
+    await provider.start()
+
+    # 启动后 is_running 应该为 True
+    assert provider.is_running is True
+
+    # 等待数据流完成
+    async for _ in provider.stream():
         pass
 
     # 完成后 is_running 应该为 False（finally 块）
@@ -172,12 +193,15 @@ async def test_input_provider_start_sets_is_running():
 
 
 @pytest.mark.asyncio
-async def test_input_provider_start_continuous():
-    """测试 start() 持续生成数据（直到外部停止）"""
+async def test_input_provider_stream_continuous():
+    """测试 stream() 持续生成数据（直到外部停止）"""
     provider = MockInputProvider({}, auto_stop=False)
 
+    # 先启动
+    await provider.start()
+
     count = 0
-    async for _raw_data in provider.start():
+    async for _raw_data in provider.stream():
         count += 1
         if count >= 5:  # 手动停止
             await provider.stop()
@@ -272,8 +296,9 @@ async def test_input_provider_full_lifecycle():
     assert provider.cleanup_called is False
 
     # 2. 启动并收集数据
+    await provider.start()
     collected_data = []
-    async for raw_data in provider.start():
+    async for raw_data in provider.stream():
         collected_data.append(raw_data)
 
     # 3. 验证数据收集
@@ -291,8 +316,9 @@ async def test_input_provider_restart():
     provider = MockInputProvider({}, auto_stop=True)
 
     # 第一次运行
+    await provider.start()
     count1 = 0
-    async for _ in provider.start():
+    async for _ in provider.stream():
         count1 += 1
     assert count1 == 3
 
@@ -303,8 +329,10 @@ async def test_input_provider_restart():
     provider.collected_count = 0
     provider.auto_stop = True
 
+    # 重新启动
+    await provider.start()
     count2 = 0
-    async for _ in provider.start():
+    async for _ in provider.stream():
         count2 += 1
     assert count2 == 3
 
@@ -317,7 +345,8 @@ async def test_input_provider_restart():
 # 添加一个辅助方法用于测试
 async def _run_and_stop(self):
     """辅助方法：运行并自动停止"""
-    async for _ in self.start():
+    await self.start()
+    async for _ in self.stream():
         await asyncio.sleep(0.01)
 
 

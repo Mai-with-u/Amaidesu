@@ -158,9 +158,10 @@ class InputProviderManager:
         运行单个Provider，错误隔离
 
         重构后：
-        1. Provider.start() 直接返回 NormalizedMessage
-        2. 通过 Pipeline 过滤（如果有）
-        3. 发布 DATA_MESSAGE 事件
+        1. Provider.start() 启动 Provider
+        2. Provider.stream() 获取数据流
+        3. 通过 Pipeline 过滤（如果有）
+        4. 发布 DATA_MESSAGE 事件
 
         捕获所有异常，避免单个Provider失败影响其他Provider。
 
@@ -170,7 +171,10 @@ class InputProviderManager:
         """
         try:
             self.logger.info(f"Provider {provider_name} 开始运行")
-            async for message in provider.start():
+            # 先启动 Provider
+            await provider.start()
+            # 然后迭代数据流
+            async for message in provider.stream():
                 # Pipeline 过滤处理（如果有）
                 if self.pipeline_manager:
                     message = await self.pipeline_manager.process(message)
