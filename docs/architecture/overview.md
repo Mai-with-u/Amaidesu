@@ -210,10 +210,6 @@ active_provider = "maicraft"
 uv run pytest tests/architecture/test_event_flow_constraints.py -v
 ```
 
-## 设计文档
-
-详细设计见：`refactor/design/overview.md`
-
 ## 相关文档
 
 - [数据流规则](data-flow.md) - 3域数据流约束

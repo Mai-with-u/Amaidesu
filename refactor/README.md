@@ -33,14 +33,14 @@
 **多个Provider如何并发？**
 → [多Provider并发设计](./design/multi_provider.md)
 
-**插件系统为什么移除？**
-→ [插件系统移除说明](./PLUGIN_SYSTEM_REMOVAL.md)
+**配置系统如何重构？**
+→ [配置系统设计](./design/config_system.md)
 
-**AmaidesuCore如何重构？**
-→ [核心重构设计](./design/core_refactoring.md)
+**提示词管理如何实现？**
+→ [提示词管理设计](./design/prompt_management.md)
 
-**HTTP服务器如何管理？**
-→ [HTTP服务器设计](./design/http_server.md)
+**LLM客户端如何管理？**
+→ [LLM服务设计](./design/llm_manager.md)
 
 ---
 
@@ -49,25 +49,19 @@
 ```
 refactor/
 ├── README.md                            # 本文件 - 文档索引
-├── PLUGIN_SYSTEM_REMOVAL.md             # 插件系统移除说明
 │
 ├── design/                              # 设计文档
 │   ├── overview.md                       # 架构总览（3域架构）
 │   ├── decision_layer.md                 # 决策层设计
 │   ├── multi_provider.md                 # 多Provider并发设计
-│   ├── core_refactoring.md               # AmaidesuCore重构设计
-│   ├── http_server.md                    # HTTP服务器设计
-│   ├── llm_service.md                    # LLM服务设计
-│   ├── event_data_contract.md            # 事件数据契约设计
-│   ├── pipeline_refactoring.md           # Pipeline重新设计
-│   ├── avatar_refactoring.md             # 虚拟形象重构设计
-│   ├── DESIGN_CONSISTENCY_REPORT.md      # 设计文档一致性检查报告
 │   ├── config_system.md                 # 配置系统设计
-│   └── plugin_system.md                  # ⚠️ 已废弃
-│
-└── plan/                                # 实施计划
-    └── 5_layer_refactoring_plan.md       # 5层架构重构实施计划（已废弃）
+│   ├── prompt_management.md             # 提示词管理设计
+│   ├── llm_manager.md                   # LLM服务设计
+│   ├── event_data_contract.md            # 事件数据契约设计
+│   └── pipeline_refactoring.md           # Pipeline重新设计
 ```
+
+> **注意**: 旧的设计文档（core_refactoring.md, http_server.md, avatar_refactoring.md, plugin_system.md, 5_layer_refactoring_plan.md）已移至 plugins_backup/ 目录作为历史参考。
 
 ---
 
@@ -161,12 +155,14 @@ enabled_outputs = ["tts", "subtitle", "vts"]
 - Plugin创建和管理Provider
 - 仍然存在职责边界模糊的问题
 
-### v3.0（2025年2月，当前）
+### v3.0（2026年2月，当前分支 refactor）
 
-- **移除插件系统**
-- Provider由Manager统一管理
-- 配置驱动启用/禁用
-- 3域架构，职责清晰
+- **移除插件系统**：所有功能迁移到 Provider 架构
+- Provider由Manager统一管理，配置驱动启用/禁用
+- 3域架构（Input → Decision → Output），职责清晰
+- 新增多个核心模块：events, config, context, llm, logging, prompts, streaming, tts, types, registry
+- Input Pipeline 系统重构，支持 MessagePipeline
+- Output 引入 Pipeline 机制，Intent 统一经 OutputPipeline 分发
 
 ---
 
@@ -195,21 +191,16 @@ enabled_outputs = ["tts", "subtitle", "vts"]
 
 ## 🔗 相关资源
 
-### 状态报告
-- [架构问题分析报告](./ARCHITECTURE_ISSUES_REPORT.md) - **当前架构问题和修复建议**
-- [设计文档一致性检查报告](./design/DESIGN_CONSISTENCY_REPORT.md) - 文档一致性验证
-
 ### 设计文档
 - [设计总览](./design/overview.md) - 3域架构总览
 - [决策层设计](./design/decision_layer.md) - 可替换的决策Provider系统
 - [多Provider并发设计](./design/multi_provider.md) - Provider管理架构
+- [配置系统设计](./design/config_system.md) - 配置管理架构
+- [提示词管理设计](./design/prompt_management.md) - PromptManager 设计
 
-### 迁移指南
-- [插件系统移除说明](./PLUGIN_SYSTEM_REMOVAL.md) - 配置和代码迁移指南
-
-### docs 目录相关文档
-- [尚未完成的重构项](../docs/REFACTOR_REMAINING.md) - 重构剩余工作
-- [VTuber 全流程 E2E 测试缺口分析](../docs/VTUBER_FLOW_E2E_GAP_ANALYSIS.md) - E2E 测试缺口
+### 文档目录
+- [docs/](../docs/) - 项目文档（包含模块文档、API参考、开发指南）
+- [plugins_backup/](../plugins_backup/) - 旧插件系统备份和迁移文档
 
 ---
 
@@ -244,5 +235,50 @@ enabled_outputs = ["tts", "subtitle", "vts"]
 
 ---
 
-**最后更新**：2026年2月1日
+## 📝 当前分支变更（相对于 dev 分支）
+
+当前 refactor 分支相对于 dev 分支的主要架构变更：
+
+### 1. 目录结构重构
+- **删除**：`src/core/` 目录（旧的核心模块）
+- **新增**：`src/domains/` 目录（3域架构）
+  - `src/domains/input/` - 输入域
+  - `src/domains/decision/` - 决策域
+  - `src/domains/output/` - 输出域
+
+### 2. 插件系统移除
+- **删除**：所有 `src/plugins/` 目录下的插件（30+ 个）
+- **新增**：Provider 架构，所有功能迁移到 `src/domains/{domain}/providers/`
+
+### 3. 新增核心模块（src/modules/）
+| 模块 | 功能 |
+|------|------|
+| `events/` | EventBus 事件系统 |
+| `config/` | 配置管理（ConfigService, Schema 验证） |
+| `context/` | 对话上下文管理 |
+| `llm/` | LLM 客户端管理 |
+| `logging/` | 统一日志系统 |
+| `prompts/` | 提示词管理（PromptManager） |
+| `streaming/` | 音频流传输 |
+| `tts/` | TTS 服务管理 |
+| `types/` | 共享类型定义（Intent, EmotionType, ActionType） |
+| `registry.py` | Provider 注册表 |
+
+### 4. Provider 系统
+- Input Provider: 10 个（console, bili_danmaku, bili_danmaku_official, bili_danmaku_official_maicraft, mainosaba, mock_danmaku, read_pingmu, remote_stream, stt）
+- Decision Provider: 3 个（llm, maicore, maicraft）
+- Output Provider: 11 个（edge_tts, gptsovits, omni_tts, vts, warudo, vrchat, subtitle, sticker, obs_control, remote_stream, mock）
+
+### 5. Pipeline 系统
+- Input Pipeline: rate_limit, similar_filter
+- Output Pipeline: profanity_filter
+
+### 6. 配置系统
+- 从旧配置系统迁移到 Pydantic Schema 验证
+- 支持配置文件自动生成
+- 配置覆盖机制
+
+---
+
+**最后更新**：2026年2月14日
 **维护者**：Amaidesu Team

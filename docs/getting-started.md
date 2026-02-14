@@ -157,8 +157,7 @@ Amaidesu/
 │   ├── prompts/         # 提示词管理
 │   └── domains/         # 业务域（input/decision/output）
 ├── tests/               # 测试
-├── docs/                # 文档
-└── refactor/            # 重构设计文档
+└── docs/                # 文档
 ```
 
 ## 下一步

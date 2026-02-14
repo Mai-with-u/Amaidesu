@@ -14,7 +14,7 @@
 
 | 目标 | 说明 |
 |------|------|
-| **集中管理** | 所有提示词集中在 `src/prompts/templates/` 目录 |
+| **集中管理** | 所有提示词集中在 `src/modules/prompts/templates/` 目录 |
 | **易于维护** | Markdown 格式，支持 YAML frontmatter 元数据 |
 | **零冲突语法** | `$variable` 语法与 JSON 零冲突，LLM 提示词无需转义 |
 | **配置覆盖** | 支持配置文件覆盖模板，保持向后兼容 |
