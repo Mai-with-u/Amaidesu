@@ -157,7 +157,7 @@ class DecisionProviderManager:
                     dependencies["config_service"] = self._config_service
                 if self._context_service:
                     dependencies["context_service"] = self._context_service
-                await self._current_provider.setup(self.event_bus, provider_config, dependencies)
+                await self._current_provider.start(self.event_bus, provider_config, dependencies)
                 self.logger.info(f"DecisionProvider '{provider_name}' 初始化成功")
 
                 # 发布Provider连接事件（使用emit）
@@ -241,7 +241,7 @@ class DecisionProviderManager:
 
                 # 设置新Provider
                 try:
-                    await new_provider.setup(self.event_bus, config, {})
+                    await new_provider.start(self.event_bus, config, {})
                     self.logger.info(f"DecisionProvider '{provider_name}' 初始化成功")
                 except Exception as e:
                     self.logger.error(f"DecisionProvider '{provider_name}' setup 失败: {e}", exc_info=True)

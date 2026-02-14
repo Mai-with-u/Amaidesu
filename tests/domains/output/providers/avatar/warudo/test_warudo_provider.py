@@ -88,7 +88,7 @@ class TestWarudoProviderConnection:
 
 class TestWarudoProviderRendering:
     @pytest.mark.asyncio
-    async def test_render_internal_with_expressions(self, warudo_config):
+    async def testexecute_with_expressions(self, warudo_config):
         provider = WarudoOutputProvider(warudo_config)
         # 创建 AsyncMock 的 websocket
         mock_ws = MagicMock()
@@ -96,23 +96,23 @@ class TestWarudoProviderRendering:
         provider.websocket = mock_ws
         provider._is_connected = True
 
-        # 使用 Intent 调用基类的 _render_internal
+        # 使用 Intent 调用基类的 execute
         intent = Intent(
             original_text="测试",
             response_text="测试",
             emotion=EmotionType.HAPPY,
             actions=[],
         )
-        await provider._render_internal(intent)
+        await provider.execute(intent)
 
         assert mock_ws.send_json.call_count >= 1
 
     @pytest.mark.asyncio
-    async def test_render_internal_when_not_connected(self, warudo_config):
+    async def testexecute_when_not_connected(self, warudo_config):
         provider = WarudoOutputProvider(warudo_config)
         provider._is_connected = False
 
-        # 使用 Intent 调用基类的 _render_internal
+        # 使用 Intent 调用基类的 execute
         intent = Intent(
             original_text="测试",
             response_text="测试",
@@ -120,7 +120,7 @@ class TestWarudoProviderRendering:
             actions=[],
         )
         # 应该不抛出异常，只是跳过渲染
-        await provider._render_internal(intent)
+        await provider.execute(intent)
 
 
 class TestWarudoProviderMoodManagement:
@@ -227,14 +227,14 @@ class TestWarudoProviderStatistics:
         mock_ws.send_json = AsyncMock()
         provider.websocket = mock_ws
 
-        # 使用 Intent 调用基类的 _render_internal
+        # 使用 Intent 调用基类的 execute
         intent = Intent(
             original_text="测试",
             response_text="测试",
             emotion=EmotionType.HAPPY,
             actions=[],
         )
-        asyncio.run(provider._render_internal(intent))
+        asyncio.run(provider.execute(intent))
 
         stats = provider.get_stats()
         assert stats["render_count"] == 1

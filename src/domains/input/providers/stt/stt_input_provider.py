@@ -239,7 +239,7 @@ class STTInputProvider(InputProvider):
 
         return None
 
-    async def start(self) -> AsyncIterator[NormalizedMessage]:
+    async def generate(self) -> AsyncIterator[NormalizedMessage]:
         """
         采集语音数据并生成 RawData
 

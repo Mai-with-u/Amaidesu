@@ -145,27 +145,17 @@ class MaiCoreDecisionProvider(DecisionProvider):
         self._pending_futures: Dict[str, asyncio.Future] = {}
         self._futures_lock = asyncio.Lock()
 
-    async def setup(
-        self,
-        event_bus: "EventBus",
-        config: Optional[Dict[str, Any]] = None,
-        dependencies: Optional[Dict[str, Any]] = None,
-    ) -> None:
+    async def init(self) -> None:
         """
-        设置 MaiCoreDecisionProvider
+        初始化 MaiCoreDecisionProvider
 
-        Args:
-            event_bus: EventBus 实例
-            config: Provider 配置（忽略，使用 __init__ 传入的 config）
-            dependencies: 依赖注入字典，可能包含 llm_service
+        配置 Router 并创建 RouterAdapter。
         """
-        self._event_bus = event_bus
         self.logger.info("初始化 MaiCoreDecisionProvider...")
 
         # 保存依赖注入
-        if dependencies:
-            self._dependencies.update(dependencies)
-            llm_service = dependencies.get("llm_service")
+        if self._dependencies:
+            llm_service = self._dependencies.get("llm_service")
             if llm_service:
                 self.logger.info("LLMService 已注入，将使用 LLM 进行 Intent 解析")
             else:
@@ -179,7 +169,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
             raise RuntimeError("Router 初始化失败")
 
         # 创建 RouterAdapter
-        self._router_adapter = RouterAdapter(self._router, event_bus)
+        self._router_adapter = RouterAdapter(self._router, self.event_bus)
         self._router_adapter.register_message_handler(self._handle_maicore_message)
 
         self.logger.info("MaiCoreDecisionProvider 初始化完成")

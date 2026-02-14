@@ -139,6 +139,9 @@ class RemoteStreamOutputProvider(OutputProvider):
         super().__init__(config)
         self.logger = get_logger("RemoteStreamOutputProvider")
 
+        # 设置状态
+        self.is_setup = False
+
         # 使用 ConfigSchema 验证配置，获得类型安全的配置对象
         self.typed_config = self.ConfigSchema(**config)
 
@@ -185,6 +188,10 @@ class RemoteStreamOutputProvider(OutputProvider):
         # AudioStreamChannel 订阅
         self._remote_subscription_id: Optional[str] = None
 
+    async def init(self):
+        """初始化 Provider"""
+        await self._setup_internal()
+
     async def _setup_internal(self):
         """内部设置逻辑"""
         # 检查依赖
@@ -210,6 +217,8 @@ class RemoteStreamOutputProvider(OutputProvider):
             )
             self.logger.info("RemoteStream 已订阅 AudioStreamChannel")
 
+        self.is_setup = True
+
         # 启动WebSocket服务器或客户端
         if self.server_mode:
             self.server_task = asyncio.create_task(self._run_server())
@@ -220,9 +229,9 @@ class RemoteStreamOutputProvider(OutputProvider):
 
         self.logger.info("RemoteStreamOutputProvider 已设置")
 
-    async def _render_internal(self, intent: Intent):
+    async def execute(self, intent: Intent):
         """
-        内部渲染逻辑
+        执行意图
 
         Args:
             intent: 决策意图
@@ -233,8 +242,8 @@ class RemoteStreamOutputProvider(OutputProvider):
             self.logger.debug(f"准备发送字幕数据: {intent.response_text[:50]}...")
             await self._send_subtitle(intent.response_text)
 
-    async def _cleanup_internal(self):
-        """内部清理逻辑"""
+    async def cleanup(self):
+        """清理资源"""
         self.logger.info("正在清理RemoteStreamOutputProvider...")
 
         # 取消 AudioStreamChannel 订阅
@@ -286,6 +295,7 @@ class RemoteStreamOutputProvider(OutputProvider):
             self.event_bus.off(CoreEvents.REMOTE_STREAM_REQUEST_IMAGE, self._handle_image_request)
 
         self._is_connected = False
+        self.is_setup = False
         self.logger.info("RemoteStreamOutputProvider 已清理")
 
     # ===== 连接管理 =====

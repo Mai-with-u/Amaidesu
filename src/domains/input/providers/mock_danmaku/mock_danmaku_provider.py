@@ -65,14 +65,13 @@ class MockDanmakuInputProvider(InputProvider):
         self._current_line_index: int = 0
         self._stop_event = asyncio.Event()
 
-    async def start(self) -> AsyncIterator[NormalizedMessage]:
+    async def generate(self) -> AsyncIterator[NormalizedMessage]:
         """
         启动模拟弹幕发送循环，直接返回 NormalizedMessage 流
 
         Yields:
             NormalizedMessage: 标准化消息
         """
-        await self._setup_internal()
         self.is_running = True
 
         try:
@@ -147,7 +146,6 @@ class MockDanmakuInputProvider(InputProvider):
 
         finally:
             self.is_running = False
-            await self._cleanup_internal()
 
     async def _load_message_lines(self):
         """从 JSONL 文件加载消息行。"""

@@ -57,14 +57,13 @@ class BiliDanmakuInputProvider(InputProvider):
         self._latest_timestamp: float = time.time()
         self._session: Optional[aiohttp.ClientSession] = None
 
-    async def start(self) -> AsyncIterator[NormalizedMessage]:
+    async def generate(self) -> AsyncIterator[NormalizedMessage]:
         """
         采集弹幕数据
 
         Yields:
             NormalizedMessage: 弹幕标准化消息
         """
-        await self._setup_internal()
         self.is_running = True
 
         try:
@@ -98,7 +97,6 @@ class BiliDanmakuInputProvider(InputProvider):
             self.logger.error(f"数据采集出错: {e}", exc_info=True)
         finally:
             self.is_running = False
-            await self._cleanup_internal()
             self.logger.info("Bilibili 弹幕采集已停止")
 
     async def _fetch_and_process(self):

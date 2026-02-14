@@ -167,9 +167,9 @@ class OmniTTSProvider(OutputProvider):
         # AudioStreamChannel 已由基类设置，通过属性访问
         self.logger.info("OmniTTSProvider设置完成")
 
-    async def _render_internal(self, intent: Intent):
+    async def execute(self, intent: Intent):
         """
-        渲染TTS输出
+        执行 TTS 输出
 
         Args:
             intent: Intent对象

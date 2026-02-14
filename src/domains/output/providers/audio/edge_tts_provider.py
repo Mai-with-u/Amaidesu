@@ -72,7 +72,7 @@ class EdgeTTSProvider(OutputProvider):
         self.voice = self.typed_config.voice
         self.output_device_name = self.typed_config.output_device_name or ""
 
-        # 音频设备管理器（在_start_internal中初始化）
+        # 音频设备管理器（在 init 中初始化）
         self.audio_manager: Optional[AudioDeviceManager] = None
 
         # 音频播放配置
@@ -80,8 +80,8 @@ class EdgeTTSProvider(OutputProvider):
 
         self.logger.info(f"EdgeTTSProvider初始化完成，语音: {self.voice}")
 
-    async def _start_internal(self):
-        """内部启动逻辑"""
+    async def init(self):
+        """初始化 Provider"""
         # 验证依赖
         if not DEPENDENCIES_OK:
             raise RuntimeError("缺少必要的依赖: soundfile")
@@ -112,9 +112,9 @@ class EdgeTTSProvider(OutputProvider):
 
         self.logger.info("EdgeTTSProvider启动完成")
 
-    async def _render_internal(self, intent: "Intent"):
+    async def execute(self, intent: "Intent"):
         """
-        渲染TTS输出
+        执行 TTS 输出
 
         Args:
             intent: Intent对象
@@ -224,8 +224,8 @@ class EdgeTTSProvider(OutputProvider):
             # 返回静音作为降级方案
             return np.zeros(44100, dtype=np.float32), 16000
 
-    async def _stop_internal(self):
-        """内部停止逻辑"""
+    async def cleanup(self):
+        """清理资源"""
         self.logger.info("EdgeTTSProvider停止中...")
 
         # 停止所有播放

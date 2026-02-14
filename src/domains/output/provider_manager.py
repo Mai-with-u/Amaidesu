@@ -378,9 +378,7 @@ class OutputProviderManager:
 
         return results
 
-    async def _render_concurrent(
-        self, providers: list[OutputProvider], intent: "Intent"
-    ) -> list[RenderResult]:
+    async def _render_concurrent(self, providers: list[OutputProvider], intent: "Intent") -> list[RenderResult]:
         """
         @deprecated 内部方法，已废弃。
 
@@ -427,9 +425,7 @@ class OutputProviderManager:
 
         return results
 
-    async def _render_sequential(
-        self, providers: list[OutputProvider], intent: "Intent"
-    ) -> list[RenderResult]:
+    async def _render_sequential(self, providers: list[OutputProvider], intent: "Intent") -> list[RenderResult]:
         """
         @deprecated 内部方法，已废弃。
 
@@ -478,11 +474,11 @@ class OutputProviderManager:
         start_time = time.time()
 
         try:
-            # 执行渲染（带超时）- 使用 _render_internal 而非已废弃的 render()
+            # 执行渲染（带超时）- 使用 execute 方法
             if self.render_timeout > 0:
-                await asyncio.wait_for(provider._render_internal(intent), timeout=self.render_timeout)
+                await asyncio.wait_for(provider.execute(intent), timeout=self.render_timeout)
             else:
-                await provider._render_internal(intent)
+                await provider.execute(intent)
 
             duration = time.time() - start_time
             self.logger.debug(f"Provider渲染成功: {provider_name} (耗时: {duration:.3f}s)")
@@ -520,8 +516,8 @@ class OutputProviderManager:
         for provider in self.providers:
             if provider.is_started:
                 try:
-                    # Provider的cleanup方法会处理停止逻辑
-                    await provider.cleanup()
+                    # 调用 stop 方法，它会调用 cleanup 并设置 is_started = False
+                    await provider.stop()
                 except Exception as e:
                     self.logger.error(f"Provider停止失败: {provider.get_info()['name']} - {e}")
 

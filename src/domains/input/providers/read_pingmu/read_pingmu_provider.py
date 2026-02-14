@@ -82,14 +82,13 @@ class ReadPingmuInputProvider(InputProvider):
         # 消息队列（用于将回调转换为异步生成器）
         self._message_queue: Optional[asyncio.Queue] = None
 
-    async def start(self) -> AsyncIterator[NormalizedMessage]:
+    async def generate(self) -> AsyncIterator[NormalizedMessage]:
         """
         启动 Provider 并返回 NormalizedMessage 流
 
         Yields:
             NormalizedMessage: 屏幕描述消息
         """
-        await self._setup_internal()
         self.is_running = True
 
         # 创建消息队列
@@ -147,7 +146,6 @@ class ReadPingmuInputProvider(InputProvider):
             self.logger.error(f"数据采集出错: {e}", exc_info=True)
         finally:
             self.is_running = False
-            await self._cleanup_internal()
             self.logger.info("ReadPingmuInputProvider 已停止")
 
     async def _monitoring_loop(self):

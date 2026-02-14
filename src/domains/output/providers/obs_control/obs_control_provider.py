@@ -119,8 +119,8 @@ class ObsControlOutputProvider(OutputProvider):
             f"逐字效果: {'启用' if self.typewriter_enabled else '禁用'}"
         )
 
-    async def _start_internal(self):
-        """内部启动逻辑 - 基类已订阅 OUTPUT_INTENT 事件"""
+    async def init(self):
+        """初始化 Provider"""
         if obs is None:
             self.logger.error("obsws-python库未安装，请运行: uv add obsws-python")
             raise RuntimeError("obsws-python库未安装")
@@ -133,9 +133,9 @@ class ObsControlOutputProvider(OutputProvider):
         self.event_bus.on(CoreEvents.OBS_SWITCH_SCENE, self._handle_switch_scene_event)
         self.event_bus.on(CoreEvents.OBS_SET_SOURCE_VISIBILITY, self._handle_set_source_visibility_event)
 
-    async def _render_internal(self, intent: "Intent"):
+    async def execute(self, intent: "Intent"):
         """
-        内部渲染逻辑
+        执行意图
 
         从Intent中提取文本并发送到OBS
 
@@ -408,8 +408,8 @@ class ObsControlOutputProvider(OutputProvider):
         else:
             self.logger.warning("事件数据中未包含源名称")
 
-    async def _stop_internal(self):
-        """内部停止逻辑"""
+    async def cleanup(self):
+        """清理资源"""
         # 取消事件监听（OBS特有的事件，不属于 OUTPUT_INTENT）
         if self.event_bus:
             self.event_bus.off(CoreEvents.OBS_SEND_TEXT, self._handle_send_text_event)

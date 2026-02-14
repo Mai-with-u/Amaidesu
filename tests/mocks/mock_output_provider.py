@@ -22,8 +22,8 @@ class MockOutputProvider(OutputProvider):
         """向后兼容属性：返回 received_intents"""
         return self.received_intents
 
-    async def _render_internal(self, intent: "Intent") -> bool:
-        """渲染（记录 Intent）"""
+    async def execute(self, intent: "Intent") -> bool:
+        """执行意图（记录 Intent）"""
         self.received_intents.append(intent)
         return True
 
@@ -38,7 +38,3 @@ class MockOutputProvider(OutputProvider):
     def clear(self):
         """清空记录"""
         self.received_intents.clear()
-
-    async def cleanup(self):
-        """清理方法（兼容性）"""
-        await self.stop()

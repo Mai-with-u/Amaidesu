@@ -166,30 +166,30 @@ class TestStickerOutputProvider:
         assert resized == invalid_base64
 
     @pytest.mark.asyncio
-    async def test_start_internal(self, sticker_config):
-        """测试内部启动逻辑"""
+    async def test_init(self, sticker_config):
+        """测试初始化逻辑"""
         provider = StickerOutputProvider(sticker_config)
         # _find_vts_provider 返回 None，所以不会有 VTS Provider
-        await provider._start_internal()
+        await provider.init()
         # 不应该抛出异常
 
     @pytest.mark.asyncio
-    async def test_render_internal_in_cooldown(self, sticker_config, sample_intent_with_sticker):
-        """测试冷却期内的渲染"""
+    async def test_execute_in_cooldown(self, sticker_config, sample_intent_with_sticker):
+        """测试冷却期内的执行"""
         provider = StickerOutputProvider(sticker_config)
 
         # 设置最近触发时间
         provider.last_trigger_time = time.monotonic()
 
-        # 尝试渲染
-        await provider._render_internal(sample_intent_with_sticker)
+        # 尝试执行
+        await provider.execute(sample_intent_with_sticker)
 
         # 由于在冷却期内，send_to_vts不应该被调用
         # 我们可以验证last_trigger_time没有更新太多
 
     @pytest.mark.asyncio
-    async def test_render_internal_without_sticker_action(self, sticker_config, sample_intent_without_sticker):
-        """测试没有 STICKER 动作的渲染"""
+    async def test_execute_without_sticker_action(self, sticker_config, sample_intent_without_sticker):
+        """测试没有 STICKER 动作的执行"""
         provider = StickerOutputProvider(sticker_config)
 
         # 确保不在冷却期
@@ -198,15 +198,15 @@ class TestStickerOutputProvider:
         # Mock _send_to_vts
         provider._send_to_vts = AsyncMock()
 
-        # 尝试渲染
-        await provider._render_internal(sample_intent_without_sticker)
+        # 尝试执行
+        await provider.execute(sample_intent_without_sticker)
 
         # send_to_vts不应该被调用
         provider._send_to_vts.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_render_internal_success(self, sticker_config, sample_intent_with_sticker):
-        """测试成功的渲染"""
+    async def test_execute_success(self, sticker_config, sample_intent_with_sticker):
+        """测试成功的执行"""
         provider = StickerOutputProvider(sticker_config)
 
         # Mock VTS Provider
@@ -217,8 +217,8 @@ class TestStickerOutputProvider:
         # 确保不在冷却期
         provider.last_trigger_time = 0
 
-        # 执行渲染
-        await provider._render_internal(sample_intent_with_sticker)
+        # 执行
+        await provider.execute(sample_intent_with_sticker)
 
         # 验证load_item被调用
         provider._vts_provider.load_item.assert_called_once()
@@ -248,16 +248,16 @@ class TestStickerOutputProvider:
         assert call_args[1]["rotation"] == 90
 
     @pytest.mark.asyncio
-    async def test_stop_internal(self, sticker_config):
-        """测试内部停止逻辑"""
+    async def test_cleanup(self, sticker_config):
+        """测试清理资源"""
         provider = StickerOutputProvider(sticker_config)
 
         # 清理不应该抛出异常
-        await provider._stop_internal()
+        await provider.cleanup()
 
     @pytest.mark.asyncio
-    async def test_full_render_workflow(self, sticker_config, sample_intent_with_sticker):
-        """测试完整的渲染工作流"""
+    async def test_full_execute_workflow(self, sticker_config, sample_intent_with_sticker):
+        """测试完整的执行工作流"""
         provider = StickerOutputProvider(sticker_config)
 
         # Mock VTS Provider
@@ -268,8 +268,8 @@ class TestStickerOutputProvider:
         # 确保不在冷却期
         provider.last_trigger_time = 0
 
-        # 执行渲染
-        await provider._render_internal(sample_intent_with_sticker)
+        # 执行
+        await provider.execute(sample_intent_with_sticker)
 
         # 验证load_item被调用
         provider._vts_provider.load_item.assert_called_once()
@@ -277,8 +277,8 @@ class TestStickerOutputProvider:
         assert provider.last_trigger_time > 0
 
     @pytest.mark.asyncio
-    async def test_render_without_vts_provider(self, sticker_config, sample_intent_with_sticker):
-        """测试没有 VTS Provider 时的渲染"""
+    async def test_execute_without_vts_provider(self, sticker_config, sample_intent_with_sticker):
+        """测试没有 VTS Provider 时的执行"""
         provider = StickerOutputProvider(sticker_config)
         # _vts_provider 默认为 None
 
@@ -288,8 +288,8 @@ class TestStickerOutputProvider:
         # Mock _send_to_vts
         provider._send_to_vts = AsyncMock()
 
-        # 执行渲染
-        await provider._render_internal(sample_intent_with_sticker)
+        # 执行
+        await provider.execute(sample_intent_with_sticker)
 
         # send_to_vts不应该被调用
         provider._send_to_vts.assert_not_called()

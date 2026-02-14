@@ -225,7 +225,7 @@ class VTSProvider(BaseAvatarProvider):
             plugin_info = {
                 "plugin_name": "Amaidesu_VTS_OutputProvider",
                 "developer": "Phase 4 Implementation",
-                "authentication_token_path": "./refactor/vts_token.txt",
+                "authentication_token_path": "./vts_token.txt",
                 "vts_host": self.vts_host,
                 "vts_port": self.vts_port,
             }

@@ -75,8 +75,8 @@ class StickerOutputProvider(OutputProvider):
         self._current_sticker_id: Optional[str] = None
         self._unload_task: Optional[Any] = None
 
-    async def _start_internal(self):
-        """内部启动逻辑"""
+    async def init(self):
+        """初始化 Provider"""
         # 查找 VTS Provider（通过 ProviderManager）
         self._vts_provider = await self._find_vts_provider()
         if self._vts_provider:
@@ -84,9 +84,9 @@ class StickerOutputProvider(OutputProvider):
         else:
             self.logger.warning("未找到 VTS Provider，贴纸功能将被禁用")
 
-    async def _render_internal(self, intent: "Intent"):
+    async def execute(self, intent: "Intent"):
         """
-        内部渲染逻辑
+        执行意图
 
         Args:
             intent: 意图对象，从 intent.actions 中获取 ActionType.STICKER 类型的动作
@@ -260,8 +260,8 @@ class StickerOutputProvider(OutputProvider):
         # 当前返回 None，需要集成实际的 Provider 查找逻辑
         return None
 
-    async def _stop_internal(self):
-        """内部停止逻辑"""
+    async def cleanup(self):
+        """清理资源"""
         # 取消卸载任务
         if self._unload_task and not self._unload_task.done():
             self._unload_task.cancel()

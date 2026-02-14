@@ -174,9 +174,9 @@ class GPTSoVITSOutputProvider(OutputProvider):
 
         self.logger.info("GPTSoVITSOutputProvider清理完成")
 
-    async def _render_internal(self, intent: "Intent"):
+    async def execute(self, intent: "Intent"):
         """
-        内部渲染逻辑
+        执行 TTS 输出
 
         Args:
             intent: Intent对象，从 response_text 获取 TTS 文本

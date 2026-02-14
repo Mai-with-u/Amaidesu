@@ -77,7 +77,7 @@ class MockOutputProvider(OutputProvider):
         super().__init__(config)
         self.provider_type = "mock_output"
 
-    async def _render_internal(self, parameters):
+    async def execute(self, intent):
         pass
 
     @classmethod

@@ -44,11 +44,9 @@ class MockDecisionProviderForManager(DecisionProvider):
         self.call_count = 0
         self.last_message = None
 
-    async def setup(self, event_bus, config, dependencies):
-        """Setup method"""
+    async def init(self):
+        """Init method"""
         self.setup_called = True
-        self.event_bus = event_bus
-        self.config = config
 
     async def cleanup(self):
         """Cleanup method"""
@@ -89,13 +87,13 @@ class MockDecisionProviderForManager(DecisionProvider):
 
 
 class FailingMockDecisionProvider(DecisionProvider):
-    """Mock provider that fails during setup"""
+    """Mock provider that fails during init"""
 
     def __init__(self, config: Dict[str, Any] = None):
         super().__init__(config or {})
 
-    async def setup(self, event_bus, config, dependencies):
-        raise ConnectionError("Setup failed")
+    async def init(self):
+        raise ConnectionError("Init failed")
 
     async def cleanup(self):
         pass
@@ -116,7 +114,7 @@ class NoneReturningMockProvider(DecisionProvider):
     def __init__(self, config: Dict[str, Any] = None):
         super().__init__(config or {})
 
-    async def setup(self, event_bus, config, dependencies):
+    async def init(self):
         pass
 
     async def cleanup(self):
@@ -742,7 +740,7 @@ async def test_cleanup_handles_provider_error(event_bus, mock_provider_class):
         def __init__(self, config: Dict[str, Any] = None):
             super().__init__(config or {})
 
-        async def setup(self, event_bus, config, dependencies):
+        async def init(self):
             pass
 
         async def cleanup(self):

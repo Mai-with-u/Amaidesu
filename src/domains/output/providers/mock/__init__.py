@@ -33,22 +33,18 @@ class MockOutputProvider(OutputProvider):
 
         self.logger.info("MockOutputProvider初始化完成")
 
-    async def _render_internal(self, intent: "Intent") -> None:
-        """记录收到的 Intent（内部渲染逻辑）"""
+    async def execute(self, intent: "Intent") -> None:
+        """记录收到的 Intent"""
         self.received_intents.append(intent)
         response_text = intent.response_text[:50] if intent.response_text else ""
         self.logger.debug(f"收到 Intent: response_text={response_text}...")
 
-    async def _start_internal(self) -> None:
-        """启动Provider（内部启动逻辑）"""
+    async def init(self) -> None:
+        """初始化 Provider"""
         self.logger.info("MockOutputProvider启动完成")
 
-    async def _stop_internal(self) -> None:
-        """停止Provider（内部停止逻辑）"""
-        self.logger.info("MockOutputProvider停止完成")
-
     async def cleanup(self) -> None:
-        """清理Provider"""
+        """清理 Provider"""
         self.logger.info(f"MockOutputProvider清理完成，共收到 {len(self.received_intents)} 条 Intent")
 
     def get_received_intents(self):

@@ -183,7 +183,7 @@ class TestRemoteStreamOutputProvider:
             assert mock_event_bus.on.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_cleanup_internal(self, remote_stream_config):
+    async def testcleanup(self, remote_stream_config):
         """测试内部清理"""
         provider = RemoteStreamOutputProvider(remote_stream_config)
 
@@ -192,7 +192,7 @@ class TestRemoteStreamOutputProvider:
         provider.server_task.done = MagicMock(return_value=True)
 
         # 清理不应该抛出异常
-        await provider._cleanup_internal()
+        await provider.cleanup()
 
         assert not provider.should_reconnect
 
@@ -244,10 +244,10 @@ class TestRemoteStreamOutputProvider:
         assert result
 
     @pytest.mark.asyncio
-    async def test_render_internal_with_tts(self, remote_stream_config, mock_event_bus):
+    async def testexecute_with_tts(self, remote_stream_config, mock_event_bus):
         """测试带TTS的渲染"""
         provider = RemoteStreamOutputProvider(remote_stream_config)
-        await provider.setup(mock_event_bus)
+        await provider.start(mock_event_bus)
 
         # Mock _send_subtitle
         provider._send_subtitle = AsyncMock()
@@ -261,7 +261,7 @@ class TestRemoteStreamOutputProvider:
         )
 
         # 执行渲染
-        await provider._render_internal(render_params)
+        await provider.execute(render_params)
 
         # 验证字幕被发送
         provider._send_subtitle.assert_called_once_with("测试字幕")
@@ -500,7 +500,7 @@ class TestRemoteStreamOutputProvider:
     async def test_handle_image_request_event(self, remote_stream_config, mock_event_bus):
         """测试处理图像请求事件"""
         provider = RemoteStreamOutputProvider(remote_stream_config)
-        await provider.setup(mock_event_bus)
+        await provider.start(mock_event_bus)
 
         # Mock request_image
         provider.request_image = AsyncMock(return_value=True)
@@ -632,7 +632,7 @@ class TestRemoteStreamOutputProvider:
             mock_ws.serve = MagicMock(return_value=mock_server)
 
             # 设置provider
-            await provider.setup(mock_event_bus)
+            await provider.start(mock_event_bus)
 
             # 验证设置成功
             assert provider.is_setup

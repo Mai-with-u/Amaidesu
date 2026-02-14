@@ -19,7 +19,7 @@ from src.modules.types.base.normalized_message import NormalizedMessage
 
 class InputProvider(ABC):
     """
-    输入Provider抽象基类（重构后）
+    输入Provider抽象基类
 
     职责: 从外部数据源采集数据并直接构造 NormalizedMessage
 
@@ -28,12 +28,16 @@ class InputProvider(ABC):
     生命周期:
     1. 实例化(__init__)
     2. 启动(start()) - 返回异步生成器,产生 NormalizedMessage
-    3. 停止(stop()) - 清理资源
+       - start() 会先调用 init() 进行初始化
+       - 然后返回 AsyncIterator
+    3. 停止(stop()) - 调用 cleanup() 清理资源
 
-    内部方法约定:
-    - _setup_internal(): 内部初始化方法,在start()开始时调用
-    - _cleanup_internal(): 内部清理方法,在stop()时调用
-    - _cleanup(): _cleanup_internal()的别名,保持向后兼容
+    公开方法:
+    - init(): 初始化资源配置（子类可重写）
+    - start(): 启动 Provider 并返回 AsyncIterator
+    - stop(): 停止 Provider
+    - cleanup(): 清理资源（子类可重写）
+    - generate(): 生成 NormalizedMessage 数据流（子类必须实现）
 
     Attributes:
         config: Provider配置(来自新配置格式)
@@ -52,69 +56,83 @@ class InputProvider(ABC):
         self.is_running = False
         self._dependencies: Dict[str, Any] = {}
 
-    @abstractmethod
+    async def init(self) -> None:  # noqa: B027
+        """
+        初始化资源配置（子类可重写）
+
+        执行初始化逻辑，如建立连接、加载配置等。
+        此方法在 start() 开始时调用。
+
+        子类可以重写此方法来执行初始化逻辑，
+        如建立连接、打开文件句柄等。
+        """
+        pass
+
     async def start(self) -> AsyncIterator[NormalizedMessage]:
         """
         启动 Provider 并返回 NormalizedMessage 流
 
-        重构后：直接返回 NormalizedMessage，不再返回 RawData
+        此方法会先调用 init() 进行初始化，
+        然后返回一个 AsyncIterator。
 
         Yields:
             NormalizedMessage: 标准化消息
 
         Raises:
             ConnectionError: 如果无法连接到数据源
-
-        Note:
-            子类必须实现此方法，直接构造 NormalizedMessage
         """
-        pass
+        await self.init()
+        self.is_running = True
+        async for message in self.generate():
+            yield message
 
     async def stop(self):
         """
-        停止Provider
+        停止 Provider
 
-        停止数据采集并清理资源。
+        停止数据采集并调用 cleanup() 清理资源。
         """
         self.is_running = False
-        await self._cleanup()
+        await self.cleanup()
 
-    async def cleanup(self):
+    async def cleanup(self) -> None:  # noqa: B027
         """
-        清理资源（公开方法，供外部调用）
+        清理资源（子类可重写）
 
-        此方法供 InputProviderManager 等外部管理器调用。
-        默认调用 _cleanup() 方法（该方法会调用 _cleanup_internal()）。
+        执行清理逻辑，如关闭连接、释放资源等。
+        此方法在 stop() 时调用。
 
-        子类可以重写 _cleanup() 或 _cleanup_internal() 方法来实现自定义清理逻辑。
-        """
-        await self._cleanup()
-
-    async def _setup_internal(self):  # noqa: B027
-        """
-        内部初始化方法(子类可选重写)
-
-        子类可以重写此方法来执行初始化逻辑,
-        如建立连接、打开文件句柄等。
-        此方法在start()开始时调用。
+        子类可以重写此方法来执行自定义清理逻辑。
         """
         pass
 
-    async def _cleanup_internal(self):  # noqa: B027
+    @abstractmethod
+    async def generate(self) -> AsyncIterator[NormalizedMessage]:
         """
-        内部清理方法(子类可选重写)
+        生成 NormalizedMessage 数据流（子类必须实现）
 
-        子类可以重写此方法来执行清理逻辑,
-        如关闭连接、释放文件句柄等。
-        此方法在stop()时调用。
+        子类必须实现此方法来定义数据生成逻辑。
+
+        Yields:
+            NormalizedMessage: 标准化消息
         """
         pass
 
-    async def _cleanup(self):  # noqa: B027
+    # 向后兼容别名
+    async def _setup_internal(self) -> None:  # noqa: B027
         """
-        清理资源别名方法(向后兼容)
+        内部初始化方法（向后兼容别名）
 
-        此方法调用 _cleanup_internal() 以保持向后兼容性。
-        子类应该重写 _cleanup_internal() 而非此方法。
+        此方法已弃用，请使用 init() 方法代替。
+        为保持向后兼容，此方法仍可使用。
         """
-        await self._cleanup_internal()
+        await self.init()
+
+    async def _cleanup_internal(self) -> None:  # noqa: B027
+        """
+        内部清理方法（向后兼容别名）
+
+        此方法已弃用，请使用 cleanup() 方法代替。
+        为保持向后兼容，此方法仍可使用。
+        """
+        await self.cleanup()
