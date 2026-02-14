@@ -399,13 +399,15 @@ class VTSProvider(BaseAvatarProvider):
             finally:
                 self._vts_subscription_id = None
 
-        if self._vts:
+        if self._vts and hasattr(self._vts, 'close') and callable(self._vts.close):
             self.logger.info("正在断开VTS连接...")
             try:
                 await self._vts.close()
                 self.logger.info("VTS连接已断开")
             except Exception as e:
                 self.logger.error(f"断开VTS连接失败: {e}")
+            finally:
+                self._vts = None
 
         self._is_connected = False
         self._is_connecting = False
