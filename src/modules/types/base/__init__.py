@@ -10,7 +10,6 @@ Provider抽象基类
 - NormalizedMessage: 标准化消息
 
 注意:
-- RenderParameters 已移至 src.domains.output.parameters.render_parameters (直接从那里导入)
 """
 
 from .base import NormalizedMessage
