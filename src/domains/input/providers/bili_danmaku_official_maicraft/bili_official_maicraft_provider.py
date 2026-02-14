@@ -4,9 +4,14 @@ Bilibili 官方弹幕+Minecraft转发 InputProvider
 从 Bilibili 官方开放平台 WebSocket API 采集弹幕数据并转发到Minecraft服务器。
 """
 
+from __future__ import annotations
+
 import asyncio
 import contextlib
-from typing import Any, AsyncIterator, Dict, Literal, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Literal, Optional
+
+if TYPE_CHECKING:
+    from src.modules.di.context import ProviderContext
 
 from pydantic import Field, field_validator
 
@@ -130,8 +135,8 @@ class BiliDanmakuOfficialMaiCraftInputProvider(InputProvider):
                 raise ValueError("forward_ws_url必须以ws://或wss://开头")
             return v
 
-    def __init__(self, config: dict):
-        super().__init__(config)
+    def __init__(self, config: dict, context: "ProviderContext" = None):
+        super().__init__(config, context)
         self.logger = get_logger(self.__class__.__name__)
 
         # 配置

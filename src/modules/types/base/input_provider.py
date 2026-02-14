@@ -12,14 +12,15 @@ InputProvider负责从外部数据源采集数据并直接构造 NormalizedMessa
 """
 
 from abc import ABC, abstractmethod
-from typing import AsyncIterator, Dict, Any
+from typing import AsyncIterator
 
+from src.modules.di.context import ProviderContext
 from src.modules.types.base.normalized_message import NormalizedMessage
 
 
 class InputProvider(ABC):
     """
-    输入Provider抽象基类
+    输入Provider抽象基类 - 依赖注入版本
 
     职责: 从外部数据源采集数据并直接构造 NormalizedMessage
 
@@ -50,20 +51,30 @@ class InputProvider(ABC):
 
     Attributes:
         config: Provider配置(来自新配置格式)
+        context: 统一依赖上下文
         is_running: 是否已启动
-        _dependencies: 依赖注入字典
     """
 
-    def __init__(self, config: dict):
+    def __init__(
+        self,
+        config: dict,
+        context: ProviderContext = None,  # 新增：统一依赖上下文
+    ):
         """
         初始化Provider
 
         Args:
             config: Provider配置(来自perception.inputs.xxx配置)
+            context: 统一依赖上下文(可选)
         """
         self.config = config
+        self.context = context or ProviderContext()  # 默认空上下文
         self.is_running = False
-        self._dependencies: Dict[str, Any] = {}
+
+    @property
+    def event_bus(self):
+        """获取事件总线"""
+        return self.context.event_bus
 
     async def init(self) -> None:  # noqa: B027
         """

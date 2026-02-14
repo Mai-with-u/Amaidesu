@@ -4,9 +4,14 @@ Bilibili 官方弹幕 InputProvider
 从 Bilibili 官方开放平台 WebSocket API 采集弹幕数据。
 """
 
+from __future__ import annotations
+
 import asyncio
 import time
-from typing import Any, AsyncIterator, Dict, Literal, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Literal, Optional
+
+if TYPE_CHECKING:
+    from src.modules.di.context import ProviderContext
 
 from pydantic import Field
 
@@ -49,8 +54,8 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
         enable_template_info: bool = Field(default=False, description="启用模板信息")
         template_items: dict = Field(default_factory=dict, description="模板项")
 
-    def __init__(self, config: dict):
-        super().__init__(config)
+    def __init__(self, config: dict, context: "ProviderContext" = None):
+        super().__init__(config, context)
         self.logger = get_logger(self.__class__.__name__)
 
         # 配置

@@ -15,6 +15,7 @@ from src.modules.logging import get_logger
 from src.modules.types.base.output_provider import OutputProvider
 
 if TYPE_CHECKING:
+    from src.modules.di.context import ProviderContext
     from src.modules.types import Intent
 
 
@@ -26,8 +27,8 @@ class AvatarProviderBase(OutputProvider, ABC):
     子类只需实现平台特定的适配和渲染逻辑。
     """
 
-    def __init__(self, config: dict):
-        super().__init__(config)
+    def __init__(self, config: dict, context: "ProviderContext" = None):
+        super().__init__(config, context)
         self.logger = get_logger(self.__class__.__name__)
         self._is_connected = False
 

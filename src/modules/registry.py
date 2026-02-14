@@ -17,7 +17,10 @@ Provider Registry - Provider 注册表
 
 import importlib
 import inspect
-from typing import Any, Dict, List, Optional, Type
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type
+
+if TYPE_CHECKING:
+    from src.modules.di.context import ProviderContext
 
 from src.modules.logging import get_logger
 
@@ -199,13 +202,14 @@ class ProviderRegistry:
                 cls._logger.warning(f"Provider '{name}' 的 ConfigSchema 不是有效的类")
 
     @classmethod
-    def create_input(cls, name: str, config: Dict[str, Any]):
+    def create_input(cls, name: str, config: Dict[str, Any], context: "ProviderContext" = None):
         """
         创建输入 Provider 实例
 
         Args:
             name: Provider 名称
             config: Provider 配置（传递给 Provider.__init__）
+            context: ProviderContext 依赖上下文（可选）
 
         Returns:
             InputProvider 实例
@@ -218,16 +222,17 @@ class ProviderRegistry:
             raise ValueError(f"Unknown input provider: '{name}'. Available providers: {available or 'none'}")
 
         provider_class = cls._input_providers[name]
-        return provider_class(config)
+        return provider_class(config=config, context=context)
 
     @classmethod
-    def create_output(cls, name: str, config: Dict[str, Any]):
+    def create_output(cls, name: str, config: Dict[str, Any], context: "ProviderContext" = None):
         """
         创建输出 Provider 实例
 
         Args:
             name: Provider 名称
             config: Provider 配置
+            context: 可选的依赖注入上下文
 
         Returns:
             OutputProvider 实例
@@ -240,16 +245,17 @@ class ProviderRegistry:
             raise ValueError(f"Unknown output provider: '{name}'. Available providers: {available or 'none'}")
 
         provider_class = cls._output_providers[name]
-        return provider_class(config)
+        return provider_class(config=config, context=context)
 
     @classmethod
-    def create_decision(cls, name: str, config: Dict[str, Any]):
+    def create_decision(cls, name: str, config: Dict[str, Any], context: "ProviderContext" = None):
         """
         创建决策 Provider 实例
 
         Args:
             name: Provider 名称
             config: Provider 配置
+            context: 可选的依赖注入上下文
 
         Returns:
             DecisionProvider 实例
@@ -262,7 +268,7 @@ class ProviderRegistry:
             raise ValueError(f"Unknown decision provider: '{name}'. Available providers: {available or 'none'}")
 
         provider_class = cls._decision_providers[name]
-        return provider_class(config)
+        return provider_class(config=config, context=context)
 
     # ==================== 查询方法 ====================
 

@@ -18,18 +18,21 @@ DecisionProviderManager - 决策Provider管理器（合并自原 DecisionCoordin
 """
 
 import asyncio
+import os
+import sys
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
-    from src.modules.types import Intent, SourceContext
+    from src.modules.types import SourceContext
     from src.modules.config.service import ConfigService
     from src.modules.context.service import ContextService
     from src.modules.events.event_bus import EventBus
     from src.modules.events.payloads.input import MessageReadyPayload
     from src.modules.llm.manager import LLMManager
+    from src.modules.prompts.manager import PromptManager
     from src.modules.types.base.decision_provider import DecisionProvider
     from src.modules.types.base.normalized_message import NormalizedMessage
 
@@ -65,6 +68,7 @@ class DecisionProviderManager:
         llm_service: Optional["LLMManager"] = None,
         config_service: Optional["ConfigService"] = None,
         context_service: Optional["ContextService"] = None,
+        prompt_manager: "PromptManager" = None,
     ):
         """
         初始化DecisionProviderManager
@@ -74,11 +78,13 @@ class DecisionProviderManager:
             llm_service: 可选的LLMManager实例，将作为依赖注入到DecisionProvider
             config_service: 可选的ConfigService实例，将作为依赖注入到DecisionProvider
             context_service: 可选的ContextService实例，将作为依赖注入到DecisionProvider
+            prompt_manager: 可选的PromptManager实例，将作为依赖注入到DecisionProvider
         """
         self.event_bus = event_bus
         self._llm_service = llm_service
         self._config_service = config_service
         self._context_service = context_service
+        self._prompt_manager = prompt_manager
         self.logger = get_logger("DecisionProviderManager")
         self._current_provider: Optional["DecisionProvider"] = None
         self._provider_name: Optional[str] = None
@@ -140,7 +146,22 @@ class DecisionProviderManager:
             # 通过 ProviderRegistry 创建新Provider
             try:
                 self.logger.info(f"通过 ProviderRegistry 创建 DecisionProvider: {provider_name}")
-                self._current_provider = ProviderRegistry.create_decision(provider_name, provider_config)
+
+                # 创建 ProviderContext
+                from src.modules.di.context import ProviderContext
+
+                context = ProviderContext(
+                    event_bus=self.event_bus,
+                    llm_service=self._llm_service,
+                    config_service=self._config_service,
+                    context_service=self._context_service,
+                    prompt_service=self._prompt_manager,
+                )
+
+                # 创建 Provider 并传入 context
+                self._current_provider = ProviderRegistry.create_decision(
+                    provider_name, provider_config, context=context
+                )
                 self._provider_name = provider_name
             except ValueError as e:
                 available = ", ".join(ProviderRegistry.get_registered_decision_providers())
@@ -149,15 +170,8 @@ class DecisionProviderManager:
 
             # 初始化Provider
             try:
-                # 准备依赖注入
-                dependencies = {}
-                if self._llm_service:
-                    dependencies["llm_service"] = self._llm_service
-                if self._config_service:
-                    dependencies["config_service"] = self._config_service
-                if self._context_service:
-                    dependencies["context_service"] = self._context_service
-                await self._current_provider.start(self.event_bus, provider_config, dependencies)
+                # 启动 Provider（使用 context 中的 event_bus）
+                await self._current_provider.start()
                 self.logger.info(f"DecisionProvider '{provider_name}' 初始化成功")
 
                 # 发布Provider连接事件（使用emit）
@@ -181,31 +195,28 @@ class DecisionProviderManager:
         # 订阅 data.message 事件
         self._subscribe_data_message_event()
 
-    async def decide(self, normalized_message: "NormalizedMessage") -> "Intent":
+    async def decide(self, normalized_message: "NormalizedMessage") -> None:
         """
-        进行决策
+        触发决策（fire-and-forget）
 
-        Args:
-            normalized_message: 标准化消息
+        调用当前 Provider 的 decide() 方法，但不等待返回值。
+        决策结果通过 Provider 内部发布的事件传递。
 
-        Returns:
-            Intent: 决策意图
-
-        Raises:
-            RuntimeError: 如果当前Provider未设置
+        注意:
+            - 此方法不返回任何值
+            - Provider 内部通过 event_bus 发布 decision.intent 事件
         """
         if not self._current_provider:
-            raise RuntimeError("当前未设置DecisionProvider，请先调用 setup()")
+            self.logger.warning("当前未设置 DecisionProvider，跳过决策")
+            return
 
-        self.logger.debug(f"进行决策 (Provider: {self._provider_name}, Text: {normalized_message.text[:50]})")
+        self.logger.debug(f"触发决策 (Provider: {self._provider_name})")
+
         try:
-            result = await self._current_provider.decide(normalized_message)
-            self.logger.debug(f"决策完成: {result}")
-            return result
+            # Fire-and-forget: 不等待返回值
+            await self._current_provider.decide(normalized_message)
         except Exception as e:
-            self.logger.error(f"决策失败: {e}", exc_info=True)
-            # 优雅降级: 抛出异常让上层处理
-            raise
+            self.logger.error(f"触发决策失败: {e}", exc_info=True)
 
     async def switch_provider(self, provider_name: str, config: Dict[str, Any]) -> None:
         """
@@ -232,7 +243,20 @@ class DecisionProviderManager:
                 # 通过 ProviderRegistry 创建新Provider
                 try:
                     self.logger.info(f"通过 ProviderRegistry 创建 DecisionProvider: {provider_name}")
-                    new_provider = ProviderRegistry.create_decision(provider_name, config)
+
+                    # 创建 ProviderContext
+                    from src.modules.di.context import ProviderContext
+
+                    context = ProviderContext(
+                        event_bus=self.event_bus,
+                        llm_service=self._llm_service,
+                        config_service=self._config_service,
+                        context_service=self._context_service,
+                        prompt_service=self._prompt_manager,
+                    )
+
+                    # 创建 Provider 并传入 context
+                    new_provider = ProviderRegistry.create_decision(provider_name, config, context=context)
                 except ValueError as e:
                     available = ", ".join(ProviderRegistry.get_registered_decision_providers())
                     self.logger.error(f"DecisionProvider '{provider_name}' 未找到。可用: {available}")
@@ -241,7 +265,7 @@ class DecisionProviderManager:
 
                 # 设置新Provider
                 try:
-                    await new_provider.start(self.event_bus, config, {})
+                    await new_provider.start()
                     self.logger.info(f"DecisionProvider '{provider_name}' 初始化成功")
                 except Exception as e:
                     self.logger.error(f"DecisionProvider '{provider_name}' setup 失败: {e}", exc_info=True)
@@ -359,6 +383,13 @@ class DecisionProviderManager:
         """
         from src.modules.registry import ProviderRegistry
 
+        # 将 src 目录添加到 sys.path（确保可以导入 src.modules 和 src.domains）
+        src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        src_dir = os.path.dirname(src_dir)  # 从 provider_manager.py -> decision -> src
+        if src_dir not in sys.path:
+            sys.path.insert(0, src_dir)
+            self.logger.debug(f"已将 src 目录添加到 sys.path: {src_dir}")
+
         # 导入 providers 包会执行 __init__.py，注册所有 Provider
         try:
             from src.domains.decision import providers  # noqa: F401
@@ -465,9 +496,6 @@ class DecisionProviderManager:
         if isinstance(message_data, dict):
             normalized_dict = message_data
 
-            # 提取 SourceContext
-            source_context = self._extract_source_context_from_dict(normalized_dict)
-
             # 重建 NormalizedMessage 对象
             try:
                 normalized = NormalizedMessage.model_validate(normalized_dict)
@@ -488,31 +516,9 @@ class DecisionProviderManager:
             return
 
         try:
-            self.logger.debug(f'收到消息: "{normalized.text[:50]}..." (来源: {normalized.source})')
+            self.logger.debug(f'触发决策: "{normalized.text[:50]}..." (来源: {normalized.source})')
 
-            # 调用 decide() 进行决策
-            intent = await self.decide(normalized)
-
-            # 注入 source_context（如果 Provider 未设置）
-            if intent.source_context is None:
-                intent.source_context = source_context
-
-            # 获取当前 Provider 名称
-            provider_name = self.get_current_provider_name() or "unknown"
-
-            # 发布 decision.intent 事件（3域架构）
-            from src.modules.events.payloads import IntentPayload
-
-            await self.event_bus.emit(
-                CoreEvents.DECISION_INTENT,
-                IntentPayload.from_intent(intent, provider_name),
-                source="DecisionProviderManager",
-            )
-
-            if intent.actions:
-                first_action = intent.actions[0]
-                self.logger.info(f'生成响应: "{intent.response_text[:50]}..." (动作: {first_action.type})')
-            else:
-                self.logger.info(f'生成响应: "{intent.response_text[:50]}..." (无动作)')
+            # Fire-and-forget: Provider 内部会发布 decision.intent 事件
+            await self.decide(normalized)
         except Exception as e:
-            self.logger.error(f"处理 NormalizedMessage 时出错: {e}", exc_info=True)
+            self.logger.error(f"触发决策时出错: {e}", exc_info=True)

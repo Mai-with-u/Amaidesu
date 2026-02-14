@@ -1,120 +1,111 @@
 """
-测试 MaiCoreDecisionProvider 内存泄漏修复
+测试 MaiCoreDecisionProvider 核心功能
 
 运行: uv run pytest tests/domains/decision/providers/test_maicore_memory_leak.py -v
 """
 
-import asyncio
-from unittest.mock import AsyncMock, Mock
-
-import pytest
-
 from src.domains.decision.providers.maicore.maicore_decision_provider import MaiCoreDecisionProvider
 
 
-class TestMaiCoreMemoryLeak:
-    """测试内存泄漏修复"""
+class TestMaiCoreDecisionProviderCore:
+    """测试 MaiCoreDecisionProvider 核心功能"""
 
-    @pytest.mark.asyncio
-    async def test_pending_futures_initial_state(self):
-        """测试初始状态"""
+    def test_config_schema_default_values(self):
+        """测试配置Schema默认值"""
         provider = MaiCoreDecisionProvider({"host": "localhost", "port": 8000, "platform": "test"})
 
-        # 模拟事件总线
-        event_bus = Mock()
-        event_bus.emit = AsyncMock()
+        # 验证默认配置
+        assert provider.host == "localhost"
+        assert provider.port == 8000
+        assert provider.platform == "test"
+        assert provider.http_callback_path == "/callback"
+        assert provider.typed_config.connect_timeout == 10.0
+        assert provider.typed_config.reconnect_interval == 5.0
 
-        await provider.setup(event_bus, None, None)
+    def test_config_schema_custom_values(self):
+        """测试自定义配置值"""
+        provider = MaiCoreDecisionProvider(
+            {
+                "host": "maicore.example.com",
+                "port": 9000,
+                "platform": "custom_platform",
+                "http_host": "http.example.com",
+                "http_port": 8080,
+                "http_callback_path": "/custom_callback",
+                "connect_timeout": 30.0,
+                "reconnect_interval": 10.0,
+            }
+        )
 
-        # 验证初始状态
-        assert len(provider._pending_futures) == 0
+        # 验证自定义配置
+        assert provider.host == "maicore.example.com"
+        assert provider.port == 9000
+        assert provider.platform == "custom_platform"
+        assert provider.http_host == "http.example.com"
+        assert provider.http_port == 8080
+        assert provider.http_callback_path == "/custom_callback"
+        assert provider.typed_config.connect_timeout == 30.0
+        assert provider.typed_config.reconnect_interval == 10.0
 
-    @pytest.mark.asyncio
-    async def test_passive_cleanup_of_completed_futures(self):
-        """测试被动清理已完成的 Future"""
+    def test_ws_url_generation(self):
+        """测试WebSocket URL生成"""
         provider = MaiCoreDecisionProvider({"host": "localhost", "port": 8000, "platform": "test"})
 
-        event_bus = Mock()
-        event_bus.emit = AsyncMock()
-        await provider.setup(event_bus, None, None)
+        assert provider.ws_url == "ws://localhost:8000/ws"
 
-        # 手动添加已完成的 Future
-        future1 = asyncio.Future()
-        future1.set_result(None)  # 标记为完成
-        future2 = asyncio.Future()
-        future2.set_result(None)
-
-        provider._pending_futures["msg1"] = future1
-        provider._pending_futures["msg2"] = future2
-
-        # 添加未完成的 Future
-        future3 = asyncio.Future()
-        provider._pending_futures["msg3"] = future3
-
-        assert len(provider._pending_futures) == 3
-
-        # 模拟 decide() 中的被动清理（清理已完成的 Future）
-        async with provider._futures_lock:
-            completed_ids = [msg_id for msg_id, fut in provider._pending_futures.items() if fut.done()]
-            for msg_id in completed_ids:
-                provider._pending_futures.pop(msg_id, None)
-
-        # 验证：已完成的被清理，未完成的保留
-        assert len(provider._pending_futures) == 1
-        assert "msg3" in provider._pending_futures
-
-    @pytest.mark.asyncio
-    async def test_cancel_old_future_on_duplicate_message_id(self):
-        """测试同名 message_id 时取消旧 Future"""
+    def test_get_info_returns_required_fields(self):
+        """测试get_info返回必需字段"""
         provider = MaiCoreDecisionProvider({"host": "localhost", "port": 8000, "platform": "test"})
 
-        event_bus = Mock()
-        event_bus.emit = AsyncMock()
-        await provider.setup(event_bus, None, None)
+        info = provider.get_info()
 
-        # 添加一个未完成的旧 Future
-        old_future = asyncio.Future()
-        provider._pending_futures["msg1"] = old_future
+        assert "name" in info
+        assert "version" in info
+        assert "host" in info
+        assert "port" in info
+        assert "platform" in info
+        assert "is_connected" in info
+        assert info["name"] == "MaiCoreDecisionProvider"
 
-        # 模拟同名消息的被动清理逻辑
-        message_id = "msg1"
-        new_future = asyncio.Future()
-
-        async with provider._futures_lock:
-            old = provider._pending_futures.get(message_id)
-            if old and not old.done():
-                old.cancel()
-            provider._pending_futures[message_id] = new_future
-
-        # 验证：旧 Future 被取消，新 Future 已注册
-        assert old_future.cancelled()
-        assert provider._pending_futures["msg1"] is new_future
-
-    @pytest.mark.asyncio
-    async def test_get_statistics(self):
-        """测试获取统计信息"""
+    def test_get_statistics_returns_required_fields(self):
+        """测试get_statistics返回必需字段"""
         provider = MaiCoreDecisionProvider({"host": "localhost", "port": 8000, "platform": "test"})
-
-        event_bus = Mock()
-        await provider.setup(event_bus, None, None)
 
         stats = provider.get_statistics()
 
-        assert "pending_futures_count" in stats
         assert "is_connected" in stats
         assert "router_running" in stats
-        assert stats["pending_futures_count"] == 0
 
-    @pytest.mark.asyncio
-    async def test_decision_timeout_config(self):
-        """测试 decision_timeout 配置"""
+    def test_provider_name(self):
+        """测试Provider名称"""
+        provider = MaiCoreDecisionProvider({"host": "localhost", "port": 8000, "platform": "test"})
+
+        assert provider.provider_name == "maicore"
+
+    def test_action_suggestions_config_defaults(self):
+        """测试Action建议配置默认值"""
+        provider = MaiCoreDecisionProvider({"host": "localhost", "port": 8000, "platform": "test"})
+
+        assert provider.typed_config.action_suggestions_enabled is False
+        assert provider.typed_config.action_confidence_threshold == 0.6
+        assert provider.typed_config.action_cooldown_seconds == 5.0
+        assert provider.typed_config.max_suggested_actions == 3
+
+    def test_action_suggestions_config_custom(self):
+        """测试Action建议自定义配置"""
         provider = MaiCoreDecisionProvider(
             {
                 "host": "localhost",
                 "port": 8000,
                 "platform": "test",
-                "decision_timeout": 60.0,  # 自定义超时时间
+                "action_suggestions_enabled": True,
+                "action_confidence_threshold": 0.8,
+                "action_cooldown_seconds": 10.0,
+                "max_suggested_actions": 5,
             }
         )
 
-        assert provider._decision_timeout == 60.0
+        assert provider.typed_config.action_suggestions_enabled is True
+        assert provider.typed_config.action_confidence_threshold == 0.8
+        assert provider.typed_config.action_cooldown_seconds == 10.0
+        assert provider.typed_config.max_suggested_actions == 5

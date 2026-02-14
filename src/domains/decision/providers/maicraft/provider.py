@@ -15,6 +15,7 @@ from typing import Dict, Literal, Optional
 
 from pydantic import Field, ValidationError
 
+from src.modules.di.context import ProviderContext
 from src.modules.types import Intent
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
@@ -74,8 +75,8 @@ class MaicraftDecisionProvider(DecisionProvider):
         mcp_timeout: int = Field(default=30, description="MCP超时时间（秒）")
         verbose_logging: bool = Field(default=False, description="是否输出详细日志")
 
-    def __init__(self, config: dict):
-        super().__init__(config)
+    def __init__(self, config: dict, context: "ProviderContext" = None):
+        super().__init__(config, context)
 
         self.logger = get_logger(self.__class__.__name__)
 
@@ -163,66 +164,63 @@ class MaicraftDecisionProvider(DecisionProvider):
         self.action_registry.clear()
         self.logger.info("MaicraftDecisionProvider 清理完成")
 
-    async def decide(self, message) -> Intent:
+    async def decide(self, message) -> None:
         """
         决策（异步）
 
-        根据标准化消息生成决策结果。
+        根据标准化消息生成决策结果，通过事件发布 Intent。
 
         Args:
             message: 标准化消息
 
-        Returns:
-            Intent: 决策意图
-
         注意:
-            - 如果不是命令，返回默认 Intent（无动作）
-            - 如果是命令但不支持，返回默认 Intent
-            - 命令解析失败时，返回默认 Intent
+            - 如果不是命令，不发布事件
+            - 如果是命令但不支持，不发布事件
+            - 命令解析失败时，不发布事件
         """
         if not self.parsed_config.enabled:
-            return self._create_default_intent(message)
+            return
 
         try:
             # 提取消息文本
             text = self._extract_message_text(message)
             if not text:
-                return self._create_default_intent(message)
+                return
 
             # 解析命令
             command = self.command_parser.parse_command(text, message)
             if not command:
-                # 不是命令，返回默认 Intent
-                return self._create_default_intent(message)
+                # 不是命令，返回
+                return
 
             self.logger.info(f"收到命令: {command.name} (参数: {command.args})")
 
             # 检查是否支持该命令
             if not self.action_registry.is_supported_command(command.name):
                 self.logger.debug(f"不支持的命令: '{command.name}'")
-                return self._create_default_intent(message)
+                return
 
             # 获取命令对应的动作类型
             action_type = self.action_registry.get_action_type(command.name)
             if not action_type:
                 self.logger.error(f"无法获取命令的动作类型: '{command.name}'")
-                return self._create_default_intent(message)
+                return
 
             # 准备动作参数
             params = self._prepare_action_params(action_type, command.args)
             if not params:
                 self.logger.error(f"准备动作参数失败: 命令='{command.name}', 参数={command.args}")
-                return self._create_default_intent(message)
+                return
 
             # 通过工厂创建对应的动作
             if not self.action_factory:
                 self.logger.error("动作工厂未初始化")
-                return self._create_default_intent(message)
+                return
 
             action = self.action_factory.create_action(action_type, params, message)
             if not action:
                 self.logger.error(f"创建动作实例失败: {action_type.value}")
-                return self._create_default_intent(message)
+                return
 
             # 生成 Intent
             intent = Intent(
@@ -243,11 +241,12 @@ class MaicraftDecisionProvider(DecisionProvider):
                 f"工厂={self.action_factory.get_factory_type()}"
             )
 
-            return intent
+            # 发布 intent 事件
+            await self._publish_intent(intent)
 
         except Exception as e:
             self.logger.error(f"处理命令时出错: {e}", exc_info=True)
-            return self._create_default_intent(message)
+            return
 
     def _extract_message_text(self, message) -> Optional[str]:
         """
@@ -330,6 +329,23 @@ class MaicraftDecisionProvider(DecisionProvider):
             actions=[],  # 空动作列表
             metadata={"provider": "maicraft", "is_default": True},
         )
+
+    async def _publish_intent(self, intent: Intent) -> None:
+        """通过 event_bus 发布 decision.intent 事件"""
+        from src.modules.events.names import CoreEvents
+        from src.modules.events.payloads import IntentPayload
+
+        if not self.event_bus:
+            self.logger.error("EventBus 未初始化，无法发布事件")
+            return
+
+        await self.event_bus.emit(
+            CoreEvents.DECISION_INTENT,
+            IntentPayload.from_intent(intent, "maicraft"),
+            source="MaicraftDecisionProvider",
+        )
+
+        self.logger.info("已发布 decision.intent 事件")
 
     @classmethod
     def get_registration_info(cls) -> dict:

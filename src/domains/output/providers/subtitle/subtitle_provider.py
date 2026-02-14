@@ -28,6 +28,7 @@ from src.modules.logging import get_logger
 from src.modules.types.base.output_provider import OutputProvider
 
 if TYPE_CHECKING:
+    from src.modules.di.context import ProviderContext
     from src.domains.decision.intent import Intent
 
 
@@ -262,8 +263,8 @@ class SubtitleOutputProvider(OutputProvider):
         """
         return {"layer": "output", "name": "subtitle", "class": cls, "source": "builtin:subtitle"}
 
-    def __init__(self, config: dict):
-        super().__init__(config)
+    def __init__(self, config: dict, context: "ProviderContext" = None):
+        super().__init__(config, context)
         self.logger = get_logger("SubtitleOutputProvider")
 
         if not CTK_AVAILABLE:

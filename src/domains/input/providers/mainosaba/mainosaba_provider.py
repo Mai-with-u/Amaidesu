@@ -19,7 +19,6 @@ from pydantic import Field, field_validator
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
-from src.modules.prompts import get_prompt_manager
 from src.modules.types.base.input_provider import InputProvider
 from src.modules.types.base.normalized_message import NormalizedMessage
 
@@ -192,7 +191,11 @@ class MainosabaInputProvider(InputProvider):
 
         try:
             # 构建 prompt（从集中管理的模板获取）
-            prompt = get_prompt_manager().get_raw("input/mainosaba_ocr")
+            # 依赖注入的 prompt_service
+            if not self.context or not self.context.prompt_service:
+                raise ValueError("prompt_service 未注入，请检查 Provider 初始化配置")
+            prompt_manager = self.context.prompt_service
+            prompt = prompt_manager.get_raw("input/mainosaba_ocr")
 
             # 构建图像 URL（LLMClient 支持 base64 格式）
             image_data_url = f"data:image/png;base64,{image_base64}"

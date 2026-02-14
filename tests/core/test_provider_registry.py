@@ -22,8 +22,8 @@ from src.modules.types.base.normalized_message import NormalizedMessage
 class MockInputProvider(InputProvider):
     """模拟 InputProvider 用于测试"""
 
-    def __init__(self, config: dict):
-        super().__init__(config)
+    def __init__(self, config: dict, context=None):
+        super().__init__(config, context)
         self.provider_type = "mock_input"
 
     async def generate(self) -> AsyncIterator[NormalizedMessage]:
@@ -44,8 +44,8 @@ class MockInputProvider(InputProvider):
 class MockDecisionProvider(DecisionProvider):
     """模拟 DecisionProvider 用于测试"""
 
-    def __init__(self, config: dict):
-        super().__init__(config)
+    def __init__(self, config: dict, context=None):
+        super().__init__(config, context=context)
         self.provider_type = "mock_decision"
 
     async def decide(self, message):
@@ -66,8 +66,8 @@ class MockDecisionProvider(DecisionProvider):
 class MockOutputProvider(OutputProvider):
     """模拟 OutputProvider 用于测试"""
 
-    def __init__(self, config: dict):
-        super().__init__(config)
+    def __init__(self, config: dict, context=None):
+        super().__init__(config, context=context)
         self.provider_type = "mock_output"
 
     async def execute(self, intent):

@@ -18,39 +18,38 @@ DecisionProvider负责将NormalizedMessage转换为决策结果(Intent)。
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Optional
 
+from src.modules.di.context import ProviderContext
+
 if TYPE_CHECKING:
-    from src.modules.types import Intent
     from src.modules.types.base.normalized_message import NormalizedMessage
 
 
 class DecisionProvider(ABC):
-    """
-    决策Provider抽象基类
+    """决策Provider抽象基类 - 依赖注入版本"""
 
-    职责: 将NormalizedMessage转换为决策结果(Intent)
-
-    生命周期:
-    1. 实例化(__init__)
-    2. 启动(start()) - 初始化并注册到EventBus
-    3. 决策(decide()) - 异步处理NormalizedMessage
-    4. 停止(stop()) - 释放资源
-
-    Attributes:
-        config: Provider配置(来自decision.providers.xxx配置)
-        event_bus: EventBus实例(可选,用于事件通信)
-        is_started: 是否已启动
-    """
-
-    def __init__(self, config: dict):
+    def __init__(
+        self,
+        config: dict,
+        context: ProviderContext = None,
+    ):
         """
         初始化Provider
 
         Args:
             config: Provider配置(来自decision.providers.xxx配置)
+            context: 依赖注入上下文（必填）
         """
+        if context is None:
+            raise ValueError("DecisionProvider 必须接收 context 参数")
+
         self.config = config
-        self.event_bus = None
+        self.context = context
         self.is_started = False
+
+    @property
+    def event_bus(self):
+        """EventBus实例"""
+        return self.context.event_bus
 
     async def init(self) -> None:  # noqa: B027
         """
@@ -61,27 +60,15 @@ class DecisionProvider(ABC):
         """
         pass
 
-    async def start(
-        self,
-        event_bus,
-        config: Optional[dict] = None,
-        dependencies: Optional[dict] = None,
-    ) -> None:
+    async def start(self) -> None:
         """
         启动 Provider
 
-        Args:
-            event_bus: EventBus实例
-            config: Provider配置（可选，如果传入则覆盖构造时的配置）
-            dependencies: 可选的依赖注入（如 llm_service 等）
+        依赖已在构造时通过 context 注入，此方法仅进行初始化。
 
         Raises:
             ConnectionError: 如果无法连接到决策服务
         """
-        self.event_bus = event_bus
-        if config:
-            self.config = config
-        self._dependencies = dependencies or {}
         await self.init()
         self.is_started = True
 
@@ -104,17 +91,20 @@ class DecisionProvider(ABC):
         pass
 
     @abstractmethod
-    async def decide(self, message: "NormalizedMessage") -> "Intent":
+    async def decide(self, message: "NormalizedMessage") -> None:
         """
-        决策（异步）
+        决策（异步，fire-and-forget）
 
-        根据NormalizedMessage生成决策结果(Intent)。
+        根据NormalizedMessage生成决策结果，并通过EventBus发布decision.intent事件。
+
+        此方法是 fire-and-forget：
+        - 不等待决策完成，不返回结果
+        - Provider内部负责通过event_bus发布decision.intent事件
+        - 不需要返回值，决策结果通过事件传递
+        - 不会阻塞，每条消息独立处理（类似InputProvider）
 
         Args:
             message: 标准化消息
-
-        Returns:
-            Intent: 决策意图
 
         Raises:
             ValueError: 如果输入消息无效

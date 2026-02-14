@@ -35,6 +35,9 @@ from src.modules.types.base.output_provider import OutputProvider
 
 if TYPE_CHECKING:
     from src.modules.events.payloads import IntentPayload
+    from src.modules.llm.manager import LLMManager
+    from src.modules.prompts.manager import PromptManager
+    from src.modules.tts.audio_device_manager import AudioDeviceManager
 
 
 class RenderResult(BaseModel):
@@ -71,7 +74,14 @@ class OutputProviderManager:
     - Pipeline 集成
     """
 
-    def __init__(self, event_bus: EventBus, config: dict[str, Any] = None):
+    def __init__(
+        self,
+        event_bus: EventBus,
+        config: dict[str, Any] = None,
+        llm_manager: "LLMManager" = None,
+        prompt_manager: "PromptManager" = None,
+        audio_device_manager: "AudioDeviceManager" = None,
+    ):
         """
         初始化 Provider 管理器
 
@@ -81,11 +91,19 @@ class OutputProviderManager:
                 - concurrent_rendering: bool = True  # 是否并发渲染
                 - error_handling: str = "continue"  # 错误处理策略: continue/stop/drop
                 - render_timeout: float = 10.0  # 单个Provider渲染超时（秒）
+            llm_manager: LLM管理器实例
+            prompt_manager: 提示词管理器实例
+            audio_device_manager: 音频设备管理器实例
         """
         self.event_bus = event_bus
         self.config = config or {}
         self.providers: list[OutputProvider] = []
         self.logger = get_logger("OutputProviderManager")
+
+        # 依赖服务（通过 ProviderContext 传递给 Provider）
+        self._llm_manager = llm_manager
+        self._prompt_manager = prompt_manager
+        self._audio_device_manager = audio_device_manager
 
         # 是否并发渲染（默认True）
         self.concurrent_rendering = self.config.get("concurrent_rendering", True)
@@ -119,6 +137,9 @@ class OutputProviderManager:
         config_service=None,
         root_config: Optional[dict[str, Any]] = None,
         audio_stream_channel=None,
+        llm_manager=None,
+        prompt_manager=None,
+        audio_device_manager=None,
     ) -> None:
         """
         设置输出Provider管理器
@@ -128,11 +149,19 @@ class OutputProviderManager:
             config_service: ConfigService实例（用于二级配置加载）
             root_config: 根配置字典（包含 pipelines 配置）
             audio_stream_channel: AudioStreamChannel 实例
+            llm_manager: LLM管理器实例
+            prompt_manager: 提示词管理器实例
+            audio_device_manager: 音频设备管理器实例
         """
         self.logger.info("开始设置输出Provider管理器...")
 
         # 保存 AudioStreamChannel 引用
         self._audio_stream_channel = audio_stream_channel
+
+        # 保存依赖服务引用（优先级：参数 > 构造函数参数）
+        self._llm_manager = llm_manager or self._llm_manager
+        self._prompt_manager = prompt_manager or self._prompt_manager
+        self._audio_device_manager = audio_device_manager or self._audio_device_manager
 
         # 创建输出Pipeline管理器
         self.pipeline_manager = OutputPipelineManager()
@@ -293,16 +322,16 @@ class OutputProviderManager:
             # 并发启动所有Provider
             setup_tasks = []
             for provider in self.providers:
-                # 传递 audio_stream_channel 给每个 Provider
-                setup_tasks.append(provider.start(event_bus, audio_stream_channel=audio_stream_channel))
+                # 依赖已通过 context 注入，start() 不需要参数
+                setup_tasks.append(provider.start())
 
             await asyncio.gather(*setup_tasks, return_exceptions=True)
         else:
             # 串行启动（用于调试）
             for provider in self.providers:
                 try:
-                    # 传递 audio_stream_channel 给每个 Provider
-                    await provider.start(event_bus, audio_stream_channel=audio_stream_channel)
+                    # 依赖已通过 context 注入，start() 不需要参数
+                    await provider.start()
                 except Exception as e:
                     self.logger.error(f"Provider启动失败: {provider.get_info()['name']} - {e}")
 
@@ -471,6 +500,7 @@ class OutputProviderManager:
         Returns:
             Provider实例，如果创建失败返回None
         """
+        from src.modules.di.context import ProviderContext
         from src.modules.registry import ProviderRegistry
 
         # 检查 Provider 是否已注册
@@ -480,8 +510,17 @@ class OutputProviderManager:
             return None
 
         try:
-            # 使用 ProviderRegistry 创建 Provider 实例
-            provider = ProviderRegistry.create_output(provider_type, config)
+            # 创建 ProviderContext（包含所有依赖服务）
+            context = ProviderContext(
+                event_bus=self.event_bus,
+                audio_stream_channel=self._audio_stream_channel,
+                llm_service=self._llm_manager,
+                prompt_service=self._prompt_manager,
+                audio_device_service=self._audio_device_manager,
+            )
+
+            # 使用 ProviderRegistry 创建 Provider 实例（传入 context）
+            provider = ProviderRegistry.create_output(provider_type, config, context=context)
 
             self.logger.info(f"Provider创建成功: {provider_type}")
             return provider

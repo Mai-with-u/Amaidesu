@@ -25,8 +25,6 @@ def maicore_config():
         "host": "localhost",
         "port": 8000,
         "platform": "amaidesu",
-        "decision_timeout": 30.0,
-        "action_suggestions_enabled": False,
     }
 
 
@@ -73,7 +71,12 @@ def setup_provider(provider, mock_event_bus, mock_dependencies):
     """设置 Provider 的异步 fixture"""
 
     async def _setup():
-        await provider.setup(mock_event_bus, dependencies=mock_dependencies)
+        # 设置依赖
+        provider._dependencies = mock_dependencies
+        provider._event_bus = mock_event_bus
+        provider.event_bus = mock_event_bus
+        # 初始化（不真正启动Router）
+        await provider.init()
         return provider
 
     return _setup
@@ -277,7 +280,7 @@ class TestParseWithRules:
             message_info=mock_message_base.message_info,
             message_segment=seg,
         )
-        intent = provider._parse_with_rules("是的，对的，嗯", message)
+        intent = provider._parse_with_rules("是的，对的", message)
         assert any(action.type == ActionType.NOD for action in intent.actions)
 
         # 测试不同意
@@ -286,7 +289,7 @@ class TestParseWithRules:
             message_info=mock_message_base.message_info,
             message_segment=seg,
         )
-        intent = provider._parse_with_rules("不，不是，不行", message)
+        intent = provider._parse_with_rules("不，不是", message)
         assert any(action.type == ActionType.SHAKE for action in intent.actions)
 
         # 测试无动作 → 眨眼
@@ -353,18 +356,21 @@ class TestJSONCleanup:
             assert intent.emotion == json.loads(expected_json)["emotion"]
 
 
-class TestTimeoutHandling:
-    """测试超时处理"""
+class TestFireAndForget:
+    """测试 fire-and-forget 行为"""
 
     @pytest.mark.asyncio
-    async def test_timeout_raises_exception(self, setup_provider, mock_event_bus):
-        """测试超时抛出异常"""
+    async def test_decide_returns_none(self, setup_provider, mock_event_bus):
+        """测试 decide() 返回 None"""
         provider = await setup_provider()
 
-        # Mock router 未连接
-        provider._router = None
+        # Mock router
+        provider._router = MagicMock()
+        provider._router.check_connection.return_value = True
+        provider._router_adapter = MagicMock()
+        provider._router_adapter.send = AsyncMock()
 
-        # 尝试调用 decide 应该抛出 RuntimeError
+        # 创建 NormalizedMessage
         from src.modules.types.base.normalized_message import NormalizedMessage
 
         message = NormalizedMessage(
@@ -375,8 +381,33 @@ class TestTimeoutHandling:
             importance=0.5,
         )
 
-        with pytest.raises(RuntimeError, match="MaiCore 未连接"):
-            await provider.decide(message)
+        # 调用 decide - 应该返回 None
+        result = await provider.decide(message)
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_decide_when_not_connected(self, setup_provider):
+        """测试未连接时 decide() 不抛出异常"""
+        provider = await setup_provider()
+
+        # Mock router 为 None（未连接）
+        provider._router = None
+
+        # 创建 NormalizedMessage
+        from src.modules.types.base.normalized_message import NormalizedMessage
+
+        message = NormalizedMessage(
+            text="测试",
+            content=MagicMock(get_user_id=lambda: "user", get_display_text=lambda: "测试"),
+            source="test",
+            data_type="text",
+            importance=0.5,
+        )
+
+        # 不应该抛出异常，只返回 None
+        result = await provider.decide(message)
+        assert result is None
 
 
 class TestActionSuggestions:

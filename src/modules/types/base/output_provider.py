@@ -8,6 +8,8 @@ OutputProvider负责将Intent渲染到目标设备。
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
+from src.modules.di.context import ProviderContext
+
 if TYPE_CHECKING:
     from src.modules.streaming.audio_stream_channel import AudioStreamChannel
     from src.modules.types import Intent
@@ -16,7 +18,7 @@ if TYPE_CHECKING:
 
 class OutputProvider(ABC):
     """
-    输出Provider抽象基类
+    输出Provider抽象基类 - 依赖注入版本
 
     职责: 将Intent渲染到目标设备
 
@@ -28,23 +30,34 @@ class OutputProvider(ABC):
 
     Attributes:
         config: Provider配置
-        event_bus: EventBus实例
+        context: ProviderContext实例（依赖注入）
+        event_bus: EventBus实例（从context获取）
         is_started: 是否已启动
         priority: 事件处理优先级
-        audio_stream_channel: AudioStreamChannel实例
+        audio_stream_channel: AudioStreamChannel实例（从context获取）
     """
 
     priority: int = 50  # 事件处理优先级
 
-    def __init__(self, config: dict):
+    def __init__(
+        self,
+        config: dict,
+        context: ProviderContext = None,
+    ):
+        if context is None:
+            raise ValueError("OutputProvider 必须接收 context 参数")
+
         self.config = config
-        self.event_bus = None
+        self.context = context
         self.is_started = False
-        self._audio_stream_channel: Optional["AudioStreamChannel"] = None
+
+    @property
+    def event_bus(self):
+        return self.context.event_bus
 
     @property
     def audio_stream_channel(self) -> Optional["AudioStreamChannel"]:
-        return self._audio_stream_channel
+        return self.context.audio_stream_channel
 
     async def init(self):  # noqa: B027
         """
@@ -55,20 +68,29 @@ class OutputProvider(ABC):
         """
         pass
 
-    async def start(self, event_bus, audio_stream_channel: Optional["AudioStreamChannel"] = None):
+    async def start(self):
         """
         启动 Provider，订阅 OUTPUT_INTENT 事件
 
-        Args:
-            event_bus: EventBus实例
-            audio_stream_channel: 可选的AudioStreamChannel实例
+        依赖已在构造时通过 context 注入。
         """
         from src.modules.events.names import CoreEvents
         from src.modules.events.payloads.decision import IntentPayload
 
-        self.event_bus = event_bus
-        self._audio_stream_channel = audio_stream_channel
-        event_bus.on(CoreEvents.OUTPUT_INTENT, self._on_intent, model_class=IntentPayload, priority=self.priority)
+        if self.context.event_bus:
+            self.context.event_bus.on(
+                CoreEvents.OUTPUT_INTENT, self._on_intent, model_class=IntentPayload, priority=self.priority
+            )
+
+        await self.init()
+        self.is_started = True
+        if actual_event_bus:
+            actual_event_bus.on(
+                CoreEvents.OUTPUT_INTENT,
+                self._on_intent,
+                model_class=IntentPayload,
+                priority=self.priority,
+            )
 
         await self.init()
         self.is_started = True
@@ -104,8 +126,8 @@ class OutputProvider(ABC):
         if not self.is_started:
             return
 
-        if self.event_bus:
-            self.event_bus.off(CoreEvents.OUTPUT_INTENT, self._on_intent)
+        if self.context.event_bus:
+            self.context.event_bus.off(CoreEvents.OUTPUT_INTENT, self._on_intent)
 
         await self.cleanup()
         self.is_started = False

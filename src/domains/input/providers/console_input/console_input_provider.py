@@ -4,9 +4,14 @@ ConsoleInputProvider - 控制台输入Provider
 从控制台接收用户输入并直接构造 NormalizedMessage。
 """
 
+from __future__ import annotations
+
 import asyncio
 import sys
-from typing import Any, AsyncIterator, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Literal, Optional
+
+if TYPE_CHECKING:
+    from src.modules.di.context import ProviderContext
 
 from pydantic import Field
 
@@ -40,14 +45,15 @@ class ConsoleInputProvider(InputProvider):
         """
         return {"layer": "input", "name": "console_input", "class": cls, "source": "builtin:console_input"}
 
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, context: "ProviderContext" = None):
         """
         初始化ConsoleInputProvider
 
         Args:
             config: 配置字典
+            context: 统一依赖上下文(可选)
         """
-        super().__init__(config)
+        super().__init__(config, context)
         self.logger = get_logger("ConsoleInputProvider")
 
         # 使用 ConfigSchema 验证配置，获得类型安全的配置对象
