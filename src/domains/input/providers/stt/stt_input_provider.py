@@ -14,7 +14,6 @@ import ssl
 import time
 from datetime import datetime
 from typing import Any, AsyncIterator, Dict, Optional
-from urllib.parse import urlencode
 
 import numpy as np
 
@@ -132,6 +131,7 @@ class STTInputProvider(InputProvider):
         self._is_speaking: bool = False
         self._silence_started_time: Optional[float] = None
         self.full_text = ""
+        self._last_audio_chunk: Optional[bytes] = None  # 保存最后的音频块用于结束帧
 
         self.logger.info(
             f"STTInputProvider 初始化完成. "
@@ -312,9 +312,6 @@ class STTInputProvider(InputProvider):
             else:
                 self.logger.info(f"使用远程音频流模式 (VAD 阈值: {self.vad_threshold})")
 
-            # 启动结果读取任务
-            result_task = asyncio.create_task(self._read_results())
-
             # 处理循环
             speech_chunk_count = 0
             timeout_duration = max(0.1, self.min_silence_duration_ms / 1000.0 * 0.8)
@@ -405,6 +402,7 @@ class STTInputProvider(InputProvider):
                             data_frame = self._build_iflytek_frame(STATUS_CONTINUE_FRAME, audio_chunk_bytes)
                             await asyncio.wait_for(self._active_ws.send_bytes(data_frame), timeout=1.0)
                             speech_chunk_count += 1
+                            self._last_audio_chunk = audio_chunk_bytes  # 保存最后的音频块
                         except Exception as e:
                             self.logger.error(f"发送音频帧失败: {e}", exc_info=True)
                             await self._close_iflytek_connection(send_last_frame=False)
@@ -456,11 +454,6 @@ class STTInputProvider(InputProvider):
 
         finally:
             self.logger.info("STT worker 循环结束，清理资源...")
-            result_task.cancel()
-            try:
-                await result_task
-            except asyncio.CancelledError:
-                pass
 
             if not self.use_remote_stream and stream is not None:
                 try:
@@ -471,21 +464,6 @@ class STTInputProvider(InputProvider):
                     self.logger.error(f"停止麦克流出错: {e}", exc_info=True)
 
             await self._close_iflytek_connection(send_last_frame=False)
-
-    async def _read_results(self):
-        """从结果队列读取并返回 NormalizedMessage"""
-        try:
-            while self.is_running:
-                try:
-                    result = await asyncio.wait_for(self._result_queue.get(), timeout=0.1)
-                    yield result
-                    self._result_queue.task_done()
-                except asyncio.TimeoutError:
-                    continue
-                except asyncio.CancelledError:
-                    break
-        except asyncio.CancelledError:
-            pass
 
     async def _ensure_iflytek_connection(self) -> bool:
         """确保讯飞 WebSocket 连接存在"""
@@ -542,13 +520,14 @@ class STTInputProvider(InputProvider):
             self._active_receiver_task = None
             return False
 
-    async def _close_iflytek_connection(self, send_last_frame: bool = True):
+    async def _close_iflytek_connection(self, send_last_frame: bool = True, last_audio_chunk: Optional[bytes] = None):
         """关闭讯飞 WebSocket 连接"""
         ws_to_close = self._active_ws
         receiver_task_to_await = self._active_receiver_task
 
         self._active_ws = None
         self._active_receiver_task = None
+        self._last_audio_chunk = None  # 重置
 
         if not ws_to_close:
             if receiver_task_to_await and not receiver_task_to_await.done():
@@ -565,7 +544,9 @@ class STTInputProvider(InputProvider):
         try:
             if send_last_frame:
                 try:
-                    last_frame = self._build_iflytek_frame(STATUS_LAST_FRAME)
+                    # 使用传入的音频块或保存的最后一个音频块
+                    audio_for_end = last_audio_chunk or self._last_audio_chunk
+                    last_frame = self._build_iflytek_frame(STATUS_LAST_FRAME, audio_for_end or b"")
                     await asyncio.wait_for(ws_to_close.send_bytes(last_frame), timeout=2.0)
                     self.logger.debug("已发送结束帧")
                 except Exception as e:
@@ -607,24 +588,34 @@ class STTInputProvider(InputProvider):
                 if msg.type == self.aiohttp.WSMsgType.TEXT:
                     try:
                         resp = json.loads(msg.data)
+                        self.logger.debug(f"讯飞原始响应: {json.dumps(resp, ensure_ascii=False)[:500]}")
 
+                        # 检查顶层的错误（语音听写流式版）
                         if resp.get("code", -1) != 0:
-                            err_msg = f"讯飞 API 错误: Code={resp.get('code')}, Message={resp.get('message')}"
+                            msg = resp.get("message", "")
+                            err_msg = f"讯飞 API 错误: Code={resp.get('code')}, Message={msg}"
                             self.logger.error(err_msg)
                             utterance_failed = True
                             break
 
+                        # 语音听写流式版响应格式: data.result 和 data.status
                         data = resp.get("data", {})
-                        status = data.get("status", -1)
-                        result = data.get("result", {})
+                        result_data = data.get("result", {})
+                        status = data.get("status", -1)  # status 在 data 层级
 
-                        # 提取文本
-                        if "ws" in result:
-                            for w in result["ws"]:
-                                for cw in w.get("cw", []):
-                                    self.full_text += cw.get("w", "")
+                        # 直接解析 result_data 中的 ws 数组（不需要 base64 解码）
+                        if "ws" in result_data:
+                            try:
+                                for w in result_data["ws"]:
+                                    for cw in w.get("cw", []):
+                                        self.full_text += cw.get("w", "")
+                            except Exception as e:
+                                self.logger.warning(f"解析识别结果文本失败: {e}")
 
                         # 最后一帧
+                        self.logger.debug(
+                            f"检查最后一帧: status={status}, STATUS_LAST_FRAME={STATUS_LAST_FRAME}, full_text='{self.full_text}'"
+                        )
                         if status == STATUS_LAST_FRAME:
                             full_text = self.full_text.strip()
                             self.logger.info(f"讯飞识别结果: '{full_text}'")
@@ -676,63 +667,81 @@ class STTInputProvider(InputProvider):
         """构建讯飞认证 URL"""
         cfg = self.iflytek_config
 
-        if not all([cfg.get(k) for k in ["host", "path", "api_secret", "api_key"]]):
+        # 使用默认的语音听写流式版地址
+        host = cfg.get("host", "iat-api.xfyun.com")
+        path = cfg.get("path", "/v2/iat")
+
+        if not all([host, path, cfg.get("api_secret"), cfg.get("api_key")]):
             raise ValueError("讯飞配置缺少必要字段")
 
-        host = cfg["host"]
-        path = cfg["path"]
         url = f"wss://{host}{path}"
 
         # 使用 UTC 时间
         date = datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT")
         signature_origin = f"host: {host}\ndate: {date}\nGET {path} HTTP/1.1"
+
+        self.logger.debug(f"signature_origin: {repr(signature_origin)}")
+
         signature_sha = hmac.new(
             cfg["api_secret"].encode("utf-8"), signature_origin.encode("utf-8"), digestmod=hashlib.sha256
         ).digest()
         signature_sha_base64 = base64.b64encode(signature_sha).decode(encoding="utf-8")
+
+        self.logger.debug(f"signature_sha_base64: {signature_sha_base64}")
+
         authorization_origin = f'api_key="{cfg["api_key"]}", algorithm="hmac-sha256", headers="host date request-line", signature="{signature_sha_base64}"'
+
+        self.logger.debug(f"authorization_origin: {authorization_origin[:50]}...")
+
         authorization = base64.b64encode(authorization_origin.encode("utf-8")).decode(encoding="utf-8")
 
-        # URL 编码参数
-        v = {"authorization": authorization, "date": date, "host": host}
-        signed_url = url + "?" + urlencode(v)
+        self.logger.debug(f"讯飞认证 - host: {host}, path: {path}, date: {date}")
 
+        # URL 编码参数 - 不对 date 进行 URL 编码，保持原始格式
+        # 直接拼接参数，手动处理
+        params = f"authorization={authorization}&date={date}&host={host}"
+        signed_url = url + "?" + params
+
+        self.logger.debug(f"讯飞认证 URL: {signed_url[:150]}...")
         return signed_url
 
-    def _build_iflytek_common_params(self) -> dict:
-        """构建讯飞公共参数"""
-        return {"app_id": str(self.iflytek_config["appid"])}
-
-    def _build_iflytek_business_params(self) -> dict:
-        """构建讯飞业务参数"""
-        return {
-            "language": self.iflytek_config.get("language", "zh_cn"),
-            "domain": self.iflytek_config.get("domain", "iat"),
-            "accent": self.iflytek_config.get("accent", "mandarin"),
-            "ptt": self.iflytek_config.get("ptt", 1),
-            "rlang": self.iflytek_config.get("rlang", "zh-cn"),
-            "vinfo": self.iflytek_config.get("vinfo", 1),
-            "dwa": self.iflytek_config.get("dwa", "wpgs"),
-            "vad_eos": self.min_silence_duration_ms,
-            "nunum": 0,
-        }
-
-    def _build_iflytek_data_params(self, status: int, audio_chunk_bytes: bytes = b"") -> dict:
-        """构建讯飞数据参数"""
-        return {
-            "status": status,
-            "format": f"audio/L16;rate={self.sample_rate}",
-            "encoding": "raw",
-            "audio": base64.b64encode(audio_chunk_bytes).decode("utf-8"),
-        }
-
     def _build_iflytek_frame(self, status: int, audio_chunk_bytes: bytes = b"") -> bytes:
-        """构建讯飞帧"""
-        frame = {
-            "common": self._build_iflytek_common_params(),
-            "business": self._build_iflytek_business_params(),
-            "data": self._build_iflytek_data_params(status, audio_chunk_bytes),
+        """构建讯飞帧（语音听写流式版 API 格式）"""
+        # 第一帧需要包含 common 和 business 参数，后续帧只需要 data
+        is_first = status == STATUS_FIRST_FRAME
+
+        # 构建业务参数
+        business = {}
+        if is_first:
+            business = {
+                "language": self.iflytek_config.get("language", "zh_cn"),
+                "domain": self.iflytek_config.get("domain", "iat"),
+                "accent": self.iflytek_config.get("accent", "mandarin"),
+                "vad_eos": self.min_silence_duration_ms,
+            }
+
+        # 构建数据参数
+        format_str = f"audio/L16;rate={self.sample_rate}"
+        data = {
+            "status": status,
+            "format": format_str,
+            "encoding": "raw",
+            "audio": base64.b64encode(audio_chunk_bytes).decode("utf-8") if audio_chunk_bytes else "",
         }
+
+        # 构建完整帧
+        if is_first:
+            frame = {
+                "common": {"app_id": str(self.iflytek_config["appid"])},
+                "business": business,
+                "data": data,
+            }
+            self.logger.debug(
+                f"发送第一帧: common={frame['common']}, business={frame['business']}, data.status={data['status']}, format={format_str}"
+            )
+        else:
+            frame = {"data": data}
+
         return json.dumps(frame).encode("utf-8")
 
     async def cleanup(self):

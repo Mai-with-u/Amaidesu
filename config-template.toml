@@ -217,7 +217,7 @@ enabled_inputs = [
     # "bili_danmaku_official_maicraft",  # B站官方弹幕（MaiCraft专用）
 
     # 语音输入
-    # "stt",                   # 语音转文字（讯飞ASR + Silero VAD）
+    # "stt",                     # 语音转文字（讯飞ASR + Silero VAD）
 
     # 其他输入
     # "mock_danmaku",           # 模拟弹幕
@@ -282,6 +282,33 @@ available_providers = [
 # app_id = "your_app_id"
 # access_key = "your_access_key"
 # access_key_secret = "your_access_key_secret"
+
+# --- STT InputProvider (语音转文字) ---
+[providers.input.stt]
+# 讯飞 ASR 配置（必填）
+[providers.input.stt.iflytek_asr]
+appid = "your_appid"
+api_key = "your_api_key"
+api_secret = "your_api_secret"
+host = "iat-api.xfyun.cn"  # 语音听写流式版 API 地址
+path = "/v2/iat"            # 语音听写流式版 API 路径
+
+# VAD 配置（可选）
+[providers.input.stt.vad]
+enable = true
+vad_threshold = 0.5
+silence_seconds = 1.0
+
+# 音频配置（可选）
+[providers.input.stt.audio]
+sample_rate = 16000
+channels = 1
+stt_input_device_name = ""  # 指定麦克风设备，留空使用默认
+
+# 消息配置（可选）
+[providers.input.stt.message_config]
+user_id = "stt_user"
+user_nickname = "语音"
 
 # --- MaiCore DecisionProvider ---
 # [providers.decision.maicore]
