@@ -505,6 +505,7 @@ enabled = true
 # =============================================================================
 
 
+@pytest.mark.skip(reason="Pipeline 本地配置功能已移除")
 def test_get_pipeline_config_with_main_override(
     config_service, temp_base_dir, full_main_config, pipeline_template_config
 ):
@@ -533,6 +534,7 @@ def test_get_pipeline_config_with_main_override(
     assert pipeline_config["default_field"] == "pipeline_default"  # Pipeline自身的字段保留
 
 
+@pytest.mark.skip(reason="Pipeline 本地配置功能已移除")
 def test_get_pipeline_config_without_main_override(
     config_service, temp_base_dir, minimal_main_config, pipeline_template_config
 ):
@@ -573,6 +575,7 @@ def test_get_pipeline_config_nonexistent(config_service, temp_base_dir, minimal_
     assert pipeline_config == {}
 
 
+@pytest.mark.skip(reason="Pipeline 本地配置功能已移除")
 def test_get_pipeline_config_with_dir_path(config_service, temp_base_dir, full_main_config, pipeline_template_config):
     """测试使用指定路径获取Pipeline配置"""
     main_template_path = os.path.join(temp_base_dir, "config-template.toml")
@@ -869,6 +872,7 @@ def test_config_isolation(config_service, temp_base_dir, minimal_main_config):
     assert service2._initialized is True
 
 
+@pytest.mark.skip(reason="Pipeline 本地配置功能已移除")
 def test_get_all_pipeline_configs(config_service, temp_base_dir, full_main_config, pipeline_template_config):
     """测试获取所有Pipeline配置"""
     main_template_path = os.path.join(temp_base_dir, "config-template.toml")
@@ -1113,122 +1117,6 @@ new_field = "from_main"
     assert merged_config["type"] == "test_provider"
 
 
-def test_get_provider_config_with_defaults_local_config(config_service, temp_base_dir):
-    """测试Schema默认值 + 主配置覆盖 + 本地配置（三级合并）"""
-    from pydantic import BaseModel
-
-    class TestProviderConfig(BaseModel):
-        type: str = "test_provider"
-        priority: int = 100
-        field1: str = "schema_default"
-        field2: str = "schema_default"
-
-    # 创建Provider目录和本地配置
-    provider_dir = os.path.join(temp_base_dir, "src", "domains", "input", "providers", "test_provider")
-    os.makedirs(provider_dir, exist_ok=True)
-
-    local_content = """
-[test_provider]
-priority = 300  # 最高优先级
-field1 = "local_value"
-local_field = "from_local"
-"""
-    with open(os.path.join(provider_dir, "config.toml"), "w", encoding="utf-8") as f:
-        f.write(local_content)
-
-    main_content = """
-[general]
-platform_id = "test"
-
-[llm]
-backend = "openai"
-model = "test"
-api_key = "test"
-
-[providers.input]
-enabled = true
-enabled_inputs = ["test_provider"]
-
-[providers.input.overrides.test_provider]
-priority = 200
-field2 = "override_value"
-override_field = "from_main"
-"""
-    template_path = os.path.join(temp_base_dir, "config-template.toml")
-    with open(template_path, "w", encoding="utf-8") as f:
-        f.write(main_content)
-
-    config_service.initialize()
-
-    merged_config = config_service.get_provider_config_with_defaults("test_provider", "input", TestProviderConfig)
-
-    # 验证三级合并优先级：Schema < 主配置覆盖 < 本地配置
-    assert merged_config["priority"] == 300  # 本地配置优先级最高
-    assert merged_config["field1"] == "local_value"  # 来自本地配置
-    assert merged_config["field2"] == "override_value"  # 来自主配置覆盖
-    assert merged_config["local_field"] == "from_local"  # 来自本地配置
-    assert merged_config["override_field"] == "from_main"  # 来自主配置覆盖
-    assert merged_config["type"] == "test_provider"  # 来自Schema默认值
-
-
-def test_get_provider_config_with_schema_validation(config_service, temp_base_dir):
-    """测试Schema验证（类型检查）"""
-    from pydantic import BaseModel, ValidationError
-
-    class StrictProviderConfig(BaseModel):
-        type: str
-        priority: int = 100
-        speed: float = 1.0
-
-    main_content = """
-[general]
-platform_id = "test"
-
-[llm]
-backend = "openai"
-model = "test"
-api_key = "test"
-
-[providers.output]
-enabled = true
-enabled_outputs = ["test_provider"]
-
-[providers.output.overrides.test_provider]
-type = "test_provider"
-priority = 200
-speed = 1.5
-"""
-    template_path = os.path.join(temp_base_dir, "config-template.toml")
-    with open(template_path, "w", encoding="utf-8") as f:
-        f.write(main_content)
-
-    config_service.initialize()
-
-    # 正确的配置应该通过验证
-    merged_config = config_service.get_provider_config_with_defaults("test_provider", "output", StrictProviderConfig)
-    assert merged_config["priority"] == 200
-    assert merged_config["speed"] == 1.5
-
-    # 创建Provider目录和错误的本地配置
-    provider_dir = os.path.join(temp_base_dir, "src", "domains", "output", "providers", "test_provider")
-    os.makedirs(provider_dir, exist_ok=True)
-
-    local_content = """
-[test_provider]
-speed = "invalid_string"  # 类型错误：应该是float
-"""
-    with open(os.path.join(provider_dir, "config.toml"), "w", encoding="utf-8") as f:
-        f.write(local_content)
-
-    # 重新初始化以加载本地配置
-    config_service2 = ConfigService(base_dir=temp_base_dir)
-    config_service2.initialize()
-
-    # 应该抛出ValidationError
-    with pytest.raises(ValidationError):
-        config_service2.get_provider_config_with_defaults("test_provider", "output", StrictProviderConfig)
-
-
 def test_load_global_overrides(config_service, temp_base_dir):
     """测试加载主配置覆盖"""
     main_content = """
@@ -1280,41 +1168,6 @@ api_key = "test"
     overrides = config_service.load_global_overrides("providers.input", "nonexistent_provider")
 
     assert overrides == {}
-
-
-def test_auto_generate_config_from_schema(config_service, temp_base_dir):
-    """测试自动从Schema生成config.toml文件"""
-    from pydantic import BaseModel
-
-    class AutoGenProviderConfig(BaseModel):
-        type: str = "auto_provider"
-        priority: int = 100
-        auto_field: str = "auto_default"
-
-    main_content = """
-[general]
-platform_id = "test"
-
-[llm]
-backend = "openai"
-model = "test"
-api_key = "test"
-
-[providers.input]
-enabled = true
-enabled_inputs = ["auto_provider"]
-"""
-    template_path = os.path.join(temp_base_dir, "config-template.toml")
-    with open(template_path, "w", encoding="utf-8") as f:
-        f.write(main_content)
-
-    config_service.initialize()
-
-    # Provider目录不存在，应该返回空配置（没有Schema时无法生成）
-    merged_config = config_service.get_provider_config_with_defaults("auto_provider", "input")
-
-    # 由于没有提供Schema，无法生成配置
-    assert merged_config == {}
 
 
 def test_schema_registry_integration():
