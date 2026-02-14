@@ -18,6 +18,8 @@ DecisionProviderManager - 决策Provider管理器（合并自原 DecisionCoordin
 """
 
 import asyncio
+import os
+import sys
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from src.modules.events.names import CoreEvents
@@ -169,7 +171,7 @@ class DecisionProviderManager:
             # 初始化Provider
             try:
                 # 启动 Provider（使用 context 中的 event_bus）
-                await self._current_provider.start(self.event_bus, provider_config)
+                await self._current_provider.start()
                 self.logger.info(f"DecisionProvider '{provider_name}' 初始化成功")
 
                 # 发布Provider连接事件（使用emit）
@@ -263,7 +265,7 @@ class DecisionProviderManager:
 
                 # 设置新Provider
                 try:
-                    await new_provider.start(self.event_bus, config)
+                    await new_provider.start()
                     self.logger.info(f"DecisionProvider '{provider_name}' 初始化成功")
                 except Exception as e:
                     self.logger.error(f"DecisionProvider '{provider_name}' setup 失败: {e}", exc_info=True)
@@ -380,6 +382,13 @@ class DecisionProviderManager:
         通过导入 providers 包触发所有 Provider 的 Schema 注册。
         """
         from src.modules.registry import ProviderRegistry
+
+        # 将 src 目录添加到 sys.path（确保可以导入 src.modules 和 src.domains）
+        src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        src_dir = os.path.dirname(src_dir)  # 从 provider_manager.py -> decision -> src
+        if src_dir not in sys.path:
+            sys.path.insert(0, src_dir)
+            self.logger.debug(f"已将 src 目录添加到 sys.path: {src_dir}")
 
         # 导入 providers 包会执行 __init__.py，注册所有 Provider
         try:

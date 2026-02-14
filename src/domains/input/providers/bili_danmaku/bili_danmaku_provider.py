@@ -4,9 +4,14 @@ Bilibili 弹幕 InputProvider
 从 Bilibili 直播间采集弹幕数据。
 """
 
+from __future__ import annotations
+
 import asyncio
 import time
-from typing import Any, AsyncIterator, Dict, Literal, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Literal, Optional
+
+if TYPE_CHECKING:
+    from src.modules.di.context import ProviderContext
 
 try:
     import aiohttp
@@ -36,8 +41,8 @@ class BiliDanmakuInputProvider(InputProvider):
         poll_interval: int = Field(default=3, description="轮询间隔（秒）", ge=1)
         message_config: dict = Field(default_factory=dict, description="消息配置")
 
-    def __init__(self, config: dict):
-        super().__init__(config)
+    def __init__(self, config: dict, context: "ProviderContext" = None):
+        super().__init__(config, context)
 
         self.logger = get_logger(self.__class__.__name__)
 

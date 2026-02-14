@@ -17,6 +17,7 @@ from src.modules.logging import get_logger
 from src.modules.types.base.output_provider import OutputProvider
 
 if TYPE_CHECKING:
+    from src.modules.di.context import ProviderContext
     from src.modules.types import Intent
 
 
@@ -46,8 +47,8 @@ class StickerOutputProvider(OutputProvider):
         cool_down_seconds: float = Field(default=5.0, ge=0.0, le=300.0, description="冷却时间（秒）")
         display_duration_seconds: float = Field(default=3.0, ge=0.0, le=300.0, description="显示时长（秒）")
 
-    def __init__(self, config: dict):
-        super().__init__(config)
+    def __init__(self, config: dict, context: "ProviderContext" = None):
+        super().__init__(config, context)
         self.logger = get_logger("StickerOutputProvider")
 
         # 使用 ConfigSchema 验证配置，获得类型安全的配置对象

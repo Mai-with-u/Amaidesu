@@ -322,16 +322,16 @@ class OutputProviderManager:
             # 并发启动所有Provider
             setup_tasks = []
             for provider in self.providers:
-                # 传递 audio_stream_channel 给每个 Provider
-                setup_tasks.append(provider.start(event_bus, audio_stream_channel=audio_stream_channel))
+                # 依赖已通过 context 注入，start() 不需要参数
+                setup_tasks.append(provider.start())
 
             await asyncio.gather(*setup_tasks, return_exceptions=True)
         else:
             # 串行启动（用于调试）
             for provider in self.providers:
                 try:
-                    # 传递 audio_stream_channel 给每个 Provider
-                    await provider.start(event_bus, audio_stream_channel=audio_stream_channel)
+                    # 依赖已通过 context 注入，start() 不需要参数
+                    await provider.start()
                 except Exception as e:
                     self.logger.error(f"Provider启动失败: {provider.get_info()['name']} - {e}")
 

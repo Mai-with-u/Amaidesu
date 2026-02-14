@@ -15,6 +15,7 @@ from typing import Dict, Literal, Optional
 
 from pydantic import Field, ValidationError
 
+from modules.di.context import ProviderContext
 from src.modules.types import Intent
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
@@ -74,8 +75,8 @@ class MaicraftDecisionProvider(DecisionProvider):
         mcp_timeout: int = Field(default=30, description="MCP超时时间（秒）")
         verbose_logging: bool = Field(default=False, description="是否输出详细日志")
 
-    def __init__(self, config: dict):
-        super().__init__(config)
+    def __init__(self, config: dict, context: "ProviderContext" = None):
+        super().__init__(config, context)
 
         self.logger = get_logger(self.__class__.__name__)
 

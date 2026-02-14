@@ -4,6 +4,8 @@ STTInputProvider - 语音转文字 Provider
 使用讯飞流式 ASR 和 Silero VAD 实现实时语音转文字。
 """
 
+from __future__ import annotations
+
 import asyncio
 import base64
 import hashlib
@@ -13,7 +15,10 @@ import os
 import ssl
 import time
 from datetime import datetime
-from typing import Any, AsyncIterator, Dict, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Optional
+
+if TYPE_CHECKING:
+    from src.modules.di.context import ProviderContext
 
 import numpy as np
 
@@ -54,14 +59,15 @@ class STTInputProvider(InputProvider):
         """获取 Provider 注册信息"""
         return {"layer": "input", "name": "stt", "class": cls, "source": "builtin:stt"}
 
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, context: "ProviderContext" = None):
         """
         初始化 STTInputProvider
 
         Args:
             config: Provider 配置
+            context: 统一依赖上下文(可选)
         """
-        super().__init__(config)
+        super().__init__(config, context)
         self.logger = get_logger("STTInputProvider")
 
         # 使用 ConfigSchema 验证配置

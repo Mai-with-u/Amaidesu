@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
 from maim_message import MessageBase, RouteConfig, Router, TargetConfig
 from pydantic import Field
 
+from modules.di.context import ProviderContext
 from src.modules.types import ActionType, EmotionType, Intent, IntentAction, SourceContext
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
