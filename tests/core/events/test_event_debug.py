@@ -18,7 +18,6 @@ from src.modules.events.payloads import (
     IntentActionPayload,
     IntentPayload,
     MessageReadyPayload,
-    ParametersGeneratedPayload,
     ProviderConnectedPayload,
     ProviderDisconnectedPayload,
     RawDataPayload,
@@ -252,27 +251,6 @@ class TestDecisionPayloads:
 
 class TestOutputPayloads:
     """测试 Output Domain Payload 的字符串表示"""
-
-    def test_parameters_generated_payload_debug_string(self):
-        """测试 ParametersGeneratedPayload 的字符串表示"""
-        payload = ParametersGeneratedPayload(
-            tts_text="你好呀~",
-            tts_enabled=True,
-            subtitle_text="你好呀~",
-            subtitle_enabled=True,
-            expressions={"happy": 0.8, "surprised": 0.2},
-            expressions_enabled=True,
-            hotkeys=["wave"],
-            hotkeys_enabled=True,
-        )
-        debug_str = str(payload)
-
-        assert "ParametersGeneratedPayload" in debug_str
-        assert 'tts_text="你好呀~"' in debug_str
-        assert "tts_enabled=True" in debug_str
-        assert 'subtitle_text="你好呀~"' in debug_str
-        assert "expressions=" in debug_str
-        assert "hotkeys=" in debug_str
 
     def test_render_completed_payload_debug_string(self):
         """测试 RenderCompletedPayload 的字符串表示"""

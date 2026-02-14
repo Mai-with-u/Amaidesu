@@ -5,10 +5,6 @@ MaiCoreDecisionProvider - MaiCore决策提供者
 - 将 NormalizedMessage 转换为 Intent
 - 通过 WebSocket 与 MaiCore 通信
 - 自己解析 MaiCore 响应为 Intent（支持 LLM 和规则两种方式）
-
-事件说明:
-- "decision.response_generated": 保留字符串形式的事件名，用于向后兼容
-  该事件不在 CoreEvents 中定义，因为它是 MaiCore 特定的历史事件
 """
 
 import asyncio
@@ -369,22 +365,6 @@ class MaiCoreDecisionProvider(DecisionProvider):
 
         if not future:
             self.logger.warning(f"收到未知消息的响应: {message_id}")
-            # 仍然发布事件（向后兼容）
-            if self._event_bus:
-                try:
-                    from src.modules.events.names import CoreEvents
-                    from src.modules.events.payloads.decision import DecisionResponsePayload
-
-                    await self._event_bus.emit(
-                        CoreEvents.DECISION_RESPONSE_GENERATED,
-                        DecisionResponsePayload(
-                            response=message.model_dump(),
-                            provider=self.provider_name,
-                        ),
-                        source=self.provider_name,
-                    )
-                except Exception as e:
-                    self.logger.error(f"发布决策响应事件失败: {e}", exc_info=True)
             return
 
         try:

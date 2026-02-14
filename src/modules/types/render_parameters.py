@@ -67,11 +67,6 @@ class ExpressionParameters(BaseModel):
         )
 
 
-# 向后兼容别名
-RenderParameters = ExpressionParameters
-
-
 __all__ = [
     "ExpressionParameters",
-    "RenderParameters",
 ]

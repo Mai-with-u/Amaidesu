@@ -41,7 +41,6 @@ from .input import (
     RawDataPayload,
 )
 from .output import (
-    ParametersGeneratedPayload,
     RenderCompletedPayload,
     RenderFailedPayload,
 )
@@ -65,7 +64,6 @@ __all__ = [
     "ProviderConnectedPayload",
     "ProviderDisconnectedPayload",
     # Output Domain
-    "ParametersGeneratedPayload",
     "RenderCompletedPayload",
     "RenderFailedPayload",
     # System

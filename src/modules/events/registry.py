@@ -111,17 +111,14 @@ def register_core_events() -> None:
         DecisionResponsePayload,
         IntentPayload,
         MessageReadyPayload,
-        ParametersGeneratedPayload,
         ProviderConnectedPayload,
         ProviderDisconnectedPayload,
-        RawDataPayload,
         RenderCompletedPayload,
         RenderFailedPayload,
     )
     from src.modules.events.payloads.system import ErrorPayload, ShutdownPayload, StartupPayload
 
     # 核心事件注册
-    EventRegistry.register_core_event(CoreEvents.DATA_RAW, RawDataPayload)
     EventRegistry.register_core_event(CoreEvents.DATA_MESSAGE, MessageReadyPayload)
     EventRegistry.register_core_event(CoreEvents.DECISION_REQUEST, DecisionRequestPayload)
     EventRegistry.register_core_event(CoreEvents.DECISION_INTENT, IntentPayload)
@@ -130,8 +127,6 @@ def register_core_events() -> None:
     EventRegistry.register_core_event(CoreEvents.DECISION_PROVIDER_DISCONNECTED, ProviderDisconnectedPayload)
     # Output Domain 事件
     EventRegistry.register_core_event(CoreEvents.OUTPUT_INTENT, IntentPayload)  # 过滤后的 Intent
-    # @deprecated: OUTPUT_PARAMS 已废弃，保留仅为向后兼容
-    EventRegistry.register_core_event(CoreEvents.OUTPUT_PARAMS, ParametersGeneratedPayload)
     EventRegistry.register_core_event(CoreEvents.RENDER_COMPLETED, RenderCompletedPayload)
     EventRegistry.register_core_event(CoreEvents.RENDER_FAILED, RenderFailedPayload)
     EventRegistry.register_core_event(CoreEvents.CORE_STARTUP, StartupPayload)

@@ -26,7 +26,6 @@ from src.modules.events.payloads.decision import (
 )
 from src.modules.events.payloads.input import MessageReadyPayload, RawDataPayload
 from src.modules.events.payloads.output import (
-    ParametersGeneratedPayload,
     RenderCompletedPayload,
     RenderFailedPayload,
 )
@@ -549,46 +548,6 @@ class TestProviderDisconnectedPayload:
 
 
 # =============================================================================
-# ParametersGeneratedPayload 测试
-# =============================================================================
-
-
-class TestParametersGeneratedPayload:
-    """测试 ParametersGeneratedPayload"""
-
-    def test_parameters_generated_payload_creation(self):
-        """测试创建 ParametersGeneratedPayload"""
-        payload = ParametersGeneratedPayload(
-            tts_text="你好呀~",
-            subtitle_text="你好呀~",
-            expressions={"happy": 0.8},
-        )
-        assert payload.tts_text == "你好呀~"
-        assert payload.subtitle_text == "你好呀~"
-        assert payload.expressions == {"happy": 0.8}
-
-    def test_parameters_generated_payload_defaults(self):
-        """测试默认字段值"""
-        payload = ParametersGeneratedPayload()
-        assert payload.tts_text == ""
-        assert payload.tts_enabled is True
-        assert payload.subtitle_enabled is True
-        assert payload.expressions == {}
-
-    def test_parameters_generated_payload_with_hotkeys(self):
-        """测试带热键的 ParametersGeneratedPayload"""
-        payload = ParametersGeneratedPayload(
-            hotkeys=["wave", "smile"],
-        )
-        assert payload.hotkeys == ["wave", "smile"]
-
-    def test_parameters_generated_payload_priority_validation(self):
-        """测试 priority 字段验证 (>=0)"""
-        payload = ParametersGeneratedPayload(priority=50)
-        assert payload.priority == 50
-
-
-# =============================================================================
 # RenderCompletedPayload 测试
 # =============================================================================
 
@@ -900,20 +859,6 @@ class TestPayloadStringFormatting:
         assert 'provider="maicore"' in str_repr
         assert 'reason="timeout"' in str_repr
         assert "will_retry=True" in str_repr
-
-    def test_parameters_generated_payload_str_format(self):
-        """测试 ParametersGeneratedPayload 的 __str__() 格式"""
-        payload = ParametersGeneratedPayload(
-            tts_text="测试语音",
-            subtitle_text="测试字幕",
-            expressions={"happy": 0.8},
-        )
-        str_repr = str(payload)
-        # ParametersGeneratedPayload 有自定义的 __str__ 方法
-        assert "ParametersGeneratedPayload" in str_repr
-        assert 'tts_text="测试语音"' in str_repr
-        assert 'subtitle_text="测试字幕"' in str_repr
-        assert "expressions=" in str_repr
 
     def test_render_completed_payload_str_format(self):
         """测试 RenderCompletedPayload 的 __str__() 格式"""
