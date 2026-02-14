@@ -15,7 +15,7 @@ from typing import Dict, Literal, Optional
 
 from pydantic import Field, ValidationError
 
-from modules.di.context import ProviderContext
+from src.modules.di.context import ProviderContext
 from src.modules.types import Intent
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger

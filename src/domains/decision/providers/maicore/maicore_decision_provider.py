@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
 from maim_message import MessageBase, RouteConfig, Router, TargetConfig
 from pydantic import Field
 
-from modules.di.context import ProviderContext
+from src.modules.di.context import ProviderContext
 from src.modules.types import ActionType, EmotionType, Intent, IntentAction, SourceContext
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
@@ -129,7 +129,6 @@ class MaiCoreDecisionProvider(DecisionProvider):
 
         # 组件
         self._router_adapter: Optional[RouterAdapter] = None
-        self._dependencies: Dict[str, Any] = {}  # 依赖注入（包括 llm_service）
 
         # EventBus 引用（用于事件通知）
         self._event_bus: Optional["EventBus"] = None
@@ -141,14 +140,6 @@ class MaiCoreDecisionProvider(DecisionProvider):
         配置 Router 并创建 RouterAdapter。
         """
         self.logger.info("初始化 MaiCoreDecisionProvider...")
-
-        # 保存依赖注入
-        if self._dependencies:
-            llm_service = self._dependencies.get("llm_service")
-            if llm_service:
-                self.logger.info("LLMService 已注入，将使用 LLM 进行 Intent 解析")
-            else:
-                self.logger.info("LLMService 未注入，将使用规则解析")
 
         # 配置 Router
         self._setup_router()
@@ -387,7 +378,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
         text = self._extract_text_from_response(response)
 
         # 尝试使用 LLM 解析
-        llm_service = self._dependencies.get("llm_service")
+        llm_service = self.context.llm_service
         if llm_service:
             try:
                 return self._parse_with_llm(text, response, llm_service)
@@ -551,7 +542,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
         text = normalized_message.text
 
         # 尝试使用 LLM 解析
-        llm_service = self._dependencies.get("llm_service")
+        llm_service = self.context.llm_service
         if llm_service:
             try:
                 # 创建假的 MessageBase 用于 LLM 解析

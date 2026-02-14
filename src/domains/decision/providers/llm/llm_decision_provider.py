@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
 
 from pydantic import Field
 
+from src.modules.di.context import ProviderContext
 from src.modules.types import Intent
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.context import MessageRole
@@ -94,30 +95,15 @@ class LLMPDecisionProvider(DecisionProvider):
         """
         初始化 LLMPDecisionProvider
 
-        从依赖注入中获取必要的服务。
+        从 ProviderContext 获取必要的服务。
         """
         self.logger.info("初始化 LLMPDecisionProvider...")
 
-        # 从依赖注入中获取 LLMManager
-        if self._dependencies and "llm_service" in self._dependencies:
-            self._llm_service = self._dependencies["llm_service"]
-            self.logger.info("LLMManager 已从依赖注入中获取")
-        else:
-            self.logger.warning("LLMManager 未通过依赖注入提供，决策功能将不可用")
-
-        # 从依赖注入中获取 ConfigService
-        if self._dependencies and "config_service" in self._dependencies:
-            self._config_service = self._dependencies["config_service"]
-            self.logger.info("ConfigService 已从依赖注入中获取")
-        else:
-            self.logger.warning("ConfigService 未通过依赖注入提供，将使用默认人设")
-
-        # 从依赖注入中获取 ContextService
-        if self._dependencies and "context_service" in self._dependencies:
-            self._context_service = self._dependencies["context_service"]
-            self.logger.info("ContextService 已从依赖注入中获取")
-        else:
-            self.logger.warning("ContextService 未通过依赖注入提供，将使用无状态模式")
+        # 从 ProviderContext 获取服务
+        self._llm_service = self.context.llm_service
+        self._config_service = self.context.config_service
+        self._context_service = self.context.context_service
+        self.logger.info("服务已从 ProviderContext 获取")
 
         self.logger.info(f"LLMPDecisionProvider 初始化完成 (Client: {self.client_type})")
 
