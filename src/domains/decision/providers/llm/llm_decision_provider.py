@@ -194,11 +194,10 @@ class LLMPDecisionProvider(DecisionProvider):
         # 构建历史文本（用于 prompt 模板）
         history_text = "\n".join(history_context) if history_context else ""
 
-        # 获取 prompt_service（优先使用依赖注入，回退到全局单例）
-        from src.modules.prompts import get_prompt_manager
-
-        prompt_service = self.context.prompt_service if self.context else None
-        prompt_manager = prompt_service if prompt_service else get_prompt_manager()
+        # 获取 prompt_service（依赖注入）
+        if not self.context or not self.context.prompt_service:
+            raise ValueError("prompt_service 未注入，请检查 Provider 初始化配置")
+        prompt_manager = self.context.prompt_service
 
         # 构建 prompt（使用 PromptManager 渲染结构化模板）
         prompt = prompt_manager.render_safe(

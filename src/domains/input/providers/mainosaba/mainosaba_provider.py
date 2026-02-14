@@ -191,11 +191,10 @@ class MainosabaInputProvider(InputProvider):
 
         try:
             # 构建 prompt（从集中管理的模板获取）
-            # 优先使用依赖注入的 prompt_service，回退到全局单例
-            from src.modules.prompts import get_prompt_manager
-
-            prompt_service = self.context.prompt_service if self.context else None
-            prompt_manager = prompt_service if prompt_service else get_prompt_manager()
+            # 依赖注入的 prompt_service
+            if not self.context or not self.context.prompt_service:
+                raise ValueError("prompt_service 未注入，请检查 Provider 初始化配置")
+            prompt_manager = self.context.prompt_service
             prompt = prompt_manager.get_raw("input/mainosaba_ocr")
 
             # 构建图像 URL（LLMClient 支持 base64 格式）

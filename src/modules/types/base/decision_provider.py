@@ -37,17 +37,18 @@ class DecisionProvider(ABC):
 
         Args:
             config: Provider配置(来自decision.providers.xxx配置)
-            context: 依赖注入上下文（可选）
+            context: 依赖注入上下文（必填）
         """
+        if context is None:
+            raise ValueError("DecisionProvider 必须接收 context 参数")
+
         self.config = config
-        self.context = context or ProviderContext()
+        self.context = context
         self.is_started = False
-        # 向后兼容：保留 _dependencies 属性
-        self._dependencies: dict = {}
 
     @property
     def event_bus(self):
-        """EventBus实例（优先使用context中的）"""
+        """EventBus实例"""
         return self.context.event_bus
 
     async def init(self) -> None:  # noqa: B027
@@ -59,33 +60,15 @@ class DecisionProvider(ABC):
         """
         pass
 
-    async def start(
-        self,
-        event_bus=None,
-        config: Optional[dict] = None,
-        dependencies: Optional[dict] = None,
-    ) -> None:
+    async def start(self) -> None:
         """
-        启动 Provider（向后兼容）
+        启动 Provider
 
-        Args:
-            event_bus: EventBus实例（保持兼容，优先使用context中的）
-            config: Provider配置（可选，如果传入则覆盖构造时的配置）
-            dependencies: 可选的依赖注入（保持兼容，但不再需要）
+        依赖已在构造时通过 context 注入，此方法仅进行初始化。
 
         Raises:
             ConnectionError: 如果无法连接到决策服务
         """
-        # 向后兼容：如果传入了 event_bus 但 context 中没有，则更新 context
-        if event_bus is not None and (self.context is None or self.context.event_bus is None):
-            # 由于 ProviderContext 是 frozen，需要使用 dataclasses.replace
-            from dataclasses import replace
-            self.context = replace(self.context, event_bus=event_bus)
-
-        if config:
-            self.config = config
-        if dependencies:
-            self._dependencies = dependencies
         await self.init()
         self.is_started = True
 

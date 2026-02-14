@@ -42,10 +42,13 @@ class OutputProvider(ABC):
     def __init__(
         self,
         config: dict,
-        context: ProviderContext = None,  # 替换硬编码参数
+        context: ProviderContext = None,
     ):
+        if context is None:
+            raise ValueError("OutputProvider 必须接收 context 参数")
+
         self.config = config
-        self.context = context or ProviderContext()
+        self.context = context
         self.is_started = False
 
     @property
@@ -65,38 +68,22 @@ class OutputProvider(ABC):
         """
         pass
 
-    async def start(
-        self,
-        event_bus=None,
-        audio_stream_channel: Optional["AudioStreamChannel"] = None,
-    ):
+    async def start(self):
         """
         启动 Provider，订阅 OUTPUT_INTENT 事件
 
-        优先使用 context 中的值，否则使用传入的参数（保持兼容）
-
-        Args:
-            event_bus: EventBus实例
-            audio_stream_channel: 可选的AudioStreamChannel实例
+        依赖已在构造时通过 context 注入。
         """
-        import dataclasses
-
         from src.modules.events.names import CoreEvents
         from src.modules.events.payloads.decision import IntentPayload
 
-        # 优先使用 context 中的值，否则使用传入的参数（保持兼容）
-        actual_event_bus = self.context.event_bus or event_bus
-        actual_audio_channel = self.context.audio_stream_channel or audio_stream_channel
-
-        # 使用 dataclasses.replace 创建新实例（因为 frozen=True）
-        if actual_event_bus or actual_audio_channel:
-            self.context = dataclasses.replace(
-                self.context,
-                event_bus=actual_event_bus or self.context.event_bus,
-                audio_stream_channel=actual_audio_channel or self.context.audio_stream_channel,
+        if self.context.event_bus:
+            self.context.event_bus.on(
+                CoreEvents.OUTPUT_INTENT, self._on_intent, model_class=IntentPayload, priority=self.priority
             )
 
-        # 订阅事件
+        await self.init()
+        self.is_started = True
         if actual_event_bus:
             actual_event_bus.on(
                 CoreEvents.OUTPUT_INTENT,

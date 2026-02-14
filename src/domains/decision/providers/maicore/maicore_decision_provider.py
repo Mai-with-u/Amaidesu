@@ -447,11 +447,10 @@ class MaiCoreDecisionProvider(DecisionProvider):
             ValueError: 如果 LLM 返回的内容无法解析为 JSON
         """
         # 使用 decision/intent_parser prompt
-        # 优先使用依赖注入的 prompt_service，回退到全局单例
-        from src.modules.prompts import get_prompt_manager
-
-        prompt_service = self.context.prompt_service if self.context else None
-        prompt_manager = prompt_service if prompt_service else get_prompt_manager()
+        # 依赖注入的 prompt_service
+        if not self.context or not self.context.prompt_service:
+            raise ValueError("prompt_service 未注入，请检查 Provider 初始化配置")
+        prompt_manager = self.context.prompt_service
         prompt = prompt_manager.render("decision/intent_parser", text=text)
 
         # 调用 LLM
