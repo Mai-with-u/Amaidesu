@@ -51,17 +51,22 @@ class MockOutputProvider(OutputProvider):
         super().__init__(config)
         self.raise_error = raise_error
         self.init_called = False
+        self.start_called = False
         self.cleanup_called = False
+        self.stop_called = False
         self.execute_count = 0
+        self.render_count = 0
         self.last_intent = None
 
     async def init(self):
         """模拟初始化"""
         self.init_called = True
+        self.start_called = True
 
     async def execute(self, intent: Intent):
         """执行意图"""
         self.execute_count += 1
+        self.render_count = self.execute_count  # 别名
         self.last_intent = intent
 
         if self.raise_error:
@@ -70,6 +75,7 @@ class MockOutputProvider(OutputProvider):
     async def cleanup(self):
         """清理资源"""
         self.cleanup_called = True
+        self.stop_called = True
 
 
 class IncompleteOutputProvider(OutputProvider):

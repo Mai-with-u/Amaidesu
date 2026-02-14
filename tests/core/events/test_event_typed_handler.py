@@ -1,7 +1,7 @@
 """
 测试类型化事件处理器
 
-验证 EventBus.on_typed() 方法的功能：
+验证 EventBus.on() 方法的功能：
 - 自动反序列化 Pydantic Model
 - 处理器直接接收类型化对象
 - 无需手动 from_dict() 调用
@@ -22,7 +22,7 @@ class TestTypedEventHandler:
     """测试类型化事件处理器"""
 
     @pytest.mark.asyncio
-    async def test_on_typed_basic(self):
+    async def test_on_basic(self):
         """测试基本的类型化事件订阅"""
 
         # 定义测试数据模型
@@ -44,7 +44,7 @@ class TestTypedEventHandler:
             received_data.append((event_name, data, source))
 
         # 订阅类型化事件
-        event_bus.on_typed("test.typed_event", typed_handler, TestPayload)
+        event_bus.on("test.typed_event", typed_handler, TestPayload)
 
         # 发布事件（传入 TestPayload 对象）
         payload = TestPayload(value="hello", count=42)
@@ -63,7 +63,7 @@ class TestTypedEventHandler:
         assert source == "test_source"
 
     @pytest.mark.asyncio
-    async def test_on_typed_with_message_ready_payload(self):
+    async def test_on_with_message_ready_payload(self):
         """测试使用 MessageReadyPayload 的类型化事件"""
 
         event_bus = EventBus(enable_stats=False)
@@ -78,7 +78,7 @@ class TestTypedEventHandler:
             received_messages.append(payload)
 
         # 订阅类型化事件
-        event_bus.on_typed(
+        event_bus.on(
             CoreEvents.DATA_MESSAGE,
             message_handler,
             MessageReadyPayload,
@@ -101,7 +101,7 @@ class TestTypedEventHandler:
         assert received_messages[0].message["text"] == "测试消息"
 
     @pytest.mark.asyncio
-    async def test_on_typed_with_intent_payload(self):
+    async def test_on_with_intent_payload(self):
         """测试使用 IntentPayload 的类型化事件"""
 
         event_bus = EventBus(enable_stats=False)
@@ -117,7 +117,7 @@ class TestTypedEventHandler:
             received_intents.append(intent)
 
         # 订阅类型化事件
-        event_bus.on_typed(
+        event_bus.on(
             CoreEvents.DECISION_INTENT,
             intent_handler,
             IntentPayload,
@@ -144,7 +144,7 @@ class TestTypedEventHandler:
         assert received_intents[0].response_text == "你好！"
 
     @pytest.mark.asyncio
-    async def test_on_typed_priority(self):
+    async def test_on_priority(self):
         """测试类型化事件的优先级"""
 
         event_bus = EventBus(enable_stats=False)
@@ -165,9 +165,9 @@ class TestTypedEventHandler:
             value: str
 
         # 订阅不同优先级
-        event_bus.on_typed("test.priority", handler_default, TestPayload, priority=100)
-        event_bus.on_typed("test.priority", handler_high, TestPayload, priority=10)
-        event_bus.on_typed("test.priority", handler_low, TestPayload, priority=200)
+        event_bus.on("test.priority", handler_default, TestPayload, priority=100)
+        event_bus.on("test.priority", handler_high, TestPayload, priority=10)
+        event_bus.on("test.priority", handler_low, TestPayload, priority=200)
 
         # 发布事件
         payload = TestPayload(value="test")
@@ -180,8 +180,8 @@ class TestTypedEventHandler:
         assert execution_order == ["high", "default", "low"]
 
     @pytest.mark.asyncio
-    async def test_on_typed_mixed_with_regular_on(self):
-        """测试类型化订阅和普通订阅可以混合使用"""
+    async def test_on_mixed_with_regular_on(self):
+        """测试多个处理器可以订阅同一事件"""
 
         event_bus = EventBus(enable_stats=False)
 
@@ -191,19 +191,19 @@ class TestTypedEventHandler:
         class TestPayload(BaseModel):
             value: str
 
-        # 类型化处理器
+        # 第一个处理器
         async def typed_handler(event_name: str, data: TestPayload, source: str):
             assert isinstance(data, TestPayload)
             received_typed.append(data.value)
 
-        # 普通处理器
-        async def regular_handler(event_name: str, data: dict, source: str):
-            assert isinstance(data, dict)
-            received_regular.append(data["value"])
+        # 第二个处理器
+        async def regular_handler(event_name: str, data: TestPayload, source: str):
+            assert isinstance(data, TestPayload)
+            received_regular.append(data.value)
 
         # 混合订阅
-        event_bus.on_typed("test.mixed", typed_handler, TestPayload)
-        event_bus.on("test.mixed", regular_handler)
+        event_bus.on("test.mixed", typed_handler, model_class=TestPayload)
+        event_bus.on("test.mixed", regular_handler, model_class=TestPayload)
 
         # 发布事件
         payload = TestPayload(value="test_value")

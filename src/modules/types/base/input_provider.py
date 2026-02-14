@@ -83,8 +83,11 @@ class InputProvider(ABC):
         """
         await self.init()
         self.is_running = True
-        async for message in self.generate():
-            yield message
+        try:
+            async for message in self.generate():
+                yield message
+        finally:
+            self.is_running = False
 
     async def stop(self):
         """

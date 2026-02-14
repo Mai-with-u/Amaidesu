@@ -26,21 +26,14 @@ class MockInputProvider(InputProvider):
         super().__init__(config)
         self.provider_type = "mock_input"
 
-    async def start(self) -> AsyncIterator[NormalizedMessage]:
-        """启动 Provider 并返回数据流"""
-        await self._setup_internal()
-        self.is_running = True
-        try:
-            yield NormalizedMessage(
-                text="test",
-                content="test",
-                source="mock",
-                data_type="text",
-                importance=0.5,
-            )
-        finally:
-            self.is_running = False
-            await self._cleanup_internal()
+    async def generate(self) -> AsyncIterator[NormalizedMessage]:
+        """生成数据流"""
+        yield NormalizedMessage(
+            text="test",
+            source="mock",
+            data_type="text",
+            importance=0.5,
+        )
 
     @classmethod
     def get_registration_info(cls):

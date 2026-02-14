@@ -451,7 +451,7 @@ class TestEventBusDebugLog:
             async def handler(event_name, data, source):
                 received_data.append(data)
 
-            event_bus.on("test.event", handler)
+            event_bus.on("test.event", handler, model_class=RawDataPayload)
 
             # 发布事件
             payload = RawDataPayload(content="测试消息", source="test", data_type="text")
@@ -487,7 +487,7 @@ class TestEventBusDebugLog:
             async def handler(event_name, data, source):
                 received_data.append(data)
 
-            event_bus.on("test.complex", handler)
+            event_bus.on("test.complex", handler, model_class=IntentPayload)
 
             # 发布复杂的 Payload
             from src.modules.types import Intent
