@@ -23,25 +23,34 @@ class InputProvider(ABC):
 
     职责: 从外部数据源采集数据并直接构造 NormalizedMessage
 
-    数据流: start() → yield NormalizedMessage
-
     生命周期:
     1. 实例化(__init__)
-    2. 启动(start()) - 返回异步生成器,产生 NormalizedMessage
-       - start() 会先调用 init() 进行初始化
-       - 然后返回 AsyncIterator
-    3. 停止(stop()) - 调用 cleanup() 清理资源
+    2. 启动(start()) - 初始化资源配置，建立连接
+    3. 获取数据(stream()) - 返回异步生成器，产生 NormalizedMessage
+    4. 停止(stop()) - 调用 cleanup() 清理资源
+
+    使用方式:
+        # 启动 Provider
+        await provider.start()
+
+        # 获取数据流
+        async for message in provider.stream():
+            ...
+
+        # 停止 Provider
+        await provider.stop()
 
     公开方法:
     - init(): 初始化资源配置（子类可重写）
-    - start(): 启动 Provider 并返回 AsyncIterator
+    - start(): 启动 Provider，建立连接
+    - stream(): 获取 NormalizedMessage 数据流
     - stop(): 停止 Provider
     - cleanup(): 清理资源（子类可重写）
     - generate(): 生成 NormalizedMessage 数据流（子类必须实现）
 
     Attributes:
         config: Provider配置(来自新配置格式)
-        is_running: 是否正在运行
+        is_running: 是否已启动
         _dependencies: 依赖注入字典
     """
 
@@ -61,33 +70,60 @@ class InputProvider(ABC):
         初始化资源配置（子类可重写）
 
         执行初始化逻辑，如建立连接、加载配置等。
-        此方法在 start() 开始时调用。
+        此方法在 start() 时调用。
 
         子类可以重写此方法来执行初始化逻辑，
         如建立连接、打开文件句柄等。
         """
         pass
 
-    async def start(self) -> AsyncIterator[NormalizedMessage]:
+    async def start(self) -> None:
         """
-        启动 Provider 并返回 NormalizedMessage 流
+        启动 Provider，建立连接
 
-        此方法会先调用 init() 进行初始化，
-        然后返回一个 AsyncIterator。
+        此方法负责：
+        1. 调用 init() 进行初始化
+        2. 建立与数据源的连接
+        3. 设置 is_running = True
+
+        使用方式:
+            await provider.start()
+            async for message in provider.stream():
+                ...
+        """
+        await self.init()
+        self.is_running = True
+
+    def stream(self) -> AsyncIterator[NormalizedMessage]:
+        """
+        返回 NormalizedMessage 数据流
+
+        这是一个异步生成器，调用后会迭代 Provider 产生的数据。
+
+        注意: 调用此方法前必须先调用 start() 启动 Provider。
+
+        使用方式:
+            await provider.start()
+            async for message in provider.stream():
+                ...
 
         Yields:
             NormalizedMessage: 标准化消息
 
         Raises:
-            ConnectionError: 如果无法连接到数据源
+            RuntimeError: 如果 Provider 未启动
         """
-        await self.init()
-        self.is_running = True
-        try:
-            async for message in self.generate():
-                yield message
-        finally:
-            self.is_running = False
+        if not self.is_running:
+            raise RuntimeError("Provider 未启动，请先调用 start()")
+
+        async def _generate():
+            try:
+                async for message in self.generate():
+                    yield message
+            finally:
+                self.is_running = False
+
+        return _generate()
 
     async def stop(self):
         """

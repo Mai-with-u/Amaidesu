@@ -52,7 +52,14 @@ class EventRegistry:
             raise ValueError(f"核心事件名必须以 {valid_prefixes} 之一开头，收到: {event_name}")
 
         if event_name in cls._core_events:
-            cls._logger.warning(f"核心事件已存在，将覆盖: {event_name}")
+            # 只有当类型不同时才发出警告，相同类型不警告（这是安全的重复注册）
+            existing_model = cls._core_events[event_name]
+            if existing_model != model:
+                cls._logger.warning(
+                    f"核心事件已存在，将覆盖: {event_name} (旧: {existing_model.__name__}, 新: {model.__name__})"
+                )
+            else:
+                cls._logger.debug(f"核心事件已存在（类型相同，跳过）: {event_name}")
 
         cls._core_events[event_name] = model
         cls._logger.debug(f"注册核心事件: {event_name} -> {model.__name__}")

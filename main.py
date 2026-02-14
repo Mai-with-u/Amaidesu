@@ -9,7 +9,7 @@ import sys
 from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger as loguru_logger
-from src.modules.events import EventBus, register_core_events
+from src.modules.events import EventBus
 from src.modules.logging import get_logger
 from src.modules.registry import ProviderRegistry
 from src.modules.config.service import ConfigService
@@ -184,12 +184,8 @@ def exit_if_config_copied(main_cfg_copied: bool, plugin_cfg_copied: bool, pipeli
 
     if plugin_cfg_copied or pipeline_cfg_copied:
         logger.warning(box)
-        if plugin_cfg_copied:
-            logger.warning("!! 已根据模板创建了部分插件的 config.toml 文件。          !!")
-            logger.warning("!! 请检查 src/domains/ 下各Provider目录中的 config.toml 文件， !!")
-        if pipeline_cfg_copied:
-            logger.warning("!! 已根据模板创建了部分管道的 config.toml 文件。          !!")
-            logger.warning("!! 请检查 src/domains/input/pipelines/ 下各管道目录中的 config.toml 文件，!!")
+        logger.warning("!! 配置文件已更新。                                      !!")
+        logger.warning("!! 请检查并修改 config.toml 中的 Provider 和 Pipeline 配置。  !!")
         logger.warning("!! 特别是 API 密钥、房间号、设备名称等需要您修改的配置。   !!")
         logger.warning("!! 修改完成后，请重新运行程序。                           !!")
         logger.warning(box)
@@ -271,7 +267,9 @@ async def load_pipeline_manager(config: Dict[str, Any]) -> Optional[InputPipelin
 
         total_pipelines = message_pipeline_count + text_pipeline_count
         if total_pipelines > 0:
-            logger.info(f"管道加载完成，共 {message_pipeline_count} 个 MessagePipeline，{text_pipeline_count} 个 TextPipeline。")
+            logger.info(
+                f"管道加载完成，共 {message_pipeline_count} 个 MessagePipeline，{text_pipeline_count} 个 TextPipeline。"
+            )
             return manager
         else:
             logger.warning("未找到任何有效的管道，管道功能将被禁用。")
@@ -348,7 +346,6 @@ async def create_app_components(
     # 事件总线
     logger.info("初始化事件总线和数据流协调器...")
     event_bus = EventBus()
-    register_core_events()
 
     # 输入Provider管理器 (Input Domain)
     input_provider_manager: Optional[InputProviderManager] = None
@@ -397,7 +394,9 @@ async def create_app_components(
 
     # 输出Provider管理器 (Output Domain)
     logger.info("初始化输出Provider管理器...")
-    output_provider_manager: Optional[OutputProviderManager] = OutputProviderManager(event_bus) if output_config else None
+    output_provider_manager: Optional[OutputProviderManager] = (
+        OutputProviderManager(event_bus) if output_config else None
+    )
     if output_provider_manager:
         try:
             await output_provider_manager.setup(

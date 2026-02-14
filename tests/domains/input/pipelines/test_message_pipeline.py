@@ -25,6 +25,7 @@ class MockMessagePipeline(MessagePipelineBase):
 
 def create_message(text: str, user_id: str = "test_user", source: str = "test_source") -> NormalizedMessage:
     """创建测试用的 NormalizedMessage"""
+
     class MockRaw:
         open_id = user_id
         uname = "test_name"

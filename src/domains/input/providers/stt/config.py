@@ -17,10 +17,10 @@ class IflytekAsrConfig(BaseModel):
     appid: str = Field(..., description="讯飞应用 ID")
     api_key: str = Field(..., description="讯飞 API Key")
     api_secret: str = Field(..., description="讯飞 API Secret")
-    host: str = Field(default="iat-api.xfyun.cn", description="讯飞 API 主机")
-    path: str = Field(default="/v2/iat", description="讯飞 API 路径")
+    host: str = Field(default="iat.xf-yun.com", description="讯飞 API 主机")
+    path: str = Field(default="/v1", description="讯飞 API 路径")
     language: str = Field(default="zh_cn", description="语言类型")
-    domain: str = Field(default="iat", description="领域")
+    domain: str = Field(default="slm", description="领域 (iat: 流式, slm: 大模型)")
     accent: str = Field(default="mandarin", description="口音")
     ptt: int = Field(default=1, description="标点符号")
     rlang: str = Field(default="zh-cn", description="动态修正语言")
@@ -61,7 +61,6 @@ class MessageConfig(BaseModel):
     template_items: Dict[str, Any] = Field(default_factory=dict, description="模板项")
     main_prompt_key: str = Field(default="reasoning_prompt_main", description="主提示词键")
     context_tags: Optional[List[str]] = Field(default=None, description="上下文标签")
-    enable_correction: bool = Field(default=True, description="是否启用文本修正")
     additional_config: Dict[str, Any] = Field(default_factory=dict, description="额外配置")
 
 

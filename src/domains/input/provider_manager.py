@@ -158,9 +158,11 @@ class InputProviderManager:
         运行单个Provider，错误隔离
 
         重构后：
-        1. Provider.start() 直接返回 NormalizedMessage
-        2. 通过 Pipeline 过滤（如果有）
-        3. 发布 DATA_MESSAGE 事件
+        1. Provider.start() 启动 Provider
+        2. Provider.stream() 获取数据流
+        3. 通过 Pipeline 过滤（如果有）
+        4. 发布 DATA_MESSAGE 事件
+        5. Provider 停止后调用 stop() 清理资源
 
         捕获所有异常，避免单个Provider失败影响其他Provider。
 
@@ -170,7 +172,10 @@ class InputProviderManager:
         """
         try:
             self.logger.info(f"Provider {provider_name} 开始运行")
-            async for message in provider.start():
+            # 1. 启动 Provider
+            await provider.start()
+            # 2. 迭代数据流
+            async for message in provider.stream():
                 # Pipeline 过滤处理（如果有）
                 if self.pipeline_manager:
                     message = await self.pipeline_manager.process(message)
@@ -191,15 +196,20 @@ class InputProviderManager:
             self.logger.info(f"Provider {provider_name} 被取消")
         except Exception as e:
             self.logger.error(f"Provider {provider_name} 运行时出错: {e}", exc_info=True)
-            # 不重新抛出，避免影响其他Provider
+        finally:
+            # 确保资源被清理
+            try:
+                await provider.stop()
+            except Exception as e:
+                self.logger.warning(f"Provider {provider_name} 停止时出错: {e}")
 
     async def load_from_config(self, config: dict[str, Any], config_service=None) -> list[InputProvider]:
         """
-        从配置加载并创建所有InputProvider（支持三级配置合并）
+        从配置加载并创建所有InputProvider（支持二级配置合并）
 
         Args:
             config: 输入配置（来自[providers.input]）
-            config_service: ConfigService实例（用于三级配置加载）
+            config_service: ConfigService实例（用于二级配置加载）
 
         Returns:
             创建的InputProvider列表
@@ -246,7 +256,7 @@ class InputProviderManager:
 
         for input_name in enabled_inputs:
             try:
-                # 使用三级配置加载
+                # 使用二级配置加载
                 try:
                     from src.modules.config.schemas import get_provider_schema
 

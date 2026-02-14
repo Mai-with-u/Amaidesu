@@ -201,7 +201,7 @@ class RemoteStreamRequestImagePayload(BasePayload):
     def __str__(self) -> str:
         """简化格式：显示图像请求信息"""
         class_name = self.__class__.__name__
-        return f'{class_name}(timestamp={self.timestamp})'
+        return f"{class_name}(timestamp={self.timestamp})"
 
 
 __all__ = [

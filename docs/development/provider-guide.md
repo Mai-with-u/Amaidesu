@@ -530,7 +530,7 @@ async def test_my_input_provider():
 
     # 测试数据采集
     data_count = 0
-    async for message in provider.start():
+    async for message in provider.stream():
         data_count += 1
         assert message.source == "my_provider"
         assert isinstance(message, NormalizedMessage)

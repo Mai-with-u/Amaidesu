@@ -8,7 +8,6 @@ from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Any, Dict, List, Optional, Protocol, Type, runtime_checkable
 
-from src.modules.config.config_utils import load_component_specific_config, merge_component_configs
 from src.modules.logging import get_logger
 from src.modules.types.base.pipeline_stats import PipelineStats
 from src.modules.types.base.normalized_message import NormalizedMessage
@@ -683,20 +682,10 @@ class InputPipelineManager:
             ):
                 continue
 
-            # 提取全局覆盖配置（排除 'priority' 和 'direction' 键）
-            global_override_config = {
+            # 直接使用主配置中的管道配置（排除 priority 和 direction）
+            final_pipeline_config = {
                 k: v for k, v in pipeline_global_settings.items() if k not in ["priority", "direction"]
             }
-
-            # 加载管道自身的独立配置
-            pipeline_specific_config = load_component_specific_config(
-                pipeline_package_path, pipeline_name_snake, "管道"
-            )
-
-            # 合并配置：全局覆盖配置优先
-            final_pipeline_config = merge_component_configs(
-                pipeline_specific_config, global_override_config, pipeline_name_snake, "管道"
-            )
 
             # 导入并查找 TextPipelineBase 子类
             try:
@@ -802,9 +791,7 @@ class InputPipelineManager:
                 priority = input_settings.get("priority")
                 enabled = input_settings.get("enabled", True)
                 # 提取 input 子配置中的其他参数作为全局覆盖
-                global_override_config = {
-                    k: v for k, v in input_settings.items() if k not in ["priority", "enabled"]
-                }
+                global_override_config = {k: v for k, v in input_settings.items() if k not in ["priority", "enabled"]}
             else:
                 # 未找到有效配置，跳过
                 continue
@@ -825,13 +812,8 @@ class InputPipelineManager:
             ):
                 continue
 
-            pipeline_specific_config = load_component_specific_config(
-                pipeline_package_path, pipeline_name_snake, "管道"
-            )
-
-            final_pipeline_config = merge_component_configs(
-                pipeline_specific_config, global_override_config, pipeline_name_snake, "管道"
-            )
+            # 直接使用主配置中的管道配置
+            final_pipeline_config = global_override_config
 
             try:
                 # 使用统一的模块导入路径格式

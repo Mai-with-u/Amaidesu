@@ -16,7 +16,6 @@ import os
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from src.modules.config.config_utils import load_component_specific_config, merge_component_configs
 from src.modules.logging import get_logger
 
 from .base import OutputPipeline, PipelineErrorHandling, PipelineException
@@ -222,26 +221,15 @@ class OutputPipelineManager:
             ):
                 continue
 
-            global_override_config = {
-                k: v for k, v in output_settings.items() if k not in ["priority", "enabled"]
-            }
-
-            pipeline_specific_config = load_component_specific_config(
-                pipeline_package_path, pipeline_name_snake, "管道"
-            )
-
-            final_pipeline_config = merge_component_configs(
-                pipeline_specific_config, global_override_config, pipeline_name_snake, "管道"
-            )
+            # 直接使用主配置中的管道配置
+            final_pipeline_config = {k: v for k, v in output_settings.items() if k not in ["priority", "enabled"]}
 
             try:
                 module_import_path = f"src.domains.output.pipelines.{pipeline_name_snake}.pipeline"
                 self.logger.debug(f"尝试导入管道模块: {module_import_path}")
                 module = importlib.import_module(module_import_path)
 
-                expected_class_name = (
-                    "".join(word.title() for word in pipeline_name_snake.split("_")) + "Pipeline"
-                )
+                expected_class_name = "".join(word.title() for word in pipeline_name_snake.split("_")) + "Pipeline"
                 pipeline_class = None
 
                 for name, obj in inspect.getmembers(module):

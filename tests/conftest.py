@@ -40,15 +40,11 @@ async def event_bus() -> AsyncGenerator[EventBus, None]:
 
     每个测试获得独立的事件总线，避免测试间相互干扰。
 
+    事件会在 Provider 订阅时自动注册，无需预先注册。
+
     Yields:
         EventBus: 新的事件总线实例
     """
-    from src.modules.events.registry import EventRegistry, register_core_events
-
-    # 只在第一次调用时注册核心事件
-    if not EventRegistry.list_all_events():
-        register_core_events()
-
     bus = EventBus()
     yield bus
     await bus.cleanup()

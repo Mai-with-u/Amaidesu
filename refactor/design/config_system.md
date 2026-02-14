@@ -38,14 +38,12 @@
 - Schema代码 = 模板 + 默认值 + 验证规则
 - 首次启动时从Schema自动生成config.toml
 
-### 2. 配置覆盖关系（局部覆盖全局）
+### 2. 配置覆盖关系（二级）
 
 ```
 Schema默认值 (最低优先级)
     ↓ 被覆盖
-主配置 [providers.{layer}.{name}] (中等优先级)
-    ↓ 被覆盖
-Provider本地 config.toml (最高优先级)
+主配置 [providers.{layer}.{name}] (最高优先级)
 ```
 
 ### 3. 关注点分离
@@ -53,7 +51,7 @@ Provider本地 config.toml (最高优先级)
 | 配置位置 | 职责 | 示例 |
 |---------|------|------|
 | **主配置** `enabled_outputs` | 控制哪些Provider启用 | `["subtitle", "vts"]` |
-| **Provider config.toml** | 控制Provider怎么运行 | `font_size = 24` |
+| **主配置** `[providers.*.{name}]` | 控制Provider怎么运行 | `font_size = 24` |
 
 **约束**：Provider配置中**禁止**包含`enabled`字段。
 
@@ -134,10 +132,9 @@ def ensure_config(provider_name: str, schema: type) -> Path:
 
 ```python
 def load_config(provider_name: str, schema: type) -> ProviderConfig:
-    """三级合并：Schema默认值 < 主配置 < 本地配置"""
+    """二级合并：Schema默认值 < 主配置"""
     result = schema().model_dump()                    # 1. Schema默认值
     result = deep_merge(result, get_main_override())  # 2. 主配置覆盖
-    result = deep_merge(result, load_local_config())  # 3. 本地配置覆盖
     return schema(**result)                           # 验证
 ```
 
@@ -157,7 +154,7 @@ enabled_inputs = ["console_input", "bili_danmaku"]
 [providers.output]
 enabled_outputs = ["subtitle", "vts"]
 
-# 可选：主配置中覆盖（会被Provider本地config.toml覆盖）
+# Provider 配置（在主配置文件中）
 [providers.output.subtitle]
 font_size = 32
 ```

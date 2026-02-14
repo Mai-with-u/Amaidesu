@@ -5,7 +5,7 @@ Provider Schema 完整性测试
 1. 所有 Provider 都定义了 ConfigSchema
 2. 所有 ConfigSchema 都正确注册到 ProviderRegistry
 3. 配置验证逻辑正确工作
-4. 三级配置合并机制正确
+4. 二级配置合并机制正确
 """
 
 from pathlib import Path
@@ -246,7 +246,7 @@ class TestConfigValidation:
 
 
 class TestConfigMergeMechanism:
-    """测试三级配置合并机制"""
+    """测试二级配置合并机制"""
 
     def test_get_default_dict(self):
         """测试 get_default_dict 返回完整默认配置"""

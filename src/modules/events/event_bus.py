@@ -285,10 +285,6 @@ class EventBus:
             event_bus.on("event.name", handler, model_class=MessageReadyPayload)
             ```
         """
-        return self._on_typed_impl(event_name, handler, model_class, priority)
-
-    def _on_typed_impl(self, event_name: str, handler: Callable, model_class: Type[T], priority: int) -> None:
-        """类型化订阅实现（自动反序列化）"""
         # 注册事件类型到 EventRegistry
         try:
             EventRegistry.register_core_event(event_name, model_class)
@@ -438,10 +434,7 @@ class EventBus:
         if not self.enable_stats:
             return None
         stats = self._stats.get(event_name)
-        if stats is None:
-            return None
-        # 返回深拷贝以避免外部修改影响内部数据
-        return copy.deepcopy(stats)
+        return None if stats is None else copy.deepcopy(stats)
 
     def get_all_stats(self) -> Dict[str, EventStats]:
         """

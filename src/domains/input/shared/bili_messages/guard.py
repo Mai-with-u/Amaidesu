@@ -11,6 +11,7 @@ from .base import BiliBaseMessage
 
 class UserInfo(BaseModel):
     """用户信息"""
+
     open_id: str = ""
     union_id: str = ""
     uname: str = ""

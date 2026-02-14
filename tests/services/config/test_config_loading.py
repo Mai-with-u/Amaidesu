@@ -1,15 +1,14 @@
 """
 配置加载集成测试
 
-测试新的三级配置合并系统：
+测试新的二级配置合并系统：
 1. Schema默认值（Pydantic）
-2. 主配置覆盖（[providers.*.overrides]）
-3. Provider本地配置（config.toml，可选）
+2. 主配置覆盖（[providers.*.{provider_name}]）
 
-注意: 已移除config-defaults.toml加载逻辑，所有默认值由Schema定义。
+注意: 本地配置（Provider目录下的config.toml）功能已移除。
 
 测试场景：
-- 三级配置合并顺序和优先级
+- 二级配置合并顺序和优先级
 - 配置验证（Pydantic Schema）
 - enabled字段不在Provider配置中的情况
 - 配置优先级正确性
@@ -183,12 +182,15 @@ enabled_inputs = ["test_input"]
 
 
 # =============================================================================
-# Test 2: 三级配置合并（Schema默认 → 主配置覆盖 → 本地配置）
+# Test 2: 二级配置合并（Schema默认 → 主配置覆盖）
+# 注意: 本地配置功能已移除
 # =============================================================================
 
 
+@pytest.mark.skip(reason="本地配置功能已移除")
+@pytest.mark.skip(reason="本地配置功能已移除")
 def test_three_tier_merge_full_flow(temp_base_dir):
-    """测试完整的三级配置合并流程（新架构）"""
+    """测试完整的二级配置合并流程（新架构）"""
     # 1. 创建Provider目录
     provider_dir = os.path.join(temp_base_dir, "src", "domains", "input", "providers", "test_input")
     os.makedirs(provider_dir, exist_ok=True)
@@ -243,8 +245,9 @@ local_field = "from_local"  # 新增字段
     assert merged_config["enabled"] is True  # from Schema default
 
 
+@pytest.mark.skip(reason="本地配置功能已移除")
 def test_three_tier_merge_with_schema_validation(temp_base_dir):
-    """测试三级配置合并 + Schema验证"""
+    """测试二级配置合并 + Schema验证"""
     # 1. 创建Provider目录
     provider_dir = os.path.join(temp_base_dir, "src", "domains", "output", "providers", "test_output")
     os.makedirs(provider_dir, exist_ok=True)
@@ -285,6 +288,7 @@ output_format = "wav"
     assert merged_config["enabled"] is True  # 来自Schema默认值
 
 
+@pytest.mark.skip(reason="本地配置功能已移除")
 def test_three_tier_merge_schema_validation_error(temp_base_dir):
     """测试Schema验证失败时抛出异常"""
     provider_dir = os.path.join(temp_base_dir, "src", "domains", "output", "providers", "test_output")
@@ -328,6 +332,7 @@ enabled_outputs = ["test_output"]
 # =============================================================================
 
 
+@pytest.mark.skip(reason="本地配置功能已移除")
 def test_config_priority_local_overrides_main(temp_base_dir):
     """测试本地配置优先级高于主配置覆盖"""
     provider_dir = os.path.join(temp_base_dir, "src", "domains", "input", "providers", "test_input")
@@ -851,6 +856,7 @@ def test_deep_merge_none_values():
 # =============================================================================
 
 
+@pytest.mark.skip(reason="自动生成功能已移除")
 def test_auto_generate_config_from_schema(temp_base_dir):
     """测试自动从Schema生成config.toml文件"""
     # 确保Provider目录不存在（没有本地配置）
@@ -883,6 +889,7 @@ enabled_inputs = ["auto_test"]
     assert merged_config == {}
 
 
+@pytest.mark.skip(reason="本地配置功能已移除")
 def test_local_config_overrides_schema(temp_base_dir):
     """测试本地配置覆盖Schema默认值"""
     # 注意：output providers的路径是 src/domains/output/providers/
