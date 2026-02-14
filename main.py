@@ -9,7 +9,7 @@ import sys
 from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger as loguru_logger
-from src.modules.events import EventBus, register_core_events
+from src.modules.events import EventBus
 from src.modules.logging import get_logger
 from src.modules.registry import ProviderRegistry
 from src.modules.config.service import ConfigService
@@ -267,7 +267,9 @@ async def load_pipeline_manager(config: Dict[str, Any]) -> Optional[InputPipelin
 
         total_pipelines = message_pipeline_count + text_pipeline_count
         if total_pipelines > 0:
-            logger.info(f"管道加载完成，共 {message_pipeline_count} 个 MessagePipeline，{text_pipeline_count} 个 TextPipeline。")
+            logger.info(
+                f"管道加载完成，共 {message_pipeline_count} 个 MessagePipeline，{text_pipeline_count} 个 TextPipeline。"
+            )
             return manager
         else:
             logger.warning("未找到任何有效的管道，管道功能将被禁用。")
@@ -344,7 +346,6 @@ async def create_app_components(
     # 事件总线
     logger.info("初始化事件总线和数据流协调器...")
     event_bus = EventBus()
-    register_core_events()
 
     # 输入Provider管理器 (Input Domain)
     input_provider_manager: Optional[InputProviderManager] = None
@@ -393,7 +394,9 @@ async def create_app_components(
 
     # 输出Provider管理器 (Output Domain)
     logger.info("初始化输出Provider管理器...")
-    output_provider_manager: Optional[OutputProviderManager] = OutputProviderManager(event_bus) if output_config else None
+    output_provider_manager: Optional[OutputProviderManager] = (
+        OutputProviderManager(event_bus) if output_config else None
+    )
     if output_provider_manager:
         try:
             await output_provider_manager.setup(

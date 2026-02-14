@@ -103,13 +103,10 @@ def error_provider():
 
 @pytest.fixture
 def event_bus():
-    """创建 EventBus 实例"""
-    from src.modules.events.registry import EventRegistry, register_core_events
+    """创建 EventBus 实例
 
-    # 确保核心事件已注册
-    if not EventRegistry.is_registered(CoreEvents.OUTPUT_INTENT):
-        register_core_events()
-
+    事件会在 Provider 订阅时自动注册，无需预先注册。
+    """
     return EventBus()
 
 
