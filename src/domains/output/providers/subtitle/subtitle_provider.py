@@ -426,6 +426,17 @@ class SubtitleOutputProvider(OutputProvider):
             )
             self.text_label.pack(expand=True, fill="both", padx=10, pady=5)
 
+            # --- 绑定窗口拖动和右键菜单事件 ---
+            def bind_drag_events(widget):
+                widget.bind("<Button-1>", self._start_move)
+                widget.bind("<B1-Motion>", self._on_move)
+                widget.bind("<Button-3>", self._show_context_menu)  # 右键菜单
+
+            bind_drag_events(self.root)
+            bind_drag_events(self.text_label)
+            if hasattr(self.text_label, "canvas"):
+                bind_drag_events(self.text_label.canvas)
+
             # 初始显示状态
             if self.always_show_window:
                 self.root.deiconify()
@@ -542,3 +553,101 @@ class SubtitleOutputProvider(OutputProvider):
             except Exception as e:
                 self.logger.warning(f"销毁 subtitle 窗口时出错: {e}", exc_info=True)
         self.root = None
+
+    # --- 窗口事件处理 ---
+    def _start_move(self, event):
+        """记录鼠标按下位置"""
+        self._move_x = event.x
+        self._move_y = event.y
+
+    def _on_move(self, event):
+        """拖动窗口"""
+        if self.root:
+            deltax = event.x - self._move_x
+            deltay = event.y - self._move_y
+            x = self.root.winfo_x() + deltax
+            y = self.root.winfo_y() + deltay
+            self.root.geometry(f"+{x}+{y}")
+
+    def _show_context_menu(self, event):
+        """显示右键菜单"""
+        if not self.root:
+            return
+
+        try:
+            # 创建右键菜单
+            context_menu = tk.Menu(self.root, tearoff=0)
+
+            # 添加菜单项
+            if self.always_show_window:
+                if self.is_visible:
+                    context_menu.add_command(label="最小化窗口", command=self._minimize_window)
+                else:
+                    context_menu.add_command(label="显示窗口", command=self._show_window)
+
+            context_menu.add_separator()
+            context_menu.add_command(label="置顶/取消置顶", command=self._toggle_topmost)
+            context_menu.add_command(label="调整透明度", command=self._adjust_opacity)
+            context_menu.add_separator()
+            context_menu.add_command(label="测试显示", command=self._show_test_message)
+            context_menu.add_command(label="清空内容", command=self._clear_content)
+            context_menu.add_separator()
+            context_menu.add_command(label="关闭窗口", command=self._on_closing)
+
+            # 显示菜单
+            context_menu.post(event.x_root, event.y_root)
+
+        except Exception as e:
+            self.logger.debug(f"显示右键菜单时出错: {e}")
+
+    def _minimize_window(self):
+        """最小化窗口"""
+        if self.root and self.always_show_window:
+            self.root.iconify()
+
+    def _show_window(self):
+        """显示窗口"""
+        if self.root:
+            self.root.deiconify()
+            self.is_visible = True
+
+    def _toggle_topmost(self):
+        """切换窗口置顶状态"""
+        if self.root:
+            current = self.root.attributes("-topmost")
+            new_topmost = not current
+            self.root.attributes("-topmost", new_topmost)
+            self.always_on_top = new_topmost  # 同步配置状态
+            status = "置顶" if new_topmost else "取消置顶"
+            self.logger.info(f"窗口已{status} (always_on_top: {self.always_on_top})")
+
+    def _adjust_opacity(self):
+        """调整窗口透明度"""
+        if self.root:
+            current_alpha = self.root.attributes("-alpha")
+            # 循环透明度: 1.0 -> 0.8 -> 0.6 -> 0.4 -> 1.0
+            alpha_values = [1.0, 0.8, 0.6, 0.4]
+            try:
+                current_index = alpha_values.index(current_alpha)
+                new_index = (current_index + 1) % len(alpha_values)
+            except ValueError:
+                new_index = 0
+
+            new_alpha = alpha_values[new_index]
+            self.root.attributes("-alpha", new_alpha)
+            self.logger.info(f"窗口透明度已调整为: {new_alpha}")
+
+    def _show_test_message(self):
+        """显示测试消息"""
+        if self.root:
+            self._update_subtitle_display("OBS 测试消息 - 窗口可见性检查")
+            self.logger.info("已显示 OBS 测试消息，请检查窗口是否在 OBS 窗口捕获列表中出现")
+
+    def _clear_content(self):
+        """清空窗口内容"""
+        if self.text_label:
+            if self.always_show_window and self.show_waiting_text:
+                self.text_label.configure_text(text="等待语音/弹幕输入...")
+            else:
+                self.text_label.configure_text(text="")  # 完全清空
+            self.logger.info("已清空字幕内容")
