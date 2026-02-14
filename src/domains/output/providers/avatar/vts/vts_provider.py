@@ -449,23 +449,6 @@ class VTSProvider(BaseAvatarProvider):
 
         return None
 
-    # ==================== 向后兼容方法 ====================
-
-    @property
-    def _is_connected_and_authenticated(self) -> bool:
-        """向后兼容的属性"""
-        return self._is_connected
-
-    # ==================== 旧的连接管理方法（向后兼容） ====================
-
-    async def connect(self):
-        """启动VTS连接和认证（向后兼容方法）"""
-        await self._connect()
-
-    async def disconnect(self):
-        """断开VTS连接（向后兼容方法）"""
-        await self._disconnect()
-
     # ==================== 热键管理 ====================
 
     async def _load_hotkeys(self):
