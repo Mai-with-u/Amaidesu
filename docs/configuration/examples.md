@@ -473,9 +473,13 @@ split_by_session = false
 
 ## 配置最佳实践
 
-1. **使用 Provider 本地配置文件**：对于复杂的 Provider 配置，建议在 `src/domains/{domain}/providers/{name}/config.toml` 中配置
+1. **统一使用主配置文件**：所有 Provider 和 Pipeline 的配置统一在 `config.toml` 中管理
 
-2. **使用主配置文件进行快速调整**：对于简单的参数调整（如端口号、API 密钥），可以在主配置文件中使用 `[providers.{domain}.{name}]`
+2. **配置路径**：
+   - `[providers.input.{name}]` - Input Provider 配置
+   - `[providers.output.{name}]` - Output Provider 配置
+   - `[providers.decision.{name}]` - Decision Provider 配置
+   - `[pipelines.{name}]` - Pipeline 配置
 
 3. **敏感信息管理**：
    - API 密钥、密码等敏感信息可以使用环境变量

@@ -184,12 +184,8 @@ def exit_if_config_copied(main_cfg_copied: bool, plugin_cfg_copied: bool, pipeli
 
     if plugin_cfg_copied or pipeline_cfg_copied:
         logger.warning(box)
-        if plugin_cfg_copied:
-            logger.warning("!! 已根据模板创建了部分插件的 config.toml 文件。          !!")
-            logger.warning("!! 请检查 src/domains/ 下各Provider目录中的 config.toml 文件， !!")
-        if pipeline_cfg_copied:
-            logger.warning("!! 已根据模板创建了部分管道的 config.toml 文件。          !!")
-            logger.warning("!! 请检查 src/domains/input/pipelines/ 下各管道目录中的 config.toml 文件，!!")
+        logger.warning("!! 配置文件已更新。                                      !!")
+        logger.warning("!! 请检查并修改 config.toml 中的 Provider 和 Pipeline 配置。  !!")
         logger.warning("!! 特别是 API 密钥、房间号、设备名称等需要您修改的配置。   !!")
         logger.warning("!! 修改完成后，请重新运行程序。                           !!")
         logger.warning(box)

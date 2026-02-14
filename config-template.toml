@@ -7,8 +7,9 @@
 # 2. Provider启用列表和配置
 # 3. Pipeline配置
 #
-# 各Provider的详细配置在各自的 config.toml 中：
-# - src/domains/{domain}/providers/{provider}/config.toml
+# 配置说明：
+# - Provider 和 Pipeline 的配置统一在本文件中管理
+# - 配置路径：[providers.input.xxx], [providers.output.xxx], [pipelines.xxx]
 #
 # 配置路径结构（简洁且语义清晰）：
 # - [providers.input.{provider_name}] - Input Provider 配置
