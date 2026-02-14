@@ -19,7 +19,6 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
-    from src.modules.types import Intent
     from src.modules.types.base.normalized_message import NormalizedMessage
 
 
@@ -104,17 +103,20 @@ class DecisionProvider(ABC):
         pass
 
     @abstractmethod
-    async def decide(self, message: "NormalizedMessage") -> "Intent":
+    async def decide(self, message: "NormalizedMessage") -> None:
         """
-        决策（异步）
+        决策（异步，fire-and-forget）
 
-        根据NormalizedMessage生成决策结果(Intent)。
+        根据NormalizedMessage生成决策结果，并通过EventBus发布decision.intent事件。
+
+        此方法是 fire-and-forget：
+        - 不等待决策完成，不返回结果
+        - Provider内部负责通过event_bus发布decision.intent事件
+        - 不需要返回值，决策结果通过事件传递
+        - 不会阻塞，每条消息独立处理（类似InputProvider）
 
         Args:
             message: 标准化消息
-
-        Returns:
-            Intent: 决策意图
 
         Raises:
             ValueError: 如果输入消息无效

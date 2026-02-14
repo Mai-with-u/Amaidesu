@@ -17,8 +17,9 @@ import pytest
 
 from src.domains.decision.providers.llm import LLMPDecisionProvider
 from src.modules.context import MessageRole
+from src.modules.events.names import CoreEvents
 from src.modules.llm.manager import LLMResponse
-from src.modules.types import ActionType, EmotionType
+from src.modules.types import ActionType
 from src.modules.types.base.normalized_message import NormalizedMessage
 
 
@@ -94,7 +95,10 @@ def mock_context_service():
 @pytest.fixture
 def mock_event_bus():
     """Mock EventBus"""
-    return MagicMock()
+    mock = MagicMock()
+    # emit 需要是 AsyncMock 因为它是异步方法
+    mock.emit = AsyncMock()
+    return mock
 
 
 @pytest.fixture
@@ -130,7 +134,7 @@ async def setup_provider(llm_config, mock_llm_service, mock_context_service, moc
 
     async def _setup(config=llm_config):
         provider = LLMPDecisionProvider(config)
-        await provider.setup(
+        await provider.start(
             event_bus=mock_event_bus,
             config={},
             dependencies={
@@ -193,17 +197,27 @@ class TestStructuredIntentGeneration:
             }""",
         )
 
-        intent = await provider.decide(normalized_message)
+        result = await provider.decide(normalized_message)
 
-        # 验证 Intent 字段
-        assert intent.response_text == "你好呀！很高兴见到你！"
-        assert intent.emotion == EmotionType.HAPPY
-        assert len(intent.actions) == 2
-        assert intent.actions[0].type == ActionType.WAVE
-        assert intent.actions[0].params == {"duration": 2}
-        assert intent.actions[0].priority == 80
-        assert intent.actions[1].type == ActionType.EXPRESSION
-        assert intent.metadata.get("parser") == "llm_structured"
+        # 验证 decide() 返回 None
+        assert result is None
+
+        # 验证 event_bus 发布 decision.intent 事件
+        provider.event_bus.emit.assert_called_once()
+        call_args = provider.event_bus.emit.call_args
+        assert call_args[0][0] == CoreEvents.DECISION_INTENT
+        # 获取发布的 IntentPayload
+        intent_payload = call_args[0][1]
+        # IntentPayload 通过 intent_data 存储 Intent 数据（序列化为字典）
+        assert intent_payload.response_text == "你好呀！很高兴见到你！"
+        assert intent_payload.emotion == "happy"
+        assert len(intent_payload.actions) == 2
+        # actions 是字典列表（因为经过 JSON 序列化）
+        assert intent_payload.actions[0]["type"] == ActionType.WAVE
+        assert intent_payload.actions[0]["params"] == {"duration": 2}
+        assert intent_payload.actions[0]["priority"] == 80
+        assert intent_payload.actions[1]["type"] == ActionType.EXPRESSION
+        assert intent_payload.metadata.get("parser") == "llm_structured"
 
         # 验证上下文保存
         assert mock_llm_service.chat.called
@@ -219,12 +233,19 @@ class TestStructuredIntentGeneration:
             content="""{"text": "嗯嗯", "emotion": "neutral", "actions": [{"type": "nod", "params": {}}]}""",
         )
 
-        intent = await provider.decide(normalized_message)
+        result = await provider.decide(normalized_message)
 
-        assert intent.response_text == "嗯嗯"
-        assert intent.emotion == EmotionType.NEUTRAL
-        assert len(intent.actions) == 1
-        assert intent.actions[0].type == ActionType.NOD
+        # 验证 decide() 返回 None
+        assert result is None
+
+        # 验证 event_bus 发布事件
+        provider.event_bus.emit.assert_called_once()
+        call_args = provider.event_bus.emit.call_args
+        intent_payload = call_args[0][1]
+        assert intent_payload.response_text == "嗯嗯"
+        assert intent_payload.emotion == "neutral"
+        assert len(intent_payload.actions) == 1
+        assert intent_payload.actions[0]["type"] == ActionType.NOD
 
 
 # =============================================================================
@@ -298,12 +319,18 @@ class TestFallbackMechanism:
             content="这不是有效的 JSON {invalid",
         )
 
-        intent = await provider.decide(normalized_message)
+        result = await provider.decide(normalized_message)
 
-        # 验证调用降级逻辑
-        assert intent.response_text == normalized_message.text
-        assert intent.emotion == EmotionType.NEUTRAL
-        assert intent.metadata.get("parser") == "llm_fallback"
+        # 验证 decide() 返回 None
+        assert result is None
+
+        # 验证调用降级逻辑并通过 event_bus 发布
+        provider.event_bus.emit.assert_called_once()
+        call_args = provider.event_bus.emit.call_args
+        intent_payload = call_args[0][1]
+        assert intent_payload.response_text == normalized_message.text
+        assert intent_payload.emotion == "neutral"
+        assert intent_payload.metadata.get("parser") == "llm_fallback"
 
     @pytest.mark.asyncio
     async def test_fallback_on_llm_failure(self, setup_provider, mock_llm_service, normalized_message):
@@ -317,11 +344,17 @@ class TestFallbackMechanism:
             error="API 错误",
         )
 
-        intent = await provider.decide(normalized_message)
+        result = await provider.decide(normalized_message)
 
-        # 验证降级响应
-        assert intent.response_text == normalized_message.text
-        assert intent.metadata.get("parser") == "llm_fallback"
+        # 验证 decide() 返回 None
+        assert result is None
+
+        # 验证降级响应通过 event_bus 发布
+        provider.event_bus.emit.assert_called_once()
+        call_args = provider.event_bus.emit.call_args
+        intent_payload = call_args[0][1]
+        assert intent_payload.response_text == normalized_message.text
+        assert intent_payload.metadata.get("parser") == "llm_fallback"
 
 
 # =============================================================================
@@ -344,7 +377,7 @@ class TestFallbackModes:
     ):
         """测试：fallback_mode="simple" 返回原始输入文本"""
         provider = LLMPDecisionProvider(llm_config)
-        await provider.setup(
+        await provider.start(
             event_bus=mock_event_bus,
             config={},
             dependencies={
@@ -361,10 +394,17 @@ class TestFallbackModes:
             error="API 错误",
         )
 
-        intent = await provider.decide(normalized_message)
+        result = await provider.decide(normalized_message)
 
-        assert intent.response_text == normalized_message.text
-        assert intent.emotion == EmotionType.NEUTRAL
+        # 验证 decide() 返回 None
+        assert result is None
+
+        # 验证通过 event_bus 发布
+        provider.event_bus.emit.assert_called_once()
+        call_args = provider.event_bus.emit.call_args
+        intent_payload = call_args[0][1]
+        assert intent_payload.response_text == normalized_message.text
+        assert intent_payload.emotion == "neutral"
 
     @pytest.mark.asyncio
     async def test_fallback_mode_echo(
@@ -378,7 +418,7 @@ class TestFallbackModes:
     ):
         """测试：fallback_mode="echo" 复读用户输入"""
         provider = LLMPDecisionProvider(llm_config_echo)
-        await provider.setup(
+        await provider.start(
             event_bus=mock_event_bus,
             config={},
             dependencies={
@@ -395,10 +435,17 @@ class TestFallbackModes:
             error="API 错误",
         )
 
-        intent = await provider.decide(normalized_message)
+        result = await provider.decide(normalized_message)
 
-        assert intent.response_text == f"你说：{normalized_message.text}"
-        assert intent.emotion == EmotionType.NEUTRAL
+        # 验证 decide() 返回 None
+        assert result is None
+
+        # 验证通过 event_bus 发布
+        provider.event_bus.emit.assert_called_once()
+        call_args = provider.event_bus.emit.call_args
+        intent_payload = call_args[0][1]
+        assert intent_payload.response_text == f"你说：{normalized_message.text}"
+        assert intent_payload.emotion == "neutral"
 
     @pytest.mark.asyncio
     async def test_fallback_mode_error(
@@ -412,7 +459,7 @@ class TestFallbackModes:
     ):
         """测试：fallback_mode="error" 抛出异常"""
         provider = LLMPDecisionProvider(llm_config_error)
-        await provider.setup(
+        await provider.start(
             event_bus=mock_event_bus,
             config={},
             dependencies={
@@ -494,13 +541,21 @@ class TestDefaultAction:
             content="""{"text": "回复文本", "emotion": "neutral", "actions": []}""",
         )
 
-        intent = await provider.decide(normalized_message)
+        result = await provider.decide(normalized_message)
 
-        # 验证自动添加默认眨眼动作
-        assert len(intent.actions) == 1
-        assert intent.actions[0].type == ActionType.BLINK
-        assert intent.actions[0].params == {}
-        assert intent.actions[0].priority == 30
+        # 验证 decide() 返回 None
+        assert result is None
+
+        # 验证通过 event_bus 发布
+        provider.event_bus.emit.assert_called_once()
+        call_args = provider.event_bus.emit.call_args
+        intent_payload = call_args[0][1]
+
+        # 验证自动添加默认眨眼动作（actions 是字典列表）
+        assert len(intent_payload.actions) == 1
+        assert intent_payload.actions[0]["type"] == ActionType.BLINK
+        assert intent_payload.actions[0]["params"] == {}
+        assert intent_payload.actions[0]["priority"] == 30
 
     @pytest.mark.asyncio
     async def test_no_default_action_when_actions_exist(self, setup_provider, mock_llm_service, normalized_message):
@@ -513,11 +568,19 @@ class TestDefaultAction:
             content="""{"text": "回复", "emotion": "happy", "actions": [{"type": "wave"}]}""",
         )
 
-        intent = await provider.decide(normalized_message)
+        result = await provider.decide(normalized_message)
+
+        # 验证 decide() 返回 None
+        assert result is None
+
+        # 验证通过 event_bus 发布
+        provider.event_bus.emit.assert_called_once()
+        call_args = provider.event_bus.emit.call_args
+        intent_payload = call_args[0][1]
 
         # 验证只有 wave 动作，没有默认的 blink
-        assert len(intent.actions) == 1
-        assert intent.actions[0].type == ActionType.WAVE
+        assert len(intent_payload.actions) == 1
+        assert intent_payload.actions[0]["type"] == ActionType.WAVE
 
 
 # =============================================================================
@@ -540,7 +603,10 @@ class TestContextManagement:
             content="""{"text": "回复内容", "emotion": "happy", "actions": []}""",
         )
 
-        await provider.decide(normalized_message)
+        result = await provider.decide(normalized_message)
+
+        # 验证 decide() 返回 None
+        assert result is None
 
         # 验证上下文服务被调用
         # 应该调用两次：保存用户消息和保存助手回复
@@ -574,7 +640,10 @@ class TestContextManagement:
             content="""{"text": "回复", "emotion": "neutral", "actions": []}""",
         )
 
-        await provider.decide(normalized_message)
+        result = await provider.decide(normalized_message)
+
+        # 验证 decide() 返回 None
+        assert result is None
 
         # 验证调用了 get_history
         mock_context_service.get_history.assert_called_once()
@@ -594,13 +663,20 @@ class TestEmotionParsing:
         provider = await setup_provider()
 
         for emotion in ["neutral", "happy", "sad", "angry", "surprised"]:
+            # 重置 mock 以便每次迭代都调用
+            provider.event_bus.reset_mock()
             mock_llm_service.chat.return_value = LLMResponse(
                 success=True,
                 content=f'{{"text": "回复", "emotion": "{emotion}", "actions": []}}',
             )
 
-            intent = await provider.decide(normalized_message)
-            assert intent.emotion.value == emotion
+            result = await provider.decide(normalized_message)
+            assert result is None
+
+            # 验证 event_bus 发布事件
+            call_args = provider.event_bus.emit.call_args
+            intent_payload = call_args[0][1]
+            assert intent_payload.emotion == emotion
 
     @pytest.mark.asyncio
     async def test_emotion_parsing_invalid_fallback(self, setup_provider, mock_llm_service, normalized_message):
@@ -612,8 +688,15 @@ class TestEmotionParsing:
             content="""{"text": "回复", "emotion": "invalid_emotion", "actions": []}""",
         )
 
-        intent = await provider.decide(normalized_message)
-        assert intent.emotion == EmotionType.NEUTRAL
+        result = await provider.decide(normalized_message)
+
+        # 验证 decide() 返回 None
+        assert result is None
+
+        # 验证通过 event_bus 发布
+        call_args = provider.event_bus.emit.call_args
+        intent_payload = call_args[0][1]
+        assert intent_payload.emotion == "neutral"
 
 
 # =============================================================================
@@ -634,8 +717,14 @@ class TestStatistics:
             content="""{"text": "回复", "emotion": "neutral", "actions": []}""",
         )
 
-        await provider.decide(normalized_message)
-        await provider.decide(normalized_message)
+        result1 = await provider.decide(normalized_message)
+        assert result1 is None
+
+        # 需要重置 event_bus 否则第二次调用会有问题
+        provider.event_bus.reset_mock()
+
+        result2 = await provider.decide(normalized_message)
+        assert result2 is None
 
         stats = provider.get_statistics()
         assert stats["total_requests"] == 2
@@ -654,7 +743,8 @@ class TestStatistics:
             error="API 错误",
         )
 
-        await provider.decide(normalized_message)
+        result = await provider.decide(normalized_message)
+        assert result is None
 
         stats = provider.get_statistics()
         assert stats["total_requests"] == 1
@@ -680,7 +770,9 @@ class TestLifecycle:
             content="""{"text": "回复", "emotion": "neutral", "actions": []}""",
         )
 
-        await provider.decide(normalized_message)
+        result = await provider.decide(normalized_message)
+        assert result is None
+
         await provider.cleanup()
 
         # cleanup 不应该抛出异常

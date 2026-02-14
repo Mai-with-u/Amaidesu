@@ -52,29 +52,50 @@ class MockDecisionProviderForManager(DecisionProvider):
         """Cleanup method"""
         self.cleanup_called = True
 
-    async def decide(self, message: NormalizedMessage) -> Intent:
-        """Decide method"""
+    async def decide(self, message: "NormalizedMessage") -> None:
+        """Decide method - fire-and-forget, publishes event internally"""
         self.call_count += 1
         self.last_message = message
 
+        # 确定回复内容
         if not self.decide_responses:
-            # 默认响应
-            return Intent(
-                original_text=message.text,
-                response_text="这是默认回复",
-                emotion=EmotionType.NEUTRAL,
-                actions=[],
-                metadata={"mock": True},
-            )
+            response_text = "这是默认回复"
+            emotion = EmotionType.NEUTRAL
+        else:
+            response = self.decide_responses.pop(0)
+            response_text = response.get("text", "默认回复")
+            emotion = response.get("emotion", EmotionType.NEUTRAL)
 
-        response = self.decide_responses.pop(0)
-        return Intent(
+        # 创建 Intent
+        intent = Intent(
             original_text=message.text,
-            response_text=response.get("text", "默认回复"),
-            emotion=response.get("emotion", EmotionType.NEUTRAL),
+            response_text=response_text,
+            emotion=emotion,
             actions=[],
             metadata={"mock": True},
         )
+
+        # 通过 event_bus 发布 decision.intent 事件
+        from src.modules.events.names import CoreEvents
+        from src.modules.events.payloads import IntentPayload
+
+        if self.event_bus:
+            # 构建 SourceContext
+            from src.modules.types import SourceContext
+            source_context = SourceContext(
+                source=message.source,
+                data_type=message.data_type,
+                user_id=message.user_id,
+                user_nickname=message.metadata.get("user_nickname"),
+                importance=message.importance,
+            )
+            intent.source_context = source_context
+
+            await self.event_bus.emit(
+                CoreEvents.DECISION_INTENT,
+                IntentPayload.from_intent(intent, "mock_decision"),
+                source="MockDecisionProviderForManager",
+            )
 
     def add_response(self, text: str, emotion: EmotionType = EmotionType.NEUTRAL):
         """Add predefined response"""
@@ -292,7 +313,8 @@ async def test_setup_subscribes_to_event(event_bus, mock_provider_class):
         event_count["count"] += 1
 
     # 在 setup 之前订阅同一个事件
-    event_bus.on(CoreEvents.DATA_MESSAGE, test_handler, priority=50)
+    from src.modules.events.payloads.input import MessageReadyPayload
+    event_bus.on(CoreEvents.DATA_MESSAGE, test_handler, model_class=MessageReadyPayload, priority=50)
 
     await manager.setup("mock_decision", {})
 
@@ -331,31 +353,32 @@ async def test_setup_subscribes_to_event(event_bus, mock_provider_class):
 
 @pytest.mark.asyncio
 async def test_decide_success(decision_manager_with_mock, sample_normalized_message):
-    """测试成功执行决策"""
+    """测试成功执行决策（fire-and-forget 模式）"""
     manager = decision_manager_with_mock
     manager._current_provider.add_response("测试回复", EmotionType.HAPPY)
 
+    # 在 fire-and-forget 模式下，decide() 返回 None
+    # 实际的 Intent 通过 Provider 发布的事件传递
     result = await manager.decide(sample_normalized_message)
 
-    assert isinstance(result, Intent)
-    assert result.response_text == "测试回复"
-    assert result.emotion == EmotionType.HAPPY
-    assert result.original_text == sample_normalized_message.text
+    assert result is None
     assert manager._current_provider.call_count == 1
 
 
 @pytest.mark.asyncio
 async def test_decide_without_provider(event_bus, sample_normalized_message):
-    """测试未设置 Provider 时执行决策（应抛出 RuntimeError）"""
+    """测试未设置 Provider 时执行决策（返回 None 并记录警告）"""
     manager = DecisionManager(event_bus)
 
-    with pytest.raises(RuntimeError, match="当前未设置DecisionProvider"):
-        await manager.decide(sample_normalized_message)
+    # 在 fire-and-forget 模式下，没有 Provider 时返回 None 并记录警告
+    result = await manager.decide(sample_normalized_message)
+
+    assert result is None
 
 
 @pytest.mark.asyncio
 async def test_decide_multiple_calls(decision_manager_with_mock, sample_normalized_message):
-    """测试多次调用 decide"""
+    """测试多次调用 decide（fire-and-forget 模式）"""
     manager = decision_manager_with_mock
 
     # 添加多个响应
@@ -363,38 +386,44 @@ async def test_decide_multiple_calls(decision_manager_with_mock, sample_normaliz
     manager._current_provider.add_response("回复2", EmotionType.SAD)
     manager._current_provider.add_response("回复3", EmotionType.ANGRY)
 
-    # 执行多次决策
+    # 执行多次决策 - 在 fire-and-forget 模式下都返回 None
     result1 = await manager.decide(sample_normalized_message)
     result2 = await manager.decide(sample_normalized_message)
     result3 = await manager.decide(sample_normalized_message)
 
-    assert result1.response_text == "回复1"
-    assert result2.response_text == "回复2"
-    assert result3.response_text == "回复3"
+    # 所有调用都返回 None
+    assert result1 is None
+    assert result2 is None
+    assert result3 is None
+    # 但 Provider 的 decide 方法被调用了 3 次
     assert manager._current_provider.call_count == 3
 
 
 @pytest.mark.asyncio
 async def test_decide_default_response(decision_manager_with_mock, sample_normalized_message):
-    """测试使用默认响应"""
+    """测试使用默认响应（fire-and-forget 模式）"""
     manager = decision_manager_with_mock
 
     result = await manager.decide(sample_normalized_message)
 
-    assert result.response_text == "这是默认回复"
-    assert result.emotion == EmotionType.NEUTRAL
+    # 在 fire-and-forget 模式下返回 None
+    assert result is None
+    # Provider 仍然被调用
+    assert manager._current_provider.call_count == 1
 
 
 @pytest.mark.asyncio
 async def test_decide_preserves_metadata(decision_manager_with_mock, sample_normalized_message):
-    """测试 decide 保留原始消息的 metadata"""
+    """测试 decide 保留原始消息的 metadata（fire-and-forget 模式）"""
     manager = decision_manager_with_mock
 
     result = await manager.decide(sample_normalized_message)
 
-    assert result.original_text == sample_normalized_message.text
-    assert "mock" in result.metadata
-    assert result.metadata["mock"] is True
+    # 在 fire-and-forget 模式下返回 None
+    assert result is None
+    # Provider 被调用，metadata 保存在 Provider 内部并通过事件发布
+    assert manager._current_provider.call_count == 1
+    assert manager._current_provider.last_message.text == sample_normalized_message.text
 
 
 # =============================================================================
@@ -419,7 +448,8 @@ async def test_on_normalized_message_ready_success(decision_manager_with_mock, s
         intent_results.append(event_data)
 
     # 订阅 decision.intent 事件
-    manager.event_bus.on(CoreEvents.DECISION_INTENT, intent_handler, priority=50)
+    from src.modules.events.payloads import IntentPayload
+    manager.event_bus.on(CoreEvents.DECISION_INTENT, intent_handler, model_class=IntentPayload, priority=50)
 
     # 触发 data.message 事件
     await manager.event_bus.emit(
@@ -432,10 +462,11 @@ async def test_on_normalized_message_ready_success(decision_manager_with_mock, s
 
     # 验证结果
     assert len(intent_results) == 1
-    # IntentPayload 使用 intent_data 嵌套字典存储 Intent 数据
-    assert intent_results[0]["intent_data"]["response_text"] == "事件回复"
-    assert intent_results[0]["intent_data"]["emotion"] == "love"  # EmotionType.LOVE 的值是 "love"
-    assert intent_results[0]["provider"] == "mock_decision"
+    # IntentPayload 是对象，直接访问属性
+    payload = intent_results[0]
+    assert payload.response_text == "事件回复"
+    assert payload.emotion == "love"  # EmotionType.LOVE 的值是 "love"
+    assert payload.provider == "mock_decision"
     assert manager._current_provider.call_count == 1
 
 
@@ -490,7 +521,8 @@ async def test_on_normalized_message_ready_event_data_structure(decision_manager
         event_data_received.append(event_data)
         source_received.append(source)
 
-    manager.event_bus.on(CoreEvents.DECISION_INTENT, intent_handler, priority=50)
+    from src.modules.events.payloads import IntentPayload
+    manager.event_bus.on(CoreEvents.DECISION_INTENT, intent_handler, model_class=IntentPayload, priority=50)
 
     await manager.event_bus.emit(
         CoreEvents.DATA_MESSAGE,
@@ -504,18 +536,16 @@ async def test_on_normalized_message_ready_event_data_structure(decision_manager
     assert len(event_data_received) == 1
     event_data = event_data_received[0]
 
-    # IntentPayload 包含字段: intent_data (嵌套字典), provider
-    assert "intent_data" in event_data
-    assert "provider" in event_data
-    # intent_data 包含 Intent 的所有字段
-    assert "original_text" in event_data["intent_data"]
-    assert "response_text" in event_data["intent_data"]
-    assert "emotion" in event_data["intent_data"]
+    # IntentPayload 是对象，直接访问属性
+    assert hasattr(event_data, "original_text")
+    assert hasattr(event_data, "response_text")
+    assert hasattr(event_data, "emotion")
+    assert hasattr(event_data, "provider")
 
-    assert event_data["intent_data"]["original_text"] == sample_normalized_message.text
-    assert event_data["provider"] == "mock_decision"
-    # source 是作为参数传递给 handler 的，不在 event_data 里
-    assert source_received[0] == "DecisionProviderManager"
+    assert event_data.original_text == sample_normalized_message.text
+    assert event_data.provider == "mock_decision"
+    # source 是作为参数传递给 handler 的
+    assert source_received[0] == "MockDecisionProviderForManager"
 
 
 @pytest.mark.asyncio
@@ -692,7 +722,8 @@ async def test_cleanup_unsubscribes_events(event_bus, mock_provider_class):
     async def test_handler(event_name, event_data, source):
         call_count["count"] += 1
 
-    manager.event_bus.on(CoreEvents.DATA_MESSAGE, test_handler, priority=50)
+    from src.modules.events.payloads.input import MessageReadyPayload
+    manager.event_bus.on(CoreEvents.DATA_MESSAGE, test_handler, model_class=MessageReadyPayload, priority=50)
 
     # 由于 manager 已经 cleanup，它的处理器不应该再被调用
     await manager.event_bus.emit(
@@ -875,7 +906,7 @@ async def test_concurrent_setup_and_switch(event_bus, mock_provider_class):
 
 @pytest.mark.asyncio
 async def test_concurrent_decide_calls(decision_manager_with_mock, sample_normalized_message):
-    """测试并发 decide 调用"""
+    """测试并发 decide 调用（fire-and-forget 模式）"""
     manager = decision_manager_with_mock
 
     # 添加足够多的响应
@@ -887,9 +918,10 @@ async def test_concurrent_decide_calls(decision_manager_with_mock, sample_normal
 
     results = await asyncio.gather(*tasks)
 
-    # 验证所有调用都成功
+    # 在 fire-and-forget 模式下，所有调用返回 None
     assert len(results) == 10
-    assert all(isinstance(r, Intent) for r in results)
+    assert all(r is None for r in results)
+    # Provider 的 decide 方法被调用了 10 次
     assert manager._current_provider.call_count == 10
 
 
@@ -926,7 +958,7 @@ async def test_switch_lock_prevents_race(event_bus, mock_provider_class):
 
 @pytest.mark.asyncio
 async def test_provider_returns_none_from_decide(event_bus):
-    """测试 Provider 返回 None"""
+    """测试 Provider 返回 None（fire-and-forget 模式）"""
     from src.modules.registry import ProviderRegistry
 
     ProviderRegistry.register_decision("none_provider", NoneReturningMockProvider, source="test")
@@ -944,6 +976,7 @@ async def test_provider_returns_none_from_decide(event_bus):
     # decide 返回 None，但不会抛出异常
     result = await manager.decide(message)
 
+    # 在 fire-and-forget 模式下，decide() 本身返回 None
     assert result is None
 
     # 清理
@@ -953,7 +986,7 @@ async def test_provider_returns_none_from_decide(event_bus):
 
 @pytest.mark.asyncio
 async def test_empty_normalized_message_text(decision_manager_with_mock):
-    """测试空文本的 NormalizedMessage"""
+    """测试空文本的 NormalizedMessage（fire-and-forget 模式）"""
     manager = decision_manager_with_mock
 
     message = NormalizedMessage(
@@ -965,13 +998,15 @@ async def test_empty_normalized_message_text(decision_manager_with_mock):
 
     result = await manager.decide(message)
 
-    assert result is not None
-    assert result.original_text == ""
+    # 在 fire-and-forget 模式下返回 None
+    assert result is None
+    # Provider 仍然被调用
+    assert manager._current_provider.call_count == 1
 
 
 @pytest.mark.asyncio
 async def test_very_long_message_text(decision_manager_with_mock):
-    """测试超长消息文本"""
+    """测试超长消息文本（fire-and-forget 模式）"""
     manager = decision_manager_with_mock
 
     long_text = "测试" * 10000  # 40000 个字符
@@ -984,8 +1019,10 @@ async def test_very_long_message_text(decision_manager_with_mock):
 
     result = await manager.decide(message)
 
-    assert result is not None
-    assert result.original_text == long_text
+    # 在 fire-and-forget 模式下返回 None
+    assert result is None
+    # Provider 仍然被调用
+    assert manager._current_provider.call_count == 1
 
 
 # =============================================================================

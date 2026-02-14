@@ -52,10 +52,9 @@ class MaiCoreDecisionProvider(DecisionProvider):
         ```
 
     异步处理流程:
-        1. decide() 被调用，创建 asyncio.Future
-        2. 发送消息到 MaiCore
-        3. MaiCore 响应到达时，解析为 Intent（优先 LLM，失败时降级到规则）
-        4. 设置 Future 结果，decide() 返回 Intent
+        1. decide() 被调用，发送消息到 MaiCore（fire-and-forget）
+        2. MaiCore 响应到达时，_process_maicore_message 解析为 Intent（优先 LLM，失败时降级到规则）
+        3. 通过 event_bus 发布 decision.intent 事件
     """
 
     class ConfigSchema(BaseProviderConfig):
@@ -73,9 +72,6 @@ class MaiCoreDecisionProvider(DecisionProvider):
         http_callback_path: str = Field(default="/callback", description="HTTP回调路径")
         connect_timeout: float = Field(default=10.0, description="连接超时时间（秒）", gt=0)
         reconnect_interval: float = Field(default=5.0, description="重连间隔时间（秒）", gt=0)
-
-        # Decision 超时配置
-        decision_timeout: float = Field(default=30.0, description="等待 MaiCore 响应的超时时间（秒）", gt=0)
 
         # Action 建议配置
         action_suggestions_enabled: bool = Field(default=False, description="是否启用 MaiBot Action 建议")
@@ -123,9 +119,6 @@ class MaiCoreDecisionProvider(DecisionProvider):
         self.http_port = self.typed_config.http_port
         self.http_callback_path = self.typed_config.http_callback_path
 
-        # Decision 超时配置
-        self._decision_timeout = self.typed_config.decision_timeout
-
         # Router
         self._router: Optional[Router] = None
         self._router_task: Optional[asyncio.Task] = None
@@ -136,10 +129,6 @@ class MaiCoreDecisionProvider(DecisionProvider):
 
         # EventBus 引用（用于事件通知）
         self._event_bus: Optional["EventBus"] = None
-
-        # 异步响应处理（message_id -> Future）
-        self._pending_futures: Dict[str, asyncio.Future] = {}
-        self._futures_lock = asyncio.Lock()
 
     async def init(self) -> None:
         """
@@ -167,6 +156,9 @@ class MaiCoreDecisionProvider(DecisionProvider):
         # 创建 RouterAdapter
         self._router_adapter = RouterAdapter(self._router, self.event_bus)
         self._router_adapter.register_message_handler(self._handle_maicore_message)
+
+        # 启动 WebSocket 连接
+        await self.connect()
 
         self.logger.info("MaiCoreDecisionProvider 初始化完成")
 
@@ -227,25 +219,45 @@ class MaiCoreDecisionProvider(DecisionProvider):
             MessageBase 实例，如果转换失败返回 None
         """
         try:
-            from maim_message import BaseMessageInfo, MessageBase, Seg, UserInfo
+            from maim_message import BaseMessageInfo, FormatInfo, MessageBase, Seg, UserInfo
 
             # 构建UserInfo
+            # platform 字段是 MaiBot 存储消息时需要的（chat_info_user_platform）
             user_id = normalized.user_id or "unknown"
             nickname = normalized.metadata.get("user_nickname", normalized.source)
-            user_info = UserInfo(user_id=user_id, user_nickname=nickname)
+            user_info = UserInfo(platform=self.platform, user_id=user_id, user_nickname=nickname)
+
+            # 构建FormatInfo（MaiBot 需要）
+            format_info = FormatInfo(
+                content_format=["text"],
+                accept_format=["text"],
+            )
 
             # 构建Seg（文本片段）
             seg = Seg(type="text", data=normalized.text)
 
             # 构建MessageBase
+            # 统一使用 self.platform 作为平台标识（amaidesu），而非原始来源
+            # 注意：raw_message 字段是 MaiBot 需要的原始消息内容
+            # additional_config 包含 MaiBot 需要的额外信息
+            # 注意：存储原始 message_id 以便在响应中查找对应的 Future
+            message_id = f"normalized_{int(normalized.timestamp)}"
+            additional_config = {
+                "source": "amaidesu_provider",
+                "original_platform": normalized.source,  # 保留原始平台信息
+                "original_message_id": message_id,  # 存储原始 message_id 用于关联响应
+            }
             message = MessageBase(
                 message_info=BaseMessageInfo(
-                    message_id=f"normalized_{int(normalized.timestamp)}",
-                    platform=normalized.source,
+                    message_id=message_id,
+                    platform=self.platform,
                     user_info=user_info,
                     time=normalized.timestamp,
+                    format_info=format_info,
+                    additional_config=additional_config,
                 ),
                 message_segment=seg,
+                raw_message=normalized.text,  # 添加原始消息内容
             )
 
             return message
@@ -253,77 +265,31 @@ class MaiCoreDecisionProvider(DecisionProvider):
             self.logger.error(f"转换为 MessageBase 失败: {e}", exc_info=True)
             return None
 
-    async def decide(self, normalized_message: "NormalizedMessage") -> Intent:
+    async def decide(self, normalized_message: "NormalizedMessage") -> None:
         """
-        进行决策（发送消息到 MaiCore）
+        发送消息到 MaiCore（fire-and-forget）
 
         Args:
             normalized_message: 标准化消息
-
-        Returns:
-            Intent: 决策意图
-
-        Raises:
-            RuntimeError: 如果未连接
-            TimeoutError: 如果 MaiCore 响应超时
-            ConnectionError: 如果发送失败
         """
         if not self._is_router_connected:
-            raise RuntimeError("MaiCore 未连接，无法发送消息")
+            self.logger.warning("MaiCore 未连接，跳过消息发送")
+            return
 
-        # 转换 NormalizedMessage 为 MessageBase
         message = self._normalized_to_message_base(normalized_message)
         if not message:
             self.logger.error("转换为 MessageBase 失败，无法发送消息")
-            raise RuntimeError("无法将 NormalizedMessage 转换为 MessageBase")
+            return
 
-        # 发送消息
         if not self._router_adapter:
             self.logger.error("RouterAdapter 未初始化，无法发送消息")
-            raise RuntimeError("RouterAdapter 未初始化")
-
-        # 创建 Future 用于等待响应
-        future: asyncio.Future[Intent] = asyncio.Future()
-        message_id = message.message_info.message_id
-
-        # 注册 Future（被动清理：清理超时的旧 Future）
-        async with self._futures_lock:
-            # 被动清理：检查是否有同名 message_id 的旧 Future
-            old_future = self._pending_futures.get(message_id)
-            if old_future and not old_future.done():
-                old_future.cancel()
-                self.logger.debug(f"取消同名消息的旧 Future: {message_id}")
-
-            self._pending_futures[message_id] = future
+            return
 
         try:
-            self.logger.debug(f"准备发送消息到 MaiCore: {message_id}")
             await self._router_adapter.send(message)
-            self.logger.info(f"消息 {message_id} 已发送至 MaiCore，等待 Intent 解析...")
-
-            # 等待响应（使用配置的超时时间）
-            intent = await asyncio.wait_for(future, timeout=self._decision_timeout)
-            self.logger.info(f"消息 {message_id} 的 Intent 解析完成")
-
-            # 异步发送 Action 建议（不阻塞主流程）
-            if self.typed_config.action_suggestions_enabled and intent.actions and self._router_adapter:
-                asyncio.create_task(self._safe_send_suggestion(intent))
-
-            return intent
-
-        except asyncio.TimeoutError:
-            self.logger.error(f"等待 MaiCore 响应超时: {message_id}")
-            # 清理 Future
-            async with self._futures_lock:
-                self._pending_futures.pop(message_id, None)
-            # 抛出超时异常（不降级）
-            raise TimeoutError(f"MaiCore 响应超时（{self._decision_timeout}秒）") from None
+            self.logger.info(f"消息已发送至 MaiCore (id: {message.message_info.message_id})")
         except Exception as e:
             self.logger.error(f"发送消息到 MaiCore 时发生错误: {e}", exc_info=True)
-            # 清理 Future
-            async with self._futures_lock:
-                self._pending_futures.pop(message_id, None)
-            raise ConnectionError(f"发送消息失败: {e}") from e
 
     def _handle_maicore_message(self, message_data: Dict[str, Any]):
         """
@@ -334,6 +300,8 @@ class MaiCoreDecisionProvider(DecisionProvider):
         Args:
             message_data: 消息数据（字典格式）
         """
+        # 打印收到的完整消息（所有字段）
+        self.logger.info(f"收到 MaiCore 原始消息: {message_data}")
         # 在新任务中处理以避免阻塞
         asyncio.create_task(self._process_maicore_message(message_data))
 
@@ -343,7 +311,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
 
         1. 解析为 MessageBase
         2. 调用 _parse_intent_from_maicore_response() 构造 Intent
-        3. 设置 Future 结果
+        3. 通过 event_bus 发布 decision.intent 事件
 
         Args:
             message_data: 消息数据（字典格式）
@@ -358,13 +326,15 @@ class MaiCoreDecisionProvider(DecisionProvider):
 
         # 获取消息ID
         message_id = message.message_info.message_id
+        response_text = self._extract_text_from_response(message)
 
-        # 查找对应的 Future
-        async with self._futures_lock:
-            future = self._pending_futures.pop(message_id, None)
+        self.logger.info(f"收到 MaiCore 消息: message_id={message_id}, text={response_text}")
+        self.logger.debug(f"完整消息: {message_data}")
 
-        if not future:
-            self.logger.warning(f"收到未知消息的响应: {message_id}")
+        # 检查消息是否是 MaiCore 的响应（有 message_segment 且有内容）
+        seg = message.message_segment
+        if not seg or not seg.data:
+            self.logger.debug(f"收到无内容消息，忽略（message_id={message_id}）")
             return
 
         try:
@@ -372,16 +342,30 @@ class MaiCoreDecisionProvider(DecisionProvider):
             intent = self._parse_intent_from_maicore_response(message)
             self.logger.debug(f"Intent解析成功: {intent}")
 
-            # 设置 Future 结果
-            if not future.done():
-                future.set_result(intent)
-                self.logger.debug(f"消息 {message_id} 的 Intent 已设置")
+            # 通过 event_bus 发布 decision.intent 事件
+            await self._publish_intent(intent)
 
         except Exception as e:
             self.logger.error(f"解析 Intent 失败: {e}", exc_info=True)
-            # 设置异常
-            if not future.done():
-                future.set_exception(e)
+
+    async def _publish_intent(self, intent: Intent) -> None:
+        """通过 event_bus 发布 decision.intent 事件"""
+        from src.modules.events.names import CoreEvents
+        from src.modules.events.payloads import IntentPayload
+
+        if not self.event_bus:
+            self.logger.error("EventBus 未初始化，无法发布事件")
+            return
+
+        provider_name = self.get_info().get("name", "maicore")
+
+        await self.event_bus.emit(
+            CoreEvents.DECISION_INTENT,
+            IntentPayload.from_intent(intent, provider_name),
+            source="MaiCoreDecisionProvider",
+        )
+
+        self.logger.info("已发布 decision.intent 事件")
 
     def _parse_intent_from_maicore_response(self, response: MessageBase) -> Intent:
         """
@@ -408,6 +392,24 @@ class MaiCoreDecisionProvider(DecisionProvider):
 
         # 降级到规则解析
         return self._parse_with_rules(text, response)
+
+    def _extract_reply_to_id(self, message: MessageBase) -> Optional[str]:
+        """
+        从 MessageBase 中提取回复关联的原始消息 ID
+
+        MaiCore 在消息间隔过长时会回复，回复消息的 Seg 中包含 type="reply" 的段，
+        其 data 字段包含原始消息的 ID。
+
+        Args:
+            message: MaiCore 返回的 MessageBase
+
+        Returns:
+            原始消息 ID，如果没有 reply 段则返回 None
+        """
+        seg = message.message_segment
+        if seg.type == "reply":
+            return str(seg.data)
+        return None
 
     def _extract_text_from_response(self, response: MessageBase) -> str:
         """
@@ -527,6 +529,62 @@ class MaiCoreDecisionProvider(DecisionProvider):
             },
         )
 
+    async def _parse_intent_locally(self, normalized_message: "NormalizedMessage") -> Intent:
+        """
+        本地解析 Intent（不等待 MaiCore 响应）
+
+        发送消息到 MaiCore 后，直接使用本地 LLM 或规则进行意图解析。
+
+        Args:
+            normalized_message: 标准化消息
+
+        Returns:
+            解析后的 Intent
+        """
+        text = normalized_message.text
+
+        # 尝试使用 LLM 解析
+        llm_service = self._dependencies.get("llm_service")
+        if llm_service:
+            try:
+                # 创建假的 MessageBase 用于 LLM 解析
+                from maim_message import BaseMessageInfo, MessageBase, Seg, UserInfo
+
+                user_id = normalized_message.user_id or "unknown"
+                nickname = normalized_message.metadata.get("user_nickname", normalized_message.source)
+                user_info = UserInfo(platform=self.platform, user_id=user_id, user_nickname=nickname)
+
+                message = MessageBase(
+                    message_info=BaseMessageInfo(
+                        message_id=normalized_message.message_id or f"local_{int(normalized_message.timestamp)}",
+                        platform=self.platform,
+                        user_info=user_info,
+                        time=normalized_message.timestamp,
+                    ),
+                    message_segment=Seg(type="text", data=text),
+                )
+                return self._parse_intent_from_maicore_response(message)
+            except Exception as e:
+                self.logger.warning(f"LLM 解析失败，降级到规则解析: {e}")
+
+        # 降级到规则解析
+        from maim_message import BaseMessageInfo, MessageBase, Seg, UserInfo
+
+        user_id = normalized_message.user_id or "unknown"
+        nickname = normalized_message.metadata.get("user_nickname", normalized_message.source)
+        user_info = UserInfo(platform=self.platform, user_id=user_id, user_nickname=nickname)
+
+        message = MessageBase(
+            message_info=BaseMessageInfo(
+                message_id=normalized_message.message_id or f"local_{int(normalized_message.timestamp)}",
+                platform=self.platform,
+                user_info=user_info,
+                time=normalized_message.timestamp,
+            ),
+            message_segment=Seg(type="text", data=text),
+        )
+        return self._parse_with_rules(text, message)
+
     def _parse_with_rules(self, text: str, response: MessageBase) -> Intent:
         """
         使用规则解析 Intent
@@ -630,13 +688,6 @@ class MaiCoreDecisionProvider(DecisionProvider):
         """
         self.logger.info("清理 MaiCoreDecisionProvider...")
 
-        # 取消所有待处理的 Future
-        async with self._futures_lock:
-            for future in self._pending_futures.values():
-                if not future.done():
-                    future.cancel()
-            self._pending_futures.clear()
-
         await self.disconnect()
         self.logger.info("MaiCoreDecisionProvider 已清理")
 
@@ -683,7 +734,6 @@ class MaiCoreDecisionProvider(DecisionProvider):
             统计信息字典
         """
         return {
-            "pending_futures_count": len(self._pending_futures),
             "is_connected": self.is_connected,
             "router_running": self._router_task is not None and not self._router_task.done(),
         }

@@ -24,7 +24,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
-    from src.modules.types import Intent, SourceContext
+    from src.modules.types import SourceContext
     from src.modules.config.service import ConfigService
     from src.modules.context.service import ContextService
     from src.modules.events.event_bus import EventBus
@@ -181,31 +181,28 @@ class DecisionProviderManager:
         # 订阅 data.message 事件
         self._subscribe_data_message_event()
 
-    async def decide(self, normalized_message: "NormalizedMessage") -> "Intent":
+    async def decide(self, normalized_message: "NormalizedMessage") -> None:
         """
-        进行决策
+        触发决策（fire-and-forget）
 
-        Args:
-            normalized_message: 标准化消息
+        调用当前 Provider 的 decide() 方法，但不等待返回值。
+        决策结果通过 Provider 内部发布的事件传递。
 
-        Returns:
-            Intent: 决策意图
-
-        Raises:
-            RuntimeError: 如果当前Provider未设置
+        注意:
+            - 此方法不返回任何值
+            - Provider 内部通过 event_bus 发布 decision.intent 事件
         """
         if not self._current_provider:
-            raise RuntimeError("当前未设置DecisionProvider，请先调用 setup()")
+            self.logger.warning("当前未设置 DecisionProvider，跳过决策")
+            return
 
-        self.logger.debug(f"进行决策 (Provider: {self._provider_name}, Text: {normalized_message.text[:50]})")
+        self.logger.debug(f"触发决策 (Provider: {self._provider_name})")
+
         try:
-            result = await self._current_provider.decide(normalized_message)
-            self.logger.debug(f"决策完成: {result}")
-            return result
+            # Fire-and-forget: 不等待返回值
+            await self._current_provider.decide(normalized_message)
         except Exception as e:
-            self.logger.error(f"决策失败: {e}", exc_info=True)
-            # 优雅降级: 抛出异常让上层处理
-            raise
+            self.logger.error(f"触发决策失败: {e}", exc_info=True)
 
     async def switch_provider(self, provider_name: str, config: Dict[str, Any]) -> None:
         """
@@ -465,9 +462,6 @@ class DecisionProviderManager:
         if isinstance(message_data, dict):
             normalized_dict = message_data
 
-            # 提取 SourceContext
-            source_context = self._extract_source_context_from_dict(normalized_dict)
-
             # 重建 NormalizedMessage 对象
             try:
                 normalized = NormalizedMessage.model_validate(normalized_dict)
@@ -488,31 +482,9 @@ class DecisionProviderManager:
             return
 
         try:
-            self.logger.debug(f'收到消息: "{normalized.text[:50]}..." (来源: {normalized.source})')
+            self.logger.debug(f'触发决策: "{normalized.text[:50]}..." (来源: {normalized.source})')
 
-            # 调用 decide() 进行决策
-            intent = await self.decide(normalized)
-
-            # 注入 source_context（如果 Provider 未设置）
-            if intent.source_context is None:
-                intent.source_context = source_context
-
-            # 获取当前 Provider 名称
-            provider_name = self.get_current_provider_name() or "unknown"
-
-            # 发布 decision.intent 事件（3域架构）
-            from src.modules.events.payloads import IntentPayload
-
-            await self.event_bus.emit(
-                CoreEvents.DECISION_INTENT,
-                IntentPayload.from_intent(intent, provider_name),
-                source="DecisionProviderManager",
-            )
-
-            if intent.actions:
-                first_action = intent.actions[0]
-                self.logger.info(f'生成响应: "{intent.response_text[:50]}..." (动作: {first_action.type})')
-            else:
-                self.logger.info(f'生成响应: "{intent.response_text[:50]}..." (无动作)')
+            # Fire-and-forget: Provider 内部会发布 decision.intent 事件
+            await self.decide(normalized)
         except Exception as e:
-            self.logger.error(f"处理 NormalizedMessage 时出错: {e}", exc_info=True)
+            self.logger.error(f"触发决策时出错: {e}", exc_info=True)

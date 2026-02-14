@@ -135,18 +135,16 @@ class LLMPDecisionProvider(DecisionProvider):
             self.logger.warning(f"读取 persona 配置失败: {e}")
             return {}
 
-    async def decide(self, normalized_message: "NormalizedMessage") -> Intent:
+    async def decide(self, normalized_message: "NormalizedMessage") -> None:
         """
         进行决策（通过 LLM 生成完整 Intent）
 
         使用 ContextService 管理对话历史，使用结构化 prompt 模板，
         对 LLM 返回的 JSON 进行清理和解析，构造完整 Intent（含 emotion/actions）。
+        处理完成后通过 event_bus 发布 decision.intent 事件。
 
         Args:
             normalized_message: 标准化消息
-
-        Returns:
-            Intent: 决策意图（LLM 生成的完整响应）
 
         Raises:
             RuntimeError: 如果所有重试失败且 fallback_mode 为 "error"
@@ -217,7 +215,8 @@ class LLMPDecisionProvider(DecisionProvider):
                 self._failed_requests += 1
                 self.logger.error(f"LLM 调用失败: {response.error}")
                 # 使用降级策略
-                return self._handle_fallback(normalized_message)
+                await self._handle_fallback(normalized_message)
+                return
 
             self._successful_requests += 1
 
@@ -248,18 +247,21 @@ class LLMPDecisionProvider(DecisionProvider):
                     except Exception as e:
                         self.logger.warning(f"保存助手回复到上下文失败: {e}")
 
-                return intent
+                # 发布 decision.intent 事件
+                await self._publish_intent(intent, normalized_message)
 
             except json.JSONDecodeError as e:
                 self.logger.error(f"JSON 解析失败: {e}, 清理后的内容: {cleaned_json[:200]}")
                 # 使用降级策略
-                return self._handle_fallback(normalized_message)
+                await self._handle_fallback(normalized_message)
+                return
 
         except Exception as e:
             self._failed_requests += 1
             self.logger.error(f"LLM 调用异常: {e}", exc_info=True)
             # 使用降级策略
-            return self._handle_fallback(normalized_message)
+            await self._handle_fallback(normalized_message)
+            return
 
     def _clean_llm_json(self, raw_output: str) -> str:
         """
@@ -379,7 +381,41 @@ class LLMPDecisionProvider(DecisionProvider):
 
         return type_mapping.get(type_str, ActionType.NONE)
 
-    def _handle_fallback(self, normalized_message: "NormalizedMessage") -> Intent:
+    async def _publish_intent(self, intent: Intent, normalized_message: "NormalizedMessage") -> None:
+        """
+        通过 event_bus 发布 decision.intent 事件
+
+        Args:
+            intent: 解析后的 Intent
+            normalized_message: 原始标准化消息
+        """
+        from src.modules.events.names import CoreEvents
+        from src.modules.events.payloads import IntentPayload
+        from src.modules.types import SourceContext
+
+        if not self.event_bus:
+            self.logger.error("EventBus 未初始化，无法发布事件")
+            return
+
+        # 构建 SourceContext
+        source_context = SourceContext(
+            source=normalized_message.source,
+            data_type=normalized_message.data_type,
+            user_id=normalized_message.user_id,
+            user_nickname=normalized_message.metadata.get("user_nickname"),
+            importance=normalized_message.importance,
+        )
+        intent.source_context = source_context
+
+        await self.event_bus.emit(
+            CoreEvents.DECISION_INTENT,
+            IntentPayload.from_intent(intent, "llm"),
+            source="LLMPDecisionProvider",
+        )
+
+        self.logger.info("已发布 decision.intent 事件")
+
+    async def _handle_fallback(self, normalized_message: "NormalizedMessage") -> None:
         """
         处理降级逻辑
 
@@ -390,32 +426,32 @@ class LLMPDecisionProvider(DecisionProvider):
         """
         if self.fallback_mode == "simple":
             # 简单降级：返回原始文本
-            return self._create_intent(normalized_message.text, normalized_message)
+            await self._create_intent(normalized_message.text, normalized_message)
         elif self.fallback_mode == "echo":
             # 回声降级：重复用户输入
-            return self._create_intent(f"你说：{normalized_message.text}", normalized_message)
+            await self._create_intent(f"你说：{normalized_message.text}", normalized_message)
         else:
             # 错误降级：抛出异常
             raise RuntimeError("LLM 请求失败，且未配置降级模式")
 
-    def _create_intent(self, text: str, normalized_message: "NormalizedMessage") -> Intent:
+    async def _create_intent(self, text: str, normalized_message: "NormalizedMessage") -> None:
         """
-        创建简单 Intent（用于降级场景）
+        创建简单 Intent 并发布（用于降级场景）
 
         Args:
             text: 响应文本
             normalized_message: 原始 NormalizedMessage
-
-        Returns:
-            Intent 实例（简单实现：中性情感 + 眨眼动作）
         """
-        return Intent(
+        intent = Intent(
             original_text=normalized_message.text,
             response_text=text,
             emotion=EmotionType.NEUTRAL,
             actions=[IntentAction(type=ActionType.BLINK, params={}, priority=30)],
             metadata={"parser": "llm_fallback"},
         )
+
+        # 发布 decision.intent 事件
+        await self._publish_intent(intent, normalized_message)
 
     async def cleanup(self) -> None:
         """
