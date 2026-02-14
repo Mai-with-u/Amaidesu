@@ -25,6 +25,7 @@ from src.modules.types.base.output_provider import OutputProvider
 from src.modules.types.intent import Intent
 
 if TYPE_CHECKING:
+    from src.modules.di.context import ProviderContext
     from src.modules.streaming.audio_chunk import AudioChunk, AudioMetadata
 
 try:
@@ -125,7 +126,7 @@ class RemoteStreamOutputProvider(OutputProvider):
         reconnect_delay: int = Field(default=5, description="重连延迟(秒)")
         max_reconnect_attempts: int = Field(default=-1, description="最大重连次数(-1表示无限)")
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], context: "ProviderContext"):
         """
         初始化RemoteStream输出Provider
 
@@ -137,7 +138,7 @@ class RemoteStreamOutputProvider(OutputProvider):
                 - audio_sample_rate, audio_channels, etc.: 音频配置
                 - image_width, image_height, etc.: 图像配置
         """
-        super().__init__(config)
+        super().__init__(config, context)
         self.logger = get_logger("RemoteStreamOutputProvider")
 
         # 设置状态
@@ -370,7 +371,7 @@ class RemoteStreamOutputProvider(OutputProvider):
 
     async def _handle_connection(self, websocket):
         """处理客户端连接"""
-        self.logger.info(f"新客户端连接: {websocket.remote_address}")
+        self.logger.debug(f"新客户端连接: {websocket.remote_address}")
 
         # 添加到连接集合
         self.connections.add(websocket)
@@ -390,7 +391,7 @@ class RemoteStreamOutputProvider(OutputProvider):
                 except Exception as e:
                     self.logger.error(f"处理消息时发生错误: {e}", exc_info=True)
         except ConnectionClosed:
-            self.logger.info(f"客户端断开连接: {websocket.remote_address}")
+            self.logger.debug(f"客户端断开连接: {websocket.remote_address}")
         finally:
             # 从连接集合中移除
             self.connections.discard(websocket)
@@ -411,7 +412,7 @@ class RemoteStreamOutputProvider(OutputProvider):
                 break
 
             try:
-                self.logger.info(f"尝试连接到WebSocket服务器: {uri}")
+                self.logger.debug(f"尝试连接到WebSocket服务器: {uri}")
 
                 async with websockets.connect(uri) as websocket:
                     self.active_connection = websocket
@@ -446,7 +447,7 @@ class RemoteStreamOutputProvider(OutputProvider):
                 self.reconnect_count += 1
 
             if self.should_reconnect:
-                self.logger.info(f"{reconnect_delay}秒后尝试重新连接...")
+                self.logger.debug(f"{reconnect_delay}秒后尝试重新连接...")
                 await asyncio.sleep(reconnect_delay)
 
     async def _send_config(self, websocket):
@@ -466,7 +467,7 @@ class RemoteStreamOutputProvider(OutputProvider):
         message_type = message.type
 
         if message_type == MessageType.HELLO:
-            self.logger.info(f"收到Hello消息: {message.data.get('client_info', '未知客户端')}")
+            self.logger.debug(f"收到Hello消息: {message.data.get('client_info', '未知客户端')}")
 
         elif message_type == MessageType.CONFIG:
             # 更新配置
@@ -498,7 +499,7 @@ class RemoteStreamOutputProvider(OutputProvider):
 
         elif message_type == MessageType.STATUS:
             # 状态更新
-            self.logger.info(f"收到状态更新: {message.data}")
+            self.logger.debug(f"收到状态更新: {message.data}")
 
         elif message_type == MessageType.ERROR:
             # 错误信息

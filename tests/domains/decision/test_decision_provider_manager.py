@@ -85,6 +85,7 @@ class MockDecisionProviderForManager(DecisionProvider):
         if self.event_bus:
             # 构建 SourceContext
             from src.modules.types import SourceContext
+
             source_context = SourceContext(
                 source=message.source,
                 data_type=message.data_type,
@@ -317,6 +318,7 @@ async def test_setup_subscribes_to_event(event_bus, mock_provider_class):
 
     # 在 setup 之前订阅同一个事件
     from src.modules.events.payloads.input import MessageReadyPayload
+
     event_bus.on(CoreEvents.DATA_MESSAGE, test_handler, model_class=MessageReadyPayload, priority=50)
 
     await manager.setup("mock_decision", {})
@@ -452,6 +454,7 @@ async def test_on_normalized_message_ready_success(decision_manager_with_mock, s
 
     # 订阅 decision.intent 事件
     from src.modules.events.payloads import IntentPayload
+
     manager.event_bus.on(CoreEvents.DECISION_INTENT, intent_handler, model_class=IntentPayload, priority=50)
 
     # 触发 data.message 事件
@@ -525,6 +528,7 @@ async def test_on_normalized_message_ready_event_data_structure(decision_manager
         source_received.append(source)
 
     from src.modules.events.payloads import IntentPayload
+
     manager.event_bus.on(CoreEvents.DECISION_INTENT, intent_handler, model_class=IntentPayload, priority=50)
 
     await manager.event_bus.emit(
@@ -726,6 +730,7 @@ async def test_cleanup_unsubscribes_events(event_bus, mock_provider_class):
         call_count["count"] += 1
 
     from src.modules.events.payloads.input import MessageReadyPayload
+
     manager.event_bus.on(CoreEvents.DATA_MESSAGE, test_handler, model_class=MessageReadyPayload, priority=50)
 
     # 由于 manager 已经 cleanup，它的处理器不应该再被调用

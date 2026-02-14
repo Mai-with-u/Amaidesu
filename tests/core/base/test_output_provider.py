@@ -15,6 +15,7 @@ OutputProvider 单元测试
 
 import pytest
 
+from src.modules.di.context import ProviderContext
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.decision import IntentPayload
@@ -40,15 +41,16 @@ def create_test_intent(response_text: str = "测试响应") -> Intent:
 class MockOutputProvider(OutputProvider):
     """模拟的 OutputProvider 实现（用于测试）"""
 
-    def __init__(self, config: dict, raise_error: bool = False):
+    def __init__(self, config: dict, context: ProviderContext = None, raise_error: bool = False):
         """
         初始化 Mock OutputProvider
 
         Args:
             config: Provider 配置
+            context: Provider 上下文（必填）
             raise_error: 是否在 execute 时抛出错误
         """
-        super().__init__(config)
+        super().__init__(config, context)
         self.raise_error = raise_error
         self.init_called = False
         self.start_called = False
@@ -90,15 +92,21 @@ class IncompleteOutputProvider(OutputProvider):
 
 
 @pytest.fixture
-def mock_provider():
-    """创建标准的 MockOutputProvider 实例"""
-    return MockOutputProvider(config={"device": "test_device"})
+def mock_context():
+    """创建用于测试的 Mock ProviderContext"""
+    return ProviderContext()
 
 
 @pytest.fixture
-def error_provider():
+def mock_provider(mock_context):
+    """创建标准的 MockOutputProvider 实例"""
+    return MockOutputProvider(config={"device": "test_device"}, context=mock_context)
+
+
+@pytest.fixture
+def error_provider(mock_context):
     """创建会抛出错误的 OutputProvider"""
-    return MockOutputProvider(config={}, raise_error=True)
+    return MockOutputProvider(config={}, context=mock_context, raise_error=True)
 
 
 @pytest.fixture
@@ -122,10 +130,10 @@ def test_intent():
 
 
 @pytest.mark.asyncio
-async def test_output_provider_initialization():
+async def test_output_provider_initialization(mock_context):
     """测试 OutputProvider 初始化"""
     config = {"device": "TTS", "voice": "female"}
-    provider = MockOutputProvider(config)
+    provider = MockOutputProvider(config, mock_context)
 
     assert provider.config == config
     assert provider.event_bus is None
@@ -133,9 +141,9 @@ async def test_output_provider_initialization():
 
 
 @pytest.mark.asyncio
-async def test_output_provider_default_config():
+async def test_output_provider_default_config(mock_context):
     """测试使用默认配置初始化"""
-    provider = MockOutputProvider({})
+    provider = MockOutputProvider({}, mock_context)
 
     assert provider.config == {}
     assert provider.is_started is False
@@ -161,9 +169,9 @@ async def test_output_provider_abstract_method_not_implemented():
 
 
 @pytest.mark.asyncio
-async def test_output_provider_start_basic(event_bus):
+async def test_output_provider_start_basic(mock_context, event_bus):
     """测试 start() 基本流程"""
-    provider = MockOutputProvider({})
+    provider = MockOutputProvider({}, mock_context)
 
     await provider.start(event_bus=event_bus)
 
@@ -173,9 +181,9 @@ async def test_output_provider_start_basic(event_bus):
 
 
 @pytest.mark.asyncio
-async def test_output_provider_start_with_audio_stream_channel(event_bus):
+async def test_output_provider_start_with_audio_stream_channel(mock_context, event_bus):
     """测试 start() 接受 AudioStreamChannel"""
-    provider = MockOutputProvider({})
+    provider = MockOutputProvider({}, mock_context)
     mock_audio_channel = object()
 
     await provider.start(event_bus=event_bus, audio_stream_channel=mock_audio_channel)
@@ -185,9 +193,9 @@ async def test_output_provider_start_with_audio_stream_channel(event_bus):
 
 
 @pytest.mark.asyncio
-async def test_output_provider_start_without_audio_stream_channel(event_bus):
+async def test_output_provider_start_without_audio_stream_channel(mock_context, event_bus):
     """测试 start() 不传 audio_stream_channel 时为 None"""
-    provider = MockOutputProvider({})
+    provider = MockOutputProvider({}, mock_context)
 
     await provider.start(event_bus=event_bus)
 
@@ -195,9 +203,9 @@ async def test_output_provider_start_without_audio_stream_channel(event_bus):
 
 
 @pytest.mark.asyncio
-async def test_output_provider_start_multiple_calls(event_bus):
+async def test_output_provider_start_multiple_calls(mock_context, event_bus):
     """测试 start() 可以多次调用"""
-    provider = MockOutputProvider({})
+    provider = MockOutputProvider({}, mock_context)
 
     await provider.start(event_bus=event_bus)
     assert provider.is_started is True
@@ -291,9 +299,9 @@ async def test_output_provider_event_driven_multiple_renders(event_bus, mock_pro
 
 
 @pytest.mark.asyncio
-async def test_output_provider_stop_basic(event_bus):
+async def test_output_provider_stop_basic(mock_context, event_bus):
     """测试 stop() 基本功能"""
-    provider = MockOutputProvider({})
+    provider = MockOutputProvider({}, mock_context)
     await provider.start(event_bus=event_bus)
 
     assert provider.is_started is True
@@ -305,9 +313,9 @@ async def test_output_provider_stop_basic(event_bus):
 
 
 @pytest.mark.asyncio
-async def test_output_provider_stop_idempotent(event_bus):
+async def test_output_provider_stop_idempotent(mock_context, event_bus):
     """测试 stop() 可以多次调用（幂等）"""
-    provider = MockOutputProvider({})
+    provider = MockOutputProvider({}, mock_context)
     await provider.start(event_bus=event_bus)
 
     await provider.stop()
@@ -319,9 +327,9 @@ async def test_output_provider_stop_idempotent(event_bus):
 
 
 @pytest.mark.asyncio
-async def test_output_provider_stop_after_render(event_bus, test_intent):
+async def test_output_provider_stop_after_render(mock_context, event_bus, test_intent):
     """测试渲染后 stop() 正常工作"""
-    provider = MockOutputProvider({})
+    provider = MockOutputProvider({}, mock_context)
     await provider.start(event_bus=event_bus)
     await provider.execute(test_intent)
 
@@ -366,9 +374,9 @@ async def test_output_provider_stop_unsubscribes_from_events(event_bus, mock_pro
 
 
 @pytest.mark.asyncio
-async def test_output_provider_get_info_basic():
+async def test_output_provider_get_info_basic(mock_context):
     """测试 get_info() 返回基本信息"""
-    provider = MockOutputProvider({})
+    provider = MockOutputProvider({}, mock_context)
 
     info = provider.get_info()
 
@@ -378,9 +386,9 @@ async def test_output_provider_get_info_basic():
 
 
 @pytest.mark.asyncio
-async def test_output_provider_get_info_after_start(event_bus):
+async def test_output_provider_get_info_after_start(mock_context, event_bus):
     """测试 start() 后 get_info() 返回正确的状态"""
-    provider = MockOutputProvider({})
+    provider = MockOutputProvider({}, mock_context)
     await provider.start(event_bus=event_bus)
 
     info = provider.get_info()
@@ -391,9 +399,9 @@ async def test_output_provider_get_info_after_start(event_bus):
 
 
 @pytest.mark.asyncio
-async def test_output_provider_get_info_after_stop(event_bus):
+async def test_output_provider_get_info_after_stop(mock_context, event_bus):
     """测试 stop() 后 get_info() 返回正确的状态"""
-    provider = MockOutputProvider({})
+    provider = MockOutputProvider({}, mock_context)
     await provider.start(event_bus=event_bus)
     await provider.stop()
 
@@ -410,9 +418,9 @@ async def test_output_provider_get_info_after_stop(event_bus):
 
 
 @pytest.mark.asyncio
-async def test_output_provider_full_lifecycle(event_bus, test_intent):
+async def test_output_provider_full_lifecycle(mock_context, event_bus, test_intent):
     """测试 OutputProvider 完整生命周期"""
-    provider = MockOutputProvider({})
+    provider = MockOutputProvider({}, mock_context)
 
     # 1. 初始化
     assert provider.is_started is False
@@ -436,9 +444,9 @@ async def test_output_provider_full_lifecycle(event_bus, test_intent):
 
 
 @pytest.mark.asyncio
-async def test_output_provider_restart(event_bus, test_intent):
+async def test_output_provider_restart(mock_context, event_bus, test_intent):
     """测试 OutputProvider 可以重新启动"""
-    provider = MockOutputProvider({})
+    provider = MockOutputProvider({}, mock_context)
 
     # 第一次运行
     await provider.start(event_bus=event_bus)
@@ -457,9 +465,9 @@ async def test_output_provider_restart(event_bus, test_intent):
 
 
 @pytest.mark.asyncio
-async def test_output_provider_lifecycle_state_transitions(event_bus):
+async def test_output_provider_lifecycle_state_transitions(mock_context, event_bus):
     """测试生命周期状态转换"""
-    provider = MockOutputProvider({})
+    provider = MockOutputProvider({}, mock_context)
 
     # 初始状态
     info = provider.get_info()
@@ -487,9 +495,9 @@ async def test_output_provider_lifecycle_state_transitions(event_bus):
 
 
 @pytest.mark.asyncio
-async def test_output_provider_start_with_mock_event_bus():
+async def test_output_provider_start_with_mock_event_bus(mock_context):
     """测试 start() 使用 mock event_bus（没有 on 方法）"""
-    provider = MockOutputProvider({})
+    provider = MockOutputProvider({}, mock_context)
 
     # 使用一个简单的 mock 对象，提供 on 方法
     class MockEventBus:
@@ -507,9 +515,9 @@ async def test_output_provider_start_with_mock_event_bus():
 
 
 @pytest.mark.asyncio
-async def test_output_provider_with_empty_config(test_intent):
+async def test_output_provider_with_empty_config(mock_context, test_intent):
     """测试使用空配置的 OutputProvider"""
-    provider = MockOutputProvider({})
+    provider = MockOutputProvider({}, mock_context)
 
     await provider.execute(test_intent)
 

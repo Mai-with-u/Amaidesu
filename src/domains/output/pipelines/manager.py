@@ -186,7 +186,7 @@ class OutputPipelineManager:
 
         if root_config_pipelines_section is None:
             root_config_pipelines_section = {}
-            self.logger.info("未提供 Pipeline 配置，跳过加载。")
+            self.logger.debug("未提供 Pipeline 配置，跳过加载。")
             return
 
         loaded_pipeline_count = 0

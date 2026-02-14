@@ -4,7 +4,11 @@
 应在应用启动时（main.py）调用 configure_from_config() 进行配置。
 """
 
+import json
+import os
 import sys
+import time
+from pathlib import Path
 
 from loguru import logger as loguru_logger
 
@@ -111,8 +115,6 @@ def configure_from_config(config_dict: dict | None = None) -> None:
 
     # 4. 若 enabled=True，添加文件处理器
     if enabled:
-        import os
-
         # 按需创建目录
         if not os.path.exists(directory):
             try:
@@ -123,8 +125,6 @@ def configure_from_config(config_dict: dict | None = None) -> None:
 
         # 定义自定义 JSONL sink
         # loguru 的 serialize=True 会传递包含 {"text": "...", "record": {...}} 的 JSON 字符串
-        import json
-
         def json_sink(message):
             """自定义 JSONL sink，每行写入一个 JSON 对象。"""
             data = json.loads(message)  # {"text": "...", "record": {...}}
@@ -143,9 +143,6 @@ def configure_from_config(config_dict: dict | None = None) -> None:
 
         # 根据格式选择文件名和格式化器
         if log_format == "jsonl":
-            import time
-            from pathlib import Path
-
             # 预先计算文件路径
             # 根据 split_by_session 决定时间戳格式
             if split_by_session:

@@ -75,7 +75,7 @@ class MaicraftDecisionProvider(DecisionProvider):
         mcp_timeout: int = Field(default=30, description="MCP超时时间（秒）")
         verbose_logging: bool = Field(default=False, description="是否输出详细日志")
 
-    def __init__(self, config: dict, context: "ProviderContext" = None):
+    def __init__(self, config: dict, context: "ProviderContext"):
         super().__init__(config, context)
 
         self.logger = get_logger(self.__class__.__name__)
@@ -193,7 +193,7 @@ class MaicraftDecisionProvider(DecisionProvider):
                 # 不是命令，返回
                 return
 
-            self.logger.info(f"收到命令: {command.name} (参数: {command.args})")
+            self.logger.debug(f"收到命令: {command.name} (参数: {command.args})")
 
             # 检查是否支持该命令
             if not self.action_registry.is_supported_command(command.name):
@@ -345,7 +345,7 @@ class MaicraftDecisionProvider(DecisionProvider):
             source="MaicraftDecisionProvider",
         )
 
-        self.logger.info("已发布 decision.intent 事件")
+        self.logger.debug("已发布 decision.intent 事件")
 
     @classmethod
     def get_registration_info(cls) -> dict:

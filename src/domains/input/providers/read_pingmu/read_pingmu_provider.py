@@ -205,7 +205,7 @@ class ReadPingmuInputProvider(InputProvider):
             self.messages_sent += 1
             self.last_message_time = time.time()
 
-            self.logger.info(f"屏幕描述消息已创建: {new_context[:50]}...")
+            self.logger.debug(f"屏幕描述消息已创建: {new_context[:50]}...")
 
         except Exception as e:
             self.logger.error(f"创建屏幕描述消息失败: {e}", exc_info=True)

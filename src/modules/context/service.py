@@ -178,8 +178,6 @@ class ContextService:
             history = await context_service.get_history(session_id, limit=10)
 
             # 获取特定时间之前的消息
-            import time
-
             timestamp = time.time() - 3600  # 1小时前
             history = await context_service.get_history(session_id, before_timestamp=timestamp)
             ```

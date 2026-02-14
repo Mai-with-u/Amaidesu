@@ -187,7 +187,7 @@ class RateLimitTextPipeline(TextPipelineBase):
             self._global_timestamps.clear()
             self._user_timestamps.clear()
         self.reset_stats()
-        self.logger.info("RateLimitTextPipeline 已重置状态")
+        self.logger.debug("RateLimitTextPipeline 已重置状态")
 
 
 # ==================== MessagePipeline 版本 ====================
@@ -322,4 +322,4 @@ class RateLimitMessagePipeline(MessagePipelineBase):
             self._global_timestamps.clear()
             self._user_timestamps.clear()
         self.reset_stats()
-        self.logger.info("RateLimitMessagePipeline 已重置状态")
+        self.logger.debug("RateLimitMessagePipeline 已重置状态")

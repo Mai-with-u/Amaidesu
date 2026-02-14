@@ -56,7 +56,7 @@ def _ensure_component_configs(component_base_dir: str, component_type_name: str)
     返回 True 如果有任何文件被复制，否则返回 False。
     """
     config_copied = False
-    logger.info(f"开始检查{component_type_name}配置文件于 '{component_base_dir}'...")
+    logger.debug(f"开始检查{component_type_name}配置文件于 '{component_base_dir}'...")
     try:
         if not os.path.isdir(component_base_dir):
             logger.warning(f"指定的{component_type_name}目录 '{component_base_dir}' 不存在或不是一个目录。")
@@ -130,7 +130,7 @@ def check_and_setup_main_config(
     template_path = os.path.join(base_dir, template_filename)
     config_copied = False
 
-    logger.info(f"开始检查主配置文件 '{config_path}'...")
+    logger.debug(f"开始检查主配置文件 '{config_path}'...")
 
     template_exists = os.path.exists(template_path)
     config_exists = os.path.exists(config_path)
@@ -146,7 +146,7 @@ def check_and_setup_main_config(
     elif not config_exists and not template_exists:
         logger.error(f"主配置文件 '{config_filename}' 和模板 '{template_filename}' 均未找到于 '{base_dir}'。")
 
-    logger.info("主配置文件检查完成。")
+    logger.debug("主配置文件检查完成。")
     return config_copied
 
 
@@ -507,7 +507,7 @@ def _update_config_from_template(config_path: str, template_path: str) -> None:
                         and not (section in ("inner", "meta") and key == "version")
                     ):
                         merged_data[section][key] = existing_data[section][key]
-                        logger.info(f"[配置更新] 保留用户设置: {section}.{key} = {existing_data[section][key]}")
+                        logger.debug(f"[配置更新] 保留用户设置: {section}.{key} = {existing_data[section][key]}")
                     else:
                         merged_data[section][key] = template_value
             else:

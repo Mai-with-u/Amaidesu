@@ -8,6 +8,7 @@
 """
 
 import time
+import traceback
 from typing import Any, Dict, Optional
 
 from pydantic import ConfigDict, Field
@@ -135,8 +136,6 @@ class ErrorPayload(BasePayload):
         Returns:
             ErrorPayload 实例
         """
-        import traceback
-
         return cls(
             error_type=type(exc).__name__,
             error_message=str(exc),

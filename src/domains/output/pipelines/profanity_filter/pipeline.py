@@ -9,6 +9,7 @@
 """
 
 import os
+import re
 from typing import TYPE_CHECKING, Any, Dict, Optional, Set
 
 from src.domains.output.pipelines.base import OutputPipelineBase
@@ -114,7 +115,7 @@ class ProfanityFilterPipeline(OutputPipelineBase):
         # 如果匹配到敏感词且配置了丢弃
         if has_match and self._drop_on_match:
             self._stats.dropped_count += 1
-            self.logger.info("敏感词过滤: 消息已丢弃（配置了 drop_on_match）")
+            self.logger.debug("敏感词过滤: 消息已丢弃（配置了 drop_on_match）")
             return None
 
         return intent
@@ -149,8 +150,6 @@ class ProfanityFilterPipeline(OutputPipelineBase):
                     filtered_text = filtered_text.replace(profanity_word, self._replacement)
                 else:
                     # 不区分大小写时，需要更复杂的替换逻辑
-                    import re
-
                     pattern = re.compile(re.escape(profanity_word), re.IGNORECASE)
                     filtered_text = pattern.sub(self._replacement, filtered_text)
 

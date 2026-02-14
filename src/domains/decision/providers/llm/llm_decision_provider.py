@@ -9,6 +9,9 @@ LLMPDecisionProvider - LLM决策提供者
 
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
 
+import json
+import re
+
 from pydantic import Field
 
 from src.modules.di.context import ProviderContext
@@ -54,7 +57,7 @@ class LLMPDecisionProvider(DecisionProvider):
         client: Literal["llm", "llm_fast", "vlm"] = Field(default="llm", description="使用的LLM客户端名称")
         fallback_mode: Literal["simple", "echo", "error"] = Field(default="simple", description="降级模式")
 
-    def __init__(self, config: Dict[str, Any], context: "ProviderContext" = None):
+    def __init__(self, config: Dict[str, Any], context: "ProviderContext"):
         """
         初始化 LLMPDecisionProvider
 
@@ -103,7 +106,7 @@ class LLMPDecisionProvider(DecisionProvider):
         self._llm_service = self.context.llm_service
         self._config_service = self.context.config_service
         self._context_service = self.context.context_service
-        self.logger.info("服务已从 ProviderContext 获取")
+        self.logger.debug("服务已从 ProviderContext 获取")
 
         self.logger.info(f"LLMPDecisionProvider 初始化完成 (Client: {self.client_type})")
 
@@ -218,8 +221,6 @@ class LLMPDecisionProvider(DecisionProvider):
 
             try:
                 # 解析 JSON
-                import json
-
                 parsed_data = json.loads(cleaned_json)
 
                 # 构造完整 Intent
@@ -271,8 +272,6 @@ class LLMPDecisionProvider(DecisionProvider):
         Returns:
             清理后的 JSON 字符串
         """
-        import re
-
         # 第一步：移除 ```json 或 ``` 代码块标记
         cleaned = raw_output.strip()
         # 移除开头的 ```json 或 ```
@@ -406,7 +405,7 @@ class LLMPDecisionProvider(DecisionProvider):
             source="LLMPDecisionProvider",
         )
 
-        self.logger.info("已发布 decision.intent 事件")
+        self.logger.debug("已发布 decision.intent 事件")
 
     async def _handle_fallback(self, normalized_message: "NormalizedMessage") -> None:
         """

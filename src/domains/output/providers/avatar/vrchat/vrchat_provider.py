@@ -17,6 +17,7 @@ from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
+    from src.modules.di.context import ProviderContext
     from src.modules.types import Intent
 
 # python-osc 软降级
@@ -79,14 +80,14 @@ class VRChatProvider(AvatarProviderBase):
         vrc_host: str = Field(default="127.0.0.1", description="VRChat OSC 主机地址")
         vrc_out_port: int = Field(default=9000, ge=1, le=65535, description="VRChat OSC 端口")
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], context: "ProviderContext"):
         """
         初始化 VRChat Provider
 
         Args:
             config: Provider 配置（来自 [providers.output.vrchat]）
         """
-        super().__init__(config)
+        super().__init__(config, context)
         self.logger = get_logger(self.__class__.__name__)
 
         # 使用 ConfigSchema 验证配置，获得类型安全的配置对象
@@ -262,7 +263,7 @@ class VRChatProvider(AvatarProviderBase):
             # VRChat OSC 地址: /avatar/parameters/VRCEmote
             address = "/avatar/parameters/VRCEmote"
             self.osc_client.send_message(address, gesture_value)
-            self.logger.info(f"触发 VRChat 手势: {gesture_name} (value: {gesture_value})")
+            self.logger.debug(f"触发 VRChat 手势: {gesture_name} (value: {gesture_value})")
         except Exception as e:
             self.logger.error(f"触发 VRChat 手势失败: {gesture_name}: {e}")
 

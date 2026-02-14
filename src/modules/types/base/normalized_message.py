@@ -9,6 +9,10 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
+from src.modules.logging import get_logger
+
+logger = get_logger(__name__)
+
 # Forward reference for BiliRawMessage - 避免循环导入
 BiliRawMessage = Any  # 实际类型在运行时动态绑定
 
@@ -68,8 +72,8 @@ class NormalizedMessage(BaseModel):
         if get_user_id is not None:
             try:
                 return get_user_id()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"获取用户ID失败: {e}")
         return None
 
     @property

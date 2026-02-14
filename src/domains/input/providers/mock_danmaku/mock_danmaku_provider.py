@@ -39,7 +39,7 @@ class MockDanmakuInputProvider(InputProvider):
         loop_playback: bool = Field(default=True, description="循环播放")
         start_immediately: bool = Field(default=True, description="立即开始")
 
-    def __init__(self, config: dict, context: "ProviderContext" = None):
+    def __init__(self, config: dict, context: "ProviderContext"):
         super().__init__(config, context)
         self.logger = get_logger("MockDanmakuInputProvider")
 

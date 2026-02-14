@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from packaging.version import Version
+
 from src.modules.logging import get_logger
 from src.modules.config.toml_utils import (
     read_toml_preserve,
@@ -83,8 +85,6 @@ class ConfigVersionManager:
 
             if not config_version:
                 return True, f"需要初始化版本到 {template_version}"
-
-            from packaging.version import Version
 
             if Version(template_version) > Version(config_version):
                 return True, f"需要更新: {config_version} -> {template_version}"
@@ -202,8 +202,6 @@ class ConfigVersionManager:
 
             if not info.current_version:
                 return True, f"需要初始化版本到 {template_version}"
-
-            from packaging.version import Version
 
             if Version(template_version) > Version(info.current_version):
                 return True, f"需要更新: {info.current_version} -> {template_version}"

@@ -7,6 +7,7 @@ OpenAI 客户端实现
 import asyncio
 import base64
 import mimetypes
+import os
 from io import BytesIO
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
@@ -66,8 +67,6 @@ class OpenAIClient(LLMClient):
 
     def _path_or_url_to_data_url(self, image: Union[str, bytes]) -> str:
         """将 URL/本地路径/字节 转为 URL 或 data URL"""
-        import os
-
         if isinstance(image, str):
             if image.startswith("http://") or image.startswith("https://"):
                 return image

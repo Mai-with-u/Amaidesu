@@ -12,6 +12,8 @@ import asyncio
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+import numpy as np
+
 from pydantic import Field
 
 from src.domains.output.providers.avatar.base import AvatarProviderBase as BaseAvatarProvider
@@ -19,6 +21,7 @@ from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
+    from src.modules.di.context import ProviderContext
     from src.modules.streaming.audio_chunk import AudioChunk, AudioMetadata
 
     from src.modules.types import Intent
@@ -78,14 +81,14 @@ class VTSProvider(BaseAvatarProvider):
         vowel_detection_sensitivity: float = Field(default=0.5, ge=0.0, le=1.0, description="元音检测灵敏度")
         sample_rate: int = Field(default=16000, ge=8000, le=48000, description="音频采样率")
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], context: "ProviderContext"):
         """
         初始化VTS Provider
 
         Args:
             config: Provider配置（来自[rendering.outputs.vts]）
         """
-        super().__init__(config)
+        super().__init__(config, context)
         self.logger = get_logger(self.__class__.__name__)
 
         # 使用 ConfigSchema 验证配置，获得类型安全的配置对象
@@ -336,11 +339,11 @@ class VTSProvider(BaseAvatarProvider):
             await self._vts.connect()
 
             # 请求认证token
-            self.logger.info("请求认证token...")
+            self.logger.debug("请求认证token...")
             await self._vts.request_authenticate_token()
 
             # 认证
-            self.logger.info("正在使用token进行认证...")
+            self.logger.debug("正在使用token进行认证...")
             authenticated = await self._vts.request_authenticate()
 
             if authenticated:
@@ -365,7 +368,7 @@ class VTSProvider(BaseAvatarProvider):
                             backpressure_strategy=BackpressureStrategy.DROP_NEWEST,
                         ),
                     )
-                    self.logger.info("VTS 口型同步已订阅 AudioStreamChannel")
+                    self.logger.debug("VTS 口型同步已订阅 AudioStreamChannel")
 
                 # 测试微笑
                 await self.smile(0)
@@ -392,19 +395,21 @@ class VTSProvider(BaseAvatarProvider):
         if audio_channel and self._vts_subscription_id:
             try:
                 await audio_channel.unsubscribe(self._vts_subscription_id)
-                self.logger.info("VTS 口型同步已取消订阅 AudioStreamChannel")
+                self.logger.debug("VTS 口型同步已取消订阅 AudioStreamChannel")
             except Exception as e:
                 self.logger.error(f"取消 AudioStreamChannel 订阅失败: {e}")
             finally:
                 self._vts_subscription_id = None
 
-        if self._vts:
-            self.logger.info("正在断开VTS连接...")
+        if self._vts and hasattr(self._vts, "close") and callable(self._vts.close):
+            self.logger.debug("正在断开VTS连接...")
             try:
                 await self._vts.close()
-                self.logger.info("VTS连接已断开")
+                self.logger.debug("VTS连接已断开")
             except Exception as e:
                 self.logger.error(f"断开VTS连接失败: {e}")
+            finally:
+                self._vts = None
 
         self._is_connected = False
         self._is_connecting = False
@@ -479,13 +484,13 @@ class VTSProvider(BaseAvatarProvider):
             return False
 
         try:
-            self.logger.info(f"触发热键: {hotkey_id}")
+            self.logger.debug(f"触发热键: {hotkey_id}")
 
             request_msg = self._vts.vts_request.requestTriggerHotKey(hotkeyID=hotkey_id)
             response = await self._vts.request(request_msg)
 
             if response and response.get("messageType") == "HotkeyTriggerResponse":
-                self.logger.info(f"热键 {hotkey_id} 触发成功")
+                self.logger.debug(f"热键 {hotkey_id} 触发成功")
                 return True
             else:
                 self.logger.warning(f"热键 {hotkey_id} 触发失败: {response}")
@@ -516,7 +521,7 @@ class VTSProvider(BaseAvatarProvider):
         try:
             await self.set_parameter_value(self.PARAM_EYE_OPEN_LEFT, 0.0)
             await self.set_parameter_value(self.PARAM_EYE_OPEN_RIGHT, 0.0)
-            self.logger.info("闭眼成功")
+            self.logger.debug("闭眼成功")
             return True
         except Exception as e:
             self.logger.error(f"闭眼失败: {e}")
@@ -530,7 +535,7 @@ class VTSProvider(BaseAvatarProvider):
         try:
             await self.set_parameter_value(self.PARAM_EYE_OPEN_LEFT, 1.0)
             await self.set_parameter_value(self.PARAM_EYE_OPEN_RIGHT, 1.0)
-            self.logger.info("睁眼成功")
+            self.logger.debug("睁眼成功")
             return True
         except Exception as e:
             self.logger.error(f"睁眼失败: {e}")
@@ -655,7 +660,7 @@ class VTSProvider(BaseAvatarProvider):
             if response and response.get("messageType") == "ItemLoadResponse":
                 instance_id = response.get("data", {}).get("instanceID", None)
                 if instance_id:
-                    self.logger.info(f"道具已加载: {instance_id}")
+                    self.logger.debug(f"道具已加载: {instance_id}")
                     return instance_id
                 else:
                     self.logger.warning(f"道具加载失败: {response}")
@@ -691,7 +696,7 @@ class VTSProvider(BaseAvatarProvider):
             )
 
             if response and response.get("messageType") == "ItemUnloadResponse":
-                self.logger.info(f"道具已卸载: {data}")
+                self.logger.debug(f"道具已卸载: {data}")
                 return True
             else:
                 self.logger.warning(f"道具卸载失败: {response}")
@@ -749,7 +754,7 @@ class VTSProvider(BaseAvatarProvider):
         if not self.lip_sync_enabled or not self._is_connected:
             return
 
-        self.logger.info(f"启动口型同步会话: {text[:30]}...")
+        self.logger.debug(f"启动口型同步会话: {text[:30]}...")
 
         self.is_speaking = True
         self.current_vowel_values = {"A": 0.0, "I": 0.0, "U": 0.0, "E": 0.0, "O": 0.0}
@@ -773,8 +778,6 @@ class VTSProvider(BaseAvatarProvider):
 
         try:
             # 转换音频数据为numpy数组
-            import numpy as np
-
             audio_array = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
 
             # 计算音量 (RMS)
@@ -920,7 +923,7 @@ class VTSProvider(BaseAvatarProvider):
                 if selected_hotkey != "NONE" and selected_hotkey in [
                     hotkey.get("name", "") for hotkey in self.hotkey_list
                 ]:
-                    self.logger.info(f"LLM为文本'{text[:30]}...'选择了热键: {selected_hotkey}")
+                    self.logger.debug(f"LLM为文本'{text[:30]}...'选择了热键: {selected_hotkey}")
                     return selected_hotkey
                 else:
                     self.logger.debug(f"LLM认为文本'{text[:30]}...'没有合适的热键匹配")

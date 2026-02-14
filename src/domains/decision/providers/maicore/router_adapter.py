@@ -56,7 +56,7 @@ class RouterAdapter:
         try:
             self.logger.debug(f"准备发送消息: {message.message_info.message_id}")
             await self._router.send_message(message)
-            self.logger.info(f"消息 {message.message_info.message_id} 已发送")
+            self.logger.debug(f"消息 {message.message_info.message_id} 已发送")
         except Exception as e:
             self.logger.error(f"发送消息时发生错误: {e}", exc_info=True)
             raise ConnectionError(f"发送消息失败: {e}") from e
@@ -122,7 +122,7 @@ class RouterAdapter:
         )
 
         await self.send(message.to_message_base())
-        self.logger.info(f"已发送 Action: {len(intent.actions)} 个动作")
+        self.logger.debug(f"已发送 Action: {len(intent.actions)} 个动作")
 
     @property
     def router(self) -> Optional["Router"]:

@@ -127,7 +127,7 @@ class LogActionFactory(AbstractActionFactory):
         Returns:
             IntentAction 对象
         """
-        self.logger.info(f"[LOG] 聊天动作: {message}")
+        self.logger.debug(f"[LOG] 聊天动作: {message}")
 
         return IntentAction(
             type="game_action",
@@ -151,7 +151,7 @@ class LogActionFactory(AbstractActionFactory):
         Returns:
             IntentAction 对象
         """
-        self.logger.info(f"[LOG] 攻击动作: {mob_name}")
+        self.logger.debug(f"[LOG] 攻击动作: {mob_name}")
 
         return IntentAction(
             type="game_action",
@@ -213,7 +213,7 @@ class McpActionFactory(AbstractActionFactory):
         if not self.is_connected:
             self.logger.warning("MCP 未连接，使用模拟模式")
 
-        self.logger.info(f"[MCP] 聊天动作: {message}")
+        self.logger.debug(f"[MCP] 聊天动作: {message}")
 
         return IntentAction(
             type="game_action",
@@ -241,7 +241,7 @@ class McpActionFactory(AbstractActionFactory):
         if not self.is_connected:
             self.logger.warning("MCP 未连接，使用模拟模式")
 
-        self.logger.info(f"[MCP] 攻击动作: {mob_name}")
+        self.logger.debug(f"[MCP] 攻击动作: {mob_name}")
 
         return IntentAction(
             type="game_action",

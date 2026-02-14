@@ -41,7 +41,7 @@ class BiliDanmakuInputProvider(InputProvider):
         poll_interval: int = Field(default=3, description="轮询间隔（秒）", ge=1)
         message_config: dict = Field(default_factory=dict, description="消息配置")
 
-    def __init__(self, config: dict, context: "ProviderContext" = None):
+    def __init__(self, config: dict, context: "ProviderContext"):
         super().__init__(config, context)
 
         self.logger = get_logger(self.__class__.__name__)
@@ -144,7 +144,7 @@ class BiliDanmakuInputProvider(InputProvider):
 
                     if new_danmakus:
                         new_danmakus.sort(key=lambda x: x.get("check_info", {}).get("ts", 0))
-                        self.logger.info(f"收到 {len(new_danmakus)} 条新弹幕")
+                        self.logger.debug(f"收到 {len(new_danmakus)} 条新弹幕")
 
                         for item in new_danmakus:
                             normalized_msg = await self._create_danmaku_message(item)

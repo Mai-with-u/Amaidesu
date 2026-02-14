@@ -11,7 +11,10 @@ GPTSoVITS OutputProvider - Output Domain: 渲染输出实现
 import asyncio
 import time
 from collections import deque
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
+if TYPE_CHECKING:
+    from src.modules.di.context import ProviderContext
 
 import numpy as np
 from pydantic import Field
@@ -78,14 +81,14 @@ class GPTSoVITSOutputProvider(OutputProvider):
         output_device_name: Optional[str] = Field(default=None, description="音频输出设备名称")
         sample_rate: int = Field(default=32000, ge=8000, le=48000, description="采样率")
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], context: "ProviderContext"):
         """
         初始化GPTSoVITS OutputProvider
 
         Args:
             config: Provider配置（来自[providers.output.gptsovits]）
         """
-        super().__init__(config)
+        super().__init__(config, context)
         self.logger = get_logger("GPTSoVITSOutputProvider")
 
         # 使用 ConfigSchema 验证配置
@@ -189,7 +192,7 @@ class GPTSoVITSOutputProvider(OutputProvider):
             return
 
         original_text = text.strip()
-        self.logger.info(f"准备TTS: '{original_text[:50]}...'")
+        self.logger.debug(f"准备TTS: '{original_text[:50]}...'")
 
         final_text = original_text
 
@@ -256,7 +259,7 @@ class GPTSoVITSOutputProvider(OutputProvider):
                         AudioMetadata(text=final_text, sample_rate=self.sample_rate, channels=CHANNELS)
                     )
 
-            self.logger.info(f"TTS播放完成: '{final_text[:30]}...'")
+            self.logger.debug(f"TTS播放完成: '{final_text[:30]}...'")
             self.render_count += 1
 
         except Exception as e:

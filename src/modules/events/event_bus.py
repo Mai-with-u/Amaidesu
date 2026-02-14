@@ -170,7 +170,7 @@ class EventBus:
 
         # 打印事件信息（INFO 级别）
         log_message = self._format_event_log(event_name, data, source)
-        self.logger.info(log_message)
+        self.logger.debug(log_message)
 
         # 更新统计（使用锁保护）
         if self.enable_stats:
