@@ -7,7 +7,10 @@
 import asyncio
 import os
 import sys
-from typing import Any, Dict
+from typing import TYPE_CHECKING, Any, Dict
+
+if TYPE_CHECKING:
+    from src.modules.di.context import ProviderContext
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
@@ -36,8 +39,8 @@ DecisionManager = DecisionProviderManager
 class MockDecisionProviderForManager(DecisionProvider):
     """Mock DecisionProvider for DecisionManager testing"""
 
-    def __init__(self, config: Dict[str, Any] = None):
-        super().__init__(config or {})
+    def __init__(self, config: Dict[str, Any] = None, context: "ProviderContext" = None):
+        super().__init__(config or {}, context=context)
         self.setup_called = False
         self.cleanup_called = False
         self.decide_responses = []
@@ -110,8 +113,8 @@ class MockDecisionProviderForManager(DecisionProvider):
 class FailingMockDecisionProvider(DecisionProvider):
     """Mock provider that fails during init"""
 
-    def __init__(self, config: Dict[str, Any] = None):
-        super().__init__(config or {})
+    def __init__(self, config: Dict[str, Any] = None, context: "ProviderContext" = None):
+        super().__init__(config or {}, context=context)
 
     async def init(self):
         raise ConnectionError("Init failed")
@@ -132,8 +135,8 @@ class FailingMockDecisionProvider(DecisionProvider):
 class NoneReturningMockProvider(DecisionProvider):
     """Mock provider that returns None from decide"""
 
-    def __init__(self, config: Dict[str, Any] = None):
-        super().__init__(config or {})
+    def __init__(self, config: Dict[str, Any] = None, context: "ProviderContext" = None):
+        super().__init__(config or {}, context=context)
 
     async def init(self):
         pass
@@ -768,8 +771,8 @@ async def test_cleanup_handles_provider_error(event_bus, mock_provider_class):
     from src.modules.registry import ProviderRegistry
 
     class FailingCleanupProvider(DecisionProvider):
-        def __init__(self, config: Dict[str, Any] = None):
-            super().__init__(config or {})
+        def __init__(self, config: Dict[str, Any] = None, context: "ProviderContext" = None):
+            super().__init__(config or {}, context=context)
 
         async def init(self):
             pass

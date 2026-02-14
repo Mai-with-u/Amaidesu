@@ -19,7 +19,6 @@ from src.modules.types import ActionType, EmotionType, Intent, IntentAction, Sou
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 from src.modules.types.base.decision_provider import DecisionProvider
-from src.modules.prompts import get_prompt_manager
 
 from .router_adapter import RouterAdapter
 
@@ -90,8 +89,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
         """
         return {"layer": "decision", "name": "maicore", "class": cls, "source": "builtin:maicore"}
 
-    def __init__(self, config: Dict[str, Any]):
-        self.provider_name = "maicore"
+    def __init__(self, config: Dict[str, Any], context: "ProviderContext" = None):
         """
         初始化 MaiCoreDecisionProvider
 
@@ -103,7 +101,12 @@ class MaiCoreDecisionProvider(DecisionProvider):
                 - http_host: (可选) HTTP 服务器主机
                 - http_port: (可选) HTTP 服务器端口
                 - http_callback_path: (可选) HTTP 回调路径，默认"/callback"
+            context: 依赖注入上下文
         """
+        super().__init__(config, context)
+
+        self.provider_name = "maicore"
+
         # 使用 Pydantic Schema 验证配置
         self.typed_config = self.ConfigSchema(**config)
         self.logger = get_logger("MaiCoreDecisionProvider")
@@ -444,7 +447,11 @@ class MaiCoreDecisionProvider(DecisionProvider):
             ValueError: 如果 LLM 返回的内容无法解析为 JSON
         """
         # 使用 decision/intent_parser prompt
-        prompt_manager = get_prompt_manager()
+        # 优先使用依赖注入的 prompt_service，回退到全局单例
+        from src.modules.prompts import get_prompt_manager
+
+        prompt_service = self.context.prompt_service if self.context else None
+        prompt_manager = prompt_service if prompt_service else get_prompt_manager()
         prompt = prompt_manager.render("decision/intent_parser", text=text)
 
         # 调用 LLM

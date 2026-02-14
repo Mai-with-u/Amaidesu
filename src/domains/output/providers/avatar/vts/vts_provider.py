@@ -17,7 +17,6 @@ from pydantic import Field
 from src.domains.output.providers.avatar.base import AvatarProviderBase as BaseAvatarProvider
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
-from src.modules.prompts import get_prompt_manager
 
 if TYPE_CHECKING:
     from src.modules.streaming.audio_chunk import AudioChunk, AudioMetadata
@@ -896,7 +895,12 @@ class VTSProvider(BaseAvatarProvider):
         hotkey_str = "\n".join([f"- {hotkey.get('name', '')}" for hotkey in self.hotkey_list])
 
         # 使用 PromptManager 渲染提示词模板
-        prompt = get_prompt_manager().render("output/vts_hotkey", text=text, hotkey_list_str=hotkey_str)
+        # 优先使用依赖注入的 prompt_service，回退到全局单例
+        from src.modules.prompts import get_prompt_manager
+
+        prompt_service = self.context.prompt_service if self.context else None
+        prompt_manager = prompt_service if prompt_service else get_prompt_manager()
+        prompt = prompt_manager.render("output/vts_hotkey", text=text, hotkey_list_str=hotkey_str)
 
         try:
             if not self.openai_client:

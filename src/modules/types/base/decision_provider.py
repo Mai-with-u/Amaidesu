@@ -18,38 +18,37 @@ DecisionProvider负责将NormalizedMessage转换为决策结果(Intent)。
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Optional
 
+from src.modules.di.context import ProviderContext
+
 if TYPE_CHECKING:
     from src.modules.types.base.normalized_message import NormalizedMessage
 
 
 class DecisionProvider(ABC):
-    """
-    决策Provider抽象基类
+    """决策Provider抽象基类 - 依赖注入版本"""
 
-    职责: 将NormalizedMessage转换为决策结果(Intent)
-
-    生命周期:
-    1. 实例化(__init__)
-    2. 启动(start()) - 初始化并注册到EventBus
-    3. 决策(decide()) - 异步处理NormalizedMessage
-    4. 停止(stop()) - 释放资源
-
-    Attributes:
-        config: Provider配置(来自decision.providers.xxx配置)
-        event_bus: EventBus实例(可选,用于事件通信)
-        is_started: 是否已启动
-    """
-
-    def __init__(self, config: dict):
+    def __init__(
+        self,
+        config: dict,
+        context: ProviderContext = None,
+    ):
         """
         初始化Provider
 
         Args:
             config: Provider配置(来自decision.providers.xxx配置)
+            context: 依赖注入上下文（可选）
         """
         self.config = config
-        self.event_bus = None
+        self.context = context or ProviderContext()
         self.is_started = False
+        # 向后兼容：保留 _dependencies 属性
+        self._dependencies: dict = {}
+
+    @property
+    def event_bus(self):
+        """EventBus实例（优先使用context中的）"""
+        return self.context.event_bus
 
     async def init(self) -> None:  # noqa: B027
         """
@@ -62,25 +61,31 @@ class DecisionProvider(ABC):
 
     async def start(
         self,
-        event_bus,
+        event_bus=None,
         config: Optional[dict] = None,
         dependencies: Optional[dict] = None,
     ) -> None:
         """
-        启动 Provider
+        启动 Provider（向后兼容）
 
         Args:
-            event_bus: EventBus实例
+            event_bus: EventBus实例（保持兼容，优先使用context中的）
             config: Provider配置（可选，如果传入则覆盖构造时的配置）
-            dependencies: 可选的依赖注入（如 llm_service 等）
+            dependencies: 可选的依赖注入（保持兼容，但不再需要）
 
         Raises:
             ConnectionError: 如果无法连接到决策服务
         """
-        self.event_bus = event_bus
+        # 向后兼容：如果传入了 event_bus 但 context 中没有，则更新 context
+        if event_bus is not None and (self.context is None or self.context.event_bus is None):
+            # 由于 ProviderContext 是 frozen，需要使用 dataclasses.replace
+            from dataclasses import replace
+            self.context = replace(self.context, event_bus=event_bus)
+
         if config:
             self.config = config
-        self._dependencies = dependencies or {}
+        if dependencies:
+            self._dependencies = dependencies
         await self.init()
         self.is_started = True
 

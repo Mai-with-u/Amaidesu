@@ -8,6 +8,8 @@ OutputProvider负责将Intent渲染到目标设备。
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
+from src.modules.di.context import ProviderContext
+
 if TYPE_CHECKING:
     from src.modules.streaming.audio_stream_channel import AudioStreamChannel
     from src.modules.types import Intent
@@ -16,7 +18,7 @@ if TYPE_CHECKING:
 
 class OutputProvider(ABC):
     """
-    输出Provider抽象基类
+    输出Provider抽象基类 - 依赖注入版本
 
     职责: 将Intent渲染到目标设备
 
@@ -28,23 +30,31 @@ class OutputProvider(ABC):
 
     Attributes:
         config: Provider配置
-        event_bus: EventBus实例
+        context: ProviderContext实例（依赖注入）
+        event_bus: EventBus实例（从context获取）
         is_started: 是否已启动
         priority: 事件处理优先级
-        audio_stream_channel: AudioStreamChannel实例
+        audio_stream_channel: AudioStreamChannel实例（从context获取）
     """
 
     priority: int = 50  # 事件处理优先级
 
-    def __init__(self, config: dict):
+    def __init__(
+        self,
+        config: dict,
+        context: ProviderContext = None,  # 替换硬编码参数
+    ):
         self.config = config
-        self.event_bus = None
+        self.context = context or ProviderContext()
         self.is_started = False
-        self._audio_stream_channel: Optional["AudioStreamChannel"] = None
+
+    @property
+    def event_bus(self):
+        return self.context.event_bus
 
     @property
     def audio_stream_channel(self) -> Optional["AudioStreamChannel"]:
-        return self._audio_stream_channel
+        return self.context.audio_stream_channel
 
     async def init(self):  # noqa: B027
         """
@@ -55,20 +65,45 @@ class OutputProvider(ABC):
         """
         pass
 
-    async def start(self, event_bus, audio_stream_channel: Optional["AudioStreamChannel"] = None):
+    async def start(
+        self,
+        event_bus=None,
+        audio_stream_channel: Optional["AudioStreamChannel"] = None,
+    ):
         """
         启动 Provider，订阅 OUTPUT_INTENT 事件
+
+        优先使用 context 中的值，否则使用传入的参数（保持兼容）
 
         Args:
             event_bus: EventBus实例
             audio_stream_channel: 可选的AudioStreamChannel实例
         """
+        import dataclasses
+
         from src.modules.events.names import CoreEvents
         from src.modules.events.payloads.decision import IntentPayload
 
-        self.event_bus = event_bus
-        self._audio_stream_channel = audio_stream_channel
-        event_bus.on(CoreEvents.OUTPUT_INTENT, self._on_intent, model_class=IntentPayload, priority=self.priority)
+        # 优先使用 context 中的值，否则使用传入的参数（保持兼容）
+        actual_event_bus = self.context.event_bus or event_bus
+        actual_audio_channel = self.context.audio_stream_channel or audio_stream_channel
+
+        # 使用 dataclasses.replace 创建新实例（因为 frozen=True）
+        if actual_event_bus or actual_audio_channel:
+            self.context = dataclasses.replace(
+                self.context,
+                event_bus=actual_event_bus or self.context.event_bus,
+                audio_stream_channel=actual_audio_channel or self.context.audio_stream_channel,
+            )
+
+        # 订阅事件
+        if actual_event_bus:
+            actual_event_bus.on(
+                CoreEvents.OUTPUT_INTENT,
+                self._on_intent,
+                model_class=IntentPayload,
+                priority=self.priority,
+            )
 
         await self.init()
         self.is_started = True
@@ -104,8 +139,8 @@ class OutputProvider(ABC):
         if not self.is_started:
             return
 
-        if self.event_bus:
-            self.event_bus.off(CoreEvents.OUTPUT_INTENT, self._on_intent)
+        if self.context.event_bus:
+            self.context.event_bus.off(CoreEvents.OUTPUT_INTENT, self._on_intent)
 
         await self.cleanup()
         self.is_started = False

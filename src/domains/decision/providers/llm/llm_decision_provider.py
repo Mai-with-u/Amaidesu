@@ -15,7 +15,6 @@ from src.modules.types import Intent
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.context import MessageRole
 from src.modules.logging import get_logger
-from src.modules.prompts import get_prompt_manager
 from src.modules.types import ActionType, EmotionType, IntentAction
 from src.modules.types.base.decision_provider import DecisionProvider
 
@@ -54,13 +53,16 @@ class LLMPDecisionProvider(DecisionProvider):
         client: Literal["llm", "llm_fast", "vlm"] = Field(default="llm", description="使用的LLM客户端名称")
         fallback_mode: Literal["simple", "echo", "error"] = Field(default="simple", description="降级模式")
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], context: "ProviderContext" = None):
         """
         初始化 LLMPDecisionProvider
 
         Args:
             config: 配置字典
+            context: 依赖注入上下文
         """
+        super().__init__(config, context)
+
         # 使用 Pydantic Schema 验证配置
         self.typed_config = self.ConfigSchema(**config)
         self.logger = get_logger("LLMPDecisionProvider")
@@ -192,8 +194,14 @@ class LLMPDecisionProvider(DecisionProvider):
         # 构建历史文本（用于 prompt 模板）
         history_text = "\n".join(history_context) if history_context else ""
 
+        # 获取 prompt_service（优先使用依赖注入，回退到全局单例）
+        from src.modules.prompts import get_prompt_manager
+
+        prompt_service = self.context.prompt_service if self.context else None
+        prompt_manager = prompt_service if prompt_service else get_prompt_manager()
+
         # 构建 prompt（使用 PromptManager 渲染结构化模板）
-        prompt = get_prompt_manager().render_safe(
+        prompt = prompt_manager.render_safe(
             "decision/llm_structured",
             text=normalized_message.text,
             bot_name=persona_config.get("bot_name", "爱德丝"),
