@@ -59,20 +59,20 @@ await event_bus.emit(
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import MessageReadyPayload, IntentPayload
 
-# 订阅事件（on() 是同步方法）
+# 订阅事件（强制类型化）
 event_bus.on(
     CoreEvents.DATA_MESSAGE,
-    self.handle_message
+    self.handle_message,
+    MessageReadyPayload  # 必填参数
 )
 
-# 订阅类型化事件（自动反序列化）
-event_bus.on_typed(
+event_bus.on(
     CoreEvents.DECISION_INTENT,
     self.handle_intent,
-    IntentPayload
+    IntentPayload  # 必填参数
 )
 
-# 新的事件处理器签名
+# 事件处理器签名
 async def handle_message(self, event_name: str, payload: MessageReadyPayload, source: str):
     message = payload.message
     # 处理消息
@@ -130,8 +130,8 @@ class MessageReadyPayload(BaseModel):
     source: str
     timestamp: float = Field(default_factory=time.time)
 
-# 订阅时指定类型（on_typed 自动反序列化）
-event_bus.on_typed(
+# 订阅时指定类型（强制类型化，model_class 必填）
+event_bus.on(
     CoreEvents.DATA_MESSAGE,
     self.handle_message,
     MessageReadyPayload

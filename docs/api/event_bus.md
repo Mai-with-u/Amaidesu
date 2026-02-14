@@ -41,14 +41,14 @@ from src.modules.events.payloads import MessageReadyPayload
 # 创建 EventBus 实例
 event_bus = EventBus(enable_stats=True)
 
-# 订阅事件（使用 on_typed 获取类型提示）
+# 订阅事件（强制类型化）
 async def handle_message(event_name: str, payload: MessageReadyPayload, source: str):
     print(f"收到消息: {payload.message['text']}")
 
-event_bus.on_typed(
+event_bus.on(
     CoreEvents.DATA_MESSAGE,
     handle_message,
-    MessageReadyPayload
+    MessageReadyPayload  # 必填参数：指定 Payload 类型
 )
 
 # 发布事件（必须使用 Pydantic BaseModel）
@@ -123,45 +123,13 @@ class MyEventPayload(BaseModel):
 await event_bus.emit("test.event", MyEventPayload(message="hello"))
 ```
 
-### on() - 订阅事件（同步方法）
-
-订阅事件，处理器接收字典格式的数据。
-
-**签名**：
-```python
-def on(
-    event_name: str,
-    handler: Callable,
-    priority: int = 100
-) -> None
-```
-
-**参数**：
-- `event_name` (str): 要监听的事件名称
-- `handler` (Callable): 事件处理器函数
-  - 签名：`async def handler(event_name: str, data: Dict[str, Any], source: str)`
-- `priority` (int): 优先级（数字越小越优先，默认 100）
-
-**返回值**：None
-
-**示例**：
-```python
-# 定义处理器（接收字典数据）
-async def handle_message(event_name: str, data: dict, source: str):
-    text = data.get("message", {}).get("text", "")
-    print(f"收到消息: {text}")
-
-# 订阅事件
-event_bus.on(CoreEvents.DATA_MESSAGE, handle_message)
-```
-
-### on_typed() - 订阅类型化事件（推荐）
+### on() - 订阅事件（强制类型化）
 
 订阅事件，处理器接收类型化的 Pydantic Model 对象。
 
 **签名**：
 ```python
-def on_typed(
+def on(
     event_name: str,
     handler: Callable,
     model_class: Type[BaseModel],
@@ -173,12 +141,12 @@ def on_typed(
 - `event_name` (str): 要监听的事件名称
 - `handler` (Callable): 事件处理器函数
   - 签名：`async def handler(event_name: str, data: BaseModel, source: str)`
-- `model_class` (Type[BaseModel]): 期望的数据模型类型
+- `model_class` (Type[BaseModel]): **必填**。期望的数据模型类型，用于类型提示和反序列化
 - `priority` (int): 优先级（数字越小越优先，默认 100）
 
 **返回值**：None
 
-**优势**：
+**特性**：
 - **类型提示**：IDE 可以自动补全字段
 - **自动反序列化**：EventBus 自动将字典转换为 Pydantic Model
 - **类型安全**：Pydantic 验证数据格式
@@ -193,22 +161,13 @@ async def handle_message(event_name: str, payload: MessageReadyPayload, source: 
     text = payload.message.get("text", "")
     print(f"收到消息: {text}")
 
-# 订阅类型化事件
-event_bus.on_typed(
+# 订阅事件（model_class 是必填参数）
+event_bus.on(
     CoreEvents.DATA_MESSAGE,
     handle_message,
     MessageReadyPayload
 )
 ```
-
-**on vs on_typed 对比**：
-
-| 特性 | on() | on_typed() |
-|------|------|------------|
-| 数据格式 | Dict[str, Any] | Pydantic BaseModel |
-| 类型提示 | 无 | 有（IDE 自动补全） |
-| 数据验证 | 无 | 有（Pydantic 验证） |
-| 推荐场景 | 简单场景 | 生产环境（推荐） |
 
 ### off() - 取消订阅
 
@@ -239,7 +198,7 @@ event_bus.off("test.event", my_handler)
 ```
 
 **注意**：
-- `off()` 同时支持 `on()` 和 `on_typed()` 注册的处理器
+- `off()` 用于取消已通过 `on()` 注册的处理器
 - 如果事件没有监听器了，会自动删除该事件条目
 
 ### cleanup() - 清理 EventBus
@@ -489,7 +448,7 @@ await event_bus.emit(
 async def handle_custom(event_name: str, payload: MyCustomPayload, source: str):
     print(f"消息: {payload.message}, 计数: {payload.count}")
 
-event_bus.on_typed("my.custom.event", handle_custom, MyCustomPayload)
+event_bus.on("my.custom.event", handle_custom, MyCustomPayload)
 ```
 
 ## 生命周期管理
@@ -545,20 +504,14 @@ from src/modules/events/names import CoreEvents
 await event_bus.emit(CoreEvents.DATA_MESSAGE, payload)
 ```
 
-### 2. 使用 on_typed() 获取类型提示
+### 2. 使用 on() 获取类型提示
 
 ```python
-# ❌ 不推荐：使用 on()
-async def handler(event_name, data, source):
-    text = data.get("message", {}).get("text", "")  # 无类型提示
-
-event_bus.on("test.event", handler)
-
-# ✅ 推荐：使用 on_typed()
+# ✅ 正确：使用 on() 并指定 model_class
 async def handler(event_name, payload: MessageReadyPayload, source):
     text = payload.message.get("text")  # 有类型提示
 
-event_bus.on_typed("test.event", handler, MessageReadyPayload)
+event_bus.on("test.event", handler, MessageReadyPayload)
 ```
 
 ### 3. 继承 BasePayload
@@ -610,14 +563,18 @@ event_bus.on("test.event", handler)
 ### Q: EventBus 不支持哪些功能？
 
 - ❌ **通配符订阅**（如 `decision.*`）：不支持，必须订阅具体事件
-- ❌ **emit_typed()**：只有 `emit()` 和 `on_typed()`，没有 `emit_typed()`
+- ❌ **emit_typed()**：只有 `emit()`，没有 `emit_typed()`
 - ❌ **同步 emit**：`emit()` 始终是异步方法
 - ❌ **字典数据**：`emit()` 强制要求 Pydantic BaseModel
 
-### Q: 如何选择 on() 和 on_typed()？
+### Q: 如何订阅事件？
 
-- **简单场景**：使用 `on()`（快速开发）
-- **生产环境**：使用 `on_typed()`（类型安全）
+使用 `on()` 方法，**必须**指定 `model_class` 参数：
+
+```python
+# 正确：使用 on() 并指定 model_class
+event_bus.on("test.event", handler, MessageReadyPayload)
+```
 
 ### Q: emit() 是阻塞还是非阻塞？
 

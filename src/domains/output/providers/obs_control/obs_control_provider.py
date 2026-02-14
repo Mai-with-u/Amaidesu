@@ -18,6 +18,11 @@ if TYPE_CHECKING:
 
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import (
+    OBSSetSourceVisibilityPayload,
+    OBSSendTextPayload,
+    OBSSwitchScenePayload,
+)
 from src.modules.logging import get_logger
 from src.modules.types.base.output_provider import OutputProvider
 
@@ -128,9 +133,13 @@ class ObsControlOutputProvider(OutputProvider):
         await self._connect_obs()
 
         # 注册事件监听（用于外部直接调用，不属于 OUTPUT_INTENT 事件）
-        self.event_bus.on(CoreEvents.OBS_SEND_TEXT, self._handle_send_text_event)
-        self.event_bus.on(CoreEvents.OBS_SWITCH_SCENE, self._handle_switch_scene_event)
-        self.event_bus.on(CoreEvents.OBS_SET_SOURCE_VISIBILITY, self._handle_set_source_visibility_event)
+        self.event_bus.on(CoreEvents.OBS_SEND_TEXT, self._handle_send_text_event, OBSSendTextPayload)
+        self.event_bus.on(CoreEvents.OBS_SWITCH_SCENE, self._handle_switch_scene_event, OBSSwitchScenePayload)
+        self.event_bus.on(
+            CoreEvents.OBS_SET_SOURCE_VISIBILITY,
+            self._handle_set_source_visibility_event,
+            OBSSetSourceVisibilityPayload,
+        )
 
     async def execute(self, intent: "Intent"):
         """
@@ -346,61 +355,42 @@ class ObsControlOutputProvider(OutputProvider):
             self.logger.error(f"设置源可见性失败: {e}")
             return False
 
-    async def _handle_send_text_event(self, event_name: str, data: Any, source: str):
+    async def _handle_send_text_event(self, payload: OBSSendTextPayload):
         """
         处理发送文本事件（供外部调用）
 
         Args:
-            event_name: 事件名
-            data: 事件数据，应包含 {"text": "...", "typewriter": bool(可选)}
-            source: 事件源
+            payload: OBS 发送文本事件 Payload
         """
-        if not isinstance(data, dict):
-            self.logger.warning(f"无效的事件数据类型: {type(data)}")
-            return
-
-        text = data.get("text", "")
-        typewriter = data.get("typewriter", None)
+        text = payload.text
 
         if text:
-            await self._send_text_to_obs(text, typewriter)
+            await self._send_text_to_obs(text, None)
         else:
             self.logger.warning("事件数据中未包含文本内容")
 
-    async def _handle_switch_scene_event(self, event_name: str, data: Any, source: str):
+    async def _handle_switch_scene_event(self, payload: OBSSwitchScenePayload):
         """
         处理切换场景事件
 
         Args:
-            event_name: 事件名
-            data: 事件数据，应包含 {"scene_name": "..."}
-            source: 事件源
+            payload: OBS 切换场景事件 Payload
         """
-        if not isinstance(data, dict):
-            self.logger.warning(f"无效的事件数据类型: {type(data)}")
-            return
-
-        scene_name = data.get("scene_name", "")
+        scene_name = payload.scene_name
         if scene_name:
             await self.switch_scene(scene_name)
         else:
             self.logger.warning("事件数据中未包含场景名称")
 
-    async def _handle_set_source_visibility_event(self, event_name: str, data: Any, source: str):
+    async def _handle_set_source_visibility_event(self, payload: OBSSetSourceVisibilityPayload):
         """
         处理设置源可见性事件
 
         Args:
-            event_name: 事件名
-            data: 事件数据，应包含 {"source_name": "...", "visible": bool}
-            source: 事件源
+            payload: OBS 设置源可见性事件 Payload
         """
-        if not isinstance(data, dict):
-            self.logger.warning(f"无效的事件数据类型: {type(data)}")
-            return
-
-        source_name = data.get("source_name", "")
-        visible = data.get("visible", True)
+        source_name = payload.source_name
+        visible = payload.visible
 
         if source_name:
             await self.set_source_visibility(source_name, visible)

@@ -11,13 +11,6 @@
 类型化订阅使用示例:
     from src.modules.events.payloads import CommandRouterData
 
-    # 普通订阅（接收字典）
-    def handle_command(event_name: str, data: dict, source: str):
-        command = data.get("command")
-        logger.debug(f"Received: {command}")
-
-    event_bus.on("command_router.received", handle_command)
-
     # 类型化订阅（接收 Pydantic Model 对象）
     async def handle_command_typed(event_name: str, data: CommandRouterData, source: str):
         command = data.command  # IDE 可以自动提示
@@ -73,14 +66,14 @@ class HandlerWrapper:
     - priority: 优先级(数字越小越优先)
     - error_count: 错误次数
     - last_error: 最后错误信息
-    - original_handler: 原始处理器函数（用于 on_typed 的取消订阅）
+    - original_handler: 原始处理器函数（用于取消订阅）
     """
 
     handler: Callable
     priority: int = 100
     error_count: int = 0
     last_error: Optional[str] = None
-    original_handler: Optional[Callable] = None  # 用于 on_typed，存储用户提供的原始处理器
+    original_handler: Optional[Callable] = None  # 存储用户提供的原始处理器
 
 
 class EventBus:
@@ -273,59 +266,26 @@ class EventBus:
             else:
                 raise
 
-    def on(
-        self, event_name: str, handler: Callable, model_class: Optional[Type[T]] = None, priority: int = 100
-    ) -> None:
+    def on(self, event_name: str, handler: Callable, model_class: Type[T], priority: int = 100) -> None:
         """
-        订阅事件（统一API）
+        订阅类型化事件
 
-        Args:
-            event_name: 要监听的事件名称
-            handler: 事件处理器函数
-            model_class: (可选) 期望的数据模型类型（必须是 BaseModel 子类）
-                         如果提供，EventBus 会自动将字典数据反序列化为该类型
-            priority: 优先级(数字越小越优先,默认100)
-
-        Example:
-            ```python
-            # 普通订阅（接收字典）
-            event_bus.on("event.name", handler)
-
-            # 类型化订阅（接收 Pydantic Model 对象）
-            event_bus.on("event.name", handler, model_class=MessageReadyPayload)
-            ```
-        """
-        if model_class is not None:
-            return self._on_typed_impl(event_name, handler, model_class, priority)
-        else:
-            return self._on_raw_impl(event_name, handler, priority)
-
-    def on_typed(self, event_name: str, handler: Callable, model_class: Type[T], priority: int = 100) -> None:
-        """
-        订阅类型化事件（便捷方法）
-
-        这是 on() 方法的便捷版本，专门用于类型化订阅。
-        等价于：event_bus.on(event_name, handler, model_class=model_class)
+        EventBus 强制要求类型化订阅，所有订阅必须指定 model_class。
 
         Args:
             event_name: 要监听的事件名称
             handler: 事件处理器函数
             model_class: 期望的数据模型类型（必须是 BaseModel 子类）
+                         EventBus 会自动将字典数据反序列化为该类型
             priority: 优先级(数字越小越优先,默认100)
 
         Example:
             ```python
-            event_bus.on_typed("event.name", handler, MessageReadyPayload)
+            # 类型化订阅（接收 Pydantic Model 对象）
+            event_bus.on("event.name", handler, model_class=MessageReadyPayload)
             ```
         """
-        # 委托给 on() 方法，确保经过架构验证器
-        return self.on(event_name, handler, model_class=model_class, priority=priority)
-
-    def _on_raw_impl(self, event_name: str, handler: Callable, priority: int) -> None:
-        """普通订阅实现"""
-        wrapper = HandlerWrapper(handler=handler, priority=priority)
-        self._handlers[event_name].append(wrapper)
-        self.logger.debug(f"注册事件监听器: {event_name} -> {handler.__name__} (优先级: {priority})")
+        return self._on_typed_impl(event_name, handler, model_class, priority)
 
     def _on_typed_impl(self, event_name: str, handler: Callable, model_class: Type[T], priority: int) -> None:
         """类型化订阅实现（自动反序列化）"""
@@ -354,6 +314,9 @@ class EventBus:
                 self.logger.error(
                     f"类型化事件处理器执行错误 ({event_name}, 处理器: {handler.__name__}): {e}", exc_info=True
                 )
+                # 更新错误计数
+                wrapper.error_count += 1
+                wrapper.last_error = str(e)
                 # 注意：这里不重新抛出异常，保持与 error_isolate=True 一致的行为
                 # 如果需要传播异常，应该通过 error_isolate 参数控制
 
