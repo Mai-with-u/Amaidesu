@@ -271,6 +271,7 @@ available_providers = [
     "maicore",  # MaiCore决策（默认，通过WebSocket连接MaiCore）
     "llm",      # LLM（直接调用LLM生成回复）
     "maicraft", # MaiCraft弹幕游戏决策
+    "replay",   # 输入重放（调试用，直接将输入传递到输出）
 ]
 
 # ========== Provider配置示例 ==========
@@ -320,6 +321,10 @@ user_nickname = "语音"
 # --- LLM DecisionProvider ---
 # [providers.decision.llm]
 # fallback_mode = "simple"  # simple | echo | error
+
+# --- Replay DecisionProvider (调试用) ---
+# [providers.decision.replay]
+# add_default_action = true  # 是否添加默认眨眼动作
 
 # --- Subtitle OutputProvider ---
 # [providers.output.subtitle]
