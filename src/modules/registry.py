@@ -447,6 +447,15 @@ class ProviderRegistry:
         """
         cls._logger.info("开始配置驱动的 Provider 注册...")
 
+        # 将 src 目录添加到 sys.path（确保可以导入 src.modules 和 src.domains）
+        import os
+        import sys
+
+        src_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        if src_dir not in sys.path:
+            sys.path.insert(0, src_dir)
+            cls._logger.debug(f"已将 src 目录添加到 sys.path: {src_dir}")
+
         # 清空现有注册（避免重复注册）
         # 注意：这会清除之前通过 __init__.py 自动注册的 Provider
         # cls.clear_all()
