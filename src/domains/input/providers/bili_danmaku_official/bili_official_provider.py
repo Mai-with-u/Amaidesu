@@ -287,7 +287,7 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
         paid_bonus = 0.1 if msg.paid else 0
         return min(base + quantity_bonus + paid_bonus, 1.0)
 
-    async def _cleanup_internal(self):
+    async def cleanup(self):
         """清理资源"""
         # 清理WebSocket客户端
         if self.websocket_client:

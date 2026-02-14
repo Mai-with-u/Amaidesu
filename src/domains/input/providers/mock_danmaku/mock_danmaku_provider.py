@@ -164,7 +164,7 @@ class MockDanmakuInputProvider(InputProvider):
             self.logger.error(f"读取日志文件时出错: {self.log_file_path}: {e}", exc_info=True)
             self._message_lines = []
 
-    async def _cleanup_internal(self):
+    async def cleanup(self):
         """清理资源"""
         self._stop_event.set()
         self._message_lines = []

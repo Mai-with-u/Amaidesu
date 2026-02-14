@@ -735,7 +735,7 @@ class STTInputProvider(InputProvider):
         }
         return json.dumps(frame).encode("utf-8")
 
-    async def _cleanup_internal(self):
+    async def cleanup(self):
         """清理资源"""
         self.logger.info("清理 STTInputProvider 资源...")
 

@@ -117,22 +117,3 @@ class InputProvider(ABC):
             NormalizedMessage: 标准化消息
         """
         pass
-
-    # 向后兼容别名
-    async def _setup_internal(self) -> None:  # noqa: B027
-        """
-        内部初始化方法（向后兼容别名）
-
-        此方法已弃用，请使用 init() 方法代替。
-        为保持向后兼容，此方法仍可使用。
-        """
-        await self.init()
-
-    async def _cleanup_internal(self) -> None:  # noqa: B027
-        """
-        内部清理方法（向后兼容别名）
-
-        此方法已弃用，请使用 cleanup() 方法代替。
-        为保持向后兼容，此方法仍可使用。
-        """
-        await self.cleanup()

@@ -190,10 +190,6 @@ class RemoteStreamOutputProvider(OutputProvider):
 
     async def init(self):
         """初始化 Provider"""
-        await self._setup_internal()
-
-    async def _setup_internal(self):
-        """内部设置逻辑"""
         # 检查依赖
         if websockets is None:
             self.logger.error("websockets库未安装，请使用 'uv add websockets' 安装")

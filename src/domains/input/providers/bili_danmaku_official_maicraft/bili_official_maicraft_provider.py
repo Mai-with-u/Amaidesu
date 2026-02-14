@@ -378,7 +378,7 @@ class BiliDanmakuOfficialMaiCraftInputProvider(InputProvider):
 
         return importance
 
-    async def _cleanup_internal(self):
+    async def cleanup(self):
         """清理资源"""
         # 关闭WebSocket客户端
         if self.websocket_client:

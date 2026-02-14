@@ -118,7 +118,7 @@ class OmniTTSProvider(OutputProvider):
         self.channels = 1
         self.dtype = np.int16
 
-        # 音频设备管理器（在_setup_internal中初始化）
+        # 音频设备管理器（在 init 中初始化）
         self.audio_manager: Optional[AudioDeviceManager] = None
 
         # 服务集成配置
@@ -143,8 +143,8 @@ class OmniTTSProvider(OutputProvider):
 
         self.logger.info("OmniTTSProvider初始化完成")
 
-    async def _setup_internal(self):
-        """内部设置逻辑"""
+    async def init(self):
+        """初始化逻辑"""
         if not TTS_DEPENDENCIES_OK:
             self.logger.error("TTS依赖缺失，请安装: pip install requests")
             raise ImportError("TTS dependencies not available")
@@ -308,8 +308,8 @@ class OmniTTSProvider(OutputProvider):
         except Exception as e:
             self.logger.error(f"解码音频数据失败: {e}")
 
-    async def _cleanup_internal(self):
-        """内部清理逻辑"""
+    async def cleanup(self):
+        """清理资源"""
         self.logger.info("OmniTTSProvider清理中...")
 
         # 停止音频播放

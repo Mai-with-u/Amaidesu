@@ -215,8 +215,8 @@ class VTSProvider(BaseAvatarProvider):
 
         self.logger.info("VTSProvider初始化完成")
 
-    async def _setup_internal(self):
-        """内部设置逻辑"""
+    async def init(self):
+        """初始化逻辑"""
         # 初始化pyvts
         try:
             import pyvts  # noqa: F401

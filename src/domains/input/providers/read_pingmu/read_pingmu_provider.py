@@ -210,7 +210,7 @@ class ReadPingmuInputProvider(InputProvider):
         except Exception as e:
             self.logger.error(f"创建屏幕描述消息失败: {e}", exc_info=True)
 
-    async def _cleanup_internal(self):
+    async def cleanup(self):
         """清理资源"""
         if self._running and self.screen_analyzer:
             self.logger.info("正在停止屏幕监控...")

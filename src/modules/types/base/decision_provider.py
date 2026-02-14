@@ -85,22 +85,6 @@ class DecisionProvider(ABC):
         await self.init()
         self.is_started = True
 
-    async def setup(
-        self,
-        event_bus,
-        config: Optional[dict] = None,
-        dependencies: Optional[dict] = None,
-    ) -> None:
-        """
-        设置 Provider（start 的别名，保持向后兼容）
-
-        Args:
-            event_bus: EventBus实例
-            config: Provider配置（可选，如果传入则覆盖构造时的配置）
-            dependencies: 可选的依赖注入（如 llm_service 等）
-        """
-        await self.start(event_bus, config, dependencies)
-
     async def stop(self) -> None:
         """
         停止 Provider
