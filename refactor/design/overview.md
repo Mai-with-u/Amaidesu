@@ -337,4 +337,4 @@ class OutputProviderManager:
 - [Pipeline设计](./pipeline_refactoring.md) - 双管道架构（输入管道 + 输出管道）
 - [事件契约](./event_data_contract.md) - 事件类型安全
 - [LLM服务](./llm_service.md) - LLM 服务设计
-- [配置系统](./config_system.md) - Pydantic Schema + 三级配置合并
+- [配置系统](./config_system.md) - Pydantic Schema + 二级配置合并

@@ -205,11 +205,11 @@ class InputProviderManager:
 
     async def load_from_config(self, config: dict[str, Any], config_service=None) -> list[InputProvider]:
         """
-        从配置加载并创建所有InputProvider（支持三级配置合并）
+        从配置加载并创建所有InputProvider（支持二级配置合并）
 
         Args:
             config: 输入配置（来自[providers.input]）
-            config_service: ConfigService实例（用于三级配置加载）
+            config_service: ConfigService实例（用于二级配置加载）
 
         Returns:
             创建的InputProvider列表
@@ -256,7 +256,7 @@ class InputProviderManager:
 
         for input_name in enabled_inputs:
             try:
-                # 使用三级配置加载
+                # 使用二级配置加载
                 try:
                     from src.modules.config.schemas import get_provider_schema
 

@@ -132,10 +132,9 @@ def ensure_config(provider_name: str, schema: type) -> Path:
 
 ```python
 def load_config(provider_name: str, schema: type) -> ProviderConfig:
-    """三级合并：Schema默认值 < 主配置 < 本地配置"""
+    """二级合并：Schema默认值 < 主配置"""
     result = schema().model_dump()                    # 1. Schema默认值
     result = deep_merge(result, get_main_override())  # 2. 主配置覆盖
-    result = deep_merge(result, load_local_config())  # 3. 本地配置覆盖
     return schema(**result)                           # 验证
 ```
 

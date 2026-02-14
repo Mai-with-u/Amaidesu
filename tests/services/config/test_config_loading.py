@@ -8,7 +8,7 @@
 注意: 本地配置（Provider目录下的config.toml）功能已移除。
 
 测试场景：
-- 三级配置合并顺序和优先级
+- 二级配置合并顺序和优先级
 - 配置验证（Pydantic Schema）
 - enabled字段不在Provider配置中的情况
 - 配置优先级正确性
@@ -190,7 +190,7 @@ enabled_inputs = ["test_input"]
 @pytest.mark.skip(reason="本地配置功能已移除")
 @pytest.mark.skip(reason="本地配置功能已移除")
 def test_three_tier_merge_full_flow(temp_base_dir):
-    """测试完整的三级配置合并流程（新架构）"""
+    """测试完整的二级配置合并流程（新架构）"""
     # 1. 创建Provider目录
     provider_dir = os.path.join(temp_base_dir, "src", "domains", "input", "providers", "test_input")
     os.makedirs(provider_dir, exist_ok=True)
@@ -247,7 +247,7 @@ local_field = "from_local"  # 新增字段
 
 @pytest.mark.skip(reason="本地配置功能已移除")
 def test_three_tier_merge_with_schema_validation(temp_base_dir):
-    """测试三级配置合并 + Schema验证"""
+    """测试二级配置合并 + Schema验证"""
     # 1. 创建Provider目录
     provider_dir = os.path.join(temp_base_dir, "src", "domains", "output", "providers", "test_output")
     os.makedirs(provider_dir, exist_ok=True)

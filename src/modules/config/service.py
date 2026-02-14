@@ -358,7 +358,7 @@ class ConfigService:
         # 检查是否定义了 priority
         return "priority" in pipeline_config
 
-    # ========== 三级配置合并方法 ==========
+    # ========== Provider 配置方法 ==========
 
     def get_provider_config_with_defaults(
         self,
