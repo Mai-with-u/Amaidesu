@@ -12,7 +12,7 @@ InputProvider负责从外部数据源采集数据并直接构造 NormalizedMessa
 """
 
 from abc import ABC, abstractmethod
-from typing import AsyncIterator
+from typing import Any, AsyncIterator, Dict
 
 from src.modules.di.context import ProviderContext
 from src.modules.types.base.normalized_message import NormalizedMessage
@@ -51,25 +51,30 @@ class InputProvider(ABC):
 
     Attributes:
         config: Provider配置(来自新配置格式)
-        context: 统一依赖上下文
-        is_running: 是否已启动
+        context: 统一依赖上下文（必填）
+        is_started: 是否已启动
     """
 
     def __init__(
         self,
         config: dict,
-        context: ProviderContext = None,  # 新增：统一依赖上下文
+        context: ProviderContext = None,
     ):
         """
         初始化Provider
 
         Args:
             config: Provider配置(来自perception.inputs.xxx配置)
-            context: 统一依赖上下文(可选)
+            context: 统一依赖上下文(必填)
+
+        Raises:
+            ValueError: 如果 context 为 None
         """
+        if context is None:
+            raise ValueError("InputProvider 必须接收 context 参数")
         self.config = config
-        self.context = context or ProviderContext()  # 默认空上下文
-        self.is_running = False
+        self.context = context
+        self.is_started = False
 
     @property
     def event_bus(self):
@@ -95,7 +100,7 @@ class InputProvider(ABC):
         此方法负责：
         1. 调用 init() 进行初始化
         2. 建立与数据源的连接
-        3. 设置 is_running = True
+        3. 设置 is_started = True
 
         使用方式:
             await provider.start()
@@ -103,7 +108,7 @@ class InputProvider(ABC):
                 ...
         """
         await self.init()
-        self.is_running = True
+        self.is_started = True
 
     def stream(self) -> AsyncIterator[NormalizedMessage]:
         """
@@ -124,7 +129,7 @@ class InputProvider(ABC):
         Raises:
             RuntimeError: 如果 Provider 未启动
         """
-        if not self.is_running:
+        if not self.is_started:
             raise RuntimeError("Provider 未启动，请先调用 start()")
 
         async def _generate():
@@ -132,7 +137,7 @@ class InputProvider(ABC):
                 async for message in self.generate():
                     yield message
             finally:
-                self.is_running = False
+                self.is_started = False
 
         return _generate()
 
@@ -142,7 +147,7 @@ class InputProvider(ABC):
 
         停止数据采集并调用 cleanup() 清理资源。
         """
-        self.is_running = False
+        self.is_started = False
         await self.cleanup()
 
     async def cleanup(self) -> None:  # noqa: B027
@@ -155,6 +160,14 @@ class InputProvider(ABC):
         子类可以重写此方法来执行自定义清理逻辑。
         """
         pass
+
+    def get_info(self) -> Dict[str, Any]:
+        """获取 Provider 信息"""
+        return {
+            "name": self.__class__.__name__,
+            "is_started": self.is_started,
+            "type": "input_provider",
+        }
 
     @abstractmethod
     async def generate(self) -> AsyncIterator[NormalizedMessage]:

@@ -316,7 +316,7 @@ class SubtitleOutputProvider(OutputProvider):
         self.root = None
         self.text_label = None
         self.last_voice_time = time.time()
-        self.is_running = True
+        self._gui_running = True
         self.is_visible = False
 
     async def init(self):
@@ -349,7 +349,7 @@ class SubtitleOutputProvider(OutputProvider):
     async def cleanup(self):
         """清理资源"""
         self.logger.info("正在清理 SubtitleOutputProvider...")
-        self.is_running = False
+        self._gui_running = False
 
         # 等待线程结束
         if self.gui_thread and self.gui_thread.is_alive():
@@ -466,11 +466,11 @@ class SubtitleOutputProvider(OutputProvider):
             if self.root:
                 with contextlib.suppress(Exception):
                     self.root.quit()
-            self.is_running = False
+            self._gui_running = False
 
     def _check_queue(self):
         """检查队列中的新文本"""
-        if not self.is_running:
+        if not self._gui_running:
             return
 
         try:
@@ -482,12 +482,12 @@ class SubtitleOutputProvider(OutputProvider):
         except Exception as e:
             self.logger.warning(f"检查字幕队列时出错: {e}", exc_info=True)
 
-        if self.is_running and self.root:
+        if self._gui_running and self.root:
             self.root.after(100, self._check_queue)
 
     def _update_subtitle_display(self, text: str):
         """更新字幕显示"""
-        if not self.text_label or not self.is_running:
+        if not self.text_label or not self._gui_running:
             return
 
         try:
@@ -511,7 +511,7 @@ class SubtitleOutputProvider(OutputProvider):
 
     def _check_auto_hide(self):
         """检查是否需要自动隐藏"""
-        if not self.is_running:
+        if not self._gui_running:
             return
 
         try:
@@ -535,18 +535,18 @@ class SubtitleOutputProvider(OutputProvider):
                     if self.text_label:
                         self.text_label.configure_text(text="")
 
-            if self.is_running and self.root:
+            if self._gui_running and self.root:
                 self.root.after(100, self._check_auto_hide)
 
         except Exception as e:
             self.logger.warning(f"检查自动隐藏时出错: {e}", exc_info=True)
-            if self.is_running and self.root:
+            if self._gui_running and self.root:
                 self.root.after(100, self._check_auto_hide)
 
     def _on_closing(self):
         """处理窗口关闭事件"""
         self.logger.info("Subtitle 窗口关闭请求...")
-        self.is_running = False
+        self._gui_running = False
         if self.root:
             try:
                 self.root.destroy()

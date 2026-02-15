@@ -190,6 +190,7 @@ async def decision_manager_with_mock(event_bus, mock_provider_class):
     config = {"test_key": "test_value"}
 
     await manager.setup("mock_decision", config)
+    await manager.start()  # 新增：显式启动 Provider
 
     yield manager
 
@@ -226,7 +227,7 @@ async def test_decision_manager_initialization_with_llm_service(event_bus):
 
 @pytest.mark.asyncio
 async def test_setup_provider_success(event_bus, mock_provider_class):
-    """测试成功设置 Provider"""
+    """测试成功设置 Provider（setup + start 分离）"""
     from src.modules.registry import ProviderRegistry
 
     ProviderRegistry.register_decision("mock_decision", mock_provider_class, source="test")
@@ -234,13 +235,21 @@ async def test_setup_provider_success(event_bus, mock_provider_class):
     manager = DecisionManager(event_bus)
     config = {"test_key": "test_value"}
 
+    # 1. setup() 只创建 Provider，不启动
     await manager.setup("mock_decision", config)
 
-    # 验证 Provider 已设置
+    # 验证 Provider 已创建但未启动
     assert manager._current_provider is not None
     assert manager._provider_name == "mock_decision"
-    assert manager._current_provider.setup_called is True
+    assert manager._current_provider.setup_called is False  # setup 不调用 start
     assert manager._current_provider.config == config
+    assert manager._provider_ready is True  # Provider 已准备好
+
+    # 2. start() 启动 Provider
+    await manager.start()
+
+    # 验证 Provider 已启动
+    assert manager._current_provider.setup_called is True
 
     # 清理
     await manager.cleanup()
@@ -257,21 +266,27 @@ async def test_setup_provider_not_registered(event_bus):
 
 
 @pytest.mark.asyncio
-async def test_setup_provider_setup_failure(event_bus):
-    """测试 Provider setup 失败"""
+async def test_setup_provider_start_failure(event_bus):
+    """测试 Provider start 失败（setup 成功，但 start 失败）"""
     from src.modules.registry import ProviderRegistry
 
     ProviderRegistry.register_decision("failing_provider", FailingMockDecisionProvider, source="test")
 
     manager = DecisionManager(event_bus)
 
-    with pytest.raises(ConnectionError, match="无法初始化DecisionProvider 'failing_provider'"):
-        await manager.setup("failing_provider", {})
+    # setup() 应该成功（只创建 Provider）
+    await manager.setup("failing_provider", {})
 
-    # 验证 Provider 未设置
-    assert manager._current_provider is None
-    assert manager._provider_name is None
+    # 验证 Provider 已创建
+    assert manager._current_provider is not None
+    assert manager._provider_name == "failing_provider"
 
+    # start() 应该失败（Provider 的 init 抛出异常）
+    with pytest.raises(ConnectionError, match="无法启动DecisionProvider 'failing_provider'"):
+        await manager.start()
+
+    # 清理
+    await manager.cleanup()
     ProviderRegistry.unregister_decision("failing_provider")
 
 
@@ -286,10 +301,12 @@ async def test_setup_replace_existing_provider(event_bus, mock_provider_class):
 
     # 设置第一个 Provider
     await manager.setup("mock_decision", {"first": True})
+    await manager.start()  # 启动第一个 Provider
     first_provider = manager._current_provider
 
     # 设置第二个 Provider（应清理第一个）
     await manager.setup("mock_decision", {"second": True})
+    await manager.start()  # 启动第二个 Provider
     second_provider = manager._current_provider
 
     # 验证第二个 Provider 已设置
@@ -302,8 +319,8 @@ async def test_setup_replace_existing_provider(event_bus, mock_provider_class):
 
 
 @pytest.mark.asyncio
-async def test_setup_subscribes_to_event(event_bus, mock_provider_class):
-    """测试 setup 订阅事件"""
+async def test_start_subscribes_to_event(event_bus, mock_provider_class):
+    """测试 start 订阅事件（setup 不订阅）"""
     from src.modules.registry import ProviderRegistry
 
     ProviderRegistry.register_decision("mock_decision", mock_provider_class, source="test")
@@ -321,7 +338,14 @@ async def test_setup_subscribes_to_event(event_bus, mock_provider_class):
 
     event_bus.on(CoreEvents.DATA_MESSAGE, test_handler, model_class=MessageReadyPayload, priority=50)
 
+    # setup() 不订阅事件
     await manager.setup("mock_decision", {})
+
+    # 验证 setup 后未订阅（_event_subscribed 为 False）
+    assert manager._event_subscribed is False
+
+    # start() 订阅事件
+    await manager.start()
 
     # 触发事件验证订阅成功
     # Note: MessageReadyPayload.message 是必需字段，不能为 None
@@ -596,9 +620,10 @@ async def test_switch_provider_success(event_bus, mock_provider_class):
 
     # 设置第一个 Provider
     await manager.setup("mock_decision", {"first": True})
+    await manager.start()  # 启动第一个 Provider
     first_provider = manager._current_provider
 
-    # 切换到新 Provider
+    # 切换到新 Provider（switch_provider 内部会调用 start）
     await manager.switch_provider("mock_decision", {"second": True})
     second_provider = manager._current_provider
 
@@ -624,6 +649,7 @@ async def test_switch_provider_failure_rollback(event_bus, mock_provider_class):
 
     # 设置初始 Provider
     await manager.setup("mock_decision", {"initial": True})
+    await manager.start()  # 启动初始 Provider
     initial_provider = manager._current_provider
 
     # 尝试切换到失败的 Provider（应回退）
@@ -652,6 +678,7 @@ async def test_switch_provider_nonexistent(event_bus, mock_provider_class):
 
     # 设置初始 Provider
     await manager.setup("mock_decision", {})
+    await manager.start()  # 启动初始 Provider
     initial_provider = manager._current_provider
 
     # 尝试切换到不存在的 Provider
@@ -719,6 +746,7 @@ async def test_cleanup_unsubscribes_events(event_bus, mock_provider_class):
 
     manager = DecisionManager(event_bus)
     await manager.setup("mock_decision", {})
+    await manager.start()  # 启动 Provider（订阅事件）
 
     # Cleanup
     await manager.cleanup()
@@ -798,6 +826,7 @@ async def test_cleanup_handles_provider_error(event_bus, mock_provider_class):
 
     manager = DecisionManager(event_bus)
     await manager.setup("failing_cleanup", {})
+    await manager.start()  # 启动 Provider
 
     # Cleanup 应该不抛出异常，只记录错误
     await manager.cleanup()
@@ -898,7 +927,7 @@ async def test_concurrent_setup_and_switch(event_bus, mock_provider_class):
 
     manager = DecisionManager(event_bus)
 
-    # 并发执行
+    # 并发执行（setup 只创建 Provider，不启动）
     tasks = [manager.setup("mock_decision", {"index": i}) for i in range(5)]
 
     await asyncio.gather(*tasks)
@@ -906,6 +935,7 @@ async def test_concurrent_setup_and_switch(event_bus, mock_provider_class):
     # 验证最终状态一致
     assert manager._current_provider is not None
     assert manager._provider_name == "mock_decision"
+    assert manager._provider_ready is True
 
     # 清理
     await manager.cleanup()
@@ -944,6 +974,7 @@ async def test_switch_lock_prevents_race(event_bus, mock_provider_class):
 
     # 初始设置
     await manager.setup("mock_decision", {})
+    await manager.start()  # 启动 Provider
 
     # 并发切换
     tasks = [manager.switch_provider("mock_decision", {"index": i}) for i in range(5)]
@@ -973,6 +1004,7 @@ async def test_provider_returns_none_from_decide(event_bus):
 
     manager = DecisionManager(event_bus)
     await manager.setup("none_provider", {})
+    await manager.start()  # 启动 Provider
 
     message = NormalizedMessage(
         text="测试",
@@ -1049,6 +1081,7 @@ async def test_llm_service_dependency_injection(event_bus, mock_provider_class):
     manager = DecisionManager(event_bus, llm_service=mock_llm_service)
 
     await manager.setup("mock_decision", {})
+    await manager.start()  # 启动 Provider
 
     # 验证 LLMService 被传递给 Provider
     # 注意：这需要 mock_provider_class 的 setup 方法验证依赖
@@ -1069,6 +1102,7 @@ async def test_llm_service_none_no_dependency(event_bus, mock_provider_class):
     manager = DecisionManager(event_bus)  # 不传递 llm_service
 
     await manager.setup("mock_decision", {})
+    await manager.start()  # 启动 Provider
 
     # 验证不注入 llm_service 依赖
     assert manager._llm_service is None

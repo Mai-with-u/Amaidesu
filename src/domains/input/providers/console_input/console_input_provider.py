@@ -79,13 +79,13 @@ class ConsoleInputProvider(InputProvider):
         Yields:
             NormalizedMessage: 标准化消息
         """
-        self.is_running = True
+        self.is_started = True
 
         try:
             loop = asyncio.get_event_loop()
             self.logger.info("控制台输入已准备就绪。输入 'exit()' 来停止。")
 
-            while self.is_running:
+            while self.is_started:
                 try:
                     # 从标准输入读取
                     line = await loop.run_in_executor(None, sys.stdin.readline)
@@ -124,7 +124,7 @@ class ConsoleInputProvider(InputProvider):
             self.logger.info("控制台输入循环结束")
 
         finally:
-            self.is_running = False
+            self.is_started = False
 
     async def stop(self):
         """停止输入"""

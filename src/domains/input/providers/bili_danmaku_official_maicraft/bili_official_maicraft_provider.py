@@ -171,7 +171,7 @@ class BiliDanmakuOfficialMaiCraftInputProvider(InputProvider):
 
     async def generate(self) -> AsyncIterator[NormalizedMessage]:
         """采集弹幕数据"""
-        self.is_running = True
+        self.is_started = True
 
         # 初始化WebSocket客户端
         self.websocket_client = BiliWebSocketClient(
@@ -201,7 +201,7 @@ class BiliDanmakuOfficialMaiCraftInputProvider(InputProvider):
         except Exception as e:
             self.logger.error(f"WebSocket运行出错: {e}", exc_info=True)
         finally:
-            self.is_running = False
+            self.is_started = False
             self.logger.info("Bilibili 官方弹幕采集已停止")
 
     async def _handle_message_from_bili(self, message_data: Dict[str, Any]):

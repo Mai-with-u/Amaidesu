@@ -77,7 +77,7 @@ class MockDanmakuInputProvider(InputProvider):
         Yields:
             NormalizedMessage: 标准化消息
         """
-        self.is_running = True
+        self.is_started = True
 
         try:
             # 加载消息
@@ -150,7 +150,7 @@ class MockDanmakuInputProvider(InputProvider):
             self.logger.info("模拟弹幕发送循环已结束。")
 
         finally:
-            self.is_running = False
+            self.is_started = False
 
     async def _load_message_lines(self):
         """从 JSONL 文件加载消息行。"""

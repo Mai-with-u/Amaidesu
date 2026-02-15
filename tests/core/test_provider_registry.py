@@ -34,6 +34,9 @@ class MockInputProvider(InputProvider):
     """模拟 InputProvider 用于测试"""
 
     def __init__(self, config: dict, context=None):
+        # 如果没有提供 context，使用 mock context
+        if context is None:
+            context = mock_provider_context()
         super().__init__(config, context)
         self.provider_type = "mock_input"
 
@@ -131,11 +134,11 @@ class TestInputProviderRegistry:
         from src.modules.types.base.input_provider import InputProvider
 
         class AnotherInputProvider(InputProvider):
-            def __init__(self, config: dict):
-                super().__init__(config)
+            def __init__(self, config: dict, context=None):
+                super().__init__(config, context=context)
 
-            async def start(self) -> AsyncIterator[NormalizedMessage]:
-                self.is_running = True
+            async def generate(self) -> AsyncIterator[NormalizedMessage]:
+                self.is_started = True
                 try:
                     yield NormalizedMessage(
                         text="test",
@@ -145,7 +148,7 @@ class TestInputProviderRegistry:
                         importance=0.5,
                     )
                 finally:
-                    self.is_running = False
+                    self.is_started = False
                     await self._cleanup_internal()
 
         ProviderRegistry.register_input("test_input", MockInputProvider, source="test1")
@@ -166,10 +169,10 @@ class TestInputProviderRegistry:
         assert "test1" in providers
         assert "test2" in providers
 
-    def test_create_input_provider(self):
+    def test_create_input_provider(self, mock_provider_context):
         """测试创建 InputProvider 实例"""
         ProviderRegistry.register_input("test_input", MockInputProvider)
-        provider = ProviderRegistry.create_input("test_input", {"key": "value"})
+        provider = ProviderRegistry.create_input("test_input", {"key": "value"}, context=mock_provider_context)
         assert isinstance(provider, MockInputProvider)
 
     def test_create_input_provider_unknown(self):
@@ -301,7 +304,7 @@ class TestClearAll:
 class TestExplicitRegistration:
     """测试显式注册模式（新增功能）"""
 
-    def test_register_from_info_input(self):
+    def test_register_from_info_input(self, mock_provider_context):
         """测试从注册信息字典注册 InputProvider"""
         info = MockInputProvider.get_registration_info()
         ProviderRegistry.register_from_info(info)
@@ -309,7 +312,7 @@ class TestExplicitRegistration:
         assert ProviderRegistry.is_input_provider_registered("mock_input_explicit")
 
         # 验证可以创建实例
-        provider = ProviderRegistry.create_input("mock_input_explicit", {})
+        provider = ProviderRegistry.create_input("mock_input_explicit", {}, context=mock_provider_context)
         assert isinstance(provider, MockInputProvider)
 
     def test_register_from_info_decision(self, mock_provider_context):
@@ -352,25 +355,32 @@ class TestExplicitRegistration:
         with pytest.raises(ValueError, match="无效的 Provider 域"):
             ProviderRegistry.register_from_info(invalid_info)
 
-    def test_register_provider_class(self):
+    def test_register_provider_class(self, mock_provider_context):
         """测试直接从 Provider 类注册（便捷方法）"""
         ProviderRegistry.register_provider_class(MockInputProvider)
 
         assert ProviderRegistry.is_input_provider_registered("mock_input_explicit")
 
         # 验证可以创建实例
-        provider = ProviderRegistry.create_input("mock_input_explicit", {})
+        provider = ProviderRegistry.create_input("mock_input_explicit", {}, context=mock_provider_context)
         assert isinstance(provider, MockInputProvider)
 
     def test_register_provider_class_no_method(self):
         """测试 Provider 类未实现 get_registration_info()"""
 
         class IncompleteProvider(InputProvider):
-            def __init__(self, config: dict):
-                super().__init__(config)
+            def __init__(self, config: dict, context=None):
+                if context is None:
+                    context = mock_provider_context()
+                super().__init__(config, context=context)
 
-            async def _collect_data(self):
-                return RawData(content="test", data_type="text", metadata={})
+            async def generate(self) -> AsyncIterator[NormalizedMessage]:
+                yield NormalizedMessage(
+                    text="test",
+                    source="mock",
+                    data_type="text",
+                    importance=0.5,
+                )
 
         with pytest.raises(NotImplementedError, match="get_registration_info"):
             ProviderRegistry.register_provider_class(IncompleteProvider)

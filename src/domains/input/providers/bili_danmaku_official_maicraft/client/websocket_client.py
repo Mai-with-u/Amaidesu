@@ -35,17 +35,17 @@ class BiliWebSocketClient:
 
         self.game_id = ""
         self.websocket = None
-        self.is_running = False
+        self.is_started = False
         self.heartbeat_task = None
         self.app_heartbeat_task = None
         self.recv_task = None
 
     async def run(self, message_handler: Callable[[Dict[str, Any]], Awaitable[None]]):
         """运行WebSocket客户端"""
-        if self.is_running:
+        if self.is_started:
             return
 
-        self.is_running = True
+        self.is_started = True
         try:
             # 建立连接
             websocket = await self._connect()
@@ -75,13 +75,13 @@ class BiliWebSocketClient:
         except Exception as e:
             self.logger.error(f"WebSocket客户端运行异常: {e}", exc_info=True)
         finally:
-            self.is_running = False
+            self.is_started = False
             await self._cleanup()
 
     async def close(self):
         """关闭WebSocket连接"""
         self.logger.debug("正在关闭WebSocket连接...")
-        self.is_running = False
+        self.is_started = False
 
         # 取消后台任务
         tasks_to_cancel = [self.heartbeat_task, self.app_heartbeat_task, self.recv_task]
@@ -259,7 +259,7 @@ class BiliWebSocketClient:
 
     async def _heartbeat_loop(self):
         """WebSocket心跳循环"""
-        while self.is_running and self.websocket:
+        while self.is_started and self.websocket:
             try:
                 proto = Proto()
                 proto.op = 2
@@ -277,7 +277,7 @@ class BiliWebSocketClient:
 
     async def _app_heartbeat_loop(self):
         """应用心跳循环"""
-        while self.is_running:
+        while self.is_started:
             try:
                 await self._send_app_heartbeat()
                 await asyncio.sleep(20)  # 每20秒发送一次应用心跳
@@ -288,7 +288,7 @@ class BiliWebSocketClient:
 
     async def _recv_loop(self, message_handler: Callable[[Dict[str, Any]], Awaitable[None]]):
         """接收消息循环"""
-        while self.is_running and self.websocket:
+        while self.is_started and self.websocket:
             try:
                 data = await self.websocket.recv()
                 proto = Proto()

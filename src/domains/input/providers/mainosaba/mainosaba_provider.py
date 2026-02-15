@@ -96,12 +96,12 @@ class MainosabaInputProvider(InputProvider):
 
     async def generate(self) -> AsyncIterator[NormalizedMessage]:
         """采集游戏文本数据"""
-        self.is_running = True
+        self.is_started = True
 
         try:
             self.logger.info("开始采集游戏文本数据...")
 
-            while self.is_running:
+            while self.is_started:
                 try:
                     # 检查是否在等待回应
                     if self.waiting_for_response:
@@ -151,7 +151,7 @@ class MainosabaInputProvider(InputProvider):
             self.logger.info("游戏文本采集结束")
 
         finally:
-            self.is_running = False
+            self.is_started = False
 
     async def capture_and_recognize(self) -> Optional[str]:
         """截取屏幕并识别游戏文本"""

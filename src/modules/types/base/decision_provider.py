@@ -16,7 +16,7 @@ DecisionProvider负责将NormalizedMessage转换为决策结果(Intent)。
 """
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict
 
 from src.modules.di.context import ProviderContext
 
@@ -111,3 +111,16 @@ class DecisionProvider(ABC):
             Exception: 决策过程中的错误
         """
         pass
+
+    def get_info(self) -> Dict[str, Any]:
+        """
+        获取 Provider 信息
+
+        Returns:
+            包含 Provider 基本信息的字典
+        """
+        return {
+            "name": self.__class__.__name__,
+            "is_started": self.is_started,
+            "type": "decision_provider",
+        }

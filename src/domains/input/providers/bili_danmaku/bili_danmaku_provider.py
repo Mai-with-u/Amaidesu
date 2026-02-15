@@ -69,7 +69,7 @@ class BiliDanmakuInputProvider(InputProvider):
         Yields:
             NormalizedMessage: 弹幕标准化消息
         """
-        self.is_running = True
+        self.is_started = True
 
         try:
             self.logger.info("开始采集 Bilibili 弹幕数据...")
@@ -84,7 +84,7 @@ class BiliDanmakuInputProvider(InputProvider):
             async with aiohttp.ClientSession(headers=headers) as session:
                 self._session = session
 
-                while self.is_running:
+                while self.is_started:
                     try:
                         await self._fetch_and_process()
                     except Exception as e:
@@ -101,7 +101,7 @@ class BiliDanmakuInputProvider(InputProvider):
         except Exception as e:
             self.logger.error(f"数据采集出错: {e}", exc_info=True)
         finally:
-            self.is_running = False
+            self.is_started = False
             self.logger.info("Bilibili 弹幕采集已停止")
 
     async def _fetch_and_process(self):

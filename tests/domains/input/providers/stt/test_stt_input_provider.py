@@ -349,7 +349,7 @@ async def test_mock_data_collection():
     # Mock 配置
     mock_provider.sample_rate = 16000
     mock_provider.vad_enabled = True
-    mock_provider.is_running = True
+    mock_provider.is_started = True
 
     # Mock 音频队列
     mock_provider._internal_audio_queue = asyncio.Queue()

@@ -355,8 +355,8 @@ async def create_app_components(
                 logger.info("已注入 InputPipelineManager 到 InputProviderManager")
 
             # 加载并启动 Provider
-            providers = await input_provider_manager.load_from_config(input_config, config_service=config_service)
-            await input_provider_manager.start_all_providers(providers)
+            await input_provider_manager.setup(input_config, config_service=config_service)
+            await input_provider_manager.start()
         except Exception as e:
             logger.error(f"设置输入Provider管理器失败: {e}", exc_info=True)
             logger.warning("输入Provider功能不可用，继续启动其他服务")
@@ -383,8 +383,9 @@ async def create_app_components(
             # 设置决策Provider（通过 ProviderRegistry 自动创建）
             # 使用新的配置格式：decision_config 包含 active_provider 和 available_providers
             await decision_provider_manager.setup(decision_config=decision_config)
+            await decision_provider_manager.start()
             active_provider = decision_provider_manager.get_current_provider_name()
-            logger.info(f"DecisionProviderManager 已设置（Provider: {active_provider}）")
+            logger.info(f"DecisionProviderManager 已设置并启动（Provider: {active_provider}）")
         except Exception as e:
             logger.error(f"设置决策域组件失败: {e}", exc_info=True)
             logger.warning("决策域功能不可用，继续启动其他服务")
@@ -495,8 +496,9 @@ async def run_shutdown(
     if input_provider_manager:
         logger.info("正在停止输入Provider（数据生产者）...")
         try:
-            await input_provider_manager.stop_all_providers()
-            logger.info("输入Provider已停止")
+            await input_provider_manager.stop()
+            await input_provider_manager.cleanup()
+            logger.info("输入Provider已停止并清理")
         except Exception as e:
             logger.error(f"停止输入Provider时出错: {e}")
 

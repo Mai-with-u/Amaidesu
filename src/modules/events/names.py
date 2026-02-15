@@ -23,6 +23,14 @@ class CoreEvents:
     DECISION_PROVIDER_CONNECTED = "decision.provider.connected"
     DECISION_PROVIDER_DISCONNECTED = "decision.provider.disconnected"
 
+    # ========== Input Domain Provider 事件 ==========
+    INPUT_PROVIDER_CONNECTED = "input.provider.connected"
+    INPUT_PROVIDER_DISCONNECTED = "input.provider.disconnected"
+
+    # ========== Output Domain Provider 事件 ==========
+    OUTPUT_PROVIDER_CONNECTED = "output.provider.connected"
+    OUTPUT_PROVIDER_DISCONNECTED = "output.provider.disconnected"
+
     # ========== Output Domain 事件 ==========
     RENDER_COMPLETED = "render.completed"
     RENDER_FAILED = "render.failed"

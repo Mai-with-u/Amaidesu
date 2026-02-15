@@ -101,9 +101,9 @@ class OutputProviderManager:
         self.logger = get_logger("OutputProviderManager")
 
         # 依赖服务（通过 ProviderContext 传递给 Provider）
-        self._llm_manager = llm_manager
-        self._prompt_manager = prompt_manager
-        self._audio_device_manager = audio_device_manager
+        self._llm_service = llm_manager
+        self._prompt_service = prompt_manager
+        self._audio_device_service = audio_device_manager
 
         # 是否并发渲染（默认True）
         self.concurrent_rendering = self.config.get("concurrent_rendering", True)
@@ -159,9 +159,9 @@ class OutputProviderManager:
         self._audio_stream_channel = audio_stream_channel
 
         # 保存依赖服务引用（优先级：参数 > 构造函数参数）
-        self._llm_manager = llm_manager or self._llm_manager
-        self._prompt_manager = prompt_manager or self._prompt_manager
-        self._audio_device_manager = audio_device_manager or self._audio_device_manager
+        self._llm_service = llm_manager or self._llm_service
+        self._prompt_service = prompt_manager or self._prompt_service
+        self._audio_device_service = audio_device_manager or self._audio_device_service
 
         # 创建输出Pipeline管理器
         self.pipeline_manager = OutputPipelineManager()
@@ -514,9 +514,9 @@ class OutputProviderManager:
             context = ProviderContext(
                 event_bus=self.event_bus,
                 audio_stream_channel=self._audio_stream_channel,
-                llm_service=self._llm_manager,
-                prompt_service=self._prompt_manager,
-                audio_device_service=self._audio_device_manager,
+                llm_service=self._llm_service,
+                prompt_service=self._prompt_service,
+                audio_device_service=self._audio_device_service,
             )
 
             # 使用 ProviderRegistry 创建 Provider 实例（传入 context）

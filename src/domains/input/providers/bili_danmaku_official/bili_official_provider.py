@@ -96,7 +96,7 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
 
     async def generate(self) -> AsyncIterator[NormalizedMessage]:
         """采集弹幕数据"""
-        self.is_running = True
+        self.is_started = True
 
         # 创建队列用于接收消息
         message_queue = asyncio.Queue()
@@ -117,7 +117,7 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
 
         try:
             # 从队列中获取消息并yield
-            while self.is_running:
+            while self.is_started:
                 try:
                     # 设置超时以避免永久阻塞
                     normalized_msg = await asyncio.wait_for(message_queue.get(), timeout=1.0)
@@ -126,7 +126,7 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
                         break
                     yield normalized_msg
                 except asyncio.TimeoutError:
-                    # 超时继续循环，检查is_running
+                    # 超时继续循环，检查is_started
                     continue
                 except Exception as e:
                     self.logger.error(f"从队列获取消息时出错: {e}", exc_info=True)
@@ -137,7 +137,7 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
         except Exception as e:
             self.logger.error(f"数据采集出错: {e}", exc_info=True)
         finally:
-            self.is_running = False
+            self.is_started = False
             # 停止WebSocket任务
             ws_task.cancel()
             try:
