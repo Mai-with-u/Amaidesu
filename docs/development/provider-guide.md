@@ -1,964 +1,799 @@
 # Provider 开发指南
 
-Provider 是项目的核心组件，负责具体的数据处理功能。本指南介绍如何开发 InputProvider、DecisionProvider 和 OutputProvider。
+本指南详细介绍如何在 Amaidesu 项目中开发自定义 Provider。Provider 是项目架构的核心组件，负责数据采集、决策和输出渲染。
 
-## Provider 概述
+## 1. Provider 类型
 
-### Provider 类型
+Amaidesu 采用 3 域架构，Provider 分为三种类型：
 
-| 类型 | 位置 | 职责 | 示例 |
+| 类型 | 职责 | 位置 | 示例 |
 |------|------|------|------|
-| **InputProvider** | Input Domain | 从外部数据源采集数据 | ConsoleInputProvider, BiliDanmakuInputProvider, STTInputProvider, BiliDanmakuOfficialInputProvider |
-| **DecisionProvider** | Decision Domain | 决策能力接口 | MaiCoreDecisionProvider, LocalLLMDecisionProvider, MaicraftDecisionProvider |
-| **OutputProvider** | Output Domain | 渲染到目标设备 | TTSOutputProvider, GPTSoVITSOutputProvider, AvatarOutputProvider, ObsControlOutputProvider, StickerOutputProvider |
+| **InputProvider** | 从外部数据源采集数据 | `src/domains/input/providers/` | ConsoleInputProvider, BiliDanmakuInputProvider |
+| **DecisionProvider** | 处理 NormalizedMessage 生成 Intent | `src/domains/decision/providers/` | MaiCoreDecisionProvider, LLMPDecisionProvider |
+| **OutputProvider** | 将 Intent 渲染到目标设备 | `src/domains/output/providers/` | SubtitleOutputProvider, TTSOutputProvider |
 
-### Provider 系统特点
+### 数据流关系
 
-- **配置驱动**：通过配置文件启用和配置
-- **自动注册**：通过 ProviderRegistry 自动注册
-- **异步优先**：所有 I/O 操作使用 async/await
-- **错误隔离**：一个 Provider 失败不影响其他
-
-## InputProvider 开发
-
-### 基本结构
-
-InputProvider 从外部数据源采集数据，**直接构造 `NormalizedMessage`**（重构后）。
-
-```python
-from typing import AsyncIterator, Dict, Any
-import asyncio
-from src.modules.types.base.input_provider import InputProvider
-from src.modules.types.base.normalized_message import NormalizedMessage
-from src.modules.logging import get_logger
-
-class MyInputProvider(InputProvider):
-    """自定义输入 Provider"""
-
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        self.logger = get_logger(self.__class__.__name__)
-        # 初始化逻辑
-        self.api_url = config.get("api_url")
-        self.poll_interval = config.get("poll_interval", 5)
-
-    async def start(self) -> AsyncIterator[NormalizedMessage]:
-        """启动 Provider，直接返回 NormalizedMessage 流"""
-        await self._setup_internal()
-        self.is_running = True
-
-        try:
-            while self.is_running:
-                try:
-                    # 采集数据
-                    data = await self._fetch_data()
-                    if data:
-                        # 直接构造 NormalizedMessage
-                        yield NormalizedMessage(
-                            text=data["text"],
-                            source="my_provider",
-                            data_type="text",
-                            importance=0.5,
-                            raw={
-                                "user": data.get("user", "未知用户"),
-                                "user_id": data.get("user_id", "unknown"),
-                            },
-                        )
-
-                    # 等待下一次采集
-                    await asyncio.sleep(self.poll_interval)
-                except Exception as e:
-                    self.logger.error(f"采集数据失败: {e}", exc_info=True)
-        finally:
-            self.is_running = False
-            await self._cleanup_internal()
-
-    async def _fetch_data(self):
-        """实现具体的数据采集逻辑"""
-        # ... 实现细节
-        pass
 ```
-
-### InputProvider 接口
-
-| 方法 | 说明 | 必须实现 |
-|------|------|----------|
-| `start()` | 启动数据采集，返回 AsyncIterator[NormalizedMessage] | ✅ |
-| `stop()` | 停止数据采集 | ❌（默认实现） |
-| `cleanup()` | 清理资源 | ❌（可选） |
-| `_setup_internal()` | 内部初始化逻辑 | ❌ |
-| `_cleanup_internal()` | 内部清理逻辑 | ❌ |
-
-### InputProvider 生命周期方法
-
-| 方法 | 说明 | 必须实现 | 调用时机 |
-|------|------|----------|----------|
-| `start()` | 启动数据采集，返回 AsyncIterator[NormalizedMessage] | ✅ | Manager 启动时 |
-| `_setup_internal()` | 内部初始化逻辑 | ❌ | `start()` 开始时 |
-| `_cleanup_internal()` | 内部清理逻辑 | ❌ | `stop()`/`cleanup()` 调用时 |
-| `stop()` | 停止数据采集 | ❌（默认实现） | Manager 停止时 |
-| `cleanup()` | 清理资源 | ❌（默认实现） | Manager 清理时 |
-
-### NormalizedMessage 结构
-
-```python
-from src.modules.types.base.normalized_message import NormalizedMessage
-
-# 直接构造 NormalizedMessage
-normalized_message = NormalizedMessage(
-    text="用户消息",              # 文本描述（用于LLM处理）
-    source="my_provider",          # 数据源标识
-    data_type="text",              # 数据类型
-    importance=0.5,                # 重要性（0-1）
-    raw={                          # 原始数据（可选）
-        "user": "用户昵称",
-        "user_id": "user_id",
-    },
-)
+外部输入 → InputProvider → NormalizedMessage → DecisionProvider → Intent
+                                                            ↓
+                                          OutputProvider → 实际输出（TTS/字幕/动作）
 ```
-
-## DecisionProvider 开发
-
-### 基本结构
-
-DecisionProvider 处理 `NormalizedMessage` 生成 `Intent`。
-
-```python
-from typing import Dict, Any
-from src.modules.types.base.decision_provider import DecisionProvider
-from src.modules.types.base.normalized_message import NormalizedMessage
-from src.modules.types import EmotionType, ActionType, IntentAction
-from src.modules.types import Intent
-from src.modules.logging import get_logger
-
-class MyDecisionProvider(DecisionProvider):
-    """自定义决策 Provider"""
-
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        self.logger = get_logger(self.__class__.__name__)
-        # 初始化逻辑
-
-    async def decide(self, message: NormalizedMessage) -> Intent:
-        """决策逻辑"""
-        # 实现决策逻辑
-        return Intent(
-            original_text=message.text,
-            response_text="响应内容",
-            emotion=EmotionType.HAPPY,
-            actions=[IntentAction(type=ActionType.EXPRESSION, params={"name": "smile"})],
-            metadata={},
-        )
-```
-
-### DecisionProvider 接口
-
-| 方法 | 说明 | 必须实现 |
-|------|------|----------|
-| `decide()` | 决策方法，NormalizedMessage → Intent | ✅ |
-| `setup()` | 设置 Provider（注册事件订阅） | ❌（默认实现） |
-| `cleanup()` | 清理资源 | ❌（可选） |
-| `_setup_internal()` | 内部初始化逻辑 | ❌（可选） |
-| `_cleanup_internal()` | 内部清理逻辑 | ❌（可选） |
-
-### Intent 结构
-
-```python
-from src.modules.types import EmotionType, ActionType, IntentAction
-from src.modules.types import Intent
-
-intent = Intent(
-    original_text="用户消息",           # 原始输入文本
-    response_text="回复内容",           # 响应内容
-    emotion=EmotionType.HAPPY,         # 情感类型（枚举）
-    actions=[                          # 动作列表
-        IntentAction(type=ActionType.EXPRESSION, params={"name": "smile"}),
-        IntentAction(type=ActionType.HOTKEY, params={"key": "wave"}),
-    ],
-    metadata={                         # 额外元数据
-        "tts_enabled": True,
-        "subtitle_enabled": True,
-    }
-)
-```
-
-## OutputProvider 开发
-
-### 基本结构
-
-OutputProvider 渲染到目标设备。
-
-```python
-from typing import Dict, Any
-from src.modules.types.base.output_provider import OutputProvider
-from src.domains.output.parameters.render_parameters import RenderParameters
-from src.modules.logging import get_logger
-
-class MyOutputProvider(OutputProvider):
-    """自定义输出 Provider"""
-
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        self.logger = get_logger(self.__class__.__name__)
-
-    async def render(self, parameters: RenderParameters):
-        """渲染逻辑"""
-        try:
-            # 实现渲染逻辑
-            self.logger.info(f"渲染: {parameters.text}")
-            # ... 实际渲染操作
-        except Exception as e:
-            self.logger.error(f"渲染失败: {e}", exc_info=True)
-```
-
-### OutputProvider 接口
-
-| 方法 | 说明 | 必须实现 |
-|------|------|----------|
-| `render()` | 渲染参数到目标设备 | ✅ |
-| `initialize()` | 初始化 Provider | ❌（可选） |
-| `cleanup()` | 清理资源 | ❌（可选） |
-
-### RenderParameters 结构
-
-```python
-from src.domains.output.parameters.render_parameters import RenderParameters
-
-params = RenderParameters(
-    text="显示文本",
-    tts_text="TTS文本",
-    emotion_type="happy",
-    emotion_value=0.8,
-    vts_hotkey="smile",
-    metadata={}
-)
-```
-
-## Provider 注册
-
-### 注册到 ProviderRegistry
-
-在 Provider 的 `__init__.py` 中注册：
-
-```python
-# src/domains/input/providers/my_provider/__init__.py
-from src.modules.provider_registry import ProviderRegistry
-from .my_input_provider import MyInputProvider
-
-ProviderRegistry.register_input(
-    "my_provider",           # Provider 名称
-    MyInputProvider,         # Provider 类
-    source="builtin:my_provider"
-)
-```
-
-### 注册类型
-
-```python
-# InputProvider
-ProviderRegistry.register_input("name", InputProviderClass)
-
-# DecisionProvider
-ProviderRegistry.register_decision("name", DecisionProviderClass)
-
-# OutputProvider
-ProviderRegistry.register_output("name", OutputProviderClass)
-```
-
-## 配置启用
-
-### InputProvider 配置
-
-```toml
-[providers.input]
-enabled_inputs = ["console_input", "my_provider"]
-
-[providers.input.inputs.my_provider]
-type = "my_provider"
-# Provider 特定配置
-api_url = "https://api.example.com"
-poll_interval = 5
-```
-
-### DecisionProvider 配置
-
-```toml
-[providers.decision]
-active_provider = "my_provider"
-available_providers = ["maicore", "my_provider"]
-
-[providers.decision.providers.my_provider]
-type = "my_provider"
-# Provider 特定配置
-model = "gpt-4"
-api_key = "sk-..."
-```
-
-### OutputProvider 配置
-
-```toml
-[providers.output]
-enabled_outputs = ["subtitle", "my_provider"]
-
-[providers.output.outputs.my_provider]
-type = "my_provider"
-# Provider 特定配置
-output_device = "default"
-volume = 0.8
-```
-
-## 完整示例
-
-### Bilibili 弹幕输入 Provider
-
-```python
-from typing import AsyncIterator, Dict, Any
-from src.modules/types/base/input_provider import InputProvider
-import asyncio
-from src.modules/types/base.normalized_message import NormalizedMessage
-from src.modules.logging import get_logger
-
-class BiliDanmakuInputProvider(InputProvider):
-    """Bilibili 弹幕输入 Provider"""
-
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        self.logger = get_logger(self.__class__.__name__)
-        self.room_id = config.get("room_id", 0)
-        self.poll_interval = config.get("poll_interval", 3)
-
-    async def start(self) -> AsyncIterator[NormalizedMessage]:
-        """采集弹幕，直接返回 NormalizedMessage"""
-        await self._setup_internal()
-        self.is_running = True
-
-        try:
-            while self.is_running:
-                try:
-                    # 调用 Bilibili API
-                    danmaku_list = await self._fetch_danmaku()
-                    for danmaku in danmaku_list:
-                        # 直接构造 NormalizedMessage
-                        yield NormalizedMessage(
-                            text=danmaku.text,
-                            source="bili_danmaku",
-                            data_type="text",
-                            importance=0.5,
-                            raw={
-                                "user": danmaku.nickname,
-                                "user_id": danmaku.user_id,
-                                "room_id": self.room_id,
-                            },
-                        )
-                    await asyncio.sleep(self.poll_interval)
-                except Exception as e:
-                    self.logger.error(f"采集弹幕失败: {e}", exc_info=True)
-        finally:
-            self.is_running = False
-            await self._cleanup_internal()
-
-    async def _fetch_danmaku(self):
-        """获取弹幕列表"""
-        # 实现 API 调用逻辑
-        pass
-```
-
-### TTS 输出 Provider
-
-```python
-from typing import Dict, Any
-from src.modules.types.base.output_provider import OutputProvider
-from src.domains.output.parameters.render_parameters import RenderParameters
-from src.modules.logging import get_logger
-
-class TTSOutputProvider(OutputProvider):
-    """TTS 输出 Provider"""
-
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        self.logger = get_logger(self.__class__.__name__)
-        self.voice = config.get("voice", "zh-CN-XiaoxiaoNeural")
-        self.volume = config.get("volume", 1.0)
-
-    async def render(self, parameters: RenderParameters):
-        """渲染 TTS"""
-        try:
-            text = parameters.tts_text or parameters.text
-            self.logger.info(f"TTS: {text[:50]}...")
-
-            # 调用 TTS API
-            audio_data = await self._synthesize_speech(text)
-
-            # 播放音频
-            await self._play_audio(audio_data)
-
-        except Exception as e:
-            self.logger.error(f"TTS 渲染失败: {e}", exc_info=True)
-
-    async def _synthesize_speech(self, text: str):
-        """合成语音"""
-        # 实现 TTS API 调用
-        pass
-
-    async def _play_audio(self, audio_data):
-        """播放音频"""
-        # 实现音频播放
-        pass
-```
-
-## 最佳实践
-
-### 1. 错误处理
-
-```python
-async def start(self) -> AsyncIterator[NormalizedMessage]:
-    await self._setup_internal()
-    self.is_running = True
-
-    try:
-        while self.is_running:
-            try:
-                data = await self._fetch_data()
-                # 构造并 yield NormalizedMessage
-                yield NormalizedMessage(...)
-            except Exception as e:
-                self.logger.error(f"采集失败: {e}", exc_info=True)
-                # 错误后等待一段时间再重试
-                await asyncio.sleep(5)
-    finally:
-        self.is_running = False
-        await self._cleanup_internal()
-```
-
-### 2. 日志记录
-
-```python
-class MyProvider(InputProvider):
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        self.logger = get_logger(self.__class__.__name__)
-
-    async def initialize(self):
-        self.logger.info("Provider 初始化")
-```
-
-### 3. 资源清理
-
-```python
-class MyProvider(InputProvider):
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        self.session = None
-
-    async def initialize(self):
-        # 初始化资源
-        self.session = aiohttp.ClientSession()
-
-    async def cleanup(self):
-        # 清理资源
-        if self.session:
-            await self.session.close()
-```
-
-### 4. 配置验证
-
-```python
-from pydantic import BaseModel, Field, validator
-
-class MyProviderConfig(BaseModel):
-    """Provider 配置"""
-    api_url: str = Field(..., description="API URL")
-    poll_interval: int = Field(default=5, ge=1, le=60)
-
-    @validator("api_url")
-    def validate_url(cls, v):
-        if not v.startswith(("http://", "https://")):
-            raise ValueError("API URL 必须以 http:// 或 https:// 开头")
-        return v
-```
-
-## Provider 生命周期方法说明
-
-### 内部方法命名约定
-
-所有 Provider 类型的内部扩展方法使用统一的 `_xxx_internal()` 命名约定：
-
-| Provider 类型 | 内部初始化 | 内部清理 |
-|--------------|-----------|----------|
-| InputProvider | `_setup_internal()` | `_cleanup_internal()` |
-| DecisionProvider | `_setup_internal()` | `_cleanup_internal()` |
-| OutputProvider | `_setup_internal()` | `_cleanup_internal()` |
-
-子类可以重写这些内部方法来实现自定义的初始化和清理逻辑。
-
-### 公共 API 差异说明
-
-不同类型的 Provider 使用不同的公共生命周期方法，这反映了它们不同的语义：
-
-| Provider 类型 | 启动方法 | 停止方法 | 内部方法 | 原因 |
-|--------------|---------|---------|----------|------|
-| InputProvider | `start()` | `stop()` + `cleanup()` | `_setup_internal()` / `_cleanup_internal()` | 返回异步数据流 (AsyncIterator) |
-| DecisionProvider | `setup()` | `cleanup()` | `_setup_internal()` / `_cleanup_internal()` | 注册到 EventBus 作为事件订阅者 |
-| OutputProvider | `setup()` | `cleanup()` | `_setup_internal()` / `_cleanup_internal()` | 注册到 EventBus 作为事件订阅者 |
-
-**为什么不能统一公共 API？**
-
-InputProvider 的 `start()` 方法必须返回 `AsyncIterator[NormalizedMessage]`：
-- 这是 Python 异步生成器的语法要求
-- `setup()` 方法无法返回 AsyncIterator
-- 使用 `start()` 更符合"启动流式数据源"的语义
-
-Decision/OutputProvider 的 `setup()` 方法用于注册事件订阅：
-- 它们是事件消费者，而非数据生产者
-- 使用 `setup()` 更符合"配置事件处理器"的语义
-
-## 测试
-
-### 单元测试
-
-```python
-import pytest
-from src.domains.input.providers.my_provider import MyInputProvider
-
-@pytest.mark.asyncio
-async def test_my_input_provider():
-    config = {"api_url": "https://api.example.com"}
-    provider = MyInputProvider(config)
-
-    # 测试初始化
-    assert provider.api_url == "https://api.example.com"
-
-    # 测试数据采集
-    data_count = 0
-    async for message in provider.stream():
-        data_count += 1
-        assert message.source == "my_provider"
-        assert isinstance(message, NormalizedMessage)
-        if data_count >= 3:
-            await provider.stop()
-```
-
-## 新增 Provider 详细说明
-
-### STTInputProvider - 语音转文字
-
-语音转文字输入 Provider，使用讯飞流式 ASR 和 Silero VAD 实现实时语音识别。
-
-**功能特性：**
-- 本地麦克风输入
-- 远程音频流支持 (RemoteStream)
-- Silero VAD 语音活动检测
-- 讯飞流式 ASR
-- 自定义 torch 缓存目录（避免 Windows 中文用户名问题）
-
-**配置示例：**
-```toml
-[providers.input.inputs.stt]
-type = "stt"
-
-# 音频配置
-audio.sample_rate = 16000
-audio.channels = 1
-audio.dtype = "int16"
-audio.stt_input_device_name = "麦克风名称"  # 可选
-audio.use_remote_stream = false  # 使用远程音频流
-
-# VAD 配置
-vad.enable = true
-vad.vad_threshold = 0.5
-vad.silence_seconds = 1.0
-
-# 讯飞 ASR 配置
-iflytek_asr.host = "wss://istream-iflytek.xf-yun.com"
-iflytek_asr.path = "/v2/iat"
-iflytek_asr.appid = "your_appid"
-iflytek_asr.api_secret = "your_api_secret"
-iflytek_asr.api_key = "your_api_key"
-iflytek_asr.language = "zh_cn"
-iflytek_asr.domain = "iat"
-
-# 消息配置
-message_config.user_id = "stt_user"
-message_config.user_nickname = "语音"
-```
-
-**依赖安装：**
-```bash
-uv add torch sounddevice aiohttp
-```
-
-### MaicraftDecisionProvider - 弹幕互动游戏决策
-
-基于抽象工厂模式的弹幕互动游戏决策 Provider，支持通过配置切换不同的动作实现系列。
-
-**功能特性：**
-- 弹幕命令解析
-- 工厂模式创建动作（Log、MCP）
-- 支持多种游戏操作（聊天、攻击等）
-- 可扩展的动作注册系统
-
-**配置示例：**
-```toml
-[providers.decision.maicraft]
-enabled = true
-factory_type = "log"  # 或 "mcp"
-command_prefix = "!"
-
-[providers.decision.maicraft.command_mappings]
-chat = "chat"
-attack = "attack"
-```
-
-### AvatarOutputProvider - 虚拟形象输出
-
-虚拟形象输出 Provider，使用 PlatformAdapter 执行渲染，支持多个平台。
-
-**功能特性：**
-- 支持多平台适配器（VTS、VRChat、Live2D）
-- 抽象参数自动翻译为平台特定参数
-- 统一的接口管理不同平台
-
-**配置示例：**
-```toml
-[providers.output.outputs.avatar]
-type = "avatar"
-adapter_type = "vts"  # vts | vrchat | live2d
-
-# VTS 特定配置
-vts_host = "127.0.0.1"
-vts_port = 8000
-
-# VRChat 特定配置
-vrc_host = "127.0.0.1"
-vrc_in_port = 9001
-vrc_out_port = 9000
-enable_server = false
-```
-
-### GPTSoVITSOutputProvider - GPT-SoVITS 语音合成
-
-使用 GPT-SoVITS 引擎进行高质量文本转语音。
-
-**功能特性：**
-- 流式 TTS 和音频播放
-- 参考音频管理
-- 音频设备管理
-- 丰富的 TTS 参数配置
-
-**配置示例：**
-```toml
-[providers.output.outputs.gptsovits]
-type = "gptsovits"
-host = "127.0.0.1"
-port = 9880
-
-# 参考音频
-ref_audio_path = "path/to/reference.wav"
-prompt_text = "参考文本"
-
-# TTS 参数
-text_language = "zh"
-prompt_language = "zh"
-top_k = 20
-top_p = 0.6
-temperature = 0.3
-speed_factor = 1.0
-streaming_mode = true
-
-# 音频输出
-sample_rate = 32000
-output_device_name = "扬声器名称"
-```
-
-### ObsControlOutputProvider - OBS 控制
-
-通过 WebSocket 连接到 OBS，支持文本显示和场景控制。
-
-**功能特性：**
-- 文本显示到 OBS 文本源
-- 逐字打印效果
-- 场景切换
-- 源可见性控制
-
-**配置示例：**
-```toml
-[providers.output.outputs.obs_control]
-type = "obs_control"
-host = "localhost"
-port = 4455
-password = "your_password"  # 可选
-text_source_name = "text"
-
-# 逐字效果配置
-typewriter_enabled = false
-typewriter_speed = 0.1
-typewriter_delay = 0.5
-
-# 连接测试
-test_on_connect = true
-```
-
-### StickerOutputProvider - 贴纸输出
-
-处理表情图片并发送到 VTS 显示。
-
-**功能特性：**
-- 图片大小调整
-- 冷却时间控制
-- 自动卸载
-- 与 VTS Provider 集成
-
-**配置示例：**
-```toml
-[providers.output.outputs.sticker]
-type = "sticker"
-
-# 贴纸配置
-sticker_size = 0.33
-sticker_rotation = 90
-sticker_position_x = 0.0
-sticker_position_y = 0.0
-
-# 图片处理
-image_width = 256
-image_height = 256
-
-# 时间控制
-cool_down_seconds = 5.0
-display_duration_seconds = 3.0
-```
-
-### RemoteStreamOutputProvider - 远程流媒体输出
-
-通过 WebSocket 实现与边缘设备的音视频双向传输。
-
-**功能特性：**
-- WebSocket 服务器/客户端模式
-- 音频数据传输
-- 图像数据传输
-- 自动重连
-
-**配置示例：**
-```toml
-[providers.output.outputs.remote_stream]
-type = "remote_stream"
-server_mode = true
-host = "0.0.0.0"
-port = 8765
-
-# 音频配置
-audio_sample_rate = 16000
-audio_channels = 1
-audio_format = "int16"
-audio_chunk_size = 1024
-
-# 图像配置
-image_width = 640
-image_height = 480
-image_format = "jpeg"
-image_quality = 80
-
-# 重连配置
-reconnect_delay = 5
-max_reconnect_attempts = -1  # -1 表示无限
-```
-
-### BiliDanmakuOfficialInputProvider - B站官方弹幕
-
-从 Bilibili 官方开放平台 WebSocket API 采集弹幕数据。
-
-**功能特性：**
-- 官方 WebSocket API
-- 消息缓存服务
-- 上下文标签过滤
-- 模板信息支持
-
-**配置示例：**
-```toml
-[providers.input.inputs.bili_danmaku_official]
-type = "bili_danmaku_official"
-id_code = "直播间ID代码"
-app_id = "应用ID"
-access_key = "访问密钥"
-access_key_secret = "访问密钥Secret"
-api_host = "https://live-open.biliapi.com"
-message_cache_size = 1000
-
-# 上下文过滤（可选）
-context_tags = ["游戏", "互动"]
-
-# 模板信息（可选）
-enable_template_info = false
-template_items = {}
-```
-
-### ReadPingmuInputProvider - 读屏木输入
-
-通过 ReadPingmu 服务采集屏幕内容，支持 OCR 文字识别和图像理解。
-
-**功能特性：**
-- 通过 ReadPingmu 服务采集屏幕内容
-- 支持 OCR 文字识别
-- 支持图像理解
-
-**配置示例：**
-```toml
-[providers.input.inputs.read_pingmu]
-type = "read_pingmu"
-api_base_url = "http://127.0.0.1:8080"
-```
-
-### BiliDanmakuOfficialMaicraftInputProvider - B站官方弹幕（Maicraft版本）
-
-专为 Maicraft 弹幕互动游戏优化的 B站官方弹幕输入 Provider。
-
-**与 BiliDanmakuOfficialInputProvider 的区别：**
-- 针对游戏场景优化的事件处理
-- 支持弹幕命令解析
-- 与 MaicraftDecisionProvider 配合使用
-
-**功能特性：**
-- 官方 WebSocket API
-- 消息缓存服务
-- 上下文标签过滤
-- 模板信息支持
-- 弹幕命令解析
-
-**配置示例：**
-```toml
-[providers.input.inputs.bili_danmaku_official_maicraft]
-type = "bili_danmaku_official_maicraft"
-id_code = "直播间ID代码"
-app_id = "应用ID"
-access_key = "访问密钥"
-access_key_secret = "访问密钥Secret"
-api_host = "https://live-open.biliapi.com"
-message_cache_size = 1000
-
-# 上下文过滤（可选）
-context_tags = ["游戏", "互动"]
-
-# 模板信息（可选）
-enable_template_info = false
-template_items = {}
-```
-
-### OmniTTSOutputProvider - Fish TTS 语音合成
-
-使用 Fish Audio TTS API 进行高质量语音合成。
-
-**功能特性：**
-- 使用 Fish Audio TTS API
-- 高质量语音合成
-- 支持多音色
-- 流式音频输出
-
-**配置示例：**
-```toml
-[providers.output.outputs.omni_tts]
-type = "omni_tts"
-api_key = "your_api_key"
-api_url = "https://api.fish.audio"
-voice = "narration"  # 音色ID
-speed = 1.0
-```
-
-**依赖安装：**
-```bash
-uv add aiohttp
-```
-
-### WarudoOutputProvider - Warudo 虚拟主播
-
-通过 WebSocket 与 Warudo 虚拟主播软件通信，控制虚拟形象。
-
-**功能特性：**
-- 通过 WebSocket 与 Warudo 通信
-- 支持参数控制（表情、手势等）
-- 支持热键触发
-- 支持场景切换
-
-**配置示例：**
-```toml
-[providers.output.outputs.warudo]
-type = "warudo"
-host = "127.0.0.1"
-port = 10800
-```
-
-## 共享服务
-
-> **⚠️ 已废弃（A-02 重构）**
->
-> 服务注册机制（ServiceManager）已完全移除。
-> 所有共享服务（如 DGLabService）已迁移到 Provider 架构或移至 `plugins_backup/` 作为历史参考。
->
-> 如果需要共享功能，请：
-> 1. 创建对应的 Provider（InputProvider/DecisionProvider/OutputProvider）
-> 2. 在 Provider 内部实现所需功能
-> 3. 通过 EventBus 进行跨 Provider 通信
->
-> 参见：[Provider 开发](#provider-开发)、[事件系统](../architecture/event-system.md)
-
-## 新提示词
-
-### input/screen_description.md - 屏幕内容描述
-
-屏幕视觉理解助手提示词，分析屏幕截图并生成内容描述。
-
-**变量：**
-- `image_base64`: 屏幕截图（base64编码）
-- `context`: 上一时刻屏幕的内容
-- `images_count`: 图像数量（用于检测是否为多张拼接）
-
-**使用示例：**
-```python
-from src.prompts import get_prompt_manager
-
-prompt = get_prompt_manager().render(
-    "input/screen_description",
-    image_base64=image_base64,
-    context="上一时刻的屏幕内容",
-    images_count=1
-)
-```
-
-### input/screen_context.md - 屏幕上下文分析
-
-屏幕上下文分析助手提示词，理解当前屏幕状态和用户意图。
-
-**变量：**
-- `image`: 屏幕截图
-- `context`: 当前上下文信息
-
-**分析任务：**
-1. 识别屏幕上的主要内容元素
-2. 理解当前的应用程序或界面类型
-3. 分析用户可能的操作意图
-4. 识别关键的可交互元素
-
-### output/avatar_expression.md - 虚拟形象表情生成
-
-虚拟形象表情生成助手提示词，根据文本内容和表情列表选择最合适的表情。
-
-**变量：**
-- `text`: 用户文本
-- `emotion_list`: 可选表情列表
-
-**输出格式：**
-```
-表情名称: [选择的脸部表情名称]
-说明: [为什么选择这个表情的理由]
-```
-
-## 相关文档
-
-- [InputProvider API](../api/input_provider.md)
-- [OutputProvider API](../api/output_provider.md)
-- [DecisionProvider API](../api/decision_provider.md)
-- [测试规范](testing-guide.md)
-- [提示词管理](prompt-management.md)
 
 ---
 
-*最后更新：2026-02-13*
+## 2. Provider 基类
+
+所有 Provider 都继承自对应的抽象基类，基类定义了统一的接口和生命周期方法。
+
+### 2.1 InputProvider 基类
+
+```python
+from abc import ABC, abstractmethod
+from typing import AsyncIterator
+
+from src.modules.di.context import ProviderContext
+from src.modules.types.base.normalized_message import NormalizedMessage
+
+
+class InputProvider(ABC):
+    """输入 Provider 抽象基类"""
+
+    def __init__(self, config: dict, context: ProviderContext = None):
+        self.config = config
+        self.context = context or ProviderContext()
+        self.is_running = False
+
+    @property
+    def event_bus(self):
+        """获取事件总线"""
+        return self.context.event_bus
+
+    async def init(self) -> None:
+        """初始化资源配置（子类可重写）"""
+        pass
+
+    async def start(self) -> None:
+        """启动 Provider，建立连接"""
+        await self.init()
+        self.is_running = True
+
+    def stream(self) -> AsyncIterator[NormalizedMessage]:
+        """
+        返回 NormalizedMessage 数据流
+        注意：调用此方法前必须先调用 start()
+        """
+        if not self.is_running:
+            raise RuntimeError("Provider 未启动，请先调用 start()")
+
+        async def _generate():
+            try:
+                async for message in self.generate():
+                    yield message
+            finally:
+                self.is_running = False
+
+        return _generate()
+
+    @abstractmethod
+    async def generate(self) -> AsyncIterator[NormalizedMessage]:
+        """
+        生成 NormalizedMessage 数据流（子类必须实现）
+
+        Yields:
+            NormalizedMessage: 标准化消息
+        """
+        pass
+
+    async def stop(self):
+        """停止 Provider"""
+        self.is_running = False
+        await self.cleanup()
+
+    async def cleanup(self) -> None:
+        """清理资源（子类可重写）"""
+        pass
+```
+
+**核心要点**：
+- InputProvider 使用 `start()` / `stop()` 方法管理生命周期
+- 核心方法是 `generate()`，必须实现为异步生成器
+- 直接构造 `NormalizedMessage`，无需中间数据结构
+
+### 2.2 DecisionProvider 基类
+
+```python
+from abc import ABC, abstractmethod
+
+from src.modules.di.context import ProviderContext
+
+
+class DecisionProvider(ABC):
+    """决策 Provider 抽象基类"""
+
+    def __init__(self, config: dict, context: ProviderContext):
+        """
+        Args:
+            config: Provider 配置
+            context: 依赖注入上下文（必填）
+        """
+        if context is None:
+            raise ValueError("DecisionProvider 必须接收 context 参数")
+
+        self.config = config
+        self.context = context
+        self.is_started = False
+
+    @property
+    def event_bus(self):
+        """EventBus 实例"""
+        return self.context.event_bus
+
+    async def init(self) -> None:
+        """初始化 Provider（子类可重写）"""
+        pass
+
+    async def start(self, event_bus=None, config=None, dependencies=None) -> None:
+        """启动 Provider"""
+        await self.init()
+        self.is_started = True
+
+    @abstractmethod
+    async def decide(self, message: "NormalizedMessage") -> None:
+        """
+        决策（fire-and-forget）
+
+        根据 NormalizedMessage 生成决策结果，并通过 EventBus 发布 decision.intent 事件。
+
+        注意：这是 fire-and-forget 模式：
+        - 不等待决策完成，不返回结果
+        - Provider 内部负责通过 event_bus 发布 decision.intent 事件
+
+        Args:
+            message: 标准化消息
+        """
+        pass
+
+    async def stop(self) -> None:
+        """停止 Provider"""
+        await self.cleanup()
+        self.is_started = False
+
+    async def cleanup(self) -> None:
+        """清理资源（子类可重写）"""
+        pass
+```
+
+**核心要点**：
+- DecisionProvider **必须**接收 `context` 参数（必填）
+- 核心方法是 `decide()`，采用 fire-and-forget 模式
+- 通过 EventBus 发布 `decision.intent` 事件传递结果
+
+### 2.3 OutputProvider 基类
+
+```python
+from abc import ABC, abstractmethod
+
+from src.modules.di.context import ProviderContext
+
+
+class OutputProvider(ABC):
+    """输出 Provider 抽象基类"""
+
+    priority: int = 50  # 事件处理优先级
+
+    def __init__(self, config: dict, context: ProviderContext):
+        """
+        Args:
+            config: Provider 配置
+            context: 依赖注入上下文（必填）
+        """
+        if context is None:
+            raise ValueError("OutputProvider 必须接收 context 参数")
+
+        self.config = config
+        self.context = context
+        self.is_started = False
+
+    @property
+    def event_bus(self):
+        return self.context.event_bus
+
+    @property
+    def audio_stream_channel(self):
+        return self.context.audio_stream_channel
+
+    async def init(self):
+        """初始化 Provider（子类可重写）"""
+        pass
+
+    async def start(self, event_bus=None, audio_stream_channel=None):
+        """
+        启动 Provider，订阅 OUTPUT_INTENT 事件
+
+        依赖已在构造时通过 context 注入。
+        """
+        from src.modules.events.names import CoreEvents
+        from src.modules.events.payloads.decision import IntentPayload
+
+        if self.event_bus:
+            self.event_bus.on(
+                CoreEvents.OUTPUT_INTENT,
+                self._on_intent,
+                model_class=IntentPayload,
+                priority=self.priority
+            )
+
+        await self.init()
+        self.is_started = True
+
+    async def _on_intent(self, event_name: str, payload: "IntentPayload", source: str):
+        """接收过滤后的 Intent 事件"""
+        intent = payload.to_intent()
+        await self.execute(intent)
+
+    @abstractmethod
+    async def execute(self, intent: "Intent"):
+        """
+        执行意图（子类必须实现）
+
+        处理接收到的 Intent，进行实际的渲染或输出操作。
+
+        Args:
+            intent: 意图对象
+        """
+        pass
+
+    async def stop(self):
+        """停止 Provider"""
+        from src.modules.events.names import CoreEvents
+
+        if self.event_bus:
+            self.event_bus.off(CoreEvents.OUTPUT_INTENT, self._on_intent)
+
+        await self.cleanup()
+        self.is_started = False
+
+    async def cleanup(self) -> None:
+        """清理资源（子类可重写）"""
+        pass
+```
+
+**核心要点**：
+- OutputProvider **必须**接收 `context` 参数（必填）
+- `priority` 属性控制事件处理优先级（数值越小越先执行）
+- 核心方法是 `execute()`，处理 Intent 并渲染输出
+- 自动订阅 `OUTPUT_INTENT` 事件，无需手动订阅
+
+---
+
+## 3. ProviderContext 依赖注入
+
+`ProviderContext` 是所有 Provider 的统一依赖容器，采用依赖注入模式提供服务。
+
+```python
+from dataclasses import dataclass
+from typing import Optional
+
+
+@dataclass(frozen=True)
+class ProviderContext:
+    """所有 Provider 的统一依赖上下文（不可变）"""
+
+    # 核心服务
+    event_bus: Optional["EventBus"] = None
+    config_service: Optional["ConfigService"] = None
+
+    # 音频服务
+    audio_stream_channel: Optional["AudioStreamChannel"] = None
+    audio_device_service: Optional["AudioDeviceManager"] = None
+
+    # LLM 服务
+    llm_service: Optional["LLMManager"] = None
+    token_usage_service: Optional["TokenUsageManager"] = None
+
+    # 提示词服务
+    prompt_service: Optional["PromptManager"] = None
+
+    # 上下文服务
+    context_service: Optional["ContextService"] = None
+```
+
+### 使用依赖服务
+
+在 Provider 中通过 `self.context` 访问服务：
+
+```python
+class MyProvider(DecisionProvider):
+    async def init(self) -> None:
+        # 获取依赖服务
+        self._llm_service = self.context.llm_service
+        self._prompt_service = self.context.prompt_service
+        self._context_service = self.context.context_service
+
+    async def decide(self, message: NormalizedMessage) -> None:
+        # 使用依赖服务
+        response = await self._llm_service.chat(prompt="...")
+```
+
+---
+
+## 4. 注册 Provider
+
+在 Provider 的 `__init__.py` 中注册到 ProviderRegistry：
+
+```python
+from src.modules.registry import ProviderRegistry
+
+from .my_input_provider import MyInputProvider
+
+# 注册 InputProvider
+ProviderRegistry.register_input(
+    "my_provider",           # Provider 名称（唯一标识符）
+    MyInputProvider,         # Provider 类
+    source="builtin:my_provider"  # 注册来源
+)
+```
+
+### 三种注册方法
+
+```python
+# 注册 InputProvider
+ProviderRegistry.register_input("name", MyInputProvider, source="builtin:xxx")
+
+# 注册 OutputProvider
+ProviderRegistry.register_output("name", MyOutputProvider, source="builtin:xxx")
+
+# 注册 DecisionProvider
+ProviderRegistry.register_decision("name", MyDecisionProvider, source="builtin:xxx")
+```
+
+### 显式注册模式（可选）
+
+也可以在 Provider 类中实现 `get_registration_info()` 方法：
+
+```python
+class MyProvider(InputProvider):
+    @classmethod
+    def get_registration_info(cls) -> Dict[str, Any]:
+        return {
+            "layer": "input",  # "input", "decision", 或 "output"
+            "name": "my_provider",
+            "class": cls,
+            "source": "builtin:my_provider"
+        }
+```
+
+---
+
+## 5. 配置启用
+
+在 `config.toml` 中启用 Provider：
+
+```toml
+# 输入 Provider
+[providers.input]
+enabled_inputs = ["console_input", "my_provider"]
+
+# 决策 Provider
+[providers.decision]
+active_provider = "my_provider"
+
+# 输出 Provider
+[providers.output]
+enabled_outputs = ["subtitle", "my_provider"]
+```
+
+### 配置 Schema（推荐）
+
+推荐在 Provider 中定义 Pydantic ConfigSchema，实现类型安全的配置：
+
+```python
+from pydantic import Field
+from src.modules.config.schemas.base import BaseProviderConfig
+
+
+class MyProvider(OutputProvider):
+    class ConfigSchema(BaseProviderConfig):
+        """Provider 配置 Schema"""
+        type: str = "my_provider"
+
+        # 自定义配置项
+        api_key: str = Field(default="", description="API 密钥")
+        timeout: int = Field(default=30, ge=1, le=300, description="超时时间（秒）")
+
+    def __init__(self, config: dict, context: ProviderContext):
+        super().__init__(config, context)
+
+        # 使用 ConfigSchema 验证配置
+        self.typed_config = self.ConfigSchema(**config)
+
+        # 读取配置
+        self.api_key = self.typed_config.api_key
+        self.timeout = self.typed_config.timeout
+```
+
+---
+
+## 6. 生命周期方法
+
+| 方法 | 调用时机 | InputProvider | DecisionProvider | OutputProvider |
+|------|---------|---------------|-------------------|----------------|
+| `__init__` | 实例化时 | 可选 | **必填 context** | **必填 context** |
+| `init()` | start/setup 时 | 可选 | 可选 | 可选 |
+| `start()` | Manager 启动时 | 必须调用 | 可选 | 可选 |
+| `generate()` | 数据流迭代时 | **必须实现** | - | - |
+| `decide()` | 收到消息时 | - | **必须实现** | - |
+| `execute()` | 收到 Intent 时 | - | - | **必须实现** |
+| `stop()` | Manager 停止时 | 可选 | 可选 | 可选 |
+| `cleanup()` | 资源清理时 | 可选 | 可选 | 可选 |
+
+### 生命周期流程
+
+**InputProvider**:
+```
+1. 实例化 (__init__)
+2. 启动 (start())
+3. 获取数据流 (stream() -> generate())
+4. 停止 (stop() -> cleanup())
+```
+
+**DecisionProvider / OutputProvider**:
+```
+1. 实例化 (__init__)
+2. 启动 (setup/start -> init)
+3. 事件触发 (decide/execute)
+4. 停止 (stop -> cleanup)
+```
+
+---
+
+## 7. 现有 Provider 列表
+
+### InputProvider（8个）
+
+| 名称 | 说明 | 位置 |
+|------|------|------|
+| `console_input` | 控制台输入 | `src/domains/input/providers/console_input/` |
+| `bili_danmaku` | B站弹幕（旧版） | `src/domains/input/providers/bili_danmaku/` |
+| `bili_danmaku_official` | B站弹幕（官方API） | `src/domains/input/providers/bili_danmaku_official/` |
+| `bili_danmaku_official_maicraft` | B站弹幕（Maicraft版） | `src/domains/input/providers/bili_danmaku_official_maicraft/` |
+| `mainosaba` | MainOSABA 捕获 | `src/domains/input/providers/mainosaba/` |
+| `mock_danmaku` | 模拟弹幕（测试用） | `src/domains/input/providers/mock_danmaku/` |
+| `read_pingmu` | 读弹幕功能 | `src/domains/input/providers/read_pingmu/` |
+| `stt` | 语音转文字 | `src/domains/input/providers/stt/` |
+
+### DecisionProvider（4个）
+
+| 名称 | 说明 | 位置 |
+|------|------|------|
+| `maicore` | MaiCore 决策 | `src/domains/decision/providers/maicore/` |
+| `llm` | LLM 决策 | `src/domains/decision/providers/llm/` |
+| `maicraft` | Maicraft 决策 | `src/domains/decision/providers/maicraft/` |
+| `replay` | 回放决策（调试用） | `src/domains/decision/providers/replay/` |
+
+### OutputProvider（12个）
+
+| 名称 | 说明 | 位置 |
+|------|------|------|
+| `edge_tts` | Edge TTS 语音合成 | `src/domains/output/providers/edge_tts/` |
+| `gptsovits` | GPT-SoVITS 语音合成 | `src/domains/output/providers/gptsovits/` |
+| `omni_tts` | Omni TTS | `src/domains/output/providers/omni_tts/` |
+| `subtitle` | 字幕显示 | `src/domains/output/providers/subtitle/` |
+| `vts` | Virtual Tube Studio | `src/domains/output/providers/avatar/vts/` |
+| `warudo` | Warudo | `src/domains/output/providers/avatar/warudo/` |
+| `vrchat` | VRChat | `src/domains/output/providers/avatar/vrchat/` |
+| `sticker` | 表情包 | `src/domains/output/providers/sticker/` |
+| `obs_control` | OBS 控制 | `src/domains/output/providers/obs_control/` |
+| `remote_stream` | 远程流 | `src/domains/output/providers/remote_stream/` |
+| `debug_console` | 调试控制台 | `src/domains/output/providers/debug_console/` |
+| `mock` | 模拟输出（测试用） | `src/domains/output/providers/mock/` |
+
+---
+
+## 8. 类图
+
+### Provider 继承关系
+
+```mermaid
+classDiagram
+    %% 抽象基类
+    class InputProvider {
+        <<abstract>>
+        +config: dict
+        +context: ProviderContext
+        +is_running: bool
+        +event_bus
+        +init() void
+        +start() void
+        +stream() AsyncIterator
+        +generate() AsyncIterator$ *
+        +stop() void
+        +cleanup() void
+    }
+
+    class DecisionProvider {
+        <<abstract>>
+        +config: dict
+        +context: ProviderContext
+        +is_started: bool
+        +event_bus
+        +init() void
+        +start() void
+        +decide(message) void$ *
+        +stop() void
+        +cleanup() void
+    }
+
+    class OutputProvider {
+        <<abstract>>
+        +priority: int = 50
+        +config: dict
+        +context: ProviderContext
+        +is_started: bool
+        +event_bus
+        +audio_stream_channel
+        +init() void
+        +start() void
+        +execute(intent) void$ *
+        +stop() void
+        +cleanup() void
+    }
+
+    %% 具体 Provider 示例
+    class ConsoleInputProvider {
+        +generate() AsyncIterator
+    }
+
+    class LLMPDecisionProvider {
+        +init() void
+        +decide(message) void
+        +cleanup() void
+    }
+
+    class SubtitleOutputProvider {
+        +priority: int = 50
+        +init() void
+        +execute(intent) void
+        +cleanup() void
+    }
+
+    %% 继承关系
+    InputProvider <|-- ConsoleInputProvider
+    DecisionProvider <|-- LLMPDecisionProvider
+    OutputProvider <|-- SubtitleOutputProvider
+
+    %% ProviderContext 依赖
+    InputProvider ..> ProviderContext : depends
+    DecisionProvider ..> ProviderContext : depends
+    OutputProvider ..> ProviderContext : depends
+
+    class ProviderContext {
+        <<dataclass>>
+        +event_bus: Optional[EventBus]
+        +config_service: Optional[ConfigService]
+        +audio_stream_channel: Optional[AudioStreamChannel]
+        +llm_service: Optional[LLMManager]
+        +prompt_service: Optional[PromptManager]
+        +context_service: Optional[ContextService]
+    }
+```
+
+### Provider 注册流程
+
+```mermaid
+sequenceDiagram
+    participant P as Provider 模块
+    participant R as ProviderRegistry
+    participant M as ProviderManager
+    participant C as ConfigService
+
+    Note over P,R: 模块导入时自动注册
+    P->>R: register_input/output/decision()
+    R->>R: 验证 Provider 类型
+    R->>R: 添加到注册表
+
+    Note over M,C: 应用启动时
+    M->>C: 获取配置
+    C->>M: 返回启用的 Provider 列表
+    M->>R: create_input/output/decision()
+    R->>M: 返回 Provider 实例
+    M->>P: new Provider(config, context)
+```
+
+---
+
+## 9. 开发示例
+
+### 9.1 开发 InputProvider
+
+```python
+"""my_input_provider/__init__.py"""
+from src.modules.registry import ProviderRegistry
+from .my_input_provider import MyInputProvider
+
+ProviderRegistry.register_input("my_input", MyInputProvider, source="builtin:my_input")
+```
+
+```python
+"""my_input_provider/my_input_provider.py"""
+from typing import AsyncIterator
+import time
+
+from src.modules.di.context import ProviderContext
+from src.modules.logging import get_logger
+from src.modules.types.base.input_provider import InputProvider
+from src.modules.types.base.normalized_message import NormalizedMessage
+
+
+class MyInputProvider(InputProvider):
+    """我的自定义输入 Provider"""
+
+    def __init__(self, config: dict, context: ProviderContext):
+        super().__init__(config, context)
+        self.logger = get_logger("MyInputProvider")
+
+        # 从配置读取参数
+        self.source_name = config.get("source_name", "my_source")
+
+    async def generate(self) -> AsyncIterator[NormalizedMessage]:
+        """生成 NormalizedMessage 数据流"""
+        self.is_running = True
+
+        while self.is_running:
+            # 从数据源获取数据
+            raw_data = await self._fetch_data()
+
+            if raw_data:
+                # 直接构造 NormalizedMessage
+                yield NormalizedMessage(
+                    text=raw_data["text"],
+                    source=self.source_name,
+                    data_type=raw_data.get("type", "text"),
+                    importance=raw_data.get("importance", 0.5),
+                    timestamp=time.time(),
+                    raw=raw_data,
+                )
+
+            await asyncio.sleep(0.1)
+
+    async def _fetch_data(self) -> dict:
+        """从数据源获取数据（示例）"""
+        # 实现具体的数据获取逻辑
+        pass
+
+    async def cleanup(self) -> None:
+        self.logger.info("MyInputProvider 已清理")
+```
+
+### 9.2 开发 OutputProvider
+
+```python
+"""my_output_provider/__init__.py"""
+from src.modules.registry import ProviderRegistry
+from .my_output_provider import MyOutputProvider
+
+ProviderRegistry.register_output("my_output", MyOutputProvider, source="builtin:my_output")
+```
+
+```python
+"""my_output_provider/my_output_provider.py"""
+from pydantic import Field
+from src.modules.config.schemas.base import BaseProviderConfig
+from src.modules.di.context import ProviderContext
+from src.modules.logging import get_logger
+from src.modules.types import Intent
+from src.modules.types.base.output_provider import OutputProvider
+
+
+class MyOutputProvider(OutputProvider):
+    """我的自定义输出 Provider"""
+
+    class ConfigSchema(BaseProviderConfig):
+        type: str = "my_output"
+        api_endpoint: str = Field(default="http://localhost:8080", description="API 端点")
+
+    def __init__(self, config: dict, context: ProviderContext):
+        super().__init__(config, context)
+        self.logger = get_logger("MyOutputProvider")
+
+        # 使用 ConfigSchema 验证配置
+        self.typed_config = self.ConfigSchema(**config)
+        self.api_endpoint = self.typed_config.api_endpoint
+
+    async def init(self) -> None:
+        """初始化 Provider"""
+        self.logger.info(f"初始化 MyOutputProvider: {self.api_endpoint}")
+
+    async def execute(self, intent: Intent) -> None:
+        """执行意图"""
+        self.logger.debug(f"收到意图: {intent.response_text}")
+
+        # 处理 Intent
+        response_text = intent.response_text
+        emotion = intent.emotion
+        actions = intent.actions
+
+        # 执行输出逻辑
+        await self._render(response_text, emotion, actions)
+
+    async def _render(self, text: str, emotion, actions) -> None:
+        """渲染输出（示例）"""
+        # 实现具体的渲染逻辑
+        pass
+```
+
+---
+
+## 10. 最佳实践
+
+### 10.1 配置验证
+
+始终使用 Pydantic ConfigSchema 进行配置验证：
+
+```python
+class MyProvider(OutputProvider):
+    class ConfigSchema(BaseProviderConfig):
+        type: str = "my_provider"
+        # 使用 Field 定义验证规则
+        timeout: int = Field(default=30, ge=1, le=300)
+        api_key: str = Field(min_length=8)
+```
+
+### 10.2 日志记录
+
+使用统一的日志记录器：
+
+```python
+from src.modules.logging import get_logger
+
+class MyProvider(OutputProvider):
+    def __init__(self, config: dict, context: ProviderContext):
+        super().__init__(config, context)
+        self.logger = get_logger(self.__class__.__name__)
+```
+
+### 10.3 错误处理
+
+实现健壮的错误处理和降级机制：
+
+```python
+async def execute(self, intent: Intent) -> None:
+    try:
+        await self._render(intent)
+    except Exception as e:
+        self.logger.error(f"渲染失败: {e}", exc_info=True)
+        # 实现降级逻辑
+        await self._fallback_render(intent)
+```
+
+### 10.4 资源清理
+
+确保在 `cleanup()` 方法中释放所有资源：
+
+```python
+async def cleanup(self) -> None:
+    # 关闭连接
+    if self._connection:
+        await self._connection.close()
+
+    # 取消任务
+    if self._task:
+        self._task.cancel()
+
+    self.logger.info("MyProvider 已清理")
+```
+
+---
+
+## 相关文档
+
+- [3 域架构](docs/architecture/overview.md)
+- [数据流规则](docs/architecture/data-flow.md)
+- [事件系统](docs/architecture/event-system.md)
+- [管道开发](docs/development/pipeline-guide.md)
+- [提示词管理](docs/development/prompt-management.md)
+
+---
+
+*最后更新：2026-02-15*

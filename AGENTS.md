@@ -11,6 +11,7 @@
 | 快速上手项目 | [快速开始](docs/getting-started.md) |
 | 了解代码规范 | [开发规范](docs/development-guide.md) |
 | 理解架构设计 | [3域架构](docs/architecture/overview.md) |
+| 理解事件系统 | [事件系统](docs/architecture/event-system.md) |
 | 开发 Provider | [Provider 开发](docs/development/provider-guide.md) |
 | 开发 Pipeline | [管道开发](docs/development/pipeline-guide.md) |
 | 管理提示词 | [提示词管理](docs/development/prompt-management.md) |

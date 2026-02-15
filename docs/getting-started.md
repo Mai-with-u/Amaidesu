@@ -1,216 +1,197 @@
 # 快速开始
 
-本文档帮助你快速设置开发环境并运行 Amaidesu 项目。
+Amaidesu 是一个 VTuber 直播辅助工具，支持弹幕互动、语音合成、虚拟形象控制等功能。本指南将帮助你快速上手。
 
-## 前置要求
+## 1. 环境要求
 
-- Python 3.10+
-- [uv](https://docs.astral.sh/uv/) - Python 包管理器
+- Python 3.12+
+- uv 包管理器
 
-## 安装步骤
+## 2. 安装步骤
 
-### 1. 安装 uv
+### 2.1 安装 uv（Windows）
 
-**Windows (PowerShell)**:
 ```powershell
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
-**macOS/Linux**:
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-### 2. 克隆项目
+### 2.2 克隆仓库
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/ChangingSelf/Amaidesu.git
 cd Amaidesu
 ```
 
-### 3. 同步依赖
+### 2.3 同步依赖
 
 ```bash
-# 基础依赖
 uv sync
-
-# 包含语音识别（STT）
-uv sync --extra stt
-
-# 所有可选依赖
-uv sync --all-extras
 ```
 
-### 4. 配置项目
-
-首次运行会自动生成配置文件：
-
-```bash
-# 生成默认配置
-cp config-template.toml config.toml
-
-# 编辑配置
-# 根据需要修改 config.toml
-```
-
-## 运行项目
-
-### 正常运行
+### 2.4 首次运行
 
 ```bash
 uv run python main.py
 ```
 
-### 调试模式
+首次运行会自动从模板生成 `config.toml` 文件。
+
+### 2.5 编辑配置文件
+
+打开生成的 `config.toml` 文件，填写必要的配置项：
+
+#### LLM 配置（必需）
+
+```toml
+[llm]
+api_key = "your-api-key"        # 你的 OpenAI API Key
+base_url = "https://api.openai.com/v1"  # 或其他兼容 API 地址
+model = "gpt-4"                 # 使用的模型
+```
+
+#### 输入 Provider 配置
+
+```toml
+[providers.input]
+enabled_inputs = [
+    "console_input",            # 控制台输入（测试用）
+    # "bili_danmaku",          # B站弹幕
+    # "stt",                   # 语音输入
+]
+```
+
+#### 输出 Provider 配置
+
+```toml
+[providers.output]
+enabled_outputs = [
+    "subtitle",                 # 字幕输出
+    "vts",                     # VTS 控制
+    # "tts",                   # Edge TTS 语音
+    # "avatar",                # 虚拟形象
+]
+```
+
+#### 决策 Provider 配置
+
+```toml
+[providers.decision]
+active_provider = "maicore"     # 使用 MaiCore 决策
+```
+
+### 2.6 再次运行
+
+配置完成后，重新启动程序：
 
 ```bash
-# 显示详细日志
+uv run python main.py
+```
+
+## 3. 配置说明
+
+### 3.1 主要配置段
+
+| 配置段 | 说明 |
+|--------|------|
+| `[llm]` | 标准 LLM 配置（用于高质量任务） |
+| `[llm_fast]` | 快速 LLM 配置（用于低延迟任务） |
+| `[vlm]` | 视觉语言模型配置（图像理解） |
+| `[providers.input]` | 输入 Provider 列表 |
+| `[providers.output]` | 输出 Provider 列表 |
+| `[providers.decision]` | 决策 Provider 选择 |
+| `[pipelines.*]` | 消息处理管道配置 |
+| `[logging]` | 日志配置 |
+
+### 3.2 Provider 类型
+
+| 类型 | 说明 | 示例 |
+|------|------|------|
+| InputProvider | 数据采集 | 弹幕、语音、控制台 |
+| DecisionProvider | 决策生成 | MaiCore、LLM |
+| OutputProvider | 渲染输出 | TTS、字幕、虚拟形象 |
+
+### 3.3 可用 Provider 列表
+
+**输入 Provider：**
+- `console_input` - 控制台输入（开发测试）
+- `bili_danmaku` - B站弹幕
+- `bili_danmaku_official` - B站官方弹幕
+- `stt` - 语音转文字
+
+**决策 Provider：**
+- `maicore` - MaiCore 决策服务
+- `llm` - 直接使用 LLM 生成回复
+- `maicraft` - 弹幕游戏决策
+
+**输出 Provider：**
+- `subtitle` - 字幕显示
+- `vts` - VTS 控制
+- `tts` - Edge TTS 语音
+- `omni_tts` - GPT-SoVITS 语音
+- `avatar` - 虚拟形象
+- `obs_control` - OBS 控制
+
+## 4. 常用命令
+
+### 4.1 运行应用
+
+```bash
+# 正常运行
+uv run python main.py
+
+# 调试模式（显示详细日志）
 uv run python main.py --debug
 
-# 过滤特定模块的日志（只显示指定模块）
+# 过滤日志（只显示指定模块）
 uv run python main.py --filter EdgeTTSProvider SubtitleProvider
-
-# 调试模式并过滤特定模块
-uv run python main.py --debug --filter VTSProvider
 ```
 
-## 测试
-
-### 运行所有测试
+### 4.2 代码质量
 
 ```bash
+# 运行测试
 uv run pytest tests/
-```
 
-### 运行特定测试
-
-```bash
-# 特定文件
-uv run pytest tests/layers/input/test_console_provider.py
-
-# 特定用例
-uv run pytest tests/layers/input/test_console_provider.py::test_console_provider_basic
-
-# 详细输出
-uv run pytest tests/ -v
-
-# 只运行标记的测试
-uv run pytest -m "not slow"
-```
-
-## 代码质量
-
-### 代码检查
-
-```bash
+# 代码检查
 uv run ruff check .
-```
 
-### 代码格式化
-
-```bash
+# 代码格式化
 uv run ruff format .
-```
 
-### 自动修复
-
-```bash
+# 自动修复
 uv run ruff check --fix .
 ```
 
-## 常用命令
-
-### 包管理
+### 4.3 包管理
 
 ```bash
-# 添加新依赖
+# 添加依赖
 uv add package-name
-
-# 添加开发依赖
-uv add --dev package-name
 
 # 移除依赖
 uv remove package-name
-
-# 升级特定依赖
-uv lock --upgrade-package package-name
 ```
 
-### 运行特定脚本
+## 5. 快速验证
 
-```bash
-# 模拟服务器（没有MaiCore时使用）
-uv run python mock_maicore.py
-```
-
-## 目录结构
+启动后，检查日志输出确保以下组件正常初始化：
 
 ```
-Amaidesu/
-├── main.py              # CLI 入口
-├── config-template.toml # 配置模板
-├── config.toml          # 实际配置（首次运行生成）
-├── src/                 # 源代码
-│   ├── amaidesu_core.py # 核心协调器
-│   ├── modules/         # 核心基础设施（跨域共享）
-│   ├── services/        # 共享服务（LLM、配置、上下文）
-│   ├── prompts/         # 提示词管理
-│   └── domains/         # 业务域（input/decision/output）
-├── tests/               # 测试
-└── docs/                # 文档
+[Info] Provider注册完成: Input=X, Decision=X, Output=X
+[Info] 配置验证通过
+[Info] 初始化输入Provider管理器（Input Domain）...
+[Info] 初始化决策域组件（Decision Domain）...
+[Info] 初始化输出Provider管理器...
+[Info] 应用程序正在运行。
 ```
 
-## 下一步
+如果看到错误信息，请检查：
+1. API 密钥是否正确配置
+2. 网络连接是否正常
+3. 配置文件格式是否正确
 
-- 阅读 [开发规范](development-guide.md) 了解代码风格
-- 阅读 [3域架构总览](architecture/overview.md) 理解项目架构
-- 阅读 [Provider 开发指南](development/provider-guide.md) 学习如何开发新功能
-- 查看 [插件迁移完成文档](../plugins_backup/MIGRATION_COMPLETE.md) 了解架构迁移历史
+## 6. 下一步
 
-## 新增 Provider（2026-02-09）
-
-项目已完成从插件系统到 Provider 架构的重构，新增以下 Provider：
-
-### 输入 Provider
-- **STTInputProvider**: 语音转文字（讯飞ASR + Silero VAD）
-- **BiliDanmakuOfficialInputProvider**: B站官方弹幕
-- **ReadPingmuInputProvider**: 读屏木输入
-- **BiliDanmakuOfficialMaicraftInputProvider**: B站官方弹幕 Maicraft 版本
-
-### 决策 Provider
-- **MaiCoreDecisionProvider**: MaiBot 核心决策
-- **LLMDecisionProvider**: 本地 LLM 决策
-- **MaicraftDecisionProvider**: 弹幕互动游戏决策
-
-### 输出 Provider
-- **EdgeTTSProvider**: Edge TTS 语音合成
-- **GPTSoVITSOutputProvider**: GPT-SoVITS 高质量语音合成
-- **OmniTTSProvider**: Fish TTS 语音合成
-- **VTSProvider**: VTS 虚拟形象控制
-- **VRChatProvider**: VRChat OSC 协议控制
-- **WarudoOutputProvider**: Warudo 虚拟主播控制
-- **SubtitleOutputProvider**: 字幕输出
-- **StickerOutputProvider**: 贴纸输出
-- **ObsControlOutputProvider**: OBS 控制（文本显示、场景切换）
-- **RemoteStreamOutputProvider**: 远程流媒体输出
-
-### 共享服务
-- **DGLabService**: DG-LAB 硬件控制服务
-
-### 平台适配器
-- **VRChatAdapter**: VRChat OSC 协议适配器
-
-详细的配置示例和使用说明，请参考：
-- [Provider 开发指南 - 新增 Provider 详细说明](development/provider-guide.md#新增-provider-详细说明)
-- [config-template.toml](../config-template.toml) 中的配置示例
-
-## 遇到问题？
-
-1. **依赖安装失败** → 确保 uv 和 Python 版本正确
-2. **配置文件问题** → 检查 `config.toml` 格式
-3. **运行时错误** → 使用 `--debug` 模式查看详细日志
-4. **测试失败** → 运行 `uv run pytest tests/ -v` 查看详细输出
-
----
-
-*更多详细信息，参见其他文档。*
+- 了解架构设计：[3域架构](architecture/overview.md)
+- 学习开发规范：[开发规范](development-guide.md)
+- 查看 Provider 开发指南：[Provider 开发](development/provider-guide.md)
