@@ -4,6 +4,7 @@ Sticker Output Provider
 贴纸输出Provider，处理表情图片并发送到VTS。
 """
 
+import asyncio
 import base64
 import io
 import time
@@ -212,11 +213,9 @@ class StickerOutputProvider(OutputProvider):
 
                 if instance_id:
                     self._current_sticker_id = instance_id
-                    self.logger.info(f"贴纸已加载到VTS: {instance_id}")
+                    self.logger.debug(f"贴纸已加载到VTS: {instance_id}")
 
                     # 设置自动卸载任务
-                    import asyncio
-
                     self._unload_task = asyncio.create_task(self._delayed_unload())
                 else:
                     self.logger.error("贴纸加载失败")
@@ -239,8 +238,6 @@ class StickerOutputProvider(OutputProvider):
 
     async def _delayed_unload(self):
         """延迟卸载贴纸"""
-        import asyncio
-
         try:
             await asyncio.sleep(self.display_duration_seconds)
             await self._unload_current_sticker()

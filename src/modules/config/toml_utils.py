@@ -11,6 +11,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from packaging import version as pkg_version
+
 try:
     import tomllib
 except ImportError:
@@ -433,8 +435,6 @@ def mark_key_as_deleted(document: tomlkit.TOMLDocument, section: str, key: str) 
 def compare_versions(template_version: str, config_version: str) -> bool:
     """比较版本号，返回 True 表示模板版本更高"""
     try:
-        from packaging import version as pkg_version
-
         return pkg_version.parse(template_version) > pkg_version.parse(config_version)
     except Exception:
         logger.warning("版本号格式比较失败，默认认为需要更新", exc_info=True)

@@ -193,7 +193,7 @@ class MaicraftDecisionProvider(DecisionProvider):
                 # 不是命令，返回
                 return
 
-            self.logger.info(f"收到命令: {command.name} (参数: {command.args})")
+            self.logger.debug(f"收到命令: {command.name} (参数: {command.args})")
 
             # 检查是否支持该命令
             if not self.action_registry.is_supported_command(command.name):
@@ -345,7 +345,7 @@ class MaicraftDecisionProvider(DecisionProvider):
             source="MaicraftDecisionProvider",
         )
 
-        self.logger.info("已发布 decision.intent 事件")
+        self.logger.debug("已发布 decision.intent 事件")
 
     @classmethod
     def get_registration_info(cls) -> dict:

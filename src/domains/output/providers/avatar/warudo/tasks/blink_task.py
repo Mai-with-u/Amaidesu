@@ -103,7 +103,7 @@ class BlinkTask:
         try:
             # 检查是否有其他眼部动作正在进行
             if not self.state_manager.eye_state.can_blink():
-                self.logger.info("当前有其他眼部动作，跳过眨眼")
+                self.logger.debug("当前有其他眼部动作，跳过眨眼")
                 return
 
             # 记录眨眼前的状态（用于恢复）

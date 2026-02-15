@@ -11,7 +11,7 @@ ConfigService - 统一的配置管理服务
 
 from typing import Any, Dict, Literal, Optional
 
-from src.modules.config.config_utils import initialize_configurations
+from src.modules.config.config_utils import initialize_configurations, load_config
 from src.modules.logging import get_logger
 
 
@@ -124,8 +124,6 @@ class ConfigService:
                 if updated:
                     self.logger.info(f"配置文件已更新: {message}")
                     # 重新加载更新后的配置
-                    from src.modules.config.config_utils import load_config
-
                     self._main_config = load_config("config.toml", self.base_dir)
                     main_config_updated = True
                 else:

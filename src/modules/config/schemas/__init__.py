@@ -16,6 +16,10 @@ from .output_providers import (
     get_output_provider_config,
 )
 
+from src.modules.logging import get_logger
+
+logger = get_logger(__name__)
+
 # Provider Schema Registry
 PROVIDER_SCHEMA_REGISTRY: Dict[str, Type[BaseModel]] = {}
 
@@ -53,8 +57,8 @@ def get_provider_schema(provider_type: str, provider_layer: str = None) -> Type[
             from src.domains.output import providers as _  # noqa: F401
         elif provider_layer == "decision":
             from src.domains.decision import providers as _  # noqa: F401
-    except ImportError:
-        pass
+    except ImportError as e:
+        logger.debug(f"导入 providers 包失败: {e}")
 
     # 重新尝试获取
     schema = ProviderRegistry.get_config_schema(provider_type)

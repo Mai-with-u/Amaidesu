@@ -13,6 +13,9 @@ from pathlib import Path
 from string import Template
 from typing import Any, Dict, Optional
 
+import frontmatter
+import re
+
 from pydantic import BaseModel, Field
 
 from src.modules.logging import get_logger
@@ -82,8 +85,6 @@ class PromptTemplate(BaseModel):
         Example:
             提取 "## User Message" section
         """
-        import re
-
         # 先渲染整个模板
         rendered = self.render(**kwargs)
 
@@ -108,8 +109,6 @@ class PromptTemplate(BaseModel):
         Example:
             获取系统消息（排除 "User Message" section）
         """
-        import re
-
         # 先渲染整个模板
         rendered = self.render(**kwargs)
 
@@ -241,8 +240,6 @@ class PromptManager:
             ---
             实际内容
         """
-        import frontmatter
-
         try:
             post = frontmatter.loads(content)
             metadata = dict(post.metadata)

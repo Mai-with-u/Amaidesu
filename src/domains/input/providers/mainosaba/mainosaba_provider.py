@@ -108,7 +108,7 @@ class MainosabaInputProvider(InputProvider):
                     if self.waiting_for_response:
                         # 检查是否超时
                         if time.time() - self.last_message_time > self.typed_config.response_timeout:
-                            self.logger.info("等待回应超时，继续游戏")
+                            self.logger.debug("等待回应超时，继续游戏")
                             await self.advance_game()
                             self.waiting_for_response = False
                     else:
@@ -122,7 +122,7 @@ class MainosabaInputProvider(InputProvider):
                         elif game_text == self.last_game_text:
                             self.logger.debug("识别到的文本与上次相同，跳过")
                         else:
-                            self.logger.info(f"检测到新游戏文本: {game_text[:50]}...")
+                            self.logger.debug(f"检测到新游戏文本: {game_text[:50]}...")
                             # 直接创建 NormalizedMessage
                             yield NormalizedMessage(
                                 text=game_text,
@@ -236,15 +236,15 @@ class MainosabaInputProvider(InputProvider):
                 # 鼠标点击指定位置
                 x, y = click_position
                 pyautogui.click(x, y)
-                self.logger.info(f"已点击位置 ({x}, {y}) 推进游戏")
+                self.logger.debug(f"已点击位置 ({x}, {y}) 推进游戏")
             elif control_method == ControlMethod.ENTER_KEY:
                 # 按Enter键
                 pyautogui.press("enter")
-                self.logger.info("已按Enter键推进游戏")
+                self.logger.debug("已按Enter键推进游戏")
             elif control_method == ControlMethod.SPACE_KEY:
                 # 按空格键
                 pyautogui.press("space")
-                self.logger.info("已按空格键推进游戏")
+                self.logger.debug("已按空格键推进游戏")
 
             # 等待一下让游戏界面更新
             await asyncio.sleep(0.5)

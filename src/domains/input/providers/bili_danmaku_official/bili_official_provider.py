@@ -201,7 +201,7 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
     def _create_normalized_message(self, bili_msg: BiliBaseMessage) -> NormalizedMessage:
         """从 B 站消息构造 NormalizedMessage"""
         if isinstance(bili_msg, DanmakuMessage):
-            self.logger.info(f"[弹幕] {bili_msg.uname}: {bili_msg.msg}")
+            self.logger.debug(f"[弹幕] {bili_msg.uname}: {bili_msg.msg}")
             return NormalizedMessage(
                 text=bili_msg.msg,
                 source="bili_danmaku_official",
@@ -212,7 +212,7 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
             )
 
         elif isinstance(bili_msg, EnterMessage):
-            self.logger.info(f"[进入] {bili_msg.uname} 进入了直播间")
+            self.logger.debug(f"[进入] {bili_msg.uname} 进入了直播间")
             return NormalizedMessage(
                 text=f"{bili_msg.uname} 进入了直播间",
                 source="bili_danmaku_official",
@@ -225,7 +225,7 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
         elif isinstance(bili_msg, GiftMessage):
             gift_name = bili_msg.gift_name or "礼物"
             description = f"{bili_msg.uname} 送出了 {bili_msg.gift_num} 个 {gift_name}"
-            self.logger.info(f"[礼物] {description}")
+            self.logger.debug(f"[礼物] {description}")
             return NormalizedMessage(
                 text=description,
                 source="bili_danmaku_official",
@@ -239,7 +239,7 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
             guard_level_map = {1: "总督", 2: "提督", 3: "舰长"}
             guard_name = guard_level_map.get(bili_msg.guard_level, "大航海")
             description = f"{bili_msg.uname} 开通了 {guard_name}"
-            self.logger.info(f"[大航海] {description}")
+            self.logger.debug(f"[大航海] {description}")
             importance_scores = {1: 1.0, 2: 0.9, 3: 0.8}
             return NormalizedMessage(
                 text=description,
@@ -257,7 +257,7 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
             else:
                 description = f"[SC {bili_msg.rmb}元] {bili_msg.uname} 发送了醒目留言"
                 text = description
-            self.logger.info(f"[SC] {description}")
+            self.logger.debug(f"[SC] {description}")
             importance = min(0.5 + bili_msg.rmb / 100, 1.0)
             return NormalizedMessage(
                 text=text,

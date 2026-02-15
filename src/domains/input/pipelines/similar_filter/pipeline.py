@@ -204,7 +204,7 @@ class SimilarFilterTextPipeline(TextPipelineBase):
         self._text_cache.clear()
         self._last_cleanup_time = time.time()
         self.reset_stats()
-        self.logger.info("SimilarFilterTextPipeline 已重置状态")
+        self.logger.debug("SimilarFilterTextPipeline 已重置状态")
 
 
 # ==================== MessagePipeline 版本 ====================
@@ -360,4 +360,4 @@ class SimilarFilterMessagePipeline(MessagePipelineBase):
         self._text_cache.clear()
         self._last_cleanup_time = time.time()
         self.reset_stats()
-        self.logger.info("SimilarFilterMessagePipeline 已重置状态")
+        self.logger.debug("SimilarFilterMessagePipeline 已重置状态")

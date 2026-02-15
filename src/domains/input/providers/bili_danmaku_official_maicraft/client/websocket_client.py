@@ -80,7 +80,7 @@ class BiliWebSocketClient:
 
     async def close(self):
         """关闭WebSocket连接"""
-        self.logger.info("正在关闭WebSocket连接...")
+        self.logger.debug("正在关闭WebSocket连接...")
         self.is_running = False
 
         # 取消后台任务

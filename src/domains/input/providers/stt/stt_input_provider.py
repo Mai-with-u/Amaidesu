@@ -341,7 +341,7 @@ class STTInputProvider(InputProvider):
                         time.monotonic() - self._silence_started_time > self.min_silence_duration_ms / 1000.0
                     ):
                         if self._active_ws:
-                            self.logger.info(f"静音超过阈值 ({self.min_silence_duration_ms}ms)，结束话语")
+                            self.logger.debug(f"静音超过阈值 ({self.min_silence_duration_ms}ms)，结束话语")
                             if speech_chunk_count > 0:
                                 await self._close_iflytek_connection(send_last_frame=True)
                             else:
@@ -377,7 +377,7 @@ class STTInputProvider(InputProvider):
                     # 检测到语音
                     if not self._is_speaking:
                         # 话语开始
-                        self.logger.info(f"VAD: 话语开始 (Prob: {speech_prob:.2f})")
+                        self.logger.debug(f"VAD: 话语开始 (Prob: {speech_prob:.2f})")
                         self._is_speaking = True
                         self._silence_started_time = None
                         speech_chunk_count = 0
@@ -438,7 +438,7 @@ class STTInputProvider(InputProvider):
                     elif self._silence_started_time is not None:
                         if now - self._silence_started_time > self.min_silence_duration_ms / 1000.0:
                             if self._active_ws:
-                                self.logger.info(f"静音阈值已达到 ({self.min_silence_duration_ms}ms)，结束话语")
+                                self.logger.debug(f"静音阈值已达到 ({self.min_silence_duration_ms}ms)，结束话语")
                                 if speech_chunk_count > 0:
                                     await self._close_iflytek_connection(send_last_frame=True)
                                 else:
@@ -493,7 +493,7 @@ class STTInputProvider(InputProvider):
         # 建立新连接
         try:
             auth_url = self._build_iflytek_auth_url()
-            self.logger.info("连接到讯飞 WebSocket...")
+            self.logger.debug("连接到讯飞 WebSocket...")
 
             ssl_context = ssl.create_default_context()
             self._active_ws = await self._session.ws_connect(
@@ -545,7 +545,7 @@ class STTInputProvider(InputProvider):
                 receiver_task_to_await.cancel()
             return
 
-        self.logger.info(f"关闭讯飞连接 (发送结束帧: {send_last_frame})...")
+        self.logger.debug(f"关闭讯飞连接 (发送结束帧: {send_last_frame})...")
 
         try:
             if send_last_frame:
@@ -567,7 +567,7 @@ class STTInputProvider(InputProvider):
                     self.logger.error(f"等待接收器任务出错: {e}", exc_info=True)
 
             await ws_to_close.close()
-            self.logger.info(f"讯飞连接已关闭 (代码: {ws_to_close.close_code})")
+            self.logger.debug(f"讯飞连接已关闭 (代码: {ws_to_close.close_code})")
 
         except Exception as e:
             self.logger.error(f"关闭连接出错: {e}", exc_info=True)
@@ -624,7 +624,7 @@ class STTInputProvider(InputProvider):
                         )
                         if status == STATUS_LAST_FRAME:
                             full_text = self.full_text.strip()
-                            self.logger.info(f"讯飞识别结果: '{full_text}'")
+                            self.logger.debug(f"讯飞识别结果: '{full_text}'")
 
                             if full_text and not utterance_failed:
                                 # 将结果放入队列

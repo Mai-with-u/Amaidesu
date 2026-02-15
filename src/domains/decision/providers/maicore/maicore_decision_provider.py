@@ -282,7 +282,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
 
         try:
             await self._router_adapter.send(message)
-            self.logger.info(f"消息已发送至 MaiCore (id: {message.message_info.message_id})")
+            self.logger.debug(f"消息已发送至 MaiCore (id: {message.message_info.message_id})")
         except Exception as e:
             self.logger.error(f"发送消息到 MaiCore 时发生错误: {e}", exc_info=True)
 
@@ -296,7 +296,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
             message_data: 消息数据（字典格式）
         """
         # 打印收到的完整消息（所有字段）
-        self.logger.info(f"收到 MaiCore 原始消息: {message_data}")
+        self.logger.debug(f"收到 MaiCore 原始消息: {message_data}")
         # 在新任务中处理以避免阻塞
         asyncio.create_task(self._process_maicore_message(message_data))
 
@@ -323,7 +323,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
         message_id = message.message_info.message_id
         response_text = self._extract_text_from_response(message)
 
-        self.logger.info(f"收到 MaiCore 消息: message_id={message_id}, text={response_text}")
+        self.logger.debug(f"收到 MaiCore 消息: message_id={message_id}, text={response_text}")
         self.logger.debug(f"完整消息: {message_data}")
 
         # 检查消息是否是 MaiCore 的响应（有 message_segment 且有内容）
@@ -360,7 +360,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
             source="MaiCoreDecisionProvider",
         )
 
-        self.logger.info("已发布 decision.intent 事件")
+        self.logger.debug("已发布 decision.intent 事件")
 
     def _parse_intent_from_maicore_response(self, response: MessageBase) -> Intent:
         """

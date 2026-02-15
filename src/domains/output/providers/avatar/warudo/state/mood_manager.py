@@ -99,7 +99,7 @@ class MoodManager:
                 has_changes = True
 
         if has_changes:
-            self.logger.info(f"心情状态已更新: {self.current_mood}")
+            self.logger.debug(f"心情状态已更新: {self.current_mood}")
             # 根据新心情更新表情
             self._update_expression_by_mood()
 
@@ -112,7 +112,7 @@ class MoodManager:
             new_expression = self._select_expression_by_mood()
 
             if new_expression != self.current_expression:
-                self.logger.info(f"表情变化: {self.current_expression} → {new_expression}")
+                self.logger.debug(f"表情变化: {self.current_expression} → {new_expression}")
                 self.current_expression = new_expression
 
                 # 应用新表情
@@ -133,13 +133,13 @@ class MoodManager:
         dominant_emotion = max(self.current_mood, key=self.current_mood.get)
         dominant_value = self.current_mood[dominant_emotion]
 
-        self.logger.info(
+        self.logger.debug(
             f"情绪分析: joy={self.current_mood['joy']}, "
             f"anger={self.current_mood['anger']}, "
             f"sorrow={self.current_mood['sorrow']}, "
             f"fear={self.current_mood['fear']}"
         )
-        self.logger.info(f"主导情绪: {dominant_emotion}({dominant_value})")
+        self.logger.debug(f"主导情绪: {dominant_emotion}({dominant_value})")
 
         # 根据情绪强度和类型选择表情
         if dominant_emotion == "joy":
@@ -172,7 +172,7 @@ class MoodManager:
             candidates = [k for k in self.expression_combinations if k.startswith(expression_name)]
             if len(candidates) > 1:
                 chosen = random.choice(candidates)
-                self.logger.info(f"表情前缀 '{expression_name}' 有多个候选，随机选择: {chosen}")
+                self.logger.debug(f"表情前缀 '{expression_name}' 有多个候选，随机选择: {chosen}")
                 expression_name = chosen
 
             if expression_name not in self.expression_combinations:
@@ -185,7 +185,7 @@ class MoodManager:
             for part, action in expression_config.items():
                 weight = action.get("weight", 1)
                 action_value = action.get("action", "")
-                self.logger.info(f"应用表情 '{expression_name}' 的 {part} 状态: {action_value} (权重: {weight})")
+                self.logger.debug(f"应用表情 '{expression_name}' 的 {part} 状态: {action_value} (权重: {weight})")
                 if part == "eye":
                     self.state_manager.eye_state.set_first_layer(action_value, weight=weight)
                 elif part == "eyebrow":
@@ -193,7 +193,7 @@ class MoodManager:
                 elif part == "mouth":
                     self.state_manager.mouth_state.set_first_layer(action_value, weight=weight)
 
-            self.logger.info(f"应用表情 '{expression_name}'")
+            self.logger.debug(f"应用表情 '{expression_name}'")
 
         except Exception as e:
             self.logger.error(f"应用表情 '{expression_name}' 时出错: {e}", exc_info=True)

@@ -144,7 +144,7 @@ class BiliDanmakuInputProvider(InputProvider):
 
                     if new_danmakus:
                         new_danmakus.sort(key=lambda x: x.get("check_info", {}).get("ts", 0))
-                        self.logger.info(f"收到 {len(new_danmakus)} 条新弹幕")
+                        self.logger.debug(f"收到 {len(new_danmakus)} 条新弹幕")
 
                         for item in new_danmakus:
                             normalized_msg = await self._create_danmaku_message(item)

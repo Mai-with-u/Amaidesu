@@ -205,15 +205,15 @@ class WarudoOutputProvider(AvatarProviderBase):
         """断开Warudo WebSocket连接"""
         # 停止眨眼任务
         await self.blink_task.stop()
-        self.logger.info("眨眼任务已停止")
+        self.logger.debug("眨眼任务已停止")
 
         # 停止眼部移动任务
         await self.shift_task.stop()
-        self.logger.info("眼部移动任务已停止")
+        self.logger.debug("眼部移动任务已停止")
 
         # 停止状态监控
         self.state_manager.stop_monitoring()
-        self.logger.info("状态管理器监控已停止")
+        self.logger.debug("状态管理器监控已停止")
 
         # 取消WebSocket连接任务
         if self._connection_task and not self._connection_task.done():
@@ -227,7 +227,7 @@ class WarudoOutputProvider(AvatarProviderBase):
         if self.websocket:
             try:
                 await asyncio.wait_for(self.websocket.close(), timeout=2.0)
-                self.logger.info("Warudo WebSocket连接已关闭")
+                self.logger.debug("Warudo WebSocket连接已关闭")
             except asyncio.TimeoutError:
                 self.logger.warning("WebSocket关闭超时")
             finally:
@@ -254,7 +254,7 @@ class WarudoOutputProvider(AvatarProviderBase):
                 self._is_connected = False
                 self.websocket = None
                 action_sender.set_websocket(None)
-                self.logger.info("WebSocket断开，但服务继续运行")
+                self.logger.debug("WebSocket断开，但服务继续运行")
                 await asyncio.sleep(5)
 
     # ==================== 辅助方法 ====================
@@ -346,7 +346,7 @@ class WarudoOutputProvider(AvatarProviderBase):
                 has_changes = True
 
         if has_changes:
-            self.logger.info(f"心情状态已更新: {self.current_mood}")
+            self.logger.debug(f"心情状态已更新: {self.current_mood}")
             # 更新心情管理器
             self.mood_manager.update_mood(mood_data)
 

@@ -263,7 +263,7 @@ class VRChatProvider(AvatarProviderBase):
             # VRChat OSC 地址: /avatar/parameters/VRCEmote
             address = "/avatar/parameters/VRCEmote"
             self.osc_client.send_message(address, gesture_value)
-            self.logger.info(f"触发 VRChat 手势: {gesture_name} (value: {gesture_value})")
+            self.logger.debug(f"触发 VRChat 手势: {gesture_name} (value: {gesture_value})")
         except Exception as e:
             self.logger.error(f"触发 VRChat 手势失败: {gesture_name}: {e}")
 

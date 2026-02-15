@@ -309,7 +309,7 @@ class TokenUsageManager:
 
         # 记录日志
         cost_msg = f"，费用: {cost_info['cost']:.6f}" if cost_info["has_price"] else "，无价格配置"
-        self.logger.info(f"模型: {model_name},[{prompt_tokens}+{completion_tokens}][{cost_msg}]")
+        self.logger.debug(f"模型: {model_name},[{prompt_tokens}+{completion_tokens}][{cost_msg}]")
 
     def get_usage_summary(self, model_name: str) -> Dict[str, Any]:
         """获取指定模型的使用量摘要

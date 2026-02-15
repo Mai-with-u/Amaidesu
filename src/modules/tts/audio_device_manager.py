@@ -167,7 +167,7 @@ class AudioDeviceManager:
         if device_index is None:
             device_index = self.output_device_index
 
-        self.logger.info(f"开始播放音频 (设备索引: {device_index}, 采样率: {samplerate})...")
+        self.logger.debug(f"开始播放音频 (设备索引: {device_index}, 采样率: {samplerate})...")
 
         try:
             # 停止现有播放
@@ -188,7 +188,7 @@ class AudioDeviceManager:
             sd.stop()
             self.is_playing = False
 
-            self.logger.info("音频播放完成")
+            self.logger.debug("音频播放完成")
 
         except Exception as e:
             self.logger.error(f"音频播放失败: {e}", exc_info=True)

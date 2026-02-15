@@ -120,7 +120,7 @@ class ReplayDecisionProvider(DecisionProvider):
         # 发布 decision.intent 事件
         await self._publish_intent(intent)
 
-        self.logger.info(f"已重放消息 (总计: {self._total_messages})")
+        self.logger.debug(f"已重放消息 (总计: {self._total_messages})")
 
     async def _publish_intent(self, intent: Intent) -> None:
         """

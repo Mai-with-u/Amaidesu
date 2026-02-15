@@ -371,7 +371,7 @@ class RemoteStreamOutputProvider(OutputProvider):
 
     async def _handle_connection(self, websocket):
         """处理客户端连接"""
-        self.logger.info(f"新客户端连接: {websocket.remote_address}")
+        self.logger.debug(f"新客户端连接: {websocket.remote_address}")
 
         # 添加到连接集合
         self.connections.add(websocket)
@@ -391,7 +391,7 @@ class RemoteStreamOutputProvider(OutputProvider):
                 except Exception as e:
                     self.logger.error(f"处理消息时发生错误: {e}", exc_info=True)
         except ConnectionClosed:
-            self.logger.info(f"客户端断开连接: {websocket.remote_address}")
+            self.logger.debug(f"客户端断开连接: {websocket.remote_address}")
         finally:
             # 从连接集合中移除
             self.connections.discard(websocket)
@@ -412,7 +412,7 @@ class RemoteStreamOutputProvider(OutputProvider):
                 break
 
             try:
-                self.logger.info(f"尝试连接到WebSocket服务器: {uri}")
+                self.logger.debug(f"尝试连接到WebSocket服务器: {uri}")
 
                 async with websockets.connect(uri) as websocket:
                     self.active_connection = websocket
@@ -447,7 +447,7 @@ class RemoteStreamOutputProvider(OutputProvider):
                 self.reconnect_count += 1
 
             if self.should_reconnect:
-                self.logger.info(f"{reconnect_delay}秒后尝试重新连接...")
+                self.logger.debug(f"{reconnect_delay}秒后尝试重新连接...")
                 await asyncio.sleep(reconnect_delay)
 
     async def _send_config(self, websocket):
@@ -467,7 +467,7 @@ class RemoteStreamOutputProvider(OutputProvider):
         message_type = message.type
 
         if message_type == MessageType.HELLO:
-            self.logger.info(f"收到Hello消息: {message.data.get('client_info', '未知客户端')}")
+            self.logger.debug(f"收到Hello消息: {message.data.get('client_info', '未知客户端')}")
 
         elif message_type == MessageType.CONFIG:
             # 更新配置
@@ -499,7 +499,7 @@ class RemoteStreamOutputProvider(OutputProvider):
 
         elif message_type == MessageType.STATUS:
             # 状态更新
-            self.logger.info(f"收到状态更新: {message.data}")
+            self.logger.debug(f"收到状态更新: {message.data}")
 
         elif message_type == MessageType.ERROR:
             # 错误信息

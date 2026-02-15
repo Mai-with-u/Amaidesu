@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import time
 from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Literal, Optional
 
 if TYPE_CHECKING:
@@ -104,8 +105,6 @@ class ConsoleInputProvider(InputProvider):
                             yield message
                     else:
                         # 普通文本消息，直接构造 NormalizedMessage
-                        import time
-
                         yield NormalizedMessage(
                             text=text,
                             source="console",
@@ -184,8 +183,6 @@ class ConsoleInputProvider(InputProvider):
 
     async def _create_gift_message(self, args: List[str]) -> Optional[NormalizedMessage]:
         """创建礼物 NormalizedMessage"""
-        import time
-
         username = args[0] if len(args) > 0 else "测试用户"
         gift_name = args[1] if len(args) > 1 else "辣条"
         gift_count = int(args[2]) if len(args) > 2 and args[2].isdigit() else 1
@@ -209,8 +206,6 @@ class ConsoleInputProvider(InputProvider):
 
     async def _create_sc_message(self, args: List[str]) -> Optional[NormalizedMessage]:
         """创建醒目留言 NormalizedMessage"""
-        import time
-
         username = args[0] if len(args) > 0 else "SC大佬"
         content_text = " ".join(args[1:]) if len(args) > 1 else "这是一条测试醒目留言！"
 
@@ -226,8 +221,6 @@ class ConsoleInputProvider(InputProvider):
 
     async def _create_guard_message(self, args: List[str]) -> Optional[NormalizedMessage]:
         """创建大航海 NormalizedMessage"""
-        import time
-
         username = args[0] if len(args) > 0 else "大航海"
         guard_level = args[1] if len(args) > 1 else "舰长"
 

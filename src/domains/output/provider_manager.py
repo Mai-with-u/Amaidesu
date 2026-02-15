@@ -265,14 +265,14 @@ class OutputProviderManager:
         # 获取第一个动作的类型（如果有）
         # 注意：由于 IntentAction 使用了 use_enum_values=True，type 已经是字符串
         action_type = intent.actions[0].type if intent.actions else "none"
-        self.logger.info(f'收到Intent事件: {event_name}, 响应: "{intent.response_text[:50]}...", 动作: {action_type}')
+        self.logger.debug(f'收到Intent事件: {event_name}, 响应: "{intent.response_text[:50]}...", 动作: {action_type}')
 
         try:
             # OutputPipeline 处理（Intent 过滤）
             if self.pipeline_manager:
                 intent = await self.pipeline_manager.process(intent)
                 if intent is None:  # 被管道丢弃
-                    self.logger.info("Intent 被 Pipeline 丢弃，取消本次输出")
+                    self.logger.debug("Intent 被 Pipeline 丢弃，取消本次输出")
                     return
                 self.logger.debug("OutputPipeline 处理完成")
 

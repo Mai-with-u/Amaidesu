@@ -192,7 +192,7 @@ class GPTSoVITSOutputProvider(OutputProvider):
             return
 
         original_text = text.strip()
-        self.logger.info(f"准备TTS: '{original_text[:50]}...'")
+        self.logger.debug(f"准备TTS: '{original_text[:50]}...'")
 
         final_text = original_text
 
@@ -259,7 +259,7 @@ class GPTSoVITSOutputProvider(OutputProvider):
                         AudioMetadata(text=final_text, sample_rate=self.sample_rate, channels=CHANNELS)
                     )
 
-            self.logger.info(f"TTS播放完成: '{final_text[:30]}...'")
+            self.logger.debug(f"TTS播放完成: '{final_text[:30]}...'")
             self.render_count += 1
 
         except Exception as e:

@@ -182,7 +182,7 @@ class OmniTTSProvider(OutputProvider):
             # 执行TTS
             await self._speak(text)
 
-            self.logger.info(f"TTS渲染完成: '{text[:30]}...'")
+            self.logger.debug(f"TTS渲染完成: '{text[:30]}...'")
 
         except Exception as e:
             self.logger.error(f"OmniTTS渲染失败: {e}", exc_info=True)

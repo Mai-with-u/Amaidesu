@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Literal, Optional
 
 if TYPE_CHECKING:
@@ -53,7 +54,7 @@ class ForwardWebSocketClient:
 
         while not self._stop.is_set():
             try:
-                self.logger.info(f"尝试连接外发 WebSocket: {self.url}")
+                self.logger.debug(f"尝试连接外发 WebSocket: {self.url}")
                 async with websockets.connect(self.url) as ws:
                     self._ws = ws
                     self.logger.info("外发 WebSocket 已连接")
@@ -67,7 +68,7 @@ class ForwardWebSocketClient:
             finally:
                 self._ws = None
                 if not self._stop.is_set():
-                    self.logger.info(f"{self.reconnect_delay} 秒后重试连接外发 WebSocket...")
+                    self.logger.debug(f"{self.reconnect_delay} 秒后重试连接外发 WebSocket...")
                     try:
                         await asyncio.wait_for(self._stop.wait(), timeout=self.reconnect_delay)
                     except asyncio.TimeoutError:
@@ -78,8 +79,6 @@ class ForwardWebSocketClient:
             self.logger.debug("外发 WebSocket 未连接，丢弃消息")
             return False
         try:
-            import json
-
             await self._ws.send(json.dumps(data, ensure_ascii=False))
             return True
         except Exception as e:

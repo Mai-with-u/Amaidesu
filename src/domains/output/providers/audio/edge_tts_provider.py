@@ -6,6 +6,7 @@ EdgeTTS Provider - Output Domain: 渲染输出实现
 """
 
 import asyncio
+import os
 import tempfile
 import time
 from typing import TYPE_CHECKING, Any, Dict, Optional
@@ -125,7 +126,7 @@ class EdgeTTSProvider(OutputProvider):
             self.logger.debug("TTS文本为空，跳过渲染")
             return
 
-        self.logger.info(f"开始TTS渲染: '{text[:30]}...'")
+        self.logger.debug(f"开始TTS渲染: '{text[:30]}...'")
         await self._speak(text)
 
     async def _speak(self, text: str):
@@ -149,7 +150,7 @@ class EdgeTTSProvider(OutputProvider):
 
                 # 计算音频时长
                 duration_seconds = len(audio_array) / samplerate if samplerate > 0 else 3.0
-                self.logger.info(f"音频时长: {duration_seconds:.3f}秒")
+                self.logger.debug(f"音频时长: {duration_seconds:.3f}秒")
 
                 # 发布音频块
                 chunk_size = 1024
@@ -168,7 +169,7 @@ class EdgeTTSProvider(OutputProvider):
                         await self.audio_stream_channel.publish(chunk)
 
                 # 播放音频
-                self.logger.info("开始播放音频...")
+                self.logger.debug("开始播放音频...")
                 await self.audio_manager.play_audio(audio_array)
 
             except Exception as e:
@@ -185,8 +186,6 @@ class EdgeTTSProvider(OutputProvider):
                 # 清理临时文件
                 if tmp_filename and tmp_filename.startswith(tempfile.gettempdir()):
                     try:
-                        import os
-
                         os.remove(tmp_filename)
                         self.logger.debug(f"已删除临时文件: {tmp_filename}")
                     except Exception as e_rem:
@@ -213,7 +212,7 @@ class EdgeTTSProvider(OutputProvider):
             # 合成语音
             communicate = edge_tts.Communicate(text, self.voice)
             await asyncio.to_thread(communicate.save_sync, tmp_filename)
-            self.logger.info(f"Edge TTS合成完成: {tmp_filename}")
+            self.logger.debug(f"Edge TTS合成完成: {tmp_filename}")
 
             # 读取音频
             audio_array, samplerate = await asyncio.to_thread(sf.read, tmp_filename, dtype="float32")

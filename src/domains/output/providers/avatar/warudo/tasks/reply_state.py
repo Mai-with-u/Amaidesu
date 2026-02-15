@@ -19,13 +19,13 @@ class ReplyState:
         """开始说话状态"""
         if not self.is_talking:
             self.is_talking = True
-            self.logger.info("开始说话状态")
+            self.logger.debug("开始说话状态")
 
     async def stop_talking(self):
         """停止说话状态"""
         if self.is_talking:
             self.is_talking = False
-            self.logger.info("停止说话状态")
+            self.logger.debug("停止说话状态")
 
     async def deal_state(self, state_data: Any):
         """
