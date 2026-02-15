@@ -56,13 +56,7 @@ def mock_llm_service():
 
 
 @pytest.fixture
-def mock_dependencies(mock_llm_service):
-    """Mock 依赖注入"""
-    return {"llm_service": mock_llm_service}
-
-
-@pytest.fixture
-def mock_provider_context(mock_llm_service):
+def mock_provider_context(mock_event_bus, mock_llm_service):
     """Mock ProviderContext"""
     # 创建一个简单的 mock prompt_service
     mock_prompt_service = MagicMock()
@@ -70,6 +64,7 @@ def mock_provider_context(mock_llm_service):
     mock_prompt_service.render = MagicMock(return_value="你是一个助手。")
 
     return ProviderContext(
+        event_bus=mock_event_bus,
         llm_service=mock_llm_service,
         prompt_service=mock_prompt_service,
     )
@@ -82,15 +77,10 @@ def provider(maicore_config, mock_provider_context):
 
 
 @pytest.fixture
-def setup_provider(provider, mock_event_bus, mock_dependencies):
+def setup_provider(provider):
     """设置 Provider 的异步 fixture"""
 
     async def _setup():
-        # 设置依赖
-        provider._dependencies = mock_dependencies
-        provider._event_bus = mock_event_bus
-        # 使用 _override_event_bus 设置 event_bus（只读属性，需要使用覆盖机制）
-        provider._override_event_bus = mock_event_bus
         # 初始化（不真正启动Router）
         await provider.init()
         return provider

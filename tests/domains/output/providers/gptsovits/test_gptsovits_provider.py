@@ -187,8 +187,6 @@ class TestGPTSoVITSOutputProvider:
         # 手动注入 mocks
         provider.tts_client = mock_tts_client
         provider.audio_manager = mock_audio_manager
-        # 设置 _dependencies 以避免 AttributeError
-        provider._dependencies = {}
 
         # 创建有响应文本的 Intent
         intent = Intent(original_text="你好", response_text="测试文本", emotion=EmotionType.HAPPY, actions=[])
@@ -216,8 +214,6 @@ class TestGPTSoVITSOutputProvider:
         # 手动注入 mocks
         provider.tts_client = mock_tts_client
         provider.audio_manager = mock_audio_manager
-        # 设置 _dependencies 以避免 AttributeError
-        provider._dependencies = {}
 
         # 创建有响应文本的 Intent
         intent = Intent(original_text="你好", response_text="测试文本", emotion=EmotionType.HAPPY, actions=[])
@@ -264,8 +260,6 @@ class TestGPTSoVITSOutputProvider:
         # 手动注入 mocks (在 start 之前)
         provider.tts_client = mock_tts_client
         provider.audio_manager = mock_audio_manager
-        # 设置 _dependencies 以避免 AttributeError
-        provider._dependencies = {}
 
         # 直接调用 execute，跳过 setup 以避免创建真实客户端
         # 创建 Intent

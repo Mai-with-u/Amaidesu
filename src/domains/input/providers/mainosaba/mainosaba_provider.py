@@ -17,7 +17,7 @@ from PIL import ImageGrab
 from pydantic import Field, field_validator
 
 from src.modules.config.schemas.base import BaseProviderConfig
-from src.modules.events.event_bus import EventBus
+from src.modules.di.context import ProviderContext
 from src.modules.logging import get_logger
 from src.modules.types.base.input_provider import InputProvider
 from src.modules.types.base.normalized_message import NormalizedMessage
@@ -76,11 +76,10 @@ class MainosabaInputProvider(InputProvider):
                 raise ValueError("click_position坐标不能为负数")
             return v
 
-    def __init__(self, config: Dict[str, Any], vlm_client=None, event_bus: Optional[EventBus] = None):
-        super().__init__(config)
+    def __init__(self, config: Dict[str, Any], context: ProviderContext = None):
+        super().__init__(config, context)
         self.logger = get_logger("MainosabaInputProvider")
-        self.vlm_client = vlm_client
-        self.event_bus = event_bus
+        self.vlm_client = context.vlm_client if context else None
 
         # 游戏配置
         self.typed_config = self.ConfigSchema(**config)

@@ -276,8 +276,13 @@ class InputProviderManager:
 
                 provider_type = provider_config.get("type", input_name)
 
+                # 创建 ProviderContext
+                from src.modules.di.context import ProviderContext
+
+                context = ProviderContext(event_bus=self.event_bus)
+
                 # 创建Provider（不再检查enabled字段，由enabled_inputs控制）
-                provider = ProviderRegistry.create_input(provider_type, provider_config)
+                provider = ProviderRegistry.create_input(provider_type, provider_config, context=context)
                 created_providers.append(provider)
                 self.logger.info(f"成功创建InputProvider: {input_name} (type={provider_type})")
             except Exception as e:
