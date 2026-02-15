@@ -1,3 +1,3 @@
-from .pipeline import RateLimitTextPipeline
+from .pipeline import RateLimitInputPipeline
 
-__all__ = ["RateLimitTextPipeline"]
+__all__ = ["RateLimitInputPipeline"]

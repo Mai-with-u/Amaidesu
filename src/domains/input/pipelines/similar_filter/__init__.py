@@ -1,6 +1,6 @@
-from .pipeline import SimilarFilterTextPipeline
+from .pipeline import SimilarFilterInputPipeline
 
-__all__ = ["SimilarFilterTextPipeline"]
+__all__ = ["SimilarFilterInputPipeline"]
 
 """
 相似消息过滤管道

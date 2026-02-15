@@ -1,14 +1,26 @@
 """
-TextPipeline 导出
+InputPipeline 导出
 
-TextPipeline 用于 Input Domain 中的文本预处理，
-在 RawData → NormalizedMessage 转换过程中处理文本。
+InputPipeline 用于 Input Domain 中的消息预处理，
+在 Provider 产出 NormalizedMessage 后进行过滤处理。
 """
 
-from src.domains.input.pipelines.rate_limit.pipeline import RateLimitTextPipeline
-from src.domains.input.pipelines.similar_filter.pipeline import SimilarFilterTextPipeline
+from src.domains.input.pipelines.rate_limit.pipeline import RateLimitInputPipeline
+from src.domains.input.pipelines.similar_filter.pipeline import SimilarFilterInputPipeline
+from src.domains.input.pipelines.manager import (
+    InputPipelineManager,
+    InputPipelineBase,
+    InputPipeline,
+    PipelineErrorHandling,
+    PipelineException,
+)
 
 __all__ = [
-    "RateLimitTextPipeline",
-    "SimilarFilterTextPipeline",
+    "InputPipelineManager",
+    "InputPipelineBase",
+    "InputPipeline",
+    "RateLimitInputPipeline",
+    "SimilarFilterInputPipeline",
+    "PipelineErrorHandling",
+    "PipelineException",
 ]

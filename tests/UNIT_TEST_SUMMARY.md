@@ -91,8 +91,7 @@
 **文件**：`tests/core/test_pipeline_manager.py`
 
 **测试覆盖**：
-- ✅ MessagePipeline管理（11个测试）
-- ✅ TextPipeline管理（17个测试）
+- ✅ InputPipeline管理（28个测试）
 - ✅ 连接通知（4个测试）
 - ✅ 统计功能（6个测试）
 - ✅ 并发处理（5个测试）

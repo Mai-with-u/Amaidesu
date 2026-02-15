@@ -258,14 +258,15 @@ async def test_error_isolation(provider_manager):
 ### 3.3 Pipeline 测试
 
 ```python
-"""测试 RateLimitTextPipeline
+"""测试 RateLimitInputPipeline
 
 运行: uv run pytest tests/domains/input/pipelines/test_rate_limit_pipeline.py -v
 """
 
 import pytest
 
-from src.domains.input.pipelines.rate_limit.pipeline import RateLimitTextPipeline
+from src.domains.input.pipelines.rate_limit.pipeline import RateLimitInputPipeline
+from src.modules.types.base.normalized_message import NormalizedMessage
 
 
 @pytest.fixture
@@ -276,7 +277,12 @@ def rate_limit_pipeline():
         "user_rate_limit": 3,
         "window_size": 60,
     }
-    return RateLimitTextPipeline(config)
+    return RateLimitInputPipeline(config)
+
+
+def create_message(text: str, user_id: str = "test_user") -> NormalizedMessage:
+    """创建测试用的 NormalizedMessage"""
+    return NormalizedMessage(text=text, source="test", user_id=user_id)
 
 
 def test_pipeline_creation(rate_limit_pipeline):
@@ -288,25 +294,23 @@ def test_pipeline_creation(rate_limit_pipeline):
 @pytest.mark.asyncio
 async def test_process_message_pass(rate_limit_pipeline):
     """测试消息通过限流"""
-    metadata = {"user_id": "test_user", "group_id": "test_group"}
-    result = await rate_limit_pipeline._process("测试消息", metadata)
-    assert result == "测试消息"
+    message = create_message("测试消息")
+    result = await rate_limit_pipeline._process(message)
+    assert result == message
 
 
 @pytest.mark.asyncio
 async def test_process_message_rate_limited(rate_limit_pipeline):
     """测试消息被限流"""
     config = {"global_rate_limit": 2, "user_rate_limit": 10, "window_size": 60}
-    pipeline = RateLimitTextPipeline(config)
-
-    metadata = {"user_id": "user1", "group_id": "group1"}
+    pipeline = RateLimitInputPipeline(config)
 
     # 前两条消息通过
-    assert await pipeline._process("消息1", metadata) == "消息1"
-    assert await pipeline._process("消息2", metadata) == "消息2"
+    assert await pipeline._process(create_message("消息1", "user1")) is not None
+    assert await pipeline._process(create_message("消息2", "user1")) is not None
 
     # 第三条消息被限流
-    result = await pipeline._process("消息3", metadata)
+    result = await pipeline._process(create_message("消息3", "user1"))
     assert result is None
 ```
 
@@ -513,7 +517,7 @@ async def test_feature_requiring_config():
 # tests/domains/input/pipelines/test_rate_limit_pipeline.py
 def test_rate_limit_pipeline_creation():
     """测试管道创建"""
-    pipeline = RateLimitTextPipeline(config)
+    pipeline = RateLimitInputPipeline(config)
     assert pipeline is not None
 ```
 
@@ -527,7 +531,7 @@ def test_rate_limit_pipeline_creation():
 async def test_provider_manager_with_pipeline():
     """测试 ProviderManager 与 Pipeline 集成"""
     manager = InputProviderManager(event_bus)
-    pipeline = RateLimitTextPipeline(config)
+    pipeline = RateLimitInputPipeline(config)
     manager.add_pipeline(pipeline)
     ...
 ```

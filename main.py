@@ -246,7 +246,7 @@ def log_config_update(main_cfg_updated: bool) -> None:
 
 
 async def load_pipeline_manager(config: Dict[str, Any]) -> Optional[InputPipelineManager]:
-    """加载输入管道管理器，包含 MessagePipeline（Input Domain: 消息预处理）。"""
+    """加载输入管道管理器（Input Domain: 消息预处理）。"""
     pipeline_config = config.get("pipelines", {})
     if not pipeline_config:
         logger.info("配置中未启用管道功能")
@@ -258,19 +258,12 @@ async def load_pipeline_manager(config: Dict[str, Any]) -> Optional[InputPipelin
     try:
         manager = InputPipelineManager()
 
-        # 加载 MessagePipeline（Input Domain: 消息预处理）
-        await manager.load_message_pipelines(pipeline_load_dir, pipeline_config)
-        message_pipeline_count = len(manager._message_pipelines)
+        # 加载管道（Input Domain: 消息预处理）
+        await manager.load_pipelines(pipeline_load_dir, pipeline_config)
+        pipeline_count = len(manager._pipelines)
 
-        # 同时加载 TextPipeline（保持兼容）
-        await manager.load_text_pipelines(pipeline_load_dir, pipeline_config)
-        text_pipeline_count = len(manager._text_pipelines)
-
-        total_pipelines = message_pipeline_count + text_pipeline_count
-        if total_pipelines > 0:
-            logger.info(
-                f"管道加载完成，共 {message_pipeline_count} 个 MessagePipeline，{text_pipeline_count} 个 TextPipeline。"
-            )
+        if pipeline_count > 0:
+            logger.info(f"管道加载完成，共 {pipeline_count} 个管道。")
             return manager
         else:
             logger.warning("未找到任何有效的管道，管道功能将被禁用。")

@@ -16,7 +16,7 @@
 
 | 类型 | 命名风格 | 示例 |
 |------|---------|------|
-| 类名 | PascalCase | `EventBus`, `InputProvider`, `TextPipeline` |
+| 类名 | PascalCase | `EventBus`, `InputProvider`, `InputPipeline` |
 | 函数/方法名 | snake_case | `send_to_maicore`, `register_websocket_handler` |
 | 变量名 | snake_case | `provider_config`, `event_bus` |
 | 私有成员 | 前导下划线 | `_message_handlers`, `_is_connected` |
@@ -88,7 +88,7 @@ from pydantic import BaseModel, Field
 |------|----------|------|
 | **Pydantic BaseModel** | 所有数据模型、配置 Schema、事件 Payload | `class UserConfig(BaseModel)` |
 | **dataclass** | 仅用于简单的内部统计/包装类 | `@dataclass class PipelineStats` |
-| **Protocol** | 定义接口协议 | `class TextPipeline(Protocol)` |
+| **Protocol** | 定义接口协议 | `class InputPipeline(Protocol)` |
 | **Enum** | 定义常量集合 | `class EmotionType(str, Enum)` |
 
 ### 3.2 Pydantic 使用示例

@@ -237,7 +237,7 @@ uv run ruff check --fix .
 |------|----------|------|
 | **Pydantic BaseModel** | 所有数据模型、配置 Schema、事件 Payload | `class UserConfig(BaseModel)` |
 | **dataclass** | 仅用于简单的内部统计/包装类 | `@dataclass class PipelineStats` |
-| **Protocol** | 定义接口协议 | `class TextPipeline(Protocol)` |
+| **Protocol** | 定义接口协议 | `class InputPipeline(Protocol)` |
 
 **详细规范**：[开发规范 - 数据类型选用](docs/development-guide.md#数据类型选用规范)
 
@@ -261,7 +261,7 @@ async def handle_message(self, message):
 
 | 类型 | 命名风格 | 示例 |
 |------|---------|------|
-| 类名 | PascalCase | `EventBus`, `InputProvider`, `TextPipeline` |
+| 类名 | PascalCase | `EventBus`, `InputProvider`, `InputPipeline` |
 | 函数/方法名 | snake_case | `send_to_maicore`, `register_websocket_handler` |
 | 变量名 | snake_case | `provider_config`, `event_bus` |
 | 私有成员 | 前导下划线 | `_message_handlers`, `_is_connected` |
@@ -333,7 +333,7 @@ enabled_outputs = ["tts", "subtitle", "vts"]
 
 ### 添加新 Pipeline
 
-1. 继承 `TextPipeline` 类
+1. 继承 `InputPipeline` 类
 2. 实现 `process()` 方法
 3. 返回 `NormalizedMessage` 继续传递，返回 `None` 丢弃消息
 
