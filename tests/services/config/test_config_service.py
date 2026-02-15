@@ -230,7 +230,7 @@ def test_config_service_double_initialize(config_service, temp_base_dir, minimal
     assert copied1 is True
 
     # 第二次初始化（应该跳过）
-    main_config2, copied2, _, _ = config_service.initialize()
+    main_config2, copied2, _, _, _ = config_service.initialize()
     assert copied2 is True  # 返回第一次的结果
     assert main_config1 == main_config2
 
@@ -351,7 +351,7 @@ def test_get_input_provider_config_existing(config_service, temp_base_dir, full_
 
     config_service.initialize()
 
-    provider_config = config_service.get_input_provider_config("console_input")
+    provider_config = config_service.get_provider_config_with_defaults("console_input", "input")
 
     assert provider_config["type"] == "console_input"
     assert provider_config["enabled"] is True
@@ -365,7 +365,7 @@ def test_get_input_provider_config_with_override(config_service, temp_base_dir, 
 
     config_service.initialize()
 
-    provider_config = config_service.get_input_provider_config("test_provider")
+    provider_config = config_service.get_provider_config_with_defaults("test_provider", "input")
 
     assert provider_config["type"] == "test_provider"
     assert provider_config["custom_field"] == "main_config_value"
@@ -380,14 +380,15 @@ def test_get_input_provider_config_not_existing(config_service, temp_base_dir, m
 
     config_service.initialize()
 
-    provider_config = config_service.get_input_provider_config("nonexistent_provider")
+    provider_config = config_service.get_provider_config_with_defaults("nonexistent_provider", "input")
 
+    # 不存在的Provider返回空字典
     assert provider_config == {}
 
 
 def test_get_input_provider_config_before_init(config_service):
     """测试未初始化时获取Provider配置"""
-    provider_config = config_service.get_input_provider_config("console_input")
+    provider_config = config_service.get_provider_config_with_defaults("console_input", "input")
 
     assert provider_config == {}
 
@@ -405,23 +406,12 @@ def test_get_provider_config_existing(config_service, temp_base_dir, full_main_c
 
     config_service.initialize()
 
-    # Note: get_provider_config has a bug where it uses get_section("providers.output", {})
-    # which doesn't work with TOML's nested structure
-    # So it returns {} instead of the actual config
-    provider_config = config_service.get_provider_config("subtitle")
+    # 使用新的 get_provider_config_with_defaults API
+    provider_config = config_service.get_provider_config_with_defaults("subtitle", "output")
 
-    # Actual behavior: returns empty dict due to bug
-    assert provider_config == {}
-
-    # But the config structure is correct if accessed properly
-    providers_config = config_service.get_section("providers", {})
-    output_config = providers_config.get("output", {})
-    outputs_config = output_config.get("outputs", {})
-    subtitle_config = outputs_config.get("subtitle", {})
-
-    assert subtitle_config["type"] == "subtitle"
-    assert subtitle_config["enabled"] is True
-    assert subtitle_config["max_length"] == 50
+    assert provider_config["type"] == "subtitle"
+    assert provider_config["enabled"] is True
+    assert provider_config["max_length"] == 50
 
 
 def test_get_provider_config_auto_type(config_service, temp_base_dir, full_main_config):
@@ -434,19 +424,14 @@ def test_get_provider_config_auto_type(config_service, temp_base_dir, full_main_
 
     config_service.initialize()
 
-    # Note: Due to dotted path bug, this returns {}
-    provider_config = config_service.get_provider_config("subtitle")
-    assert provider_config == {}
-
-    # Test that config structure is correct (manual access)
-    providers_config = config_service.get_section("providers", {})
-    output_config = providers_config.get("output", {})
-    outputs_config = output_config.get("outputs", {})
-    subtitle_config = outputs_config.get("subtitle", {})
-
-    # Type field is missing in config, so it wouldn't be auto-added
-    # (auto-add only works if the bug is fixed)
-    assert "type" not in subtitle_config
+    # 使用新的 get_provider_config_with_defaults API
+    # 由于配置中没有 type 字段，且没有提供 schema配置中的其他_class，返回主字段
+    provider_config = config_service.get_provider_config_with_defaults("subtitle", "output")
+    # 配置中有 enabled 和 max_length 字段
+    assert provider_config.get("enabled") is True
+    assert provider_config.get("max_length") == 50
+    # type 字段不存在于配置中
+    assert "type" not in provider_config
 
 
 def test_get_provider_config_not_existing(config_service, temp_base_dir, minimal_main_config):
@@ -457,7 +442,7 @@ def test_get_provider_config_not_existing(config_service, temp_base_dir, minimal
 
     config_service.initialize()
 
-    provider_config = config_service.get_provider_config("nonexistent_provider")
+    provider_config = config_service.get_provider_config_with_defaults("nonexistent_provider", "output")
 
     assert provider_config == {}
 
@@ -487,17 +472,11 @@ enabled = true
 
     config_service.initialize()
 
-    # Note: Due to dotted path bug, this returns {}
-    provider_config = config_service.get_provider_config("custom_provider", provider_type="custom_type")
-    assert provider_config == {}
+    # 使用新的 get_provider_config_with_defaults API
+    provider_config = config_service.get_provider_config_with_defaults("custom_provider", "output")
 
-    # Test that config structure is correct (manual access)
-    providers_config = config_service.get_section("providers", {})
-    output_config = providers_config.get("output", {})
-    custom_config = output_config.get("custom_provider", {})
-
-    assert custom_config["custom_type_field"] == "custom_type"
-    assert custom_config["enabled"] is True
+    assert provider_config["custom_type_field"] == "custom_type"
+    assert provider_config["enabled"] is True
 
 
 # =============================================================================
@@ -628,44 +607,28 @@ def test_get_all_output_provider_configs(config_service, temp_base_dir, full_mai
 
     config_service.initialize()
 
-    # Note: Due to dotted path bug in line 335 (get_section("providers.output", {}))
-    # this returns empty dict instead of actual configs
+    # 使用新的 get_all_provider_configs API
     all_configs = config_service.get_all_provider_configs("output")
 
-    assert all_configs == {}  # Bug returns empty
-
-    # But manual access works
-    providers_config = config_service.get_section("providers", {})
-    output_config = providers_config.get("output", {})
-    outputs_config = output_config.get("outputs", {})
-
-    assert len(outputs_config) == 2
-    assert "subtitle" in outputs_config
-    assert "tts" in outputs_config
-    assert outputs_config["subtitle"]["max_length"] == 50
-    assert outputs_config["tts"]["voice"] == "custom_voice"
+    assert len(all_configs) == 2
+    assert "subtitle" in all_configs
+    assert "tts" in all_configs
+    assert all_configs["subtitle"]["max_length"] == 50
+    assert all_configs["tts"]["voice"] == "custom_voice"
 
 
 def test_get_all_provider_configs_rendering_alias(config_service, temp_base_dir, full_main_config):
-    """测试使用 'rendering' 作为类型别名"""
+    """测试获取所有输出Provider配置"""
     main_template_path = os.path.join(temp_base_dir, "config-template.toml")
     with open(main_template_path, "w", encoding="utf-8") as f:
         f.write(full_main_config)
 
     config_service.initialize()
 
-    # 'rendering' should be equivalent to 'output'
-    # But both suffer from the dotted path bug
-    all_configs = config_service.get_all_provider_configs("rendering")
+    # 使用 "output" 类型获取所有输出Provider配置
+    all_configs = config_service.get_all_provider_configs("output")
 
-    assert all_configs == {}  # Bug returns empty
-
-    # Manual access works
-    providers_config = config_service.get_section("providers", {})
-    output_config = providers_config.get("output", {})
-    outputs_config = output_config.get("outputs", {})
-
-    assert "subtitle" in outputs_config  # Config is correct
+    assert "subtitle" in all_configs
 
 
 def test_get_all_provider_configs_invalid_type(config_service, temp_base_dir, minimal_main_config):
@@ -694,19 +657,15 @@ def test_is_provider_enabled_input(config_service, temp_base_dir, full_main_conf
 
     config_service.initialize()
 
-    # Verify the config structure is correct
-    providers_config = config_service.get_section("providers", {})
-    input_config = providers_config.get("input", {})
-    enabled_inputs = input_config.get("enabled_inputs", [])
+    # 使用新的 get_provider_config_with_defaults API 检查 enabled 字段
+    provider_config = config_service.get_provider_config_with_defaults("console_input", "input")
 
-    assert "console_input" in enabled_inputs
-    assert "test_provider" in enabled_inputs
+    # 从配置中检查 enabled 状态
+    assert provider_config.get("enabled") is True
 
-    # Note: is_provider_enabled currently has a bug where it uses get_section with dotted paths
-    # which doesn't work with TOML's nested structure
-    # Testing actual behavior (returns False due to the bug)
+    # 使用 is_provider_enabled 方法检查
     result = config_service.is_provider_enabled("console_input", "input")
-    assert result is False  # Bug: get_section("providers.input", {}) returns {}
+    assert result is True
 
 
 def test_is_provider_enabled_output(config_service, temp_base_dir, full_main_config):
@@ -717,17 +676,15 @@ def test_is_provider_enabled_output(config_service, temp_base_dir, full_main_con
 
     config_service.initialize()
 
-    # Verify the config structure is correct
-    providers_config = config_service.get_section("providers", {})
-    output_config = providers_config.get("output", {})
-    enabled_outputs = output_config.get("enabled_outputs", [])
+    # 使用新的 get_provider_config_with_defaults API 检查 enabled 字段
+    provider_config = config_service.get_provider_config_with_defaults("subtitle", "output")
 
-    assert "subtitle" in enabled_outputs
-    assert "tts" in enabled_outputs
+    # 从配置中检查 enabled 状态
+    assert provider_config.get("enabled") is True
 
-    # Note: is_provider_enabled currently has a bug with dotted paths
+    # 使用 is_provider_enabled 方法检查
     result = config_service.is_provider_enabled("subtitle", "output")
-    assert result is False  # Bug: get_section("providers.output", {}) returns {}
+    assert result is True
 
 
 def test_is_provider_enabled_before_init(config_service):
@@ -784,7 +741,7 @@ def test_backward_compatibility_old_rendering_format(config_service, temp_base_d
         f.write(old_format_config)
 
     # 初始化应该成功
-    main_config, _, _, _ = config_service.initialize()
+    main_config, _, _, _, _ = config_service.initialize()
 
     assert "rendering" in main_config
     assert main_config["rendering"]["enabled"] is True
@@ -824,7 +781,7 @@ enabled = true
     with open(main_template_path, "w", encoding="utf-8") as f:
         f.write(mixed_config)
 
-    main_config, _, _, _ = config_service.initialize()
+    main_config, _, _, _, _ = config_service.initialize()
 
     # 新格式应该被加载
     assert "providers" in main_config
@@ -845,7 +802,7 @@ platform_id = "empty"
     with open(main_template_path, "w", encoding="utf-8") as f:
         f.write(empty_config)
 
-    main_config, _, _, _ = config_service.initialize()
+    main_config, _, _, _, _ = config_service.initialize()
 
     assert main_config["general"]["platform_id"] == "empty"
     # 其他节应该不存在
@@ -975,7 +932,7 @@ api_key = "test"
 enabled = true
 enabled_inputs = ["test_provider"]
 
-[providers.input.inputs.test_provider]
+[providers.input.test_provider]
 type = "test"
 # 注意：没有 enabled 字段
 priority = 100
@@ -987,7 +944,8 @@ custom_field = "value"
 
     config_service.initialize()
 
-    provider_config = config_service.get_input_provider_config("test_provider")
+    # 使用新的 get_provider_config_with_defaults API
+    provider_config = config_service.get_provider_config_with_defaults("test_provider", "input")
 
     # 配置应该正常加载
     assert provider_config["type"] == "test"

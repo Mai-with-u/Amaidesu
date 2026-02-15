@@ -2,6 +2,7 @@
 
 import tempfile
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from pydantic import ValidationError
@@ -9,7 +10,16 @@ from pydantic import ValidationError
 from src.domains.input.providers.mock_danmaku import MockDanmakuInputProvider
 from src.modules.config.schemas import get_provider_schema
 from src.modules.config.schemas.base import BaseProviderConfig
+from src.modules.di.context import ProviderContext
 from src.modules.registry import ProviderRegistry
+
+
+def mock_provider_context():
+    """Mock ProviderContext for testing"""
+    return ProviderContext(
+        event_bus=MagicMock(),
+        config_service=MagicMock(),
+    )
 
 
 def test_mock_danmaku_has_config_schema():
@@ -45,7 +55,7 @@ def test_mock_danmaku_provider_loads_with_valid_config():
         "loop_playback": False,
     }
 
-    provider = MockDanmakuInputProvider(config)
+    provider = MockDanmakuInputProvider(config, context=mock_provider_context())
 
     assert provider.typed_config.log_file_path == "test.jsonl"
     assert provider.typed_config.send_interval == 2.0
@@ -94,7 +104,7 @@ def test_fallback_for_non_migrated_providers():
 def test_typed_config_is_instance_of_config_schema():
     """测试 typed_config 是 ConfigSchema 的实例"""
     config = {"send_interval": 1.5}
-    provider = MockDanmakuInputProvider(config)
+    provider = MockDanmakuInputProvider(config, context=mock_provider_context())
 
     assert isinstance(provider.typed_config, MockDanmakuInputProvider.ConfigSchema)
     assert provider.typed_config.send_interval == 1.5

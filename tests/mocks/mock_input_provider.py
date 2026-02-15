@@ -23,12 +23,11 @@ class MockInputProvider(InputProvider):
         """添加测试数据"""
         self._test_data_queue.put_nowait(data)
 
-    async def start(self) -> AsyncIterator[NormalizedMessage]:
+    async def generate(self) -> AsyncIterator[NormalizedMessage]:
         """
-        启动 Provider 并返回 NormalizedMessage 流
+        生成 NormalizedMessage 数据流
         """
         self.is_running = True
-        await self._setup_internal()
 
         empty_count = 0
         while self.is_running:
@@ -44,6 +43,13 @@ class MockInputProvider(InputProvider):
                     empty_count += 1
                     if empty_count >= 3:  # 连续3次超时（150ms）
                         break
+
+    async def start(self) -> AsyncIterator[NormalizedMessage]:
+        """
+        启动 Provider 并返回 NormalizedMessage 流
+        """
+        self.is_running = True
+        return self.generate()
 
     async def _cleanup_internal(self):
         """清理资源"""

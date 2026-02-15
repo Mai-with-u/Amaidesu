@@ -7,9 +7,11 @@
 """
 
 import asyncio
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
+
+from src.modules.di.context import ProviderContext
 
 # 由于 STTInputProvider 有很多外部依赖，我们使用 Mock 进行测试
 
@@ -17,6 +19,15 @@ import pytest
 # =============================================================================
 # 配置 Fixtures
 # =============================================================================
+
+
+@pytest.fixture
+def mock_provider_context():
+    """Mock ProviderContext for testing"""
+    return ProviderContext(
+        event_bus=MagicMock(),
+        config_service=MagicMock(),
+    )
 
 
 @pytest.fixture
@@ -62,7 +73,7 @@ def test_check_dependencies_missing_torch(stt_config):
         with pytest.raises(RuntimeError):
             from src.domains.input.providers.stt.stt_input_provider import STTInputProvider
 
-            STTInputProvider(stt_config)
+            STTInputProvider(stt_config, context=mock_provider_context())
 
 
 @pytest.mark.skip(reason="需要真实的依赖包，使用 Mock 测试替代")
@@ -72,7 +83,7 @@ def test_check_dependencies_missing_sounddevice(stt_config):
         with pytest.raises(RuntimeError):
             from src.domains.input.providers.stt.stt_input_provider import STTInputProvider
 
-            STTInputProvider(stt_config)
+            STTInputProvider(stt_config, context=mock_provider_context())
 
 
 # =============================================================================
@@ -87,7 +98,7 @@ def test_stt_provider_initialization(stt_config):
 
     with patch("src.domains.input.providers.stt.stt_input_provider.STTInputProvider._check_dependencies"):
         with patch("src.domains.input.providers.stt.stt_input_provider.STTInputProvider._load_vad_model"):
-            provider = STTInputProvider(stt_config)
+            provider = STTInputProvider(stt_config, context=mock_provider_context())
 
             assert provider.typed_config is not None
             assert provider.sample_rate == 16000
@@ -105,7 +116,7 @@ def test_stt_provider_custom_sample_rate(stt_config):
 
     with patch("src.domains.input.providers.stt.stt_input_provider.STTInputProvider._check_dependencies"):
         with patch("src.domains.input.providers.stt.stt_input_provider.STTInputProvider._load_vad_model"):
-            provider = STTInputProvider(stt_config)
+            provider = STTInputProvider(stt_config, context=mock_provider_context())
             assert provider.sample_rate == 8000
 
 
@@ -118,7 +129,7 @@ def test_stt_provider_invalid_sample_rate(stt_config):
 
     with patch("src.domains.input.providers.stt.stt_input_provider.STTInputProvider._check_dependencies"):
         with patch("src.domains.input.providers.stt.stt_input_provider.STTInputProvider._load_vad_model"):
-            provider = STTInputProvider(stt_config)
+            provider = STTInputProvider(stt_config, context=mock_provider_context())
             # 应该回退到 16000
             assert provider.sample_rate == 16000
 
@@ -131,7 +142,7 @@ def test_stt_provider_vad_disabled(stt_config):
     stt_config["vad"]["enable"] = False
 
     with patch("src.domains.input.providers.stt.stt_input_provider.STTInputProvider._check_dependencies"):
-        provider = STTInputProvider(stt_config)
+        provider = STTInputProvider(stt_config, context=mock_provider_context())
         assert provider.vad_enabled is False
         assert provider.vad_model is None
 
@@ -152,7 +163,7 @@ def test_load_vad_model_success(stt_config):
             mock_utils = Mock()
             mock_load.return_value = (mock_model, mock_utils)
 
-            provider = STTInputProvider(stt_config)
+            provider = STTInputProvider(stt_config, context=mock_provider_context())
 
             assert provider.vad_model is not None
             assert provider.vad_utils is not None
@@ -166,7 +177,7 @@ def test_load_vad_model_failure(stt_config):
 
     with patch("src.domains.input.providers.stt.stt_input_provider.STTInputProvider._check_dependencies"):
         with patch("torch.hub.load", side_effect=Exception("加载失败")):
-            provider = STTInputProvider(stt_config)
+            provider = STTInputProvider(stt_config, context=mock_provider_context())
             # 加载失败后应该禁用 VAD
             assert provider.vad_enabled is False
 
@@ -182,7 +193,7 @@ def test_find_device_by_name(stt_config):
     from src.domains.input.providers.stt.stt_input_provider import STTInputProvider
 
     with patch("src.domains.input.providers.stt.stt_input_provider.STTInputProvider._check_dependencies"):
-        provider = STTInputProvider(stt_config)
+        provider = STTInputProvider(stt_config, context=mock_provider_context())
 
         # Mock sounddevice
         mock_devices = [
@@ -205,7 +216,7 @@ def test_find_device_default(stt_config):
     from src.domains.input.providers.stt.stt_input_provider import STTInputProvider
 
     with patch("src.domains.input.providers.stt.stt_input_provider.STTInputProvider._check_dependencies"):
-        provider = STTInputProvider(stt_config)
+        provider = STTInputProvider(stt_config, context=mock_provider_context())
 
         with patch("src.domains.input.providers.stt.stt_input_provider.sd") as mock_sd:
             mock_device = {"name": "默认设备", "max_input_channels": 2}
@@ -227,7 +238,7 @@ def test_build_iflytek_auth_url(stt_config):
     from src.domains.input.providers.stt.stt_input_provider import STTInputProvider
 
     with patch("src.domains.input.providers.stt.stt_input_provider.STTInputProvider._check_dependencies"):
-        provider = STTInputProvider(stt_config)
+        provider = STTInputProvider(stt_config, context=mock_provider_context())
 
         url = provider._build_iflytek_auth_url()
 
@@ -243,7 +254,7 @@ def test_build_iflytek_frame(stt_config):
     from src.domains.input.providers.stt.stt_input_provider import STTInputProvider
 
     with patch("src.domains.input.providers.stt.stt_input_provider.STTInputProvider._check_dependencies"):
-        provider = STTInputProvider(stt_config)
+        provider = STTInputProvider(stt_config, context=mock_provider_context())
 
         # 测试第一帧
         audio_data = b"test_audio_data"
@@ -267,7 +278,7 @@ async def test_cleanup(stt_config):
     from src.domains.input.providers.stt.stt_input_provider import STTInputProvider
 
     with patch("src.domains.input.providers.stt.stt_input_provider.STTInputProvider._check_dependencies"):
-        provider = STTInputProvider(stt_config)
+        provider = STTInputProvider(stt_config, context=mock_provider_context())
 
         # Mock session
         mock_session = AsyncMock()

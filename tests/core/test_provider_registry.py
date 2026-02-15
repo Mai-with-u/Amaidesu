@@ -11,12 +11,23 @@ ProviderRegistry 测试
 
 import pytest
 from typing import AsyncIterator
+from unittest.mock import MagicMock
 
+from src.modules.di.context import ProviderContext
 from src.modules.registry import ProviderRegistry
 from src.modules.types.base.decision_provider import DecisionProvider
 from src.modules.types.base.input_provider import InputProvider
 from src.modules.types.base.output_provider import OutputProvider
 from src.modules.types.base.normalized_message import NormalizedMessage
+
+
+@pytest.fixture
+def mock_provider_context():
+    """Mock ProviderContext for testing"""
+    return ProviderContext(
+        event_bus=MagicMock(),
+        config_service=MagicMock(),
+    )
 
 
 class MockInputProvider(InputProvider):
@@ -124,7 +135,6 @@ class TestInputProviderRegistry:
                 super().__init__(config)
 
             async def start(self) -> AsyncIterator[NormalizedMessage]:
-                await self._setup_internal()
                 self.is_running = True
                 try:
                     yield NormalizedMessage(
@@ -189,10 +199,10 @@ class TestDecisionProviderRegistry:
         ProviderRegistry.register_decision("test_decision", MockDecisionProvider)
         assert ProviderRegistry.is_decision_provider_registered("test_decision")
 
-    def test_create_decision_provider(self):
+    def test_create_decision_provider(self, mock_provider_context):
         """测试创建 DecisionProvider 实例"""
         ProviderRegistry.register_decision("test_decision", MockDecisionProvider)
-        provider = ProviderRegistry.create_decision("test_decision", {"key": "value"})
+        provider = ProviderRegistry.create_decision("test_decision", {"key": "value"}, context=mock_provider_context)
         assert isinstance(provider, MockDecisionProvider)
 
     def test_create_decision_provider_unknown(self):
@@ -217,10 +227,10 @@ class TestOutputProviderRegistry:
         ProviderRegistry.register_output("test_output", MockOutputProvider)
         assert ProviderRegistry.is_output_provider_registered("test_output")
 
-    def test_create_output_provider(self):
+    def test_create_output_provider(self, mock_provider_context):
         """测试创建 OutputProvider 实例"""
         ProviderRegistry.register_output("test_output", MockOutputProvider)
-        provider = ProviderRegistry.create_output("test_output", {"key": "value"})
+        provider = ProviderRegistry.create_output("test_output", {"key": "value"}, context=mock_provider_context)
         assert isinstance(provider, MockOutputProvider)
 
     def test_create_output_provider_unknown(self):
@@ -302,7 +312,7 @@ class TestExplicitRegistration:
         provider = ProviderRegistry.create_input("mock_input_explicit", {})
         assert isinstance(provider, MockInputProvider)
 
-    def test_register_from_info_decision(self):
+    def test_register_from_info_decision(self, mock_provider_context):
         """测试从注册信息字典注册 DecisionProvider"""
         info = MockDecisionProvider.get_registration_info()
         ProviderRegistry.register_from_info(info)
@@ -310,10 +320,10 @@ class TestExplicitRegistration:
         assert ProviderRegistry.is_decision_provider_registered("mock_decision_explicit")
 
         # 验证可以创建实例
-        provider = ProviderRegistry.create_decision("mock_decision_explicit", {})
+        provider = ProviderRegistry.create_decision("mock_decision_explicit", {}, context=mock_provider_context)
         assert isinstance(provider, MockDecisionProvider)
 
-    def test_register_from_info_output(self):
+    def test_register_from_info_output(self, mock_provider_context):
         """测试从注册信息字典注册 OutputProvider"""
         info = MockOutputProvider.get_registration_info()
         ProviderRegistry.register_from_info(info)
@@ -321,7 +331,7 @@ class TestExplicitRegistration:
         assert ProviderRegistry.is_output_provider_registered("mock_output_explicit")
 
         # 验证可以创建实例
-        provider = ProviderRegistry.create_output("mock_output_explicit", {})
+        provider = ProviderRegistry.create_output("mock_output_explicit", {}, context=mock_provider_context)
         assert isinstance(provider, MockOutputProvider)
 
     def test_register_from_info_missing_field(self):
