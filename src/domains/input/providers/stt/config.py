@@ -4,7 +4,7 @@ STTInputProvider 配置 Schema
 定义了语音转文字 Provider 的嵌套配置结构。
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -67,7 +67,7 @@ class MessageConfig(BaseModel):
 class STTInputProviderConfig(BaseProviderConfig):
     """STT 输入 Provider 配置"""
 
-    type: str = "stt"
+    type: Literal["stt"] = "stt"
 
     # 嵌套配置结构（与旧插件一致）
     iflytek_asr: IflytekAsrConfig = Field(..., description="讯飞 ASR 配置")

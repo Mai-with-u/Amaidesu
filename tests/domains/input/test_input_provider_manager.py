@@ -386,12 +386,16 @@ async def test_load_from_config_and_start(manager):
 @pytest.mark.asyncio
 async def test_provider_data_flow_to_event_bus(manager, event_bus):
     """测试 Provider 数据通过 EventBus 传递"""
+    from src.modules.events.payloads.input import MessageReadyPayload
+
     collected_events = []
 
-    async def on_message(event_name: str, payload: dict, source: str):
+    async def on_message(event_name: str, payload, source: str):
+        # payload 是 MessageReadyPayload 对象
         collected_events.append({"event_name": event_name, "payload": payload, "source": source})
 
-    event_bus.on(CoreEvents.DATA_MESSAGE, on_message)
+    # 使用正确的 model_class 类型
+    event_bus.on(CoreEvents.DATA_MESSAGE, on_message, model_class=MessageReadyPayload)
 
     provider = MockInputProvider({"name": "test_provider"})
 
@@ -411,7 +415,9 @@ async def test_provider_data_flow_to_event_bus(manager, event_bus):
     # 验证事件
     assert len(collected_events) == 1
     assert collected_events[0]["event_name"] == CoreEvents.DATA_MESSAGE
-    assert collected_events[0]["payload"]["message"]["text"] == "测试消息"
+    # payload 是 MessageReadyPayload 对象
+    payload = collected_events[0]["payload"]
+    assert payload.message["text"] == "测试消息"
     assert collected_events[0]["source"] == "MockInput"
 
     await manager.stop_all_providers()
@@ -420,13 +426,17 @@ async def test_provider_data_flow_to_event_bus(manager, event_bus):
 @pytest.mark.asyncio
 async def test_multiple_providers_data_isolation(manager, event_bus):
     """测试多个 Provider 的数据隔离"""
+    from src.modules.events.payloads.input import MessageReadyPayload
+
     collected_events = []
 
-    async def on_message(event_name: str, payload: dict, source: str):
-        message = payload.get("message", {})
-        collected_events.append({"text": message.get("text"), "source": source})
+    async def on_message(event_name: str, payload, source: str):
+        # payload 是 MessageReadyPayload 对象，有 message 属性
+        message = getattr(payload, "message", {}) if not isinstance(payload, dict) else payload.get("message", {})
+        text = message.get("text") if isinstance(message, dict) else None
+        collected_events.append({"text": text, "source": source})
 
-    event_bus.on(CoreEvents.DATA_MESSAGE, on_message)
+    event_bus.on(CoreEvents.DATA_MESSAGE, on_message, model_class=MessageReadyPayload)
 
     provider1 = MockInputProvider({"name": "provider1"})
     provider2 = MockInputProvider({"name": "provider2"})
@@ -479,7 +489,7 @@ async def test_single_provider_failure_does_not_affect_others(manager, event_bus
     async def on_message(event_name: str, payload: dict, source: str):
         collected_events.append(payload)
 
-    event_bus.on(CoreEvents.DATA_MESSAGE, on_message)
+    event_bus.on(CoreEvents.DATA_MESSAGE, on_message, model_class=NormalizedMessage)
 
     await manager.start_all_providers(providers)
 

@@ -4,6 +4,17 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.modules.di.context import ProviderContext
+
+
+@pytest.fixture
+def mock_provider_context():
+    """Mock ProviderContext for testing"""
+    return ProviderContext(
+        event_bus=MagicMock(),
+        config_service=MagicMock(),
+    )
+
 
 @pytest.fixture
 def warudo_config():

@@ -1,383 +1,603 @@
 # 事件系统
 
-Amaidesu 使用 EventBus 作为跨域通信机制，实现发布-订阅模式。
-
-## 概述
-
-EventBus 是项目的核心通信机制，支持：
-- 发布-订阅模式
-- 优先级队列
-- 错误隔离
-- 类型安全的事件数据
-- 统计功能
-
-## 核心概念
-
-### 发布-订阅模式
-
-```
-发布者              EventBus              订阅者
-  │                   │                    │
-  ├─ publish(event) ─>│<── subscribe(event)┤
-                      │                    │
-                      ├─ 通知所有订阅者 ────┤
-```
-
-### 优点
-
-- **松耦合**：发布者和订阅者无需直接引用
-- **可扩展**：易于添加新的订阅者
-- **错误隔离**：一个订阅者失败不影响其他
-- **异步**：支持异步事件处理
-
-## 基本使用
-
-### 发布事件
-
-```python
-from src.modules.events.names import CoreEvents
-from src.modules.events.payloads import MessageReadyPayload, IntentPayload
-
-# 发布事件（必须使用 Pydantic BaseModel）
-await event_bus.emit(
-    CoreEvents.DATA_MESSAGE,
-    MessageReadyPayload(message=normalized_message),
-    source="MyInputProvider"
-)
-
-# 所有事件都需要 source 参数
-await event_bus.emit(
-    CoreEvents.DECISION_INTENT,
-    IntentPayload(intent=intent),
-    source="MyDecisionProvider"
-)
-```
-
-### 订阅事件
-
-```python
-from src.modules.events.names import CoreEvents
-from src.modules.events.payloads import MessageReadyPayload, IntentPayload
-
-# 订阅事件（强制类型化）
-event_bus.on(
-    CoreEvents.DATA_MESSAGE,
-    self.handle_message,
-    MessageReadyPayload  # 必填参数
-)
-
-event_bus.on(
-    CoreEvents.DECISION_INTENT,
-    self.handle_intent,
-    IntentPayload  # 必填参数
-)
-
-# 事件处理器签名
-async def handle_message(self, event_name: str, payload: MessageReadyPayload, source: str):
-    message = payload.message
-    # 处理消息
-```
-
-### 取消订阅
-
-```python
-# 取消订阅
-event_bus.off(
-    CoreEvents.DATA_MESSAGE,
-    self.handle_message
-)
-```
-
-## 核心事件
-
-### 事件列表
-
-| 事件名 | 发布者 | 订阅者 | 数据类型 |
-|--------|--------|--------|---------|
-| `data.raw` | InputProvider | InputCoordinator | `RawDataPayload` |
-| `data.message` | InputCoordinator | DecisionCoordinator | `MessageReadyPayload` |
-| `decision.intent` | DecisionCoordinator | OutputProviderManager | `IntentPayload` |
-| `output.params` | OutputProviderManager | TTS/Subtitle Providers | `ParametersGeneratedPayload` |
-| `render.completed` | OutputProvider | - | `RenderCompletedPayload` |
-
-### 事件常量
-
-使用 `CoreEvents` 常量避免硬编码字符串：
-
-```python
-from src.modules.events.names import CoreEvents
-
-# ✅ 正确：使用常量
-await event_bus.emit(CoreEvents.DATA_MESSAGE, data)
-
-# ❌ 错误：硬编码字符串
-await event_bus.emit("data.message", data)
-```
-
-## 类型安全
-
-### 事件 Payload
-
-使用 Pydantic Model 确保类型安全：
-
-```python
-from pydantic import BaseModel
-from src.modules.events.payloads import MessageReadyPayload
-
-class MessageReadyPayload(BaseModel):
-    """消息就绪事件 Payload"""
-    message: NormalizedMessage
-    source: str
-    timestamp: float = Field(default_factory=time.time)
-
-# 订阅时指定类型（强制类型化，model_class 必填）
-event_bus.on(
-    CoreEvents.DATA_MESSAGE,
-    self.handle_message,
-    MessageReadyPayload
-)
-
-async def handle_message(self, event_name: str, payload: MessageReadyPayload, source: str):
-    # payload 类型已知，IDE 有自动补全
-    message = payload.message
-```
-
-## 优先级
-
-### 设置优先级
-
-```python
-# 高优先级订阅（先处理）
-event_bus.on(
-    CoreEvents.DATA_MESSAGE,
-    self.handle_critical,
-    priority=100
-)
-
-# 普通优先级
-event_bus.on(
-    CoreEvents.DATA_MESSAGE,
-    self.handle_normal,
-    priority=50  # 默认值
-)
-
-# 低优先级订阅（后处理）
-event_bus.on(
-    CoreEvents.DATA_MESSAGE,
-    self.handle_logging,
-    priority=10
-)
-```
-
-### 优先级顺序
-
-高优先级 → 低优先级
-```
-priority=100 (critical)
-     ↓
-priority=50  (normal)
-     ↓
-priority=10  (logging)
-```
-
-## 错误处理
-
-### 错误隔离
-
-默认情况下，一个订阅者的错误不会影响其他订阅者：
-
-```python
-# 订阅者 A
-async def handler_a(self, payload):
-    raise ValueError("错误")  # 不会影响订阅者 B
-
-# 订阅者 B（仍然会执行）
-async def handler_b(self, payload):
-    print("正常执行")
-```
-
-### 错误回调
-
-监听错误事件：
-
-```python
-async def on_error(error_event):
-    print(f"EventBus 错误: {error_event.error}")
-
-event_bus.on("eventbus.error", on_error)
-```
-
-## 统计功能
-
-### 获取统计信息
-
-```python
-stats = event_bus.get_stats()
-
-print(f"已发布事件: {stats['total_published']}")
-print(f"已处理事件: {stats['total_processed']}")
-print(f"错误数: {stats['total_errors']}")
-```
-
-### 重置统计
-
-```python
-event_bus.reset_stats()
-```
-
-## 高级用法
-
-### 一次性订阅
-
-```python
-# 只处理一次
-async def handle_once():
-    future = asyncio.Future()
-
-    async def callback(event_name: str, payload: dict, source: str):
-        future.set_result(payload)
-
-    event_bus.on(
-        CoreEvents.DATA_MESSAGE,
-        callback
-    )
-
-    return await future
-```
-
-### 条件订阅
-
-```python
-async def conditional_handler(self, event_name: str, payload: dict, source: str):
-    # 只处理特定条件的事件
-    if source == "bili_danmaku":
-        await self.handle_bili_danmaku(payload)
-```
-
-## 最佳实践
-
-### 1. 使用事件常量
-
-```python
-# ✅ 正确
-from src.modules.events.names import CoreEvents
-await event_bus.emit(CoreEvents.DATA_MESSAGE, data)
-
-# ❌ 错误
-await event_bus.emit("data.message", data)
-```
-
-### 2. 使用类型安全的 Payload
-
-```python
-# ✅ 正确
-from src.modules.events.payloads import MessageReadyPayload
-await event_bus.emit(
-    CoreEvents.DATA_MESSAGE,
-    MessageReadyPayload(message=msg),
-    source="MyProvider"
-)
-
-# ❌ 错误
-await event_bus.emit(
-    CoreEvents.DATA_MESSAGE,
-    {"message": msg},  # 无类型检查，会抛出 TypeError
-    source="MyProvider"
-)
-```
-
-### 3. 异步处理
-
-```python
-# ✅ 正确：异步处理
-async def handle_message(self, event_name: str, payload: dict, source: str):
-    await self.process_async(payload)
-
-# ❌ 错误：阻塞事件循环
-def handle_message(self, event_name: str, payload: dict, source: str):
-    time.sleep(10)  # 阻塞
-```
-
-### 4. 错误处理
-
-```python
-# ✅ 正确：捕获异常
-async def handle_message(self, event_name: str, payload: dict, source: str):
-    try:
-        await self.process(payload)
-    except Exception as e:
-        self.logger.error(f"处理失败: {e}", exc_info=True)
-
-# ❌ 错误：未处理异常
-async def handle_message(self, event_name: str, payload: dict, source: str):
-    await self.process(payload)  # 可能抛出异常
-```
-
-## 架构约束
-
-EventBus 技术上允许任何订阅模式，但架构层面强制约束：
-
-- Input Domain 只发布，不订阅
-- Decision Domain 订阅 Input，不订阅 Output
-- Output Domain 订阅 Decision，不订阅 Input
-
-详细规则见：[数据流规则](data-flow.md)
-
-## AudioStreamChannel 与 EventBus 的协作
-
-AudioStreamChannel 是专门的音频数据传输通道，与 EventBus 配合使用：
-
-### 职责分离
-
-- **EventBus**: 元数据事件（开始/结束/状态通知）
-- **AudioStreamChannel**: 音频数据流（chunk 数据传输）
-
-### 为什么需要分离？
-
-音频数据量大，通过 EventBus 传输会：
-- 序列化开销大（EventBus 支持持久化，需要序列化）
-- 不适合高频大块数据传输
-- 缺乏背压机制
-
-AudioStreamChannel 提供：
-- 低开销进程内队列传输（传递 Python 对象引用）
-- 背压策略（BLOCK/DROP_NEWEST/DROP_OLDEST/FAIL_FAST）
-- 音频专用功能（重采样、采样率转换）
-
-### 使用示例
-
-```python
-# EventBus: 发布 TTS 触发事件
-await event_bus.emit(
-    CoreEvents.OUTPUT_PARAMS,
-    ExpressionParametersPayload(parameters=expr_params),
-    source="ExpressionGenerator"
-)
-
-# AudioStreamChannel: TTS Provider 发布音频数据
-await audio_channel.notify_start(AudioMetadata(text=text, sample_rate=48000))
-for chunk in audio_chunks:
-    await audio_channel.publish(AudioChunk(data=chunk, sample_rate=48000))
-await audio_channel.notify_end(AudioMetadata(text=text, sample_rate=48000))
-
-# VTS Provider: 订阅音频数据用于口型同步
-await audio_channel.subscribe(
-    name="vts_lip_sync",
-    on_audio_chunk=self._on_lip_sync_chunk,
-    config=SubscriberConfig(
-        queue_size=100,
-        backpressure_strategy=BackpressureStrategy.DROP_NEWEST
-    )
-)
-```
-
-详细文档见：[AGENTS.md - AudioStreamChannel](../../AGENTS.md#audiostreamchannel-音频流系统)
-
-## 相关文档
-
-- [数据流规则](data-flow.md) - 事件订阅约束
-- [AGENTS.md - AudioStreamChannel](../../AGENTS.md#audiostreamchannel-音频流系统) - 音频流系统
+Amaidesu 项目采用 **发布-订阅（Pub/Sub）模式** 构建事件驱动架构，通过 EventBus 实现组件间的松耦合通信。
+
+## 目录
+
+- [架构概述](#架构概述)
+- [核心组件](#核心组件)
+- [核心 API](#核心-api)
+- [核心事件常量](#核心事件常量)
+- [事件载荷类型](#事件载荷类型)
+- [核心特性](#核心特性)
+- [使用示例](#使用示例)
+- [Mermaid 时序图](#mermaid-时序图)
+- [最佳实践](#最佳实践)
 
 ---
 
-*最后更新：2026-02-10*
+## 架构概述
+
+事件系统是 3 域架构中各组件通信的核心机制：
+
+```mermaid
+flowchart LR
+    subgraph Input[Input Domain]
+        IP[InputProvider]
+    end
+
+    subgraph Decision[Decision Domain]
+        DP[DecisionProvider]
+    end
+
+    subgraph Output[Output Domain]
+        OP[OutputProvider]
+    end
+
+    IP -->|emit: data.message| EB[EventBus]
+    DP -->|emit: decision.intent| EB
+    OP -->|emit: render.completed| EB
+
+    EB -->|on| DP
+    EB -->|on| OP
+```
+
+**数据流规则**：
+- **Input Domain** 发布 `data.message` 事件，携带标准化消息
+- **Decision Domain** 订阅并处理消息，发布 `decision.intent` 事件
+- **Output Domain** 订阅意图事件，执行渲染并发布 `render.completed` 事件
+
+详细规则见 [数据流规则](data-flow.md)。
+
+---
+
+## 核心组件
+
+| 组件 | 文件位置 | 职责 |
+|------|----------|------|
+| **EventBus** | `src/modules/events/event_bus.py` | 事件总线核心，提供 emit/on/off 等核心 API |
+| **EventRegistry** | `src/modules/events/registry.py` | 事件类型注册表，验证事件合法性 |
+| **CoreEvents** | `src/modules/events/names.py` | 核心事件名称常量（避免魔法字符串） |
+| **Payloads** | `src/modules/events/payloads/*.py` | 事件载荷类型定义（基于 Pydantic） |
+
+### 模块结构
+
+```
+src/modules/events/
+├── __init__.py           # 模块导出
+├── event_bus.py          # EventBus 核心实现
+├── registry.py           # 事件注册表
+├── names.py              # CoreEvents 常量
+└── payloads/
+    ├── __init__.py       # Payload 统一导出
+    ├── base.py           # BasePayload 基类
+    ├── input.py          # Input Domain Payload
+    ├── decision.py       # Decision Domain Payload
+    ├── output.py         # Output Domain Payload
+    └── system.py         # 系统事件 Payload
+```
+
+---
+
+## 核心 API
+
+### EventBus 核心方法
+
+```python
+from src.modules.events.event_bus import EventBus
+
+# 创建事件总线
+event_bus = EventBus(enable_stats=True)
+```
+
+#### 发布事件 (emit)
+
+```python
+await event_bus.emit(
+    event_name: str,              # 事件名称
+    data: BaseModel,              # Pydantic Model 实例
+    source: str = "unknown",      # 事件源
+    error_isolate: bool = True,   # 错误隔离
+    wait: bool = False            # 是否等待处理完成
+)
+```
+
+**参数说明**：
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `event_name` | `str` | 必填 | 事件名称 |
+| `data` | `BaseModel` | 必填 | Pydantic Model 实例 |
+| `source` | `str` | `"unknown"` | 事件发布源，通常为 Provider 类名 |
+| `error_isolate` | `bool` | `True` | 错误隔离策略 |
+| `wait` | `bool` | `False` | 是否等待所有监听器执行完成 |
+
+**error_isolate 行为**：
+- `True`：单个 handler 异常不会影响其他 handler 执行
+- `False`：第一个异常会传播到调用者，中断所有 handler
+
+**wait 行为**：
+- `False`：在后台任务中执行，不等待完成
+- `True`：等待所有监听器执行完成后再返回
+
+#### 订阅事件 (on)
+
+```python
+event_bus.on(
+    event_name: str,               # 事件名称
+    handler: Callable,              # 处理函数
+    model_class: Type[T],          # Payload 类型（必须）
+    priority: int = 100            # 优先级（越小越优先）
+)
+```
+
+**注意**：EventBus 强制要求类型化订阅，所有订阅必须指定 `model_class`。
+
+#### 取消订阅 (off)
+
+```python
+event_bus.off(event_name: str, handler: Callable)
+```
+
+#### 生命周期管理
+
+```python
+# 清理 EventBus
+await event_bus.cleanup(timeout: float = 5.0, force: bool = False)
+```
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `timeout` | `float` | `5.0` | 等待活跃 emit 完成的超时时间（秒） |
+| `force` | `bool` | `False` | 是否强制清理（即使有活跃任务） |
+
+#### 统计功能
+
+```python
+# 获取单个事件统计
+stats = event_bus.get_stats(event_name: str)
+
+# 获取所有事件统计
+all_stats = event_bus.get_all_stats()
+
+# 重置统计
+event_bus.reset_stats(event_name: Optional[str] = None)
+```
+
+**EventStats 结构**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `emit_count` | `int` | 发布次数 |
+| `listener_count` | `int` | 监听器数量 |
+| `error_count` | `int` | 错误次数 |
+| `last_emit_time` | `float` | 最后发布时间（Unix 时间戳） |
+| `last_error_time` | `float` | 最后错误时间（Unix 时间戳） |
+| `total_execution_time_ms` | `float` | 总执行时间（毫秒） |
+
+---
+
+## 核心事件常量
+
+使用 `CoreEvents` 类获取所有事件常量，避免魔法字符串：
+
+```python
+from src.modules.events.names import CoreEvents
+
+# 3域数据流核心事件
+CoreEvents.DATA_MESSAGE          # Input → Decision
+CoreEvents.DECISION_INTENT       # Decision → Output
+CoreEvents.OUTPUT_INTENT         # 过滤后的 Intent
+
+# Decision Domain
+CoreEvents.DECISION_REQUEST
+CoreEvents.DECISION_RESPONSE_GENERATED
+CoreEvents.DECISION_PROVIDER_CONNECTED
+CoreEvents.DECISION_PROVIDER_DISCONNECTED
+
+# Output Domain
+CoreEvents.RENDER_COMPLETED
+CoreEvents.RENDER_FAILED
+
+# 系统事件
+CoreEvents.CORE_STARTUP
+CoreEvents.CORE_SHUTDOWN
+CoreEvents.CORE_ERROR
+
+# STT 事件
+CoreEvents.STT_AUDIO_RECEIVED
+CoreEvents.STT_SPEECH_STARTED
+CoreEvents.STT_SPEECH_ENDED
+
+# 屏幕上下文事件
+CoreEvents.SCREEN_CONTEXT_UPDATED
+CoreEvents.SCREEN_CHANGED
+
+# 关键词匹配事件
+CoreEvents.KEYWORD_MATCHED
+
+# VRChat 事件
+CoreEvents.VRCHAT_CONNECTED
+CoreEvents.VRCHAT_DISCONNECTED
+CoreEvents.VRCHAT_PARAMETER_SENT
+
+# 渲染事件
+CoreEvents.RENDER_SUBTITLE
+CoreEvents.RENDER_STICKER
+
+# OBS 控制事件
+CoreEvents.OBS_SEND_TEXT
+CoreEvents.OBS_SWITCH_SCENE
+CoreEvents.OBS_SET_SOURCE_VISIBILITY
+
+# 远程流事件
+CoreEvents.REMOTE_STREAM_REQUEST_IMAGE
+
+# VTS 相关事件
+CoreEvents.VTS_SEND_EMOTION
+CoreEvents.VTS_SEND_STATE
+```
+
+### 获取所有事件
+
+```python
+all_events = CoreEvents.get_all_events()
+print(all_events)  # ('data.message', 'decision.intent', ...)
+```
+
+---
+
+## 事件载荷类型
+
+所有事件载荷都继承自 `BasePayload`（基于 Pydantic BaseModel），提供统一的字符串表示和日志格式化。
+
+### Payload 继承关系
+
+```mermaid
+classDiagram
+    BaseModel <|-- BasePayload
+    BasePayload <|-- RawDataPayload
+    BasePayload <|-- MessageReadyPayload
+    BasePayload <|-- DecisionRequestPayload
+    BasePayload <|-- IntentPayload
+    BasePayload <|-- DecisionResponsePayload
+    BasePayload <|-- ProviderConnectedPayload
+    BasePayload <|-- ProviderDisconnectedPayload
+    BasePayload <|-- RenderCompletedPayload
+    BasePayload <|-- RenderFailedPayload
+    BasePayload <|-- StartupPayload
+    BasePayload <|-- ShutdownPayload
+    BasePayload <|-- ErrorPayload
+```
+
+### 按域分类
+
+#### Input Domain
+
+| Payload 类 | 事件名 | 用途 |
+|-----------|--------|------|
+| `RawDataPayload` | `data.raw` | 原始数据事件 |
+| `MessageReadyPayload` | `data.message` | 标准化消息就绪 |
+
+#### Decision Domain
+
+| Payload 类 | 事件名 | 用途 |
+|-----------|--------|------|
+| `DecisionRequestPayload` | `decision.request` | 决策请求 |
+| `IntentPayload` | `decision.intent` | 意图生成 |
+| `IntentActionPayload` | - | 意图动作 |
+| `DecisionResponsePayload` | `decision.response_generated` | MaiCore 响应 |
+| `ProviderConnectedPayload` | `decision.provider.connected` | Provider 连接 |
+| `ProviderDisconnectedPayload` | `decision.provider.disconnected` | Provider 断开 |
+
+#### Output Domain
+
+| Payload 类 | 事件名 | 用途 |
+|-----------|--------|------|
+| `RenderCompletedPayload` | `render.completed` | 渲染完成 |
+| `RenderFailedPayload` | `render.failed` | 渲染失败 |
+| `OBSSendTextPayload` | `obs.send_text` | OBS 发送文本 |
+| `OBSSwitchScenePayload` | `obs.switch_scene` | OBS 切换场景 |
+| `OBSSetSourceVisibilityPayload` | `obs.set_source_visibility` | OBS 设置源可见性 |
+| `RemoteStreamRequestImagePayload` | `remote_stream.request_image` | 远程流请求图像 |
+
+#### System
+
+| Payload 类 | 事件名 | 用途 |
+|-----------|--------|------|
+| `StartupPayload` | `core.startup` | 系统启动 |
+| `ShutdownPayload` | `core.shutdown` | 系统关闭 |
+| `ErrorPayload` | `core.error` | 系统错误 |
+
+### BasePayload 特性
+
+所有 Payload 继承 `BasePayload`，提供以下特性：
+
+```python
+from src.modules.events.payloads.base import BasePayload
+
+class MyPayload(BasePayload):
+    """自定义 Payload"""
+
+    text: str
+    user_name: str
+
+    def get_log_format(self):
+        """自定义日志格式"""
+        return self.text, self.user_name, None
+```
+
+| 方法 | 说明 |
+|------|------|
+| `__str__()` | 返回易读的调试字符串 |
+| `get_log_format()` | 返回 (text, user_name, extra) 元组，用于日志优化 |
+| `_format_field_value()` | 格式化字段值 |
+
+---
+
+## 核心特性
+
+| 特性 | 说明 |
+|------|------|
+| **错误隔离** | 单个 handler 异常不影响其他 handler 执行 |
+| **优先级控制** | `priority` 参数控制 handler 执行顺序（数字越小越优先） |
+| **统计功能** | 跟踪 emit 次数、错误率、执行时间 |
+| **类型安全** | 强制要求 `model_class` 参数，自动反序列化 |
+| **生命周期管理** | `cleanup()` 方法确保优雅关闭 |
+| **数据验证** | 支持事件数据格式验证（基于 EventRegistry） |
+| **日志优化** | Payload 自定义 `__str__` 和 `get_log_format()` 方法 |
+| **并发安全** | 使用锁保护统计数据，支持并发 emit |
+
+---
+
+## 使用示例
+
+### 基本发布-订阅
+
+```python
+from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import MessageReadyPayload
+
+# 创建事件总线
+event_bus = EventBus(enable_stats=True)
+
+# 订阅事件（类型化）
+async def handle_message(event_name: str, data: MessageReadyPayload, source: str):
+    print(f"收到消息: {data.message.get('text')}")
+
+event_bus.on(
+    CoreEvents.DATA_MESSAGE,
+    handle_message,
+    model_class=MessageReadyPayload,
+    priority=50  # 高优先级
+)
+
+# 发布事件
+await event_bus.emit(
+    CoreEvents.DATA_MESSAGE,
+    MessageReadyPayload(message={"text": "你好", "source": "console"}, source="console"),
+    source="ConsoleInputProvider"
+)
+
+# 获取统计
+stats = event_bus.get_stats(CoreEvents.DATA_MESSAGE)
+print(f"Emit次数: {stats.emit_count}, 监听器数: {stats.listener_count}")
+
+# 清理
+await event_bus.cleanup()
+```
+
+### Provider 中使用
+
+```python
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import RenderCompletedPayload
+
+class MyOutputProvider(OutputProvider):
+    async def _setup_internal(self):
+        # 订阅渲染完成事件
+        self._event_bus.on(
+            CoreEvents.RENDER_COMPLETED,
+            self._on_render_completed,
+            model_class=RenderCompletedPayload,
+        )
+
+    async def _on_render_completed(
+        self,
+        event_name: str,
+        data: RenderCompletedPayload,
+        source: str
+    ):
+        print(f"渲染完成: {data.provider}, 耗时: {data.duration_ms}ms")
+```
+
+### 发布系统错误事件
+
+```python
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import ErrorPayload
+
+try:
+    # 可能失败的代码
+    await do_something()
+except Exception as e:
+    await event_bus.emit(
+        CoreEvents.CORE_ERROR,
+        ErrorPayload.from_exception(
+            exc=e,
+            source="MyProvider",
+            recoverable=True,
+            context={"endpoint": "ws://localhost:8080"}
+        ),
+        source="MyProvider"
+    )
+```
+
+### 发布决策意图
+
+```python
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import IntentPayload
+
+# 从 Intent 对象创建 Payload
+intent_payload = IntentPayload.from_intent(intent, provider="maicore")
+
+await event_bus.emit(
+    CoreEvents.DECISION_INTENT,
+    intent_payload,
+    source="DecisionManager"
+)
+```
+
+---
+
+## Mermaid 时序图
+
+### 事件发布-订阅流程
+
+```mermaid
+sequenceDiagram
+    participant P as Provider
+    participant EB as EventBus
+    participant ER as EventRegistry
+    participant H1 as Handler1 (高优先级)
+    participant H2 as Handler2 (低优先级)
+
+    Note over P,EB: 发布事件流程
+
+    P->>EB: emit(event_name, payload)
+    EB->>EB: 验证 payload 是 BaseModel
+
+    EB->>ER: validate_event_data()
+    ER-->>EB: 验证结果
+
+    EB->>EB: 按 priority 排序 handlers
+    EB->>EB: 并发执行所有 handler
+
+    par 并行执行
+        EB->>H1: _call_handler(wrapper, data)
+        H1-->>EB: result / exception
+    and 并行执行
+        EB->>H2: _call_handler(wrapper, data)
+        H2-->>EB: result / exception
+    end
+
+    alt error_isolate=True
+        EB->>EB: 记录异常, 继续执行其他 handler
+    else error_isolate=False
+        EB->>P: 抛出第一个异常
+    end
+
+    EB->>EB: 更新统计信息
+    EB->>P: 返回
+```
+
+### 3域数据流事件
+
+```mermaid
+sequenceDiagram
+    participant IP as InputProvider
+    participant EB as EventBus
+    participant DM as DecisionManager
+    participant EG as ExpressionGenerator
+    participant OP as OutputProvider
+
+    Note over IP,EB: Input Domain
+
+    IP->>EB: emit(data.message, MessageReadyPayload)
+    EB->>DM: 转发事件
+
+    Note over DM,EB: Decision Domain
+
+    DM->>DM: decide(message) -> Intent
+    DM->>EB: emit(decision.intent, IntentPayload)
+    EB->>EG: 转发事件
+
+    Note over EG,EB: Output Domain
+
+    EG->>EG: generate_params(intent) -> RenderParameters
+    EG->>EB: emit(output.intent, RenderParamsPayload)
+    EB->>OP: 转发事件
+
+    OP->>OP: render(params)
+    OP->>EB: emit(render.completed, RenderCompletedPayload)
+```
+
+---
+
+## 最佳实践
+
+### 1. 使用 CoreEvents 常量
+
+```python
+# 避免魔法字符串
+await event_bus.emit("data.message", payload)  # 不推荐
+
+# 使用常量
+await event_bus.emit(CoreEvents.DATA_MESSAGE, payload) ### 2. # 推荐
+```
+
+ 正确使用类型化订阅
+
+```python
+# 强制指定 model_class
+event_bus.on(CoreEvents.DATA_MESSAGE, handler, model_class=MessageReadyPayload)
+
+# 不指定 model_class 会导致无法自动反序列化
+```
+
+### 3. 处理错误隔离
+
+```python
+# 需要确保所有 handler 都执行（默认）
+await event_bus.emit(event, data, error_isolate=True)
+
+# 需要立即知道错误
+await event_bus.emit(event, data, error_isolate=False)
+```
+
+### 4. 优雅关闭
+
+```python
+# 在应用关闭时调用 cleanup
+async def shutdown():
+    await event_bus.cleanup(timeout=5.0)
+    print("EventBus 已清理")
+```
+
+### 5. 日志优化
+
+```python
+class MyPayload(BasePayload):
+    text: str
+    user_name: str
+
+    def get_log_format(self):
+        # 返回 (文本, 用户名, 额外信息)
+        return self.text, self.user_name, None
+
+    def __str__(self):
+        return f'{self.text} ({self.user_name})'
+```
+
+### 6. 避免循环依赖
+
+根据 3 域架构约束：
+- Output Provider 不应订阅 Input 事件
+- Decision Provider 不应订阅 Output 事件
+- Input Provider 不应订阅 Decision/Output 事件
+
+详见 [数据流规则](data-flow.md)。
+
+---
+
+## 相关文档
+
+- [3域架构](overview.md)
+- [数据流规则](data-flow.md)
+- [Provider 开发](../development/provider-guide.md)
+
+---
+
+*最后更新：2026-02-15*

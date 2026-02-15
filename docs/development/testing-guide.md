@@ -1,580 +1,665 @@
 # 测试指南
 
-本文档介绍项目的测试规范、工具和最佳实践。
+本指南介绍如何在 Amaidesu 项目中编写和运行测试。
 
-## 测试框架
+## 1. 测试框架
 
-### 使用 pytest
+项目使用 [pytest](https://docs.pytest.org/) 作为测试框架，配合 [pytest-asyncio](https://pytest-asyncio.readthedocs.io/) 支持异步测试。
 
-项目使用 [pytest](https://docs.pytest.org/) 作为测试框架。
+### 依赖配置
+
+测试依赖已在 `pyproject.toml` 中配置：
+
+```toml
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+]
+```
+
+## 2. 测试目录结构
+
+```
+tests/
+├── architecture/           # 架构约束测试
+│   ├── test_dependency_direction.py
+│   └── test_event_flow_constraints.py
+├── core/                   # 核心模块测试
+│   ├── base/               # 基础类型测试
+│   │   ├── test_input_provider.py
+│   │   ├── test_output_provider.py
+│   │   └── test_pipeline_stats.py
+│   ├── config/             # 配置测试
+│   ├── events/             # 事件系统测试
+│   ├── test_event_bus.py
+│   └── test_logger.py
+├── domains/                # 领域测试
+│   ├── input/
+│   │   ├── pipelines/      # Input Pipeline 测试
+│   │   │   ├── test_rate_limit_pipeline.py
+│   │   │   └── test_similar_filter_pipeline.py
+│   │   ├── providers/      # Input Provider 测试
+│   │   └── test_input_provider_manager.py
+│   ├── decision/
+│   │   ├── providers/     # Decision Provider 测试
+│   │   └── test_decision_provider_manager.py
+│   └── output/
+│       ├── pipelines/     # Output Pipeline 测试
+│       ├── providers/     # Output Provider 测试
+│       │   ├── avatar/
+│       │   ├── test_sticker_output_provider.py
+│       │   └── test_obs_control_output_provider.py
+│       └── test_output_provider_manager.py
+├── integration/            # 集成测试
+├── mocks/                  # Mock 对象
+│   ├── mock_input_provider.py
+│   ├── mock_output_provider.py
+│   └── mock_decision_provider.py
+├── prompts/                # 提示词测试
+├── services/               # 服务测试
+│   ├── config/
+│   ├── context/
+│   ├── llm/
+│   └── tts/
+├── conftest.py             # 全局共享 fixtures
+└── __init__.py
+```
+
+### 命名规范
+
+| 类型 | 命名规范 | 示例 |
+|------|---------|------|
+| 测试文件 | `test_*.py` | `test_event_bus.py` |
+| 测试函数 | `async def test_*():` | `async def test_event_publish():` |
+| 测试类 | `Test*` | `class TestEventBus:` |
+| Fixture | `*_fixture` 或直接用功能名 | `event_bus`, `sample_providers` |
+
+## 3. 测试示例
+
+### 3.1 基础测试结构
+
+```python
+"""
+测试模块名称
+
+运行: uv run pytest tests/path/to/test_file.py -v
+"""
+
+import asyncio
+import pytest
+
+from src.modules.events.event_bus import EventBus
+from src.modules.types.base.normalized_message import NormalizedMessage
+
+
+# =============================================================================
+# Fixtures - 测试依赖
+# =============================================================================
+
+
+@pytest.fixture
+def event_bus():
+    """创建 EventBus 实例"""
+    return EventBus()
+
+
+@pytest.fixture
+def sample_message():
+    """创建示例 NormalizedMessage"""
+    return NormalizedMessage(
+        text="测试消息",
+        source="test",
+        data_type="text",
+        importance=0.5,
+    )
+
+
+# =============================================================================
+# 测试用例
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_event_bus_publish(event_bus, sample_message):
+    """测试事件总线发布订阅功能"""
+    received = []
+
+    async def handler(event_name: str, payload: NormalizedMessage, source: str):
+        received.append(payload)
+
+    # 订阅事件
+    event_bus.on("test.event", handler, NormalizedMessage)
+
+    # 发布事件
+    await event_bus.emit("test.event", sample_message, source="test")
+    await asyncio.sleep(0.1)  # 等待异步处理
+
+    # 验证结果
+    assert len(received) == 1
+    assert received[0].text == "测试消息"
+
+
+@pytest.mark.asyncio
+async def test_event_bus_error_isolation(event_bus):
+    """测试错误隔离功能"""
+    results = []
+
+    async def failing_handler(event_name, payload, source):
+        results.append("before_error")
+        raise ValueError("模拟错误")
+
+    async def normal_handler(event_name, payload, source):
+        results.append("normal")
+
+    event_bus.on("test.event", failing_handler, NormalizedMessage, priority=10)
+    event_bus.on("test.event", normal_handler, NormalizedMessage, priority=20)
+
+    # 启用错误隔离
+    await event_bus.emit("test.event", NormalizedMessage(
+        text="test", source="test", data_type="text", importance=0.5
+    ), source="test", error_isolate=True)
+    await asyncio.sleep(0.1)
+
+    # 验证两个处理器都执行了
+    assert "before_error" in results
+    assert "normal" in results
+```
+
+### 3.2 Provider 测试
+
+```python
+"""测试 InputProvider
+
+运行: uv run pytest tests/domains/input/test_input_provider_manager.py -v
+"""
+
+import asyncio
+import pytest
+
+from src.domains.input.provider_manager import InputProviderManager
+from src.modules.events.names import CoreEvents
+from src.modules.types.base.normalized_message import NormalizedMessage
+from tests.mocks.mock_input_provider import MockInputProvider
+
+
+class FailingMockProvider(MockInputProvider):
+    """模拟失败的 Provider"""
+
+    async def start(self):
+        raise RuntimeError("启动失败")
+
+
+@pytest.fixture
+def provider_manager(event_bus):
+    """创建 InputProviderManager 实例"""
+    return InputProviderManager(event_bus)
+
+
+@pytest.mark.asyncio
+async def test_provider_start_and_stop(provider_manager):
+    """测试 Provider 启动和停止"""
+    provider = MockInputProvider({"name": "test_provider", "auto_exit": True})
+
+    await provider_manager.start_all_providers([provider])
+    assert provider_manager._is_started is True
+
+    await provider_manager.stop_all_providers()
+    assert provider_manager._is_started is False
+
+
+@pytest.mark.asyncio
+async def test_provider_data_flow(provider_manager, event_bus):
+    """测试 Provider 数据流"""
+    collected = []
+
+    async def on_message(event_name, payload, source):
+        collected.append(payload)
+
+    event_bus.on(CoreEvents.DATA_MESSAGE, on_message, model_class=NormalizedMessage)
+
+    provider = MockInputProvider({"name": "test_provider"})
+    await provider_manager.start_all_providers([provider])
+
+    # 添加测试数据
+    msg = NormalizedMessage(
+        text="测试",
+        source="test",
+        data_type="text",
+        importance=0.5,
+    )
+    provider.add_test_data(msg)
+
+    await asyncio.sleep(0.3)
+
+    assert len(collected) == 1
+    assert collected[0].message.text == "测试"
+
+    await provider_manager.stop_all_providers()
+
+
+@pytest.mark.asyncio
+async def test_error_isolation(provider_manager):
+    """测试错误隔离"""
+    providers = [
+        MockInputProvider({"name": "good_provider"}),
+        FailingMockProvider({"name": "failing_provider"}),
+    ]
+
+    await provider_manager.start_all_providers(providers)
+
+    # 单个 Provider 失败不应影响整体
+    assert provider_manager._is_started is True
+
+    await provider_manager.stop_all_providers()
+```
+
+### 3.3 Pipeline 测试
+
+```python
+"""测试 RateLimitInputPipeline
+
+运行: uv run pytest tests/domains/input/pipelines/test_rate_limit_pipeline.py -v
+"""
+
+import pytest
+
+from src.domains.input.pipelines.rate_limit.pipeline import RateLimitInputPipeline
+from src.modules.types.base.normalized_message import NormalizedMessage
+
+
+@pytest.fixture
+def rate_limit_pipeline():
+    """创建限流管道实例"""
+    config = {
+        "global_rate_limit": 10,
+        "user_rate_limit": 3,
+        "window_size": 60,
+    }
+    return RateLimitInputPipeline(config)
+
+
+def create_message(text: str, user_id: str = "test_user") -> NormalizedMessage:
+    """创建测试用的 NormalizedMessage"""
+    return NormalizedMessage(text=text, source="test", user_id=user_id)
+
+
+def test_pipeline_creation(rate_limit_pipeline):
+    """测试管道创建"""
+    assert rate_limit_pipeline._global_rate_limit == 10
+    assert rate_limit_pipeline._user_rate_limit == 3
+
+
+@pytest.mark.asyncio
+async def test_process_message_pass(rate_limit_pipeline):
+    """测试消息通过限流"""
+    message = create_message("测试消息")
+    result = await rate_limit_pipeline._process(message)
+    assert result == message
+
+
+@pytest.mark.asyncio
+async def test_process_message_rate_limited(rate_limit_pipeline):
+    """测试消息被限流"""
+    config = {"global_rate_limit": 2, "user_rate_limit": 10, "window_size": 60}
+    pipeline = RateLimitInputPipeline(config)
+
+    # 前两条消息通过
+    assert await pipeline._process(create_message("消息1", "user1")) is not None
+    assert await pipeline._process(create_message("消息2", "user1")) is not None
+
+    # 第三条消息被限流
+    result = await pipeline._process(create_message("消息3", "user1"))
+    assert result is None
+```
+
+### 3.4 Mock 对象
+
+项目在 `tests/mocks/` 目录中提供了常用的 Mock 对象：
+
+```python
+from tests.mocks.mock_input_provider import MockInputProvider
+from tests.mocks.mock_output_provider import MockOutputProvider
+from tests.mocks.mock_decision_provider import MockDecisionProvider
+
+# 使用 MockInputProvider 进行测试
+provider = MockInputProvider({"name": "test"})
+provider.add_test_data(normalized_message)
+```
+
+#### 自定义 Mock Provider
+
+```python
+class CustomMockInputProvider(MockInputProvider):
+    """自定义 Mock Provider"""
+
+    def __init__(self, config=None, fail_on_start=False):
+        super().__init__(config)
+        self.fail_on_start = fail_on_start
+
+    async def start(self):
+        if self.fail_on_start:
+            raise RuntimeError("模拟启动失败")
+        async for data in super().start():
+            yield data
+```
+
+## 4. 运行测试
+
+### 基本命令
 
 ```bash
-# 安装测试依赖
-uv sync --dev
-
 # 运行所有测试
 uv run pytest tests/
 
 # 运行特定测试文件
-uv run pytest tests/layers/input/test_console_provider.py
+uv run pytest tests/core/test_event_bus.py
 
-# 运行特定测试用例
-uv run pytest tests/layers/input/test_console_provider.py::test_console_provider_basic
+# 运行特定测试函数
+uv run pytest tests/core/test_event_bus.py::test_on_register_handler
 
-# 详细输出模式
-uv run pytest tests/ -v
+# 详细输出（显示打印语句）
+uv run pytest tests/ -v -s
 
-# 只运行标记的测试
-uv run pytest -m "not slow"
+# 显示失败的详细信息
+uv run pytest tests/ -v --tb=long
 ```
 
-### pytest-asyncio
-
-异步测试使用 [pytest-asyncio](https://pytest-asyncio.readthedocs.io/) 插件。
-
-```python
-import pytest
-
-@pytest.mark.asyncio
-async def test_async_function():
-    result = await some_async_function()
-    assert result is not None
-```
-
-## 测试规范
-
-### 文件和函数命名
-
-| 类型 | 命名规则 | 示例 |
-|------|---------|------|
-| 测试文件 | `test_*.py` | `test_console_provider.py` |
-| 测试函数 | `async def test_*():` | `async def test_provider_init():` |
-| 测试类 | `Test*` | `class TestInputProvider:` |
-
-### 基本测试结构
-
-```python
-import pytest
-from src/domains/input/providers/console_input import ConsoleInputProvider
-
-@pytest.mark.asyncio
-async def test_console_provider_init():
-    """测试 ConsoleInputProvider 初始化"""
-    config = {"name": "test"}
-    provider = ConsoleInputProvider(config)
-
-    assert provider is not None
-    assert provider.config == config
-```
-
-### 断言
-
-使用 `assert` 进行断言：
-
-```python
-# ✅ 正确：使用 assert
-assert result is not None
-assert result.value == "expected"
-assert len(items) > 0
-assert "error" not in message
-
-# ❌ 错误：使用 unittest 风格的断言
-self.assertEqual(result, "expected")
-```
-
-## 异步测试
-
-### 使用 pytest-asyncio
-
-```python
-import pytest
-
-@pytest.mark.asyncio
-async def test_async_function():
-    result = await some_async_function()
-    assert result is not None
-
-@pytest.mark.asyncio
-async def test_with_fixture(event_bus):
-    # 使用 fixture
-    await event_bus.emit("test.event", data)
-    assert True
-```
-
-### 使用 asyncio.run（不推荐）
-
-```python
-import asyncio
-
-def test_sync_wrapper():
-    async def async_test():
-        result = await some_async_function()
-        assert result is not None
-
-    asyncio.run(async_test())
-```
-
-## 测试固件（Fixtures）
-
-### 定义 Fixture
-
-```python
-import pytest
-from src.modules.events.event_bus import EventBus
-
-@pytest.fixture
-async def event_bus():
-    """创建 EventBus 实例"""
-    bus = EventBus()
-    yield bus
-    # 清理
-    await bus.clear()
-```
-
-### 使用 Fixture
-
-```python
-@pytest.mark.asyncio
-async def test_with_event_bus(event_bus):
-    """测试使用 EventBus fixture"""
-    await event_bus.emit("test.event", data)
-    assert True
-```
-
-### 内置 Fixture 位置
-
-项目级 fixtures 放在 `tests/conftest.py`：
-
-```python
-# tests/conftest.py
-import pytest
-from src.modules.events.event_bus import EventBus
-
-@pytest.fixture
-async def global_event_bus():
-    """全局 EventBus fixture"""
-    bus = EventBus()
-    yield bus
-    await bus.clear()
-```
-
-## Mock 和 Patch
-
-### 使用 unittest.mock
-
-```python
-from unittest.mock import Mock, AsyncMock, patch
-
-@pytest.mark.asyncio
-async def test_with_mock():
-    # 创建 Mock 对象
-    mock_provider = Mock()
-    mock_provider.decide.return_value = Intent(type="response")
-
-    # 创建 AsyncMock
-    async_mock = AsyncMock()
-    async_mock.fetch_data.return_value = {"data": "test"}
-
-    result = await async_mock.fetch_data()
-    assert result == {"data": "test"}
-```
-
-### 使用 patch
-
-```python
-from unittest.mock import patch
-
-@pytest.mark.asyncio
-async def test_with_patch():
-    # Patch 函数
-    with patch("src.domains.input.providers.my_provider.fetch_data") as mock_fetch:
-        mock_fetch.return_value = {"data": "test"}
-
-        provider = MyInputProvider(config)
-        result = await provider._fetch_data()
-
-        assert result == {"data": "test"}
-        mock_fetch.assert_called_once()
-```
-
-### 使用 monkeypatch（pytest）
-
-```python
-def test_with_monkeypatch(monkeypatch):
-    # Mock 环境变量
-    monkeypatch.setenv("API_KEY", "test_key")
-
-    # Mock 函数
-    def mock_get_config():
-        return {"key": "value"}
-
-    monkeypatch.setattr("src.config.get_config", mock_get_config)
-```
-
-## 测试分类
-
-### 标记测试
-
-```python
-import pytest
-
-@pytest.mark.slow
-def test_slow_operation():
-    """标记为慢速测试"""
-    pass
-
-@pytest.mark.integration
-def test_integration():
-    """标记为集成测试"""
-    pass
-
-@pytest.mark.unit
-def test_unit():
-    """标记为单元测试"""
-    pass
-```
-
-### 运行特定标记的测试
+### 测试过滤
 
 ```bash
-# 只运行慢速测试
-uv run pytest -m slow
-
 # 排除慢速测试
 uv run pytest -m "not slow"
 
-# 运行多个标记
-uv run pytest -m "slow and integration"
+# 只运行特定标记的测试
+uv.mark.asyncio
+async def test_xxx():
+    ...
+
+# 运行带特定标记的测试
+uv run pytest -m asyncio
 ```
 
-## 测试最佳实践
-
-### 1. 测试独立性
-
-```python
-# ✅ 正确：每个测试独立
-@pytest.mark.asyncio
-async def test_1():
-    provider = MyProvider({})
-    assert provider.init() is True
-
-@pytest.mark.asyncio
-async def test_2():
-    provider = MyProvider({})  # 新实例
-    assert provider.init() is True
-
-# ❌ 错误：测试相互依赖
-global provider = None
-
-async def test_1():
-    global provider
-    provider = MyProvider({})
-
-async def test_2():
-    provider.init()  # 依赖 test_1
-```
-
-### 2. 清理资源
-
-```python
-# ✅ 正确：使用 fixture 清理
-@pytest.fixture
-async def provider():
-    p = MyProvider(config)
-    yield p
-    await p.cleanup()
-
-# ❌ 错误：未清理资源
-async def test_without_cleanup():
-    p = MyProvider(config)
-    await p.start()
-    # 测试结束，资源未清理
-```
-
-### 3. 使用描述性名称
-
-```python
-# ✅ 正确：描述性名称
-async def test_provider_init_with_valid_config():
-    pass
-
-async def test_provider_init_with_missing_api_key():
-    pass
-
-# ❌ 错误：模糊名称
-async def test_1():
-    pass
-
-async def test_2():
-    pass
-```
-
-### 4. 测试边界条件
-
-```python
-# ✅ 正确：测试各种情况
-@pytest.mark.asyncio
-async def test_provider_with_valid_input():
-    provider = MyProvider({})
-    result = await provider.process("valid input")
-    assert result is not None
-
-@pytest.mark.asyncio
-async def test_provider_with_empty_input():
-    provider = MyProvider({})
-    result = await provider.process("")
-    assert result is None
-
-@pytest.mark.asyncio
-async def test_provider_with_none_input():
-    provider = MyProvider({})
-    with pytest.raises(ValueError):
-        await provider.process(None)
-
-# ❌ 错误：只测试正常情况
-async def test_provider():
-    provider = MyProvider({})
-    result = await provider.process("valid input")
-    assert result is not None
-```
-
-## Provider 测试
-
-### InputProvider 测试
-
-```python
-import pytest
-from src.domains.input.providers.my_provider import MyInputProvider
-from src.modules.types.base.raw_data import RawData
-
-@pytest.mark.asyncio
-async def test_input_provider_collect_data():
-    """测试 InputProvider 数据采集"""
-    config = {"api_url": "https://api.example.com"}
-    provider = MyInputProvider(config)
-
-    data_count = 0
-    async for raw_data in provider._collect_data():
-        data_count += 1
-        assert raw_data.source == "my_provider"
-        if data_count >= 3:
-            await provider.stop()
-
-    assert data_count > 0
-```
-
-### DecisionProvider 测试
-
-```python
-import pytest
-from src.domains.decision.providers.my_provider import MyDecisionProvider
-from src.modules.types.base.normalized_message import NormalizedMessage
-from src.modules.types import Intent
-
-@pytest.mark.asyncio
-async def test_decision_provider_decide():
-    """测试 DecisionProvider 决策"""
-    provider = MyDecisionProvider({})
-
-    message = NormalizedMessage(
-        text="测试消息",
-        user=None,
-        source="test"
-    )
-
-    intent = await provider.decide(message)
-
-    assert intent is not None
-    assert intent.type in ["response", "ignore"]
-```
-
-### OutputProvider 测试
-
-```python
-import pytest
-from src.domains.output.providers.my_provider import MyOutputProvider
-from src.domains.output.parameters.render_parameters import RenderParameters
-
-@pytest.mark.asyncio
-async def test_output_provider_render():
-    """测试 OutputProvider 渲染"""
-    provider = MyOutputProvider({})
-
-    params = RenderParameters(
-        text="测试文本",
-        tts_text="测试文本",
-        emotion_type="happy",
-    )
-
-    # Mock 渲染方法
-    with patch.object(provider, "_actual_render"):
-        await provider.render(params)
-        provider._actual_render.assert_called_once()
-```
-
-## Pipeline 测试
-
-```python
-import pytest
-from src.domains.input.pipelines.my_pipeline import MyPipeline
-from src.modules.types.base.normalized_message import NormalizedMessage
-
-@pytest.mark.asyncio
-async def test_pipeline_process():
-    """测试 Pipeline 处理"""
-    config = {"param": "test"}
-    pipeline = MyPipeline(config)
-
-    message = NormalizedMessage(
-        text="测试消息",
-        source="test",
-        user=None
-    )
-
-    result = await pipeline.process(message)
-
-    # 返回 None 表示消息被过滤
-    if result is None:
-        assert True  # 消息被过滤
-    else:
-        assert result.text == "预期的文本"
-
-@pytest.mark.asyncio
-async def test_pipeline_filter():
-    """测试 Pipeline 过滤"""
-    config = {"similarity_threshold": 0.8}
-    pipeline = SimilarTextFilterPipeline(config)
-
-    message = NormalizedMessage(
-        text="相似消息",
-        source="test",
-        user=None
-    )
-
-    result = await pipeline.process(message)
-
-    # 验证消息被过滤
-    assert result is None
-```
-
-## 架构测试
-
-项目包含架构测试自动验证数据流约束。
-
-### 运行架构测试
+### 覆盖率
 
 ```bash
-uv run pytest tests/architecture/test_event_flow_constraints.py -v
-```
-
-### 测试内容
-
-- Output Domain 不订阅 Input Domain 事件
-- Decision Domain 不订阅 Output Domain 事件
-- Input Domain 不订阅下游事件
-- 事件流向严格遵守单向原则
-
-**在提交代码前务必运行架构测试！**
-
-## 测试覆盖率
-
-### 安装 coverage
-
-```bash
-uv add --dev pytest-cov
-```
-
-### 生成覆盖率报告
-
-```bash
-# 终端输出
+# 生成覆盖率报告
 uv run pytest --cov=src tests/
 
-# HTML 报告
+# 生成 HTML 覆盖率报告
 uv run pytest --cov=src --cov-report=html tests/
-open htmlcov/index.html
 
-# 只报告覆盖率低于 100% 的文件
-uv run pytest --cov=src --cov-fail-under=80 tests/
+# 查看覆盖率报告
+uv run python -m http.server 8000 --directory htmlcov
 ```
 
-## 调试测试
-
-### 使用 pdb
-
-```python
-def test_with_debug():
-    import pdb; pdb.set_trace()
-    assert True
-```
-
-### 使用 pytest 的调试选项
+### 其他选项
 
 ```bash
-# 进入 pdb 当测试失败时
-uv run pytest --pdb
+# 失败时立即停止
+uv run pytest -x
 
-# 在测试开始时进入 pdb
-uv run pytest --trace
+# 显示本地变量（调试用）
+uv run pytest -l
+
+# 并行执行（需要安装 pytest-xdist）
+uv run pytest -n auto
 ```
 
-### 查看详细输出
+## 5. 测试最佳实践
 
-```bash
-# 显示 print 输出
-uv run pytest -s
-
-# 显示详细日志
-uv run pytest -vv --log-cli-level=DEBUG
-```
-
-## 常见问题
-
-### Q: 异步测试报错 "RuntimeError: Event loop is closed"
-
-A: 使用 pytest-asyncio 的 fixture：
+### 5.1 测试命名和文档
 
 ```python
+# ✅ 正确：清晰描述测试内容
+@pytest.mark.asyncio
+async def test_event_bus_publish_message_to_multiple_subscribers(event_bus):
+    """测试事件总线向多个订阅者发布消息"""
+    ...
+
+# ❌ 错误：模糊的测试名称
+@pytest.mark.asyncio
+async def test_eb(event_bus):
+    """test eb"""
+    ...
+```
+
+### 5.2 使用 Fixture 管理依赖
+
+```python
+# ✅ 正确：使用 fixture 创建依赖
 @pytest.fixture
-async def event_loop():
-    loop = asyncio.get_event_loop()
-    yield loop
+def event_bus():
+    return EventBus()
+
+@pytest.mark.asyncio
+async def test_event(event_bus):  # 自动注入
+    ...
+
+# ❌ 错误：在测试函数内部创建依赖
+@pytest.mark.asyncio
+async def test_event():
+    event_bus = EventBus()  # 每次都创建新的
+    ...
 ```
 
-### Q: Mock 不起作用
-
-A: 确保使用正确的导入路径：
+### 5.3 异步测试
 
 ```python
-# ✅ 正确：使用实际导入路径
-with patch("src.domains.input.my_provider.fetch_data"):
-    pass
+# ✅ 正确：使用 @pytest.mark.asyncio 装饰器
+@pytest.mark.asyncio
+async def test_async_operation():
+    result = await async_function()
+    assert result is not None
 
-# ❌ 错误：使用测试文件中的导入
-with patch("tests.test_my_provider.fetch_data"):
-    pass
+# ✅ 正确：等待异步操作完成
+@pytest.mark.asyncio
+async def test_event_handling(event_bus):
+    await event_bus.emit("test", payload, source="test")
+    await asyncio.sleep(0.1)  # 等待异步处理器执行
+    assert received
 ```
 
-### Q: 测试数据库文件污染
+### 5.4 Mock 外部依赖
 
-A: 使用临时目录：
+```python
+# ✅ 正确：使用 Mock 对象隔离外部依赖
+from unittest.mock import AsyncMock, MagicMock
+
+@pytest.mark.asyncio
+async def test_llm_manager():
+    mock_backend = AsyncMock()
+    mock_backend.generate.return_value = "Mock response"
+
+    manager = LLMManager()
+    result = await manager.generate("prompt", backend=mock_backend)
+    assert result == "Mock response"
+```
+
+### 5.5 测试隔离
+
+```python
+# ✅ 正确：每个测试独立，不依赖执行顺序
+@pytest.mark.asyncio
+async def test_first():
+    provider = MockInputProvider({"name": "test"})
+    await provider.start()
+    # 测试逻辑
+    await provider.stop()
+
+@pytest.mark.asyncio
+async def test_second():  # 独立运行，不依赖 test_first
+    provider = MockInputProvider({"name": "test"})
+    ...
+```
+
+### 5.6 跳过测试
+
+```bash
+# 使用 pytest.skip 跳过需要特定条件的测试
+@pytest.mark.asyncio
+async def test_feature_requiring_config():
+    if not has_config():
+        pytest.skip("需要配置文件")
+
+    # 测试逻辑
+    ...
+```
+
+## 6. 测试类型
+
+### 6.1 单元测试
+
+测试单个组件（Provider、Pipeline、Manager）的功能。
+
+```python
+# tests/domains/input/pipelines/test_rate_limit_pipeline.py
+def test_rate_limit_pipeline_creation():
+    """测试管道创建"""
+    pipeline = RateLimitInputPipeline(config)
+    assert pipeline is not None
+```
+
+### 6.2 集成测试
+
+测试多个组件协作。
+
+```python
+# tests/integration/test_mock_danmaku_schema_migration.py
+@pytest.mark.asyncio
+async def test_provider_manager_with_pipeline():
+    """测试 ProviderManager 与 Pipeline 集成"""
+    manager = InputProviderManager(event_bus)
+    pipeline = RateLimitInputPipeline(config)
+    manager.add_pipeline(pipeline)
+    ...
+```
+
+### 6.3 架构测试
+
+验证架构约束（数据流方向、依赖关系）。
+
+```python
+# tests/architecture/test_dependency_direction.py
+def test_core_does_not_import_domain():
+    """验证 Core 层不依赖 Domain 层"""
+    ...
+```
+
+## 7. Fixtures 共享
+
+### 7.1 全局 Fixtures
+
+在 `tests/conftest.py` 中定义全局共享的 fixtures：
+
+```python
+# tests/conftest.py
+@pytest.fixture
+async def event_bus() -> EventBus:
+    """创建干净的 EventBus 实例"""
+    bus = EventBus()
+    yield bus
+    await bus.cleanup()
+```
+
+### 7.2 域特定 Fixtures
+
+在 `tests/domains/*/conftest.py` 中定义特定域的 fixtures：
+
+```python
+# tests/domains/input/conftest.py
+@pytest.fixture
+def sample_providers():
+    """创建示例 Provider 列表"""
+    return [
+        MockInputProvider({"name": "provider1"}),
+        MockInputProvider({"name": "provider2"}),
+    ]
+```
+
+## 8. 调试测试
+
+### 查看日志输出
+
+```bash
+# 显示所有日志
+uv run pytest tests/ -v -s --log-cli-level=DEBUG
+
+# 过滤特定模块的日志
+uv run pytest tests/ -v --log-cli-level=DEBUG -k test_event_bus
+```
+
+### 断点调试
 
 ```python
 import pytest
-import tempfile
 
-@pytest.fixture
-def temp_db():
-    with tempfile.NamedTemporaryFile(suffix=".db") as f:
-        yield f.name
+@pytest.mark.asyncio
+async def test_debug():
+    result = await some_operation()
+    # 设置断点
+    import pdb; pdb.set_trace()
+    assert result
 ```
 
-## 相关文档
+运行：
+```bash
+uv run pytest tests/test_file.py::test_debug -v -s
+```
 
-- [开发规范](development-guide.md) - 代码风格和约定
-- [Provider 开发](provider-guide.md) - Provider 测试示例
-- [管道开发](pipeline-guide.md) - Pipeline 测试示例
+## 9. 常见问题
+
+### 9.1 异步测试超时
+
+如果遇到异步测试超时错误：
+
+```python
+# 增加超时时间
+@pytest.mark.asyncio(timeout=30)  # 30 秒超时
+async def test_slow_operation():
+    ...
+```
+
+### 9.2 Fixture 循环依赖
+
+确保 fixture 之间没有循环依赖：
+
+```python
+# ✅ 正确：依赖链清晰
+@pytest.fixture
+def manager(event_bus):
+    return Manager(event_bus)
+
+# ❌ 错误：循环依赖
+@pytest.fixture
+def manager(provider):
+    return Manager(provider)
+
+@pytest.fixture
+def provider(manager):
+    return Provider(manager)
+```
+
+### 9.3 事件总线清理
+
+确保每个测试后清理事件总线：
+
+```python
+@pytest.fixture
+async def event_bus():
+    bus = EventBus()
+    yield bus
+    await bus.cleanup()  # 清理所有订阅
+```
+
+## 10. 相关文档
+
+- [开发规范](development-guide.md) - 代码风格和数据类型规范
+- [Provider 开发](development/provider-guide.md) - Provider 开发指南
+- [管道开发](development/pipeline-guide.md) - Pipeline 开发指南
+- [事件系统](../architecture/event-system.md) - EventBus 使用指南
 
 ---
 
-*最后更新：2026-02-09*
+*最后更新：2026-02-15*

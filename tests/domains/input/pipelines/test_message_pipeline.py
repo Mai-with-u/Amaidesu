@@ -1,14 +1,23 @@
-"""MessagePipeline 测试"""
+"""
+InputPipeline 测试
+
+测试 InputPipeline 的基本功能：
+- 注册和排序
+- 消息处理和丢弃
+- 优先级顺序
+
+运行: uv run pytest tests/domains/input/pipelines/test_message_pipeline.py -v
+"""
 
 import pytest
 from src.domains.input.pipelines.manager import (
     InputPipelineManager,
-    MessagePipelineBase,
+    InputPipelineBase,
 )
 from src.modules.types.base.normalized_message import NormalizedMessage
 
 
-class MockMessagePipeline(MessagePipelineBase):
+class MockInputPipeline(InputPipelineBase):
     """测试用的 Mock Pipeline"""
 
     priority = 100
@@ -45,7 +54,7 @@ def pipeline_manager():
 
 @pytest.fixture
 def mock_pipeline():
-    return MockMessagePipeline()
+    return MockInputPipeline()
 
 
 @pytest.mark.asyncio
@@ -60,7 +69,7 @@ async def test_process_without_pipelines(pipeline_manager):
 @pytest.mark.asyncio
 async def test_process_with_pipeline(pipeline_manager, mock_pipeline):
     """测试 Pipeline 注册后正常工作"""
-    pipeline_manager.register_message_pipeline(mock_pipeline)
+    pipeline_manager.register_pipeline(mock_pipeline)
     message = create_message("hello")
     result = await pipeline_manager.process(message)
     assert result is not None
@@ -70,8 +79,8 @@ async def test_process_with_pipeline(pipeline_manager, mock_pipeline):
 @pytest.mark.asyncio
 async def test_process_drops_message(pipeline_manager):
     """测试 Pipeline 可以丢弃消息"""
-    drop_pipeline = MockMessagePipeline({"should_drop": True})
-    pipeline_manager.register_message_pipeline(drop_pipeline)
+    drop_pipeline = MockInputPipeline({"should_drop": True})
+    pipeline_manager.register_pipeline(drop_pipeline)
     message = create_message("hello")
     result = await pipeline_manager.process(message)
     assert result is None
@@ -80,7 +89,7 @@ async def test_process_drops_message(pipeline_manager):
 @pytest.mark.asyncio
 async def test_process_handles_raw_none(pipeline_manager, mock_pipeline):
     """测试 raw=None 边界情况"""
-    pipeline_manager.register_message_pipeline(mock_pipeline)
+    pipeline_manager.register_pipeline(mock_pipeline)
     message = NormalizedMessage(
         text="test",
         source="test",
@@ -94,17 +103,21 @@ async def test_process_handles_raw_none(pipeline_manager, mock_pipeline):
 @pytest.mark.asyncio
 async def test_pipeline_priority_ordering(pipeline_manager):
     """测试 Pipeline 按优先级排序"""
-    low_priority = MockMessagePipeline({"priority": 500})
+    low_priority = MockInputPipeline({"priority": 500})
     low_priority.priority = 500
-    high_priority = MockMessagePipeline({"priority": 100})
+    high_priority = MockInputPipeline({"priority": 100})
     high_priority.priority = 100
 
     # 先注册低优先级
-    pipeline_manager.register_message_pipeline(low_priority)
+    pipeline_manager.register_pipeline(low_priority)
     # 再注册高优先级
-    pipeline_manager.register_message_pipeline(high_priority)
+    pipeline_manager.register_pipeline(high_priority)
 
     # 检查排序
-    pipeline_manager._ensure_message_pipelines_sorted()
-    assert pipeline_manager._message_pipelines[0].priority == 100
-    assert pipeline_manager._message_pipelines[1].priority == 500
+    pipeline_manager._ensure_pipelines_sorted()
+    assert pipeline_manager._pipelines[0].priority == 100
+    assert pipeline_manager._pipelines[1].priority == 500
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v", "-s"])

@@ -89,7 +89,7 @@ class ReadPingmuInputProvider(InputProvider):
         Yields:
             NormalizedMessage: 屏幕描述消息
         """
-        self.is_running = True
+        self.is_started = True
 
         # 创建消息队列
         self._message_queue = asyncio.Queue()
@@ -132,12 +132,12 @@ class ReadPingmuInputProvider(InputProvider):
             )
 
             # 从队列中获取消息并yield
-            while self.is_running:
+            while self.is_started:
                 try:
                     normalized_msg = await asyncio.wait_for(self._message_queue.get(), timeout=1.0)
                     yield normalized_msg
                 except asyncio.TimeoutError:
-                    # 超时继续循环，检查is_running
+                    # 超时继续循环，检查is_started
                     continue
 
         except asyncio.CancelledError:
@@ -145,7 +145,7 @@ class ReadPingmuInputProvider(InputProvider):
         except Exception as e:
             self.logger.error(f"数据采集出错: {e}", exc_info=True)
         finally:
-            self.is_running = False
+            self.is_started = False
             self.logger.info("ReadPingmuInputProvider 已停止")
 
     async def _monitoring_loop(self):

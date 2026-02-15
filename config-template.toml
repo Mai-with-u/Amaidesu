@@ -163,6 +163,9 @@ split_by_session = false
 # Pipeline 配置
 # ============================================================
 
+# === 输入管道（InputPipeline）===
+# InputPipeline 在 InputProviderManager 中执行，用于过滤/处理输入消息
+
 # 限流管道 - 限制消息发送频率
 [pipelines.rate_limit]
 priority = 100
@@ -181,9 +184,9 @@ min_text_length = 3          # 最小处理文本长度
 cross_user_filter = true     # 是否跨用户过滤相似消息
 
 # === 输出管道（OutputPipeline）===
-# OutputPipeline 示例：敏感词过滤
-[pipelines.profanity_filter]
-# OutputPipeline 配置
+# OutputPipeline 在 OutputProviderManager 中执行，用于过滤/处理输出内容
+
+# 敏感词过滤管道 - 过滤输出中的敏感词
 [pipelines.profanity_filter.output]
 enabled = true
 priority = 100

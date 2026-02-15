@@ -48,6 +48,7 @@ from .output import (
     RenderCompletedPayload,
     RenderFailedPayload,
 )
+from .provider import GenericProviderPayload
 from .system import (
     ErrorPayload,
     ShutdownPayload,
@@ -74,6 +75,8 @@ __all__ = [
     "OBSSwitchScenePayload",
     "OBSSetSourceVisibilityPayload",
     "RemoteStreamRequestImagePayload",
+    # Provider (通用)
+    "GenericProviderPayload",
     # System
     "StartupPayload",
     "ShutdownPayload",

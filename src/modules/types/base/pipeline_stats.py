@@ -1,7 +1,7 @@
 """
 PipelineStats 共享统计类
 
-供 Input Domain 的 TextPipeline 和 Output Domain 的 OutputPipeline 使用。
+供 Input Domain 的 InputPipeline 和 Output Domain 的 OutputPipeline 使用。
 """
 
 from dataclasses import dataclass

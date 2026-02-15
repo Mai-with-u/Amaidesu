@@ -90,6 +90,7 @@ class DecisionProviderManager:
         self._provider_name: Optional[str] = None
         self._switch_lock = asyncio.Lock()
         self._event_subscribed = False
+        self._provider_ready = False  # 标记 Provider 是否已创建（但未启动）
 
     async def setup(
         self,
@@ -98,7 +99,10 @@ class DecisionProviderManager:
         decision_config: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
-        设置决策Provider并订阅事件
+        创建决策Provider实例（不启动）
+
+        此方法只创建 Provider 实例，不启动 Provider。
+        需要显式调用 start() 来启动 Provider 并订阅事件。
 
         Args:
             provider_name: Provider名称（如果为None，则从decision_config中读取active_provider）
@@ -107,7 +111,11 @@ class DecisionProviderManager:
 
         Raises:
             ValueError: 如果Provider未注册到ProviderRegistry
-            ConnectionError: 如果Provider初始化失败
+
+        注意:
+            - 调用此方法后，必须调用 start() 来启动 Provider
+            - Provider 实例创建后存储在 _current_provider 中
+            - _provider_ready 标志会设置为 True
         """
         # 确保所有 Provider 已注册
         await self.ensure_providers_registered()
@@ -135,7 +143,7 @@ class DecisionProviderManager:
         provider_config = config or decision_config.get(provider_name, {})
 
         async with self._switch_lock:
-            # 清理当前Provider
+            # 清理当前Provider（如果存在）
             if self._current_provider:
                 self.logger.info(f"清理当前Provider: {self._provider_name}")
                 try:
@@ -163,37 +171,123 @@ class DecisionProviderManager:
                     provider_name, provider_config, context=context
                 )
                 self._provider_name = provider_name
+                self._provider_ready = True
+                self.logger.info(f"DecisionProvider '{provider_name}' 已创建（未启动）")
+
             except ValueError as e:
                 available = ", ".join(ProviderRegistry.get_registered_decision_providers())
                 self.logger.error(f"DecisionProvider '{provider_name}' 未找到。可用: {available}")
                 raise ValueError(f"DecisionProvider '{provider_name}' 未找到。可用: {available}") from e
 
-            # 初始化Provider
+    async def start(self) -> None:
+        """
+        启动当前 Provider
+
+        此方法会：
+        1. 调用 Provider 的 start() 方法启动 Provider
+        2. 发布 Provider 连接事件
+        3. 订阅 data.message 事件
+
+        注意：
+            - 必须先调用 setup() 创建 Provider
+            - 如果没有已创建的 Provider，会跳过启动并记录警告
+
+        Raises:
+            ConnectionError: 如果 Provider 启动失败
+        """
+        if not self._current_provider:
+            self.logger.warning("没有已创建的 Provider，跳过启动")
+            return
+
+        provider_name = self._provider_name
+
+        try:
+            # 启动 Provider
+            await self._current_provider.start()
+            self.logger.info(f"DecisionProvider '{provider_name}' 已启动")
+
+            # 发布Provider连接事件
+            await self._emit_provider_connected_event()
+
+            # 订阅 data.message 事件
+            self._subscribe_data_message_event()
+
+        except Exception as e:
+            self.logger.error(f"DecisionProvider '{provider_name}' 启动失败: {e}", exc_info=True)
+            raise ConnectionError(f"无法启动DecisionProvider '{provider_name}': {e}") from e
+
+    async def stop(self) -> None:
+        """
+        停止当前 Provider（不删除实例）
+
+        此方法会：
+        1. 取消订阅 data.message 事件
+        2. 发布 Provider 断开事件
+        3. 调用 Provider 的 cleanup() 方法
+
+        注意：
+            - 停止后 Provider 实例仍然存在
+            - 可以通过调用 start() 重新启动
+            - 如需删除实例，请调用 cleanup()
+        """
+        # 取消事件订阅
+        self._unsubscribe_data_message_event()
+
+        provider_name = self._provider_name
+
+        if self._current_provider:
+            self.logger.info(f"停止 Provider: {provider_name}")
             try:
-                # 启动 Provider（使用 context 中的 event_bus）
-                await self._current_provider.start()
-                self.logger.info(f"DecisionProvider '{provider_name}' 初始化成功")
-
-                # 发布Provider连接事件（使用emit）
-                from src.modules.events.payloads.decision import ProviderConnectedPayload
-
-                await self.event_bus.emit(
-                    CoreEvents.DECISION_PROVIDER_CONNECTED,
-                    ProviderConnectedPayload(
-                        provider=provider_name,
-                        endpoint=provider_config.get("host") or provider_config.get("ws_url"),
-                        metadata={"config": provider_config},
-                    ),
-                    source="DecisionProviderManager",
-                )
+                await self._current_provider.cleanup()
             except Exception as e:
-                self.logger.error(f"DecisionProvider '{provider_name}' 初始化失败: {e}", exc_info=True)
-                self._current_provider = None
-                self._provider_name = None
-                raise ConnectionError(f"无法初始化DecisionProvider '{provider_name}': {e}") from e
+                self.logger.error(f"停止 Provider 失败: {e}", exc_info=True)
 
-        # 订阅 data.message 事件
-        self._subscribe_data_message_event()
+            # 发布Provider断开事件
+            await self._emit_provider_disconnected_event(provider_name, reason="stop", will_retry=False)
+
+            self._provider_ready = False
+            self.logger.info(f"DecisionProvider '{provider_name}' 已停止")
+
+    async def _emit_provider_connected_event(self) -> None:
+        """发布 Provider 连接事件"""
+        if not self._current_provider or not self._provider_name:
+            return
+
+        try:
+            from src.modules.events.payloads.decision import ProviderConnectedPayload
+
+            await self.event_bus.emit(
+                CoreEvents.DECISION_PROVIDER_CONNECTED,
+                ProviderConnectedPayload(
+                    provider=self._provider_name,
+                    metadata={"provider_ready": self._provider_ready},
+                ),
+                source="DecisionProviderManager",
+            )
+        except Exception as e:
+            self.logger.warning(f"发布Provider连接事件失败: {e}")
+
+    async def _emit_provider_disconnected_event(
+        self, provider_name: Optional[str], reason: str = "unknown", will_retry: bool = False
+    ) -> None:
+        """发布 Provider 断开事件"""
+        if not provider_name:
+            return
+
+        try:
+            from src.modules.events.payloads import ProviderDisconnectedPayload
+
+            await self.event_bus.emit(
+                CoreEvents.DECISION_PROVIDER_DISCONNECTED,
+                ProviderDisconnectedPayload(
+                    provider=provider_name,
+                    reason=reason,
+                    will_retry=will_retry,
+                ),
+                source="DecisionProviderManager",
+            )
+        except Exception as e:
+            self.logger.warning(f"发布Provider断开事件失败: {e}")
 
     async def decide(self, normalized_message: "NormalizedMessage") -> None:
         """
@@ -227,7 +321,7 @@ class DecisionProviderManager:
             config: 新Provider配置
 
         注意:
-            - 切换时会先清理旧Provider
+            - 切换时会先停止并清理旧Provider
             - 如果新Provider初始化失败，会回退到旧Provider
         """
         from src.modules.registry import ProviderRegistry
@@ -263,15 +357,15 @@ class DecisionProviderManager:
                     # 保留原始错误消息格式以兼容测试
                     raise ValueError(f"DecisionProvider '{provider_name}' 未找到") from e
 
-                # 设置新Provider
+                # 启动新Provider
                 try:
                     await new_provider.start()
-                    self.logger.info(f"DecisionProvider '{provider_name}' 初始化成功")
+                    self.logger.info(f"DecisionProvider '{provider_name}' 启动成功")
                 except Exception as e:
-                    self.logger.error(f"DecisionProvider '{provider_name}' setup 失败: {e}", exc_info=True)
-                    raise ConnectionError(f"无法初始化DecisionProvider '{provider_name}': {e}") from e
+                    self.logger.error(f"DecisionProvider '{provider_name}' 启动失败: {e}", exc_info=True)
+                    raise ConnectionError(f"无法启动DecisionProvider '{provider_name}': {e}") from e
 
-                # 新Provider设置成功后，清理旧Provider
+                # 新Provider启动成功后，清理旧Provider
                 if old_provider:
                     self.logger.info(f"清理旧Provider: {old_name}")
                     try:
@@ -282,8 +376,9 @@ class DecisionProviderManager:
                 # 更新当前Provider
                 self._current_provider = new_provider
                 self._provider_name = provider_name
+                self._provider_ready = True
 
-                # 发布新Provider连接事件（使用emit）
+                # 发布新Provider连接事件
                 try:
                     from src.modules.events.payloads.decision import ProviderConnectedPayload
 
@@ -298,6 +393,9 @@ class DecisionProviderManager:
                 except Exception as e:
                     self.logger.warning(f"发布Provider连接事件失败: {e}")
 
+                # 订阅 data.message 事件（如果尚未订阅）
+                self._subscribe_data_message_event()
+
                 self.logger.info(f"Provider切换成功: {old_name} -> {provider_name}")
 
             except Exception as e:
@@ -305,13 +403,23 @@ class DecisionProviderManager:
                 # 回退到旧Provider
                 self._current_provider = old_provider
                 self._provider_name = old_name
+                self._provider_ready = old_provider is not None
                 raise
 
     async def cleanup(self) -> None:
         """
-        清理资源
+        清理资源并删除 Provider 实例
 
-        取消事件订阅，清理当前Provider。
+        此方法会：
+        1. 取消订阅 data.message 事件
+        2. 调用 Provider 的 cleanup() 方法
+        3. 发布 Provider 断开事件
+        4. 删除 Provider 实例（设置 _current_provider 为 None）
+
+        注意：
+            - 此方法会完全删除 Provider 实例
+            - 如需保留实例仅停止运行，请调用 stop()
+            - 清理后需要重新调用 setup() 和 start() 才能再次使用
         """
         # 取消事件订阅
         self._unsubscribe_data_message_event()
@@ -325,24 +433,14 @@ class DecisionProviderManager:
                     await self._current_provider.cleanup()
                 except Exception as e:
                     self.logger.error(f"清理Provider失败: {e}", exc_info=True)
-                self._current_provider = None
-                self._provider_name = None
 
                 # 发布Provider断开事件
-                try:
-                    from src.modules.events.payloads import ProviderDisconnectedPayload
+                await self._emit_provider_disconnected_event(provider_name, reason="cleanup", will_retry=False)
 
-                    await self.event_bus.emit(
-                        CoreEvents.DECISION_PROVIDER_DISCONNECTED,
-                        ProviderDisconnectedPayload(
-                            provider=provider_name,
-                            reason="cleanup",
-                            will_retry=False,
-                        ),
-                        source="DecisionProviderManager",
-                    )
-                except Exception as e:
-                    self.logger.warning(f"发布Provider断开事件失败: {e}")
+                # 删除 Provider 实例
+                self._current_provider = None
+                self._provider_name = None
+                self._provider_ready = False
 
             self.logger.info("DecisionProviderManager 已清理")
 

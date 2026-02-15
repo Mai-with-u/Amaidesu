@@ -322,7 +322,7 @@ class STTInputProvider(InputProvider):
             speech_chunk_count = 0
             timeout_duration = max(0.1, self.min_silence_duration_ms / 1000.0 * 0.8)
 
-            while self.is_running:
+            while self.is_started:
                 try:
                     # 等待音频块
                     audio_chunk_bytes = await asyncio.wait_for(
@@ -588,7 +588,7 @@ class STTInputProvider(InputProvider):
 
         try:
             async for msg in ws:
-                if not self.is_running:
+                if not self.is_started:
                     break
 
                 if msg.type == self.aiohttp.WSMsgType.TEXT:

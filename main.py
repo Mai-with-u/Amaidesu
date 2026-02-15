@@ -246,7 +246,7 @@ def log_config_update(main_cfg_updated: bool) -> None:
 
 
 async def load_pipeline_manager(config: Dict[str, Any]) -> Optional[InputPipelineManager]:
-    """加载输入管道管理器，包含 MessagePipeline（Input Domain: 消息预处理）。"""
+    """加载输入管道管理器（Input Domain: 消息预处理）。"""
     pipeline_config = config.get("pipelines", {})
     if not pipeline_config:
         logger.info("配置中未启用管道功能")
@@ -258,19 +258,12 @@ async def load_pipeline_manager(config: Dict[str, Any]) -> Optional[InputPipelin
     try:
         manager = InputPipelineManager()
 
-        # 加载 MessagePipeline（Input Domain: 消息预处理）
-        await manager.load_message_pipelines(pipeline_load_dir, pipeline_config)
-        message_pipeline_count = len(manager._message_pipelines)
+        # 加载管道（Input Domain: 消息预处理）
+        await manager.load_pipelines(pipeline_load_dir, pipeline_config)
+        pipeline_count = len(manager._pipelines)
 
-        # 同时加载 TextPipeline（保持兼容）
-        await manager.load_text_pipelines(pipeline_load_dir, pipeline_config)
-        text_pipeline_count = len(manager._text_pipelines)
-
-        total_pipelines = message_pipeline_count + text_pipeline_count
-        if total_pipelines > 0:
-            logger.info(
-                f"管道加载完成，共 {message_pipeline_count} 个 MessagePipeline，{text_pipeline_count} 个 TextPipeline。"
-            )
+        if pipeline_count > 0:
+            logger.info(f"管道加载完成，共 {pipeline_count} 个管道。")
             return manager
         else:
             logger.warning("未找到任何有效的管道，管道功能将被禁用。")
@@ -362,8 +355,8 @@ async def create_app_components(
                 logger.info("已注入 InputPipelineManager 到 InputProviderManager")
 
             # 加载并启动 Provider
-            providers = await input_provider_manager.load_from_config(input_config, config_service=config_service)
-            await input_provider_manager.start_all_providers(providers)
+            await input_provider_manager.setup(input_config, config_service=config_service)
+            await input_provider_manager.start()
         except Exception as e:
             logger.error(f"设置输入Provider管理器失败: {e}", exc_info=True)
             logger.warning("输入Provider功能不可用，继续启动其他服务")
@@ -390,8 +383,9 @@ async def create_app_components(
             # 设置决策Provider（通过 ProviderRegistry 自动创建）
             # 使用新的配置格式：decision_config 包含 active_provider 和 available_providers
             await decision_provider_manager.setup(decision_config=decision_config)
+            await decision_provider_manager.start()
             active_provider = decision_provider_manager.get_current_provider_name()
-            logger.info(f"DecisionProviderManager 已设置（Provider: {active_provider}）")
+            logger.info(f"DecisionProviderManager 已设置并启动（Provider: {active_provider}）")
         except Exception as e:
             logger.error(f"设置决策域组件失败: {e}", exc_info=True)
             logger.warning("决策域功能不可用，继续启动其他服务")
@@ -502,8 +496,9 @@ async def run_shutdown(
     if input_provider_manager:
         logger.info("正在停止输入Provider（数据生产者）...")
         try:
-            await input_provider_manager.stop_all_providers()
-            logger.info("输入Provider已停止")
+            await input_provider_manager.stop()
+            await input_provider_manager.cleanup()
+            logger.info("输入Provider已停止并清理")
         except Exception as e:
             logger.error(f"停止输入Provider时出错: {e}")
 

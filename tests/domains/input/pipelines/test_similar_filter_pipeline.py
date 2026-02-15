@@ -1,12 +1,35 @@
 """
-测试 SimilarFilterTextPipeline (相似文本过滤管道)
+测试 SimilarFilterInputPipeline (相似文本过滤管道)
 
 运行: uv run pytest tests/domains/input/pipelines/test_similar_filter_pipeline.py -v
 """
 
 import pytest
 
-from src.domains.input.pipelines.similar_filter.pipeline import SimilarFilterTextPipeline
+from src.domains.input.pipelines.similar_filter.pipeline import SimilarFilterInputPipeline
+from src.modules.types.base.normalized_message import NormalizedMessage
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+
+def create_message(
+    text: str, user_id: str = "test_user", source: str = "test_source"
+) -> NormalizedMessage:
+    """创建 NormalizedMessage 辅助函数"""
+
+    class MockRaw:
+        open_id = user_id
+        uname = "test_name"
+
+    return NormalizedMessage(
+        text=text,
+        source=source,
+        data_type="text",
+        raw=MockRaw(),
+    )
+
 
 # =============================================================================
 # Fixtures
@@ -22,13 +45,7 @@ def similar_filter_pipeline():
         "min_text_length": 3,
         "cross_user_filter": True,
     }
-    return SimilarFilterTextPipeline(config)
-
-
-@pytest.fixture
-def basic_metadata():
-    """基础元数据"""
-    return {"user_id": "test_user", "group_id": "test_group"}
+    return SimilarFilterInputPipeline(config)
 
 
 # =============================================================================
@@ -54,7 +71,7 @@ def test_similar_filter_pipeline_custom_config():
         "min_text_length": 5,
         "cross_user_filter": False,
     }
-    pipeline = SimilarFilterTextPipeline(config)
+    pipeline = SimilarFilterInputPipeline(config)
     assert pipeline._similarity_threshold == 0.9
     assert pipeline._time_window == 10.0
     assert pipeline._min_text_length == 5
@@ -67,46 +84,46 @@ def test_similar_filter_pipeline_custom_config():
 
 
 @pytest.mark.asyncio
-async def test_process_first_message(similar_filter_pipeline, basic_metadata):
+async def test_process_first_message(similar_filter_pipeline):
     """测试第一条消息通过"""
-    text = "这是一条测试消息"
-    result = await similar_filter_pipeline._process(text, basic_metadata)
-    assert result == text
+    message = create_message("这是一条测试消息")
+    result = await similar_filter_pipeline._process(message)
+    assert result == message
 
 
 @pytest.mark.asyncio
-async def test_process_similar_message_filtered(similar_filter_pipeline, basic_metadata):
+async def test_process_similar_message_filtered(similar_filter_pipeline):
     """测试相似消息被过滤"""
-    text1 = "这是一条测试消息"
-    text2 = "这是一条测试消息"  # 完全相同
+    message1 = create_message("这是一条测试消息")
+    message2 = create_message("这是一条测试消息")  # 完全相同
 
-    result1 = await similar_filter_pipeline._process(text1, basic_metadata)
-    assert result1 == text1
+    result1 = await similar_filter_pipeline._process(message1)
+    assert result1 == message1
 
-    result2 = await similar_filter_pipeline._process(text2, basic_metadata)
+    result2 = await similar_filter_pipeline._process(message2)
     assert result2 is None  # 被过滤
 
 
 @pytest.mark.asyncio
-async def test_process_different_message_pass(similar_filter_pipeline, basic_metadata):
+async def test_process_different_message_pass(similar_filter_pipeline):
     """测试不同消息通过"""
-    text1 = "这是一条测试消息"
-    text2 = "这是完全不同的内容"
+    message1 = create_message("这是一条测试消息")
+    message2 = create_message("这是完全不同的内容")
 
-    result1 = await similar_filter_pipeline._process(text1, basic_metadata)
-    assert result1 == text1
+    result1 = await similar_filter_pipeline._process(message1)
+    assert result1 == message1
 
-    result2 = await similar_filter_pipeline._process(text2, basic_metadata)
-    assert result2 == text2
+    result2 = await similar_filter_pipeline._process(message2)
+    assert result2 == message2
 
 
 @pytest.mark.asyncio
-async def test_process_below_min_length(similar_filter_pipeline, basic_metadata):
+async def test_process_below_min_length(similar_filter_pipeline):
     """测试低于最小长度的文本跳过过滤"""
-    short_text = "12"  # 低于 min_text_length=3
+    short_message = create_message("12")  # 低于 min_text_length=3
 
-    result = await similar_filter_pipeline._process(short_text, basic_metadata)
-    assert result == short_text  # 应该通过（跳过过滤）
+    result = await similar_filter_pipeline._process(short_message)
+    assert result == short_message  # 应该通过（跳过过滤）
 
 
 @pytest.mark.asyncio
@@ -114,20 +131,19 @@ async def test_process_cross_user_filter(similar_filter_pipeline):
     """测试跨用户过滤"""
     text = "相同的消息内容"
 
-    user1_metadata = {"user_id": "user1", "group_id": "group1"}
-    user2_metadata = {"user_id": "user2", "group_id": "group1"}
-
     # 用户1发送消息
-    result1 = await similar_filter_pipeline._process(text, user1_metadata)
-    assert result1 == text
+    message1 = create_message(text, user_id="user1", source="group1")
+    result1 = await similar_filter_pipeline._process(message1)
+    assert result1 == message1
 
     # 用户2发送相同消息（跨用户过滤启用）
-    result2 = await similar_filter_pipeline._process(text, user2_metadata)
+    message2 = create_message(text, user_id="user2", source="group1")
+    result2 = await similar_filter_pipeline._process(message2)
     assert result2 is None  # 被过滤
 
 
 @pytest.mark.asyncio
-async def test_process_no_cross_user_filter(similar_filter_pipeline):
+async def test_process_no_cross_user_filter():
     """测试禁用跨用户过滤"""
     # 创建禁用跨用户过滤的管道
     config = {
@@ -136,20 +152,19 @@ async def test_process_no_cross_user_filter(similar_filter_pipeline):
         "min_text_length": 3,
         "cross_user_filter": False,
     }
-    pipeline = SimilarFilterTextPipeline(config)
+    pipeline = SimilarFilterInputPipeline(config)
 
     text = "相同的消息内容"
 
-    user1_metadata = {"user_id": "user1", "group_id": "group1"}
-    user2_metadata = {"user_id": "user2", "group_id": "group1"}
-
     # 用户1发送消息
-    result1 = await pipeline._process(text, user1_metadata)
-    assert result1 == text
+    message1 = create_message(text, user_id="user1", source="group1")
+    result1 = await pipeline._process(message1)
+    assert result1 == message1
 
     # 用户2发送相同消息（跨用户过滤禁用）
-    result2 = await pipeline._process(text, user2_metadata)
-    assert result2 == text  # 应该通过
+    message2 = create_message(text, user_id="user2", source="group1")
+    result2 = await pipeline._process(message2)
+    assert result2 == message2  # 应该通过
 
 
 # =============================================================================
@@ -160,23 +175,21 @@ async def test_process_no_cross_user_filter(similar_filter_pipeline):
 @pytest.mark.asyncio
 async def test_similarity_calculation(similar_filter_pipeline):
     """测试相似度计算"""
-    metadata = {"user_id": "user1", "group_id": "group1"}
-
     # 测试完全相同的文本
-    text1 = "完全相同的文本"
-    await similar_filter_pipeline._process(text1, metadata)
-    result = await similar_filter_pipeline._process(text1, metadata)
+    message1 = create_message("完全相同的文本", user_id="user1")
+    await similar_filter_pipeline._process(message1)
+    result = await similar_filter_pipeline._process(message1)
     assert result is None
 
     # 测试包含关系 (666 vs 6666)
     await similar_filter_pipeline.reset()
-    text2 = "666"
-    text3 = "6666"
+    message2 = create_message("666", user_id="user1")
+    message3 = create_message("6666", user_id="user1")
 
-    await similar_filter_pipeline._process(text2, metadata)
-    result = await similar_filter_pipeline._process(text3, metadata)
+    await similar_filter_pipeline._process(message2)
+    result = await similar_filter_pipeline._process(message3)
     # 可能被过滤（包含关系）
-    assert result is None or result == text3
+    assert result is None or result == message3
 
 
 # =============================================================================
@@ -185,17 +198,18 @@ async def test_similarity_calculation(similar_filter_pipeline):
 
 
 @pytest.mark.asyncio
-async def test_time_window_expiration(similar_filter_pipeline, basic_metadata):
+async def test_time_window_expiration(similar_filter_pipeline):
     """测试重置管道清空缓存"""
     text = "测试消息"
+    message = create_message(text, source="test_source")
 
     # 使用 process() 而不是 _process()
     # 发送第一条消息
-    result1 = await similar_filter_pipeline.process(text, basic_metadata)
-    assert result1 == text
+    result1 = await similar_filter_pipeline.process(message)
+    assert result1 == message
 
     # 验证缓存中有数据
-    group_id = basic_metadata["group_id"]
+    group_id = "test_source"
     cache_size_before = len(similar_filter_pipeline._text_cache.get(group_id, []))
     assert cache_size_before > 0
 
@@ -207,18 +221,18 @@ async def test_time_window_expiration(similar_filter_pipeline, basic_metadata):
     assert cache_size_after == 0
 
     # 现在相同消息应该通过（缓存已清空）
-    result2 = await similar_filter_pipeline.process(text, basic_metadata)
-    assert result2 == text
+    result2 = await similar_filter_pipeline.process(message)
+    assert result2 == message
 
 
 @pytest.mark.asyncio
-async def test_cache_cleanup(similar_filter_pipeline, basic_metadata):
+async def test_cache_cleanup(similar_filter_pipeline):
     """测试缓存清理"""
     # 添加多条消息
     for i in range(5):
-        await similar_filter_pipeline._process(f"消息{i}", basic_metadata)
+        await similar_filter_pipeline._process(create_message(f"消息{i}", source="test_source"))
 
-    group_id = basic_metadata["group_id"]
+    group_id = "test_source"
     cache_before = len(similar_filter_pipeline._text_cache.get(group_id, []))
     assert cache_before > 0
 
@@ -235,16 +249,15 @@ async def test_different_groups(similar_filter_pipeline):
     """测试不同组独立过滤"""
     text = "相同的消息"
 
-    group1_metadata = {"user_id": "user1", "group_id": "group1"}
-    group2_metadata = {"user_id": "user1", "group_id": "group2"}
-
     # group1 发送消息
-    result1 = await similar_filter_pipeline._process(text, group1_metadata)
-    assert result1 == text
+    message1 = create_message(text, user_id="user1", source="group1")
+    result1 = await similar_filter_pipeline._process(message1)
+    assert result1 == message1
 
     # group2 发送相同消息（不同组）
-    result2 = await similar_filter_pipeline._process(text, group2_metadata)
-    assert result2 == text  # 应该通过（不同组独立计数)
+    message2 = create_message(text, user_id="user1", source="group2")
+    result2 = await similar_filter_pipeline._process(message2)
+    assert result2 == message2  # 应该通过（不同组独立计数)
 
 
 # =============================================================================
@@ -266,14 +279,15 @@ async def test_get_info(similar_filter_pipeline):
 
 
 @pytest.mark.asyncio
-async def test_statistics_tracking(similar_filter_pipeline, basic_metadata):
+async def test_statistics_tracking(similar_filter_pipeline):
     """测试统计信息跟踪"""
     # 重置统计信息确保测试从干净状态开始
     similar_filter_pipeline.reset_stats()
 
+    message = create_message("消息1")
     # 使用 process() 而不是 _process()，确保统计信息被正确记录
-    await similar_filter_pipeline.process("消息1", basic_metadata)
-    await similar_filter_pipeline.process("消息1", basic_metadata)  # 重复，被过滤
+    await similar_filter_pipeline.process(message)
+    await similar_filter_pipeline.process(message)  # 重复，被过滤
 
     stats = similar_filter_pipeline.get_stats()
     # process() 会被调用2次，所以 processed_count >= 2
@@ -288,36 +302,40 @@ async def test_statistics_tracking(similar_filter_pipeline, basic_metadata):
 
 
 @pytest.mark.asyncio
-async def test_empty_text(similar_filter_pipeline, basic_metadata):
+async def test_empty_text(similar_filter_pipeline):
     """测试空文本处理"""
-    result = await similar_filter_pipeline._process("", basic_metadata)
+    message = create_message("")
+    result = await similar_filter_pipeline._process(message)
     # 空文本低于最小长度，应该跳过过滤
-    assert result == ""
+    assert result == message
 
 
 @pytest.mark.asyncio
-async def test_special_characters(similar_filter_pipeline, basic_metadata):
+async def test_special_characters(similar_filter_pipeline):
     """测试特殊字符处理"""
-    text1 = "测试!!!消息@@@"
-    text2 = "测试!!!消息@@@"
+    text = "测试!!!消息@@@"
+    message1 = create_message(text)
+    message2 = create_message(text)
 
-    result1 = await similar_filter_pipeline._process(text1, basic_metadata)
-    assert result1 == text1
+    result1 = await similar_filter_pipeline._process(message1)
+    assert result1 == message1
 
-    result2 = await similar_filter_pipeline._process(text2, basic_metadata)
+    result2 = await similar_filter_pipeline._process(message2)
     assert result2 is None  # 相同，被过滤
 
 
 @pytest.mark.asyncio
-async def test_very_long_text(similar_filter_pipeline, basic_metadata):
+async def test_very_long_text(similar_filter_pipeline):
     """测试超长文本处理"""
     long_text = "a" * 10000
+    message1 = create_message(long_text)
+    message2 = create_message(long_text)
 
-    result = await similar_filter_pipeline._process(long_text, basic_metadata)
-    assert result == long_text
+    result = await similar_filter_pipeline._process(message1)
+    assert result == message1
 
     # 再次发送应该被过滤
-    result2 = await similar_filter_pipeline._process(long_text, basic_metadata)
+    result2 = await similar_filter_pipeline._process(message2)
     assert result2 is None
 
 

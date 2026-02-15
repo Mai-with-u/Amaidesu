@@ -5,7 +5,7 @@ InputProviderManager - 输入Provider管理器
 """
 
 import asyncio
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -58,10 +58,71 @@ class InputProviderManager:
 
         self.logger.debug("InputProviderManager初始化完成")
 
+    async def setup(
+        self,
+        config: Optional[Dict[str, Any]] = None,
+        config_service=None,
+    ) -> None:
+        """
+        设置 InputProviderManager
+
+        Args:
+            config: 输入 Provider 配置（来自[providers.input]）
+            config_service: ConfigService 实例
+
+        注意：此方法不启动 Provider，需要调用 start() 启动
+        """
+        self.logger.info("开始设置 InputProviderManager...")
+
+        if config is None:
+            self.logger.warning("未提供配置，跳过 Provider 加载")
+            return
+
+        # 从配置加载 Provider
+        providers = await self.load_from_config(config, config_service=config_service)
+        self._providers = providers
+
+        self.logger.info(f"InputProviderManager 设置完成，加载了 {len(providers)} 个 Provider")
+
+    async def start(self) -> None:
+        """
+        启动所有已加载的 Provider
+
+        注意：必须先调用 setup() 加载 Provider
+        """
+        if not self._providers:
+            self.logger.warning("没有已加载的 Provider，跳过启动")
+            return
+
+        await self.start_all_providers(self._providers)
+
+    async def stop(self) -> None:
+        """停止所有 Provider"""
+        await self.stop_all_providers()
+
+    async def cleanup(self) -> None:
+        """
+        清理 InputProviderManager 资源
+
+        取消所有订阅，清理 Provider 列表。
+        """
+        self.logger.info("清理 InputProviderManager...")
+
+        # 确保已停止
+        if self._is_started:
+            await self.stop_all_providers()
+
+        # 清理 Provider 列表
+        self._providers.clear()
+        self._provider_tasks.clear()
+
+        self.logger.info("InputProviderManager 清理完成")
+
     async def start_all_providers(self, providers: list[InputProvider]) -> None:
         """
         并发启动所有InputProvider，错误隔离
 
+        注意：这是内部方法，外部应使用 setup() + start() 组合。
         使用asyncio.gather包装每个Provider启动，确保单个Provider失败不影响其他。
 
         Args:
@@ -276,8 +337,13 @@ class InputProviderManager:
 
                 provider_type = provider_config.get("type", input_name)
 
+                # 创建 ProviderContext
+                from src.modules.di.context import ProviderContext
+
+                context = ProviderContext(event_bus=self.event_bus)
+
                 # 创建Provider（不再检查enabled字段，由enabled_inputs控制）
-                provider = ProviderRegistry.create_input(provider_type, provider_config)
+                provider = ProviderRegistry.create_input(provider_type, provider_config, context=context)
                 created_providers.append(provider)
                 self.logger.info(f"成功创建InputProvider: {input_name} (type={provider_type})")
             except Exception as e:

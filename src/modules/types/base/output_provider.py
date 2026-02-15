@@ -50,21 +50,13 @@ class OutputProvider(ABC):
         self.config = config
         self.context = context
         self.is_started = False
-        self._override_event_bus = None  # 用于测试时覆盖 event_bus
-        self._override_audio_stream_channel = None  # 用于测试时覆盖 audio_stream_channel
 
     @property
     def event_bus(self):
-        # 优先使用覆盖值（用于测试）
-        if self._override_event_bus is not None:
-            return self._override_event_bus
         return self.context.event_bus
 
     @property
     def audio_stream_channel(self) -> Optional["AudioStreamChannel"]:
-        # 优先使用覆盖值（用于测试）
-        if hasattr(self, "_override_audio_stream_channel") and self._override_audio_stream_channel is not None:
-            return self._override_audio_stream_channel
         return self.context.audio_stream_channel
 
     async def init(self):  # noqa: B027
@@ -76,28 +68,15 @@ class OutputProvider(ABC):
         """
         pass
 
-    async def start(self, event_bus=None, audio_stream_channel=None):
+    async def start(self):
         """
         启动 Provider，订阅 OUTPUT_INTENT 事件
 
         依赖已在构造时通过 context 注入。
-
-        Args:
-            event_bus: 可选的 EventBus 实例（用于测试兼容性）
-            audio_stream_channel: 可选的 AudioStreamChannel 实例（用于测试兼容性）
         """
         from src.modules.events.names import CoreEvents
         from src.modules.events.payloads.decision import IntentPayload
 
-        # 如果传入 event_bus，设置覆盖值
-        if event_bus is not None:
-            self._override_event_bus = event_bus
-
-        # 如果传入 audio_stream_channel，设置覆盖值
-        if audio_stream_channel is not None:
-            self._override_audio_stream_channel = audio_stream_channel
-
-        # 使用 event_bus 属性（支持覆盖值）
         if self.event_bus:
             self.event_bus.on(
                 CoreEvents.OUTPUT_INTENT, self._on_intent, model_class=IntentPayload, priority=self.priority
@@ -137,7 +116,6 @@ class OutputProvider(ABC):
         if not self.is_started:
             return
 
-        # 使用 event_bus 属性（支持覆盖值）
         if self.event_bus:
             self.event_bus.off(CoreEvents.OUTPUT_INTENT, self._on_intent)
 

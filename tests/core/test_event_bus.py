@@ -18,7 +18,7 @@ import asyncio
 import pytest
 from pydantic import BaseModel, Field
 
-from src.modules.events.event_bus import EventBus, HandlerWrapper
+from src.modules.events.event_bus import EventBus
 from src.modules.events.payloads import RawDataPayload
 from src.modules.events.registry import EventRegistry
 

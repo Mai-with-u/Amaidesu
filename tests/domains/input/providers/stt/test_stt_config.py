@@ -39,10 +39,10 @@ def test_iflytek_asr_config_defaults():
     """测试讯飞 ASR 配置默认值"""
     config = IflytekAsrConfig(appid="test_appid", api_secret="test_secret", api_key="test_key")
 
-    assert config.host == "iat-api.xfyun.cn"
-    assert config.path == "/v2/iat"
+    assert config.host == "iat.xf-yun.com"
+    assert config.path == "/v1"
     assert config.language == "zh_cn"
-    assert config.domain == "iat"
+    assert config.domain == "slm"
     assert config.accent == "mandarin"
 
 
