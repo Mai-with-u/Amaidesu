@@ -1,284 +1,290 @@
-# Amaidesu 架构重构文档索引
+# Amaidesu 重构文档
 
-> **版本**: v3.0
-> **日期**: 2026-02-01
-> **状态**: 插件系统已移除，采用纯Provider架构
+本目录包含 Amaidesu 项目的重构设计文档，旨在帮助了解旧架构的开发者快速理解新架构的变化和优势。
 
----
+## 目录
 
-## ⚠️ 架构说明
+- [为何重构](#为何重构)
+- [原本的架构](#原本的架构)
+- [新的架构](#新的架构)
+- [核心变化](#核心变化)
+- [详细设计文档](#详细设计文档)
 
-> **重要**: 当前架构已稳定运行，采用3域架构设计
+## 为何重构
 
-| 架构版本 | 说明 |
-|----------|------|
-| v3.0 | 3域架构（Input → Decision → Output） |
-| 移除内容 | 7层/5层架构已废弃 |
+旧架构在实际开发和维护过程中暴露了以下问题：
 
----
+### 1. 过度插件化
 
-## 📋 快速导航
+旧架构将几乎所有功能都作为插件实现，包括核心功能（如 WebUI 后端、LLM 客户端）。这导致了以下问题：
 
-### 我想了解...
+- **概念混淆**：如果某个"插件"对所有用户都是必需的，那它就不符合"可拔插"的定义，应该称为模块
+- **权限过高**：插件被赋予了过高的权限，核心功能与可选插件混在一起
+- **复杂度爆炸**：24 个插件之间存在复杂的依赖关系，难以理解和维护
 
-**整体架构是什么？**
-→ [设计总览](./design/overview.md)
+### 2. 服务注册机制的复杂性
 
-**3域架构如何工作？**
-→ [设计总览](./design/overview.md)
+旧架构使用 `register_service()` / `get_service()` 的服务注册机制：
 
-**决策层如何可替换？**
-→ [决策层设计](./design/decision_layer.md)
-
-**多个Provider如何并发？**
-→ [多Provider并发设计](./design/multi_provider.md)
-
-**配置系统如何重构？**
-→ [配置系统设计](./design/config_system.md)
-
-**提示词管理如何实现？**
-→ [提示词管理设计](./design/prompt_management.md)
-
-**LLM客户端如何管理？**
-→ [LLM服务设计](./design/llm_manager.md)
-
----
-
-## 📁 文档结构
-
-```
-refactor/
-├── README.md                            # 本文件 - 文档索引
-│
-├── design/                              # 设计文档
-│   ├── overview.md                       # 架构总览（3域架构）
-│   ├── decision_layer.md                 # 决策层设计
-│   ├── multi_provider.md                 # 多Provider并发设计
-│   ├── config_system.md                 # 配置系统设计
-│   ├── prompt_management.md             # 提示词管理设计
-│   ├── llm_manager.md                   # LLM服务设计
-│   ├── event_data_contract.md            # 事件数据契约设计
-│   └── pipeline_refactoring.md           # Pipeline重新设计
+```python
+# 旧架构：插件通过服务注册发现依赖
+self.core.register_service("text_cleanup", service_instance)
+service = self.core.get_service("text_cleanup")
 ```
 
-> **注意**: 旧的设计文档（core_refactoring.md, http_server.md, avatar_refactoring.md, plugin_system.md, 5_layer_refactoring_plan.md）已移至 plugins_backup/ 目录作为历史参考。
+这种方式导致：
+- **隐式依赖**：依赖关系在运行时才能发现，而非编译时
+- **依赖链复杂**：18 个插件使用服务注册，形成复杂的依赖网络
+- **难以追踪**：服务调用链难以追踪，调试困难
 
----
+### 3. 插件间依赖问题
 
-## 🎯 重构核心要点
+旧架构中插件之间存在相互依赖：
 
-### 1. 3域架构数据流（当前架构）
+- **稳定性差**：功能互相依赖一直在变，插件排列组合难以保证稳定
+- **难以解耦**：插件之间的互相依赖不可避免，最终变成"石山"代码
+- **需要额外工具**：需要开发依赖解决器、依赖下载器等工具
+
+### 4. 消息流不清晰
+
+旧架构的消息流动路径：
 
 ```
-Input Domain（数据采集 + 标准化）
-    ↓ NormalizedMessage
-Decision Domain（决策，可替换）
-    ↓ Intent
-Output Domain（参数生成 + 渲染）
-    ↓ 实际输出
+插件 -> AmaidesuCore -> MaiCore -> AmaidesuCore -> 插件
 ```
 
-### 2. 核心变化
+这种设计：
+- 所有消息都通过 MaiCore 中转，即使不需要 AI 处理的消息
+- 插件需要注册 `websocket_handler` 来接收消息，分发逻辑分散
+- 难以追踪消息的处理流程
 
-| 变化 | 旧架构 | 新架构（3域） |
-|------|-------------|-------------|
-| **架构类型** | 7层/5层分层架构 | 3域架构 |
-| **Input** | Layer 1-2 (Input + Normalization) | Input Domain（包含标准化） |
-| **Decision** | Layer 3 (Decision) 或 Layer 4 | Decision Domain |
-| **Output** | Layer 5-7 (Parameters + Rendering) | Output Domain（包含参数生成） |
-| **插件系统** | 存在 | **已移除**，采用纯Provider架构 |
+### 5. 配置管理分散
 
-### 3. 为什么移除插件系统？
+旧架构的配置系统：
+- 全局配置和插件级配置混在一起
+- 配置合并逻辑复杂
+- 难以进行配置验证
 
-详见：[插件系统移除说明](./PLUGIN_SYSTEM_REMOVAL.md)
+## 原本的架构
 
-**核心原因**：
-- ❌ Plugin在创建Provider，违背了"不创建Provider"的设计原则
-- ❌ 与"消灭插件化"的重构目标直接矛盾
-- ❌ 增加了一层不必要的抽象，反而使架构更复杂
+### 目录结构
 
-**新架构优势**：
-- ✅ Provider由Manager统一管理，配置驱动启用
-- ✅ 职责边界明确：Provider = 原子能力
-- ✅ 代码组织更清晰：按数据流层级组织
-
----
-
-## 🔑 关键设计概念
-
-### Provider（提供者）
-
-| 类型 | 位置 | 职责 | 示例 |
-|------|------|------|------|
-| **InputProvider** | Input Domain | 接收外部数据，生成RawData | ConsoleInputProvider, BiliDanmakuProvider |
-| **DecisionProvider** | Decision Domain | 处理NormalizedMessage，决策并返回Intent | MaiCoreDecisionProvider, LocalLLMDecisionProvider |
-| **OutputProvider** | Output Domain | 接收渲染参数，执行实际输出 | TTSProvider, SubtitleProvider, VTSProvider |
-
-### Manager（管理者）
-
-- **InputProviderManager**：管理输入Provider的生命周期
-- **DecisionManager**：管理决策Provider，支持运行时切换
-- **OutputProviderManager**：管理输出Provider的生命周期
-
-### 配置驱动
-
-```toml
-# 输入Provider配置
-[providers.input]
-enabled_inputs = ["console", "bili_danmaku"]
-
-[providers.input.providers.console]
-source = "stdin"
-
-# 决策Provider配置
-[providers.decision]
-active_provider = "maicore"
-
-# 输出Provider配置
-[providers.output]
-enabled_outputs = ["tts", "subtitle", "vts"]
+```
+Amaidesu-dev/
+├── main.py                      # 应用入口
+├── config-template.toml          # 配置模板
+├── src/
+│   ├── core/
+│   │   ├── amaidesu_core.py     # 核心协调器
+│   │   ├── plugin_manager.py    # 插件管理器
+│   │   ├── event_bus.py        # 事件总线
+│   │   ├── pipeline_manager.py  # 管道管理器
+│   │   └── context_manager.py   # 上下文管理器
+│   ├── plugins/                 # 24 个插件
+│   │   ├── bili_danmaku/
+│   │   ├── bili_danmaku_official/
+│   │   ├── console_input/
+│   │   ├── tts/
+│   │   ├── maicraft/
+│   │   ├── vts/
+│   │   └── ...
+│   └── pipelines/               # 消息处理管道
+│       ├── command_processor/
+│       ├── command_router/
+│       ├── similar_message_filter/
+│       └── throttle/
+└── tests/
 ```
 
----
+### 核心组件
 
-## 📊 架构演进
-
-### v1.0（2024年）
-
-- 24个插件，18个服务注册
-- 过度插件化，依赖地狱
-- 模块定位模糊
-
-### v2.0（2025年初）
-
-- 插件系统 + Provider系统双轨并行
-- Plugin创建和管理Provider
-- 仍然存在职责边界模糊的问题
-
-### v3.0（2026年2月，当前分支 refactor）
-
-- **移除插件系统**：所有功能迁移到 Provider 架构
-- Provider由Manager统一管理，配置驱动启用/禁用
-- 3域架构（Input → Decision → Output），职责清晰
-- 新增多个核心模块：events, config, context, llm, logging, prompts, streaming, tts, types, registry
-- Input Pipeline 系统重构，支持 MessagePipeline
-- Output 引入 Pipeline 机制，Intent 统一经 OutputPipeline 分发
-
----
-
-## ✅ 成功标准
-
-### 技术指标
-- ✅ 所有现有功能正常运行
-- ✅ 配置文件行数减少40%以上
-- ✅ 核心功能响应时间无增加
-- ✅ 代码重复率降低30%以上
-- ✅ 服务注册调用减少80%以上
-- ✅ EventBus事件调用覆盖率90%以上
-- ✅ 插件系统已移除，Provider由Manager统一管理
-
-### 架构指标
-- ✅ 清晰的3域架构数据流
-- ✅ 决策层可替换（支持多种DecisionProvider）
-- ✅ 多Provider并发支持（输入域和输出域）
-- ✅ 域间依赖关系清晰（单向依赖）
-- ✅ EventBus为内部主要通信模式
-- ✅ Provider模式替代重复插件
-- ✅ 配置驱动，无需修改代码即可启用/禁用Provider
-- ✅ 插件系统已完全移除
-
----
-
-## 🔗 相关资源
-
-### 设计文档
-- [设计总览](./design/overview.md) - 3域架构总览
-- [决策层设计](./design/decision_layer.md) - 可替换的决策Provider系统
-- [多Provider并发设计](./design/multi_provider.md) - Provider管理架构
-- [配置系统设计](./design/config_system.md) - 配置管理架构
-- [提示词管理设计](./design/prompt_management.md) - PromptManager 设计
-
-### 文档目录
-- [docs/](../docs/) - 项目文档（包含模块文档、API参考、开发指南）
-- [plugins_backup/](../plugins_backup/) - 旧插件系统备份和迁移文档
-
----
-
-## ❓ 常见问题
-
-### Q: 为什么要从7层/5层改为3域？
-
-**A**: 简化架构，消除冗余：
-- Normalization与Input强耦合，合并到Input Domain
-- Parameters与Output强耦合，合并到Output Domain
-- 减少数据转换开销，提高性能
-- 按业务功能组织，而非按技术分层
-
-### Q: 插件系统为什么要移除？
-
-**A**: 插件系统与"消灭插件化"的重构目标不兼容：
-- Plugin在创建Provider，违背了设计原则
-- 增加了一层不必要的抽象
-- 纯Provider架构更简单、更清晰
-
-详见：[插件系统移除说明](./PLUGIN_SYSTEM_REMOVAL.md)
-
-### Q: 社区开发者如何扩展功能？
-
-**A**: 直接添加Provider：
-
-1. 在对应域创建Provider文件：`src/domains/{domain}/providers/my_provider.py`
-2. 在配置中启用：`[providers.input]enabled_inputs = ["console", "my_provider"]`
-3. 无需创建Plugin
-
-详见：[设计总览 - 社区扩展](./design/overview.md#社区扩展)
-
----
-
-## 📝 当前分支变更（相对于 dev 分支）
-
-当前 refactor 分支相对于 dev 分支的主要架构变更：
-
-### 1. 目录结构重构
-- **删除**：`src/core/` 目录（旧的核心模块）
-- **新增**：`src/domains/` 目录（3域架构）
-  - `src/domains/input/` - 输入域
-  - `src/domains/decision/` - 决策域
-  - `src/domains/output/` - 输出域
-
-### 2. 插件系统移除
-- **删除**：所有 `src/plugins/` 目录下的插件（30+ 个）
-- **新增**：Provider 架构，所有功能迁移到 `src/domains/{domain}/providers/`
-
-### 3. 新增核心模块（src/modules/）
-| 模块 | 功能 |
+| 组件 | 职责 |
 |------|------|
-| `events/` | EventBus 事件系统 |
-| `config/` | 配置管理（ConfigService, Schema 验证） |
-| `context/` | 对话上下文管理 |
-| `llm/` | LLM 客户端管理 |
-| `logging/` | 统一日志系统 |
-| `prompts/` | 提示词管理（PromptManager） |
-| `streaming/` | 音频流传输 |
-| `tts/` | TTS 服务管理 |
-| `types/` | 共享类型定义（Intent, EmotionType, ActionType） |
-| `registry.py` | Provider 注册表 |
+| **AmaidesuCore** | WebSocket 通信、消息分发、服务注册 |
+| **PluginManager** | 插件加载、生命周期管理 |
+| **EventBus** | 事件发布-订阅（可选） |
+| **PipelineManager** | 入站/出站消息管道处理 |
 
-### 4. Provider 系统
-- Input Provider: 10 个（console, bili_danmaku, bili_danmaku_official, bili_danmaku_official_maicraft, mainosaba, mock_danmaku, read_pingmu, remote_stream, stt）
-- Decision Provider: 3 个（llm, maicore, maicraft）
-- Output Provider: 11 个（edge_tts, gptsovits, omni_tts, vts, warudo, vrchat, subtitle, sticker, obs_control, remote_stream, mock）
+### 插件系统
 
-### 5. Pipeline 系统
-- Input Pipeline: rate_limit, similar_filter
-- Output Pipeline: profanity_filter
+旧架构使用 `plugin_entrypoint` 入口点加载插件：
 
-### 6. 配置系统
-- 从旧配置系统迁移到 Pydantic Schema 验证
-- 支持配置文件自动生成
-- 配置覆盖机制
+```python
+# plugin.py
+class MyPlugin(BasePlugin):
+    def __init__(self, core, plugin_config):
+        self.core = core
+        self.plugin_config = plugin_config
+
+    async def setup(self):
+        self.core.register_websocket_handler("*", self.handler)
+
+    async def handler(self, message: MessageBase):
+        await self.core.send_to_maicore(message)
+
+plugin_entrypoint = MyPlugin
+```
+
+### 数据流
+
+```
+外部输入（B站弹幕/控制台/语音）
+    ↓
+【插件】发送 MessageBase → AmaidesuCore.send_to_maicore()
+    ↓
+【PipelineManager】出站管道处理
+    ↓
+【WebSocket】发送到 MaiCore
+    ↓
+【MaiCore】AI 决策
+    ↓
+【WebSocket】接收响应 → AmaidesuCore._handle_maicore_message()
+    ↓
+【PipelineManager】入站管道处理
+    ↓
+【插件】分发给处理器 → TTS/VTS/动作执行
+```
+
+## 新的架构
+
+### 目录结构
+
+```
+Amaidesu/
+├── main.py                      # CLI 入口
+├── config-template.toml         # 配置模板
+├── src/
+│   ├── domains/                 # 业务域（3域架构）
+│   │   ├── input/               # 输入域
+│   │   │   ├── provider_manager.py
+│   │   │   ├── pipelines/       # 输入管道
+│   │   │   └── providers/       # 输入 Provider
+│   │   ├── decision/            # 决策域
+│   │   │   ├── provider_manager.py
+│   │   │   └── providers/       # 决策 Provider
+│   │   └── output/              # 输出域
+│   │       ├── provider_manager.py
+│   │       ├── pipelines/       # 输出管道
+│   │       └── providers/       # 输出 Provider
+│   └── modules/                 # 核心模块（共享基础设施）
+│       ├── config/             # 配置管理
+│       ├── context/            # 上下文服务
+│       ├── di/                 # 依赖注入
+│       ├── events/             # 事件系统
+│       ├── llm/                # LLM 服务
+│       ├── logging/            # 日志系统
+│       ├── prompts/            # 提示词管理
+│       ├── registry/          # Provider 注册表
+│       ├── streaming/          # 音频流通道
+│       └── types/              # 共享类型
+└── docs/                       # 项目文档
+```
+
+### 核心组件
+
+| 组件 | 职责 |
+|------|------|
+| **InputProviderManager** | 管理输入 Provider 生命周期 |
+| **DecisionProviderManager** | 管理决策 Provider（单一活跃） |
+| **OutputProviderManager** | 管理输出 Provider 生命周期 |
+| **EventBus** | 唯一的跨域通信机制 |
+| **AudioStreamChannel** | 音频数据流传输通道 |
+
+### Provider 系统
+
+新架构使用 Provider 替代插件：
+
+```python
+# Provider 示例
+class ConsoleInputProvider(InputProvider):
+    async def start(self) -> AsyncIterator[NormalizedMessage]:
+        while True:
+            text = await self._read_input()
+            yield NormalizedMessage(
+                source=self.name,
+                content=text,
+                metadata={},
+            )
+```
+
+### 数据流
+
+```
+外部输入（弹幕、游戏、语音）
+        ↓
+【Input Domain】InputProvider → NormalizedMessage → Pipeline 过滤
+        ↓ EventBus: data.message
+【Decision Domain】DecisionProvider → Intent
+        ↓ EventBus: decision.intent
+【Output Domain】OutputProviderManager → OutputPipeline → OutputProviders
+```
+
+## 核心变化
+
+### 1. 从插件到 Provider
+
+| 方面 | 旧架构（插件） | 新架构（Provider） |
+|------|---------------|-------------------|
+| **定位** | 所有功能都是插件 | 核心功能是 Provider，可选功能是扩展 |
+| **加载** | 动态导入 `plugin_entrypoint` | 注册表 + 类型安全 |
+| **生命周期** | `setup()` / `cleanup()` | `init()` / `start()` / `stop()` / `cleanup()`（所有 Provider 类型统一） |
+| **依赖** | 服务注册 | 依赖注入 |
+
+### 2. 从服务注册到依赖注入
+
+| 方面 | 旧架构 | 新架构 |
+|------|--------|--------|
+| **机制** | `register_service()` / `get_service()` | `ProviderContext` 依赖注入 |
+| **依赖发现** | 运行时 | 初始化时 |
+| **类型安全** | 无 | 完整类型注解 |
+
+**注入链路**：
+```
+main.py 创建 ProviderContext
+    ↓
+ProviderManager 接收 context
+    ↓
+创建 Provider 时注入: provider_class(config=config, context=context)
+    ↓
+Provider 通过 self.context.xxx 访问依赖
+```
+
+### 3. 从集中式到 3 域架构
+
+| 方面 | 旧架构 | 新架构 |
+|------|--------|--------|
+| **组织** | 扁平的插件列表 | 按职责分域 |
+| **通信** | 通过 AmaidesuCore 中转 | EventBus 直接通信 |
+| **数据流** | 插件 → Core → MaiCore → Core → 插件 | Input → Decision → Output |
+
+### 4. 从可选到强制的 EventBus
+
+| 方面 | 旧架构 | 新架构 |
+|------|--------|--------|
+| **EventBus** | 可选功能 | 唯一跨域通信机制 |
+| **事件常量** | 字符串硬编码 | `CoreEvents` 枚举 |
+| **类型安全** | 无 | 事件类型与数据类型绑定 |
+
+## 详细设计文档
+
+| 文档 | 说明 |
+|------|------|
+| [architecture_comparison.md](design/architecture_comparison.md) | 架构对比详解 |
+| [data_flow.md](design/data_flow.md) | 数据流变化 |
+| [event_system.md](design/event_system.md) | 事件系统变化 |
+| [dependency_injection.md](design/dependency_injection.md) | 依赖注入变化 |
+| [config_system.md](design/config_system.md) | 配置系统变化 |
+| [core_modules.md](design/core_modules.md) | 核心模块变化（Prompts/Context/Logging） |
+
+## 迁移指南
+
+如果你有基于旧架构开发的插件，请参考以下迁移路径：
+
+1. **Input 插件** → 继承 `InputProvider`，实现 `start()` 方法
+2. **Output 插件** → 继承 `OutputProvider`，订阅 `decision.intent` 事件
+3. **Service 插件** → 转换为 `modules/` 中的共享模块或作为独立的 Provider
+4. **Decision 插件** → 继承 `DecisionProvider`，订阅 `data.message` 事件
 
 ---
 
-**最后更新**：2026年2月14日
-**维护者**：Amaidesu Team
+*最后更新：2026-02-15*
