@@ -182,14 +182,6 @@ async def test_start_all_providers_empty_list(manager):
     await manager.stop_all_providers()
 
 
-@pytest.mark.asyncio
-async def test_start_all_providers_concurrent(manager):
-    """测试并发启动（验证真的并发）"""
-    # 跳过此测试，因为 SlowMockInputProvider 会导致超时
-    # TODO: 修复 SlowMockInputProvider 的实现
-    pytest.skip("SlowMockInputProvider causes timeout - need to fix implementation")
-
-
 # =============================================================================
 # 优雅停止测试
 # =============================================================================
@@ -241,13 +233,6 @@ async def test_stop_all_providers_with_cleanup_failures(manager):
 
     # 验证 Manager 仍然标记为已停止
     assert manager._is_started is False
-
-
-@pytest.mark.asyncio
-async def test_stop_all_providers_timeout(manager):
-    """测试停止超时处理"""
-    # 跳过此测试，因为需要等待10秒超时
-    pytest.skip("Timeout test takes too long - mark as slow test")
 
 
 # =============================================================================
@@ -310,13 +295,6 @@ async def test_get_provider_by_source_case_sensitive(manager, sample_providers):
 
 
 @pytest.mark.asyncio
-async def test_load_from_config_basic(manager):
-    """测试从配置加载 Provider（基本配置）"""
-    # 跳过：需要 config_service 参数
-    pytest.skip("需要 config_service 参数支持")
-
-
-@pytest.mark.asyncio
 async def test_load_from_config_disabled(manager):
     """测试禁用配置"""
     config = {
@@ -348,34 +326,6 @@ async def test_load_from_config_no_inputs_key(manager):
     providers = await manager.load_from_config(config)
 
     assert len(providers) == 0
-
-
-@pytest.mark.asyncio
-async def test_load_from_config_provider_disabled(manager):
-    """测试单个 Provider 禁用"""
-    # 跳过：需要 config_service 参数
-    pytest.skip("需要 config_service 参数支持")
-
-
-@pytest.mark.asyncio
-async def test_load_from_config_invalid_provider_type(manager):
-    """测试无效的 Provider 类型（失败处理）"""
-    # 跳过：需要 config_service 参数
-    pytest.skip("需要 config_service 参数支持")
-
-
-@pytest.mark.asyncio
-async def test_load_from_config_type_fallback(manager):
-    """测试 type 字段回退到 provider_name"""
-    # 跳过：需要 config_service 参数
-    pytest.skip("需要 config_service 参数支持")
-
-
-@pytest.mark.asyncio
-async def test_load_from_config_and_start(manager):
-    """测试从配置加载并启动 Provider"""
-    # 跳过：需要 config_service 参数
-    pytest.skip("需要 config_service 参数支持")
 
 
 # =============================================================================

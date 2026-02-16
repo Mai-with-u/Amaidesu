@@ -500,19 +500,6 @@ async def test_on_normalized_message_ready_success(decision_manager_with_mock, s
     assert manager._current_provider.call_count == 1
 
 
-@pytest.mark.skip(reason="MessageReadyPayload 不支持 None 值，此测试场景已不再适用")
-@pytest.mark.asyncio
-async def test_on_normalized_message_ready_empty_message(decision_manager_with_mock):
-    """测试处理空消息（应忽略）
-
-    注意：由于 MessageReadyPayload.message 是必需字段，无法传递 None。
-    此测试已不再适用，因为 Payload API 强制类型安全。
-    """
-    # 此测试已被跳过，因为无法使用 MessageReadyPayload 创建 message=None 的事件
-    # 原始测试使用 {"message": None} 格式，但这违反了 Payload 的类型约束
-    pass
-
-
 @pytest.mark.asyncio
 async def test_on_normalized_message_ready_missing_message_key(decision_manager_with_mock):
     """测试事件数据中缺少 message 键"""
