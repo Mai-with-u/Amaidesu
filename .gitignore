@@ -199,3 +199,8 @@ MineLand/
 .cursor/
 nul
 *.torch_cache/
+
+# Dashboard 前端构建产物
+dashboard/dist/
+dashboard/node_modules/
+src/modules/llm/history/*.json

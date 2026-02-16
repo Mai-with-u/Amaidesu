@@ -398,12 +398,12 @@ class TokenUsageManager:
             return f"模型 {model_name} 暂无使用记录"
 
         first_call = (
-            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(usage["first_call_time"]))
+            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(usage["first_call_time"] / 1000))
             if usage["first_call_time"]
             else "未知"
         )
         last_call = (
-            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(usage["last_call_time"]))
+            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(usage["last_call_time"] / 1000))
             if usage["last_call_time"]
             else "未知"
         )
