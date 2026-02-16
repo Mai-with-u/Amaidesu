@@ -172,6 +172,40 @@ uv add package-name
 uv remove package-name
 ```
 
+### 4.4 Web Dashboard
+
+项目提供 Web 管理界面，可以实时查看会话历史、调试消息、监控系统状态。
+
+```bash
+# 方式一：后端自动启动（默认启用）
+uv run python main.py
+# 后端服务启动后访问 http://127.0.0.1:60214
+
+# 方式二：前端开发模式（需要单独启动）
+cd dashboard
+npm install    # 首次安装依赖
+npm run dev    # 启动开发服务器（端口 5173）
+```
+
+**配置选项**（在 `config.toml` 中）：
+
+```toml
+[dashboard]
+enabled = true              # 是否启用 Dashboard
+host = "127.0.0.1"          # 监听地址
+port = 60214                # 监听端口
+cors_origins = ["http://localhost:5173"]  # 允许的跨域来源
+max_history_messages = 1000  # 最大历史消息数
+websocket_heartbeat = 30    # WebSocket 心跳间隔（秒）
+```
+
+**功能特性**：
+- 实时会话历史查看
+- 消息调试和重放
+- Provider 状态监控
+- 配置在线修改
+- LLM 对话调试
+
 ## 5. 快速验证
 
 启动后，检查日志输出确保以下组件正常初始化：

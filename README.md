@@ -127,6 +127,20 @@ uv run python main.py --debug
 uv run python main.py --filter EdgeTTSProvider SubtitleProvider
 ```
 
+### Web Dashboard
+
+项目内置 Web 管理界面，启动后访问 http://127.0.0.1:60214
+
+```bash
+# 后端自动启动（默认启用）
+uv run python main.py
+
+# 前端开发模式（需单独启动）
+cd dashboard
+npm install
+npm run dev
+```
+
 详见 [快速开始](docs/getting-started.md)
 
 ## 文档导航
