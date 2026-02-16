@@ -15,9 +15,19 @@
 class CoreEvents:
     """核心事件名称常量（3域架构）"""
 
+    # ========== Core: 核心系统事件 ==========
+    # 核心启动/关闭事件
+    CORE_STARTUP = "core.startup"
+    CORE_SHUTDOWN = "core.shutdown"
+    CORE_ERROR = "core.error"
+
     # ========== Input Domain: 输入域 ==========
     # 标准化消息就绪事件（由 Input Domain 发布，Decision Domain 订阅）
     INPUT_MESSAGE_READY = "input.message.ready"
+
+    # Provider 连接状态事件
+    INPUT_PROVIDER_CONNECTED = "input.provider.connected"
+    INPUT_PROVIDER_DISCONNECTED = "input.provider.disconnected"
 
     # ========== Decision Domain: 决策域 ==========
     # 意图生成完成事件（由 Decision Domain 发布，Output Domain 订阅）
@@ -30,6 +40,10 @@ class CoreEvents:
     # ========== Output Domain: 输出域 ==========
     # 过滤后意图就绪事件（由 OutputProviderManager 发布，OutputProviders 订阅）
     OUTPUT_INTENT_READY = "output.intent.ready"
+
+    # Provider 连接状态事件
+    OUTPUT_PROVIDER_CONNECTED = "output.provider.connected"
+    OUTPUT_PROVIDER_DISCONNECTED = "output.provider.disconnected"
 
     # OBS 控制事件
     OUTPUT_OBS_SEND_TEXT = "output.obs.send_text"

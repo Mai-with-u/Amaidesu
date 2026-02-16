@@ -109,7 +109,7 @@ class TestAvatarProviderBaseStart:
         await provider.start()
         mock_event_bus.on.assert_called_once()
         call_args = mock_event_bus.on.call_args
-        assert call_args[0][0] == CoreEvents.OUTPUT_INTENT
+        assert call_args[0][0] == CoreEvents.OUTPUT_INTENT_READY
 
     @pytest.mark.asyncio
     async def test_start_connects_to_platform(self, mock_provider_context):

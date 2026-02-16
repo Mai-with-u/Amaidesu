@@ -8,6 +8,8 @@ LLM 管理器 - 核心基础设施
 
 import asyncio
 import os
+import time
+import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -634,6 +636,10 @@ class LLMManager:
         Returns:
             LLMResponse: 响应结果
         """
+        # 生成请求 ID 和记录开始时间
+        request_id = f"req_{uuid.uuid4().hex[:12]}"
+        start_time = time.time()
+
         llm_client = self._get_client(client_type)
         client_config = self._client_configs.get(client_type, {})
 
@@ -643,6 +649,7 @@ class LLMManager:
         max_delay = self._retry_config.max_delay
 
         last_error = None
+        result = None
 
         for attempt in range(max_retries):
             try:
@@ -658,6 +665,15 @@ class LLMManager:
                         total_tokens=result.usage.get("total_tokens", 0),
                     )
 
+                # 记录成功的请求历史
+                self._record_request_history(
+                    request_id=request_id,
+                    client_type=client_type,
+                    result=result,
+                    kwargs=kwargs,
+                    start_time=start_time,
+                )
+
                 return result
 
             except Exception as e:
@@ -669,7 +685,100 @@ class LLMManager:
 
         # 所有重试失败
         self.logger.error(f"所有 LLM 调用重试失败 (客户端: {client_type}): {last_error}")
-        return LLMResponse(success=False, content=None, error=str(last_error))
+        result = LLMResponse(success=False, content=None, error=str(last_error))
+
+        # 记录失败的请求历史
+        self._record_request_history(
+            request_id=request_id,
+            client_type=client_type,
+            result=result,
+            kwargs=kwargs,
+            start_time=start_time,
+        )
+
+        return result
+
+    def _record_request_history(
+        self,
+        request_id: str,
+        client_type: str,
+        result: LLMResponse,
+        kwargs: Dict[str, Any],
+        start_time: float,
+    ) -> None:
+        """
+        记录请求历史
+
+        Args:
+            request_id: 请求 ID
+            client_type: 客户端类型
+            result: LLM 响应结果
+            kwargs: 请求参数
+            start_time: 请求开始时间
+        """
+        try:
+            from src.modules.llm.request_history_manager import (
+                RequestRecord,
+                TokenUsage,
+                get_global_request_history_manager,
+            )
+
+            # 计算延迟（毫秒）
+            latency_ms = int((time.time() - start_time) * 1000)
+
+            # 获取模型名称
+            model_name = result.model or self._client_configs.get(client_type, {}).get("model", "unknown")
+
+            # 构建请求参数（去除敏感信息）
+            request_params = {
+                "messages": kwargs.get("messages", []),
+                "temperature": kwargs.get("temperature"),
+                "max_tokens": kwargs.get("max_tokens"),
+                "tools": kwargs.get("tools"),
+            }
+            # 移除 None 值
+            request_params = {k: v for k, v in request_params.items() if v is not None}
+
+            # 构建 TokenUsage
+            usage = None
+            if result.usage:
+                usage = TokenUsage(
+                    prompt_tokens=result.usage.get("prompt_tokens", 0),
+                    completion_tokens=result.usage.get("completion_tokens", 0),
+                    total_tokens=result.usage.get("total_tokens", 0),
+                )
+
+            # 计算费用
+            cost = 0.0
+            if usage and self._token_manager:
+                cost_info = self._token_manager._calculate_cost(
+                    model_name, usage.prompt_tokens, usage.completion_tokens
+                )
+                cost = cost_info.get("cost", 0.0)
+
+            # 创建请求记录
+            record = RequestRecord(
+                request_id=request_id,
+                client_type=client_type,
+                model_name=model_name,
+                request_params=request_params,
+                response_content=result.content,
+                reasoning_content=result.reasoning_content,
+                tool_calls=result.tool_calls or [],
+                usage=usage,
+                cost=cost,
+                success=result.success,
+                error=result.error,
+                latency_ms=latency_ms,
+            )
+
+            # 记录到全局管理器
+            history_manager = get_global_request_history_manager()
+            history_manager.record_request(record)
+
+        except Exception as e:
+            # 记录历史失败不应该影响主流程
+            self.logger.warning(f"记录请求历史失败: {e}")
 
     # === 生命周期 ===
 
