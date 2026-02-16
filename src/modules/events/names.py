@@ -2,76 +2,42 @@
 事件名称常量定义（3域架构）
 
 使用常量替代魔法字符串，提供 IDE 自动补全和重构支持。
+
+命名规范:
+- 格式: {domain}.{component}.{action}
+- 分隔符: 统一使用点号 (.)
+- 常量命名: 全大写 + 下划线
+
+详细规范请参考: docs/architecture/event-naming-convention.md
 """
 
 
 class CoreEvents:
     """核心事件名称常量（3域架构）"""
 
-    # ========== Data Domain: 数据域 ==========
-    DATA_MESSAGE = "data.message"
+    # ========== Input Domain: 输入域 ==========
+    # 标准化消息就绪事件（由 Input Domain 发布，Decision Domain 订阅）
+    INPUT_MESSAGE_READY = "input.message.ready"
 
     # ========== Decision Domain: 决策域 ==========
-    DECISION_INTENT = "decision.intent"
+    # 意图生成完成事件（由 Decision Domain 发布，Output Domain 订阅）
+    DECISION_INTENT_GENERATED = "decision.intent.generated"
 
-    # ========== Output Domain: 输出域 ==========
-    OUTPUT_INTENT = "output.intent"  # 过滤后的 Intent（新架构）
-
-    # ========== Decision Domain 事件 ==========
-    DECISION_REQUEST = "decision.request"
-    DECISION_RESPONSE_GENERATED = "decision.response_generated"  # MaiCore响应事件
+    # Provider 连接状态事件
     DECISION_PROVIDER_CONNECTED = "decision.provider.connected"
     DECISION_PROVIDER_DISCONNECTED = "decision.provider.disconnected"
 
-    # ========== Input Domain Provider 事件 ==========
-    INPUT_PROVIDER_CONNECTED = "input.provider.connected"
-    INPUT_PROVIDER_DISCONNECTED = "input.provider.disconnected"
-
-    # ========== Output Domain Provider 事件 ==========
-    OUTPUT_PROVIDER_CONNECTED = "output.provider.connected"
-    OUTPUT_PROVIDER_DISCONNECTED = "output.provider.disconnected"
-
-    # ========== Output Domain 事件 ==========
-    RENDER_COMPLETED = "render.completed"
-    RENDER_FAILED = "render.failed"
-
-    # 系统事件
-    CORE_STARTUP = "core.startup"
-    CORE_SHUTDOWN = "core.shutdown"
-    CORE_ERROR = "core.error"
-
-    # STT (语音识别) 事件
-    STT_AUDIO_RECEIVED = "stt.audio.received"
-    STT_SPEECH_STARTED = "stt.speech.started"
-    STT_SPEECH_ENDED = "stt.speech.ended"
-
-    # 屏幕上下文事件
-    SCREEN_CONTEXT_UPDATED = "screen.context.updated"
-    SCREEN_CHANGED = "screen.changed"
-
-    # 关键词匹配事件
-    KEYWORD_MATCHED = "keyword.matched"
-
-    # VRChat 事件
-    VRCHAT_CONNECTED = "vrchat.connected"
-    VRCHAT_DISCONNECTED = "vrchat.disconnected"
-    VRCHAT_PARAMETER_SENT = "vrchat.parameter.sent"
-
-    # Output Domain: 渲染相关事件
-    RENDER_SUBTITLE = "render.subtitle"
-    RENDER_STICKER = "render.sticker"
+    # ========== Output Domain: 输出域 ==========
+    # 过滤后意图就绪事件（由 OutputProviderManager 发布，OutputProviders 订阅）
+    OUTPUT_INTENT_READY = "output.intent.ready"
 
     # OBS 控制事件
-    OBS_SEND_TEXT = "obs.send_text"
-    OBS_SWITCH_SCENE = "obs.switch_scene"
-    OBS_SET_SOURCE_VISIBILITY = "obs.set_source_visibility"
+    OUTPUT_OBS_SEND_TEXT = "output.obs.send_text"
+    OUTPUT_OBS_SWITCH_SCENE = "output.obs.switch_scene"
+    OUTPUT_OBS_SET_SOURCE_VISIBILITY = "output.obs.set_source_visibility"
 
     # 远程流事件
-    REMOTE_STREAM_REQUEST_IMAGE = "remote_stream.request_image"
-
-    # VTS 相关事件（跨 Provider 通信）
-    VTS_SEND_EMOTION = "vts.send_emotion"
-    VTS_SEND_STATE = "vts.send_state"
+    OUTPUT_REMOTE_STREAM_REQUEST_IMAGE = "output.remote_stream.request_image"
 
     @classmethod
     def get_all_events(cls) -> tuple[str, ...]:
@@ -83,15 +49,12 @@ class CoreEvents:
         1. 不以下划线开头（排除私有属性）
         2. 值为字符串
         3. 值为小写（排除类名等）
-        4. 包含点号或以 CORE_ 开头（事件特征）
+        4. 包含点号（事件特征）
         """
         return tuple(
             value
             for name, value in vars(cls).items()
-            if not name.startswith("_")
-            and isinstance(value, str)
-            and value.islower()
-            and ("." in value or name.startswith("CORE_"))
+            if not name.startswith("_") and isinstance(value, str) and value.islower() and ("." in value)
         )
 
     # 所有事件名集合（用于事件验证等）

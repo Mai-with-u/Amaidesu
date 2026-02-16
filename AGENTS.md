@@ -35,7 +35,7 @@
 
 **重构前**：`Provider → RawData → InputCoordinator → NormalizerRegistry → NormalizedMessage`
 
-**重构后**：`Provider → NormalizedMessage → ProviderManager (Pipeline过滤) → data.message 事件`
+**重构后**：`Provider → NormalizedMessage → ProviderManager (Pipeline过滤) → input.message.ready 事件`
 
 ### 旧插件备份
 
@@ -371,23 +371,24 @@ prompt = get_prompt_manager().render(
 from src.modules.events.names import CoreEvents
 
 # 发布事件
-await event_bus.emit(CoreEvents.DATA_MESSAGE, normalized_message)
+await event_bus.emit(CoreEvents.INPUT_MESSAGE_READY, normalized_message)
 
 # 订阅事件
-await event_bus.subscribe(CoreEvents.DATA_MESSAGE, self.handle_message)
+await event_bus.subscribe(CoreEvents.INPUT_MESSAGE_READY, self.handle_message)
 ```
 
 **详细文档**：
 - [事件系统](docs/architecture/event-system.md)
 - [数据流规则](docs/architecture/data-flow.md)
+- [事件命名规范](docs/architecture/event-naming-convention.md)
 
 ### 核心事件
 
 | 事件名 | 发布者 | 订阅者 | 数据类型 |
 |--------|--------|--------|---------|
-| `data.message` | Input Domain | Decision Domain | `NormalizedMessage` |
-| `decision.intent` | Decision Domain | Output Domain | `Intent` |
-| `output.params` | ExpressionGenerator | OutputProviders | `RenderParameters` |
+| `input.message.ready` | Input Domain | Decision Domain | `NormalizedMessage` |
+| `decision.intent.generated` | Decision Domain | Output Domain | `Intent` |
+| `output.intent.ready` | OutputProviderManager | OutputProviders | `Intent` |
 
 ## ContextService 上下文管理
 
@@ -417,9 +418,9 @@ ContextService 提供对话历史管理和多会话支持。
 外部输入（弹幕、游戏、语音）
   ↓
 【Input Domain】外部数据 → NormalizedMessage
-  ↓ EventBus: data.message
+  ↓ EventBus: input.message.ready
 【Decision Domain】NormalizedMessage → Intent
-  ↓ EventBus: decision.intent
+  ↓ EventBus: decision.intent.generated
 【Output Domain】Intent → 实际输出
 ```
 

@@ -70,7 +70,7 @@ class OutputProvider(ABC):
 
     async def start(self):
         """
-        启动 Provider，订阅 OUTPUT_INTENT 事件
+        启动 Provider，订阅 OUTPUT_INTENT_READY 事件
 
         依赖已在构造时通过 context 注入。
         """
@@ -79,7 +79,7 @@ class OutputProvider(ABC):
 
         if self.event_bus:
             self.event_bus.on(
-                CoreEvents.OUTPUT_INTENT, self._on_intent, model_class=IntentPayload, priority=self.priority
+                CoreEvents.OUTPUT_INTENT_READY, self._on_intent, model_class=IntentPayload, priority=self.priority
             )
 
         await self.init()
@@ -117,7 +117,7 @@ class OutputProvider(ABC):
             return
 
         if self.event_bus:
-            self.event_bus.off(CoreEvents.OUTPUT_INTENT, self._on_intent)
+            self.event_bus.off(CoreEvents.OUTPUT_INTENT_READY, self._on_intent)
 
         await self.cleanup()
         self.is_started = False

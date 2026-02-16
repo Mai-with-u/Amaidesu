@@ -200,7 +200,7 @@ class RemoteStreamOutputProvider(OutputProvider):
         # 注册事件监听
         if self.event_bus:
             self.event_bus.on(
-                CoreEvents.REMOTE_STREAM_REQUEST_IMAGE,
+                CoreEvents.OUTPUT_REMOTE_STREAM_REQUEST_IMAGE,
                 self._handle_image_request,
                 RemoteStreamRequestImagePayload,
             )
@@ -295,7 +295,7 @@ class RemoteStreamOutputProvider(OutputProvider):
         # 取消事件监听
         if self.event_bus:
             self.event_bus.off(
-                CoreEvents.REMOTE_STREAM_REQUEST_IMAGE,
+                CoreEvents.OUTPUT_REMOTE_STREAM_REQUEST_IMAGE,
                 self._handle_image_request,
                 RemoteStreamRequestImagePayload,
             )
@@ -491,7 +491,7 @@ class RemoteStreamOutputProvider(OutputProvider):
             # 触发图像请求事件
             if self.event_bus:
                 payload = RemoteStreamRequestImagePayload(timestamp=message.data.get("timestamp", time.time()))
-                await self.event_bus.emit(CoreEvents.REMOTE_STREAM_REQUEST_IMAGE, payload)
+                await self.event_bus.emit(CoreEvents.OUTPUT_REMOTE_STREAM_REQUEST_IMAGE, payload)
 
         elif message_type == MessageType.TTS_DATA:
             # 服务器向边缘设备发送的TTS数据（在客户端模式下会收到）

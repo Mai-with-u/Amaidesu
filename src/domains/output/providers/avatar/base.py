@@ -2,7 +2,7 @@
 AvatarProviderBase - 虚拟形象 Provider 抽象基类
 
 定义了所有 Avatar Provider 的通用处理流程:
-1. 继承 OutputProvider，自动订阅 OUTPUT_INTENT 事件
+1. 继承 OutputProvider，自动订阅 OUTPUT_INTENT_READY 事件
 2. 适配 Intent 为平台参数 (_adapt_intent)
 3. 渲染到平台 (_render_to_platform)
 4. 连接/断开管理
@@ -23,7 +23,7 @@ class AvatarProviderBase(OutputProvider, ABC):
     """
     虚拟形象 Provider 抽象基类（重构后）
 
-    继承 OutputProvider，自动订阅 OUTPUT_INTENT 事件。
+    继承 OutputProvider，自动订阅 OUTPUT_INTENT_READY 事件。
     子类只需实现平台特定的适配和渲染逻辑。
     """
 

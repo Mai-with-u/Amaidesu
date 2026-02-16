@@ -194,13 +194,13 @@ class OutputProviderManager:
         from src.modules.events.payloads.decision import IntentPayload
 
         self.event_bus.on(
-            CoreEvents.DECISION_INTENT,
+            CoreEvents.DECISION_INTENT_GENERATED,
             self._on_decision_intent,
             model_class=IntentPayload,
             priority=50,
         )
         self._event_handler_registered = True
-        self.logger.info(f"已订阅 '{CoreEvents.DECISION_INTENT}' 事件（类型化）")
+        self.logger.info(f"已订阅 '{CoreEvents.DECISION_INTENT_GENERATED}' 事件（类型化）")
 
         self._is_setup = True
         self.logger.info("输出Provider管理器设置完成")
@@ -238,7 +238,7 @@ class OutputProviderManager:
         # 取消事件订阅
         if self._event_handler_registered:
             try:
-                self.event_bus.off(CoreEvents.DECISION_INTENT, self._on_decision_intent)
+                self.event_bus.off(CoreEvents.DECISION_INTENT_GENERATED, self._on_decision_intent)
                 self._event_handler_registered = False
                 self.logger.info("事件订阅已取消")
             except Exception as e:
@@ -276,18 +276,18 @@ class OutputProviderManager:
                     return
                 self.logger.debug("OutputPipeline 处理完成")
 
-            # 发布 OUTPUT_INTENT 事件（事件驱动）
+            # 发布 OUTPUT_INTENT_READY 事件（事件驱动）
             # 所有 Output Provider 订阅此事件并响应
             # 使用处理后的 Intent 创建新的 IntentPayload
             from src.modules.events.payloads.decision import IntentPayload
 
             output_payload = IntentPayload.from_intent(intent, payload.provider)
             await self.event_bus.emit(
-                CoreEvents.OUTPUT_INTENT,
+                CoreEvents.OUTPUT_INTENT_READY,
                 output_payload,
                 source="OutputProviderManager",
             )
-            self.logger.debug(f"已发布事件: {CoreEvents.OUTPUT_INTENT}")
+            self.logger.debug(f"已发布事件: {CoreEvents.OUTPUT_INTENT_READY}")
 
         except Exception as e:
             self.logger.error(f"处理Intent事件时出错: {e}", exc_info=True)

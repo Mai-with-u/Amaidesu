@@ -31,7 +31,7 @@ class EventRegistry:
         注册核心事件
 
         Args:
-            event_name: 事件名称（如 "perception.raw_data.generated"）
+            event_name: 事件名称（如 "input.message.ready"）
             model: Pydantic Model 类型
 
         Raises:
@@ -39,13 +39,9 @@ class EventRegistry:
         """
         # 验证命名规范
         valid_prefixes = (
-            "data.",
-            "perception.",
-            "normalization.",
+            "input.",
             "decision.",
             "output.",
-            "expression.",
-            "render.",
             "core.",
         )
         if not any(event_name.startswith(prefix) for prefix in valid_prefixes):
@@ -114,28 +110,27 @@ def register_core_events() -> None:
     """注册所有核心事件名与 Payload 类型的映射，供 EventBus 校验使用。"""
     from src.modules.events.names import CoreEvents
     from src.modules.events.payloads import (
-        DecisionRequestPayload,
-        DecisionResponsePayload,
         IntentPayload,
         MessageReadyPayload,
+        OBSSendTextPayload,
+        OBSSetSourceVisibilityPayload,
+        OBSSwitchScenePayload,
         ProviderConnectedPayload,
         ProviderDisconnectedPayload,
-        RenderCompletedPayload,
-        RenderFailedPayload,
+        RemoteStreamRequestImagePayload,
     )
-    from src.modules.events.payloads.system import ErrorPayload, ShutdownPayload, StartupPayload
 
-    # 核心事件注册
-    EventRegistry.register_core_event(CoreEvents.DATA_MESSAGE, MessageReadyPayload)
-    EventRegistry.register_core_event(CoreEvents.DECISION_REQUEST, DecisionRequestPayload)
-    EventRegistry.register_core_event(CoreEvents.DECISION_INTENT, IntentPayload)
-    EventRegistry.register_core_event(CoreEvents.DECISION_RESPONSE_GENERATED, DecisionResponsePayload)
+    # Input Domain 事件
+    EventRegistry.register_core_event(CoreEvents.INPUT_MESSAGE_READY, MessageReadyPayload)
+
+    # Decision Domain 事件
+    EventRegistry.register_core_event(CoreEvents.DECISION_INTENT_GENERATED, IntentPayload)
     EventRegistry.register_core_event(CoreEvents.DECISION_PROVIDER_CONNECTED, ProviderConnectedPayload)
     EventRegistry.register_core_event(CoreEvents.DECISION_PROVIDER_DISCONNECTED, ProviderDisconnectedPayload)
+
     # Output Domain 事件
-    EventRegistry.register_core_event(CoreEvents.OUTPUT_INTENT, IntentPayload)  # 过滤后的 Intent
-    EventRegistry.register_core_event(CoreEvents.RENDER_COMPLETED, RenderCompletedPayload)
-    EventRegistry.register_core_event(CoreEvents.RENDER_FAILED, RenderFailedPayload)
-    EventRegistry.register_core_event(CoreEvents.CORE_STARTUP, StartupPayload)
-    EventRegistry.register_core_event(CoreEvents.CORE_SHUTDOWN, ShutdownPayload)
-    EventRegistry.register_core_event(CoreEvents.CORE_ERROR, ErrorPayload)
+    EventRegistry.register_core_event(CoreEvents.OUTPUT_INTENT_READY, IntentPayload)
+    EventRegistry.register_core_event(CoreEvents.OUTPUT_OBS_SEND_TEXT, OBSSendTextPayload)
+    EventRegistry.register_core_event(CoreEvents.OUTPUT_OBS_SWITCH_SCENE, OBSSwitchScenePayload)
+    EventRegistry.register_core_event(CoreEvents.OUTPUT_OBS_SET_SOURCE_VISIBILITY, OBSSetSourceVisibilityPayload)
+    EventRegistry.register_core_event(CoreEvents.OUTPUT_REMOTE_STREAM_REQUEST_IMAGE, RemoteStreamRequestImagePayload)

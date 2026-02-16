@@ -344,7 +344,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
             self.logger.error(f"解析 Intent 失败: {e}", exc_info=True)
 
     async def _publish_intent(self, intent: Intent) -> None:
-        """通过 event_bus 发布 decision.intent 事件"""
+        """通过 event_bus 发布 decision.intent.generated 事件"""
         from src.modules.events.names import CoreEvents
         from src.modules.events.payloads import IntentPayload
 
@@ -355,12 +355,12 @@ class MaiCoreDecisionProvider(DecisionProvider):
         provider_name = self.get_info().get("name", "maicore")
 
         await self.event_bus.emit(
-            CoreEvents.DECISION_INTENT,
+            CoreEvents.DECISION_INTENT_GENERATED,
             IntentPayload.from_intent(intent, provider_name),
             source="MaiCoreDecisionProvider",
         )
 
-        self.logger.debug("已发布 decision.intent 事件")
+        self.logger.debug("已发布 decision.intent.generated 事件")
 
     def _parse_intent_from_maicore_response(self, response: MessageBase) -> Intent:
         """

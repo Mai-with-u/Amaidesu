@@ -400,12 +400,12 @@ class LLMPDecisionProvider(DecisionProvider):
         intent.source_context = source_context
 
         await self.event_bus.emit(
-            CoreEvents.DECISION_INTENT,
+            CoreEvents.DECISION_INTENT_GENERATED,
             IntentPayload.from_intent(intent, "llm"),
             source="LLMPDecisionProvider",
         )
 
-        self.logger.debug("已发布 decision.intent 事件")
+        self.logger.debug("已发布 decision.intent.generated 事件")
 
     async def _handle_fallback(self, normalized_message: "NormalizedMessage") -> None:
         """

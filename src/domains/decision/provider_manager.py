@@ -505,27 +505,27 @@ class DecisionProviderManager:
 
     def _subscribe_data_message_event(self) -> None:
         """
-        订阅 data.message 事件（防止重复订阅）
+        订阅 input.message.ready 事件（防止重复订阅）
         """
         if not self._event_subscribed:
             from src.modules.events.payloads.input import MessageReadyPayload
 
             self.event_bus.on(
-                CoreEvents.DATA_MESSAGE,
+                CoreEvents.INPUT_MESSAGE_READY,
                 self._on_data_message,
                 model_class=MessageReadyPayload,
             )
             self._event_subscribed = True
-            self.logger.info(f"DecisionProviderManager 已订阅 '{CoreEvents.DATA_MESSAGE}' 事件（类型化）")
+            self.logger.info(f"DecisionProviderManager 已订阅 '{CoreEvents.INPUT_MESSAGE_READY}' 事件（类型化）")
         else:
-            self.logger.debug(f"DecisionProviderManager 已订阅过 '{CoreEvents.DATA_MESSAGE}' 事件，跳过重复订阅")
+            self.logger.debug(f"DecisionProviderManager 已订阅过 '{CoreEvents.INPUT_MESSAGE_READY}' 事件，跳过重复订阅")
 
     def _unsubscribe_data_message_event(self) -> None:
         """
-        取消订阅 data.message 事件
+        取消订阅 input.message.ready 事件
         """
         if self._event_subscribed:
-            self.event_bus.off(CoreEvents.DATA_MESSAGE, self._on_data_message)
+            self.event_bus.off(CoreEvents.INPUT_MESSAGE_READY, self._on_data_message)
             self._event_subscribed = False
             self.logger.debug("DecisionProviderManager 已取消事件订阅")
 
@@ -567,7 +567,7 @@ class DecisionProviderManager:
 
     async def _on_data_message(self, event_name: str, payload: "MessageReadyPayload", source: str) -> None:
         """
-        处理 data.message 事件（类型化）
+        处理 input.message.ready 事件（类型化）
 
         当 InputDomain 生成 NormalizedMessage 时：
         1. 从字典格式的 payload.message 提取数据
@@ -575,10 +575,10 @@ class DecisionProviderManager:
         3. 提取 SourceContext
         4. 调用 decide() 进行决策
         5. 将 SourceContext 注入 Intent
-        6. 发布 decision.intent 事件（3域架构）
+        6. 发布 decision.intent.generated 事件（3域架构）
 
         Args:
-            event_name: 事件名称 (CoreEvents.DATA_MESSAGE)
+            event_name: 事件名称 (CoreEvents.INPUT_MESSAGE_READY)
             payload: 类型化的事件数据（MessageReadyPayload 对象）
             source: 事件源
         """

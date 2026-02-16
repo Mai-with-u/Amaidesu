@@ -273,7 +273,7 @@ async def test_output_provider_event_driven_render(mock_provider, test_intent, e
 
     # 创建 IntentPayload 并发送事件
     payload = IntentPayload.from_intent(test_intent, "test_provider")
-    await event_bus.emit(CoreEvents.OUTPUT_INTENT, payload, source="test")
+    await event_bus.emit(CoreEvents.OUTPUT_INTENT_READY, payload, source="test")
 
     # 等待事件处理
     import asyncio
@@ -294,7 +294,7 @@ async def test_output_provider_event_driven_multiple_renders(mock_provider, even
     for i in range(3):
         intent = create_test_intent(f"响应 {i}")
         payload = IntentPayload.from_intent(intent, "test_provider")
-        await event_bus.emit(CoreEvents.OUTPUT_INTENT, payload, source="test")
+        await event_bus.emit(CoreEvents.OUTPUT_INTENT_READY, payload, source="test")
 
     import asyncio
 
@@ -355,7 +355,7 @@ async def test_output_provider_stop_unsubscribes_from_events(mock_provider, test
 
     # 发送事件，应该收到
     payload = IntentPayload.from_intent(test_intent, "test_provider")
-    await event_bus.emit(CoreEvents.OUTPUT_INTENT, payload, source="test")
+    await event_bus.emit(CoreEvents.OUTPUT_INTENT_READY, payload, source="test")
 
     import asyncio
 
@@ -369,7 +369,7 @@ async def test_output_provider_stop_unsubscribes_from_events(mock_provider, test
     mock_provider.render_count = 0
 
     # 再次发送事件，不应该收到
-    await event_bus.emit(CoreEvents.OUTPUT_INTENT, payload, source="test")
+    await event_bus.emit(CoreEvents.OUTPUT_INTENT_READY, payload, source="test")
     await asyncio.sleep(0.1)
 
     assert mock_provider.render_count == 0

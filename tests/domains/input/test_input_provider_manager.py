@@ -345,7 +345,7 @@ async def test_provider_data_flow_to_event_bus(manager, event_bus):
         collected_events.append({"event_name": event_name, "payload": payload, "source": source})
 
     # 使用正确的 model_class 类型
-    event_bus.on(CoreEvents.DATA_MESSAGE, on_message, model_class=MessageReadyPayload)
+    event_bus.on(CoreEvents.INPUT_MESSAGE_READY, on_message, model_class=MessageReadyPayload)
 
     provider = MockInputProvider({"name": "test_provider"})
 
@@ -364,7 +364,7 @@ async def test_provider_data_flow_to_event_bus(manager, event_bus):
 
     # 验证事件
     assert len(collected_events) == 1
-    assert collected_events[0]["event_name"] == CoreEvents.DATA_MESSAGE
+    assert collected_events[0]["event_name"] == CoreEvents.INPUT_MESSAGE_READY
     # payload 是 MessageReadyPayload 对象
     payload = collected_events[0]["payload"]
     assert payload.message["text"] == "测试消息"
@@ -386,7 +386,7 @@ async def test_multiple_providers_data_isolation(manager, event_bus):
         text = message.get("text") if isinstance(message, dict) else None
         collected_events.append({"text": text, "source": source})
 
-    event_bus.on(CoreEvents.DATA_MESSAGE, on_message, model_class=MessageReadyPayload)
+    event_bus.on(CoreEvents.INPUT_MESSAGE_READY, on_message, model_class=MessageReadyPayload)
 
     provider1 = MockInputProvider({"name": "provider1"})
     provider2 = MockInputProvider({"name": "provider2"})
@@ -439,7 +439,7 @@ async def test_single_provider_failure_does_not_affect_others(manager, event_bus
     async def on_message(event_name: str, payload: dict, source: str):
         collected_events.append(payload)
 
-    event_bus.on(CoreEvents.DATA_MESSAGE, on_message, model_class=NormalizedMessage)
+    event_bus.on(CoreEvents.INPUT_MESSAGE_READY, on_message, model_class=NormalizedMessage)
 
     await manager.start_all_providers(providers)
 

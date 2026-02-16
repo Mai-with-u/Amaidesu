@@ -9,24 +9,23 @@ import ast
 from pathlib import Path
 from typing import Dict, List
 
-# Event names by domain
+# Event names by domain (updated to new naming convention)
 INPUT_EVENTS = {
-    "DATA_RAW",
-    "DATA_MESSAGE",
+    "INPUT_MESSAGE_READY",
 }
 
 DECISION_EVENTS = {
-    "DECISION_REQUEST",
-    "DECISION_INTENT",
-    "DECISION_RESPONSE_GENERATED",
+    "DECISION_INTENT_GENERATED",
     "DECISION_PROVIDER_CONNECTED",
     "DECISION_PROVIDER_DISCONNECTED",
 }
 
 OUTPUT_EVENTS = {
-    "OUTPUT_PARAMS",
-    "RENDER_COMPLETED",
-    "RENDER_FAILED",
+    "OUTPUT_INTENT_READY",
+    "OUTPUT_OBS_SEND_TEXT",
+    "OUTPUT_OBS_SWITCH_SCENE",
+    "OUTPUT_OBS_SET_SOURCE_VISIBILITY",
+    "OUTPUT_REMOTE_STREAM_REQUEST_IMAGE",
 }
 
 
@@ -178,7 +177,7 @@ class TestEventFlowConstraints:
                 f"Found {len(violations)} violation(s):\n"
                 f"{violation_details}\n\n"
                 f"Correct pattern: Output should only subscribe to "
-                f"DECISION_INTENT events."
+                f"DECISION_INTENT_GENERATED events."
             )
 
     def test_decision_domain_does_not_subscribe_to_output_events(self):
@@ -254,71 +253,42 @@ class TestEventFlowConstraints:
         Test that the proper event chain exists: Input → Decision → Output.
 
         This verifies that:
-        1. Input Domain publishes DATA_MESSAGE
-        2. Decision Domain subscribes to DATA_MESSAGE
-        3. Decision Domain publishes DECISION_INTENT
-        4. Core orchestrator (FlowCoordinator) or Output Domain subscribes to DECISION_INTENT
+        1. Input Domain publishes INPUT_MESSAGE_READY
+        2. Decision Domain subscribes to INPUT_MESSAGE_READY
+        3. Decision Domain publishes DECISION_INTENT_GENERATED
+        4. Output Domain subscribes to DECISION_INTENT_GENERATED
 
         Note: During refactoring, this test provides guidance but doesn't fail
         if subscriptions aren't implemented yet. The critical tests are the
         constraint tests that prevent wrong subscriptions.
-
-        Note: FlowCoordinator (in core/) coordinates Decision → Output data flow,
-        which is architecturally valid as orchestrators sit above all domains.
         """
         # Check that Decision subscribes to Input's event
         decision_subscriptions = get_all_subscriptions_in_domain("decision")
         decision_subscribes_to_input = any(sub["event_name"] in INPUT_EVENTS for sub in decision_subscriptions)
 
-        # Check that Output or Core orchestrator subscribes to Decision's event
+        # Check that Output subscribes to Decision's event
         output_subscriptions = get_all_subscriptions_in_domain("output")
-        core_orchestrator_subscriptions = self._get_core_orchestrator_subscriptions()
 
         output_subscribes_to_decision = any(sub["event_name"] in DECISION_EVENTS for sub in output_subscriptions)
 
-        orchestrator_subscribes_to_decision = any(
-            sub["event_name"] in DECISION_EVENTS for sub in core_orchestrator_subscriptions
-        )
-
         # If either subscription exists, verify the chain is complete
-        if decision_subscribes_to_input or output_subscribes_to_decision or orchestrator_subscribes_to_decision:
+        if decision_subscribes_to_input or output_subscribes_to_decision:
             if not decision_subscribes_to_input:
                 raise AssertionError(
                     "Decision Domain should subscribe to Input Domain events "
-                    "(DATA_MESSAGE) when Output/orchestrator subscribes to Decision events. "
+                    "(INPUT_MESSAGE_READY) when Output subscribes to Decision events. "
                     "Data flow: Input → Decision → Output"
                 )
 
-            if not output_subscribes_to_decision and not orchestrator_subscribes_to_decision:
+            if not output_subscribes_to_decision:
                 raise AssertionError(
-                    "Output Domain or Core orchestrator should subscribe to Decision Domain events "
-                    "(DECISION_INTENT) when Decision subscribes to Input events. "
+                    "Output Domain should subscribe to Decision Domain events "
+                    "(DECISION_INTENT_GENERATED) when Decision subscribes to Input events. "
                     "Data flow: Input → Decision → Output"
                 )
 
         # If no subscriptions exist yet (refactoring in progress), just skip
         # The constraint tests will prevent wrong subscriptions when they're added
-
-    def _get_core_orchestrator_subscriptions(self) -> List[Dict]:
-        """Get event subscriptions from core orchestrators (FlowCoordinator, etc.)."""
-        project_root = get_project_root()
-        core_path = project_root / "src" / "core"
-
-        if not core_path.exists():
-            return []
-
-        subscriptions = []
-        orchestrator_files = [
-            core_path / "flow_coordinator.py",
-            # Add other orchestrators here if needed
-        ]
-
-        for orchestrator_file in orchestrator_files:
-            if orchestrator_file.exists():
-                file_subscriptions = extract_event_subscriptions(orchestrator_file)
-                subscriptions.extend(file_subscriptions)
-
-        return subscriptions
 
     def test_event_subscriptions_follow_domain_boundaries(self):
         """

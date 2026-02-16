@@ -7,20 +7,20 @@
 - input.py: Input Domain 相关 Payload
 - decision.py: Decision Domain 相关 Payload
 - output.py: Output Domain 相关 Payload
-- system.py: 系统事件 Payload
 
 使用示例:
-    from src.modules.events.payloads import RawDataPayload, MessageReadyPayload
+    from src.modules.events.payloads import MessageReadyPayload
     from src.modules.events.names import CoreEvents
 
     # 发送事件
     await event_bus.emit(
-        CoreEvents.DATA_RAW,
-        RawDataPayload(content=data, source="console_input", data_type="text")
+        CoreEvents.INPUT_MESSAGE_READY,
+        MessageReadyPayload.from_normalized_message(message),
+        source="console_input",
     )
 
     # 订阅事件（类型提示）
-    @event_bus.on(CoreEvents.DATA_MESSAGE)
+    @event_bus.on(CoreEvents.INPUT_MESSAGE_READY)
     async def handle_message(payload: MessageReadyPayload):
         message = payload.message
         logger.debug(f"收到消息: {message.text}")
@@ -29,8 +29,6 @@
 from src.modules.logging import get_logger
 
 from .decision import (
-    DecisionRequestPayload,
-    DecisionResponsePayload,
     IntentActionPayload,
     IntentPayload,
     ProviderConnectedPayload,
@@ -45,15 +43,8 @@ from .output import (
     OBSSetSourceVisibilityPayload,
     OBSSwitchScenePayload,
     RemoteStreamRequestImagePayload,
-    RenderCompletedPayload,
-    RenderFailedPayload,
 )
 from .provider import GenericProviderPayload
-from .system import (
-    ErrorPayload,
-    ShutdownPayload,
-    StartupPayload,
-)
 
 logger = get_logger("Payloads")
 
@@ -62,23 +53,15 @@ __all__ = [
     "RawDataPayload",
     "MessageReadyPayload",
     # Decision Domain
-    "DecisionRequestPayload",
     "IntentPayload",
     "IntentActionPayload",
-    "DecisionResponsePayload",
     "ProviderConnectedPayload",
     "ProviderDisconnectedPayload",
     # Output Domain
-    "RenderCompletedPayload",
-    "RenderFailedPayload",
     "OBSSendTextPayload",
     "OBSSwitchScenePayload",
     "OBSSetSourceVisibilityPayload",
     "RemoteStreamRequestImagePayload",
     # Provider (通用)
     "GenericProviderPayload",
-    # System
-    "StartupPayload",
-    "ShutdownPayload",
-    "ErrorPayload",
 ]
