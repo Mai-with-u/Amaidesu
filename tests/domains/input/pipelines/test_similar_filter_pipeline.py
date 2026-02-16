@@ -14,9 +14,7 @@ from src.modules.types.base.normalized_message import NormalizedMessage
 # =============================================================================
 
 
-def create_message(
-    text: str, user_id: str = "test_user", source: str = "test_source"
-) -> NormalizedMessage:
+def create_message(text: str, user_id: str = "test_user", source: str = "test_source") -> NormalizedMessage:
     """创建 NormalizedMessage 辅助函数"""
 
     class MockRaw:

@@ -12,7 +12,6 @@ Amaidesu!
 
 ![Python Version](https://img.shields.io/badge/Python-3.12+-blue)
 ![Status](https://img.shields.io/badge/状态-前期开发中-red)
-![Contributors](https://img.shields.io/badge/贡献者-没几个人-red)
 ![forks](https://img.shields.io/github/forks/Mai-with-u/Amaidesu?style=flat)
 ![stars](https://img.shields.io/github/stars/Mai-with-u/Amaidesu?style=flat)
 ![issues](https://img.shields.io/github/issues/Mai-with-u/Amaidesu)
@@ -25,6 +24,8 @@ Amaidesu!
 其聊天核心为 [麦麦Bot](https://github.com/MaiM-with-u/MaiBot)，一款专注于群组聊天的赛博网友 QQ BOT。
 
 **架构状态**：✅ 核心架构重构已完成，采用 3域架构 + Provider 系统
+
+如需了解重构前后的架构差异，可查看 [重构文档](refactor/README.md)。
 
 </div>
 

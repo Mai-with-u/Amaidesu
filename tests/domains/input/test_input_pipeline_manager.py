@@ -178,7 +178,9 @@ async def test_process_multiple_pipelines(pipeline_manager: InputPipelineManager
 
 
 @pytest.mark.asyncio
-async def test_process_pipeline_drops_message(pipeline_manager: InputPipelineManager, sample_message: NormalizedMessage):
+async def test_process_pipeline_drops_message(
+    pipeline_manager: InputPipelineManager, sample_message: NormalizedMessage
+):
     """测试 InputPipeline 丢弃消息"""
     pipeline1 = MockInputPipeline({})
     pipeline1.priority = 100
@@ -235,7 +237,9 @@ async def test_process_disabled_pipeline(pipeline_manager: InputPipelineManager,
 
 
 @pytest.mark.asyncio
-async def test_process_pipeline_error_continue(pipeline_manager: InputPipelineManager, sample_message: NormalizedMessage):
+async def test_process_pipeline_error_continue(
+    pipeline_manager: InputPipelineManager, sample_message: NormalizedMessage
+):
     """测试 InputPipeline 错误处理：CONTINUE"""
     pipeline1 = MockInputPipeline({})
     pipeline1.priority = 100
@@ -301,7 +305,9 @@ async def test_process_pipeline_error_drop(pipeline_manager: InputPipelineManage
 
 
 @pytest.mark.asyncio
-async def test_process_pipeline_timeout_continue(pipeline_manager: InputPipelineManager, sample_message: NormalizedMessage):
+async def test_process_pipeline_timeout_continue(
+    pipeline_manager: InputPipelineManager, sample_message: NormalizedMessage
+):
     """测试 InputPipeline 超时：CONTINUE"""
     pipeline1 = MockInputPipeline({})
     pipeline1.priority = 100

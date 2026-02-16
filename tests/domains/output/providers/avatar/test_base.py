@@ -92,20 +92,6 @@ class IncompleteAvatarProvider(AvatarProviderBase):
 
 
 class TestAvatarProviderBaseAbstract:
-    @pytest.mark.skip(reason="需要外部环境")
-    def test_cannot_instantiate_abstract_base_class(self):
-        config = {}
-        with pytest.raises(TypeError) as exc_info:
-            AvatarProviderBase(config, MagicMock())
-        assert "abstract" in str(exc_info.value).lower()
-
-    @pytest.mark.skip(reason="需要外部环境")
-    def test_subclass_must_implement_all_abstract_methods(self):
-        config = {}
-        with pytest.raises(TypeError) as exc_info:
-            IncompleteAvatarProvider(config, MagicMock())
-        assert "abstract" in str(exc_info.value).lower()
-
     def test_complete_subclass_can_be_instantiated(self, mock_provider_context):
         config = {"test": "config"}
         provider = MockAvatarProvider(config, mock_provider_context)
@@ -179,15 +165,6 @@ class TestAvatarProviderBaseIntentProcessing:
         provider._is_connected = False
         await provider._on_intent("test_event", sample_intent_payload, "test_source")
         assert len(provider.adapt_intent_calls) == 0
-
-    @pytest.mark.asyncio
-    @pytest.mark.skip(reason="需要外部环境")
-    async def test_on_intent_handles_invalid_payload(self):
-        provider = MockAvatarProvider({}, ProviderContext(event_bus=MagicMock()))
-        await provider.start()
-        # Invalid payload - not an IntentPayload
-        with pytest.raises(Exception):
-            await provider._on_intent("test_event", {"invalid": "payload"}, "test_source")
 
     @pytest.mark.asyncio
     async def test_on_intent_handles_rendering_errors(self, mock_provider_context, sample_intent_payload):

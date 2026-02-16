@@ -2,7 +2,6 @@
 Bili 弹幕消息测试
 """
 
-
 from src.domains.input.shared.bili_messages.danmaku import DanmakuMessage
 from src.domains.input.shared.bili_messages.gift import GiftMessage
 from src.domains.input.shared.bili_messages.guard import GuardMessage
