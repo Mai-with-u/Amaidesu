@@ -2,14 +2,12 @@
 Decision Domain 事件 Payload 定义
 
 定义 Decision Domain 相关的事件 Payload 类型。
-- DecisionRequestPayload: 决策请求事件
 - IntentPayload: 意图生成事件
-- DecisionResponsePayload: 决策响应事件（MaiCore）
+- IntentActionPayload: 意图动作 Payload
 - ProviderConnectedPayload: Provider 连接事件
 - ProviderDisconnectedPayload: Provider 断开事件
 """
 
-import time
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from pydantic import ConfigDict, Field
@@ -18,44 +16,6 @@ from src.modules.events.payloads.base import BasePayload
 
 if TYPE_CHECKING:
     from src.modules.types import Intent
-
-
-class DecisionRequestPayload(BasePayload):
-    """
-    决策请求事件 Payload
-
-    事件名：CoreEvents.DECISION_REQUEST
-    发布者：任何需要决策的组件
-    订阅者：DecisionManager
-
-    用于显式请求对某个消息进行决策处理。
-    """
-
-    normalized_message: Dict[str, Any] = Field(..., description="标准化消息（NormalizedMessage 序列化）")
-    context: Dict[str, Any] = Field(default_factory=dict, description="上下文信息")
-    priority: int = Field(default=100, ge=0, le=1000, description="优先级（数字越小越优先）")
-    timestamp: float = Field(default_factory=time.time, description="时间戳")
-
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "normalized_message": {
-                    "text": "你好",
-                    "source": "console_input",
-                    "data_type": "text",
-                    "importance": 0.5,
-                },
-                "context": {"conversation_id": "conv_456"},
-                "priority": 100,
-                "timestamp": 1706745600.0,
-            }
-        }
-    )
-
-    def __str__(self) -> str:
-        """简化格式：只显示关键字段"""
-        class_name = self.__class__.__name__
-        return f"{class_name}(priority={self.priority}, timestamp={self.timestamp:.0f})"
 
 
 class IntentActionPayload(BasePayload):
@@ -89,14 +49,14 @@ class IntentPayload(BasePayload):
     """
     意图生成事件 Payload
 
-    事件名：CoreEvents.DECISION_INTENT
-    发布者：DecisionManager（Decision Domain）
-    订阅者：ExpressionGenerator（Output Domain）
+    事件名：CoreEvents.DECISION_INTENT_GENERATED
+    发布者：DecisionProvider（Decision Domain）
+    订阅者：OutputProviderManager（Output Domain）
 
     **3域架构说明**：
     - DecisionProvider.decide() 直接返回 Intent
-    - DecisionManager 接收到 Intent 后发布此事件
-    - ExpressionGenerator 订阅此事件并生成渲染参数
+    - DecisionProvider 通过 event_bus 发布此事件
+    - OutputProviderManager 订阅此事件并分发给 OutputProviders
 
     **简化设计**：
     - 使用 Pydantic 的自动序列化（model_dump/model_validate）
@@ -134,8 +94,8 @@ class IntentPayload(BasePayload):
             "response_text",
             "emotion",
             "actions",
-            "metadata",  # 添加缺失的字段
-            "timestamp",  # 添加缺失的字段
+            "metadata",
+            "timestamp",
         ]
         if name in KNOWN_FIELDS:
             value = self.intent_data.get(name, "")
@@ -197,49 +157,6 @@ class IntentPayload(BasePayload):
         return Intent.model_validate(self.intent_data)
 
 
-class DecisionResponsePayload(BasePayload):
-    """
-    决策响应事件 Payload
-
-    事件名：CoreEvents.DECISION_RESPONSE_GENERATED
-    发布者：MaiCoreDecisionProvider 内部
-    订阅者：MaiCoreDecisionProvider 内部处理
-
-    **注意**：此事件主要在 MaiCoreDecisionProvider 内部使用
-    - MaiCore 返回的是 MessageBase 格式的响应
-    - MaiCoreDecisionProvider 自己解析为 Intent（使用 _parse_intent_from_maicore_response）
-    - 然后发布 decision.intent_generated 事件
-
-    此事件用于 MaiCoreDecisionProvider 内部的异步响应处理。
-    """
-
-    response: Dict[str, Any] = Field(..., description="决策响应（MessageBase 格式）")
-    provider: str = Field(..., description="决策Provider名称")
-    latency_ms: float = Field(default=0, ge=0, description="决策延迟（毫秒）")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="元数据")
-    timestamp: float = Field(default_factory=time.time, description="时间戳")
-
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "response": {
-                    "message_text": "你好！很高兴见到你~",
-                    "emotion": "happy",
-                },
-                "provider": "maicore",
-                "latency_ms": 150.5,
-                "metadata": {"model": "gpt-3.5-turbo"},
-                "timestamp": 1706745600.0,
-            }
-        }
-    )
-
-    def __str__(self) -> str:
-        """简化格式：显示响应信息"""
-        class_name = self.__class__.__name__
-        return f'{class_name}(provider="{self.provider}", latency_ms={self.latency_ms:.1f})'
-
-
 class ProviderConnectedPayload(BasePayload):
     """
     Provider 连接成功事件 Payload
@@ -253,7 +170,7 @@ class ProviderConnectedPayload(BasePayload):
 
     provider: str = Field(..., description="Provider 名称")
     endpoint: Optional[str] = Field(default=None, description="连接端点")
-    timestamp: float = Field(default_factory=time.time, description="连接时间")
+    timestamp: float = Field(default_factory=lambda: __import__("time").time(), description="连接时间")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="额外元数据")
 
     model_config = ConfigDict(
@@ -286,7 +203,7 @@ class ProviderDisconnectedPayload(BasePayload):
     provider: str = Field(..., description="Provider 名称")
     reason: str = Field(default="unknown", description="断开原因")
     will_retry: bool = Field(default=False, description="是否将重试连接")
-    timestamp: float = Field(default_factory=time.time, description="断开时间")
+    timestamp: float = Field(default_factory=lambda: __import__("time").time(), description="断开时间")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="额外元数据")
 
     model_config = ConfigDict(
@@ -304,3 +221,11 @@ class ProviderDisconnectedPayload(BasePayload):
     def __str__(self) -> str:
         """自定义字符串表示，只显示关键字段"""
         return f'ProviderDisconnectedPayload(provider="{self.provider}", reason="{self.reason}", will_retry={self.will_retry})'
+
+
+__all__ = [
+    "IntentActionPayload",
+    "IntentPayload",
+    "ProviderConnectedPayload",
+    "ProviderDisconnectedPayload",
+]

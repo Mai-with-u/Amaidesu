@@ -46,7 +46,7 @@ class InputPipeline(Protocol):
 
     位置：
         - InputProviderManager._run_provider() 方法内部调用
-        - 在 Provider 产出 NormalizedMessage 之后、发布 DATA_MESSAGE 事件之前
+        - 在 Provider 产出 NormalizedMessage 之后、发布 INPUT_MESSAGE_READY 事件之前
         - 可返回 None 表示丢弃该消息
 
     数据流：
@@ -235,7 +235,7 @@ class InputPipelineManager:
         按优先级顺序通过所有启用的 InputPipeline 处理消息
 
         这是 InputProviderManager 调用的主入口点，用于过滤 NormalizedMessage。
-        在 Provider 产出消息之后、发布 DATA_MESSAGE 事件之前调用。
+        在 Provider 产出消息之后、发布 INPUT_MESSAGE_READY 事件之前调用。
 
         Args:
             message: 待处理的 NormalizedMessage
@@ -351,7 +351,7 @@ class InputPipelineManager:
 
         3域架构中的位置：
             - InputProviderManager._run_provider() 方法内部调用
-            - 在 Provider 产出 NormalizedMessage 之后、发布 DATA_MESSAGE 事件之前
+            - 在 Provider 产出 NormalizedMessage 之后、发布 INPUT_MESSAGE_READY 事件之前
             - 示例：限流、相似文本过滤、敏感词过滤
 
         配置格式：

@@ -134,7 +134,7 @@ async def test_setup_subscribes_to_intent_event(
 
     assert output_provider_manager._event_handler_registered is True
     # 验证事件订阅
-    assert event_bus.get_listeners_count(CoreEvents.DECISION_INTENT) == 1
+    assert event_bus.get_listeners_count(CoreEvents.DECISION_INTENT_GENERATED) == 1
 
 
 @pytest.mark.asyncio
@@ -145,10 +145,10 @@ async def test_setup_can_be_called_multiple_times(
 ):
     """测试 setup 可以被多次调用（但会重复订阅事件）"""
     await output_provider_manager.setup(sample_config)
-    first_listener_count = event_bus.get_listeners_count(CoreEvents.DECISION_INTENT)
+    first_listener_count = event_bus.get_listeners_count(CoreEvents.DECISION_INTENT_GENERATED)
 
     await output_provider_manager.setup(sample_config)
-    second_listener_count = event_bus.get_listeners_count(CoreEvents.DECISION_INTENT)
+    second_listener_count = event_bus.get_listeners_count(CoreEvents.DECISION_INTENT_GENERATED)
 
     # 当前实现：每次 setup 都会订阅事件（会重复）
     assert first_listener_count == 1
@@ -235,11 +235,11 @@ async def test_on_intent_ready(
             received_payloads.append(data)
 
         # 使用类型化事件监听
-        event_bus.on(CoreEvents.OUTPUT_INTENT, on_output_intent, model_class=IntentPayload)
+        event_bus.on(CoreEvents.OUTPUT_INTENT_READY, on_output_intent, model_class=IntentPayload)
 
         # 发布 Intent 事件
         await event_bus.emit(
-            CoreEvents.DECISION_INTENT,
+            CoreEvents.DECISION_INTENT_GENERATED,
             IntentPayload.from_intent(sample_intent, provider="DecisionProvider"),
             source="DecisionProvider",
         )
@@ -273,7 +273,7 @@ async def test_intent_event_with_empty_response_text(
 
         # 不应该抛出异常
         await output_provider_manager.event_bus.emit(
-            CoreEvents.DECISION_INTENT,
+            CoreEvents.DECISION_INTENT_GENERATED,
             IntentPayload.from_intent(empty_intent, provider="test"),
             source="test",
         )
@@ -297,12 +297,12 @@ async def test_cleanup_unsubscribes_event_handler(
         await output_provider_manager.setup(sample_config)
 
         # 验证事件已订阅
-        assert event_bus.get_listeners_count(CoreEvents.DECISION_INTENT) == 1
+        assert event_bus.get_listeners_count(CoreEvents.DECISION_INTENT_GENERATED) == 1
 
         await output_provider_manager.cleanup()
 
         # 验证事件已取消订阅
-        assert event_bus.get_listeners_count(CoreEvents.DECISION_INTENT) == 0
+        assert event_bus.get_listeners_count(CoreEvents.DECISION_INTENT_GENERATED) == 0
         assert output_provider_manager._event_handler_registered is False
 
 
@@ -413,14 +413,14 @@ async def test_full_integration(
             received_payloads.append(data)
 
         # 使用类型化事件监听
-        event_bus.on(CoreEvents.OUTPUT_INTENT, on_output_intent, model_class=IntentPayload)
+        event_bus.on(CoreEvents.OUTPUT_INTENT_READY, on_output_intent, model_class=IntentPayload)
 
         # 启动
         await manager.start()
 
         # 发布 Intent 事件
         await event_bus.emit(
-            CoreEvents.DECISION_INTENT,
+            CoreEvents.DECISION_INTENT_GENERATED,
             IntentPayload.from_intent(sample_intent, provider="DecisionProvider"),
             source="DecisionProvider",
         )

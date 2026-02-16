@@ -137,7 +137,7 @@ class ReplayDecisionProvider(DecisionProvider):
             return
 
         await self.event_bus.emit(
-            CoreEvents.DECISION_INTENT,
+            CoreEvents.DECISION_INTENT_GENERATED,
             IntentPayload.from_intent(intent, "replay"),
             source="ReplayDecisionProvider",
         )

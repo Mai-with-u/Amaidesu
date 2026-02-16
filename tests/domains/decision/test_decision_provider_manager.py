@@ -96,7 +96,7 @@ class MockDecisionProviderForManager(DecisionProvider):
             intent.source_context = source_context
 
             await self.event_bus.emit(
-                CoreEvents.DECISION_INTENT,
+                CoreEvents.DECISION_INTENT_GENERATED,
                 IntentPayload.from_intent(intent, "mock_decision"),
                 source="MockDecisionProviderForManager",
             )
@@ -336,7 +336,7 @@ async def test_start_subscribes_to_event(event_bus, mock_provider_class):
     # 在 setup 之前订阅同一个事件
     from src.modules.events.payloads.input import MessageReadyPayload
 
-    event_bus.on(CoreEvents.DATA_MESSAGE, test_handler, model_class=MessageReadyPayload, priority=50)
+    event_bus.on(CoreEvents.INPUT_MESSAGE_READY, test_handler, model_class=MessageReadyPayload, priority=50)
 
     # setup() 不订阅事件
     await manager.setup("mock_decision", {})
@@ -351,7 +351,7 @@ async def test_start_subscribes_to_event(event_bus, mock_provider_class):
     # Note: MessageReadyPayload.message 是必需字段，不能为 None
     # 这里我们创建一个空的 NormalizedMessage 字典用于测试
     await event_bus.emit(
-        CoreEvents.DATA_MESSAGE,
+        CoreEvents.INPUT_MESSAGE_READY,
         MessageReadyPayload(
             message={
                 "text": "",
@@ -479,11 +479,11 @@ async def test_on_normalized_message_ready_success(decision_manager_with_mock, s
     # 订阅 decision.intent 事件
     from src.modules.events.payloads import IntentPayload
 
-    manager.event_bus.on(CoreEvents.DECISION_INTENT, intent_handler, model_class=IntentPayload, priority=50)
+    manager.event_bus.on(CoreEvents.DECISION_INTENT_GENERATED, intent_handler, model_class=IntentPayload, priority=50)
 
     # 触发 data.message 事件
     await manager.event_bus.emit(
-        CoreEvents.DATA_MESSAGE,
+        CoreEvents.INPUT_MESSAGE_READY,
         MessageReadyPayload.from_normalized_message(sample_normalized_message),
         source="test",
     )
@@ -509,7 +509,7 @@ async def test_on_normalized_message_ready_missing_message_key(decision_manager_
     # Note: MessageReadyPayload 要求 message 字段，但我们测试 DecisionManager 如何处理
     # 通过传入一个空的 message 字典来模拟边缘情况
     await manager.event_bus.emit(
-        CoreEvents.DATA_MESSAGE,
+        CoreEvents.INPUT_MESSAGE_READY,
         MessageReadyPayload(
             message={},  # 空字典模拟缺失/无效数据
             source="test",
@@ -540,10 +540,10 @@ async def test_on_normalized_message_ready_event_data_structure(decision_manager
 
     from src.modules.events.payloads import IntentPayload
 
-    manager.event_bus.on(CoreEvents.DECISION_INTENT, intent_handler, model_class=IntentPayload, priority=50)
+    manager.event_bus.on(CoreEvents.DECISION_INTENT_GENERATED, intent_handler, model_class=IntentPayload, priority=50)
 
     await manager.event_bus.emit(
-        CoreEvents.DATA_MESSAGE,
+        CoreEvents.INPUT_MESSAGE_READY,
         MessageReadyPayload.from_normalized_message(sample_normalized_message),
         source="test",
     )
@@ -581,7 +581,7 @@ async def test_on_normalized_message_ready_handles_provider_error(
 
     # 应该不抛出异常，只记录错误
     await manager.event_bus.emit(
-        CoreEvents.DATA_MESSAGE,
+        CoreEvents.INPUT_MESSAGE_READY,
         MessageReadyPayload.from_normalized_message(sample_normalized_message),
         source="test",
     )
@@ -746,11 +746,11 @@ async def test_cleanup_unsubscribes_events(event_bus, mock_provider_class):
 
     from src.modules.events.payloads.input import MessageReadyPayload
 
-    manager.event_bus.on(CoreEvents.DATA_MESSAGE, test_handler, model_class=MessageReadyPayload, priority=50)
+    manager.event_bus.on(CoreEvents.INPUT_MESSAGE_READY, test_handler, model_class=MessageReadyPayload, priority=50)
 
     # 由于 manager 已经 cleanup，它的处理器不应该再被调用
     await manager.event_bus.emit(
-        CoreEvents.DATA_MESSAGE,
+        CoreEvents.INPUT_MESSAGE_READY,
         MessageReadyPayload(
             message={
                 "text": "",

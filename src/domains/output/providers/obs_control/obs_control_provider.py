@@ -133,11 +133,11 @@ class ObsControlOutputProvider(OutputProvider):
         # 连接OBS
         await self._connect_obs()
 
-        # 注册事件监听（用于外部直接调用，不属于 OUTPUT_INTENT 事件）
-        self.event_bus.on(CoreEvents.OBS_SEND_TEXT, self._handle_send_text_event, OBSSendTextPayload)
-        self.event_bus.on(CoreEvents.OBS_SWITCH_SCENE, self._handle_switch_scene_event, OBSSwitchScenePayload)
+        # 注册事件监听（用于外部直接调用，不属于 OUTPUT_INTENT_READY 事件）
+        self.event_bus.on(CoreEvents.OUTPUT_OBS_SEND_TEXT, self._handle_send_text_event, OBSSendTextPayload)
+        self.event_bus.on(CoreEvents.OUTPUT_OBS_SWITCH_SCENE, self._handle_switch_scene_event, OBSSwitchScenePayload)
         self.event_bus.on(
-            CoreEvents.OBS_SET_SOURCE_VISIBILITY,
+            CoreEvents.OUTPUT_OBS_SET_SOURCE_VISIBILITY,
             self._handle_set_source_visibility_event,
             OBSSetSourceVisibilityPayload,
         )
@@ -400,11 +400,11 @@ class ObsControlOutputProvider(OutputProvider):
 
     async def cleanup(self):
         """清理资源"""
-        # 取消事件监听（OBS特有的事件，不属于 OUTPUT_INTENT）
+        # 取消事件监听（OBS特有的事件，不属于 OUTPUT_INTENT_READY）
         if self.event_bus:
-            self.event_bus.off(CoreEvents.OBS_SEND_TEXT, self._handle_send_text_event)
-            self.event_bus.off(CoreEvents.OBS_SWITCH_SCENE, self._handle_switch_scene_event)
-            self.event_bus.off(CoreEvents.OBS_SET_SOURCE_VISIBILITY, self._handle_set_source_visibility_event)
+            self.event_bus.off(CoreEvents.OUTPUT_OBS_SEND_TEXT, self._handle_send_text_event)
+            self.event_bus.off(CoreEvents.OUTPUT_OBS_SWITCH_SCENE, self._handle_switch_scene_event)
+            self.event_bus.off(CoreEvents.OUTPUT_OBS_SET_SOURCE_VISIBILITY, self._handle_set_source_visibility_event)
 
         # 断开OBS连接
         if self.obs_connection:

@@ -247,7 +247,7 @@ class InputProviderManager:
 
                 # 发布事件
                 await self.event_bus.emit(
-                    CoreEvents.DATA_MESSAGE,
+                    CoreEvents.INPUT_MESSAGE_READY,
                     MessageReadyPayload.from_normalized_message(message),
                     source=provider_name,
                 )
