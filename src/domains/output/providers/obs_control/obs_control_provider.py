@@ -43,6 +43,11 @@ class ObsControlOutputProvider(OutputProvider):
     - 源控制: 控制源的可见性、设置等
     """
 
+    @classmethod
+    def get_registration_info(cls) -> Dict[str, Any]:
+        """获取 Provider 注册信息"""
+        return {"layer": "output", "name": "obs_control", "class": cls, "source": "builtin:obs_control"}
+
     class ConfigSchema(BaseProviderConfig):
         """OBS控制输出Provider配置"""
 

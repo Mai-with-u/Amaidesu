@@ -40,6 +40,11 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
     使用官方WebSocket API获取实时弹幕。
     """
 
+    @classmethod
+    def get_registration_info(cls) -> Dict[str, Any]:
+        """获取 Provider 注册信息"""
+        return {"layer": "input", "name": "bili_danmaku_official", "class": cls, "source": "builtin:bili_danmaku_official"}
+
     class ConfigSchema(BaseProviderConfig):
         """Bilibili官方弹幕输入Provider配置"""
 

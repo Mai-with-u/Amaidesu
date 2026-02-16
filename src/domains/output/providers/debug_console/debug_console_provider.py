@@ -4,7 +4,7 @@ Debug Console Output Provider
 调试用控制台输出 Provider，用于打印 Intent 内容到控制台。
 """
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Dict, Literal
 
 from pydantic import Field
 
@@ -24,6 +24,11 @@ class DebugConsoleOutputProvider(OutputProvider):
 
     直接打印 Intent 内容到控制台，用于调试和开发。
     """
+
+    @classmethod
+    def get_registration_info(cls) -> Dict[str, Any]:
+        """获取 Provider 注册信息"""
+        return {"layer": "output", "name": "debug_console", "class": cls, "source": "builtin:debug_console"}
 
     class ConfigSchema(BaseProviderConfig):
         """调试控制台输出Provider配置"""

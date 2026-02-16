@@ -6,7 +6,7 @@ import pytest
 
 from src.domains.output.providers.avatar.warudo.utils import IntentEmotionAdapter
 from src.domains.output.providers.avatar.warudo.warudo_sender import ActionSender
-from src.modules.types.intent import EmotionType
+from src.modules.types import EmotionType
 
 
 class TestIntentEmotionAdapter:

@@ -41,6 +41,11 @@ class VRChatProvider(AvatarProviderBase):
     - 软降级：python-osc 不可用时不会导致实例化失败
     """
 
+    @classmethod
+    def get_registration_info(cls) -> Dict[str, Any]:
+        """获取 Provider 注册信息"""
+        return {"layer": "output", "name": "vrchat", "class": cls, "source": "builtin:vrchat"}
+
     # ==================== 情感映射配置 ====================
 
     # 情感到 VRChat OSC 参数的映射

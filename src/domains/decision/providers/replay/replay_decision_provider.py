@@ -42,6 +42,11 @@ class ReplayDecisionProvider(DecisionProvider):
         ```
     """
 
+    @classmethod
+    def get_registration_info(cls) -> Dict[str, Any]:
+        """获取 Provider 注册信息"""
+        return {"layer": "decision", "name": "replay", "class": cls, "source": "builtin:replay"}
+
     class ConfigSchema(BaseProviderConfig):
         """Replay决策Provider配置Schema
 

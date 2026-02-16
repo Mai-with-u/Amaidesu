@@ -46,6 +46,11 @@ class VTSProvider(BaseAvatarProvider):
     - LLM智能热键匹配
     """
 
+    @classmethod
+    def get_registration_info(cls) -> Dict[str, Any]:
+        """获取 Provider 注册信息"""
+        return {"layer": "output", "name": "vts", "class": cls, "source": "builtin:vts"}
+
     # ==================== 情感和动作映射配置 ====================
 
     # VTS参数名定义（常量）

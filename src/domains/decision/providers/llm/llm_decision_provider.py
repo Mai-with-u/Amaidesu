@@ -1,5 +1,5 @@
 """
-LLMPDecisionProvider - LLM决策提供者
+LLMDecisionProvider - LLM决策提供者
 
 职责:
 - 使用 LLM Service 进行决策
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from src.modules.types.base.normalized_message import NormalizedMessage
 
 
-class LLMPDecisionProvider(DecisionProvider):
+class LLMDecisionProvider(DecisionProvider):
     """
     LLM决策提供者
 
@@ -47,6 +47,11 @@ class LLMPDecisionProvider(DecisionProvider):
         fallback_mode: 降级模式（"simple"返回简单响应，"error"抛出异常）
     """
 
+    @classmethod
+    def get_registration_info(cls) -> Dict[str, Any]:
+        """获取 Provider 注册信息"""
+        return {"layer": "decision", "name": "llm", "class": cls, "source": "builtin:llm"}
+
     class ConfigSchema(BaseProviderConfig):
         """LLM决策Provider配置Schema
 
@@ -59,7 +64,7 @@ class LLMPDecisionProvider(DecisionProvider):
 
     def __init__(self, config: Dict[str, Any], context: "ProviderContext"):
         """
-        初始化 LLMPDecisionProvider
+        初始化 LLMDecisionProvider
 
         Args:
             config: 配置字典
@@ -69,7 +74,7 @@ class LLMPDecisionProvider(DecisionProvider):
 
         # 使用 Pydantic Schema 验证配置
         self.typed_config = self.ConfigSchema(**config)
-        self.logger = get_logger("LLMPDecisionProvider")
+        self.logger = get_logger("LLMDecisionProvider")
 
         # LLM Manager 引用（通过 setup 注入）
         self._llm_service: Optional["LLMManager"] = None
@@ -96,11 +101,11 @@ class LLMPDecisionProvider(DecisionProvider):
 
     async def init(self) -> None:
         """
-        初始化 LLMPDecisionProvider
+        初始化 LLMDecisionProvider
 
         从 ProviderContext 获取必要的服务。
         """
-        self.logger.info("初始化 LLMPDecisionProvider...")
+        self.logger.info("初始化 LLMDecisionProvider...")
 
         # 从 ProviderContext 获取服务
         self._llm_service = self.context.llm_service
@@ -108,7 +113,7 @@ class LLMPDecisionProvider(DecisionProvider):
         self._context_service = self.context.context_service
         self.logger.debug("服务已从 ProviderContext 获取")
 
-        self.logger.info(f"LLMPDecisionProvider 初始化完成 (Client: {self.client_type})")
+        self.logger.info(f"LLMDecisionProvider 初始化完成 (Client: {self.client_type})")
 
     def _get_persona_config(self) -> Dict[str, Any]:
         """获取 VTuber 人设配置
@@ -402,7 +407,7 @@ class LLMPDecisionProvider(DecisionProvider):
         await self.event_bus.emit(
             CoreEvents.DECISION_INTENT_GENERATED,
             IntentPayload.from_intent(intent, "llm"),
-            source="LLMPDecisionProvider",
+            source="LLMDecisionProvider",
         )
 
         self.logger.debug("已发布 decision.intent.generated 事件")
@@ -451,7 +456,7 @@ class LLMPDecisionProvider(DecisionProvider):
 
         输出统计信息。
         """
-        self.logger.info("清理LLMPDecisionProvider...")
+        self.logger.info("清理LLMDecisionProvider...")
 
         # 输出统计信息
         success_rate = self._successful_requests / self._total_requests * 100 if self._total_requests > 0 else 0
@@ -460,7 +465,7 @@ class LLMPDecisionProvider(DecisionProvider):
             f"失败={self._failed_requests}, 成功率={success_rate:.1f}%"
         )
 
-        self.logger.info("LLMPDecisionProvider已清理")
+        self.logger.info("LLMDecisionProvider已清理")
 
     def get_statistics(self) -> Dict[str, Any]:
         """
@@ -488,7 +493,7 @@ class LLMPDecisionProvider(DecisionProvider):
             Provider 信息字典（静态配置）
         """
         return {
-            "name": "LLMPDecisionProvider",
+            "name": "LLMDecisionProvider",
             "version": "1.0.0",
             "client_type": self.client_type,
             "template_name": "decision/llm",

@@ -48,6 +48,11 @@ class EdgeTTSProvider(OutputProvider):
     - 音频播放和设备管理
     """
 
+    @classmethod
+    def get_registration_info(cls) -> Dict[str, Any]:
+        """获取 Provider 注册信息"""
+        return {"layer": "output", "name": "edge_tts", "class": cls, "source": "builtin:edge_tts"}
+
     class ConfigSchema(BaseProviderConfig):
         """EdgeTTS输出Provider配置"""
 

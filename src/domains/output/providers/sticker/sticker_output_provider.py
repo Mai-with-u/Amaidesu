@@ -8,7 +8,7 @@ import asyncio
 import base64
 import io
 import time
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from PIL import Image
 from pydantic import Field
@@ -28,6 +28,11 @@ class StickerOutputProvider(OutputProvider):
 
     处理表情图片，调整大小并发送到VTS显示。
     """
+
+    @classmethod
+    def get_registration_info(cls) -> Dict[str, Any]:
+        """获取 Provider 注册信息"""
+        return {"layer": "output", "name": "sticker", "class": cls, "source": "builtin:sticker"}
 
     class ConfigSchema(BaseProviderConfig):
         """贴纸输出Provider配置"""
