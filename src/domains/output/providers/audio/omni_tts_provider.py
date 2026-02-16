@@ -23,7 +23,7 @@ from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
 from src.modules.tts import AudioDeviceManager
 from src.modules.types.base.output_provider import OutputProvider
-from src.modules.types.intent import Intent
+from src.modules.types import Intent
 
 # 导入工具函数
 from .utils.device_finder import find_device_index
@@ -48,6 +48,11 @@ class OmniTTSProvider(OutputProvider):
     - 流式TTS和音频播放
     - 集成text_cleanup、vts_lip_sync、subtitle_service等服务
     """
+
+    @classmethod
+    def get_registration_info(cls) -> Dict[str, Any]:
+        """获取 Provider 注册信息"""
+        return {"layer": "output", "name": "omni_tts", "class": cls, "source": "builtin:omni_tts"}
 
     class ConfigSchema(BaseProviderConfig):
         """Omni TTS输出Provider配置"""

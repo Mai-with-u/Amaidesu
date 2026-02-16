@@ -2,9 +2,9 @@
 
 from src.modules.registry import ProviderRegistry
 
-from .llm_decision_provider import LLMPDecisionProvider
+from .llm_decision_provider import LLMDecisionProvider
 
 # 注册到 ProviderRegistry
-ProviderRegistry.register_decision("llm", LLMPDecisionProvider, source="builtin:llm")
+ProviderRegistry.register_decision("llm", LLMDecisionProvider, source="builtin:llm")
 
-__all__ = ["LLMPDecisionProvider"]
+__all__ = ["LLMDecisionProvider"]

@@ -41,6 +41,11 @@ class MainosabaInputProvider(InputProvider):
     - 产生RawData供后续处理
     """
 
+    @classmethod
+    def get_registration_info(cls) -> Dict[str, Any]:
+        """获取 Provider 注册信息"""
+        return {"layer": "input", "name": "mainosaba", "class": cls, "source": "builtin:mainosaba"}
+
     class ConfigSchema(BaseProviderConfig):
         """Mainosaba游戏画面采集输入Provider配置"""
 

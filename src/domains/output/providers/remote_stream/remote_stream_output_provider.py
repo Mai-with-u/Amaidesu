@@ -22,7 +22,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import RemoteStreamRequestImagePayload
 from src.modules.logging import get_logger
 from src.modules.types.base.output_provider import OutputProvider
-from src.modules.types.intent import Intent
+from src.modules.types import Intent
 
 if TYPE_CHECKING:
     from src.modules.di.context import ProviderContext
@@ -100,6 +100,11 @@ class ImageConfig(BaseModel):
 
 class RemoteStreamOutputProvider(OutputProvider):
     """远程流媒体输出Provider"""
+
+    @classmethod
+    def get_registration_info(cls) -> Dict[str, Any]:
+        """获取 Provider 注册信息"""
+        return {"layer": "output", "name": "remote_stream", "class": cls, "source": "builtin:remote_stream"}
 
     class ConfigSchema(BaseProviderConfig):
         """远程流输出Provider配置"""

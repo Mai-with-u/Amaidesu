@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, AsyncIterator, Literal
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Literal
 
 if TYPE_CHECKING:
     from src.modules.di.context import ProviderContext
@@ -29,6 +29,11 @@ class MockDanmakuInputProvider(InputProvider):
     从JSONL文件读取消息并按设定速率发送。
     直接构造 NormalizedMessage，无需中间数据结构。
     """
+
+    @classmethod
+    def get_registration_info(cls) -> Dict[str, Any]:
+        """获取 Provider 注册信息"""
+        return {"layer": "input", "name": "mock_danmaku", "class": cls, "source": "builtin:mock_danmaku"}
 
     class ConfigSchema(BaseProviderConfig):
         """模拟弹幕输入Provider配置"""

@@ -35,6 +35,11 @@ except ImportError:
 class ReadPingmuInputProvider(InputProvider):
     """屏幕读评输入Provider"""
 
+    @classmethod
+    def get_registration_info(cls) -> Dict[str, Any]:
+        """获取 Provider 注册信息"""
+        return {"layer": "input", "name": "read_pingmu", "class": cls, "source": "builtin:read_pingmu"}
+
     class ConfigSchema(BaseProviderConfig):
         """屏幕读评输入Provider配置"""
 

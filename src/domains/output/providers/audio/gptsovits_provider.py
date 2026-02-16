@@ -20,7 +20,7 @@ import numpy as np
 from pydantic import Field
 
 from src.modules.config.schemas.base import BaseProviderConfig
-from src.modules.types.intent import Intent
+from src.modules.types import Intent
 from src.modules.logging import get_logger
 from src.modules.tts import AudioDeviceManager, GPTSoVITSClient
 from src.modules.types.base.output_provider import OutputProvider
@@ -45,6 +45,11 @@ class GPTSoVITSOutputProvider(OutputProvider):
     - 流式TTS和音频播放
     - 音频设备管理
     """
+
+    @classmethod
+    def get_registration_info(cls) -> Dict[str, Any]:
+        """获取 Provider 注册信息"""
+        return {"layer": "output", "name": "gptsovits", "class": cls, "source": "builtin:gptsovits"}
 
     class ConfigSchema(BaseProviderConfig):
         """GPT-SoVITS输出Provider配置"""
@@ -199,7 +204,7 @@ class GPTSoVITSOutputProvider(OutputProvider):
         try:
             async with self.tts_lock:
                 # 通知订阅者: 音频开始
-                audio_channel = getattr(self, "audio_stream_channel", None)
+                audio_channel = self.audio_stream_channel
                 if audio_channel:
                     from src.modules.streaming.audio_chunk import AudioMetadata
 

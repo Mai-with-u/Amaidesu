@@ -33,6 +33,11 @@ class BiliDanmakuInputProvider(InputProvider):
     通过轮询 Bilibili API 获取直播间的弹幕信息。
     """
 
+    @classmethod
+    def get_registration_info(cls) -> Dict[str, Any]:
+        """获取 Provider 注册信息"""
+        return {"layer": "input", "name": "bili_danmaku", "class": cls, "source": "builtin:bili_danmaku"}
+
     class ConfigSchema(BaseProviderConfig):
         """Bilibili弹幕输入Provider配置"""
 

@@ -9,7 +9,7 @@ Amaidesu 采用 3 域架构，Provider 分为三种类型：
 | 类型 | 职责 | 位置 | 示例 |
 |------|------|------|------|
 | **InputProvider** | 从外部数据源采集数据 | `src/domains/input/providers/` | ConsoleInputProvider, BiliDanmakuInputProvider |
-| **DecisionProvider** | 处理 NormalizedMessage 生成 Intent | `src/domains/decision/providers/` | MaiCoreDecisionProvider, LLMPDecisionProvider |
+| **DecisionProvider** | 处理 NormalizedMessage 生成 Intent | `src/domains/decision/providers/` | MaiCoreDecisionProvider, LLMDecisionProvider |
 | **OutputProvider** | 将 Intent 渲染到目标设备 | `src/domains/output/providers/` | SubtitleOutputProvider, TTSOutputProvider |
 
 ### 数据流关系
@@ -545,7 +545,7 @@ classDiagram
         +generate() AsyncIterator
     }
 
-    class LLMPDecisionProvider {
+    class LLMDecisionProvider {
         +init() void
         +decide(message) void
         +cleanup() void
@@ -560,7 +560,7 @@ classDiagram
 
     %% 继承关系
     InputProvider <|-- ConsoleInputProvider
-    DecisionProvider <|-- LLMPDecisionProvider
+    DecisionProvider <|-- LLMDecisionProvider
     OutputProvider <|-- SubtitleOutputProvider
 
     %% ProviderContext 依赖

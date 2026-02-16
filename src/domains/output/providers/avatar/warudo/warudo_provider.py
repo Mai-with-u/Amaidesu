@@ -27,6 +27,11 @@ if TYPE_CHECKING:
 class WarudoOutputProvider(AvatarProviderBase):
     """Warudo虚拟形象控制Provider"""
 
+    @classmethod
+    def get_registration_info(cls) -> Dict[str, Any]:
+        """获取 Provider 注册信息"""
+        return {"layer": "output", "name": "warudo", "class": cls, "source": "builtin:warudo"}
+
     class ConfigSchema(BaseProviderConfig):
         """Warudo输出Provider配置"""
 
