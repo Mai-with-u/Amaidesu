@@ -55,6 +55,11 @@ class RouterAdapter:
 
         try:
             self.logger.debug(f"准备发送消息: {message.message_info.message_id}")
+            # 打印序列化后的消息（调试用）
+            msg_dict = message.to_dict()
+            self.logger.info("RouterAdapter 发送的消息字典:")
+            self.logger.info(f"  - group_info: {msg_dict.get('message_info', {}).get('group_info')}")
+            self.logger.info(f"  - template_info: {msg_dict.get('message_info', {}).get('template_info')}")
             await self._router.send_message(message)
             self.logger.debug(f"消息 {message.message_info.message_id} 已发送")
         except Exception as e:

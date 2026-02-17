@@ -484,5 +484,109 @@ class TestIntegration:
         assert intent.metadata["parser"] == "llm"
 
 
+class TestPromptOverride:
+    """测试提示词覆盖功能"""
+
+    @pytest.fixture
+    def override_config(self):
+        """启用覆盖的配置"""
+        return {
+            "host": "localhost",
+            "port": 8000,
+            "platform": "test",
+            "enable_prompt_override": True,
+            "override_template_name": "test_override",
+            "override_templates": [
+                "replyer_prompt",
+                "replyer_prompt_0",
+                "chat_target_group1",
+                "chat_target_group2",
+            ],
+        }
+
+    @pytest.fixture
+    def provider_with_override(self, override_config, mock_provider_context):
+        """创建启用覆盖的 Provider 实例"""
+        return MaiCoreDecisionProvider(override_config, mock_provider_context)
+
+    def test_override_service_enabled_by_default(self, mock_provider_context):
+        """测试默认启用覆盖功能"""
+        config = {"host": "localhost", "port": 8000}
+        provider = MaiCoreDecisionProvider(config, mock_provider_context)
+        assert provider._override_service.config.enabled is True
+
+    def test_override_service_enabled(self, provider_with_override):
+        """测试启用覆盖功能"""
+        assert provider_with_override._override_service.config.enabled is True
+
+    @pytest.mark.asyncio
+    async def test_normalized_to_message_base_includes_template_info_when_enabled(
+        self, provider_with_override
+    ):
+        """测试启用时 message 包含 template_info"""
+        from unittest.mock import MagicMock
+
+        # Mock PromptManager 返回模板内容
+        provider_with_override._override_service._prompt_manager.get_raw = MagicMock(
+            return_value="测试模板内容 {bot_name}"
+        )
+
+        # 创建 NormalizedMessage，使用 mock raw 对象提供 user_id
+        from src.modules.types.base.normalized_message import NormalizedMessage
+
+        mock_raw = MagicMock()
+        mock_raw.get_user_id = MagicMock(return_value="test_user")
+
+        message = NormalizedMessage(
+            text="测试",
+            source="test",
+            data_type="text",
+            importance=0.5,
+            timestamp=1234567890.0,
+            raw=mock_raw,
+        )
+
+        result = provider_with_override._normalized_to_message_base(message)
+
+        assert result is not None
+        assert result.message_info.template_info is not None
+        assert result.message_info.template_info.template_default is False
+        assert "replyer_prompt" in result.message_info.template_info.template_items
+        # 验证 replyer_prompt_0 也被包含（think_level=0 时使用）
+        assert "replyer_prompt_0" in result.message_info.template_info.template_items
+        # 验证 group_info 也被正确设置（用于群聊判定）
+        assert result.message_info.group_info is not None
+        assert result.message_info.group_info.group_id == "live_room"
+        assert result.message_info.group_info.group_name == "直播间"
+
+    @pytest.mark.asyncio
+    async def test_normalized_to_message_base_no_template_info_when_disabled(
+        self, mock_provider_context
+    ):
+        """测试禁用时 message 不包含 template_info"""
+        config = {"host": "localhost", "port": 8000, "enable_prompt_override": False}
+        provider = MaiCoreDecisionProvider(config, mock_provider_context)
+
+        from src.modules.types.base.normalized_message import NormalizedMessage
+
+        # 创建 NormalizedMessage，使用 mock raw 对象提供 user_id
+        mock_raw = MagicMock()
+        mock_raw.get_user_id = MagicMock(return_value="test_user")
+
+        message = NormalizedMessage(
+            text="测试",
+            source="test",
+            data_type="text",
+            importance=0.5,
+            timestamp=1234567890.0,
+            raw=mock_raw,
+        )
+
+        result = provider._normalized_to_message_base(message)
+
+        assert result is not None
+        assert result.message_info.template_info is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

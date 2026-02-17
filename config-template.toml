@@ -321,6 +321,17 @@ user_nickname = "语音"
 # connect_timeout = 10.0
 # reconnect_interval = 5.0
 
+# --- MaiCore DecisionProvider 提示词覆盖配置 ---
+# 覆盖 MaiBot 默认回复提示词，使 VTuber 人设更一致（默认启用）
+# enable_prompt_override = true
+# override_template_name = "amaidesu_override"
+# override_templates = [
+#     "replyer_prompt",      # think_level=1 时使用
+#     "replyer_prompt_0",    # think_level=0 时使用（轻量回复）
+#     "chat_target_group1",
+#     "chat_target_group2",
+# ]
+
 # --- LLM DecisionProvider ---
 # [providers.decision.llm]
 # fallback_mode = "simple"  # simple | echo | error
