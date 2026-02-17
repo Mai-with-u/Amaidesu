@@ -7,7 +7,7 @@ Amadeus?
 
 Amaidesu!
 
-
+![示例截图](docs/images/demoScreenshot.png)
 
 
 ![Python Version](https://img.shields.io/badge/Python-3.12+-blue)
