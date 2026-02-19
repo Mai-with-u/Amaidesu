@@ -15,7 +15,7 @@ import json
 import time
 import uuid
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -398,8 +398,6 @@ class RequestHistoryManager:
         Returns:
             日期字符串列表
         """
-        from datetime import datetime, timedelta
-
         start = datetime.strptime(start_date, "%Y-%m-%d")
         end = datetime.strptime(end_date, "%Y-%m-%d")
 

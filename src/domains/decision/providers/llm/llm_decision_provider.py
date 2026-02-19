@@ -14,12 +14,13 @@ import re
 
 from pydantic import Field
 
-from src.modules.di.context import ProviderContext
-from src.modules.types import Intent
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.context import MessageRole
+from src.modules.di.context import ProviderContext
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import IntentPayload
 from src.modules.logging import get_logger
-from src.modules.types import ActionType, EmotionType, IntentAction
+from src.modules.types import ActionType, EmotionType, Intent, IntentAction, SourceContext
 from src.modules.types.base.decision_provider import DecisionProvider
 
 if TYPE_CHECKING:
@@ -386,10 +387,6 @@ class LLMDecisionProvider(DecisionProvider):
             intent: 解析后的 Intent
             normalized_message: 原始标准化消息
         """
-        from src.modules.events.names import CoreEvents
-        from src.modules.events.payloads import IntentPayload
-        from src.modules.types import SourceContext
-
         if not self.event_bus:
             self.logger.error("EventBus 未初始化，无法发布事件")
             return

@@ -9,7 +9,12 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set
 from pydantic import BaseModel
 
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads import IntentPayload, MessageReadyPayload
+from src.modules.events.payloads import (
+    IntentPayload,
+    MessageReadyPayload,
+    ProviderConnectedPayload,
+    ProviderDisconnectedPayload,
+)
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
@@ -143,8 +148,6 @@ class EventBroadcaster:
             self._subscribe_event(event_name, handler, model_class=GenericEventPayload)
 
         # 订阅 Provider 状态事件
-        from src.modules.events.payloads import ProviderConnectedPayload, ProviderDisconnectedPayload
-
         provider_event_map = {
             CoreEvents.INPUT_PROVIDER_CONNECTED: ProviderConnectedPayload,
             CoreEvents.INPUT_PROVIDER_DISCONNECTED: ProviderDisconnectedPayload,

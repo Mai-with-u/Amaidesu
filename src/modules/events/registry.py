@@ -9,6 +9,17 @@ from typing import Dict, Optional, Type
 from pydantic import BaseModel
 
 from src.modules.logging import get_logger
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import (
+    IntentPayload,
+    MessageReadyPayload,
+    OBSSendTextPayload,
+    OBSSetSourceVisibilityPayload,
+    OBSSwitchScenePayload,
+    ProviderConnectedPayload,
+    ProviderDisconnectedPayload,
+    RemoteStreamRequestImagePayload,
+)
 
 
 class EventRegistry:
@@ -108,18 +119,6 @@ class EventRegistry:
 
 def register_core_events() -> None:
     """注册所有核心事件名与 Payload 类型的映射，供 EventBus 校验使用。"""
-    from src.modules.events.names import CoreEvents
-    from src.modules.events.payloads import (
-        IntentPayload,
-        MessageReadyPayload,
-        OBSSendTextPayload,
-        OBSSetSourceVisibilityPayload,
-        OBSSwitchScenePayload,
-        ProviderConnectedPayload,
-        ProviderDisconnectedPayload,
-        RemoteStreamRequestImagePayload,
-    )
-
     # Input Domain 事件
     EventRegistry.register_core_event(CoreEvents.INPUT_MESSAGE_READY, MessageReadyPayload)
 

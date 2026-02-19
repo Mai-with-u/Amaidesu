@@ -16,8 +16,15 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 from pydantic import Field
 
 from src.domains.output.providers.avatar.base import AvatarProviderBase
+from src.domains.output.providers.avatar.warudo.state.mood_manager import MoodManager
+from src.domains.output.providers.avatar.warudo.state.warudo_state_manager import WarudoStateManager
+from src.domains.output.providers.avatar.warudo.tasks.blink_task import BlinkTask
+from src.domains.output.providers.avatar.warudo.tasks.reply_state import ReplyState
+from src.domains.output.providers.avatar.warudo.tasks.shift_task import ShiftTask
+from src.domains.output.providers.avatar.warudo.warudo_sender import ActionSender
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
+from src.modules.types import EmotionType
 
 if TYPE_CHECKING:
     from src.modules.di.context import ProviderContext
@@ -84,8 +91,6 @@ class WarudoOutputProvider(AvatarProviderBase):
         self._first_connection = True
 
         # 状态管理器 - 使用新版本（依赖注入模式）
-        from .state.warudo_state_manager import WarudoStateManager
-
         # 创建发送动作的回调函数
         async def send_action_callback(action: str, data: dict):
             """发送动作到 Warudo"""
@@ -94,23 +99,15 @@ class WarudoOutputProvider(AvatarProviderBase):
         self.state_manager = WarudoStateManager(self.logger, send_action_callback)
 
         # 心情管理器
-        from .state.mood_manager import MoodManager
-
         self.mood_manager = MoodManager(self.state_manager, self.logger)
 
         # 眨眼任务
-        from .tasks.blink_task import BlinkTask
-
         self.blink_task = BlinkTask(self.state_manager, self.logger)
 
         # 眼部移动任务
-        from .tasks.shift_task import ShiftTask
-
         self.shift_task = ShiftTask(self.state_manager, self.logger)
 
         # 回复状态管理器
-        from .tasks.reply_state import ReplyState
-
         self.reply_state = ReplyState(self.state_manager, self.logger)
 
         # 当前心情状态 (1-10)
@@ -137,8 +134,6 @@ class WarudoOutputProvider(AvatarProviderBase):
             - expressions: Dict[str, float] - 表情参数
             - hotkeys: List[str] - 热键ID列表
         """
-        from src.modules.types import EmotionType
-
         result = {
             "expressions": {},
             "hotkeys": [],
@@ -243,8 +238,6 @@ class WarudoOutputProvider(AvatarProviderBase):
 
     async def _connection_loop(self, uri: str):
         """WebSocket连接循环（支持自动重连）"""
-        from .warudo_sender import ActionSender
-
         action_sender = ActionSender()
 
         while True:
@@ -277,8 +270,6 @@ class WarudoOutputProvider(AvatarProviderBase):
             return
 
         try:
-            from .warudo_sender import ActionSender
-
             action_sender = ActionSender()
             action_sender.set_websocket(self.websocket)
             await action_sender.send_action(action, data)

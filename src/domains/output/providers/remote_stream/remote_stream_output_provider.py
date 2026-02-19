@@ -21,8 +21,10 @@ from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import RemoteStreamRequestImagePayload
 from src.modules.logging import get_logger
-from src.modules.types.base.output_provider import OutputProvider
+from src.modules.streaming.backpressure import BackpressureStrategy, SubscriberConfig
 from src.modules.types import Intent
+from src.modules.streaming.audio_utils import resample_audio
+from src.modules.types.base.output_provider import OutputProvider
 
 if TYPE_CHECKING:
     from src.modules.di.context import ProviderContext
@@ -213,8 +215,6 @@ class RemoteStreamOutputProvider(OutputProvider):
         # 注册 AudioStreamChannel 订阅
         audio_channel = self.audio_stream_channel
         if audio_channel:
-            from src.modules.streaming.backpressure import BackpressureStrategy, SubscriberConfig
-
             self._remote_subscription_id = await audio_channel.subscribe(
                 name="remote_stream",
                 on_audio_chunk=self._on_audio_chunk_received,
@@ -685,8 +685,6 @@ class RemoteStreamOutputProvider(OutputProvider):
         """AudioStreamChannel: 音频块回调"""
         try:
             # RemoteStream 期望 16000 Hz
-            from src.modules.streaming.audio_utils import resample_audio
-
             audio_data = resample_audio(chunk.data, chunk.sample_rate, 16000)
             await self.send_tts_audio(audio_data)
         except Exception as e:

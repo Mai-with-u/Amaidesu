@@ -6,10 +6,11 @@
 
 import uuid
 from datetime import datetime
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends
 
+from src.modules.context.models import MessageRole
 from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.dashboard.schemas.debug import (
     EventBusStatsResponse,
@@ -18,8 +19,6 @@ from src.modules.dashboard.schemas.debug import (
     InjectMessageRequest,
     InjectMessageResponse,
 )
-from src.modules.context.models import MessageRole
-from src.modules.dashboard.server import DashboardServer
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.decision import IntentPayload
 from src.modules.events.payloads.input import MessageReadyPayload
@@ -27,12 +26,15 @@ from src.modules.logging import get_logger
 from src.modules.types.base.normalized_message import NormalizedMessage
 from src.modules.types.intent import Intent, IntentAction
 
+if TYPE_CHECKING:
+    from src.modules.dashboard.server import DashboardServer
+
 router = APIRouter()
 logger = get_logger("DebugAPI")
 
 
 # 类型别名，用于依赖注入
-ServerDep = Annotated[DashboardServer, Depends(get_dashboard_server)]
+ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 
 
 @router.post("/inject-message", response_model=InjectMessageResponse)

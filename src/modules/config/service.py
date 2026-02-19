@@ -12,6 +12,7 @@ ConfigService - 统一的配置管理服务
 from typing import Any, Dict, Literal, Optional
 
 from src.modules.config.config_utils import initialize_configurations, load_config
+from src.modules.config.version_manager import ConfigVersionManager
 from src.modules.logging import get_logger
 
 
@@ -52,8 +53,6 @@ class ConfigService:
         self.logger = get_logger("ConfigService")
 
         # 版本管理器
-        from src.modules.config.version_manager import ConfigVersionManager
-
         self.version_manager = ConfigVersionManager(base_dir)
 
         self.logger.debug("ConfigService 初始化完成")

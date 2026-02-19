@@ -9,11 +9,12 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from src.modules.di.context import ProviderContext
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.decision import IntentPayload
 
 if TYPE_CHECKING:
     from src.modules.streaming.audio_stream_channel import AudioStreamChannel
     from src.modules.types import Intent
-    from src.modules.events.payloads.decision import IntentPayload
 
 
 class OutputProvider(ABC):
@@ -74,9 +75,6 @@ class OutputProvider(ABC):
 
         依赖已在构造时通过 context 注入。
         """
-        from src.modules.events.names import CoreEvents
-        from src.modules.events.payloads.decision import IntentPayload
-
         if self.event_bus:
             self.event_bus.on(
                 CoreEvents.OUTPUT_INTENT_READY, self._on_intent, model_class=IntentPayload, priority=self.priority
@@ -111,8 +109,6 @@ class OutputProvider(ABC):
 
     async def stop(self):
         """停止 Provider"""
-        from src.modules.events.names import CoreEvents
-
         if not self.is_started:
             return
 

@@ -6,7 +6,7 @@
 
 import sys
 import time
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends
 
@@ -17,7 +17,9 @@ from src.modules.dashboard.schemas.system import (
     SystemStatsResponse,
     SystemStatusResponse,
 )
-from src.modules.dashboard.server import DashboardServer
+
+if TYPE_CHECKING:
+    from src.modules.dashboard.server import DashboardServer
 
 router = APIRouter()
 
@@ -26,7 +28,7 @@ _startup_time: float = time.time()
 
 
 # 类型别名，用于依赖注入
-ServerDep = Annotated[DashboardServer, Depends(get_dashboard_server)]
+ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 
 
 @router.get("/status", response_model=SystemStatusResponse)

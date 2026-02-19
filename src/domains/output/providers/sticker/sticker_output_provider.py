@@ -15,6 +15,7 @@ from pydantic import Field
 
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
+from src.modules.types import ActionType
 from src.modules.types.base.output_provider import OutputProvider
 
 if TYPE_CHECKING:
@@ -98,8 +99,6 @@ class StickerOutputProvider(OutputProvider):
         Args:
             intent: 意图对象，从 intent.actions 中获取 ActionType.STICKER 类型的动作
         """
-        from src.modules.types import ActionType
-
         # 检查 VTS Provider 是否可用
         if not self._vts_provider:
             self.logger.warning("VTS Provider 不可用，无法显示贴纸")

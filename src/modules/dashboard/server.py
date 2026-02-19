@@ -5,10 +5,14 @@ Dashboard 服务器主类
 """
 
 import asyncio
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from fastapi import WebSocket
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
+from src.modules.dashboard.api.router import create_app, setup_cors
 from src.modules.logging import get_logger
 from src.modules.logging.log_streamer import LogStreamer
 
@@ -87,14 +91,10 @@ class DashboardServer:
 
         self.logger.info(f"Dashboard 服务器启动中: http://{self.host}:{self.port}")
 
+        # 延迟导入依赖注入工具，避免循环导入
+        from src.modules.dashboard.dependencies import set_dashboard_server
+
         # 创建 FastAPI 应用
-        from pathlib import Path
-
-        from fastapi.responses import FileResponse
-        from fastapi.staticfiles import StaticFiles
-
-        from src.modules.dashboard.api.router import create_app, setup_cors
-
         self.app = create_app()
         setup_cors(self.app, self.cors_origins)
 
@@ -132,8 +132,6 @@ class DashboardServer:
             self.logger.info("前端未构建，仅 API 模式运行")
 
         # 设置依赖注入
-        from src.modules.dashboard.dependencies import set_dashboard_server
-
         set_dashboard_server(self)
 
         # 初始化 WebSocket 处理器
@@ -218,8 +216,6 @@ class DashboardServer:
     def get_config_path(self) -> Optional[str]:
         """获取配置文件路径"""
         if self.config_service and hasattr(self.config_service, "base_dir"):
-            from pathlib import Path
-
             return str(Path(self.config_service.base_dir) / "config.toml")
         return None
 

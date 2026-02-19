@@ -4,7 +4,9 @@
 提供配置的查询、Schema 获取和修改接口。
 """
 
-from typing import Annotated, Any, Dict
+from typing import TYPE_CHECKING, Annotated, Any, Dict
+import os
+import signal
 
 from fastapi import APIRouter, Depends
 
@@ -24,14 +26,16 @@ from src.modules.dashboard.schemas.config_schema import (
     ConfigGroupSchema,
     ConfigFieldSchema,
 )
-from src.modules.dashboard.server import DashboardServer
 from src.modules.logging import get_logger
+
+if TYPE_CHECKING:
+    from src.modules.dashboard.server import DashboardServer
 
 router = APIRouter()
 logger = get_logger("ConfigAPI")
 
 # 类型别名，用于依赖注入
-ServerDep = Annotated[DashboardServer, Depends(get_dashboard_server)]
+ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 
 
 # 需要重启服务的配置键前缀
@@ -237,9 +241,6 @@ async def restart_service(
         # 例如 systemd、supervisor 或 Docker
 
         # 设置一个标志，让主循环检测并退出
-        import os
-        import signal
-
         # 给自己发送 SIGTERM 信号，触发优雅关闭
         os.kill(os.getpid(), signal.SIGTERM)
 

@@ -5,6 +5,5 @@ Dashboard 模块 - Web 管理界面
 """
 
 from src.modules.dashboard.config import DashboardConfig
-from src.modules.dashboard.server import DashboardServer
 
-__all__ = ["DashboardServer", "DashboardConfig"]
+__all__ = ["DashboardConfig"]

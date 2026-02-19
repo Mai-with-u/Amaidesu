@@ -14,10 +14,12 @@ from typing import TYPE_CHECKING, Any, Dict, Literal
 
 from pydantic import Field
 
-from src.modules.di.context import ProviderContext
-from src.modules.types import ActionType, EmotionType, Intent, IntentAction, SourceContext
 from src.modules.config.schemas.base import BaseProviderConfig
+from src.modules.di.context import ProviderContext
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import IntentPayload
 from src.modules.logging import get_logger
+from src.modules.types import ActionType, EmotionType, Intent, IntentAction, SourceContext
 from src.modules.types.base.decision_provider import DecisionProvider
 
 if TYPE_CHECKING:
@@ -134,9 +136,6 @@ class ReplayDecisionProvider(DecisionProvider):
         Args:
             intent: 要发布的 Intent
         """
-        from src.modules.events.names import CoreEvents
-        from src.modules.events.payloads import IntentPayload
-
         if not self.event_bus:
             self.logger.error("EventBus 未初始化，无法发布事件")
             return

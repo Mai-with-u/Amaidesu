@@ -22,9 +22,6 @@ from src.domains.input.pipelines.manager import InputPipelineManager
 from src.domains.input.provider_manager import InputProviderManager
 from src.domains.output import OutputProviderManager
 
-if TYPE_CHECKING:
-    from src.modules.dashboard import DashboardServer
-
 logger = get_logger("Main")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -428,7 +425,8 @@ async def create_app_components(
 
     if dashboard_config.get("enabled", True):
         try:
-            from src.modules.dashboard import DashboardConfig, DashboardServer
+            from src.modules.dashboard.config import DashboardConfig
+            from src.modules.dashboard.server import DashboardServer
 
             typed_dashboard_config = DashboardConfig(**dashboard_config)
             dashboard_server = DashboardServer(

@@ -19,6 +19,7 @@ from pydantic import Field
 from src.domains.output.providers.avatar.base import AvatarProviderBase as BaseAvatarProvider
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
+from src.modules.types import ActionType, EmotionType
 
 if TYPE_CHECKING:
     from src.modules.di.context import ProviderContext
@@ -270,16 +271,12 @@ class VTSProvider(BaseAvatarProvider):
             - expressions: Dict[str, float] - VTS参数值
             - hotkeys: List[str] - 热键ID列表
         """
-        from src.modules.types import EmotionType
-
         result = {
             "expressions": {},
             "hotkeys": [],
         }
 
         # 1. 适配情感为VTS参数
-        from src.modules.types import ActionType
-
         emotion_str = intent.emotion.value if isinstance(intent.emotion, EmotionType) else str(intent.emotion)
         if emotion_str in self._emotion_map:
             result["expressions"].update(self._emotion_map[emotion_str])

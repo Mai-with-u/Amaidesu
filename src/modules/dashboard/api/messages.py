@@ -4,7 +4,8 @@
 提供消息历史的查询接口。
 """
 
-from typing import Annotated, Optional
+from typing import TYPE_CHECKING, Annotated, Optional
+import time
 
 from fastapi import APIRouter, Depends, Query
 
@@ -15,15 +16,17 @@ from src.modules.dashboard.schemas.message import (
     SessionInfo,
     SessionListResponse,
 )
-from src.modules.dashboard.server import DashboardServer
 from src.modules.logging import get_logger
+
+if TYPE_CHECKING:
+    from src.modules.dashboard.server import DashboardServer
 
 router = APIRouter()
 logger = get_logger("MessagesAPI")
 
 
 # 类型别名，用于依赖注入
-ServerDep = Annotated[DashboardServer, Depends(get_dashboard_server)]
+ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 
 
 @router.get("/sessions", response_model=SessionListResponse)
@@ -46,8 +49,6 @@ async def list_sessions(
             info = await context_service.get_session_info(session.session_id)
 
             # 计算是否活跃（1小时内有活动）
-            import time
-
             is_active = (time.time() - session.last_active) < 3600
 
             sessions.append(

@@ -15,15 +15,17 @@ from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
 from maim_message import MessageBase, RouteConfig, Router, TargetConfig
 from pydantic import Field
 
-from src.modules.di.context import ProviderContext
-from src.modules.types import ActionType, EmotionType, Intent, IntentAction, SourceContext
 from src.modules.config.schemas.base import BaseProviderConfig
+from src.modules.di.context import ProviderContext
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import IntentPayload
 from src.modules.logging import get_logger
-from src.modules.types.base.decision_provider import DecisionProvider
 from src.modules.prompts.template_override_service import (
     TemplateOverrideService,
     OverrideConfig,
 )
+from src.modules.types import ActionType, EmotionType, Intent, IntentAction, SourceContext
+from src.modules.types.base.decision_provider import DecisionProvider
 
 from .router_adapter import RouterAdapter
 
@@ -417,9 +419,6 @@ class MaiCoreDecisionProvider(DecisionProvider):
 
     async def _publish_intent(self, intent: Intent) -> None:
         """通过 event_bus 发布 decision.intent.generated 事件"""
-        from src.modules.events.names import CoreEvents
-        from src.modules.events.payloads import IntentPayload
-
         if not self.event_bus:
             self.logger.error("EventBus 未初始化，无法发布事件")
             return

@@ -15,11 +15,12 @@ from typing import Dict, Literal, Optional
 
 from pydantic import Field, ValidationError
 
-from src.modules.di.context import ProviderContext
-from src.modules.types import Intent
 from src.modules.config.schemas.base import BaseProviderConfig
+from src.modules.di.context import ProviderContext
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import IntentPayload
 from src.modules.logging import get_logger
-from src.modules.types import EmotionType
+from src.modules.types import EmotionType, Intent
 from src.modules.types.base.decision_provider import DecisionProvider
 
 from .action_registry import ActionRegistry
@@ -332,9 +333,6 @@ class MaicraftDecisionProvider(DecisionProvider):
 
     async def _publish_intent(self, intent: Intent) -> None:
         """通过 event_bus 发布 decision.intent 事件"""
-        from src.modules.events.names import CoreEvents
-        from src.modules.events.payloads import IntentPayload
-
         if not self.event_bus:
             self.logger.error("EventBus 未初始化，无法发布事件")
             return

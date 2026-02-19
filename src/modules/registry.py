@@ -17,6 +17,9 @@ Provider Registry - Provider 注册表
 
 import importlib
 import inspect
+import json
+import os
+import sys
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type
 
 if TYPE_CHECKING:
@@ -418,8 +421,6 @@ class ProviderRegistry:
     def print_registry_info(cls) -> None:
         """打印注册表信息（用于调试）"""
         info = cls.get_registry_info()
-        import json
-
         cls._logger.debug(json.dumps(info, indent=2, ensure_ascii=False))
 
     # ==================== 配置驱动注册方法 ====================
@@ -448,9 +449,6 @@ class ProviderRegistry:
         cls._logger.info("开始配置驱动的 Provider 注册...")
 
         # 将 src 目录添加到 sys.path（确保可以导入 src.modules 和 src.domains）
-        import os
-        import sys
-
         src_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
         if src_dir not in sys.path:
             sys.path.insert(0, src_dir)

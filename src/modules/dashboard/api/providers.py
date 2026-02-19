@@ -4,7 +4,7 @@ Provider 管理 API
 提供 Provider 状态查询和控制接口。
 """
 
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, HTTPException, Depends
 
@@ -17,7 +17,6 @@ from src.modules.dashboard.schemas.provider import (
     ProviderDetailResponse,
     ProviderListResponse,
 )
-from src.modules.dashboard.server import DashboardServer
 from src.modules.dashboard.utils.provider_helper import (
     get_decision_provider_summaries,
     get_input_provider_summaries,
@@ -25,11 +24,14 @@ from src.modules.dashboard.utils.provider_helper import (
     get_provider_detail,
 )
 
+if TYPE_CHECKING:
+    from src.modules.dashboard.server import DashboardServer
+
 router = APIRouter()
 
 
 # 类型别名，用于依赖注入
-ServerDep = Annotated[DashboardServer, Depends(get_dashboard_server)]
+ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 
 
 @router.get("", response_model=ProviderListResponse)
@@ -91,7 +93,7 @@ async def control_provider(
 
 
 async def _control_input_provider(
-    name: str, action: ProviderControlAction, server: DashboardServer
+    name: str, action: ProviderControlAction, server: "DashboardServer"
 ) -> ProviderControlResponse:
     """控制 InputProvider"""
     manager = server.input_manager
@@ -129,7 +131,7 @@ async def _control_input_provider(
 
 
 async def _control_decision_provider(
-    name: str, action: ProviderControlAction, server: DashboardServer
+    name: str, action: ProviderControlAction, server: "DashboardServer"
 ) -> ProviderControlResponse:
     """控制 DecisionProvider"""
     manager = server.decision_manager
@@ -152,7 +154,7 @@ async def _control_decision_provider(
 
 
 async def _control_output_provider(
-    name: str, action: ProviderControlAction, server: DashboardServer
+    name: str, action: ProviderControlAction, server: "DashboardServer"
 ) -> ProviderControlResponse:
     """控制 OutputProvider"""
     manager = server.output_manager

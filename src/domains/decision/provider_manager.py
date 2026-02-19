@@ -22,19 +22,23 @@ import os
 import sys
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
+from src.modules.di.context import ProviderContext
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import ProviderDisconnectedPayload
+from src.modules.events.payloads.decision import ProviderConnectedPayload
+from src.modules.events.payloads.input import MessageReadyPayload
 from src.modules.logging import get_logger
+from src.modules.registry import ProviderRegistry
+from src.modules.types import SourceContext
+from src.modules.types.base.normalized_message import NormalizedMessage
 
 if TYPE_CHECKING:
-    from src.modules.types import SourceContext
     from src.modules.config.service import ConfigService
     from src.modules.context.service import ContextService
     from src.modules.events.event_bus import EventBus
-    from src.modules.events.payloads.input import MessageReadyPayload
     from src.modules.llm.manager import LLMManager
     from src.modules.prompts.manager import PromptManager
     from src.modules.types.base.decision_provider import DecisionProvider
-    from src.modules.types.base.normalized_message import NormalizedMessage
 
 
 class DecisionProviderManager:
@@ -120,8 +124,6 @@ class DecisionProviderManager:
         # 确保所有 Provider 已注册
         await self.ensure_providers_registered()
 
-        from src.modules.registry import ProviderRegistry
-
         # 确定配置来源
         if decision_config is None:
             decision_config = config or {}
@@ -156,8 +158,6 @@ class DecisionProviderManager:
                 self.logger.info(f"通过 ProviderRegistry 创建 DecisionProvider: {provider_name}")
 
                 # 创建 ProviderContext
-                from src.modules.di.context import ProviderContext
-
                 context = ProviderContext(
                     event_bus=self.event_bus,
                     llm_service=self._llm_service,
@@ -254,8 +254,6 @@ class DecisionProviderManager:
             return
 
         try:
-            from src.modules.events.payloads.decision import ProviderConnectedPayload
-
             await self.event_bus.emit(
                 CoreEvents.DECISION_PROVIDER_CONNECTED,
                 ProviderConnectedPayload(
@@ -275,8 +273,6 @@ class DecisionProviderManager:
             return
 
         try:
-            from src.modules.events.payloads import ProviderDisconnectedPayload
-
             await self.event_bus.emit(
                 CoreEvents.DECISION_PROVIDER_DISCONNECTED,
                 ProviderDisconnectedPayload(
@@ -324,7 +320,6 @@ class DecisionProviderManager:
             - 切换时会先停止并清理旧Provider
             - 如果新Provider初始化失败，会回退到旧Provider
         """
-        from src.modules.registry import ProviderRegistry
 
         old_provider = self._current_provider
         old_name = self._provider_name
@@ -339,8 +334,6 @@ class DecisionProviderManager:
                     self.logger.info(f"通过 ProviderRegistry 创建 DecisionProvider: {provider_name}")
 
                     # 创建 ProviderContext
-                    from src.modules.di.context import ProviderContext
-
                     context = ProviderContext(
                         event_bus=self.event_bus,
                         llm_service=self._llm_service,
@@ -469,8 +462,6 @@ class DecisionProviderManager:
         Returns:
             Provider名称列表
         """
-        from src.modules.registry import ProviderRegistry
-
         return ProviderRegistry.get_registered_decision_providers()
 
     async def ensure_providers_registered(self) -> None:
@@ -479,8 +470,6 @@ class DecisionProviderManager:
 
         通过导入 providers 包触发所有 Provider 的 Schema 注册。
         """
-        from src.modules.registry import ProviderRegistry
-
         # 将 src 目录添加到 sys.path（确保可以导入 src.modules 和 src.domains）
         src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         src_dir = os.path.dirname(src_dir)  # 从 provider_manager.py -> decision -> src
@@ -543,8 +532,6 @@ class DecisionProviderManager:
         - model_dump(): raw 字段
         - to_dict(): raw_data 字段
         """
-        from src.modules.types import SourceContext
-
         source = normalized_dict.get("source", "")
         data_type = normalized_dict.get("data_type", "")
         importance = normalized_dict.get("importance", 0.5)
@@ -582,8 +569,6 @@ class DecisionProviderManager:
             payload: 类型化的事件数据（MessageReadyPayload 对象）
             source: 事件源
         """
-        from src.modules.types.base.normalized_message import NormalizedMessage
-
         # 获取消息数据（字典格式）
         message_data = payload.message
         if not message_data:

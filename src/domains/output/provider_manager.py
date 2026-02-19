@@ -30,11 +30,12 @@ from pydantic import BaseModel
 from src.domains.output.pipelines.manager import OutputPipelineManager
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.decision import IntentPayload
 from src.modules.logging import get_logger
+from src.modules.registry import ProviderRegistry
 from src.modules.types.base.output_provider import OutputProvider
 
 if TYPE_CHECKING:
-    from src.modules.events.payloads import IntentPayload
     from src.modules.llm.manager import LLMManager
     from src.modules.prompts.manager import PromptManager
     from src.modules.tts.audio_device_manager import AudioDeviceManager
@@ -191,8 +192,6 @@ class OutputProviderManager:
         await self.load_from_config(config, config_service=config_service)
 
         # 订阅 Decision Domain 的 Intent 事件（3域架构，类型化）
-        from src.modules.events.payloads.decision import IntentPayload
-
         self.event_bus.on(
             CoreEvents.DECISION_INTENT_GENERATED,
             self._on_decision_intent,
@@ -279,8 +278,6 @@ class OutputProviderManager:
             # 发布 OUTPUT_INTENT_READY 事件（事件驱动）
             # 所有 Output Provider 订阅此事件并响应
             # 使用处理后的 Intent 创建新的 IntentPayload
-            from src.modules.events.payloads.decision import IntentPayload
-
             output_payload = IntentPayload.from_intent(intent, payload.provider)
             await self.event_bus.emit(
                 CoreEvents.OUTPUT_INTENT_READY,
@@ -501,7 +498,6 @@ class OutputProviderManager:
             Provider实例，如果创建失败返回None
         """
         from src.modules.di.context import ProviderContext
-        from src.modules.registry import ProviderRegistry
 
         # 检查 Provider 是否已注册
         if not ProviderRegistry.is_output_provider_registered(provider_type):
