@@ -36,18 +36,17 @@ class EventBusStatsResponse(BaseModel):
 
 class InjectIntentRequest(BaseModel):
     """注入 Intent 请求"""
+
     text: str  # 对应 Intent.original_text
     response_text: Optional[str] = None  # 如果为空则使用 text
     emotion: str = "neutral"
-    actions: List[Dict[str, Any]] = Field(
-        default_factory=list,
-        description="动作列表，每个包含 type, params, priority"
-    )
+    actions: List[Dict[str, Any]] = Field(default_factory=list, description="动作列表，每个包含 type, params, priority")
     source: str = "dashboard_debug"
 
 
 class InjectIntentResponse(BaseModel):
     """注入 Intent 响应"""
+
     success: bool
     intent_id: Optional[str] = None
     error: Optional[str] = None

@@ -484,8 +484,6 @@ enabled = true
 # =============================================================================
 
 
-
-
 def test_get_pipeline_config_nonexistent(config_service, temp_base_dir, minimal_main_config):
     """测试获取不存在的Pipeline配置"""
     main_template_path = os.path.join(temp_base_dir, "config-template.toml")
@@ -498,8 +496,6 @@ def test_get_pipeline_config_nonexistent(config_service, temp_base_dir, minimal_
     pipeline_config = config_service.get_pipeline_config("nonexistent_pipeline")
 
     assert pipeline_config == {}
-
-
 
 
 # =============================================================================
@@ -752,8 +748,6 @@ def test_config_isolation(config_service, temp_base_dir, minimal_main_config):
     # service2 初始化后应该独立
     service2.initialize()
     assert service2._initialized is True
-
-
 
 
 def test_get_all_pipeline_configs_no_pipelines_dir(config_service, temp_base_dir, minimal_main_config):

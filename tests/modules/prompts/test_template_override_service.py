@@ -94,11 +94,7 @@ class TestOverrideConfig:
 
     def test_custom_values(self):
         """测试自定义值"""
-        config = OverrideConfig(
-            enabled=True,
-            template_name="custom_scope",
-            templates=["template1", "template2"]
-        )
+        config = OverrideConfig(enabled=True, template_name="custom_scope", templates=["template1", "template2"])
         assert config.enabled is True
         assert config.template_name == "custom_scope"
         assert config.templates == ["template1", "template2"]
@@ -123,14 +119,11 @@ class TestTemplateOverrideService:
 
     def test_service_enabled_returns_template_info(self):
         """测试启用时返回 TemplateInfo"""
-        config = OverrideConfig(
-            enabled=True,
-            templates=["test_template"]
-        )
+        config = OverrideConfig(enabled=True, templates=["test_template"])
         service = TemplateOverrideService(config)
 
         # Mock PromptManager
-        with patch.object(service._prompt_manager, 'get_raw', return_value="模板内容"):
+        with patch.object(service._prompt_manager, "get_raw", return_value="模板内容"):
             result = service.build_template_info()
 
         assert result is not None
@@ -139,13 +132,11 @@ class TestTemplateOverrideService:
     def test_template_info_has_correct_structure(self):
         """测试 TemplateInfo 结构正确"""
         config = OverrideConfig(
-            enabled=True,
-            template_name="test_scope",
-            templates=["replyer_prompt", "chat_target_group1"]
+            enabled=True, template_name="test_scope", templates=["replyer_prompt", "chat_target_group1"]
         )
         service = TemplateOverrideService(config)
 
-        with patch.object(service._prompt_manager, 'get_raw', return_value="模板内容"):
+        with patch.object(service._prompt_manager, "get_raw", return_value="模板内容"):
             result = service.build_template_info()
 
         assert result.template_name == "test_scope"
@@ -157,7 +148,7 @@ class TestTemplateOverrideService:
         config = OverrideConfig(enabled=True, templates=["test"])
         service = TemplateOverrideService(config)
 
-        with patch.object(service._prompt_manager, 'get_raw', return_value="内容"):
+        with patch.object(service._prompt_manager, "get_raw", return_value="内容"):
             result = service.build_template_info()
 
         assert result.template_default is False
@@ -167,7 +158,7 @@ class TestTemplateOverrideService:
         config = OverrideConfig(enabled=True, templates=["nonexistent"])
         service = TemplateOverrideService(config)
 
-        with patch.object(service._prompt_manager, 'get_raw', side_effect=KeyError("not found")):
+        with patch.object(service._prompt_manager, "get_raw", side_effect=KeyError("not found")):
             result = service.build_template_info()
 
         # 缺失模板时返回 None（因为没有成功加载任何模板）
@@ -175,10 +166,7 @@ class TestTemplateOverrideService:
 
     def test_partial_template_loading(self):
         """测试部分模板加载失败时仍返回有效的 TemplateInfo"""
-        config = OverrideConfig(
-            enabled=True,
-            templates=["exists", "nonexistent"]
-        )
+        config = OverrideConfig(enabled=True, templates=["exists", "nonexistent"])
         service = TemplateOverrideService(config)
 
         def mock_get_raw(key):
@@ -186,7 +174,7 @@ class TestTemplateOverrideService:
                 return "有效模板"
             raise KeyError("not found")
 
-        with patch.object(service._prompt_manager, 'get_raw', side_effect=mock_get_raw):
+        with patch.object(service._prompt_manager, "get_raw", side_effect=mock_get_raw):
             result = service.build_template_info()
 
         assert result is not None

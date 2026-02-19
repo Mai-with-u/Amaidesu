@@ -46,9 +46,7 @@ class ConfigFieldSchema(BaseModel):
     properties: Optional[Dict[str, "ConfigFieldSchema"]] = Field(
         default=None, description="嵌套对象属性（OBJECT 类型）"
     )
-    items: Optional["ConfigFieldSchema"] = Field(
-        default=None, description="数组项 Schema（ARRAY 类型）"
-    )
+    items: Optional["ConfigFieldSchema"] = Field(default=None, description="数组项 Schema（ARRAY 类型）")
     required: bool = Field(default=False, description="是否必填")
     sensitive: bool = Field(default=False, description="是否为敏感字段")
     group: Optional[str] = Field(default=None, description="所属分组")

@@ -125,6 +125,7 @@ class EventBroadcaster:
 
     def _subscribe_system_events(self) -> None:
         """订阅系统状态事件"""
+
         # 定义一个简单的通用 Payload 用于系统事件
         class GenericEventPayload(BaseModel):
             event: Optional[str] = None

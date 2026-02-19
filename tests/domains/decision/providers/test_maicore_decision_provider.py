@@ -520,9 +520,7 @@ class TestPromptOverride:
         assert provider_with_override._override_service.config.enabled is True
 
     @pytest.mark.asyncio
-    async def test_normalized_to_message_base_includes_template_info_when_enabled(
-        self, provider_with_override
-    ):
+    async def test_normalized_to_message_base_includes_template_info_when_enabled(self, provider_with_override):
         """测试启用时 message 包含 template_info"""
         from unittest.mock import MagicMock
 
@@ -560,9 +558,7 @@ class TestPromptOverride:
         assert result.message_info.group_info.group_name == "直播间"
 
     @pytest.mark.asyncio
-    async def test_normalized_to_message_base_no_template_info_when_disabled(
-        self, mock_provider_context
-    ):
+    async def test_normalized_to_message_base_no_template_info_when_disabled(self, mock_provider_context):
         """测试禁用时 message 不包含 template_info"""
         config = {"host": "localhost", "port": 8000, "enable_prompt_override": False}
         provider = MaiCoreDecisionProvider(config, mock_provider_context)

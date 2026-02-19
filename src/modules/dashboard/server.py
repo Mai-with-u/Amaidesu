@@ -219,6 +219,7 @@ class DashboardServer:
         """获取配置文件路径"""
         if self.config_service and hasattr(self.config_service, "base_dir"):
             from pathlib import Path
+
             return str(Path(self.config_service.base_dir) / "config.toml")
         return None
 

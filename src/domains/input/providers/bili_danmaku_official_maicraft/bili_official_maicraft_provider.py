@@ -109,7 +109,12 @@ class BiliDanmakuOfficialMaiCraftInputProvider(InputProvider):
     @classmethod
     def get_registration_info(cls) -> Dict[str, Any]:
         """获取 Provider 注册信息"""
-        return {"layer": "input", "name": "bili_danmaku_official_maicraft", "class": cls, "source": "builtin:bili_danmaku_official_maicraft"}
+        return {
+            "layer": "input",
+            "name": "bili_danmaku_official_maicraft",
+            "class": cls,
+            "source": "builtin:bili_danmaku_official_maicraft",
+        }
 
     class ConfigSchema(BaseProviderConfig):
         """Bilibili官方弹幕+Minecraft转发输入Provider配置"""

@@ -62,9 +62,7 @@ class ConfigFieldDefinition:
             result["validation"]["options"] = self.options
 
         if self.properties:
-            result["properties"] = {
-                k: v.to_dict() for k, v in self.properties.items()
-            }
+            result["properties"] = {k: v.to_dict() for k, v in self.properties.items()}
 
         if self.items:
             result["items"] = self.items.to_dict()
@@ -104,10 +102,7 @@ class ConfigGroupDefinition:
             "description": self.description,
             "icon": self.icon,
             "order": self.order,
-            "fields": [
-                f.to_dict(current_values.get(f.key))
-                for f in self.fields
-            ],
+            "fields": [f.to_dict(current_values.get(f.key)) for f in self.fields],
         }
 
 

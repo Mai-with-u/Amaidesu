@@ -86,22 +86,16 @@ class MaiCoreDecisionProvider(DecisionProvider):
         max_suggested_actions: int = Field(default=3, ge=1, le=10, description="每条消息最大建议数量")
 
         # 提示词覆盖配置
-        enable_prompt_override: bool = Field(
-            default=True,
-            description="是否启用 MaiBot 提示词覆盖功能"
-        )
-        override_template_name: str = Field(
-            default="amaidesu_override",
-            description="覆盖模板组名（作用域名称）"
-        )
+        enable_prompt_override: bool = Field(default=True, description="是否启用 MaiBot 提示词覆盖功能")
+        override_template_name: str = Field(default="amaidesu_override", description="覆盖模板组名（作用域名称）")
         override_templates: list[str] = Field(
             default=[
-                "replyer_prompt",      # think_level=1 时使用
-                "replyer_prompt_0",    # think_level=0 时使用（轻量回复）
+                "replyer_prompt",  # think_level=1 时使用
+                "replyer_prompt_0",  # think_level=0 时使用（轻量回复）
                 "chat_target_group1",
                 "chat_target_group2",
             ],
-            description="要覆盖的提示词名称列表"
+            description="要覆盖的提示词名称列表",
         )
 
     @classmethod
@@ -281,6 +275,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
             # MaiBot 通过 group_info 是否存在来判断是群聊还是私聊
             # 群聊会使用 replyer_prompt，私聊会使用 private_replyer_prompt
             from maim_message import GroupInfo
+
             group_info = GroupInfo(
                 platform=self.platform,
                 group_id="live_room",  # 直播间群组ID
@@ -311,9 +306,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
                 )
             if group_info:
                 self.logger.debug(
-                    f"消息携带 group_info: "
-                    f"group_id={group_info.group_id}, "
-                    f"group_name={group_info.group_name}"
+                    f"消息携带 group_info: group_id={group_info.group_id}, group_name={group_info.group_name}"
                 )
 
             return message
@@ -355,7 +348,9 @@ class MaiCoreDecisionProvider(DecisionProvider):
             if message.message_info.template_info:
                 self.logger.info(f"    - template_default: {message.message_info.template_info.template_default}")
                 self.logger.info(f"    - template_name: {message.message_info.template_info.template_name}")
-                self.logger.info(f"    - template_items keys: {list(message.message_info.template_info.template_items.keys()) if message.message_info.template_info.template_items else None}")
+                self.logger.info(
+                    f"    - template_items keys: {list(message.message_info.template_info.template_items.keys()) if message.message_info.template_info.template_items else None}"
+                )
             # 打印完整消息字典（调试用）
             self.logger.debug(f"完整消息字典: {message.to_dict()}")
             await self._router_adapter.send(message)

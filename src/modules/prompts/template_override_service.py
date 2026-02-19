@@ -21,6 +21,7 @@ from src.modules.logging import get_logger
 @dataclass
 class OverrideConfig:
     """覆盖配置"""
+
     enabled: bool = False
     template_name: str = "amaidesu_override"
     templates: List[str] = field(default_factory=lambda: ["replyer_prompt"])
@@ -50,7 +51,9 @@ class TemplateOverrideService:
         self.logger = get_logger("TemplateOverrideService")
         self._prompt_manager = get_prompt_manager()
         # 初始化时打印配置状态
-        self.logger.info(f"TemplateOverrideService 初始化: enabled={config.enabled}, template_name={config.template_name}, templates={config.templates}")
+        self.logger.info(
+            f"TemplateOverrideService 初始化: enabled={config.enabled}, template_name={config.template_name}, templates={config.templates}"
+        )
 
     @staticmethod
     def _strip_yaml_frontmatter(content: str) -> str:
@@ -71,8 +74,8 @@ class TemplateOverrideService:
             剥离 frontmatter 后的内容
         """
         # 匹配开头的 YAML frontmatter（--- ... ---）
-        pattern = r'^---\s*\n.*?\n---\s*\n'
-        stripped = re.sub(pattern, '', content, flags=re.DOTALL)
+        pattern = r"^---\s*\n.*?\n---\s*\n"
+        stripped = re.sub(pattern, "", content, flags=re.DOTALL)
         return stripped.strip()
 
     def build_template_info(self) -> Optional[TemplateInfo]:
@@ -98,7 +101,9 @@ class TemplateOverrideService:
                 if raw_content:
                     # 剥离 YAML frontmatter，只发送实际模板内容
                     clean_content = self._strip_yaml_frontmatter(raw_content)
-                    self.logger.info(f"模板 {template_key} 加载成功，原始长度: {len(raw_content)}，清理后长度: {len(clean_content)}")
+                    self.logger.info(
+                        f"模板 {template_key} 加载成功，原始长度: {len(raw_content)}，清理后长度: {len(clean_content)}"
+                    )
                     template_items[template_name] = clean_content
             except KeyError:
                 self.logger.warning(f"模板 {template_key} 不存在，跳过")
