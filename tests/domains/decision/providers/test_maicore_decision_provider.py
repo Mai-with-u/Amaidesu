@@ -15,6 +15,7 @@ from src.modules.types import (
     EmotionType,
     Intent,
     IntentAction,
+    ParserType,
 )
 
 
@@ -148,9 +149,9 @@ class TestParseWithLLM:
         assert intent.source_context.user_id == "test_user"
         assert intent.source_context.user_nickname == "TestUser"
 
-        # 验证 metadata
-        assert intent.metadata["parser"] == "llm"
-        assert intent.metadata["llm_model"] == "gpt-4"
+        # 验证 decision_metadata
+        assert intent.decision_metadata.parser_type == ParserType.LLM
+        assert intent.decision_metadata.llm_model == "gpt-4"
 
     @pytest.mark.asyncio
     async def test_parse_with_llm_fallback_to_rules(self, setup_provider, mock_message_base, mock_llm_service):
@@ -481,7 +482,7 @@ class TestIntegration:
         assert intent.response_text == "你好呀！很高兴见到你！"
         assert len(intent.actions) == 2
         assert intent.source_context.source == "amaidesu"
-        assert intent.metadata["parser"] == "llm"
+        assert intent.decision_metadata.parser_type == ParserType.LLM
 
 
 class TestPromptOverride:

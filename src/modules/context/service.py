@@ -108,7 +108,6 @@ class ContextService:
         session_id: str,
         role: MessageRole,
         content: str,
-        metadata: Optional[Dict[str, Any]] = None,
     ) -> ConversationMessage:
         """
         添加消息到会话
@@ -117,7 +116,6 @@ class ContextService:
             session_id: 会话ID（建议使用 normalized_message.source）
             role: 消息角色（SYSTEM, USER, ASSISTANT）
             content: 消息内容
-            metadata: 可选的元数据
 
         Returns:
             创建的 ConversationMessage 对象
@@ -144,7 +142,6 @@ class ContextService:
             session_id=session_id,
             role=role,
             content=content,
-            metadata=metadata or {},
         )
         await self._storage.add_message(message)
 

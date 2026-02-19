@@ -536,12 +536,9 @@ class DecisionProviderManager:
         data_type = normalized_dict.get("data_type", "")
         importance = normalized_dict.get("importance", 0.5)
 
-        # 新版 NormalizedMessage 没有 metadata 字段
-        # user_id 和 user_name 从 raw/raw_data 中提取
-        # model_dump() 输出 raw，to_dict() 输出 raw_data
-        raw_data = normalized_dict.get("raw_data") or normalized_dict.get("raw") or {}
-        user_id = raw_data.get("open_id") if isinstance(raw_data, dict) else None
-        user_nickname = raw_data.get("uname") if isinstance(raw_data, dict) else None
+        # 从类型化字段获取用户信息（新版 NormalizedMessage）
+        user_id = normalized_dict.get("user_id")
+        user_nickname = normalized_dict.get("user_nickname")
 
         return SourceContext(
             source=source,
@@ -549,7 +546,6 @@ class DecisionProviderManager:
             user_id=user_id,
             user_nickname=user_nickname,
             importance=importance,
-            extra={},  # 新版 NormalizedMessage 没有 metadata
         )
 
     async def _on_data_message(self, event_name: str, payload: "MessageReadyPayload", source: str) -> None:

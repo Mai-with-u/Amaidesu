@@ -18,7 +18,7 @@ import time
 import pytest
 
 from src.modules.types import Intent, SourceContext
-from src.modules.types import ActionType, EmotionType, IntentAction
+from src.modules.types import ActionType, DecisionMetadata, EmotionType, IntentAction, ParserType
 
 # =============================================================================
 # EmotionType 测试
@@ -334,16 +334,6 @@ class TestSourceContext:
                 importance=-0.1,
             )
 
-    def test_source_context_extra_metadata(self):
-        """测试额外元数据"""
-        context = SourceContext(
-            source="test",
-            data_type="test",
-            extra={"room_id": "123456", "gift_name": "鲜花"},
-        )
-        assert context.extra["room_id"] == "123456"
-        assert context.extra["gift_name"] == "鲜花"
-
 
 # =============================================================================
 # Intent 测试
@@ -383,14 +373,18 @@ class TestIntent:
             emotion=EmotionType.HAPPY,
             actions=actions,
             source_context=source_context,
-            metadata={"confidence": 0.95},
+            decision_metadata=DecisionMetadata(
+                parser_type=ParserType.LLM,
+                extra={"confidence": 0.95},
+            ),
         )
         assert intent.original_text == "测试"
         assert intent.response_text == "回复"
         assert intent.emotion == EmotionType.HAPPY
         assert len(intent.actions) == 2
         assert intent.source_context.source == "console_input"
-        assert intent.metadata["confidence"] == 0.95
+        assert intent.decision_metadata.parser_type == ParserType.LLM
+        assert intent.decision_metadata.extra["confidence"] == 0.95
 
     def test_intent_id_generation(self):
         """测试自动生成唯一 ID"""
@@ -447,7 +441,7 @@ class TestIntent:
 
     def test_intent_repr_short_text(self):
         """测试短文本的 repr"""
-        intent = Intent(original_text="short", response_text="reply", emotion=EmotionType.SAD, actions=[], metadata={})
+        intent = Intent(original_text="short", response_text="reply", emotion=EmotionType.SAD, actions=[])
 
         repr_str = repr(intent)
 
@@ -502,9 +496,8 @@ class TestIntent:
         assert "actions" in schema["properties"]
 
     def test_create_intent_with_none_metadata(self):
-        """测试 metadata 为 None 时转换为空字典"""
-        # Pydantic BaseModel 使用 default_factory，不需要传 None
-        # 不传 metadata 参数时会使用默认值 {}
+        """测试 decision_metadata 为 None 时使用默认值"""
+        # Pydantic BaseModel 使用 default=None，不传时会使用 None
         intent = Intent(
             original_text="test",
             response_text="response",
@@ -512,29 +505,36 @@ class TestIntent:
             actions=[],
         )
 
-        assert intent.metadata == {}
+        assert intent.decision_metadata is None
 
     def test_create_intent_metadata_isolation(self):
-        """测试 metadata 的隔离（修改不影响原始字典）"""
-        original_metadata = {"key": "value"}
+        """测试 decision_metadata 的隔离（model_dump 返回副本）"""
+        original_metadata = DecisionMetadata(
+            parser_type=ParserType.LLM,
+            extra={"key": "value"},
+        )
         intent = Intent(
             original_text="test",
             response_text="response",
             emotion=EmotionType.NEUTRAL,
             actions=[],
-            metadata=original_metadata,
+            decision_metadata=original_metadata,
         )
 
-        # 修改 intent 的 metadata
-        intent.metadata["new_key"] = "new_value"
+        # Pydantic 默认不会复制嵌套对象，它们会共享引用
+        # 如果需要隔离，应该使用 model_dump() 获取副本
+        data = intent.model_dump()
 
-        # 原始字典不应被修改
-        assert "new_key" not in original_metadata
+        # 修改返回的字典
+        data["decision_metadata"]["extra"]["new_key"] = "new_value"
+
+        # 原始 intent 的 decision_metadata 不应被修改
+        assert "new_key" not in intent.decision_metadata.extra
 
     def test_create_intent_empty_actions(self):
         """测试空动作列表"""
         intent = Intent(
-            original_text="test", response_text="response", emotion=EmotionType.NEUTRAL, actions=[], metadata={}
+            original_text="test", response_text="response", emotion=EmotionType.NEUTRAL, actions=[]
         )
 
         assert intent.actions == []
@@ -551,7 +551,7 @@ class TestIntent:
         ]
 
         for emotion in emotions:
-            intent = Intent(original_text="test", response_text="response", emotion=emotion, actions=[], metadata={})
+            intent = Intent(original_text="test", response_text="response", emotion=emotion, actions=[])
             assert intent.emotion == emotion
 
     def test_from_dict_with_default_values(self):
@@ -567,7 +567,7 @@ class TestIntent:
         assert intent.response_text == "response"
         assert intent.emotion == EmotionType.NEUTRAL
         assert intent.actions == []
-        assert intent.metadata == {}
+        assert intent.decision_metadata is None
         assert isinstance(intent.timestamp, float)
 
     def test_from_dict_missing_actions(self):
@@ -625,7 +625,7 @@ class TestIntentEdgeCases:
 
     def test_empty_text(self):
         """测试空文本"""
-        intent = Intent(original_text="", response_text="", emotion=EmotionType.NEUTRAL, actions=[], metadata={})
+        intent = Intent(original_text="", response_text="", emotion=EmotionType.NEUTRAL, actions=[])
 
         assert intent.original_text == ""
         assert intent.response_text == ""
@@ -634,7 +634,7 @@ class TestIntentEdgeCases:
         """测试超长文本"""
         long_text = "测试" * 10000
         intent = Intent(
-            original_text=long_text, response_text=long_text, emotion=EmotionType.NEUTRAL, actions=[], metadata={}
+            original_text=long_text, response_text=long_text, emotion=EmotionType.NEUTRAL, actions=[]
         )
 
         assert intent.original_text == long_text
@@ -644,7 +644,7 @@ class TestIntentEdgeCases:
         """测试文本中的特殊字符"""
         special_text = "测试\n换行\t制表符\r回车\"引号'单引号\\反斜杠"
         intent = Intent(
-            original_text=special_text, response_text=special_text, emotion=EmotionType.NEUTRAL, actions=[], metadata={}
+            original_text=special_text, response_text=special_text, emotion=EmotionType.NEUTRAL, actions=[]
         )
 
         assert intent.original_text == special_text
@@ -657,7 +657,6 @@ class TestIntentEdgeCases:
             response_text="❤️💕💖💗💓💝",
             emotion=EmotionType.LOVE,
             actions=[IntentAction(type=ActionType.EMOJI, params={"emoji": "😀"}, priority=50)],
-            metadata={},
         )
 
         assert "😀" in intent.original_text
@@ -682,7 +681,7 @@ class TestIntentEdgeCases:
         actions = [IntentAction(type=ActionType.BLINK, params={"index": i}, priority=i) for i in range(100)]
 
         intent = Intent(
-            original_text="test", response_text="response", emotion=EmotionType.NEUTRAL, actions=actions, metadata={}
+            original_text="test", response_text="response", emotion=EmotionType.NEUTRAL, actions=actions
         )
 
         assert len(intent.actions) == 100
@@ -690,23 +689,28 @@ class TestIntentEdgeCases:
         assert intent.actions[99].priority == 99
 
     def test_metadata_with_various_types(self):
-        """测试 metadata 包含各种数据类型"""
-        metadata = {
-            "string": "value",
-            "int": 42,
-            "float": 3.14,
-            "bool": True,
-            "null": None,
-            "list": [1, 2, 3],
-            "dict": {"nested": "value"},
-            "tuple": (1, 2, 3),  # 会被转字典
-        }
-
-        intent = Intent(
-            original_text="test", response_text="response", emotion=EmotionType.NEUTRAL, actions=[], metadata=metadata
+        """测试 decision_metadata 包含各种数据类型"""
+        decision_metadata = DecisionMetadata(
+            parser_type=ParserType.LLM,
+            llm_model="gpt-4",
+            extra={
+                "string": "value",
+                "int": 42,
+                "float": 3.14,
+                "bool": True,
+                "null": None,
+                "list": [1, 2, 3],
+                "dict": {"nested": "value"},
+            },
         )
 
-        assert intent.metadata == metadata
+        intent = Intent(
+            original_text="test", response_text="response", emotion=EmotionType.NEUTRAL, actions=[], decision_metadata=decision_metadata
+        )
+
+        assert intent.decision_metadata.parser_type == ParserType.LLM
+        assert intent.decision_metadata.llm_model == "gpt-4"
+        assert intent.decision_metadata.extra["string"] == "value"
 
 
 # =============================================================================
@@ -762,7 +766,10 @@ class TestIntentIntegration:
                 user_nickname="慷慨的观众",
                 importance=1.0,
             ),
-            metadata={"gift_value": 100},
+            decision_metadata=DecisionMetadata(
+                parser_type=ParserType.LLM,
+                extra={"gift_value": 100},
+            ),
         )
 
         # 序列化
@@ -779,7 +786,8 @@ class TestIntentIntegration:
         assert restored.actions[0].type == ActionType.CLAP
         assert restored.source_context.source == "bili_danmaku"
         assert restored.source_context.importance == 1.0
-        assert restored.metadata["gift_value"] == 100
+        assert restored.decision_metadata.parser_type == ParserType.LLM
+        assert restored.decision_metadata.extra["gift_value"] == 100
 
     def test_to_dict_complex_actions(self):
         """测试包含复杂动作的 Intent 转字典（使用 model_dump）"""
@@ -792,7 +800,6 @@ class TestIntentIntegration:
                 IntentAction(type=ActionType.EMOJI, params={"emoji": "😀"}, priority=80),
                 IntentAction(type=ActionType.WAVE, params={"intensity": 0.9}, priority=60),
             ],
-            metadata={},
         )
 
         result = intent.model_dump()
@@ -806,22 +813,25 @@ class TestIntentIntegration:
         assert result["actions"][2]["params"]["intensity"] == 0.9
 
     def test_to_dict_metadata_copy(self):
-        """测试 model_dump 时 metadata 被复制"""
+        """测试 model_dump 时 decision_metadata 被复制"""
         intent = Intent(
             original_text="test",
             response_text="response",
             emotion=EmotionType.NEUTRAL,
             actions=[],
-            metadata={"key": "value"},
+            decision_metadata=DecisionMetadata(
+                parser_type=ParserType.LLM,
+                extra={"key": "value"},
+            ),
         )
 
         result = intent.model_dump()
 
         # 修改返回的字典
-        result["metadata"]["new_key"] = "new_value"
+        result["decision_metadata"]["extra"]["new_key"] = "new_value"
 
-        # 原始 intent 的 metadata 不应被修改
-        assert "new_key" not in intent.metadata
+        # 原始 intent 的 decision_metadata 不应被修改
+        assert "new_key" not in intent.decision_metadata.extra
 
 
 # =============================================================================

@@ -133,13 +133,9 @@ class MainosabaInputProvider(InputProvider):
                                 source="mainosaba_game",
                                 data_type="text",
                                 importance=0.5,
-                                raw={
-                                    "platform": "mainosaba",
-                                    "source": "manosaba_game",
-                                    "maimcore_reply_probability_gain": 1.5,
-                                    "user": "Mainosaba游戏",
-                                    "user_id": "mainosaba_game",
-                                },
+                                user_id="mainosaba_game",
+                                user_nickname="Mainosaba游戏",
+                                platform="mainosaba",
                             )
                             self.last_game_text = game_text
                             self.last_message_time = time.time()

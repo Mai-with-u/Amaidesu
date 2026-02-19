@@ -196,14 +196,10 @@ class BiliDanmakuInputProvider(InputProvider):
             source="bili_danmaku",
             data_type="text",
             importance=0.5,
-            raw={
-                "nickname": nickname,
-                "user_id": str(user_id),
-                "uid": item.get("uid"),
-                "room_id": self.room_id,
-                "platform": self.message_config.get("platform", "bilibili"),
-                "maimcore_reply_probability_gain": 1,
-            },
+            user_id=str(user_id),
+            user_nickname=nickname,
+            platform=self.message_config.get("platform", "bilibili"),
+            room_id=str(self.room_id),
         )
 
     async def cleanup(self):

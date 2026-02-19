@@ -144,26 +144,6 @@ async def test_add_and_get_message(context_service: ContextService):
 
 
 @pytest.mark.asyncio
-async def test_add_message_with_metadata(context_service: ContextService):
-    """测试添加带元数据的消息"""
-    session_id = "test_session"
-    metadata = {"source": "console", "user_id": "12345"}
-
-    message = await context_service.add_message(
-        session_id=session_id,
-        role=MessageRole.USER,
-        content="Hello with metadata",
-        metadata=metadata,
-    )
-
-    assert message.metadata == metadata
-
-    # 从历史中获取并验证元数据
-    history = await context_service.get_history(session_id)
-    assert history[0].metadata == metadata
-
-
-@pytest.mark.asyncio
 async def test_get_history_empty_session(context_service: ContextService):
     """测试获取空会话的历史"""
     history = await context_service.get_history("nonexistent_session")

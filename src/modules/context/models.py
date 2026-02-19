@@ -6,7 +6,6 @@ ContextService 数据模型
 
 import time
 from enum import Enum
-from typing import Any, Dict
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -27,7 +26,6 @@ class ConversationMessage(BaseModel):
     role: MessageRole = Field(..., description="消息角色")
     content: str = Field(..., description="消息内容")
     timestamp: float = Field(default_factory=time.time, description="时间戳")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="元数据")
     message_id: str = Field(default_factory=lambda: str(uuid4()), description="唯一ID")
 
 
@@ -38,4 +36,3 @@ class SessionInfo(BaseModel):
     created_at: float = Field(default_factory=time.time, description="创建时间")
     last_active: float = Field(default_factory=time.time, description="最后活跃时间")
     message_count: int = Field(default=0, description="消息数量")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="会话元数据")

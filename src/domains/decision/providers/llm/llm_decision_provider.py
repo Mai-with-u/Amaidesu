@@ -20,7 +20,15 @@ from src.modules.di.context import ProviderContext
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import IntentPayload
 from src.modules.logging import get_logger
-from src.modules.types import ActionType, EmotionType, Intent, IntentAction, SourceContext
+from src.modules.types import (
+    ActionType,
+    DecisionMetadata,
+    EmotionType,
+    Intent,
+    IntentAction,
+    ParserType,
+    SourceContext,
+)
 from src.modules.types.base.decision_provider import DecisionProvider
 
 if TYPE_CHECKING:
@@ -346,7 +354,9 @@ class LLMDecisionProvider(DecisionProvider):
             response_text=text,
             emotion=emotion,
             actions=actions,
-            metadata={"parser": "llm_structured"},
+            decision_metadata=DecisionMetadata(
+                parser_type=ParserType.LLM_STRUCTURED,
+            ),
         )
 
     def _map_action_type(self, type_str: str) -> ActionType:
@@ -396,7 +406,7 @@ class LLMDecisionProvider(DecisionProvider):
             source=normalized_message.source,
             data_type=normalized_message.data_type,
             user_id=normalized_message.user_id,
-            user_nickname=normalized_message.metadata.get("user_nickname"),
+            user_nickname=normalized_message.user_nickname,
             importance=normalized_message.importance,
         )
         intent.source_context = source_context
@@ -441,7 +451,9 @@ class LLMDecisionProvider(DecisionProvider):
             response_text=text,
             emotion=EmotionType.NEUTRAL,
             actions=[IntentAction(type=ActionType.BLINK, params={}, priority=30)],
-            metadata={"parser": "llm_fallback"},
+            decision_metadata=DecisionMetadata(
+                parser_type=ParserType.LLM_FALLBACK,
+            ),
         )
 
         # 发布 decision.intent 事件

@@ -210,6 +210,11 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
 
     def _create_normalized_message(self, bili_msg: BiliBaseMessage) -> NormalizedMessage:
         """从 B 站消息构造 NormalizedMessage"""
+        # 提取通用字段
+        user_id = getattr(bili_msg, "open_id", None) or None
+        user_nickname = getattr(bili_msg, "uname", None) or None
+        room_id = str(getattr(bili_msg, "room_id", 0)) or None
+
         if isinstance(bili_msg, DanmakuMessage):
             self.logger.debug(f"[弹幕] {bili_msg.uname}: {bili_msg.msg}")
             return NormalizedMessage(
@@ -219,6 +224,10 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
                 importance=self._calculate_danmaku_importance(bili_msg),
                 timestamp=bili_msg.timestamp or time.time(),
                 raw=bili_msg,
+                user_id=user_id,
+                user_nickname=user_nickname,
+                platform="bilibili",
+                room_id=room_id,
             )
 
         elif isinstance(bili_msg, EnterMessage):
@@ -230,6 +239,10 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
                 importance=0.1,
                 timestamp=bili_msg.timestamp or time.time(),
                 raw=bili_msg,
+                user_id=user_id,
+                user_nickname=user_nickname,
+                platform="bilibili",
+                room_id=room_id,
             )
 
         elif isinstance(bili_msg, GiftMessage):
@@ -243,6 +256,10 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
                 importance=self._calculate_gift_importance(bili_msg),
                 timestamp=bili_msg.timestamp or time.time(),
                 raw=bili_msg,
+                user_id=user_id,
+                user_nickname=user_nickname,
+                platform="bilibili",
+                room_id=room_id,
             )
 
         elif isinstance(bili_msg, GuardMessage):
@@ -258,6 +275,10 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
                 importance=importance_scores.get(bili_msg.guard_level, 0.7),
                 timestamp=bili_msg.timestamp or time.time(),
                 raw=bili_msg,
+                user_id=user_id,
+                user_nickname=user_nickname,
+                platform="bilibili",
+                room_id=room_id,
             )
 
         elif isinstance(bili_msg, SuperChatMessage):
@@ -276,6 +297,10 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
                 importance=importance,
                 timestamp=bili_msg.timestamp or time.time(),
                 raw=bili_msg,
+                user_id=user_id,
+                user_nickname=user_nickname,
+                platform="bilibili",
+                room_id=room_id,
             )
 
         else:
@@ -286,6 +311,10 @@ class BiliDanmakuOfficialInputProvider(InputProvider):
                 importance=0.1,
                 timestamp=time.time(),
                 raw=bili_msg,
+                user_id=user_id,
+                user_nickname=user_nickname,
+                platform="bilibili",
+                room_id=room_id,
             )
 
     def _calculate_danmaku_importance(self, msg: DanmakuMessage) -> float:

@@ -75,7 +75,6 @@ class MockDecisionProviderForManager(DecisionProvider):
             response_text=response_text,
             emotion=emotion,
             actions=[],
-            metadata={"mock": True},
         )
 
         # 通过 event_bus 发布 decision.intent 事件
@@ -90,7 +89,7 @@ class MockDecisionProviderForManager(DecisionProvider):
                 source=message.source,
                 data_type=message.data_type,
                 user_id=message.user_id,
-                user_nickname=message.metadata.get("user_nickname"),
+                user_nickname=message.user_nickname,
                 importance=message.importance,
             )
             intent.source_context = source_context
@@ -129,7 +128,6 @@ class FailingMockDecisionProvider(DecisionProvider):
             response_text="Should not reach here",
             emotion=EmotionType.NEUTRAL,
             actions=[],
-            metadata={},
         )
 
 

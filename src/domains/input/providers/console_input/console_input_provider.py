@@ -112,6 +112,9 @@ class ConsoleInputProvider(InputProvider):
                             importance=0.5,
                             timestamp=time.time(),
                             raw=None,
+                            user_id=self.user_id,
+                            user_nickname=self.user_nickname,
+                            platform="console",
                         )
 
                 except asyncio.CancelledError:
@@ -202,6 +205,9 @@ class ConsoleInputProvider(InputProvider):
             importance=importance,
             timestamp=time.time(),
             raw=None,
+            user_id=self.user_id,
+            user_nickname=username,
+            platform="console",
         )
 
     async def _create_sc_message(self, args: List[str]) -> Optional[NormalizedMessage]:
@@ -217,6 +223,9 @@ class ConsoleInputProvider(InputProvider):
             importance=0.7,
             timestamp=time.time(),
             raw=None,
+            user_id=self.user_id,
+            user_nickname=username,
+            platform="console",
         )
 
     async def _create_guard_message(self, args: List[str]) -> Optional[NormalizedMessage]:
@@ -241,4 +250,7 @@ class ConsoleInputProvider(InputProvider):
             importance=importance,
             timestamp=time.time(),
             raw=None,
+            user_id=self.user_id,
+            user_nickname=username,
+            platform="console",
         )

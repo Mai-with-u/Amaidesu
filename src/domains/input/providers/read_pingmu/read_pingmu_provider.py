@@ -184,7 +184,6 @@ class ReadPingmuInputProvider(InputProvider):
                 return
 
             new_context = analysis_result.new_current_context
-            images_processed = data.get("images_processed", 1)
 
             if not new_context:
                 return
@@ -195,12 +194,9 @@ class ReadPingmuInputProvider(InputProvider):
                 source="read_pingmu",
                 data_type="text",
                 importance=0.5,
-                raw={
-                    "images_processed": images_processed,
-                    "statistics": data.get("statistics", {}),
-                    "user": "屏幕分析",
-                    "user_id": "screen_analyzer",
-                },
+                user_id="screen_analyzer",
+                user_nickname="屏幕分析",
+                platform="screen",
             )
 
             # 放入队列

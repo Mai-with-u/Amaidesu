@@ -57,6 +57,17 @@ class ActionType(str, Enum):
         return cls.EXPRESSION
 
 
+class ParserType(str, Enum):
+    """解析器类型枚举"""
+
+    LLM = "llm"
+    LLM_STRUCTURED = "llm_structured"
+    LLM_FALLBACK = "llm_fallback"
+    RULE_BASED = "rule_based"
+    REPLAY = "replay"
+    MAICRAFT = "maicraft"
+
+
 class IntentAction(BaseModel):
     """意图动作"""
 
@@ -75,7 +86,15 @@ class SourceContext(BaseModel):
     user_id: Optional[str] = Field(default=None, description="用户ID")
     user_nickname: Optional[str] = Field(default=None, description="用户昵称")
     importance: float = Field(default=0.5, ge=0.0, le=1.0, description="重要性评分")
-    extra: Dict[str, Any] = Field(default_factory=dict, description="额外上下文信息")
+
+
+class DecisionMetadata(BaseModel):
+    """决策元数据（类型化）"""
+
+    parser_type: ParserType = Field(..., description="解析器类型")
+    llm_model: Optional[str] = Field(default=None, description="使用的 LLM 模型")
+    replay_count: Optional[int] = Field(default=None, description="重放次数")
+    extra: Dict[str, Any] = Field(default_factory=dict, description="Provider 特定信息")
 
 
 class Intent(BaseModel):
@@ -94,7 +113,7 @@ class Intent(BaseModel):
     response_text: str = Field(..., description="AI回复文本")
     emotion: EmotionType = Field(default=EmotionType.NEUTRAL, description="情感类型")
     actions: List[IntentAction] = Field(default_factory=list, description="动作列表")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="元数据")
+    decision_metadata: Optional[DecisionMetadata] = Field(default=None, description="决策元数据")
     timestamp: float = Field(default_factory=time.time, description="时间戳")
 
     def __repr__(self) -> str:
@@ -112,7 +131,9 @@ class Intent(BaseModel):
 __all__ = [
     "EmotionType",
     "ActionType",
+    "ParserType",
     "IntentAction",
     "SourceContext",
+    "DecisionMetadata",
     "Intent",
 ]

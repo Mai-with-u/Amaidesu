@@ -270,16 +270,21 @@ class BiliDanmakuOfficialMaiCraftInputProvider(InputProvider):
 
     def _create_normalized_message(self, bili_message: BiliBaseMessage) -> NormalizedMessage:
         """从 Bili 消息创建 NormalizedMessage"""
+        # 提取通用字段
+        user_id = getattr(bili_message, "open_id", None) or None
+        user_nickname = getattr(bili_message, "uname", None) or None
+        room_id = str(getattr(bili_message, "room_id", 0)) or None
+
         if isinstance(bili_message, DanmakuMessage):
-            return self._create_danmaku_message(bili_message)
+            return self._create_danmaku_message(bili_message, user_id, user_nickname, room_id)
         elif isinstance(bili_message, EnterMessage):
-            return self._create_enter_message(bili_message)
+            return self._create_enter_message(bili_message, user_id, user_nickname, room_id)
         elif isinstance(bili_message, GiftMessage):
-            return self._create_gift_message(bili_message)
+            return self._create_gift_message(bili_message, user_id, user_nickname, room_id)
         elif isinstance(bili_message, GuardMessage):
-            return self._create_guard_message(bili_message)
+            return self._create_guard_message(bili_message, user_id, user_nickname, room_id)
         elif isinstance(bili_message, SuperChatMessage):
-            return self._create_superchat_message(bili_message)
+            return self._create_superchat_message(bili_message, user_id, user_nickname, room_id)
 
         # 默认消息
         return NormalizedMessage(
@@ -288,9 +293,15 @@ class BiliDanmakuOfficialMaiCraftInputProvider(InputProvider):
             data_type="unknown",
             importance=0.1,
             raw=bili_message,
+            user_id=user_id,
+            user_nickname=user_nickname,
+            platform="bilibili",
+            room_id=room_id,
         )
 
-    def _create_danmaku_message(self, msg: DanmakuMessage) -> NormalizedMessage:
+    def _create_danmaku_message(
+        self, msg: DanmakuMessage, user_id: Optional[str], user_nickname: Optional[str], room_id: Optional[str]
+    ) -> NormalizedMessage:
         """创建弹幕消息"""
         text = f"[弹幕] {msg.uname}: {msg.msg}"
         importance = self._calculate_danmaku_importance(msg)
@@ -301,9 +312,15 @@ class BiliDanmakuOfficialMaiCraftInputProvider(InputProvider):
             data_type="text",
             importance=importance,
             raw=msg,
+            user_id=user_id,
+            user_nickname=user_nickname,
+            platform="bilibili",
+            room_id=room_id,
         )
 
-    def _create_enter_message(self, msg: EnterMessage) -> NormalizedMessage:
+    def _create_enter_message(
+        self, msg: EnterMessage, user_id: Optional[str], user_nickname: Optional[str], room_id: Optional[str]
+    ) -> NormalizedMessage:
         """创建进场消息"""
         text = f"[进场] {msg.uname} 进入了直播间"
 
@@ -313,9 +330,15 @@ class BiliDanmakuOfficialMaiCraftInputProvider(InputProvider):
             data_type="enter",
             importance=0.2,
             raw=msg,
+            user_id=user_id,
+            user_nickname=user_nickname,
+            platform="bilibili",
+            room_id=room_id,
         )
 
-    def _create_gift_message(self, msg: GiftMessage) -> NormalizedMessage:
+    def _create_gift_message(
+        self, msg: GiftMessage, user_id: Optional[str], user_nickname: Optional[str], room_id: Optional[str]
+    ) -> NormalizedMessage:
         """创建礼物消息"""
         text = f"[礼物] {msg.uname} 送出了 {msg.gift_name} x{msg.gift_num}"
         importance = self._calculate_gift_importance(msg)
@@ -326,9 +349,15 @@ class BiliDanmakuOfficialMaiCraftInputProvider(InputProvider):
             data_type="gift",
             importance=importance,
             raw=msg,
+            user_id=user_id,
+            user_nickname=user_nickname,
+            platform="bilibili",
+            room_id=room_id,
         )
 
-    def _create_guard_message(self, msg: GuardMessage) -> NormalizedMessage:
+    def _create_guard_message(
+        self, msg: GuardMessage, user_id: Optional[str], user_nickname: Optional[str], room_id: Optional[str]
+    ) -> NormalizedMessage:
         """创建大航海消息"""
         guard_level_names = {1: "总督", 2: "提督", 3: "舰长"}
         guard_name = guard_level_names.get(msg.guard_level, "大航海")
@@ -343,9 +372,15 @@ class BiliDanmakuOfficialMaiCraftInputProvider(InputProvider):
             data_type="guard",
             importance=importance,
             raw=msg,
+            user_id=user_id,
+            user_nickname=user_nickname,
+            platform="bilibili",
+            room_id=room_id,
         )
 
-    def _create_superchat_message(self, msg: SuperChatMessage) -> NormalizedMessage:
+    def _create_superchat_message(
+        self, msg: SuperChatMessage, user_id: Optional[str], user_nickname: Optional[str], room_id: Optional[str]
+    ) -> NormalizedMessage:
         """创建醒目留言消息"""
         text = f"[SC] {msg.uname} (¥{msg.rmb}): {msg.message}"
 
@@ -358,6 +393,10 @@ class BiliDanmakuOfficialMaiCraftInputProvider(InputProvider):
             data_type="super_chat",
             importance=importance,
             raw=msg,
+            user_id=user_id,
+            user_nickname=user_nickname,
+            platform="bilibili",
+            room_id=room_id,
         )
 
     def _calculate_danmaku_importance(self, msg: DanmakuMessage) -> float:

@@ -24,7 +24,15 @@ from src.modules.prompts.template_override_service import (
     TemplateOverrideService,
     OverrideConfig,
 )
-from src.modules.types import ActionType, EmotionType, Intent, IntentAction, SourceContext
+from src.modules.types import (
+    ActionType,
+    DecisionMetadata,
+    EmotionType,
+    Intent,
+    IntentAction,
+    ParserType,
+    SourceContext,
+)
 from src.modules.types.base.decision_provider import DecisionProvider
 
 from .router_adapter import RouterAdapter
@@ -246,7 +254,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
             # 构建UserInfo
             # platform 字段是 MaiBot 存储消息时需要的（chat_info_user_platform）
             user_id = normalized.user_id or "unknown"
-            nickname = normalized.metadata.get("user_nickname", normalized.source)
+            nickname = normalized.user_nickname or normalized.source
             user_info = UserInfo(platform=self.platform, user_id=user_id, user_nickname=nickname)
 
             # 构建FormatInfo（MaiBot 需要）
@@ -592,10 +600,10 @@ class MaiCoreDecisionProvider(DecisionProvider):
             emotion=emotion,
             actions=actions,
             source_context=source_context,
-            metadata={
-                "llm_model": llm_result.model,
-                "parser": "llm",
-            },
+            decision_metadata=DecisionMetadata(
+                parser_type=ParserType.LLM,
+                llm_model=llm_result.model,
+            ),
         )
 
     async def _parse_intent_locally(self, normalized_message: "NormalizedMessage") -> Intent:
@@ -620,7 +628,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
                 from maim_message import BaseMessageInfo, MessageBase, Seg, UserInfo
 
                 user_id = normalized_message.user_id or "unknown"
-                nickname = normalized_message.metadata.get("user_nickname", normalized_message.source)
+                nickname = normalized_message.user_nickname or normalized_message.source
                 user_info = UserInfo(platform=self.platform, user_id=user_id, user_nickname=nickname)
 
                 message = MessageBase(
@@ -640,7 +648,7 @@ class MaiCoreDecisionProvider(DecisionProvider):
         from maim_message import BaseMessageInfo, MessageBase, Seg, UserInfo
 
         user_id = normalized_message.user_id or "unknown"
-        nickname = normalized_message.metadata.get("user_nickname", normalized_message.source)
+        nickname = normalized_message.user_nickname or normalized_message.source
         user_info = UserInfo(platform=self.platform, user_id=user_id, user_nickname=nickname)
 
         message = MessageBase(
@@ -727,7 +735,9 @@ class MaiCoreDecisionProvider(DecisionProvider):
             emotion=emotion,
             actions=actions,
             source_context=source_context,
-            metadata={"parser": "rule_based"},
+            decision_metadata=DecisionMetadata(
+                parser_type=ParserType.RULE_BASED,
+            ),
         )
 
     async def _safe_send_suggestion(self, intent: Intent) -> None:

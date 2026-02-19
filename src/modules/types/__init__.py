@@ -5,9 +5,11 @@
 
 from .intent import (
     ActionType,
+    DecisionMetadata,
     EmotionType,
     Intent,
     IntentAction,
+    ParserType,
     SourceContext,
 )
 
@@ -17,4 +19,6 @@ __all__ = [
     "IntentAction",
     "SourceContext",
     "Intent",
+    "DecisionMetadata",
+    "ParserType",
 ]

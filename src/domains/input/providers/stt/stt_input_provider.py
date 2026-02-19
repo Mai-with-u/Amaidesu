@@ -634,10 +634,9 @@ class STTInputProvider(InputProvider):
                                         source="stt",
                                         data_type="text",
                                         importance=0.5,
-                                        raw={
-                                            "user": self.message_config.get("user_nickname", "语音"),
-                                            "user_id": self.message_config.get("user_id", "stt_user"),
-                                        },
+                                        user_id=self.message_config.get("user_id") or None,
+                                        user_nickname=self.message_config.get("user_nickname") or None,
+                                        platform="voice",
                                     )
                                 )
                                 self.full_text = ""

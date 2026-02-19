@@ -130,10 +130,9 @@ class MockDanmakuInputProvider(InputProvider):
                         source="mock_danmaku",
                         data_type="text",
                         importance=0.5,
-                        raw={
-                            "user": user,
-                            "user_id": user_id,
-                        },
+                        user_id=user_id or None,
+                        user_nickname=user or None,
+                        platform="mock",
                     )
 
                     self.logger.debug(f"发送模拟消息 (行 {self._current_line_index}): {str(data)[:50]}...")

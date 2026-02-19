@@ -19,7 +19,15 @@ from src.modules.di.context import ProviderContext
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import IntentPayload
 from src.modules.logging import get_logger
-from src.modules.types import ActionType, EmotionType, Intent, IntentAction, SourceContext
+from src.modules.types import (
+    ActionType,
+    DecisionMetadata,
+    EmotionType,
+    Intent,
+    IntentAction,
+    ParserType,
+    SourceContext,
+)
 from src.modules.types.base.decision_provider import DecisionProvider
 
 if TYPE_CHECKING:
@@ -111,7 +119,10 @@ class ReplayDecisionProvider(DecisionProvider):
             response_text=normalized_message.text,  # 重放：响应文本 = 原始文本
             emotion=EmotionType.NEUTRAL,
             actions=actions,
-            metadata={"parser": "replay", "replay_count": self._total_messages},
+            decision_metadata=DecisionMetadata(
+                parser_type=ParserType.REPLAY,
+                replay_count=self._total_messages,
+            ),
         )
 
         # 构建 SourceContext
@@ -119,7 +130,7 @@ class ReplayDecisionProvider(DecisionProvider):
             source=normalized_message.source,
             data_type=normalized_message.data_type,
             user_id=normalized_message.user_id,
-            user_nickname=normalized_message.metadata.get("user_nickname"),
+            user_nickname=normalized_message.user_nickname,
             importance=normalized_message.importance,
         )
         intent.source_context = source_context

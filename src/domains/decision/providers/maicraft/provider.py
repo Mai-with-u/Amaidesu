@@ -20,7 +20,7 @@ from src.modules.di.context import ProviderContext
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import IntentPayload
 from src.modules.logging import get_logger
-from src.modules.types import EmotionType, Intent
+from src.modules.types import DecisionMetadata, EmotionType, Intent, ParserType
 from src.modules.types.base.decision_provider import DecisionProvider
 
 from .action_registry import ActionRegistry
@@ -229,11 +229,14 @@ class MaicraftDecisionProvider(DecisionProvider):
                 response_text=f"[游戏操作] {command.name} {' '.join(command.args)}",
                 emotion=EmotionType.NEUTRAL,
                 actions=[action],
-                metadata={
-                    "command": command.name,
-                    "action_type": action_type.value,
-                    "factory_type": self.action_factory.get_factory_type(),
-                },
+                decision_metadata=DecisionMetadata(
+                    parser_type=ParserType.MAICRAFT,
+                    extra={
+                        "command": command.name,
+                        "action_type": action_type.value,
+                        "factory_type": self.action_factory.get_factory_type(),
+                    },
+                ),
             )
 
             self.logger.info(
@@ -328,7 +331,10 @@ class MaicraftDecisionProvider(DecisionProvider):
             response_text="",
             emotion=EmotionType.NEUTRAL,
             actions=[],  # 空动作列表
-            metadata={"provider": "maicraft", "is_default": True},
+            decision_metadata=DecisionMetadata(
+                parser_type=ParserType.MAICRAFT,
+                extra={"is_default": True},
+            ),
         )
 
     async def _publish_intent(self, intent: Intent) -> None:
