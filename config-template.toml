@@ -369,6 +369,7 @@ port = 60214
 cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
 max_history_messages = 1000
 websocket_heartbeat = 30
+auto_open_browser = true
 
 # ==================================================
 # 事件总线配置

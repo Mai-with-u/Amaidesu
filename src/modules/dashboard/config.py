@@ -21,3 +21,4 @@ class DashboardConfig(BaseModel):
     )
     max_history_messages: int = Field(default=1000, description="内存中保留的最大历史消息数")
     websocket_heartbeat: int = Field(default=30, description="WebSocket 心跳间隔（秒）")
+    auto_open_browser: bool = Field(default=True, description="启动时自动打开浏览器")

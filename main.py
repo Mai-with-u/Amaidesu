@@ -1,14 +1,16 @@
 """Amaidesu 应用程序主入口。"""
 
+import webbrowser
 import argparse
 import asyncio
 import contextlib
 import os
 import signal
 import sys
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger as loguru_logger
+from src.modules.dashboard.server import DashboardServer
 from src.modules.events import EventBus
 from src.modules.logging import get_logger
 from src.modules.registry import ProviderRegistry
@@ -444,6 +446,12 @@ async def create_app_components(
             )
             await dashboard_server.start()
             logger.info(f"Dashboard 已启动: http://{typed_dashboard_config.host}:{typed_dashboard_config.port}")
+
+            # 自动打开浏览器
+            if typed_dashboard_config.auto_open_browser:
+                dashboard_url = f"http://{typed_dashboard_config.host}:{typed_dashboard_config.port}"
+                webbrowser.open(dashboard_url)
+                logger.info(f"已自动打开浏览器: {dashboard_url}")
         except ImportError as e:
             logger.warning(f"Dashboard 模块导入失败（可能缺少依赖）: {e}")
             logger.warning("Dashboard 功能将被禁用。请运行: uv add fastapi 'uvicorn[standard]'")
