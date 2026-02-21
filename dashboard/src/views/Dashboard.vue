@@ -441,7 +441,7 @@ onMounted(async () => {
   statusInterval = setInterval(() => {
     systemStore.fetchStatus();
     providersStore.fetchProviders();
-  }, 10000);
+  }, 1000);
 });
 
 onUnmounted(() => {
