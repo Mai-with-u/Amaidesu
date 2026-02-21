@@ -140,5 +140,10 @@ python_functions = ["test_*"]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[dependency-groups]
+dev = [
+    "pre-commit>=4.5.1",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
