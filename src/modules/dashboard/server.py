@@ -8,7 +8,7 @@ import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from fastapi import WebSocket
+from fastapi import WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -53,6 +53,7 @@ class DashboardServer:
         cors_origins: Optional[list[str]] = None,
         max_history_messages: int = 1000,
         websocket_heartbeat: int = 30,
+        log_streamer: Optional[LogStreamer] = None,
     ):
         self.event_bus = event_bus
         self.input_manager = input_manager
@@ -80,6 +81,8 @@ class DashboardServer:
         self.ws_handler: Optional[WebSocketHandler] = None
         self.event_broadcaster: Optional[EventBroadcaster] = None
         self._heartbeat_task: Optional[asyncio.Task] = None
+        # 外部传入的 log_streamer 或内部创建
+        self._external_log_streamer = log_streamer
         self.log_streamer: Optional[LogStreamer] = None
 
     async def start(self) -> None:
@@ -144,14 +147,37 @@ class DashboardServer:
         )
         await self.event_broadcaster.start()
 
-        # 初始化日志流广播器
-        self.log_streamer = LogStreamer(ws_handler=self.ws_handler, min_level="DEBUG")
-        await self.log_streamer.start()
+        # 初始化日志流广播器（使用外部传入的或创建新的）
+        if self._external_log_streamer:
+            # 外部传入的 log_streamer 需要更新 ws_handler
+            self._external_log_streamer.ws_handler = self.ws_handler
+            self.log_streamer = self._external_log_streamer
+            # 如果还未启动，则启动
+            if not hasattr(self.log_streamer, "_is_running") or not self.log_streamer._is_running:
+                await self.log_streamer.start()
+        else:
+            self.log_streamer = LogStreamer(ws_handler=self.ws_handler, min_level="DEBUG")
+            await self.log_streamer.start()
 
         # 添加 WebSocket 路由
         @self.app.websocket("/ws")
         async def websocket_endpoint(websocket: WebSocket):
-            await self.ws_handler.run_client_handler(websocket)
+            # 获取 client_id 用于推送历史日志
+            client_id = await self.ws_handler.connect(websocket)
+            # 推送历史日志
+            if self.log_streamer:
+                await self.log_streamer.broadcast_history(client_id)
+            # 运行客户端消息处理循环
+            try:
+                while True:
+                    message = await websocket.receive_text()
+                    await self.ws_handler.handle_message(client_id, message)
+            except WebSocketDisconnect:
+                pass
+            except Exception:
+                pass
+            finally:
+                await self.ws_handler.disconnect(client_id)
 
         # 启动心跳任务
         self._heartbeat_task = asyncio.create_task(self._run_heartbeat())

@@ -425,6 +425,12 @@ async def create_app_components(
     dashboard_server: Optional["DashboardServer"] = None
     dashboard_config = config.get("dashboard", {})
 
+    # 提前创建 LogStreamer，以便捕获应用启动过程中的日志
+    from src.modules.logging.log_streamer import LogStreamer
+
+    log_streamer = LogStreamer(min_level="DEBUG")
+    await log_streamer.start()  # 立即启动捕获日志
+
     if dashboard_config.get("enabled", True):
         try:
             from src.modules.dashboard.config import DashboardConfig
@@ -443,6 +449,7 @@ async def create_app_components(
                 cors_origins=typed_dashboard_config.cors_origins,
                 max_history_messages=typed_dashboard_config.max_history_messages,
                 websocket_heartbeat=typed_dashboard_config.websocket_heartbeat,
+                log_streamer=log_streamer,
             )
             await dashboard_server.start()
             logger.info(f"Dashboard 已启动: http://{typed_dashboard_config.host}:{typed_dashboard_config.port}")

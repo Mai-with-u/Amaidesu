@@ -133,7 +133,7 @@ const showHiddenEvents = ref(false);
 const expandedEvents = ref<Set<number>>(new Set());
 
 // 默认隐藏的事件类型（系统噪音）
-const HIDDEN_EVENT_TYPES = ['system.heartbeat', 'heartbeat', 'ping', 'pong'];
+const HIDDEN_EVENT_TYPES = ['system.heartbeat', 'heartbeat', 'ping', 'pong', 'log.entry'];
 
 // 动态图标
 const pausePlayIcon = computed(() => (isPaused.value ? markRaw(VideoPlay) : markRaw(VideoPause)));
