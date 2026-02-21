@@ -143,8 +143,9 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  // 只断开 WebSocket 连接，不清空消息
+  // 这样切换页面后回来仍然可以看到历史消息
   sessionStore.disconnect();
-  sessionStore.clearMessages();
 });
 </script>
 

@@ -202,17 +202,32 @@ uv run python main.py --filter EdgeTTSProvider SubtitleProvider
 
 ### Web Dashboard
 
-项目内置 Web 管理界面，启动后端服务后访问 `http://127.0.0.1:60214`。
+项目内置 Web 管理界面，有两种访问方式：
+
+| 端口 | 模式 | 说明 |
+|------|------|------|
+| **60214** | 生产模式 | 后端直接服务打包后的前端（`dist/`），适合最终部署 |
+| **5173** | 开发模式 | Vite 开发服务器，支持热更新，适合开发调试 |
 
 ```bash
-# 后端自动启动（默认启用）
+# 方式一：生产模式（后端自动启动）
+# 访问 http://127.0.0.1:60214
 uv run python main.py
 
-# 前端开发模式（需单独启动）
+# 方式二：开发模式（需要两个终端）
+# 终端1：启动后端
+uv run python main.py
+
+# 终端2：启动前端开发服务器（支持热更新）
 cd dashboard
-npm install
-npm run dev
+npm install   # 首次需要
+npm run dev   # 访问 http://localhost:5173
 ```
+
+**开发模式说明：**
+- Vite 开发服务器会自动代理 `/api` 和 `/ws` 请求到后端（60214）
+- 修改 Vue 文件后，浏览器会自动热更新（无需刷新）
+- 这是前端开发时推荐的方式
 
 **配置**（`config.toml`）：
 

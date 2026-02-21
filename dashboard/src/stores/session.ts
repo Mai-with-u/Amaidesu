@@ -1,14 +1,50 @@
 import { defineStore } from 'pinia';
-import { ref } from 'vue';
+import { ref, watch } from 'vue';
 import { useWebSocketStore } from './websocket';
 import { debugApi, messageApi } from '@/api';
 import type { ChatMessage, InjectIntentRequest, MessageItem, WebSocketMessage } from '@/types';
 
+const STORAGE_KEY = 'session_messages';
+
+// 从 localStorage 加载消息
+function loadFromStorage(): ChatMessage[] {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) {
+      return JSON.parse(stored);
+    }
+  } catch (e) {
+    console.warn('从 localStorage 加载消息失败:', e);
+  }
+  return [];
+}
+
+// 保存消息到 localStorage
+function saveToStorage(messages: ChatMessage[]) {
+  try {
+    // 只保存最近 100 条消息
+    const toSave = messages.slice(-100);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
+  } catch (e) {
+    console.warn('保存消息到 localStorage 失败:', e);
+  }
+}
+
 export const useSessionStore = defineStore('session', () => {
-  const messages = ref<ChatMessage[]>([]);
+  // 优先从 localStorage 加载
+  const messages = ref<ChatMessage[]>(loadFromStorage());
   const maxMessages = 100;
   const sending = ref(false);
   const sessionId = 'dashboard'; // 默认会话 ID
+
+  // 监听消息变化，自动保存到 localStorage
+  watch(
+    messages,
+    (newMessages) => {
+      saveToStorage(newMessages);
+    },
+    { deep: true },
+  );
 
   // 处理 WebSocket 消息
   function handleEvent(message: WebSocketMessage) {
@@ -87,35 +123,35 @@ export const useSessionStore = defineStore('session', () => {
 
   // 连接 WebSocket 并加载历史消息
   async function connect() {
-    // 先加载历史消息
-    try {
-      const response = await messageApi.getSessionMessages(sessionId, maxMessages);
-      if (response.data.messages) {
-        // 将历史消息转换为 ChatMessage
-        const historyMessages: ChatMessage[] = response.data.messages.map((msg: MessageItem) => {
-          const isUser = msg.role === 'user';
-          return {
-            id: msg.id,
-            type: isUser ? ('normalized_message' as const) : ('intent' as const),
-            sender: isUser ? (msg.metadata?.source as string) || '弹幕' : '主播',
-            content: msg.content,
-            timestamp: msg.timestamp,
-            priority: msg.metadata?.importance as number | undefined,
-            emotion: msg.metadata?.emotion as string | undefined,
-          };
-        });
-        // 按时间正序排列
-        historyMessages.sort((a, b) => a.timestamp - b.timestamp);
-        messages.value = historyMessages;
-      }
-    } catch (e) {
-      console.warn('加载历史消息失败:', e);
-    }
-
-    // 连接 WebSocket 接收实时消息
+    // 消息已从 localStorage 恢复，直接连接 WebSocket
     const wsStore = useWebSocketStore();
     wsStore.subscribe(handleEvent);
     wsStore.connect();
+
+    // 如果本地没有消息，尝试从后端加载（首次运行）
+    if (messages.value.length === 0) {
+      try {
+        const response = await messageApi.getSessionMessages(sessionId, maxMessages);
+        if (response.data.messages) {
+          const historyMessages: ChatMessage[] = response.data.messages.map((msg: MessageItem) => {
+            const isUser = msg.role === 'user';
+            return {
+              id: msg.id,
+              type: isUser ? ('normalized_message' as const) : ('intent' as const),
+              sender: isUser ? (msg.metadata?.source as string) || '弹幕' : '主播',
+              content: msg.content,
+              timestamp: msg.timestamp,
+              priority: msg.metadata?.importance as number | undefined,
+              emotion: msg.metadata?.emotion as string | undefined,
+            };
+          });
+          historyMessages.sort((a, b) => a.timestamp - b.timestamp);
+          messages.value = historyMessages;
+        }
+      } catch (e) {
+        console.warn('加载历史消息失败:', e);
+      }
+    }
   }
 
   // 发送 NormalizedMessage（弹幕输入）
