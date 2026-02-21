@@ -1,0 +1,57 @@
+{
+  "manifest_version": 1,
+  "name": "Amaidesu 动作控制插件",
+  "version": "1.0.0",
+  "description": "用于控制 Amaidesu 虚拟形象的动作和情绪，通过 MaiBot 的 LLM 决策系统自动判断触发时机",
+  "author": {
+    "name": "Amaidesu",
+    "url": "https://github.com/your-repo"
+  },
+  "license": "MIT",
+  "host_application": {
+    "min_version": "0.8.0"
+  },
+  "homepage_url": "https://github.com/your-repo/amaidesu",
+  "repository_url": "https://github.com/your-repo/amaidesu",
+  "keywords": [
+    "amaidesu",
+    "virtual-live",
+    "动作控制",
+    "虚拟形象"
+  ],
+  "categories": [
+    "虚拟形象",
+    "动作控制"
+  ],
+  "default_locale": "zh-CN",
+  "plugin_info": {
+    "is_built_in": false,
+    "plugin_type": "action",
+    "components": [
+      {
+        "type": "action",
+        "name": "amaidesu_action",
+        "description": "控制 Amaidesu 虚拟形象的动作和情绪"
+      },
+      {
+        "type": "command",
+        "name": "amaidesu",
+        "description": "手动控制 Amaidesu（仅调试用）",
+        "pattern": "/amaidesu"
+      },
+      {
+        "type": "command",
+        "name": "amaidestatus",
+        "description": "查询 Amaidesu 连接状态",
+        "pattern": "/amaidestatus"
+      }
+    ],
+    "features": [
+      "通过 LLM 决策自动触发动作",
+      "支持热键动作 (hotkey)",
+      "支持表情 (expression)",
+      "支持动作 (motion)",
+      "支持情绪设置"
+    ]
+  }
+}

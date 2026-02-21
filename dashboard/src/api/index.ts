@@ -64,6 +64,27 @@ export const debugApi = {
   getEventBusStats: () => api.get<EventBusStatsResponse>('/debug/event-bus/stats'),
 };
 
+// MaiBot API
+export interface MaibotActionRequest {
+  action?: string;
+  action_params?: Record<string, unknown>;
+  emotion?: string;
+  priority?: number;
+  text?: string;
+}
+
+export interface MaibotActionResponse {
+  success: boolean;
+  intent_id?: string;
+  message?: string;
+  error?: string;
+}
+
+export const maibotApi = {
+  triggerAction: (request: MaibotActionRequest) =>
+    api.post<MaibotActionResponse>('/maibot/action', request),
+};
+
 // Message API
 export const messageApi = {
   getSessionMessages: (sessionId: string, limit: number = 100) =>

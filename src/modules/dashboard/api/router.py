@@ -7,7 +7,7 @@ FastAPI 路由注册
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.modules.dashboard.api import config, debug, llm, messages, providers, system
+from src.modules.dashboard.api import config, debug, llm, maibot, messages, providers, system
 
 
 def create_app() -> FastAPI:
@@ -25,6 +25,7 @@ def create_app() -> FastAPI:
     app.include_router(config.router, prefix="/api/v1/config", tags=["Config"])
     app.include_router(debug.router, prefix="/api/v1/debug", tags=["Debug"])
     app.include_router(llm.router, prefix="/api/v1/llm", tags=["LLM"])
+    app.include_router(maibot.router, prefix="/api/v1/maibot", tags=["MaiBot"])
 
     return app
 

@@ -207,6 +207,217 @@
             </section>
           </div>
         </el-tab-pane>
+
+        <!-- Tab 3: MaiBot 控制 -->
+        <el-tab-pane name="maibot">
+          <template #label>
+            <span class="tab-label">
+              <el-icon><Pointer /></el-icon>
+              MaiBot 控制
+            </span>
+          </template>
+
+          <div class="tab-content-wrapper">
+            <div class="inject-layout">
+              <!-- 控制表单 -->
+              <section class="inject-panel">
+                <div class="panel-header">
+                  <div class="panel-title">
+                    <el-icon class="title-icon"><Pointer /></el-icon>
+                    <span>MaiBot 动作控制</span>
+                  </div>
+                  <el-tag size="small" type="success" effect="plain">外部控制</el-tag>
+                </div>
+
+                <el-form
+                  :model="maibotForm"
+                  label-position="top"
+                  class="inject-form"
+                  @submit.prevent="triggerMaibotAction"
+                >
+                  <el-form-item label="动作类型">
+                    <el-select
+                      v-model="maibotForm.action"
+                      placeholder="选择动作类型"
+                      clearable
+                      style="width: 100%"
+                    >
+                      <el-option label="hotkey (热键)" value="hotkey" />
+                      <el-option label="expression (表情)" value="expression" />
+                      <el-option label="motion (动作)" value="motion" />
+                    </el-select>
+                  </el-form-item>
+
+                  <!-- 热键参数 -->
+                  <el-form-item v-if="maibotForm.action === 'hotkey'" label="选择热键">
+                    <el-select
+                      v-model="maibotForm.hotkey"
+                      placeholder="选择预设热键"
+                      style="width: 100%"
+                    >
+                      <el-option label="smile (微笑)" value="smile" />
+                      <el-option label="wave (挥手)" value="wave" />
+                      <el-option label="nod (点头)" value="nod" />
+                      <el-option label="shake (摇头)" value="shake" />
+                      <el-option label="clap (鼓掌)" value="clap" />
+                      <el-option label="dance (跳舞)" value="dance" />
+                      <el-option label="jump (跳跃)" value="jump" />
+                      <el-option label="sit (坐下)" value="sit" />
+                      <el-option label="lie (躺下)" value="lie" />
+                      <el-option label="run (跑步)" value="run" />
+                    </el-select>
+                  </el-form-item>
+
+                  <!-- 表情参数 -->
+                  <el-form-item v-if="maibotForm.action === 'expression'" label="选择表情">
+                    <el-select
+                      v-model="maibotForm.expression"
+                      placeholder="选择预设表情"
+                      style="width: 100%"
+                    >
+                      <el-option label="happy (开心)" value="happy" />
+                      <el-option label="sad (难过)" value="sad" />
+                      <el-option label="angry (生气)" value="angry" />
+                      <el-option label="surprised (惊讶)" value="surprised" />
+                      <el-option label="scared (害怕)" value="scared" />
+                      <el-option label="embarrassed (尴尬)" value="embarrassed" />
+                      <el-option label="cry (哭泣)" value="cry" />
+                      <el-option label="laugh (大笑)" value="laugh" />
+                    </el-select>
+                  </el-form-item>
+
+                  <!-- 动作参数 -->
+                  <el-form-item v-if="maibotForm.action === 'motion'" label="选择动作">
+                    <el-select
+                      v-model="maibotForm.motion"
+                      placeholder="选择预设动作"
+                      style="width: 100%"
+                    >
+                      <el-option label="wave (挥手)" value="wave" />
+                      <el-option label="nod (点头)" value="nod" />
+                      <el-option label="shake_head (摇头)" value="shake_head" />
+                      <el-option label="dance (跳舞)" value="dance" />
+                      <el-option label="jump (跳跃)" value="jump" />
+                      <el-option label="run (跑步)" value="run" />
+                      <el-option label="sit_down (坐下)" value="sit_down" />
+                      <el-option label="stand_up (站起来)" value="stand_up" />
+                      <el-option label="walk (走路)" value="walk" />
+                      <el-option label="attack (攻击)" value="attack" />
+                    </el-select>
+                  </el-form-item>
+
+                  <el-form-item label="情绪类型">
+                    <el-select
+                      v-model="maibotForm.emotion"
+                      placeholder="选择情绪"
+                      clearable
+                      style="width: 100%"
+                    >
+                      <el-option label="happy (开心)" value="happy" />
+                      <el-option label="neutral (中性)" value="neutral" />
+                      <el-option label="sad (难过)" value="sad" />
+                      <el-option label="angry (生气)" value="angry" />
+                      <el-option label="excited (兴奋)" value="excited" />
+                      <el-option label="shy (害羞)" value="shy" />
+                    </el-select>
+                  </el-form-item>
+
+                  <el-form-item label="优先级">
+                    <div class="importance-slider">
+                      <el-slider
+                        v-model="maibotForm.priority"
+                        :min="0"
+                        :max="100"
+                        :show-tooltip="false"
+                      />
+                      <span class="importance-value">{{ maibotForm.priority }}</span>
+                    </div>
+                  </el-form-item>
+
+                  <el-form-item label="回复文本 (可选)">
+                    <el-input
+                      v-model="maibotForm.text"
+                      type="textarea"
+                      :rows="2"
+                      placeholder="可选的回复文本..."
+                      resize="none"
+                    />
+                  </el-form-item>
+
+                  <el-form-item>
+                    <el-button
+                      type="primary"
+                      :loading="maibotLoading"
+                      :disabled="!maibotForm.action && !maibotForm.emotion"
+                      @click="triggerMaibotAction"
+                    >
+                      <el-icon><Pointer /></el-icon>
+                      触发动作/情绪
+                    </el-button>
+                  </el-form-item>
+                </el-form>
+              </section>
+
+              <!-- 控制历史 -->
+              <section class="history-panel">
+                <div class="panel-header">
+                  <div class="panel-title">
+                    <el-icon class="title-icon"><Clock /></el-icon>
+                    <span>控制历史</span>
+                    <el-badge :value="maibotHistory.length" :max="99" class="history-badge" />
+                  </div>
+                  <el-button
+                    size="small"
+                    :icon="Delete"
+                    :disabled="maibotHistory.length === 0"
+                    @click="maibotHistory = []"
+                  >
+                    清空
+                  </el-button>
+                </div>
+
+                <el-table
+                  v-if="maibotHistory.length > 0"
+                  :data="maibotHistory"
+                  size="small"
+                  empty-text="暂无控制记录"
+                  class="history-table"
+                >
+                  <el-table-column prop="time" label="时间" width="100">
+                    <template #default="{ row }">
+                      <span class="time-text">{{ row.time }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="动作/情绪">
+                    <template #default="{ row }">
+                      <div class="message-preview">
+                        <el-tag v-if="row.action" size="small" type="warning">{{
+                          row.action
+                        }}</el-tag>
+                        <el-tag v-if="row.emotion" size="small" type="success">{{
+                          row.emotion
+                        }}</el-tag>
+                      </div>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="状态" width="70" align="center">
+                    <template #default="{ row }">
+                      <el-tag
+                        :type="row.success ? 'success' : 'danger'"
+                        size="small"
+                        effect="plain"
+                      >
+                        {{ row.success ? '成功' : '失败' }}
+                      </el-tag>
+                    </template>
+                  </el-table-column>
+                </el-table>
+
+                <el-empty v-else description="暂无控制记录" :image-size="80" />
+              </section>
+            </div>
+          </div>
+        </el-tab-pane>
       </el-tabs>
     </div>
   </div>
@@ -223,8 +434,9 @@ import {
   Refresh,
   Delete,
   RefreshRight,
+  Pointer,
 } from '@element-plus/icons-vue';
-import { debugApi } from '@/api';
+import { debugApi, maibotApi } from '@/api';
 import type { EventBusStatsResponse, InjectMessageRequest } from '@/types';
 
 // Tab state
@@ -299,6 +511,96 @@ async function retryInject(item: InjectHistoryItem) {
     importance: item.importance,
   };
   await injectMessage();
+}
+
+// ============ MaiBot 控制 Tab ============
+interface MaibotHistoryItem {
+  time: string;
+  action?: string;
+  emotion?: string;
+  priority: number;
+  text?: string;
+  success: boolean;
+  error?: string;
+}
+
+const maibotForm = ref({
+  action: '',
+  hotkey: '',
+  expression: '',
+  motion: '',
+  emotion: '',
+  priority: 50,
+  text: '',
+});
+
+const maibotLoading = ref(false);
+const maibotHistory = ref<MaibotHistoryItem[]>([]);
+
+async function triggerMaibotAction() {
+  if (!maibotForm.value.action && !maibotForm.value.emotion) {
+    ElMessage.warning('请选择动作或情绪');
+    return;
+  }
+
+  maibotLoading.value = true;
+  const time = new Date().toLocaleString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+
+  // 根据动作类型构建参数
+  let actionParams = {};
+  if (maibotForm.value.action === 'hotkey' && maibotForm.value.hotkey) {
+    actionParams = { hotkey: maibotForm.value.hotkey };
+  } else if (maibotForm.value.action === 'expression' && maibotForm.value.expression) {
+    actionParams = { expression: maibotForm.value.expression };
+  } else if (maibotForm.value.action === 'motion' && maibotForm.value.motion) {
+    actionParams = { motion: maibotForm.value.motion };
+  }
+
+  const requestData = {
+    action: maibotForm.value.action || undefined,
+    action_params: Object.keys(actionParams).length > 0 ? actionParams : undefined,
+    emotion: maibotForm.value.emotion || undefined,
+    priority: maibotForm.value.priority,
+    text: maibotForm.value.text || undefined,
+  };
+
+  try {
+    const response = await maibotApi.triggerAction(requestData);
+
+    maibotHistory.value.unshift({
+      time,
+      action: maibotForm.value.action || undefined,
+      emotion: maibotForm.value.emotion || undefined,
+      priority: maibotForm.value.priority,
+      text: maibotForm.value.text || undefined,
+      success: response.data.success,
+      error: response.data.error,
+    });
+
+    if (response.data.success) {
+      ElMessage.success('动作/情绪触发成功');
+    } else {
+      ElMessage.error(response.data.error || '触发失败');
+    }
+  } catch (error) {
+    console.error('Maibot API error:', error);
+    maibotHistory.value.unshift({
+      time,
+      action: maibotForm.value.action || undefined,
+      emotion: maibotForm.value.emotion || undefined,
+      priority: maibotForm.value.priority,
+      text: maibotForm.value.text || undefined,
+      success: false,
+      error: String(error),
+    });
+    ElMessage.error('请求失败');
+  } finally {
+    maibotLoading.value = false;
+  }
 }
 
 // ============ EventBus 统计 Tab ============
