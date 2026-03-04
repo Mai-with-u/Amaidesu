@@ -148,10 +148,10 @@ const filteredGroups = computed(() => {
 
   const query = searchQuery.value.toLowerCase();
   return props.groups
-    .map((group) => {
+    .map(group => {
       // 过滤匹配的字段
       const matchedFields = group.fields.filter(
-        (field) =>
+        field =>
           field.label.toLowerCase().includes(query) ||
           field.key.toLowerCase().includes(query) ||
           (field.description?.toLowerCase().includes(query) ?? false),
@@ -229,7 +229,7 @@ function updateFieldValue(field: ConfigFieldSchema, value: unknown) {
 // 更新待保存变更
 function updatePendingChanges(field: ConfigFieldSchema, newValue: unknown) {
   const oldValue = getOriginalValue(field.key);
-  const existingIndex = props.pendingChanges.findIndex((c) => c.key === field.key);
+  const existingIndex = props.pendingChanges.findIndex(c => c.key === field.key);
 
   // 如果新值等于原始值，移除变更记录
   if (JSON.stringify(newValue) === JSON.stringify(oldValue)) {

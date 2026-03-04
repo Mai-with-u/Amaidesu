@@ -99,7 +99,7 @@ function emitParticles() {
 // Watch for flow trigger
 watch(
   () => props.flowing,
-  (newVal) => {
+  newVal => {
     if (newVal) {
       emitParticles();
     }

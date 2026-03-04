@@ -176,12 +176,12 @@ const scrollModeIcon = computed(() =>
 
 // 获取某个日志级别的数量
 function getLevelCount(level: string): number {
-  return logs.value.filter((log) => log.level === level).length;
+  return logs.value.filter(log => log.level === level).length;
 }
 
 // 获取某个模块的数量
 function getModuleCount(module: string): number {
-  return logs.value.filter((log) => log.module === module).length;
+  return logs.value.filter(log => log.module === module).length;
 }
 
 // 筛选后的日志列表
@@ -190,18 +190,18 @@ const filteredLogs = computed(() => {
 
   // 1. 按日志级别筛选
   if (selectedLevels.value.length > 0) {
-    result = result.filter((log) => selectedLevels.value.includes(log.level));
+    result = result.filter(log => selectedLevels.value.includes(log.level));
   }
 
   // 2. 按模块筛选
   if (selectedModules.value.length > 0) {
-    result = result.filter((log) => selectedModules.value.includes(log.module));
+    result = result.filter(log => selectedModules.value.includes(log.module));
   }
 
   // 3. 按搜索关键词筛选
   if (searchQuery.value.trim()) {
     const query = searchQuery.value.toLowerCase();
-    result = result.filter((log) => {
+    result = result.filter(log => {
       // 搜索日志内容
       if (log.message.toLowerCase().includes(query)) return true;
       // 搜索模块名

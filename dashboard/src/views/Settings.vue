@@ -414,7 +414,7 @@ const activeGroup = ref('');
 // 初始化：设置默认分组
 watch(
   () => settingsStore.groups,
-  (groups) => {
+  groups => {
     if (groups.length > 0 && !activeGroup.value) {
       activeGroup.value = groups[0].key;
     }
@@ -434,7 +434,7 @@ const filteredGroups = computed(() => {
   }
 
   const query = searchQuery.value.toLowerCase();
-  return settingsStore.groups.filter((group) => {
+  return settingsStore.groups.filter(group => {
     // 检查分组标题或描述是否匹配
     if (
       group.label.toLowerCase().includes(query) ||
@@ -444,7 +444,7 @@ const filteredGroups = computed(() => {
     }
     // 检查字段是否匹配
     return group.fields.some(
-      (field) =>
+      field =>
         field.label.toLowerCase().includes(query) ||
         field.key.toLowerCase().includes(query) ||
         (field.description?.toLowerCase().includes(query) ?? false),
@@ -454,7 +454,7 @@ const filteredGroups = computed(() => {
 
 // 当前分组
 const currentGroup = computed((): ConfigGroupSchema | undefined => {
-  return filteredGroups.value.find((g) => g.key === activeGroup.value);
+  return filteredGroups.value.find(g => g.key === activeGroup.value);
 });
 
 // 当前分组的字段（搜索时过滤）
@@ -468,7 +468,7 @@ const currentGroupFields = computed((): ConfigFieldSchema[] => {
 
   const query = searchQuery.value.toLowerCase();
   return group.fields.filter(
-    (field) =>
+    field =>
       field.label.toLowerCase().includes(query) ||
       field.key.toLowerCase().includes(query) ||
       (field.description?.toLowerCase().includes(query) ?? false),
@@ -483,7 +483,7 @@ function getIcon(iconName?: string) {
 
 // 获取分组的变更数量
 function getGroupChangeCount(groupKey: string): number {
-  return settingsStore.pendingChanges.filter((change) => change.key.startsWith(groupKey + '.'))
+  return settingsStore.pendingChanges.filter(change => change.key.startsWith(groupKey + '.'))
     .length;
 }
 
@@ -545,7 +545,7 @@ function updateFieldValue(field: ConfigFieldSchema, value: unknown) {
 // 更新待保存变更
 function updatePendingChanges(field: ConfigFieldSchema, newValue: unknown) {
   const oldValue = getOriginalValue(field.key);
-  const existingIndex = settingsStore.pendingChanges.findIndex((c) => c.key === field.key);
+  const existingIndex = settingsStore.pendingChanges.findIndex(c => c.key === field.key);
 
   // 如果新值等于原始值，移除变更记录
   if (JSON.stringify(newValue) === JSON.stringify(oldValue)) {

@@ -84,7 +84,7 @@ async function fetchHistory() {
 
     // 提取可用模型列表
     const models = new Set<string>();
-    response.data.items.forEach((item) => {
+    response.data.items.forEach(item => {
       if (item.model_name) {
         models.add(item.model_name);
       }

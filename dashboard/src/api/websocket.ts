@@ -35,14 +35,14 @@ class WebSocketClient {
             this.sendSubscribe(Array.from(this.subscribedEvents));
           }
 
-          this.connectCallbacks.forEach((cb) => cb());
+          this.connectCallbacks.forEach(cb => cb());
           resolve();
         };
 
-        this.ws.onmessage = (event) => {
+        this.ws.onmessage = event => {
           try {
             const message: WebSocketMessage = JSON.parse(event.data);
-            this.messageCallbacks.forEach((cb) => cb(message));
+            this.messageCallbacks.forEach(cb => cb(message));
           } catch (e) {
             console.error('Failed to parse WebSocket message:', e);
           }
@@ -50,11 +50,11 @@ class WebSocketClient {
 
         this.ws.onclose = () => {
           console.log('WebSocket disconnected');
-          this.disconnectCallbacks.forEach((cb) => cb());
+          this.disconnectCallbacks.forEach(cb => cb());
           this.attemptReconnect();
         };
 
-        this.ws.onerror = (error) => {
+        this.ws.onerror = error => {
           console.error('WebSocket error:', error);
           reject(error);
         };
@@ -89,7 +89,7 @@ class WebSocketClient {
   }
 
   unsubscribe(events: string[]) {
-    events.forEach((e) => this.subscribedEvents.delete(e));
+    events.forEach(e => this.subscribedEvents.delete(e));
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       const request: SubscribeRequest = {
         action: 'unsubscribe',

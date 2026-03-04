@@ -137,7 +137,7 @@ const localValue = ref<unknown>(props.modelValue ?? props.field.default);
 // 监听外部值变化
 watch(
   () => props.modelValue,
-  (newVal) => {
+  newVal => {
     localValue.value = newVal ?? props.field.default;
   },
 );

@@ -292,14 +292,14 @@ function getDomainProviders(domain: string) {
 function allProvidersRunning(domain: string): boolean {
   const domainProviders = getDomainProviders(domain);
   if (domainProviders.length === 0) return true;
-  return domainProviders.every((p) => p.is_started);
+  return domainProviders.every(p => p.is_started);
 }
 
 // Check if all providers in a domain are stopped
 function allProvidersStopped(domain: string): boolean {
   const domainProviders = getDomainProviders(domain);
   if (domainProviders.length === 0) return true;
-  return domainProviders.every((p) => !p.is_started);
+  return domainProviders.every(p => !p.is_started);
 }
 
 // Get health status class for a domain
@@ -349,7 +349,7 @@ function getHealthLabel(domain: string): string {
 // Start all providers in a domain
 async function startAllProviders(domain: string) {
   const domainProviders = getDomainProviders(domain);
-  const stoppedProviders = domainProviders.filter((p) => !p.is_started && p.is_enabled);
+  const stoppedProviders = domainProviders.filter(p => !p.is_started && p.is_enabled);
 
   if (stoppedProviders.length === 0) {
     ElMessage.info('所有 Provider 已在运行中');
@@ -360,10 +360,10 @@ async function startAllProviders(domain: string) {
 
   try {
     const results = await Promise.allSettled(
-      stoppedProviders.map((p) => providersStore.controlProvider(domain, p.name, 'start')),
+      stoppedProviders.map(p => providersStore.controlProvider(domain, p.name, 'start')),
     );
 
-    const failed = results.filter((r) => r.status === 'rejected');
+    const failed = results.filter(r => r.status === 'rejected');
     const succeeded = results.length - failed.length;
 
     if (failed.length === 0) {
@@ -384,7 +384,7 @@ async function startAllProviders(domain: string) {
 // Stop all providers in a domain
 async function stopAllProviders(domain: string) {
   const domainProviders = getDomainProviders(domain);
-  const runningProviders = domainProviders.filter((p) => p.is_started);
+  const runningProviders = domainProviders.filter(p => p.is_started);
 
   if (runningProviders.length === 0) {
     ElMessage.info('所有 Provider 已停止');
@@ -395,10 +395,10 @@ async function stopAllProviders(domain: string) {
 
   try {
     const results = await Promise.allSettled(
-      runningProviders.map((p) => providersStore.controlProvider(domain, p.name, 'stop')),
+      runningProviders.map(p => providersStore.controlProvider(domain, p.name, 'stop')),
     );
 
-    const failed = results.filter((r) => r.status === 'rejected');
+    const failed = results.filter(r => r.status === 'rejected');
     const succeeded = results.length - failed.length;
 
     if (failed.length === 0) {

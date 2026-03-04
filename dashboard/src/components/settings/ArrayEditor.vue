@@ -99,7 +99,7 @@ const items = ref<unknown[]>([]);
 // 初始化
 watch(
   () => props.modelValue,
-  (newVal) => {
+  newVal => {
     if (Array.isArray(newVal)) {
       items.value = [...newVal];
     } else {

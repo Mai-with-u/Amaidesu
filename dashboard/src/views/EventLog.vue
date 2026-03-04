@@ -141,7 +141,7 @@ const pausePlayIcon = computed(() => (isPaused.value ? markRaw(VideoPlay) : mark
 // 获取所有出现过的唯一事件类型（动态生成）
 const availableEventTypes = computed(() => {
   const types = new Set<string>();
-  events.value.forEach((event) => {
+  events.value.forEach(event => {
     types.add(event.type);
   });
   return Array.from(types).sort();
@@ -149,7 +149,7 @@ const availableEventTypes = computed(() => {
 
 // 获取某个事件类型的数量
 function getEventTypeCount(type: string): number {
-  return events.value.filter((e) => e.type === type).length;
+  return events.value.filter(e => e.type === type).length;
 }
 
 // 筛选后的事件列表
@@ -158,18 +158,18 @@ const filteredEvents = computed(() => {
 
   // 1. 过滤隐藏的系统事件
   if (!showHiddenEvents.value) {
-    result = result.filter((event) => !isHiddenEvent(event.type));
+    result = result.filter(event => !isHiddenEvent(event.type));
   }
 
   // 2. 按事件类型筛选
   if (selectedTypes.value.length > 0) {
-    result = result.filter((event) => selectedTypes.value.includes(event.type));
+    result = result.filter(event => selectedTypes.value.includes(event.type));
   }
 
   // 3. 按搜索关键词筛选
   if (searchQuery.value.trim()) {
     const query = searchQuery.value.toLowerCase();
-    result = result.filter((event) => {
+    result = result.filter(event => {
       // 搜索事件类型
       if (event.type.toLowerCase().includes(query)) return true;
       // 搜索事件数据
@@ -183,7 +183,7 @@ const filteredEvents = computed(() => {
 
 // 判断是否为隐藏的系统事件
 function isHiddenEvent(type: string): boolean {
-  return HIDDEN_EVENT_TYPES.some((hidden) => type.toLowerCase().includes(hidden.toLowerCase()));
+  return HIDDEN_EVENT_TYPES.some(hidden => type.toLowerCase().includes(hidden.toLowerCase()));
 }
 
 // 暂停/继续事件流

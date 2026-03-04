@@ -37,7 +37,7 @@ export const useSettingsStore = defineStore('settings', () => {
   });
 
   const requiresRestart = computed(() => {
-    return pendingChanges.value.some((change) => {
+    return pendingChanges.value.some(change => {
       // 检查是否有需要重启的配置变更
       const restartPrefixes = [
         'llm.',
@@ -49,7 +49,7 @@ export const useSettingsStore = defineStore('settings', () => {
         'http_server.',
         'logging.',
       ];
-      return restartPrefixes.some((prefix) => change.key.startsWith(prefix));
+      return restartPrefixes.some(prefix => change.key.startsWith(prefix));
     });
   });
 
@@ -115,7 +115,7 @@ export const useSettingsStore = defineStore('settings', () => {
       pendingChanges.value = [];
 
       return {
-        success: results.every((r) => r.success),
+        success: results.every(r => r.success),
         message: requiresRestartFlag ? '配置已保存，部分更改需要重启服务才能生效' : '配置已保存',
         requires_restart: requiresRestartFlag,
       };

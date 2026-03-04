@@ -25,7 +25,7 @@ export const useThemeStore = defineStore('theme', () => {
   // 监听主题变化
   watch(
     theme,
-    (newTheme) => {
+    newTheme => {
       applyTheme(newTheme);
     },
     { immediate: true },

@@ -28,8 +28,8 @@ export const useWebSocketStore = defineStore('websocket', () => {
       isConnected.value = false;
     });
 
-    wsClient.onMessage((msg) => {
-      messageHandlers.forEach((handler) => handler(msg));
+    wsClient.onMessage(msg => {
+      messageHandlers.forEach(handler => handler(msg));
     });
 
     wsClient.connect().catch(console.error);

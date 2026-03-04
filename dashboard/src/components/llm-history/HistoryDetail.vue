@@ -122,8 +122,8 @@ const promptContent = computed(() => {
 
   if (messages && Array.isArray(messages)) {
     return messages
-      .filter((m) => m.role === 'user' || m.role === 'system')
-      .map((m) => `**${m.role}**: ${m.content || ''}`)
+      .filter(m => m.role === 'user' || m.role === 'system')
+      .map(m => `**${m.role}**: ${m.content || ''}`)
       .join('\n\n');
   }
 

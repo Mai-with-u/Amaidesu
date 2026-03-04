@@ -26,7 +26,7 @@
           :event-count="getProviderEvents(provider.name, 'input').length"
           :log-count="getProviderLogs(provider.name).length"
           :action-loading="actionLoading"
-          @control="(action) => handleControl('input', provider.name, action)"
+          @control="action => handleControl('input', provider.name, action)"
         />
       </DomainColumn>
 
@@ -48,7 +48,7 @@
           :event-count="getProviderEvents(provider.name, 'decision').length"
           :log-count="getProviderLogs(provider.name).length"
           :action-loading="actionLoading"
-          @control="(action) => handleControl('decision', provider.name, action)"
+          @control="action => handleControl('decision', provider.name, action)"
         />
       </DomainColumn>
 
@@ -70,7 +70,7 @@
           :event-count="getProviderEvents(provider.name, 'output').length"
           :log-count="getProviderLogs(provider.name).length"
           :action-loading="actionLoading"
-          @control="(action) => handleControl('output', provider.name, action)"
+          @control="action => handleControl('output', provider.name, action)"
         />
       </DomainColumn>
     </div>
@@ -153,7 +153,7 @@ const domainsContainerRef = ref<HTMLElement | null>(null);
 
 // Get events related to a specific provider
 function getProviderEvents(providerName: string, providerDomain: string): WebSocketMessage[] {
-  return events.value.filter((e) => {
+  return events.value.filter(e => {
     // Input Provider: use event.data.source field for matching
     if (providerDomain === 'input' && e.type === 'message.received') {
       return e.data?.source === providerName;
@@ -195,8 +195,8 @@ function getProviderLogs(providerName: string): LogEntry[] {
     `${providerName}DecisionProvider`, // Decision Provider
   ];
 
-  return logs.value.filter((log) =>
-    patterns.some((p) => log.module.toLowerCase().includes(p.toLowerCase())),
+  return logs.value.filter(log =>
+    patterns.some(p => log.module.toLowerCase().includes(p.toLowerCase())),
   );
 }
 

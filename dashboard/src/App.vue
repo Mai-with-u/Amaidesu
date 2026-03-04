@@ -1,16 +1,7 @@
 <template>
-  <AppLayout>
-    <router-view />
-  </AppLayout>
+  <div class="app">
+    <el-button type="primary">测试按钮</el-button>
+  </div>
 </template>
 
-<script setup lang="ts">
-import AppLayout from '@/components/layout/AppLayout.vue';
-</script>
-
-<style>
-#app {
-  width: 100%;
-  height: 100vh;
-}
-</style>
+<script setup lang="ts"></script>

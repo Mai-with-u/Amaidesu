@@ -191,7 +191,7 @@ function getPromptPreview(row: LLMRequestHistory): string {
   const messages = params.messages as Array<{ content?: string }> | undefined;
   if (messages && Array.isArray(messages)) {
     // 获取最后一条用户消息
-    const lastUserMessage = [...messages].reverse().find((m) => typeof m.content === 'string');
+    const lastUserMessage = [...messages].reverse().find(m => typeof m.content === 'string');
     if (lastUserMessage?.content) {
       return truncateText(lastUserMessage.content, 50);
     }

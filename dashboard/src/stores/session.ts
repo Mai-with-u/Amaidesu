@@ -40,7 +40,7 @@ export const useSessionStore = defineStore('session', () => {
   // 监听消息变化，自动保存到 localStorage
   watch(
     messages,
-    (newMessages) => {
+    newMessages => {
       saveToStorage(newMessages);
     },
     { deep: true },
@@ -82,7 +82,7 @@ export const useSessionStore = defineStore('session', () => {
       const msgId = String(data.message?.timestamp) || crypto.randomUUID();
 
       // 去重检查
-      if (messages.value.some((m) => m.id === msgId)) {
+      if (messages.value.some(m => m.id === msgId)) {
         return;
       }
 
@@ -101,7 +101,7 @@ export const useSessionStore = defineStore('session', () => {
       const msgId = data.intent_data?.id || crypto.randomUUID();
 
       // 去重检查
-      if (messages.value.some((m) => m.id === msgId)) {
+      if (messages.value.some(m => m.id === msgId)) {
         return;
       }
 

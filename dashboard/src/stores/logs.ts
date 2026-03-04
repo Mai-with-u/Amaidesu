@@ -18,7 +18,7 @@ export const useLogsStore = defineStore('logs', () => {
   // 动态收集所有出现过的模块名
   const availableModules = computed(() => {
     const modules = new Set<string>();
-    logs.value.forEach((log) => modules.add(log.module));
+    logs.value.forEach(log => modules.add(log.module));
     return Array.from(modules).sort();
   });
 
