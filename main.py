@@ -437,6 +437,7 @@ async def create_app_components(
             from src.modules.dashboard.server import DashboardServer
 
             typed_dashboard_config = DashboardConfig(**dashboard_config)
+
             dashboard_server = DashboardServer(
                 event_bus=event_bus,
                 input_manager=input_provider_manager,
@@ -444,11 +445,7 @@ async def create_app_components(
                 output_manager=output_provider_manager,
                 context_service=context_service,
                 config_service=config_service,
-                port=typed_dashboard_config.port,
-                host=typed_dashboard_config.host,
-                cors_origins=typed_dashboard_config.cors_origins,
-                max_history_messages=typed_dashboard_config.max_history_messages,
-                websocket_heartbeat=typed_dashboard_config.websocket_heartbeat,
+                dashboard_config=typed_dashboard_config,
                 log_streamer=log_streamer,
             )
             await dashboard_server.start()

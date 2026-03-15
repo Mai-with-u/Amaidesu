@@ -48,6 +48,18 @@ const router = createRouter({
       name: 'llm-history',
       component: () => import('@/views/LLMHistory.vue'),
     },
+    {
+      path: '/danmaku',
+      name: 'danmaku',
+      component: () => import('@/views/Danmaku.vue'),
+      meta: { layout: false },
+    },
+    {
+      path: '/subtitle',
+      name: 'subtitle',
+      component: () => import('@/views/Subtitle.vue'),
+      meta: { layout: false },
+    },
   ],
 });
 

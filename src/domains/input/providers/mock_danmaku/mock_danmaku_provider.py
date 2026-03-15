@@ -122,7 +122,7 @@ class MockDanmakuInputProvider(InputProvider):
 
                     # 直接构造 NormalizedMessage
                     text = data.get("text", "")
-                    user = data.get("user", "未知用户")
+                    user = data.get("user_name", "未知用户")
                     user_id = data.get("user_id", "")
 
                     message = NormalizedMessage(

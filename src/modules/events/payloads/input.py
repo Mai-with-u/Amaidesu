@@ -225,10 +225,10 @@ class MessageReadyPayload(BasePayload):
 
         # 构建 metadata：从 NormalizedMessage 中提取用户信息
         metadata = {}
-        if hasattr(normalized_message, "user_id") and normalized_message.user_id:
+        if normalized_message.user_id:
             metadata["user_id"] = normalized_message.user_id
-        if hasattr(normalized_message, "user_name") and normalized_message.user_name:
-            metadata["user_name"] = normalized_message.user_name
+        if normalized_message.user_nickname:
+            metadata["username"] = normalized_message.user_nickname
         metadata.update(extra_metadata)
 
         return cls(
