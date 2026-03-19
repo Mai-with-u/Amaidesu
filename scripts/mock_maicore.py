@@ -29,7 +29,7 @@ from typing import Any, Callable, Dict, List, Optional, Set
 from aiohttp import WSMsgType, web
 from maim_message import MessageBase
 from maim_message.message_base import BaseMessageInfo, FormatInfo, Seg, UserInfo
-from src.core.utils.logger import get_logger
+from src.modules.logging import get_logger
 
 logger = get_logger("mock_maicore")
 
