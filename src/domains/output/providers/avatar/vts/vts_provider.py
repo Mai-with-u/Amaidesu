@@ -19,7 +19,7 @@ from pydantic import Field
 from src.domains.output.providers.avatar.base import AvatarProviderBase as BaseAvatarProvider
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
-from src.modules.types import ActionType, EmotionType
+
 
 if TYPE_CHECKING:
     from src.modules.di.context import ProviderContext
@@ -277,23 +277,19 @@ class VTSProvider(BaseAvatarProvider):
         }
 
         # 1. 适配情感为VTS参数
-        emotion_str = intent.emotion.value if isinstance(intent.emotion, EmotionType) else str(intent.emotion)
+        emotion_str = intent.emotion or "neutral"
         if emotion_str in self._emotion_map:
             result["expressions"].update(self._emotion_map[emotion_str])
             self.logger.debug(f"情感映射: {emotion_str} -> {self._emotion_map[emotion_str]}")
 
         # 2. 适配动作为热键
-        if intent.actions:
-            for action in intent.actions:
-                action_type_str = action.type.value if isinstance(action.type, ActionType) else str(action.type)
-                action_name = action.name if action.name else None
-
-                if action_type_str in self._action_hotkey_map:
-                    hotkey_prefix = self._action_hotkey_map[action_type_str]
-                    # 尝试匹配完整热键名称
-                    matched_hotkey = self._find_hotkey_by_name(hotkey_prefix, action_name)
-                    if matched_hotkey:
-                        result["hotkeys"].append(matched_hotkey)
+        if intent.action:
+            action_type_str = intent.action
+            if action_type_str in self._action_hotkey_map:
+                hotkey_prefix = self._action_hotkey_map[action_type_str]
+                matched_hotkey = self._find_hotkey_by_name(hotkey_prefix, "")
+                if matched_hotkey:
+                    result["hotkeys"].append(matched_hotkey)
 
         self.logger.debug(f"Intent适配结果: expressions={result['expressions']}, hotkeys={result['hotkeys']}")
         return result

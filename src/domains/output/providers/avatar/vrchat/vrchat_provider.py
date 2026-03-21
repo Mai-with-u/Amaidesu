@@ -132,28 +132,23 @@ class VRChatProvider(AvatarProviderBase):
             - expressions: Dict[str, float] - VRChat OSC 参数值
             - gestures: List[str] - 手势名称列表
         """
-        from src.modules.types import EmotionType
-
         result = {
             "expressions": {},
             "gestures": [],
         }
 
         # 1. 适配情感为 VRChat OSC 参数
-        emotion_str = intent.emotion.value if isinstance(intent.emotion, EmotionType) else str(intent.emotion)
+        emotion_str = intent.emotion or "neutral"
         if emotion_str in self.EMOTION_MAP:
             result["expressions"].update(self.EMOTION_MAP[emotion_str])
             self.logger.debug(f"情感映射: {emotion_str} -> {self.EMOTION_MAP[emotion_str]}")
 
         # 2. 适配动作为手势
-        for action in intent.actions:
-            action_type_str = action.type.value if hasattr(action.type, "value") else str(action.type)
-            gesture_name = action.params.get("gesture_name", "")
-
-            # 检查是否是手势动作（HOTKEY 或 CUSTOM 类型）
-            if action_type_str in ("hotkey", "custom") and gesture_name:
-                result["gestures"].append(gesture_name)
-                self.logger.debug(f"手势映射: {gesture_name}")
+        if intent.action:
+            # action is now a string directly
+            if intent.action in self.GESTURE_MAP:
+                result["gestures"].append(intent.action)
+                self.logger.debug(f"手势映射: {intent.action}")
 
         self.logger.debug(f"Intent 适配结果: expressions={result['expressions']}, gestures={result['gestures']}")
         return result

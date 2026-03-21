@@ -98,36 +98,35 @@ class RouterAdapter:
         发送 Action 到 MaiBot（fire-and-forget）
 
         Args:
-            intent: Intent 对象，包含动作列表
+            intent: Intent 对象，包含自然语言动作描述
         """
         from .message_schema import ActionSuggestionMessage
 
-        if not intent.actions:
+        if not intent.action:
             self.logger.debug("Intent 无动作，跳过发送")
             return
 
-        # 将 IntentAction 转换为 MaiBot 需要的格式
+        # 新架构： action 是自然语言字符串，不再有 IntentAction 列表
+        # 直接发送自然语言动作描述
         suggested_actions = [
             {
-                "action_name": action.type.value,
-                "priority": action.priority,
-                "parameters": action.params,
-                "reason": "",  # IntentAction 没有 reason 字段
-                "confidence": 1.0,  # IntentAction 没有 confidence 字段
+                "action_name": intent.action,
+                "priority": 1.0,  # 默认优先级
+                "parameters": {},
+                "reason": "",
+                "confidence": 1.0,
             }
-            for action in intent.actions
         ]
 
         message = ActionSuggestionMessage(
-            intent_id=intent.id,
-            original_text=intent.original_text,
-            response_text=intent.response_text,
-            emotion=intent.emotion.value,
+            intent_id=intent.metadata.source_id,
+            original_text=intent.context,
+            response_text=intent.speech,
+            emotion=intent.emotion,
             suggested_actions=suggested_actions,
         )
-
         await self.send(message.to_message_base())
-        self.logger.debug(f"已发送 Action: {len(intent.actions)} 个动作")
+        self.logger.debug(f"已发送 Action: {intent.action}")
 
     @property
     def router(self) -> Optional["Router"]:

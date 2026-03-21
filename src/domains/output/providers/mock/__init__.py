@@ -37,8 +37,8 @@ class MockOutputProvider(OutputProvider):
     async def execute(self, intent: "Intent") -> None:
         """记录收到的 Intent"""
         self.received_intents.append(intent)
-        response_text = intent.response_text[:50] if intent.response_text else ""
-        self.logger.debug(f"收到 Intent: response_text={response_text}...")
+        speech = intent.speech[:50] if intent.speech else ""
+        self.logger.debug(f"收到 Intent: speech={speech}...")
 
     async def init(self) -> None:
         """初始化 Provider"""

@@ -1,27 +1,21 @@
 """
-MaiBot 控制 API
+M aiBot 控制 API
 
 提供 MaiBot 插件控制 Amaidesu 动作和情绪的接口。
 """
 
+import time
 import uuid
-from typing import TYPE_CHECKING, Annotated, List
+from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, HTTPException, status
 
-from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.dashboard.schemas.maibot import MaibotActionRequest, MaibotActionResponse
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.decision import IntentPayload
 from src.modules.logging import get_logger
-from src.modules.types.intent import (
-    DecisionMetadata,
-    EmotionType,
-    Intent,
-    IntentAction,
-    ParserType,
-    SourceContext,
-)
+from src.modules.types.intent import Intent, IntentMetadata
+
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
@@ -29,85 +23,49 @@ if TYPE_CHECKING:
 router = APIRouter()
 logger = get_logger("MaibotAPI")
 
-ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
-
 
 @router.post("/action", response_model=MaibotActionResponse)
 async def handle_maibot_action(
     request: MaibotActionRequest,
-    server: ServerDep,
+    server: "DashboardServer",
 ) -> MaibotActionResponse:
-    """处理 MaiBot 动作/情绪控制请求"""
-
     event_bus = server.event_bus
     if not event_bus:
-        logger.error("Event bus not available")
-        return MaibotActionResponse(
-            success=False,
-            error="Event bus not available",
-        )
-
-    # 验证请求参数（至少需要 action 或 emotion 之一）
-    if not request.action and not request.emotion:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="至少需要提供 action 或 emotion 参数",
-        )
+        return MaibotActionResponse(success=False, error="Event bus not available")
 
     try:
-        # 构造 Intent 对象
+        emotion = request.emotion
+        speech = request.text
+
         intent = Intent(
-            original_text=request.text or "",
-            response_text=request.text or "",
-            emotion=request.emotion or EmotionType.NEUTRAL,
-            actions=_build_actions(request),
-            source_context=SourceContext(
-                source="maibot",
-                data_type="control",
-                importance=0.8,
-            ),
-            decision_metadata=DecisionMetadata(
-                parser_type=ParserType.REPLAY,
-                extra={"maibot_control": True},
+            emotion=emotion,
+            action=request.action,
+            speech=speech,
+            context="来源: maibot_api",
+            metadata=IntentMetadata(
+                source_id="maibot_api",
+                decision_time=int(time.time() * 1000),
+                parser_type="maibot_api",
+                extra={"priority": request.priority, "action_params": request.action_params},
             ),
         )
 
-        # 通过 EventBus 发布 decision.intent.generated 事件
         payload = IntentPayload.from_intent(intent, provider="maibot_api")
+
         await event_bus.emit(
             CoreEvents.DECISION_INTENT_GENERATED,
             payload,
-            source="maibot",
+            source="dashboard.maibot",
         )
 
         intent_id = str(uuid.uuid4())
-        logger.info(
-            f"MaiBot 控制请求处理成功: intent_id={intent_id}, action={request.action}, emotion={request.emotion}"
-        )
+        logger.info(f"处理 MaiBot 动作成功: {intent_id}")
 
-        return MaibotActionResponse(
-            success=True,
-            intent_id=intent_id,
-            message="Intent created and emitted successfully",
-        )
+        return MaibotActionResponse(success=True, intent_id=intent_id)
 
     except Exception as e:
-        logger.error(f"MaiBot 控制请求处理失败: {e}")
-        return MaibotActionResponse(
-            success=False,
-            error=str(e),
-        )
-
-
-def _build_actions(request: MaibotActionRequest) -> List[IntentAction]:
-    """构建动作列表"""
-    if not request.action:
-        return []
-
-    return [
-        IntentAction(
-            type=request.action,
-            params=request.action_params,
-            priority=request.priority,
-        )
-    ]
+        logger.error(f"处理 MaiBot 动作失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        ) from None

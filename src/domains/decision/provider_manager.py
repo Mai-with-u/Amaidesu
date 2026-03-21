@@ -29,7 +29,6 @@ from src.modules.events.payloads.decision import ProviderConnectedPayload
 from src.modules.events.payloads.input import MessageReadyPayload
 from src.modules.logging import get_logger
 from src.modules.registry import ProviderRegistry
-from src.modules.types import SourceContext
 from src.modules.types.base.normalized_message import NormalizedMessage
 
 if TYPE_CHECKING:
@@ -517,36 +516,6 @@ class DecisionProviderManager:
             self.event_bus.off(CoreEvents.INPUT_MESSAGE_READY, self._on_data_message)
             self._event_subscribed = False
             self.logger.debug("DecisionProviderManager 已取消事件订阅")
-
-    def _extract_source_context_from_dict(self, normalized_dict: Dict[str, Any]) -> "SourceContext":
-        """
-        从字典格式的 NormalizedMessage 提取 SourceContext
-
-        Args:
-            normalized_dict: NormalizedMessage 字典格式
-
-        Returns:
-            SourceContext 对象
-
-        支持两种序列化格式：
-        - model_dump(): raw 字段
-        - to_dict(): raw_data 字段
-        """
-        source = normalized_dict.get("source", "")
-        data_type = normalized_dict.get("data_type", "")
-        importance = normalized_dict.get("importance", 0.5)
-
-        # 从类型化字段获取用户信息（新版 NormalizedMessage）
-        user_id = normalized_dict.get("user_id")
-        user_nickname = normalized_dict.get("user_nickname")
-
-        return SourceContext(
-            source=source,
-            data_type=data_type,
-            user_id=user_id,
-            user_nickname=user_nickname,
-            importance=importance,
-        )
 
     async def _on_data_message(self, event_name: str, payload: "MessageReadyPayload", source: str) -> None:
         """

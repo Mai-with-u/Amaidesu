@@ -24,7 +24,7 @@ from src.domains.output.providers.avatar.warudo.tasks.shift_task import ShiftTas
 from src.domains.output.providers.avatar.warudo.warudo_sender import ActionSender
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
-from src.modules.types import EmotionType
+
 
 if TYPE_CHECKING:
     from src.modules.di.context import ProviderContext
@@ -139,21 +139,16 @@ class WarudoOutputProvider(AvatarProviderBase):
             "hotkeys": [],
         }
 
-        # 1. 适配情感为表情参数
-        emotion_str = intent.emotion.value if isinstance(intent.emotion, EmotionType) else str(intent.emotion)
+        # 1. 适配情感为表情参数（emotion 现在是字符串）
+        emotion_str = intent.emotion or "neutral"
         if emotion_str in self.EMOTION_MAP:
             result["expressions"] = self.EMOTION_MAP[emotion_str].copy()
             self.logger.debug(f"情感映射: {emotion_str} -> {result['expressions']}")
 
-        # 2. 适配动作为热键
-        for action in intent.actions:
-            action_type_str = action.type.value if hasattr(action.type, "value") else str(action.type)
-
-            # 如果动作参数中直接指定了热键ID
-            if "hotkey_id" in action.params:
-                result["hotkeys"].append(action.params["hotkey_id"])
-            # 否则使用映射
-            elif action_type_str in self.ACTION_HOTKEY_MAP:
+        # 2. 适配动作为热键（action 现在是字符串）
+        if intent.action:
+            action_type_str = intent.action
+            if action_type_str in self.ACTION_HOTKEY_MAP:
                 result["hotkeys"].append(self.ACTION_HOTKEY_MAP[action_type_str])
 
         self.logger.debug(f"Intent适配结果: expressions={result['expressions']}, hotkeys={result['hotkeys']}")

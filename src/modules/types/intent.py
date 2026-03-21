@@ -2,138 +2,69 @@
 
 这些类型被 Input/Decision/Output Domain 共享，
 因此放在 src/modules/types/ 中避免循环依赖。
+
+版本：自然语言版
+- emotion/action 使用自然语言字符串
+- 移除了类型化的枚举和类，使用更灵活的字符串
 """
 
 from __future__ import annotations
 
-import time
-from enum import Enum
-from typing import Any, Dict, List, Optional
-from uuid import uuid4
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# 向后兼容 type alias - 旧代码仍在导入这些类型
+# 新代码应使用字符串直接赋值
+EmotionType = str  # type: ignore[misc]
+"""情感类型 - 自然语言字符串，如 "害羞"、"开心"、"生气" """
 
-class EmotionType(str, Enum):
-    """情感类型枚举"""
-
-    NEUTRAL = "neutral"
-    HAPPY = "happy"
-    SAD = "sad"
-    ANGRY = "angry"
-    SURPRISED = "surprised"
-    LOVE = "love"
-    SHY = "shy"
-    EXCITED = "excited"
-    CONFUSED = "confused"
-    SCARED = "scared"
-
-    @classmethod
-    def get_default(cls) -> EmotionType:
-        """获取默认情感类型"""
-        return cls.NEUTRAL
+ActionType = str  # type: ignore[misc]
+"""动作类型 - 自然语言字符串，如 "脸红并挥手"、"比心" """
 
 
-class ActionType(str, Enum):
-    """动作类型枚举"""
+class IntentMetadata(BaseModel):
+    """意图元数据"""
 
-    EXPRESSION = "expression"  # 表情
-    HOTKEY = "hotkey"  # 热键
-    EMOJI = "emoji"  # emoji表情
-    BLINK = "blink"  # 眨眼
-    NOD = "nod"  # 点头
-    SHAKE = "shake"  # 摇头
-    WAVE = "wave"  # 挥手
-    CLAP = "clap"  # 鼓掌
-    STICKER = "sticker"  # 贴图
-    MOTION = "motion"  # 动作
-    CUSTOM = "custom"  # 自定义
-    GAME_ACTION = "game_action"  # 游戏动作
-    NONE = "none"  # 无动作
-
-    @classmethod
-    def get_default(cls) -> ActionType:
-        """获取默认动作类型"""
-        return cls.EXPRESSION
-
-
-class ParserType(str, Enum):
-    """解析器类型枚举"""
-
-    LLM = "llm"
-    LLM_STRUCTURED = "llm_structured"
-    LLM_FALLBACK = "llm_fallback"
-    RULE_BASED = "rule_based"
-    REPLAY = "replay"
-    MAICRAFT = "maicraft"
-
-
-class IntentAction(BaseModel):
-    """意图动作"""
-
-    model_config = ConfigDict(use_enum_values=True)
-
-    type: ActionType = Field(..., description="动作类型")
-    params: Dict[str, Any] = Field(default_factory=dict, description="动作参数")
-    priority: int = Field(default=50, ge=0, le=100, description="优先级（越高越优先）")
-
-
-class SourceContext(BaseModel):
-    """触发此 Intent 的输入事件上下文摘要"""
-
-    source: str = Field(..., description="输入源类型（如 'console_input', 'danmaku'）")
-    data_type: str = Field(..., description="数据类型（如 'text', 'gift'）")
-    user_id: Optional[str] = Field(default=None, description="用户ID")
-    user_nickname: Optional[str] = Field(default=None, description="用户昵称")
-    importance: float = Field(default=0.5, ge=0.0, le=1.0, description="重要性评分")
-
-
-class DecisionMetadata(BaseModel):
-    """决策元数据（类型化）"""
-
-    parser_type: ParserType = Field(..., description="解析器类型")
+    source_id: str = Field(description="来源ID")
+    decision_time: int = Field(description="13位时间戳")
+    parser_type: Optional[str] = Field(default=None, description="解析器类型（如 'llm', 'maicraft'）")
     llm_model: Optional[str] = Field(default=None, description="使用的 LLM 模型")
     replay_count: Optional[int] = Field(default=None, description="重放次数")
-    extra: Dict[str, Any] = Field(default_factory=dict, description="Provider 特定信息")
+    extra: dict = Field(default_factory=dict, description="额外信息")
 
 
 class Intent(BaseModel):
     """
-    决策意图 - Decision Domain 的核心输出
+    决策意图 - 平台无关
 
     核心职责：
     - 表示AI的决策意图
-    - 包含回复文本、情感、动作
+    - 使用自然语言描述情感、动作、回复
     - 作为 Output Domain 的输入
+
+    字段说明：
+    - emotion: 自然语言情感描述，如 "害羞"、"开心"、"生气"
+    - action: 自然语言动作描述，如 "脸红并挥手"、"比心"
+    - speech: AI 要说的话
+    - context: 简短上下文信息
+    - metadata: 元数据
     """
 
-    id: str = Field(default_factory=lambda: str(uuid4()), description="唯一标识符")
-    source_context: Optional[SourceContext] = Field(default=None, description="输入源上下文")
-    original_text: str = Field(..., description="原始输入文本")
-    response_text: str = Field(..., description="AI回复文本")
-    emotion: EmotionType = Field(default=EmotionType.NEUTRAL, description="情感类型")
-    actions: List[IntentAction] = Field(default_factory=list, description="动作列表")
-    decision_metadata: Optional[DecisionMetadata] = Field(default=None, description="决策元数据")
-    timestamp: float = Field(default_factory=time.time, description="时间戳")
+    model_config = ConfigDict(populate_by_name=True)
 
-    def __repr__(self) -> str:
-        """字符串表示"""
-        return (
-            f"Intent("
-            f"id={self.id[:8]}..., "
-            f"emotion={self.emotion}, "
-            f"actions={len(self.actions)}, "
-            f"response_text='{self.response_text[:30]}...'"
-            f")"
-        )
+    emotion: Optional[str] = Field(default=None, description="自然语言情感描述，如 '害羞'、'开心'、'生气'")
+    action: Optional[str] = Field(default=None, description="自然语言动作描述，如 '脸红并挥手'、'比心'")
+    speech: Optional[str] = Field(default=None, description="AI 要说的话")
+    context: Optional[str] = Field(default=None, description="简短上下文")
+    metadata: IntentMetadata = Field(..., description="意图元数据")
 
 
 __all__ = [
+    # 类型别名（向后兼容）
     "EmotionType",
     "ActionType",
-    "ParserType",
-    "IntentAction",
-    "SourceContext",
-    "DecisionMetadata",
+    # 核心类
+    "IntentMetadata",
     "Intent",
 ]

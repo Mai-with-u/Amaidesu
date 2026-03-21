@@ -20,15 +20,7 @@ from src.modules.di.context import ProviderContext
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import IntentPayload
 from src.modules.logging import get_logger
-from src.modules.types import (
-    ActionType,
-    DecisionMetadata,
-    EmotionType,
-    Intent,
-    IntentAction,
-    ParserType,
-    SourceContext,
-)
+from src.modules.types import Intent, IntentMetadata
 from src.modules.types.base.decision_provider import DecisionProvider
 
 if TYPE_CHECKING:
@@ -216,6 +208,7 @@ class LLMDecisionProvider(DecisionProvider):
 
         try:
             # 使用 LLM Service 进行调用（不使用 response_format，因为该参数不存在）
+            self.logger.info(f"LLMDecisionProvider 使用 LLM 解析意图: {normalized_message.text[:50]}...")
             response = await self._llm_service.chat(
                 prompt=prompt,
                 client_type=self.client_type,
@@ -243,13 +236,13 @@ class LLMDecisionProvider(DecisionProvider):
                     normalized_message=normalized_message,
                 )
 
-                # 保存助手回复到上下文（保存 response_text）
+                # 保存助手回复到上下文（使用 speech 字段）
                 if self._context_service:
                     try:
                         await self._context_service.add_message(
                             session_id=session_id,
                             role=MessageRole.ASSISTANT,
-                            content=intent.response_text,
+                            content=intent.speech or "",
                         )
                         self.logger.debug(f"已保存助手回复到上下文 (session: {session_id})")
                     except Exception as e:
@@ -309,85 +302,39 @@ class LLMDecisionProvider(DecisionProvider):
 
     def _create_full_intent(self, parsed_data: Dict[str, Any], normalized_message: "NormalizedMessage") -> Intent:
         """
-        从解析的 JSON 数据创建完整 Intent
+        从解析的 JSON 数据创建完整 Intent（使用新的自然语言结构）
 
         Args:
             parsed_data: LLM 返回的解析后 JSON 数据
             normalized_message: 原始 NormalizedMessage
 
         Returns:
-            完整的 Intent 对象（含 emotion/actions）
+            完整的 Intent 对象（使用自然语言 emotion/action）
         """
-        # 提取字段
-        text = parsed_data.get("text", "")
-        emotion_str = parsed_data.get("emotion", "neutral").lower()
-        actions_data = parsed_data.get("actions", [])
+        import time
 
-        # 解析 emotion
-        try:
-            emotion = EmotionType(emotion_str)
-        except ValueError:
-            self.logger.warning(f"无效的情感类型: {emotion_str}, 使用默认 NEUTRAL")
-            emotion = EmotionType.NEUTRAL
+        # 提取字段 - 新结构使用自然语言字符串
+        speech = parsed_data.get("text", "") or parsed_data.get("speech", "")
+        emotion = parsed_data.get("emotion", "neutral").lower()
+        action = parsed_data.get("action", "")  # 自然语言动作描述
+        context = parsed_data.get("context", "")
 
-        # 解析 actions
-        actions = []
-        for action_data in actions_data:
-            try:
-                action_type_str = action_data.get("type", "none").lower()
-                params = action_data.get("params", {})
-                priority = action_data.get("priority", 50)
+        # 如果没有动作，添加默认眨眼动作（自然语言描述）
+        if not action:
+            action = "眨眼"
 
-                # 映射 action type
-                action_type = self._map_action_type(action_type_str)
-                actions.append(IntentAction(type=action_type, params=params, priority=priority))
-            except Exception as e:
-                self.logger.warning(f"解析动作失败: {e}, 跳过该动作")
-
-        # 如果没有动作，添加默认眨眼动作
-        if not actions:
-            actions.append(IntentAction(type=ActionType.BLINK, params={}, priority=30))
-
-        # 创建 Intent
+        # 创建 Intent - 使用新的自然语言结构
         return Intent(
-            original_text=normalized_message.text,
-            response_text=text,
             emotion=emotion,
-            actions=actions,
-            decision_metadata=DecisionMetadata(
-                parser_type=ParserType.LLM_STRUCTURED,
+            action=action,
+            speech=speech,
+            context=context,
+            metadata=IntentMetadata(
+                source_id="llm",
+                decision_time=int(time.time() * 1000),
+                parser_type="llm_structured",
             ),
         )
-
-    def _map_action_type(self, type_str: str) -> ActionType:
-        """
-        映射动作类型字符串到 ActionType 枚举
-
-        Args:
-            type_str: 动作类型字符串
-
-        Returns:
-            ActionType 枚举值
-        """
-        type_mapping = {
-            "expression": ActionType.EXPRESSION,
-            "hotkey": ActionType.HOTKEY,
-            "emoji": ActionType.EMOJI,
-            "blink": ActionType.BLINK,
-            "nod": ActionType.NOD,
-            "shake": ActionType.SHAKE,
-            "wave": ActionType.WAVE,
-            "clap": ActionType.CLAP,
-            "sticker": ActionType.STICKER,
-            "motion": ActionType.MOTION,
-            "custom": ActionType.CUSTOM,
-            "game_action": ActionType.GAME_ACTION,
-            "none": ActionType.NONE,
-            "speak": ActionType.EXPRESSION,  # speak 映射到 expression
-            "gesture": ActionType.EXPRESSION,  # gesture 映射到 expression
-        }
-
-        return type_mapping.get(type_str, ActionType.NONE)
 
     async def _publish_intent(self, intent: Intent, normalized_message: "NormalizedMessage") -> None:
         """
@@ -400,16 +347,6 @@ class LLMDecisionProvider(DecisionProvider):
         if not self.event_bus:
             self.logger.error("EventBus 未初始化，无法发布事件")
             return
-
-        # 构建 SourceContext
-        source_context = SourceContext(
-            source=normalized_message.source,
-            data_type=normalized_message.data_type,
-            user_id=normalized_message.user_id,
-            user_nickname=normalized_message.user_nickname,
-            importance=normalized_message.importance,
-        )
-        intent.source_context = source_context
 
         await self.event_bus.emit(
             CoreEvents.DECISION_INTENT_GENERATED,
@@ -446,13 +383,17 @@ class LLMDecisionProvider(DecisionProvider):
             text: 响应文本
             normalized_message: 原始 NormalizedMessage
         """
+        import time
+
         intent = Intent(
-            original_text=normalized_message.text,
-            response_text=text,
-            emotion=EmotionType.NEUTRAL,
-            actions=[IntentAction(type=ActionType.BLINK, params={}, priority=30)],
-            decision_metadata=DecisionMetadata(
-                parser_type=ParserType.LLM_FALLBACK,
+            emotion="neutral",
+            action="眨眼",
+            speech=text,
+            context="",
+            metadata=IntentMetadata(
+                source_id="llm",
+                decision_time=int(time.time() * 1000),
+                parser_type="llm_fallback",
             ),
         )
 

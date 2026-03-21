@@ -9,7 +9,6 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from src.modules.logging import get_logger
-from src.modules.types import IntentAction
 
 from .action_types import MaicraftActionType
 
@@ -51,7 +50,7 @@ class AbstractActionFactory(ABC):
         ...
 
     @abstractmethod
-    def create_chat_action(self, message: str, original_message: "NormalizedMessage") -> IntentAction:
+    def create_chat_action(self, message: str, original_message: "NormalizedMessage") -> str:
         """
         创建聊天动作。
 
@@ -60,12 +59,12 @@ class AbstractActionFactory(ABC):
             original_message: 原始标准化消息
 
         Returns:
-            IntentAction 对象
+            自然语言动作描述
         """
         pass
 
     @abstractmethod
-    def create_attack_action(self, mob_name: str, original_message: "NormalizedMessage") -> IntentAction:
+    def create_attack_action(self, mob_name: str, original_message: "NormalizedMessage") -> str:
         """
         创建攻击动作。
 
@@ -74,7 +73,7 @@ class AbstractActionFactory(ABC):
             original_message: 原始标准化消息
 
         Returns:
-            IntentAction 对象
+            自然语言动作描述
         """
         pass
 
@@ -83,7 +82,7 @@ class AbstractActionFactory(ABC):
         action_type: MaicraftActionType,
         params: Dict[str, Any],
         original_message: "NormalizedMessage",
-    ) -> Optional[IntentAction]:
+    ) -> Optional[str]:
         """
         根据动作类型创建对应的动作。
 
@@ -93,7 +92,7 @@ class AbstractActionFactory(ABC):
             original_message: 原始标准化消息
 
         Returns:
-            IntentAction 对象，如果不支持该类型则返回 None
+            自然语言动作描述，如果不支持该类型则返回 None
         """
         if action_type == MaicraftActionType.CHAT:
             message = params.get("message", "")
@@ -116,53 +115,15 @@ class LogActionFactory(AbstractActionFactory):
     def get_factory_type(self) -> str:
         return "log"
 
-    def create_chat_action(self, message: str, original_message: "NormalizedMessage") -> IntentAction:
-        """
-        创建日志聊天动作。
-
-        Args:
-            message: 聊天消息内容
-            original_message: 原始标准化消息
-
-        Returns:
-            IntentAction 对象
-        """
+    def create_chat_action(self, message: str, original_message: "NormalizedMessage") -> str:
+        """创建日志聊天动作"""
         self.logger.debug(f"[LOG] 聊天动作: {message}")
+        return "游戏聊天"
 
-        return IntentAction(
-            type="game_action",
-            params={
-                "action": "chat",
-                "message": message,
-                "factory_type": "log",
-                "source": original_message.source,
-            },
-            priority=50,
-        )
-
-    def create_attack_action(self, mob_name: str, original_message: "NormalizedMessage") -> IntentAction:
-        """
-        创建日志攻击动作。
-
-        Args:
-            mob_name: 生物名称
-            original_message: 原始标准化消息
-
-        Returns:
-            IntentAction 对象
-        """
+    def create_attack_action(self, mob_name: str, original_message: "NormalizedMessage") -> str:
+        """创建日志攻击动作"""
         self.logger.debug(f"[LOG] 攻击动作: {mob_name}")
-
-        return IntentAction(
-            type="game_action",
-            params={
-                "action": "attack",
-                "mob_name": mob_name,
-                "factory_type": "log",
-                "source": original_message.source,
-            },
-            priority=50,
-        )
+        return f"攻击 {mob_name}"
 
 
 class McpActionFactory(AbstractActionFactory):
@@ -199,58 +160,18 @@ class McpActionFactory(AbstractActionFactory):
         self.is_connected = False
         self.logger.info("MCP 工厂清理完成")
 
-    def create_chat_action(self, message: str, original_message: "NormalizedMessage") -> IntentAction:
-        """
-        创建 MCP 聊天动作。
-
-        Args:
-            message: 聊天消息内容
-            original_message: 原始标准化消息
-
-        Returns:
-            IntentAction 对象
-        """
+    def create_chat_action(self, message: str, original_message: "NormalizedMessage") -> str:
+        """创建 MCP 聊天动作"""
         if not self.is_connected:
             self.logger.warning("MCP 未连接，使用模拟模式")
 
         self.logger.debug(f"[MCP] 聊天动作: {message}")
+        return "MCP 游戏聊天"
 
-        return IntentAction(
-            type="game_action",
-            params={
-                "action": "chat",
-                "message": message,
-                "factory_type": "mcp",
-                "source": original_message.source,
-                "protocol": "mcp",
-            },
-            priority=50,
-        )
-
-    def create_attack_action(self, mob_name: str, original_message: "NormalizedMessage") -> IntentAction:
-        """
-        创建 MCP 攻击动作。
-
-        Args:
-            mob_name: 生物名称
-            original_message: 原始标准化消息
-
-        Returns:
-            IntentAction 对象
-        """
+    def create_attack_action(self, mob_name: str, original_message: "NormalizedMessage") -> str:
+        """创建 MCP 攻击动作"""
         if not self.is_connected:
             self.logger.warning("MCP 未连接，使用模拟模式")
 
         self.logger.debug(f"[MCP] 攻击动作: {mob_name}")
-
-        return IntentAction(
-            type="game_action",
-            params={
-                "action": "attack",
-                "mob_name": mob_name,
-                "factory_type": "mcp",
-                "source": original_message.source,
-                "protocol": "mcp",
-            },
-            priority=50,
-        )
+        return f"MCP 攻击 {mob_name}"

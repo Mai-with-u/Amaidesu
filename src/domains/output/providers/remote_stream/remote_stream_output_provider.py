@@ -244,10 +244,10 @@ class RemoteStreamOutputProvider(OutputProvider):
             intent: 决策意图
         """
         # 如果有回复文本，发送到远程设备
-        if intent.response_text:
+        if intent.speech:
             # TTS 音频通过 AudioStreamChannel 传输，这里只发送字幕
-            self.logger.debug(f"准备发送字幕数据: {intent.response_text[:50]}...")
-            await self._send_subtitle(intent.response_text)
+            self.logger.debug(f"准备发送字幕数据: {intent.speech[:50]}...")
+            await self._send_subtitle(intent.speech)
 
     async def cleanup(self):
         """清理资源"""

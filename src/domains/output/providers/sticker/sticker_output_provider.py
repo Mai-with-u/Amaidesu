@@ -15,7 +15,6 @@ from pydantic import Field
 
 from src.modules.config.schemas.base import BaseProviderConfig
 from src.modules.logging import get_logger
-from src.modules.types import ActionType
 from src.modules.types.base.output_provider import OutputProvider
 
 if TYPE_CHECKING:
@@ -97,11 +96,16 @@ class StickerOutputProvider(OutputProvider):
         执行意图
 
         Args:
-            intent: 意图对象，从 intent.actions 中获取 ActionType.STICKER 类型的动作
+            intent: 意图对象，检查 intent.action 是否为 sticker 类型
         """
         # 检查 VTS Provider 是否可用
         if not self._vts_provider:
             self.logger.warning("VTS Provider 不可用，无法显示贴纸")
+            return
+
+        # 检查是否为 sticker 动作
+        if not intent.action or "sticker" not in intent.action.lower():
+            self.logger.debug("Intent 中没有 sticker 动作，跳过渲染")
             return
 
         # 检查冷却时间
@@ -111,34 +115,9 @@ class StickerOutputProvider(OutputProvider):
             self.logger.debug(f"表情贴纸冷却中，跳过渲染。剩余 {remaining_cooldown:.1f} 秒")
             return
 
-        # 从 intent.actions 中获取 STICKER 类型的动作
-        sticker_action = None
-        for action in intent.actions:
-            if action.type == ActionType.STICKER:
-                sticker_action = action
-                break
-
-        if not sticker_action:
-            self.logger.debug("Intent 中没有 STICKER 动作，跳过渲染")
-            return
-
-        # 从 action.params 获取图片base64数据
-        image_base64 = sticker_action.params.get("sticker_image")
-        if not image_base64:
-            self.logger.warning("未提供图片数据（action.params.sticker_image），跳过渲染")
-            return
-
-        try:
-            # 调整图片大小
-            resized_image_base64 = self._resize_image_base64(image_base64)
-
-            # 发送到VTS
-            await self._send_to_vts(resized_image_base64)
-
-            # 更新冷却时间
-            self.last_trigger_time = time.monotonic()
-        except Exception as e:
-            self.logger.error(f"渲染贴纸失败: {e}", exc_info=True)
+        # 新 Intent 结构中使用自然语言 action，暂不支持图片数据传递
+        self.logger.debug(f"检测到 sticker 动作: {intent.action}，但暂不支持图片数据传递")
+        return
 
     def _resize_image_base64(self, base64_str: str) -> str:
         """

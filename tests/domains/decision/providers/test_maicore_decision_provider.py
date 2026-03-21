@@ -10,13 +10,7 @@ from maim_message import BaseMessageInfo, MessageBase, Seg, UserInfo
 
 from src.domains.decision.providers.maicore import MaiCoreDecisionProvider
 from src.modules.di.context import ProviderContext
-from src.modules.types import (
-    ActionType,
-    EmotionType,
-    Intent,
-    IntentAction,
-    ParserType,
-)
+from src.modules.types import Intent, IntentMetadata
 
 
 @pytest.fixture
@@ -112,16 +106,13 @@ class TestParseWithLLM:
         """测试 LLM 成功解析"""
         provider = await setup_provider()
 
-        # Mock LLM 返回有效 JSON
+        # Mock LLM 返回有效 JSON（自然语言格式）
         mock_llm_service.chat_fast.return_value.success = True
         mock_llm_service.chat_fast.return_value.content = """
         {
             "emotion": "happy",
-            "actions": [
-                {"type": "wave", "params": {}, "priority": 60},
-                {"type": "expression", "params": {"name": "smile"}, "priority": 70}
-            ],
-            "response_text": "你好呀！"
+            "action": "挥手",
+            "speech": "你好呀！"
         }
         """
         mock_llm_service.chat_fast.return_value.model = "gpt-4"
@@ -129,29 +120,14 @@ class TestParseWithLLM:
         # 调用解析
         intent = provider._parse_with_llm("你好，你好呀！", mock_message_base, mock_llm_service)
 
-        # 验证结果
-        assert intent.emotion == EmotionType.HAPPY
-        assert intent.response_text == "你好呀！"
-        assert len(intent.actions) == 2
+        # 验证结果（自然语言格式）
+        assert intent.emotion == "happy"
+        assert intent.speech == "你好呀！"
+        assert intent.action == "挥手"
 
-        # 验证第一个 action
-        assert intent.actions[0].type == ActionType.WAVE
-        assert intent.actions[0].params == {}
-        assert intent.actions[0].priority == 60
-
-        # 验证第二个 action
-        assert intent.actions[1].type == ActionType.EXPRESSION
-        assert intent.actions[1].params == {"name": "smile"}
-        assert intent.actions[1].priority == 70
-
-        # 验证 SourceContext
-        assert intent.source_context.source == "amaidesu"
-        assert intent.source_context.user_id == "test_user"
-        assert intent.source_context.user_nickname == "TestUser"
-
-        # 验证 decision_metadata
-        assert intent.decision_metadata.parser_type == ParserType.LLM
-        assert intent.decision_metadata.llm_model == "gpt-4"
+        # 验证 metadata
+        assert intent.metadata.parser_type == "llm"
+        assert intent.metadata.llm_model == "gpt-4"
 
     @pytest.mark.asyncio
     async def test_parse_with_llm_fallback_to_rules(self, setup_provider, mock_message_base, mock_llm_service):
@@ -190,34 +166,31 @@ class TestParseWithLLM:
         )
         mock_llm_service.chat_fast.return_value.model = "test-model"
 
-        # 应该降级到 NEUTRAL
+        # 应该返回自然语言字符串
         intent = provider._parse_with_llm("测试", mock_message_base, mock_llm_service)
 
-        assert intent.emotion == EmotionType.NEUTRAL
+        assert intent.emotion == "unknown_emotion"
 
     @pytest.mark.asyncio
     async def test_parse_with_llm_unknown_action_type(self, setup_provider, mock_message_base, mock_llm_service):
         """测试 LLM 返回未知动作类型"""
         provider = await setup_provider()
 
-        # Mock LLM 返回未知动作类型
+        # Mock LLM 返回未知动作类型（自然语言格式）
         mock_llm_service.chat_fast.return_value.success = True
         mock_llm_service.chat_fast.return_value.content = """
         {
             "emotion": "happy",
-            "actions": [
-                {"type": "unknown_action", "params": {}, "priority": 50}
-            ],
-            "response_text": "测试"
+            "action": "unknown_action",
+            "speech": "测试"
         }
         """
         mock_llm_service.chat_fast.return_value.model = "test-model"
 
         intent = provider._parse_with_llm("测试", mock_message_base, mock_llm_service)
 
-        # 未知动作应该被转换为 NONE
-        assert len(intent.actions) == 1
-        assert intent.actions[0].type == ActionType.NONE
+        # 未知动作返回原始字符串
+        assert intent.action == "unknown_action"
 
 
 class TestParseWithRules:
@@ -228,19 +201,16 @@ class TestParseWithRules:
         """测试关键词情感识别"""
         provider = await setup_provider()
 
-        # 测试各种情感
+        # 测试各种情感（自然语言格式）
         test_cases = [
-            ("我今天很开心，太棒了！", EmotionType.HAPPY),
-            ("这件事让我很难过，很伤心", EmotionType.SAD),
-            ("我真的很生气，很愤怒", EmotionType.ANGRY),
-            ("哇，天啊，真的吗！", EmotionType.SURPRISED),
-            # 注意：规则中 HAPPY 包含"喜"，LOVE 包含"喜欢"和"爱"
-            # 因为"喜欢"包含"喜"，会被优先匹配为 HAPPY
-            # ("我爱你，喜欢你", EmotionType.LOVE),  # 这个会匹配到 HAPPY
-            ("真的很爱你，支持你", EmotionType.LOVE),  # 使用"爱"和"支持"关键词
-            ("有点害羞，不好意思", EmotionType.SHY),
-            ("太激动了，很兴奋", EmotionType.EXCITED),
-            ("普通消息，没有情感", EmotionType.NEUTRAL),
+            ("我今天很开心，太棒了！", "开心"),
+            ("这件事让我很难过，很伤心", "难过"),
+            ("我真的很生气，很愤怒", "生气"),
+            ("哇，天啊，真的吗！", "惊讶"),
+            ("真的很爱你，支持你", "感激"),
+            ("有点害羞，不好意思", "害羞"),
+            ("太激动了，很兴奋", "激动"),
+            ("普通消息，没有情感", None),
         ]
 
         for text, expected_emotion in test_cases:
@@ -269,8 +239,7 @@ class TestParseWithRules:
             message_segment=seg,
         )
         intent = provider._parse_with_rules("非常感谢，多谢！", message)
-        assert any(action.type == ActionType.CLAP for action in intent.actions)
-        assert any(action.type == ActionType.EXPRESSION for action in intent.actions)
+        assert intent.action == "鼓掌"
 
         # 测试打招呼
         seg = Seg(type="text", data="你好，大家好，哈喽")
@@ -279,7 +248,7 @@ class TestParseWithRules:
             message_segment=seg,
         )
         intent = provider._parse_with_rules("你好，大家好，哈喽", message)
-        assert any(action.type == ActionType.WAVE for action in intent.actions)
+        assert intent.action == "挥手"
 
         # 测试同意
         seg = Seg(type="text", data="是的，对的，嗯")
@@ -288,7 +257,7 @@ class TestParseWithRules:
             message_segment=seg,
         )
         intent = provider._parse_with_rules("是的，对的", message)
-        assert any(action.type == ActionType.NOD for action in intent.actions)
+        assert intent.action == "点头"
 
         # 测试不同意
         seg = Seg(type="text", data="不，不是，不行")
@@ -297,16 +266,16 @@ class TestParseWithRules:
             message_segment=seg,
         )
         intent = provider._parse_with_rules("不，不是", message)
-        assert any(action.type == ActionType.SHAKE for action in intent.actions)
+        assert intent.action == "摇头"
 
-        # 测试无动作 → 眨眼
+        # 测试无动作
         seg = Seg(type="text", data="普通消息")
         message = MessageBase(
             message_info=mock_message_base.message_info,
             message_segment=seg,
         )
         intent = provider._parse_with_rules("普通消息", message)
-        assert any(action.type == ActionType.BLINK for action in intent.actions)
+        assert intent.action is None
 
 
 class TestJSONCleanup:
@@ -317,7 +286,7 @@ class TestJSONCleanup:
         """测试嵌套的 markdown 代码块"""
         provider = await setup_provider()
 
-        # 测试嵌套的 ```json
+        # 测试嵌套的 ```json（自然语言格式）
         test_cases = [
             # 嵌套 ```json
             (
@@ -326,8 +295,8 @@ class TestJSONCleanup:
             ),
             # 带 ```json 包装
             (
-                '```json\n{"emotion": "happy", "actions": [], "response_text": "测试"}\n```',
-                '{"emotion": "happy", "actions": [], "response_text": "测试"}',
+                '```json\n{"emotion": "happy", "action": "wave", "speech": "测试"}\n```',
+                '{"emotion": "happy", "action": "wave", "speech": "测试"}',
             ),
             # 只有 ``` 包装
             (
@@ -341,8 +310,8 @@ class TestJSONCleanup:
             ),
             # 带尾逗号
             (
-                '{"emotion": "happy", "actions": [],}',
-                '{"emotion": "happy", "actions": []}',
+                '{"emotion": "happy", "action": "wave",}',
+                '{"emotion": "happy", "action": "wave"}',
             ),
             # 带前后文本
             (
@@ -382,10 +351,11 @@ class TestFireAndForget:
 
         message = NormalizedMessage(
             text="测试",
-            content=MagicMock(get_user_id=lambda: "user", get_display_text=lambda: "测试"),
+            raw=MagicMock(get_user_id=lambda: "user", get_display_text=lambda: "测试"),
             source="test",
             data_type="text",
             importance=0.5,
+            timestamp=1234567890.0,
         )
 
         # 调用 decide - 应该返回 None
@@ -406,10 +376,11 @@ class TestFireAndForget:
 
         message = NormalizedMessage(
             text="测试",
-            content=MagicMock(get_user_id=lambda: "user", get_display_text=lambda: "测试"),
+            raw=MagicMock(get_user_id=lambda: "user", get_display_text=lambda: "测试"),
             source="test",
             data_type="text",
             importance=0.5,
+            timestamp=1234567890.0,
         )
 
         # 不应该抛出异常，只返回 None
@@ -421,19 +392,19 @@ class TestActionSuggestions:
     """测试 Action 建议功能"""
 
     @pytest.mark.asyncio
-    async def test_action_suggestions_uses_intent_actions(self, setup_provider, mock_llm_service):
-        """测试使用 intent.actions（不是 suggested_actions）"""
+    async def test_action_suggestions_uses_intent_action(self, setup_provider, mock_llm_service):
+        """测试使用 intent.action"""
         provider = await setup_provider()
 
-        # 创建带 actions 的 Intent
+        # 创建带 action 的 Intent（自然语言格式）
         intent = Intent(
-            original_text="测试",
-            response_text="测试回复",
-            emotion=EmotionType.HAPPY,
-            actions=[
-                IntentAction(type=ActionType.WAVE, params={}, priority=60),
-                IntentAction(type=ActionType.EXPRESSION, params={"name": "smile"}, priority=70),
-            ],
+            emotion="happy",
+            action="挥手",
+            speech="测试回复",
+            metadata=IntentMetadata(
+                source_id="test",
+                decision_time=1234567890,
+            ),
         )
 
         # Mock router_adapter
@@ -443,13 +414,11 @@ class TestActionSuggestions:
         # 调用发送
         await provider._safe_send_suggestion(intent)
 
-        # 验证使用了 intent.actions
+        # 验证使用了 intent.action
         provider._router_adapter.send_action_suggestion.assert_called_once_with(intent)
 
-        # 验证 intent.actions 存在
-        assert hasattr(intent, "actions")
-        assert len(intent.actions) == 2
-        assert intent.actions[0].type == ActionType.WAVE
+        # 验证 intent.action 存在
+        assert intent.action == "挥手"
 
 
 class TestIntegration:
@@ -460,16 +429,13 @@ class TestIntegration:
         """测试完整的 Intent 解析流程"""
         provider = await setup_provider()
 
-        # Mock LLM 返回
+        # Mock LLM 返回（自然语言格式）
         mock_llm_service.chat_fast.return_value.success = True
         mock_llm_service.chat_fast.return_value.content = """
         {
             "emotion": "happy",
-            "actions": [
-                {"type": "wave", "params": {}, "priority": 60},
-                {"type": "nod", "params": {}, "priority": 50}
-            ],
-            "response_text": "你好呀！很高兴见到你！"
+            "action": "挥手",
+            "speech": "你好呀！很高兴见到你！"
         }
         """
         mock_llm_service.chat_fast.return_value.model = "gpt-4"
@@ -477,12 +443,11 @@ class TestIntegration:
         # 调用 _parse_intent_from_maicore_response
         intent = provider._parse_intent_from_maicore_response(mock_message_base)
 
-        # 验证结果
-        assert intent.emotion == EmotionType.HAPPY
-        assert intent.response_text == "你好呀！很高兴见到你！"
-        assert len(intent.actions) == 2
-        assert intent.source_context.source == "amaidesu"
-        assert intent.decision_metadata.parser_type == ParserType.LLM
+        # 验证结果（自然语言格式）
+        assert intent.emotion == "happy"
+        assert intent.speech == "你好呀！很高兴见到你！"
+        assert intent.action == "挥手"
+        assert intent.metadata.parser_type == "llm"
 
 
 class TestPromptOverride:

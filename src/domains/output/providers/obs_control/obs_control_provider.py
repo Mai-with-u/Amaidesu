@@ -154,7 +154,7 @@ class ObsControlOutputProvider(OutputProvider):
         从Intent中提取文本并发送到OBS
 
         Args:
-            intent: 决策意图，包含response_text和actions
+            intent: 决策意图，包含 speech 和 actions
         """
         if not self.is_connected or not self.obs_connection:
             self.logger.warning("OBS未连接，跳过渲染")
@@ -164,8 +164,8 @@ class ObsControlOutputProvider(OutputProvider):
         text = None
 
         # 1. 从回复文本提取
-        if intent.response_text:
-            text = intent.response_text
+        if intent.speech:
+            text = intent.speech
 
         # 2. 从元数据提取（兼容旧插件）
         if not text and "obs_text" in intent.metadata:

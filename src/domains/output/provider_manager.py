@@ -261,10 +261,11 @@ class OutputProviderManager:
         # 使用 IntentPayload.to_intent() 方法转换为 Intent 对象
         intent = payload.to_intent()
 
-        # 获取第一个动作的类型（如果有）
-        # 注意：由于 IntentAction 使用了 use_enum_values=True，type 已经是字符串
-        action_type = intent.actions[0].type if intent.actions else "none"
-        self.logger.debug(f'收到Intent事件: {event_name}, 响应: "{intent.response_text[:50]}...", 动作: {action_type}')
+        # 获取动作（新的自然语言结构）
+        action_type = intent.action if intent.action else "none"
+        self.logger.debug(
+            f'收到Intent事件: {event_name}, 响应: "{intent.speech[:50] if intent.speech else ""}...", 动作: {action_type}'
+        )
 
         try:
             # OutputPipeline 处理（Intent 过滤）

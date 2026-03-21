@@ -129,15 +129,15 @@ class DanmakuWidgetService:
     ) -> None:
         try:
             intent_data = payload.intent_data
-            response_text = intent_data.get("response_text", "")
-            if not response_text:
+            speech = intent_data.get("speech", "")
+            if not speech:
                 return
 
             if not self.config.show_subtitle:
                 return
 
-            await self._broadcast_subtitle(response_text)
-            self.logger.debug(f"广播字幕: {response_text[:30]}...")
+            await self._broadcast_subtitle(speech)
+            self.logger.debug(f"广播字幕: {speech[:30]}...")
 
         except Exception as e:
             self.logger.error(f"处理决策意图失败: {e}", exc_info=True)

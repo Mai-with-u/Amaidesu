@@ -178,7 +178,7 @@ class OmniTTSProvider(OutputProvider):
         Args:
             intent: Intent对象
         """
-        text = intent.response_text
+        text = intent.speech
         if not text:
             self.logger.debug("回复文本为空，跳过TTS渲染")
             return

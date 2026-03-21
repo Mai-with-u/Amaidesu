@@ -24,7 +24,7 @@ from src.modules.events.payloads.decision import IntentPayload
 from src.modules.events.payloads.input import MessageReadyPayload
 from src.modules.logging import get_logger
 from src.modules.types.base.normalized_message import NormalizedMessage
-from src.modules.types.intent import Intent, IntentAction
+from src.modules.types.intent import Intent, IntentMetadata
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
@@ -76,7 +76,6 @@ async def inject_message(
                     session_id=request.source,
                     role=MessageRole.USER,
                     content=request.text,
-                    metadata={"importance": request.importance, "data_type": request.data_type},
                 )
             except Exception as e:
                 logger.warning(f"存储消息到 ContextService 失败: {e}")
@@ -96,30 +95,23 @@ async def inject_intent(
     request: InjectIntentRequest,
     server: ServerDep,
 ) -> InjectIntentResponse:
-    """注入测试 Intent 到系统"""
     event_bus = server.event_bus
     if not event_bus:
         return InjectIntentResponse(success=False, error="Event bus not available")
 
     try:
-        # 构造 Intent 对象
         intent = Intent(
-            original_text=request.text,
-            response_text=request.response_text or request.text,
             emotion=request.emotion,
-            actions=[
-                IntentAction(
-                    type=a.get("type", "expression"),
-                    params=a.get("params", {}),
-                    priority=a.get("priority", 50),
-                )
-                for a in request.actions
-            ],
-            metadata={},
-            timestamp=datetime.now().timestamp(),
+            action=request.actions[0].get("type", "眨眼") if request.actions else "眨眼",
+            speech=request.response_text or request.text,
+            context=f"来源: {request.source}",
+            metadata=IntentMetadata(
+                source_id=request.source,
+                decision_time=int(datetime.now().timestamp() * 1000),
+                parser_type="dashboard_debug",
+            ),
         )
 
-        # 通过 EventBus 发布事件
         payload = IntentPayload.from_intent(intent, provider="dashboard_debug")
 
         await event_bus.emit(
@@ -128,15 +120,13 @@ async def inject_intent(
             source="dashboard.debug",
         )
 
-        # 存储到 ContextService（使用 source 作为 session_id）
         context_service = server.context_service
         if context_service:
             try:
                 await context_service.add_message(
                     session_id=request.source,
                     role=MessageRole.ASSISTANT,
-                    content=intent.response_text,
-                    metadata={"emotion": request.emotion, "original_text": request.text},
+                    content=intent.speech or request.response_text or "",
                 )
             except Exception as e:
                 logger.warning(f"存储 Intent 到 ContextService 失败: {e}")

@@ -126,7 +126,7 @@ class EdgeTTSProvider(OutputProvider):
         Args:
             intent: Intent对象
         """
-        text = intent.response_text
+        text = intent.speech
         if not text:
             self.logger.debug("TTS文本为空，跳过渲染")
             return

@@ -10,6 +10,7 @@ ReplayDecisionProvider - 输入重放决策提供者
 - 不需要 AI 决策，只需要将用户输入直接传递到输出
 """
 
+import time
 from typing import TYPE_CHECKING, Any, Dict, Literal
 
 from pydantic import Field
@@ -19,15 +20,7 @@ from src.modules.di.context import ProviderContext
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import IntentPayload
 from src.modules.logging import get_logger
-from src.modules.types import (
-    ActionType,
-    DecisionMetadata,
-    EmotionType,
-    Intent,
-    IntentAction,
-    ParserType,
-    SourceContext,
-)
+from src.modules.types import Intent, IntentMetadata
 from src.modules.types.base.decision_provider import DecisionProvider
 
 if TYPE_CHECKING:
@@ -47,106 +40,51 @@ class ReplayDecisionProvider(DecisionProvider):
         active_provider = "replay"
 
         [replay]
-        # 是否添加默认动作（眨眼），默认 true
         add_default_action = true
         ```
     """
 
     @classmethod
     def get_registration_info(cls) -> Dict[str, Any]:
-        """获取 Provider 注册信息"""
         return {"layer": "decision", "name": "replay", "class": cls, "source": "builtin:replay"}
 
     class ConfigSchema(BaseProviderConfig):
-        """Replay决策Provider配置Schema
-
-        将输入消息直接重放到输出域。
-        """
-
         type: Literal["replay"] = "replay"
-        add_default_action: bool = Field(default=True, description="是否添加默认动作（眨眼）")
+        add_default_action: bool = Field(default=True, description="是否添加默认动作")
 
     def __init__(self, config: Dict[str, Any], context: "ProviderContext"):
-        """
-        初始化 ReplayDecisionProvider
-
-        Args:
-            config: 配置字典
-            context: 依赖注入上下文
-        """
         super().__init__(config, context)
-
-        # 使用 Pydantic Schema 验证配置
         self.typed_config = self.ConfigSchema(**config)
         self.logger = get_logger("ReplayDecisionProvider")
-
-        # 配置
         self.add_default_action = self.typed_config.add_default_action
-
-        # 统计信息
         self._total_messages = 0
 
     async def init(self) -> None:
-        """初始化 ReplayDecisionProvider"""
         self.logger.info("初始化 ReplayDecisionProvider...")
 
     async def decide(self, normalized_message: "NormalizedMessage") -> None:
-        """
-        重放输入消息
-
-        将 NormalizedMessage 的内容直接转换为 Intent 并发布到输出域。
-
-        Args:
-            normalized_message: 标准化消息
-        """
         self._total_messages += 1
         self.logger.debug(f"重放消息: {normalized_message.text[:50]}...")
 
-        # 构建动作列表
-        actions: list[IntentAction] = []
-        if self.add_default_action:
-            actions.append(
-                IntentAction(
-                    type=ActionType.BLINK,
-                    params={},
-                    priority=30,
-                )
-            )
+        action = "眨眼" if self.add_default_action else None
 
-        # 创建 Intent，将原始文本作为响应文本
         intent = Intent(
-            original_text=normalized_message.text,
-            response_text=normalized_message.text,  # 重放：响应文本 = 原始文本
-            emotion=EmotionType.NEUTRAL,
-            actions=actions,
-            decision_metadata=DecisionMetadata(
-                parser_type=ParserType.REPLAY,
+            emotion="平静",
+            action=action,
+            speech=normalized_message.text,
+            context=f"来源: {normalized_message.source}",
+            metadata=IntentMetadata(
+                source_id=normalized_message.source,
+                decision_time=int(time.time() * 1000),
+                parser_type="replay",
                 replay_count=self._total_messages,
             ),
         )
 
-        # 构建 SourceContext
-        source_context = SourceContext(
-            source=normalized_message.source,
-            data_type=normalized_message.data_type,
-            user_id=normalized_message.user_id,
-            user_nickname=normalized_message.user_nickname,
-            importance=normalized_message.importance,
-        )
-        intent.source_context = source_context
-
-        # 发布 decision.intent 事件
         await self._publish_intent(intent)
-
         self.logger.debug(f"已重放消息 (总计: {self._total_messages})")
 
     async def _publish_intent(self, intent: Intent) -> None:
-        """
-        通过 event_bus 发布 decision.intent 事件
-
-        Args:
-            intent: 要发布的 Intent
-        """
         if not self.event_bus:
             self.logger.error("EventBus 未初始化，无法发布事件")
             return
@@ -158,5 +96,4 @@ class ReplayDecisionProvider(DecisionProvider):
         )
 
     async def cleanup(self) -> None:
-        """清理资源"""
         self.logger.info(f"ReplayDecisionProvider 已清理，共重放 {self._total_messages} 条消息")

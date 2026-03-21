@@ -104,13 +104,13 @@ class ProfanityFilterPipeline(OutputPipelineBase):
         """
         has_match = False
 
-        # 过滤 response_text
-        if intent.response_text:
-            filtered_text, text_has_match = self._filter_text(intent.response_text)
+        # 过滤 speech
+        if intent.speech:
+            filtered_text, text_has_match = self._filter_text(intent.speech)
             if text_has_match:
                 has_match = True
-                intent.response_text = filtered_text
-                self.logger.debug(f"response_text 已过滤: '{filtered_text}'")
+                intent.speech = filtered_text
+                self.logger.debug(f"speech 已过滤: '{filtered_text}'")
 
         # 如果匹配到敏感词且配置了丢弃
         if has_match and self._drop_on_match:

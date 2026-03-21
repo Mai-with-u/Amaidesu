@@ -187,10 +187,9 @@ class GPTSoVITSOutputProvider(OutputProvider):
         执行 TTS 输出
 
         Args:
-            intent: Intent对象，从 response_text 获取 TTS 文本
+            intent: Intent对象，从 speech 获取 TTS 文本
         """
-        # 从 Intent 获取 TTS 文本
-        text = intent.response_text
+        text = intent.speech
 
         if not text or not text.strip():
             self.logger.debug("TTS文本为空，跳过渲染")

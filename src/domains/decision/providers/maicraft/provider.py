@@ -11,6 +11,7 @@ Maicraft Decision Provider
 - 不直接触发 Output Provider（遵守 3 域数据流规则）
 """
 
+import time
 from typing import Dict, Literal, Optional
 
 from pydantic import Field, ValidationError
@@ -20,7 +21,7 @@ from src.modules.di.context import ProviderContext
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import IntentPayload
 from src.modules.logging import get_logger
-from src.modules.types import DecisionMetadata, EmotionType, Intent, ParserType
+from src.modules.types import Intent, IntentMetadata
 from src.modules.types.base.decision_provider import DecisionProvider
 
 from .action_registry import ActionRegistry
@@ -225,17 +226,12 @@ class MaicraftDecisionProvider(DecisionProvider):
 
             # 生成 Intent
             intent = Intent(
-                original_text=text,
-                response_text=f"[游戏操作] {command.name} {' '.join(command.args)}",
-                emotion=EmotionType.NEUTRAL,
-                actions=[action],
-                decision_metadata=DecisionMetadata(
-                    parser_type=ParserType.MAICRAFT,
-                    extra={
-                        "command": command.name,
-                        "action_type": action_type.value,
-                        "factory_type": self.action_factory.get_factory_type(),
-                    },
+                emotion="neutral",
+                action=action_type.value,
+                speech=f"[游戏操作] {command.name} {' '.join(command.args)}",
+                metadata=IntentMetadata(
+                    source_id="maicraft",
+                    decision_time=int(time.time() * 1000),
                 ),
             )
 
@@ -324,16 +320,13 @@ class MaicraftDecisionProvider(DecisionProvider):
         Returns:
             默认 Intent
         """
-        text = self._extract_message_text(message) or ""
-
         return Intent(
-            original_text=text,
-            response_text="",
-            emotion=EmotionType.NEUTRAL,
-            actions=[],  # 空动作列表
-            decision_metadata=DecisionMetadata(
-                parser_type=ParserType.MAICRAFT,
-                extra={"is_default": True},
+            emotion="neutral",
+            action=None,
+            speech="",
+            metadata=IntentMetadata(
+                source_id="maicraft",
+                decision_time=int(time.time() * 1000),
             ),
         )
 

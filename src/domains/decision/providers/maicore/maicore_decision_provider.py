@@ -10,6 +10,7 @@ MaiCoreDecisionProvider - MaiCore决策提供者
 import asyncio
 import json
 import re
+import time
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
 
 from maim_message import MessageBase, RouteConfig, Router, TargetConfig
@@ -24,15 +25,7 @@ from src.modules.prompts.template_override_service import (
     TemplateOverrideService,
     OverrideConfig,
 )
-from src.modules.types import (
-    ActionType,
-    DecisionMetadata,
-    EmotionType,
-    Intent,
-    IntentAction,
-    ParserType,
-    SourceContext,
-)
+from src.modules.types import Intent, IntentMetadata
 from src.modules.types.base.decision_provider import DecisionProvider
 
 from .router_adapter import RouterAdapter
@@ -460,11 +453,13 @@ class MaiCoreDecisionProvider(DecisionProvider):
         llm_service = self.context.llm_service
         if llm_service:
             try:
+                self.logger.info(f"使用 LLM 解析意图: {text[:50]}...")
                 return self._parse_with_llm(text, response, llm_service)
             except Exception as e:
                 self.logger.warning(f"LLM 解析失败，降级到规则解析: {e}")
 
         # 降级到规则解析
+        self.logger.info(f"使用规则解析意图: {text[:50]}...")
         return self._parse_with_rules(text, response)
 
     def _extract_reply_to_id(self, message: MessageBase) -> Optional[str]:
@@ -555,53 +550,20 @@ class MaiCoreDecisionProvider(DecisionProvider):
         except json.JSONDecodeError as e:
             raise ValueError(f"无法解析 LLM 返回的 JSON: {e}\n内容: {content}") from e
 
-        # 构造 Intent
-        response_text = intent_data.get("response_text", text)
-        emotion_str = intent_data.get("emotion", "neutral")
-        try:
-            emotion = EmotionType(emotion_str)
-        except ValueError:
-            emotion = EmotionType.NEUTRAL
-
-        # 解析 actions
-        actions = []
-        for action_data in intent_data.get("actions", []):
-            try:
-                action_type_str = action_data.get("type", "none")
-                try:
-                    action_type = ActionType(action_type_str)
-                except ValueError:
-                    action_type = ActionType.NONE
-
-                action = IntentAction(
-                    type=action_type,
-                    params=action_data.get("params", {}),
-                    priority=action_data.get("priority", 50),
-                )
-                actions.append(action)
-            except Exception as e:
-                self.logger.warning(f"解析 action 失败: {e}, action_data: {action_data}")
-
-        # 构造 SourceContext
-        source_context = SourceContext(
-            source=response.message_info.platform if response.message_info else "maicore",
-            data_type="text",
-            user_id=response.message_info.user_info.user_id
-            if response.message_info and response.message_info.user_info
-            else None,
-            user_nickname=response.message_info.user_info.user_nickname
-            if response.message_info and response.message_info.user_info
-            else None,
-        )
+        # 提取自然语言字段
+        emotion = intent_data.get("emotion")  # 直接使用自然语言字符串
+        action = intent_data.get("action")  # 直接使用自然语言字符串
+        speech = intent_data.get("speech", text)  # AI 回复
 
         return Intent(
-            original_text=text,
-            response_text=response_text,
             emotion=emotion,
-            actions=actions,
-            source_context=source_context,
-            decision_metadata=DecisionMetadata(
-                parser_type=ParserType.LLM,
+            action=action,
+            speech=speech,
+            context=None,
+            metadata=IntentMetadata(
+                source_id="maicore",
+                decision_time=int(time.time() * 1000),
+                parser_type="llm",
                 llm_model=llm_result.model,
             ),
         )
@@ -663,99 +625,55 @@ class MaiCoreDecisionProvider(DecisionProvider):
         return self._parse_with_rules(text, message)
 
     def _parse_with_rules(self, text: str, response: MessageBase) -> Intent:
-        """
-        使用规则解析 Intent
-
-        简单的关键词匹配，保证最坏情况下也能给出合理的 emotion 和基础动作。
-
-        Args:
-            text: 提取的文本
-            response: MaiCore 返回的 MessageBase
-
-        Returns:
-            解析后的 Intent
-        """
-        # 情感关键词表
+        # 情感关键词映射 -> 直接输出中文
         emotion_keywords = {
-            EmotionType.HAPPY: ["开心", "哈哈", "太棒了", "好玩", "高兴", "快乐", "欢乐", "喜"],
-            EmotionType.SAD: ["难过", "伤心", "哎", "可惜", "遗憾", "悲伤"],
-            EmotionType.ANGRY: ["生气", "愤怒", "讨厌", "烦", "气死"],
-            EmotionType.SURPRISED: ["哇", "天啊", "竟然", "真的吗", "没想到"],
-            EmotionType.LOVE: ["爱", "喜欢", "谢谢", "感谢", "支持"],
-            EmotionType.SHY: ["害羞", "不好意思"],
-            EmotionType.EXCITED: ["激动", "兴奋"],
+            "开心": ["开心", "哈哈", "太棒了", "好玩", "高兴", "快乐", "欢乐", "喜"],
+            "难过": ["难过", "伤心", "哎", "可惜", "遗憾", "悲伤"],
+            "生气": ["生气", "愤怒", "讨厌", "烦", "气死"],
+            "惊讶": ["哇", "天啊", "竟然", "真的吗", "没想到"],
+            "感激": ["爱", "喜欢", "谢谢", "感谢", "支持"],
+            "害羞": ["害羞", "不好意思"],
+            "激动": ["激动", "兴奋"],
         }
 
         # 检测情感
-        emotion = EmotionType.NEUTRAL
+        emotion = None
         for emo, keywords in emotion_keywords.items():
             if any(keyword in text for keyword in keywords):
                 emotion = emo
                 break
 
-        # 动作规则
-        actions = []
-
-        # 感谢 → clap + 表情
+        # 动作关键词 -> 自然语言描述
+        action = None
         if any(word in text for word in ["感谢", "谢谢", "多谢"]):
-            actions.append(IntentAction(type=ActionType.CLAP, params={}, priority=60))
-            actions.append(IntentAction(type=ActionType.EXPRESSION, params={"name": "thank"}, priority=70))
-
-        # 打招呼 → wave
-        if any(word in text for word in ["你好", "大家好", "嗨", "哈喽"]):
-            actions.append(IntentAction(type=ActionType.WAVE, params={}, priority=60))
-
-        # 同意 → nod
-        if any(word in text for word in ["是的", "对", "嗯", "好的", "可以"]):
-            actions.append(IntentAction(type=ActionType.NOD, params={}, priority=50))
-
-        # 不同意 → shake
-        if any(word in text for word in ["不", "不是", "不行"]):
-            actions.append(IntentAction(type=ActionType.SHAKE, params={}, priority=50))
-
-        # 如果没有任何动作，添加低优先级眨眼
-        if not actions:
-            actions.append(IntentAction(type=ActionType.BLINK, params={}, priority=30))
-
-        # 构造 SourceContext
-        source_context = SourceContext(
-            source=response.message_info.platform if response.message_info else "maicore",
-            data_type="text",
-            user_id=response.message_info.user_info.user_id
-            if response.message_info and response.message_info.user_info
-            else None,
-            user_nickname=response.message_info.user_info.user_nickname
-            if response.message_info and response.message_info.user_info
-            else None,
-        )
+            action = "鼓掌"
+        elif any(word in text for word in ["你好", "大家好", "嗨", "哈喽"]):
+            action = "挥手"
+        elif any(word in text for word in ["是的", "对", "嗯", "好的", "可以"]):
+            action = "点头"
+        elif any(word in text for word in ["不", "不是", "不行"]):
+            action = "摇头"
 
         return Intent(
-            original_text=text,
-            response_text=text,
             emotion=emotion,
-            actions=actions,
-            source_context=source_context,
-            decision_metadata=DecisionMetadata(
-                parser_type=ParserType.RULE_BASED,
+            action=action,
+            speech=text,
+            context=None,
+            metadata=IntentMetadata(
+                source_id="maicore",
+                decision_time=int(time.time() * 1000),
+                parser_type="rule_based",
             ),
         )
 
     async def _safe_send_suggestion(self, intent: Intent) -> None:
-        """
-        安全发送 Action 建议（捕获异常）
-
-        异步发送 MaiBot Action 建议，任何错误都不会影响主流程。
-
-        Args:
-            intent: 包含建议动作的 Intent 对象
-        """
         try:
             if not self._router_adapter:
                 self.logger.warning("RouterAdapter 未初始化，无法发送 Action 建议")
                 return
 
             await self._router_adapter.send_action_suggestion(intent)
-            self.logger.debug(f"Action 发送成功: {len(intent.actions)} 个动作")
+            self.logger.debug(f"Action 发送成功: {intent.action}")
         except Exception as e:
             self.logger.warning(f"发送 Action 建议失败: {e}", exc_info=True)
 

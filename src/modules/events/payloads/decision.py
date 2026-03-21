@@ -71,15 +71,15 @@ class IntentPayload(BasePayload):
         json_schema_extra={
             "example": {
                 "intent_data": {
-                    "original_text": "你好",
-                    "response_text": "你好！很高兴见到你~",
-                    "emotion": "happy",
-                    "actions": [
-                        {"type": "blink", "params": {"count": 2}, "priority": 30},
-                        {"type": "wave", "params": {"duration": 1.0}, "priority": 50},
-                    ],
-                    "metadata": {"confidence": 0.95},
-                    "timestamp": 1706745600.0,
+                    "emotion": "开心",
+                    "action": "脸红并挥手",
+                    "speech": "你好！很高兴见到你~",
+                    "context": "用户打招呼",
+                    "metadata": {
+                        "source_id": "msg_123",
+                        "decision_time": 1706745600000,
+                        "parser_type": "llm",
+                    },
                 },
                 "provider": "maicore",
             }
@@ -90,15 +90,30 @@ class IntentPayload(BasePayload):
         """代理访问 intent_data 中的字段，用于调试显示"""
         # 只代理已知的字段，其他字段抛出 AttributeError
         KNOWN_FIELDS = [
+            "emotion",
+            "action",
+            "speech",
+            "context",
+            "metadata",
+            # 向后兼容字段（已废弃但仍支持访问）
             "original_text",
             "response_text",
-            "emotion",
             "actions",
-            "metadata",
             "timestamp",
         ]
         if name in KNOWN_FIELDS:
-            value = self.intent_data.get(name, "")
+            # 向后兼容映射
+            backward_compat_map = {
+                "response_text": "speech",
+                "actions": "action",
+                "original_text": "context",
+                "timestamp": "metadata.decision_time",
+            }
+            if name in backward_compat_map:
+                mapped_key = backward_compat_map[name]
+                value = self.intent_data.get(mapped_key, "")
+            else:
+                value = self.intent_data.get(name, "")
             # metadata 默认返回空字典而非空字符串
             if name == "metadata" and value == "":
                 return {}
@@ -106,25 +121,13 @@ class IntentPayload(BasePayload):
         raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'. 可用字段: {KNOWN_FIELDS}")
 
     def __str__(self) -> str:
-        """
-        自定义字符串表示，显示 intent_data 中的关键字段。
-
-        Returns:
-            调试字符串
-        """
+        """自定义字符串表示，显示 intent_data 中的关键字段"""
         parts = [
             f'provider="{self.provider}"',
-            f'original_text="{self.intent_data.get("original_text", "")}"',
-            f'response_text="{self.intent_data.get("response_text", "")}"',
+            f'speech="{self.intent_data.get("speech", "")}"',
             f'emotion="{self.intent_data.get("emotion", "")}"',
+            f'action="{self.intent_data.get("action", "")}"',
         ]
-        # 格式化 actions
-        actions = self.intent_data.get("actions", [])
-        if actions:
-            types = [a.get("type", "?") for a in actions[:3]]
-            if len(actions) > 3:
-                types.append("...")
-            parts.append(f"actions=[{', '.join(types)}]")
         return f"IntentPayload({', '.join(parts)})"
 
     @classmethod

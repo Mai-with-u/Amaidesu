@@ -332,9 +332,9 @@ class SubtitleOutputProvider(OutputProvider):
         执行意图
 
         Args:
-            intent: 决策意图，包含response_text(文本内容)
+            intent: 决策意图，包含 speech(文本内容)
         """
-        text = intent.response_text if intent.response_text else ""
+        text = intent.speech if intent.speech else ""
         if not text:
             return
 
