@@ -60,6 +60,9 @@ class VTSProvider(BaseAvatarProvider):
     PARAM_EYE_OPEN_LEFT = "EyeOpenLeft"
     PARAM_EYE_OPEN_RIGHT = "EyeOpenRight"
 
+    EMOTION_KEYS = {"happy", "surprised", "sad", "angry", "shy", "love", "excited", "confused", "scared", "neutral"}
+    ACTION_KEYS = {"blink", "nod", "shake", "wave", "clap", "motion"}
+
     class ConfigSchema(BaseProviderConfig):
         """VTS输出Provider配置"""
 
@@ -259,7 +262,7 @@ class VTSProvider(BaseAvatarProvider):
 
     # ==================== AvatarProviderBase 抽象方法实现 ====================
 
-    def _adapt_intent(self, intent: "Intent") -> Dict[str, Any]:
+    async def _adapt_intent(self, intent: "Intent") -> Dict[str, Any]:
         """
         适配 Intent 为 VTS 特定参数
 

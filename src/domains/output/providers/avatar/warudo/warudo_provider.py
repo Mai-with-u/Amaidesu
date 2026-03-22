@@ -50,7 +50,6 @@ class WarudoOutputProvider(AvatarProviderBase):
 
     # ==================== Warudo API 参数映射 ====================
 
-    # 情感映射（符合测试期望）
     EMOTION_MAP: Dict[str, Dict[str, float]] = {
         "happy": {"mouthSmile": 1.0},
         "sad": {"mouthSad": 1.0},
@@ -61,14 +60,18 @@ class WarudoOutputProvider(AvatarProviderBase):
         "neutral": {},
     }
 
-    # 动作映射
-    ACTION_HOTKEY_MAP: Dict[str, str] = {
+    ACTION_MAP: Dict[str, str] = {
         "blink": "blink",
         "nod": "nod",
         "shake": "shake",
         "wave": "wave",
         "clap": "clap",
     }
+
+    ACTION_HOTKEY_MAP = ACTION_MAP
+
+    EMOTION_KEYS = {"happy", "sad", "angry", "surprised", "shy", "love", "neutral"}
+    ACTION_KEYS = {"blink", "nod", "shake", "wave", "clap"}
 
     def __init__(self, config: Dict[str, Any], context: "ProviderContext"):
         """
@@ -122,7 +125,7 @@ class WarudoOutputProvider(AvatarProviderBase):
 
     # ==================== AvatarProviderBase 抽象方法实现 ====================
 
-    def _adapt_intent(self, intent: "Intent") -> Dict[str, Any]:
+    async def _adapt_intent(self, intent: "Intent") -> Dict[str, Any]:
         """
         适配 Intent 为 Warudo 参数
 

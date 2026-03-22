@@ -76,6 +76,9 @@ class VRChatProvider(AvatarProviderBase):
         "Cross": 8,
     }
 
+    EMOTION_KEYS = {"neutral", "happy", "sad", "angry", "surprised", "confused", "scared", "love", "shy", "excited"}
+    ACTION_KEYS = {"wave", "peace", "thumbsup", "rocknroll", "handgun", "point", "victory", "cross"}
+
     class ConfigSchema(BaseProviderConfig):
         """VRChat 输出 Provider 配置"""
 
@@ -120,7 +123,7 @@ class VRChatProvider(AvatarProviderBase):
 
     # ==================== AvatarProviderBase 抽象方法实现 ====================
 
-    def _adapt_intent(self, intent: "Intent") -> Dict[str, Any]:
+    async def _adapt_intent(self, intent: "Intent") -> Dict[str, Any]:
         """
         适配 Intent 为 VRChat 特定参数
 
