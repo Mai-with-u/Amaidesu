@@ -77,9 +77,9 @@ export const useSessionStore = defineStore('session', () => {
 
     if (message.type === 'message.received') {
       const data = message.data as MessageReceivedData;
-      // 添加 NormalizedMessage 到左侧
-      // 数据结构: message.data.message (NormalizedMessage), message.data.source
-      const msgId = String(data.message?.timestamp) || crypto.randomUUID();
+      // message.timestamp 是 WebSocket 级别时间戳，确保唯一性
+      // data.message.timestamp 是秒级精度，同秒内消息会重复
+      const msgId = String(message.timestamp) + '-' + crypto.randomUUID().slice(0, 8);
 
       // 去重检查
       if (messages.value.some(m => m.id === msgId)) {
@@ -109,7 +109,7 @@ export const useSessionStore = defineStore('session', () => {
         id: msgId,
         type: 'intent',
         sender: '主播',
-        content: data.intent_data?.response_text || '',
+        content: data.intent_data?.speech || data.intent_data?.response_text || '',
         timestamp: message.timestamp,
         emotion: data.intent_data?.emotion,
       });

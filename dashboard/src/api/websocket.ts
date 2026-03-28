@@ -30,10 +30,10 @@ class WebSocketClient {
           console.log('WebSocket connected');
           this.reconnectAttempts = 0;
 
-          // 重新订阅之前的事件
           if (this.subscribedEvents.size > 0) {
             this.sendSubscribe(Array.from(this.subscribedEvents));
           }
+          this.sendSubscribe(['*']);
 
           this.connectCallbacks.forEach(cb => cb());
           resolve();
