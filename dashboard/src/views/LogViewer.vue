@@ -267,12 +267,21 @@ function toggleLogExpand(index: number) {
   expandedLogs.value = new Set(expandedLogs.value);
 }
 
-// 自动滚动到底部
+// 自动滚动到底部 - 使用 requestAnimationFrame 节流，避免强制同步布局
+let scrollRAFId: number | null = null;
+let pendingScroll = false;
+
 function scrollToBottom() {
-  nextTick(() => {
-    if (logListRef.value) {
-      logListRef.value.scrollTop = logListRef.value.scrollHeight;
-    }
+  if (pendingScroll) return;
+  pendingScroll = true;
+
+  scrollRAFId = requestAnimationFrame(() => {
+    pendingScroll = false;
+    nextTick(() => {
+      if (logListRef.value) {
+        logListRef.value.scrollTop = logListRef.value.scrollHeight;
+      }
+    });
   });
 }
 
@@ -310,6 +319,10 @@ onMounted(() => {
 onUnmounted(() => {
   if (unsubscribe) {
     unsubscribe();
+  }
+  // 取消 pending 的 scrollToBottom
+  if (scrollRAFId !== null) {
+    cancelAnimationFrame(scrollRAFId);
   }
 });
 </script>

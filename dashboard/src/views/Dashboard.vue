@@ -283,12 +283,7 @@
     <section class="widget-info-section">
       <div class="section-header">
         <h2 class="section-title">小部件访问地址</h2>
-        <el-button
-          type="primary"
-          size="small"
-          text
-          @click="showWidgetInfo = !showWidgetInfo"
-        >
+        <el-button type="primary" size="small" text @click="showWidgetInfo = !showWidgetInfo">
           {{ showWidgetInfo ? '收起' : '展开' }}
           <el-icon :class="{ 'is-rotate': showWidgetInfo }">
             <ArrowDown />
@@ -337,7 +332,16 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue';
-import { Document, Connection, Tools, Setting, ChatLineSquare, ChatDotRound, CopyDocument, ArrowDown } from '@element-plus/icons-vue';
+import {
+  Document,
+  Connection,
+  Tools,
+  Setting,
+  ChatLineSquare,
+  ChatDotRound,
+  CopyDocument,
+  ArrowDown,
+} from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { useSystemStore, useProvidersStore } from '@/stores';
 import { storeToRefs } from 'pinia';
@@ -362,11 +366,14 @@ const baseUrl = computed(() => window.location.origin);
 
 // Copy widget URL to clipboard
 function copyUrl(url: string) {
-  navigator.clipboard.writeText(url).then(() => {
-    ElMessage.success('URL 已复制到剪贴板');
-  }).catch(() => {
-    ElMessage.error('复制失败');
-  });
+  navigator.clipboard
+    .writeText(url)
+    .then(() => {
+      ElMessage.success('URL 已复制到剪贴板');
+    })
+    .catch(() => {
+      ElMessage.error('复制失败');
+    });
 }
 
 // Get providers for a specific domain

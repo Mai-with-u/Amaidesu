@@ -255,12 +255,21 @@ function getEventClass(type: string): string {
   return 'type-default';
 }
 
-// 自动滚动到底部
+// 自动滚动到底部 - 使用 requestAnimationFrame 节流
+let scrollRAFId: number | null = null;
+let pendingScroll = false;
+
 function scrollToBottom() {
-  nextTick(() => {
-    if (eventListRef.value) {
-      eventListRef.value.scrollTop = eventListRef.value.scrollHeight;
-    }
+  if (pendingScroll) return;
+  pendingScroll = true;
+
+  scrollRAFId = requestAnimationFrame(() => {
+    pendingScroll = false;
+    nextTick(() => {
+      if (eventListRef.value) {
+        eventListRef.value.scrollTop = eventListRef.value.scrollHeight;
+      }
+    });
   });
 }
 
@@ -282,6 +291,10 @@ onMounted(() => {
 onUnmounted(() => {
   if (unsubscribe) {
     unsubscribe();
+  }
+  // 取消 pending 的 scrollToBottom
+  if (scrollRAFId !== null) {
+    cancelAnimationFrame(scrollRAFId);
   }
 });
 </script>

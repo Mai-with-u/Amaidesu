@@ -74,38 +74,49 @@ async def test_send_intent_empty_speech(mcp_service: MCPServerService):
 
 @pytest.mark.asyncio
 async def test_send_intent_api_timeout(mcp_service: MCPServerService):
-    """测试 send_intent API 超时 - 应抛出 MCPError
+    """测试 send_intent API 超时 - 应抛出 Exception"""
+    import httpx
+    from unittest.mock import AsyncMock, patch, MagicMock
 
-    Note: 当前测试失败是预期的 (TDD Red)，因为 send_intent 尚未实现。
-    1.4 实现时需要创建 src.modules.mcp.exceptions 模块并定义 MCPError
-    """
-    # 测试会在调用 send_intent 时失败，因为该方法不存在
-    # 1.4 实现时需 mock httpx 客户端模拟超时行为
-    await mcp_service.send_intent(
-        action="wave",
-        emotion="happy",
-        speech="Hi",
-        priority=50,
-    )
-    pytest.fail("send_intent 未实现，不应到达此处")
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(side_effect=httpx.TimeoutException("Connection timeout"))
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("src.modules.mcp.service.httpx.AsyncClient", return_value=mock_client):
+        with pytest.raises(Exception, match="timed out"):
+            await mcp_service.send_intent(
+                action="wave",
+                emotion="happy",
+                speech="Hi",
+                priority=50,
+            )
 
 
 @pytest.mark.asyncio
 async def test_send_intent_api_error(mcp_service: MCPServerService):
-    """测试 send_intent API 返回错误 - 应抛出 MCPError
+    """测试 send_intent API 返回错误 - 应抛出 Exception"""
+    from unittest.mock import AsyncMock, patch, MagicMock
 
-    Note: 当前测试失败是预期的 (TDD Red)，因为 send_intent 尚未实现。
-    1.4 实现时需要创建 src.modules.mcp.exceptions 模块并定义 MCPError
-    """
-    # 测试会在调用 send_intent 时失败，因为该方法不存在
-    # 1.4 实现时需 mock httpx 客户端模拟 API 错误行为
-    await mcp_service.send_intent(
-        action="wave",
-        emotion="happy",
-        speech="Hi",
-        priority=50,
-    )
-    pytest.fail("send_intent 未实现，不应到达此处")
+    mock_response = MagicMock()
+    mock_response.is_success = False
+    mock_response.json.return_value = {"error": "Internal server error"}
+    mock_response.content = b'{"error": "Internal server error"}'
+    mock_response.text = '{"error": "Internal server error"}'
+
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(return_value=mock_response)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("src.modules.mcp.service.httpx.AsyncClient", return_value=mock_client):
+        with pytest.raises(Exception, match="MCP API error"):
+            await mcp_service.send_intent(
+                action="wave",
+                emotion="happy",
+                speech="Hi",
+                priority=50,
+            )
 
 
 # =============================================================================

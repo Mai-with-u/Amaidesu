@@ -18,6 +18,7 @@ from src.modules.config.service import ConfigService
 from src.modules.llm.manager import LLMManager
 from src.modules.context import ContextService, ContextServiceConfig
 from src.modules.prompts import get_prompt_manager
+from src.modules.mcp import MCPServerService
 
 from src.domains.decision import DecisionProviderManager
 from src.domains.input.pipelines.manager import InputPipelineManager
@@ -288,6 +289,7 @@ async def create_app_components(
     LLMManager,
     Optional[DecisionProviderManager],
     Optional["DashboardServer"],
+    Optional["MCPServerService"],
 ]:
     """创建并连接核心组件。
 
@@ -300,8 +302,9 @@ async def create_app_components(
     6. DecisionProviderManager
     7. OutputProviderManager
     8. DashboardServer
+    9. MCPServerService
 
-    返回顺序（7个）：
+    返回顺序（8个）：
     1. ContextService
     2. EventBus
     3. OutputProviderManager
@@ -309,6 +312,7 @@ async def create_app_components(
     5. LLMManager
     6. DecisionProviderManager
     7. DashboardServer
+    8. MCPServerService
     """
     # 使用新的 [providers.*] 配置格式
     output_config = config.get("providers", {}).get("output", {})
@@ -463,6 +467,23 @@ async def create_app_components(
             logger.error(f"Dashboard 启动失败: {e}")
             logger.warning("Dashboard 功能将被禁用")
 
+    # ========================================
+    # 初始化 MCP 服务
+    # ========================================
+    mcp_service: Optional["MCPServerService"] = None
+    mcp_config = config.get("mcp", {})
+    if mcp_config.get("enabled", False):
+        try:
+            mcp_service = MCPServerService()
+            await mcp_service.setup(mcp_config)
+            logger.info("已创建 MCP 服务实例")
+        except Exception as e:
+            logger.error(f"MCP 服务初始化失败: {e}")
+            logger.warning("MCP 服务功能将被禁用")
+            mcp_service = None
+    else:
+        logger.info("MCP 服务未启用")
+
     return (
         context_service,
         event_bus,
@@ -471,6 +492,7 @@ async def create_app_components(
         llm_service,
         decision_provider_manager,
         dashboard_server,
+        mcp_service,
     )
 
 
@@ -525,6 +547,7 @@ async def run_shutdown(
     event_bus: EventBus,
     decision_provider_manager: Optional[DecisionProviderManager],
     dashboard_server: Optional["DashboardServer"] = None,
+    mcp_service: Optional["MCPServerService"] = None,
 ) -> None:
     """按顺序执行关闭与清理。
 
@@ -535,9 +558,10 @@ async def run_shutdown(
        2.2 清理决策Provider管理器（取消订阅 data.message 和 decision.intent）
        2.3 清理输出Provider管理器（取消订阅 decision.intent）
        2.4 清理 OutputProvider（必须在 EventBus.cleanup 之前，因为会调用 event_bus.off()）
-    3. 清理 Dashboard（停止 WebSocket 连接和服务器）
-    4. 等待待处理事件完成（EventBus.cleanup）- 清除所有监听器
-    5. 清理基础设施（LLM等）
+    3. 清理 MCP 服务
+    4. 清理 Dashboard（停止 WebSocket 连接和服务器）
+    5. 等待待处理事件完成（EventBus.cleanup）- 清除所有监听器
+    6. 清理基础设施（LLM等）
 
     关键原则：
     - 所有订阅者的 cleanup() 必须在 EventBus.cleanup() 之前执行
@@ -586,7 +610,16 @@ async def run_shutdown(
         except Exception as e:
             logger.error(f"清理 OutputProvider 失败: {e}")
 
-    # 3. 清理 Dashboard（停止 WebSocket 连接和服务器）
+    # 3. 清理 MCP 服务
+    if mcp_service:
+        logger.info("正在清理 MCP 服务...")
+        try:
+            await mcp_service.cleanup()
+            logger.info("MCP 服务已清理")
+        except Exception as e:
+            logger.error(f"MCP 服务清理失败: {e}")
+
+    # 4. 清理 Dashboard（停止 WebSocket 连接和服务器）
     if dashboard_server:
         logger.info("正在停止 Dashboard...")
         try:
@@ -688,6 +721,7 @@ async def main() -> None:
         llm_service,
         decision_provider_manager,
         dashboard_server,
+        mcp_service,
     ) = await create_app_components(config, input_pipeline_manager, config_service)
 
     stop_event = asyncio.Event()
@@ -710,6 +744,7 @@ async def main() -> None:
         event_bus,
         decision_provider_manager,
         dashboard_server,
+        mcp_service,
     )
 
 
