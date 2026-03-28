@@ -40,6 +40,22 @@
           </el-menu-item>
         </el-sub-menu>
 
+        <!-- 小部件分组 -->
+        <el-sub-menu index="widget-group">
+          <template #title>
+            <el-icon><Grid /></el-icon>
+            <span>小部件</span>
+          </template>
+          <el-menu-item index="/danmaku">
+            <el-icon><ChatLineSquare /></el-icon>
+            <span>弹幕小部件</span>
+          </el-menu-item>
+          <el-menu-item index="/subtitle">
+            <el-icon><ChatDotRound /></el-icon>
+            <span>字幕小部件</span>
+          </el-menu-item>
+        </el-sub-menu>
+
         <el-menu-item index="/devtools">
           <el-icon><Tools /></el-icon>
           <span>开发工具</span>
@@ -67,11 +83,14 @@ import {
   Document,
   Tools,
   Setting,
-  Tickets,
   Cpu,
   TrendCharts,
   Clock,
   ChatLineRound,
+  Tickets,
+  Grid,
+  ChatLineSquare,
+  ChatDotRound,
 } from '@element-plus/icons-vue';
 
 const route = useRoute();

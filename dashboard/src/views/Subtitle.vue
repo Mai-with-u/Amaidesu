@@ -41,7 +41,8 @@ const textStyle = computed(() => ({
   fontSize: `${fontSize.value}px`,
   fontWeight: 'bold',
   color: fontColor.value,
-  textShadow: '-2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 2px 2px 0 #000, 0 0 10px rgba(0,0,0,0.8)',
+  textShadow:
+    '-2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 2px 2px 0 #000, 0 0 10px rgba(0,0,0,0.8)',
   letterSpacing: '2px',
   lineHeight: '1.4',
 }));

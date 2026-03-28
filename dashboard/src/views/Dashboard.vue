@@ -258,14 +258,86 @@
             <p class="quick-link-desc">配置管理，保存后可重启服务</p>
           </div>
         </router-link>
+        <router-link to="/danmaku" target="_blank" class="quick-link-card">
+          <div class="quick-link-icon">
+            <el-icon :size="24"><ChatLineSquare /></el-icon>
+          </div>
+          <div class="quick-link-content">
+            <h4 class="quick-link-title">弹幕小部件</h4>
+            <p class="quick-link-desc">独立的弹幕显示窗口</p>
+          </div>
+        </router-link>
+        <router-link to="/subtitle" target="_blank" class="quick-link-card">
+          <div class="quick-link-icon">
+            <el-icon :size="24"><ChatDotRound /></el-icon>
+          </div>
+          <div class="quick-link-content">
+            <h4 class="quick-link-title">字幕小部件</h4>
+            <p class="quick-link-desc">独立的字幕显示窗口</p>
+          </div>
+        </router-link>
       </div>
+    </section>
+
+    <!-- 小部件信息 -->
+    <section class="widget-info-section">
+      <div class="section-header">
+        <h2 class="section-title">小部件访问地址</h2>
+        <el-button
+          type="primary"
+          size="small"
+          text
+          @click="showWidgetInfo = !showWidgetInfo"
+        >
+          {{ showWidgetInfo ? '收起' : '展开' }}
+          <el-icon :class="{ 'is-rotate': showWidgetInfo }">
+            <ArrowDown />
+          </el-icon>
+        </el-button>
+      </div>
+      <el-collapse-transition>
+        <div v-show="showWidgetInfo" class="widget-urls">
+          <div class="widget-url-card">
+            <div class="widget-url-info">
+              <span class="widget-url-label">弹幕小部件</span>
+              <code class="widget-url-value">{{ baseUrl }}/danmaku</code>
+            </div>
+            <el-button
+              class="copy-btn"
+              type="primary"
+              size="small"
+              text
+              @click="copyUrl(`${baseUrl}/danmaku`)"
+            >
+              <el-icon><CopyDocument /></el-icon>
+              复制
+            </el-button>
+          </div>
+          <div class="widget-url-card">
+            <div class="widget-url-info">
+              <span class="widget-url-label">字幕小部件</span>
+              <code class="widget-url-value">{{ baseUrl }}/subtitle</code>
+            </div>
+            <el-button
+              class="copy-btn"
+              type="primary"
+              size="small"
+              text
+              @click="copyUrl(`${baseUrl}/subtitle`)"
+            >
+              <el-icon><CopyDocument /></el-icon>
+              复制
+            </el-button>
+          </div>
+        </div>
+      </el-collapse-transition>
     </section>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue';
-import { Document, Connection, Tools, Setting } from '@element-plus/icons-vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { Document, Connection, Tools, Setting, ChatLineSquare, ChatDotRound, CopyDocument, ArrowDown } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { useSystemStore, useProvidersStore } from '@/stores';
 import { storeToRefs } from 'pinia';
@@ -281,6 +353,21 @@ const domainLoading = ref<Record<string, 'start' | 'stop' | null>>({
   decision: null,
   output: null,
 });
+
+// Widget info visibility
+const showWidgetInfo = ref(false);
+
+// Base URL for widget links
+const baseUrl = computed(() => window.location.origin);
+
+// Copy widget URL to clipboard
+function copyUrl(url: string) {
+  navigator.clipboard.writeText(url).then(() => {
+    ElMessage.success('URL 已复制到剪贴板');
+  }).catch(() => {
+    ElMessage.error('复制失败');
+  });
+}
 
 // Get providers for a specific domain
 function getDomainProviders(domain: string) {
@@ -757,6 +844,56 @@ onUnmounted(() => {
   font-size: 12px;
   color: var(--text-secondary);
   line-height: 1.4;
+}
+
+/* 小部件信息区域 */
+.widget-info-section {
+  margin-bottom: var(--spacing-lg);
+}
+
+.widget-urls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.widget-url-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-md);
+  background: var(--bg-card);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color-light);
+}
+
+.widget-url-info {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+}
+
+.widget-url-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.widget-url-value {
+  font-size: 13px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+}
+
+.copy-btn {
+  flex-shrink: 0;
+}
+
+.is-rotate {
+  transform: rotate(180deg);
 }
 
 /* Utility Classes */
