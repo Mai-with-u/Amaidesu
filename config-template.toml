@@ -385,4 +385,4 @@ enable_validation = false
 [mcp]
 enabled = false
 host = "127.0.0.1"
-port = 80214
+port = 8021

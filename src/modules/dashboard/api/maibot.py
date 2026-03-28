@@ -8,14 +8,14 @@ import time
 import uuid
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
+from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.dashboard.schemas.maibot import MaibotActionRequest, MaibotActionResponse
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.decision import IntentPayload
 from src.modules.logging import get_logger
 from src.modules.types.intent import Intent, IntentMetadata
-
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
@@ -27,7 +27,7 @@ logger = get_logger("MaibotAPI")
 @router.post("/action", response_model=MaibotActionResponse)
 async def handle_maibot_action(
     request: MaibotActionRequest,
-    server: "DashboardServer",
+    server: "DashboardServer" = Depends(get_dashboard_server),  # noqa: B008
 ) -> MaibotActionResponse:
     event_bus = server.event_bus
     if not event_bus:

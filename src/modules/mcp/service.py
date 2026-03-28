@@ -86,11 +86,12 @@ class MCPServerService:
             return await self._send_intent_internal(action, emotion, speech, context, priority)
 
         host = config.get("host", "127.0.0.1")
-        port = config.get("port", 80214)
+        port = config.get("port", 8021)
 
-        self.logger.info(f"启动 MCP 服务器: {host}:{port}")
+        self.logger.info(f"启动 MCP 服务器: {host}:{port} (stateless_http=True)")
+
         self._server_task = asyncio.create_task(
-            self._mcp.run_http_async(transport="streamable-http", host=host, port=port)
+            self._mcp.run_async(transport="http", host=host, port=port, stateless_http=True)
         )
 
         self._initialized = True
@@ -106,7 +107,9 @@ class MCPServerService:
         if self._server_task:
             self._server_task.cancel()
             try:
-                await self._server_task
+                await asyncio.wait_for(self._server_task, timeout=5.0)
+            except asyncio.TimeoutError:
+                self.logger.warning("MCP 服务器关闭超时，强制取消")
             except asyncio.CancelledError:
                 pass
 

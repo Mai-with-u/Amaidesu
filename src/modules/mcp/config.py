@@ -12,4 +12,4 @@ class MCPServerConfig(BaseModel):
 
     enabled: bool = Field(default=False, description="是否启用 MCP 服务")
     host: str = Field(default="127.0.0.1", description="MCP 服务监听地址")
-    port: int = Field(default=80214, description="MCP 服务监听端口")
+    port: int = Field(default=8021, description="MCP 服务监听端口（有效范围：1024-65535）")
