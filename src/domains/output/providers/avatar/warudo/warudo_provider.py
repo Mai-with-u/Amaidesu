@@ -287,7 +287,7 @@ class WarudoOutputProvider(AvatarProviderBase):
             return
 
         try:
-            message = {"type": "expression", "data": {param_name: param_value}}
+            message = {"action": param_name, "data": param_value}
             # 使用 send_json（如果可用）或 send
             if hasattr(self.websocket, "send_json"):
                 await self.websocket.send_json(message)
@@ -309,7 +309,7 @@ class WarudoOutputProvider(AvatarProviderBase):
             return
 
         try:
-            message = {"type": "hotkey", "data": {"id": hotkey_id}}
+            message = {"action": hotkey_id, "data": ""}
             # 使用 send_json（如果可用）或 send
             if hasattr(self.websocket, "send_json"):
                 await self.websocket.send_json(message)
