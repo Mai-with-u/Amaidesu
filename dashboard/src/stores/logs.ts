@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { ref, computed } from 'vue';
+import { ref, computed, shallowRef } from 'vue';
 import { useWebSocketStore } from './websocket';
 import type { WebSocketMessage } from '@/types';
 
@@ -11,26 +11,34 @@ export interface LogEntry {
 }
 
 export const useLogsStore = defineStore('logs', () => {
-  const logs = ref<LogEntry[]>([]);
+  const logs = shallowRef<LogEntry[]>([]);
   const isPaused = ref(false);
   const maxLogs = 500;
 
-  // 动态收集所有出现过的模块名
+  let cachedModules: string[] = [];
+  let logsCacheVersion = 0;
+  let modulesCacheVersion = -1;
+
   const availableModules = computed(() => {
-    const modules = new Set<string>();
-    logs.value.forEach(log => modules.add(log.module));
-    return Array.from(modules).sort();
+    if (modulesCacheVersion !== logsCacheVersion) {
+      const modules = new Set<string>();
+      logs.value.forEach(log => modules.add(log.module));
+      cachedModules = Array.from(modules).sort();
+      modulesCacheVersion = logsCacheVersion;
+    }
+    return cachedModules;
   });
 
   function handleLog(message: WebSocketMessage) {
     if (isPaused.value) return;
-    // 只处理日志类型消息
     if (message.type === 'log.entry' && message.data) {
       const logEntry = message.data as unknown as LogEntry;
-      logs.value.push(logEntry);
-      if (logs.value.length > maxLogs) {
-        logs.value.shift();
+      const newLogs = [...logs.value, logEntry];
+      if (newLogs.length > maxLogs) {
+        newLogs.splice(0, newLogs.length - maxLogs);
       }
+      logsCacheVersion++;
+      logs.value = newLogs;
     }
   }
 

@@ -1,18 +1,18 @@
 import { defineStore } from 'pinia';
-import { ref } from 'vue';
+import { shallowRef } from 'vue';
 import { useWebSocketStore } from './websocket';
 import type { WebSocketMessage } from '@/types';
 
 export const useEventsStore = defineStore('events', () => {
-  const events = ref<WebSocketMessage[]>([]);
+  const events = shallowRef<WebSocketMessage[]>([]);
   const maxEvents = 100;
 
   function handleEvent(message: WebSocketMessage) {
-    // 添加到事件列表（保留最近的 N 个事件）
-    events.value.push(message);
-    if (events.value.length > maxEvents) {
-      events.value.shift();
+    const newEvents = [...events.value, message];
+    if (newEvents.length > maxEvents) {
+      newEvents.splice(0, newEvents.length - maxEvents);
     }
+    events.value = newEvents;
   }
 
   function connect() {

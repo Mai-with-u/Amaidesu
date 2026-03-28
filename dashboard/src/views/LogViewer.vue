@@ -110,11 +110,11 @@
 
         <div v-else class="logs-container">
           <div
-            v-for="(log, index) in filteredLogs"
-            :key="index"
+            v-for="log in visibleLogs"
+            :key="log.timestamp + log.message"
             class="log-row"
             :class="`log-level-${log.level.toLowerCase()}`"
-            @click="toggleLogExpand(index)"
+            @click="toggleLogExpand(log.timestamp + log.message)"
           >
             <span class="log-time mono">{{ formatTime(log.timestamp) }}</span>
             <span class="log-level" :class="`level-${log.level.toLowerCase()}`">
@@ -122,11 +122,13 @@
             </span>
             <span class="log-module">{{ log.module }}</span>
             <div class="log-message-wrapper">
-              <pre class="log-message" :class="{ expanded: expandedLogs.has(index) }">{{
-                log.message
-              }}</pre>
+              <pre
+                class="log-message"
+                :class="{ expanded: expandedLogs.has(log.timestamp + log.message) }"
+                >{{ log.message }}</pre
+              >
               <span v-if="shouldShowExpand(log.message)" class="expand-hint">
-                {{ expandedLogs.has(index) ? '点击收起' : '点击展开' }}
+                {{ expandedLogs.has(log.timestamp + log.message) ? '点击收起' : '点击展开' }}
               </span>
             </div>
           </div>
@@ -164,7 +166,7 @@ const logListRef = ref<HTMLElement | null>(null);
 const searchQuery = ref('');
 const selectedLevels = ref<string[]>([]);
 const selectedModules = ref<string[]>([]);
-const expandedLogs = ref<Set<number>>(new Set());
+const expandedLogs = ref<Set<string>>(new Set());
 const isRealtimeScroll = ref(true);
 
 // 动态图标
@@ -202,15 +204,21 @@ const filteredLogs = computed(() => {
   if (searchQuery.value.trim()) {
     const query = searchQuery.value.toLowerCase();
     result = result.filter(log => {
-      // 搜索日志内容
       if (log.message.toLowerCase().includes(query)) return true;
-      // 搜索模块名
       if (log.module.toLowerCase().includes(query)) return true;
       return false;
     });
   }
 
   return result;
+});
+
+// 仅用于渲染的日志列表（限制数量以避免 DOM 过多）
+const MAX_VISIBLE_LOGS = 100;
+const visibleLogs = computed(() => {
+  const list = filteredLogs.value;
+  if (list.length <= MAX_VISIBLE_LOGS) return list;
+  return list.slice(list.length - MAX_VISIBLE_LOGS);
 });
 
 // 切换滚动模式
@@ -258,11 +266,11 @@ function shouldShowExpand(message: string): boolean {
 }
 
 // 切换日志展开状态
-function toggleLogExpand(index: number) {
-  if (expandedLogs.value.has(index)) {
-    expandedLogs.value.delete(index);
+function toggleLogExpand(key: string) {
+  if (expandedLogs.value.has(key)) {
+    expandedLogs.value.delete(key);
   } else {
-    expandedLogs.value.add(index);
+    expandedLogs.value.add(key);
   }
   expandedLogs.value = new Set(expandedLogs.value);
 }

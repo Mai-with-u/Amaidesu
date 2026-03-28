@@ -81,21 +81,23 @@
 
         <div v-else class="events-container">
           <div
-            v-for="(event, index) in filteredEvents"
-            :key="index"
+            v-for="event in visibleEvents"
+            :key="event.timestamp + event.type"
             class="event-row"
-            @click="toggleEventExpand(index)"
+            @click="toggleEventExpand(event.timestamp + event.type)"
           >
             <span class="event-time mono">{{ formatTime(event.timestamp) }}</span>
             <span class="event-type" :class="getEventClass(event.type)">{{ event.type }}</span>
             <div class="event-data-wrapper">
               <pre
                 class="event-data"
-                :class="{ expanded: expandedEvents.has(index) }"
-                v-html="formatEventDataHtml(event.data, expandedEvents.has(index))"
+                :class="{ expanded: expandedEvents.has(event.timestamp + event.type) }"
+                v-html="
+                  formatEventDataHtml(event.data, expandedEvents.has(event.timestamp + event.type))
+                "
               ></pre>
               <span v-if="shouldShowExpand(event.data)" class="expand-hint">
-                {{ expandedEvents.has(index) ? '点击收起' : '点击展开' }}
+                {{ expandedEvents.has(event.timestamp + event.type) ? '点击收起' : '点击展开' }}
               </span>
             </div>
           </div>
@@ -130,7 +132,7 @@ const isPaused = ref(false);
 const searchQuery = ref('');
 const selectedTypes = ref<string[]>([]);
 const showHiddenEvents = ref(false);
-const expandedEvents = ref<Set<number>>(new Set());
+const expandedEvents = ref<Set<string>>(new Set());
 
 // 默认隐藏的事件类型（系统噪音）
 const HIDDEN_EVENT_TYPES = ['system.heartbeat', 'heartbeat', 'ping', 'pong', 'log.entry'];
@@ -179,6 +181,13 @@ const filteredEvents = computed(() => {
   }
 
   return result;
+});
+
+const MAX_VISIBLE_EVENTS = 100;
+const visibleEvents = computed(() => {
+  const list = filteredEvents.value;
+  if (list.length <= MAX_VISIBLE_EVENTS) return list;
+  return list.slice(list.length - MAX_VISIBLE_EVENTS);
 });
 
 // 判断是否为隐藏的系统事件
@@ -235,11 +244,11 @@ function shouldShowExpand(data: Record<string, unknown>): boolean {
 }
 
 // 切换事件展开状态
-function toggleEventExpand(index: number) {
-  if (expandedEvents.value.has(index)) {
-    expandedEvents.value.delete(index);
+function toggleEventExpand(key: string) {
+  if (expandedEvents.value.has(key)) {
+    expandedEvents.value.delete(key);
   } else {
-    expandedEvents.value.add(index);
+    expandedEvents.value.add(key);
   }
   expandedEvents.value = new Set(expandedEvents.value);
 }
