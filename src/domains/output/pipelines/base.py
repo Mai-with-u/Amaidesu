@@ -109,8 +109,9 @@ class OutputPipelineBase(ABC):
     error_handling: PipelineErrorHandling = PipelineErrorHandling.CONTINUE
     timeout_seconds: float = 5.0
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], context: Optional["OutputPipelineContext"] = None):
         self.config = config
+        self.context = context
         self.logger = get_logger(self.__class__.__name__)
         self._stats = PipelineStats()
 
