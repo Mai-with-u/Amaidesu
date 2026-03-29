@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from src.modules.logging import get_logger
 
-from .base import OutputPipeline, PipelineErrorHandling, PipelineException
+from .base import OutputPipeline, OutputPipelineContext, PipelineErrorHandling, PipelineException
 
 # 类型检查时的导入
 if TYPE_CHECKING:
@@ -37,10 +37,11 @@ class OutputPipelineManager:
         - 功能: 敏感词过滤、Intent 验证、Intent 转换等
     """
 
-    def __init__(self):
+    def __init__(self, context: Optional[OutputPipelineContext] = None):
         self._pipelines: List[OutputPipeline] = []
         self._pipelines_sorted: bool = True
         self._pipeline_lock = asyncio.Lock()
+        self.context = context
         self.logger = get_logger("OutputPipelineManager")
 
     def register_pipeline(self, pipeline: OutputPipeline) -> None:

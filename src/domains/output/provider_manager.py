@@ -27,6 +27,8 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from pydantic import BaseModel
 
+from src.domains.output.capability_registry import OutputCapabilityRegistry
+from src.domains.output.pipelines.base import OutputPipelineContext
 from src.domains.output.pipelines.manager import OutputPipelineManager
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -106,6 +108,10 @@ class OutputProviderManager:
         self._prompt_service = prompt_manager
         self._audio_device_service = audio_device_manager
 
+        # 能力注册表
+        self.capability_registry = OutputCapabilityRegistry()
+        self.logger.debug("OutputCapabilityRegistry 已创建")
+
         # 是否并发渲染（默认True）
         self.concurrent_rendering = self.config.get("concurrent_rendering", True)
 
@@ -164,8 +170,16 @@ class OutputProviderManager:
         self._prompt_service = prompt_manager or self._prompt_service
         self._audio_device_service = audio_device_manager or self._audio_device_service
 
+        # 创建输出Pipeline上下文
+        pipeline_context = OutputPipelineContext(
+            capability_registry=self.capability_registry,
+            llm_service=self._llm_service,
+            prompt_service=self._prompt_service,
+        )
+        self.logger.debug("OutputPipelineContext 已创建")
+
         # 创建输出Pipeline管理器
-        self.pipeline_manager = OutputPipelineManager()
+        self.pipeline_manager = OutputPipelineManager(context=pipeline_context)
         self.logger.info("输出Pipeline管理器已创建")
 
         # 从配置加载输出Pipeline
@@ -514,6 +528,7 @@ class OutputProviderManager:
                 llm_service=self._llm_service,
                 prompt_service=self._prompt_service,
                 audio_device_service=self._audio_device_service,
+                capability_registry=self.capability_registry,
             )
 
             # 使用 ProviderRegistry 创建 Provider 实例（传入 context）

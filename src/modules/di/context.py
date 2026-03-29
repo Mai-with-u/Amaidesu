@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
     from src.modules.streaming.audio_stream_channel import AudioStreamChannel
     from src.modules.config.service import ConfigService
+    from src.domains.output.capability_registry import OutputCapabilityRegistry
 
 
 @dataclass(frozen=True)
@@ -39,3 +40,6 @@ class ProviderContext:
 
     # 上下文服务
     context_service: Optional["ContextService"] = None
+
+    # 能力注册表
+    capability_registry: Optional["OutputCapabilityRegistry"] = None
