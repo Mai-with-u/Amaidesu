@@ -2,10 +2,12 @@
 ProfanityFilterPipeline 测试
 """
 
+import time
+
 import pytest
 
 from src.domains.output.pipelines.profanity_filter.pipeline import ProfanityFilterPipeline
-from src.modules.types import Intent
+from src.modules.types import Intent, IntentMetadata
 
 
 @pytest.mark.asyncio
@@ -23,15 +25,16 @@ async def test_profanity_filter_basic():
     pipeline = ProfanityFilterPipeline(config)
 
     intent = Intent(
-        original_text="用户输入",
-        response_text="This is a badword example",
+        metadata=IntentMetadata(source_id="test", decision_time=int(time.time() * 1000)),
+        speech="This is a badword example",
     )
 
     result = await pipeline.process(intent)
 
     assert result is not None
-    assert "badword" not in result.response_text
-    assert "***" in result.response_text
+    assert result.speech is not None
+    assert "badword" not in result.speech
+    assert "***" in result.speech
 
 
 @pytest.mark.asyncio
@@ -49,16 +52,17 @@ async def test_profanity_filter_chinese():
     pipeline = ProfanityFilterPipeline(config)
 
     intent = Intent(
-        original_text="用户输入",
-        response_text="这是一段包含脏话和敏感词的文本",
+        metadata=IntentMetadata(source_id="test", decision_time=int(time.time() * 1000)),
+        speech="这是一段包含脏话和敏感词的文本",
     )
 
     result = await pipeline.process(intent)
 
     assert result is not None
-    assert "脏话" not in result.response_text
-    assert "敏感词" not in result.response_text
-    assert "【已过滤】" in result.response_text
+    assert result.speech is not None
+    assert "脏话" not in result.speech
+    assert "敏感词" not in result.speech
+    assert "【已过滤】" in result.speech
 
 
 @pytest.mark.asyncio
@@ -76,8 +80,8 @@ async def test_profanity_filter_drop_on_match():
     pipeline = ProfanityFilterPipeline(config)
 
     intent = Intent(
-        original_text="用户输入",
-        response_text="This message is blocked",
+        metadata=IntentMetadata(source_id="test", decision_time=int(time.time() * 1000)),
+        speech="This message is blocked",
     )
 
     result = await pipeline.process(intent)
@@ -100,16 +104,17 @@ async def test_profanity_filter_case_insensitive():
     pipeline = ProfanityFilterPipeline(config)
 
     intent = Intent(
-        original_text="用户输入",
-        response_text="This has BADWORD and BadWord",
+        metadata=IntentMetadata(source_id="test", decision_time=int(time.time() * 1000)),
+        speech="This has BADWORD and BadWord",
     )
 
     result = await pipeline.process(intent)
 
     assert result is not None
-    assert "BADWORD" not in result.response_text
-    assert "BadWord" not in result.response_text
-    assert result.response_text.count("***") == 2
+    assert result.speech is not None
+    assert "BADWORD" not in result.speech
+    assert "BadWord" not in result.speech
+    assert result.speech.count("***") == 2
 
 
 @pytest.mark.asyncio
@@ -127,15 +132,16 @@ async def test_profanity_filter_case_sensitive():
     pipeline = ProfanityFilterPipeline(config)
 
     intent = Intent(
-        original_text="用户输入",
-        response_text="This has BADWORD and badword",
+        metadata=IntentMetadata(source_id="test", decision_time=int(time.time() * 1000)),
+        speech="This has BADWORD and badword",
     )
 
     result = await pipeline.process(intent)
 
     assert result is not None
-    assert "BADWORD" in result.response_text  # 大写版本不受影响
-    assert "badword" not in result.response_text  # 只过滤小写版本
+    assert result.speech is not None
+    assert "BADWORD" in result.speech  # 大写版本不受影响
+    assert "badword" not in result.speech  # 只过滤小写版本
 
 
 @pytest.mark.asyncio
@@ -154,11 +160,11 @@ async def test_profanity_filter_no_match():
 
     original_text = "这是一段正常的文本"
     intent = Intent(
-        original_text="用户输入",
-        response_text=original_text,
+        metadata=IntentMetadata(source_id="test", decision_time=int(time.time() * 1000)),
+        speech=original_text,
     )
 
     result = await pipeline.process(intent)
 
     assert result is not None
-    assert result.response_text == original_text
+    assert result.speech == original_text

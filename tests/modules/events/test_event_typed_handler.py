@@ -8,6 +8,7 @@
 """
 
 import asyncio
+import time
 
 import pytest
 from pydantic import BaseModel, Field
@@ -126,10 +127,15 @@ class TestTypedEventHandler:
         # 发布事件（传入 IntentPayload 对象）
         payload = IntentPayload(
             intent_data={
-                "original_text": "你好",
-                "response_text": "你好！",
                 "emotion": "happy",
-                "actions": [],
+                "action": None,
+                "speech": "你好！",
+                "context": "你好",
+                "metadata": {
+                    "source_id": "test_source",
+                    "decision_time": int(time.time() * 1000),
+                },
+                "structured_params": {},
             },
             provider="test_provider",
         )
@@ -140,8 +146,8 @@ class TestTypedEventHandler:
 
         # 验证处理器接收到类型化对象并成功转换
         assert len(received_intents) == 1
-        assert received_intents[0].original_text == "你好"
-        assert received_intents[0].response_text == "你好！"
+        assert received_intents[0].context == "你好"
+        assert received_intents[0].speech == "你好！"
 
     @pytest.mark.asyncio
     async def test_on_priority(self):

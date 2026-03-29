@@ -51,7 +51,7 @@ def create_message(text: str, user_id: str = "test_user", group_id: str = "test_
         text=text,
         source="test",
         raw=raw,
-        metadata={"group_id": group_id},
+        user_id=user_id,
     )
 
 

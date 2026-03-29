@@ -26,6 +26,7 @@ def create_message(text: str, user_id: str = "test_user", source: str = "test_so
         source=source,
         data_type="text",
         raw=MockRaw(),
+        user_id=user_id,
     )
 
 

@@ -5,15 +5,34 @@
 """
 
 import asyncio
+import time
 
 import pytest
 
-from src.modules.types import Intent
+from src.modules.types import Intent, IntentMetadata
 from src.domains.output.pipelines.base import (
     OutputPipelineBase,
     PipelineException,
 )
 from src.domains.output.pipelines.manager import OutputPipelineManager
+
+
+# =============================================================================
+# 测试用辅助函数
+# =============================================================================
+
+
+def make_intent(text: str) -> Intent:
+    """创建测试用 Intent"""
+    return Intent(
+        metadata=IntentMetadata(
+            source_id="test",
+            decision_time=int(time.time() * 1000),
+        ),
+        speech=text,
+        emotion="neutral",
+    )
+
 
 # =============================================================================
 # 测试用 Pipeline
@@ -31,7 +50,7 @@ class ModifyingPipeline(OutputPipelineBase):
     """修改 Pipeline"""
 
     async def _process(self, params):
-        params.response_text += " [已修改]"
+        params.speech = (params.speech or "") + " [已修改]"
         return params
 
 
@@ -110,7 +129,7 @@ async def test_process_no_pipelines():
     """测试没有 Pipeline 时直接返回"""
     manager = OutputPipelineManager()
 
-    params = Intent(original_text="测试", response_text="测试")
+    params = make_intent("测试")
     result = await manager.process(params)
 
     assert result == params
@@ -123,11 +142,11 @@ async def test_process_single_pipeline():
     pipeline = PassThroughPipeline(config={})
     manager.register_pipeline(pipeline)
 
-    params = Intent(original_text="测试", response_text="测试")
+    params = make_intent("测试")
     result = await manager.process(params)
 
     assert result is not None
-    assert result.response_text == "测试"
+    assert result.speech == "测试"
 
 
 @pytest.mark.asyncio
@@ -141,11 +160,11 @@ async def test_process_multiple_pipelines():
     manager.register_pipeline(pipeline1)
     manager.register_pipeline(pipeline2)
 
-    params = Intent(original_text="测试", response_text="测试")
+    params = make_intent("测试")
     result = await manager.process(params)
 
     # 应该被修改两次（顺序根据优先级）
-    assert result.response_text.endswith(" [已修改] [已修改]")
+    assert result.speech.endswith(" [已修改] [已修改]")
 
 
 @pytest.mark.asyncio
@@ -156,11 +175,11 @@ async def test_process_disabled_pipeline():
     pipeline = ModifyingPipeline(config={"enabled": False})
     manager.register_pipeline(pipeline)
 
-    params = Intent(original_text="测试", response_text="测试")
+    params = make_intent("测试")
     result = await manager.process(params)
 
     # 不应该被修改
-    assert result.response_text == "测试"
+    assert result.speech == "测试"
 
 
 @pytest.mark.asyncio
@@ -176,7 +195,7 @@ async def test_process_dropping_pipeline():
     manager.register_pipeline(pipeline2)
     manager.register_pipeline(pipeline3)
 
-    params = Intent(original_text="测试", response_text="测试")
+    params = make_intent("测试")
     result = await manager.process(params)
 
     # pipeline2 丢弃后，后续 pipeline 不执行
@@ -223,12 +242,12 @@ async def test_process_continue_on_error():
     manager.register_pipeline(pipeline2)
     manager.register_pipeline(pipeline3)
 
-    params = Intent(original_text="测试", response_text="测试")
+    params = make_intent("测试")
     result = await manager.process(params)
 
     # pipeline2 失败但继续执行 pipeline3
     assert result is not None
-    assert result.response_text.endswith(" [已修改]")
+    assert result.speech.endswith(" [已修改]")
 
 
 @pytest.mark.asyncio
@@ -244,7 +263,7 @@ async def test_process_stop_on_error():
     manager.register_pipeline(pipeline2)
     manager.register_pipeline(pipeline3)
 
-    params = Intent(original_text="测试", response_text="测试")
+    params = make_intent("测试")
 
     with pytest.raises(PipelineException):
         await manager.process(params)
@@ -263,7 +282,7 @@ async def test_process_drop_on_error():
     manager.register_pipeline(pipeline2)
     manager.register_pipeline(pipeline3)
 
-    params = Intent(original_text="测试", response_text="测试")
+    params = make_intent("测试")
     result = await manager.process(params)
 
     # pipeline2 失败后丢弃
@@ -279,7 +298,7 @@ async def test_process_timeout():
     pipeline = SlowPipeline(config={"timeout_seconds": 0.1, "error_handling": "stop"})
     manager.register_pipeline(pipeline)
 
-    params = Intent(original_text="测试", response_text="测试")
+    params = make_intent("测试")
 
     with pytest.raises(PipelineException, match="超时"):
         await manager.process(params)
@@ -302,7 +321,7 @@ async def test_get_pipeline_stats():
     manager.register_pipeline(pipeline2)
 
     # 处理一些数据
-    params = Intent(original_text="测试", response_text="测试")
+    params = make_intent("测试")
     await manager.process(params)
 
     stats = manager.get_pipeline_stats()
@@ -331,7 +350,7 @@ async def test_concurrent_processing():
     # 并发处理多个参数
     tasks = []
     for i in range(10):
-        params = Intent(original_text=f"测试{i}", response_text=f"测试{i}")
+        params = make_intent(f"测试{i}")
         task = manager.process(params)
         tasks.append(task)
 

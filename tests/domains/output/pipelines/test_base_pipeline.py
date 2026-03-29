@@ -11,7 +11,7 @@ from src.domains.output.pipelines.base import (
     PipelineErrorHandling,
     PipelineException,
 )
-from src.modules.types import ActionType, EmotionType, Intent, IntentAction
+from src.modules.types import Intent, IntentMetadata
 
 # =============================================================================
 # 测试用 Pipeline
@@ -21,10 +21,12 @@ from src.modules.types import ActionType, EmotionType, Intent, IntentAction
 def create_test_intent(response_text: str = "测试响应") -> Intent:
     """创建测试用的 Intent"""
     return Intent(
-        original_text="测试输入",
-        response_text=response_text,
-        actions=[IntentAction(type=ActionType.NONE)],
-        emotion=EmotionType.NEUTRAL,
+        metadata=IntentMetadata(
+            source_id="test_source",
+            decision_time=0,
+        ),
+        emotion="neutral",
+        speech=response_text,
     )
 
 
@@ -41,7 +43,7 @@ class ModifyingTestPipeline(OutputPipelineBase):
 
     async def _process(self, intent: Intent):
         """修改响应文本"""
-        intent.response_text = intent.response_text + " [已修改]"
+        intent.speech = (intent.speech or "") + " [已修改]"
         return intent
 
 
@@ -118,7 +120,7 @@ async def test_process_success():
     result = await pipeline.process(intent)
 
     assert result is not None
-    assert result.response_text == "测试消息"
+    assert result.speech == "测试消息"
 
 
 @pytest.mark.asyncio
@@ -130,7 +132,7 @@ async def test_process_modification():
     result = await pipeline.process(intent)
 
     assert result is not None
-    assert result.response_text == "测试消息 [已修改]"
+    assert result.speech == "测试消息 [已修改]"
 
 
 @pytest.mark.asyncio
@@ -374,7 +376,7 @@ async def test_process_large_intent():
     result = await pipeline.process(intent)
 
     assert result is not None
-    assert result.response_text == long_text
+    assert result.speech == long_text
 
 
 if __name__ == "__main__":

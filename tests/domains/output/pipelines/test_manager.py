@@ -2,9 +2,11 @@
 测试 OutputPipeline 接口和基类
 """
 
+import time
+
 import pytest
 
-from src.modules.types import Intent
+from src.modules.types import Intent, IntentMetadata
 from src.domains.output.pipelines import (
     OutputPipelineBase,
     OutputPipelineManager,
@@ -14,20 +16,27 @@ from src.domains.output.pipelines import (
 )
 
 
+def _make_test_intent(speech: str = "Hello") -> Intent:
+    """创建测试用 Intent"""
+    return Intent(
+        metadata=IntentMetadata(source_id="test", decision_time=int(time.time() * 1000)),
+        speech=speech,
+        emotion="neutral",
+    )
+
+
 class DummyOutputPipeline(OutputPipelineBase):
     """测试用的 OutputPipeline"""
 
-    async def _process(self, params: Intent):
-        # 简单处理：添加元数据
-        params.metadata["processed"] = True
-        return params
+    async def _process(self, intent: Intent):
+        intent.metadata.extra["processed"] = True
+        return intent
 
 
 class DropOutputPipeline(OutputPipelineBase):
     """测试用的丢弃 Pipeline"""
 
-    async def _process(self, params: Intent):
-        # 丢弃所有输出
+    async def _process(self, intent: Intent):
         return None
 
 
@@ -37,12 +46,12 @@ async def test_output_pipeline_base():
     pipeline = DummyOutputPipeline(config={})
 
     # 测试 process 方法
-    params = Intent(original_text="Hello", response_text="Hello")
+    params = _make_test_intent()
     result = await pipeline.process(params)
 
     assert result is not None
-    assert result.metadata.get("processed") is True
-    assert result.response_text == "Hello"
+    assert result.metadata.extra.get("processed") is True
+    assert result.speech == "Hello"
 
     # 测试统计信息
     stats = pipeline.get_stats()
@@ -56,7 +65,7 @@ async def test_output_pipeline_drop():
     """测试 OutputPipeline 丢弃功能"""
     pipeline = DropOutputPipeline(config={})
 
-    params = Intent(original_text="Hello", response_text="Hello")
+    params = _make_test_intent()
     result = await pipeline.process(params)
 
     assert result is None
@@ -78,11 +87,11 @@ async def test_output_pipeline_manager():
     manager.register_pipeline(pipeline2)
 
     # 测试处理
-    params = Intent(original_text="Hello", response_text="Hello")
+    params = _make_test_intent()
     result = await manager.process(params)
 
     assert result is not None
-    assert result.response_text == "Hello"
+    assert result.speech == "Hello"
     # 两个管道都应该处理过（都添加了 metadata）
     # 但因为同名 key，最后只会有一个 True
 
@@ -99,7 +108,7 @@ async def test_output_pipeline_manager_with_drop():
     manager.register_pipeline(dummy_pipeline)
 
     # 测试处理
-    params = Intent(original_text="Hello", response_text="Hello")
+    params = _make_test_intent()
     result = await manager.process(params)
 
     # 第一个管道丢弃，返回 None
@@ -120,7 +129,7 @@ async def test_output_pipeline_disabled():
     manager.register_pipeline(pipeline)
 
     # 测试处理
-    params = Intent(original_text="Hello", response_text="Hello")
+    params = _make_test_intent()
     result = await manager.process(params)
 
     assert result is not None
@@ -136,19 +145,19 @@ async def test_output_pipeline_priority():
 
     # 创建不同的 Pipeline 类来测试优先级
     class PriorityPipeline1(OutputPipelineBase):
-        async def _process(self, params):
-            params.metadata["priority_1"] = True
-            return params
+        async def _process(self, intent):
+            intent.metadata.extra["priority_1"] = True
+            return intent
 
     class PriorityPipeline2(OutputPipelineBase):
-        async def _process(self, params):
-            params.metadata["priority_2"] = True
-            return params
+        async def _process(self, intent):
+            intent.metadata.extra["priority_2"] = True
+            return intent
 
     class PriorityPipeline3(OutputPipelineBase):
-        async def _process(self, params):
-            params.metadata["priority_3"] = True
-            return params
+        async def _process(self, intent):
+            intent.metadata.extra["priority_3"] = True
+            return intent
 
     # 注册不同优先级的管道
     pipeline1 = PriorityPipeline1(config={"priority": 300})
@@ -170,14 +179,14 @@ async def test_output_pipeline_priority():
     assert stats["PriorityPipeline3"]["priority"] == 200
 
     # 测试处理顺序：priority 100 -> 200 -> 300
-    params = Intent(original_text="Hello", response_text="Hello")
+    params = _make_test_intent()
     result = await manager.process(params)
 
     assert result is not None
     # 所有管道都应该执行
-    assert result.metadata.get("priority_1") is True
-    assert result.metadata.get("priority_2") is True
-    assert result.metadata.get("priority_3") is True
+    assert result.metadata.extra.get("priority_1") is True
+    assert result.metadata.extra.get("priority_2") is True
+    assert result.metadata.extra.get("priority_3") is True
 
 
 def test_pipeline_stats():

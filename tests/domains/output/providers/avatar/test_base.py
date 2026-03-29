@@ -6,10 +6,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.modules.di.context import ProviderContext
-from src.modules.types import Intent, SourceContext
+from src.modules.types import Intent, IntentMetadata
 from src.domains.output.providers.avatar.base import AvatarProviderBase
 from src.modules.events.payloads.decision import IntentPayload
-from src.modules.types import ActionType, EmotionType, IntentAction
 
 
 @pytest.fixture
@@ -32,19 +31,15 @@ def mock_provider_context(mock_event_bus):
 @pytest.fixture
 def sample_intent():
     return Intent(
-        original_text="你好",
-        response_text="你好！很高兴见到你~",
-        emotion=EmotionType.HAPPY,
-        actions=[
-            IntentAction(type=ActionType.EXPRESSION, params={"smile": 0.8}),
-            IntentAction(type=ActionType.HOTKEY, params={"hotkey": "wave"}),
-        ],
-        source_context=SourceContext(
-            source="console_input",
-            data_type="text",
-            user_id="test_user",
-            user_nickname="测试用户",
+        emotion="happy",
+        action="微笑并挥手",
+        speech="你好！很高兴见到你~",
+        context=None,
+        metadata=IntentMetadata(
+            source_id="test_source",
+            decision_time=1234567890123,
         ),
+        structured_params={},
     )
 
 
@@ -61,9 +56,9 @@ class MockAvatarProvider(AvatarProviderBase):
         self.connect_calls = []
         self.disconnect_calls = []
 
-    def _adapt_intent(self, intent: Intent) -> Dict[str, Any]:
+    async def _adapt_intent(self, intent: Intent) -> Dict[str, Any]:
         self.adapt_intent_calls.append(intent)
-        return {"emotion": intent.emotion.value, "actions": len(intent.actions), "response": intent.response_text}
+        return {"emotion": intent.emotion, "action": intent.action, "response": intent.speech}
 
     async def _render_to_platform(self, params: Any) -> None:
         self.render_to_platform_calls.append(params)
@@ -81,7 +76,7 @@ class IncompleteAvatarProvider(AvatarProviderBase):
     def __init__(self, config: Dict[str, Any], context: ProviderContext):
         super().__init__(config, context)
 
-    def _adapt_intent(self, intent: Intent) -> Dict[str, Any]:
+    async def _adapt_intent(self, intent: Intent) -> Dict[str, Any]:
         return {"test": "data"}
 
     async def _connect(self) -> None:
@@ -181,7 +176,7 @@ class TestAvatarProviderBaseIntentProcessing:
     @pytest.mark.asyncio
     async def test_on_intent_handles_adaptation_errors(self, mock_provider_context, sample_intent_payload):
         class ErrorAdaptProvider(MockAvatarProvider):
-            def _adapt_intent(self, intent: Intent) -> Dict[str, Any]:
+            async def _adapt_intent(self, intent: Intent) -> Dict[str, Any]:
                 raise ValueError("适配失败测试")
 
         provider = ErrorAdaptProvider({}, mock_provider_context)

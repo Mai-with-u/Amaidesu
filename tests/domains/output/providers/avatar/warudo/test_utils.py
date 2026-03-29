@@ -6,7 +6,6 @@ import pytest
 
 from src.domains.output.providers.avatar.warudo.utils import IntentEmotionAdapter
 from src.domains.output.providers.avatar.warudo.warudo_sender import ActionSender
-from src.modules.types import EmotionType
 
 
 class TestIntentEmotionAdapter:
@@ -14,58 +13,58 @@ class TestIntentEmotionAdapter:
 
     def test_adapt_neutral_emotion(self):
         """测试适配中性情绪"""
-        result = IntentEmotionAdapter.adapt(EmotionType.NEUTRAL)
+        result = IntentEmotionAdapter.adapt("neutral")
         assert result == {"joy": 5, "anger": 1, "sorrow": 1, "fear": 1}
 
     def test_adapt_happy_emotion(self):
         """测试适配快乐情绪"""
-        result = IntentEmotionAdapter.adapt(EmotionType.HAPPY)
+        result = IntentEmotionAdapter.adapt("happy")
         assert result == {"joy": 7, "anger": 1, "sorrow": 1, "fear": 1}
 
     def test_adapt_sad_emotion(self):
         """测试适配悲伤情绪"""
-        result = IntentEmotionAdapter.adapt(EmotionType.SAD)
+        result = IntentEmotionAdapter.adapt("sad")
         assert result == {"joy": 1, "anger": 1, "sorrow": 7, "fear": 1}
 
     def test_adapt_angry_emotion(self):
         """测试适配愤怒情绪"""
-        result = IntentEmotionAdapter.adapt(EmotionType.ANGRY)
+        result = IntentEmotionAdapter.adapt("angry")
         assert result == {"joy": 1, "anger": 7, "sorrow": 1, "fear": 1}
 
     def test_adapt_surprised_emotion(self):
         """测试适配惊讶情绪"""
-        result = IntentEmotionAdapter.adapt(EmotionType.SURPRISED)
+        result = IntentEmotionAdapter.adapt("surprised")
         assert result == {"joy": 6, "anger": 1, "sorrow": 1, "fear": 6}
 
     def test_adapt_love_emotion(self):
         """测试适配爱意情绪"""
-        result = IntentEmotionAdapter.adapt(EmotionType.LOVE)
+        result = IntentEmotionAdapter.adapt("love")
         assert result == {"joy": 8, "anger": 1, "sorrow": 1, "fear": 1}
 
     def test_adapt_shy_emotion(self):
         """测试适配害羞情绪"""
-        result = IntentEmotionAdapter.adapt(EmotionType.SHY)
+        result = IntentEmotionAdapter.adapt("shy")
         assert result == {"joy": 5, "anger": 1, "sorrow": 2, "fear": 4}
 
     def test_adapt_excited_emotion(self):
         """测试适配兴奋情绪"""
-        result = IntentEmotionAdapter.adapt(EmotionType.EXCITED)
+        result = IntentEmotionAdapter.adapt("excited")
         assert result == {"joy": 9, "anger": 1, "sorrow": 1, "fear": 1}
 
     def test_adapt_confused_emotion(self):
         """测试适配困惑情绪"""
-        result = IntentEmotionAdapter.adapt(EmotionType.CONFUSED)
+        result = IntentEmotionAdapter.adapt("confused")
         assert result == {"joy": 3, "anger": 2, "sorrow": 2, "fear": 5}
 
     def test_adapt_scared_emotion(self):
         """测试适配恐惧情绪"""
-        result = IntentEmotionAdapter.adapt(EmotionType.SCARED)
+        result = IntentEmotionAdapter.adapt("scared")
         assert result == {"joy": 1, "anger": 1, "sorrow": 2, "fear": 9}
 
     def test_adapt_returns_copy(self):
         """测试返回的是副本而非原字典的引用"""
-        result1 = IntentEmotionAdapter.adapt(EmotionType.HAPPY)
-        result2 = IntentEmotionAdapter.adapt(EmotionType.HAPPY)
+        result1 = IntentEmotionAdapter.adapt("happy")
+        result2 = IntentEmotionAdapter.adapt("happy")
 
         # 修改 result1 不应影响 result2
         result1["joy"] = 10
@@ -73,7 +72,8 @@ class TestIntentEmotionAdapter:
 
     def test_all_emotions_in_range(self):
         """测试所有情绪值都在 1-10 范围内"""
-        for emotion in EmotionType:
+        emotions = ["neutral", "happy", "sad", "angry", "surprised", "love", "shy", "excited", "confused", "scared"]
+        for emotion in emotions:
             result = IntentEmotionAdapter.adapt(emotion)
             for key, value in result.items():
                 assert 1 <= value <= 10, f"{emotion}.{key} = {value} 不在 1-10 范围内"

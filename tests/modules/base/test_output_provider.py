@@ -19,7 +19,7 @@ from src.modules.di.context import ProviderContext
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.decision import IntentPayload
-from src.modules.types import ActionType, EmotionType, Intent, IntentAction
+from src.modules.types import Intent, IntentMetadata
 from src.modules.types.base.output_provider import OutputProvider
 
 
@@ -31,10 +31,9 @@ from src.modules.types.base.output_provider import OutputProvider
 def create_test_intent(response_text: str = "测试响应") -> Intent:
     """创建测试用的 Intent"""
     return Intent(
-        original_text="测试输入",
-        response_text=response_text,
-        actions=[IntentAction(type=ActionType.NONE)],
-        emotion=EmotionType.NEUTRAL,
+        speech=response_text,
+        emotion="neutral",
+        metadata=IntentMetadata(source_id="test_source", decision_time=1234567890),
     )
 
 
@@ -282,7 +281,7 @@ async def test_output_provider_event_driven_render(mock_provider, test_intent, e
 
     # Provider 应该收到了 Intent
     assert mock_provider.render_count == 1
-    assert mock_provider.last_intent.response_text == test_intent.response_text
+    assert mock_provider.last_intent.speech == test_intent.speech
 
 
 @pytest.mark.asyncio

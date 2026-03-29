@@ -4,8 +4,7 @@ Mock 决策 Provider（用于测试）
 
 from typing import Any, Dict, List, Optional
 
-from src.modules.types import Intent
-from src.modules.types import EmotionType
+from src.modules.types import Intent, IntentMetadata
 from src.modules.types.base.decision_provider import DecisionProvider
 from src.modules.types.base.normalized_message import NormalizedMessage
 
@@ -19,7 +18,7 @@ class MockDecisionProvider(DecisionProvider):
         self.call_count = 0  # 调用计数
         self.last_message: Optional[NormalizedMessage] = None
 
-    def add_response(self, text: str, emotion: EmotionType = EmotionType.NEUTRAL):
+    def add_response(self, text: str, emotion: str = "neutral"):
         """添加预设响应"""
         self.responses.append(
             {
@@ -36,20 +35,26 @@ class MockDecisionProvider(DecisionProvider):
         if not self.responses:
             # 默认响应
             return Intent(
-                original_text=message.text,
-                response_text="这是一个模拟回复",
-                emotion=EmotionType.NEUTRAL,
-                actions=[],
-                metadata={"mock": True},
+                speech="这是一个模拟回复",
+                emotion="neutral",
+                action=None,
+                context=None,
+                metadata=IntentMetadata(
+                    source_id="mock",
+                    decision_time=0,
+                ),
             )
 
         response = self.responses.pop(0)
         return Intent(
-            original_text=message.text,
-            response_text=response["text"],
+            speech=response["text"],
             emotion=response["emotion"],
-            actions=[],
-            metadata={"mock": True},
+            action=None,
+            context=None,
+            metadata=IntentMetadata(
+                source_id="mock",
+                decision_time=0,
+            ),
         )
 
     def reset(self):

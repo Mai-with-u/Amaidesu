@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.modules.types import Intent, EmotionType
+from src.modules.types import Intent, IntentMetadata
 from src.domains.output.providers.avatar.warudo.warudo_provider import WarudoOutputProvider
 from src.modules.di.context import ProviderContext
 
@@ -68,10 +68,9 @@ class TestWarudoProviderRendering:
 
         # 使用 Intent 调用基类的 execute
         intent = Intent(
-            original_text="测试",
-            response_text="测试",
-            emotion=EmotionType.HAPPY,
-            actions=[],
+            metadata=IntentMetadata(source_id="test", decision_time=1234567890),
+            emotion="happy",
+            speech="测试",
         )
         await provider.execute(intent)
 
@@ -84,10 +83,9 @@ class TestWarudoProviderRendering:
 
         # 使用 Intent 调用基类的 execute
         intent = Intent(
-            original_text="测试",
-            response_text="测试",
-            emotion=EmotionType.HAPPY,
-            actions=[],
+            metadata=IntentMetadata(source_id="test", decision_time=1234567890),
+            emotion="happy",
+            speech="测试",
         )
         # 应该不抛出异常，只是跳过渲染
         await provider.execute(intent)

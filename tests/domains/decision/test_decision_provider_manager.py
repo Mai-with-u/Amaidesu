@@ -18,12 +18,11 @@ import pytest
 
 # 导入所有 decision providers 以触发注册
 import src.domains.decision.providers  # noqa: F401
-from src.modules.types import Intent
+from src.modules.types import Intent, IntentMetadata
 from src.domains.decision.provider_manager import DecisionProviderManager
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import MessageReadyPayload
-from src.modules.types import EmotionType
 from src.modules.types.base.decision_provider import DecisionProvider
 from src.modules.types.base.normalized_message import NormalizedMessage
 
@@ -62,19 +61,22 @@ class MockDecisionProviderForManager(DecisionProvider):
 
         # 确定回复内容
         if not self.decide_responses:
-            response_text = "这是默认回复"
-            emotion = EmotionType.NEUTRAL
+            speech = "这是默认回复"
+            emotion = "neutral"
         else:
             response = self.decide_responses.pop(0)
-            response_text = response.get("text", "默认回复")
-            emotion = response.get("emotion", EmotionType.NEUTRAL)
+            speech = response.get("text", "默认回复")
+            emotion = response.get("emotion", "neutral")
 
-        # 创建 Intent
+        # 创建 Intent (新结构)
         intent = Intent(
-            original_text=message.text,
-            response_text=response_text,
+            speech=speech,
             emotion=emotion,
-            actions=[],
+            context=message.text,
+            metadata=IntentMetadata(
+                source_id=message.source,
+                decision_time=int(message.timestamp * 1000) if message.timestamp else 0,
+            ),
         )
 
         # 通过 event_bus 发布 decision.intent 事件
@@ -82,25 +84,13 @@ class MockDecisionProviderForManager(DecisionProvider):
         from src.modules.events.payloads import IntentPayload
 
         if self.event_bus:
-            # 构建 SourceContext
-            from src.modules.types import SourceContext
-
-            source_context = SourceContext(
-                source=message.source,
-                data_type=message.data_type,
-                user_id=message.user_id,
-                user_nickname=message.user_nickname,
-                importance=message.importance,
-            )
-            intent.source_context = source_context
-
             await self.event_bus.emit(
                 CoreEvents.DECISION_INTENT_GENERATED,
                 IntentPayload.from_intent(intent, "mock_decision"),
                 source="MockDecisionProviderForManager",
             )
 
-    def add_response(self, text: str, emotion: EmotionType = EmotionType.NEUTRAL):
+    def add_response(self, text: str, emotion: str = "neutral"):
         """Add predefined response"""
         self.decide_responses.append(
             {
@@ -124,10 +114,12 @@ class FailingMockDecisionProvider(DecisionProvider):
 
     async def decide(self, message):
         return Intent(
-            original_text=message.text,
-            response_text="Should not reach here",
-            emotion=EmotionType.NEUTRAL,
-            actions=[],
+            speech="Should not reach here",
+            emotion="neutral",
+            metadata=IntentMetadata(
+                source_id=message.source if hasattr(message, "source") else "unknown",
+                decision_time=0,
+            ),
         )
 
 
@@ -382,7 +374,7 @@ async def test_start_subscribes_to_event(event_bus, mock_provider_class):
 async def test_decide_success(decision_manager_with_mock, sample_normalized_message):
     """测试成功执行决策（fire-and-forget 模式）"""
     manager = decision_manager_with_mock
-    manager._current_provider.add_response("测试回复", EmotionType.HAPPY)
+    manager._current_provider.add_response("测试回复", "happy")
 
     # 在 fire-and-forget 模式下，decide() 返回 None
     # 实际的 Intent 通过 Provider 发布的事件传递
@@ -409,9 +401,9 @@ async def test_decide_multiple_calls(decision_manager_with_mock, sample_normaliz
     manager = decision_manager_with_mock
 
     # 添加多个响应
-    manager._current_provider.add_response("回复1", EmotionType.HAPPY)
-    manager._current_provider.add_response("回复2", EmotionType.SAD)
-    manager._current_provider.add_response("回复3", EmotionType.ANGRY)
+    manager._current_provider.add_response("回复1", "happy")
+    manager._current_provider.add_response("回复2", "sad")
+    manager._current_provider.add_response("回复3", "angry")
 
     # 执行多次决策 - 在 fire-and-forget 模式下都返回 None
     result1 = await manager.decide(sample_normalized_message)
@@ -465,7 +457,7 @@ async def test_on_normalized_message_ready_success(decision_manager_with_mock, s
     事件处理逻辑已合并到 DecisionProviderManager。
     """
     manager = decision_manager_with_mock
-    manager._current_provider.add_response("事件回复", EmotionType.LOVE)
+    manager._current_provider.add_response("事件回复", "love")
 
     intent_results = []
 
@@ -493,7 +485,7 @@ async def test_on_normalized_message_ready_success(decision_manager_with_mock, s
     # IntentPayload 是对象，直接访问属性
     payload = intent_results[0]
     assert payload.response_text == "事件回复"
-    assert payload.emotion == "love"  # EmotionType.LOVE 的值是 "love"
+    assert payload.emotion == "love"
     assert payload.provider == "mock_decision"
     assert manager._current_provider.call_count == 1
 
@@ -800,11 +792,12 @@ async def test_cleanup_handles_provider_error(event_bus, mock_provider_class):
 
         async def decide(self, message):
             return Intent(
-                original_text=message.text,
-                response_text="test",
-                emotion=EmotionType.NEUTRAL,
-                actions=[],
-                metadata={},
+                speech="test",
+                emotion="neutral",
+                metadata=IntentMetadata(
+                    source_id=message.source if hasattr(message, "source") else "unknown",
+                    decision_time=0,
+                ),
             )
 
     ProviderRegistry.register_decision("failing_cleanup", FailingCleanupProvider, source="test")
@@ -934,7 +927,7 @@ async def test_concurrent_decide_calls(decision_manager_with_mock, sample_normal
 
     # 添加足够多的响应
     for i in range(10):
-        manager._current_provider.add_response(f"回复{i}", EmotionType.NEUTRAL)
+        manager._current_provider.add_response(f"回复{i}", "neutral")
 
     # 并发执行
     tasks = [manager.decide(sample_normalized_message) for _ in range(10)]

@@ -18,14 +18,13 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.modules.types import Intent
+from src.modules.types import Intent, IntentMetadata
 from src.domains.output import OutputProviderManager
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import (
     IntentPayload,
 )
-from src.modules.types import ActionType, EmotionType, IntentAction
 
 # =============================================================================
 # Test Fixtures
@@ -63,13 +62,11 @@ def sample_config():
 def sample_intent():
     """创建测试用的 Intent 对象"""
     return Intent(
-        original_text="你好",
-        response_text="你好！很高兴见到你！",
-        emotion=EmotionType.HAPPY,
-        actions=[
-            IntentAction(type=ActionType.WAVE, params={"duration": 1.0}, priority=50),
-        ],
-        metadata={"source": "test"},
+        metadata=IntentMetadata(source_id="test_source", decision_time=1706745600000),
+        emotion="happy",
+        action="wave",
+        speech="你好！很高兴见到你！",
+        context="用户打招呼",
     )
 
 
@@ -250,7 +247,7 @@ async def test_on_intent_ready(
         assert len(received_payloads) == 1
         # 验证 payload 包含正确的 Intent 数据
         assert received_payloads[0].provider == "DecisionProvider"
-        assert received_payloads[0].intent_data["response_text"] == sample_intent.response_text
+        assert received_payloads[0].intent_data["speech"] == sample_intent.speech
 
 
 @pytest.mark.asyncio
@@ -262,13 +259,13 @@ async def test_intent_event_with_empty_response_text(
     with patch.object(output_provider_manager, "load_from_config", new_callable=AsyncMock):
         await output_provider_manager.setup(sample_config)
 
-        # 创建空 response_text 的 Intent
+        # 创建空 speech 的 Intent
         empty_intent = Intent(
-            original_text="",
-            response_text="",
-            emotion=EmotionType.NEUTRAL,
-            actions=[],
-            metadata={},
+            metadata=IntentMetadata(source_id="test", decision_time=0),
+            emotion="neutral",
+            action=None,
+            speech="",
+            context=None,
         )
 
         # 不应该抛出异常
@@ -430,7 +427,7 @@ async def test_full_integration(
         # 验证 IntentPayload 转发
         assert len(received_payloads) == 1
         assert received_payloads[0].provider == "DecisionProvider"
-        assert received_payloads[0].intent_data["response_text"] == sample_intent.response_text
+        assert received_payloads[0].intent_data["speech"] == sample_intent.speech
 
         # 清理
         await manager.stop()

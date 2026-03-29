@@ -1,14 +1,11 @@
 """
 Intent 类型单元测试
 
-测试跨域共享的 Intent 相关类型：
-- EmotionType 枚举
-- ActionType 枚举
-- IntentAction 类
-- SourceContext 类
-- Intent 类完整功能
-- 序列化/反序列化
-- 边界情况
+测试跨域共享的 Intent 相关类型（新版自然语言架构）：
+- IntentMetadata: 意图元数据
+- Intent: 决策意图（emotion/action/speech/context/metadata/structured_params）
+- EmotionType: 情感类型（字符串别名）
+- ActionType: 动作类型（字符串别名）
 
 运行: uv run pytest tests/modules/types/test_intent.py -v
 """
@@ -17,322 +14,198 @@ import time
 
 import pytest
 
-from src.modules.types import Intent, SourceContext
-from src.modules.types import ActionType, DecisionMetadata, EmotionType, IntentAction, ParserType
+from src.modules.types import (
+    ActionType,
+    EmotionType,
+    Intent,
+    IntentMetadata,
+)
+
 
 # =============================================================================
-# EmotionType 测试
+# EmotionType 和 ActionType 测试（字符串类型别名）
 # =============================================================================
 
 
-class TestEmotionType:
-    """测试 EmotionType 枚举"""
+class TestEmotionTypeAlias:
+    """测试 EmotionType 字符串类型别名"""
 
-    def test_emotion_type_values(self):
-        """测试所有情感类型值"""
-        assert EmotionType.NEUTRAL.value == "neutral"
-        assert EmotionType.HAPPY.value == "happy"
-        assert EmotionType.SAD.value == "sad"
-        assert EmotionType.ANGRY.value == "angry"
-        assert EmotionType.SURPRISED.value == "surprised"
-        assert EmotionType.LOVE.value == "love"
-        assert EmotionType.SHY.value == "shy"
-        assert EmotionType.EXCITED.value == "excited"
-        assert EmotionType.CONFUSED.value == "confused"
-        assert EmotionType.SCARED.value == "scared"
+    def test_emotion_type_is_string(self):
+        """测试 EmotionType 就是 str 类型"""
+        emotion: EmotionType = "neutral"
+        assert isinstance(emotion, str)
+        assert emotion == "neutral"
 
-    def test_emotion_type_get_default(self):
-        """测试获取默认情感类型"""
-        default = EmotionType.get_default()
-        assert default == EmotionType.NEUTRAL
+    def test_emotion_type_various_values(self):
+        """测试各种情感字符串值"""
+        emotions = ["neutral", "happy", "sad", "angry", "surprised", "love", "shy", "excited", "confused", "scared"]
+        for e in emotions:
+            emotion: EmotionType = e
+            assert emotion == e
 
-    def test_emotion_type_iteration(self):
-        """测试遍历所有情感类型"""
-        emotions = list(EmotionType)
-        assert len(emotions) == 10
-        assert EmotionType.HAPPY in emotions
-        assert EmotionType.SAD in emotions
+    def test_emotion_type_assignment(self):
+        """测试 EmotionType 赋值"""
+        emotion: EmotionType = "happy"
+        assert emotion == "happy"
 
     def test_emotion_type_comparison(self):
         """测试情感类型比较"""
-        assert EmotionType.HAPPY == EmotionType.HAPPY
-        assert EmotionType.HAPPY != EmotionType.SAD
-
-    def test_emotion_type_string_value(self):
-        """测试获取字符串值"""
-        # 枚举的 str() 返回 EmotionType.HAPPY 格式
-        assert "HAPPY" in str(EmotionType.HAPPY)
-        # 使用 .value 获取字符串值
-        assert EmotionType.HAPPY.value == "happy"
-
-    def test_emotion_type_from_string(self):
-        """测试从字符串创建 EmotionType"""
-        assert EmotionType("neutral") == EmotionType.NEUTRAL
-        assert EmotionType("happy") == EmotionType.HAPPY
-        assert EmotionType("sad") == EmotionType.SAD
-        assert EmotionType("angry") == EmotionType.ANGRY
-        assert EmotionType("surprised") == EmotionType.SURPRISED
-        assert EmotionType("love") == EmotionType.LOVE
-
-    def test_emotion_type_invalid_string(self):
-        """测试无效字符串抛出 ValueError"""
-        with pytest.raises(ValueError, match="is not a valid EmotionType"):
-            EmotionType("invalid_emotion")
+        e1: EmotionType = "happy"
+        e2: EmotionType = "happy"
+        e3: EmotionType = "sad"
+        assert e1 == e2
+        assert e1 != e3
 
 
-# =============================================================================
-# ActionType 测试
-# =============================================================================
+class TestActionTypeAlias:
+    """测试 ActionType 字符串类型别名"""
 
+    def test_action_type_is_string(self):
+        """测试 ActionType 就是 str 类型"""
+        action: ActionType = "blink"
+        assert isinstance(action, str)
+        assert action == "blink"
 
-class TestActionType:
-    """测试 ActionType 枚举"""
+    def test_action_type_various_values(self):
+        """测试各种动作字符串值"""
+        actions = [
+            "expression",
+            "hotkey",
+            "emoji",
+            "blink",
+            "nod",
+            "shake",
+            "wave",
+            "clap",
+            "sticker",
+            "motion",
+            "custom",
+            "game_action",
+            "none",
+        ]
+        for a in actions:
+            action: ActionType = a
+            assert action == a
 
-    def test_action_type_values(self):
-        """测试所有动作类型值"""
-        assert ActionType.EXPRESSION.value == "expression"
-        assert ActionType.HOTKEY.value == "hotkey"
-        assert ActionType.EMOJI.value == "emoji"
-        assert ActionType.BLINK.value == "blink"
-        assert ActionType.NOD.value == "nod"
-        assert ActionType.SHAKE.value == "shake"
-        assert ActionType.WAVE.value == "wave"
-        assert ActionType.CLAP.value == "clap"
-        assert ActionType.STICKER.value == "sticker"
-        assert ActionType.MOTION.value == "motion"
-        assert ActionType.CUSTOM.value == "custom"
-        assert ActionType.GAME_ACTION.value == "game_action"
-        assert ActionType.NONE.value == "none"
-
-    def test_action_type_get_default(self):
-        """测试获取默认动作类型"""
-        default = ActionType.get_default()
-        assert default == ActionType.EXPRESSION
-
-    def test_action_type_iteration(self):
-        """测试遍历所有动作类型"""
-        actions = list(ActionType)
-        # 当前有13个动作类型（不包括某个已移除的类型）
-        assert len(actions) >= 13
-        assert ActionType.BLINK in actions
-        assert ActionType.WAVE in actions
+    def test_action_type_assignment(self):
+        """测试 ActionType 赋值"""
+        action: ActionType = "wave"
+        assert action == "wave"
 
     def test_action_type_comparison(self):
         """测试动作类型比较"""
-        assert ActionType.BLINK == ActionType.BLINK
-        assert ActionType.BLINK != ActionType.WAVE
-
-    def test_action_type_from_string(self):
-        """测试从字符串创建 ActionType"""
-        assert ActionType("expression") == ActionType.EXPRESSION
-        assert ActionType("hotkey") == ActionType.HOTKEY
-        assert ActionType("emoji") == ActionType.EMOJI
-        assert ActionType("blink") == ActionType.BLINK
-        assert ActionType("nod") == ActionType.NOD
-        assert ActionType("shake") == ActionType.SHAKE
-        assert ActionType("wave") == ActionType.WAVE
-        assert ActionType("clap") == ActionType.CLAP
-        assert ActionType("none") == ActionType.NONE
-
-    def test_action_type_invalid_string(self):
-        """测试无效字符串抛出 ValueError"""
-        with pytest.raises(ValueError, match="is not a valid ActionType"):
-            ActionType("invalid_action")
+        a1: ActionType = "blink"
+        a2: ActionType = "blink"
+        a3: ActionType = "wave"
+        assert a1 == a2
+        assert a1 != a3
 
 
 # =============================================================================
-# IntentAction 测试
+# IntentMetadata 测试
 # =============================================================================
 
 
-class TestIntentAction:
-    """测试 IntentAction 类"""
+class TestIntentMetadata:
+    """测试 IntentMetadata 类"""
 
-    def test_intent_action_creation(self):
-        """测试创建 IntentAction"""
-        action = IntentAction(
-            type=ActionType.BLINK,
-            params={"count": 2},
-            priority=30,
+    def test_intent_metadata_creation_minimal(self):
+        """测试创建最小 IntentMetadata"""
+        metadata = IntentMetadata(
+            source_id="console_input",
+            decision_time=1700000000000,
         )
-        assert action.type == ActionType.BLINK
-        assert action.params == {"count": 2}
-        assert action.priority == 30
+        assert metadata.source_id == "console_input"
+        assert metadata.decision_time == 1700000000000
+        assert metadata.parser_type is None
+        assert metadata.llm_model is None
+        assert metadata.replay_count is None
+        assert metadata.extra == {}
 
-    def test_intent_action_default_params(self):
-        """测试默认 params 为空字典"""
-        action = IntentAction(type=ActionType.WAVE)
-        assert action.params == {}
-
-    def test_intent_action_default_priority(self):
-        """测试默认 priority 为 50"""
-        action = IntentAction(type=ActionType.NOD)
-        assert action.priority == 50
-
-    def test_intent_action_priority_validation(self):
-        """测试 priority 字段验证 (0-100)"""
-        # 有效范围
-        action = IntentAction(
-            type=ActionType.BLINK,
-            priority=0,
+    def test_intent_metadata_creation_full(self):
+        """测试创建完整 IntentMetadata"""
+        metadata = IntentMetadata(
+            source_id="bili_danmaku",
+            decision_time=1700000000000,
+            parser_type="llm",
+            llm_model="gpt-4",
+            replay_count=0,
+            extra={"confidence": 0.95},
         )
-        assert action.priority == 0
+        assert metadata.source_id == "bili_danmaku"
+        assert metadata.decision_time == 1700000000000
+        assert metadata.parser_type == "llm"
+        assert metadata.llm_model == "gpt-4"
+        assert metadata.replay_count == 0
+        assert metadata.extra["confidence"] == 0.95
 
-        action = IntentAction(
-            type=ActionType.BLINK,
-            priority=100,
+    def test_intent_metadata_extra_default(self):
+        """测试 extra 默认为空字典"""
+        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+        assert metadata.extra == {}
+
+    def test_intent_metadata_extra_modification(self):
+        """测试 extra 可修改"""
+        metadata = IntentMetadata(
+            source_id="test",
+            decision_time=1700000000000,
+            extra={"key": "value"},
         )
-        assert action.priority == 100
+        metadata.extra["new_key"] = "new_value"
+        assert metadata.extra["key"] == "value"
+        assert metadata.extra["new_key"] == "new_value"
 
-    def test_intent_action_priority_invalid(self):
-        """测试无效的 priority 值"""
-        # 超出范围
-        with pytest.raises(Exception):  # ValidationError
-            IntentAction(
-                type=ActionType.BLINK,
-                priority=150,
-            )
-
-        # 负数
-        with pytest.raises(Exception):  # ValidationError
-            IntentAction(
-                type=ActionType.BLINK,
-                priority=-10,
-            )
-
-    def test_intent_action_serialization(self):
+    def test_intent_metadata_serialization(self):
         """测试序列化"""
-        action = IntentAction(
-            type=ActionType.BLINK,
-            params={"count": 2},
-            priority=30,
+        metadata = IntentMetadata(
+            source_id="console_input",
+            decision_time=1700000000000,
+            parser_type="rule",
+            extra={"test": True},
         )
-        data = action.model_dump()
-        assert data["type"] == "blink"  # use_enum_values=True
-        assert data["params"] == {"count": 2}
-        assert data["priority"] == 30
+        data = metadata.model_dump()
+        assert data["source_id"] == "console_input"
+        assert data["decision_time"] == 1700000000000
+        assert data["parser_type"] == "rule"
+        assert data["extra"]["test"] is True
 
-    def test_intent_action_deserialization(self):
+    def test_intent_metadata_deserialization(self):
         """测试反序列化"""
         data = {
-            "type": "blink",
-            "params": {"count": 2},
-            "priority": 30,
+            "source_id": "bili_danmaku",
+            "decision_time": 1700000000000,
+            "parser_type": "llm",
+            "llm_model": "gpt-3.5",
+            "replay_count": 1,
+            "extra": {"score": 0.8},
         }
-        action = IntentAction.model_validate(data)
-        assert action.type == ActionType.BLINK
-        assert action.params == {"count": 2}
-        assert action.priority == 30
+        metadata = IntentMetadata.model_validate(data)
+        assert metadata.source_id == "bili_danmaku"
+        assert metadata.decision_time == 1700000000000
+        assert metadata.parser_type == "llm"
+        assert metadata.llm_model == "gpt-3.5"
+        assert metadata.replay_count == 1
+        assert metadata.extra["score"] == 0.8
 
-    def test_intent_action_repr(self):
-        """测试 IntentAction 的字符串表示"""
-        action = IntentAction(type=ActionType.WAVE, params={"intensity": 0.8}, priority=70)
+    def test_intent_metadata_missing_required_field(self):
+        """测试缺少必填字段"""
+        from pydantic import ValidationError
 
-        repr_str = repr(action)
-        assert "wave" in repr_str
-        assert "70" in repr_str
-        assert "params" in repr_str
-
-    def test_intent_action_different_types(self):
-        """测试不同类型的 IntentAction"""
-        actions = [
-            IntentAction(type=ActionType.EXPRESSION, params={"name": "sad"}),
-            IntentAction(type=ActionType.HOTKEY, params={"key": "F1"}),
-            IntentAction(type=ActionType.EMOJI, params={"emoji": "😀"}),
-            IntentAction(type=ActionType.BLINK, params={}),
-            IntentAction(type=ActionType.NOD, params={}),
-            IntentAction(type=ActionType.SHAKE, params={}),
-            IntentAction(type=ActionType.WAVE, params={}),
-            IntentAction(type=ActionType.CLAP, params={}),
-            IntentAction(type=ActionType.NONE, params={}),
-        ]
-
-        assert len(actions) == 9
-        assert actions[0].type == ActionType.EXPRESSION
-        assert actions[1].type == ActionType.HOTKEY
-        assert actions[2].type == ActionType.EMOJI
-        assert actions[3].type == ActionType.BLINK
-        assert actions[4].type == ActionType.NOD
-        assert actions[5].type == ActionType.SHAKE
-        assert actions[6].type == ActionType.WAVE
-        assert actions[7].type == ActionType.CLAP
-        assert actions[8].type == ActionType.NONE
-
-
-# =============================================================================
-# SourceContext 测试
-# =============================================================================
-
-
-class TestSourceContext:
-    """测试 SourceContext 类"""
-
-    def test_source_context_creation(self):
-        """测试创建 SourceContext"""
-        context = SourceContext(
-            source="console_input",
-            data_type="text",
-            user_id="12345",
-            user_nickname="测试用户",
-            importance=0.8,
-        )
-        assert context.source == "console_input"
-        assert context.data_type == "text"
-        assert context.user_id == "12345"
-        assert context.user_nickname == "测试用户"
-        assert context.importance == 0.8
-
-    def test_source_context_optional_fields(self):
-        """测试可选字段"""
-        context = SourceContext(
-            source="bili_danmaku",
-            data_type="gift",
-        )
-        assert context.source == "bili_danmaku"
-        assert context.data_type == "gift"
-        assert context.user_id is None
-        assert context.user_nickname is None
-
-    def test_source_context_default_importance(self):
-        """测试默认 importance 为 0.5"""
-        context = SourceContext(
-            source="test",
-            data_type="test",
-        )
-        assert context.importance == 0.5
-
-    def test_source_context_importance_validation(self):
-        """测试 importance 字段验证 (0.0-1.0)"""
-        # 有效范围
-        context = SourceContext(
-            source="test",
-            data_type="test",
-            importance=0.0,
-        )
-        assert context.importance == 0.0
-
-        context = SourceContext(
-            source="test",
-            data_type="test",
-            importance=1.0,
-        )
-        assert context.importance == 1.0
-
-    def test_source_context_importance_invalid(self):
-        """测试无效的 importance 值"""
-        with pytest.raises(Exception):  # ValidationError
-            SourceContext(
-                source="test",
-                data_type="test",
-                importance=1.5,
+        with pytest.raises(ValidationError):
+            IntentMetadata(
+                source_id="test",
+                # missing decision_time
             )
 
-        with pytest.raises(Exception):  # ValidationError
-            SourceContext(
-                source="test",
-                data_type="test",
-                importance=-0.1,
-            )
+    def test_intent_metadata_repr(self):
+        """测试 __repr__ 方法"""
+        metadata = IntentMetadata(
+            source_id="test_source",
+            decision_time=1700000000000,
+        )
+        repr_str = repr(metadata)
+        assert "IntentMetadata" in repr_str
+        assert "test_source" in repr_str
 
 
 # =============================================================================
@@ -345,274 +218,214 @@ class TestIntent:
 
     def test_intent_creation_minimal(self):
         """测试创建最小 Intent"""
+        metadata = IntentMetadata(source_id="console_input", decision_time=1700000000000)
         intent = Intent(
-            original_text="你好",
-            response_text="你好！很高兴见到你~",
+            metadata=metadata,
         )
-        assert intent.original_text == "你好"
-        assert intent.response_text == "你好！很高兴见到你~"
-        assert intent.emotion == EmotionType.NEUTRAL
-        assert intent.actions == []
-        assert intent.source_context is None
+        assert intent.emotion is None
+        assert intent.action is None
+        assert intent.speech is None
+        assert intent.context is None
+        assert intent.metadata.source_id == "console_input"
+        assert intent.structured_params == {}
 
     def test_intent_creation_full(self):
         """测试创建完整 Intent"""
-        source_context = SourceContext(
-            source="console_input",
-            data_type="text",
-            user_id="123",
+        metadata = IntentMetadata(
+            source_id="bili_danmaku",
+            decision_time=1700000000000,
+            parser_type="llm",
+            llm_model="gpt-4",
         )
-        actions = [
-            IntentAction(type=ActionType.BLINK, params={"count": 2}),
-            IntentAction(type=ActionType.WAVE, params={"duration": 1.0}),
-        ]
-
         intent = Intent(
-            original_text="测试",
-            response_text="回复",
-            emotion=EmotionType.HAPPY,
-            actions=actions,
-            source_context=source_context,
-            decision_metadata=DecisionMetadata(
-                parser_type=ParserType.LLM,
-                extra={"confidence": 0.95},
-            ),
+            emotion="害羞",
+            action="脸红并挥手",
+            speech="大家好呀~",
+            context="用户进入直播间",
+            metadata=metadata,
+            structured_params={
+                "tts": {"voice": "shy", "speed": 1.0},
+                "vts": {"expression": "shy"},
+            },
         )
-        assert intent.original_text == "测试"
-        assert intent.response_text == "回复"
-        assert intent.emotion == EmotionType.HAPPY
-        assert len(intent.actions) == 2
-        assert intent.source_context.source == "console_input"
-        assert intent.decision_metadata.parser_type == ParserType.LLM
-        assert intent.decision_metadata.extra["confidence"] == 0.95
+        assert intent.emotion == "害羞"
+        assert intent.action == "脸红并挥手"
+        assert intent.speech == "大家好呀~"
+        assert intent.context == "用户进入直播间"
+        assert intent.metadata.source_id == "bili_danmaku"
+        assert intent.metadata.parser_type == "llm"
+        assert intent.metadata.llm_model == "gpt-4"
+        assert "tts" in intent.structured_params
+        assert "vts" in intent.structured_params
 
-    def test_intent_id_generation(self):
-        """测试自动生成唯一 ID"""
-        intent1 = Intent(
-            original_text="测试1",
-            response_text="回复1",
-        )
-        intent2 = Intent(
-            original_text="测试2",
-            response_text="回复2",
-        )
-        assert intent1.id != intent2.id
-        assert len(intent1.id) > 0
-
-    def test_intent_timestamp_generation(self):
-        """测试自动生成时间戳"""
-        before = time.time()
+    def test_intent_emotion_as_string(self):
+        """测试 emotion 字段为字符串"""
+        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
         intent = Intent(
-            original_text="测试",
-            response_text="回复",
+            emotion="happy",
+            metadata=metadata,
         )
-        after = time.time()
-        assert before <= intent.timestamp <= after
+        assert intent.emotion == "happy"
+        assert isinstance(intent.emotion, str)
 
-    def test_intent_actions_mutation(self):
-        """测试 actions 列表可变性"""
+    def test_intent_action_as_string(self):
+        """测试 action 字段为字符串"""
+        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
         intent = Intent(
-            original_text="测试",
-            response_text="回复",
+            action="wave",
+            metadata=metadata,
         )
-        assert len(intent.actions) == 0
+        assert intent.action == "wave"
+        assert isinstance(intent.action, str)
 
-        # 添加动作
-        intent.actions.append(IntentAction(type=ActionType.BLINK))
-        assert len(intent.actions) == 1
-
-    def test_intent_repr(self):
-        """测试 __repr__ 方法"""
+    def test_intent_speech(self):
+        """测试 speech 字段"""
+        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
         intent = Intent(
-            original_text="这是一个很长的测试文本，用于测试字符串截断功能是否正常工作",
-            response_text="这是回复文本",
-            emotion=EmotionType.HAPPY,
-            actions=[
-                IntentAction(type=ActionType.BLINK),
-                IntentAction(type=ActionType.WAVE),
-            ],
+            speech="今天天气真不错！",
+            metadata=metadata,
         )
-        repr_str = repr(intent)
-        assert "Intent(" in repr_str
-        # emotion 的 repr 包含枚举类型名
-        assert "EmotionType.HAPPY" in repr_str or "emotion=" in repr_str
-        assert "actions=2" in repr_str
-        assert "response_text=" in repr_str
+        assert intent.speech == "今天天气真不错！"
 
-    def test_intent_repr_short_text(self):
-        """测试短文本的 repr"""
-        intent = Intent(original_text="short", response_text="reply", emotion=EmotionType.SAD, actions=[])
+    def test_intent_context(self):
+        """测试 context 字段"""
+        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+        intent = Intent(
+            context="回复用户问题",
+            metadata=metadata,
+        )
+        assert intent.context == "回复用户问题"
 
-        repr_str = repr(intent)
+    def test_intent_structured_params_default(self):
+        """测试 structured_params 默认为空字典"""
+        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+        intent = Intent(metadata=metadata)
+        assert intent.structured_params == {}
 
-        # Pydantic BaseModel 的 repr 会显示完整的枚举类型
-        assert "SAD" in repr_str or "sad" in repr_str
-        assert "0" in repr_str  # actions 数量
-        assert "id=" in repr_str  # 包含 id
+    def test_intent_structured_params_single_provider(self):
+        """测试 structured_params 单个 provider"""
+        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+        intent = Intent(
+            metadata=metadata,
+            structured_params={
+                "tts": {"voice": "happy", "speed": 1.2},
+            },
+        )
+        assert "tts" in intent.structured_params
+        assert intent.structured_params["tts"]["voice"] == "happy"
+        assert intent.structured_params["tts"]["speed"] == 1.2
+
+    def test_intent_structured_params_multiple_providers(self):
+        """测试 structured_params 多个 providers"""
+        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+        intent = Intent(
+            metadata=metadata,
+            structured_params={
+                "tts": {"voice": "excited", "speed": 1.5},
+                "vts": {"expression": "excited", "motion": "jump"},
+                "subtitle": {"font_size": 24, "color": "white"},
+            },
+        )
+        assert len(intent.structured_params) == 3
+        assert intent.structured_params["tts"]["voice"] == "excited"
+        assert intent.structured_params["vts"]["expression"] == "excited"
+        assert intent.structured_params["subtitle"]["font_size"] == 24
+
+    def test_intent_structured_params_common_key(self):
+        """测试 structured_params 的 common key（共享参数）"""
+        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+        intent = Intent(
+            metadata=metadata,
+            structured_params={
+                "common": {"emotion_en": "happy", "action_en": "wave"},
+                "tts": {"voice": "happy"},
+            },
+        )
+        assert "common" in intent.structured_params
+        assert intent.structured_params["common"]["emotion_en"] == "happy"
+        assert intent.structured_params["common"]["action_en"] == "wave"
 
     def test_intent_serialization(self):
         """测试序列化"""
+        metadata = IntentMetadata(
+            source_id="console_input",
+            decision_time=1700000000000,
+            parser_type="rule",
+        )
         intent = Intent(
-            original_text="测试",
-            response_text="回复",
-            emotion=EmotionType.EXCITED,
-            actions=[
-                IntentAction(type=ActionType.BLINK, params={"count": 1}),
-            ],
+            emotion="shy",
+            action="脸红",
+            speech="你好呀~",
+            context="问候",
+            metadata=metadata,
+            structured_params={"tts": {"voice": "shy"}},
         )
         data = intent.model_dump()
-        assert data["original_text"] == "测试"
-        assert data["response_text"] == "回复"
-        assert data["emotion"] == "excited"  # use_enum_values
-        assert len(data["actions"]) == 1
-        assert data["actions"][0]["type"] == "blink"
+        assert data["emotion"] == "shy"
+        assert data["action"] == "脸红"
+        assert data["speech"] == "你好呀~"
+        assert data["context"] == "问候"
+        assert data["metadata"]["source_id"] == "console_input"
+        assert data["structured_params"]["tts"]["voice"] == "shy"
 
     def test_intent_deserialization(self):
         """测试反序列化"""
         data = {
-            "original_text": "测试",
-            "response_text": "回复",
             "emotion": "happy",
-            "actions": [
-                {"type": "blink", "params": {"count": 2}, "priority": 30},
-            ],
-            "metadata": {"test": "value"},
-            "timestamp": time.time(),
+            "action": "挥手",
+            "speech": "很高兴见到你！",
+            "context": "用户问候",
+            "metadata": {
+                "source_id": "bili_danmaku",
+                "decision_time": 1700000000000,
+                "parser_type": "llm",
+            },
+            "structured_params": {
+                "vts": {"expression": "happy"},
+            },
         }
         intent = Intent.model_validate(data)
-        assert intent.original_text == "测试"
-        assert intent.response_text == "回复"
-        assert intent.emotion == EmotionType.HAPPY
-        assert len(intent.actions) == 1
-        assert intent.actions[0].type == ActionType.BLINK
+        assert intent.emotion == "happy"
+        assert intent.action == "挥手"
+        assert intent.speech == "很高兴见到你！"
+        assert intent.context == "用户问候"
+        assert intent.metadata.source_id == "bili_danmaku"
+        assert intent.metadata.parser_type == "llm"
+        assert intent.structured_params["vts"]["expression"] == "happy"
+
+    def test_intent_missing_metadata(self):
+        """测试缺少必填字段 metadata"""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            Intent(
+                emotion="happy",
+                speech="test",
+                # missing metadata
+            )
+
+    def test_intent_repr(self):
+        """测试 __repr__ 方法"""
+        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+        intent = Intent(
+            emotion="害羞",
+            speech="你好呀~",
+            metadata=metadata,
+        )
+        repr_str = repr(intent)
+        assert "Intent(" in repr_str
+        assert "害羞" in repr_str
 
     def test_intent_json_schema(self):
         """测试 JSON Schema 生成"""
         schema = Intent.model_json_schema()
         assert "properties" in schema
-        assert "original_text" in schema["properties"]
-        assert "response_text" in schema["properties"]
         assert "emotion" in schema["properties"]
-        assert "actions" in schema["properties"]
-
-    def test_create_intent_with_none_metadata(self):
-        """测试 decision_metadata 为 None 时使用默认值"""
-        # Pydantic BaseModel 使用 default=None，不传时会使用 None
-        intent = Intent(
-            original_text="test",
-            response_text="response",
-            emotion=EmotionType.NEUTRAL,
-            actions=[],
-        )
-
-        assert intent.decision_metadata is None
-
-    def test_create_intent_metadata_isolation(self):
-        """测试 decision_metadata 的隔离（model_dump 返回副本）"""
-        original_metadata = DecisionMetadata(
-            parser_type=ParserType.LLM,
-            extra={"key": "value"},
-        )
-        intent = Intent(
-            original_text="test",
-            response_text="response",
-            emotion=EmotionType.NEUTRAL,
-            actions=[],
-            decision_metadata=original_metadata,
-        )
-
-        # Pydantic 默认不会复制嵌套对象，它们会共享引用
-        # 如果需要隔离，应该使用 model_dump() 获取副本
-        data = intent.model_dump()
-
-        # 修改返回的字典
-        data["decision_metadata"]["extra"]["new_key"] = "new_value"
-
-        # 原始 intent 的 decision_metadata 不应被修改
-        assert "new_key" not in intent.decision_metadata.extra
-
-    def test_create_intent_empty_actions(self):
-        """测试空动作列表"""
-        intent = Intent(
-            original_text="test", response_text="response", emotion=EmotionType.NEUTRAL, actions=[]
-        )
-
-        assert intent.actions == []
-
-    def test_create_intent_with_different_emotions(self):
-        """测试不同情感类型"""
-        emotions = [
-            EmotionType.NEUTRAL,
-            EmotionType.HAPPY,
-            EmotionType.SAD,
-            EmotionType.ANGRY,
-            EmotionType.SURPRISED,
-            EmotionType.LOVE,
-        ]
-
-        for emotion in emotions:
-            intent = Intent(original_text="test", response_text="response", emotion=emotion, actions=[])
-            assert intent.emotion == emotion
-
-    def test_from_dict_with_default_values(self):
-        """测试从字典创建 Intent 时使用默认值（使用 model_validate）"""
-        data = {
-            "original_text": "test",
-            "response_text": "response",
-        }
-
-        intent = Intent.model_validate(data)
-
-        assert intent.original_text == "test"
-        assert intent.response_text == "response"
-        assert intent.emotion == EmotionType.NEUTRAL
-        assert intent.actions == []
-        assert intent.decision_metadata is None
-        assert isinstance(intent.timestamp, float)
-
-    def test_from_dict_missing_actions(self):
-        """测试从字典创建 Intent 时缺少 actions"""
-        data = {"original_text": "test", "response_text": "response", "emotion": "sad"}
-
-        intent = Intent.model_validate(data)
-
-        assert intent.actions == []
-
-    def test_from_dict_missing_priority(self):
-        """测试从字典创建 Intent 时动作缺少 priority"""
-        data = {
-            "original_text": "test",
-            "response_text": "response",
-            "emotion": "neutral",
-            "actions": [{"type": "blink", "params": {}}],
-        }
-
-        intent = Intent.model_validate(data)
-
-        assert intent.actions[0].priority == 50  # 默认值
-
-    def test_from_dict_invalid_emotion(self):
-        """测试无效的情感类型"""
-        from pydantic import ValidationError
-
-        data = {"original_text": "test", "response_text": "response", "emotion": "invalid_emotion", "actions": []}
-
-        with pytest.raises(ValidationError):
-            Intent.model_validate(data)
-
-    def test_from_dict_invalid_action_type(self):
-        """测试无效的动作类型"""
-        from pydantic import ValidationError
-
-        data = {
-            "original_text": "test",
-            "response_text": "response",
-            "emotion": "neutral",
-            "actions": [{"type": "invalid_action", "params": {}}],
-        }
-
-        with pytest.raises(ValidationError):
-            Intent.model_validate(data)
+        assert "action" in schema["properties"]
+        assert "speech" in schema["properties"]
+        assert "context" in schema["properties"]
+        assert "metadata" in schema["properties"]
+        assert "structured_params" in schema["properties"]
 
 
 # =============================================================================
@@ -623,76 +436,90 @@ class TestIntent:
 class TestIntentEdgeCases:
     """测试 Intent 边界情况"""
 
-    def test_empty_text(self):
-        """测试空文本"""
-        intent = Intent(original_text="", response_text="", emotion=EmotionType.NEUTRAL, actions=[])
-
-        assert intent.original_text == ""
-        assert intent.response_text == ""
+    def test_empty_strings(self):
+        """测试空字符串字段"""
+        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+        intent = Intent(
+            emotion="",
+            action="",
+            speech="",
+            context="",
+            metadata=metadata,
+        )
+        assert intent.emotion == ""
+        assert intent.action == ""
+        assert intent.speech == ""
+        assert intent.context == ""
 
     def test_very_long_text(self):
         """测试超长文本"""
         long_text = "测试" * 10000
+        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
         intent = Intent(
-            original_text=long_text, response_text=long_text, emotion=EmotionType.NEUTRAL, actions=[]
+            speech=long_text,
+            metadata=metadata,
         )
+        assert intent.speech == long_text
 
-        assert intent.original_text == long_text
-        assert intent.response_text == long_text
-
-    def test_special_characters_in_text(self):
-        """测试文本中的特殊字符"""
+    def test_special_characters(self):
+        """测试特殊字符"""
         special_text = "测试\n换行\t制表符\r回车\"引号'单引号\\反斜杠"
+        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
         intent = Intent(
-            original_text=special_text, response_text=special_text, emotion=EmotionType.NEUTRAL, actions=[]
+            speech=special_text,
+            metadata=metadata,
         )
-
-        assert intent.original_text == special_text
-        assert intent.response_text == special_text
+        assert intent.speech == special_text
 
     def test_unicode_emoji(self):
         """测试 Unicode emoji"""
+        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
         intent = Intent(
-            original_text="😀😃😄😁😆😅🤣😂",
-            response_text="❤️💕💖💗💓💝",
-            emotion=EmotionType.LOVE,
-            actions=[IntentAction(type=ActionType.EMOJI, params={"emoji": "😀"}, priority=50)],
+            emotion="开心",
+            speech="😀😃😄😁😆",
+            metadata=metadata,
+            structured_params={"tts": {"emoji": "😀"}},
         )
+        assert "😀" in intent.speech
+        assert intent.structured_params["tts"]["emoji"] == "😀"
 
-        assert "😀" in intent.original_text
-        assert "❤️" in intent.response_text
-
-    def test_empty_params_in_action(self):
-        """测试动作中空 params"""
-        action = IntentAction(type=ActionType.BLINK, params={}, priority=30)
-
-        assert action.params == {}
-
-    def test_complex_nested_params(self):
-        """测试复杂的嵌套 params"""
-        complex_params = {"nested": {"deep": {"value": 123, "list": [1, 2, 3]}}, "array": [{"a": 1}, {"b": 2}]}
-
-        action = IntentAction(type=ActionType.EXPRESSION, params=complex_params, priority=70)
-
-        assert action.params == complex_params
-
-    def test_many_actions(self):
-        """测试大量动作"""
-        actions = [IntentAction(type=ActionType.BLINK, params={"index": i}, priority=i) for i in range(100)]
-
+    def test_empty_structured_params(self):
+        """测试空的 structured_params"""
+        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
         intent = Intent(
-            original_text="test", response_text="response", emotion=EmotionType.NEUTRAL, actions=actions
+            metadata=metadata,
+            structured_params={},
         )
+        assert intent.structured_params == {}
 
-        assert len(intent.actions) == 100
-        assert intent.actions[0].priority == 0
-        assert intent.actions[99].priority == 99
+    def test_structured_params_complex_values(self):
+        """测试 structured_params 复杂值"""
+        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+        intent = Intent(
+            metadata=metadata,
+            structured_params={
+                "tts": {
+                    "voice": "happy",
+                    "speed": 1.5,
+                    "pitch": 1.2,
+                    "nested": {"deep": {"value": 123, "list": [1, 2, 3]}},
+                },
+                "vts": {
+                    "expressions": ["happy", "surprised"],
+                    "settings": {"intensity": 0.8, "enabled": True},
+                },
+            },
+        )
+        assert intent.structured_params["tts"]["speed"] == 1.5
+        assert intent.structured_params["tts"]["nested"]["deep"]["value"] == 123
+        assert "happy" in intent.structured_params["vts"]["expressions"]
+        assert intent.structured_params["vts"]["settings"]["enabled"] is True
 
-    def test_metadata_with_various_types(self):
-        """测试 decision_metadata 包含各种数据类型"""
-        decision_metadata = DecisionMetadata(
-            parser_type=ParserType.LLM,
-            llm_model="gpt-4",
+    def test_metadata_with_various_extra_types(self):
+        """测试 metadata.extra 包含各种数据类型"""
+        metadata = IntentMetadata(
+            source_id="test",
+            decision_time=1700000000000,
             extra={
                 "string": "value",
                 "int": 42,
@@ -703,14 +530,24 @@ class TestIntentEdgeCases:
                 "dict": {"nested": "value"},
             },
         )
+        assert metadata.extra["string"] == "value"
+        assert metadata.extra["int"] == 42
+        assert metadata.extra["float"] == 3.14
+        assert metadata.extra["bool"] is True
+        assert metadata.extra["null"] is None
+        assert metadata.extra["list"] == [1, 2, 3]
+        assert metadata.extra["dict"]["nested"] == "value"
 
-        intent = Intent(
-            original_text="test", response_text="response", emotion=EmotionType.NEUTRAL, actions=[], decision_metadata=decision_metadata
+    def test_intent_replay_count(self):
+        """测试 replay_count 字段"""
+        metadata = IntentMetadata(
+            source_id="test",
+            decision_time=1700000000000,
+            replay_count=3,
         )
-
-        assert intent.decision_metadata.parser_type == ParserType.LLM
-        assert intent.decision_metadata.llm_model == "gpt-4"
-        assert intent.decision_metadata.extra["string"] == "value"
+        assert metadata.replay_count == 3
+        intent = Intent(metadata=metadata)
+        assert intent.metadata.replay_count == 3
 
 
 # =============================================================================
@@ -721,55 +558,56 @@ class TestIntentEdgeCases:
 class TestIntentIntegration:
     """Intent 集成测试"""
 
-    def test_intent_with_complex_actions(self):
-        """测试包含复杂动作的 Intent"""
-        intent = Intent(
-            original_text="用户发了一个红包",
-            response_text="谢谢老板！",
-            emotion=EmotionType.EXCITED,
-            actions=[
-                IntentAction(
-                    type=ActionType.EXPRESSION,
-                    params={"expression": "surprised"},
-                    priority=80,
-                ),
-                IntentAction(
-                    type=ActionType.BLINK,
-                    params={"count": 3},
-                    priority=70,
-                ),
-                IntentAction(
-                    type=ActionType.WAVE,
-                    params={"duration": 2.0},
-                    priority=60,
-                ),
-            ],
+    def test_intent_full_workflow(self):
+        """测试完整工作流"""
+        # 1. 创建 metadata
+        metadata = IntentMetadata(
+            source_id="bili_danmaku",
+            decision_time=int(time.time() * 1000),
+            parser_type="llm",
+            llm_model="gpt-4",
+            replay_count=0,
+            extra={"user_name": "测试用户"},
         )
-        assert len(intent.actions) == 3
-        # 验证动作按优先级排序（如果需要）
-        priorities = [a.priority for a in intent.actions]
-        assert priorities == [80, 70, 60]
+
+        # 2. 创建 Intent
+        intent = Intent(
+            emotion="开心",
+            action="挥手",
+            speech="欢迎来到直播间！",
+            context="用户进入",
+            metadata=metadata,
+            structured_params={
+                "tts": {"voice": "welcoming", "speed": 1.0},
+                "vts": {"expression": "happy", "motion": "wave"},
+                "subtitle": {"text": "欢迎来到直播间！"},
+            },
+        )
+
+        # 3. 验证
+        assert intent.emotion == "开心"
+        assert intent.action == "挥手"
+        assert intent.speech == "欢迎来到直播间！"
+        assert intent.metadata.parser_type == "llm"
+        assert intent.structured_params["tts"]["voice"] == "welcoming"
 
     def test_intent_round_trip(self):
         """测试序列化-反序列化往返"""
         original = Intent(
-            original_text="原始消息",
-            response_text="回复消息",
-            emotion=EmotionType.LOVE,
-            actions=[
-                IntentAction(type=ActionType.CLAP, params={"count": 5}),
-            ],
-            source_context=SourceContext(
-                source="bili_danmaku",
-                data_type="gift",
-                user_id="999",
-                user_nickname="慷慨的观众",
-                importance=1.0,
+            emotion="害羞",
+            action="脸红",
+            speech="谢谢大家~",
+            context="收到礼物",
+            metadata=IntentMetadata(
+                source_id="bili_danmaku",
+                decision_time=1700000000000,
+                parser_type="llm",
+                extra={"gift_name": "辣条"},
             ),
-            decision_metadata=DecisionMetadata(
-                parser_type=ParserType.LLM,
-                extra={"gift_value": 100},
-            ),
+            structured_params={
+                "tts": {"voice": "shy"},
+                "vts": {"expression": "shy"},
+            },
         )
 
         # 序列化
@@ -779,59 +617,62 @@ class TestIntentIntegration:
         restored = Intent.model_validate(data)
 
         # 验证
-        assert restored.original_text == original.original_text
-        assert restored.response_text == original.response_text
         assert restored.emotion == original.emotion
-        assert len(restored.actions) == len(original.actions)
-        assert restored.actions[0].type == ActionType.CLAP
-        assert restored.source_context.source == "bili_danmaku"
-        assert restored.source_context.importance == 1.0
-        assert restored.decision_metadata.parser_type == ParserType.LLM
-        assert restored.decision_metadata.extra["gift_value"] == 100
+        assert restored.action == original.action
+        assert restored.speech == original.speech
+        assert restored.context == original.context
+        assert restored.metadata.source_id == original.metadata.source_id
+        assert restored.metadata.parser_type == original.metadata.parser_type
+        assert restored.structured_params["tts"]["voice"] == original.structured_params["tts"]["voice"]
 
-    def test_to_dict_complex_actions(self):
-        """测试包含复杂动作的 Intent 转字典（使用 model_dump）"""
+    def test_intent_different_emotions_and_actions(self):
+        """测试不同的情感和动作组合"""
+        test_cases = [
+            ("开心", "挥手", "tts"),
+            ("害羞", "脸红", "vts"),
+            ("惊讶", "睁大眼睛", "subtitle"),
+            ("生气", "皱眉", "obs"),
+            ("悲伤", "低头", "sticker"),
+        ]
+
+        for emotion, action, provider in test_cases:
+            metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+            intent = Intent(
+                emotion=emotion,
+                action=action,
+                speech=f"测试{emotion}",
+                metadata=metadata,
+                structured_params={provider: {}},
+            )
+            assert intent.emotion == emotion
+            assert intent.action == action
+
+    def test_intent_multiple_providers_params(self):
+        """测试多个 provider 的参数"""
+        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
         intent = Intent(
-            original_text="test",
-            response_text="response",
-            emotion=EmotionType.NEUTRAL,
-            actions=[
-                IntentAction(type=ActionType.EXPRESSION, params={"name": "smile"}, priority=70),
-                IntentAction(type=ActionType.EMOJI, params={"emoji": "😀"}, priority=80),
-                IntentAction(type=ActionType.WAVE, params={"intensity": 0.9}, priority=60),
-            ],
+            emotion="兴奋",
+            speech="好耶！",
+            metadata=metadata,
+            structured_params={
+                "tts": {"voice": "excited", "speed": 1.5, "pitch": 1.3},
+                "edge_tts": {"voice": "zh-CN-XiaoxiaoNeural", "rate": "+20%"},
+                "vts": {"expression": "excited", "motion": "jump", "intensity": 0.9},
+                "gptsovits": {"model": "happy", "seed": 42},
+                "subtitle": {"font": "微软雅黑", "size": 24, "color": "#FFFFFF", "outline": True},
+                "obs": {"source": "webcam", "filter": "blur"},
+                "sticker": {"pack": "emoji", "id": "happy"},
+            },
         )
 
-        result = intent.model_dump()
-
-        assert len(result["actions"]) == 3
-        assert result["actions"][0]["type"] == ActionType.EXPRESSION
-        assert result["actions"][0]["params"]["name"] == "smile"
-        assert result["actions"][1]["type"] == ActionType.EMOJI
-        assert result["actions"][1]["params"]["emoji"] == "😀"
-        assert result["actions"][2]["type"] == ActionType.WAVE
-        assert result["actions"][2]["params"]["intensity"] == 0.9
-
-    def test_to_dict_metadata_copy(self):
-        """测试 model_dump 时 decision_metadata 被复制"""
-        intent = Intent(
-            original_text="test",
-            response_text="response",
-            emotion=EmotionType.NEUTRAL,
-            actions=[],
-            decision_metadata=DecisionMetadata(
-                parser_type=ParserType.LLM,
-                extra={"key": "value"},
-            ),
-        )
-
-        result = intent.model_dump()
-
-        # 修改返回的字典
-        result["decision_metadata"]["extra"]["new_key"] = "new_value"
-
-        # 原始 intent 的 decision_metadata 不应被修改
-        assert "new_key" not in intent.decision_metadata.extra
+        assert len(intent.structured_params) == 7
+        assert intent.structured_params["tts"]["speed"] == 1.5
+        assert intent.structured_params["edge_tts"]["voice"] == "zh-CN-XiaoxiaoNeural"
+        assert intent.structured_params["vts"]["expression"] == "excited"
+        assert intent.structured_params["gptsovits"]["seed"] == 42
+        assert intent.structured_params["subtitle"]["size"] == 24
+        assert intent.structured_params["obs"]["filter"] == "blur"
+        assert intent.structured_params["sticker"]["id"] == "happy"
 
 
 # =============================================================================

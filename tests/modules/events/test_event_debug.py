@@ -13,16 +13,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../.."))
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.payloads import (
-    DecisionRequestPayload,
-    ErrorPayload,
     IntentActionPayload,
     IntentPayload,
     MessageReadyPayload,
     ProviderConnectedPayload,
     ProviderDisconnectedPayload,
     RawDataPayload,
-    RenderCompletedPayload,
-    RenderFailedPayload,
 )
 from src.modules.events.payloads.base import BasePayload
 
@@ -192,14 +188,15 @@ class TestDecisionPayloads:
     def test_intent_payload_debug_string(self):
         """测试 IntentPayload 的字符串表示"""
         from src.modules.types import Intent
-        from src.modules.types import ActionType, EmotionType, IntentAction
+        from src.modules.types import IntentMetadata
 
         # 使用 from_intent 方法创建 Payload
         intent = Intent(
-            original_text="你好",
-            response_text="你好！很高兴见到你~",
-            emotion=EmotionType.HAPPY,
-            actions=[IntentAction(type=ActionType.BLINK, params={"count": 2}, priority=30)],
+            metadata=IntentMetadata(source_id="test_123", decision_time=1234567890123),
+            emotion="happy",
+            action="blink",
+            speech="你好！很高兴见到你~",
+            context="测试上下文",
         )
         payload = IntentPayload.from_intent(intent, provider="maicore")
         debug_str = str(payload)
@@ -207,22 +204,9 @@ class TestDecisionPayloads:
         # IntentPayload 有自定义的 __str__ 方法
         assert "IntentPayload" in debug_str
         assert 'provider="maicore"' in debug_str
-        assert 'original_text="你好"' in debug_str
-        assert 'response_text="你好！很高兴见到你~"' in debug_str
+        assert 'speech="你好！很高兴见到你~"' in debug_str
         assert 'emotion="happy"' in debug_str
-        assert "actions=[blink]" in debug_str
-
-    def test_decision_request_payload_debug_string(self):
-        """测试 DecisionRequestPayload 的字符串表示（自定义实现，只显示关键字段）"""
-        payload = DecisionRequestPayload(normalized_message={"text": "测试", "source": "test"}, priority=100)
-        debug_str = str(payload)
-
-        # 使用自定义的 __str__ 实现，只显示 priority 和 timestamp
-        assert "DecisionRequestPayload" in debug_str
-        assert "priority=100" in debug_str
-        assert "timestamp=" in debug_str
-        # normalized_message 不在自定义 __str__ 中
-        assert "normalized_message=" not in debug_str
+        assert 'action="blink"' in debug_str
 
     def test_provider_connected_payload_debug_string(self):
         """测试 ProviderConnectedPayload 的字符串表示"""
@@ -242,72 +226,6 @@ class TestDecisionPayloads:
         assert 'provider="maicore"' in debug_str
         assert 'reason="connection_lost"' in debug_str
         assert "will_retry=True" in debug_str
-
-
-# =============================================================================
-# 测试 Output Domain Payload
-# =============================================================================
-
-
-class TestOutputPayloads:
-    """测试 Output Domain Payload 的字符串表示"""
-
-    def test_render_completed_payload_debug_string(self):
-        """测试 RenderCompletedPayload 的字符串表示"""
-        payload = RenderCompletedPayload(provider="tts", output_type="audio", success=True, duration_ms=500.0)
-        debug_str = str(payload)
-
-        assert "RenderCompletedPayload" in debug_str
-        assert 'provider="tts"' in debug_str
-        assert 'output_type="audio"' in debug_str
-        assert "success=True" in debug_str
-        # duration_ms 使用 :.0f 格式化，没有小数点
-        assert "duration_ms=500" in debug_str
-
-    def test_render_failed_payload_debug_string(self):
-        """测试 RenderFailedPayload 的字符串表示"""
-        payload = RenderFailedPayload(
-            provider="tts",
-            output_type="audio",
-            error_type="ConnectionError",
-            error_message="无法连接到 TTS 服务",
-            recoverable=True,
-        )
-        debug_str = str(payload)
-
-        assert "RenderFailedPayload" in debug_str
-        assert 'provider="tts"' in debug_str
-        assert 'output_type="audio"' in debug_str
-        assert 'error_type="ConnectionError"' in debug_str
-        assert 'error_message="无法连接到 TTS 服务"' in debug_str
-        assert "recoverable=True" in debug_str
-
-
-# =============================================================================
-# 测试 System Payload
-# =============================================================================
-
-
-class TestSystemPayloads:
-    """测试 System Payload 的字符串表示"""
-
-    def test_error_payload_debug_string(self):
-        """测试 ErrorPayload 的字符串表示"""
-        payload = ErrorPayload(
-            error_type="ConnectionError",
-            error_message="无法连接到 MaiCore 服务",
-            source="MaiCoreDecisionProvider",
-            recoverable=True,
-        )
-        debug_str = str(payload)
-
-        # ErrorPayload 有自定义的 __str__ 方法，只显示关键字段
-        assert "ErrorPayload" in debug_str
-        assert 'error_type="ConnectionError"' in debug_str
-        assert 'error_message="无法连接到 MaiCore 服务"' in debug_str
-        assert 'source="MaiCoreDecisionProvider"' in debug_str
-        # stack_trace 不应该在调试输出中（被自定义 __str__ 排除）
-        assert "stack_trace" not in debug_str
 
 
 # =============================================================================
@@ -491,13 +409,13 @@ class TestEventBusDebugLog:
 
             # 发布复杂的 Payload
             from src.modules.types import Intent
-            from src.modules.types import ActionType, EmotionType, IntentAction
+            from src.modules.types import IntentMetadata
 
             intent = Intent(
-                original_text="你好",
-                response_text="你好！很高兴见到你~",
-                emotion=EmotionType.HAPPY,
-                actions=[IntentAction(type=ActionType.BLINK, params={"count": 2}, priority=30)],
+                metadata=IntentMetadata(source_id="test_456", decision_time=1234567890123),
+                emotion="happy",
+                action="blink",
+                speech="你好！很高兴见到你~",
             )
             payload = IntentPayload.from_intent(intent, provider="maicore")
 
@@ -506,7 +424,7 @@ class TestEventBusDebugLog:
             # 验证日志
             log_output = log_capture.getvalue()
             assert "IntentPayload" in log_output
-            assert "original_text=" in log_output or "original_text" in log_output
+            assert "speech=" in log_output or "speech" in log_output
         finally:
             # 清理 log handler
             logger.remove(handler_id)

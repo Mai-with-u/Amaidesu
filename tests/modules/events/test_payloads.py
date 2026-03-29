@@ -30,7 +30,7 @@ from src.modules.events.payloads.output import (
     RenderFailedPayload,
 )
 from src.modules.events.payloads.system import ErrorPayload, ShutdownPayload, StartupPayload
-from src.modules.types import ActionType, EmotionType, IntentAction
+from src.modules.types import IntentMetadata
 
 # =============================================================================
 # BasePayload 测试
@@ -347,29 +347,32 @@ class TestIntentPayload:
     def test_intent_payload_from_intent(self):
         """测试 from_intent 工厂方法"""
         intent = Intent(
-            original_text="测试",
-            response_text="回复",
-            emotion=EmotionType.HAPPY,
-            actions=[IntentAction(type=ActionType.BLINK, params={"count": 1})],
+            metadata=IntentMetadata(source_id="test-123", decision_time=1700000000000),
+            emotion="happy",
+            action="blink",
+            speech="回复",
         )
         payload = IntentPayload.from_intent(intent, provider="maicore")
         assert payload.provider == "maicore"
-        assert payload.intent_data["original_text"] == "测试"
+        assert payload.intent_data["emotion"] == "happy"
 
     def test_intent_payload_to_intent(self):
         """测试 to_intent 方法"""
         intent_data = {
-            "original_text": "测试",
-            "response_text": "回复",
             "emotion": "happy",
-            "actions": [],
-            "timestamp": time.time(),
+            "action": "blink",
+            "speech": "回复",
+            "context": "测试上下文",
+            "metadata": {
+                "source_id": "test-123",
+                "decision_time": 1700000000000,
+            },
         }
         payload = IntentPayload(intent_data=intent_data, provider="test")
         intent = payload.to_intent()
         assert isinstance(intent, Intent)
-        assert intent.original_text == "测试"
-        assert intent.response_text == "回复"
+        assert intent.emotion == "happy"
+        assert intent.speech == "回复"
 
     def test_intent_payload_proxy_attributes(self):
         """测试代理访问 intent_data 中的字段"""
