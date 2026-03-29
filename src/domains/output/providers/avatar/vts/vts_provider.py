@@ -228,6 +228,23 @@ class VTSProvider(BaseAvatarProvider):
 
     async def init(self):
         """初始化逻辑"""
+        # 注册 VTSProvider 能力到 capability_registry
+        if self.context.capability_registry:
+            from src.domains.output.capability_registry import ProviderCapability
+
+            self.context.capability_registry.register(
+                ProviderCapability(
+                    provider_name="vts",
+                    emotions=list(self.EMOTION_KEYS),
+                    actions=list(self.ACTION_KEYS),
+                )
+            )
+            self.logger.info(
+                f"Registered VTSProvider capability: emotions={self.EMOTION_KEYS}, actions={self.ACTION_KEYS}"
+            )
+        else:
+            self.logger.warning("capability_registry not available, skipping VTSProvider registration")
+
         # 初始化pyvts
         try:
             import pyvts  # noqa: F401
@@ -279,13 +296,24 @@ class VTSProvider(BaseAvatarProvider):
             "hotkeys": [],
         }
 
-        # 1. 适配情感为VTS参数
+        # 优先使用 structured_params["vts"]（如果决策系统已结构化）
+        if intent.structured_params and "vts" in intent.structured_params:
+            vts_params = intent.structured_params["vts"]
+            if "expressions" in vts_params:
+                result["expressions"].update(vts_params["expressions"])
+                self.logger.debug(f"Using structured_params expressions: {vts_params['expressions']}")
+            if "hotkeys" in vts_params:
+                result["hotkeys"].extend(vts_params["hotkeys"])
+                self.logger.debug(f"Using structured_params hotkeys: {vts_params['hotkeys']}")
+            self.logger.info("VTS参数来源于 structured_params")
+            return result
+
+        # 回退到 emotion/action 映射逻辑
         emotion_str = intent.emotion or "neutral"
         if emotion_str in self._emotion_map:
             result["expressions"].update(self._emotion_map[emotion_str])
             self.logger.debug(f"情感映射: {emotion_str} -> {self._emotion_map[emotion_str]}")
 
-        # 2. 适配动作为热键
         if intent.action:
             action_type_str = intent.action
             if action_type_str in self._action_hotkey_map:
@@ -294,6 +322,7 @@ class VTSProvider(BaseAvatarProvider):
                 if matched_hotkey:
                     result["hotkeys"].append(matched_hotkey)
 
+        self.logger.info(f"VTS参数来源于 emotion/action 映射: emotion={emotion_str}, action={intent.action}")
         self.logger.debug(f"Intent适配结果: expressions={result['expressions']}, hotkeys={result['hotkeys']}")
         return result
 
