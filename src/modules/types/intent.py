@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -58,6 +58,10 @@ class Intent(BaseModel):
     speech: Optional[str] = Field(default=None, description="AI 要说的话")
     context: Optional[str] = Field(default=None, description="简短上下文")
     metadata: IntentMetadata = Field(..., description="意图元数据")
+    structured_params: Dict[str, Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="结构化参数，按 provider 名称组织。特殊 key 'common' 用于共享参数（如 emotion、action 的英文版本）",
+    )
 
 
 __all__ = [

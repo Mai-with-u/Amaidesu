@@ -9,6 +9,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, Optional, Protocol, runtime_checkable
 
 import time
+from pydantic import BaseModel
 
 from src.modules.logging import get_logger
 from src.modules.types.base.pipeline_stats import PipelineStats
@@ -41,6 +42,26 @@ class PipelineException(Exception):
         # 设置异常链，使 __cause__ 可用
         if original_error is not None:
             self.__cause__ = original_error
+
+
+class OutputPipelineContext(BaseModel):
+    """
+    OutputPipeline 上下文容器
+
+    用于依赖注入，包装 Pipeline 可能需要的服务实例。
+    所有字段均为 Optional，支持按需使用。
+
+    Attributes:
+        capability_registry: 能力注册表（用于查询 Provider 能力）
+        llm_service: LLM 服务（用于生成文本/决策）
+        prompt_service: 提示词服务（用于渲染提示词模板）
+    """
+
+    capability_registry: Optional[Any] = None
+    llm_service: Optional[Any] = None
+    prompt_service: Optional[Any] = None
+
+    model_config = {"arbitrary_types_allowed": True}
 
 
 @runtime_checkable
