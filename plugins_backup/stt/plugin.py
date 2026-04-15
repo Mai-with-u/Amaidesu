@@ -548,11 +548,11 @@ class STTPlugin(BasePlugin):
                 except Exception as send_err:
                     self.logger.error(f"发送结束帧时出错: {send_err}", exc_info=True)
 
-            # Wait briefly for the receiver task
+            # Wait briefly for the receiver task to complete final processing
             if receiver_task_to_await and not receiver_task_to_await.done():
-                self.logger.debug("等待接收器任务完成 (最多 1 秒)...")
+                self.logger.debug("等待接收器任务完成 (最多 5 秒，确保最终结果能够发送)...")
                 try:
-                    await asyncio.wait_for(receiver_task_to_await, timeout=1.0)
+                    await asyncio.wait_for(receiver_task_to_await, timeout=5.0)
                     self.logger.debug("接收器任务完成。")
                 except asyncio.TimeoutError:
                     self.logger.warning("等待接收器任务完成超时，正在取消任务。")
@@ -900,47 +900,57 @@ class STTPlugin(BasePlugin):
                             # self.logger.debug(f"Intermediate text: '{text_segment}' (Total: '{full_text}')") # Optional: verbose
                             self.logger.info(f"讯飞收到最终结果: '{full_text}'")
                             if full_text.strip() and not utterance_failed:  # Only send non-empty, non-failed results
-                                try:
-                                    # --- 修正服务调用 (Re-inserted from old logic) ---
-                                    final_text_to_send = full_text.strip()
-                                    if self.enable_correction:
-                                        correction_service = self.core.get_service("stt_correction")
-                                        if correction_service:
-                                            self.logger.debug("找到 stt_correction 服务，尝试修正文本...")
-                                            try:
-                                                # Use the stripped full_text as input
-                                                corrected = await correction_service.correct_text(final_text_to_send)
-                                                if corrected and isinstance(corrected, str):
-                                                    self.logger.info(f"修正后 STT 结果: '{corrected}'")
-                                                    final_text_to_send = corrected  # Use corrected text
-                                                elif corrected:
-                                                    self.logger.warning(
-                                                        f"STT 修正服务返回了非字符串结果 ({type(corrected)})，使用原始文本。"
+                                # 创建一个不可取消的任务来发送最终结果，避免任务取消中断发送流程
+                                async def send_final_result():
+                                    try:
+                                        # --- 修正服务调用 (Re-inserted from old logic) ---
+                                        final_text_to_send = full_text.strip()
+                                        if self.enable_correction:
+                                            correction_service = self.core.get_service("stt_correction")
+                                            if correction_service:
+                                                self.logger.debug("找到 stt_correction 服务，尝试修正文本...")
+                                                try:
+                                                    # Use the stripped full_text as input
+                                                    corrected = await correction_service.correct_text(final_text_to_send)
+                                                    if corrected and isinstance(corrected, str):
+                                                        self.logger.info(f"修正后 STT 结果: '{corrected}'")
+                                                        final_text_to_send = corrected  # Use corrected text
+                                                    elif corrected:
+                                                        self.logger.warning(
+                                                            f"STT 修正服务返回了非字符串结果 ({type(corrected)})，使用原始文本。"
+                                                        )
+                                                    else:
+                                                        self.logger.info("STT 修正服务未返回有效结果，使用原始文本。")
+                                                except AttributeError:
+                                                    self.logger.error(
+                                                        "获取到的 'stt_correction' 服务没有 'correct_text' 方法。"
                                                     )
-                                                else:
-                                                    self.logger.info("STT 修正服务未返回有效结果，使用原始文本。")
-                                            except AttributeError:
-                                                self.logger.error(
-                                                    "获取到的 'stt_correction' 服务没有 'correct_text' 方法。"
-                                                )
-                                            except Exception as correct_err:
-                                                self.logger.error(
-                                                    f"调用 stt_correction 服务时出错: {correct_err}", exc_info=True
-                                                )
-                                        else:
-                                            self.logger.warning("配置启用了 STT 修正，但未找到 'stt_correction' 服务。")
-                                    # --- 使用 (可能) 修正后的文本发送消息到 Core ---
-                                    if "none" in final_text_to_send.lower():
-                                        self.logger.warning("识别结果为空，不发送。")
-                                        break
-                                    message_to_send = await self._create_stt_message(final_text_to_send)
-                                    self.logger.debug(f"准备发送 STT 消息对象到 Core: {repr(message_to_send)}")
-                                    await self.core.send_to_maicore(message_to_send)
-                                    self.logger.info(
-                                        f"STT 结果已发送到 Core: {message_to_send.message_info.message_id}"
-                                    )
-                                except Exception as send_err:
-                                    self.logger.error(f"创建或发送 STT 结果到 Core 时出错: {send_err}", exc_info=True)
+                                                except Exception as correct_err:
+                                                    self.logger.error(
+                                                        f"调用 stt_correction 服务时出错: {correct_err}", exc_info=True
+                                                    )
+                                            else:
+                                                self.logger.warning("配置启用了 STT 修正，但未找到 'stt_correction' 服务。")
+                                        # --- 使用 (可能) 修正后的文本发送消息到 Core ---
+                                        if "none" in final_text_to_send.lower():
+                                            self.logger.warning("识别结果为空，不发送。")
+                                            return
+                                        message_to_send = await self._create_stt_message(final_text_to_send)
+                                        self.logger.debug(f"准备发送 STT 消息对象到 Core: {repr(message_to_send)}")
+                                        await self.core.send_to_maicore(message_to_send)
+                                        self.logger.info(
+                                            f"STT 结果已发送到 Core: {message_to_send.message_info.message_id}"
+                                        )
+                                    except Exception as send_err:
+                                        self.logger.error(f"创建或发送 STT 结果到 Core 时出错: {send_err}", exc_info=True)
+                                
+                                # 使用asyncio.shield保护发送任务，防止被取消
+                                try:
+                                    await asyncio.shield(send_final_result())
+                                except asyncio.CancelledError:
+                                    # 即使任务被取消，也要尝试完成发送
+                                    self.logger.warning("接收器任务被取消，但仍尝试发送最终结果...")
+                                    await send_final_result()
                             elif utterance_failed:
                                 self.logger.warning("Utterance failed due to API error, not sending result.")
                             else:
