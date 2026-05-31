@@ -215,7 +215,7 @@ requires-dist = [
     { name = "fastmcp", specifier = ">=2.0.0" },
     { name = "librosa", specifier = ">=0.10.0" },
     { name = "loguru", specifier = ">=0.7.0" },
-    { name = "maim-message", specifier = ">=0.1.0" },
+    { name = "maim-message", specifier = "==0.6.8" },
     { name = "mss", specifier = ">=9.0.0" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "obsws-python", specifier = ">=1.6.0" },

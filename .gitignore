@@ -205,3 +205,5 @@ dashboard/dist/
 dashboard/node_modules/
 src/modules/llm/history/*.json
 dashboard/tsconfig.tsbuildinfo
+.omc/
+.omo/

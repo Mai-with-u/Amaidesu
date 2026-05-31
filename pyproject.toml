@@ -25,7 +25,7 @@ dependencies = [
     # MCP
     "fastmcp>=2.0.0",
     # MaiCore 消息协议
-    "maim-message>=0.1.0",
+    "maim-message==0.6.8",
     # VTube Studio 控制
     "pyvts>=0.3.0",
     # TTS 相关

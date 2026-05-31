@@ -24,10 +24,6 @@ from src.modules.prompts.manager import (
     get_prompt_manager,
     reset_prompt_manager,
 )
-from src.modules.prompts.template_override_service import (
-    OverrideConfig,
-    TemplateOverrideService,
-)
 
 __all__ = [
     "PromptManager",
@@ -35,6 +31,4 @@ __all__ = [
     "TemplateMetadata",
     "get_prompt_manager",
     "reset_prompt_manager",
-    "OverrideConfig",
-    "TemplateOverrideService",
 ]

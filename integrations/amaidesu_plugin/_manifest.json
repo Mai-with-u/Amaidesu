@@ -1,27 +1,41 @@
 {
-  "manifest_version": 1,
-  "name": "Amaidesu 动作控制插件",
-  "version": "1.0.0",
-  "description": "用于控制 Amaidesu 虚拟形象的动作和情绪，通过 MaiBot 的 LLM 决策系统自动判断触发时机",
+  "manifest_version": 2,
+  "id": "amaidesu.amaidesu-plugin",
+  "name": "Amaidesu 动作控制与提示词覆盖插件",
+  "version": "2.0.0",
+  "description": "用于控制 Amaidesu 虚拟形象的动作和情绪，通过 MaiBot 的 LLM 决策系统自动判断触发时机，并提供提示词覆盖功能",
   "author": {
     "name": "Amaidesu",
-    "url": "https://github.com/your-repo"
+    "url": "https://github.com/Mai-with-u/Amaidesu"
   },
   "license": "MIT",
   "host_application": {
-    "min_version": "0.8.0"
+    "min_version": "1.0.0",
+    "max_version": "1.0.0"
   },
-  "homepage_url": "https://github.com/your-repo/amaidesu",
-  "repository_url": "https://github.com/your-repo/amaidesu",
+  "sdk": {
+    "min_version": "2.0.0",
+    "max_version": "2.99.99"
+  },
+  "capabilities": [
+    "send.text",
+    "send.forward",
+    "send.hybrid",
+    "config.get"
+  ],
+  "homepage_url": "https://github.com/Mai-with-u/Amaidesu",
+  "repository_url": "https://github.com/Mai-with-u/Amaidesu",
   "keywords": [
     "amaidesu",
     "virtual-live",
     "动作控制",
-    "虚拟形象"
+    "虚拟形象",
+    "提示词覆盖"
   ],
   "categories": [
     "虚拟形象",
-    "动作控制"
+    "动作控制",
+    "提示词覆盖"
   ],
   "default_locale": "zh-CN",
   "plugin_info": {
@@ -51,7 +65,8 @@
       "支持热键动作 (hotkey)",
       "支持表情 (expression)",
       "支持动作 (motion)",
-      "支持情绪设置"
+      "支持情绪设置",
+      "支持提示词覆盖 (prompt_override)"
     ]
   }
 }

@@ -21,10 +21,6 @@ from src.modules.di.context import ProviderContext
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import IntentPayload
 from src.modules.logging import get_logger
-from src.modules.prompts.template_override_service import (
-    TemplateOverrideService,
-    OverrideConfig,
-)
 from src.modules.types import Intent, IntentMetadata
 from src.modules.types.base.decision_provider import DecisionProvider
 
@@ -88,19 +84,6 @@ class MaiCoreDecisionProvider(DecisionProvider):
         action_cooldown_seconds: float = Field(default=5.0, gt=0.0, description="同一 Action 的最小间隔（秒）")
         max_suggested_actions: int = Field(default=3, ge=1, le=10, description="每条消息最大建议数量")
 
-        # 提示词覆盖配置
-        enable_prompt_override: bool = Field(default=True, description="是否启用 MaiBot 提示词覆盖功能")
-        override_template_name: str = Field(default="amaidesu_override", description="覆盖模板组名（作用域名称）")
-        override_templates: list[str] = Field(
-            default=[
-                "replyer_prompt",  # think_level=1 时使用
-                "replyer_prompt_0",  # think_level=0 时使用（轻量回复）
-                "chat_target_group1",
-                "chat_target_group2",
-            ],
-            description="要覆盖的提示词名称列表",
-        )
-
     @classmethod
     def get_registration_info(cls) -> Dict[str, Any]:
         """
@@ -152,14 +135,6 @@ class MaiCoreDecisionProvider(DecisionProvider):
 
         # EventBus 引用（用于事件通知）
         self._event_bus: Optional["EventBus"] = None
-
-        # 初始化提示词覆盖服务
-        override_config = OverrideConfig(
-            enabled=self.typed_config.enable_prompt_override,
-            template_name=self.typed_config.override_template_name,
-            templates=self.typed_config.override_templates,
-        )
-        self._override_service = TemplateOverrideService(override_config)
 
     async def init(self) -> None:
         """
@@ -267,22 +242,18 @@ class MaiCoreDecisionProvider(DecisionProvider):
             message_id = f"normalized_{int(normalized.timestamp)}"
             additional_config = {
                 "source": "amaidesu_provider",
-                "original_platform": normalized.source,  # 保留原始平台信息
-                "original_message_id": message_id,  # 存储原始 message_id 用于关联响应
+                "original_platform": normalized.source,
+                "original_message_id": message_id,
+                "account_id": "amaidesu",
+                "scope": "live_room",
             }
 
-            # 构建 template_info（如果启用）
-            template_info = self._override_service.build_template_info()
-
-            # 构建 group_info（直播间作为群聊处理）
-            # MaiBot 通过 group_info 是否存在来判断是群聊还是私聊
-            # 群聊会使用 replyer_prompt，私聊会使用 private_replyer_prompt
             from maim_message import GroupInfo
 
             group_info = GroupInfo(
                 platform=self.platform,
-                group_id="live_room",  # 直播间群组ID
-                group_name="直播间",  # 直播间名称
+                group_id="live_room",
+                group_name="直播间",
             )
 
             message = MessageBase(
@@ -293,20 +264,12 @@ class MaiCoreDecisionProvider(DecisionProvider):
                     time=normalized.timestamp,
                     format_info=format_info,
                     additional_config=additional_config,
-                    template_info=template_info,  # 新增：注入 template_info
-                    group_info=group_info,  # 新增：注入 group_info（群聊标识）
+                    group_info=group_info,
                 ),
                 message_segment=seg,
-                raw_message=normalized.text,  # 添加原始消息内容
+                raw_message=normalized.text,
             )
 
-            # 调试日志
-            if template_info:
-                self.logger.debug(
-                    f"消息携带 template_info: "
-                    f"template_name={template_info.template_name}, "
-                    f"templates={list(template_info.template_items.keys())}"
-                )
             if group_info:
                 self.logger.debug(
                     f"消息携带 group_info: group_id={group_info.group_id}, group_name={group_info.group_name}"
@@ -338,23 +301,14 @@ class MaiCoreDecisionProvider(DecisionProvider):
             return
 
         try:
-            # 打印发送的 maim-message 结构（调试用）
             self.logger.info("发送到 MaiCore 的消息结构:")
             self.logger.info(f"  - message_id: {message.message_info.message_id}")
             self.logger.info(f"  - platform: {message.message_info.platform}")
             self.logger.info(f"  - user_info: {message.message_info.user_info}")
             self.logger.info(f"  - group_info: {message.message_info.group_info}")
-            self.logger.info(f"  - template_info: {message.message_info.template_info}")
             if message.message_info.group_info:
                 self.logger.info(f"    - group_id: {message.message_info.group_info.group_id}")
                 self.logger.info(f"    - group_name: {message.message_info.group_info.group_name}")
-            if message.message_info.template_info:
-                self.logger.info(f"    - template_default: {message.message_info.template_info.template_default}")
-                self.logger.info(f"    - template_name: {message.message_info.template_info.template_name}")
-                self.logger.info(
-                    f"    - template_items keys: {list(message.message_info.template_info.template_items.keys()) if message.message_info.template_info.template_items else None}"
-                )
-            # 打印完整消息字典（调试用）
             self.logger.debug(f"完整消息字典: {message.to_dict()}")
             await self._router_adapter.send(message)
             self.logger.debug(f"消息已发送至 MaiCore (id: {message.message_info.message_id})")
