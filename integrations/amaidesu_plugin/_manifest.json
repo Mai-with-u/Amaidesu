@@ -9,6 +9,10 @@
     "url": "https://github.com/Mai-with-u/Amaidesu"
   },
   "license": "MIT",
+  "urls": {
+    "repository": "https://github.com/Mai-with-u/Amaidesu",
+    "homepage": "https://github.com/Mai-with-u/Amaidesu"
+  },
   "host_application": {
     "min_version": "1.0.0",
     "max_version": "1.0.0"
@@ -19,54 +23,11 @@
   },
   "capabilities": [
     "send.text",
-    "send.forward",
-    "send.hybrid",
     "config.get"
   ],
-  "homepage_url": "https://github.com/Mai-with-u/Amaidesu",
-  "repository_url": "https://github.com/Mai-with-u/Amaidesu",
-  "keywords": [
-    "amaidesu",
-    "virtual-live",
-    "动作控制",
-    "虚拟形象",
-    "提示词覆盖"
-  ],
-  "categories": [
-    "虚拟形象",
-    "动作控制",
-    "提示词覆盖"
-  ],
-  "default_locale": "zh-CN",
-  "plugin_info": {
-    "is_built_in": false,
-    "plugin_type": "action",
-    "components": [
-      {
-        "type": "action",
-        "name": "amaidesu_action",
-        "description": "控制 Amaidesu 虚拟形象的动作和情绪"
-      },
-      {
-        "type": "command",
-        "name": "amaidesu",
-        "description": "手动控制 Amaidesu（仅调试用）",
-        "pattern": "/amaidesu"
-      },
-      {
-        "type": "command",
-        "name": "amaidestatus",
-        "description": "查询 Amaidesu 连接状态",
-        "pattern": "/amaidestatus"
-      }
-    ],
-    "features": [
-      "通过 LLM 决策自动触发动作",
-      "支持热键动作 (hotkey)",
-      "支持表情 (expression)",
-      "支持动作 (motion)",
-      "支持情绪设置",
-      "支持提示词覆盖 (prompt_override)"
-    ]
-  }
+  "i18n": {
+    "default_locale": "zh-CN",
+    "supported_locales": ["zh-CN"]
+  },
+  "dependencies": []
 }

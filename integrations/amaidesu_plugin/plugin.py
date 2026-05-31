@@ -19,7 +19,6 @@ Amaidesu 动作控制插件 - MaiBot SDK v2
 """
 
 import httpx
-import re
 from typing import Any
 
 from maibot_sdk import (
@@ -30,7 +29,14 @@ from maibot_sdk import (
     Field,
     PluginConfigBase,
 )
-from maibot_sdk.types import ActivationType, HookMode, HookOrder, ErrorPolicy
+from maibot_sdk.types import (
+    ActivationType,
+    ErrorPolicy,
+    HookMode,
+    HookOrder,
+    ToolParameterInfo,
+    ToolParamType,
+)
 
 
 # ============ Config Classes ============
@@ -39,22 +45,48 @@ from maibot_sdk.types import ActivationType, HookMode, HookOrder, ErrorPolicy
 class PluginSectionConfig(PluginConfigBase):
     """插件基本信息配置"""
 
-    enabled: bool = Field(default=True)
-    config_version: str = Field(default="2.0.0")
+    __ui_label__ = "插件"
+    __ui_icon__ = "package"
+    __ui_order__ = 0
+
+    enabled: bool = Field(default=True, description="是否启用插件")
+    config_version: str = Field(default="2.0.0", description="配置版本")
 
 
 class ApiConfig(PluginConfigBase):
     """API 配置"""
 
-    url: str = Field(default="http://127.0.0.1:60214/api/v1/maibot/action")
-    timeout: int = Field(default=10)
+    __ui_label__ = "API"
+    __ui_icon__ = "link"
+    __ui_order__ = 1
+
+    url: str = Field(
+        default="http://127.0.0.1:60214/api/v1/maibot/action",
+        description="Amaidesu HTTP API 地址",
+    )
+    timeout: int = Field(default=10, description="请求超时时间(秒)")
 
 
-class PromptOverrideConfig(PluginConfigBase):
-    """提示词覆盖配置"""
+class ReplyerOverrideConfig(PluginConfigBase):
+    """回复器提示词覆盖配置"""
 
-    enabled: bool = Field(default=True)
-    system_prompt_content: str = Field(default="")
+    __ui_label__ = "回复器提示词覆盖"
+    __ui_icon__ = "file-text"
+    __ui_order__ = 2
+
+    enabled: bool = Field(default=False, description="是否启用回复器提示词覆盖")
+    system_prompt_content: str = Field(default="", description="覆盖的回复器系统提示词内容")
+
+
+class PlannerOverrideConfig(PluginConfigBase):
+    """规划器提示词覆盖配置"""
+
+    __ui_label__ = "规划器提示词覆盖"
+    __ui_icon__ = "brain"
+    __ui_order__ = 3
+
+    enabled: bool = Field(default=False, description="是否启用规划器提示词覆盖")
+    system_prompt_content: str = Field(default="", description="覆盖的规划器系统提示词内容")
 
 
 class AmaidesuPluginConfig(PluginConfigBase):
@@ -62,7 +94,8 @@ class AmaidesuPluginConfig(PluginConfigBase):
 
     plugin: PluginSectionConfig = Field(default_factory=PluginSectionConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
-    prompt_override: PromptOverrideConfig = Field(default_factory=PromptOverrideConfig)
+    replyer_override: ReplyerOverrideConfig = Field(default_factory=ReplyerOverrideConfig)
+    planner_override: PlannerOverrideConfig = Field(default_factory=PlannerOverrideConfig)
 
 
 # ============ Main Plugin Class ============
@@ -78,92 +111,160 @@ class AmaidesuPlugin(MaiBotPlugin):
     config_model = AmaidesuPluginConfig
 
     async def on_load(self) -> None:
-        """插件加载时调用"""
-        self.logger.info("AmaidesuPlugin loaded")
+        """插件加载时执行"""
+        self.ctx.logger.info("AmaidesuPlugin 已加载")
 
     async def on_unload(self) -> None:
-        """插件卸载时调用"""
-        self.logger.info("AmaidesuPlugin unloaded")
+        """插件卸载时执行"""
+        self.ctx.logger.info("AmaidesuPlugin 已卸载")
+
+    async def on_config_update(self, scope: str, config_data: dict[str, Any], version: str) -> None:
+        """配置热重载时执行"""
+        self.ctx.logger.info(f"AmaidesuPlugin 配置已更新 (scope={scope}, version={version})")
+
+    # ===== 提示词覆盖 =====
+
+    def _override_system_message(self, messages: list, content: str) -> list:
+        """替换消息列表中第一条 system 消息的内容
+
+        Args:
+            messages: 原始消息列表（不会被修改）
+            content: 新的系统提示词内容
+
+        Returns:
+            修改后的新消息列表
+        """
+        modified = list(messages)
+
+        if not modified:
+            modified.insert(0, {"role": "system", "content": content})
+            return modified
+
+        for i, msg in enumerate(modified):
+            is_system = False
+            if isinstance(msg, dict):
+                is_system = msg.get("role") == "system"
+            elif hasattr(msg, "role"):
+                is_system = msg.role == "system"
+
+            if is_system:
+                if isinstance(modified[i], dict):
+                    modified[i] = {**modified[i], "content": content}
+                else:
+                    modified[i].content = content
+                return modified
+
+        # 未找到 system 消息，在开头插入
+        modified.insert(0, {"role": "system", "content": content})
+        return modified
 
     @HookHandler(
         "maisaka.replyer.before_model_request",
-        name="amaidesu_prompt_override",
+        name="amaidesu_replyer_prompt_override",
         mode=HookMode.BLOCKING,
         order=HookOrder.EARLY,
         error_policy=ErrorPolicy.SKIP,
     )
-    async def handle_prompt_override(self, messages=None, session_id="", **kwargs) -> dict[str, Any]:
-        """Hook handler for prompt override
+    async def handle_replyer_prompt_override(self, messages=None, session_id="", **kwargs) -> dict[str, Any]:
+        """回复器提示词覆盖 Hook
 
-        当 enabled=True 且 system_prompt_content 非空时，
-        替换 messages 列表中第一个 system 消息的内容。
+        替换回复器发送给 LLM 的系统提示词。
         """
-        # 1. If enabled=False or system_prompt_content is empty, return kwargs unchanged
-        if not self.config.prompt_override.enabled:
-            return kwargs
-        if not self.config.prompt_override.system_prompt_content:
-            return kwargs
+        cfg = self.config.replyer_override
+        if not cfg.enabled or not cfg.system_prompt_content:
+            return {"success": True}
 
-        # 7. Wrap in try-except, on error: logger.error and return original kwargs
         try:
-            # 5. Handle edge cases: messages is None/empty
-            if messages is None:
-                messages = []
-
-            if not messages:
-                # 4. If not found: insert new system message at index 0
-                messages.insert(0, {"role": "system", "content": self.config.prompt_override.system_prompt_content})
-                self.logger.info("Prompt override: inserted new system message (empty messages)")
-                return {"messages": messages}
-
-            # 2. Find first message with role="system" in messages list
-            system_message_index = None
-            for i, msg in enumerate(messages):
-                if isinstance(msg, dict):
-                    if msg.get("role") == "system":
-                        system_message_index = i
-                        break
-                elif hasattr(msg, "role"):
-                    if msg.role == "system":
-                        system_message_index = i
-                        break
-
-            if system_message_index is not None:
-                # 3. If found: replace its content
-                if isinstance(messages[system_message_index], dict):
-                    messages[system_message_index]["content"] = self.config.prompt_override.system_prompt_content
-                else:
-                    # Handle message object with role/content attributes
-                    messages[system_message_index].content = self.config.prompt_override.system_prompt_content
-                self.logger.info(f"Prompt override: replaced system message at index {system_message_index}")
-            else:
-                # 4. If not found: insert new system message at index 0
-                messages.insert(0, {"role": "system", "content": self.config.prompt_override.system_prompt_content})
-                self.logger.info("Prompt override: inserted new system message at index 0")
-
-            # 5. Handle edge cases: multiple system messages - only override the first one
-            # (already handled by break in loop above)
-
-            # 6. Use logger.info to log the override
-            self.logger.info(f"Prompt override applied, {len(messages)} messages in list")
-
-            # 8. Return {"messages": modified_messages}
-            return {"messages": messages}
-
+            modified = self._override_system_message(messages or [], cfg.system_prompt_content)
+            self.ctx.logger.info(f"Replyer prompt override 已应用，消息列表共 {len(modified)} 条")
+            return {
+                "success": True,
+                "action": "continue",
+                "modified_kwargs": {
+                    "messages": modified,
+                    "session_id": session_id,
+                    **kwargs,
+                },
+            }
         except Exception as e:
-            self.logger.error(f"Prompt override error: {e}")
-            return kwargs
+            self.ctx.logger.error(f"Replyer prompt override 错误: {e}")
+            return {"success": False, "error_message": str(e)}
+
+    @HookHandler(
+        "maisaka.planner.before_request",
+        name="amaidesu_planner_prompt_override",
+        mode=HookMode.BLOCKING,
+        order=HookOrder.EARLY,
+        error_policy=ErrorPolicy.SKIP,
+    )
+    async def handle_planner_prompt_override(self, messages=None, session_id="", **kwargs) -> dict[str, Any]:
+        """规划器提示词覆盖 Hook
+
+        替换规划器发送给模型的消息中的系统提示词。
+        同时保留 kwargs 中的 tool_definitions 等其他字段。
+        """
+        cfg = self.config.planner_override
+        if not cfg.enabled or not cfg.system_prompt_content:
+            return {"success": True}
+
+        try:
+            modified = self._override_system_message(messages or [], cfg.system_prompt_content)
+            self.ctx.logger.info(f"Planner prompt override 已应用，消息列表共 {len(modified)} 条")
+            return {
+                "success": True,
+                "action": "continue",
+                "modified_kwargs": {
+                    "messages": modified,
+                    "session_id": session_id,
+                    **kwargs,
+                },
+            }
+        except Exception as e:
+            self.ctx.logger.error(f"Planner prompt override 错误: {e}")
+            return {"success": False, "error_message": str(e)}
 
     @Tool(
         "amaidesu_action",
-        description="控制 Amaidesu 虚拟形象的动作和情绪",
+        description="控制 Amaidesu 虚拟形象的动作和情绪。适用于需要表达情感、做动作、触发热键等场景。",
         activation_type=ActivationType.ALWAYS,
+        parameters=[
+            ToolParameterInfo(
+                name="action_type",
+                param_type=ToolParamType.STRING,
+                description="动作类型，如 hotkey（热键动作）、expression（表情）",
+                required=False,
+            ),
+            ToolParameterInfo(
+                name="action_value",
+                param_type=ToolParamType.STRING,
+                description="动作值，如 smile、wave、nod、clap、dance、think、bow、point",
+                required=False,
+            ),
+            ToolParameterInfo(
+                name="emotion",
+                param_type=ToolParamType.STRING,
+                description="情绪类型，如 happy、neutral、sad、angry、excited、shy、surprised、confused",
+                required=False,
+            ),
+            ToolParameterInfo(
+                name="priority",
+                param_type=ToolParamType.INTEGER,
+                description="优先级，0-100，默认 50",
+                required=False,
+            ),
+            ToolParameterInfo(
+                name="text",
+                param_type=ToolParamType.STRING,
+                description="附带文本内容",
+                required=False,
+            ),
+        ],
     )
-    async def handle_action(self, stream_id="", **kwargs) -> tuple[bool, str]:
+    async def handle_action(self, stream_id="", **kwargs) -> dict[str, str]:
         """Tool handler for action control
 
-        从 kwargs 中提取 action_type, action_value, emotion, priority, text
-        构建 payload 并 POST 到 API
+        从参数中提取 action_type, action_value, emotion, priority, text
+        构建 payload 并 POST 到 Amaidesu API
         """
         action_type = kwargs.get("action_type")
         action_value = kwargs.get("action_value")
@@ -190,84 +291,75 @@ class AmaidesuPlugin(MaiBotPlugin):
                 result = response.json()
 
                 if result.get("success"):
-                    self.logger.info(f"Amaidesu action executed: {payload}")
-                    return True, "动作执行成功"
+                    self.ctx.logger.info(f"Amaidesu 动作已执行: {payload}")
+                    return {"content": "动作执行成功"}
                 else:
                     error_msg = result.get("error", "未知错误")
-                    self.logger.error(f"Amaidesu action failed: {error_msg}")
-                    return False, error_msg
+                    self.ctx.logger.error(f"Amaidesu 动作失败: {error_msg}")
+                    return {"content": f"动作执行失败: {error_msg}"}
 
         except httpx.ConnectError:
-            self.logger.error(f"Cannot connect to Amaidesu ({self.config.api.url})")
-            return False, "连接失败"
+            self.ctx.logger.error(f"无法连接到 Amaidesu ({self.config.api.url})")
+            return {"content": "连接 Amaidesu 失败，请确认服务是否已启动"}
         except httpx.TimeoutException:
-            self.logger.error("Request timeout")
-            return False, "请求超时"
+            self.ctx.logger.error("请求超时")
+            return {"content": "请求 Amaidesu 超时"}
         except Exception as e:
-            self.logger.error(f"Action execution failed: {e}")
-            return False, str(e)
+            self.ctx.logger.error(f"动作执行失败: {e}")
+            return {"content": f"动作执行失败: {e}"}
 
-    @Command("amaidesu", description="手动控制 Amaidesu 动作和情绪", pattern=r"^/amaidesu\s+(\w+)\s*(\w*)")
-    async def handle_amaidesu_command(self, stream_id="", **kwargs) -> tuple[bool, str, bool]:
-        """Command handler for manual control
+    @Command(
+        "amaidesu",
+        description="手动控制 Amaidesu 动作和情绪",
+        pattern=r"^/amaidesu\s+(?P<cmd_type>\w+)\s*(?P<cmd_value>\w*)",
+    )
+    async def handle_amaidesu_command(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
+        """手动控制命令
 
-        Parse command: /amaidesu <action|emotion|hotkey> <value>
-        /amaidesu list -> show available commands
+        用法: /amaidesu <action|emotion|hotkey> <value>
+        /amaidesu list -> 显示可用命令
         """
-        message = kwargs.get("message", {})
-        raw_message = message.get("raw_message", "") if isinstance(message, dict) else str(message)
+        matched_groups = kwargs.get("matched_groups")
+        if not isinstance(matched_groups, dict):
+            matched_groups = {}
 
-        match = re.match(r"^/amaidesu\s+(\w+)\s*(\w*)", raw_message)
-        if not match:
-            return (
-                True,
-                (
-                    "❌ 命令格式错误\n"
-                    "用法: /amaidesu <action|emotion|hotkey> <value>\n"
-                    "示例:\n"
-                    "  /amaidesu hotkey smile\n"
-                    "  /amaidesu emotion happy"
-                ),
-                True,
-            )
-
-        cmd_type = match.group(1).lower()
-        cmd_value = match.group(2).lower() if match.group(2) else None
+        cmd_type = str(matched_groups.get("cmd_type", "")).lower()
+        cmd_value = str(matched_groups.get("cmd_value", "")).lower() or None
 
         payload: dict[str, Any] = {"priority": 50}
 
-        if cmd_type == "action" or cmd_type == "hotkey":
+        if cmd_type in ("action", "hotkey"):
             if not cmd_value:
-                return True, ("❌ 请指定动作值\n可用热键: smile, wave, nod, clap, dance, think, bow, point"), True
+                msg = "❌ 请指定动作值\n可用热键: smile, wave, nod, clap, dance, think, bow, point"
+                await self.ctx.send.text(msg, stream_id)
+                return True, msg, True
             payload["action"] = "hotkey"
             payload["action_params"] = {"hotkey": cmd_value}
 
-        elif cmd_type == "emotion" or cmd_type == "feeling":
+        elif cmd_type in ("emotion", "feeling"):
             if not cmd_value:
-                return (
-                    True,
-                    ("❌ 请指定情绪类型\n可用情绪: happy, neutral, sad, angry, excited, shy, surprised, confused"),
-                    True,
-                )
+                msg = "❌ 请指定情绪类型\n可用情绪: happy, neutral, sad, angry, excited, shy, surprised, confused"
+                await self.ctx.send.text(msg, stream_id)
+                return True, msg, True
             payload["emotion"] = cmd_value
 
         elif cmd_type == "list":
-            return (
-                True,
-                (
-                    "📋 可用命令:\n\n"
-                    "热键动作:\n"
-                    "  /amaidesu hotkey <动作>\n"
-                    "  可用: smile, wave, nod, clap, dance, think, bow, point\n\n"
-                    "情绪设置:\n"
-                    "  /amaidesu emotion <情绪>\n"
-                    "  可用: happy, neutral, sad, angry, excited, shy, surprised, confused"
-                ),
-                True,
+            msg = (
+                "📋 可用命令:\n\n"
+                "热键动作:\n"
+                "  /amaidesu hotkey <动作>\n"
+                "  可用: smile, wave, nod, clap, dance, think, bow, point\n\n"
+                "情绪设置:\n"
+                "  /amaidesu emotion <情绪>\n"
+                "  可用: happy, neutral, sad, angry, excited, shy, surprised, confused"
             )
+            await self.ctx.send.text(msg, stream_id)
+            return True, msg, True
 
         else:
-            return True, f"❌ 未知命令类型: {cmd_type}\n可用: action, emotion, list", True
+            msg = f"❌ 未知命令类型: {cmd_type}\n可用: action, emotion, list"
+            await self.ctx.send.text(msg, stream_id)
+            return True, msg, True
 
         try:
             async with httpx.AsyncClient(timeout=self.config.api.timeout) as client:
@@ -277,33 +369,49 @@ class AmaidesuPlugin(MaiBotPlugin):
 
                 if result.get("success"):
                     intent_id = result.get("intent_id", "")
-                    return True, f"✅ 执行成功! (ID: {intent_id})", True
+                    msg = f"✅ 执行成功! (ID: {intent_id})"
+                    await self.ctx.send.text(msg, stream_id)
+                    return True, msg, True
                 else:
                     error_msg = result.get("error", "未知错误")
-                    return True, f"❌ 执行失败: {error_msg}", True
+                    msg = f"❌ 执行失败: {error_msg}"
+                    await self.ctx.send.text(msg, stream_id)
+                    return True, msg, True
 
         except httpx.ConnectError:
-            return True, f"❌ 无法连接到 Amaidesu\n地址: {self.config.api.url}", True
+            msg = f"❌ 无法连接到 Amaidesu\n地址: {self.config.api.url}"
+            await self.ctx.send.text(msg, stream_id)
+            return True, msg, True
         except httpx.TimeoutException:
-            return True, "❌ 请求超时", True
+            msg = "❌ 请求超时"
+            await self.ctx.send.text(msg, stream_id)
+            return True, msg, True
         except Exception as e:
-            return True, f"❌ 执行失败: {str(e)}", True
+            msg = f"❌ 执行失败: {e}"
+            await self.ctx.send.text(msg, stream_id)
+            return True, msg, True
 
     @Command("amaidestatus", description="查询 Amaidesu 连接状态", pattern=r"^/amaidestatus$")
-    async def handle_status_command(self, stream_id="", **kwargs) -> tuple[bool, str, bool]:
-        """Command handler for status query"""
+    async def handle_status_command(self, stream_id: str = "", **kwargs: Any) -> tuple[bool, str, bool]:
+        """查询 Amaidesu 连接状态"""
         try:
             status_url = self.config.api.url.replace("/action", "/status")
             async with httpx.AsyncClient(timeout=5) as client:
                 response = await client.get(status_url)
                 if response.status_code == 200:
-                    return True, "✅ Amaidesu 连接正常", True
+                    msg = "✅ Amaidesu 连接正常"
                 else:
-                    return True, f"⚠️ Amaidesu 响应异常: {response.status_code}", True
+                    msg = f"⚠️ Amaidesu 响应异常: {response.status_code}"
+                await self.ctx.send.text(msg, stream_id)
+                return True, msg, True
         except httpx.ConnectError:
-            return True, f"❌ 无法连接到 Amaidesu\n地址: {self.config.api.url}", True
+            msg = f"❌ 无法连接到 Amaidesu\n地址: {self.config.api.url}"
+            await self.ctx.send.text(msg, stream_id)
+            return True, msg, True
         except Exception as e:
-            return True, f"❌ 查询失败: {str(e)}", True
+            msg = f"❌ 查询失败: {e}"
+            await self.ctx.send.text(msg, stream_id)
+            return True, msg, True
 
 
 # ============ Factory Function ============
