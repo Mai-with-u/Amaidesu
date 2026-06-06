@@ -92,7 +92,7 @@ dev-dependencies = [
 
 [tool.ruff]
 include = ["*.py"]
-exclude = ["plugins_backup/*","tests/*"]
+exclude = ["tests/*"]
 
 # 行长度设置
 line-length = 120

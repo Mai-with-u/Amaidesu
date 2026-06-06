@@ -37,14 +37,7 @@
 
 **重构后**：`Provider → NormalizedMessage → ProviderManager (Pipeline过滤) → input.message.ready 事件`
 
-### 旧插件备份
-
-旧插件代码已归档到 `plugins_backup/` 目录：
-- 保留作为历史参考
-- 包含完整的迁移对照表
-- 请参考 `plugins_backup/MIGRATION_COMPLETE.md`
-
-**不必担心会破坏性变更**，因为重构已经完成，所有功能都已在新架构中正常工作。
+**重构已全面完成**，所有旧插件功能已迁移到新 Provider 架构中正常工作。
 
 ## 核心规范
 
@@ -575,12 +568,9 @@ Amaidesu/
 - [提示词管理](docs/development/prompt-management.md) - PromptManager 使用
 - [测试指南](docs/development/testing-guide.md) - 测试规范和最佳实践
 
-### 迁移文档
-- [插件迁移完成文档](plugins_backup/MIGRATION_COMPLETE.md) - 插件系统到 Provider 架构的迁移状态
-
 ---
 
-*最后更新：2026-02-09*
+*最后更新：2026-06-06*
 
 ## 迁移完成状态（2026-02-09）
 
@@ -599,4 +589,4 @@ Amaidesu/
 - 生命周期管理：由 ProviderManager 统一管理
 - 错误隔离：单个 Provider 不会影响其他 Provider
 
-旧的插件代码已归档到 `plugins_backup/` 目录，仅供参考。所有后续开发都应基于新的 Provider 架构进行。
+所有后续开发都应基于新的 Provider 架构进行。
