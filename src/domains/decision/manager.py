@@ -156,11 +156,14 @@ class DeciderManager:
         从配置中获取启用的Decider列表
 
         支持两种格式：
-        1. 新格式：decision_config["deciders"]["enabled"] = ["maibot", "llm"]
+        1. 新格式：decision_config["enabled"] = ["maibot", "llm"]
         2. 旧格式：decision_config["active_provider"] = "maibot"
 
+        注意：decision_config 已经是 deciders 配置节（来自 config.get("deciders", {})），
+        所以直接读取 enabled 或 active_provider，不要再次 get("deciders", {})。
+
         Args:
-            decision_config: 决策层配置
+            decision_config: 决策层配置（deciders配置节）
             decider_name: 显式指定的Decider名称
 
         Returns:
@@ -170,12 +173,11 @@ class DeciderManager:
         if decider_name:
             return [decider_name]
 
-        # 尝试新格式：deciders.enabled 列表
-        deciders_config = decision_config.get("deciders", {})
-        if isinstance(deciders_config, dict):
-            enabled = deciders_config.get("enabled", [])
-            if isinstance(enabled, list) and enabled:
-                return enabled
+        # 尝试新格式：decision_config["enabled"] 列表
+        # decision_config 已经是 deciders 配置节，不需要再 get("deciders", {})
+        enabled = decision_config.get("enabled", [])
+        if isinstance(enabled, list) and enabled:
+            return enabled
 
         # 尝试旧格式：active_provider 单值
         active_provider = decision_config.get("active_provider")

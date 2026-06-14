@@ -313,9 +313,21 @@ async def create_app_components(
     7. DashboardServer
     8. MCPServerService
     """
+    # 导入阶段参与者包以触发装饰器注册
+    import src.domains.input.providers  # noqa: F401
+    import src.domains.decision.providers  # noqa: F401
+    import src.domains.output.providers  # noqa: F401
+
     output_config = config.get("handlers", {})
     decision_config = config.get("deciders", {})
     input_config = config.get("collectors", {})
+
+    # 导入阶段参与者包以触发装饰器注册（替代旧的 ProviderRegistry.discover_and_register_providers）
+    # 这些导入必须在创建任何 Manager 之前完成，以确保 @collector/@decider/@handler 装饰器
+    # 已经将类注册到对应的 _COLLECTORS/_DECIDERS/_HANDLERS 字典中
+    import src.domains.input.providers  # noqa: F401 — 触发 @collector 注册
+    import src.domains.decision.providers  # noqa: F401 — 触发 @decider 注册
+    import src.domains.output.providers  # noqa: F401 — 触发 @handler 注册
 
     if output_config:
         logger.info("检测到输出Provider配置，将启用输出协调器")

@@ -83,6 +83,8 @@ class OutputHandlerManager:
         self.event_bus = event_bus
         self.config = config or {}
         self.handlers: list[Any] = []
+        self._handler_names: dict[Any, str] = {}
+        self._handler_started: dict[Any, bool] = {}
         self.logger = get_logger("OutputHandlerManager")
 
         self._llm_service = llm_manager
@@ -236,10 +238,11 @@ class OutputHandlerManager:
         except Exception as e:
             self.logger.error(f"处理Intent事件时出错: {e}", exc_info=True)
 
-    async def register_handler(self, handler: Any):
+    async def register_handler(self, handler: Any, handler_name: str):
         """注册Handler"""
         self.handlers.append(handler)
-        self.logger.info(f"Handler已注册: {handler.get_info()['name']}")
+        self._handler_names[handler] = handler_name
+        self.logger.info(f"Handler已注册: {handler_name}")
 
     async def _start_all_handlers(self) -> None:
         """启动所有Handler"""
@@ -248,21 +251,29 @@ class OutputHandlerManager:
         if self.concurrent_rendering:
             setup_tasks = []
             for handler in self.handlers:
-                setup_tasks.append(handler.start())
+                setup_tasks.append(handler.init())
 
-            await asyncio.gather(*setup_tasks, return_exceptions=True)
+            results = await asyncio.gather(*setup_tasks, return_exceptions=True)
+            for handler, result in zip(self.handlers, results, strict=False):
+                if isinstance(result, Exception):
+                    self._handler_started[handler] = False
+                    self.logger.error(f"Handler启动异常: {self._handler_names.get(handler, 'unknown')} - {result}")
+                else:
+                    self._handler_started[handler] = True
         else:
             for handler in self.handlers:
                 try:
-                    await handler.start()
+                    await handler.init()
+                    self._handler_started[handler] = True
                 except Exception as e:
-                    self.logger.error(f"Handler启动失败: {handler.get_info()['name']} - {e}")
+                    self._handler_started[handler] = False
+                    self.logger.error(f"Handler启动失败: {self._handler_names.get(handler, 'unknown')} - {e}")
 
-        all_setup = all(handler.is_started for handler in self.handlers)
+        all_setup = all(self._handler_started.get(h, False) for h in self.handlers)
         if all_setup:
             self.logger.info(f"所有 {len(self.handlers)} 个Handler已启动")
         else:
-            setup_count = sum(1 for h in self.handlers if h.is_started)
+            setup_count = sum(1 for h in self.handlers if self._handler_started.get(h, False))
             self.logger.warning(f"部分Handler启动失败: {setup_count}/{len(self.handlers)}")
 
     async def _stop_all_handlers(self):
@@ -270,22 +281,22 @@ class OutputHandlerManager:
         self.logger.info(f"正在停止 {len(self.handlers)} 个Handler...")
 
         for handler in self.handlers:
-            if handler.is_started:
+            if self._handler_started.get(handler, False):
                 try:
-                    await handler.stop()
+                    await handler.cleanup()
                 except Exception as e:
-                    self.logger.error(f"Handler停止失败: {handler.get_info()['name']} - {e}")
+                    self.logger.error(f"Handler停止失败: {self._handler_names.get(handler, 'unknown')} - {e}")
 
         self.logger.info("所有Handler已停止")
 
     def get_handler_names(self) -> list[str]:
         """获取所有Handler名称"""
-        return [h.get_info()["name"] for h in self.handlers]
+        return [self._handler_names.get(h, "unknown") for h in self.handlers]
 
     def get_handler_by_name(self, name: str) -> Any | None:
         """根据名称获取Handler"""
         for handler in self.handlers:
-            if handler.get_info()["name"] == name:
+            if self._handler_names.get(handler, "unknown") == name:
                 return handler
         return None
 
@@ -351,7 +362,7 @@ class OutputHandlerManager:
 
                 handler = self._create_handler(handler_type, handler_config)
                 if handler:
-                    await self.register_handler(handler)
+                    await self.register_handler(handler, output_name)
                     created_count += 1
                 else:
                     self.logger.error(f"Handler创建失败: {output_name} (type={handler_type})")
@@ -401,7 +412,7 @@ class OutputHandlerManager:
         """获取管理器的统计信息"""
         stats: dict[str, Any] = {
             "total_handlers": len(self.handlers),
-            "setup_handlers": sum(1 for h in self.handlers if h.is_started),
+            "setup_handlers": sum(1 for h in self.handlers if self._handler_started.get(h, False)),
             "concurrent_rendering": self.concurrent_rendering,
             "error_handling": self.error_handling,
             "handler_stats": {},
@@ -409,7 +420,7 @@ class OutputHandlerManager:
 
         handler_count = {}
         for handler in self.handlers:
-            handler_name = handler.get_info()["name"]
+            handler_name = self._handler_names.get(handler, "unknown")
             if handler_name not in stats["handler_stats"]:
                 if handler_name in handler_count:
                     handler_count[handler_name] += 1
@@ -419,14 +430,14 @@ class OutputHandlerManager:
                     numbered_name = handler_name
 
                 stats["handler_stats"][numbered_name] = {
-                    "is_started": handler.is_started,
+                    "is_started": self._handler_started.get(handler, False),
                     "type": "output_handler",
                 }
             else:
                 handler_count[handler_name] = handler_count.get(handler_name, 0) + 1
                 numbered_name = f"{handler_name}_{handler_count[handler_name]}"
                 stats["handler_stats"][numbered_name] = {
-                    "is_started": handler.is_started,
+                    "is_started": self._handler_started.get(handler, False),
                     "type": "output_handler",
                 }
 
