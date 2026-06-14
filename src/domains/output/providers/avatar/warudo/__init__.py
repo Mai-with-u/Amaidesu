@@ -1,10 +1,5 @@
-"""Warudo Avatar Provider"""
+"""Warudo Avatar Handler"""
 
-from src.modules.registry import ProviderRegistry
+from .warudo_handler import WarudoHandler
 
-from .warudo_provider import WarudoOutputProvider
-
-# 注册到 ProviderRegistry
-ProviderRegistry.register_output("warudo", WarudoOutputProvider, source="builtin:warudo")
-
-__all__ = ["WarudoOutputProvider"]
+__all__ = ["WarudoHandler"]

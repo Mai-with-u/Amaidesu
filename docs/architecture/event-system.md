@@ -18,20 +18,20 @@ Amaidesu 项目采用 **发布-订阅（Pub/Sub）模式** 构建事件驱动架
 
 ## 架构概述
 
-事件系统是 3 域架构中各组件通信的核心机制：
+事件系统是 3 阶段架构中各组件通信的核心机制：
 
 ```mermaid
 flowchart LR
-    subgraph Input[Input Domain]
-        IP[InputProvider]
+    subgraph Input[Input 阶段]
+        IP[InputCollector]
     end
 
-    subgraph Decision[Decision Domain]
-        DP[DecisionProvider]
+    subgraph Decision[Decision 阶段]
+        DP[Decider]
     end
 
-    subgraph Output[Output Domain]
-        OP[OutputProvider]
+    subgraph Output[Output 阶段]
+        OP[OutputHandler]
     end
 
     IP -->|emit: data.message| EB[EventBus]
@@ -43,9 +43,9 @@ flowchart LR
 ```
 
 **数据流规则**：
-- **Input Domain** 发布 `data.message` 事件，携带标准化消息
-- **Decision Domain** 订阅并处理消息，发布 `decision.intent` 事件
-- **Output Domain** 订阅意图事件，执行渲染并发布 `render.completed` 事件
+- **Input 阶段** 发布 `data.message` 事件，携带标准化消息
+- **Decision 阶段** 订阅并处理消息，发布 `decision.intent` 事件
+- **Output 阶段** 订阅意图事件，执行渲染并发布 `render.completed` 事件
 
 详细规则见 [数据流规则](data-flow.md)。
 
@@ -71,9 +71,9 @@ src/modules/events/
 └── payloads/
     ├── __init__.py       # Payload 统一导出
     ├── base.py           # BasePayload 基类
-    ├── input.py          # Input Domain Payload
-    ├── decision.py       # Decision Domain Payload
-    ├── output.py         # Output Domain Payload
+    ├── input.py          # Input 阶段 Payload
+    ├── decision.py       # Decision 阶段 Payload
+    ├── output.py         # Output 阶段 Payload
     └── system.py         # 系统事件 Payload
 ```
 
@@ -108,7 +108,7 @@ await event_bus.emit(
 |------|------|--------|------|
 | `event_name` | `str` | 必填 | 事件名称 |
 | `data` | `BaseModel` | 必填 | Pydantic Model 实例 |
-| `source` | `str` | `"unknown"` | 事件发布源，通常为 Provider 类名 |
+| `source` | `str` | `"unknown"` | 事件发布源，通常为 Collector/Decider/Handler 类名 |
 | `error_isolate` | `bool` | `True` | 错误隔离策略 |
 | `wait` | `bool` | `False` | 是否等待所有监听器执行完成 |
 
@@ -184,18 +184,18 @@ event_bus.reset_stats(event_name: Optional[str] = None)
 ```python
 from src.modules.events.names import CoreEvents
 
-# 3域数据流核心事件
+# 3阶段数据流核心事件
 CoreEvents.DATA_MESSAGE          # Input → Decision
 CoreEvents.DECISION_INTENT       # Decision → Output
 CoreEvents.OUTPUT_INTENT         # 过滤后的 Intent
 
-# Decision Domain
+# Decision 阶段
 CoreEvents.DECISION_REQUEST
 CoreEvents.DECISION_RESPONSE_GENERATED
 CoreEvents.DECISION_PROVIDER_CONNECTED
 CoreEvents.DECISION_PROVIDER_DISCONNECTED
 
-# Output Domain
+# Output 阶段
 CoreEvents.RENDER_COMPLETED
 CoreEvents.RENDER_FAILED
 
@@ -270,16 +270,16 @@ classDiagram
     BasePayload <|-- ErrorPayload
 ```
 
-### 按域分类
+### 按阶段分类
 
-#### Input Domain
+#### Input 阶段
 
 | Payload 类 | 事件名 | 用途 |
 |-----------|--------|------|
 | `RawDataPayload` | `data.raw` | 原始数据事件 |
 | `MessageReadyPayload` | `data.message` | 标准化消息就绪 |
 
-#### Decision Domain
+#### Decision 阶段
 
 | Payload 类 | 事件名 | 用途 |
 |-----------|--------|------|
@@ -287,10 +287,10 @@ classDiagram
 | `IntentPayload` | `decision.intent` | 意图生成 |
 | `IntentActionPayload` | - | 意图动作 |
 | `DecisionResponsePayload` | `decision.response_generated` | MaiCore 响应 |
-| `ProviderConnectedPayload` | `decision.provider.connected` | Provider 连接 |
-| `ProviderDisconnectedPayload` | `decision.provider.disconnected` | Provider 断开 |
+| `ProviderConnectedPayload` | `decision.provider.connected` | Decider 连接 |
+| `ProviderDisconnectedPayload` | `decision.provider.disconnected` | Decider 断开 |
 
-#### Output Domain
+#### Output 阶段
 
 | Payload 类 | 事件名 | 用途 |
 |-----------|--------|------|
@@ -388,13 +388,13 @@ print(f"Emit次数: {stats.emit_count}, 监听器数: {stats.listener_count}")
 await event_bus.cleanup()
 ```
 
-### Provider 中使用
+### 阶段参与者中使用
 
 ```python
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import RenderCompletedPayload
 
-class MyOutputProvider(OutputProvider):
+class MyOutputHandler(OutputHandler):
     async def _setup_internal(self):
         # 订阅渲染完成事件
         self._event_bus.on(
@@ -409,7 +409,7 @@ class MyOutputProvider(OutputProvider):
         data: RenderCompletedPayload,
         source: str
     ):
-        print(f"渲染完成: {data.provider}, 耗时: {data.duration_ms}ms")
+        print(f"渲染完成: {data.handler}, 耗时: {data.duration_ms}ms")
 ```
 
 ### 发布系统错误事件
@@ -458,7 +458,7 @@ await event_bus.emit(
 
 ```mermaid
 sequenceDiagram
-    participant P as Provider
+    participant P as 阶段参与者
     participant EB as EventBus
     participant ER as EventRegistry
     participant H1 as Handler1 (高优先级)
@@ -493,28 +493,28 @@ sequenceDiagram
     EB->>P: 返回
 ```
 
-### 3域数据流事件
+### 3阶段数据流事件
 
 ```mermaid
 sequenceDiagram
-    participant IP as InputProvider
+    participant IP as InputCollector
     participant EB as EventBus
-    participant DM as DecisionManager
+    participant DM as DeciderManager
     participant EG as ExpressionGenerator
-    participant OP as OutputProvider
+    participant OP as OutputHandler
 
-    Note over IP,EB: Input Domain
+    Note over IP,EB: Input 阶段
 
     IP->>EB: emit(data.message, MessageReadyPayload)
     EB->>DM: 转发事件
 
-    Note over DM,EB: Decision Domain
+    Note over DM,EB: Decision 阶段
 
     DM->>DM: decide(message) -> Intent
     DM->>EB: emit(decision.intent, IntentPayload)
     EB->>EG: 转发事件
 
-    Note over EG,EB: Output Domain
+    Note over EG,EB: Output 阶段
 
     EG->>EG: generate_params(intent) -> RenderParameters
     EG->>EB: emit(output.intent, RenderParamsPayload)
@@ -583,10 +583,10 @@ class MyPayload(BasePayload):
 
 ### 6. 避免循环依赖
 
-根据 3 域架构约束：
-- Output Provider 不应订阅 Input 事件
-- Decision Provider 不应订阅 Output 事件
-- Input Provider 不应订阅 Decision/Output 事件
+根据 3 阶段架构约束：
+- OutputHandler 不应订阅 Input 事件
+- Decider 不应订阅 Output 事件
+- InputCollector 不应订阅 Decision/Output 事件
 
 详见 [数据流规则](data-flow.md)。
 
@@ -594,10 +594,10 @@ class MyPayload(BasePayload):
 
 ## 相关文档
 
-- [3域架构](overview.md)
+- [3阶段架构](overview.md)
 - [数据流规则](data-flow.md)
-- [Provider 开发](../development/provider-guide.md)
+- [阶段参与者开发](../development/provider-guide.md)
 
 ---
 
-*最后更新：2026-02-15*
+*最后更新：2026-06-14*

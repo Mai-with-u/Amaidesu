@@ -4,8 +4,8 @@
 基于滑动时间窗口算法限制消息发送频率。
 
 3域架构中的位置：
-- Input Domain: 在 Provider 产出 NormalizedMessage 后进行后处理
-- 在 InputProviderManager._run_provider() 方法中调用
+- Input Domain: 在 Collector 产出 NormalizedMessage 后进行后处理
+- 在 InputCollectorManager._run_collector() 方法中调用
 - 用于限制输入消息频率
 
 功能：

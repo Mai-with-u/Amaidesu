@@ -35,16 +35,16 @@ prompt_mgr.load_all()
 
 ```
 src/modules/prompts/templates/
-├── decision/                    # 决策域提示词
+├── decision/                    # 决策阶段提示词
 │   ├── intent_parser.md        # Intent 解析模板
 │   ├── llm.md                  # LLM 对话模板
 │   └── llm_structured.md       # 结构化输出模板
-├── input/                      # 输入域提示词
+├── input/                      # 输入阶段提示词
 │   ├── mainosaba_ocr.md       # OCR 提示词
 │   ├── screen_context.md      # 屏幕上下文提示词
 │   ├── screen_description.md  # 屏幕描述提示词
 │   └── summarize.md           # 摘要提示词
-└── output/                     # 输出域提示词
+└── output/                     # 输出阶段提示词
     ├── avatar_expression.md    # 虚拟形象表情模板
     ├── speech.md               # 语音合成模板
     └── vts_hotkey.md           # VTS 热键模板
@@ -215,16 +215,16 @@ $text
 ```
 ```
 
-### 7. 在 Provider 中使用
+### 7. 在阶段参与者中使用
 
 ```python
 from src.modules.prompts import get_prompt_manager
 
-class MyDecisionProvider(DecisionProvider):
+class MyDecider(Decider):
     async def _setup_internal(self):
         self._prompt_mgr = get_prompt_manager()
 
-    async def process(self, message: NormalizedMessage) -> Intent:
+    async def decide(self, message: NormalizedMessage) -> None:
         # 渲染模板
         prompt = self._prompt_mgr.render(
             "decision/llm",
@@ -247,7 +247,7 @@ class MyDecisionProvider(DecisionProvider):
 
 - 加载和管理主配置文件 (`config.toml`)
 - 提供配置合并策略（Schema 默认值 + 主配置覆盖）
-- 管理 Provider 和 Pipeline 配置
+- 管理阶段参与者和 Pipeline 配置
 - 支持配置版本管理和自动更新
 
 ### 2. 快速开始
@@ -262,9 +262,9 @@ config, copied, *_ = await config_service.initialize()
 # 获取配置节
 general_config = config_service.get_section("general")
 
-# 获取 Provider 配置
-input_config = config_service.get_provider_config_with_defaults(
-    "console_input", "input", ConsoleInputProviderConfig
+# 获取 Collector 配置
+input_config = config_service.get_collector_config_with_defaults(
+    "console_input", ConsoleInputCollectorConfig
 )
 ```
 
@@ -307,20 +307,20 @@ emotion_intensity = 7
 host = "127.0.0.1"
 port = 8000
 
-# ========== Provider 配置 ==========
+# ========== 阶段参与者配置 ==========
 
-[providers.input]
+[collectors]
 enabled = true
-enabled_inputs = ["console_input", "bili_danmaku"]
+enabled = ["console_input", "bili_danmaku"]
 
-[providers.output]
+[handlers]
 enabled = true
-enabled_outputs = ["subtitle", "vts", "tts"]
+enabled = ["subtitle", "vts", "tts"]
 
-[providers.decision]
+[deciders]
 enabled = true
-active_provider = "maicore"
-available_providers = ["maicore", "llm", "maicraft"]
+active = "maibot"
+available = ["maibot", "llm", "maicraft"]
 
 # ========== Pipeline 配置 ==========
 
@@ -351,57 +351,57 @@ similarity_threshold = 0.85
 | `[maicore]` | MaiCore 连接配置 |
 | `[context]` | 上下文管理器配置 |
 | `[logging]` | 日志配置 |
-| `[providers.input]` | 输入 Provider 启用列表 |
-| `[providers.output]` | 输出 Provider 启用列表 |
-| `[providers.decision]` | 决策 Provider 配置 |
+| `[collectors]` | 输入 Collector 启用列表 |
+| `[handlers]` | 输出 Handler 启用列表 |
+| `[deciders]` | 决策 Decider 配置 |
 | `[pipelines.*]` | 各 Pipeline 配置 |
 
-### 4. Provider 配置
+### 4. 阶段参与者配置
 
-#### 4.1 启用 Provider
+#### 4.1 启用阶段参与者
 
-在对应域的配置节中添加 Provider 名称到启用列表：
+在对应阶段的配置节中添加参与者名称到启用列表：
 
 ```toml
-# 启用输入 Provider
-[providers.input]
-enabled_inputs = ["console_input", "bili_danmaku"]
+# 启用输入 Collector
+[collectors]
+enabled = ["console_input", "bili_danmaku"]
 
-# 启用输出 Provider
-[providers.output]
-enabled_outputs = ["subtitle", "vts", "tts"]
+# 启用输出 Handler
+[handlers]
+enabled = ["subtitle", "vts", "tts"]
 
-# 配置决策 Provider
-[providers.decision]
-active_provider = "maicore"
+# 配置决策 Decider
+[deciders]
+active = "maibot"
 ```
 
-#### 4.2 Provider 特定配置
+#### 4.2 阶段参与者特定配置
 
-每个 Provider 可以有自己的配置节：
+每个阶段参与者可以有自己的配置节：
 
 ```toml
-# 输入 Provider 配置
-[providers.input.console_input]
-# ConsoleInputProvider 特定配置
+# 输入 Collector 配置
+[collectors.console_input]
+# ConsoleInputCollector 特定配置
 
-[providers.input.bili_danmaku_official]
+[collectors.bili_danmaku_official]
 id_code = "your_id_code"
 app_id = "your_app_id"
 access_key = "your_access_key"
 
-# 输出 Provider 配置
-[providers.output.tts]
+# 输出 Handler 配置
+[handlers.tts]
 voice = "zh-CN-YunxiNeural"
 rate = "+0%"
 
-[providers.output.subtitle]
+[handlers.subtitle]
 font_size = 32
 window_width = 1000
 window_height = 720
 
-# 决策 Provider 配置
-[providers.decision.maicore]
+# 决策 Decider 配置
+[deciders.maibot]
 host = "127.0.0.1"
 port = 8000
 ```
@@ -417,28 +417,27 @@ Schema 默认值（优先级低） → 主配置覆盖（优先级高）
 #### 5.1 获取合并后的配置
 
 ```python
-from src.modules.config.schemas.input_providers import ConsoleInputProviderConfig
+from src.modules.config.schemas.input_collectors import ConsoleInputCollectorConfig
 
 # 获取带默认值合并的配置
-config = config_service.get_provider_config_with_defaults(
-    "console_input",      # Provider 名称
-    "input",               # Provider 类型
-    ConsoleInputProviderConfig  # Schema 类（可选）
+config = config_service.get_collector_config_with_defaults(
+    "console_input",      # Collector 名称
+    ConsoleInputCollectorConfig  # Schema 类（可选）
 )
 ```
 
 #### 5.2 Schema 配置类
 
-每个 Provider 可以定义 Pydantic Schema 配置类：
+每个阶段参与者可以定义 Pydantic Schema 配置类：
 
 ```python
-# src/domains/input/providers/console/config.py
+# src/domains/input/collectors/console_input/config.py
 from pydantic import Field
-from src.modules.config.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.base import BaseConfig
 
 
-class ConsoleInputProviderConfig(BaseProviderConfig):
-    """ConsoleInputProvider 配置"""
+class ConsoleInputCollectorConfig(BaseConfig):
+    """ConsoleInputCollector 配置"""
 
     type: str = "console_input"
 
@@ -491,14 +490,15 @@ platform_id = config_service.get("platform_id", section="general")
 api_key = config_service.get("api_key", default="default_key")
 ```
 
-#### 6.3 检查 Provider 启用状态
+#### 6.3 检查阶段参与者启用状态
 
 ```python
-# 检查 Provider 是否启用
-if config_service.is_provider_enabled("bili_danmaku", "input"):
+# 检查 Collector 是否启用
+if config_service.is_collector_enabled("bili_danmaku"):
     # ...
 
-if config_service.is_provider_enabled("tts", "output"):
+# 检查 Handler 是否启用
+if config_service.is_handler_enabled("tts"):
     # ...
 ```
 
@@ -513,11 +513,14 @@ if config_service.is_pipeline_enabled("rate_limit"):
 #### 6.5 获取所有配置
 
 ```python
-# 获取所有 Input Provider 配置
-all_inputs = config_service.get_all_provider_configs("input")
+# 获取所有 Collector 配置
+all_collectors = config_service.get_all_collector_configs()
 
-# 获取所有 Output Provider 配置
-all_outputs = config_service.get_all_provider_configs("output")
+# 获取所有 Handler 配置
+all_handlers = config_service.get_all_handler_configs()
+
+# 获取所有 Decider 配置
+all_deciders = config_service.get_all_decider_configs()
 
 # 获取所有 Pipeline 配置
 all_pipelines = config_service.get_all_pipeline_configs()
@@ -528,12 +531,12 @@ all_pipelines = config_service.get_all_pipeline_configs()
 ConfigService 支持从 Schema 类自动生成配置模板：
 
 ```python
-from src.modules.config.schemas.input_providers import ConsoleInputProviderConfig
+from src.modules.config.schemas.input_collectors import ConsoleInputCollectorConfig
 
 # 生成 TOML 配置文件
-ConsoleInputProviderConfig.generate_toml(
+ConsoleInputCollectorConfig.generate_toml(
     output_path="config_example.toml",
-    provider_name="providers.input.console_input",
+    section="collectors.console_input",
     include_comments=True
 )
 ```
@@ -541,9 +544,9 @@ ConsoleInputProviderConfig.generate_toml(
 生成的配置文件：
 
 ```toml
-# ConsoleInputProvider 配置
+# ConsoleInputCollector 配置
 
-[providers.input.console_input]
+[collectors.console_input]
 # 命令行提示符
 prompt = "> "
 # 是否启用历史记录
@@ -566,8 +569,8 @@ uv run python main.py
 
 ## 相关文档
 
-- [Provider 开发指南](provider-guide.md) - 如何开发自定义 Provider
+- [阶段参与者开发指南](provider-guide.md) - 如何开发自定义阶段参与者
 - [管道开发指南](pipeline-guide.md) - 如何开发自定义 Pipeline
 - [开发规范](../development-guide.md) - 代码风格和约定
-- [3域架构](../architecture/overview.md) - 架构设计总览
+- [3阶段架构](../architecture/overview.md) - 架构设计总览
 - [事件系统](../architecture/event-system.md) - EventBus 使用指南

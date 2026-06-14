@@ -18,7 +18,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from src.modules.logging import get_logger
 
-from .base import OutputPipeline, OutputPipelineContext, PipelineErrorHandling, PipelineException
+from .base import OutputPipeline, OutputPipelineContext
+from src.modules.types.base.pipeline_types import PipelineErrorHandling, PipelineException
 
 # 类型检查时的导入
 if TYPE_CHECKING:

@@ -4,16 +4,16 @@
 
 ## 概述
 
-Pipeline 是一种消息处理机制，用于在数据流经 3 域架构时对数据进行过滤、转换或预处理。项目中有两种 Pipeline：
+Pipeline 是一种消息处理机制，用于在数据流经 3 阶段架构时对数据进行过滤、转换或预处理。项目中有两种 Pipeline：
 
-| 类型 | 域 | 处理对象 | 位置 |
+| 类型 | 阶段 | 处理对象 | 位置 |
 |------|-----|----------|------|
-| **InputPipeline** | Input Domain | NormalizedMessage 对象 | Provider 产出后、发布事件前 |
-| **OutputPipeline** | Output Domain | Intent 对象 | Intent → OutputProvider |
+| **InputPipeline** | Input 阶段 | NormalizedMessage 对象 | Collector 产出后、发布事件前 |
+| **OutputPipeline** | Output 阶段 | Intent 对象 | Intent → OutputHandler |
 
 ## 1. InputPipeline
 
-InputPipeline 处理完整的 `NormalizedMessage` 对象，在 `InputProviderManager._run_provider()` 中调用。
+InputPipeline 处理完整的 `NormalizedMessage` 对象，在 `InputCollectorManager._run_collector()` 中调用。
 
 ### 基类定义
 
@@ -94,7 +94,7 @@ __all__ = ["MyFilterInputPipeline"]
 
 ## 2. OutputPipeline
 
-OutputPipeline 处理 `Intent` 对象，在 Intent 分发给 OutputProvider 前执行过滤。
+OutputPipeline 处理 `Intent` 对象，在 Intent 分发给 OutputHandler 前执行过滤。
 
 ### 基类定义
 
@@ -195,14 +195,14 @@ blocked_words = ["敏感词1", "敏感词2"]
 
 项目已内置以下 Pipeline：
 
-### Input Domain
+### Input 阶段
 
 | Pipeline | 说明 | 优先级 |
 |----------|------|-------|
 | **rate_limit** | 限流管道，基于滑动时间窗口限制消息频率 | 100 |
 | **similar_filter** | 相似文本过滤管道，过滤短时间内重复的消息 | 500 |
 
-### Output Domain
+### Output 阶段
 
 | Pipeline | 说明 | 优先级 |
 |----------|------|-------|
@@ -215,25 +215,25 @@ blocked_words = ["敏感词1", "敏感词2"]
 ```
 外部输入 (RawData)
     ↓
-Provider 构造 NormalizedMessage
+Collector 构造 NormalizedMessage
     ↓
 【InputPipeline 链】NormalizedMessage → NormalizedMessage | None
     ↓ (返回消息)
 EventBus: data.message 事件
     ↓
-【Decision Domain】
+【Decision 阶段】
 ```
 
 ### Output Pipeline 流程
 
 ```
-Decision Domain
+Decision 阶段
     ↓
 EventBus: decision.intent 事件
     ↓
 【OutputPipeline 链】Intent → Intent | None
     ↓ (返回 Intent)
-【Output Domain】Intent → 实际输出
+【Output 阶段】Intent → 实际输出
 ```
 
 ### 执行顺序

@@ -14,7 +14,7 @@
 
 | 部分 | 说明 | 示例 |
 |------|------|------|
-| `domain` | **必须** - 事件所属的域 | `input`, `decision`, `output`, `core` |
+| `domain` | **必须** - 事件所属的阶段 | `input`, `decision`, `output`, `core` |
 | `component` | **可选** - 产生事件的组件 | `obs`, `remote_stream`, `provider` |
 | `action` | **必须** - 动作或状态描述 | `ready`, `generated`, `connected`, `send_text` |
 
@@ -24,13 +24,13 @@
 - **不使用下划线 (`_`)** 作为分隔符
 - 组件和动作内部可以使用下划线（如 `send_text`）
 
-## 域前缀定义
+## 阶段前缀定义
 
-| 域 | 前缀 | 说明 | 发布者 |
+| 阶段 | 前缀 | 说明 | 发布者 |
 |----|------|------|--------|
-| **Input Domain** | `input.` | 数据采集、消息就绪 | InputProvider |
-| **Decision Domain** | `decision.` | 决策处理、意图生成 | DecisionProvider |
-| **Output Domain** | `output.` | 渲染、输出控制 | OutputProviderManager, OutputProvider |
+| **Input 阶段** | `input.` | 数据采集、消息就绪 | InputCollector |
+| **Decision 阶段** | `decision.` | 决策处理、意图生成 | Decider |
+| **Output 阶段** | `output.` | 渲染、输出控制 | OutputHandlerManager, OutputHandler |
 | **Core** | `core.` | 系统启动、关闭、错误 | 系统核心 |
 
 ## 常量命名规范
@@ -39,43 +39,43 @@
 
 1. **使用全大写字母**
 2. **使用下划线连接单词**
-3. **前缀与域对应**
+3. **前缀与阶段对应**
 
 ```python
 class CoreEvents:
-    # Input Domain
+    # Input 阶段
     INPUT_MESSAGE_READY = "input.message.ready"
 
-    # Decision Domain
+    # Decision 阶段
     DECISION_INTENT_GENERATED = "decision.intent.generated"
     DECISION_PROVIDER_CONNECTED = "decision.provider.connected"
 
-    # Output Domain
+    # Output 阶段
     OUTPUT_INTENT_READY = "output.intent.ready"
     OUTPUT_OBS_SEND_TEXT = "output.obs.send_text"
 ```
 
 ## 当前事件列表
 
-### Input Domain
+### Input 阶段
 
 | 常量 | 值 | 说明 |
 |------|-----|------|
-| `INPUT_MESSAGE_READY` | `input.message.ready` | 标准化消息就绪，由 InputProvider 发布 |
+| `INPUT_MESSAGE_READY` | `input.message.ready` | 标准化消息就绪，由 InputCollector 发布 |
 
-### Decision Domain
-
-| 常量 | 值 | 说明 |
-|------|-----|------|
-| `DECISION_INTENT_GENERATED` | `decision.intent.generated` | 意图生成完成，由 DecisionProvider 发布 |
-| `DECISION_PROVIDER_CONNECTED` | `decision.provider.connected` | DecisionProvider 连接成功 |
-| `DECISION_PROVIDER_DISCONNECTED` | `decision.provider.disconnected` | DecisionProvider 断开连接 |
-
-### Output Domain
+### Decision 阶段
 
 | 常量 | 值 | 说明 |
 |------|-----|------|
-| `OUTPUT_INTENT_READY` | `output.intent.ready` | 过滤后意图就绪，由 OutputProviderManager 发布 |
+| `DECISION_INTENT_GENERATED` | `decision.intent.generated` | 意图生成完成，由 Decider 发布 |
+| `DECISION_PROVIDER_CONNECTED` | `decision.provider.connected` | Decider 连接成功 |
+| `DECISION_PROVIDER_DISCONNECTED` | `decision.provider.disconnected` | Decider 断开连接 |
+
+### Output 阶段
+
+| 常量 | 值 | 说明 |
+|------|-----|------|
+| `OUTPUT_INTENT_READY` | `output.intent.ready` | 过滤后意图就绪，由 OutputHandlerManager 发布 |
 | `OUTPUT_OBS_SEND_TEXT` | `output.obs.send_text` | OBS 发送文本 |
 | `OUTPUT_OBS_SWITCH_SCENE` | `output.obs.switch_scene` | OBS 切换场景 |
 | `OUTPUT_OBS_SET_SOURCE_VISIBILITY` | `output.obs.set_source_visibility` | OBS 设置源可见性 |
@@ -84,24 +84,24 @@ class CoreEvents:
 ## 数据流
 
 ```
-Input Domain          Decision Domain         Output Domain
-    │                      │                       │
-    │ INPUT_MESSAGE_READY │                       │
-    ├──────────────────────►                       │
-    │                      │                       │
-    │                      │ DECISION_INTENT_     │
-    │                      │ GENERATED            │
-    │                      ├──────────────────────►
-    │                      │                       │
-    │                      │                       │ OUTPUT_INTENT_READY
-    │                      │                       ├──► OutputProviders
+Input 阶段          Decision 阶段         Output 阶段
+     │                      │                       │
+     │ INPUT_MESSAGE_READY │                       │
+     ├──────────────────────►                       │
+     │                      │                       │
+     │                      │ DECISION_INTENT_     │
+     │                      │ GENERATED            │
+     │                      ├──────────────────────►
+     │                      │                       │
+     │                      │                       │ OUTPUT_INTENT_READY
+     │                      │                       ├──► OutputHandlers
 ```
 
 ## 添加新事件
 
 添加新事件时，请遵循以下步骤：
 
-1. **确定域前缀**：根据事件的发布者确定域前缀
+1. **确定阶段前缀**：根据事件的发布者确定阶段前缀
 2. **确定组件名**（可选）：如果事件来自特定组件，添加组件名
 3. **确定动作名**：描述事件代表的动作或状态
 4. **在 `names.py` 中添加常量**：

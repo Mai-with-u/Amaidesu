@@ -137,6 +137,9 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
+markers = [
+    "characterization: tests that pin current behavior before refactoring",
+]
 
 [build-system]
 requires = ["hatchling"]

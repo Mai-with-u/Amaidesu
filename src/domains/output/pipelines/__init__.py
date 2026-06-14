@@ -14,9 +14,10 @@ OutputPipeline 用于在 Intent 分发给 OutputProvider 前执行过滤/修改/
     - OutputPipeline: 处理 Intent → 返回 Intent 或 None
 """
 
-from .base import OutputPipeline, OutputPipelineBase, PipelineErrorHandling, PipelineException, PipelineStats
+from .base import OutputPipeline, OutputPipelineBase, PipelineStats
 from .manager import OutputPipelineManager
 from .profanity_filter import ProfanityFilterPipeline
+from src.modules.types.base.pipeline_types import PipelineErrorHandling, PipelineException
 
 __all__ = [
     "OutputPipelineBase",

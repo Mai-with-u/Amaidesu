@@ -10,34 +10,65 @@
 |---------|---------|
 | 快速上手项目 | [快速开始](docs/getting-started.md) |
 | 了解代码规范 | [开发规范](docs/development-guide.md) |
-| 理解架构设计 | [3域架构](docs/architecture/overview.md) |
+| 理解架构设计 | [3阶段架构](docs/architecture/overview.md) |
 | 理解事件系统 | [事件系统](docs/architecture/event-system.md) |
-| 开发 Provider | [Provider 开发](docs/development/provider-guide.md) |
+| 开发 Collector/Decider/Handler | [阶段参与者开发](docs/development/provider-guide.md) |
 | 开发 Pipeline | [管道开发](docs/development/pipeline-guide.md) |
 | 管理提示词 | [提示词管理](docs/development/prompt-management.md) |
 | 编写测试 | [测试指南](docs/development/testing-guide.md) |
 
 ## 重构阶段
 
-**✅ 重构已完成（Iteration 3）**：Provider 自我标准化重构已完成，所有 Provider 直接构造 NormalizedMessage。
+**✅ Output Handler 重构已完成**：所有 OutputHandler 已完成重构，采用构造器注入替代 ProviderContext。
 
 ### 重构状态
 
-- **Input Provider**：8 个全部完成迁移并完成自我标准化重构
+#### Iteration 4: Output Handler 重命名 + 构造器注入
+
+**完成时间**: 2026-06-14
+
+**重构内容**:
+- **11 个 Output Handler** 已完成重命名和重构：
+  - Audio Handlers: EdgeTTSHandler, GPTSoVITSHandler, OmniTTSHandler
+  - Avatar Handlers: VTSHandler, WarudoHandler, VRChatHandler (继承 AvatarHandlerBase)
+  - Non-Audio Handlers: SubtitleHandler, StickerHandler, ObsControlHandler, RemoteStreamHandler, DebugConsoleHandler
+
+**架构变更**:
+- **重构前**: `config + context: ProviderContext` → 从 context 提取 dependencies
+- **重构后**: `config + event_bus + audio_stream_channel + llm_service + prompt_service` → 构造器直接注入
+
+**详细变更**:
+| Handler 类型 | 构造器参数 |
+|-------------|-----------|
+| TTS Handlers | `config`, `event_bus`, `audio_stream_channel` |
+| Avatar Handlers | `config`, `event_bus`, `audio_stream_channel`, `llm_service`, `prompt_service` |
+| Non-Audio Handlers | `config`, `event_bus` |
+
+**注册方式**: `@handler("name")` 装饰器替代 `ProviderRegistry.register_output()`
+
+**测试状态**: 163 tests passed ✓
+
+---
+
+**✅ Iteration 3（已完成）**：阶段参与者自我标准化重构已完成，所有参与者直接构造 NormalizedMessage。
+
+### Iteration 3 重构状态
+
+- **InputCollector**：8 个全部完成迁移并完成自我标准化重构
   - 删除 InputCoordinator 和 Normalizer 系统
-  - Provider 直接构造 NormalizedMessage
-  - Pipeline 移至 ProviderManager 层面统一过滤
-- **Decision Provider**：3 个已迁移完成
-- **Output Provider**：11 个完成迁移（含新增）
+  - Collector 直接构造 NormalizedMessage
+  - Pipeline 移至 CollectorManager 层面统一过滤
+- **Decider**：3 个已迁移完成
+- **OutputHandler**：11 个完成迁移（含新增）
 - **Service**：1 个完成迁移
 
 ### 架构变更
 
 **重构前**：`Provider → RawData → InputCoordinator → NormalizerRegistry → NormalizedMessage`
 
-**重构后**：`Provider → NormalizedMessage → ProviderManager (Pipeline过滤) → input.message.ready 事件`
+**重构后**：`Collector → NormalizedMessage → CollectorManager (Pipeline过滤) → input.message.ready 事件`
 
-**重构已全面完成**，所有旧插件功能已迁移到新 Provider 架构中正常工作。
+**重构已全面完成**，所有旧插件功能已迁移到新阶段参与者架构中正常工作。
 
 ## 核心规范
 
@@ -53,7 +84,7 @@
 
 | 禁止 | 原因 | 替代方案 |
 |------|------|----------|
-| ❌ 创建新的 Plugin（插件系统已移除） | 架构已重构为 Provider 系统 | 创建 Provider |
+| ❌ 创建新的 Plugin（插件系统已移除） | 架构已重构为阶段参与者系统 | 创建 Collector/Decider/Handler |
 | ❌ 使用服务注册机制（已废弃） | 使用 EventBus | EventBus 事件系统 |
 | ❌ 硬编码事件名字符串 | 避免拼写错误 | 使用 `CoreEvents` 常量 |
 | ❌ 使用空的 except 块 | 隐藏错误 | 记录日志并处理 |
@@ -62,15 +93,15 @@
 | ❌ 提交未验证的代码 | 可能破坏构建 | 先运行测试和 lint |
 | ❌ 类变量中存储可变对象 | 共享状态问题 | 使用 `__init__` 初始化 |
 
-### 架构约束：3域数据流规则
+### 架构约束：3阶段数据流规则
 
-**严格遵守单向数据流：Input Domain → Decision Domain → Output Domain**
+**严格遵守单向数据流：Input 阶段 → Decision 阶段 → Output 阶段**
 
 | 禁止模式 | 说明 | 详细规则 |
 |---------|------|----------|
-| ❌ Output Provider 订阅 Input 事件 | 绕过 Decision Domain，破坏分层 | [数据流规则](docs/architecture/data-flow.md) |
-| ❌ Decision Provider 订阅 Output 事件 | 创建循环依赖 | 同上 |
-| ❌ Input Provider 订阅 Decision/Output 事件 | Input 应只发布，不订阅下游 | 同上 |
+| ❌ OutputHandler 订阅 Input 事件 | 绕过 Decision 阶段，破坏分层 | [数据流规则](docs/architecture/data-flow.md) |
+| ❌ Decider 订阅 Output 事件 | 创建循环依赖 | 同上 |
+| ❌ InputCollector 订阅 Decision/Output 事件 | Input 应只发布，不订阅下游 | 同上 |
 
 ## AudioStreamChannel 音频流系统
 
@@ -81,12 +112,18 @@ AudioStreamChannel 是专门的音频数据传输通道，与 EventBus 分离，
 - **EventBus**: 用于元数据事件（开始/结束/状态通知）
 - **AudioStreamChannel**: 用于音频数据流（chunk 数据传输）
 
-### 发布者（TTS Provider）
+### 发布者（TTS Handler）
 
-所有 TTS Provider 在 `_setup_internal()` 中从 `self._dependencies` 获取 AudioStreamChannel：
+所有 TTS Handler 在 `__init__()` 中通过构造器注入获取 AudioStreamChannel：
 
 ```python
-self.audio_stream_channel = self._dependencies.get("audio_stream_channel")
+def __init__(
+    self,
+    config: Dict[str, Any],
+    event_bus: EventBus,
+    audio_stream_channel: Optional[AudioStreamChannel] = None,
+):
+    self.audio_stream_channel = audio_stream_channel
 ```
 
 在音频生成时：
@@ -94,13 +131,13 @@ self.audio_stream_channel = self._dependencies.get("audio_stream_channel")
 2. 循环调用 `publish(AudioChunk(data=chunk_bytes, ...))` 发布音频块
 3. 调用 `notify_end(AudioMetadata(...))` 通知结束
 
-### 订阅者（Avatar Provider, Remote Stream Provider）
+### 订阅者（Avatar Handler, Remote Stream Handler）
 
 订阅者在连接/设置阶段注册回调函数：
 
 ```python
 await audio_channel.subscribe(
-    name="provider_name",
+    name="handler_name",
     on_audio_start=self._on_audio_start,
     on_audio_chunk=self._on_audio_chunk,
     on_audio_end=self._on_audio_end,
@@ -128,18 +165,18 @@ await audio_channel.subscribe(
 ```python
 # main.py
 audio_stream_channel = AudioStreamChannel("tts")
-await output_provider_manager.setup(..., audio_stream_channel=audio_stream_channel)
+await output_handler_manager.setup(..., audio_stream_channel=audio_stream_channel)
 
-# OutputProviderManager 内部
-await self.setup_all_providers(event_bus, audio_stream_channel=audio_stream_channel)
+# OutputHandlerManager 内部
+await self.setup_all_handlers(event_bus, audio_stream_channel=audio_stream_channel)
 
-# Provider
-self.audio_stream_channel = self._dependencies.get("audio_stream_channel")
+# Handler
+self.audio_stream_channel = audio_stream_channel  # 构造器注入
 ```
 
 ### 共享类型
 
-以下类型被多个 Domain 共享，因此放在 `src/modules/types/` 中避免循环依赖：
+以下类型被多个阶段共享，因此放在 `src/modules/types/` 中避免循环依赖：
 
 | 类型 | 用途 | 定义位置 |
 |------|------|---------|
@@ -148,19 +185,19 @@ self.audio_stream_channel = self._dependencies.get("audio_stream_channel")
 | `IntentAction` | 意图动作模型 | `src/modules/types/intent.py` |
 
 **为什么这些类型在 Modules 层？**
-- 被 Input/Decision/Output 多个 Domain 使用
-- 如果放在任何一个 Domain 中，会导致其他 Domain 依赖它
+- 被 Input/Decision/Output 多个阶段使用
+- 如果放在任何一个阶段中，会导致其他阶段依赖它
 - 放在 Modules 层可以避免循环依赖
 
-**Decision Domain 特定的类型**：
+**Decision 阶段特定的类型**：
 以下类型位于 `src/modules/types/intent.py` 中（共享类型）：
-- `Intent`: 完整的决策意图类（Decision Domain 的核心输出）
+- `Intent`: 完整的决策意图类（Decision 阶段的核心输出）
 - `SourceContext`: 输入源上下文
 
 **如何添加新的共享类型？**
-1. 评估类型是否真的需要跨多个 Domain 使用
+1. 评估类型是否真的需要跨多个阶段使用
 2. 如果是，添加到 `src/modules/types/` 中的合适文件
-3. 更新相关 Domain 的导入语句
+3. 更新相关阶段的导入语句
 4. 运行架构测试验证
 
 ## 常用命令
@@ -292,75 +329,77 @@ async def handle_message(self, message):
 
 | 类型 | 命名风格 | 示例 |
 |------|---------|------|
-| 类名 | PascalCase | `EventBus`, `InputProvider`, `InputPipeline` |
+| 类名 | PascalCase | `EventBus`, `InputCollector`, `InputPipeline` |
 | 函数/方法名 | snake_case | `send_to_maicore`, `register_websocket_handler` |
-| 变量名 | snake_case | `provider_config`, `event_bus` |
+| 变量名 | snake_case | `handler_config`, `event_bus` |
 | 私有成员 | 前导下划线 | `_message_handlers`, `_is_connected` |
-| Provider 类 | 以 `Provider` 结尾 | `ConsoleInputProvider`, `TTSSProvider` |
+| Collector 类 | 以 `Collector` 结尾 | `ConsoleInputCollector`, `BiliDanmakuCollector` |
+| Decider 类 | 以 `Decider` 结尾 | `MaiBotDecider`, `LLMDecider` |
+| Handler 类 | 以 `Handler` 结尾 | `EdgeTTSHandler`, `SubtitleHandler` |
 | 管道类 | 以 `Pipeline` 结尾 | `RateLimitPipeline`, `SimilarTextFilterPipeline` |
 
 **详细规范**：[开发规范](docs/development-guide.md)
 
-## Provider 开发
+## 阶段参与者开发
 
-项目使用 Provider 系统封装具体功能，由 Manager 统一管理，配置驱动启用。
+项目使用阶段参与者系统封装具体功能，由 Manager 统一管理，配置驱动启用。
 
-### Provider 类型
+### 阶段参与者类型
 
 | 类型 | 职责 | 位置 | 示例 |
 |------|------|------|------|
-| **InputProvider** | 从外部数据源采集数据 | `src/domains/input/providers/` | ConsoleInputProvider, BiliDanmakuInputProvider, STTInputProvider, BiliDanmakuOfficialInputProvider |
-| **DecisionProvider** | 处理 NormalizedMessage 生成 Intent | `src/domains/decision/providers/` | MaiCoreDecisionProvider, LLMDecisionProvider, MaicraftDecisionProvider |
-| **OutputProvider** | 渲染到目标设备 | `src/domains/output/providers/` | TTSOutputProvider, GPTSoVITSOutputProvider, AvatarOutputProvider, ObsControlOutputProvider, StickerOutputProvider |
+| **InputCollector** | 从外部数据源采集数据 | `src/domains/input/collectors/` | ConsoleInputCollector, BiliDanmakuCollector, STTCollector, BiliDanmakuOfficialCollector |
+| **Decider** | 处理 NormalizedMessage 生成 Intent | `src/domains/decision/deciders/` | MaiBotDecider, LLMDecider, MaicraftDecider |
+| **OutputHandler** | 渲染到目标设备 | `src/domains/output/handlers/` | EdgeTTSHandler, GPTSoVITSHandler, VTSHandler, WarudoHandler, VRChatHandler, SubtitleHandler, StickerHandler, ObsControlHandler, RemoteStreamHandler, DebugConsoleHandler |
 
-### Provider 生命周期方法
+### 阶段参与者生命周期方法
 
-| Provider 类型 | 启动方法 | 停止方法 | 说明 |
+| 参与者类型 | 启动方法 | 停止方法 | 说明 |
 |--------------|---------|---------|------|
-| InputProvider | `start()` | `stop()` | 返回 AsyncIterator，用于数据流生成 |
-| DecisionProvider | `setup()` | `cleanup()` | 注册到 EventBus，处理消息 |
-| OutputProvider | `setup()` | `cleanup()` | 注册到 EventBus，渲染参数 |
+| InputCollector | `start()` | `stop()` | 返回 AsyncIterator，用于数据流生成 |
+| Decider | `setup()` | `cleanup()` | 注册到 EventBus，处理消息 |
+| OutputHandler | `setup()` | `cleanup()` | 注册到 EventBus，渲染参数 |
 
-**注意**: InputProvider 使用 `start()`/`stop()` 是因为它需要返回异步生成器（AsyncIterator），
-而 Decision/OutputProvider 使用 `setup()`/`cleanup()` 是因为它们是事件订阅者。
+**注意**: InputCollector 使用 `start()`/`stop()` 是因为它需要返回异步生成器（AsyncIterator），
+而 Decider/OutputHandler 使用 `setup()`/`cleanup()` 是因为它们是事件订阅者。
 
-InputProvider 也提供了 `setup()` 方法作为接口一致性，但它是空实现，实际启动数据流必须使用 `start()`。
+InputCollector 也提供了 `setup()` 方法作为接口一致性，但它是空实现，实际启动数据流必须使用 `start()`。
 
-### Provider 生命周期快速参考
+### 阶段参与者生命周期快速参考
 
 | 类型 | 启动 | 停止 | 内部初始化 | 内部清理 |
 |------|-----|------|----------|----------|
-| InputProvider | `start()` | `stop()` + `cleanup()` | `_setup_internal()` | `_cleanup_internal()` |
-| DecisionProvider | `setup()` | `cleanup()` | `_setup_internal()` | `_cleanup_internal()` |
-| OutputProvider | `setup()` | `cleanup()` | `_setup_internal()` | `_cleanup_internal()` |
+| InputCollector | `start()` | `stop()` + `cleanup()` | `_setup_internal()` | `_cleanup_internal()` |
+| Decider | `setup()` | `cleanup()` | `_setup_internal()` | `_cleanup_internal()` |
+| OutputHandler | `setup()` | `cleanup()` | `_setup_internal()` | `_cleanup_internal()` |
 
-### 添加新 Provider
+### 添加新 Handler
 
-1. 继承对应的 Provider 基类（InputProvider/DecisionProvider/OutputProvider）
-2. 在 Provider 的 `__init__.py` 中注册到 ProviderRegistry
+1. 继承对应的 Handler 基类（InputCollector/Decider/OutputHandler）
+2. 使用 `@collector`/`@decider`/`@handler` 装饰器注册
 3. 在配置中启用
 
-**详细指南**：[Provider 开发](docs/development/provider-guide.md)
+**详细指南**：[阶段参与者开发](docs/development/provider-guide.md)
 
 ### 配置示例
 
 ```toml
-# 输入Provider
-[providers.input]
-enabled_inputs = ["console_input", "bili_danmaku"]
+# 输入Collector
+[collectors]
+enabled = ["console_input", "bili_danmaku"]
 
-# 决策Provider
-[providers.decision]
-active_provider = "maicore"
+# 决策Decider
+[deciders]
+active = "maibot"
 
-# 输出Provider
-[providers.output]
-enabled_outputs = ["tts", "subtitle", "vts"]
+# 输出Handler
+[handlers]
+enabled = ["tts", "subtitle", "vts"]
 ```
 
 ## 管道开发
 
-管道用于在消息处理流程中进行预处理，位于 Input Domain 内部。
+管道用于在消息处理流程中进行预处理，位于 Input 阶段内部。
 
 ### 添加新 Pipeline
 
@@ -394,7 +433,7 @@ prompt = get_prompt_manager().render(
 
 ## 事件系统
 
-项目使用 **EventBus** 作为唯一的跨域通信机制。
+项目使用 **EventBus** 作为唯一的跨阶段通信机制。
 
 ### 基本使用
 
@@ -417,9 +456,9 @@ await event_bus.subscribe(CoreEvents.INPUT_MESSAGE_READY, self.handle_message)
 
 | 事件名 | 发布者 | 订阅者 | 数据类型 |
 |--------|--------|--------|---------|
-| `input.message.ready` | Input Domain | Decision Domain | `NormalizedMessage` |
-| `decision.intent.generated` | Decision Domain | Output Domain | `Intent` |
-| `output.intent.ready` | OutputProviderManager | OutputProviders | `Intent` |
+| `input.message.ready` | Input 阶段 | Decision 阶段 | `NormalizedMessage` |
+| `decision.intent.generated` | Decision 阶段 | Output 阶段 | `Intent` |
+| `output.intent.ready` | OutputHandlerManager | OutputHandlers | `Intent` |
 
 ## ContextService 上下文管理
 
@@ -429,45 +468,45 @@ ContextService 提供对话历史管理和多会话支持。
 
 - 管理对话历史（内存存储）
 - 支持多会话隔离（通过 session_id）
-- 为 DecisionProvider 提供上下文
+- 为 Decider 提供上下文
 
 ### 使用示例
 
 见 `docs/development/context-service.md`（待创建）
 
-## 3域架构
+## 3阶段架构
 
-| 域 | 职责 | 位置 |
+| 阶段 | 职责 | 位置 |
 |----|------|------|
-| **Input Domain** | 数据采集 + 标准化 + 预处理 | `src/domains/input/` |
-| **Decision Domain** | 决策（可替换） | `src/domains/decision/` |
-| **Output Domain** | 参数生成 + 渲染 | `src/domains/output/` |
+| **Input 阶段** | 数据采集 + 标准化 + 预处理 | `src/domains/input/` |
+| **Decision 阶段** | 决策（可替换） | `src/domains/decision/` |
+| **Output 阶段** | 参数生成 + 渲染 | `src/domains/output/` |
 
 ### 数据流
 
 ```
 外部输入（弹幕、游戏、语音）
   ↓
-【Input Domain】外部数据 → NormalizedMessage
+【Input 阶段】外部数据 → NormalizedMessage
   ↓ EventBus: input.message.ready
-【Decision Domain】NormalizedMessage → Intent
+【Decision 阶段】NormalizedMessage → Intent
   ↓ EventBus: decision.intent.generated
-【Output Domain】Intent → 实际输出
+【Output 阶段】Intent → 实际输出
 ```
 
-**详细文档**：[3域架构](docs/architecture/overview.md)
+**详细文档**：[3阶段架构](docs/architecture/overview.md)
 
 ### Core 层职责边界
 
 **Core 层的职责**：
-- 定义基础接口（Provider 基类、事件系统）
+- 定义基础接口（Collector/Decider/Handler 基类、事件系统）
 - 提供共享工具（日志、配置管理）
-- 存放跨域共享的类型（避免循环依赖）
+- 存放跨阶段共享的类型（避免循环依赖）
 - 组合根（main.py）协调组件生命周期
 
 **Core 层不应该**：
-- 从 Domain 层导入类型并重导出
-- 依赖任何 Domain 的具体实现
+- 从阶段层导入类型并重导出
+- 依赖任何阶段的具体实现
 - 包含业务逻辑
 
 **示例**：
@@ -500,7 +539,9 @@ logger.error("错误日志", exc_info=True)
 ## 配置文件
 
 - 配置文件使用 TOML 格式
-- Provider 配置：`[providers.input]`, `[providers.decision]`, `[providers.output]`
+- Collector 配置：`[collectors]`
+- Decider 配置：`[deciders]`
+- Handler 配置：`[handlers]`
 - 管道配置：`[pipelines.*]`
 - 根配置：根目录的 `config-template.toml`
 - 首次运行会自动从模板生成 `config.toml`
@@ -510,12 +551,12 @@ logger.error("错误日志", exc_info=True)
 **Core 层的职责**：
 - 定义基础接口（Provider 基类、事件系统）
 - 提供共享工具（日志、配置管理）
-- 存放跨域共享的类型（避免循环依赖）
-- 组合根（AmaidesuCore）协调组件
+- 存放跨阶段共享的类型（避免循环依赖）
+- 组合根（AmaidesuCore）协调组件生命周期
 
 **Core 层不应该**：
-- 从 Domain 层导入类型并重导出
-- 依赖任何 Domain 的具体实现
+- 从阶段层导入类型并重导出
+- 依赖任何阶段的具体实现
 - 包含业务逻辑
 
 **示例**：
@@ -541,12 +582,12 @@ Amaidesu/
     ├── core/            # 基础设施（事件、基类、通信、工具）
     ├── services/        # 共享服务（LLM、配置、上下文）
     ├── prompts/         # 提示词管理
-    └── domains/         # 业务域（input、decision、output）
+    └── domains/         # 业务阶段（input、decision、output）
 ```
 
 ## 通信模式
 
-项目使用 **EventBus** 作为唯一的跨域通信机制：
+项目使用 **EventBus** 作为唯一的跨阶段通信机制：
 - **事件系统（发布-订阅）**：瞬时通知、广播场景
 - 支持优先级、错误隔离、统计功能
 - 使用 CoreEvents 常量确保类型安全
@@ -557,7 +598,7 @@ Amaidesu/
 - [快速开始](docs/getting-started.md) - 环境搭建和基本使用
 
 ### 架构理解
-- [3域架构总览](docs/architecture/overview.md) - 3域架构详解
+- [3阶段架构总览](docs/architecture/overview.md) - 3阶段架构详解
 - [数据流规则](docs/architecture/data-flow.md) - 数据流约束和规则
 - [事件系统](docs/architecture/event-system.md) - EventBus 使用指南
 
@@ -570,23 +611,23 @@ Amaidesu/
 
 ---
 
-*最后更新：2026-06-06*
+*最后更新：2026-06-14*
 
 ## 迁移完成状态（2026-02-09）
 
-✅ **插件系统到 Provider 架构重构已完成**
+✅ **插件系统到阶段参与者架构重构已完成**
 
-所有功能已成功从旧插件系统迁移到新的 Provider 架构：
+所有功能已成功从旧插件系统迁移到新的阶段参与者架构：
 
-- **8 个 Input Provider** 已迁移完成
-- **3 个 Decision Provider** 已迁移完成
-- **11 个 Output Provider** 已迁移完成（含新增）
+- **8 个 InputCollector** 已迁移完成
+- **3 个 Decider** 已迁移完成
+- **11 个 OutputHandler** 已迁移完成（含新增）
 - **1 个共享服务** (DGLabService) 已迁移完成
 
 新架构优势：
-- 类型安全：所有 Provider 都继承基类，提供统一的接口
-- 配置驱动：通过 TOML 配置文件启用/禁用 Provider
-- 生命周期管理：由 ProviderManager 统一管理
-- 错误隔离：单个 Provider 不会影响其他 Provider
+- 类型安全：所有阶段参与者都继承基类，提供统一的接口
+- 配置驱动：通过 TOML 配置文件启用/禁用参与者
+- 生命周期管理：由 Manager 统一管理
+- 错误隔离：单个参与者不会影响其他参与者
 
-所有后续开发都应基于新的 Provider 架构进行。
+所有后续开发都应基于新的阶段参与者架构进行。

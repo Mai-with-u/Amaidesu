@@ -9,8 +9,8 @@ from typing import Dict, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class MaicraftDecisionProviderConfig(BaseModel):
-    """MaicraftDecisionProvider 配置 Schema"""
+class MaicraftDeciderConfig(BaseModel):
+    """MaicraftDecider 配置 Schema"""
 
     model_config = ConfigDict(
         json_schema_extra={

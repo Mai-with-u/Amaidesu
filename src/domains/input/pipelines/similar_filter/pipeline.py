@@ -5,8 +5,8 @@
 适用于直播弹幕、评论等场景。
 
 3域架构中的位置：
-- Input Domain: 在 RawData → NormalizedMessage 转换中处理文本
-- 在 InputProviderManager 中调用
+- Input Domain: 在 Collector 产出 NormalizedMessage 后进行后处理
+- 在 InputCollectorManager 中调用
 - 用于过滤相似输入消息
 
 原理：保留第一条消息，丢弃后来的相似消息。

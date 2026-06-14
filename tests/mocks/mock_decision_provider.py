@@ -1,22 +1,28 @@
 """
-Mock 决策 Provider（用于测试）
+Mock 决策 Decider（用于测试）
+
+不再继承 DecisionProvider，而是作为独立类实现 decider 协议。
 """
 
 from typing import Any, Dict, List, Optional
 
 from src.modules.types import Intent, IntentMetadata
-from src.modules.types.base.decision_provider import DecisionProvider
 from src.modules.types.base.normalized_message import NormalizedMessage
 
 
-class MockDecisionProvider(DecisionProvider):
-    """Mock 决策 Provider（用于测试）"""
+class MockDecisionProvider:
+    """Mock 决策 Decider（用于测试）
+
+    不继承 DecisionProvider 基类，直接实现 decider 协议。
+    使用 @decider 装饰器注册。
+    """
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
-        super().__init__(config or {})
+        # 不调用 super().__init__(config) - 不再有基类
         self.responses: List[Dict[str, Any]] = []  # 预设的响应列表
         self.call_count = 0  # 调用计数
         self.last_message: Optional[NormalizedMessage] = None
+        self._config = config or {}
 
     def add_response(self, text: str, emotion: str = "neutral"):
         """添加预设响应"""
@@ -62,3 +68,7 @@ class MockDecisionProvider(DecisionProvider):
         self.responses.clear()
         self.call_count = 0
         self.last_message = None
+
+
+# 导出别名（保持向后兼容）
+MockDecisionDecider = MockDecisionProvider

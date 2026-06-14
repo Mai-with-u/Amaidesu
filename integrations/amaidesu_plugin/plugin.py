@@ -19,6 +19,8 @@ Amaidesu 动作控制插件 - MaiBot SDK v2
 """
 
 import httpx
+import json
+import time
 from typing import Any
 
 from maibot_sdk import (
@@ -307,6 +309,136 @@ class AmaidesuPlugin(MaiBotPlugin):
         except Exception as e:
             self.ctx.logger.error(f"动作执行失败: {e}")
             return {"content": f"动作执行失败: {e}"}
+
+    @Tool(
+        "amaidesu_react",
+        description="当你回应观众时调用此工具，传递台词、情绪和动作。让 AI 直接生成结构化的情感和动作数据，无需二次解析。",
+        activation_type=ActivationType.ALWAYS,
+        parameters=[
+            ToolParameterInfo(
+                name="speech",
+                param_type=ToolParamType.STRING,
+                description="AI 要说的台词内容",
+                required=True,
+            ),
+            ToolParameterInfo(
+                name="emotion",
+                param_type=ToolParamType.STRING,
+                description="情绪类型，如 开心、害羞、惊讶、生气、难过、激动、感激 等（自然语言）",
+                required=False,
+            ),
+            ToolParameterInfo(
+                name="action",
+                param_type=ToolParamType.STRING,
+                description="动作描述，如 脸红并挥手、比心、鼓掌、点头、摇头、挥手、鞠躬 等（自然语言）",
+                required=False,
+            ),
+        ],
+    )
+    async def handle_react(self, stream_id: str = "", **kwargs) -> dict[str, str]:
+        """结构化响应 Tool - 直接传递 speech/emotion/action 给 Amaidesu
+
+        通过 maim_message 协议发送结构化 Intent 数据给 Amaidesu，
+        使其无需二次 LLM 调用即可获得情感和动作信息。
+
+        Args:
+            speech: AI 要说的台词（必填）
+            emotion: 情绪类型（可选），如 开心、害羞、惊讶
+            action: 动作描述（可选），如 脸红并挥手、鼓掌、点头
+
+        Returns:
+            包含执行状态的字典
+        """
+        speech = kwargs.get("speech", "")
+        emotion = kwargs.get("emotion", "")
+        action = kwargs.get("action", "")
+
+        if not speech:
+            return {"content": "台词不能为空"}
+
+        # 构建结构化数据
+        react_data = {
+            "speech": speech,
+            "emotion": emotion if emotion else None,
+            "action": action if action else None,
+        }
+
+        # 通过 maim_message 发送结构化数据
+        # 使用自定义段类型 "amaidesu_react" 携带结构化 Intent 数据
+        # additional_config 中包含 emotion 和 action 供 Amaidesu 直接解析
+        additional_config = {
+            "source": "amaidesu_react_tool",
+            "react_data": react_data,
+        }
+
+        # 尝试通过 ctx 发送 maim_message
+        # 如果 ctx.send_message 可用，则发送结构化消息
+        sent_via_maim = False
+        if hasattr(self.ctx, "send_message"):
+            try:
+                from maim_message import BaseMessageInfo, FormatInfo, GroupInfo, MessageBase, Seg, UserInfo
+
+                message_id = f"react_{int(time.time() * 1000)}"
+                user_info = UserInfo(user_id="maibot_plugin", user_nickname="MaiBot插件")
+                group_info = GroupInfo(platform="maibot", group_id="plugin", group_name="插件")
+
+                message = MessageBase(
+                    message_info=BaseMessageInfo(
+                        message_id=message_id,
+                        platform="maibot",
+                        user_info=user_info,
+                        time=time.time(),
+                        format_info=FormatInfo(content_format=["text"], accept_format=["text"]),
+                        additional_config=additional_config,
+                        group_info=group_info,
+                    ),
+                    message_segment=Seg(type="amaidesu_react", data=json.dumps(react_data)),
+                    raw_message=speech,
+                )
+
+                await self.ctx.send_message(message)
+                sent_via_maim = True
+                self.ctx.logger.info(f"amaidesu_react 通过 maim_message 发送: speech={speech[:30]}...")
+            except Exception as e:
+                self.ctx.logger.warning(f"maim_message 发送失败，回退到 HTTP: {e}")
+                sent_via_maim = False
+
+        # 如果 maim_message 不可用，通过 HTTP POST 发送作为后备方案
+        if not sent_via_maim:
+            try:
+                payload: dict[str, Any] = {
+                    "priority": 50,
+                    "text": speech,
+                    "message_type": "amaidesu_react",
+                    "additional_config": additional_config,
+                }
+
+                if emotion:
+                    payload["emotion"] = emotion
+                if action:
+                    payload["action"] = action
+
+                async with httpx.AsyncClient(timeout=self.config.api.timeout) as client:
+                    response = await client.post(self.config.api.url, json=payload)
+                    response.raise_for_status()
+                    result = response.json()
+
+                    if result.get("success"):
+                        self.ctx.logger.info(f"amaidesu_react 通过 HTTP 发送: speech={speech[:30]}...")
+                    else:
+                        error_msg = result.get("error", "未知错误")
+                        self.ctx.logger.warning(f"amaidesu_react HTTP 响应异常: {error_msg}")
+
+            except httpx.ConnectError:
+                self.ctx.logger.warning(f"无法连接到 Amaidesu ({self.config.api.url})")
+            except httpx.TimeoutException:
+                self.ctx.logger.warning("请求 Amaidesu 超时")
+            except Exception as e:
+                self.ctx.logger.warning(f"amaidesu_react 发送失败: {e}")
+
+        # Tool 返回台词内容作为响应
+        # MaiBot 会将这个响应发送给用户
+        return {"content": speech}
 
     @Command(
         "amaidesu",

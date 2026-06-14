@@ -1,25 +1,14 @@
 """
-Provider抽象基类
+基础数据类型定义
 
-定义了三种核心Provider接口：
-- InputProvider: 输入Provider抽象基类
-- DecisionProvider: 决策Provider抽象基类
-- OutputProvider: 输出Provider抽象基类
-
-以及核心数据类型：
-- NormalizedMessage: 标准化消息
-
-注意:
+定义了核心数据结构和类型。
 """
 
 from .base import NormalizedMessage
-from .decision_provider import DecisionProvider
-from .input_provider import InputProvider
-from .output_provider import OutputProvider
+from .pipeline_types import PipelineErrorHandling, PipelineException
 
 __all__ = [
-    "InputProvider",
-    "DecisionProvider",
-    "OutputProvider",
     "NormalizedMessage",
+    "PipelineErrorHandling",
+    "PipelineException",
 ]

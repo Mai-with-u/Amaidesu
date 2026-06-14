@@ -1,16 +1,14 @@
 """
-STTInputProvider 测试
+STTCollector 测试
 """
 
+from src.domains.input.registry import list_collectors
 
-def test_get_registration_info():
-    """测试注册信息"""
-    from src.domains.input.providers.stt import STTInputProvider
 
-    info = STTInputProvider.get_registration_info()
-
-    assert info["layer"] == "input"
-    assert info["name"] == "stt"
+def test_stt_collector_registered():
+    """测试 STT Collector 已注册"""
+    collectors = list_collectors()
+    assert "stt" in collectors
 
 
 if __name__ == "__main__":

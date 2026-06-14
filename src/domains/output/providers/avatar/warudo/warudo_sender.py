@@ -9,6 +9,10 @@ from typing import Optional
 
 import websockets
 
+from src.modules.logging import get_logger
+
+_logger = get_logger("ActionSender")
+
 
 class ActionSender:
     """Warudo动作发送器"""
@@ -41,4 +45,4 @@ class ActionSender:
         try:
             await self.websocket.send(json.dumps(action_message))
         except Exception as e:
-            print(f"发送动作失败: {e}")
+            _logger.error(f"发送动作失败: {e}")

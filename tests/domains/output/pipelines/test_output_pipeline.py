@@ -10,10 +10,8 @@ import time
 import pytest
 
 from src.modules.types import Intent, IntentMetadata
-from src.domains.output.pipelines.base import (
-    OutputPipelineBase,
-    PipelineException,
-)
+from src.domains.output.pipelines.base import OutputPipelineBase
+from src.modules.types.base.pipeline_types import PipelineException
 from src.domains.output.pipelines.manager import OutputPipelineManager
 
 

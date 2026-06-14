@@ -1,6 +1,6 @@
 # 测试目录结构
 
-本目录包含按照 3 域架构组织的测试，目录结构与 `src/` 目录对应。
+本目录包含按照 3 阶段架构组织的测试，目录结构与 `src/` 目录对应。
 
 ## 目录结构
 
@@ -43,16 +43,16 @@ tests/
 │   │   └── test_intent.py
 │   ├── test_provider_registry.py    # Provider 注册表测试
 │   └── test_provider_registry_schema.py
-├── domains/                         # 3域测试（对应 src/domains/）
-│   ├── input/                       # 输入域测试
+├── domains/                         # 3阶段测试（对应 src/domains/）
+│   ├── input/                       # 输入阶段测试
 │   │   ├── providers/               # InputProvider 测试
 │   │   ├── pipelines/               # Pipeline 测试
 │   │   ├── normalization/           # 标准化测试
 │   │   └── shared/                  # 共享组件测试
-│   ├── decision/                    # 决策域测试
+│   ├── decision/                    # 决策阶段测试
 │   │   ├── providers/               # DecisionProvider 测试
 │   │   └── test_decision_provider_manager.py
-│   └── output/                      # 输出域测试
+│   └── output/                      # 输出阶段测试
 │       ├── providers/               # OutputProvider 测试
 │       │   ├── avatar/              # Avatar 相关 Provider
 │       │   └── gptsovits/           # TTS Provider
@@ -88,15 +88,15 @@ uv run pytest tests/modules/config/ -v
 uv run pytest tests/modules/llm/ -v
 ```
 
-### 运行特定域的测试
+### 运行特定阶段的测试
 ```bash
-# 输入域测试
+# 输入阶段测试
 uv run pytest tests/domains/input/ -v
 
-# 决策域测试
+# 决策阶段测试
 uv run pytest tests/domains/decision/ -v
 
-# 输出域测试
+# 输出阶段测试
 uv run pytest tests/domains/output/ -v
 ```
 
@@ -131,9 +131,9 @@ uv run pytest tests/ -v -m "not slow"
 | 源码位置 | 测试位置 | 说明 |
 |---------|---------|------|
 | `src/modules/` | `tests/modules/` | 通用模块（配置、事件、LLM、日志等） |
-| `src/domains/input/` | `tests/domains/input/` | 输入域 |
-| `src/domains/decision/` | `tests/domains/decision/` | 决策域 |
-| `src/domains/output/` | `tests/domains/output/` | 输出域 |
+| `src/domains/input/` | `tests/domains/input/` | 输入阶段 |
+| `src/domains/decision/` | `tests/domains/decision/` | 决策阶段 |
+| `src/domains/output/` | `tests/domains/output/` | 输出阶段 |
 | - | `tests/architecture/` | 架构约束测试 |
 | - | `tests/integration/` | 集成测试 |
 | - | `tests/mocks/` | Mock 对象 |
@@ -159,5 +159,5 @@ xdg-open htmlcov/index.html
 ## 相关文档
 
 - [测试指南](../docs/development/testing-guide.md) - 测试规范和最佳实践
-- [3域架构](../docs/architecture/overview.md) - 架构设计详解
+- [3阶段架构](../docs/architecture/overview.md) - 架构设计详解
 - [Provider 开发](../docs/development/provider-guide.md) - Provider 开发指南

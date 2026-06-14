@@ -1,0 +1,655 @@
+"""
+Subtitle Handler
+
+字幕输出Handler，使用CustomTkinter显示字幕窗口。
+"""
+
+import contextlib
+import queue
+import threading
+import time
+import tkinter as tk
+from typing import Any, Dict, Optional
+
+try:
+    import customtkinter as ctk
+
+    CTK_AVAILABLE = True
+except ImportError:
+    ctk = None
+    CTK_AVAILABLE = False
+
+from typing import TYPE_CHECKING
+
+from pydantic import Field
+
+from src.domains.output.registry import handler
+from src.modules.config.schemas.base import BaseProviderConfig
+from src.modules.events.event_bus import EventBus
+from src.modules.logging import get_logger
+
+if TYPE_CHECKING:
+    from src.modules.types import Intent
+
+
+class OutlineLabel:
+    """自定义标签，支持文字描边效果"""
+
+    def __init__(
+        self,
+        master,
+        text="",
+        font=None,
+        text_color="white",
+        outline_color="black",
+        outline_width=2,
+        outline_enabled=True,
+        background_color="gray15",
+        logger=None,
+        **kwargs,
+    ):
+        if not CTK_AVAILABLE or ctk is None:
+            raise ImportError("CustomTkinter not available")
+
+        self.logger = logger
+
+        # 移除描边相关参数
+        kwargs.pop("outline_color", None)
+        kwargs.pop("outline_width", None)
+        kwargs.pop("outline_enabled", None)
+        kwargs.pop("background_color", None)
+        kwargs.pop("logger", None)
+
+        # 过滤掉可能导致问题的参数
+        safe_kwargs = {k: v for k, v in kwargs.items() if k not in ["bg_color", "text_color"]}
+
+        # 设置容器为透明
+        safe_kwargs["fg_color"] = "transparent"
+        safe_kwargs["bg_color"] = "transparent"
+        safe_kwargs["border_width"] = 0
+
+        # 使用 CTkFrame 作为容器
+        self.container_frame = ctk.CTkFrame(master, **safe_kwargs)
+
+        self.display_text = text
+        self.text_color = text_color
+        self.outline_color = outline_color
+        self.outline_width = outline_width
+        self.outline_enabled = outline_enabled
+        self.font_obj = font
+        self._background_color = background_color
+
+        # 创建 Canvas 来绘制带描边的文字
+        canvas_kwargs = {
+            "highlightthickness": 0,
+            "bd": 0,
+            "relief": "flat",
+            "bg": background_color,
+        }
+
+        self.canvas = tk.Canvas(self.container_frame, **canvas_kwargs)
+        self.canvas.pack(fill="both", expand=True)
+
+        # 绑定重绘事件
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
+
+        # 初始绘制
+        self.container_frame.after(1, self._draw_text)
+
+    def pack(self, **kwargs):
+        """包装 pack 方法"""
+        self.container_frame.pack(**kwargs)
+
+    def bind(self, event, callback):
+        """包装 bind 方法"""
+        self.container_frame.bind(event, callback)
+
+    def cget(self, option):
+        """包装 cget 方法"""
+        try:
+            return self.container_frame.cget(option)
+        except Exception:
+            self.logger.error(f"获取 Canvas 选项 '{option}' 失败", exc_info=True)
+            return None
+
+    def after(self, delay, callback):
+        """包装 after 方法"""
+        return self.container_frame.after(delay, callback)
+
+    def _on_canvas_configure(self, event):
+        """Canvas 尺寸改变时重绘文字"""
+        self._draw_text()
+
+    def _draw_text(self):
+        """绘制带描边的文字"""
+        if not self.display_text:
+            return
+
+        self.canvas.delete("all")
+
+        # 设置背景色
+        bg_color = self._background_color if self._background_color else "gray15"
+        try:
+            self.canvas.configure(bg=bg_color)
+        except Exception:
+            self.canvas.configure(bg="gray15")
+
+        # 获取 Canvas 尺寸
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+
+        if canvas_width <= 1 or canvas_height <= 1:
+            return
+
+        # 计算文字位置 (居中)
+        x = canvas_width // 2
+        y = canvas_height // 2
+
+        # 绘制描边
+        if self.outline_enabled and self.outline_width > 0:
+            for dx in range(-self.outline_width, self.outline_width + 1):
+                for dy in range(-self.outline_width, self.outline_width + 1):
+                    if dx == 0 and dy == 0:
+                        continue
+                    if dx * dx + dy * dy <= self.outline_width * self.outline_width:
+                        if self.font_obj:
+                            self.canvas.create_text(
+                                x + dx,
+                                y + dy,
+                                text=self.display_text,
+                                font=self.font_obj,
+                                fill=self.outline_color,
+                                anchor="center",
+                                width=canvas_width - 20,
+                            )
+                        else:
+                            self.canvas.create_text(
+                                x + dx,
+                                y + dy,
+                                text=self.display_text,
+                                fill=self.outline_color,
+                                anchor="center",
+                                width=canvas_width - 20,
+                            )
+
+        # 绘制主文字
+        if self.font_obj:
+            self.canvas.create_text(
+                x,
+                y,
+                text=self.display_text,
+                font=self.font_obj,
+                fill=self.text_color,
+                anchor="center",
+                width=canvas_width - 20,
+            )
+        else:
+            self.canvas.create_text(
+                x, y, text=self.display_text, fill=self.text_color, anchor="center", width=canvas_width - 20
+            )
+
+    def configure_text(self, text="", **kwargs):
+        """更新文字内容和样式"""
+        if text != "":
+            self.display_text = text
+
+        if "text_color" in kwargs:
+            self.text_color = kwargs["text_color"]
+        if "outline_color" in kwargs:
+            self.outline_color = kwargs["outline_color"]
+        if "outline_width" in kwargs:
+            self.outline_width = kwargs["outline_width"]
+        if "outline_enabled" in kwargs:
+            self.outline_enabled = kwargs["outline_enabled"]
+        if "font" in kwargs:
+            self.font_obj = kwargs["font"]
+
+        self._draw_text()
+
+
+@handler("subtitle")
+class SubtitleHandler:
+    """
+    字幕输出Handler
+
+    使用CustomTkinter显示字幕窗口，支持描边和半透明背景。
+    """
+
+    class ConfigSchema(BaseProviderConfig):
+        """字幕输出Handler配置"""
+
+        type: str = "subtitle"
+
+        # GUI配置
+        window_width: int = Field(default=800, ge=100, le=3840, description="字幕窗口宽度")
+        window_height: int = Field(default=100, ge=50, le=2160, description="字幕窗口高度")
+        window_offset_y: int = Field(default=100, ge=0, le=2160, description="字幕窗口距离底部的偏移")
+        font_family: str = Field(default="Microsoft YaHei UI", description="字体名称")
+        font_size: int = Field(default=28, ge=10, le=100, description="字体大小")
+        font_weight: str = Field(default="bold", description="字体粗细")
+        text_color: str = Field(default="white", pattern=r"^[a-zA-Z#]+$", description="文字颜色")
+
+        # 描边配置
+        outline_enabled: bool = Field(default=True, description="是否启用描边")
+        outline_color: str = Field(default="black", pattern=r"^[a-zA-Z#]+$", description="描边颜色")
+        outline_width: int = Field(default=2, ge=0, le=10, description="描边宽度")
+
+        # 背景配置
+        background_color: str = Field(default="#FFFFFF", pattern=r"^#[0-9A-Fa-f]{6}$", description="背景颜色")
+
+        # 行为配置
+        fade_delay_seconds: int = Field(default=5, ge=0, le=300, description="淡出延迟（秒）")
+        auto_hide: bool = Field(default=True, description="是否自动隐藏")
+        window_alpha: float = Field(default=0.95, ge=0.0, le=1.0, description="窗口透明度")
+        always_on_top: bool = Field(default=False, description="是否置顶")
+
+        # OBS集成配置
+        obs_friendly_mode: bool = Field(default=True, description="OBS友好模式")
+        window_title: str = Field(default="Amaidesu-Subtitle-OBS", description="窗口标题")
+        use_chroma_key: bool = Field(default=False, description="是否使用色度键")
+        chroma_key_color: str = Field(default="#00FF00", pattern=r"^#[0-9A-Fa-f]{6}$", description="色度键颜色")
+
+        # 窗口显示配置
+        always_show_window: bool = Field(default=True, description="是否始终显示窗口")
+        show_in_taskbar: bool = Field(default=True, description="是否在任务栏显示")
+        window_minimizable: bool = Field(default=True, description="窗口是否可最小化")
+        show_waiting_text: bool = Field(default=False, description="是否显示等待文字（设为 false 在无内容时透明）")
+
+    def __init__(self, config: Dict[str, Any], event_bus: EventBus):
+        """
+        初始化字幕Handler
+
+        Args:
+            config: Handler配置字典
+            event_bus: EventBus实例
+        """
+        self.config = config
+        self.event_bus = event_bus
+        self.logger = get_logger("SubtitleHandler")
+
+        if not CTK_AVAILABLE:
+            self.logger.error("CustomTkinter库不可用,字幕插件已禁用。")
+            self._enabled = False
+            return
+
+        self._enabled = True
+
+        # 使用 ConfigSchema 验证配置，获得类型安全的配置对象
+        self.typed_config = self.ConfigSchema(**config)
+
+        # GUI 配置
+        self.window_width = self.typed_config.window_width
+        self.window_height = self.typed_config.window_height
+        self.window_offset_y = self.typed_config.window_offset_y
+        self.font_family = self.typed_config.font_family
+        self.font_size = self.typed_config.font_size
+        self.font_weight = self.typed_config.font_weight
+        self.text_color = self.typed_config.text_color
+
+        # 描边配置
+        self.outline_enabled = self.typed_config.outline_enabled
+        self.outline_color = self.typed_config.outline_color
+        self.outline_width = self.typed_config.outline_width
+
+        # 背景配置
+        self.background_color = self.typed_config.background_color
+
+        # 行为配置
+        self.fade_delay_seconds = self.typed_config.fade_delay_seconds
+        self.auto_hide = self.typed_config.auto_hide
+        self.window_alpha = self.typed_config.window_alpha
+        self.always_on_top = self.typed_config.always_on_top
+
+        # OBS 集成配置
+        self.obs_friendly_mode = self.typed_config.obs_friendly_mode
+        self.window_title = self.typed_config.window_title
+        self.use_chroma_key = self.typed_config.use_chroma_key
+        self.chroma_key_color = self.typed_config.chroma_key_color
+
+        # 窗口显示配置
+        self.always_show_window = self.typed_config.always_show_window
+        self.show_in_taskbar = self.typed_config.show_in_taskbar
+        self.window_minimizable = self.typed_config.window_minimizable
+        self.show_waiting_text = self.typed_config.show_waiting_text
+
+        # 线程和状态
+        self.text_queue = queue.Queue()
+        self.gui_thread: Optional[threading.Thread] = None
+        self.root = None
+        self.text_label = None
+        self.last_voice_time = time.time()
+        self._gui_running = True
+        self.is_visible = False
+
+    async def init(self):
+        """初始化 Provider"""
+        # 启动 GUI 线程
+        if not self.gui_thread or not self.gui_thread.is_alive():
+            self.gui_thread = threading.Thread(target=self._run_gui, daemon=True)
+            self.gui_thread.start()
+            self.logger.info("字幕 GUI 线程已启动")
+
+    async def handle(self, intent: "Intent"):
+        """
+        执行意图
+
+        Args:
+            intent: 决策意图，包含 speech(文本内容)
+        """
+        text = intent.speech if intent.speech else ""
+        if not text:
+            return
+
+        self.logger.debug(f"收到字幕渲染请求: {text[:30]}...")
+
+        # 将文本放入队列
+        try:
+            self.text_queue.put(text)
+        except Exception as e:
+            self.logger.error(f"放入字幕队列时出错: {e}", exc_info=True)
+
+    async def cleanup(self):
+        """清理资源"""
+        self.logger.info("正在清理 SubtitleHandler...")
+        self._gui_running = False
+
+        # 等待线程结束
+        if self.gui_thread and self.gui_thread.is_alive():
+            self.logger.debug("等待 Subtitle GUI 线程结束...")
+            self.gui_thread.join(timeout=3.0)
+            if self.gui_thread.is_alive():
+                self.logger.warning("Subtitle GUI 线程未能及时结束。")
+
+        self.logger.info("SubtitleHandler 清理完成。")
+
+    def _run_gui(self):
+        """运行 GUI 线程"""
+        if not CTK_AVAILABLE or ctk is None:
+            self.logger.error("CustomTkinter not available")
+            return
+
+        try:
+            # 设置 CustomTkinter 外观
+            ctk.set_appearance_mode("dark")
+            ctk.set_default_color_theme("blue")
+
+            self.root = ctk.CTk()
+            window_title = self.window_title if self.obs_friendly_mode else "Amaidesu Subtitle"
+            self.root.title(window_title)
+            self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
+
+            # 窗口属性设置
+            self.root.attributes("-topmost", self.always_on_top)
+            self.root.attributes("-alpha", self.window_alpha)
+
+            # 任务栏显示
+            if self.always_show_window and self.show_in_taskbar:
+                if self.window_minimizable:
+                    self.root.resizable(True, True)
+                else:
+                    self.root.resizable(False, False)
+            else:
+                try:
+                    self.root.attributes("-toolwindow", True)
+                except Exception:
+                    self.logger.error("设置工具窗口属性失败", exc_info=True)
+
+            # 窗口大小和位置
+            screen_width = self.root.winfo_screenwidth()
+            screen_height = self.root.winfo_screenheight()
+            x = (screen_width - self.window_width) // 2
+            y = screen_height - self.window_height - self.window_offset_y
+            self.root.geometry(f"{self.window_width}x{self.window_height}+{x}+{y}")
+
+            # 背景设置
+            if self.use_chroma_key:
+                try:
+                    self.root.configure(fg_color=self.chroma_key_color)
+                except Exception:
+                    self.logger.error("设置色度颜色失败", exc_info=True)
+            else:
+                try:
+                    self.root.configure(fg_color=self.background_color)
+                except Exception:
+                    self.logger.error("设置背景颜色失败", exc_info=True)
+
+            # 创建文本标签
+            font_tuple = (self.font_family, self.font_size, self.font_weight)
+            self.text_label = OutlineLabel(
+                self.root,
+                text="",
+                font=font_tuple,
+                text_color=self.text_color,
+                outline_color=self.outline_color,
+                outline_width=self.outline_width,
+                outline_enabled=self.outline_enabled,
+                background_color=self.background_color,
+                logger=self.logger,
+            )
+            self.text_label.pack(expand=True, fill="both", padx=10, pady=5)
+
+            # --- 绑定窗口拖动和右键菜单事件 ---
+            def bind_drag_events(widget):
+                widget.bind("<Button-1>", self._start_move)
+                widget.bind("<B1-Motion>", self._on_move)
+                widget.bind("<Button-3>", self._show_context_menu)  # 右键菜单
+
+            bind_drag_events(self.root)
+            bind_drag_events(self.text_label)
+            if hasattr(self.text_label, "canvas"):
+                bind_drag_events(self.text_label.canvas)
+
+            # 初始显示状态
+            if self.always_show_window:
+                self.root.deiconify()
+                self.is_visible = True
+
+                initial_text = ""
+                if self.show_waiting_text:
+                    initial_text = "字幕窗口已就绪 - 等待语音/弹幕输入..."
+
+                if initial_text:
+                    self.root.after(500, lambda: self._update_subtitle_display(initial_text))
+            else:
+                self.root.withdraw()
+                self.is_visible = False
+
+            # 启动定时任务
+            self.root.after(100, self._check_queue)
+            self.root.after(100, self._check_auto_hide)
+
+            self.logger.info("Subtitle GUI 启动成功。")
+            self.root.mainloop()
+
+        except Exception as e:
+            self.logger.error(f"运行 Subtitle GUI 时出错: {e}", exc_info=True)
+        finally:
+            self.logger.info("Subtitle GUI 线程结束。")
+            if self.root:
+                with contextlib.suppress(Exception):
+                    self.root.quit()
+            self._gui_running = False
+
+    def _check_queue(self):
+        """检查队列中的新文本"""
+        if not self._gui_running:
+            return
+
+        try:
+            while not self.text_queue.empty():
+                text = self.text_queue.get_nowait()
+                self._update_subtitle_display(text)
+        except queue.Empty:
+            pass
+        except Exception as e:
+            self.logger.warning(f"检查字幕队列时出错: {e}", exc_info=True)
+
+        if self._gui_running and self.root:
+            self.root.after(100, self._check_queue)
+
+    def _update_subtitle_display(self, text: str):
+        """更新字幕显示"""
+        if not self.text_label or not self._gui_running:
+            return
+
+        try:
+            if text:
+                # 显示窗口
+                if not self.always_show_window and not self.is_visible and self.root:
+                    self.root.deiconify()
+                    self.is_visible = True
+
+                # 更新文本
+                self.text_label.configure_text(text=text)
+                self.last_voice_time = time.time()
+                self.logger.debug(f"已更新字幕: {text[:30]}...")
+            elif not self.always_show_window and self.is_visible and self.auto_hide and self.root:
+                # 隐藏窗口
+                self.root.withdraw()
+                self.is_visible = False
+
+        except Exception as e:
+            self.logger.warning(f"更新字幕显示时出错: {e}", exc_info=True)
+
+    def _check_auto_hide(self):
+        """检查是否需要自动隐藏"""
+        if not self._gui_running:
+            return
+
+        try:
+            if (
+                self.auto_hide
+                and self.is_visible
+                and self.root
+                and self.fade_delay_seconds > 0
+                and time.time() - self.last_voice_time > self.fade_delay_seconds
+            ):
+                if self.always_show_window:
+                    if self.text_label:
+                        if self.show_waiting_text:
+                            self.text_label.configure_text(text="等待语音/弹幕输入...")
+                        else:
+                            self.text_label.configure_text(text="")
+                else:
+                    self.logger.debug("自动隐藏字幕窗口")
+                    self.root.withdraw()
+                    self.is_visible = False
+                    if self.text_label:
+                        self.text_label.configure_text(text="")
+
+            if self._gui_running and self.root:
+                self.root.after(100, self._check_auto_hide)
+
+        except Exception as e:
+            self.logger.warning(f"检查自动隐藏时出错: {e}", exc_info=True)
+            if self._gui_running and self.root:
+                self.root.after(100, self._check_auto_hide)
+
+    def _on_closing(self):
+        """处理窗口关闭事件"""
+        self.logger.info("Subtitle 窗口关闭请求...")
+        self._gui_running = False
+        if self.root:
+            try:
+                self.root.destroy()
+            except Exception as e:
+                self.logger.warning(f"销毁 subtitle 窗口时出错: {e}", exc_info=True)
+        self.root = None
+
+    # --- 窗口事件处理 ---
+    def _start_move(self, event):
+        """记录鼠标按下位置"""
+        self._move_x = event.x
+        self._move_y = event.y
+
+    def _on_move(self, event):
+        """拖动窗口"""
+        if self.root:
+            deltax = event.x - self._move_x
+            deltay = event.y - self._move_y
+            x = self.root.winfo_x() + deltax
+            y = self.root.winfo_y() + deltay
+            self.root.geometry(f"+{x}+{y}")
+
+    def _show_context_menu(self, event):
+        """显示右键菜单"""
+        if not self.root:
+            return
+
+        try:
+            # 创建右键菜单
+            context_menu = tk.Menu(self.root, tearoff=0)
+
+            # 添加菜单项
+            if self.always_show_window:
+                if self.is_visible:
+                    context_menu.add_command(label="最小化窗口", command=self._minimize_window)
+                else:
+                    context_menu.add_command(label="显示窗口", command=self._show_window)
+
+            context_menu.add_separator()
+            context_menu.add_command(label="置顶/取消置顶", command=self._toggle_topmost)
+            context_menu.add_command(label="调整透明度", command=self._adjust_opacity)
+            context_menu.add_separator()
+            context_menu.add_command(label="测试显示", command=self._show_test_message)
+            context_menu.add_command(label="清空内容", command=self._clear_content)
+            context_menu.add_separator()
+            context_menu.add_command(label="关闭窗口", command=self._on_closing)
+
+            # 显示菜单
+            context_menu.post(event.x_root, event.y_root)
+
+        except Exception as e:
+            self.logger.debug(f"显示右键菜单时出错: {e}")
+
+    def _minimize_window(self):
+        """最小化窗口"""
+        if self.root and self.always_show_window:
+            self.root.iconify()
+
+    def _show_window(self):
+        """显示窗口"""
+        if self.root:
+            self.root.deiconify()
+            self.is_visible = True
+
+    def _toggle_topmost(self):
+        """切换窗口置顶状态"""
+        if self.root:
+            current = self.root.attributes("-topmost")
+            new_topmost = not current
+            self.root.attributes("-topmost", new_topmost)
+            self.always_on_top = new_topmost  # 同步配置状态
+            status = "置顶" if new_topmost else "取消置顶"
+            self.logger.info(f"窗口已{status} (always_on_top: {self.always_on_top})")
+
+    def _adjust_opacity(self):
+        """调整窗口透明度"""
+        if self.root:
+            current_alpha = self.root.attributes("-alpha")
+            # 循环透明度: 1.0 -> 0.8 -> 0.6 -> 0.4 -> 1.0
+            alpha_values = [1.0, 0.8, 0.6, 0.4]
+            try:
+                current_index = alpha_values.index(current_alpha)
+                new_index = (current_index + 1) % len(alpha_values)
+            except ValueError:
+                new_index = 0
+
+            new_alpha = alpha_values[new_index]
+            self.root.attributes("-alpha", new_alpha)
+            self.logger.info(f"窗口透明度已调整为: {new_alpha}")
+
+    def _show_test_message(self):
+        """显示测试消息"""
+        if self.root:
+            self._update_subtitle_display("OBS 测试消息 - 窗口可见性检查")
+            self.logger.info("已显示 OBS 测试消息，请检查窗口是否在 OBS 窗口捕获列表中出现")
+
+    def _clear_content(self):
+        """清空窗口内容"""
+        if self.text_label:
+            if self.always_show_window and self.show_waiting_text:
+                self.text_label.configure_text(text="等待语音/弹幕输入...")
+            else:
+                self.text_label.configure_text(text="")  # 完全清空
+            self.logger.info("已清空字幕内容")

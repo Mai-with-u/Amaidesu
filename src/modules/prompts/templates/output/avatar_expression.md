@@ -2,7 +2,7 @@
 TODO: 此模板当前未被使用
 
 预期用途: 根据对话内容分析并推荐合适的虚拟形象表情
-集成位置: AvatarOutputProvider 或 VTSProvider
+集成位置: AvatarHandler 或 VTSHandler
 集成方式: 在渲染表情前调用 LLM 分析文本情感和语境，从可用表情列表中推荐最合适的表情
 
 预期变量:

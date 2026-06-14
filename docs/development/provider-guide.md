@@ -1,61 +1,65 @@
-# Provider 开发指南
+# 阶段参与者开发指南
 
-本指南详细介绍如何在 Amaidesu 项目中开发自定义 Provider。Provider 是项目架构的核心组件，负责数据采集、决策和输出渲染。
+本指南详细介绍如何在 Amaidesu 项目中开发自定义阶段参与者。阶段参与者是项目架构的核心组件，负责数据采集、决策和输出渲染。
 
-## 1. Provider 类型
+## 1. 阶段参与者类型
 
-Amaidesu 采用 3 域架构，Provider 分为三种类型：
+Amaidesu 采用 3 阶段架构，阶段参与者分为三种类型：
 
 | 类型 | 职责 | 位置 | 示例 |
 |------|------|------|------|
-| **InputProvider** | 从外部数据源采集数据 | `src/domains/input/providers/` | ConsoleInputProvider, BiliDanmakuInputProvider |
-| **DecisionProvider** | 处理 NormalizedMessage 生成 Intent | `src/domains/decision/providers/` | MaiCoreDecisionProvider, LLMDecisionProvider |
-| **OutputProvider** | 将 Intent 渲染到目标设备 | `src/domains/output/providers/` | SubtitleOutputProvider, TTSOutputProvider |
+| **InputCollector** | 从外部数据源采集数据 | `src/domains/input/collectors/` | ConsoleInputCollector, BiliDanmakuCollector |
+| **Decider** | 处理 NormalizedMessage 生成 Intent | `src/domains/decision/deciders/` | MaiBotDecider, LLMDecider |
+| **OutputHandler** | 将 Intent 渲染到目标设备 | `src/domains/output/handlers/` | SubtitleHandler, EdgeTTSHandler |
 
 ### 数据流关系
 
 ```
-外部输入 → InputProvider → NormalizedMessage → DecisionProvider → Intent
+外部输入 → InputCollector → NormalizedMessage → Decider → Intent
                                                             ↓
-                                          OutputProvider → 实际输出（TTS/字幕/动作）
+                                          OutputHandler → 实际输出（TTS/字幕/动作）
 ```
 
 ---
 
-## 2. Provider 基类
+## 2. 阶段参与者基类
 
-所有 Provider 都继承自对应的抽象基类，基类定义了统一的接口和生命周期方法。
+所有阶段参与者都继承自对应的抽象基类，基类定义了统一的接口和生命周期方法。
 
-### 2.1 InputProvider 基类
+### 2.1 InputCollector 基类
 
 ```python
 from abc import ABC, abstractmethod
-from typing import AsyncIterator
+from typing import AsyncIterator, Dict, Any, Optional
 
-from src.modules.di.context import ProviderContext
-from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.events import EventBus
+from src.modules.types.normalized_message import NormalizedMessage
 
 
-class InputProvider(ABC):
-    """输入 Provider 抽象基类"""
+class InputCollector(ABC):
+    """输入 Collector 抽象基类"""
 
-    def __init__(self, config: dict, context: ProviderContext = None):
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        event_bus: EventBus,
+    ):
         self.config = config
-        self.context = context or ProviderContext()
+        self.event_bus = event_bus
         self.is_running = False
 
-    @property
-    def event_bus(self):
-        """获取事件总线"""
-        return self.context.event_bus
+    async def _setup_internal(self) -> None:
+        """内部初始化（子类可重写）"""
+        pass
 
-    async def init(self) -> None:
+    async def setup(self) -> None:
         """初始化资源配置（子类可重写）"""
         pass
 
     async def start(self) -> None:
-        """启动 Provider，建立连接"""
-        await self.init()
+        """启动 Collector，建立连接"""
+        await self._setup_internal()
+        await self.setup()
         self.is_running = True
 
     def stream(self) -> AsyncIterator[NormalizedMessage]:
@@ -64,11 +68,11 @@ class InputProvider(ABC):
         注意：调用此方法前必须先调用 start()
         """
         if not self.is_running:
-            raise RuntimeError("Provider 未启动，请先调用 start()")
+            raise RuntimeError("Collector 未启动，请先调用 start()")
 
         async def _generate():
             try:
-                async for message in self.generate():
+                async for message in self.collect():
                     yield message
             finally:
                 self.is_running = False
@@ -76,7 +80,7 @@ class InputProvider(ABC):
         return _generate()
 
     @abstractmethod
-    async def generate(self) -> AsyncIterator[NormalizedMessage]:
+    async def collect(self) -> AsyncIterator[NormalizedMessage]:
         """
         生成 NormalizedMessage 数据流（子类必须实现）
 
@@ -86,9 +90,13 @@ class InputProvider(ABC):
         pass
 
     async def stop(self):
-        """停止 Provider"""
+        """停止 Collector"""
         self.is_running = False
-        await self.cleanup()
+        await self._cleanup_internal()
+
+    async def _cleanup_internal(self) -> None:
+        """内部清理（子类可重写）"""
+        pass
 
     async def cleanup(self) -> None:
         """清理资源（子类可重写）"""
@@ -96,50 +104,42 @@ class InputProvider(ABC):
 ```
 
 **核心要点**：
-- InputProvider 使用 `start()` / `stop()` 方法管理生命周期
-- 核心方法是 `generate()`，必须实现为异步生成器
+- InputCollector 使用构造器注入获取 `event_bus`
+- 核心方法是 `collect()`，必须实现为异步生成器
 - 直接构造 `NormalizedMessage`，无需中间数据结构
 
-### 2.2 DecisionProvider 基类
+### 2.2 Decider 基类
 
 ```python
 from abc import ABC, abstractmethod
+from typing import Dict, Any, Optional
 
-from src.modules.di.context import ProviderContext
+from src.modules.events import EventBus
+from src.modules.types import Intent, NormalizedMessage
 
 
-class DecisionProvider(ABC):
-    """决策 Provider 抽象基类"""
+class Decider(ABC):
+    """决策 Decider 抽象基类"""
 
-    def __init__(self, config: dict, context: ProviderContext):
-        """
-        Args:
-            config: Provider 配置
-            context: 依赖注入上下文（必填）
-        """
-        if context is None:
-            raise ValueError("DecisionProvider 必须接收 context 参数")
-
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        event_bus: EventBus,
+    ):
         self.config = config
-        self.context = context
+        self.event_bus = event_bus
         self.is_started = False
 
-    @property
-    def event_bus(self):
-        """EventBus 实例"""
-        return self.context.event_bus
-
-    async def init(self) -> None:
-        """初始化 Provider（子类可重写）"""
+    async def _setup_internal(self) -> None:
+        """内部初始化（子类可重写）"""
         pass
 
-    async def start(self, event_bus=None, config=None, dependencies=None) -> None:
-        """启动 Provider"""
-        await self.init()
-        self.is_started = True
+    async def setup(self) -> None:
+        """初始化 Decider（子类可重写）"""
+        pass
 
     @abstractmethod
-    async def decide(self, message: "NormalizedMessage") -> None:
+    async def decide(self, message: NormalizedMessage) -> None:
         """
         决策（fire-and-forget）
 
@@ -147,17 +147,12 @@ class DecisionProvider(ABC):
 
         注意：这是 fire-and-forget 模式：
         - 不等待决策完成，不返回结果
-        - Provider 内部负责通过 event_bus 发布 decision.intent 事件
+        - Decider 内部负责通过 event_bus 发布 decision.intent 事件
 
         Args:
             message: 标准化消息
         """
         pass
-
-    async def stop(self) -> None:
-        """停止 Provider"""
-        await self.cleanup()
-        self.is_started = False
 
     async def cleanup(self) -> None:
         """清理资源（子类可重写）"""
@@ -165,54 +160,39 @@ class DecisionProvider(ABC):
 ```
 
 **核心要点**：
-- DecisionProvider **必须**接收 `context` 参数（必填）
+- Decider 使用构造器注入获取 `event_bus`
 - 核心方法是 `decide()`，采用 fire-and-forget 模式
 - 通过 EventBus 发布 `decision.intent` 事件传递结果
 
-### 2.3 OutputProvider 基类
+### 2.3 OutputHandler 基类
 
 ```python
 from abc import ABC, abstractmethod
+from typing import Dict, Any, Optional
 
-from src.modules.di.context import ProviderContext
+from src.modules.events import EventBus
+from src.modules.streaming import AudioStreamChannel
+from src.modules.types import Intent
 
 
-class OutputProvider(ABC):
-    """输出 Provider 抽象基类"""
+class OutputHandler(ABC):
+    """输出 Handler 抽象基类"""
 
     priority: int = 50  # 事件处理优先级
 
-    def __init__(self, config: dict, context: ProviderContext):
-        """
-        Args:
-            config: Provider 配置
-            context: 依赖注入上下文（必填）
-        """
-        if context is None:
-            raise ValueError("OutputProvider 必须接收 context 参数")
-
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        event_bus: EventBus,
+        audio_stream_channel: Optional[AudioStreamChannel] = None,
+    ):
         self.config = config
-        self.context = context
+        self.event_bus = event_bus
+        self.audio_stream_channel = audio_stream_channel
         self.is_started = False
 
-    @property
-    def event_bus(self):
-        return self.context.event_bus
-
-    @property
-    def audio_stream_channel(self):
-        return self.context.audio_stream_channel
-
-    async def init(self):
-        """初始化 Provider（子类可重写）"""
-        pass
-
-    async def start(self, event_bus=None, audio_stream_channel=None):
-        """
-        启动 Provider，订阅 OUTPUT_INTENT 事件
-
-        依赖已在构造时通过 context 注入。
-        """
+    async def _setup_internal(self) -> None:
+        """内部初始化（子类可重写）"""
         from src.modules.events.names import CoreEvents
         from src.modules.events.payloads.decision import IntentPayload
 
@@ -224,8 +204,9 @@ class OutputProvider(ABC):
                 priority=self.priority
             )
 
-        await self.init()
-        self.is_started = True
+    async def setup(self) -> None:
+        """初始化 Handler（子类可重写）"""
+        pass
 
     async def _on_intent(self, event_name: str, payload: "IntentPayload", source: str):
         """接收过滤后的 Intent 事件"""
@@ -233,7 +214,7 @@ class OutputProvider(ABC):
         await self.execute(intent)
 
     @abstractmethod
-    async def execute(self, intent: "Intent"):
+    async def execute(self, intent: Intent):
         """
         执行意图（子类必须实现）
 
@@ -244,166 +225,146 @@ class OutputProvider(ABC):
         """
         pass
 
-    async def stop(self):
-        """停止 Provider"""
+    async def cleanup(self) -> None:
+        """清理资源（子类可重写）"""
         from src.modules.events.names import CoreEvents
 
         if self.event_bus:
             self.event_bus.off(CoreEvents.OUTPUT_INTENT, self._on_intent)
 
-        await self.cleanup()
         self.is_started = False
-
-    async def cleanup(self) -> None:
-        """清理资源（子类可重写）"""
-        pass
 ```
 
 **核心要点**：
-- OutputProvider **必须**接收 `context` 参数（必填）
+- OutputHandler 使用构造器注入获取 `event_bus` 和可选的 `audio_stream_channel`
 - `priority` 属性控制事件处理优先级（数值越小越先执行）
 - 核心方法是 `execute()`，处理 Intent 并渲染输出
 - 自动订阅 `OUTPUT_INTENT` 事件，无需手动订阅
 
 ---
 
-## 3. ProviderContext 依赖注入
+## 3. 构造器注入
 
-`ProviderContext` 是所有 Provider 的统一依赖容器，采用依赖注入模式提供服务。
+阶段参与者通过构造器注入获取依赖服务，而不是使用 ProviderContext。
 
 ```python
-from dataclasses import dataclass
-from typing import Optional
+class MyDecider(Decider):
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        event_bus: EventBus,
+        llm_service: Optional[LLMManager] = None,
+        prompt_service: Optional[PromptManager] = None,
+    ):
+        super().__init__(config, event_bus)
+        self.llm_service = llm_service
+        self.prompt_service = prompt_service
 
-
-@dataclass(frozen=True)
-class ProviderContext:
-    """所有 Provider 的统一依赖上下文（不可变）"""
-
-    # 核心服务
-    event_bus: Optional["EventBus"] = None
-    config_service: Optional["ConfigService"] = None
-
-    # 音频服务
-    audio_stream_channel: Optional["AudioStreamChannel"] = None
-    audio_device_service: Optional["AudioDeviceManager"] = None
-
-    # LLM 服务
-    llm_service: Optional["LLMManager"] = None
-    token_usage_service: Optional["TokenUsageManager"] = None
-
-    # 提示词服务
-    prompt_service: Optional["PromptManager"] = None
-
-    # 上下文服务
-    context_service: Optional["ContextService"] = None
+    async def decide(self, message: NormalizedMessage) -> None:
+        # 使用注入的服务
+        response = await self.llm_service.chat(prompt="...")
 ```
 
 ### 使用依赖服务
 
-在 Provider 中通过 `self.context` 访问服务：
-
 ```python
-class MyProvider(DecisionProvider):
-    async def init(self) -> None:
-        # 获取依赖服务
-        self._llm_service = self.context.llm_service
-        self._prompt_service = self.context.prompt_service
-        self._context_service = self.context.context_service
+class MyHandler(OutputHandler):
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        event_bus: EventBus,
+        audio_stream_channel: Optional[AudioStreamChannel] = None,
+        llm_service: Optional[LLMManager] = None,
+        prompt_service: Optional[PromptManager] = None,
+    ):
+        super().__init__(config, event_bus, audio_stream_channel)
+        self.llm_service = llm_service
+        self.prompt_service = prompt_service
 
-    async def decide(self, message: NormalizedMessage) -> None:
-        # 使用依赖服务
-        response = await self._llm_service.chat(prompt="...")
+    async def execute(self, intent: Intent) -> None:
+        # 使用注入的服务
+        rendered = await self._render_with_template(intent)
 ```
 
 ---
 
-## 4. 注册 Provider
+## 4. 注册阶段参与者
 
-在 Provider 的 `__init__.py` 中注册到 ProviderRegistry：
+使用装饰器注册阶段参与者：
 
 ```python
-from src.modules.registry import ProviderRegistry
+from src.modules.decorators import collector, decider, handler
 
-from .my_input_provider import MyInputProvider
-
-# 注册 InputProvider
-ProviderRegistry.register_input(
-    "my_provider",           # Provider 名称（唯一标识符）
-    MyInputProvider,         # Provider 类
-    source="builtin:my_provider"  # 注册来源
-)
+@collector("my_collector")
+class MyInputCollector(InputCollector):
+    async def collect(self) -> AsyncIterator[NormalizedMessage]:
+        # ...
+        pass
 ```
 
-### 三种注册方法
+### 三种注册装饰器
 
 ```python
-# 注册 InputProvider
-ProviderRegistry.register_input("name", MyInputProvider, source="builtin:xxx")
+# 注册 InputCollector
+@collector("name")
+class MyInputCollector(InputCollector):
+    pass
 
-# 注册 OutputProvider
-ProviderRegistry.register_output("name", MyOutputProvider, source="builtin:xxx")
+# 注册 OutputHandler
+@handler("name")
+class MyOutputHandler(OutputHandler):
+    pass
 
-# 注册 DecisionProvider
-ProviderRegistry.register_decision("name", MyDecisionProvider, source="builtin:xxx")
-```
-
-### 显式注册模式（可选）
-
-也可以在 Provider 类中实现 `get_registration_info()` 方法：
-
-```python
-class MyProvider(InputProvider):
-    @classmethod
-    def get_registration_info(cls) -> Dict[str, Any]:
-        return {
-            "layer": "input",  # "input", "decision", 或 "output"
-            "name": "my_provider",
-            "class": cls,
-            "source": "builtin:my_provider"
-        }
+# 注册 Decider
+@decider("name")
+class MyDecider(Decider):
+    pass
 ```
 
 ---
 
 ## 5. 配置启用
 
-在 `config.toml` 中启用 Provider：
+在 `config.toml` 中启用阶段参与者：
 
 ```toml
-# 输入 Provider
-[providers.input]
-enabled_inputs = ["console_input", "my_provider"]
+# 输入 Collector
+[collectors]
+enabled = ["console_input", "my_collector"]
 
-# 决策 Provider
-[providers.decision]
-active_provider = "my_provider"
+# 决策 Decider
+[deciders]
+active = "my_decider"
 
-# 输出 Provider
-[providers.output]
-enabled_outputs = ["subtitle", "my_provider"]
+# 输出 Handler
+[handlers]
+enabled = ["subtitle", "my_handler"]
 ```
 
 ### 配置 Schema（推荐）
 
-推荐在 Provider 中定义 Pydantic ConfigSchema，实现类型安全的配置：
+推荐在阶段参与者中定义 Pydantic ConfigSchema，实现类型安全的配置：
 
 ```python
 from pydantic import Field
-from src.modules.config.schemas.base import BaseProviderConfig
+from src.modules.config.schemas.base import BaseConfig
 
 
-class MyProvider(OutputProvider):
-    class ConfigSchema(BaseProviderConfig):
-        """Provider 配置 Schema"""
-        type: str = "my_provider"
+class MyHandler(OutputHandler):
+    class ConfigSchema(BaseConfig):
+        """Handler 配置 Schema"""
+        type: str = "my_handler"
 
         # 自定义配置项
         api_key: str = Field(default="", description="API 密钥")
         timeout: int = Field(default=30, ge=1, le=300, description="超时时间（秒）")
 
-    def __init__(self, config: dict, context: ProviderContext):
-        super().__init__(config, context)
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        event_bus: EventBus,
+    ):
+        super().__init__(config, event_bus)
 
         # 使用 ConfigSchema 验证配置
         self.typed_config = self.ConfigSchema(**config)
@@ -417,71 +378,79 @@ class MyProvider(OutputProvider):
 
 ## 6. 生命周期方法
 
-| 方法 | 调用时机 | InputProvider | DecisionProvider | OutputProvider |
-|------|---------|---------------|-------------------|----------------|
-| `__init__` | 实例化时 | 可选 | **必填 context** | **必填 context** |
-| `init()` | start/setup 时 | 可选 | 可选 | 可选 |
-| `start()` | Manager 启动时 | 必须调用 | 可选 | 可选 |
-| `generate()` | 数据流迭代时 | **必须实现** | - | - |
+| 方法 | 调用时机 | InputCollector | Decider | OutputHandler |
+|------|---------|---------------|---------|---------------|
+| `__init__` | 实例化时 | 必填 | 必填 | 必填 |
+| `_setup_internal()` | setup 时 | 可选 | 可选 | 可选 |
+| `setup()` | Manager 启动时 | 可选 | 可选 | 可选 |
+| `collect()` | 数据流迭代时 | **必须实现** | - | - |
 | `decide()` | 收到消息时 | - | **必须实现** | - |
 | `execute()` | 收到 Intent 时 | - | - | **必须实现** |
-| `stop()` | Manager 停止时 | 可选 | 可选 | 可选 |
+| `stop()` | Manager 停止时 | 可选 | - | - |
 | `cleanup()` | 资源清理时 | 可选 | 可选 | 可选 |
 
 ### 生命周期流程
 
-**InputProvider**:
+**InputCollector**:
 ```
 1. 实例化 (__init__)
 2. 启动 (start())
-3. 获取数据流 (stream() -> generate())
-4. 停止 (stop() -> cleanup())
+3. 获取数据流 (stream() -> collect())
+4. 停止 (stop() -> _cleanup_internal() -> cleanup())
 ```
 
-**DecisionProvider / OutputProvider**:
+**Decider**:
 ```
 1. 实例化 (__init__)
-2. 启动 (setup/start -> init)
-3. 事件触发 (decide/execute)
-4. 停止 (stop -> cleanup)
+2. 初始化 (_setup_internal() -> setup())
+3. 事件触发 (decide)
+4. 清理 (cleanup)
+```
+
+**OutputHandler**:
+```
+1. 实例化 (__init__)
+2. 初始化 (_setup_internal() -> setup())
+3. 事件触发 (execute)
+4. 清理 (cleanup)
 ```
 
 ---
 
-## 7. 现有 Provider 列表
+## 7. 现有阶段参与者列表
 
-### InputProvider（8个）
-
-| 名称 | 说明 | 位置 |
-|------|------|------|
-| `console_input` | 控制台输入 | `src/domains/input/providers/console_input/` |
-| `bili_danmaku` | B站弹幕（旧版） | `src/domains/input/providers/bili_danmaku/` |
-| `bili_danmaku_official` | B站弹幕（官方API） | `src/domains/input/providers/bili_danmaku_official/` |
-| `bili_danmaku_official_maicraft` | B站弹幕（Maicraft版） | `src/domains/input/providers/bili_danmaku_official_maicraft/` |
-| `mainosaba` | MainOSABA 捕获 | `src/domains/input/providers/mainosaba/` |
-| `mock_danmaku` | 模拟弹幕（测试用） | `src/domains/input/providers/mock_danmaku/` |
-| `read_pingmu` | 读弹幕功能 | `src/domains/input/providers/read_pingmu/` |
-| `stt` | 语音转文字 | `src/domains/input/providers/stt/` |
-
-### DecisionProvider（4个）
+### InputCollector（8个）
 
 | 名称 | 说明 | 位置 |
 |------|------|------|
-| `maicore` | MaiCore 决策 | `src/domains/decision/providers/maicore/` |
-| `llm` | LLM 决策 | `src/domains/decision/providers/llm/` |
-| `maicraft` | Maicraft 决策 | `src/domains/decision/providers/maicraft/` |
-| `replay` | 回放决策（调试用） | `src/domains/decision/providers/replay/` |
+| `console_input` | 控制台输入 | `src/domains/input/collectors/console_input/` |
+| `bili_danmaku` | B站弹幕（旧版） | `src/domains/input/collectors/bili_danmaku/` |
+| `bili_danmaku_official` | B站弹幕（官方API） | `src/domains/input/collectors/bili_danmaku_official/` |
+| `bili_danmaku_official_maicraft` | B站弹幕（Maicraft版） | `src/domains/input/collectors/bili_danmaku_official_maicraft/` |
+| `mainosaba` | MainOSABA 捕获 | `src/domains/input/collectors/mainosaba/` |
+| `mock_danmaku` | 模拟弹幕（测试用） | `src/domains/input/collectors/mock_danmaku/` |
+| `read_pingmu` | 读弹幕功能 | `src/domains/input/collectors/read_pingmu/` |
+| `stt` | 语音转文字 | `src/domains/input/collectors/stt/` |
 
-### MaiCoreDecisionProvider 提示词覆盖
+### Decider（4个）
 
-MaiCoreDecisionProvider 支持通过 `template_info` 机制覆盖 MaiBot 的回复提示词，使 VTuber 在直播场景下具有更一致的个性。
+| 名称 | 说明 | 位置 |
+|------|------|------|
+| `maibot` | MaiBot 决策 | `src/domains/decision/deciders/maibot/` |
+| `llm` | LLM 决策 | `src/domains/decision/deciders/llm/` |
+| `maicraft` | Maicraft 决策 | `src/domains/decision/deciders/maicraft/` |
+| `replay` | 回放决策（调试用） | `src/domains/decision/deciders/replay/` |
+
+### MaiBotDecider 提示词覆盖
+
+MaiBotDecider 支持通过 `template_info` 机制覆盖 MaiBot 的回复提示词，使 VTuber 在直播场景下具有更一致的个性。
 
 #### 启用方式
 
 在 `config.toml` 中配置：
 
 ```toml
-[providers.decision.maicore]
+[deciders.maibot]
 host = "127.0.0.1"
 port = 8000
 
@@ -503,171 +472,160 @@ override_templates = ["replyer_prompt", "chat_target_group1", "chat_target_group
 
 模板文件位于 `src/modules/prompts/templates/maibot_override/` 目录。详细说明请参阅 [MaiBot 提示词覆盖文档](maibot-override.md)。
 
-### OutputProvider（12个）
+### OutputHandler（12个）
 
 | 名称 | 说明 | 位置 |
 |------|------|------|
-| `edge_tts` | Edge TTS 语音合成 | `src/domains/output/providers/edge_tts/` |
-| `gptsovits` | GPT-SoVITS 语音合成 | `src/domains/output/providers/gptsovits/` |
-| `omni_tts` | Omni TTS | `src/domains/output/providers/omni_tts/` |
-| `subtitle` | 字幕显示 | `src/domains/output/providers/subtitle/` |
-| `vts` | Virtual Tube Studio | `src/domains/output/providers/avatar/vts/` |
-| `warudo` | Warudo | `src/domains/output/providers/avatar/warudo/` |
-| `vrchat` | VRChat | `src/domains/output/providers/avatar/vrchat/` |
-| `sticker` | 表情包 | `src/domains/output/providers/sticker/` |
-| `obs_control` | OBS 控制 | `src/domains/output/providers/obs_control/` |
-| `remote_stream` | 远程流 | `src/domains/output/providers/remote_stream/` |
-| `debug_console` | 调试控制台 | `src/domains/output/providers/debug_console/` |
-| `mock` | 模拟输出（测试用） | `src/domains/output/providers/mock/` |
+| `edge_tts` | Edge TTS 语音合成 | `src/domains/output/handlers/audio/edge_tts/` |
+| `gptsovits` | GPT-SoVITS 语音合成 | `src/domains/output/handlers/audio/gptsovits/` |
+| `omni_tts` | Omni TTS | `src/domains/output/handlers/audio/omni_tts/` |
+| `subtitle` | 字幕显示 | `src/domains/output/handlers/subtitle/` |
+| `vts` | Virtual Tube Studio | `src/domains/output/handlers/avatar/vts/` |
+| `warudo` | Warudo | `src/domains/output/handlers/avatar/warudo/` |
+| `vrchat` | VRChat | `src/domains/output/handlers/avatar/vrchat/` |
+| `sticker` | 表情包 | `src/domains/output/handlers/sticker/` |
+| `obs_control` | OBS 控制 | `src/domains/output/handlers/obs_control/` |
+| `remote_stream` | 远程流 | `src/domains/output/handlers/remote_stream/` |
+| `debug_console` | 调试控制台 | `src/domains/output/handlers/debug_console/` |
+| `mock` | 模拟输出（测试用） | `src/domains/output/handlers/mock/` |
 
 ---
 
 ## 8. 类图
 
-### Provider 继承关系
+### 阶段参与者继承关系
 
 ```mermaid
 classDiagram
     %% 抽象基类
-    class InputProvider {
+    class InputCollector {
         <<abstract>>
-        +config: dict
-        +context: ProviderContext
+        +config: Dict
+        +event_bus: EventBus
         +is_running: bool
-        +event_bus
-        +init() void
+        +_setup_internal() void
+        +setup() void
         +start() void
         +stream() AsyncIterator
-        +generate() AsyncIterator$ *
+        +collect() AsyncIterator$ *
         +stop() void
+        +_cleanup_internal() void
         +cleanup() void
     }
 
-    class DecisionProvider {
+    class Decider {
         <<abstract>>
-        +config: dict
-        +context: ProviderContext
+        +config: Dict
+        +event_bus: EventBus
         +is_started: bool
-        +event_bus
-        +init() void
-        +start() void
+        +_setup_internal() void
+        +setup() void
         +decide(message) void$ *
-        +stop() void
         +cleanup() void
     }
 
-    class OutputProvider {
+    class OutputHandler {
         <<abstract>>
         +priority: int = 50
-        +config: dict
-        +context: ProviderContext
+        +config: Dict
+        +event_bus: EventBus
+        +audio_stream_channel: Optional[AudioStreamChannel]
         +is_started: bool
-        +event_bus
-        +audio_stream_channel
-        +init() void
-        +start() void
+        +_setup_internal() void
+        +setup() void
         +execute(intent) void$ *
-        +stop() void
         +cleanup() void
     }
 
-    %% 具体 Provider 示例
-    class ConsoleInputProvider {
-        +generate() AsyncIterator
+    %% 具体阶段参与者示例
+    class ConsoleInputCollector {
+        +collect() AsyncIterator
     }
 
-    class LLMDecisionProvider {
-        +init() void
+    class LLMDecider {
+        +_setup_internal() void
         +decide(message) void
         +cleanup() void
     }
 
-    class SubtitleOutputProvider {
+    class SubtitleHandler {
         +priority: int = 50
-        +init() void
+        +_setup_internal() void
+        +setup() void
         +execute(intent) void
         +cleanup() void
     }
 
     %% 继承关系
-    InputProvider <|-- ConsoleInputProvider
-    DecisionProvider <|-- LLMDecisionProvider
-    OutputProvider <|-- SubtitleOutputProvider
-
-    %% ProviderContext 依赖
-    InputProvider ..> ProviderContext : depends
-    DecisionProvider ..> ProviderContext : depends
-    OutputProvider ..> ProviderContext : depends
-
-    class ProviderContext {
-        <<dataclass>>
-        +event_bus: Optional[EventBus]
-        +config_service: Optional[ConfigService]
-        +audio_stream_channel: Optional[AudioStreamChannel]
-        +llm_service: Optional[LLMManager]
-        +prompt_service: Optional[PromptManager]
-        +context_service: Optional[ContextService]
-    }
+    InputCollector <|-- ConsoleInputCollector
+    Decider <|-- LLMDecider
+    OutputHandler <|-- SubtitleHandler
 ```
 
-### Provider 注册流程
+### 阶段参与者注册流程
 
 ```mermaid
 sequenceDiagram
-    participant P as Provider 模块
-    participant R as ProviderRegistry
-    participant M as ProviderManager
+    participant P as 阶段参与者模块
+    participant R as 装饰器注册表
+    participant M as Manager
     participant C as ConfigService
 
     Note over P,R: 模块导入时自动注册
-    P->>R: register_input/output/decision()
-    R->>R: 验证 Provider 类型
+    P->>R: @collector/@decider/@handler 装饰器
+    R->>R: 验证参与者类型
     R->>R: 添加到注册表
 
     Note over M,C: 应用启动时
     M->>C: 获取配置
-    C->>M: 返回启用的 Provider 列表
-    M->>R: create_input/output/decision()
-    R->>M: 返回 Provider 实例
-    M->>P: new Provider(config, context)
+    C->>M: 返回启用的参与者列表
+    M->>R: create_collector/decider/handler()
+    R->>M: 返回参与者实例
+    M->>P: new Collector(config, event_bus)
 ```
 
 ---
 
 ## 9. 开发示例
 
-### 9.1 开发 InputProvider
+### 9.1 开发 InputCollector
 
 ```python
-"""my_input_provider/__init__.py"""
-from src.modules.registry import ProviderRegistry
-from .my_input_provider import MyInputProvider
+"""my_input_collector/__init__.py"""
+from src.modules.decorators import collector
+from .my_input_collector import MyInputCollector
 
-ProviderRegistry.register_input("my_input", MyInputProvider, source="builtin:my_input")
+# 导出以供 Manager 发现
+__all__ = ["MyInputCollector"]
 ```
 
 ```python
-"""my_input_provider/my_input_provider.py"""
-from typing import AsyncIterator
-import time
+"""my_input_collector/my_input_collector.py"""
+from typing import AsyncIterator, Dict, Any
+import asyncio
 
-from src.modules.di.context import ProviderContext
+from src.modules.decorators import collector
+from src.modules.events import EventBus
 from src.modules.logging import get_logger
-from src.modules.types.base.input_provider import InputProvider
-from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.types import NormalizedMessage
 
 
-class MyInputProvider(InputProvider):
-    """我的自定义输入 Provider"""
+@collector("my_collector")
+class MyInputCollector(InputCollector):
+    """我的自定义输入 Collector"""
 
-    def __init__(self, config: dict, context: ProviderContext):
-        super().__init__(config, context)
-        self.logger = get_logger("MyInputProvider")
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        event_bus: EventBus,
+    ):
+        super().__init__(config, event_bus)
+        self.logger = get_logger("MyInputCollector")
 
         # 从配置读取参数
         self.source_name = config.get("source_name", "my_source")
 
-    async def generate(self) -> AsyncIterator[NormalizedMessage]:
+    async def collect(self) -> AsyncIterator[NormalizedMessage]:
         """生成 NormalizedMessage 数据流"""
         self.is_running = True
 
@@ -682,7 +640,7 @@ class MyInputProvider(InputProvider):
                     source=self.source_name,
                     data_type=raw_data.get("type", "text"),
                     importance=raw_data.get("importance", 0.5),
-                    timestamp=time.time(),
+                    timestamp=raw_data.get("timestamp", 0),
                     raw=raw_data,
                 )
 
@@ -694,47 +652,50 @@ class MyInputProvider(InputProvider):
         pass
 
     async def cleanup(self) -> None:
-        self.logger.info("MyInputProvider 已清理")
+        self.logger.info("MyInputCollector 已清理")
 ```
 
-### 9.2 开发 OutputProvider
+### 9.2 开发 OutputHandler
 
 ```python
-"""my_output_provider/__init__.py"""
-from src.modules.registry import ProviderRegistry
-from .my_output_provider import MyOutputProvider
+"""my_output_handler/__init__.py"""
+from src.modules.decorators import handler
+from .my_output_handler import MyOutputHandler
 
-ProviderRegistry.register_output("my_output", MyOutputProvider, source="builtin:my_output")
+# 导出以供 Manager 发现
+__all__ = ["MyOutputHandler"]
 ```
 
 ```python
-"""my_output_provider/my_output_provider.py"""
-from pydantic import Field
-from src.modules.config.schemas.base import BaseProviderConfig
-from src.modules.di.context import ProviderContext
+"""my_output_handler/my_output_handler.py"""
+from typing import Dict, Any, Optional
+
+from src.modules.decorators import handler
+from src.modules.events import EventBus
 from src.modules.logging import get_logger
 from src.modules.types import Intent
-from src.modules.types.base.output_provider import OutputProvider
+from src.modules.streaming import AudioStreamChannel
 
 
-class MyOutputProvider(OutputProvider):
-    """我的自定义输出 Provider"""
+@handler("my_handler")
+class MyOutputHandler(OutputHandler):
+    """我的自定义输出 Handler"""
 
-    class ConfigSchema(BaseProviderConfig):
-        type: str = "my_output"
-        api_endpoint: str = Field(default="http://localhost:8080", description="API 端点")
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        event_bus: EventBus,
+        audio_stream_channel: Optional[AudioStreamChannel] = None,
+    ):
+        super().__init__(config, event_bus, audio_stream_channel)
+        self.logger = get_logger("MyOutputHandler")
 
-    def __init__(self, config: dict, context: ProviderContext):
-        super().__init__(config, context)
-        self.logger = get_logger("MyOutputProvider")
+        # 从配置读取参数
+        self.api_endpoint = config.get("api_endpoint", "http://localhost:8080")
 
-        # 使用 ConfigSchema 验证配置
-        self.typed_config = self.ConfigSchema(**config)
-        self.api_endpoint = self.typed_config.api_endpoint
-
-    async def init(self) -> None:
-        """初始化 Provider"""
-        self.logger.info(f"初始化 MyOutputProvider: {self.api_endpoint}")
+    async def setup(self) -> None:
+        """初始化 Handler"""
+        self.logger.info(f"初始化 MyOutputHandler: {self.api_endpoint}")
 
     async def execute(self, intent: Intent) -> None:
         """执行意图"""
@@ -763,9 +724,9 @@ class MyOutputProvider(OutputProvider):
 始终使用 Pydantic ConfigSchema 进行配置验证：
 
 ```python
-class MyProvider(OutputProvider):
-    class ConfigSchema(BaseProviderConfig):
-        type: str = "my_provider"
+class MyHandler(OutputHandler):
+    class ConfigSchema(BaseConfig):
+        type: str = "my_handler"
         # 使用 Field 定义验证规则
         timeout: int = Field(default=30, ge=1, le=300)
         api_key: str = Field(min_length=8)
@@ -778,9 +739,13 @@ class MyProvider(OutputProvider):
 ```python
 from src.modules.logging import get_logger
 
-class MyProvider(OutputProvider):
-    def __init__(self, config: dict, context: ProviderContext):
-        super().__init__(config, context)
+class MyHandler(OutputHandler):
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        event_bus: EventBus,
+    ):
+        super().__init__(config, event_bus)
         self.logger = get_logger(self.__class__.__name__)
 ```
 
@@ -812,19 +777,19 @@ async def cleanup(self) -> None:
     if self._task:
         self._task.cancel()
 
-    self.logger.info("MyProvider 已清理")
+    self.logger.info("MyHandler 已清理")
 ```
 
 ---
 
 ## 相关文档
 
-- [3 域架构](docs/architecture/overview.md)
-- [数据流规则](docs/architecture/data-flow.md)
-- [事件系统](docs/architecture/event-system.md)
-- [管道开发](docs/development/pipeline-guide.md)
-- [提示词管理](docs/development/prompt-management.md)
+- [3 阶段架构](../architecture/overview.md)
+- [数据流规则](../architecture/data-flow.md)
+- [事件系统](../architecture/event-system.md)
+- [管道开发](../development/pipeline-guide.md)
+- [提示词管理](../development/prompt-management.md)
 
 ---
 
-*最后更新：2026-02-15*
+*最后更新：2026-06-14*

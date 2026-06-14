@@ -9,27 +9,29 @@
 - **注释和文档**：使用中文编写注释和文档字符串
 - **变量命名**：使用 snake_case（如 `provider_config`, `event_bus`）
 - **函数命名**：使用 snake_case（如 `send_to_maicore`, `register_websocket_handler`）
-- **类命名**：使用 PascalCase（如 `EventBus`, `InputProvider`）
+- **类命名**：使用 PascalCase（如 `EventBus`, `InputCollector`）
 - **常量命名**：使用 CamelCase（如 `CoreEvents`, `EmotionType`）
 
 ### 1.2 命名约定表
 
 | 类型 | 命名风格 | 示例 |
 |------|---------|------|
-| 类名 | PascalCase | `EventBus`, `InputProvider`, `InputPipeline` |
+| 类名 | PascalCase | `EventBus`, `InputCollector`, `InputPipeline` |
 | 函数/方法名 | snake_case | `send_to_maicore`, `register_websocket_handler` |
-| 变量名 | snake_case | `provider_config`, `event_bus` |
+| 变量名 | snake_case | `handler_config`, `event_bus` |
 | 私有成员 | 前导下划线 | `_message_handlers`, `_is_connected` |
-| Provider 类 | 以 `Provider` 结尾 | `ConsoleInputProvider`, `TTSSProvider` |
+| Collector 类 | 以 `Collector` 结尾 | `ConsoleInputCollector`, `BiliDanmakuCollector` |
+| Decider 类 | 以 `Decider` 结尾 | `MaiBotDecider`, `LLMDecider` |
+| Handler 类 | 以 `Handler` 结尾 | `EdgeTTSHandler`, `SubtitleHandler` |
 | 管道类 | 以 `Pipeline` 结尾 | `RateLimitPipeline`, `SimilarTextFilterPipeline` |
 | 常量类 | PascalCase | `CoreEvents`, `EmotionType` |
 
 ### 1.3 注释规范
 
 ```python
-class MyProvider(OutputProvider):
+class MyHandler(OutputHandler):
     """
-    Provider 类的中文文档说明
+    Handler 类的中文文档说明
 
     负责描述这个类的职责和主要功能。
     """
@@ -159,8 +161,8 @@ logger.error("错误日志", exc_info=True)  # 错误信息，包含堆栈
 使用 `--filter` 参数时，传入 `get_logger` 的第一个参数（类名或模块名）决定是否显示：
 
 ```bash
-# 只显示 SubtitleProvider 和 EdgeTTSProvider 的日志
-uv run python main.py --filter SubtitleProvider EdgeTTSProvider
+# 只显示 SubtitleHandler 和 EdgeTTSHandler 的日志
+uv run python main.py --filter SubtitleHandler EdgeTTSHandler
 ```
 
 ## 5. 事件使用规范
@@ -211,7 +213,7 @@ class IntentPayload(BaseModel):
 
 | 禁止 | 原因 | 替代方案 |
 |------|------|----------|
-| ❌ 创建新的 Plugin | 插件系统已移除 | 创建 Provider |
+| ❌ 创建新的 Plugin | 插件系统已移除 | 创建阶段参与者 |
 | ❌ 使用服务注册机制 | 已废弃 | 使用 EventBus |
 | ❌ 硬编码事件名字符串 | 避免拼写错误 | 使用 `CoreEvents` 常量 |
 | ❌ 使用空的 except 块 | 隐藏错误 | 记录日志并处理 |
@@ -219,17 +221,17 @@ class IntentPayload(BaseModel):
 | ❌ 在修复 bug 时进行大规模重构 | 扩大风险范围 | 只修复 bug |
 | ❌ 提交未验证的代码 | 可能破坏构建 | 先运行测试和 lint |
 | ❌ 类变量中存储可变对象 | 共享状态问题 | 使用 `__init__` 初始化 |
-| ❌ 在 main.py 中直接创建 Provider | 违反配置驱动原则 | 使用 Manager + 配置驱动 |
+| ❌ 在 main.py 中直接创建阶段参与者 | 违反配置驱动原则 | 使用 Manager + 配置驱动 |
 
-### 6.1 架构约束：3域数据流规则
+### 6.1 架构约束：3阶段数据流规则
 
-严格遵守单向数据流：**Input Domain → Decision Domain → Output Domain**
+严格遵守单向数据流：**Input 阶段 → Decision 阶段 → Output 阶段**
 
 | 禁止模式 | 说明 |
 |---------|------|
-| ❌ Output Provider 订阅 Input 事件 | 绕过 Decision Domain，破坏分层 |
-| ❌ Decision Provider 订阅 Output 事件 | 创建循环依赖 |
-| ❌ Input Provider 订阅 Decision/Output 事件 | Input 应只发布，不订阅下游 |
+| ❌ OutputHandler 订阅 Input 事件 | 绕过 Decision 阶段，破坏分层 |
+| ❌ Decider 订阅 Output 事件 | 创建循环依赖 |
+| ❌ InputCollector 订阅 Decision/Output 事件 | Input 应只发布，不订阅下游 |
 
 ## 7. 测试规范
 
@@ -280,10 +282,10 @@ tests/
 │   ├── events/        # 事件系统测试
 │   ├── types/         # 类型测试
 │   └── config/        # 配置测试
-├── domains/           # Domain 测试
-│   ├── input/         # 输入域测试
-│   ├── decision/      # 决策域测试
-│   └── output/        # 输出域测试
+├── domains/           # 阶段测试
+│   ├── input/         # 输入阶段测试
+│   ├── decision/      # 决策阶段测试
+│   └── output/        # 输出阶段测试
 ├── services/          # 服务测试
 └── mocks/             # 测试用 Mock 对象
 ```
@@ -332,9 +334,9 @@ uv run ruff format .
 使用清晰的中文提交信息，描述本次修改的内容：
 
 ```
-feat: 添加新的字幕 Provider
+feat: 添加新的字幕 Handler
 fix: 修复弹幕解析的边界情况
-refactor: 重构 Provider 生命周期管理
+refactor: 重构阶段参与者生命周期管理
 docs: 更新开发规范文档
 ```
 
@@ -343,57 +345,59 @@ docs: 更新开发规范文档
 ### 9.1 配置文件格式
 
 - 使用 TOML 格式
-- Provider 配置：`[providers.input]`, `[providers.decision]`, `[providers.output]`
+- Collector 配置：`[collectors]`
+- Decider 配置：`[deciders]`
+- Handler 配置：`[handlers]`
 - 管道配置：`[pipelines.*]`
 
 ### 9.2 配置示例
 
 ```toml
-# 输入 Provider
-[providers.input]
-enabled_inputs = ["console_input", "bili_danmaku"]
+# 输入 Collector
+[collectors]
+enabled = ["console_input", "bili_danmaku"]
 
-# 决策 Provider
-[providers.decision]
-active_provider = "maicore"
+# 决策 Decider
+[deciders]
+active = "maibot"
 
-# 输出 Provider
-[providers.output]
-enabled_outputs = ["subtitle", "vts", "tts"]
+# 输出 Handler
+[handlers]
+enabled = ["subtitle", "vts", "tts"]
 ```
 
-## 10. Provider 开发规范
+## 10. 阶段参与者开发规范
 
-### 10.1 Provider 类型
+### 10.1 阶段参与者类型
 
 | 类型 | 职责 | 位置 |
 |------|------|------|
-| InputProvider | 从外部数据源采集数据 | `src/domains/input/providers/` |
-| DecisionProvider | 处理 NormalizedMessage 生成 Intent | `src/domains/decision/providers/` |
-| OutputProvider | 渲染到目标设备 | `src/domains/output/providers/` |
+| InputCollector | 从外部数据源采集数据 | `src/domains/input/collectors/` |
+| Decider | 处理 NormalizedMessage 生成 Intent | `src/domains/decision/deciders/` |
+| OutputHandler | 渲染到目标设备 | `src/domains/output/handlers/` |
 
-### 10.2 Provider 生命周期
+### 10.2 阶段参与者生命周期
 
-| Provider 类型 | 启动方法 | 停止方法 |
+| 参与者类型 | 启动方法 | 停止方法 |
 |--------------|---------|---------|
-| InputProvider | `start()` | `stop()` |
-| DecisionProvider | `setup()` | `cleanup()` |
-| OutputProvider | `setup()` | `cleanup()` |
+| InputCollector | `start()` | `stop()` |
+| Decider | `setup()` | `cleanup()` |
+| OutputHandler | `setup()` | `cleanup()` |
 
-### 10.3 添加新 Provider 步骤
+### 10.3 添加新阶段参与者步骤
 
-1. 继承对应的 Provider 基类
-2. 在 Provider 的 `__init__.py` 中注册到 ProviderRegistry
+1. 继承对应的基类（InputCollector/Decider/OutputHandler）
+2. 使用 `@collector`/`@decider`/`@handler` 装饰器注册
 3. 在配置文件中启用
 
-详见：[Provider 开发指南](development/provider-guide.md)
+详见：[阶段参与者开发](development/provider-guide.md)
 
 ## 相关文档
 
-- [Provider 开发](development/provider-guide.md) - Provider 开发详解
+- [阶段参与者开发](development/provider-guide.md) - 阶段参与者开发详解
 - [管道开发](development/pipeline-guide.md) - Pipeline 开发详解
 - [提示词管理](development/prompt-management.md) - PromptManager 使用
 - [测试指南](development/testing-guide.md) - 测试规范和最佳实践
-- [3域架构](architecture/overview.md) - 架构设计详解
+- [3阶段架构](architecture/overview.md) - 架构设计详解
 - [事件系统](architecture/event-system.md) - EventBus 使用指南
 - [数据流规则](architecture/data-flow.md) - 数据流约束和规则

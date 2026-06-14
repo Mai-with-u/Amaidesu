@@ -1,13 +1,14 @@
 """
-Pytest configuration for InputProviderManager tests
+Pytest configuration for InputCollectorManager tests
 
-This ensures all input providers are registered before tests run.
-
-Note: remote_stream has been moved to output domain as RemoteStreamOutputProvider.
+This ensures all input collectors are registered before tests run.
 """
 
-# Import all input providers to trigger registration
-import src.domains.input.providers.bili_danmaku  # noqa: F401
-import src.domains.input.providers.bili_danmaku_official  # noqa: F401
-import src.domains.input.providers.console_input  # noqa: F401
-import src.domains.input.providers.mock_danmaku  # noqa: F401
+import src.domains.input.providers.bili_danmaku
+import src.domains.input.providers.bili_danmaku_official
+import src.domains.input.providers.bili_danmaku_official_maicraft
+import src.domains.input.providers.console_input
+import src.domains.input.providers.mainosaba
+import src.domains.input.providers.mock_danmaku
+import src.domains.input.providers.read_pingmu
+import src.domains.input.providers.stt

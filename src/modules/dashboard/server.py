@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from fastapi import FastAPI
 
     from src.domains.decision.provider_manager import DecisionProviderManager
-    from src.domains.input.provider_manager import InputProviderManager
+    from src.domains.input.provider_manager import InputCollectorManager
     from src.domains.output.provider_manager import OutputProviderManager
     from src.modules.config.service import ConfigService
     from src.modules.context.service import ContextService
@@ -47,7 +47,7 @@ class DashboardServer:
     def __init__(
         self,
         event_bus: "EventBus",
-        input_manager: Optional["InputProviderManager"],
+        input_manager: Optional["InputCollectorManager"],
         decision_manager: Optional["DecisionProviderManager"],
         output_manager: Optional["OutputProviderManager"],
         context_service: "ContextService",

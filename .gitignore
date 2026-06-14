@@ -208,3 +208,6 @@ dashboard/tsconfig.tsbuildinfo
 .omc/
 .omo/
 AGENTS.local.md
+
+# 配置备份文件（含敏感信息）
+config.toml.backup*

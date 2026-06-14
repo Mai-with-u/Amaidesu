@@ -1,10 +1,5 @@
-"""LLM Decision Provider"""
+"""LLM Decision Decider"""
 
-from src.modules.registry import ProviderRegistry
+from .llm_decider import LLMDecider
 
-from .llm_decision_provider import LLMDecisionProvider
-
-# 注册到 ProviderRegistry
-ProviderRegistry.register_decision("llm", LLMDecisionProvider, source="builtin:llm")
-
-__all__ = ["LLMDecisionProvider"]
+__all__ = ["LLMDecider"]

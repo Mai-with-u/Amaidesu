@@ -1,20 +1,24 @@
 """
-Mock 输出 Provider（用于测试）
+Mock 输出 Handler（用于测试）
+
+不再继承 OutputProvider，而是作为独立类实现 handler 协议。
 """
 
 from typing import TYPE_CHECKING, Any
-
-from src.modules.types.base.output_provider import OutputProvider
 
 if TYPE_CHECKING:
     from src.modules.types import Intent
 
 
-class MockOutputProvider(OutputProvider):
-    """Mock 输出 Provider（用于测试）"""
+class MockOutputProvider:
+    """Mock 输出 Handler（用于测试）
+
+    不继承 OutputProvider 基类，直接实现 handler 协议。
+    """
 
     def __init__(self, config: dict[str, Any] | None = None):
-        super().__init__(config or {})
+        # 不调用 super().__init__(config) - 不再有基类
+        self._config = config or {}
         self.received_intents: list["Intent"] = []  # 记录收到的 Intent
 
     @property
@@ -38,3 +42,7 @@ class MockOutputProvider(OutputProvider):
     def clear(self):
         """清空记录"""
         self.received_intents.clear()
+
+
+# 导出别名（保持向后兼容）
+MockOutputHandler = MockOutputProvider

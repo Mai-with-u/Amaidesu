@@ -1,36 +1,33 @@
 """
-AvatarProviderBase - 虚拟形象 Provider 抽象基类
+AvatarHandlerBase - 虚拟形象 Handler 抽象基类
 
-定义了所有 Avatar Provider 的通用处理流程:
-1. 继承 OutputProvider，自动订阅 OUTPUT_INTENT_READY 事件
-2. 翻译自然语言 Intent 为平台参数 (_translate_with_llm)
-3. 适配 Intent 为平台参数 (_adapt_intent)
-4. 渲染到平台 (_render_to_platform)
-5. 连接/断开管理
+定义了所有 Avatar Handler 的通用处理流程:
+1. 翻译自然语言 Intent 为平台参数 (_translate_with_llm)
+2. 适配 Intent 为平台参数 (_adapt_intent)
+3. 渲染到平台 (_render_to_platform)
+4. 连接/断开管理
 """
 
 import json
 import re
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from src.modules.llm.manager import LLMManager
-from src.modules.llm.manager import ClientType
+from src.modules.events.event_bus import EventBus
+from src.modules.llm.manager import ClientType, LLMManager
 from src.modules.logging import get_logger
-from src.modules.types.base.output_provider import OutputProvider
+from src.modules.prompts.manager import PromptManager
+from src.modules.streaming.audio_stream_channel import AudioStreamChannel
 
 if TYPE_CHECKING:
-    from src.modules.di.context import ProviderContext
-    from src.modules.prompts.manager import PromptManager
     from src.modules.types import Intent
 
 
-class AvatarProviderBase(OutputProvider, ABC):
+class AvatarHandlerBase(ABC):
     """
-    虚拟形象 Provider 抽象基类（重构后）
+    虚拟形象 Handler 抽象基类（重构后）
 
-    继承 OutputProvider，自动订阅 OUTPUT_INTENT_READY 事件。
-    子类只需实现平台特定的适配和渲染逻辑。
+    使用构造器注入获取依赖，子类只需实现平台特定的适配和渲染逻辑。
 
     LLM 翻译层：
     - Decision Domain 输出自然语言 emotion/action（如"开心"、"比心"）
@@ -41,20 +38,34 @@ class AvatarProviderBase(OutputProvider, ABC):
     EMOTION_KEYS: set = set()
     ACTION_KEYS: set = set()
 
-    def __init__(self, config: dict, context: "ProviderContext"):
-        super().__init__(config, context)
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        event_bus: EventBus,
+        audio_stream_channel: Optional[AudioStreamChannel] = None,
+        llm_service: Optional[LLMManager] = None,
+        prompt_service: Optional[PromptManager] = None,
+    ):
+        """
+        初始化 Avatar Handler 基类
+
+        Args:
+            config: Handler配置
+            event_bus: EventBus实例
+            audio_stream_channel: AudioStreamChannel实例（用于口型同步）
+            llm_service: LLM服务实例
+            prompt_service: 提示词服务实例
+        """
+        self.config = config
+        self.event_bus = event_bus
+        self.audio_stream_channel = audio_stream_channel
+        self.llm_service = llm_service
+        self.prompt_service = prompt_service
         self.logger = get_logger(self.__class__.__name__)
         self._is_connected = False
+        self._has_started = False
 
-    @property
-    def llm_service(self) -> Optional["LLMManager"]:
-        return self.context.llm_service if self.context else None
-
-    @property
-    def prompt_service(self) -> Optional["PromptManager"]:
-        return self.context.prompt_service if self.context else None
-
-    async def execute(self, intent: "Intent"):
+    async def handle(self, intent: "Intent"):
         """
         执行意图，翻译后适配渲染到平台
 
@@ -232,14 +243,24 @@ class AvatarProviderBase(OutputProvider, ABC):
     # ==================== 生命周期方法 ====================
 
     async def init(self):
-        """初始化 Provider：连接平台"""
+        """初始化 Handler：连接平台"""
         await self._connect()
+        self._has_started = True
         self.logger.info(f"{self.__class__.__name__} 已启动")
 
     async def cleanup(self):
         """清理资源：断开连接"""
         await self._disconnect()
         self.logger.info(f"{self.__class__.__name__} 已停止")
+
+    # start/stop 兼容别名
+    async def start(self):
+        await self.init()
+
+    async def stop(self):
+        if not self._has_started:
+            return
+        await self.cleanup()
 
     @abstractmethod
     async def _connect(self) -> None:

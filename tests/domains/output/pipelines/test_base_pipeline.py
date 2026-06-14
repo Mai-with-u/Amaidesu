@@ -6,11 +6,8 @@
 
 import pytest
 
-from src.domains.output.pipelines.base import (
-    OutputPipelineBase,
-    PipelineErrorHandling,
-    PipelineException,
-)
+from src.domains.output.pipelines.base import OutputPipelineBase
+from src.modules.types.base.pipeline_types import PipelineErrorHandling, PipelineException
 from src.modules.types import Intent, IntentMetadata
 
 # =============================================================================

@@ -1,7 +1,5 @@
-"""Debug Console Output Provider - 调试用控制台输出"""
+"""Debug Console Output Handler - 调试用控制台输出"""
 
-from src.domains.output.providers.debug_console.debug_console_provider import (
-    DebugConsoleOutputProvider,
-)
+from .debug_console_handler import DebugConsoleHandler
 
-__all__ = ["DebugConsoleOutputProvider"]
+__all__ = ["DebugConsoleHandler"]

@@ -49,34 +49,29 @@ base_url = "https://api.openai.com/v1"  # 或其他兼容 API 地址
 model = "gpt-4"                 # 使用的模型
 ```
 
-#### 输入 Provider 配置
+#### 输入 Collector 配置
 
 ```toml
-[providers.input]
-enabled_inputs = [
-    "console_input",            # 控制台输入（测试用）
-    # "bili_danmaku",          # B站弹幕
-    # "stt",                   # 语音输入
-]
+[collectors]
+enabled = ["console_input"]     # 控制台输入（测试用）
+# enabled = ["bili_danmaku"]   # B站弹幕
+# enabled = ["stt"]            # 语音输入
 ```
 
-#### 输出 Provider 配置
+#### 输出 Handler 配置
 
 ```toml
-[providers.output]
-enabled_outputs = [
-    "subtitle",                 # 字幕输出
-    "vts",                     # VTS 控制
-    # "tts",                   # Edge TTS 语音
-    # "avatar",                # 虚拟形象
-]
+[handlers]
+enabled = ["subtitle", "vts"]  # 字幕输出、VTS 控制
+# enabled = ["edge_tts"]       # Edge TTS 语音
+# enabled = ["avatar"]          # 虚拟形象
 ```
 
-#### 决策 Provider 配置
+#### 决策 Decider 配置
 
 ```toml
-[providers.decision]
-active_provider = "maicore"     # 使用 MaiCore 决策
+[deciders]
+active = "maibot"               # 使用 MaiBot 决策
 ```
 
 ### 2.6 再次运行
@@ -96,37 +91,37 @@ uv run python main.py
 | `[llm]` | 标准 LLM 配置（用于高质量任务） |
 | `[llm_fast]` | 快速 LLM 配置（用于低延迟任务） |
 | `[vlm]` | 视觉语言模型配置（图像理解） |
-| `[providers.input]` | 输入 Provider 列表 |
-| `[providers.output]` | 输出 Provider 列表 |
-| `[providers.decision]` | 决策 Provider 选择 |
+| `[collectors]` | 输入 Collector 列表 |
+| `[handlers]` | 输出 Handler 列表 |
+| `[deciders]` | 决策 Decider 选择 |
 | `[pipelines.*]` | 消息处理管道配置 |
 | `[logging]` | 日志配置 |
 
-### 3.2 Provider 类型
+### 3.2 阶段参与者类型
 
 | 类型 | 说明 | 示例 |
 |------|------|------|
-| InputProvider | 数据采集 | 弹幕、语音、控制台 |
-| DecisionProvider | 决策生成 | MaiCore、LLM |
-| OutputProvider | 渲染输出 | TTS、字幕、虚拟形象 |
+| InputCollector | 数据采集 | 弹幕、语音、控制台 |
+| Decider | 决策生成 | MaiBot、LLM |
+| OutputHandler | 渲染输出 | TTS、字幕、虚拟形象 |
 
-### 3.3 可用 Provider 列表
+### 3.3 可用阶段参与者列表
 
-**输入 Provider：**
+**输入 Collector：**
 - `console_input` - 控制台输入（开发测试）
 - `bili_danmaku` - B站弹幕
 - `bili_danmaku_official` - B站官方弹幕
 - `stt` - 语音转文字
 
-**决策 Provider：**
-- `maicore` - MaiCore 决策服务
+**决策 Decider：**
+- `maibot` - MaiBot 决策服务
 - `llm` - 直接使用 LLM 生成回复
 - `maicraft` - 弹幕游戏决策
 
-**输出 Provider：**
+**输出 Handler：**
 - `subtitle` - 字幕显示
 - `vts` - VTS 控制
-- `tts` - Edge TTS 语音
+- `edge_tts` - Edge TTS 语音
 - `omni_tts` - GPT-SoVITS 语音
 - `avatar` - 虚拟形象
 - `obs_control` - OBS 控制
@@ -143,7 +138,7 @@ uv run python main.py
 uv run python main.py --debug
 
 # 过滤日志（只显示指定模块）
-uv run python main.py --filter EdgeTTSProvider SubtitleProvider
+uv run python main.py --filter EdgeTTSHandler SubtitleHandler
 ```
 
 ### 4.2 代码质量
@@ -202,7 +197,7 @@ websocket_heartbeat = 30    # WebSocket 心跳间隔（秒）
 **功能特性**：
 - 实时会话历史查看
 - 消息调试和重放
-- Provider 状态监控
+- 阶段参与者状态监控
 - 配置在线修改
 - LLM 对话调试
 
@@ -211,11 +206,11 @@ websocket_heartbeat = 30    # WebSocket 心跳间隔（秒）
 启动后，检查日志输出确保以下组件正常初始化：
 
 ```
-[Info] Provider注册完成: Input=X, Decision=X, Output=X
+[Info] 阶段参与者注册完成: Collector=X, Decider=X, Handler=X
 [Info] 配置验证通过
-[Info] 初始化输入Provider管理器（Input Domain）...
-[Info] 初始化决策域组件（Decision Domain）...
-[Info] 初始化输出Provider管理器...
+[Info] 初始化输入Collector（Input 阶段）...
+[Info] 初始化决策Decider（Decision 阶段）...
+[Info] 初始化输出Handler管理器...
 [Info] 应用程序正在运行。
 ```
 
@@ -226,6 +221,6 @@ websocket_heartbeat = 30    # WebSocket 心跳间隔（秒）
 
 ## 6. 下一步
 
-- 了解架构设计：[3域架构](architecture/overview.md)
+- 了解架构设计：[3阶段架构](architecture/overview.md)
 - 学习开发规范：[开发规范](development-guide.md)
-- 查看 Provider 开发指南：[Provider 开发](development/provider-guide.md)
+- 查看阶段参与者开发指南：[阶段参与者开发](development/provider-guide.md)

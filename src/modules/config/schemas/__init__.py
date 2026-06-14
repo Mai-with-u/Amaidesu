@@ -1,6 +1,6 @@
 """Pydantic schemas for configuration validation."""
 
-from typing import Dict, Type
+from typing import Dict, Optional, Type
 
 from pydantic import BaseModel
 
@@ -20,36 +20,40 @@ from src.modules.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Provider Schema Registry
+# Provider Schema Registry - 内存存储
 PROVIDER_SCHEMA_REGISTRY: Dict[str, Type[BaseModel]] = {}
 
 
-# Helper functions
-def get_provider_schema(provider_type: str, provider_layer: str = None) -> Type[BaseModel]:
+def register_provider_schema(provider_type: str, schema_class: Type[BaseModel]) -> None:
     """
-    获取Provider的Schema类
-
-    从 ProviderRegistry 获取。
+    注册 Provider 的配置 Schema
 
     Args:
-        provider_type: Provider类型标识
-        provider_layer: Provider层级（可选）
+        provider_type: Provider 类型标识
+        schema_class: Schema 类
+    """
+    PROVIDER_SCHEMA_REGISTRY[provider_type] = schema_class
+
+
+def get_provider_schema(provider_type: str, provider_layer: Optional[str] = None) -> Type[BaseModel]:
+    """
+    获取 Provider 的 Schema 类
+
+    Args:
+        provider_type: Provider 类型标识
+        provider_layer: Provider 层级（可选）
 
     Returns:
-        对应的Schema类
+        对应的 Schema 类
 
     Raises:
-        KeyError: 如果provider_type未注册
+        KeyError: 如果 provider_type 未注册
     """
-    from src.modules.registry import ProviderRegistry
-
-    schema = ProviderRegistry.get_config_schema(provider_type)
+    schema = PROVIDER_SCHEMA_REGISTRY.get(provider_type)
     if schema is not None:
         return schema
 
-    # 如果找不到Schema，尝试导入 providers 包以触发注册
-    # 这发生在 get_provider_config_with_defaults 被调用时，
-    # providers 包的 __init__.py 可能还没有被执行
+    # 如果找不到 Schema，尝试触发 providers 包的导入以进行自我注册
     try:
         if provider_layer == "input":
             from src.domains.input import providers as _  # noqa: F401
@@ -61,26 +65,26 @@ def get_provider_schema(provider_type: str, provider_layer: str = None) -> Type[
         logger.debug(f"导入 providers 包失败: {e}")
 
     # 重新尝试获取
-    schema = ProviderRegistry.get_config_schema(provider_type)
+    schema = PROVIDER_SCHEMA_REGISTRY.get(provider_type)
     if schema is not None:
         return schema
 
-    raise KeyError(f"未注册的Provider类型: {provider_type} (layer: {provider_layer})")
+    raise KeyError(f"未注册的 Provider 类型: {provider_type} (layer: {provider_layer})")
 
 
 def validate_provider_config(provider_type: str, config: dict) -> BaseModel:
     """
-    验证Provider配置
+    验证 Provider 配置
 
     Args:
-        provider_type: Provider类型
+        provider_type: Provider 类型
         config: 配置字典
 
     Returns:
         验证后的配置对象
 
     Raises:
-        KeyError: 如果provider_type未注册
+        KeyError: 如果 provider_type 未注册
         ValidationError: 如果配置验证失败
     """
     schema_class = get_provider_schema(provider_type)
@@ -89,9 +93,7 @@ def validate_provider_config(provider_type: str, config: dict) -> BaseModel:
 
 def list_all_providers() -> dict:
     """
-    列出所有已注册的Provider
-
-    从ProviderRegistry获取所有已注册的Provider（自管理Schema架构）。
+    列出所有已注册的 Provider
 
     Returns:
         包含分类列表的字典:
@@ -102,45 +104,26 @@ def list_all_providers() -> dict:
             "total": N
         }
     """
-    from src.modules.registry import ProviderRegistry
-
-    input_providers = ProviderRegistry.get_registered_input_providers()
-    decision_providers = ProviderRegistry.get_registered_decision_providers()
-    output_providers = ProviderRegistry.get_registered_output_providers()
-
     return {
-        "input": sorted(input_providers),
-        "decision": sorted(decision_providers),
-        "output": sorted(output_providers),
-        "total": len(input_providers) + len(decision_providers) + len(output_providers),
+        "input": [],
+        "decision": [],
+        "output": sorted(PROVIDER_SCHEMA_REGISTRY.keys()),
+        "total": len(PROVIDER_SCHEMA_REGISTRY),
     }
 
 
 def verify_no_enabled_field_in_schemas() -> list:
     """
-    验证所有Provider Schema中都不包含'enabled'字段
-
-    从ProviderRegistry检查所有已注册Provider的Schema。
+    验证所有 Provider Schema 中都不包含 'enabled' 字段
 
     Returns:
-        包含'enabled'字段的Schema列表（应为空）
-
-    Note:
-        这是架构约束测试。Provider的enabled状态由Manager统一管理，
-        Schema中不应包含enabled字段。
+        包含 'enabled' 字段的 Schema 列表（应为空）
     """
-    from src.modules.registry import ProviderRegistry
-
     schemas_with_enabled = []
 
-    # 检查所有域的Provider
-    all_providers = ProviderRegistry.get_all_providers()
-
-    for domain, provider_names in all_providers.items():
-        for provider_name in provider_names:
-            schema_class = ProviderRegistry.get_config_schema(provider_name)
-            if schema_class and "enabled" in schema_class.model_fields:
-                schemas_with_enabled.append(f"{domain}:{provider_name}")
+    for provider_name, schema_class in PROVIDER_SCHEMA_REGISTRY.items():
+        if hasattr(schema_class, "model_fields") and "enabled" in schema_class.model_fields:
+            schemas_with_enabled.append(provider_name)
 
     return schemas_with_enabled
 
@@ -160,4 +143,5 @@ __all__ = [
     "validate_provider_config",
     "list_all_providers",
     "verify_no_enabled_field_in_schemas",
+    "register_provider_schema",
 ]

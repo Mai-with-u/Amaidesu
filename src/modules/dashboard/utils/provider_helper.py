@@ -11,12 +11,12 @@ from src.modules.dashboard.schemas.provider import ProviderSummary
 
 if TYPE_CHECKING:
     from src.domains.decision.provider_manager import DecisionProviderManager
-    from src.domains.input.provider_manager import InputProviderManager
+    from src.domains.input.provider_manager import InputCollectorManager
     from src.domains.output.provider_manager import OutputProviderManager
 
 
-def get_input_provider_summaries(manager: Optional["InputProviderManager"]) -> List[ProviderSummary]:
-    """从 InputProviderManager 提取 Provider 信息"""
+def get_input_provider_summaries(manager: Optional["InputCollectorManager"]) -> List[ProviderSummary]:
+    """从 InputCollectorManager 提取 Provider 信息"""
     if not manager:
         return []
 
@@ -106,7 +106,7 @@ def get_output_provider_summaries(manager: Optional["OutputProviderManager"]) ->
 def get_provider_detail(
     domain: str,
     name: str,
-    input_manager: Optional["InputProviderManager"],
+    input_manager: Optional["InputCollectorManager"],
     decision_manager: Optional["DecisionProviderManager"],
     output_manager: Optional["OutputProviderManager"],
 ) -> Optional[Dict[str, Any]]:
@@ -120,7 +120,7 @@ def get_provider_detail(
     return None
 
 
-def _get_input_provider_detail(name: str, manager: Optional["InputProviderManager"]) -> Optional[Dict[str, Any]]:
+def _get_input_provider_detail(name: str, manager: Optional["InputCollectorManager"]) -> Optional[Dict[str, Any]]:
     """获取 InputProvider 详情"""
     if not manager:
         return None

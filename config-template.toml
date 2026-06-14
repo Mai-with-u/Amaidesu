@@ -4,20 +4,23 @@
 # ================================
 # 此配置文件是用户主配置，包含：
 # 1. 全局配置（LLM、MaiCore连接等）
-# 2. Provider启用列表和配置
+# 2. Collector/Decider/Handler启用列表和配置
 # 3. Pipeline配置
 #
 # 配置说明：
-# - Provider 和 Pipeline 的配置统一在本文件中管理
-# - 配置路径：[providers.input.xxx], [providers.output.xxx], [pipelines.xxx]
+# - Collector、Decider、Handler 和 Pipeline 的配置统一在本文件中管理
+# - 配置路径：[collectors.xxx], [deciders.xxx], [handlers.xxx], [pipelines.xxx]
 #
-# 配置路径结构（简洁且语义清晰）：
-# - [providers.input.{provider_name}] - Input Provider 配置
-# - [providers.output.{provider_name}] - Output Provider 配置
-# - [providers.decision.{provider_name}] - Decision Provider 配置
+# 配置格式（v0.3.0+）:
+# - [collectors] - 输入Collector配置
+# - [collectors.xxx] - 具体Collector配置
+# - [deciders] - 决策Decider配置
+# - [deciders.xxx] - 具体Decider配置
+# - [handlers] - 输出Handler配置
+# - [handlers.xxx] - 具体Handler配置
 
 [meta]
-version = "0.2.0"  # 配置模板版本，用于自动更新检测
+version = "0.3.0"  # 配置模板版本，用于自动更新检测
 
 # ========== 全局LLM配置 ==========
 
@@ -164,7 +167,7 @@ split_by_session = false
 # ============================================================
 
 # === 输入管道（InputPipeline）===
-# InputPipeline 在 InputProviderManager 中执行，用于过滤/处理输入消息
+# InputPipeline 在 InputCollectorManager 中执行，用于过滤/处理输入消息
 
 # 限流管道 - 限制消息发送频率
 [pipelines.rate_limit]
@@ -184,7 +187,7 @@ min_text_length = 3          # 最小处理文本长度
 cross_user_filter = true     # 是否跨用户过滤相似消息
 
 # === 输出管道（OutputPipeline）===
-# OutputPipeline 在 OutputProviderManager 中执行，用于过滤/处理输出内容
+# OutputPipeline 在 OutputHandlerManager 中执行，用于过滤/处理输出内容
 
 # 敏感词过滤管道 - 过滤输出中的敏感词
 [pipelines.profanity_filter.output]
@@ -204,13 +207,11 @@ case_sensitive = false
 # 匹配到敏感词是否丢弃整个消息（默认：false）
 drop_on_match = false
 
-# ========== Provider配置 ==========
+# ========== Collector配置（Input Domain） ==========
 
-# === 输入Provider（Input Domain） ===
-[providers.input]
-enabled = true
-# 启用的输入Provider列表
-enabled_inputs = [
+# === 输入Collector ===
+[collectors]
+enabled = [
     # 控制台输入（开发测试用）
     # "console_input",
 
@@ -228,15 +229,66 @@ enabled_inputs = [
     # "mainosaba",              # Mainosaba读屏
 ]
 
-# === 输出Provider（Output Domain） ===
-[providers.output]
-enabled = true
-concurrent_rendering = true          # 是否并发渲染到多个Provider
-error_handling = "continue"          # 错误处理策略: continue（继续） | stop（停止）
-render_timeout = 10.0                # 单个Provider渲染超时（秒），0表示不限制
+# --- STT Collector (语音转文字) ---
+[collectors.stt]
+type = "stt"
 
-# 启用的输出Provider列表
-enabled_outputs = [
+[collectors.stt.iflytek_asr]
+appid = "your_appid"
+api_key = "your_api_key"
+api_secret = "your_api_secret"
+host = "iat-api.xfyun.cn"  # 语音听写流式版 API 地址
+path = "/v2/iat"            # 语音听写流式版 API 路径
+
+# VAD 配置（可选）
+[collectors.stt.vad]
+enable = true
+vad_threshold = 0.5
+silence_seconds = 1.0
+
+# 音频配置（可选）
+[collectors.stt.audio]
+sample_rate = 16000
+channels = 1
+stt_input_device_name = ""  # 指定麦克风设备，留空使用默认
+
+# 消息配置（可选）
+[collectors.stt.message_config]
+user_id = "stt_user"
+user_nickname = "语音"
+
+# ========== Decider配置（Decision Domain） ==========
+
+# === 决策Decider ===
+[deciders]
+active = "maibot"  # 当前使用的决策Decider
+available = [
+    "maibot",     # MaiBot决策（默认，通过WebSocket连接MaiCore）
+    "llm",        # LLM（直接调用LLM生成回复）
+    "maicraft",   # MaiCraft弹幕游戏决策
+    "replay",      # 输入重放（调试用，直接将输入传递到输出）
+]
+
+# --- MaiBot Decider ---
+# [deciders.maibot]
+# host = "127.0.0.1"
+# port = 8000
+# connect_timeout = 10.0
+# reconnect_interval = 5.0
+
+# --- LLM Decider ---
+# [deciders.llm]
+# fallback_mode = "simple"  # simple | echo | error
+
+# --- Replay Decider (调试用) ---
+# [deciders.replay]
+# add_default_action = true  # 是否添加默认眨眼动作
+
+# ========== Handler配置（Output Domain） ==========
+
+# === 输出Handler ===
+[handlers]
+enabled = [
     # 基础输出（推荐启用）
     "subtitle",     # 字幕
     "vts",          # VTS控制
@@ -257,100 +309,36 @@ enabled_outputs = [
     # "warudo",      # Warudo控制
 ]
 
+concurrent_rendering = true          # 是否并发渲染到多个Handler
+error_handling = "continue"          # 错误处理策略: continue（继续） | stop（停止）
+render_timeout = 10.0                # 单个Handler渲染超时（秒），0表示不限制
+
 # ExpressionGenerator配置
-[providers.output.expression_generator]
+[handlers.expression_generator]
 default_tts_enabled = true
 default_subtitle_enabled = true
 default_expressions_enabled = true
 default_hotkeys_enabled = true
 
-# === 决策Provider（Decision Domain） ===
-[providers.decision]
-enabled = true
-# 当前使用的决策Provider
-active_provider = "maicore"
-# 支持的决策Provider列表（用于运行时切换验证）
-available_providers = [
-    "maicore",  # MaiCore决策（默认，通过WebSocket连接MaiCore）
-    "llm",      # LLM（直接调用LLM生成回复）
-    "maicraft", # MaiCraft弹幕游戏决策
-    "replay",   # 输入重放（调试用，直接将输入传递到输出）
-]
-
-# ========== Provider配置示例 ==========
-# 以下为各 Provider 的配置示例，取消注释并填写相应参数即可启用
-
-# --- BiliDanmakuOfficialInputProvider ---
-# [providers.input.bili_danmaku_official]
-# id_code = "your_id_code"
-# app_id = "your_app_id"
-# access_key = "your_access_key"
-# access_key_secret = "your_access_key_secret"
-
-# --- STT InputProvider (语音转文字) ---
-[providers.input.stt]
-# 讯飞 ASR 配置（必填）
-[providers.input.stt.iflytek_asr]
-appid = "your_appid"
-api_key = "your_api_key"
-api_secret = "your_api_secret"
-host = "iat-api.xfyun.cn"  # 语音听写流式版 API 地址
-path = "/v2/iat"            # 语音听写流式版 API 路径
-
-# VAD 配置（可选）
-[providers.input.stt.vad]
-enable = true
-vad_threshold = 0.5
-silence_seconds = 1.0
-
-# 音频配置（可选）
-[providers.input.stt.audio]
-sample_rate = 16000
-channels = 1
-stt_input_device_name = ""  # 指定麦克风设备，留空使用默认
-
-# 消息配置（可选）
-[providers.input.stt.message_config]
-user_id = "stt_user"
-user_nickname = "语音"
-
-# --- MaiCore DecisionProvider ---
-# [providers.decision.maicore]
-# host = "127.0.0.1"
-# port = 8000
-# connect_timeout = 10.0
-# reconnect_interval = 5.0
-
-# --- LLM DecisionProvider ---
-# [providers.decision.llm]
-# fallback_mode = "simple"  # simple | echo | error
-
-# --- Replay DecisionProvider (调试用) ---
-# [providers.decision.replay]
-# add_default_action = true  # 是否添加默认眨眼动作
-
-# --- Subtitle OutputProvider ---
-# [providers.output.subtitle]
+# --- Subtitle Handler ---
+# [handlers.subtitle]
 # font_size = 32
 # window_width = 1000
 # window_height = 720
 
-# --- VTS OutputProvider ---
-# [providers.output.vts]
+# --- VTS Handler ---
+# [handlers.vts]
 # vts_host = "127.0.0.1"
 # vts_port = 8000
 
-# --- TTS OutputProvider ---
-# [providers.output.tts]
+# --- TTS Handler ---
+# [handlers.tts]
 # voice = "zh-CN-YunxiNeural"
 # rate = "+0%"
 # volume = "+0%"
 
-# ========== 事件总线配置 ==========
+# ========== Dashboard 配置 ==========
 
-# ==================================================
-# Dashboard 配置
-# ==================================================
 [dashboard]
 enabled = true
 host = "127.0.0.1"
@@ -360,17 +348,15 @@ max_history_messages = 1000
 websocket_heartbeat = 30
 auto_open_browser = true
 
-# ==================================================
-# 事件总线配置
-# ==================================================
+# ========== 事件总线配置 ==========
+
 [event_bus]
 # 是否启用事件数据验证（建议仅 debug 模式开启）
 # 开启后会验证所有已注册事件的数据格式
 enable_validation = false
 
-# ==================================================
-# MCP Server 配置
-# ==================================================
+# ========== MCP Server 配置 ==========
+
 [mcp]
 enabled = false
 host = "127.0.0.1"

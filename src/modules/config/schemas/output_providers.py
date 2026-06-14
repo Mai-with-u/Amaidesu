@@ -29,9 +29,9 @@ def get_output_provider_config(provider_type: str, config: Dict[str, Any]) -> Ba
     Raises:
         ValueError: 如果provider_type不支持
     """
-    from src.modules.registry import ProviderRegistry
+    from src.modules.config.schemas import get_provider_schema
 
-    schema_class = ProviderRegistry.get_config_schema(provider_type)
+    schema_class = get_provider_schema(provider_type, provider_layer="output")
     if not schema_class:
         raise ValueError(f"不支持的输出Provider类型: {provider_type}")
 

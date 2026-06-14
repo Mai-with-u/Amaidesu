@@ -1,24 +1,19 @@
-"""Warudo Provider 测试共享 fixtures"""
+"""Warudo Handler 测试共享 fixtures"""
 
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.modules.di.context import ProviderContext
-
 
 @pytest.fixture
-def mock_provider_context():
-    """Mock ProviderContext for testing"""
-    return ProviderContext(
-        event_bus=MagicMock(),
-        config_service=MagicMock(),
-    )
+def mock_event_bus():
+    """Mock EventBus for testing"""
+    return MagicMock()
 
 
 @pytest.fixture
 def warudo_config():
-    """Warudo Provider 配置"""
+    """Warudo Handler 配置"""
     return {"ws_host": "localhost", "ws_port": 19190}
 
 

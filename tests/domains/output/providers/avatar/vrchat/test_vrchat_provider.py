@@ -1,5 +1,5 @@
 """
-VRChatProvider 单元测试
+VRChatHandler 单元测试
 
 注意：大部分需要外部环境的测试已被删除。
 本文件保留不需要外部环境的测试。
@@ -9,14 +9,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.domains.output.providers.avatar.vrchat.vrchat_provider import (
-    VRChatProvider,
+from src.domains.output.providers.avatar.vrchat.vrchat_handler import (
+    VRChatHandler,
 )
-from src.modules.di.context import ProviderContext
+from src.modules.events.event_bus import EventBus
 
 
-# GESTURE_MAP 是 VRChatProvider 的类变量
-GESTURE_MAP = VRChatProvider.GESTURE_MAP
+# GESTURE_MAP 是 VRChatHandler 的类变量
+GESTURE_MAP = VRChatHandler.GESTURE_MAP
 
 
 # =============================================================================
@@ -26,19 +26,10 @@ GESTURE_MAP = VRChatProvider.GESTURE_MAP
 
 @pytest.fixture
 def mock_event_bus():
-    event_bus = MagicMock()
+    event_bus = MagicMock(spec=EventBus)
     event_bus.on = MagicMock()
     event_bus.off = MagicMock()
     return event_bus
-
-
-@pytest.fixture
-def mock_provider_context(mock_event_bus):
-    """Mock ProviderContext for testing"""
-    return ProviderContext(
-        event_bus=mock_event_bus,
-        config_service=MagicMock(),
-    )
 
 
 @pytest.fixture
@@ -65,12 +56,12 @@ def mock_logger():
 # =============================================================================
 
 
-class TestVRChatProviderGestures:
+class TestVRChatHandlerGestures:
     """测试手势映射"""
 
     def test_gesture_map_exists(self):
         """测试 GESTURE_MAP 存在且是字典类型"""
-        assert hasattr(VRChatProvider, "GESTURE_MAP")
+        assert hasattr(VRChatHandler, "GESTURE_MAP")
         assert isinstance(GESTURE_MAP, dict)
 
     def test_gesture_map_has_all_9_gestures(self):

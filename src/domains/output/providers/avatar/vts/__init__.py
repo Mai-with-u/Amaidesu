@@ -1,10 +1,5 @@
-"""VTS Provider"""
+"""VTS Handler"""
 
-from src.modules.registry import ProviderRegistry
+from .vts_handler import VTSHandler
 
-from .vts_provider import VTSProvider
-
-# 注册到 ProviderRegistry
-ProviderRegistry.register_output("vts", VTSProvider, source="builtin:vts")
-
-__all__ = ["VTSProvider"]
+__all__ = ["VTSHandler"]

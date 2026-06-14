@@ -1,6 +1,3 @@
-from src.modules.registry import ProviderRegistry
-from .vrchat_provider import VRChatProvider
+from .vrchat_handler import VRChatHandler
 
-ProviderRegistry.register_output("vrchat", VRChatProvider, source="builtin:vrchat")
-
-__all__ = ["VRChatProvider"]
+__all__ = ["VRChatHandler"]

@@ -5,35 +5,12 @@ import os
 import sys
 import time
 from abc import ABC, abstractmethod
-from enum import Enum
 from typing import Any, Dict, List, Optional, Protocol, Type, runtime_checkable
 
 from src.modules.logging import get_logger
 from src.modules.types.base.pipeline_stats import PipelineStats
+from src.modules.types.base.pipeline_types import PipelineErrorHandling, PipelineException
 from src.modules.types.base.normalized_message import NormalizedMessage
-
-
-class PipelineErrorHandling(str, Enum):
-    """Pipeline 错误处理策略"""
-
-    CONTINUE = "continue"  # 记录日志，继续执行下一个 Pipeline
-    STOP = "stop"  # 停止执行，抛出异常
-    DROP = "drop"  # 丢弃消息，不执行后续 Pipeline
-
-
-class PipelineException(Exception):
-    """Pipeline 处理异常"""
-
-    def __init__(
-        self,
-        pipeline_name: str,
-        message: str,
-        original_error: Optional[Exception] = None,
-    ):
-        self.pipeline_name = pipeline_name
-        self.message = message
-        self.original_error = original_error
-        super().__init__(f"[{pipeline_name}] {message}")
 
 
 @runtime_checkable
@@ -41,12 +18,12 @@ class InputPipeline(Protocol):
     """
     输入管道协议（3域架构：Input Domain 的消息后处理）
 
-    用于在 InputProviderManager 中处理 NormalizedMessage，
+    用于在 InputCollectorManager 中处理 NormalizedMessage，
     如限流、敏感词过滤、相似消息过滤等。
 
     位置：
-        - InputProviderManager._run_provider() 方法内部调用
-        - 在 Provider 产出 NormalizedMessage 之后、发布 INPUT_MESSAGE_READY 事件之前
+        - InputCollectorManager._run_collector() 方法内部调用
+        - 在 Collector 产出 NormalizedMessage 之后、发布 INPUT_MESSAGE_READY 事件之前
         - 可返回 None 表示丢弃该消息
 
     数据流：
@@ -187,8 +164,8 @@ class InputPipelineManager:
     输入管道管理器，负责 InputPipeline 的加载、排序和执行。
 
     InputPipeline 位置（3域架构）：
-        - InputDomain: 在 Provider 产出 NormalizedMessage 后进行后处理
-        - 调用点: InputProviderManager._run_provider()
+        - InputDomain: 在 Collector 产出 NormalizedMessage 后进行后处理
+        - 调用点: InputCollectorManager._run_collector()
         - 功能: 限流、相似文本过滤、敏感词过滤等后处理
 
     架构：
@@ -234,8 +211,8 @@ class InputPipelineManager:
         """
         按优先级顺序通过所有启用的 InputPipeline 处理消息
 
-        这是 InputProviderManager 调用的主入口点，用于过滤 NormalizedMessage。
-        在 Provider 产出消息之后、发布 INPUT_MESSAGE_READY 事件之前调用。
+        这是 InputCollectorManager 调用的主入口点，用于过滤 NormalizedMessage。
+        在 Collector 产出消息之后、发布 INPUT_MESSAGE_READY 事件之前调用。
 
         Args:
             message: 待处理的 NormalizedMessage
@@ -347,11 +324,11 @@ class InputPipelineManager:
         """
         扫描并加载 InputPipeline 类型的管道。
 
-        InputPipeline 用于 InputProviderManager 中处理 NormalizedMessage。
+        InputPipeline 用于 InputCollectorManager 中处理 NormalizedMessage。
 
         3域架构中的位置：
-            - InputProviderManager._run_provider() 方法内部调用
-            - 在 Provider 产出 NormalizedMessage 之后、发布 INPUT_MESSAGE_READY 事件之前
+            - InputCollectorManager._run_collector() 方法内部调用
+            - 在 Collector 产出 NormalizedMessage 之后、发布 INPUT_MESSAGE_READY 事件之前
             - 示例：限流、相似文本过滤、敏感词过滤
 
         配置格式：

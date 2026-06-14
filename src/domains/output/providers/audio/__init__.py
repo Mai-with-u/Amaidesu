@@ -1,25 +1,18 @@
 """
-音频输出Provider模块
+音频输出Handler模块
 
 包含:
-- EdgeTTSProvider: Edge TTS文本转语音
-- GPTSoVITSOutputProvider: GPT-SoVITS文本转语音
-- OmniTTSProvider: Omni TTS文本转语音
+- EdgeTTSHandler: Edge TTS文本转语音
+- GPTSoVITSHandler: GPT-So-VITS文本转语音
+- OmniTTSHandler: Omni TTS文本转语音
 """
 
-from src.modules.registry import ProviderRegistry
-
-from .edge_tts_provider import EdgeTTSProvider
-from .gptsovits_provider import GPTSoVITSOutputProvider
-from .omni_tts_provider import OmniTTSProvider
-
-# 注册到 ProviderRegistry
-ProviderRegistry.register_output("edge_tts", EdgeTTSProvider, source="builtin:edge_tts")
-ProviderRegistry.register_output("gptsovits", GPTSoVITSOutputProvider, source="builtin:gptsovits")
-ProviderRegistry.register_output("omni_tts", OmniTTSProvider, source="builtin:omni_tts")
+from .edge_tts_handler import EdgeTTSHandler
+from .gptsovits_handler import GPTSoVITSHandler
+from .omni_tts_handler import OmniTTSHandler
 
 __all__ = [
-    "EdgeTTSProvider",
-    "GPTSoVITSOutputProvider",
-    "OmniTTSProvider",
+    "EdgeTTSHandler",
+    "GPTSoVITSHandler",
+    "OmniTTSHandler",
 ]

@@ -7,8 +7,10 @@ ConfigService - 统一的配置管理服务
 - 支持 Provider、Pipeline 等组件的配置获取
 - 配置合并策略：主配置覆盖组件配置
 - 二级配置合并：Schema默认值 → 主配置覆盖
+- 配置格式迁移：新格式 [collectors]/[deciders]/[handlers] 兼容旧格式 [providers.*]
 """
 
+import warnings
 from typing import Any, Dict, Literal, Optional
 
 from src.modules.config.config_utils import initialize_configurations, load_config
@@ -56,6 +58,131 @@ class ConfigService:
         self.version_manager = ConfigVersionManager(base_dir)
 
         self.logger.debug("ConfigService 初始化完成")
+
+    def _migrate_config_format(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        迁移配置格式从旧格式 [providers.*] 到新格式 [collectors]/[deciders]/[handlers]
+
+        迁移规则:
+        - [providers.input] → [collectors]
+        - [providers.decision] → [deciders]
+        - [providers.output] → [handlers]
+        - "maicore" decider 别名 → "maibot"
+
+        Args:
+            config: 原始配置字典
+
+        Returns:
+            迁移后的配置字典
+        """
+        # 检查是否已有新格式配置
+        has_new_format = any(key in config for key in ("collectors", "deciders", "handlers"))
+
+        # 检查是否使用旧格式配置
+        has_old_format = "providers" in config
+
+        if has_new_format and has_old_format:
+            self.logger.info("检测到新旧两种配置格式，优先使用新格式 [collectors]/[deciders]/[handlers]")
+            migrated = config.copy()
+            del migrated["providers"]
+            return migrated
+        elif has_new_format:
+            # 只有新格式，直接使用
+            return config
+        elif has_old_format:
+            # 只有旧格式，需要迁移
+            self.logger.info("检测到旧配置格式 [providers.*]，正在迁移到新格式 [collectors]/[deciders]/[handlers]")
+            migrated = self._convert_old_to_new_format(config)
+            warnings.warn(
+                "配置格式已变更，请迁移到 [collectors]/[deciders]/[handlers] 格式。\n"
+                "详细迁移指南: https://docs.example.com/config-migration\n"
+                "旧格式示例:\n"
+                "  [providers.input]\n"
+                '  enabled_inputs = ["console_input"]\n'
+                "新格式示例:\n"
+                "  [collectors]\n"
+                '  enabled = ["console_input"]',
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            return migrated
+        else:
+            # 没有配置或配置为空，返回原配置
+            return config
+
+    def _convert_old_to_new_format(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        将旧格式配置转换为新格式
+
+        Args:
+            config: 旧格式配置字典
+
+        Returns:
+            新格式配置字典
+        """
+        migrated = config.copy()
+
+        # 迁移 Input 配置: [providers.input] → [collectors]
+        if "providers" in config and "input" in config["providers"]:
+            old_input = config["providers"]["input"]
+            new_collectors: Dict[str, Any] = {"enabled": old_input.get("enabled_inputs", [])}
+
+            # 迁移各 Collector 的配置
+            for key, value in old_input.items():
+                if key not in ("enabled", "enabled_inputs"):
+                    new_collectors[key] = value
+
+            migrated["collectors"] = new_collectors
+
+        # 迁移 Decision 配置: [providers.decision] → [deciders]
+        if "providers" in config and "decision" in config["providers"]:
+            old_decision = config["providers"]["decision"]
+
+            # 处理 maicore → maibot 别名
+            active_provider = old_decision.get("active_provider", "maicore")
+            if active_provider == "maicore":
+                active_provider = "maibot"
+                self.logger.info("Decider 别名迁移: 'maicore' → 'maibot'")
+
+            available_providers = old_decision.get("available_deciders", [])
+            # 别名映射
+            available_providers = ["maibot" if p == "maicore" else p for p in available_providers]
+
+            new_deciders: Dict[str, Any] = {
+                "active": active_provider,
+                "available": available_providers,
+            }
+
+            # 迁移各 Decider 的配置
+            for key, value in old_decision.items():
+                if key not in ("enabled", "active_provider", "available_deciders"):
+                    # 别名映射 key
+                    if key == "maicore":
+                        new_deciders["maibot"] = value
+                    else:
+                        new_deciders[key] = value
+
+            migrated["deciders"] = new_deciders
+
+        # 迁移 Output 配置: [providers.output] → [handlers]
+        if "providers" in config and "output" in config["providers"]:
+            old_output = config["providers"]["output"]
+            new_handlers: Dict[str, Any] = {
+                "enabled": old_output.get("enabled_outputs", []),
+                "concurrent_rendering": old_output.get("concurrent_rendering", True),
+                "error_handling": old_output.get("error_handling", "continue"),
+                "render_timeout": old_output.get("render_timeout", 10.0),
+            }
+
+            # 迁移各 Handler 的配置（排除元数据字段）
+            metadata_fields = {"enabled", "enabled_outputs", "concurrent_rendering", "error_handling", "render_timeout"}
+            for key, value in old_output.items():
+                if key not in metadata_fields:
+                    new_handlers[key] = value
+
+            migrated["handlers"] = new_handlers
+
+        return migrated
 
     @property
     def main_config(self) -> Dict[str, Any]:
@@ -106,9 +233,12 @@ class ConfigService:
             base_dir=self.base_dir,
             main_cfg_name="config.toml",
             main_template_name="config-template.toml",
-            plugin_dir_name="src/domains",  # 更新：插件系统已移除，使用domains目录
-            pipeline_dir_name="src/domains/input/pipelines",  # 更新：Pipeline已移入Input Domain
+            plugin_dir_name="src/domains",
+            pipeline_dir_name="src/domains/input/pipelines",
         )
+
+        # 迁移配置格式（从旧格式 [providers.*] 到新格式 [collectors]/[deciders]/[handlers]）
+        self._main_config = self._migrate_config_format(self._main_config)
 
         # 新增：检查并更新配置版本
         # 仅当配置已存在（未从模板复制）时才检查版本
