@@ -64,7 +64,7 @@ class VTSHandler(AvatarHandlerBase):
     ACTION_KEYS = {"blink", "nod", "shake", "wave", "clap", "motion"}
 
     class ConfigSchema(BaseProviderConfig):
-        """VTS输出Provider配置"""
+        """VTS输出Handler配置"""
 
         type: str = "vts"
 

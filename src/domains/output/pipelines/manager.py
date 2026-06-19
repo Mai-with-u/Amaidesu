@@ -1,11 +1,11 @@
 """
-输出管道管理器 - Output Domain Intent 处理管道管理
+输出管道管理器 - Output 阶段 Intent 处理管道管理
 
 管理 OutputPipeline 的加载、排序和执行。
 
-3域架构中的位置：
-- OutputDomain: 在 Intent → OutputProvider 转换中处理 Intent
-- 调用点: OutputProviderManager._on_decision_intent() 方法
+3阶段架构中的位置：
+- Output 阶段: 在 Intent → OutputHandler 转换中处理 Intent
+- 调用点: OutputHandlerManager._on_decision_intent() 方法
 - 功能: 敏感词过滤、Intent 验证、Intent 转换等
 """
 
@@ -32,9 +32,9 @@ class OutputPipelineManager:
 
     负责 OutputPipeline 的加载、排序和执行。
 
-    3域架构中的位置：
-        - OutputDomain: 在 Intent → OutputProvider 转换中处理 Intent
-        - 调用点: OutputProviderManager._on_decision_intent() 方法
+    3阶段架构中的位置：
+        - Output 阶段: 在 Intent → OutputHandler 转换中处理 Intent
+        - 调用点: OutputHandlerManager._on_decision_intent() 方法
         - 功能: 敏感词过滤、Intent 验证、Intent 转换等
     """
 
@@ -67,8 +67,8 @@ class OutputPipelineManager:
         """
         按优先级顺序通过所有启用的 OutputPipeline 处理 Intent
 
-        这是 OutputDomain 中的 Intent 预处理入口点。
-        在 OutputProviderManager._on_decision_intent() 中调用。
+        这是 Output 阶段中的 Intent 预处理入口点。
+        在 OutputHandlerManager._on_decision_intent() 中调用。
 
         Args:
             intent: 待处理的 Intent

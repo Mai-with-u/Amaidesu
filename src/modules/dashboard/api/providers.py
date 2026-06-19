@@ -95,7 +95,7 @@ async def control_provider(
 async def _control_input_provider(
     name: str, action: ProviderControlAction, server: "DashboardServer"
 ) -> ProviderControlResponse:
-    """控制 InputProvider"""
+    """控制 InputCollector"""
     manager = server.input_manager
     if not manager:
         return ProviderControlResponse(success=False, message="Input manager not available")
@@ -133,7 +133,7 @@ async def _control_input_provider(
 async def _control_decision_provider(
     name: str, action: ProviderControlAction, server: "DashboardServer"
 ) -> ProviderControlResponse:
-    """控制 DecisionProvider"""
+    """控制 Decider"""
     manager = server.decision_manager
     if not manager:
         return ProviderControlResponse(success=False, message="Decision manager not available")
@@ -156,7 +156,7 @@ async def _control_decision_provider(
 async def _control_output_provider(
     name: str, action: ProviderControlAction, server: "DashboardServer"
 ) -> ProviderControlResponse:
-    """控制 OutputProvider"""
+    """控制 OutputHandler"""
     manager = server.output_manager
     if not manager:
         return ProviderControlResponse(success=False, message="Output manager not available")

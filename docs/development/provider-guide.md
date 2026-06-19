@@ -245,7 +245,7 @@ class OutputHandler(ABC):
 
 ## 3. 构造器注入
 
-阶段参与者通过构造器注入获取依赖服务，而不是使用 ProviderContext。
+阶段参与者通过构造器注入获取依赖服务。
 
 ```python
 class MyDecider(Decider):

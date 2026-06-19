@@ -1,12 +1,12 @@
 """
-OutputPipeline - Output Domain Intent 后处理管道系统
+OutputPipeline - Output 阶段 Intent 后处理管道系统
 
-OutputPipeline 用于在 Intent 分发给 OutputProvider 前执行过滤/修改/丢弃。
-类似于 Input Domain 的 InputPipeline，但处理的是 Intent 对象。
+OutputPipeline 用于在 Intent 分发给 OutputHandler 前执行过滤/修改/丢弃。
+类似于 Input 阶段的 InputPipeline，但处理的是 Intent 对象。
 
-位置（3域架构）：
-    - OutputDomain: DecisionProvider → Intent → OutputPipeline → OUTPUT_INTENT_READY 事件 → OutputProvider
-    - 调用点: OutputProviderManager._on_decision_intent()
+位置（3阶段架构）：
+    - Output 阶段: Decider → Intent → OutputPipeline → OUTPUT_INTENT_READY 事件 → OutputHandler
+    - 调用点: OutputHandlerManager._on_decision_intent()
     - 功能: Intent 过滤、修改、增强等后处理
 
 与 InputPipeline 的区别：

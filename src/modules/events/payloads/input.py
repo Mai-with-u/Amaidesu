@@ -23,10 +23,10 @@ class RawDataPayload(BasePayload):
     原始数据事件 Payload
 
     事件名：CoreEvents.DATA_RAW
-    发布者：InputProvider
+    发布者：InputCollector
     订阅者：InputDomain (Input Domain)
 
-    表示 InputProvider 从外部采集到的原始数据。
+    表示 InputCollector 从外部采集到的原始数据。
     """
 
     content: Any = Field(..., description="原始数据内容（bytes, str, dict等）")

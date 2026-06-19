@@ -28,35 +28,35 @@ tests/
 │   └── test_event_flow_constraints.py
 ├── core/                   # 核心模块测试
 │   ├── base/               # 基础类型测试
-│   │   ├── test_input_provider.py
-│   │   ├── test_output_provider.py
+│   │   ├── test_input_collector.py
+│   │   ├── test_output_handler.py
 │   │   └── test_pipeline_stats.py
 │   ├── config/             # 配置测试
 │   ├── events/             # 事件系统测试
 │   ├── test_event_bus.py
 │   └── test_logger.py
-├── domains/                # 领域测试
+├── domains/                # 阶段测试
 │   ├── input/
 │   │   ├── pipelines/      # Input Pipeline 测试
 │   │   │   ├── test_rate_limit_pipeline.py
 │   │   │   └── test_similar_filter_pipeline.py
-│   │   ├── providers/      # Input Provider 测试
-│   │   └── test_input_provider_manager.py
+│   │   ├── collectors/      # InputCollector 测试
+│   │   └── test_input_collector_manager.py
 │   ├── decision/
-│   │   ├── providers/     # Decision Provider 测试
-│   │   └── test_decision_provider_manager.py
+│   │   ├── deciders/     # Decider 测试
+│   │   └── test_decider_manager.py
 │   └── output/
 │       ├── pipelines/     # Output Pipeline 测试
-│       ├── providers/     # Output Provider 测试
+│       ├── handlers/     # OutputHandler 测试
 │       │   ├── avatar/
-│       │   ├── test_sticker_output_provider.py
-│       │   └── test_obs_control_output_provider.py
-│       └── test_output_provider_manager.py
+│       │   ├── test_sticker_handler.py
+│       │   └── test_obs_control_handler.py
+│       └── test_output_handler_manager.py
 ├── integration/            # 集成测试
 ├── mocks/                  # Mock 对象
-│   ├── mock_input_provider.py
-│   ├── mock_output_provider.py
-│   └── mock_decision_provider.py
+│   ├── mock_input_collector.py
+│   ├── mock_output_handler.py
+│   └── mock_decider.py
 ├── prompts/                # 提示词测试
 ├── services/               # 服务测试
 │   ├── config/
@@ -167,51 +167,51 @@ async def test_event_bus_error_isolation(event_bus):
     assert "normal" in results
 ```
 
-### 3.2 Provider 测试
+### 3.2 阶段参与者测试
 
 ```python
-"""测试 InputProvider
+"""测试 InputCollector
 
-运行: uv run pytest tests/domains/input/test_input_provider_manager.py -v
+运行: uv run pytest tests/domains/input/test_input_collector_manager.py -v
 """
 
 import asyncio
 import pytest
 
-from src.domains.input.provider_manager import InputProviderManager
+from src.domains.input.collector_manager import InputCollectorManager
 from src.modules.events.names import CoreEvents
 from src.modules.types.base.normalized_message import NormalizedMessage
-from tests.mocks.mock_input_provider import MockInputProvider
+from tests.mocks.mock_input_collector import MockInputCollector
 
 
-class FailingMockProvider(MockInputProvider):
-    """模拟失败的 Provider"""
+class FailingMockCollector(MockInputCollector):
+    """模拟失败的 Collector"""
 
     async def start(self):
         raise RuntimeError("启动失败")
 
 
 @pytest.fixture
-def provider_manager(event_bus):
-    """创建 InputProviderManager 实例"""
-    return InputProviderManager(event_bus)
+def collector_manager(event_bus):
+    """创建 InputCollectorManager 实例"""
+    return InputCollectorManager(event_bus)
 
 
 @pytest.mark.asyncio
-async def test_provider_start_and_stop(provider_manager):
-    """测试 Provider 启动和停止"""
-    provider = MockInputProvider({"name": "test_provider", "auto_exit": True})
+async def test_collector_start_and_stop(collector_manager):
+    """测试 Collector 启动和停止"""
+    collector = MockInputCollector({"name": "test_collector", "auto_exit": True})
 
-    await provider_manager.start_all_providers([provider])
-    assert provider_manager._is_started is True
+    await collector_manager.start_all_collectors([collector])
+    assert collector_manager._is_started is True
 
-    await provider_manager.stop_all_providers()
-    assert provider_manager._is_started is False
+    await collector_manager.stop_all_collectors()
+    assert collector_manager._is_started is False
 
 
 @pytest.mark.asyncio
-async def test_provider_data_flow(provider_manager, event_bus):
-    """测试 Provider 数据流"""
+async def test_collector_data_flow(collector_manager, event_bus):
+    """测试 Collector 数据流"""
     collected = []
 
     async def on_message(event_name, payload, source):
@@ -219,8 +219,8 @@ async def test_provider_data_flow(provider_manager, event_bus):
 
     event_bus.on(CoreEvents.DATA_MESSAGE, on_message, model_class=NormalizedMessage)
 
-    provider = MockInputProvider({"name": "test_provider"})
-    await provider_manager.start_all_providers([provider])
+    collector = MockInputCollector({"name": "test_collector"})
+    await collector_manager.start_all_collectors([collector])
 
     # 添加测试数据
     msg = NormalizedMessage(
@@ -229,30 +229,30 @@ async def test_provider_data_flow(provider_manager, event_bus):
         data_type="text",
         importance=0.5,
     )
-    provider.add_test_data(msg)
+    collector.add_test_data(msg)
 
     await asyncio.sleep(0.3)
 
     assert len(collected) == 1
     assert collected[0].message.text == "测试"
 
-    await provider_manager.stop_all_providers()
+    await collector_manager.stop_all_collectors()
 
 
 @pytest.mark.asyncio
-async def test_error_isolation(provider_manager):
+async def test_error_isolation(collector_manager):
     """测试错误隔离"""
-    providers = [
-        MockInputProvider({"name": "good_provider"}),
-        FailingMockProvider({"name": "failing_provider"}),
+    collectors = [
+        MockInputCollector({"name": "good_collector"}),
+        FailingMockCollector({"name": "failing_collector"}),
     ]
 
-    await provider_manager.start_all_providers(providers)
+    await collector_manager.start_all_collectors(collectors)
 
-    # 单个 Provider 失败不应影响整体
-    assert provider_manager._is_started is True
+    # 单个 Collector 失败不应影响整体
+    assert collector_manager._is_started is True
 
-    await provider_manager.stop_all_providers()
+    await collector_manager.stop_all_collectors()
 ```
 
 ### 3.3 Pipeline 测试
@@ -319,20 +319,20 @@ async def test_process_message_rate_limited(rate_limit_pipeline):
 项目在 `tests/mocks/` 目录中提供了常用的 Mock 对象：
 
 ```python
-from tests.mocks.mock_input_provider import MockInputProvider
-from tests.mocks.mock_output_provider import MockOutputProvider
-from tests.mocks.mock_decision_provider import MockDecisionProvider
+from tests.mocks.mock_input_collector import MockInputCollector
+from tests.mocks.mock_output_handler import MockOutputHandler
+from tests.mocks.mock_decider import MockDecider
 
-# 使用 MockInputProvider 进行测试
-provider = MockInputProvider({"name": "test"})
-provider.add_test_data(normalized_message)
+# 使用 MockInputCollector 进行测试
+collector = MockInputCollector({"name": "test"})
+collector.add_test_data(normalized_message)
 ```
 
-#### 自定义 Mock Provider
+#### 自定义 Mock Collector
 
 ```python
-class CustomMockInputProvider(MockInputProvider):
-    """自定义 Mock Provider"""
+class CustomMockInputCollector(MockInputCollector):
+    """自定义 Mock Collector"""
 
     def __init__(self, config=None, fail_on_start=False):
         super().__init__(config)
@@ -483,14 +483,14 @@ async def test_llm_manager():
 # ✅ 正确：每个测试独立，不依赖执行顺序
 @pytest.mark.asyncio
 async def test_first():
-    provider = MockInputProvider({"name": "test"})
-    await provider.start()
+    collector = MockInputCollector({"name": "test"})
+    await collector.start()
     # 测试逻辑
-    await provider.stop()
+    await collector.stop()
 
 @pytest.mark.asyncio
 async def test_second():  # 独立运行，不依赖 test_first
-    provider = MockInputProvider({"name": "test"})
+    collector = MockInputCollector({"name": "test"})
     ...
 ```
 
@@ -511,7 +511,7 @@ async def test_feature_requiring_config():
 
 ### 6.1 单元测试
 
-测试单个组件（Provider、Pipeline、Manager）的功能。
+测试单个组件（Collector、Pipeline、Manager）的功能。
 
 ```python
 # tests/domains/input/pipelines/test_rate_limit_pipeline.py
@@ -528,9 +528,9 @@ def test_rate_limit_pipeline_creation():
 ```python
 # tests/integration/test_mock_danmaku_schema_migration.py
 @pytest.mark.asyncio
-async def test_provider_manager_with_pipeline():
-    """测试 ProviderManager 与 Pipeline 集成"""
-    manager = InputProviderManager(event_bus)
+async def test_collector_manager_with_pipeline():
+    """测试 CollectorManager 与 Pipeline 集成"""
+    manager = InputCollectorManager(event_bus)
     pipeline = RateLimitInputPipeline(config)
     manager.add_pipeline(pipeline)
     ...
@@ -563,18 +563,18 @@ async def event_bus() -> EventBus:
     await bus.cleanup()
 ```
 
-### 7.2 域特定 Fixtures
+### 7.2 阶段特定 Fixtures
 
-在 `tests/domains/*/conftest.py` 中定义特定域的 fixtures：
+在 `tests/domains/*/conftest.py` 中定义特定阶段的 fixtures：
 
 ```python
 # tests/domains/input/conftest.py
 @pytest.fixture
-def sample_providers():
-    """创建示例 Provider 列表"""
+def sample_collectors():
+    """创建示例 Collector 列表"""
     return [
-        MockInputProvider({"name": "provider1"}),
-        MockInputProvider({"name": "provider2"}),
+        MockInputCollector({"name": "collector1"}),
+        MockInputCollector({"name": "collector2"}),
     ]
 ```
 
@@ -656,10 +656,10 @@ async def event_bus():
 ## 10. 相关文档
 
 - [开发规范](development-guide.md) - 代码风格和数据类型规范
-- [Provider 开发](development/provider-guide.md) - Provider 开发指南
+- [阶段参与者开发](development/provider-guide.md) - 阶段参与者开发指南
 - [管道开发](development/pipeline-guide.md) - Pipeline 开发指南
 - [事件系统](../architecture/event-system.md) - EventBus 使用指南
 
 ---
 
-*最后更新：2026-02-15*
+*最后更新：2026-06-19*

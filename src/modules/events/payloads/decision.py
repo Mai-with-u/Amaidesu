@@ -50,13 +50,13 @@ class IntentPayload(BasePayload):
     意图生成事件 Payload
 
     事件名：CoreEvents.DECISION_INTENT_GENERATED
-    发布者：DecisionProvider（Decision Domain）
-    订阅者：OutputProviderManager（Output Domain）
+    发布者：Decider（Decision 阶段）
+    订阅者：OutputHandlerManager（Output 阶段）
 
-    **3域架构说明**：
-    - DecisionProvider.decide() 直接返回 Intent
-    - DecisionProvider 通过 event_bus 发布此事件
-    - OutputProviderManager 订阅此事件并分发给 OutputProviders
+    **3阶段架构说明**：
+    - Decider.decide() 直接返回 Intent
+    - Decider 通过 event_bus 发布此事件
+    - OutputHandlerManager 订阅此事件并分发给 OutputHandlers
 
     **简化设计**：
     - 使用 Pydantic 的自动序列化（model_dump/model_validate）
@@ -162,13 +162,13 @@ class IntentPayload(BasePayload):
 
 class ProviderConnectedPayload(BasePayload):
     """
-    Provider 连接成功事件 Payload
+    Decider 连接成功事件 Payload
 
     事件名：CoreEvents.DECISION_PROVIDER_CONNECTED
-    发布者：DecisionProvider
-    订阅者：任何需要监控 Provider 状态的组件
+    发布者：Decider
+    订阅者：任何需要监控 Decider 状态的组件
 
-    表示 DecisionProvider 已成功连接到外部服务（如 MaiCore）。
+    表示 Decider 已成功连接到外部服务（如 MaiBot）。
     """
 
     provider: str = Field(..., description="Provider 名称")
@@ -194,13 +194,13 @@ class ProviderConnectedPayload(BasePayload):
 
 class ProviderDisconnectedPayload(BasePayload):
     """
-    Provider 断开连接事件 Payload
+    Decider 断开连接事件 Payload
 
     事件名：CoreEvents.DECISION_PROVIDER_DISCONNECTED
-    发布者：DecisionProvider
-    订阅者：任何需要监控 Provider 状态的组件
+    发布者：Decider
+    订阅者：任何需要监控 Decider 状态的组件
 
-    表示 DecisionProvider 与外部服务断开连接。
+    表示 Decider 与外部服务断开连接。
     """
 
     provider: str = Field(..., description="Provider 名称")

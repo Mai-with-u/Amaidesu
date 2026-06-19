@@ -44,7 +44,7 @@ def get_input_provider_summaries(manager: Optional["InputCollectorManager"]) -> 
 
 
 def get_decision_provider_summaries(manager: Optional["DecisionProviderManager"]) -> List[ProviderSummary]:
-    """从 DecisionProviderManager 提取 Provider 信息"""
+    """从 DecisionProviderManager 提取 Decider 信息"""
     if not manager:
         return []
 
@@ -73,7 +73,7 @@ def get_decision_provider_summaries(manager: Optional["DecisionProviderManager"]
 
 
 def get_output_provider_summaries(manager: Optional["OutputProviderManager"]) -> List[ProviderSummary]:
-    """从 OutputProviderManager 提取 Provider 信息"""
+    """从 OutputProviderManager 提取 Handler 信息"""
     if not manager:
         return []
 
@@ -121,7 +121,7 @@ def get_provider_detail(
 
 
 def _get_input_provider_detail(name: str, manager: Optional["InputCollectorManager"]) -> Optional[Dict[str, Any]]:
-    """获取 InputProvider 详情"""
+    """获取 InputCollector 详情"""
     if not manager:
         return None
 
@@ -141,7 +141,7 @@ def _get_input_provider_detail(name: str, manager: Optional["InputCollectorManag
 
 
 def _get_decision_provider_detail(name: str, manager: Optional["DecisionProviderManager"]) -> Optional[Dict[str, Any]]:
-    """获取 DecisionProvider 详情"""
+    """获取 Decider 详情"""
     if not manager:
         return None
 
@@ -160,7 +160,7 @@ def _get_decision_provider_detail(name: str, manager: Optional["DecisionProvider
 
 
 def _get_output_provider_detail(name: str, manager: Optional["OutputProviderManager"]) -> Optional[Dict[str, Any]]:
-    """获取 OutputProvider 详情"""
+    """获取 OutputHandler 详情"""
     if not manager:
         return None
 

@@ -253,7 +253,7 @@ sequenceDiagram
 |--------|--------|--------|---------|
 | `data.message` | Input 阶段 | Decision 阶段 | `NormalizedMessage` |
 | `decision.intent` | Decision 阶段 | Output 阶段 | `Intent` |
-| `output.params` | ExpressionGenerator | OutputProviders | `RenderParameters` |
+| `output.params` | ExpressionGenerator | OutputHandlers | `RenderParameters` |
 
 ### 管道（Pipeline）
 

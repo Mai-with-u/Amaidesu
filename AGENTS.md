@@ -17,59 +17,6 @@
 | 管理提示词 | [提示词管理](docs/development/prompt-management.md) |
 | 编写测试 | [测试指南](docs/development/testing-guide.md) |
 
-## 重构阶段
-
-**✅ Output Handler 重构已完成**：所有 OutputHandler 已完成重构，采用构造器注入替代 ProviderContext。
-
-### 重构状态
-
-#### Iteration 4: Output Handler 重命名 + 构造器注入
-
-**完成时间**: 2026-06-14
-
-**重构内容**:
-- **11 个 Output Handler** 已完成重命名和重构：
-  - Audio Handlers: EdgeTTSHandler, GPTSoVITSHandler, OmniTTSHandler
-  - Avatar Handlers: VTSHandler, WarudoHandler, VRChatHandler (继承 AvatarHandlerBase)
-  - Non-Audio Handlers: SubtitleHandler, StickerHandler, ObsControlHandler, RemoteStreamHandler, DebugConsoleHandler
-
-**架构变更**:
-- **重构前**: `config + context: ProviderContext` → 从 context 提取 dependencies
-- **重构后**: `config + event_bus + audio_stream_channel + llm_service + prompt_service` → 构造器直接注入
-
-**详细变更**:
-| Handler 类型 | 构造器参数 |
-|-------------|-----------|
-| TTS Handlers | `config`, `event_bus`, `audio_stream_channel` |
-| Avatar Handlers | `config`, `event_bus`, `audio_stream_channel`, `llm_service`, `prompt_service` |
-| Non-Audio Handlers | `config`, `event_bus` |
-
-**注册方式**: `@handler("name")` 装饰器替代 `ProviderRegistry.register_output()`
-
-**测试状态**: 163 tests passed ✓
-
----
-
-**✅ Iteration 3（已完成）**：阶段参与者自我标准化重构已完成，所有参与者直接构造 NormalizedMessage。
-
-### Iteration 3 重构状态
-
-- **InputCollector**：8 个全部完成迁移并完成自我标准化重构
-  - 删除 InputCoordinator 和 Normalizer 系统
-  - Collector 直接构造 NormalizedMessage
-  - Pipeline 移至 CollectorManager 层面统一过滤
-- **Decider**：3 个已迁移完成
-- **OutputHandler**：11 个完成迁移（含新增）
-- **Service**：1 个完成迁移
-
-### 架构变更
-
-**重构前**：`Provider → RawData → InputCoordinator → NormalizerRegistry → NormalizedMessage`
-
-**重构后**：`Collector → NormalizedMessage → CollectorManager (Pipeline过滤) → input.message.ready 事件`
-
-**重构已全面完成**，所有旧插件功能已迁移到新阶段参与者架构中正常工作。
-
 ## 核心规范
 
 ### 必须遵守
@@ -227,7 +174,7 @@ uv run python main.py
 uv run python main.py --debug
 
 # 过滤日志（只显示指定模块）
-uv run python main.py --filter EdgeTTSProvider SubtitleProvider
+uv run python main.py --filter EdgeTTSHandler SubtitleHandler
 ```
 
 ### Web Dashboard
@@ -546,24 +493,6 @@ logger.error("错误日志", exc_info=True)
 - 根配置：根目录的 `config-template.toml`
 - 首次运行会自动从模板生成 `config.toml`
 
-## Core 层职责边界
-
-**Core 层的职责**：
-- 定义基础接口（Provider 基类、事件系统）
-- 提供共享工具（日志、配置管理）
-- 存放跨阶段共享的类型（避免循环依赖）
-- 组合根（AmaidesuCore）协调组件生命周期
-
-**Core 层不应该**：
-- 从阶段层导入类型并重导出
-- 依赖任何阶段的具体实现
-- 包含业务逻辑
-
-**示例**：
-- ✓ `src/modules/base/raw_data.py`: 定义 RawData 基础类型
-- ✓ `src/modules/types/intent.py`: 共享的枚举类型
-- ✗ `src/modules/base/base.py`: 重导出 `RenderParameters`（违规）
-
 ## 目录结构
 
 ```
@@ -604,30 +533,11 @@ Amaidesu/
 
 ### 开发指南
 - [开发规范](docs/development-guide.md) - 代码风格和约定
-- [Provider 开发](docs/development/provider-guide.md) - Provider 开发详解
+- [阶段参与者开发](docs/development/provider-guide.md) - Collector/Decider/Handler 开发详解
 - [管道开发](docs/development/pipeline-guide.md) - Pipeline 开发详解
 - [提示词管理](docs/development/prompt-management.md) - PromptManager 使用
 - [测试指南](docs/development/testing-guide.md) - 测试规范和最佳实践
 
 ---
 
-*最后更新：2026-06-14*
-
-## 迁移完成状态（2026-02-09）
-
-✅ **插件系统到阶段参与者架构重构已完成**
-
-所有功能已成功从旧插件系统迁移到新的阶段参与者架构：
-
-- **8 个 InputCollector** 已迁移完成
-- **3 个 Decider** 已迁移完成
-- **11 个 OutputHandler** 已迁移完成（含新增）
-- **1 个共享服务** (DGLabService) 已迁移完成
-
-新架构优势：
-- 类型安全：所有阶段参与者都继承基类，提供统一的接口
-- 配置驱动：通过 TOML 配置文件启用/禁用参与者
-- 生命周期管理：由 Manager 统一管理
-- 错误隔离：单个参与者不会影响其他参与者
-
-所有后续开发都应基于新的阶段参与者架构进行。
+*最后更新：2026-06-19*

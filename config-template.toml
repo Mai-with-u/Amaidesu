@@ -61,25 +61,6 @@ model = "llama3"
 base_url = "http://localhost:11434/v1"  # Ollama 默认地址
 api_key = "sk-dummy"  # Ollama 不需要真实 API key
 
-# ========== 共享服务配置 ==========
-
-# DG-Lab 硬件控制服务
-[dg_lab]
-# DG-Lab API 地址
-api_base_url = "http://127.0.0.1:8081"
-# 默认强度 (0-200)
-default_strength = 10
-# 默认波形预设: small | medium | big | random
-default_waveform = "big"
-# 默认电击持续时间（秒）
-shock_duration_seconds = 2.0
-# HTTP 请求超时时间（秒）
-request_timeout = 5.0
-# 最大强度限制（安全保护）
-max_strength = 50
-# 是否启用安全限制（推荐启用）
-enable_safety_limit = true
-
 # ========== Amaidesu核心配置 ==========
 
 [general]

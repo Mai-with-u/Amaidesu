@@ -3,9 +3,9 @@
 
 过滤 Intent 中的敏感词，适用于所有输出。
 
-3域架构中的位置：
-- Output Domain: 在 Intent → OutputProvider 转换中处理 Intent
-- 在 OutputProviderManager._on_decision_intent() 之后、Provider 之前调用
+3阶段架构中的位置：
+- Output 阶段: 在 Intent → OutputHandler 转换中处理 Intent
+- 在 OutputHandlerManager._on_decision_intent() 之后、Handler 之前调用
 """
 
 import os

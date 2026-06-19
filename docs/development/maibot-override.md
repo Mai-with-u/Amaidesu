@@ -26,10 +26,10 @@ Amaidesu 默认为所有消息设置 `group_info`（`group_id="live_room"`, `gro
 
 ## 配置方法
 
-在 `config.toml` 的 `[providers.decision.maicore]` 段添加：
+在 `config.toml` 的 `[deciders.maibot]` 段添加：
 
 ```toml
-[providers.decision.maicore]
+[deciders.maibot]
 # 现有配置...
 host = "127.0.0.1"
 port = 8000
@@ -124,12 +124,12 @@ variables:
 
 设置 `enable_prompt_override = false` 或注释掉该配置项。
 
-### Q: 多个 DecisionProvider 会冲突吗？
+### Q: 多个 Decider 会冲突吗？
 
-不会。`template_info` 在 `MaiCoreDecisionProvider` 层注入，其他 DecisionProvider（如 LLMDecisionProvider）不使用此机制。
+不会。`template_info` 在 `MaiBotDecider` 层注入，其他 Decider（如 LLMDecider）不使用此机制。
 
 ## 相关文件
 
 - 服务类: `src/modules/prompts/template_override_service.py`
-- Provider 修改: `src/domains/decision/providers/maicore/maicore_decision_provider.py`
+- Decider 修改: `src/domains/decision/deciders/maibot/maibot_decider.py`
 - 模板目录: `src/modules/prompts/templates/maibot_override/`

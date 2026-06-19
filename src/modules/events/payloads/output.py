@@ -19,7 +19,7 @@ class OBSSendTextPayload(BasePayload):
 
     事件名：CoreEvents.OUTPUT_OBS_SEND_TEXT
     发布者：需要向 OBS 发送文本的组件
-    订阅者：ObsControlOutputProvider
+    订阅者：ObsControlHandler
 
     用于向 OBS 文本源发送文本内容。
     """
@@ -49,7 +49,7 @@ class OBSSwitchScenePayload(BasePayload):
 
     事件名：CoreEvents.OUTPUT_OBS_SWITCH_SCENE
     发布者：需要切换 OBS 场景的组件
-    订阅者：ObsControlOutputProvider
+    订阅者：ObsControlHandler
 
     用于切换 OBS 中的场景。
     """
@@ -76,7 +76,7 @@ class OBSSetSourceVisibilityPayload(BasePayload):
 
     事件名：CoreEvents.OUTPUT_OBS_SET_SOURCE_VISIBILITY
     发布者：需要控制源可见性的组件
-    订阅者：ObsControlOutputProvider
+    订阅者：ObsControlHandler
 
     用于设置 OBS 中源的可见性。
     """
@@ -104,8 +104,8 @@ class RemoteStreamRequestImagePayload(BasePayload):
     远程流请求图像事件 Payload
 
     事件名：CoreEvents.OUTPUT_REMOTE_STREAM_REQUEST_IMAGE
-    发布者：RemoteStreamOutputProvider
-    订阅者：需要响应图像请求的组件（如 AvatarOutputProvider）
+    发布者：RemoteStreamHandler
+    订阅者：需要响应图像请求的组件（如 AvatarHandler）
 
     当边缘设备向服务器请求一帧图像时触发。
     """

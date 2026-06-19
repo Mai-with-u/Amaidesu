@@ -1,7 +1,7 @@
 """
 OutputPipeline 基类和协议定义
 
-处理 Intent 的管道，在 Intent 分发给 OutputProvider 前执行过滤。
+处理 Intent 的管道，在 Intent 分发给 OutputHandler 前执行过滤。
 """
 
 from abc import ABC, abstractmethod
@@ -26,7 +26,7 @@ class OutputPipelineContext(BaseModel):
     所有字段均为 Optional，支持按需使用。
 
     Attributes:
-        capability_registry: 能力注册表（用于查询 Provider 能力）
+        capability_registry: 能力注册表（用于查询 Handler 能力）
         llm_service: LLM 服务（用于生成文本/决策）
         prompt_service: 提示词服务（用于渲染提示词模板）
     """
@@ -43,7 +43,7 @@ class OutputPipeline(Protocol):
     """
     输出管道协议（与 InputPipeline 对称）
 
-    处理 Intent，在分发给 OutputProvider 前执行过滤/修改/丢弃。
+    处理 Intent，在分发给 OutputHandler 前执行过滤/修改/丢弃。
 
     数据流：
         Intent → OutputPipeline.process() → Intent | None

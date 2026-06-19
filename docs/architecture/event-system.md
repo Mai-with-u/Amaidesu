@@ -377,7 +377,7 @@ event_bus.on(
 await event_bus.emit(
     CoreEvents.DATA_MESSAGE,
     MessageReadyPayload(message={"text": "你好", "source": "console"}, source="console"),
-    source="ConsoleInputProvider"
+    source="ConsoleInputCollector"
 )
 
 # 获取统计
@@ -426,11 +426,11 @@ except Exception as e:
         CoreEvents.CORE_ERROR,
         ErrorPayload.from_exception(
             exc=e,
-            source="MyProvider",
+            source="MyHandler",
             recoverable=True,
             context={"endpoint": "ws://localhost:8080"}
         ),
-        source="MyProvider"
+        source="MyHandler"
     )
 ```
 
