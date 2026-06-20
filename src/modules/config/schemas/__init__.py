@@ -73,6 +73,9 @@ def validate_config(type: str, config: dict) -> BaseModel:
         ValidationError: 如果配置验证失败
     """
     schema_class = get_config_schema(type)
+    # 通过 from_dict 加载，自动剥离未知字段（配合 extra="forbid"）
+    if hasattr(schema_class, "from_dict"):
+        return schema_class.from_dict(config)
     return schema_class(**config)
 
 

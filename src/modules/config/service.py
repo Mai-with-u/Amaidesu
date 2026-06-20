@@ -9,6 +9,7 @@ ConfigService - 统一的配置管理服务
 - 二级配置合并：Schema默认值 → 主配置覆盖
 """
 
+from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 
 from src.modules.config.config_utils import initialize_configurations, load_config
@@ -63,6 +64,72 @@ class ConfigService:
             return {}
         return self._main_config
 
+    def _try_multi_file_init(self) -> tuple[bool, bool]:
+        """尝试使用多文件配置模式（首次运行自动生成/迁移）
+
+        决策逻辑：
+        1. config/ 存在且有 .toml → 直接加载
+        2. config/ 不存在 + 旧 config.toml 存在 → 迁移到 config/
+        3. config/ 不存在 + 无旧 config.toml → 从 Schema 生成默认配置
+
+        成功时将配置拍平到 _main_config 以保持向后兼容。
+
+        Returns:
+            (success, was_created) — success=True 表示多文件模式就绪；
+            was_created=True 表示本次执行了生成或迁移
+        """
+        from src.modules.config.migration import migrate_old_config
+        from src.modules.config.multi_file_loader import (
+            CONFIG_VERSION,
+            generate_default_configs,
+            get_config_version,
+            load_config_dir,
+        )
+
+        config_dir = Path(self.base_dir) / "config"
+        old_config = Path(self.base_dir) / "config.toml"
+        was_created = False
+
+        if not config_dir.exists() or not any(config_dir.glob("*.toml")):
+            if old_config.exists():
+                self.logger.info("检测到旧 config.toml，开始迁移到 config/ 多文件结构...")
+                report = migrate_old_config(old_config, config_dir)
+                self.logger.info(
+                    f"迁移完成: {len(report.migrated_sections)} 段迁移, {len(report.dropped_sections)} 段丢弃"
+                )
+                was_created = True
+            else:
+                self.logger.info("首次运行：从 Schema 生成默认配置到 config/...")
+                generate_default_configs(config_dir)
+                was_created = True
+
+        try:
+            multi_config, drift = load_config_dir(config_dir)
+        except Exception as e:
+            self.logger.error(f"多文件配置加载失败: {e}")
+            return False, False
+
+        if drift.has_drift:
+            for key in drift.redundant:
+                self.logger.warning(f"漂移检测: 冗余配置项 '{key}'")
+            for key in drift.missing:
+                self.logger.info(f"漂移检测: 补充缺失配置项 '{key}'")
+
+        current_ver = get_config_version(config_dir)
+        if current_ver and current_ver != CONFIG_VERSION:
+            self.logger.info(f"配置版本更新: {current_ver} → {CONFIG_VERSION}")
+
+        self._main_config = {}
+        for category in ("core", "model", "input", "decision", "output"):
+            section_data = multi_config.get(category, {})
+            if isinstance(section_data, dict):
+                for key, value in section_data.items():
+                    if key == "type":
+                        continue
+                    self._main_config[key] = value
+
+        return True, was_created
+
     def initialize(self) -> tuple[Dict[str, Any], bool, bool, bool, bool]:
         """
         初始化所有配置文件
@@ -89,6 +156,23 @@ class ConfigService:
             )
 
         self.logger.info("开始初始化配置服务...")
+
+        # 优先尝试多文件配置模式（config/ 目录）— 自动生成/迁移
+        success, was_created = self._try_multi_file_init()
+        if success:
+            self._initialized = True
+            self._main_config_copied = was_created
+            self.logger.info("配置服务初始化完成（多文件模式）")
+            return (
+                self._main_config,
+                self._main_config_copied,
+                self._plugin_configs_copied,
+                self._pipeline_configs_copied,
+                False,
+            )
+
+        # 回退到旧模式（单文件 config.toml）
+        self.logger.info("多文件模式不可用，回退到旧模式...")
 
         (
             self._main_config,
@@ -255,9 +339,6 @@ class ConfigService:
             return False
 
         section_name = _PHASE_SECTION.get(phase)
-        if phase == "rendering":
-            section_name = "handlers"
-
         if section_name is None:
             self.logger.warning(f"未知的组件阶段: {phase}")
             return False
@@ -331,7 +412,11 @@ class ConfigService:
                 schema_fields = set(schema_class.model_fields.keys())
                 extra_fields = {k: v for k, v in result.items() if k not in schema_fields}
 
-                validated = schema_class(**result)
+                # 通过 from_dict 加载，自动剥离未知字段（配合 extra="forbid"）
+                if hasattr(schema_class, "from_dict"):
+                    validated = schema_class.from_dict(result)
+                else:
+                    validated = schema_class(**result)
                 result = validated.model_dump(exclude_unset=False)
                 result.update(extra_fields)
             except Exception as e:

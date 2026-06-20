@@ -35,6 +35,9 @@ def get_output_config(handler_type: str, config: Dict[str, Any]) -> BaseModel:
     if not schema_class:
         raise ValueError(f"不支持的输出Handler类型: {handler_type}")
 
+    # 通过 from_dict 加载，自动剥离未知字段（配合 extra="forbid"）
+    if hasattr(schema_class, "from_dict"):
+        return schema_class.from_dict(config)
     return schema_class(**config)
 
 
