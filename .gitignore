@@ -209,5 +209,9 @@ dashboard/tsconfig.tsbuildinfo
 .omo/
 AGENTS.local.md
 
-# ÅäÖÃ±¸·ÝÎÄ¼þ£¨º¬Ãô¸ÐÐÅÏ¢£©
+# ï¿½ï¿½ï¿½Ã±ï¿½ï¿½ï¿½ï¿½Ä¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ï¢ï¿½ï¿½
 config.toml.backup*
+
+# Multi-file config (generated from Schema on first run, contains user secrets)
+config/*.toml
+config/old/

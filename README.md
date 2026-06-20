@@ -108,10 +108,10 @@ cd Amaidesu
 # 3. 同步依赖
 uv sync
 
-# 4. 首次运行（自动生成配置）
+# 4. 首次运行（自动生成 config/ 目录及默认配置）
 uv run python main.py
 
-# 5. 编辑 config.toml 填入必要配置
+# 5. 编辑 config/ 目录下的 .toml 文件填入必要配置
 
 # 6. 再次运行
 uv run python main.py
