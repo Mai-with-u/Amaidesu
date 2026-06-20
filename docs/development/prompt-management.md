@@ -431,7 +431,7 @@ config = config_service.get_collector_config_with_defaults(
 每个阶段参与者可以定义 Pydantic Schema 配置类：
 
 ```python
-# src/domains/input/collectors/console_input/config.py
+# src/stages/input/collectors/console_input/config.py
 from pydantic import Field
 from src.modules.config.schemas.base import BaseConfig
 

@@ -83,7 +83,7 @@ Amaidesu/
 ├── config-template.toml         # 配置模板
 ├── config.toml                  # 运行时配置（自动生成）
 ├── src/
-│   ├── domains/                 # 业务阶段
+│   ├── stages/                  # 业务阶段
      │   │   ├── input/               # 输入阶段
      │   │   │   ├── collector_manager.py
      │   │   │   ├── pipelines/       # 输入管道
@@ -184,23 +184,23 @@ sequenceDiagram
 
 | 名称 | 说明 | 位置 |
 |------|------|------|
-| console_input | 控制台输入 | `src/domains/input/collectors/console_input/` |
-| bili_danmaku | B站弹幕（第三方API） | `src/domains/input/collectors/bili_danmaku/` |
-| bili_danmaku_official | B站弹幕（官方WebSocket） | `src/domains/input/collectors/bili_danmaku_official/` |
-| bili_danmaku_official_maicraft | B站弹幕（Maicraft优化版） | `src/domains/input/collectors/bili_danmaku_official_maicraft/` |
-| mainosaba | Mainosaba输入 | `src/domains/input/collectors/mainosaba/` |
-| mock_danmaku | 模拟弹幕（测试用） | `src/domains/input/collectors/mock_danmaku/` |
-| read_pingmu | PingMu读取 | `src/domains/input/collectors/read_pingmu/` |
-| stt | 语音识别 | `src/domains/input/collectors/stt/` |
+| console_input | 控制台输入 | `src/stages/input/collectors/console_input/` |
+| bili_danmaku | B站弹幕（第三方API） | `src/stages/input/collectors/bili_danmaku/` |
+| bili_danmaku_official | B站弹幕（官方WebSocket） | `src/stages/input/collectors/bili_danmaku_official/` |
+| bili_danmaku_official_maicraft | B站弹幕（Maicraft优化版） | `src/stages/input/collectors/bili_danmaku_official_maicraft/` |
+| mainosaba | Mainosaba输入 | `src/stages/input/collectors/mainosaba/` |
+| mock_danmaku | 模拟弹幕（测试用） | `src/stages/input/collectors/mock_danmaku/` |
+| read_pingmu | PingMu读取 | `src/stages/input/collectors/read_pingmu/` |
+| stt | 语音识别 | `src/stages/input/collectors/stt/` |
 
 ### Decider（4个）
 
 | 名称 | 说明 | 位置 |
 |------|------|------|
-| maibot | MaiBot 决策（默认） | `src/domains/decision/deciders/maibot/` |
-| llm | 本地 LLM 决策 | `src/domains/decision/deciders/llm/` |
-| maicraft | Maicraft 规则引擎 | `src/domains/decision/deciders/maicraft/` |
-| replay | 回放决策（调试用） | `src/domains/decision/deciders/replay/` |
+| maibot | MaiBot 决策（默认） | `src/stages/decision/deciders/maibot/` |
+| llm | 本地 LLM 决策 | `src/stages/decision/deciders/llm/` |
+| maicraft | Maicraft 规则引擎 | `src/stages/decision/deciders/maicraft/` |
+| replay | 回放决策（调试用） | `src/stages/decision/deciders/replay/` |
 
 ### OutputHandler（12个）
 
@@ -208,28 +208,28 @@ sequenceDiagram
 
 | 名称 | 说明 | 位置 |
 |------|------|------|
-| edge_tts | Edge TTS | `src/domains/output/handlers/audio/edge_tts/` |
-| gptsovits | GPT-SoVITS TTS | `src/domains/output/handlers/audio/gptsovits/` |
-| omni_tts | Omni TTS | `src/domains/output/handlers/audio/omni_tts/` |
+| edge_tts | Edge TTS | `src/stages/output/handlers/audio/edge_tts/` |
+| gptsovits | GPT-SoVITS TTS | `src/stages/output/handlers/audio/gptsovits/` |
+| omni_tts | Omni TTS | `src/stages/output/handlers/audio/omni_tts/` |
 
 #### 虚拟形象
 
 | 名称 | 说明 | 位置 |
 |------|------|------|
-| vts | VTubeStudio | `src/domains/output/handlers/avatar/vts/` |
-| warudo | Warudo 控制 | `src/domains/output/handlers/avatar/warudo/` |
-| vrchat | VRChat | `src/domains/output/handlers/avatar/vrchat/` |
+| vts | VTubeStudio | `src/stages/output/handlers/avatar/vts/` |
+| warudo | Warudo 控制 | `src/stages/output/handlers/avatar/warudo/` |
+| vrchat | VRChat | `src/stages/output/handlers/avatar/vrchat/` |
 
 #### 其他输出
 
 | 名称 | 说明 | 位置 |
 |------|------|------|
-| subtitle | 字幕渲染 | `src/domains/output/handlers/subtitle/` |
-| sticker | 表情贴纸 | `src/domains/output/handlers/sticker/` |
-| obs_control | OBS 控制 | `src/domains/output/handlers/obs_control/` |
-| remote_stream | 远程流输出 | `src/domains/output/handlers/remote_stream/` |
-| debug_console | 调试控制台输出 | `src/domains/output/handlers/debug_console/` |
-| mock | 模拟输出（测试用） | `src/domains/output/handlers/mock/` |
+| subtitle | 字幕渲染 | `src/stages/output/handlers/subtitle/` |
+| sticker | 表情贴纸 | `src/stages/output/handlers/sticker/` |
+| obs_control | OBS 控制 | `src/stages/output/handlers/obs_control/` |
+| remote_stream | 远程流输出 | `src/stages/output/handlers/remote_stream/` |
+| debug_console | 调试控制台输出 | `src/stages/output/handlers/debug_console/` |
+| mock | 模拟输出（测试用） | `src/stages/output/handlers/mock/` |
 
 ## 核心概念
 

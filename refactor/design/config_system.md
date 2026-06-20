@@ -36,15 +36,15 @@
 - 复杂的配置合并逻辑
 - 配置验证分散
 
-### 新架构：统一的 Provider 配置
+### 新架构：统一的阶段参与者配置
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         config.toml                              │
 │                                                                  │
-│  [providers.input]      # 输入 Provider 配置                    │
-│  [providers.decision]   # 决策 Provider 配置                    │
-│  [providers.output]     # 输出 Provider 配置                    │
+│  [collectors]          # 输入 Collector 配置                    │
+│  [deciders]             # 决策 Decider 配置                    │
+│  [handlers]             # 输出 Handler 配置                    │
 │  [pipelines]            # 管道配置                               │
 │  [llm]                  # LLM 配置                               │
 │  [context]              # 上下文配置                             │
@@ -57,7 +57,7 @@
 │                    ConfigManager (统一管理)                       │
 │                                                                  │
 │  - load_config()       # 加载配置                                │
-│  - get_provider_config() # 获取 Provider 配置                   │
+│  - get_config_with_defaults() # 获取配置（带默认值）            │
 │  - validate()          # 验证配置                                │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
@@ -65,7 +65,7 @@
 
 **特点**：
 - 统一的配置文件
-- 配置与 Provider 类型绑定
+- 配置与阶段参与者类型绑定
 - 简化的配置加载
 
 ## 配置文件结构对比
@@ -132,40 +132,40 @@ max_tokens = 1024
 [general]
 platform_id = "amaidesu_default"
 
-# ==================== Input Providers ====================
-[providers.input]
-enabled_inputs = ["console_input", "bili_danmaku"]
+# ==================== Input Collectors ====================
+[collectors]
+enabled = ["console_input", "bili_danmaku"]
 
-[providers.input.console_input]
+[collectors.console_input]
 # 控制台输入无需额外配置
 
-[providers.input.bili_danmaku]
+[collectors.bili_danmaku]
 room_id = 123456
 # ... 弹幕配置
 
-# ==================== Decision Providers ====================
-[providers.decision]
-active_provider = "maicore"  # 只能有一个活跃的决策 Provider
+# ==================== Decision Deciders ====================
+[deciders]
+active = "maicore"  # 只能有一个活跃的决策 Decider
 
-[providers.decision.maicore]
+[deciders.maicore]
 host = "127.0.0.1"
 port = 8000
 
-[providers.decision.llm]
+[deciders.llm]
 model = "gpt-4o-mini"
 # ... LLM 配置
 
-# ==================== Output Providers ====================
-[providers.output]
-enabled_outputs = ["edge_tts", "subtitle", "vts"]
+# ==================== Output Handlers ====================
+[handlers]
+enabled = ["edge_tts", "subtitle", "vts"]
 
-[providers.output.edge_tts]
+[handlers.edge_tts]
 voice = "zh-CN-XiaoxiaoNeural"
 
-[providers.output.subtitle]
+[handlers.subtitle]
 font_size = 24
 
-[providers.output.vts]
+[handlers.vts]
 host = "127.0.0.1"
 port = 8001
 
@@ -189,9 +189,9 @@ max_history_length = 50
 ```
 
 **改进**：
-- 按 Provider 类型分组
+- 按阶段参与者类型分组
 - 配置结构清晰
-- 决策 Provider 明确"只选一个"
+- 决策 Decider 明确"只选一个"
 
 ## 配置加载对比
 
@@ -250,29 +250,29 @@ class ConfigManager:
             shutil.copy("config-template.toml", path)
         return toml.load(path)
 
-    def get_provider_config(self, domain: str, provider_name: str) -> Dict[str, Any]:
-        """获取 Provider 配置"""
-        domain_config = self._config.get("providers", {}).get(domain, {})
-        return domain_config.get(provider_name, {})
+    def get_config_with_defaults(self, stage: str, component_name: str) -> Dict[str, Any]:
+        """获取配置（带默认值）"""
+        stage_config = self._config.get(stage, {})
+        return stage_config.get(component_name, {})
 
-    def get_enabled_providers(self, domain: str) -> List[str]:
-        """获取启用的 Provider 列表"""
-        domain_config = self._config.get("providers", {}).get(domain, {})
+    def get_enabled(self, stage: str) -> List[str]:
+        """获取启用的组件列表"""
+        stage_config = self._config.get(stage, {})
 
-        if domain == "decision":
-            # 决策域只返回 active_provider
-            return [domain_config.get("active_provider")]
+        if stage == "deciders":
+            # 决策阶段只返回 active
+            return [stage_config.get("active")]
         else:
-            # 输入/输出域返回 enabled 列表
-            return domain_config.get(f"enabled_{domain}s", [])
+            # 输入/输出阶段返回 enabled 列表
+            return stage_config.get("enabled", [])
 
-# provider_manager.py
-async def load_providers(self):
-    enabled = self._config_manager.get_enabled_providers("input")
+# collector_manager.py
+async def load_collectors(self):
+    enabled = self._config_manager.get_enabled("collectors")
 
-    for provider_name in enabled:
-        config = self._config_manager.get_provider_config("input", provider_name)
-        provider = ProviderClass(config=config, context=self._context)
+    for collector_name in enabled:
+        config = self._config_manager.get_config_with_defaults("collectors", collector_name)
+        collector = CollectorClass(config=config, event_bus=self._event_bus)
 ```
 
 **改进**：
@@ -316,24 +316,24 @@ class LLMConfig(BaseModel):
 class ConfigService:
     """统一的配置管理服务"""
 
-    def get_provider_config_with_defaults(
+    def get_config_with_defaults(
         self,
-        provider_name: str,
-        provider_layer: Literal["input", "output", "decision"],
+        component_name: str,
+        stage: Literal["collectors", "deciders", "handlers"],
         schema_class: Optional[type] = None,
     ) -> Dict[str, Any]:
         """
-        获取Provider配置（二级合并）
+        获取组件配置（二级合并）
 
         配置合并顺序（后者覆盖前者）:
         1. Schema默认值（从Pydantic Schema类获取）
-        2. 主配置覆盖 (config.toml中的[providers.*.{provider_name}])
+        2. 主配置覆盖 (config.toml中的[collectors.xxx])
         """
         # 步骤1: 获取Schema默认值
-        result = self._get_schema_defaults(schema_class, provider_name)
+        result = self._get_schema_defaults(schema_class, component_name)
 
         # 步骤2: 应用主配置覆盖
-        global_override = self.load_global_overrides(config_section, provider_name)
+        global_override = self.load_global_overrides(stage, component_name)
         if global_override:
             result = deep_merge_configs(result, global_override)
 
@@ -344,8 +344,8 @@ class ConfigService:
 
         return result
 
-# 具体 Provider 的配置 Schema（可选）
-# modules/config/schemas/input_providers.py
+# 具体组件的配置 Schema（可选）
+# modules/config/schemas/collectors.py
 class BiliDanmakuConfig(BaseModel):
     """B站弹幕配置"""
     room_id: int
@@ -358,8 +358,8 @@ class BiliDanmakuConfig(BaseModel):
         return v
 
 # 使用示例
-config = config_service.get_provider_config_with_defaults(
-    "bili_danmaku_official", "input", BiliDanmakuConfig
+config = config_service.get_config_with_defaults(
+    "bili_danmaku_official", "collectors", BiliDanmakuConfig
 )
 ```
 
@@ -420,10 +420,10 @@ enabled = ["bili_danmaku", "tts"]
 room_id = 123456
 
 # 新配置
-[providers.input]
-enabled_inputs = ["bili_danmaku"]
+[collectors]
+enabled = ["bili_danmaku"]
 
-[providers.input.bili_danmaku]
+[collectors.bili_danmaku]
 room_id = 123456
 ```
 
@@ -436,15 +436,15 @@ plugin_config = config.plugins.get("my_plugin", {})
 
 # 新代码
 config_manager = ConfigManager("config.toml")
-provider_config = config_manager.get_provider_config("input", "my_provider")
+collector_config = config_manager.get_config_with_defaults("collectors", "my_collector")
 ```
 
-### 添加新 Provider 配置
+### 添加新组件配置
 
 1. 在 `config-template.toml` 中添加默认配置：
 
 ```toml
-[providers.input.my_new_provider]
+[collectors.my_new_collector]
 enabled = true
 option1 = "value1"
 option2 = 123
@@ -453,19 +453,17 @@ option2 = 123
 2. 创建配置 Schema（可选）：
 
 ```python
-class MyNewProviderConfig(InputProviderConfig):
+class MyNewCollectorConfig(BaseModel):
     option1: str = "value1"
     option2: int = 123
 ```
 
-3. 在 Provider 中使用：
+3. 在 Collector 中使用：
 
 ```python
-from src.modules.di import ProviderContext
-
-class MyNewProvider(InputProvider):
-    def __init__(self, config: dict, context: ProviderContext):
-        super().__init__(config, context)
+class MyNewCollector(InputCollector):
+    def __init__(self, config: dict, event_bus: EventBus):
+        super().__init__(config, event_bus)
         self.option1 = config.get("option1", "value1")
         self.option2 = config.get("option2", 123)
 ```

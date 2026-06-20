@@ -131,5 +131,5 @@ variables:
 ## 相关文件
 
 - 服务类: `src/modules/prompts/template_override_service.py`
-- Decider 修改: `src/domains/decision/deciders/maibot/maibot_decider.py`
+- Decider 修改: `src/stages/decision/deciders/maibot/maibot_decider.py`
 - 模板目录: `src/modules/prompts/templates/maibot_override/`

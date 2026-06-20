@@ -42,7 +42,7 @@
 │   └─────────────────────────────────────────────────────────┘  │
 │                                                                 │
 │   ┌────────────────┐  ┌────────────────┐  ┌────────────────┐  │
-│   │ InputProvider  │  │DecisionProvider│  │ OutputProvider │  │
+│   │InputCollector  │  │    Decider    │  │OutputHandler  │  │
 │   │    发布事件    │  │   订阅/发布    │  │    订阅事件    │  │
 │   └────────────────┘  └────────────────┘  └────────────────┘  │
 │                                                                 │
@@ -50,7 +50,7 @@
 ```
 
 **特点**：
-- EventBus 是唯一的跨域通信机制
+- EventBus 是唯一的跨阶段通信机制
 - 使用 `CoreEvents` 枚举避免拼写错误
 - 事件与数据类型绑定
 
@@ -161,7 +161,7 @@ class CoreEvents:
     DECISION_INTENT = "decision.intent"
     OUTPUT_INTENT = "output.intent"  # 过滤后的 Intent
 
-    # Provider 事件
+    # 阶段参与者事件
     INPUT_PROVIDER_CONNECTED = "input.provider.connected"
     INPUT_PROVIDER_DISCONNECTED = "input.provider.disconnected"
     OUTPUT_PROVIDER_CONNECTED = "output.provider.connected"
@@ -200,15 +200,15 @@ await self.event_bus.emit("TTS_START", data, "PluginC")  # 风格不一致
 
 | 事件 | 常量 | 发布者 | 订阅者 | 数据类型 |
 |------|------|--------|--------|---------|
-| 标准化消息 | `DATA_MESSAGE` | InputProvider | DecisionProvider | `NormalizedMessage` |
-| 决策意图 | `DECISION_INTENT` | DecisionProvider | OutputProviderManager | `Intent` |
-| 过滤后意图 | `OUTPUT_INTENT` | OutputProviderManager | OutputProvider | `Intent` |
-| 决策Provider连接 | `DECISION_PROVIDER_CONNECTED` | DecisionProviderManager | 任意 | - |
-| 决策Provider断开 | `DECISION_PROVIDER_DISCONNECTED` | DecisionProviderManager | 任意 | - |
-| 输入Provider连接 | `INPUT_PROVIDER_CONNECTED` | InputProviderManager | 任意 | - |
-| 输入Provider断开 | `INPUT_PROVIDER_DISCONNECTED` | InputProviderManager | 任意 | - |
-| 输出Provider连接 | `OUTPUT_PROVIDER_CONNECTED` | OutputProviderManager | 任意 | - |
-| 输出Provider断开 | `OUTPUT_PROVIDER_DISCONNECTED` | OutputProviderManager | 任意 | - |
+| 标准化消息 | `DATA_MESSAGE` | InputCollector | Decider | `NormalizedMessage` |
+| 决策意图 | `DECISION_INTENT` | Decider | OutputHandlerManager | `Intent` |
+| 过滤后意图 | `OUTPUT_INTENT` | OutputHandlerManager | OutputHandler | `Intent` |
+| 决策Decider连接 | `DECISION_PROVIDER_CONNECTED` | DeciderManager | 任意 | - |
+| 决策Decider断开 | `DECISION_PROVIDER_DISCONNECTED` | DeciderManager | 任意 | - |
+| 输入Collector连接 | `INPUT_PROVIDER_CONNECTED` | InputCollectorManager | 任意 | - |
+| 输入Collector断开 | `INPUT_PROVIDER_DISCONNECTED` | InputCollectorManager | 任意 | - |
+| 输出Handler连接 | `OUTPUT_PROVIDER_CONNECTED` | OutputHandlerManager | 任意 | - |
+| 输出Handler断开 | `OUTPUT_PROVIDER_DISCONNECTED` | OutputHandlerManager | 任意 | - |
 
 ## 事件流对比
 
@@ -241,17 +241,17 @@ AmaidesuCore._handle_maicore_message()
 ### 新架构事件流
 
 ```
-InputProvider 生成 NormalizedMessage
+InputCollector 生成 NormalizedMessage
     ↓
 EventBus.emit(DATA_MESSAGE)
     ↓
-DecisionProvider 处理
+Decider 处理
     ↓
-DecisionProvider 生成 Intent
+Decider 生成 Intent
     ↓
 EventBus.emit(DECISION_INTENT)
     ↓
-OutputProvider 处理
+OutputHandler 处理
     ↓
 (可选) EventBus.emit(自定义事件)
 ```
@@ -286,7 +286,7 @@ class MyPlugin(BasePlugin):
 ### 新架构订阅
 
 ```python
-class MyProvider(OutputProvider):
+class MyHandler(OutputHandler):
     async def _setup_internal(self):
         # EventBus 通过依赖注入，保证存在
         self._subscription_id = await self.event_bus.subscribe(
@@ -400,7 +400,7 @@ class MyPlugin(BasePlugin):
             self.event_bus.on("my_event", self.handler)
 
 # 新代码
-class MyProvider(OutputProvider):
+class MyHandler(OutputHandler):
     async def _setup_internal(self):
         self._sub_id = await self.event_bus.subscribe(
             CoreEvents.DECISION_INTENT,

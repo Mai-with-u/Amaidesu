@@ -8,9 +8,9 @@ Amaidesu 采用 3 阶段架构，阶段参与者分为三种类型：
 
 | 类型 | 职责 | 位置 | 示例 |
 |------|------|------|------|
-| **InputCollector** | 从外部数据源采集数据 | `src/domains/input/collectors/` | ConsoleInputCollector, BiliDanmakuCollector |
-| **Decider** | 处理 NormalizedMessage 生成 Intent | `src/domains/decision/deciders/` | MaiBotDecider, LLMDecider |
-| **OutputHandler** | 将 Intent 渲染到目标设备 | `src/domains/output/handlers/` | SubtitleHandler, EdgeTTSHandler |
+| **InputCollector** | 从外部数据源采集数据 | `src/stages/input/collectors/` | ConsoleInputCollector, BiliDanmakuCollector |
+| **Decider** | 处理 NormalizedMessage 生成 Intent | `src/stages/decision/deciders/` | MaiBotDecider, LLMDecider |
+| **OutputHandler** | 将 Intent 渲染到目标设备 | `src/stages/output/handlers/` | SubtitleHandler, EdgeTTSHandler |
 
 ### 数据流关系
 
@@ -423,23 +423,23 @@ class MyHandler(OutputHandler):
 
 | 名称 | 说明 | 位置 |
 |------|------|------|
-| `console_input` | 控制台输入 | `src/domains/input/collectors/console_input/` |
-| `bili_danmaku` | B站弹幕（旧版） | `src/domains/input/collectors/bili_danmaku/` |
-| `bili_danmaku_official` | B站弹幕（官方API） | `src/domains/input/collectors/bili_danmaku_official/` |
-| `bili_danmaku_official_maicraft` | B站弹幕（Maicraft版） | `src/domains/input/collectors/bili_danmaku_official_maicraft/` |
-| `mainosaba` | MainOSABA 捕获 | `src/domains/input/collectors/mainosaba/` |
-| `mock_danmaku` | 模拟弹幕（测试用） | `src/domains/input/collectors/mock_danmaku/` |
-| `read_pingmu` | 读弹幕功能 | `src/domains/input/collectors/read_pingmu/` |
-| `stt` | 语音转文字 | `src/domains/input/collectors/stt/` |
+| `console_input` | 控制台输入 | `src/stages/input/collectors/console_input/` |
+| `bili_danmaku` | B站弹幕（旧版） | `src/stages/input/collectors/bili_danmaku/` |
+| `bili_danmaku_official` | B站弹幕（官方API） | `src/stages/input/collectors/bili_danmaku_official/` |
+| `bili_danmaku_official_maicraft` | B站弹幕（Maicraft版） | `src/stages/input/collectors/bili_danmaku_official_maicraft/` |
+| `mainosaba` | MainOSABA 捕获 | `src/stages/input/collectors/mainosaba/` |
+| `mock_danmaku` | 模拟弹幕（测试用） | `src/stages/input/collectors/mock_danmaku/` |
+| `read_pingmu` | 读弹幕功能 | `src/stages/input/collectors/read_pingmu/` |
+| `stt` | 语音转文字 | `src/stages/input/collectors/stt/` |
 
 ### Decider（4个）
 
 | 名称 | 说明 | 位置 |
 |------|------|------|
-| `maibot` | MaiBot 决策 | `src/domains/decision/deciders/maibot/` |
-| `llm` | LLM 决策 | `src/domains/decision/deciders/llm/` |
-| `maicraft` | Maicraft 决策 | `src/domains/decision/deciders/maicraft/` |
-| `replay` | 回放决策（调试用） | `src/domains/decision/deciders/replay/` |
+| `maibot` | MaiBot 决策 | `src/stages/decision/deciders/maibot/` |
+| `llm` | LLM 决策 | `src/stages/decision/deciders/llm/` |
+| `maicraft` | Maicraft 决策 | `src/stages/decision/deciders/maicraft/` |
+| `replay` | 回放决策（调试用） | `src/stages/decision/deciders/replay/` |
 
 ### MaiBotDecider 提示词覆盖
 
@@ -476,18 +476,18 @@ override_templates = ["replyer_prompt", "chat_target_group1", "chat_target_group
 
 | 名称 | 说明 | 位置 |
 |------|------|------|
-| `edge_tts` | Edge TTS 语音合成 | `src/domains/output/handlers/audio/edge_tts/` |
-| `gptsovits` | GPT-SoVITS 语音合成 | `src/domains/output/handlers/audio/gptsovits/` |
-| `omni_tts` | Omni TTS | `src/domains/output/handlers/audio/omni_tts/` |
-| `subtitle` | 字幕显示 | `src/domains/output/handlers/subtitle/` |
-| `vts` | Virtual Tube Studio | `src/domains/output/handlers/avatar/vts/` |
-| `warudo` | Warudo | `src/domains/output/handlers/avatar/warudo/` |
-| `vrchat` | VRChat | `src/domains/output/handlers/avatar/vrchat/` |
-| `sticker` | 表情包 | `src/domains/output/handlers/sticker/` |
-| `obs_control` | OBS 控制 | `src/domains/output/handlers/obs_control/` |
-| `remote_stream` | 远程流 | `src/domains/output/handlers/remote_stream/` |
-| `debug_console` | 调试控制台 | `src/domains/output/handlers/debug_console/` |
-| `mock` | 模拟输出（测试用） | `src/domains/output/handlers/mock/` |
+| `edge_tts` | Edge TTS 语音合成 | `src/stages/output/handlers/audio/edge_tts/` |
+| `gptsovits` | GPT-SoVITS 语音合成 | `src/stages/output/handlers/audio/gptsovits/` |
+| `omni_tts` | Omni TTS | `src/stages/output/handlers/audio/omni_tts/` |
+| `subtitle` | 字幕显示 | `src/stages/output/handlers/subtitle/` |
+| `vts` | Virtual Tube Studio | `src/stages/output/handlers/avatar/vts/` |
+| `warudo` | Warudo | `src/stages/output/handlers/avatar/warudo/` |
+| `vrchat` | VRChat | `src/stages/output/handlers/avatar/vrchat/` |
+| `sticker` | 表情包 | `src/stages/output/handlers/sticker/` |
+| `obs_control` | OBS 控制 | `src/stages/output/handlers/obs_control/` |
+| `remote_stream` | 远程流 | `src/stages/output/handlers/remote_stream/` |
+| `debug_console` | 调试控制台 | `src/stages/output/handlers/debug_console/` |
+| `mock` | 模拟输出（测试用） | `src/stages/output/handlers/mock/` |
 
 ---
 

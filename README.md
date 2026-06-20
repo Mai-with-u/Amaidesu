@@ -169,7 +169,7 @@ npm run dev   # 访问 http://localhost:5173
 - [事件系统](docs/architecture/event-system.md) - EventBus 使用
 
 ### 开发指南
-- [阶段参与者开发](docs/development/provider-guide.md)
+- [阶段参与者开发](docs/development/component-guide.md)
 - [管道开发](docs/development/pipeline-guide.md)
 - [提示词管理](docs/development/prompt-management.md)
 - [测试指南](docs/development/testing-guide.md)

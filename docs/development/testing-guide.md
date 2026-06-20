@@ -35,7 +35,7 @@ tests/
 │   ├── events/             # 事件系统测试
 │   ├── test_event_bus.py
 │   └── test_logger.py
-├── domains/                # 阶段测试
+├── stages/                # 阶段测试
 │   ├── input/
 │   │   ├── pipelines/      # Input Pipeline 测试
 │   │   │   ├── test_rate_limit_pipeline.py
@@ -172,13 +172,13 @@ async def test_event_bus_error_isolation(event_bus):
 ```python
 """测试 InputCollector
 
-运行: uv run pytest tests/domains/input/test_input_collector_manager.py -v
+运行: uv run pytest tests/stages/input/test_input_collector_manager.py -v
 """
 
 import asyncio
 import pytest
 
-from src.domains.input.collector_manager import InputCollectorManager
+from src.stages.input.collector_manager import InputCollectorManager
 from src.modules.events.names import CoreEvents
 from src.modules.types.base.normalized_message import NormalizedMessage
 from tests.mocks.mock_input_collector import MockInputCollector
@@ -260,12 +260,12 @@ async def test_error_isolation(collector_manager):
 ```python
 """测试 RateLimitInputPipeline
 
-运行: uv run pytest tests/domains/input/pipelines/test_rate_limit_pipeline.py -v
+运行: uv run pytest tests/stages/input/pipelines/test_rate_limit_pipeline.py -v
 """
 
 import pytest
 
-from src.domains.input.pipelines.rate_limit.pipeline import RateLimitInputPipeline
+from src.stages.input.pipelines.rate_limit.pipeline import RateLimitInputPipeline
 from src.modules.types.base.normalized_message import NormalizedMessage
 
 
@@ -514,7 +514,7 @@ async def test_feature_requiring_config():
 测试单个组件（Collector、Pipeline、Manager）的功能。
 
 ```python
-# tests/domains/input/pipelines/test_rate_limit_pipeline.py
+# tests/stages/input/pipelines/test_rate_limit_pipeline.py
 def test_rate_limit_pipeline_creation():
     """测试管道创建"""
     pipeline = RateLimitInputPipeline(config)
@@ -542,8 +542,8 @@ async def test_collector_manager_with_pipeline():
 
 ```python
 # tests/architecture/test_dependency_direction.py
-def test_core_does_not_import_domain():
-    """验证 Core 层不依赖 Domain 层"""
+def test_core_does_not_import_stage():
+    """验证 Core 层不依赖 Stage 层"""
     ...
 ```
 
@@ -565,10 +565,10 @@ async def event_bus() -> EventBus:
 
 ### 7.2 阶段特定 Fixtures
 
-在 `tests/domains/*/conftest.py` 中定义特定阶段的 fixtures：
+在 `tests/stages/*/conftest.py` 中定义特定阶段的 fixtures：
 
 ```python
-# tests/domains/input/conftest.py
+# tests/stages/input/conftest.py
 @pytest.fixture
 def sample_collectors():
     """创建示例 Collector 列表"""

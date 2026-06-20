@@ -30,19 +30,19 @@
 - 插件通过 `register_service()` 共享服务
 - 消息必须经过 MaiCore 处理
 
-### 新架构：3域分层架构
+### 新架构：3阶段分层架构
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        External Input                           │
 │              (弹幕、语音、控制台、游戏)                           │
 └───────────────────────────┬─────────────────────────────────────┘
-                            │
-                            ▼
+                             │
+                             ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                     INPUT DOMAIN                                │
+│                     INPUT 阶段                                  │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
-│  │InputProvider │  │InputProvider │  │InputProvider │          │
+│  │InputCollector│  │InputCollector│  │InputCollector│          │
 │  │  (弹幕)       │  │  (语音)       │  │  (控制台)    │          │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘          │
 │         │                 │                 │                   │
@@ -52,24 +52,24 @@
 │                           │                                     │
 │                  Pipeline 过滤                                   │
 └───────────────────────────┬─────────────────────────────────────┘
-                            │ EventBus: data.message
-                            ▼
+                             │ EventBus: data.message
+                             ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    DECISION DOMAIN                              │
+│                    DECISION 阶段                                │
 │  ┌──────────────────────────────────────────────────────────┐  │
-│  │                  DecisionProvider                         │  │
-│  │    (MaiCore / LLM / Maicraft / Replay)                   │  │
+│  │                    Decider                                │  │
+│  │      (MaiCore / LLM / Maicraft / Replay)                  │  │
 │  └────────────────────────┬─────────────────────────────────┘  │
 │                           │                                     │
 │                           ▼                                     │
 │                        Intent                                   │
 └───────────────────────────┬─────────────────────────────────────┘
-                            │ EventBus: decision.intent
-                            ▼
+                             │ EventBus: decision.intent
+                             ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                     OUTPUT DOMAIN                               │
+│                     OUTPUT 阶段                                 │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
-│  │OutputProvider│  │OutputProvider│  │OutputProvider│          │
+│  │OutputHandler │  │OutputHandler │  │OutputHandler │          │
 │  │   (TTS)      │  │   (字幕)      │  │   (虚拟形象) │          │
 │  └──────────────┘  └──────────────┘  └──────────────┘          │
 │                                                                 │
@@ -79,8 +79,8 @@
 
 **特点**：
 - 严格的单向数据流
-- EventBus 作为唯一的跨域通信机制
-- 每个 Domain 内部职责清晰
+- EventBus 作为唯一的跨阶段通信机制
+- 每个阶段内部职责清晰
 
 ## 目录结构对比
 
@@ -136,36 +136,36 @@ Amaidesu-dev/
 Amaidesu/
 ├── main.py                      # CLI 入口（简洁）
 ├── src/
-│   ├── domains/                 # 业务域（核心变化）
-│   │   ├── input/              # 输入域
+│   ├── stages/                 # 业务阶段（核心变化）
+│   │   ├── input/              # 输入阶段
 │   │   │   ├── __init__.py
-│   │   │   ├── base.py         # InputProvider 基类
-│   │   │   ├── provider_manager.py
+│   │   │   ├── base.py         # InputCollector 基类
+│   │   │   ├── collector_manager.py
 │   │   │   ├── pipelines/      # 输入管道
 │   │   │   │   ├── rate_limit/
 │   │   │   │   └── similar_filter/
-│   │   │   └── providers/      # 输入 Provider
+│   │   │   └── collectors/     # 输入 Collector
 │   │   │       ├── console_input/
 │   │   │       ├── bili_danmaku/
 │   │   │       ├── bili_danmaku_official/
 │   │   │       ├── stt/
 │   │   │       └── ...
-│   │   ├── decision/           # 决策域
+│   │   ├── decision/           # 决策阶段
 │   │   │   ├── __init__.py
-│   │   │   ├── base.py         # DecisionProvider 基类
-│   │   │   ├── provider_manager.py
-│   │   │   └── providers/      # 决策 Provider
+│   │   │   ├── base.py         # Decider 基类
+│   │   │   ├── decider_manager.py
+│   │   │   └── deciders/       # 决策 Decider
 │   │   │       ├── maicore/
 │   │   │       ├── llm/
 │   │   │       ├── maicraft/
 │   │   │       └── replay/
-│   │   └── output/             # 输出域
+│   │   └── output/             # 输出阶段
 │   │       ├── __init__.py
-│   │       ├── base.py         # OutputProvider 基类
-│   │       ├── provider_manager.py
+│   │       ├── base.py         # OutputHandler 基类
+│   │       ├── handler_manager.py
 │   │       ├── pipelines/      # 输出管道
 │   │       │   └── profanity_filter/
-│   │       └── providers/      # 输出 Provider
+│   │       └── handlers/       # 输出 Handler
 │   │           ├── audio/      # TTS 类
 │   │           │   ├── edge_tts/
 │   │           │   ├── gptsovits/
@@ -185,7 +185,7 @@ Amaidesu/
 │       ├── llm/                # LLM 服务
 │       ├── logging/            # 日志系统
 │       ├── prompts/            # 提示词管理
-│       ├── registry/           # Provider 注册表
+│       ├── registry/           # 组件注册表
 │       ├── streaming/          # 音频流通道
 │       └── types/              # 共享类型
 └── docs/
@@ -194,28 +194,28 @@ Amaidesu/
 ```
 
 **改进**：
-- 按职责分域，每个域有清晰的边界
+- 按职责分阶段，每个阶段有清晰的边界
 - `modules/` 提供共享基础设施
 - 简化目录结构，移除不必要的 `services/` 层
 
 ## 核心组件对比
 
-### AmaidesuCore vs Domain Managers
+### AmaidesuCore vs Stage Managers
 
-| 方面 | 旧架构：AmaidesuCore | 新架构：Domain Managers |
+| 方面 | 旧架构：AmaidesuCore | 新架构：Stage Managers |
 |------|---------------------|------------------------|
 | **职责** | WebSocket、消息分发、服务注册、HTTP | 仅协调生命周期 |
 | **代码行数** | 600+ 行 | 每个 Manager 约 100-200 行 |
 | **耦合度** | 高（所有功能集中） | 低（职责分离） |
 | **可测试性** | 难（需要模拟所有依赖） | 易（可单独测试每个 Manager） |
 
-### Plugin vs Provider
+### Plugin vs Stage Participants
 
-| 方面 | 旧架构：Plugin | 新架构：Provider |
-|------|---------------|------------------|
-| **基类** | `BasePlugin` | `InputProvider` / `DecisionProvider` / `OutputProvider` |
-| **生命周期** | `setup()` / `cleanup()` | `init()` / `start()` / `stop()` / `cleanup()`（所有 Provider 类型统一） |
-| **依赖获取** | `self.core.get_service()` | `self.context.xxx` |
+| 方面 | 旧架构：Plugin | 新架构：阶段参与者 |
+|------|---------------|-------------------|
+| **基类** | `BasePlugin` | `InputCollector` / `Decider` / `OutputHandler` |
+| **生命周期** | `setup()` / `cleanup()` | `init()` / `start()` / `stop()` / `cleanup()`（所有阶段参与者类型统一） |
+| **依赖获取** | `self.core.get_service()` | 构造函数注入 |
 | **类型安全** | 弱 | 强（泛型支持） |
 | **消息类型** | `MessageBase` | `NormalizedMessage` / `Intent` |
 
@@ -232,31 +232,27 @@ class MyPlugin(BasePlugin):
 
 # 新架构：依赖注入（完整注入链路）
 
-# 1. main.py 创建 ProviderContext
-from src.modules.di import ProviderContext
+# 1. main.py 创建依赖并注入 Manager
+class InputCollectorManager:
+    def __init__(self, event_bus, pipeline_manager):
+        self._event_bus = event_bus
+        self._pipeline_manager = pipeline_manager
 
-context = ProviderContext(
-    event_bus=event_bus,
-    llm_service=llm_manager,
-    context_service=context_service,
-    audio_stream_channel=audio_stream_channel,
-)
+# 2. Manager 创建 Collector 时注入
+class InputCollectorManager:
+    async def load_collector(self, collector_class, config):
+        collector = collector_class(config=config, event_bus=self._event_bus)
+        return collector
 
-# 2. ProviderManager 创建 Provider 时注入 context
-class InputProviderManager:
-    async def load_provider(self, provider_class, config):
-        provider = provider_class(config=config, context=self._context)
-        return provider
-
-# 3. Provider 通过 self.context 访问依赖
-class MyProvider(InputProvider):
-    def __init__(self, config: dict, context: ProviderContext):
+# 3. Collector 通过构造函数接收依赖
+class MyCollector(InputCollector):
+    def __init__(self, config: dict, event_bus: EventBus):
         self.config = config
-        self.context = context  # 构造时注入
+        self._event_bus = event_bus  # 构造时注入
 
     async def init(self):
-        if self.context.event_bus:
-            await self.context.event_bus.subscribe(...)
+        if self._event_bus:
+            await self._event_bus.subscribe(...)
 ```
 
 ### 核心模块变化
@@ -303,27 +299,27 @@ class MyProvider(InputProvider):
 ```
 外部输入
     ↓
-【InputProvider】创建 NormalizedMessage
+【InputCollector】创建 NormalizedMessage
     ↓
 【InputPipeline】过滤处理
     ↓
 【EventBus.emit(CoreEvents.DATA_MESSAGE)】发布事件
     ↓
-【DecisionProvider】订阅并处理
+【Decider】订阅并处理
     ↓
-【DecisionProvider】创建 Intent
+【Decider】创建 Intent
     ↓
 【EventBus.emit(CoreEvents.DECISION_INTENT)】发布事件
     ↓
 【OutputPipeline】过滤处理
     ↓
-【OutputProvider】订阅并渲染
+【OutputHandler】订阅并渲染
 ```
 
 **改进**：
 - 单向数据流，易于追踪
 - EventBus 解耦组件
-- 本地决策 Provider 可以不依赖 MaiCore
+- 本地决策 Decider 可以不依赖 MaiCore
 
 ## 扩展性对比
 
@@ -340,16 +336,16 @@ class MyProvider(InputProvider):
 - 依赖关系不明确
 - 与其他插件的关系难以管理
 
-### 新架构：添加新 Provider
+### 新架构：添加新阶段参与者
 
-1. 选择合适的 Domain（input/decision/output）
-2. 继承对应的 Provider 基类
+1. 选择合适的阶段（input/decision/output）
+2. 继承对应的基类（InputCollector/Decider/OutputHandler）
 3. 在 `__init__.py` 中注册到 Registry
 4. 在 `config.toml` 中启用
 
 **改进**：
 - 类型安全
-- 依赖通过 `ProviderContext` 注入
+- 依赖通过构造函数注入
 - 职责边界清晰
 
 ## 测试对比
@@ -370,16 +366,16 @@ def test_my_plugin():
 ### 新架构测试优势
 
 ```python
-# 可以轻松注入 ProviderContext
-from src.modules.di import ProviderContext
+# 可以轻松注入依赖
+def test_my_collector():
+    mock_event_bus = MockEventBus()
+    mock_context_service = MockContextService()
 
-def test_my_provider():
-    mock_context = ProviderContext(
-        event_bus=MockEventBus(),
-        context_service=MockContextService(),
+    collector = MyCollector(
+        config={},
+        event_bus=mock_event_bus,
+        context_service=mock_context_service,
     )
-
-    provider = MyProvider(config={}, context=mock_context)
     # 完全隔离测试
 ```
 
@@ -398,7 +394,7 @@ class BiliDanmakuPlugin(BasePlugin):
         await self.core.send_to_maicore(message)
 
 # 新代码
-class BiliDanmakuProvider(InputProvider):
+class BiliDanmakuCollector(InputCollector):
     async def start(self) -> AsyncIterator[NormalizedMessage]:
         async for danmaku in self._fetch_danmaku():
             yield NormalizedMessage(
@@ -421,7 +417,7 @@ class TTSPlugin(BasePlugin):
         await self._speak(text)
 
 # 新代码
-class TTSProvider(OutputProvider):
+class TTSHandler(OutputHandler):
     async def init(self):
         await self.event_bus.subscribe(
             CoreEvents.DECISION_INTENT,

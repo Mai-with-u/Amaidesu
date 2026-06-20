@@ -417,8 +417,8 @@ class Intent(BaseModel):
 
 ```python
 # 错误示例：放在阶段层会导致循环依赖
-# src/domains/input/types.py -> 导入 Decision 的 Intent
-# src/domains/decision/types.py -> 导入 Input 的类型
+# src/stages/input/types.py -> 导入 Decision 的 Intent
+# src/stages/decision/types.py -> 导入 Input 的类型
 
 # 正确示例：放在 Modules 层
 # src/modules/types/intent.py -> 所有阶段都可以导入

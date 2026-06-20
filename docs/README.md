@@ -23,7 +23,7 @@
 
 | 文档 | 说明 |
 |------|------|
-| [阶段参与者开发](development/provider-guide.md) | 阶段参与者开发详解 |
+| [阶段参与者开发](development/component-guide.md) | 阶段参与者开发详解 |
 | [管道开发](development/pipeline-guide.md) | Pipeline 开发详解 |
 | [提示词管理](development/prompt-management.md) | PromptManager 使用 |
 | [测试指南](development/testing-guide.md) | 测试规范和最佳实践 |

@@ -154,18 +154,18 @@ Amaidesu/
 ├── main.py                      # CLI 入口
 ├── config-template.toml         # 配置模板
 ├── src/
-│   ├── domains/                 # 业务域（3域架构）
-│   │   ├── input/               # 输入域
-│   │   │   ├── provider_manager.py
+│   ├── stages/                 # 业务阶段（3阶段架构）
+│   │   ├── input/               # 输入阶段
+│   │   │   ├── collector_manager.py
 │   │   │   ├── pipelines/       # 输入管道
-│   │   │   └── providers/       # 输入 Provider
-│   │   ├── decision/            # 决策域
-│   │   │   ├── provider_manager.py
-│   │   │   └── providers/       # 决策 Provider
-│   │   └── output/              # 输出域
-│   │       ├── provider_manager.py
+│   │   │   └── collectors/      # 输入 Collector
+│   │   ├── decision/            # 决策阶段
+│   │   │   ├── decider_manager.py
+│   │   │   └── deciders/        # 决策 Decider
+│   │   └── output/              # 输出阶段
+│   │       ├── handler_manager.py
 │   │       ├── pipelines/       # 输出管道
-│   │       └── providers/       # 输出 Provider
+│   │       └── handlers/        # 输出 Handler
 │   └── modules/                 # 核心模块（共享基础设施）
 │       ├── config/             # 配置管理
 │       ├── context/            # 上下文服务
@@ -174,8 +174,8 @@ Amaidesu/
 │       ├── llm/                # LLM 服务
 │       ├── logging/            # 日志系统
 │       ├── prompts/            # 提示词管理
-│       ├── registry/          # Provider 注册表
-│       ├── streaming/          # 音频流通道
+│       ├── registry/           # 组件注册表
+│       ├── streaming/           # 音频流通道
 │       └── types/              # 共享类型
 └── docs/                       # 项目文档
 ```
@@ -184,19 +184,19 @@ Amaidesu/
 
 | 组件 | 职责 |
 |------|------|
-| **InputProviderManager** | 管理输入 Provider 生命周期 |
-| **DecisionProviderManager** | 管理决策 Provider（单一活跃） |
-| **OutputProviderManager** | 管理输出 Provider 生命周期 |
-| **EventBus** | 唯一的跨域通信机制 |
+| **InputCollectorManager** | 管理输入 Collector 生命周期 |
+| **DeciderManager** | 管理决策 Decider（单一活跃） |
+| **OutputHandlerManager** | 管理输出 Handler 生命周期 |
+| **EventBus** | 唯一的跨阶段通信机制 |
 | **AudioStreamChannel** | 音频数据流传输通道 |
 
-### Provider 系统
+### 阶段参与者系统
 
-新架构使用 Provider 替代插件：
+新架构使用阶段参与者（Collector/Decider/Handler）替代插件：
 
 ```python
-# Provider 示例
-class ConsoleInputProvider(InputProvider):
+# Collector 示例
+class ConsoleInputCollector(InputCollector):
     async def start(self) -> AsyncIterator[NormalizedMessage]:
         while True:
             text = await self._read_input()
@@ -212,48 +212,48 @@ class ConsoleInputProvider(InputProvider):
 ```
 外部输入（弹幕、游戏、语音）
         ↓
-【Input Domain】InputProvider → NormalizedMessage → Pipeline 过滤
+【Input 阶段】InputCollector → NormalizedMessage → Pipeline 过滤
         ↓ EventBus: data.message
-【Decision Domain】DecisionProvider → Intent
+【Decision 阶段】Decider → Intent
         ↓ EventBus: decision.intent
-【Output Domain】OutputProviderManager → OutputPipeline → OutputProviders
+【Output 阶段】OutputHandlerManager → OutputPipeline → OutputHandlers
 ```
 
 ## 核心变化
 
-### 1. 从插件到 Provider
+### 1. 从插件到阶段参与者
 
-| 方面 | 旧架构（插件） | 新架构（Provider） |
-|------|---------------|-------------------|
-| **定位** | 所有功能都是插件 | 核心功能是 Provider，可选功能是扩展 |
+| 方面 | 旧架构（插件） | 新架构（阶段参与者） |
+|------|---------------|---------------------|
+| **定位** | 所有功能都是插件 | 核心功能是 Collector/Decider/Handler，可选功能是扩展 |
 | **加载** | 动态导入 `plugin_entrypoint` | 注册表 + 类型安全 |
-| **生命周期** | `setup()` / `cleanup()` | `init()` / `start()` / `stop()` / `cleanup()`（所有 Provider 类型统一） |
+| **生命周期** | `setup()` / `cleanup()` | `init()` / `start()` / `stop()` / `cleanup()`（所有阶段参与者类型统一） |
 | **依赖** | 服务注册 | 依赖注入 |
 
 ### 2. 从服务注册到依赖注入
 
 | 方面 | 旧架构 | 新架构 |
 |------|--------|--------|
-| **机制** | `register_service()` / `get_service()` | `ProviderContext` 依赖注入 |
+| **机制** | `register_service()` / `get_service()` | 构造函数注入 |
 | **依赖发现** | 运行时 | 初始化时 |
 | **类型安全** | 无 | 完整类型注解 |
 
 **注入链路**：
 ```
-main.py 创建 ProviderContext
+main.py 创建依赖
     ↓
-ProviderManager 接收 context
+Manager 接收依赖（构造函数注入）
     ↓
-创建 Provider 时注入: provider_class(config=config, context=context)
+创建组件时注入: collector_class(config=config, event_bus=event_bus, ...)
     ↓
-Provider 通过 self.context.xxx 访问依赖
+组件直接使用注入的依赖
 ```
 
-### 3. 从集中式到 3 域架构
+### 3. 从集中式到 3 阶段架构
 
 | 方面 | 旧架构 | 新架构 |
 |------|--------|--------|
-| **组织** | 扁平的插件列表 | 按职责分域 |
+| **组织** | 扁平的插件列表 | 按职责分阶段 |
 | **通信** | 通过 AmaidesuCore 中转 | EventBus 直接通信 |
 | **数据流** | 插件 → Core → MaiCore → Core → 插件 | Input → Decision → Output |
 
@@ -261,7 +261,7 @@ Provider 通过 self.context.xxx 访问依赖
 
 | 方面 | 旧架构 | 新架构 |
 |------|--------|--------|
-| **EventBus** | 可选功能 | 唯一跨域通信机制 |
+| **EventBus** | 可选功能 | 唯一跨阶段通信机制 |
 | **事件常量** | 字符串硬编码 | `CoreEvents` 枚举 |
 | **类型安全** | 无 | 事件类型与数据类型绑定 |
 
@@ -280,10 +280,10 @@ Provider 通过 self.context.xxx 访问依赖
 
 如果你有基于旧架构开发的插件，请参考以下迁移路径：
 
-1. **Input 插件** → 继承 `InputProvider`，实现 `start()` 方法
-2. **Output 插件** → 继承 `OutputProvider`，订阅 `decision.intent` 事件
-3. **Service 插件** → 转换为 `modules/` 中的共享模块或作为独立的 Provider
-4. **Decision 插件** → 继承 `DecisionProvider`，订阅 `data.message` 事件
+1. **Input 插件** → 继承 `InputCollector`，实现 `start()` 方法
+2. **Output 插件** → 继承 `OutputHandler`，订阅 `decision.intent` 事件
+3. **Service 插件** → 转换为 `modules/` 中的共享模块或作为独立的阶段参与者
+4. **Decision 插件** → 继承 `Decider`，订阅 `data.message` 事件
 
 ---
 

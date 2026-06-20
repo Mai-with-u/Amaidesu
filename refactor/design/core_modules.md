@@ -317,13 +317,13 @@ def get_logger(module_name: str):
 
 ```bash
 # 运行应用时过滤特定模块日志
-uv run python main.py --filter EdgeTTSProvider SubtitleProvider
+uv run python main.py --filter EdgeTTSHandler SubtitleHandler
 ```
 
 ```python
 # 内部实现
 configure_from_config({
-    "filter": ["EdgeTTSProvider", "SubtitleProvider"],
+    "filter": ["EdgeTTSHandler", "SubtitleHandler"],
     ...
 })
 

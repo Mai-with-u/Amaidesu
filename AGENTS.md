@@ -12,7 +12,7 @@
 | 了解代码规范 | [开发规范](docs/development-guide.md) |
 | 理解架构设计 | [3阶段架构](docs/architecture/overview.md) |
 | 理解事件系统 | [事件系统](docs/architecture/event-system.md) |
-| 开发 Collector/Decider/Handler | [阶段参与者开发](docs/development/provider-guide.md) |
+| 开发 Collector/Decider/Handler | [阶段参与者开发](docs/development/component-guide.md) |
 | 开发 Pipeline | [管道开发](docs/development/pipeline-guide.md) |
 | 管理提示词 | [提示词管理](docs/development/prompt-management.md) |
 | 编写测试 | [测试指南](docs/development/testing-guide.md) |
@@ -222,7 +222,7 @@ port = 60214
 uv run pytest tests/
 
 # 运行特定测试
-uv run pytest tests/layers/input/test_console_provider.py
+uv run pytest tests/stages/input/collectors/test_stt_input_collector.py
 
 # 详细输出
 uv run pytest tests/ -v
@@ -295,9 +295,9 @@ async def handle_message(self, message):
 
 | 类型 | 职责 | 位置 | 示例 |
 |------|------|------|------|
-| **InputCollector** | 从外部数据源采集数据 | `src/domains/input/collectors/` | ConsoleInputCollector, BiliDanmakuCollector, STTCollector, BiliDanmakuOfficialCollector |
-| **Decider** | 处理 NormalizedMessage 生成 Intent | `src/domains/decision/deciders/` | MaiBotDecider, LLMDecider, MaicraftDecider |
-| **OutputHandler** | 渲染到目标设备 | `src/domains/output/handlers/` | EdgeTTSHandler, GPTSoVITSHandler, VTSHandler, WarudoHandler, VRChatHandler, SubtitleHandler, StickerHandler, ObsControlHandler, RemoteStreamHandler, DebugConsoleHandler |
+| **InputCollector** | 从外部数据源采集数据 | `src/stages/input/collectors/` | ConsoleInputCollector, BiliDanmakuCollector, STTCollector, BiliDanmakuOfficialCollector |
+| **Decider** | 处理 NormalizedMessage 生成 Intent | `src/stages/decision/deciders/` | MaiBotDecider, LLMDecider, MaicraftDecider |
+| **OutputHandler** | 渲染到目标设备 | `src/stages/output/handlers/` | EdgeTTSHandler, GPTSoVITSHandler, VTSHandler, WarudoHandler, VRChatHandler, SubtitleHandler, StickerHandler, ObsControlHandler, RemoteStreamHandler, DebugConsoleHandler |
 
 ### 阶段参与者生命周期方法
 
@@ -326,7 +326,7 @@ InputCollector 也提供了 `setup()` 方法作为接口一致性，但它是空
 2. 使用 `@collector`/`@decider`/`@handler` 装饰器注册
 3. 在配置中启用
 
-**详细指南**：[阶段参与者开发](docs/development/provider-guide.md)
+**详细指南**：[阶段参与者开发](docs/development/component-guide.md)
 
 ### 配置示例
 
@@ -425,9 +425,9 @@ ContextService 提供对话历史管理和多会话支持。
 
 | 阶段 | 职责 | 位置 |
 |----|------|------|
-| **Input 阶段** | 数据采集 + 标准化 + 预处理 | `src/domains/input/` |
-| **Decision 阶段** | 决策（可替换） | `src/domains/decision/` |
-| **Output 阶段** | 参数生成 + 渲染 | `src/domains/output/` |
+| **Input 阶段** | 数据采集 + 标准化 + 预处理 | `src/stages/input/` |
+| **Decision 阶段** | 决策（可替换） | `src/stages/decision/` |
+| **Output 阶段** | 参数生成 + 渲染 | `src/stages/output/` |
 
 ### 数据流
 
@@ -507,11 +507,24 @@ Amaidesu/
 │   ├── architecture/    # 架构文档
 │   └── development/     # 开发指南
 └── src/
-    ├── amaidesu_core.py # 核心协调器（管理组件生命周期）
-    ├── core/            # 基础设施（事件、基类、通信、工具）
-    ├── services/        # 共享服务（LLM、配置、上下文）
-    ├── prompts/         # 提示词管理
-    └── domains/         # 业务阶段（input、decision、output）
+    ├── modules/         # 共享模块
+    │   ├── config/      # 配置管理
+    │   ├── context/     # 上下文服务
+    │   ├── dashboard/   # Dashboard API
+    │   ├── di/          # 依赖注入
+    │   ├── events/      # 事件系统
+    │   ├── llm/         # LLM 服务
+    │   ├── logging/     # 日志
+    │   ├── mcp/         # MCP 服务
+    │   ├── prompts/     # 提示词管理
+    │   ├── services/    # 共享服务
+    │   ├── streaming/   # 流媒体
+    │   ├── tts/         # TTS 服务
+    │   └── types/       # 共享类型
+    └── stages/          # 业务阶段
+        ├── input/       # 输入阶段（Collector + Pipeline）
+        ├── decision/    # 决策阶段（Decider）
+        └── output/      # 输出阶段（Handler + Pipeline）
 ```
 
 ## 通信模式
@@ -533,7 +546,7 @@ Amaidesu/
 
 ### 开发指南
 - [开发规范](docs/development-guide.md) - 代码风格和约定
-- [阶段参与者开发](docs/development/provider-guide.md) - Collector/Decider/Handler 开发详解
+- [阶段参与者开发](docs/development/component-guide.md) - Collector/Decider/Handler 开发详解
 - [管道开发](docs/development/pipeline-guide.md) - Pipeline 开发详解
 - [提示词管理](docs/development/prompt-management.md) - PromptManager 使用
 - [测试指南](docs/development/testing-guide.md) - 测试规范和最佳实践

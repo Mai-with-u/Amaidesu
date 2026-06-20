@@ -282,7 +282,7 @@ tests/
 │   ├── events/        # 事件系统测试
 │   ├── types/         # 类型测试
 │   └── config/        # 配置测试
-├── domains/           # 阶段测试
+├── stages/           # 阶段测试
 │   ├── input/         # 输入阶段测试
 │   ├── decision/      # 决策阶段测试
 │   └── output/        # 输出阶段测试
@@ -372,9 +372,9 @@ enabled = ["subtitle", "vts", "tts"]
 
 | 类型 | 职责 | 位置 |
 |------|------|------|
-| InputCollector | 从外部数据源采集数据 | `src/domains/input/collectors/` |
-| Decider | 处理 NormalizedMessage 生成 Intent | `src/domains/decision/deciders/` |
-| OutputHandler | 渲染到目标设备 | `src/domains/output/handlers/` |
+| InputCollector | 从外部数据源采集数据 | `src/stages/input/collectors/` |
+| Decider | 处理 NormalizedMessage 生成 Intent | `src/stages/decision/deciders/` |
+| OutputHandler | 渲染到目标设备 | `src/stages/output/handlers/` |
 
 ### 10.2 阶段参与者生命周期
 

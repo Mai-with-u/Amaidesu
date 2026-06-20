@@ -49,10 +49,10 @@
                                │
                                ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│                       INPUT DOMAIN                               │
+│                       INPUT 阶段                                 │
 │                                                                  │
 │   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐            │
-│   │ Provider 1  │  │ Provider 2  │  │ Provider 3  │            │
+│   │Collector 1 │  │Collector 2 │  │Collector 3 │            │
 │   │  (弹幕)     │  │  (语音)     │  │ (控制台)    │            │
 │   └──────┬──────┘  └──────┬──────┘  └──────┬──────┘            │
 │          │                │                │                    │
@@ -70,11 +70,11 @@
                             │
                             ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│                     DECISION DOMAIN                              │
+│                     DECISION 阶段                                │
 │                                                                  │
 │   ┌─────────────────────────────────────────────────────────┐   │
-│   │                  DecisionProvider                        │   │
-│   │      (MaiCore / LLM / Maicraft / Replay)                │   │
+│   │                     Decider                              │   │
+│   │        (MaiCore / LLM / Maicraft / Replay)              │   │
 │   │                                                         │   │
 │   │   EventBus.subscribe(DATA_MESSAGE)                      │   │
 │   │           │                                             │   │
@@ -93,10 +93,10 @@
                             │
                             ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│                       OUTPUT DOMAIN                              │
+│                       OUTPUT 阶段                                │
 │                                                                  │
 │  ┌────────────────────────────────────────────────────────────┐  │
-│  │              OutputProviderManager                         │  │
+│  │              OutputHandlerManager                          │  │
 │  │                                                            │  │
 │  │   EventBus.subscribe(DECISION_INTENT)                      │  │
 │  │           │                                                │  │
@@ -113,7 +113,7 @@
 │           │               │               │                     │
 │           ▼               ▼               ▼                     │
 │   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐            │
-│   │ Provider 1  │  │ Provider 2  │  │ Provider 3  │            │
+│   │Handler 1    │  │Handler 2    │  │Handler 3    │            │
 │   │   (TTS)     │  │   (字幕)    │  │ (虚拟形象)  │            │
 │   └─────────────┘  └─────────────┘  └─────────────┘            │
 │                                                                  │
@@ -123,8 +123,8 @@
 **特点**：
 - 严格的单向数据流
 - EventBus 作为唯一通信机制
-- OutputProviderManager 负责过滤和分发
-- 使用 `OUTPUT_INTENT` 事件将过滤后的 Intent 分发给 OutputProvider
+- OutputHandlerManager 负责过滤和分发
+- 使用 `OUTPUT_INTENT` 事件将过滤后的 Intent 分发给 OutputHandler
 
 ## 消息类型对比
 
@@ -161,15 +161,15 @@ message = MessageBase(
 # 输入层标准化消息
 @dataclass
 class NormalizedMessage:
-    """标准化消息，所有输入 Provider 产生的统一格式"""
-    source: str           # 来源 Provider 名称
+    """标准化消息，所有输入 Collector 产生的统一格式"""
+    source: str           # 来源 Collector 名称
     content: str          # 消息内容
     metadata: Dict[str, Any]  # 附加元数据
     timestamp: float      # 时间戳
 
 # 决策层意图
 class Intent(BaseModel):
-    """决策意图，DecisionProvider 的输出"""
+    """决策意图，Decider 的输出"""
     text: Optional[str] = None        # 要朗读/显示的文本
     emotions: List[EmotionType] = []  # 情感标签
     actions: List[ActionType] = []    # 动作指令
@@ -209,21 +209,21 @@ class Intent(BaseModel):
 #### 新架构
 
 ```
-1. BiliDanmakuProvider.start() 生成 NormalizedMessage
+1. BiliDanmakuCollector.start() 生成 NormalizedMessage
 2. InputPipeline 过滤（频率限制、相似过滤）
 3. EventBus.emit(DATA_MESSAGE)
-4. DecisionProvider 接收并处理
+4. Decider 接收并处理
 5. 生成 Intent
 6. EventBus.emit(DECISION_INTENT)
 7. OutputPipeline 过滤（敏感词过滤）
-8. TTSProvider 接收并朗读
-9. VTSProvider 接收并执行动作
+8. TTSHandler 接收并朗读
+9. VTSHandler 接收并执行动作
 ```
 
 **改进**：
 - 9 步处理，更直接
-- 本地 DecisionProvider 可不依赖 MaiCore
-- 每个 Provider 独立订阅事件
+- 本地 Decider 可不依赖 MaiCore
+- 每个 Handler 独立订阅事件
 
 ### 场景 2：语音输入
 
@@ -246,17 +246,17 @@ WebSocket ← MaiCore
 #### 新架构
 
 ```
-STTProvider.start() 生成 NormalizedMessage
+STTCollector.start() 生成 NormalizedMessage
     ↓
 InputPipeline 过滤
     ↓
 EventBus.emit(DATA_MESSAGE)
     ↓
-DecisionProvider 处理
+Decider 处理
     ↓
 EventBus.emit(DECISION_INTENT)
     ↓
-OutputProvider 渲染
+OutputHandler 渲染
 ```
 
 ## 管道系统对比
@@ -288,16 +288,16 @@ class PipelineManager:
 - 入站/出站概念与外部通信耦合
 - 难以针对特定 Domain 定制管道
 
-### 新架构：Domain 专属管道
+### 新架构：阶段专属管道
 
 ```python
-# Input Domain 管道
+# Input 阶段管道
 class InputPipeline:
     async def process(self, message: NormalizedMessage) -> Optional[NormalizedMessage]:
         """处理输入消息"""
         pass
 
-# Output Domain 管道
+# Output 阶段管道
 class OutputPipeline:
     async def process(self, intent: Intent) -> Optional[Intent]:
         """处理输出意图"""
@@ -305,7 +305,7 @@ class OutputPipeline:
 ```
 
 **改进**：
-- 管道与 Domain 绑定
+- 管道与阶段绑定
 - 类型安全
 - 易于扩展和测试
 
@@ -338,16 +338,16 @@ class AudioStreamChannel:
         """订阅音频流"""
         pass
 
-# TTS Provider 发布音频
-class TTSProvider(OutputProvider):
+# TTS Handler 发布音频
+class TTSHandler(OutputHandler):
     async def _speak(self, text):
         self.audio_channel.notify_start(metadata)
         async for chunk in self._generate_audio(text):
             await self.audio_channel.publish(chunk)
         self.audio_channel.notify_end(metadata)
 
-# VTS Provider 订阅音频进行口型同步
-class VTSProvider(OutputProvider):
+# VTS Handler 订阅音频进行口型同步
+class VTSHandler(OutputHandler):
     async def _setup_internal(self):
         await self.audio_channel.subscribe(
             name="vts_lip_sync",
@@ -367,25 +367,25 @@ class VTSProvider(OutputProvider):
 ### 1. 单向数据流
 
 ```
-Input Domain → Decision Domain → Output Domain
+Input 阶段 → Decision 阶段 → Output 阶段
 ```
 
-- 禁止 Output Provider 订阅 Input 事件
-- 禁止 Decision Provider 订阅 Output 事件
-- Input Provider 应只发布，不订阅下游
+- 禁止 OutputHandler 订阅 Input 事件
+- 禁止 Decider 订阅 Output 事件
+- InputCollector 应只发布，不订阅下游
 
 ### 2. 事件类型约束
 
 | 事件 | 发布者 | 订阅者 | 数据类型 |
 |------|--------|--------|---------|
-| `data.message` | InputProvider | DecisionProvider | `NormalizedMessage` |
-| `decision.intent` | DecisionProvider | OutputProviderManager | `Intent` |
-| `output.intent` | OutputProviderManager | OutputProvider | `Intent` |
+| `data.message` | InputCollector | Decider | `NormalizedMessage` |
+| `decision.intent` | Decider | OutputHandlerManager | `Intent` |
+| `output.intent` | OutputHandlerManager | OutputHandler | `Intent` |
 
-### 3. Domain 边界
+### 3. 阶段边界
 
-- 每个 Domain 只能访问自己的 Manager
-- 跨 Domain 通信必须通过 EventBus
+- 每个阶段只能访问自己的 Manager
+- 跨阶段通信必须通过 EventBus
 - 共享状态通过依赖注入
 
 ## 迁移建议
@@ -420,7 +420,7 @@ class MyPlugin(BasePlugin):
         await self.process(text)
 
 # 新代码
-class MyProvider(OutputProvider):
+class MyHandler(OutputHandler):
     async def _setup_internal(self):
         await self.event_bus.subscribe(
             CoreEvents.DECISION_INTENT,
