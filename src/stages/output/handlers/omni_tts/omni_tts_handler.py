@@ -103,7 +103,7 @@ class OmniTTSHandler:
         self.logger = get_logger("OmniTTSHandler")
 
         # 使用 ConfigSchema 验证配置，获得类型安全的配置对象
-        self.typed_config = self.ConfigSchema(**config)
+        self.typed_config = self.ConfigSchema.from_dict(config)
 
         # GPT-SoVITS API配置
         self.host = self.typed_config.host

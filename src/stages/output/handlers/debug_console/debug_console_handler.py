@@ -47,7 +47,7 @@ class DebugConsoleHandler:
         self.logger = get_logger("DebugConsoleHandler")
 
         # 使用 ConfigSchema 验证配置
-        self.typed_config = self.ConfigSchema(**config)
+        self.typed_config = self.ConfigSchema.from_dict(config)
 
         # 配置选项
         self.print_source_context = self.typed_config.print_source_context

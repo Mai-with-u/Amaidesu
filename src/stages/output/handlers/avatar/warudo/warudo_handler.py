@@ -95,7 +95,7 @@ class WarudoHandler(AvatarHandlerBase):
         self.logger = get_logger(self.__class__.__name__)
 
         # 使用 ConfigSchema 验证配置
-        self.typed_config = self.ConfigSchema(**config)
+        self.typed_config = self.ConfigSchema.from_dict(config)
 
         # WebSocket配置
         self.ws_host = self.typed_config.ws_host

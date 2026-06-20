@@ -95,7 +95,7 @@ class ObsControlHandler:
 
         # 使用 ConfigSchema 验证配置，获得类型安全的配置对象
         try:
-            self.typed_config = self.ConfigSchema(**config)
+            self.typed_config = self.ConfigSchema.from_dict(config)
         except Exception as e:
             self.logger.error(f"配置验证失败: {e}")
             raise

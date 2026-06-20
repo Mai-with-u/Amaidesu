@@ -110,7 +110,7 @@ class VRChatHandler(AvatarHandlerBase):
         self.logger = get_logger(self.__class__.__name__)
 
         # 使用 ConfigSchema 验证配置，获得类型安全的配置对象
-        self.typed_config = self.ConfigSchema(**config)
+        self.typed_config = self.ConfigSchema.from_dict(config)
 
         # VRChat OSC 连接配置
         self.vrc_host = self.typed_config.vrc_host

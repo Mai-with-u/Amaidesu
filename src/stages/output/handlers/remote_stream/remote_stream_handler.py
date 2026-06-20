@@ -153,7 +153,7 @@ class RemoteStreamHandler:
         self.is_setup = False
 
         # 使用 ConfigSchema 验证配置，获得类型安全的配置对象
-        self.typed_config = self.ConfigSchema(**config)
+        self.typed_config = self.ConfigSchema.from_dict(config)
 
         # WebSocket配置
         self.server_mode = self.typed_config.server_mode

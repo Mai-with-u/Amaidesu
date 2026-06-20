@@ -275,7 +275,7 @@ class SubtitleHandler:
         self._enabled = True
 
         # 使用 ConfigSchema 验证配置，获得类型安全的配置对象
-        self.typed_config = self.ConfigSchema(**config)
+        self.typed_config = self.ConfigSchema.from_dict(config)
 
         # GUI 配置
         self.window_width = self.typed_config.window_width

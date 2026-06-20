@@ -104,7 +104,7 @@ class GPTSoVITSHandler:
         self.logger = get_logger("GPTSoVITSHandler")
 
         # 使用 ConfigSchema 验证配置
-        self.typed_config = self.ConfigSchema(**config)
+        self.typed_config = self.ConfigSchema.from_dict(config)
 
         # GPT-SoVITS API配置
         self.host = self.typed_config.host
