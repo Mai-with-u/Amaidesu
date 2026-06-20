@@ -49,7 +49,7 @@ class ConsoleInputCollector:
         self.logger = get_logger(self.__class__.__name__)
 
         # 使用 ConfigSchema 验证配置，获得类型安全的配置对象
-        self.typed_config = self.ConfigSchema(**config)
+        self.typed_config = self.ConfigSchema.from_dict(config)
 
         # 从类型安全的配置对象读取参数
         self.user_id = self.typed_config.user_id

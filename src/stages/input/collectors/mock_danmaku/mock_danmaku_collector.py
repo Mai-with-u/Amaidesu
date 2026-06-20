@@ -53,7 +53,7 @@ class MockDanmakuCollector:
         self.event_bus = event_bus
         self.logger = get_logger(self.__class__.__name__)
 
-        self.typed_config = self.ConfigSchema(**config)
+        self.typed_config = self.ConfigSchema.from_dict(config)
         self.log_filename = self.typed_config.log_file_path
         self.send_interval = max(0.1, self.typed_config.send_interval)
         self.loop_playback = self.typed_config.loop_playback

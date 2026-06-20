@@ -58,7 +58,7 @@ class BiliDanmakuCollector:
             raise ImportError("aiohttp is required for BiliDanmakuCollector")
 
         # 配置
-        self.typed_config = self.ConfigSchema(**config)
+        self.typed_config = self.ConfigSchema.from_dict(config)
         self.room_id = self.typed_config.room_id
         self.poll_interval = self.typed_config.poll_interval
         self.message_config = self.typed_config.message_config

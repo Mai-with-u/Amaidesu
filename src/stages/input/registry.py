@@ -45,6 +45,17 @@ def collector(name: str):
         if name in _COLLECTORS:
             raise ValueError(f"Collector '{name}' 已被注册")
         _COLLECTORS[name] = cls
+
+        # 自动注册 ConfigSchema（如果组件定义了嵌套 ConfigSchema 类）
+        config_schema = getattr(cls, "ConfigSchema", None)
+        if config_schema is not None:
+            try:
+                from src.modules.config.schemas import register_config_schema
+
+                register_config_schema(name, config_schema)
+            except ImportError:
+                pass  # schemas 模块不可用时静默跳过
+
         return cls
 
     return decorator

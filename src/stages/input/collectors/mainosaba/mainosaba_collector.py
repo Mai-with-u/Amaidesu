@@ -100,7 +100,7 @@ class MainosabaCollector:
         self.prompt_manager = prompt_manager
         self.logger = get_logger(self.__class__.__name__)
 
-        self.typed_config = self.ConfigSchema(**config)
+        self.typed_config = self.ConfigSchema.from_dict(config)
         self.full_screen = self.typed_config.full_screen
         self.game_region = self.typed_config.game_region
         self.check_interval = self.typed_config.check_interval

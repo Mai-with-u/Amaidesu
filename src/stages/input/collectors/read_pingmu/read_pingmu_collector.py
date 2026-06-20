@@ -65,7 +65,7 @@ class ReadPingmuCollector:
         self.config = config
         self.event_bus = event_bus
         self.logger = get_logger(self.__class__.__name__)
-        self.typed_config = self.ConfigSchema(**config)
+        self.typed_config = self.ConfigSchema.from_dict(config)
 
         self.screen_analyzer: Optional[ScreenAnalyzer] = None
         self.screen_reader: Optional[ScreenReader] = None

@@ -69,7 +69,7 @@ class STTCollector:
         self.logger = get_logger(self.__class__.__name__)
 
         try:
-            self.typed_config = self.ConfigSchema(**config)
+            self.typed_config = self.ConfigSchema.from_dict(config)
         except Exception as e:
             self.logger.error(f"配置验证失败: {e}")
             raise

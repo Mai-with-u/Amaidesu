@@ -65,7 +65,7 @@ class BiliDanmakuOfficialCollector:
         self.event_bus = event_bus
         self.logger = get_logger(self.__class__.__name__)
 
-        self.typed_config = self.ConfigSchema(**config)
+        self.typed_config = self.ConfigSchema.from_dict(config)
         self.id_code = self.typed_config.id_code
         self.app_id = self.typed_config.app_id
         self.access_key = self.typed_config.access_key
