@@ -80,7 +80,7 @@ def test_version_manager_scan_uses_stages_path(tmp_path):
 
 def test_config_service_reads_collectors_format(tmp_path):
     """核心: ConfigService 应读取 [collectors] 而非 [providers.input]"""
-    config_path = tmp_path / "config-template.toml"
+    config_path = tmp_path / "config.toml"
     config_path.write_text(
         '[collectors]\nenabled = ["test_collector"]\n\n'
         "[collectors.test_collector]\npriority = 100\n"
@@ -98,7 +98,7 @@ def test_config_service_reads_collectors_format(tmp_path):
 
 def test_config_service_reads_handlers_format(tmp_path):
     """核心: ConfigService 应读取 [handlers] 而非 [providers.output]"""
-    config_path = tmp_path / "config-template.toml"
+    config_path = tmp_path / "config.toml"
     config_path.write_text(
         '[handlers]\nenabled = ["test_handler"]\n\n'
         "[handlers.test_handler]\nvoice_id = \"test\"\n"
@@ -116,7 +116,7 @@ def test_config_service_reads_handlers_format(tmp_path):
 
 def test_config_service_reads_deciders_format(tmp_path):
     """核心: ConfigService 应读取 [deciders] 而非 [providers.decision]"""
-    config_path = tmp_path / "config-template.toml"
+    config_path = tmp_path / "config.toml"
     config_path.write_text(
         '[deciders]\nactive = "test_decider"\n\n'
         "[deciders.test_decider]\nmodel = \"gpt\"\n"

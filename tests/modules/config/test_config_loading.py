@@ -70,9 +70,9 @@ def temp_base_dir():
 
 
 def _write_main_config(base_dir: str, content: str) -> None:
-    """写入主配置文件"""
-    template_path = os.path.join(base_dir, "config-template.toml")
-    with open(template_path, "w", encoding="utf-8") as f:
+    """写入主配置文件（旧格式 config.toml，由 ConfigService 自动迁移）"""
+    config_path = os.path.join(base_dir, "config.toml")
+    with open(config_path, "w", encoding="utf-8") as f:
         f.write(content)
 
 
