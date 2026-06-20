@@ -251,7 +251,7 @@ async def load_pipeline_manager(config: Dict[str, Any]) -> Optional[InputPipelin
         logger.info("配置中未启用管道功能")
         return None
 
-    pipeline_load_dir = os.path.join(_BASE_DIR, "src", "domains", "input", "pipelines")
+    pipeline_load_dir = os.path.join(_BASE_DIR, "src", "stages", "input", "pipelines")
     logger.info(f"准备加载管道 (从目录: {pipeline_load_dir})...")
 
     try:
@@ -310,11 +310,6 @@ async def create_app_components(
     7. DashboardServer
     8. MCPServerService
     """
-    # 导入阶段参与者包以触发装饰器注册
-    import src.stages.input.collectors  # noqa: F401
-    import src.stages.decision.deciders  # noqa: F401
-    import src.stages.output.handlers  # noqa: F401
-
     output_config = config.get("handlers", {})
     decision_config = config.get("deciders", {})
     input_config = config.get("collectors", {})
@@ -583,14 +578,6 @@ async def run_shutdown(
             logger.info("DeciderManager 清理完成")
         except Exception as e:
             logger.error(f"清理 DeciderManager 时出错: {e}")
-
-    if output_manager:
-        logger.info("正在清理 OutputHandlerManager（取消订阅）...")
-        try:
-            await output_manager.cleanup()
-            logger.info("OutputHandlerManager 清理完成")
-        except Exception as e:
-            logger.error(f"清理 OutputHandlerManager 时出错: {e}")
 
     if output_manager:
         logger.info("正在清理 OutputHandler（必须在 EventBus.cleanup 之前）...")
