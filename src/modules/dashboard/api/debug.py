@@ -112,7 +112,7 @@ async def inject_intent(
             ),
         )
 
-        payload = IntentPayload.from_intent(intent, provider="dashboard_debug")
+        payload = IntentPayload.from_intent(intent, name="dashboard_debug")
 
         await event_bus.emit(
             CoreEvents.DECISION_INTENT_GENERATED,

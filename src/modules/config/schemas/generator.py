@@ -5,25 +5,25 @@
 
 主要功能:
 - generate_toml(): 从 Schema 类生成 TOML 配置内容
-- ensure_provider_config(): 确保 Provider 配置文件存在
+- ensure_component_config(): 确保 组件配置文件存在
 
 使用示例:
-    from src.modules.config.schemas.generator import generate_toml, ensure_provider_config
+    from src.modules.config.schemas.generator import generate_toml, ensure_component_config
     from pydantic import BaseModel
 
-    class MyProviderConfig(BaseModel):
+    class MyConfig(BaseModel):
         host: str = "localhost"
         port: int = 8080
         enabled: bool = True
 
     # 生成 TOML 内容
-    toml_content = generate_toml(MyProviderConfig, "my_provider")
+    toml_content = generate_toml(MyConfig, "my_provider")
 
     # 确保配置文件存在
-    ensure_provider_config(
-        provider_name="my_provider",
-        provider_layer="input",
-        schema_class=MyProviderConfig,
+    ensure_component_config(
+        name="my_provider",
+        phase="input",
+        schema_class=MyConfig,
         base_dir="/path/to/project"
     )
 """
@@ -166,23 +166,23 @@ def _format_toml_item(value: Any) -> str:
         return f'"{str(value)}"'
 
 
-def ensure_provider_config(
-    provider_name: str,
-    provider_layer: Literal["input", "output", "decision"],
+def ensure_component_config(
+    name: str,
+    phase: Literal["input", "output", "decision"],
     schema_class: Optional[Type[BaseModel]] = None,
     base_dir: Optional[str] = None,
     config_filename: str = "config.toml",
     force_regenerate: bool = False,
 ) -> str:
     """
-    确保 Provider 配置文件存在
+    确保 组件配置文件存在
 
     如果配置文件不存在，则从 Schema 类生成默认配置文件。
     如果配置文件已存在且 force_regenerate=False，则跳过生成。
 
     Args:
-        provider_name: Provider 名称（如 "console_input", "tts"）
-        provider_layer: Provider 层级（input/output/decision）
+        name: 组件名称（如 "console_input", "tts"）
+        phase: 组件层级（input/output/decision）
         schema_class: Pydantic Schema 类（用于生成默认配置）
         base_dir: 项目根目录（如果为 None 则自动检测）
         config_filename: 配置文件名（默认 "config-defaults.toml"）
@@ -197,36 +197,32 @@ def ensure_provider_config(
 
     Example:
         >>> # 从 Schema 生成配置文件
-        >>> ensure_provider_config(
-        ...     provider_name="console_input",
-        ...     provider_layer="input",
+        >>> ensure_component_config(
+        ...     name="console_input",
+        ...     phase="input",
         ...     schema_class=ConsoleInputConfig,
         ...     base_dir="/path/to/project",
         ... )
 
         >>> # 检查配置文件是否存在（不生成）
-        >>> config_path = ensure_provider_config(provider_name="tts", provider_layer="output")
+        >>> config_path = ensure_component_config(name="tts", phase="output")
     """
     # 确定项目根目录
     if base_dir is None:
         base_dir = _detect_project_root()
 
-    # 构建 Provider 目录路径
-    if provider_layer == "input":
-        provider_dir = os.path.join(base_dir, "src", "domains", "input", "providers", provider_name)
-    elif provider_layer == "output":
-        provider_dir = os.path.join(base_dir, "src", "domains", "output", "providers", provider_name)
-    elif provider_layer == "decision":
-        provider_dir = os.path.join(base_dir, "src", "domains", "decision", "providers", provider_name)
-    else:
-        raise ValueError(f"未知的 Provider 层级: {provider_layer}")
+    _PHASE_SUBDIR = {"input": "collectors", "output": "handlers", "decision": "deciders"}
+    subdir = _PHASE_SUBDIR.get(phase)
+    if subdir is None:
+        raise ValueError(f"未知的组件阶段: {phase}")
 
-    # 检查 Provider 目录是否存在
-    if not os.path.isdir(provider_dir):
-        raise FileNotFoundError(f"Provider 目录不存在: {provider_dir}")
+    component_dir = os.path.join(base_dir, "src", "stages", phase, subdir, name)
+
+    if not os.path.isdir(component_dir):
+        raise FileNotFoundError(f"组件目录不存在: {component_dir}")
 
     # 配置文件路径
-    config_path = os.path.join(provider_dir, config_filename)
+    config_path = os.path.join(component_dir, config_filename)
 
     # 如果配置文件已存在且不强制重新生成，则返回路径
     if os.path.exists(config_path) and not force_regenerate:
@@ -243,7 +239,7 @@ def ensure_provider_config(
     # 生成配置文件
     if schema_class is not None:
         logger.info(f"生成配置文件: {config_path}")
-        toml_content = generate_toml(schema_class, provider_name)
+        toml_content = generate_toml(schema_class, name)
 
         # 写入配置文件
         with open(config_path, "w", encoding="utf-8") as f:
@@ -257,20 +253,20 @@ def ensure_provider_config(
 
 def generate_config_dict(
     schema_class: Type[BaseModel],
-    provider_name: str,
+    name: str,
 ) -> Dict[str, Any]:
     """
     从 Pydantic Schema 类生成配置字典
 
     Args:
         schema_class: Pydantic BaseModel 子类
-        provider_name: Provider 名称（用作配置节键）
+        name: 组件名称（用作配置节键）
 
     Returns:
-        配置字典，格式为 {provider_name: {...}}
+        配置字典，格式为 {name: {...}}
 
     Example:
-        >>> config_dict = generate_config_dict(MyProviderConfig, "my_provider")
+        >>> config_dict = generate_config_dict(MyConfig, "my_provider")
         >>> print(config_dict)
         {'my_provider': {'host': 'localhost', 'port': 8080}}
     """
@@ -280,7 +276,7 @@ def generate_config_dict(
     schema_instance = schema_class()
     config_values = schema_instance.model_dump(exclude_unset=False)
 
-    return {provider_name: config_values}
+    return {name: config_values}
 
 
 def merge_config_with_tomli_w(
@@ -377,53 +373,53 @@ def _detect_project_root() -> str:
     return str(current_dir.parent.parent.parent.parent)
 
 
-# 便捷函数：批量生成 Provider 配置
-def batch_ensure_provider_configs(
+# 便捷函数：批量生成 组件配置
+def batch_ensure_component_configs(
     provider_configs: list[Dict[str, Any]],
     base_dir: Optional[str] = None,
     force_regenerate: bool = False,
 ) -> Dict[str, str]:
     """
-    批量确保 Provider 配置文件存在
+    批量确保 组件配置文件存在
 
     Args:
-        provider_configs: Provider 配置列表，每项包含:
-            - provider_name: str
-            - provider_layer: Literal["input", "output", "decision"]
+        provider_configs: 组件配置列表，每项包含:
+            - name: str
+            - phase: Literal["input", "output", "decision"]
             - schema_class: Type[BaseModel]
         base_dir: 项目根目录（如果为 None 则自动检测）
         force_regenerate: 是否强制重新生成
 
     Returns:
-        字典，键为 provider_name，值为配置文件路径
+        字典，键为 name，值为配置文件路径
 
     Example:
         >>> configs = [
-        ...     {"provider_name": "console_input", "provider_layer": "input", "schema_class": ConsoleInputConfig},
-        ...     {"provider_name": "tts", "provider_layer": "output", "schema_class": TTSConfig},
+        ...     {"name": "console_input", "phase": "input", "schema_class": ConsoleInputConfig},
+        ...     {"name": "tts", "phase": "output", "schema_class": TTSConfig},
         ... ]
-        >>> paths = batch_ensure_provider_configs(configs)
+        >>> paths = batch_ensure_component_configs(configs)
         >>> print(paths)
         {'console_input': '/path/to/console_input/config-defaults.toml', 'tts': '/path/to/tts/config-defaults.toml'}
     """
     results = {}
 
     for config in provider_configs:
-        provider_name = config["provider_name"]
-        provider_layer = config["provider_layer"]
+        name = config["name"]
+        phase = config["phase"]
         schema_class = config.get("schema_class")
 
         try:
-            config_path = ensure_provider_config(
-                provider_name=provider_name,
-                provider_layer=provider_layer,
+            config_path = ensure_component_config(
+                name=name,
+                phase=phase,
                 schema_class=schema_class,
                 base_dir=base_dir,
                 force_regenerate=force_regenerate,
             )
-            results[provider_name] = config_path
+            results[name] = config_path
         except Exception as e:
-            logger.error(f"生成配置文件失败: {provider_name} - {e}")
-            results[provider_name] = None
+            logger.error(f"生成配置文件失败: {name} - {e}")
+            results[name] = None
 
     return results

@@ -5,143 +5,128 @@ from typing import Dict, Optional, Type
 from pydantic import BaseModel
 
 # Base schema
-from .base import BaseProviderConfig
+from .base import BaseConfig
 
-# Non-provider schemas (system-wide configurations)
+# Non-component schemas (system-wide configurations)
 from .logging import LoggingConfig
 
-# Output provider schemas
-from .output_providers import (
-    OUTPUT_PROVIDER_CONFIG_MAP,
-    get_output_provider_config,
+# Output handler schemas
+from .output_schemas import (
+    OUTPUT_CONFIG_MAP,
+    get_output_config,
 )
 
-from src.modules.logging import get_logger
+# 组件 Schema Registry - 内存存储
+#
+# 注意：当前各 Collector/Decider/Handler 尚未通过 register_config_schema() 注册各自的 Schema。
+# get_config_schema(type, phase) 对 input/decision 阶段会抛 KeyError（由调用方兜底处理）。
+# output 阶段通过 OUTPUT_CONFIG_MAP 硬编码查找。
+# TODO: 后续各组件应在自身模块中调用 register_config_schema() 完成注册。
+CONFIG_SCHEMA_REGISTRY: Dict[str, Type[BaseModel]] = {}
 
-logger = get_logger(__name__)
 
-# Provider Schema Registry - 内存存储
-PROVIDER_SCHEMA_REGISTRY: Dict[str, Type[BaseModel]] = {}
-
-
-def register_provider_schema(provider_type: str, schema_class: Type[BaseModel]) -> None:
+def register_config_schema(type: str, schema_class: Type[BaseModel]) -> None:
     """
-    注册 Provider 的配置 Schema
+    注册组件的配置 Schema
 
     Args:
-        provider_type: Provider 类型标识
+        type: Collector/Decider/Handler 类型标识
         schema_class: Schema 类
     """
-    PROVIDER_SCHEMA_REGISTRY[provider_type] = schema_class
+    CONFIG_SCHEMA_REGISTRY[type] = schema_class
 
 
-def get_provider_schema(provider_type: str, provider_layer: Optional[str] = None) -> Type[BaseModel]:
+def get_config_schema(type: str, phase: Optional[str] = None) -> Type[BaseModel]:
     """
-    获取 Provider 的 Schema 类
+    获取组件的 Schema 类
 
     Args:
-        provider_type: Provider 类型标识
-        provider_layer: Provider 层级（可选）
+        type: Collector/Decider/Handler 类型标识
+        phase: 组件所处阶段（可选，仅用于错误信息）
 
     Returns:
         对应的 Schema 类
 
     Raises:
-        KeyError: 如果 provider_type 未注册
+        KeyError: 如果 type 未注册
     """
-    schema = PROVIDER_SCHEMA_REGISTRY.get(provider_type)
+    schema = CONFIG_SCHEMA_REGISTRY.get(type)
     if schema is not None:
         return schema
 
-    # 如果找不到 Schema，尝试触发 providers 包的导入以进行自我注册
-    try:
-        if provider_layer == "input":
-            from src.domains.input import providers as _  # noqa: F401
-        elif provider_layer == "output":
-            from src.domains.output import providers as _  # noqa: F401
-        elif provider_layer == "decision":
-            from src.domains.decision import providers as _  # noqa: F401
-    except ImportError as e:
-        logger.debug(f"导入 providers 包失败: {e}")
-
-    # 重新尝试获取
-    schema = PROVIDER_SCHEMA_REGISTRY.get(provider_type)
-    if schema is not None:
-        return schema
-
-    raise KeyError(f"未注册的 Provider 类型: {provider_type} (layer: {provider_layer})")
+    raise KeyError(f"未注册的 Collector/Decider/Handler 类型: {type} (phase: {phase})")
 
 
-def validate_provider_config(provider_type: str, config: dict) -> BaseModel:
+def validate_config(type: str, config: dict) -> BaseModel:
     """
-    验证 Provider 配置
+    验证组件配置
 
     Args:
-        provider_type: Provider 类型
+        type: Collector/Decider/Handler 类型
         config: 配置字典
 
     Returns:
         验证后的配置对象
 
     Raises:
-        KeyError: 如果 provider_type 未注册
+        KeyError: 如果 type 未注册
         ValidationError: 如果配置验证失败
     """
-    schema_class = get_provider_schema(provider_type)
+    schema_class = get_config_schema(type)
     return schema_class(**config)
 
 
-def list_all_providers() -> dict:
+def list_registered_schemas() -> dict:
     """
-    列出所有已注册的 Provider
+    列出所有已注册的 Schema
 
     Returns:
         包含分类列表的字典:
         {
-            "input": [...],
-            "decision": [...],
-            "output": [...],
-            "total": N
+            "input": [],
+            "decision": [],
+            "output": sorted(CONFIG_SCHEMA_REGISTRY.keys()),
+            "total": len(CONFIG_SCHEMA_REGISTRY),
         }
     """
     return {
         "input": [],
         "decision": [],
-        "output": sorted(PROVIDER_SCHEMA_REGISTRY.keys()),
-        "total": len(PROVIDER_SCHEMA_REGISTRY),
+        "output": sorted(CONFIG_SCHEMA_REGISTRY.keys()),
+        "total": len(CONFIG_SCHEMA_REGISTRY),
     }
 
 
 def verify_no_enabled_field_in_schemas() -> list:
     """
-    验证所有 Provider Schema 中都不包含 'enabled' 字段
+    验证所有组件 Schema 中都不包含 'enabled' 字段
 
     Returns:
         包含 'enabled' 字段的 Schema 列表（应为空）
     """
     schemas_with_enabled = []
 
-    for provider_name, schema_class in PROVIDER_SCHEMA_REGISTRY.items():
+    for name, schema_class in CONFIG_SCHEMA_REGISTRY.items():
         if hasattr(schema_class, "model_fields") and "enabled" in schema_class.model_fields:
-            schemas_with_enabled.append(provider_name)
+            schemas_with_enabled.append(name)
 
     return schemas_with_enabled
 
 
 __all__ = [
     # Base schemas
-    "BaseProviderConfig",
-    # Output provider schemas
-    "OUTPUT_PROVIDER_CONFIG_MAP",
-    "get_output_provider_config",
-    # Non-provider schemas
+    "BaseConfig",
+    # Output handler schemas
+    "OUTPUT_CONFIG_MAP",
+    "get_output_config",
+    # Non-component schemas
     "LoggingConfig",
     # Registry
-    "PROVIDER_SCHEMA_REGISTRY",
+    "CONFIG_SCHEMA_REGISTRY",
     # Helper functions
-    "get_provider_schema",
-    "validate_provider_config",
-    "list_all_providers",
+    "get_config_schema",
+    "validate_config",
+    "list_registered_schemas",
     "verify_no_enabled_field_in_schemas",
-    "register_provider_schema",
+    "register_config_schema",
 ]

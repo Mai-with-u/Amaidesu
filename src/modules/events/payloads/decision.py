@@ -4,8 +4,8 @@ Decision Domain 事件 Payload 定义
 定义 Decision Domain 相关的事件 Payload 类型。
 - IntentPayload: 意图生成事件
 - IntentActionPayload: 意图动作 Payload
-- ProviderConnectedPayload: Provider 连接事件
-- ProviderDisconnectedPayload: Provider 断开事件
+- ConnectedPayload: 组件连接事件
+- DisconnectedPayload: 组件断开事件
 """
 
 from typing import TYPE_CHECKING, Any, Dict, Optional
@@ -65,7 +65,7 @@ class IntentPayload(BasePayload):
     """
 
     intent_data: Dict[str, Any] = Field(..., description="Intent 序列化数据")
-    provider: str = Field(..., description="决策Provider名称")
+    name: str = Field(..., description="决策Decider名称")
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -81,7 +81,7 @@ class IntentPayload(BasePayload):
                         "parser_type": "llm",
                     },
                 },
-                "provider": "maicore",
+                "name": "maicore",
             }
         }
     )
@@ -123,7 +123,7 @@ class IntentPayload(BasePayload):
     def __str__(self) -> str:
         """自定义字符串表示，显示 intent_data 中的关键字段"""
         parts = [
-            f'provider="{self.provider}"',
+            f'name="{self.name}"',
             f'speech="{self.intent_data.get("speech", "")}"',
             f'emotion="{self.intent_data.get("emotion", "")}"',
             f'action="{self.intent_data.get("action", "")}"',
@@ -131,7 +131,7 @@ class IntentPayload(BasePayload):
         return f"IntentPayload({', '.join(parts)})"
 
     @classmethod
-    def from_intent(cls, intent: "Intent", provider: str) -> "IntentPayload":
+    def from_intent(cls, intent: "Intent", name: str) -> "IntentPayload":
         """
         从 Intent 对象创建 Payload
 
@@ -139,12 +139,12 @@ class IntentPayload(BasePayload):
 
         Args:
             intent: Intent 对象
-            provider: 决策Provider名称
+            name: 决策Decider名称
 
         Returns:
             IntentPayload 实例
         """
-        return cls(intent_data=intent.model_dump(mode="json"), provider=provider)
+        return cls(intent_data=intent.model_dump(mode="json"), name=name)
 
     def to_intent(self) -> "Intent":
         """
@@ -160,18 +160,18 @@ class IntentPayload(BasePayload):
         return Intent.model_validate(self.intent_data)
 
 
-class ProviderConnectedPayload(BasePayload):
+class ConnectedPayload(BasePayload):
     """
     Decider 连接成功事件 Payload
 
-    事件名：CoreEvents.DECISION_PROVIDER_CONNECTED
+    事件名：CoreEvents.DECISION_DECIDER_CONNECTED
     发布者：Decider
     订阅者：任何需要监控 Decider 状态的组件
 
     表示 Decider 已成功连接到外部服务（如 MaiBot）。
     """
 
-    provider: str = Field(..., description="Provider 名称")
+    name: str = Field(..., description="参与者名称")
     endpoint: Optional[str] = Field(default=None, description="连接端点")
     timestamp: float = Field(default_factory=lambda: __import__("time").time(), description="连接时间")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="额外元数据")
@@ -179,7 +179,7 @@ class ProviderConnectedPayload(BasePayload):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "provider": "maicore",
+                "name": "maicore",
                 "endpoint": "ws://localhost:8000/ws",
                 "timestamp": 1706745600.0,
                 "metadata": {"reconnect_count": 0},
@@ -189,21 +189,21 @@ class ProviderConnectedPayload(BasePayload):
 
     def __str__(self) -> str:
         """自定义字符串表示，只显示关键字段"""
-        return f'ProviderConnectedPayload(provider="{self.provider}", endpoint="{self.endpoint}")'
+        return f'ConnectedPayload(name="{self.name}", endpoint="{self.endpoint}")'
 
 
-class ProviderDisconnectedPayload(BasePayload):
+class DisconnectedPayload(BasePayload):
     """
     Decider 断开连接事件 Payload
 
-    事件名：CoreEvents.DECISION_PROVIDER_DISCONNECTED
+    事件名：CoreEvents.DECISION_DECIDER_DISCONNECTED
     发布者：Decider
     订阅者：任何需要监控 Decider 状态的组件
 
     表示 Decider 与外部服务断开连接。
     """
 
-    provider: str = Field(..., description="Provider 名称")
+    name: str = Field(..., description="参与者名称")
     reason: str = Field(default="unknown", description="断开原因")
     will_retry: bool = Field(default=False, description="是否将重试连接")
     timestamp: float = Field(default_factory=lambda: __import__("time").time(), description="断开时间")
@@ -212,7 +212,7 @@ class ProviderDisconnectedPayload(BasePayload):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "provider": "maicore",
+                "name": "maicore",
                 "reason": "connection_lost",
                 "will_retry": True,
                 "timestamp": 1706745600.0,
@@ -223,12 +223,12 @@ class ProviderDisconnectedPayload(BasePayload):
 
     def __str__(self) -> str:
         """自定义字符串表示，只显示关键字段"""
-        return f'ProviderDisconnectedPayload(provider="{self.provider}", reason="{self.reason}", will_retry={self.will_retry})'
+        return f'DisconnectedPayload(name="{self.name}", reason="{self.reason}", will_retry={self.will_retry})'
 
 
 __all__ = [
     "IntentActionPayload",
     "IntentPayload",
-    "ProviderConnectedPayload",
-    "ProviderDisconnectedPayload",
+    "ConnectedPayload",
+    "DisconnectedPayload",
 ]

@@ -12,8 +12,8 @@ from fastapi import APIRouter, Depends
 
 from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.dashboard.schemas.system import (
-    DomainStatus,
     HealthResponse,
+    PhaseStatus,
     SystemStatsResponse,
     SystemStatusResponse,
 )
@@ -36,47 +36,41 @@ async def get_system_status(server: ServerDep) -> SystemStatusResponse:
     """获取系统整体状态"""
     uptime = time.time() - _startup_time
 
-    # 构建 Domain 状态
-    input_domain = None
-    decision_domain = None
-    output_domain = None
+    # 构建阶段状态
+    input_phase = None
+    decision_phase = None
+    output_phase = None
 
     if server.input_manager:
-        providers = server.input_manager._providers if hasattr(server.input_manager, "_providers") else []
-        input_domain = DomainStatus(
+        collectors = server.input_manager._collectors
+        input_phase = PhaseStatus(
             enabled=True,
-            active_providers=len([p for p in providers if getattr(p, "is_started", False)]),
-            total_providers=len(providers),
+            active_components=len([c for c in collectors if getattr(c, "is_started", False)]),
+            total_components=len(collectors),
         )
 
     if server.decision_manager:
-        current = server.decision_manager.get_current_provider()
-        available = (
-            server.decision_manager.get_available_providers()
-            if hasattr(server.decision_manager, "get_available_providers")
-            else []
-        )
-        decision_domain = DomainStatus(
+        decider_names = list(server.decision_manager._deciders.keys())
+        current = server.decision_manager._current_decider
+        decision_phase = PhaseStatus(
             enabled=True,
-            active_providers=1 if current else 0,
-            total_providers=len(available),
+            active_components=1 if current else 0,
+            total_components=len(decider_names),
         )
 
     if server.output_manager:
-        names = (
-            server.output_manager.get_provider_names() if hasattr(server.output_manager, "get_provider_names") else []
-        )
-        output_domain = DomainStatus(
+        handler_names = server.output_manager.get_handler_names()
+        output_phase = PhaseStatus(
             enabled=True,
-            active_providers=len(
+            active_components=len(
                 [
                     n
-                    for n in names
-                    if server.output_manager.get_provider_by_name(n)
-                    and getattr(server.output_manager.get_provider_by_name(n), "is_started", False)
+                    for n in handler_names
+                    if server.output_manager.get_handler_by_name(n)
+                    and getattr(server.output_manager.get_handler_by_name(n), "_is_started", False)
                 ]
             ),
-            total_providers=len(names),
+            total_components=len(handler_names),
         )
 
     return SystemStatusResponse(
@@ -84,9 +78,9 @@ async def get_system_status(server: ServerDep) -> SystemStatusResponse:
         uptime_seconds=uptime,
         version="0.1.0",  # TODO: 从 config_service 获取
         python_version=f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
-        input_domain=input_domain,
-        decision_domain=decision_domain,
-        output_domain=output_domain,
+        input_phase=input_phase,
+        decision_phase=decision_phase,
+        output_phase=output_phase,
     )
 
 

@@ -13,7 +13,7 @@ from typing import Any, Dict
 
 from maim_message import MessageBase, BaseMessageInfo, FormatInfo, Seg, UserInfo, GroupInfo
 
-from src.domains.decision.providers.maibot.maibot_decider import MaiBotDecider
+from src.stages.decision.deciders.maibot.maibot_decider import MaiBotDecider
 from src.modules.types import Intent
 
 

@@ -7,7 +7,7 @@ FastAPI 路由注册
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.modules.dashboard.api import config, debug, llm, maibot, messages, providers, system
+from src.modules.dashboard.api import components, config, debug, llm, maibot, messages, system
 
 
 def create_app() -> FastAPI:
@@ -20,7 +20,7 @@ def create_app() -> FastAPI:
 
     # 注册路由
     app.include_router(system.router, prefix="/api/v1/system", tags=["System"])
-    app.include_router(providers.router, prefix="/api/v1/providers", tags=["Providers"])
+    app.include_router(components.router, prefix="/api/v1/components", tags=["Components"])
     app.include_router(messages.router, prefix="/api/v1", tags=["Messages"])
     app.include_router(config.router, prefix="/api/v1/config", tags=["Config"])
     app.include_router(debug.router, prefix="/api/v1/debug", tags=["Debug"])

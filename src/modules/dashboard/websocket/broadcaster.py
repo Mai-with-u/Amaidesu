@@ -12,8 +12,8 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import (
     IntentPayload,
     MessageReadyPayload,
-    ProviderConnectedPayload,
-    ProviderDisconnectedPayload,
+    ConnectedPayload,
+    DisconnectedPayload,
 )
 from src.modules.logging import get_logger
 
@@ -34,14 +34,14 @@ class EventBroadcaster:
         CoreEvents.OUTPUT_INTENT_READY: "output.render",
     }
 
-    # Provider 事件类型映射
+    # 组件 事件类型映射
     PROVIDER_EVENT_TYPE_MAP = {
-        CoreEvents.INPUT_PROVIDER_CONNECTED: "provider.connected",
-        CoreEvents.INPUT_PROVIDER_DISCONNECTED: "provider.disconnected",
-        CoreEvents.DECISION_PROVIDER_CONNECTED: "provider.connected",
-        CoreEvents.DECISION_PROVIDER_DISCONNECTED: "provider.disconnected",
-        CoreEvents.OUTPUT_PROVIDER_CONNECTED: "provider.connected",
-        CoreEvents.OUTPUT_PROVIDER_DISCONNECTED: "provider.disconnected",
+        CoreEvents.INPUT_COLLECTOR_CONNECTED: "collector.connected",
+        CoreEvents.INPUT_COLLECTOR_DISCONNECTED: "collector.disconnected",
+        CoreEvents.DECISION_DECIDER_CONNECTED: "collector.connected",
+        CoreEvents.DECISION_DECIDER_DISCONNECTED: "collector.disconnected",
+        CoreEvents.OUTPUT_HANDLER_CONNECTED: "collector.connected",
+        CoreEvents.OUTPUT_HANDLER_DISCONNECTED: "collector.disconnected",
     }
 
     def __init__(
@@ -100,9 +100,9 @@ class EventBroadcaster:
             CoreEvents.CORE_SHUTDOWN: self._on_core_event,
             CoreEvents.CORE_ERROR: self._on_core_error,
         }
-        # Provider 事件使用通用处理器
+        # 组件 事件使用通用处理器
         if event_name in self.PROVIDER_EVENT_TYPE_MAP:
-            return self._create_provider_handler(event_name)
+            return self._create_component_handler(event_name)
         return handler_map.get(event_name)
 
     def _subscribe_core_events(self) -> None:
@@ -147,31 +147,30 @@ class EventBroadcaster:
         for event_name, handler in system_events:
             self._subscribe_event(event_name, handler, model_class=GenericEventPayload)
 
-        # 订阅 Provider 状态事件
-        provider_event_map = {
-            CoreEvents.INPUT_PROVIDER_CONNECTED: ProviderConnectedPayload,
-            CoreEvents.INPUT_PROVIDER_DISCONNECTED: ProviderDisconnectedPayload,
-            CoreEvents.DECISION_PROVIDER_CONNECTED: ProviderConnectedPayload,
-            CoreEvents.DECISION_PROVIDER_DISCONNECTED: ProviderDisconnectedPayload,
-            CoreEvents.OUTPUT_PROVIDER_CONNECTED: ProviderConnectedPayload,
-            CoreEvents.OUTPUT_PROVIDER_DISCONNECTED: ProviderDisconnectedPayload,
+        # 订阅组件状态事件
+        component_event_map = {
+            CoreEvents.INPUT_COLLECTOR_CONNECTED: ConnectedPayload,
+            CoreEvents.INPUT_COLLECTOR_DISCONNECTED: DisconnectedPayload,
+            CoreEvents.DECISION_DECIDER_CONNECTED: ConnectedPayload,
+            CoreEvents.DECISION_DECIDER_DISCONNECTED: DisconnectedPayload,
+            CoreEvents.OUTPUT_HANDLER_CONNECTED: ConnectedPayload,
+            CoreEvents.OUTPUT_HANDLER_DISCONNECTED: DisconnectedPayload,
         }
 
-        for event_name, payload_class in provider_event_map.items():
-            handler = self._create_provider_handler(event_name)
+        for event_name, payload_class in component_event_map.items():
+            handler = self._create_component_handler(event_name)
             self._subscribe_event(event_name, handler, model_class=payload_class)
 
-    def _create_provider_handler(self, target_event_name: str) -> Callable:
-        """创建 Provider 事件处理器（闭包捕获事件名）"""
+    def _create_component_handler(self, target_event_name: str) -> Callable:
+        """创建组件事件处理器（闭包捕获事件名）"""
 
         async def handler(event_name: str, data: BaseModel, source: str) -> None:
             try:
-                # data 现在是 ProviderConnectedPayload 或 ProviderDisconnectedPayload
                 dict_data = data.model_dump() if isinstance(data, BaseModel) else {}
-                event_type = self.PROVIDER_EVENT_TYPE_MAP.get(target_event_name, "provider.connected")
+                event_type = self.PROVIDER_EVENT_TYPE_MAP.get(target_event_name, "collector.connected")
                 await self.ws_handler.broadcast(event_type, dict_data)
             except Exception as e:
-                logger.error(f"广播 provider event 失败: {e}")
+                logger.error(f"广播 component event 失败: {e}")
 
         return handler
 

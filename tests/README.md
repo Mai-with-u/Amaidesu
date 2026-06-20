@@ -7,62 +7,84 @@
 ```
 tests/
 ├── architecture/                    # 架构约束测试
-│   ├── test_dependency_direction.py # 依赖方向验证
-│   └── test_event_flow_constraints.py # 事件流约束验证
+│   ├── test_dependency_direction.py
+│   └── test_event_flow_constraints.py
+├── characterization/                 # 表征测试
 ├── modules/                         # 模块层测试（对应 src/modules/）
 │   ├── base/                        # 基类测试
-│   │   ├── test_input_provider.py
-│   │   ├── test_decision_provider.py
-│   │   ├── test_output_provider.py
-│   │   └── test_normalized_message.py
+│   │   ├── test_normalized_message.py
+│   │   └── test_pipeline_stats.py
 │   ├── config/                      # 配置系统测试
-│   │   ├── test_config_service.py
 │   │   ├── test_config_loading.py
-│   │   ├── test_schema_completeness.py
+│   │   ├── test_config_version_management.py
+│   │   ├── test_regression_fixes.py
 │   │   └── schemas/
 │   ├── context/                     # 上下文服务测试
+│   │   └── test_context_service.py
+│   ├── dashboard/                   # Dashboard 测试
+│   │   ├── api/
+│   │   └── overlay/
 │   ├── di/                          # 依赖注入测试
 │   ├── events/                      # 事件系统测试
 │   │   ├── test_event_bus.py
+│   │   ├── test_event_debug.py
 │   │   ├── test_event_registry.py
-│   │   ├── test_event_typed_handler.py
-│   │   └── test_payloads.py
+│   │   └── test_event_typed_handler.py
 │   ├── llm/                         # LLM 服务测试
 │   │   ├── test_llm_manager.py
 │   │   └── backends/
+│   │       └── test_token_usage_manager.py
 │   ├── logging/                     # 日志测试
 │   │   └── test_logger.py
+│   ├── mcp/                         # MCP 服务测试
+│   │   └── test_mcp_server.py
 │   ├── prompts/                     # 提示词测试
 │   │   ├── test_prompt_manager.py
 │   │   └── test_prompt_quality.py
+│   ├── services/                    # 共享服务测试
 │   ├── streaming/                   # 流媒体测试
 │   ├── tts/                         # TTS 服务测试
 │   │   ├── test_audio_device_manager.py
 │   │   └── test_gptsovits_client.py
-│   ├── types/                       # 类型测试
-│   │   └── test_intent.py
-│   ├── test_provider_registry.py    # Provider 注册表测试
-│   └── test_provider_registry_schema.py
-├── domains/                         # 3阶段测试（对应 src/domains/）
+│   └── types/                       # 类型测试
+│       └── test_intent.py
+├── stages/                          # 阶段测试（对应 src/stages/）
 │   ├── input/                       # 输入阶段测试
-│   │   ├── providers/               # InputProvider 测试
-│   │   ├── pipelines/               # Pipeline 测试
+│   │   ├── collectors/              # InputCollector 测试
+│   │   │   └── test_stt_input_collector.py
 │   │   ├── normalization/           # 标准化测试
-│   │   └── shared/                  # 共享组件测试
+│   │   │   └── normalizers/
+│   │   ├── pipelines/               # Pipeline 测试
+│   │   │   ├── test_message_pipeline.py
+│   │   │   ├── test_rate_limit_pipeline.py
+│   │   │   └── test_similar_filter_pipeline.py
+│   │   ├── shared/                  # 共享组件测试
+│   │   │   └── bili_messages/
+│   │   └── test_input_pipeline_manager.py
 │   ├── decision/                    # 决策阶段测试
-│   │   ├── providers/               # DecisionProvider 测试
-│   │   └── test_decision_provider_manager.py
+│   │   └── deciders/                # Decider 测试
 │   └── output/                      # 输出阶段测试
-│       ├── providers/               # OutputProvider 测试
-│       │   ├── avatar/              # Avatar 相关 Provider
-│       │   └── gptsovits/           # TTS Provider
+│       ├── handlers/                # OutputHandler 测试
+│       │   ├── avatar/
+│       │   │   ├── test_base.py
+│       │   │   ├── vrchat/
+│       │   │   ├── vts/
+│       │   │   └── warudo/
+│       │   │       ├── test_mood_manager.py
+│       │   │       ├── test_state_manager.py
+│       │   │       └── test_warudo_handler.py
+│       │   └── gptsovits/
 │       ├── pipelines/               # Output Pipeline 测试
-│       └── test_output_provider_manager.py
+│       │   ├── test_base_pipeline.py
+│       │   ├── test_manager.py
+│       │   ├── test_output_pipeline.py
+│       │   └── test_profanity_filter.py
+│       └── parameters/              # 渲染参数测试
 ├── integration/                     # 集成测试
 ├── mocks/                           # Mock 对象
+│   ├── mock_decision_decider.py
 │   ├── mock_input_provider.py
-│   ├── mock_decision_provider.py
-│   └── mock_output_provider.py
+│   └── mock_output_handler.py
 └── conftest.py                      # pytest 配置和共享 fixtures
 ```
 
@@ -91,22 +113,25 @@ uv run pytest tests/modules/llm/ -v
 ### 运行特定阶段的测试
 ```bash
 # 输入阶段测试
-uv run pytest tests/domains/input/ -v
+uv run pytest tests/stages/input/ -v
 
 # 决策阶段测试
-uv run pytest tests/domains/decision/ -v
+uv run pytest tests/stages/decision/ -v
 
 # 输出阶段测试
-uv run pytest tests/domains/output/ -v
+uv run pytest tests/stages/output/ -v
 ```
 
-### 运行特定 Provider 测试
+### 运行特定 Handler 测试
 ```bash
-# VTS Provider
-uv run pytest tests/domains/output/providers/avatar/vts/ -v
+# VTS Handler
+uv run pytest tests/stages/output/handlers/avatar/vts/ -v
 
-# GPTSoVITS Provider
-uv run pytest tests/domains/output/providers/gptsovits/ -v
+# Warudo Handler
+uv run pytest tests/stages/output/handlers/avatar/warudo/ -v
+
+# VRChat Handler
+uv run pytest tests/stages/output/handlers/avatar/vrchat/ -v
 ```
 
 ### 运行架构约束测试
@@ -121,19 +146,21 @@ uv run pytest tests/ -v -m "not slow"
 
 ## 测试命名规范
 
-- `test_<provider_name>_provider.py` - Provider 测试（如 `test_stt_input_provider.py`）
-- `test_<manager_name>_manager.py` - Manager 测试（如 `test_input_provider_manager.py`）
-- `test_<pipeline_name>_pipeline.py` - Pipeline 测试（如 `test_rate_limit_pipeline.py`）
+- `test_<name>_collector.py` - InputCollector 测试（如 `test_stt_input_collector.py`）
+- `test_<name>_decider.py` - Decider 测试（如 `test_maibot_decider.py`）
+- `test_<name>_handler.py` - OutputHandler 测试（如 `test_vts_handler.py`）
+- `test_<name>_pipeline.py` - Pipeline 测试（如 `test_rate_limit_pipeline.py`）
 - `test_<component>.py` - 核心组件测试（如 `test_event_bus.py`）
+- `test_<manager_name>_manager.py` - Manager 测试
 
 ## 目录结构与源码对应关系
 
 | 源码位置 | 测试位置 | 说明 |
 |---------|---------|------|
 | `src/modules/` | `tests/modules/` | 通用模块（配置、事件、LLM、日志等） |
-| `src/domains/input/` | `tests/domains/input/` | 输入阶段 |
-| `src/domains/decision/` | `tests/domains/decision/` | 决策阶段 |
-| `src/domains/output/` | `tests/domains/output/` | 输出阶段 |
+| `src/stages/input/` | `tests/stages/input/` | 输入阶段 |
+| `src/stages/decision/` | `tests/stages/decision/` | 决策阶段 |
+| `src/stages/output/` | `tests/stages/output/` | 输出阶段 |
 | - | `tests/architecture/` | 架构约束测试 |
 | - | `tests/integration/` | 集成测试 |
 | - | `tests/mocks/` | Mock 对象 |
@@ -160,4 +187,4 @@ xdg-open htmlcov/index.html
 
 - [测试指南](../docs/development/testing-guide.md) - 测试规范和最佳实践
 - [3阶段架构](../docs/architecture/overview.md) - 架构设计详解
-- [Provider 开发](../docs/development/provider-guide.md) - Provider 开发指南
+- [阶段参与者开发](../docs/development/component-guide.md) - Collector/Decider/Handler 开发指南

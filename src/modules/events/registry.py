@@ -16,8 +16,8 @@ from src.modules.events.payloads import (
     OBSSendTextPayload,
     OBSSetSourceVisibilityPayload,
     OBSSwitchScenePayload,
-    ProviderConnectedPayload,
-    ProviderDisconnectedPayload,
+    ConnectedPayload,
+    DisconnectedPayload,
     RemoteStreamRequestImagePayload,
 )
 
@@ -124,8 +124,8 @@ def register_core_events() -> None:
 
     # Decision Domain 事件
     EventRegistry.register_core_event(CoreEvents.DECISION_INTENT_GENERATED, IntentPayload)
-    EventRegistry.register_core_event(CoreEvents.DECISION_PROVIDER_CONNECTED, ProviderConnectedPayload)
-    EventRegistry.register_core_event(CoreEvents.DECISION_PROVIDER_DISCONNECTED, ProviderDisconnectedPayload)
+    EventRegistry.register_core_event(CoreEvents.DECISION_DECIDER_CONNECTED, ConnectedPayload)
+    EventRegistry.register_core_event(CoreEvents.DECISION_DECIDER_DISCONNECTED, DisconnectedPayload)
 
     # Output Domain 事件
     EventRegistry.register_core_event(CoreEvents.OUTPUT_INTENT_READY, IntentPayload)

@@ -31,8 +31,8 @@ from src.modules.logging import get_logger
 from .decision import (
     IntentActionPayload,
     IntentPayload,
-    ProviderConnectedPayload,
-    ProviderDisconnectedPayload,
+    ConnectedPayload,
+    DisconnectedPayload,
 )
 from .input import (
     MessageReadyPayload,
@@ -44,7 +44,7 @@ from .output import (
     OBSSwitchScenePayload,
     RemoteStreamRequestImagePayload,
 )
-from .provider import GenericProviderPayload
+from .connection import ConnectionEventPayload
 
 logger = get_logger("Payloads")
 
@@ -55,13 +55,13 @@ __all__ = [
     # Decision Domain
     "IntentPayload",
     "IntentActionPayload",
-    "ProviderConnectedPayload",
-    "ProviderDisconnectedPayload",
+    "ConnectedPayload",
+    "DisconnectedPayload",
     # Output Domain
     "OBSSendTextPayload",
     "OBSSwitchScenePayload",
     "OBSSetSourceVisibilityPayload",
     "RemoteStreamRequestImagePayload",
-    # Provider (通用)
-    "GenericProviderPayload",
+    # 组件 (通用)
+    "ConnectionEventPayload",
 ]

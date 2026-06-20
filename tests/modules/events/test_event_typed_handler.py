@@ -137,7 +137,7 @@ class TestTypedEventHandler:
                 },
                 "structured_params": {},
             },
-            provider="test_provider",
+            name="test_provider",
         )
         await event_bus.emit(CoreEvents.DECISION_INTENT_GENERATED, payload, source="test")
 

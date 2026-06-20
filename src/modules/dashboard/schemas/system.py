@@ -16,12 +16,12 @@ class EventStats(BaseModel):
     total_subscribers: int = 0
 
 
-class DomainStatus(BaseModel):
-    """域状态"""
+class PhaseStatus(BaseModel):
+    """阶段状态"""
 
     enabled: bool
-    active_providers: int = 0
-    total_providers: int = 0
+    active_components: int = 0
+    total_components: int = 0
     event_stats: Optional[EventStats] = None
 
 
@@ -32,9 +32,9 @@ class SystemStatusResponse(BaseModel):
     uptime_seconds: float
     version: str
     python_version: str
-    input_domain: Optional[DomainStatus] = None
-    decision_domain: Optional[DomainStatus] = None
-    output_domain: Optional[DomainStatus] = None
+    input_phase: Optional[PhaseStatus] = None
+    decision_phase: Optional[PhaseStatus] = None
+    output_phase: Optional[PhaseStatus] = None
 
 
 class SystemStatsResponse(BaseModel):

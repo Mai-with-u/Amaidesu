@@ -44,11 +44,11 @@ def get_layer_from_path(file_path: Path) -> str:
         return "orchestrator"
 
     # Check in order of specificity (more specific paths first)
-    if "/domains/input/" in path_str or "\\domains\\input\\" in path_str:
+    if "/stages/input/" in path_str or "\\stages\\input\\" in path_str:
         return "input"
-    elif "/domains/decision/" in path_str or "\\domains\\decision\\" in path_str:
+    elif "/stages/decision/" in path_str or "\\stages\\decision\\" in path_str:
         return "decision"
-    elif "/domains/output/" in path_str or "\\domains\\output\\" in path_str:
+    elif "/stages/output/" in path_str or "\\stages\\output\\" in path_str:
         return "output"
     elif "/core/" in path_str or "\\core\\" in path_str:
         return "core"
@@ -165,7 +165,7 @@ def get_import_target_layer(module_name: str) -> str:
             return "core"
         elif parts[1] == "services":
             return "services"
-        elif parts[1] == "domains":
+        elif parts[1] == "stages":
             if len(parts) > 2:
                 if parts[2] == "input":
                     return "input"
@@ -191,7 +191,7 @@ def get_all_files_in_layer(layer: str) -> List[Path]:
     elif layer == "services":
         search_path = src_path / "services"
     elif layer in ["input", "decision", "output"]:
-        search_path = src_path / "domains" / layer
+        search_path = src_path / "stages" / layer
     else:
         return []
 

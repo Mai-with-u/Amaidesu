@@ -19,10 +19,10 @@ from src.modules.context import ContextService, ContextServiceConfig
 from src.modules.prompts import get_prompt_manager
 from src.modules.mcp import MCPServerService
 
-from src.domains.decision import DeciderManager
-from src.domains.input.pipelines.manager import InputPipelineManager
-from src.domains.input.manager import InputCollectorManager
-from src.domains.output import OutputHandlerManager
+from src.stages.decision import DeciderManager
+from src.stages.input.pipelines.manager import InputPipelineManager
+from src.stages.input.manager import InputCollectorManager
+from src.stages.output import OutputHandlerManager
 
 logger = get_logger("Main")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -52,7 +52,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def setup_logging_early(args: argparse.Namespace) -> None:
-    """早期日志配置，在导入providers之前调用。
+    """早期日志配置，在导入阶段参与者之前调用。
 
     使用默认的INFO级别，避免DEBUG日志过早输出。
     完整的日志配置会在load_config后再次调用。
@@ -150,15 +150,12 @@ def validate_config(config: Dict[str, Any]) -> None:
     if not config.get("general"):
         errors.append("缺少 [general] 配置段")
 
-    # 检查输入Provider配置（新格式）
     if not config.get("collectors"):
         logger.warning("未检测到 [collectors] 配置，输入Collector功能将被禁用")
 
-    # 检查决策Provider配置（新格式）
     if not config.get("deciders"):
         logger.warning("未检测到 [deciders] 配置，决策Decider功能将被禁用")
 
-    # 检查输出Provider配置（新格式）
     if not config.get("handlers"):
         logger.warning("未检测到 [handlers] 配置，输出Handler功能将被禁用")
 
@@ -188,7 +185,7 @@ def exit_if_config_copied(main_cfg_copied: bool, plugin_cfg_copied: bool, pipeli
     if plugin_cfg_copied or pipeline_cfg_copied:
         logger.warning(box)
         logger.warning("!! 配置文件已更新。                                      !!")
-        logger.warning("!! 请检查并修改 config.toml 中的 Provider 和 Pipeline 配置。  !!")
+        logger.warning("!! 请检查并修改 config.toml 中的 阶段参与者 和 Pipeline 配置。  !!")
         logger.warning("!! 特别是 API 密钥、房间号、设备名称等需要您修改的配置。   !!")
         logger.warning("!! 修改完成后，请重新运行程序。                           !!")
         logger.warning(box)
@@ -207,8 +204,8 @@ def run_update_configs_command() -> None:
     print("配置文件批量更新")
     print("=" * 60)
 
-    # 扫描 Provider 配置
-    version_manager.scan_provider_configs()
+    # 扫描阶段参与者配置
+    version_manager.scan_configs()
 
     # 更新主配置
     needs_update, message = version_manager.check_main_config()
@@ -219,9 +216,9 @@ def run_update_configs_command() -> None:
     else:
         print(f"\n主配置: {message}")
 
-    # 更新 Provider 配置
-    print("\nProvider 配置:")
-    results = version_manager.update_all_provider_configs()
+    # 更新阶段参与者配置
+    print("\n阶段参与者配置:")
+    results = version_manager.update_all_configs()
     for key, updated, message in results:
         status = "[已更新]" if updated else "[跳过]"
         print(f"  {status} {key}: {message}")
@@ -314,25 +311,24 @@ async def create_app_components(
     8. MCPServerService
     """
     # 导入阶段参与者包以触发装饰器注册
-    import src.domains.input.providers  # noqa: F401
-    import src.domains.decision.providers  # noqa: F401
-    import src.domains.output.providers  # noqa: F401
+    import src.stages.input.collectors  # noqa: F401
+    import src.stages.decision.deciders  # noqa: F401
+    import src.stages.output.handlers  # noqa: F401
 
     output_config = config.get("handlers", {})
     decision_config = config.get("deciders", {})
     input_config = config.get("collectors", {})
 
-    # 导入阶段参与者包以触发装饰器注册（替代旧的 ProviderRegistry.discover_and_register_providers）
     # 这些导入必须在创建任何 Manager 之前完成，以确保 @collector/@decider/@handler 装饰器
     # 已经将类注册到对应的 _COLLECTORS/_DECIDERS/_HANDLERS 字典中
-    import src.domains.input.providers  # noqa: F401 — 触发 @collector 注册
-    import src.domains.decision.providers  # noqa: F401 — 触发 @decider 注册
-    import src.domains.output.providers  # noqa: F401 — 触发 @handler 注册
+    import src.stages.input.collectors  # noqa: F401 — 触发 @collector 注册
+    import src.stages.decision.deciders  # noqa: F401 — 触发 @decider 注册
+    import src.stages.output.handlers  # noqa: F401 — 触发 @handler 注册
 
     if output_config:
-        logger.info("检测到输出Provider配置，将启用输出协调器")
+        logger.info("检测到输出Handler配置，将启用输出协调器")
     else:
-        logger.info("未检测到输出Provider配置，输出协调器功能将被禁用")
+        logger.info("未检测到输出Handler配置，输出协调器功能将被禁用")
 
     # 创建 AudioStreamChannel
     from src.modules.streaming.audio_stream_channel import AudioStreamChannel
@@ -360,33 +356,32 @@ async def create_app_components(
     logger.info("初始化事件总线和数据流协调器...")
     event_bus = EventBus()
 
-    # 输入Provider管理器 (Input Domain)
-    input_provider_manager: Optional[InputCollectorManager] = None
+    # 输入Collector管理器 (Input Domain)
+    input_manager: Optional[InputCollectorManager] = None
     if input_config:
         logger.info("初始化输入Collector管理器（Input Domain）...")
         try:
-            input_provider_manager = InputCollectorManager(
+            input_manager = InputCollectorManager(
                 event_bus=event_bus,
                 pipeline_manager=input_pipeline_manager,
             )
             if input_pipeline_manager:
                 logger.info("已注入 InputPipelineManager 到 InputCollectorManager")
 
-            # 加载并启动 Provider
-            await input_provider_manager.setup(input_config, config_service=config_service)
-            await input_provider_manager.start()
+            await input_manager.setup(input_config, config_service=config_service)
+            await input_manager.start()
         except Exception as e:
-            logger.error(f"设置输入Provider管理器失败: {e}", exc_info=True)
-            logger.warning("输入Provider功能不可用，继续启动其他服务")
-            input_provider_manager = None
+            logger.error(f"设置输入Collector管理器失败: {e}", exc_info=True)
+            logger.warning("输入Collector功能不可用，继续启动其他服务")
+            input_manager = None
     else:
-        logger.info("未检测到输入配置，输入Provider功能将被禁用")
+        logger.info("未检测到输入配置，输入Collector功能将被禁用")
 
     # InputCollectorManager 直接订阅事件，无需协调器
     # input_coordinator 已被移除
 
     # 决策域 (Decision Domain)
-    decision_provider_manager: Optional[DeciderManager] = None
+    decision_manager: Optional[DeciderManager] = None
 
     # 初始化 prompt_manager（供 decision 和 output domain 使用）
     prompt_manager = get_prompt_manager()
@@ -394,43 +389,39 @@ async def create_app_components(
     if decision_config:
         logger.info("初始化决策域组件（Decision Domain）...")
         try:
-            decision_provider_manager = DeciderManager(
-                event_bus, llm_service, config_service, context_service, prompt_manager
-            )
+            decision_manager = DeciderManager(event_bus, llm_service, config_service, context_service, prompt_manager)
 
-            # 设置决策Provider（通过 ProviderRegistry 自动创建）
-            # 使用新的配置格式：decision_config 包含 active_provider 和 available_providers
-            await decision_provider_manager.setup(decision_config=decision_config)
-            await decision_provider_manager.start()
-            active_provider = decision_provider_manager.get_current_decider_name()
-            logger.info(f"DeciderManager 已设置并启动（Provider: {active_provider}）")
+            await decision_manager.setup(decision_config=decision_config)
+            await decision_manager.start()
+            active_decider = decision_manager.get_current_decider_name()
+            logger.info(f"DeciderManager 已设置并启动（Decider: {active_decider}）")
         except Exception as e:
             logger.error(f"设置决策域组件失败: {e}", exc_info=True)
             logger.warning("决策域功能不可用，继续启动其他服务")
-            decision_provider_manager = None
+            decision_manager = None
     else:
         logger.info("未检测到决策配置，决策域功能将被禁用")
 
-    # 输出Provider管理器 (Output Domain)
-    logger.info("初始化输出Provider管理器...")
-    output_provider_manager: Optional[OutputHandlerManager] = (
+    # 输出Handler管理器 (Output Domain)
+    logger.info("初始化输出Handler管理器...")
+    output_manager: Optional[OutputHandlerManager] = (
         OutputHandlerManager(event_bus, prompt_manager=prompt_manager) if output_config else None
     )
-    if output_provider_manager:
+    if output_manager:
         try:
-            await output_provider_manager.setup(
+            await output_manager.setup(
                 output_config,
                 config_service=config_service,
                 root_config=config,
                 audio_stream_channel=audio_stream_channel,
                 prompt_manager=prompt_manager,
             )
-            await output_provider_manager.start()
-            logger.info("输出Provider管理器已设置（Output Domain）")
+            await output_manager.start()
+            logger.info("输出Handler管理器已设置（Output Domain）")
         except Exception as e:
-            logger.error(f"设置输出Provider管理器失败: {e}", exc_info=True)
-            logger.warning("输出Provider管理器功能不可用，继续启动其他服务")
-            output_provider_manager = None
+            logger.error(f"设置输出Handler管理器失败: {e}", exc_info=True)
+            logger.warning("输出Handler管理器功能不可用，继续启动其他服务")
+            output_manager = None
 
     # ========================================
     # 初始化 Dashboard Server
@@ -453,9 +444,9 @@ async def create_app_components(
 
             dashboard_server = DashboardServer(
                 event_bus=event_bus,
-                input_manager=input_provider_manager,
-                decision_manager=decision_provider_manager,
-                output_manager=output_provider_manager,
+                input_manager=input_manager,
+                decision_manager=decision_manager,
+                output_manager=output_manager,
                 context_service=context_service,
                 config_service=config_service,
                 dashboard_config=typed_dashboard_config,
@@ -496,10 +487,10 @@ async def create_app_components(
     return (
         context_service,
         event_bus,
-        output_provider_manager,
-        input_provider_manager,
+        output_manager,
+        input_manager,
         llm_service,
-        decision_provider_manager,
+        decision_manager,
         dashboard_server,
         mcp_service,
     )
@@ -550,23 +541,23 @@ def restore_signal_handlers(original_sigint: Optional[Any], original_sigterm: Op
 
 async def run_shutdown(
     context_service: "ContextService",
-    output_provider_manager: Optional[OutputHandlerManager],
-    input_provider_manager: Optional[InputCollectorManager],
+    output_manager: Optional[OutputHandlerManager],
+    input_manager: Optional[InputCollectorManager],
     llm_service: LLMManager,
     event_bus: EventBus,
-    decision_provider_manager: Optional[DeciderManager],
+    decision_manager: Optional[DeciderManager],
     dashboard_server: Optional["DashboardServer"] = None,
     mcp_service: Optional["MCPServerService"] = None,
 ) -> None:
     """按顺序执行关闭与清理。
 
     关闭顺序（关键）：
-    1. 先停止数据生产者（InputProvider）
+    1. 先停止数据生产者（InputCollectorManager）
     2. 组件取消订阅（InputCollectorManager、DeciderManager、OutputHandlerManager）- 在 EventBus.cleanup 之前
        2.1 清理输入域协调器（取消订阅 data.raw）
-       2.2 清理决策Provider管理器（取消订阅 data.message 和 decision.intent）
-       2.3 清理输出Provider管理器（取消订阅 decision.intent）
-       2.4 清理 OutputProvider（必须在 EventBus.cleanup 之前，因为会调用 event_bus.off()）
+       2.2 清理 DeciderManager（取消订阅 data.message 和 decision.intent）
+       2.3 清理 OutputHandlerManager（取消订阅 decision.intent）
+       2.4 清理 OutputHandler（必须在 EventBus.cleanup 之前，因为会调用 event_bus.off()）
     3. 清理 MCP 服务
     4. 清理 Dashboard（停止 WebSocket 连接和服务器）
     5. 等待待处理事件完成（EventBus.cleanup）- 清除所有监听器
@@ -575,49 +566,40 @@ async def run_shutdown(
     关键原则：
     - 所有订阅者的 cleanup() 必须在 EventBus.cleanup() 之前执行
     - 否则 cleanup() 中的 event_bus.off() 会因为监听器已被清除而失败
-    - OutputProvider 的 cleanup() 也会调用 event_bus.off()，因此必须在步骤 2.4 中清理
+    - OutputHandler 的 cleanup() 也会调用 event_bus.off()，因此必须在步骤 2.4 中清理
     """
-    # 1. 先停止输入Provider（数据生产者）
-    if input_provider_manager:
-        logger.info("正在停止输入Provider（数据生产者）...")
+    if input_manager:
+        logger.info("正在停止输入Collector（数据生产者）...")
         try:
-            await input_provider_manager.cleanup()
-            logger.info("输入Provider已停止并清理")
+            await input_manager.cleanup()
+            logger.info("输入Collector已停止并清理")
         except Exception as e:
-            logger.error(f"停止输入Provider时出错: {e}")
+            logger.error(f"停止输入Collector时出错: {e}")
 
-    # 2. 组件取消订阅（必须在 EventBus.cleanup 之前）
-    # 这样组件可以正确地移除它们的监听器
-
-    # 2.1 清理决策Provider管理器（取消订阅 data.message）
-    if decision_provider_manager:
-        logger.info("正在清理决策Provider管理器（取消订阅）...")
+    if decision_manager:
+        logger.info("正在清理 DeciderManager（取消订阅）...")
         try:
-            await decision_provider_manager.cleanup()
-            logger.info("决策Provider管理器清理完成")
+            await decision_manager.cleanup()
+            logger.info("DeciderManager 清理完成")
         except Exception as e:
-            logger.error(f"清理决策Provider管理器时出错: {e}")
+            logger.error(f"清理 DeciderManager 时出错: {e}")
 
-    # 2.2 清理输出Provider管理器（取消订阅 decision.intent）
-    if output_provider_manager:
-        logger.info("正在清理输出Provider管理器（取消订阅）...")
+    if output_manager:
+        logger.info("正在清理 OutputHandlerManager（取消订阅）...")
         try:
-            await output_provider_manager.cleanup()
-            logger.info("输出Provider管理器清理完成")
+            await output_manager.cleanup()
+            logger.info("OutputHandlerManager 清理完成")
         except Exception as e:
-            logger.error(f"清理输出Provider管理器时出错: {e}")
+            logger.error(f"清理 OutputHandlerManager 时出错: {e}")
 
-    # 2.3 清理 OutputProvider（必须在 EventBus.cleanup 之前）
-    #     因为 OutputProvider.cleanup() 会调用 event_bus.off()
-    #     而这需要在 EventBus 清理监听器之前完成
-    if output_provider_manager:
-        logger.info("正在清理 OutputProvider...")
+    if output_manager:
+        logger.info("正在清理 OutputHandler（必须在 EventBus.cleanup 之前）...")
         try:
-            await output_provider_manager.stop()
-            await output_provider_manager.cleanup()
-            logger.info("OutputProvider 已清理")
+            await output_manager.stop()
+            await output_manager.cleanup()
+            logger.info("OutputHandler 已清理")
         except Exception as e:
-            logger.error(f"清理 OutputProvider 失败: {e}")
+            logger.error(f"清理 OutputHandler 失败: {e}")
 
     # 3. 清理 MCP 服务
     if mcp_service:
@@ -694,7 +676,7 @@ async def main() -> None:
             sys.exit(1)
 
     # 2. 早期日志配置（使用默认INFO级别）
-    #    这必须在导入providers之前完成，避免过早的DEBUG日志输出
+    #    这必须在导入阶段参与者之前完成，避免过早的DEBUG日志输出
     setup_logging_early(args)
 
     # 3. 加载配置文件
@@ -715,10 +697,10 @@ async def main() -> None:
     (
         context_service,
         event_bus,
-        output_provider_manager,
-        input_provider_manager,
+        output_manager,
+        input_manager,
         llm_service,
-        decision_provider_manager,
+        decision_manager,
         dashboard_server,
         mcp_service,
     ) = await create_app_components(config, input_pipeline_manager, config_service)
@@ -737,11 +719,11 @@ async def main() -> None:
     restore_signal_handlers(orig_sigint, orig_sigterm)
     await run_shutdown(
         context_service,
-        output_provider_manager,
-        input_provider_manager,
+        output_manager,
+        input_manager,
         llm_service,
         event_bus,
-        decision_provider_manager,
+        decision_manager,
         dashboard_server,
         mcp_service,
     )

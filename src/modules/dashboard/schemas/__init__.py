@@ -46,17 +46,17 @@ from src.modules.dashboard.schemas.message import (
     SessionInfo,
     SessionListResponse,
 )
-from src.modules.dashboard.schemas.provider import (
-    ProviderControlAction,
-    ProviderControlRequest,
-    ProviderControlResponse,
-    ProviderDetail,
-    ProviderDetailResponse,
-    ProviderListResponse,
-    ProviderSummary,
+from src.modules.dashboard.schemas.component import (
+    ComponentControlAction,
+    ComponentControlRequest,
+    ComponentControlResponse,
+    ComponentDetail,
+    ComponentDetailResponse,
+    ComponentListResponse,
+    ComponentSummary,
 )
 from src.modules.dashboard.schemas.system import (
-    DomainStatus,
+    PhaseStatus,
     EventStats,
     HealthResponse,
     SystemStatsResponse,
@@ -66,18 +66,18 @@ from src.modules.dashboard.schemas.system import (
 __all__ = [
     # System
     "EventStats",
-    "DomainStatus",
+    "PhaseStatus",
     "SystemStatusResponse",
     "SystemStatsResponse",
     "HealthResponse",
-    # Provider
-    "ProviderControlAction",
-    "ProviderSummary",
-    "ProviderDetail",
-    "ProviderListResponse",
-    "ProviderDetailResponse",
-    "ProviderControlRequest",
-    "ProviderControlResponse",
+    # 组件
+    "ComponentControlAction",
+    "ComponentSummary",
+    "ComponentDetail",
+    "ComponentListResponse",
+    "ComponentDetailResponse",
+    "ComponentControlRequest",
+    "ComponentControlResponse",
     # Message
     "MessageItem",
     "MessageListResponse",

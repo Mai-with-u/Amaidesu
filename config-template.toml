@@ -69,7 +69,7 @@ platform_id = "amaidesu"
 
 # ========== VTuber 人设配置 ==========
 # 此配置段用于定义 VTuber 的性格和说话风格
-# 被 LocalLLMDecisionProvider 等使用 LLM 的 Provider 引用
+# 被 LocalLLMDecider 等使用 LLM 的 Decider 引用
 [persona]
 # VTuber 名字
 bot_name = "麦麦"
@@ -188,7 +188,7 @@ case_sensitive = false
 # 匹配到敏感词是否丢弃整个消息（默认：false）
 drop_on_match = false
 
-# ========== Collector配置（Input Domain） ==========
+# ========== Collector配置（Input 阶段） ==========
 
 # === 输入Collector ===
 [collectors]
@@ -238,7 +238,7 @@ stt_input_device_name = ""  # 指定麦克风设备，留空使用默认
 user_id = "stt_user"
 user_nickname = "语音"
 
-# ========== Decider配置（Decision Domain） ==========
+# ========== Decider配置（Decision 阶段） ==========
 
 # === 决策Decider ===
 [deciders]
@@ -265,7 +265,7 @@ available = [
 # [deciders.replay]
 # add_default_action = true  # 是否添加默认眨眼动作
 
-# ========== Handler配置（Output Domain） ==========
+# ========== Handler配置（Output 阶段） ==========
 
 # === 输出Handler ===
 [handlers]

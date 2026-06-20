@@ -7,7 +7,7 @@
 - 配置合并策略
 - 数组合并策略
 - 原子写入机制
-- Provider 配置版本管理
+- Collector 配置版本管理
 
 运行: uv run pytest tests/services/config/test_config_version_management.py -v
 
@@ -24,7 +24,7 @@ import tomlkit
 # 模块导入（使用 mock 处理未实现的函数）
 # =============================================================================
 
-from src.modules.config.version_manager import ConfigVersionManager, ProviderConfigInfo
+from src.modules.config.version_manager import ConfigVersionManager, ConfigVersionInfo
 
 # toml_utils 的函数需要实现，这里先 mock 待实现
 try:
@@ -223,8 +223,8 @@ class TestCommentPreservation:
 [general]
 platform_id = "test"
 
-# 这是 providers 节的注释
-[providers.input]
+        # 这是 collectors 节的注释
+[collectors]
 enabled = true
 """
         config_path = Path(temp_base_dir) / "config.toml"
@@ -240,7 +240,7 @@ enabled = true
         # 读取输出内容，检查注释是否存在
         output_content = output_path.read_text(encoding="utf-8")
         assert "# 这是 general 节的注释" in output_content
-        assert "# 这是 providers 节的注释" in output_content
+        assert "# 这是 collectors 节的注释" in output_content
 
     def test_key_comment_preservation(self, temp_base_dir):
         """测试键注释保留"""
@@ -268,8 +268,8 @@ max_connections = 10  # 最大连接数
 [general]
 platform_id = "test"
 
-[providers]
-# Provider 配置
+[collectors]
+# Collector 配置
 enabled = true
 """
         config_path = Path(temp_base_dir) / "config.toml"
@@ -283,7 +283,7 @@ enabled = true
         # 检查各种注释
         output_content = output_path.read_text(encoding="utf-8")
         assert "# 顶部注释" in output_content
-        assert "# Provider 配置" in output_content
+        assert "# Collector 配置" in output_content
 
 
 # =============================================================================
@@ -305,7 +305,7 @@ version = "2.0.0"
 platform_id = "test"
 new_field = "new_value"
 
-[providers.input]
+[collectors]
 enabled = true
 new_option = true
 """
@@ -319,7 +319,7 @@ version = "1.0.0"
 [general]
 platform_id = "test"
 
-[providers.input]
+[collectors]
 enabled = true
 """
         user_config = tomlkit.loads(user_content)
@@ -329,7 +329,7 @@ enabled = true
 
         # 检查新字段已添加
         assert merged["general"]["new_field"] == "new_value"
-        assert merged["providers"]["input"]["new_option"] is True
+        assert merged["collectors"]["new_option"] is True
         # 版本号会保留用户的值（合并逻辑保留用户值）
         assert merged["meta"]["version"] == "1.0.0"
 
@@ -343,7 +343,7 @@ version = "2.0.0"
 platform_id = "test"
 max_connections = 10
 
-[providers.input]
+[collectors]
 enabled = true
 priority = 100
 """
@@ -358,7 +358,7 @@ version = "1.0.0"
 platform_id = "my_platform"
 max_connections = 50
 
-[providers.input]
+[collectors]
 enabled = true
 priority = 200
 """
@@ -370,7 +370,7 @@ priority = 200
         # 检查用户值被保留
         assert merged["general"]["platform_id"] == "my_platform"
         assert merged["general"]["max_connections"] == 50
-        assert merged["providers"]["input"]["priority"] == 200
+        assert merged["collectors"]["priority"] == 200
 
     def test_merge_deleted_keys(self, temp_base_dir):
         """测试删除的键不会重新添加"""
@@ -439,10 +439,10 @@ custom_option = true
 [meta]
 version = "2.0.0"
 
-[providers.input]
+[collectors]
 enabled = true
 
-[providers.input.options]
+[collectors.options]
 retry_count = 3
 timeout = 30
 new_option = "new"
@@ -454,10 +454,10 @@ new_option = "new"
 [meta]
 version = "1.0.0"
 
-[providers.input]
+[collectors]
 enabled = true
 
-[providers.input.options]
+[collectors.options]
 retry_count = 5
 timeout = 60
 """
@@ -467,9 +467,9 @@ timeout = 60
         merged = merge_toml_documents(template, user_config)
 
         # 检查嵌套结构
-        assert merged["providers"]["input"]["options"]["retry_count"] == 5
-        assert merged["providers"]["input"]["options"]["timeout"] == 60
-        assert merged["providers"]["input"]["options"]["new_option"] == "new"
+        assert merged["collectors"]["options"]["retry_count"] == 5
+        assert merged["collectors"]["options"]["timeout"] == 60
+        assert merged["collectors"]["options"]["new_option"] == "new"
 
 
 # =============================================================================
@@ -615,20 +615,18 @@ class TestAtomicWrite:
 
 
 # =============================================================================
-# Provider 配置版本管理测试
+# Collector 配置版本管理测试
 # =============================================================================
 
 
-class TestProviderConfigVersioning:
-    """测试 Provider 配置版本管理"""
+class TestStageConfigVersioning:
+    """测试阶段参与者配置版本管理"""
 
-    def test_provider_config_check(self, temp_base_dir):
-        """测试 Provider 配置检查"""
-        # 创建 Provider 目录结构
-        provider_dir = Path(temp_base_dir) / "src" / "domains" / "input" / "providers" / "test_provider"
-        provider_dir.mkdir(parents=True)
+    def test_stage_config_check(self, temp_base_dir):
+        """测试阶段参与者配置检查"""
+        participant_dir = Path(temp_base_dir) / "src" / "stages" / "input" / "collectors" / "test_participant"
+        participant_dir.mkdir(parents=True)
 
-        # 创建模板文件
         template_content = """
 [meta]
 version = "2.0.0"
@@ -636,9 +634,8 @@ version = "2.0.0"
 [config]
 enabled = true
 """
-        (provider_dir / "config-template.toml").write_text(template_content, encoding="utf-8")
+        (participant_dir / "config-template.toml").write_text(template_content, encoding="utf-8")
 
-        # 创建配置文件（旧版本）
         config_content = """
 [meta]
 version = "1.0.0"
@@ -646,26 +643,22 @@ version = "1.0.0"
 [config]
 enabled = true
 """
-        (provider_dir / "config.toml").write_text(config_content, encoding="utf-8")
+        (participant_dir / "config.toml").write_text(config_content, encoding="utf-8")
 
-        # 创建版本管理器并扫描
         vm = ConfigVersionManager(temp_base_dir)
-        vm.scan_provider_configs()
+        vm.scan_configs()
 
-        # 检查配置
-        needs_update, message = vm.check_provider_config("input", "test_provider")
+        needs_update, message = vm.check_config("input", "test_participant")
 
         assert needs_update is True
         assert "1.0.0 -> 2.0.0" in message
 
-    def test_provider_config_lazy_check(self, temp_base_dir):
+    def test_stage_config_lazy_check(self, temp_base_dir):
         """测试懒检查机制（未扫描时自动注册）"""
-        # 创建 Provider 目录结构
-        provider_dir = Path(temp_base_dir) / "src" / "domains" / "input" / "providers" / "lazy_provider"
-        provider_dir.mkdir(parents=True)
+        participant_dir = Path(temp_base_dir) / "src" / "stages" / "input" / "collectors" / "lazy_participant"
+        participant_dir.mkdir(parents=True)
 
-        # 创建模板和配置
-        (provider_dir / "config-template.toml").write_text(
+        (participant_dir / "config-template.toml").write_text(
             """
 [meta]
 version = "1.0.0"
@@ -676,7 +669,7 @@ enabled = true
             encoding="utf-8",
         )
 
-        (provider_dir / "config.toml").write_text(
+        (participant_dir / "config.toml").write_text(
             """
 [meta]
 version = "1.0.0"
@@ -687,24 +680,19 @@ enabled = true
             encoding="utf-8",
         )
 
-        # 创建版本管理器（不扫描）
         vm = ConfigVersionManager(temp_base_dir)
 
-        # 直接检查未扫描的 Provider
-        needs_update, message = vm.check_provider_config("input", "lazy_provider")
+        needs_update, message = vm.check_config("input", "lazy_participant")
 
-        # 应该自动注册并检查
-        assert needs_update is False  # 版本相同
+        assert needs_update is False
         assert "latest" in message.lower() or "最新" in message
 
-    def test_provider_without_template(self, temp_base_dir):
-        """测试无模板 Provider"""
-        # 创建 Provider 目录结构（无模板文件）
-        provider_dir = Path(temp_base_dir) / "src" / "domains" / "output" / "providers" / "no_template"
-        provider_dir.mkdir(parents=True)
+    def test_stage_without_template(self, temp_base_dir):
+        """测试无模板阶段参与者"""
+        participant_dir = Path(temp_base_dir) / "src" / "stages" / "output" / "handlers" / "no_template"
+        participant_dir.mkdir(parents=True)
 
-        # 只创建配置文件
-        (provider_dir / "config.toml").write_text(
+        (participant_dir / "config.toml").write_text(
             """
 [config]
 enabled = true
@@ -712,24 +700,20 @@ enabled = true
             encoding="utf-8",
         )
 
-        # 创建版本管理器并扫描
         vm = ConfigVersionManager(temp_base_dir)
-        vm.scan_provider_configs()
+        vm.scan_configs()
 
-        # 检查配置
-        needs_update, message = vm.check_provider_config("output", "no_template")
+        needs_update, message = vm.check_config("output", "no_template")
 
         assert needs_update is False
         assert "无版本管理" in message
 
-    def test_update_provider_config(self, temp_base_dir):
-        """测试更新 Provider 配置"""
-        # 创建 Provider 目录结构
-        provider_dir = Path(temp_base_dir) / "src" / "domains" / "decision" / "providers" / "update_provider"
-        provider_dir.mkdir(parents=True)
+    def test_update_config(self, temp_base_dir):
+        """测试更新阶段参与者配置"""
+        participant_dir = Path(temp_base_dir) / "src" / "stages" / "decision" / "deciders" / "update_participant"
+        participant_dir.mkdir(parents=True)
 
-        # 创建模板
-        (provider_dir / "config-template.toml").write_text(
+        (participant_dir / "config-template.toml").write_text(
             """
 [meta]
 version = "2.0.0"
@@ -742,8 +726,7 @@ temperature = 0.7
             encoding="utf-8",
         )
 
-        # 创建旧配置
-        (provider_dir / "config.toml").write_text(
+        (participant_dir / "config.toml").write_text(
             """
 [meta]
 version = "1.0.0"
@@ -756,22 +739,16 @@ temperature = 0.5
             encoding="utf-8",
         )
 
-        # 创建版本管理器并扫描
         vm = ConfigVersionManager(temp_base_dir)
-        vm.scan_provider_configs()
+        vm.scan_configs()
 
-        # 更新配置
-        updated, message = vm.update_provider_config("decision", "update_provider")
+        updated, message = vm.update_config("decision", "update_participant")
 
         assert updated is True
-        # 注意：由于合并逻辑是保留用户值，版本号会保持用户的版本
         assert "1.0.0" in message
 
-        # 验证文件内容
-        config_content = (provider_dir / "config.toml").read_text(encoding="utf-8")
-        # 用户的版本号被保留
+        config_content = (participant_dir / "config.toml").read_text(encoding="utf-8")
         assert 'version = "1.0.0"' in config_content
-        # 用户自定义值应该被保留
         assert "temperature = 0.5" in config_content
 
 
@@ -845,7 +822,7 @@ version = "2.0.0"
 platform_id = "test"
 new_field = "new_value"
 
-[providers.input]
+[collectors]
 enabled = true
 priority = 100
 """
@@ -860,7 +837,7 @@ version = "1.0.0"
 [general]
 platform_id = "my_platform"
 
-[providers.input]
+[collectors]
 enabled = true
 priority = 200
 custom_field = "keep_this"
@@ -885,32 +862,31 @@ custom_field = "keep_this"
         assert updated_config["meta"]["version"] == "1.0.0"
         assert updated_config["general"]["platform_id"] == "my_platform"  # 用户值保留
         assert updated_config["general"]["new_field"] == "new_value"  # 新字段添加
-        assert updated_config["providers"]["input"]["priority"] == 200  # 用户值保留
-        assert updated_config["providers"]["input"]["custom_field"] == "keep_this"  # 自定义字段保留
+        assert updated_config["collectors"]["priority"] == 200  # 用户值保留
+        assert updated_config["collectors"]["custom_field"] == "keep_this"  # 自定义字段保留
 
         # 7. 验证备份创建
         backup_path = Path(temp_base_dir) / "config.toml.backup"
         assert backup_path.exists()
 
     def test_version_info_dataclass(self):
-        """测试 ProviderConfigInfo 数据类"""
-        info = ProviderConfigInfo(
-            domain="input",
-            provider_name="test_provider",
+        """测试 ConfigVersionInfo 数据类"""
+        info = ConfigVersionInfo(
+            stage="input",
+            name="test_participant",
             config_path="/path/to/config.toml",
             template_path="/path/to/template.toml",
             current_version="1.0.0",
         )
 
-        assert info.domain == "input"
-        assert info.provider_name == "test_provider"
+        assert info.stage == "input"
+        assert info.name == "test_participant"
         assert info.config_path == "/path/to/config.toml"
         assert info.template_path == "/path/to/template.toml"
         assert info.current_version == "1.0.0"
 
-        # 测试无模板的情况
-        info_no_template = ProviderConfigInfo(
-            domain="output", provider_name="no_template", config_path="/path/to/config.toml", template_path=None
+        info_no_template = ConfigVersionInfo(
+            stage="output", name="no_template", config_path="/path/to/config.toml", template_path=None
         )
 
         assert info_no_template.template_path is None
@@ -922,7 +898,7 @@ custom_field = "keep_this"
 # - TestMergeLogic: 5 个测试（配置合并逻辑）
 # - TestArrayMerge: 3 个测试（数组合并策略）
 # - TestAtomicWrite: 2 个测试（原子写入机制）
-# - TestProviderConfigVersioning: 4 个测试（Provider 配置版本管理）
+# - TestStageConfigVersioning: 4 个测试（阶段参与者配置版本管理）
 # - TestUtilityFunctions: 5 个测试（辅助函数）
 # - TestIntegration: 2 个测试（集成测试）
 #

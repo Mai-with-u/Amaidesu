@@ -16,8 +16,8 @@ from src.modules.events.payloads import (
     IntentActionPayload,
     IntentPayload,
     MessageReadyPayload,
-    ProviderConnectedPayload,
-    ProviderDisconnectedPayload,
+    ConnectedPayload,
+    DisconnectedPayload,
     RawDataPayload,
 )
 from src.modules.events.payloads.base import BasePayload
@@ -198,32 +198,32 @@ class TestDecisionPayloads:
             speech="你好！很高兴见到你~",
             context="测试上下文",
         )
-        payload = IntentPayload.from_intent(intent, provider="maicore")
+        payload = IntentPayload.from_intent(intent, name="maicore")
         debug_str = str(payload)
 
         # IntentPayload 有自定义的 __str__ 方法
         assert "IntentPayload" in debug_str
-        assert 'provider="maicore"' in debug_str
+        assert 'name="maicore"' in debug_str
         assert 'speech="你好！很高兴见到你~"' in debug_str
         assert 'emotion="happy"' in debug_str
         assert 'action="blink"' in debug_str
 
     def test_provider_connected_payload_debug_string(self):
-        """测试 ProviderConnectedPayload 的字符串表示"""
-        payload = ProviderConnectedPayload(provider="maicore", endpoint="ws://localhost:8000/ws")
+        """测试 ConnectedPayload 的字符串表示"""
+        payload = ConnectedPayload(name="maicore", endpoint="ws://localhost:8000/ws")
         debug_str = str(payload)
 
-        assert "ProviderConnectedPayload" in debug_str
-        assert 'provider="maicore"' in debug_str
+        assert "ConnectedPayload" in debug_str
+        assert 'name="maicore"' in debug_str
         assert 'endpoint="ws://localhost:8000/ws"' in debug_str
 
     def test_provider_disconnected_payload_debug_string(self):
-        """测试 ProviderDisconnectedPayload 的字符串表示"""
-        payload = ProviderDisconnectedPayload(provider="maicore", reason="connection_lost", will_retry=True)
+        """测试 DisconnectedPayload 的字符串表示"""
+        payload = DisconnectedPayload(name="maicore", reason="connection_lost", will_retry=True)
         debug_str = str(payload)
 
-        assert "ProviderDisconnectedPayload" in debug_str
-        assert 'provider="maicore"' in debug_str
+        assert "DisconnectedPayload" in debug_str
+        assert 'name="maicore"' in debug_str
         assert 'reason="connection_lost"' in debug_str
         assert "will_retry=True" in debug_str
 
@@ -417,7 +417,7 @@ class TestEventBusDebugLog:
                 action="blink",
                 speech="你好！很高兴见到你~",
             )
-            payload = IntentPayload.from_intent(intent, provider="maicore")
+            payload = IntentPayload.from_intent(intent, name="maicore")
 
             await event_bus.emit("test.complex", payload, source="test")
 

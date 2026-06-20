@@ -1,10 +1,10 @@
 """
-事件名称常量定义（3域架构）
+事件名称常量定义（3阶段架构）
 
 使用常量替代魔法字符串，提供 IDE 自动补全和重构支持。
 
 命名规范:
-- 格式: {domain}.{component}.{action}
+- 格式: {phase}.{component}.{action}
 - 分隔符: 统一使用点号 (.)
 - 常量命名: 全大写 + 下划线
 
@@ -13,7 +13,7 @@
 
 
 class CoreEvents:
-    """核心事件名称常量（3域架构）"""
+    """核心事件名称常量（3阶段架构）"""
 
     # ========== Core: 核心系统事件 ==========
     # 核心启动/关闭事件
@@ -21,29 +21,29 @@ class CoreEvents:
     CORE_SHUTDOWN = "core.shutdown"
     CORE_ERROR = "core.error"
 
-    # ========== Input Domain: 输入域 ==========
-    # 标准化消息就绪事件（由 Input Domain 发布，Decision Domain 订阅）
+    # ========== Input 阶段: 输入阶段 ==========
+    # 标准化消息就绪事件（由 Input 阶段发布，Decision 阶段订阅）
     INPUT_MESSAGE_READY = "input.message.ready"
 
-    # Provider 连接状态事件
-    INPUT_PROVIDER_CONNECTED = "input.provider.connected"
-    INPUT_PROVIDER_DISCONNECTED = "input.provider.disconnected"
+    # 组件 连接状态事件
+    INPUT_COLLECTOR_CONNECTED = "input.collector.connected"
+    INPUT_COLLECTOR_DISCONNECTED = "input.collector.disconnected"
 
-    # ========== Decision Domain: 决策域 ==========
-    # 意图生成完成事件（由 Decision Domain 发布，Output Domain 订阅）
+    # ========== Decision 阶段: 决策阶段 ==========
+    # 意图生成完成事件（由 Decision 阶段发布，Output 阶段订阅）
     DECISION_INTENT_GENERATED = "decision.intent.generated"
 
-    # Provider 连接状态事件
-    DECISION_PROVIDER_CONNECTED = "decision.provider.connected"
-    DECISION_PROVIDER_DISCONNECTED = "decision.provider.disconnected"
+    # 组件 连接状态事件
+    DECISION_DECIDER_CONNECTED = "decision.decider.connected"
+    DECISION_DECIDER_DISCONNECTED = "decision.decider.disconnected"
 
-    # ========== Output Domain: 输出域 ==========
-    # 过滤后意图就绪事件（由 OutputProviderManager 发布，OutputProviders 订阅）
+    # ========== Output 阶段: 输出阶段 ==========
+    # 过滤后意图就绪事件（由 OutputHandlerManager 发布，OutputHandlers 订阅）
     OUTPUT_INTENT_READY = "output.intent.ready"
 
-    # Provider 连接状态事件
-    OUTPUT_PROVIDER_CONNECTED = "output.provider.connected"
-    OUTPUT_PROVIDER_DISCONNECTED = "output.provider.disconnected"
+    # 组件 连接状态事件
+    OUTPUT_HANDLER_CONNECTED = "output.handler.connected"
+    OUTPUT_HANDLER_DISCONNECTED = "output.handler.disconnected"
 
     # OBS 控制事件
     OUTPUT_OBS_SEND_TEXT = "output.obs.send_text"

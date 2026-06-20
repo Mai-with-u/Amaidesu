@@ -1,7 +1,7 @@
 """
 标准化消息类型
 
-所有 Provider 产出的统一消息格式。
+所有组件 产出的统一消息格式。
 """
 
 from typing import Any, Optional
@@ -20,7 +20,7 @@ class NormalizedMessage(BaseModel):
     """
     标准化消息
 
-    所有 Provider 产出的统一消息格式，包含文本描述、数据类型、重要性和原始消息。
+    所有组件 产出的统一消息格式，包含文本描述、数据类型、重要性和原始消息。
 
     Attributes:
         text: 用于 LLM 处理的文本描述

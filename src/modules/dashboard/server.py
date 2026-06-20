@@ -30,9 +30,9 @@ except ImportError:
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
-    from src.domains.decision.provider_manager import DecisionProviderManager
-    from src.domains.input.provider_manager import InputCollectorManager
-    from src.domains.output.provider_manager import OutputProviderManager
+    from src.stages.decision.manager import DeciderManager
+    from src.stages.input.manager import InputCollectorManager
+    from src.stages.output.manager import OutputHandlerManager
     from src.modules.config.service import ConfigService
     from src.modules.context.service import ContextService
     from src.modules.events.event_bus import EventBus
@@ -48,8 +48,8 @@ class DashboardServer:
         self,
         event_bus: "EventBus",
         input_manager: Optional["InputCollectorManager"],
-        decision_manager: Optional["DecisionProviderManager"],
-        output_manager: Optional["OutputProviderManager"],
+        decision_manager: Optional["DeciderManager"],
+        output_manager: Optional["OutputHandlerManager"],
         context_service: "ContextService",
         config_service: "ConfigService",
         dashboard_config: DashboardConfig,

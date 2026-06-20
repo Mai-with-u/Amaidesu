@@ -50,7 +50,7 @@ async def handle_maibot_action(
             ),
         )
 
-        payload = IntentPayload.from_intent(intent, provider="maibot_api")
+        payload = IntentPayload.from_intent(intent, name="maibot_api")
 
         await event_bus.emit(
             CoreEvents.DECISION_INTENT_GENERATED,

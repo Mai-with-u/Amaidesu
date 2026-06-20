@@ -2,7 +2,7 @@
 TODO: 此模板当前未被使用
 
 预期用途: 消息摘要生成，用于处理长文本或批量消息
-集成位置: 可能用于 Input Domain 的预处理 Pipeline 或 Decision Provider
+集成位置: 可能用于 Input Domain 的预处理 Pipeline 或 Decision Decider
 集成方式: 当输入消息过长或需要批量处理时，调用此模板生成摘要
 
 预期变量:

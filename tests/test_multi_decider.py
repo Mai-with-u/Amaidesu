@@ -13,8 +13,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from typing import Any, Dict, List
 
 # 导入 providers 模块以触发 @decider 装饰器注册
-from src.domains.decision import providers as decision_providers  # noqa: F401
-from src.domains.decision.manager import DeciderManager, SPEECH_DECIDERS
+from src.stages.decision import deciders  # noqa: F401
+from src.stages.decision.manager import DeciderManager, SPEECH_DECIDERS
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.input import MessageReadyPayload
 from src.modules.types.base.normalized_message import NormalizedMessage
@@ -83,9 +83,7 @@ class TestMultiDeciderConfigLoading:
         manager = DeciderManager(event_bus=mock_event_bus)
 
         decision_config = {
-            "deciders": {
-                "enabled": ["maibot", "llm"]
-            }
+            "enabled": ["maibot", "llm"]
         }
 
         await manager.setup(decision_config=decision_config)
@@ -106,9 +104,7 @@ class TestMultiDeciderConfigLoading:
         manager = DeciderManager(event_bus=mock_event_bus)
 
         decision_config = {
-            "deciders": {
-                "enabled": ["maibot", "llm"]
-            }
+            "enabled": ["maibot", "llm"]
         }
 
         # decider_name 优先于配置，只加载指定的 Decider
@@ -125,9 +121,7 @@ class TestMultiDeciderConfigLoading:
         manager = DeciderManager(event_bus=mock_event_bus)
 
         decision_config = {
-            "deciders": {
-                "enabled": ["maibot", "llm"]
-            },
+            "enabled": ["maibot", "llm"],
             "maibot": {
                 "host": "localhost",
                 "port": 8000
@@ -225,9 +219,7 @@ class TestMultiDeciderLifecycle:
 
         # 只测试 maibot，因为它有简单的 setup 不需要 LLM
         decision_config = {
-            "deciders": {
-                "enabled": ["maibot"]
-            }
+            "enabled": ["maibot"]
         }
 
         await manager.setup(decision_config=decision_config)
@@ -243,13 +235,14 @@ class TestMultiDeciderLifecycle:
         manager = DeciderManager(event_bus=mock_event_bus)
 
         decision_config = {
-            "deciders": {
-                "enabled": ["maibot"]
-            }
+            "enabled": ["maibot"]
         }
 
         await manager.setup(decision_config=decision_config)
         await manager.start()
+        # 用 mock 替换真实 decider 避免 cleanup 时连 WebSocket
+        for name in manager._deciders:
+            manager._deciders[name] = create_mock_decider(name)
         await manager.stop()
 
         # 验证 Decider 已停止
@@ -262,9 +255,7 @@ class TestMultiDeciderLifecycle:
         manager = DeciderManager(event_bus=mock_event_bus)
 
         decision_config = {
-            "deciders": {
-                "enabled": ["maibot", "llm"]
-            }
+            "enabled": ["maibot", "llm"]
         }
 
         await manager.setup(decision_config=decision_config)
@@ -285,9 +276,7 @@ class TestMultiDeciderDecision:
         manager = DeciderManager(event_bus=mock_event_bus)
 
         decision_config = {
-            "deciders": {
-                "enabled": ["maibot", "llm"]
-            }
+            "enabled": ["maibot", "llm"]
         }
 
         await manager.setup(decision_config=decision_config)
@@ -333,9 +322,7 @@ class TestBackwardCompatibility:
         manager = DeciderManager(event_bus=mock_event_bus)
 
         decision_config = {
-            "deciders": {
-                "enabled": ["maibot", "llm"]
-            }
+            "enabled": ["maibot", "llm"]
         }
 
         await manager.setup(decision_config=decision_config)
@@ -343,7 +330,7 @@ class TestBackwardCompatibility:
         # get_current_decider 应该返回某个 Decider
         current = manager.get_current_decider()
         assert current is not None
-        assert current.provider_name in ["maibot", "llm"]
+        assert current.name in ["maibot", "llm"]
 
     @pytest.mark.asyncio
     async def test_switch_provider_with_existing_decider(self):
@@ -352,15 +339,13 @@ class TestBackwardCompatibility:
         manager = DeciderManager(event_bus=mock_event_bus)
 
         decision_config = {
-            "deciders": {
-                "enabled": ["maibot", "llm"]
-            }
+            "enabled": ["maibot", "llm"]
         }
 
         await manager.setup(decision_config=decision_config)
 
         # 切换到 llm
-        await manager.switch_provider("llm", decision_config)
+        await manager.switch_decider("llm", {})
 
         assert manager.get_current_decider_name() == "llm"
 
@@ -371,9 +356,7 @@ class TestBackwardCompatibility:
         manager = DeciderManager(event_bus=mock_event_bus)
 
         decision_config = {
-            "deciders": {
-                "enabled": ["maibot", "llm"]
-            }
+            "enabled": ["maibot", "llm"]
         }
 
         await manager.setup(decision_config=decision_config)
@@ -392,9 +375,7 @@ class TestBackwardCompatibility:
 
         # 只使用 maibot 和 llm，不包含 maicraft 因为它的签名不同
         decision_config = {
-            "deciders": {
-                "enabled": ["maibot", "llm"]
-            }
+            "enabled": ["maibot", "llm"]
         }
 
         await manager.setup(decision_config=decision_config)
@@ -427,9 +408,7 @@ class TestEventSubscription:
         manager = DeciderManager(event_bus=mock_event_bus)
 
         decision_config = {
-            "deciders": {
-                "enabled": ["maibot", "llm"]
-            }
+            "enabled": ["maibot", "llm"]
         }
 
         await manager.setup(decision_config=decision_config)
@@ -449,13 +428,14 @@ class TestEventSubscription:
         manager = DeciderManager(event_bus=mock_event_bus)
 
         decision_config = {
-            "deciders": {
-                "enabled": ["maibot"]
-            }
+            "enabled": ["maibot"]
         }
 
         await manager.setup(decision_config=decision_config)
         await manager.start()
+        # 用 mock 替换真实 decider 避免 cleanup 时连 WebSocket
+        for name in manager._deciders:
+            manager._deciders[name] = create_mock_decider(name)
         await manager.stop()
 
         # 验证 event_bus.off 被调用
@@ -487,9 +467,7 @@ class TestEdgeCases:
         manager = DeciderManager(event_bus=mock_event_bus)
 
         decision_config = {
-            "deciders": {
-                "enabled": ["maibot", "llm"]
-            }
+            "enabled": ["maibot", "llm"]
         }
 
         await manager.setup(decision_config=decision_config)
@@ -513,9 +491,7 @@ class TestEdgeCases:
         manager = DeciderManager(event_bus=mock_event_bus)
 
         decision_config = {
-            "deciders": {
-                "enabled": []
-            }
+            "enabled": []
         }
 
         await manager.setup(decision_config=decision_config)

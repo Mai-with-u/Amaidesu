@@ -60,7 +60,7 @@ class Intent(BaseModel):
     metadata: IntentMetadata = Field(..., description="意图元数据")
     structured_params: Dict[str, Dict[str, Any]] = Field(
         default_factory=dict,
-        description="结构化参数，按 provider 名称组织。特殊 key 'common' 用于共享参数（如 emotion、action 的英文版本）",
+        description="结构化参数，按组件名称组织。特殊 key 'common' 用于共享参数（如 emotion、action 的英文版本）",
     )
 
 

@@ -9,19 +9,19 @@ import pytest
 from typing import Type
 
 # 导入被测试的模块
-from src.domains.input.registry import (
+from src.stages.input.registry import (
     collector,
     _COLLECTORS,
     get_collector,
     list_collectors,
 )
-from src.domains.decision.registry import (
+from src.stages.decision.registry import (
     decider,
     _DECIDERS,
     get_decider,
     list_deciders,
 )
-from src.domains.output.registry import (
+from src.stages.output.registry import (
     handler,
     _HANDLERS,
     get_handler,

@@ -1,6 +1,6 @@
 """Provider配置基类定义
 
-定义所有Provider配置的抽象基类。
+定义所有Provider配置的基类。
 """
 
 from pathlib import Path
@@ -9,10 +9,10 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
-class BaseProviderConfig(BaseModel):
+class BaseConfig(BaseModel):
     """Provider配置基类
 
-    所有Provider配置的抽象基类，定义通用字段和验证逻辑。
+    所有Provider配置的基类，定义通用字段和验证逻辑。
 
     注意：
     - 此基类不包含'enabled'字段，该字段由Manager统一管理
@@ -27,7 +27,7 @@ class BaseProviderConfig(BaseModel):
     def generate_toml(
         cls,
         output_path: str | Path,
-        provider_name: str | None = None,
+        name: str | None = None,
         include_comments: bool = True,
     ) -> None:
         """从Schema生成TOML配置文件
@@ -37,16 +37,16 @@ class BaseProviderConfig(BaseModel):
 
         Args:
             output_path: 输出文件路径
-            provider_name: Provider名称（用于生成TOML中的表名），默认为类名的小写形式
+            name: Provider名称（用于生成TOML中的表名），默认为类名的小写形式
             include_comments: 是否包含字段注释（从Field description生成）
 
         Example:
-            >>> ConsoleInputProviderConfig.generate_toml("config.toml", "console_input")
+            >>> ConsoleInputConfig.generate_toml("config.toml", "console_input")
         """
         output_path = Path(output_path)
 
         # 确定表名
-        table_name = provider_name if provider_name else cls.__name__.lower()
+        table_name = name if name else cls.__name__.lower()
 
         # 创建Schema实例获取默认值
         schema_instance = cls()

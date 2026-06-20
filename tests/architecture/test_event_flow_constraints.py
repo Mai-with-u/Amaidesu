@@ -16,8 +16,8 @@ INPUT_EVENTS = {
 
 DECISION_EVENTS = {
     "DECISION_INTENT_GENERATED",
-    "DECISION_PROVIDER_CONNECTED",
-    "DECISION_PROVIDER_DISCONNECTED",
+    "DECISION_DECIDER_CONNECTED",
+    "DECISION_DECIDER_DISCONNECTED",
 }
 
 OUTPUT_EVENTS = {
@@ -109,11 +109,11 @@ def get_domain_from_path(file_path: Path) -> str:
     """
     path_str = str(file_path)
 
-    if "/domains/input/" in path_str or "\\domains\\input\\" in path_str:
+    if "/stages/input/" in path_str or "\\stages\\input\\" in path_str:
         return "input"
-    elif "/domains/decision/" in path_str or "\\domains\\decision\\" in path_str:
+    elif "/stages/decision/" in path_str or "\\stages\\decision\\" in path_str:
         return "decision"
-    elif "/domains/output/" in path_str or "\\domains\\output\\" in path_str:
+    elif "/stages/output/" in path_str or "\\stages\\output\\" in path_str:
         return "output"
     else:
         return "unknown"
@@ -122,7 +122,7 @@ def get_domain_from_path(file_path: Path) -> str:
 def get_all_subscriptions_in_domain(domain: str) -> List[Dict]:
     """Get all event subscriptions in a specific domain."""
     project_root = get_project_root()
-    domain_path = project_root / "src" / "domains" / domain
+    domain_path = project_root / "src" / "stages" / domain
 
     if not domain_path.exists():
         return []
