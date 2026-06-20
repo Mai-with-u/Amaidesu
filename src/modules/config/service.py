@@ -12,8 +12,6 @@ ConfigService - 统一的配置管理服务
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 
-from src.modules.config.config_utils import initialize_configurations, load_config
-from src.modules.config.version_manager import ConfigVersionManager
 from src.modules.logging import get_logger
 
 # 阶段 → 主配置节名映射
@@ -39,7 +37,7 @@ class ConfigService:
 
     使用示例:
         config_service = ConfigService(base_dir="/path/to/project")
-        config, main_copied, plugin_copied, pipeline_copied, config_updated = await config_service.initialize()
+        config, was_created = config_service.initialize()
 
         general_config = config_service.get_section("general")
         input_config = config_service.get_config_with_defaults("console", "input")
@@ -50,11 +48,8 @@ class ConfigService:
         self.base_dir = base_dir
         self._main_config: Dict[str, Any] = {}
         self._main_config_copied = False
-        self._plugin_configs_copied = False
-        self._pipeline_configs_copied = False
         self._initialized = False
         self.logger = get_logger("ConfigService")
-        self.version_manager = ConfigVersionManager(base_dir)
         self.logger.debug("ConfigService 初始化完成")
 
     @property
@@ -130,88 +125,34 @@ class ConfigService:
 
         return True, was_created
 
-    def initialize(self) -> tuple[Dict[str, Any], bool, bool, bool, bool]:
+    def initialize(self) -> tuple[Dict[str, Any], bool]:
         """
-        初始化所有配置文件
+        初始化配置（多文件模式）。
 
-        执行以下步骤:
-        1. 检查并设置主配置文件
-        2. 加载主配置
-        3. 检查并设置插件配置文件
-        4. 检查并设置管道配置文件
-        5. 检查并更新配置版本
+        自动检测 config/ 目录：
+        1. 已存在 → 直接加载
+        2. 不存在 + 旧 config.toml 存在 → 迁移到 config/
+        3. 不存在 + 无旧 config.toml → 从 Schema 生成默认配置
 
         Returns:
-            (main_config, main_config_copied, plugin_configs_copied,
-             pipeline_configs_copied, main_config_updated)
+            (main_config, was_created) — was_created 表示本次执行了生成或迁移
         """
         if self._initialized:
             self.logger.warning("ConfigService 已经初始化，跳过重复初始化")
-            return (
-                self._main_config,
-                self._main_config_copied,
-                self._plugin_configs_copied,
-                self._pipeline_configs_copied,
-                False,
-            )
+            return self._main_config, False
 
         self.logger.info("开始初始化配置服务...")
 
-        # 优先尝试多文件配置模式（config/ 目录）— 自动生成/迁移
         success, was_created = self._try_multi_file_init()
-        if success:
-            self._initialized = True
-            self._main_config_copied = was_created
-            self.logger.info("配置服务初始化完成（多文件模式）")
-            return (
-                self._main_config,
-                self._main_config_copied,
-                self._plugin_configs_copied,
-                self._pipeline_configs_copied,
-                False,
+        if not success:
+            raise RuntimeError(
+                "配置初始化失败：无法加载 config/ 目录下的配置文件。请检查配置文件格式或删除 config/ 目录重新生成。"
             )
 
-        # 回退到旧模式（单文件 config.toml）
-        self.logger.info("多文件模式不可用，回退到旧模式...")
-
-        (
-            self._main_config,
-            self._main_config_copied,
-            self._plugin_configs_copied,
-            self._pipeline_configs_copied,
-        ) = initialize_configurations(
-            base_dir=self.base_dir,
-            main_cfg_name="config.toml",
-            main_template_name="config-template.toml",
-            plugin_dir_name="src/stages",
-            pipeline_dir_name="src/stages/input/pipelines",
-        )
-
-        main_config_updated = False
-        if not self._main_config_copied and self.version_manager is not None:
-            needs_update, message = self.version_manager.check_main_config()
-
-            if needs_update:
-                self.logger.info(f"配置文件需要更新: {message}")
-                updated, message = self.version_manager.update_main_config()
-
-                if updated:
-                    self.logger.info(f"配置文件已更新: {message}")
-                    self._main_config = load_config("config.toml", self.base_dir)
-                    main_config_updated = True
-                else:
-                    self.logger.warning(f"配置文件更新失败: {message}")
-
         self._initialized = True
+        self._main_config_copied = was_created
         self.logger.info("配置服务初始化完成")
-
-        return (
-            self._main_config,
-            self._main_config_copied,
-            self._plugin_configs_copied,
-            self._pipeline_configs_copied,
-            main_config_updated,
-        )
+        return self._main_config, was_created
 
     def get_section(self, section: str, default: Any = None) -> Dict[str, Any]:
         """

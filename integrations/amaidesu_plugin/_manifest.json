@@ -23,7 +23,6 @@
   },
   "capabilities": [
     "send.text",
-    "send.amaidesu_react",
     "config.get"
   ],
   "i18n": {

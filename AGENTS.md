@@ -277,7 +277,7 @@ async def handle_message(self, message):
 | 类型 | 命名风格 | 示例 |
 |------|---------|------|
 | 类名 | PascalCase | `EventBus`, `InputCollector`, `InputPipeline` |
-| 函数/方法名 | snake_case | `send_to_maicore`, `register_websocket_handler` |
+| 函数/方法名 | snake_case | `send_to_maibot`, `register_websocket_handler` |
 | 变量名 | snake_case | `handler_config`, `event_bus` |
 | 私有成员 | 前导下划线 | `_message_handlers`, `_is_connected` |
 | Collector 类 | 以 `Collector` 结尾 | `ConsoleInputCollector`, `BiliDanmakuCollector` |
@@ -366,7 +366,7 @@ enabled = ["tts", "subtitle", "vts"]
 from src.modules.prompts import get_prompt_manager
 
 # 获取提示词
-prompt = get_prompt_manager().get_raw("decision/intent_parser")
+prompt = get_prompt_manager().get_raw("decision/llm")
 
 # 渲染提示词
 prompt = get_prompt_manager().render(
@@ -490,8 +490,7 @@ logger.error("错误日志", exc_info=True)
 - Decider 配置：`[deciders]`
 - Handler 配置：`[handlers]`
 - 管道配置：`[pipelines.*]`
-- 根配置：根目录的 `config-template.toml`
-- 首次运行会自动从模板生成 `config.toml`
+- 配置目录：`config/`（多文件结构，首次运行从 Schema 自动生成）
 
 ## 目录结构
 

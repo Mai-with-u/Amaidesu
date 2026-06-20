@@ -286,7 +286,7 @@ classDiagram
 | `DecisionRequestPayload` | `decision.request` | 决策请求 |
 | `IntentPayload` | `decision.intent` | 意图生成 |
 | `IntentActionPayload` | - | 意图动作 |
-| `DecisionResponsePayload` | `decision.response_generated` | MaiCore 响应 |
+| `DecisionResponsePayload` | `decision.response_generated` | MaiBot 响应 |
 | `ProviderConnectedPayload` | `decision.provider.connected` | Decider 连接 |
 | `ProviderDisconnectedPayload` | `decision.provider.disconnected` | Decider 断开 |
 
@@ -441,7 +441,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import IntentPayload
 
 # 从 Intent 对象创建 Payload
-intent_payload = IntentPayload.from_intent(intent, provider="maicore")
+intent_payload = IntentPayload.from_intent(intent, provider="maibot")
 
 await event_bus.emit(
     CoreEvents.DECISION_INTENT,

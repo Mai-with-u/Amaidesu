@@ -18,7 +18,7 @@ from src.modules.logging import get_logger
 logger = get_logger("ConfigMigration")
 
 # 确认的死配置（代码中已无引用）
-_DEAD_SECTIONS = {"dg_lab", "spark_rtasr"}
+_DEAD_SECTIONS = {"dg_lab", "spark_rtasr", "http_server"}
 
 # section 前缀 → 目标文件 映射
 _SECTION_MAP: dict[str, str] = {
@@ -29,7 +29,6 @@ _SECTION_MAP: dict[str, str] = {
     "maicore": "core.toml",
     "context": "core.toml",
     "dashboard": "core.toml",
-    "http_server": "core.toml",
     "event_bus": "core.toml",
     "logging": "core.toml",
     "mcp": "core.toml",

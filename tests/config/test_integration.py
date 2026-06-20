@@ -26,7 +26,7 @@ class TestFirstRunGeneration:
 
     def test_generates_config_dir_on_first_run(self, temp_project: Path):
         service = ConfigService(base_dir=str(temp_project))
-        config, main_copied, _, _, _ = service.initialize()
+        config, was_created = service.initialize()
 
         config_dir = temp_project / "config"
         assert config_dir.exists()
@@ -38,8 +38,8 @@ class TestFirstRunGeneration:
 
     def test_first_run_sets_copied_flag(self, temp_project: Path):
         service = ConfigService(base_dir=str(temp_project))
-        _, main_copied, _, _, _ = service.initialize()
-        assert main_copied is True
+        _, was_created = service.initialize()
+        assert was_created is True
 
     def test_generated_config_has_comments(self, temp_project: Path):
         service = ConfigService(base_dir=str(temp_project))
@@ -79,7 +79,7 @@ class TestOldConfigMigration:
         )
 
         service = ConfigService(base_dir=str(temp_project))
-        config, main_copied, _, _, _ = service.initialize()
+        config, was_created = service.initialize()
 
         config_dir = temp_project / "config"
         assert config_dir.exists()
@@ -109,7 +109,7 @@ class TestOldConfigMigration:
         )
 
         service = ConfigService(base_dir=str(temp_project))
-        config, _, _, _, _ = service.initialize()
+        config, _ = service.initialize()
 
         assert config.get("general", {}).get("platform_id") == "my_platform"
         assert config.get("persona", {}).get("bot_name") == "自定义名字"
@@ -142,9 +142,9 @@ class TestExistingConfigLoad:
         generate_default_configs(temp_project / "config")
 
         service = ConfigService(base_dir=str(temp_project))
-        config, main_copied, _, _, _ = service.initialize()
+        config, was_created = service.initialize()
 
-        assert main_copied is False
+        assert was_created is False
         assert "general" in config
         assert "persona" in config
 
@@ -152,7 +152,7 @@ class TestExistingConfigLoad:
         service = ConfigService(base_dir=str(temp_project))
         service.initialize()
 
-        _, _, _, _, _ = service.initialize()
+        service.initialize()  # 第二次调用应跳过
 
 
 class TestDriftDetection:
@@ -168,6 +168,6 @@ class TestDriftDetection:
         core_path.write_text(content + '\n[zombie_section]\nkey = "dead"\n', encoding="utf-8")
 
         service = ConfigService(base_dir=str(temp_project))
-        config, _, _, _, _ = service.initialize()
+        config, _ = service.initialize()
 
         assert "zombie_section" not in config

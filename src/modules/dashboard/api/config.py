@@ -46,7 +46,6 @@ RESTART_REQUIRED_PREFIXES = [
     "llm_local.",
     "maicore.",
     "dashboard.",
-    "http_server.",
     "logging.",
 ]
 

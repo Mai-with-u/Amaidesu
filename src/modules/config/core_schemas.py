@@ -4,7 +4,7 @@
 这些配置拆分到 config/core.toml 文件中。
 
 包含：meta, general, persona, maicore, context, dashboard,
-http_server, event_bus, logging, mcp, pipelines。
+event_bus, logging, mcp, pipelines。
 """
 
 from typing import Any
@@ -128,19 +128,6 @@ class DashboardConfig(BaseConfig):
     )
 
 
-class HttpServerConfig(BaseConfig):
-    """HTTP 回调服务器配置"""
-
-    type: str = Field(default="http_server", description="配置类型标识")
-    enable: bool = Field(default=True, description="是否启用 HTTP 服务器")
-    host: str = Field(default="127.0.0.1", description="HTTP 服务器监听地址")
-    port: int = Field(default=8080, description="HTTP 服务器监听端口")
-    callback_path: str = Field(
-        default="/maicore_callback",
-        description="MaiCore 回调路径",
-    )
-
-
 class EventBusConfig(BaseConfig):
     """事件总线配置"""
 
@@ -174,10 +161,6 @@ class CoreConfig(BaseConfig):
     maicore: MaiCoreConfig = Field(default_factory=MaiCoreConfig, description="MaiCore 连接配置")
     context: ContextConfig = Field(default_factory=ContextConfig, description="上下文管理配置")
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig, description="Dashboard 配置")
-    http_server: HttpServerConfig = Field(
-        default_factory=HttpServerConfig,
-        description="HTTP 服务器配置",
-    )
     event_bus: EventBusConfig = Field(
         default_factory=EventBusConfig,
         description="事件总线配置",

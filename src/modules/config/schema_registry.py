@@ -545,53 +545,6 @@ class ConfigSchemaRegistry:
         )
         self.register_group(dashboard_group)
 
-        # ========== HTTP 服务器配置 ==========
-        http_group = ConfigGroupDefinition(
-            key="http_server",
-            label="HTTP 服务器",
-            description="HTTP 回调服务器配置",
-            icon="Link",
-            order=80,
-        )
-        http_group.add_field(
-            ConfigFieldDefinition(
-                key="http_server.enable",
-                label="启用 HTTP 服务器",
-                field_type="boolean",
-                description="是否启用 HTTP 服务器",
-                default=True,
-            )
-        )
-        http_group.add_field(
-            ConfigFieldDefinition(
-                key="http_server.host",
-                label="监听地址",
-                field_type="string",
-                description="HTTP 服务器监听地址",
-                default="127.0.0.1",
-            )
-        )
-        http_group.add_field(
-            ConfigFieldDefinition(
-                key="http_server.port",
-                label="监听端口",
-                field_type="integer",
-                description="HTTP 服务器监听端口",
-                default=8080,
-                validation={"min": 1, "max": 65535},
-            )
-        )
-        http_group.add_field(
-            ConfigFieldDefinition(
-                key="http_server.callback_path",
-                label="回调路径",
-                field_type="string",
-                description="回调路径",
-                default="/maicore_callback",
-            )
-        )
-        self.register_group(http_group)
-
         # ========== EventBus 配置 ==========
         eventbus_group = ConfigGroupDefinition(
             key="event_bus",

@@ -8,7 +8,7 @@
 
 - **注释和文档**：使用中文编写注释和文档字符串
 - **变量命名**：使用 snake_case（如 `provider_config`, `event_bus`）
-- **函数命名**：使用 snake_case（如 `send_to_maicore`, `register_websocket_handler`）
+- **函数命名**：使用 snake_case（如 `send_to_maibot`, `register_websocket_handler`）
 - **类命名**：使用 PascalCase（如 `EventBus`, `InputCollector`）
 - **常量命名**：使用 CamelCase（如 `CoreEvents`, `EmotionType`）
 
@@ -17,7 +17,7 @@
 | 类型 | 命名风格 | 示例 |
 |------|---------|------|
 | 类名 | PascalCase | `EventBus`, `InputCollector`, `InputPipeline` |
-| 函数/方法名 | snake_case | `send_to_maicore`, `register_websocket_handler` |
+| 函数/方法名 | snake_case | `send_to_maibot`, `register_websocket_handler` |
 | 变量名 | snake_case | `handler_config`, `event_bus` |
 | 私有成员 | 前导下划线 | `_message_handlers`, `_is_connected` |
 | Collector 类 | 以 `Collector` 结尾 | `ConsoleInputCollector`, `BiliDanmakuCollector` |

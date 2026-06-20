@@ -46,7 +46,6 @@ export const useSettingsStore = defineStore('settings', () => {
         'llm_local.',
         'maicore.',
         'dashboard.',
-        'http_server.',
         'logging.',
       ];
       return restartPrefixes.some(prefix => change.key.startsWith(prefix));

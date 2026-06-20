@@ -43,11 +43,6 @@ def parse_args() -> argparse.Namespace:
         metavar="MODULE_NAME",
         help="仅显示指定模块的 INFO/DEBUG 级别日志 (WARNING 及以上级别总是显示)",
     )
-    parser.add_argument(
-        "--update-configs",
-        action="store_true",
-        help="更新所有配置文件到最新版本",
-    )
     return parser.parse_args()
 
 
@@ -119,18 +114,15 @@ def setup_logging(args: argparse.Namespace, logging_config: Optional[Dict[str, A
 # ---------------------------------------------------------------------------
 
 
-def load_config() -> Tuple[ConfigService, Dict[str, Any], bool, bool, bool, bool]:
-    """加载配置，失败时直接退出进程。返回 (config_service, config, main_copied, plugin_copied, pipeline_copied, config_updated)。"""
+def load_config() -> Tuple[ConfigService, Dict[str, Any], bool]:
+    """加载配置，失败时直接退出进程。返回 (config_service, config, was_created)。"""
     config_service = ConfigService(base_dir=_BASE_DIR)
     try:
-        config, main_copied, plugin_copied, pipeline_copied, config_updated = config_service.initialize()
-        return config_service, config, main_copied, plugin_copied, pipeline_copied, config_updated
-    except (IOError, FileNotFoundError) as e:
-        logger.critical(f"配置文件初始化失败: {e}")
-        logger.critical("请检查错误信息并确保配置文件或模板存在且可访问。")
-        sys.exit(1)
+        config, was_created = config_service.initialize()
+        return config_service, config, was_created
     except Exception as e:
-        logger.critical(f"加载配置时发生未知严重错误: {e}", exc_info=True)
+        logger.critical(f"配置文件初始化失败: {e}", exc_info=True)
+        logger.critical("请检查 config/ 目录下的配置文件格式，或删除 config/ 目录重新生成。")
         sys.exit(1)
 
 
@@ -170,73 +162,18 @@ def validate_config(config: Dict[str, Any]) -> None:
     logger.info("配置验证通过")
 
 
-def exit_if_config_copied(main_cfg_copied: bool, plugin_cfg_copied: bool, pipeline_cfg_copied: bool) -> None:
+def exit_if_config_created(was_created: bool) -> None:
     """若配置文件为新创建，提示用户并退出。"""
-    box = "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-
-    if main_cfg_copied:
+    if was_created:
+        box = "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
         logger.warning(box)
-        logger.warning("!! 主配置文件 config.toml 已根据模板创建。                 !!")
-        logger.warning("!! 请检查根目录下的 config.toml 文件，并根据需要进行修改。   !!")
+        logger.warning("!! 配置文件已在 config/ 目录下自动生成。                    !!")
+        logger.warning("!! 请编辑 config/ 目录下的 .toml 文件，填写必要配置。       !!")
         logger.warning("!! 修改完成后，请重新运行程序。                           !!")
         logger.warning(box)
         sys.exit(0)
 
-    if plugin_cfg_copied or pipeline_cfg_copied:
-        logger.warning(box)
-        logger.warning("!! 配置文件已更新。                                      !!")
-        logger.warning("!! 请检查并修改 config.toml 中的 阶段参与者 和 Pipeline 配置。  !!")
-        logger.warning("!! 特别是 API 密钥、房间号、设备名称等需要您修改的配置。   !!")
-        logger.warning("!! 修改完成后，请重新运行程序。                           !!")
-        logger.warning(box)
-        sys.exit(0)
-
-    logger.info("所有必要的配置文件已存在或已处理。继续正常启动...")
-
-
-def run_update_configs_command() -> None:
-    """执行配置更新命令"""
-    from src.modules.config.version_manager import ConfigVersionManager
-
-    version_manager = ConfigVersionManager(base_dir=".")
-
-    print("=" * 60)
-    print("配置文件批量更新")
-    print("=" * 60)
-
-    # 扫描阶段参与者配置
-    version_manager.scan_configs()
-
-    # 更新主配置
-    needs_update, message = version_manager.check_main_config()
-    if needs_update:
-        print(f"\n主配置: {message}")
-        updated, message = version_manager.update_main_config()
-        print(f"  结果: {message}")
-    else:
-        print(f"\n主配置: {message}")
-
-    # 更新阶段参与者配置
-    print("\n阶段参与者配置:")
-    results = version_manager.update_all_configs()
-    for key, updated, message in results:
-        status = "[已更新]" if updated else "[跳过]"
-        print(f"  {status} {key}: {message}")
-
-    print("=" * 60)
-    print("更新完成")
-    sys.exit(0)
-
-
-def log_config_update(main_cfg_updated: bool) -> None:
-    """如果配置文件已更新，输出日志"""
-    if main_cfg_updated:
-        logger.info("=" * 60)
-        logger.info("配置文件已根据新模板自动更新")
-        logger.info("备份文件: config.toml.backup")
-        logger.info("请检查更新后的配置，如有问题可从备份恢复")
-        logger.info("提示: 使用 --update-configs 命令可批量更新所有配置")
-        logger.info("=" * 60)
+    logger.info("所有必要的配置文件已存在。继续正常启动...")
 
 
 # ---------------------------------------------------------------------------
@@ -648,36 +585,19 @@ async def main() -> None:
     # 1. 解析命令行参数
     args = parse_args()
 
-    # 检查 --update-configs 命令
-    if args.update_configs:
-        # 需要先配置日志，否则 print 输出可能被 logger 干扰
-        setup_logging_early(args)
-        try:
-            run_update_configs_command()
-        except ImportError as e:
-            logger.error(f"ConfigVersionManager 尚未实现: {e}")
-            logger.error("请先实现 ConfigVersionManager 类以使用 --update-configs 功能")
-            sys.exit(1)
-        except Exception as e:
-            logger.error(f"配置更新失败: {e}", exc_info=True)
-            sys.exit(1)
-
     # 2. 早期日志配置（使用默认INFO级别）
     #    这必须在导入阶段参与者之前完成，避免过早的DEBUG日志输出
     setup_logging_early(args)
 
     # 3. 加载配置文件
-    config_service, config, main_cfg_copied, plugin_cfg_copied, pipeline_cfg_copied, config_updated = load_config()
+    config_service, config, was_created = load_config()
 
     # 4. 获取完整的日志配置并重新配置日志（应用完整配置）
     logging_config = config_service.get_section("logging", default={})
     setup_logging(args, logging_config)
 
     validate_config(config)
-    exit_if_config_copied(main_cfg_copied, plugin_cfg_copied, pipeline_cfg_copied)
-
-    # 记录配置更新状态
-    log_config_update(config_updated)
+    exit_if_config_created(was_created)
 
     input_pipeline_manager = await load_pipeline_manager(config)
 

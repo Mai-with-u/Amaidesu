@@ -80,8 +80,7 @@ flowchart LR
 ```
 Amaidesu/
 ├── main.py                      # CLI 入口，程序启动入口
-├── config-template.toml         # 配置模板
-├── config.toml                  # 运行时配置（自动生成）
+├── config/                      # 配置目录（多文件结构，首次运行自动生成）
 ├── src/
 │   ├── stages/                  # 业务阶段
      │   │   ├── input/               # 输入阶段
@@ -101,7 +100,7 @@ Amaidesu/
      │   │   ├── decision/            # 决策阶段
      │   │   │   ├── decider_manager.py
      │   │   │   └── deciders/       # 决策 Decider
-     │   │   │       ├── maicore/
+     │   │   │       ├── maibot/
      │   │   │       ├── llm/
      │   │   │       ├── maicraft/
      │   │   │       └── replay/

@@ -450,6 +450,6 @@ class LLMDecider:
             "name": "LLMDecider",
             "version": "1.0.0",
             "client_type": self.client_type,
-            "template_name": "decision/llm",
+            "template_name": "decision/llm_structured",
             "fallback_mode": self.fallback_mode,
         }

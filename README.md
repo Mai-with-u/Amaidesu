@@ -45,7 +45,7 @@ Amaidesu!
 > - **核心抽象**：InputCollector / Decider / OutputHandler
 > - **处理逻辑**：数据采集 / 决策生成 / 渲染输出
 >
-> 阶段之间通过 EventBus 进行**松耦合通信**，而非直接的层级调用。这种划分允许各阶段独立演进，例如可以替换决策引擎（从 MaiCore 换成 LLM）而不影响输入输出。
+> 阶段之间通过 EventBus 进行**松耦合通信**，而非直接的层级调用。这种划分允许各阶段独立演进，例如可以替换决策引擎（从 MaiBot 换成 LLM）而不影响输入输出。
 
 ```mermaid
 flowchart LR
@@ -71,7 +71,7 @@ flowchart LR
 
 **数据流**：
 1. **Input 阶段**：外部数据（弹幕、语音、控制台）→ NormalizedMessage → Pipelines 过滤
-2. **Decision 阶段**：NormalizedMessage → Intent（MaiCore / LLM / 规则引擎）
+2. **Decision 阶段**：NormalizedMessage → Intent（MaiBot / LLM / 规则引擎）
 3. **Output 阶段**：Intent → 渲染输出（TTS、字幕、VTS、表情等）
 
 ### 核心组件

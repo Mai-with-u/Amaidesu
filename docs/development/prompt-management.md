@@ -36,9 +36,7 @@ prompt_mgr.load_all()
 ```
 src/modules/prompts/templates/
 ├── decision/                    # 决策阶段提示词
-│   ├── intent_parser.md        # Intent 解析模板
-│   ├── llm.md                  # LLM 对话模板
-│   └── llm_structured.md       # 结构化输出模板
+│   └── llm.md                  # LLM 对话模板
 ├── input/                      # 输入阶段提示词
 │   ├── mainosaba_ocr.md       # OCR 提示词
 │   ├── screen_context.md      # 屏幕上下文提示词
@@ -56,18 +54,21 @@ src/modules/prompts/templates/
 
 ```yaml
 ---
-name: intent_parser
+name: local_llm
 version: "2.0"
-description: "Intent 解析系统提示词"
+description: "本地 LLM 决策模板"
 author: Amaidesu
-tags: [decision, intent, parser]
+tags: [decision, llm]
 variables:
   - text
+  - bot_name
+  - personality
   - user_name
 ---
 
 # 模板内容...
-请分析以下消息：$text
+你是一个 AI VTuber，名字叫 $bot_name。
+$user_name 说：$text
 ```
 
 **元数据字段说明：**
@@ -87,14 +88,14 @@ variables:
 
 ```python
 # 获取原始模板内容（含 Frontmatter）
-raw_template = pm.get_raw("decision/intent_parser")
+raw_template = pm.get_raw("decision/llm")
 ```
 
 #### 5.2 渲染模板（严格模式）
 
 ```python
 # 渲染模板，缺失变量会抛出 KeyError
-prompt = pm.render("decision/intent_parser", text="你好啊", user_name="小明")
+prompt = pm.render("decision/llm", text="你好啊", bot_name="麦麦", personality="活泼开朗", user_name="小明")
 ```
 
 **严格模式特点：**
@@ -105,7 +106,7 @@ prompt = pm.render("decision/intent_parser", text="你好啊", user_name="小明
 
 ```python
 # 安全模式渲染，缺失变量保留原样
-prompt = pm.render_safe("decision/intent_parser", text="你好")
+prompt = pm.render_safe("decision/llm", text="你好")
 ```
 
 **安全模式特点：**
@@ -146,11 +147,11 @@ system_prompt = pm.extract_content_without_section(
 ```python
 # 列出所有已加载的模板
 templates = pm.list_templates()
-# ['decision/intent_parser', 'decision/llm', 'output/speech', ...]
+# ['decision/llm', 'output/speech', 'output/vts_hotkey', ...]
 
 # 获取模板元数据
-metadata = pm.get_metadata("decision/intent_parser")
-# TemplateMetadata(name='intent_parser', version='2.0', ...)
+metadata = pm.get_metadata("decision/llm")
+# TemplateMetadata(name='local_llm', version='2.0', ...)
 ```
 
 ### 6. 模板示例
@@ -185,34 +186,6 @@ $user_name 说：$text
 ## 示例
 用户: 大家好！
 回复: 哈哈，大家好呀！很高兴见到你们~
-```
-
-#### 6.2 Intent 解析模板
-
-```yaml
----
-name: intent_parser
-version: "2.0"
-description: "Intent 解析系统提示词"
-tags: [decision, intent, parser]
----
-
-你是一个AI VTuber的意图分析助手。
-
-## User Message
-
-请分析以下AI VTuber的回复消息：
-$text
-
-## 输出格式
-严格按照 JSON 格式输出：
-```json
-{
-  "emotion": "happy",
-  "response_text": "回复内容",
-  "actions": [{"type": "expression", "params": {"name": "smile"}, "priority": 50}]
-}
-```
 ```
 
 ### 7. 在阶段参与者中使用
@@ -303,7 +276,7 @@ user_name = "大家"
 max_response_length = 50
 emotion_intensity = 7
 
-[maicore]
+[maibot]
 host = "127.0.0.1"
 port = 8000
 
@@ -348,7 +321,7 @@ similarity_threshold = 0.85
 | `[llm_local]` | 本地 LLM 配置（Ollama 等） |
 | `[general]` | 通用配置 |
 | `[persona]` | VTuber 人设配置 |
-| `[maicore]` | MaiCore 连接配置 |
+| `[maibot]` | MaiBot 连接配置 |
 | `[context]` | 上下文管理器配置 |
 | `[logging]` | 日志配置 |
 | `[collectors]` | 输入 Collector 启用列表 |
@@ -477,7 +450,7 @@ general = config_service.get_section("general")
 
 # 获取嵌套配置节（使用点分路径）
 input_config = config_service.get_section("providers.input")
-maicore_config = config_service.get_section("providers.decision.maicore")
+maibot_config = config_service.get_section("providers.decision.maibot")
 ```
 
 #### 6.2 获取配置项
@@ -557,12 +530,12 @@ max_history = 100
 
 ### 8. 模板配置文件
 
-项目提供 `config-template.toml` 模板文件，首次运行时会自动复制为 `config.toml`：
+项目使用 `config/` 目录下的多文件配置结构，首次运行时从 Pydantic Schema 自动生成：
 
 ```bash
 # 首次运行
 uv run python main.py
-# 会自动从 config-template.toml 生成 config.toml
+# 会自动在 config/ 目录下生成 core.toml, model.toml, input.toml, decision.toml, output.toml
 ```
 
 ---

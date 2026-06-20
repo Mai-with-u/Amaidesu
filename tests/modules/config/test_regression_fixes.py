@@ -6,7 +6,6 @@
 - BUG1: schemas/__init__.py import 断链
 - BUG2: __all__ 包含不存在的函数
 - BUG3: generator.py 路径错误
-- BUG4: version_manager.py 路径错误
 - 核心: ConfigService 配置节名从 [providers.*] 改为 [collectors/deciders/handlers]
 - 核心: get_config_with_defaults 参数从 layer 改为 phase
 """
@@ -61,21 +60,6 @@ def test_ensure_component_config_output_phase():
         assert "handlers" in str(e)
     except ValueError:
         pass
-
-
-def test_version_manager_scan_uses_stages_path(tmp_path):
-    """BUG4: version_manager 应扫描 src/stages/ 而非 src/domains/"""
-    component_dir = tmp_path / "src" / "stages" / "input" / "collectors" / "test_component"
-    component_dir.mkdir(parents=True)
-    (component_dir / "config.toml").write_text('[meta]\nversion = "1.0"\n')
-
-    from src.modules.config.version_manager import ConfigVersionManager
-
-    vm = ConfigVersionManager(base_dir=str(tmp_path))
-    vm.scan_configs()
-
-    assert len(vm._configs) == 1
-    assert "input.test_component" in vm._configs
 
 
 def test_config_service_reads_collectors_format(tmp_path):

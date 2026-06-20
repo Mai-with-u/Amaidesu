@@ -16,7 +16,6 @@ tests/
 │   │   └── test_pipeline_stats.py
 │   ├── config/                      # 配置系统测试
 │   │   ├── test_config_loading.py
-│   │   ├── test_config_version_management.py
 │   │   ├── test_regression_fixes.py
 │   │   └── schemas/
 │   ├── context/                     # 上下文服务测试

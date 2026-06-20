@@ -441,37 +441,6 @@ class MyHandler(OutputHandler):
 | `maicraft` | Maicraft 决策 | `src/stages/decision/deciders/maicraft/` |
 | `replay` | 回放决策（调试用） | `src/stages/decision/deciders/replay/` |
 
-### MaiBotDecider 提示词覆盖
-
-MaiBotDecider 支持通过 `template_info` 机制覆盖 MaiBot 的回复提示词，使 VTuber 在直播场景下具有更一致的个性。
-
-#### 启用方式
-
-在 `config.toml` 中配置：
-
-```toml
-[deciders.maibot]
-host = "127.0.0.1"
-port = 8000
-
-# 启用提示词覆盖
-enable_prompt_override = true
-override_template_name = "amaidesu_override"
-override_templates = ["replyer_prompt", "chat_target_group1", "chat_target_group2"]
-```
-
-#### 配置项
-
-| 配置项 | 说明 |
-|--------|------|
-| `enable_prompt_override` | 是否启用提示词覆盖 |
-| `override_template_name` | 作用域名称 |
-| `override_templates` | 要覆盖的模板列表 |
-
-#### 自定义模板
-
-模板文件位于 `src/modules/prompts/templates/maibot_override/` 目录。详细说明请参阅 [MaiBot 提示词覆盖文档](maibot-override.md)。
-
 ### OutputHandler（12个）
 
 | 名称 | 说明 | 位置 |
