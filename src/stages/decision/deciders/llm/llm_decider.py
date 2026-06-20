@@ -86,7 +86,7 @@ class LLMDecider:
             context_service: ContextService 实例（可选）
         """
         # 使用 Pydantic Schema 验证配置
-        self.typed_config = self.ConfigSchema(**config)
+        self.typed_config = self.ConfigSchema.from_dict(config)
         self.logger = get_logger("LLMDecider")
 
         # 显式依赖注入

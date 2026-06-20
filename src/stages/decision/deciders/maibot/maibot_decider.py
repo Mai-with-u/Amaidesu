@@ -126,7 +126,7 @@ class MaiBotDecider:
         self.name = "maibot"
 
         # 使用 Pydantic Schema 验证配置
-        self.typed_config = self.ConfigSchema(**config)
+        self.typed_config = self.ConfigSchema.from_dict(config)
         self.logger = get_logger("MaiBotDecider")
 
         # 显式依赖注入

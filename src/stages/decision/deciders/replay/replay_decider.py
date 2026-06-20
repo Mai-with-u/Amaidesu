@@ -61,7 +61,7 @@ class ReplayDecider:
             config: 配置字典
             event_bus: EventBus 实例（必填）
         """
-        self.typed_config = self.ConfigSchema(**config)
+        self.typed_config = self.ConfigSchema.from_dict(config)
         self.logger = get_logger("ReplayDecider")
         self.add_default_action = self.typed_config.add_default_action
         self._total_messages = 0
