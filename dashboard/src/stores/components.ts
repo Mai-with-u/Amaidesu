@@ -1,42 +1,41 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
-import { providerApi } from '@/api';
-import type { ProviderListResponse, ProviderControlAction } from '@/types';
+import { componentApi } from '@/api';
+import type { ComponentListResponse, ComponentControlAction } from '@/types';
 
-export const useProvidersStore = defineStore('providers', () => {
-  const providers = ref<ProviderListResponse | null>(null);
+export const useComponentsStore = defineStore('components', () => {
+  const components = ref<ComponentListResponse | null>(null);
   const loading = ref(false);
   const error = ref<string | null>(null);
 
-  async function fetchProviders() {
+  async function fetchComponents() {
     loading.value = true;
     error.value = null;
     try {
-      const response = await providerApi.getAll();
-      providers.value = response.data;
+      const response = await componentApi.getAll();
+      components.value = response.data;
     } catch (e) {
-      error.value = e instanceof Error ? e.message : 'Failed to fetch providers';
+      error.value = e instanceof Error ? e.message : 'Failed to fetch components';
     } finally {
       loading.value = false;
     }
   }
 
-  async function controlProvider(domain: string, name: string, action: ProviderControlAction) {
+  async function controlComponent(phase: string, name: string, action: ComponentControlAction) {
     try {
-      const response = await providerApi.control(domain, name, { action });
-      // Refresh providers after control action
-      await fetchProviders();
+      const response = await componentApi.control(phase, name, { action });
+      await fetchComponents();
       return response.data;
     } catch (e) {
-      throw e instanceof Error ? e : new Error('Failed to control provider');
+      throw e instanceof Error ? e : new Error('Failed to control component');
     }
   }
 
   return {
-    providers,
+    components,
     loading,
     error,
-    fetchProviders,
-    controlProvider,
+    fetchComponents,
+    controlComponent,
   };
 });

@@ -9,16 +9,16 @@
 
     <div ref="domainsContainerRef" class="domains-container">
       <!-- Input Domain Column -->
-      <DomainColumn
+      <PhaseColumn
         domain="input"
         title="输入域"
-        :providers="providers?.input || []"
+        :providers="components?.input || []"
         :icon="InputIcon"
         :loading="loading"
         @refresh="handleRefresh"
       >
-        <ProviderCard
-          v-for="provider in providers?.input || []"
+        <ComponentCard
+          v-for="provider in components?.input || []"
           :key="provider.name"
           :provider="provider"
           :recent-events="getProviderEvents(provider.name, 'input')"
@@ -28,19 +28,19 @@
           :action-loading="actionLoading"
           @control="action => handleControl('input', provider.name, action)"
         />
-      </DomainColumn>
+      </PhaseColumn>
 
       <!-- Decision Domain Column -->
-      <DomainColumn
+      <PhaseColumn
         domain="decision"
         title="决策域"
-        :providers="providers?.decision || []"
+        :providers="components?.decision || []"
         :icon="DecisionIcon"
         :loading="loading"
         @refresh="handleRefresh"
       >
-        <ProviderCard
-          v-for="provider in providers?.decision || []"
+        <ComponentCard
+          v-for="provider in components?.decision || []"
           :key="provider.name"
           :provider="provider"
           :recent-events="getProviderEvents(provider.name, 'decision')"
@@ -50,19 +50,19 @@
           :action-loading="actionLoading"
           @control="action => handleControl('decision', provider.name, action)"
         />
-      </DomainColumn>
+      </PhaseColumn>
 
       <!-- Output Domain Column -->
-      <DomainColumn
+      <PhaseColumn
         domain="output"
         title="输出域"
-        :providers="providers?.output || []"
+        :providers="components?.output || []"
         :icon="OutputIcon"
         :loading="loading"
         @refresh="handleRefresh"
       >
-        <ProviderCard
-          v-for="provider in providers?.output || []"
+        <ComponentCard
+          v-for="provider in components?.output || []"
           :key="provider.name"
           :provider="provider"
           :recent-events="getProviderEvents(provider.name, 'output')"
@@ -72,7 +72,7 @@
           :action-loading="actionLoading"
           @control="action => handleControl('output', provider.name, action)"
         />
-      </DomainColumn>
+      </PhaseColumn>
     </div>
   </div>
 </template>
@@ -80,11 +80,11 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref, h } from 'vue';
 import { ElMessage } from 'element-plus';
-import { useProvidersStore, useEventsStore, useLogsStore } from '@/stores';
+import { useComponentsStore, useEventsStore, useLogsStore } from '@/stores';
 import { storeToRefs } from 'pinia';
-import type { ProviderControlAction, WebSocketMessage } from '@/types';
+import type { ComponentControlAction, WebSocketMessage } from '@/types';
 import type { LogEntry } from '@/stores/logs';
-import { DomainColumn, ProviderCard } from '@/components/providers';
+import { PhaseColumn, ComponentCard } from '@/components/component-cards';
 
 // Domain icons as inline SVG components
 const InputIcon = {
@@ -137,11 +137,11 @@ const OutputIcon = {
 };
 
 // Stores
-const providersStore = useProvidersStore();
+const componentsStore = useComponentsStore();
 const eventsStore = useEventsStore();
 const logsStore = useLogsStore();
 
-const { providers, loading } = storeToRefs(providersStore);
+const { components, loading } = storeToRefs(componentsStore);
 const { events } = storeToRefs(eventsStore);
 const { logs } = storeToRefs(logsStore);
 
@@ -202,16 +202,16 @@ function getProviderLogs(providerName: string): LogEntry[] {
 
 // Handle refresh
 function handleRefresh() {
-  providersStore.fetchProviders();
+  componentsStore.fetchComponents();
 }
 
 // Handle provider control actions
-async function handleControl(domain: string, name: string, action: ProviderControlAction) {
+async function handleControl(phase: string, name: string, action: ComponentControlAction) {
   const actionKey = `${name}-${action}`;
   actionLoading[actionKey] = true;
 
   try {
-    const result = await providersStore.controlProvider(domain, name, action);
+    const result = await componentsStore.controlComponent(phase, name, action);
     ElMessage.success(result.message);
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '操作失败');
@@ -221,7 +221,7 @@ async function handleControl(domain: string, name: string, action: ProviderContr
 }
 
 onMounted(() => {
-  providersStore.fetchProviders();
+  componentsStore.fetchComponents();
   // Connect to WebSocket for real-time events and logs
   eventsStore.connect();
   logsStore.connect();
@@ -229,7 +229,7 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.providers-page {
+.components-page {
   max-width: 1600px;
   margin: 0 auto;
 }
@@ -274,7 +274,7 @@ onMounted(() => {
 }
 
 /* Provider card grid within columns */
-.domains-container :deep(.providers-list) {
+.domains-container :deep(.components-list) {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-md);

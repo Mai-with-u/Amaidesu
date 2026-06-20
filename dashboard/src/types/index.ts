@@ -4,10 +4,10 @@ export interface EventStats {
   total_subscribers: number;
 }
 
-export interface DomainStatus {
+export interface PhaseStatus {
   enabled: boolean;
-  active_providers: number;
-  total_providers: number;
+  active_components: number;
+  total_components: number;
   event_stats?: EventStats;
 }
 
@@ -16,9 +16,9 @@ export interface SystemStatusResponse {
   uptime_seconds: number;
   version: string;
   python_version: string;
-  input_domain?: DomainStatus;
-  decision_domain?: DomainStatus;
-  output_domain?: DomainStatus;
+  input_phase?: PhaseStatus;
+  decision_phase?: PhaseStatus;
+  output_phase?: PhaseStatus;
 }
 
 export interface SystemStatsResponse {
@@ -27,24 +27,24 @@ export interface SystemStatsResponse {
   event_bus_stats?: EventStats;
 }
 
-// Provider types
-export interface ProviderSummary {
+// Component types
+export interface ComponentSummary {
   name: string;
-  domain: string;
+  phase: string;
   type: string;
   is_started: boolean;
   is_enabled: boolean;
 }
 
-export interface ProviderListResponse {
-  input: ProviderSummary[];
-  decision: ProviderSummary[];
-  output: ProviderSummary[];
+export interface ComponentListResponse {
+  input: ComponentSummary[];
+  decision: ComponentSummary[];
+  output: ComponentSummary[];
 }
 
-export interface ProviderDetail {
+export interface ComponentDetail {
   name: string;
-  domain: string;
+  phase: string;
   type: string;
   is_started: boolean;
   is_enabled: boolean;
@@ -52,13 +52,13 @@ export interface ProviderDetail {
   stats?: Record<string, unknown>;
 }
 
-export type ProviderControlAction = 'start' | 'stop' | 'restart';
+export type ComponentControlAction = 'start' | 'stop' | 'restart';
 
-export interface ProviderControlRequest {
-  action: ProviderControlAction;
+export interface ComponentControlRequest {
+  action: ComponentControlAction;
 }
 
-export interface ProviderControlResponse {
+export interface ComponentControlResponse {
   success: boolean;
   message: string;
 }

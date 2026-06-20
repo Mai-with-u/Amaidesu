@@ -17,8 +17,8 @@
     </header>
 
     <!-- Domain 状态卡片 -->
-    <section class="domain-cards">
-      <div class="domain-card" :class="{ active: status?.input_domain?.enabled }">
+    <section class="phase-cards">
+      <div class="phase-card" :class="{ active: status?.input_phase?.enabled }">
         <div class="card-header">
           <div class="card-icon input">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -29,7 +29,7 @@
           </div>
           <div class="card-title-area">
             <div class="card-title-row">
-              <h3 class="card-title">Input Domain</h3>
+              <h3 class="card-title">Input 阶段</h3>
               <span class="health-badge" :class="getHealthStatus('input')">
                 {{ getHealthLabel('input') }}
               </span>
@@ -39,24 +39,24 @@
         </div>
         <div class="card-stats">
           <div class="stat">
-            <span class="stat-value">{{ status?.input_domain?.active_providers || 0 }}</span>
+            <span class="stat-value">{{ status?.input_phase?.active_components || 0 }}</span>
             <span class="stat-label">运行中</span>
           </div>
           <div class="stat-divider"></div>
           <div class="stat">
-            <span class="stat-value">{{ status?.input_domain?.total_providers || 0 }}</span>
+            <span class="stat-value">{{ status?.input_phase?.total_components || 0 }}</span>
             <span class="stat-label">总计</span>
           </div>
         </div>
         <div class="card-footer">
-          <div class="domain-actions">
+          <div class="phase-actions">
             <el-button
               size="small"
               type="success"
               plain
-              :loading="domainLoading.input === 'start'"
-              :disabled="!status?.input_domain?.enabled || allProvidersRunning('input')"
-              @click="startAllProviders('input')"
+              :loading="phaseLoading.input === 'start'"
+              :disabled="!status?.input_phase?.enabled || allComponentsRunning('input')"
+              @click="startAllComponents('input')"
             >
               启动全部
             </el-button>
@@ -64,9 +64,9 @@
               size="small"
               type="danger"
               plain
-              :loading="domainLoading.input === 'stop'"
-              :disabled="!status?.input_domain?.enabled || allProvidersStopped('input')"
-              @click="stopAllProviders('input')"
+              :loading="phaseLoading.input === 'stop'"
+              :disabled="!status?.input_phase?.enabled || allComponentsStopped('input')"
+              @click="stopAllComponents('input')"
             >
               停止全部
             </el-button>
@@ -74,7 +74,7 @@
         </div>
       </div>
 
-      <div class="domain-card" :class="{ active: status?.decision_domain?.enabled }">
+      <div class="phase-card" :class="{ active: status?.decision_phase?.enabled }">
         <div class="card-header">
           <div class="card-icon decision">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -87,7 +87,7 @@
           </div>
           <div class="card-title-area">
             <div class="card-title-row">
-              <h3 class="card-title">Decision Domain</h3>
+              <h3 class="card-title">Decision 阶段</h3>
               <span class="health-badge" :class="getHealthStatus('decision')">
                 {{ getHealthLabel('decision') }}
               </span>
@@ -97,24 +97,24 @@
         </div>
         <div class="card-stats">
           <div class="stat">
-            <span class="stat-value">{{ status?.decision_domain?.active_providers || 0 }}</span>
+            <span class="stat-value">{{ status?.decision_phase?.active_components || 0 }}</span>
             <span class="stat-label">运行中</span>
           </div>
           <div class="stat-divider"></div>
           <div class="stat">
-            <span class="stat-value">{{ status?.decision_domain?.total_providers || 0 }}</span>
+            <span class="stat-value">{{ status?.decision_phase?.total_components || 0 }}</span>
             <span class="stat-label">总计</span>
           </div>
         </div>
         <div class="card-footer">
-          <div class="domain-actions">
+          <div class="phase-actions">
             <el-button
               size="small"
               type="success"
               plain
-              :loading="domainLoading.decision === 'start'"
-              :disabled="!status?.decision_domain?.enabled || allProvidersRunning('decision')"
-              @click="startAllProviders('decision')"
+              :loading="phaseLoading.decision === 'start'"
+              :disabled="!status?.decision_phase?.enabled || allComponentsRunning('decision')"
+              @click="startAllComponents('decision')"
             >
               启动全部
             </el-button>
@@ -122,9 +122,9 @@
               size="small"
               type="danger"
               plain
-              :loading="domainLoading.decision === 'stop'"
-              :disabled="!status?.decision_domain?.enabled || allProvidersStopped('decision')"
-              @click="stopAllProviders('decision')"
+              :loading="phaseLoading.decision === 'stop'"
+              :disabled="!status?.decision_phase?.enabled || allComponentsStopped('decision')"
+              @click="stopAllComponents('decision')"
             >
               停止全部
             </el-button>
@@ -132,7 +132,7 @@
         </div>
       </div>
 
-      <div class="domain-card" :class="{ active: status?.output_domain?.enabled }">
+      <div class="phase-card" :class="{ active: status?.output_phase?.enabled }">
         <div class="card-header">
           <div class="card-icon output">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -143,7 +143,7 @@
           </div>
           <div class="card-title-area">
             <div class="card-title-row">
-              <h3 class="card-title">Output Domain</h3>
+              <h3 class="card-title">Output 阶段</h3>
               <span class="health-badge" :class="getHealthStatus('output')">
                 {{ getHealthLabel('output') }}
               </span>
@@ -153,24 +153,24 @@
         </div>
         <div class="card-stats">
           <div class="stat">
-            <span class="stat-value">{{ status?.output_domain?.active_providers || 0 }}</span>
+            <span class="stat-value">{{ status?.output_phase?.active_components || 0 }}</span>
             <span class="stat-label">运行中</span>
           </div>
           <div class="stat-divider"></div>
           <div class="stat">
-            <span class="stat-value">{{ status?.output_domain?.total_providers || 0 }}</span>
+            <span class="stat-value">{{ status?.output_phase?.total_components || 0 }}</span>
             <span class="stat-label">总计</span>
           </div>
         </div>
         <div class="card-footer">
-          <div class="domain-actions">
+          <div class="phase-actions">
             <el-button
               size="small"
               type="success"
               plain
-              :loading="domainLoading.output === 'start'"
-              :disabled="!status?.output_domain?.enabled || allProvidersRunning('output')"
-              @click="startAllProviders('output')"
+              :loading="phaseLoading.output === 'start'"
+              :disabled="!status?.output_phase?.enabled || allComponentsRunning('output')"
+              @click="startAllComponents('output')"
             >
               启动全部
             </el-button>
@@ -178,9 +178,9 @@
               size="small"
               type="danger"
               plain
-              :loading="domainLoading.output === 'stop'"
-              :disabled="!status?.output_domain?.enabled || allProvidersStopped('output')"
-              @click="stopAllProviders('output')"
+              :loading="phaseLoading.output === 'stop'"
+              :disabled="!status?.output_phase?.enabled || allComponentsStopped('output')"
+              @click="stopAllComponents('output')"
             >
               停止全部
             </el-button>
@@ -231,13 +231,13 @@
             <p class="quick-link-desc">实时监控系统事件流，支持筛选和搜索</p>
           </div>
         </router-link>
-        <router-link to="/providers" class="quick-link-card">
+        <router-link to="/components" class="quick-link-card">
           <div class="quick-link-icon">
             <el-icon :size="24"><Connection /></el-icon>
           </div>
           <div class="quick-link-content">
-            <h4 class="quick-link-title">Provider 管理</h4>
-            <p class="quick-link-desc">管理各域的 Provider 启停状态</p>
+            <h4 class="quick-link-title">组件管理</h4>
+            <p class="quick-link-desc">管理各阶段的组件启停状态</p>
           </div>
         </router-link>
         <router-link to="/devtools" class="quick-link-card">
@@ -343,16 +343,17 @@ import {
   ArrowDown,
 } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
-import { useSystemStore, useProvidersStore } from '@/stores';
+import { useSystemStore, useComponentsStore } from '@/stores';
 import { storeToRefs } from 'pinia';
+import type { ComponentSummary } from '@/types';
 
 const systemStore = useSystemStore();
-const providersStore = useProvidersStore();
+const componentsStore = useComponentsStore();
 
 const { status } = storeToRefs(systemStore);
-const { providers } = storeToRefs(providersStore);
+const { components } = storeToRefs(componentsStore);
 
-const domainLoading = ref<Record<string, 'start' | 'stop' | null>>({
+const phaseLoading = ref<Record<string, 'start' | 'stop' | null>>({
   input: null,
   decision: null,
   output: null,
@@ -376,38 +377,34 @@ function copyUrl(url: string) {
     });
 }
 
-// Get providers for a specific domain
-function getDomainProviders(domain: string) {
-  if (!providers.value) return [];
-  return providers.value[domain as keyof typeof providers.value] || [];
+function getPhaseComponents(phase: string): ComponentSummary[] {
+  if (!components.value) return [];
+  return components.value[phase as keyof typeof components.value] || [];
 }
 
-// Check if all providers in a domain are running
-function allProvidersRunning(domain: string): boolean {
-  const domainProviders = getDomainProviders(domain);
-  if (domainProviders.length === 0) return true;
-  return domainProviders.every(p => p.is_started);
+function allComponentsRunning(phase: string): boolean {
+  const phaseComponents = getPhaseComponents(phase);
+  if (phaseComponents.length === 0) return true;
+  return phaseComponents.every(p => p.is_started);
 }
 
-// Check if all providers in a domain are stopped
-function allProvidersStopped(domain: string): boolean {
-  const domainProviders = getDomainProviders(domain);
-  if (domainProviders.length === 0) return true;
-  return domainProviders.every(p => !p.is_started);
+function allComponentsStopped(phase: string): boolean {
+  const phaseComponents = getPhaseComponents(phase);
+  if (phaseComponents.length === 0) return true;
+  return phaseComponents.every(p => !p.is_started);
 }
 
-// Get health status class for a domain
-function getHealthStatus(domain: string): string {
-  const domainStatus = status.value?.[`${domain}_domain` as keyof typeof status.value] as
-    | { enabled?: boolean; active_providers?: number; total_providers?: number }
+function getHealthStatus(phase: string): string {
+  const phaseStatus = status.value?.[`${phase}_phase` as keyof typeof status.value] as
+    | { enabled?: boolean; active_components?: number; total_components?: number }
     | undefined;
 
-  if (!domainStatus?.enabled || domainStatus.total_providers === 0) {
+  if (!phaseStatus?.enabled || phaseStatus.total_components === 0) {
     return 'status-disabled';
   }
 
-  const activeCount = domainStatus.active_providers || 0;
-  const totalCount = domainStatus.total_providers || 0;
+  const activeCount = phaseStatus.active_components || 0;
+  const totalCount = phaseStatus.total_components || 0;
 
   if (activeCount === totalCount) {
     return 'status-healthy';
@@ -418,18 +415,17 @@ function getHealthStatus(domain: string): string {
   }
 }
 
-// Get health label for a domain
-function getHealthLabel(domain: string): string {
-  const domainStatus = status.value?.[`${domain}_domain` as keyof typeof status.value] as
-    | { enabled?: boolean; active_providers?: number; total_providers?: number }
+function getHealthLabel(phase: string): string {
+  const phaseStatus = status.value?.[`${phase}_phase` as keyof typeof status.value] as
+    | { enabled?: boolean; active_components?: number; total_components?: number }
     | undefined;
 
-  if (!domainStatus?.enabled || domainStatus.total_providers === 0) {
+  if (!phaseStatus?.enabled || phaseStatus.total_components === 0) {
     return '已禁用';
   }
 
-  const activeCount = domainStatus.active_providers || 0;
-  const totalCount = domainStatus.total_providers || 0;
+  const activeCount = phaseStatus.active_components || 0;
+  const totalCount = phaseStatus.total_components || 0;
 
   if (activeCount === totalCount) {
     return '正常运行';
@@ -440,28 +436,27 @@ function getHealthLabel(domain: string): string {
   }
 }
 
-// Start all providers in a domain
-async function startAllProviders(domain: string) {
-  const domainProviders = getDomainProviders(domain);
-  const stoppedProviders = domainProviders.filter(p => !p.is_started && p.is_enabled);
+async function startAllComponents(phase: string) {
+  const phaseComponents = getPhaseComponents(phase);
+  const stoppedComponents = phaseComponents.filter(p => !p.is_started && p.is_enabled);
 
-  if (stoppedProviders.length === 0) {
-    ElMessage.info('所有 Provider 已在运行中');
+  if (stoppedComponents.length === 0) {
+    ElMessage.info('所有组件已在运行中');
     return;
   }
 
-  domainLoading.value[domain] = 'start';
+  phaseLoading.value[phase] = 'start';
 
   try {
     const results = await Promise.allSettled(
-      stoppedProviders.map(p => providersStore.controlProvider(domain, p.name, 'start')),
+      stoppedComponents.map(p => componentsStore.controlComponent(phase, p.name, 'start')),
     );
 
     const failed = results.filter(r => r.status === 'rejected');
     const succeeded = results.length - failed.length;
 
     if (failed.length === 0) {
-      ElMessage.success(`已启动 ${succeeded} 个 Provider`);
+      ElMessage.success(`已启动 ${succeeded} 个组件`);
     } else {
       ElMessage.warning(`启动完成: ${succeeded} 成功, ${failed.length} 失败`);
     }
@@ -471,32 +466,31 @@ async function startAllProviders(domain: string) {
     ElMessage.error('批量启动失败');
     console.error('Batch start error:', error);
   } finally {
-    domainLoading.value[domain] = null;
+    phaseLoading.value[phase] = null;
   }
 }
 
-// Stop all providers in a domain
-async function stopAllProviders(domain: string) {
-  const domainProviders = getDomainProviders(domain);
-  const runningProviders = domainProviders.filter(p => p.is_started);
+async function stopAllComponents(phase: string) {
+  const phaseComponents = getPhaseComponents(phase);
+  const runningComponents = phaseComponents.filter(p => p.is_started);
 
-  if (runningProviders.length === 0) {
-    ElMessage.info('所有 Provider 已停止');
+  if (runningComponents.length === 0) {
+    ElMessage.info('所有组件已停止');
     return;
   }
 
-  domainLoading.value[domain] = 'stop';
+  phaseLoading.value[phase] = 'stop';
 
   try {
     const results = await Promise.allSettled(
-      runningProviders.map(p => providersStore.controlProvider(domain, p.name, 'stop')),
+      runningComponents.map(p => componentsStore.controlComponent(phase, p.name, 'stop')),
     );
 
     const failed = results.filter(r => r.status === 'rejected');
     const succeeded = results.length - failed.length;
 
     if (failed.length === 0) {
-      ElMessage.success(`已停止 ${succeeded} 个 Provider`);
+      ElMessage.success(`已停止 ${succeeded} 个组件`);
     } else {
       ElMessage.warning(`停止完成: ${succeeded} 成功, ${failed.length} 失败`);
     }
@@ -506,7 +500,7 @@ async function stopAllProviders(domain: string) {
     ElMessage.error('批量停止失败');
     console.error('Batch stop error:', error);
   } finally {
-    domainLoading.value[domain] = null;
+    phaseLoading.value[phase] = null;
   }
 }
 
@@ -530,11 +524,11 @@ let statusInterval: ReturnType<typeof setInterval> | null = null;
 
 onMounted(async () => {
   await systemStore.fetchStatus();
-  await providersStore.fetchProviders();
+  await componentsStore.fetchComponents();
 
   statusInterval = setInterval(() => {
     systemStore.fetchStatus();
-    providersStore.fetchProviders();
+    componentsStore.fetchComponents();
   }, 1000);
 });
 
@@ -570,14 +564,14 @@ onUnmounted(() => {
 }
 
 /* Domain 卡片 */
-.domain-cards {
+.phase-cards {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: var(--spacing-md);
   margin-bottom: var(--spacing-lg);
 }
 
-.domain-card {
+.phase-card {
   background: var(--bg-card);
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-color-light);
@@ -588,7 +582,7 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
-.domain-card::before {
+.phase-card::before {
   content: '';
   position: absolute;
   top: 0;
@@ -599,11 +593,11 @@ onUnmounted(() => {
   transition: background var(--transition-normal);
 }
 
-.domain-card.active::before {
+.phase-card.active::before {
   background: var(--color-success);
 }
 
-.domain-card:hover {
+.phase-card:hover {
   box-shadow: var(--shadow-md);
   transform: translateY(-2px);
 }
@@ -734,7 +728,7 @@ onUnmounted(() => {
   justify-content: flex-end;
 }
 
-.domain-actions {
+.phase-actions {
   display: flex;
   gap: var(--spacing-xs);
 }
@@ -910,7 +904,7 @@ onUnmounted(() => {
 
 /* Responsive */
 @media (max-width: 1200px) {
-  .domain-cards {
+  .phase-cards {
     grid-template-columns: repeat(2, 1fr);
   }
 
@@ -929,7 +923,7 @@ onUnmounted(() => {
     gap: var(--spacing-md);
   }
 
-  .domain-cards {
+  .phase-cards {
     grid-template-columns: 1fr;
   }
 

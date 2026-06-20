@@ -1,7 +1,7 @@
 <template>
   <div
     class="provider-card"
-    :class="[statusClass, { expanded: isExpanded, 'is-decision': provider.domain === 'decision' }]"
+    :class="[statusClass, { expanded: isExpanded, 'is-decision': provider.phase === 'decision' }]"
   >
     <!-- Header Section - Compact -->
     <div class="provider-header">
@@ -54,7 +54,7 @@
 
       <div class="action-buttons">
         <!-- Decision Provider: Only Activate button -->
-        <template v-if="provider.domain === 'decision'">
+        <template v-if="provider.phase === 'decision'">
           <el-button
             size="small"
             type="primary"
@@ -158,11 +158,11 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import type { ProviderSummary, WebSocketMessage, ProviderControlAction } from '@/types';
+import type { ComponentSummary, WebSocketMessage, ComponentControlAction } from '@/types';
 import type { LogEntry } from '@/stores/logs';
 
 interface Props {
-  provider: ProviderSummary;
+  provider: ComponentSummary;
   recentEvents: WebSocketMessage[];
   recentLogs: LogEntry[];
   eventCount: number;
@@ -171,7 +171,7 @@ interface Props {
 }
 
 interface Emits {
-  (e: 'control', action: ProviderControlAction): void;
+  (e: 'control', action: ComponentControlAction): void;
   (e: 'toggle-expand'): void;
 }
 
@@ -192,7 +192,7 @@ const statusText = computed(() => {
   return '已停止';
 });
 
-function handleControl(action: ProviderControlAction) {
+function handleControl(action: ComponentControlAction) {
   emit('control', action);
 }
 

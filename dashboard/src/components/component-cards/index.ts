@@ -1,4 +1,4 @@
-export { default as DomainColumn } from './DomainColumn.vue';
-export { default as ProviderCard } from './ProviderCard.vue';
+export { default as PhaseColumn } from './PhaseColumn.vue';
+export { default as ComponentCard } from './ComponentCard.vue';
 export { default as EventLogPanel } from './EventLogPanel.vue';
 export { default as EventFlowCanvas } from './EventFlowCanvas.vue';

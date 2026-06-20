@@ -61,6 +61,7 @@ export const useSessionStore = defineStore('session', () => {
 
     interface IntentData {
       id?: string;
+      speech?: string;
       response_text?: string;
       emotion?: string;
     }

@@ -25,19 +25,19 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { Component } from 'vue';
-import type { ProviderSummary } from '@/types';
+import type { ComponentSummary } from '@/types';
 
 interface Props {
   domain: 'input' | 'decision' | 'output';
   title: string;
-  providers: ProviderSummary[];
+  providers: ComponentSummary[];
   icon: Component;
   loading?: boolean;
 }
 
 interface Emits {
   (e: 'refresh'): void;
-  (e: 'control', domain: string, name: string, action: 'start' | 'stop' | 'restart'): void;
+  (e: 'control', phase: string, name: string, action: 'start' | 'stop' | 'restart'): void;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -133,7 +133,7 @@ const emptyText = computed(() => {
 }
 
 /* Providers List - Single column layout */
-.providers-list {
+.components-list {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-sm);

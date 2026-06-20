@@ -7,7 +7,7 @@
           <el-icon><Monitor /></el-icon>
           <span>仪表盘</span>
         </el-menu-item>
-        <el-menu-item index="/providers">
+        <el-menu-item index="/components">
           <el-icon><Connection /></el-icon>
           <span>Providers</span>
         </el-menu-item>

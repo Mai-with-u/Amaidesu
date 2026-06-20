@@ -9,9 +9,9 @@ const router = createRouter({
       component: () => import('@/views/Dashboard.vue'),
     },
     {
-      path: '/providers',
-      name: 'providers',
-      component: () => import('@/views/Providers.vue'),
+      path: '/components',
+      name: 'components',
+      component: () => import('@/views/Components.vue'),
     },
     {
       path: '/eventlog',

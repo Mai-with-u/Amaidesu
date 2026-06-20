@@ -1,5 +1,5 @@
 export { useSystemStore } from './system';
-export { useProvidersStore } from './providers';
+export { useComponentsStore } from './components';
 export { useEventsStore } from './events';
 export { useThemeStore } from './theme';
 export { useLogsStore } from './logs';

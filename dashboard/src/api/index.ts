@@ -2,10 +2,10 @@ import axios from 'axios';
 import type {
   SystemStatusResponse,
   SystemStatsResponse,
-  ProviderListResponse,
-  ProviderDetail,
-  ProviderControlRequest,
-  ProviderControlResponse,
+  ComponentListResponse,
+  ComponentDetail,
+  ComponentControlRequest,
+  ComponentControlResponse,
   ConfigResponse,
   InjectMessageRequest,
   InjectMessageResponse,
@@ -38,13 +38,13 @@ export const systemApi = {
   getHealth: () => api.get<{ status: string; timestamp: number }>('/system/health'),
 };
 
-// Provider API
-export const providerApi = {
-  getAll: () => api.get<ProviderListResponse>('/providers'),
-  getOne: (domain: string, name: string) =>
-    api.get<{ provider: ProviderDetail }>(`/providers/${domain}/${name}`),
-  control: (domain: string, name: string, request: ProviderControlRequest) =>
-    api.post<ProviderControlResponse>(`/providers/${domain}/${name}/control`, request),
+// Component API
+export const componentApi = {
+  getAll: () => api.get<ComponentListResponse>('/components'),
+  getOne: (phase: string, name: string) =>
+    api.get<{ component: ComponentDetail }>(`/components/${phase}/${name}`),
+  control: (phase: string, name: string, request: ComponentControlRequest) =>
+    api.post<ComponentControlResponse>(`/components/${phase}/${name}/control`, request),
 };
 
 // Config API
