@@ -145,10 +145,12 @@ def _generate_phase_toml(phase: str) -> str:
         doc.add(tomlkit.comment("Decision 阶段配置 - Deciders"))
         doc.add(tomlkit.nl())
         table = tomlkit.table()
-        table.add(tomlkit.comment("当前激活的 Decider"))
-        table["active"] = "maibot"
-        table.add(tomlkit.comment("可用的 Decider 列表"))
-        table["available"] = ["maibot", "llm", "maicraft", "replay"]
+        table.add(tomlkit.comment("启用的 Decider 列表（可多选，所有启用的 Decider 将并行处理消息）"))
+        table["enabled"] = ["maibot"]
+        table.add(tomlkit.comment("可用 Decider（取消注释并添加到上方 enabled 列表即可启用）"))
+        table.add(tomlkit.comment('  "llm",      # LLM 直接决策'))
+        table.add(tomlkit.comment('  "maicraft", # MaiCraft 弹幕游戏'))
+        table.add(tomlkit.comment('  "replay",   # 输入重放（调试用）'))
         doc["deciders"] = table
 
     elif phase == "output":

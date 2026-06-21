@@ -19,7 +19,7 @@ def old_config(tmp_path):
     doc["persona"] = {"bot_name": "test_bot", "emotion_intensity": 5}
     doc["llm"] = {"client": "openai", "model": "test-model", "api_key": "sk-test"}
     doc["collectors"] = {"enabled": ["console_input"]}
-    doc["deciders"] = {"active": "llm", "available": ["llm", "maibot"]}
+    doc["deciders"] = {"active": "llm", "available": ["llm", "maibot"]}  # 旧格式，迁移后应变为 enabled
     doc["handlers"] = {"enabled": ["subtitle"], "concurrent_rendering": True}
     doc["dg_lab"] = {"api_base_url": "http://localhost:8081"}
     doc["spark_rtasr"] = {"app_id": ""}
@@ -71,3 +71,13 @@ class TestMigration:
         assert len(report.migrated_sections) > 0
         assert any("meta" in s for s in report.migrated_sections)
         assert any("llm" in s for s in report.migrated_sections)
+
+    def test_migrates_deciders_active_to_enabled(self, tmp_path, old_config):
+        """迁移时 deciders.active（旧格式）应转换为 deciders.enabled（新格式）"""
+        config_dir = tmp_path / "config"
+        migrate_old_config(old_config, config_dir)
+        decision_content = (config_dir / "decision.toml").read_text(encoding="utf-8")
+        assert "enabled" in decision_content
+        assert "llm" in decision_content
+        assert '"active"' not in decision_content
+        assert '"available"' not in decision_content

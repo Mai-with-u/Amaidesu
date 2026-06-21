@@ -10,6 +10,7 @@ import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import tomlkit
 
@@ -100,6 +101,21 @@ def _transform_section_name(section_name: str) -> str:
     return section_name
 
 
+def _migrate_deciders_keys(deciders_table: Any) -> None:
+    """迁移 deciders 旧键: active/available → enabled
+
+    将旧的 active（单数选择）和 available（可用列表）转换为
+    新的 enabled（多选启用列表），与 Input/Output 阶段统一。
+    """
+    if "active" in deciders_table:
+        active_val = deciders_table.pop("active")
+        if "enabled" not in deciders_table:
+            deciders_table["enabled"] = [active_val] if active_val else []
+        logger.info("迁移: deciders.active → deciders.enabled")
+    if "available" in deciders_table:
+        deciders_table.pop("available")
+
+
 def migrate_old_config(
     old_config_path: Path,
     new_config_dir: Path,
@@ -178,6 +194,9 @@ def migrate_old_config(
     for fname in expected_files:
         file_path = new_config_dir / fname
         if fname in file_groups:
+            # 迁移 deciders 旧键: active/available → enabled
+            if fname == "decision.toml" and "deciders" in file_groups[fname]:
+                _migrate_deciders_keys(file_groups[fname]["deciders"])
             content = tomlkit.dumps(file_groups[fname])
             file_path.write_text(content, encoding="utf-8")
             logger.info(f"已写入 {fname}")

@@ -25,7 +25,7 @@ _PHASE_SECTION: Dict[str, str] = {
 _PHASE_METADATA_FIELDS: Dict[str, set] = {
     "input": {"enabled"},
     "output": {"enabled", "concurrent_rendering", "error_handling", "render_timeout"},
-    "decision": {"active", "available"},
+    "decision": {"enabled"},
 }
 
 

@@ -18,6 +18,7 @@ DeciderManager - 决策Decider管理器
 """
 
 import asyncio
+import inspect
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from pydantic import ValidationError
@@ -214,16 +215,34 @@ class DeciderManager:
         # 获取Decider特定配置
         decider_config = decision_config.get(decider_name, {})
 
-        # 直接构造 Decider，传递依赖
-        decider = decider_cls(
-            config=decider_config,
-            event_bus=self.event_bus,
-            llm_service=self._llm_service,
-            prompt_service=self._prompt_manager,
-        )
+        # 按 decider __init__ 签名动态注入依赖
+        decider = self._instantiate_decider(decider_cls, decider_config)
 
         self._deciders[decider_name] = decider
         self.logger.info(f"Decider '{decider_name}' 已创建（未启动）")
+
+    def _instantiate_decider(self, decider_cls: type, decider_config: Dict[str, Any]) -> Any:
+        """根据 __init__ 签名注入依赖，各 Decider 只收到自己声明的参数"""
+        available_deps: Dict[str, Any] = {
+            "config": decider_config,
+            "event_bus": self.event_bus,
+            "llm_service": self._llm_service,
+            "prompt_service": self._prompt_manager,
+            "config_service": self._config_service,
+            "context_service": self._context_service,
+        }
+
+        sig = inspect.signature(decider_cls.__init__)
+        kwargs = {}
+        for name, param in sig.parameters.items():
+            if name == "self":
+                continue
+            if param.kind is inspect.Parameter.VAR_KEYWORD:
+                return decider_cls(**available_deps)
+            if name in available_deps:
+                kwargs[name] = available_deps[name]
+
+        return decider_cls(**kwargs)
 
     async def start(self) -> None:
         """启动所有已创建的Decider"""

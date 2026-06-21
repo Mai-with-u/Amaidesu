@@ -59,12 +59,12 @@ class TestMultiDeciderConfigLoading:
     """测试多 Decider 配置加载"""
 
     @pytest.mark.asyncio
-    async def test_load_single_decider_from_active_provider(self):
-        """测试从 active_provider 加载单个 Decider（向后兼容）"""
+    async def test_load_single_decider_from_enabled(self):
+        """测试从 enabled 列表加载单个 Decider"""
         mock_event_bus = MagicMock()
         manager = DeciderManager(event_bus=mock_event_bus)
 
-        decision_config = {"active_provider": "maibot"}
+        decision_config = {"enabled": ["maibot"]}
 
         await manager.setup(decision_config=decision_config)
 
@@ -298,7 +298,7 @@ class TestMultiDeciderDecision:
         mock_event_bus = MagicMock()
         manager = DeciderManager(event_bus=mock_event_bus)
 
-        decision_config = {"active_provider": "maibot"}
+        decision_config = {"enabled": ["maibot"]}
 
         await manager.setup(decision_config=decision_config)
 

@@ -102,7 +102,7 @@ def test_config_service_reads_deciders_format(tmp_path):
     """核心: ConfigService 应读取 [deciders] 而非 [providers.decision]"""
     config_path = tmp_path / "config.toml"
     config_path.write_text(
-        '[deciders]\nactive = "test_decider"\n\n'
+        '[deciders]\nenabled = ["test_decider"]\n\n'
         "[deciders.test_decider]\nmodel = \"gpt\"\n"
     )
 
@@ -111,7 +111,7 @@ def test_config_service_reads_deciders_format(tmp_path):
     cs = ConfigService(base_dir=str(tmp_path))
     cs.initialize()
 
-    assert cs.get_section("deciders").get("active") == "test_decider"
+    assert cs.get_section("deciders").get("enabled") == ["test_decider"]
     config = cs.get_config_with_defaults("test_decider", "decision")
     assert config.get("model") == "gpt"
 
