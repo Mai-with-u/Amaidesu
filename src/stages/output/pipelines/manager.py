@@ -191,26 +191,22 @@ class OutputPipelineManager:
             self.logger.debug("未提供 Pipeline 配置，跳过加载。")
             return
 
+        output_pipelines = root_config_pipelines_section.get("output", {})
+        if not isinstance(output_pipelines, dict):
+            self.logger.warning("pipelines.output 不是字典，跳过 OutputPipeline 加载。")
+            return
+
         loaded_pipeline_count = 0
 
-        # 遍历根配置中定义的管道
-        for pipeline_name_snake, pipeline_global_settings in root_config_pipelines_section.items():
-            if not isinstance(pipeline_global_settings, dict):
+        for pipeline_name_snake, pipeline_config in output_pipelines.items():
+            if not isinstance(pipeline_config, dict):
                 continue
 
-            # 检查是否有 output 子配置
-            if "output" not in pipeline_global_settings:
-                continue
-
-            output_settings = pipeline_global_settings["output"]
-            if not isinstance(output_settings, dict):
-                continue
-
-            priority = output_settings.get("priority")
+            priority = pipeline_config.get("priority")
             if not isinstance(priority, int):
                 continue
 
-            enabled = output_settings.get("enabled", True)
+            enabled = pipeline_config.get("enabled", True)
             if not enabled:
                 continue
 
@@ -223,8 +219,7 @@ class OutputPipelineManager:
             ):
                 continue
 
-            # 直接使用主配置中的管道配置
-            final_pipeline_config = {k: v for k, v in output_settings.items() if k not in ["priority", "enabled"]}
+            final_pipeline_config = {k: v for k, v in pipeline_config.items() if k not in ["priority", "enabled"]}
 
             try:
                 module_import_path = f"src.stages.output.pipelines.{pipeline_name_snake}.pipeline"

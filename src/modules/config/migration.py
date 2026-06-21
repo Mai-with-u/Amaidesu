@@ -116,6 +116,42 @@ def _migrate_deciders_keys(deciders_table: Any) -> None:
         deciders_table.pop("available")
 
 
+def _migrate_pipelines_keys(pipelines_table: Any) -> None:
+    """迁移 pipelines 旧格式到阶段优先格式: pipelines.{name} → pipelines.{phase}.{name}
+
+    旧格式:
+        [pipelines.rate_limit]              # 扁平，默认属于 input
+        [pipelines.profanity_filter.output] # 嵌套，显式声明 output
+
+    新格式:
+        [pipelines.input.rate_limit]
+        [pipelines.output.profanity_filter]
+    """
+    if "input" in pipelines_table or "output" in pipelines_table:
+        return
+
+    input_pipelines: dict[str, Any] = {}
+    output_pipelines: dict[str, Any] = {}
+
+    for name, config in list(pipelines_table.items()):
+        if not isinstance(config, dict):
+            continue
+        if "output" in config and isinstance(config["output"], dict):
+            output_pipelines[name] = config["output"]
+        elif "input" in config and isinstance(config["input"], dict):
+            input_pipelines[name] = config["input"]
+        elif "priority" in config:
+            input_pipelines[name] = config
+        pipelines_table.pop(name)
+
+    if input_pipelines:
+        pipelines_table["input"] = input_pipelines
+        logger.info(f"迁移: {len(input_pipelines)} 个 input pipeline 转换为 pipelines.input.* 格式")
+    if output_pipelines:
+        pipelines_table["output"] = output_pipelines
+        logger.info(f"迁移: {len(output_pipelines)} 个 output pipeline 转换为 pipelines.output.* 格式")
+
+
 def migrate_old_config(
     old_config_path: Path,
     new_config_dir: Path,
@@ -194,9 +230,10 @@ def migrate_old_config(
     for fname in expected_files:
         file_path = new_config_dir / fname
         if fname in file_groups:
-            # 迁移 deciders 旧键: active/available → enabled
             if fname == "decision.toml" and "deciders" in file_groups[fname]:
                 _migrate_deciders_keys(file_groups[fname]["deciders"])
+            if fname == "core.toml" and "pipelines" in file_groups[fname]:
+                _migrate_pipelines_keys(file_groups[fname]["pipelines"])
             content = tomlkit.dumps(file_groups[fname])
             file_path.write_text(content, encoding="utf-8")
             logger.info(f"已写入 {fname}")

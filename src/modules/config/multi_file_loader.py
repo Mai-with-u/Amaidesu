@@ -167,15 +167,6 @@ def _generate_phase_toml(phase: str) -> str:
         table["render_timeout"] = 10.0
         doc["handlers"] = table
 
-        doc.add(tomlkit.nl())
-        eg_table = tomlkit.table()
-        eg_table.add(tomlkit.comment("ExpressionGenerator 默认开关"))
-        eg_table["default_tts_enabled"] = True
-        eg_table["default_subtitle_enabled"] = True
-        eg_table["default_expressions_enabled"] = True
-        eg_table["default_hotkeys_enabled"] = True
-        doc["handlers.expression_generator"] = eg_table
-
     return tomlkit.dumps(doc)
 
 

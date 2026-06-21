@@ -53,8 +53,8 @@ class TestFirstRunGeneration:
         service.initialize()
 
         core_content = (temp_project / "config" / "core.toml").read_text(encoding="utf-8")
-        assert "rate_limit" in core_content
-        assert "similar_filter" in core_content
+        assert "pipelines.input.rate_limit" in core_content or "rate_limit" in core_content
+        assert "pipelines.input.similar_filter" in core_content or "similar_filter" in core_content
 
 
 class TestOldConfigMigration:

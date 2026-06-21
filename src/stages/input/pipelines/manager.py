@@ -360,33 +360,22 @@ class InputPipelineManager:
             self.logger.warning("未提供根配置中的 'pipelines' 部分，InputPipeline 将无法加载。")
             return
 
+        input_pipelines = root_config_pipelines_section.get("input", {})
+        if not isinstance(input_pipelines, dict):
+            self.logger.warning("pipelines.input 不是字典，跳过 InputPipeline 加载。")
+            return
+
         loaded_pipeline_count = 0
 
-        for pipeline_name_snake, pipeline_global_settings in root_config_pipelines_section.items():
-            if not isinstance(pipeline_global_settings, dict):
+        for pipeline_name_snake, pipeline_config in input_pipelines.items():
+            if not isinstance(pipeline_config, dict):
                 continue
 
-            # 检查是否有 input 子配置（嵌套格式）
-            if "input" in pipeline_global_settings:
-                input_settings = pipeline_global_settings["input"]
-                if not isinstance(input_settings, dict):
-                    continue
-                priority = input_settings.get("priority")
-                enabled = input_settings.get("enabled", True)
-                global_override_config = {k: v for k, v in input_settings.items() if k not in ["priority", "enabled"]}
-            elif "priority" in pipeline_global_settings:
-                # 扁平格式：priority/enabled 直接写在 [pipelines.xxx] 下
-                priority = pipeline_global_settings.get("priority")
-                enabled = pipeline_global_settings.get("enabled", True)
-                global_override_config = {
-                    k: v for k, v in pipeline_global_settings.items() if k not in ["priority", "enabled"]
-                }
-            else:
-                continue
-
+            priority = pipeline_config.get("priority")
             if not isinstance(priority, int):
                 continue
 
+            enabled = pipeline_config.get("enabled", True)
             if not enabled:
                 self.logger.debug(f"InputPipeline '{pipeline_name_snake}' 已禁用，跳过加载。")
                 continue
@@ -400,8 +389,7 @@ class InputPipelineManager:
             ):
                 continue
 
-            # 直接使用主配置中的管道配置
-            final_pipeline_config = global_override_config
+            final_pipeline_config = {k: v for k, v in pipeline_config.items() if k not in ["priority", "enabled"]}
 
             try:
                 # 使用统一的模块导入路径格式

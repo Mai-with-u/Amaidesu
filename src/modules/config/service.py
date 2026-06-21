@@ -212,14 +212,15 @@ class ConfigService:
         else:
             return self._main_config.get(key, default)
 
-    def get_pipeline_config(self, pipeline_name: str) -> Dict[str, Any]:
+    def get_pipeline_config(self, pipeline_name: str, phase: str = "input") -> Dict[str, Any]:
         """
         获取管道配置
 
-        配置来源：主配置文件中 [pipelines.pipeline_name]
+        配置来源：主配置文件中 [pipelines.phase.pipeline_name]
 
         Args:
             pipeline_name: 管道名称（如 "rate_limit", "similar_filter"）
+            phase: 阶段（"input" 或 "output"，默认 "input"）
 
         Returns:
             管道配置字典
@@ -228,7 +229,7 @@ class ConfigService:
             self.logger.warning("ConfigService 未初始化，返回空配置")
             return {}
 
-        return self.get_section("pipelines", {}).get(pipeline_name, {}).copy()
+        return self.get_section("pipelines", {}).get(phase, {}).get(pipeline_name, {}).copy()
 
     def get_all_configs(self, phase: str = "input") -> Dict[str, Dict[str, Any]]:
         """
@@ -287,14 +288,15 @@ class ConfigService:
         enabled_list = self.get_section(section_name, {}).get("enabled", [])
         return name in enabled_list
 
-    def is_pipeline_enabled(self, pipeline_name: str) -> bool:
+    def is_pipeline_enabled(self, pipeline_name: str, phase: str = "input") -> bool:
         """
         检查管道是否启用
 
-        管道启用的条件：在 [pipelines.pipeline_name] 配置节中定义了 `priority` 键。
+        管道启用的条件：在 [pipelines.phase.pipeline_name] 中定义了 `priority` 键。
 
         Args:
             pipeline_name: 管道名称
+            phase: 阶段（"input" 或 "output"，默认 "input"）
 
         Returns:
             是否启用
@@ -304,7 +306,8 @@ class ConfigService:
             return False
 
         pipelines_config = self.get_section("pipelines", {})
-        pipeline_config = pipelines_config.get(pipeline_name, {})
+        phase_config = pipelines_config.get(phase, {})
+        pipeline_config = phase_config.get(pipeline_name, {})
 
         return "priority" in pipeline_config
 

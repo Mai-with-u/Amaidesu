@@ -169,23 +169,25 @@ class CoreConfig(BaseConfig):
     mcp: McpConfig = Field(default_factory=McpConfig, description="MCP Server 配置")
     pipelines: dict[str, Any] = Field(
         default_factory=lambda: {
-            "rate_limit": {
-                "priority": 100,
-                "enabled": True,
-                "global_rate_limit": 100,
-                "user_rate_limit": 10,
-                "window_size": 60,
+            "input": {
+                "rate_limit": {
+                    "priority": 100,
+                    "enabled": True,
+                    "global_rate_limit": 100,
+                    "user_rate_limit": 10,
+                    "window_size": 60,
+                },
+                "similar_filter": {
+                    "priority": 500,
+                    "enabled": True,
+                    "similarity_threshold": 0.85,
+                    "time_window": 5.0,
+                    "min_text_length": 3,
+                    "cross_user_filter": True,
+                },
             },
-            "similar_filter": {
-                "priority": 500,
-                "enabled": True,
-                "similarity_threshold": 0.85,
-                "time_window": 5.0,
-                "min_text_length": 3,
-                "cross_user_filter": True,
-            },
-            "profanity_filter": {
-                "output": {
+            "output": {
+                "profanity_filter": {
                     "enabled": True,
                     "priority": 100,
                     "words": ["测试脏话", "示例敏感词"],
@@ -194,7 +196,7 @@ class CoreConfig(BaseConfig):
                     "filter_subtitle": True,
                     "case_sensitive": False,
                     "drop_on_match": False,
-                }
+                },
             },
         },
         description="管道配置（动态键，如 rate_limit, similar_filter 等）",
