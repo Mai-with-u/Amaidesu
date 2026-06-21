@@ -206,7 +206,7 @@ class LLMManager:
         Raises:
             ValueError: 如果客户端类型不支持
         """
-        if client_impl == "openai":
+        if client_impl in ("openai", "ollama"):
             from src.modules.llm.clients.openai_client import OpenAIClient
 
             return OpenAIClient

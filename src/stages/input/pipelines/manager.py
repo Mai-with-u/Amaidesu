@@ -366,18 +366,22 @@ class InputPipelineManager:
             if not isinstance(pipeline_global_settings, dict):
                 continue
 
-            # 检查是否有 input 子配置（新格式）
+            # 检查是否有 input 子配置（嵌套格式）
             if "input" in pipeline_global_settings:
-                # 新格式：[pipelines.xxx.input.priority]
                 input_settings = pipeline_global_settings["input"]
                 if not isinstance(input_settings, dict):
                     continue
                 priority = input_settings.get("priority")
                 enabled = input_settings.get("enabled", True)
-                # 提取 input 子配置中的其他参数作为全局覆盖
                 global_override_config = {k: v for k, v in input_settings.items() if k not in ["priority", "enabled"]}
+            elif "priority" in pipeline_global_settings:
+                # 扁平格式：priority/enabled 直接写在 [pipelines.xxx] 下
+                priority = pipeline_global_settings.get("priority")
+                enabled = pipeline_global_settings.get("enabled", True)
+                global_override_config = {
+                    k: v for k, v in pipeline_global_settings.items() if k not in ["priority", "enabled"]
+                }
             else:
-                # 未找到有效配置，跳过
                 continue
 
             if not isinstance(priority, int):
