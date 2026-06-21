@@ -5,9 +5,12 @@ Warudo ActionSender - 动作发送器
 """
 
 import json
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-import websockets
+if TYPE_CHECKING:
+    import websockets
+else:
+    websockets = None  # type: ignore[assignment]
 
 from src.modules.logging import get_logger
 
@@ -17,10 +20,10 @@ _logger = get_logger("ActionSender")
 class ActionSender:
     """Warudo动作发送器"""
 
-    def __init__(self, websocket: Optional[websockets.WebSocketClientProtocol] = None):
+    def __init__(self, websocket: Optional[Any] = None):
         self.websocket = websocket
 
-    def set_websocket(self, websocket: websockets.WebSocketClientProtocol):
+    def set_websocket(self, websocket: Any):
         """设置WebSocket连接"""
         self.websocket = websocket
 

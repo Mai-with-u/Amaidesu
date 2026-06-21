@@ -34,10 +34,10 @@ if TYPE_CHECKING:
 try:
     import websockets
     from websockets.exceptions import ConnectionClosed
-    from websockets.server import WebSocketServerProtocol
+    from websockets.server import ServerConnection
 except ImportError:
     websockets = None
-    WebSocketServerProtocol = None
+    ServerConnection = None
     ConnectionClosed = Exception
 
 try:
@@ -182,7 +182,7 @@ class RemoteStreamHandler:
         self.client = None
         self.client_task: Optional[asyncio.Task] = None
         self.connections = set()  # 活跃的客户端连接集合
-        self.active_connection: Optional[WebSocketServerProtocol] = None
+        self.active_connection: Optional[ServerConnection] = None
         self.connect_task: Optional[asyncio.Task] = None
         self._is_connected = False
         self._sequence_counter = 0
@@ -318,11 +318,9 @@ class RemoteStreamHandler:
             return False
 
         try:
-            # 新版本使用state属性
+            # 新版本 websockets (>=13)：state.name == "OPEN"
             if hasattr(ws, "state"):
-                from websockets.protocol import State
-
-                return ws.state == State.OPEN
+                return ws.state.name == "OPEN"
             # 检查closed属性
             elif hasattr(ws, "closed"):
                 return not ws.closed

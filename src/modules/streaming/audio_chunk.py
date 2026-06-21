@@ -2,19 +2,18 @@
 
 import time
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AudioMetadata(BaseModel):
     """音频流元数据"""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     text: str = Field(description="TTS 文本内容")
     sample_rate: int = Field(description="采样率（Hz）")
     channels: int = Field(default=1, description="声道数")
     timestamp: float = Field(default_factory=time.time, description="时间戳")
-
-    class Config:
-        arbitrary_types_allowed = True
 
 
 class AudioChunk(BaseModel):

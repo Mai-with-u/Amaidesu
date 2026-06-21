@@ -9,7 +9,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SubtitleWidgetMessage(BaseModel):
@@ -71,8 +71,7 @@ class DanmakuWidgetMessage(BaseModel):
     platform: str = Field(default="bilibili", description="平台来源")
     room_id: Optional[str] = Field(default=None, description="直播间 ID")
 
-    class Config:
-        use_enum_values = True
+    model_config = ConfigDict(use_enum_values=True)
 
     def to_display_text(self) -> str:
         """生成显示文本"""
