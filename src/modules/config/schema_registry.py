@@ -545,25 +545,6 @@ class ConfigSchemaRegistry:
         )
         self.register_group(dashboard_group)
 
-        # ========== EventBus 配置 ==========
-        eventbus_group = ConfigGroupDefinition(
-            key="event_bus",
-            label="事件总线",
-            description="EventBus 配置",
-            icon="DataLine",
-            order=90,
-        )
-        eventbus_group.add_field(
-            ConfigFieldDefinition(
-                key="event_bus.enable_validation",
-                label="启用数据验证",
-                field_type="boolean",
-                description="是否启用事件数据验证（建议仅 debug 模式开启）",
-                default=False,
-            )
-        )
-        self.register_group(eventbus_group)
-
         logger.info(f"已初始化 {len(self._groups)} 个配置分组")
 
     def register_group(self, group: ConfigGroupDefinition):

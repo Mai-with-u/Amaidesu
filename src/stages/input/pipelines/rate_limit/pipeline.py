@@ -1,10 +1,10 @@
 """
-限流管道（Input Domain）
+限流管道（Input 阶段）
 
 基于滑动时间窗口算法限制消息发送频率。
 
-3域架构中的位置：
-- Input Domain: 在 Collector 产出 NormalizedMessage 后进行后处理
+3 阶段架构中的位置：
+- Input 阶段: 在 Collector 产出 NormalizedMessage 后进行后处理
 - 在 InputCollectorManager._run_collector() 方法中调用
 - 用于限制输入消息频率
 

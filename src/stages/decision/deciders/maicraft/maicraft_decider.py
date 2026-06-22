@@ -7,7 +7,7 @@ Maicraft Decision Decider
 架构要点:
 - 订阅 CoreEvents.INPUT_MESSAGE_READY 事件
 - 解析弹幕命令并生成游戏操作 Intent
-- 通过 Intent.actions 传递动作给 Output Domain
+- 通过 Intent.actions 传递动作给 Output 阶段
 - 不直接触发 Output Handler（遵守 3 域数据流规则）
 """
 
@@ -101,10 +101,6 @@ class MaicraftDecider:
             self.logger.error(f"配置验证失败: {e}")
             raise
 
-        if not self.parsed_config.enabled:
-            self.logger.warning("MaicraftDecider 在配置中被禁用")
-            return
-
         # 初始化组件
         self.command_parser = CommandParser(command_prefix=self.parsed_config.command_prefix)
         self.action_registry = ActionRegistry()
@@ -192,9 +188,6 @@ class MaicraftDecider:
             - 如果是命令但不支持，不发布事件
             - 命令解析失败时，不发布事件
         """
-        if not self.parsed_config.enabled:
-            return
-
         try:
             # 提取消息文本
             text = self._extract_message_text(message)

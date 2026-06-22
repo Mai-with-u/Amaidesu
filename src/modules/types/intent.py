@@ -1,6 +1,6 @@
 """跨域共享的 Intent 相关类型
 
-这些类型被 Input/Decision/Output Domain 共享，
+这些类型被 Input/Decision/Output 阶段 共享，
 因此放在 src/modules/types/ 中避免循环依赖。
 
 版本：自然语言版
@@ -41,7 +41,7 @@ class Intent(BaseModel):
     核心职责：
     - 表示AI的决策意图
     - 使用自然语言描述情感、动作、回复
-    - 作为 Output Domain 的输入
+    - 作为 Output 阶段 的输入
 
     字段说明：
     - emotion: 自然语言情感描述，如 "害羞"、"开心"、"生气"

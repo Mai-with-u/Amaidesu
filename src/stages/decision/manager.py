@@ -6,15 +6,15 @@ DeciderManager - 决策Decider管理器
 - 使用 _DECIDERS 字典直接创建Decider
 - 支持从配置加载多个启用的Decider
 - 提供decide()方法进行决策（每个Decider独立决策）
-- 订阅 Input Domain 的 input.message.ready 事件
-- 发布 decision.intent.generated 事件到 Output Domain
+- 订阅 Input 阶段 的 input.message.ready 事件
+- 发布 decision.intent.generated 事件到 Output 阶段
 - 异常处理和优雅降级
 - Speech冲突警告机制
 
-架构约束（3域架构）:
-- 只订阅 Input Domain 的事件
-- 只发布到 Output Domain
-- 不订阅 Output Domain 的事件（避免循环依赖）
+架构约束（3 阶段架构）:
+- 只订阅 Input 阶段 的事件
+- 只发布到 Output 阶段
+- 不订阅 Output 阶段 的事件（避免循环依赖）
 """
 
 import asyncio
@@ -45,23 +45,23 @@ SPEECH_DECIDERS = {"maibot", "llm"}
 
 class DeciderManager:
     """
-    决策Decider管理器 (Decision Domain: Decider管理 + 事件协调)
+    决策Decider管理器 (Decision 阶段: Decider管理 + 事件协调)
 
     职责:
     - 管理多个DecisionDecider生命周期（支持多Decider并行）
     - 使用 _DECIDERS 字典直接创建Decider
     - 支持从配置加载多个启用的Decider
     - 提供decide()方法进行决策（每个Decider独立决策）
-    - 订阅 input.message.ready 事件（来自 Input Domain）
-    - 发布 decision.intent.generated 事件（到 Output Domain）
+    - 订阅 input.message.ready 事件（来自 Input 阶段）
+    - 发布 decision.intent.generated 事件（到 Output 阶段）
     - 异常处理和优雅降级
     - Speech冲突警告机制
 
-    架构约束（3域架构）:
-    - 只订阅 Input Domain 的事件
-    - 只发布到 Output Domain
-    - 不订阅 Output Domain 的事件（避免循环依赖）
-    - 不订阅其他 Decision Domain 事件
+    架构约束（3 阶段架构）:
+    - 只订阅 Input 阶段 的事件
+    - 只发布到 Output 阶段
+    - 不订阅 Output 阶段 的事件（避免循环依赖）
+    - 不订阅其他 Decision 阶段 事件
     """
 
     def __init__(

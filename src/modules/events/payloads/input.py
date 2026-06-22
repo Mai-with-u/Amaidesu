@@ -1,7 +1,7 @@
 """
-Input Domain 事件 Payload 定义
+Input 阶段 事件 Payload 定义
 
-定义 Input Domain 相关的事件 Payload 类型。
+定义 Input 阶段 相关的事件 Payload 类型。
 - RawDataPayload: 原始数据事件
 - MessageReadyPayload: 标准化消息就绪事件
 """
@@ -24,7 +24,7 @@ class RawDataPayload(BasePayload):
 
     事件名：CoreEvents.DATA_RAW
     发布者：InputCollector
-    订阅者：InputDomain (Input Domain)
+    订阅者：InputDomain (Input 阶段)
 
     表示 InputCollector 从外部采集到的原始数据。
     """
@@ -113,7 +113,7 @@ class MessageReadyPayload(BasePayload):
 
     事件名：CoreEvents.DATA_MESSAGE
     发布者：InputDomain
-    订阅者：DecisionManager (Decision Domain)
+    订阅者：DecisionManager (Decision 阶段)
 
     表示 InputDomain 完成了数据标准化处理，生成了 NormalizedMessage。
 

@@ -1,8 +1,8 @@
 """
-OutputHandlerManager - Output Domain: 输出Handler管理器
+OutputHandlerManager - Output 阶段: 输出Handler管理器
 
 职责:
-- 协调 Decision Domain → Output Domain 的数据流
+- 协调 Decision 阶段 → Output 阶段 的数据流
 - 订阅 DECISION_INTENT_GENERATED 事件，通过 OutputPipeline 处理后发布 OUTPUT_INTENT_READY 事件
 - 管理多个 OutputHandler
 - 支持并发渲染
@@ -12,7 +12,7 @@ OutputHandlerManager - Output Domain: 输出Handler管理器
 - 从配置加载Handler
 - Pipeline 集成（OutputPipeline）
 
-数据流（3域架构）:
+数据流（3 阶段架构）:
     Intent (Decision) → OutputHandlerManager → OutputPipeline 过滤 → OUTPUT_INTENT_READY 事件
                      → Output Handlers (TTS/Subtitle/Avatar/Sticker 等)
 
@@ -63,7 +63,7 @@ class OutputHandlerManager:
     输出Handler管理器
 
     核心职责:
-    - 协调 Decision Domain → Output Domain 的数据流
+    - 协调 Decision 阶段 → Output 阶段 的数据流
     - 订阅 DECISION_INTENT_GENERATED 事件，通过 OutputPipeline 过滤后发布 OUTPUT_INTENT_READY 事件
     - 管理多个 OutputHandler 实例
     - 并发渲染到所有 Handler
@@ -212,7 +212,7 @@ class OutputHandlerManager:
         self.logger.info("输出Handler管理器清理完成")
 
     async def _on_decision_intent(self, event_name: str, payload: "IntentPayload", source: str):
-        """处理Intent事件（Decision Domain → Output Domain，类型化）"""
+        """处理Intent事件（Decision 阶段 → Output 阶段，类型化）"""
         intent = payload.to_intent()
 
         action_type = intent.action if intent.action else "none"
@@ -380,14 +380,14 @@ class OutputHandlerManager:
                     )
                     schema_class = None
 
-                if config_service:
-                    handler_config = config_service.get_config_with_defaults(
-                        name=output_name,
-                        phase="output",
-                        schema_class=schema_class,
-                    )
-                else:
-                    handler_config = config.get("outputs_config", {}).get(output_name, {})
+                if config_service is None:
+                    raise RuntimeError("config_service 未提供，无法加载 Handler 配置")
+
+                handler_config = config_service.get_config_with_defaults(
+                    name=output_name,
+                    phase="output",
+                    schema_class=schema_class,
+                )
 
                 handler_type = handler_config.get("type", output_name)
 

@@ -30,8 +30,8 @@ class AvatarHandlerBase(ABC):
     使用构造器注入获取依赖，子类只需实现平台特定的适配和渲染逻辑。
 
     LLM 翻译层：
-    - Decision Domain 输出自然语言 emotion/action（如"开心"、"比心"）
-    - Output Domain 使用 LLM 将其翻译为平台特定的英文键
+    - Decision 阶段 输出自然语言 emotion/action（如"开心"、"比心"）
+    - Output 阶段 使用 LLM 将其翻译为平台特定的英文键
     """
 
     # 子类必须定义这些映射表（用于 LLM 翻译层）

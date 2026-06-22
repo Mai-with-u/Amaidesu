@@ -671,7 +671,7 @@ class STTCollector:
         if is_first:
             business = {
                 "language": self.iflytek_config.get("language", "zh_cn"),
-                "domain": self.iflytek_config.get("domain", "iat"),
+                "阶段": self.iflytek_config.get("阶段", "iat"),
                 "accent": self.iflytek_config.get("accent", "mandarin"),
                 "vad_eos": self.min_silence_duration_ms,
             }

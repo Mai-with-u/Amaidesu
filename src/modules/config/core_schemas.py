@@ -83,24 +83,13 @@ class ContextConfig(BaseConfig):
     )
 
 
-class DashboardOverlayConfig(BaseConfig):
-    """Dashboard Overlay 配置"""
-
-    type: str = Field(default="dashboard_overlay", description="配置类型标识")
-    enabled: bool = Field(default=True, description="是否启用 Overlay")
-    enable_html_page: bool = Field(default=False, description="是否启用 HTML 页面")
-    max_messages: int = Field(default=30, description="最大显示消息数")
-    show_danmaku: bool = Field(default=True, description="显示弹幕")
-    show_gift: bool = Field(default=True, description="显示礼物")
-    show_super_chat: bool = Field(default=True, description="显示醒目留言")
-    show_guard: bool = Field(default=True, description="显示上舰")
-    show_enter: bool = Field(default=False, description="显示进场")
-    show_reply: bool = Field(default=True, description="显示回复")
-    min_importance: float = Field(default=0.0, description="最小重要性过滤")
-
-
 class DashboardConfig(BaseConfig):
-    """Web Dashboard 配置"""
+    """Web Dashboard 配置
+
+    注意：完整配置（含 danmaku_widget / subtitle_widget 等）由
+    `src.modules.dashboard.config.DashboardConfig` 管理。
+    此处仅保留顶层基础字段，供 core.toml [dashboard] 段使用。
+    """
 
     type: str = Field(default="dashboard", description="配置类型标识")
     enabled: bool = Field(default=True, description="是否启用 Dashboard")
@@ -118,33 +107,6 @@ class DashboardConfig(BaseConfig):
         default=30,
         description="WebSocket 心跳间隔（秒）",
     )
-    auto_open_browser: bool = Field(
-        default=True,
-        description="启动时自动打开浏览器",
-    )
-    overlay: DashboardOverlayConfig = Field(
-        default_factory=DashboardOverlayConfig,
-        description="Overlay 配置",
-    )
-
-
-class EventBusConfig(BaseConfig):
-    """事件总线配置"""
-
-    type: str = Field(default="event_bus", description="配置类型标识")
-    enable_validation: bool = Field(
-        default=False,
-        description="是否启用事件数据验证（建议仅 debug 模式开启）",
-    )
-
-
-class McpConfig(BaseConfig):
-    """MCP Server 配置"""
-
-    type: str = Field(default="mcp", description="配置类型标识")
-    enabled: bool = Field(default=False, description="是否启用 MCP Server")
-    host: str = Field(default="127.0.0.1", description="MCP 监听地址")
-    port: int = Field(default=8021, description="MCP 监听端口")
 
 
 class CoreConfig(BaseConfig):
@@ -161,12 +123,7 @@ class CoreConfig(BaseConfig):
     maicore: MaiCoreConfig = Field(default_factory=MaiCoreConfig, description="MaiCore 连接配置")
     context: ContextConfig = Field(default_factory=ContextConfig, description="上下文管理配置")
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig, description="Dashboard 配置")
-    event_bus: EventBusConfig = Field(
-        default_factory=EventBusConfig,
-        description="事件总线配置",
-    )
     logging: LoggingConfig = Field(default_factory=LoggingConfig, description="日志配置")
-    mcp: McpConfig = Field(default_factory=McpConfig, description="MCP Server 配置")
     pipelines: dict[str, Any] = Field(
         default_factory=lambda: {
             "input": {
@@ -192,8 +149,6 @@ class CoreConfig(BaseConfig):
                     "priority": 100,
                     "words": ["测试脏话", "示例敏感词"],
                     "replacement": "***",
-                    "filter_tts": True,
-                    "filter_subtitle": True,
                     "case_sensitive": False,
                     "drop_on_match": False,
                 },

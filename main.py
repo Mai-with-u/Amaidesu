@@ -182,7 +182,7 @@ def exit_if_config_created(was_created: bool) -> None:
 
 
 async def load_pipeline_manager(config: Dict[str, Any]) -> Optional[InputPipelineManager]:
-    """加载输入管道管理器（Input Domain: 消息预处理）。"""
+    """加载输入管道管理器（Input 阶段：消息预处理）。"""
     pipeline_config = config.get("pipelines", {})
     if not pipeline_config:
         logger.info("配置中未启用管道功能")
@@ -194,7 +194,7 @@ async def load_pipeline_manager(config: Dict[str, Any]) -> Optional[InputPipelin
     try:
         manager = InputPipelineManager()
 
-        # 加载管道（Input Domain: 消息预处理）
+        # 加载管道（Input 阶段：消息预处理）
         await manager.load_pipelines(pipeline_load_dir, pipeline_config)
         pipeline_count = len(manager._pipelines)
 
@@ -288,10 +288,10 @@ async def create_app_components(
     logger.info("初始化事件总线和数据流协调器...")
     event_bus = EventBus()
 
-    # 输入Collector管理器 (Input Domain)
+    # 输入Collector管理器 (Input 阶段)
     input_manager: Optional[InputCollectorManager] = None
     if input_config:
-        logger.info("初始化输入Collector管理器（Input Domain）...")
+        logger.info("初始化输入Collector管理器（Input 阶段）...")
         try:
             input_manager = InputCollectorManager(
                 event_bus=event_bus,
@@ -312,14 +312,14 @@ async def create_app_components(
     # InputCollectorManager 直接订阅事件，无需协调器
     # input_coordinator 已被移除
 
-    # 决策域 (Decision Domain)
+    # 决策阶段 (Decision 阶段)
     decision_manager: Optional[DeciderManager] = None
 
-    # 初始化 prompt_manager（供 decision 和 output domain 使用）
+    # 初始化 prompt_manager（供 decision 和 output 阶段使用）
     prompt_manager = get_prompt_manager()
 
     if decision_config:
-        logger.info("初始化决策域组件（Decision Domain）...")
+        logger.info("初始化决策阶段组件（Decision 阶段）...")
         try:
             decision_manager = DeciderManager(event_bus, llm_service, config_service, context_service, prompt_manager)
 
@@ -334,7 +334,7 @@ async def create_app_components(
     else:
         logger.info("未检测到决策配置，决策域功能将被禁用")
 
-    # 输出Handler管理器 (Output Domain)
+    # 输出Handler管理器 (Output 阶段)
     logger.info("初始化输出Handler管理器...")
     output_manager: Optional[OutputHandlerManager] = (
         OutputHandlerManager(event_bus, prompt_manager=prompt_manager) if output_config else None
@@ -349,7 +349,7 @@ async def create_app_components(
                 prompt_manager=prompt_manager,
             )
             await output_manager.start()
-            logger.info("输出Handler管理器已设置（Output Domain）")
+            logger.info("输出Handler管理器已设置（Output 阶段）")
         except Exception as e:
             logger.error(f"设置输出Handler管理器失败: {e}", exc_info=True)
             logger.warning("输出Handler管理器功能不可用，继续启动其他服务")

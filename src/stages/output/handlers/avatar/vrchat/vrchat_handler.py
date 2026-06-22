@@ -1,5 +1,5 @@
 """
-VRChat Handler - Output Domain: VRChat OSC 虚拟形象渲染实现
+VRChat Handler - Output 阶段: VRChat OSC 虚拟形象渲染实现
 
 职责:
 - 通过 OSC 协议连接到 VRChat

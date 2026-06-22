@@ -1,7 +1,7 @@
 """
 InputPipeline 导出
 
-InputPipeline 用于 Input Domain 中的消息预处理，
+InputPipeline 用于 Input 阶段 中的消息预处理，
 在 组件产出 NormalizedMessage 后进行过滤处理。
 """
 

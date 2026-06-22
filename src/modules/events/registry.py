@@ -119,15 +119,15 @@ class EventRegistry:
 
 def register_core_events() -> None:
     """注册所有核心事件名与 Payload 类型的映射，供 EventBus 校验使用。"""
-    # Input Domain 事件
+    # Input 阶段 事件
     EventRegistry.register_core_event(CoreEvents.INPUT_MESSAGE_READY, MessageReadyPayload)
 
-    # Decision Domain 事件
+    # Decision 阶段 事件
     EventRegistry.register_core_event(CoreEvents.DECISION_INTENT_GENERATED, IntentPayload)
     EventRegistry.register_core_event(CoreEvents.DECISION_DECIDER_CONNECTED, ConnectedPayload)
     EventRegistry.register_core_event(CoreEvents.DECISION_DECIDER_DISCONNECTED, DisconnectedPayload)
 
-    # Output Domain 事件
+    # Output 阶段 事件
     EventRegistry.register_core_event(CoreEvents.OUTPUT_INTENT_READY, IntentPayload)
     EventRegistry.register_core_event(CoreEvents.OUTPUT_OBS_SEND_TEXT, OBSSendTextPayload)
     EventRegistry.register_core_event(CoreEvents.OUTPUT_OBS_SWITCH_SCENE, OBSSwitchScenePayload)

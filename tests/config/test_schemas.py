@@ -12,14 +12,7 @@ class TestCoreConfig:
         assert c.persona.emotion_intensity == 7
         assert c.maicore.port == 8000
         assert c.dashboard.port == 60214
-        assert c.event_bus.enable_validation is False
-        assert c.mcp.enabled is False
         assert c.meta.version == "0.4.0"
-
-    def test_dashboard_overlay_defaults(self):
-        c = CoreConfig()
-        assert c.dashboard.overlay.show_danmaku is True
-        assert c.dashboard.overlay.max_messages == 30
 
     def test_logging_present(self):
         c = CoreConfig()

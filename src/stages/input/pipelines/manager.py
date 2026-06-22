@@ -16,7 +16,7 @@ from src.modules.types.base.normalized_message import NormalizedMessage
 @runtime_checkable
 class InputPipeline(Protocol):
     """
-    输入管道协议（3域架构：Input Domain 的消息后处理）
+    输入管道协议（3 阶段架构：Input 阶段 的消息后处理）
 
     用于在 InputCollectorManager 中处理 NormalizedMessage，
     如限流、敏感词过滤、相似消息过滤等。
@@ -163,7 +163,7 @@ class InputPipelineManager:
     """
     输入管道管理器，负责 InputPipeline 的加载、排序和执行。
 
-    InputPipeline 位置（3域架构）：
+    InputPipeline 位置（3 阶段架构）：
         - InputDomain: 在 Collector 产出 NormalizedMessage 后进行后处理
         - 调用点: InputCollectorManager._run_collector()
         - 功能: 限流、相似文本过滤、敏感词过滤等后处理
@@ -326,7 +326,7 @@ class InputPipelineManager:
 
         InputPipeline 用于 InputCollectorManager 中处理 NormalizedMessage。
 
-        3域架构中的位置：
+        3 阶段架构中的位置：
             - InputCollectorManager._run_collector() 方法内部调用
             - 在 Collector 产出 NormalizedMessage 之后、发布 INPUT_MESSAGE_READY 事件之前
             - 示例：限流、相似文本过滤、敏感词过滤

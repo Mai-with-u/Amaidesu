@@ -2,8 +2,6 @@
 
 from typing import TYPE_CHECKING, Any, Dict, Literal
 
-from pydantic import Field
-
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
@@ -25,7 +23,6 @@ class MockOutputHandler:
         """模拟输出 Handler 配置（用于测试）"""
 
         type: Literal["mock"] = "mock"
-        log_received: bool = Field(default=True, description="是否记录收到的参数")
 
     def __init__(self, config: Dict[str, Any], event_bus: EventBus):
         self.config = config

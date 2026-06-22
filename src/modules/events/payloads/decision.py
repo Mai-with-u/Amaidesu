@@ -1,7 +1,7 @@
 """
-Decision Domain 事件 Payload 定义
+Decision 阶段 事件 Payload 定义
 
-定义 Decision Domain 相关的事件 Payload 类型。
+定义 Decision 阶段 相关的事件 Payload 类型。
 - IntentPayload: 意图生成事件
 - IntentActionPayload: 意图动作 Payload
 - ConnectedPayload: 组件连接事件

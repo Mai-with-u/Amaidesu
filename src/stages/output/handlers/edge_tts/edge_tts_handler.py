@@ -1,5 +1,5 @@
 """
-EdgeTTS Handler - Output Domain: 渲染输出实现
+EdgeTTS Handler - Output 阶段: 渲染输出实现
 
 职责:
 - 使用Edge TTS引擎进行文本转语音并播放

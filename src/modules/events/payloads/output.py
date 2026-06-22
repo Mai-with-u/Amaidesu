@@ -1,7 +1,7 @@
 """
-Output Domain 事件 Payload 定义
+Output 阶段 事件 Payload 定义
 
-定义 Output Domain 相关的事件 Payload 类型。
+定义 Output 阶段 相关的事件 Payload 类型。
 - OBSSendTextPayload: OBS 发送文本事件
 - OBSSwitchScenePayload: OBS 切换场景事件
 - OBSSetSourceVisibilityPayload: OBS 设置源可见性事件

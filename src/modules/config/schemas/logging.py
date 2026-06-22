@@ -4,7 +4,7 @@
 定义日志系统的配置结构。
 """
 
-from typing import Literal
+from typing import List, Literal
 
 from pydantic import BaseModel, Field
 
@@ -21,6 +21,13 @@ class LoggingConfig(BaseModel):
     directory: str = Field(default="logs", description="日志目录（相对于项目根目录）")
 
     level: str = Field(default="INFO", description="最低日志级别（DEBUG, INFO, WARNING, ERROR, CRITICAL）")
+
+    console_level: str = Field(default="INFO", description="控制台日志级别（DEBUG, INFO, WARNING, ERROR, CRITICAL）")
+
+    filter: List[str] = Field(
+        default_factory=list,
+        description="模块过滤器（仅显示这些模块的日志，空列表 = 不过滤）",
+    )
 
     rotation: str = Field(default="10 MB", description="日志轮转触发条件（如 '10 MB', '500 MB', '1 GB'）")
 
@@ -49,6 +56,10 @@ format = "jsonl"
 directory = "logs"
 # 最低日志级别（DEBUG, INFO, WARNING, ERROR, CRITICAL）
 level = "INFO"
+# 控制台日志级别（DEBUG, INFO, WARNING, ERROR, CRITICAL）
+console_level = "INFO"
+# 模块过滤器（仅显示这些模块的日志，空列表 = 不过滤）
+# filter = ["EdgeTTSHandler", "SubtitleHandler"]
 # 日志轮转触发条件（如 '10 MB', '500 MB', '1 GB'）
 rotation = "10 MB"
 # 日志保留时间（如 '7 days', '1 week', '1 month'）
@@ -68,6 +79,8 @@ split_by_session = false
                 "format": "jsonl",
                 "directory": "logs",
                 "level": "INFO",
+                "console_level": "INFO",
+                "filter": [],
                 "rotation": "10 MB",
                 "retention": "7 days",
                 "compression": "zip",

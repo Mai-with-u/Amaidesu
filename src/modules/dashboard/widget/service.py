@@ -29,7 +29,7 @@ class DanmakuWidgetService:
     """
     弹幕小部件服务
 
-    订阅输入域的消息事件，转换为 DanmakuWidgetMessage 并广播到前端。
+    订阅输入阶段的消息事件，转换为 DanmakuWidgetMessage 并广播到前端。
     用于 Warudo 等虚拟形象软件的网页道具场景。
     """
 

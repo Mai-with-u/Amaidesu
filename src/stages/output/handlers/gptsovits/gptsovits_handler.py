@@ -1,5 +1,5 @@
 """
-GPTSoVITS Handler - Output Domain: 渲染输出实现
+GPTSoVITS Handler - Output 阶段: 渲染输出实现
 
 职责:
 - 使用GPT-SoVITS引擎进行文本转语音

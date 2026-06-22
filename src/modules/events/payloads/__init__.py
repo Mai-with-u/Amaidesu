@@ -4,9 +4,9 @@
 为 EventBus 事件提供类型安全的 Pydantic Payload 定义。
 
 模块结构：
-- input.py: Input Domain 相关 Payload
-- decision.py: Decision Domain 相关 Payload
-- output.py: Output Domain 相关 Payload
+- input.py: Input 阶段 相关 Payload
+- decision.py: Decision 阶段 相关 Payload
+- output.py: Output 阶段 相关 Payload
 
 使用示例:
     from src.modules.events.payloads import MessageReadyPayload
@@ -49,15 +49,15 @@ from .connection import ConnectionEventPayload
 logger = get_logger("Payloads")
 
 __all__ = [
-    # Input Domain
+    # Input 阶段
     "RawDataPayload",
     "MessageReadyPayload",
-    # Decision Domain
+    # Decision 阶段
     "IntentPayload",
     "IntentActionPayload",
     "ConnectedPayload",
     "DisconnectedPayload",
-    # Output Domain
+    # Output 阶段
     "OBSSendTextPayload",
     "OBSSwitchScenePayload",
     "OBSSetSourceVisibilityPayload",

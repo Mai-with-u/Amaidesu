@@ -1,5 +1,5 @@
 """
-VTS Handler - Output Domain: VTS虚拟形象渲染实现
+VTS Handler - Output 阶段: VTS虚拟形象渲染实现
 
 职责:
 - 接收Intent并适配为VTS特定参数
@@ -79,9 +79,6 @@ class VTSHandler(AvatarHandlerBase):
         llm_model: str = Field(default="gpt-4o-mini", description="LLM模型")
         llm_temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="LLM温度")
         llm_max_tokens: int = Field(default=50, ge=1, le=200, description="LLM最大token数")
-
-        # 情感热键映射
-        emotion_hotkey_mapping: Dict[str, str] = Field(default_factory=dict, description="情感到热键的映射")
 
         # 口型同步配置
         lip_sync_enabled: bool = Field(default=True, description="是否启用口型同步")
@@ -194,9 +191,6 @@ class VTSHandler(AvatarHandlerBase):
                 self.logger.info("LLM客户端初始化成功")
             except Exception as e:
                 self.logger.warning(f"LLM客户端初始化失败: {e}")
-
-        # 情感热键映射
-        self.emotion_hotkey_mapping = self.typed_config.emotion_hotkey_mapping
 
         # 缓存热键列表
         self.hotkey_list: List[Dict[str, Any]] = []

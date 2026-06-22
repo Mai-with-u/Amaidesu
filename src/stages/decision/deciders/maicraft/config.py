@@ -16,7 +16,6 @@ class MaicraftDeciderConfig(BaseModel):
         json_schema_extra={
             "example": {
                 "type": "maicraft",
-                "enabled": True,
                 "factory_type": "log",
                 "command_mappings": {
                     "chat": "chat",
@@ -35,9 +34,6 @@ class MaicraftDeciderConfig(BaseModel):
 
     # Collector/Decider/Handler 类型标识
     type: Literal["maicraft"] = "maicraft"
-
-    # 是否启用
-    enabled: bool = True
 
     # 工厂类型：log（测试用）或 mcp（生产环境）
     factory_type: Literal["log", "mcp"] = "log"
