@@ -388,10 +388,10 @@ prompt = get_prompt_manager().render(
 from src.modules.events.names import CoreEvents
 
 # 发布事件
-await event_bus.emit(CoreEvents.INPUT_MESSAGE_READY, normalized_message)
+await event_bus.emit(CoreEvents.INPUT_MESSAGE_RECEIVED, normalized_message)
 
 # 订阅事件
-await event_bus.subscribe(CoreEvents.INPUT_MESSAGE_READY, self.handle_message)
+await event_bus.subscribe(CoreEvents.INPUT_MESSAGE_RECEIVED, self.handle_message)
 ```
 
 **详细文档**：
@@ -401,11 +401,82 @@ await event_bus.subscribe(CoreEvents.INPUT_MESSAGE_READY, self.handle_message)
 
 ### 核心事件
 
+事件按阶段流转使用统一的动词链：`received → generated → dispatched`。
+
 | 事件名 | 发布者 | 订阅者 | 数据类型 |
 |--------|--------|--------|---------|
-| `input.message.ready` | Input 阶段 | Decision 阶段 | `NormalizedMessage` |
-| `decision.intent.generated` | Decision 阶段 | Output 阶段 | `Intent` |
-| `output.intent.ready` | OutputHandlerManager | OutputHandlers | `Intent` |
+| `input.message.received` | Input 阶段 | Decision 阶段 | `MessageReadyPayload` (NormalizedMessage) |
+| `decision.intent.generated` | Decision 阶段 | Output 阶段 | `IntentPayload` (Intent) |
+| `output.intent.dispatched` | OutputHandlerManager | OutputHandlers | `IntentPayload` (Intent) |
+| `output.obs.command` | Dashboard API / 外部组件 | ObsControlHandler 等 | `OBSCommandPayload`（按 `action` 区分） |
+
+### 事件注册
+
+事件 Payload 通过 `@register_event` 装饰器注册到模块级 `EVENT_REGISTRY` 字典，由 Payload 模块导入时自动触发。
+
+```python
+from pydantic import BaseModel
+from src.modules.events.registry import register_event
+from src.modules.events.payloads.base import BasePayload
+
+
+@register_event("input.message.received")
+class MessageReadyPayload(BasePayload):
+    message: dict
+    source: str
+    timestamp_ms: int
+    ...
+```
+
+要点：
+- **装饰器幂等**：同一类重复注册不会出错，重复注册为不同类型会抛 `ValueError`
+- **自动反向引用**：被装饰类获得 `cls._registered_event_name` 属性，便于日志/调试
+- **Payload 模块导入**：应用启动时调用 `register_core_events()` 触发各 Payload 子模块 import，使装饰器生效
+- **兼容层**：`EventRegistry.register_core_event(...)` 类 API 保留以兼容旧调用方，新代码应使用装饰器
+
+注册表查询：
+
+```python
+from src.modules.events.registry import EVENT_REGISTRY, get_registered_event, list_registered_events
+
+# 查单个
+payload_cls = get_registered_event("input.message.received")
+
+# 列出全部
+all_events = list_registered_events()  # dict[str, type[BaseModel]]
+```
+
+### 时间字段约定
+
+项目统一使用 **毫秒（ms）** 作为时间单位，避免混用秒和毫秒导致的精度和单位错误。
+
+| 字段类型 | 类型 | 单位 | 命名 | 示例 |
+|---------|------|------|------|------|
+| **时刻**（point-in-time） | `int` | Unix epoch 毫秒 | `<name>_ms` | `timestamp_ms = 1706745600000` |
+| **时长**（duration） | `int` 或 `float` | 毫秒 | `<name>_ms` | `duration_ms = 1234`, `elapsed_ms = 12.5` |
+| **超时配置** | `int` | 毫秒 | `<name>_ms` 或 `<name>_timeout_ms` | `render_timeout_ms = 10000` |
+
+**统一时间工具**（`src/modules/time_utils.py`）：
+
+```python
+from src.modules.time_utils import now_ms, elapsed_ms, format_duration_ms, ms_to_datetime
+
+# 当前时刻（int 毫秒）
+ts = now_ms()  # 1729612345678
+
+# 计算经过时长
+elapsed = elapsed_ms(start_ms=ts)  # int 毫秒
+
+# 人类可读格式化
+format_duration_ms(1234)  # "1.2s"
+format_duration_ms(500)   # "500ms"
+```
+
+**注意事项**：
+- 时刻字段使用 `int` 避免浮点精度问题（Unix 毫秒已经是 13 位整数）
+- 时长字段可为 `float`（用于毫秒级精度测量，如 `12.5ms`）
+- 禁止使用秒为单位的字段（如 `timestamp_s`、`duration_seconds`），如需人类阅读用 `ms_to_datetime()` 转换
+- 历史代码中的 `timestamp` 字段通过 Pydantic `alias` 兼容（`alias="timestamp"`，实际字段为 `timestamp_ms`）
 
 ## ContextService 上下文管理
 
@@ -435,10 +506,12 @@ ContextService 提供对话历史管理和多会话支持。
 外部输入（弹幕、游戏、语音）
   ↓
 【Input 阶段】外部数据 → NormalizedMessage
-  ↓ EventBus: input.message.ready
+  ↓ EventBus: input.message.received
 【Decision 阶段】NormalizedMessage → Intent
   ↓ EventBus: decision.intent.generated
 【Output 阶段】Intent → 实际输出
+  ↓ EventBus: output.intent.dispatched
+OutputHandlers 渲染
 ```
 
 **详细文档**：[3阶段架构](docs/architecture/overview.md)

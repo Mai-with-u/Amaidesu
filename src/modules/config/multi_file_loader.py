@@ -163,8 +163,8 @@ def _generate_phase_toml(phase: str) -> str:
         table["concurrent_rendering"] = True
         table.add(tomlkit.comment("错误处理策略: continue | stop"))
         table["error_handling"] = "continue"
-        table.add(tomlkit.comment("单个 Handler 渲染超时（秒），0 表示不限制"))
-        table["render_timeout"] = 10.0
+        table.add(tomlkit.comment("单个 Handler 渲染超时（毫秒），0 表示不限制"))
+        table["render_timeout_ms"] = 10000
         doc["handlers"] = table
 
     return tomlkit.dumps(doc)

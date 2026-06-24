@@ -295,7 +295,7 @@ class DeciderManager:
 
         try:
             await self.event_bus.emit(
-                CoreEvents.DECISION_DECIDER_CONNECTED,
+                CoreEvents.DECISION_CONNECTED,
                 ConnectedPayload(
                     name=self._decider_name,
                     metadata={"decider_ready": self._decider_ready, "decider_count": len(self._deciders)},
@@ -314,7 +314,7 @@ class DeciderManager:
 
         try:
             await self.event_bus.emit(
-                CoreEvents.DECISION_DECIDER_DISCONNECTED,
+                CoreEvents.DISCONNECTED,
                 DisconnectedPayload(
                     name=decider_name,
                     reason=reason,
@@ -501,19 +501,19 @@ class DeciderManager:
             from src.modules.events.payloads.input import MessageReadyPayload
 
             self.event_bus.on(
-                CoreEvents.INPUT_MESSAGE_READY,
+                CoreEvents.INPUT_MESSAGE_RECEIVED,
                 self._on_data_message,
                 model_class=MessageReadyPayload,
             )
             self._event_subscribed = True
-            self.logger.info(f"DeciderManager 已订阅 '{CoreEvents.INPUT_MESSAGE_READY}' 事件（类型化）")
+            self.logger.info(f"DeciderManager 已订阅 '{CoreEvents.INPUT_MESSAGE_RECEIVED}' 事件（类型化）")
         else:
-            self.logger.debug(f"DeciderManager 已订阅过 '{CoreEvents.INPUT_MESSAGE_READY}' 事件，跳过重复订阅")
+            self.logger.debug(f"DeciderManager 已订阅过 '{CoreEvents.INPUT_MESSAGE_RECEIVED}' 事件，跳过重复订阅")
 
     def _unsubscribe_data_message_event(self) -> None:
         """取消订阅 input.message.ready 事件"""
         if self._event_subscribed:
-            self.event_bus.off(CoreEvents.INPUT_MESSAGE_READY, self._on_data_message)
+            self.event_bus.off(CoreEvents.INPUT_MESSAGE_RECEIVED, self._on_data_message)
             self._event_subscribed = False
             self.logger.debug("DeciderManager 已取消事件订阅")
 

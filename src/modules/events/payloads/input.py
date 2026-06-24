@@ -12,12 +12,14 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 from pydantic import ConfigDict, Field
 
 from src.modules.events.payloads.base import BasePayload
+from src.modules.events.registry import register_event
 
 if TYPE_CHECKING:
     from src.modules.types.base.normalized_message import NormalizedMessage
     from src.modules.types.base.raw_data import RawData
 
 
+@register_event("input.raw.data")
 class RawDataPayload(BasePayload):
     """
     原始数据事件 Payload
@@ -32,21 +34,26 @@ class RawDataPayload(BasePayload):
     content: Any = Field(..., description="原始数据内容（bytes, str, dict等）")
     source: str = Field(..., min_length=1, description="数据源标识符（如 'console_input', 'bili_danmaku'）")
     data_type: str = Field(..., description="数据类型（如 'text', 'gift', 'super_chat'）")
-    timestamp: float = Field(default_factory=time.time, description="Unix时间戳（秒）")
+    timestamp_ms: int = Field(
+        default_factory=lambda: int(time.time() * 1000),
+        alias="timestamp",
+        description="Unix 时间戳（毫秒）",
+    )
     preserve_original: bool = Field(default=False, description="是否保留原始数据")
     original_data: Optional[Any] = Field(default=None, description="原始数据（如果content已被处理）")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="额外元数据")
 
     model_config = ConfigDict(
+        populate_by_name=True,
         json_schema_extra={
             "example": {
                 "content": "用户输入的文本",
                 "source": "console_input",
                 "data_type": "text",
-                "timestamp": 1706745600.0,
+                "timestamp_ms": 1706745600000,
                 "metadata": {"user_id": "12345", "username": "观众A"},
             }
-        }
+        },
     )
 
     def get_log_format(self) -> Optional[Tuple[str, str, Optional[str]]]:
@@ -100,13 +107,14 @@ class RawDataPayload(BasePayload):
             content=raw_data.content,
             source=raw_data.source,
             data_type=raw_data.data_type,
-            timestamp=raw_data.timestamp,
+            timestamp_ms=int(raw_data.timestamp * 1000),
             preserve_original=raw_data.preserve_original,
             original_data=raw_data.original_data,
             metadata=raw_data.metadata.copy(),
         )
 
 
+@register_event("input.message.received")
 class MessageReadyPayload(BasePayload):
     """
     标准化消息就绪事件 Payload
@@ -124,10 +132,15 @@ class MessageReadyPayload(BasePayload):
     # 使用 Dict 格式，因为 NormalizedMessage.content 包含不可序列化的对象
     message: Dict[str, Any] = Field(..., description="标准化消息（NormalizedMessage 序列化后的字典）")
     source: str = Field(..., min_length=1, description="数据源")
-    timestamp: float = Field(default_factory=time.time, description="时间戳")
+    timestamp_ms: int = Field(
+        default_factory=lambda: int(time.time() * 1000),
+        alias="timestamp",
+        description="事件时间戳（Unix 毫秒）",
+    )
     metadata: Dict[str, Any] = Field(default_factory=dict, description="额外元数据")
 
     model_config = ConfigDict(
+        populate_by_name=True,
         json_schema_extra={
             "example": {
                 "message": {
@@ -137,13 +150,13 @@ class MessageReadyPayload(BasePayload):
                     "data_type": "text",
                     "importance": 0.5,
                     "metadata": {"user_id": "12345", "username": "观众A"},
-                    "timestamp": 1706745600.0,
+                    "timestamp_ms": 1706745600000,
                 },
                 "source": "bili_danmaku",
-                "timestamp": 1706745600.0,
+                "timestamp_ms": 1706745600000,
                 "metadata": {"room_id": "123456"},
             }
-        }
+        },
     )
 
     def get_log_format(self) -> Optional[Tuple[str, str, Optional[str]]]:
@@ -234,6 +247,6 @@ class MessageReadyPayload(BasePayload):
         return cls(
             message=normalized_message.model_dump(mode="python"),
             source=normalized_message.source,
-            timestamp=normalized_message.timestamp,
+            timestamp_ms=normalized_message.timestamp_ms,
             metadata=metadata,
         )

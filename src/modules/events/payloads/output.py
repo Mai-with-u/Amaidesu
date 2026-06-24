@@ -2,133 +2,78 @@
 Output 阶段 事件 Payload 定义
 
 定义 Output 阶段 相关的事件 Payload 类型。
-- OBSSendTextPayload: OBS 发送文本事件
-- OBSSwitchScenePayload: OBS 切换场景事件
-- OBSSetSourceVisibilityPayload: OBS 设置源可见性事件
-- RemoteStreamRequestImagePayload: 远程流请求图像事件
+- OBSCommandPayload: 统一的 OBS 命令事件 Payload
+  整合了发送文本、切换场景、设置源可见性、远程流请求图像等命令，
+  通过 ``action`` 字段区分。
+
+事件名：CoreEvents.OUTPUT_OBS_COMMAND = "output.obs.command"
 """
 
-from pydantic import ConfigDict, Field
+from typing import Literal, Optional
+
+from pydantic import ConfigDict
 
 from src.modules.events.payloads.base import BasePayload
+from src.modules.events.registry import register_event
 
 
-class OBSSendTextPayload(BasePayload):
+@register_event("output.obs.command")
+class OBSCommandPayload(BasePayload):
+    """统一的 OBS 命令 Payload
+
+    所有 OBS 相关操作（发送文本、切换场景、设置源可见性、远程流请求图像）
+    都通过本 Payload 的 ``action`` 字段区分。
+
+    事件名：CoreEvents.OUTPUT_OBS_COMMAND
+    发布者：Dashboard API、外部组件
+    订阅者：ObsControlHandler、RemoteStreamHandler 等
+
+    Attributes:
+        action: 命令类型，可选值见 Literal 类型定义。
+        text: send_text 字段，要发送的文本。
+        scene_name: switch_scene 字段，目标场景名称。
+        source_name: send_text / set_source_visibility 字段，OBS 源名称。
+        visibility: set_source_visibility 字段，是否可见。
+        url: request_image 字段，请求图像的 URL。
+        timeout_seconds: request_image 字段，请求超时秒数。
+        timestamp_ms: request_image 字段，请求时间戳（毫秒）。
     """
-    OBS 发送文本事件 Payload
 
-    事件名：CoreEvents.OUTPUT_OBS_SEND_TEXT
-    发布者：需要向 OBS 发送文本的组件
-    订阅者：ObsControlHandler
+    action: Literal["send_text", "switch_scene", "set_source_visibility", "request_image"]
 
-    用于向 OBS 文本源发送文本内容。
-    """
+    # send_text 字段
+    text: Optional[str] = None
 
-    text: str = Field(..., description="要发送的文本")
-    source_name: str = Field(default="文本", description="OBS 源名称")
+    # switch_scene 字段
+    scene_name: Optional[str] = None
+
+    # set_source_visibility 字段
+    source_name: Optional[str] = None
+    visibility: Optional[bool] = None
+
+    # request_image 字段
+    url: Optional[str] = None
+    timeout_seconds: Optional[float] = None
+    timestamp_ms: Optional[int] = None
 
     model_config = ConfigDict(
+        populate_by_name=True,
         json_schema_extra={
-            "example": {
-                "text": "Hello World",
-                "source_name": "文本",
-            }
-        }
+            "examples": [
+                {"action": "send_text", "text": "Hello World", "source_name": "文本"},
+                {"action": "switch_scene", "scene_name": "主场景"},
+                {"action": "set_source_visibility", "source_name": "摄像头", "visibility": True},
+                {
+                    "action": "request_image",
+                    "url": "http://example.com/img.jpg",
+                    "timeout_seconds": 5.0,
+                    "timestamp_ms": 1706745600000,
+                },
+            ]
+        },
     )
-
-    def __str__(self) -> str:
-        """简化格式：显示发送文本信息"""
-        class_name = self.__class__.__name__
-        text_preview = self.text[:20] + "..." if len(self.text) > 20 else self.text
-        return f'{class_name}(source_name="{self.source_name}", text="{text_preview}")'
-
-
-class OBSSwitchScenePayload(BasePayload):
-    """
-    OBS 切换场景事件 Payload
-
-    事件名：CoreEvents.OUTPUT_OBS_SWITCH_SCENE
-    发布者：需要切换 OBS 场景的组件
-    订阅者：ObsControlHandler
-
-    用于切换 OBS 中的场景。
-    """
-
-    scene_name: str = Field(..., description="目标场景名称")
-
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "scene_name": "主场景",
-            }
-        }
-    )
-
-    def __str__(self) -> str:
-        """简化格式：显示场景切换信息"""
-        class_name = self.__class__.__name__
-        return f'{class_name}(scene_name="{self.scene_name}")'
-
-
-class OBSSetSourceVisibilityPayload(BasePayload):
-    """
-    OBS 设置源可见性事件 Payload
-
-    事件名：CoreEvents.OUTPUT_OBS_SET_SOURCE_VISIBILITY
-    发布者：需要控制源可见性的组件
-    订阅者：ObsControlHandler
-
-    用于设置 OBS 中源的可见性。
-    """
-
-    source_name: str = Field(..., description="OBS 源名称")
-    visible: bool = Field(..., description="是否可见")
-
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "source_name": "摄像头",
-                "visible": True,
-            }
-        }
-    )
-
-    def __str__(self) -> str:
-        """简化格式：显示源可见性信息"""
-        class_name = self.__class__.__name__
-        return f'{class_name}(source_name="{self.source_name}", visible={self.visible})'
-
-
-class RemoteStreamRequestImagePayload(BasePayload):
-    """
-    远程流请求图像事件 Payload
-
-    事件名：CoreEvents.OUTPUT_REMOTE_STREAM_REQUEST_IMAGE
-    发布者：RemoteStreamHandler
-    订阅者：需要响应图像请求的组件（如 AvatarHandler）
-
-    当边缘设备向服务器请求一帧图像时触发。
-    """
-
-    timestamp: float = Field(default_factory=lambda: __import__("time").time(), description="请求时间戳")
-
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "timestamp": 1706745600.0,
-            }
-        }
-    )
-
-    def __str__(self) -> str:
-        """简化格式：显示图像请求信息"""
-        class_name = self.__class__.__name__
-        return f"{class_name}(timestamp={self.timestamp})"
 
 
 __all__ = [
-    "OBSSendTextPayload",
-    "OBSSwitchScenePayload",
-    "OBSSetSourceVisibilityPayload",
-    "RemoteStreamRequestImagePayload",
+    "OBSCommandPayload",
 ]

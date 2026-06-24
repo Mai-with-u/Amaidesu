@@ -14,13 +14,13 @@
 
     # 发送事件
     await event_bus.emit(
-        CoreEvents.INPUT_MESSAGE_READY,
+        CoreEvents.INPUT_MESSAGE_RECEIVED,
         MessageReadyPayload.from_normalized_message(message),
         source="console_input",
     )
 
     # 订阅事件（类型提示）
-    @event_bus.on(CoreEvents.INPUT_MESSAGE_READY)
+    @event_bus.on(CoreEvents.INPUT_MESSAGE_RECEIVED)
     async def handle_message(payload: MessageReadyPayload):
         message = payload.message
         logger.debug(f"收到消息: {message.text}")
@@ -39,10 +39,7 @@ from .input import (
     RawDataPayload,
 )
 from .output import (
-    OBSSendTextPayload,
-    OBSSetSourceVisibilityPayload,
-    OBSSwitchScenePayload,
-    RemoteStreamRequestImagePayload,
+    OBSCommandPayload,
 )
 from .connection import ConnectionEventPayload
 
@@ -58,10 +55,7 @@ __all__ = [
     "ConnectedPayload",
     "DisconnectedPayload",
     # Output 阶段
-    "OBSSendTextPayload",
-    "OBSSwitchScenePayload",
-    "OBSSetSourceVisibilityPayload",
-    "RemoteStreamRequestImagePayload",
+    "OBSCommandPayload",
     # 组件 (通用)
     "ConnectionEventPayload",
 ]

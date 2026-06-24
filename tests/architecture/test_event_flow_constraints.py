@@ -11,21 +11,18 @@ from typing import Dict, List
 
 # Event names by domain (updated to new naming convention)
 INPUT_EVENTS = {
-    "INPUT_MESSAGE_READY",
+    "INPUT_MESSAGE_RECEIVED",
 }
 
 DECISION_EVENTS = {
     "DECISION_INTENT_GENERATED",
-    "DECISION_DECIDER_CONNECTED",
-    "DECISION_DECIDER_DISCONNECTED",
+    "DECISION_CONNECTED",
+    "DISCONNECTED",
 }
 
 OUTPUT_EVENTS = {
-    "OUTPUT_INTENT_READY",
-    "OUTPUT_OBS_SEND_TEXT",
-    "OUTPUT_OBS_SWITCH_SCENE",
-    "OUTPUT_OBS_SET_SOURCE_VISIBILITY",
-    "OUTPUT_REMOTE_STREAM_REQUEST_IMAGE",
+    "OUTPUT_INTENT_DISPATCHED",
+    "OUTPUT_OBS_COMMAND",
 }
 
 
@@ -253,8 +250,8 @@ class TestEventFlowConstraints:
         Test that the proper event chain exists: Input → Decision → Output.
 
         This verifies that:
-        1. Input Domain publishes INPUT_MESSAGE_READY
-        2. Decision Domain subscribes to INPUT_MESSAGE_READY
+        1. Input Domain publishes INPUT_MESSAGE_RECEIVED
+        2. Decision Domain subscribes to INPUT_MESSAGE_RECEIVED
         3. Decision Domain publishes DECISION_INTENT_GENERATED
         4. Output Domain subscribes to DECISION_INTENT_GENERATED
 
@@ -276,7 +273,7 @@ class TestEventFlowConstraints:
             if not decision_subscribes_to_input:
                 raise AssertionError(
                     "Decision Domain should subscribe to Input Domain events "
-                    "(INPUT_MESSAGE_READY) when Output subscribes to Decision events. "
+                    "(INPUT_MESSAGE_RECEIVED) when Output subscribes to Decision events. "
                     "Data flow: Input → Decision → Output"
                 )
 

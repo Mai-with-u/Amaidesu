@@ -6,9 +6,21 @@ Amaidesu 事件系统模块
 
 # 导出核心组件
 from .event_bus import EventBus
-from .registry import register_core_events
+from .registry import (
+    EVENT_REGISTRY,
+    EventRegistry,
+    get_registered_event,
+    list_registered_events,
+    register_core_events,
+    register_event,
+)
 
 __all__ = [
     "EventBus",
+    "EventRegistry",
+    "EVENT_REGISTRY",
+    "register_event",
+    "get_registered_event",
+    "list_registered_events",
     "register_core_events",
 ]

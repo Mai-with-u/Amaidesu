@@ -21,9 +21,7 @@ from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import (
-    OBSSetSourceVisibilityPayload,
-    OBSSendTextPayload,
-    OBSSwitchScenePayload,
+    OBSCommandPayload,
 )
 from src.modules.logging import get_logger
 
@@ -136,14 +134,8 @@ class ObsControlHandler:
         # 连接OBS
         await self._connect_obs()
 
-        # 注册事件监听（用于外部直接调用，不属于 OUTPUT_INTENT_READY 事件）
-        self.event_bus.on(CoreEvents.OUTPUT_OBS_SEND_TEXT, self._handle_send_text_event, OBSSendTextPayload)
-        self.event_bus.on(CoreEvents.OUTPUT_OBS_SWITCH_SCENE, self._handle_switch_scene_event, OBSSwitchScenePayload)
-        self.event_bus.on(
-            CoreEvents.OUTPUT_OBS_SET_SOURCE_VISIBILITY,
-            self._handle_set_source_visibility_event,
-            OBSSetSourceVisibilityPayload,
-        )
+        # 注册事件监听（用于外部直接调用，不属于 OUTPUT_INTENT_DISPATCHED 事件）
+        self.event_bus.on(CoreEvents.OUTPUT_OBS_COMMAND, self._handle_obs_command_event, OBSCommandPayload)
 
     async def handle(self, intent: "Intent"):
         """
@@ -345,55 +337,44 @@ class ObsControlHandler:
             self.logger.error(f"设置源可见性失败: {e}")
             return False
 
-    async def _handle_send_text_event(self, payload: OBSSendTextPayload):
+    async def _handle_obs_command_event(self, payload: OBSCommandPayload):
         """
-        处理发送文本事件（供外部调用）
+        处理统一的 OBS 命令事件（供外部调用）
+
+        根据 ``payload.action`` 分发到对应的子命令处理逻辑。
 
         Args:
-            payload: OBS 发送文本事件 Payload
+            payload: OBS 命令事件 Payload
         """
-        text = payload.text
+        action = payload.action
 
-        if text:
-            await self._send_text_to_obs(text, None)
+        if action == "send_text":
+            text = payload.text
+            if text:
+                await self._send_text_to_obs(text, None)
+            else:
+                self.logger.warning("send_text 命令未包含 text 内容")
+        elif action == "switch_scene":
+            scene_name = payload.scene_name
+            if scene_name:
+                await self.switch_scene(scene_name)
+            else:
+                self.logger.warning("switch_scene 命令未包含 scene_name")
+        elif action == "set_source_visibility":
+            source_name = payload.source_name
+            visible = payload.visibility
+            if source_name and visible is not None:
+                await self.set_source_visibility(source_name, visible)
+            else:
+                self.logger.warning("set_source_visibility 命令缺少 source_name 或 visibility")
         else:
-            self.logger.warning("事件数据中未包含文本内容")
-
-    async def _handle_switch_scene_event(self, payload: OBSSwitchScenePayload):
-        """
-        处理切换场景事件
-
-        Args:
-            payload: OBS 切换场景事件 Payload
-        """
-        scene_name = payload.scene_name
-        if scene_name:
-            await self.switch_scene(scene_name)
-        else:
-            self.logger.warning("事件数据中未包含场景名称")
-
-    async def _handle_set_source_visibility_event(self, payload: OBSSetSourceVisibilityPayload):
-        """
-        处理设置源可见性事件
-
-        Args:
-            payload: OBS 设置源可见性事件 Payload
-        """
-        source_name = payload.source_name
-        visible = payload.visible
-
-        if source_name:
-            await self.set_source_visibility(source_name, visible)
-        else:
-            self.logger.warning("事件数据中未包含源名称")
+            self.logger.warning(f"收到未知的 OBS 命令 action: {action}")
 
     async def cleanup(self):
         """清理资源"""
-        # 取消事件监听（OBS特有的事件，不属于 OUTPUT_INTENT_READY）
+        # 取消事件监听（OBS特有的事件，不属于 OUTPUT_INTENT_DISPATCHED）
         if self.event_bus:
-            self.event_bus.off(CoreEvents.OUTPUT_OBS_SEND_TEXT, self._handle_send_text_event)
-            self.event_bus.off(CoreEvents.OUTPUT_OBS_SWITCH_SCENE, self._handle_switch_scene_event)
-            self.event_bus.off(CoreEvents.OUTPUT_OBS_SET_SOURCE_VISIBILITY, self._handle_set_source_visibility_event)
+            self.event_bus.off(CoreEvents.OUTPUT_OBS_COMMAND, self._handle_obs_command_event)
 
         # 断开OBS连接
         if self.obs_connection:

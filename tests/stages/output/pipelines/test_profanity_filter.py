@@ -25,7 +25,7 @@ async def test_profanity_filter_basic():
     pipeline = ProfanityFilterPipeline(config)
 
     intent = Intent(
-        metadata=IntentMetadata(source_id="test", decision_time=int(time.time() * 1000)),
+        metadata=IntentMetadata(source_id="test", decision_time_ms=int(time.time() * 1000)),
         speech="This is a badword example",
     )
 
@@ -52,7 +52,7 @@ async def test_profanity_filter_chinese():
     pipeline = ProfanityFilterPipeline(config)
 
     intent = Intent(
-        metadata=IntentMetadata(source_id="test", decision_time=int(time.time() * 1000)),
+        metadata=IntentMetadata(source_id="test", decision_time_ms=int(time.time() * 1000)),
         speech="这是一段包含脏话和敏感词的文本",
     )
 
@@ -80,7 +80,7 @@ async def test_profanity_filter_drop_on_match():
     pipeline = ProfanityFilterPipeline(config)
 
     intent = Intent(
-        metadata=IntentMetadata(source_id="test", decision_time=int(time.time() * 1000)),
+        metadata=IntentMetadata(source_id="test", decision_time_ms=int(time.time() * 1000)),
         speech="This message is blocked",
     )
 
@@ -104,7 +104,7 @@ async def test_profanity_filter_case_insensitive():
     pipeline = ProfanityFilterPipeline(config)
 
     intent = Intent(
-        metadata=IntentMetadata(source_id="test", decision_time=int(time.time() * 1000)),
+        metadata=IntentMetadata(source_id="test", decision_time_ms=int(time.time() * 1000)),
         speech="This has BADWORD and BadWord",
     )
 
@@ -132,7 +132,7 @@ async def test_profanity_filter_case_sensitive():
     pipeline = ProfanityFilterPipeline(config)
 
     intent = Intent(
-        metadata=IntentMetadata(source_id="test", decision_time=int(time.time() * 1000)),
+        metadata=IntentMetadata(source_id="test", decision_time_ms=int(time.time() * 1000)),
         speech="This has BADWORD and badword",
     )
 
@@ -160,7 +160,7 @@ async def test_profanity_filter_no_match():
 
     original_text = "这是一段正常的文本"
     intent = Intent(
-        metadata=IntentMetadata(source_id="test", decision_time=int(time.time() * 1000)),
+        metadata=IntentMetadata(source_id="test", decision_time_ms=int(time.time() * 1000)),
         speech=original_text,
     )
 

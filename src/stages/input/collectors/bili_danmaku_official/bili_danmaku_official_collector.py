@@ -7,7 +7,6 @@ BiliDanmakuOfficialCollector - Bilibili 官方弹幕 Collector
 from __future__ import annotations
 
 import asyncio
-import time
 from typing import Any, AsyncIterator, Dict, Literal, Optional
 
 from pydantic import Field
@@ -26,6 +25,7 @@ from src.stages.input.shared.bili_messages import (
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
+from src.modules.time_utils import now_ms
 from src.modules.types.base.normalized_message import NormalizedMessage
 
 from .client.websocket_client import BiliWebSocketClient
@@ -238,7 +238,7 @@ class BiliDanmakuOfficialCollector:
                 source="bili_danmaku_official",
                 data_type="text",
                 importance=self._calculate_danmaku_importance(bili_msg),
-                timestamp=bili_msg.timestamp or time.time(),
+                timestamp_ms=int(bili_msg.timestamp * 1000) if bili_msg.timestamp else now_ms(),
                 raw=bili_msg,
                 user_id=user_id,
                 user_nickname=user_nickname,
@@ -253,7 +253,7 @@ class BiliDanmakuOfficialCollector:
                 source="bili_danmaku_official",
                 data_type="enter",
                 importance=0.1,
-                timestamp=bili_msg.timestamp or time.time(),
+                timestamp_ms=int(bili_msg.timestamp * 1000) if bili_msg.timestamp else now_ms(),
                 raw=bili_msg,
                 user_id=user_id,
                 user_nickname=user_nickname,
@@ -270,7 +270,7 @@ class BiliDanmakuOfficialCollector:
                 source="bili_danmaku_official",
                 data_type="gift",
                 importance=self._calculate_gift_importance(bili_msg),
-                timestamp=bili_msg.timestamp or time.time(),
+                timestamp_ms=int(bili_msg.timestamp * 1000) if bili_msg.timestamp else now_ms(),
                 raw=bili_msg,
                 user_id=user_id,
                 user_nickname=user_nickname,
@@ -289,7 +289,7 @@ class BiliDanmakuOfficialCollector:
                 source="bili_danmaku_official",
                 data_type="guard",
                 importance=importance_scores.get(bili_msg.guard_level, 0.7),
-                timestamp=bili_msg.timestamp or time.time(),
+                timestamp_ms=int(bili_msg.timestamp * 1000) if bili_msg.timestamp else now_ms(),
                 raw=bili_msg,
                 user_id=user_id,
                 user_nickname=user_nickname,
@@ -311,7 +311,7 @@ class BiliDanmakuOfficialCollector:
                 source="bili_danmaku_official",
                 data_type="super_chat",
                 importance=importance,
-                timestamp=bili_msg.timestamp or time.time(),
+                timestamp_ms=int(bili_msg.timestamp * 1000) if bili_msg.timestamp else now_ms(),
                 raw=bili_msg,
                 user_id=user_id,
                 user_nickname=user_nickname,
@@ -325,7 +325,7 @@ class BiliDanmakuOfficialCollector:
                 source="bili_danmaku_official",
                 data_type="unknown",
                 importance=0.1,
-                timestamp=time.time(),
+                timestamp_ms=now_ms(),
                 raw=bili_msg,
                 user_id=user_id,
                 user_nickname=user_nickname,

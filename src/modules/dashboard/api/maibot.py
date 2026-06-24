@@ -44,7 +44,7 @@ async def handle_maibot_action(
             context="来源: maibot_api",
             metadata=IntentMetadata(
                 source_id="maibot_api",
-                decision_time=int(time.time() * 1000),
+                decision_time_ms=int(time.time() * 1000),
                 parser_type="maibot_api",
                 extra={"priority": request.priority, "action_params": request.action_params},
             ),

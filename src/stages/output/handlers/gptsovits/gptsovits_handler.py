@@ -22,6 +22,8 @@ from pydantic import Field
 from src.stages.output.registry import handler
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import IntentPayload
 from src.modules.logging import get_logger
 from src.modules.streaming.audio_stream_channel import AudioStreamChannel
 from src.modules.tts import AudioDeviceManager, GPTSoVITSClient
@@ -149,6 +151,9 @@ class GPTSoVITSHandler:
         self.tts_client: Optional[GPTSoVITSClient] = None
         self.audio_manager: Optional[AudioDeviceManager] = None
 
+        # 事件订阅状态标志（确保幂等）
+        self._dispatch_subscribed = False
+
         self.logger.info("GPTSoVITSHandler初始化完成")
 
     async def init(self):
@@ -171,11 +176,37 @@ class GPTSoVITSHandler:
         # 加载默认预设
         self.tts_client.load_preset("default")
 
+        # 订阅 OUTPUT_INTENT_DISPATCHED 事件（idempotent）
+        if self.event_bus and not getattr(self, "_dispatch_subscribed", False):
+            self.event_bus.on(
+                CoreEvents.OUTPUT_INTENT_DISPATCHED,
+                self._handle_intent_dispatched,
+                model_class=IntentPayload,
+            )
+            self._dispatch_subscribed = True
+
         self.logger.info("GPTSoVITSHandler设置完成")
+
+    async def _handle_intent_dispatched(self, event_name: str, payload: IntentPayload, source: str):
+        """
+        处理 OUTPUT_INTENT_DISPATCHED 事件（OutputHandlerManager 派发的 Intent）
+
+        Args:
+            event_name: 事件名
+            payload: IntentPayload 实例
+            source: 事件源标识
+        """
+        intent = payload.to_intent()
+        await self.handle(intent)
 
     async def cleanup(self):
         """清理资源"""
         self.logger.info("GPTSoVITSHandler清理中...")
+
+        # 取消事件订阅
+        if self.event_bus and getattr(self, "_dispatch_subscribed", False):
+            self.event_bus.off(CoreEvents.OUTPUT_INTENT_DISPATCHED, self._handle_intent_dispatched)
+            self._dispatch_subscribed = False
 
         # 停止音频播放
         if self.audio_manager:

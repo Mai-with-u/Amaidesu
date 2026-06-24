@@ -85,7 +85,7 @@ class ReplayDecider:
             context=f"来源: {normalized_message.source}",
             metadata=IntentMetadata(
                 source_id=normalized_message.source,
-                decision_time=int(time.time() * 1000),
+                decision_time_ms=int(time.time() * 1000),
                 parser_type="replay",
                 replay_count=self._total_messages,
             ),

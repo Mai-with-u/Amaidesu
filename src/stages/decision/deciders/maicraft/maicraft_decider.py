@@ -5,7 +5,7 @@ Maicraft Decision Decider
 支持通过配置切换不同的动作实现系列（如 Log、MCP 等）。
 
 架构要点:
-- 订阅 CoreEvents.INPUT_MESSAGE_READY 事件
+- 订阅 CoreEvents.INPUT_MESSAGE_RECEIVED 事件
 - 解析弹幕命令并生成游戏操作 Intent
 - 通过 Intent.actions 传递动作给 Output 阶段
 - 不直接触发 Output Handler（遵守 3 域数据流规则）
@@ -236,7 +236,7 @@ class MaicraftDecider:
                 speech=f"[游戏操作] {command.name} {' '.join(command.args)}",
                 metadata=IntentMetadata(
                     source_id="maicraft",
-                    decision_time=int(time.time() * 1000),
+                    decision_time_ms=int(time.time() * 1000),
                 ),
             )
 
@@ -331,7 +331,7 @@ class MaicraftDecider:
             speech="",
             metadata=IntentMetadata(
                 source_id="maicraft",
-                decision_time=int(time.time() * 1000),
+                decision_time_ms=int(time.time() * 1000),
             ),
         )
 

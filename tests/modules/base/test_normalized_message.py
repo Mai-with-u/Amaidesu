@@ -98,23 +98,40 @@ async def test_normalized_message_creation(mock_content):
     assert message.source == "bili_danmaku"
     assert message.data_type == "text"
     assert message.importance == 0.5
-    assert message.timestamp == 0.0  # 默认值为 0.0
+    assert message.timestamp_ms == 0  # 默认值为 0（毫秒）
 
 
 @pytest.mark.asyncio
 async def test_normalized_message_with_explicit_timestamp(mock_content):
-    """测试显式提供 timestamp"""
-    custom_timestamp = time.time()
+    """测试显式提供 timestamp_ms（使用新字段名）"""
+    custom_timestamp_ms = int(time.time() * 1000)
     message = NormalizedMessage(
         text="测试",
         raw=mock_content,
         source="test",
         data_type="text",
         importance=0.5,
-        timestamp=custom_timestamp,
+        timestamp_ms=custom_timestamp_ms,
     )
 
-    assert message.timestamp == custom_timestamp
+    assert message.timestamp_ms == custom_timestamp_ms
+
+
+@pytest.mark.asyncio
+async def test_normalized_message_with_legacy_timestamp_alias(mock_content):
+    """测试使用 alias 字段名 `timestamp` 仍能创建实例（向后兼容）"""
+    custom_timestamp_ms = int(time.time() * 1000)
+    message = NormalizedMessage(
+        text="测试",
+        raw=mock_content,
+        source="test",
+        data_type="text",
+        importance=0.5,
+        timestamp=custom_timestamp_ms,  # 使用 alias
+    )
+
+    # 实际值应存入 timestamp_ms
+    assert message.timestamp_ms == custom_timestamp_ms
 
 
 @pytest.mark.asyncio
@@ -383,7 +400,7 @@ async def test_normalized_message_to_dict(mock_content):
         user_nickname="测试用户",
         platform="bilibili",
         room_id="123456",
-        timestamp=1234567890.0,
+        timestamp_ms=1234567890000,
     )
 
     serialized = message.to_dict()
@@ -392,7 +409,7 @@ async def test_normalized_message_to_dict(mock_content):
     assert serialized["source"] == "test"
     assert serialized["data_type"] == "text"
     assert serialized["importance"] == 0.8
-    assert serialized["timestamp"] == 1234567890.0
+    assert serialized["timestamp_ms"] == 1234567890000
     assert serialized["user_id"] == "user123"
     assert serialized["user_nickname"] == "测试用户"
     assert serialized["platform"] == "bilibili"
@@ -444,7 +461,13 @@ async def test_normalized_message_model_dump(mock_content):
     assert serialized["user_nickname"] == "测试用户"
     assert serialized["platform"] == "bilibili"
     assert serialized["room_id"] == "123456"
-    assert "timestamp" in serialized
+    # 默认 model_dump 输出新字段名
+    assert "timestamp_ms" in serialized
+    assert serialized["timestamp_ms"] == 0  # 默认值
+    # 验证 alias 模式可输出旧字段名
+    alias_dump = message.model_dump(by_alias=True)
+    assert "timestamp" in alias_dump
+    assert "timestamp_ms" not in alias_dump
 
 
 # =============================================================================
@@ -470,7 +493,7 @@ async def test_empty_text():
 
 @pytest.mark.asyncio
 async def test_zero_timestamp_remains_zero():
-    """测试 timestamp 默认为 0.0 且保持不变"""
+    """测试 timestamp_ms 默认为 0 且保持不变"""
     mock_content = MockStructuredContent("测试", "user123")
     message = NormalizedMessage(
         text="测试",
@@ -478,11 +501,11 @@ async def test_zero_timestamp_remains_zero():
         source="test",
         data_type="text",
         importance=0.5,
-        # 不提供 timestamp，使用默认值 0.0
+        # 不提供 timestamp_ms，使用默认值 0
     )
 
-    # timestamp 应该保持默认值 0.0（不再自动设置）
-    assert message.timestamp == 0.0
+    # timestamp_ms 应该保持默认值 0（不再自动设置）
+    assert message.timestamp_ms == 0
 
 
 @pytest.mark.asyncio

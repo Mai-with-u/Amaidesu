@@ -21,7 +21,7 @@ from src.stages.output.registry import handler
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads import RemoteStreamRequestImagePayload
+from src.modules.events.payloads import OBSCommandPayload
 from src.modules.logging import get_logger
 from src.modules.streaming.audio_stream_channel import AudioStreamChannel
 from src.modules.streaming.backpressure import BackpressureStrategy, SubscriberConfig
@@ -208,9 +208,9 @@ class RemoteStreamHandler:
         # 注册事件监听
         if self.event_bus:
             self.event_bus.on(
-                CoreEvents.OUTPUT_REMOTE_STREAM_REQUEST_IMAGE,
+                CoreEvents.OUTPUT_OBS_COMMAND,
                 self._handle_image_request,
-                RemoteStreamRequestImagePayload,
+                OBSCommandPayload,
             )
 
         # 注册 AudioStreamChannel 订阅
@@ -301,9 +301,9 @@ class RemoteStreamHandler:
         # 取消事件监听
         if self.event_bus:
             self.event_bus.off(
-                CoreEvents.OUTPUT_REMOTE_STREAM_REQUEST_IMAGE,
+                CoreEvents.OUTPUT_OBS_COMMAND,
                 self._handle_image_request,
-                RemoteStreamRequestImagePayload,
+                OBSCommandPayload,
             )
 
         self._is_connected = False
@@ -494,8 +494,9 @@ class RemoteStreamHandler:
             self.logger.debug("收到图像请求")
             # 触发图像请求事件
             if self.event_bus:
-                payload = RemoteStreamRequestImagePayload(timestamp=message.data.get("timestamp", time.time()))
-                await self.event_bus.emit(CoreEvents.OUTPUT_REMOTE_STREAM_REQUEST_IMAGE, payload)
+                timestamp_ms = int(message.data.get("timestamp", time.time()) * 1000)
+                payload = OBSCommandPayload(action="request_image", timestamp_ms=timestamp_ms)
+                await self.event_bus.emit(CoreEvents.OUTPUT_OBS_COMMAND, payload)
 
         elif message_type == MessageType.TTS_DATA:
             # 服务器向边缘设备发送的TTS数据（在客户端模式下会收到）
@@ -665,10 +666,11 @@ class RemoteStreamHandler:
 
     # ===== 事件处理 =====
 
-    async def _handle_image_request(self, payload: RemoteStreamRequestImagePayload):
+    async def _handle_image_request(self, payload: OBSCommandPayload):
         """处理图像请求事件"""
         self.logger.debug(f"收到图像请求: {payload}")
-        # 转发为实际的图像请求消息
+        if payload.action != "request_image":
+            return
         await self.request_image()
 
     # 注意: _handle_tts_request 已移除，TTS 音频现在通过 AudioStreamChannel 传输

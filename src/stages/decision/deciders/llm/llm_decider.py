@@ -335,7 +335,7 @@ class LLMDecider:
             context=context,
             metadata=IntentMetadata(
                 source_id="llm",
-                decision_time=int(time.time() * 1000),
+                decision_time_ms=int(time.time() * 1000),
                 parser_type="llm_structured",
             ),
         )
@@ -396,7 +396,7 @@ class LLMDecider:
             context="",
             metadata=IntentMetadata(
                 source_id="llm",
-                decision_time=int(time.time() * 1000),
+                decision_time_ms=int(time.time() * 1000),
                 parser_type="llm_fallback",
             ),
         )

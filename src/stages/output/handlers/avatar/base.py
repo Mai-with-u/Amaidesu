@@ -14,6 +14,8 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.decision import IntentPayload
 from src.modules.llm.manager import ClientType, LLMManager
 from src.modules.logging import get_logger
 from src.modules.prompts.manager import PromptManager
@@ -64,6 +66,7 @@ class AvatarHandlerBase(ABC):
         self.logger = get_logger(self.__class__.__name__)
         self._is_connected = False
         self._has_started = False
+        self._dispatch_subscribed = False
 
     async def handle(self, intent: "Intent"):
         """
@@ -243,13 +246,50 @@ class AvatarHandlerBase(ABC):
     # ==================== 生命周期方法 ====================
 
     async def init(self):
-        """初始化 Handler：连接平台"""
+        """初始化 Handler：订阅 OUTPUT_INTENT_DISPATCHED 事件并连接平台"""
+        # 订阅 OUTPUT_INTENT_DISPATCHED 事件（由 OutputHandlerManager 派发）
+        if self.event_bus and not getattr(self, "_dispatch_subscribed", False):
+            self.event_bus.on(
+                CoreEvents.OUTPUT_INTENT_DISPATCHED,
+                self._handle_intent_dispatched,
+                IntentPayload,
+            )
+            self._dispatch_subscribed = True
+            self.logger.debug(f"{self.__class__.__name__} 已订阅 {CoreEvents.OUTPUT_INTENT_DISPATCHED}")
+
         await self._connect()
         self._has_started = True
         self.logger.info(f"{self.__class__.__name__} 已启动")
 
+    async def _handle_intent_dispatched(self, event_name: str, payload: IntentPayload, source: str) -> None:
+        """处理 OUTPUT_INTENT_DISPATCHED 事件
+
+        将 IntentPayload 转换为 Intent 对象后调用 handle()。
+
+        Args:
+            event_name: 事件名
+            payload: IntentPayload 实例
+            source: 事件来源
+        """
+        try:
+            intent = payload.to_intent()
+            await self.handle(intent)
+        except Exception as e:
+            self.logger.error(f"处理 Intent 派发事件失败: {e}", exc_info=True)
+
     async def cleanup(self):
-        """清理资源：断开连接"""
+        """清理资源：取消订阅并断开连接"""
+        if self.event_bus and getattr(self, "_dispatch_subscribed", False):
+            try:
+                self.event_bus.off(
+                    CoreEvents.OUTPUT_INTENT_DISPATCHED,
+                    self._handle_intent_dispatched,
+                )
+            except Exception as e:
+                self.logger.warning(f"取消订阅 {CoreEvents.OUTPUT_INTENT_DISPATCHED} 失败: {e}")
+            finally:
+                self._dispatch_subscribed = False
+
         await self._disconnect()
         self.logger.info(f"{self.__class__.__name__} 已停止")
 

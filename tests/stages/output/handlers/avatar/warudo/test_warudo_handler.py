@@ -59,7 +59,7 @@ class TestWarudoHandlerRendering:
 
         # 使用 Intent 调用 handle
         intent = Intent(
-            metadata=IntentMetadata(source_id="test", decision_time=1234567890),
+            metadata=IntentMetadata(source_id="test", decision_time_ms=1234567890123),
             emotion="happy",
             speech="测试",
         )
@@ -74,7 +74,7 @@ class TestWarudoHandlerRendering:
 
         # 使用 Intent 调用 handle
         intent = Intent(
-            metadata=IntentMetadata(source_id="test", decision_time=1234567890),
+            metadata=IntentMetadata(source_id="test", decision_time_ms=1234567890123),
             emotion="happy",
             speech="测试",
         )

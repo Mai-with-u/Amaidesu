@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import sys
-import time
 from typing import Any, AsyncIterator, Dict, List, Literal, Optional
 
 from pydantic import Field
@@ -17,6 +16,7 @@ from src.stages.input.registry import collector
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
+from src.modules.time_utils import now_ms
 from src.modules.types.base.normalized_message import NormalizedMessage
 
 
@@ -142,7 +142,7 @@ class ConsoleInputCollector:
                             source="console",
                             data_type="text",
                             importance=0.5,
-                            timestamp=time.time(),
+                            timestamp_ms=now_ms(),
                             raw=None,
                             user_id=self.user_id,
                             user_nickname=self.user_nickname,
@@ -224,7 +224,7 @@ class ConsoleInputCollector:
             source="console",
             data_type="gift",
             importance=importance,
-            timestamp=time.time(),
+            timestamp_ms=now_ms(),
             raw=None,
             user_id=self.user_id,
             user_nickname=username,
@@ -242,7 +242,7 @@ class ConsoleInputCollector:
             source="console",
             data_type="super_chat",
             importance=0.7,
-            timestamp=time.time(),
+            timestamp_ms=now_ms(),
             raw=None,
             user_id=self.user_id,
             user_nickname=username,
@@ -269,7 +269,7 @@ class ConsoleInputCollector:
             source="console",
             data_type="guard",
             importance=importance,
-            timestamp=time.time(),
+            timestamp_ms=now_ms(),
             raw=None,
             user_id=self.user_id,
             user_nickname=username,

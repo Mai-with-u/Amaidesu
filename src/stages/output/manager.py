@@ -3,7 +3,7 @@ OutputHandlerManager - Output 阶段: 输出Handler管理器
 
 职责:
 - 协调 Decision 阶段 → Output 阶段 的数据流
-- 订阅 DECISION_INTENT_GENERATED 事件，通过 OutputPipeline 处理后发布 OUTPUT_INTENT_READY 事件
+- 订阅 DECISION_INTENT_GENERATED 事件，通过 OutputPipeline 处理后发布 OUTPUT_INTENT_DISPATCHED 事件
 - 管理多个 OutputHandler
 - 支持并发渲染
 - 错误隔离（单个Handler失败不影响其他）
@@ -13,17 +13,18 @@ OutputHandlerManager - Output 阶段: 输出Handler管理器
 - Pipeline 集成（OutputPipeline）
 
 数据流（3 阶段架构）:
-    Intent (Decision) → OutputHandlerManager → OutputPipeline 过滤 → OUTPUT_INTENT_READY 事件
+    Intent (Decision) → OutputHandlerManager → OutputPipeline 过滤 → OUTPUT_INTENT_DISPATCHED 事件
                      → Output Handlers (TTS/Subtitle/Avatar/Sticker 等)
 
 注意:
 - OutputHandlerManager 负责过滤 Intent 并分发
-- 所有 OutputHandler 订阅 OUTPUT_INTENT_READY 事件
+- 所有 OutputHandler 订阅 OUTPUT_INTENT_DISPATCHED 事件
 """
 
 import asyncio
 import inspect
 import os
+import warnings
 from typing import TYPE_CHECKING, Any, Optional
 
 from pydantic import BaseModel
@@ -64,7 +65,7 @@ class OutputHandlerManager:
 
     核心职责:
     - 协调 Decision 阶段 → Output 阶段 的数据流
-    - 订阅 DECISION_INTENT_GENERATED 事件，通过 OutputPipeline 过滤后发布 OUTPUT_INTENT_READY 事件
+    - 订阅 DECISION_INTENT_GENERATED 事件，通过 OutputPipeline 过滤后发布 OUTPUT_INTENT_DISPATCHED 事件
     - 管理多个 OutputHandler 实例
     - 并发渲染到所有 Handler
     - 错误隔离（单个 Handler 失败不影响其他）
@@ -97,7 +98,7 @@ class OutputHandlerManager:
 
         self.concurrent_rendering = self.config.get("concurrent_rendering", True)
         self.error_handling = self.config.get("error_handling", "continue")
-        self.render_timeout = float(self.config.get("render_timeout", 10.0))
+        self.render_timeout_ms = self._migrate_render_timeout_config(self.config)
 
         self.pipeline_manager: Optional[OutputPipelineManager] = None
 
@@ -109,8 +110,28 @@ class OutputHandlerManager:
             f"OutputHandlerManager初始化完成 "
             f"(concurrent={self.concurrent_rendering}, "
             f"error_handling={self.error_handling}, "
-            f"timeout={self.render_timeout}s)"
+            f"timeout={self.render_timeout_ms}ms)"
         )
+
+    def _migrate_render_timeout_config(self, config: dict) -> int:
+        """迁移旧的 render_timeout (float 秒) 到 render_timeout_ms (int 毫秒)
+
+        Returns the resolved value in milliseconds.
+        Emits DeprecationWarning if old field is present.
+        """
+        if "render_timeout" in config and "render_timeout_ms" not in config:
+            warnings.warn(
+                "Config field 'render_timeout' is deprecated. "
+                "Use 'render_timeout_ms' (int milliseconds) instead. "
+                "Old value: {sec}s → New value: {ms}ms".format(
+                    sec=config["render_timeout"],
+                    ms=int(config["render_timeout"] * 1000),
+                ),
+                DeprecationWarning,
+                stacklevel=3,
+            )
+            return int(config["render_timeout"] * 1000)
+        return int(config.get("render_timeout_ms", 10000))
 
     async def setup(
         self,
@@ -230,11 +251,11 @@ class OutputHandlerManager:
 
             output_payload = IntentPayload.from_intent(intent, payload.name)
             await self.event_bus.emit(
-                CoreEvents.OUTPUT_INTENT_READY,
+                CoreEvents.OUTPUT_INTENT_DISPATCHED,
                 output_payload,
                 source="OutputHandlerManager",
             )
-            self.logger.debug(f"已发布事件: {CoreEvents.OUTPUT_INTENT_READY}")
+            self.logger.debug(f"已发布事件: {CoreEvents.OUTPUT_INTENT_DISPATCHED}")
 
         except Exception as e:
             self.logger.error(f"处理Intent事件时出错: {e}", exc_info=True)
@@ -349,13 +370,13 @@ class OutputHandlerManager:
 
         self.concurrent_rendering = config.get("concurrent_rendering", True)
         self.error_handling = config.get("error_handling", "continue")
-        self.render_timeout = float(config.get("render_timeout", 10.0))
+        self.render_timeout_ms = self._migrate_render_timeout_config(config)
 
         self.logger.info(
             f"输出Handler管理器配置: "
             f"concurrent={self.concurrent_rendering}, "
             f"error_handling={self.error_handling}, "
-            f"timeout={self.render_timeout}s"
+            f"timeout={self.render_timeout_ms}ms"
         )
 
         enabled_handlers = config.get("enabled", [])

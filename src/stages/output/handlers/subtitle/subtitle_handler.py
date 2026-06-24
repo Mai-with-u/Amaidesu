@@ -7,7 +7,6 @@ Subtitle Handler
 import contextlib
 import queue
 import threading
-import time
 import tkinter as tk
 from typing import Any, Dict, Optional
 
@@ -26,7 +25,10 @@ from pydantic import Field
 from src.stages.output.registry import handler
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import IntentPayload
 from src.modules.logging import get_logger
+from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.types import Intent
@@ -238,7 +240,7 @@ class SubtitleHandler:
         background_color: str = Field(default="#FFFFFF", pattern=r"^#[0-9A-Fa-f]{6}$", description="背景颜色")
 
         # 行为配置
-        fade_delay_seconds: int = Field(default=5, ge=0, le=300, description="淡出延迟（秒）")
+        fade_delay_ms: int = Field(default=5000, ge=0, le=300000, description="淡出延迟（毫秒）")
         auto_hide: bool = Field(default=True, description="是否自动隐藏")
         window_alpha: float = Field(default=0.95, ge=0.0, le=1.0, description="窗口透明度")
         always_on_top: bool = Field(default=False, description="是否置顶")
@@ -295,7 +297,7 @@ class SubtitleHandler:
         self.background_color = self.typed_config.background_color
 
         # 行为配置
-        self.fade_delay_seconds = self.typed_config.fade_delay_seconds
+        self.fade_delay_ms = self.typed_config.fade_delay_ms
         self.auto_hide = self.typed_config.auto_hide
         self.window_alpha = self.typed_config.window_alpha
         self.always_on_top = self.typed_config.always_on_top
@@ -317,9 +319,12 @@ class SubtitleHandler:
         self.gui_thread: Optional[threading.Thread] = None
         self.root = None
         self.text_label = None
-        self.last_voice_time = time.time()
+        self.last_voice_time_ms = now_ms()
         self._gui_running = True
         self.is_visible = False
+
+        # 事件订阅状态标志（确保幂等）
+        self._dispatch_subscribed = False
 
     async def init(self):
         """初始化 Handler"""
@@ -328,6 +333,15 @@ class SubtitleHandler:
             self.gui_thread = threading.Thread(target=self._run_gui, daemon=True)
             self.gui_thread.start()
             self.logger.info("字幕 GUI 线程已启动")
+
+        # 订阅 OUTPUT_INTENT_DISPATCHED 事件（idempotent）
+        if self.event_bus and not getattr(self, "_dispatch_subscribed", False):
+            self.event_bus.on(
+                CoreEvents.OUTPUT_INTENT_DISPATCHED,
+                self._handle_intent_dispatched,
+                model_class=IntentPayload,
+            )
+            self._dispatch_subscribed = True
 
     async def handle(self, intent: "Intent"):
         """
@@ -348,9 +362,27 @@ class SubtitleHandler:
         except Exception as e:
             self.logger.error(f"放入字幕队列时出错: {e}", exc_info=True)
 
+    async def _handle_intent_dispatched(self, event_name: str, payload: IntentPayload, source: str):
+        """
+        处理 OUTPUT_INTENT_DISPATCHED 事件（OutputHandlerManager 派发的 Intent）
+
+        Args:
+            event_name: 事件名
+            payload: IntentPayload 实例
+            source: 事件源标识
+        """
+        intent = payload.to_intent()
+        await self.handle(intent)
+
     async def cleanup(self):
         """清理资源"""
         self.logger.info("正在清理 SubtitleHandler...")
+
+        # 取消事件订阅
+        if self.event_bus and getattr(self, "_dispatch_subscribed", False):
+            self.event_bus.off(CoreEvents.OUTPUT_INTENT_DISPATCHED, self._handle_intent_dispatched)
+            self._dispatch_subscribed = False
+
         self._gui_running = False
 
         # 等待线程结束
@@ -501,7 +533,7 @@ class SubtitleHandler:
 
                 # 更新文本
                 self.text_label.configure_text(text=text)
-                self.last_voice_time = time.time()
+                self.last_voice_time_ms = now_ms()
                 self.logger.debug(f"已更新字幕: {text[:30]}...")
             elif not self.always_show_window and self.is_visible and self.auto_hide and self.root:
                 # 隐藏窗口
@@ -521,8 +553,8 @@ class SubtitleHandler:
                 self.auto_hide
                 and self.is_visible
                 and self.root
-                and self.fade_delay_seconds > 0
-                and time.time() - self.last_voice_time > self.fade_delay_seconds
+                and self.fade_delay_ms > 0
+                and now_ms() - self.last_voice_time_ms > self.fade_delay_ms
             ):
                 if self.always_show_window:
                     if self.text_label:

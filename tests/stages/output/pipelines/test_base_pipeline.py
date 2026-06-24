@@ -20,7 +20,7 @@ def create_test_intent(response_text: str = "测试响应") -> Intent:
     return Intent(
         metadata=IntentMetadata(
             source_id="test_source",
-            decision_time=0,
+            decision_time_ms=0,
         ),
         emotion="neutral",
         speech=response_text,

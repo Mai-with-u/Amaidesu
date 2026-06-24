@@ -29,19 +29,17 @@ class EventBroadcaster:
 
     # 事件类型映射：从 CoreEvents 常量到 WebSocket 事件类型
     EVENT_TYPE_MAP = {
-        CoreEvents.INPUT_MESSAGE_READY: "message.received",
+        CoreEvents.INPUT_MESSAGE_RECEIVED: "message.received",
         CoreEvents.DECISION_INTENT_GENERATED: "decision.intent",
-        CoreEvents.OUTPUT_INTENT_READY: "output.render",
+        CoreEvents.OUTPUT_INTENT_DISPATCHED: "output.render",
     }
 
     # 组件 事件类型映射
     PROVIDER_EVENT_TYPE_MAP = {
-        CoreEvents.INPUT_COLLECTOR_CONNECTED: "collector.connected",
-        CoreEvents.INPUT_COLLECTOR_DISCONNECTED: "collector.disconnected",
-        CoreEvents.DECISION_DECIDER_CONNECTED: "collector.connected",
-        CoreEvents.DECISION_DECIDER_DISCONNECTED: "collector.disconnected",
-        CoreEvents.OUTPUT_HANDLER_CONNECTED: "collector.connected",
-        CoreEvents.OUTPUT_HANDLER_DISCONNECTED: "collector.disconnected",
+        CoreEvents.INPUT_CONNECTED: "collector.connected",
+        CoreEvents.INPUT_DISCONNECTED: "collector.disconnected",
+        CoreEvents.DECISION_CONNECTED: "collector.connected",
+        CoreEvents.DISCONNECTED: "collector.disconnected",
     }
 
     def __init__(
@@ -93,9 +91,9 @@ class EventBroadcaster:
     def _get_handler_for_event(self, event_name: str) -> Optional[Callable]:
         """获取事件对应的处理器"""
         handler_map = {
-            CoreEvents.INPUT_MESSAGE_READY: self._on_input_message,
+            CoreEvents.INPUT_MESSAGE_RECEIVED: self._on_input_message,
             CoreEvents.DECISION_INTENT_GENERATED: self._on_decision_intent,
-            CoreEvents.OUTPUT_INTENT_READY: self._on_output_intent,
+            CoreEvents.OUTPUT_INTENT_DISPATCHED: self._on_output_intent,
             CoreEvents.CORE_STARTUP: self._on_core_event,
             CoreEvents.CORE_SHUTDOWN: self._on_core_event,
             CoreEvents.CORE_ERROR: self._on_core_error,
@@ -109,7 +107,7 @@ class EventBroadcaster:
         """订阅核心数据流事件"""
         # 订阅 Input 事件 - 使用 MessageReadyPayload
         self._subscribe_event(
-            CoreEvents.INPUT_MESSAGE_READY,
+            CoreEvents.INPUT_MESSAGE_RECEIVED,
             self._on_input_message,
             model_class=MessageReadyPayload,
         )
@@ -123,7 +121,7 @@ class EventBroadcaster:
 
         # 订阅 Output 事件 - 使用 IntentPayload
         self._subscribe_event(
-            CoreEvents.OUTPUT_INTENT_READY,
+            CoreEvents.OUTPUT_INTENT_DISPATCHED,
             self._on_output_intent,
             model_class=IntentPayload,
         )
@@ -149,12 +147,10 @@ class EventBroadcaster:
 
         # 订阅组件状态事件
         component_event_map = {
-            CoreEvents.INPUT_COLLECTOR_CONNECTED: ConnectedPayload,
-            CoreEvents.INPUT_COLLECTOR_DISCONNECTED: DisconnectedPayload,
-            CoreEvents.DECISION_DECIDER_CONNECTED: ConnectedPayload,
-            CoreEvents.DECISION_DECIDER_DISCONNECTED: DisconnectedPayload,
-            CoreEvents.OUTPUT_HANDLER_CONNECTED: ConnectedPayload,
-            CoreEvents.OUTPUT_HANDLER_DISCONNECTED: DisconnectedPayload,
+            CoreEvents.INPUT_CONNECTED: ConnectedPayload,
+            CoreEvents.INPUT_DISCONNECTED: DisconnectedPayload,
+            CoreEvents.DECISION_CONNECTED: ConnectedPayload,
+            CoreEvents.DISCONNECTED: DisconnectedPayload,
         }
 
         for event_name, payload_class in component_event_map.items():

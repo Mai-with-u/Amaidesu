@@ -27,7 +27,7 @@ def sample_intent():
         context=None,
         metadata=IntentMetadata(
             source_id="test_source",
-            decision_time=1234567890123,
+            decision_time_ms=1234567890123,
         ),
     )
 

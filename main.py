@@ -11,7 +11,11 @@ from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger as loguru_logger
 from src.modules.dashboard.server import DashboardServer
-from src.modules.events import EventBus
+from src.modules.events import (
+    EventBus,
+    list_registered_events,
+    register_core_events,
+)
 from src.modules.logging import get_logger
 from src.modules.config.service import ConfigService
 from src.modules.llm.manager import LLMManager
@@ -600,6 +604,11 @@ async def main() -> None:
     exit_if_config_created(was_created)
 
     input_pipeline_manager = await load_pipeline_manager(config)
+
+    # 注册所有核心事件（通过 @register_event 装饰器触发 Payload 模块导入）
+    # 必须在 create_app_components() 之前调用，否则 EventBus 校验时找不到 Payload 类型
+    register_core_events()
+    logger.info(f"核心事件注册完成，共 {len(list_registered_events())} 个事件")
 
     (
         context_service,

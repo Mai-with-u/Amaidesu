@@ -80,7 +80,7 @@ class TestTypedEventHandler:
 
         # 订阅类型化事件
         event_bus.on(
-            CoreEvents.INPUT_MESSAGE_READY,
+            CoreEvents.INPUT_MESSAGE_RECEIVED,
             message_handler,
             MessageReadyPayload,
         )
@@ -90,7 +90,7 @@ class TestTypedEventHandler:
             message={"text": "测试消息", "source": "test"},
             source="test_source",
         )
-        await event_bus.emit(CoreEvents.INPUT_MESSAGE_READY, payload, source="test")
+        await event_bus.emit(CoreEvents.INPUT_MESSAGE_RECEIVED, payload, source="test")
 
         # 等待事件处理完成
         await asyncio.sleep(0.1)
@@ -133,7 +133,7 @@ class TestTypedEventHandler:
                 "context": "你好",
                 "metadata": {
                     "source_id": "test_source",
-                    "decision_time": int(time.time() * 1000),
+                    "decision_time_ms": int(time.time() * 1000),
                 },
                 "structured_params": {},
             },

@@ -25,7 +25,7 @@ def make_intent(text: str) -> Intent:
     return Intent(
         metadata=IntentMetadata(
             source_id="test",
-            decision_time=int(time.time() * 1000),
+            decision_time_ms=int(time.time() * 1000),
         ),
         speech=text,
         emotion="neutral",

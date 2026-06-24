@@ -192,7 +192,7 @@ class TestDecisionPayloads:
 
         # 使用 from_intent 方法创建 Payload
         intent = Intent(
-            metadata=IntentMetadata(source_id="test_123", decision_time=1234567890123),
+            metadata=IntentMetadata(source_id="test_123", decision_time_ms=1234567890123),
             emotion="happy",
             action="blink",
             speech="你好！很高兴见到你~",
@@ -412,7 +412,7 @@ class TestEventBusDebugLog:
             from src.modules.types import IntentMetadata
 
             intent = Intent(
-                metadata=IntentMetadata(source_id="test_456", decision_time=1234567890123),
+                metadata=IntentMetadata(source_id="test_456", decision_time_ms=1234567890123),
                 emotion="happy",
                 action="blink",
                 speech="你好！很高兴见到你~",

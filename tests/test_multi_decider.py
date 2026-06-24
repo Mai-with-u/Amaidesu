@@ -3,7 +3,7 @@ Multi-Decider 支持测试
 
 测试 DeciderManager 的多 Decider 并行支持功能：
 1. 多个 Decider 从配置加载
-2. 每个 Decider 独立订阅 INPUT_MESSAGE_READY 事件
+2. 每个 Decider 独立订阅 INPUT_MESSAGE_RECEIVED 事件
 3. Speech 冲突警告机制
 4. 向后兼容（单 Decider 模式）
 """
@@ -48,7 +48,7 @@ def create_test_message(text: str = "测试消息") -> NormalizedMessage:
         source="test_source",
         data_type="text",
         importance=0.5,
-        timestamp=1234567890.0,
+        timestamp_ms=1234567890000,
     )
 
 
@@ -82,9 +82,7 @@ class TestMultiDeciderConfigLoading:
         mock_event_bus = MagicMock()
         manager = DeciderManager(event_bus=mock_event_bus)
 
-        decision_config = {
-            "enabled": ["maibot", "llm"]
-        }
+        decision_config = {"enabled": ["maibot", "llm"]}
 
         await manager.setup(decision_config=decision_config)
 
@@ -103,9 +101,7 @@ class TestMultiDeciderConfigLoading:
         mock_event_bus = MagicMock()
         manager = DeciderManager(event_bus=mock_event_bus)
 
-        decision_config = {
-            "enabled": ["maibot", "llm"]
-        }
+        decision_config = {"enabled": ["maibot", "llm"]}
 
         # decider_name 优先于配置，只加载指定的 Decider
         await manager.setup(decider_name="llm", decision_config=decision_config)
@@ -122,13 +118,8 @@ class TestMultiDeciderConfigLoading:
 
         decision_config = {
             "enabled": ["maibot", "llm"],
-            "maibot": {
-                "host": "localhost",
-                "port": 8000
-            },
-            "llm": {
-                "model": "gpt-4"
-            }
+            "maibot": {"host": "localhost", "port": 8000},
+            "llm": {"model": "gpt-4"},
         }
 
         await manager.setup(decision_config=decision_config)
@@ -218,9 +209,7 @@ class TestMultiDeciderLifecycle:
         manager = DeciderManager(event_bus=mock_event_bus)
 
         # 只测试 maibot，因为它有简单的 setup 不需要 LLM
-        decision_config = {
-            "enabled": ["maibot"]
-        }
+        decision_config = {"enabled": ["maibot"]}
 
         await manager.setup(decision_config=decision_config)
         await manager.start()
@@ -234,9 +223,7 @@ class TestMultiDeciderLifecycle:
         mock_event_bus = MagicMock()
         manager = DeciderManager(event_bus=mock_event_bus)
 
-        decision_config = {
-            "enabled": ["maibot"]
-        }
+        decision_config = {"enabled": ["maibot"]}
 
         await manager.setup(decision_config=decision_config)
         await manager.start()
@@ -254,9 +241,7 @@ class TestMultiDeciderLifecycle:
         mock_event_bus = MagicMock()
         manager = DeciderManager(event_bus=mock_event_bus)
 
-        decision_config = {
-            "enabled": ["maibot", "llm"]
-        }
+        decision_config = {"enabled": ["maibot", "llm"]}
 
         await manager.setup(decision_config=decision_config)
         await manager.cleanup()
@@ -275,9 +260,7 @@ class TestMultiDeciderDecision:
         mock_event_bus = MagicMock()
         manager = DeciderManager(event_bus=mock_event_bus)
 
-        decision_config = {
-            "enabled": ["maibot", "llm"]
-        }
+        decision_config = {"enabled": ["maibot", "llm"]}
 
         await manager.setup(decision_config=decision_config)
 
@@ -321,9 +304,7 @@ class TestBackwardCompatibility:
         mock_event_bus = MagicMock()
         manager = DeciderManager(event_bus=mock_event_bus)
 
-        decision_config = {
-            "enabled": ["maibot", "llm"]
-        }
+        decision_config = {"enabled": ["maibot", "llm"]}
 
         await manager.setup(decision_config=decision_config)
 
@@ -338,9 +319,7 @@ class TestBackwardCompatibility:
         mock_event_bus = MagicMock()
         manager = DeciderManager(event_bus=mock_event_bus)
 
-        decision_config = {
-            "enabled": ["maibot", "llm"]
-        }
+        decision_config = {"enabled": ["maibot", "llm"]}
 
         await manager.setup(decision_config=decision_config)
 
@@ -355,9 +334,7 @@ class TestBackwardCompatibility:
         mock_event_bus = MagicMock()
         manager = DeciderManager(event_bus=mock_event_bus)
 
-        decision_config = {
-            "enabled": ["maibot", "llm"]
-        }
+        decision_config = {"enabled": ["maibot", "llm"]}
 
         await manager.setup(decision_config=decision_config)
 
@@ -374,9 +351,7 @@ class TestBackwardCompatibility:
         manager = DeciderManager(event_bus=mock_event_bus)
 
         # 只使用 maibot 和 llm，不包含 maicraft 因为它的签名不同
-        decision_config = {
-            "enabled": ["maibot", "llm"]
-        }
+        decision_config = {"enabled": ["maibot", "llm"]}
 
         await manager.setup(decision_config=decision_config)
 
@@ -403,20 +378,18 @@ class TestEventSubscription:
 
     @pytest.mark.asyncio
     async def test_subscribe_input_message_ready_once(self):
-        """测试只订阅 INPUT_MESSAGE_READY 一次"""
+        """测试只订阅 INPUT_MESSAGE_RECEIVED 一次"""
         mock_event_bus = MagicMock()
         manager = DeciderManager(event_bus=mock_event_bus)
 
-        decision_config = {
-            "enabled": ["maibot", "llm"]
-        }
+        decision_config = {"enabled": ["maibot", "llm"]}
 
         await manager.setup(decision_config=decision_config)
         await manager.start()
 
         # 验证 event_bus.on 只被调用一次
         mock_event_bus.on.assert_called_once_with(
-            CoreEvents.INPUT_MESSAGE_READY,
+            CoreEvents.INPUT_MESSAGE_RECEIVED,
             manager._on_data_message,
             model_class=MessageReadyPayload,
         )
@@ -427,9 +400,7 @@ class TestEventSubscription:
         mock_event_bus = MagicMock()
         manager = DeciderManager(event_bus=mock_event_bus)
 
-        decision_config = {
-            "enabled": ["maibot"]
-        }
+        decision_config = {"enabled": ["maibot"]}
 
         await manager.setup(decision_config=decision_config)
         await manager.start()
@@ -440,7 +411,7 @@ class TestEventSubscription:
 
         # 验证 event_bus.off 被调用
         mock_event_bus.off.assert_called_once_with(
-            CoreEvents.INPUT_MESSAGE_READY,
+            CoreEvents.INPUT_MESSAGE_RECEIVED,
             manager._on_data_message,
         )
 
@@ -466,9 +437,7 @@ class TestEdgeCases:
         mock_event_bus = MagicMock()
         manager = DeciderManager(event_bus=mock_event_bus)
 
-        decision_config = {
-            "enabled": ["maibot", "llm"]
-        }
+        decision_config = {"enabled": ["maibot", "llm"]}
 
         await manager.setup(decision_config=decision_config)
 
@@ -490,9 +459,7 @@ class TestEdgeCases:
         mock_event_bus = MagicMock()
         manager = DeciderManager(event_bus=mock_event_bus)
 
-        decision_config = {
-            "enabled": []
-        }
+        decision_config = {"enabled": []}
 
         await manager.setup(decision_config=decision_config)
 

@@ -174,7 +174,7 @@ class InputCollectorManager:
                         continue
 
                 await self.event_bus.emit(
-                    CoreEvents.INPUT_MESSAGE_READY,
+                    CoreEvents.INPUT_MESSAGE_RECEIVED,
                     MessageReadyPayload.from_normalized_message(message),
                     source=collector_name,
                 )

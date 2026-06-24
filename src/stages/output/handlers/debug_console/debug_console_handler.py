@@ -11,6 +11,8 @@ from pydantic import Field
 from src.stages.output.registry import handler
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import IntentPayload
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
@@ -55,10 +57,22 @@ class DebugConsoleHandler:
         self.print_metadata = self.typed_config.print_metadata
         self.prefix = self.typed_config.prefix
 
+        # 事件订阅状态标志（确保幂等）
+        self._dispatch_subscribed = False
+
         self.logger.info("DebugConsoleHandler 初始化完成")
 
     async def init(self) -> None:
         """初始化 Handler"""
+        # 订阅 OUTPUT_INTENT_DISPATCHED 事件（idempotent）
+        if self.event_bus and not getattr(self, "_dispatch_subscribed", False):
+            self.event_bus.on(
+                CoreEvents.OUTPUT_INTENT_DISPATCHED,
+                self._handle_intent_dispatched,
+                model_class=IntentPayload,
+            )
+            self._dispatch_subscribed = True
+
         self.logger.info("DebugConsoleHandler 启动完成")
 
     async def handle(self, intent: "Intent") -> None:
@@ -113,8 +127,25 @@ class DebugConsoleHandler:
 
         print(f"{'=' * 60}\n")
 
+    async def _handle_intent_dispatched(self, event_name: str, payload: IntentPayload, source: str):
+        """
+        处理 OUTPUT_INTENT_DISPATCHED 事件（OutputHandlerManager 派发的 Intent）
+
+        Args:
+            event_name: 事件名
+            payload: IntentPayload 实例
+            source: 事件源标识
+        """
+        intent = payload.to_intent()
+        await self.handle(intent)
+
     async def cleanup(self) -> None:
         """清理 Handler"""
+        # 取消事件订阅
+        if self.event_bus and getattr(self, "_dispatch_subscribed", False):
+            self.event_bus.off(CoreEvents.OUTPUT_INTENT_DISPATCHED, self._handle_intent_dispatched)
+            self._dispatch_subscribed = False
+
         self.logger.info("DebugConsoleHandler 清理完成")
 
 

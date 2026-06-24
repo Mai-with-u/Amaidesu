@@ -8,16 +8,19 @@ Decision 阶段 事件 Payload 定义
 - DisconnectedPayload: 组件断开事件
 """
 
+import time
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from pydantic import ConfigDict, Field
 
 from src.modules.events.payloads.base import BasePayload
+from src.modules.events.registry import register_event
 
 if TYPE_CHECKING:
     from src.modules.types import Intent
 
 
+@register_event("decision.intent.action")
 class IntentActionPayload(BasePayload):
     """
     意图动作 Payload
@@ -45,6 +48,7 @@ class IntentActionPayload(BasePayload):
         return f'{class_name}(type="{self.type}", params={self._format_field_value(self.params)}, priority={self.priority})'
 
 
+@register_event("decision.intent.generated")
 class IntentPayload(BasePayload):
     """
     意图生成事件 Payload
@@ -77,7 +81,7 @@ class IntentPayload(BasePayload):
                     "context": "用户打招呼",
                     "metadata": {
                         "source_id": "msg_123",
-                        "decision_time": 1706745600000,
+                        "decision_time_ms": 1706745600000,
                         "parser_type": "llm",
                     },
                 },
@@ -100,16 +104,21 @@ class IntentPayload(BasePayload):
             "response_text",
             "actions",
             "timestamp",
+            "decision_time_ms",
         ]
         if name in KNOWN_FIELDS:
-            # 向后兼容映射
+            # 向后兼容映射（顶层字段重命名）
             backward_compat_map = {
                 "response_text": "speech",
                 "actions": "action",
                 "original_text": "context",
-                "timestamp": "metadata.decision_time",
+                "timestamp": "decision_time_ms",
             }
-            if name in backward_compat_map:
+            if name == "timestamp":
+                # timestamp 嵌套在 metadata 下，需要向下导航
+                metadata = self.intent_data.get("metadata") or {}
+                value = metadata.get("decision_time_ms", "")
+            elif name in backward_compat_map:
                 mapped_key = backward_compat_map[name]
                 value = self.intent_data.get(mapped_key, "")
             else:
@@ -160,11 +169,12 @@ class IntentPayload(BasePayload):
         return Intent.model_validate(self.intent_data)
 
 
+@register_event("decision.connected")
 class ConnectedPayload(BasePayload):
     """
     Decider 连接成功事件 Payload
 
-    事件名：CoreEvents.DECISION_DECIDER_CONNECTED
+    事件名：CoreEvents.DECISION_CONNECTED
     发布者：Decider
     订阅者：任何需要监控 Decider 状态的组件
 
@@ -173,18 +183,23 @@ class ConnectedPayload(BasePayload):
 
     name: str = Field(..., description="参与者名称")
     endpoint: Optional[str] = Field(default=None, description="连接端点")
-    timestamp: float = Field(default_factory=lambda: __import__("time").time(), description="连接时间")
+    timestamp_ms: int = Field(
+        default_factory=lambda: int(time.time() * 1000),
+        alias="timestamp",
+        description="连接时间（Unix 毫秒）",
+    )
     metadata: Dict[str, Any] = Field(default_factory=dict, description="额外元数据")
 
     model_config = ConfigDict(
+        populate_by_name=True,
         json_schema_extra={
             "example": {
                 "name": "maicore",
                 "endpoint": "ws://localhost:8000/ws",
-                "timestamp": 1706745600.0,
+                "timestamp_ms": 1706745600000,
                 "metadata": {"reconnect_count": 0},
             }
-        }
+        },
     )
 
     def __str__(self) -> str:
@@ -192,11 +207,12 @@ class ConnectedPayload(BasePayload):
         return f'ConnectedPayload(name="{self.name}", endpoint="{self.endpoint}")'
 
 
+@register_event("decision.disconnected")
 class DisconnectedPayload(BasePayload):
     """
     Decider 断开连接事件 Payload
 
-    事件名：CoreEvents.DECISION_DECIDER_DISCONNECTED
+    事件名：CoreEvents.DISCONNECTED
     发布者：Decider
     订阅者：任何需要监控 Decider 状态的组件
 
@@ -206,19 +222,24 @@ class DisconnectedPayload(BasePayload):
     name: str = Field(..., description="参与者名称")
     reason: str = Field(default="unknown", description="断开原因")
     will_retry: bool = Field(default=False, description="是否将重试连接")
-    timestamp: float = Field(default_factory=lambda: __import__("time").time(), description="断开时间")
+    timestamp_ms: int = Field(
+        default_factory=lambda: int(time.time() * 1000),
+        alias="timestamp",
+        description="断开时间（Unix 毫秒）",
+    )
     metadata: Dict[str, Any] = Field(default_factory=dict, description="额外元数据")
 
     model_config = ConfigDict(
+        populate_by_name=True,
         json_schema_extra={
             "example": {
                 "name": "maicore",
                 "reason": "connection_lost",
                 "will_retry": True,
-                "timestamp": 1706745600.0,
+                "timestamp_ms": 1706745600000,
                 "metadata": {"reconnect_attempt": 1},
             }
-        }
+        },
     )
 
     def __str__(self) -> str:

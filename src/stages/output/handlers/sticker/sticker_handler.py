@@ -16,6 +16,8 @@ from pydantic import Field
 from src.stages.output.registry import handler
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import IntentPayload
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
@@ -88,6 +90,9 @@ class StickerHandler:
         self._current_sticker_id: Optional[str] = None
         self._unload_task: Optional[Any] = None
 
+        # 事件订阅状态标志（确保幂等）
+        self._dispatch_subscribed = False
+
     async def init(self):
         """初始化 Handler"""
         # 查找 VTS Handler（通过 HandlerManager）
@@ -96,6 +101,15 @@ class StickerHandler:
             self.logger.info("已找到 VTS Handler，贴纸功能已启用")
         else:
             self.logger.warning("未找到 VTS Handler，贴纸功能将被禁用")
+
+        # 订阅 OUTPUT_INTENT_DISPATCHED 事件（idempotent）
+        if self.event_bus and not getattr(self, "_dispatch_subscribed", False):
+            self.event_bus.on(
+                CoreEvents.OUTPUT_INTENT_DISPATCHED,
+                self._handle_intent_dispatched,
+                model_class=IntentPayload,
+            )
+            self._dispatch_subscribed = True
 
     async def handle(self, intent: "Intent"):
         """
@@ -124,6 +138,18 @@ class StickerHandler:
         # 新 Intent 结构中使用自然语言 action，暂不支持图片数据传递
         self.logger.debug(f"检测到 sticker 动作: {intent.action}，但暂不支持图片数据传递")
         return
+
+    async def _handle_intent_dispatched(self, event_name: str, payload: IntentPayload, source: str):
+        """
+        处理 OUTPUT_INTENT_DISPATCHED 事件（OutputHandlerManager 派发的 Intent）
+
+        Args:
+            event_name: 事件名
+            payload: IntentPayload 实例
+            source: 事件源标识
+        """
+        intent = payload.to_intent()
+        await self.handle(intent)
 
     def _resize_image_base64(self, base64_str: str) -> str:
         """
@@ -262,6 +288,11 @@ class StickerHandler:
 
     async def cleanup(self):
         """清理资源"""
+        # 取消事件订阅
+        if self.event_bus and getattr(self, "_dispatch_subscribed", False):
+            self.event_bus.off(CoreEvents.OUTPUT_INTENT_DISPATCHED, self._handle_intent_dispatched)
+            self._dispatch_subscribed = False
+
         # 取消卸载任务
         if self._unload_task and not self._unload_task.done():
             self._unload_task.cancel()

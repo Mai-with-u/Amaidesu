@@ -233,6 +233,8 @@ class VTSHandler(AvatarHandlerBase):
 
     async def init(self):
         """初始化逻辑"""
+        await super().init()
+
         # 初始化pyvts
         try:
             import pyvts  # noqa: F401

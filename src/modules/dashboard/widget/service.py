@@ -72,7 +72,7 @@ class DanmakuWidgetService:
             return
 
         self.event_bus.on(
-            CoreEvents.INPUT_MESSAGE_READY,
+            CoreEvents.INPUT_MESSAGE_RECEIVED,
             self._on_input_message,
             model_class=MessageReadyPayload,
         )
@@ -90,7 +90,7 @@ class DanmakuWidgetService:
         if not self._is_running:
             return
 
-        self.event_bus.off(CoreEvents.INPUT_MESSAGE_READY, self._on_input_message)
+        self.event_bus.off(CoreEvents.INPUT_MESSAGE_RECEIVED, self._on_input_message)
         self.event_bus.off(CoreEvents.DECISION_INTENT_GENERATED, self._on_decision_intent)
 
         self._is_running = False

@@ -59,9 +59,9 @@ def test_register_core_event_valid():
 def test_register_core_event_multiple_valid_prefixes():
     """测试注册所有有效前缀的核心事件"""
     valid_events = [
-        ("input.message.ready", CoreEventData),
+        ("input.message.received", CoreEventData),
         ("decision.intent.generated", CoreEventData),
-        ("output.intent.ready", CoreEventData),
+        ("output.intent.dispatched", CoreEventData),
         ("core.startup", CoreEventData),
     ]
 
@@ -177,8 +177,8 @@ def test_mixed_operations():
 def test_event_name_with_dots():
     """测试包含多个点的事件名"""
     # 核心事件（使用 input. 前缀）
-    EventRegistry.register_core_event("input.message.ready", CoreEventData)
-    assert EventRegistry.is_registered("input.message.ready")
+    EventRegistry.register_core_event("input.message.received", CoreEventData)
+    assert EventRegistry.is_registered("input.message.received")
 
     # 也可以注册更深层级的事件（使用 core. 前缀）
     EventRegistry.register_core_event("core.test.nested.event", CoreEventData)

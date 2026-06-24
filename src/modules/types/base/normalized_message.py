@@ -6,7 +6,7 @@
 
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.modules.logging import get_logger
 
@@ -18,28 +18,35 @@ BiliRawMessage = Any  # 实际类型在运行时动态绑定
 
 class NormalizedMessage(BaseModel):
     """
-    标准化消息
+        标准化消息
 
-    所有组件 产出的统一消息格式，包含文本描述、数据类型、重要性和原始消息。
+        所有组件 产出的统一消息格式，包含文本描述、数据类型、重要性和原始消息。
 
     Attributes:
-        text: 用于 LLM 处理的文本描述
-        source: 数据来源标识（如 "bili_danmaku_official", "console"）
-        data_type: 数据类型（text, gift, super_chat, guard, enter）
-        importance: 重要性评分（0-1），用于过滤和优先级排序
-        timestamp: 消息时间戳
-        raw: 平台原始消息对象（类型安全，可选）
-        user_id: 用户 ID（可选）
-        user_nickname: 用户昵称（可选）
-        platform: 平台来源（可选）
-        room_id: 直播间 ID（可选）
+            text: 用于 LLM 处理的文本描述
+            source: 数据来源标识（如 "bili_danmaku_official", "console"）
+            data_type: 数据类型（text, gift, super_chat, guard, enter）
+            importance: 重要性评分（0-1），用于过滤和优先级排序
+            timestamp_ms: 消息时间戳，Unix epoch 毫秒（13 位整数）
+                通过 alias `timestamp` 保持向后兼容：旧调用仍可使用 `timestamp=...` 传入。
+            raw: 平台原始消息对象（类型安全，可选）
+            user_id: 用户 ID（可选）
+            user_nickname: 用户昵称（可选）
+            platform: 平台来源（可选）
+            room_id: 直播间 ID（可选）
     """
+
+    model_config = ConfigDict(populate_by_name=True)
 
     text: str = Field(description="用于 LLM 处理的文本描述")
     source: str = Field(description="数据来源标识")
     data_type: str = Field(default="text", description="数据类型")
     importance: float = Field(default=0.5, ge=0.0, le=1.0, description="重要性评分")
-    timestamp: float = Field(default=0.0, description="消息时间戳")
+    timestamp_ms: int = Field(
+        default=0,
+        description="消息时间戳，Unix epoch 毫秒（13 位整数）",
+        alias="timestamp",
+    )
     raw: Optional[BiliRawMessage] = Field(default=None, description="平台原始消息")
 
     # 类型化字段（替代原 metadata）
@@ -98,7 +105,7 @@ class NormalizedMessage(BaseModel):
             "source": self.source,
             "data_type": self.data_type,
             "importance": self.importance,
-            "timestamp": self.timestamp,
+            "timestamp_ms": self.timestamp_ms,
             "user_id": self.user_id,
             "user_nickname": self.user_nickname,
             "platform": self.platform,

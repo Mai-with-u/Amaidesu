@@ -61,9 +61,9 @@ async def inject_message(
         # 使用 MessageReadyPayload.from_normalized_message 构造 Payload
         payload = MessageReadyPayload.from_normalized_message(message)
 
-        # 使用 CoreEvents.INPUT_MESSAGE_READY 常量（不要硬编码字符串）
+        # 使用 CoreEvents.INPUT_MESSAGE_RECEIVED 常量（不要硬编码字符串）
         await event_bus.emit(
-            CoreEvents.INPUT_MESSAGE_READY,
+            CoreEvents.INPUT_MESSAGE_RECEIVED,
             payload,
             source="dashboard.debug",
         )
@@ -107,7 +107,7 @@ async def inject_intent(
             context=f"来源: {request.source}",
             metadata=IntentMetadata(
                 source_id=request.source,
-                decision_time=int(datetime.now().timestamp() * 1000),
+                decision_time_ms=int(datetime.now().timestamp() * 1000),
                 parser_type="dashboard_debug",
             ),
         )

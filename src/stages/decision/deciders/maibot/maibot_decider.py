@@ -124,7 +124,7 @@ class MaiBotDecider:
 
             seg = Seg(type="text", data=normalized.text)
 
-            message_id = f"normalized_{int(normalized.timestamp)}"
+            message_id = f"normalized_{normalized.timestamp_ms}"
             additional_config = {
                 "source": "amaidesu",
                 "original_platform": normalized.source,
@@ -144,7 +144,7 @@ class MaiBotDecider:
                     message_id=message_id,
                     platform=self.platform,
                     user_info=user_info,
-                    time=normalized.timestamp,
+                    time=normalized.timestamp_ms,
                     format_info=format_info,
                     additional_config=additional_config,
                     group_info=group_info,
@@ -209,7 +209,7 @@ class MaiBotDecider:
             context=None,
             metadata=IntentMetadata(
                 source_id="maibot",
-                decision_time=int(time.time() * 1000),
+                decision_time_ms=int(time.time() * 1000),
                 parser_type="text_forward",
             ),
         )

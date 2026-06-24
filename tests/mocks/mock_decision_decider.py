@@ -47,7 +47,7 @@ class MockDecider:
                 context=None,
                 metadata=IntentMetadata(
                     source_id="mock",
-                    decision_time=0,
+                    decision_time_ms=0,
                 ),
             )
 
@@ -59,7 +59,7 @@ class MockDecider:
             context=None,
             metadata=IntentMetadata(
                 source_id="mock",
-                decision_time=0,
+                decision_time_ms=0,
             ),
         )
 

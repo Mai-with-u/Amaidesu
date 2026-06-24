@@ -113,10 +113,10 @@ class TestIntentMetadata:
         """测试创建最小 IntentMetadata"""
         metadata = IntentMetadata(
             source_id="console_input",
-            decision_time=1700000000000,
+            decision_time_ms=1700000000000,
         )
         assert metadata.source_id == "console_input"
-        assert metadata.decision_time == 1700000000000
+        assert metadata.decision_time_ms == 1700000000000
         assert metadata.parser_type is None
         assert metadata.llm_model is None
         assert metadata.replay_count is None
@@ -126,14 +126,14 @@ class TestIntentMetadata:
         """测试创建完整 IntentMetadata"""
         metadata = IntentMetadata(
             source_id="bili_danmaku",
-            decision_time=1700000000000,
+            decision_time_ms=1700000000000,
             parser_type="llm",
             llm_model="gpt-4",
             replay_count=0,
             extra={"confidence": 0.95},
         )
         assert metadata.source_id == "bili_danmaku"
-        assert metadata.decision_time == 1700000000000
+        assert metadata.decision_time_ms == 1700000000000
         assert metadata.parser_type == "llm"
         assert metadata.llm_model == "gpt-4"
         assert metadata.replay_count == 0
@@ -141,14 +141,14 @@ class TestIntentMetadata:
 
     def test_intent_metadata_extra_default(self):
         """测试 extra 默认为空字典"""
-        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+        metadata = IntentMetadata(source_id="test", decision_time_ms=1700000000000)
         assert metadata.extra == {}
 
     def test_intent_metadata_extra_modification(self):
         """测试 extra 可修改"""
         metadata = IntentMetadata(
             source_id="test",
-            decision_time=1700000000000,
+            decision_time_ms=1700000000000,
             extra={"key": "value"},
         )
         metadata.extra["new_key"] = "new_value"
@@ -159,13 +159,13 @@ class TestIntentMetadata:
         """测试序列化"""
         metadata = IntentMetadata(
             source_id="console_input",
-            decision_time=1700000000000,
+            decision_time_ms=1700000000000,
             parser_type="rule",
             extra={"test": True},
         )
         data = metadata.model_dump()
         assert data["source_id"] == "console_input"
-        assert data["decision_time"] == 1700000000000
+        assert data["decision_time_ms"] == 1700000000000
         assert data["parser_type"] == "rule"
         assert data["extra"]["test"] is True
 
@@ -173,7 +173,7 @@ class TestIntentMetadata:
         """测试反序列化"""
         data = {
             "source_id": "bili_danmaku",
-            "decision_time": 1700000000000,
+            "decision_time_ms": 1700000000000,
             "parser_type": "llm",
             "llm_model": "gpt-3.5",
             "replay_count": 1,
@@ -181,7 +181,7 @@ class TestIntentMetadata:
         }
         metadata = IntentMetadata.model_validate(data)
         assert metadata.source_id == "bili_danmaku"
-        assert metadata.decision_time == 1700000000000
+        assert metadata.decision_time_ms == 1700000000000
         assert metadata.parser_type == "llm"
         assert metadata.llm_model == "gpt-3.5"
         assert metadata.replay_count == 1
@@ -194,14 +194,14 @@ class TestIntentMetadata:
         with pytest.raises(ValidationError):
             IntentMetadata(
                 source_id="test",
-                # missing decision_time
+                # missing decision_time_ms
             )
 
     def test_intent_metadata_repr(self):
         """测试 __repr__ 方法"""
         metadata = IntentMetadata(
             source_id="test_source",
-            decision_time=1700000000000,
+            decision_time_ms=1700000000000,
         )
         repr_str = repr(metadata)
         assert "IntentMetadata" in repr_str
@@ -218,7 +218,7 @@ class TestIntent:
 
     def test_intent_creation_minimal(self):
         """测试创建最小 Intent"""
-        metadata = IntentMetadata(source_id="console_input", decision_time=1700000000000)
+        metadata = IntentMetadata(source_id="console_input", decision_time_ms=1700000000000)
         intent = Intent(
             metadata=metadata,
         )
@@ -233,7 +233,7 @@ class TestIntent:
         """测试创建完整 Intent"""
         metadata = IntentMetadata(
             source_id="bili_danmaku",
-            decision_time=1700000000000,
+            decision_time_ms=1700000000000,
             parser_type="llm",
             llm_model="gpt-4",
         )
@@ -260,7 +260,7 @@ class TestIntent:
 
     def test_intent_emotion_as_string(self):
         """测试 emotion 字段为字符串"""
-        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+        metadata = IntentMetadata(source_id="test", decision_time_ms=1700000000000)
         intent = Intent(
             emotion="happy",
             metadata=metadata,
@@ -270,7 +270,7 @@ class TestIntent:
 
     def test_intent_action_as_string(self):
         """测试 action 字段为字符串"""
-        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+        metadata = IntentMetadata(source_id="test", decision_time_ms=1700000000000)
         intent = Intent(
             action="wave",
             metadata=metadata,
@@ -280,7 +280,7 @@ class TestIntent:
 
     def test_intent_speech(self):
         """测试 speech 字段"""
-        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+        metadata = IntentMetadata(source_id="test", decision_time_ms=1700000000000)
         intent = Intent(
             speech="今天天气真不错！",
             metadata=metadata,
@@ -289,7 +289,7 @@ class TestIntent:
 
     def test_intent_context(self):
         """测试 context 字段"""
-        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+        metadata = IntentMetadata(source_id="test", decision_time_ms=1700000000000)
         intent = Intent(
             context="回复用户问题",
             metadata=metadata,
@@ -298,13 +298,13 @@ class TestIntent:
 
     def test_intent_structured_params_default(self):
         """测试 structured_params 默认为空字典"""
-        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+        metadata = IntentMetadata(source_id="test", decision_time_ms=1700000000000)
         intent = Intent(metadata=metadata)
         assert intent.structured_params == {}
 
     def test_intent_structured_params_single_provider(self):
         """测试 structured_params 单个 provider"""
-        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+        metadata = IntentMetadata(source_id="test", decision_time_ms=1700000000000)
         intent = Intent(
             metadata=metadata,
             structured_params={
@@ -317,7 +317,7 @@ class TestIntent:
 
     def test_intent_structured_params_multiple_providers(self):
         """测试 structured_params 多个 providers"""
-        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+        metadata = IntentMetadata(source_id="test", decision_time_ms=1700000000000)
         intent = Intent(
             metadata=metadata,
             structured_params={
@@ -333,7 +333,7 @@ class TestIntent:
 
     def test_intent_structured_params_common_key(self):
         """测试 structured_params 的 common key（共享参数）"""
-        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+        metadata = IntentMetadata(source_id="test", decision_time_ms=1700000000000)
         intent = Intent(
             metadata=metadata,
             structured_params={
@@ -349,7 +349,7 @@ class TestIntent:
         """测试序列化"""
         metadata = IntentMetadata(
             source_id="console_input",
-            decision_time=1700000000000,
+            decision_time_ms=1700000000000,
             parser_type="rule",
         )
         intent = Intent(
@@ -377,7 +377,7 @@ class TestIntent:
             "context": "用户问候",
             "metadata": {
                 "source_id": "bili_danmaku",
-                "decision_time": 1700000000000,
+                "decision_time_ms": 1700000000000,
                 "parser_type": "llm",
             },
             "structured_params": {
@@ -406,7 +406,7 @@ class TestIntent:
 
     def test_intent_repr(self):
         """测试 __repr__ 方法"""
-        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+        metadata = IntentMetadata(source_id="test", decision_time_ms=1700000000000)
         intent = Intent(
             emotion="害羞",
             speech="你好呀~",
@@ -438,7 +438,7 @@ class TestIntentEdgeCases:
 
     def test_empty_strings(self):
         """测试空字符串字段"""
-        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+        metadata = IntentMetadata(source_id="test", decision_time_ms=1700000000000)
         intent = Intent(
             emotion="",
             action="",
@@ -454,7 +454,7 @@ class TestIntentEdgeCases:
     def test_very_long_text(self):
         """测试超长文本"""
         long_text = "测试" * 10000
-        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+        metadata = IntentMetadata(source_id="test", decision_time_ms=1700000000000)
         intent = Intent(
             speech=long_text,
             metadata=metadata,
@@ -464,7 +464,7 @@ class TestIntentEdgeCases:
     def test_special_characters(self):
         """测试特殊字符"""
         special_text = "测试\n换行\t制表符\r回车\"引号'单引号\\反斜杠"
-        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+        metadata = IntentMetadata(source_id="test", decision_time_ms=1700000000000)
         intent = Intent(
             speech=special_text,
             metadata=metadata,
@@ -473,7 +473,7 @@ class TestIntentEdgeCases:
 
     def test_unicode_emoji(self):
         """测试 Unicode emoji"""
-        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+        metadata = IntentMetadata(source_id="test", decision_time_ms=1700000000000)
         intent = Intent(
             emotion="开心",
             speech="😀😃😄😁😆",
@@ -485,7 +485,7 @@ class TestIntentEdgeCases:
 
     def test_empty_structured_params(self):
         """测试空的 structured_params"""
-        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+        metadata = IntentMetadata(source_id="test", decision_time_ms=1700000000000)
         intent = Intent(
             metadata=metadata,
             structured_params={},
@@ -494,7 +494,7 @@ class TestIntentEdgeCases:
 
     def test_structured_params_complex_values(self):
         """测试 structured_params 复杂值"""
-        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+        metadata = IntentMetadata(source_id="test", decision_time_ms=1700000000000)
         intent = Intent(
             metadata=metadata,
             structured_params={
@@ -519,7 +519,7 @@ class TestIntentEdgeCases:
         """测试 metadata.extra 包含各种数据类型"""
         metadata = IntentMetadata(
             source_id="test",
-            decision_time=1700000000000,
+            decision_time_ms=1700000000000,
             extra={
                 "string": "value",
                 "int": 42,
@@ -542,7 +542,7 @@ class TestIntentEdgeCases:
         """测试 replay_count 字段"""
         metadata = IntentMetadata(
             source_id="test",
-            decision_time=1700000000000,
+            decision_time_ms=1700000000000,
             replay_count=3,
         )
         assert metadata.replay_count == 3
@@ -563,7 +563,7 @@ class TestIntentIntegration:
         # 1. 创建 metadata
         metadata = IntentMetadata(
             source_id="bili_danmaku",
-            decision_time=int(time.time() * 1000),
+            decision_time_ms=int(time.time() * 1000),
             parser_type="llm",
             llm_model="gpt-4",
             replay_count=0,
@@ -600,7 +600,7 @@ class TestIntentIntegration:
             context="收到礼物",
             metadata=IntentMetadata(
                 source_id="bili_danmaku",
-                decision_time=1700000000000,
+                decision_time_ms=1700000000000,
                 parser_type="llm",
                 extra={"gift_name": "辣条"},
             ),
@@ -636,7 +636,7 @@ class TestIntentIntegration:
         ]
 
         for emotion, action, provider in test_cases:
-            metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+            metadata = IntentMetadata(source_id="test", decision_time_ms=1700000000000)
             intent = Intent(
                 emotion=emotion,
                 action=action,
@@ -649,7 +649,7 @@ class TestIntentIntegration:
 
     def test_intent_multiple_providers_params(self):
         """测试多个 provider 的参数"""
-        metadata = IntentMetadata(source_id="test", decision_time=1700000000000)
+        metadata = IntentMetadata(source_id="test", decision_time_ms=1700000000000)
         intent = Intent(
             emotion="兴奋",
             speech="好耶！",
