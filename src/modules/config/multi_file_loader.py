@@ -13,10 +13,11 @@
 
 from __future__ import annotations
 
+import importlib
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, Union, cast, get_args, get_origin
 
 import tomlkit
 
@@ -27,6 +28,22 @@ from src.modules.logging import get_logger
 from pydantic import BaseModel
 
 logger = get_logger("MultiFileLoader")
+
+_PHASE_TO_SECTION: dict[str, str] = {
+    "input": "collectors",
+    "decision": "deciders",
+    "output": "handlers",
+}
+_PHASE_TO_COMPONENTS_PKG: dict[str, str] = {
+    "input": "src.stages.input.collectors",
+    "decision": "src.stages.decision.deciders",
+    "output": "src.stages.output.handlers",
+}
+_PHASE_TO_REGISTRY: dict[tuple[str, str], str] = {
+    ("input", "_COLLECTORS"): "src.stages.input.registry",
+    ("decision", "_DECIDERS"): "src.stages.decision.registry",
+    ("output", "_HANDLERS"): "src.stages.output.registry",
+}
 
 CONFIG_VERSION = "0.4.0"
 
@@ -129,8 +146,235 @@ def _generate_model_toml() -> str:
     return tomlkit.dumps(doc)
 
 
+def _unwrap_optional(annotation: Any) -> Any:
+    """解包 Optional[X] / Union[X, None] → X；其他类型原样返回。
+
+    仅当 Union 中只有一个非 None 参数时才解包，避免误判 Union[X, Y] 类联合类型。
+    """
+    origin = get_origin(annotation)
+    if origin is Union:
+        non_none_args = [a for a in get_args(annotation) if a is not type(None)]
+        if len(non_none_args) == 1:
+            return non_none_args[0]
+    return annotation
+
+
+def _placeholder_for_type(annotation: Any) -> Any:
+    """根据字段注解生成占位符值。
+
+    用于必填字段：避免直接调用 schema_cls()（会触发 ValidationError），
+    而是根据类型返回中性的占位符，配合 `[必填]` 注释提示用户填写。
+    """
+    origin = get_origin(annotation)
+    args = get_args(annotation)
+
+    if origin is list:
+        return []
+    if origin is dict:
+        return {}
+    if origin is tuple:
+        return ()
+    if origin is set:
+        return []
+    if origin is frozenset:
+        return []
+    if origin is Literal:
+        return str(args[0]) if args else ""
+    if annotation is str:
+        return "请填写"
+    if annotation is int:
+        return 0
+    if annotation is float:
+        return 0.0
+    if annotation is bool:
+        return False
+    if annotation is bytes:
+        return b""
+    return ""
+
+
+def _extract_constraint_hints(field_info: Any) -> str:
+    """从 Pydantic v2 Field 的 metadata 中提取 gt/ge/lt/le/length 等约束提示。
+
+    用于在 `[必填]` 注释中追加约束条件，避免用户填入非法值。
+    """
+    hints: list[str] = []
+    for meta in field_info.metadata:
+        cls_name = type(meta).__name__
+        if cls_name == "Gt":
+            hints.append(f"需大于 {meta.gt}")
+        elif cls_name == "Ge":
+            hints.append(f"需大于等于 {meta.ge}")
+        elif cls_name == "Lt":
+            hints.append(f"需小于 {meta.lt}")
+        elif cls_name == "Le":
+            hints.append(f"需小于等于 {meta.le}")
+        elif cls_name == "MinLen":
+            hints.append(f"最少 {meta.min_length} 个字符")
+        elif cls_name == "MaxLen":
+            hints.append(f"最多 {meta.max_length} 个字符")
+    return "，".join(hints)
+
+
+def _schema_to_toml_table(schema_cls: type[BaseModel]) -> Any:
+    """从 Pydantic v2 Schema 类（不实例化）生成 tomlkit Table 模板。
+
+    处理规则：
+    - 简单字段（key-value）先输出，子表字段（嵌套 BaseModel / 非空 dict 默认值）后输出，
+      确保 TOML 语法合法（父表键值对必须在子表之前），且字段注释紧邻对应字段不产生孤儿注释。
+    - 必填字段（is_required() 为 True）→ 占位符值 + `# [必填]` 注释
+    - 有默认值（非 None、非空容器）→ 使用默认值 + description 注释
+    - 默认值为 None 或空 dict/空 list → 跳过
+
+    字段处理顺序在各类内部遵循 model_fields 的声明顺序，确保输出稳定。
+    """
+    table = tomlkit.table()
+
+    # 按字段类型分两类：简单字段（key-value）与 子表字段（sub-table）
+    simple_fields: list[tuple[str, Any, Any]] = []
+    subtable_fields: list[tuple[str, Any, Any]] = []
+
+    for field_name, field_info in schema_cls.model_fields.items():
+        unwrapped = _unwrap_optional(field_info.annotation)
+
+        is_nested_model = isinstance(unwrapped, type) and issubclass(unwrapped, BaseModel)
+        is_subtable = False
+
+        if is_nested_model:
+            is_subtable = True
+        elif not field_info.is_required():
+            try:
+                default_value = field_info.get_default(call_default_factory=True)
+            except Exception:
+                default_value = None
+            # 非空 dict 默认值会变成子表，归入子表类（避免触发 tomlkit 重排导致孤儿注释）
+            if isinstance(default_value, dict) and default_value:
+                is_subtable = True
+
+        target = subtable_fields if is_subtable else simple_fields
+        target.append((field_name, field_info, unwrapped))
+
+    # 第一遍：输出所有简单字段（key-value），注释与值紧邻
+    for field_name, field_info, unwrapped in simple_fields:
+        if field_info.is_required():
+            desc = field_info.description or ""
+            constraint_hint = _extract_constraint_hints(field_info)
+            parts = ["[必填]"]
+            if desc:
+                parts.append(desc)
+            if constraint_hint:
+                parts.append(f"({constraint_hint})")
+            table.add(tomlkit.comment(" ".join(parts)))
+            table[field_name] = _placeholder_for_type(unwrapped)
+            continue
+
+        try:
+            default_value = field_info.get_default(call_default_factory=True)
+        except Exception:
+            continue
+
+        if default_value is None:
+            continue
+
+        if isinstance(default_value, (dict, list)) and not default_value:
+            continue
+
+        if field_info.description:
+            table.add(tomlkit.comment(field_info.description))
+
+        table[field_name] = default_value
+
+    # 第二遍：输出所有子表字段（嵌套 BaseModel / 非空 dict 默认值）
+    for field_name, field_info, unwrapped in subtable_fields:
+        is_nested_model = isinstance(unwrapped, type) and issubclass(unwrapped, BaseModel)
+
+        if is_nested_model:
+            sub_table = _schema_to_toml_table(unwrapped)
+        else:
+            try:
+                default_value = field_info.get_default(call_default_factory=True)
+            except Exception:
+                continue
+            if not isinstance(default_value, dict) or not default_value:
+                continue
+            # 手动构造子表（避免 _set_toml_value 在父表上转子表触发重排）
+            sub_table = tomlkit.table()
+            for sub_key, sub_value in default_value.items():
+                if isinstance(sub_value, dict):
+                    inner_table = tomlkit.table()
+                    for inner_key, inner_value in sub_value.items():
+                        inner_table[inner_key] = inner_value
+                    sub_table[sub_key] = inner_table
+                else:
+                    sub_table[sub_key] = sub_value
+
+        # 字段注释：必填加 [必填] 标记，否则用 description
+        if field_info.is_required():
+            desc = field_info.description or ""
+            if desc:
+                table.add(tomlkit.comment(f"[必填] {desc}"))
+            else:
+                table.add(tomlkit.comment("[必填]"))
+        elif field_info.description:
+            table.add(tomlkit.comment(field_info.description))
+
+        table[field_name] = sub_table
+
+    return table
+
+
+def _discover_components(phase: str) -> dict[str, type]:
+    """发现某阶段所有已注册组件的 ConfigSchema 类。
+
+    主动 import 阶段包，触发 @collector/@decider/@handler 装饰器注册，
+    然后枚举对应 registry 中的组件，提取其 ConfigSchema 嵌套类。
+
+    容错策略：组件包 import 失败（如 STT 缺少 torch 依赖）时，
+    仅记录 warning 并返回空 dict，调用方降级到不追加组件模板的行为。
+    """
+    components_pkg = _PHASE_TO_COMPONENTS_PKG.get(phase)
+    section_key = _PHASE_TO_SECTION.get(phase)
+    registry_attr = {"input": "_COLLECTORS", "decision": "_DECIDERS", "output": "_HANDLERS"}.get(phase)
+    if components_pkg is None or section_key is None or registry_attr is None:
+        logger.warning(f"未知阶段: {phase}")
+        return {}
+
+    try:
+        importlib.import_module(components_pkg)
+    except ImportError as e:
+        logger.warning(f"无法 import 阶段 {phase} 的组件包 {components_pkg}: {e}；跳过组件配置模板生成")
+        return {}
+    except Exception as e:
+        logger.warning(f"加载阶段 {phase} 组件时出错: {e}；跳过组件配置模板生成")
+        return {}
+
+    registry_path = _PHASE_TO_REGISTRY.get((phase, registry_attr))
+    if registry_path is None:
+        return {}
+
+    try:
+        registry_module = importlib.import_module(registry_path)
+        registry: dict[str, type] = getattr(registry_module, registry_attr, {})
+    except ImportError as e:
+        logger.warning(f"无法 import registry {registry_path}: {e}")
+        return {}
+
+    discovered: dict[str, type] = {}
+    for name, cls in registry.items():
+        config_schema = getattr(cls, "ConfigSchema", None)
+        if config_schema is not None and isinstance(config_schema, type):
+            discovered[name] = config_schema
+
+    return discovered
+
+
 def _generate_phase_toml(phase: str) -> str:
-    """生成阶段配置文件（input.toml / decision.toml / output.toml）"""
+    """生成阶段配置文件（input.toml / decision.toml / output.toml）
+
+    文件结构：
+    1. 顶部骨架（启用列表等，按阶段硬编码）
+    2. 自动发现的各组件配置模板（从 ConfigSchema 推导，含必填标记）
+    """
     doc = tomlkit.document()
 
     if phase == "input":
@@ -166,6 +410,32 @@ def _generate_phase_toml(phase: str) -> str:
         table.add(tomlkit.comment("单个 Handler 渲染超时（毫秒），0 表示不限制"))
         table["render_timeout_ms"] = 10000
         doc["handlers"] = table
+
+    else:
+        raise ValueError(f"未知阶段: {phase}")
+
+    components = _discover_components(phase)
+    section_key = _PHASE_TO_SECTION.get(phase)
+    if components and section_key:
+        parent_table = cast(Any, doc[section_key])
+        parent_table.add(tomlkit.nl())
+        parent_table.add(tomlkit.comment("=" * 60))
+        parent_table.add(tomlkit.comment("以下为各组件配置模板（首次自动生成）"))
+        parent_table.add(tomlkit.comment("启用组件步骤：1) 将组件名加到上方 enabled 列表  2) 填写 [必填] 字段"))
+        parent_table.add(tomlkit.comment("=" * 60))
+        parent_table.add(tomlkit.nl())
+
+        for name in sorted(components.keys()):
+            schema_cls = components[name]
+            try:
+                comp_table = _schema_to_toml_table(schema_cls)
+                parent_table.add(tomlkit.comment(f"--- {name} ---"))
+                if schema_cls.__doc__:
+                    parent_table.add(tomlkit.comment(schema_cls.__doc__.strip().split("\n")[0]))
+                parent_table[name] = comp_table
+                parent_table.add(tomlkit.nl())
+            except Exception as e:
+                logger.warning(f"生成组件 {name} 配置模板失败: {e}，跳过")
 
     return tomlkit.dumps(doc)
 
