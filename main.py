@@ -21,7 +21,7 @@ from src.modules.config.service import ConfigService
 from src.modules.llm.manager import LLMManager
 from src.modules.context import ContextService, ContextServiceConfig
 from src.modules.prompts import get_prompt_manager
-from src.modules.mcp import MCPServerService
+from src.modules.mcp import MCPServerConfig, MCPServerService
 
 from src.stages.decision import DeciderManager
 from src.stages.input.pipelines.manager import InputPipelineManager
@@ -410,7 +410,7 @@ async def create_app_components(
     mcp_config = config.get("mcp", {})
     if mcp_config.get("enabled", False):
         try:
-            mcp_service = MCPServerService()
+            mcp_service = MCPServerService(MCPServerConfig(**mcp_config))
             await mcp_service.setup(mcp_config)
             logger.info("已创建 MCP 服务实例")
         except Exception as e:
