@@ -3,6 +3,7 @@
 """
 
 import asyncio
+import sys
 from typing import TYPE_CHECKING, Any, Optional
 
 from loguru import logger as loguru_logger
@@ -101,8 +102,8 @@ class LogStreamer:
             try:
                 await self.ws_handler._send_to_client(client_id, message)
                 count += 1
-            except Exception:
-                pass
+            except Exception as e:
+                loguru_logger.debug(f"WS broadcast to client {client_id} failed: {e!r}")
         return count
 
     def _sink(self, message: Any) -> None:
@@ -130,5 +131,5 @@ class LogStreamer:
                 except RuntimeError:
                     # 没有运行中的事件循环，忽略
                     pass
-        except Exception:
-            pass  # 避免日志系统崩溃
+        except Exception as e:
+            sys.stderr.write(f"[log_streamer] sink error: {e!r}\n")

@@ -7,11 +7,10 @@ import time
 from typing import Dict, List, Optional
 
 from src.modules.context.models import ConversationMessage, SessionInfo
-from src.modules.context.storage import Storage
 from src.modules.logging import get_logger
 
 
-class MemoryStorage(Storage):
+class MemoryStorage:
     """内存存储实现"""
 
     def __init__(

@@ -1,7 +1,6 @@
 """MaiBotDecider - 通过 WebSocket 与 MaiBot 通信的纯文本转发决策器。"""
 
 import asyncio
-import time
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
 
 from maim_message import MessageBase, RouteConfig, Router, TargetConfig
@@ -15,6 +14,7 @@ from src.modules.types import Intent, IntentMetadata
 from src.stages.decision.registry import decider
 
 from .router_adapter import RouterAdapter
+from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
@@ -209,7 +209,7 @@ class MaiBotDecider:
             context=None,
             metadata=IntentMetadata(
                 source_id="maibot",
-                decision_time_ms=int(time.time() * 1000),
+                decision_time_ms=now_ms(),
                 parser_type="text_forward",
             ),
         )

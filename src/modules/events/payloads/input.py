@@ -6,13 +6,13 @@ Input 阶段 事件 Payload 定义
 - MessageReadyPayload: 标准化消息就绪事件
 """
 
-import time
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 from pydantic import ConfigDict, Field
 
 from src.modules.events.payloads.base import BasePayload
 from src.modules.events.registry import register_event
+from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.types.base.normalized_message import NormalizedMessage
@@ -35,7 +35,7 @@ class RawDataPayload(BasePayload):
     source: str = Field(..., min_length=1, description="数据源标识符（如 'console_input', 'bili_danmaku'）")
     data_type: str = Field(..., description="数据类型（如 'text', 'gift', 'super_chat'）")
     timestamp_ms: int = Field(
-        default_factory=lambda: int(time.time() * 1000),
+        default_factory=lambda: now_ms(),
         alias="timestamp",
         description="Unix 时间戳（毫秒）",
     )
@@ -133,7 +133,7 @@ class MessageReadyPayload(BasePayload):
     message: Dict[str, Any] = Field(..., description="标准化消息（NormalizedMessage 序列化后的字典）")
     source: str = Field(..., min_length=1, description="数据源")
     timestamp_ms: int = Field(
-        default_factory=lambda: int(time.time() * 1000),
+        default_factory=lambda: now_ms(),
         alias="timestamp",
         description="事件时间戳（Unix 毫秒）",
     )

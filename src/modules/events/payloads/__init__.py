@@ -40,6 +40,8 @@ from .input import (
 )
 from .output import (
     OBSCommandPayload,
+    OutputIntentDispatchedPayload,
+    StickerCommandPayload,
 )
 from .connection import ConnectionEventPayload
 
@@ -56,6 +58,8 @@ __all__ = [
     "DisconnectedPayload",
     # Output 阶段
     "OBSCommandPayload",
+    "OutputIntentDispatchedPayload",
+    "StickerCommandPayload",
     # 组件 (通用)
     "ConnectionEventPayload",
 ]

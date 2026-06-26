@@ -5,59 +5,12 @@ import os
 import sys
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Protocol, Type, runtime_checkable
+from typing import Any, Dict, List, Optional, Type
 
 from src.modules.logging import get_logger
 from src.modules.types.base.pipeline_stats import PipelineStats
 from src.modules.types.base.pipeline_types import PipelineErrorHandling, PipelineException
 from src.modules.types.base.normalized_message import NormalizedMessage
-
-
-@runtime_checkable
-class InputPipeline(Protocol):
-    """
-    输入管道协议（3 阶段架构：Input 阶段 的消息后处理）
-
-    用于在 InputCollectorManager 中处理 NormalizedMessage，
-    如限流、敏感词过滤、相似消息过滤等。
-
-    位置：
-        - InputCollectorManager._run_collector() 方法内部调用
-        - 在 Collector 产出 NormalizedMessage 之后、发布 INPUT_MESSAGE_RECEIVED 事件之前
-        - 可返回 None 表示丢弃该消息
-
-    数据流：
-        NormalizedMessage → InputPipeline.process() → NormalizedMessage | None
-    """
-
-    priority: int
-    enabled: bool
-    error_handling: PipelineErrorHandling
-    timeout_seconds: float
-
-    async def process(self, message: NormalizedMessage) -> Optional[NormalizedMessage]:
-        """
-        处理 NormalizedMessage
-
-        Args:
-            message: 待处理的消息对象
-
-        Returns:
-            处理后的消息对象，或 None 表示丢弃该消息
-        """
-        ...
-
-    def get_info(self) -> Dict[str, Any]:
-        """获取 Pipeline 信息（名称、版本等）"""
-        ...
-
-    def get_stats(self) -> PipelineStats:
-        """获取统计信息"""
-        ...
-
-    def reset_stats(self) -> None:
-        """重置统计信息"""
-        ...
 
 
 class InputPipelineBase(ABC):
@@ -176,15 +129,14 @@ class InputPipelineManager:
 
     def __init__(self, core=None):
         # InputPipeline 列表
-        self._pipelines: List[InputPipeline] = []
+        self._pipelines: List[InputPipelineBase] = []
         self._pipelines_sorted: bool = True
         self._pipeline_lock = asyncio.Lock()
-
         self.logger = get_logger("InputPipelineManager")
 
-    # ==================== InputPipeline 方法 ====================
+    # ==================== InputPipeline  ====================
 
-    def register_pipeline(self, pipeline: InputPipeline) -> None:
+    def register_pipeline(self, pipeline: InputPipelineBase) -> None:
         """
         注册一个 InputPipeline
 
@@ -398,7 +350,7 @@ class InputPipelineManager:
                 module = importlib.import_module(module_import_path)
 
                 expected_class_name = "".join(word.title() for word in pipeline_name_snake.split("_")) + "InputPipeline"
-                pipeline_class: Optional[Type[InputPipeline]] = None
+                pipeline_class: Optional[Type[InputPipelineBase]] = None
 
                 for name, obj in inspect.getmembers(module):
                     if (

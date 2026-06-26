@@ -76,7 +76,7 @@ async def get_system_status(server: ServerDep) -> SystemStatusResponse:
     return SystemStatusResponse(
         running=server._is_running,
         uptime_seconds=uptime,
-        version="0.1.0",  # TODO: 从 config_service 获取
+        version=_get_app_version(),
         python_version=f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
         input_phase=input_phase,
         decision_phase=decision_phase,
@@ -84,10 +84,18 @@ async def get_system_status(server: ServerDep) -> SystemStatusResponse:
     )
 
 
+def _get_app_version() -> str:
+    try:
+        from importlib.metadata import version
+
+        return version("amaidesu")
+    except Exception:
+        return "0.0.0"
+
+
 @router.get("/stats", response_model=SystemStatsResponse)
 async def get_system_stats(server: ServerDep) -> SystemStatsResponse:
     """获取系统统计"""
-    # TODO: 实现统计逻辑
     return SystemStatsResponse()
 
 

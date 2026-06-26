@@ -530,9 +530,9 @@ OutputHandlers 渲染
 - 包含业务逻辑
 
 **示例**：
-- ✓ `src/modules/base/raw_data.py`: 定义 RawData 基础类型
+- ✓ `src/modules/types/base/normalized_message.py`: 定义 NormalizedMessage 基础类型
 - ✓ `src/modules/types/intent.py`: 共享的枚举类型
-- ✗ `src/modules/base/base.py`: 重导出 `RenderParameters`（违规）
+- ✗ `src/modules/types/base/render_parameters.py`: 重导出 `RenderParameters`（违规）
 
 ## 日志使用
 

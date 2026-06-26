@@ -50,26 +50,6 @@ class WarudoHandler(AvatarHandlerBase):
 
     # ==================== Warudo API 参数映射 ====================
 
-    EMOTION_MAP: Dict[str, Dict[str, float]] = {
-        "happy": {"mouthSmile": 1.0},
-        "sad": {"mouthSad": 1.0},
-        "angry": {"eyebrowAngry": 1.0},
-        "surprised": {"eyeSurprised": 1.0},
-        "shy": {"cheekBlush": 0.8},
-        "love": {"heart": 1.0},
-        "neutral": {},
-    }
-
-    ACTION_MAP: Dict[str, str] = {
-        "blink": "blink",
-        "nod": "nod",
-        "shake": "shake",
-        "wave": "wave",
-        "clap": "clap",
-    }
-
-    ACTION_HOTKEY_MAP = ACTION_MAP
-
     EMOTION_KEYS = {"happy", "sad", "angry", "surprised", "shy", "love", "neutral"}
     ACTION_KEYS = {"blink", "nod", "shake", "wave", "clap"}
 
@@ -96,6 +76,25 @@ class WarudoHandler(AvatarHandlerBase):
 
         # 使用 ConfigSchema 验证配置
         self.typed_config = self.ConfigSchema.from_dict(config)
+
+        self._emotion_map: Dict[str, Dict[str, float]] = {
+            "happy": {"mouthSmile": 1.0},
+            "sad": {"mouthSad": 1.0},
+            "angry": {"eyebrowAngry": 1.0},
+            "surprised": {"eyeSurprised": 1.0},
+            "shy": {"cheekBlush": 0.8},
+            "love": {"heart": 1.0},
+            "neutral": {},
+        }
+
+        self._action_map: Dict[str, str] = {
+            "blink": "blink",
+            "nod": "nod",
+            "shake": "shake",
+            "wave": "wave",
+            "clap": "clap",
+        }
+        self._action_hotkey_map = self._action_map
 
         # WebSocket配置
         self.ws_host = self.typed_config.ws_host
@@ -155,15 +154,15 @@ class WarudoHandler(AvatarHandlerBase):
 
         # 1. 适配情感为表情参数（emotion 现在是字符串）
         emotion_str = intent.emotion or "neutral"
-        if emotion_str in self.EMOTION_MAP:
-            result["expressions"] = self.EMOTION_MAP[emotion_str].copy()
+        if emotion_str in self._emotion_map:
+            result["expressions"] = self._emotion_map[emotion_str].copy()
             self.logger.debug(f"情感映射: {emotion_str} -> {result['expressions']}")
 
         # 2. 适配动作为热键（action 现在是字符串）
         if intent.action:
             action_type_str = intent.action
-            if action_type_str in self.ACTION_HOTKEY_MAP:
-                result["hotkeys"].append(self.ACTION_HOTKEY_MAP[action_type_str])
+            if action_type_str in self._action_hotkey_map:
+                result["hotkeys"].append(self._action_hotkey_map[action_type_str])
 
         self.logger.debug(f"Intent适配结果: expressions={result['expressions']}, hotkeys={result['hotkeys']}")
         return result

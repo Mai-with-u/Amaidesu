@@ -2,162 +2,60 @@
 阶段参与者辅助函数
 
 提供 Collector/Decider/Handler 状态查询的公共接口。
-不再使用 defensive getattr，直接调用 Manager 的公开方法。
+基于 ManagerStatusProvider 协议与阶段层解耦。
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from src.modules.dashboard.schemas.component import ComponentSummary
-
-if TYPE_CHECKING:
-    from src.stages.decision.manager import DeciderManager
-    from src.stages.input.manager import InputCollectorManager
-    from src.stages.output.manager import OutputHandlerManager
+from src.modules.dashboard.schemas.manager_protocol import ManagerStatusProvider
 
 
-def get_collector_summaries(manager: Optional["InputCollectorManager"]) -> List[ComponentSummary]:
-    """从 InputCollectorManager 提取 Collector 信息"""
+def get_collector_summaries(manager: Optional[ManagerStatusProvider]) -> List[ComponentSummary]:
+    """从任意实现了 ManagerStatusProvider 的 Input 阶段 Manager 提取 Collector 信息"""
     if not manager:
         return []
-
-    if not hasattr(manager, "get_collector_status"):
-        return []
-
-    summaries = []
-    for status in manager.get_collector_status():
-        summaries.append(
-            ComponentSummary(
-                name=status["name"],
-                phase="input",
-                type="collector",
-                is_started=status["is_started"],
-                is_enabled=True,
-            )
-        )
-
-    return summaries
+    summaries = manager.get_component_summaries()
+    return [ComponentSummary(**s) for s in summaries if s.get("phase") == "input"]
 
 
-def get_decider_summaries(manager: Optional["DeciderManager"]) -> List[ComponentSummary]:
-    """从 DeciderManager 提取 Decider 信息"""
+def get_decider_summaries(manager: Optional[ManagerStatusProvider]) -> List[ComponentSummary]:
+    """从任意实现了 ManagerStatusProvider 的 Decision 阶段 Manager 提取 Decider 信息"""
     if not manager:
         return []
-
-    if not hasattr(manager, "get_decider_status"):
-        return []
-
-    summaries = []
-    for status in manager.get_decider_status():
-        summaries.append(
-            ComponentSummary(
-                name=status["name"],
-                phase="decision",
-                type="decider",
-                is_started=status["is_started"],
-                is_enabled=True,
-            )
-        )
-
-    return summaries
+    summaries = manager.get_component_summaries()
+    return [ComponentSummary(**s) for s in summaries if s.get("phase") == "decision"]
 
 
-def get_handler_summaries(manager: Optional["OutputHandlerManager"]) -> List[ComponentSummary]:
-    """从 OutputHandlerManager 提取 Handler 信息"""
+def get_handler_summaries(manager: Optional[ManagerStatusProvider]) -> List[ComponentSummary]:
+    """从任意实现了 ManagerStatusProvider 的 Output 阶段 Manager 提取 Handler 信息"""
     if not manager:
         return []
-
-    if not hasattr(manager, "get_handler_status"):
-        return []
-
-    summaries = []
-    for status in manager.get_handler_status():
-        summaries.append(
-            ComponentSummary(
-                name=status["name"],
-                phase="output",
-                type="handler",
-                is_started=status["is_started"],
-                is_enabled=True,
-            )
-        )
-
-    return summaries
+    summaries = manager.get_component_summaries()
+    return [ComponentSummary(**s) for s in summaries if s.get("phase") == "output"]
 
 
 def get_component_detail(
     phase: str,
     name: str,
-    input_manager: Optional["InputCollectorManager"],
-    decision_manager: Optional["DeciderManager"],
-    output_manager: Optional["OutputHandlerManager"],
+    input_manager: Optional[ManagerStatusProvider],
+    decision_manager: Optional[ManagerStatusProvider],
+    output_manager: Optional[ManagerStatusProvider],
 ) -> Optional[Dict[str, Any]]:
     """获取单个阶段参与者详情"""
     if phase == "input":
-        return _get_collector_detail(name, input_manager)
+        return _find_detail(input_manager, name, "input")
     elif phase == "decision":
-        return _get_decider_detail(name, decision_manager)
+        return _find_detail(decision_manager, name, "decision")
     elif phase == "output":
-        return _get_handler_detail(name, output_manager)
+        return _find_detail(output_manager, name, "output")
     return None
 
 
-def _get_collector_detail(name: str, manager: Optional["InputCollectorManager"]) -> Optional[Dict[str, Any]]:
-    """获取 Collector 详情"""
+def _find_detail(manager: Optional[ManagerStatusProvider], name: str, phase: str) -> Optional[Dict[str, Any]]:
     if not manager:
         return None
-
-    if not hasattr(manager, "get_collector_status"):
-        return None
-
-    for status in manager.get_collector_status():
-        if status["name"] == name:
-            return {
-                "name": name,
-                "phase": "input",
-                "type": "collector",
-                "is_started": status["is_started"],
-                "is_enabled": True,
-                "config": status.get("config"),
-            }
-    return None
-
-
-def _get_decider_detail(name: str, manager: Optional["DeciderManager"]) -> Optional[Dict[str, Any]]:
-    """获取 Decider 详情"""
-    if not manager:
-        return None
-
-    if not hasattr(manager, "get_decider_status"):
-        return None
-
-    for status in manager.get_decider_status():
-        if status["name"] == name:
-            return {
-                "name": name,
-                "phase": "decision",
-                "type": "decider",
-                "is_started": status["is_started"],
-                "is_enabled": True,
-            }
-    return None
-
-
-def _get_handler_detail(name: str, manager: Optional["OutputHandlerManager"]) -> Optional[Dict[str, Any]]:
-    """获取 Handler 详情"""
-    if not manager:
-        return None
-
-    if not hasattr(manager, "get_handler_status"):
-        return None
-
-    for status in manager.get_handler_status():
-        if status["name"] == name:
-            return {
-                "name": name,
-                "phase": "output",
-                "type": "handler",
-                "is_started": status["is_started"],
-                "is_enabled": True,
-                "config": status.get("config"),
-            }
+    for s in manager.get_component_summaries():
+        if s.get("phase") == phase and s.get("name") == name:
+            return dict(s)
     return None

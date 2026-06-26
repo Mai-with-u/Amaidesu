@@ -11,8 +11,7 @@ Maicraft Decision Decider
 - 不直接触发 Output Handler（遵守 3 域数据流规则）
 """
 
-import time
-from typing import TYPE_CHECKING, Dict, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
 
 from pydantic import Field, ValidationError
 
@@ -27,7 +26,7 @@ from .action_registry import ActionRegistry
 from .action_types import MaicraftActionType
 from .command_parser import CommandParser
 from .config import MaicraftDeciderConfig
-from .factories import AbstractActionFactory, LogActionFactory, McpActionFactory
+from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
@@ -104,30 +103,18 @@ class MaicraftDecider:
         # 初始化组件
         self.command_parser = CommandParser(command_prefix=self.parsed_config.command_prefix)
         self.action_registry = ActionRegistry()
-        self.action_factory: Optional[AbstractActionFactory] = None
 
-        # 初始化工厂
-        self._initialize_factory()
+        # 验证 factory_type（未实现的类型快速失败）
+        if self.parsed_config.factory_type not in ("log", None):
+            raise NotImplementedError(
+                f"MaicraftDecider factory_type '{self.parsed_config.factory_type}' is not implemented. "
+                "Only 'log' is currently supported."
+            )
 
         # 注册命令映射
         self._register_commands()
 
         self.logger.info("MaicraftDecider 初始化完成")
-
-    def _initialize_factory(self) -> None:
-        """初始化动作工厂"""
-        factory_type = self.parsed_config.factory_type
-
-        # 根据配置创建对应的工厂
-        if factory_type == "log":
-            self.action_factory = LogActionFactory()
-        elif factory_type == "mcp":
-            self.action_factory = McpActionFactory()
-        else:
-            self.logger.error(f"未知的工厂类型: {factory_type}，使用默认的 Log 工厂")
-            self.action_factory = LogActionFactory()
-
-        self.logger.info(f"使用动作工厂: {factory_type} ({self.action_factory.get_factory_type()})")
 
     def _register_commands(self) -> None:
         """注册所有支持的命令映射"""
@@ -157,20 +144,10 @@ class MaicraftDecider:
 
     async def setup(self) -> None:
         """初始化逻辑"""
-        # 初始化工厂
-        if self.action_factory:
-            success = await self.action_factory.initialize()
-            if not success:
-                self.logger.error("动作工厂初始化失败")
-                return
-
         self.logger.info("MaicraftDecider 设置完成")
 
     async def cleanup(self) -> None:
         """清理资源"""
-        if self.action_factory:
-            await self.action_factory.cleanup()
-
         self.action_registry.clear()
         self.logger.info("MaicraftDecider 清理完成")
 
@@ -219,14 +196,10 @@ class MaicraftDecider:
                 self.logger.error(f"准备动作参数失败: 命令='{command.name}', 参数={command.args}")
                 return
 
-            # 通过工厂创建对应的动作
-            if not self.action_factory:
-                self.logger.error("动作工厂未初始化")
-                return
-
-            action = self.action_factory.create_action(action_type, params, message)
+            # 直接生成自然语言动作描述（log 模式）
+            action = self._format_action_text(action_type, params)
             if not action:
-                self.logger.error(f"创建动作实例失败: {action_type.value}")
+                self.logger.error(f"不支持的动作类型: {action_type.value}")
                 return
 
             # 生成 Intent
@@ -236,14 +209,12 @@ class MaicraftDecider:
                 speech=f"[游戏操作] {command.name} {' '.join(command.args)}",
                 metadata=IntentMetadata(
                     source_id="maicraft",
-                    decision_time_ms=int(time.time() * 1000),
+                    decision_time_ms=now_ms(),
                 ),
             )
 
             self.logger.info(
-                f"成功生成游戏操作 Intent: 命令='{command.name}' -> "
-                f"动作类型='{action_type.value}' -> "
-                f"工厂={self.action_factory.get_factory_type()}"
+                f"成功生成游戏操作 Intent: 命令='{command.name}' -> 动作类型='{action_type.value}' -> 动作={action}"
             )
 
             # 发布 intent 事件
@@ -274,6 +245,14 @@ class MaicraftDecider:
         except Exception as e:
             self.logger.debug(f"提取消息文本失败: {e}")
             return None
+
+    @staticmethod
+    def _format_action_text(action_type: MaicraftActionType, params: Dict[str, Any]) -> Optional[str]:
+        if action_type == MaicraftActionType.CHAT:
+            return "游戏聊天"
+        if action_type == MaicraftActionType.ATTACK:
+            return f"攻击 {params.get('mob_name', '')}"
+        return None
 
     def _prepare_action_params(self, action_type: MaicraftActionType, args: list[str]) -> Optional[dict]:
         """
@@ -331,7 +310,7 @@ class MaicraftDecider:
             speech="",
             metadata=IntentMetadata(
                 source_id="maicraft",
-                decision_time_ms=int(time.time() * 1000),
+                decision_time_ms=now_ms(),
             ),
         )
 

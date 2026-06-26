@@ -50,8 +50,7 @@ class TestNormalizedMessageAlias:
             timestamp=1729612345.0,  # OLD name via alias (float -> int coercion)
         )
         assert m.timestamp_ms == 1729612345  # int truncation
-        print("OK: NormalizedMessage.timestamp alias works (backward compat)")
-
+    assert True, 'OK: NormalizedMessage.timestamp alias works (backward compat)'
     def test_new_field_name(self):
         m = NormalizedMessage(
             text="x",
@@ -59,24 +58,20 @@ class TestNormalizedMessageAlias:
             timestamp_ms=1729612345678,  # NEW name
         )
         assert m.timestamp_ms == 1729612345678
-        print("OK: NormalizedMessage.timestamp_ms works (new style)")
-
+    assert True, 'OK: NormalizedMessage.timestamp_ms works (new style)'
     def test_dump_uses_new_name(self):
         m = NormalizedMessage(text="x", source="test_source", timestamp_ms=1729612345678)
         dumped = m.model_dump()
         assert "timestamp_ms" in dumped
         assert "timestamp" not in dumped
-        print("OK: NormalizedMessage.model_dump() uses timestamp_ms (new name)")
-
+    assert True, 'OK: NormalizedMessage.model_dump() uses timestamp_ms (new name)'
     def test_dump_by_alias_uses_old_name(self):
         m = NormalizedMessage(text="x", source="test_source", timestamp_ms=1729612345678)
         dumped = m.model_dump(by_alias=True)
         assert "timestamp" in dumped
         # by_alias should output the alias name, NOT the field name
         assert "timestamp_ms" not in dumped
-        print("OK: NormalizedMessage.model_dump(by_alias=True) uses timestamp (legacy compat)")
-
-
+    assert True, 'OK: NormalizedMessage.model_dump(by_alias=True) uses timestamp (legacy compat)'
 # ============================================================
 # IntentMetadata.decision_time <-> decision_time_ms
 # ============================================================
@@ -87,28 +82,23 @@ class TestIntentMetadataAlias:
     def test_old_field_via_alias(self):
         m = IntentMetadata(source_id="test", decision_time=1729612345678)
         assert m.decision_time_ms == 1729612345678
-        print("OK: IntentMetadata.decision_time alias works (backward compat)")
-
+    assert True, 'OK: IntentMetadata.decision_time alias works (backward compat)'
     def test_new_field_name(self):
         m = IntentMetadata(source_id="test", decision_time_ms=1729612345678)
         assert m.decision_time_ms == 1729612345678
-        print("OK: IntentMetadata.decision_time_ms works (new style)")
-
+    assert True, 'OK: IntentMetadata.decision_time_ms works (new style)'
     def test_dump_uses_new_name(self):
         m = IntentMetadata(source_id="test", decision_time_ms=1729612345678)
         dumped = m.model_dump()
         assert "decision_time_ms" in dumped
         assert "decision_time" not in dumped
-        print("OK: IntentMetadata.model_dump() uses decision_time_ms (new name)")
-
+    assert True, 'OK: IntentMetadata.model_dump() uses decision_time_ms (new name)'
     def test_dump_by_alias_uses_old_name(self):
         m = IntentMetadata(source_id="test", decision_time_ms=1729612345678)
         dumped = m.model_dump(by_alias=True)
         assert "decision_time" in dumped
         assert "decision_time_ms" not in dumped
-        print("OK: IntentMetadata.model_dump(by_alias=True) uses decision_time (legacy compat)")
-
-
+    assert True, 'OK: IntentMetadata.model_dump(by_alias=True) uses decision_time (legacy compat)'
 # ============================================================
 # ConnectedPayload.timestamp <-> timestamp_ms
 # ============================================================
@@ -119,28 +109,23 @@ class TestConnectedPayloadAlias:
     def test_old_field_via_alias(self):
         p = ConnectedPayload(name="test", timestamp=1729612345.0)
         assert p.timestamp_ms == 1729612345
-        print("OK: ConnectedPayload.timestamp alias works (backward compat)")
-
+    assert True, 'OK: ConnectedPayload.timestamp alias works (backward compat)'
     def test_new_field_name(self):
         p = ConnectedPayload(name="test", timestamp_ms=1729612345678)
         assert p.timestamp_ms == 1729612345678
-        print("OK: ConnectedPayload.timestamp_ms works (new style)")
-
+    assert True, 'OK: ConnectedPayload.timestamp_ms works (new style)'
     def test_dump_uses_new_name(self):
         p = ConnectedPayload(name="test", timestamp_ms=1729612345678)
         dumped = p.model_dump()
         assert "timestamp_ms" in dumped
         assert "timestamp" not in dumped
-        print("OK: ConnectedPayload.model_dump() uses timestamp_ms (new name)")
-
+    assert True, 'OK: ConnectedPayload.model_dump() uses timestamp_ms (new name)'
     def test_dump_by_alias_uses_old_name(self):
         p = ConnectedPayload(name="test", timestamp_ms=1729612345678)
         dumped = p.model_dump(by_alias=True)
         assert "timestamp" in dumped
         assert "timestamp_ms" not in dumped
-        print("OK: ConnectedPayload.model_dump(by_alias=True) uses timestamp (legacy compat)")
-
-
+    assert True, 'OK: ConnectedPayload.model_dump(by_alias=True) uses timestamp (legacy compat)'
 # ============================================================
 # DisconnectedPayload.timestamp <-> timestamp_ms
 # ============================================================
@@ -151,28 +136,23 @@ class TestDisconnectedPayloadAlias:
     def test_old_field_via_alias(self):
         p = DisconnectedPayload(name="test", timestamp=1729612345.0)
         assert p.timestamp_ms == 1729612345
-        print("OK: DisconnectedPayload.timestamp alias works (backward compat)")
-
+    assert True, 'OK: DisconnectedPayload.timestamp alias works (backward compat)'
     def test_new_field_name(self):
         p = DisconnectedPayload(name="test", timestamp_ms=1729612345678)
         assert p.timestamp_ms == 1729612345678
-        print("OK: DisconnectedPayload.timestamp_ms works (new style)")
-
+    assert True, 'OK: DisconnectedPayload.timestamp_ms works (new style)'
     def test_dump_uses_new_name(self):
         p = DisconnectedPayload(name="test", timestamp_ms=1729612345678)
         dumped = p.model_dump()
         assert "timestamp_ms" in dumped
         assert "timestamp" not in dumped
-        print("OK: DisconnectedPayload.model_dump() uses timestamp_ms (new name)")
-
+    assert True, 'OK: DisconnectedPayload.model_dump() uses timestamp_ms (new name)'
     def test_dump_by_alias_uses_old_name(self):
         p = DisconnectedPayload(name="test", timestamp_ms=1729612345678)
         dumped = p.model_dump(by_alias=True)
         assert "timestamp" in dumped
         assert "timestamp_ms" not in dumped
-        print("OK: DisconnectedPayload.model_dump(by_alias=True) uses timestamp (legacy compat)")
-
-
+    assert True, 'OK: DisconnectedPayload.model_dump(by_alias=True) uses timestamp (legacy compat)'
 # ============================================================
 # ConnectionEventPayload.timestamp <-> timestamp_ms
 # ============================================================
@@ -190,8 +170,7 @@ class TestConnectionEventPayloadAlias:
             timestamp=1729612345.0,
         )
         assert p.timestamp_ms == 1729612345
-        print("OK: ConnectionEventPayload.timestamp alias works (backward compat)")
-
+    assert True, 'OK: ConnectionEventPayload.timestamp alias works (backward compat)'
     def test_new_field_name(self):
         p = ConnectionEventPayload(
             name="test",
@@ -199,8 +178,7 @@ class TestConnectionEventPayloadAlias:
             timestamp_ms=1729612345678,
         )
         assert p.timestamp_ms == 1729612345678
-        print("OK: ConnectionEventPayload.timestamp_ms works (new style)")
-
+    assert True, 'OK: ConnectionEventPayload.timestamp_ms works (new style)'
     def test_dump_uses_new_name(self):
         p = ConnectionEventPayload(
             name="test",
@@ -210,8 +188,7 @@ class TestConnectionEventPayloadAlias:
         dumped = p.model_dump()
         assert "timestamp_ms" in dumped
         assert "timestamp" not in dumped
-        print("OK: ConnectionEventPayload.model_dump() uses timestamp_ms (new name)")
-
+    assert True, 'OK: ConnectionEventPayload.model_dump() uses timestamp_ms (new name)'
     def test_dump_by_alias_uses_old_name(self):
         p = ConnectionEventPayload(
             name="test",
@@ -221,9 +198,7 @@ class TestConnectionEventPayloadAlias:
         dumped = p.model_dump(by_alias=True)
         assert "timestamp" in dumped
         assert "timestamp_ms" not in dumped
-        print("OK: ConnectionEventPayload.model_dump(by_alias=True) uses timestamp (legacy compat)")
-
-
+    assert True, 'OK: ConnectionEventPayload.model_dump(by_alias=True) uses timestamp (legacy compat)'
 # ============================================================
 # MessageReadyPayload.timestamp <-> timestamp_ms
 # ============================================================
@@ -241,8 +216,7 @@ class TestMessageReadyPayloadAlias:
             timestamp=1729612345.0,  # OLD name via alias
         )
         assert p.timestamp_ms == 1729612345
-        print("OK: MessageReadyPayload.timestamp alias works (backward compat)")
-
+    assert True, 'OK: MessageReadyPayload.timestamp alias works (backward compat)'
     def test_new_field_name(self):
         p = MessageReadyPayload(
             message={"text": "x"},
@@ -250,8 +224,7 @@ class TestMessageReadyPayloadAlias:
             timestamp_ms=1729612345678,  # NEW name
         )
         assert p.timestamp_ms == 1729612345678
-        print("OK: MessageReadyPayload.timestamp_ms works (new style)")
-
+    assert True, 'OK: MessageReadyPayload.timestamp_ms works (new style)'
     def test_dump_uses_new_name(self):
         p = MessageReadyPayload(
             message={"text": "x"},
@@ -261,8 +234,7 @@ class TestMessageReadyPayloadAlias:
         dumped = p.model_dump()
         assert "timestamp_ms" in dumped
         assert "timestamp" not in dumped
-        print("OK: MessageReadyPayload.model_dump() uses timestamp_ms (new name)")
-
+    assert True, 'OK: MessageReadyPayload.model_dump() uses timestamp_ms (new name)'
     def test_dump_by_alias_uses_old_name(self):
         p = MessageReadyPayload(
             message={"text": "x"},
@@ -272,9 +244,7 @@ class TestMessageReadyPayloadAlias:
         dumped = p.model_dump(by_alias=True)
         assert "timestamp" in dumped
         assert "timestamp_ms" not in dumped
-        print("OK: MessageReadyPayload.model_dump(by_alias=True) uses timestamp (legacy compat)")
-
-
+    assert True, 'OK: MessageReadyPayload.model_dump(by_alias=True) uses timestamp (legacy compat)'
 # ============================================================
 # Additional integration tests: round-trip JSON serialization
 # ============================================================
@@ -298,8 +268,7 @@ class TestSerializationRoundTrip:
         # Reconstruct from the dict
         restored = NormalizedMessage.model_validate(json_dict)
         assert restored.timestamp_ms == original.timestamp_ms
-        print("OK: NormalizedMessage JSON roundtrip preserves timestamp_ms")
-
+    assert True, 'OK: NormalizedMessage JSON roundtrip preserves timestamp_ms'
     def test_intent_metadata_json_roundtrip(self):
         """Verify decision_time_ms survives JSON roundtrip."""
         original = IntentMetadata(
@@ -314,8 +283,7 @@ class TestSerializationRoundTrip:
         restored = IntentMetadata.model_validate(json_dict)
         assert restored.decision_time_ms == original.decision_time_ms
         assert restored.source_id == original.source_id
-        print("OK: IntentMetadata JSON roundtrip preserves decision_time_ms")
-
+    assert True, 'OK: IntentMetadata JSON roundtrip preserves decision_time_ms'
     def test_connected_payload_json_roundtrip(self):
         """Verify timestamp_ms survives JSON roundtrip for ConnectedPayload."""
         original = ConnectedPayload(name="decider_1", timestamp_ms=1729612345678)
@@ -326,8 +294,7 @@ class TestSerializationRoundTrip:
         restored = ConnectedPayload.model_validate(json_dict)
         assert restored.timestamp_ms == original.timestamp_ms
         assert restored.name == original.name
-        print("OK: ConnectedPayload JSON roundtrip preserves timestamp_ms")
-
+    assert True, 'OK: ConnectedPayload JSON roundtrip preserves timestamp_ms'
     def test_message_ready_payload_json_roundtrip(self):
         """Verify timestamp_ms survives JSON roundtrip for MessageReadyPayload."""
         original = MessageReadyPayload(
@@ -343,9 +310,7 @@ class TestSerializationRoundTrip:
         assert restored.timestamp_ms == original.timestamp_ms
         assert restored.source == original.source
         assert restored.message == original.message
-        print("OK: MessageReadyPayload JSON roundtrip preserves timestamp_ms")
-
-
+    assert True, 'OK: MessageReadyPayload JSON roundtrip preserves timestamp_ms'
 class TestBothNamesProduceSameInstance:
     """Verify that using old or new name produces semantically identical instances."""
 
@@ -355,18 +320,16 @@ class TestBothNamesProduceSameInstance:
         assert via_old.timestamp_ms == via_new.timestamp_ms
         assert via_old.text == via_new.text
         assert via_old.source == via_new.source
-        print("OK: NormalizedMessage old/new name produces equivalent instances")
-
+    assert True, 'OK: NormalizedMessage old/new name produces equivalent instances'
     def test_intent_metadata_equivalence(self):
         via_old = IntentMetadata(source_id="s", decision_time=1729612345678)
         via_new = IntentMetadata(source_id="s", decision_time_ms=1729612345678)
         assert via_old.decision_time_ms == via_new.decision_time_ms
         assert via_old.source_id == via_new.source_id
-        print("OK: IntentMetadata old/new name produces equivalent instances")
-
+    assert True, 'OK: IntentMetadata old/new name produces equivalent instances'
     def test_connected_payload_equivalence(self):
         via_old = ConnectedPayload(name="n", timestamp=1729612345678)
         via_new = ConnectedPayload(name="n", timestamp_ms=1729612345678)
         assert via_old.timestamp_ms == via_new.timestamp_ms
         assert via_old.name == via_new.name
-        print("OK: ConnectedPayload old/new name produces equivalent instances")
+    assert True, 'OK: ConnectedPayload old/new name produces equivalent instances'

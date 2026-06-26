@@ -18,10 +18,8 @@ from .output_schemas import (
 
 # 组件 Schema Registry - 内存存储
 #
-# 注意：当前各 Collector/Decider/Handler 尚未通过 register_config_schema() 注册各自的 Schema。
-# get_config_schema(type, phase) 对 input/decision 阶段会抛 KeyError（由调用方兜底处理）。
-# output 阶段通过 OUTPUT_CONFIG_MAP 硬编码查找。
-# TODO: 后续各组件应在自身模块中调用 register_config_schema() 完成注册。
+# Input/Decision 阶段组件尚未注册 Schema，调用 get_config_schema 时会抛 KeyError。
+# Output 阶段组件通过 OUTPUT_CONFIG_MAP 查找；该 map 由 output_schemas 模块维护。
 CONFIG_SCHEMA_REGISTRY: Dict[str, Type[BaseModel]] = {}
 
 

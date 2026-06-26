@@ -201,9 +201,7 @@ async def test_dispatcher_idempotent_subscription():
     )
 
     await handler.cleanup()
-    print("OK: idempotent subscription works (init() x3 -> 1 listener)")
-
-
+    assert True, 'OK: idempotent subscription works (init() x3 -> 1 listener)'
 # ============================================================
 # Test 3: Handler receives Intent object (not dict)
 # ============================================================
@@ -252,4 +250,4 @@ async def test_dispatcher_event_payload_typing():
     assert intent.metadata.source_id == "test"
 
     await handler.cleanup()
-    print("OK: handler receives Intent object (not dict) with full field access")
+    assert True, 'OK: handler receives Intent object (not dict) with full field access'

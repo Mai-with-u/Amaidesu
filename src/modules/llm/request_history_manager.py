@@ -12,7 +12,6 @@ LLM 请求历史记录管理器
 """
 
 import json
-import time
 import uuid
 from collections import deque
 from datetime import datetime, timedelta
@@ -22,6 +21,7 @@ from typing import Any, Callable, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 from src.modules.logging import get_logger
+from src.modules.time_utils import now_ms
 
 # 全局请求历史记录管理器实例
 global_request_history_manager: Optional["RequestHistoryManager"] = None
@@ -68,7 +68,7 @@ class RequestRecord(BaseModel):
     """LLM 请求记录"""
 
     request_id: str = Field(default_factory=lambda: f"req_{uuid.uuid4().hex[:12]}")
-    timestamp: int = Field(default_factory=lambda: int(time.time() * 1000))
+    timestamp: int = Field(default_factory=lambda: now_ms())
     client_type: str  # llm, llm_fast, vlm, llm_local
     model_name: str
     request_params: Dict[str, Any] = Field(default_factory=dict)
@@ -175,7 +175,7 @@ class RequestHistoryManager:
             日期字符串，格式为 YYYY-MM-DD
         """
         if timestamp_ms is None:
-            timestamp_ms = int(time.time() * 1000)
+            timestamp_ms = now_ms()
         return datetime.fromtimestamp(timestamp_ms / 1000).strftime("%Y-%m-%d")
 
     def _get_history_file_path(self, date_str: str) -> Path:

@@ -179,48 +179,24 @@ class LLMManager:
         # 获取客户端类型，默认从配置或使用默认值
         client_impl = client_config.get("client", self.DEFAULT_BACKENDS.get(client_type, "openai"))
 
-        # 动态导入客户端实现
-        client_class = self._get_client_class(client_impl)
+        if client_impl not in ("openai", "ollama", "anthropic"):
+            raise ValueError(f"Unknown LLM provider: {client_impl}")
+
+        if client_impl == "anthropic":
+            self.logger.warning("Anthropic 客户端暂未实现，使用 OpenAI 客户端")
+
+        from src.modules.llm.clients.openai_client import OpenAIClient
 
         # 应用环境变量覆盖（API Key 等）
         enriched_config = self._enrich_config_with_env(client_config, client_impl)
 
         # 创建客户端实例
-        self._clients[client_type] = client_class(enriched_config)
+        self._clients[client_type] = OpenAIClient(enriched_config)
         self._client_configs[client_type] = enriched_config
 
         self.logger.info(
             f"已初始化客户端 '{client_type}' (客户端: {client_impl}, 模型: {enriched_config.get('model', 'N/A')})"
         )
-
-    def _get_client_class(self, client_impl: str) -> type:
-        """
-        动态导入客户端类
-
-        Args:
-            client_impl: 客户端实现类型 (openai)
-
-        Returns:
-            客户端类
-
-        Raises:
-            ValueError: 如果客户端类型不支持
-        """
-        if client_impl in ("openai", "ollama"):
-            from src.modules.llm.clients.openai_client import OpenAIClient
-
-            return OpenAIClient
-        elif client_impl == "anthropic":
-            # 未来可以添加 Anthropic 客户端
-            from src.modules.llm.clients.openai_client import OpenAIClient
-
-            self.logger.warning("Anthropic 客户端暂未实现，降级到 OpenAI 客户端")
-            return OpenAIClient
-        else:
-            self.logger.warning(f"未知的客户端类型 '{client_impl}'，降级到 OpenAI 客户端")
-            from src.modules.llm.clients.openai_client import OpenAIClient
-
-            return OpenAIClient
 
     def _enrich_config_with_env(self, config: Dict[str, Any], client_impl: str) -> Dict[str, Any]:
         """

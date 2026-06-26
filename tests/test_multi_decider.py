@@ -215,7 +215,7 @@ class TestMultiDeciderLifecycle:
         await manager.start()
 
         # 验证 Decider 的 setup 被调用了
-        assert manager._decider_ready is True
+        assert manager._decider_ready.get("maibot") is True
 
     @pytest.mark.asyncio
     async def test_stop_all_deciders(self):
@@ -233,7 +233,7 @@ class TestMultiDeciderLifecycle:
         await manager.stop()
 
         # 验证 Decider 已停止
-        assert manager._decider_ready is False
+        assert manager._decider_ready.get("maibot") is False
 
     @pytest.mark.asyncio
     async def test_cleanup_all_deciders(self):

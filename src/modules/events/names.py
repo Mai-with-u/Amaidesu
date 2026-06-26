@@ -55,6 +55,8 @@ class CoreEvents:
     # OBS 控制事件（统一入口，所有 OBS 操作通过 payload.command 区分）
     OUTPUT_OBS_COMMAND = "output.obs.command"
 
+    OUTPUT_STICKER_COMMAND = "output.sticker.command"
+
     @classmethod
     def get_all_events(cls) -> tuple[str, ...]:
         """

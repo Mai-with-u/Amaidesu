@@ -1,7 +1,7 @@
 """
 OpenAI 客户端实现
 
-从 src/openai_client/llm_request.py 的 LLMClient 重构而来，适配 LLMClient 接口。
+OpenAI 兼容 API 客户端，唯一的 LLM 实现。
 """
 
 import asyncio
@@ -14,11 +14,11 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Union
 from openai import AsyncOpenAI
 from PIL import Image
 
-from src.modules.llm.clients.client_base import LLMClient
 from src.modules.llm.manager import LLMResponse
+from src.modules.logging import get_logger
 
 
-class OpenAIClient(LLMClient):
+class OpenAIClient:
     """
     OpenAI 兼容 API 客户端
 
@@ -29,7 +29,8 @@ class OpenAIClient(LLMClient):
     """
 
     def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
+        self.config = config
+        self.logger = get_logger(self.__class__.__name__)
 
         # 验证必需配置
         api_key: str = config.get("api_key") or "sk-dummy"
@@ -260,3 +261,10 @@ class OpenAIClient(LLMClient):
         """清理资源"""
         # AsyncOpenAI 客户端无需显式清理
         pass
+
+    def get_info(self) -> Dict[str, Any]:
+        return {
+            "name": self.__class__.__name__,
+            "model": self.config.get("model"),
+            "base_url": self.config.get("base_url"),
+        }

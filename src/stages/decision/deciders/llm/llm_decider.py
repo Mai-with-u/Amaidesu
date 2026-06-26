@@ -21,6 +21,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import IntentPayload
 from src.modules.logging import get_logger
 from src.modules.types import Intent, IntentMetadata
+from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.context import ContextService
@@ -315,7 +316,6 @@ class LLMDecider:
         Returns:
             完整的 Intent 对象（使用自然语言 emotion/action）
         """
-        import time
 
         # 提取字段 - 新结构使用自然语言字符串
         speech = parsed_data.get("text", "") or parsed_data.get("speech", "")
@@ -335,7 +335,7 @@ class LLMDecider:
             context=context,
             metadata=IntentMetadata(
                 source_id="llm",
-                decision_time_ms=int(time.time() * 1000),
+                decision_time_ms=now_ms(),
                 parser_type="llm_structured",
             ),
         )
@@ -387,7 +387,6 @@ class LLMDecider:
             text: 响应文本
             normalized_message: 原始 NormalizedMessage
         """
-        import time
 
         intent = Intent(
             emotion="neutral",
@@ -396,7 +395,7 @@ class LLMDecider:
             context="",
             metadata=IntentMetadata(
                 source_id="llm",
-                decision_time_ms=int(time.time() * 1000),
+                decision_time_ms=now_ms(),
                 parser_type="llm_fallback",
             ),
         )

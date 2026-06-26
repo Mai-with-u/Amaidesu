@@ -24,7 +24,7 @@ _PHASE_SECTION: Dict[str, str] = {
 # 各阶段配置节中的元数据字段（非组件配置，需排除）
 _PHASE_METADATA_FIELDS: Dict[str, set] = {
     "input": {"enabled"},
-    "output": {"enabled", "concurrent_rendering", "error_handling", "render_timeout"},
+    "output": {"enabled", "concurrent_rendering", "error_handling", "render_timeout_ms"},
     "decision": {"enabled"},
 }
 

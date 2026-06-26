@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from src.modules.logging import get_logger
+from src.modules.time_utils import now_ms
 
 # 全局Token使用量管理器实例
 global_token_manager = None
@@ -276,7 +277,7 @@ class TokenUsageManager:
             completion_tokens: 输出token数量
             total_tokens: 总token数量
         """
-        current_time = int(time.time() * 1000)  # 转换为整数毫秒时间戳
+        current_time = now_ms()  # 转换为整数毫秒时间戳
         current_usage = self._load_current_usage(model_name)
 
         # 计算本次调用的费用

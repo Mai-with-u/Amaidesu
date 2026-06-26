@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from src.modules.dashboard.api.router import create_app, setup_cors
 from src.modules.dashboard.config import DashboardConfig
+from src.modules.dashboard.schemas.manager_protocol import ManagerStatusProvider
 from src.modules.dashboard.widget import DanmakuWidgetService
 from src.modules.dashboard.widget.models import DanmakuWidgetConfig, SubtitleWidgetConfig
 from src.modules.logging import get_logger
@@ -30,9 +31,6 @@ except ImportError:
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
-    from src.stages.decision.manager import DeciderManager
-    from src.stages.input.manager import InputCollectorManager
-    from src.stages.output.manager import OutputHandlerManager
     from src.modules.config.service import ConfigService
     from src.modules.context.service import ContextService
     from src.modules.events.event_bus import EventBus
@@ -47,9 +45,9 @@ class DashboardServer:
     def __init__(
         self,
         event_bus: "EventBus",
-        input_manager: Optional["InputCollectorManager"],
-        decision_manager: Optional["DeciderManager"],
-        output_manager: Optional["OutputHandlerManager"],
+        input_manager: Optional[ManagerStatusProvider],
+        decision_manager: Optional[ManagerStatusProvider],
+        output_manager: Optional[ManagerStatusProvider],
         context_service: "ContextService",
         config_service: "ConfigService",
         dashboard_config: DashboardConfig,

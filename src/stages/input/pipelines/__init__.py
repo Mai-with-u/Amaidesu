@@ -10,7 +10,6 @@ from src.stages.input.pipelines.similar_filter.pipeline import SimilarFilterInpu
 from src.stages.input.pipelines.manager import (
     InputPipelineManager,
     InputPipelineBase,
-    InputPipeline,
     PipelineErrorHandling,
     PipelineException,
 )
@@ -18,9 +17,8 @@ from src.stages.input.pipelines.manager import (
 __all__ = [
     "InputPipelineManager",
     "InputPipelineBase",
-    "InputPipeline",
     "RateLimitInputPipeline",
     "SimilarFilterInputPipeline",
     "PipelineErrorHandling",
     "PipelineException",
-]
+]  # noqa: F401

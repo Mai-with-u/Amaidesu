@@ -5,7 +5,7 @@ OutputPipeline 基类和协议定义
 """
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Optional, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import time
 from pydantic import BaseModel
@@ -26,49 +26,14 @@ class OutputPipelineContext(BaseModel):
     所有字段均为 Optional，支持按需使用。
 
     Attributes:
-        capability_registry: 能力注册表（用于查询 Handler 能力）
         llm_service: LLM 服务（用于生成文本/决策）
         prompt_service: 提示词服务（用于渲染提示词模板）
     """
 
-    capability_registry: Optional[Any] = None
     llm_service: Optional[Any] = None
     prompt_service: Optional[Any] = None
 
     model_config = {"arbitrary_types_allowed": True}
-
-
-@runtime_checkable
-class OutputPipeline(Protocol):
-    """
-    输出管道协议（与 InputPipeline 对称）
-
-    处理 Intent，在分发给 OutputHandler 前执行过滤/修改/丢弃。
-
-    数据流：
-        Intent → OutputPipeline.process() → Intent | None
-    """
-
-    priority: int
-    enabled: bool
-    error_handling: PipelineErrorHandling
-    timeout_seconds: float
-
-    async def process(self, intent: "Intent") -> Optional["Intent"]:
-        """处理 Intent，返回 None 表示丢弃"""
-        ...
-
-    def get_info(self) -> Dict[str, Any]:
-        """获取 Pipeline 信息"""
-        ...
-
-    def get_stats(self) -> PipelineStats:
-        """获取统计信息"""
-        ...
-
-    def reset_stats(self) -> None:
-        """重置统计"""
-        ...
 
 
 class OutputPipelineBase(ABC):

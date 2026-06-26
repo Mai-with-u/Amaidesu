@@ -10,7 +10,6 @@ ReplayDecider - 输入重放决策提供者
 - 不需要 AI 决策，只需要将用户输入直接传递到输出
 """
 
-import time
 from typing import TYPE_CHECKING, Any, Dict, Literal
 
 from pydantic import Field
@@ -21,6 +20,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import IntentPayload
 from src.modules.logging import get_logger
 from src.modules.types import Intent, IntentMetadata
+from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
@@ -85,7 +85,7 @@ class ReplayDecider:
             context=f"来源: {normalized_message.source}",
             metadata=IntentMetadata(
                 source_id=normalized_message.source,
-                decision_time_ms=int(time.time() * 1000),
+                decision_time_ms=now_ms(),
                 parser_type="replay",
                 replay_count=self._total_messages,
             ),

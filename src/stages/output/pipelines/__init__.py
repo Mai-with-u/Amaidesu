@@ -14,17 +14,16 @@ OutputPipeline 用于在 Intent 分发给 OutputHandler 前执行过滤/修改/�
     - OutputPipeline: 处理 Intent → 返回 Intent 或 None
 """
 
-from .base import OutputPipeline, OutputPipelineBase, PipelineStats
+from .base import OutputPipelineBase, PipelineStats
 from .manager import OutputPipelineManager
 from .profanity_filter import ProfanityFilterPipeline
 from src.modules.types.base.pipeline_types import PipelineErrorHandling, PipelineException
 
 __all__ = [
     "OutputPipelineBase",
-    "OutputPipeline",
     "OutputPipelineManager",
     "ProfanityFilterPipeline",
     "PipelineErrorHandling",
     "PipelineException",
     "PipelineStats",
-]
+]  # noqa: F401

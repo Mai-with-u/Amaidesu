@@ -8,13 +8,13 @@ Decision 阶段 事件 Payload 定义
 - DisconnectedPayload: 组件断开事件
 """
 
-import time
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from pydantic import ConfigDict, Field
 
 from src.modules.events.payloads.base import BasePayload
 from src.modules.events.registry import register_event
+from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.types import Intent
@@ -184,7 +184,7 @@ class ConnectedPayload(BasePayload):
     name: str = Field(..., description="参与者名称")
     endpoint: Optional[str] = Field(default=None, description="连接端点")
     timestamp_ms: int = Field(
-        default_factory=lambda: int(time.time() * 1000),
+        default_factory=lambda: now_ms(),
         alias="timestamp",
         description="连接时间（Unix 毫秒）",
     )
@@ -223,7 +223,7 @@ class DisconnectedPayload(BasePayload):
     reason: str = Field(default="unknown", description="断开原因")
     will_retry: bool = Field(default=False, description="是否将重试连接")
     timestamp_ms: int = Field(
-        default_factory=lambda: int(time.time() * 1000),
+        default_factory=lambda: now_ms(),
         alias="timestamp",
         description="断开时间（Unix 毫秒）",
     )

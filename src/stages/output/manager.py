@@ -22,14 +22,12 @@ OutputHandlerManager - Output 阶段: 输出Handler管理器
 """
 
 import asyncio
-import inspect
 import os
-import warnings
 from typing import TYPE_CHECKING, Any, Optional
 
 from pydantic import BaseModel
 
-from src.stages.output.capability_registry import OutputCapabilityRegistry
+
 from src.stages.output.pipelines.base import OutputPipelineContext
 from src.stages.output.pipelines.manager import OutputPipelineManager
 from src.modules.events.event_bus import EventBus
@@ -56,7 +54,7 @@ class RenderResult(BaseModel):
 
 
 # 需要 audio_stream_channel 的音频Handler列表
-AUDIO_HANDLERS = {"edge_tts", "gptsovits", "omni_tts", "vts", "warudo", "vrchat"}
+AUDIO_HANDLERS = {"edge_tts", "gptsovits", "omni_tts", "vts"}
 
 
 class OutputHandlerManager:
@@ -93,12 +91,9 @@ class OutputHandlerManager:
         self._prompt_service = prompt_manager
         self._audio_device_service = audio_device_manager
 
-        self.capability_registry = OutputCapabilityRegistry()
-        self.logger.debug("OutputCapabilityRegistry 已创建")
-
         self.concurrent_rendering = self.config.get("concurrent_rendering", True)
         self.error_handling = self.config.get("error_handling", "continue")
-        self.render_timeout_ms = self._migrate_render_timeout_config(self.config)
+        self.render_timeout_ms = int(self.config.get("render_timeout_ms", 10000))
 
         self.pipeline_manager: Optional[OutputPipelineManager] = None
 
@@ -112,26 +107,6 @@ class OutputHandlerManager:
             f"error_handling={self.error_handling}, "
             f"timeout={self.render_timeout_ms}ms)"
         )
-
-    def _migrate_render_timeout_config(self, config: dict) -> int:
-        """迁移旧的 render_timeout (float 秒) 到 render_timeout_ms (int 毫秒)
-
-        Returns the resolved value in milliseconds.
-        Emits DeprecationWarning if old field is present.
-        """
-        if "render_timeout" in config and "render_timeout_ms" not in config:
-            warnings.warn(
-                "Config field 'render_timeout' is deprecated. "
-                "Use 'render_timeout_ms' (int milliseconds) instead. "
-                "Old value: {sec}s → New value: {ms}ms".format(
-                    sec=config["render_timeout"],
-                    ms=int(config["render_timeout"] * 1000),
-                ),
-                DeprecationWarning,
-                stacklevel=3,
-            )
-            return int(config["render_timeout"] * 1000)
-        return int(config.get("render_timeout_ms", 10000))
 
     async def setup(
         self,
@@ -152,7 +127,6 @@ class OutputHandlerManager:
         self._audio_device_service = audio_device_manager or self._audio_device_service
 
         pipeline_context = OutputPipelineContext(
-            capability_registry=self.capability_registry,
             llm_service=self._llm_service,
             prompt_service=self._prompt_service,
         )
@@ -352,6 +326,20 @@ class OutputHandlerManager:
             )
         return result
 
+    def get_component_summaries(self) -> list[dict[str, Any]]:
+        """Dashboard 协议接口：返回 Output 阶段参与者状态摘要字典列表"""
+        return [
+            {
+                "name": s["name"],
+                "phase": "output",
+                "type": "handler",
+                "is_started": s["is_started"],
+                "is_enabled": True,
+                "config": s.get("config"),
+            }
+            for s in self.get_handler_status()
+        ]
+
     async def load_from_config(self, config: dict[str, Any], config_service=None):
         """从配置加载并创建所有OutputHandler（支持二级配置合并）"""
         self.logger.info("开始从配置加载OutputHandler...")
@@ -370,7 +358,7 @@ class OutputHandlerManager:
 
         self.concurrent_rendering = config.get("concurrent_rendering", True)
         self.error_handling = config.get("error_handling", "continue")
-        self.render_timeout_ms = self._migrate_render_timeout_config(config)
+        self.render_timeout_ms = int(config.get("render_timeout_ms", 10000))
 
         self.logger.info(
             f"输出Handler管理器配置: "
@@ -438,20 +426,12 @@ class OutputHandlerManager:
         try:
             handler_cls = _HANDLERS[handler_type]
 
-            # 根据Handler类型决定是否传递audio_stream_channel
             is_audio_handler = handler_type in AUDIO_HANDLERS
-
-            # 检查 handler 是否接受 handler_manager 参数
-            sig = inspect.signature(handler_cls.__init__)
-            accepts_handler_manager = "handler_manager" in sig.parameters
 
             kwargs: dict[str, Any] = {"config": config, "event_bus": self.event_bus}
 
             if is_audio_handler and self._audio_stream_channel:
                 kwargs["audio_stream_channel"] = self._audio_stream_channel
-
-            if accepts_handler_manager:
-                kwargs["handler_manager"] = self
 
             handler = handler_cls(**kwargs)
 

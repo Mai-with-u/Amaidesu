@@ -99,7 +99,7 @@ class DeciderManager:
 
         self._switch_lock = asyncio.Lock()
         self._event_subscribed = False
-        self._decider_ready = False
+        self._decider_ready: Dict[str, bool] = {}
 
     async def setup(
         self,
@@ -145,7 +145,7 @@ class DeciderManager:
                 first_name = list(self._deciders.keys())[0]
                 self._current_decider = self._deciders[first_name]
                 self._decider_name = first_name
-                self._decider_ready = True
+                self._decider_ready[first_name] = True
 
             # 检查Speech冲突
             self._check_speech_conflict(enabled_deciders)
@@ -266,7 +266,8 @@ class DeciderManager:
         # 订阅事件
         self._subscribe_data_message_event()
 
-        self._decider_ready = True
+        for name in self._deciders:
+            self._decider_ready[name] = True
         self.logger.info(f"所有 {len(self._deciders)} 个Decider已启动")
 
     async def stop(self) -> None:
@@ -285,7 +286,8 @@ class DeciderManager:
         if self._decider_name:
             await self._emit_decider_disconnected_event(self._decider_name, reason="stop", will_retry=False)
 
-        self._decider_ready = False
+        for name in self._deciders:
+            self._decider_ready[name] = False
         self.logger.info("所有 Decider 已停止")
 
     async def _emit_decider_connected_event(self) -> None:
@@ -298,7 +300,10 @@ class DeciderManager:
                 CoreEvents.DECISION_CONNECTED,
                 ConnectedPayload(
                     name=self._decider_name,
-                    metadata={"decider_ready": self._decider_ready, "decider_count": len(self._deciders)},
+                    metadata={
+                        "decider_ready_count": sum(1 for v in self._decider_ready.values() if v),
+                        "decider_count": len(self._deciders),
+                    },
                 ),
                 source="DeciderManager",
             )
@@ -446,7 +451,7 @@ class DeciderManager:
             self._decider_names = []
             self._current_decider = None
             self._decider_name = None
-            self._decider_ready = False
+            self._decider_ready = {}
 
             self.logger.info("DeciderManager 已清理")
 
@@ -480,9 +485,8 @@ class DeciderManager:
             包含 name, is_started 的字典列表
         """
         result = []
-        for name, decider in self._deciders.items():
-            # Decider 通过 _decider_ready 标志位指示是否已启动
-            is_started = getattr(decider, "_is_ready", False) if hasattr(decider, "_is_ready") else False
+        for name, _decider in self._deciders.items():
+            is_started = self._decider_ready.get(name, False)
             result.append(
                 {
                     "name": name,
@@ -490,6 +494,19 @@ class DeciderManager:
                 }
             )
         return result
+
+    def get_component_summaries(self) -> list[dict[str, Any]]:
+        """Dashboard 协议接口：返回 Decision 阶段参与者状态摘要字典列表"""
+        return [
+            {
+                "name": s["name"],
+                "phase": "decision",
+                "type": "decider",
+                "is_started": s["is_started"],
+                "is_enabled": True,
+            }
+            for s in self.get_decider_status()
+        ]
 
     def _subscribe_data_message_event(self) -> None:
         """订阅 input.message.ready 事件（防止重复订阅）

@@ -38,7 +38,7 @@ class MockOutputHandler:
         speech = intent.speech[:50] if intent.speech else ""
         self.logger.debug(f"收到 Intent: speech={speech}...")
 
-    async def setup(self) -> None:
+    async def init(self) -> None:
         """初始化 Handler"""
         self.logger.info("MockOutputHandler 启动完成")
 

@@ -69,22 +69,22 @@ class TestAvatarHandlerBaseLifecycle:
     @pytest.mark.asyncio
     async def test_start_connects_to_platform(self, mock_event_bus):
         provider = MockAvatarProvider({}, mock_event_bus)
-        await provider.start()
+        await provider.init()
         assert len(provider.connect_calls) == 1
         assert provider._is_connected is True
 
     @pytest.mark.asyncio
     async def test_stop_disconnects_from_platform(self, mock_event_bus):
         provider = MockAvatarProvider({}, mock_event_bus)
-        await provider.start()
-        await provider.stop()
+        await provider.init()
+        await provider.cleanup()
         assert len(provider.disconnect_calls) == 1
         assert provider._is_connected is False
 
     @pytest.mark.asyncio
     async def test_stop_without_start(self, mock_event_bus):
         provider = MockAvatarProvider({}, mock_event_bus)
-        await provider.stop()
+        await provider.cleanup()
         assert len(provider.disconnect_calls) == 0
 
 
@@ -138,14 +138,14 @@ class TestAvatarHandlerBaseConnectionState:
     @pytest.mark.asyncio
     async def test_connection_state_becomes_true_after_start(self, mock_event_bus):
         provider = MockAvatarProvider({}, mock_event_bus)
-        await provider.start()
+        await provider.init()
         assert provider._is_connected is True
 
     @pytest.mark.asyncio
     async def test_connection_state_becomes_false_after_stop(self, mock_event_bus):
         provider = MockAvatarProvider({}, mock_event_bus)
-        await provider.start()
-        await provider.stop()
+        await provider.init()
+        await provider.cleanup()
         assert provider._is_connected is False
 
 
@@ -153,11 +153,11 @@ class TestAvatarHandlerBaseIntegration:
     @pytest.mark.asyncio
     async def test_full_lifecycle(self, mock_event_bus, sample_intent):
         provider = MockAvatarProvider({}, mock_event_bus)
-        await provider.start()
+        await provider.init()
         for _i in range(3):
             await provider.handle(sample_intent)
         assert len(provider.adapt_intent_calls) == 3
-        await provider.stop()
+        await provider.cleanup()
         assert provider._is_connected is False
 
 

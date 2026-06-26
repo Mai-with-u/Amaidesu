@@ -162,6 +162,20 @@ class InputCollectorManager:
             )
         return result
 
+    def get_component_summaries(self) -> list[dict[str, Any]]:
+        """Dashboard 协议接口：返回 Input 阶段参与者状态摘要字典列表"""
+        return [
+            {
+                "name": s["name"],
+                "phase": "input",
+                "type": "collector",
+                "is_started": s["is_started"],
+                "is_enabled": True,
+                "config": s.get("config"),
+            }
+            for s in self.get_collector_status()
+        ]
+
     async def _run_collector(self, collector, collector_name: str) -> None:
         try:
             self.logger.info(f"Collector {collector_name} 开始运行")

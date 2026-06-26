@@ -2,13 +2,13 @@
 通用组件事件 Payload 定义
 """
 
-import time
 from typing import Any, Dict, Optional
 
 from pydantic import ConfigDict, Field
 
 from src.modules.events.payloads.base import BasePayload
 from src.modules.events.registry import register_event
+from src.modules.time_utils import now_ms
 
 
 @register_event("connection.event")
@@ -20,7 +20,7 @@ class ConnectionEventPayload(BasePayload):
     reason: Optional[str] = Field(default=None, description="断开原因")
     will_retry: bool = Field(default=False, description="是否将重试")
     timestamp_ms: int = Field(
-        default_factory=lambda: int(time.time() * 1000),
+        default_factory=lambda: now_ms(),
         alias="timestamp",
         description="事件时间戳（Unix 毫秒）",
     )

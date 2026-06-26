@@ -4,7 +4,6 @@ M aiBot 控制 API
 提供 MaiBot 插件控制 Amaidesu 动作和情绪的接口。
 """
 
-import time
 import uuid
 from typing import TYPE_CHECKING
 
@@ -16,6 +15,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.decision import IntentPayload
 from src.modules.logging import get_logger
 from src.modules.types.intent import Intent, IntentMetadata
+from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
@@ -44,7 +44,7 @@ async def handle_maibot_action(
             context="来源: maibot_api",
             metadata=IntentMetadata(
                 source_id="maibot_api",
-                decision_time_ms=int(time.time() * 1000),
+                decision_time_ms=now_ms(),
                 parser_type="maibot_api",
                 extra={"priority": request.priority, "action_params": request.action_params},
             ),

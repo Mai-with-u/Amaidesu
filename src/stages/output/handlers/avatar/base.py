@@ -279,6 +279,8 @@ class AvatarHandlerBase(ABC):
 
     async def cleanup(self):
         """清理资源：取消订阅并断开连接"""
+        if not self._has_started:
+            return
         if self.event_bus and getattr(self, "_dispatch_subscribed", False):
             try:
                 self.event_bus.off(
@@ -290,17 +292,19 @@ class AvatarHandlerBase(ABC):
             finally:
                 self._dispatch_subscribed = False
 
+        if self.event_bus and getattr(self, "_sticker_subscribed", False):
+            try:
+                self.event_bus.off(
+                    CoreEvents.OUTPUT_STICKER_COMMAND,
+                    self._on_sticker_command,
+                )
+            except Exception as e:
+                self.logger.warning(f"取消订阅 {CoreEvents.OUTPUT_STICKER_COMMAND} 失败: {e}")
+            finally:
+                self._sticker_subscribed = False
+
         await self._disconnect()
         self.logger.info(f"{self.__class__.__name__} 已停止")
-
-    # start/stop 兼容别名
-    async def start(self):
-        await self.init()
-
-    async def stop(self):
-        if not self._has_started:
-            return
-        await self.cleanup()
 
     @abstractmethod
     async def _connect(self) -> None:

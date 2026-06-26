@@ -20,8 +20,6 @@ dependencies = [
     "python-logging-loki>=0.3.0",
     # 数据验证
     "pydantic>=2.0",
-    # CLI
-    "typer>=0.9.0",
     # MCP
     "fastmcp>=2.0.0",
     # MaiBot 消息协议
@@ -50,7 +48,6 @@ dependencies = [
     # 自动化和 OSC
     "pyautogui>=0.9.0",
     "python-osc>=1.8.0",
-    "pytest>=9.0.2",
     "tomli-w>=1.2.0",
     "tomlkit>=0.14.0",
     "python-frontmatter>=1.1.0",
@@ -66,8 +63,9 @@ stt = [
 # 开发依赖
 dev = [
     "ruff>=0.1.0",
-    "pytest>=7.0.0",
+    "pytest>=9.0.2",
     "pytest-asyncio>=0.21.0",
+    "pytest-cov>=5.0.0",
     "setuptools>=68.0.0",
 ]
 

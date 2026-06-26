@@ -185,6 +185,15 @@ class BiliDanmakuOfficialMaiCraftCollector:
     async def start(self) -> None:
         self.is_started = True
 
+        if self.forward_enabled and self.forward_ws_url and self.forward_client is None:
+            self.forward_client = ForwardWebSocketClient(self.forward_ws_url, self.logger)
+            try:
+                await self.forward_client.start()
+                self.logger.info(f"已启用外发 WebSocket 转发: {self.forward_ws_url}")
+            except Exception as e:
+                self.logger.warning(f"外发 WebSocket 启动失败: {e}")
+                self.forward_client = None
+
     async def stop(self) -> None:
         self.is_started = False
 
@@ -224,15 +233,18 @@ class BiliDanmakuOfficialMaiCraftCollector:
             api_host=self.api_host,
         )
 
-        if self.forward_enabled and self.forward_ws_url:
+        if self.forward_enabled and self.forward_ws_url and self.forward_client is None:
             self.forward_client = ForwardWebSocketClient(self.forward_ws_url, self.logger)
-            await self.forward_client.start()
-            self.logger.info(f"已启用外发 WebSocket 转发: {self.forward_ws_url}")
-        else:
-            if not self.forward_enabled:
-                self.logger.info("已禁用外发 WebSocket 转发")
-            else:
-                self.logger.warning("未配置 forward_ws_url，外发 WebSocket 转发不可用")
+            try:
+                await self.forward_client.start()
+                self.logger.info(f"已启用外发 WebSocket 转发: {self.forward_ws_url}")
+            except Exception as e:
+                self.logger.warning(f"外发 WebSocket 启动失败: {e}")
+                self.forward_client = None
+        elif not self.forward_enabled:
+            self.logger.info("已禁用外发 WebSocket 转发")
+        elif not self.forward_ws_url:
+            self.logger.warning("未配置 forward_ws_url，外发 WebSocket 转发不可用")
 
         self.logger.info("开始采集 Bilibili 官方弹幕数据...")
 

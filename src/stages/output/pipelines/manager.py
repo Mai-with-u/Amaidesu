@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from src.modules.logging import get_logger
 
-from .base import OutputPipeline, OutputPipelineContext
+from .base import OutputPipelineBase, OutputPipelineContext
 from src.modules.types.base.pipeline_types import PipelineErrorHandling, PipelineException
 
 # 类型检查时的导入
@@ -39,13 +39,13 @@ class OutputPipelineManager:
     """
 
     def __init__(self, context: Optional[OutputPipelineContext] = None):
-        self._pipelines: List[OutputPipeline] = []
+        self._pipelines: List[OutputPipelineBase] = []
         self._pipelines_sorted: bool = True
         self._pipeline_lock = asyncio.Lock()
         self.context = context
         self.logger = get_logger("OutputPipelineManager")
 
-    def register_pipeline(self, pipeline: OutputPipeline) -> None:
+    def register_pipeline(self, pipeline: OutputPipelineBase) -> None:
         """注册一个 OutputPipeline"""
         self._pipelines.append(pipeline)
         self._pipelines_sorted = False
