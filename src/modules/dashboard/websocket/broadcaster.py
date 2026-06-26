@@ -35,11 +35,11 @@ class EventBroadcaster:
     }
 
     # 组件 事件类型映射
-    PROVIDER_EVENT_TYPE_MAP = {
+    COMPONENT_EVENT_TYPE_MAP = {
         CoreEvents.INPUT_CONNECTED: "collector.connected",
         CoreEvents.INPUT_DISCONNECTED: "collector.disconnected",
-        CoreEvents.DECISION_CONNECTED: "collector.connected",
-        CoreEvents.DISCONNECTED: "collector.disconnected",
+        CoreEvents.DECISION_CONNECTED: "decider.connected",
+        CoreEvents.DISCONNECTED: "decider.disconnected",
     }
 
     def __init__(
@@ -99,7 +99,7 @@ class EventBroadcaster:
             CoreEvents.CORE_ERROR: self._on_core_error,
         }
         # 组件 事件使用通用处理器
-        if event_name in self.PROVIDER_EVENT_TYPE_MAP:
+        if event_name in self.COMPONENT_EVENT_TYPE_MAP:
             return self._create_component_handler(event_name)
         return handler_map.get(event_name)
 
@@ -163,7 +163,7 @@ class EventBroadcaster:
         async def handler(event_name: str, data: BaseModel, source: str) -> None:
             try:
                 dict_data = data.model_dump() if isinstance(data, BaseModel) else {}
-                event_type = self.PROVIDER_EVENT_TYPE_MAP.get(target_event_name, "collector.connected")
+                event_type = self.COMPONENT_EVENT_TYPE_MAP.get(target_event_name, "collector.connected")
                 await self.ws_handler.broadcast(event_type, dict_data)
             except Exception as e:
                 logger.error(f"广播 component event 失败: {e}")

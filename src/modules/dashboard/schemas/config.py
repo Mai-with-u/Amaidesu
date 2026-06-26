@@ -13,7 +13,6 @@ class ConfigResponse(BaseModel):
     """配置响应"""
 
     general: Dict[str, Any] = {}
-    providers: Dict[str, Any] = {}
     pipelines: Dict[str, Any] = {}
     logging: Dict[str, Any] = {}
     context: Dict[str, Any] = {}

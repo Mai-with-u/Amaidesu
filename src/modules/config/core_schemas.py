@@ -96,8 +96,8 @@ class DashboardConfig(BaseConfig):
     host: str = Field(default="127.0.0.1", description="Dashboard 监听地址")
     port: int = Field(default=60214, description="Dashboard 监听端口")
     cors_origins: list[str] = Field(
-        default_factory=lambda: ["http://localhost:5173", "http://127.0.0.1:5173"],
-        description="允许的 CORS 来源列表",
+        default_factory=lambda: ["http://localhost:60315", "http://127.0.0.1:60315"],
+        description="允许的 CORS 来源列表（Vite 开发服务器端口，由 dashboard/vite.config.ts 配置）",
     )
     max_history_messages: int = Field(
         default=1000,

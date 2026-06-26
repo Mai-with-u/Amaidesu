@@ -43,8 +43,8 @@ class DashboardConfig(BaseModel):
     host: str = Field(default="127.0.0.1", description="监听地址")
     port: int = Field(default=60214, description="监听端口")
     cors_origins: List[str] = Field(
-        default=["http://localhost:5173", "http://127.0.0.1:5173"],
-        description="CORS 允许的源",
+        default=["http://localhost:60315", "http://127.0.0.1:60315"],
+        description="CORS 允许的源（Vite 开发服务器端口，由 dashboard/vite.config.ts 配置）",
     )
     max_history_messages: int = Field(default=1000, description="内存中保留的最大历史消息数")
     websocket_heartbeat: int = Field(default=30, description="WebSocket 心跳间隔（秒）")

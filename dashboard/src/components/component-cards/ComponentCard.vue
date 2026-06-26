@@ -1,17 +1,17 @@
 <template>
   <div
-    class="provider-card"
-    :class="[statusClass, { expanded: isExpanded, 'is-decision': provider.phase === 'decision' }]"
+    class="component-card"
+    :class="[statusClass, { expanded: isExpanded, 'is-decision': component.phase === 'decision' }]"
   >
     <!-- Header Section - Compact -->
-    <div class="provider-header">
-      <div class="provider-title-row">
+    <div class="component-header">
+      <div class="component-title-row">
         <span class="status-indicator" :class="statusClass">
           <span class="status-dot"></span>
         </span>
-        <h3 class="provider-name">{{ provider.name }}</h3>
+        <h3 class="component-name">{{ component.name }}</h3>
         <el-tag
-          :type="provider.is_started ? 'success' : provider.is_enabled ? 'warning' : 'info'"
+          :type="component.is_started ? 'success' : component.is_enabled ? 'warning' : 'info'"
           size="small"
           effect="plain"
           class="status-tag"
@@ -22,7 +22,7 @@
     </div>
 
     <!-- Stats & Actions Row -->
-    <div class="provider-footer">
+    <div class="component-footer">
       <div class="stats-row">
         <div class="stat-badge" title="事件" @click="handleToggleExpand">
           <span class="stat-icon">
@@ -53,12 +53,12 @@
       </div>
 
       <div class="action-buttons">
-        <!-- Decision Provider: Only Activate button -->
-        <template v-if="provider.phase === 'decision'">
+        <!-- Decision component: Only Activate button -->
+        <template v-if="component.phase === 'decision'">
           <el-button
             size="small"
             type="primary"
-            :disabled="provider.is_started"
+            :disabled="component.is_started"
             :loading="actionLoading['start']"
             @click="handleControl('start')"
           >
@@ -66,12 +66,12 @@
           </el-button>
         </template>
 
-        <!-- Input/Output Providers: Start, Stop, Restart -->
+        <!-- Input/Output components: Start, Stop, Restart -->
         <template v-else>
           <el-button
             size="small"
             type="primary"
-            :disabled="provider.is_started"
+            :disabled="component.is_started"
             :loading="actionLoading['start']"
             @click="handleControl('start')"
           >
@@ -79,7 +79,7 @@
           </el-button>
           <el-button
             size="small"
-            :disabled="!provider.is_started"
+            :disabled="!component.is_started"
             :loading="actionLoading['stop']"
             @click="handleControl('stop')"
           >
@@ -99,7 +99,7 @@
 
     <!-- Expanded Details Section -->
     <el-collapse-transition>
-      <div v-show="isExpanded" class="provider-details">
+      <div v-show="isExpanded" class="component-details">
         <!-- Recent Events -->
         <div class="detail-section events-section">
           <div class="section-header">
@@ -162,7 +162,7 @@ import type { ComponentSummary, WebSocketMessage, ComponentControlAction } from 
 import type { LogEntry } from '@/stores/logs';
 
 interface Props {
-  provider: ComponentSummary;
+  component: ComponentSummary;
   recentEvents: WebSocketMessage[];
   recentLogs: LogEntry[];
   eventCount: number;
@@ -181,14 +181,14 @@ const emit = defineEmits<Emits>();
 const isExpanded = ref(false);
 
 const statusClass = computed(() => {
-  if (!props.provider.is_enabled) return 'disabled';
-  if (props.provider.is_started) return 'running';
+  if (!props.component.is_enabled) return 'disabled';
+  if (props.component.is_started) return 'running';
   return 'stopped';
 });
 
 const statusText = computed(() => {
-  if (!props.provider.is_enabled) return '已禁用';
-  if (props.provider.is_started) return '运行中';
+  if (!props.component.is_enabled) return '已禁用';
+  if (props.component.is_started) return '运行中';
   return '已停止';
 });
 
@@ -227,7 +227,7 @@ function formatLogTime(timestamp: string): string {
 </script>
 
 <style scoped>
-.provider-card {
+.component-card {
   background: var(--bg-card);
   border-radius: var(--radius-md);
   border: 1px solid var(--border-color-light);
@@ -238,7 +238,7 @@ function formatLogTime(timestamp: string): string {
   overflow: hidden;
 }
 
-.provider-card::before {
+.component-card::before {
   content: '';
   position: absolute;
   top: 0;
@@ -249,38 +249,38 @@ function formatLogTime(timestamp: string): string {
   transition: background var(--transition-normal);
 }
 
-.provider-card.running::before {
+.component-card.running::before {
   background: var(--color-success);
 }
 
-.provider-card.stopped::before {
+.component-card.stopped::before {
   background: var(--color-warning);
 }
 
-.provider-card.disabled::before {
+.component-card.disabled::before {
   background: var(--text-secondary);
 }
 
-.provider-card:hover {
+.component-card:hover {
   box-shadow: var(--shadow-md);
 }
 
-.provider-card.expanded {
+.component-card.expanded {
   box-shadow: var(--shadow-md);
 }
 
 /* Header - Compact */
-.provider-header {
+.component-header {
   margin-bottom: var(--spacing-xs);
 }
 
-.provider-title-row {
+.component-title-row {
   display: flex;
   align-items: center;
   gap: var(--spacing-sm);
 }
 
-.provider-name {
+.component-name {
   font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
@@ -340,7 +340,7 @@ function formatLogTime(timestamp: string): string {
 }
 
 /* Footer / Actions */
-.provider-footer {
+.component-footer {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -433,7 +433,7 @@ function formatLogTime(timestamp: string): string {
 }
 
 /* Expanded Details */
-.provider-details {
+.component-details {
   margin-top: var(--spacing-sm);
   padding-top: var(--spacing-sm);
   border-top: 1px solid var(--border-color-light);
@@ -562,7 +562,7 @@ function formatLogTime(timestamp: string): string {
 
 /* Responsive */
 @media (max-width: 768px) {
-  .provider-footer {
+  .component-footer {
     flex-direction: column;
     align-items: stretch;
     gap: var(--spacing-xs);

@@ -1,23 +1,23 @@
 <template>
-  <section class="domain-column" :style="domainStyleVars">
-    <!-- 域标题区域 -->
+  <section class="phase-column" :style="phaseStyleVars">
+    <!-- Phase title area -->
     <div class="section-header">
       <div class="section-title">
-        <span class="domain-icon">
+        <span class="phase-icon">
           <component :is="icon" />
         </span>
         <h2>{{ title }}</h2>
-        <span class="count-badge">{{ providers.length }}</span>
+        <span class="count-badge">{{ components.length }}</span>
       </div>
       <el-button size="small" :loading="loading" @click="$emit('refresh')"> 刷新 </el-button>
     </div>
 
-    <!-- Provider 列表区域 -->
-    <div v-if="providers.length" class="providers-list">
+    <!-- Component list area -->
+    <div v-if="components.length" class="components-list">
       <slot></slot>
     </div>
 
-    <!-- 空状态 -->
+    <!-- Empty state -->
     <el-empty v-else :description="emptyText" :image-size="80" />
   </section>
 </template>
@@ -28,9 +28,9 @@ import type { Component } from 'vue';
 import type { ComponentSummary } from '@/types';
 
 interface Props {
-  domain: 'input' | 'decision' | 'output';
+  phase: 'input' | 'decision' | 'output';
   title: string;
-  providers: ComponentSummary[];
+  components: ComponentSummary[];
   icon: Component;
   loading?: boolean;
 }
@@ -46,38 +46,36 @@ const props = withDefaults(defineProps<Props>(), {
 
 defineEmits<Emits>();
 
-// 域特定颜色 CSS 变量
-const domainStyleVars = computed(() => {
+const phaseStyleVars = computed(() => {
   const colorMap = {
     input: {
-      '--domain-color': 'var(--color-input)',
-      '--domain-color-bg': 'var(--color-input-bg)',
+      '--phase-color': 'var(--color-input)',
+      '--phase-color-bg': 'var(--color-input-bg)',
     },
     decision: {
-      '--domain-color': 'var(--color-decision)',
-      '--domain-color-bg': 'var(--color-decision-bg)',
+      '--phase-color': 'var(--color-decision)',
+      '--phase-color-bg': 'var(--color-decision-bg)',
     },
     output: {
-      '--domain-color': 'var(--color-output)',
-      '--domain-color-bg': 'var(--color-output-bg)',
+      '--phase-color': 'var(--color-output)',
+      '--phase-color-bg': 'var(--color-output-bg)',
     },
   };
-  return colorMap[props.domain];
+  return colorMap[props.phase];
 });
 
-// 空状态文本
 const emptyText = computed(() => {
   const textMap = {
-    input: '暂无 Input Provider',
-    decision: '暂无 Decision Provider',
-    output: '暂无 Output Provider',
+    input: '暂无 Input 组件',
+    decision: '暂无 Decision 组件',
+    output: '暂无 Output 组件',
   };
-  return textMap[props.domain];
+  return textMap[props.phase];
 });
 </script>
 
 <style scoped>
-.domain-column {
+.phase-column {
   margin-bottom: var(--spacing-xl);
   position: relative;
 }
@@ -103,26 +101,26 @@ const emptyText = computed(() => {
   margin: 0;
 }
 
-/* Domain Icon */
-.domain-icon {
+/* Phase Icon */
+.phase-icon {
   width: 24px;
   height: 24px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--domain-color);
+  color: var(--phase-color);
   transition: color var(--transition-normal);
 }
 
-.domain-icon :deep(svg) {
+.phase-icon :deep(svg) {
   width: 20px;
   height: 20px;
 }
 
 /* Count Badge */
 .count-badge {
-  background: var(--domain-color-bg);
-  color: var(--domain-color);
+  background: var(--phase-color-bg);
+  color: var(--phase-color);
   font-size: 12px;
   font-weight: 600;
   padding: 2px 8px;
@@ -132,7 +130,7 @@ const emptyText = computed(() => {
     color var(--transition-normal);
 }
 
-/* Providers List - Single column layout */
+/* Component List - Single column layout */
 .components-list {
   display: flex;
   flex-direction: column;
@@ -140,11 +138,11 @@ const emptyText = computed(() => {
 }
 
 /* Empty State */
-.domain-column :deep(.el-empty) {
+.phase-column :deep(.el-empty) {
   padding: var(--spacing-xl) 0;
 }
 
-.domain-column :deep(.el-empty__description) {
+.phase-column :deep(.el-empty__description) {
   color: var(--text-secondary);
 }
 </style>

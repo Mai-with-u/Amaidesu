@@ -9,7 +9,7 @@
         </el-menu-item>
         <el-menu-item index="/components">
           <el-icon><Connection /></el-icon>
-          <span>Providers</span>
+          <span>组件管理</span>
         </el-menu-item>
         <el-menu-item index="/eventlog">
           <el-icon><Document /></el-icon>

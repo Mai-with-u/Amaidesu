@@ -101,7 +101,6 @@ async def get_config(
 
         return ConfigResponse(
             general=config.get("general", {}),
-            providers=config.get("providers", {}),
             pipelines=config.get("pipelines", {}),
             logging=config.get("logging", {}),
             context=config.get("context", {}),

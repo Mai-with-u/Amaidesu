@@ -126,8 +126,10 @@ function getEventTypeClass(item: WebSocketMessage): Record<string, boolean> {
     'message.received': 'type-blue',
     'decision.intent': 'type-purple',
     'output.render': 'type-green',
-    'provider.connected': 'type-green',
-    'provider.disconnected': 'type-red',
+    'collector.connected': 'type-green',
+    'collector.disconnected': 'type-red',
+    'decider.connected': 'type-green',
+    'decider.disconnected': 'type-red',
   };
 
   const colorClass = typeColors[eventType];

@@ -1,76 +1,78 @@
 <template>
-  <div class="providers-page">
+  <div class="components-page">
     <header class="page-header">
       <div class="header-left">
-        <h1 class="page-title">Provider 管理</h1>
-        <p class="page-subtitle">监控和控制系统的所有 Provider 实例</p>
+        <h1 class="page-title">组件管理</h1>
+        <p class="page-subtitle">
+          监控和控制系统的所有阶段参与者（Collector / Decider / OutputHandler）
+        </p>
       </div>
     </header>
 
-    <div ref="domainsContainerRef" class="domains-container">
-      <!-- Input Domain Column -->
+    <div ref="phasesContainerRef" class="phases-container">
+      <!-- Input Phase Column -->
       <PhaseColumn
-        domain="input"
-        title="输入域"
-        :providers="components?.input || []"
+        phase="input"
+        title="输入阶段"
+        :components="components?.input || []"
         :icon="InputIcon"
         :loading="loading"
         @refresh="handleRefresh"
       >
         <ComponentCard
-          v-for="provider in components?.input || []"
-          :key="provider.name"
-          :provider="provider"
-          :recent-events="getProviderEvents(provider.name, 'input')"
-          :recent-logs="getProviderLogs(provider.name)"
-          :event-count="getProviderEvents(provider.name, 'input').length"
-          :log-count="getProviderLogs(provider.name).length"
+          v-for="component in components?.input || []"
+          :key="component.name"
+          :component="component"
+          :recent-events="getComponentEvents(component.name, 'input')"
+          :recent-logs="getComponentLogs(component.name)"
+          :event-count="getComponentEvents(component.name, 'input').length"
+          :log-count="getComponentLogs(component.name).length"
           :action-loading="actionLoading"
-          @control="action => handleControl('input', provider.name, action)"
+          @control="action => handleControl('input', component.name, action)"
         />
       </PhaseColumn>
 
-      <!-- Decision Domain Column -->
+      <!-- Decision Phase Column -->
       <PhaseColumn
-        domain="decision"
-        title="决策域"
-        :providers="components?.decision || []"
+        phase="decision"
+        title="决策阶段"
+        :components="components?.decision || []"
         :icon="DecisionIcon"
         :loading="loading"
         @refresh="handleRefresh"
       >
         <ComponentCard
-          v-for="provider in components?.decision || []"
-          :key="provider.name"
-          :provider="provider"
-          :recent-events="getProviderEvents(provider.name, 'decision')"
-          :recent-logs="getProviderLogs(provider.name)"
-          :event-count="getProviderEvents(provider.name, 'decision').length"
-          :log-count="getProviderLogs(provider.name).length"
+          v-for="component in components?.decision || []"
+          :key="component.name"
+          :component="component"
+          :recent-events="getComponentEvents(component.name, 'decision')"
+          :recent-logs="getComponentLogs(component.name)"
+          :event-count="getComponentEvents(component.name, 'decision').length"
+          :log-count="getComponentLogs(component.name).length"
           :action-loading="actionLoading"
-          @control="action => handleControl('decision', provider.name, action)"
+          @control="action => handleControl('decision', component.name, action)"
         />
       </PhaseColumn>
 
-      <!-- Output Domain Column -->
+      <!-- Output Phase Column -->
       <PhaseColumn
-        domain="output"
-        title="输出域"
-        :providers="components?.output || []"
+        phase="output"
+        title="输出阶段"
+        :components="components?.output || []"
         :icon="OutputIcon"
         :loading="loading"
         @refresh="handleRefresh"
       >
         <ComponentCard
-          v-for="provider in components?.output || []"
-          :key="provider.name"
-          :provider="provider"
-          :recent-events="getProviderEvents(provider.name, 'output')"
-          :recent-logs="getProviderLogs(provider.name)"
-          :event-count="getProviderEvents(provider.name, 'output').length"
-          :log-count="getProviderLogs(provider.name).length"
+          v-for="component in components?.output || []"
+          :key="component.name"
+          :component="component"
+          :recent-events="getComponentEvents(component.name, 'output')"
+          :recent-logs="getComponentLogs(component.name)"
+          :event-count="getComponentEvents(component.name, 'output').length"
+          :log-count="getComponentLogs(component.name).length"
           :action-loading="actionLoading"
-          @control="action => handleControl('output', provider.name, action)"
+          @control="action => handleControl('output', component.name, action)"
         />
       </PhaseColumn>
     </div>
@@ -86,7 +88,7 @@ import type { ComponentControlAction, WebSocketMessage } from '@/types';
 import type { LogEntry } from '@/stores/logs';
 import { PhaseColumn, ComponentCard } from '@/components/component-cards';
 
-// Domain icons as inline SVG components
+// Phase icons as inline SVG components
 const InputIcon = {
   render() {
     return h(
@@ -148,51 +150,54 @@ const { logs } = storeToRefs(logsStore);
 // Track loading state for individual actions
 const actionLoading = reactive<Record<string, boolean>>({});
 
-// Reference to domains container for positioning
-const domainsContainerRef = ref<HTMLElement | null>(null);
+// Reference to phases container for positioning
+const phasesContainerRef = ref<HTMLElement | null>(null);
 
-// Get events related to a specific provider
-function getProviderEvents(providerName: string, providerDomain: string): WebSocketMessage[] {
+// Get events related to a specific component
+function getComponentEvents(componentName: string, componentPhase: string): WebSocketMessage[] {
   return events.value.filter(e => {
-    // Input Provider: use event.data.source field for matching
-    if (providerDomain === 'input' && e.type === 'message.received') {
-      return e.data?.source === providerName;
+    // Input collector: match by event.data.source
+    if (componentPhase === 'input' && e.type === 'message.received') {
+      return e.data?.source === componentName;
     }
 
-    // Decision Provider: use event.data.provider field for matching
-    if (providerDomain === 'decision' && e.type === 'decision.intent') {
-      return e.data?.provider === providerName;
+    // Decision decider: match by event.data.name (ConnectedPayload.name / IntentPayload.name)
+    if (componentPhase === 'decision' && e.type === 'decision.intent') {
+      return e.data?.name === componentName;
     }
 
-    // Output Provider: show all output domain events
-    // Note: output.render event's provider field is the DecisionProvider name
-    if (providerDomain === 'output') {
+    // Output handler: show all output phase events
+    if (componentPhase === 'output') {
       return (
         e.type === 'output.render' ||
-        e.type === 'provider.connected' ||
-        e.type === 'provider.disconnected'
+        e.type === 'collector.connected' ||
+        e.type === 'collector.disconnected'
       );
     }
 
-    // Provider connected/disconnected events
-    if (e.type === 'provider.connected' || e.type === 'provider.disconnected') {
-      return e.data?.provider === providerName;
+    // collector.connected / collector.disconnected events (Input 阶段)
+    if (e.type === 'collector.connected' || e.type === 'collector.disconnected') {
+      return e.data?.name === componentName;
+    }
+
+    // decider.connected / decider.disconnected events (Decision 阶段)
+    if (e.type === 'decider.connected' || e.type === 'decider.disconnected') {
+      return e.data?.name === componentName;
     }
 
     return false;
   });
 }
 
-// Get logs related to a specific provider
-function getProviderLogs(providerName: string): LogEntry[] {
-  // Provider log modules are usually class names like "SubtitleOutputProvider"
-  // Need to convert provider name to possible class name patterns
+// Get logs related to a specific component
+function getComponentLogs(componentName: string): LogEntry[] {
+  // Log modules are usually class names like "SubtitleHandler"
+  // Need to convert component name to possible class name patterns
   const patterns = [
-    providerName, // Original name
-    `${providerName}Provider`, // Add Provider suffix
-    `${providerName}InputProvider`, // Input Provider
-    `${providerName}OutputProvider`, // Output Provider
-    `${providerName}DecisionProvider`, // Decision Provider
+    componentName,
+    `${componentName}Collector`,
+    `${componentName}Decider`,
+    `${componentName}Handler`,
   ];
 
   return logs.value.filter(log =>
@@ -205,7 +210,7 @@ function handleRefresh() {
   componentsStore.fetchComponents();
 }
 
-// Handle provider control actions
+// Handle component control actions
 async function handleControl(phase: string, name: string, action: ComponentControlAction) {
   const actionKey = `${name}-${action}`;
   actionLoading[actionKey] = true;
@@ -257,24 +262,24 @@ onMounted(() => {
   margin: 0;
 }
 
-/* Domains Container - Horizontal Layout */
-.domains-container {
+/* Phases Container - Horizontal Layout */
+.phases-container {
   display: flex;
   gap: var(--spacing-xl);
   position: relative;
   padding: var(--spacing-lg) 0;
 }
 
-/* Domain columns - equal width */
-.domains-container > :deep(.domain-column) {
+/* Phase columns - equal width */
+.phases-container > :deep(.phase-column) {
   flex: 1 1 0;
   min-width: 280px;
   position: relative;
   z-index: 1;
 }
 
-/* Provider card grid within columns */
-.domains-container :deep(.components-list) {
+/* Component card grid within columns */
+.phases-container :deep(.components-list) {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-md);
@@ -282,21 +287,21 @@ onMounted(() => {
 
 /* Responsive Design */
 @media (max-width: 1200px) {
-  .domains-container {
+  .phases-container {
     gap: var(--spacing-md);
   }
 
-  .domains-container > :deep(.domain-column) {
+  .phases-container > :deep(.phase-column) {
     min-width: 250px;
   }
 }
 
 @media (max-width: 900px) {
-  .domains-container {
+  .phases-container {
     flex-direction: column;
   }
 
-  .domains-container > :deep(.domain-column) {
+  .phases-container > :deep(.phase-column) {
     min-width: 100%;
   }
 

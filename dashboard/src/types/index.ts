@@ -66,7 +66,6 @@ export interface ComponentControlResponse {
 // Config types
 export interface ConfigResponse {
   general: Record<string, unknown>;
-  providers: Record<string, unknown>;
   pipelines: Record<string, unknown>;
   logging: Record<string, unknown>;
   context: Record<string, unknown>;

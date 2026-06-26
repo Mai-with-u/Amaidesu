@@ -259,7 +259,7 @@ function getEventClass(type: string): string {
   if (type.includes('decision') || type.includes('intent')) return 'type-decision';
   if (type.includes('output') || type.includes('render')) return 'type-output';
   if (type.includes('error')) return 'type-error';
-  if (type.includes('provider')) return 'type-provider';
+  if (type.includes('collector')) return 'type-collector';
   if (type.includes('system') || type.includes('heartbeat')) return 'type-system';
   return 'type-default';
 }
@@ -467,7 +467,7 @@ onUnmounted(() => {
   color: var(--color-danger);
 }
 
-.event-type.type-provider {
+.event-type.type-collector {
   background-color: var(--color-warning-light);
   color: var(--color-warning);
 }

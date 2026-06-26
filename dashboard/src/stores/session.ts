@@ -73,7 +73,7 @@ export const useSessionStore = defineStore('session', () => {
 
     interface DecisionIntentData {
       intent_data?: IntentData;
-      provider?: string;
+      name?: string;
     }
 
     if (message.type === 'message.received') {
@@ -98,7 +98,7 @@ export const useSessionStore = defineStore('session', () => {
     } else if (message.type === 'decision.intent') {
       const data = message.data as DecisionIntentData;
       // 添加 Intent 到右侧
-      // 数据结构: message.data.intent_data (Intent 字典), message.data.provider
+      // 数据结构: message.data.intent_data (Intent 字典), message.data.name
       const msgId = data.intent_data?.id || crypto.randomUUID();
 
       // 去重检查
@@ -109,7 +109,7 @@ export const useSessionStore = defineStore('session', () => {
       messages.value.push({
         id: msgId,
         type: 'intent',
-        sender: '主播',
+        sender: data.name || '主播',
         content: data.intent_data?.speech || data.intent_data?.response_text || '',
         timestamp: message.timestamp,
         emotion: data.intent_data?.emotion,
