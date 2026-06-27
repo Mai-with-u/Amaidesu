@@ -22,18 +22,16 @@ OutputHandlerManager - Output 阶段: 输出Handler管理器
 """
 
 import asyncio
-import os
 from typing import TYPE_CHECKING, Any, Optional
 
 from pydantic import BaseModel
 
 
-from src.stages.output.pipelines.base import OutputPipelineContext
-from src.stages.output.pipelines.manager import OutputPipelineManager
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.decision import IntentPayload
 from src.modules.logging import get_logger
+from src.modules.pipeline import PipelineManager
 from src.stages.output.registry import _HANDLERS
 
 if TYPE_CHECKING:
@@ -75,6 +73,7 @@ class OutputHandlerManager:
     def __init__(
         self,
         event_bus: EventBus,
+        pipeline_manager: "PipelineManager",
         config: Optional[dict[str, Any]] = None,
         llm_manager: Optional["LLMManager"] = None,
         prompt_manager: Optional["PromptManager"] = None,
@@ -95,7 +94,7 @@ class OutputHandlerManager:
         self.error_handling = self.config.get("error_handling", "continue")
         self.render_timeout_ms = int(self.config.get("render_timeout_ms", 10000))
 
-        self.pipeline_manager: Optional[OutputPipelineManager] = None
+        self.pipeline_manager = pipeline_manager
 
         self._is_setup = False
         self._event_handler_registered = False
@@ -112,7 +111,6 @@ class OutputHandlerManager:
         self,
         config: dict[str, Any],
         config_service=None,
-        root_config: Optional[dict[str, Any]] = None,
         audio_stream_channel: Optional["AudioStreamChannel"] = None,
         llm_manager=None,
         prompt_manager=None,
@@ -125,33 +123,6 @@ class OutputHandlerManager:
         self._llm_service = llm_manager or self._llm_service
         self._prompt_service = prompt_manager or self._prompt_service
         self._audio_device_service = audio_device_manager or self._audio_device_service
-
-        pipeline_context = OutputPipelineContext(
-            llm_service=self._llm_service,
-            prompt_service=self._prompt_service,
-        )
-        self.logger.debug("OutputPipelineContext 已创建")
-
-        self.pipeline_manager = OutputPipelineManager(context=pipeline_context)
-        self.logger.info("输出Pipeline管理器已创建")
-
-        pipeline_config = root_config.get("pipelines", {}) if root_config else {}
-        if pipeline_config:
-            pipeline_load_dir = os.path.join(os.path.dirname(__file__), "pipelines")
-            pipeline_load_dir = os.path.abspath(pipeline_load_dir)
-            self.logger.info(f"准备加载输出Pipeline (从目录: {pipeline_load_dir})...")
-
-            try:
-                await self.pipeline_manager.load_output_pipelines(pipeline_load_dir, pipeline_config)
-                pipeline_count = len(self.pipeline_manager._pipelines)
-                if pipeline_count > 0:
-                    self.logger.info(f"输出Pipeline加载完成，共 {pipeline_count} 个管道。")
-                else:
-                    self.logger.info("未找到任何有效的输出Pipeline。")
-            except Exception as e:
-                self.logger.error(f"加载输出Pipeline时出错: {e}", exc_info=True)
-        else:
-            self.logger.info("配置中未启用管道功能")
 
         await self.load_from_config(config, config_service=config_service)
 

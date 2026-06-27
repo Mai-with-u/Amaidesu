@@ -13,7 +13,8 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.input import MessageReadyPayload
 from src.modules.logging import get_logger
-from src.stages.input.pipelines.manager import InputPipelineManager
+from src.modules.pipeline import PipelineManager
+from src.modules.types.base.normalized_message import NormalizedMessage
 from src.stages.input.registry import _COLLECTORS
 
 
@@ -21,7 +22,7 @@ class InputCollectorManager:
     def __init__(
         self,
         event_bus: EventBus,
-        pipeline_manager: Optional[InputPipelineManager] = None,
+        pipeline_manager: Optional[PipelineManager[NormalizedMessage]] = None,
     ):
         self.event_bus = event_bus
         self.pipeline_manager = pipeline_manager

@@ -7,13 +7,9 @@ import time
 import pytest
 
 from src.modules.types import Intent, IntentMetadata
-from src.stages.output.pipelines import (
-    OutputPipelineBase,
-    OutputPipelineManager,
-    PipelineErrorHandling,
-    PipelineException,
-    PipelineStats,
-)
+from src.modules.pipeline import Pipeline, PipelineManager
+from src.modules.types.base.pipeline_types import PipelineErrorHandling, PipelineException
+from src.modules.types.base.pipeline_stats import PipelineStats
 
 
 def _make_test_intent(speech: str = "Hello") -> Intent:
@@ -25,7 +21,7 @@ def _make_test_intent(speech: str = "Hello") -> Intent:
     )
 
 
-class DummyOutputPipeline(OutputPipelineBase):
+class DummyOutputPipeline(Pipeline["Intent"]):
     """测试用的 OutputPipeline"""
 
     async def _process(self, intent: Intent):
@@ -33,7 +29,7 @@ class DummyOutputPipeline(OutputPipelineBase):
         return intent
 
 
-class DropOutputPipeline(OutputPipelineBase):
+class DropOutputPipeline(Pipeline["Intent"]):
     """测试用的丢弃 Pipeline"""
 
     async def _process(self, intent: Intent):
@@ -78,7 +74,7 @@ async def test_output_pipeline_drop():
 @pytest.mark.asyncio
 async def test_output_pipeline_manager():
     """测试 OutputPipelineManager"""
-    manager = OutputPipelineManager()
+    manager = PipelineManager["Intent"](stage="output")
 
     # 注册管道
     pipeline1 = DummyOutputPipeline(config={"priority": 100})
@@ -99,7 +95,7 @@ async def test_output_pipeline_manager():
 @pytest.mark.asyncio
 async def test_output_pipeline_manager_with_drop():
     """测试 OutputPipelineManager 丢弃逻辑"""
-    manager = OutputPipelineManager()
+    manager = PipelineManager["Intent"](stage="output")
 
     # 注册管道：第一个丢弃
     drop_pipeline = DropOutputPipeline(config={"priority": 100})
@@ -122,7 +118,7 @@ async def test_output_pipeline_manager_with_drop():
 @pytest.mark.asyncio
 async def test_output_pipeline_disabled():
     """测试禁用的 Pipeline"""
-    manager = OutputPipelineManager()
+    manager = PipelineManager["Intent"](stage="output")
 
     # 注册禁用的管道
     pipeline = DummyOutputPipeline(config={"enabled": False})
@@ -141,20 +137,20 @@ async def test_output_pipeline_disabled():
 @pytest.mark.asyncio
 async def test_output_pipeline_priority():
     """测试 Pipeline 优先级排序"""
-    manager = OutputPipelineManager()
+    manager = PipelineManager["Intent"](stage="output")
 
     # 创建不同的 Pipeline 类来测试优先级
-    class PriorityPipeline1(OutputPipelineBase):
+    class PriorityPipeline1(Pipeline["Intent"]):
         async def _process(self, intent):
             intent.metadata.extra["priority_1"] = True
             return intent
 
-    class PriorityPipeline2(OutputPipelineBase):
+    class PriorityPipeline2(Pipeline["Intent"]):
         async def _process(self, intent):
             intent.metadata.extra["priority_2"] = True
             return intent
 
-    class PriorityPipeline3(OutputPipelineBase):
+    class PriorityPipeline3(Pipeline["Intent"]):
         async def _process(self, intent):
             intent.metadata.extra["priority_3"] = True
             return intent

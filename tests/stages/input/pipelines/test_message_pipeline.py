@@ -10,14 +10,12 @@ InputPipeline 测试
 """
 
 import pytest
-from src.stages.input.pipelines.manager import (
-    InputPipelineManager,
-    InputPipelineBase,
-)
+from src.modules.pipeline import Pipeline, PipelineManager
+from src.modules.types.base.normalized_message import NormalizedMessage
 from src.modules.types.base.normalized_message import NormalizedMessage
 
 
-class MockInputPipeline(InputPipelineBase):
+class MockInputPipeline(Pipeline[NormalizedMessage]):
     """测试用的 Mock Pipeline"""
 
     priority = 100
@@ -49,7 +47,7 @@ def create_message(text: str, user_id: str = "test_user", source: str = "test_so
 
 @pytest.fixture
 def pipeline_manager():
-    return InputPipelineManager()
+    return PipelineManager[NormalizedMessage](stage="input")
 
 
 @pytest.fixture

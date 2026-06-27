@@ -1,15 +1,6 @@
-"""
-相似文本过滤管道
+"""相似文本过滤管道（Input 阶段）
 
-过滤短时间内内容高度相似的重复消息，减少消息冗余。
-适用于直播弹幕、评论等场景。
-
-3 阶段架构中的位置：
-- Input 阶段: 在 Collector 产出 NormalizedMessage 后进行后处理
-- 在 InputCollectorManager 中调用
-- 用于过滤相似输入消息
-
-原理：保留第一条消息，丢弃后来的相似消息。
+过滤短时间内内容高度相似的重复消息。
 """
 
 import difflib
@@ -17,31 +8,17 @@ import time
 from collections import defaultdict, deque
 from typing import Any, Dict, Optional
 
-from src.stages.input.pipelines.manager import InputPipelineBase
+from src.modules.pipeline import Pipeline, pipeline
 from src.modules.types.base.normalized_message import NormalizedMessage
 
 
-class SimilarFilterInputPipeline(InputPipelineBase):
-    """
-    相似文本过滤管道
+@pipeline("similar_filter")
+class SimilarFilterInputPipeline(Pipeline[NormalizedMessage]):
+    """相似文本过滤管道。"""
 
-    处理 NormalizedMessage，过滤短时间内内容高度相似的重复消息。
-    使用滑动窗口和文本相似度算法实现。
-    """
-
-    priority = 500  # 中等优先级
+    priority = 500
 
     def __init__(self, config: Dict[str, Any]):
-        """
-        初始化相似文本过滤管道
-
-        Args:
-            config: 配置字典，支持以下键:
-                similarity_threshold (float): 相似度阈值 (0.0-1.0) (默认: 0.85)
-                time_window (float): 检查窗口的时间范围（秒）(默认: 5.0)
-                min_text_length (int): 最小处理文本长度 (默认: 3)
-                cross_user_filter (bool): 是否跨用户过滤相似消息 (默认: True)
-        """
         super().__init__(config)
 
         self._similarity_threshold = self.config.get("similarity_threshold", 0.85)
@@ -59,40 +36,30 @@ class SimilarFilterInputPipeline(InputPipelineBase):
             f"跨用户过滤={self._cross_user_filter}"
         )
 
-    async def _process(self, message: NormalizedMessage) -> Optional[NormalizedMessage]:
-        """
-        处理消息，检查是否需要过滤
-
-        Args:
-            message: 待处理的 NormalizedMessage
-
-        Returns:
-            原始消息（允许通过）或 None（相似消息被过滤）
-        """
+    async def _process(self, item: NormalizedMessage) -> Optional[NormalizedMessage]:
         self._clean_expired_texts()
 
-        if len(message.text) < self._min_text_length:
-            self.logger.debug(f"文本长度 {len(message.text)} 小于最小要求 {self._min_text_length}，跳过过滤")
-            return message
+        if len(item.text) < self._min_text_length:
+            self.logger.debug(f"文本长度 {len(item.text)} 小于最小要求 {self._min_text_length}，跳过过滤")
+            return item
 
-        user_id = message.user_id or "unknown"
-        group_id = message.source or "default"
+        user_id = item.user_id or "unknown"
+        group_id = item.source or "default"
         now = time.time()
 
-        if self._has_similar_text(group_id, user_id, message.text):
+        if self._has_similar_text(group_id, user_id, item.text):
             self._stats.dropped_count += 1
             self.logger.info(
-                f"相似文本过滤: text_preview='{message.text[:50]}{'...' if len(message.text) > 50 else ''}', "
+                f"相似文本过滤: text_preview='{item.text[:50]}{'...' if len(item.text) > 50 else ''}', "
                 f"user_id={user_id}, group_id={group_id}"
             )
             return None
 
-        self._text_cache[group_id].append((now, message.text, user_id))
-        self.logger.debug(f"文本通过过滤并添加到缓存: {message.text[:30]!r}")
-        return message
+        self._text_cache[group_id].append((now, item.text, user_id))
+        self.logger.debug(f"文本通过过滤并添加到缓存: {item.text[:30]!r}")
+        return item
 
     def _clean_expired_texts(self) -> None:
-        """清理过期的文本缓存"""
         now = time.time()
 
         if now - self._last_cleanup_time < self._time_window / 2:
@@ -109,7 +76,6 @@ class SimilarFilterInputPipeline(InputPipelineBase):
                 del self._text_cache[group_id]
 
     def _has_similar_text(self, group_id: str, user_id: str, text: str) -> bool:
-        """检查缓存中是否有相似文本"""
         if group_id not in self._text_cache:
             return False
 
@@ -134,7 +100,6 @@ class SimilarFilterInputPipeline(InputPipelineBase):
         return False
 
     def _calculate_similarity(self, text1: str, text2: str) -> float:
-        """计算两段文本的相似度"""
         similarity = difflib.SequenceMatcher(None, text1, text2).ratio()
 
         if text1 in text2 or text2 in text1:
@@ -147,7 +112,6 @@ class SimilarFilterInputPipeline(InputPipelineBase):
         return similarity
 
     def get_info(self) -> Dict[str, Any]:
-        """获取 Pipeline 信息"""
         info = super().get_info()
         info.update(
             {
@@ -162,7 +126,6 @@ class SimilarFilterInputPipeline(InputPipelineBase):
         return info
 
     async def reset(self) -> None:
-        """重置所有状态"""
         self._text_cache.clear()
         self._last_cleanup_time = time.time()
         self.reset_stats()

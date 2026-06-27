@@ -1,83 +1,57 @@
-"""
-测试 OutputPipelineBase (输出管道基类)
+"""测试 OutputPipeline 协议"""
 
-运行: uv run pytest tests/stages/output/pipelines/test_base_pipeline.py -v
-"""
+import asyncio
 
 import pytest
 
-from src.stages.output.pipelines.base import OutputPipelineBase
+from src.modules.pipeline import Pipeline
 from src.modules.types.base.pipeline_types import PipelineErrorHandling, PipelineException
 from src.modules.types import Intent, IntentMetadata
 
-# =============================================================================
-# 测试用 Pipeline
-# =============================================================================
-
 
 def create_test_intent(response_text: str = "测试响应") -> Intent:
-    """创建测试用的 Intent"""
     return Intent(
         metadata=IntentMetadata(
             source_id="test_source",
-            decision_time_ms=0,
+            decision_time=0,
         ),
         emotion="neutral",
         speech=response_text,
     )
 
 
-class SimpleTestPipeline(OutputPipelineBase):
-    """简单的测试 Pipeline"""
-
-    async def _process(self, intent: Intent):
-        """直接返回 Intent"""
-        return intent
+class SimpleTestPipeline(Pipeline["Intent"]):
+    async def _process(self, item: "Intent"):
+        return item
 
 
-class ModifyingTestPipeline(OutputPipelineBase):
-    """修改 Intent 的测试 Pipeline"""
-
-    async def _process(self, intent: Intent):
-        """修改响应文本"""
-        intent.speech = (intent.speech or "") + " [已修改]"
-        return intent
+class ModifyingTestPipeline(Pipeline["Intent"]):
+    async def _process(self, item: "Intent"):
+        item.speech = (item.speech or "") + " [已修改]"
+        return item
 
 
-class DroppingTestPipeline(OutputPipelineBase):
-    """丢弃 Intent 的测试 Pipeline"""
-
-    async def _process(self, intent: Intent):
-        """返回 None 表示丢弃"""
+class DroppingTestPipeline(Pipeline["Intent"]):
+    async def _process(self, item: "Intent"):
         return None
 
 
-class FailingTestPipeline(OutputPipelineBase):
-    """抛出异常的测试 Pipeline"""
-
-    async def _process(self, intent: Intent):
-        """总是抛出异常"""
+class FailingTestPipeline(Pipeline["Intent"]):
+    async def _process(self, item: "Intent"):
         raise ValueError("测试异常")
 
 
-# =============================================================================
-# 创建和初始化测试
-# =============================================================================
-
-
 def test_pipeline_creation():
-    """测试 Pipeline 创建"""
     pipeline = SimpleTestPipeline(config={})
 
     assert pipeline is not None
-    assert pipeline.priority == 500  # 默认优先级
+    assert pipeline.priority == 500
     assert pipeline.enabled is True
     assert pipeline.error_handling == PipelineErrorHandling.CONTINUE
     assert pipeline.timeout_seconds == 5.0
 
 
 def test_pipeline_custom_config():
-    """测试自定义配置"""
     config = {
         "priority": 100,
         "enabled": False,
@@ -94,23 +68,15 @@ def test_pipeline_custom_config():
 
 
 def test_pipeline_invalid_error_handling():
-    """测试无效的 error_handling 值"""
     config = {"error_handling": "invalid_value"}
 
     pipeline = SimpleTestPipeline(config=config)
 
-    # 应该回退到默认值
     assert pipeline.error_handling == PipelineErrorHandling.CONTINUE
-
-
-# =============================================================================
-# process() 方法测试
-# =============================================================================
 
 
 @pytest.mark.asyncio
 async def test_process_success():
-    """测试成功处理"""
     pipeline = SimpleTestPipeline(config={})
 
     intent = create_test_intent("测试消息")
@@ -122,7 +88,6 @@ async def test_process_success():
 
 @pytest.mark.asyncio
 async def test_process_modification():
-    """测试参数修改"""
     pipeline = ModifyingTestPipeline(config={})
 
     intent = create_test_intent("测试消息")
@@ -134,7 +99,6 @@ async def test_process_modification():
 
 @pytest.mark.asyncio
 async def test_process_dropping():
-    """测试丢弃参数"""
     pipeline = DroppingTestPipeline(config={})
 
     intent = create_test_intent("测试消息")
@@ -145,7 +109,6 @@ async def test_process_dropping():
 
 @pytest.mark.asyncio
 async def test_process_exception():
-    """测试处理异常"""
     pipeline = FailingTestPipeline(config={"error_handling": "continue"})
 
     intent = create_test_intent("测试消息")
@@ -154,19 +117,12 @@ async def test_process_exception():
         await pipeline.process(intent)
 
 
-# =============================================================================
-# 统计信息测试
-# =============================================================================
-
-
 @pytest.mark.asyncio
 async def test_statistics_processing():
-    """测试处理计数"""
     pipeline = SimpleTestPipeline(config={})
 
     intent = create_test_intent()
 
-    # 处理多次
     for _ in range(5):
         await pipeline.process(intent)
 
@@ -176,12 +132,10 @@ async def test_statistics_processing():
 
 @pytest.mark.asyncio
 async def test_statistics_error():
-    """测试错误计数"""
     pipeline = FailingTestPipeline(config={"error_handling": "continue"})
 
     intent = create_test_intent()
 
-    # 处理多次（都会失败）
     for _ in range(3):
         try:
             await pipeline.process(intent)
@@ -194,42 +148,28 @@ async def test_statistics_error():
 
 @pytest.mark.asyncio
 async def test_statistics_average_duration():
-    """测试平均处理时间"""
-    import asyncio
     import time
 
-    # 记录处理前的时间
     start = time.perf_counter()
 
     pipeline = SimpleTestPipeline(config={})
 
     intent = create_test_intent()
 
-    # 处理几次
     for _ in range(3):
         await pipeline.process(intent)
 
-    # 确保有实际处理时间
     await asyncio.sleep(0.05)
 
-    # 记录处理后的时间
     end = time.perf_counter()
-    elapsed = (end - start) * 1000  # 转换为毫秒
+    elapsed = (end - start) * 1000
 
     stats = pipeline.get_stats()
     assert stats.processed_count == 3
-    # 注意：由于 Windows 上 time.time() 精度问题，可能无法准确测量
-    # 只验证 processed_count 正确即可
-    assert stats.avg_duration_ms >= 0  # 允许为 0（时间精度问题）
-
-
-# =============================================================================
-# get_info() 测试
-# =============================================================================
+    assert stats.avg_duration_ms >= 0
 
 
 def test_get_info():
-    """测试获取 Pipeline 信息"""
     config = {
         "priority": 100,
         "enabled": False,
@@ -247,26 +187,18 @@ def test_get_info():
     assert info["timeout_seconds"] == 10.0
 
 
-# =============================================================================
-# reset_stats() 测试
-# =============================================================================
-
-
 @pytest.mark.asyncio
 async def test_reset_stats():
-    """测试重置统计信息"""
     pipeline = SimpleTestPipeline(config={})
 
     intent = create_test_intent()
 
-    # 处理几次
     for _ in range(5):
         await pipeline.process(intent)
 
     stats_before = pipeline.get_stats()
     assert stats_before.processed_count == 5
 
-    # 重置
     pipeline.reset_stats()
 
     stats_after = pipeline.get_stats()
@@ -274,25 +206,13 @@ async def test_reset_stats():
     assert stats_after.total_duration_ms == 0
 
 
-# =============================================================================
-# PipelineErrorHandling 测试
-# =============================================================================
-
-
 def test_error_handling_enum():
-    """测试错误处理枚举"""
     assert PipelineErrorHandling.CONTINUE == "continue"
     assert PipelineErrorHandling.STOP == "stop"
     assert PipelineErrorHandling.DROP == "drop"
 
 
-# =============================================================================
-# PipelineException 测试
-# =============================================================================
-
-
 def test_pipeline_exception_creation():
-    """测试 PipelineException 创建"""
     exc = PipelineException("test_pipeline", "测试错误")
 
     assert str(exc) == "[test_pipeline] 测试错误"
@@ -302,7 +222,6 @@ def test_pipeline_exception_creation():
 
 
 def test_pipeline_exception_with_original_error():
-    """测试带原始错误的 PipelineException"""
     original = ValueError("原始错误")
     exc = PipelineException("test_pipeline", "包装错误", original_error=original)
 
@@ -310,30 +229,20 @@ def test_pipeline_exception_with_original_error():
 
 
 def test_pipeline_exception_chaining():
-    """测试异常链"""
     original = ValueError("原始错误")
     exc = PipelineException("test_pipeline", "包装错误", original_error=original)
 
-    # 验证异常链
     assert exc.__cause__ == original
 
 
-# =============================================================================
-# OutputPipeline Protocol 测试
-# =============================================================================
-
-
 def test_simple_test_pipeline_is_output_pipeline():
-    """测试 SimpleTestPipeline 符合 OutputPipeline Protocol"""
     pipeline = SimpleTestPipeline(config={})
 
-    # 检查必需属性
     assert hasattr(pipeline, "priority")
     assert hasattr(pipeline, "enabled")
     assert hasattr(pipeline, "error_handling")
     assert hasattr(pipeline, "timeout_seconds")
 
-    # 检查必需方法
     assert hasattr(pipeline, "process")
     assert callable(pipeline.process)
 
@@ -347,17 +256,11 @@ def test_simple_test_pipeline_is_output_pipeline():
     assert callable(pipeline.reset_stats)
 
 
-# =============================================================================
-# 边界条件测试
-# =============================================================================
-
-
 @pytest.mark.asyncio
 async def test_process_empty_intent():
-    """测试处理空 Intent"""
     pipeline = SimpleTestPipeline(config={})
 
-    intent = create_test_intent()  # 默认 Intent
+    intent = create_test_intent()
     result = await pipeline.process(intent)
 
     assert result is not None
@@ -365,7 +268,6 @@ async def test_process_empty_intent():
 
 @pytest.mark.asyncio
 async def test_process_large_intent():
-    """测试处理大型 Intent"""
     pipeline = SimpleTestPipeline(config={})
 
     long_text = "a" * 100000

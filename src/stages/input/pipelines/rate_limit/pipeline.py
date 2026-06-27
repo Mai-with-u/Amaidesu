@@ -1,16 +1,6 @@
-"""
-限流管道（Input 阶段）
+"""限流管道（Input 阶段）
 
 基于滑动时间窗口算法限制消息发送频率。
-
-3 阶段架构中的位置：
-- Input 阶段: 在 Collector 产出 NormalizedMessage 后进行后处理
-- 在 InputCollectorManager._run_collector() 方法中调用
-- 用于限制输入消息频率
-
-功能：
-1. 全局消息频率限制 - 控制整个系统每分钟处理的消息总量
-2. 用户级别频率限制 - 控制单个用户每分钟可发送的消息数量
 """
 
 import asyncio
@@ -18,30 +8,17 @@ import time
 from collections import defaultdict, deque
 from typing import Any, Dict, Optional
 
-from src.stages.input.pipelines.manager import InputPipelineBase
+from src.modules.pipeline import Pipeline, pipeline
 from src.modules.types.base.normalized_message import NormalizedMessage
 
 
-class RateLimitInputPipeline(InputPipelineBase):
-    """
-    限流管道
+@pipeline("rate_limit")
+class RateLimitInputPipeline(Pipeline[NormalizedMessage]):
+    """限流管道。"""
 
-    处理 NormalizedMessage，基于滑动时间窗口算法限制消息发送频率。
-    从 NormalizedMessage.user_id 属性获取用户ID（自动处理 raw=None 情况）。
-    """
-
-    priority = 100  # 较高优先级，尽早过滤
+    priority = 100
 
     def __init__(self, config: Dict[str, Any]):
-        """
-        初始化限流管道
-
-        Args:
-            config: 配置字典，支持以下键:
-                global_rate_limit (int): 全局每分钟最大消息数量 (默认: 100)
-                user_rate_limit (int): 每个用户每分钟最大消息数量 (默认: 10)
-                window_size (int): 滑动窗口大小（秒）(默认: 60)
-        """
         super().__init__(config)
 
         self._global_rate_limit = self.config.get("global_rate_limit", 100)
@@ -59,17 +36,8 @@ class RateLimitInputPipeline(InputPipelineBase):
             f"窗口={self._window_size}秒"
         )
 
-    async def _process(self, message: NormalizedMessage) -> Optional[NormalizedMessage]:
-        """
-        处理消息，根据限流规则决定是否允许继续传递
-
-        Args:
-            message: 待处理的 NormalizedMessage
-
-        Returns:
-            原始消息（允许通过）或 None（限流丢弃）
-        """
-        user_id = message.user_id or "unknown_user"
+    async def _process(self, item: NormalizedMessage) -> Optional[NormalizedMessage]:
+        user_id = item.user_id or "unknown_user"
         current_time = time.time()
 
         await self._clean_expired_timestamps(current_time)
@@ -77,15 +45,14 @@ class RateLimitInputPipeline(InputPipelineBase):
         if await self._is_throttled(user_id):
             self._stats.dropped_count += 1
             self.logger.info(
-                f"消息限流: user_id={user_id}, text_preview='{message.text[:50]}{'...' if len(message.text) > 50 else ''}'"
+                f"消息限流: user_id={user_id}, text_preview='{item.text[:50]}{'...' if len(item.text) > 50 else ''}'"
             )
             return None
 
         await self._record_message(user_id, current_time)
-        return message
+        return item
 
     async def _clean_expired_timestamps(self, current_time: float) -> None:
-        """清理过期的时间戳记录"""
         async with self._lock:
             cutoff_time = current_time - self._window_size
 
@@ -100,7 +67,6 @@ class RateLimitInputPipeline(InputPipelineBase):
                     del self._user_timestamps[user_id]
 
     async def _is_throttled(self, user_id: str) -> bool:
-        """检查指定用户的消息是否应该被限流"""
         async with self._lock:
             global_count = len(self._global_timestamps)
             if global_count >= self._global_rate_limit:
@@ -122,13 +88,11 @@ class RateLimitInputPipeline(InputPipelineBase):
             return False
 
     async def _record_message(self, user_id: str, current_time: float) -> None:
-        """记录消息的发送时间到对应队列"""
         async with self._lock:
             self._global_timestamps.append(current_time)
             self._user_timestamps[user_id].append(current_time)
 
     def get_info(self) -> Dict[str, Any]:
-        """获取 Pipeline 信息"""
         info = super().get_info()
         info.update(
             {
@@ -142,7 +106,6 @@ class RateLimitInputPipeline(InputPipelineBase):
         return info
 
     async def reset(self) -> None:
-        """重置所有状态"""
         async with self._lock:
             self._global_timestamps.clear()
             self._user_timestamps.clear()

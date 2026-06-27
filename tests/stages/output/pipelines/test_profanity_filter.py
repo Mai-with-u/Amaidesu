@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from src.stages.output.pipelines.profanity_filter.pipeline import ProfanityFilterPipeline
+from src.stages.output.pipelines.profanity_filter.pipeline import ProfanityFilterOutputPipeline
 from src.modules.types import Intent, IntentMetadata
 
 
@@ -22,7 +22,7 @@ async def test_profanity_filter_basic():
         "drop_on_match": False,
     }
 
-    pipeline = ProfanityFilterPipeline(config)
+    pipeline = ProfanityFilterOutputPipeline(config)
 
     intent = Intent(
         metadata=IntentMetadata(source_id="test", decision_time_ms=int(time.time() * 1000)),
@@ -49,7 +49,7 @@ async def test_profanity_filter_chinese():
         "drop_on_match": False,
     }
 
-    pipeline = ProfanityFilterPipeline(config)
+    pipeline = ProfanityFilterOutputPipeline(config)
 
     intent = Intent(
         metadata=IntentMetadata(source_id="test", decision_time_ms=int(time.time() * 1000)),
@@ -77,7 +77,7 @@ async def test_profanity_filter_drop_on_match():
         "drop_on_match": True,
     }
 
-    pipeline = ProfanityFilterPipeline(config)
+    pipeline = ProfanityFilterOutputPipeline(config)
 
     intent = Intent(
         metadata=IntentMetadata(source_id="test", decision_time_ms=int(time.time() * 1000)),
@@ -101,7 +101,7 @@ async def test_profanity_filter_case_insensitive():
         "drop_on_match": False,
     }
 
-    pipeline = ProfanityFilterPipeline(config)
+    pipeline = ProfanityFilterOutputPipeline(config)
 
     intent = Intent(
         metadata=IntentMetadata(source_id="test", decision_time_ms=int(time.time() * 1000)),
@@ -129,7 +129,7 @@ async def test_profanity_filter_case_sensitive():
         "drop_on_match": False,
     }
 
-    pipeline = ProfanityFilterPipeline(config)
+    pipeline = ProfanityFilterOutputPipeline(config)
 
     intent = Intent(
         metadata=IntentMetadata(source_id="test", decision_time_ms=int(time.time() * 1000)),
@@ -156,7 +156,7 @@ async def test_profanity_filter_no_match():
         "drop_on_match": False,
     }
 
-    pipeline = ProfanityFilterPipeline(config)
+    pipeline = ProfanityFilterOutputPipeline(config)
 
     original_text = "这是一段正常的文本"
     intent = Intent(

@@ -356,11 +356,19 @@ enabled = ["tts", "subtitle", "vts"]
 
 ### 添加新 Pipeline
 
-1. 继承 `InputPipeline` 类
-2. 实现 `process()` 方法
-3. 返回 `NormalizedMessage` 继续传递，返回 `None` 丢弃消息
+1. 继承 `Pipeline[NormalizedMessage]`（Input）或 `Pipeline["Intent"]`（Output）
+2. 加 `@pipeline("name")` 装饰器（stage 从基类自动推断）
+3. 实现 `_process()` 方法
+4. 返回原对象继续传递，返回新对象（`model_copy`）转换，返回 `None` 丢弃消息
 
 **详细指南**：[管道开发](docs/development/pipeline-guide.md)
+
+## 依赖注入约定
+
+- **服务对象**（LLMManager、PromptManager、EventBus 等）→ 构造器注入（DI）
+- **数据对象**（请求 ID、会话状态、值对象）→ 可用 Context Object 或直接参数
+- **禁止**把服务塞进 Context 容器传递
+- 详见 [依赖注入指南](docs/development/dependency-injection.md)
 
 ## 提示词管理
 

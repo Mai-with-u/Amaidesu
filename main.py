@@ -24,7 +24,7 @@ from src.modules.prompts import get_prompt_manager
 from src.modules.mcp import MCPServerConfig, MCPServerService
 
 from src.stages.decision import DeciderManager
-from src.stages.input.pipelines.manager import InputPipelineManager
+from src.modules.pipeline import PipelineManager
 from src.stages.input.manager import InputCollectorManager
 from src.stages.output import OutputHandlerManager
 
@@ -182,41 +182,41 @@ def exit_if_config_created(was_created: bool) -> None:
 
 # ---------------------------------------------------------------------------
 # 管道与核心组件
+async def create_pipeline_manager(
+    stage: str,
+    config: Dict[str, Any],
+    context_services: Optional[Dict[str, Any]] = None,
+) -> Optional[Any]:
+    """加载指定阶段的 PipelineManager。
+
+    Args:
+        stage: 'input' 或 'output'
+        config: 完整配置 dict
+        context_services: 可用服务字典（key=参数名, value=服务实例）
+
+    Returns:
+        PipelineManager 实例，或 None（如果配置中未启用）
+    """
+    pipelines_root = config.get("pipelines", {})
+    stage_config = pipelines_root.get(stage, {})
+    if not stage_config:
+        return None
+
+    manager = PipelineManager(stage=stage, context_services=context_services or {})
+    loaded = await manager.load_from_config(stage_config)
+    if loaded > 0:
+        logger.info(f"PipelineManager[{stage}] 加载完成，共 {loaded} 个管道。")
+        return manager
+    logger.info(f"PipelineManager[{stage}] 未加载任何管道。")
+    return manager
+
+
 # ---------------------------------------------------------------------------
-
-
-async def load_pipeline_manager(config: Dict[str, Any]) -> Optional[InputPipelineManager]:
-    """加载输入管道管理器（Input 阶段：消息预处理）。"""
-    pipeline_config = config.get("pipelines", {})
-    if not pipeline_config:
-        logger.info("配置中未启用管道功能")
-        return None
-
-    pipeline_load_dir = os.path.join(_BASE_DIR, "src", "stages", "input", "pipelines")
-    logger.info(f"准备加载管道 (从目录: {pipeline_load_dir})...")
-
-    try:
-        manager = InputPipelineManager()
-
-        # 加载管道（Input 阶段：消息预处理）
-        await manager.load_pipelines(pipeline_load_dir, pipeline_config)
-        pipeline_count = len(manager._pipelines)
-
-        if pipeline_count > 0:
-            logger.info(f"管道加载完成，共 {pipeline_count} 个管道。")
-            return manager
-        else:
-            logger.warning("未找到任何有效的管道，管道功能将被禁用。")
-            return None
-    except Exception as e:
-        logger.error(f"加载管道时出错: {e}", exc_info=True)
-        logger.warning("由于加载失败，管道处理功能将被禁用")
-        return None
 
 
 async def create_app_components(
     config: Dict[str, Any],
-    input_pipeline_manager: Optional[InputPipelineManager],
+    input_pipeline_manager: Optional[PipelineManager],
     config_service: ConfigService,
 ) -> Tuple[
     ContextService,
@@ -340,15 +340,34 @@ async def create_app_components(
 
     # 输出Handler管理器 (Output 阶段)
     logger.info("初始化输出Handler管理器...")
-    output_manager: Optional[OutputHandlerManager] = (
-        OutputHandlerManager(event_bus, prompt_manager=prompt_manager) if output_config else None
+    output_pipeline_manager = await create_pipeline_manager(
+        stage="output",
+        config=config,
+        context_services={
+            "llm_service": llm_service,
+            "prompt_service": prompt_manager,
+        },
     )
+    output_manager: Optional[OutputHandlerManager] = None
+    if output_config:
+        if output_pipeline_manager is None:
+            output_pipeline_manager = PipelineManager(
+                stage="output",
+                context_services={
+                    "llm_service": llm_service,
+                    "prompt_service": prompt_manager,
+                },
+            )
+        output_manager = OutputHandlerManager(
+            event_bus,
+            pipeline_manager=output_pipeline_manager,
+            prompt_manager=prompt_manager,
+        )
     if output_manager:
         try:
             await output_manager.setup(
                 output_config,
                 config_service=config_service,
-                root_config=config,
                 audio_stream_channel=audio_stream_channel,
                 prompt_manager=prompt_manager,
             )
@@ -603,7 +622,7 @@ async def main() -> None:
     validate_config(config)
     exit_if_config_created(was_created)
 
-    input_pipeline_manager = await load_pipeline_manager(config)
+    input_pipeline_manager = await create_pipeline_manager(stage="input", config=config)
 
     # 注册所有核心事件（通过 @register_event 装饰器触发 Payload 模块导入）
     # 必须在 create_app_components() 之前调用，否则 EventBus 校验时找不到 Payload 类型

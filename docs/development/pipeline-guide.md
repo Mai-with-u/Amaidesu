@@ -1,323 +1,168 @@
 # Pipeline 开发指南
 
-本文档详细介绍如何为 Amaidesu 项目开发 Pipeline（管道）。
+本文档详细介绍 Amaidesu 项目的 Pipeline（管道）开发规范。
 
 ## 概述
 
-Pipeline 是一种消息处理机制，用于在数据流经 3 阶段架构时对数据进行过滤、转换或预处理。项目中有两种 Pipeline：
+Pipeline 是一种消息处理机制，用于在数据流经 3 阶段架构时对数据进行过滤、转换或预处理。所有 Pipeline 统一继承 `Pipeline[T]` 泛型基类：
 
-| 类型 | 阶段 | 处理对象 | 位置 |
-|------|-----|----------|------|
-| **InputPipeline** | Input 阶段 | NormalizedMessage 对象 | Collector 产出后、发布事件前 |
-| **OutputPipeline** | Output 阶段 | Intent 对象 | Intent → OutputHandler |
+| 阶段 | 处理对象 | 类型参数 | 触发位置 |
+|------|----------|---------|---------|
+| **Input Pipeline** | `NormalizedMessage` | `Pipeline[NormalizedMessage]` | `InputCollectorManager._run_collector()` |
+| **Output Pipeline** | `Intent` | `Pipeline["Intent"]` | `OutputHandlerManager._on_decision_intent()` |
 
-## 1. InputPipeline
+## 1. 创建 Pipeline
 
-InputPipeline 处理完整的 `NormalizedMessage` 对象，在 `InputCollectorManager._run_collector()` 中调用。
+### 1.1 文件位置
 
-### 基类定义
+| 阶段 | 路径 | 示例 |
+|------|------|------|
+| Input | `src/stages/input/pipelines/<name>/pipeline.py` | `rate_limit/pipeline.py` |
+| Output | `src/stages/output/pipelines/<name>/pipeline.py` | `profanity_filter/pipeline.py` |
 
-```python
-from src.stages.input.pipelines.manager import InputPipelineBase
-from src.modules.types.base.normalized_message import NormalizedMessage
+### 1.2 装饰器注册
 
-class InputPipelineBase(ABC):
-    priority: int = 500
-    enabled: bool = True
-    error_handling: PipelineErrorHandling = PipelineErrorHandling.CONTINUE
-    timeout_seconds: float = 5.0
-
-    def __init__(self, config: Dict[str, Any]):
-        self.config = config
-        self.logger = get_logger(self.__class__.__name__)
-        self._stats = PipelineStats()
-
-    async def process(self, message: NormalizedMessage) -> Optional[NormalizedMessage]:
-        """处理消息，返回处理后的消息或 None（丢弃消息）"""
-        result = await self._process(message)
-        self._stats.processed_count += 1
-        return result
-
-    @abstractmethod
-    async def _process(self, message: NormalizedMessage) -> Optional[NormalizedMessage]:
-        """子类实现实际处理逻辑"""
-        pass
-```
-
-### 创建 InputPipeline
-
-1. 在 `src/stages/input/pipelines/` 目录下创建新目录
-2. 创建 `pipeline.py` 文件，继承 `InputPipelineBase`
-3. 实现 `_process()` 方法
+每个 Pipeline 类必须用 `@pipeline("name")` 装饰器显式注册，stage 由基类自动推断：
 
 ```python
-# src/stages/input/pipelines/my_filter/pipeline.py
-from typing import Any, Dict, Optional
-
-from src.stages.input.pipelines.manager import InputPipelineBase
+from src.modules.pipeline import pipeline, Pipeline
 from src.modules.types.base.normalized_message import NormalizedMessage
+from typing import Optional, Any, Dict
 
 
-class MyFilterInputPipeline(InputPipelineBase):
-    """我的自定义消息过滤器"""
+@pipeline("rate_limit")
+class RateLimitInputPipeline(Pipeline[NormalizedMessage]):
+    """限流管道。基于滑动时间窗口限制消息频率。"""
 
-    priority = 500
+    priority = 100
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
-        self.min_length = self.config.get("min_length", 3)
+        self._rate = config.get("rate", 100)
 
-    async def _process(self, message: NormalizedMessage) -> Optional[NormalizedMessage]:
-        """
-        处理 NormalizedMessage
-
-        注意：NormalizedMessage 是 Pydantic 模型，不可直接修改字段。
-        如需修改，使用 message.model_copy(update={...}) 创建新实例。
-        """
-        # 检查消息长度
-        if len(message.text) < self.min_length:
-            self.logger.debug(f"消息长度 {len(message.text)} 小于最小要求 {self.min_length}")
-            return None  # 丢弃
-
-        # 返回原消息（允许通过）
-        return message
+    async def _process(self, item: NormalizedMessage) -> Optional[NormalizedMessage]:
+        if self._is_over_limit():
+            return None  # 返回 None = 丢弃
+        return item
 ```
 
-### 创建 __init__.py
+装饰器规则：
+- 必须传入 `name`（在配置 `[pipelines.<stage>.<name>]` 中使用）
+- `priority` 写在类属性中（数字越小越先执行）
+- 不允许重复注册（`(stage, name)` 唯一）
+- 抽象类自动跳过注册
 
-```python
-# src/stages/input/pipelines/my_filter/__init__.py
-from .pipeline import MyFilterInputPipeline
+### 1.3 配置启用
 
-__all__ = ["MyFilterInputPipeline"]
-```
-
-## 2. OutputPipeline
-
-OutputPipeline 处理 `Intent` 对象，在 Intent 分发给 OutputHandler 前执行过滤。
-
-### 基类定义
-
-```python
-from src.stages.output.pipelines.base import OutputPipelineBase
-from src.modules.types import Intent
-
-class OutputPipelineBase(ABC):
-    priority: int = 500
-    enabled: bool = True
-    error_handling: PipelineErrorHandling = PipelineErrorHandling.CONTINUE
-    timeout_seconds: float = 5.0
-
-    def __init__(self, config: Dict[str, Any]):
-        self.config = config
-        self.logger = get_logger(self.__class__.__name__)
-        self._stats = PipelineStats()
-
-    async def process(self, intent: Intent) -> Optional[Intent]:
-        result = await self._process(intent)
-        self._stats.processed_count += 1
-        return result
-
-    @abstractmethod
-    async def _process(self, intent: Intent) -> Optional[Intent]:
-        """子类实现实际处理逻辑"""
-        pass
-```
-
-### 创建 OutputPipeline
-
-```python
-# src/stages/output/pipelines/my_filter/pipeline.py
-from typing import TYPE_CHECKING, Any, Optional
-
-from src.stages.output.pipelines.base import OutputPipelineBase
-
-if TYPE_CHECKING:
-    from src.modules.types import Intent
-
-
-class MyFilterPipeline(OutputPipelineBase):
-    """我的自定义输出过滤器"""
-
-    priority = 100  # 高优先级
-
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        self.blocked_words = self.config.get("blocked_words", [])
-
-    async def _process(self, intent: "Intent") -> Optional["Intent"]:
-        """处理 Intent"""
-        if not intent.response_text:
-            return intent
-
-        # 检查是否包含敏感词
-        for word in self.blocked_words:
-            if word in intent.response_text:
-                self.logger.info(f"检测到敏感词 '{word}'，丢弃消息")
-                return None  # 丢弃
-
-        return intent
-```
-
-## 3. 配置启用
-
-在 `config.toml` 中配置 Pipeline。
-
-### InputPipeline 配置
+在 `config/core.toml`（或被加载的配置文件中）：
 
 ```toml
-[pipelines.my_filter]
-[pipelines.my_filter.input]      # 注意：需要 input 子配置
-priority = 500
+[pipelines.input.rate_limit]
 enabled = true
-min_length = 3
-```
+priority = 100        # 可覆盖类属性默认值
+rate = 100
 
-### OutputPipeline 配置
-
-```toml
-[pipelines.my_filter]
-[pipelines.my_filter.output]     # 注意：需要 output 子配置
+[pipelines.output.profanity_filter]
+enabled = true
 priority = 100
-enabled = true
-blocked_words = ["敏感词1", "敏感词2"]
+words = ["bad1", "bad2"]
+replacement = "***"
 ```
 
-### 错误处理策略
+`PipelineItemConfig` Schema 校验：
 
-| 值 | 说明 |
-|-----|------|
-| `continue` | 记录错误，继续执行下一个 Pipeline（默认） |
-| `stop` | 停止执行，抛出异常 |
-| `drop` | 丢弃消息，不执行后续 Pipeline |
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `priority` | int | 500 | 优先级（必填，配置错误立即报错） |
+| `enabled` | bool | true | 是否启用 |
+| `error_handling` | enum | "continue" | CONTINUE / STOP / DROP |
+| `timeout_seconds` | float | 5.0 | 单次处理超时 |
+| 其他 | any | - | 子类自定义字段（`extra="allow"`） |
 
-## 4. 现有 Pipeline
+## 2. 进程契约
 
-项目已内置以下 Pipeline：
+`_process()` 方法必须遵守：
 
-### Input 阶段
+| 返回值 | 含义 |
+|--------|------|
+| 原 `item` | 透传 |
+| `item.model_copy(update={...})` 或新对象 | 转换 |
+| `None` | 丢弃整条消息（后续 Pipeline 不执行） |
 
-| Pipeline | 说明 | 优先级 |
-|----------|------|-------|
-| **rate_limit** | 限流管道，基于滑动时间窗口限制消息频率 | 100 |
-| **similar_filter** | 相似文本过滤管道，过滤短时间内重复的消息 | 500 |
+行为契约：
+- 错误处理策略默认 CONTINUE（记录日志继续执行下一个 Pipeline）
+- 第一处返回 `None` 短路整条链路
+- 每次处理累加统计（processed_count / dropped_count / error_count / total_duration_ms）
 
-### Output 阶段
+## 3. 依赖注入
 
-| Pipeline | 说明 | 优先级 |
-|----------|------|-------|
-| **profanity_filter** | 敏感词过滤管道，过滤 Intent 中的敏感词 | 100 |
-
-## 5. 执行流程
-
-### Input Pipeline 流程
-
-```
-外部输入 (RawData)
-    ↓
-Collector 构造 NormalizedMessage
-    ↓
-【InputPipeline 链】NormalizedMessage → NormalizedMessage | None
-    ↓ (返回消息)
-EventBus: data.message 事件
-    ↓
-【Decision 阶段】
-```
-
-### Output Pipeline 流程
-
-```
-Decision 阶段
-    ↓
-EventBus: decision.intent 事件
-    ↓
-【OutputPipeline 链】Intent → Intent | None
-    ↓ (返回 Intent)
-【Output 阶段】Intent → 实际输出
-```
-
-### 执行顺序
-
-1. 系统初始化时扫描配置中的 Pipeline
-2. 按 `priority` 升序排列（数字越小越先执行）
-3. 消息依次通过各 Pipeline
-4. 如果任何 Pipeline 返回 `None`，消息被丢弃
-5. Pipeline 支持超时控制和错误处理策略
-
-## 6. 统计信息
-
-所有 Pipeline 都自动收集统计信息：
+Pipeline 不需要 Context 容器。如需注入服务（如 LLMManager），直接在 `__init__` 声明：
 
 ```python
-# 获取统计
-stats = pipeline.get_stats()
-# processed_count: 处理的消息数
-# dropped_count: 丢弃的消息数
-# error_count: 错误次数
-# avg_duration_ms: 平均处理时间（毫秒）
-
-# 获取 Pipeline 信息
-info = pipeline.get_info()
-# name: Pipeline 名称
-# priority: 优先级
-# enabled: 是否启用
-```
-
-## 7. 最佳实践
-
-### 命名规范
-
-- InputPipeline 类名：`MyFilterInputPipeline`
-- OutputPipeline 类名：`MyFilterPipeline`
-- 目录名：`my_filter`（snake_case）
-
-### 注意事项
-
-1. **不要直接修改 Pydantic 模型**：如需修改 `NormalizedMessage`，使用 `message.model_copy(update={...})`
-2. **优先使用现有基类**：继承 `InputPipelineBase` / `OutputPipelineBase`
-3. **合理设置优先级**：限流等基础过滤使用较低优先级（先执行）
-4. **处理空值**：始终检查输入是否为 None
-5. **日志记录**：在关键路径添加适当日志
-
-### 代码示例：完整的消息过滤 Pipeline
-
-```python
-from typing import Any, Dict, Optional
-import time
-
-from src.stages.input.pipelines.manager import InputPipelineBase
-from src.modules.types.base.normalized_message import NormalizedMessage
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from src.modules.llm.manager import LLMManager
 
 
-class LengthFilterInputPipeline(InputPipelineBase):
-    """按消息长度过滤的 Pipeline"""
-
-    priority = 100  # 高优先级，尽早过滤
-
-    def __init__(self, config: Dict[str, Any]):
+@pipeline("llm_filter")
+class LLMFilterOutputPipeline(Pipeline["Intent"]):
+    def __init__(self, config: Dict[str, Any], llm_service: "LLMManager"):
         super().__init__(config)
-        self.min_length = self.config.get("min_length", 1)
-        self.max_length = self.config.get("max_length", 500)
-
-    async def _process(self, message: NormalizedMessage) -> Optional[NormalizedMessage]:
-        text_length = len(message.text)
-
-        # 检查长度范围
-        if text_length < self.min_length:
-            self.logger.debug(f"消息太短: {text_length} < {self.min_length}")
-            return None
-
-        if text_length > self.max_length:
-            self.logger.debug(f"消息太长: {text_length} > {self.max_length}")
-            return None
-
-        return message
-
-    def get_info(self) -> Dict[str, Any]:
-        info = super().get_info()
-        info.update({
-            "min_length": self.min_length,
-            "max_length": self.max_length,
-        })
-        return info
+        self._llm = llm_service
 ```
+
+`PipelineManager._instantiate_pipeline()` 会通过反射 `__init__` 签名自动注入：
+
+```python
+# main.py
+output_pipeline_manager = await create_pipeline_manager(
+    stage="output",
+    config=config,
+    context_services={
+        "llm_service": llm_service,
+        "prompt_service": prompt_manager,
+    },
+)
+```
+
+## 4. 测试
+
+```python
+import pytest
+from src.modules.pipeline import Pipeline
+
+
+class TestPipeline(Pipeline[NormalizedMessage]):
+    async def _process(self, item):
+        return item
+
+
+@pytest.mark.asyncio
+async def test_pipeline():
+    pipeline = TestPipeline(config={"priority": 100})
+    msg = create_test_message()
+    result = await pipeline.process(msg)
+    assert result is not None
+```
+
+测试隔离：使用 `clear_registry()` 清理装饰器副作用。
+
+## 5. 已实现 Pipeline
+
+| 名称 | 阶段 | Priority | 功能 |
+|------|------|----------|------|
+| `rate_limit` | Input | 100 | 滑动时间窗口限流（全局 + 用户级） |
+| `similar_filter` | Input | 500 | 相似文本去重 |
+| `profanity_filter` | Output | 100 | 敏感词过滤 |
+
+## 6. 反模式
+
+**禁止**：
+- ❌ 创建新的 Plugin（插件系统已移除，使用 Pipeline）
+- ❌ 使用 Context 容器传递服务
+- ❌ 硬编码事件名字符串（使用 `CoreEvents` 常量）
+- ❌ 使用空的 except 块
+- ❌ 在 Pipeline 内修改全局状态
+- ❌ 给 Pipeline 加 `setup()`/`cleanup()` 方法
+
+详见 [依赖注入指南](dependency-injection.md)。

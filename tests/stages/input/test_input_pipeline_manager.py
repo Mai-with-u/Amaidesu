@@ -15,12 +15,10 @@ from typing import Any, Dict, Optional
 
 import pytest
 
-from src.stages.input.pipelines.manager import (
-    InputPipelineManager,
-    InputPipelineBase,
-    PipelineErrorHandling,
-    PipelineException,
-)
+from src.modules.pipeline import Pipeline, PipelineManager
+from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.types.base.pipeline_types import PipelineErrorHandling, PipelineException
+from src.modules.types.base.pipeline_stats import PipelineStats
 from src.modules.types.base.normalized_message import NormalizedMessage
 from src.modules.types.base.pipeline_stats import PipelineStats
 
@@ -44,7 +42,7 @@ def create_message(text: str, user_id: str = "test_user", source: str = "test_so
     )
 
 
-class MockInputPipeline(InputPipelineBase):
+class MockInputPipeline(Pipeline[NormalizedMessage]):
     """Mock InputPipeline 用于测试"""
 
     def __init__(self, config: Dict[str, Any]):
@@ -74,7 +72,7 @@ class MockInputPipeline(InputPipelineBase):
         return message
 
 
-class SlowMockInputPipeline(InputPipelineBase):
+class SlowMockInputPipeline(Pipeline[NormalizedMessage]):
     """慢速 Mock InputPipeline 用于测试超时"""
 
     def __init__(self, config: Dict[str, Any]):
@@ -94,7 +92,7 @@ class SlowMockInputPipeline(InputPipelineBase):
 @pytest.fixture
 def pipeline_manager():
     """创建 InputPipelineManager 实例"""
-    return InputPipelineManager()
+    return PipelineManager[NormalizedMessage](stage="input")
 
 
 @pytest.fixture
@@ -109,7 +107,7 @@ def sample_message():
 
 
 @pytest.mark.asyncio
-async def test_register_pipeline(pipeline_manager: InputPipelineManager):
+async def test_register_pipeline(pipeline_manager: PipelineManager[NormalizedMessage]):
     """测试注册 InputPipeline"""
     pipeline = MockInputPipeline({})
     pipeline.priority = 100
@@ -122,7 +120,7 @@ async def test_register_pipeline(pipeline_manager: InputPipelineManager):
 
 
 @pytest.mark.asyncio
-async def test_register_multiple_pipelines(pipeline_manager: InputPipelineManager):
+async def test_register_multiple_pipelines(pipeline_manager: PipelineManager[NormalizedMessage]):
     """测试注册多个 InputPipeline"""
     pipeline1 = MockInputPipeline({})
     pipeline2 = MockInputPipeline({})
@@ -141,7 +139,7 @@ async def test_register_multiple_pipelines(pipeline_manager: InputPipelineManage
 
 
 @pytest.mark.asyncio
-async def test_process_single_pipeline(pipeline_manager: InputPipelineManager, sample_message: NormalizedMessage):
+async def test_process_single_pipeline(pipeline_manager: PipelineManager[NormalizedMessage], sample_message: NormalizedMessage):
     """测试单个 InputPipeline 处理消息"""
     pipeline = MockInputPipeline({})
     pipeline.priority = 100
@@ -156,7 +154,7 @@ async def test_process_single_pipeline(pipeline_manager: InputPipelineManager, s
 
 
 @pytest.mark.asyncio
-async def test_process_multiple_pipelines(pipeline_manager: InputPipelineManager, sample_message: NormalizedMessage):
+async def test_process_multiple_pipelines(pipeline_manager: PipelineManager[NormalizedMessage], sample_message: NormalizedMessage):
     """测试多个 InputPipeline 处理消息"""
     pipeline1 = MockInputPipeline({})
     pipeline1.priority = 100
@@ -179,7 +177,7 @@ async def test_process_multiple_pipelines(pipeline_manager: InputPipelineManager
 
 @pytest.mark.asyncio
 async def test_process_pipeline_drops_message(
-    pipeline_manager: InputPipelineManager, sample_message: NormalizedMessage
+    pipeline_manager: PipelineManager[NormalizedMessage], sample_message: NormalizedMessage
 ):
     """测试 InputPipeline 丢弃消息"""
     pipeline1 = MockInputPipeline({})
@@ -204,7 +202,7 @@ async def test_process_pipeline_drops_message(
 
 
 @pytest.mark.asyncio
-async def test_process_empty_pipeline_list(pipeline_manager: InputPipelineManager, sample_message: NormalizedMessage):
+async def test_process_empty_pipeline_list(pipeline_manager: PipelineManager[NormalizedMessage], sample_message: NormalizedMessage):
     """测试空 InputPipeline 列表"""
     result = await pipeline_manager.process(sample_message)
 
@@ -213,7 +211,7 @@ async def test_process_empty_pipeline_list(pipeline_manager: InputPipelineManage
 
 
 @pytest.mark.asyncio
-async def test_process_disabled_pipeline(pipeline_manager: InputPipelineManager, sample_message: NormalizedMessage):
+async def test_process_disabled_pipeline(pipeline_manager: PipelineManager[NormalizedMessage], sample_message: NormalizedMessage):
     """测试禁用的 InputPipeline 不处理"""
     pipeline1 = MockInputPipeline({})
     pipeline1.priority = 100
@@ -238,7 +236,7 @@ async def test_process_disabled_pipeline(pipeline_manager: InputPipelineManager,
 
 @pytest.mark.asyncio
 async def test_process_pipeline_error_continue(
-    pipeline_manager: InputPipelineManager, sample_message: NormalizedMessage
+    pipeline_manager: PipelineManager[NormalizedMessage], sample_message: NormalizedMessage
 ):
     """测试 InputPipeline 错误处理：CONTINUE"""
     pipeline1 = MockInputPipeline({})
@@ -264,7 +262,7 @@ async def test_process_pipeline_error_continue(
 
 
 @pytest.mark.asyncio
-async def test_process_pipeline_error_stop(pipeline_manager: InputPipelineManager, sample_message: NormalizedMessage):
+async def test_process_pipeline_error_stop(pipeline_manager: PipelineManager[NormalizedMessage], sample_message: NormalizedMessage):
     """测试 InputPipeline 错误处理：STOP"""
     pipeline = MockInputPipeline({})
     pipeline.priority = 100
@@ -281,7 +279,7 @@ async def test_process_pipeline_error_stop(pipeline_manager: InputPipelineManage
 
 
 @pytest.mark.asyncio
-async def test_process_pipeline_error_drop(pipeline_manager: InputPipelineManager, sample_message: NormalizedMessage):
+async def test_process_pipeline_error_drop(pipeline_manager: PipelineManager[NormalizedMessage], sample_message: NormalizedMessage):
     """测试 InputPipeline 错误处理：DROP"""
     pipeline1 = MockInputPipeline({})
     pipeline1.priority = 100
@@ -306,7 +304,7 @@ async def test_process_pipeline_error_drop(pipeline_manager: InputPipelineManage
 
 @pytest.mark.asyncio
 async def test_process_pipeline_timeout_continue(
-    pipeline_manager: InputPipelineManager, sample_message: NormalizedMessage
+    pipeline_manager: PipelineManager[NormalizedMessage], sample_message: NormalizedMessage
 ):
     """测试 InputPipeline 超时：CONTINUE"""
     pipeline1 = MockInputPipeline({})
@@ -330,7 +328,7 @@ async def test_process_pipeline_timeout_continue(
 
 
 @pytest.mark.asyncio
-async def test_process_pipeline_timeout_drop(pipeline_manager: InputPipelineManager, sample_message: NormalizedMessage):
+async def test_process_pipeline_timeout_drop(pipeline_manager: PipelineManager[NormalizedMessage], sample_message: NormalizedMessage):
     """测试 InputPipeline 超时：DROP"""
     pipeline1 = MockInputPipeline({})
     pipeline1.priority = 100
@@ -359,7 +357,7 @@ async def test_process_pipeline_timeout_drop(pipeline_manager: InputPipelineMana
 
 
 @pytest.mark.asyncio
-async def test_pipeline_priority_sorting(pipeline_manager: InputPipelineManager, sample_message: NormalizedMessage):
+async def test_pipeline_priority_sorting(pipeline_manager: PipelineManager[NormalizedMessage], sample_message: NormalizedMessage):
     """测试 InputPipeline 按优先级排序"""
     execution_order = []
 
@@ -395,7 +393,7 @@ async def test_pipeline_priority_sorting(pipeline_manager: InputPipelineManager,
 
 
 @pytest.mark.asyncio
-async def test_get_stats(pipeline_manager: InputPipelineManager, sample_message: NormalizedMessage):
+async def test_get_stats(pipeline_manager: PipelineManager[NormalizedMessage], sample_message: NormalizedMessage):
     """测试获取 InputPipeline 统计信息"""
     pipeline1 = MockInputPipeline({})
     pipeline1.priority = 100
@@ -410,7 +408,7 @@ async def test_get_stats(pipeline_manager: InputPipelineManager, sample_message:
     await pipeline_manager.process(sample_message)
     await pipeline_manager.process(sample_message)
 
-    stats = pipeline_manager.get_stats()
+    stats = pipeline_manager.get_pipeline_stats()
 
     # 验证基本结构
     assert len(stats) >= 1
@@ -423,7 +421,7 @@ async def test_get_stats(pipeline_manager: InputPipelineManager, sample_message:
 
 
 @pytest.mark.asyncio
-async def test_get_stats_with_drops(pipeline_manager: InputPipelineManager, sample_message: NormalizedMessage):
+async def test_get_stats_with_drops(pipeline_manager: PipelineManager[NormalizedMessage], sample_message: NormalizedMessage):
     """测试统计信息包含丢弃计数"""
     pipeline = MockInputPipeline({})
     pipeline.priority = 100
@@ -433,13 +431,13 @@ async def test_get_stats_with_drops(pipeline_manager: InputPipelineManager, samp
 
     await pipeline_manager.process(sample_message)
 
-    stats = pipeline_manager.get_stats()
+    stats = pipeline_manager.get_pipeline_stats()
 
     assert stats["MockInputPipeline"]["dropped_count"] == 1
 
 
 @pytest.mark.asyncio
-async def test_get_stats_with_errors(pipeline_manager: InputPipelineManager, sample_message: NormalizedMessage):
+async def test_get_stats_with_errors(pipeline_manager: PipelineManager[NormalizedMessage], sample_message: NormalizedMessage):
     """测试统计信息包含错误计数"""
     pipeline = MockInputPipeline({})
     pipeline.priority = 100
@@ -450,13 +448,13 @@ async def test_get_stats_with_errors(pipeline_manager: InputPipelineManager, sam
 
     await pipeline_manager.process(sample_message)
 
-    stats = pipeline_manager.get_stats()
+    stats = pipeline_manager.get_pipeline_stats()
 
     assert stats["MockInputPipeline"]["error_count"] >= 1
 
 
 @pytest.mark.asyncio
-async def test_get_stats_avg_duration(pipeline_manager: InputPipelineManager, sample_message: NormalizedMessage):
+async def test_get_stats_avg_duration(pipeline_manager: PipelineManager[NormalizedMessage], sample_message: NormalizedMessage):
     """测试统计信息包含平均处理时间"""
     pipeline = MockInputPipeline({})
     pipeline.priority = 100
@@ -467,16 +465,16 @@ async def test_get_stats_avg_duration(pipeline_manager: InputPipelineManager, sa
     await pipeline_manager.process(sample_message)
     await pipeline_manager.process(sample_message)
 
-    stats = pipeline_manager.get_stats()
+    stats = pipeline_manager.get_pipeline_stats()
 
     assert stats["MockInputPipeline"]["processed_count"] == 2
     assert stats["MockInputPipeline"]["avg_duration_ms"] >= 50  # 至少 50ms
 
 
 @pytest.mark.asyncio
-async def test_get_stats_empty(pipeline_manager: InputPipelineManager):
+async def test_get_stats_empty(pipeline_manager: PipelineManager[NormalizedMessage]):
     """测试空 InputPipeline 列表的统计"""
-    stats = pipeline_manager.get_stats()
+    stats = pipeline_manager.get_pipeline_stats()
 
     assert len(stats) == 0
 
@@ -519,7 +517,7 @@ def test_pipeline_stats_avg_duration_with_processed():
 
 
 @pytest.mark.asyncio
-async def test_concurrent_processing(pipeline_manager: InputPipelineManager, sample_message: NormalizedMessage):
+async def test_concurrent_processing(pipeline_manager: PipelineManager[NormalizedMessage], sample_message: NormalizedMessage):
     """测试并发处理多个消息"""
     pipeline = MockInputPipeline({})
     pipeline.priority = 100
@@ -544,7 +542,7 @@ async def test_concurrent_processing(pipeline_manager: InputPipelineManager, sam
 
 
 @pytest.mark.asyncio
-async def test_process_empty_text(pipeline_manager: InputPipelineManager):
+async def test_process_empty_text(pipeline_manager: PipelineManager[NormalizedMessage]):
     """测试处理空文本消息"""
     pipeline = MockInputPipeline({})
     pipeline.priority = 100
@@ -560,7 +558,7 @@ async def test_process_empty_text(pipeline_manager: InputPipelineManager):
 
 
 @pytest.mark.asyncio
-async def test_process_with_unicode(pipeline_manager: InputPipelineManager):
+async def test_process_with_unicode(pipeline_manager: PipelineManager[NormalizedMessage]):
     """测试处理 Unicode 文本"""
     pipeline = MockInputPipeline({})
     pipeline.priority = 100
@@ -576,7 +574,7 @@ async def test_process_with_unicode(pipeline_manager: InputPipelineManager):
 
 
 @pytest.mark.asyncio
-async def test_process_handles_raw_none(pipeline_manager: InputPipelineManager):
+async def test_process_handles_raw_none(pipeline_manager: PipelineManager[NormalizedMessage]):
     """测试 raw=None 边界情况"""
     pipeline = MockInputPipeline({})
     pipeline.priority = 100

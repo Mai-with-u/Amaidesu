@@ -10,9 +10,8 @@ import time
 import pytest
 
 from src.modules.types import Intent, IntentMetadata
-from src.stages.output.pipelines.base import OutputPipelineBase
+from src.modules.pipeline import Pipeline, PipelineManager
 from src.modules.types.base.pipeline_types import PipelineException
-from src.stages.output.pipelines.manager import OutputPipelineManager
 
 
 # =============================================================================
@@ -37,14 +36,14 @@ def make_intent(text: str) -> Intent:
 # =============================================================================
 
 
-class PassThroughPipeline(OutputPipelineBase):
+class PassThroughPipeline(Pipeline["Intent"]):
     """透传 Pipeline"""
 
     async def _process(self, params):
         return params
 
 
-class ModifyingPipeline(OutputPipelineBase):
+class ModifyingPipeline(Pipeline["Intent"]):
     """修改 Pipeline"""
 
     async def _process(self, params):
@@ -52,21 +51,21 @@ class ModifyingPipeline(OutputPipelineBase):
         return params
 
 
-class DroppingPipeline(OutputPipelineBase):
+class DroppingPipeline(Pipeline["Intent"]):
     """丢弃 Pipeline"""
 
     async def _process(self, params):
         return None
 
 
-class FailingPipeline(OutputPipelineBase):
+class FailingPipeline(Pipeline["Intent"]):
     """失败 Pipeline"""
 
     async def _process(self, params):
         raise ValueError("测试失败")
 
 
-class SlowPipeline(OutputPipelineBase):
+class SlowPipeline(Pipeline["Intent"]):
     """慢速 Pipeline（用于超时测试）"""
 
     async def _process(self, params):
@@ -81,7 +80,7 @@ class SlowPipeline(OutputPipelineBase):
 
 def test_manager_creation():
     """测试管理器创建"""
-    manager = OutputPipelineManager()
+    manager = PipelineManager["Intent"](stage="output")
 
     assert manager is not None
     assert len(manager._pipelines) == 0
@@ -94,7 +93,7 @@ def test_manager_creation():
 
 def test_register_pipeline():
     """测试注册 Pipeline"""
-    manager = OutputPipelineManager()
+    manager = PipelineManager["Intent"](stage="output")
     pipeline = PassThroughPipeline(config={})
 
     manager.register_pipeline(pipeline)
@@ -106,7 +105,7 @@ def test_register_pipeline():
 
 def test_register_multiple_pipelines():
     """测试注册多个 Pipeline"""
-    manager = OutputPipelineManager()
+    manager = PipelineManager["Intent"](stage="output")
 
     pipeline1 = PassThroughPipeline(config={"priority": 100})
     pipeline2 = ModifyingPipeline(config={"priority": 200})
@@ -125,7 +124,7 @@ def test_register_multiple_pipelines():
 @pytest.mark.asyncio
 async def test_process_no_pipelines():
     """测试没有 Pipeline 时直接返回"""
-    manager = OutputPipelineManager()
+    manager = PipelineManager["Intent"](stage="output")
 
     params = make_intent("测试")
     result = await manager.process(params)
@@ -136,7 +135,7 @@ async def test_process_no_pipelines():
 @pytest.mark.asyncio
 async def test_process_single_pipeline():
     """测试单个 Pipeline 处理"""
-    manager = OutputPipelineManager()
+    manager = PipelineManager["Intent"](stage="output")
     pipeline = PassThroughPipeline(config={})
     manager.register_pipeline(pipeline)
 
@@ -150,7 +149,7 @@ async def test_process_single_pipeline():
 @pytest.mark.asyncio
 async def test_process_multiple_pipelines():
     """测试多个 Pipeline 顺序处理"""
-    manager = OutputPipelineManager()
+    manager = PipelineManager["Intent"](stage="output")
 
     pipeline1 = ModifyingPipeline(config={"priority": 100})
     pipeline2 = ModifyingPipeline(config={"priority": 200})
@@ -168,7 +167,7 @@ async def test_process_multiple_pipelines():
 @pytest.mark.asyncio
 async def test_process_disabled_pipeline():
     """测试禁用的 Pipeline 不执行"""
-    manager = OutputPipelineManager()
+    manager = PipelineManager["Intent"](stage="output")
 
     pipeline = ModifyingPipeline(config={"enabled": False})
     manager.register_pipeline(pipeline)
@@ -183,7 +182,7 @@ async def test_process_disabled_pipeline():
 @pytest.mark.asyncio
 async def test_process_dropping_pipeline():
     """测试丢弃 Pipeline"""
-    manager = OutputPipelineManager()
+    manager = PipelineManager["Intent"](stage="output")
 
     pipeline1 = PassThroughPipeline(config={"priority": 100})
     pipeline2 = DroppingPipeline(config={"priority": 200})
@@ -203,7 +202,7 @@ async def test_process_dropping_pipeline():
 @pytest.mark.asyncio
 async def test_process_priority_ordering():
     """测试按优先级排序执行"""
-    manager = OutputPipelineManager()
+    manager = PipelineManager["Intent"](stage="output")
 
     # 逆序注册
     pipeline3 = PassThroughPipeline(config={"priority": 300})
@@ -230,7 +229,7 @@ async def test_process_priority_ordering():
 @pytest.mark.asyncio
 async def test_process_continue_on_error():
     """测试错误处理策略 CONTINUE"""
-    manager = OutputPipelineManager()
+    manager = PipelineManager["Intent"](stage="output")
 
     pipeline1 = PassThroughPipeline(config={"priority": 100})
     pipeline2 = FailingPipeline(config={"priority": 200, "error_handling": "continue"})
@@ -251,7 +250,7 @@ async def test_process_continue_on_error():
 @pytest.mark.asyncio
 async def test_process_stop_on_error():
     """测试错误处理策略 STOP"""
-    manager = OutputPipelineManager()
+    manager = PipelineManager["Intent"](stage="output")
 
     pipeline1 = PassThroughPipeline(config={"priority": 100})
     pipeline2 = FailingPipeline(config={"priority": 200, "error_handling": "stop"})
@@ -270,7 +269,7 @@ async def test_process_stop_on_error():
 @pytest.mark.asyncio
 async def test_process_drop_on_error():
     """测试错误处理策略 DROP"""
-    manager = OutputPipelineManager()
+    manager = PipelineManager["Intent"](stage="output")
 
     pipeline1 = PassThroughPipeline(config={"priority": 100})
     pipeline2 = FailingPipeline(config={"priority": 200, "error_handling": "drop"})
@@ -290,7 +289,7 @@ async def test_process_drop_on_error():
 @pytest.mark.asyncio
 async def test_process_timeout():
     """测试超时处理"""
-    manager = OutputPipelineManager()
+    manager = PipelineManager["Intent"](stage="output")
 
     # 需要设置 error_handling="stop" 才能在超时时抛出异常
     pipeline = SlowPipeline(config={"timeout_seconds": 0.1, "error_handling": "stop"})
@@ -310,7 +309,7 @@ async def test_process_timeout():
 @pytest.mark.asyncio
 async def test_get_pipeline_stats():
     """测试获取 Pipeline 统计信息"""
-    manager = OutputPipelineManager()
+    manager = PipelineManager["Intent"](stage="output")
 
     pipeline1 = PassThroughPipeline(config={"priority": 100})
     pipeline2 = DroppingPipeline(config={"priority": 200, "enabled": False})
@@ -340,7 +339,7 @@ async def test_get_pipeline_stats():
 @pytest.mark.asyncio
 async def test_concurrent_processing():
     """测试并发处理"""
-    manager = OutputPipelineManager()
+    manager = PipelineManager["Intent"](stage="output")
 
     pipeline = PassThroughPipeline(config={})
     manager.register_pipeline(pipeline)
