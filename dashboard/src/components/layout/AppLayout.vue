@@ -54,6 +54,7 @@
 
 <script setup lang="ts">
 import { Sunny, Moon } from '@element-plus/icons-vue';
+import { onMounted } from 'vue';
 import Sidebar from './Sidebar.vue';
 import { useThemeStore, useWebSocketStore } from '@/stores';
 import { storeToRefs } from 'pinia';
@@ -61,6 +62,10 @@ import { storeToRefs } from 'pinia';
 const themeStore = useThemeStore();
 const wsStore = useWebSocketStore();
 const { isConnected } = storeToRefs(wsStore);
+
+onMounted(() => {
+  wsStore.connect();
+});
 </script>
 
 <style scoped>

@@ -22,6 +22,12 @@ class WebSocketClient {
   }
 
   connect(): Promise<void> {
+    if (
+      this.ws &&
+      (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)
+    ) {
+      return Promise.resolve();
+    }
     return new Promise((resolve, reject) => {
       try {
         this.ws = new WebSocket(this.url);
@@ -110,15 +116,21 @@ class WebSocketClient {
   }
 
   onMessage(callback: MessageCallback) {
-    this.messageCallbacks.push(callback);
+    if (!this.messageCallbacks.includes(callback)) {
+      this.messageCallbacks.push(callback);
+    }
   }
 
   onConnect(callback: ConnectCallback) {
-    this.connectCallbacks.push(callback);
+    if (!this.connectCallbacks.includes(callback)) {
+      this.connectCallbacks.push(callback);
+    }
   }
 
   onDisconnect(callback: DisconnectCallback) {
-    this.disconnectCallbacks.push(callback);
+    if (!this.disconnectCallbacks.includes(callback)) {
+      this.disconnectCallbacks.push(callback);
+    }
   }
 
   isConnected(): boolean {

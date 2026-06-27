@@ -12,11 +12,11 @@ export const useWebSocketStore = defineStore('websocket', () => {
   const isConnected = ref(false);
 
   function connect() {
-    if (isConnected.value) return;
     if (wsClient.isConnected()) {
       isConnected.value = true;
       return;
     }
+    if (isConnected.value) return;
 
     wsClient.onConnect(() => {
       isConnected.value = true;

@@ -227,7 +227,6 @@ async function handleControl(phase: string, name: string, action: ComponentContr
 
 onMounted(() => {
   componentsStore.fetchComponents();
-  // Connect to WebSocket for real-time events and logs
   eventsStore.connect();
   logsStore.connect();
 });
