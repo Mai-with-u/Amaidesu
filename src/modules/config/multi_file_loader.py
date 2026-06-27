@@ -393,7 +393,7 @@ def _generate_phase_toml(phase: str) -> str:
         table["enabled"] = ["maibot"]
         table.add(tomlkit.comment("可用 Decider（取消注释并添加到上方 enabled 列表即可启用）"))
         table.add(tomlkit.comment('  "llm",      # LLM 直接决策'))
-        table.add(tomlkit.comment('  "maicraft", # MaiCraft 弹幕游戏'))
+        table.add(tomlkit.comment('  "command",  # 通用命令意图路由'))
         table.add(tomlkit.comment('  "replay",   # 输入重放（调试用）'))
         doc["deciders"] = table
 

@@ -116,7 +116,7 @@ uv run python main.py
 **决策 Decider：**
 - `maibot` - MaiBot 决策服务
 - `llm` - 直接使用 LLM 生成回复
-- `maicraft` - 弹幕游戏决策
+- `command` - 通用命令意图路由（解析 /命令 形式的消息）
 
 **输出 Handler：**
 - `subtitle` - 字幕显示

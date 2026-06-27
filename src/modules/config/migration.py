@@ -120,6 +120,36 @@ def _migrate_deciders_keys(deciders_table: Any) -> None:
     if "available" in deciders_table:
         deciders_table.pop("available")
 
+    if "enabled" in deciders_table:
+        enabled = deciders_table["enabled"]
+        if isinstance(enabled, list) and "maicraft" in enabled:
+            enabled = ["command" if x == "maicraft" else x for x in enabled]
+            deciders_table["enabled"] = enabled
+            logger.info("迁移: deciders.enabled 中的 'maicraft' → 'command'")
+
+    if "maicraft" in deciders_table:
+        maicraft_config = deciders_table.pop("maicraft")
+        if "command" not in deciders_table:
+            deciders_table["command"] = maicraft_config
+            logger.info("迁移: [deciders.maicraft] → [deciders.command]")
+
+
+def _migrate_collectors_keys(collectors_table: Any) -> None:
+    """迁移 collectors 中已删除的旧 collector 配置。"""
+    if "bili_danmaku_official_maicraft" in collectors_table:
+        collectors_table.pop("bili_danmaku_official_maicraft")
+        logger.warning(
+            "已丢弃 collectors.bili_danmaku_official_maicraft 配置："
+            "该 collector 已被移除，其功能由 bili_danmaku_official 提供"
+        )
+
+    if "enabled" in collectors_table:
+        enabled = collectors_table["enabled"]
+        if isinstance(enabled, list) and "bili_danmaku_official_maicraft" in enabled:
+            enabled = [x for x in enabled if x != "bili_danmaku_official_maicraft"]
+            collectors_table["enabled"] = enabled
+            logger.warning("已从 collectors.enabled 中移除 'bili_danmaku_official_maicraft'")
+
 
 def _migrate_pipelines_keys(pipelines_table: Any) -> None:
     """迁移 pipelines 旧格式到阶段优先格式: pipelines.{name} → pipelines.{phase}.{name}
@@ -237,6 +267,8 @@ def migrate_old_config(
         if fname in file_groups:
             if fname == "decision.toml" and "deciders" in file_groups[fname]:
                 _migrate_deciders_keys(file_groups[fname]["deciders"])
+            if fname == "input.toml" and "collectors" in file_groups[fname]:
+                _migrate_collectors_keys(file_groups[fname]["collectors"])
             if fname == "core.toml" and "pipelines" in file_groups[fname]:
                 _migrate_pipelines_keys(file_groups[fname]["pipelines"])
             content = tomlkit.dumps(file_groups[fname])

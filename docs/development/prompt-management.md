@@ -293,7 +293,7 @@ enabled = ["subtitle", "vts", "tts"]
 [deciders]
 enabled = true
 active = "maibot"
-available = ["maibot", "llm", "maicraft"]
+available = ["maibot", "llm", "command"]
 
 # ========== Pipeline 配置 ==========
 

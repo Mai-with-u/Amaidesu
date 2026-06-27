@@ -30,7 +30,7 @@ class IntentMetadata(BaseModel):
 
     source_id: str = Field(description="来源ID")
     decision_time_ms: int = Field(description="13位毫秒时间戳", alias="decision_time")
-    parser_type: Optional[str] = Field(default=None, description="解析器类型（如 'llm', 'maicraft'）")
+    parser_type: Optional[str] = Field(default=None, description="解析器类型（如 'llm', 'command'）")
     llm_model: Optional[str] = Field(default=None, description="使用的 LLM 模型")
     replay_count: Optional[int] = Field(default=None, description="重放次数")
     extra: dict = Field(default_factory=dict, description="额外信息")

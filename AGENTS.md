@@ -302,7 +302,7 @@ async def handle_message(self, message):
 | 类型 | 职责 | 位置 | 示例 |
 |------|------|------|------|
 | **InputCollector** | 从外部数据源采集数据 | `src/stages/input/collectors/` | ConsoleInputCollector, BiliDanmakuCollector, STTCollector, BiliDanmakuOfficialCollector |
-| **Decider** | 处理 NormalizedMessage 生成 Intent | `src/stages/decision/deciders/` | MaiBotDecider, LLMDecider, MaicraftDecider |
+| **Decider** | 处理 NormalizedMessage 生成 Intent | `src/stages/decision/deciders/` | MaiBotDecider, LLMDecider, CommandDecider |
 | **OutputHandler** | 渲染到目标设备 | `src/stages/output/handlers/` | EdgeTTSHandler, GPTSoVITSHandler, VTSHandler, WarudoHandler, VRChatHandler, SubtitleHandler, StickerHandler, ObsControlHandler, RemoteStreamHandler, DebugConsoleHandler |
 
 ### 阶段参与者生命周期方法

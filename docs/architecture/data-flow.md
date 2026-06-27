@@ -479,7 +479,7 @@ flowchart TB
 
     subgraph Decision["【Decision 阶段】决策阶段"]
         DM[DeciderManager]
-        DP[Decider<br/>maibot/llm/maicraft]
+        DP[Decider<br/>maibot/llm/command]
         Intent[Intent<br/>回复+情感+动作]
     end
 

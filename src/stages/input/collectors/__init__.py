@@ -6,7 +6,6 @@ Input Collectors - 输入 Collector 实现
 - MockDanmakuCollector: 模拟弹幕Collector
 - BiliDanmakuCollector: B站弹幕Collector
 - BiliDanmakuOfficialCollector: B站官方弹幕Collector
-- BiliDanmakuOfficialMaiCraftCollector: B站官方弹幕+Minecraft转发Collector
 - ReadPingmuCollector: 屏幕读评输入Collector
 - MainosabaCollector: 游戏画面文本采集Collector
 - STTCollector: 语音转文字输入Collector
@@ -20,7 +19,6 @@ Input Collectors - 输入 Collector 实现
 
 from .bili_danmaku import BiliDanmakuCollector
 from .bili_danmaku_official import BiliDanmakuOfficialCollector
-from .bili_danmaku_official_maicraft import BiliDanmakuOfficialMaiCraftCollector
 from .console_input import ConsoleInputCollector
 from .mainosaba import MainosabaCollector
 from .mock_danmaku import MockDanmakuCollector
@@ -32,7 +30,6 @@ __all__ = [
     "MockDanmakuCollector",
     "BiliDanmakuCollector",
     "BiliDanmakuOfficialCollector",
-    "BiliDanmakuOfficialMaiCraftCollector",
     "ReadPingmuCollector",
     "MainosabaCollector",
     "STTCollector",

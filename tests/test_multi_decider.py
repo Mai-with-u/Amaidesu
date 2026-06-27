@@ -185,7 +185,7 @@ class TestSpeechConflictWarning:
         manager = DeciderManager(event_bus=mock_event_bus)
         manager.logger = mock_logger
 
-        decider_names = ["maicraft"]  # 非 speech decider
+        decider_names = ["command"]  # 非 speech decider
 
         manager._check_speech_conflict(decider_names)
 
@@ -196,7 +196,7 @@ class TestSpeechConflictWarning:
         """验证 SPEECH_DECIDERS 常量包含正确的 Decider"""
         assert "maibot" in SPEECH_DECIDERS
         assert "llm" in SPEECH_DECIDERS
-        assert "maicraft" not in SPEECH_DECIDERS  # maicraft 产生 action，不产生 speech
+        assert "command" not in SPEECH_DECIDERS  # command 产生 action，不产生 speech
 
 
 class TestMultiDeciderLifecycle:
@@ -350,7 +350,6 @@ class TestBackwardCompatibility:
         mock_event_bus = MagicMock()
         manager = DeciderManager(event_bus=mock_event_bus)
 
-        # 只使用 maibot 和 llm，不包含 maicraft 因为它的签名不同
         decision_config = {"enabled": ["maibot", "llm"]}
 
         await manager.setup(decision_config=decision_config)

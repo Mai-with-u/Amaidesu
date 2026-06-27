@@ -90,20 +90,19 @@ Amaidesu/
      │   │   │   │   └── similar_filter/ # 相似过滤管道
      │   │   │   └── collectors/       # 输入 Collector
      │   │   │       ├── console_input/
-     │   │   │       ├── bili_danmaku/
-     │   │   │       ├── bili_danmaku_official/
-     │   │   │       ├── bili_danmaku_official_maicraft/
-     │   │   │       ├── mainosaba/
+      │   │   │       ├── bili_danmaku/
+      │   │   │       ├── bili_danmaku_official/
+      │   │   │       ├── mainosaba/
      │   │   │       ├── mock_danmaku/
      │   │   │       ├── read_pingmu/
      │   │   │       └── stt/
      │   │   ├── decision/            # 决策阶段
      │   │   │   ├── decider_manager.py
      │   │   │   └── deciders/       # 决策 Decider
-     │   │   │       ├── maibot/
-     │   │   │       ├── llm/
-     │   │   │       ├── maicraft/
-     │   │   │       └── replay/
+      │   │   │       ├── maibot/
+      │   │   │       ├── llm/
+      │   │   │       ├── command/
+      │   │   │       └── replay/
      │   │   └── output/              # 输出阶段
      │   │       ├── handler_manager.py
      │   │       ├── pipelines/       # 输出管道
@@ -186,7 +185,6 @@ sequenceDiagram
 | console_input | 控制台输入 | `src/stages/input/collectors/console_input/` |
 | bili_danmaku | B站弹幕（第三方API） | `src/stages/input/collectors/bili_danmaku/` |
 | bili_danmaku_official | B站弹幕（官方WebSocket） | `src/stages/input/collectors/bili_danmaku_official/` |
-| bili_danmaku_official_maicraft | B站弹幕（Maicraft优化版） | `src/stages/input/collectors/bili_danmaku_official_maicraft/` |
 | mainosaba | Mainosaba输入 | `src/stages/input/collectors/mainosaba/` |
 | mock_danmaku | 模拟弹幕（测试用） | `src/stages/input/collectors/mock_danmaku/` |
 | read_pingmu | PingMu读取 | `src/stages/input/collectors/read_pingmu/` |
@@ -198,7 +196,7 @@ sequenceDiagram
 |------|------|------|
 | maibot | MaiBot 决策（默认） | `src/stages/decision/deciders/maibot/` |
 | llm | 本地 LLM 决策 | `src/stages/decision/deciders/llm/` |
-| maicraft | Maicraft 规则引擎 | `src/stages/decision/deciders/maicraft/` |
+| command | 通用命令意图路由 | `src/stages/decision/deciders/command/` |
 | replay | 回放决策（调试用） | `src/stages/decision/deciders/replay/` |
 
 ### OutputHandler（12个）

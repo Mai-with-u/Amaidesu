@@ -1,5 +1,7 @@
 # Amaidesu 重构文档
 
+> **历史说明**：本文档中提及的 `maicraft` 组件（`plugins/maicraft/`、`plugins/bili_danmaku_official_maicraft/`）已于后续重构中完全移除，相关功能由通用 `CommandDecider` 替代，`bili_danmaku_official_maicraft` 的功能合并到 `bili_danmaku_official`（旁路 WebSocket 转发被删除，因违反 EventBus 单一通信原则）。本文档保留作为历史架构参考，不再反映当前代码状态。
+
 本目录包含 Amaidesu 项目的重构设计文档，旨在帮助了解旧架构的开发者快速理解新架构的变化和优势。
 
 ## 目录

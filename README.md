@@ -88,7 +88,7 @@ flowchart LR
 ### 阶段参与者概览
 
 - **InputCollector (8个)**：控制台、弹幕、语音识别等
-- **Decider (4个)**：MaiBot、LLM、Maicraft、回放
+- **Decider (4个)**：MaiBot、LLM、Command、回放
 - **OutputHandler (12个)**：TTS、字幕、VTS、OBS等
 
 详见 [3阶段架构总览](docs/architecture/overview.md)

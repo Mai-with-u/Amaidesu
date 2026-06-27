@@ -247,7 +247,7 @@ assert len(handler.get_received_intents()) == 1
 | `LLMClient` ABC | `OpenAIClient` 唯一实现 |
 | `Storage` ABC | `MemoryStorage` 唯一实现 |
 | `TTSManager` 单例 + `get_tts_manager()` | 直接 `GPTSoVITSClient(host, port)` |
-| `AbstractActionFactory` | MaicraftDecider 内置实现 |
+| `AbstractActionFactory` | CommandDecider 内置实现 |
 | `CapabilityPipelineContext.capability_registry` | 删除 |
 | `InputPipeline` / `OutputPipeline` Protocol 重复定义 | 保留 ABC 版本（`InputPipelineBase` / `OutputPipelineBase`） |
 | `src/modules/di/` 空模块 | 已删除 |
