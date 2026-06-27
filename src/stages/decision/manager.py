@@ -18,25 +18,23 @@ DeciderManager - 决策Decider管理器
 """
 
 import asyncio
-import inspect
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Type
 
 from pydantic import ValidationError
 
+from src.modules.config.service import ConfigService
+from src.modules.context.service import ContextService
+from src.modules.di import instantiate_with_di
+from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import DisconnectedPayload
 from src.modules.events.payloads.decision import ConnectedPayload
 from src.modules.events.payloads.input import MessageReadyPayload
+from src.modules.llm.manager import LLMManager
 from src.modules.logging import get_logger
+from src.modules.prompts.manager import PromptManager
 from src.modules.types.base.normalized_message import NormalizedMessage
 from src.stages.decision.registry import _DECIDERS
-
-if TYPE_CHECKING:
-    from src.modules.config.service import ConfigService
-    from src.modules.context.service import ContextService
-    from src.modules.events.event_bus import EventBus
-    from src.modules.llm.manager import LLMManager
-    from src.modules.prompts.manager import PromptManager
 
 
 # 产生语音输出的Decider列表（可能产生音频交叠）
@@ -66,11 +64,11 @@ class DeciderManager:
 
     def __init__(
         self,
-        event_bus: "EventBus",
-        llm_service: Optional["LLMManager"] = None,
-        config_service: Optional["ConfigService"] = None,
-        context_service: Optional["ContextService"] = None,
-        prompt_manager: Optional["PromptManager"] = None,
+        event_bus: EventBus,
+        llm_service: Optional[LLMManager] = None,
+        config_service: Optional[ConfigService] = None,
+        context_service: Optional[ContextService] = None,
+        prompt_manager: Optional[PromptManager] = None,
     ):
         """
         初始化DeciderManager
@@ -222,27 +220,24 @@ class DeciderManager:
         self.logger.info(f"Decider '{decider_name}' 已创建（未启动）")
 
     def _instantiate_decider(self, decider_cls: type, decider_config: Dict[str, Any]) -> Any:
-        """根据 __init__ 签名注入依赖，各 Decider 只收到自己声明的参数"""
-        available_deps: Dict[str, Any] = {
-            "config": decider_config,
-            "event_bus": self.event_bus,
-            "llm_service": self._llm_service,
-            "prompt_service": self._prompt_manager,
-            "config_service": self._config_service,
-            "context_service": self._context_service,
+        """按类型匹配注入依赖，各 Decider 只收到自己声明的参数"""
+        services_by_type: Dict[Type[Any], Any] = {
+            EventBus: self.event_bus,
         }
+        if self._llm_service is not None:
+            services_by_type[LLMManager] = self._llm_service
+        if self._prompt_manager is not None:
+            services_by_type[PromptManager] = self._prompt_manager
+        if self._config_service is not None:
+            services_by_type[ConfigService] = self._config_service
+        if self._context_service is not None:
+            services_by_type[ContextService] = self._context_service
 
-        sig = inspect.signature(decider_cls.__init__)
-        kwargs = {}
-        for name, param in sig.parameters.items():
-            if name == "self":
-                continue
-            if param.kind is inspect.Parameter.VAR_KEYWORD:
-                return decider_cls(**available_deps)
-            if name in available_deps:
-                kwargs[name] = available_deps[name]
-
-        return decider_cls(**kwargs)
+        return instantiate_with_di(
+            decider_cls,
+            config=decider_config,
+            services_by_type=services_by_type,
+        )
 
     async def start(self) -> None:
         """启动所有已创建的Decider"""

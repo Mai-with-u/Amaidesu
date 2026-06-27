@@ -3,25 +3,23 @@
 通用命令意图路由器：将命令形式的标准化消息转换为 Intent。
 """
 
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import Literal, Optional
 
 from pydantic import Field, ValidationError
 
 from src.modules.config.schemas.base import BaseConfig
+from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import IntentPayload
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
 from src.modules.types import Intent, IntentMetadata
+from src.modules.types.base.normalized_message import NormalizedMessage
 from src.stages.decision.registry import decider
 
 from .command_parser import CommandParser
 from .command_registry import CommandRegistry
 from .config import CommandDeciderConfig
-
-if TYPE_CHECKING:
-    from src.modules.events.event_bus import EventBus
-    from src.modules.types.base.normalized_message import NormalizedMessage
 
 
 @decider("command")
@@ -46,7 +44,7 @@ class CommandDecider:
         )
         command_prefix: str = Field(default="/", description="命令前缀")
 
-    def __init__(self, config: dict, event_bus: "EventBus"):
+    def __init__(self, config: dict, event_bus: EventBus):
         self.logger = get_logger(self.__class__.__name__)
         self._event_bus = event_bus
 

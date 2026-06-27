@@ -6,10 +6,10 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import time
 from typing import Any, Dict, Generic, List, Optional, Type
 
+from src.modules.di import instantiate_with_di
 from src.modules.logging import get_logger
 from src.modules.types.base.pipeline_types import PipelineErrorHandling, PipelineException
 
@@ -22,18 +22,18 @@ class PipelineManager(Generic[T]):
 
     Args:
         stage: "input" 或 "output"
-        context_services: 可用服务字典（key=参数名, value=服务实例），用于反射注入
+        services_by_type: 可用服务字典（key=类型, value=服务实例），用于类型匹配注入
     """
 
     def __init__(
         self,
         stage: str,
-        context_services: Optional[Dict[str, Any]] = None,
+        services_by_type: Optional[Dict[Type[Any], Any]] = None,
     ):
         if stage not in ("input", "output"):
             raise ValueError(f"stage 必须是 'input' 或 'output'，得到: {stage}")
         self.stage = stage
-        self.context_services = context_services or {}
+        self.services_by_type = services_by_type or {}
         self._pipelines: List[Pipeline] = []
         self._pipelines_sorted: bool = True
         self._pipeline_lock = asyncio.Lock()
@@ -149,7 +149,7 @@ class PipelineManager(Generic[T]):
         pipeline_cls: Type[Pipeline],
         pipeline_config: Dict[str, Any],
     ) -> Pipeline:
-        """根据 __init__ 签名注入依赖。
+        """按类型匹配注入依赖并实例化 Pipeline。
 
         Args:
             pipeline_cls: Pipeline 类
@@ -161,29 +161,14 @@ class PipelineManager(Generic[T]):
         Raises:
             PipelineConfigError: 当 Pipeline 声明了不可用的依赖时
         """
-        available_deps: Dict[str, Any] = {
-            "config": pipeline_config,
-            **self.context_services,
-        }
-
-        sig = inspect.signature(pipeline_cls.__init__)
-        kwargs: Dict[str, Any] = {}
-        for name, param in sig.parameters.items():
-            if name == "self":
-                continue
-            if param.kind is inspect.Parameter.VAR_KEYWORD:
-                # 支持 **kwargs 的类
-                return pipeline_cls(**available_deps)
-            if name in available_deps:
-                kwargs[name] = available_deps[name]
-            elif param.default is inspect.Parameter.empty:
-                # 必填参数但没有可用依赖
-                raise PipelineConfigError(
-                    f"Pipeline {pipeline_cls.__name__} 声明了必填参数 '{name}'，"
-                    f"但该参数不在可用服务字典中（{list(self.context_services.keys())}）"
-                )
-
-        return pipeline_cls(**kwargs)
+        try:
+            return instantiate_with_di(
+                pipeline_cls,
+                config=pipeline_config,
+                services_by_type=self.services_by_type,
+            )
+        except Exception as e:
+            raise PipelineConfigError(f"Pipeline {pipeline_cls.__name__} 实例化失败: {e}") from e
 
     async def load_from_config(
         self,

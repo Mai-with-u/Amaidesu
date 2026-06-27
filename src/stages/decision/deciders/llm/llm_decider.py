@@ -7,7 +7,7 @@ LLMDecider - LLM决策提供者
 - 错误处理和降级机制
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
+from typing import Any, Dict, Literal, Optional
 
 import json
 import re
@@ -16,20 +16,17 @@ from pydantic import Field
 
 from src.stages.decision.registry import decider
 from src.modules.config.schemas.base import BaseConfig
-from src.modules.context import MessageRole
+from src.modules.config.service import ConfigService
+from src.modules.context import ContextService, MessageRole
+from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import IntentPayload
+from src.modules.llm.manager import LLMManager
 from src.modules.logging import get_logger
+from src.modules.prompts.manager import PromptManager
 from src.modules.types import Intent, IntentMetadata
+from src.modules.types.base.normalized_message import NormalizedMessage
 from src.modules.time_utils import now_ms
-
-if TYPE_CHECKING:
-    from src.modules.context import ContextService
-    from src.modules.events.event_bus import EventBus
-    from src.modules.llm.manager import LLMManager
-    from src.modules.prompts.manager import PromptManager
-    from src.modules.config.service import ConfigService
-    from src.modules.types.base.normalized_message import NormalizedMessage
 
 
 @decider("llm")
@@ -69,11 +66,11 @@ class LLMDecider:
     def __init__(
         self,
         config: Dict[str, Any],
-        event_bus: "EventBus",
-        llm_service: "LLMManager",
-        prompt_service: "PromptManager",
-        config_service: Optional["ConfigService"] = None,
-        context_service: Optional["ContextService"] = None,
+        event_bus: EventBus,
+        llm_service: LLMManager,
+        prompt_service: PromptManager,
+        config_service: Optional[ConfigService] = None,
+        context_service: Optional[ContextService] = None,
     ):
         """
         初始化 LLMDecider

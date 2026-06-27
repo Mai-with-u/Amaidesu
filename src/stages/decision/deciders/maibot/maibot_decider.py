@@ -1,24 +1,22 @@
 """MaiBotDecider - 通过 WebSocket 与 MaiBot 通信的纯文本转发决策器。"""
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
+from typing import Any, Dict, Literal, Optional
 
 from maim_message import MessageBase, RouteConfig, Router, TargetConfig
 from pydantic import Field
 
 from src.modules.config.schemas.base import BaseConfig
+from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import IntentPayload
 from src.modules.logging import get_logger
 from src.modules.types import Intent, IntentMetadata
+from src.modules.types.base.normalized_message import NormalizedMessage
 from src.stages.decision.registry import decider
 
 from .router_adapter import RouterAdapter
 from src.modules.time_utils import now_ms
-
-if TYPE_CHECKING:
-    from src.modules.events.event_bus import EventBus
-    from src.modules.types.base.normalized_message import NormalizedMessage
 
 
 @decider("maibot")
@@ -38,7 +36,7 @@ class MaiBotDecider:
     def get_registration_info(cls) -> Dict[str, Any]:
         return {"layer": "decision", "name": "maibot", "class": cls, "source": "builtin:maibot"}
 
-    def __init__(self, config: Dict[str, Any], event_bus: "EventBus", **kwargs):
+    def __init__(self, config: Dict[str, Any], event_bus: EventBus, **kwargs):
         self.name = "maibot"
         self.typed_config = self.ConfigSchema.from_dict(config)
         self.logger = get_logger("MaiBotDecider")

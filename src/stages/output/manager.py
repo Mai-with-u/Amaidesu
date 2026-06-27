@@ -22,23 +22,21 @@ OutputHandlerManager - Output 阶段: 输出Handler管理器
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel
 
-
+from src.modules.di import instantiate_with_di
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.decision import IntentPayload
+from src.modules.llm.manager import LLMManager
 from src.modules.logging import get_logger
 from src.modules.pipeline import PipelineManager
+from src.modules.prompts.manager import PromptManager
+from src.modules.streaming.audio_stream_channel import AudioStreamChannel
+from src.modules.tts.audio_device_manager import AudioDeviceManager
 from src.stages.output.registry import _HANDLERS
-
-if TYPE_CHECKING:
-    from src.modules.llm.manager import LLMManager
-    from src.modules.prompts.manager import PromptManager
-    from src.modules.tts.audio_device_manager import AudioDeviceManager
-    from src.modules.streaming.audio_stream_channel import AudioStreamChannel
 
 
 class RenderResult(BaseModel):
@@ -49,10 +47,6 @@ class RenderResult(BaseModel):
     error: str | None = None
     timeout: bool = False
     duration: float = 0.0
-
-
-# 需要 audio_stream_channel 的音频Handler列表
-AUDIO_HANDLERS = {"edge_tts", "gptsovits", "omni_tts", "vts"}
 
 
 class OutputHandlerManager:
@@ -73,11 +67,11 @@ class OutputHandlerManager:
     def __init__(
         self,
         event_bus: EventBus,
-        pipeline_manager: "PipelineManager",
+        pipeline_manager: PipelineManager,
         config: Optional[dict[str, Any]] = None,
-        llm_manager: Optional["LLMManager"] = None,
-        prompt_manager: Optional["PromptManager"] = None,
-        audio_device_manager: Optional["AudioDeviceManager"] = None,
+        llm_manager: Optional[LLMManager] = None,
+        prompt_manager: Optional[PromptManager] = None,
+        audio_device_manager: Optional[AudioDeviceManager] = None,
     ):
         self.event_bus = event_bus
         self.config = config or {}
@@ -111,7 +105,7 @@ class OutputHandlerManager:
         self,
         config: dict[str, Any],
         config_service=None,
-        audio_stream_channel: Optional["AudioStreamChannel"] = None,
+        audio_stream_channel: Optional[AudioStreamChannel] = None,
         llm_manager=None,
         prompt_manager=None,
         audio_device_manager=None,
@@ -388,7 +382,10 @@ class OutputHandlerManager:
         )
 
     def _create_handler(self, handler_type: str, config: dict[str, Any]) -> Any | None:
-        """Handler工厂方法：根据类型创建Handler实例"""
+        """Handler工厂方法：根据类型创建Handler实例
+
+        使用类型匹配 DI 自动注入 Handler 声明的依赖（AudioStreamChannel 等）。
+        """
         if handler_type not in _HANDLERS:
             available = list(_HANDLERS.keys())
             self.logger.error(f"未知的Handler类型: '{handler_type}'. 可用的Handler: {available or '无'}")
@@ -397,14 +394,15 @@ class OutputHandlerManager:
         try:
             handler_cls = _HANDLERS[handler_type]
 
-            is_audio_handler = handler_type in AUDIO_HANDLERS
+            services_by_type: dict[type, Any] = {EventBus: self.event_bus}
+            if self._audio_stream_channel is not None:
+                services_by_type[AudioStreamChannel] = self._audio_stream_channel
 
-            kwargs: dict[str, Any] = {"config": config, "event_bus": self.event_bus}
-
-            if is_audio_handler and self._audio_stream_channel:
-                kwargs["audio_stream_channel"] = self._audio_stream_channel
-
-            handler = handler_cls(**kwargs)
+            handler = instantiate_with_di(
+                handler_cls,
+                config=config,
+                services_by_type=services_by_type,
+            )
 
             self.logger.info(f"Handler创建成功: {handler_type}")
             return handler

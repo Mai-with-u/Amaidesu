@@ -10,21 +10,19 @@ ReplayDecider - 输入重放决策提供者
 - 不需要 AI 决策，只需要将用户输入直接传递到输出
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Literal
+from typing import Any, Dict, Literal
 
 from pydantic import Field
 
 from src.stages.decision.registry import decider
 from src.modules.config.schemas.base import BaseConfig
+from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import IntentPayload
 from src.modules.logging import get_logger
 from src.modules.types import Intent, IntentMetadata
+from src.modules.types.base.normalized_message import NormalizedMessage
 from src.modules.time_utils import now_ms
-
-if TYPE_CHECKING:
-    from src.modules.events.event_bus import EventBus
-    from src.modules.types.base.normalized_message import NormalizedMessage
 
 
 @decider("replay")
@@ -53,7 +51,7 @@ class ReplayDecider:
         type: Literal["replay"] = "replay"
         add_default_action: bool = Field(default=True, description="是否添加默认动作")
 
-    def __init__(self, config: Dict[str, Any], event_bus: "EventBus"):
+    def __init__(self, config: Dict[str, Any], event_bus: EventBus):
         """
         初始化 ReplayDecider
 

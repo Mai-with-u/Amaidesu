@@ -5,10 +5,8 @@
 """
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.types.base.normalized_message import NormalizedMessage
 
 
 @dataclass
@@ -18,7 +16,7 @@ class Command:
     name: str  # 命令名称，如 "chat"
     args: list[str]  # 参数列表，如 ["hello", "world"]
     raw_args: str  # 原始参数字符串，如 "hello world"
-    original_message: "NormalizedMessage"  # 原始标准化消息对象
+    original_message: NormalizedMessage  # 原始标准化消息对象
 
     def get_arg(self, index: int, default: str = "") -> str:
         """

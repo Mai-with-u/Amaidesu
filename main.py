@@ -7,7 +7,7 @@ import contextlib
 import os
 import signal
 import sys
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, Type
 
 from loguru import logger as loguru_logger
 from src.modules.dashboard.server import DashboardServer
@@ -20,7 +20,7 @@ from src.modules.logging import get_logger
 from src.modules.config.service import ConfigService
 from src.modules.llm.manager import LLMManager
 from src.modules.context import ContextService, ContextServiceConfig
-from src.modules.prompts import get_prompt_manager
+from src.modules.prompts import PromptManager, get_prompt_manager
 from src.modules.mcp import MCPServerConfig, MCPServerService
 
 from src.stages.decision import DeciderManager
@@ -185,14 +185,14 @@ def exit_if_config_created(was_created: bool) -> None:
 async def create_pipeline_manager(
     stage: str,
     config: Dict[str, Any],
-    context_services: Optional[Dict[str, Any]] = None,
+    services_by_type: Optional[Dict[Type[Any], Any]] = None,
 ) -> Optional[Any]:
     """加载指定阶段的 PipelineManager。
 
     Args:
         stage: 'input' 或 'output'
         config: 完整配置 dict
-        context_services: 可用服务字典（key=参数名, value=服务实例）
+        services_by_type: 可用服务字典（key=类型, value=服务实例），用于类型匹配注入
 
     Returns:
         PipelineManager 实例，或 None（如果配置中未启用）
@@ -202,7 +202,7 @@ async def create_pipeline_manager(
     if not stage_config:
         return None
 
-    manager = PipelineManager(stage=stage, context_services=context_services or {})
+    manager = PipelineManager(stage=stage, services_by_type=services_by_type or {})
     loaded = await manager.load_from_config(stage_config)
     if loaded > 0:
         logger.info(f"PipelineManager[{stage}] 加载完成，共 {loaded} 个管道。")
@@ -343,9 +343,9 @@ async def create_app_components(
     output_pipeline_manager = await create_pipeline_manager(
         stage="output",
         config=config,
-        context_services={
-            "llm_service": llm_service,
-            "prompt_service": prompt_manager,
+        services_by_type={
+            LLMManager: llm_service,
+            PromptManager: prompt_manager,
         },
     )
     output_manager: Optional[OutputHandlerManager] = None
@@ -353,9 +353,9 @@ async def create_app_components(
         if output_pipeline_manager is None:
             output_pipeline_manager = PipelineManager(
                 stage="output",
-                context_services={
-                    "llm_service": llm_service,
-                    "prompt_service": prompt_manager,
+                services_by_type={
+                    LLMManager: llm_service,
+                    PromptManager: prompt_manager,
                 },
             )
         output_manager = OutputHandlerManager(

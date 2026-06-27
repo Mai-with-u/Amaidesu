@@ -20,6 +20,34 @@ from src.modules.events.payloads.input import MessageReadyPayload
 from src.modules.types.base.normalized_message import NormalizedMessage
 
 
+# ==================== Fixtures ====================
+
+
+@pytest.fixture
+def mock_services():
+    """提供 mock 的可选服务，供 Decider 类型匹配注入使用。
+
+    LLMDecider 等会声明 LLMManager/PromptManager 等依赖，按类型匹配 DI
+    在服务字典中找不到时直接抛错，因此测试需要预先注入 mock 实例。
+    """
+    return {
+        "llm_service": MagicMock(),
+        "prompt_service": MagicMock(),
+        "config_service": MagicMock(),
+        "context_service": MagicMock(),
+    }
+
+
+def _make_manager(mock_event_bus, mock_services=None):
+    return DeciderManager(
+        event_bus=mock_event_bus,
+        llm_service=mock_services["llm_service"] if mock_services else None,
+        prompt_manager=mock_services["prompt_service"] if mock_services else None,
+        config_service=mock_services["config_service"] if mock_services else None,
+        context_service=mock_services["context_service"] if mock_services else None,
+    )
+
+
 # ==================== 辅助函数 ====================
 
 
@@ -59,10 +87,10 @@ class TestMultiDeciderConfigLoading:
     """测试多 Decider 配置加载"""
 
     @pytest.mark.asyncio
-    async def test_load_single_decider_from_enabled(self):
+    async def test_load_single_decider_from_enabled(self, mock_services):
         """测试从 enabled 列表加载单个 Decider"""
         mock_event_bus = MagicMock()
-        manager = DeciderManager(event_bus=mock_event_bus)
+        manager = _make_manager(mock_event_bus, mock_services)
 
         decision_config = {"enabled": ["maibot"]}
 
@@ -77,10 +105,10 @@ class TestMultiDeciderConfigLoading:
         assert manager.get_current_decider_name() == "maibot"
 
     @pytest.mark.asyncio
-    async def test_load_multiple_deciders_from_enabled_list(self):
+    async def test_load_multiple_deciders_from_enabled_list(self, mock_services):
         """测试从 enabled 列表加载多个 Decider（新格式）"""
         mock_event_bus = MagicMock()
-        manager = DeciderManager(event_bus=mock_event_bus)
+        manager = _make_manager(mock_event_bus, mock_services)
 
         decision_config = {"enabled": ["maibot", "llm"]}
 
@@ -96,10 +124,10 @@ class TestMultiDeciderConfigLoading:
         assert manager.get_current_decider_name() in ["maibot", "llm"]
 
     @pytest.mark.asyncio
-    async def test_load_multiple_deciders_with_decider_name_override(self):
+    async def test_load_multiple_deciders_with_decider_name_override(self, mock_services):
         """测试 decider_name 参数优先于配置"""
         mock_event_bus = MagicMock()
-        manager = DeciderManager(event_bus=mock_event_bus)
+        manager = _make_manager(mock_event_bus, mock_services)
 
         decision_config = {"enabled": ["maibot", "llm"]}
 
@@ -111,10 +139,10 @@ class TestMultiDeciderConfigLoading:
         assert "llm" in manager._deciders
 
     @pytest.mark.asyncio
-    async def test_load_deciders_with_specific_config(self):
+    async def test_load_deciders_with_specific_config(self, mock_services):
         """测试每个 Decider 使用自己的配置"""
         mock_event_bus = MagicMock()
-        manager = DeciderManager(event_bus=mock_event_bus)
+        manager = _make_manager(mock_event_bus, mock_services)
 
         decision_config = {
             "enabled": ["maibot", "llm"],
@@ -128,10 +156,10 @@ class TestMultiDeciderConfigLoading:
         assert len(manager._deciders) == 2
 
     @pytest.mark.asyncio
-    async def test_fallback_to_default_when_no_enabled_deciders(self):
+    async def test_fallback_to_default_when_no_enabled_deciders(self, mock_services):
         """测试没有启用 Decider 时使用默认值"""
         mock_event_bus = MagicMock()
-        manager = DeciderManager(event_bus=mock_event_bus)
+        manager = _make_manager(mock_event_bus, mock_services)
 
         # 空配置
         decision_config = {}
@@ -146,11 +174,11 @@ class TestMultiDeciderConfigLoading:
 class TestSpeechConflictWarning:
     """测试 Speech 冲突警告机制"""
 
-    def test_speech_conflict_warning_for_multiple_speech_deciders(self):
+    def test_speech_conflict_warning_for_multiple_speech_deciders(self, mock_services):
         """测试多个 speech-producing Decider 时的警告"""
         mock_event_bus = MagicMock()
         mock_logger = MagicMock()
-        manager = DeciderManager(event_bus=mock_event_bus)
+        manager = _make_manager(mock_event_bus, mock_services)
         manager.logger = mock_logger
 
         decider_names = ["maibot", "llm"]  # 都是 speech deciders
@@ -164,11 +192,11 @@ class TestSpeechConflictWarning:
         assert "maibot" in warning_msg
         assert "llm" in warning_msg
 
-    def test_no_warning_for_single_speech_decider(self):
+    def test_no_warning_for_single_speech_decider(self, mock_services):
         """测试单个 speech decider 时无警告"""
         mock_event_bus = MagicMock()
         mock_logger = MagicMock()
-        manager = DeciderManager(event_bus=mock_event_bus)
+        manager = _make_manager(mock_event_bus, mock_services)
         manager.logger = mock_logger
 
         decider_names = ["maibot"]  # 单个 speech decider
@@ -178,11 +206,11 @@ class TestSpeechConflictWarning:
         # 验证无警告
         mock_logger.warning.assert_not_called()
 
-    def test_no_warning_for_non_speech_deciders(self):
+    def test_no_warning_for_non_speech_deciders(self, mock_services):
         """测试无 speech decider 时无警告"""
         mock_event_bus = MagicMock()
         mock_logger = MagicMock()
-        manager = DeciderManager(event_bus=mock_event_bus)
+        manager = _make_manager(mock_event_bus, mock_services)
         manager.logger = mock_logger
 
         decider_names = ["command"]  # 非 speech decider
@@ -192,7 +220,7 @@ class TestSpeechConflictWarning:
         # 验证无警告
         mock_logger.warning.assert_not_called()
 
-    def test_speech_deciders_constant_contains_expected_deciders(self):
+    def test_speech_deciders_constant_contains_expected_deciders(self, mock_services):
         """验证 SPEECH_DECIDERS 常量包含正确的 Decider"""
         assert "maibot" in SPEECH_DECIDERS
         assert "llm" in SPEECH_DECIDERS
@@ -203,10 +231,10 @@ class TestMultiDeciderLifecycle:
     """测试多 Decider 生命周期管理"""
 
     @pytest.mark.asyncio
-    async def test_start_all_deciders(self):
+    async def test_start_all_deciders(self, mock_services):
         """测试启动所有 Decider"""
         mock_event_bus = MagicMock()
-        manager = DeciderManager(event_bus=mock_event_bus)
+        manager = _make_manager(mock_event_bus, mock_services)
 
         # 只测试 maibot，因为它有简单的 setup 不需要 LLM
         decision_config = {"enabled": ["maibot"]}
@@ -218,10 +246,10 @@ class TestMultiDeciderLifecycle:
         assert manager._decider_ready.get("maibot") is True
 
     @pytest.mark.asyncio
-    async def test_stop_all_deciders(self):
+    async def test_stop_all_deciders(self, mock_services):
         """测试停止所有 Decider"""
         mock_event_bus = MagicMock()
-        manager = DeciderManager(event_bus=mock_event_bus)
+        manager = _make_manager(mock_event_bus, mock_services)
 
         decision_config = {"enabled": ["maibot"]}
 
@@ -236,10 +264,10 @@ class TestMultiDeciderLifecycle:
         assert manager._decider_ready.get("maibot") is False
 
     @pytest.mark.asyncio
-    async def test_cleanup_all_deciders(self):
+    async def test_cleanup_all_deciders(self, mock_services):
         """测试清理所有 Decider"""
         mock_event_bus = MagicMock()
-        manager = DeciderManager(event_bus=mock_event_bus)
+        manager = _make_manager(mock_event_bus, mock_services)
 
         decision_config = {"enabled": ["maibot", "llm"]}
 
@@ -255,10 +283,10 @@ class TestMultiDeciderDecision:
     """测试多 Decider 决策触发"""
 
     @pytest.mark.asyncio
-    async def test_decide_triggers_all_deciders(self):
+    async def test_decide_triggers_all_deciders(self, mock_services):
         """测试 decide() 触发所有 Decider"""
         mock_event_bus = MagicMock()
-        manager = DeciderManager(event_bus=mock_event_bus)
+        manager = _make_manager(mock_event_bus, mock_services)
 
         decision_config = {"enabled": ["maibot", "llm"]}
 
@@ -276,10 +304,10 @@ class TestMultiDeciderDecision:
             decider.decide.assert_called_once_with(test_message)
 
     @pytest.mark.asyncio
-    async def test_decide_with_single_decider_backward_compat(self):
+    async def test_decide_with_single_decider_backward_compat(self, mock_services):
         """测试单 Decider 模式（向后兼容）"""
         mock_event_bus = MagicMock()
-        manager = DeciderManager(event_bus=mock_event_bus)
+        manager = _make_manager(mock_event_bus, mock_services)
 
         decision_config = {"enabled": ["maibot"]}
 
@@ -299,10 +327,10 @@ class TestBackwardCompatibility:
     """测试向后兼容性"""
 
     @pytest.mark.asyncio
-    async def test_get_current_decider_returns_first_decider(self):
+    async def test_get_current_decider_returns_first_decider(self, mock_services):
         """测试 get_current_decider() 返回第一个 Decider"""
         mock_event_bus = MagicMock()
-        manager = DeciderManager(event_bus=mock_event_bus)
+        manager = _make_manager(mock_event_bus, mock_services)
 
         decision_config = {"enabled": ["maibot", "llm"]}
 
@@ -314,10 +342,10 @@ class TestBackwardCompatibility:
         assert current.name in ["maibot", "llm"]
 
     @pytest.mark.asyncio
-    async def test_switch_provider_with_existing_decider(self):
+    async def test_switch_provider_with_existing_decider(self, mock_services):
         """测试切换到已加载的 Decider"""
         mock_event_bus = MagicMock()
-        manager = DeciderManager(event_bus=mock_event_bus)
+        manager = _make_manager(mock_event_bus, mock_services)
 
         decision_config = {"enabled": ["maibot", "llm"]}
 
@@ -329,10 +357,10 @@ class TestBackwardCompatibility:
         assert manager.get_current_decider_name() == "llm"
 
     @pytest.mark.asyncio
-    async def test_get_deciders_returns_all_loaded_deciders(self):
+    async def test_get_deciders_returns_all_loaded_deciders(self, mock_services):
         """测试 get_deciders() 返回所有加载的 Decider"""
         mock_event_bus = MagicMock()
-        manager = DeciderManager(event_bus=mock_event_bus)
+        manager = _make_manager(mock_event_bus, mock_services)
 
         decision_config = {"enabled": ["maibot", "llm"]}
 
@@ -345,10 +373,10 @@ class TestBackwardCompatibility:
         assert "llm" in deciders
 
     @pytest.mark.asyncio
-    async def test_get_decider_names_returns_name_list(self):
+    async def test_get_decider_names_returns_name_list(self, mock_services):
         """测试 get_decider_names() 返回名称列表"""
         mock_event_bus = MagicMock()
-        manager = DeciderManager(event_bus=mock_event_bus)
+        manager = _make_manager(mock_event_bus, mock_services)
 
         decision_config = {"enabled": ["maibot", "llm"]}
 
@@ -360,10 +388,10 @@ class TestBackwardCompatibility:
         assert set(names) == {"maibot", "llm"}
 
     @pytest.mark.asyncio
-    async def test_get_available_deciders(self):
+    async def test_get_available_deciders(self, mock_services):
         """测试 get_available_deciders() 返回所有可用 Decider"""
         mock_event_bus = MagicMock()
-        manager = DeciderManager(event_bus=mock_event_bus)
+        manager = _make_manager(mock_event_bus, mock_services)
 
         available = manager.get_available_deciders()
 
@@ -376,10 +404,10 @@ class TestEventSubscription:
     """测试事件订阅"""
 
     @pytest.mark.asyncio
-    async def test_subscribe_input_message_ready_once(self):
+    async def test_subscribe_input_message_ready_once(self, mock_services):
         """测试只订阅 INPUT_MESSAGE_RECEIVED 一次"""
         mock_event_bus = MagicMock()
-        manager = DeciderManager(event_bus=mock_event_bus)
+        manager = _make_manager(mock_event_bus, mock_services)
 
         decision_config = {"enabled": ["maibot", "llm"]}
 
@@ -394,10 +422,10 @@ class TestEventSubscription:
         )
 
     @pytest.mark.asyncio
-    async def test_unsubscribe_on_stop(self):
+    async def test_unsubscribe_on_stop(self, mock_services):
         """测试停止时取消订阅"""
         mock_event_bus = MagicMock()
-        manager = DeciderManager(event_bus=mock_event_bus)
+        manager = _make_manager(mock_event_bus, mock_services)
 
         decision_config = {"enabled": ["maibot"]}
 
@@ -419,10 +447,10 @@ class TestEdgeCases:
     """边界情况测试"""
 
     @pytest.mark.asyncio
-    async def test_decide_with_no_deciders(self):
+    async def test_decide_with_no_deciders(self, mock_services):
         """测试没有 Decider 时的 decide 调用"""
         mock_event_bus = MagicMock()
-        manager = DeciderManager(event_bus=mock_event_bus)
+        manager = _make_manager(mock_event_bus, mock_services)
 
         # 不调用 setup，直接调用 decide
         test_message = create_test_message()
@@ -431,10 +459,10 @@ class TestEdgeCases:
         await manager.decide(test_message)
 
     @pytest.mark.asyncio
-    async def test_decider_failure_does_not_affect_others(self):
+    async def test_decider_failure_does_not_affect_others(self, mock_services):
         """测试单个 Decider 失败不影响其他 Decider"""
         mock_event_bus = MagicMock()
-        manager = DeciderManager(event_bus=mock_event_bus)
+        manager = _make_manager(mock_event_bus, mock_services)
 
         decision_config = {"enabled": ["maibot", "llm"]}
 
@@ -453,10 +481,10 @@ class TestEdgeCases:
         manager._deciders["llm"].decide.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_empty_enabled_list_uses_default(self):
+    async def test_empty_enabled_list_uses_default(self, mock_services):
         """测试空 enabled 列表使用默认 Decider"""
         mock_event_bus = MagicMock()
-        manager = DeciderManager(event_bus=mock_event_bus)
+        manager = _make_manager(mock_event_bus, mock_services)
 
         decision_config = {"enabled": []}
 

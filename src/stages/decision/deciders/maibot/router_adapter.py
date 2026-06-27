@@ -6,22 +6,18 @@ Router 适配器
 - 提供简化的发送/接收接口
 """
 
-from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
-from maim_message import MessageBase
+from maim_message import MessageBase, Router
 
+from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
-
-if TYPE_CHECKING:
-    from maim_message import Router
-
-    from src.modules.events.event_bus import EventBus
 
 
 class RouterAdapter:
     """封装 maim_message Router，提供简化的发送和消息处理回调注册接口。"""
 
-    def __init__(self, router: "Router", event_bus: Optional["EventBus"] = None):
+    def __init__(self, router: Router, event_bus: Optional[EventBus] = None):
         self._router = router
         self._event_bus = event_bus
         self.logger = get_logger("RouterAdapter")
@@ -48,5 +44,5 @@ class RouterAdapter:
         self.logger.info("消息处理器已注册")
 
     @property
-    def router(self) -> Optional["Router"]:
+    def router(self) -> Optional[Router]:
         return self._router

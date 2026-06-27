@@ -118,9 +118,9 @@ class LLMFilterOutputPipeline(Pipeline["Intent"]):
 output_pipeline_manager = await create_pipeline_manager(
     stage="output",
     config=config,
-    context_services={
-        "llm_service": llm_service,
-        "prompt_service": prompt_manager,
+    services_by_type={
+        LLMManager: llm_service,
+        PromptManager: prompt_manager,
     },
 )
 ```
