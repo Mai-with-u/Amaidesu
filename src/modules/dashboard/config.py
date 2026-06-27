@@ -49,6 +49,14 @@ class DashboardConfig(BaseModel):
     max_history_messages: int = Field(default=1000, description="内存中保留的最大历史消息数")
     websocket_heartbeat: int = Field(default=30, description="WebSocket 心跳间隔（秒）")
     auto_open_browser: bool = Field(default=True, description="启动时自动打开浏览器")
+    dev_mode: bool = Field(
+        default=False,
+        description="开发模式：自动启动 Vite 开发服务器（端口由 vite_dev_port 指定），通常通过 CLI --dev-webui 启用",
+    )
+    vite_dev_port: int = Field(
+        default=60315,
+        description="Vite 开发服务器端口（需与 dashboard/vite.config.ts 中的 server.port 保持一致）",
+    )
 
     danmaku_widget: DanmakuWidgetConfigModel = Field(
         default_factory=DanmakuWidgetConfigModel,
