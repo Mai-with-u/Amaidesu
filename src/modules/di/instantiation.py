@@ -47,7 +47,7 @@ handler = instantiate_with_di(
 from __future__ import annotations
 
 import inspect
-from typing import Any, Dict, Type, Union, get_args, get_origin
+from typing import Any, Dict, Type, Union, get_args, get_origin, get_type_hints
 
 
 class DependencyInjectionError(Exception):
@@ -125,6 +125,14 @@ def instantiate_with_di(
     kwargs: Dict[str, Any] = {}
     remaining_services: Dict[Type[Any], Any] = dict(services_by_type)
 
+    # 解析 PEP 563 字符串注解（from __future__ import annotations）；
+    # inspect.signature() 默认不解析字符串，会导致 DI 类型匹配失败
+    try:
+        resolved_hints = get_type_hints(cls.__init__)
+    except Exception:
+        # 引用类型不在模块 globals 时回退到原始 annotation
+        resolved_hints = {}
+
     for name, param in sig.parameters.items():
         # 跳过 self
         if name == "self":
@@ -145,7 +153,8 @@ def instantiate_with_di(
         if param.kind is inspect.Parameter.VAR_POSITIONAL:
             continue
 
-        annotation = _resolve_annotation(param.annotation)
+        raw_annotation = resolved_hints.get(name, param.annotation)
+        annotation = _resolve_annotation(raw_annotation)
 
         # 没注解且没默认值 → 错误
         if annotation is None:

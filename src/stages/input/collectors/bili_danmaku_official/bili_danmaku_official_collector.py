@@ -43,7 +43,7 @@ class BiliDanmakuOfficialCollector:
         """Bilibili官方弹幕输入Collector配置"""
 
         type: Literal["bili_danmaku_official"] = "bili_danmaku_official"
-        id_code: str = Field(..., description="直播间ID代码")
+        id_code: str = Field(..., description="主播身份码")
         app_id: str = Field(..., description="应用ID")
         access_key: str = Field(..., description="访问密钥")
         access_key_secret: str = Field(..., description="访问密钥Secret")

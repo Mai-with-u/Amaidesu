@@ -255,12 +255,6 @@ async def create_app_components(
     decision_config = config.get("deciders", {})
     input_config = config.get("collectors", {})
 
-    # 这些导入必须在创建任何 Manager 之前完成，以确保 @collector/@decider/@handler 装饰器
-    # 已经将类注册到对应的 _COLLECTORS/_DECIDERS/_HANDLERS 字典中
-    import src.stages.input.collectors  # noqa: F401 — 触发 @collector 注册
-    import src.stages.decision.deciders  # noqa: F401 — 触发 @decider 注册
-    import src.stages.output.handlers  # noqa: F401 — 触发 @handler 注册
-
     if output_config:
         logger.info("检测到输出Handler配置，将启用输出协调器")
     else:
@@ -621,6 +615,13 @@ async def main() -> None:
 
     validate_config(config)
     exit_if_config_created(was_created)
+
+    # 触发阶段参与者装饰器注册（必须在 create_pipeline_manager() 之前执行，否则 *_REGISTRY 为空）
+    import src.stages.input.collectors  # noqa: F401
+    import src.stages.input.pipelines  # noqa: F401
+    import src.stages.decision.deciders  # noqa: F401
+    import src.stages.output.handlers  # noqa: F401
+    import src.stages.output.pipelines  # noqa: F401
 
     input_pipeline_manager = await create_pipeline_manager(stage="input", config=config)
 
