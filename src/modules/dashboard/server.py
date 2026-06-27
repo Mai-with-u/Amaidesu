@@ -6,6 +6,7 @@ Dashboard 服务器主类
 
 import asyncio
 import json
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -83,6 +84,10 @@ class DashboardServer:
         self._widget_clients: set[WebSocket] = set()
         self._danmaku_clients: set[WebSocket] = set()
         self._subtitle_clients: set[WebSocket] = set()
+
+        self.dev_mode: bool = dashboard_config.dev_mode
+        self.vite_dev_port: int = dashboard_config.vite_dev_port
+        self._vite_process: Optional[asyncio.subprocess.Process] = None
 
     async def start(self) -> None:
         """启动 Dashboard 服务器"""
@@ -178,12 +183,24 @@ class DashboardServer:
         self._is_running = True
         self.logger.info(f"Dashboard 已启动: {self.get_url()}")
 
-        # 启动 uvicorn
+        if self.dev_mode:
+            await self._start_vite_dev_server()
+
+        # 启动 uvicorn。
+        # 显式指定 sansio 实现避免触发 websockets.legacy 弃用警告。
+        # 注：uvicorn 0.49 仍未修复 auto.py 的 legacy 引用；uvicorn 0.50+ 将以字符串选项 'websockets-sansio' 公开支持，
+        # 届时应改为 ws="websockets-sansio" 并删除此处导入。
+        # 降级 websockets 到 13.x 不可行：uvicorn 引用了 websockets 14+ 才引入的 WebSocketServerProtocol。
+        from uvicorn.protocols.websockets.websockets_sansio_impl import (
+            WebSocketsSansIOProtocol,
+        )
+
         config = uvicorn.Config(
             app=self.app,
             host=self.host,
             port=self.port,
             log_level="warning",
+            ws=WebSocketsSansIOProtocol,
         )
         server = uvicorn.Server(config)
         self._server_task = asyncio.create_task(server.serve())
@@ -233,6 +250,9 @@ class DashboardServer:
                 pass
             self._server_task = None
 
+        if self._vite_process:
+            await self._stop_vite_dev_server()
+
     async def cleanup(self) -> None:
         """清理资源"""
         self.logger.info("Dashboard 清理资源中...")
@@ -252,6 +272,50 @@ class DashboardServer:
         if self.config_service and hasattr(self.config_service, "base_dir"):
             return str(Path(self.config_service.base_dir) / "config.toml")
         return None
+
+    async def _start_vite_dev_server(self) -> None:
+        """启动 Vite 开发服务器子进程（开发模式专用）"""
+        dashboard_dir = Path(__file__).parent.parent.parent.parent / "dashboard"
+        if not dashboard_dir.exists():
+            self.logger.error(f"dashboard 目录不存在: {dashboard_dir}")
+            return
+
+        npm_cmd = "npm.cmd" if sys.platform == "win32" else "npm"
+        self.logger.info(f"开发模式：启动 Vite 开发服务器 (cwd={dashboard_dir}, port={self.vite_dev_port})")
+        try:
+            self._vite_process = await asyncio.create_subprocess_exec(
+                npm_cmd,
+                "run",
+                "dev",
+                cwd=str(dashboard_dir),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            self.logger.info(f"Vite 已启动 (pid={self._vite_process.pid})，访问 http://localhost:{self.vite_dev_port}")
+        except FileNotFoundError:
+            self.logger.error(f"未找到 {npm_cmd}，请先安装 Node.js 与 npm")
+            self._vite_process = None
+        except Exception as e:
+            self.logger.error(f"启动 Vite 失败: {e}")
+            self._vite_process = None
+
+    async def _stop_vite_dev_server(self) -> None:
+        """终止 Vite 开发服务器子进程"""
+        if not self._vite_process:
+            return
+        self.logger.info(f"停止 Vite 开发服务器 (pid={self._vite_process.pid})...")
+        try:
+            self._vite_process.terminate()
+            try:
+                await asyncio.wait_for(self._vite_process.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                self.logger.warning("Vite 未在 5s 内退出，强制 kill")
+                self._vite_process.kill()
+                await self._vite_process.wait()
+        except Exception as e:
+            self.logger.error(f"停止 Vite 失败: {e}")
+        finally:
+            self._vite_process = None
 
     async def _run_heartbeat(self) -> None:
         """心跳任务"""

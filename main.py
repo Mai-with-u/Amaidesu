@@ -47,6 +47,11 @@ def parse_args() -> argparse.Namespace:
         metavar="MODULE_NAME",
         help="仅显示指定模块的 INFO/DEBUG 级别日志 (WARNING 及以上级别总是显示)",
     )
+    parser.add_argument(
+        "--dev-webui",
+        action="store_true",
+        help="启用 WebUI 开发模式：自动启动 Vite 开发服务器（HMR 热更新），浏览器将打开 http://localhost:60315",
+    )
     return parser.parse_args()
 
 
@@ -218,6 +223,7 @@ async def create_app_components(
     config: Dict[str, Any],
     input_pipeline_manager: Optional[PipelineManager],
     config_service: ConfigService,
+    dev_webui: bool = False,
 ) -> Tuple[
     ContextService,
     EventBus,
@@ -389,7 +395,7 @@ async def create_app_components(
             from src.modules.dashboard.config import DashboardConfig
             from src.modules.dashboard.server import DashboardServer
 
-            typed_dashboard_config = DashboardConfig(**dashboard_config)
+            typed_dashboard_config = DashboardConfig(**dashboard_config, dev_mode=dev_webui)
 
             dashboard_server = DashboardServer(
                 event_bus=event_bus,
@@ -406,7 +412,10 @@ async def create_app_components(
 
             # 自动打开浏览器
             if typed_dashboard_config.auto_open_browser:
-                dashboard_url = f"http://{typed_dashboard_config.host}:{typed_dashboard_config.port}"
+                if typed_dashboard_config.dev_mode:
+                    dashboard_url = f"http://localhost:{typed_dashboard_config.vite_dev_port}"
+                else:
+                    dashboard_url = f"http://{typed_dashboard_config.host}:{typed_dashboard_config.port}"
                 webbrowser.open(dashboard_url)
                 logger.info(f"已自动打开浏览器: {dashboard_url}")
         except ImportError as e:
@@ -639,7 +648,7 @@ async def main() -> None:
         decision_manager,
         dashboard_server,
         mcp_service,
-    ) = await create_app_components(config, input_pipeline_manager, config_service)
+    ) = await create_app_components(config, input_pipeline_manager, config_service, dev_webui=args.dev_webui)
 
     stop_event = asyncio.Event()
     orig_sigint, orig_sigterm = setup_signal_handlers(stop_event)
