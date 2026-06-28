@@ -337,15 +337,23 @@ class ObsControlHandler:
             self.logger.error(f"设置源可见性失败: {e}")
             return False
 
-    async def _handle_obs_command_event(self, payload: OBSCommandPayload):
+    async def _handle_obs_command_event(
+        self,
+        event_name: str,
+        payload: OBSCommandPayload,
+        source: str,
+    ) -> None:
         """
-        处理统一的 OBS 命令事件（供外部调用）
+        处理统一的 OBS 命令事件（供外部直接调用）
 
         根据 ``payload.action`` 分发到对应的子命令处理逻辑。
 
         Args:
+            event_name: 事件名（EventBus 必需参数，当前未使用）
             payload: OBS 命令事件 Payload
+            source: 事件源标识（EventBus 必需参数，当前未使用）
         """
+        _ = event_name, source  # EventBus 契约签名要求,业务侧暂未使用
         action = payload.action
 
         if action == "send_text":

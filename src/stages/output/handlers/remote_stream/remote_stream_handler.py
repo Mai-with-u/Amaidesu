@@ -316,7 +316,6 @@ class RemoteStreamHandler:
             self.event_bus.off(
                 CoreEvents.OUTPUT_OBS_COMMAND,
                 self._handle_image_request,
-                OBSCommandPayload,
             )
 
         self._is_connected = False
@@ -679,8 +678,20 @@ class RemoteStreamHandler:
 
     # ===== 事件处理 =====
 
-    async def _handle_image_request(self, payload: OBSCommandPayload):
-        """处理图像请求事件"""
+    async def _handle_image_request(
+        self,
+        event_name: str,
+        payload: OBSCommandPayload,
+        source: str,
+    ) -> None:
+        """处理图像请求事件
+
+        Args:
+            event_name: 事件名（EventBus 必需参数，当前未使用）
+            payload: OBS 命令事件 Payload
+            source: 事件源标识（EventBus 必需参数，当前未使用）
+        """
+        _ = event_name, source  # EventBus 契约签名要求,业务侧暂未使用
         self.logger.debug(f"收到图像请求: {payload}")
         if payload.action != "request_image":
             return

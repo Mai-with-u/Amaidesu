@@ -3,7 +3,7 @@
 import asyncio
 from typing import Any, Dict, Literal, Optional
 
-from maim_message import MessageBase, RouteConfig, Router, TargetConfig
+from maim_message import MessageBase, RouteConfig, Router, Seg, TargetConfig
 from pydantic import Field
 
 from src.modules.config.schemas.base import BaseConfig
@@ -196,7 +196,11 @@ class MaiBotDecider:
         if seg.type == "text" and isinstance(seg.data, str):
             speech = seg.data
         else:
-            speech = f"[{seg.type}] {seg.data}"
+            speech = self._extract_speech_from_seg(seg)
+
+        if speech is None:
+            self.logger.debug(f"收到 MaiBot 消息但无可朗读内容，已跳过: message_id={message_id}, seg_type={seg.type}")
+            return
 
         self.logger.debug(f"收到 MaiBot 消息: message_id={message_id}, speech={speech[:50]}")
 
@@ -213,6 +217,39 @@ class MaiBotDecider:
         )
 
         await self._publish_intent(intent)
+
+    def _extract_speech_from_seg(self, seg: Seg) -> str | None:
+        """
+        从 MaiBot 的 Seg 中提取可朗读的文本。
+
+        支持的 Seg.type:
+        - ``text``: 直接返回 ``data`` 字符串
+        - ``seglist``: 递归展开子 Seg, 拼接所有 ``text`` 段
+          (这是 MaiBot-v1.0.0 出站回复的标准格式)
+        - 其他 (``image``/``emoji``/``voice``/``at``/``reply``/``dict``):
+          返回 ``None``, 调用方应跳过该消息(避免 TTS 朗读占位符)
+
+        Args:
+            seg: maim_message.Seg 实例
+
+        Returns:
+            提取出的文本;若无可朗读内容则返回 ``None``
+        """
+        if seg.type == "text" and isinstance(seg.data, str):
+            return seg.data
+
+        if seg.type == "seglist" and isinstance(seg.data, list):
+            text_parts: list[str] = []
+            for sub in seg.data:
+                if sub.type == "text" and isinstance(sub.data, str):
+                    text_parts.append(sub.data)
+                elif sub.type == "seglist":
+                    inner = self._extract_speech_from_seg(sub)
+                    if inner:
+                        text_parts.append(inner)
+            return "\n".join(text_parts) if text_parts else None
+
+        return None
 
     async def _publish_intent(self, intent: Intent) -> None:
         if not self._event_bus:
