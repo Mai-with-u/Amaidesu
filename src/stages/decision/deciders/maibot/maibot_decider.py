@@ -127,8 +127,8 @@ class MaiBotDecider:
                 "source": "amaidesu",
                 "original_platform": normalized.source,
                 "original_message_id": message_id,
-                "account_id": "amaidesu",
-                "scope": "live_room",
+                "platform_io_account_id": "amaidesu",
+                "platform_io_scope": "live_room",
             }
 
             group_info = GroupInfo(
@@ -142,7 +142,7 @@ class MaiBotDecider:
                     message_id=message_id,
                     platform=self.platform,
                     user_info=user_info,
-                    time=normalized.timestamp_ms,
+                    time=normalized.timestamp_ms / 1000.0,
                     format_info=format_info,
                     additional_config=additional_config,
                     group_info=group_info,
