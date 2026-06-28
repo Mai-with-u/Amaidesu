@@ -378,68 +378,83 @@ AudioStreamChannel 支持多种背压策略：
 
 | 类型 | 用途 | 定义位置 |
 |------|------|---------|
-| `EmotionType` | 情感类型枚举 | `src/modules/types/intent.py` |
-| `ActionType` | 动作类型枚举 | `src/modules/types/intent.py` |
-| `IntentAction` | 意图动作模型 | `src/modules/types/intent.py` |
-| `Intent` | 完整决策意图类 | `src/modules/types/intent.py` |
-| `SourceContext` | 输入源上下文 | `src/modules/types/intent.py` |
+| `Emotion` | 全局情感枚举(12 个值,str-Enum) | `src/modules/types/emotion_vocab.py` |
+| `Intent` | 决策意图(平台无关,核心数据结构) | `src/modules/types/intent.py` |
+| `IntentMetadata` | 意图元数据(来源 + 决策时间) | `src/modules/types/intent.py` |
+| `IntentAction` | 意图动作(全限定名 `<handler>.<action>` + parameters) | `src/modules/types/intent.py` |
+| `IntentEmotion` | 意图情绪(枚举名 + intensity 0-1) | `src/modules/types/intent.py` |
 
 ### 类型定义
 
-#### EmotionType（情感类型枚举）
+#### Emotion（全局情感枚举，12 个值）
 
 ```python
-class EmotionType(str, Enum):
-    """情感类型枚举"""
+class Emotion(str, Enum):
+    """全局情感枚举（共享给所有 avatar handler）。"""
 
-    NEUTRAL = "neutral"      # 中性
-    HAPPY = "happy"        # 开心
-    SAD = "sad"            # 悲伤
-    ANGRY = "angry"        # 生气
-    SURPRISED = "surprised" # 惊讶
-    LOVE = "love"          # 喜爱
-    SHY = "shy"            # 害羞
-    EXCITED = "excited"    # 兴奋
-    CONFUSED = "confused"  # 困惑
-    SCARED = "scared"      # 害怕
+    NEUTRAL = "neutral"       # 中性
+    HAPPY = "happy"           # 开心
+    SAD = "sad"               # 悲伤
+    ANGRY = "angry"           # 生气
+    SURPRISED = "surprised"   # 惊讶
+    SHY = "shy"               # 害羞
+    LOVE = "love"             # 喜爱
+    EXCITED = "excited"       # 兴奋
+    CONFUSED = "confused"     # 困惑
+    SCARED = "scared"         # 害怕
+    THINKING = "thinking"     # 思考
+    RELAXED = "relaxed"       # 放松
 ```
 
-#### ActionType（动作类型枚举）
+> **关键设计**:强制 12 个枚举值,`IntentEmotion.name` 通过 `field_validator` 校验
+> 必须在枚举里（handler 不接受 LLM 自由发挥的情绪名）。
+
+#### Intent（决策意图，结构化 Pydantic）
 
 ```python
-class ActionType(str, Enum):
-    """动作类型枚举"""
+class IntentMetadata(BaseModel):
+    """意图元数据:只保留来源 + 决策时间（毫秒）。"""
 
-    EXPRESSION = "expression"  # 表情
-    HOTKEY = "hotkey"          # 热键
-    EMOJI = "emoji"           # Emoji 表情
-    BLINK = "blink"           # 眨眼
-    NOD = "nod"               # 点头
-    SHAKE = "shake"           # 摇头
-    WAVE = "wave"             # 挥手
-    CLAP = "clap"             # 鼓掌
-    STICKER = "sticker"       # 贴图
-    MOTION = "motion"         # 动作
-    CUSTOM = "custom"         # 自定义
-    GAME_ACTION = "game_action" # 游戏动作
-    NONE = "none"             # 无动作
-```
+    model_config = ConfigDict(extra="forbid")
 
-#### Intent（决策意图）
+    source_id: str          # 决策来源,如 'maibot_api' / 'command' / 'dashboard_debug'
+    decision_time_ms: int   # 决策时刻（Unix 毫秒）
 
-```python
+class IntentAction(BaseModel):
+    """意图中的动作（结构化）:全限定名 + 任意 parameters。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str                            # 全限定 action 名,格式 `<handler>.<local_action>`
+    parameters: Dict[str, Any] = {}      # 动作参数（handler 内部 Pydantic 校验）
+
+class IntentEmotion(BaseModel):
+    """意图中的情绪（结构化）:枚举名 + 强度。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str               # 必须是 Emotion 枚举值之一（由 field_validator 强制）
+    intensity: float = 0.5  # [0.0, 1.0],默认 0.5（中等）
+
 class Intent(BaseModel):
-    """决策意图 - Decision 阶段的核心输出"""
+    """决策意图（平台无关,核心数据结构）。"""
 
-    id: str                           # 唯一标识符
-    source_context: Optional[SourceContext]  # 输入源上下文
-    original_text: str                # 原始输入文本
-    response_text: str                # AI 回复文本
-    emotion: EmotionType              # 情感类型
-    actions: List[IntentAction]       # 动作列表
-    metadata: Dict[str, Any]          # 元数据
-    timestamp: float                  # 时间戳
+    model_config = ConfigDict(extra="forbid")
+
+    speech: Optional[str] = None             # AI 要说的话
+    metadata: IntentMetadata                 # 元数据（必填）
+    emotion: Optional[IntentEmotion] = None  # 情绪（可选）
+    action: Optional[IntentAction] = None    # 动作（可选）
 ```
+
+> **破坏性升级**:`context` / `structured_params` / `parser_type` / `llm_model` /
+> `replay_count` / `extra` / `alias` / `model_config`（原 config 字段）全部删除。
+> 全部 `BaseModel` 启用 `extra="forbid"`,HTTP / EventBus / CLI 入口**多层一致**
+> 严格拒绝旧字段。
+>
+> **action.name 全限定**:`<handler>.<local_action>`（如 `warudo.wave`）。
+> Manager 在 `get_all_capabilities()` 时自动加前缀;handler 内部 schema 只关心
+> `local_action`。
 
 ### 如何添加新的共享类型
 
@@ -616,4 +631,4 @@ flowchart LR
 
 ---
 
-*最后更新：2026-06-23*
+*最后更新：2026-06-28（破坏性升级：删 EmotionType/ActionType/SourceContext，新增结构化 Pydantic 模型 + Emotion 枚举）*

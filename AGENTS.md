@@ -123,27 +123,30 @@ self.audio_stream_channel = audio_stream_channel  # 构造器注入
 
 ### 共享类型
 
-以下类型被多个阶段共享，因此放在 `src/modules/types/` 中避免循环依赖：
+以下类型被 Input/Decision/Output 多个阶段共享，因此放在 `src/modules/types/` 中避免循环依赖：
 
 | 类型 | 用途 | 定义位置 |
 |------|------|---------|
-| `EmotionType` | 情感类型枚举 | `src/modules/types/intent.py` |
-| `ActionType` | 动作类型枚举 | `src/modules/types/intent.py` |
-| `IntentAction` | 意图动作模型 | `src/modules/types/intent.py` |
+| `Emotion` | 全局情感枚举(12 个值,str-Enum) | `src/modules/types/emotion_vocab.py` |
+| `Intent` | 决策意图(平台无关,核心数据结构) | `src/modules/types/intent.py` |
+| `IntentMetadata` | 意图元数据(来源 + 决策时间) | `src/modules/types/intent.py` |
+| `IntentAction` | 意图动作(全限定名 `<handler>.<action>` + parameters) | `src/modules/types/intent.py` |
+| `IntentEmotion` | 意图情绪(枚举名 + intensity 0-1) | `src/modules/types/intent.py` |
 
 **为什么这些类型在 Modules 层？**
 - 被 Input/Decision/Output 多个阶段使用
 - 如果放在任何一个阶段中，会导致其他阶段依赖它
 - 放在 Modules 层可以避免循环依赖
 
-**Decision 阶段特定的类型**：
-以下类型位于 `src/modules/types/intent.py` 中（共享类型）：
-- `Intent`: 完整的决策意图类（Decision 阶段的核心输出）
-- `SourceContext`: 输入源上下文
+**破坏性升级（2026-06-28）**：
+- 已删除: `EmotionType` / `ActionType` / `SourceContext`（旧 string 字段）
+- 新结构: 全部 Pydantic 模型 + `extra="forbid"`，HTTP / EventBus / CLI 入口**多层一致**严格拒绝旧字段
+- `IntentEmotion.name` 由 `field_validator` 强制必须在 12 个 Emotion 枚举值内
+- `IntentAction.name` 全限定格式: `<handler>.<local_action>`(如 `warudo.wave`),由 `Manager.get_all_capabilities()` 自动加前缀
 
 **如何添加新的共享类型？**
 1. 评估类型是否真的需要跨多个阶段使用
-2. 如果是，添加到 `src/modules/types/` 中的合适文件
+2. 如果是，添加到 `src/modules/types/` 中的合适文件（共享枚举放 `emotion_vocab.py`，Pydantic 模型放 `intent.py`）
 3. 更新相关阶段的导入语句
 4. 运行架构测试验证
 
