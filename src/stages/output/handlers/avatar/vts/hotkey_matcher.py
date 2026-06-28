@@ -108,7 +108,8 @@ class HotkeyMatcher:
         hotkey_str = "\n".join([f"- {hotkey.get('name', '')}" for hotkey in self.hotkey_list])
 
         if not self._prompt_service:
-            raise ValueError("prompt_service 未注入，请检查 Handler 初始化配置")
+            self.logger.debug("prompt_service 未注入,LLM hotkey matching 降级为关闭")
+            return None
         prompt = self._prompt_service.render("output/vts_hotkey", text=text, hotkey_list_str=hotkey_str)
 
         try:

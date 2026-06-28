@@ -211,11 +211,9 @@ class MaiBotDecider:
             emotion=None,
             action=None,
             speech=speech,
-            context=None,
             metadata=IntentMetadata(
                 source_id="maibot",
                 decision_time_ms=now_ms(),
-                parser_type="text_forward",
             ),
         )
 

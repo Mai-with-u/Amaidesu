@@ -20,7 +20,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import IntentPayload
 from src.modules.logging import get_logger
-from src.modules.types import Intent, IntentMetadata
+from src.modules.types import Intent, IntentAction, IntentEmotion, IntentMetadata
 from src.modules.types.base.normalized_message import NormalizedMessage
 from src.modules.time_utils import now_ms
 
@@ -74,18 +74,15 @@ class ReplayDecider:
         self._total_messages += 1
         self.logger.debug(f"重放消息: {normalized_message.text[:50]}...")
 
-        action = "眨眼" if self.add_default_action else None
+        action_obj = IntentAction(name="blink", parameters={}) if self.add_default_action else None
 
         intent = Intent(
-            emotion="平静",
-            action=action,
+            emotion=IntentEmotion(name="neutral", intensity=0.5),
+            action=action_obj,
             speech=normalized_message.text,
-            context=f"来源: {normalized_message.source}",
             metadata=IntentMetadata(
                 source_id=normalized_message.source,
                 decision_time_ms=now_ms(),
-                parser_type="replay",
-                replay_count=self._total_messages,
             ),
         )
 

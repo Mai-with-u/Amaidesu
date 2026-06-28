@@ -24,7 +24,7 @@ from src.modules.events.payloads import IntentPayload
 from src.modules.llm.manager import LLMManager
 from src.modules.logging import get_logger
 from src.modules.prompts.manager import PromptManager
-from src.modules.types import Intent, IntentMetadata
+from src.modules.types import Intent, IntentAction, IntentEmotion, IntentMetadata
 from src.modules.types.base.normalized_message import NormalizedMessage
 from src.modules.time_utils import now_ms
 
@@ -303,37 +303,35 @@ class LLMDecider:
         return cleaned
 
     def _create_full_intent(self, parsed_data: Dict[str, Any], normalized_message: "NormalizedMessage") -> Intent:
-        """
-        从解析的 JSON 数据创建完整 Intent（使用新的自然语言结构）
+        """从 LLM 解析的 JSON 创建 Intent。
 
-        Args:
-            parsed_data: LLM 返回的解析后 JSON 数据
-            normalized_message: 原始 NormalizedMessage
-
-        Returns:
-            完整的 Intent 对象（使用自然语言 emotion/action）
+        LLM 当前 prompt 仍输出自然语言 emotion/action,这里做向后兼容:
+        - emotion: 12 个 Emotion 枚举值,无效降级为 neutral + warn
+        - action: 字符串直接当成本地 action 名传给 IntentAction(后续 LLM prompt
+          升级后会输出结构化 `<handler>.<action>`)
         """
 
-        # 提取字段 - 新结构使用自然语言字符串
         speech = parsed_data.get("text", "") or parsed_data.get("speech", "")
-        emotion = parsed_data.get("emotion", "neutral").lower()
-        action = parsed_data.get("action", "")  # 自然语言动作描述
-        context = parsed_data.get("context", "")
+        emotion_raw = str(parsed_data.get("emotion", "neutral")).lower()
+        action_raw = str(parsed_data.get("action", "")).strip()
 
-        # 如果没有动作，添加默认眨眼动作（自然语言描述）
-        if not action:
-            action = "眨眼"
+        try:
+            emotion_obj: IntentEmotion | None = IntentEmotion(name=emotion_raw, intensity=0.5)
+        except Exception:
+            self.logger.warning(f"LLM 情绪 '{emotion_raw}' 不在枚举中,降级为 neutral")
+            emotion_obj = IntentEmotion(name="neutral", intensity=0.5)
 
-        # 创建 Intent - 使用新的自然语言结构
+        action_obj: IntentAction | None = None
+        if action_raw:
+            action_obj = IntentAction(name=action_raw, parameters={})
+
         return Intent(
-            emotion=emotion,
-            action=action,
+            emotion=emotion_obj,
+            action=action_obj,
             speech=speech,
-            context=context,
             metadata=IntentMetadata(
                 source_id="llm",
                 decision_time_ms=now_ms(),
-                parser_type="llm_structured",
             ),
         )
 
@@ -386,14 +384,12 @@ class LLMDecider:
         """
 
         intent = Intent(
-            emotion="neutral",
-            action="眨眼",
+            emotion=IntentEmotion(name="neutral", intensity=0.5),
+            action=IntentAction(name="blink", parameters={}),
             speech=text,
-            context="",
             metadata=IntentMetadata(
                 source_id="llm",
                 decision_time_ms=now_ms(),
-                parser_type="llm_fallback",
             ),
         )
 

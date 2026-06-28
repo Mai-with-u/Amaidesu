@@ -36,7 +36,8 @@ from src.modules.pipeline import PipelineManager
 from src.modules.prompts.manager import PromptManager
 from src.modules.streaming.audio_stream_channel import AudioStreamChannel
 from src.modules.tts.audio_device_manager import AudioDeviceManager
-from src.stages.output.registry import _HANDLERS
+from src.stages.output.registry import _HANDLERS, SupportsCapabilities
+from src.stages.output.capabilities import UnifiedActionEntry, UnifiedCapabilitiesView
 
 
 class RenderResult(BaseModel):
@@ -290,6 +291,34 @@ class OutputHandlerManager:
                 }
             )
         return result
+
+    def get_all_capabilities(self) -> UnifiedCapabilitiesView:
+        """汇总所有支持 `SupportsCapabilities` 的 handler 的 action 列表。
+
+        - 自动给 action name 加 `f"{handler_name}.{local_name}"` 前缀(handler 不感知前缀)
+        - 不支持 `SupportsCapabilities` 的 handler 静默跳过
+        - handler `get_capabilities()` 抛异常时,warn + 跳过(不传播)
+        - 不缓存(用户决定无缓存)
+        """
+        unified_actions: list[UnifiedActionEntry] = []
+        for handler in self.handlers:
+            handler_name = self._handler_names.get(handler, "unknown")
+            if not isinstance(handler, SupportsCapabilities):
+                continue
+            try:
+                caps = handler.get_capabilities()
+            except Exception as e:
+                self.logger.warning(f"Handler '{handler_name}' get_capabilities failed: {e}")
+                continue
+            for action_spec in caps.actions:
+                unified_actions.append(
+                    UnifiedActionEntry(
+                        name=f"{handler_name}.{action_spec.name}",
+                        description=action_spec.description,
+                        parameters=action_spec.parameters.copy(),
+                    )
+                )
+        return UnifiedCapabilitiesView(actions=unified_actions)
 
     def get_component_summaries(self) -> list[dict[str, Any]]:
         """Dashboard 协议接口：返回 Output 阶段参与者状态摘要字典列表"""

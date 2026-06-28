@@ -14,7 +14,10 @@
 - 这些装饰器替换了旧的 Collector/Decider/Handler 注册系统
 """
 
-from typing import TypeVar, Type, Dict
+from typing import TYPE_CHECKING, Dict, Protocol, Type, TypeVar, runtime_checkable
+
+if TYPE_CHECKING:
+    from src.stages.output.capabilities import HandlerCapabilities
 
 T = TypeVar("T")
 
@@ -88,3 +91,27 @@ def list_handlers() -> list[str]:
         Handler 名称列表
     """
     return list(_HANDLERS.keys())
+
+
+@runtime_checkable
+class SupportsCapabilities(Protocol):
+    """声明 handler 实现了 `get_capabilities()` 的 Protocol。
+
+    - **只强制** `get_capabilities()` 方法,handler 内部可自由选填
+      `_ACTION_PARAMS_SCHEMA` / `_EMOTION_KEYS` 等约定属性
+    - 用 `isinstance(h, SupportsCapabilities)` 做运行时检查
+    - 用于 `OutputHandlerManager.get_all_capabilities()` 决定是否给该 handler
+      加前缀并展开其 actions
+    """
+
+    def get_capabilities(self) -> "HandlerCapabilities":
+        """返回 handler 暴露的能力(本地 action 名)。"""
+        ...
+
+
+__all__ = [
+    "handler",
+    "get_handler",
+    "list_handlers",
+    "SupportsCapabilities",
+]

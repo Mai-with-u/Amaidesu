@@ -24,7 +24,7 @@ from src.modules.events.payloads.decision import IntentPayload
 from src.modules.events.payloads.input import MessageReadyPayload
 from src.modules.logging import get_logger
 from src.modules.types.base.normalized_message import NormalizedMessage
-from src.modules.types.intent import Intent, IntentMetadata
+from src.modules.types.intent import Intent, IntentAction, IntentEmotion, IntentMetadata
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
@@ -100,15 +100,26 @@ async def inject_intent(
         return InjectIntentResponse(success=False, error="Event bus not available")
 
     try:
+        try:
+            emotion_obj: IntentEmotion | None = IntentEmotion(name=str(request.emotion).lower(), intensity=0.5)
+        except Exception:
+            emotion_obj = IntentEmotion(name="neutral", intensity=0.5)
+
+        action_obj: IntentAction | None = None
+        if request.actions:
+            first = request.actions[0]
+            action_obj = IntentAction(
+                name=str(first.get("type", "blink")),
+                parameters=first.get("params", {}) or {},
+            )
+
         intent = Intent(
-            emotion=request.emotion,
-            action=request.actions[0].get("type", "眨眼") if request.actions else "眨眼",
+            emotion=emotion_obj,
+            action=action_obj,
             speech=request.response_text or request.text,
-            context=f"来源: {request.source}",
             metadata=IntentMetadata(
                 source_id=request.source,
                 decision_time_ms=int(datetime.now().timestamp() * 1000),
-                parser_type="dashboard_debug",
             ),
         )
 

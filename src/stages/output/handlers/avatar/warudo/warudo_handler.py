@@ -17,13 +17,11 @@ import asyncio
 import json
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
-from src.modules.llm.manager import LLMManager
 from src.modules.logging import get_logger
-from src.modules.prompts.manager import PromptManager
 from src.modules.streaming.audio_stream_channel import (
     AudioStreamChannel,
     BackpressureStrategy,
@@ -102,40 +100,58 @@ class WarudoHandler(AvatarHandlerBase):
 
     # ==================== Warudo API 参数映射 ====================
 
-    EMOTION_KEYS = {
-        "happy",
-        "sad",
-        "angry",
-        "surprised",
-        "shy",
-        "love",
-        "neutral",
+    _EMOTION_KEYS = frozenset(
+        {
+            "happy",
+            "sad",
+            "angry",
+            "surprised",
+            "shy",
+            "love",
+            "neutral",
+        }
+    )
+
+    class _WarudoActionParams(BaseModel):  # type: ignore[name-defined]  # noqa: F821
+        duration_ms: int = Field(default=1500, ge=100, le=10000)
+
+    _ACTION_PARAMS_SCHEMA: dict[str, type] = {
+        "blink": _WarudoActionParams,
+        "nod": _WarudoActionParams,
+        "shake": _WarudoActionParams,
+        "wave": _WarudoActionParams,
+        "clap": _WarudoActionParams,
+        "throw_fish": _WarudoActionParams,
+        "throw_fish_big": _WarudoActionParams,
+        "typing_on": _WarudoActionParams,
+        "typing_off": _WarudoActionParams,
+        "head_action": _WarudoActionParams,
     }
-    ACTION_KEYS = {
-        # Hotkey 类
-        "blink",
-        "nod",
-        "shake",
-        "wave",
-        "clap",
-        # Body action 类
-        "throw_fish",
-        "throw_fish_big",
-        "typing_on",
-        "typing_off",
-        # Head action 类
-        "head_action",
-    }
+
+    def get_capabilities(self):
+        from src.stages.output.capabilities import (
+            ActionSpec,
+            HandlerCapabilities,
+            _pydantic_to_param_spec,
+        )
+
+        actions = [
+            ActionSpec(
+                name=local,
+                description=f"Warudo {local} action",
+                parameters=_pydantic_to_param_spec(cls),
+            )
+            for local, cls in self._ACTION_PARAMS_SCHEMA.items()
+        ]
+        return HandlerCapabilities(actions=actions)
 
     def __init__(
         self,
         config: Dict[str, Any],
         event_bus: EventBus,
         audio_stream_channel: Optional[AudioStreamChannel] = None,
-        llm_service: Optional[LLMManager] = None,
-        prompt_service: Optional[PromptManager] = None,
     ):
-        super().__init__(config, event_bus, audio_stream_channel, llm_service, prompt_service)
+        super().__init__(config, event_bus, audio_stream_channel)
         self.logger = get_logger(self.__class__.__name__)
 
         # 配置验证
@@ -265,8 +281,16 @@ class WarudoHandler(AvatarHandlerBase):
 
     # ==================== AvatarHandlerBase 抽象方法实现 ====================
 
-    async def _adapt_intent(self, intent: "Intent") -> Dict[str, Any]:
-        """适配 Intent 为 Warudo 参数(三字典分类)"""
+    async def _adapt_intent(self, intent: "Intent") -> Optional[Dict[str, Any]]:
+        """适配 Intent 为 Warudo 参数(三字典分类)。
+
+        新 Intent 结构:
+        - `intent.emotion` 是 `IntentEmotion` 对象,`name` 已是全局枚举值
+        - `intent.action` 是 `IntentAction` 对象,`name` 是 handler 前缀化的 `<handler>.<action>`,
+          这里只取点号后的本地名
+
+        返回 None 表示跳过(本地 action 不被识别 / 参数校验失败)。
+        """
         result: Dict[str, Any] = {
             "expressions": {},
             "hotkeys": [],
@@ -274,21 +298,34 @@ class WarudoHandler(AvatarHandlerBase):
             "head_actions": [],
         }
 
-        # 1. 情感 -> 表情参数
-        emotion_str = intent.emotion or "neutral"
-        if emotion_str in self._emotion_map:
-            result["expressions"] = self._emotion_map[emotion_str].copy()
-            self.logger.debug(f"情感映射: {emotion_str} -> {result['expressions']}")
+        if intent.emotion is not None:
+            emotion_str = intent.emotion.name
+            if emotion_str in self._emotion_map:
+                scale = float(intent.emotion.intensity)
+                base = self._emotion_map[emotion_str]
+                result["expressions"] = {k: v * scale for k, v in base.items()}
+                self.logger.debug(f"情感映射: {emotion_str} (intensity={scale}) -> {result['expressions']}")
 
-        # 2. Action -> 三类分别查表
-        if intent.action:
-            action_type_str = intent.action
-            if action_type_str in self._action_hotkey_map:
-                result["hotkeys"].append(self._action_hotkey_map[action_type_str])
-            elif action_type_str in self._action_body_map:
-                result["body_actions"].append(self._action_body_map[action_type_str])
-            elif action_type_str in self._action_head_map:
-                result["head_actions"].append(self._action_head_map[action_type_str])
+        if intent.action is not None:
+            local_name = intent.action.name.split(".", 1)[-1]
+            schema_cls = self._ACTION_PARAMS_SCHEMA.get(local_name)
+            if schema_cls is None:
+                self.logger.debug(f"action '{local_name}' 不在 warudo _ACTION_PARAMS_SCHEMA 中,跳过")
+                return None
+            try:
+                schema_cls.model_validate(intent.action.parameters or {})
+            except Exception as e:
+                self.logger.warning(f"warudo action '{local_name}' 参数校验失败: {e}")
+                return None
+
+            if local_name in self._action_hotkey_map:
+                result["hotkeys"].append(self._action_hotkey_map[local_name])
+            elif local_name in self._action_body_map:
+                result["body_actions"].append(self._action_body_map[local_name])
+            elif local_name in self._action_head_map:
+                result["head_actions"].append(self._action_head_map[local_name])
+            else:
+                return None
 
         return result
 
@@ -603,26 +640,6 @@ class WarudoHandler(AvatarHandlerBase):
             self.logger.debug(f"字幕已推送: {speech[:50]}...")
         except Exception as e:
             self.logger.error(f"字幕推送失败: {e}")
-
-    # ==================== handle() override 注入字幕推送 ====================
-
-    async def handle(self, intent: "Intent") -> None:
-        """执行意图,翻译后适配渲染到平台(override 基类,在 render 后推送字幕)"""
-        if not self._is_connected:
-            self.logger.warning("未连接,跳过渲染")
-            return
-
-        try:
-            translated_intent = await self._translate_with_llm(intent)
-            params = await self._adapt_intent(translated_intent)
-            await self._render_to_platform(params)
-
-            # 字幕推送(only-shot 退化模式)
-            if translated_intent.speech:
-                user_name = translated_intent.metadata.source_id if translated_intent.metadata else "MaiBot"
-                await self.push_subtitle(translated_intent.speech, user_name)
-        except Exception as e:
-            self.logger.error(f"渲染失败: {e}", exc_info=True)
 
     # ==================== 状态联动(供其他模块/测试调用) ====================
 

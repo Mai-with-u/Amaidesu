@@ -1,76 +1,97 @@
-"""跨域共享的 Intent 相关类型
+"""跨阶段共享的 Intent 类型(结构化版本)。
 
-这些类型被 Input/Decision/Output 阶段 共享，
-因此放在 src/modules/types/ 中避免循环依赖。
+设计原则:
+- `IntentAction` / `IntentEmotion` 是 Pydantic 模型,不是字符串别名
+- `Emotion.name` 通过 `field_validator` 强制从 `Emotion` 枚举中取值
+- `IntentAction.name` 是全限定名 `<handler>.<local_action>`(Manager 也会加前缀)
+- `IntentAction.parameters` 不限定 schema(handler 内部 Pydantic 校验)
+- 移除 `context` / `structured_params` / `parser_type` / `llm_model` / `replay_count` /
+  `extra` / `alias` / `model_config`(破坏性升级,无向后兼容)
 
-版本：自然语言版
-- emotion/action 使用自然语言字符串
-- 移除了类型化的枚举和类，使用更灵活的字符串
+放这里是为了避免 Input/Decision/Output 阶段之间循环依赖。
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-# 向后兼容 type alias - 旧代码仍在导入这些类型
-# 新代码应使用字符串直接赋值
-EmotionType = str  # type: ignore[misc]
-"""情感类型 - 自然语言字符串，如 "害羞"、"开心"、"生气" """
-
-ActionType = str  # type: ignore[misc]
-"""动作类型 - 自然语言字符串，如 "脸红并挥手"、"比心" """
+from src.modules.types.emotion_vocab import Emotion
 
 
 class IntentMetadata(BaseModel):
-    """意图元数据"""
+    """意图元数据。
 
-    model_config = ConfigDict(populate_by_name=True)
+    只保留决策来源 + 决策时间(毫秒)。其余历史字段全部删除。
+    """
 
-    source_id: str = Field(description="来源ID")
-    decision_time_ms: int = Field(description="13位毫秒时间戳", alias="decision_time")
-    parser_type: Optional[str] = Field(default=None, description="解析器类型（如 'llm', 'command'）")
-    llm_model: Optional[str] = Field(default=None, description="使用的 LLM 模型")
-    replay_count: Optional[int] = Field(default=None, description="重放次数")
-    extra: dict = Field(default_factory=dict, description="额外信息")
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: str = Field(..., description="决策来源标识,如 'maibot_api' / 'command' / 'dashboard_debug'")
+    decision_time_ms: int = Field(..., description="决策时刻(Unix 毫秒)")
+
+
+class IntentAction(BaseModel):
+    """意图中的动作(结构化)。
+
+    `name` 形如 `<handler>.<local_action>`,例如 `warudo.wave`。
+    `parameters` 不限定 schema,handler 内部用 Pydantic model 校验。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(..., description="全限定 action 名,格式 `<handler>.<local_action>`")
+    parameters: Dict[str, Any] = Field(default_factory=dict, description="动作参数(handler 内部 Pydantic 校验)")
+
+
+class IntentEmotion(BaseModel):
+    """意图中的情绪(结构化)。
+
+    `name` 必须来自 `Emotion` 枚举(12 个值),`intensity` 范围 [0.0, 1.0],默认 0.5。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(..., description="情绪名,必须是 Emotion 枚举值之一")
+    intensity: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="情绪强度,[0.0, 1.0],默认 0.5(中等)",
+    )
+
+    @field_validator("name")
+    @classmethod
+    def _validate_emotion_name(cls, v: str) -> str:
+        """强制 `name` 必须是 `Emotion` 枚举里的小写字符串值。"""
+        valid = {e.value for e in Emotion}
+        if v not in valid:
+            raise ValueError(f"emotion.name '{v}' 不在全局 Emotion 枚举中({sorted(valid)})")
+        return v
 
 
 class Intent(BaseModel):
-    """
-    决策意图 - 平台无关
+    """决策意图(平台无关,核心数据结构)。
 
-    核心职责：
-    - 表示AI的决策意图
-    - 使用自然语言描述情感、动作、回复
-    - 作为 Output 阶段 的输入
-
-    字段说明：
-    - emotion: 自然语言情感描述，如 "害羞"、"开心"、"生气"
-    - action: 自然语言动作描述，如 "脸红并挥手"、"比心"
-    - speech: AI 要说的话
-    - context: 简短上下文信息
-    - metadata: 元数据
+    字段:
+    - speech: 要说的文本(可选)
+    - metadata: 元数据(必填,来源 + 决策时间)
+    - emotion: 情绪(可选)
+    - action: 动作(可选)
     """
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(extra="forbid")
 
-    emotion: Optional[str] = Field(default=None, description="自然语言情感描述，如 '害羞'、'开心'、'生气'")
-    action: Optional[str] = Field(default=None, description="自然语言动作描述，如 '脸红并挥手'、'比心'")
     speech: Optional[str] = Field(default=None, description="AI 要说的话")
-    context: Optional[str] = Field(default=None, description="简短上下文")
     metadata: IntentMetadata = Field(..., description="意图元数据")
-    structured_params: Dict[str, Dict[str, Any]] = Field(
-        default_factory=dict,
-        description="结构化参数，按组件名称组织。特殊 key 'common' 用于共享参数（如 emotion、action 的英文版本）",
-    )
+    emotion: Optional[IntentEmotion] = Field(default=None, description="情绪(可选)")
+    action: Optional[IntentAction] = Field(default=None, description="动作(可选)")
 
 
 __all__ = [
-    # 类型别名（向后兼容）
-    "EmotionType",
-    "ActionType",
-    # 核心类
-    "IntentMetadata",
     "Intent",
+    "IntentAction",
+    "IntentEmotion",
+    "IntentMetadata",
 ]

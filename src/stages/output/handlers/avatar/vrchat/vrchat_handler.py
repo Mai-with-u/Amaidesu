@@ -10,15 +10,13 @@ VRChat Handler - Output 阶段: VRChat OSC 虚拟形象渲染实现
 
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from src.stages.output.handlers.avatar.base import AvatarHandlerBase
 from src.stages.output.registry import handler
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
-from src.modules.llm.manager import LLMManager
 from src.modules.logging import get_logger
-from src.modules.prompts.manager import PromptManager
 from src.modules.streaming.audio_stream_channel import AudioStreamChannel
 
 if TYPE_CHECKING:
@@ -76,8 +74,52 @@ class VRChatHandler(AvatarHandlerBase):
         "Cross": 8,
     }
 
-    EMOTION_KEYS = {"neutral", "happy", "sad", "angry", "surprised", "confused", "scared", "love", "shy", "excited"}
-    ACTION_KEYS = {"wave", "peace", "thumbsup", "rocknroll", "handgun", "point", "victory", "cross"}
+    _EMOTION_KEYS = frozenset(
+        {
+            "neutral",
+            "happy",
+            "sad",
+            "angry",
+            "surprised",
+            "confused",
+            "scared",
+            "love",
+            "shy",
+            "excited",
+        }
+    )
+    _ACTION_KEYS = frozenset({"wave", "peace", "thumbsup", "rocknroll", "handgun", "point", "victory", "cross"})
+
+    class _VRChatActionParams(BaseModel):  # type: ignore[name-defined]  # noqa: F821
+        duration_ms: int = Field(default=1500, ge=100, le=10000)
+
+    _ACTION_PARAMS_SCHEMA: dict[str, type] = {
+        "wave": _VRChatActionParams,
+        "peace": _VRChatActionParams,
+        "thumbsup": _VRChatActionParams,
+        "rocknroll": _VRChatActionParams,
+        "handgun": _VRChatActionParams,
+        "point": _VRChatActionParams,
+        "victory": _VRChatActionParams,
+        "cross": _VRChatActionParams,
+    }
+
+    def get_capabilities(self):
+        from src.stages.output.capabilities import (
+            ActionSpec,
+            HandlerCapabilities,
+            _pydantic_to_param_spec,
+        )
+
+        actions = [
+            ActionSpec(
+                name=local,
+                description=f"VRChat {local} gesture",
+                parameters=_pydantic_to_param_spec(cls),
+            )
+            for local, cls in self._ACTION_PARAMS_SCHEMA.items()
+        ]
+        return HandlerCapabilities(actions=actions)
 
     class ConfigSchema(BaseConfig):
         """VRChat 输出 组件配置"""
@@ -93,8 +135,6 @@ class VRChatHandler(AvatarHandlerBase):
         config: Dict[str, Any],
         event_bus: EventBus,
         audio_stream_channel: Optional[AudioStreamChannel] = None,
-        llm_service: Optional[LLMManager] = None,
-        prompt_service: Optional[PromptManager] = None,
     ):
         """
         初始化 VRChat Handler
@@ -103,10 +143,8 @@ class VRChatHandler(AvatarHandlerBase):
             config: Handler 配置（来自 [handlers.vrchat]）
             event_bus: EventBus实例
             audio_stream_channel: AudioStreamChannel实例（用于口型同步）
-            llm_service: LLM服务实例
-            prompt_service: 提示词服务实例
         """
-        super().__init__(config, event_bus, audio_stream_channel, llm_service, prompt_service)
+        super().__init__(config, event_bus, audio_stream_channel)
         self.logger = get_logger(self.__class__.__name__)
 
         # 使用 ConfigSchema 验证配置，获得类型安全的配置对象
@@ -134,7 +172,7 @@ class VRChatHandler(AvatarHandlerBase):
 
     # ==================== AvatarHandlerBase 抽象方法实现 ====================
 
-    async def _adapt_intent(self, intent: "Intent") -> Dict[str, Any]:
+    async def _adapt_intent(self, intent: "Intent") -> Optional[Dict[str, Any]]:
         """
         适配 Intent 为 VRChat 特定参数
 
@@ -146,23 +184,34 @@ class VRChatHandler(AvatarHandlerBase):
             - expressions: Dict[str, float] - VRChat OSC 参数值
             - gestures: List[str] - 手势名称列表
         """
-        result = {
+        result: Dict[str, Any] = {
             "expressions": {},
             "gestures": [],
         }
 
-        # 1. 适配情感为 VRChat OSC 参数
-        emotion_str = intent.emotion or "neutral"
-        if emotion_str in self.EMOTION_MAP:
-            result["expressions"].update(self.EMOTION_MAP[emotion_str])
-            self.logger.debug(f"情感映射: {emotion_str} -> {self.EMOTION_MAP[emotion_str]}")
+        if intent.emotion is not None:
+            emotion_str = intent.emotion.name
+            if emotion_str in self.EMOTION_MAP:
+                scale = float(intent.emotion.intensity)
+                result["expressions"] = {k: v * scale for k, v in self.EMOTION_MAP[emotion_str].items()}
+                self.logger.debug(f"情感映射: {emotion_str} (intensity={scale}) -> {result['expressions']}")
 
-        # 2. 适配动作为手势
-        if intent.action:
-            # action is now a string directly
-            if intent.action in self.GESTURE_MAP:
-                result["gestures"].append(intent.action)
-                self.logger.debug(f"手势映射: {intent.action}")
+        if intent.action is not None:
+            local_name = intent.action.name.split(".", 1)[-1]
+            schema_cls = self._ACTION_PARAMS_SCHEMA.get(local_name)
+            if schema_cls is None:
+                self.logger.debug(f"action '{local_name}' 不在 vrchat _ACTION_PARAMS_SCHEMA 中,跳过")
+                return None
+            try:
+                schema_cls.model_validate(intent.action.parameters or {})
+            except Exception as e:
+                self.logger.warning(f"vrchat action '{local_name}' 参数校验失败: {e}")
+                return None
+
+            if local_name in self.GESTURE_MAP:
+                result["gestures"].append(local_name)
+            else:
+                return None
 
         self.logger.debug(f"Intent 适配结果: expressions={result['expressions']}, gestures={result['gestures']}")
         return result

@@ -101,21 +101,14 @@ class CommandDecider:
                 self.logger.error(f"无法获取命令的动作: '{command.name}'")
                 return
 
+            command_summary = f"/{command.name} {command.raw_args}".strip()
             intent = Intent(
-                action="command",
-                speech=None,
+                action=None,
+                speech=command_summary,
                 metadata=IntentMetadata(
                     source_id="command",
-                    parser_type="command",
                     decision_time_ms=now_ms(),
                 ),
-                structured_params={
-                    "common": {
-                        "command_name": command.name,
-                        "command_args": list(command.args),
-                        "command_raw": command.raw_args,
-                    }
-                },
             )
 
             self.logger.info(f"生成命令 Intent: 命令='{command.name}' -> 动作='{action}' 参数={command.args}")

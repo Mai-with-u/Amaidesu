@@ -12,12 +12,11 @@ VTS Handler - VTS虚拟形象渲染编排器
 
 from typing import TYPE_CHECKING, Any, Coroutine, Dict, List, Optional
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.llm.manager import LLMManager
 from src.modules.logging import get_logger
 from src.modules.prompts.manager import PromptManager
 from src.modules.streaming.audio_stream_channel import AudioStreamChannel
@@ -51,8 +50,50 @@ class VTSHandler(AvatarHandlerBase):
     PARAM_EYE_OPEN_LEFT = "EyeOpenLeft"
     PARAM_EYE_OPEN_RIGHT = "EyeOpenRight"
 
-    EMOTION_KEYS = {"happy", "surprised", "sad", "angry", "shy", "love", "excited", "confused", "scared", "neutral"}
-    ACTION_KEYS = {"blink", "nod", "shake", "wave", "clap", "motion"}
+    _EMOTION_KEYS = frozenset(
+        {
+            "happy",
+            "surprised",
+            "sad",
+            "angry",
+            "shy",
+            "love",
+            "excited",
+            "confused",
+            "scared",
+            "neutral",
+        }
+    )
+    _ACTION_KEYS = frozenset({"blink", "nod", "shake", "wave", "clap", "motion"})
+
+    class _VTSActionParams(BaseModel):  # type: ignore[name-defined]  # noqa: F821
+        duration_ms: int = Field(default=1500, ge=100, le=10000)
+
+    _ACTION_PARAMS_SCHEMA: dict[str, type] = {
+        "blink": _VTSActionParams,
+        "nod": _VTSActionParams,
+        "shake": _VTSActionParams,
+        "wave": _VTSActionParams,
+        "clap": _VTSActionParams,
+        "motion": _VTSActionParams,
+    }
+
+    def get_capabilities(self):
+        from src.stages.output.capabilities import (
+            ActionSpec,
+            HandlerCapabilities,
+            _pydantic_to_param_spec,
+        )
+
+        actions = [
+            ActionSpec(
+                name=local,
+                description=f"VTS {local} action",
+                parameters=_pydantic_to_param_spec(cls),
+            )
+            for local, cls in self._ACTION_PARAMS_SCHEMA.items()
+        ]
+        return HandlerCapabilities(actions=actions)
 
     class ConfigSchema(BaseConfig):
         type: str = "vts"
@@ -78,11 +119,11 @@ class VTSHandler(AvatarHandlerBase):
         config: Dict[str, Any],
         event_bus: EventBus,
         audio_stream_channel: Optional[AudioStreamChannel] = None,
-        llm_service: Optional[LLMManager] = None,
         prompt_service: Optional[PromptManager] = None,
     ):
-        super().__init__(config, event_bus, audio_stream_channel, llm_service, prompt_service)
+        super().__init__(config, event_bus, audio_stream_channel)
         self.logger = get_logger(self.__class__.__name__)
+        self._prompt_service = prompt_service
 
         self.typed_config = self.ConfigSchema.from_dict(config)
         self.vts_host = self.typed_config.vts_host
@@ -132,7 +173,7 @@ class VTSHandler(AvatarHandlerBase):
             logger_name=f"{self.__class__.__name__}.Hotkey",
             is_connected=lambda: self._is_connected,
             vts_request=self._vts_request_proxy,
-            prompt_service=prompt_service,
+            prompt_service=self._prompt_service,
             openai_client=self._build_openai_client(),
             llm_model=self.typed_config.llm_model,
             llm_temperature=self.typed_config.llm_temperature,
@@ -203,18 +244,33 @@ class VTSHandler(AvatarHandlerBase):
             )
             self._sticker_subscribed = True
 
-    async def _adapt_intent(self, intent: "Intent") -> Dict[str, Any]:
-        result = {"expressions": {}, "hotkeys": []}
+    async def _adapt_intent(self, intent: "Intent") -> Optional[Dict[str, Any]]:
+        result: Dict[str, Any] = {"expressions": {}, "hotkeys": []}
 
-        emotion_str = intent.emotion or "neutral"
-        if emotion_str in self._emotion_map:
-            result["expressions"] = self._emotion_map[emotion_str].copy()
-            self.logger.debug(f"情感映射: {emotion_str} -> {result['expressions']}")
+        if intent.emotion is not None:
+            emotion_str = intent.emotion.name
+            if emotion_str in self._emotion_map:
+                scale = float(intent.emotion.intensity)
+                base = self._emotion_map[emotion_str]
+                result["expressions"] = {k: v * scale for k, v in base.items()}
+                self.logger.debug(f"情感映射: {emotion_str} (intensity={scale}) -> {result['expressions']}")
 
-        if intent.action:
-            action_type_str = intent.action
-            if action_type_str in self._action_hotkey_map:
-                result["hotkeys"].append(self._action_hotkey_map[action_type_str])
+        if intent.action is not None:
+            local_name = intent.action.name.split(".", 1)[-1]
+            schema_cls = self._ACTION_PARAMS_SCHEMA.get(local_name)
+            if schema_cls is None:
+                self.logger.debug(f"action '{local_name}' 不在 vts _ACTION_PARAMS_SCHEMA 中,跳过")
+                return None
+            try:
+                schema_cls.model_validate(intent.action.parameters or {})
+            except Exception as e:
+                self.logger.warning(f"vts action '{local_name}' 参数校验失败: {e}")
+                return None
+
+            if local_name in self._action_hotkey_map:
+                result["hotkeys"].append(self._action_hotkey_map[local_name])
+            else:
+                return None
 
         self.logger.debug(f"Intent适配结果: expressions={result['expressions']}, hotkeys={result['hotkeys']}")
         return result

@@ -2,8 +2,8 @@
 Decision 阶段 事件 Payload 定义
 
 定义 Decision 阶段 相关的事件 Payload 类型。
-- IntentPayload: 意图生成事件
-- IntentActionPayload: 意图动作 Payload
+- IntentPayload: 意图生成事件(承载新结构化 Intent)
+- IntentActionPayload: 意图动作 Payload(用于 decision.intent.action 事件)
 - ConnectedPayload: 组件连接事件
 - DisconnectedPayload: 组件断开事件
 """
@@ -25,7 +25,8 @@ class IntentActionPayload(BasePayload):
     """
     意图动作 Payload
 
-    表示 Intent 中的单个动作。
+    表示 Intent 中的单个动作(用于 decision.intent.action 事件,
+    即 LLM 风格的"动作-参数-优先级"输出)。
     """
 
     type: str = Field(..., description="动作类型（如 'expression', 'hotkey', 'blink'）")
@@ -63,9 +64,9 @@ class IntentPayload(BasePayload):
     - OutputHandlerManager 订阅此事件并分发给 OutputHandlers
 
     **简化设计**：
-    - 使用 Pydantic 的自动序列化（model_dump/model_validate）
-    - Intent 数据存储为字典，避免重复字段定义
-    - 提供便捷方法与 Intent 对象互转
+    - Intent 数据存储为字典,通过 `from_intent` / `to_intent` 与 Intent 对象互转
+    - 旧版 `__getattr__` 代理白名单(context/parser_type/original_text/response_text/actions/timestamp)已删除:
+        调用方应直接访问 `intent_data` 或 `to_intent()` 后访问结构化字段
     """
 
     intent_data: Dict[str, Any] = Field(..., description="Intent 序列化数据")
@@ -75,62 +76,21 @@ class IntentPayload(BasePayload):
         json_schema_extra={
             "example": {
                 "intent_data": {
-                    "emotion": "开心",
-                    "action": "脸红并挥手",
                     "speech": "你好！很高兴见到你~",
-                    "context": "用户打招呼",
+                    "emotion": {"name": "happy", "intensity": 0.5},
+                    "action": {"name": "warudo.wave", "parameters": {"duration_ms": 1500}},
                     "metadata": {
                         "source_id": "msg_123",
                         "decision_time_ms": 1706745600000,
-                        "parser_type": "llm",
                     },
                 },
-                "name": "maicore",
+                "name": "maibot",
             }
         }
     )
 
-    def __getattr__(self, name: str) -> Any:
-        """代理访问 intent_data 中的字段，用于调试显示"""
-        # 只代理已知的字段，其他字段抛出 AttributeError
-        KNOWN_FIELDS = [
-            "emotion",
-            "action",
-            "speech",
-            "context",
-            "metadata",
-            # 向后兼容字段（已废弃但仍支持访问）
-            "original_text",
-            "response_text",
-            "actions",
-            "timestamp",
-            "decision_time_ms",
-        ]
-        if name in KNOWN_FIELDS:
-            # 向后兼容映射（顶层字段重命名）
-            backward_compat_map = {
-                "response_text": "speech",
-                "actions": "action",
-                "original_text": "context",
-                "timestamp": "decision_time_ms",
-            }
-            if name == "timestamp":
-                # timestamp 嵌套在 metadata 下，需要向下导航
-                metadata = self.intent_data.get("metadata") or {}
-                value = metadata.get("decision_time_ms", "")
-            elif name in backward_compat_map:
-                mapped_key = backward_compat_map[name]
-                value = self.intent_data.get(mapped_key, "")
-            else:
-                value = self.intent_data.get(name, "")
-            # metadata 默认返回空字典而非空字符串
-            if name == "metadata" and value == "":
-                return {}
-            return value
-        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'. 可用字段: {KNOWN_FIELDS}")
-
     def __str__(self) -> str:
-        """自定义字符串表示，显示 intent_data 中的关键字段"""
+        """自定义字符串表示,显示 intent_data 中的关键字段"""
         parts = [
             f'name="{self.name}"',
             f'speech="{self.intent_data.get("speech", "")}"',
@@ -144,7 +104,7 @@ class IntentPayload(BasePayload):
         """
         从 Intent 对象创建 Payload
 
-        使用 Pydantic 的自动序列化，将 Intent 转换为字典存储。
+        使用 Pydantic 的自动序列化,将 Intent 转换为字典存储。
 
         Args:
             intent: Intent 对象
@@ -159,7 +119,7 @@ class IntentPayload(BasePayload):
         """
         转换为 Intent 对象
 
-        使用 Pydantic 的自动反序列化，从字典还原 Intent。
+        使用 Pydantic 的自动反序列化,从字典还原 Intent。
 
         Returns:
             Intent 实例
