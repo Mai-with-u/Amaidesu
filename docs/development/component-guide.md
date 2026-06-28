@@ -23,7 +23,7 @@ Amaidesu 采用 3 阶段架构，阶段参与者分为三种类型：
                           ↓
                   Intent (event: decision.intent.generated)
                           ↓
-              OutputHandlerManager.dispatch()
+       OutputHandlerManager 接收后 emit output.intent.dispatched
                           ↓
               Intent (event: output.intent.dispatched)
                           ↓
@@ -249,8 +249,6 @@ assert len(handler.get_received_intents()) == 1
 | `TTSManager` 单例 + `get_tts_manager()` | 直接 `GPTSoVITSClient(host, port)` |
 | `AbstractActionFactory` | CommandDecider 内置实现 |
 | `CapabilityPipelineContext.capability_registry` | 删除 |
-| `InputPipeline` / `OutputPipeline` Protocol 重复定义 | 保留 ABC 版本（`InputPipelineBase` / `OutputPipelineBase`） |
-| `src/modules/di/` 空模块 | 已删除 |
 
 ## 10. 最佳实践
 
