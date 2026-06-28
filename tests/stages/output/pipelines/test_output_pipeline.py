@@ -5,12 +5,12 @@
 """
 
 import asyncio
-import time
 
 import pytest
 
-from src.modules.types import Intent, IntentMetadata
 from src.modules.pipeline import Pipeline, PipelineManager
+from src.modules.time_utils import now_ms
+from src.modules.types import Intent, IntentMetadata
 from src.modules.types.base.pipeline_types import PipelineException
 
 
@@ -24,7 +24,7 @@ def make_intent(text: str) -> Intent:
     return Intent(
         metadata=IntentMetadata(
             source_id="test",
-            decision_time_ms=int(time.time() * 1000),
+            decision_time_ms=now_ms(),
         ),
         speech=text,
         emotion="neutral",

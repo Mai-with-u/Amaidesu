@@ -10,10 +10,9 @@ Intent 类型单元测试
 运行: uv run pytest tests/modules/types/test_intent.py -v
 """
 
-import time
-
 import pytest
 
+from src.modules.time_utils import now_ms
 from src.modules.types import (
     ActionType,
     EmotionType,
@@ -563,7 +562,7 @@ class TestIntentIntegration:
         # 1. 创建 metadata
         metadata = IntentMetadata(
             source_id="bili_danmaku",
-            decision_time_ms=int(time.time() * 1000),
+            decision_time_ms=now_ms(),
             parser_type="llm",
             llm_model="gpt-4",
             replay_count=0,

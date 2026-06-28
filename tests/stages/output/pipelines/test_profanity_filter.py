@@ -2,12 +2,11 @@
 ProfanityFilterPipeline 测试
 """
 
-import time
-
 import pytest
 
-from src.stages.output.pipelines.profanity_filter.pipeline import ProfanityFilterOutputPipeline
+from src.modules.time_utils import now_ms
 from src.modules.types import Intent, IntentMetadata
+from src.stages.output.pipelines.profanity_filter.pipeline import ProfanityFilterOutputPipeline
 
 
 @pytest.mark.asyncio
@@ -25,7 +24,7 @@ async def test_profanity_filter_basic():
     pipeline = ProfanityFilterOutputPipeline(config)
 
     intent = Intent(
-        metadata=IntentMetadata(source_id="test", decision_time_ms=int(time.time() * 1000)),
+        metadata=IntentMetadata(source_id="test", decision_time_ms=now_ms()),
         speech="This is a badword example",
     )
 
@@ -52,7 +51,7 @@ async def test_profanity_filter_chinese():
     pipeline = ProfanityFilterOutputPipeline(config)
 
     intent = Intent(
-        metadata=IntentMetadata(source_id="test", decision_time_ms=int(time.time() * 1000)),
+        metadata=IntentMetadata(source_id="test", decision_time_ms=now_ms()),
         speech="这是一段包含脏话和敏感词的文本",
     )
 
@@ -80,7 +79,7 @@ async def test_profanity_filter_drop_on_match():
     pipeline = ProfanityFilterOutputPipeline(config)
 
     intent = Intent(
-        metadata=IntentMetadata(source_id="test", decision_time_ms=int(time.time() * 1000)),
+        metadata=IntentMetadata(source_id="test", decision_time_ms=now_ms()),
         speech="This message is blocked",
     )
 
@@ -104,7 +103,7 @@ async def test_profanity_filter_case_insensitive():
     pipeline = ProfanityFilterOutputPipeline(config)
 
     intent = Intent(
-        metadata=IntentMetadata(source_id="test", decision_time_ms=int(time.time() * 1000)),
+        metadata=IntentMetadata(source_id="test", decision_time_ms=now_ms()),
         speech="This has BADWORD and BadWord",
     )
 
@@ -132,7 +131,7 @@ async def test_profanity_filter_case_sensitive():
     pipeline = ProfanityFilterOutputPipeline(config)
 
     intent = Intent(
-        metadata=IntentMetadata(source_id="test", decision_time_ms=int(time.time() * 1000)),
+        metadata=IntentMetadata(source_id="test", decision_time_ms=now_ms()),
         speech="This has BADWORD and badword",
     )
 
@@ -160,7 +159,7 @@ async def test_profanity_filter_no_match():
 
     original_text = "这是一段正常的文本"
     intent = Intent(
-        metadata=IntentMetadata(source_id="test", decision_time_ms=int(time.time() * 1000)),
+        metadata=IntentMetadata(source_id="test", decision_time_ms=now_ms()),
         speech=original_text,
     )
 

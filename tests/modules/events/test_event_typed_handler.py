@@ -8,7 +8,6 @@
 """
 
 import asyncio
-import time
 
 import pytest
 from pydantic import BaseModel, Field
@@ -17,6 +16,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.decision import IntentPayload
 from src.modules.events.payloads.input import MessageReadyPayload
+from src.modules.time_utils import now_ms
 
 
 class TestTypedEventHandler:
@@ -133,7 +133,7 @@ class TestTypedEventHandler:
                 "context": "你好",
                 "metadata": {
                     "source_id": "test_source",
-                    "decision_time_ms": int(time.time() * 1000),
+                    "decision_time_ms": now_ms(),
                 },
                 "structured_params": {},
             },

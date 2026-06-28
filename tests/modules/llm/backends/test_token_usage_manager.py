@@ -405,11 +405,11 @@ def test_record_usage_callback_exception(token_manager):
 
 def test_record_usage_time_stamps(token_manager):
     """测试时间戳记录"""
-    import time
+    from src.modules.time_utils import now_ms
 
-    before_time = int(time.time() * 1000)
+    before_time = now_ms()
     token_manager.record_usage("gpt-4o", 1000, 500, 1500)
-    after_time = int(time.time() * 1000)
+    after_time = now_ms()
 
     usage = token_manager.get_usage_summary("gpt-4o")
     assert usage["first_call_time"] is not None

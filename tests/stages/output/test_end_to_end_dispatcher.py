@@ -166,7 +166,6 @@ async def test_dispatcher_triggers_all_seven_handlers():
 
     # Verify all unsubscribed
     assert bus.get_listeners_count(CoreEvents.OUTPUT_INTENT_DISPATCHED) == 0
-    print(f"OK: all 7 handlers received the dispatched Intent")
 
 
 # ============================================================

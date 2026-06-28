@@ -13,10 +13,9 @@ NormalizedMessage 单元测试
 运行: uv run pytest tests/modules/base/test_normalized_message.py -v
 """
 
-import time
-
 import pytest
 
+from src.modules.time_utils import now_ms
 from src.modules.types.base.normalized_message import NormalizedMessage
 
 # =============================================================================
@@ -104,7 +103,7 @@ async def test_normalized_message_creation(mock_content):
 @pytest.mark.asyncio
 async def test_normalized_message_with_explicit_timestamp(mock_content):
     """测试显式提供 timestamp_ms（使用新字段名）"""
-    custom_timestamp_ms = int(time.time() * 1000)
+    custom_timestamp_ms = now_ms()
     message = NormalizedMessage(
         text="测试",
         raw=mock_content,
@@ -120,7 +119,7 @@ async def test_normalized_message_with_explicit_timestamp(mock_content):
 @pytest.mark.asyncio
 async def test_normalized_message_with_legacy_timestamp_alias(mock_content):
     """测试使用 alias 字段名 `timestamp` 仍能创建实例（向后兼容）"""
-    custom_timestamp_ms = int(time.time() * 1000)
+    custom_timestamp_ms = now_ms()
     message = NormalizedMessage(
         text="测试",
         raw=mock_content,
