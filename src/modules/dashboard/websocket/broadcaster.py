@@ -39,7 +39,7 @@ class EventBroadcaster:
         CoreEvents.INPUT_CONNECTED: "collector.connected",
         CoreEvents.INPUT_DISCONNECTED: "collector.disconnected",
         CoreEvents.DECISION_CONNECTED: "decider.connected",
-        CoreEvents.DISCONNECTED: "decider.disconnected",
+        CoreEvents.DECISION_DISCONNECTED: "decider.disconnected",
     }
 
     def __init__(
@@ -150,7 +150,7 @@ class EventBroadcaster:
             CoreEvents.INPUT_CONNECTED: ConnectedPayload,
             CoreEvents.INPUT_DISCONNECTED: DisconnectedPayload,
             CoreEvents.DECISION_CONNECTED: ConnectedPayload,
-            CoreEvents.DISCONNECTED: DisconnectedPayload,
+            CoreEvents.DECISION_DISCONNECTED: DisconnectedPayload,
         }
 
         for event_name, payload_class in component_event_map.items():

@@ -212,7 +212,7 @@ class DisconnectedPayload(BasePayload):
     """
     Decider 断开连接事件 Payload
 
-    事件名：CoreEvents.DISCONNECTED
+    事件名：CoreEvents.DECISION_DISCONNECTED
     发布者：Decider
     订阅者：任何需要监控 Decider 状态的组件
 

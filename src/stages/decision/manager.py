@@ -314,7 +314,7 @@ class DeciderManager:
 
         try:
             await self.event_bus.emit(
-                CoreEvents.DISCONNECTED,
+                CoreEvents.DECISION_DISCONNECTED,
                 DisconnectedPayload(
                     name=decider_name,
                     reason=reason,

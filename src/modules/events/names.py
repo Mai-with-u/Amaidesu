@@ -42,7 +42,7 @@ class CoreEvents:
 
     # 组件 连接状态事件（去 decider 前缀：阶段名已隐含组件类型）
     DECISION_CONNECTED = "decision.connected"
-    DISCONNECTED = "decision.disconnected"
+    DECISION_DISCONNECTED = "decision.disconnected"
 
     # ========== Output 阶段: 输出阶段 ==========
     # 过滤后意图派发事件（由 OutputHandlerManager 发布，OutputHandlers 订阅）
