@@ -10,6 +10,7 @@ MCP Server 服务 - Model Context Protocol 服务端实现
 """
 
 import asyncio
+import logging
 from typing import Any, Dict, Optional
 
 import httpx
@@ -17,6 +18,8 @@ from fastmcp import FastMCP
 
 from src.modules.logging import get_logger
 from src.modules.mcp.config import MCPServerConfig
+
+logger = logging.getLogger(__name__)
 
 
 class MCPServerService:
@@ -240,7 +243,8 @@ class MCPServerService:
         if response.content:
             try:
                 return response.json().get("error", response.text)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"解析错误响应 JSON 失败，使用原始文本: {e}")
                 return response.text
         return response.text
 

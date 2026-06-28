@@ -30,6 +30,9 @@ from src.modules.logging import get_logger
 from src.modules.prompts.manager import PromptManager
 from src.modules.streaming.audio_stream_channel import AudioStreamChannel
 
+# Warudo WebSocket 重连默认间隔（秒）
+_RECONNECT_DELAY_S = 5
+
 
 if TYPE_CHECKING:
     from src.modules.types import Intent
@@ -261,7 +264,7 @@ class WarudoHandler(AvatarHandlerBase):
                 self.websocket = None
                 action_sender.set_websocket(None)
                 self.logger.debug("WebSocket断开，但服务继续运行")
-                await asyncio.sleep(5)
+                await asyncio.sleep(_RECONNECT_DELAY_S)
 
     # ==================== 辅助方法 ====================
 

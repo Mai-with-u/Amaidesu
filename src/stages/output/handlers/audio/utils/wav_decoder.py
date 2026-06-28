@@ -7,9 +7,12 @@ WAV 解码工具模块
 """
 
 import base64
+import logging
 from typing import Optional
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 def extract_pcm_from_wav(wav_data: bytes) -> bytes:
@@ -38,8 +41,8 @@ def extract_pcm_from_wav(wav_data: bytes) -> bytes:
         pcm_start = data_pos + 8
         return wav_data[pcm_start:]
 
-    except Exception:
-        # 发生错误时返回原始数据
+    except Exception as e:
+        logger.warning(f"WAV header 解析失败，返回原始数据: {e}")
         return wav_data
 
 
@@ -70,5 +73,6 @@ async def decode_wav_chunk(wav_chunk: bytes, dtype=np.int16) -> Optional[np.ndar
         audio_array = np.frombuffer(pcm_data, dtype=dtype)
         return audio_array
 
-    except Exception:
+    except Exception as e:
+        logger.warning(f"WAV chunk 解码失败，返回 None: {e}")
         return None

@@ -209,8 +209,8 @@ class OpenAIClient:
             if stream is not None:
                 try:
                     await stream.aclose()
-                except Exception:
-                    pass  # 关闭流失败，忽略错误
+                except Exception as e:
+                    self.logger.debug(f"关闭流失败（已忽略）: {e}")
 
     async def vision(
         self,

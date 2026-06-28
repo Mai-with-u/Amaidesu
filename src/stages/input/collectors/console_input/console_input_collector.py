@@ -19,6 +19,9 @@ from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
 from src.modules.types.base.normalized_message import NormalizedMessage
 
+# 控制台输入循环异常后重试间隔（秒）
+_ERROR_RETRY_INTERVAL_S = 1
+
 
 @collector("console_input")
 class ConsoleInputCollector:
@@ -154,7 +157,7 @@ class ConsoleInputCollector:
                     break
                 except Exception as e:
                     self.logger.error(f"控制台输入循环出错: {e}", exc_info=True)
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(_ERROR_RETRY_INTERVAL_S)
 
             self.logger.info("控制台输入循环结束")
 

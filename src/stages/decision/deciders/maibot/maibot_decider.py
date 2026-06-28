@@ -18,6 +18,9 @@ from src.stages.decision.registry import decider
 from .router_adapter import RouterAdapter
 from src.modules.time_utils import now_ms
 
+# Router 启动后等待初步连接建立的延迟（秒）
+_CONNECT_INIT_WAIT_S = 1
+
 
 @decider("maibot")
 class MaiBotDecider:
@@ -88,7 +91,7 @@ class MaiBotDecider:
             self._router_task = asyncio.create_task(self._router.run())
             self.logger.info("MaiBot Router 运行任务已创建")
 
-            await asyncio.sleep(1)
+            await asyncio.sleep(_CONNECT_INIT_WAIT_S)
 
             if self._router.check_connection(self.platform):
                 self.logger.info("MaiBot WebSocket 连接初步建立")

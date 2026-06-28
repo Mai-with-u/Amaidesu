@@ -25,6 +25,11 @@ from src.modules.logging import get_logger
 from src.modules.prompts.manager import PromptManager
 from src.modules.types.base.normalized_message import NormalizedMessage
 
+# 游戏监听循环异常后重试间隔（秒）
+_GAME_ERROR_RETRY_S = 5
+# 游戏控制指令后的等待间隔（秒）
+_GAME_ACTION_WAIT_S = 0.5
+
 
 class ControlMethod(Enum):
     """游戏控制方式枚举"""
@@ -178,7 +183,7 @@ class MainosabaCollector:
                     break
                 except Exception as e:
                     self.logger.error(f"游戏监听循环出错: {e}", exc_info=True)
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(_GAME_ERROR_RETRY_S)
 
             self.logger.info("游戏文本采集结束")
 
@@ -264,7 +269,7 @@ class MainosabaCollector:
                 pyautogui.press("space")
                 self.logger.debug("已按空格键推进游戏")
 
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(_GAME_ACTION_WAIT_S)
 
         except Exception as e:
             self.logger.error(f"推进游戏出错: {e}", exc_info=True)

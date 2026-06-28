@@ -9,6 +9,9 @@ from typing import Dict, Optional
 
 # ==================== 常量定义 ====================
 
+# 状态检查循环间隔（秒）：越高 CPU 占用越低，但状态同步延迟越大
+_STATE_CHECK_INTERVAL_S = 0.1
+
 ALL_SIGHT_STATE = {
     "camera": 0.0,
     "danmu": 0.0,
@@ -408,7 +411,7 @@ class WarudoStateManager:
         """状态检查和发送循环"""
         try:
             while self._is_monitoring:
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(_STATE_CHECK_INTERVAL_S)
 
                 # 检查并发送所有状态
                 await self._send_changed_states()

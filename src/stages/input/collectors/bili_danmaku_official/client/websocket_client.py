@@ -21,6 +21,10 @@ from .proto import Proto
 # 禁用HTTPS证书警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# B站官方 WebSocket 心跳间隔（秒）：平台要求每 30s 发一次心跳保活
+_WS_HEARTBEAT_INTERVAL_S = 30
+_APP_HEARTBEAT_INTERVAL_S = 20
+
 
 class BiliWebSocketClient:
     """Bilibili官方WebSocket客户端"""
@@ -274,7 +278,7 @@ class BiliWebSocketClient:
                 await self.websocket.send(data)
                 self.logger.debug("WebSocket心跳已发送")
 
-                await asyncio.sleep(30)  # 每30秒发送一次心跳
+                await asyncio.sleep(_WS_HEARTBEAT_INTERVAL_S)
 
             except Exception as e:
                 self.logger.warning(f"发送WebSocket心跳时出错: {e}")
@@ -285,7 +289,7 @@ class BiliWebSocketClient:
         while self.is_started:
             try:
                 await self._send_app_heartbeat()
-                await asyncio.sleep(20)  # 每20秒发送一次应用心跳
+                await asyncio.sleep(_APP_HEARTBEAT_INTERVAL_S)
 
             except Exception as e:
                 self.logger.warning(f"应用心跳循环出错: {e}")

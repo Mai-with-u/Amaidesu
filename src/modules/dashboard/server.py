@@ -169,8 +169,8 @@ class DashboardServer:
                     await self.ws_handler.handle_message(client_id, message)
             except WebSocketDisconnect:
                 pass
-            except Exception:
-                pass
+            except Exception as e:
+                self.logger.warning(f"WebSocket 消息循环异常（将清理连接）: {e}")
             finally:
                 await self.ws_handler.disconnect(client_id)
 
@@ -219,8 +219,8 @@ class DashboardServer:
         for client in list(self._widget_clients):
             try:
                 await client.close()
-            except Exception:
-                pass
+            except Exception as e:
+                self.logger.debug(f"关闭 widget WebSocket 客户端失败（已忽略）: {e}")
         self._widget_clients.clear()
 
         # 停止日志流广播器
@@ -453,7 +453,8 @@ class DashboardServer:
         for client in self._danmaku_clients:
             try:
                 await client.send_text(message)
-            except Exception:
+            except Exception as e:
+                self.logger.debug(f"广播时客户端已断开: {e}")
                 disconnected.add(client)
 
         self._danmaku_clients -= disconnected
@@ -469,7 +470,8 @@ class DashboardServer:
         for client in self._subtitle_clients:
             try:
                 await client.send_text(message)
-            except Exception:
+            except Exception as e:
+                self.logger.debug(f"广播时客户端已断开: {e}")
                 disconnected.add(client)
 
         self._subtitle_clients -= disconnected
@@ -485,7 +487,8 @@ class DashboardServer:
         for client in self._widget_clients:
             try:
                 await client.send_text(message)
-            except Exception:
+            except Exception as e:
+                self.logger.debug(f"广播时客户端已断开: {e}")
                 disconnected.add(client)
 
         self._widget_clients -= disconnected

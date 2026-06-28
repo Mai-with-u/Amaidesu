@@ -47,7 +47,10 @@ handler = instantiate_with_di(
 from __future__ import annotations
 
 import inspect
+import logging
 from typing import Any, Dict, Type, Union, get_args, get_origin, get_type_hints
+
+logger = logging.getLogger(__name__)
 
 
 class DependencyInjectionError(Exception):
@@ -129,8 +132,9 @@ def instantiate_with_di(
     # inspect.signature() 默认不解析字符串，会导致 DI 类型匹配失败
     try:
         resolved_hints = get_type_hints(cls.__init__)
-    except Exception:
+    except Exception as e:
         # 引用类型不在模块 globals 时回退到原始 annotation
+        logger.debug(f"get_type_hints 解析失败，回退到原始 annotation: {e}")
         resolved_hints = {}
 
     for name, param in sig.parameters.items():

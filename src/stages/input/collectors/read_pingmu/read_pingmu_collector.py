@@ -28,6 +28,9 @@ except ImportError:
     ScreenReader = None
     SCREEN_MODULES_AVAILABLE = False
 
+# 后台监控循环心跳间隔（秒）
+_MONITOR_INTERVAL_S = 1.0
+
 
 @collector("read_pingmu")
 class ReadPingmuCollector:
@@ -164,7 +167,7 @@ class ReadPingmuCollector:
     async def _monitoring_loop(self) -> None:
         """后台监控循环"""
         while self._running:
-            await asyncio.sleep(1)
+            await asyncio.sleep(_MONITOR_INTERVAL_S)
 
     async def _on_screen_change(self, change_data: Dict[str, Any]) -> None:
         """处理屏幕变化检测"""
