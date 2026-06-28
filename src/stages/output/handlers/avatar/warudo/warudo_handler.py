@@ -1,12 +1,16 @@
 """
-Warudo Handler - Warudo虚拟形象控制Handler
+Warudo Handler - Warudo 虚拟形象控制 Handler
 
 职责:
-- 通过WebSocket连接到Warudo
-- 接收Intent事件并适配为Warudo参数
-- 发送表情、状态等指令到Warudo
+- 通过 WebSocket 连接到 Warudo
+- 接收 Intent 事件并适配为 Warudo 参数
+- 发送表情、状态等指令到 Warudo
 - 口型同步、眨眼、眼球移动等自动化动作
 - 心情状态管理
+- 字幕系统管理(HTML + WebSocket)
+- 自动重连支持
+
+重构自 plugins_backup/warudo/(commit 78a0c46)旧插件,适配新 3 阶段架构。
 """
 
 import asyncio
@@ -15,46 +19,113 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from pydantic import Field
 
-from src.stages.output.handlers.avatar.base import AvatarHandlerBase
-from src.stages.output.handlers.avatar.warudo.state.mood_manager import MoodManager
-from src.stages.output.handlers.avatar.warudo.state.warudo_state_manager import WarudoStateManager
-from src.stages.output.handlers.avatar.warudo.tasks.blink_task import BlinkTask
-from src.stages.output.handlers.avatar.warudo.tasks.reply_state import ReplyState
-from src.stages.output.handlers.avatar.warudo.tasks.shift_task import ShiftTask
-from src.stages.output.handlers.avatar.warudo.warudo_sender import ActionSender
-from src.stages.output.registry import handler
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.llm.manager import LLMManager
 from src.modules.logging import get_logger
 from src.modules.prompts.manager import PromptManager
-from src.modules.streaming.audio_stream_channel import AudioStreamChannel
-
-# Warudo WebSocket 重连默认间隔（秒）
-_RECONNECT_DELAY_S = 5
-
+from src.modules.streaming.audio_stream_channel import (
+    AudioStreamChannel,
+    BackpressureStrategy,
+    SubscriberConfig,
+)
+from src.stages.output.handlers.avatar.base import AvatarHandlerBase
+from src.stages.output.handlers.avatar.warudo.lip_sync_subscriber import (
+    WarudoLipSyncSubscriber,
+)
+from src.stages.output.handlers.avatar.warudo.state.mood_manager import MoodManager
+from src.stages.output.handlers.avatar.warudo.state.warudo_state_manager import (
+    WarudoStateManager,
+)
+from src.stages.output.handlers.avatar.warudo.subtitle.subtitle_manager import (
+    WarudoSubtitleManager,
+)
+from src.stages.output.handlers.avatar.warudo.tasks.blink_task import BlinkTask
+from src.stages.output.handlers.avatar.warudo.tasks.shift_task import ShiftTask
+from src.stages.output.handlers.avatar.warudo.tasks.talking_head_task import (
+    TalkingHeadTask,
+)
+from src.stages.output.handlers.avatar.warudo.tasks.throw_fish_task import (
+    ThrowFishTask,
+)
+from src.stages.output.handlers.avatar.warudo.tasks.typing_action_task import (
+    TypingActionTask,
+)
+from src.stages.output.handlers.avatar.warudo.warudo_sender import ActionSender
+from src.stages.output.registry import handler
 
 if TYPE_CHECKING:
     from src.modules.types import Intent
 
 
+# 软降级:websockets 库可能未安装
+try:
+    import websockets  # type: ignore
+
+    WEBSOCKETS_AVAILABLE = True
+except ImportError:
+    websockets = None  # type: ignore
+    WEBSOCKETS_AVAILABLE = False
+
+
 @handler("warudo")
 class WarudoHandler(AvatarHandlerBase):
-    """Warudo虚拟形象控制Handler"""
+    """Warudo 虚拟形象控制 Handler"""
 
     class ConfigSchema(BaseConfig):
-        """Warudo输出Handler配置"""
+        """Warudo 输出 Handler 配置"""
 
         type: str = "warudo"
 
-        # WebSocket配置
-        ws_host: str = Field(default="localhost", description="WebSocket主机地址")
-        ws_port: int = Field(default=19190, ge=1, le=65535, description="WebSocket端口")
+        # WebSocket 配置
+        ws_host: str = Field(default="localhost", description="WebSocket 主机地址")
+        ws_port: int = Field(default=19190, ge=1, le=65535, description="WebSocket 端口")
+        reconnect_delay_seconds: float = Field(default=5.0, ge=0.1, description="断线重连间隔")
+
+        # Lip-sync 配置
+        lip_sync_enabled: bool = Field(default=True, description="是否启用音频口型同步")
+        lip_sync_sample_rate: int = Field(default=16000, ge=8000, le=48000, description="音频处理采样率")
+        lip_sync_volume_threshold: float = Field(default=0.01, ge=0.0, le=1.0, description="元音检测音量阈值")
+        lip_sync_smoothing_factor: float = Field(default=0.3, ge=0.0, le=1.0, description="元音强度平滑系数")
+        lip_sync_sensitivity: float = Field(default=0.5, ge=0.0, le=1.0, description="元音检测灵敏度")
+
+        # 字幕系统配置
+        subtitle_enabled: bool = Field(default=True, description="是否启用字幕系统")
+        subtitle_port: int = Field(default=8766, ge=1, le=65535, description="字幕 HTTP 端口")
+        subtitle_show_status: bool = Field(default=False, description="字幕页面显示连接状态")
+
+        # 小动画配置
+        talking_head_enabled: bool = Field(default=True, description="是否启用说话头部动作")
+        talking_head_interval: float = Field(default=0.1, ge=0.05, le=1.0, description="头部动作循环步进(秒)")
+
+        throw_fish_cooldown: float = Field(default=5.0, ge=0.0, description="抛鱼触发冷却(秒)")
 
     # ==================== Warudo API 参数映射 ====================
 
-    EMOTION_KEYS = {"happy", "sad", "angry", "surprised", "shy", "love", "neutral"}
-    ACTION_KEYS = {"blink", "nod", "shake", "wave", "clap"}
+    EMOTION_KEYS = {
+        "happy",
+        "sad",
+        "angry",
+        "surprised",
+        "shy",
+        "love",
+        "neutral",
+    }
+    ACTION_KEYS = {
+        # Hotkey 类
+        "blink",
+        "nod",
+        "shake",
+        "wave",
+        "clap",
+        # Body action 类
+        "throw_fish",
+        "throw_fish_big",
+        "typing_on",
+        "typing_off",
+        # Head action 类
+        "head_action",
+    }
 
     def __init__(
         self,
@@ -64,22 +135,13 @@ class WarudoHandler(AvatarHandlerBase):
         llm_service: Optional[LLMManager] = None,
         prompt_service: Optional[PromptManager] = None,
     ):
-        """
-        初始化Warudo Handler
-
-        Args:
-            config: Handler配置字典
-            event_bus: EventBus实例
-            audio_stream_channel: AudioStreamChannel实例（用于口型同步）
-            llm_service: LLM服务实例
-            prompt_service: 提示词服务实例
-        """
         super().__init__(config, event_bus, audio_stream_channel, llm_service, prompt_service)
         self.logger = get_logger(self.__class__.__name__)
 
-        # 使用 ConfigSchema 验证配置
+        # 配置验证
         self.typed_config = self.ConfigSchema.from_dict(config)
 
+        # Emotion -> Warudo 表情参数映射
         self._emotion_map: Dict[str, Dict[str, float]] = {
             "happy": {"mouthSmile": 1.0},
             "sad": {"mouthSad": 1.0},
@@ -90,28 +152,50 @@ class WarudoHandler(AvatarHandlerBase):
             "neutral": {},
         }
 
-        self._action_map: Dict[str, str] = {
+        # Action 三字典分类(替代旧的单一 _action_map)
+        # 热键类:由 _send_hotkey 发送
+        self._action_hotkey_map: Dict[str, str] = {
             "blink": "blink",
             "nod": "nod",
             "shake": "shake",
             "wave": "wave",
             "clap": "clap",
         }
-        self._action_hotkey_map = self._action_map
+        # 身体动作类:由 _send_action_internal 发送 body_action 类别
+        self._action_body_map: Dict[str, str] = {
+            "throw_fish": "throw_fish",
+            "throw_fish_big": "throw_fish_big",
+            "typing_on": "typing_on",
+            "typing_off": "typing_off",
+        }
+        # 头部动作类:由 _send_action_internal 发送 head_action 类别
+        self._action_head_map: Dict[str, str] = {
+            "head_action": "head_action",
+        }
 
-        # WebSocket配置
+        # 兼容旧字段
+        self._action_map = self._action_hotkey_map
+
+        # WebSocket 状态
         self.ws_host = self.typed_config.ws_host
         self.ws_port = self.typed_config.ws_port
         self.websocket = None
         self._connection_task: Optional[asyncio.Task] = None
-        self._first_connection = True
+        self._should_stop: bool = False
+        self._first_connection: bool = True
+        self._lip_sync_sub_id: Optional[str] = None
 
-        # 状态管理器 - 使用新版本（依赖注入模式）
-        # 创建发送动作的回调函数
-        async def send_action_callback(action: str, data: dict):
-            """发送动作到 Warudo"""
+        # 单实例 ActionSender
+        self._action_sender = ActionSender()
+
+        # ==================== 子组件实例化 ====================
+
+        async def send_action_callback(action: str, data: Any) -> bool:
+            """发送动作到 Warudo(给子组件用)"""
             await self._send_action_internal(action, data)
+            return True
 
+        # 状态管理器(给心情、眨眼、眼球移动用)
         self.state_manager = WarudoStateManager(self.logger, send_action_callback)
 
         # 心情管理器
@@ -120,66 +204,101 @@ class WarudoHandler(AvatarHandlerBase):
         # 眨眼任务
         self.blink_task = BlinkTask(self.state_manager, self.logger)
 
-        # 眼部移动任务
+        # 眼球移动任务
         self.shift_task = ShiftTask(self.state_manager, self.logger)
 
-        # 回复状态管理器
-        self.reply_state = ReplyState(self.state_manager, self.logger)
+        # 说话时头部动作任务(接收 send_action_callback 而非 WebSocket)
+        self.talking_head_task: Optional[TalkingHeadTask] = None
+        if self.typed_config.talking_head_enabled:
+            self.talking_head_task = TalkingHeadTask(
+                send_action_callback=send_action_callback,
+                logger=self.logger,
+                min_interval=self.typed_config.talking_head_interval,
+            )
 
-        # 当前心情状态 (1-10)
+        # 抛鱼动画(单次触发)
+        self.throw_fish_task = ThrowFishTask(
+            send_action_callback=send_action_callback,
+            logger=self.logger,
+            cooldown_seconds=self.typed_config.throw_fish_cooldown,
+        )
+
+        # 打字动画任务
+        self.typing_action_task = TypingActionTask(
+            send_action_callback=send_action_callback,
+            logger=self.logger,
+        )
+
+        # 字幕系统
+        self.subtitle_manager: Optional[WarudoSubtitleManager] = None
+        if self.typed_config.subtitle_enabled:
+            self.subtitle_manager = WarudoSubtitleManager(
+                port=self.typed_config.subtitle_port,
+                show_status=self.typed_config.subtitle_show_status,
+                logger=self.logger,
+            )
+
+        # 音频口型同步订阅器(只启用 lip_sync + audio_stream_channel 都存在时)
+        self.lip_sync: Optional[WarudoLipSyncSubscriber] = None
+        if self.typed_config.lip_sync_enabled and audio_stream_channel is not None:
+            self.lip_sync = WarudoLipSyncSubscriber(
+                state_manager=self.state_manager,
+                logger_name=f"{self.__class__.__name__}.LipSync",
+                sample_rate=self.typed_config.lip_sync_sample_rate,
+                volume_threshold=self.typed_config.lip_sync_volume_threshold,
+                smoothing_factor=self.typed_config.lip_sync_smoothing_factor,
+                vowel_detection_sensitivity=self.typed_config.lip_sync_sensitivity,
+                is_connected=lambda: self._is_connected,
+                on_audio_start_hook=self.on_audio_start_proxy,
+                on_audio_end_hook=self.on_audio_end_proxy,
+            )
+
+        # 当前心情状态(1-10)
         self.current_mood = {"joy": 5, "anger": 1, "sorrow": 1, "fear": 1}
         self.current_expression = "neutral"
 
-        # 统计信息
+        # 统计
         self.render_count = 0
         self.error_count = 0
 
-        self.logger.info("WarudoHandler初始化完成")
+        self.logger.info("WarudoHandler 初始化完成")
 
     # ==================== AvatarHandlerBase 抽象方法实现 ====================
 
     async def _adapt_intent(self, intent: "Intent") -> Dict[str, Any]:
-        """
-        适配 Intent 为 Warudo 参数
-
-        Args:
-            intent: 平台无关的 Intent
-
-        Returns:
-            Warudo参数字典，包含:
-            - expressions: Dict[str, float] - 表情参数
-            - hotkeys: List[str] - 热键ID列表
-        """
-        result = {
+        """适配 Intent 为 Warudo 参数(三字典分类)"""
+        result: Dict[str, Any] = {
             "expressions": {},
             "hotkeys": [],
+            "body_actions": [],
+            "head_actions": [],
         }
 
-        # 1. 适配情感为表情参数（emotion 现在是字符串）
+        # 1. 情感 -> 表情参数
         emotion_str = intent.emotion or "neutral"
         if emotion_str in self._emotion_map:
             result["expressions"] = self._emotion_map[emotion_str].copy()
             self.logger.debug(f"情感映射: {emotion_str} -> {result['expressions']}")
 
-        # 2. 适配动作为热键（action 现在是字符串）
+        # 2. Action -> 三类分别查表
         if intent.action:
             action_type_str = intent.action
             if action_type_str in self._action_hotkey_map:
                 result["hotkeys"].append(self._action_hotkey_map[action_type_str])
+            elif action_type_str in self._action_body_map:
+                result["body_actions"].append(self._action_body_map[action_type_str])
+            elif action_type_str in self._action_head_map:
+                result["head_actions"].append(self._action_head_map[action_type_str])
 
-        self.logger.debug(f"Intent适配结果: expressions={result['expressions']}, hotkeys={result['hotkeys']}")
         return result
 
     async def _render_to_platform(self, params: Dict[str, Any]) -> None:
-        """
-        渲染到Warudo平台
-
-        Args:
-            params: _adapt_intent() 返回的Warudo参数字典
-        """
+        """渲染到 Warudo 平台"""
         try:
             expressions = params.get("expressions", {})
             hotkeys = params.get("hotkeys", [])
+            body_actions = params.get("body_actions", [])
+            head_actions = params.get("head_actions", [])
 
             # 1. 应用表情参数
             for param_name, param_value in expressions.items():
@@ -189,141 +308,254 @@ class WarudoHandler(AvatarHandlerBase):
             for hotkey in hotkeys:
                 await self._send_hotkey(hotkey)
 
-            self.render_count += 1
+            # 3. 身体动作
+            for body_action in body_actions:
+                await self._send_action_internal("body_action", body_action)
 
+            # 4. 头部动作
+            for head_action in head_actions:
+                await self._send_action_internal("head_action", head_action)
+
+            self.render_count += 1
         except Exception as e:
-            self.logger.error(f"Warudo渲染失败: {e}", exc_info=True)
+            self.logger.error(f"Warudo 渲染失败: {e}", exc_info=True)
             self.error_count += 1
-            raise RuntimeError(f"Warudo渲染失败: {e}") from e
+            raise RuntimeError(f"Warudo 渲染失败: {e}") from e
 
     async def _connect(self) -> None:
-        """连接到Warudo WebSocket服务器"""
-        import websockets
+        """连接到 Warudo WebSocket(并启动后台重连循环)"""
+        if not WEBSOCKETS_AVAILABLE:
+            self.logger.error("websockets 库未安装,无法连接 Warudo")
+            return
 
+        self._should_stop = False
         uri = f"ws://{self.ws_host}:{self.ws_port}"
 
-        # 同步连接（用于测试）
-        self.websocket = await websockets.connect(uri)
-        self._is_connected = True
-        self.logger.info(f"已连接到Warudo: {uri}")
+        # 第一次同步连接(给 _is_connected 提供初始值)
+        try:
+            self.websocket = await websockets.connect(uri)  # type: ignore
+            self._is_connected = True
+            self.logger.info(f"已连接到 Warudo: {uri}")
+        except Exception as e:
+            self.logger.warning(f"首次连接 Warudo 失败({e}),将由后台重连循环处理")
+            self._is_connected = False
 
-        # 启动连接的后台任务（用于生产环境）
+        # 启动后台重连循环
         if not self._connection_task or self._connection_task.done():
-            self._connection_task = asyncio.create_task(self._connection_loop(uri), name="Warudo_Connect")
-            self.logger.info("Warudo WebSocket连接任务已启动")
+            self._connection_task = asyncio.create_task(self._connection_loop(uri), name="Warudo_Reconnect")
+            self.logger.info("Warudo WebSocket 后台重连任务已启动")
 
     async def _disconnect(self) -> None:
-        """断开Warudo WebSocket连接"""
-        # 停止眨眼任务
-        await self.blink_task.stop()
-        self.logger.debug("眨眼任务已停止")
+        """断开 Warudo WebSocket 连接"""
+        # 1. 通知重连循环停止
+        self._should_stop = True
 
-        # 停止眼部移动任务
-        await self.shift_task.stop()
-        self.logger.debug("眼部移动任务已停止")
+        # 2. 取消音频订阅
+        if self._lip_sync_sub_id and self.audio_stream_channel:
+            try:
+                await self.audio_stream_channel.unsubscribe(self._lip_sync_sub_id)
+            except Exception as e:
+                self.logger.error(f"取消 lip-sync 订阅失败: {e}")
+            finally:
+                self._lip_sync_sub_id = None
 
-        # 停止状态监控
-        self.state_manager.stop_monitoring()
-        self.logger.debug("状态管理器监控已停止")
+        # 3. 停止后台任务
+        try:
+            await self.blink_task.stop()
+        except Exception as e:
+            self.logger.error(f"停止眨眼任务失败: {e}")
 
-        # 取消WebSocket连接任务
+        try:
+            await self.shift_task.stop()
+        except Exception as e:
+            self.logger.error(f"停止眼球移动任务失败: {e}")
+
+        if self.talking_head_task is not None:
+            try:
+                await self.talking_head_task.stop()
+            except Exception as e:
+                self.logger.error(f"停止 talking_head 任务失败: {e}")
+
+        try:
+            await self.typing_action_task.stop()
+        except Exception as e:
+            self.logger.error(f"停止 typing_action 任务失败: {e}")
+
+        # 4. 停止状态监控
+        try:
+            self.state_manager.stop_monitoring()
+        except Exception as e:
+            self.logger.error(f"停止状态监控失败: {e}")
+
+        # 5. 停止字幕服务器
+        if self.subtitle_manager is not None:
+            try:
+                await self.subtitle_manager.stop_server()
+            except Exception as e:
+                self.logger.error(f"停止字幕服务器失败: {e}")
+
+        # 6. 取消 WebSocket 重连循环
         if self._connection_task and not self._connection_task.done():
             self._connection_task.cancel()
             try:
-                await asyncio.wait_for(self._connection_task, timeout=2.0)
+                await asyncio.wait_for(self._connection_task, timeout=3.0)
             except (asyncio.CancelledError, asyncio.TimeoutError):
-                self.logger.debug("WebSocket连接任务已取消")
+                self.logger.debug("WebSocket 重连任务已取消")
+            finally:
+                self._connection_task = None
 
-        # 关闭WebSocket连接
+        # 7. 关闭当前 WebSocket
         if self.websocket:
             try:
                 await asyncio.wait_for(self.websocket.close(), timeout=2.0)
-                self.logger.debug("Warudo WebSocket连接已关闭")
-            except asyncio.TimeoutError:
-                self.logger.warning("WebSocket关闭超时")
+            except (asyncio.TimeoutError, Exception) as e:
+                self.logger.warning(f"WebSocket 关闭异常: {e}")
             finally:
                 self.websocket = None
                 self._is_connected = False
+
+        self._action_sender.set_websocket(None)
 
     # ==================== 连接管理 ====================
 
-    async def _connection_loop(self, uri: str):
-        """WebSocket连接循环（支持自动重连）"""
-        action_sender = ActionSender()
-
-        while True:
+    async def _connection_loop(self, uri: str) -> None:
+        """WebSocket 真重连循环(由 _should_stop 控制退出)"""
+        self.logger.info("Warudo WebSocket 重连循环已启动")
+        while not self._should_stop:
             try:
-                # 等待现有连接关闭
+                # 第一次连接后或断线后重新连接
+                if not self._is_connected or self.websocket is None or self.websocket.closed:
+                    self.logger.info(f"尝试连接 Warudo: {uri}")
+                    self.websocket = await websockets.connect(uri)  # type: ignore
+                    self._is_connected = True
+                    self._action_sender.set_websocket(self.websocket)
+                    self.logger.info(f"已连接到 Warudo: {uri}")
+
+                    # 首次连接初始化(只执行一次)
+                    if self._first_connection:
+                        self._first_connection = False
+                        await self._on_first_connection_setup()
+
+                # 保持连接直到断开
                 if self.websocket and not self.websocket.closed:
                     await self.websocket.wait_closed()
 
+            except asyncio.CancelledError:
+                self.logger.debug("WebSocket 重连循环被取消")
+                break
             except Exception as e:
-                self.logger.error(f"WebSocket连接异常: {e}，5秒后重连...")
+                self.logger.error(f"WebSocket 连接异常: {e}")
             finally:
-                self._is_connected = False
-                self.websocket = None
-                action_sender.set_websocket(None)
-                self.logger.debug("WebSocket断开，但服务继续运行")
-                await asyncio.sleep(_RECONNECT_DELAY_S)
+                if not self._should_stop:
+                    self._is_connected = False
+                    self.websocket = None
+                    self._action_sender.set_websocket(None)
+                    self.logger.debug(f"WebSocket 断开,{self.typed_config.reconnect_delay_seconds}秒后重连...")
+                    try:
+                        await asyncio.sleep(self.typed_config.reconnect_delay_seconds)
+                    except asyncio.CancelledError:
+                        break
 
-    # ==================== 辅助方法 ====================
+        self.logger.info("Warudo WebSocket 重连循环已退出")
 
-    async def _send_action_internal(self, action: str, data: dict) -> None:
-        """
-        内部方法：发送动作到 Warudo（供状态管理器回调使用）
-
-        Args:
-            action: 动作名称
-            data: 动作数据
-        """
-        if not self._is_connected or not self.websocket:
-            self.logger.warning(f"Warudo未连接，无法发送动作: {action}")
-            return
-
+    async def _on_first_connection_setup(self) -> None:
+        """首次连接成功后的初始化(启动后台任务、监控、订阅音频)"""
+        # 1. 启动状态监控(关键修复:之前从未启动)
         try:
-            action_sender = ActionSender()
-            action_sender.set_websocket(self.websocket)
-            await action_sender.send_action(action, data)
+            self.state_manager.start_monitoring()
+            self.logger.info("状态管理器监控已启动")
+        except Exception as e:
+            self.logger.error(f"启动状态监控失败: {e}")
+
+        # 2. 启动眨眼任务(关键修复:之前从未启动)
+        try:
+            await self.blink_task.start()
+            self.logger.info("眨眼任务已启动")
+        except Exception as e:
+            self.logger.error(f"启动眨眼任务失败: {e}")
+
+        # 3. 启动眼球移动任务(关键修复:之前从未启动)
+        try:
+            await self.shift_task.start()
+            self.logger.info("眼球移动任务已启动")
+        except Exception as e:
+            self.logger.error(f"启动眼球移动任务失败: {e}")
+
+        # 4. 启动 talking_head 任务
+        if self.talking_head_task is not None:
+            try:
+                await self.talking_head_task.start()
+                self.logger.info("TalkingHead 任务已启动")
+            except Exception as e:
+                self.logger.error(f"启动 TalkingHead 任务失败: {e}")
+
+        # 5. 启动 typing_action 任务
+        try:
+            await self.typing_action_task.start()
+            self.logger.info("TypingAction 任务已启动")
+        except Exception as e:
+            self.logger.error(f"启动 TypingAction 任务失败: {e}")
+
+        # 6. 启动字幕服务器
+        if self.subtitle_manager is not None:
+            try:
+                await self.subtitle_manager.start_server()
+                self.logger.info(f"字幕服务器已启动: http://localhost:{self.typed_config.subtitle_port}")
+            except Exception as e:
+                self.logger.error(f"启动字幕服务器失败: {e}")
+
+        # 7. 订阅音频流(关键: lip-sync)
+        if self.lip_sync is not None and self.audio_stream_channel is not None:
+            try:
+                self._lip_sync_sub_id = await self.audio_stream_channel.subscribe(
+                    name="warudo_lip_sync",
+                    on_audio_start=self.lip_sync.on_start,
+                    on_audio_chunk=self.lip_sync.on_chunk,
+                    on_audio_end=self.lip_sync.on_end,
+                    config=SubscriberConfig(
+                        queue_size=200,
+                        backpressure_strategy=BackpressureStrategy.DROP_NEWEST,
+                    ),
+                )
+                self.logger.info("已订阅 AudioStreamChannel 进行 lip-sync")
+            except Exception as e:
+                self.logger.error(f"订阅 AudioStreamChannel 失败: {e}")
+
+    # ==================== 发送方法 ====================
+
+    async def _send_action_internal(self, action: str, data: Any) -> None:
+        """通过单实例 ActionSender 发送动作"""
+        if not self._is_connected or self.websocket is None or self.websocket.closed:
+            self.logger.warning(f"Warudo 未连接,无法发送动作: {action}")
+            return
+        try:
+            self._action_sender.set_websocket(self.websocket)
+            await self._action_sender.send_action(action, data)
         except Exception as e:
             self.logger.error(f"发送动作失败: {action}: {e}")
 
     async def _send_expression(self, param_name: str, param_value: float) -> None:
-        """
-        发送表情参数到Warudo
-
-        Args:
-            param_name: 参数名
-            param_value: 参数值
-        """
-        if not self._is_connected or not self.websocket:
-            self.logger.warning(f"Warudo未连接，无法设置参数: {param_name} = {param_value}")
+        """发送表情参数"""
+        if not self._is_ready_to_send():
+            self.logger.warning(f"Warudo 未连接,无法设置参数: {param_name} = {param_value}")
             return
-
         try:
             message = {"action": param_name, "data": param_value}
-            # 使用 send_json（如果可用）或 send
             if hasattr(self.websocket, "send_json"):
                 await self.websocket.send_json(message)
             else:
                 await self.websocket.send(json.dumps(message))
-            self.logger.debug(f"设置Warudo参数: {param_name} = {param_value}")
+            self.logger.debug(f"设置 Warudo 参数: {param_name} = {param_value}")
         except Exception as e:
-            self.logger.error(f"设置Warudo参数失败: {param_name}: {e}")
+            self.logger.error(f"设置 Warudo 参数失败: {param_name}: {e}")
 
     async def _send_hotkey(self, hotkey_id: str) -> None:
-        """
-        发送热键到Warudo
-
-        Args:
-            hotkey_id: 热键ID
-        """
-        if not self._is_connected or not self.websocket:
-            self.logger.warning(f"Warudo未连接，无法触发热键: {hotkey_id}")
+        """发送热键"""
+        if not self._is_ready_to_send():
+            self.logger.warning(f"Warudo 未连接,无法触发热键: {hotkey_id}")
             return
-
         try:
             message = {"action": hotkey_id, "data": ""}
-            # 使用 send_json（如果可用）或 send
             if hasattr(self.websocket, "send_json"):
                 await self.websocket.send_json(message)
             else:
@@ -332,20 +564,20 @@ class WarudoHandler(AvatarHandlerBase):
         except Exception as e:
             self.logger.error(f"触发热键失败: {hotkey_id}: {e}")
 
+    def _is_ready_to_send(self) -> bool:
+        """检查是否就绪可以发送(处理 mock 对象没有 closed 属性的情况)"""
+        if not self._is_connected or self.websocket is None:
+            return False
+        closed = getattr(self.websocket, "closed", None)
+        if closed is True:
+            return False
+        return True
+
     # ==================== 心情管理 ====================
 
     def update_mood(self, mood_data: Dict[str, Any]) -> bool:
-        """
-        更新心情状态
-
-        Args:
-            mood_data: 包含心情数据的字典，格式: {"joy": 5, "anger": 1, "sorrow": 1, "fear": 1}
-
-        Returns:
-            bool: 是否有变化发生
-        """
+        """更新心情状态"""
         has_changes = False
-
         for emotion in ["joy", "anger", "sorrow", "fear"]:
             new_value = max(1, min(10, int(mood_data.get(emotion, 5))))
             if self.current_mood[emotion] != new_value:
@@ -354,25 +586,70 @@ class WarudoHandler(AvatarHandlerBase):
 
         if has_changes:
             self.logger.debug(f"心情状态已更新: {self.current_mood}")
-            # 更新心情管理器
             self.mood_manager.update_mood(mood_data)
 
         return has_changes
 
-    # ==================== 回复状态管理 ====================
+    # ==================== 字幕推送 ====================
+
+    async def push_subtitle(self, speech: str, user_name: str = "MaiBot") -> None:
+        """推送完整字幕(一次性,one-shot 退化模式)"""
+        if not self.subtitle_manager or not speech:
+            return
+        try:
+            await self.subtitle_manager.start_generation(user_name)
+            await self.subtitle_manager.add_chunk(speech)
+            await self.subtitle_manager.complete_generation()
+            self.logger.debug(f"字幕已推送: {speech[:50]}...")
+        except Exception as e:
+            self.logger.error(f"字幕推送失败: {e}")
+
+    # ==================== handle() override 注入字幕推送 ====================
+
+    async def handle(self, intent: "Intent") -> None:
+        """执行意图,翻译后适配渲染到平台(override 基类,在 render 后推送字幕)"""
+        if not self._is_connected:
+            self.logger.warning("未连接,跳过渲染")
+            return
+
+        try:
+            translated_intent = await self._translate_with_llm(intent)
+            params = await self._adapt_intent(translated_intent)
+            await self._render_to_platform(params)
+
+            # 字幕推送(only-shot 退化模式)
+            if translated_intent.speech:
+                user_name = translated_intent.metadata.source_id if translated_intent.metadata else "MaiBot"
+                await self.push_subtitle(translated_intent.speech, user_name)
+        except Exception as e:
+            self.logger.error(f"渲染失败: {e}", exc_info=True)
+
+    # ==================== 状态联动(供其他模块/测试调用) ====================
 
     async def start_talking(self) -> None:
-        """开始说话状态"""
-        await self.reply_state.start_talking()
+        """开始说话(由 lip-sync on_start 回调或外部触发)"""
+        if self.talking_head_task is not None:
+            self.talking_head_task.is_talking = True
+        self.state_manager.sight_state.set_state("camera", 1.0)
+        await self._send_action_internal("loading", "")
 
     async def stop_talking(self) -> None:
-        """停止说话状态"""
-        await self.reply_state.stop_talking()
+        """停止说话(由 lip-sync on_end 回调或外部触发)"""
+        if self.talking_head_task is not None:
+            self.talking_head_task.is_talking = False
+        self.state_manager.sight_state.set_state("camera", 0.0)
+
+    async def on_audio_start_proxy(self) -> None:
+        """lip-sync on_start 回调代理: 触发 start_talking"""
+        await self.start_talking()
+
+    async def on_audio_end_proxy(self) -> None:
+        """lip-sync on_end 回调代理: 触发 stop_talking"""
+        await self.stop_talking()
 
     # ==================== 统计信息 ====================
 
     def get_stats(self) -> Dict[str, Any]:
-        """获取Handler统计信息"""
         return {
             "name": self.__class__.__name__,
             "is_connected": self._is_connected,
@@ -380,5 +657,8 @@ class WarudoHandler(AvatarHandlerBase):
             "error_count": self.error_count,
             "current_mood": self.current_mood,
             "current_expression": self.current_expression,
-            "concurrent_rendering": False,
+            "lip_sync_enabled": self.lip_sync is not None,
+            "lip_sync_subscribed": self._lip_sync_sub_id is not None,
+            "subtitle_enabled": self.subtitle_manager is not None,
+            "talking_head_running": self.talking_head_task.running if self.talking_head_task else False,
         }
