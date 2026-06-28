@@ -34,18 +34,18 @@ flowchart LR
         OP[OutputHandler]
     end
 
-    IP -->|emit: data.message| EB[EventBus]
-    DP -->|emit: decision.intent| EB
-    OP -->|emit: render.completed| EB
+    IP -->|emit: input.message.received| EB[EventBus]
+    DP -->|emit: decision.intent.generated| EB
+    OP -->|emit: output.intent.dispatched| EB
 
     EB -->|on| DP
     EB -->|on| OP
 ```
 
 **数据流规则**：
-- **Input 阶段** 发布 `data.message` 事件，携带标准化消息
-- **Decision 阶段** 订阅并处理消息，发布 `decision.intent` 事件
-- **Output 阶段** 订阅意图事件，执行渲染并发布 `render.completed` 事件
+- **Input 阶段** 发布 `input.message.received` 事件，携带标准化消息
+- **Decision 阶段** 订阅并处理消息，发布 `decision.intent.generated` 事件
+- **Output 阶段** 订阅意图事件，执行渲染并发布 `output.intent.dispatched` 事件
 
 详细规则见 [数据流规则](data-flow.md)。
 
@@ -184,65 +184,43 @@ event_bus.reset_stats(event_name: Optional[str] = None)
 ```python
 from src.modules.events.names import CoreEvents
 
-# 3阶段数据流核心事件
-CoreEvents.DATA_MESSAGE          # Input → Decision
-CoreEvents.DECISION_INTENT       # Decision → Output
-CoreEvents.OUTPUT_INTENT         # 过滤后的 Intent
+# ========== Core: 核心系统事件 ==========
+CoreEvents.CORE_STARTUP          # core.startup
+CoreEvents.CORE_SHUTDOWN         # core.shutdown
+CoreEvents.CORE_ERROR            # core.error
 
-# Decision 阶段
-CoreEvents.DECISION_REQUEST
-CoreEvents.DECISION_RESPONSE_GENERATED
-CoreEvents.DECISION_PROVIDER_CONNECTED
-CoreEvents.DECISION_PROVIDER_DISCONNECTED
+# ========== Input 阶段 ==========
+CoreEvents.INPUT_MESSAGE_RECEIVED    # input.message.received
+CoreEvents.INPUT_CONNECTED           # input.connected
+CoreEvents.INPUT_DISCONNECTED        # input.disconnected
 
-# Output 阶段
-CoreEvents.RENDER_COMPLETED
-CoreEvents.RENDER_FAILED
+# ========== Decision 阶段 ==========
+CoreEvents.DECISION_INTENT_GENERATED     # decision.intent.generated
+CoreEvents.DECISION_CONNECTED            # decision.connected
+CoreEvents.DECISION_DISCONNECTED         # decision.disconnected
 
-# 系统事件
-CoreEvents.CORE_STARTUP
-CoreEvents.CORE_SHUTDOWN
-CoreEvents.CORE_ERROR
-
-# STT 事件
-CoreEvents.STT_AUDIO_RECEIVED
-CoreEvents.STT_SPEECH_STARTED
-CoreEvents.STT_SPEECH_ENDED
-
-# 屏幕上下文事件
-CoreEvents.SCREEN_CONTEXT_UPDATED
-CoreEvents.SCREEN_CHANGED
-
-# 关键词匹配事件
-CoreEvents.KEYWORD_MATCHED
-
-# VRChat 事件
-CoreEvents.VRCHAT_CONNECTED
-CoreEvents.VRCHAT_DISCONNECTED
-CoreEvents.VRCHAT_PARAMETER_SENT
-
-# 渲染事件
-CoreEvents.RENDER_SUBTITLE
-CoreEvents.RENDER_STICKER
-
-# OBS 控制事件
-CoreEvents.OBS_SEND_TEXT
-CoreEvents.OBS_SWITCH_SCENE
-CoreEvents.OBS_SET_SOURCE_VISIBILITY
-
-# 远程流事件
-CoreEvents.REMOTE_STREAM_REQUEST_IMAGE
-
-# VTS 相关事件
-CoreEvents.VTS_SEND_EMOTION
-CoreEvents.VTS_SEND_STATE
+# ========== Output 阶段 ==========
+CoreEvents.OUTPUT_INTENT_DISPATCHED      # output.intent.dispatched
+CoreEvents.OUTPUT_HANDLER_CONNECTED      # DEPRECATED 兼容垫片（不再发射）
+CoreEvents.OUTPUT_HANDLER_DISCONNECTED   # DEPRECATED 兼容垫片（不再发射）
+CoreEvents.OUTPUT_OBS_COMMAND            # output.obs.command
+CoreEvents.OUTPUT_STICKER_COMMAND        # output.sticker.command
 ```
+
+> **架构演进**：早期版本的事件常量（如 `OBS_SEND_TEXT`/`VTS_SEND_EMOTION`/
+> `STT_AUDIO_RECEIVED` 等细粒度事件）已统一收敛为"阶段流转事件 + Payload 内部 command
+> 区分"的模式。例如所有 OBS 操作通过 `OUTPUT_OBS_COMMAND` 单一事件分发，
+> 具体动作由 `OBSCommandPayload.command` 字段区分。
 
 ### 获取所有事件
 
 ```python
 all_events = CoreEvents.get_all_events()
-print(all_events)  # ('data.message', 'decision.intent', ...)
+print(all_events)
+# ('core.startup', 'core.shutdown', 'core.error',
+#  'input.message.received', 'input.connected', 'input.disconnected',
+#  'decision.intent.generated', 'decision.connected', 'decision.disconnected',
+#  'output.intent.dispatched', 'output.obs.command', 'output.sticker.command')
 ```
 
 ---
@@ -258,17 +236,21 @@ classDiagram
     BaseModel <|-- BasePayload
     BasePayload <|-- RawDataPayload
     BasePayload <|-- MessageReadyPayload
-    BasePayload <|-- DecisionRequestPayload
+    BasePayload <|-- IntentActionPayload
     BasePayload <|-- IntentPayload
-    BasePayload <|-- DecisionResponsePayload
-    BasePayload <|-- ProviderConnectedPayload
-    BasePayload <|-- ProviderDisconnectedPayload
-    BasePayload <|-- RenderCompletedPayload
-    BasePayload <|-- RenderFailedPayload
-    BasePayload <|-- StartupPayload
-    BasePayload <|-- ShutdownPayload
-    BasePayload <|-- ErrorPayload
+    BasePayload <|-- ConnectedPayload
+    BasePayload <|-- DisconnectedPayload
+    BasePayload <|-- ConnectionEventPayload
+    BasePayload <|-- OBSCommandPayload
+    BasePayload <|-- OutputIntentDispatchedPayload
+    BasePayload <|-- StickerCommandPayload
 ```
+
+> **架构演进**：早期版本中散落的 Payload 类（`DecisionRequestPayload`、
+> `ProviderConnectedPayload`、`RenderCompletedPayload`、`ErrorPayload` 等）
+> 已统一收敛。当前实际存在的 11 个 Payload 类如上图所示，全部定义在
+> `src/modules/events/payloads/` 下按阶段分包（`input.py` / `decision.py` /
+> `output.py` / `connection.py` / `base.py`）。
 
 ### 按阶段分类
 
@@ -277,37 +259,35 @@ classDiagram
 | Payload 类 | 事件名 | 用途 |
 |-----------|--------|------|
 | `RawDataPayload` | `data.raw` | 原始数据事件 |
-| `MessageReadyPayload` | `data.message` | 标准化消息就绪 |
+| `MessageReadyPayload` | `input.message.received` | 标准化消息就绪（Input → Decision） |
 
 #### Decision 阶段
 
 | Payload 类 | 事件名 | 用途 |
 |-----------|--------|------|
-| `DecisionRequestPayload` | `decision.request` | 决策请求 |
-| `IntentPayload` | `decision.intent` | 意图生成 |
-| `IntentActionPayload` | - | 意图动作 |
-| `DecisionResponsePayload` | `decision.response_generated` | MaiBot 响应 |
-| `ProviderConnectedPayload` | `decision.provider.connected` | Decider 连接 |
-| `ProviderDisconnectedPayload` | `decision.provider.disconnected` | Decider 断开 |
+| `IntentPayload` | `decision.intent.generated` | 决策意图生成（Decision → Output） |
+| `IntentActionPayload` | `decision.intent.action` | 意图中的单个动作（结构化输出） |
+| `ConnectedPayload` | `decision.connected` | Decider 连接 |
+| `DisconnectedPayload` | `decision.disconnected` | Decider 断开 |
+
+#### Connection 通用
+
+| Payload 类 | 事件名 | 用途 |
+|-----------|--------|------|
+| `ConnectionEventPayload` | 通用 | 输入/决策组件连接状态（共用） |
 
 #### Output 阶段
 
 | Payload 类 | 事件名 | 用途 |
 |-----------|--------|------|
-| `RenderCompletedPayload` | `render.completed` | 渲染完成 |
-| `RenderFailedPayload` | `render.failed` | 渲染失败 |
-| `OBSSendTextPayload` | `obs.send_text` | OBS 发送文本 |
-| `OBSSwitchScenePayload` | `obs.switch_scene` | OBS 切换场景 |
-| `OBSSetSourceVisibilityPayload` | `obs.set_source_visibility` | OBS 设置源可见性 |
-| `RemoteStreamRequestImagePayload` | `remote_stream.request_image` | 远程流请求图像 |
+| `OutputIntentDispatchedPayload` | `output.intent.dispatched` | 过滤后意图派发（OutputHandlerManager → OutputHandler） |
+| `OBSCommandPayload` | `output.obs.command` | OBS 统一入口（由 payload.command 区分动作） |
+| `StickerCommandPayload` | `output.sticker.command` | 贴图命令 |
 
-#### System
-
-| Payload 类 | 事件名 | 用途 |
-|-----------|--------|------|
-| `StartupPayload` | `core.startup` | 系统启动 |
-| `ShutdownPayload` | `core.shutdown` | 系统关闭 |
-| `ErrorPayload` | `core.error` | 系统错误 |
+> **架构演进**：早期版本中各细粒度事件（`obs.send_text` / `obs.switch_scene` /
+> `obs.set_source_visibility` / `render.completed` / `render.failed` /
+> `remote_stream.request_image` 等）已统一收敛为"事件 + Payload.command 区分"的模式。
+> 一个事件承担一类操作，具体动作由 Payload 内部字段决定。
 
 ### BasePayload 特性
 
@@ -367,7 +347,7 @@ async def handle_message(event_name: str, data: MessageReadyPayload, source: str
     print(f"收到消息: {data.message.get('text')}")
 
 event_bus.on(
-    CoreEvents.DATA_MESSAGE,
+    CoreEvents.INPUT_MESSAGE_RECEIVED,
     handle_message,
     model_class=MessageReadyPayload,
     priority=50  # 高优先级
@@ -375,13 +355,13 @@ event_bus.on(
 
 # 发布事件
 await event_bus.emit(
-    CoreEvents.DATA_MESSAGE,
+    CoreEvents.INPUT_MESSAGE_RECEIVED,
     MessageReadyPayload(message={"text": "你好", "source": "console"}, source="console"),
     source="ConsoleInputCollector"
 )
 
 # 获取统计
-stats = event_bus.get_stats(CoreEvents.DATA_MESSAGE)
+stats = event_bus.get_stats(CoreEvents.INPUT_MESSAGE_RECEIVED)
 print(f"Emit次数: {stats.emit_count}, 监听器数: {stats.listener_count}")
 
 # 清理
@@ -392,46 +372,41 @@ await event_bus.cleanup()
 
 ```python
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads import RenderCompletedPayload
+from src.modules.events.payloads import IntentPayload
 
 class MyOutputHandler(OutputHandler):
     async def _setup_internal(self):
-        # 订阅渲染完成事件
+        # 订阅派发后的意图事件
         self._event_bus.on(
-            CoreEvents.RENDER_COMPLETED,
-            self._on_render_completed,
-            model_class=RenderCompletedPayload,
+            CoreEvents.OUTPUT_INTENT_DISPATCHED,
+            self._on_intent_dispatched,
+            model_class=IntentPayload,
         )
 
-    async def _on_render_completed(
+    async def _on_intent_dispatched(
         self,
         event_name: str,
-        data: RenderCompletedPayload,
+        data: IntentPayload,
         source: str
     ):
-        print(f"渲染完成: {data.handler}, 耗时: {data.duration_ms}ms")
+        intent = data.to_intent()
+        print(f"收到意图: speech={intent.speech!r}, action={intent.action.name if intent.action else None!r}")
 ```
 
 ### 发布系统错误事件
 
 ```python
-from src.modules.events.names import CoreEvents
-from src.modules.events.payloads import ErrorPayload
+from src.modules.logging import get_logger
+
+logger = get_logger(__name__)
 
 try:
     # 可能失败的代码
     await do_something()
 except Exception as e:
-    await event_bus.emit(
-        CoreEvents.CORE_ERROR,
-        ErrorPayload.from_exception(
-            exc=e,
-            source="MyHandler",
-            recoverable=True,
-            context={"endpoint": "ws://localhost:8080"}
-        ),
-        source="MyHandler"
-    )
+    # 当前 core.error 事件暂未绑定统一 Payload，
+    # 业务代码通常直接 logger.exception() 或发布自定义 Payload
+    logger.exception("MyHandler 操作失败")
 ```
 
 ### 发布决策意图
@@ -441,10 +416,10 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import IntentPayload
 
 # 从 Intent 对象创建 Payload
-intent_payload = IntentPayload.from_intent(intent, provider="maibot")
+intent_payload = IntentPayload.from_intent(intent, name="maibot")
 
 await event_bus.emit(
-    CoreEvents.DECISION_INTENT,
+    CoreEvents.DECISION_INTENT_GENERATED,
     intent_payload,
     source="DecisionManager"
 )
@@ -505,23 +480,20 @@ sequenceDiagram
 
     Note over IP,EB: Input 阶段
 
-    IP->>EB: emit(data.message, MessageReadyPayload)
+    IP->>EB: emit(input.message.received, MessageReadyPayload)
     EB->>DM: 转发事件
 
     Note over DM,EB: Decision 阶段
 
     DM->>DM: decide(message) -> Intent
-    DM->>EB: emit(decision.intent, IntentPayload)
-    EB->>EG: 转发事件
+    DM->>EB: emit(decision.intent.generated, IntentPayload)
+    EB->>OHM: 转发事件
 
-    Note over EG,EB: Output 阶段
+    Note over OHM,EB: Output 阶段
 
-    EG->>EG: generate_params(intent) -> RenderParameters
-    EG->>EB: emit(output.intent, RenderParamsPayload)
-    EB->>OP: 转发事件
-
+    OHM->>OP: dispatch(intent)  # 订阅 output.intent.dispatched
+    OP->>OP: handle(intent)
     OP->>OP: render(params)
-    OP->>EB: emit(render.completed, RenderCompletedPayload)
 ```
 
 ---
@@ -532,17 +504,17 @@ sequenceDiagram
 
 ```python
 # 避免魔法字符串
-await event_bus.emit("data.message", payload)  # 不推荐
+await event_bus.emit("input.message.received", payload)  # 不推荐
 
 # 使用常量
-await event_bus.emit(CoreEvents.DATA_MESSAGE, payload) ### 2. # 推荐
+await event_bus.emit(CoreEvents.INPUT_MESSAGE_RECEIVED, payload)  # 推荐
 ```
 
- 正确使用类型化订阅
+### 2. 正确使用类型化订阅
 
 ```python
 # 强制指定 model_class
-event_bus.on(CoreEvents.DATA_MESSAGE, handler, model_class=MessageReadyPayload)
+event_bus.on(CoreEvents.INPUT_MESSAGE_RECEIVED, handler, model_class=MessageReadyPayload)
 
 # 不指定 model_class 会导致无法自动反序列化
 ```
@@ -600,4 +572,4 @@ class MyPayload(BasePayload):
 
 ---
 
-*最后更新：2026-06-14*
+*最后更新：2026-06-28（同步破坏性升级：收敛事件常量 + Payload 类名 + intent 事件名 + from_intent 参数名）*

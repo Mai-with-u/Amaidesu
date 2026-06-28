@@ -56,7 +56,7 @@ tests/
 ├── mocks/                  # Mock 对象
 │   ├── mock_input_collector.py
 │   ├── mock_output_handler.py
-│   └── mock_decider.py
+│   └── mock_decision_decider.py
 ├── prompts/                # 提示词测试
 ├── services/               # 服务测试
 │   ├── config/
@@ -217,9 +217,9 @@ async def test_collector_data_flow(collector_manager, event_bus):
     async def on_message(event_name, payload, source):
         collected.append(payload)
 
-    event_bus.on(CoreEvents.DATA_MESSAGE, on_message, model_class=NormalizedMessage)
+    event_bus.on(CoreEvents.INPUT_MESSAGE_RECEIVED, on_message, model_class=MessageReadyPayload)
 
-    collector = MockInputCollector({"name": "test_collector"})
+    collector = MockInputCollector({"name": "test_collector"}, event_bus)
     await collector_manager.start_all_collectors([collector])
 
     # 添加测试数据
@@ -321,10 +321,10 @@ async def test_process_message_rate_limited(rate_limit_pipeline):
 ```python
 from tests.mocks.mock_input_collector import MockInputCollector
 from tests.mocks.mock_output_handler import MockOutputHandler
-from tests.mocks.mock_decider import MockDecider
+from tests.mocks.mock_decision_decider import MockDecider
 
 # 使用 MockInputCollector 进行测试
-collector = MockInputCollector({"name": "test"})
+collector = MockInputCollector({"name": "test"}, event_bus)
 collector.add_test_data(normalized_message)
 ```
 
@@ -662,4 +662,4 @@ async def event_bus():
 
 ---
 
-*最后更新：2026-06-19*
+*最后更新：2026-06-28（同步破坏性升级：事件名 DATA_MESSAGE→INPUT_MESSAGE_RECEIVED + mock_decider.py→mock_decision_decider.py + MockInputCollector 新增 event_bus 必填参数）*

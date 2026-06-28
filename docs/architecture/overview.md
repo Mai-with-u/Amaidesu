@@ -43,9 +43,9 @@ flowchart TB
     IP2 --> NM
     IP3 --> NM
     NM --> Pipeline
-    Pipeline -->|"EventBus: data.message"| DP
+    Pipeline -->|"EventBus: input.message.received"| DP
     DP --> Intent
-    Intent -->|"EventBus: decision.intent"| OPM
+    Intent -->|"EventBus: decision.intent.generated"| OPM
     OPM --> OPipeline
     OPipeline --> OP1
     OPipeline --> OP2
@@ -59,9 +59,9 @@ flowchart TB
 外部输入（弹幕、游戏、语音）
         ↓
 【Input 阶段】InputCollector → NormalizedMessage → Pipeline 过滤
-        ↓ EventBus: data.message
+        ↓ EventBus: input.message.received
 【Decision 阶段】Decider → Intent
-        ↓ EventBus: decision.intent
+        ↓ EventBus: decision.intent.generated
 【Output 阶段】OutputHandlerManager → OutputPipeline → OutputHandlers
 ```
 
@@ -248,9 +248,9 @@ sequenceDiagram
 
 | 事件名 | 发布者 | 订阅者 | 数据类型 |
 |--------|--------|--------|---------|
-| `data.message` | Input 阶段 | Decision 阶段 | `NormalizedMessage` |
-| `decision.intent` | Decision 阶段 | Output 阶段 | `Intent` |
-| `output.params` | ExpressionGenerator | OutputHandlers | `RenderParameters` |
+| `input.message.received` | Input 阶段 | Decision 阶段 | `MessageReadyPayload`（NormalizedMessage 字典） |
+| `decision.intent.generated` | Decision 阶段 | OutputHandlerManager | `IntentPayload`（Intent 字典） |
+| `output.intent.dispatched` | OutputHandlerManager | OutputHandlers | `OutputIntentDispatchedPayload` |
 
 ### 管道（Pipeline）
 
@@ -342,4 +342,4 @@ enabled = ["tts", "subtitle", "vts"]
 
 ---
 
-*最后更新：2026-06-14*
+*最后更新：2026-06-28（同步事件名重命名 data.message→input.message.received / decision.intent→decision.intent.generated / output.params→output.intent.dispatched）*

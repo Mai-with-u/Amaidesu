@@ -10,7 +10,7 @@
 - **变量命名**：使用 snake_case（如 `provider_config`, `event_bus`）
 - **函数命名**：使用 snake_case（如 `send_to_maibot`, `register_websocket_handler`）
 - **类命名**：使用 PascalCase（如 `EventBus`, `InputCollector`）
-- **常量命名**：使用 CamelCase（如 `CoreEvents`, `EmotionType`）
+- **常量命名**：使用 CamelCase（如 `CoreEvents`, `Emotion`）
 
 ### 1.2 命名约定表
 
@@ -24,7 +24,7 @@
 | Decider 类 | 以 `Decider` 结尾 | `MaiBotDecider`, `LLMDecider` |
 | Handler 类 | 以 `Handler` 结尾 | `EdgeTTSHandler`, `SubtitleHandler` |
 | 管道类 | 以 `Pipeline` 结尾 | `RateLimitPipeline`, `SimilarTextFilterPipeline` |
-| 常量类 | PascalCase | `CoreEvents`, `EmotionType` |
+| 常量类 | PascalCase | `CoreEvents`, `Emotion` |
 
 ### 1.3 注释规范
 
@@ -91,7 +91,7 @@ from pydantic import BaseModel, Field
 | **Pydantic BaseModel** | 所有数据模型、配置 Schema、事件 Payload | `class UserConfig(BaseModel)` |
 | **dataclass** | 仅用于简单的内部统计/包装类 | `@dataclass class PipelineStats` |
 | **Protocol** | 定义接口协议 | `class InputPipeline(Protocol)` |
-| **Enum** | 定义常量集合 | `class EmotionType(str, Enum)` |
+| **Enum** | 定义常量集合 | `class Emotion(str, Enum)` |
 
 ### 3.2 Pydantic 使用示例
 
@@ -100,19 +100,23 @@ from pydantic import BaseModel, Field, ConfigDict
 from typing import Dict, Any, Optional
 from enum import Enum
 
-class EmotionType(str, Enum):
-    """情感类型枚举"""
+class Emotion(str, Enum):
+    """全局情感枚举（共享给所有 avatar handler，强制 12 个值）"""
     NEUTRAL = "neutral"
     HAPPY = "happy"
 
 class Intent(BaseModel):
-    """决策意图"""
-    model_config = ConfigDict(use_enum_values=True)
+    """决策意图（平台无关，核心数据结构）"""
+    model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(..., description="唯一标识符")
-    response_text: str = Field(..., description="回复文本")
-    emotion: EmotionType = Field(default=EmotionType.NEUTRAL, description="情感类型")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="元数据")
+    speech: Optional[str] = Field(default=None, description="AI 要说的话")
+    emotion: Optional["IntentEmotion"] = Field(default=None, description="意图情绪")
+
+class IntentEmotion(BaseModel):
+    """意图情绪（枚举名 + intensity 0-1）"""
+    model_config = ConfigDict(extra="forbid")
+    name: Emotion = Field(..., description="必须是 Emotion 枚举值之一")
+    intensity: float = Field(default=0.5, ge=0.0, le=1.0)
 ```
 
 ### 3.3 dataclass 使用示例
@@ -175,11 +179,11 @@ uv run python main.py --filter SubtitleHandler EdgeTTSHandler
 from src.modules.events.names import CoreEvents
 
 # ✅ 正确：使用常量
-await event_bus.emit(CoreEvents.DATA_MESSAGE, normalized_message)
-event_bus.on(CoreEvents.OUTPUT_INTENT, self._on_intent, model_class=IntentPayload)
+await event_bus.emit(CoreEvents.INPUT_MESSAGE_RECEIVED, normalized_message)
+event_bus.on(CoreEvents.OUTPUT_INTENT_DISPATCHED, self._on_intent, model_class=IntentPayload)
 
 # ❌ 错误：硬编码字符串
-await event_bus.emit("data.message", normalized_message)
+await event_bus.emit("input.message.received", normalized_message)
 ```
 
 ### 5.2 CoreEvents 常用常量
@@ -187,9 +191,9 @@ await event_bus.emit("data.message", normalized_message)
 ```python
 class CoreEvents:
     # 核心事件
-    DATA_MESSAGE = "data.message"
-    DECISION_INTENT = "decision.intent"
-    OUTPUT_INTENT = "output.intent"
+    INPUT_MESSAGE_RECEIVED = "input.message.received"
+    DECISION_INTENT_GENERATED = "decision.intent.generated"
+    OUTPUT_INTENT_DISPATCHED = "output.intent.dispatched"
 
     # 系统事件
     CORE_STARTUP = "core.startup"

@@ -226,13 +226,12 @@ except Exception as e:
 - **配置**：测试用 `MockOutputHandler` 不应在生产 config 启用
 
 ```python
-from src.stages.output.handlers.mock import MockOutputHandler
-from src.modules.events.payloads import IntentPayload
+from tests.mocks.mock_output_handler import MockOutputHandler
 
-handler = MockOutputHandler({}, mock_event_bus)
-await handler.init()
-await handler.handle(test_intent)
-assert len(handler.get_received_intents()) == 1
+handler = MockOutputHandler()
+await handler.execute(test_intent)
+assert len(handler.received_intents) == 1
+assert handler.get_last_intent().speech == test_intent.speech
 ```
 
 ## 9. 已下线组件（了解历史）
