@@ -138,18 +138,6 @@ class CommandDecider:
             IntentPayload.from_intent(intent, "command"),
             source="CommandDecider",
         )
-        extra = ""
-        if intent.action:
-            extra += f" → {intent.action.name}"
-        if intent.emotion:
-            extra += f" ({intent.emotion.name})"
-        self.logger.info(f"[CommandDecider] {intent.speech}{extra}")
-        self.logger.debug(
-            f"[CommandDecider] decision.intent.generated: speech={intent.speech!r}, "
-            f"emotion={intent.emotion.name if intent.emotion else None}, "
-            f"action={intent.action.name if intent.action else None}, "
-            f"source={intent.metadata.source_id}, decision_time_ms={intent.metadata.decision_time_ms}"
-        )
 
     @classmethod
     def get_registration_info(cls) -> dict:

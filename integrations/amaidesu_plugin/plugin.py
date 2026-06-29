@@ -10,12 +10,13 @@ Amaidesu 动作控制插件 - MaiBot SDK v2
 """
 
 import asyncio
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 import httpx
 from pydantic import Field
 from maibot_sdk import (
     MaiBotPlugin,
+    MessageGateway,
     Tool,
     Command,
     HookHandler,
@@ -29,6 +30,61 @@ from maibot_sdk.types import (
     ToolParameterInfo,
     ToolParamType,
 )
+
+# MessageGateway 标识
+AMAIDESU_GATEWAY_NAME = "amaidesu_gateway"
+AMAIDESU_PLATFORM = "amaidesu"
+# 不传 account_id —— SendService 出来的 RouteKey.account_id 是 None(消息
+# additional_config 里没有 platform_io_account_id),bind 端如果传非空会 hash
+# 不一致导致永远查不到 binding。装饰器上的 account_id="" 同样走 None。
+
+# c72d1e5 默认回复器提示词模板,占位符由 MaiBot 端填充
+_DEFAULT_REPLYER_PROMPT = """{knowledge_prompt}{tool_info_block}{extra_info_block}
+{expression_habits_block}{memory_retrieval}{jargon_explanation}
+
+你是一位正在直播的 VTuber {bot_name}，下面是直播间正在聊的内容，其中包含聊天记录和聊天中的图片
+其中标注 {bot_name}(你) 的发言是你自己的发言，请注意区分:
+{time_block}
+{dialogue_prompt}
+
+{reply_target_block}。
+{planner_reasoning}
+{identity}
+{chat_prompt}作为 VTuber，请用生动有趣的方式回应观众弹幕，保持角色特点，
+尽量简短一些。{keywords_reaction_prompt}
+请注意把握弹幕内容，不要回复的太有条理。
+{reply_style}
+请注意不要输出多余内容(包括不必要的前后缀，冒号，括号，表情包，at或 @等 )，只输出发言内容就好。
+最好一次对一个话题进行回复，免得啰嗦或者回复内容太乱。
+现在，你说：
+"""
+
+# 默认规划器提示词(VTuber 直播决策模板;c72d1e5 时代无独立模板,这里给完整版本)
+# 注意:Hook 触发时 messages 已被 MaiBot 端渲染,override 内容按原样替换原 system message,
+# 因此占位符不会被填充,这里用静态文本而非 {bot_name} 等变量。
+_DEFAULT_PLANNER_PROMPT = """你是 VTuber 直播间的聊天决策规划助手。
+
+# 任务
+分析当前直播间的弹幕和聊天内容，判断 VTuber 是否需要回复、如何回复，以及是否需要触发额外的工具动作。
+
+# 决策原则
+- 保持角色特点，不要打破沉浸感
+- 主动回应有趣或高频的弹幕，而不是每条都回
+- 不要重复回复相同话题，不要在对方话没说完时插嘴
+- 如果有工具可以帮助表达情绪/动作，优先调用
+- 信息不足时不要编造
+
+# 可用工具
+- reply():对用户发出可见回复
+- query_memory():检索历史对话/长期偏好
+- tool_search():从 deferred 池中解锁其他工具
+- view_complex_message():展开复杂消息
+- no_action():不应该回复时使用
+- wait():等对方继续说完
+- finish():结束这次规划
+
+现在，请输出你对当前场景的分析，然后调用工具：
+"""
 
 
 # ============ Config Classes ============
@@ -80,8 +136,11 @@ class ReplyerOverrideConfig(PluginConfigBase):
     __ui_icon__ = "file-text"
     __ui_order__ = 2
 
-    enabled: bool = Field(default=False, description="是否启用回复器提示词覆盖")
-    system_prompt_content: str = Field(default="", description="覆盖的回复器系统提示词内容")
+    enabled: bool = Field(default=True, description="是否启用回复器提示词覆盖")
+    system_prompt_content: str = Field(
+        default=_DEFAULT_REPLYER_PROMPT,
+        description="覆盖的回复器系统提示词内容(默认 c72d1e5 模板,占位符由 MaiBot 端填充)",
+    )
 
 
 class PlannerOverrideConfig(PluginConfigBase):
@@ -91,8 +150,11 @@ class PlannerOverrideConfig(PluginConfigBase):
     __ui_icon__ = "brain"
     __ui_order__ = 3
 
-    enabled: bool = Field(default=False, description="是否启用规划器提示词覆盖")
-    system_prompt_content: str = Field(default="", description="覆盖的规划器系统提示词内容")
+    enabled: bool = Field(default=True, description="是否启用规划器提示词覆盖")
+    system_prompt_content: str = Field(
+        default=_DEFAULT_PLANNER_PROMPT,
+        description="覆盖的规划器系统提示词内容(默认 VTuber 直播决策模板,完整无占位符)",
+    )
 
 
 class AmaidesuPluginConfig(PluginConfigBase):
@@ -120,8 +182,12 @@ class AmaidesuPlugin(MaiBotPlugin):
     async def on_load(self) -> None:
         self.ctx.logger.info("AmaidesuPlugin 已加载")
         await self._prefetch_handlers()
+        # 上报 MessageGateway ready,MaiBot 会自动注册 platform="amaidesu" 的 send route
+        await self._report_gateway_ready(True)
 
     async def on_unload(self) -> None:
+        # 卸载前 unregister,避免 PluginSupervisor 残留 driver
+        await self._report_gateway_ready(False)
         self.ctx.logger.info("AmaidesuPlugin 已卸载")
 
     async def on_config_update(self, scope: str, config_data: dict[str, Any], version: str) -> None:
@@ -173,6 +239,132 @@ class AmaidesuPlugin(MaiBotPlugin):
         if prefix not in self._valid_handlers:
             return f"未知 handler 标识符: '{prefix}', 可用: {sorted(self._valid_handlers)}"
         return None
+
+    # ===== MessageGateway(出站)=====
+
+    async def _report_gateway_ready(self, ready: bool) -> None:
+        """向 MaiBot Host 上报 MessageGateway 运行时状态。
+
+        - ready=True: Host 会创建 PluginPlatformDriver 并 `bind_send_route(RouteKey)`
+        - ready=False: Host 会解绑并移除 driver
+
+        关键:不传 account_id/scope,让 bind 端 RouteKey = (platform, account_id=None, scope=None),
+        与 SendService 构造的 RouteKey(消息 additional_config 通常无 platform_io_account_id)一致。
+        """
+        try:
+            # 不传 account_id/scope → update_state 默认 "" → _build_message_gateway_route_key 内部
+            # 走 "or gateway_entry.account_id or None" → None → RouteKey(platform='amaidesu', account_id=None)
+            ok = await self.ctx.gateway.update_state(
+                gateway_name=AMAIDESU_GATEWAY_NAME,
+                ready=ready,
+                platform=AMAIDESU_PLATFORM,
+                metadata={
+                    "plugin_version": "2.0.0",
+                    "api_base_url": self.config.api.base_url,
+                    "expected_route_key": f"platform={AMAIDESU_PLATFORM}, account_id=None, scope=None",
+                },
+            )
+            if ok:
+                self.ctx.logger.info(
+                    f"[OK] MessageGateway {AMAIDESU_GATEWAY_NAME} ready={ready} 上报成功 "
+                    f"| 期望 RouteKey: (platform={AMAIDESU_PLATFORM}, account_id=None, scope=None) "
+                    f"| 实际: 见 MaiBot 端 [runner_manager] bind_send_route DEBUG 日志"
+                )
+            else:
+                self.ctx.logger.warning(f"[!!] MessageGateway {AMAIDESU_GATEWAY_NAME} ready={ready} 上报被 Host 拒绝")
+        except Exception as e:
+            self.ctx.logger.warning(f"[!!] MessageGateway ready 上报异常(忽略): {type(e).__name__}: {e}")
+
+    def _extract_reply_text(self, message: Dict[str, Any]) -> str:
+        """从 MaiBot 序列化消息字典中提取回复文本。
+
+        优先使用 `processed_plain_text`(MaiBot 已处理过的纯文本),
+        回退从 `raw_message` 段的 text 字段拼接。
+        """
+        plain = message.get("processed_plain_text")
+        if isinstance(plain, str) and plain.strip():
+            return plain.strip()
+
+        raw = message.get("raw_message")
+        if isinstance(raw, list):
+            parts = []
+            for seg in raw:
+                if isinstance(seg, dict):
+                    if seg.get("type") == "text":
+                        data = seg.get("data")
+                        if isinstance(data, dict):
+                            text = data.get("text")
+                            if isinstance(text, str):
+                                parts.append(text)
+                        elif isinstance(data, str):
+                            parts.append(data)
+            if parts:
+                return "".join(parts).strip()
+        return ""
+
+    @MessageGateway(
+        name=AMAIDESU_GATEWAY_NAME,
+        route_type="send",
+        platform=AMAIDESU_PLATFORM,
+        protocol="amaidesu",
+        description="Amaidesu 出站消息网关:MaiBot 决策回复后通过此通道转发到 Amaidesu HTTP API",
+    )
+    async def handle_amaidesu_outbound(
+        self,
+        message: Dict[str, Any],
+        route: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """接收 MaiBot 出站消息(MaiBot → Amaidesu 回复),转发到 Amaidesu `/api/v1/maibot/action`。
+
+        入站(Amaidesu → MaiBot)走 `MaiBotDecider` 的 `maim_message.Router`,
+        此 gateway 仅负责出站,故 route_type="send"。
+        """
+        del route
+        del metadata
+        del kwargs
+
+        text = self._extract_reply_text(message)
+        if not text:
+            self.ctx.logger.warning("MessageGateway 出站消息无文本内容,跳过")
+            return {"success": False, "error": "消息无文本内容"}
+
+        payload = {"text": text}
+        url = self.config.api.base_url.rstrip("/") + self.config.api.action_path
+
+        try:
+            async with httpx.AsyncClient(timeout=self.config.api.timeout) as client:
+                response = await client.post(url, json=payload)
+                response.raise_for_status()
+                result = response.json()
+        except httpx.ConnectError as e:
+            self.ctx.logger.error(f"MessageGateway 连接 Amaidesu 失败: {self.config.api.base_url}: {e}")
+            return {"success": False, "error": f"连接 Amaidesu 失败: {e}"}
+        except httpx.TimeoutException as e:
+            self.ctx.logger.error(f"MessageGateway 请求 Amaidesu 超时: {e}")
+            return {"success": False, "error": f"请求超时: {e}"}
+        except httpx.HTTPStatusError as e:
+            self.ctx.logger.error(
+                f"MessageGateway Amaidesu 返回 HTTP {e.response.status_code}: {e.response.text[:200]}"
+            )
+            return {"success": False, "error": f"HTTP {e.response.status_code}: {e.response.text[:200]}"}
+        except Exception as e:
+            self.ctx.logger.error(f"MessageGateway 转发失败: {type(e).__name__}: {e}")
+            return {"success": False, "error": f"{type(e).__name__}: {e}"}
+
+        if not result.get("success"):
+            err = result.get("error", "未知错误")
+            self.ctx.logger.error(f"MessageGateway Amaidesu 处理失败: {err}")
+            return {"success": False, "error": err}
+
+        intent_id = result.get("intent_id", "?")
+        self.ctx.logger.info(f"MessageGateway 出站成功: text='{text[:50]}...' intent_id={intent_id}")
+        return {
+            "success": True,
+            "external_message_id": str(intent_id) if intent_id else "",
+            "metadata": {"intent_id": intent_id, "text_length": len(text)},
+        }
 
     # ===== 提示词覆盖(Hook)=====
 

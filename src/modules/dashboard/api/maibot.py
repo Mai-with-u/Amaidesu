@@ -94,7 +94,6 @@ async def handle_maibot_action(
         )
 
         intent_id = str(uuid.uuid4())
-        logger.info(f"处理 MaiBot 动作成功: {intent_id}")
 
         return MaibotActionResponse(success=True, intent_id=intent_id)
 

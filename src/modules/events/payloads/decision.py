@@ -14,7 +14,10 @@ from pydantic import ConfigDict, Field
 
 from src.modules.events.payloads.base import BasePayload
 from src.modules.events.registry import register_event
+from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from src.modules.types import Intent
@@ -113,6 +116,18 @@ class IntentPayload(BasePayload):
         Returns:
             IntentPayload 实例
         """
+        extra = ""
+        if intent.action is not None:
+            extra += f" → {intent.action.name}"
+        if intent.emotion is not None:
+            extra += f" ({intent.emotion.name})"
+        logger.info(f"[{name}] {intent.speech or ''}{extra}")
+        logger.debug(
+            f"IntentPayload.from_intent: name={name}, "
+            f"speech={intent.speech!r}, "
+            f"emotion={intent.emotion.name if intent.emotion else None}, "
+            f"action={intent.action.name if intent.action else None}"
+        )
         return cls(intent_data=intent.model_dump(mode="json"), name=name)
 
     def to_intent(self) -> "Intent":
