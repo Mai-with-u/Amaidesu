@@ -195,7 +195,13 @@ class InputCollectorManager:
                     source=collector_name,
                 )
 
-                self.logger.debug(f"Collector {collector_name} 生成消息: {message.text}")
+                nick = message.user_nickname or message.user_id or "anonymous"
+                self.logger.info(f"[{collector_name}] {nick}({message.user_id}): {message.text}")
+                self.logger.debug(
+                    f"[{collector_name}] input.message.received: "
+                    f"text={message.text!r}, source={message.source!r}, "
+                    f"user_id={message.user_id!r}, user_nickname={message.user_nickname!r}"
+                )
         except asyncio.CancelledError:
             self.logger.info(f"Collector {collector_name} 被取消")
         except Exception as e:

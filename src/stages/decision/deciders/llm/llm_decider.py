@@ -353,7 +353,18 @@ class LLMDecider:
             source="LLMDecider",
         )
 
-        self.logger.debug("已发布 decision.intent.generated 事件")
+        extra = ""
+        if intent.action:
+            extra += f" → {intent.action.name}"
+        if intent.emotion:
+            extra += f" ({intent.emotion.name})"
+        self.logger.info(f"[LLMDecider] {intent.speech}{extra}")
+        self.logger.debug(
+            f"[LLMDecider] decision.intent.generated: speech={intent.speech!r}, "
+            f"emotion={intent.emotion.name if intent.emotion else None}, "
+            f"action={intent.action.name if intent.action else None}, "
+            f"source={intent.metadata.source_id}, decision_time_ms={intent.metadata.decision_time_ms}"
+        )
 
     async def _handle_fallback(self, normalized_message: "NormalizedMessage") -> None:
         """
