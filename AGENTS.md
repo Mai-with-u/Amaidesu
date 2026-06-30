@@ -45,10 +45,15 @@
 
 **严格遵守单向数据流：Input 阶段 → Decision 阶段 → Output 阶段**
 
+约束分三个层面（精确表述见[数据流规则](docs/architecture/data-flow.md)）：
+- **① 数据平面（硬规则）**：运行时消息/结果严格单向，禁止下游结果回灌（防环）。
+- **② 分层规则**：阶段间不直接 import 对方实现，共享契约放 `src/modules/`（无 import 环）。
+- **③ 发现平面（允许）**：Decision 可**只读、拉取式**获取 Output 的能力元数据做动作选择，但必须经 `src/modules/` 的 Protocol（如 `CapabilitiesProvider`）+ 组合根注入，**不得** import Output 实现、**不得**靠 Output 推送事件。区分口诀："能挥手吗"可问（发现），"刚才挥手成功了吗"不可问（结果回灌）。
+
 | 禁止模式 | 说明 | 详细规则 |
 |---------|------|----------|
 | ❌ OutputHandler 订阅 Input 事件 | 绕过 Decision 阶段，破坏分层 | [数据流规则](docs/architecture/data-flow.md) |
-| ❌ Decider 订阅 Output 事件 | 创建循环依赖 | 同上 |
+| ❌ Decider 订阅 Output 事件（运行时结果） | 创建循环依赖；但只读能力元数据可经 Protocol 拉取 | 同上 |
 | ❌ InputCollector 订阅 Decision/Output 事件 | Input 应只发布，不订阅下游 | 同上 |
 
 ## AudioStreamChannel 音频流系统

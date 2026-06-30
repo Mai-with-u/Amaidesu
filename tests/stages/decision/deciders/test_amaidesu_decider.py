@@ -20,6 +20,11 @@ from src.stages.decision.deciders.amaidesu.message_buffer import MessageBuffer
 from src.stages.decision.deciders.amaidesu.timing_gate import TimingGate
 from src.modules.events.names import CoreEvents
 from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.types.capabilities import (
+    ParameterSpec,
+    UnifiedActionEntry,
+    UnifiedCapabilitiesView,
+)
 
 
 # ==================== 辅助 ====================
@@ -46,7 +51,34 @@ def make_llm_response(*, success: bool = True, content: str = "", error: str = "
     return SimpleNamespace(success=success, content=content, error=error)
 
 
-def make_decider(config: dict, llm_response: SimpleNamespace | None = None) -> AmaidesuDecider:
+class _FakeCapabilitiesProvider:
+    """测试用能力提供者，返回固定的统一能力视图。"""
+
+    def __init__(self, view: UnifiedCapabilitiesView):
+        self._view = view
+
+    def get_all_capabilities(self) -> UnifiedCapabilitiesView:
+        return self._view
+
+
+def make_capabilities(*names: str) -> UnifiedCapabilitiesView:
+    return UnifiedCapabilitiesView(
+        actions=[
+            UnifiedActionEntry(
+                name=name,
+                description=f"{name} 动作",
+                parameters={"duration_ms": ParameterSpec(type="integer", minimum=100, maximum=10000, default=1500)},
+            )
+            for name in names
+        ]
+    )
+
+
+def make_decider(
+    config: dict,
+    llm_response: SimpleNamespace | None = None,
+    capabilities_provider=None,
+) -> AmaidesuDecider:
     event_bus = MagicMock()
     event_bus.emit = AsyncMock()
 
@@ -63,6 +95,7 @@ def make_decider(config: dict, llm_response: SimpleNamespace | None = None) -> A
         prompt_service=prompt_service,
         config_service=None,
         context_service=None,
+        capabilities_provider=capabilities_provider,
     )
     return decider
 
@@ -251,6 +284,62 @@ class TestAmaidesuDecider:
 
         decider._event_bus.emit.assert_not_awaited()
         assert decider._failed_requests == 1
+
+    @pytest.mark.asyncio
+    async def test_action_selection_valid_action(self):
+        content = json.dumps(
+            {
+                "should_reply": True,
+                "text": "好嘞，挥个手~",
+                "emotion": "happy",
+                "action": "warudo.wave",
+                "action_parameters": {"duration_ms": 2000},
+            }
+        )
+        provider = _FakeCapabilitiesProvider(make_capabilities("warudo.wave", "warudo.nod"))
+        decider = make_decider(
+            config={"type": "amaidesu", "force_data_types": ["text"], "batch_window_ms": 0},
+            llm_response=make_llm_response(success=True, content=content),
+            capabilities_provider=provider,
+        )
+        await decider.decide(make_message("挥个手"))
+        await decider._maybe_flush()
+
+        decider._event_bus.emit.assert_awaited_once()
+        intent = decider._event_bus.emit.call_args[0][1].to_intent()
+        assert intent.action is not None
+        assert intent.action.name == "warudo.wave"
+        assert intent.action.parameters == {"duration_ms": 2000}
+
+        # action_list 被渲染进 prompt
+        render_kwargs = decider._prompt_service.render_safe.call_args.kwargs
+        assert "warudo.wave" in render_kwargs["action_list"]
+
+    @pytest.mark.asyncio
+    async def test_action_selection_invalid_action_dropped(self):
+        content = json.dumps(
+            {
+                "should_reply": True,
+                "text": "在的在的",
+                "emotion": "neutral",
+                "action": "warudo.unknown",
+                "action_parameters": {},
+            }
+        )
+        provider = _FakeCapabilitiesProvider(make_capabilities("warudo.wave"))
+        decider = make_decider(
+            config={"type": "amaidesu", "force_data_types": ["text"], "batch_window_ms": 0},
+            llm_response=make_llm_response(success=True, content=content),
+            capabilities_provider=provider,
+        )
+        await decider.decide(make_message("你好"))
+        await decider._maybe_flush()
+
+        decider._event_bus.emit.assert_awaited_once()
+        intent = decider._event_bus.emit.call_args[0][1].to_intent()
+        # 非法动作被丢弃，但发言仍发布
+        assert intent.action is None
+        assert intent.speech == "在的在的"
 
     @pytest.mark.asyncio
     async def test_window_not_due_keeps_buffer(self):

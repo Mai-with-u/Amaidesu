@@ -9,10 +9,18 @@ from .intent import (
     IntentEmotion,
     IntentMetadata,
 )
+from .capabilities import (
+    CapabilitiesProvider,
+    UnifiedActionEntry,
+    UnifiedCapabilitiesView,
+)
 
 __all__ = [
     "Intent",
     "IntentAction",
     "IntentEmotion",
     "IntentMetadata",
+    "CapabilitiesProvider",
+    "UnifiedActionEntry",
+    "UnifiedCapabilitiesView",
 ]

@@ -129,7 +129,7 @@ class WarudoHandler(AvatarHandlerBase):
     }
 
     def get_capabilities(self):
-        from src.stages.output.capabilities import (
+        from src.modules.types.capabilities import (
             ActionSpec,
             HandlerCapabilities,
             _pydantic_to_param_spec,

@@ -316,29 +316,12 @@ async def create_app_components(
     # InputCollectorManager 直接订阅事件，无需协调器
     # input_coordinator 已被移除
 
-    # 决策阶段 (Decision 阶段)
-    decision_manager: Optional[DeciderManager] = None
-
     # 初始化 prompt_manager（供 decision 和 output 阶段使用）
     prompt_manager = get_prompt_manager()
 
-    if decision_config:
-        logger.info("初始化决策阶段组件（Decision 阶段）...")
-        try:
-            decision_manager = DeciderManager(event_bus, llm_service, config_service, context_service, prompt_manager)
-
-            await decision_manager.setup(decision_config=decision_config)
-            await decision_manager.start()
-            active_decider = decision_manager.get_current_decider_name()
-            logger.info(f"DeciderManager 已设置并启动（Decider: {active_decider}）")
-        except Exception as e:
-            logger.error(f"设置决策域组件失败: {e}", exc_info=True)
-            logger.warning("决策域功能不可用，继续启动其他服务")
-            decision_manager = None
-    else:
-        logger.info("未检测到决策配置，决策域功能将被禁用")
-
     # 输出Handler管理器 (Output 阶段)
+    # 先于 Decision 阶段创建并启动，以便作为 CapabilitiesProvider 注入 DeciderManager，
+    # 供 Decider 查询 Output 能力做动作选择（只读 Protocol，不违反单向数据流）。
     logger.info("初始化输出Handler管理器...")
     output_pipeline_manager = await create_pipeline_manager(
         stage="output",
@@ -377,6 +360,31 @@ async def create_app_components(
             logger.error(f"设置输出Handler管理器失败: {e}", exc_info=True)
             logger.warning("输出Handler管理器功能不可用，继续启动其他服务")
             output_manager = None
+
+    # 决策阶段 (Decision 阶段)
+    decision_manager: Optional[DeciderManager] = None
+    if decision_config:
+        logger.info("初始化决策阶段组件（Decision 阶段）...")
+        try:
+            decision_manager = DeciderManager(
+                event_bus,
+                llm_service,
+                config_service,
+                context_service,
+                prompt_manager,
+                capabilities_provider=output_manager,
+            )
+
+            await decision_manager.setup(decision_config=decision_config)
+            await decision_manager.start()
+            active_decider = decision_manager.get_current_decider_name()
+            logger.info(f"DeciderManager 已设置并启动（Decider: {active_decider}）")
+        except Exception as e:
+            logger.error(f"设置决策域组件失败: {e}", exc_info=True)
+            logger.warning("决策域功能不可用，继续启动其他服务")
+            decision_manager = None
+    else:
+        logger.info("未检测到决策配置，决策域功能将被禁用")
 
     # ========================================
     # 初始化 Dashboard Server

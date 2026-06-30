@@ -34,6 +34,7 @@ from src.modules.logging import get_logger
 from src.modules.prompts.manager import PromptManager
 from src.modules.types import Intent, IntentAction, IntentEmotion, IntentMetadata
 from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.types.capabilities import CapabilitiesProvider, UnifiedCapabilitiesView
 from src.modules.time_utils import now_ms
 
 from .message_buffer import MessageBuffer
@@ -83,6 +84,11 @@ class AmaidesuDecider:
         # 可选 LLM 节奏门控
         use_llm_timing_gate: bool = Field(default=False, description="是否启用额外的 LLM 节奏门控（非强制批次）")
 
+        # 动作选择
+        enable_action_selection: bool = Field(
+            default=True, description="是否让 LLM 从 OutputHandler 能力中选择动作（需注入能力提供者）"
+        )
+
         # 人设默认值（无 persona 配置时使用）
         bot_name: str = Field(default="爱德丝", description="VTuber 名称")
 
@@ -94,6 +100,7 @@ class AmaidesuDecider:
         prompt_service: PromptManager,
         config_service: Optional[ConfigService] = None,
         context_service: Optional[ContextService] = None,
+        capabilities_provider: Optional[CapabilitiesProvider] = None,
     ):
         self.typed_config = self.ConfigSchema.from_dict(config)
         self.logger = get_logger("AmaidesuDecider")
@@ -103,6 +110,12 @@ class AmaidesuDecider:
         self._prompt_service = prompt_service
         self._config_service = config_service
         self._context_service = context_service
+        self._capabilities_provider = capabilities_provider
+
+        # 能力快照（首次决策时惰性加载并缓存）
+        self._capabilities_loaded = False
+        self._action_list_str = ""
+        self._valid_action_names: set[str] = set()
 
         self.client_type = self.typed_config.client
         self.fallback_mode = self.typed_config.fallback_mode
@@ -235,6 +248,7 @@ class AmaidesuDecider:
         history_text = await self._get_history_text(session_id)
         persona = self._get_persona_config()
         room_context = self._build_room_context(batch)
+        self._ensure_capabilities()
 
         prompt = self._prompt_service.render_safe(
             "decision/amaidesu_planner",
@@ -244,6 +258,7 @@ class AmaidesuDecider:
             style_constraints=persona.get("style_constraints", "口语化、简短，像在直播间和观众聊天，避免机械式回复"),
             history=history_text,
             room_context=room_context,
+            action_list=self._action_list_str or "（当前无可用动作，action 请留空字符串）",
         )
 
         try:
@@ -388,7 +403,7 @@ class AmaidesuDecider:
         return cleaned
 
     def _create_intent(self, parsed_data: Dict[str, Any], speech: str) -> Intent:
-        """从解析后的 JSON 构造 Intent（speech + emotion，action 预留扩展点）。"""
+        """从解析后的 JSON 构造 Intent（speech + emotion + 经能力校验的 action）。"""
         emotion_raw = str(parsed_data.get("emotion", "neutral")).lower()
         try:
             emotion_obj: Optional[IntentEmotion] = IntentEmotion(name=emotion_raw, intensity=0.5)
@@ -396,10 +411,7 @@ class AmaidesuDecider:
             self.logger.warning(f"LLM 情绪 '{emotion_raw}' 不在枚举中，降级为 neutral")
             emotion_obj = IntentEmotion(name="neutral", intensity=0.5)
 
-        action_obj: Optional[IntentAction] = None
-        action_raw = str(parsed_data.get("action", "")).strip()
-        if action_raw:
-            action_obj = IntentAction(name=action_raw, parameters={})
+        action_obj = self._build_action(parsed_data)
 
         return Intent(
             emotion=emotion_obj,
@@ -407,6 +419,70 @@ class AmaidesuDecider:
             speech=speech,
             metadata=IntentMetadata(source_id="amaidesu", decision_time_ms=now_ms()),
         )
+
+    def _build_action(self, parsed_data: Dict[str, Any]) -> Optional[IntentAction]:
+        """从 LLM 输出构造并校验 IntentAction。
+
+        - 期望 `action` 为全限定名 `<handler>.<local_action>`（来自能力清单）。
+        - 启用动作选择且已加载能力时，对动作名做白名单校验，非法则丢弃。
+        - `action_parameters` 必须为 dict，否则忽略参数。
+        """
+        action_raw = str(parsed_data.get("action", "")).strip()
+        if not action_raw:
+            return None
+
+        if self.typed_config.enable_action_selection and self._valid_action_names:
+            if action_raw not in self._valid_action_names:
+                self.logger.warning(f"LLM 选择的动作 '{action_raw}' 不在可用能力清单中，丢弃")
+                return None
+
+        raw_params = parsed_data.get("action_parameters") or parsed_data.get("parameters") or {}
+        parameters = raw_params if isinstance(raw_params, dict) else {}
+        if raw_params and not isinstance(raw_params, dict):
+            self.logger.warning(f"action_parameters 非对象（{type(raw_params).__name__}），忽略参数")
+
+        try:
+            return IntentAction(name=action_raw, parameters=parameters)
+        except Exception as e:
+            self.logger.warning(f"构造 IntentAction 失败（name={action_raw!r}）：{e}")
+            return None
+
+    def _ensure_capabilities(self) -> None:
+        """惰性加载并缓存 Output 能力快照（首次决策时调用一次）。"""
+        if self._capabilities_loaded:
+            return
+        self._capabilities_loaded = True
+
+        if not self.typed_config.enable_action_selection or self._capabilities_provider is None:
+            return
+
+        try:
+            view = self._capabilities_provider.get_all_capabilities()
+        except Exception as e:
+            self.logger.warning(f"查询 Output 能力失败，动作选择降级为禁用：{e}")
+            return
+
+        self._valid_action_names = {entry.name for entry in view.actions}
+        self._action_list_str = self._format_action_list(view)
+        self.logger.info(f"已加载 {len(self._valid_action_names)} 个可用动作供决策选择")
+
+    @staticmethod
+    def _format_action_list(view: UnifiedCapabilitiesView) -> str:
+        """把能力视图渲染为供 prompt 使用的动作清单文本。"""
+        lines: List[str] = []
+        for entry in view.actions:
+            param_parts: List[str] = []
+            for pname, spec in entry.parameters.items():
+                seg = f"{pname}:{spec.type}"
+                if spec.minimum is not None or spec.maximum is not None:
+                    seg += f"[{spec.minimum}~{spec.maximum}]"
+                if spec.default is not None:
+                    seg += f"=默认{spec.default}"
+                param_parts.append(seg)
+            params_str = f"（参数: {', '.join(param_parts)}）" if param_parts else ""
+            desc = entry.description or ""
+            lines.append(f"- {entry.name}: {desc}{params_str}")
+        return "\n".join(lines)
 
     async def _publish_intent(self, intent: Intent) -> None:
         """通过 event_bus 发布 decision.intent.generated 事件。"""

@@ -4,9 +4,13 @@
 - 每个 handler 通过 `get_capabilities()` 返回 `HandlerCapabilities`(本地 action 名)
 - `OutputHandlerManager.get_all_capabilities()` 自动加 handler 前缀,生成 `UnifiedActionEntry`
 - `_pydantic_to_param_spec()` 把 Pydantic model 反射成 `ParameterSpec` 字典
+
+放在 `src/modules/types/` 的原因:
+- 被 Output 阶段(handler 声明、Manager 聚合)与 Decision 阶段(Decider 动作选择)共享
+- 共享类型放 Modules 层可避免 Decision 反向依赖 Output 阶段实现(单向数据流)
 """
 
-from typing import Any, Dict, List, Literal, Optional, Union, get_args, get_origin
+from typing import Any, Dict, List, Literal, Optional, Protocol, Union, get_args, get_origin, runtime_checkable
 
 from pydantic import BaseModel, Field
 
@@ -51,6 +55,21 @@ class UnifiedCapabilitiesView(BaseModel):
     """整个 Output 阶段所有 handler 的能力聚合视图。"""
 
     actions: List[UnifiedActionEntry] = Field(default_factory=list)
+
+
+@runtime_checkable
+class CapabilitiesProvider(Protocol):
+    """能力提供者协议(只读)。
+
+    供 Decision 阶段在 composition root 经依赖注入获取 Output 能力快照，
+    而无需 import Output 阶段实现、也无需订阅 Output 事件(遵循单向数据流)。
+
+    `OutputHandlerManager` 通过其 `get_all_capabilities()` 方法结构化满足本协议。
+    """
+
+    def get_all_capabilities(self) -> "UnifiedCapabilitiesView":
+        """返回当前所有 OutputHandler 的统一能力视图(全限定 action 名)。"""
+        ...
 
 
 # ----------------------------------------------------------------------
@@ -164,5 +183,6 @@ __all__ = [
     "HandlerCapabilities",
     "UnifiedActionEntry",
     "UnifiedCapabilitiesView",
+    "CapabilitiesProvider",
     "_pydantic_to_param_spec",
 ]

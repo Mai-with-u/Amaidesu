@@ -37,7 +37,7 @@ from src.modules.prompts.manager import PromptManager
 from src.modules.streaming.audio_stream_channel import AudioStreamChannel
 from src.modules.tts.audio_device_manager import AudioDeviceManager
 from src.stages.output.registry import _HANDLERS, SupportsCapabilities
-from src.stages.output.capabilities import UnifiedActionEntry, UnifiedCapabilitiesView
+from src.modules.types.capabilities import UnifiedActionEntry, UnifiedCapabilitiesView
 
 
 class RenderResult(BaseModel):

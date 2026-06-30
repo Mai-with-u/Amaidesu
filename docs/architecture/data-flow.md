@@ -41,6 +41,41 @@ OutputHandlers 渲染
 | 渲染 | `RenderParameters` | Output | 渲染参数 |
 | 输出 | 实际输出 | Output | TTS 音频、字幕、动作等 |
 
+### 约束的精确定义：数据平面 vs 发现平面
+
+"单向数据流"这一句容易被误读成"Decision 永远不许知道 Output 的任何东西"。这是不准确的。约束真正要守护的是三件事，应分三个层面精确表述：
+
+#### ① 数据平面（硬规则，绝不能破）—— 运行时消息/结果严格单向
+
+> Output 的**运行时产物**（渲染结果、成功/失败、状态、产物数据）**绝不可**成为 Decision 的输入，无论经 EventBus 还是直接调用。每条消息/意图的生命周期是一条直线：`Input → Decision → Output`。
+
+这条守护的是**防环**：一旦 Output 的结果能回灌触发新决策，就会形成"输出→决策→输出"的无限循环。形式化约束：
+
+- Decider **不订阅**任何 Output 阶段发布的事件。
+- InputCollector **不订阅**任何 Decision/Output 事件。
+- OutputHandler **不订阅** Input 事件（必须经 Decision）。
+
+#### ② 分层规则（防 import 环）—— 跨阶段只经共享抽象
+
+> 阶段之间**不直接 import 对方的实现模块**；跨阶段契约（共享类型、Protocol）一律放在 `src/modules/`；模块依赖图必须无环。
+
+这条守护的是**可替换 / 可测试 / 无编译期环**。Decision 不该认识 `OutputHandlerManager` 这种具体类，只该认识共享层的抽象。
+
+#### ③ 发现平面（受限放行，允许上行）—— 只读能力元数据
+
+> "**能做什么**"这类**只读、静态的能力/发现元数据**（有哪些动作、参数是什么），**允许**从 Output 流向 Decision（用于动作选择），但必须满足全部以下条件：
+> - **只读**：Decision 只查询，不写、不触发 Output 行为；
+> - **拉取式（pull）**：由 Decision 主动查询，**不是** Output 推送/广播事件给 Decision（推送会落回 ① 的禁区）；
+> - **经反转抽象**：通过 `src/modules/` 层的只读 Protocol（如 `CapabilitiesProvider`），Decision 不 import Output 实现；
+> - **组合根接线**：具体实现（`OutputHandlerManager`）只在 `main.py` 注入，组合根允许认识所有阶段。
+
+**① 和 ③ 的一句话区分**：
+
+> "你能挥手吗？" —— 可以问（发现平面，查询能力空间）。
+> "你刚才挥手成功了吗？" —— 不能问（数据平面，结果回灌会成环）。
+
+动作选择本质上要求决策器知道动作空间（MaiBot 的 Planner 做 tool calling 同理），因此发现平面的上行信息流是**必要且安全**的，只要严守上述四个条件即可。这不是对单向数据流的违反，而是对它的精确化。
+
 ---
 
 ## 2. 禁止模式
@@ -63,9 +98,13 @@ OutputHandler 如果直接订阅 `input.message.received` 事件，会绕过 Dec
 #### 为什么禁止 Decider 订阅 Output 事件？
 
 Decider 订阅 Output 事件会创建循环依赖：
-- Decision 依赖 Output 的状态来做出决策
-- 形成循环，打破单向数据流
+- Decision 依赖 Output 的**运行时结果/状态**来做出决策
+- 形成循环（输出→决策→输出），打破单向数据流
 - 增加系统复杂度和调试难度
+
+> **注意区分**：这里禁止的是 Decision 消费 Output 的**运行时结果**（数据平面，见 ①）。
+> Decision **拉取** Output 的**只读能力元数据**（发现平面，见 ③）是被允许的——
+> 那是查询"能做什么"，不是订阅"做了什么"，不会成环。详见下方"允许模式"。
 
 #### 为什么 InputCollector 不应订阅下游事件？
 
@@ -97,6 +136,63 @@ class MyOutputHandler(OutputHandler):
             model_class=IntentPayload,
         )
 ```
+
+### 允许模式：Decision 拉取 Output 能力做动作选择（发现平面）
+
+决策器需要"挑动作"时，必须知道有哪些动作可选。这条能力元数据从 Output 上行到
+Decision 是**允许**的，但要严格走"只读 Protocol + 组合根注入"的形态，**不得**让
+Decision import Output 实现，也**不得**通过 Output 推送事件实现。
+
+**第 1 步：共享层定义只读抽象**（`src/modules/types/capabilities.py`）
+
+```python
+@runtime_checkable
+class CapabilitiesProvider(Protocol):
+    """能力提供者协议（只读）。Decision 经此查询 Output 能力，不 import Output 实现。"""
+
+    def get_all_capabilities(self) -> "UnifiedCapabilitiesView": ...
+```
+
+**第 2 步：Output 实现该抽象**（`OutputHandlerManager.get_all_capabilities()` 结构化满足 Protocol，无需显式继承）。
+
+**第 3 步：组合根注入**（`main.py`，注意 Output 须先于 Decision 就绪）
+
+```python
+# main.py —— 组合根允许认识所有阶段
+output_manager = OutputHandlerManager(...)
+await output_manager.setup(...)          # 能力依赖 handler 加载完成
+decision_manager = DeciderManager(
+    event_bus, llm_service, ...,
+    capabilities_provider=output_manager,  # 经类型匹配 DI 下发给各 Decider
+)
+```
+
+**第 4 步：Decider 只依赖抽象，惰性拉取**（不 import `src.stages.output`）
+
+```python
+from src.modules.types.capabilities import CapabilitiesProvider  # 仅依赖共享抽象
+
+class MyDecider:
+    def __init__(self, ..., capabilities_provider: Optional[CapabilitiesProvider] = None):
+        self._capabilities_provider = capabilities_provider
+
+    def _ensure_capabilities(self) -> None:
+        # 首次决策时拉取并缓存（此时 Output 已就绪）；provider 缺失则优雅降级
+        if self._capabilities_provider is None:
+            return
+        view = self._capabilities_provider.get_all_capabilities()
+        self._valid_action_names = {a.name for a in view.actions}
+```
+
+**依赖箭头**（永远没有 Decision → Output 的实现依赖）：
+
+```
+Output（实现）──▶ CapabilitiesProvider（抽象，在 modules）◀── Decision（使用）
+```
+
+> **代价提示**：此模式引入"Output 须先于 Decision 就绪"的时序耦合。`main.py` 已据此
+> 调整启动顺序，Decider 也采用"首次决策时惰性拉取 + 缓存"，并在 provider 缺失/查询失败时
+> 优雅降级为关闭动作选择。这是发现平面上行的固有成本，可接受。
 
 ---
 
@@ -621,6 +717,10 @@ flowchart LR
     style OutputStage fill:#e8f5e9,stroke:#388e3c
 ```
 
+> 上图禁止的是**事件订阅 / 运行时结果回灌**（数据平面 ①）。Decision **拉取** Output 的
+> 只读能力元数据（发现平面 ③，经 `CapabilitiesProvider` Protocol + 组合根注入）**不在禁止之列**，
+> 因为它不经事件、不回灌结果、不产生实现依赖。参见第 2 节"允许模式"。
+
 ---
 
 ## 相关文档
@@ -631,4 +731,4 @@ flowchart LR
 
 ---
 
-*最后更新：2026-06-28（破坏性升级：删 EmotionType/ActionType/SourceContext，新增结构化 Pydantic 模型 + Emotion 枚举）*
+*最后更新：2026-06-30（约束精确化：区分数据平面/分层规则/发现平面，新增 Decision 拉取 Output 能力的"允许模式"）*

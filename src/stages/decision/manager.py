@@ -34,6 +34,7 @@ from src.modules.llm.manager import LLMManager
 from src.modules.logging import get_logger
 from src.modules.prompts.manager import PromptManager
 from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.types.capabilities import CapabilitiesProvider
 from src.stages.decision.registry import _DECIDERS
 
 
@@ -69,6 +70,7 @@ class DeciderManager:
         config_service: Optional[ConfigService] = None,
         context_service: Optional[ContextService] = None,
         prompt_manager: Optional[PromptManager] = None,
+        capabilities_provider: Optional[CapabilitiesProvider] = None,
     ):
         """
         初始化DeciderManager
@@ -79,12 +81,16 @@ class DeciderManager:
             config_service: 可选的ConfigService实例，将作为依赖注入到Decider
             context_service: 可选的ContextService实例，将作为依赖注入到Decider
             prompt_manager: 可选的PromptManager实例，将作为依赖注入到Decider
+            capabilities_provider: 可选的能力提供者(通常为 OutputHandlerManager)，
+                供 Decider 查询 Output 能力做动作选择。仅在 composition root 注入，
+                Decider 通过只读 Protocol 使用，不违反单向数据流。
         """
         self.event_bus = event_bus
         self._llm_service = llm_service
         self._config_service = config_service
         self._context_service = context_service
         self._prompt_manager = prompt_manager
+        self._capabilities_provider = capabilities_provider
         self.logger = get_logger("DeciderManager")
 
         # 多Decider支持：存储所有已加载的Decider实例
@@ -232,6 +238,8 @@ class DeciderManager:
             services_by_type[ConfigService] = self._config_service
         if self._context_service is not None:
             services_by_type[ContextService] = self._context_service
+        if self._capabilities_provider is not None:
+            services_by_type[CapabilitiesProvider] = self._capabilities_provider
 
         return instantiate_with_di(
             decider_cls,
