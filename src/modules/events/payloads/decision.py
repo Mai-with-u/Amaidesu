@@ -14,10 +14,7 @@ from pydantic import ConfigDict, Field
 
 from src.modules.events.payloads.base import BasePayload
 from src.modules.events.registry import register_event
-from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
-
-logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from src.modules.types import Intent
@@ -105,9 +102,13 @@ class IntentPayload(BasePayload):
     @classmethod
     def from_intent(cls, intent: "Intent", name: str) -> "IntentPayload":
         """
-        从 Intent 对象创建 Payload
+        从 Intent 对象创建 Payload（纯工厂，无副作用）
 
         使用 Pydantic 的自动序列化,将 Intent 转换为字典存储。
+
+        注意：意图摘要日志由 Decision → Output 的单一汇聚点
+        `OutputHandlerManager._on_decision_intent` 统一打印（每个被发布的意图
+        仅经过该处一次），本工厂不承担日志职责，避免被 Output 转发等场景重复打印。
 
         Args:
             intent: Intent 对象
@@ -116,18 +117,6 @@ class IntentPayload(BasePayload):
         Returns:
             IntentPayload 实例
         """
-        extra = ""
-        if intent.action is not None:
-            extra += f" → {intent.action.name}"
-        if intent.emotion is not None:
-            extra += f" ({intent.emotion.name})"
-        logger.info(f"[{name}] {intent.speech or ''}{extra}")
-        logger.debug(
-            f"IntentPayload.from_intent: name={name}, "
-            f"speech={intent.speech!r}, "
-            f"emotion={intent.emotion.name if intent.emotion else None}, "
-            f"action={intent.action.name if intent.action else None}"
-        )
         return cls(intent_data=intent.model_dump(mode="json"), name=name)
 
     def to_intent(self) -> "Intent":

@@ -38,7 +38,7 @@ from src.stages.decision.registry import _DECIDERS
 
 
 # 产生语音输出的Decider列表（可能产生音频交叠）
-SPEECH_DECIDERS = {"maibot", "llm"}
+SPEECH_DECIDERS = {"maibot", "llm", "amaidesu"}
 
 
 class DeciderManager:

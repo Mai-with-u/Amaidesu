@@ -176,6 +176,14 @@ class OutputHandlerManager:
         """处理Intent事件（Decision 阶段 → Output 阶段，类型化）"""
         intent = payload.to_intent()
 
+        # Decision → Output 的单一汇聚点：每个被发布的意图在此处打印一次摘要
+        extra = ""
+        if intent.action is not None:
+            extra += f" → {intent.action.name}"
+        if intent.emotion is not None:
+            extra += f" ({intent.emotion.name})"
+        self.logger.info(f"[{payload.name}] {intent.speech or ''}{extra}")
+
         action_type = intent.action if intent.action else "none"
         self.logger.debug(
             f'收到Intent事件: {event_name}, 响应: "{intent.speech[:50] if intent.speech else ""}...", 动作: {action_type}'
