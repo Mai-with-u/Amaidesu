@@ -1,175 +1,161 @@
 import { defineStore } from 'pinia';
 import { ref, watch } from 'vue';
 import { useWebSocketStore } from './websocket';
-import { debugApi, messageApi } from '@/api';
-import type { ChatMessage, InjectIntentRequest, MessageItem, WebSocketMessage } from '@/types';
+import { debugApi } from '@/api';
+import type {
+  DebugSessionEvent,
+  NormalizedMessageData,
+  IntentEventData,
+  WebSocketMessage,
+  InjectIntentRequest,
+} from '@/types';
 
-const STORAGE_KEY = 'session_messages';
+const STORAGE_KEY = 'debug_session_events';
+const MAX_EVENTS = 200;
 
-// 从 localStorage 加载消息
-function loadFromStorage(): ChatMessage[] {
+function loadFromStorage(): DebugSessionEvent[] {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
       return JSON.parse(stored);
     }
   } catch (e) {
-    console.warn('从 localStorage 加载消息失败:', e);
+    console.warn('从 localStorage 加载调试事件失败:', e);
   }
   return [];
 }
 
-// 保存消息到 localStorage
-function saveToStorage(messages: ChatMessage[]) {
+function saveToStorage(events: DebugSessionEvent[]) {
   try {
-    // 只保存最近 100 条消息
-    const toSave = messages.slice(-100);
+    const toSave = events.slice(-MAX_EVENTS);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
   } catch (e) {
-    console.warn('保存消息到 localStorage 失败:', e);
+    console.warn('保存调试事件到 localStorage 失败:', e);
   }
 }
 
 export const useSessionStore = defineStore('session', () => {
-  // 优先从 localStorage 加载
-  const messages = ref<ChatMessage[]>(loadFromStorage());
-  const maxMessages = 100;
+  const events = ref<DebugSessionEvent[]>(loadFromStorage());
   const sending = ref(false);
-  const sessionId = 'dashboard'; // 默认会话 ID
 
-  // 监听消息变化，自动保存到 localStorage
-  watch(
-    messages,
-    newMessages => {
-      saveToStorage(newMessages);
-    },
-    { deep: true },
-  );
+  watch(events, newEvents => saveToStorage(newEvents), { deep: true });
 
-  // 处理 WebSocket 消息
   function handleEvent(message: WebSocketMessage) {
-    // WebSocket 事件类型来自 broadcaster.py 的 EVENT_TYPE_MAP:
-    // - "message.received" 对应 CoreEvents.INPUT_MESSAGE_READY
-    // - "decision.intent" 对应 CoreEvents.DECISION_INTENT_GENERATED
-
-    // 定义消息数据结构接口
-    interface NormalizedMessageData {
-      text?: string;
-      timestamp?: number;
-      importance?: number;
-    }
-
-    interface IntentData {
-      id?: string;
-      speech?: string;
-      response_text?: string;
-      emotion?: string;
-    }
-
-    interface MessageReceivedData {
-      message?: NormalizedMessageData;
-      source?: string;
-    }
-
-    interface DecisionIntentData {
-      intent_data?: IntentData;
-      name?: string;
-    }
-
     if (message.type === 'message.received') {
-      const data = message.data as MessageReceivedData;
-      // message.timestamp 是 WebSocket 级别时间戳，确保唯一性
-      // data.message.timestamp 是秒级精度，同秒内消息会重复
-      const msgId = String(message.timestamp) + '-' + crypto.randomUUID().slice(0, 8);
+      const data = message.data as Record<string, unknown>;
+      const msg = data?.message as Record<string, unknown> | undefined;
+      const msgId = `msg-${message.timestamp}-${crypto.randomUUID().slice(0, 6)}`;
 
-      // 去重检查
-      if (messages.value.some(m => m.id === msgId)) {
-        return;
-      }
+      if (events.value.some(e => e.id === msgId)) return;
 
-      messages.value.push({
+      events.value.push({
         id: msgId,
-        type: 'normalized_message',
-        sender: data.source || '弹幕',
-        content: data.message?.text || '',
+        type: 'message.received',
         timestamp: message.timestamp,
-        priority: data.message?.importance,
+        message: msg
+          ? ({
+              text: (msg.text as string) || '',
+              source: (msg.source as string) || (data?.source as string) || 'unknown',
+              data_type: (msg.data_type as string) || 'text',
+              importance: (msg.importance as number) ?? 0.5,
+              timestamp_ms: (msg.timestamp_ms as number) ?? 0,
+              user_id: msg.user_id as string | undefined,
+              user_nickname: msg.user_nickname as string | undefined,
+              platform: msg.platform as string | undefined,
+              room_id: msg.room_id as string | undefined,
+              raw: msg.raw as Record<string, unknown> | undefined,
+            } as NormalizedMessageData)
+          : {
+              text: (data?.text as string) || '',
+              source: (data?.source as string) || 'unknown',
+              data_type: 'text',
+              importance: 0.5,
+              timestamp_ms: message.timestamp,
+            },
+        source: (data?.source as string) || 'unknown',
       });
     } else if (message.type === 'decision.intent') {
-      const data = message.data as DecisionIntentData;
-      // 添加 Intent 到右侧
-      // 数据结构: message.data.intent_data (Intent 字典), message.data.name
-      const msgId = data.intent_data?.id || crypto.randomUUID();
+      const data = message.data as Record<string, unknown>;
+      const intentData = data?.intent_data as Record<string, unknown> | undefined;
+      const intentId = `intent-${message.timestamp}-${crypto.randomUUID().slice(0, 6)}`;
 
-      // 去重检查
-      if (messages.value.some(m => m.id === msgId)) {
-        return;
-      }
+      if (events.value.some(e => e.id === intentId)) return;
 
-      messages.value.push({
-        id: msgId,
-        type: 'intent',
-        sender: data.name || '主播',
-        content: data.intent_data?.speech || data.intent_data?.response_text || '',
+      events.value.push({
+        id: intentId,
+        type: 'decision.intent',
         timestamp: message.timestamp,
-        emotion: data.intent_data?.emotion,
+        intent: intentData
+          ? ({
+              speech: intentData.speech as string | undefined,
+              emotion: intentData.emotion as IntentEventData['emotion'] | undefined,
+              action: intentData.action as IntentEventData['action'] | undefined,
+              metadata: (intentData.metadata as IntentEventData['metadata']) || {
+                source_id: (data?.name as string) || 'unknown',
+                decision_time_ms: message.timestamp,
+              },
+            } as IntentEventData)
+          : {
+              metadata: {
+                source_id: (data?.name as string) || 'unknown',
+                decision_time_ms: message.timestamp,
+              },
+            },
+        deciderName: (data?.name as string) || '未知Decider',
+      });
+    } else if (message.type === 'output.render') {
+      const data = message.data as Record<string, unknown>;
+      const intentData = data?.intent_data as Record<string, unknown> | undefined;
+
+      events.value.push({
+        id: `output-${message.timestamp}-${crypto.randomUUID().slice(0, 6)}`,
+        type: 'output.render',
+        timestamp: message.timestamp,
+        intent: intentData
+          ? ({
+              speech: intentData.speech as string | undefined,
+              emotion: intentData.emotion as IntentEventData['emotion'] | undefined,
+              action: intentData.action as IntentEventData['action'] | undefined,
+              metadata: (intentData.metadata as IntentEventData['metadata']) || {
+                source_id: (data?.name as string) || 'unknown',
+                decision_time_ms: message.timestamp,
+              },
+            } as IntentEventData)
+          : {
+              metadata: {
+                source_id: (data?.name as string) || 'unknown',
+                decision_time_ms: message.timestamp,
+              },
+            },
+        deciderName: 'Output',
       });
     }
 
-    // 限制消息数量
-    if (messages.value.length > maxMessages) {
-      messages.value.shift();
+    while (events.value.length > MAX_EVENTS) {
+      events.value.shift();
     }
   }
 
-  // 连接 WebSocket 并加载历史消息
-  async function connect() {
-    // 消息已从 localStorage 恢复，直接连接 WebSocket
+  function connect() {
     const wsStore = useWebSocketStore();
     wsStore.subscribe(handleEvent);
     wsStore.connect();
-
-    // 如果本地没有消息，尝试从后端加载（首次运行）
-    if (messages.value.length === 0) {
-      try {
-        const response = await messageApi.getSessionMessages(sessionId, maxMessages);
-        if (response.data.messages) {
-          const historyMessages: ChatMessage[] = response.data.messages.map((msg: MessageItem) => {
-            const isUser = msg.role === 'user';
-            return {
-              id: msg.id,
-              type: isUser ? ('normalized_message' as const) : ('intent' as const),
-              sender: isUser ? (msg.metadata?.source as string) || '弹幕' : '主播',
-              content: msg.content,
-              timestamp: msg.timestamp,
-              priority: msg.metadata?.importance as number | undefined,
-              emotion: msg.metadata?.emotion as string | undefined,
-            };
-          });
-          historyMessages.sort((a, b) => a.timestamp - b.timestamp);
-          messages.value = historyMessages;
-        }
-      } catch (e) {
-        console.warn('加载历史消息失败:', e);
-      }
-    }
   }
 
-  // 发送 NormalizedMessage（弹幕输入）
+  function disconnect() {
+    const wsStore = useWebSocketStore();
+    wsStore.unsubscribe(handleEvent);
+  }
+
   async function sendNormalizedMessage(text: string, source: string = 'dashboard') {
     sending.value = true;
     try {
-      await debugApi.injectMessage({
-        text,
-        source,
-        importance: 1, // 最高优先级
-      });
+      await debugApi.injectMessage({ text, source, importance: 1 });
     } finally {
       sending.value = false;
     }
   }
 
-  // 发送 Intent（主播回应）
   async function sendIntent(text: string, responseText?: string) {
     sending.value = true;
     try {
@@ -185,24 +171,17 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
-  // 清空消息
-  function clearMessages() {
-    messages.value = [];
-  }
-
-  // 断开连接（取消订阅）
-  function disconnect() {
-    const wsStore = useWebSocketStore();
-    wsStore.unsubscribe(handleEvent);
+  function clearEvents() {
+    events.value = [];
   }
 
   return {
-    messages,
+    events,
     sending,
     connect,
     disconnect,
     sendNormalizedMessage,
     sendIntent,
-    clearMessages,
+    clearEvents,
   };
 });

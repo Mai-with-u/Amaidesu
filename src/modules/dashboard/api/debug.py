@@ -5,7 +5,6 @@
 """
 
 import uuid
-from datetime import datetime
 from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends
@@ -23,6 +22,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.decision import IntentPayload
 from src.modules.events.payloads.input import MessageReadyPayload
 from src.modules.logging import get_logger
+from src.modules.time_utils import now_ms
 from src.modules.types.base.normalized_message import NormalizedMessage
 from src.modules.types.intent import Intent, IntentAction, IntentEmotion, IntentMetadata
 
@@ -54,7 +54,7 @@ async def inject_message(
             source=request.source,
             data_type=request.data_type,
             importance=request.importance,
-            timestamp=datetime.now().timestamp(),
+            timestamp=now_ms(),
         )
 
         # 通过 EventBus 发布事件
@@ -119,7 +119,7 @@ async def inject_intent(
             speech=request.response_text or request.text,
             metadata=IntentMetadata(
                 source_id=request.source,
-                decision_time_ms=int(datetime.now().timestamp() * 1000),
+                decision_time_ms=now_ms(),
             ),
         )
 

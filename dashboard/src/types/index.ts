@@ -106,6 +106,64 @@ export interface InjectIntentResponse {
   error?: string;
 }
 
+// ============================================================
+// 调试会话类型 — 完整保留 NormalizedMessage 和 Intent 的结构
+// ============================================================
+
+/** 标准化消息（来自 WebSocket message.received 事件） */
+export interface NormalizedMessageData {
+  text: string;
+  source: string;
+  data_type: string;
+  importance: number;
+  timestamp_ms: number;
+  user_id?: string;
+  user_nickname?: string;
+  platform?: string;
+  room_id?: string;
+  raw?: Record<string, unknown>;
+}
+
+/** Intent 情绪 */
+export interface IntentEmotionData {
+  name: string;
+  intensity: number;
+}
+
+/** Intent 动作 */
+export interface IntentActionData {
+  name: string;
+  parameters: Record<string, unknown>;
+}
+
+/** Intent 元数据 */
+export interface IntentMetadataData {
+  source_id: string;
+  decision_time_ms: number;
+}
+
+/** 决策意图（来自 WebSocket decision.intent / output.render 事件） */
+export interface IntentEventData {
+  speech?: string;
+  emotion?: IntentEmotionData;
+  action?: IntentActionData;
+  metadata: IntentMetadataData;
+}
+
+/** 调试会话统一事件类型 */
+export interface DebugSessionEvent {
+  id: string;
+  type: 'message.received' | 'decision.intent' | 'output.render';
+  timestamp: number; // WebSocket 消息时间戳
+  // message.received 事件专有字段
+  message?: NormalizedMessageData;
+  source?: string;
+  // decision.intent / output.render 事件专有字段
+  intent?: IntentEventData;
+  deciderName?: string;
+}
+
+// 旧版 ChatMessage（保留兼容，但新代码应使用 DebugSessionEvent）
 export interface ChatMessage {
   id: string;
   type: 'normalized_message' | 'intent';
