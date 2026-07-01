@@ -461,7 +461,7 @@ class WarudoHandler(AvatarHandlerBase):
         while not self._should_stop:
             try:
                 # 第一次连接后或断线后重新连接
-                if not self._is_connected or self.websocket is None or self.websocket.closed:
+                if not self._is_connected or self.websocket is None or self._ws_closed:
                     self.logger.info(f"尝试连接 Warudo: {uri}")
                     self.websocket = await websockets.connect(uri)  # type: ignore
                     self._is_connected = True
@@ -474,7 +474,7 @@ class WarudoHandler(AvatarHandlerBase):
                         await self._on_first_connection_setup()
 
                 # 保持连接直到断开
-                if self.websocket and not self.websocket.closed:
+                if self.websocket and not self._ws_closed:
                     await self.websocket.wait_closed()
 
             except asyncio.CancelledError:
@@ -558,11 +558,27 @@ class WarudoHandler(AvatarHandlerBase):
             except Exception as e:
                 self.logger.error(f"订阅 AudioStreamChannel 失败: {e}")
 
+    # ==================== WebSocket 状态(兼容 websockets >= 13) ====================
+
+    @property
+    def _ws_closed(self) -> bool:
+        """检查 WebSocket 是否已关闭。
+
+        websockets >= 13 移除了 .closed 属性，改用 .close_code。
+        close_code 为 None 表示连接中，非 None 表示已关闭。
+        """
+        if self.websocket is None:
+            return True
+        code = getattr(self.websocket, "close_code", None)
+        if code is not None:
+            return True
+        return getattr(self.websocket, "closed", False)
+
     # ==================== 发送方法 ====================
 
     async def _send_action_internal(self, action: str, data: Any) -> None:
         """通过单实例 ActionSender 发送动作"""
-        if not self._is_connected or self.websocket is None or self.websocket.closed:
+        if not self._is_connected or self.websocket is None or self._ws_closed:
             self.logger.warning(f"Warudo 未连接,无法发送动作: {action}")
             return
         try:
@@ -602,13 +618,10 @@ class WarudoHandler(AvatarHandlerBase):
             self.logger.error(f"触发热键失败: {hotkey_id}: {e}")
 
     def _is_ready_to_send(self) -> bool:
-        """检查是否就绪可以发送(处理 mock 对象没有 closed 属性的情况)"""
+        """检查是否就绪可以发送(兼容 websockets >= 13 无 .closed 属性)"""
         if not self._is_connected or self.websocket is None:
             return False
-        closed = getattr(self.websocket, "closed", None)
-        if closed is True:
-            return False
-        return True
+        return not self._ws_closed
 
     # ==================== 心情管理 ====================
 

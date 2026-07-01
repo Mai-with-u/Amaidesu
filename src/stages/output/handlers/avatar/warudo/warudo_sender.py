@@ -29,8 +29,12 @@ class ActionSender:
         self.websocket = websocket
 
     def is_ready(self) -> bool:
-        """检查 WebSocket 是否就绪"""
+        """检查 WebSocket 是否就绪(兼容 websockets >= 13)"""
         if self.websocket is None:
+            return False
+        # websockets >= 13: 用 close_code; < 13: 用 closed
+        code = getattr(self.websocket, "close_code", None)
+        if code is not None:
             return False
         if hasattr(self.websocket, "closed") and self.websocket.closed:
             return False
