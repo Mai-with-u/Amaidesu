@@ -100,17 +100,80 @@ class WarudoHandler(AvatarHandlerBase):
 
     # ==================== Warudo API 参数映射 ====================
 
-    _EMOTION_KEYS = frozenset(
+    # 情绪强度分档阈值(intensity ∈ [0,1] → 三档)
+    _INTENSITY_HIGH_THRESHOLD: float = 0.7
+    _INTENSITY_LOW_THRESHOLD: float = 0.3
+
+    # Warudo 蓝图 blendshape 名白名单(校验用，与 表情.json 对齐)
+    _VALID_BLENDSHAPES: frozenset[str] = frozenset(
         {
-            "happy",
-            "sad",
-            "angry",
-            "surprised",
-            "shy",
-            "love",
-            "neutral",
+            "eyebrow_angry_strong",
+            "eyebrow_angry_weak",
+            "eyebrow_happy_strong",
+            "eyebrow_happy_weak",
+            "eyebrow_sad_strong",
+            "eyebrow_sad_weak",
+            "eye_happy_weak",
+            "mouth_happy_strong",
+            "mouth_angry_weak",
+            "mouth_sad_weak",
+            "mouth_smlie_2",
+            "mouth_smlie_3",
         }
     )
+
+    # Emotion → blendshape 双档映射(与蓝图 表情.json 的 12 个 ON_WEBSOCKET_ACTION 对齐)
+    # 结构: {emotion_name: {"high": {blendshape: value}, "low": {...}}}
+    _EMOTION_BLENDSHAPE_MAP: dict[str, dict[str, dict[str, float]]] = {
+        "happy": {
+            "high": {"mouth_happy_strong": 1.0, "eyebrow_happy_strong": 0.8, "eye_happy_weak": 0.5},
+            "low": {"mouth_smlie_3": 1.0, "eyebrow_happy_weak": 0.5, "eye_happy_weak": 0.3},
+        },
+        "sad": {
+            "high": {"eyebrow_sad_strong": 1.0, "mouth_sad_weak": 0.8},
+            "low": {"eyebrow_sad_weak": 0.8, "mouth_sad_weak": 0.5},
+        },
+        "angry": {
+            "high": {"eyebrow_angry_strong": 1.0, "mouth_angry_weak": 0.6},
+            "low": {"eyebrow_angry_weak": 0.8, "mouth_angry_weak": 0.4},
+        },
+        "surprised": {
+            "high": {"mouth_happy_strong": 1.0, "eyebrow_happy_strong": 0.8},
+            "low": {"mouth_smlie_3": 0.6, "eyebrow_happy_weak": 0.5},
+        },
+        "shy": {
+            "high": {"mouth_smlie_3": 1.0, "eye_happy_weak": 0.5, "eyebrow_happy_weak": 0.3},
+            "low": {"mouth_smlie_2": 0.8, "eye_happy_weak": 0.3},
+        },
+        "love": {
+            "high": {"mouth_smlie_3": 1.0, "eye_happy_weak": 0.6},
+            "low": {"mouth_smlie_2": 0.8, "eye_happy_weak": 0.3},
+        },
+        "excited": {
+            "high": {"mouth_happy_strong": 1.0, "eyebrow_happy_strong": 1.0, "eye_happy_weak": 0.8},
+            "low": {"mouth_smlie_3": 1.0, "eyebrow_happy_weak": 0.6, "eye_happy_weak": 0.5},
+        },
+        "confused": {
+            "high": {"eyebrow_sad_strong": 0.8, "mouth_sad_weak": 0.4},
+            "low": {"eyebrow_sad_weak": 0.6},
+        },
+        "scared": {
+            "high": {"eyebrow_sad_strong": 1.0, "mouth_happy_strong": 0.8},
+            "low": {"eyebrow_sad_weak": 0.6, "mouth_happy_strong": 0.4},
+        },
+        "thinking": {
+            "high": {"eyebrow_sad_weak": 0.8, "mouth_sad_weak": 0.4},
+            "low": {"mouth_sad_weak": 0.3},
+        },
+        "relaxed": {
+            "high": {"eye_happy_weak": 0.5, "mouth_smlie_2": 0.6},
+            "low": {"eye_happy_weak": 0.3, "mouth_smlie_2": 0.3},
+        },
+        "neutral": {
+            "high": {},
+            "low": {},
+        },
+    }
 
     class _WarudoActionParams(BaseModel):  # type: ignore[name-defined]  # noqa: F821
         duration_ms: int = Field(default=1500, ge=100, le=10000)
@@ -157,16 +220,7 @@ class WarudoHandler(AvatarHandlerBase):
         # 配置验证
         self.typed_config = self.ConfigSchema.from_dict(config)
 
-        # Emotion -> Warudo 表情参数映射
-        self._emotion_map: Dict[str, Dict[str, float]] = {
-            "happy": {"mouthSmile": 1.0},
-            "sad": {"mouthSad": 1.0},
-            "angry": {"eyebrowAngry": 1.0},
-            "surprised": {"eyeSurprised": 1.0},
-            "shy": {"cheekBlush": 0.8},
-            "love": {"heart": 1.0},
-            "neutral": {},
-        }
+        # Emotion → blendshape:已迁移到类级 _EMOTION_BLENDSHAPE_MAP(对齐蓝图)
 
         # Action 三字典分类(替代旧的单一 _action_map)
         # 热键类:由 _send_hotkey 发送
@@ -300,11 +354,22 @@ class WarudoHandler(AvatarHandlerBase):
 
         if intent.emotion is not None:
             emotion_str = intent.emotion.name
-            if emotion_str in self._emotion_map:
-                scale = float(intent.emotion.intensity)
-                base = self._emotion_map[emotion_str]
-                result["expressions"] = {k: v * scale for k, v in base.items()}
-                self.logger.debug(f"情感映射: {emotion_str} (intensity={scale}) -> {result['expressions']}")
+            mapping = self._EMOTION_BLENDSHAPE_MAP.get(emotion_str)
+            if mapping:
+                intensity = float(intent.emotion.intensity)
+                if intensity >= self._INTENSITY_HIGH_THRESHOLD:
+                    tier = mapping["high"]
+                    tier_name = "high"
+                elif intensity >= self._INTENSITY_LOW_THRESHOLD:
+                    tier = mapping["low"]
+                    tier_name = "low"
+                else:
+                    tier = {}
+                    tier_name = "none"
+                result["expressions"] = {k: v * intensity for k, v in tier.items()}
+                self.logger.debug(
+                    f"情感映射: {emotion_str} (intensity={intensity:.2f}, tier={tier_name}) -> {result['expressions']}"
+                )
 
         if intent.action is not None:
             local_name = intent.action.name.split(".", 1)[-1]
