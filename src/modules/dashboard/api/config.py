@@ -16,15 +16,13 @@ from src.modules.config.toml_utils import (
     write_toml_preserve,
 )
 from src.modules.dashboard.dependencies import get_dashboard_server
-from src.modules.dashboard.schemas.config import (
-    ConfigResponse,
-    ConfigUpdateRequest,
-    ConfigUpdateResponse,
-)
+from src.modules.dashboard.schemas.config import ConfigResponse
 from src.modules.dashboard.schemas.config_schema import (
     ConfigSchemaResponse,
     ConfigGroupSchema,
     ConfigFieldSchema,
+    ConfigUpdateRequest,
+    ConfigUpdateResponse,
 )
 from src.modules.logging import get_logger
 
