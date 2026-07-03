@@ -1,7 +1,43 @@
 """
-配置 Schema 注册表
+DEPRECATED — 配置 Schema 注册表 (历史手写元数据,仅保留以供回滚)
 
-提供配置字段的元数据定义，用于生成动态表单。
+⚠️ 弃用说明 (Task 11 - 2026-07)
+=================================
+
+本模块已被 ``ConfigSchemaGenerator`` (Pydantic 自动生成) 取代:
+
+- 新代码应使用 ``src.modules.config.schema_generator.ConfigSchemaGenerator``
+- 新代码应使用 ``src.modules.config.core_schemas`` / ``model_schemas`` 中
+  定义的 Pydantic ``BaseModel`` (``GeneralConfig`` / ``PersonaConfig`` / ...)
+- 业务逻辑层 (``ConfigService.get_config_schema``) 已经迁移到 generator,
+  本模块被保留**仅用于**:
+
+  1. **Dashboard 前端兼容**: ``src/modules/dashboard/api/config.py`` 仍依赖本
+     模块的 ``{groups: [...], version: "1.0.0"}`` 输出形状(前端
+     ``settings.ts`` 尚未迁移到 ``{className, fields, nested}`` 形状)
+  2. **回归保护**: ``src/modules/config/schema_coverage.py`` 与
+     ``scripts/check_schema_coverage.py`` 在 100% 字段覆盖门禁上对比
+     generator vs registry,确保迁移期间不会出现"前端看到、generator 没生成"
+     或"generator 生成、但比 registry 多出来"的字段
+
+迁移路径
+--------
+
+1. **新增配置字段**: 直接修改 ``src/modules/config/core_schemas.py`` 中对应
+   的 Pydantic ``BaseModel`` 子类,generator 会自动产出 schema
+2. **新增配置分组** (如有需要): 在 ``core_schemas.py`` 添加新类 + 在
+   ``CoreConfig`` / ``ModelConfig`` 中 ``Field(default_factory=...)`` 引用,
+   然后在 ``schema_coverage.REGISTRY_GROUP_TO_PYDANTIC`` 中添加映射
+3. **删除本模块**: 仅当所有 Dashboard 前端消费方迁移到 generator 输出形状后
+
+不要做的事
+----------
+
+- ❌ 不要在 ``ConfigFieldDefinition`` / ``ConfigGroupDefinition`` 中添加新字段
+  (registry 已是冻结状态,新字段请走 Pydantic)
+- ❌ 不要从业务层 (Collector / Decider / Handler) 直接 import 本模块
+
+提供配置字段的元数据定义,用于生成动态表单。
 """
 
 from typing import Any, Dict, List, Optional

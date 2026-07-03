@@ -56,8 +56,6 @@ class AmaidesuDecider:
         借鉴 MaiBot 的频率/强制/退避机制，适配直播弹幕场景。
         """
 
-        type: Literal["amaidesu"] = "amaidesu"
-
         # Stage 2 LLM
         client: Literal["llm", "llm_fast", "vlm"] = Field(default="llm_fast", description="内容决策使用的 LLM 客户端")
         fallback_mode: Literal["silent", "simple", "echo"] = Field(

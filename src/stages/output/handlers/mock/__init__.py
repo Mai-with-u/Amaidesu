@@ -1,6 +1,6 @@
 """Mock Output Handler - 用于测试"""
 
-from typing import TYPE_CHECKING, Any, Dict, Literal
+from typing import TYPE_CHECKING, Any, Dict
 
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
@@ -21,8 +21,6 @@ class MockOutputHandler:
 
     class ConfigSchema(BaseConfig):
         """模拟输出 Handler 配置（用于测试）"""
-
-        type: Literal["mock"] = "mock"
 
     def __init__(self, config: Dict[str, Any], event_bus: EventBus):
         self.config = config

@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import Any, AsyncIterator, Dict, Literal
+from typing import Any, AsyncIterator, Dict
 
 from pydantic import Field
 
@@ -31,7 +31,6 @@ class MockDanmakuCollector:
     class ConfigSchema(BaseConfig):
         """模拟弹幕输入Collector配置"""
 
-        type: Literal["mock_danmaku"] = "mock_danmaku"
         log_file_path: str = Field(default="msg_default.jsonl", description="日志文件路径")
         send_interval: float = Field(default=1.0, description="发送间隔（秒）", ge=0.1)
         loop_playback: bool = Field(default=True, description="循环播放")

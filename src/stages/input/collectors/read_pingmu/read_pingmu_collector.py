@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, AsyncIterator, Dict, Literal, Optional
+from typing import Any, AsyncIterator, Dict, Optional
 
 from pydantic import Field
 
@@ -43,7 +43,6 @@ class ReadPingmuCollector:
     class ConfigSchema(BaseConfig):
         """屏幕读评输入Collector配置"""
 
-        type: Literal["read_pingmu"] = "read_pingmu"
         api_key: str = Field(default="", description="API密钥")
         base_url: str = Field(default="https://dashscope.aliyuncs.com/compatible-mode/v1", description="API基础URL")
         model_name: str = Field(default="qwen2.5-vl-72b-instruct", description="模型名称")

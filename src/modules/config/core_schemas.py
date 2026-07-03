@@ -18,14 +18,12 @@ from src.modules.config.schemas.logging import LoggingConfig
 class MetaConfig(BaseConfig):
     """配置元数据"""
 
-    type: str = Field(default="meta", description="配置类型标识")
     version: str = Field(default="0.4.0", description="配置版本号（用于自动迁移检测）")
 
 
 class GeneralConfig(BaseConfig):
     """通用配置"""
 
-    type: str = Field(default="general", description="配置类型标识")
     platform_id: str = Field(default="amaidesu", description="Amaidesu 在 MaiCore 中注册的平台标识符")
 
 
@@ -36,7 +34,6 @@ class PersonaConfig(BaseConfig):
     被 LLM Decider 等使用 LLM 的组件引用。
     """
 
-    type: str = Field(default="persona", description="配置类型标识")
     bot_name: str = Field(default="麦麦", description="VTuber 名字")
     personality: str = Field(
         default="活泼开朗，有些调皮，喜欢和观众互动",
@@ -57,7 +54,6 @@ class PersonaConfig(BaseConfig):
 class MaiCoreConfig(BaseConfig):
     """MaiCore 连接配置"""
 
-    type: str = Field(default="maicore", description="配置类型标识")
     host: str = Field(default="127.0.0.1", description="MaiCore WebSocket 服务器地址")
     port: int = Field(default=8000, description="MaiCore WebSocket 服务器端口")
     token: str = Field(default="", description="认证 Token（如果 MaiCore 需要认证）")
@@ -66,8 +62,11 @@ class MaiCoreConfig(BaseConfig):
 class ContextConfig(BaseConfig):
     """上下文管理配置"""
 
-    type: str = Field(default="context", description="配置类型标识")
-    storage_type: str = Field(default="memory", description="存储类型: memory 或 file")
+    storage_type: str = Field(
+        default="memory",
+        description="存储类型: memory 或 file",
+        json_schema_extra={"x-ui-type": "select", "x-options": ["memory", "file"]},
+    )
     max_messages_per_session: int = Field(
         default=50,
         description="每个会话保留的最大消息数",
@@ -91,7 +90,6 @@ class DashboardConfig(BaseConfig):
     此处仅保留顶层基础字段，供 core.toml [dashboard] 段使用。
     """
 
-    type: str = Field(default="dashboard", description="配置类型标识")
     enabled: bool = Field(default=True, description="是否启用 Dashboard")
     host: str = Field(default="127.0.0.1", description="Dashboard 监听地址")
     port: int = Field(default=60214, description="Dashboard 监听端口")
@@ -116,7 +114,6 @@ class CoreConfig(BaseConfig):
     对应 config/core.toml 文件。
     """
 
-    type: str = Field(default="core", description="配置类型标识")
     meta: MetaConfig = Field(default_factory=MetaConfig, description="配置元数据")
     general: GeneralConfig = Field(default_factory=GeneralConfig, description="通用配置")
     persona: PersonaConfig = Field(default_factory=PersonaConfig, description="VTuber 人设配置")

@@ -71,14 +71,9 @@ def _generate_core_toml() -> str:
     doc.add(tomlkit.nl())
 
     core = CoreConfig()
-    doc.add(tomlkit.comment(f'type = "{core.type}"'))
-    doc["type"] = core.type
     doc.add(tomlkit.nl())
 
     for field_name, _field_info in CoreConfig.model_fields.items():
-        if field_name == "type":
-            continue
-
         field_value = getattr(core, field_name)
 
         if isinstance(field_value, BaseModel):
@@ -115,12 +110,8 @@ def _generate_model_toml() -> str:
     doc.add(tomlkit.nl())
 
     model = ModelConfig()
-    doc["type"] = model.type
-    doc.add(tomlkit.nl())
 
     for field_name, field_info in ModelConfig.model_fields.items():
-        if field_name == "type":
-            continue
         field_value = getattr(model, field_name)
 
         if isinstance(field_value, BaseModel):

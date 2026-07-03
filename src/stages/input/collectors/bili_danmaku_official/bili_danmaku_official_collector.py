@@ -7,7 +7,7 @@ BiliDanmakuOfficialCollector - Bilibili 官方弹幕 Collector
 from __future__ import annotations
 
 import asyncio
-from typing import Any, AsyncIterator, Dict, Literal, Optional
+from typing import Any, AsyncIterator, Dict, Optional
 
 from pydantic import Field
 
@@ -42,7 +42,6 @@ class BiliDanmakuOfficialCollector:
     class ConfigSchema(BaseConfig):
         """Bilibili官方弹幕输入Collector配置"""
 
-        type: Literal["bili_danmaku_official"] = "bili_danmaku_official"
         id_code: str = Field(..., description="主播身份码")
         app_id: str = Field(..., description="应用ID")
         access_key: str = Field(..., description="访问密钥")

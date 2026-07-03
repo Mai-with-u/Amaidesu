@@ -59,7 +59,6 @@ class LLMDecider:
         使用LLM Service统一接口进行决策。
         """
 
-        type: Literal["llm"] = "llm"
         client: Literal["llm", "llm_fast", "vlm"] = Field(default="llm", description="使用的LLM客户端名称")
         fallback_mode: Literal["simple", "echo", "error"] = Field(default="simple", description="降级模式")
 

@@ -32,7 +32,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional, Type
 
-import tomli_w
+import tomlkit
 from pydantic import BaseModel
 
 from src.modules.logging import get_logger
@@ -117,9 +117,10 @@ def _format_toml_value(value: Any) -> str:
         TOML 格式的字符串
 
     Note:
-        此函数用于生成可直接写入 TOML 文件的字符串字面量
-        与 tomli_w 配合使用时，tomli_w 会自动处理大部分格式化
-        此函数主要用于手动构建包含注释的 TOML 内容
+        此函数用于手动构建包含注释的 TOML 字符串内容。
+        tomli_w / tomlkit 等库在序列化时不会保留源码中的注释，
+        因此 ``generate_toml()`` 采用纯字符串拼接方式逐行输出。
+        此函数仅被 ``generate_toml()`` 调用，无需直接使用。
     """
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -279,13 +280,13 @@ def generate_config_dict(
     return {name: config_values}
 
 
-def merge_config_with_tomli_w(
+def merge_config_with_tomlkit(
     base_config: Dict[str, Any],
     override_config: Dict[str, Any],
     output_path: str,
 ) -> None:
     """
-    使用 tomli_w 合并配置并写入文件
+    使用 tomlkit 合并配置并写入文件
 
     Args:
         base_config: 基础配置字典
@@ -295,14 +296,14 @@ def merge_config_with_tomli_w(
     Example:
         >>> base = {"provider": {"host": "localhost", "port": 8080}}
         >>> override = {"provider": {"port": 9090}}
-        >>> merge_config_with_tomli_w(base, override, "config.toml")
+        >>> merge_config_with_tomlkit(base, override, "config.toml")
     """
     # 深度合并配置
     merged = _deep_merge_dicts(base_config, override_config)
 
-    # 使用 tomli_w 写入文件
-    with open(output_path, "wb") as f:
-        tomli_w.dump(merged, f)
+    # 使用 tomlkit 写入文件（文本模式）
+    with open(output_path, "w", encoding="utf-8") as f:
+        tomlkit.dump(merged, f)
 
     logger.debug(f"配置文件已写入: {output_path}")
 

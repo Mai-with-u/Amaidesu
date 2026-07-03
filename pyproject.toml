@@ -48,9 +48,9 @@ dependencies = [
     # 自动化和 OSC
     "pyautogui>=0.9.0",
     "python-osc>=1.8.0",
-    "tomli-w>=1.2.0",
     "tomlkit>=0.14.0",
     "python-frontmatter>=1.1.0",
+    "watchfiles>=1.1.1",
 ]
 
 [project.optional-dependencies]

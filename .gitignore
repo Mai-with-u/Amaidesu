@@ -214,4 +214,4 @@ config.toml.backup*
 
 # Multi-file config (generated from Schema on first run, contains user secrets)
 *.toml
-config/
+/config/

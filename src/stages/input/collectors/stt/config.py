@@ -4,7 +4,7 @@ STTInput组件配置 Schema
 定义了语音转文字 Collector 的嵌套配置结构。
 """
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -66,8 +66,6 @@ class MessageConfig(BaseModel):
 
 class STTInputConfig(BaseConfig):
     """STT 输入 组件配置"""
-
-    type: Literal["stt"] = "stt"
 
     # 嵌套配置结构（与旧插件一致）
     iflytek_asr: IflytekAsrConfig = Field(..., description="讯飞 ASR 配置")

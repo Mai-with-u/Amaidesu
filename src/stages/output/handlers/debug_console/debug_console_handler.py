@@ -4,7 +4,7 @@ Debug Console Handler
 调试用控制台输出 Handler，用于打印 Intent 内容到控制台。
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Literal
+from typing import TYPE_CHECKING, Any, Dict
 
 from pydantic import Field
 
@@ -30,7 +30,6 @@ class DebugConsoleHandler:
     class ConfigSchema(BaseConfig):
         """调试控制台输出Handler配置"""
 
-        type: Literal["debug_console"] = "debug_console"
         print_source_context: bool = Field(default=True, description="是否打印源上下文")
         print_actions: bool = Field(default=True, description="是否打印动作列表")
         print_metadata: bool = Field(default=False, description="是否打印元数据")

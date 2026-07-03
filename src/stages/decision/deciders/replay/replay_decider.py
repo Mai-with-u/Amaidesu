@@ -10,7 +10,7 @@ ReplayDecider - 输入重放决策提供者
 - 不需要 AI 决策，只需要将用户输入直接传递到输出
 """
 
-from typing import Any, Dict, Literal
+from typing import Any, Dict
 
 from pydantic import Field
 
@@ -48,7 +48,6 @@ class ReplayDecider:
         return {"layer": "decision", "name": "replay", "class": cls, "source": "builtin:replay"}
 
     class ConfigSchema(BaseConfig):
-        type: Literal["replay"] = "replay"
         add_default_action: bool = Field(default=True, description="是否添加默认动作")
 
     def __init__(self, config: Dict[str, Any], event_bus: EventBus):

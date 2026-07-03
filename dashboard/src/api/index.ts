@@ -66,11 +66,9 @@ export const debugApi = {
 
 // MaiBot API
 export interface MaibotActionRequest {
-  action?: string;
-  action_params?: Record<string, unknown>;
-  emotion?: string;
-  priority?: number;
   text?: string;
+  emotion?: { name: string; intensity: number };
+  action?: { name: string; parameters: Record<string, unknown> };
 }
 
 export interface MaibotActionResponse {

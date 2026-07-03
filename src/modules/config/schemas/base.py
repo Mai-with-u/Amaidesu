@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Union, get_args, get_origin
 
 import tomlkit
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 
 def _unwrap_to_baseconfig(annotation: Any) -> type["BaseConfig"] | None:
@@ -66,8 +66,6 @@ class BaseConfig(BaseModel):
     - 使用 extra="forbid" 拒绝未知字段（安全网）
     - 加载配置时必须通过 from_dict() / from_dict_with_drift_check() 而非直接构造
     """
-
-    type: str = Field(description="组件类型标识")
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
@@ -236,6 +234,10 @@ def _set_toml_value(table: tomlkit.items.Table, key: str, value: Any) -> None:
         key: 字段键名
         value: Python 值
     """
+    # TOML 不支持 null
+    if value is None:
+        return
+
     if isinstance(value, dict):
         # 嵌套字典转为子表
         sub_table = tomlkit.table()

@@ -12,8 +12,11 @@ from src.modules.config.schemas.base import BaseConfig
 class LLMConfig(BaseConfig):
     """标准 LLM 配置（用于高质量任务）"""
 
-    type: str = Field(default="llm", description="配置类型标识")
-    client: str = Field(default="openai", description="客户端类型（openai 兼容所有 OpenAI API 服务）")
+    client: str = Field(
+        default="openai",
+        description="客户端类型（openai 兼容所有 OpenAI API 服务）",
+        json_schema_extra={"x-ui-type": "select", "x-options": ["openai"]},
+    )
     model: str = Field(default="gpt-4", description="模型名称")
     temperature: float = Field(default=0.2, description="生成温度 (0.0-2.0)")
     api_key: str = Field(default="", description="API 密钥（留空则使用环境变量）")
@@ -29,7 +32,6 @@ class LLMConfig(BaseConfig):
 class FastLLMConfig(BaseConfig):
     """快速 LLM 配置（用于低延迟任务，如 Avatar 表情分析）"""
 
-    type: str = Field(default="llm_fast", description="配置类型标识")
     client: str = Field(default="openai", description="客户端类型")
     model: str = Field(default="gpt-3.5-turbo", description="模型名称")
     temperature: float = Field(default=0.2, description="生成温度")
@@ -44,7 +46,6 @@ class FastLLMConfig(BaseConfig):
 class VLMConfig(BaseConfig):
     """视觉语言模型配置（用于图像理解任务）"""
 
-    type: str = Field(default="vlm", description="配置类型标识")
     client: str = Field(default="openai", description="客户端类型")
     model: str = Field(default="gpt-4-vision-preview", description="视觉模型名称")
     temperature: float = Field(default=0.3, description="生成温度")
@@ -57,13 +58,12 @@ class VLMConfig(BaseConfig):
 
 
 class LocalLLMConfig(BaseConfig):
-    """本地模型配置（Ollama / LM Studio / vLLM 等）
+    """本地模型配置（Ollama / LM Studio / vLLM 等)
 
     这些服务提供 OpenAI 兼容 API，
     使用 client = "openai" 并配置 base_url 即可。
     """
 
-    type: str = Field(default="llm_local", description="配置类型标识")
     client: str = Field(default="openai", description="客户端类型")
     model: str = Field(default="llama3", description="本地模型名称")
     base_url: str = Field(
@@ -80,7 +80,6 @@ class ModelConfig(BaseConfig):
     对应 config/model.toml 文件。
     """
 
-    type: str = Field(default="model", description="配置类型标识")
     llm: LLMConfig = Field(default_factory=LLMConfig, description="标准 LLM 配置")
     llm_fast: FastLLMConfig = Field(default_factory=FastLLMConfig, description="快速 LLM 配置")
     vlm: VLMConfig = Field(default_factory=VLMConfig, description="视觉语言模型配置")

@@ -1,7 +1,7 @@
 """MaiBotDecider - 通过 WebSocket 与 MaiBot 通信的纯文本转发决策器。"""
 
 import asyncio
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, Optional
 
 from maim_message import MessageBase, RouteConfig, Router, Seg, TargetConfig
 from pydantic import Field
@@ -27,7 +27,6 @@ class MaiBotDecider:
     """通过 WebSocket 与 MaiBot 通信，将 NormalizedMessage 转发给 MaiBot，并从 MaiBot 的回复中提取文本作为 Intent。"""
 
     class ConfigSchema(BaseConfig):
-        type: Literal["maibot"] = "maibot"
         host: str = Field(default="localhost", description="MaiBot WebSocket服务器主机地址")
         port: int = Field(default=8000, description="MaiBot WebSocket服务器端口", ge=1, le=65535)
         platform: str = Field(default="amaidesu", description="平台标识符")

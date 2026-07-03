@@ -53,7 +53,6 @@ class MainosabaCollector:
     class ConfigSchema(BaseConfig):
         """Mainosaba游戏画面采集输入Collector配置"""
 
-        type: Literal["mainosaba"] = "mainosaba"
         full_screen: bool = Field(default=True, description="全屏截图")
         game_region: Optional[List[int]] = Field(default=None, description="游戏区域 [x1, y1, x2, y2]")
         check_interval: int = Field(default=1, description="检查间隔（秒）", ge=1)

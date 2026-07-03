@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from typing import Any, AsyncIterator, Dict, List, Literal, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 from pydantic import Field
 
@@ -35,7 +35,6 @@ class ConsoleInputCollector:
     class ConfigSchema(BaseConfig):
         """控制台输入Collector配置"""
 
-        type: Literal["console_input"] = "console_input"
         user_id: str = Field(default="console_user", description="用户ID")
         user_nickname: str = Field(default="控制台", description="用户昵称")
 

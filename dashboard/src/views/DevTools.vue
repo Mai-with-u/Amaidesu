@@ -550,23 +550,27 @@ async function triggerMaibotAction() {
     second: '2-digit',
   });
 
-  // 根据动作类型构建参数
-  let actionParams = {};
+  // 构建结构化 action payload（全限定名格式）
+  let actionPayload: { name: string; parameters: Record<string, unknown> } | undefined;
   if (maibotForm.value.action === 'hotkey' && maibotForm.value.hotkey) {
-    actionParams = { hotkey: maibotForm.value.hotkey };
+    actionPayload = { name: `warudo.${maibotForm.value.hotkey}`, parameters: {} };
   } else if (maibotForm.value.action === 'expression' && maibotForm.value.expression) {
-    actionParams = { expression: maibotForm.value.expression };
+    actionPayload = { name: `warudo.${maibotForm.value.expression}`, parameters: {} };
   } else if (maibotForm.value.action === 'motion' && maibotForm.value.motion) {
-    actionParams = { motion: maibotForm.value.motion };
+    actionPayload = { name: `warudo.${maibotForm.value.motion}`, parameters: {} };
   }
 
-  const requestData = {
-    action: maibotForm.value.action || undefined,
-    action_params: Object.keys(actionParams).length > 0 ? actionParams : undefined,
-    emotion: maibotForm.value.emotion || undefined,
-    priority: maibotForm.value.priority,
+  // 构建结构化 emotion payload
+  let emotionPayload: { name: string; intensity: number } | undefined;
+  if (maibotForm.value.emotion) {
+    emotionPayload = { name: maibotForm.value.emotion, intensity: 0.5 };
+  }
+
+  const requestData: Record<string, unknown> = {
     text: maibotForm.value.text || undefined,
   };
+  if (actionPayload) requestData.action = actionPayload;
+  if (emotionPayload) requestData.emotion = emotionPayload;
 
   try {
     const response = await maibotApi.triggerAction(requestData);

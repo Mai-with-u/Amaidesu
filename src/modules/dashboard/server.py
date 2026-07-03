@@ -39,6 +39,25 @@ if TYPE_CHECKING:
 from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
 from src.modules.dashboard.websocket.handler import WebSocketHandler
 
+_SECTION_TO_CONFIG_FILE: dict[str, str] = {
+    "meta": "core.toml",
+    "general": "core.toml",
+    "persona": "core.toml",
+    "maicore": "core.toml",
+    "context": "core.toml",
+    "dashboard": "core.toml",
+    "logging": "core.toml",
+    "pipelines": "core.toml",
+    "mcp": "core.toml",
+    "llm": "model.toml",
+    "llm_fast": "model.toml",
+    "vlm": "model.toml",
+    "llm_local": "model.toml",
+    "collectors": "input.toml",
+    "deciders": "decision.toml",
+    "handlers": "output.toml",
+}
+
 
 class DashboardServer:
     """Dashboard 服务器主类"""
@@ -267,11 +286,25 @@ class DashboardServer:
         """获取访问 URL"""
         return f"http://{self.host}:{self.port}"
 
-    def get_config_path(self) -> Optional[str]:
-        """获取配置文件路径"""
-        if self.config_service and hasattr(self.config_service, "base_dir"):
-            return str(Path(self.config_service.base_dir) / "config.toml")
-        return None
+    def get_config_path(self, section: Optional[str] = None) -> Optional[str]:
+        """获取配置文件路径
+
+        根据配置节名路由到对应的 TOML 文件 (多文件配置结构)。
+
+        Args:
+            section: 配置节名 (例如 ``"persona"`` / ``"llm"`` / ``"collectors"``)。
+                ``None`` 时返回 ``core.toml`` (默认核心配置文件)。
+
+        Returns:
+            对应 TOML 文件的绝对路径字符串;若 ``config_service`` 不可用则返回 ``None``。
+        """
+        if not (self.config_service and hasattr(self.config_service, "base_dir")):
+            return None
+
+        config_dir = Path(self.config_service.base_dir) / "config"
+        # 未知 section 兜底到 core.toml,避免静默失败
+        filename = _SECTION_TO_CONFIG_FILE.get(section or "", "core.toml")
+        return str(config_dir / filename)
 
     async def _start_vite_dev_server(self) -> None:
         """启动 Vite 开发服务器子进程（开发模式专用）"""

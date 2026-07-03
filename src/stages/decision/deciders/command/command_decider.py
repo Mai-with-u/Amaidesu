@@ -3,7 +3,7 @@
 通用命令意图路由器：将命令形式的标准化消息转换为 Intent。
 """
 
-from typing import Literal, Optional
+from typing import Optional
 
 from pydantic import Field, ValidationError
 
@@ -31,7 +31,6 @@ class CommandDecider:
     """
 
     class ConfigSchema(BaseConfig):
-        type: Literal["command"] = "command"
         command_mappings: dict = Field(
             default_factory=lambda: {
                 "chat": "chat",

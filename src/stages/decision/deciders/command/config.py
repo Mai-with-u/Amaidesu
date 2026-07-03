@@ -1,6 +1,6 @@
 """CommandDecider 配置 Schema"""
 
-from typing import Dict, Literal
+from typing import Dict
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -24,7 +24,6 @@ class CommandDeciderConfig(BaseModel):
         }
     )
 
-    type: Literal["command"] = "command"
     command_mappings: Dict[str, str] = Field(
         default_factory=lambda: {
             "chat": "chat",

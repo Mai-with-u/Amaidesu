@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, AsyncIterator, Dict, Literal, Optional
+from typing import Any, AsyncIterator, Dict, Optional
 
 try:
     import aiohttp
@@ -35,7 +35,6 @@ class BiliDanmakuCollector:
     class ConfigSchema(BaseConfig):
         """Bilibili弹幕输入Collector配置"""
 
-        type: Literal["bili_danmaku"] = "bili_danmaku"
         room_id: int = Field(..., description="直播间ID", gt=0)
         poll_interval: int = Field(default=3, description="轮询间隔（秒）", ge=1)
         message_config: dict = Field(default_factory=dict, description="消息配置")
