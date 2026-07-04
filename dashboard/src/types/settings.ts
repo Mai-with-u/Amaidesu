@@ -34,6 +34,7 @@ export interface ConfigFieldSchema {
   validation?: ValidationRule;
   properties?: Record<string, ConfigFieldSchema>;
   items?: ConfigFieldSchema;
+  children?: ConfigFieldSchema[];
   required: boolean;
   sensitive: boolean;
   group?: string;
@@ -47,6 +48,8 @@ export interface ConfigGroupSchema {
   icon?: string;
   fields: ConfigFieldSchema[];
   order: number;
+  file_name?: string;
+  file_label?: string;
 }
 
 // 配置 Schema 响应

@@ -175,7 +175,7 @@ def config_service(config_dir: Path):
 @pytest.fixture
 def dashboard_server(config_service):
     """构造一个最小化的 DashboardServer (只注入 config_service)"""
-    from src.modules.dashboard.config import DashboardConfig
+    from src.modules.config.core_schemas import DashboardConfig
     from src.modules.dashboard.server import DashboardServer
     from src.modules.dashboard.dependencies import set_dashboard_server
 
@@ -269,7 +269,7 @@ class TestGetConfigPath:
 
     def test_get_path_without_service_returns_none(self):
         """config_service 不存在时返回 None"""
-        from src.modules.dashboard.config import DashboardConfig
+        from src.modules.config.core_schemas import DashboardConfig
         from src.modules.dashboard.server import DashboardServer
 
         cfg = DashboardConfig(host="127.0.0.1", port=60214)

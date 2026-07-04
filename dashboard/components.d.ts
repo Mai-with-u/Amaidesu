@@ -14,6 +14,8 @@ declare module 'vue' {
     AppLayout: typeof import('./src/components/layout/AppLayout.vue')['default']
     ArrayEditor: typeof import('./src/components/settings/ArrayEditor.vue')['default']
     ComponentCard: typeof import('./src/components/component-cards/ComponentCard.vue')['default']
+    ComponentCardList: typeof import('./src/components/settings/ComponentCardList.vue')['default']
+    DictEditor: typeof import('./src/components/settings/DictEditor.vue')['default']
     DynamicForm: typeof import('./src/components/settings/DynamicForm.vue')['default']
     ElAlert: typeof import('element-plus/es')['ElAlert']
     ElAside: typeof import('element-plus/es')['ElAside']
@@ -58,6 +60,7 @@ declare module 'vue' {
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     Sidebar: typeof import('./src/components/layout/Sidebar.vue')['default']
+    SubFieldGroup: typeof import('./src/components/settings/SubFieldGroup.vue')['default']
   }
   export interface GlobalDirectives {
     vLoading: typeof import('element-plus/es')['ElLoadingDirective']

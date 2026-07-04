@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.modules.dashboard.api.router import create_app, setup_cors
-from src.modules.dashboard.config import DashboardConfig
+from src.modules.config.core_schemas import DashboardConfig
 from src.modules.dashboard.schemas.manager_protocol import ManagerStatusProvider
 from src.modules.dashboard.widget import DanmakuWidgetService
 from src.modules.dashboard.widget.models import DanmakuWidgetConfig, SubtitleWidgetConfig

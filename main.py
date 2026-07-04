@@ -400,7 +400,7 @@ async def create_app_components(
 
     if dashboard_config.get("enabled", True):
         try:
-            from src.modules.dashboard.config import DashboardConfig
+            from src.modules.config.core_schemas import DashboardConfig
             from src.modules.dashboard.server import DashboardServer
 
             dashboard_config["dev_mode"] = dev_webui  # CLI 参数覆盖配置文件

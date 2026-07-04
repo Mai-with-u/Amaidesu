@@ -151,7 +151,6 @@ class TestOutputHandlersConfigAggregate:
             "debug_console",
             "edge_tts",
             "gptsovits",
-            "mock",
             "obs_control",
             "omni_tts",
             "remote_stream",
@@ -292,7 +291,6 @@ class TestExistingConfigValidation:
                 "debug_console",
                 "edge_tts",
                 "gptsovits",
-                "mock",
                 "obs_control",
                 "omni_tts",
                 "remote_stream",
@@ -421,12 +419,6 @@ class TestHandlerConfigSchemas:
         assert d.print_actions is True
         assert d.prefix == "[DEBUG]"
 
-    def test_mock_schema_defaults(self):
-        from src.modules.config.schemas.output_schemas import MockConfigSchema
-
-        m = MockConfigSchema()
-        
-
     def test_all_handler_schemas_subclass_baseconfig(self):
         """所有 Handler ConfigSchema 必须继承 BaseConfig"""
         from src.modules.config.schemas.base import BaseConfig
@@ -434,7 +426,6 @@ class TestHandlerConfigSchemas:
             DebugConsoleConfigSchema,
             EdgeTTSConfigSchema,
             GPTSoVITSConfigSchema,
-            MockConfigSchema,
             ObsControlConfigSchema,
             OmniTTSConfigSchema,
             RemoteStreamConfigSchema,
@@ -449,7 +440,6 @@ class TestHandlerConfigSchemas:
             DebugConsoleConfigSchema,
             EdgeTTSConfigSchema,
             GPTSoVITSConfigSchema,
-            MockConfigSchema,
             OmniTTSConfigSchema,
             RemoteStreamConfigSchema,
             StickerConfigSchema,

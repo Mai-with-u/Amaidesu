@@ -87,8 +87,12 @@
         <ArrayEditor v-model="localValue" :field="field" @change="handleChange" />
       </template>
 
-      <!-- 对象类型 -->
-      <template v-else-if="field.type === 'object'">
+      <!-- 对象类型：有 properties 时递归渲染子字段 -->
+      <template
+        v-else-if="
+          field.type === 'object' && field.properties && Object.keys(field.properties).length > 0
+        "
+      >
         <div class="nested-object">
           <FieldRenderer
             v-for="(propField, propKey) in field.properties"
@@ -99,6 +103,15 @@
             @update:model-value="setObjectValue(propKey, $event)"
           />
         </div>
+      </template>
+
+      <!-- 对象类型：无 properties（自由 dict），键值对编辑 -->
+      <template v-else-if="field.type === 'object'">
+        <DictEditor
+          :model-value="localValue"
+          @update:model-value="setDictValue"
+          @change="handleChange"
+        />
       </template>
 
       <!-- 未知类型 -->
@@ -120,6 +133,7 @@
 import { ref, computed, watch } from 'vue';
 import type { ConfigFieldSchema } from '@/types/settings';
 import ArrayEditor from './ArrayEditor.vue';
+import DictEditor from './DictEditor.vue';
 
 const props = defineProps<{
   field: ConfigFieldSchema;
@@ -163,6 +177,12 @@ const isModified = computed(() => {
 
 // 错误信息
 const error = ref<string | null>(null);
+
+// 自由 dict 字段的值更新
+function setDictValue(val: unknown) {
+  localValue.value = val;
+  handleChange();
+}
 
 // 处理变更
 function handleChange() {

@@ -22,7 +22,6 @@ from . import (
     debug_console,  # noqa: F401
     edge_tts,  # noqa: F401
     gptsovits,  # noqa: F401
-    mock,  # noqa: F401
     obs_control,  # noqa: F401
     omni_tts,  # noqa: F401
     remote_stream,  # noqa: F401
@@ -35,7 +34,7 @@ from .avatar.vrchat import VRChatHandler
 from .debug_console import DebugConsoleHandler
 from .edge_tts import EdgeTTSHandler
 from .gptsovits import GPTSoVITSHandler
-from .mock import MockOutputHandler
+
 from .obs_control import ObsControlHandler
 from .omni_tts import OmniTTSHandler
 from .remote_stream import RemoteStreamHandler
@@ -54,5 +53,4 @@ __all__ = [
     "ObsControlHandler",
     "RemoteStreamHandler",
     "DebugConsoleHandler",
-    "MockOutputHandler",
 ]

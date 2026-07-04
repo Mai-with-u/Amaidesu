@@ -142,6 +142,10 @@ class ConfigSchemaGenerator:
         if origin in {dict}:
             return "object"
 
+        # 裸 dict（非 Dict[str, Any] 泛型写法）-> object
+        if unwrapped is dict:
+            return "object"
+
         # Pydantic / BaseModel 子类 -> object
         if _is_basemodel_subclass(unwrapped):
             return "object"

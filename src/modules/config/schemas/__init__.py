@@ -10,8 +10,19 @@ from .base import BaseConfig
 # Non-component schemas (system-wide configurations)
 from .logging import LoggingConfig
 
-# Output handler schemas
-from .output_schemas import (
+# 组件 Schema Registry — 必须放在所有 import 之前，
+# 因为 @collector/@decider/@handler 装饰器在模块加载时立即调用 register_config_schema，
+# 若 registry 尚未定义则装饰器会静默吞掉 ImportError，导致 CONFIG_SCHEMA_REGISTRY 始终为空。
+CONFIG_SCHEMA_REGISTRY: Dict[str, Type[BaseModel]] = {}
+
+
+def register_config_schema(type: str, schema_class: Type[BaseModel]) -> None:
+    """注册组件的配置 Schema"""
+    CONFIG_SCHEMA_REGISTRY[type] = schema_class
+
+
+# Output handler schemas — 延迟导入以避免循环依赖，见上方 registry 注释
+from .output_schemas import (  # noqa: E402
     OutputConfig,
     OutputHandlersConfig,
     OutputPipelinesConfig,
@@ -19,7 +30,7 @@ from .output_schemas import (
 )
 
 # Input stage schemas (Task 8)
-from .input_schemas import (
+from .input_schemas import (  # noqa: E402
     InputCollectorsConfig,
     InputConfig,
     InputPipelinesConfig,
@@ -27,7 +38,7 @@ from .input_schemas import (
 )
 
 # Decision stage schemas (Task 10)
-from .decision_schemas import (
+from .decision_schemas import (  # noqa: E402
     AmaidesuDeciderConfigSchema,
     CommandDeciderConfigSchema,
     DecisionConfig,
@@ -37,24 +48,6 @@ from .decision_schemas import (
     MaiBotDeciderConfigSchema,
     ReplayDeciderConfigSchema,
 )
-
-# 组件 Schema Registry - 内存存储
-#
-# Input/Decision 阶段组件尚未注册 Schema，调用 get_config_schema 时会抛 KeyError。
-# Output 阶段组件通过 CONFIG_SCHEMA_REGISTRY 查找；该 registry 由
-# @collector/@decider/@handler 装饰器在对应阶段模块加载时自动填充。
-CONFIG_SCHEMA_REGISTRY: Dict[str, Type[BaseModel]] = {}
-
-
-def register_config_schema(type: str, schema_class: Type[BaseModel]) -> None:
-    """
-    注册组件的配置 Schema
-
-    Args:
-        type: Collector/Decider/Handler 类型标识
-        schema_class: Schema 类
-    """
-    CONFIG_SCHEMA_REGISTRY[type] = schema_class
 
 
 def get_config_schema(type: str, phase: Optional[str] = None) -> Type[BaseModel]:

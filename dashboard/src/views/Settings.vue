@@ -40,67 +40,110 @@
       class="error-alert"
     />
 
-    <!-- 主内容：左侧导航 + 右侧内容 -->
+    <!-- 主内容 -->
     <div v-else class="settings-content">
-      <!-- 左侧分组导航 -->
-      <nav class="settings-nav">
-        <!-- 搜索框 -->
-        <div class="nav-search">
-          <el-input
-            v-model="searchQuery"
-            placeholder="搜索配置项..."
-            :prefix-icon="Search"
-            clearable
-            size="small"
-          />
-        </div>
-
-        <!-- 分组列表 -->
-        <div class="nav-groups">
-          <button
-            v-for="group in filteredGroups"
-            :key="group.key"
-            :class="['nav-item', { active: activeGroup === group.key }]"
-            @click="activeGroup = group.key"
-          >
-            <el-icon class="nav-icon"><component :is="getIcon(group.icon)" /></el-icon>
-            <span class="nav-label">{{ group.label }}</span>
-            <el-badge
-              v-if="getGroupChangeCount(group.key) > 0"
-              :value="getGroupChangeCount(group.key)"
-              type="warning"
-              class="nav-badge"
-            />
-          </button>
-        </div>
-      </nav>
-
-      <!-- 右侧配置内容 -->
-      <div class="settings-main">
-        <div class="main-header">
-          <div class="main-title">
-            <h2>{{ currentGroup?.label }}</h2>
-            <p v-if="currentGroup?.description">{{ currentGroup.description }}</p>
-          </div>
-        </div>
-
-        <div class="main-content">
-          <!-- 当前分组的字段列表 -->
-          <div v-if="currentGroupFields.length > 0" class="fields-list">
-            <FieldRenderer
-              v-for="field in currentGroupFields"
-              :key="field.key"
-              :field="field"
-              :model-value="getFieldValue(field.key)"
-              :original-value="getOriginalValue(field.key)"
-              @update:model-value="updateFieldValue(field, $event)"
-            />
-          </div>
-
-          <!-- 空状态 -->
-          <el-empty v-else-if="searchQuery" description="没有找到匹配的配置项" :image-size="100" />
-        </div>
+      <!-- 顶部栏：搜索 + Tab -->
+      <div class="settings-toolbar">
+        <el-input
+          v-model="searchQuery"
+          placeholder="搜索配置项..."
+          :prefix-icon="Search"
+          clearable
+          size="default"
+          class="search-input"
+        />
       </div>
+
+      <!-- 文件 Tab 导航 -->
+      <el-tabs
+        v-model="activeFileTab"
+        class="file-tabs"
+        :stretch="false"
+        @tab-click="handleTabClick"
+      >
+        <el-tab-pane
+          v-for="tab in FILE_TABS"
+          :key="tab.key"
+          :label="getTabLabel(tab)"
+          :name="tab.key"
+          lazy
+        >
+          <!-- 搜索模式：跨文件结果 -->
+          <div v-if="searchQuery" class="search-results">
+            <div
+              v-for="match in globalSearchResults"
+              :key="match.section.key"
+              class="search-section"
+            >
+              <div class="search-section-header">
+                <el-icon class="section-header-icon"
+                  ><component :is="getIcon(match.section.icon)"
+                /></el-icon>
+                <span class="search-section-title">{{ match.section.label }}</span>
+                <el-tag size="small" type="info">{{ tab.label }}</el-tag>
+              </div>
+              <div class="section-fields">
+                <SubFieldGroup
+                  :fields="match.fields"
+                  :get-value="getFieldValue"
+                  :get-original="getOriginalValue"
+                  :update-value="updateFieldValue"
+                />
+              </div>
+            </div>
+            <el-empty
+              v-if="globalSearchResults.length === 0"
+              description="没有找到匹配的配置项"
+              :image-size="80"
+            />
+          </div>
+
+          <!-- 正常浏览模式：分区卡片 -->
+          <div v-else class="section-cards">
+            <div
+              v-for="section in getFileSections(tab.key)"
+              :key="section.key"
+              class="section-card"
+            >
+              <div class="section-header">
+                <div class="section-header-left">
+                  <div class="section-icon-wrapper">
+                    <el-icon class="section-icon"
+                      ><component :is="getIcon(section.icon)"
+                    /></el-icon>
+                  </div>
+                  <div class="section-title-area">
+                    <h3 class="section-title">{{ section.label }}</h3>
+                    <p v-if="section.description" class="section-desc">{{ section.description }}</p>
+                  </div>
+                </div>
+                <el-badge
+                  v-if="getSectionChangeCount(section.key) > 0"
+                  :value="getSectionChangeCount(section.key)"
+                  type="warning"
+                />
+              </div>
+              <div class="section-fields">
+                <ComponentCardList
+                  v-if="['collectors', 'deciders', 'handlers'].includes(section.key)"
+                  :fields="section.fields"
+                  :enabled-field-key="`${section.key}.enabled`"
+                  :get-value="getFieldValue"
+                  :get-original="getOriginalValue"
+                  :update-value="updateFieldValue"
+                />
+                <SubFieldGroup
+                  v-else
+                  :fields="section.fields"
+                  :get-value="getFieldValue"
+                  :get-original="getOriginalValue"
+                  :update-value="updateFieldValue"
+                />
+              </div>
+            </div>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
     </div>
 
     <!-- 重启确认对话框 -->
@@ -128,15 +171,10 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { Check, RefreshLeft, Loading, Search } from '@element-plus/icons-vue';
 import {
-  Check,
-  RefreshLeft,
-  Loading,
-  Search,
-  // 常用图标（用于配置分组动态显示）
   Setting,
   User,
-  Connection,
   Monitor,
   Document,
   ChatDotRound,
@@ -146,135 +184,49 @@ import {
   Picture,
   Film,
   Notification,
-  Bell,
-  Message,
-  ChatLineSquare,
   Cpu,
   DataAnalysis,
-  Grid,
-  List,
   Tools,
   Key,
-  Lock,
-  Unlock,
-  Link,
-  House,
-  OfficeBuilding,
-  School,
-  ShoppingCart,
-  Wallet,
-  Money,
-  Timer,
-  Clock,
-  Calendar,
-  Sunrise,
-  Sunny,
-  Moon,
-  Cloudy,
-  Compass,
-  Location,
-  MapLocation,
-  Guide,
-  Aim,
-  Pointer,
-  Position,
-  FullScreen,
-  Expand,
-  Fold,
-  Rank,
-  Share,
-  Upload,
-  Download,
-  Top,
-  Bottom,
-  Back as Left,
-  Right,
-  Plus,
-  Minus,
-  Close,
-  Check as CheckIcon,
-  Delete,
-  Edit,
-  Refresh,
-  RefreshRight,
-  Search as SearchIcon,
-  Filter,
-  Sort,
-  More,
-  MoreFilled,
-  Operation,
-  Switch,
-  TurnOff,
-  Open,
-  View,
-  Hide,
-  Star,
-  StarFilled,
-  Collection,
-  CollectionTag,
-  Folder,
-  FolderOpened,
-  Files,
-  DocumentCopy,
-  DocumentChecked,
-  DocumentAdd,
-  DocumentRemove,
-  Tickets,
-  Postcard,
-  Notebook,
-  Reading,
-  Memo,
-  Menu,
-  Histogram,
-  PieChart,
-  DataLine,
-  TrendCharts,
-  DataBoard,
-  SetUp,
-  SwitchButton,
+  Connection,
   Management,
-  Promotion,
-  Platform,
-  Opportunity as Opportunities,
-  Medal,
-  Trophy,
-  Present,
-  Box,
-  Goods,
-  GoodsFilled,
-  ShoppingCartFull,
-  Handbag,
-  Shop as ShopIcon,
-  TakeawayBox,
-  Van,
-  Bicycle,
-  Ship,
-  Cherry,
-  Apple,
-  Orange,
-  Pear,
-  Watermelon,
-  Coffee,
-  CoffeeCup,
-  MilkTea,
-  Goblet,
-  GobletFull,
-  GobletSquare,
-  GobletSquareFull,
-  IceCream,
-  IceCreamRound,
-  IceCreamSquare,
-  Lollipop,
 } from '@element-plus/icons-vue';
 import { useSettingsStore } from '@/stores/settings';
 import type { ConfigFieldSchema, ConfigGroupSchema, PendingChange } from '@/types/settings';
-import FieldRenderer from '@/components/settings/FieldRenderer.vue';
+import SubFieldGroup from '@/components/settings/SubFieldGroup.vue';
+import ComponentCardList from '@/components/settings/ComponentCardList.vue';
 
-// 图标映射表
+// ── 文件 Tab 定义 ──────────────────────────────────────────
+const FILE_TABS = [
+  {
+    key: 'core.toml',
+    label: '核心',
+    icon: Monitor,
+    desc: '通用 / 角色 / Dashboard / 日志',
+    restart: true,
+  },
+  { key: 'model.toml', label: '模型', icon: Cpu, desc: 'LLM / VLM 模型配置', restart: true },
+  {
+    key: 'input.toml',
+    label: '输入',
+    icon: Microphone,
+    desc: '弹幕 / 语音 / 控制台采集',
+    restart: false,
+  },
+  {
+    key: 'decision.toml',
+    label: '决策',
+    icon: ChatDotRound,
+    desc: 'MaiBot / LLM 决策',
+    restart: false,
+  },
+  { key: 'output.toml', label: '输出', icon: Film, desc: 'TTS / 字幕 / VTS / OBS', restart: false },
+];
+
+// 简化图标映射（按使用频率排序，只保留用到的）
 const iconMap: Record<string, unknown> = {
   Setting,
   User,
-  Connection,
   Monitor,
   Document,
   ChatDotRound,
@@ -284,139 +236,31 @@ const iconMap: Record<string, unknown> = {
   Picture,
   Film,
   Notification,
-  Bell,
-  Message,
-  ChatLineSquare,
   Cpu,
   DataAnalysis,
-  Grid,
-  List,
   Tools,
   Key,
-  Lock,
-  Unlock,
-  Link,
-  House,
-  OfficeBuilding,
-  School,
-  ShoppingCart,
-  Wallet,
-  Money,
-  Timer,
-  Clock,
-  Calendar,
-  Sunrise,
-  Sunny,
-  Moon,
-  Cloudy,
-  Compass,
-  Location,
-  MapLocation,
-  Guide,
-  Aim,
-  Pointer,
-  Position,
-  FullScreen,
-  Expand,
-  Fold,
-  Rank,
-  Share,
-  Upload,
-  Download,
-  Top,
-  Bottom,
-  Left,
-  Right,
-  Plus,
-  Minus,
-  Close,
-  Check: CheckIcon,
-  Delete,
-  Edit,
-  Refresh,
-  RefreshRight,
-  Search: SearchIcon,
-  Filter,
-  Sort,
-  More,
-  MoreFilled,
-  Operation,
-  Switch,
-  TurnOff,
-  Open,
-  View,
-  Hide,
-  Star,
-  StarFilled,
-  Collection,
-  CollectionTag,
-  Folder,
-  FolderOpened,
-  Files,
-  DocumentCopy,
-  DocumentChecked,
-  DocumentAdd,
-  DocumentRemove,
-  Tickets,
-  Postcard,
-  Notebook,
-  Reading,
-  Memo,
-  Menu,
-  Histogram,
-  PieChart,
-  DataLine,
-  TrendCharts,
-  DataBoard,
-  SetUp,
-  SwitchButton,
+  Connection,
   Management,
-  Promotion,
-  Platform,
-  Opportunities,
-  Medal,
-  Trophy,
-  Present,
-  Box,
-  Goods,
-  GoodsFilled,
-  ShoppingCartFull,
-  Handbag,
-  Shop: ShopIcon,
-  TakeawayBox,
-  Van,
-  Bicycle,
-  Ship,
-  Cherry,
-  Apple,
-  Orange,
-  Pear,
-  Watermelon,
-  Coffee,
-  CoffeeCup,
-  MilkTea,
-  Goblet,
-  GobletFull,
-  GobletSquare,
-  GobletSquareFull,
-  IceCream,
-  IceCreamRound,
-  IceCreamSquare,
-  Lollipop,
 };
 
+// ── 状态 ──────────────────────────────────────────────────
 const settingsStore = useSettingsStore();
 const showRestartDialog = ref(false);
 const restarting = ref(false);
 const searchQuery = ref('');
-const activeGroup = ref('');
+const activeFileTab = ref('core.toml');
 
-// 初始化：设置默认分组
+// 初始化：默认选中第一个非空 Tab
 watch(
   () => settingsStore.groups,
   groups => {
-    if (groups.length > 0 && !activeGroup.value) {
-      activeGroup.value = groups[0].key;
+    if (groups.length === 0) return;
+    // 检查当前 tab 是否有内容，没有则跳到第一个有内容的
+    const hasCurrent = getFileSections(activeFileTab.value).length > 0;
+    if (!hasCurrent) {
+      const firstNonEmpty = FILE_TABS.find(t => getFileSections(t.key).length > 0);
+      if (firstNonEmpty) activeFileTab.value = firstNonEmpty.key;
     }
   },
   { immediate: true },
@@ -427,71 +271,80 @@ onMounted(async () => {
   await settingsStore.fetchSchema();
 });
 
-// 过滤分组（搜索时）
-const filteredGroups = computed(() => {
-  if (!searchQuery.value) {
-    return settingsStore.groups;
+// ── 计算属性 ──────────────────────────────────────────────
+// 所有 group 按 file_name 分组
+// 所有 group 按后端返回的 file_name 分组
+const groupsByFile = computed(() => {
+  const map = new Map<string, ConfigGroupSchema[]>();
+  for (const group of settingsStore.groups) {
+    const file = group.file_name;
+    if (!file) continue; // 后端必须返回 file_name
+    if (!map.has(file)) map.set(file, []);
+    map.get(file)!.push(group);
   }
+  return map;
+});
 
-  const query = searchQuery.value.toLowerCase();
-  return settingsStore.groups.filter(group => {
-    // 检查分组标题或描述是否匹配
-    if (
-      group.label.toLowerCase().includes(query) ||
-      (group.description?.toLowerCase().includes(query) ?? false)
-    ) {
-      return true;
-    }
-    // 检查字段是否匹配
-    return group.fields.some(
-      field =>
-        field.label.toLowerCase().includes(query) ||
-        field.key.toLowerCase().includes(query) ||
-        (field.description?.toLowerCase().includes(query) ?? false),
+// 获取某个文件下的 sections（排序后）
+function getFileSections(fileName: string): ConfigGroupSchema[] {
+  return (groupsByFile.value.get(fileName) || []).sort((a, b) => (a.order ?? 99) - (b.order ?? 99));
+}
+
+// 搜索模式：全局跨文件结果
+const globalSearchResults = computed(() => {
+  if (!searchQuery.value) return [];
+  const q = searchQuery.value.toLowerCase();
+  const results: { section: ConfigGroupSchema; fields: ConfigFieldSchema[]; file: string }[] = [];
+
+  for (const group of settingsStore.groups) {
+    const matched = group.fields.filter(
+      f =>
+        f.label.toLowerCase().includes(q) ||
+        f.key.toLowerCase().includes(q) ||
+        (f.description?.toLowerCase().includes(q) ?? false),
     );
-  });
-});
-
-// 当前分组
-const currentGroup = computed((): ConfigGroupSchema | undefined => {
-  return filteredGroups.value.find(g => g.key === activeGroup.value);
-});
-
-// 当前分组的字段（搜索时过滤）
-const currentGroupFields = computed((): ConfigFieldSchema[] => {
-  const group = currentGroup.value;
-  if (!group) return [];
-
-  if (!searchQuery.value) {
-    return group.fields;
+    if (matched.length > 0) {
+      results.push({ section: group, fields: matched, file: group.file_name ?? '' });
+    }
   }
-
-  const query = searchQuery.value.toLowerCase();
-  return group.fields.filter(
-    field =>
-      field.label.toLowerCase().includes(query) ||
-      field.key.toLowerCase().includes(query) ||
-      (field.description?.toLowerCase().includes(query) ?? false),
-  );
+  return results;
 });
 
-// 获取图标组件
+// ── 图标 ──────────────────────────────────────────────────
 function getIcon(iconName?: string) {
   if (!iconName) return Setting;
   return iconMap[iconName] || Setting;
 }
 
-// 获取分组的变更数量
-function getGroupChangeCount(groupKey: string): number {
-  return settingsStore.pendingChanges.filter(change => change.key.startsWith(groupKey + '.'))
-    .length;
+// Tab 标签渲染
+function getTabLabel(tab: (typeof FILE_TABS)[0]) {
+  const hasChanges = getFileChangeCount(tab.key) > 0;
+  const restartNeeded = tab.restart && hasChanges;
+  return `${tab.label}${restartNeeded ? ' ⚠️' : ''}`;
 }
 
-// 获取字段值
+// Tab 点击：搜索时清除搜索
+function handleTabClick() {
+  // 不做特殊处理，保持 tab 切换
+}
+
+// ── 变更统计 ──────────────────────────────────────────────
+// 某个文件下的变更数
+function getFileChangeCount(fileName: string): number {
+  const sections = getFileSections(fileName);
+  const keys = new Set(sections.flatMap(s => s.fields.map(f => f.key)));
+  return settingsStore.pendingChanges.filter(c => keys.has(c.key)).length;
+}
+
+// 某个 section 的变更数
+function getSectionChangeCount(sectionKey: string): number {
+  return settingsStore.pendingChanges.filter(c => c.key.startsWith(sectionKey + '.')).length;
+}
+
+// ── 字段读写 ──────────────────────────────────────────────
 function getFieldValue(key: string): unknown {
   const keys = key.split('.');
   let current: unknown = settingsStore.currentValues;
-
   for (const k of keys) {
     if (current && typeof current === 'object' && k in current) {
       current = (current as Record<string, unknown>)[k];
@@ -499,15 +352,12 @@ function getFieldValue(key: string): unknown {
       return undefined;
     }
   }
-
   return current;
 }
 
-// 获取原始值
 function getOriginalValue(key: string): unknown {
   const keys = key.split('.');
   let current: unknown = settingsStore.originalValues;
-
   for (const k of keys) {
     if (current && typeof current === 'object' && k in current) {
       current = (current as Record<string, unknown>)[k];
@@ -515,16 +365,12 @@ function getOriginalValue(key: string): unknown {
       return undefined;
     }
   }
-
   return current;
 }
 
-// 更新字段值
 function updateFieldValue(field: ConfigFieldSchema, value: unknown) {
   const keys = field.key.split('.');
   const newValues = { ...settingsStore.currentValues };
-
-  // 嵌套更新
   let current: Record<string, unknown> = newValues;
   for (let i = 0; i < keys.length - 1; i++) {
     const k = keys[i];
@@ -534,20 +380,14 @@ function updateFieldValue(field: ConfigFieldSchema, value: unknown) {
     current[k] = { ...(current[k] as Record<string, unknown>) };
     current = current[k] as Record<string, unknown>;
   }
-
   current[keys[keys.length - 1]] = value;
   settingsStore.updateCurrentValues(newValues);
-
-  // 更新待保存变更
   updatePendingChanges(field, value);
 }
 
-// 更新待保存变更
 function updatePendingChanges(field: ConfigFieldSchema, newValue: unknown) {
   const oldValue = getOriginalValue(field.key);
   const existingIndex = settingsStore.pendingChanges.findIndex(c => c.key === field.key);
-
-  // 如果新值等于原始值，移除变更记录
   if (JSON.stringify(newValue) === JSON.stringify(oldValue)) {
     if (existingIndex >= 0) {
       const newChanges = [...settingsStore.pendingChanges];
@@ -556,15 +396,12 @@ function updatePendingChanges(field: ConfigFieldSchema, newValue: unknown) {
     }
     return;
   }
-
-  // 添加或更新变更记录
   const change: PendingChange = {
     key: field.key,
     oldValue,
     newValue,
     field,
   };
-
   if (existingIndex >= 0) {
     const newChanges = [...settingsStore.pendingChanges];
     newChanges[existingIndex] = change;
@@ -574,19 +411,13 @@ function updatePendingChanges(field: ConfigFieldSchema, newValue: unknown) {
   }
 }
 
-// 保存更改
+// ── 保存 / 重置 / 重启 ──────────────────────────────────
 async function handleSave() {
-  if (!settingsStore.hasChanges) {
-    return;
-  }
-
+  if (!settingsStore.hasChanges) return;
   try {
     const result = await settingsStore.saveChanges();
-
     if (result.success) {
       ElMessage.success(result.message);
-
-      // 如果需要重启，显示重启对话框
       if (result.requires_restart) {
         showRestartDialog.value = true;
       }
@@ -599,12 +430,8 @@ async function handleSave() {
   }
 }
 
-// 丢弃更改
 async function handleDiscard() {
-  if (!settingsStore.hasChanges) {
-    return;
-  }
-
+  if (!settingsStore.hasChanges) return;
   try {
     await ElMessageBox.confirm('确定要丢弃所有未保存的更改吗？', '确认丢弃', {
       confirmButtonText: '丢弃',
@@ -614,17 +441,14 @@ async function handleDiscard() {
     settingsStore.discardChanges();
     ElMessage.info('已丢弃所有更改');
   } catch {
-    // 用户取消
+    /* 用户取消 */
   }
 }
 
-// 重启服务
 async function handleRestart() {
   restarting.value = true;
-
   try {
     const result = await settingsStore.restartService();
-
     if (result.success) {
       ElMessage.success('服务正在重启...');
       showRestartDialog.value = false;
@@ -697,154 +521,211 @@ async function handleRestart() {
   flex-shrink: 0;
 }
 
-/* 主内容布局 */
+/* ── 主内容区 ──────────────────────────────────────────── */
 .settings-content {
   flex: 1;
   display: flex;
-  gap: var(--spacing-md);
-  overflow: hidden;
-}
-
-/* 左侧导航 */
-.settings-nav {
-  width: 220px;
-  flex-shrink: 0;
-  display: flex;
   flex-direction: column;
+  overflow: hidden;
   background: var(--bg-card);
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-color-light);
   box-shadow: var(--shadow-sm);
-  overflow: hidden;
 }
 
-.nav-search {
-  padding: var(--spacing-md);
-  border-bottom: 1px solid var(--border-color-light);
+/* 顶部栏：搜索框 */
+.settings-toolbar {
+  flex-shrink: 0;
+  padding: var(--spacing-md) var(--spacing-lg) 0;
 }
 
-.nav-groups {
+.search-input {
+  max-width: 360px;
+}
+
+/* ── File Tabs ──────────────────────────────────────────── */
+.file-tabs {
   flex: 1;
-  overflow-y: auto;
-  padding: var(--spacing-sm);
-}
-
-.nav-item {
   display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
-  width: 100%;
-  padding: var(--spacing-sm) var(--spacing-md);
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  font-size: 14px;
-  color: var(--text-regular);
-  text-align: left;
-  transition: all var(--transition-fast);
-  border-radius: var(--radius-md);
-  margin-bottom: 2px;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0 var(--spacing-lg);
 }
 
-.nav-item:hover {
-  background: var(--bg-hover);
+.file-tabs :deep(.el-tabs__header) {
+  margin: 0;
+  padding: var(--spacing-sm) 0 0;
+  flex-shrink: 0;
+}
+
+.file-tabs :deep(.el-tabs__nav-wrap) {
+  padding-left: 0;
+}
+
+.file-tabs :deep(.el-tabs__item) {
+  font-size: 14px;
+  font-weight: 500;
+  padding: 0 20px;
+  height: 40px;
+  line-height: 40px;
+  transition: color var(--transition-fast);
+}
+
+.file-tabs :deep(.el-tabs__item:hover) {
   color: var(--color-primary);
 }
 
-.nav-item.active {
+.file-tabs :deep(.el-tabs__active-bar) {
+  height: 2px;
   background: var(--color-primary);
-  color: var(--text-inverse);
-  font-weight: 500;
 }
 
-.nav-icon {
-  font-size: 18px;
-  flex-shrink: 0;
-}
-
-.nav-label {
+/* Tab 内容区可滚动 */
+.file-tabs :deep(.el-tabs__content) {
   flex: 1;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.nav-badge {
-  flex-shrink: 0;
+.file-tabs :deep(.el-tab-pane) {
+  height: 100%;
+  overflow-y: auto;
+  padding: var(--spacing-md) 0;
 }
 
-/* 右侧主内容 */
-.settings-main {
-  flex: 1;
+/* ── 搜索模式结果 ──────────────────────────────────────── */
+.search-results {
   display: flex;
   flex-direction: column;
-  background: var(--bg-card);
+  gap: var(--spacing-md);
+}
+
+.search-section {
+  background: var(--bg-elevated);
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-color-light);
-  box-shadow: var(--shadow-sm);
   overflow: hidden;
 }
 
-.main-header {
-  padding: var(--spacing-lg);
+.search-section-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-md);
+  background: var(--bg-card);
   border-bottom: 1px solid var(--border-color-light);
+  font-size: 13px;
+  color: var(--text-regular);
+}
+
+.section-header-icon {
+  font-size: 16px;
+  color: var(--color-primary);
+}
+
+.search-section-title {
+  font-weight: 500;
+  flex: 1;
+}
+
+/* ── 分区卡片列表 ──────────────────────────────────────── */
+.section-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.section-card {
+  background: var(--bg-elevated);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-color-light);
+  overflow: hidden;
+  transition: box-shadow var(--transition-fast);
+}
+
+.section-card:hover {
+  box-shadow: var(--shadow-md);
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-md) var(--spacing-lg);
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border-color-light);
+}
+
+.section-header-left {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+}
+
+.section-icon-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  background: var(--color-primary-light-9);
   flex-shrink: 0;
 }
 
-.main-title h2 {
-  margin: 0;
+.section-icon {
   font-size: 18px;
+  color: var(--color-primary);
+}
+
+.section-title-area {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.section-title {
+  margin: 0;
+  font-size: 15px;
   font-weight: 600;
   color: var(--text-primary);
 }
 
-.main-title p {
-  margin: var(--spacing-xs) 0 0;
-  font-size: 13px;
+.section-desc {
+  margin: 0;
+  font-size: 12px;
   color: var(--text-secondary);
 }
 
-.main-content {
-  flex: 1;
-  overflow-y: auto;
-  padding: var(--spacing-md);
+.section-fields {
+  padding: var(--spacing-md) var(--spacing-lg);
 }
 
-.fields-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-sm);
-}
-
-/* 滚动条样式 */
-.nav-groups::-webkit-scrollbar,
-.main-content::-webkit-scrollbar {
-  width: 6px;
-}
-
-.nav-groups::-webkit-scrollbar-track,
-.main-content::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.nav-groups::-webkit-scrollbar-thumb,
-.main-content::-webkit-scrollbar-thumb {
-  background: var(--border-color-dark);
-  border-radius: 3px;
-}
-
-.nav-groups::-webkit-scrollbar-thumb:hover,
-.main-content::-webkit-scrollbar-thumb:hover {
-  background: var(--text-secondary);
-}
-
+/* ── 重启警告 ──────────────────────────────────────────── */
 .restart-warning {
   margin-top: var(--spacing-sm);
   font-size: 12px;
   color: var(--color-warning);
 }
 
-/* 响应式 */
+/* ── 滚动条 ────────────────────────────────────────────── */
+.file-tabs :deep(.el-tab-pane)::-webkit-scrollbar {
+  width: 6px;
+}
+
+.file-tabs :deep(.el-tab-pane)::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.file-tabs :deep(.el-tab-pane)::-webkit-scrollbar-thumb {
+  background: var(--border-color-dark);
+  border-radius: 3px;
+}
+
+.file-tabs :deep(.el-tab-pane)::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
+
+/* ── 响应式 ────────────────────────────────────────────── */
 @media (max-width: 768px) {
   .page-header {
     flex-direction: column;
@@ -856,24 +737,29 @@ async function handleRestart() {
     justify-content: flex-end;
   }
 
-  .settings-content {
-    flex-direction: column;
+  .settings-toolbar {
+    padding: var(--spacing-sm) var(--spacing-md) 0;
   }
 
-  .settings-nav {
-    width: 100%;
-    max-height: 200px;
+  .search-input {
+    max-width: 100%;
   }
 
-  .nav-groups {
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: var(--spacing-xs);
+  .file-tabs {
+    padding: 0 var(--spacing-md);
   }
 
-  .nav-item {
-    flex-shrink: 0;
-    width: auto;
+  .file-tabs :deep(.el-tabs__item) {
+    padding: 0 12px;
+    font-size: 13px;
+  }
+
+  .section-header {
+    padding: var(--spacing-sm) var(--spacing-md);
+  }
+
+  .section-fields {
+    padding: var(--spacing-xs) var(--spacing-md);
   }
 }
 </style>

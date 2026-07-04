@@ -61,12 +61,10 @@ export const useSettingsStore = defineStore('settings', () => {
       const response = await api.get<ConfigSchemaResponse>('/config/schema');
       schema.value = response.data;
 
-      // 初始化当前值
+      // 初始化当前值（嵌套结构，递归包含子字段，与 getFieldValue 的点分遍历匹配）
       const values: Record<string, unknown> = {};
       for (const group of schema.value.groups) {
-        for (const field of group.fields) {
-          values[field.key] = field.value ?? field.default;
-        }
+        flattenFields(group.fields, values);
       }
       currentValues.value = values;
       originalValues.value = JSON.parse(JSON.stringify(values));
@@ -152,6 +150,19 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   // 辅助函数
+  // 递归展开 fields（含 children），用嵌套结构存入 values
+  function flattenFields(
+    fields: import('@/types/settings').ConfigFieldSchema[],
+    values: Record<string, unknown>,
+  ) {
+    for (const field of fields) {
+      setNestedValue(values, field.key, field.value ?? field.default);
+      if (field.children && field.children.length > 0) {
+        flattenFields(field.children, values);
+      }
+    }
+  }
+
   function setNestedValue(obj: Record<string, unknown>, key: string, value: unknown) {
     const keys = key.split('.');
     let current: Record<string, unknown> = obj;

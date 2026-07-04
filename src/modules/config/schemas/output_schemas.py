@@ -100,8 +100,6 @@ from src.stages.output.handlers.sticker.sticker_handler import (  # noqa: F401
 from src.stages.output.handlers.subtitle.subtitle_handler import (  # noqa: F401
     SubtitleHandler,
 )
-from src.stages.output.handlers.mock import MockOutputHandler  # noqa: F401
-
 # 公共别名：XXXConfigSchema -> Handler.ConfigSchema
 # 这样做的好处：
 # 1. 调用方无需 import Handler 内部嵌套类
@@ -111,7 +109,6 @@ from src.stages.output.handlers.mock import MockOutputHandler  # noqa: F401
 DebugConsoleConfigSchema = DebugConsoleHandler.ConfigSchema
 EdgeTTSConfigSchema = EdgeTTSHandler.ConfigSchema
 GPTSoVITSConfigSchema = GPTSoVITSHandler.ConfigSchema
-MockConfigSchema = MockOutputHandler.ConfigSchema
 ObsControlConfigSchema = None  # 避免循环 import：下面单独处理
 OmniTTSConfigSchema = OmniTTSHandler.ConfigSchema
 RemoteStreamConfigSchema = RemoteStreamHandler.ConfigSchema
@@ -206,7 +203,6 @@ class OutputHandlersConfig(BaseConfig):
     debug_console: Optional[DebugConsoleConfigSchema] = _optional_handler_field(DebugConsoleConfigSchema)
     edge_tts: Optional[EdgeTTSConfigSchema] = _optional_handler_field(EdgeTTSConfigSchema)
     gptsovits: Optional[GPTSoVITSConfigSchema] = _optional_handler_field(GPTSoVITSConfigSchema)
-    mock: Optional[MockConfigSchema] = _optional_handler_field(MockConfigSchema)
     obs_control: Optional[Any] = _optional_handler_field(ObsControlConfigSchema)
     omni_tts: Optional[OmniTTSConfigSchema] = _optional_handler_field(OmniTTSConfigSchema)
     remote_stream: Optional[RemoteStreamConfigSchema] = _optional_handler_field(RemoteStreamConfigSchema)
@@ -313,7 +309,6 @@ __all__ = [
     "DebugConsoleConfigSchema",
     "EdgeTTSConfigSchema",
     "GPTSoVITSConfigSchema",
-    "MockConfigSchema",
     "ObsControlConfigSchema",
     "OmniTTSConfigSchema",
     "RemoteStreamConfigSchema",
