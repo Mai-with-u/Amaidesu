@@ -60,6 +60,10 @@
           <el-icon><Tools /></el-icon>
           <span>开发工具</span>
         </el-menu-item>
+        <el-menu-item index="/traces">
+          <el-icon><Opportunity /></el-icon>
+          <span>链路追踪</span>
+        </el-menu-item>
         <el-menu-item index="/settings">
           <el-icon><Setting /></el-icon>
           <span>系统设置</span>
@@ -91,6 +95,7 @@ import {
   Grid,
   ChatLineSquare,
   ChatDotRound,
+  Opportunity,
 } from '@element-plus/icons-vue';
 
 const route = useRoute();

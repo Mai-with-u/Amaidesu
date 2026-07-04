@@ -49,6 +49,16 @@ const router = createRouter({
       component: () => import('@/views/LLMHistory.vue'),
     },
     {
+      path: '/traces',
+      name: 'traces',
+      component: () => import('@/views/TraceDetail.vue'),
+    },
+    {
+      path: '/traces/:messageId',
+      name: 'trace-detail',
+      component: () => import('@/views/TraceDetail.vue'),
+    },
+    {
       path: '/danmaku',
       name: 'danmaku',
       component: () => import('@/views/Danmaku.vue'),

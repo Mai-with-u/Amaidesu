@@ -241,3 +241,6 @@ export * from './settings';
 
 // Re-export LLM types
 export * from './llm';
+
+// Re-export Trace types
+export * from './trace';

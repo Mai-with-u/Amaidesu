@@ -77,36 +77,162 @@
         </div>
 
         <div v-else class="events-container">
-          <div
-            v-for="event in visibleEvents"
-            :key="event.timestamp + event.type"
-            class="event-row"
-            @click="toggleEventExpand(event.timestamp + event.type)"
-          >
-            <span class="event-time mono">{{ formatTime(event.timestamp) }}</span>
-            <span class="event-type" :class="getEventClass(event.type)">{{ event.type }}</span>
-            <div class="event-data-wrapper">
-              <pre
-                class="event-data"
-                :class="{ expanded: expandedEvents.has(event.timestamp + event.type) }"
-                v-html="
-                  formatEventDataHtml(event.data, expandedEvents.has(event.timestamp + event.type))
-                "
-              ></pre>
-              <span v-if="shouldShowExpand(event.data)" class="expand-hint">
-                {{ expandedEvents.has(event.timestamp + event.type) ? '点击收起' : '点击展开' }}
-              </span>
-            </div>
+        <div
+          v-for="event in visibleEvents"
+          :key="event.timestamp + event.type"
+          class="event-row"
+          @click="toggleEventExpand(event.timestamp + event.type)"
+        >
+          <span class="event-time mono">{{ formatTime(event.timestamp) }}</span>
+          <span class="event-type" :class="getEventClass(event.type)">{{ event.type }}</span>
+          <div class="event-data-wrapper">
+            <pre
+              class="event-data"
+              :class="{ expanded: expandedEvents.has(event.timestamp + event.type) }"
+              v-html="
+                formatEventDataHtml(event.data, expandedEvents.has(event.timestamp + event.type))
+              "
+            ></pre>
+            <span v-if="shouldShowExpand(event.data)" class="expand-hint">
+              {{ expandedEvents.has(event.timestamp + event.type) ? '点击收起' : '点击展开' }}
+            </span>
           </div>
+          <el-button
+            v-if="getMessageId(event)"
+            class="trace-link-btn"
+            size="small"
+            type="primary"
+            link
+            @click.stop="openTrace(event)"
+          >
+            🔍 链路
+          </el-button>
+        </div>
         </div>
       </div>
     </section>
+
+    <!-- Trace 详情抽屉 -->
+    <el-drawer
+      v-model="traceDrawerVisible"
+      title="消息链路追踪"
+      size="480px"
+      direction="rtl"
+      :before-close="closeTraceDrawer"
+    >
+      <template #default>
+        <!-- 加载中 -->
+        <div v-if="traceLoading" class="drawer-loading">
+          <el-skeleton :rows="3" animated />
+          <el-skeleton :rows="4" animated style="margin-top: 16px" />
+          <el-skeleton :rows="2" animated style="margin-top: 16px" />
+        </div>
+
+        <!-- 错误/未找到 -->
+        <el-result
+          v-else-if="traceError"
+          icon="warning"
+          title="加载失败"
+          :sub-title="traceError"
+        >
+          <template #extra>
+            <el-button type="primary" @click="loadTrace(currentTraceId)">重试</el-button>
+          </template>
+        </el-result>
+
+        <!-- 链路详情 -->
+        <div v-else-if="currentTrace" class="drawer-trace">
+          <!-- 消息 -->
+          <div class="dt-node input">
+            <div class="dt-dot" />
+            <div class="dt-card">
+              <div class="dt-card-header">
+                <span class="dt-card-title">📩 消息</span>
+                <el-tag size="small" type="primary" effect="plain">{{ currentTrace.message.source }}</el-tag>
+              </div>
+              <div class="dt-message-text">{{ currentTrace.message.text }}</div>
+              <div class="dt-message-meta">
+                <span>{{ formatDrawerTime(currentTrace.message.timestamp_ms) }}</span>
+                <span v-if="currentTrace.message.user_nickname || currentTrace.message.user_id">
+                  👤 {{ currentTrace.message.user_nickname || currentTrace.message.user_id }}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 箭头 -->
+          <div class="dt-arrow">
+            <span class="dt-arrow-label">{{ formatDrawerLatency(currentTrace.decision?.elapsed_ms) }}</span>
+          </div>
+
+          <!-- 决策 -->
+          <div class="dt-node decision">
+            <div class="dt-dot" />
+            <div class="dt-card">
+              <div class="dt-card-header">
+                <span class="dt-card-title">🧠 决策</span>
+                <el-tag size="small" type="warning" effect="plain">
+                  {{ currentTrace.decision?.decider || '无' }}
+                </el-tag>
+              </div>
+              <template v-if="currentTrace.decision">
+                <div class="dt-speech">💬 {{ currentTrace.decision.speech }}</div>
+                <div v-if="currentTrace.decision.emotion" class="dt-meta-row">
+                  😊 {{ currentTrace.decision.emotion.name }} ({{ currentTrace.decision.emotion.intensity.toFixed(2) }})
+                </div>
+                <div v-if="currentTrace.decision.action" class="dt-meta-row">
+                  🎬 <code>{{ currentTrace.decision.action.name }}</code>
+                  <span v-if="Object.keys(currentTrace.decision.action.parameters).length">({{ JSON.stringify(currentTrace.decision.action.parameters) }})</span>
+                </div>
+              </template>
+              <div v-else class="dt-empty-hint">未生成决策（消息被过滤）</div>
+            </div>
+          </div>
+
+          <!-- 箭头 -->
+          <div class="dt-arrow">
+            <span class="dt-arrow-label">→ 输出</span>
+          </div>
+
+          <!-- 输出 -->
+          <div class="dt-node outputs">
+            <div class="dt-dot" />
+            <div class="dt-card">
+              <div class="dt-card-header">
+                <span class="dt-card-title">📤 输出</span>
+                <el-tag size="small" type="success" effect="plain">
+                  {{ currentTrace.outputs.length }} 个 Handler
+                </el-tag>
+              </div>
+              <div v-if="currentTrace.outputs.length === 0" class="dt-empty-hint">
+                无 Handler 处理此 Intent
+              </div>
+              <div v-else class="dt-output-list">
+                <div v-for="(out, i) in currentTrace.outputs" :key="i" class="dt-output-row">
+                  <el-icon class="dt-ok"><Check /></el-icon>
+                  <el-tag size="small" type="success" effect="plain">{{ out.handler }}</el-tag>
+                  <span class="dt-elapsed">{{ formatDrawerLatency(out.elapsed_ms) }}</span>
+                  <span v-if="out.speech" class="dt-speech">{{ out.speech }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 汇总 -->
+          <div class="dt-summary">
+            总耗时 <strong>{{ formatDrawerLatency(currentTrace.total_elapsed_ms) }}</strong>
+            <span class="dt-divider">|</span>
+            ID <code>{{ currentTrace.message_id.slice(0, 16) }}…</code>
+          </div>
+        </div>
+      </template>
+    </el-drawer>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick, markRaw } from 'vue';
-import { Document, VideoPause, VideoPlay, Search, Delete } from '@element-plus/icons-vue';
+import { Document, VideoPause, VideoPlay, Search, Delete, Check } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { useEventsStore } from '@/stores';
 import { storeToRefs } from 'pinia';
@@ -114,6 +240,8 @@ import DOMPurify from 'dompurify';
 import hljs from 'highlight.js/lib/core';
 import json from 'highlight.js/lib/languages/json';
 import 'highlight.js/styles/atom-one-dark.min.css';
+import { tracesApi } from '@/api';
+import type { Trace } from '@/types';
 
 // 注册 JSON 语言
 hljs.registerLanguage('json', json);
@@ -244,6 +372,67 @@ function toggleEventExpand(key: string) {
     expandedEvents.value.add(key);
   }
   expandedEvents.value = new Set(expandedEvents.value);
+}
+
+// Trace 抽屉状态
+const traceDrawerVisible = ref(false);
+const traceLoading = ref(false);
+const traceError = ref('');
+const currentTraceId = ref('');
+const currentTrace = ref<Trace | null>(null);
+
+async function loadTrace(messageId: string) {
+  traceLoading.value = true;
+  traceError.value = '';
+  currentTrace.value = null;
+  try {
+    const res = await tracesApi.get(messageId);
+    if (res.data.trace) {
+      currentTrace.value = res.data.trace;
+    } else {
+      traceError.value = res.data.error || '未找到该链路';
+    }
+  } catch (e) {
+    traceError.value = e instanceof Error ? e.message : '请求失败';
+  } finally {
+    traceLoading.value = false;
+  }
+}
+
+function closeTraceDrawer() {
+  traceDrawerVisible.value = false;
+  currentTrace.value = null;
+  traceError.value = '';
+}
+
+// 从 message.received 事件中提取 message_id
+function getMessageId(event: { type: string; data: Record<string, unknown> }): string | null {
+  if (event.type !== 'message.received') return null;
+  const msg = event.data?.message as Record<string, unknown> | undefined;
+  if (!msg) return null;
+  const id = msg.message_id;
+  return typeof id === 'string' && id.length > 0 ? id : null;
+}
+
+function openTrace(event: { type: string; data: Record<string, unknown> }) {
+  const id = getMessageId(event);
+  if (id) {
+    currentTraceId.value = id;
+    traceDrawerVisible.value = true;
+    loadTrace(id);
+  }
+}
+
+// Trace 抽屉内的时间/延迟格式化
+function formatDrawerTime(tsMs: number): string {
+  if (!tsMs) return '';
+  return new Date(tsMs).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function formatDrawerLatency(ms: number | undefined | null): string {
+  if (ms == null) return '';
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 // 获取事件类型的 CSS 类
@@ -473,6 +662,158 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 4px;
   min-width: 0;
+}
+
+.trace-link-btn {
+  flex-shrink: 0;
+  align-self: center;
+}
+
+/* Trace 抽屉 */
+.drawer-loading {
+  padding: 24px 16px;
+}
+
+.drawer-trace {
+  padding: 8px 0;
+}
+
+.dt-node {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.dt-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 14px;
+}
+
+.dt-node.input .dt-dot { background: var(--color-primary); }
+.dt-node.decision .dt-dot { background: var(--color-warning); }
+.dt-node.outputs .dt-dot { background: var(--color-success); }
+
+.dt-card {
+  flex: 1;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color-light);
+  border-radius: var(--radius-md);
+  padding: 12px;
+}
+
+.dt-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.dt-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.dt-message-text {
+  font-size: 14px;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+  word-break: break-all;
+}
+
+.dt-message-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.dt-speech {
+  font-size: 13px;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.dt-meta-row {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+.dt-meta-row code {
+  background: var(--bg-hover);
+  padding: 1px 4px;
+  border-radius: 2px;
+  font-size: 11px;
+}
+
+.dt-empty-hint {
+  font-size: 12px;
+  color: var(--text-placeholder);
+  padding: 8px 0;
+}
+
+.dt-output-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dt-output-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+
+.dt-ok {
+  color: var(--color-success);
+  font-size: 14px;
+}
+
+.dt-elapsed {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.dt-arrow {
+  display: flex;
+  align-items: center;
+  padding: 4px 0 4px 22px;
+}
+
+.dt-arrow-label {
+  font-size: 11px;
+  color: var(--text-placeholder);
+  font-family: var(--font-mono);
+}
+
+.dt-summary {
+  margin-top: 16px;
+  padding: 12px;
+  background: var(--bg-hover);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.dt-summary strong {
+  color: var(--color-primary);
+}
+
+.dt-divider {
+  margin: 0 8px;
+  color: var(--border-color);
+}
+
+.dt-summary code {
+  font-size: 11px;
+  color: var(--text-secondary);
 }
 
 .event-data {

@@ -107,4 +107,7 @@ export const capabilitiesApi = {
   list: () => api.get<UnifiedCapabilitiesView>('/capabilities'),
 };
 
+// Trace API
+export * from './traces';
+
 export default api;
