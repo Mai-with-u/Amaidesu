@@ -7,7 +7,18 @@ FastAPI 路由注册
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.modules.dashboard.api import capabilities, components, config, debug, events, llm, maibot, messages, system
+from src.modules.dashboard.api import (
+    capabilities,
+    components,
+    config,
+    debug,
+    events,
+    llm,
+    maibot,
+    messages,
+    system,
+    traces,
+)
 
 
 def create_app() -> FastAPI:
@@ -28,6 +39,7 @@ def create_app() -> FastAPI:
     app.include_router(maibot.router, prefix="/api/v1/maibot", tags=["MaiBot"])
     app.include_router(capabilities.router, prefix="/api/v1", tags=["Capabilities"])
     app.include_router(events.router, prefix="/api/v1", tags=["Events"])
+    app.include_router(traces.router, prefix="/api/v1", tags=["Traces"])
 
     return app
 
