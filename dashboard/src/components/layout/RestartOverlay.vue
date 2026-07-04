@@ -69,17 +69,20 @@ import { computed } from 'vue';
 import { Loading, CircleCheck, CircleClose, Refresh, RefreshRight } from '@element-plus/icons-vue';
 
 // ===== Props =====
-const props = withDefaults(defineProps<{
-  visible: boolean;
-  status: 'requesting' | 'restarting' | 'checking' | 'success' | 'failed';
-  progress: number;
-  elapsed: number;
-  checkAttempts?: number;
-  maxAttempts?: number;
-}>(), {
-  checkAttempts: 0,
-  maxAttempts: 60,
-});
+const props = withDefaults(
+  defineProps<{
+    visible: boolean;
+    status: 'requesting' | 'restarting' | 'checking' | 'success' | 'failed';
+    progress: number;
+    elapsed: number;
+    checkAttempts?: number;
+    maxAttempts?: number;
+  }>(),
+  {
+    checkAttempts: 0,
+    maxAttempts: 60,
+  },
+);
 
 // ===== Emits =====
 const emit = defineEmits<{
@@ -88,13 +91,9 @@ const emit = defineEmits<{
 }>();
 
 // ===== Computed =====
-const isRunning = computed(() =>
-  ['requesting', 'restarting', 'checking'].includes(props.status),
-);
+const isRunning = computed(() => ['requesting', 'restarting', 'checking'].includes(props.status));
 
-const showProgress = computed(() =>
-  props.status !== 'failed',
-);
+const showProgress = computed(() => props.status !== 'failed');
 
 const progressColor = computed(() => {
   if (props.status === 'success') return 'var(--color-success)';
@@ -343,22 +342,44 @@ function formatTime(seconds: number): string {
 
 /* ===== Keyframes ===== */
 @keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @keyframes pulse-ring {
-  0%, 100% { transform: scale(1); opacity: 0.15; }
-  50% { transform: scale(1.3); opacity: 0.05; }
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.15;
+  }
+  50% {
+    transform: scale(1.3);
+    opacity: 0.05;
+  }
 }
 
 @keyframes ping {
-  0%   { transform: translate(-50%, -50%) scale(1); opacity: 1; }
-  100% { transform: translate(-50%, -50%) scale(1.5); opacity: 0; }
+  0% {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(1.5);
+    opacity: 0;
+  }
 }
 
 @keyframes bounce {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-10px); }
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
 }
 </style>

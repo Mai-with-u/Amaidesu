@@ -58,8 +58,9 @@ class MockDanmakuCollector:
         self.loop_playback = self.typed_config.loop_playback
         self.start_immediately = self.typed_config.start_immediately
 
-        component_dir = Path(__file__).resolve().parent
-        self.data_dir = component_dir / "data"
+        # 指向项目根目录 data/（src/stages/input/collectors/mock_danmaku/ 向上 5 层）
+        _project_root = Path(__file__).resolve().parents[5]
+        self.data_dir = _project_root / "data"
 
         try:
             self.data_dir.mkdir(parents=True, exist_ok=True)
