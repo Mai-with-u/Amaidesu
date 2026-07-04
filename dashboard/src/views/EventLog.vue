@@ -116,7 +116,7 @@
     <el-drawer
       v-model="traceDrawerVisible"
       title="消息链路追踪"
-      size="480px"
+      size="560px"
       direction="rtl"
       :before-close="closeTraceDrawer"
     >
@@ -209,10 +209,20 @@
               </div>
               <div v-else class="dt-output-list">
                 <div v-for="(out, i) in currentTrace.outputs" :key="i" class="dt-output-row">
-                  <el-icon class="dt-ok"><Check /></el-icon>
-                  <el-tag size="small" type="success" effect="plain">{{ out.handler }}</el-tag>
-                  <span class="dt-elapsed">{{ formatDrawerLatency(out.elapsed_ms) }}</span>
-                  <span v-if="out.speech" class="dt-speech">{{ out.speech }}</span>
+                  <div class="dt-output-main">
+                    <el-icon class="dt-ok"><Check /></el-icon>
+                    <el-tag size="small" type="success" effect="dark">{{ out.handler }}</el-tag>
+                    <span class="dt-elapsed">{{ formatDrawerLatency(out.elapsed_ms) }}</span>
+                  </div>
+                  <div v-if="out.speech" class="dt-output-detail dt-speech">
+                    💬 <span>{{ out.speech }}</span>
+                  </div>
+                  <div v-if="out.action" class="dt-output-detail">
+                    🎬 <code>{{ out.action.name }}</code>
+                    <span v-if="Object.keys(out.action.parameters).length" class="dt-action-params">
+                      {{ JSON.stringify(out.action.parameters) }}
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -220,9 +230,22 @@
 
           <!-- 汇总 -->
           <div class="dt-summary">
-            总耗时 <strong>{{ formatDrawerLatency(currentTrace.total_elapsed_ms) }}</strong>
-            <span class="dt-divider">|</span>
-            ID <code>{{ currentTrace.message_id.slice(0, 16) }}…</code>
+            <div class="dt-summary-main">
+              <span>总耗时 <strong>{{ formatDrawerLatency(currentTrace.total_elapsed_ms) }}</strong></span>
+              <span class="dt-divider">|</span>
+              <span>消息来源 <el-tag size="small" type="info" effect="plain">{{ currentTrace.message.source }}</el-tag></span>
+              <span v-if="currentTrace.message.user_nickname || currentTrace.message.user_id" class="dt-divider">|</span>
+              <span v-if="currentTrace.message.user_nickname || currentTrace.message.user_id">
+                用户 {{ currentTrace.message.user_nickname || currentTrace.message.user_id }}
+              </span>
+            </div>
+            <div class="dt-summary-id">
+              <span class="dt-summary-label">消息 ID</span>
+              <code class="dt-full-id">{{ currentTrace.message_id }}</code>
+              <el-button size="small" type="primary" link @click="copyText(currentTrace.message_id)">
+                📋 复制
+              </el-button>
+            </div>
           </div>
         </div>
       </template>
@@ -405,13 +428,27 @@ function closeTraceDrawer() {
   traceError.value = '';
 }
 
-// 从 message.received 事件中提取 message_id
+// 从事件的 data 中提取关联的 message_id
+// 三种事件都能关联到同一条链路：
+//   message.received → data.message.message_id
+//   decision.intent  → data.intent_data.metadata.source_message_id
+//   output.render    → data.intent_data.metadata.source_message_id
 function getMessageId(event: { type: string; data: Record<string, unknown> }): string | null {
-  if (event.type !== 'message.received') return null;
-  const msg = event.data?.message as Record<string, unknown> | undefined;
-  if (!msg) return null;
-  const id = msg.message_id;
-  return typeof id === 'string' && id.length > 0 ? id : null;
+  if (event.type === 'message.received') {
+    const msg = event.data?.message as Record<string, unknown> | undefined;
+    if (!msg) return null;
+    const id = msg.message_id;
+    return typeof id === 'string' && id.length > 0 ? id : null;
+  }
+  if (event.type === 'decision.intent' || event.type === 'output.render') {
+    const intentData = event.data?.intent_data as Record<string, unknown> | undefined;
+    if (!intentData) return null;
+    const metadata = intentData.metadata as Record<string, unknown> | undefined;
+    if (!metadata) return null;
+    const id = metadata.source_message_id;
+    return typeof id === 'string' && id.length > 0 ? id : null;
+  }
+  return null;
 }
 
 function openTrace(event: { type: string; data: Record<string, unknown> }) {
@@ -433,6 +470,12 @@ function formatDrawerLatency(ms: number | undefined | null): string {
   if (ms == null) return '';
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function copyText(text: string) {
+  navigator.clipboard.writeText(text).then(() => {
+    ElMessage.success('已复制到剪贴板');
+  });
 }
 
 // 获取事件类型的 CSS 类
