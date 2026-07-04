@@ -298,8 +298,29 @@ async def create_app_components(
     # 事件历史服务（系统级，不依赖 Dashboard）
     event_history_service: Optional["EventHistoryService"] = None
     event_recorder: Optional["EventHistoryRecorder"] = None
-    events_config = config.get("events", {})
-    if events_config:
+
+    events_config = config.get("events", {}) or {}
+    try:
+        from src.modules.events.event_history import EventHistoryService
+        from src.modules.events.event_recorder import EventHistoryRecorder
+
+        typed_events_config = EventHistoryConfig(**events_config)
+        event_history_service = EventHistoryService(
+            max_events=typed_events_config.history_size,
+            persist=typed_events_config.persist,
+        )
+        event_recorder = EventHistoryRecorder(
+            event_bus=event_bus,
+            event_history=event_history_service,
+        )
+        await event_recorder.start()
+        logger.info(
+            f"事件历史记录器已启动（size={typed_events_config.history_size}, persist={typed_events_config.persist}）",
+        )
+    except Exception as e:
+        logger.warning(f"事件历史记录器启动失败: {e}")
+        event_history_service = None
+        event_recorder = None
         try:
             from src.modules.events.event_history import EventHistoryService
             from src.modules.events.event_recorder import EventHistoryRecorder

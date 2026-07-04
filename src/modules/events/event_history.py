@@ -141,6 +141,40 @@ class EventHistoryService:
             self._persist_dir = (project_root / persist_dir).resolve()
             self._persist_dir.mkdir(parents=True, exist_ok=True)
             self.logger.info(f"事件历史 JSONL 持久化已启用,目录: {self._persist_dir}")
+            self._load_from_disk()
+
+    # ------------------------------------------------------------------ #
+    # 内部:磁盘恢复                                                      #
+    # ------------------------------------------------------------------ #
+
+    def _load_from_disk(self) -> None:
+        """启动时从当日 JSONL 文件恢复历史事件到内存环形缓冲。
+
+        仅当 persist=True 且当日文件存在时生效。
+        恢复过程中发生任何 I/O 错误仅记录日志,不影响服务启动。
+        """
+        if self._persist_dir is None:
+            return
+        today = self._date_string(time.time())
+        file_path = self._file_path_for_date(today)
+        if not file_path.exists():
+            return
+        try:
+            count = 0
+            with open(file_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = EventRecord.model_validate_json(line)
+                        self._buffer.append(event)
+                        count += 1
+                    except Exception:
+                        continue
+            self.logger.info(f"从磁盘恢复 {count} 条历史事件 ({file_path})")
+        except Exception as exc:
+            self.logger.warning(f"从磁盘恢复事件失败 ({file_path}): {exc!r}")
 
     # ------------------------------------------------------------------ #
     # 内部:日期与文件路径                                                #
