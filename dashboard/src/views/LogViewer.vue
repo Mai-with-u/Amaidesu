@@ -7,9 +7,6 @@
         <p class="page-subtitle">实时监控系统日志</p>
       </div>
       <div class="header-actions">
-        <el-tag :type="isConnected ? 'success' : 'danger'" effect="plain" size="small">
-          {{ isConnected ? '已连接' : '未连接' }}
-        </el-tag>
         <el-tag :type="isRealtimeScroll ? 'primary' : 'info'" effect="plain" size="small">
           {{ isRealtimeScroll ? '实时滚动' : '自由滚动' }}
         </el-tag>
@@ -150,13 +147,11 @@ import {
   Unlock,
 } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
-import { useLogsStore, useWebSocketStore } from '@/stores';
+import { useLogsStore } from '@/stores';
 import { storeToRefs } from 'pinia';
 
 const logsStore = useLogsStore();
-const wsStore = useWebSocketStore();
 const { logs, isPaused, availableModules } = storeToRefs(logsStore);
-const { isConnected } = storeToRefs(wsStore);
 
 // 日志级别常量
 const LOG_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'] as const;

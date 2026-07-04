@@ -6,9 +6,6 @@
         <p class="page-subtitle">NormalizedMessage → Intent → Output 全链路事件追踪</p>
       </div>
       <div class="header-actions">
-        <el-tag :type="wsConnected ? 'success' : 'danger'" effect="plain" size="small">
-          {{ wsConnected ? 'WebSocket 已连接' : 'WebSocket 未连接' }}
-        </el-tag>
         <span class="event-count">{{ filteredEvents.length }} / {{ events.length }} 条</span>
         <el-button @click="clearEvents" :disabled="events.length === 0" size="small">
           <el-icon><Delete /></el-icon>
@@ -49,7 +46,6 @@
       <div v-if="filteredEvents.length === 0" class="empty-state">
         <el-icon class="empty-icon"><Timer /></el-icon>
         <span>{{ events.length === 0 ? '等待事件...' : '没有匹配的事件' }}</span>
-        <span class="empty-hint">WebSocket 已连接后将自动接收事件</span>
       </div>
 
       <div v-else class="chat-stream">
@@ -446,7 +442,6 @@ import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue';
 import { storeToRefs } from 'pinia';
 import { Delete, Timer, Search, Promotion, Plus } from '@element-plus/icons-vue';
 import { useSessionStore } from '@/stores/session';
-import { useWebSocketStore } from '@/stores';
 import { capabilitiesApi } from '@/api';
 import type { DebugSessionEvent, UnifiedActionEntry, ParameterType } from '@/types';
 import DOMPurify from 'dompurify';
@@ -457,9 +452,7 @@ import 'highlight.js/styles/atom-one-dark.min.css';
 hljs.registerLanguage('json', json);
 
 const sessionStore = useSessionStore();
-const wsStore = useWebSocketStore();
 const { events, sending } = storeToRefs(sessionStore);
-const { isConnected: wsConnected } = storeToRefs(wsStore);
 
 const timelineRef = ref<HTMLElement | null>(null);
 const typeFilter = ref<string[]>([]);

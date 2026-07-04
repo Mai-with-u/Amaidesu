@@ -7,9 +7,6 @@
         <p class="page-subtitle">实时监控系统事件流</p>
       </div>
       <div class="header-actions">
-        <el-tag :type="isConnected ? 'success' : 'danger'" effect="plain" size="small">
-          {{ isConnected ? '已连接' : '未连接' }}
-        </el-tag>
         <el-tag type="info" effect="plain" size="small">
           {{ filteredEvents.length }} / {{ events.length }} 条事件
         </el-tag>
@@ -111,7 +108,7 @@
 import { ref, computed, onMounted, onUnmounted, nextTick, markRaw } from 'vue';
 import { Document, VideoPause, VideoPlay, Search, Delete } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
-import { useEventsStore, useWebSocketStore } from '@/stores';
+import { useEventsStore } from '@/stores';
 import { storeToRefs } from 'pinia';
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js/lib/core';
@@ -122,9 +119,7 @@ import 'highlight.js/styles/atom-one-dark.min.css';
 hljs.registerLanguage('json', json);
 
 const eventsStore = useEventsStore();
-const wsStore = useWebSocketStore();
 const { events } = storeToRefs(eventsStore);
-const { isConnected } = storeToRefs(wsStore);
 
 // 状态
 const eventListRef = ref<HTMLElement | null>(null);
