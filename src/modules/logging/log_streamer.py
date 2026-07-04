@@ -3,7 +3,11 @@
 """
 
 import asyncio
+import json
 import sys
+import time as time_mod
+from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from loguru import logger as loguru_logger
@@ -15,25 +19,98 @@ if TYPE_CHECKING:
 class LogStreamer:
     """日志流广播器 - 捕获日志并广播到 WebSocket"""
 
+    # 日志持久化默认参数
+    DEFAULT_PERSIST_DIR = "data/logs"
+
     def __init__(
         self,
         ws_handler: Optional["WebSocketHandler"] = None,
         min_level: str = "INFO",
         max_logs: int = 500,
+        persist: bool = False,
+        persist_dir: str = DEFAULT_PERSIST_DIR,
     ):
         """
         Args:
             ws_handler: WebSocket 处理器实例（可选，可延迟设置）
             min_level: 最低日志级别
             max_logs: 最大缓存的日志条数
+            persist: 是否启用 JSONL 文件持久化
+            persist_dir: 持久化目录（相对项目根）
         """
         self.ws_handler = ws_handler
         self.min_level = min_level
         self.max_logs = max_logs
+        self.persist = persist
         self._handler_id: Optional[int] = None
         self._is_running = False
         self._log_buffer: list[dict[str, Any]] = []  # 历史日志缓冲区
         self._buffer_lock = asyncio.Lock()
+
+        # 持久化路径
+        self._persist_dir: Optional[Path] = None
+        self._current_date: Optional[str] = None
+        self._current_file_path: Optional[Path] = None
+        if self.persist:
+            project_root = Path(__file__).resolve().parents[3]
+            self._persist_dir = (project_root / persist_dir).resolve()
+            self._persist_dir.mkdir(parents=True, exist_ok=True)
+            self._load_from_disk()
+
+    # ------------------------------------------------------------------ #
+    # 内部:磁盘恢复与持久化                                              #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _date_string(timestamp: float) -> str:
+        return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
+
+    def _load_from_disk(self) -> None:
+        """启动时从当日 JSONL 文件恢复日志到内存缓冲。"""
+        if self._persist_dir is None:
+            return
+        today = self._date_string(time_mod.time())
+        file_path = self._persist_dir / f"{today}.jsonl"
+        if not file_path.exists():
+            return
+        try:
+            count = 0
+            with open(file_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        self._log_buffer.append(entry)
+                        count += 1
+                    except json.JSONDecodeError:
+                        continue
+            # 限制缓冲不超过 max_logs
+            if len(self._log_buffer) > self.max_logs:
+                self._log_buffer = self._log_buffer[-self.max_logs :]
+            loguru_logger.info(f"从磁盘恢复 {count} 条历史日志 ({file_path})")
+        except Exception as exc:
+            loguru_logger.warning(f"从磁盘恢复日志失败 ({file_path}): {exc!r}")
+
+    def _append_to_file(self, entry: dict[str, Any]) -> None:
+        """同步将单条日志追加到当日 JSONL 文件。"""
+        if not self.persist or self._persist_dir is None:
+            return
+        try:
+            now = time_mod.time()
+            date_str = self._date_string(now)
+            if date_str != self._current_date or self._current_file_path is None:
+                self._current_date = date_str
+                self._current_file_path = self._persist_dir / f"{date_str}.jsonl"
+            with open(self._current_file_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception as exc:
+            loguru_logger.warning(f"写入日志持久化文件失败: {exc!r}")
+
+    # ------------------------------------------------------------------ #
+    # 公开 API                                                            #
+    # ------------------------------------------------------------------ #
 
     def set_ws_handler(self, ws_handler: "WebSocketHandler") -> None:
         """设置 WebSocket 处理器（用于延迟设置）"""
@@ -70,7 +147,9 @@ class LogStreamer:
         return True
 
     async def _add_to_buffer(self, log_entry: dict[str, Any]) -> None:
-        """将日志添加到缓冲区"""
+        """将日志添加到缓冲区并持久化到磁盘。"""
+        if self.persist:
+            self._append_to_file(log_entry)
         async with self._buffer_lock:
             self._log_buffer.append(log_entry)
             if len(self._log_buffer) > self.max_logs:

@@ -446,7 +446,7 @@ async def create_app_components(
     # 提前创建 LogStreamer，以便捕获应用启动过程中的日志
     from src.modules.logging.log_streamer import LogStreamer
 
-    log_streamer = LogStreamer(min_level="DEBUG")
+    log_streamer = LogStreamer(min_level="DEBUG", persist=True)
     await log_streamer.start()  # 立即启动捕获日志
 
     if dashboard_config.get("enabled", True):
