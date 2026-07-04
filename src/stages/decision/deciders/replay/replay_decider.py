@@ -82,6 +82,7 @@ class ReplayDecider:
             metadata=IntentMetadata(
                 source_id=normalized_message.source,
                 decision_time_ms=now_ms(),
+                source_message_id=normalized_message.message_id,
             ),
         )
 

@@ -30,6 +30,7 @@ class IntentMetadata(BaseModel):
 
     source_id: str = Field(..., description="决策来源标识,如 'maibot_api' / 'command' / 'dashboard_debug'")
     decision_time_ms: int = Field(..., description="决策时刻(Unix 毫秒)")
+    source_message_id: Optional[str] = Field(default=None, description="来源 NormalizedMessage 的 message_id")
 
 
 class IntentAction(BaseModel):

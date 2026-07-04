@@ -5,6 +5,7 @@
 """
 
 from typing import Any, Optional
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -54,6 +55,7 @@ class NormalizedMessage(BaseModel):
     user_nickname: Optional[str] = Field(default=None, description="用户昵称")
     platform: Optional[str] = Field(default=None, description="平台来源")
     room_id: Optional[str] = Field(default=None, description="直播间 ID")
+    message_id: str = Field(default_factory=lambda: uuid4().hex, description="消息唯一 ID,自动生成 UUID hex")
 
     @property
     def display_text(self) -> str:

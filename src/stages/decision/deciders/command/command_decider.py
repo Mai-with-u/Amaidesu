@@ -107,6 +107,7 @@ class CommandDecider:
                 metadata=IntentMetadata(
                     source_id="command",
                     decision_time_ms=now_ms(),
+                    source_message_id=message.message_id,
                 ),
             )
 

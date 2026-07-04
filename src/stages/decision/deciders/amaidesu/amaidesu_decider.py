@@ -293,6 +293,7 @@ class AmaidesuDecider:
             return
 
         intent = self._create_intent(parsed_data, speech)
+        intent.metadata.source_message_id = batch[-1].message_id
         await self._publish_intent(intent)
         await self._save_context(session_id, danmaku_batch, speech)
 
@@ -509,7 +510,11 @@ class AmaidesuDecider:
             emotion=IntentEmotion(name="neutral", intensity=0.5),
             action=None,
             speech=speech,
-            metadata=IntentMetadata(source_id="amaidesu", decision_time_ms=now_ms()),
+            metadata=IntentMetadata(
+                source_id="amaidesu",
+                decision_time_ms=now_ms(),
+                source_message_id=batch[-1].message_id,
+            ),
         )
         await self._publish_intent(intent)
         await self._save_context(session_id, MessageBuffer.render_batch_text(batch), speech)
