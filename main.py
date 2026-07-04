@@ -403,7 +403,8 @@ async def create_app_components(
             from src.modules.dashboard.config import DashboardConfig
             from src.modules.dashboard.server import DashboardServer
 
-            typed_dashboard_config = DashboardConfig(**dashboard_config, dev_mode=dev_webui)
+            dashboard_config["dev_mode"] = dev_webui  # CLI 参数覆盖配置文件
+            typed_dashboard_config = DashboardConfig(**dashboard_config)
 
             dashboard_server = DashboardServer(
                 event_bus=event_bus,
