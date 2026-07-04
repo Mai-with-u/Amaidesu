@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     from src.modules.config.service import ConfigService
     from src.modules.context.service import ContextService
     from src.modules.events.event_bus import EventBus
+    from src.modules.events.event_history import EventHistoryService
 
 from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
 from src.modules.dashboard.websocket.handler import WebSocketHandler
@@ -72,6 +73,7 @@ class DashboardServer:
         config_service: "ConfigService",
         dashboard_config: DashboardConfig,
         log_streamer: Optional[LogStreamer] = None,
+        event_history: Optional["EventHistoryService"] = None,
     ):
         self.event_bus = event_bus
         self.input_manager = input_manager
@@ -95,6 +97,7 @@ class DashboardServer:
 
         self.ws_handler: Optional[WebSocketHandler] = None
         self.event_broadcaster: Optional[EventBroadcaster] = None
+        self.event_history = event_history
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._external_log_streamer = log_streamer
         self.log_streamer: Optional[LogStreamer] = None
@@ -154,10 +157,11 @@ class DashboardServer:
         # 初始化 WebSocket 处理器
         self.ws_handler = WebSocketHandler(heartbeat_interval=self.websocket_heartbeat)
 
-        # 初始化事件广播器
+        # 初始化事件广播器（仅用于 WS 推送，不负责记录事件）
         self.event_broadcaster = EventBroadcaster(
             event_bus=self.event_bus,
             ws_handler=self.ws_handler,
+            event_history=self.event_history,
         )
         await self.event_broadcaster.start()
 
@@ -181,6 +185,9 @@ class DashboardServer:
             # 推送历史日志
             if self.log_streamer:
                 await self.log_streamer.broadcast_history(client_id)
+            # 推送事件历史（类似 LogStreamer 的模式）
+            if self.event_broadcaster:
+                await self.event_broadcaster.push_history_to_client(client_id)
             # 运行客户端消息处理循环
             try:
                 while True:
@@ -252,6 +259,11 @@ class DashboardServer:
             await self.event_broadcaster.stop()
             self.event_broadcaster = None
 
+        # 清理事件历史服务
+        if self.event_history:
+            self.event_history.cleanup()
+            self.event_history = None
+
         # 停止心跳任务
         if self._heartbeat_task:
             self._heartbeat_task.cancel()
@@ -277,6 +289,7 @@ class DashboardServer:
         self.logger.info("Dashboard 清理资源中...")
         self.app = None
         self.event_broadcaster = None
+        self.event_history = None
         self.ws_handler = None
         self.log_streamer = None
         self.widget_service = None

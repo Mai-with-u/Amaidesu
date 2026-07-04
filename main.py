@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional, Tuple, Type
 
 from loguru import logger as loguru_logger
 from src.modules.dashboard.server import DashboardServer
+from src.modules.events.event_recorder import EventHistoryRecorder
 from src.modules.events import (
     EventBus,
     list_registered_events,
@@ -18,6 +19,7 @@ from src.modules.events import (
 )
 from src.modules.logging import get_logger
 from src.modules.config.service import ConfigService
+from src.modules.config.core_schemas import EventHistoryConfig
 from src.modules.llm.manager import LLMManager
 from src.modules.context import ContextService, ContextServiceConfig
 from src.modules.prompts import PromptManager, get_prompt_manager
@@ -233,6 +235,7 @@ async def create_app_components(
     Optional[DeciderManager],
     Optional["DashboardServer"],
     Optional["MCPServerService"],
+    Optional["EventHistoryRecorder"],
 ]:
     """创建并连接核心组件。
 
@@ -291,6 +294,33 @@ async def create_app_components(
     # 事件总线
     logger.info("初始化事件总线和数据流协调器...")
     event_bus = EventBus()
+
+    # 事件历史服务（系统级，不依赖 Dashboard）
+    event_history_service: Optional["EventHistoryService"] = None
+    event_recorder: Optional["EventHistoryRecorder"] = None
+    events_config = config.get("events", {})
+    if events_config:
+        try:
+            from src.modules.events.event_history import EventHistoryService
+            from src.modules.events.event_recorder import EventHistoryRecorder
+
+            typed_events_config = EventHistoryConfig(**events_config)
+            event_history_service = EventHistoryService(
+                max_events=typed_events_config.history_size,
+                persist=typed_events_config.persist,
+            )
+            event_recorder = EventHistoryRecorder(
+                event_bus=event_bus,
+                event_history=event_history_service,
+            )
+            await event_recorder.start()
+            logger.info(
+                f"事件历史记录器已启动（size={typed_events_config.history_size}, persist={typed_events_config.persist}）",
+            )
+        except Exception as e:
+            logger.warning(f"事件历史记录器启动失败: {e}")
+            event_history_service = None
+            event_recorder = None
 
     # 输入Collector管理器 (Input 阶段)
     input_manager: Optional[InputCollectorManager] = None
@@ -401,7 +431,6 @@ async def create_app_components(
     if dashboard_config.get("enabled", True):
         try:
             from src.modules.config.core_schemas import DashboardConfig
-            from src.modules.dashboard.server import DashboardServer
 
             dashboard_config["dev_mode"] = dev_webui  # CLI 参数覆盖配置文件
             typed_dashboard_config = DashboardConfig(**dashboard_config)
@@ -415,6 +444,7 @@ async def create_app_components(
                 config_service=config_service,
                 dashboard_config=typed_dashboard_config,
                 log_streamer=log_streamer,
+                event_history=event_history_service,
             )
             await dashboard_server.start()
             logger.info(f"Dashboard 已启动: http://{typed_dashboard_config.host}:{typed_dashboard_config.port}")
@@ -460,6 +490,7 @@ async def create_app_components(
         decision_manager,
         dashboard_server,
         mcp_service,
+        event_recorder,
     )
 
 
@@ -515,6 +546,7 @@ async def run_shutdown(
     decision_manager: Optional[DeciderManager],
     dashboard_server: Optional["DashboardServer"] = None,
     mcp_service: Optional["MCPServerService"] = None,
+    event_recorder: Optional["EventHistoryRecorder"] = None,
 ) -> None:
     """按顺序执行关闭与清理。
 
@@ -579,7 +611,16 @@ async def run_shutdown(
         except Exception as e:
             logger.error(f"停止 Dashboard 失败: {e}")
 
-    # 4. 等待待处理事件完成并清除所有监听器（EventBus 清理）
+    # 5. 停止事件历史记录器（必须在 EventBus.cleanup() 之前取消 EventBus 订阅）
+    if event_recorder:
+        logger.info("正在停止事件历史记录器...")
+        try:
+            await event_recorder.stop()
+            logger.info("事件历史记录器已停止")
+        except Exception as e:
+            logger.error(f"停止事件历史记录器失败: {e}")
+
+    # 6. 等待待处理事件完成并清除所有监听器（EventBus 清理）
     logger.info("等待待处理事件完成...")
     if event_bus:
         try:
@@ -657,6 +698,7 @@ async def main() -> None:
         decision_manager,
         dashboard_server,
         mcp_service,
+        event_recorder,
     ) = await create_app_components(config, input_pipeline_manager, config_service, dev_webui=args.dev_webui)
 
     stop_event = asyncio.Event()
@@ -680,6 +722,7 @@ async def main() -> None:
         decision_manager,
         dashboard_server,
         mcp_service,
+        event_recorder,
     )
 
 

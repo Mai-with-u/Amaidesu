@@ -6,4 +6,6 @@ Dashboard 模块 - Web 管理界面
 
 from src.modules.config.core_schemas import DashboardConfig
 
-__all__ = ["DashboardConfig"]
+__all__ = [
+    "DashboardConfig",
+]

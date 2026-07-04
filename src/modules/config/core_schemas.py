@@ -148,6 +148,21 @@ class DashboardConfig(BaseConfig):
     )
 
 
+class EventHistoryConfig(BaseConfig):
+    """事件历史记录配置"""
+
+    history_size: int = Field(
+        default=5000,
+        ge=100,
+        le=50000,
+        description="事件历史内存环形缓冲大小",
+    )
+    persist: bool = Field(
+        default=True,
+        description="是否将事件历史持久化到 data/events/",
+    )
+
+
 class CoreConfig(BaseConfig):
     """核心系统配置根类
 
@@ -160,6 +175,7 @@ class CoreConfig(BaseConfig):
     persona: PersonaConfig = Field(default_factory=PersonaConfig, description="VTuber 人设配置")
     maicore: MaiCoreConfig = Field(default_factory=MaiCoreConfig, description="MaiCore 连接配置")
     context: ContextConfig = Field(default_factory=ContextConfig, description="上下文管理配置")
+    events: EventHistoryConfig = Field(default_factory=EventHistoryConfig, description="事件历史记录配置")
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig, description="Dashboard 配置")
     logging: LoggingConfig = Field(default_factory=LoggingConfig, description="日志配置")
     pipelines: dict[str, Any] = Field(

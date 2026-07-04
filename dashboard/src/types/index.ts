@@ -203,6 +203,17 @@ export interface SubscribeRequest {
   events: string[];
 }
 
+// 历史事件记录（由后端通过 events.history 消息推送）
+export interface EventRecord {
+  id: string;
+  type: string;
+  timestamp: number;
+  level: 'info' | 'warn' | 'error';
+  source: string;
+  summary: string;
+  data: Record<string, unknown>;
+}
+
 // Capabilities types (mapped from src/modules/types/capabilities.py)
 export type ParameterType = 'string' | 'number' | 'integer' | 'boolean';
 
