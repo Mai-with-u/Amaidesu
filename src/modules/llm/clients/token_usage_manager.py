@@ -45,7 +45,7 @@ def set_global_token_manager_callback(callback: Optional[Callable[[str, Dict[str
         global_token_manager.update_callback = callback
 
 
-USAGE_DIR = "usage"
+USAGE_DIR = "data/llm_usage"
 
 
 class TokenUsageManager:
@@ -71,8 +71,8 @@ class TokenUsageManager:
             self.__dict__.update(global_token_manager.__dict__)
             return
 
-        # 获取项目根目录
-        project_root = Path(__file__).parent.parent
+        # 获取项目根目录（src/modules/llm/clients/ 向上 4 层 = Amaidesu/）
+        project_root = Path(__file__).resolve().parents[4]
         self.usage_dir = project_root / USAGE_DIR
         self.usage_dir.mkdir(exist_ok=True)
 

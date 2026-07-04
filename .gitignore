@@ -203,13 +203,11 @@ nul
 # Dashboard 前端构建产物
 dashboard/dist/
 dashboard/node_modules/
-src/modules/llm/history/*.json
 dashboard/tsconfig.tsbuildinfo
-.omc/
 .omo/
 AGENTS.local.md
 
-# ���ñ����ļ�����������Ϣ��
+# 配置备份文件（可能包含敏感信息）
 config.toml.backup*
 
 # Multi-file config (generated from Schema on first run, contains user secrets)

@@ -52,7 +52,7 @@ def set_global_request_history_manager_callback(callback: Optional[Callable[[Dic
         global_request_history_manager.record_callback = callback
 
 
-HISTORY_DIR = "history"
+HISTORY_DIR = "data/llm_history"
 CACHE_SIZE = 100  # 内存缓存大小
 
 
@@ -127,6 +127,7 @@ class RequestHistoryManager:
         record_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
         use_global: bool = True,
         cache_size: int = CACHE_SIZE,
+        enabled: bool = True,
     ):
         """初始化请求历史记录管理器
 
@@ -134,6 +135,7 @@ class RequestHistoryManager:
             record_callback: 记录更新时的回调函数，参数为请求记录字典
             use_global: 是否使用全局实例
             cache_size: 内存缓存大小
+            enabled: 是否启用记录功能。测试环境关闭以避免污染本地历史文件
         """
         # 如果使用全局实例且已存在，则返回现有实例
         global global_request_history_manager
@@ -143,8 +145,8 @@ class RequestHistoryManager:
             self.__dict__.update(global_request_history_manager.__dict__)
             return
 
-        # 获取项目根目录
-        project_root = Path(__file__).parent
+        # 获取项目根目录（src/modules/llm/ 向上 3 层 = Amaidesu/）
+        project_root = Path(__file__).resolve().parents[3]
         self.history_dir = project_root / HISTORY_DIR
         self.history_dir.mkdir(exist_ok=True)
 
@@ -153,6 +155,9 @@ class RequestHistoryManager:
 
         # 设置回调
         self.record_callback = record_callback
+
+        # 记录开关（测试环境关闭）
+        self.enabled = enabled
 
         # 内存缓存（使用 deque 限制大小）
         self._cache: deque = deque(maxlen=cache_size)
@@ -231,6 +236,9 @@ class RequestHistoryManager:
         Returns:
             请求 ID
         """
+        if not self.enabled:
+            return record.request_id
+
         date_str = self._get_date_string(record.timestamp)
         file_path = self._get_history_file_path(date_str)
 
