@@ -179,16 +179,11 @@ class WarudoHandler(AvatarHandlerBase):
         duration_ms: int = Field(default=1500, ge=100, le=10000)
 
     _ACTION_PARAMS_SCHEMA: dict[str, type] = {
-        "blink": _WarudoActionParams,
         "nod": _WarudoActionParams,
         "shake": _WarudoActionParams,
-        "wave": _WarudoActionParams,
-        "clap": _WarudoActionParams,
         "throw_fish": _WarudoActionParams,
-        "throw_fish_big": _WarudoActionParams,
-        "typing_on": _WarudoActionParams,
-        "typing_off": _WarudoActionParams,
-        "head_action": _WarudoActionParams,
+        "calm_pose": _WarudoActionParams,
+        "think": _WarudoActionParams,
     }
 
     def get_capabilities(self):
@@ -222,29 +217,25 @@ class WarudoHandler(AvatarHandlerBase):
 
         # Emotion → blendshape:已迁移到类级 _EMOTION_BLENDSHAPE_MAP(对齐蓝图)
 
-        # Action 三字典分类(替代旧的单一 _action_map)
-        # 热键类:由 _send_hotkey 发送
-        self._action_hotkey_map: Dict[str, str] = {
-            "blink": "blink",
-            "nod": "nod",
-            "shake": "shake",
-            "wave": "wave",
-            "clap": "clap",
-        }
-        # 身体动作类:由 _send_action_internal 发送 body_action 类别
+        # Action 四字典分类(对齐蓝图 ON_WEBSOCKET_ACTION 节点名称)
+        self._action_hotkey_map: Dict[str, str] = {}
+        # 身体动作 → 姿势.json (body_action, String)
         self._action_body_map: Dict[str, str] = {
-            "throw_fish": "throw_fish",
-            "throw_fish_big": "throw_fish_big",
-            "typing_on": "typing_on",
-            "typing_off": "typing_off",
+            "calm_pose": "平静，双手后放",
+            "think": "思考",
         }
-        # 头部动作类:由 _send_action_internal 发送 head_action 类别
+        # 头部动作 → 头部动态.json (head_action, String) — SWITCH_ON_STRING 认中文值
         self._action_head_map: Dict[str, str] = {
-            "head_action": "head_action",
+            "nod": "点头一次",
+            "shake": "摇头",
+        }
+        # 直接动作 → action 名直接匹配蓝图 ON_WEBSOCKET_ACTION 节点
+        self._action_direct_map: Dict[str, str] = {
+            "throw_fish": "throw_fish",
         }
 
-        # 兼容旧字段
-        self._action_map = self._action_hotkey_map
+        # 兼容旧字段 — 指向 head_map
+        self._action_map = self._action_head_map
 
         # WebSocket 状态
         self.ws_host = self.typed_config.ws_host
@@ -350,6 +341,7 @@ class WarudoHandler(AvatarHandlerBase):
             "hotkeys": [],
             "body_actions": [],
             "head_actions": [],
+            "direct_actions": [],
         }
 
         if intent.emotion is not None:
@@ -389,6 +381,8 @@ class WarudoHandler(AvatarHandlerBase):
                 result["body_actions"].append(self._action_body_map[local_name])
             elif local_name in self._action_head_map:
                 result["head_actions"].append(self._action_head_map[local_name])
+            elif local_name in self._action_direct_map:
+                result["direct_actions"].append((self._action_direct_map[local_name], 1))
             else:
                 return None
 
@@ -417,6 +411,10 @@ class WarudoHandler(AvatarHandlerBase):
             # 4. 头部动作
             for head_action in head_actions:
                 await self._send_action_internal("head_action", head_action)
+
+            # 5. 直接动作(action 名匹配蓝图 ON_WEBSOCKET_ACTION 节点,不走管道)
+            for action_name, action_data in params.get("direct_actions", []):
+                await self._send_action_internal(action_name, action_data)
 
             self.render_count += 1
         except Exception as e:
