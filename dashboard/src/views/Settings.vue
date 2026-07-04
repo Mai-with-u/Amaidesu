@@ -251,6 +251,24 @@ const restarting = ref(false);
 const searchQuery = ref('');
 const activeFileTab = ref('core.toml');
 
+// ── 计算属性 ──────────────────────────────────────────────
+// 所有 group 按后端返回的 file_name 分组
+const groupsByFile = computed(() => {
+  const map = new Map<string, ConfigGroupSchema[]>();
+  for (const group of settingsStore.groups) {
+    const file = group.file_name;
+    if (!file) continue;
+    if (!map.has(file)) map.set(file, []);
+    map.get(file)!.push(group);
+  }
+  return map;
+});
+
+// 获取某个文件下的 sections（排序后）
+function getFileSections(fileName: string): ConfigGroupSchema[] {
+  return (groupsByFile.value.get(fileName) || []).sort((a, b) => (a.order ?? 99) - (b.order ?? 99));
+}
+
 // 初始化：默认选中第一个非空 Tab
 watch(
   () => settingsStore.groups,
@@ -270,25 +288,6 @@ watch(
 onMounted(async () => {
   await settingsStore.fetchSchema();
 });
-
-// ── 计算属性 ──────────────────────────────────────────────
-// 所有 group 按 file_name 分组
-// 所有 group 按后端返回的 file_name 分组
-const groupsByFile = computed(() => {
-  const map = new Map<string, ConfigGroupSchema[]>();
-  for (const group of settingsStore.groups) {
-    const file = group.file_name;
-    if (!file) continue; // 后端必须返回 file_name
-    if (!map.has(file)) map.set(file, []);
-    map.get(file)!.push(group);
-  }
-  return map;
-});
-
-// 获取某个文件下的 sections（排序后）
-function getFileSections(fileName: string): ConfigGroupSchema[] {
-  return (groupsByFile.value.get(fileName) || []).sort((a, b) => (a.order ?? 99) - (b.order ?? 99));
-}
 
 // 搜索模式：全局跨文件结果
 const globalSearchResults = computed(() => {
