@@ -203,6 +203,28 @@ export interface SubscribeRequest {
   events: string[];
 }
 
+// Capabilities types (mapped from src/modules/types/capabilities.py)
+export type ParameterType = 'string' | 'number' | 'integer' | 'boolean';
+
+export interface ParameterSpec {
+  type: ParameterType;
+  required: boolean;
+  default?: unknown;
+  description?: string;
+  minimum?: number;
+  maximum?: number;
+}
+
+export interface UnifiedActionEntry {
+  name: string; // 全限定名 <handler>.<action>
+  description?: string;
+  parameters: Record<string, ParameterSpec>;
+}
+
+export interface UnifiedCapabilitiesView {
+  actions: UnifiedActionEntry[];
+}
+
 // Re-export settings types
 export * from './settings';
 

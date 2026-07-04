@@ -73,7 +73,17 @@
           :log-count="getComponentLogs(component.name).length"
           :action-loading="actionLoading"
           @control="action => handleControl('output', component.name, action)"
-        />
+        >
+          <template #detail-panel>
+            <CapabilitiesPanel
+              :capabilities="capabilities || { actions: [] }"
+              :handler-name="component.name"
+              :loading="capsLoading"
+              :error="capsError"
+              @retry="fetchCapabilities"
+            />
+          </template>
+        </ComponentCard>
       </PhaseColumn>
     </div>
   </div>
@@ -86,7 +96,9 @@ import { useComponentsStore, useEventsStore, useLogsStore } from '@/stores';
 import { storeToRefs } from 'pinia';
 import type { ComponentControlAction, WebSocketMessage } from '@/types';
 import type { LogEntry } from '@/stores/logs';
-import { PhaseColumn, ComponentCard } from '@/components/component-cards';
+import { PhaseColumn, ComponentCard, CapabilitiesPanel } from '@/components/component-cards';
+import { capabilitiesApi } from '@/api';
+import type { UnifiedCapabilitiesView } from '@/types';
 
 // Phase icons as inline SVG components
 const InputIcon = {
@@ -152,6 +164,25 @@ const actionLoading = reactive<Record<string, boolean>>({});
 
 // Reference to phases container for positioning
 const phasesContainerRef = ref<HTMLElement | null>(null);
+
+// Capabilities data for Output phase cards
+const capabilities = ref<UnifiedCapabilitiesView | null>(null);
+const capsLoading = ref(false);
+const capsError = ref<string | null>(null);
+
+async function fetchCapabilities() {
+  if (capabilities.value && !capsError.value) return;
+  capsLoading.value = true;
+  capsError.value = null;
+  try {
+    const response = await capabilitiesApi.list();
+    capabilities.value = response.data;
+  } catch (e) {
+    capsError.value = e instanceof Error ? e.message : '无法加载能力列表';
+  } finally {
+    capsLoading.value = false;
+  }
+}
 
 // Get events related to a specific component
 function getComponentEvents(componentName: string, componentPhase: string): WebSocketMessage[] {
@@ -229,6 +260,7 @@ onMounted(() => {
   componentsStore.fetchComponents();
   eventsStore.connect();
   logsStore.connect();
+  fetchCapabilities();
 });
 </script>
 

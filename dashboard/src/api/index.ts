@@ -21,6 +21,7 @@ import type {
   LLMHistoryResponse,
   LLMRequestHistory,
   MessageListResponse,
+  UnifiedCapabilitiesView,
 } from '@/types';
 
 const api = axios.create({
@@ -99,6 +100,11 @@ export const llmApi = {
     api.get<LLMHistoryResponse>('/llm/history', { params }),
   getRequestById: (requestId: string) => api.get<LLMRequestHistory>(`/llm/history/${requestId}`),
   getAvailableDates: () => api.get<string[]>('/llm/history/dates'),
+};
+
+// Capabilities API
+export const capabilitiesApi = {
+  list: () => api.get<UnifiedCapabilitiesView>('/capabilities'),
 };
 
 export default api;
