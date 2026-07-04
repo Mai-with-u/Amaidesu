@@ -23,6 +23,17 @@
           <span class="status-label">{{ isConnected ? '已连接' : '离线' }}</span>
         </div>
 
+        <!-- 重启按钮 -->
+        <el-button
+          class="restart-btn"
+          :icon="SwitchButton"
+          text
+          :disabled="restarting"
+          @click="handleRestart"
+        >
+          重启
+        </el-button>
+
         <!-- 主题切换 -->
         <el-tooltip
           :content="themeStore.theme === 'light' ? '切换到深色模式' : '切换到浅色模式'"
@@ -49,23 +60,177 @@
         <slot />
       </el-main>
     </el-container>
+
   </el-container>
+
+  <!-- 重启全屏遮罩（fixed定位，放在最外层） -->
+  <RestartOverlay
+    :visible="overlayVisible"
+    :status="overlayStatus"
+    :progress="overlayProgress"
+    :elapsed="overlayElapsed"
+    :check-attempts="overlayCheckAttempts"
+    :max-attempts="overlayMaxAttempts"
+    @retry="handleRetry"
+    @refresh-page="handleRefreshPage"
+  />
 </template>
 
 <script setup lang="ts">
-import { Sunny, Moon } from '@element-plus/icons-vue';
-import { onMounted } from 'vue';
+import { Sunny, Moon, SwitchButton } from '@element-plus/icons-vue';
+import { ref, onMounted, onUnmounted } from 'vue';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import Sidebar from './Sidebar.vue';
+import RestartOverlay from './RestartOverlay.vue';
 import { useThemeStore, useWebSocketStore } from '@/stores';
 import { storeToRefs } from 'pinia';
+import { configApi, systemApi } from '@/api';
 
 const themeStore = useThemeStore();
 const wsStore = useWebSocketStore();
 const { isConnected } = storeToRefs(wsStore);
 
+// ---- 重启 ----
+const restarting = ref(false);
+const overlayVisible = ref(false);
+const overlayStatus = ref<'requesting' | 'restarting' | 'checking' | 'success' | 'failed'>('requesting');
+const overlayProgress = ref(0);
+const overlayElapsed = ref(0);
+const overlayCheckAttempts = ref(0);
+const overlayMaxAttempts = 60;
+
+let _progressTimer: ReturnType<typeof setInterval> | null = null;
+let _elapsedTimer: ReturnType<typeof setInterval> | null = null;
+let _healthTimer: ReturnType<typeof setInterval> | null = null;
+
+function clearAllTimers() {
+  if (_progressTimer) { clearInterval(_progressTimer); _progressTimer = null; }
+  if (_elapsedTimer) { clearInterval(_elapsedTimer); _elapsedTimer = null; }
+  if (_healthTimer) { clearInterval(_healthTimer); _healthTimer = null; }
+}
+
+function startProgressAnimation() {
+  _progressTimer = setInterval(() => {
+    if (overlayProgress.value < 90) overlayProgress.value += 1;
+  }, 200);
+  _elapsedTimer = setInterval(() => {
+    overlayElapsed.value += 1;
+  }, 1000);
+}
+
+async function handleRestart() {
+  try {
+    await ElMessageBox.confirm(
+      '重启后服务将短暂不可用，WebSocket 会自动重连。确定要重启吗？',
+      '重启服务',
+      {
+        confirmButtonText: '确认重启',
+        cancelButtonText: '取消',
+        type: 'warning',
+        confirmButtonClass: 'el-button--danger',
+      },
+    );
+  } catch {
+    return;
+  }
+
+  restarting.value = true;
+  overlayVisible.value = true;
+  overlayStatus.value = 'requesting';
+  overlayProgress.value = 0;
+  overlayElapsed.value = 0;
+  overlayCheckAttempts.value = 0;
+
+  try {
+    const response = await configApi.restart();
+    if (!response.data.success) {
+      overlayStatus.value = 'failed';
+      ElMessage.error(`重启失败: ${response.data.message}`);
+      return;
+    }
+
+    overlayStatus.value = 'restarting';
+    startProgressAnimation();
+
+    // 等后端退出后开始检查
+    await new Promise(resolve => setTimeout(resolve, 3000));
+
+    overlayStatus.value = 'checking';
+    let attempts = 0;
+
+    _healthTimer = setInterval(async () => {
+      attempts++;
+      overlayCheckAttempts.value = attempts;
+
+      try {
+        await systemApi.getHealth();
+        // 成功
+        clearAllTimers();
+        overlayProgress.value = 100;
+        overlayStatus.value = 'success';
+        setTimeout(() => {
+          overlayVisible.value = false;
+          restarting.value = false;
+          ElMessage.success('服务重启完成');
+        }, 1200);
+      } catch {
+        if (attempts >= overlayMaxAttempts) {
+          clearAllTimers();
+          overlayStatus.value = 'failed';
+          restarting.value = false;
+        }
+      }
+    }, 2000);
+  } catch (e: any) {
+    clearAllTimers();
+    overlayStatus.value = 'failed';
+    ElMessage.error(`重启失败: ${e instanceof Error ? e.message : '网络错误'}`);
+    restarting.value = false;
+  }
+}
+
+function handleRetry() {
+  // 重试健康检查
+  clearAllTimers();
+  overlayStatus.value = 'checking';
+  overlayCheckAttempts.value = 0;
+  let attempts = 0;
+
+  _healthTimer = setInterval(async () => {
+    attempts++;
+    overlayCheckAttempts.value = attempts;
+    try {
+      await systemApi.getHealth();
+      clearAllTimers();
+      overlayProgress.value = 100;
+      overlayStatus.value = 'success';
+      setTimeout(() => {
+        overlayVisible.value = false;
+        restarting.value = false;
+        ElMessage.success('服务重启完成');
+      }, 1200);
+    } catch {
+      if (attempts >= overlayMaxAttempts) {
+        clearAllTimers();
+        overlayStatus.value = 'failed';
+        restarting.value = false;
+      }
+    }
+  }, 2000);
+}
+
+function handleRefreshPage() {
+  window.location.reload();
+}
+
 onMounted(() => {
   wsStore.connect();
 });
+
+onUnmounted(() => {
+  clearAllTimers();
+});
+
 </script>
 
 <style scoped>
@@ -160,6 +325,16 @@ onMounted(() => {
 
 .connection-status.connected .status-label {
   color: var(--color-success);
+}
+
+/* 重启按钮 */
+.restart-btn {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.restart-btn:hover {
+  color: var(--color-danger);
 }
 
 /* 主题切换按钮 */
