@@ -520,22 +520,14 @@ function formatUptime(seconds: number): string {
 }
 
 // Lifecycle management
-let statusInterval: ReturnType<typeof setInterval> | null = null;
-
 onMounted(async () => {
   await systemStore.fetchStatus();
   await componentsStore.fetchComponents();
-
-  statusInterval = setInterval(() => {
-    systemStore.fetchStatus();
-    componentsStore.fetchComponents();
-  }, 1000);
+  systemStore.startPolling(1000);
 });
 
 onUnmounted(() => {
-  if (statusInterval) {
-    clearInterval(statusInterval);
-  }
+  systemStore.stopPolling();
 });
 </script>
 

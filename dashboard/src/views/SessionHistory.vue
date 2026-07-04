@@ -72,10 +72,7 @@
                 ).toUpperCase()
               }}
             </div>
-            <div
-              class="chat-bubble chat-bubble--message"
-              @click="toggleExpand(event.id)"
-            >
+            <div class="chat-bubble chat-bubble--message" @click="toggleExpand(event.id)">
               <div class="bubble-header">
                 <el-tag size="small" effect="plain" type="info">
                   {{ event.message.source }}
@@ -91,9 +88,7 @@
                   event.message.user_nickname || event.message.source || '匿名用户'
                 }}</span>
                 <span class="bubble-spacer" />
-                <span class="bubble-time">{{
-                  formatMs(event.timestamp).split('.')[0]
-                }}</span>
+                <span class="bubble-time">{{ formatMs(event.timestamp).split('.')[0] }}</span>
               </div>
               <div class="bubble-text">{{ event.message.text }}</div>
               <div class="bubble-meta">
@@ -133,27 +128,17 @@
 
           <!-- decision.intent: 右侧 AI 意图气泡（带头像） -->
           <template v-if="event.type === 'decision.intent' && event.intent">
-            <div
-              class="chat-bubble chat-bubble--intent"
-              @click="toggleExpand(event.id)"
-            >
+            <div class="chat-bubble chat-bubble--intent" @click="toggleExpand(event.id)">
               <div class="bubble-header">
                 <el-tag size="small" effect="plain" type="success">AI</el-tag>
-                <span class="bubble-sender">{{
-                  event.deciderName || 'Decider'
-                }}</span>
+                <span class="bubble-sender">{{ event.deciderName || 'Decider' }}</span>
                 <span class="bubble-spacer" />
-                <span class="bubble-time">{{
-                  formatMs(event.timestamp).split('.')[0]
-                }}</span>
+                <span class="bubble-time">{{ formatMs(event.timestamp).split('.')[0] }}</span>
               </div>
               <div v-if="event.intent.speech" class="bubble-text bubble-text--speech">
                 <span class="speech-marker">💬</span>{{ event.intent.speech }}
               </div>
-              <div
-                v-if="event.intent.emotion || event.intent.action"
-                class="bubble-meta"
-              >
+              <div v-if="event.intent.emotion || event.intent.action" class="bubble-meta">
                 <el-tag
                   v-if="event.intent.emotion"
                   size="small"
@@ -194,11 +179,7 @@
               >
                 {{ event.intent.action.name }}
               </code>
-              <span
-                v-if="event.intent.speech"
-                class="system-speech"
-                :title="event.intent.speech"
-              >
+              <span v-if="event.intent.speech" class="system-speech" :title="event.intent.speech">
                 ·
                 {{
                   event.intent.speech.length > 40
@@ -207,9 +188,7 @@
                 }}
               </span>
               <span class="bubble-spacer" />
-              <span class="system-time">{{
-                formatMs(event.timestamp).split('.')[0]
-              }}</span>
+              <span class="system-time">{{ formatMs(event.timestamp).split('.')[0] }}</span>
               <span class="expand-hint expand-hint--system">
                 {{ expanded.has(event.id) ? '▲' : '▾' }}
               </span>
@@ -288,12 +267,7 @@
         <div class="inject-fields inject-fields--two">
           <div class="inject-field">
             <label class="inject-field-label">emotion</label>
-            <el-select
-              v-model="intentEmotion"
-              size="small"
-              :disabled="sending"
-              style="width: 100%"
-            >
+            <el-select v-model="intentEmotion" size="small" :disabled="sending" style="width: 100%">
               <el-option label="happy" value="happy" />
               <el-option label="sad" value="sad" />
               <el-option label="angry" value="angry" />
@@ -321,26 +295,14 @@
         <div class="inject-actions">
           <div class="inject-actions-header">
             <span class="inject-actions-title">动作 (IntentAction[])</span>
-            <el-button
-              size="small"
-              text
-              type="primary"
-              :disabled="sending"
-              @click="addAction"
-            >
+            <el-button size="small" text type="primary" :disabled="sending" @click="addAction">
               <el-icon><Plus /></el-icon>
               <span>添加动作</span>
             </el-button>
           </div>
-          <div v-if="intentActions.length === 0" class="inject-actions-empty">
-            暂无动作
-          </div>
+          <div v-if="intentActions.length === 0" class="inject-actions-empty">暂无动作</div>
           <div v-else class="inject-actions-list">
-            <div
-              v-for="(action, idx) in intentActions"
-              :key="idx"
-              class="inject-action-row"
-            >
+            <div v-for="(action, idx) in intentActions" :key="idx" class="inject-action-row">
               <div class="inject-action-header">
                 <el-select
                   v-model="action.actionName"
@@ -416,16 +378,8 @@
                 >
                   <label class="inject-param-label">
                     <span class="inject-param-key">{{ key }}</span>
-                    <span
-                      v-if="spec.required"
-                      class="inject-param-required"
-                      title="必填"
-                    >*</span>
-                    <el-tooltip
-                      v-if="spec.description"
-                      :content="spec.description"
-                      placement="top"
-                    >
+                    <span v-if="spec.required" class="inject-param-required" title="必填">*</span>
+                    <el-tooltip v-if="spec.description" :content="spec.description" placement="top">
                       <span class="inject-param-help">?</span>
                     </el-tooltip>
                   </label>
@@ -752,8 +706,6 @@ function clearEvents() {
 let scrollObserver: MutationObserver | null = null;
 
 onMounted(() => {
-  sessionStore.connect();
-
   if (autoScroll.value && timelineRef.value) {
     scrollObserver = new MutationObserver(() => {
       nextTick(() => {
@@ -770,7 +722,6 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-  sessionStore.disconnect();
   scrollObserver?.disconnect();
 });
 </script>
@@ -934,7 +885,9 @@ onUnmounted(() => {
   max-width: min(72%, 540px);
   padding: 10px 14px 8px;
   cursor: pointer;
-  transition: transform var(--transition-fast), box-shadow var(--transition-fast),
+  transition:
+    transform var(--transition-fast),
+    box-shadow var(--transition-fast),
     border-color var(--transition-fast);
   word-break: break-word;
   position: relative;

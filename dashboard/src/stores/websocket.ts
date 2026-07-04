@@ -8,15 +8,14 @@ type MessageHandler = (msg: WebSocketMessage) => void;
 // 模块级别的消息处理器列表
 const messageHandlers: MessageHandler[] = [];
 
+let _initialized = false;
+
 export const useWebSocketStore = defineStore('websocket', () => {
   const isConnected = ref(false);
 
-  function connect() {
-    if (wsClient.isConnected()) {
-      isConnected.value = true;
-      return;
-    }
-    if (isConnected.value) return;
+  // 安全：即使多次调用，_initialized 短路 + wsClient 内部的 callbacks 去重（includes 检查）确保不会重复注册
+  function init() {
+    if (_initialized) return;
 
     wsClient.onConnect(() => {
       isConnected.value = true;
@@ -31,6 +30,18 @@ export const useWebSocketStore = defineStore('websocket', () => {
     wsClient.onMessage(msg => {
       messageHandlers.forEach(handler => handler(msg));
     });
+
+    _initialized = true;
+  }
+
+  function connect() {
+    init(); // 注册与连接解耦：init() 幂等，多次 connect() 不会重复注册
+
+    if (wsClient.isConnected()) {
+      isConnected.value = true;
+      return;
+    }
+    if (isConnected.value) return;
 
     wsClient.connect().catch(console.error);
   }
@@ -55,6 +66,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
 
   return {
     isConnected,
+    init,
     connect,
     disconnect,
     subscribe,

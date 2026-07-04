@@ -258,8 +258,6 @@ async function handleControl(phase: string, name: string, action: ComponentContr
 
 onMounted(() => {
   componentsStore.fetchComponents();
-  eventsStore.connect();
-  logsStore.connect();
   fetchCapabilities();
 });
 </script>

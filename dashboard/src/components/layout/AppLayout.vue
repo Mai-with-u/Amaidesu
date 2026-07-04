@@ -60,7 +60,6 @@
         <slot />
       </el-main>
     </el-container>
-
   </el-container>
 
   <!-- 重启全屏遮罩（fixed定位，放在最外层） -->
@@ -93,7 +92,9 @@ const { isConnected } = storeToRefs(wsStore);
 // ---- 重启 ----
 const restarting = ref(false);
 const overlayVisible = ref(false);
-const overlayStatus = ref<'requesting' | 'restarting' | 'checking' | 'success' | 'failed'>('requesting');
+const overlayStatus = ref<'requesting' | 'restarting' | 'checking' | 'success' | 'failed'>(
+  'requesting',
+);
 const overlayProgress = ref(0);
 const overlayElapsed = ref(0);
 const overlayCheckAttempts = ref(0);
@@ -104,9 +105,18 @@ let _elapsedTimer: ReturnType<typeof setInterval> | null = null;
 let _healthTimer: ReturnType<typeof setInterval> | null = null;
 
 function clearAllTimers() {
-  if (_progressTimer) { clearInterval(_progressTimer); _progressTimer = null; }
-  if (_elapsedTimer) { clearInterval(_elapsedTimer); _elapsedTimer = null; }
-  if (_healthTimer) { clearInterval(_healthTimer); _healthTimer = null; }
+  if (_progressTimer) {
+    clearInterval(_progressTimer);
+    _progressTimer = null;
+  }
+  if (_elapsedTimer) {
+    clearInterval(_elapsedTimer);
+    _elapsedTimer = null;
+  }
+  if (_healthTimer) {
+    clearInterval(_healthTimer);
+    _healthTimer = null;
+  }
 }
 
 function startProgressAnimation() {
@@ -223,14 +233,11 @@ function handleRefreshPage() {
   window.location.reload();
 }
 
-onMounted(() => {
-  wsStore.connect();
-});
+onMounted(() => {});
 
 onUnmounted(() => {
   clearAllTimers();
 });
-
 </script>
 
 <style scoped>

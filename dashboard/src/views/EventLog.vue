@@ -195,15 +195,13 @@ function isHiddenEvent(type: string): boolean {
   return HIDDEN_EVENT_TYPES.some(hidden => type.toLowerCase().includes(hidden.toLowerCase()));
 }
 
-// 暂停/继续事件流
+// 暂停/继续自动滚动（事件始终在后台接收,仅停止自动滚动）
 function togglePause() {
   isPaused.value = !isPaused.value;
   if (isPaused.value) {
-    eventsStore.disconnect();
-    ElMessage.info('事件流已暂停');
+    ElMessage.info('显示已暂停(后台仍在接收)');
   } else {
-    eventsStore.connect();
-    ElMessage.success('事件流已恢复');
+    ElMessage.success('显示已恢复');
   }
 }
 
@@ -286,10 +284,7 @@ function scrollToBottom() {
 let unsubscribe: (() => void) | null = null;
 
 onMounted(() => {
-  // 连接 WebSocket
-  eventsStore.connect();
-
-  // 订阅事件变化，自动滚动
+  // 订阅事件变化,自动滚动 (事件接收由 store setup 阶段统一处理)
   unsubscribe = eventsStore.$subscribe(() => {
     if (!isPaused.value) {
       scrollToBottom();

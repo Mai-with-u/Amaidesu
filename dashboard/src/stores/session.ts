@@ -136,16 +136,8 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
-  function connect() {
-    const wsStore = useWebSocketStore();
-    wsStore.subscribe(handleEvent);
-    wsStore.connect();
-  }
-
-  function disconnect() {
-    const wsStore = useWebSocketStore();
-    wsStore.unsubscribe(handleEvent);
-  }
+  const wsStore = useWebSocketStore();
+  wsStore.subscribe(handleEvent);
 
   async function sendNormalizedMessage(
     text: string,
@@ -190,8 +182,6 @@ export const useSessionStore = defineStore('session', () => {
   return {
     events,
     sending,
-    connect,
-    disconnect,
     sendNormalizedMessage,
     sendIntent,
     clearEvents,

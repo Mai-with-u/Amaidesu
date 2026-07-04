@@ -42,20 +42,7 @@ export const useLogsStore = defineStore('logs', () => {
     }
   }
 
-  function connect() {
-    const wsStore = useWebSocketStore();
-
-    // 订阅 WebSocket 消息
-    wsStore.subscribe(handleLog);
-
-    // 启动统一连接
-    wsStore.connect();
-  }
-
-  function disconnect() {
-    const wsStore = useWebSocketStore();
-    wsStore.unsubscribe(handleLog);
-  }
+  useWebSocketStore().subscribe(handleLog);
 
   function clearLogs() {
     logs.value = [];
@@ -69,8 +56,6 @@ export const useLogsStore = defineStore('logs', () => {
     logs,
     isPaused,
     availableModules,
-    connect,
-    disconnect,
     clearLogs,
     togglePause,
   };

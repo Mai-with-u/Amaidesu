@@ -15,20 +15,7 @@ export const useEventsStore = defineStore('events', () => {
     events.value = newEvents;
   }
 
-  function connect() {
-    const wsStore = useWebSocketStore();
-
-    // 订阅 WebSocket 消息
-    wsStore.subscribe(handleEvent);
-
-    // 启动统一连接
-    wsStore.connect();
-  }
-
-  function disconnect() {
-    const wsStore = useWebSocketStore();
-    wsStore.unsubscribe(handleEvent);
-  }
+  useWebSocketStore().subscribe(handleEvent);
 
   function clearEvents() {
     events.value = [];
@@ -36,8 +23,6 @@ export const useEventsStore = defineStore('events', () => {
 
   return {
     events,
-    connect,
-    disconnect,
     clearEvents,
   };
 });

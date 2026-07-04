@@ -310,9 +310,6 @@ function handleScroll() {
 let unsubscribe: (() => void) | null = null;
 
 onMounted(() => {
-  // 连接 WebSocket
-  logsStore.connect();
-
   // 订阅日志变化，自动滚动
   unsubscribe = logsStore.$subscribe(() => {
     if (!isPaused.value && isRealtimeScroll.value) {
