@@ -66,9 +66,7 @@ const _externalHash = ref('');
 
 /** 对 entries 做稳定序列化，用于比对是否是自己的更新 */
 function entriesHash(): string {
-  const ordered = entries.value
-    .filter(e => e.key)
-    .sort((a, b) => a.key.localeCompare(b.key));
+  const ordered = entries.value.filter(e => e.key).sort((a, b) => a.key.localeCompare(b.key));
   return JSON.stringify(ordered);
 }
 
