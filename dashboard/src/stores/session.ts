@@ -147,23 +147,35 @@ export const useSessionStore = defineStore('session', () => {
     wsStore.unsubscribe(handleEvent);
   }
 
-  async function sendNormalizedMessage(text: string, source: string = 'dashboard') {
+  async function sendNormalizedMessage(
+    text: string,
+    source: string = 'dashboard',
+    data_type: string = 'text',
+    importance: number = 1,
+  ) {
     sending.value = true;
     try {
-      await debugApi.injectMessage({ text, source, importance: 1 });
+      await debugApi.injectMessage({ text, source, data_type, importance });
     } finally {
       sending.value = false;
     }
   }
 
-  async function sendIntent(text: string, responseText?: string) {
+  async function sendIntent(
+    text?: string,
+    emotion: string = 'neutral',
+    source: string = 'dashboard',
+    responseText?: string,
+    actions: Record<string, any>[] = [],
+  ) {
     sending.value = true;
     try {
       const request: InjectIntentRequest = {
-        text,
+        text: text || undefined,
         responseText,
-        emotion: 'neutral',
-        source: 'dashboard',
+        emotion,
+        source,
+        actions,
       };
       await debugApi.injectIntent(request);
     } finally {

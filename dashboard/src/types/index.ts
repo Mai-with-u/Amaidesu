@@ -93,7 +93,7 @@ export interface EventBusStatsResponse {
 }
 
 export interface InjectIntentRequest {
-  text: string;
+  text?: string;
   responseText?: string;
   emotion?: string;
   actions?: Record<string, any>[];

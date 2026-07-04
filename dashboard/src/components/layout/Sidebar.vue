@@ -21,7 +21,7 @@
         </el-menu-item>
         <el-menu-item index="/session">
           <el-icon><ChatLineRound /></el-icon>
-          <span>会话历史</span>
+          <span>调试会话</span>
         </el-menu-item>
 
         <!-- LLM 分组 -->
