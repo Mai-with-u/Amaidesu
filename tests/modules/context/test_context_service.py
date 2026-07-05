@@ -779,6 +779,115 @@ async def test_concurrent_different_sessions(context_service: ContextService):
 
 
 # =============================================================================
+# 氛围情绪测试（get_ambient_mood）
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_get_ambient_mood_empty_session(context_service: ContextService):
+    """空会话返回无明显情绪倾向"""
+    result = await context_service.get_ambient_mood("empty_session")
+    assert result == "无明显情绪倾向"
+
+
+@pytest.mark.asyncio
+async def test_get_ambient_mood_no_assistant_messages(context_service: ContextService):
+    """只有 USER 消息无 ASSISTANT 消息时返回无明显情绪倾向"""
+    await context_service.add_message("test", MessageRole.USER, "Hello")
+    await context_service.add_message("test", MessageRole.USER, "World")
+    result = await context_service.get_ambient_mood("test")
+    assert result == "无明显情绪倾向"
+
+
+@pytest.mark.asyncio
+async def test_get_ambient_mood_single_emotion(context_service: ContextService):
+    """单一情绪的助手消息"""
+    await context_service.add_message("test", MessageRole.USER, "Hi")
+    await context_service.add_message("test", MessageRole.ASSISTANT, "Hey!", emotion="happy")
+    result = await context_service.get_ambient_mood("test")
+    assert "happy" in result
+
+
+@pytest.mark.asyncio
+async def test_get_ambient_mood_same_emotion_high_concentration(context_service: ContextService):
+    """连续相同情绪 → 高浓度"""
+    for i in range(4):
+        await context_service.add_message("test", MessageRole.USER, f"msg{i}")
+        await context_service.add_message("test", MessageRole.ASSISTANT, f"reply{i}", emotion="happy")
+    result = await context_service.get_ambient_mood("test")
+    assert "happy" in result
+    assert "较高" in result
+
+
+@pytest.mark.asyncio
+async def test_get_ambient_mood_ema_gives_recent_higher_weight(context_service: ContextService):
+    """EMA: 一轮 sad 之后跟一轮 happy，happy 主导"""
+    await context_service.add_message("test", MessageRole.USER, "hi")
+    await context_service.add_message("test", MessageRole.ASSISTANT, "reply", emotion="sad")
+    await context_service.add_message("test", MessageRole.USER, "hi")
+    await context_service.add_message("test", MessageRole.ASSISTANT, "reply", emotion="happy")
+    result = await context_service.get_ambient_mood("test")
+    assert "happy" in result
+
+
+@pytest.mark.asyncio
+async def test_get_ambient_mood_without_emotion_field(context_service: ContextService):
+    """向后兼容：无 emotion 字段的旧消息被忽略"""
+    await context_service.add_message("test", MessageRole.USER, "Hi")
+    await context_service.add_message("test", MessageRole.ASSISTANT, "Hey!")  # 无 emotion
+    result = await context_service.get_ambient_mood("test")
+    assert result == "无明显情绪倾向"
+
+
+@pytest.mark.asyncio
+async def test_get_ambient_mood_diverse_emotions(context_service: ContextService):
+    """多元情绪 → 低浓度描述"""
+    emotions = ["happy", "sad", "angry", "surprised", "confused"]
+    for e in emotions:
+        await context_service.add_message("test", MessageRole.USER, "hi")
+        await context_service.add_message("test", MessageRole.ASSISTANT, "reply", emotion=e)
+    result = await context_service.get_ambient_mood("test")
+    assert "多元" in result or "适中" in result
+
+
+@pytest.mark.asyncio
+async def test_get_ambient_mood_custom_window(context_service: ContextService):
+    """自定义 window 参数限制回溯范围"""
+    # 添加10条 sad
+    for _ in range(10):
+        await context_service.add_message("test", MessageRole.USER, "hi")
+        await context_service.add_message("test", MessageRole.ASSISTANT, "reply", emotion="sad")
+    # 最近2条 happy
+    await context_service.add_message("test", MessageRole.USER, "hi")
+    await context_service.add_message("test", MessageRole.ASSISTANT, "latest", emotion="happy")
+    await context_service.add_message("test", MessageRole.USER, "hi")
+    await context_service.add_message("test", MessageRole.ASSISTANT, "latest", emotion="happy")
+
+    # window=1 → 只看最近2条消息 → 只看到 happy
+    result_narrow = await context_service.get_ambient_mood("test", window=1)
+    assert "happy" in result_narrow
+    assert "较高" in result_narrow
+
+
+@pytest.mark.asyncio
+async def test_add_message_with_emotion_persists(context_service: ContextService):
+    """验证 emotion 字段正确持久化到 ConversationMessage"""
+    msg = await context_service.add_message("test", MessageRole.ASSISTANT, "Hello!", emotion="excited")
+    assert msg.emotion == "excited"
+
+    history = await context_service.get_history("test")
+    assert len(history) == 1
+    assert history[0].emotion == "excited"
+
+
+@pytest.mark.asyncio
+async def test_add_message_without_emotion_defaults_none(context_service: ContextService):
+    """无 emotion 参数时默认为 None"""
+    msg = await context_service.add_message("test", MessageRole.USER, "Hello")
+    assert msg.emotion is None
+
+
+# =============================================================================
 # 运行入口
 # =============================================================================
 

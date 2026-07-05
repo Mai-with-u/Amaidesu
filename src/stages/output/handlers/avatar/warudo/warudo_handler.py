@@ -31,7 +31,6 @@ from src.stages.output.handlers.avatar.base import AvatarHandlerBase
 from src.stages.output.handlers.avatar.warudo.lip_sync_subscriber import (
     WarudoLipSyncSubscriber,
 )
-from src.stages.output.handlers.avatar.warudo.state.mood_manager import MoodManager
 from src.stages.output.handlers.avatar.warudo.state.warudo_state_manager import (
     WarudoStateManager,
 )
@@ -259,9 +258,6 @@ class WarudoHandler(AvatarHandlerBase):
         # 状态管理器(给心情、眨眼、眼球移动用)
         self.state_manager = WarudoStateManager(self.logger, send_action_callback)
 
-        # 心情管理器
-        self.mood_manager = MoodManager(self.state_manager, self.logger)
-
         # 眨眼任务
         self.blink_task = BlinkTask(self.state_manager, self.logger)
 
@@ -313,10 +309,6 @@ class WarudoHandler(AvatarHandlerBase):
                 on_audio_start_hook=self.on_audio_start_proxy,
                 on_audio_end_hook=self.on_audio_end_proxy,
             )
-
-        # 当前心情状态(1-10)
-        self.current_mood = {"joy": 5, "anger": 1, "sorrow": 1, "fear": 1}
-        self.current_expression = "neutral"
 
         # 统计
         self.render_count = 0
@@ -686,23 +678,6 @@ class WarudoHandler(AvatarHandlerBase):
             return False
         return not self._ws_closed
 
-    # ==================== 心情管理 ====================
-
-    def update_mood(self, mood_data: Dict[str, Any]) -> bool:
-        """更新心情状态"""
-        has_changes = False
-        for emotion in ["joy", "anger", "sorrow", "fear"]:
-            new_value = max(1, min(10, int(mood_data.get(emotion, 5))))
-            if self.current_mood[emotion] != new_value:
-                self.current_mood[emotion] = new_value
-                has_changes = True
-
-        if has_changes:
-            self.logger.debug(f"心情状态已更新: {self.current_mood}")
-            self.mood_manager.update_mood(mood_data)
-
-        return has_changes
-
     # ==================== 字幕推送 ====================
 
     async def push_subtitle(self, speech: str, user_name: str = "MaiBot") -> None:
@@ -748,8 +723,6 @@ class WarudoHandler(AvatarHandlerBase):
             "is_connected": self._is_connected,
             "render_count": self.render_count,
             "error_count": self.error_count,
-            "current_mood": self.current_mood,
-            "current_expression": self.current_expression,
             "lip_sync_enabled": self.lip_sync is not None,
             "lip_sync_subscribed": self._lip_sync_sub_id is not None,
             "subtitle_enabled": self.subtitle_manager is not None,

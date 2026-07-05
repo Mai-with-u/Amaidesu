@@ -8,6 +8,7 @@ variables:
   - personality
   - style_constraints
   - history
+  - ambient_mood
 author: Amaidesu
 tags: [decision, llm, structured, vtuber]
 ---
@@ -29,6 +30,11 @@ $style_constraints
 
 ## 对话历史
 $history
+
+## 当前氛围
+$ambient_mood
+
+在保持角色个性的前提下，你的情绪选择应倾向于当前氛围，除非用户消息构成强烈的情绪转折。
 
 ## 用户消息
 $text

@@ -108,6 +108,7 @@ class ContextService:
         session_id: str,
         role: MessageRole,
         content: str,
+        emotion: Optional[str] = None,
     ) -> ConversationMessage:
         """
         添加消息到会话
@@ -116,6 +117,7 @@ class ContextService:
             session_id: 会话ID（建议使用 normalized_message.source）
             role: 消息角色（SYSTEM, USER, ASSISTANT）
             content: 消息内容
+            emotion: 情绪标签，仅 ASSISTANT 消息填充（可选，值为 Emotion 枚举名）
 
         Returns:
             创建的 ConversationMessage 对象
@@ -142,6 +144,7 @@ class ContextService:
             session_id=session_id,
             role=role,
             content=content,
+            emotion=emotion,
         )
         await self._storage.add_message(message)
 
@@ -331,6 +334,56 @@ class ContextService:
 
         self._initialized = False
         self.logger.info("ContextService 已清理")
+
+    async def get_ambient_mood(self, session_id: str, window: int = 5) -> str:
+        """
+        获取会话最近 N 轮的情绪氛围描述
+
+        使用 EMA（指数移动平均）对最近的助手情绪进行加权统计，
+        返回自然语言描述的氛围，供 LLM prompt 使用。
+
+        Args:
+            session_id: 会话ID
+            window: 回溯的消息轮数（默认 5）
+
+        Returns:
+            自然语言氛围描述，如 "以happy为主，情绪浓度适中"
+
+        Raises:
+            RuntimeError: 如果服务未初始化
+        """
+        if not self._initialized:
+            raise RuntimeError("ContextService 未初始化，请先调用 initialize()")
+
+        # 取最近 window*2 条消息（每轮 user+assistant 各一条）
+        history = await self.get_history(session_id, limit=window * 2)
+
+        emotions = [m.emotion for m in history if m.role == MessageRole.ASSISTANT and m.emotion]
+
+        if not emotions:
+            return "无明显情绪倾向"
+
+        # EMA: 最新排在 emotions 列表末尾，权重 1.0，依次衰减 0.7^n
+        # y[n] = x[n] + 0.7 * y[n-1]，反向遍历模拟
+        counter: Dict[str, float] = {}
+        weight = 1.0
+        for e in reversed(emotions):
+            counter[e] = counter.get(e, 0) + weight
+            weight *= 0.7
+
+        if not counter:
+            return "无明显情绪倾向"
+
+        dominant = max(counter, key=lambda k: counter[k])
+        total_weight = sum(counter.values())
+        concentration = counter[dominant] / total_weight if total_weight > 0 else 0
+
+        if concentration > 0.7:
+            return f"以{dominant}为主，情绪浓度较高"
+        elif concentration > 0.4:
+            return f"以{dominant}为主，情绪浓度适中"
+        else:
+            return f"情绪较为多元，{dominant}略占主导"
 
     def get_statistics(self) -> Dict[str, Any]:
         """

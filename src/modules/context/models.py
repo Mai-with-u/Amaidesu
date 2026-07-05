@@ -6,6 +6,7 @@ ContextService 数据模型
 
 import time
 from enum import Enum
+from typing import Optional
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -25,6 +26,7 @@ class ConversationMessage(BaseModel):
     session_id: str = Field(..., description="会话ID")
     role: MessageRole = Field(..., description="消息角色")
     content: str = Field(..., description="消息内容")
+    emotion: Optional[str] = Field(default=None, description="情绪标签（ASSISTANT 消息可选填充，值为 Emotion 枚举名）")
     timestamp: float = Field(default_factory=time.time, description="时间戳")
     message_id: str = Field(default_factory=lambda: str(uuid4()), description="唯一ID")
 

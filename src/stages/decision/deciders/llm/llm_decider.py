@@ -195,6 +195,15 @@ class LLMDecider:
             raise ValueError("prompt_service 未注入，请检查 组件初始化配置")
         prompt_manager = self._prompt_service
 
+        # 获取氛围情绪（基于最近 N 轮助手的情绪历史）
+        ambient_mood = ""
+        if self._context_service:
+            try:
+                ambient_mood = await self._context_service.get_ambient_mood(session_id, window=5)
+                self.logger.debug(f"氛围情绪: {ambient_mood}")
+            except Exception as e:
+                self.logger.warning(f"获取氛围情绪失败: {e}")
+
         # 构建 prompt（使用 PromptManager 渲染结构化模板）
         prompt = prompt_manager.render_safe(
             "decision/llm_structured",
@@ -205,6 +214,7 @@ class LLMDecider:
                 "style_constraints", "口语化，使用网络流行语，避免机械式回复，适当使用emoji"
             ),
             history=history_text,
+            ambient_mood=ambient_mood,
         )
 
         try:
@@ -237,13 +247,14 @@ class LLMDecider:
                     normalized_message=normalized_message,
                 )
 
-                # 保存助手回复到上下文（使用 speech 字段）
+                # 保存助手回复到上下文（含情绪标签，用于氛围追踪）
                 if self._context_service:
                     try:
                         await self._context_service.add_message(
                             session_id=session_id,
                             role=MessageRole.ASSISTANT,
                             content=intent.speech or "",
+                            emotion=intent.emotion.name if intent.emotion else None,
                         )
                         self.logger.debug(f"已保存助手回复到上下文 (session: {session_id})")
                     except Exception as e:
