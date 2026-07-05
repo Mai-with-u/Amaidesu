@@ -19,10 +19,10 @@ def extract_pcm_from_wav(wav_data: bytes) -> bytes:
     """
     从 WAV 数据中提取 PCM 数据
 
-    简化版本，查找 "data" chunk
+    也兼容流式场景下不带 WAV header 的 raw PCM。
 
     Args:
-        wav_data: WAV 格式的字节数据
+        wav_data: WAV 格式或 raw PCM 字节数据
 
     Returns:
         PCM 数据字节
@@ -35,7 +35,9 @@ def extract_pcm_from_wav(wav_data: bytes) -> bytes:
         # Find "data" chunk
         data_pos = wav_data.find(b"data")
         if data_pos == -1:
-            return wav_data[44:]  # Skip standard header
+            # 没有 WAV header,说明是 raw PCM(streaming_mode=2/3),
+            # 直接全部返回,不跳 44 字节,否则会截断音频
+            return wav_data
 
         # Skip "data" marker and size (4 + 4 = 8 bytes)
         pcm_start = data_pos + 8

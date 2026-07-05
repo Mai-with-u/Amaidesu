@@ -195,6 +195,56 @@ class AudioDeviceManager:
             self.is_playing = False
             raise
 
+    def start_stream(self) -> None:
+        """启动流式播放,创建 OutputStream 准备接收音频块。"""
+        if not DEPENDENCIES_OK:
+            self.logger.error("sounddevice 库不可用")
+            return
+        try:
+            self._stream = sd.OutputStream(
+                samplerate=self.sample_rate,
+                channels=self.channels,
+                dtype=self.dtype,
+                device=self.output_device_index,
+            )
+            self._stream.start()
+            self.is_playing = True
+            self.logger.debug("流式播放已启动")
+        except Exception as e:
+            self.logger.error(f"启动流式播放失败: {e}")
+            self._stream = None
+
+    def write_chunk(self, chunk: np.ndarray) -> None:
+        """向流写入一个音频块,立即输出到扬声器。
+
+        Args:
+            chunk: 音频数据块 (1D 或 2D ndarray)
+        """
+        if not DEPENDENCIES_OK:
+            return
+        if self._stream is None:
+            return
+        try:
+            self._stream.write(chunk)
+        except Exception as e:
+            self.logger.error(f"写入音频流失败: {e}")
+
+    def stop_stream(self) -> None:
+        """停止并关闭流式播放。"""
+        if not DEPENDENCIES_OK:
+            return
+        if self._stream is None:
+            return
+        try:
+            self._stream.stop()
+            self._stream.close()
+        except Exception as e:
+            self.logger.warning(f"停止音频流失败: {e}")
+        finally:
+            self._stream = None
+            self.is_playing = False
+            self.logger.debug("流式播放已停止")
+
     def stop_audio(self) -> None:
         """停止音频播放"""
         if not DEPENDENCIES_OK:

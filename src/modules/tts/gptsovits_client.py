@@ -86,6 +86,35 @@ class GPTSoVITSClient:
         self._prompt_text = prompt_text
         self.logger.debug(f"设置参考音频: {audio_path}")
 
+    def set_refer_audio_remote(self, ref_audio_path: str, prompt_text: str, prompt_language: str = "zh") -> None:
+        """
+        通过 api.py 的 /change_refer 接口远程设置参考音频。
+
+        Args:
+            ref_audio_path: 参考音频路径(相对于 GPT-SoVITS 根目录)
+            prompt_text: 参考文本
+            prompt_language: 参考文本语言
+
+        Raises:
+            Exception: 如果设置失败
+        """
+        params = {
+            "refer_wav_path": ref_audio_path,
+            "prompt_text": prompt_text,
+            "prompt_language": prompt_language,
+        }
+        response = requests.get(
+            f"{self.base_url}/change_refer",
+            params=params,
+            timeout=self._timeout[0],
+        )
+        if response.status_code != 200:
+            error_msg = response.json().get("message", "Unknown error")
+            raise Exception(f"远程设置参考音频失败: {error_msg}")
+        # 也同步到本地
+        self.set_refer_audio(ref_audio_path, prompt_text)
+        self.logger.info(f"远程参考音频已设置: {ref_audio_path}")
+
     def set_gpt_weights(self, weights_path: str) -> None:
         """
         设置 GPT 权重
@@ -198,22 +227,10 @@ class GPTSoVITSClient:
 
         return {
             "text": text,
-            "text_lang": text_lang,
-            "ref_audio_path": ref_audio_path,
+            "text_language": text_lang,
+            "refer_wav_path": ref_audio_path,
             "prompt_text": prompt_text,
-            "prompt_lang": prompt_lang or "zh",
-            "top_k": top_k,
-            "top_p": top_p,
-            "temperature": temperature,
-            "text_split_method": text_split_method,
-            "batch_size": batch_size,
-            "batch_threshold": batch_threshold,
-            "speed_factor": speed_factor,
-            "streaming_mode": streaming_mode,
-            "media_type": media_type,
-            "repetition_penalty": repetition_penalty,
-            "sample_steps": sample_steps,
-            "super_sampling": super_sampling if super_sampling is not None else True,
+            "prompt_language": prompt_lang or "zh",
         }
 
     def tts(
@@ -288,7 +305,7 @@ class GPTSoVITSClient:
         )
 
         response = requests.get(
-            f"{self.base_url}/tts",
+            f"{self.base_url}/",
             params=params,
             timeout=self._timeout[1],
         )
@@ -370,7 +387,7 @@ class GPTSoVITSClient:
         )
 
         response = requests.get(
-            f"{self.base_url}/tts",
+            f"{self.base_url}/",
             params=params,
             stream=True,
             timeout=self._timeout,

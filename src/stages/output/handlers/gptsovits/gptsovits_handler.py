@@ -9,6 +9,7 @@ GPTSoVITS Handler - Output 阶段: 渲染输出实现
 """
 
 import asyncio
+import re
 import time
 from collections import deque
 from typing import TYPE_CHECKING, Any, Dict, Optional
@@ -38,6 +39,29 @@ DTYPE = np.int16
 BLOCKSIZE = 1024
 SAMPLE_SIZE = DTYPE().itemsize
 BUFFER_REQUIRED_BYTES = BLOCKSIZE * CHANNELS * SAMPLE_SIZE
+
+
+# GPT-SoVITS 中文归一化器(RE_NUMBER 用 \d 匹配 Unicode 数字,DIGITS 字典只含 ASCII)
+# 对 emoji、颜文字、泰文/阿拉伯文/全角数字等会抛 KeyError。黑名单追不齐,改用白名单。
+# 白名单:中文/英文/ASCII 数字/常用标点/空白;其余一律移除。
+_TTS_UNSAFE_CHARS = re.compile(
+    r"[^\u4e00-\u9fff"  # 中文 CJK 统一汉字
+    r"\u3000-\u303f"  # CJK 标点(。 、 〈〉等)
+    r"\uff01-\uff0f"  # 全角标点 !"#$%&'()*+,-./
+    r"\uff1a-\uff20"  # 全角标点 :;<=>?@
+    r"\uff3b-\uff40"  # 全角标点 [\]^_`
+    r"\uff5b-\uff5e"  # 全角标点 {|}~
+    r"a-zA-Z0-9\s"
+    r"!\"#$%&'()*+,\-./:;<=>?@\[\\\]^_`{|}~]"  # ASCII 标点
+)
+
+
+def _sanitize_text_for_tts(text: str) -> str:
+    """白名单清洗:只保留中英文、ASCII 数字、常用标点、空白。
+
+    用于规避 GPT-SoVITS 归一化器对 emoji/颜文字/稀有 Unicode 抛 KeyError 的服务端 bug。
+    """
+    return _TTS_UNSAFE_CHARS.sub("", text)
 
 
 @handler("gptsovits")
@@ -74,7 +98,9 @@ class GPTSoVITSHandler:
         streaming_mode: bool = Field(default=True, description="是否启用流式模式")
         media_type: str = Field(default="wav", pattern=r"^(wav|mp3|ogg)$", description="媒体类型")
         text_split_method: str = Field(
-            default="latency", pattern=r"^(latency|punctuation)$", description="文本分割方法"
+            default="cut5",
+            pattern=r"^(cut0|cut1|cut2|cut3|cut4|cut5)$",
+            description="文本分割方法(api_v2.py 格式)",
         )
         batch_size: int = Field(default=1, ge=1, le=10, description="批处理大小")
         batch_threshold: float = Field(default=0.7, ge=0.0, le=1.0, description="批处理阈值")
@@ -162,7 +188,7 @@ class GPTSoVITSHandler:
         self.tts_client = GPTSoVITSClient(self.host, self.port)
         self.tts_client.initialize()
 
-        # 设置参考音频
+        # 本地缓存参考音频(发送 TTS 请求时自动带上)
         if self.ref_audio_path and self.prompt_text:
             self.tts_client.set_refer_audio(self.ref_audio_path, self.prompt_text)
 
@@ -208,9 +234,9 @@ class GPTSoVITSHandler:
             self.event_bus.off(CoreEvents.OUTPUT_INTENT_DISPATCHED, self._handle_intent_dispatched)
             self._dispatch_subscribed = False
 
-        # 停止音频播放
+        # 停止音频流播放
         if self.audio_manager:
-            self.audio_manager.stop_audio()
+            self.audio_manager.stop_stream()
 
         # 清空缓冲区
         async with self.input_pcm_queue_lock:
@@ -235,7 +261,14 @@ class GPTSoVITSHandler:
         original_text = text.strip()
         self.logger.debug(f"准备TTS: '{original_text[:50]}...'")
 
-        final_text = original_text
+        # 文本清洗:移除 GPT-SoVITS 不支持的字符(emoji、泰语数字等),
+        # 否则会触发中文归一化器的 KeyError
+        final_text = _sanitize_text_for_tts(original_text)
+        if final_text != original_text:
+            self.logger.debug(f"文本清洗: 移除了 {len(original_text) - len(final_text)} 个不支持字符")
+        if not final_text.strip():
+            self.logger.debug("清洗后文本为空，跳过渲染")
+            return
 
         try:
             async with self.tts_lock:
@@ -266,12 +299,13 @@ class GPTSoVITSHandler:
                     media_type=self.media_type,
                 )
 
-                # 音频处理和播放
-                all_audio_chunks = []
+                # 启动流式播放(边收边播,不等全部合成完)
+                self.audio_manager.start_stream()
+
                 chunk_index = 0
                 async for chunk in self._process_audio_stream(audio_stream):
                     if chunk is not None:
-                        # 发布音频块
+                        # 发布到 AudioStreamChannel 供 VTS/Warudo 口型同步
                         if audio_channel:
                             from src.modules.streaming.audio_chunk import AudioChunk
 
@@ -284,13 +318,11 @@ class GPTSoVITSHandler:
                             )
                             await audio_channel.publish(audio_chunk)
 
-                        all_audio_chunks.append(chunk)
+                        # 写入扬声器立即播放(首音延迟 ~2-3s)
+                        self.audio_manager.write_chunk(chunk)
                         chunk_index += 1
 
-                # 播放所有音频
-                if all_audio_chunks:
-                    full_audio = np.concatenate(all_audio_chunks)
-                    await self.audio_manager.play_audio(full_audio)
+                self.audio_manager.stop_stream()
 
                 # 通知订阅者: 音频结束
                 if audio_channel:
