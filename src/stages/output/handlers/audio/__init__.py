@@ -6,6 +6,7 @@
 - EdgeTTSHandler: Edge TTS 语音输出
 - GPTSoVITSHandler: GPT-SoVITS 语音输出
 - OmniTTSHandler: Omni TTS 语音输出
+- VoiceboxHandler: Voicebox 语音输出
 
 共享工具位于 audio/utils/：
 - device_finder: 音频输出设备查找
@@ -19,15 +20,18 @@ from . import (  # noqa: F401
     edge_tts,
     gptsovits,
     omni_tts,
+    voicebox,
 )
 
 from .edge_tts import EdgeTTSHandler
 from .gptsovits import GPTSoVITSHandler
 from .omni_tts import OmniTTSHandler
+from .voicebox import VoiceboxHandler
 
 __all__ = [
     "AudioHandlerBase",
     "EdgeTTSHandler",
     "GPTSoVITSHandler",
     "OmniTTSHandler",
+    "VoiceboxHandler",
 ]

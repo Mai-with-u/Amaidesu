@@ -6,6 +6,7 @@ Rendering Handlers - 渲染输出Handler实现
 - EdgeTTSHandler: Edge TTS语音输出Handler（位于audio/edge_tts/）
 - GPTSoVITSHandler: GPT-SoVITS TTS Handler（位于audio/gptsovits/）
 - OmniTTSHandler: Omni TTS Handler（位于audio/omni_tts/）
+- VoiceboxHandler: Voicebox TTS Handler（位于audio/voicebox/）
 - VTSHandler: VTS虚拟形象Handler（位于avatar/vts/）
 - WarudoHandler: Warudo虚拟形象Handler（位于avatar/warudo/）
 - StickerHandler: 贴纸输出Handler
@@ -18,7 +19,7 @@ Rendering Handlers - 渲染输出Handler实现
 
 # 导入所有 Handler 子模块以触发 @handler 装饰器注册
 from . import (
-    audio,  # noqa: F401 (包含所有音频Handler：EdgeTTS/GPTSoVITS/OmniTTS)
+    audio,  # noqa: F401 (包含所有音频Handler：EdgeTTS/GPTSoVITS/OmniTTS/Voicebox)
     avatar,  # noqa: F401 (包含所有Avatar Handler：VTS/Warudo/VRChat)
     debug_console,  # noqa: F401
     obs_control,  # noqa: F401
@@ -33,6 +34,7 @@ from .debug_console import DebugConsoleHandler
 from .audio.edge_tts import EdgeTTSHandler
 from .audio.gptsovits import GPTSoVITSHandler
 from .audio.omni_tts import OmniTTSHandler
+from .audio.voicebox import VoiceboxHandler
 from .obs_control import ObsControlHandler
 from .remote_stream import RemoteStreamHandler
 from .sticker import StickerHandler
@@ -43,6 +45,7 @@ __all__ = [
     "EdgeTTSHandler",
     "GPTSoVITSHandler",
     "OmniTTSHandler",
+    "VoiceboxHandler",
     "VTSHandler",
     "WarudoHandler",
     "VRChatHandler",
