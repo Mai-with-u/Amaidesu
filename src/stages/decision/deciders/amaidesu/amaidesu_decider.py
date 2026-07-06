@@ -374,15 +374,29 @@ class AmaidesuDecider:
             return {}
 
     def _build_room_context(self, batch: List["NormalizedMessage"]) -> str:
-        """根据本批消息构建简短的直播间上下文描述。"""
+        """根据本批消息构建直播氛围化的直播间上下文描述。"""
+        if not batch:
+            return "你正在直播间与观众互动，通过弹幕与观众实时交流，欢迎随时发送消息。"
+
         last = batch[-1]
-        parts = []
-        if last.platform:
-            parts.append(f"平台: {last.platform}")
-        if last.room_id:
-            parts.append(f"直播间: {last.room_id}")
-        parts.append(f"本批弹幕数: {len(batch)}")
-        return "，".join(parts)
+        platform_name = last.platform or "B站"
+        room_id = last.room_id or "未指定"
+        batch_size = len(batch)
+
+        parts = [
+            f"你正在{platform_name}直播。",
+            f"直播间: {room_id}。",
+            "观众们正在通过弹幕和你互动。",
+            f"本批收到 {batch_size} 条弹幕。",
+        ]
+
+        if any(m.data_type == "super_chat" for m in batch):
+            parts.append("其中包含醒目留言（SC），值得重点回应！")
+
+        if any(m.importance >= 0.8 for m in batch):
+            parts.append("其中有观众发送了重要消息。")
+
+        return "".join(parts)
 
     def _clean_llm_json(self, raw_output: str) -> str:
         """清理 LLM 返回的 JSON 字符串（与 LLMDecider 一致的三步清理）。"""
