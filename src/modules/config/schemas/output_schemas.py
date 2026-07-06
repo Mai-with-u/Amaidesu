@@ -82,13 +82,13 @@ from src.stages.output.handlers.avatar.warudo.warudo_handler import (  # noqa: F
 from src.stages.output.handlers.debug_console.debug_console_handler import (  # noqa: F401
     DebugConsoleHandler,
 )
-from src.stages.output.handlers.edge_tts.edge_tts_handler import (  # noqa: F401
+from src.stages.output.handlers.audio.edge_tts.edge_tts_handler import (  # noqa: F401
     EdgeTTSHandler,
 )
-from src.stages.output.handlers.gptsovits.gptsovits_handler import (  # noqa: F401
+from src.stages.output.handlers.audio.gptsovits.gptsovits_handler import (  # noqa: F401
     GPTSoVITSHandler,
 )
-from src.stages.output.handlers.omni_tts.omni_tts_handler import (  # noqa: F401
+from src.stages.output.handlers.audio.omni_tts.omni_tts_handler import (  # noqa: F401
     OmniTTSHandler,
 )
 from src.stages.output.handlers.remote_stream.remote_stream_handler import (  # noqa: F401
