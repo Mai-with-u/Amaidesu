@@ -22,8 +22,15 @@ from .proto import Proto
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # B站官方 WebSocket 心跳间隔（秒）：平台要求每 30s 发一次心跳保活
-_WS_HEARTBEAT_INTERVAL_S = 30
+# 实测 B 站服务器约 10s 无活动即关闭连接，故设为 5s 留足余量
+_WS_HEARTBEAT_INTERVAL_S = 5
 _APP_HEARTBEAT_INTERVAL_S = 20
+
+# 重连配置
+_RECONNECT_BASE_DELAY_S = 2.0  # 首次重连等待秒数
+_RECONNECT_MAX_DELAY_S = 60.0  # 最大重连等待秒数（指数退避上限）
+_RECONNECT_BACKOFF_FACTOR = 2.0  # 退避倍率
+_RECONNECT_MAX_ATTEMPTS = 0  # 最大重连次数，0 = 无限
 
 
 class BiliWebSocketClient:
@@ -45,7 +52,7 @@ class BiliWebSocketClient:
         self.recv_task = None
 
     async def run(self, message_handler: Callable, queue: asyncio.Queue = None):
-        """运行WebSocket客户端
+        """运行WebSocket客户端（带自动重连）
 
         Args:
             message_handler: 消息处理回调函数
@@ -55,37 +62,53 @@ class BiliWebSocketClient:
             return
 
         self.is_started = True
-        try:
-            # 建立连接
-            websocket = await self._connect()
-            if not websocket:
-                return
+        attempt = 0
 
-            self.websocket = websocket
-
-            # 启动后台任务
-            tasks = [
-                asyncio.create_task(self._recv_loop(message_handler, queue), name="WebSocket接收循环"),
-                asyncio.create_task(self._heartbeat_loop(), name="WebSocket心跳"),
-                asyncio.create_task(self._app_heartbeat_loop(), name="应用心跳"),
-            ]
-
-            # 等待任务完成或异常
+        while self.is_started:
+            attempt += 1
             try:
-                await asyncio.gather(*tasks)
+                # 建立连接
+                websocket = await self._connect()
+                if not websocket:
+                    self.logger.warning(f"连接失败（第 {attempt} 次），准备重连...")
+                    await self._reconnect_delay(attempt)
+                    continue
+
+                self.websocket = websocket
+                self.logger.info(f"WebSocket 已连接（第 {attempt} 次尝试）")
+                attempt = 0  # 连接成功后重置计数
+
+                # 启动后台任务
+                tasks = [
+                    asyncio.create_task(self._recv_loop(message_handler, queue), name="WebSocket接收循环"),
+                    asyncio.create_task(self._heartbeat_loop(), name="WebSocket心跳"),
+                    asyncio.create_task(self._app_heartbeat_loop(), name="应用心跳"),
+                ]
+
+                # 等待任务完成或异常
+                try:
+                    await asyncio.gather(*tasks)
+                except Exception as e:
+                    self.logger.warning(f"WebSocket任务组异常: {e}")
+                finally:
+                    # 取消所有任务
+                    for task in tasks:
+                        if not task.done():
+                            task.cancel()
+                            with contextlib.suppress(asyncio.CancelledError):
+                                await task
+
             except Exception as e:
-                self.logger.error(f"WebSocket任务组异常: {e}")
-                # 取消所有任务
-                for task in tasks:
-                    if not task.done():
-                        task.cancel()
-                        with contextlib.suppress(asyncio.CancelledError):
-                            await task
-        except Exception as e:
-            self.logger.error(f"WebSocket客户端运行异常: {e}", exc_info=True)
-        finally:
-            self.is_started = False
+                self.logger.warning(f"WebSocket客户端运行异常: {e}")
+
+            await self._end_app()
             await self._cleanup()
+
+            if not self.is_started:
+                break
+
+            self.logger.info("WebSocket 连接断开，准备重连...")
+            await self._reconnect_delay(attempt if attempt > 0 else 1)
 
     async def close(self):
         """关闭WebSocket连接"""
@@ -252,7 +275,7 @@ class BiliWebSocketClient:
                 return None
 
             self.logger.info(f"正在连接WebSocket: {wss_link}")
-            websocket = await websockets.connect(wss_link, ping_interval=30, ping_timeout=10)
+            websocket = await websockets.connect(wss_link, ping_interval=None)
 
             # 进行认证
             if not await self._auth(websocket, auth_body):
@@ -336,3 +359,18 @@ class BiliWebSocketClient:
                 self.logger.warning(f"清理WebSocket时出错: {e}")
             finally:
                 self.websocket = None
+
+    async def _reconnect_delay(self, attempt: int):
+        """重连等待（指数退避），连接断开后根据尝试次数递增等待时间。
+
+        Args:
+            attempt: 当前重连尝试次数（1-based）
+        """
+        if _RECONNECT_MAX_ATTEMPTS > 0 and attempt > _RECONNECT_MAX_ATTEMPTS:
+            self.logger.error(f"已达最大重连次数 ({_RECONNECT_MAX_ATTEMPTS})，停止重连")
+            self.is_started = False
+            return
+
+        delay = min(_RECONNECT_BASE_DELAY_S * (_RECONNECT_BACKOFF_FACTOR ** (attempt - 1)), _RECONNECT_MAX_DELAY_S)
+        self.logger.info(f"等待 {delay:.1f}s 后重连（第 {attempt} 次）")
+        await asyncio.sleep(delay)
