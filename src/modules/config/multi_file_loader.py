@@ -442,27 +442,27 @@ def generate_default_configs(config_dir: Path) -> None:
 
     # core.toml
     core_path = config_dir / "core.toml"
-    core_path.write_text(_generate_core_toml(), encoding="utf-8")
+    core_path.write_text(_generate_core_toml(), encoding="utf-8-sig")
     logger.info("已生成 core.toml")
 
     # model.toml
     model_path = config_dir / "model.toml"
-    model_path.write_text(_generate_model_toml(), encoding="utf-8")
+    model_path.write_text(_generate_model_toml(), encoding="utf-8-sig")
     logger.info("已生成 model.toml")
 
     # input.toml
     input_path = config_dir / "input.toml"
-    input_path.write_text(_generate_phase_toml("input"), encoding="utf-8")
+    input_path.write_text(_generate_phase_toml("input"), encoding="utf-8-sig")
     logger.info("已生成 input.toml")
 
     # decision.toml
     decision_path = config_dir / "decision.toml"
-    decision_path.write_text(_generate_phase_toml("decision"), encoding="utf-8")
+    decision_path.write_text(_generate_phase_toml("decision"), encoding="utf-8-sig")
     logger.info("已生成 decision.toml")
 
     # output.toml
     output_path = config_dir / "output.toml"
-    output_path.write_text(_generate_phase_toml("output"), encoding="utf-8")
+    output_path.write_text(_generate_phase_toml("output"), encoding="utf-8-sig")
     logger.info("已生成 output.toml")
 
 
@@ -479,7 +479,7 @@ def _load_and_validate_schema(
     Returns:
         (model_dump 字典, 漂移报告)
     """
-    with open(file_path, "r", encoding="utf-8") as f:
+    with open(file_path, "r", encoding="utf-8-sig") as f:
         doc = tomlkit.load(f)
 
     raw_data = doc.unwrap()
@@ -530,19 +530,19 @@ def load_config_dir(
     # input.toml → raw dict（组件配置在各 Manager 中单独验证）
     input_path = config_dir / "input.toml"
     if input_path.exists():
-        with open(input_path, "r", encoding="utf-8") as f:
+        with open(input_path, "r", encoding="utf-8-sig") as f:
             result["input"] = tomlkit.load(f).unwrap()
 
     # decision.toml → raw dict
     decision_path = config_dir / "decision.toml"
     if decision_path.exists():
-        with open(decision_path, "r", encoding="utf-8") as f:
+        with open(decision_path, "r", encoding="utf-8-sig") as f:
             result["decision"] = tomlkit.load(f).unwrap()
 
     # output.toml → raw dict
     output_path = config_dir / "output.toml"
     if output_path.exists():
-        with open(output_path, "r", encoding="utf-8") as f:
+        with open(output_path, "r", encoding="utf-8-sig") as f:
             result["output"] = tomlkit.load(f).unwrap()
 
     return result, combined
@@ -572,7 +572,7 @@ def get_config_version(config_dir: Path) -> str | None:
     core_path = config_dir / "core.toml"
     if not core_path.exists():
         return None
-    with open(core_path, "r", encoding="utf-8") as f:
+    with open(core_path, "r", encoding="utf-8-sig") as f:
         doc = tomlkit.load(f)
     meta = doc.get("meta", {})
     version = meta.get("version")
