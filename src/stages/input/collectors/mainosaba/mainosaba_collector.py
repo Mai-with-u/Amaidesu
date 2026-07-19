@@ -21,6 +21,7 @@ from pydantic import Field, field_validator
 from src.stages.input.registry import collector
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
+from src.modules.llm.manager import LLMManager
 from src.modules.logging import get_logger
 from src.modules.prompts.manager import PromptManager
 from src.modules.types.base.normalized_message import NormalizedMessage
@@ -62,6 +63,8 @@ class MainosabaCollector:
             default="mouse_click", description="游戏控制方式"
         )
         click_position: List[int] = Field(default_factory=lambda: [1920 // 2, 1080 // 2], description="点击位置 [x, y]")
+        # post_output_delay_s 已移除:OUTPUT_INTENT_FINISHED 现在由 OutputHandlerManager
+        # 在所有 handler 真实完成后聚合发出,不再需要拍脑袋的固定延迟补偿。
 
         @field_validator("game_region")
         @classmethod
@@ -86,7 +89,7 @@ class MainosabaCollector:
         self,
         config: Dict[str, Any],
         event_bus: EventBus,
-        vlm_client: Any = None,
+        llm_service: Optional[LLMManager] = None,
         prompt_manager: Optional[PromptManager] = None,
     ):
         """
@@ -95,12 +98,12 @@ class MainosabaCollector:
         Args:
             config: 配置字典
             event_bus: 事件总线实例
-            vlm_client: VLM客户端（用于图像识别）
+            llm_service: LLM管理器（用于 VLM 图像识别）
             prompt_manager: 提示词管理器
         """
         self.config = config
         self.event_bus = event_bus
-        self.vlm_client = vlm_client
+        self.llm_service = llm_service
         self.prompt_manager = prompt_manager
         self.logger = get_logger(self.__class__.__name__)
 
@@ -115,6 +118,7 @@ class MainosabaCollector:
         self.waiting_for_response = False
         self.last_message_time = 0
         self.is_started = False
+        self._output_finished = asyncio.Event()
 
     def stream(self) -> AsyncIterator[NormalizedMessage]:
         if not self.is_started:
@@ -148,10 +152,17 @@ class MainosabaCollector:
             while self.is_started:
                 try:
                     if self.waiting_for_response:
-                        if time.time() - self.last_message_time > self.typed_config.response_timeout:
-                            self.logger.debug("等待回应超时，继续游戏")
-                            await self.advance_game()
-                            self.waiting_for_response = False
+                        self._output_finished.clear()
+                        try:
+                            await asyncio.wait_for(
+                                self._output_finished.wait(),
+                                timeout=self.typed_config.response_timeout,
+                            )
+                        except asyncio.TimeoutError:
+                            self.logger.debug("等待输出完成超时，直接推进游戏")
+
+                        await self.advance_game()
+                        self.waiting_for_response = False
                     else:
                         self.logger.debug("开始截屏识别...")
                         game_text = await self.capture_and_recognize()
@@ -189,6 +200,10 @@ class MainosabaCollector:
         finally:
             self.is_started = False
 
+    def notify_output_finished(self) -> None:
+        """通知输出处理已完成（由外部调用，触发游戏推进）"""
+        self._output_finished.set()
+
     async def capture_and_recognize(self) -> Optional[str]:
         """截取屏幕并识别游戏文本"""
         try:
@@ -216,24 +231,28 @@ class MainosabaCollector:
 
     async def recognize_game_text(self, image_base64: str) -> Optional[str]:
         """识别游戏截图中的文本（使用 VLM）"""
-        if not self.vlm_client:
-            self.logger.warning("VLM 客户端未初始化，无法识别文本")
+        if not self.llm_service:
+            self.logger.warning("LLM 服务未初始化，无法识别文本")
             return None
 
         try:
             if not self.prompt_manager:
-                raise ValueError("prompt_service 未注入，请检查 Collector 初始化配置")
+                raise ValueError("prompt_manager 未注入，请检查 Collector 初始化配置")
             prompt = self.prompt_manager.get_raw("input/mainosaba_ocr")
 
             image_data_url = f"data:image/png;base64,{image_base64}"
 
-            result = await self.vlm_client.vision_completion(prompt=prompt, images=image_data_url, max_tokens=500)
+            result = await self.llm_service.chat_vision(
+                prompt=prompt,
+                images=[image_data_url],
+                client_type="vlm",
+            )
 
-            if not result["success"]:
-                self.logger.error(f"VLM识别失败: {result.get('error')}")
+            if not result.success:
+                self.logger.error(f"VLM识别失败: {result.error}")
                 return None
 
-            content = result["content"].strip()
+            content = (result.content or "").strip()
 
             if content in ["无对话文本", "没有对话文本", "No dialogue text", ""]:
                 return None
