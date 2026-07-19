@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import Field
 
+from src.stages.output.handlers.completion_mixin import CompletionEmitterMixin
 from src.stages.output.registry import handler
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
@@ -210,7 +211,7 @@ class OutlineLabel:
 
 
 @handler("subtitle")
-class SubtitleHandler:
+class SubtitleHandler(CompletionEmitterMixin):
     """
     字幕输出Handler
 
@@ -352,15 +353,24 @@ class SubtitleHandler:
         """
         text = intent.speech if intent.speech else ""
         if not text:
+            await self._emit_completed(intent, success=True)
             return
 
-        self.logger.debug(f"收到字幕渲染请求: {text[:30]}...")
-
-        # 将文本放入队列
+        success = True
         try:
-            self.text_queue.put(text)
+            self.logger.debug(f"收到字幕渲染请求: {text[:30]}...")
+
+            # 将文本放入队列
+            try:
+                self.text_queue.put(text)
+            except Exception as e:
+                self.logger.error(f"放入字幕队列时出错: {e}", exc_info=True)
+                success = False
         except Exception as e:
-            self.logger.error(f"放入字幕队列时出错: {e}", exc_info=True)
+            success = False
+            self.logger.error(f"SubtitleHandler 渲染失败: {e}", exc_info=True)
+        finally:
+            await self._emit_completed(intent, success=success)
 
     async def _handle_intent_dispatched(self, event_name: str, payload: IntentPayload, source: str):
         """

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Dict
 
 from pydantic import Field
 
+from src.stages.output.handlers.completion_mixin import CompletionEmitterMixin
 from src.stages.output.registry import handler
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
 
 
 @handler("sticker")
-class StickerHandler:
+class StickerHandler(CompletionEmitterMixin):
     """
     贴纸输出Handler
 
@@ -80,34 +81,41 @@ class StickerHandler:
             self._dispatch_subscribed = True
 
     async def handle(self, intent: "Intent"):
-        if not intent.action or "sticker" not in intent.action.lower():
-            self.logger.debug("Intent 中没有 sticker 动作，跳过渲染")
-            return
+        success = True
+        try:
+            if not intent.action or "sticker" not in intent.action.name.lower():
+                self.logger.debug("Intent 中没有 sticker 动作，跳过渲染")
+                return
 
-        current_time = time.monotonic()
-        if current_time - self.last_trigger_time < self.cool_down_seconds:
-            remaining = self.cool_down_seconds - (current_time - self.last_trigger_time)
-            self.logger.debug(f"表情贴纸冷却中，跳过渲染。剩余 {remaining:.1f} 秒")
-            return
+            current_time = time.monotonic()
+            if current_time - self.last_trigger_time < self.cool_down_seconds:
+                remaining = self.cool_down_seconds - (current_time - self.last_trigger_time)
+                self.logger.debug(f"表情贴纸冷却中，跳过渲染。剩余 {remaining:.1f} 秒")
+                return
 
-        self.last_trigger_time = current_time
-        sticker_id = f"sticker_{uuid.uuid4().hex[:8]}"
+            self.last_trigger_time = current_time
+            sticker_id = f"sticker_{uuid.uuid4().hex[:8]}"
 
-        await self.event_bus.emit(
-            CoreEvents.OUTPUT_STICKER_COMMAND,
-            StickerCommandPayload(
-                sticker_id=sticker_id,
-                target_handler=self.target_handler,
-                timestamp_ms=now_ms(),
-                size=self.sticker_size,
-                rotation=self.sticker_rotation,
-                position_x=self.sticker_position_x,
-                position_y=self.sticker_position_y,
-                display_duration_seconds=self.display_duration_seconds,
-            ),
-            source="StickerHandler",
-        )
-        self.logger.debug(f"已发布贴纸事件: sticker_id={sticker_id}")
+            await self.event_bus.emit(
+                CoreEvents.OUTPUT_STICKER_COMMAND,
+                StickerCommandPayload(
+                    sticker_id=sticker_id,
+                    target_handler=self.target_handler,
+                    timestamp_ms=now_ms(),
+                    size=self.sticker_size,
+                    rotation=self.sticker_rotation,
+                    position_x=self.sticker_position_x,
+                    position_y=self.sticker_position_y,
+                    display_duration_seconds=self.display_duration_seconds,
+                ),
+                source="StickerHandler",
+            )
+            self.logger.debug(f"已发布贴纸事件: sticker_id={sticker_id}")
+        except Exception as e:
+            success = False
+            self.logger.error(f"StickerHandler 渲染失败: {e}", exc_info=True)
+        finally:
+            await self._emit_completed(intent, success=success)
 
     async def _handle_intent_dispatched(self, event_name: str, payload: IntentPayload, source: str):
         intent = payload.to_intent()

@@ -2,12 +2,16 @@
 Debug Console Handler
 
 调试用控制台输出 Handler，用于打印 Intent 内容到控制台。
+
+per-handler 完成事件(OUTPUT_HANDLER_COMPLETED)由本 handler 在 handle() 的
+finally 中显式发出(独立 handler 模式,因为不走 AudioHandlerBase/AvatarHandlerBase)。
 """
 
 from typing import TYPE_CHECKING, Any, Dict
 
 from pydantic import Field
 
+from src.stages.output.handlers.completion_mixin import CompletionEmitterMixin
 from src.stages.output.registry import handler
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
@@ -20,7 +24,7 @@ if TYPE_CHECKING:
 
 
 @handler("debug_console")
-class DebugConsoleHandler:
+class DebugConsoleHandler(CompletionEmitterMixin):
     """
     调试用控制台输出Handler
 
@@ -81,50 +85,58 @@ class DebugConsoleHandler:
         Args:
             intent: 决策意图
         """
-        # 打印分隔线
-        print(f"\n{'=' * 60}")
-        print(f"{self.prefix} Debug Console Output - Intent Received")
-        print(f"{'=' * 60}")
+        success = True
+        try:
+            # 打印分隔线
+            print(f"\n{'=' * 60}")
+            print(f"{self.prefix} Debug Console Output - Intent Received")
+            print(f"{'=' * 60}")
 
-        # 打印基本信息
-        print(f"ID:       {intent.id}")
-        print(f"Timestamp:{intent.timestamp}")
+            # 打印基本信息
+            print(f"ID:       {intent.id}")
+            print(f"Timestamp:{intent.timestamp}")
 
-        # 打印原始文本和回复文本
-        print("\n[Text]")
-        print(f"  Original:  {intent.original_text}")
-        print(f"  Response:  {intent.response_text}")
+            # 打印原始文本和回复文本
+            print("\n[Text]")
+            print(f"  Original:  {intent.original_text}")
+            print(f"  Response:  {intent.response_text}")
 
-        # 打印情感
-        print("\n[Emotion]")
-        print(f"  Type: {intent.emotion}")
+            # 打印情感
+            print("\n[Emotion]")
+            print(f"  Type: {intent.emotion}")
 
-        # 打印源上下文
-        if self.print_source_context and intent.source_context:
-            sc = intent.source_context
-            print("\n[Source Context]")
-            print(f"  Source:       {sc.source}")
-            print(f"  Data Type:    {sc.data_type}")
-            print(f"  User ID:      {sc.user_id or 'N/A'}")
-            print(f"  User Nickname:{sc.user_nickname or 'N/A'}")
-            print(f"  Importance:   {sc.importance}")
+            # 打印源上下文
+            if self.print_source_context and intent.source_context:
+                sc = intent.source_context
+                print("\n[Source Context]")
+                print(f"  Source:       {sc.source}")
+                print(f"  Data Type:    {sc.data_type}")
+                print(f"  User ID:      {sc.user_id or 'N/A'}")
+                print(f"  User Nickname:{sc.user_nickname or 'N/A'}")
+                print(f"  Importance:   {sc.importance}")
 
-        # 打印动作列表
-        if self.print_actions and intent.actions:
-            print(f"\n[Actions] ({len(intent.actions)} total)")
-            for i, action in enumerate(intent.actions, 1):
-                print(f"  {i}. Type: {action.type}")
-                print(f"     Priority: {action.priority}")
-                if action.params:
-                    print(f"     Params: {action.params}")
+            # 打印动作列表
+            if self.print_actions and intent.actions:
+                print(f"\n[Actions] ({len(intent.actions)} total)")
+                for i, action in enumerate(intent.actions, 1):
+                    print(f"  {i}. Type: {action.type}")
+                    print(f"     Priority: {action.priority}")
+                    if action.params:
+                        print(f"     Params: {action.params}")
 
-        # 打印元数据
-        if self.print_metadata and intent.metadata:
-            print("\n[Metadata]")
-            for key, value in intent.metadata.items():
-                print(f"  {key}: {value}")
+            # 打印元数据
+            if self.print_metadata and intent.metadata:
+                print("\n[Metadata]")
+                for key, value in intent.metadata.items():
+                    print(f"  {key}: {value}")
 
-        print(f"{'=' * 60}\n")
+            print(f"{'=' * 60}\n")
+        except Exception as e:
+            success = False
+            self.logger.error(f"debug 打印失败: {e}", exc_info=True)
+            raise
+        finally:
+            await self._emit_completed(intent, success=success)
 
     async def _handle_intent_dispatched(self, event_name: str, payload: IntentPayload, source: str):
         """
