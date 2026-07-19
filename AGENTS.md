@@ -54,7 +54,7 @@
 |---------|------|----------|
 | ❌ OutputHandler 订阅 Input 事件 | 绕过 Decision 阶段，破坏分层 | [数据流规则](docs/architecture/data-flow.md) |
 | ❌ Decider 订阅 Output 事件（运行时结果） | 创建循环依赖；但只读能力元数据可经 Protocol 拉取 | 同上 |
-| ❌ InputCollector 订阅 Decision/Output 事件 | Input 应只发布，不订阅下游 | 同上 |
+| ❌ InputCollector 订阅 Decision/Output 的数据事件 | Input 应只发布数据，不订阅下游结果数据；元控制信号（如 `output.intent.finished`）除外 | 同上 |
 
 ## AudioStreamChannel 音频流系统
 

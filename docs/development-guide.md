@@ -235,7 +235,7 @@ class IntentPayload(BaseModel):
 |---------|------|
 | ❌ OutputHandler 订阅 Input 事件 | 绕过 Decision 阶段，破坏分层 |
 | ❌ Decider 订阅 Output 事件 | 创建循环依赖 |
-| ❌ InputCollector 订阅 Decision/Output 事件 | Input 应只发布，不订阅下游 |
+| ❌ InputCollector 订阅 Decision/Output 的数据事件 | Input 应只发布数据，不订阅下游结果数据；但元控制信号（如 `output.intent.finished`）除外 |
 
 ## 7. 测试规范
 
