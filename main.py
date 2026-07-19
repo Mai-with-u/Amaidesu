@@ -17,6 +17,8 @@ from src.modules.events import (
     list_registered_events,
     register_core_events,
 )
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.decision import IntentPayload
 from src.modules.logging import get_logger
 from src.modules.config.service import ConfigService
 from src.modules.config.core_schemas import EventHistoryConfig
@@ -343,6 +345,9 @@ async def create_app_components(
             event_history_service = None
             event_recorder = None
 
+    # 初始化 prompt_manager（供 collector、decision 和 output 阶段使用）
+    prompt_manager = get_prompt_manager()
+
     # 输入Collector管理器 (Input 阶段)
     input_manager: Optional[InputCollectorManager] = None
     if input_config:
@@ -351,6 +356,10 @@ async def create_app_components(
             input_manager = InputCollectorManager(
                 event_bus=event_bus,
                 pipeline_manager=input_pipeline_manager,
+                services_by_type={
+                    LLMManager: llm_service,
+                    PromptManager: prompt_manager,
+                },
             )
             if input_pipeline_manager:
                 logger.info("已注入 InputPipelineManager 到 InputCollectorManager")
@@ -363,12 +372,6 @@ async def create_app_components(
             input_manager = None
     else:
         logger.info("未检测到输入配置，输入Collector功能将被禁用")
-
-    # InputCollectorManager 直接订阅事件，无需协调器
-    # input_coordinator 已被移除
-
-    # 初始化 prompt_manager（供 decision 和 output 阶段使用）
-    prompt_manager = get_prompt_manager()
 
     # 输出Handler管理器 (Output 阶段)
     # 先于 Decision 阶段创建并启动，以便作为 CapabilitiesProvider 注入 DeciderManager，
@@ -411,6 +414,17 @@ async def create_app_components(
             logger.error(f"设置输出Handler管理器失败: {e}", exc_info=True)
             logger.warning("输出Handler管理器功能不可用，继续启动其他服务")
             output_manager = None
+
+    # 桥接：Output 处理完成后通知 MainosabaCollector 推进游戏
+    if input_manager and output_manager:
+        mainosaba_col = input_manager.get_collector_by_source("Mainosaba")
+        if mainosaba_col and hasattr(mainosaba_col, "notify_output_finished"):
+            event_bus.on(
+                CoreEvents.OUTPUT_INTENT_FINISHED,
+                lambda _name, _payload, _source: mainosaba_col.notify_output_finished(),
+                model_class=IntentPayload,
+            )
+            logger.info("已桥接 Output 完成事件 → MainosabaCollector 游戏推进")
 
     # 决策阶段 (Decision 阶段)
     decision_manager: Optional[DeciderManager] = None

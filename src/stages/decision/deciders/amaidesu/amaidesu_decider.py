@@ -240,7 +240,7 @@ class AmaidesuDecider:
 
     async def _make_decision(self, batch: List["NormalizedMessage"], *, trigger_reason: str) -> None:
         """对一批弹幕做单次结构化 LLM 决策并发布 Intent。"""
-        session_id = batch[-1].source
+        session_id = next((m.session_id for m in batch if m.session_id), "live")
         danmaku_batch = MessageBuffer.render_batch_text(batch)
 
         history_text = await self._get_history_text(session_id)

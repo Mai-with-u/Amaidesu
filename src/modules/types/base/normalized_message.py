@@ -55,6 +55,7 @@ class NormalizedMessage(BaseModel):
     user_nickname: Optional[str] = Field(default=None, description="用户昵称")
     platform: Optional[str] = Field(default=None, description="平台来源")
     room_id: Optional[str] = Field(default=None, description="直播间 ID")
+    session_id: Optional[str] = Field(default=None, description="会话 ID，不填则所有采集器共享同一默认会话")
     message_id: str = Field(default_factory=lambda: uuid4().hex, description="消息唯一 ID,自动生成 UUID hex")
 
     @property
@@ -98,6 +99,7 @@ class NormalizedMessage(BaseModel):
             user_nickname=raw_data.get("user_nickname"),
             platform=raw_data.get("platform"),
             room_id=raw_data.get("room_id"),
+            session_id=raw_data.get("session_id"),
         )
 
     def to_dict(self) -> dict:
@@ -112,6 +114,7 @@ class NormalizedMessage(BaseModel):
             "user_nickname": self.user_nickname,
             "platform": self.platform,
             "room_id": self.room_id,
+            "session_id": self.session_id,
         }
         if self.raw is not None:
             result["raw_data"] = self.raw.model_dump()

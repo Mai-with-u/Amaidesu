@@ -9,6 +9,8 @@ InputCollectorManager - 输入Collector管理器
 import asyncio
 from typing import Any, Dict, Optional
 
+from typing import Type
+
 from src.modules.di import instantiate_with_di
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -24,9 +26,11 @@ class InputCollectorManager:
         self,
         event_bus: EventBus,
         pipeline_manager: Optional[PipelineManager[NormalizedMessage]] = None,
+        services_by_type: Optional[Dict[Type, Any]] = None,
     ):
         self.event_bus = event_bus
         self.pipeline_manager = pipeline_manager
+        self._services_by_type = services_by_type or {}
         self.logger = get_logger("InputCollectorManager")
 
         self._collectors: list = []
@@ -259,11 +263,11 @@ class InputCollectorManager:
 
                 collector_cls = _COLLECTORS[collector_type]
 
-                # 直接构造 Collector
+                services = {EventBus: self.event_bus, **self._services_by_type}
                 collector = instantiate_with_di(
                     collector_cls,
                     config=collector_config,
-                    services_by_type={EventBus: self.event_bus},
+                    services_by_type=services,
                 )
                 created_collectors.append(collector)
                 self.logger.info(f"成功创建InputCollector: {input_name} (type={collector_type})")

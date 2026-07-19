@@ -87,9 +87,16 @@ class MessageBuffer:
             "gift": "[礼物] ",
             "enter": "[入场] ",
         }
+        source_prefix = {
+            "mainosaba_game": "[游戏] ",
+        }
         lines: List[str] = []
         for message in messages:
-            nickname = message.user_nickname or message.user_id or "观众"
-            prefix = type_prefix.get(message.data_type, "")
-            lines.append(f"{prefix}{nickname}: {message.text}")
+            source_pre = source_prefix.get(message.source, "")
+            if source_pre:
+                lines.append(f"{source_pre}{message.text}")
+            else:
+                nickname = message.user_nickname or message.user_id or "观众"
+                pre = type_prefix.get(message.data_type, "")
+                lines.append(f"{pre}{nickname}: {message.text}")
         return "\n".join(lines)
