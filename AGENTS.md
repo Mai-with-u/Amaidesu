@@ -424,14 +424,33 @@ await event_bus.subscribe(CoreEvents.INPUT_MESSAGE_RECEIVED, self.handle_message
 
 ### 核心事件
 
-事件按阶段流转使用统一的动词链：`received → generated → dispatched`。
+事件按阶段流转使用统一的动词链：`received → generated → dispatched → completed → finished`。
 
 | 事件名 | 发布者 | 订阅者 | 数据类型 |
 |--------|--------|--------|---------|
 | `input.message.received` | Input 阶段 | Decision 阶段 | `MessageReadyPayload` (NormalizedMessage) |
 | `decision.intent.generated` | Decision 阶段 | Output 阶段 | `IntentPayload` (Intent) |
 | `output.intent.dispatched` | OutputHandlerManager | OutputHandlers | `IntentPayload` (Intent) |
+| `output.handler.completed` | 各 OutputHandler（在 `handle()` 末尾的 finally 里发） | OutputHandlerManager（聚合） | `OutputHandlerCompletedPayload`（含 `handler_name`、`intent_id`） |
+| `output.intent.finished` | OutputHandlerManager（聚合后发） | 任何需要"等所有输出完成"的组件（如 MainosabaCollector） | `IntentPayload` (Intent) |
 | `output.obs.command` | Dashboard API / 外部组件 | ObsControlHandler 等 | `OBSCommandPayload`（按 `action` 区分） |
+
+#### 两层事件聚合模式（Output 完成时序）
+
+`output.intent.dispatched` 默认是 fire-and-forget，emit 立刻返回而 handler 在后台跑。所以需要一套聚合机制保证"所有 handler 真的干完了"信号能被准确发出。
+
+- **第一层**：每个 OutputHandler 在自己的 `handle()` 末尾（finally 里以保证异常也发）emit `output.handler.completed`，声明"我干完了"。
+- **第二层**：`OutputHandlerManager` 订阅第一层，按 `intent_id` 关联，等所有 active handler 都报告完成后，emit `output.intent.finished`。
+- **兜底**：watchdog 超时（`completion_timeout_ms` 默认 30000），防止某个 handler 漏发导致 FINISHED 永远不发。
+
+**新增 OutputHandler 时必须遵守的契约**：
+
+1. 在 `handle(intent)` 末尾（用 `try/finally` 包裹）emit `OUTPUT_HANDLER_COMPLETED`
+2. `handler_name` 用 `self.__class__.__name__`（与 Manager 端 `type(h).__name__` 一致）
+3. `intent_id` 从 `intent.metadata.intent_id` 取
+4. 异常路径（`success=False`）也要发，否则 Manager 只能靠超时兜底
+
+基类 `AudioHandlerBase` 和 `AvatarHandlerBase` 已自动 emit，子类无需重复。独立 handler（`StickerHandler` / `SubtitleHandler` / `DebugConsoleHandler` / `ObsControlHandler` / `GPTSoVITSHandler`）需自行实现 `_emit_completed` 并在 `handle()` finally 里调用。
 
 ### 事件注册
 

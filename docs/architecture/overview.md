@@ -251,6 +251,8 @@ sequenceDiagram
 | `input.message.received` | Input 阶段 | Decision 阶段 | `MessageReadyPayload`（NormalizedMessage 字典） |
 | `decision.intent.generated` | Decision 阶段 | OutputHandlerManager | `IntentPayload`（Intent 字典） |
 | `output.intent.dispatched` | OutputHandlerManager | OutputHandlers | `OutputIntentDispatchedPayload` |
+| `output.handler.completed` | 各 OutputHandler（`handle()` 末尾 finally 里发） | OutputHandlerManager（聚合） | `OutputHandlerCompletedPayload`（含 `handler_name`、`intent_id`） |
+| `output.intent.finished` | OutputHandlerManager（聚合后发） | 任何需要"等所有输出完成"的组件（如 MainosabaCollector） | `IntentPayload` |
 
 ### 管道（Pipeline）
 

@@ -281,8 +281,18 @@ classDiagram
 | Payload 类 | 事件名 | 用途 |
 |-----------|--------|------|
 | `OutputIntentDispatchedPayload` | `output.intent.dispatched` | 过滤后意图派发（OutputHandlerManager → OutputHandler） |
+| `OutputHandlerCompletedPayload` | `output.handler.completed` | 单个 handler 完成通知（两层事件模式第一层，per-handler 完成由 OutputHandlerManager 聚合后再发 FINISHED）。含 `handler_name`、`intent_id`、`success` |
+| `IntentPayload`（复用） | `output.intent.finished` | 聚合后"所有 handler 干完"通知（两层事件模式第二层，由 OutputHandlerManager 等齐所有 active handler 的 COMPLETED 后发出） |
 | `OBSCommandPayload` | `output.obs.command` | OBS 统一入口（由 payload.command 区分动作） |
 | `StickerCommandPayload` | `output.sticker.command` | 贴图命令 |
+
+> **两层事件聚合模式（Output 完成时序）**：`output.intent.dispatched` 默认 fire-and-forget，emit 立即返回而 handler 在后台 task 跑。要准确感知"所有 handler 都干完了"，需要两层：
+> - **第一层**：每个 OutputHandler 在 `handle()` 末尾（finally 里以保证异常也发）emit `output.handler.completed`
+> - **第二层**：`OutputHandlerManager` 订阅第一层，按 `intent_id` 关联，等所有 active handler 报告完成后再 emit `output.intent.finished`
+> - **兜底**：watchdog 超时（`completion_timeout_ms` 默认 30000）防止 handler 漏发导致 FINISHED 永远不发
+>
+> 任何关心"等输出全部干完"的下游组件（如 MainosabaCollector 推进游戏）应订阅 `output.intent.finished`，而不是 `output.intent.dispatched`。
+> 新增 OutputHandler 时必须遵守契约：在 `handle()` 的 `try/finally` 里 emit COMPLETED，`handler_name` 用 `self.__class__.__name__`，`intent_id` 从 `intent.metadata.intent_id` 取，异常路径也要发。基类 `AudioHandlerBase` / `AvatarHandlerBase` 已自动 emit。
 
 > **架构演进**：早期版本中各细粒度事件（`obs.send_text` / `obs.switch_scene` /
 > `obs.set_source_visibility` / `render.completed` / `render.failed` /
