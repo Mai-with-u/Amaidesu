@@ -11,14 +11,19 @@ OutputHandlerManager - Output 阶段: 输出Handler管理器
 - 生命周期管理（启动、停止、清理）
 - 从配置加载Handler
 - Pipeline 集成（OutputPipeline）
+- **两层事件聚合**：订阅 per-handler 完成事件 (OUTPUT_HANDLER_COMPLETED)，
+  当同一 intent 的所有 active handler 都报告完成时再聚合发 OUTPUT_INTENT_FINISHED
 
 数据流（3 阶段架构）:
-    Intent (Decision) → OutputHandlerManager → OutputPipeline 过滤 → OUTPUT_INTENT_DISPATCHED 事件
-                     → Output Handlers (TTS/Subtitle/Avatar/Sticker 等)
+    Intent (Decision) → OutputHandlerManager → OutputPipeline 过滤
+                     → OUTPUT_INTENT_DISPATCHED 事件 (广播给所有 active handler)
+                     → 每个 handler 处理完 emit OUTPUT_HANDLER_COMPLETED (事件流 1)
+                     → Manager 聚合 → OUTPUT_INTENT_FINISHED (事件流 2)
 
 注意:
 - OutputHandlerManager 负责过滤 Intent 并分发
 - 所有 OutputHandler 订阅 OUTPUT_INTENT_DISPATCHED 事件
+- 所有 OutputHandler 必须在 handle() 末尾 emit OUTPUT_HANDLER_COMPLETED (推荐放 finally)
 """
 
 import asyncio
@@ -30,6 +35,7 @@ from src.modules.di import instantiate_with_di
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.decision import IntentPayload
+from src.modules.events.payloads.output import OutputHandlerCompletedPayload
 from src.modules.llm.manager import LLMManager
 from src.modules.logging import get_logger
 from src.modules.pipeline import PipelineManager
@@ -63,6 +69,9 @@ class OutputHandlerManager:
     - 超时控制（防止单个 Handler 阻塞）
     - 生命周期管理
     - Pipeline 集成
+    - **两层事件聚合**：订阅 OUTPUT_HANDLER_COMPLETED 事件，
+      维护 intent_id → expected_handlers 映射，等齐后发 OUTPUT_INTENT_FINISHED,
+      并带 watchdog 超时兜底（避免某个 handler 漏发导致 FINISHED 永远不发）
     """
 
     def __init__(
@@ -88,18 +97,31 @@ class OutputHandlerManager:
         self.concurrent_rendering = self.config.get("concurrent_rendering", True)
         self.error_handling = self.config.get("error_handling", "continue")
         self.render_timeout_ms = int(self.config.get("render_timeout_ms", 10000))
+        self.completion_timeout_ms = int(self.config.get("completion_timeout_ms", 30000))
 
         self.pipeline_manager = pipeline_manager
 
         self._is_setup = False
         self._event_handler_registered = False
+        self._completion_handler_registered = False
         self._audio_stream_channel = None
+
+        # === 两层事件聚合状态（per-intent tracking） ===
+        # key: intent_id, value: 剩余期望完成的 handler 名字集合
+        self._pending_intents: dict[str, set[str]] = {}
+        # 每个 intent 对应一份 IntentPayload,用于聚合完成时 emit FINISHED
+        self._pending_intent_payloads: dict[str, IntentPayload] = {}
+        # watchdog task,key=intent_id,用于超时兜底
+        self._pending_timeouts: dict[str, asyncio.Task] = {}
+        # 异步锁保护上述 4 个集合(emit 是 fire-and-forget,可能并发)
+        self._pending_lock = asyncio.Lock()
 
         self.logger.info(
             f"OutputHandlerManager初始化完成 "
             f"(concurrent={self.concurrent_rendering}, "
             f"error_handling={self.error_handling}, "
-            f"timeout={self.render_timeout_ms}ms)"
+            f"timeout={self.render_timeout_ms}ms, "
+            f"completion_timeout={self.completion_timeout_ms}ms)"
         )
 
     async def setup(
@@ -129,6 +151,17 @@ class OutputHandlerManager:
         )
         self._event_handler_registered = True
         self.logger.info(f"已订阅 '{CoreEvents.DECISION_INTENT_GENERATED}' 事件（类型化）")
+
+        # 订阅 per-handler 完成事件,作为两层事件模式的聚合者
+        if not self._completion_handler_registered:
+            self.event_bus.on(
+                CoreEvents.OUTPUT_HANDLER_COMPLETED,
+                self._on_handler_completed,
+                model_class=OutputHandlerCompletedPayload,
+                priority=50,
+            )
+            self._completion_handler_registered = True
+            self.logger.info(f"已订阅 '{CoreEvents.OUTPUT_HANDLER_COMPLETED}' 事件(聚合者)")
 
         self._is_setup = True
         self.logger.info("输出Handler管理器设置完成")
@@ -169,10 +202,28 @@ class OutputHandlerManager:
             except Exception as e:
                 self.logger.error(f"取消事件订阅失败: {e}", exc_info=True)
 
+        if self._completion_handler_registered:
+            try:
+                self.event_bus.off(CoreEvents.OUTPUT_HANDLER_COMPLETED, self._on_handler_completed)
+                self._completion_handler_registered = False
+                self.logger.info("聚合事件订阅已取消")
+            except Exception as e:
+                self.logger.error(f"取消聚合事件订阅失败: {e}", exc_info=True)
+
+        # 取消所有 pending watchdog,避免关闭后还有 task 在跑
+        for task in list(self._pending_timeouts.values()):
+            if not task.done():
+                task.cancel()
+        if self._pending_timeouts:
+            await asyncio.gather(*self._pending_timeouts.values(), return_exceptions=True)
+        self._pending_intents.clear()
+        self._pending_intent_payloads.clear()
+        self._pending_timeouts.clear()
+
         self._is_setup = False
         self.logger.info("输出Handler管理器清理完成")
 
-    async def _on_decision_intent(self, event_name: str, payload: "IntentPayload", source: str):
+    async def _on_decision_intent(self, event_name: str, payload: IntentPayload, source: str):
         """处理Intent事件（Decision 阶段 → Output 阶段，类型化）"""
         intent = payload.to_intent()
 
@@ -198,6 +249,14 @@ class OutputHandlerManager:
                 self.logger.debug("OutputPipeline 处理完成")
 
             output_payload = IntentPayload.from_intent(intent, payload.name)
+
+            # 用当前活跃 handler 集合初始化 pending 跟踪(intent_id 为空兜底生成)
+            intent_id = intent.metadata.intent_id
+            # 用类名(`type(h).__name__`)而非注册名,与 handler emit COMPLETED 时的命名一致
+            active_handler_names = [type(h).__name__ for h in self.handlers if self._handler_started.get(h, False)]
+            await self._register_pending_intent(intent_id, output_payload, set(active_handler_names))
+
+            # 1) 广播 DISPATCHED → 所有 handler 会通过订阅开始干活
             await self.event_bus.emit(
                 CoreEvents.OUTPUT_INTENT_DISPATCHED,
                 output_payload,
@@ -205,8 +264,131 @@ class OutputHandlerManager:
             )
             self.logger.debug(f"已发布事件: {CoreEvents.OUTPUT_INTENT_DISPATCHED}")
 
+            # 2) 不再立刻发 FINISHED;改由 _on_handler_completed 聚合触发
+            #    如果没有任何 active handler,直接发 FINISHED (避免悬挂待跟踪意图)
+            if not active_handler_names:
+                self.logger.debug(f"无 active handler,直接发 FINISHED: intent_id={intent_id}")
+                await self._finalize_intent(intent_id)
+
         except Exception as e:
             self.logger.error(f"处理Intent事件时出错: {e}", exc_info=True)
+
+    async def _register_pending_intent(
+        self,
+        intent_id: str,
+        payload: IntentPayload,
+        expected_handlers: set[str],
+    ) -> None:
+        """注册一个新的待完成 intent(线程安全)。
+
+        同时启动 watchdog 超时兜底,防止某个 handler 漏发 COMPLETED 导致 FINISHED 永远不发。
+        """
+        async with self._pending_lock:
+            self._pending_intents[intent_id] = set(expected_handlers)
+            self._pending_intent_payloads[intent_id] = payload
+
+            # 取消旧的 watchdog (同一 intent_id 重复场景罕见但要防呆)
+            old_task = self._pending_timeouts.pop(intent_id, None)
+            if old_task is not None and not old_task.done():
+                old_task.cancel()
+
+            # 启动新的 watchdog
+            if expected_handlers and self.completion_timeout_ms > 0:
+                task = asyncio.create_task(self._watchdog_intent(intent_id))
+                self._pending_timeouts[intent_id] = task
+
+        self.logger.debug(f"注册 pending intent: id={intent_id}, expected={sorted(expected_handlers)}")
+
+    async def _watchdog_intent(self, intent_id: str) -> None:
+        """Watchdog: 超过 completion_timeout_ms 后强制 finalize 未完成的 intent。
+
+        调用 _on_handler_completed 完成等价的清理路径,保证 FINISHED 一定会发出。
+        """
+        try:
+            await asyncio.sleep(self.completion_timeout_ms / 1000.0)
+            async with self._pending_lock:
+                remaining = self._pending_intents.get(intent_id)
+                if remaining is None:
+                    return  # 已完成
+                self.logger.warning(
+                    f"completion watchdog 超时: intent_id={intent_id}, "
+                    f"超时={self.completion_timeout_ms}ms, "
+                    f"remaining={sorted(remaining)}"
+                )
+                # 强制清空,触发 finalize
+                self._pending_intents[intent_id] = set()
+            await self._finalize_intent(intent_id)
+        except asyncio.CancelledError:
+            # 被 _register_pending_intent 取消或 _finalize_intent 清理了,正常情况
+            pass
+        except Exception as e:
+            self.logger.error(f"watchdog 异常 (intent_id={intent_id}): {e}", exc_info=True)
+
+    async def _on_handler_completed(
+        self,
+        event_name: str,
+        payload: OutputHandlerCompletedPayload,
+        source: str,
+    ) -> None:
+        """聚合者回调:每个 handler 完成都会触发此回调。
+
+        从 expected set 里移除该 handler_name;若 set 变空,触发 FINISHED。
+        """
+        async with self._pending_lock:
+            remaining = self._pending_intents.get(payload.intent_id)
+            if remaining is None:
+                # 未知 intent_id (例如重复注册或 idle 期间的迟到事件);静默忽略
+                self.logger.debug(
+                    f"未知 intent_id,忽略 COMPLETED: id={payload.intent_id}, handler={payload.handler_name}"
+                )
+                return
+
+            if payload.handler_name in remaining:
+                remaining.discard(payload.handler_name)
+            else:
+                # 该 handler 不在 expected set 里(可能 handler 漏订阅/未启动)
+                self.logger.warning(
+                    f"handler_name={payload.handler_name} 不在 expected set "
+                    f"for intent_id={payload.intent_id} (remaining={sorted(remaining)})"
+                )
+
+            self.logger.debug(
+                f"handler 完成: intent_id={payload.intent_id}, "
+                f"handler={payload.handler_name}, "
+                f"remaining={len(remaining)}"
+            )
+
+            if remaining:
+                return
+            # 变空,继续外层 finalize
+
+        # 锁外做 finalize 避免持锁 emit 导致死锁
+        await self._finalize_intent(payload.intent_id)
+
+    async def _finalize_intent(self, intent_id: str) -> None:
+        """发出 OUTPUT_INTENT_FINISHED 并清理 pending 跟踪状态。"""
+        async with self._pending_lock:
+            payload = self._pending_intent_payloads.pop(intent_id, None)
+            self._pending_intents.pop(intent_id, None)
+            timeout_task = self._pending_timeouts.pop(intent_id, None)
+
+        if timeout_task is not None and not timeout_task.done():
+            timeout_task.cancel()
+
+        if payload is None:
+            # 已经被 finalize 过了 (重复路径) 或 未知 id
+            self.logger.debug(f"_finalize_intent: 无 payload for intent_id={intent_id}")
+            return
+
+        try:
+            await self.event_bus.emit(
+                CoreEvents.OUTPUT_INTENT_FINISHED,
+                payload,
+                source="OutputHandlerManager",
+            )
+            self.logger.debug(f"已聚合发出事件: {CoreEvents.OUTPUT_INTENT_FINISHED} (intent_id={intent_id})")
+        except Exception as e:
+            self.logger.error(f"发出 FINISHED 失败 (intent_id={intent_id}): {e}", exc_info=True)
 
     async def register_handler(self, handler: Any, handler_name: str):
         """注册Handler"""
@@ -361,12 +543,14 @@ class OutputHandlerManager:
         self.concurrent_rendering = config.get("concurrent_rendering", True)
         self.error_handling = config.get("error_handling", "continue")
         self.render_timeout_ms = int(config.get("render_timeout_ms", 10000))
+        self.completion_timeout_ms = int(config.get("completion_timeout_ms", 30000))
 
         self.logger.info(
             f"输出Handler管理器配置: "
             f"concurrent={self.concurrent_rendering}, "
             f"error_handling={self.error_handling}, "
-            f"timeout={self.render_timeout_ms}ms"
+            f"timeout={self.render_timeout_ms}ms, "
+            f"completion_timeout={self.completion_timeout_ms}ms"
         )
 
         enabled_handlers = config.get("enabled", [])

@@ -9,6 +9,7 @@
     concurrent_rendering = true
     error_handling = "continue"  # continue | stop
     render_timeout_ms = 10000  # 0 = 无限制
+    completion_timeout_ms = 30000  # 两层事件聚合超时(毫秒),0 表示不限制
 
     [handlers.subtitle]
     type = "subtitle"
@@ -28,6 +29,7 @@
             "concurrent_rendering": True,
             "error_handling": "continue",
             "render_timeout_ms": 10000,
+            "completion_timeout_ms": 30000,
             "subtitle": {...},
             ...
         },
@@ -42,13 +44,13 @@
 - **每个 Handler 的 ConfigSchema 重导出**：从原 Handler 模块导入 `ConfigSchema`，
   在此处用 `XXXConfigSchema` 别名导出，避免调用方硬编码 Handler 内部类名。
 - **OutputHandlersConfig**：`[handlers]` 段的聚合模型。
-  包含启用元数据（enabled / concurrent_rendering / error_handling / render_timeout_ms）
-  以及每个 Handler 的可选子配置。
+  包含启用元数据（enabled / concurrent_rendering / error_handling / render_timeout_ms /
+  completion_timeout_ms）以及每个 Handler 的可选子配置。
 - **OutputPipelinesConfig**：`[pipelines]` 段（默认空 dict）。
 - **OutputConfig**：`config/output.toml` 文件对应的根模型。
 
 设计原则：
-- 不修改 Handler 内部代码，仅导入并重导出其 `ConfigSchema` 嵌套类。
+- 不修改 Handler 内部代码，仅在调用时延迟加载其 `ConfigSchema` 嵌套类。
 - 所有 Pydantic 模型继承 `BaseConfig`，自动获得 `from_dict_with_drift_check` /
   `generate_toml_string` 等能力。
 - 顶层枚举/布尔字段携带 `json_schema_extra` UI 元数据，供 Dashboard 前端动态表单使用。
@@ -56,88 +58,93 @@
 
 from __future__ import annotations
 
+import importlib
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import ConfigDict, Field
 
 from .base import BaseConfig
 
+
 # ---------------------------------------------------------------------------
-# 每个 Handler 的 ConfigSchema 重导出
+# 每个 Handler 的 ConfigSchema 延迟加载
 # ---------------------------------------------------------------------------
 #
 # 这些类由 `@handler("name")` 装饰器在 Handler 模块加载时自动注册到
 # `CONFIG_SCHEMA_REGISTRY`（见 `src.modules.config.schemas.__init__`）。
-# 此处仅导入并重命名为稳定公开名，避免调用方依赖 Handler 内部嵌套类名。
-
-from src.stages.output.handlers.avatar.vrchat.vrchat_handler import (  # noqa: F401
-    VRChatHandler,
-)
-from src.stages.output.handlers.avatar.vts.vts_handler import (  # noqa: F401
-    VTSHandler,
-)
-from src.stages.output.handlers.avatar.warudo.warudo_handler import (  # noqa: F401
-    WarudoHandler,
-)
-from src.stages.output.handlers.debug_console.debug_console_handler import (  # noqa: F401
-    DebugConsoleHandler,
-)
-from src.stages.output.handlers.audio.edge_tts.edge_tts_handler import (  # noqa: F401
-    EdgeTTSHandler,
-)
-from src.stages.output.handlers.audio.gptsovits.gptsovits_handler import (  # noqa: F401
-    GPTSoVITSHandler,
-)
-from src.stages.output.handlers.audio.omni_tts.omni_tts_handler import (  # noqa: F401
-    OmniTTSHandler,
-)
-from src.stages.output.handlers.remote_stream.remote_stream_handler import (  # noqa: F401
-    RemoteStreamHandler,
-)
-from src.stages.output.handlers.sticker.sticker_handler import (  # noqa: F401
-    StickerHandler,
-)
-from src.stages.output.handlers.subtitle.subtitle_handler import (  # noqa: F401
-    SubtitleHandler,
-)
-# 公共别名：XXXConfigSchema -> Handler.ConfigSchema
-# 这样做的好处：
-# 1. 调用方无需 import Handler 内部嵌套类
-# 2. 真实配置字段定义仍由 Handler 模块维护，避免重复定义
-# 3. Pydantic 实例化时直接复用 Handler.ConfigSchema（含其字段约束、validator 等）
-
-DebugConsoleConfigSchema = DebugConsoleHandler.ConfigSchema
-EdgeTTSConfigSchema = EdgeTTSHandler.ConfigSchema
-GPTSoVITSConfigSchema = GPTSoVITSHandler.ConfigSchema
-ObsControlConfigSchema = None  # 避免循环 import：下面单独处理
-OmniTTSConfigSchema = OmniTTSHandler.ConfigSchema
-RemoteStreamConfigSchema = RemoteStreamHandler.ConfigSchema
-StickerConfigSchema = StickerHandler.ConfigSchema
-SubtitleConfigSchema = SubtitleHandler.ConfigSchema
-VRChatConfigSchema = VRChatHandler.ConfigSchema
-VTSConfigSchema = VTSHandler.ConfigSchema
-WarudoConfigSchema = WarudoHandler.ConfigSchema
+# 此处仅在调用方实际访问 `*ConfigSchema` 符号时才 import 对应 Handler 模块，
+# 一来避免 handler 模块被本配置模块反向 import（可能触发循环依赖），
+# 二来与旧 `_try_import_obs_control_schema` 的延迟加载风格保持一致。
 
 
-# ---------------------------------------------------------------------------
-# 延迟加载：ObsControlHandler 因依赖 obs-websocket-py，单独处理导入错误
-# ---------------------------------------------------------------------------
+def _try_load_handler_schema(module_path: str, class_name: str) -> Optional[type]:
+    """延迟加载某个 Handler 模块并返回其 `ConfigSchema`。
 
+    Args:
+        module_path: Handler 模块路径（如 `src.stages.output.handlers....`）
+        class_name: Handler 类名
 
-def _try_import_obs_control_schema() -> Optional[type]:
-    """尝试导入 ObsControlHandler.ConfigSchema；缺失依赖时返回 None"""
+    Returns:
+        `ConfigSchema` 类型，或 None（导入失败/依赖缺失时）
+    """
     try:
-        from src.stages.output.handlers.obs_control.obs_control_handler import (
-            ObsControlHandler,
-        )
-
-        return ObsControlHandler.ConfigSchema
+        module = importlib.import_module(module_path)
+        cls = getattr(module, class_name, None)
+        if cls is None:
+            return None
+        return getattr(cls, "ConfigSchema", None)
     except Exception:
-        # obs-websocket-py 未安装时仍允许其他 Handler 配置加载
         return None
 
 
-ObsControlConfigSchema = _try_import_obs_control_schema()
+# 公共别名：XXXConfigSchema -> Handler.ConfigSchema
+# 调用方可通过这些符号访问对应 Handler 的 ConfigSchema，
+# 无需关心 Handler 模块的 import 时机。
+
+DebugConsoleConfigSchema: Optional[type] = _try_load_handler_schema(
+    "src.stages.output.handlers.debug_console.debug_console_handler",
+    "DebugConsoleHandler",
+)
+EdgeTTSConfigSchema: Optional[type] = _try_load_handler_schema(
+    "src.stages.output.handlers.audio.edge_tts.edge_tts_handler",
+    "EdgeTTSHandler",
+)
+GPTSoVITSConfigSchema: Optional[type] = _try_load_handler_schema(
+    "src.stages.output.handlers.audio.gptsovits.gptsovits_handler",
+    "GPTSoVITSHandler",
+)
+ObsControlConfigSchema: Optional[type] = _try_load_handler_schema(
+    "src.stages.output.handlers.obs_control.obs_control_handler",
+    "ObsControlHandler",
+)
+OmniTTSConfigSchema: Optional[type] = _try_load_handler_schema(
+    "src.stages.output.handlers.audio.omni_tts.omni_tts_handler",
+    "OmniTTSHandler",
+)
+RemoteStreamConfigSchema: Optional[type] = _try_load_handler_schema(
+    "src.stages.output.handlers.remote_stream.remote_stream_handler",
+    "RemoteStreamHandler",
+)
+StickerConfigSchema: Optional[type] = _try_load_handler_schema(
+    "src.stages.output.handlers.sticker.sticker_handler",
+    "StickerHandler",
+)
+SubtitleConfigSchema: Optional[type] = _try_load_handler_schema(
+    "src.stages.output.handlers.subtitle.subtitle_handler",
+    "SubtitleHandler",
+)
+VRChatConfigSchema: Optional[type] = _try_load_handler_schema(
+    "src.stages.output.handlers.avatar.vrchat.vrchat_handler",
+    "VRChatHandler",
+)
+VTSConfigSchema: Optional[type] = _try_load_handler_schema(
+    "src.stages.output.handlers.avatar.vts.vts_handler",
+    "VTSHandler",
+)
+WarudoConfigSchema: Optional[type] = _try_load_handler_schema(
+    "src.stages.output.handlers.avatar.warudo.warudo_handler",
+    "WarudoHandler",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +174,7 @@ class OutputHandlersConfig(BaseConfig):
     """`[handlers]` 段聚合模型
 
     包含 Output 阶段运行元数据（enabled / concurrent_rendering / error_handling /
-    render_timeout_ms）以及每个 Handler 的可选子配置。
+    render_timeout_ms / completion_timeout_ms）以及每个 Handler 的可选子配置。
 
     使用 `extra="forbid"` 拒绝未知 Handler 子段，避免拼写错误静默通过。
     """
@@ -198,19 +205,26 @@ class OutputHandlersConfig(BaseConfig):
         description="单个 Handler 渲染超时（毫秒），0 表示不限制",
         json_schema_extra={"x-ui-type": "integer", "x-min": 0},
     )
+    completion_timeout_ms: int = Field(
+        default=30000,
+        ge=0,
+        description="两层事件聚合 watchdog 超时(毫秒):per-handler 完成事件超时未到齐则强制"
+        "发 OUTPUT_INTENT_FINISHED 并 warn 日志。0 表示不启用 watchdog。",
+        json_schema_extra={"x-ui-type": "integer", "x-min": 0},
+    )
 
     # ----- 每个 Handler 的可选子配置 -----
-    debug_console: Optional[DebugConsoleConfigSchema] = _optional_handler_field(DebugConsoleConfigSchema)
-    edge_tts: Optional[EdgeTTSConfigSchema] = _optional_handler_field(EdgeTTSConfigSchema)
-    gptsovits: Optional[GPTSoVITSConfigSchema] = _optional_handler_field(GPTSoVITSConfigSchema)
+    debug_console: Optional[Any] = _optional_handler_field(DebugConsoleConfigSchema)
+    edge_tts: Optional[Any] = _optional_handler_field(EdgeTTSConfigSchema)
+    gptsovits: Optional[Any] = _optional_handler_field(GPTSoVITSConfigSchema)
     obs_control: Optional[Any] = _optional_handler_field(ObsControlConfigSchema)
-    omni_tts: Optional[OmniTTSConfigSchema] = _optional_handler_field(OmniTTSConfigSchema)
-    remote_stream: Optional[RemoteStreamConfigSchema] = _optional_handler_field(RemoteStreamConfigSchema)
-    sticker: Optional[StickerConfigSchema] = _optional_handler_field(StickerConfigSchema)
-    subtitle: Optional[SubtitleConfigSchema] = _optional_handler_field(SubtitleConfigSchema)
-    vrchat: Optional[VRChatConfigSchema] = _optional_handler_field(VRChatConfigSchema)
-    vts: Optional[VTSConfigSchema] = _optional_handler_field(VTSConfigSchema)
-    warudo: Optional[WarudoConfigSchema] = _optional_handler_field(WarudoConfigSchema)
+    omni_tts: Optional[Any] = _optional_handler_field(OmniTTSConfigSchema)
+    remote_stream: Optional[Any] = _optional_handler_field(RemoteStreamConfigSchema)
+    sticker: Optional[Any] = _optional_handler_field(StickerConfigSchema)
+    subtitle: Optional[Any] = _optional_handler_field(SubtitleConfigSchema)
+    vrchat: Optional[Any] = _optional_handler_field(VRChatConfigSchema)
+    vts: Optional[Any] = _optional_handler_field(VTSConfigSchema)
+    warudo: Optional[Any] = _optional_handler_field(WarudoConfigSchema)
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +319,7 @@ def get_output_config(handler_type: str, config: Dict[str, Any]) -> Any:
 
 
 __all__ = [
-    # Handler ConfigSchema 重导出（稳定公开名）
+    # Handler ConfigSchema 重导出（稳定公开名，可能为 None 表示依赖缺失）
     "DebugConsoleConfigSchema",
     "EdgeTTSConfigSchema",
     "GPTSoVITSConfigSchema",
@@ -325,4 +339,4 @@ __all__ = [
     # 向后兼容
     "OUTPUT_CONFIG_MAP",
     "get_output_config",
-]
+]  # noqa: F401
