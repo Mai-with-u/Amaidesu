@@ -223,6 +223,7 @@ class GPTSoVITSHandler(AudioHandlerBase):
 
         if not text or not text.strip():
             self.logger.debug("TTS文本为空，跳过渲染")
+            await self._emit_completed(intent, success=True)
             return
 
         original_text = text.strip()
@@ -235,8 +236,10 @@ class GPTSoVITSHandler(AudioHandlerBase):
             self.logger.debug(f"文本清洗: 移除了 {len(original_text) - len(final_text)} 个不支持字符")
         if not final_text.strip():
             self.logger.debug("清洗后文本为空，跳过渲染")
+            await self._emit_completed(intent, success=True)
             return
 
+        success = True
         try:
             async with self.tts_lock:
                 await self._notify_audio_start(final_text)
@@ -285,9 +288,12 @@ class GPTSoVITSHandler(AudioHandlerBase):
             self.render_count += 1
 
         except Exception as e:
+            success = False
             self.logger.error(f"TTS渲染失败: {e}", exc_info=True)
             self.error_count += 1
             raise
+        finally:
+            await self._emit_completed(intent, success=success)
 
     async def _process_audio_stream(self, audio_stream):
         """

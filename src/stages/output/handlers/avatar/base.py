@@ -5,6 +5,8 @@ AvatarHandlerBase - 虚拟形象 Handler 抽象基类
 1. 适配 Intent 为平台参数 (_adapt_intent,返回 None = skip)
 2. 渲染到平台 (_render_to_platform)
 3. 连接/断开管理
+4. **per-handler 完成事件自动 emit**(OUTPUT_HANDLER_COMPLETED),在 handle() 的 finally 中,
+   保证异常路径也发出,让 OutputHandlerManager 可以聚合各 handler 的完成事件。
 
 LLM 翻译层已删除:Intent 已经是结构化 emotion(action) 形式,不再需要 LLM 翻译
 自然语言到平台键。
@@ -16,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.decision import IntentPayload
+from src.modules.events.payloads.output import OutputHandlerCompletedPayload
 from src.modules.logging import get_logger
 from src.modules.streaming.audio_stream_channel import AudioStreamChannel
 
@@ -49,8 +52,10 @@ class AvatarHandlerBase(ABC):
     async def handle(self, intent: "Intent"):
         if not self._is_connected:
             self.logger.warning("未连接,跳过渲染")
+            await self._emit_completed(intent, success=True)
             return
 
+        success = True
         try:
             params = await self._adapt_intent(intent)
             if params is None:
@@ -58,7 +63,33 @@ class AvatarHandlerBase(ABC):
                 return
             await self._render_to_platform(params)
         except Exception as e:
+            success = False
             self.logger.error(f"渲染失败: {e}", exc_info=True)
+        finally:
+            await self._emit_completed(intent, success=success)
+
+    async def _emit_completed(self, intent: "Intent", success: bool = True) -> None:
+        """emit 一个 OUTPUT_HANDLER_COMPLETED 事件给聚合者。
+
+        用 `self.__class__.__name__` 作为 handler_name(与 manager 的 active_handler_names
+        命名一致,即 `type(h).__name__`),从 Intent.metadata.intent_id 拿 intent_id。
+        无 event_bus 或 intent 缺 metadata 时降级到 unknown 让 watchdog 兜底。
+        """
+        if self.event_bus is None:
+            return
+        try:
+            intent_id = intent.metadata.intent_id
+        except AttributeError:
+            intent_id = "unknown"
+        await self.event_bus.emit(
+            CoreEvents.OUTPUT_HANDLER_COMPLETED,
+            OutputHandlerCompletedPayload(
+                handler_name=self.__class__.__name__,
+                intent_id=intent_id,
+                success=success,
+            ),
+            source=self.__class__.__name__,
+        )
 
     @abstractmethod
     async def _adapt_intent(self, intent: "Intent") -> Optional[Dict[str, Any]]:
