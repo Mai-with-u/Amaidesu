@@ -568,7 +568,7 @@ class MyPayload(BasePayload):
 根据 3 阶段架构约束：
 - OutputHandler 不应订阅 Input 事件
 - Decider 不应订阅 Output 事件
-- InputCollector 不应订阅 Decision/Output 事件
+- InputCollector 不应订阅 Decision/Output 的数据事件（`decision.intent.generated` 等）；但 Output 的**元控制信号**（如 `output.intent.finished`，不携带输出结果）可以做为例外
 
 详见 [数据流规则](data-flow.md)。
 

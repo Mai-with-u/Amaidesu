@@ -52,7 +52,8 @@ OutputHandlers 渲染
 这条守护的是**防环**：一旦 Output 的结果能回灌触发新决策，就会形成"输出→决策→输出"的无限循环。形式化约束：
 
 - Decider **不订阅**任何 Output 阶段发布的事件。
-- InputCollector **不订阅**任何 Decision/Output 事件。
+- InputCollector **不订阅**任何 Decision/Output 的**数据事件**（`decision.intent.generated`、`output.intent.dispatched` 等携带决策/输出结果的事件）。
+- **例外**：Output 阶段的**元控制信号**（如 `output.intent.finished`，仅表示"所有 handler 已完成"，不携带输出结果）允许 InputCollector 订阅。这类信号不含输出结果数据，不会形成回灌循环。
 - OutputHandler **不订阅** Input 事件（必须经 Decision）。
 
 #### ② 分层规则（防 import 环）—— 跨阶段只经共享抽象
@@ -84,7 +85,7 @@ OutputHandlers 渲染
 |---------|------|---------|
 | OutputHandler 订阅 Input 事件 | `input.message.received` | 绕过 Decision 阶段，破坏分层架构 |
 | Decider 订阅 Output 事件 | `output.intent.dispatched` 等 | 创建循环依赖，破坏单向流 |
-| InputCollector 订阅 Decision/Output 事件 | `decision.intent.generated` 等 | Input 应只发布，不订阅下游 |
+| InputCollector 订阅 Decision/Output 的数据事件 | `decision.intent.generated` 等 | Input 应只发布数据，不订阅下游结果数据 |
 
 ### 详细说明
 
@@ -106,12 +107,14 @@ Decider 订阅 Output 事件会创建循环依赖：
 > Decision **拉取** Output 的**只读能力元数据**（发现平面，见 ③）是被允许的——
 > 那是查询"能做什么"，不是订阅"做了什么"，不会成环。详见下方"允许模式"。
 
-#### 为什么 InputCollector 不应订阅下游事件？
+#### 为什么 InputCollector 不应订阅下游数据事件？
 
 InputCollector 的职责是采集和发布数据：
-- 应该是数据的生产者，不应该是消费者
-- 订阅下游事件会改变其角色定位
+- 应该是数据的生产者，不应该是**结果数据**的消费者
+- 订阅下游的**数据事件**（携带决策/输出结果）会改变其角色定位
 - 违反单一职责原则
+
+> **例外**：Output 的**元控制信号**（如 `output.intent.finished`）仅表示"所有 handler 已完成"，不携带任何输出结果数据，InputCollector 可以订阅以触发下一轮采集。这种控制信号不会形成数据回灌循环。
 
 ### 违规示例
 

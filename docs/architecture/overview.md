@@ -327,7 +327,7 @@ enabled = ["tts", "subtitle", "vts"]
 - Input 阶段 -> Decision 阶段 -> Output 阶段
 - 禁止 OutputHandler 订阅 Input 事件
 - 禁止 Decider 订阅 Output 事件
-- InputCollector 应只发布，不订阅下游
+- InputCollector 不应订阅下游数据事件（元控制信号如 `output.intent.finished` 除外）
 
 ### 5. 类型安全
 
