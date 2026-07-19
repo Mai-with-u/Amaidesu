@@ -52,6 +52,12 @@ class CoreEvents:
     OUTPUT_HANDLER_CONNECTED = "output.handler.connected"  # DEPRECATED: not emitted, retained for backward compat
     OUTPUT_HANDLER_DISCONNECTED = "output.handler.disconnected"  # DEPRECATED: not emitted, retained for backward compat
 
+    #     # 意图输出完成事件（OutputHandlerManager 分发完成后发出，供外部组件感知输出状态）
+    OUTPUT_INTENT_FINISHED = "output.intent.finished"
+
+    # 单个 Handler 完成事件（per-handler 完成通知，由 OutputHandler 作为协调者聚合后再发 FINISHED）
+    OUTPUT_HANDLER_COMPLETED = "output.handler.completed"
+
     # OBS 控制事件（统一入口，所有 OBS 操作通过 payload.command 区分）
     OUTPUT_OBS_COMMAND = "output.obs.command"
 

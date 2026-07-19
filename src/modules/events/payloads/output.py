@@ -6,15 +6,18 @@ Output 阶段 事件 Payload 定义
   整合了发送文本、切换场景、设置源可见性、远程流请求图像等命令，
   通过 ``action`` 字段区分。
 - OutputIntentDispatchedPayload: Intent 分发事件 Payload
+- OutputHandlerCompletedPayload: 单个 OutputHandler 完成事件 Payload
+  (两层事件模式第一层,per-handler 完成由 OutputHandlerManager 聚合后再发 FINISHED)
 
 事件名：
 - CoreEvents.OUTPUT_OBS_COMMAND = "output.obs.command"
 - CoreEvents.OUTPUT_INTENT_DISPATCHED = "output.intent.dispatched"
+- CoreEvents.OUTPUT_HANDLER_COMPLETED = "output.handler.completed"
 """
 
 from typing import Literal, Optional
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, Field
 
 from src.modules.events.payloads.base import BasePayload
 from src.modules.events.payloads.decision import IntentPayload
@@ -93,6 +96,44 @@ class OutputIntentDispatchedPayload(IntentPayload):
     """
 
     pass
+
+
+@register_event("output.handler.completed")
+class OutputHandlerCompletedPayload(BasePayload):
+    """单个 OutputHandler 完成事件 Payload（两层事件模式第一层）
+
+    事件名：CoreEvents.OUTPUT_HANDLER_COMPLETED
+    发布者：每个 OutputHandler（在自己的 handle() 结束时，包括异常路径）
+    订阅者：OutputHandlerManager（聚合协调者，期望完成的 handler 集合减一）
+
+    Attributes:
+        handler_name: 完成渲染的 handler 名称（如 "tts", "subtitle"），用于从
+            OutputHandlerManager 维护的 expected set 里精确移除。
+        intent_id: 对应 Intent 的唯一标识（来自 IntentMetadata.intent_id），用于关联
+            同一 intent 的多个 handler 完成事件。
+        success: handler 报告自身是否成功完成（异常路径下也会发,这里记 False）。
+            默认 True,失败由 handler 在 except 分支显式置 False 也可,Manager 只关心
+            "已完成"事实不看 success 字段。
+    """
+
+    handler_name: str = Field(..., description="完成渲染的 handler 名称")
+    intent_id: str = Field(..., description="对应的 Intent 唯一 ID (来自 IntentMetadata.intent_id)")
+    success: bool = Field(default=True, description="handler 自身是否成功完成（聚合器不依赖此字段）")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "handler_name": "subtitle",
+                "intent_id": "a1b2c3d4",
+                "success": True,
+            }
+        }
+    )
+
+    def __str__(self) -> str:
+        class_name = self.__class__.__name__
+        status = "ok" if self.success else "fail"
+        return f'{class_name}(handler="{self.handler_name}", intent_id="{self.intent_id}", {status})'
 
 
 @register_event("output.sticker.command")

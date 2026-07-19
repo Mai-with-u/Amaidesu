@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -20,10 +21,16 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from src.modules.types.emotion_vocab import Emotion
 
 
+def _new_intent_id() -> str:
+    """生成 Intent 唯一 ID(UUID4 hex 前 8 位)。"""
+    return uuid.uuid4().hex[:8]
+
+
 class IntentMetadata(BaseModel):
     """意图元数据。
 
-    只保留决策来源 + 决策时间(毫秒)。其余历史字段全部删除。
+    除决策来源 + 决策时间外,新增 `intent_id` 作为跨阶段唯一标识,
+    用于 OutputHandlerManager 的两层事件聚合(把 per-handler 完成事件关联回同一个 intent)。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -31,6 +38,11 @@ class IntentMetadata(BaseModel):
     source_id: str = Field(..., description="决策来源标识,如 'maibot_api' / 'command' / 'dashboard_debug'")
     decision_time_ms: int = Field(..., description="决策时刻(Unix 毫秒)")
     source_message_id: Optional[str] = Field(default=None, description="来源 NormalizedMessage 的 message_id")
+    intent_id: str = Field(
+        default_factory=_new_intent_id,
+        description="Intent 唯一标识 (UUID4 hex 前 8 位)。由 IntentMetadata 自动生成,"
+        "跨阶段用于关联同一 intent 的多个 handler 完成事件。",
+    )
 
 
 class IntentAction(BaseModel):
