@@ -198,7 +198,7 @@ Output（实现）──▶ CapabilitiesProvider（抽象，在 modules）◀─
 
 ## 3. 事件流向
 
-事件按阶段流转使用统一的动词链：`received → generated → dispatched`。
+事件按阶段流转使用统一的动词链：`received → generated → dispatched → completed → finished`。
 
 ### 核心事件
 
@@ -206,8 +206,29 @@ Output（实现）──▶ CapabilitiesProvider（抽象，在 modules）◀─
 |--------|--------|--------|---------|------|
 | `input.message.received` | InputCollector | DeciderManager | `MessageReadyPayload` (NormalizedMessage) | 标准化消息接收（received 动词） |
 | `decision.intent.generated` | Decider | OutputHandlerManager | `IntentPayload` (Intent) | 决策意图生成（generated 动词） |
-| `output.intent.dispatched` | OutputHandlerManager | OutputHandlers | `IntentPayload` (Intent) | 过滤后意图派发（dispatched 动词） |
+| `output.intent.dispatched` | OutputHandlerManager | OutputHandlers | `IntentPayload` (Intent) | 过滤后意图派发（dispatched 动词），fire-and-forget |
+| `output.handler.completed` | 各 OutputHandler（`handle()` 末尾 finally 里发） | OutputHandlerManager（聚合） | `OutputHandlerCompletedPayload`（含 `handler_name`、`intent_id`） | 单个 handler 完成通知（两层事件第一层） |
+| `output.intent.finished` | OutputHandlerManager（聚合后发） | 任何需要"等所有输出完成"的组件（如 MainosabaCollector） | `IntentPayload` (Intent) | 所有 active handler 都干完的聚合信号（两层事件第二层） |
 | `output.obs.command` | Dashboard API / 外部组件 | ObsControlHandler 等 | `OBSCommandPayload`（按 `action` 区分） | OBS 统一命令入口 |
+
+#### 两层事件聚合模式（Output 完成时序）
+
+`output.intent.dispatched` 默认是 fire-and-forget，emit 立刻返回而 handler 在后台 task 跑。要准确感知"所有 handler 真的干完了"，需要两层：
+
+- **第一层（per-handler 完成）**：每个 OutputHandler 在自己的 `handle()` 末尾（`try/finally` 里以保证异常也发）emit `output.handler.completed`，声明"我干完了"。`handler_name` 用 `self.__class__.__name__`，`intent_id` 从 `intent.metadata.intent_id` 取。
+- **第二层（聚合）**：`OutputHandlerManager` 订阅第一层，按 `intent_id` 关联，等所有 active handler 都报告完成后 emit `output.intent.finished`。
+- **兜底**：watchdog 超时（`completion_timeout_ms` 默认 30000），防止某个 handler 漏发导致 FINISHED 永远不发。
+
+任何关心"等输出全部干完"的下游组件应订阅 `output.intent.finished`，而不是 `output.intent.dispatched`。
+
+**新增 OutputHandler 时必须遵守的契约**：
+
+1. 在 `handle(intent)` 末尾（用 `try/finally` 包裹）emit `OUTPUT_HANDLER_COMPLETED`
+2. `handler_name` 用 `self.__class__.__name__`（与 Manager 端 `type(h).__name__` 一致）
+3. `intent_id` 从 `intent.metadata.intent_id` 取
+4. 异常路径（`success=False`）也要发，否则 Manager 只能靠超时兜底
+
+基类 `AudioHandlerBase` 和 `AvatarHandlerBase` 已自动 emit，子类无需重复。独立 handler（`StickerHandler` / `SubtitleHandler` / `DebugConsoleHandler` / `ObsControlHandler` / `GPTSoVITSHandler`）需自行实现 `_emit_completed` 并在 `handle()` finally 里调用。
 
 ### 完整事件流
 

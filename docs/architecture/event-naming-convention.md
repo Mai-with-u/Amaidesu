@@ -32,14 +32,26 @@
 |------|---------|------|
 | **Input 阶段** | `...received` | Collector 接收外部数据 |
 | **Decision 阶段** | `...generated` | Decider 生成意图 |
-| **Output 阶段** | `...dispatched` | OutputHandlerManager 派发渲染 |
+| **Output 阶段** | `...dispatched` | OutputHandlerManager 派发渲染（fire-and-forget） |
+| **Output 完成（per-handler）** | `...completed` | 每个 handler 在 `handle()` 末尾发，声明自身完成 |
+| **Output 完成（聚合）** | `...finished` | OutputHandlerManager 聚合所有 handler 完成后发 |
 
 完整示例：
 ```
 input.message.received  →  decision.intent.generated  →  output.intent.dispatched
         ▲                            ▲                              ▲
    InputCollector                  Decider                  OutputHandlerManager
+                                                                      │
+                                                                      ↓
+                                                   output.handler.completed × N
+                                                   (每个 handler 在 finally 里发)
+                                                                      │
+                                                                      ↓
+                                                   output.intent.finished
+                                                   (Manager 聚合后广播)
 ```
+
+> **动词链延伸**：基础流转是 `received → generated → dispatched`；在 Output 阶段内部还有 `dispatched → completed → finished` 的两层聚合时序，详见 [数据流规则](data-flow.md#两层事件聚合模式output-完成时序)。
 
 ### 前缀去重
 
@@ -104,7 +116,9 @@ class CoreEvents:
 
 | 常量 | 值 | 说明 |
 |------|-----|------|
-| `OUTPUT_INTENT_DISPATCHED` | `output.intent.dispatched` | 过滤后意图派发，由 OutputHandlerManager 发布 |
+| `OUTPUT_INTENT_DISPATCHED` | `output.intent.dispatched` | 过滤后意图派发，由 OutputHandlerManager 发布（fire-and-forget，emit 立即返回） |
+| `OUTPUT_HANDLER_COMPLETED` | `output.handler.completed` | 单个 OutputHandler 完成通知（两层事件第一层），由各 handler 在 `handle()` 末尾 finally 里发，含 `handler_name` + `intent_id` |
+| `OUTPUT_INTENT_FINISHED` | `output.intent.finished` | 所有 active handler 都干完的聚合信号（两层事件第二层），由 OutputHandlerManager 聚合 COMPLETED 后发出，订阅者靠它感知"输出真正结束" |
 | `OUTPUT_OBS_COMMAND` | `output.obs.command` | OBS 统一命令入口（通过 payload.action 区分具体操作） |
 
 ### Output 阶段（DEPRECATED 兼容垫片）
