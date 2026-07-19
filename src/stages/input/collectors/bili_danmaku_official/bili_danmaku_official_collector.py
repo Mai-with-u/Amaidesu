@@ -261,14 +261,17 @@ class BiliDanmakuOfficialCollector:
             )
 
         elif isinstance(bili_msg, GiftMessage):
+            # 连击时 gift_num 始终为 1，用 combo_count 反映实际累计数量
+            actual_num = max(bili_msg.gift_num, bili_msg.combo_info.combo_count)
             gift_name = bili_msg.gift_name or "礼物"
-            description = f"{bili_msg.uname} 送出了 {bili_msg.gift_num} 个 {gift_name}"
+            description = f"{bili_msg.uname} 送出了 {actual_num} 个 {gift_name}"
             self.logger.debug(f"[礼物] {description}")
+
             return NormalizedMessage(
                 text=description,
                 source="bili_danmaku_official",
                 data_type="gift",
-                importance=self._calculate_gift_importance(bili_msg),
+                importance=self._calculate_gift_importance(bili_msg, actual_num),
                 timestamp_ms=int(bili_msg.timestamp * 1000) if bili_msg.timestamp else now_ms(),
                 raw=bili_msg,
                 user_id=user_id,
@@ -339,9 +342,9 @@ class BiliDanmakuOfficialCollector:
         guard_bonus = {1: 0.3, 2: 0.2, 3: 0.1}.get(msg.guard_level, 0)
         return min(base + medal_bonus + guard_bonus, 1.0)
 
-    def _calculate_gift_importance(self, msg: GiftMessage) -> float:
+    def _calculate_gift_importance(self, msg: GiftMessage, actual_num: int) -> float:
         """计算礼物重要性"""
         base = min(msg.price / 10000, 0.5)
-        quantity_bonus = min(msg.gift_num / 10, 0.3)
+        quantity_bonus = min(actual_num / 10, 0.3)
         paid_bonus = 0.1 if msg.paid else 0
         return min(base + quantity_bonus + paid_bonus, 1.0)
