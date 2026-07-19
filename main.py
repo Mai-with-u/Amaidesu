@@ -17,8 +17,6 @@ from src.modules.events import (
     list_registered_events,
     register_core_events,
 )
-from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.decision import IntentPayload
 from src.modules.logging import get_logger
 from src.modules.config.service import ConfigService
 from src.modules.config.core_schemas import EventHistoryConfig
@@ -414,17 +412,6 @@ async def create_app_components(
             logger.error(f"设置输出Handler管理器失败: {e}", exc_info=True)
             logger.warning("输出Handler管理器功能不可用，继续启动其他服务")
             output_manager = None
-
-    # 桥接：Output 处理完成后通知 MainosabaCollector 推进游戏
-    if input_manager and output_manager:
-        mainosaba_col = input_manager.get_collector_by_source("Mainosaba")
-        if mainosaba_col and hasattr(mainosaba_col, "notify_output_finished"):
-            event_bus.on(
-                CoreEvents.OUTPUT_INTENT_FINISHED,
-                lambda _name, _payload, _source: mainosaba_col.notify_output_finished(),
-                model_class=IntentPayload,
-            )
-            logger.info("已桥接 Output 完成事件 → MainosabaCollector 游戏推进")
 
     # 决策阶段 (Decision 阶段)
     decision_manager: Optional[DeciderManager] = None

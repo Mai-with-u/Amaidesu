@@ -21,6 +21,8 @@ from pydantic import Field, field_validator
 from src.stages.input.registry import collector
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.decision import IntentPayload
 from src.modules.llm.manager import LLMManager
 from src.modules.logging import get_logger
 from src.modules.prompts.manager import PromptManager
@@ -135,6 +137,16 @@ class MainosabaCollector:
 
     async def start(self) -> None:
         self.is_started = True
+        # 订阅 OUTPUT_INTENT_FINISHED：等所有 handler 输出完成后推进游戏
+        # 这是元控制信号（不携带输出结果数据），不违反数据平面约束
+        self.event_bus.on(
+            CoreEvents.OUTPUT_INTENT_FINISHED,
+            self._on_output_finished,
+            model_class=IntentPayload,
+        )
+
+    def _on_output_finished(self, event_name: str, payload: IntentPayload, source: str) -> None:
+        self._output_finished.set()
 
     async def stop(self) -> None:
         self.is_started = False
