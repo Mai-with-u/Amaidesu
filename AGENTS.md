@@ -379,6 +379,79 @@ enabled = ["tts", "subtitle", "vts"]
 - **禁止**把服务塞进 Context 容器传递
 - 详见 [依赖注入指南](docs/development/dependency-injection.md)
 
+## LLM 模块
+
+LLM 调用统一通过 `LLMManager`。配置采用 **provider + profile** 两层结构：
+
+- `[[llm_providers]]` 定义可复用的 API 连接（一个 provider 对应一个客户端实例）
+- `[llm] / [llm_fast] / [vlm] / [llm_local]` 四个 profile 通过 `provider = "..."` 字段引用某个 provider，再单独覆盖 `model / temperature` 等业务参数
+
+这样同一份 API 连接可以在多个 profile 间共享，也允许让 `llm` 和 `vlm` 同时挂在 deepseek 下但使用不同模型。
+
+### 配置文件示例（`config/model.toml`）
+
+```toml
+# LLM 提供商池
+[[llm_providers]]
+name = "deepseek"
+client_type = "openai"
+base_url = "https://api.deepseek.com/v1"
+api_key = ""
+
+[[llm_providers]]
+name = "local"
+client_type = "openai"
+base_url = "http://localhost:11434/v1"
+api_key = ""
+auth_type = "none"
+
+# 角色配置：引用某个 provider + 自己的 model 参数
+[llm]
+provider = "deepseek"
+model = "deepseek-v4-pro"
+temperature = 0.2
+
+[llm_fast]
+provider = "deepseek"
+model = "deepseek-v4-flash"
+temperature = 0.7
+
+[vlm]
+provider = "deepseek"
+model = "deepseek-v4-vision"
+
+[llm_local]
+provider = "local"
+model = "llama3"
+```
+
+注意 `api_key` 留空时，`LLMManager.setup()` 会尝试从同名环境变量读取（例如 `DEEPSEEK_API_KEY`）。
+
+### 在代码中使用
+
+```python
+from src.modules.llm import LLMManager
+
+llm_manager = LLMManager()
+await llm_manager.setup(model_config)
+
+# 公共 API 保持不变：chat / chat_fast / chat_messages / chat_vision / stream_chat 等
+response = await llm_manager.chat("你好")
+short_reply = await llm_manager.chat_fast("把这句话翻译成英文")
+```
+
+`LLMManager.setup()` 会按 `provider` 字段从 `llm_providers` 里查出对应的连接配置，把它和 profile 自己的参数合并后再创建 client。多个 profile 引用同一个 provider 时，会各自独立创建客户端实例。
+
+### 添加新的 LLM Provider 实现
+
+1. 新建文件 `src/modules/llm/clients/your_client.py`，继承 `BaseLLMClient`（定义在 `src/modules/llm/clients/base.py`）。
+2. 实现抽象方法：`async chat() / async stream_chat()`（以及可选的 `chat_messages / chat_vision / call_tools`）。
+3. 在文件末尾调用 `register_client("your_type", YourClient)`，把实现注册到全局表。
+4. 在 `src/modules/llm/clients/__init__.py` 导出新类，方便测试和外部 import。
+5. 在 `config/model.toml` 里添加一条 `[[llm_providers]]`，把 `client_type` 设成你刚注册的字符串。
+
+未知的 `provider` 或 `client_type` 会在 `setup()` 阶段 fail-fast 报错，不会带着错误配置跑到运行时才发现。
+
 ## 提示词管理
 
 项目使用 **PromptManager** 统一管理所有 LLM 提示词。

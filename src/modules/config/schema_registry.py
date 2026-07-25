@@ -251,94 +251,104 @@ class ConfigSchemaRegistry:
         )
         self.register_group(persona_group)
 
-        # ========== LLM 配置 ==========
+        # ========== LLM Provider 列表 ==========
+        llm_providers_group = ConfigGroupDefinition(
+            key="llm_providers",
+            label="LLM 提供商",
+            description="API 提供商列表（连接信息、鉴权、重试参数；被 llm/llm_fast/vlm/llm_local 引用）",
+            icon="Link",
+            order=28,
+        )
+        llm_providers_group.add_field(
+            ConfigFieldDefinition(
+                key="llm_providers.providers",
+                label="LLM 提供商列表",
+                field_type="array",
+                description="Provider 配置列表（每项含 name/client_type/base_url/api_key/auth_type/timeout/max_retries/retry_delay 等）",
+            )
+        )
+        self.register_group(llm_providers_group)
+
+        # ========== LLM 使用预设（标准 / 快速 / VLM / 本地）==========
+        def _add_llm_profile_fields(group: ConfigGroupDefinition, prefix: str) -> None:
+            """为单个 LLM Profile 分组添加 4 个共享字段 (provider/model/temperature/max_tokens)。"""
+            group.add_field(
+                ConfigFieldDefinition(
+                    key=f"{prefix}.provider",
+                    label="Provider",
+                    field_type="string",
+                    description="引用的 Provider 名称（须在 llm_providers 中存在）",
+                    default="default",
+                )
+            )
+            group.add_field(
+                ConfigFieldDefinition(
+                    key=f"{prefix}.model",
+                    label="模型名称",
+                    field_type="string",
+                    description="模型名称（如 gpt-4o-mini / deepseek-chat）",
+                    default="gpt-4o-mini",
+                    required=True,
+                )
+            )
+            group.add_field(
+                ConfigFieldDefinition(
+                    key=f"{prefix}.temperature",
+                    label="温度参数",
+                    field_type="float",
+                    description="生成温度 (0.0-2.0)，留空则使用 Provider 默认",
+                    validation={"min": 0.0, "max": 2.0},
+                )
+            )
+            group.add_field(
+                ConfigFieldDefinition(
+                    key=f"{prefix}.max_tokens",
+                    label="最大 Token 数",
+                    field_type="integer",
+                    description="最大 Token 数，留空则使用 Provider 默认",
+                    validation={"min": 1, "max": 32000},
+                )
+            )
+
         llm_group = ConfigGroupDefinition(
             key="llm",
             label="LLM 配置",
-            description="大语言模型配置",
+            description="标准 LLM 角色（高质量任务）",
             icon="ChatDotRound",
             order=30,
         )
-        llm_group.add_field(
-            ConfigFieldDefinition(
-                key="llm.client",
-                label="LLM 客户端",
-                field_type="select",
-                description="LLM 客户端类型",
-                default="openai",
-                options=["openai"],
-            )
-        )
-        llm_group.add_field(
-            ConfigFieldDefinition(
-                key="llm.model",
-                label="模型名称",
-                field_type="string",
-                description="使用的模型名称",
-                default="gpt-4",
-                required=True,
-            )
-        )
-        llm_group.add_field(
-            ConfigFieldDefinition(
-                key="llm.temperature",
-                label="温度参数",
-                field_type="float",
-                description="生成温度 (0.0-2.0)",
-                default=0.2,
-                validation={"min": 0.0, "max": 2.0},
-            )
-        )
-        llm_group.add_field(
-            ConfigFieldDefinition(
-                key="llm.api_key",
-                label="API Key",
-                field_type="string",
-                description="API 密钥（可使用环境变量）",
-                default="your-api-key",
-                sensitive=True,
-            )
-        )
-        llm_group.add_field(
-            ConfigFieldDefinition(
-                key="llm.base_url",
-                label="API 端点",
-                field_type="string",
-                description="自定义 API 端点",
-                default="https://api.openai.com/v1",
-            )
-        )
-        llm_group.add_field(
-            ConfigFieldDefinition(
-                key="llm.max_tokens",
-                label="最大 Token 数",
-                field_type="integer",
-                description="生成的最大 Token 数",
-                default=1024,
-                validation={"min": 1, "max": 32000},
-            )
-        )
-        llm_group.add_field(
-            ConfigFieldDefinition(
-                key="llm.max_retries",
-                label="最大重试次数",
-                field_type="integer",
-                description="请求失败时的最大重试次数",
-                default=3,
-                validation={"min": 0, "max": 10},
-            )
-        )
-        llm_group.add_field(
-            ConfigFieldDefinition(
-                key="llm.retry_delay",
-                label="重试延迟",
-                field_type="float",
-                description="重试间隔时间（秒）",
-                default=1.0,
-                validation={"min": 0.0, "max": 60.0},
-            )
-        )
+        _add_llm_profile_fields(llm_group, "llm")
         self.register_group(llm_group)
+
+        llm_fast_group = ConfigGroupDefinition(
+            key="llm_fast",
+            label="快速 LLM",
+            description="快速 LLM 角色（低延迟任务，如意图解析/Avatar 表情分析）",
+            icon="Bolt",
+            order=31,
+        )
+        _add_llm_profile_fields(llm_fast_group, "llm_fast")
+        self.register_group(llm_fast_group)
+
+        vlm_group = ConfigGroupDefinition(
+            key="vlm",
+            label="VLM 配置",
+            description="视觉语言模型角色（图像理解）",
+            icon="Picture",
+            order=32,
+        )
+        _add_llm_profile_fields(vlm_group, "vlm")
+        self.register_group(vlm_group)
+
+        llm_local_group = ConfigGroupDefinition(
+            key="llm_local",
+            label="本地 LLM",
+            description="本地模型角色（Ollama / LM Studio / vLLM 等 OpenAI 兼容服务）",
+            icon="Cpu",
+            order=33,
+        )
+        _add_llm_profile_fields(llm_local_group, "llm_local")
+        self.register_group(llm_local_group)
 
         # ========== MaiCore 配置 ==========
         maicore_group = ConfigGroupDefinition(

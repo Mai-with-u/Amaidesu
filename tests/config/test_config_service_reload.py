@@ -44,12 +44,15 @@ def _build_core_toml() -> str:
 
 
 def _build_model_toml() -> str:
-    """生成最小可加载的 model.toml 内容"""
+    """生成最小可加载的 model.toml 内容（新 LLM 结构）"""
     return (
+        "[[llm_providers]]\n"
+        'name = "default"\n'
+        'client_type = "openai"\n'
+        "\n"
         "[llm]\n"
-        'client = "openai"\n'
+        'provider = "default"\n'
         'model = "gpt-4"\n'
-        'api_key = ""\n'
     )
 
 

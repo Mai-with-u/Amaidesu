@@ -80,27 +80,33 @@ _MODEL_TOML = """\
 
 type = "model"
 
-[llm]
-type = "llm"
-client = "openai"
-model = "gpt-4"
+[[llm_providers]]
+name = "default"
+client_type = "openai"
+base_url = "https://api.openai.com/v1"
 api_key = ""
+timeout = 60
+max_retries = 3
+retry_delay = 1.0
+
+[llm]
+provider = "default"
+model = "gpt-4"
 temperature = 0.2
 
 [llm_fast]
-type = "llm_fast"
-client = "openai"
+provider = "default"
 model = "gpt-3.5-turbo"
 
 [vlm]
-type = "vlm"
-client = "openai"
+provider = "default"
 model = "gpt-4-vision-preview"
 
 [llm_local]
-type = "llm_local"
-client = "ollama"
+provider = "default"
 model = "llama3"
+base_url = "http://localhost:11434/v1"
+api_key = "sk-dummy"
 """
 
 _INPUT_TOML = """\
@@ -342,7 +348,14 @@ class TestGetConfigEndpoint:
         data = body["config"]
         assert data["persona"]["bot_name"] == "麦麦"
         assert data["llm"]["model"] == "gpt-4"
+        assert data["llm"]["provider"] == "default"
+        # 新结构:llm_providers 是列表
+        assert isinstance(data["llm_providers"], list)
+        assert len(data["llm_providers"]) >= 1
+        assert data["llm_providers"][0]["name"] == "default"
+        assert data["llm_providers"][0]["client_type"] == "openai"
         assert data["collectors"]["console_input"]["user_id"] == "console_user"
+        # deciders.llm.client 是 decider 配置字段(选哪个 role),与 model config 无关
         assert data["deciders"]["llm"]["client"] == "llm"
         assert data["handlers"]["subtitle"]["font_size"] == 28
 

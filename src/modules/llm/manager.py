@@ -7,13 +7,13 @@ LLM 管理器 - 核心基础设施
 """
 
 import asyncio
-import os
 import time
 import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from src.modules.llm.clients.base import get_client_impl
 from src.modules.logging import get_logger
 
 # === 数据类定义 ===
@@ -108,164 +108,83 @@ class LLMManager:
         ```
     """
 
-    # 客户端类型到默认后端类型的映射
-    DEFAULT_BACKENDS = {
-        ClientType.LLM: "openai",
-        ClientType.LLM_FAST: "openai",
-        ClientType.VLM: "openai",
-        ClientType.LLM_LOCAL: "openai",  # 本地模型使用 OpenAI 兼容 API
-    }
-
     def __init__(self):
         self.logger = get_logger("LLMManager")
-        self._clients: Dict[str, Any] = {}  # client_type -> client_instance
-        self._client_configs: Dict[str, Dict[str, Any]] = {}  # client_type -> config
+        self._clients: Dict[str, Any] = {}  # profile_name -> client_instance
+        self._profile_configs: Dict[str, Dict[str, Any]] = {}  # profile_name -> merged config (provider + profile)
+        self._providers: Dict[str, tuple[Dict[str, Any], Any]] = {}  # provider_name -> (config, client_instance)
         self._config: Dict[str, Any] = {}
         self._token_manager = None
         self._retry_config = RetryConfig()
 
     async def setup(self, config: Dict[str, Any]) -> None:
         """
-        从配置初始化所有 LLM 客户端
+        从 provider-reference 配置初始化所有 LLM 客户端
 
         Args:
-            config: 完整配置字典，包含 [llm], [llm_fast], [vlm], [llm_local] 等部分
+            config: 完整配置字典，包含：
+                - llm_providers: list[dict]，每个 provider 含 name/client_type/base_url/api_key 等
+                - llm / llm_fast / vlm / llm_local: dict，每个 role 含 provider/model 等
+                  （provider 字段引用 llm_providers 中的某个 name）
 
         配置示例：
             ```toml
+            [[llm_providers]]
+            name = "deepseek"
+            client_type = "openai"
+            base_url = "https://api.deepseek.com/v1"
+            api_key = "sk-xxx"
+
             [llm]
-            client = "openai"
-            model = "gpt-4"
-            api_key = "your-api-key"
-
-            [llm_fast]
-            client = "openai"
-            model = "gpt-3.5-turbo"
-            api_key = "your-api-key"
-
-            [vlm]
-            client = "openai"
-            model = "gpt-4-vision-preview"
-            api_key = "your-api-key"
+            provider = "deepseek"
+            model = "deepseek-chat"
+            temperature = 0.2
             ```
         """
         self._config = config
 
-        # 初始化配置中定义的每个客户端
-        for client_type in ClientType.ALL:
-            if client_type in config:
-                await self._init_client(client_type, config[client_type])
+        if "llm_providers" not in config and isinstance(config.get("llm"), dict):
+            if "client" in config["llm"]:
+                self.logger.warning(
+                    "检测到旧版 LLM 配置格式。请迁移到 provider-reference 格式（llm_providers + role.provider）。"
+                )
 
-        # 确保至少有一个默认客户端
-        if ClientType.DEFAULT not in self._clients:
-            self.logger.warning(f"未配置默认客户端 '{ClientType.DEFAULT}'，将使用默认配置初始化")
-            await self._init_client(ClientType.DEFAULT, self._get_default_config(ClientType.DEFAULT))
+        provider_configs = config.get("llm_providers") or []
+        for pcfg in provider_configs:
+            name = pcfg.get("name", "default")
+            if name in self._providers:
+                raise ValueError(f"llm_providers 中存在重复的 provider name: {name!r}")
+            client_type = pcfg.get("client_type", "openai")
+            impl = get_client_impl(client_type)
+            self._providers[name] = (pcfg, impl)
+            self.logger.info(f"已注册 provider '{name}' (客户端: {client_type}, 端点: {pcfg.get('base_url', 'N/A')})")
 
-        # 初始化 token 管理器
+        for profile_key in ClientType.ALL:
+            profile_raw = config.get(profile_key)
+            if not profile_raw:
+                continue
+            provider_name = profile_raw.get("provider", "default")
+            if provider_name not in self._providers:
+                raise ValueError(
+                    f"LLM 角色 '{profile_key}' 引用的 provider '{provider_name}' 不存在。"
+                    f"可用: {list(self._providers.keys())}"
+                )
+            provider_cfg, impl = self._providers[provider_name]
+            # 合并配置: role 的非 None 值覆盖 provider 值(如 model/temperature);
+            # role 的 None 值(默认)不覆盖,保留 provider 的 api_key/base_url
+            merged = {**provider_cfg, **{k: v for k, v in profile_raw.items() if v is not None}}
+            self._profile_configs[profile_key] = merged
+            # 用合并配置(含 model/temperature/max_tokens)初始化客户端
+            self._clients[profile_key] = impl(merged)
+
         from src.modules.llm.clients.token_usage_manager import TokenUsageManager
 
         self._token_manager = TokenUsageManager(use_global=True)
 
-        self.logger.info(f"LLMManager 初始化完成，已配置客户端: {list(self._clients.keys())}")
-
-    async def _init_client(self, client_type: str, client_config: Dict[str, Any]) -> None:
-        """
-        初始化单个客户端
-
-        Args:
-            client_type: 客户端类型 (llm, llm_fast, vlm, llm_local)
-            client_config: 客户端配置
-        """
-        # 获取客户端类型，默认从配置或使用默认值
-        client_impl = client_config.get("client", self.DEFAULT_BACKENDS.get(client_type, "openai"))
-
-        if client_impl not in ("openai", "ollama", "anthropic"):
-            raise ValueError(f"Unknown LLM provider: {client_impl}")
-
-        if client_impl == "anthropic":
-            self.logger.warning("Anthropic 客户端暂未实现，使用 OpenAI 客户端")
-
-        from src.modules.llm.clients.openai_client import OpenAIClient
-
-        # 应用环境变量覆盖（API Key 等）
-        enriched_config = self._enrich_config_with_env(client_config, client_impl)
-
-        # 创建客户端实例
-        self._clients[client_type] = OpenAIClient(enriched_config)
-        self._client_configs[client_type] = enriched_config
-
         self.logger.info(
-            f"已初始化客户端 '{client_type}' (客户端: {client_impl}, 模型: {enriched_config.get('model', 'N/A')})"
+            f"LLMManager 初始化完成，providers: {list(self._providers.keys())}, "
+            f"profiles: {list(self._profile_configs.keys())}"
         )
-
-    def _enrich_config_with_env(self, config: Dict[str, Any], client_impl: str) -> Dict[str, Any]:
-        """
-        使用环境变量丰富配置
-
-        优先级：环境变量 > 配置文件 > 默认值
-
-        Args:
-            config: 原始配置
-            client_impl: 客户端实现类型
-
-        Returns:
-            丰富后的配置
-        """
-        enriched = config.copy()
-
-        # API Key 环境变量映射
-        env_key_map = {
-            "openai": "OPENAI_API_KEY",
-            "anthropic": "ANTHROPIC_API_KEY",
-        }
-
-        env_key = env_key_map.get(client_impl)
-        if env_key and not enriched.get("api_key"):
-            enriched["api_key"] = os.environ.get(env_key, "sk-dummy")
-
-        # Base URL 环境变量
-        if not enriched.get("base_url"):
-            enriched["base_url"] = os.environ.get("OPENAI_BASE_URL")
-
-        return enriched
-
-    def _get_default_config(self, client_type: str) -> Dict[str, Any]:
-        """
-        获取客户端类型的默认配置
-
-        Args:
-            client_type: 客户端类型
-
-        Returns:
-            默认配置字典
-        """
-        defaults = {
-            ClientType.LLM: {
-                "client": "openai",
-                "model": "gpt-4o-mini",
-                "temperature": 0.2,
-                "max_tokens": 1024,
-            },
-            ClientType.LLM_FAST: {
-                "client": "openai",
-                "model": "gpt-3.5-turbo",
-                "temperature": 0.2,
-                "max_tokens": 512,
-            },
-            ClientType.VLM: {
-                "client": "openai",
-                "model": "gpt-4-vision-preview",
-                "temperature": 0.3,
-                "max_tokens": 1024,
-            },
-            ClientType.LLM_LOCAL: {
-                "client": "openai",
-                "model": "llama3",
-                "base_url": "http://localhost:11434/v1",  # Ollama 默认地址
-                "api_key": "sk-dummy",  # Ollama 不需要真实 API key
-            },
-        }
-        return defaults.get(client_type, {})
 
     # === 主要调用接口 ===
 
@@ -553,7 +472,7 @@ class LLMManager:
         Returns:
             配置字典，如果未配置则返回 None
         """
-        return self._client_configs.get(client_type)
+        return self._profile_configs.get(client_type)
 
     # === 内部方法 ===
 
@@ -617,7 +536,7 @@ class LLMManager:
         start_time = time.time()
 
         llm_client = self._get_client(client_type)
-        client_config = self._client_configs.get(client_type, {})
+        client_config = self._profile_configs.get(client_type, {})
 
         # 获取重试配置
         max_retries = client_config.get("max_retries", self._retry_config.max_retries)
@@ -703,7 +622,7 @@ class LLMManager:
             latency_ms = int((time.time() - start_time) * 1000)
 
             # 获取模型名称
-            model_name = result.model or self._client_configs.get(client_type, {}).get("model", "unknown")
+            model_name = result.model or self._profile_configs.get(client_type, {}).get("model", "unknown")
 
             # 构建请求参数（去除敏感信息）
             request_params = {
@@ -760,14 +679,20 @@ class LLMManager:
 
     async def cleanup(self) -> None:
         """清理所有客户端资源"""
+        cleaned: set[int] = set()
         for name, client in self._clients.items():
+            client_id = id(client)
+            if client_id in cleaned:
+                continue
+            cleaned.add(client_id)
             try:
                 await client.cleanup()
                 self.logger.debug(f"已清理 {name} 客户端")
             except Exception as e:
                 self.logger.warning(f"清理 {name} 客户端失败: {e}")
         self._clients.clear()
-        self._client_configs.clear()
+        self._profile_configs.clear()
+        self._providers.clear()
 
     # === 统计信息 ===
 
@@ -792,7 +717,7 @@ class LLMManager:
         return {
             name: {
                 "client": client.__class__.__name__,
-                "config": self._client_configs.get(name, {}),
+                "config": self._profile_configs.get(name, {}),
             }
             for name, client in self._clients.items()
         }

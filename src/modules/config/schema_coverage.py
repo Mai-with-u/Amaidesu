@@ -83,21 +83,16 @@ def _build_group_to_pydantic() -> Dict[str, Type[BaseModel]]:
         MetaConfig,
         PersonaConfig,
     )
-    from src.modules.config.model_schemas import (
-        FastLLMConfig,
-        LLMConfig,
-        LocalLLMConfig,
-        VLMConfig,
-    )
+    from src.modules.config.model_schemas import LLMProfileConfig
     from src.modules.config.schemas.logging import LoggingConfig
 
     return {
         "general": GeneralConfig,
         "persona": PersonaConfig,
-        "llm": LLMConfig,
-        "llm_fast": FastLLMConfig,
-        "vlm": VLMConfig,
-        "llm_local": LocalLLMConfig,
+        "llm": LLMProfileConfig,
+        "llm_fast": LLMProfileConfig,
+        "vlm": LLMProfileConfig,
+        "llm_local": LLMProfileConfig,
         "maicore": MaiCoreConfig,
         "context": ContextConfig,
         "dashboard": DashboardConfig,

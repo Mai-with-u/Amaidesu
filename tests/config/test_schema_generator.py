@@ -33,11 +33,9 @@ from src.modules.config.core_schemas import (
     PersonaConfig,
 )
 from src.modules.config.model_schemas import (
-    FastLLMConfig,
-    LLMConfig,
-    LocalLLMConfig,
+    LLMProviderConfig,
+    LLMProfileConfig,
     ModelConfig,
-    VLMConfig,
 )
 from src.modules.config.schema_generator import (
     ConfigSchemaGenerator,
@@ -431,44 +429,60 @@ class TestCoreConfigGeneration:
 
 
 class TestModelConfigGeneration:
-    """验证 ModelConfig (llm, llm_fast, vlm, llm_local)。"""
+    """验证 ModelConfig (llm_providers + 4 个 role: llm/llm_fast/vlm/llm_local)。"""
 
     def test_modelconfig_contains_all_model_types(self):
         schema = ConfigSchemaGenerator.generate_config_schema(ModelConfig)
         nested_keys = set(schema["nested"].keys())
-        for expected in ["llm", "llm_fast", "vlm", "llm_local"]:
+        # 新结构:含 llm_providers + 4 个 role
+        for expected in ["llm_providers", "llm", "llm_fast", "vlm", "llm_local"]:
             assert expected in nested_keys, f"ModelConfig missing: {expected}"
 
-    def test_llm_config_fields(self):
-        schema = ConfigSchemaGenerator.generate_config_schema(LLMConfig)
+    def test_llm_provider_config_fields(self):
+        """LLMProviderConfig:client_type + api_key + base_url + retry 等位于 provider。"""
+        schema = ConfigSchemaGenerator.generate_config_schema(LLMProviderConfig)
         by_name = {f["name"]: f for f in schema["fields"]}
-        assert by_name["client"]["type"] == "select"
-        assert by_name["client"]["default"] == "openai"
-        assert by_name["client"]["options"] == ["openai"]
-        assert by_name["model"]["type"] == "string"
-        assert by_name["model"]["default"] == "gpt-4"
-        assert by_name["temperature"]["type"] == "number"
-        assert by_name["temperature"]["default"] == 0.2
-        assert by_name["max_tokens"]["type"] == "integer"
+        assert by_name["name"]["type"] == "string"
+        assert by_name["name"]["default"] == "default"
+        # client_type 在 provider 层(select 选项只 ["openai"])
+        assert by_name["client_type"]["type"] == "select"
+        assert by_name["client_type"]["default"] == "openai"
+        assert by_name["client_type"]["options"] == ["openai"]
+        assert by_name["base_url"]["type"] == "string"
+        assert by_name["base_url"]["default"] == "https://api.openai.com/v1"
         assert by_name["api_key"]["default"] == ""
+        # retry 参数移至 provider
+        assert by_name["max_retries"]["type"] == "integer"
+        assert by_name["max_retries"]["default"] == 3
+        assert by_name["retry_delay"]["type"] == "number"
+        assert by_name["retry_delay"]["default"] == 1.0
 
-    def test_fast_llm_config_fields(self):
-        schema = ConfigSchemaGenerator.generate_config_schema(FastLLMConfig)
+    def test_llm_role_config_fields(self):
+        """LLMRoleConfig:role 仅含 provider 引用 + model + 可选覆盖字段。"""
+        schema = ConfigSchemaGenerator.generate_config_schema(LLMProfileConfig)
         by_name = {f["name"]: f for f in schema["fields"]}
-        assert by_name["model"]["default"] == "gpt-3.5-turbo"
+        # 旧字段 client/api_key/base_url/max_retries/retry_delay 已不在 role 层
+        assert "client" not in by_name
+        assert "max_retries" not in by_name
+        assert "retry_delay" not in by_name
+        # 新字段
+        assert by_name["provider"]["type"] == "string"
+        assert by_name["provider"]["default"] == "default"
+        assert by_name["model"]["type"] == "string"
+        assert by_name["model"]["default"] == "gpt-4o-mini"
+        # 可选字段(temperature/max_tokens/base_url/api_key)的 default 都是 None
+        assert by_name["temperature"]["type"] == "number"
+        assert by_name["max_tokens"]["type"] == "integer"
+        # role 级 api_key/base_url 默认 None(运行时由 provider 兜底)
+        assert by_name["api_key"].get("default") is None
+        assert by_name["base_url"].get("default") is None
 
-    def test_vlm_config_fields(self):
-        schema = ConfigSchemaGenerator.generate_config_schema(VLMConfig)
-        by_name = {f["name"]: f for f in schema["fields"]}
-        assert by_name["model"]["default"] == "gpt-4-vision-preview"
-        assert by_name["temperature"]["default"] == 0.3
-
-    def test_local_llm_config_fields(self):
-        schema = ConfigSchemaGenerator.generate_config_schema(LocalLLMConfig)
-        by_name = {f["name"]: f for f in schema["fields"]}
-        assert by_name["model"]["default"] == "llama3"
-        assert by_name["base_url"]["default"] == "http://localhost:11434/v1"
-        assert by_name["api_key"]["default"] == "sk-dummy"
+    def test_llm_role_uses_provider_not_client(self):
+        """回归保护:role 不应再暴露 client 字段(已迁移至 provider)。"""
+        schema = ConfigSchemaGenerator.generate_config_schema(LLMProfileConfig)
+        field_names = {f["name"] for f in schema["fields"]}
+        assert "client" not in field_names, "role 不应有 client 字段(已迁移至 provider.client_type)"
+        assert "client_type" not in field_names, "role 不应有 client_type 字段(仅 provider 有)"
 
 
 # ===========================================================================
@@ -477,6 +491,8 @@ class TestModelConfigGeneration:
 
 
 # registry group_key -> Pydantic 类
+# 新结构:4 个 LLM role (llm/llm_fast/vlm/llm_local) 都映射到 LLMRoleConfig
+# (旧结构下每个 role 有独立的 FastLLMConfig/LocalLLMConfig/VLMConfig 子类,已合并)
 _GROUP_CLASS = {
     "general": GeneralConfig,
     "persona": PersonaConfig,
@@ -484,10 +500,10 @@ _GROUP_CLASS = {
     "context": ContextConfig,
     "dashboard": DashboardConfig,
     "logging": LoggingConfig,
-    "llm": LLMConfig,
-    "llm_fast": FastLLMConfig,
-    "vlm": VLMConfig,
-    "llm_local": LocalLLMConfig,
+    "llm": LLMProfileConfig,
+    "llm_fast": LLMProfileConfig,
+    "vlm": LLMProfileConfig,
+    "llm_local": LLMProfileConfig,
     "meta": MetaConfig,
 }
 

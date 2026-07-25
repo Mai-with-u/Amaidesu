@@ -73,10 +73,20 @@ def llm_manager() -> LLMManager:
 
     用于测试 LLM 相关功能，不连接真实后端。
 
+    注意：使用前必须调用 await manager.setup(config)，其中 config 必须为
+    新 provider-reference 格式：
+        {
+            "llm_providers": [{"name": "...", "client_type": "openai", ...}],
+            "llm": {"provider": "...", "model": "..."},
+            ...
+        }
+
     Returns:
-        LLMManager: LLM 管理器实例
+        LLMManager: 未初始化的 LLM 管理器实例
     """
-    return LLMManager()
+    manager = LLMManager()
+    manager._token_manager = None  # 显式标记未初始化，方便下游检查
+    return manager
 
 
 # Domain 特定的 fixtures 通过各 domain 的 conftest.py 提供

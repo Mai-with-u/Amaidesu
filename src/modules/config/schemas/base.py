@@ -29,6 +29,29 @@ def _unwrap_to_baseconfig(annotation: Any) -> type["BaseConfig"] | None:
     return None
 
 
+def _unwrap_to_baseconfig_list(annotation: Any) -> type["BaseConfig"] | None:
+    """从 list[BaseConfig] / Optional[list[BaseConfig]] 注解中提取元素类型。
+
+    仅处理 list 包装 + 元素是 BaseConfig 子类的情形；
+    其他（list[str]、list[int]、list[dict] 等）返回 None。
+    """
+    origin = get_origin(annotation)
+    if origin is Union:
+        args = [a for a in get_args(annotation) if a is not type(None)]
+        if len(args) == 1:
+            annotation = args[0]
+        else:
+            return None
+
+    if origin in (list, list):
+        inner_args = [a for a in get_args(annotation) if a is not type(None)]
+        if len(inner_args) == 1:
+            inner = inner_args[0]
+            if isinstance(inner, type) and issubclass(inner, BaseConfig):
+                return inner
+    return None
+
+
 @dataclass
 class DriftReport:
     """配置漂移报告
@@ -113,7 +136,12 @@ class BaseConfig(BaseModel):
             report.redundant.append(key)
 
         # 检测缺失字段（Schema 有，配置没有）
+        # None-默认值字段（如 LLMRoleConfig.api_key = None）不视为缺失——
+        # 它们表示"使用 provider 兜底",在 TOML 中省略是合法且推荐的写法
         for key in class_fields - data_keys:
+            field_info = cls.model_fields.get(key)
+            if field_info is not None and field_info.default is None and not field_info.is_required():
+                continue
             report.missing.append(key)
 
         # 剥离多余字段
@@ -131,6 +159,25 @@ class BaseConfig(BaseModel):
                     nested_instance, nested_report = actual_type.from_dict_with_drift_check(nested_data)
                     report.merge(field_name, nested_report)
                     clean_data[field_name] = nested_instance
+
+        # 递归处理 list[BaseConfig] 字段 (e.g., llm_providers: list[LLMProviderConfig])
+        for field_name, field_info in cls.model_fields.items():
+            if field_name not in clean_data:
+                continue
+
+            list_inner_type = _unwrap_to_baseconfig_list(field_info.annotation)
+            if list_inner_type is not None:
+                nested_data = clean_data[field_name]
+                if isinstance(nested_data, list):
+                    cleaned_items = []
+                    for idx, item in enumerate(nested_data):
+                        if isinstance(item, dict):
+                            item_instance, item_report = list_inner_type.from_dict_with_drift_check(item)
+                            report.merge(f"{field_name}[{idx}]", item_report)
+                            cleaned_items.append(item_instance)
+                        else:
+                            cleaned_items.append(item)
+                    clean_data[field_name] = cleaned_items
 
         instance = cls(**clean_data)
         return instance, report

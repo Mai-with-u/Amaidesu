@@ -38,11 +38,17 @@ def _build_core_toml() -> str:
 
 
 def _build_model_toml() -> str:
+    """新 LLM 结构:[[llm_providers]] + [llm] 引用 provider。"""
     return (
-        "[llm]\n"
-        'client = "openai"\n'
-        'model = "gpt-4"\n'
+        "[[llm_providers]]\n"
+        'name = "default"\n'
+        'client_type = "openai"\n'
+        'base_url = "https://api.openai.com/v1"\n'
         'api_key = ""\n'
+        "\n"
+        "[llm]\n"
+        'provider = "default"\n'
+        'model = "gpt-4"\n'
     )
 
 
@@ -244,19 +250,26 @@ class TestGetConfigSchemaForSection:
         assert "style_constraints" in field_names
 
     def test_get_llm_section_schema(self, initialized_service):
-        """get_config_schema_for_section('llm') 返回 LLMConfig 的 schema"""
-        from src.modules.config.model_schemas import LLMConfig
+        """get_config_schema_for_section('llm') 返回 LLMRoleConfig 的 schema (新结构)"""
+        from src.modules.config.model_schemas import LLMProfileConfig
 
         schema = initialized_service.get_config_schema_for_section("llm")
 
         assert isinstance(schema, dict)
-        assert schema.get("className") == "LLMConfig"
+        assert schema.get("className") == "LLMRoleConfig"
         assert "fields" in schema
 
         field_names = {f["name"] for f in schema["fields"]}
-        assert "client" in field_names
+        # 新 LLMRoleConfig 字段: provider/model/temperature/max_tokens + 可选 base_url/api_key 覆盖
+        assert "provider" in field_names
         assert "model" in field_names
+        assert "temperature" in field_names
+        assert "max_tokens" in field_names
+        # 旧 LLMConfig 的字段(client/api_key/base_url/max_retries/retry_delay)不再存在
+        assert "client" not in field_names
+        # api_key/base_url 仍存在(role 级覆盖 provider 默认)
         assert "api_key" in field_names
+        assert "base_url" in field_names
 
     def test_get_maicore_section_schema(self, initialized_service):
         """get_config_schema_for_section('maicore') 返回 MaiCoreConfig 的 schema"""
@@ -305,10 +318,13 @@ class TestGetConfigSchemaForSection:
         """json_schema_extra 中的字段标记 (x-ui-type / x-options / ...) 必须保留"""
         schema = initialized_service.get_config_schema_for_section("llm")
 
-        # LLMConfig.client 有 json_schema_extra={"x-ui-type": "select", "x-options": [...]}
-        client_field = next(f for f in schema["fields"] if f["name"] == "client")
-        assert client_field.get("x-ui-type") == "select"
-        assert client_field.get("x-options") == ["openai"]
+        # 新结构:LLMRoleConfig.temperature 有 json_schema_extra={"x-ui-type": "number"}
+        # LLMRoleConfig.max_tokens 有 json_schema_extra={"x-ui-type": "integer"}
+        temperature_field = next(f for f in schema["fields"] if f["name"] == "temperature")
+        assert temperature_field.get("x-ui-type") == "number"
+
+        max_tokens_field = next(f for f in schema["fields"] if f["name"] == "max_tokens")
+        assert max_tokens_field.get("x-ui-type") == "integer"
 
 
 # ===========================================================================

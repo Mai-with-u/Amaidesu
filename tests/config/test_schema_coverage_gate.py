@@ -385,7 +385,17 @@ def _build_minimal_core_toml() -> str:
 
 
 def _build_minimal_model_toml() -> str:
-    return '[llm]\ntype = "llm"\nclient = "openai"\nmodel = "gpt-4"\n'
+    """新 LLM 结构:[[llm_providers]] 数组 + [llm] 引用 provider。"""
+    return (
+        "[[llm_providers]]\n"
+        'name = "default"\n'
+        'client_type = "openai"\n'
+        'api_key = ""\n'
+        "\n"
+        "[llm]\n"
+        'provider = "default"\n'
+        'model = "gpt-4"\n'
+    )
 
 
 @pytest.fixture

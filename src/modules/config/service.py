@@ -738,12 +738,7 @@ class ConfigService:
             MetaConfig,
             PersonaConfig,
         )
-        from src.modules.config.model_schemas import (
-            FastLLMConfig,
-            LLMConfig,
-            LocalLLMConfig,
-            VLMConfig,
-        )
+        from src.modules.config.model_schemas import LLMProfileConfig
         from src.modules.config.schema_generator import ConfigSchemaGenerator
         from src.modules.config.schemas.logging import LoggingConfig
 
@@ -756,11 +751,11 @@ class ConfigService:
             "context": ContextConfig,
             "dashboard": DashboardConfig,
             "logging": LoggingConfig,
-            # model 子节
-            "llm": LLMConfig,
-            "llm_fast": FastLLMConfig,
-            "vlm": VLMConfig,
-            "llm_local": LocalLLMConfig,
+            # model 子节(新结构:所有 profile 共享同一 LLMProfileConfig,profile 引用 provider)
+            "llm": LLMProfileConfig,
+            "llm_fast": LLMProfileConfig,
+            "vlm": LLMProfileConfig,
+            "llm_local": LLMProfileConfig,
         }
 
         if section not in section_map:

@@ -111,26 +111,49 @@ def _generate_model_toml() -> str:
 
     model = ModelConfig()
 
+    def _populate_nested_table(table: Any, item: BaseModel) -> None:
+        """把 BaseModel 字段填入 tomlkit table;None 值跳过 (留给运行时默认)。"""
+        nested_cls = type(item)
+        sub_config = item.model_dump()
+        for sub_name, sub_info in nested_cls.model_fields.items():
+            value = sub_config.get(sub_name)
+            if value is None:
+                continue
+            if sub_info.description:
+                table.add(tomlkit.comment(sub_info.description))
+            table[sub_name] = value
+
     for field_name, field_info in ModelConfig.model_fields.items():
         field_value = getattr(model, field_name)
 
         if isinstance(field_value, BaseModel):
-            sub_config = field_value.model_dump()
             sub_table = tomlkit.table()
-
-            nested_cls = type(field_value)
-            for sub_name, sub_info in nested_cls.model_fields.items():
-                if sub_info.description:
-                    sub_table.add(tomlkit.comment(sub_info.description))
-                sub_table[sub_name] = sub_config[sub_name]
+            _populate_nested_table(sub_table, field_value)
 
             if field_info.description:
                 doc.add(tomlkit.comment(field_info.description))
             doc[field_name] = sub_table
             doc.add(tomlkit.nl())
+        elif isinstance(field_value, list) and field_value and isinstance(field_value[0], BaseModel):
+            # list[BaseModel] → TOML array-of-tables (`[[field_name]]`)
+            # 必须用 tomlkit.items.AoT 显式构造,才能确保输出 `[[name]]` 表头语法
+            # (doc.append() 单元素会被降级为 `[name]` 单表;array() 会输出内联 `[{}]`)
+            if field_info.description:
+                doc.add(tomlkit.comment(field_info.description))
+            from tomlkit.items import AoT
+
+            tables = []
+            for item in field_value:
+                item_table = tomlkit.table()
+                _populate_nested_table(item_table, item)
+                tables.append(item_table)
+            doc[field_name] = AoT(tables)
+            doc.add(tomlkit.nl())
         else:
             if field_info.description:
                 doc.add(tomlkit.comment(field_info.description))
+            if field_value is None:
+                continue
             doc[field_name] = field_value
             doc.add(tomlkit.nl())
 
