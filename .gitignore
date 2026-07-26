@@ -213,3 +213,8 @@ config.toml.backup*
 # Multi-file config (generated from Schema on first run, contains user secrets)
 *.toml
 /config/
+
+# Simulator preset files (no user secrets — checked-in templates)
+!config/simulator_residents.toml
+!config/simulator_gifts.toml
+!config/simulated_live_stream.toml.example

@@ -9,7 +9,11 @@ const showLayout = computed(() => route.meta.layout !== false);
 
 <template>
   <AppLayout v-if="showLayout">
-    <router-view />
+    <router-view v-slot="{ Component }">
+      <keep-alive>
+        <component :is="Component" />
+      </keep-alive>
+    </router-view>
   </AppLayout>
   <router-view v-else />
 </template>

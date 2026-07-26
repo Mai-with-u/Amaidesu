@@ -28,6 +28,7 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:60214',
         changeOrigin: true,
+        ws: true,
       },
       '/ws': {
         target: 'ws://localhost:60214',

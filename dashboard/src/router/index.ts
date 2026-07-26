@@ -70,6 +70,11 @@ const router = createRouter({
       component: () => import('@/views/Subtitle.vue'),
       meta: { layout: false },
     },
+    {
+      path: '/simulator',
+      name: 'simulator',
+      component: () => import('@/views/SimulatorPanel.vue'),
+    },
   ],
 });
 

@@ -29,3 +29,7 @@ class ManagerStatusProvider(Protocol):
     def get_component_summaries(self) -> List[Dict[str, Any]]:
         """返回当前阶段所有参与者的状态摘要字典列表"""
         ...
+
+    def get_collectors(self) -> list:
+        """返回所有已加载的 Collector 实例列表（供 Dashboard 子路由查询）"""
+        ...

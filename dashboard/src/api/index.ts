@@ -110,4 +110,41 @@ export const capabilitiesApi = {
 // Trace API
 export * from './traces';
 
+// Simulator API
+export interface SimulatorStatus {
+  is_running: boolean;
+  current_state: string;
+  started_at_ms: number;
+  config_snapshot: Record<string, unknown>;
+  is_collector_available: boolean;
+}
+
+export interface SimulatorStats {
+  total_messages: number;
+  total_tokens: number;
+  messages_by_type: Record<string, number>;
+  messages_by_role: Record<string, number>;
+}
+
+export interface SimulatorPersona {
+  user_id: string;
+  user_nickname: string;
+  role: string;
+  fans_medal_level: number;
+  guard_level: number;
+  messages_generated: number;
+}
+
+export const simulatorApi = {
+  getStatus: () => api.get<SimulatorStatus>('/simulator/status'),
+  getStats: () => api.get<SimulatorStats>('/simulator/stats'),
+  getPersonas: () => api.get<SimulatorPersona[]>('/simulator/personas'),
+  start: () => api.post<{ status: string }>('/simulator/start'),
+  stop: () => api.post<{ status: string }>('/simulator/stop'),
+  updateParams: (params: Record<string, unknown>) => api.post<{ status: string; params: Record<string, unknown> }>('/simulator/params', params),
+  triggerGiftRain: (duration_s: number = 30) => api.post<{ status: string; duration_s: number }>('/simulator/trigger/gift_rain', { duration_s }),
+  triggerTopicInjection: (topic: string) => api.post<{ status: string; topic: string }>('/simulator/trigger/topic_injection', { topic }),
+  resetTokenBudget: () => api.post<{ status: string }>('/simulator/reset_token_budget'),
+};
+
 export default api;

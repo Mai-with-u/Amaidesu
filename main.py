@@ -357,6 +357,8 @@ async def create_app_components(
                 services_by_type={
                     LLMManager: llm_service,
                     PromptManager: prompt_manager,
+                    ContextService: context_service,
+                    EventHistoryService: event_history_service,
                 },
             )
             if input_pipeline_manager:
