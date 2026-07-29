@@ -278,28 +278,28 @@ class AmaidesuPlugin(MaiBotPlugin):
     def _extract_reply_text(self, message: Dict[str, Any]) -> str:
         """从 MaiBot 序列化消息字典中提取回复文本。
 
-        优先使用 `processed_plain_text`(MaiBot 已处理过的纯文本),
-        回退从 `raw_message` 段的 text 字段拼接。
+        优先从 `raw_message` 提取 TextComponent（避免 `processed_plain_text`
+        里混入 ReplyComponent 的 target_message_content 导致用户原文重复）。
         """
-        plain = message.get("processed_plain_text")
-        if isinstance(plain, str) and plain.strip():
-            return plain.strip()
-
         raw = message.get("raw_message")
         if isinstance(raw, list):
             parts = []
             for seg in raw:
-                if isinstance(seg, dict):
-                    if seg.get("type") == "text":
-                        data = seg.get("data")
-                        if isinstance(data, dict):
-                            text = data.get("text")
-                            if isinstance(text, str):
-                                parts.append(text)
-                        elif isinstance(data, str):
-                            parts.append(data)
+                if isinstance(seg, dict) and seg.get("type") == "text":
+                    data = seg.get("data")
+                    if isinstance(data, dict):
+                        text = data.get("text")
+                        if isinstance(text, str):
+                            parts.append(text)
+                    elif isinstance(data, str):
+                        parts.append(data)
             if parts:
                 return "".join(parts).strip()
+
+        plain = message.get("processed_plain_text")
+        if isinstance(plain, str) and plain.strip():
+            return plain.strip()
+
         return ""
 
     @MessageGateway(

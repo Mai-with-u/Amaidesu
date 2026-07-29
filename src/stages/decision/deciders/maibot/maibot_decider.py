@@ -124,7 +124,9 @@ class MaiBotDecider:
 
             seg = Seg(type="text", data=normalized.text)
 
-            message_id = f"normalized_{normalized.timestamp_ms}"
+            # NormalizedMessage.timestamp_ms 默认为 0，但 MaiBot 要求 time 必须 > 0
+            ts_ms = normalized.timestamp_ms or now_ms()
+            message_id = f"normalized_{ts_ms}"
             additional_config = {
                 "source": "amaidesu",
                 "original_platform": normalized.source,
@@ -144,7 +146,7 @@ class MaiBotDecider:
                     message_id=message_id,
                     platform=self.platform,
                     user_info=user_info,
-                    time=normalized.timestamp_ms / 1000.0,
+                    time=ts_ms / 1000.0,
                     format_info=format_info,
                     additional_config=additional_config,
                     group_info=group_info,
