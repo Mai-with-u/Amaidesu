@@ -20,6 +20,9 @@ from src.modules.events.event_history import EventRecord, EventHistoryService, i
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import (
     ConnectedPayload,
+    CoreErrorPayload,
+    CoreShutdownPayload,
+    CoreStartupPayload,
     DisconnectedPayload,
     IntentPayload,
     MessageReadyPayload,
@@ -55,17 +58,12 @@ class EventHistoryRecorder:
     async def start(self) -> None:
         """订阅所有需要记录的事件。"""
 
-        class _GenericPayload(BaseModel):
-            event: str = ""
-            message: str = ""
-            data: Any = None
-
         self._subscribe(CoreEvents.INPUT_MESSAGE_RECEIVED, self._on_input_message, model_class=MessageReadyPayload)
         self._subscribe(CoreEvents.DECISION_INTENT_GENERATED, self._on_decision_intent, model_class=IntentPayload)
         self._subscribe(CoreEvents.OUTPUT_INTENT_DISPATCHED, self._on_output_intent, model_class=IntentPayload)
-        self._subscribe(CoreEvents.CORE_STARTUP, self._on_core_event, model_class=_GenericPayload)
-        self._subscribe(CoreEvents.CORE_SHUTDOWN, self._on_core_event, model_class=_GenericPayload)
-        self._subscribe(CoreEvents.CORE_ERROR, self._on_core_error, model_class=_GenericPayload)
+        self._subscribe(CoreEvents.CORE_STARTUP, self._on_core_event, model_class=CoreStartupPayload)
+        self._subscribe(CoreEvents.CORE_SHUTDOWN, self._on_core_event, model_class=CoreShutdownPayload)
+        self._subscribe(CoreEvents.CORE_ERROR, self._on_core_error, model_class=CoreErrorPayload)
 
         component_model_map = {
             CoreEvents.INPUT_CONNECTED: ConnectedPayload,

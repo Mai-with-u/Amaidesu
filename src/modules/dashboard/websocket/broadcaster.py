@@ -12,10 +12,13 @@ from pydantic import BaseModel
 
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import (
+    ConnectedPayload,
+    CoreErrorPayload,
+    CoreShutdownPayload,
+    CoreStartupPayload,
+    DisconnectedPayload,
     IntentPayload,
     MessageReadyPayload,
-    ConnectedPayload,
-    DisconnectedPayload,
 )
 from src.modules.logging import get_logger
 
@@ -107,17 +110,12 @@ class EventBroadcaster:
         self._subscribe_event(CoreEvents.OUTPUT_INTENT_DISPATCHED, self._on_output_intent, model_class=IntentPayload)
 
     def _subscribe_system_events(self) -> None:
-        class GenericEventPayload(BaseModel):
-            event: Optional[str] = None
-            message: Optional[str] = None
-            data: Any = None
-
-        for event_name, handler in [
-            (CoreEvents.CORE_STARTUP, self._on_core_event),
-            (CoreEvents.CORE_SHUTDOWN, self._on_core_event),
-            (CoreEvents.CORE_ERROR, self._on_core_error),
+        for event_name, handler, payload_class in [
+            (CoreEvents.CORE_STARTUP, self._on_core_event, CoreStartupPayload),
+            (CoreEvents.CORE_SHUTDOWN, self._on_core_event, CoreShutdownPayload),
+            (CoreEvents.CORE_ERROR, self._on_core_error, CoreErrorPayload),
         ]:
-            self._subscribe_event(event_name, handler, model_class=GenericEventPayload)
+            self._subscribe_event(event_name, handler, model_class=payload_class)
 
         component_map = {
             CoreEvents.INPUT_CONNECTED: ConnectedPayload,

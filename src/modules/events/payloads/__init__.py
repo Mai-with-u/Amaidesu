@@ -28,6 +28,11 @@
 
 from src.modules.logging import get_logger
 
+from .core import (
+    CoreErrorPayload,
+    CoreShutdownPayload,
+    CoreStartupPayload,
+)
 from .decision import (
     IntentActionPayload,
     IntentPayload,
@@ -49,6 +54,10 @@ from .connection import ConnectionEventPayload
 logger = get_logger("Payloads")
 
 __all__ = [
+    # Core 系统事件
+    "CoreStartupPayload",
+    "CoreShutdownPayload",
+    "CoreErrorPayload",
     # Input 阶段
     "RawDataPayload",
     "MessageReadyPayload",

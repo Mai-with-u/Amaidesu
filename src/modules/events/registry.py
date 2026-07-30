@@ -185,18 +185,24 @@ class EventRegistry:
         """
         获取事件的 Model 类型
 
+        优先查询 ``_core_events``，若未找到则回退到模块级 ``EVENT_REGISTRY``
+        （``@register_event`` 装饰器填充的注册表）。
+
         Args:
             event_name: 事件名称
 
         Returns:
             Pydantic Model 类型，未注册返回 None
         """
-        return cls._core_events.get(event_name)
+        model = cls._core_events.get(event_name)
+        if model is None:
+            model = EVENT_REGISTRY.get(event_name)
+        return model
 
     @classmethod
     def is_registered(cls, event_name: str) -> bool:
-        """检查事件是否已注册"""
-        return event_name in cls._core_events
+        """检查事件是否已注册（同时查询 _core_events 和 EVENT_REGISTRY）"""
+        return event_name in cls._core_events or event_name in EVENT_REGISTRY
 
     # ==================== 列表 API ====================
 
@@ -218,6 +224,7 @@ def register_core_events() -> None:
     """
     # noqa: F401 —— 仅为触发模块级 @register_event 执行
     from src.modules.events.payloads import (  # noqa: F401
+        core as _core_payloads,  # noqa: F401
         input as _input_payloads,  # noqa: F401
         decision as _decision_payloads,  # noqa: F401
         output as _output_payloads,  # noqa: F401

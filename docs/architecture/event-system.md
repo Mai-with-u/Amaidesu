@@ -74,7 +74,7 @@ src/modules/events/
     ├── input.py          # Input 阶段 Payload
     ├── decision.py       # Decision 阶段 Payload
     ├── output.py         # Output 阶段 Payload
-    └── system.py         # 系统事件 Payload
+    └── core.py           # 核心系统事件 Payload
 ```
 
 ---
@@ -201,6 +201,8 @@ CoreEvents.DECISION_DISCONNECTED         # decision.disconnected
 
 # ========== Output 阶段 ==========
 CoreEvents.OUTPUT_INTENT_DISPATCHED      # output.intent.dispatched
+CoreEvents.OUTPUT_INTENT_FINISHED        # output.intent.finished（所有 handler 完成后聚合通知）
+CoreEvents.OUTPUT_HANDLER_COMPLETED      # output.handler.completed（per-handler 完成通知）
 CoreEvents.OUTPUT_HANDLER_CONNECTED      # DEPRECATED 兼容垫片（不再发射）
 CoreEvents.OUTPUT_HANDLER_DISCONNECTED   # DEPRECATED 兼容垫片（不再发射）
 CoreEvents.OUTPUT_OBS_COMMAND            # output.obs.command
@@ -234,6 +236,9 @@ print(all_events)
 ```mermaid
 classDiagram
     BaseModel <|-- BasePayload
+    BasePayload <|-- CoreStartupPayload
+    BasePayload <|-- CoreShutdownPayload
+    BasePayload <|-- CoreErrorPayload
     BasePayload <|-- RawDataPayload
     BasePayload <|-- MessageReadyPayload
     BasePayload <|-- IntentActionPayload
@@ -243,22 +248,31 @@ classDiagram
     BasePayload <|-- ConnectionEventPayload
     BasePayload <|-- OBSCommandPayload
     BasePayload <|-- OutputIntentDispatchedPayload
+    BasePayload <|-- OutputHandlerCompletedPayload
     BasePayload <|-- StickerCommandPayload
 ```
 
 > **架构演进**：早期版本中散落的 Payload 类（`DecisionRequestPayload`、
 > `ProviderConnectedPayload`、`RenderCompletedPayload`、`ErrorPayload` 等）
-> 已统一收敛。当前实际存在的 11 个 Payload 类如上图所示，全部定义在
-> `src/modules/events/payloads/` 下按阶段分包（`input.py` / `decision.py` /
+> 已统一收敛。当前实际存在的 14 个 Payload 类如上图所示，全部定义在
+> `src/modules/events/payloads/` 下按阶段分包（`core.py` / `input.py` / `decision.py` /
 > `output.py` / `connection.py` / `base.py`）。
 
 ### 按阶段分类
+
+#### Core 系统事件
+
+| Payload 类 | 事件名 | 用途 |
+|-----------|--------|------|
+| `CoreStartupPayload` | `core.startup` | 系统启动事件 |
+| `CoreShutdownPayload` | `core.shutdown` | 系统关闭事件 |
+| `CoreErrorPayload` | `core.error` | 系统错误事件 |
 
 #### Input 阶段
 
 | Payload 类 | 事件名 | 用途 |
 |-----------|--------|------|
-| `RawDataPayload` | `data.raw` | 原始数据事件 |
+| `RawDataPayload` | `input.raw.data` | 原始数据事件 |
 | `MessageReadyPayload` | `input.message.received` | 标准化消息就绪（Input → Decision） |
 
 #### Decision 阶段
@@ -274,7 +288,7 @@ classDiagram
 
 | Payload 类 | 事件名 | 用途 |
 |-----------|--------|------|
-| `ConnectionEventPayload` | 通用 | 输入/决策组件连接状态（共用） |
+| `ConnectionEventPayload` | `connection.event` | 输入/决策组件连接状态（共用） |
 
 #### Output 阶段
 
@@ -283,7 +297,7 @@ classDiagram
 | `OutputIntentDispatchedPayload` | `output.intent.dispatched` | 过滤后意图派发（OutputHandlerManager → OutputHandler） |
 | `OutputHandlerCompletedPayload` | `output.handler.completed` | 单个 handler 完成通知（两层事件模式第一层，per-handler 完成由 OutputHandlerManager 聚合后再发 FINISHED）。含 `handler_name`、`intent_id`、`success` |
 | `IntentPayload`（复用） | `output.intent.finished` | 聚合后"所有 handler 干完"通知（两层事件模式第二层，由 OutputHandlerManager 等齐所有 active handler 的 COMPLETED 后发出） |
-| `OBSCommandPayload` | `output.obs.command` | OBS 统一入口（由 payload.command 区分动作） |
+| `OBSCommandPayload` | `output.obs.command` | OBS 统一入口（由 payload.action 区分动作） |
 | `StickerCommandPayload` | `output.sticker.command` | 贴图命令 |
 
 > **两层事件聚合模式（Output 完成时序）**：`output.intent.dispatched` 默认 fire-and-forget，emit 立即返回而 handler 在后台 task 跑。要准确感知"所有 handler 都干完了"，需要两层：
@@ -582,4 +596,4 @@ class MyPayload(BasePayload):
 
 ---
 
-*最后更新：2026-06-28（同步破坏性升级：收敛事件常量 + Payload 类名 + intent 事件名 + from_intent 参数名）*
+*最后更新：2026-07-30（同步事件注册机制：去除 EventRegistry 副作用，统一使用 @register_event 装饰器注册；新增 Core 系统事件 Payload）*

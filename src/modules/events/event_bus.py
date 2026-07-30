@@ -285,11 +285,6 @@ class EventBus:
             event_bus.on("event.name", handler, model_class=MessageReadyPayload)
             ```
         """
-        # 注册事件类型到 EventRegistry
-        try:
-            EventRegistry.register_core_event(event_name, model_class)
-        except ValueError:
-            self.logger.debug(f"事件 '{event_name}' 不符合核心事件命名规范")
 
         # 创建包装器，自动反序列化
         async def typed_wrapper(event_name: str, dict_data: Dict[str, Any], source: str):
