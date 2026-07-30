@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.payloads import RawDataPayload
-from src.modules.events.registry import EventRegistry
+from src.modules.events.registry import EVENT_REGISTRY, EventRegistry
 
 # =============================================================================
 # Test Models
@@ -269,8 +269,8 @@ async def test_event_validation_with_registered_event(event_bus: EventBus):
     async def handler(event_name, payload: RawDataPayload, source: str):
         received_data.append(payload)
 
-    # 注册核心事件（必须以 core. 开头）
-    EventRegistry.register_core_event("core.test.validation.event", RawDataPayload)
+    # 注册测试事件到 EVENT_REGISTRY，使 emit 时的数据验证能找到类型
+    EVENT_REGISTRY["core.test.validation.event"] = RawDataPayload
     event_bus.on("core.test.validation.event", handler, RawDataPayload)
 
     # 发布符合验证的数据（使用 Payload 类）
@@ -282,7 +282,7 @@ async def test_event_validation_with_registered_event(event_bus: EventBus):
     assert received_data[0].content == "test content"
 
     # 清理
-    EventRegistry._core_events.pop("core.test.validation.event", None)
+    EVENT_REGISTRY.pop("core.test.validation.event", None)
 
 
 # =============================================================================

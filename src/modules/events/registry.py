@@ -105,78 +105,18 @@ def list_registered_events() -> Dict[str, Type[BaseModel]]:
     return EVENT_REGISTRY.copy()
 
 
-# ==================== 兼容层：EventRegistry 类 ====================
+# ==================== 兼容查询层：EventRegistry 类 ====================
 
 
 class EventRegistry:
     """
-    事件类型注册表（兼容层）
+    事件类型注册表（查询 API）
 
-    保留旧 API（``register_core_event`` / ``get`` / ``is_registered`` /
-    ``list_all_events`` / ``unregister_core_event``）以兼容既有调用方。
-
-    新代码应使用 :func:`register_event` 装饰器和 :data:`EVENT_REGISTRY` 字典。
+    所有事件注册统一通过 :func:`register_event` 装饰器写入 :data:`EVENT_REGISTRY`。
+    本类提供兼容的查询 API（``get`` / ``is_registered`` / ``list_all_events``）。
     """
 
-    # 核心事件（只读）：由旧 register_core_event 调用方写入
-    _core_events: Dict[str, Type[BaseModel]] = {}
-
     _logger = get_logger("EventRegistry")
-
-    # ==================== 核心事件 API ====================
-
-    @classmethod
-    def register_core_event(cls, event_name: str, model: Type[BaseModel]) -> None:
-        """
-        注册核心事件
-
-        Args:
-            event_name: 事件名称（如 "input.message.received"）
-            model: Pydantic Model 类型
-
-        Raises:
-            ValueError: 事件名不符合核心事件命名规范
-        """
-        # 验证命名规范
-        valid_prefixes = (
-            "input.",
-            "decision.",
-            "output.",
-            "core.",
-        )
-        if not any(event_name.startswith(prefix) for prefix in valid_prefixes):
-            raise ValueError(f"核心事件名必须以 {valid_prefixes} 之一开头，收到: {event_name}")
-
-        if event_name in cls._core_events:
-            # 只有当类型不同时才发出警告，相同类型不警告（这是安全的重复注册）
-            existing_model = cls._core_events[event_name]
-            if existing_model != model:
-                cls._logger.warning(
-                    f"核心事件已存在，将覆盖: {event_name} (旧: {existing_model.__name__}, 新: {model.__name__})"
-                )
-            else:
-                cls._logger.debug(f"核心事件已存在（类型相同，跳过）: {event_name}")
-
-        cls._core_events[event_name] = model
-        cls._logger.debug(f"注册核心事件: {event_name} -> {model.__name__}")
-
-    @classmethod
-    def unregister_core_event(cls, event_name: str) -> bool:
-        """
-        移除核心事件注册
-
-        Args:
-            event_name: 事件名称
-
-        Returns:
-            是否成功移除（False 表示事件未注册）
-        """
-        if event_name in cls._core_events:
-            del cls._core_events[event_name]
-            cls._logger.debug(f"移除核心事件: {event_name}")
-            return True
-        cls._logger.debug(f"尝试移除未注册的事件: {event_name}")
-        return False
 
     # ==================== 查询 API ====================
 
@@ -185,8 +125,7 @@ class EventRegistry:
         """
         获取事件的 Model 类型
 
-        优先查询 ``_core_events``，若未找到则回退到模块级 ``EVENT_REGISTRY``
-        （``@register_event`` 装饰器填充的注册表）。
+        委托给模块级 :data:`EVENT_REGISTRY`（由 ``@register_event`` 装饰器填充）。
 
         Args:
             event_name: 事件名称
@@ -194,22 +133,19 @@ class EventRegistry:
         Returns:
             Pydantic Model 类型，未注册返回 None
         """
-        model = cls._core_events.get(event_name)
-        if model is None:
-            model = EVENT_REGISTRY.get(event_name)
-        return model
+        return EVENT_REGISTRY.get(event_name)
 
     @classmethod
     def is_registered(cls, event_name: str) -> bool:
-        """检查事件是否已注册（同时查询 _core_events 和 EVENT_REGISTRY）"""
-        return event_name in cls._core_events or event_name in EVENT_REGISTRY
+        """检查事件是否已注册"""
+        return event_name in EVENT_REGISTRY
 
     # ==================== 列表 API ====================
 
     @classmethod
     def list_all_events(cls) -> Dict[str, Type[BaseModel]]:
         """列出所有注册的事件"""
-        return cls._core_events.copy()
+        return EVENT_REGISTRY.copy()
 
 
 # ==================== 启动钩子 ====================

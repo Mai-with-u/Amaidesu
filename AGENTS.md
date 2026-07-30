@@ -547,7 +547,7 @@ class MessageReadyPayload(BasePayload):
 - **装饰器幂等**：同一类重复注册不会出错，重复注册为不同类型会抛 `ValueError`
 - **自动反向引用**：被装饰类获得 `cls._registered_event_name` 属性，便于日志/调试
 - **Payload 模块导入**：应用启动时调用 `register_core_events()` 触发各 Payload 子模块 import，使装饰器生效
-- **兼容层**：`EventRegistry.register_core_event(...)` 类 API 保留以兼容旧调用方，新代码应使用装饰器
+- **事件注册**：统一使用 `@register_event` 装饰器注册；`EventRegistry` 仅提供查询 API（`get` / `is_registered` / `list_all_events`）
 
 注册表查询：
 

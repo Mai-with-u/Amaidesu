@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 import pytest
 from pydantic import BaseModel
 
-from src.modules.events.registry import EventRegistry
+from src.modules.events.registry import EVENT_REGISTRY, EventRegistry
 
 # =============================================================================
 # 测试数据模型
@@ -33,97 +33,56 @@ class CoreEventData(BaseModel):
 
 @pytest.fixture(autouse=True)
 def reset_registry():
-    """每个测试前后重置 EventRegistry 状态"""
-    # 测试前清理
-    EventRegistry._core_events.clear()
-
+    """每个测试前后保存并恢复 EVENT_REGISTRY 状态"""
+    saved = dict(EVENT_REGISTRY)
+    EVENT_REGISTRY.clear()
     yield
-
-    # 测试后清理
-    EventRegistry._core_events.clear()
-
-
-# =============================================================================
-# 核心事件注册测试
-# =============================================================================
-
-
-def test_register_core_event_valid():
-    """测试注册有效的核心事件"""
-    EventRegistry.register_core_event("input.test", CoreEventData)
-
-    assert EventRegistry.is_registered("input.test")
-    assert EventRegistry.get("input.test") == CoreEventData
-
-
-def test_register_core_event_multiple_valid_prefixes():
-    """测试注册所有有效前缀的核心事件"""
-    valid_events = [
-        ("input.message.received", CoreEventData),
-        ("decision.intent.generated", CoreEventData),
-        ("output.intent.dispatched", CoreEventData),
-        ("core.startup", CoreEventData),
-    ]
-
-    for event_name, model in valid_events:
-        EventRegistry.register_core_event(event_name, model)
-
-    # 验证所有事件都已注册
-    for event_name, _ in valid_events:
-        assert EventRegistry.is_registered(event_name)
-
-
-def test_register_core_event_invalid_prefix():
-    """测试注册无效前缀的核心事件（应失败）"""
-    with pytest.raises(ValueError, match="核心事件名必须以"):
-        EventRegistry.register_core_event("invalid.event.name", CoreEventData)
-
-    with pytest.raises(ValueError, match="核心事件名必须以"):
-        EventRegistry.register_core_event("plugin.test.event", CoreEventData)
-
-    with pytest.raises(ValueError, match="核心事件名必须以"):
-        EventRegistry.register_core_event("custom.event", CoreEventData)
-
-    with pytest.raises(ValueError, match="核心事件名必须以"):
-        EventRegistry.register_core_event("data.raw", CoreEventData)  # data. 前缀已废弃
-
-
-def test_register_core_event_duplicate():
-    """测试重复注册核心事件（应覆盖并警告）"""
-    EventRegistry.register_core_event("input.test", CoreEventData)
-
-    # 重复注册应该覆盖（记录警告但不抛出异常）
-    EventRegistry.register_core_event("input.test", CoreEventData)
-
-    # 验证仍然可以获取
-    assert EventRegistry.get("input.test") == CoreEventData
+    EVENT_REGISTRY.clear()
+    EVENT_REGISTRY.update(saved)
 
 
 # =============================================================================
-# 事件查询测试
+# 注册和查询测试
 # =============================================================================
 
 
-def test_get_event():
-    """测试获取已注册的事件"""
-    EventRegistry.register_core_event("core.event1", CoreEventData)
+def test_register_and_query():
+    """测试注册事件并查询"""
+    EVENT_REGISTRY["test.event.one"] = CoreEventData
 
-    # 获取核心事件
-    assert EventRegistry.get("core.event1") == CoreEventData
+    assert EventRegistry.is_registered("test.event.one")
+    assert EventRegistry.get("test.event.one") == CoreEventData
 
-    # 获取不存在的事件
+
+def test_multiple_events():
+    """测试注册多个事件"""
+    events = {
+        "test.event.a": CoreEventData,
+        "test.event.b": CoreEventData,
+        "test.event.c": CoreEventData,
+    }
+    for name, cls in events.items():
+        EVENT_REGISTRY[name] = cls
+
+    for name in events:
+        assert EventRegistry.is_registered(name)
+
+    all_events = EventRegistry.list_all_events()
+    for name in events:
+        assert name in all_events
+
+
+def test_get_nonexistent():
+    """测试获取不存在的事件"""
     assert EventRegistry.get("nonexistent.event") is None
 
 
 def test_is_registered():
     """测试检查事件是否已注册"""
-    EventRegistry.register_core_event("core.registered", CoreEventData)
+    EVENT_REGISTRY["test.registered"] = CoreEventData
 
-    # 已注册的核心事件
-    assert EventRegistry.is_registered("core.registered") is True
-
-    # 未注册的事件
-    assert EventRegistry.is_registered("core.unregistered") is False
+    assert EventRegistry.is_registered("test.registered") is True
+    assert EventRegistry.is_registered("test.unregistered") is False
 
 
 # =============================================================================
@@ -133,15 +92,14 @@ def test_is_registered():
 
 def test_list_all_events():
     """测试列出所有事件"""
-    EventRegistry.register_core_event("core.event1", CoreEventData)
-    EventRegistry.register_core_event("core.event2", CoreEventData)
+    EVENT_REGISTRY["test.list.one"] = CoreEventData
+    EVENT_REGISTRY["test.list.two"] = CoreEventData
 
     all_events = EventRegistry.list_all_events()
 
-    # 应该包含所有事件
     assert len(all_events) == 2
-    assert "core.event1" in all_events
-    assert "core.event2" in all_events
+    assert "test.list.one" in all_events
+    assert "test.list.two" in all_events
 
     # 返回的是副本，修改不应影响原数据
     all_events["new.event"] = CoreEventData
@@ -154,35 +112,41 @@ def test_list_all_events():
 
 
 def test_empty_registry():
-    """测试空注册表的行为"""
-    # 所有查询方法在空注册表上应该正常工作
+    """测试空注册表的行为（清除装饰器注册后）"""
+    # 此时 EVENT_REGISTRY 为空（reset_registry 已清空）
     assert EventRegistry.is_registered("any.event") is False
     assert EventRegistry.get("any.event") is None
     assert len(EventRegistry.list_all_events()) == 0
 
 
 def test_mixed_operations():
-    """测试混合操作（注册、查询）"""
-    # 初始状态：注册一些事件
-    EventRegistry.register_core_event("core.event1", CoreEventData)
-    EventRegistry.register_core_event("core.event2", CoreEventData)
+    """测试混合操作（注册、查询、清空）"""
+    EVENT_REGISTRY["test.mixed.one"] = CoreEventData
+    EVENT_REGISTRY["test.mixed.two"] = CoreEventData
 
     assert len(EventRegistry.list_all_events()) == 2
 
-    # 清空
-    EventRegistry._core_events.clear()
+    EVENT_REGISTRY.clear()
     assert len(EventRegistry.list_all_events()) == 0
 
 
 def test_event_name_with_dots():
     """测试包含多个点的事件名"""
-    # 核心事件（使用 input. 前缀）
-    EventRegistry.register_core_event("input.message.received", CoreEventData)
+    EVENT_REGISTRY["input.message.received"] = CoreEventData
     assert EventRegistry.is_registered("input.message.received")
 
-    # 也可以注册更深层级的事件（使用 core. 前缀）
-    EventRegistry.register_core_event("core.test.nested.event", CoreEventData)
+    EVENT_REGISTRY["core.test.nested.event"] = CoreEventData
     assert EventRegistry.is_registered("core.test.nested.event")
+
+
+def test_list_all_events_returns_copy():
+    """测试 list_all_events() 返回的是副本"""
+    EVENT_REGISTRY["test.copy"] = CoreEventData
+
+    events = EventRegistry.list_all_events()
+    events["__test_dummy__"] = type  # type: ignore[assignment]
+
+    assert EventRegistry.is_registered("__test_dummy__") is False
 
 
 if __name__ == "__main__":
