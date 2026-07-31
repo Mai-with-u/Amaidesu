@@ -320,12 +320,12 @@ async def handle_message(self, message):
 |--------------|---------|---------|------|
 | InputCollector | `start()` | `stop()` | 返回 AsyncIterator，用于数据流生成 |
 | Decider | `setup()` | `cleanup()` | 注册到 EventBus，处理消息 |
-| OutputHandler | `setup()` | `cleanup()` | 注册到 EventBus，渲染参数 |
+| OutputHandler | `init()` | `cleanup()` | Manager 初始化资源并直接调用 `handle(intent)`，Handler 不订阅阶段调度事件 |
 
 **注意**: InputCollector 使用 `start()`/`stop()` 是因为它需要返回异步生成器（AsyncIterator），
-而 Decider/OutputHandler 使用 `setup()`/`cleanup()` 是因为它们是事件订阅者。
+而 Decider 使用 `setup()`/`cleanup()` 是因为它是事件订阅者。
 
-InputCollector 也提供了 `setup()` 方法作为接口一致性，但它是空实现，实际启动数据流必须使用 `start()`。
+OutputHandler 的 `init()` 与 `cleanup()` 只管理自身资源及专用事件通信（如 `OUTPUT_STICKER_COMMAND`），不处理阶段调度事件。`OutputHandlerManager` 在 OutputPipeline 过滤后直接调用 active Handler 的 `handle(intent)`。
 
 ### 阶段参与者生命周期快速参考
 
@@ -497,33 +497,28 @@ await event_bus.subscribe(CoreEvents.INPUT_MESSAGE_RECEIVED, self.handle_message
 
 ### 核心事件
 
-事件按阶段流转使用统一的动词链：`received → generated → dispatched → completed → finished`。
+事件按阶段流转使用统一的动词链：`received → generated → dispatched → finished`。`completed` 保留为 Manager 内部完成语义，Handler 不必再发布。
 
 | 事件名 | 发布者 | 订阅者 | 数据类型 |
 |--------|--------|--------|---------|
 | `input.message.received` | Input 阶段 | Decision 阶段 | `MessageReadyPayload` (NormalizedMessage) |
 | `decision.intent.generated` | Decision 阶段 | Output 阶段 | `IntentPayload` (Intent) |
-| `output.intent.dispatched` | OutputHandlerManager | OutputHandlers | `IntentPayload` (Intent) |
-| `output.handler.completed` | 各 OutputHandler（在 `handle()` 末尾的 finally 里发） | OutputHandlerManager（聚合） | `OutputHandlerCompletedPayload`（含 `handler_name`、`intent_id`） |
-| `output.intent.finished` | OutputHandlerManager（聚合后发） | 任何需要"等所有输出完成"的组件（如 MainosabaCollector） | `IntentPayload` (Intent) |
+| `output.intent.dispatched` | OutputHandlerManager | Broadcaster、EventRecorder 等监控组件 | `IntentPayload` (Intent) |
+| `output.handler.completed` | OutputHandlerManager（内部） | OutputHandlerManager（内部） | `OutputHandlerCompletedPayload` |
+| `output.intent.finished` | OutputHandlerManager | 任何需要"等所有输出完成"的组件（如 MainosabaCollector） | `IntentPayload` (Intent) |
 | `output.obs.command` | Dashboard API / 外部组件 | ObsControlHandler 等 | `OBSCommandPayload`（按 `action` 区分） |
 
-#### 两层事件聚合模式（Output 完成时序）
+#### Manager 直接调度与完成跟踪
 
-`output.intent.dispatched` 默认是 fire-and-forget，emit 立刻返回而 handler 在后台跑。所以需要一套聚合机制保证"所有 handler 真的干完了"信号能被准确发出。
+`OutputHandlerManager` 是 Output 阶段唯一的调度点：
 
-- **第一层**：每个 OutputHandler 在自己的 `handle()` 末尾（finally 里以保证异常也发）emit `output.handler.completed`，声明"我干完了"。
-- **第二层**：`OutputHandlerManager` 订阅第一层，按 `intent_id` 关联，等所有 active handler 都报告完成后，emit `output.intent.finished`。
-- **兜底**：watchdog 超时（`completion_timeout_ms` 默认 30000），防止某个 handler 漏发导致 FINISHED 永远不发。
+1. 订阅 `decision.intent.generated` 并运行 OutputPipeline。
+2. 发布 `output.intent.dispatched` 监控信号，供 Broadcaster、EventRecorder 等观察。
+3. 为每个 active Handler 直接创建任务并调用 `handle(intent)`。
+4. `_run_handler` 使用 `asyncio.wait_for` 落实 `render_timeout_ms`（配置为 `0` 时不设超时），隔离单个 Handler 的超时与异常。
+5. Manager 使用 `gather` 等待全部 Handler 任务结束，再发布 `output.intent.finished`。
 
-**新增 OutputHandler 时必须遵守的契约**：
-
-1. 在 `handle(intent)` 末尾（用 `try/finally` 包裹）emit `OUTPUT_HANDLER_COMPLETED`
-2. `handler_name` 用 `self.__class__.__name__`（与 Manager 端 `type(h).__name__` 一致）
-3. `intent_id` 从 `intent.metadata.intent_id` 取
-4. 异常路径（`success=False`）也要发，否则 Manager 只能靠超时兜底
-
-基类 `AudioHandlerBase` 和 `AvatarHandlerBase` 已自动 emit，子类无需重复。独立 handler（`StickerHandler` / `SubtitleHandler` / `DebugConsoleHandler` / `ObsControlHandler` / `GPTSoVITSHandler`）需自行实现 `_emit_completed` 并在 `handle()` finally 里调用。
+Handler 不订阅 `output.intent.dispatched`，也不发布 `output.handler.completed`。完成跟踪由 Manager 内部管理。等待全部输出结束的下游组件应订阅 `output.intent.finished`。
 
 ### 事件注册
 
@@ -624,9 +619,10 @@ ContextService 提供对话历史管理和多会话支持。
   ↓ EventBus: input.message.received
 【Decision 阶段】NormalizedMessage → Intent
   ↓ EventBus: decision.intent.generated
-【Output 阶段】Intent → 实际输出
-  ↓ EventBus: output.intent.dispatched
-OutputHandlers 渲染
+【Output 阶段】Intent → Manager 直接并行渲染
+  └─ EventBus: output.intent.dispatched（监控信号，仅供 Broadcaster/EventRecorder 观察）
+  └─ EventBus: output.intent.finished（全部 Handler 完成后由 Manager 发布）
+  OutputHandlers 渲染
 ```
 
 **详细文档**：[3阶段架构](docs/architecture/overview.md)
@@ -740,4 +736,4 @@ Amaidesu/
 
 ---
 
-*最后更新：2026-06-19*
+*最后更新：2026-07-31（OutputHandlerManager 改为直接并行调用 Handler，DISPATCHED 仅保留为监控信号）*

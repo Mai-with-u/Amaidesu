@@ -5,6 +5,7 @@
 """
 
 import asyncio
+from typing import Optional
 
 import pytest
 
@@ -27,7 +28,6 @@ def make_intent(text: str) -> Intent:
             decision_time_ms=now_ms(),
         ),
         speech=text,
-        emotion="neutral",
     )
 
 
@@ -39,38 +39,38 @@ def make_intent(text: str) -> Intent:
 class PassThroughPipeline(Pipeline["Intent"]):
     """透传 Pipeline"""
 
-    async def _process(self, params):
-        return params
+    async def _process(self, item: Intent) -> Optional[Intent]:
+        return item
 
 
 class ModifyingPipeline(Pipeline["Intent"]):
     """修改 Pipeline"""
 
-    async def _process(self, params):
-        params.speech = (params.speech or "") + " [已修改]"
-        return params
+    async def _process(self, item: Intent) -> Optional[Intent]:
+        item.speech = (item.speech or "") + " [已修改]"
+        return item
 
 
 class DroppingPipeline(Pipeline["Intent"]):
     """丢弃 Pipeline"""
 
-    async def _process(self, params):
+    async def _process(self, item: Intent) -> Optional[Intent]:
         return None
 
 
 class FailingPipeline(Pipeline["Intent"]):
     """失败 Pipeline"""
 
-    async def _process(self, params):
+    async def _process(self, item: Intent) -> Optional[Intent]:
         raise ValueError("测试失败")
 
 
 class SlowPipeline(Pipeline["Intent"]):
     """慢速 Pipeline（用于超时测试）"""
 
-    async def _process(self, params):
+    async def _process(self, item: Intent) -> Optional[Intent]:
         await asyncio.sleep(10)  # 超过默认超时时间
-        return params
+        return item
 
 
 # =============================================================================
@@ -160,7 +160,9 @@ async def test_process_multiple_pipelines():
     params = make_intent("测试")
     result = await manager.process(params)
 
+    assert result is not None
     # 应该被修改两次（顺序根据优先级）
+    assert result.speech is not None
     assert result.speech.endswith(" [已修改] [已修改]")
 
 
@@ -175,6 +177,7 @@ async def test_process_disabled_pipeline():
     params = make_intent("测试")
     result = await manager.process(params)
 
+    assert result is not None
     # 不应该被修改
     assert result.speech == "测试"
 
@@ -244,6 +247,7 @@ async def test_process_continue_on_error():
 
     # pipeline2 失败但继续执行 pipeline3
     assert result is not None
+    assert result.speech is not None
     assert result.speech.endswith(" [已修改]")
 
 

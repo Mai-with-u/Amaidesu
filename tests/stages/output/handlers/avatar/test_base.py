@@ -1,11 +1,11 @@
 """AvatarHandlerBase 测试 - 新架构版本"""
 
 from typing import Any, Dict
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.modules.types import Intent, IntentMetadata
+from src.modules.types import Intent, IntentAction, IntentEmotion, IntentMetadata
 from src.stages.output.handlers.avatar.base import AvatarHandlerBase
 from src.modules.events.event_bus import EventBus
 
@@ -15,16 +15,16 @@ def mock_event_bus():
     event_bus = MagicMock(spec=EventBus)
     event_bus.on = MagicMock()
     event_bus.off = MagicMock()
+    event_bus.emit = AsyncMock()
     return event_bus
 
 
 @pytest.fixture
 def sample_intent():
     return Intent(
-        emotion="happy",
-        action="smile",
+        emotion=IntentEmotion(name="happy"),
+        action=IntentAction(name="test.smile"),
         speech="你好！很高兴见到你~",
-        context=None,
         metadata=IntentMetadata(
             source_id="test_source",
             decision_time_ms=1234567890123,
@@ -42,7 +42,11 @@ class MockAvatarProvider(AvatarHandlerBase):
 
     async def _adapt_intent(self, intent: Intent) -> Dict[str, Any]:
         self.adapt_intent_calls.append(intent)
-        return {"emotion": intent.emotion, "action": intent.action, "response": intent.speech}
+        return {
+            "emotion": intent.emotion.name if intent.emotion else None,
+            "action": intent.action.name if intent.action else None,
+            "response": intent.speech,
+        }
 
     async def _render_to_platform(self, params: Any) -> None:
         self.render_to_platform_calls.append(params)

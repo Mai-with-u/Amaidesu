@@ -22,14 +22,14 @@ Amaidesu 采用 3 阶段架构，阶段参与者分为三种类型：
                     Decider.decide()
                           ↓
                   Intent (event: decision.intent.generated)
-                          ↓
-       OutputHandlerManager 接收后 emit output.intent.dispatched
-                          ↓
-              Intent (event: output.intent.dispatched)
-                          ↓
-                  OutputHandler.handle()
-                          ↓
-                    实际渲染输出
+                           ↓
+       OutputHandlerManager 运行 Pipeline 并发出监控信号
+                           ↓
+       Manager 直接并行调用 active Handler.handle(intent)
+                           ↓
+                     实际渲染输出
+                           ↓
+          Manager emit output.intent.finished
 ```
 
 ## 2. 装饰器注册
@@ -105,54 +105,48 @@ class MyOutputHandler:
 | 方法 | 调用时机 | 职责 |
 |------|----------|------|
 | `__init__(config, event_bus)` | 注册时 | 存储配置和依赖 |
-| `async init()` | Manager 启动时 | 初始化资源、订阅事件 |
-| `async handle(intent)` | 每个派发的 Intent | 实际渲染 |
-| `async cleanup()` | Manager 停止时 | 释放资源、取消订阅 |
+| `async init()` | Manager 启动时 | 初始化自身资源、连接及专用事件通信 |
+| `async handle(intent)` | Manager 直接调用时 | 实际渲染，不订阅阶段调度事件 |
+| `async cleanup()` | Manager 停止时 | 释放自身资源及专用事件订阅 |
 
 实际示例参见 `src/stages/output/handlers/subtitle/subtitle_handler.py`。
 
-## 4. Handler 事件订阅模式
+## 4. Handler 直接调度模式
 
-Handler 通过订阅 `OUTPUT_INTENT_DISPATCHED` 事件接收 Intent，**不**通过 Manager 注入的回调执行。
+Handler 不订阅 `OUTPUT_INTENT_DISPATCHED`。`OutputHandlerManager` 运行 OutputPipeline 后，会为每个 active Handler 创建任务并直接调用 `handle(intent)`。
 
-### 4.1 推荐订阅模式（幂等）
+### 4.1 推荐实现
 
 ```python
-from src.modules.events.names import CoreEvents
-from src.modules.events.payloads import IntentPayload
+from src.modules.types.intent import Intent
 
 class MyHandler:
     def __init__(self, config, event_bus):
+        self.config = config
         self.event_bus = event_bus
-        self._dispatch_subscribed = False
 
-    async def init(self):
-        if self.event_bus and not self._dispatch_subscribed:
-            self.event_bus.on(
-                CoreEvents.OUTPUT_INTENT_DISPATCHED,
-                self._handle_intent_dispatched,
-                model_class=IntentPayload,
-            )
-            self._dispatch_subscribed = True
+    async def init(self) -> None:
+        # 只初始化本 Handler 的连接或资源
+        await self._connect()
 
-    async def _handle_intent_dispatched(self, event_name, payload, source):
-        intent = payload.to_intent()
-        await self.handle(intent)
-
-    async def cleanup(self):
-        if self.event_bus and self._dispatch_subscribed:
-            self.event_bus.off(
-                CoreEvents.OUTPUT_INTENT_DISPATCHED,
-                self._handle_intent_dispatched,
-            )
-            self._dispatch_subscribed = False
-
-    async def handle(self, intent):
+    async def handle(self, intent: Intent) -> None:
         # 实际渲染逻辑
-        ...
+        await self._render(intent)
+
+    async def cleanup(self) -> None:
+        # 只释放本 Handler 的连接或资源
+        await self._disconnect()
 ```
 
-模板见 `src/stages/output/handlers/subtitle/subtitle_handler.py:329-346`。
+新增 Handler 的调度契约只有一个：实现 `async def handle(self, intent)`。不要在 `init()` 中订阅 `OUTPUT_INTENT_DISPATCHED`，不要在 `cleanup()` 中取消该订阅，也不要发布 `OUTPUT_HANDLER_COMPLETED`。
+
+Manager 会执行以下工作：
+
+- 发布 `OUTPUT_INTENT_DISPATCHED` 监控信号，供 Broadcaster、EventRecorder 等组件观察。
+- 并行调用所有 active Handler 的 `handle(intent)`。
+- 通过 `asyncio.wait_for` 应用 `render_timeout_ms`，配置为 `0` 时不设超时。
+- 隔离单个 Handler 的异常和超时。
+- 等待全部 Handler 任务结束后发布 `OUTPUT_INTENT_FINISHED`。
 
 ### 4.2 跨 Handler 通信
 
@@ -253,7 +247,7 @@ assert handler.get_last_intent().speech == test_intent.speech
 
 1. **优先组合而非继承**（VTS Handler 已拆分为 VTSHandler + LipSyncProcessor + HotkeyMatcher + ExpressionController）
 2. **避免类级可变字典**（AGENTS.md 禁止）；实例级 dict 放在 `__init__`
-3. **事件命名遵循动词链**：`input.message.received` → `decision.intent.generated` → `output.intent.dispatched`
+3. **事件命名遵循动词链**：`input.message.received` → `decision.intent.generated` → `output.intent.dispatched`（监控）→ `output.intent.finished`
 4. **避免 magic number**（P3-8 TODO）；超时、节流间隔应放 config
 5. **资源生命周期**（如 Client、Connection）在 `start/init` 创建，`stop/cleanup` 释放，避免泄漏
 6. **依赖通过构造函数注入**，便于测试

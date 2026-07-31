@@ -10,12 +10,11 @@ from typing import TYPE_CHECKING, Any, Dict
 
 from pydantic import Field
 
-from src.stages.output.handlers.completion_mixin import CompletionEmitterMixin
 from src.stages.output.registry import handler
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads import IntentPayload, StickerCommandPayload
+from src.modules.events.payloads import StickerCommandPayload
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
 
@@ -24,7 +23,7 @@ if TYPE_CHECKING:
 
 
 @handler("sticker")
-class StickerHandler(CompletionEmitterMixin):
+class StickerHandler:
     """
     贴纸输出Handler
 
@@ -68,20 +67,7 @@ class StickerHandler(CompletionEmitterMixin):
 
         self.last_trigger_time: float = 0.0
 
-        self._dispatch_subscribed = False
-
-    async def init(self):
-        """初始化 Handler"""
-        if self.event_bus and not getattr(self, "_dispatch_subscribed", False):
-            self.event_bus.on(
-                CoreEvents.OUTPUT_INTENT_DISPATCHED,
-                self._handle_intent_dispatched,
-                model_class=IntentPayload,
-            )
-            self._dispatch_subscribed = True
-
     async def handle(self, intent: "Intent"):
-        success = True
         try:
             if not intent.action or "sticker" not in intent.action.name.lower():
                 self.logger.debug("Intent 中没有 sticker 动作，跳过渲染")
@@ -112,16 +98,4 @@ class StickerHandler(CompletionEmitterMixin):
             )
             self.logger.debug(f"已发布贴纸事件: sticker_id={sticker_id}")
         except Exception as e:
-            success = False
             self.logger.error(f"StickerHandler 渲染失败: {e}", exc_info=True)
-        finally:
-            await self._emit_completed(intent, success=success)
-
-    async def _handle_intent_dispatched(self, event_name: str, payload: IntentPayload, source: str):
-        intent = payload.to_intent()
-        await self.handle(intent)
-
-    async def cleanup(self):
-        if self.event_bus and getattr(self, "_dispatch_subscribed", False):
-            self.event_bus.off(CoreEvents.OUTPUT_INTENT_DISPATCHED, self._handle_intent_dispatched)
-            self._dispatch_subscribed = False

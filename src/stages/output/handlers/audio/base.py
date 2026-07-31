@@ -7,18 +7,21 @@ AudioHandlerBase - 语音合成 Handler 抽象基类
 
 基类提供：
   1. 构造器（config / event_bus / audio_stream_channel）
-  2. 事件订阅/取消（OUTPUT_INTENT_DISPATCHED）
-  3. AudioDeviceManager 初始化辅助
-  4. AudioStreamChannel 通知辅助（notify_start / publish / notify_end）
-  5. handle() 模板方法（提取 speech → 加锁 → 通知 → 合成 → 通知）
-  6. **per-handler 完成事件自动 emit**（OUTPUT_HANDLER_COMPLETED，放在 finally 里保证异常也发）
+  2. AudioDeviceManager 初始化辅助
+  3. AudioStreamChannel 通知辅助（notify_start / publish / notify_end）
+  4. handle() 模板方法（提取 speech → 加锁 → 通知 → 合成 → 通知）
+
+调度模型：
+  OutputHandlerManager 直接调用 handler.handle(intent) (asyncio.create_task +
+  wait_for 包装 render_timeout_ms)。Handler 无需订阅派发事件，
+  也无需 emit 完成事件。
 
 子类必须实现：
   - _synthesize(text): 核心合成逻辑
-  - init(): 引擎初始化 + 调用 _setup_audio_device() + _subscribe_output_events()
-  - cleanup(): 引擎清理 + _unsubscribe_output_events()
+  - init(): 引擎初始化 + 调用 _setup_audio_device()
+  - cleanup(): 引擎清理
 
-覆盖 handle() 时（如 GPTSoVITS）需自行保证在末尾 emit OUTPUT_HANDLER_COMPLETED。
+覆盖 handle() 时（如 GPTSoVITS）无需 emit 任何事件。
 """
 
 from abc import ABC, abstractmethod
@@ -29,8 +32,6 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 import numpy as np
 
 from src.modules.events.event_bus import EventBus
-from src.modules.events.names import CoreEvents
-from src.modules.events.payloads import IntentPayload, OutputHandlerCompletedPayload
 from src.modules.logging import get_logger
 from src.modules.streaming.audio_stream_channel import AudioStreamChannel
 from src.modules.tts import AudioDeviceManager
@@ -69,9 +70,6 @@ class AudioHandlerBase(ABC):
         # 串行化锁：同一时间只合成一句话
         self.tts_lock = asyncio.Lock()
 
-        # 事件订阅状态标志（确保幂等）
-        self._dispatch_subscribed = False
-
     # ── 模板方法 ────────────────────────────────────────────────
 
     async def handle(self, intent: "Intent"):
@@ -80,27 +78,23 @@ class AudioHandlerBase(ABC):
         子类可以完全覆盖此方法（如 GPTSoVITS 需要 inline 文本清洗），
         但覆盖时建议仍用 _notify_audio_start/_notify_audio_end 保证通知完整性。
 
-        无论成功或异常,都会在 finally 中 emit OUTPUT_HANDLER_COMPLETED,
-        以便 OutputHandlerManager 可以聚合各 handler 的完成事件。
+        完成/失败信号由 OutputHandlerManager 通过 asyncio.wait_for 自行处理，
+        Handler 无需 emit 完成事件。
         """
         text = intent.speech
         if not text:
             self.logger.debug("TTS 文本为空，跳过渲染")
-            await self._emit_completed(intent, success=True)
             return
 
-        success = True
         async with self.tts_lock:
             await self._notify_audio_start(text)
             try:
                 await self._synthesize(text)
             except Exception as e:
-                success = False
                 self.logger.error(f"TTS 合成失败: {e}", exc_info=True)
                 raise
             finally:
                 await self._notify_audio_end(text)
-                await self._emit_completed(intent, success=success)
 
     async def _synthesize(self, text: str):  # noqa: B027 — 故意非抽象；GPTSoVITS 覆盖 handle() 无需此方法
         """合成钩子：子类可覆盖。
@@ -126,7 +120,6 @@ class AudioHandlerBase(ABC):
         1. 检查依赖
         2. 初始化 TTS 客户端/引擎
         3. self._setup_audio_device(...)
-        4. self._subscribe_output_events()
         """
         ...
 
@@ -137,7 +130,6 @@ class AudioHandlerBase(ABC):
         通用步骤（子类 cleanup() 中按顺序调用）：
         1. 停止音频播放 / 停止流
         2. 清空缓冲区
-        3. self._unsubscribe_output_events()
         """
         ...
 
@@ -167,29 +159,6 @@ class AudioHandlerBase(ABC):
                 manager.set_output_device(device_index=index)
         self.audio_manager = manager
         return manager
-
-    # ── 事件订阅辅助 ────────────────────────────────────────────
-
-    async def _subscribe_output_events(self):
-        """订阅 OUTPUT_INTENT_DISPATCHED（幂等）。"""
-        if self.event_bus and not self._dispatch_subscribed:
-            self.event_bus.on(
-                CoreEvents.OUTPUT_INTENT_DISPATCHED,
-                self._on_intent_dispatched,
-                model_class=IntentPayload,
-            )
-            self._dispatch_subscribed = True
-            self.logger.debug(f"{self.__class__.__name__} 已订阅 {CoreEvents.OUTPUT_INTENT_DISPATCHED}")
-
-    async def _unsubscribe_output_events(self):
-        """取消订阅 OUTPUT_INTENT_DISPATCHED（幂等）。"""
-        if self.event_bus and self._dispatch_subscribed:
-            self.event_bus.off(CoreEvents.OUTPUT_INTENT_DISPATCHED, self._on_intent_dispatched)
-            self._dispatch_subscribed = False
-
-    async def _on_intent_dispatched(self, event_name: str, payload: IntentPayload, source: str):
-        intent = payload.to_intent()
-        await self.handle(intent)
 
     # ── AudioStreamChannel 通知辅助 ─────────────────────────────
 
@@ -227,30 +196,3 @@ class AudioHandlerBase(ABC):
                     timestamp=time.time(),
                 )
             )
-
-    # ── 完成事件辅助(供 handle() 调用) ──────────────────────────
-
-    async def _emit_completed(self, intent: "Intent", success: bool = True) -> None:
-        """emit 一个 OUTPUT_HANDLER_COMPLETED 事件给聚合者。
-
-        handler_name 用 `self.__class__.__name__`（与 Manager 端的 `type(h).__name__`
-        一致），intent_id 从 `intent.metadata.intent_id` 取。无 event_bus 时静默跳过。
-        老 Intent 结构缺 metadata 时降级到 "unknown" 让 watchdog 兜底。
-        """
-        if self.event_bus is None:
-            return
-        try:
-            intent_id = intent.metadata.intent_id
-        except AttributeError:
-            # 老 Intent 结构没 metadata/intent_id,降级到占位符避免聚合死锁
-            # (这种情况 handler 应被 manager 视为 unknown,不会完成聚合)
-            intent_id = "unknown"
-        await self.event_bus.emit(
-            CoreEvents.OUTPUT_HANDLER_COMPLETED,
-            OutputHandlerCompletedPayload(
-                handler_name=self.__class__.__name__,
-                intent_id=intent_id,
-                success=success,
-            ),
-            source=self.__class__.__name__,
-        )

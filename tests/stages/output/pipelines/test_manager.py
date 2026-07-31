@@ -2,6 +2,8 @@
 测试 OutputPipeline 接口和基类
 """
 
+from typing import Optional
+
 import pytest
 
 from src.modules.pipeline import Pipeline, PipelineManager
@@ -16,22 +18,21 @@ def _make_test_intent(speech: str = "Hello") -> Intent:
     return Intent(
         metadata=IntentMetadata(source_id="test", decision_time_ms=now_ms()),
         speech=speech,
-        emotion="neutral",
     )
 
 
 class DummyOutputPipeline(Pipeline["Intent"]):
     """测试用的 OutputPipeline"""
 
-    async def _process(self, intent: Intent):
-        intent.metadata.extra["processed"] = True
-        return intent
+    async def _process(self, item: Intent) -> Optional[Intent]:
+        item.speech = (item.speech or "") + " [processed]"
+        return item
 
 
 class DropOutputPipeline(Pipeline["Intent"]):
     """测试用的丢弃 Pipeline"""
 
-    async def _process(self, intent: Intent):
+    async def _process(self, item: Intent) -> Optional[Intent]:
         return None
 
 
@@ -45,8 +46,7 @@ async def test_output_pipeline_base():
     result = await pipeline.process(params)
 
     assert result is not None
-    assert result.metadata.extra.get("processed") is True
-    assert result.speech == "Hello"
+    assert result.speech == "Hello [processed]"
 
     # 测试统计信息
     stats = pipeline.get_stats()
@@ -86,9 +86,7 @@ async def test_output_pipeline_manager():
     result = await manager.process(params)
 
     assert result is not None
-    assert result.speech == "Hello"
-    # 两个管道都应该处理过（都添加了 metadata）
-    # 但因为同名 key，最后只会有一个 True
+    assert result.speech == "Hello [processed] [processed]"
 
 
 @pytest.mark.asyncio
@@ -140,19 +138,19 @@ async def test_output_pipeline_priority():
 
     # 创建不同的 Pipeline 类来测试优先级
     class PriorityPipeline1(Pipeline["Intent"]):
-        async def _process(self, intent):
-            intent.metadata.extra["priority_1"] = True
-            return intent
+        async def _process(self, item: Intent) -> Optional[Intent]:
+            item.speech = (item.speech or "") + "|1"
+            return item
 
     class PriorityPipeline2(Pipeline["Intent"]):
-        async def _process(self, intent):
-            intent.metadata.extra["priority_2"] = True
-            return intent
+        async def _process(self, item: Intent) -> Optional[Intent]:
+            item.speech = (item.speech or "") + "|2"
+            return item
 
     class PriorityPipeline3(Pipeline["Intent"]):
-        async def _process(self, intent):
-            intent.metadata.extra["priority_3"] = True
-            return intent
+        async def _process(self, item: Intent) -> Optional[Intent]:
+            item.speech = (item.speech or "") + "|3"
+            return item
 
     # 注册不同优先级的管道
     pipeline1 = PriorityPipeline1(config={"priority": 300})
@@ -178,10 +176,7 @@ async def test_output_pipeline_priority():
     result = await manager.process(params)
 
     assert result is not None
-    # 所有管道都应该执行
-    assert result.metadata.extra.get("priority_1") is True
-    assert result.metadata.extra.get("priority_2") is True
-    assert result.metadata.extra.get("priority_3") is True
+    assert result.speech == "Hello|2|3|1"
 
 
 def test_pipeline_stats():

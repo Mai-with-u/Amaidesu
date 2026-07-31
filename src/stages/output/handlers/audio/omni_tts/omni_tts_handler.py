@@ -154,9 +154,6 @@ class OmniTTSHandler(AudioHandlerBase):
             device_name=self.output_device_name,
         )
 
-        # 订阅事件
-        await self._subscribe_output_events()
-
         self.logger.info("OmniTTSHandler设置完成")
 
     async def _synthesize(self, text: str):
@@ -259,9 +256,6 @@ class OmniTTSHandler(AudioHandlerBase):
     async def cleanup(self):
         """清理资源"""
         self.logger.info("OmniTTSHandler清理中...")
-
-        # 取消事件订阅
-        await self._unsubscribe_output_events()
 
         # 停止音频播放
         if self.audio_manager:

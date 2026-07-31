@@ -21,11 +21,12 @@ from src.stages.output.registry import handler
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads import OBSCommandPayload, IntentPayload
+from src.modules.events.payloads import OBSCommandPayload
 from src.modules.logging import get_logger
 from src.modules.streaming.audio_stream_channel import AudioStreamChannel
 from src.modules.streaming.backpressure import BackpressureStrategy, SubscriberConfig
 from src.modules.streaming.audio_utils import resample_audio
+from src.modules.types import Intent
 
 if TYPE_CHECKING:
     from src.modules.streaming.audio_chunk import AudioChunk, AudioMetadata
@@ -197,8 +198,6 @@ class RemoteStreamHandler:
         # AudioStreamChannel 订阅
         self._remote_subscription_id: Optional[str] = None
 
-        self._dispatch_subscribed = False
-
     async def init(self):
         """初始化 Handler"""
         # 检查依赖
@@ -213,13 +212,6 @@ class RemoteStreamHandler:
                 self._handle_image_request,
                 OBSCommandPayload,
             )
-            if not self._dispatch_subscribed:
-                self.event_bus.on(
-                    CoreEvents.OUTPUT_INTENT_DISPATCHED,
-                    self._handle_intent_dispatched,
-                    IntentPayload,
-                )
-                self._dispatch_subscribed = True
 
         # 注册 AudioStreamChannel 订阅
         audio_channel = self.audio_stream_channel
@@ -245,27 +237,26 @@ class RemoteStreamHandler:
 
         self.logger.info("RemoteStreamOutput组件已设置")
 
-    async def _handle_intent_dispatched(self, event_name: str, payload: IntentPayload, source: str):
+    async def handle(self, intent: Intent) -> None:
         """
-        处理 OUTPUT_INTENT_DISPATCHED 事件（OutputHandlerManager 派发的 Intent）
+        处理派发的 Intent（OutputHandlerManager 直接调用）。
+
+        将 intent.speech 作为字幕转发给已连接的 WebSocket 客户端。
 
         Args:
-            event_name: 事件名
-            payload: IntentPayload 实例
-            source: 事件源标识
+            intent: 决策意图，包含 speech(文本内容)
         """
-        intent = payload.to_intent()
-        if intent.speech:
+        if not intent.speech:
+            return
+        try:
             self.logger.debug(f"准备发送字幕数据: {intent.speech[:50]}...")
             await self._send_subtitle(intent.speech)
+        except Exception as e:
+            self.logger.error(f"RemoteStreamHandler 发送字幕失败: {e}", exc_info=True)
 
     async def cleanup(self):
         """清理资源"""
         self.logger.info("正在清理RemoteStreamOutputProvider...")
-
-        if self.event_bus and self._dispatch_subscribed:
-            self.event_bus.off(CoreEvents.OUTPUT_INTENT_DISPATCHED, self._handle_intent_dispatched)
-            self._dispatch_subscribed = False
 
         # 取消 AudioStreamChannel 订阅
         audio_channel = self.audio_stream_channel

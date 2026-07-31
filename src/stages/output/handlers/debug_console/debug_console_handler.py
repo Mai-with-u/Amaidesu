@@ -2,29 +2,24 @@
 Debug Console Handler
 
 调试用控制台输出 Handler，用于打印 Intent 内容到控制台。
-
-per-handler 完成事件(OUTPUT_HANDLER_COMPLETED)由本 handler 在 handle() 的
-finally 中显式发出(独立 handler 模式,因为不走 AudioHandlerBase/AvatarHandlerBase)。
 """
 
 from typing import TYPE_CHECKING, Any, Dict
 
 from pydantic import Field
 
-from src.stages.output.handlers.completion_mixin import CompletionEmitterMixin
-from src.stages.output.registry import handler
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
-from src.modules.events.names import CoreEvents
-from src.modules.events.payloads import IntentPayload
 from src.modules.logging import get_logger
+from src.modules.time_utils import ms_to_datetime
+from src.stages.output.registry import handler
 
 if TYPE_CHECKING:
     from src.modules.types import Intent
 
 
 @handler("debug_console")
-class DebugConsoleHandler(CompletionEmitterMixin):
+class DebugConsoleHandler:
     """
     调试用控制台输出Handler
 
@@ -34,9 +29,11 @@ class DebugConsoleHandler(CompletionEmitterMixin):
     class ConfigSchema(BaseConfig):
         """调试控制台输出Handler配置"""
 
-        print_source_context: bool = Field(default=True, description="是否打印源上下文")
-        print_actions: bool = Field(default=True, description="是否打印动作列表")
-        print_metadata: bool = Field(default=False, description="是否打印元数据")
+        print_source_context: bool = Field(
+            default=True, description="是否打印源上下文(来源 source_id / source_message_id)"
+        )
+        print_actions: bool = Field(default=True, description="是否打印动作(action)")
+        print_metadata: bool = Field(default=False, description="是否打印元数据(metadata 全部字段)")
         prefix: str = Field(default="[DEBUG]", description="打印前缀")
 
     def __init__(self, config: Dict[str, Any], event_bus: EventBus):
@@ -60,22 +57,10 @@ class DebugConsoleHandler(CompletionEmitterMixin):
         self.print_metadata = self.typed_config.print_metadata
         self.prefix = self.typed_config.prefix
 
-        # 事件订阅状态标志（确保幂等）
-        self._dispatch_subscribed = False
-
         self.logger.info("DebugConsoleHandler 初始化完成")
 
     async def init(self) -> None:
         """初始化 Handler"""
-        # 订阅 OUTPUT_INTENT_DISPATCHED 事件（idempotent）
-        if self.event_bus and not getattr(self, "_dispatch_subscribed", False):
-            self.event_bus.on(
-                CoreEvents.OUTPUT_INTENT_DISPATCHED,
-                self._handle_intent_dispatched,
-                model_class=IntentPayload,
-            )
-            self._dispatch_subscribed = True
-
         self.logger.info("DebugConsoleHandler 启动完成")
 
     async def handle(self, intent: "Intent") -> None:
@@ -85,78 +70,58 @@ class DebugConsoleHandler(CompletionEmitterMixin):
         Args:
             intent: 决策意图
         """
-        success = True
-        try:
-            # 打印分隔线
-            print(f"\n{'=' * 60}")
-            print(f"{self.prefix} Debug Console Output - Intent Received")
-            print(f"{'=' * 60}")
+        # 打印分隔线
+        print(f"\n{'=' * 60}")
+        print(f"{self.prefix} Debug Console Output - Intent Received")
+        print(f"{'=' * 60}")
 
-            # 打印基本信息
-            print(f"ID:       {intent.id}")
-            print(f"Timestamp:{intent.timestamp}")
+        # 打印 Speech(可空)
+        print("\n[Speech]")
+        if intent.speech is not None:
+            print(f"  {intent.speech}")
+        else:
+            print("  (no speech)")
 
-            # 打印原始文本和回复文本
-            print("\n[Text]")
-            print(f"  Original:  {intent.original_text}")
-            print(f"  Response:  {intent.response_text}")
+        # 打印 Intent 标识
+        print("\n[Identity]")
+        print(f"  Intent ID:  {intent.metadata.intent_id}")
+        print(f"  Source ID:  {intent.metadata.source_id}")
+        decision_dt = ms_to_datetime(intent.metadata.decision_time_ms)
+        print(f"  Decision:   {decision_dt} ({intent.metadata.decision_time_ms} ms)")
 
-            # 打印情感
+        # 打印源上下文(对应 source_id / source_message_id)
+        if self.print_source_context:
+            print("\n[Source Context]")
+            print(f"  Source ID:       {intent.metadata.source_id}")
+            print(f"  Source Msg ID:   {intent.metadata.source_message_id or 'N/A'}")
+
+        # 打印情感(可选)
+        if intent.emotion is not None:
             print("\n[Emotion]")
-            print(f"  Type: {intent.emotion}")
+            print(f"  Name:      {intent.emotion.name}")
+            print(f"  Intensity: {intent.emotion.intensity}")
 
-            # 打印源上下文
-            if self.print_source_context and intent.source_context:
-                sc = intent.source_context
-                print("\n[Source Context]")
-                print(f"  Source:       {sc.source}")
-                print(f"  Data Type:    {sc.data_type}")
-                print(f"  User ID:      {sc.user_id or 'N/A'}")
-                print(f"  User Nickname:{sc.user_nickname or 'N/A'}")
-                print(f"  Importance:   {sc.importance}")
+        # 打印动作(可选)
+        if self.print_actions and intent.action is not None:
+            print("\n[Action]")
+            print(f"  Name:       {intent.action.name}")
+            if intent.action.parameters:
+                print(f"  Parameters: {intent.action.parameters}")
+            else:
+                print("  Parameters: (none)")
 
-            # 打印动作列表
-            if self.print_actions and intent.actions:
-                print(f"\n[Actions] ({len(intent.actions)} total)")
-                for i, action in enumerate(intent.actions, 1):
-                    print(f"  {i}. Type: {action.type}")
-                    print(f"     Priority: {action.priority}")
-                    if action.params:
-                        print(f"     Params: {action.params}")
+        # 打印元数据(展开 IntentMetadata 4 个字段,逐字段打印)
+        if self.print_metadata:
+            print("\n[Metadata]")
+            print(f"  source_id:         {intent.metadata.source_id}")
+            print(f"  decision_time_ms:  {intent.metadata.decision_time_ms}")
+            print(f"  source_message_id: {intent.metadata.source_message_id or 'N/A'}")
+            print(f"  intent_id:         {intent.metadata.intent_id}")
 
-            # 打印元数据
-            if self.print_metadata and intent.metadata:
-                print("\n[Metadata]")
-                for key, value in intent.metadata.items():
-                    print(f"  {key}: {value}")
-
-            print(f"{'=' * 60}\n")
-        except Exception as e:
-            success = False
-            self.logger.error(f"debug 打印失败: {e}", exc_info=True)
-            raise
-        finally:
-            await self._emit_completed(intent, success=success)
-
-    async def _handle_intent_dispatched(self, event_name: str, payload: IntentPayload, source: str):
-        """
-        处理 OUTPUT_INTENT_DISPATCHED 事件（OutputHandlerManager 派发的 Intent）
-
-        Args:
-            event_name: 事件名
-            payload: IntentPayload 实例
-            source: 事件源标识
-        """
-        intent = payload.to_intent()
-        await self.handle(intent)
+        print(f"{'=' * 60}\n")
 
     async def cleanup(self) -> None:
         """清理 Handler"""
-        # 取消事件订阅
-        if self.event_bus and getattr(self, "_dispatch_subscribed", False):
-            self.event_bus.off(CoreEvents.OUTPUT_INTENT_DISPATCHED, self._handle_intent_dispatched)
-            self._dispatch_subscribed = False
-
         self.logger.info("DebugConsoleHandler 清理完成")
 
 

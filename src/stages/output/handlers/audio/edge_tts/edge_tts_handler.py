@@ -97,9 +97,6 @@ class EdgeTTSHandler(AudioHandlerBase):
             device_name=self.output_device_name or None,
         )
 
-        # 订阅事件
-        await self._subscribe_output_events()
-
         self.logger.info("EdgeTTSHandler启动完成")
 
     async def _synthesize(self, text: str):
@@ -190,9 +187,6 @@ class EdgeTTSHandler(AudioHandlerBase):
     async def cleanup(self):
         """清理资源"""
         self.logger.info("EdgeTTSHandler停止中...")
-
-        # 取消事件订阅
-        await self._unsubscribe_output_events()
 
         # 停止所有播放
         if self.audio_manager:

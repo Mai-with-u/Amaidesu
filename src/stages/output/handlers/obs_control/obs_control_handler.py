@@ -7,8 +7,10 @@ OBS Control Handler - OBS控制Handler
 - 场景切换
 - 源设置控制
 
-per-handler 完成事件(OUTPUT_HANDLER_COMPLETED)由本 handler 在 handle() 的
-finally 中显式发出(独立 handler 模式,因为不走 AudioHandlerBase/AvatarHandlerBase)。
+注意:本 handler 同时支持两种触发路径 —
+- intent dispatch 路径: 走标准 handle(intent),由 OutputHandlerManager 调度
+- 外部命令路径: 通过 EventBus 订阅 CoreEvents.OUTPUT_OBS_COMMAND,
+  不依赖 intent dispatch (例如 Dashboard API 直接调用 OBS 操作)
 """
 
 import asyncio
@@ -19,7 +21,6 @@ from pydantic import Field, field_validator
 if TYPE_CHECKING:
     from src.modules.types import Intent
 
-from src.stages.output.handlers.completion_mixin import CompletionEmitterMixin
 from src.stages.output.registry import handler
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
@@ -34,7 +35,7 @@ except ImportError:
 
 
 @handler("obs_control")
-class ObsControlHandler(CompletionEmitterMixin):
+class ObsControlHandler:
     """OBS控制Handler
 
     功能:
@@ -148,31 +149,27 @@ class ObsControlHandler(CompletionEmitterMixin):
         Args:
             intent: 决策意图，包含 speech
         """
-        success = True
+        if not self.is_connected or not self.obs_connection:
+            self.logger.warning("OBS未连接，跳过渲染")
+            return
+
+        # 从多个可能的来源提取文本
+        text = None
+
+        # 1. 从回复文本提取
+        if intent.speech:
+            text = intent.speech
+
+        if not text:
+            self.logger.debug("没有需要显示的文本内容")
+            return
+
+        # 发送文本到OBS
         try:
-            if not self.is_connected or not self.obs_connection:
-                self.logger.warning("OBS未连接，跳过渲染")
-                return
-
-            # 从多个可能的来源提取文本
-            text = None
-
-            # 1. 从回复文本提取
-            if intent.speech:
-                text = intent.speech
-
-            if not text:
-                self.logger.debug("没有需要显示的文本内容")
-                return
-
-            # 发送文本到OBS
             await self._send_text_to_obs(text)
         except Exception as e:
-            success = False
             self.logger.error(f"OBS 渲染失败: {e}", exc_info=True)
             raise
-        finally:
-            await self._emit_completed(intent, success=success)
 
     async def _connect_obs(self) -> bool:
         """

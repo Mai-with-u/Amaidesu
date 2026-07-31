@@ -101,14 +101,12 @@ class VoiceboxHandler(AudioHandlerBase):
         except Exception as e:
             self.logger.warning(f"Voicebox 健康检查失败: {e}")
 
-        await self._subscribe_output_events()
         self.logger.info("VoiceboxHandler 设置完成")
 
     async def cleanup(self):
         """清理资源"""
         self.logger.info("VoiceboxHandler 清理中...")
 
-        await self._unsubscribe_output_events()
         if self.audio_manager:
             self.audio_manager.stop_audio()
         if self._session and not self._session.closed:

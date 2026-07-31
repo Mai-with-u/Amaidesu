@@ -26,9 +26,9 @@ Amaidesu 项目采用 3 阶段架构，数据在各阶段之间按照固定方�
         ↓ EventBus: input.message.received
 【Decision 阶段】处理消息 → 生成 Intent
         ↓ EventBus: decision.intent.generated
-【Output 阶段】参数生成 → Pipeline 过滤 → 渲染输出
-        ↓ EventBus: output.intent.dispatched
-OutputHandlers 渲染
+【Output 阶段】参数生成 → Pipeline 过滤 → Manager 直接并行渲染
+        ├─ EventBus: output.intent.dispatched（监控信号）
+        └─ OutputHandlerManager → OutputHandlers
 ```
 
 ### 数据类型流
@@ -116,29 +116,16 @@ InputCollector 的职责是采集和发布数据：
 
 > **例外**：Output 的**元控制信号**（如 `output.intent.finished`）仅表示"所有 handler 已完成"，不携带任何输出结果数据，InputCollector 可以订阅以触发下一轮采集。这种控制信号不会形成数据回灌循环。
 
-### 违规示例
+### 正确示例
 
 ```python
-# 错误示例：OutputHandler 订阅 Input 事件
+# OutputHandler 不订阅阶段流转事件，只实现渲染入口。
 class MyOutputHandler(OutputHandler):
-    async def _setup_internal(self):
-        # 违规：不应该订阅 input.message.received
-        self._event_bus.on(
-            CoreEvents.INPUT_MESSAGE_RECEIVED,
-            self._handle_raw_message,  # 直接处理原始消息
-            model_class=MessageReadyPayload,
-        )
-
-# 正确示例：通过 Decision 阶段处理
-class MyOutputHandler(OutputHandler):
-    async def _setup_internal(self):
-        # 正确：订阅 output.intent.dispatched（OutputHandlerManager 派发）
-        self._event_bus.on(
-            CoreEvents.OUTPUT_INTENT_DISPATCHED,
-            self._handle_intent,
-            model_class=IntentPayload,
-        )
+    async def handle(self, intent: Intent) -> None:
+        await self.render(intent)
 ```
+
+`OutputHandlerManager` 在 OutputPipeline 过滤后直接调用 active handler 的 `handle(intent)`。
 
 ### 允许模式：Decision 拉取 Output 能力做动作选择（发现平面）
 
@@ -201,7 +188,7 @@ Output（实现）──▶ CapabilitiesProvider（抽象，在 modules）◀─
 
 ## 3. 事件流向
 
-事件按阶段流转使用统一的动词链：`received → generated → dispatched → completed → finished`。
+事件按阶段流转使用统一的动词链：`received → generated → dispatched → finished`。`completed` 保留为 Manager 内部的单 handler 完成概念，不再要求 Handler 发布完成事件。
 
 ### 核心事件
 
@@ -209,29 +196,22 @@ Output（实现）──▶ CapabilitiesProvider（抽象，在 modules）◀─
 |--------|--------|--------|---------|------|
 | `input.message.received` | InputCollector | DeciderManager | `MessageReadyPayload` (NormalizedMessage) | 标准化消息接收（received 动词） |
 | `decision.intent.generated` | Decider | OutputHandlerManager | `IntentPayload` (Intent) | 决策意图生成（generated 动词） |
-| `output.intent.dispatched` | OutputHandlerManager | OutputHandlers | `IntentPayload` (Intent) | 过滤后意图派发（dispatched 动词），fire-and-forget |
-| `output.handler.completed` | 各 OutputHandler（`handle()` 末尾 finally 里发） | OutputHandlerManager（聚合） | `OutputHandlerCompletedPayload`（含 `handler_name`、`intent_id`） | 单个 handler 完成通知（两层事件第一层） |
-| `output.intent.finished` | OutputHandlerManager（聚合后发） | 任何需要"等所有输出完成"的组件（如 MainosabaCollector） | `IntentPayload` (Intent) | 所有 active handler 都干完的聚合信号（两层事件第二层） |
+| `output.intent.dispatched` | OutputHandlerManager | Broadcaster、EventRecorder 等监控组件 | `IntentPayload` (Intent) | Pipeline 过滤完成后的监控信号，不触发 Handler |
+| `output.handler.completed` | OutputHandlerManager 内部 | OutputHandlerManager 内部 | `OutputHandlerCompletedPayload` | 兼容的内部完成语义，Handler 不订阅也不发布 |
+| `output.intent.finished` | OutputHandlerManager | 任何需要"等所有输出完成"的组件（如 MainosabaCollector） | `IntentPayload` (Intent) | Manager 等待全部 active handler 完成后发布 |
 | `output.obs.command` | Dashboard API / 外部组件 | ObsControlHandler 等 | `OBSCommandPayload`（按 `action` 区分） | OBS 统一命令入口 |
 
-#### 两层事件聚合模式（Output 完成时序）
+#### Manager 直接调度与完成跟踪
 
-`output.intent.dispatched` 默认是 fire-and-forget，emit 立刻返回而 handler 在后台 task 跑。要准确感知"所有 handler 真的干完了"，需要两层：
+`OutputHandlerManager` 是 Output 阶段的唯一调度点：
 
-- **第一层（per-handler 完成）**：每个 OutputHandler 在自己的 `handle()` 末尾（`try/finally` 里以保证异常也发）emit `output.handler.completed`，声明"我干完了"。`handler_name` 用 `self.__class__.__name__`，`intent_id` 从 `intent.metadata.intent_id` 取。
-- **第二层（聚合）**：`OutputHandlerManager` 订阅第一层，按 `intent_id` 关联，等所有 active handler 都报告完成后 emit `output.intent.finished`。
-- **兜底**：watchdog 超时（`completion_timeout_ms` 默认 30000），防止某个 handler 漏发导致 FINISHED 永远不发。
+1. 订阅 `decision.intent.generated` 并运行 OutputPipeline。
+2. 发布 `output.intent.dispatched`，供 Broadcaster、EventRecorder 等组件监控。
+3. 为每个 active handler 创建任务，直接调用 `handler.handle(intent)`。
+4. `_run_handler` 使用 `asyncio.wait_for` 落实 `render_timeout_ms`，并隔离单个 handler 的超时与异常。配置为 `0` 时不设超时。
+5. Manager 使用 `gather` 等待全部 handler 任务结束，再发布 `output.intent.finished`。
 
-任何关心"等输出全部干完"的下游组件应订阅 `output.intent.finished`，而不是 `output.intent.dispatched`。
-
-**新增 OutputHandler 时必须遵守的契约**：
-
-1. 在 `handle(intent)` 末尾（用 `try/finally` 包裹）emit `OUTPUT_HANDLER_COMPLETED`
-2. `handler_name` 用 `self.__class__.__name__`（与 Manager 端 `type(h).__name__` 一致）
-3. `intent_id` 从 `intent.metadata.intent_id` 取
-4. 异常路径（`success=False`）也要发，否则 Manager 只能靠超时兜底
-
-基类 `AudioHandlerBase` 和 `AvatarHandlerBase` 已自动 emit，子类无需重复。独立 handler（`StickerHandler` / `SubtitleHandler` / `DebugConsoleHandler` / `ObsControlHandler` / `GPTSoVITSHandler`）需自行实现 `_emit_completed` 并在 `handle()` finally 里调用。
+Handler 不订阅 `output.intent.dispatched`，也不负责发布 `output.handler.completed`。完成跟踪由 Manager 内部管理。等待全部输出结束的下游组件应订阅 `output.intent.finished`。
 
 ### 完整事件流
 
@@ -269,7 +249,11 @@ flowchart TB
     DP --> Intent
     Intent -->|"emit: decision.intent.generated"| OPM
     OPM --> OPipeline
-    OPipeline -->|"emit: output.intent.dispatched"| OPS
+    OPipeline --> OPM
+    OPM -.->|"emit: output.intent.dispatched<br/>监控信号"| Monitor[监控组件]
+    OPM -->|"直接调用 handle(intent)"| OPS
+    OPS -->|"任务完成"| OPM
+    OPM -.->|"emit: output.intent.finished"| Finished[完成信号]
 ```
 
 ### 阶段参与者生命周期中的事件发布
@@ -319,62 +303,29 @@ class MyDecider(Decider):
         )
 ```
 
-#### OutputHandler（Dispatcher 修复后）
+#### OutputHandler（Manager 直接调度）
 
-> **重要**：OutputHandler 不再订阅 `decision.intent.generated`，而是订阅
-> `output.intent.dispatched`。`OutputHandlerManager` 负责 Pipeline 过滤并
-> 派发统一事件，避免每个 Handler 各自处理 pipeline 逻辑。
+> OutputHandler 不订阅 `decision.intent.generated` 或 `output.intent.dispatched`。`OutputHandlerManager` 统一运行 OutputPipeline，然后直接调用每个 active handler 的 `handle(intent)`。
 
 ```python
 class MyOutputHandler(OutputHandler):
-    async def _setup_internal(self):
-        # 订阅 OutputHandlerManager 派发的事件
-        self._event_bus.on(
-            CoreEvents.OUTPUT_INTENT_DISPATCHED,
-            self._handle_intent,
-            model_class=IntentPayload,
-        )
-
-    async def _handle_intent(self, event_name: str, data: IntentPayload, source: str):
-        # 渲染输出
-        intent = data.to_intent()
+    async def handle(self, intent: Intent) -> None:
+        # 只实现本 Handler 的渲染逻辑
         await self.render(intent)
 ```
 
-### Dispatcher 修复说明（Handler 订阅 OUTPUT_INTENT_DISPATCHED）
+### Manager 直接调度说明
 
-**问题**：早期版本中，OutputHandler 直接订阅 `decision.intent.generated`，
-导致 OutputPipeline 过滤逻辑被绕过或重复执行。
+`OutputHandlerManager` 订阅 `decision.intent.generated`，统一运行 OutputPipeline。过滤通过后，它先发布 `output.intent.dispatched` 监控信号，再为每个 active handler 创建任务并直接调用 `handle(intent)`。
 
-**修复**：
-- `OutputHandlerManager` 订阅 `decision.intent.generated`，统一运行 OutputPipeline
-- 过滤完成后发布 `output.intent.dispatched` 事件
-- 所有 OutputHandler 改为订阅 `output.intent.dispatched`
+这种设计保证：
 
-**收益**：
-- Pipeline 过滤逻辑只在 Manager 中执行一次，避免重复
-- Handler 不再关心 Decision 阶段的具体 Decider 来源
-- 单测可以单独 stub Manager 的派发事件，无需 mock Decider
-
-**示例代码**（参考 `src/stages/output/handlers/avatar/base.py`）：
-
-```python
-class AvatarHandlerBase(ABC):
-    async def init(self):
-        # 订阅 OUTPUT_INTENT_DISPATCHED（由 OutputHandlerManager 派发）
-        self.event_bus.on(
-            CoreEvents.OUTPUT_INTENT_DISPATCHED,
-            self._handle_intent_dispatched,
-            IntentPayload,
-        )
-        await self._connect()
-
-    async def _handle_intent_dispatched(
-        self, event_name: str, payload: IntentPayload, source: str
-    ) -> None:
-        intent = payload.to_intent()
-        await self.handle(intent)
-```
+- Pipeline 过滤逻辑只在 Manager 中执行一次。
+- `output.intent.dispatched` 只供 Broadcaster、EventRecorder 等监控组件订阅，不是 Handler 的调度通道。
+- Handler 只实现 `handle(intent)`，不管理阶段流转事件的订阅、取消订阅或完成通知。
+- `_run_handler` 通过 `asyncio.wait_for` 执行 `render_timeout_ms`，单个 Handler 超时或异常不会阻止其他 Handler。
+- Manager 等待全部任务完成后发布 `output.intent.finished`。
+- 收尾任务使用 `asyncio.shield` 等待 Handler 任务，因此收尾任务被取消时不会连带取消正在运行的 Handler。
 
 ---
 
@@ -397,7 +348,7 @@ Amaidesu 项目使用两种不同的通信机制来处理不同类型的数据�
 
 - `input.message.received`：标准化消息接收
 - `decision.intent.generated`：决策意图生成
-- `output.intent.dispatched`：过滤后意图派发
+- `output.intent.dispatched`：Pipeline 过滤后的意图监控信号
 - `output.obs.command`：OBS 统一命令入口
 - `core.startup` / `core.shutdown`：系统生命周期事件
 
@@ -619,7 +570,7 @@ flowchart TB
     end
 
     subgraph Output["【Output 阶段】输出阶段"]
-        OPM[OutputHandlerManager<br/>订阅 + 过滤 + 派发]
+        OPM[OutputHandlerManager<br/>订阅 + 过滤 + 直接调度]
         OPipeline[OutputPipeline<br/>脏话过滤]
         TTS[TTS Handler<br/>EdgeTTS/GPTSoVITS]
         Sub[字幕 Handler]
@@ -639,10 +590,12 @@ flowchart TB
     DP --> Intent
     Intent -->|decision.intent.generated| OPM
     OPM --> OPipeline
-    OPipeline -->|output.intent.dispatched| TTS
-    OPipeline -->|output.intent.dispatched| Sub
-    OPipeline -->|output.intent.dispatched| Avatar
-    OPipeline -->|output.intent.dispatched| Other
+    OPipeline --> OPM
+    OPM -.->|output.intent.dispatched<br/>监控信号| Monitor[Broadcaster / EventRecorder]
+    OPM -->|handle(intent)| TTS
+    OPM -->|handle(intent)| Sub
+    OPM -->|handle(intent)| Avatar
+    OPM -->|handle(intent)| Other
 
     TTS -->|AudioChunk| ASC
     ASC -->|音频流| Avatar
@@ -678,14 +631,18 @@ sequenceDiagram
     DP->>DP: decide(message) -> Intent
     DP->>EB: emit(decision.intent.generated, IntentPayload)
 
-    Note over OPM,EB: Output 阶段（verb: dispatched）
+    Note over OPM,EB: Output 阶段（direct dispatch）
 
     EB->>OPM: 转发 decision.intent.generated
     OPM->>OPM: OutputPipeline 过滤
     OPM->>EB: emit(output.intent.dispatched, IntentPayload)
-
-    EB->>OP: 转发 output.intent.dispatched
-    OP->>OP: render(intent)
+    Note over EB: DISPATCHED 仅供监控组件观察
+    par 并行直接调用
+        OPM->>OP: handle(intent)
+        OP->>OP: render(intent)
+        OP-->>OPM: 返回
+    end
+    OPM->>EB: emit(output.intent.finished, IntentPayload)
 ```
 
 ### AudioStreamChannel 数据流
@@ -755,4 +712,4 @@ flowchart LR
 
 ---
 
-*最后更新：2026-06-30（约束精确化：区分数据平面/分层规则/发现平面，新增 Decision 拉取 Output 能力的"允许模式"）*
+*最后更新：2026-07-31（OutputHandlerManager 改为直接并行调用 Handler，DISPATCHED 仅保留为监控信号）*

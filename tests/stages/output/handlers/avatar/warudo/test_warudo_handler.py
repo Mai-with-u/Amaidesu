@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.modules.types import Intent, IntentMetadata
+from src.modules.types import Intent, IntentEmotion, IntentMetadata
 from src.stages.output.handlers.avatar.warudo.warudo_handler import WarudoHandler
 from src.modules.events.event_bus import EventBus
 
@@ -23,6 +23,7 @@ def mock_event_bus():
     event_bus = MagicMock(spec=EventBus)
     event_bus.on = MagicMock()
     event_bus.off = MagicMock()
+    event_bus.emit = AsyncMock()
     return event_bus
 
 
@@ -53,6 +54,8 @@ class TestWarudoHandlerRendering:
         handler = WarudoHandler(warudo_config, event_bus=mock_event_bus)
         # 创建 AsyncMock 的 websocket
         mock_ws = MagicMock()
+        mock_ws.close_code = None
+        mock_ws.closed = False
         mock_ws.send_json = AsyncMock()
         handler.websocket = mock_ws
         handler._is_connected = True
@@ -60,7 +63,7 @@ class TestWarudoHandlerRendering:
         # 使用 Intent 调用 handle
         intent = Intent(
             metadata=IntentMetadata(source_id="test", decision_time_ms=1234567890123),
-            emotion="happy",
+            emotion=IntentEmotion(name="happy"),
             speech="测试",
         )
         await handler.handle(intent)
@@ -75,7 +78,7 @@ class TestWarudoHandlerRendering:
         # 使用 Intent 调用 handle
         intent = Intent(
             metadata=IntentMetadata(source_id="test", decision_time_ms=1234567890123),
-            emotion="happy",
+            emotion=IntentEmotion(name="happy"),
             speech="测试",
         )
         # 应该不抛出异常，只是跳过渲染

@@ -36,16 +36,18 @@ flowchart LR
 
     IP -->|emit: input.message.received| EB[EventBus]
     DP -->|emit: decision.intent.generated| EB
-    OP -->|emit: output.intent.dispatched| EB
+    OPM[OutputHandlerManager] -->|emit: output.intent.dispatched<br/>监控信号| EB
 
     EB -->|on| DP
-    EB -->|on| OP
+    EB -->|on| OPM
+    OPM -->|直接调用 handle(intent)| OP[OutputHandler]
 ```
 
 **数据流规则**：
 - **Input 阶段** 发布 `input.message.received` 事件，携带标准化消息
 - **Decision 阶段** 订阅并处理消息，发布 `decision.intent.generated` 事件
-- **Output 阶段** 订阅意图事件，执行渲染并发布 `output.intent.dispatched` 事件
+- **Output 阶段** 由 `OutputHandlerManager` 订阅意图事件，运行 Pipeline，发布 `output.intent.dispatched` 监控信号，并直接并行调用 active handler 的 `handle(intent)`
+- Manager 等待全部 Handler 完成后发布 `output.intent.finished`
 
 详细规则见 [数据流规则](data-flow.md)。
 
@@ -200,9 +202,9 @@ CoreEvents.DECISION_CONNECTED            # decision.connected
 CoreEvents.DECISION_DISCONNECTED         # decision.disconnected
 
 # ========== Output 阶段 ==========
-CoreEvents.OUTPUT_INTENT_DISPATCHED      # output.intent.dispatched
-CoreEvents.OUTPUT_INTENT_FINISHED        # output.intent.finished（所有 handler 完成后聚合通知）
-CoreEvents.OUTPUT_HANDLER_COMPLETED      # output.handler.completed（per-handler 完成通知）
+CoreEvents.OUTPUT_INTENT_DISPATCHED      # output.intent.dispatched（意图已进入直接调度的监控信号）
+CoreEvents.OUTPUT_INTENT_FINISHED        # output.intent.finished（Manager 等待所有 handler 完成后通知）
+CoreEvents.OUTPUT_HANDLER_COMPLETED      # output.handler.completed（Manager 内部兼容语义，Handler 不发布）
 CoreEvents.OUTPUT_HANDLER_CONNECTED      # DEPRECATED 兼容垫片（不再发射）
 CoreEvents.OUTPUT_HANDLER_DISCONNECTED   # DEPRECATED 兼容垫片（不再发射）
 CoreEvents.OUTPUT_OBS_COMMAND            # output.obs.command
@@ -294,19 +296,17 @@ classDiagram
 
 | Payload 类 | 事件名 | 用途 |
 |-----------|--------|------|
-| `OutputIntentDispatchedPayload` | `output.intent.dispatched` | 过滤后意图派发（OutputHandlerManager → OutputHandler） |
-| `OutputHandlerCompletedPayload` | `output.handler.completed` | 单个 handler 完成通知（两层事件模式第一层，per-handler 完成由 OutputHandlerManager 聚合后再发 FINISHED）。含 `handler_name`、`intent_id`、`success` |
-| `IntentPayload`（复用） | `output.intent.finished` | 聚合后"所有 handler 干完"通知（两层事件模式第二层，由 OutputHandlerManager 等齐所有 active handler 的 COMPLETED 后发出） |
+| `OutputIntentDispatchedPayload` | `output.intent.dispatched` | 过滤后意图进入直接调度流程的监控信号，供 Broadcaster、EventRecorder 等组件观察 |
+| `OutputHandlerCompletedPayload` | `output.handler.completed` | Manager 内部兼容的单 Handler 完成语义，Handler 无需发布或订阅 |
+| `IntentPayload`（复用） | `output.intent.finished` | Manager 等待全部 active handler 任务结束后发布的完成通知 |
 | `OBSCommandPayload` | `output.obs.command` | OBS 统一入口（由 payload.action 区分动作） |
 | `StickerCommandPayload` | `output.sticker.command` | 贴图命令 |
 
-> **两层事件聚合模式（Output 完成时序）**：`output.intent.dispatched` 默认 fire-and-forget，emit 立即返回而 handler 在后台 task 跑。要准确感知"所有 handler 都干完了"，需要两层：
-> - **第一层**：每个 OutputHandler 在 `handle()` 末尾（finally 里以保证异常也发）emit `output.handler.completed`
-> - **第二层**：`OutputHandlerManager` 订阅第一层，按 `intent_id` 关联，等所有 active handler 报告完成后再 emit `output.intent.finished`
-> - **兜底**：watchdog 超时（`completion_timeout_ms` 默认 30000）防止 handler 漏发导致 FINISHED 永远不发
+> **直接调度与完成时序**：`OutputHandlerManager` 发布 `output.intent.dispatched` 监控信号后，为每个 active handler 创建任务并直接调用 `handle(intent)`。该事件不会触发 Handler。
 >
-> 任何关心"等输出全部干完"的下游组件（如 MainosabaCollector 推进游戏）应订阅 `output.intent.finished`，而不是 `output.intent.dispatched`。
-> 新增 OutputHandler 时必须遵守契约：在 `handle()` 的 `try/finally` 里 emit COMPLETED，`handler_name` 用 `self.__class__.__name__`，`intent_id` 从 `intent.metadata.intent_id` 取，异常路径也要发。基类 `AudioHandlerBase` / `AvatarHandlerBase` 已自动 emit。
+> `_run_handler` 使用 `asyncio.wait_for` 应用 `render_timeout_ms`，并隔离单个 Handler 的超时与异常。Manager 使用 `gather` 等待所有任务结束，再发布 `output.intent.finished`。`render_timeout_ms = 0` 表示不设超时。
+>
+> Handler 只需实现 `handle(intent)`。它不订阅 `output.intent.dispatched`，也不发布 `output.handler.completed`。完成跟踪由 Manager 内部管理。关心"全部输出已结束"的下游组件应订阅 `output.intent.finished`。
 
 > **架构演进**：早期版本中各细粒度事件（`obs.send_text` / `obs.switch_scene` /
 > `obs.set_source_visibility` / `render.completed` / `render.failed` /
@@ -392,30 +392,21 @@ print(f"Emit次数: {stats.emit_count}, 监听器数: {stats.listener_count}")
 await event_bus.cleanup()
 ```
 
-### 阶段参与者中使用
+### OutputHandler 中实现直接调用入口
 
 ```python
-from src.modules.events.names import CoreEvents
-from src.modules.events.payloads import IntentPayload
+from src.modules.types.intent import Intent
 
 class MyOutputHandler(OutputHandler):
-    async def _setup_internal(self):
-        # 订阅派发后的意图事件
-        self._event_bus.on(
-            CoreEvents.OUTPUT_INTENT_DISPATCHED,
-            self._on_intent_dispatched,
-            model_class=IntentPayload,
+    async def handle(self, intent: Intent) -> None:
+        print(
+            f"处理意图: speech={intent.speech!r}, "
+            f"action={intent.action.name if intent.action else None!r}"
         )
-
-    async def _on_intent_dispatched(
-        self,
-        event_name: str,
-        data: IntentPayload,
-        source: str
-    ):
-        intent = data.to_intent()
-        print(f"收到意图: speech={intent.speech!r}, action={intent.action.name if intent.action else None!r}")
+        await self.render(intent)
 ```
+
+`OutputHandlerManager` 会自动调用 active handler 的 `handle(intent)`。Handler 的 `init()` 和 `cleanup()` 只负责自身资源生命周期及专用事件通信，不处理 `OUTPUT_INTENT_DISPATCHED`。
 
 ### 发布系统错误事件
 
@@ -499,7 +490,7 @@ sequenceDiagram
     participant IP as InputCollector
     participant EB as EventBus
     participant DM as DeciderManager
-    participant EG as ExpressionGenerator
+    participant OHM as OutputHandlerManager
     participant OP as OutputHandler
 
     Note over IP,EB: Input 阶段
@@ -515,9 +506,14 @@ sequenceDiagram
 
     Note over OHM,EB: Output 阶段
 
-    OHM->>OP: dispatch(intent)  # 订阅 output.intent.dispatched
-    OP->>OP: handle(intent)
-    OP->>OP: render(params)
+    OHM->>OHM: OutputPipeline 过滤
+    OHM->>EB: emit(output.intent.dispatched) 监控信号
+    par 直接并行调用 active handler
+        OHM->>OP: handle(intent)
+        OP->>OP: render(intent)
+        OP-->>OHM: 返回
+    end
+    OHM->>EB: emit(output.intent.finished)
 ```
 
 ---
@@ -596,4 +592,4 @@ class MyPayload(BasePayload):
 
 ---
 
-*最后更新：2026-07-30（同步事件注册机制：去除 EventRegistry 副作用，统一使用 @register_event 装饰器注册；新增 Core 系统事件 Payload）*
+*最后更新：2026-07-31（OutputHandlerManager 改为直接调度，DISPATCHED 仅用于监控，完成跟踪收归 Manager）*

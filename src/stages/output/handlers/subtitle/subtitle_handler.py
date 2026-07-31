@@ -22,12 +22,9 @@ from typing import TYPE_CHECKING
 
 from pydantic import Field
 
-from src.stages.output.handlers.completion_mixin import CompletionEmitterMixin
 from src.stages.output.registry import handler
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
-from src.modules.events.names import CoreEvents
-from src.modules.events.payloads import IntentPayload
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
 
@@ -211,7 +208,7 @@ class OutlineLabel:
 
 
 @handler("subtitle")
-class SubtitleHandler(CompletionEmitterMixin):
+class SubtitleHandler:
     """
     字幕输出Handler
 
@@ -324,9 +321,6 @@ class SubtitleHandler(CompletionEmitterMixin):
         self._gui_running = True
         self.is_visible = False
 
-        # 事件订阅状态标志（确保幂等）
-        self._dispatch_subscribed = False
-
     async def init(self):
         """初始化 Handler"""
         # 启动 GUI 线程
@@ -334,15 +328,6 @@ class SubtitleHandler(CompletionEmitterMixin):
             self.gui_thread = threading.Thread(target=self._run_gui, daemon=True)
             self.gui_thread.start()
             self.logger.info("字幕 GUI 线程已启动")
-
-        # 订阅 OUTPUT_INTENT_DISPATCHED 事件（idempotent）
-        if self.event_bus and not getattr(self, "_dispatch_subscribed", False):
-            self.event_bus.on(
-                CoreEvents.OUTPUT_INTENT_DISPATCHED,
-                self._handle_intent_dispatched,
-                model_class=IntentPayload,
-            )
-            self._dispatch_subscribed = True
 
     async def handle(self, intent: "Intent"):
         """
@@ -353,10 +338,8 @@ class SubtitleHandler(CompletionEmitterMixin):
         """
         text = intent.speech if intent.speech else ""
         if not text:
-            await self._emit_completed(intent, success=True)
             return
 
-        success = True
         try:
             self.logger.debug(f"收到字幕渲染请求: {text[:30]}...")
 
@@ -365,33 +348,12 @@ class SubtitleHandler(CompletionEmitterMixin):
                 self.text_queue.put(text)
             except Exception as e:
                 self.logger.error(f"放入字幕队列时出错: {e}", exc_info=True)
-                success = False
         except Exception as e:
-            success = False
             self.logger.error(f"SubtitleHandler 渲染失败: {e}", exc_info=True)
-        finally:
-            await self._emit_completed(intent, success=success)
-
-    async def _handle_intent_dispatched(self, event_name: str, payload: IntentPayload, source: str):
-        """
-        处理 OUTPUT_INTENT_DISPATCHED 事件（OutputHandlerManager 派发的 Intent）
-
-        Args:
-            event_name: 事件名
-            payload: IntentPayload 实例
-            source: 事件源标识
-        """
-        intent = payload.to_intent()
-        await self.handle(intent)
 
     async def cleanup(self):
         """清理资源"""
         self.logger.info("正在清理 SubtitleHandler...")
-
-        # 取消事件订阅
-        if self.event_bus and getattr(self, "_dispatch_subscribed", False):
-            self.event_bus.off(CoreEvents.OUTPUT_INTENT_DISPATCHED, self._handle_intent_dispatched)
-            self._dispatch_subscribed = False
 
         self._gui_running = False
 
