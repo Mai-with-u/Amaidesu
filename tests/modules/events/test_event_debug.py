@@ -21,6 +21,7 @@ from src.modules.events.payloads import (
     RawDataPayload,
 )
 from src.modules.events.payloads.base import BasePayload
+from src.modules.types import IntentAction, IntentEmotion
 
 # =============================================================================
 # 测试 BasePayload 基类
@@ -193,10 +194,9 @@ class TestDecisionPayloads:
         # 使用 from_intent 方法创建 Payload
         intent = Intent(
             metadata=IntentMetadata(source_id="test_123", decision_time_ms=1234567890123),
-            emotion="happy",
-            action="blink",
+            emotion=IntentEmotion(name="happy", intensity=0.5),
+            action=IntentAction(name="blink", parameters={}),
             speech="你好！很高兴见到你~",
-            context="测试上下文",
         )
         payload = IntentPayload.from_intent(intent, name="maicore")
         debug_str = str(payload)
@@ -205,8 +205,8 @@ class TestDecisionPayloads:
         assert "IntentPayload" in debug_str
         assert 'name="maicore"' in debug_str
         assert 'speech="你好！很高兴见到你~"' in debug_str
-        assert 'emotion="happy"' in debug_str
-        assert 'action="blink"' in debug_str
+        assert '"name": "happy"' in debug_str or "happy" in debug_str
+        assert '"name": "blink"' in debug_str or "blink" in debug_str
 
     def test_provider_connected_payload_debug_string(self):
         """测试 ConnectedPayload 的字符串表示"""
@@ -413,8 +413,8 @@ class TestEventBusDebugLog:
 
             intent = Intent(
                 metadata=IntentMetadata(source_id="test_456", decision_time_ms=1234567890123),
-                emotion="happy",
-                action="blink",
+                emotion=IntentEmotion(name="happy", intensity=0.5),
+                action=IntentAction(name="blink", parameters={}),
                 speech="你好！很高兴见到你~",
             )
             payload = IntentPayload.from_intent(intent, name="maicore")

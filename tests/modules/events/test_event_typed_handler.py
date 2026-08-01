@@ -127,15 +127,13 @@ class TestTypedEventHandler:
         # 发布事件（传入 IntentPayload 对象）
         payload = IntentPayload(
             intent_data={
-                "emotion": "happy",
+                "emotion": {"name": "happy", "intensity": 0.5},
                 "action": None,
                 "speech": "你好！",
-                "context": "你好",
                 "metadata": {
                     "source_id": "test_source",
                     "decision_time_ms": now_ms(),
                 },
-                "structured_params": {},
             },
             name="test_provider",
         )
@@ -146,7 +144,6 @@ class TestTypedEventHandler:
 
         # 验证处理器接收到类型化对象并成功转换
         assert len(received_intents) == 1
-        assert received_intents[0].context == "你好"
         assert received_intents[0].speech == "你好！"
 
     @pytest.mark.asyncio
