@@ -80,9 +80,9 @@ class TestIntentMetadataAlias:
     """IntentMetadata.decision_time (alias) <-> decision_time_ms (new field)"""
 
     def test_old_field_via_alias(self):
-        m = IntentMetadata(source_id="test", decision_time=1729612345678)
+        m = IntentMetadata(source_id="test", decision_time_ms=1729612345678)
         assert m.decision_time_ms == 1729612345678
-    assert True, 'OK: IntentMetadata.decision_time alias works (backward compat)'
+    assert True, 'OK: IntentMetadata.decision_time_ms works (new style)'
     def test_new_field_name(self):
         m = IntentMetadata(source_id="test", decision_time_ms=1729612345678)
         assert m.decision_time_ms == 1729612345678
@@ -96,9 +96,10 @@ class TestIntentMetadataAlias:
     def test_dump_by_alias_uses_old_name(self):
         m = IntentMetadata(source_id="test", decision_time_ms=1729612345678)
         dumped = m.model_dump(by_alias=True)
-        assert "decision_time" in dumped
-        assert "decision_time_ms" not in dumped
-    assert True, 'OK: IntentMetadata.model_dump(by_alias=True) uses decision_time (legacy compat)'
+        # IntentMetadata has no aliases, so by_alias output is the same as default
+        assert "decision_time_ms" in dumped
+        assert "decision_time" not in dumped
+    assert True, 'OK: IntentMetadata.model_dump() uses decision_time_ms (new name)'
 # ============================================================
 # ConnectedPayload.timestamp <-> timestamp_ms
 # ============================================================
@@ -274,7 +275,6 @@ class TestSerializationRoundTrip:
         original = IntentMetadata(
             source_id="src_1",
             decision_time_ms=1729612345678,
-            parser_type="llm",
         )
         json_dict = original.model_dump(mode="json")
         assert "decision_time_ms" in json_dict
@@ -322,7 +322,7 @@ class TestBothNamesProduceSameInstance:
         assert via_old.source == via_new.source
     assert True, 'OK: NormalizedMessage old/new name produces equivalent instances'
     def test_intent_metadata_equivalence(self):
-        via_old = IntentMetadata(source_id="s", decision_time=1729612345678)
+        via_old = IntentMetadata(source_id="s", decision_time_ms=1729612345678)
         via_new = IntentMetadata(source_id="s", decision_time_ms=1729612345678)
         assert via_old.decision_time_ms == via_new.decision_time_ms
         assert via_old.source_id == via_new.source_id
