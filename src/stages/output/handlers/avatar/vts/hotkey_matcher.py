@@ -70,7 +70,8 @@ class HotkeyMatcher:
             self.logger.warning("VTS未连接，跳过加载热键列表")
             return
         try:
-            response = await self._vts_request.requestHotKeyList()
+            request_msg = self._vts_request.vts_request.requestHotKeyList()
+            response = await self._vts_request(request_msg)
             if response and response.get("data") and "availableHotkeys" in response["data"]:
                 hotkeys = response["data"]["availableHotkeys"]
                 self.hotkey_list = hotkeys
@@ -87,7 +88,7 @@ class HotkeyMatcher:
             return False
         try:
             self.logger.debug(f"触发热键: {hotkey_id}")
-            request_msg = self._vts_request.requestTriggerHotKey(hotkeyID=hotkey_id)
+            request_msg = self._vts_request.vts_request.requestTriggerHotKey(hotkeyID=hotkey_id)
             response = await self._vts_request(request_msg)
             if response and response.get("messageType") == "HotkeyTriggerResponse":
                 self.logger.debug(f"热键 {hotkey_id} 触发成功")
