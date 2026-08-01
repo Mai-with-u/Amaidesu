@@ -28,9 +28,12 @@ class AudioStreamChannel:
         self.name = name
         self._logger = get_logger(f"AudioStreamChannel.{name}")
 
-        # 订阅者存储: {sub_id: (config, callbacks, queue)}
+        # 订阅者存储: {sub_id: {config, callbacks, queue}}
         self._subscribers: Dict[str, Dict[str, Any]] = {}
         self._lock = asyncio.Lock()
+
+        # 消费者任务: {sub_id: asyncio.Task}
+        self._consumer_tasks: Dict[str, asyncio.Task] = {}
 
         # 统计信息
         self._publish_count = 0
@@ -42,9 +45,26 @@ class AudioStreamChannel:
         self._is_started = True
         self._logger.info(f"AudioStreamChannel '{self.name}' 已启动")
 
+        # 为已存在的订阅者启动消费者
+        async with self._lock:
+            for sub_id in list(self._subscribers.keys()):
+                self._start_consumer(sub_id)
+
     async def stop(self) -> None:
         """停止通道并清理所有订阅者"""
         self._is_started = False
+
+        # 取消所有消费者任务
+        tasks = []
+        async with self._lock:
+            for _sub_id, task in list(self._consumer_tasks.items()):
+                if not task.done():
+                    task.cancel()
+                    tasks.append(task)
+            self._consumer_tasks.clear()
+
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
         async with self._lock:
             # 清空所有队列
@@ -107,17 +127,62 @@ class AudioStreamChannel:
         async with self._lock:
             self._subscribers[sub_id] = sub_data
 
+        # 启动消费者任务
+        self._start_consumer(sub_id)
+
         self._logger.info(f"订阅者 '{name}' 已注册 (ID: {sub_id})")
         return sub_id
 
     async def unsubscribe(self, sub_id: str) -> bool:
-        """取消订阅"""
         async with self._lock:
-            if sub_id in self._subscribers:
-                del self._subscribers[sub_id]
-                self._logger.info(f"订阅者 '{sub_id}' 已取消")
-                return True
-        return False
+            if sub_id not in self._subscribers:
+                return False
+
+            # 取消消费者任务
+            task = self._consumer_tasks.pop(sub_id, None)
+            if task and not task.done():
+                task.cancel()
+
+            del self._subscribers[sub_id]
+
+        if task and not task.done():
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        self._logger.info(f"订阅者 '{sub_id}' 已取消")
+        return True
+
+    def _start_consumer(self, sub_id: str) -> None:
+        """启动指定订阅者的消费者任务"""
+        if sub_id in self._consumer_tasks:
+            return
+
+        task = asyncio.create_task(self._run_consumer(sub_id))
+        self._consumer_tasks[sub_id] = task
+        self._logger.debug(f"订阅者 {sub_id} 消费者任务已启动")
+
+    async def _run_consumer(self, sub_id: str) -> None:
+        """消费者循环：从队列取音频块并调用回调"""
+        sub_data = self._subscribers.get(sub_id)
+        if not sub_data:
+            return
+
+        queue = sub_data["queue"]
+        callback = sub_data["callbacks"].get("chunk")
+        if not callback:
+            return
+
+        while True:
+            try:
+                chunk = await queue.get()
+                await callback(chunk)
+                queue.task_done()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self._logger.error(f"消费者处理音频块失败 ({sub_id}): {e}")
 
     async def notify_start(self, metadata: AudioMetadata) -> PublishResult:
         """通知所有订阅者：音频流开始"""
