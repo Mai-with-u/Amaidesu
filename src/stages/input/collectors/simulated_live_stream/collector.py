@@ -22,6 +22,7 @@ from src.modules.events.payloads.decision import IntentPayload
 from src.modules.llm.manager import LLMManager
 from src.modules.logging import get_logger
 from src.modules.prompts.manager import PromptManager
+from src.modules.time_utils import now_ms
 from src.modules.types.base.normalized_message import NormalizedMessage
 from src.stages.input.collectors.simulated_live_stream.cadence import (
     CadenceGenerator,
@@ -391,6 +392,7 @@ class SimulatedLiveStreamCollector:
             source="simulated_live_stream",
             data_type=msg.data_type,
             text=text,
+            timestamp_ms=now_ms(),
             user_id=msg.persona.user_id,
             user_nickname=msg.persona.user_nickname,
             platform="simulated",

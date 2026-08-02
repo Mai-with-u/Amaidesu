@@ -21,6 +21,7 @@ from src.stages.input.registry import collector
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
+from src.modules.time_utils import now_ms
 from src.modules.types.base.normalized_message import NormalizedMessage
 
 
@@ -222,12 +223,17 @@ class BiliDanmakuCollector:
         if not text:
             return None
 
+        # 弹幕时间戳：优先使用 Bilibili API 返回的秒级时间戳（check_info.ts），缺失时兜底当前时间
+        ts = item.get("check_info", {}).get("ts")
+        timestamp_ms = int(ts * 1000) if ts else now_ms()
+
         # 直接创建 NormalizedMessage
         return NormalizedMessage(
             text=text,
             source="bili_danmaku",
             data_type="text",
             importance=0.5,
+            timestamp_ms=timestamp_ms,
             user_id=str(user_id),
             user_nickname=nickname,
             platform=self.message_config.get("platform", "bilibili"),

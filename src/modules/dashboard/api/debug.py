@@ -54,7 +54,7 @@ async def inject_message(
             source=request.source,
             data_type=request.data_type,
             importance=request.importance,
-            timestamp=now_ms(),
+            timestamp_ms=now_ms(),
         )
 
         # 通过 EventBus 发布事件

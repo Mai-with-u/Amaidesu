@@ -17,6 +17,7 @@ from src.stages.input.registry import collector
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
+from src.modules.time_utils import now_ms
 from src.modules.types.base.normalized_message import NormalizedMessage
 
 
@@ -144,6 +145,7 @@ class MockDanmakuCollector:
                         source="mock_danmaku",
                         data_type="text",
                         importance=0.5,
+                        timestamp_ms=now_ms(),
                         user_id=user_id or None,
                         user_nickname=user or None,
                         platform="mock",

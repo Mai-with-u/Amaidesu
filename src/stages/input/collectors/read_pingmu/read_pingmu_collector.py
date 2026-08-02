@@ -16,6 +16,7 @@ from src.stages.input.registry import collector
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
+from src.modules.time_utils import now_ms
 from src.modules.types.base.normalized_message import NormalizedMessage
 
 try:
@@ -201,6 +202,7 @@ class ReadPingmuCollector:
                 source="read_pingmu",
                 data_type="text",
                 importance=0.5,
+                timestamp_ms=now_ms(),
                 user_id="screen_analyzer",
                 user_nickname="屏幕分析",
                 platform="screen",

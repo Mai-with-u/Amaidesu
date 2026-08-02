@@ -22,6 +22,7 @@ import numpy as np
 from src.stages.input.registry import collector
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
+from src.modules.time_utils import now_ms
 from src.modules.types.base.normalized_message import NormalizedMessage
 
 from .config import STTInputConfig
@@ -591,6 +592,7 @@ class STTCollector:
                                         source="stt",
                                         data_type="text",
                                         importance=0.5,
+                                        timestamp_ms=now_ms(),
                                         user_id=self.message_config.get("user_id") or None,
                                         user_nickname=self.message_config.get("user_nickname") or None,
                                         platform="voice",
