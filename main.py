@@ -591,12 +591,17 @@ async def run_shutdown(
     - 否则 cleanup() 中的 event_bus.off() 会因为监听器已被清除而失败
     - OutputHandler 的 cleanup() 也会调用 event_bus.off()，因此必须在步骤 2.4 中清理
     """
+    # Ctrl+C 时 asyncio.run 取消 main task，run_shutdown 内部所有 await 都会抛 CancelledError。
+    # 每个 cleanup 步骤必须吃 CancelledError 才能让后续步骤继续执行（例如 input cleanup 被取消后，
+    # decision_manager.cleanup() 仍要跑，否则 AmaidesuDecider._flush_task 不会被取消）。
+    _saw_cancelled = False
     if input_manager:
         logger.info("正在停止输入Collector（数据生产者）...")
         try:
             await input_manager.cleanup()
             logger.info("输入Collector已停止并清理")
-        except Exception as e:
+        except (Exception, asyncio.CancelledError) as e:
+            _saw_cancelled = _saw_cancelled or isinstance(e, asyncio.CancelledError)
             logger.error(f"停止输入Collector时出错: {e}")
 
     if decision_manager:
@@ -604,7 +609,8 @@ async def run_shutdown(
         try:
             await decision_manager.cleanup()
             logger.info("DeciderManager 清理完成")
-        except Exception as e:
+        except (Exception, asyncio.CancelledError) as e:
+            _saw_cancelled = _saw_cancelled or isinstance(e, asyncio.CancelledError)
             logger.error(f"清理 DeciderManager 时出错: {e}")
 
     if output_manager:
@@ -613,7 +619,8 @@ async def run_shutdown(
             await output_manager.stop()
             await output_manager.cleanup()
             logger.info("OutputHandler 已清理")
-        except Exception as e:
+        except (Exception, asyncio.CancelledError) as e:
+            _saw_cancelled = _saw_cancelled or isinstance(e, asyncio.CancelledError)
             logger.error(f"清理 OutputHandler 失败: {e}")
 
     # 3. 清理 MCP 服务
@@ -622,7 +629,8 @@ async def run_shutdown(
         try:
             await mcp_service.cleanup()
             logger.info("MCP 服务已清理")
-        except Exception as e:
+        except (Exception, asyncio.CancelledError) as e:
+            _saw_cancelled = _saw_cancelled or isinstance(e, asyncio.CancelledError)
             logger.error(f"MCP 服务清理失败: {e}")
 
     # 4. 清理 Dashboard（停止 WebSocket 连接和服务器）
@@ -632,7 +640,8 @@ async def run_shutdown(
             await dashboard_server.stop()
             await dashboard_server.cleanup()
             logger.info("Dashboard 已停止")
-        except Exception as e:
+        except (Exception, asyncio.CancelledError) as e:
+            _saw_cancelled = _saw_cancelled or isinstance(e, asyncio.CancelledError)
             logger.error(f"停止 Dashboard 失败: {e}")
 
     # 5. 停止事件历史记录器（必须在 EventBus.cleanup() 之前取消 EventBus 订阅）
@@ -641,7 +650,8 @@ async def run_shutdown(
         try:
             await event_recorder.stop()
             logger.info("事件历史记录器已停止")
-        except Exception as e:
+        except (Exception, asyncio.CancelledError) as e:
+            _saw_cancelled = _saw_cancelled or isinstance(e, asyncio.CancelledError)
             logger.error(f"停止事件历史记录器失败: {e}")
 
     # 6. 等待待处理事件完成并清除所有监听器（EventBus 清理）
@@ -650,7 +660,8 @@ async def run_shutdown(
         try:
             await event_bus.cleanup()
             logger.info("EventBus 清理完成")
-        except Exception as e:
+        except (Exception, asyncio.CancelledError) as e:
+            _saw_cancelled = _saw_cancelled or isinstance(e, asyncio.CancelledError)
             logger.error(f"EventBus 清理失败: {e}")
 
     # 5. 清理基础设施（LLM等）
@@ -660,7 +671,8 @@ async def run_shutdown(
             await llm_service.cleanup()
             logger.info("LLM 服务已清理")
         logger.info("核心服务关闭完成")
-    except Exception as e:
+    except (Exception, asyncio.CancelledError) as e:
+        _saw_cancelled = _saw_cancelled or isinstance(e, asyncio.CancelledError)
         logger.error(f"核心服务关闭时出错: {e}")
 
     # 6. 清理上下文服务
@@ -669,10 +681,16 @@ async def run_shutdown(
         if context_service:
             await context_service.cleanup()
             logger.info("上下文服务已清理")
-    except Exception as e:
+    except (Exception, asyncio.CancelledError) as e:
+        _saw_cancelled = _saw_cancelled or isinstance(e, asyncio.CancelledError)
         logger.error(f"清理上下文服务失败: {e}")
 
     logger.info("Amaidesu 应用程序已关闭。")
+
+    # 所有 cleanup 步骤都已尝试完成。如果原始触发是 Ctrl+C（main task 被取消），
+    # 此时应让 CancelledError 继续传播，asyncio.run 会按正常流程收尾并打印 KeyboardInterrupt。
+    if _saw_cancelled:
+        raise asyncio.CancelledError()
 
 
 # ---------------------------------------------------------------------------

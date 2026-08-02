@@ -224,6 +224,10 @@ async def ws_simulator_stream(websocket: WebSocket):
                         "importance": msg.importance,
                     }
                 )
+            except asyncio.CancelledError:
+                # 关闭信号：break 退出循环（finally 负责 unsubscribe）。
+                # CancelledError 是 BaseException，不被 except Exception/WebSocketDisconnect 捕获
+                break
             except asyncio.TimeoutError:
                 # 心跳 ping
                 try:

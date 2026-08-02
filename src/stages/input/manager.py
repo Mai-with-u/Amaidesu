@@ -122,11 +122,24 @@ class InputCollectorManager:
                 await asyncio.wait_for(
                     asyncio.gather(*self._collector_tasks.values(), return_exceptions=True), timeout=10.0
                 )
-            except TimeoutError:
-                self.logger.warning("等待Collector停止超时，强制取消任务")
+            except (TimeoutError, asyncio.CancelledError) as e:
+                # Ctrl+C 时 asyncio.run 取消 main task → wait_for 抛出 CancelledError，
+                # 需与 TimeoutError 一样强制取消未结束的子任务，避免"Task was destroyed" 警告。
+                # 此处吞掉 CancelledError，让 cleanup() 正常返回 run_shutdown，
+                # 由 run_shutdown 统一保证所有 cleanup 步骤都执行。
+                if isinstance(e, TimeoutError):
+                    self.logger.warning("等待Collector停止超时，强制取消任务")
+                else:
+                    self.logger.debug("收到 CancelledError，强制取消未结束的 Collector 任务")
                 for task in self._collector_tasks.values():
                     if not task.done():
                         task.cancel()
+                for task in self._collector_tasks.values():
+                    if not task.done():
+                        try:
+                            await asyncio.wait_for(asyncio.shield(task), timeout=0.5)
+                        except (TimeoutError, asyncio.CancelledError, Exception):
+                            pass
 
         self._is_started = False
         self.logger.info("所有Collector已停止")

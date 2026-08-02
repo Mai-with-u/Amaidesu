@@ -4,6 +4,7 @@ WebSocket 连接处理器
 管理 WebSocket 连接的生命周期、订阅和心跳。
 """
 
+import asyncio
 import json
 import time
 import uuid
@@ -189,6 +190,9 @@ class WebSocketHandler:
                 await self.handle_message(client_id, message)
         except WebSocketDisconnect:
             logger.info(f"客户端 {client_id} 主动断开连接")
+        except asyncio.CancelledError:
+            # 关闭信号：静默退出（finally 负责 disconnect，避免 starlette 打印 ASGI traceback）
+            pass
         except Exception as e:
             logger.error(f"客户端 {client_id} 连接异常: {e}")
         finally:

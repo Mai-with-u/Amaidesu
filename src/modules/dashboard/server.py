@@ -195,10 +195,16 @@ class DashboardServer:
                     await self.ws_handler.handle_message(client_id, message)
             except WebSocketDisconnect:
                 pass
+            except asyncio.CancelledError:
+                # 关闭信号：静默退出（finally 负责 disconnect，避免 starlette 打印 ASGI traceback）
+                pass
             except Exception as e:
                 self.logger.warning(f"WebSocket 消息循环异常（将清理连接）: {e}")
             finally:
-                await self.ws_handler.disconnect(client_id)
+                # 防御: dashboard.cleanup() 可能已把 ws_handler 置 None(WS handler task 是孤儿,
+                # 可能在 cleanup() 之后才走到 finally,直接调用会抛 AttributeError -> starlette traceback)
+                if self.ws_handler is not None:
+                    await self.ws_handler.disconnect(client_id)
 
         # 启动心跳任务
         self._heartbeat_task = asyncio.create_task(self._run_heartbeat())
@@ -435,6 +441,9 @@ class DashboardServer:
                     await websocket.receive_text()
             except WebSocketDisconnect:
                 pass
+            except asyncio.CancelledError:
+                # 关闭信号：静默退出（finally 负责清理 client 集合）
+                pass
             except Exception as e:
                 self.logger.debug(f"Danmaku WebSocket 错误: {e}")
             finally:
@@ -449,6 +458,9 @@ class DashboardServer:
                 while True:
                     await websocket.receive_text()
             except WebSocketDisconnect:
+                pass
+            except asyncio.CancelledError:
+                # 关闭信号：静默退出（finally 负责清理 client 集合）
                 pass
             except Exception as e:
                 self.logger.debug(f"Subtitle WebSocket 错误: {e}")
@@ -467,6 +479,9 @@ class DashboardServer:
                 while True:
                     await websocket.receive_text()
             except WebSocketDisconnect:
+                pass
+            except asyncio.CancelledError:
+                # 关闭信号：静默退出（finally 负责清理 client 集合）
                 pass
             except Exception as e:
                 self.logger.debug(f"Widget WebSocket 错误: {e}")
