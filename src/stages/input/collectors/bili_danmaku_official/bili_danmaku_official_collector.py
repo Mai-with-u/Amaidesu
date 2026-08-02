@@ -92,7 +92,7 @@ class BiliDanmakuOfficialCollector:
             self.template_items = self.typed_config.template_items
             if not self.template_items:
                 self.logger.warning(
-                    "BiliDanmakuOfficial 配置启用了 template_info，但在 config.toml 中未找到 template_items。"
+                    "BiliDanmakuOfficial 配置启用了 template_info，但在 config/input.toml 中未找到 template_items。"
                 )
 
     def stream(self) -> AsyncIterator[NormalizedMessage]:
