@@ -53,7 +53,8 @@ def _import_under_test():
         "ReplayDeciderConfigSchema": ReplayDeciderConfigSchema,
         "DecisionDecidersConfig": DecisionDecidersConfig,
         "DecisionPipelinesConfig": DecisionPipelinesConfig,
-        "DecisionConfig": DecisionConfig}
+        "DecisionConfig": DecisionConfig,
+    }
 
 
 @pytest.fixture
@@ -95,19 +96,19 @@ class TestLLMDeciderConfigSchema:
 
     def test_parses_explicit_dict(self, schemas):
         cls = schemas["LLMDeciderConfigSchema"]
-        cfg = cls.model_validate({ "client": "llm_fast", "fallback_mode": "echo"})
+        cfg = cls.model_validate({"client": "llm_fast", "fallback_mode": "echo"})
         assert cfg.client == "llm_fast"
         assert cfg.fallback_mode == "echo"
 
     def test_invalid_client_rejected(self, schemas):
         cls = schemas["LLMDeciderConfigSchema"]
         with pytest.raises(ValidationError):
-            cls.model_validate({ "client": "nonsense"})
+            cls.model_validate({"client": "nonsense"})
 
     def test_invalid_fallback_mode_rejected(self, schemas):
         cls = schemas["LLMDeciderConfigSchema"]
         with pytest.raises(ValidationError):
-            cls.model_validate({ "fallback_mode": "shout"})
+            cls.model_validate({"fallback_mode": "shout"})
 
 
 # =====================================================================
@@ -141,7 +142,8 @@ class TestMaiBotDeciderConfigSchema:
                 "platform": "myplatform",
                 "token": "secret-token",
                 "connect_timeout": 3.5,
-                "reconnect_interval": 7.0}
+                "reconnect_interval": 7.0,
+            }
         )
         assert cfg.host == "192.168.1.10"
         assert cfg.port == 9000
@@ -153,22 +155,22 @@ class TestMaiBotDeciderConfigSchema:
     def test_port_below_1_rejected(self, schemas):
         cls = schemas["MaiBotDeciderConfigSchema"]
         with pytest.raises(ValidationError):
-            cls.model_validate({ "port": 0})
+            cls.model_validate({"port": 0})
 
     def test_port_above_65535_rejected(self, schemas):
         cls = schemas["MaiBotDeciderConfigSchema"]
         with pytest.raises(ValidationError):
-            cls.model_validate({ "port": 70000})
+            cls.model_validate({"port": 70000})
 
     def test_connect_timeout_must_be_positive(self, schemas):
         cls = schemas["MaiBotDeciderConfigSchema"]
         with pytest.raises(ValidationError):
-            cls.model_validate({ "connect_timeout": 0.0})
+            cls.model_validate({"connect_timeout": 0.0})
 
     def test_reconnect_interval_must_be_positive(self, schemas):
         cls = schemas["MaiBotDeciderConfigSchema"]
         with pytest.raises(ValidationError):
-            cls.model_validate({ "reconnect_interval": -1.0})
+            cls.model_validate({"reconnect_interval": -1.0})
 
     def test_token_optional(self, schemas):
         cls = schemas["MaiBotDeciderConfigSchema"]
@@ -195,75 +197,71 @@ class TestAmaidesuDeciderConfigSchema:
         assert cfg.client == "llm_fast"
         assert cfg.fallback_mode == "silent"
         assert cfg.history_limit == 10
-        # Stage 1 弹幕聚合
-        assert cfg.batch_window_ms == 1500
-        assert cfg.batch_max_size == 8
+        # Stage 1 弹幕聚合（Task 5 两阶段调优：默认窗口/上限调大）
+        assert cfg.batch_window_ms == 3000
+        assert cfg.batch_max_size == 20
         assert cfg.tick_interval_ms == 300
-        # Stage 1 节奏门控
-        assert cfg.participation_rate == 0.3
-        assert cfg.force_data_types == ["super_chat", "guard"]
+        # Stage 1 节奏门控（Task 11：仅保留强制触发判定）
+        assert cfg.force_data_types == ["super_chat", "guard", "gift"]
         assert cfg.force_importance == 0.8
-        assert cfg.no_action_backoff_base_ms == 8000
-        assert cfg.no_action_backoff_cap_ms == 60000
-        # 可选 LLM 节奏门控
+        # 可选 LLM 节奏门控（保留字段）
         assert cfg.use_llm_timing_gate is False
         # 动作选择
         assert cfg.enable_action_selection is True
         # 人设默认值
         assert cfg.bot_name == "爱德丝"
+        # Task 5 两阶段新增字段默认值
+        assert cfg.planner_client == "llm_fast"
+        assert cfg.replyer_client == "llm"
+        assert cfg.enable_idle_compensation is True
+        assert cfg.room_state_enabled is True
+        assert cfg.room_state_cold_timeout_ms == 60000
+        assert cfg.room_state_llm_summary_interval_ms == 60000
 
     def test_parses_real_decision_toml_block(self, schemas):
         """config/decision.toml 中 [deciders.amaidesu] 段必须能解析"""
         cls = schemas["AmaidesuDeciderConfigSchema"]
         cfg = cls.model_validate(
             {
-                "participation_rate": 1.0,
-                "force_data_types": ["super_chat", "guard"],
+                "force_data_types": ["super_chat", "guard", "gift"],
                 "force_importance": 0.8,
                 "batch_window_ms": 1500,
                 "batch_max_size": 8,
                 "client": "llm_fast",
                 "fallback_mode": "silent",
-                "use_llm_timing_gate": False}
+                "use_llm_timing_gate": False,
+            }
         )
-        assert cfg.participation_rate == 1.0
         assert cfg.fallback_mode == "silent"
         assert cfg.use_llm_timing_gate is False
         # 未提供字段应用默认值
         assert cfg.batch_window_ms == 1500
 
-    def test_participation_rate_range(self, schemas):
-        cls = schemas["AmaidesuDeciderConfigSchema"]
-        with pytest.raises(ValidationError):
-            cls.model_validate({ "participation_rate": -0.1})
-        with pytest.raises(ValidationError):
-            cls.model_validate({ "participation_rate": 1.5})
-
     def test_force_importance_range(self, schemas):
         cls = schemas["AmaidesuDeciderConfigSchema"]
         with pytest.raises(ValidationError):
-            cls.model_validate({ "force_importance": 1.5})
+            cls.model_validate({"force_importance": 1.5})
 
     def test_tick_interval_min_50ms(self, schemas):
         cls = schemas["AmaidesuDeciderConfigSchema"]
         with pytest.raises(ValidationError):
-            cls.model_validate({ "tick_interval_ms": 10})
+            cls.model_validate({"tick_interval_ms": 10})
 
     def test_batch_max_size_min_1(self, schemas):
         cls = schemas["AmaidesuDeciderConfigSchema"]
         with pytest.raises(ValidationError):
-            cls.model_validate({ "batch_max_size": 0})
+            cls.model_validate({"batch_max_size": 0})
 
     def test_invalid_client_rejected(self, schemas):
         cls = schemas["AmaidesuDeciderConfigSchema"]
         with pytest.raises(ValidationError):
-            cls.model_validate({ "client": "llm_huge"})
+            cls.model_validate({"client": "llm_huge"})
 
     def test_invalid_fallback_mode_rejected(self, schemas):
         """Amaidesu 的 fallback_mode 不包含 'error'（与 llm decider 不同）"""
         cls = schemas["AmaidesuDeciderConfigSchema"]
         with pytest.raises(ValidationError):
-            cls.model_validate({ "fallback_mode": "error"})
+            cls.model_validate({"fallback_mode": "error"})
 
 
 # =====================================================================
@@ -289,17 +287,13 @@ class TestCommandDeciderConfigSchema:
 
     def test_parses_custom_mappings(self, schemas):
         cls = schemas["CommandDeciderConfigSchema"]
-        cfg = cls.model_validate(
-            {
-                "command_prefix": "!",
-                "command_mappings": {"hello": "say_hello"}}
-        )
+        cfg = cls.model_validate({"command_prefix": "!", "command_mappings": {"hello": "say_hello"}})
         assert cfg.command_prefix == "!"
         assert cfg.command_mappings == {"hello": "say_hello"}
 
     def test_empty_mappings_allowed(self, schemas):
         cls = schemas["CommandDeciderConfigSchema"]
-        cfg = cls.model_validate({ "command_mappings": {}})
+        cfg = cls.model_validate({"command_mappings": {}})
         assert cfg.command_mappings == {}
 
 
@@ -322,7 +316,7 @@ class TestReplayDeciderConfigSchema:
 
     def test_parses_dict_with_false(self, schemas):
         cls = schemas["ReplayDeciderConfigSchema"]
-        cfg = cls.model_validate({ "add_default_action": False})
+        cfg = cls.model_validate({"add_default_action": False})
         assert cfg.add_default_action is False
 
 
@@ -395,9 +389,9 @@ class TestDecisionDecidersConfig:
 
     def test_includes_amaidesu_when_provided(self, schemas):
         cls = schemas["DecisionDecidersConfig"]
-        cfg = cls.model_validate({"amaidesu": {"participation_rate": 0.5}})
+        cfg = cls.model_validate({"amaidesu": {"force_importance": 0.9}})
         assert cfg.amaidesu is not None
-        assert cfg.amaidesu.participation_rate == 0.5
+        assert cfg.amaidesu.force_importance == 0.9
 
     def test_unknown_decider_subconfig_rejected(self, schemas):
         cls = schemas["DecisionDecidersConfig"]
@@ -456,7 +450,7 @@ class TestDecisionConfigParseRealToml:
         cfg = cls.model_validate(real_decision_toml_data)
         amaidesu = cfg.deciders.amaidesu
         assert amaidesu is not None
-        assert amaidesu.participation_rate == 1.0
+        assert amaidesu.force_importance == 0.8
 
     def test_llm_block_parses(self, schemas, real_decision_toml_data):
         cls = schemas["DecisionConfig"]
@@ -571,14 +565,8 @@ class TestTomlRoundTrip:
     def test_dump_and_reload_preserves_values(self, schemas):
         """顶层 DecisionConfig：model_dump() ↔ model_validate() 来回不丢值"""
         cls = schemas["DecisionConfig"]
-        cfg = cls.model_validate(
-            {
-                "deciders": {
-                    "enabled": ["amaidesu"],
-                    "amaidesu": { "participation_rate": 0.5}}
-            }
-        )
+        cfg = cls.model_validate({"deciders": {"enabled": ["amaidesu"], "amaidesu": {"force_importance": 0.9}}})
 
         cfg2 = cls.model_validate(cfg.model_dump())
         assert cfg2.deciders.enabled == cfg.deciders.enabled
-        assert cfg2.deciders.amaidesu.participation_rate == 0.5
+        assert cfg2.deciders.amaidesu.force_importance == 0.9

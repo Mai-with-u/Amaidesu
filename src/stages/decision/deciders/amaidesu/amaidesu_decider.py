@@ -1,24 +1,28 @@
-"""
-AmaidesuDecider - 直播专用决策器
+"""AmaidesuDecider - 直播专用决策器（双阶段编排：Planner + Replyer）
 
-借鉴 MaiBot Maisaka 的"双阶段决策"思路，但做成轻量、低延迟、完全自包含的实现：
-
-- Stage 1 节奏门控（TimingGate + MessageBuffer）：聚合突发弹幕，按采样率/强制触发/退避
-  决定"要不要参与"，对应 MaiBot 的 Timing Gate。
-- Stage 2 内容决策（单次结构化 LLM 调用）：决定"说什么 + 情绪"，合并了 MaiBot 的
-  Planner 与 Replyer，去掉多轮内部循环与学习库，适配直播低延迟。
+设计沿革（Task 10 + Task 11）：
+- Stage 1 节奏门控（TimingGate + MessageBuffer）：
+  - MessageBuffer 聚合突发弹幕，按时间窗口/条数上限/空窗补偿/force 决定何时取出一批。
+  - TimingGate（Task 11 精简）：仅保留 is_forced 强制触发判定；sampling/backoff 已移除，
+    "要不要发言"的裁决下沉到 Stage 2 的 Planner（should_reply）。
+- Stage 2 两阶段内容决策（替代旧的单阶段 LLM 调用）：
+  - Planner（战术决策者）：判断"要不要参与 + 如何参与"，产出 DecisionPlan。
+    使用快速模型 planner_client（默认 llm_fast），零人设注入。
+  - Replyer（回复生成器）：消费 plan + 人设 + 弹幕，生成实际 Intent。
+    使用高质量模型 replyer_client（默认 llm），注入 bot_name/personality/style_constraints。
+  - 两者解耦：Planner 失败 → silent；Planner should_reply=False → Replyer 不调用；
+    Replyer 失败 → silent。失败计数分别记录到 planner_failures / replyer_failures。
 
 约束：
 - 只使用 Amaidesu 自己的 LLMManager / PromptManager / ContextService，不依赖 MaiBot。
 - 不订阅 input/output 事件，由 DeciderManager 调用 decide()；只发布 decision.intent.generated。
-- 本期输出 speech + emotion（12 枚举），action 字段预留扩展点。
+- RoomState 提供热度信号给 Planner；RoomStateLoop 后台低频 LLM 摘要填充 topic_summary。
+- 本期输出 speech + emotion（12 枚举），action 字段由 Replyer 经能力白名单校验。
 """
 
 from typing import Any, Dict, List, Literal, Optional
 
 import asyncio
-import json
-import re
 
 from pydantic import Field
 
@@ -32,18 +36,22 @@ from src.modules.events.payloads import IntentPayload
 from src.modules.llm.manager import LLMManager
 from src.modules.logging import get_logger
 from src.modules.prompts.manager import PromptManager
-from src.modules.types import Intent, IntentAction, IntentEmotion, IntentMetadata
+from src.modules.types import Intent
 from src.modules.types.base.normalized_message import NormalizedMessage
-from src.modules.types.capabilities import CapabilitiesProvider, UnifiedCapabilitiesView
+from src.modules.types.capabilities import CapabilitiesProvider
 from src.modules.time_utils import now_ms
 
 from .message_buffer import MessageBuffer
+from .planner import Planner
+from .replyer import Replyer
+from .room_state import RoomState
+from .room_state_loop import RoomStateLoop
 from .timing_gate import TimingGate
 
 
 @decider("amaidesu")
 class AmaidesuDecider:
-    """直播专用决策器（双阶段轻量版）。"""
+    """直播专用决策器（双阶段编排：Planner + Replyer）。"""
 
     @classmethod
     def get_registration_info(cls) -> Dict[str, Any]:
@@ -53,34 +61,35 @@ class AmaidesuDecider:
     class ConfigSchema(BaseConfig):
         """直播决策器配置 Schema。
 
-        借鉴 MaiBot 的频率/强制/退避机制，适配直播弹幕场景。
+        Task 11 已清理：participation_rate / no_action_backoff_base_ms /
+        no_action_backoff_cap_ms（采样率与冷场退避已下沉到 Planner 的 should_reply 裁决）。
+        保留 client / fallback_mode / use_llm_timing_gate 字段以维持向后兼容
+        （决策器不再使用，但既有配置文件与 Dashboard UI 仍可能引用）。
         """
 
-        # Stage 2 LLM
-        client: Literal["llm", "llm_fast", "vlm"] = Field(default="llm_fast", description="内容决策使用的 LLM 客户端")
+        # Stage 2 LLM（保留字段：向后兼容 stats / get_info，新代码使用 planner_client/replyer_client）
+        client: Literal["llm", "llm_fast", "vlm"] = Field(
+            default="llm_fast", description="（保留）单阶段 LLM 客户端，新代码用 planner_client/replyer_client"
+        )
         fallback_mode: Literal["silent", "simple", "echo"] = Field(
-            default="silent", description="LLM 失败时的降级模式：silent 不发言 / simple 通用回复 / echo 复述"
+            default="silent", description="（保留）LLM 失败降级模式；两阶段重构后固定 silent"
         )
         history_limit: int = Field(default=10, ge=0, description="构建 prompt 时引用的历史消息条数")
 
-        # Stage 1 弹幕聚合
-        batch_window_ms: int = Field(default=1500, ge=0, description="弹幕聚合时间窗口（毫秒）")
-        batch_max_size: int = Field(default=8, ge=1, description="单批最多聚合的弹幕条数")
+        # Stage 1 弹幕聚合（两阶段调优：调大窗口/上限，让 Planner 看到更多上下文）
+        batch_window_ms: int = Field(default=3000, ge=0, description="弹幕聚合时间窗口（毫秒），原 1500")
+        batch_max_size: int = Field(default=20, ge=1, description="单批最多聚合的弹幕条数，原 8")
         tick_interval_ms: int = Field(default=300, ge=50, description="后台聚合检查间隔（毫秒）")
 
-        # Stage 1 节奏门控
-        participation_rate: float = Field(
-            default=0.3, ge=0.0, le=1.0, description="普通弹幕采样率（类比 talk_value），0 为静默"
-        )
+        # Stage 1 节奏门控（仅保留强制触发判定；Task 11 移除采样/退避）
+        # 计划要求：SC / guard / 礼物均强制响应（Final Wave 合规）
         force_data_types: List[str] = Field(
-            default_factory=lambda: ["super_chat", "guard"], description="强制响应的数据类型"
+            default_factory=lambda: ["super_chat", "guard", "gift"], description="强制响应的数据类型"
         )
         force_importance: float = Field(default=0.8, ge=0.0, le=1.0, description="importance 达到该值则强制响应")
-        no_action_backoff_base_ms: int = Field(default=8000, ge=0, description="冷场 no_action 退避基数（毫秒）")
-        no_action_backoff_cap_ms: int = Field(default=60000, ge=0, description="冷场 no_action 退避上限（毫秒）")
 
-        # 可选 LLM 节奏门控
-        use_llm_timing_gate: bool = Field(default=False, description="是否启用额外的 LLM 节奏门控（非强制批次）")
+        # 可选 LLM 节奏门控（保留字段：两阶段重构后已删除代码路径，Planner 接管该职责）
+        use_llm_timing_gate: bool = Field(default=False, description="（保留，已废弃）两阶段重构后 Planner 接管该职责")
 
         # 动作选择
         enable_action_selection: bool = Field(
@@ -89,6 +98,31 @@ class AmaidesuDecider:
 
         # 人设默认值（无 persona 配置时使用）
         bot_name: str = Field(default="爱德丝", description="VTuber 名称")
+
+        # ===== 两阶段决策字段（Task 5）=====
+        # 两阶段客户端：Planner 用快速模型生成动作意图，Replyer 用高质量模型生成回复
+        planner_client: Literal["llm", "llm_fast", "vlm"] = Field(
+            default="llm_fast", description="两阶段-Planner 使用的 LLM 客户端（快速模型）"
+        )
+        replyer_client: Literal["llm", "llm_fast", "vlm"] = Field(
+            default="llm", description="两阶段-Replyer 使用的 LLM 客户端（高质量模型）"
+        )
+        # 空窗补偿：人少时避免冷场，默认开启
+        enable_idle_compensation: bool = Field(default=True, description="空窗补偿开关：人少时不冷场（默认开启）")
+        # 房间状态后台预处理：冷场 60s 自动降频/暂停控制成本
+        room_state_enabled: bool = Field(default=True, description="是否启用房间状态后台预处理（默认开启）")
+        room_state_cold_timeout_ms: int = Field(
+            default=60000, ge=0, description="房间冷场判定阈值（毫秒），超过则视为冷场"
+        )
+        room_state_llm_summary_interval_ms: int = Field(
+            default=60000, ge=0, description="低频 LLM 房间状态摘要间隔（毫秒）"
+        )
+        # 摘要专用 LLM profile：必须独立于 planner_client（默认 llm_fast），
+        # 否则 LLMManager 按 profile 名复用同一 client 实例，违反"独立连接池"约束（Task 8）
+        room_state_summary_client: str = Field(
+            default="llm_summary",
+            description="房间状态摘要专用 LLM profile（独立 client 实例，避免与 Planner 共享）",
+        )
 
     def __init__(
         self,
@@ -99,6 +133,7 @@ class AmaidesuDecider:
         config_service: Optional[ConfigService] = None,
         context_service: Optional[ContextService] = None,
         capabilities_provider: Optional[CapabilitiesProvider] = None,
+        room_state: Optional[RoomState] = None,
     ):
         self.typed_config = self.ConfigSchema.from_dict(config)
         self.logger = get_logger("AmaidesuDecider")
@@ -110,58 +145,95 @@ class AmaidesuDecider:
         self._context_service = context_service
         self._capabilities_provider = capabilities_provider
 
-        # 能力快照（首次决策时惰性加载并缓存）
-        self._capabilities_loaded = False
-        self._action_list_str = ""
-        self._valid_action_names: set[str] = set()
+        # 房间态势（可注入，默认新建）—— 提供热度信号给 Planner
+        self._room_state = room_state or RoomState()
 
-        self.client_type = self.typed_config.client
-        self.fallback_mode = self.typed_config.fallback_mode
+        # 两阶段子组件
+        self._planner = Planner(
+            config=self.typed_config,
+            llm_service=llm_service,
+            prompt_service=prompt_service,
+            room_state=self._room_state,
+            capabilities_provider=capabilities_provider,
+        )
+        self._replyer = Replyer(
+            config=config,
+            llm_service=llm_service,
+            prompt_service=prompt_service,
+            event_bus=event_bus,
+            context_service=context_service,
+            capabilities_provider=capabilities_provider,
+        )
+        self._room_state_loop = RoomStateLoop(
+            config=self.typed_config,
+            room_state=self._room_state,
+            llm_service=llm_service,
+            prompt_service=prompt_service,
+            context_service=context_service,
+        )
 
-        self._buffer = MessageBuffer()
+        # Task 9: 将 batch 参数和空窗补偿开关注入 MessageBuffer
+        self._buffer = MessageBuffer(
+            batch_window_ms=self.typed_config.batch_window_ms,
+            batch_max_size=self.typed_config.batch_max_size,
+            enable_idle_compensation=self.typed_config.enable_idle_compensation,
+        )
+        # TimingGate（Task 11 精简）：仅保留强制触发判定，采样/退避已移除
         self._timing_gate = TimingGate(
-            participation_rate=self.typed_config.participation_rate,
             force_data_types=self.typed_config.force_data_types,
             force_importance=self.typed_config.force_importance,
-            backoff_base_ms=self.typed_config.no_action_backoff_base_ms,
-            backoff_cap_ms=self.typed_config.no_action_backoff_cap_ms,
         )
+
+        # 旧字段保留（向后兼容 stats / get_info）
+        self.client_type = self.typed_config.client
+        self.fallback_mode = self.typed_config.fallback_mode
 
         self._running = False
         self._flush_task: Optional[asyncio.Task] = None
         self._flush_lock = asyncio.Lock()
 
-        # 统计信息
+        # 统计信息：保留原有 + 新增 planner/replyer 失败计数
         self._total_messages = 0
         self._total_batches = 0
         self._total_replies = 0
         self._total_no_action = 0
-        self._failed_requests = 0
+        self._failed_requests = 0  # 旧字段保留（向后兼容 stats），新代码不再主动递增
+        self._planner_failures = 0
+        self._replyer_failures = 0
 
     async def setup(self) -> None:
-        """启动后台聚合循环。"""
-        self.logger.info("初始化 AmaidesuDecider...")
+        """启动后台聚合循环 + 房间状态后台摘要循环。"""
+        self.logger.info("初始化 AmaidesuDecider（双阶段：Planner + Replyer）...")
         if self._llm_service is None:
             raise RuntimeError("LLM Manager 未注入！请确保在 setup 中正确配置。")
 
         self._running = True
         self._flush_task = asyncio.create_task(self._flush_loop())
+        # 启动房间状态后台摘要循环（默认启用，可通过 room_state_enabled=False 关闭）
+        await self._room_state_loop.start()
         self.logger.info(
-            f"AmaidesuDecider 初始化完成 (Client: {self.client_type}, "
-            f"采样率: {self.typed_config.participation_rate}, "
-            f"聚合窗口: {self.typed_config.batch_window_ms}ms)"
+            f"AmaidesuDecider 初始化完成 "
+            f"(Planner client={self.typed_config.planner_client}, "
+            f"Replyer client={self.typed_config.replyer_client}, "
+            f"聚合窗口={self.typed_config.batch_window_ms}ms)"
         )
 
     async def decide(self, normalized_message: "NormalizedMessage") -> None:
-        """接收单条消息，入缓冲并更新强制触发状态（快速返回，决策在后台循环完成）。"""
+        """接收单条消息：更新房间态势 + 入缓冲（快速返回，决策在后台循环完成）。"""
         self._total_messages += 1
+        # 房间态势热度信号（Planner 通过 RoomState.get_snapshot 读取）
+        self._room_state.update(normalized_message)
         forced = self._timing_gate.is_forced(normalized_message)
         self._buffer.add(normalized_message, arrival_ms=now_ms(), forced=forced)
 
     async def cleanup(self) -> None:
-        """停止后台循环并打印统计。"""
+        """停止后台循环（聚合 + 房间状态摘要）并打印统计。"""
         self.logger.info("清理 AmaidesuDecider...")
         self._running = False
+
+        # 停止房间状态后台摘要循环
+        await self._room_state_loop.stop()
+
         if self._flush_task is not None:
             self._flush_task.cancel()
             try:
@@ -173,7 +245,8 @@ class AmaidesuDecider:
         self.logger.info(
             f"统计: 消息={self._total_messages}, 批次={self._total_batches}, "
             f"发言={self._total_replies}, no_action={self._total_no_action}, "
-            f"LLM失败={self._failed_requests}"
+            f"planner_failures={self._planner_failures}, "
+            f"replyer_failures={self._replyer_failures}"
         )
         self.logger.info("AmaidesuDecider 已清理")
 
@@ -193,7 +266,14 @@ class AmaidesuDecider:
             raise
 
     async def _maybe_flush(self) -> None:
-        """判断是否应该取出一批并决策。"""
+        """判断是否应该取出一批并做两阶段决策。
+
+        流程：
+        1. 缓冲为空 / 上一批仍在决策 → 跳过
+        2. MessageBuffer.should_flush 判定（窗口/条数/空窗补偿/force）
+        3. TimingGate.should_act（Task 11 精简后恒通过，仅区分 forced/proceed 原因）
+        4. 进入 Stage 2：_make_two_stage_decision
+        """
         if self._buffer.is_empty:
             return
 
@@ -206,11 +286,8 @@ class AmaidesuDecider:
                 return
 
             now = now_ms()
-            flush_due = (
-                self._buffer.force
-                or self._buffer.size >= self.typed_config.batch_max_size
-                or (now - self._buffer.first_arrival_ms) >= self.typed_config.batch_window_ms
-            )
+            avg_interval_ms = self._estimate_avg_interval_ms()
+            flush_due, flush_reason = self._buffer.should_flush(now, avg_interval_ms=avg_interval_ms)
             if not flush_due:
                 return
 
@@ -221,129 +298,104 @@ class AmaidesuDecider:
 
             self._total_batches += 1
 
+            # TimingGate（Task 11 精简）：恒通过；forced 标识用于日志和 Planner 上下文
             act, reason = self._timing_gate.should_act(forced=forced)
             if not act:
                 self.logger.info(f"节奏门控跳过本批 ({len(batch)} 条), 原因: {reason}")
                 return
 
-            if self.typed_config.use_llm_timing_gate and not forced:
-                gate_act = await self._run_llm_timing_gate(batch)
-                if not gate_act:
-                    self.logger.debug(f"LLM 节奏门控决定不参与本批 ({len(batch)} 条)")
-                    self._timing_gate.record_result(replied=False)
-                    self._total_no_action += 1
-                    return
+            await self._make_two_stage_decision(batch, forced=forced, trigger_reason=flush_reason)
 
-            await self._make_decision(batch, trigger_reason=reason)
+    def _estimate_avg_interval_ms(self) -> Optional[float]:
+        """根据当前缓冲内容估算平均消息间隔（毫秒），供空窗补偿折算使用。
 
-    # ==================== Stage 2: 内容决策 ====================
+        Returns:
+            平均间隔毫秒数；缓冲不足或时间跨度为 0 时返回 None
+        """
+        buf = self._buffer
+        if buf.size < 2:
+            return None
+        span = buf.last_arrival_ms - buf.first_arrival_ms
+        if span <= 0:
+            return None
+        return span / (buf.size - 1)
 
-    async def _make_decision(self, batch: List["NormalizedMessage"], *, trigger_reason: str) -> None:
-        """对一批弹幕做单次结构化 LLM 决策并发布 Intent。"""
+    # ==================== Stage 2: 两阶段内容决策（Planner → Replyer） ====================
+
+    async def _make_two_stage_decision(
+        self,
+        batch: List["NormalizedMessage"],
+        *,
+        forced: bool,
+        trigger_reason: str,
+    ) -> None:
+        """对一批弹幕做两阶段决策（Planner → Replyer），成功时发布 Intent。
+
+        流程：
+        1. Planner.plan(batch, forced=forced) → Optional[DecisionPlan]
+           - None（异常/脏 JSON）→ silent 降级，planner_failures+1
+        2. plan.should_reply=False → 不发布，no_action+1
+        3. Replyer.generate(plan, batch, persona) → Optional[Intent]
+           - None（异常/空 text）→ silent 降级，replyer_failures+1
+        4. event_bus.emit(decision.intent.generated, IntentPayload)
+        5. 保存上下文（ContextService）
+        """
         session_id = next((m.session_id for m in batch if m.session_id), "live")
-        danmaku_batch = MessageBuffer.render_batch_text(batch)
 
-        history_text = await self._get_history_text(session_id)
-        persona = self._get_persona_config()
-        room_context = self._build_room_context(batch)
-        self._ensure_capabilities()
-
-        prompt = self._prompt_service.render_safe(
-            "decision/amaidesu_planner",
-            danmaku_batch=danmaku_batch,
-            bot_name=persona.get("bot_name", self.typed_config.bot_name),
-            personality=persona.get("personality", "活泼开朗，有些调皮，喜欢和直播间观众互动"),
-            style_constraints=persona.get("style_constraints", "口语化、简短，像在直播间和观众聊天，避免机械式回复"),
-            history=history_text,
-            room_context=room_context,
-            action_list=self._action_list_str or "（当前无可用动作，action 请留空字符串）",
-        )
-
+        # ① Planner：战术决策（产出 DecisionPlan 或 None）
+        self.logger.info(f"Planner 决策中 ({len(batch)} 条, 触发: {trigger_reason}, forced={forced})")
         try:
-            self.logger.info(f"AmaidesuDecider 决策中 ({len(batch)} 条, 触发: {trigger_reason})")
-            response = await self._llm_service.chat(prompt=prompt, client_type=self.client_type)
+            plan = await self._planner.plan(batch, forced=forced)
         except Exception as e:
-            self._failed_requests += 1
-            self.logger.error(f"LLM 调用异常: {e}", exc_info=True)
-            await self._handle_fallback(batch, session_id)
-            return
+            # 防御性兜底：Planner 内部已捕获异常返回 None
+            self.logger.error(f"Planner 调用异常: {e}", exc_info=True)
+            plan = None
 
-        if not response.success:
-            self._failed_requests += 1
-            self.logger.error(f"LLM 调用失败: {response.error}")
-            await self._handle_fallback(batch, session_id)
-            return
-
-        cleaned_json = self._clean_llm_json(response.content)
-        try:
-            parsed_data = json.loads(cleaned_json)
-        except json.JSONDecodeError as e:
-            self._failed_requests += 1
-            self.logger.error(f"JSON 解析失败: {e}, 清理后的内容: {cleaned_json[:200]}")
-            await self._handle_fallback(batch, session_id)
-            return
-
-        should_reply = bool(parsed_data.get("should_reply", True))
-        speech = (parsed_data.get("text", "") or parsed_data.get("speech", "")).strip()
-
-        if not should_reply or not speech:
-            self.logger.info("LLM 决定本批不发言 (should_reply=false 或空文本)")
+        if plan is None:
+            self._planner_failures += 1
             self._timing_gate.record_result(replied=False)
             self._total_no_action += 1
+            self.logger.warning(f"Planner 失败 (batch={len(batch)} 条), silent 降级")
             return
 
-        intent = self._create_intent(parsed_data, speech)
+        # ② Plan 裁决：should_reply=False → Replyer 不调用
+        if not plan.should_reply:
+            self._timing_gate.record_result(replied=False)
+            self._total_no_action += 1
+            self.logger.info(f"Planner 决定本批不发言 (confidence={plan.confidence:.2f}, target={plan.target!r})")
+            return
+
+        # ③ Replyer：基于 plan + 人设 + 弹幕生成 Intent
+        persona = self._get_persona_config()
+        try:
+            intent = await self._replyer.generate(plan, batch, persona)
+        except Exception as e:
+            # 防御性兜底：Replyer 内部已捕获异常返回 None
+            self.logger.error(f"Replyer 调用异常: {e}", exc_info=True)
+            intent = None
+
+        if intent is None:
+            self._replyer_failures += 1
+            self._timing_gate.record_result(replied=False)
+            self._total_no_action += 1
+            self.logger.warning(f"Replyer 失败 (plan.target={plan.target!r}), silent 降级")
+            return
+
+        # ④ 发布 Intent + 保存上下文
         intent.metadata.source_message_id = batch[-1].message_id
         await self._publish_intent(intent)
-        await self._save_context(session_id, danmaku_batch, speech)
+        # intent.speech 类型为 Optional[str]，但 Replyer 返回成功时必然非空
+        await self._save_context(
+            session_id,
+            MessageBuffer.render_batch_text(batch),
+            intent.speech or "",
+        )
 
         self._timing_gate.record_result(replied=True)
         self._total_replies += 1
-        self.logger.info(f"AmaidesuDecider 发言: {speech}")
-
-    async def _run_llm_timing_gate(self, batch: List["NormalizedMessage"]) -> bool:
-        """可选的 LLM 节奏门控：判断当前是否适合插话。返回 True 表示参与。"""
-        danmaku_batch = MessageBuffer.render_batch_text(batch)
-        persona = self._get_persona_config()
-        prompt = self._prompt_service.render_safe(
-            "decision/amaidesu_timing_gate",
-            danmaku_batch=danmaku_batch,
-            bot_name=persona.get("bot_name", self.typed_config.bot_name),
-        )
-        try:
-            response = await self._llm_service.chat(prompt=prompt, client_type=self.client_type)
-        except Exception as e:
-            self.logger.warning(f"LLM 节奏门控调用异常，默认参与: {e}")
-            return True
-
-        if not response.success:
-            self.logger.warning(f"LLM 节奏门控调用失败，默认参与: {response.error}")
-            return True
-
-        try:
-            parsed = json.loads(self._clean_llm_json(response.content))
-        except json.JSONDecodeError:
-            self.logger.warning("LLM 节奏门控返回非 JSON，默认参与")
-            return True
-
-        return str(parsed.get("action", "act")).strip().lower() == "act"
+        self.logger.info(f"AmaidesuDecider 发言: {intent.speech}")
 
     # ==================== 辅助方法 ====================
-
-    async def _get_history_text(self, session_id: str) -> str:
-        """从 ContextService 取历史并渲染为文本（可选服务，缺失时返回空）。"""
-        if not self._context_service or self.typed_config.history_limit <= 0:
-            return ""
-        try:
-            history = await self._context_service.get_history(session_id, limit=self.typed_config.history_limit)
-            lines = []
-            for msg in history:
-                role_name = "用户" if msg.role == MessageRole.USER else "助手"
-                lines.append(f"{role_name}: {msg.content}")
-            return "\n".join(lines)
-        except Exception as e:
-            self.logger.warning(f"获取历史上下文失败: {e}")
-            return ""
 
     async def _save_context(self, session_id: str, danmaku_batch: str, speech: str) -> None:
         """将本批弹幕与回复写回上下文（可选服务）。"""
@@ -364,141 +416,39 @@ class AmaidesuDecider:
             self.logger.warning(f"保存上下文失败: {e}")
 
     def _get_persona_config(self) -> Dict[str, Any]:
-        """读取 VTuber 人设配置，无法获取时返回空字典。"""
+        """构建 Replyer 所需的 persona 字典。
+
+        合并优先级（高 → 低）：
+        1. config_service.get_section("persona", {}) 的字段（personality / style_constraints 等）
+        2. ConfigSchema.bot_name（始终提供 bot_name 默认值）
+
+        Returns:
+            persona 字典，至少包含 bot_name。Replyer 对 personality / style_constraints
+            缺失字段有自己的兜底默认值。
+        """
+        # 默认 persona：bot_name 来自 ConfigSchema
+        persona: Dict[str, Any] = {"bot_name": self.typed_config.bot_name}
+
         if self._config_service is None:
-            return {}
+            return persona
+
         try:
-            return self._config_service.get_section("persona", {})
+            section = self._config_service.get_section("persona", {})
         except Exception as e:
             self.logger.warning(f"读取 persona 配置失败: {e}")
-            return {}
+            return persona
 
-    def _build_room_context(self, batch: List["NormalizedMessage"]) -> str:
-        """根据本批消息构建直播氛围化的直播间上下文描述。"""
-        if not batch:
-            return "你正在直播间与观众互动，通过弹幕与观众实时交流，欢迎随时发送消息。"
-
-        last = batch[-1]
-        platform_name = last.platform or "B站"
-        room_id = last.room_id or "未指定"
-        batch_size = len(batch)
-
-        parts = [
-            f"你正在{platform_name}直播。",
-            f"直播间: {room_id}。",
-            "观众们正在通过弹幕和你互动。",
-            f"本批收到 {batch_size} 条弹幕。",
-        ]
-
-        if any(m.data_type == "super_chat" for m in batch):
-            parts.append("其中包含醒目留言（SC），值得重点回应！")
-
-        if any(m.importance >= 0.8 for m in batch):
-            parts.append("其中有观众发送了重要消息。")
-
-        return "".join(parts)
-
-    def _clean_llm_json(self, raw_output: str) -> str:
-        """清理 LLM 返回的 JSON 字符串（与 LLMDecider 一致的三步清理）。"""
-        cleaned = raw_output.strip()
-        cleaned = re.sub(r"^```json\s*", "", cleaned)
-        cleaned = re.sub(r"^```\s*", "", cleaned)
-        cleaned = re.sub(r"\s*```$", "", cleaned)
-        cleaned = cleaned.strip()
-
-        first_brace = cleaned.find("{")
-        last_brace = cleaned.rfind("}")
-        if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
-            cleaned = cleaned[first_brace : last_brace + 1]
-
-        cleaned = re.sub(r",\s*}", "}", cleaned)
-        cleaned = re.sub(r",\s*]", "]", cleaned)
-        return cleaned
-
-    def _create_intent(self, parsed_data: Dict[str, Any], speech: str) -> Intent:
-        """从解析后的 JSON 构造 Intent（speech + emotion + 经能力校验的 action）。"""
-        emotion_raw = str(parsed_data.get("emotion", "neutral")).lower()
-        try:
-            emotion_obj: Optional[IntentEmotion] = IntentEmotion(name=emotion_raw, intensity=0.5)
-        except Exception:
-            self.logger.warning(f"LLM 情绪 '{emotion_raw}' 不在枚举中，降级为 neutral")
-            emotion_obj = IntentEmotion(name="neutral", intensity=0.5)
-
-        action_obj = self._build_action(parsed_data)
-
-        return Intent(
-            emotion=emotion_obj,
-            action=action_obj,
-            speech=speech,
-            metadata=IntentMetadata(source_id="amaidesu", decision_time_ms=now_ms()),
-        )
-
-    def _build_action(self, parsed_data: Dict[str, Any]) -> Optional[IntentAction]:
-        """从 LLM 输出构造并校验 IntentAction。
-
-        - 期望 `action` 为全限定名 `<handler>.<local_action>`（来自能力清单）。
-        - 启用动作选择且已加载能力时，对动作名做白名单校验，非法则丢弃。
-        - `action_parameters` 必须为 dict，否则忽略参数。
-        """
-        action_raw = str(parsed_data.get("action", "")).strip()
-        if not action_raw:
-            return None
-
-        if self.typed_config.enable_action_selection and self._valid_action_names:
-            if action_raw not in self._valid_action_names:
-                self.logger.warning(f"LLM 选择的动作 '{action_raw}' 不在可用能力清单中，丢弃")
-                return None
-
-        raw_params = parsed_data.get("action_parameters") or parsed_data.get("parameters") or {}
-        parameters = raw_params if isinstance(raw_params, dict) else {}
-        if raw_params and not isinstance(raw_params, dict):
-            self.logger.warning(f"action_parameters 非对象（{type(raw_params).__name__}），忽略参数")
-
-        try:
-            return IntentAction(name=action_raw, parameters=parameters)
-        except Exception as e:
-            self.logger.warning(f"构造 IntentAction 失败（name={action_raw!r}）：{e}")
-            return None
-
-    def _ensure_capabilities(self) -> None:
-        """惰性加载并缓存 Output 能力快照（首次决策时调用一次）。"""
-        if self._capabilities_loaded:
-            return
-        self._capabilities_loaded = True
-
-        if not self.typed_config.enable_action_selection or self._capabilities_provider is None:
-            return
-
-        try:
-            view = self._capabilities_provider.get_all_capabilities()
-        except Exception as e:
-            self.logger.warning(f"查询 Output 能力失败，动作选择降级为禁用：{e}")
-            return
-
-        self._valid_action_names = {entry.name for entry in view.actions}
-        self._action_list_str = self._format_action_list(view)
-        self.logger.info(f"已加载 {len(self._valid_action_names)} 个可用动作供决策选择")
-
-    @staticmethod
-    def _format_action_list(view: UnifiedCapabilitiesView) -> str:
-        """把能力视图渲染为供 prompt 使用的动作清单文本。"""
-        lines: List[str] = []
-        for entry in view.actions:
-            param_parts: List[str] = []
-            for pname, spec in entry.parameters.items():
-                seg = f"{pname}:{spec.type}"
-                if spec.minimum is not None or spec.maximum is not None:
-                    seg += f"[{spec.minimum}~{spec.maximum}]"
-                if spec.default is not None:
-                    seg += f"=默认{spec.default}"
-                param_parts.append(seg)
-            params_str = f"（参数: {', '.join(param_parts)}）" if param_parts else ""
-            desc = entry.description or ""
-            lines.append(f"- {entry.name}: {desc}{params_str}")
-        return "\n".join(lines)
+        if isinstance(section, dict):
+            # 合并：section 覆盖默认；若 section 未提供 bot_name 则保留 ConfigSchema 默认
+            persona.update(section)
+            persona.setdefault("bot_name", self.typed_config.bot_name)
+        return persona
 
     async def _publish_intent(self, intent: Intent) -> None:
-        """通过 event_bus 发布 decision.intent.generated 事件。"""
+        """通过 event_bus 发布 decision.intent.generated 事件。
+
+        Guardrail：本类只允许发布此唯一事件，不得新增其他事件名。
+        """
         if not self._event_bus:
             self.logger.error("EventBus 未初始化，无法发布事件")
             return
@@ -508,42 +458,16 @@ class AmaidesuDecider:
             source="AmaidesuDecider",
         )
 
-    async def _handle_fallback(self, batch: List["NormalizedMessage"], session_id: str) -> None:
-        """LLM 失败时的降级处理。"""
-        if self.fallback_mode == "silent":
-            self._timing_gate.record_result(replied=False)
-            self._total_no_action += 1
-            return
-
-        if self.fallback_mode == "echo":
-            speech = f"刚才有观众说：{batch[-1].text}"
-        else:  # simple
-            speech = "哎呀刚刚没太听清，再说一遍嘛~"
-
-        intent = Intent(
-            emotion=IntentEmotion(name="neutral", intensity=0.5),
-            action=None,
-            speech=speech,
-            metadata=IntentMetadata(
-                source_id="amaidesu",
-                decision_time_ms=now_ms(),
-                source_message_id=batch[-1].message_id,
-            ),
-        )
-        await self._publish_intent(intent)
-        await self._save_context(session_id, MessageBuffer.render_batch_text(batch), speech)
-        self._timing_gate.record_result(replied=True)
-        self._total_replies += 1
-
     def get_statistics(self) -> Dict[str, Any]:
-        """获取运行时统计信息。"""
+        """获取运行时统计信息（结构向后兼容，新增 planner_failures / replyer_failures）。"""
         return {
             "total_messages": self._total_messages,
             "total_batches": self._total_batches,
             "total_replies": self._total_replies,
             "total_no_action": self._total_no_action,
             "failed_requests": self._failed_requests,
-            "no_action_streak": self._timing_gate.no_action_count,
+            "planner_failures": self._planner_failures,
+            "replyer_failures": self._replyer_failures,
             "client_type": self.client_type,
         }
 
@@ -551,9 +475,10 @@ class AmaidesuDecider:
         """获取 Decider 配置信息。"""
         return {
             "name": "AmaidesuDecider",
-            "version": "1.0.0",
+            "version": "2.0.0",  # 两阶段编排版本
             "client_type": self.client_type,
-            "template_name": "decision/amaidesu_planner",
-            "participation_rate": self.typed_config.participation_rate,
+            "planner_client": self.typed_config.planner_client,
+            "replyer_client": self.typed_config.replyer_client,
+            "template_name": "decision/amaidesu_planner_v2",
             "fallback_mode": self.fallback_mode,
         }

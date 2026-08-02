@@ -93,6 +93,7 @@ def _build_group_to_pydantic() -> Dict[str, Type[BaseModel]]:
         "llm_fast": LLMProfileConfig,
         "vlm": LLMProfileConfig,
         "llm_local": LLMProfileConfig,
+        "llm_summary": LLMProfileConfig,
         "maicore": MaiCoreConfig,
         "context": ContextConfig,
         "dashboard": DashboardConfig,

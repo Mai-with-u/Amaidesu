@@ -255,7 +255,7 @@ class ConfigSchemaRegistry:
         llm_providers_group = ConfigGroupDefinition(
             key="llm_providers",
             label="LLM 提供商",
-            description="API 提供商列表（连接信息、鉴权、重试参数；被 llm/llm_fast/vlm/llm_local 引用）",
+            description="API 提供商列表（连接信息、鉴权、重试参数；被 llm/llm_fast/vlm/llm_local/llm_summary 引用）",
             icon="Link",
             order=28,
         )
@@ -349,6 +349,16 @@ class ConfigSchemaRegistry:
         )
         _add_llm_profile_fields(llm_local_group, "llm_local")
         self.register_group(llm_local_group)
+
+        llm_summary_group = ConfigGroupDefinition(
+            key="llm_summary",
+            label="摘要 LLM",
+            description="房间状态摘要 LLM（独立 client，避免与前台 Planner 共享连接池）",
+            icon="Document",
+            order=34,
+        )
+        _add_llm_profile_fields(llm_summary_group, "llm_summary")
+        self.register_group(llm_summary_group)
 
         # ========== MaiCore 配置 ==========
         maicore_group = ConfigGroupDefinition(

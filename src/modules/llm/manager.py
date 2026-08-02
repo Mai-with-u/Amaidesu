@@ -47,9 +47,11 @@ class ClientType:
     LLM_FAST = "llm_fast"  # 快速LLM客户端（低延迟任务）
     VLM = "vlm"  # 视觉语言模型客户端（图像理解）
     LLM_LOCAL = "llm_local"  # 本地LLM客户端（Ollama等）
+    # 房间状态摘要专用 profile：独立 client 实例，避免与 Planner(llm_fast) 共享连接池（Task 8）
+    LLM_SUMMARY = "llm_summary"
 
     # 所有支持的客户端类型
-    ALL = [LLM, LLM_FAST, VLM, LLM_LOCAL]
+    ALL = [LLM, LLM_FAST, VLM, LLM_LOCAL, LLM_SUMMARY]
 
     # 默认客户端
     DEFAULT = LLM
