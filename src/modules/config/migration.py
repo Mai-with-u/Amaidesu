@@ -254,7 +254,7 @@ def migrate_old_config(
     # 备份旧文件
     new_config_dir.mkdir(parents=True, exist_ok=True)
     old_dir = new_config_dir / "old"
-    old_dir.mkdir(exist_ok=True)
+    old_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_name = f"config_{timestamp}.toml"
     report.backup_path = old_dir / backup_name

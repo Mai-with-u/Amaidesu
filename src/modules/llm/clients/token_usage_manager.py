@@ -74,7 +74,7 @@ class TokenUsageManager:
         # 获取项目根目录（src/modules/llm/clients/ 向上 4 层 = Amaidesu/）
         project_root = Path(__file__).resolve().parents[4]
         self.usage_dir = project_root / USAGE_DIR
-        self.usage_dir.mkdir(exist_ok=True)
+        self.usage_dir.mkdir(parents=True, exist_ok=True)
 
         # 初始化logger
         self.logger = get_logger("TokenUsageManager")

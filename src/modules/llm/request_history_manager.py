@@ -148,7 +148,7 @@ class RequestHistoryManager:
         # 获取项目根目录（src/modules/llm/ 向上 3 层 = Amaidesu/）
         project_root = Path(__file__).resolve().parents[3]
         self.history_dir = project_root / HISTORY_DIR
-        self.history_dir.mkdir(exist_ok=True)
+        self.history_dir.mkdir(parents=True, exist_ok=True)
 
         # 初始化 logger
         self.logger = get_logger("RequestHistoryManager")
