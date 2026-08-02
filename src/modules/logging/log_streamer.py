@@ -89,9 +89,10 @@ class LogStreamer:
             # 限制缓冲不超过 max_logs
             if len(self._log_buffer) > self.max_logs:
                 self._log_buffer = self._log_buffer[-self.max_logs :]
-            loguru_logger.info(f"从磁盘恢复 {count} 条历史日志 ({file_path})")
+            # 显式 .bind(module="LogStreamer")：避免日志格式字符串 {extra[module]} 触发 KeyError
+            loguru_logger.bind(module="LogStreamer").info(f"从磁盘恢复 {count} 条历史日志 ({file_path})")
         except Exception as exc:
-            loguru_logger.warning(f"从磁盘恢复日志失败 ({file_path}): {exc!r}")
+            loguru_logger.bind(module="LogStreamer").warning(f"从磁盘恢复日志失败 ({file_path}): {exc!r}")
 
     def _append_to_file(self, entry: dict[str, Any]) -> None:
         """同步将单条日志追加到当日 JSONL 文件。"""
@@ -106,7 +107,7 @@ class LogStreamer:
             with open(self._current_file_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         except Exception as exc:
-            loguru_logger.warning(f"写入日志持久化文件失败: {exc!r}")
+            loguru_logger.bind(module="LogStreamer").warning(f"写入日志持久化文件失败: {exc!r}")
 
     # ------------------------------------------------------------------ #
     # 公开 API                                                            #
@@ -182,7 +183,7 @@ class LogStreamer:
                 await self.ws_handler._send_to_client(client_id, message)
                 count += 1
             except Exception as e:
-                loguru_logger.debug(f"WS broadcast to client {client_id} failed: {e!r}")
+                loguru_logger.bind(module="LogStreamer").debug(f"WS broadcast to client {client_id} failed: {e!r}")
         return count
 
     def _sink(self, message: Any) -> None:
