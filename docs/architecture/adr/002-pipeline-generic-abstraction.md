@@ -1,5 +1,9 @@
 # ADR-002: Pipeline[T] 泛型基类设计
 
+- 状态：已采纳
+- 日期：2026-06-27
+- 实现提交：`5ffa6417f2c71c1e210a43e0167e9fcdb3f404f0`（refactor(pipeline): 重构管道架构，引入泛型抽象与装饰器注册机制）
+
 ## Context
 
 Amaidesu 的 Pipeline 系统存在严重的代码重复：
@@ -89,7 +93,7 @@ class Pipeline(ABC, Generic[T]):
 
 ## Reversibility
 
-回滚方法：`git revert <commit-hash>`，因为：
+回滚方法：`git revert 5ffa6417f2c71c1e210a43e0167e9fcdb3f404f0`，因为：
 - 改动集中在 `src/modules/pipeline/`（新建）+ 现有基类/Manager 文件（替换）
 - 现有 Pipeline 实现可临时重新指向旧基类（如需要快速回滚）
 - 测试是行为基线，行为不变测试就通过

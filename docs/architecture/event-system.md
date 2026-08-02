@@ -68,15 +68,18 @@ flowchart LR
 src/modules/events/
 ├── __init__.py           # 模块导出
 ├── event_bus.py          # EventBus 核心实现
+├── event_history.py      # 事件历史查询服务
+├── event_recorder.py     # 事件记录器（监控组件）
 ├── registry.py           # 事件注册表
 ├── names.py              # CoreEvents 常量
 └── payloads/
     ├── __init__.py       # Payload 统一导出
     ├── base.py           # BasePayload 基类
+    ├── connection.py     # 连接状态事件 Payload（共用）
+    ├── core.py           # 核心系统事件 Payload
     ├── input.py          # Input 阶段 Payload
     ├── decision.py       # Decision 阶段 Payload
-    ├── output.py         # Output 阶段 Payload
-    └── core.py           # 核心系统事件 Payload
+    └── output.py         # Output 阶段 Payload
 ```
 
 ---
@@ -214,7 +217,7 @@ CoreEvents.OUTPUT_STICKER_COMMAND        # output.sticker.command
 > **架构演进**：早期版本的事件常量（如 `OBS_SEND_TEXT`/`VTS_SEND_EMOTION`/
 > `STT_AUDIO_RECEIVED` 等细粒度事件）已统一收敛为"阶段流转事件 + Payload 内部 command
 > 区分"的模式。例如所有 OBS 操作通过 `OUTPUT_OBS_COMMAND` 单一事件分发，
-> 具体动作由 `OBSCommandPayload.command` 字段区分。
+> 具体动作由 `OBSCommandPayload.action` 字段区分。
 
 ### 获取所有事件
 
@@ -224,7 +227,9 @@ print(all_events)
 # ('core.startup', 'core.shutdown', 'core.error',
 #  'input.message.received', 'input.connected', 'input.disconnected',
 #  'decision.intent.generated', 'decision.connected', 'decision.disconnected',
-#  'output.intent.dispatched', 'output.obs.command', 'output.sticker.command')
+#  'output.intent.dispatched', 'output.handler.connected', 'output.handler.disconnected',
+#  'output.intent.finished', 'output.handler.completed',
+#  'output.obs.command', 'output.sticker.command')
 ```
 
 ---
@@ -256,9 +261,12 @@ classDiagram
 
 > **架构演进**：早期版本中散落的 Payload 类（`DecisionRequestPayload`、
 > `ProviderConnectedPayload`、`RenderCompletedPayload`、`ErrorPayload` 等）
-> 已统一收敛。当前实际存在的 14 个 Payload 类如上图所示，全部定义在
+> 已统一收敛。当前实际存在的 14 个具体 Payload 类（不含 `BasePayload`）如上图所示，全部定义在
 > `src/modules/events/payloads/` 下按阶段分包（`core.py` / `input.py` / `decision.py` /
 > `output.py` / `connection.py` / `base.py`）。
+>
+> **注意**：`RawDataPayload`（`input.raw.data`）与 `IntentActionPayload`（`decision.intent.action`）
+> 为历史遗留定义——有 Payload 类但**无生产代码发布或订阅**（仅测试与兼容场景使用）。
 
 ### 按阶段分类
 
@@ -274,7 +282,7 @@ classDiagram
 
 | Payload 类 | 事件名 | 用途 |
 |-----------|--------|------|
-| `RawDataPayload` | `input.raw.data` | 原始数据事件 |
+| `RawDataPayload` | `input.raw.data` | 原始数据事件（⚠️ 仅定义，无生产发布者，保留供测试/兼容） |
 | `MessageReadyPayload` | `input.message.received` | 标准化消息就绪（Input → Decision） |
 
 #### Decision 阶段
@@ -282,7 +290,7 @@ classDiagram
 | Payload 类 | 事件名 | 用途 |
 |-----------|--------|------|
 | `IntentPayload` | `decision.intent.generated` | 决策意图生成（Decision → Output） |
-| `IntentActionPayload` | `decision.intent.action` | 意图中的单个动作（结构化输出） |
+| `IntentActionPayload` | `decision.intent.action` | 意图中的单个动作（⚠️ 仅定义，无生产发布者，保留供测试/兼容） |
 | `ConnectedPayload` | `decision.connected` | Decider 连接 |
 | `DisconnectedPayload` | `decision.disconnected` | Decider 断开 |
 
@@ -397,10 +405,10 @@ await event_bus.cleanup()
 ```python
 from src.modules.types.intent import Intent
 
-class MyOutputHandler(OutputHandler):
+class MyOutputHandler:
     async def handle(self, intent: Intent) -> None:
         print(
-            f"处理意图: speech={intent.speech!r}, "
+            f"收到意图: speech={intent.speech!r}, "
             f"action={intent.action.name if intent.action else None!r}"
         )
         await self.render(intent)
@@ -419,8 +427,8 @@ try:
     # 可能失败的代码
     await do_something()
 except Exception as e:
-    # 当前 core.error 事件暂未绑定统一 Payload，
-    # 业务代码通常直接 logger.exception() 或发布自定义 Payload
+    # core.error 已绑定 CoreErrorPayload（Broadcaster/EventRecorder 会订阅），
+    # 但业务代码通常直接 logger.exception() 记录，不主动发布 core.error
     logger.exception("MyHandler 操作失败")
 ```
 
@@ -450,7 +458,6 @@ await event_bus.emit(
 sequenceDiagram
     participant P as 阶段参与者
     participant EB as EventBus
-    participant ER as EventRegistry
     participant H1 as Handler1 (高优先级)
     participant H2 as Handler2 (低优先级)
 
@@ -458,9 +465,7 @@ sequenceDiagram
 
     P->>EB: emit(event_name, payload)
     EB->>EB: 验证 payload 是 BaseModel
-
-    EB->>ER: validate_event_data()
-    ER-->>EB: 验证结果
+    EB->>EB: _validate_event_data() 校验事件注册
 
     EB->>EB: 按 priority 排序 handlers
     EB->>EB: 并发执行所有 handler
@@ -588,7 +593,7 @@ class MyPayload(BasePayload):
 
 - [3阶段架构](overview.md)
 - [数据流规则](data-flow.md)
-- [阶段参与者开发](../development/provider-guide.md)
+- [阶段参与者开发](../development/component-guide.md)
 
 ---
 

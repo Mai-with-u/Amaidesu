@@ -29,14 +29,14 @@
 ### 1.3 注释规范
 
 ```python
-class MyHandler(OutputHandler):
+class MyHandler:
     """
     Handler 类的中文文档说明
 
     负责描述这个类的职责和主要功能。
     """
 
-    async def execute(self, intent: Intent) -> None:
+    async def handle(self, intent: "Intent") -> None:
         """执行意图渲染，将 Intent 输出到目标设备"""
         # 处理具体逻辑
         pass
@@ -90,33 +90,44 @@ from pydantic import BaseModel, Field
 |------|----------|------|
 | **Pydantic BaseModel** | 所有数据模型、配置 Schema、事件 Payload | `class UserConfig(BaseModel)` |
 | **dataclass** | 仅用于简单的内部统计/包装类 | `@dataclass class PipelineStats` |
-| **Protocol** | 定义接口协议 | `class InputPipeline(Protocol)` |
+| **Protocol** | 定义接口协议 | `class CapabilitiesProvider(Protocol)` |
 | **Enum** | 定义常量集合 | `class Emotion(str, Enum)` |
 
 ### 3.2 Pydantic 使用示例
 
 ```python
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import Dict, Any, Optional
 from enum import Enum
 
 class Emotion(str, Enum):
-    """全局情感枚举（共享给所有 avatar handler，强制 12 个值）"""
+    """全局情感枚举（共享给所有 avatar handler，12 个值）"""
     NEUTRAL = "neutral"
     HAPPY = "happy"
+    # ...
+
+class IntentEmotion(BaseModel):
+    """意图情绪（枚举名 + intensity 0-1）"""
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(..., description="情绪名，必须是 Emotion 枚举值之一")
+    intensity: float = Field(default=0.5, ge=0.0, le=1.0)
+
+    @field_validator("name")
+    @classmethod
+    def _validate_emotion_name(cls, v: str) -> str:
+        valid = {e.value for e in Emotion}
+        if v not in valid:
+            raise ValueError(f"emotion.name '{v}' 不在全局 Emotion 枚举中({sorted(valid)})")
+        return v
 
 class Intent(BaseModel):
     """决策意图（平台无关，核心数据结构）"""
     model_config = ConfigDict(extra="forbid")
 
     speech: Optional[str] = Field(default=None, description="AI 要说的话")
-    emotion: Optional["IntentEmotion"] = Field(default=None, description="意图情绪")
-
-class IntentEmotion(BaseModel):
-    """意图情绪（枚举名 + intensity 0-1）"""
-    model_config = ConfigDict(extra="forbid")
-    name: Emotion = Field(..., description="必须是 Emotion 枚举值之一")
-    intensity: float = Field(default=0.5, ge=0.0, le=1.0)
+    metadata: "IntentMetadata" = Field(..., description="意图元数据（必填）")
+    emotion: Optional["IntentEmotion"] = Field(default=None, description="情绪")
+    action: Optional["IntentAction"] = Field(default=None, description="动作")
 ```
 
 ### 3.3 dataclass 使用示例
@@ -155,7 +166,7 @@ logger = get_logger("MyClassName")  # 使用类名或模块名作为标识
 
 ```python
 logger.info("信息日志")  # 常规操作信息
-logger.debug("调试日志", extra_context={"key": "value"})  # 调试信息
+logger.debug("调试日志")  # 调试信息
 logger.warning("警告日志")  # 警告信息
 logger.error("错误日志", exc_info=True)  # 错误信息，包含堆栈
 ```
@@ -194,12 +205,15 @@ class CoreEvents:
     INPUT_MESSAGE_RECEIVED = "input.message.received"
     DECISION_INTENT_GENERATED = "decision.intent.generated"
     OUTPUT_INTENT_DISPATCHED = "output.intent.dispatched"
+    OUTPUT_INTENT_FINISHED = "output.intent.finished"
 
     # 系统事件
     CORE_STARTUP = "core.startup"
     CORE_SHUTDOWN = "core.shutdown"
     CORE_ERROR = "core.error"
 ```
+
+> 完整常量列表（含 `input.connected` / `decision.disconnected` / `output.obs.command` / `output.sticker.command` 等）见 [事件系统](architecture/event-system.md#核心事件常量)。
 
 ### 5.3 事件 Payload 要求
 
@@ -248,6 +262,8 @@ class IntentPayload(BaseModel):
 ### 7.2 测试示例
 
 ```python
+import asyncio
+
 import pytest
 from pydantic import BaseModel, Field
 
@@ -272,7 +288,7 @@ async def test_event_emission(event_bus: EventBus):
     event_bus.on("test.event", handler, SimpleTestEvent)
     await event_bus.emit("test.event", SimpleTestEvent(message="hello"), source="test")
 
-    await pytest.asyncio.sleep(0.1)  # 等待异步处理
+    await asyncio.sleep(0.1)  # 等待异步处理
 
     assert len(received) == 1
     assert received[0].message == "hello"
@@ -282,17 +298,16 @@ async def test_event_emission(event_bus: EventBus):
 
 ```
 tests/
-├── core/              # 核心模块测试
-│   ├── events/        # 事件系统测试
-│   ├── types/         # 类型测试
-│   └── config/        # 配置测试
-├── stages/           # 阶段测试
-│   ├── input/         # 输入阶段测试
-│   ├── decision/      # 决策阶段测试
-│   └── output/        # 输出阶段测试
-├── services/          # 服务测试
-└── mocks/             # 测试用 Mock 对象
+├── architecture/       # 架构约束测试
+├── config/             # 配置系统测试
+├── modules/            # 共享模块测试（与 src/modules/ 对应）
+├── stages/             # 阶段测试（与 src/stages/ 对应）
+├── integration/        # 集成测试
+├── mocks/              # 测试用 Mock 对象
+└── conftest.py         # 全局共享 fixtures
 ```
+
+> 完整测试目录结构、命名规范与编写指南见 [测试指南](development/testing-guide.md#2-测试目录结构)。
 
 ## 8. 提交前检查
 
@@ -318,7 +333,7 @@ uv run ruff format .
 uv run pytest tests/
 
 # 运行特定测试文件
-uv run pytest tests/core/test_event_bus.py -v
+uv run pytest tests/modules/events/test_event_bus.py -v
 
 # 排除慢速测试
 uv run pytest -m "not slow"
@@ -363,12 +378,14 @@ enabled = ["console_input", "bili_danmaku"]
 
 # 决策 Decider
 [deciders]
-active = "maibot"
+enabled = ["amaidesu"]
 
 # 输出 Handler
 [handlers]
-enabled = ["subtitle", "vts", "tts"]
+enabled = ["subtitle", "vts", "edge_tts"]
 ```
+
+> 配置为多文件结构：`config/core.toml` / `input.toml` / `decision.toml` / `output.toml` / `model.toml`。LLM 采用 provider + profile 两层结构（`[[llm_providers]]` + `[llm] provider=`），详见 [快速开始 - 编辑配置文件](getting-started.md#25-编辑配置文件)。
 
 ## 10. 阶段参与者开发规范
 
@@ -382,11 +399,11 @@ enabled = ["subtitle", "vts", "tts"]
 
 ### 10.2 阶段参与者生命周期
 
-| 参与者类型 | 启动方法 | 停止方法 |
-|--------------|---------|---------|
-| InputCollector | `start()` | `stop()` |
-| Decider | `setup()` | `cleanup()` |
-| OutputHandler | `setup()` | `cleanup()` |
+| 参与者类型 | 启动方法 | 停止方法 | 业务入口 |
+|--------------|---------|---------|----------|
+| InputCollector | `start()` | `stop()` + `cleanup()` | `collect()`（AsyncIterator 产出消息） |
+| Decider | `setup()` | `cleanup()` | `decide()`（订阅消息处理） |
+| OutputHandler | `init()` | `cleanup()` | `handle(intent)`（Manager 直接调用，不订阅阶段调度事件） |
 
 ### 10.3 添加新阶段参与者步骤
 
@@ -394,11 +411,11 @@ enabled = ["subtitle", "vts", "tts"]
 2. 使用 `@collector`/`@decider`/`@handler` 装饰器注册
 3. 在配置文件中启用
 
-详见：[阶段参与者开发](development/provider-guide.md)
+详见：[阶段参与者开发](development/component-guide.md)
 
 ## 相关文档
 
-- [阶段参与者开发](development/provider-guide.md) - 阶段参与者开发详解
+- [阶段参与者开发](development/component-guide.md) - 阶段参与者开发详解
 - [管道开发](development/pipeline-guide.md) - Pipeline 开发详解
 - [提示词管理](development/prompt-management.md) - PromptManager 使用
 - [测试指南](development/testing-guide.md) - 测试规范和最佳实践

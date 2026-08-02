@@ -32,8 +32,7 @@
 |------|---------|------|
 | **Input 阶段** | `...received` | Collector 接收外部数据 |
 | **Decision 阶段** | `...generated` | Decider 生成意图 |
-| **Output 阶段** | `...dispatched` | OutputHandlerManager 派发渲染（fire-and-forget） |
-| **Output 完成（per-handler）** | `...completed` | 每个 handler 在 `handle()` 末尾发，声明自身完成 |
+| **Output 阶段** | `...dispatched` | OutputHandlerManager 发布监控信号（不触发 Handler） |
 | **Output 完成（聚合）** | `...finished` | OutputHandlerManager 聚合所有 handler 完成后发 |
 
 完整示例：
@@ -41,17 +40,14 @@
 input.message.received  →  decision.intent.generated  →  output.intent.dispatched
         ▲                            ▲                              ▲
    InputCollector                  Decider                  OutputHandlerManager
-                                                                      │
-                                                                      ↓
-                                                   output.handler.completed × N
-                                                   (每个 handler 在 finally 里发)
-                                                                      │
-                                                                      ↓
-                                                   output.intent.finished
-                                                   (Manager 聚合后广播)
+                                                                       │
+                                                    (Manager 直接并行调用 handle(intent))
+                                                                       ↓
+                                                    output.intent.finished
+                                                    (Manager 聚合后广播)
 ```
 
-> **动词链延伸**：基础流转是 `received → generated → dispatched`；在 Output 阶段内部还有 `dispatched → completed → finished` 的两层聚合时序，详见 [数据流规则](data-flow.md#两层事件聚合模式output-完成时序)。
+> **动词链**：基础流转是 `received → generated → dispatched`；`output.intent.finished` 由 Manager 在全部 active handler 任务结束后发布。`output.handler.completed` 仅为 Manager 内部的单 handler 完成语义，Handler 不发布也不订阅。
 
 ### 前缀去重
 
@@ -59,7 +55,7 @@ input.message.received  →  decision.intent.generated  →  output.intent.dispa
 
 - ✗ `decision.decider.connected` → ✓ `decision.connected`
 - ✗ `input.collector.connected`  → ✓ `input.connected`
-- ✗ `output.handler.connected`   → ✓ `output.handler.connected`（保留 handler 以区分组件层）
+- ✗ `output.connected`   → ✓ `output.handler.connected`（Output 阶段含 Manager / Handler 两层，保留 handler 以区分）
 
 ## 阶段前缀定义
 
@@ -96,6 +92,14 @@ class CoreEvents:
 
 ## 当前事件列表
 
+### Core 阶段
+
+| 常量 | 值 | 说明 |
+|------|-----|------|
+| `CORE_STARTUP` | `core.startup` | 系统启动 |
+| `CORE_SHUTDOWN` | `core.shutdown` | 系统关闭 |
+| `CORE_ERROR` | `core.error` | 系统级错误 |
+
 ### Input 阶段
 
 | 常量 | 值 | 说明 |
@@ -116,10 +120,11 @@ class CoreEvents:
 
 | 常量 | 值 | 说明 |
 |------|-----|------|
-| `OUTPUT_INTENT_DISPATCHED` | `output.intent.dispatched` | 过滤后意图派发，由 OutputHandlerManager 发布（fire-and-forget，emit 立即返回） |
-| `OUTPUT_HANDLER_COMPLETED` | `output.handler.completed` | 单个 OutputHandler 完成通知（两层事件第一层），由各 handler 在 `handle()` 末尾 finally 里发，含 `handler_name` + `intent_id` |
-| `OUTPUT_INTENT_FINISHED` | `output.intent.finished` | 所有 active handler 都干完的聚合信号（两层事件第二层），由 OutputHandlerManager 聚合 COMPLETED 后发出，订阅者靠它感知"输出真正结束" |
+| `OUTPUT_INTENT_DISPATCHED` | `output.intent.dispatched` | 过滤后意图监控信号，由 OutputHandlerManager 发布，不触发 Handler |
+| `OUTPUT_HANDLER_COMPLETED` | `output.handler.completed` | Manager 内部单 handler 完成语义，Handler 不发布也不订阅 |
+| `OUTPUT_INTENT_FINISHED` | `output.intent.finished` | Manager 在全部 active handler 任务结束后发布的聚合信号，订阅者靠它感知"输出真正结束" |
 | `OUTPUT_OBS_COMMAND` | `output.obs.command` | OBS 统一命令入口（通过 payload.action 区分具体操作） |
+| `OUTPUT_STICKER_COMMAND` | `output.sticker.command` | 贴纸命令（StickerHandler 发布，VTSHandler 订阅显示贴纸） |
 
 ### Output 阶段（DEPRECATED 兼容垫片）
 
@@ -204,7 +209,9 @@ async def _handle_obs_command(self, payload: OBSCommandPayload):
       │                          │ DECISION_INTENT_GENERATED│
       │                          ├─────────────────────────►│
       │                          │                          │ OUTPUT_INTENT_DISPATCHED
-      │                          │                          ├──► OutputHandlers
+      │                          │                          ├──► 监控组件（Broadcaster 等）
+      │                          │                          │
+      │                          │                          └──► Manager 直接调用 handle(intent)
 ```
 
 ### Mermaid 时序图
@@ -222,9 +229,14 @@ sequenceDiagram
     DC->>EB: emit(decision.intent.generated)
     EB->>OHM: 转发 decision.intent.generated
     OHM->>OHM: OutputPipeline 过滤
-    OHM->>EB: emit(output.intent.dispatched)
-    EB->>OH: 转发 output.intent.dispatched
+    OHM->>EB: emit(output.intent.dispatched) 监控信号
+    Note over EB: DISPATCHED 仅供监控组件观察
+    OHM->>OH: 直接调用 handle(intent)
+    OH-->>OHM: 返回
+    OHM->>EB: emit(output.intent.finished)
 ```
+
+> **注意**：OutputHandler **不订阅** `output.intent.dispatched`——该事件是供 Broadcaster、EventRecorder 等监控组件观察的信号，不触发 Handler。Handler 由 Manager 直接调用 `handle(intent)`。
 
 ## 添加新事件
 
@@ -281,4 +293,4 @@ sequenceDiagram
 
 ---
 
-*最后更新：2026-06-23*
+*最后更新：2026-08-02（同步 OutputHandlerManager 直接调度：DISPATCHED 为监控信号、COMPLETED 归 Manager 内部）*

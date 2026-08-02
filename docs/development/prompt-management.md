@@ -23,12 +23,12 @@
 from src.modules.prompts import get_prompt_manager
 
 # 获取全局单例（推荐）
-prompt_mgr = get_prompt_manager()
+pm = get_prompt_manager()
 
 # 或者手动创建实例
 from src.modules.prompts.manager import PromptManager
-prompt_mgr = PromptManager()
-prompt_mgr.load_all()
+pm = PromptManager()
+pm.load_all()
 ```
 
 ### 3. 模板目录结构
@@ -36,16 +36,26 @@ prompt_mgr.load_all()
 ```
 src/modules/prompts/templates/
 ├── decision/                    # 决策阶段提示词
-│   └── llm.md                  # LLM 对话模板
+│   ├── amaidesu_planner.md      # Amaidesu Planner 模板
+│   ├── amaidesu_planner_v2.md   # Planner v2
+│   ├── amaidesu_replyer.md      # Amaidesu Replyer 模板
+│   ├── amaidesu_timing_gate.md  # 时机门控模板
+│   ├── llm.md                   # LLM 对话模板
+│   └── llm_structured.md        # LLM 结构化输出模板
 ├── input/                      # 输入阶段提示词
 │   ├── mainosaba_ocr.md       # OCR 提示词
 │   ├── screen_context.md      # 屏幕上下文提示词
 │   ├── screen_description.md  # 屏幕描述提示词
 │   └── summarize.md           # 摘要提示词
-└── output/                     # 输出阶段提示词
-    ├── avatar_expression.md    # 虚拟形象表情模板
-    ├── speech.md               # 语音合成模板
-    └── vts_hotkey.md           # VTS 热键模板
+├── output/                     # 输出阶段提示词
+│   ├── avatar_expression.md    # 虚拟形象表情模板
+│   ├── speech.md               # 语音合成模板
+│   └── vts_hotkey.md           # VTS 热键模板
+└── simulator/                  # 模拟直播间提示词
+    ├── passerby_message.md     # 临时路人消息
+    ├── sc_message.md           # Super Chat 消息
+    ├── viewer_message.md       # 观众消息
+    └── warmup_message.md       # 暖场期消息
 ```
 
 ### 4. 模板格式 (YAML Frontmatter)
@@ -193,8 +203,8 @@ $user_name 说：$text
 ```python
 from src.modules.prompts import get_prompt_manager
 
-class MyDecider(Decider):
-    async def _setup_internal(self):
+class MyDecider:
+    async def setup(self):
         self._prompt_mgr = get_prompt_manager()
 
     async def decide(self, message: NormalizedMessage) -> None:
@@ -218,331 +228,170 @@ class MyDecider(Decider):
 
 **ConfigService** 是项目的统一配置管理服务，负责：
 
-- 加载和管理主配置文件 (`config.toml`)
-- 提供配置合并策略（Schema 默认值 + 主配置覆盖）
-- 管理阶段参与者和 Pipeline 配置
-- 支持配置版本管理和自动更新
+- 加载 `config/` 目录下的多文件配置（`core.toml` / `model.toml` / `input.toml` / `decision.toml` / `output.toml`）
+- 首次运行从 Pydantic Schema 自动生成缺失的配置文件
+- 提供配置合并策略（Schema 默认值 + 配置覆盖）
+- 支持配置文件热重载（file watcher）
 
 ### 2. 快速开始
 
 ```python
 from src.modules.config.service import ConfigService
 
-# 初始化配置服务
+# 初始化配置服务（首次运行自动生成 config/ 目录，同步方法）
 config_service = ConfigService(base_dir="/path/to/project")
-config, copied, *_ = await config_service.initialize()
+main_config, was_created = config_service.initialize()
 
 # 获取配置节
 general_config = config_service.get_section("general")
 
-# 获取 Collector 配置
-input_config = config_service.get_collector_config_with_defaults(
-    "console_input", ConsoleInputCollectorConfig
+# 获取 Collector 配置（合并 Schema 默认值）
+input_config = config_service.get_config_with_defaults(
+    "console_input", phase="input"
 )
 ```
 
+> 配置文件的完整结构与 LLM provider/profile 两层模型见 [快速开始 - 编辑配置文件](../getting-started.md#25-编辑配置文件)。
+
 ### 3. 配置文件结构
 
-#### 3.1 主配置文件
+配置为**多文件**结构（`config/` 目录），按关注点拆分：
 
-项目使用 TOML 格式的配置文件：
-
-```toml
-# 配置文件示例
-
-[meta]
-version = "0.2.0"
-
-# ========== 全局 LLM 配置 ==========
-
-[llm]
-client = "openai"
-model = "gpt-4"
-api_key = "your-api-key"
-base_url = "https://api.openai.com/v1"
-temperature = 0.2
-max_tokens = 1024
-
-# ========== 核心配置 ==========
-
-[general]
-platform_id = "amaidesu"
-
-[persona]
-bot_name = "麦麦"
-personality = "活泼开朗"
-style_constraints = "口语化，适当使用emoji"
-user_name = "大家"
-max_response_length = 50
-emotion_intensity = 7
-
-[maibot]
-host = "127.0.0.1"
-port = 8000
-
-# ========== 阶段参与者配置 ==========
-
-[collectors]
-enabled = true
-enabled = ["console_input", "bili_danmaku"]
-
-[handlers]
-enabled = true
-enabled = ["subtitle", "vts", "tts"]
-
-[deciders]
-enabled = true
-active = "maibot"
-available = ["maibot", "llm", "command"]
-
-# ========== Pipeline 配置 ==========
-
-[pipelines.rate_limit]
-priority = 100
-enabled = true
-global_rate_limit = 100
-user_rate_limit = 10
-window_size = 60
-
-[pipelines.similar_filter]
-priority = 500
-enabled = true
-similarity_threshold = 0.85
-```
-
-#### 3.2 配置节说明
-
-| 配置节 | 说明 |
-|--------|------|
-| `[meta]` | 元数据，如配置版本 |
-| `[llm]` | 标准 LLM 配置 |
-| `[llm_fast]` | 快速 LLM 配置（低延迟任务） |
-| `[vlm]` | 视觉语言模型配置 |
-| `[llm_local]` | 本地 LLM 配置（Ollama 等） |
-| `[general]` | 通用配置 |
-| `[persona]` | VTuber 人设配置 |
-| `[maibot]` | MaiBot 连接配置 |
-| `[context]` | 上下文管理器配置 |
-| `[logging]` | 日志配置 |
-| `[collectors]` | 输入 Collector 启用列表 |
-| `[handlers]` | 输出 Handler 启用列表 |
-| `[deciders]` | 决策 Decider 配置 |
-| `[pipelines.*]` | 各 Pipeline 配置 |
+| 文件 | 内容 |
+|------|------|
+| `core.toml` | 核心配置（`[general]` / `[persona]` / `[logging]` / `[dashboard]` 等） |
+| `model.toml` | LLM provider 池（`[[llm_providers]]`）+ 各 profile（`[llm]` / `[llm_fast]` / `[vlm]` / `[llm_local]`） |
+| `input.toml` | 输入阶段（`[collectors]` 启用列表 + 各 Collector 配置节） |
+| `decision.toml` | 决策阶段（`[deciders]` 启用列表 + 各 Decider 配置节） |
+| `output.toml` | 输出阶段（`[handlers]` 启用列表 + 各 Handler 配置节） |
 
 ### 4. 阶段参与者配置
 
-#### 4.1 启用阶段参与者
-
-在对应阶段的配置节中添加参与者名称到启用列表：
+在对应配置文件的启用列表中添加参与者名称：
 
 ```toml
-# 启用输入 Collector
+# config/input.toml
 [collectors]
 enabled = ["console_input", "bili_danmaku"]
 
-# 启用输出 Handler
+# config/output.toml
 [handlers]
-enabled = ["subtitle", "vts", "tts"]
+enabled = ["subtitle", "vts", "edge_tts"]
 
-# 配置决策 Decider
+# config/decision.toml
 [deciders]
-active = "maibot"
+enabled = ["amaidesu"]
 ```
 
-#### 4.2 阶段参与者特定配置
-
-每个阶段参与者可以有自己的配置节：
+每个阶段参与者可以有独立的配置节（位于同一配置文件）：
 
 ```toml
-# 输入 Collector 配置
-[collectors.console_input]
-# ConsoleInputCollector 特定配置
-
+# config/input.toml
 [collectors.bili_danmaku_official]
 id_code = "your_id_code"
 app_id = "your_app_id"
 access_key = "your_access_key"
 
-# 输出 Handler 配置
-[handlers.tts]
-voice = "zh-CN-YunxiNeural"
-rate = "+0%"
-
+# config/output.toml
 [handlers.subtitle]
 font_size = 32
 window_width = 1000
 window_height = 720
 
-# 决策 Decider 配置
+# config/decision.toml
 [deciders.maibot]
 host = "127.0.0.1"
 port = 8000
 ```
 
-### 5. 二级配置合并
+### 5. 配置合并
 
-ConfigService 支持**二级配置合并**，优先级如下：
+ConfigService 支持**配置合并**，优先级如下：
 
 ```
-Schema 默认值（优先级低） → 主配置覆盖（优先级高）
+Schema 默认值（优先级低） → 配置文件覆盖（优先级高）
 ```
 
 #### 5.1 获取合并后的配置
 
 ```python
-from src.modules.config.schemas.input_collectors import ConsoleInputCollectorConfig
-
-# 获取带默认值合并的配置
-config = config_service.get_collector_config_with_defaults(
-    "console_input",      # Collector 名称
-    ConsoleInputCollectorConfig  # Schema 类（可选）
+# 获取带默认值合并的配置（phase 指定阶段）
+config = config_service.get_config_with_defaults(
+    "console_input",      # 参与者名称
+    phase="input"         # 阶段：input / decision / output
 )
 ```
 
 #### 5.2 Schema 配置类
 
-每个阶段参与者可以定义 Pydantic Schema 配置类：
+每个阶段参与者在自身模块内定义 `ConfigSchema` 嵌套类：
 
 ```python
-# src/stages/input/collectors/console_input/config.py
+# src/stages/input/collectors/console_input/console_input_collector.py
 from pydantic import Field
 from src.modules.config.schemas.base import BaseConfig
 
 
-class ConsoleInputCollectorConfig(BaseConfig):
+class ConsoleInputCollector:
     """ConsoleInputCollector 配置"""
 
-    type: str = "console_input"
+    class ConfigSchema(BaseConfig):
+        type: str = "console_input"
 
-    # 命令行提示符
-    prompt: str = Field(default="> ", description="命令行提示符")
+        # 命令行提示符
+        prompt: str = Field(default="> ", description="命令行提示符")
 
-    # 是否启用历史记录
-    history_enabled: bool = Field(default=True, description="是否启用历史记录")
+        # 是否启用历史记录
+        history_enabled: bool = Field(default=True, description="是否启用历史记录")
 
-    # 最大历史记录数
-    max_history: int = Field(default=100, description="最大历史记录数")
+        # 最大历史记录数
+        max_history: int = Field(default=100, description="最大历史记录数")
 ```
 
-#### 5.3 合并规则
-
-```python
-# 深度合并示例
-base = {"a": 1, "b": {"x": 10, "y": 20}}
-override = {"b": {"y": 200}, "c": 3}
-result = deep_merge_configs(base, override)
-# result = {"a": 1, "b": {"x": 10, "y": 200}, "c": 3}
-```
-
-**合并规则说明：**
-- 基本类型（str, int, float, bool）：override 直接覆盖
-- 字典类型：递归合并
-- 列表类型：override 完全替换（不合并）
-- None：跳过
+> `src/modules/config/schemas/input_schemas.py` 通过 `_try_import_schema()` 延迟导入各 Collector 的 `ConfigSchema` 并重导出为 `XXXConfigSchema` 别名（如 `InputCollectorsConfig` 聚合容器），避免循环 import。开发者只需关注参与者内的 `ConfigSchema` 定义，聚合由配置模块自动完成。
 
 ### 6. 配置 API
-
-#### 6.1 获取配置节
 
 ```python
 # 获取顶层配置节
 general = config_service.get_section("general")
 
-# 获取嵌套配置节（使用点分路径）
-input_config = config_service.get_section("providers.input")
-maibot_config = config_service.get_section("providers.decision.maibot")
-```
-
-#### 6.2 获取配置项
-
-```python
-# 从根配置获取
+# 获取配置项
 platform_id = config_service.get("platform_id", section="general")
 
-# 带默认值
-api_key = config_service.get("api_key", default="default_key")
-```
+# 获取带默认值的参与者配置
+cfg = config_service.get_config_with_defaults("bili_danmaku", phase="input")
 
-#### 6.3 检查阶段参与者启用状态
-
-```python
-# 检查 Collector 是否启用
-if config_service.is_collector_enabled("bili_danmaku"):
+# 检查参与者是否启用（phase 指定阶段）
+if config_service.is_config_enabled("bili_danmaku", phase="input"):
     # ...
 
-# 检查 Handler 是否启用
-if config_service.is_handler_enabled("tts"):
-    # ...
-```
+# 获取某阶段全部配置
+all_input = config_service.get_all_configs(phase="input")
 
-#### 6.4 检查 Pipeline 启用状态
-
-```python
-# Pipeline 启用的条件：定义了 priority 键
-if config_service.is_pipeline_enabled("rate_limit"):
+# Pipeline 配置
+pipe_cfg = config_service.get_pipeline_config("rate_limit", phase="input")
+if config_service.is_pipeline_enabled("rate_limit", phase="input"):
     # ...
 ```
 
-#### 6.5 获取所有配置
+### 7. 配置文件生成与热重载
 
-```python
-# 获取所有 Collector 配置
-all_collectors = config_service.get_all_collector_configs()
-
-# 获取所有 Handler 配置
-all_handlers = config_service.get_all_handler_configs()
-
-# 获取所有 Decider 配置
-all_deciders = config_service.get_all_decider_configs()
-
-# 获取所有 Pipeline 配置
-all_pipelines = config_service.get_all_pipeline_configs()
-```
-
-### 7. 配置模板生成
-
-ConfigService 支持从 Schema 类自动生成配置模板：
-
-```python
-from src.modules.config.schemas.input_collectors import ConsoleInputCollectorConfig
-
-# 生成 TOML 配置文件
-ConsoleInputCollectorConfig.generate_toml(
-    output_path="config_example.toml",
-    section="collectors.console_input",
-    include_comments=True
-)
-```
-
-生成的配置文件：
-
-```toml
-# ConsoleInputCollector 配置
-
-[collectors.console_input]
-# 命令行提示符
-prompt = "> "
-# 是否启用历史记录
-history_enabled = true
-# 最大历史记录数
-max_history = 100
-```
-
-### 8. 模板配置文件
-
-项目使用 `config/` 目录下的多文件配置结构，首次运行时从 Pydantic Schema 自动生成：
+- **首次运行**：`ConfigService.initialize()` 通过 `ConfigSchemaGenerator` 从 Schema 自动生成 `config/` 目录及全部配置文件
+- **热重载**：`FileWatcher` 监听配置文件变更，通过 `register_reload_callback(callback)` 注册回调感知变化
+- **迁移**：`migration.py` / `upgrade_hooks.py` 处理配置版本升级
 
 ```bash
-# 首次运行
+# 首次运行自动生成 config/ 目录
 uv run python main.py
-# 会自动在 config/ 目录下生成 core.toml, model.toml, input.toml, decision.toml, output.toml
+# → 生成 core.toml, model.toml, input.toml, decision.toml, output.toml
 ```
 
 ---
 
 ## 相关文档
 
-- [阶段参与者开发指南](provider-guide.md) - 如何开发自定义阶段参与者
+- [阶段参与者开发指南](component-guide.md) - 如何开发自定义阶段参与者
 - [管道开发指南](pipeline-guide.md) - 如何开发自定义 Pipeline
 - [开发规范](../development-guide.md) - 代码风格和约定
 - [3阶段架构](../architecture/overview.md) - 架构设计总览

@@ -21,50 +21,21 @@ test = [
 
 ## 2. 测试目录结构
 
+测试按 3 阶段架构组织，目录结构与 `src/` 对应。**权威且完整的目录结构见 [tests/README.md](../../tests/README.md#目录结构)**（位于测试目录内，随代码演进维护）：
+
 ```
 tests/
 ├── architecture/           # 架构约束测试
-│   ├── test_dependency_direction.py
-│   └── test_event_flow_constraints.py
-├── core/                   # 核心模块测试
-│   ├── base/               # 基础类型测试
-│   │   ├── test_input_collector.py
-│   │   ├── test_output_handler.py
-│   │   └── test_pipeline_stats.py
-│   ├── config/             # 配置测试
-│   ├── events/             # 事件系统测试
-│   ├── test_event_bus.py
-│   └── test_logger.py
-├── stages/                # 阶段测试
-│   ├── input/
-│   │   ├── pipelines/      # Input Pipeline 测试
-│   │   │   ├── test_rate_limit_pipeline.py
-│   │   │   └── test_similar_filter_pipeline.py
-│   │   ├── collectors/      # InputCollector 测试
-│   │   └── test_input_collector_manager.py
-│   ├── decision/
-│   │   ├── deciders/     # Decider 测试
-│   │   └── test_decider_manager.py
-│   └── output/
-│       ├── pipelines/     # Output Pipeline 测试
-│       ├── handlers/     # OutputHandler 测试
-│       │   ├── avatar/
-│       │   ├── test_sticker_handler.py
-│       │   └── test_obs_control_handler.py
-│       └── test_output_handler_manager.py
+├── characterization/       # 特征化测试
+├── config/                 # 配置系统测试
+├── dashboard/              # Web Dashboard 测试
 ├── integration/            # 集成测试
 ├── mocks/                  # Mock 对象
-│   ├── mock_input_collector.py
-│   ├── mock_output_handler.py
-│   └── mock_decision_decider.py
-├── prompts/                # 提示词测试
-├── services/               # 服务测试
-│   ├── config/
-│   ├── context/
-│   ├── llm/
-│   └── tts/
+├── modules/                # 共享模块测试（与 src/modules/ 对应）
+├── stages/                 # 阶段测试（与 src/stages/ 对应）
 ├── conftest.py             # 全局共享 fixtures
-└── __init__.py
+├── test_decorator_registry.py
+└── test_multi_decider.py
 ```
 
 ### 命名规范
@@ -172,14 +143,15 @@ async def test_event_bus_error_isolation(event_bus):
 ```python
 """测试 InputCollector
 
-运行: uv run pytest tests/stages/input/test_input_collector_manager.py -v
+运行: uv run pytest tests/stages/input/ -v
 """
 
 import asyncio
 import pytest
 
-from src.stages.input.collector_manager import InputCollectorManager
+from src.stages.input.manager import InputCollectorManager
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import MessageReadyPayload
 from src.modules.types.base.normalized_message import NormalizedMessage
 from tests.mocks.mock_input_collector import MockInputCollector
 
@@ -198,9 +170,9 @@ def collector_manager(event_bus):
 
 
 @pytest.mark.asyncio
-async def test_collector_start_and_stop(collector_manager):
+async def test_collector_start_and_stop(collector_manager, event_bus):
     """测试 Collector 启动和停止"""
-    collector = MockInputCollector({"name": "test_collector", "auto_exit": True})
+    collector = MockInputCollector({"name": "test_collector", "auto_exit": True}, event_bus)
 
     await collector_manager.start_all_collectors([collector])
     assert collector_manager._is_started is True
@@ -234,17 +206,17 @@ async def test_collector_data_flow(collector_manager, event_bus):
     await asyncio.sleep(0.3)
 
     assert len(collected) == 1
-    assert collected[0].message.text == "测试"
+    assert collected[0].message["text"] == "测试"
 
     await collector_manager.stop_all_collectors()
 
 
 @pytest.mark.asyncio
-async def test_error_isolation(collector_manager):
+async def test_error_isolation(collector_manager, event_bus):
     """测试错误隔离"""
     collectors = [
-        MockInputCollector({"name": "good_collector"}),
-        FailingMockCollector({"name": "failing_collector"}),
+        MockInputCollector({"name": "good_collector"}, event_bus),
+        FailingMockCollector({"name": "failing_collector"}, event_bus),
     ]
 
     await collector_manager.start_all_collectors(collectors)
@@ -334,15 +306,14 @@ collector.add_test_data(normalized_message)
 class CustomMockInputCollector(MockInputCollector):
     """自定义 Mock Collector"""
 
-    def __init__(self, config=None, fail_on_start=False):
-        super().__init__(config)
+    def __init__(self, config=None, event_bus=None, fail_on_start=False):
+        super().__init__(config or {}, event_bus)
         self.fail_on_start = fail_on_start
 
     async def start(self):
         if self.fail_on_start:
             raise RuntimeError("模拟启动失败")
-        async for data in super().start():
-            yield data
+        await super().start()
 ```
 
 ## 4. 运行测试
@@ -354,10 +325,10 @@ class CustomMockInputCollector(MockInputCollector):
 uv run pytest tests/
 
 # 运行特定测试文件
-uv run pytest tests/core/test_event_bus.py
+uv run pytest tests/modules/events/test_event_bus.py
 
 # 运行特定测试函数
-uv run pytest tests/core/test_event_bus.py::test_on_register_handler
+uv run pytest tests/modules/events/test_event_bus.py::test_on_register_handler
 
 # 详细输出（显示打印语句）
 uv run pytest tests/ -v -s
@@ -467,13 +438,14 @@ async def test_event_handling(event_bus):
 # ✅ 正确：使用 Mock 对象隔离外部依赖
 from unittest.mock import AsyncMock, MagicMock
 
+# 示例：Mock LLM 客户端
 @pytest.mark.asyncio
-async def test_llm_manager():
-    mock_backend = AsyncMock()
-    mock_backend.generate.return_value = "Mock response"
+async def test_llm_client():
+    mock_client = AsyncMock()
+    mock_client.chat.return_value = "Mock response"
 
-    manager = LLMManager()
-    result = await manager.generate("prompt", backend=mock_backend)
+    # 将 mock 注入使用方（示例）
+    result = await mock_client.chat("prompt")
     assert result == "Mock response"
 ```
 
@@ -482,15 +454,15 @@ async def test_llm_manager():
 ```python
 # ✅ 正确：每个测试独立，不依赖执行顺序
 @pytest.mark.asyncio
-async def test_first():
-    collector = MockInputCollector({"name": "test"})
+async def test_first(event_bus):
+    collector = MockInputCollector({"name": "test"}, event_bus)
     await collector.start()
     # 测试逻辑
     await collector.stop()
 
 @pytest.mark.asyncio
-async def test_second():  # 独立运行，不依赖 test_first
-    collector = MockInputCollector({"name": "test"})
+async def test_second(event_bus):  # 独立运行，不依赖 test_first
+    collector = MockInputCollector({"name": "test"}, event_bus)
     ...
 ```
 
@@ -526,13 +498,14 @@ def test_rate_limit_pipeline_creation():
 测试多个组件协作。
 
 ```python
-# tests/integration/test_mock_danmaku_schema_migration.py
+# tests/integration/test_amaidesu_plugin.py
+# 需要 import: PipelineManager / RateLimitInputPipeline / InputCollectorManager
 @pytest.mark.asyncio
-async def test_collector_manager_with_pipeline():
+async def test_collector_manager_with_pipeline(event_bus):
     """测试 CollectorManager 与 Pipeline 集成"""
-    manager = InputCollectorManager(event_bus)
-    pipeline = RateLimitInputPipeline(config)
-    manager.add_pipeline(pipeline)
+    pipeline_manager = PipelineManager("input")
+    pipeline_manager.register_pipeline(RateLimitInputPipeline(config))
+    manager = InputCollectorManager(event_bus, pipeline_manager=pipeline_manager)
     ...
 ```
 
@@ -570,11 +543,11 @@ async def event_bus() -> EventBus:
 ```python
 # tests/stages/input/conftest.py
 @pytest.fixture
-def sample_collectors():
+def sample_collectors(event_bus):
     """创建示例 Collector 列表"""
     return [
-        MockInputCollector({"name": "collector1"}),
-        MockInputCollector({"name": "collector2"}),
+        MockInputCollector({"name": "collector1"}, event_bus),
+        MockInputCollector({"name": "collector2"}, event_bus),
     ]
 ```
 
@@ -655,11 +628,11 @@ async def event_bus():
 
 ## 10. 相关文档
 
-- [开发规范](development-guide.md) - 代码风格和数据类型规范
-- [阶段参与者开发](development/provider-guide.md) - 阶段参与者开发指南
-- [管道开发](development/pipeline-guide.md) - Pipeline 开发指南
+- [开发规范](../development-guide.md) - 代码风格和数据类型规范
+- [阶段参与者开发](component-guide.md) - 阶段参与者开发指南
+- [管道开发](pipeline-guide.md) - Pipeline 开发指南
 - [事件系统](../architecture/event-system.md) - EventBus 使用指南
 
 ---
 
-*最后更新：2026-06-28（同步破坏性升级：事件名 DATA_MESSAGE→INPUT_MESSAGE_RECEIVED + mock_decider.py→mock_decision_decider.py + MockInputCollector 新增 event_bus 必填参数）*
+*最后更新：2026-08-02（同步测试目录结构与 Manager 路径，InputCollectorManager 位于 src/stages/input/manager.py）*

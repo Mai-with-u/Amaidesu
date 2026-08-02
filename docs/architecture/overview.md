@@ -17,6 +17,7 @@ flowchart TB
         IP1[InputCollector]
         IP2[InputCollector]
         IP3[InputCollector]
+        ICM[InputCollectorManager]
         NM[NormalizedMessage]
         Pipeline[Pipeline 过滤]
     end
@@ -39,13 +40,14 @@ flowchart TB
     External --> IP1
     External --> IP2
     External --> IP3
-    IP1 --> NM
-    IP2 --> NM
-    IP3 --> NM
+    IP1 --> ICM
+    IP2 --> ICM
+    IP3 --> ICM
+    ICM --> NM
     NM --> Pipeline
-    Pipeline -->|"EventBus: input.message.received"| DP
+    ICM -->|"EventBus: input.message.received"| DP
     DP --> Intent
-    Intent -->|"EventBus: decision.intent.generated"| OPM
+    DP -->|"EventBus: decision.intent.generated"| OPM
     OPM --> OPipeline
     OPipeline --> OP1
     OPipeline --> OP2
@@ -69,10 +71,9 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    RD[RawData<br/>原始数据] -->|InputCollector| NM[NormalizedMessage<br/>标准化消息]
+    EXT[外部输入<br/>弹幕/语音/控制台] -->|InputCollector| NM[NormalizedMessage<br/>标准化消息]
     NM -->|Decider| I[Intent<br/>决策意图]
-    I -->|OutputPipeline| RP[RenderParameters<br/>渲染参数]
-    RP -->|OutputHandler| AO[实际输出<br/>TTS/字幕/动作]
+    I -->|OutputHandlerManager<br/>直接调度| AO[实际输出<br/>TTS/字幕/动作]
 ```
 
 ## 目录结构
@@ -83,60 +84,70 @@ Amaidesu/
 ├── config/                      # 配置目录（多文件结构，首次运行自动生成）
 ├── src/
 │   ├── stages/                  # 业务阶段
-     │   │   ├── input/               # 输入阶段
-     │   │   │   ├── collector_manager.py
-     │   │   │   ├── pipelines/       # 输入管道
-     │   │   │   │   ├── rate_limit/  # 频率限制管道
-     │   │   │   │   └── similar_filter/ # 相似过滤管道
-     │   │   │   └── collectors/       # 输入 Collector
-     │   │   │       ├── console_input/
-      │   │   │       ├── bili_danmaku/
-      │   │   │       ├── bili_danmaku_official/
-      │   │   │       ├── mainosaba/
-     │   │   │       ├── mock_danmaku/
-     │   │   │       ├── read_pingmu/
-     │   │   │       └── stt/
-     │   │   ├── decision/            # 决策阶段
-     │   │   │   ├── decider_manager.py
-     │   │   │   └── deciders/       # 决策 Decider
-      │   │   │       ├── maibot/
-      │   │   │       ├── llm/
-      │   │   │       ├── command/
-      │   │   │       └── replay/
-     │   │   └── output/              # 输出阶段
-     │   │       ├── handler_manager.py
-     │   │       ├── pipelines/       # 输出管道
-     │   │       │   └── profanity_filter/
-     │   │       └── handlers/       # 输出 Handler
-     │   │           ├── audio/       # TTS 音频
-     │   │           │   ├── edge_tts/
-     │   │           │   ├── gptsovits/
-     │   │           │   └── omni_tts/
-     │   │           ├── avatar/      # 虚拟形象
-     │   │           │   ├── vts/
-     │   │           │   ├── warudo/
-     │   │           │   └── vrchat/
-     │   │           ├── subtitle/
-     │   │           ├── sticker/
-     │   │           ├── obs_control/
-     │   │           ├── remote_stream/
-     │   │           ├── debug_console/
-     │   │           └── mock/
-     │   ├── modules/                 # 核心模块（共享基础设施）
-     │   │   ├── config/             # 配置管理
-     │   │   ├── context/            # 上下文服务
-     │   │   ├── di/                 # 依赖注入
-     │   │   ├── events/             # 事件系统
-     │   │   ├── llm/                # LLM 服务
-     │   │   ├── logging/            # 日志系统
-     │   │   ├── prompts/            # 提示词管理
-     │   │   ├── registry/          # 阶段参与者注册表
-     │   │   ├── streaming/          # 音频流通道
-     │   │   ├── tts/                # TTS 管理
-     │   │   └── types/              # 共享类型
-     │   │       ├── base/           # 基础类型
-     │   │       └── intent.py       # 意图类型
-     │   └── services/               # 共享服务
+│   │   ├── input/               # 输入阶段
+│   │   │   ├── manager.py       # InputCollectorManager
+│   │   │   ├── registry.py      # @collector 装饰器注册表
+│   │   │   ├── pipelines/       # 输入管道
+│   │   │   │   ├── rate_limit/  # 频率限制管道
+│   │   │   │   └── similar_filter/ # 相似过滤管道
+│   │   │   ├── collectors/      # 输入 Collector
+│   │   │   │   ├── console_input/
+│   │   │   │   ├── bili_danmaku/
+│   │   │   │   ├── bili_danmaku_official/
+│   │   │   │   ├── mainosaba/
+│   │   │   │   ├── mock_danmaku/
+│   │   │   │   ├── read_pingmu/
+│   │   │   │   ├── simulated_live_stream/
+│   │   │   │   └── stt/
+│   │   │   └── shared/          # 输入阶段共享组件
+│   │   ├── decision/            # 决策阶段
+│   │   │   ├── manager.py       # DeciderManager
+│   │   │   ├── registry.py      # @decider 装饰器注册表
+│   │   │   └── deciders/        # 决策 Decider
+│   │   │       ├── amaidesu/    # 默认决策器（Planner/Replyer 两阶段）
+│   │   │       ├── maibot/
+│   │   │       ├── llm/
+│   │   │       ├── command/
+│   │   │       └── replay/
+│   │   └── output/              # 输出阶段
+│   │       ├── manager.py       # OutputHandlerManager
+│   │       ├── registry.py      # @handler 装饰器注册表
+│   │       ├── pipelines/       # 输出管道
+│   │       │   └── profanity_filter/
+│   │       └── handlers/        # 输出 Handler
+│   │           ├── audio/       # TTS 音频
+│   │           │   ├── edge_tts/
+│   │           │   ├── gptsovits/
+│   │           │   ├── omni_tts/
+│   │           │   └── voicebox/
+│   │           ├── avatar/      # 虚拟形象
+│   │           │   ├── vts/
+│   │           │   ├── warudo/
+│   │           │   └── vrchat/
+│   │           ├── subtitle/
+│   │           ├── sticker/
+│   │           ├── obs_control/
+│   │           ├── remote_stream/
+│   │           └── debug_console/
+│   └── modules/                 # 核心模块（共享基础设施）
+│       ├── avatar/              # 虚拟形象共享组件（IdleMotionController 等）
+│       ├── config/              # 配置管理
+│       ├── context/             # 上下文服务
+│       ├── dashboard/           # Dashboard API
+│       ├── di/                  # 依赖注入
+│       ├── events/              # 事件系统
+│       ├── llm/                 # LLM 服务
+│       ├── logging/             # 日志系统
+│       ├── mcp/                 # MCP 服务
+│       ├── pipeline/            # Pipeline 基类
+│       ├── prompts/             # 提示词管理
+│       ├── streaming/           # 音频流通道
+│       ├── tts/                 # TTS 管理
+│       └── types/               # 共享类型
+│           ├── base/            # 基础类型
+│           ├── capabilities.py  # CapabilitiesProvider 协议
+│           ├── emotion_vocab.py # Emotion 枚举
+│           └── intent.py        # Intent 类型
 └── docs/                       # 项目文档
     ├── architecture/           # 架构文档
     └── development/            # 开发指南
@@ -188,13 +199,15 @@ sequenceDiagram
 | mainosaba | Mainosaba输入 | `src/stages/input/collectors/mainosaba/` |
 | mock_danmaku | 模拟弹幕（测试用） | `src/stages/input/collectors/mock_danmaku/` |
 | read_pingmu | PingMu读取 | `src/stages/input/collectors/read_pingmu/` |
+| simulated_live_stream | 模拟直播间（调试工具） | `src/stages/input/collectors/simulated_live_stream/` |
 | stt | 语音识别 | `src/stages/input/collectors/stt/` |
 
-### Decider（4个）
+### Decider（5个）
 
 | 名称 | 说明 | 位置 |
 |------|------|------|
-| maibot | MaiBot 决策（默认） | `src/stages/decision/deciders/maibot/` |
+| amaidesu | Amaidesu 决策（默认，Planner/Replyer 两阶段） | `src/stages/decision/deciders/amaidesu/` |
+| maibot | MaiBot 决策 | `src/stages/decision/deciders/maibot/` |
 | llm | 本地 LLM 决策 | `src/stages/decision/deciders/llm/` |
 | command | 通用命令意图路由 | `src/stages/decision/deciders/command/` |
 | replay | 回放决策（调试用） | `src/stages/decision/deciders/replay/` |
@@ -208,6 +221,7 @@ sequenceDiagram
 | edge_tts | Edge TTS | `src/stages/output/handlers/audio/edge_tts/` |
 | gptsovits | GPT-SoVITS TTS | `src/stages/output/handlers/audio/gptsovits/` |
 | omni_tts | Omni TTS | `src/stages/output/handlers/audio/omni_tts/` |
+| voicebox | VoiceBox TTS | `src/stages/output/handlers/audio/voicebox/` |
 
 #### 虚拟形象
 
@@ -226,33 +240,35 @@ sequenceDiagram
 | obs_control | OBS 控制 | `src/stages/output/handlers/obs_control/` |
 | remote_stream | 远程流输出 | `src/stages/output/handlers/remote_stream/` |
 | debug_console | 调试控制台输出 | `src/stages/output/handlers/debug_console/` |
-| mock | 模拟输出（测试用） | `src/stages/output/handlers/mock/` |
 
 ## 核心概念
 
 ### 阶段参与者生命周期
 
-| 参与者类型 | 启动方法 | 停止方法 | 说明 |
-|--------------|---------|---------|------|
-| InputCollector | `start()` | `stop()` | 返回 AsyncIterator，用于数据流生成 |
-| Decider | `setup()` | `cleanup()` | 注册到 EventBus，处理消息 |
-| OutputHandler | `setup()` | `cleanup()` | 注册到 EventBus，渲染参数 |
+三种阶段参与者的生命周期方法**唯一权威定义在 [开发规范 §10.2](../development-guide.md#102-阶段参与者生命周期)**：
 
-**注意**：
-- InputCollector 使用 `start()`/`stop()` 是因为它需要返回异步生成器（AsyncIterator）
-- Decider/OutputHandler 使用 `setup()`/`cleanup()` 是因为它们是事件订阅者
+| 参与者类型 | 启动 | 停止 | 业务入口 |
+|------|-----|------|----------|
+| InputCollector | `start()` | `stop()` + `cleanup()` | `collect()` |
+| Decider | `setup()` | `cleanup()` | `decide()` |
+| OutputHandler | `init()` | `cleanup()` | `handle(intent)`（Manager 直接调用，不订阅调度事件） |
+
+**关键差异**：OutputHandler 与 Input/Decision 不同——它**不订阅阶段调度事件**，由 `OutputHandlerManager` 在 OutputPipeline 过滤后直接调用 `handle(intent)`。完整说明见 [阶段参与者开发](../development/component-guide.md)。
 
 ### 事件系统
 
-项目使用 **EventBus** 作为唯一的跨阶段通信机制：
+项目使用 **EventBus** 作为唯一的跨阶段通信机制，事件按动词链 `received → generated → dispatched → finished` 流转。
 
-| 事件名 | 发布者 | 订阅者 | 数据类型 |
-|--------|--------|--------|---------|
-| `input.message.received` | Input 阶段 | Decision 阶段 | `MessageReadyPayload`（NormalizedMessage 字典） |
-| `decision.intent.generated` | Decision 阶段 | OutputHandlerManager | `IntentPayload`（Intent 字典） |
-| `output.intent.dispatched` | OutputHandlerManager | OutputHandlers | `OutputIntentDispatchedPayload` |
-| `output.handler.completed` | 各 OutputHandler（`handle()` 末尾 finally 里发） | OutputHandlerManager（聚合） | `OutputHandlerCompletedPayload`（含 `handler_name`、`intent_id`） |
-| `output.intent.finished` | OutputHandlerManager（聚合后发） | 任何需要"等所有输出完成"的组件（如 MainosabaCollector） | `IntentPayload` |
+**核心事件**（完整事件表见 [事件系统](event-system.md#事件载荷类型)）：
+
+| 事件名 | 方向 |
+|--------|------|
+| `input.message.received` | Input → Decision |
+| `decision.intent.generated` | Decision → OutputHandlerManager |
+| `output.intent.dispatched` | 监控信号（Broadcaster/EventRecorder 等观察，不触发 Handler） |
+| `output.intent.finished` | Manager 聚合全部 handler 完成后发布 |
+
+> **直接调度说明**：`OutputHandlerManager` 是 Output 阶段唯一调度点——订阅 `decision.intent.generated`，运行 OutputPipeline，发布 `output.intent.dispatched` 监控信号，然后为每个 active Handler 创建任务并直接调用 `handle(intent)`，用 `gather` 等待全部完成后发布 `output.intent.finished`。Handler 不订阅 `output.intent.dispatched`，也不发布 `output.handler.completed`（后者为 Manager 内部语义，详见 [事件系统](event-system.md)）。
 
 ### 管道（Pipeline）
 
@@ -308,13 +324,13 @@ def __init__(
 [collectors]
 enabled = ["console_input", "bili_danmaku"]
 
-# 决策 Decider
+# 决策 Decider（可多选，并行处理）
 [deciders]
-active = "maibot"
+enabled = ["amaidesu"]
 
 # 输出 Handler
 [handlers]
-enabled = ["tts", "subtitle", "vts"]
+enabled = ["edge_tts", "subtitle", "vts"]
 ```
 
 ### 3. 错误隔离
@@ -339,9 +355,9 @@ enabled = ["tts", "subtitle", "vts"]
 
 - [数据流规则](data-flow.md) - 数据流约束和规则
 - [事件系统](event-system.md) - EventBus 使用指南
-- [阶段参与者开发](../development/provider-guide.md) - 阶段参与者开发详解
+- [阶段参与者开发](../development/component-guide.md) - 阶段参与者开发详解
 - [管道开发](../development/pipeline-guide.md) - Pipeline 开发详解
 
 ---
 
-*最后更新：2026-06-28（同步事件名重命名 data.message→input.message.received / decision.intent→decision.intent.generated / output.params→output.intent.dispatched）*
+*最后更新：2026-08-02（同步 OutputHandlerManager 直接调度、事件名 input.message.received / decision.intent.generated、组件列表与目录结构）*

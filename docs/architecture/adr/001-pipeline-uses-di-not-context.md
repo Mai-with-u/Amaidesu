@@ -1,5 +1,9 @@
 # ADR-001: Pipeline 使用依赖注入而非 Context Object
 
+- 状态：已采纳
+- 日期：2026-06-27
+- 实现提交：`5ffa6417f2c71c1e210a43e0167e9fcdb3f404f0`（refactor(pipeline): 重构管道架构，引入泛型抽象与装饰器注册机制）
+
 ## Context
 
 Amaidesu 的 Pipeline 系统存在以下问题：
@@ -64,7 +68,7 @@ Amaidesu 的 Pipeline 系统存在以下问题：
 
 ## Reversibility
 
-回滚方法：`git revert <commit-hash>`，因为：
+回滚方法：`git revert 5ffa6417f2c71c1e210a43e0167e9fcdb3f404f0`，因为：
 - 改动集中（`base.py`、`profanity_filter/pipeline.py`、Manager 构造点）
 - 没有数据库 schema 变更
 - 没有配置文件格式变更（`[pipelines.output.xxx]` key 不变）

@@ -60,7 +60,9 @@ class RateLimitInputPipeline(Pipeline[NormalizedMessage]):
 [pipelines.input.rate_limit]
 enabled = true
 priority = 100        # 可覆盖类属性默认值
-rate = 100
+global_rate_limit = 100
+user_rate_limit = 10
+window_size = 60
 
 [pipelines.output.profanity_filter]
 enabled = true

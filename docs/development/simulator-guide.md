@@ -113,7 +113,11 @@ is_temporary = false
 - `fans_medal_level`: 0-40（影响消息重要性）
 - `guard_level`: 0=无, 1=总督, 2=提督, 3=舰长
 
-## 架构说明
+## 礼物配置
+
+编辑 `config/simulator_gifts.toml` 可自定义模拟直播间可触发的礼物（概率与价值在 `config/input.toml` 的 `[collectors.simulated_live_stream]` 中配置，如 `gift_probability`）。
+
+## 架构说明：
 
 ### 与单向数据流的关系
 

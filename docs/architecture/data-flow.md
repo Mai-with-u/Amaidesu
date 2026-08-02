@@ -35,11 +35,10 @@ Amaidesu 项目采用 3 阶段架构，数据在各阶段之间按照固定方�
 
 | 阶段 | 数据类型 | 所在阶段 | 说明 |
 |------|---------|--------|------|
-| 输入 | `RawData` | Input | 原始数据（弹幕、语音等） |
+| 输入 | 外部原始数据 | Input | 弹幕、语音、控制台等（尚未标准化） |
 | 标准化 | `NormalizedMessage` | Input | 标准化消息 |
-| 决策 | `Intent` | Decision | 决策意图 |
-| 渲染 | `RenderParameters` | Output | 渲染参数 |
-| 输出 | 实际输出 | Output | TTS 音频、字幕、动作等 |
+| 决策 | `Intent` | Decision | 决策意图（含 speech/emotion/action） |
+| 输出 | 实际输出 | Output | TTS 音频、字幕、动作等（Intent 直接驱动 Handler 渲染） |
 
 ### 约束的精确定义：数据平面 vs 发现平面
 
@@ -119,8 +118,9 @@ InputCollector 的职责是采集和发布数据：
 ### 正确示例
 
 ```python
-# OutputHandler 不订阅阶段流转事件，只实现渲染入口。
-class MyOutputHandler(OutputHandler):
+# OutputHandler 不订阅阶段调度事件，只实现渲染逻辑。
+# 项目使用 @handler 装饰器注册，无需继承基类。
+class MyOutputHandler:
     async def handle(self, intent: Intent) -> None:
         await self.render(intent)
 ```
@@ -192,14 +192,9 @@ Output（实现）──▶ CapabilitiesProvider（抽象，在 modules）◀─
 
 ### 核心事件
 
-| 事件名 | 发布者 | 订阅者 | 数据类型 | 说明 |
-|--------|--------|--------|---------|------|
-| `input.message.received` | InputCollector | DeciderManager | `MessageReadyPayload` (NormalizedMessage) | 标准化消息接收（received 动词） |
-| `decision.intent.generated` | Decider | OutputHandlerManager | `IntentPayload` (Intent) | 决策意图生成（generated 动词） |
-| `output.intent.dispatched` | OutputHandlerManager | Broadcaster、EventRecorder 等监控组件 | `IntentPayload` (Intent) | Pipeline 过滤完成后的监控信号，不触发 Handler |
-| `output.handler.completed` | OutputHandlerManager 内部 | OutputHandlerManager 内部 | `OutputHandlerCompletedPayload` | 兼容的内部完成语义，Handler 不订阅也不发布 |
-| `output.intent.finished` | OutputHandlerManager | 任何需要"等所有输出完成"的组件（如 MainosabaCollector） | `IntentPayload` (Intent) | Manager 等待全部 active handler 完成后发布 |
-| `output.obs.command` | Dashboard API / 外部组件 | ObsControlHandler 等 | `OBSCommandPayload`（按 `action` 区分） | OBS 统一命令入口 |
+事件按阶段流转使用统一的动词链：`received → generated → dispatched → finished`。`completed` 保留为 Manager 内部的单 handler 完成概念，不再要求 Handler 发布完成事件。
+
+**完整事件表（含发布者/订阅者/数据类型）见 [事件系统](event-system.md#事件载荷类型)**。本文档只强调与数据流相关的调度约束：
 
 #### Manager 直接调度与完成跟踪
 
@@ -215,53 +210,15 @@ Handler 不订阅 `output.intent.dispatched`，也不负责发布 `output.handle
 
 ### 完整事件流
 
-```mermaid
-flowchart TB
-    subgraph External["外部输入"]
-        Danmaku["弹幕"]
-        Voice["语音"]
-        Console["控制台"]
-    end
-
-    subgraph Input["Input 阶段"]
-        IP[InputCollector]
-        NM[NormalizedMessage]
-        Pipeline[InputPipeline]
-    end
-
-    subgraph Decision["Decision 阶段"]
-        DM[DeciderManager]
-        DP[Decider]
-        Intent[Intent]
-    end
-
-    subgraph Output["Output 阶段"]
-        OPM[OutputHandlerManager]
-        OPipeline[OutputPipeline]
-        OPS[OutputHandlers]
-    end
-
-    External --> IP
-    IP --> NM
-    NM --> Pipeline
-    Pipeline -->|"emit: input.message.received"| DM
-    DM --> DP
-    DP --> Intent
-    Intent -->|"emit: decision.intent.generated"| OPM
-    OPM --> OPipeline
-    OPipeline --> OPM
-    OPM -.->|"emit: output.intent.dispatched<br/>监控信号"| Monitor[监控组件]
-    OPM -->|"直接调用 handle(intent)"| OPS
-    OPS -->|"任务完成"| OPM
-    OPM -.->|"emit: output.intent.finished"| Finished[完成信号]
-```
+完整事件流图与 3 阶段时序图见 [事件系统](event-system.md#3阶段数据流事件)。本文档只保留与数据流约束相关的图（见下文"禁止的跨阶段订阅"）。
 
 ### 阶段参与者生命周期中的事件发布
 
 #### InputCollector
 
 ```python
-class MyInputCollector(InputCollector):
+# InputCollector 只发布数据，不订阅下游结果事件
+class MyInputCollector:
     async def start(self):
         """启动数据采集"""
         async for raw_data in self._fetch_data():
@@ -282,8 +239,9 @@ class MyInputCollector(InputCollector):
 #### Decider
 
 ```python
-class MyDecider(Decider):
-    async def _setup_internal(self):
+# Decider 订阅 input.message.received（合法），不订阅 Output 事件
+class MyDecider:
+    async def setup(self):
         # 订阅标准化消息
         self._event_bus.on(
             CoreEvents.INPUT_MESSAGE_RECEIVED,
@@ -308,7 +266,7 @@ class MyDecider(Decider):
 > OutputHandler 不订阅 `decision.intent.generated` 或 `output.intent.dispatched`。`OutputHandlerManager` 统一运行 OutputPipeline，然后直接调用每个 active handler 的 `handle(intent)`。
 
 ```python
-class MyOutputHandler(OutputHandler):
+class MyOutputHandler:
     async def handle(self, intent: Intent) -> None:
         # 只实现本 Handler 的渲染逻辑
         await self.render(intent)
@@ -708,8 +666,8 @@ flowchart LR
 
 - [3阶段架构总览](overview.md) - 3阶段架构详解
 - [事件系统](event-system.md) - EventBus 使用指南
-- [阶段参与者开发](../development/provider-guide.md) - 阶段参与者开发详解
+- [阶段参与者开发](../development/component-guide.md) - 阶段参与者开发详解
 
 ---
 
-*最后更新：2026-07-31（OutputHandlerManager 改为直接并行调用 Handler，DISPATCHED 仅保留为监控信号）*
+*最后更新：2026-08-02（事件表收敛至 event-system.md 单一事实源，移除重复的完整事件流图）*

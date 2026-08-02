@@ -2,7 +2,7 @@
 
 为在此代码库中工作的 AI 编码代理提供指南。
 
-**本文档已重构为渐进式披露格式**：核心规则在此文件，详细指南请查看 `docs/` 目录。
+**本文档为 AI 代理核心规则**：硬规则与高频 API 内联，操作手册渐进式披露——详细指南请查看 `docs/` 目录。
 
 ## 快速导航
 
@@ -56,105 +56,23 @@
 | ❌ Decider 订阅 Output 事件（运行时结果） | 创建循环依赖；但只读能力元数据可经 Protocol 拉取 | 同上 |
 | ❌ InputCollector 订阅 Decision/Output 的数据事件 | Input 应只发布数据，不订阅下游结果数据；元控制信号（如 `output.intent.finished`）除外 | 同上 |
 
-## AudioStreamChannel 音频流系统
+### 文档维护规则
 
-AudioStreamChannel 是专门的音频数据传输通道，与 EventBus 分离，用于高效传输大量音频数据。
+**单一事实源**（修改以下事实时只改权威处，其他文件只引用链接，不得复制）：
 
-### 与 EventBus 的关系
+| 事实 | 唯一权威处 |
+|------|-----------|
+| 事件表（含发布者/订阅者/数据类型） | `docs/architecture/event-system.md` |
+| 数据流图 / 组件清单 / 目录结构 | `docs/architecture/overview.md` |
+| 生命周期表 | `docs/development-guide.md` §10.2 |
+| 架构决策记录（ADR） | `docs/architecture/adr/` |
+| 数据流规则约束 | `docs/architecture/data-flow.md` |
 
-- **EventBus**: 用于元数据事件（开始/结束/状态通知）
-- **AudioStreamChannel**: 用于音频数据流（chunk 数据传输）
-
-### 发布者（TTS Handler）
-
-所有 TTS Handler 在 `__init__()` 中通过构造器注入获取 AudioStreamChannel：
-
-```python
-def __init__(
-    self,
-    config: Dict[str, Any],
-    event_bus: EventBus,
-    audio_stream_channel: Optional[AudioStreamChannel] = None,
-):
-    self.audio_stream_channel = audio_stream_channel
-```
-
-在音频生成时：
-1. 调用 `notify_start(AudioMetadata(text=text, sample_rate=...))` 通知开始
-2. 循环调用 `publish(AudioChunk(data=chunk_bytes, ...))` 发布音频块
-3. 调用 `notify_end(AudioMetadata(...))` 通知结束
-
-### 订阅者（Avatar Handler, Remote Stream Handler）
-
-订阅者在连接/设置阶段注册回调函数：
-
-```python
-await audio_channel.subscribe(
-    name="handler_name",
-    on_audio_start=self._on_audio_start,
-    on_audio_chunk=self._on_audio_chunk,
-    on_audio_end=self._on_audio_end,
-    config=SubscriberConfig(
-        queue_size=100,
-        backpressure_strategy=BackpressureStrategy.DROP_NEWEST,
-    ),
-)
-```
-
-回调方法负责：
-- 接收 AudioChunk
-- 重采样到目标采样率（使用 `resample_audio()`）
-- 处理音频数据（口型同步、网络传输等）
-
-### 背压策略
-
-- **BLOCK**: 队列满时阻塞等待
-- **DROP_NEWEST**: 丢弃新数据（默认，不阻塞 TTS）
-- **DROP_OLDEST**: 替换最旧的数据
-- **FAIL_FAST**: 队列满时抛出异常
-
-### 依赖注入链路
-
-```python
-# main.py
-audio_stream_channel = AudioStreamChannel("tts")
-await output_handler_manager.setup(..., audio_stream_channel=audio_stream_channel)
-
-# OutputHandlerManager 内部
-await self.setup_all_handlers(event_bus, audio_stream_channel=audio_stream_channel)
-
-# Handler
-self.audio_stream_channel = audio_stream_channel  # 构造器注入
-```
-
-### 共享类型
-
-以下类型被 Input/Decision/Output 多个阶段共享，因此放在 `src/modules/types/` 中避免循环依赖：
-
-| 类型 | 用途 | 定义位置 |
-|------|------|---------|
-| `Emotion` | 全局情感枚举(12 个值,str-Enum) | `src/modules/types/emotion_vocab.py` |
-| `Intent` | 决策意图(平台无关,核心数据结构) | `src/modules/types/intent.py` |
-| `IntentMetadata` | 意图元数据(来源 + 决策时间) | `src/modules/types/intent.py` |
-| `IntentAction` | 意图动作(全限定名 `<handler>.<action>` + parameters) | `src/modules/types/intent.py` |
-| `IntentEmotion` | 意图情绪(枚举名 + intensity 0-1) | `src/modules/types/intent.py` |
-
-**为什么这些类型在 Modules 层？**
-- 被 Input/Decision/Output 多个阶段使用
-- 如果放在任何一个阶段中，会导致其他阶段依赖它
-- 放在 Modules 层可以避免循环依赖
-
-**破坏性升级（2026-06-28）**：
-- 已删除: `EmotionType` / `ActionType` / `SourceContext`（旧 string 字段）
-- 新结构: 全部 Pydantic 模型 + `extra="forbid"`，HTTP / EventBus / CLI 入口**多层一致**严格拒绝旧字段
-- `IntentEmotion.name` 由 `field_validator` 强制必须在 12 个 Emotion 枚举值内
-- `IntentAction.name` 全限定格式: `<handler>.<local_action>`(如 `warudo.wave`),由 `Manager.get_all_capabilities()` 自动加前缀
-
-**如何添加新的共享类型？**
-1. 评估类型是否真的需要跨多个阶段使用
-2. 如果是，添加到 `src/modules/types/` 中的合适文件（共享枚举放 `emotion_vocab.py`，Pydantic 模型放 `intent.py`）
-3. 更新相关阶段的导入语句
-4. 运行架构测试验证
+- **禁止在多个文档复制同一事实**；需要引用时用相对链接指向权威处
+- 修改文档后更新文件末尾"最后更新"日期（`YYYY-MM-DD` + 变更摘要）
+- ADR 编号按创建时间递增，含元数据（状态 / 日期 / 实现提交 40 位 hash）
+- 根目录不放图片/视频；图片放 `docs/images/`，视频放 `docs/videos/`
+- 详细规范见 [文档维护规范](docs/development/documentation-guide.md)
 
 ## 常用命令
 
@@ -163,142 +81,58 @@ self.audio_stream_channel = audio_stream_channel  # 构造器注入
 本项目使用 [uv](https://docs.astral.sh/uv/) 作为 Python 包管理器。
 
 ```bash
-# 同步依赖
-uv sync
-
-# 添加新依赖
-uv add package-name
-
-# 移除依赖
-uv remove package-name
+uv sync          # 同步依赖
+uv add pkg       # 添加依赖
+uv remove pkg    # 移除依赖
 ```
 
 ### 运行应用
 
 ```bash
-# 正常运行
-uv run python main.py
-
-# 调试模式
-uv run python main.py --debug
-
-# 过滤日志（只显示指定模块）
-uv run python main.py --filter EdgeTTSHandler SubtitleHandler
+uv run python main.py                    # 正常运行
+uv run python main.py --debug            # 调试模式
+uv run python main.py --filter EdgeTTSHandler SubtitleHandler   # 过滤日志
 ```
 
 ### Web Dashboard
 
-项目内置 Web 管理界面，有**两种独立运行模式**：
-
-| 端口 | 模式 | 前置条件 | 访问入口 | 适合场景 |
-|------|------|---------|---------|---------|
-| **60214** | 生产模式 | 需先 `npm run build` 生成 `dashboard/dist/` | http://127.0.0.1:60214 | 最终部署 / 单进程启动 |
-| **60315** | 开发模式 | 需同时运行后端（60214） | http://localhost:60315 | 前端开发 / HMR 热更新 |
-
-```bash
-# 方式一：生产模式（单进程）
-cd dashboard && npm run build   # 首次或前端改动后执行一次
-uv run python main.py           # → 浏览器访问 http://127.0.0.1:60214
-```
-
-**注意**：未执行 `npm run build` 时，60214 仅提供 API，不会显示 WebUI。
-
-```bash
-# 方式二：开发模式（双进程）
-# 终端 1：启动后端
-uv run python main.py           # → 后端运行在 http://127.0.0.1:60214
-
-# 终端 2：启动 Vite 开发服务器
-cd dashboard
-npm install                     # 首次需要
-npm run dev                     # → Vite 启动在 http://localhost:60315
-# 浏览器访问 http://localhost:60315（不是 5173、不是 60214）
-```
-
-**开发模式说明：**
-- Vite 自动代理 `/api` 和 `/ws` 请求到后端 60214
-- 修改 `dashboard/src/**` 下文件后浏览器自动热更新（无需刷新）
-- 修改后端 Python (`src/**/*.py`) 或配置文件 (`config/*.toml`) 需要重启主程序
-- 只跑 `npm run dev` 而不跑主程序，WebSocket/API 会无法连接
-
-**配置**（`config.toml`）：
-
-```toml
-[dashboard]
-enabled = true
-host = "127.0.0.1"
-port = 60214
-```
+项目内置 Web 管理界面，有**两种运行模式**（生产 60214 / 开发 60315），完整说明见 [快速开始 - Web Dashboard](docs/getting-started.md#44-web-dashboard)。
 
 ### 测试
 
 ```bash
-# 运行所有测试
-uv run pytest tests/
-
-# 运行特定测试
-uv run pytest tests/stages/input/collectors/test_stt_input_collector.py
-
-# 详细输出
-uv run pytest tests/ -v
-
-# 排除慢速测试
-uv run pytest -m "not slow"
+uv run pytest tests/                     # 运行所有测试
+uv run pytest tests/path/to/test.py      # 运行特定测试
+uv run pytest -v                         # 详细输出
+uv run pytest -m "not slow"              # 排除慢速测试
 ```
 
 ### 代码质量
 
 ```bash
-# 代码检查
-uv run ruff check .
-
-# 代码格式化
-uv run ruff format .
-
-# 自动修复
-uv run ruff check --fix .
+uv run ruff check .      # 代码检查
+uv run ruff format .     # 代码格式化
+uv run ruff check --fix .  # 自动修复
 ```
 
 ## 数据类型选用规范
-
-### 统一使用 Pydantic BaseModel
 
 | 类型 | 使用场景 | 示例 |
 |------|----------|------|
 | **Pydantic BaseModel** | 所有数据模型、配置 Schema、事件 Payload | `class UserConfig(BaseModel)` |
 | **dataclass** | 仅用于简单的内部统计/包装类 | `@dataclass class PipelineStats` |
-| **Protocol** | 定义接口协议 | `class InputPipeline(Protocol)` |
+| **Protocol** | 定义接口协议 | `class CapabilitiesProvider(Protocol)` |
 
-**详细规范**：[开发规范 - 数据类型选用](docs/development-guide.md#数据类型选用规范)
-
-### 类型注解
-
-```python
-# ✅ 正确：总是使用类型注解
-async def handle_message(self, message: MessageBase) -> Optional[MessageBase]:
-    """处理消息并返回处理结果"""
-    pass
-
-def __init__(self, config: Dict[str, Any]):
-    self.logger = get_logger(self.__class__.__name__)
-
-# ❌ 错误：缺少类型注解
-async def handle_message(self, message):
-    pass
-```
+**详细规范**：[开发规范 - 数据类型选用](docs/development-guide.md#3-数据类型选用规范)
 
 ### 命名约定
 
 | 类型 | 命名风格 | 示例 |
 |------|---------|------|
 | 类名 | PascalCase | `EventBus`, `InputCollector`, `InputPipeline` |
-| 函数/方法名 | snake_case | `send_to_maibot`, `register_websocket_handler` |
-| 变量名 | snake_case | `handler_config`, `event_bus` |
+| 函数/方法/变量名 | snake_case | `send_to_maibot`, `handler_config` |
 | 私有成员 | 前导下划线 | `_message_handlers`, `_is_connected` |
-| Collector 类 | 以 `Collector` 结尾 | `ConsoleInputCollector`, `BiliDanmakuCollector` |
-| Decider 类 | 以 `Decider` 结尾 | `MaiBotDecider`, `LLMDecider` |
-| Handler 类 | 以 `Handler` 结尾 | `EdgeTTSHandler`, `SubtitleHandler` |
-| 管道类 | 以 `Pipeline` 结尾 | `RateLimitPipeline`, `SimilarTextFilterPipeline` |
+| Collector/Decider/Handler/Pipeline 类 | 以类型名结尾 | `ConsoleInputCollector`, `LLMDecider`, `EdgeTTSHandler`, `RateLimitPipeline` |
 
 **详细规范**：[开发规范](docs/development-guide.md)
 
@@ -308,32 +142,26 @@ async def handle_message(self, message):
 
 ### 阶段参与者类型
 
-| 类型 | 职责 | 位置 | 示例 |
-|------|------|------|------|
-| **InputCollector** | 从外部数据源采集数据 | `src/stages/input/collectors/` | ConsoleInputCollector, BiliDanmakuCollector, STTCollector, BiliDanmakuOfficialCollector |
-| **Decider** | 处理 NormalizedMessage 生成 Intent | `src/stages/decision/deciders/` | MaiBotDecider, LLMDecider, CommandDecider |
-| **OutputHandler** | 渲染到目标设备 | `src/stages/output/handlers/` | EdgeTTSHandler, GPTSoVITSHandler, VTSHandler, WarudoHandler, VRChatHandler, SubtitleHandler, StickerHandler, ObsControlHandler, RemoteStreamHandler, DebugConsoleHandler |
+| 类型 | 职责 | 位置 |
+|------|------|------|
+| **InputCollector** | 从外部数据源采集数据 | `src/stages/input/collectors/` |
+| **Decider** | 处理 NormalizedMessage 生成 Intent | `src/stages/decision/deciders/` |
+| **OutputHandler** | 渲染到目标设备 | `src/stages/output/handlers/` |
 
-### 阶段参与者生命周期方法
+### 生命周期方法
 
-| 参与者类型 | 启动方法 | 停止方法 | 说明 |
-|--------------|---------|---------|------|
-| InputCollector | `start()` | `stop()` | 返回 AsyncIterator，用于数据流生成 |
-| Decider | `setup()` | `cleanup()` | 注册到 EventBus，处理消息 |
-| OutputHandler | `init()` | `cleanup()` | Manager 初始化资源并直接调用 `handle(intent)`，Handler 不订阅阶段调度事件 |
+| 参与者类型 | 启动 | 停止 | 业务入口 | 说明 |
+|------------|------|------|----------|------|
+| InputCollector | `start()` | `stop()` + `cleanup()` | `collect()` | 返回 AsyncIterator，持续产出消息 |
+| Decider | `setup()` | `cleanup()` | `decide()` | 订阅 `input.message.received`，处理消息 |
+| OutputHandler | `init()` | `cleanup()` | `handle(intent)` | Manager 初始化资源并直接调用，Handler 不订阅阶段调度事件 |
 
 **注意**: InputCollector 使用 `start()`/`stop()` 是因为它需要返回异步生成器（AsyncIterator），
 而 Decider 使用 `setup()`/`cleanup()` 是因为它是事件订阅者。
 
 OutputHandler 的 `init()` 与 `cleanup()` 只管理自身资源及专用事件通信（如 `OUTPUT_STICKER_COMMAND`），不处理阶段调度事件。`OutputHandlerManager` 在 OutputPipeline 过滤后直接调用 active Handler 的 `handle(intent)`。
 
-### 阶段参与者生命周期快速参考
-
-| 类型 | 启动 | 停止 | 内部初始化 | 内部清理 |
-|------|-----|------|----------|----------|
-| InputCollector | `start()` | `stop()` + `cleanup()` | `_setup_internal()` | `_cleanup_internal()` |
-| Decider | `setup()` | `cleanup()` | `_setup_internal()` | `_cleanup_internal()` |
-| OutputHandler | `setup()` | `cleanup()` | `_setup_internal()` | `_cleanup_internal()` |
+> **单一事实源**：生命周期表的权威定义在 [开发规范 §10.2](docs/development-guide.md#102-阶段参与者生命周期)。若两侧不一致，以 development-guide.md 为准并同步本表。
 
 ### 添加新 Handler
 
@@ -352,16 +180,16 @@ enabled = ["console_input", "bili_danmaku"]
 
 # 决策Decider
 [deciders]
-active = "maibot"
+enabled = ["amaidesu"]
 
 # 输出Handler
 [handlers]
-enabled = ["tts", "subtitle", "vts"]
+enabled = ["edge_tts", "subtitle", "vts"]
 ```
 
 ## 管道开发
 
-管道用于在消息处理流程中进行预处理，位于 Input 阶段内部。
+管道用于在消息处理流程中进行预处理/后处理，位于 Input/Output 阶段内部。
 
 ### 添加新 Pipeline
 
@@ -381,53 +209,7 @@ enabled = ["tts", "subtitle", "vts"]
 
 ## LLM 模块
 
-LLM 调用统一通过 `LLMManager`。配置采用 **provider + profile** 两层结构：
-
-- `[[llm_providers]]` 定义可复用的 API 连接（一个 provider 对应一个客户端实例）
-- `[llm] / [llm_fast] / [vlm] / [llm_local]` 四个 profile 通过 `provider = "..."` 字段引用某个 provider，再单独覆盖 `model / temperature` 等业务参数
-
-这样同一份 API 连接可以在多个 profile 间共享，也允许让 `llm` 和 `vlm` 同时挂在 deepseek 下但使用不同模型。
-
-### 配置文件示例（`config/model.toml`）
-
-```toml
-# LLM 提供商池
-[[llm_providers]]
-name = "deepseek"
-client_type = "openai"
-base_url = "https://api.deepseek.com/v1"
-api_key = ""
-
-[[llm_providers]]
-name = "local"
-client_type = "openai"
-base_url = "http://localhost:11434/v1"
-api_key = ""
-auth_type = "none"
-
-# 角色配置：引用某个 provider + 自己的 model 参数
-[llm]
-provider = "deepseek"
-model = "deepseek-v4-pro"
-temperature = 0.2
-
-[llm_fast]
-provider = "deepseek"
-model = "deepseek-v4-flash"
-temperature = 0.7
-
-[vlm]
-provider = "deepseek"
-model = "deepseek-v4-vision"
-
-[llm_local]
-provider = "local"
-model = "llama3"
-```
-
-注意 `api_key` 留空时，`LLMManager.setup()` 会尝试从同名环境变量读取（例如 `DEEPSEEK_API_KEY`）。
-
-### 在代码中使用
+LLM 调用统一通过 `LLMManager`。配置采用 **provider + profile** 两层结构（`[[llm_providers]]` 定义可复用 API 连接，`[llm]`/`[llm_fast]`/`[vlm]`/`[llm_local]` 等 profile 通过 `provider` 字段引用并覆盖 model/temperature）。配置示例见 `config/model.toml`。
 
 ```python
 from src.modules.llm import LLMManager
@@ -435,41 +217,21 @@ from src.modules.llm import LLMManager
 llm_manager = LLMManager()
 await llm_manager.setup(model_config)
 
-# 公共 API 保持不变：chat / chat_fast / chat_messages / chat_vision / stream_chat 等
-response = await llm_manager.chat("你好")
-short_reply = await llm_manager.chat_fast("把这句话翻译成英文")
+response = await llm_manager.chat("你好")              # 完整对话
+short_reply = await llm_manager.chat_fast("翻译成英文")  # 快速对话
 ```
 
-`LLMManager.setup()` 会按 `provider` 字段从 `llm_providers` 里查出对应的连接配置，把它和 profile 自己的参数合并后再创建 client。多个 profile 引用同一个 provider 时，会各自独立创建客户端实例。
-
-### 添加新的 LLM Provider 实现
-
-1. 新建文件 `src/modules/llm/clients/your_client.py`，继承 `BaseLLMClient`（定义在 `src/modules/llm/clients/base.py`）。
-2. 实现抽象方法：`async chat() / async stream_chat()`（以及可选的 `chat_messages / chat_vision / call_tools`）。
-3. 在文件末尾调用 `register_client("your_type", YourClient)`，把实现注册到全局表。
-4. 在 `src/modules/llm/clients/__init__.py` 导出新类，方便测试和外部 import。
-5. 在 `config/model.toml` 里添加一条 `[[llm_providers]]`，把 `client_type` 设成你刚注册的字符串。
-
-未知的 `provider` 或 `client_type` 会在 `setup()` 阶段 fail-fast 报错，不会带着错误配置跑到运行时才发现。
+**添加新的 LLM Provider**：新建 `src/modules/llm/clients/your_client.py` 继承 `BaseLLMClient`，实现 `chat()/stream_chat()`，末尾调用 `register_client("your_type", YourClient)`，并在 `config/model.toml` 添加 `[[llm_providers]]`。未知的 `provider`/`client_type` 会在 `setup()` 时 fail-fast 报错。
 
 ## 提示词管理
 
 项目使用 **PromptManager** 统一管理所有 LLM 提示词。
 
-### 基本使用
-
 ```python
 from src.modules.prompts import get_prompt_manager
 
-# 获取提示词
-prompt = get_prompt_manager().get_raw("decision/llm")
-
-# 渲染提示词
-prompt = get_prompt_manager().render(
-    "output/vts_hotkey",
-    text="用户消息",
-    hotkey_list_str="smile, wave",
-)
+prompt = get_prompt_manager().get_raw("decision/llm")          # 获取原始提示词
+prompt = get_prompt_manager().render("output/vts_hotkey", text="用户消息", hotkey_list_str="smile, wave")
 ```
 
 **详细指南**：[提示词管理](docs/development/prompt-management.md)
@@ -487,7 +249,7 @@ from src.modules.events.names import CoreEvents
 await event_bus.emit(CoreEvents.INPUT_MESSAGE_RECEIVED, normalized_message)
 
 # 订阅事件
-await event_bus.subscribe(CoreEvents.INPUT_MESSAGE_RECEIVED, self.handle_message)
+event_bus.on(CoreEvents.INPUT_MESSAGE_RECEIVED, self.handle_message, model_class=MessageReadyPayload)
 ```
 
 **详细文档**：
@@ -497,28 +259,20 @@ await event_bus.subscribe(CoreEvents.INPUT_MESSAGE_RECEIVED, self.handle_message
 
 ### 核心事件
 
-事件按阶段流转使用统一的动词链：`received → generated → dispatched → finished`。`completed` 保留为 Manager 内部完成语义，Handler 不必再发布。
+事件按阶段流转使用统一的动词链：`received → generated → dispatched → finished`。`completed` 保留为 Manager 内部完成语义，Handler 不必再发布。**完整事件表（含发布者/订阅者/数据类型）见 [事件系统](docs/architecture/event-system.md#事件载荷类型)**。
 
-| 事件名 | 发布者 | 订阅者 | 数据类型 |
-|--------|--------|--------|---------|
-| `input.message.received` | Input 阶段 | Decision 阶段 | `MessageReadyPayload` (NormalizedMessage) |
-| `decision.intent.generated` | Decision 阶段 | Output 阶段 | `IntentPayload` (Intent) |
-| `output.intent.dispatched` | OutputHandlerManager | Broadcaster、EventRecorder 等监控组件 | `IntentPayload` (Intent) |
-| `output.handler.completed` | OutputHandlerManager（内部） | OutputHandlerManager（内部） | `OutputHandlerCompletedPayload` |
-| `output.intent.finished` | OutputHandlerManager | 任何需要"等所有输出完成"的组件（如 MainosabaCollector） | `IntentPayload` (Intent) |
-| `output.obs.command` | Dashboard API / 外部组件 | ObsControlHandler 等 | `OBSCommandPayload`（按 `action` 区分） |
+| 事件名 | 方向 |
+|--------|------|
+| `input.message.received` | Input → Decision |
+| `decision.intent.generated` | Decision → OutputHandlerManager |
+| `output.intent.dispatched` | 监控信号（Broadcaster/EventRecorder 等观察，不触发 Handler） |
+| `output.intent.finished` | Manager 聚合全部 handler 完成后发布 |
+
+> **单一事实源**：事件表的权威定义在 event-system.md。若两侧不一致，以 event-system.md 为准并同步本表。
 
 #### Manager 直接调度与完成跟踪
 
-`OutputHandlerManager` 是 Output 阶段唯一的调度点：
-
-1. 订阅 `decision.intent.generated` 并运行 OutputPipeline。
-2. 发布 `output.intent.dispatched` 监控信号，供 Broadcaster、EventRecorder 等观察。
-3. 为每个 active Handler 直接创建任务并调用 `handle(intent)`。
-4. `_run_handler` 使用 `asyncio.wait_for` 落实 `render_timeout_ms`（配置为 `0` 时不设超时），隔离单个 Handler 的超时与异常。
-5. Manager 使用 `gather` 等待全部 Handler 任务结束，再发布 `output.intent.finished`。
-
-Handler 不订阅 `output.intent.dispatched`，也不发布 `output.handler.completed`。完成跟踪由 Manager 内部管理。等待全部输出结束的下游组件应订阅 `output.intent.finished`。
+`OutputHandlerManager` 是 Output 阶段唯一的调度点：订阅 `decision.intent.generated` → 运行 OutputPipeline → 发布 `output.intent.dispatched` 监控信号 → 为每个 active Handler 创建任务并直接调用 `handle(intent)`（`asyncio.wait_for` 落实 `render_timeout_ms`，隔离超时与异常）→ `gather` 等待全部完成后发布 `output.intent.finished`。Handler 不订阅 `output.intent.dispatched`，也不发布 `output.handler.completed`。
 
 ### 事件注册
 
@@ -528,7 +282,6 @@ Handler 不订阅 `output.intent.dispatched`，也不发布 `output.handler.comp
 from pydantic import BaseModel
 from src.modules.events.registry import register_event
 from src.modules.events.payloads.base import BasePayload
-
 
 @register_event("input.message.received")
 class MessageReadyPayload(BasePayload):
@@ -542,65 +295,29 @@ class MessageReadyPayload(BasePayload):
 - **装饰器幂等**：同一类重复注册不会出错，重复注册为不同类型会抛 `ValueError`
 - **自动反向引用**：被装饰类获得 `cls._registered_event_name` 属性，便于日志/调试
 - **Payload 模块导入**：应用启动时调用 `register_core_events()` 触发各 Payload 子模块 import，使装饰器生效
-- **事件注册**：统一使用 `@register_event` 装饰器注册；`EventRegistry` 仅提供查询 API（`get` / `is_registered` / `list_all_events`）
-
-注册表查询：
-
-```python
-from src.modules.events.registry import EVENT_REGISTRY, get_registered_event, list_registered_events
-
-# 查单个
-payload_cls = get_registered_event("input.message.received")
-
-# 列出全部
-all_events = list_registered_events()  # dict[str, type[BaseModel]]
-```
+- **注册表查询**：`get_registered_event(name)` / `list_registered_events()`；`EventRegistry` 仅提供查询 API（`get`/`is_registered`/`list_all_events`）
 
 ### 时间字段约定
 
-项目统一使用 **毫秒（ms）** 作为时间单位，避免混用秒和毫秒导致的精度和单位错误。
-
-| 字段类型 | 类型 | 单位 | 命名 | 示例 |
-|---------|------|------|------|------|
-| **时刻**（point-in-time） | `int` | Unix epoch 毫秒 | `<name>_ms` | `timestamp_ms = 1706745600000` |
-| **时长**（duration） | `int` 或 `float` | 毫秒 | `<name>_ms` | `duration_ms = 1234`, `elapsed_ms = 12.5` |
-| **超时配置** | `int` | 毫秒 | `<name>_ms` 或 `<name>_timeout_ms` | `render_timeout_ms = 10000` |
-
-**统一时间工具**（`src/modules/time_utils.py`）：
+项目统一使用**毫秒（ms）**作为时间单位。时刻字段用 `int` Unix epoch 毫秒，时长/超时字段用毫秒，命名统一 `<name>_ms`（如 `timestamp_ms`、`render_timeout_ms`）。
 
 ```python
 from src.modules.time_utils import now_ms, elapsed_ms, format_duration_ms, ms_to_datetime
 
-# 当前时刻（int 毫秒）
-ts = now_ms()  # 1729612345678
-
-# 计算经过时长
-elapsed = elapsed_ms(start_ms=ts)  # int 毫秒
-
-# 人类可读格式化
-format_duration_ms(1234)  # "1.2s"
-format_duration_ms(500)   # "500ms"
+ts = now_ms()                        # 当前时刻（int 毫秒）
+elapsed = elapsed_ms(start_ms=ts)    # 经过时长
+format_duration_ms(1234)             # "1.2s"
 ```
 
 **注意事项**：
-- 时刻字段使用 `int` 避免浮点精度问题（Unix 毫秒已经是 13 位整数）
-- 时长字段可为 `float`（用于毫秒级精度测量，如 `12.5ms`）
 - 禁止使用秒为单位的字段（如 `timestamp_s`、`duration_seconds`），如需人类阅读用 `ms_to_datetime()` 转换
 - 历史代码中的 `timestamp` 字段通过 Pydantic `alias` 兼容（`alias="timestamp"`，实际字段为 `timestamp_ms`）
 
 ## ContextService 上下文管理
 
-ContextService 提供对话历史管理和多会话支持。
+ContextService 提供对话历史管理和多会话支持：管理对话历史（内存存储）、支持多会话隔离（session_id）、为 Decider 提供上下文。
 
-### 用途
-
-- 管理对话历史（内存存储）
-- 支持多会话隔离（通过 session_id）
-- 为 Decider 提供上下文
-
-### 使用示例
-
-见 `docs/development/context-service.md`（待创建）
+> **文档状态**：`docs/development/context-service.md` 尚未编写，使用示例待补充。基本用法见 `src/modules/context/` 下的实现与测试。
 
 ## 3阶段架构
 
@@ -610,22 +327,7 @@ ContextService 提供对话历史管理和多会话支持。
 | **Decision 阶段** | 决策（可替换） | `src/stages/decision/` |
 | **Output 阶段** | 参数生成 + 渲染 | `src/stages/output/` |
 
-### 数据流
-
-```
-外部输入（弹幕、游戏、语音）
-  ↓
-【Input 阶段】外部数据 → NormalizedMessage
-  ↓ EventBus: input.message.received
-【Decision 阶段】NormalizedMessage → Intent
-  ↓ EventBus: decision.intent.generated
-【Output 阶段】Intent → Manager 直接并行渲染
-  └─ EventBus: output.intent.dispatched（监控信号，仅供 Broadcaster/EventRecorder 观察）
-  └─ EventBus: output.intent.finished（全部 Handler 完成后由 Manager 发布）
-  OutputHandlers 渲染
-```
-
-**详细文档**：[3阶段架构](docs/architecture/overview.md)
+**数据流**：外部输入 → NormalizedMessage → Intent → Manager 直接并行渲染（详见 [3阶段架构](docs/architecture/overview.md)）。
 
 ### Core 层职责边界
 
@@ -642,17 +344,16 @@ ContextService 提供对话历史管理和多会话支持。
 
 **示例**：
 - ✓ `src/modules/types/base/normalized_message.py`: 定义 NormalizedMessage 基础类型
-- ✓ `src/modules/types/intent.py`: 共享的枚举类型
-- ✗ `src/modules/types/base/render_parameters.py`: 重导出 `RenderParameters`（违规）
+- ✓ `src/modules/types/intent.py`: 共享的 Intent 类型
 
 ## 日志使用
 
 ```python
 from src.modules.logging import get_logger
 
-logger = get_logger("MyClassName")  # 使用类名或模块名
+logger = get_logger("MyClassName")  # 使用类名或模块名（绑定 module 字段）
 logger.info("信息日志")
-logger.debug("调试日志", extra_context={"key": "value"})
+logger.debug("调试日志")
 logger.error("错误日志", exc_info=True)
 ```
 
@@ -660,62 +361,23 @@ logger.error("错误日志", exc_info=True)
 
 ## 测试规范
 
-- 使用 pytest 编写测试
-- 测试文件名：`test_*.py`
-- 测试函数名：`async def test_*():`
+- 使用 pytest 编写测试，测试文件 `test_*.py`，测试函数 `async def test_*():`
 - 异步测试使用 `@pytest.mark.asyncio` 装饰器
 
 **详细指南**：[测试指南](docs/development/testing-guide.md)
 
 ## 配置文件
 
-- 配置文件使用 TOML 格式
-- Collector 配置：`[collectors]`
-- Decider 配置：`[deciders]`
-- Handler 配置：`[handlers]`
-- 管道配置：`[pipelines.*]`
-- 配置目录：`config/`（多文件结构，首次运行从 Schema 自动生成）
+- 配置文件使用 TOML 格式，目录 `config/`（多文件结构，首次运行从 Schema 自动生成）
+- Collector 配置 `[collectors]` / Decider 配置 `[deciders]` / Handler 配置 `[handlers]` / 管道配置 `[pipelines.*]`
 
 ## 目录结构
 
-```
-Amaidesu/
-├── main.py              # CLI入口（参数解析、启动应用）
-├── AGENTS.md            # 本文件（AI 代理核心规则）
-├── CLAUDE.md            # Claude Code 专属规则
-├── docs/                # 项目文档（渐进式披露）
-│   ├── README.md        # 文档导航
-│   ├── getting-started.md
-│   ├── development-guide.md
-│   ├── architecture/    # 架构文档
-│   └── development/     # 开发指南
-└── src/
-    ├── modules/         # 共享模块
-    │   ├── config/      # 配置管理
-    │   ├── context/     # 上下文服务
-    │   ├── dashboard/   # Dashboard API
-    │   ├── di/          # 依赖注入
-    │   ├── events/      # 事件系统
-    │   ├── llm/         # LLM 服务
-    │   ├── logging/     # 日志
-    │   ├── mcp/         # MCP 服务
-    │   ├── prompts/     # 提示词管理
-    │   ├── services/    # 共享服务
-    │   ├── streaming/   # 流媒体
-    │   ├── tts/         # TTS 服务
-    │   └── types/       # 共享类型
-    └── stages/          # 业务阶段
-        ├── input/       # 输入阶段（Collector + Pipeline）
-        ├── decision/    # 决策阶段（Decider）
-        └── output/      # 输出阶段（Handler + Pipeline）
-```
+完整目录结构见 [3阶段架构总览 - 目录结构](docs/architecture/overview.md#目录结构)。核心布局：`src/modules/`（共享模块）+ `src/stages/`（业务阶段：input/decision/output）+ `config/`（配置）+ `docs/`（文档）。
 
 ## 通信模式
 
-项目使用 **EventBus** 作为唯一的跨阶段通信机制：
-- **事件系统（发布-订阅）**：瞬时通知、广播场景
-- 支持优先级、错误隔离、统计功能
-- 使用 CoreEvents 常量确保类型安全
+项目使用 **EventBus** 作为唯一的跨阶段通信机制（发布-订阅），支持优先级、错误隔离、统计功能，使用 CoreEvents 常量确保类型安全。
 
 ## 相关文档
 
@@ -726,6 +388,7 @@ Amaidesu/
 - [3阶段架构总览](docs/architecture/overview.md) - 3阶段架构详解
 - [数据流规则](docs/architecture/data-flow.md) - 数据流约束和规则
 - [事件系统](docs/architecture/event-system.md) - EventBus 使用指南
+- [事件命名规范](docs/architecture/event-naming-convention.md) - 事件命名规则
 
 ### 开发指南
 - [开发规范](docs/development-guide.md) - 代码风格和约定
@@ -736,4 +399,4 @@ Amaidesu/
 
 ---
 
-*最后更新：2026-07-31（OutputHandlerManager 改为直接并行调用 Handler，DISPATCHED 仅保留为监控信号）*
+*最后更新：2026-08-02（重构为纯规则文件：硬规则与高频 API 内联，操作手册收敛至 docs/，删除与 docs/ 重复的内容）*

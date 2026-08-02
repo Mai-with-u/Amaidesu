@@ -55,21 +55,29 @@ class LLMDecider:
 
 ### 反射式装配（PipelineManager / DeciderManager）
 
-`DeciderManager._instantiate_decider()` 和 `PipelineManager._instantiate_pipeline()` 通过反射 `__init__` 签名按需注入服务：
+`DeciderManager._instantiate_decider()` 和 `PipelineManager._instantiate_pipeline()` 都通过 `instantiate_with_di()`（类型匹配 DI）按需注入服务：
 
 ```python
-available_deps = {
-    "config": pipeline_config,
-    "event_bus": self.event_bus,
-    "llm_service": self._llm_service,
-    "prompt_service": self._prompt_manager,
+from src.modules.di import instantiate_with_di
+
+services_by_type = {
+    EventBus: event_bus,
+    LLMManager: llm_service,
+    PromptManager: prompt_manager,
 }
 
-sig = inspect.signature(pipeline_cls.__init__)
-for name, param in sig.parameters.items():
-    if name in available_deps:
-        kwargs[name] = available_deps[name]
+pipeline = instantiate_with_di(
+    pipeline_cls,
+    config=pipeline_config,          # __init__ 的 config 参数自动注入
+    services_by_type=services_by_type,
+)
 ```
+
+匹配规则（见 `src/modules/di/instantiation.py`）：
+- **按类型注解匹配**（非参数名）：`__init__` 参数的类型注解在 `services_by_type` 字典中查找服务
+- `Optional[X]` 自动解包为 `X`；`Union[X, Y]` 任一类型匹配即可
+- 基本类型（`Dict[str, Any]`、`int` 等）不参与注入，只通过 `config` 传入
+- 有默认值的参数在服务缺失时跳过（让默认值生效）；缺失必填服务抛 `DependencyInjectionError`
 
 每个 Pipeline 只收到自己声明的依赖，不需要的服务不会传入。
 
@@ -142,7 +150,7 @@ class PluginContext:
 - **核心层（项目内部）**：用 DI，类型完全已知
 - **插件层（未来第三方）**：用 PluginContext，框架无法预知用户需求
 
-详见 ADR-004：核心层 DI vs 插件层 Context 边界。
+> **注**：插件层 Context 是面向未来第三方扩展的设计边界。项目当前采用源码级扩展（直接改代码），插件系统已移除且不计划恢复，因此核心层一律使用构造器注入 DI，不存在运行时 PluginContext 实例。
 
 ## 决策清单
 
@@ -161,4 +169,3 @@ class PluginContext:
 ## 相关 ADR
 
 - ADR-001：Pipeline 用 DI 不用 Context
-- ADR-004：核心层 DI vs 插件层 Context 边界

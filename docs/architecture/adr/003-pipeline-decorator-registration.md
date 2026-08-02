@@ -1,5 +1,9 @@
 # ADR-003: @pipeline 装饰器注册机制
 
+- 状态：已采纳
+- 日期：2026-06-27
+- 实现提交：`5ffa6417f2c71c1e210a43e0167e9fcdb3f404f0`（refactor(pipeline): 重构管道架构，引入泛型抽象与装饰器注册机制）
+
 ## Context
 
 当前 Pipeline 注册机制存在以下问题：
@@ -50,7 +54,7 @@ class RateLimitInputPipeline(InputPipeline):
 
 - **优点**：支持第三方 pip 安装插件
 - **缺点**：项目当前是源码级扩展（修改项目代码加文件），不需要插件化
-- **否决理由**：YAGNI（参见 ADR-004 关于核心层 vs 插件层的边界）
+- **否决理由**：YAGNI
 
 ### 替代方案 C：装饰器 + 显式 register() 调用
 
@@ -88,7 +92,7 @@ class RateLimitInputPipeline(InputPipeline):
 
 ## Reversibility
 
-回滚方法：`git revert <commit-hash>`，因为：
+回滚方法：`git revert 5ffa6417f2c71c1e210a43e0167e9fcdb3f404f0`，因为：
 - 改动集中在 `src/modules/pipeline/registry.py`（新建）+ 现有 Pipeline 文件（添加装饰器）
 - 装饰器本质上是装饰（不影响类行为）
 - 旧目录扫描机制可以保留为 fallback（但用户明确要求不保留 fallback，直接删）

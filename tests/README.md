@@ -82,7 +82,7 @@ tests/
 ├── integration/                     # 集成测试
 ├── mocks/                           # Mock 对象
 │   ├── mock_decision_decider.py
-│   ├── mock_input_provider.py
+│   ├── mock_input_collector.py
 │   └── mock_output_handler.py
 └── conftest.py                      # pytest 配置和共享 fixtures
 ```

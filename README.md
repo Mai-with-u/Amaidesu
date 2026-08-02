@@ -25,54 +25,22 @@ Amaidesu!
 
 **架构状态**：✅ 核心架构重构已完成，采用 3阶段架构 + 阶段参与者系统
 
-如需了解重构前后的架构差异，可查看 [重构文档](refactor/README.md)。
-
 </div>
 
 ## 架构概述
 
 ### 3阶段架构数据流
 
-> **为什么叫"阶段"(Stage)而不是"层"(Layer)？**
->
-> 传统"层"(Layer)代表**不同的抽象层级**，如表现层→业务层→数据层，每层都有不同的抽象级别。而"阶段"(Stage)强调的是**平等的业务边界**划分：
->
-> - **层(Layer)**：有高低之分，上层调用下层，下层不知道上层存在
-> - **阶段(Stage)**：平等边界，各自包含完整的抽象层次（自己的数据模型、Collector/Decider/Handler、处理逻辑）
->
-> 每个阶段都有自己的：
-> - **数据模型**：Input → NormalizedMessage → Intent → RenderParameters
-> - **核心抽象**：InputCollector / Decider / OutputHandler
-> - **处理逻辑**：数据采集 / 决策生成 / 渲染输出
->
-> 阶段之间通过 EventBus 进行**松耦合通信**，而非直接的层级调用。这种划分允许各阶段独立演进，例如可以替换决策引擎（从 MaiBot 换成 LLM）而不影响输入输出。
+系统由 **Input（输入）→ Decision（决策）→ Output（输出）** 三个阶段组成，阶段之间通过 EventBus 松耦合通信：
 
-```mermaid
-flowchart LR
-    subgraph Input["Input 阶段"]
-        IP[InputCollector] --> |NormalizedMessage| PIP[Pipelines]
-    end
-
-    EB(EventBus)
-
-    subgraph Decision["Decision 阶段"]
-        DP[Decider] --> |Intent| OPIP[OutputPipelines]
-    end
-
-    subgraph Output["Output 阶段"]
-        OPM[OutputHandlerManager] --> OP[OutputHandlers]
-    end
-
-    Input --> |data.message| EB
-    EB --> |data.message| Decision
-    Decision --> |decision.intent| EB
-    EB --> |decision.intent| Output
-```
+- **Input 阶段**：InputCollector 采集外部数据（弹幕、语音、控制台），标准化为 NormalizedMessage，经 Pipeline 过滤后发布
+- **Decision 阶段**：Decider 将 NormalizedMessage 决策为 Intent（回复内容 + 情绪 + 动作）
+- **Output 阶段**：OutputHandlerManager 运行 OutputPipeline 后，并行调用各 active Handler 渲染（TTS、字幕、VTS、OBS 等）
 
 **数据流**：
-1. **Input 阶段**：外部数据（弹幕、语音、控制台）→ NormalizedMessage → Pipelines 过滤
-2. **Decision 阶段**：NormalizedMessage → Intent（MaiBot / LLM / 规则引擎）
-3. **Output 阶段**：Intent → 渲染输出（TTS、字幕、VTS、表情等）
+1. **Input 阶段**：外部数据（弹幕、语音、控制台）→ NormalizedMessage → InputPipelines 过滤
+2. **Decision 阶段**：NormalizedMessage → Intent（amaidesu Planner/Replyer 两阶段，可替换为 MaiBot / LLM / Command）
+3. **Output 阶段**：Intent → OutputPipeline 过滤 → 并行渲染输出（TTS、字幕、VTS、表情等）
 
 ### 核心组件
 
@@ -87,11 +55,11 @@ flowchart LR
 
 ### 阶段参与者概览
 
-- **InputCollector (8个)**：控制台、弹幕、语音识别等
-- **Decider (4个)**：MaiBot、LLM、Command、回放
-- **OutputHandler (12个)**：TTS、字幕、VTS、OBS等
+- **InputCollector (8个)**：控制台、弹幕、语音识别、模拟直播等
+- **Decider (5个)**：amaidesu（Planner/Replyer 两阶段，默认）、MaiBot、LLM、Command、回放
+- **OutputHandler (12个)**：TTS（Edge/GPT-SoVITS/Omni/VoiceBox）、字幕、VTS、OBS 等
 
-详见 [3阶段架构总览](docs/architecture/overview.md)
+架构图、完整组件清单与生命周期详见 [3阶段架构总览](docs/architecture/overview.md)。
 
 ## 安装与运行
 
@@ -102,7 +70,7 @@ flowchart LR
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 
 # 2. 克隆仓库
-git clone https://github.com/ChangingSelf/Amaidesu.git
+git clone https://github.com/Mai-with-u/Amaidesu.git
 cd Amaidesu
 
 # 3. 同步依赖
@@ -169,8 +137,6 @@ npm run dev      # → Vite 启动在 http://localhost:60315
 
 详见 [快速开始](docs/getting-started.md)
 
-详见 [快速开始](docs/getting-started.md)
-
 ## 文档导航
 
 ### 新手入门
@@ -181,12 +147,17 @@ npm run dev      # → Vite 启动在 http://localhost:60315
 - [3阶段架构总览](docs/architecture/overview.md) - 架构详解
 - [数据流规则](docs/architecture/data-flow.md) - 数据流约束
 - [事件系统](docs/architecture/event-system.md) - EventBus 使用
+- [事件命名规范](docs/architecture/event-naming-convention.md) - 事件命名规则
+- [架构决策记录](docs/architecture/adr/README.md) - ADR 决策清单
 
 ### 开发指南
 - [阶段参与者开发](docs/development/component-guide.md)
 - [管道开发](docs/development/pipeline-guide.md)
 - [提示词管理](docs/development/prompt-management.md)
+- [依赖注入](docs/development/dependency-injection.md)
 - [测试指南](docs/development/testing-guide.md)
+- [模拟直播间工具](docs/development/simulator-guide.md)
+- [文档维护规范](docs/development/documentation-guide.md)
 
 ## Git 工作流
 

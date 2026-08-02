@@ -18,7 +18,7 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 ### 2.2 克隆仓库
 
 ```bash
-git clone https://github.com/ChangingSelf/Amaidesu.git
+git clone https://github.com/Mai-with-u/Amaidesu.git
 cd Amaidesu
 ```
 
@@ -34,24 +34,41 @@ uv sync
 uv run python main.py
 ```
 
-首次运行会自动从模板生成 `config.toml` 文件。
+首次运行会自动从 Schema 生成 `config/` 目录及多文件配置（`core.toml` / `input.toml` / `decision.toml` / `output.toml` / `model.toml`）。
 
 ### 2.5 编辑配置文件
 
-打开生成的 `config.toml` 文件，填写必要的配置项：
+打开 `config/` 目录下的 `.toml` 文件，填写必要的配置项：
 
 #### LLM 配置（必需）
 
+LLM 采用 **provider + profile** 两层结构：`config/model.toml` 中 `[[llm_providers]]` 定义可复用的 API 连接，profile（`[llm]` / `[llm_fast]` / `[vlm]` 等）通过 `provider` 字段引用并覆盖模型参数：
+
 ```toml
-[llm]
-api_key = "your-api-key"        # 你的 OpenAI API Key
-base_url = "https://api.openai.com/v1"  # 或其他兼容 API 地址
-model = "gpt-4"                 # 使用的模型
+# config/model.toml
+[[llm_providers]]
+name = "deepseek"            # provider 名称（profile 中引用）
+client_type = "openai"       # 客户端类型
+base_url = "https://api.deepseek.com"
+api_key = "sk-your-key"      # 填入你的 API Key（留空会用 sk-dummy 并警告）
+
+[llm]                        # 完整对话（高质量）
+provider = "deepseek"
+model = "deepseek-chat"
+temperature = 0.2
+
+[llm_fast]                   # 快速对话（低延迟）
+provider = "deepseek"
+model = "deepseek-chat"
+temperature = 0.7
 ```
+
+> ⚠️ **注意**：`config/` 目录已在 `.gitignore` 中忽略，`model.toml` 中的 API Key **不会提交到仓库**。当前实现不读取环境变量——请直接在 `config/model.toml` 中填写明文 Key。
 
 #### 输入 Collector 配置
 
 ```toml
+# config/input.toml
 [collectors]
 enabled = ["console_input"]     # 控制台输入（测试用）
 # enabled = ["bili_danmaku"]   # B站弹幕
@@ -61,17 +78,19 @@ enabled = ["console_input"]     # 控制台输入（测试用）
 #### 输出 Handler 配置
 
 ```toml
+# config/output.toml
 [handlers]
 enabled = ["subtitle", "vts"]  # 字幕输出、VTS 控制
 # enabled = ["edge_tts"]       # Edge TTS 语音
-# enabled = ["avatar"]          # 虚拟形象
 ```
 
 #### 决策 Decider 配置
 
 ```toml
+# config/decision.toml
 [deciders]
-active = "maibot"               # 使用 MaiBot 决策
+enabled = ["amaidesu"]         # 使用 Amaidesu 决策（Planner/Replyer 两阶段）
+# enabled = ["maibot"]         # 或使用 MaiBot 决策
 ```
 
 ### 2.6 再次运行
@@ -86,16 +105,16 @@ uv run python main.py
 
 ### 3.1 主要配置段
 
-| 配置段 | 说明 |
-|--------|------|
-| `[llm]` | 标准 LLM 配置（用于高质量任务） |
-| `[llm_fast]` | 快速 LLM 配置（用于低延迟任务） |
-| `[vlm]` | 视觉语言模型配置（图像理解） |
-| `[collectors]` | 输入 Collector 列表 |
-| `[handlers]` | 输出 Handler 列表 |
-| `[deciders]` | 决策 Decider 选择 |
-| `[pipelines.*]` | 消息处理管道配置 |
-| `[logging]` | 日志配置 |
+| 配置文件 | 配置段 | 说明 |
+|---------|--------|------|
+| `model.toml` | `[[llm_providers]]` | LLM 提供商连接池（可复用） |
+| `model.toml` | `[llm]` / `[llm_fast]` / `[vlm]` / `[llm_local]` | LLM profile（引用 provider + 覆盖参数） |
+| `input.toml` | `[collectors]` | 输入 Collector 列表 |
+| `decision.toml` | `[deciders]` | 决策 Decider 列表 |
+| `output.toml` | `[handlers]` | 输出 Handler 列表 |
+| `core.toml` | `[pipelines.*]` | 消息处理管道配置 |
+| `core.toml` | `[logging]` | 日志配置 |
+| `core.toml` | `[dashboard]` | Web Dashboard 配置 |
 
 ### 3.2 阶段参与者类型
 
@@ -107,24 +126,35 @@ uv run python main.py
 
 ### 3.3 可用阶段参与者列表
 
+完整清单见 [3阶段架构总览 - 阶段参与者列表](architecture/overview.md#阶段参与者列表)，常用组件：
+
 **输入 Collector：**
 - `console_input` - 控制台输入（开发测试）
 - `bili_danmaku` - B站弹幕
 - `bili_danmaku_official` - B站官方弹幕
+- `simulated_live_stream` - 模拟直播间（调试）
 - `stt` - 语音转文字
 
 **决策 Decider：**
+- `amaidesu` - Amaidesu 决策（默认，Planner/Replyer 两阶段）
 - `maibot` - MaiBot 决策服务
 - `llm` - 直接使用 LLM 生成回复
 - `command` - 通用命令意图路由（解析 /命令 形式的消息）
+- `replay` - 回放决策（调试用）
 
 **输出 Handler：**
 - `subtitle` - 字幕显示
 - `vts` - VTS 控制
+- `vrchat` - VRChat 控制
+- `warudo` - Warudo 控制
 - `edge_tts` - Edge TTS 语音
-- `omni_tts` - GPT-SoVITS 语音
-- `avatar` - 虚拟形象
+- `gptsovits` - GPT-SoVITS 语音
+- `omni_tts` - Omni TTS 语音
+- `voicebox` - VoiceBox TTS 语音
 - `obs_control` - OBS 控制
+- `sticker` - 贴纸控制
+- `remote_stream` - 远程串流
+- `debug_console` - 调试控制台
 
 ## 4. 常用命令
 
@@ -204,7 +234,7 @@ npm run dev                     # → Vite 启动在 http://localhost:60315
 - 修改后端 Python (`src/**/*.py`) 或配置文件 (`config/*.toml`) 需要重启主程序
 - 只跑 `npm run dev` 而不跑主程序，WebSocket/API 会无法连接
 
-**配置选项**（在 `config.toml` 中）：
+**配置选项**（在 `config/core.toml` 中）：
 
 ```toml
 [dashboard]
@@ -228,12 +258,12 @@ websocket_heartbeat = 30                            # WebSocket 心跳间隔（�
 启动后，检查日志输出确保以下组件正常初始化：
 
 ```
-[Info] 阶段参与者注册完成: Collector=X, Decider=X, Handler=X
 [Info] 配置验证通过
+[Info] 核心事件注册完成，共 N 个事件
 [Info] 初始化输入Collector（Input 阶段）...
 [Info] 初始化决策Decider（Decision 阶段）...
 [Info] 初始化输出Handler管理器...
-[Info] 应用程序正在运行。
+[Info] 应用程序正在运行。按 Ctrl+C 退出
 ```
 
 如果看到错误信息，请检查：
@@ -245,4 +275,4 @@ websocket_heartbeat = 30                            # WebSocket 心跳间隔（�
 
 - 了解架构设计：[3阶段架构](architecture/overview.md)
 - 学习开发规范：[开发规范](development-guide.md)
-- 查看阶段参与者开发指南：[阶段参与者开发](development/provider-guide.md)
+- 查看阶段参与者开发指南：[阶段参与者开发](development/component-guide.md)
