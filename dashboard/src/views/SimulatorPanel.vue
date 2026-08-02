@@ -61,19 +61,49 @@
                 </el-radio-group>
               </el-form-item>
               <el-form-item v-if="params.cadence_mode === 'fixed'" label="固定间隔 (秒)">
-                <el-slider v-model="params.fixed_interval_s" :min="1" :max="60" :step="0.5" show-input />
+                <el-slider
+                  v-model="params.fixed_interval_s"
+                  :min="1"
+                  :max="60"
+                  :step="0.5"
+                  show-input
+                />
               </el-form-item>
               <el-form-item label="消息频率 (条/分)">
-                <el-slider v-model="params.base_rate_per_minute" :min="0.5" :max="30" :step="0.5" show-input />
+                <el-slider
+                  v-model="params.base_rate_per_minute"
+                  :min="0.5"
+                  :max="30"
+                  :step="0.5"
+                  show-input
+                />
               </el-form-item>
               <el-form-item label="突发倍率">
-                <el-slider v-model="params.burst_multiplier" :min="1" :max="10" :step="0.5" show-input />
+                <el-slider
+                  v-model="params.burst_multiplier"
+                  :min="1"
+                  :max="10"
+                  :step="0.5"
+                  show-input
+                />
               </el-form-item>
               <el-form-item label="路人比例">
-                <el-slider v-model="params.temp_passerby_ratio" :min="0" :max="1" :step="0.05" show-input />
+                <el-slider
+                  v-model="params.temp_passerby_ratio"
+                  :min="0"
+                  :max="1"
+                  :step="0.05"
+                  show-input
+                />
               </el-form-item>
               <el-form-item label="礼物概率">
-                <el-slider v-model="params.gift_probability" :min="0" :max="0.5" :step="0.01" show-input />
+                <el-slider
+                  v-model="params.gift_probability"
+                  :min="0"
+                  :max="0.5"
+                  :step="0.01"
+                  show-input
+                />
               </el-form-item>
               <el-form-item>
                 <el-button type="primary" size="small" @click="updateParams">更新参数</el-button>
@@ -87,7 +117,12 @@
             </template>
             <el-space wrap>
               <el-button type="warning" @click="triggerGiftRain">礼物雨 (30s)</el-button>
-              <el-input v-model="injectTopic" placeholder="输入话题" size="small" style="width: 200px" />
+              <el-input
+                v-model="injectTopic"
+                placeholder="输入话题"
+                size="small"
+                style="width: 200px"
+              />
               <el-button type="primary" @click="triggerTopicInjection">注入话题</el-button>
               <el-button @click="resetBudget">重置 Token</el-button>
             </el-space>
@@ -100,9 +135,24 @@
               <span>实时消息流 (最近 50 条)</span>
             </template>
             <div class="message-stream" ref="messageStreamRef">
-              <div v-for="(msg, i) in messageStream" :key="i" class="message-item" :class="msg.data_type">
+              <div
+                v-for="(msg, i) in messageStream"
+                :key="i"
+                class="message-item"
+                :class="msg.data_type"
+              >
                 <span class="msg-time">{{ msg.time }}</span>
-                <el-tag :type="msg.data_type === 'gift' ? 'warning' : msg.data_type === 'super_chat' ? 'danger' : ''" size="small" effect="plain">
+                <el-tag
+                  :type="
+                    msg.data_type === 'gift'
+                      ? 'warning'
+                      : msg.data_type === 'super_chat'
+                        ? 'danger'
+                        : ''
+                  "
+                  size="small"
+                  effect="plain"
+                >
                   {{ msg.data_type }}
                 </el-tag>
                 <span class="msg-nick">{{ msg.user_nickname }}</span>
@@ -285,12 +335,16 @@ function connectWebSocket() {
   const wsUrl = `${protocol}//${window.location.host}/api/v1/ws/simulator/stream`;
   ws = new WebSocket(wsUrl);
 
-  ws.onmessage = (event) => {
+  ws.onmessage = event => {
     try {
       const data = JSON.parse(event.data);
       if (data.type === 'ping') return;
       messageStream.value.unshift({
-        time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        time: new Date().toLocaleTimeString('zh-CN', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        }),
         data_type: data.type || 'text',
         user_nickname: data.user_nickname || '',
         text: data.text || '',

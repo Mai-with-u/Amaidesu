@@ -77,37 +77,37 @@
         </div>
 
         <div v-else class="events-container">
-        <div
-          v-for="event in visibleEvents"
-          :key="event.timestamp + event.type"
-          class="event-row"
-          @click="toggleEventExpand(event.timestamp + event.type)"
-        >
-          <span class="event-time mono">{{ formatTime(event.timestamp) }}</span>
-          <span class="event-type" :class="getEventClass(event.type)">{{ event.type }}</span>
-          <div class="event-data-wrapper">
-            <pre
-              class="event-data"
-              :class="{ expanded: expandedEvents.has(event.timestamp + event.type) }"
-              v-html="
-                formatEventDataHtml(event.data, expandedEvents.has(event.timestamp + event.type))
-              "
-            ></pre>
-            <span v-if="shouldShowExpand(event.data)" class="expand-hint">
-              {{ expandedEvents.has(event.timestamp + event.type) ? '点击收起' : '点击展开' }}
-            </span>
-          </div>
-          <el-button
-            v-if="getMessageId(event)"
-            class="trace-link-btn"
-            size="small"
-            type="primary"
-            link
-            @click.stop="openTrace(event)"
+          <div
+            v-for="event in visibleEvents"
+            :key="event.timestamp + event.type"
+            class="event-row"
+            @click="toggleEventExpand(event.timestamp + event.type)"
           >
-            🔍 链路
-          </el-button>
-        </div>
+            <span class="event-time mono">{{ formatTime(event.timestamp) }}</span>
+            <span class="event-type" :class="getEventClass(event.type)">{{ event.type }}</span>
+            <div class="event-data-wrapper">
+              <pre
+                class="event-data"
+                :class="{ expanded: expandedEvents.has(event.timestamp + event.type) }"
+                v-html="
+                  formatEventDataHtml(event.data, expandedEvents.has(event.timestamp + event.type))
+                "
+              ></pre>
+              <span v-if="shouldShowExpand(event.data)" class="expand-hint">
+                {{ expandedEvents.has(event.timestamp + event.type) ? '点击收起' : '点击展开' }}
+              </span>
+            </div>
+            <el-button
+              v-if="getMessageId(event)"
+              class="trace-link-btn"
+              size="small"
+              type="primary"
+              link
+              @click.stop="openTrace(event)"
+            >
+              🔍 链路
+            </el-button>
+          </div>
         </div>
       </div>
     </section>
@@ -129,12 +129,7 @@
         </div>
 
         <!-- 错误/未找到 -->
-        <el-result
-          v-else-if="traceError"
-          icon="warning"
-          title="加载失败"
-          :sub-title="traceError"
-        >
+        <el-result v-else-if="traceError" icon="warning" title="加载失败" :sub-title="traceError">
           <template #extra>
             <el-button type="primary" @click="loadTrace(currentTraceId)">重试</el-button>
           </template>
@@ -148,7 +143,9 @@
             <div class="dt-card">
               <div class="dt-card-header">
                 <span class="dt-card-title">📩 消息</span>
-                <el-tag size="small" type="primary" effect="plain">{{ currentTrace.message.source }}</el-tag>
+                <el-tag size="small" type="primary" effect="plain">{{
+                  currentTrace.message.source
+                }}</el-tag>
               </div>
               <div class="dt-message-text">{{ currentTrace.message.text }}</div>
               <div class="dt-message-meta">
@@ -162,7 +159,9 @@
 
           <!-- 箭头 -->
           <div class="dt-arrow">
-            <span class="dt-arrow-label">{{ formatDrawerLatency(currentTrace.decision?.elapsed_ms) }}</span>
+            <span class="dt-arrow-label">{{
+              formatDrawerLatency(currentTrace.decision?.elapsed_ms)
+            }}</span>
           </div>
 
           <!-- 决策 -->
@@ -178,11 +177,15 @@
               <template v-if="currentTrace.decision">
                 <div class="dt-speech">💬 {{ currentTrace.decision.speech }}</div>
                 <div v-if="currentTrace.decision.emotion" class="dt-meta-row">
-                  😊 {{ currentTrace.decision.emotion.name }} ({{ currentTrace.decision.emotion.intensity.toFixed(2) }})
+                  😊 {{ currentTrace.decision.emotion.name }} ({{
+                    currentTrace.decision.emotion.intensity.toFixed(2)
+                  }})
                 </div>
                 <div v-if="currentTrace.decision.action" class="dt-meta-row">
                   🎬 <code>{{ currentTrace.decision.action.name }}</code>
-                  <span v-if="Object.keys(currentTrace.decision.action.parameters).length">({{ JSON.stringify(currentTrace.decision.action.parameters) }})</span>
+                  <span v-if="Object.keys(currentTrace.decision.action.parameters).length"
+                    >({{ JSON.stringify(currentTrace.decision.action.parameters) }})</span
+                  >
                 </div>
               </template>
               <div v-else class="dt-empty-hint">未生成决策（消息被过滤）</div>
@@ -231,10 +234,22 @@
           <!-- 汇总 -->
           <div class="dt-summary">
             <div class="dt-summary-main">
-              <span>总耗时 <strong>{{ formatDrawerLatency(currentTrace.total_elapsed_ms) }}</strong></span>
+              <span
+                >总耗时
+                <strong>{{ formatDrawerLatency(currentTrace.total_elapsed_ms) }}</strong></span
+              >
               <span class="dt-divider">|</span>
-              <span>消息来源 <el-tag size="small" type="info" effect="plain">{{ currentTrace.message.source }}</el-tag></span>
-              <span v-if="currentTrace.message.user_nickname || currentTrace.message.user_id" class="dt-divider">|</span>
+              <span
+                >消息来源
+                <el-tag size="small" type="info" effect="plain">{{
+                  currentTrace.message.source
+                }}</el-tag></span
+              >
+              <span
+                v-if="currentTrace.message.user_nickname || currentTrace.message.user_id"
+                class="dt-divider"
+                >|</span
+              >
               <span v-if="currentTrace.message.user_nickname || currentTrace.message.user_id">
                 用户 {{ currentTrace.message.user_nickname || currentTrace.message.user_id }}
               </span>
@@ -242,7 +257,12 @@
             <div class="dt-summary-id">
               <span class="dt-summary-label">消息 ID</span>
               <code class="dt-full-id">{{ currentTrace.message_id }}</code>
-              <el-button size="small" type="primary" link @click="copyText(currentTrace.message_id)">
+              <el-button
+                size="small"
+                type="primary"
+                link
+                @click="copyText(currentTrace.message_id)"
+              >
                 📋 复制
               </el-button>
             </div>
@@ -463,7 +483,11 @@ function openTrace(event: { type: string; data: Record<string, unknown> }) {
 // Trace 抽屉内的时间/延迟格式化
 function formatDrawerTime(tsMs: number): string {
   if (!tsMs) return '';
-  return new Date(tsMs).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  return new Date(tsMs).toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
 }
 
 function formatDrawerLatency(ms: number | undefined | null): string {
@@ -735,9 +759,15 @@ onUnmounted(() => {
   margin-top: 14px;
 }
 
-.dt-node.input .dt-dot { background: var(--color-primary); }
-.dt-node.decision .dt-dot { background: var(--color-warning); }
-.dt-node.outputs .dt-dot { background: var(--color-success); }
+.dt-node.input .dt-dot {
+  background: var(--color-primary);
+}
+.dt-node.decision .dt-dot {
+  background: var(--color-warning);
+}
+.dt-node.outputs .dt-dot {
+  background: var(--color-success);
+}
 
 .dt-card {
   flex: 1;

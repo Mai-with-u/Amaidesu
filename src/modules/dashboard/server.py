@@ -147,7 +147,7 @@ class DashboardServer:
                     "name": "Amaidesu Dashboard API",
                     "version": "1.0.0",
                     "docs": "/docs",
-                    "message": "前端未构建（dashboard/dist/ 不存在），开发模式请先执行 'cd dashboard && npm run dev' 并访问 http://localhost:60315",
+                    "message": "前端未构建（dashboard/dist/ 不存在），开发模式请先执行 'cd dashboard && pnpm run dev' 并访问 http://localhost:60315",
                 }
 
             self.logger.info("前端未构建，仅 API 模式运行")

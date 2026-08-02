@@ -101,18 +101,18 @@ uv run python main.py --filter EdgeTTSHandler SubtitleHandler
 
 | 端口 | 模式 | 前置条件 | 访问入口 | 适合场景 |
 |------|------|---------|---------|---------|
-| **60214** | 生产模式 | 需先 `npm run build` 生成 `dashboard/dist/` | http://127.0.0.1:60214 | 最终部署 / 给非开发者使用 |
+| **60214** | 生产模式 | 需先 `pnpm run build` 生成 `dashboard/dist/` | http://127.0.0.1:60214 | 最终部署 / 给非开发者使用 |
 | **60315** | 开发模式 | 需同时运行后端（端口 60214） | http://localhost:60315 | 前端开发 / 调样式 / HMR 热更新 |
 
 #### 方式一：生产模式（单进程）
 
 ```bash
-cd dashboard && npm run build   # 首次或前端改动后执行一次
+cd dashboard && pnpm run build   # 首次或前端改动后执行一次
 uv run python main.py           # 一条命令搞定：后端 + 静态前端都在 60214
 # 浏览器访问 http://127.0.0.1:60214
 ```
 
-**注意**：未执行 `npm run build` 时，60214 仅提供 API（GET / 返回 JSON），不会显示 WebUI。
+**注意**：未执行 `pnpm run build` 时，60214 仅提供 API（GET / 返回 JSON），不会显示 WebUI。
 
 #### 方式二：开发模式（双进程）
 
@@ -123,8 +123,8 @@ uv run python main.py
 
 # 终端 2：启动 Vite 开发服务器（HMR 热更新）
 cd dashboard
-npm install      # 首次需要
-npm run dev      # → Vite 启动在 http://localhost:60315
+pnpm install      # 首次需要
+pnpm run dev      # → Vite 启动在 http://localhost:60315
 ```
 
 **浏览器访问 http://localhost:60315**（不是 5173、不是 60214）。
@@ -133,7 +133,7 @@ npm run dev      # → Vite 启动在 http://localhost:60315
 - Vite 自动代理 `/api` 和 `/ws` 请求到后端 60214
 - 修改 `dashboard/src/**` 下的 .vue / .ts / .css 文件后浏览器自动热更新（无需刷新）
 - 修改 `src/**/*.py`（后端）或 `config/*.toml` 需要重启主程序
-- 只跑 `npm run dev` 而不跑 `uv run python main.py` 会因 WebSocket/API 无法连接而无法使用
+- 只跑 `pnpm run dev` 而不跑 `uv run python main.py` 会因 WebSocket/API 无法连接而无法使用
 
 详见 [快速开始](docs/getting-started.md)
 

@@ -15,7 +15,9 @@
           <h1 class="page-title">{{ isDetailMode ? '消息链路追踪' : '链路追踪' }}</h1>
         </div>
         <p class="page-subtitle">
-          {{ isDetailMode ? '查看单条消息从输入到输出的完整处理链路' : '查看最近消息的全链路处理过程' }}
+          {{
+            isDetailMode ? '查看单条消息从输入到输出的完整处理链路' : '查看最近消息的全链路处理过程'
+          }}
         </p>
       </div>
       <div class="header-actions">
@@ -36,22 +38,14 @@
       </div>
 
       <!-- 错误 -->
-      <el-result
-        v-else-if="listError"
-        icon="error"
-        title="加载失败"
-        :sub-title="listError"
-      >
+      <el-result v-else-if="listError" icon="error" title="加载失败" :sub-title="listError">
         <template #extra>
           <el-button type="primary" @click="fetchList">重试</el-button>
         </template>
       </el-result>
 
       <!-- 空状态 -->
-      <el-empty
-        v-else-if="traces.length === 0"
-        description="暂无链路数据，等待第一条消息..."
-      />
+      <el-empty v-else-if="traces.length === 0" description="暂无链路数据，等待第一条消息..." />
 
       <!-- 列表表格 -->
       <div v-else class="trace-list">
@@ -210,9 +204,7 @@
                   <el-icon><Promotion /></el-icon>
                   输出 — Output 阶段
                 </span>
-                <el-tag size="small" type="success">
-                  {{ trace.outputs.length }} 个 Handler
-                </el-tag>
+                <el-tag size="small" type="success"> {{ trace.outputs.length }} 个 Handler </el-tag>
               </div>
             </template>
 
@@ -718,7 +710,9 @@ onUnmounted(() => {
 
 .node-card {
   border-radius: var(--radius-lg);
-  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+  transition:
+    transform var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
 .node-card:hover {

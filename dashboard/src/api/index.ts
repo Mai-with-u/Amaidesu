@@ -141,9 +141,14 @@ export const simulatorApi = {
   getPersonas: () => api.get<SimulatorPersona[]>('/simulator/personas'),
   start: () => api.post<{ status: string }>('/simulator/start'),
   stop: () => api.post<{ status: string }>('/simulator/stop'),
-  updateParams: (params: Record<string, unknown>) => api.post<{ status: string; params: Record<string, unknown> }>('/simulator/params', params),
-  triggerGiftRain: (duration_s: number = 30) => api.post<{ status: string; duration_s: number }>('/simulator/trigger/gift_rain', { duration_s }),
-  triggerTopicInjection: (topic: string) => api.post<{ status: string; topic: string }>('/simulator/trigger/topic_injection', { topic }),
+  updateParams: (params: Record<string, unknown>) =>
+    api.post<{ status: string; params: Record<string, unknown> }>('/simulator/params', params),
+  triggerGiftRain: (duration_s: number = 30) =>
+    api.post<{ status: string; duration_s: number }>('/simulator/trigger/gift_rain', {
+      duration_s,
+    }),
+  triggerTopicInjection: (topic: string) =>
+    api.post<{ status: string; topic: string }>('/simulator/trigger/topic_injection', { topic }),
   resetTokenBudget: () => api.post<{ status: string }>('/simulator/reset_token_budget'),
 };
 
