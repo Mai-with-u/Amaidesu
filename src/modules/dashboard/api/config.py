@@ -68,6 +68,29 @@ def _resolve_section(key: str) -> str:
     return key.split(".", 1)[0]
 
 
+def _find_empty_key(value: Any, path: str = "") -> Optional[str]:
+    """递归查找 value 中嵌套的空 key（空字符串或纯空白），返回其字段路径；无则返回 None。
+
+    tomlkit 序列化时遇到空 key 会抛笼统的 "Empty key" 错误，无法定位具体字段。
+    此函数在写入前提前校验，返回可定位的路径（如 ``collectors.xxx.\"\"``）。
+    """
+    if isinstance(value, dict):
+        for k, v in value.items():
+            key_str = str(k)
+            key_path = f"{path}.{key_str}" if path else key_str
+            if not key_str.strip():
+                return key_path
+            sub = _find_empty_key(v, key_path)
+            if sub is not None:
+                return sub
+    elif isinstance(value, list):
+        for i, v in enumerate(value):
+            sub = _find_empty_key(v, f"{path}[{i}]" if path else f"[{i}]")
+            if sub is not None:
+                return sub
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Response models
 # ---------------------------------------------------------------------------
@@ -549,6 +572,15 @@ async def update_config(request: ConfigUpdateRequest, server: ServerDep) -> Conf
             success=False,
             message="Config file path not available",
             target_file=None,
+        )
+
+    # 校验 value 中不含空 key（嵌套），避免 tomlkit 序列化时报笼统的 "Empty key" 错误
+    empty_key_path = _find_empty_key(request.value)
+    if empty_key_path is not None:
+        return ConfigUpdateResponse(
+            success=False,
+            message=f"配置值包含空键: '{empty_key_path}'（位于 {request.key}，请移除空白键后重试）",
+            target_file=_path_basename(config_path),
         )
 
     try:

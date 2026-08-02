@@ -23,7 +23,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict
 
 import pytest
 
@@ -525,6 +524,78 @@ class TestPatchConfigEndpoint:
         assert "u1" in (config_dir / "input.toml").read_text(encoding="utf-8")
         assert "deciders.llm" in (config_dir / "decision.toml").read_text(encoding="utf-8")
         assert "40" in (config_dir / "output.toml").read_text(encoding="utf-8")
+
+
+# ===========================================================================
+# 3b. PATCH /api/v1/config — 空键校验 (issue #69 #7)
+# ===========================================================================
+
+
+class TestPatchConfigEmptyKeyValidation:
+    """PATCH 写入嵌套 dict 值时，必须拒绝空键并返回具体字段路径"""
+
+    def test_patch_rejects_top_level_empty_key(self, client, config_dir):
+        """value 为 {'': 'x'} 时拒绝，且不写入文件"""
+        resp = client.patch(
+            "/api/v1/config",
+            json={"key": "persona.custom", "value": {"": "x"}},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is False
+        assert "空键" in body["message"]
+        # 不得写入文件
+        core_content = (config_dir / "core.toml").read_text(encoding="utf-8")
+        assert "custom" not in core_content
+
+    def test_patch_rejects_nested_empty_key_with_path(self, client, config_dir):
+        """嵌套 dict 中的空键必须返回完整字段路径"""
+        resp = client.patch(
+            "/api/v1/config",
+            json={"key": "persona.custom", "value": {"sub": {"": "x"}}},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is False
+        assert "sub." in body["message"]
+
+    def test_patch_rejects_whitespace_key(self, client, config_dir):
+        """纯空白键也应被拒绝"""
+        resp = client.patch(
+            "/api/v1/config",
+            json={"key": "persona.custom", "value": {" ": "x"}},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is False
+        assert "空键" in body["message"]
+
+    def test_patch_rejects_empty_key_in_list(self, client, config_dir):
+        """列表元素中的 dict 含空键也应被拒绝"""
+        resp = client.patch(
+            "/api/v1/config",
+            json={"key": "persona.custom", "value": [{"ok": 1}, {"": 2}]},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is False
+        assert "[1]" in body["message"]
+
+    def test_patch_accepts_valid_nested_dict(self, client, config_dir):
+        """合法嵌套 dict 仍可正常写入"""
+        resp = client.patch(
+            "/api/v1/config",
+            json={"key": "persona.custom", "value": {"name": "麦麦", "age": 18}},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is True
+
+        from src.modules.config.toml_utils import load_toml_with_comments
+
+        doc = load_toml_with_comments(str(config_dir / "core.toml"))
+        assert doc["persona"]["custom"]["name"] == "麦麦"
+        assert doc["persona"]["custom"]["age"] == 18
 
 
 # ===========================================================================
