@@ -117,13 +117,18 @@ class Planner:
         batch: List[Any],
         *,
         forced: bool = False,
+        proactive: bool = False,
     ) -> Optional[DecisionPlan]:
         """对一批弹幕做战术决策，产出 DecisionPlan。
 
         Args:
-            batch: 本批弹幕列表（``NormalizedMessage`` 或鸭子类型）
+            batch: 本批弹幕列表（``NormalizedMessage`` 或鸭子类型）。允许为空列表：
+                当 ``proactive=True`` 时，模板会基于房间状态独立判断是否主动开口。
             forced: 是否为强制回应批次（SC / 礼物 / 上舰等）。会透传到 prompt 的
                 ``$forced`` 变量，影响 LLM 的 should_reply 判断。
+            proactive: 是否为主动发言触发（由 ``ProactiveTrigger`` 在冷场或定时间隔
+                触发时调用）。会透传到 prompt 的 ``$proactive`` 变量，提示 LLM 本批
+                弹幕可能为空、需基于房间状态决定是否主动开口。
 
         Returns:
             DecisionPlan：解析成功时返回；LLM 异常 / 脏 JSON / 调用失败时返回 None，
@@ -136,13 +141,14 @@ class Planner:
         action_list = self._get_action_list()
 
         # 2. 渲染 prompt（★ 无 persona 变量）
-        #    forced 透传为字符串（"true"/"false"），对齐模板中的文档约定
+        #    forced / proactive 透传为字符串（"true"/"false"），对齐模板中的文档约定
         try:
             prompt = self._prompt_service.render_safe(
                 self.TEMPLATE_NAME,
                 room_state=room_state_text,
                 danmaku_batch=danmaku_text,
                 forced=str(forced).lower(),
+                proactive=str(proactive).lower(),
                 action_list=action_list,
             )
         except Exception as e:

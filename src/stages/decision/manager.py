@@ -385,6 +385,40 @@ class DeciderManager:
         except Exception as e:
             self.logger.error(f"Decider '{name}' 触发决策失败: {e}", exc_info=True)
 
+    async def trigger_proactive(self, topic_hint: Optional[str] = None) -> List[str]:
+        """
+        转发主动发言触发到所有实现了 trigger_proactive 接口的 Decider
+
+        该方法作为主动发言的外部入口（由 Dashboard API 等调用）：
+        - 遍历 self._deciders，对实现了 trigger_proactive 的 Decider 发起调用
+        - 未实现该接口的 Decider 静默跳过（鸭子类型兼容）
+        - 单个 Decider 抛异常时隔离并记录，不影响其他 Decider（与 _safe_decide 一致）
+        - topic_hint 仅作为可选提示透传给 Decider，不在本方法做内容处理
+
+        Args:
+            topic_hint: 可选的话题提示，仅透传给 Decider（用于日志/未来上下文注入）
+
+        Returns:
+            实际接收到触发调用的 Decider 名称列表（供 API 层日志/响应）
+        """
+        triggered: List[str] = []
+
+        if not self._deciders:
+            self.logger.warning("当前未设置任何 Decider，跳过主动发言转发")
+            return triggered
+
+        for name, decider in self._deciders.items():
+            if not hasattr(decider, "trigger_proactive"):
+                continue
+            try:
+                await decider.trigger_proactive(topic_hint)
+                triggered.append(name)
+            except Exception as e:
+                self.logger.error(f"Decider '{name}' 主动发言触发失败: {e}", exc_info=True)
+
+        self.logger.info(f"触发主动发言: {len(triggered)} 个 Decider: {triggered}")
+        return triggered
+
     async def switch_decider(self, decider_name: str, config: Dict[str, Any]) -> None:
         """
         切换决策Decider（向后兼容方法）

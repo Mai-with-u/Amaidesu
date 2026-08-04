@@ -16,6 +16,7 @@ from src.modules.dashboard.api import (
     llm,
     maibot,
     messages,
+    proactive,
     simulator,
     system,
     traces,
@@ -42,6 +43,7 @@ def create_app() -> FastAPI:
     app.include_router(events.router, prefix="/api/v1", tags=["Events"])
     app.include_router(traces.router, prefix="/api/v1", tags=["Traces"])
     app.include_router(simulator.router, prefix="/api/v1", tags=["Simulator"])
+    app.include_router(proactive.router, prefix="/api/v1", tags=["Proactive"])
 
     return app
 

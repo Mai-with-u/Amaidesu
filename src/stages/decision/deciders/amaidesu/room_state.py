@@ -108,6 +108,11 @@ class RoomState:
         self._topic_summary_at_ms: int = 0
         # 最近一条弹幕到达时刻（不受滑动窗口裁剪影响，用于冷场判定）
         self._last_message_ms: Optional[int] = None
+        # 最近一次主播主动发言时刻（与弹幕并列但互不影响；
+        # 供 ProactiveTrigger 的 min_interval 频率限制使用）
+        self._last_speech_ms: Optional[int] = None
+        # 累计主动发言次数（用于 max_per_hour 频率限制统计）
+        self._speech_count: int = 0
 
     # ------------------------------------------------------------------
     # 时钟注入
@@ -242,6 +247,42 @@ class RoomState:
             return True
         ts = self._resolve_now(now_ms)
         return (ts - self._last_message_ms) > cold_timeout_ms
+
+    # ------------------------------------------------------------------
+    # 主动发言时刻跟踪（供 ProactiveTrigger 使用）
+    # ------------------------------------------------------------------
+
+    def record_speech(self, now_ms: Optional[int] = None) -> None:
+        """记录一次主播主动发言（由 AmaidesuDecider 在发布 Intent 后调用）
+
+        与 ``update()``（弹幕）并列：``update`` 更新 ``_last_message_ms``，
+        ``record_speech`` 更新 ``_last_speech_ms``，两者互不影响。
+        冷场判定仍只看弹幕（``_last_message_ms``），主动发言不重置冷场计时器。
+
+        Args:
+            now_ms: 发言时刻（Unix 毫秒）。None 时使用真实时钟。
+        """
+        ts = self._resolve_now(now_ms)
+        self._last_speech_ms = ts
+        self._speech_count += 1
+
+    @property
+    def last_speech_ms(self) -> Optional[int]:
+        """最近一次主动发言时刻（Unix 毫秒），未发言时为 None
+
+        注意：与 ``_last_message_ms``（弹幕时刻）并列，二者独立。
+        ProactiveTrigger 用此字段实现 ``min_interval_ms`` 频率限制，
+        避免主播刚刚说完话立刻又被触发。
+        """
+        return self._last_speech_ms
+
+    @property
+    def speech_count(self) -> int:
+        """累计主动发言次数（自进程启动以来）
+
+        供 ProactiveTrigger 的 ``max_per_hour`` 频率限制统计使用。
+        """
+        return self._speech_count
 
     # ------------------------------------------------------------------
     # SC / 礼物 / 上舰 队列

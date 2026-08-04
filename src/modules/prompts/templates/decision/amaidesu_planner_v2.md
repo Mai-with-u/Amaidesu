@@ -6,6 +6,7 @@ variables:
   - room_state
   - danmaku_batch
   - forced
+  - proactive
 author: Amaidesu
 tags: [decision, live, vtuber, danmaku, planner, two-stage]
 ---
@@ -40,6 +41,14 @@ forced = $forced
 
 > `forced=true` 表示这批弹幕中包含**必须回应**的事件（典型场景：SC 醒目留言、礼物、上舰）。此时默认 `should_reply=true`，除非内容本身违反下面的"恶意内容处置原则"。
 > `forced=false` 表示本批是普通弹幕流，按常规决策原则判断即可。
+
+## 主动发言标志
+
+proactive = $proactive
+
+> `proactive=true` 表示本次是**主播主动发言机会**（无弹幕输入，可能因冷场/定时/运营指令触发）。
+> 此时 `danmaku_batch` 通常为"（本批无弹幕）"，请基于 `room_state` 中的话题摘要判断是否值得主动开口；
+> 若无值得聊的话题，`should_reply=false` 完全合理。
 
 # ④ 决策原则层（直播适配核心）
 
