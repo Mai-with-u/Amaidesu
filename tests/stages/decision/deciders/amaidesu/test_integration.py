@@ -615,3 +615,118 @@ class TestRoomStateInjectedIntoPlanner:
         assert "高热" in room_state_text, (
             f"预推 10 条密集弹幕后热度应为 high（高热），实际 room_state: {room_state_text!r}"
         )
+
+
+# ==================== 测试 6：会话历史透传到 Planner/Replyer ====================
+
+
+class TestHistoryPassedToPlannerAndReplyer:
+    """ContextService 会话历史应通过 ``history`` 参数透传到 Planner/Replyer。
+
+    契约：
+    - 注入真实 ContextService 并预存历史 → Planner.plan / Replyer.generate
+      收到 ``history`` 参数，且值等于 ``context_service.get_history(...)`` 返回；
+    - 未注入 context_service → ``history=None``，不抛异常，链路正常。
+    """
+
+    @staticmethod
+    def _patch_plan_and_generate(decider: AmaidesuDecider) -> tuple[AsyncMock, AsyncMock]:
+        """用 AsyncMock 替换 ``_planner.plan`` / ``_replyer.generate`` 捕获调用参数。"""
+        plan_mock = AsyncMock(return_value=None)
+        generate_mock = AsyncMock(return_value=None)
+        decider._planner.plan = plan_mock
+        decider._replyer.generate = generate_mock
+        return plan_mock, generate_mock
+
+    @pytest.mark.asyncio
+    async def test_history_passed_to_planner_when_context_service_injected(self) -> None:
+        """ContextService 注入且有历史时，Planner.plan 收到 ``history=get_history 返回值``。"""
+        ctx = ContextService()
+        await ctx.initialize()
+
+        # 预存一条 USER + 一条 ASSISTANT（占位历史）
+        await ctx.add_message(session_id="live", role=MessageRole.USER, content="之前弹幕")
+        await ctx.add_message(session_id="live", role=MessageRole.ASSISTANT, content="之前回复")
+
+        decider = build_decider(
+            context_service=ctx,
+            config={"force_data_types": ["text"], "history_limit": 5},
+            llm_responses=[],
+        )
+
+        plan_mock, generate_mock = self._patch_plan_and_generate(decider)
+
+        await decider.decide(make_message("主播在吗？", nickname="新人"))
+        await decider._maybe_flush()
+
+        # Planner.plan 被调用一次，history 等于 ctx.get_history 返回值
+        plan_mock.assert_awaited_once()
+        history_arg = plan_mock.await_args.kwargs["history"]
+        assert history_arg is not None
+        assert len(history_arg) == 2
+        assert history_arg[0].role == MessageRole.USER
+        assert history_arg[0].content == "之前弹幕"
+        assert history_arg[1].role == MessageRole.ASSISTANT
+        assert history_arg[1].content == "之前回复"
+
+        # 因为 plan_mock 返回 None → should_reply=False → generate 不应被调用
+        generate_mock.assert_not_awaited()
+
+        await ctx.cleanup()
+
+    @pytest.mark.asyncio
+    async def test_history_passed_to_replyer_when_plan_should_reply(self) -> None:
+        """plan.should_reply=True 时，history 也透传到 Replyer.generate。"""
+        ctx = ContextService()
+        await ctx.initialize()
+
+        await ctx.add_message(session_id="live", role=MessageRole.USER, content="hello")
+
+        decider = build_decider(
+            context_service=ctx,
+            config={"force_data_types": ["text"], "history_limit": 3},
+            llm_responses=[],
+        )
+
+        # 替换 plan_mock 为返回 should_reply=True 的对象
+        plan_obj = MagicMock()
+        plan_obj.should_reply = True
+        plan_obj.confidence = 0.8
+        plan_obj.target = "all"
+        plan_mock = AsyncMock(return_value=plan_obj)
+        generate_mock = AsyncMock(return_value=None)
+        decider._planner.plan = plan_mock
+        decider._replyer.generate = generate_mock
+
+        await decider.decide(make_message("主播好", nickname="新人"))
+        await decider._maybe_flush()
+
+        # Planner + Replyer 都收到 history（非空列表）
+        plan_mock.assert_awaited_once()
+        generate_mock.assert_awaited_once()
+        plan_history = plan_mock.await_args.kwargs["history"]
+        gen_history = generate_mock.await_args.kwargs["history"]
+        assert plan_history is not None
+        assert len(plan_history) == 1
+        # Planner 与 Replyer 收到的是同一份 history（同一 list 对象）
+        assert plan_history is gen_history
+
+        await ctx.cleanup()
+
+    @pytest.mark.asyncio
+    async def test_history_is_none_when_no_context_service(self) -> None:
+        """未注入 context_service 时，history=None，链路不崩溃。"""
+        decider = build_decider(
+            config={"force_data_types": ["text"]},
+            llm_responses=[],
+        )
+        assert decider._context_service is None
+
+        plan_mock, generate_mock = self._patch_plan_and_generate(decider)
+
+        # 不应抛异常
+        await decider.decide(make_message("弹幕", nickname="观众"))
+        await decider._maybe_flush()
+
+        plan_mock.assert_awaited_once()
+        assert plan_mock.await_args.kwargs["history"] is None

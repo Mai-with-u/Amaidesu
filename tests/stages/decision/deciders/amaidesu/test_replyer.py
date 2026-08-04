@@ -1,6 +1,6 @@
 """Replyer 单元测试（双阶段决策器的 Stage 2）。
 
-覆盖（≥7 个用例）：
+覆盖（≥13 个用例）：
 - 基础生成：mock LLM → 生成 Intent
 - 人设注入：prompt 渲染含 personality / style_constraints / bot_name 变量
 - 客户端选择：client_type == "llm"（replyer_client，与 Planner 分离）
@@ -8,6 +8,9 @@
 - 情绪降级：非法 emotion → neutral
 - 动作白名单：非法 action → 丢弃 action，保留 speech
 - LLM 异常静默：LLM 抛异常 → 返回 None（silent 降级，不发布事件）
+- 会话历史注入：默认 / None / [] 都走占位
+- 会话历史渲染：字符串 role / Enum role 都正确取 .value
+- 历史注入下生成链路不被破坏
 
 人设分离承诺：Replyer 负责注入人设（Planner 零人设的另一半）。
 """
@@ -15,6 +18,7 @@
 from __future__ import annotations
 
 import json
+from enum import Enum
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock
 
@@ -244,3 +248,123 @@ class TestReplyerConfigClient:
         await r.generate(plan, [], persona)
 
         assert llm.chat.await_args.kwargs.get("client_type") == "vlm"
+
+
+class TestReplyerHistoryInjection:
+    """会话历史注入：让 Replyer 看到自己最近说过的话（反句式重复）。
+
+    契约：
+    - generate(..., history=None) 时 render_safe 收到 conversation_history=占位文本；
+    - 传非空 history 时按 role/content 行渲染（role 可能是枚举，用 .value 取值）；
+    - 现有调用（不传 history）默认走占位分支，行为不变。
+    """
+
+    @pytest.mark.asyncio
+    async def test_replyer_default_history_is_placeholder(self) -> None:
+        """不传 history → render_safe 收到 conversation_history=（暂无对话历史）。"""
+        r, _llm, prompt, _eb = _make_replyer(llm_return=_ok_payload())
+        plan = _make_plan()
+        persona = {"bot_name": "爱德丝", "personality": "p", "style_constraints": "s"}
+
+        await r.generate(plan, [], persona)
+
+        kwargs = prompt.render_safe.call_args.kwargs
+        assert "conversation_history" in kwargs
+        assert kwargs["conversation_history"] == "（暂无对话历史）"
+
+    @pytest.mark.asyncio
+    async def test_replyer_history_none_is_placeholder(self) -> None:
+        """显式传 history=None → render_safe 收到的 conversation_history 仍是占位文本。"""
+        r, _llm, prompt, _eb = _make_replyer(llm_return=_ok_payload())
+        plan = _make_plan()
+        persona = {"bot_name": "爱德丝", "personality": "p", "style_constraints": "s"}
+
+        await r.generate(plan, [], persona, history=None)
+
+        kwargs = prompt.render_safe.call_args.kwargs
+        assert kwargs["conversation_history"] == "（暂无对话历史）"
+
+    @pytest.mark.asyncio
+    async def test_replyer_history_empty_list_is_placeholder(self) -> None:
+        """传空 history=[] → 占位文本（与 None 等价），不会渲染空字符串。"""
+        r, _llm, prompt, _eb = _make_replyer(llm_return=_ok_payload())
+        plan = _make_plan()
+        persona = {"bot_name": "爱德丝", "personality": "p", "style_constraints": "s"}
+
+        await r.generate(plan, [], persona, history=[])
+
+        kwargs = prompt.render_safe.call_args.kwargs
+        assert kwargs["conversation_history"] == "（暂无对话历史）"
+
+    @pytest.mark.asyncio
+    async def test_replyer_history_string_roles_render(self) -> None:
+        """role 是字符串 + content 是字符串的简单鸭子类型，按 user/assistant 行渲染、从旧到新拼接。"""
+
+        class _Msg:
+            def __init__(self, role: str, content: str) -> None:
+                self.role = role
+                self.content = content
+
+        history = [
+            _Msg("user", "主播练什么？"),
+            _Msg("assistant", "练吉他练吉他，开什么玩笑"),
+            _Msg("user", "加油！"),
+        ]
+        r, _llm, prompt, _eb = _make_replyer(llm_return=_ok_payload())
+        plan = _make_plan()
+        persona = {"bot_name": "爱德丝", "personality": "p", "style_constraints": "s"}
+
+        await r.generate(plan, [], persona, history=history)
+
+        kwargs = prompt.render_safe.call_args.kwargs
+        rendered = kwargs["conversation_history"]
+        # 行序：user → assistant → user，换行拼接
+        assert rendered == "user: 主播练什么？\nassistant: 练吉他练吉他，开什么玩笑\nuser: 加油！"
+
+    @pytest.mark.asyncio
+    async def test_replyer_history_enum_role_uses_value(self) -> None:
+        """role 是 Enum（如 MessageRole）→ getattr(role, "value", str(role)) 取值，不要 str(Enum)。"""
+
+        class _Role(Enum):
+            USER = "user"
+            ASSISTANT = "assistant"
+
+        class _Msg:
+            def __init__(self, role: _Role, content: str) -> None:
+                self.role = role
+                self.content = content
+
+        history = [
+            _Msg(_Role.USER, "在吗"),
+            _Msg(_Role.ASSISTANT, "在的在的，今天练个新曲子"),
+        ]
+        r, _llm, prompt, _eb = _make_replyer(llm_return=_ok_payload())
+        plan = _make_plan()
+        persona = {"bot_name": "爱德丝", "personality": "p", "style_constraints": "s"}
+
+        await r.generate(plan, [], persona, history=history)
+
+        rendered = prompt.render_safe.call_args.kwargs["conversation_history"]
+        # 必须解析出 "user" / "assistant"，而不是 "Role.USER" / "Role.ASSISTANT"
+        assert rendered.startswith("user: 在吗")
+        assert "assistant: 在的在的" in rendered
+        assert "Role." not in rendered
+
+    @pytest.mark.asyncio
+    async def test_replyer_history_generation_still_works(self) -> None:
+        """传非空 history 时 generate() 仍能正常生成 Intent（不破坏已有行为）。"""
+
+        class _Msg:
+            def __init__(self, role: str, content: str) -> None:
+                self.role = role
+                self.content = content
+
+        history = [_Msg("user", "晚上好")]
+        r, _llm, _prompt, _eb = _make_replyer(llm_return=_ok_payload(text="晚上好呀！"))
+        plan = _make_plan()
+        persona = {"bot_name": "爱德丝", "personality": "p", "style_constraints": "s"}
+
+        intent = await r.generate(plan, [], persona, history=history)
+
+        assert intent is not None
+        assert intent.speech == "晚上好呀！"

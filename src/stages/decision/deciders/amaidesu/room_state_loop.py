@@ -1,7 +1,7 @@
 """RoomStateLoop - 直播间后台预处理循环
 
 低频 LLM 话题摘要：周期性读取 ContextService 历史 → 提炼话题摘要 → 存入
-``room_state.snapshot.topic_summary``。频率由热度驱动，冷场自动暂停以控制成本。
+``room_state.snapshot.topic_summary``。频率由热度驱动，冷场时仍按热度间隔更新（效果优先）。
 
 设计要点：
 - **不订阅 EventBus**：热度信号由 ``AmaidesuDecider.decide()`` 调用
@@ -9,7 +9,7 @@
 - **独立 client**：摘要用独立 profile ``llm_summary``，不与前台 Planner（``llm_fast``）共用连接池。
 - **可注入时钟**：``_tick(now_ms=...)`` 接受确定性时间戳，测试无需 sleep。
 - **热度驱动频率**：high → 间隔减半（30s），medium → 基准间隔（60s），
-  low → 间隔翻倍（120s），冷场（超过 cold_timeout_ms 无消息）→ 完全暂停。
+  low → 间隔翻倍（120s），冷场时仍按热度间隔更新（效果优先）。
 """
 
 import asyncio
@@ -117,9 +117,6 @@ class RoomStateLoop:
         ts = now_ms if now_ms is not None else _real_now_ms()
 
         if not self._enabled:
-            return
-
-        if self._room_state.is_cold(self._cold_timeout_ms, now_ms=ts):
             return
 
         snap = self._room_state.get_snapshot(now_ms=ts)

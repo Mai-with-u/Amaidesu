@@ -75,7 +75,7 @@ class AmaidesuDecider:
         fallback_mode: Literal["silent", "simple", "echo"] = Field(
             default="silent", description="（保留）LLM 失败降级模式；两阶段重构后固定 silent"
         )
-        history_limit: int = Field(default=10, ge=0, description="构建 prompt 时引用的历史消息条数")
+        history_limit: int = Field(default=30, ge=0, description="构建 prompt 时引用的历史消息条数")
 
         # Stage 1 弹幕聚合（两阶段调优：调大窗口/上限，让 Planner 看到更多上下文）
         batch_window_ms: int = Field(default=3000, ge=0, description="弹幕聚合时间窗口（毫秒），原 1500")
@@ -403,10 +403,10 @@ class AmaidesuDecider:
         """对一批弹幕做两阶段决策（Planner → Replyer），成功时发布 Intent。
 
         流程：
-        1. Planner.plan(batch, forced=forced, proactive=proactive) → Optional[DecisionPlan]
+        1. Planner.plan(batch, forced=forced, proactive=proactive, history=history) → Optional[DecisionPlan]
            - None（异常/脏 JSON）→ silent 降级，planner_failures+1
         2. plan.should_reply=False → 不发布，no_action+1
-        3. Replyer.generate(plan, batch, persona) → Optional[Intent]
+        3. Replyer.generate(plan, batch, persona, history=history) → Optional[Intent]
            - None（异常/空 text）→ silent 降级，replyer_failures+1
         4. event_bus.emit(decision.intent.generated, IntentPayload)
         5. 保存上下文（ContextService） + 记录发言时刻（proactive 时同时 record_trigger）
@@ -416,12 +416,15 @@ class AmaidesuDecider:
         is_proactive_call = proactive or not batch
         session_id = next((m.session_id for m in batch if m.session_id), "live")
 
+        # 读取会话历史（让 Planner/Replyer 看到自己最近说过的话，避免冷场复读）
+        history = await self._read_history(session_id)
+
         # ① Planner：战术决策（产出 DecisionPlan 或 None）
         self.logger.info(
             f"Planner 决策中 ({len(batch)} 条, 触发: {trigger_reason}, forced={forced}, proactive={proactive})"
         )
         try:
-            plan = await self._planner.plan(batch, forced=forced, proactive=proactive)
+            plan = await self._planner.plan(batch, forced=forced, proactive=proactive, history=history)
         except Exception as e:
             # 防御性兜底：Planner 内部已捕获异常返回 None
             self.logger.error(f"Planner 调用异常: {e}", exc_info=True)
@@ -444,7 +447,7 @@ class AmaidesuDecider:
         # ③ Replyer：基于 plan + 人设 + 弹幕生成 Intent
         persona = self._get_persona_config()
         try:
-            intent = await self._replyer.generate(plan, batch, persona)
+            intent = await self._replyer.generate(plan, batch, persona, history=history)
         except Exception as e:
             # 防御性兜底：Replyer 内部已捕获异常返回 None
             self.logger.error(f"Replyer 调用异常: {e}", exc_info=True)
@@ -484,6 +487,28 @@ class AmaidesuDecider:
             self._proactive_trigger.record_trigger(reason, now)
 
     # ==================== 辅助方法 ====================
+
+    async def _read_history(self, session_id: str) -> Optional[List]:
+        """从 ContextService 读取最近会话历史（供 Planner/Replyer 反复读）。
+
+        契约：
+        - ``self._context_service`` 未注入时返回 None（不中断决策链路）。
+        - 异常时 logger.warning 记录并返回 None（让两阶段调用按无历史降级，
+          避免因历史服务故障导致整批弹幕静默）。
+
+        Args:
+            session_id: 会话 ID（与 ``_save_context`` 使用同一来源，默认 "live"）。
+
+        Returns:
+            会话历史列表（ConversationMessage 鸭子类型）；无服务或异常时返回 None。
+        """
+        if self._context_service is None:
+            return None
+        try:
+            return await self._context_service.get_history(session_id, limit=self.typed_config.history_limit)
+        except Exception as e:
+            self.logger.warning(f"读取会话历史失败 (session_id={session_id}): {e}")
+            return None
 
     async def _save_context(self, session_id: str, danmaku_batch: str, speech: str) -> None:
         """将本批弹幕与回复写回上下文（可选服务）。"""
@@ -568,6 +593,6 @@ class AmaidesuDecider:
             "client_type": self.client_type,
             "planner_client": self.typed_config.planner_client,
             "replyer_client": self.typed_config.replyer_client,
-            "template_name": "decision/amaidesu_planner_v2",
+            "template_name": "decision/amaidesu_planner",
             "fallback_mode": self.fallback_mode,
         }

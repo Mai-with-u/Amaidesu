@@ -93,6 +93,7 @@ class Replyer:
         plan: DecisionPlan,
         batch: List[NormalizedMessage],
         persona: Dict[str, Any],
+        history: Optional[List[Any]] = None,
     ) -> Optional[Intent]:
         """根据 Planner 的决策计划 + 弹幕批次 + 人设，生成实际回复 Intent。
 
@@ -107,6 +108,10 @@ class Replyer:
             plan: Planner 产出的决策计划（should_reply=True 时才应到达此处）。
             batch: 本批弹幕（NormalizedMessage 列表）。
             persona: 人设字典（bot_name / personality / style_constraints）。
+            history: 可选的最近会话历史（鸭子类型对象列表，需有 `role` 和 `content` 属性）；
+                     role 可能是枚举（取 `.value`），content 是 str。None 表示无历史可用，
+                     渲染为占位文本。用于让 Replyer 看到自己最近说过的话，避免冷场时反复
+                     生成相同句式。
 
         Returns:
             Intent 实例；LLM 异常或解析失败时返回 None（silent 降级）。
@@ -119,8 +124,8 @@ class Replyer:
         # 惰性加载能力快照（用于动作白名单）
         self._ensure_capabilities()
 
-        # ① 注入人设 + 决策计划 + 弹幕上下文，渲染 Replyer prompt
-        prompt = self._render_prompt(plan, batch, persona)
+        # ① 注入人设 + 决策计划 + 弹幕上下文 + 会话历史，渲染 Replyer prompt
+        prompt = self._render_prompt(plan, batch, persona, history)
 
         # ② 调用高质量 LLM（无 tools）
         try:
@@ -164,10 +169,12 @@ class Replyer:
         plan: DecisionPlan,
         batch: List[NormalizedMessage],
         persona: Dict[str, Any],
+        history: Optional[List[Any]] = None,
     ) -> str:
-        """渲染 Replyer prompt，注入人设三件套 + 计划 + 弹幕。
+        """渲染 Replyer prompt，注入人设三件套 + 计划 + 弹幕 + 会话历史。
 
         人设分离承诺的另一半：$personality / $style_constraints / $bot_name 必须传给模板。
+        会话历史用于让 Replyer 看到自己最近说过的话，避免冷场反复生成相同句式。
         """
         return self._prompt_service.render_safe(
             _REPLYER_TEMPLATE,
@@ -176,6 +183,7 @@ class Replyer:
             style_constraints=persona.get("style_constraints", _DEFAULT_STYLE_CONSTRAINTS),
             plan=_render_plan_text(plan),
             danmaku_batch=_render_batch_text(batch),
+            conversation_history=_render_history_text(history),
             action_list=self._action_list_str or "（当前无可用动作，action 请留空字符串）",
         )
 
@@ -325,6 +333,25 @@ def _render_batch_text(batch: List[NormalizedMessage]) -> str:
     if not batch:
         return "（本批无弹幕）"
     return MessageBuffer.render_batch_text(batch)
+
+
+def _render_history_text(history: Optional[List[Any]]) -> str:
+    """把会话历史渲染为供 prompt 使用的多行文本。
+
+    每条消息渲染为 ``<role>: <content>`` 一行，从旧到新换行拼接。
+    - role 可能是枚举对象（用 ``getattr(role, "value", str(role))`` 取值）；
+    - 元素是鸭子类型（只需 ``role`` / ``content`` 两个属性），不绑定具体类型。
+    - history 为 None 或空时返回占位文本，避免 LLM 拿到空字符串误以为没有上下文。
+    """
+    if not history:
+        return "（暂无对话历史）"
+    lines: List[str] = []
+    for msg in history:
+        role = getattr(msg, "role", None)
+        role_str = getattr(role, "value", str(role)) if role else "user"
+        content = getattr(msg, "content", "") or ""
+        lines.append(f"{role_str}: {content}")
+    return "\n".join(lines)
 
 
 def _format_action_list(view: UnifiedCapabilitiesView) -> str:

@@ -38,10 +38,10 @@ def _feed_active_messages(rs: RoomState, base_ts: int = 100_000, count: int = 10
 
 
 class TestRoomStateLoopCold:
-    """冷场场景：无消息 → LLM 摘要不被调用"""
+    """冷场场景：仍按低热度间隔执行摘要"""
 
     @pytest.mark.asyncio
-    async def test_cold_no_llm_call(self):
+    async def test_cold_no_messages_still_summarizes(self):
         rs = RoomState()
         mock_llm = _make_mock_llm()
         mock_ctx = _make_mock_context(messages=[])
@@ -52,12 +52,13 @@ class TestRoomStateLoopCold:
             llm_service=mock_llm,
             context_service=mock_ctx,
         )
+        loop._summarize = AsyncMock()
         await loop._tick(now_ms=200_000)
 
-        mock_llm.chat.assert_not_called()
+        loop._summarize.assert_awaited_once_with(now_ms=200_000)
 
     @pytest.mark.asyncio
-    async def test_cold_after_timeout(self):
+    async def test_cold_after_timeout_still_summarizes(self):
         rs = RoomState()
         rs.update(_make_msg("早期消息"), now_ms=100_000)
         mock_llm = _make_mock_llm()
@@ -69,9 +70,10 @@ class TestRoomStateLoopCold:
             llm_service=mock_llm,
             context_service=mock_ctx,
         )
+        loop._summarize = AsyncMock()
         await loop._tick(now_ms=200_000)
 
-        mock_llm.chat.assert_not_called()
+        loop._summarize.assert_awaited_once_with(now_ms=200_000)
 
 
 class TestRoomStateLoopActive:

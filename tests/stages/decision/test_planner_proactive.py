@@ -128,7 +128,7 @@ class TestPlannerProactiveDefault:
 class TestPlannerProactiveEmptyBatch:
     """``proactive=True`` + 空批次仍能产出 DecisionPlan。
 
-    模板 ``amaidesu_planner_v2`` 已声明"本批弹幕可能是 0 条"，因此 Planner 在
+    模板 ``amaidesu_planner`` 已声明"本批弹幕可能是 0 条"，因此 Planner 在
     主动发言场景下空批次完全合法：LLM 应基于房间状态独立判断是否开口。
     """
 

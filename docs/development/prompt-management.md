@@ -36,8 +36,7 @@ pm.load_all()
 ```
 src/modules/prompts/templates/
 ├── decision/                    # 决策阶段提示词
-│   ├── amaidesu_planner.md      # Amaidesu Planner 模板
-│   ├── amaidesu_planner_v2.md   # Planner v2
+│   ├── amaidesu_planner.md      # Amaidesu Planner 模板（两阶段，零人设注入）
 │   ├── amaidesu_replyer.md      # Amaidesu Replyer 模板
 │   ├── amaidesu_timing_gate.md  # 时机门控模板
 │   ├── llm.md                   # LLM 对话模板

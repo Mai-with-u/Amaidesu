@@ -151,7 +151,7 @@ class TestProactiveColdTrigger:
         planner_render_calls = [
             call
             for call in decider._prompt_service.render_safe.call_args_list
-            if call.args and "amaidesu_planner_v2" in str(call.args[0])
+            if call.args and "amaidesu_planner" in str(call.args[0])
         ]
         assert len(planner_render_calls) >= 1, "Planner 应至少调用一次 render_safe"
         assert planner_render_calls[0].kwargs["proactive"] == "true"
@@ -238,7 +238,7 @@ class TestDanmakuBranchPriority:
         planner_render_calls = [
             call
             for call in decider._prompt_service.render_safe.call_args_list
-            if call.args and "amaidesu_planner_v2" in str(call.args[0])
+            if call.args and "amaidesu_planner" in str(call.args[0])
         ]
         assert len(planner_render_calls) >= 1
         assert planner_render_calls[0].kwargs["proactive"] == "false"
@@ -558,3 +558,192 @@ class TestProactiveStatistics:
         stats = decider.get_statistics()
         assert stats["total_proactive"] == 1
         assert stats["total_replies"] == 1
+
+
+# ==================== 场景 8：会话历史注入两阶段决策 ====================
+
+
+class TestHistoryInjectedIntoTwoStage:
+    """ContextService 读取的会话历史应作为 history 传给 Planner.plan / Replyer.generate。
+
+    契约：
+    - context_service 注入时，Planner.plan / Replyer.generate 收到
+      ``history=context_service.get_history(session_id, limit=...)`` 的返回值；
+    - context_service 为 None 时，history 为 None，不抛异常。
+    """
+
+    @staticmethod
+    def _wrap_plan_and_generate(decider: AmaidesuDecider) -> tuple[AsyncMock, AsyncMock]:
+        """用 AsyncMock 替换 decider._planner.plan / decider._replyer.generate。
+
+        返回 (plan_mock, generate_mock)。由于 Planner/Replyer 内部还会调 LLM，
+        这里直接短路到 mock，让被 wrap 的方法不再执行实际逻辑。
+        """
+        plan_mock = AsyncMock(return_value=None)
+        generate_mock = AsyncMock(return_value=None)
+        decider._planner.plan = plan_mock
+        decider._replyer.generate = generate_mock
+        return plan_mock, generate_mock
+
+    @pytest.mark.asyncio
+    async def test_context_service_none_history_is_none(self):
+        """context_service=None 时，planner.plan / replyer.generate 收到 history=None，不崩溃。"""
+        room_state = MagicMock()
+        room_state.last_speech_ms = None
+        room_state.is_cold = MagicMock(return_value=True)
+        room_state.get_snapshot = MagicMock(return_value=_make_snapshot(topic_summary="某话题"))
+
+        decider = _make_decider(
+            config={
+                "type": "amaidesu",
+                "proactive_enabled": True,
+                "proactive_min_interval_ms": 0,
+                "proactive_schedule_interval_ms": 0,
+            },
+            llm_responses=[],  # mock 后不消费
+            room_state=room_state,
+            # context_service 显式 None（_make_decider 默认就 None）
+        )
+        assert decider._context_service is None
+
+        plan_mock, generate_mock = self._wrap_plan_and_generate(decider)
+
+        # 不应抛异常
+        await decider._maybe_flush()
+
+        # Planner.plan 被调用，history=None
+        plan_mock.assert_awaited_once()
+        kwargs = plan_mock.await_args.kwargs
+        assert kwargs["history"] is None
+        assert kwargs["forced"] is False
+        assert kwargs["proactive"] is True
+
+        # 因为 plan_mock 返回 None → should_reply 分支不命中 → generate 不应被调用
+        generate_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_context_service_injected_history_passed_to_plan(self):
+        """context_service 注入且有历史时，Planner.plan 收到 get_history 的返回值。"""
+        from src.modules.context.models import MessageRole
+
+        # 准备历史：user + assistant 各 1 条（鸭子类型即可，mock 不消费）
+        fake_history = [
+            MagicMock(role=MessageRole.USER, content="之前弹幕"),
+            MagicMock(role=MessageRole.ASSISTANT, content="之前回复"),
+        ]
+
+        # mock context_service.get_history 返回 fake_history
+        ctx = MagicMock()
+        ctx.get_history = AsyncMock(return_value=fake_history)
+
+        room_state = MagicMock()
+        room_state.last_speech_ms = None
+        room_state.is_cold = MagicMock(return_value=True)
+        room_state.get_snapshot = MagicMock(return_value=_make_snapshot(topic_summary="某话题"))
+
+        decider = _make_decider(
+            config={
+                "type": "amaidesu",
+                "proactive_enabled": True,
+                "proactive_min_interval_ms": 0,
+                "proactive_schedule_interval_ms": 0,
+                "history_limit": 7,  # 验证 history_limit 透传
+            },
+            llm_responses=[],
+            room_state=room_state,
+        )
+        decider._context_service = ctx  # 注入 mock context_service
+
+        plan_mock, generate_mock = self._wrap_plan_and_generate(decider)
+
+        await decider._maybe_flush()
+
+        # 验证：ctx.get_history 被以 session_id="live"（空 batch 回退）、limit=7 调用
+        ctx.get_history.assert_awaited_once_with("live", limit=7)
+        # 验证：planner.plan 收到 history=fake_history
+        plan_mock.assert_awaited_once()
+        assert plan_mock.await_args.kwargs["history"] is fake_history
+
+        # 因为 plan_mock 返回 None（should_reply 默认 False）→ generate 不应被调用
+        generate_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_context_service_injected_history_passed_to_replyer_when_plan_replies(self):
+        """plan.should_reply=True 时，history 也透传到 replyer.generate。"""
+        from src.modules.context.models import MessageRole
+
+        fake_history = [
+            MagicMock(role=MessageRole.USER, content="弹幕A"),
+            MagicMock(role=MessageRole.ASSISTANT, content="回复A"),
+        ]
+        ctx = MagicMock()
+        ctx.get_history = AsyncMock(return_value=fake_history)
+
+        room_state = MagicMock()
+        room_state.last_speech_ms = None
+        room_state.is_cold = MagicMock(return_value=True)
+        room_state.get_snapshot = MagicMock(return_value=_make_snapshot(topic_summary="某话题"))
+
+        decider = _make_decider(
+            config={
+                "type": "amaidesu",
+                "proactive_enabled": True,
+                "proactive_min_interval_ms": 0,
+                "proactive_schedule_interval_ms": 0,
+                "history_limit": 5,
+            },
+            llm_responses=[],
+            room_state=room_state,
+        )
+        decider._context_service = ctx
+
+        # 让 plan_mock 返回一个 should_reply=True 的对象（鸭子类型）
+        plan_obj = MagicMock()
+        plan_obj.should_reply = True
+        plan_obj.confidence = 0.8
+        plan_obj.target = "all"
+
+        plan_mock = AsyncMock(return_value=plan_obj)
+        generate_mock = AsyncMock(return_value=None)
+        decider._planner.plan = plan_mock
+        decider._replyer.generate = generate_mock
+
+        await decider._maybe_flush()
+
+        # 验证 Planner + Replyer 都收到 fake_history
+        plan_mock.assert_awaited_once()
+        generate_mock.assert_awaited_once()
+        assert plan_mock.await_args.kwargs["history"] is fake_history
+        assert generate_mock.await_args.kwargs["history"] is fake_history
+
+    @pytest.mark.asyncio
+    async def test_context_service_get_history_exception_returns_none(self):
+        """context_service.get_history 抛异常时，history 降级为 None，不中断决策。"""
+        ctx = MagicMock()
+        ctx.get_history = AsyncMock(side_effect=RuntimeError("ContextService 挂了"))
+
+        room_state = MagicMock()
+        room_state.last_speech_ms = None
+        room_state.is_cold = MagicMock(return_value=True)
+        room_state.get_snapshot = MagicMock(return_value=_make_snapshot(topic_summary="某话题"))
+
+        decider = _make_decider(
+            config={
+                "type": "amaidesu",
+                "proactive_enabled": True,
+                "proactive_min_interval_ms": 0,
+                "proactive_schedule_interval_ms": 0,
+            },
+            llm_responses=[],
+            room_state=room_state,
+        )
+        decider._context_service = ctx
+
+        plan_mock, generate_mock = self._wrap_plan_and_generate(decider)
+
+        # 不应抛异常（_read_history 内部 try/except 降级）
+        await decider._maybe_flush()
+
+        # history 降级为 None
+        plan_mock.assert_awaited_once()
+        assert plan_mock.await_args.kwargs["history"] is None

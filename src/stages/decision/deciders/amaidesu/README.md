@@ -17,7 +17,7 @@ NormalizedMessage ─decide()► MessageBuffer ─tick► _maybe_flush (锁内�
 ```
 
 - **Stage 1 聚合**:`MessageBuffer` 按 `batch_window_ms` / `batch_max_size` / 空窗补偿折算判定取出时机,`TimingGate` 仅保留强制触发判定(SC/Guard/Gift 立即响应)。
-- **Stage 2 决策**:`Planner.plan(batch, forced, proactive)` 渲染模板 `decision/amaidesu_planner_v2`,产出 `DecisionPlan`(`should_reply` / `target` / `topic_summary` / `reply_guidance` / `confidence`);`should_reply=False` 直接 no-op。`Replyer.generate(plan, batch, persona)` 渲染模板 `decision/amaidesu_replyer`,产出 `Intent` 并回填 `IntentPayload` 发布。
+- **Stage 2 决策**:`Planner.plan(batch, forced, proactive)` 渲染模板 `decision/amaidesu_planner`,产出 `DecisionPlan`(`should_reply` / `target` / `topic_summary` / `reply_guidance` / `confidence`);`should_reply=False` 直接 no-op。`Replyer.generate(plan, batch, persona)` 渲染模板 `decision/amaidesu_replyer`,产出 `Intent` 并回填 `IntentPayload` 发布。
 - **房间态势**:`RoomState`(纯规则,60s 滑动窗口)负责热度/词频/冷场判定,供 `Planner` 注入 prompt;`RoomStateLoop` 后台低频调用独立 LLM profile `llm_summary` 填充 `topic_summary`,冷场自动暂停以控制成本。
 - **失败降级**:Planner 异常 / 脏 JSON → silent(`planner_failures+1`);Replyer 同理(`replyer_failures+1`)。两者用独立 LLM client,避免连接池共享。
 

@@ -12,9 +12,11 @@
    ``replyer_client``（默认 ``llm``）分离，避免共享客户端实例。
 3. **无工具调用**：``chat()`` 调用不传 ``tools`` 参数——Planner 只做结构化 JSON 输出。
 4. **降级安全**：LLM 异常 / 脏 JSON 均返回 ``None``，由调用方（Decider 编排层）处理降级。
+5. **历史感知**：可选注入最近对话历史（``history``），渲染为 ``$conversation_history``
+   注入 prompt，让 Planner 决策时能反重复（特别是主动发言时避免重复已聊过的话题）。
 
 数据流：
-    batch + room_state.snapshot + forced ──▶ render_safe('decision/amaidesu_planner_v2')
+    batch + room_state.snapshot + history + forced/proactive ──▶ render_safe('decision/amaidesu_planner')
         ──▶ llm_service.chat(prompt, client_type=planner_client)
         ──▶ _clean_llm_json + json.loads
         ──▶ DecisionPlan（或 None）
@@ -65,7 +67,7 @@ class Planner:
     """
 
     #: Planner 专用的提示词模板名（v2，零人设注入）
-    TEMPLATE_NAME: str = "decision/amaidesu_planner_v2"
+    TEMPLATE_NAME: str = "decision/amaidesu_planner"
 
     def __init__(
         self,
@@ -118,6 +120,7 @@ class Planner:
         *,
         forced: bool = False,
         proactive: bool = False,
+        history: Optional[List[Any]] = None,
     ) -> Optional[DecisionPlan]:
         """对一批弹幕做战术决策，产出 DecisionPlan。
 
@@ -129,6 +132,11 @@ class Planner:
             proactive: 是否为主动发言触发（由 ``ProactiveTrigger`` 在冷场或定时间隔
                 触发时调用）。会透传到 prompt 的 ``$proactive`` 变量，提示 LLM 本批
                 弹幕可能为空、需基于房间状态决定是否主动开口。
+            history: 最近对话历史（可选，由调用方从 ``ContextService`` 等获取）。
+                元素为 ``ConversationMessage`` 鸭子类型（``role`` 属性可能是
+                ``MessageRole`` 枚举或字符串；``content`` 为字符串）。``None`` 表示
+                无历史可用，渲染为占位文本。会透传到 prompt 的 ``$conversation_history``
+                变量，供 LLM 决策时反重复（特别是主动发言时避免重复已聊过的话题）。
 
         Returns:
             DecisionPlan：解析成功时返回；LLM 异常 / 脏 JSON / 调用失败时返回 None，
@@ -138,6 +146,7 @@ class Planner:
         snapshot = self._room_state.get_snapshot()
         room_state_text = self._render_room_state(snapshot)
         danmaku_text = self._render_batch(batch)
+        history_text = self._render_history(history)
         action_list = self._get_action_list()
 
         # 2. 渲染 prompt（★ 无 persona 变量）
@@ -150,6 +159,7 @@ class Planner:
                 forced=str(forced).lower(),
                 proactive=str(proactive).lower(),
                 action_list=action_list,
+                conversation_history=history_text,
             )
         except Exception as e:
             self.logger.error(f"渲染 Planner prompt 失败: {e}", exc_info=True)
@@ -296,6 +306,34 @@ class Planner:
             }.get(data_type, "")
 
             lines.append(f"{type_tag}{nickname}: {text}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _render_history(history: Optional[List[Any]]) -> str:
+        """将会话历史渲染为供 prompt 注入的文本块。
+
+        统一契约：``history`` 元素为 ``ConversationMessage`` 鸭子类型，
+        ``role`` 属性可能是 ``MessageRole`` 枚举（用 ``getattr(role, "value", str(role))``
+        取值）或纯字符串；``content`` 为字符串。
+
+        与 ``RoomStateLoop._format_history`` 同构：逐条渲染为 ``<role>: <content>`` 行，
+        从旧到新用换行拼接。``history`` 为 ``None`` 或空列表时返回占位文本。
+
+        Args:
+            history: 最近对话历史列表。``None`` 或空列表时返回占位文本。
+
+        Returns:
+            多行文本，每行格式为 ``<role>: <content>``；空历史返回占位文本
+        """
+        if not history:
+            return "（暂无对话历史）"
+
+        lines: List[str] = []
+        for msg in history:
+            role = getattr(msg, "role", None)
+            role_str = getattr(role, "value", str(role)) if role else "user"
+            content = getattr(msg, "content", "") or ""
+            lines.append(f"{role_str}: {content}")
         return "\n".join(lines)
 
     def _get_action_list(self) -> str:

@@ -196,7 +196,8 @@ class TestAmaidesuDeciderConfigSchema:
         # Stage 2 LLM
         assert cfg.client == "llm_fast"
         assert cfg.fallback_mode == "silent"
-        assert cfg.history_limit == 10
+        # 会话历史注入条数（决策链路反重复，默认 30）
+        assert cfg.history_limit == 30
         # Stage 1 弹幕聚合（Task 5 两阶段调优：默认窗口/上限调大）
         assert cfg.batch_window_ms == 3000
         assert cfg.batch_max_size == 20

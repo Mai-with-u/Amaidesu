@@ -19,6 +19,7 @@ from __future__ import annotations
 import src.modules.config.schemas  # noqa: F401  # isort:skip
 
 import json
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -293,3 +294,146 @@ class TestPlannerForcedFlag:
         )
         # 两次调用的 forced 值必须不同（证明标志确实被透传，而非硬编码）
         assert forced_true != forced_false, f"forced=True/False 的 prompt 变量必须不同，实际均为 {forced_true!r}"
+
+
+# ---------------------------------------------------------------------------
+# 测试 8：会话历史注入（反重复）
+# ---------------------------------------------------------------------------
+
+
+class _FakeHistoryMsg:
+    """模拟 ``ConversationMessage`` 鸭子类型（仅含 ``role`` / ``content`` 属性）。"""
+
+    def __init__(self, role: Any, content: str) -> None:
+        self.role = role
+        self.content = content
+
+
+class TestPlannerHistoryInjection:
+    """会话历史注入测试（让 Planner 决策时能看到最近对话，反重复）。
+
+    覆盖：
+    - 有效 history → render_safe 收到 ``conversation_history``，内容为
+      ``user:`` / ``assistant:`` 交替的多行文本（顺序保持旧→新）。
+    - ``history=None`` → 占位文本 "（暂无对话历史）"。
+    - ``history=[]`` → 同上占位文本。
+    - 默认不传 history → 占位文本（与现有测试兼容）。
+    - ``role`` 为 ``MessageRole`` 枚举时，使用 ``role.value``（而非 ``str(role)``）。
+    """
+
+    @pytest.mark.asyncio
+    async def test_plan_with_history_renders_user_assistant_lines(self) -> None:
+        """传入 history → render_safe 收到 ``conversation_history``，``user:`` / ``assistant:`` 交替。"""
+        raw = json.dumps({"should_reply": False})
+        planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+
+        history = [
+            _FakeHistoryMsg("user", "主播打游戏好厉害"),
+            _FakeHistoryMsg("assistant", "哈哈谢谢支持"),
+            _FakeHistoryMsg("user", "今天玩什么游戏"),
+            _FakeHistoryMsg("assistant", "今天玩只狼"),
+        ]
+
+        await planner.plan([], forced=False, history=history)
+
+        kwargs = prompt.render_safe.call_args.kwargs
+        assert "conversation_history" in kwargs, "render_safe 必须接收 conversation_history 变量"
+        rendered = kwargs["conversation_history"]
+
+        assert rendered.count("\n") == 3, f"历史应有 4 行（3 个换行），实际换行数: {rendered.count(chr(10))}"
+
+        assert "user: 主播打游戏好厉害" in rendered
+        assert "assistant: 哈哈谢谢支持" in rendered
+        assert "user: 今天玩什么游戏" in rendered
+        assert "assistant: 今天玩只狼" in rendered
+
+        idx0 = rendered.index("user: 主播打游戏好厉害")
+        idx1 = rendered.index("assistant: 哈哈谢谢支持")
+        idx2 = rendered.index("user: 今天玩什么游戏")
+        idx3 = rendered.index("assistant: 今天玩只狼")
+        assert idx0 < idx1 < idx2 < idx3, "历史应按传入顺序（旧→新）拼接"
+
+    @pytest.mark.asyncio
+    async def test_plan_with_role_enum_uses_value(self) -> None:
+        """``role`` 为 ``MessageRole`` 枚举时，使用 ``role.value``（而非 ``str(role)``）。"""
+        import enum
+
+        class _FakeRole(enum.Enum):
+            USER = "user"
+            ASSISTANT = "assistant"
+
+        raw = json.dumps({"should_reply": False})
+        planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+
+        history = [
+            _FakeHistoryMsg(_FakeRole.USER, "一条弹幕"),
+            _FakeHistoryMsg(_FakeRole.ASSISTANT, "主播回复"),
+        ]
+
+        await planner.plan([], forced=False, history=history)
+
+        rendered = prompt.render_safe.call_args.kwargs["conversation_history"]
+        assert "user: 一条弹幕" in rendered
+        assert "assistant: 主播回复" in rendered
+        assert "_FakeRole" not in rendered, f"role 枚举不应被 repr 化，实际: {rendered!r}"
+
+    @pytest.mark.asyncio
+    async def test_plan_with_none_history_uses_placeholder(self) -> None:
+        """``history=None`` → render_safe 收到 ``conversation_history="（暂无对话历史）"``。"""
+        raw = json.dumps({"should_reply": False})
+        planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+
+        await planner.plan([], forced=False, history=None)
+
+        kwargs = prompt.render_safe.call_args.kwargs
+        assert "conversation_history" in kwargs
+        assert kwargs["conversation_history"] == "（暂无对话历史）", (
+            f"history=None 时应使用占位文本，实际: {kwargs['conversation_history']!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_plan_with_empty_history_uses_placeholder(self) -> None:
+        """``history=[]`` → 同样使用占位文本（空列表与 None 等价）。"""
+        raw = json.dumps({"should_reply": False})
+        planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+
+        await planner.plan([], forced=False, history=[])
+
+        kwargs = prompt.render_safe.call_args.kwargs
+        assert "conversation_history" in kwargs
+        assert kwargs["conversation_history"] == "（暂无对话历史）", (
+            f"history=[] 时应使用占位文本，实际: {kwargs['conversation_history']!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_plan_default_no_history_arg_uses_placeholder(self) -> None:
+        """不传 ``history`` → 默认占位文本（与现有测试兼容，不破坏既有行为）。"""
+        raw = json.dumps({"should_reply": False})
+        planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+
+        await planner.plan([], forced=False)
+
+        kwargs = prompt.render_safe.call_args.kwargs
+        assert "conversation_history" in kwargs
+        assert kwargs["conversation_history"] == "（暂无对话历史）", (
+            f"不传 history 时应使用占位文本，实际: {kwargs['conversation_history']!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_plan_history_coexists_with_proactive(self) -> None:
+        """``history`` 与 ``proactive`` 同时透传，互不干扰（反重复生效路径）。"""
+        raw = json.dumps({"should_reply": True})
+        planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+
+        history = [
+            _FakeHistoryMsg("user", "观众问 1"),
+            _FakeHistoryMsg("assistant", "主播答 1"),
+        ]
+
+        await planner.plan([], proactive=True, history=history)
+
+        kwargs = prompt.render_safe.call_args.kwargs
+        assert kwargs.get("proactive") == "true"
+        rendered = kwargs["conversation_history"]
+        assert "user: 观众问 1" in rendered
+        assert "assistant: 主播答 1" in rendered
