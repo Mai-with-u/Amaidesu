@@ -747,3 +747,58 @@ class TestHistoryInjectedIntoTwoStage:
         # history 降级为 None
         plan_mock.assert_awaited_once()
         assert plan_mock.await_args.kwargs["history"] is None
+
+    @pytest.mark.asyncio
+    async def test_proactive_speech_saves_topic_in_user_message(self):
+        """主动发言保存上下文时，USER 消息携带 Planner 主题（连续性机制）。"""
+        from src.modules.context.models import MessageRole
+        from src.modules.types import Intent, IntentEmotion, IntentMetadata
+
+        ctx = MagicMock()
+        ctx.get_history = AsyncMock(return_value=[])
+        ctx.add_message = AsyncMock()
+
+        room_state = MagicMock()
+        room_state.last_speech_ms = None
+        room_state.is_cold = MagicMock(return_value=True)
+        room_state.get_snapshot = MagicMock(return_value=_make_snapshot(topic_summary="某话题"))
+
+        decider = _make_decider(
+            config={
+                "type": "amaidesu",
+                "proactive_enabled": True,
+                "proactive_min_interval_ms": 0,
+                "proactive_schedule_interval_ms": 0,
+            },
+            llm_responses=[],
+            room_state=room_state,
+        )
+        decider._context_service = ctx
+
+        # plan 返回 should_reply=True + 主题
+        plan_obj = MagicMock()
+        plan_obj.should_reply = True
+        plan_obj.confidence = 0.8
+        plan_obj.target = "all"
+        plan_obj.topic_summary = "踩坑经历"
+
+        intent_obj = Intent(
+            emotion=IntentEmotion(name="neutral", intensity=0.5),
+            action=None,
+            speech="我昨天买了个吉他谱，亏麻了",
+            metadata=IntentMetadata(source_id="amaidesu", decision_time_ms=1, source_message_id="proactive"),
+        )
+
+        decider._planner.plan = AsyncMock(return_value=plan_obj)
+        decider._replyer.generate = AsyncMock(return_value=intent_obj)
+
+        await decider._maybe_flush()
+
+        # 验证保存：USER 行携带主题 + ASSISTANT 行是发言
+        add_calls = ctx.add_message.await_args_list
+        assert len(add_calls) == 2
+        assert add_calls[0].kwargs["role"] == MessageRole.USER
+        assert "踩坑经历" in add_calls[0].kwargs["content"]
+        assert "（主动发言" in add_calls[0].kwargs["content"]
+        assert add_calls[1].kwargs["role"] == MessageRole.ASSISTANT
+        assert add_calls[1].kwargs["content"] == "我昨天买了个吉他谱，亏麻了"

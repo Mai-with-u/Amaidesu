@@ -465,9 +465,15 @@ class AmaidesuDecider:
         intent.metadata.source_message_id = batch[-1].message_id if batch else "proactive"
         await self._publish_intent(intent)
         # intent.speech 类型为 Optional[str]，但 Replyer 返回成功时必然非空
+        # 主动发言时 USER 行携带 Planner 的主题（topic_summary），让后续决策显式看到
+        # "上次聊到哪了"，而非从发言文本反推主题（机制层连续性保障）
+        if is_proactive_call:
+            user_content = f"（主动发言，主题：{plan.topic_summary or '随聊'}）"
+        else:
+            user_content = MessageBuffer.render_batch_text(batch)
         await self._save_context(
             session_id,
-            MessageBuffer.render_batch_text(batch),
+            user_content,
             intent.speech or "",
         )
 
