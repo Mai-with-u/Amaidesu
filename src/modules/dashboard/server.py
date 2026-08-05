@@ -6,6 +6,7 @@ Dashboard 服务器主类
 
 import asyncio
 import json
+import socket
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -15,6 +16,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.modules.dashboard.api.router import create_app, setup_cors
+from src.modules.dashboard.dependencies import set_dashboard_server
 from src.modules.config.core_schemas import DashboardConfig
 from src.modules.dashboard.schemas.manager_protocol import ManagerStatusProvider
 from src.modules.dashboard.widget import DanmakuWidgetService
@@ -24,6 +26,12 @@ from src.modules.logging.log_streamer import LogStreamer
 
 try:
     import uvicorn
+
+    # 显式指定 sansio 实现避免触发 websockets.legacy 弃用警告。
+    # 注：uvicorn 0.49 仍未修复 auto.py 的 legacy 引用；uvicorn 0.50+ 将以字符串选项 'websockets-sansio' 公开支持，
+    # 届时应改为 ws="websockets-sansio" 并删除此处导入。
+    # 降级 websockets 到 13.x 不可行：uvicorn 引用了 websockets 14+ 才引入的 WebSocketServerProtocol。
+    from uvicorn.protocols.websockets.websockets_sansio_impl import WebSocketsSansIOProtocol
 
     UVICORN_AVAILABLE = True
 except ImportError:
@@ -94,6 +102,7 @@ class DashboardServer:
 
         self.app: Optional["FastAPI"] = None
         self._server_task: Optional[asyncio.Task] = None
+        self._server: Optional["uvicorn.Server"] = None
 
         self.ws_handler: Optional[WebSocketHandler] = None
         self.event_broadcaster: Optional[EventBroadcaster] = None
@@ -119,8 +128,6 @@ class DashboardServer:
             return
 
         self.logger.info(f"Dashboard 服务器启动中: http://{self.host}:{self.port}")
-
-        from src.modules.dashboard.dependencies import set_dashboard_server
 
         self.app = create_app()
         setup_cors(self.app, self.cors_origins)
@@ -151,6 +158,19 @@ class DashboardServer:
                 }
 
             self.logger.info("前端未构建，仅 API 模式运行")
+
+        # 预绑定端口：在任何副作用（broadcaster/log_streamer/vite/心跳）之前完成，
+        # 端口被占用时在此失败，避免先打印“已启动”再退出的假象（issue #69）。
+        config = uvicorn.Config(
+            app=self.app,
+            host=self.host,
+            port=self.port,
+            log_level="warning",
+            ws=WebSocketsSansIOProtocol,
+        )
+        server = uvicorn.Server(config)
+        self._server = server
+        bound_socket = self._bind_socket()
 
         set_dashboard_server(self)
 
@@ -212,30 +232,29 @@ class DashboardServer:
         # 初始化弹幕叠加服务
         await self._setup_widget_service()
 
-        self._is_running = True
-        self.logger.info(f"Dashboard 已启动: {self.get_url()}")
-
         if self.dev_mode:
             await self._start_vite_dev_server()
 
-        # 启动 uvicorn。
-        # 显式指定 sansio 实现避免触发 websockets.legacy 弃用警告。
-        # 注：uvicorn 0.49 仍未修复 auto.py 的 legacy 引用；uvicorn 0.50+ 将以字符串选项 'websockets-sansio' 公开支持，
-        # 届时应改为 ws="websockets-sansio" 并删除此处导入。
-        # 降级 websockets 到 13.x 不可行：uvicorn 引用了 websockets 14+ 才引入的 WebSocketServerProtocol。
-        from uvicorn.protocols.websockets.websockets_sansio_impl import (
-            WebSocketsSansIOProtocol,
-        )
+        # socket 已预绑定，serve 直接复用，不会再绑定端口
+        self._server_task = asyncio.create_task(server.serve(sockets=[bound_socket]))
 
-        config = uvicorn.Config(
-            app=self.app,
-            host=self.host,
-            port=self.port,
-            log_level="warning",
-            ws=WebSocketsSansIOProtocol,
-        )
-        server = uvicorn.Server(config)
-        self._server_task = asyncio.create_task(server.serve())
+        self._is_running = True
+        self.logger.info(f"Dashboard 已启动: {self.get_url()}")
+
+    def _bind_socket(self) -> socket.socket:
+        """预绑定 Dashboard 端口，端口被占用时抛 RuntimeError（避免“已启动”假象）
+
+        注意：不设置 SO_REUSEADDR——Windows 上该选项允许绑定已被监听的端口，
+        会使端口占用检测失效；与 asyncio.create_server（uvicorn）行为保持一致。
+        """
+        family = socket.AF_INET6 if ":" in self.host else socket.AF_INET
+        sock = socket.socket(family, socket.SOCK_STREAM)
+        try:
+            sock.bind((self.host, self.port))
+        except OSError as e:
+            sock.close()
+            raise RuntimeError(f"Dashboard 端口绑定失败（{self.host}:{self.port} 可能被占用）: {e}") from e
+        return sock
 
     async def stop(self) -> None:
         """停止 Dashboard 服务器"""
@@ -279,12 +298,22 @@ class DashboardServer:
                 pass
             self._heartbeat_task = None
 
-        if self._server_task:
-            self._server_task.cancel()
-            try:
-                await self._server_task
-            except asyncio.CancelledError:
-                pass
+        if self._server:
+            # 优雅关闭：should_exit 让 main_loop 正常退出并触发 uvicorn shutdown，
+            # 释放监听 socket（直接 cancel 会跳过 shutdown，端口残留占用）
+            self._server.should_exit = True
+            server_task = self._server_task
+            if server_task is not None:
+                try:
+                    await asyncio.wait_for(server_task, timeout=5.0)
+                except asyncio.TimeoutError:
+                    self.logger.warning("Dashboard 服务器未在 5s 内优雅退出，强制取消")
+                    server_task.cancel()
+                    try:
+                        await server_task
+                    except asyncio.CancelledError:
+                        pass
+            self._server = None
             self._server_task = None
 
         if self._vite_process:
