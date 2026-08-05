@@ -29,6 +29,8 @@ if TYPE_CHECKING:
 
 logger = get_logger("EventBroadcaster")
 
+HISTORY_PUSH_LIMIT = 100
+
 
 class EventBroadcaster:
     """EventBus 事件广播器 - 将 EventBus 事件广播到 WebSocket 客户端"""
@@ -196,7 +198,7 @@ class EventBroadcaster:
         """向新连接的客户端推送最近的事件历史（匹配 LogStreamer 模式）。"""
         if not self.event_history:
             return
-        recent = self.event_history.get_recent(100)
+        recent = self.event_history.get_recent(HISTORY_PUSH_LIMIT)
         if not recent:
             return
         from src.modules.dashboard.schemas.event import WebSocketMessage
