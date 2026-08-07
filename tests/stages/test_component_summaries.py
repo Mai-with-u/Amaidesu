@@ -98,3 +98,73 @@ def test_enable_via_config_idempotent(tmp_path):
 
     doc = tomlkit.parse(toml_path.read_text(encoding="utf-8"))
     assert doc["collectors"]["enabled"] == ["stt"]
+
+
+def test_disable_via_config_removes_from_enabled_list(tmp_path):
+    """停用组件应从 TOML enabled 列表移除。"""
+    from types import SimpleNamespace
+
+    from src.modules.dashboard.api.components import _disable_via_config
+
+    toml_path = tmp_path / "input.toml"
+    toml_path.write_text('[collectors]\nenabled = ["console_input", "stt"]\n', encoding="utf-8")
+    server = SimpleNamespace(get_config_path=lambda section: str(toml_path))
+
+    resp = _disable_via_config(server, "input", "stt")
+
+    assert resp.success is True
+    import tomlkit
+
+    doc = tomlkit.parse(toml_path.read_text(encoding="utf-8"))
+    assert doc["collectors"]["enabled"] == ["console_input"]
+
+
+def test_disable_via_config_idempotent(tmp_path):
+    """停用不在列表中的组件应幂等成功。"""
+    from types import SimpleNamespace
+
+    from src.modules.dashboard.api.components import _disable_via_config
+
+    toml_path = tmp_path / "input.toml"
+    toml_path.write_text('[collectors]\nenabled = ["console_input"]\n', encoding="utf-8")
+    server = SimpleNamespace(get_config_path=lambda section: str(toml_path))
+
+    resp = _disable_via_config(server, "input", "stt")
+
+    assert resp.success is True
+    import tomlkit
+
+    doc = tomlkit.parse(toml_path.read_text(encoding="utf-8"))
+    assert doc["collectors"]["enabled"] == ["console_input"]
+
+
+@pytest.mark.asyncio
+async def test_decision_dynamic_enable_disable():
+    """Decider 动态启用（加入并行分发）与停用（移除）应生效。"""
+    from src.modules.events.event_bus import EventBus
+
+    manager = DeciderManager(event_bus=EventBus())
+
+    ok = await manager.enable_decider("command", {})
+    assert ok is True
+    assert "command" in manager.get_decider_names()
+    assert manager._decider_ready.get("command") is True
+
+    # 幂等：再次启用不报错
+    ok_again = await manager.enable_decider("command", {})
+    assert ok_again is True
+
+    ok_stop = await manager.disable_decider("command")
+    assert ok_stop is True
+    assert "command" not in manager.get_decider_names()
+    assert "command" not in manager._decider_ready
+
+
+@pytest.mark.asyncio
+async def test_decision_enable_failure_on_unknown_decider():
+    """启用未注册的 Decider 应返回 False 而不抛异常。"""
+    from src.modules.events.event_bus import EventBus
+
+    manager = DeciderManager(event_bus=EventBus())
+    ok = await manager.enable_decider("not_a_real_decider", {})
+    assert ok is False

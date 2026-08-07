@@ -263,41 +263,9 @@ class InputCollectorManager:
 
         for input_name in enabled_collectors:
             try:
-                schema_class = None
-                if config_service:
-                    try:
-                        from src.modules.config.schemas import get_config_schema
-
-                        schema_class = get_config_schema(input_name, "input")
-                    except KeyError:
-                        pass
-
-                if config_service:
-                    collector_config = config_service.get_config_with_defaults(
-                        name=input_name,
-                        phase="input",
-                        schema_class=schema_class,
-                    )
-                else:
-                    collector_config = {}
-
-                collector_type = collector_config.get("type", input_name)
-
-                # 使用 _COLLECTORS 字典直接获取 Collector 类
-                if collector_type not in _COLLECTORS:
-                    available = list(_COLLECTORS.keys())
-                    raise KeyError(f"Collector '{collector_type}' 未找到。可用: {available}")
-
-                collector_cls = _COLLECTORS[collector_type]
-
-                services = {EventBus: self.event_bus, **self._services_by_type}
-                collector = instantiate_with_di(
-                    collector_cls,
-                    config=collector_config,
-                    services_by_type=services,
-                )
+                collector = await self._create_collector(input_name, config_service)
                 created_collectors.append(collector)
-                self.logger.info(f"成功创建InputCollector: {input_name} (type={collector_type})")
+                self.logger.info(f"成功创建InputCollector: {input_name}")
             except Exception as e:
                 self.logger.error(f"InputCollector创建异常: {input_name} - {e}", exc_info=True)
                 failed_count += 1
@@ -311,6 +279,99 @@ class InputCollectorManager:
             self.logger.info(f"InputCollector加载完成: 成功={len(created_collectors)}/{len(enabled_collectors)}")
 
         return created_collectors
+
+    async def _create_collector(self, name: str, config_service=None):
+        """创建单个 Collector 实例（load_from_config 与动态启用的公共工厂）"""
+        schema_class = None
+        if config_service:
+            try:
+                from src.modules.config.schemas import get_config_schema
+
+                schema_class = get_config_schema(name, "input")
+            except KeyError:
+                pass
+
+        if config_service:
+            collector_config = config_service.get_config_with_defaults(
+                name=name,
+                phase="input",
+                schema_class=schema_class,
+            )
+        else:
+            collector_config = {}
+
+        collector_type = collector_config.get("type", name)
+
+        if collector_type not in _COLLECTORS:
+            available = list(_COLLECTORS.keys())
+            raise KeyError(f"Collector '{collector_type}' 未找到。可用: {available}")
+
+        collector_cls = _COLLECTORS[collector_type]
+
+        services = {EventBus: self.event_bus, **self._services_by_type}
+        return instantiate_with_di(
+            collector_cls,
+            config=collector_config,
+            services_by_type=services,
+        )
+
+    async def enable_collector(self, name: str, config_service=None) -> bool:
+        """动态启用单个 Collector：创建实例并启动（若 Manager 已运行）。
+
+        Args:
+            name: Collector 名称
+            config_service: 可选，用于读取组件配置（缺省时使用空配置）
+
+        Returns:
+            True 表示已在运行或启动成功
+        """
+        if self._get_collector_by_name(name):
+            self.logger.info(f"Collector '{name}' 已在运行，跳过")
+            return True
+
+        try:
+            collector = await self._create_collector(name, config_service)
+        except Exception as e:
+            self.logger.error(f"动态启用 Collector '{name}' 失败: {e}", exc_info=True)
+            return False
+
+        self._collectors.append(collector)
+        if self._is_started:
+            task = asyncio.create_task(self._run_collector(collector, name), name=f"InputCollector-{name}")
+            self._collector_tasks[name] = task
+        self.logger.info(f"Collector '{name}' 动态启用成功")
+        return True
+
+    async def disable_collector(self, name: str) -> bool:
+        """动态停用单个 Collector：取消运行任务并停止实例，从运行列表移除。"""
+        collector = self._get_collector_by_name(name)
+        if not collector:
+            self.logger.info(f"Collector '{name}' 未在运行，跳过")
+            return True
+
+        task = self._collector_tasks.pop(name, None)
+        if task and not task.done():
+            task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
+            except (TimeoutError, asyncio.CancelledError, Exception):
+                pass
+
+        try:
+            await collector.stop()
+        except Exception as e:
+            self.logger.error(f"停止Collector '{name}' 时出错: {e}", exc_info=True)
+
+        self._collectors = [c for c in self._collectors if c is not collector]
+        self.logger.info(f"Collector '{name}' 动态停用成功")
+        return True
+
+    def _get_collector_by_name(self, name: str):
+        """按名称精确查找已加载的 Collector 实例"""
+        for collector in self._collectors:
+            if self._get_collector_name(collector) == name:
+                return collector
+        return None
 
     def _get_collector_name(self, collector) -> str:
         class_name = collector.__class__.__name__

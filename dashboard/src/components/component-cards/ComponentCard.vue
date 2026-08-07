@@ -53,47 +53,32 @@
       </div>
 
       <div class="action-buttons">
-        <!-- Decision component: 多 Decider 并行，每个可独立启用（未启用时点启动写入配置） -->
-        <template v-if="component.phase === 'decision'">
-          <el-button
-            size="small"
-            type="primary"
-            :disabled="component.is_started"
-            :loading="actionLoading['start']"
-            @click="handleControl('start')"
-          >
-            启动
-          </el-button>
-        </template>
-
-        <!-- Input/Output components: Start, Stop, Restart -->
-        <template v-else>
-          <el-button
-            size="small"
-            type="primary"
-            :disabled="component.is_started"
-            :loading="actionLoading['start']"
-            @click="handleControl('start')"
-          >
-            启动
-          </el-button>
-          <el-button
-            size="small"
-            :disabled="!component.is_started"
-            :loading="actionLoading['stop']"
-            @click="handleControl('stop')"
-          >
-            停止
-          </el-button>
-          <el-button
-            size="small"
-            type="warning"
-            :loading="actionLoading['restart']"
-            @click="handleControl('restart')"
-          >
-            重启
-          </el-button>
-        </template>
+        <!-- 启动/停止/重启：动态启停（含未启用组件，未启用时启动会写入 enabled 配置并即时生效） -->
+        <el-button
+          size="small"
+          type="primary"
+          :disabled="component.is_started"
+          :loading="actionLoading['start']"
+          @click="handleControl('start')"
+        >
+          启动
+        </el-button>
+        <el-button
+          size="small"
+          :disabled="!component.is_started"
+          :loading="actionLoading['stop']"
+          @click="handleControl('stop')"
+        >
+          停止
+        </el-button>
+        <el-button
+          size="small"
+          type="warning"
+          :loading="actionLoading['restart']"
+          @click="handleControl('restart')"
+        >
+          重启
+        </el-button>
       </div>
     </div>
 

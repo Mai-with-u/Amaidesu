@@ -278,6 +278,76 @@ class OutputHandlerManager:
         self._handler_names[handler] = handler_name
         self.logger.info(f"Handler已注册: {handler_name}")
 
+    async def enable_handler(self, name: str, config_service=None) -> bool:
+        """动态启用单个 Handler：创建实例、注册并 init。
+
+        Args:
+            name: Handler 名称
+            config_service: 读取组件配置所需
+
+        Returns:
+            True 表示已在运行或启动成功
+        """
+        if self.get_handler_by_name(name):
+            self.logger.info(f"Handler '{name}' 已在运行，跳过")
+            return True
+        if config_service is None:
+            self.logger.error(f"动态启用 Handler '{name}' 失败: config_service 未提供")
+            return False
+
+        try:
+            from src.modules.config.schemas import get_config_schema
+
+            try:
+                schema_class = get_config_schema(name, "output")
+            except KeyError:
+                schema_class = None
+
+            handler_config = config_service.get_config_with_defaults(
+                name=name,
+                phase="output",
+                schema_class=schema_class,
+            )
+            handler_type = handler_config.get("type", name)
+            handler = self._create_handler(handler_type, handler_config)
+            if handler is None:
+                self.logger.error(f"Handler创建失败: {name} (type={handler_type})")
+                return False
+
+            await self.register_handler(handler, name)
+            try:
+                await handler.init()
+                self._handler_started[handler] = True
+            except Exception as e:
+                self._handler_started[handler] = False
+                self.logger.error(f"Handler '{name}' init 失败: {e}", exc_info=True)
+                return False
+
+            self.logger.info(f"Handler '{name}' 动态启用成功")
+            return True
+        except Exception as e:
+            self.logger.error(f"动态启用 Handler '{name}' 失败: {e}", exc_info=True)
+            return False
+
+    async def disable_handler(self, name: str) -> bool:
+        """动态停用单个 Handler：cleanup 并从运行列表移除（调度自动跳过）。"""
+        handler = self.get_handler_by_name(name)
+        if handler is None:
+            self.logger.info(f"Handler '{name}' 未在运行，跳过")
+            return True
+
+        if self._handler_started.get(handler, False):
+            try:
+                await handler.cleanup()
+            except Exception as e:
+                self.logger.error(f"Handler '{name}' 停止失败: {e}", exc_info=True)
+
+        self.handlers = [h for h in self.handlers if h is not handler]
+        self._handler_names.pop(handler, None)
+        self._handler_started.pop(handler, None)
+        self.logger.info(f"Handler '{name}' 动态停用成功")
+        return True
+
     async def _start_all_handlers(self) -> None:
         """启动所有Handler"""
         self.logger.info(f"正在启动 {len(self.handlers)} 个Handler...")

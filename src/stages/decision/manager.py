@@ -200,6 +200,59 @@ class DeciderManager:
                 f"这可能导致音频交叠。如非预期，请在配置中只启用一个。"
             )
 
+    async def enable_decider(self, decider_name: str, decision_config: Dict[str, Any]) -> bool:
+        """动态启用单个 Decider：创建实例并启动，加入并行决策分发。
+
+        Args:
+            decider_name: Decider 名称
+            decision_config: 决策层配置（含各 Decider 子配置段）
+
+        Returns:
+            True 表示已在运行或启动成功
+        """
+        if decider_name in self._deciders:
+            self.logger.info(f"Decider '{decider_name}' 已在运行，跳过")
+            return True
+
+        try:
+            await self._create_decider(decider_name, decision_config)
+            decider = self._deciders[decider_name]
+            await decider.setup()
+            if decider_name not in self._decider_names:
+                self._decider_names.append(decider_name)
+            self._decider_ready[decider_name] = True
+            # 向后兼容：无 current 时指向它
+            if self._current_decider is None:
+                self._current_decider = decider
+                self._decider_name = decider_name
+            self.logger.info(f"Decider '{decider_name}' 动态启用成功")
+            return True
+        except Exception as e:
+            self.logger.error(f"动态启用 Decider '{decider_name}' 失败: {e}", exc_info=True)
+            return False
+
+    async def disable_decider(self, decider_name: str) -> bool:
+        """动态停用单个 Decider：cleanup 并从并行分发列表移除。"""
+        decider = self._deciders.pop(decider_name, None)
+        if decider is None:
+            self.logger.info(f"Decider '{decider_name}' 未在运行，跳过")
+            return True
+
+        try:
+            await decider.cleanup()
+        except Exception as e:
+            self.logger.error(f"Decider '{decider_name}' 停止失败: {e}", exc_info=True)
+
+        self._decider_ready.pop(decider_name, None)
+        if decider_name in self._decider_names:
+            self._decider_names.remove(decider_name)
+        # 向后兼容：current 指向被停用的实例时，改指剩余第一个
+        if self._current_decider is decider:
+            self._current_decider = next(iter(self._deciders.values()), None) if self._deciders else None
+            self._decider_name = self._decider_names[0] if self._decider_names else None
+        self.logger.info(f"Decider '{decider_name}' 动态停用成功")
+        return True
+
     async def _create_decider(self, decider_name: str, decision_config: Dict[str, Any]) -> None:
         """
         创建单个Decider实例
