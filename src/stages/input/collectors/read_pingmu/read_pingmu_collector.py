@@ -33,7 +33,7 @@ except ImportError:
 _MONITOR_INTERVAL_S = 1.0
 
 
-@collector("read_pingmu")
+@collector("read_pingmu", label="屏幕读取", description="读取屏幕内容并识别为输入")
 class ReadPingmuCollector:
     """
     屏幕读评输入Collector

@@ -43,7 +43,11 @@ class ControlMethod(Enum):
     SPACE_KEY = "space_key"
 
 
-@collector("mainosaba")
+@collector(
+    "mainosaba",
+    label="游戏画面读取",
+    description="截取文字冒险游戏（ADV）画面，用 VLM 识别游戏文本并产生消息",
+)
 class MainosabaCollector:
     """
     MainosabaCollector - 从游戏画面采集文本数据

@@ -31,7 +31,7 @@ from src.modules.types.base.normalized_message import NormalizedMessage
 from .client.websocket_client import BiliWebSocketClient
 
 
-@collector("bili_danmaku_official")
+@collector("bili_danmaku_official", label="B 站官方弹幕", description="通过官方接口采集 Bilibili 直播弹幕")
 class BiliDanmakuOfficialCollector:
     """
     Bilibili 官方弹幕 Collector

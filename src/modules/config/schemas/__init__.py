@@ -1,5 +1,6 @@
 """Pydantic schemas for configuration validation."""
 
+from dataclasses import dataclass
 from typing import Dict, Optional, Type
 
 from pydantic import BaseModel
@@ -16,9 +17,33 @@ from .logging import LoggingConfig
 CONFIG_SCHEMA_REGISTRY: Dict[str, Type[BaseModel]] = {}
 
 
+@dataclass(frozen=True)
+class ComponentUIMeta:
+    """组件 UI 元数据（配置页展示用）。
+
+    由 ``@collector/@decider/@handler`` 装饰器在注册组件时一并登记，
+    是组件显示名/描述的唯一事实源头（替代旧 ``_FRIENDLY_LABELS`` 硬编码表）。
+    """
+
+    label: str
+    """显示名。未显式声明时 fallback 为组件 key（英文标识本身），不做 .title() 伪翻译。"""
+
+    description: str
+    """显示描述。未显式声明时为空字符串。"""
+
+
+# 组件 UI 元数据 Registry（与 CONFIG_SCHEMA_REGISTRY 同 key）
+COMPONENT_UI_REGISTRY: Dict[str, ComponentUIMeta] = {}
+
+
 def register_config_schema(type: str, schema_class: Type[BaseModel]) -> None:
     """注册组件的配置 Schema"""
     CONFIG_SCHEMA_REGISTRY[type] = schema_class
+
+
+def register_component_ui(type: str, label: str, description: str) -> None:
+    """注册组件的 UI 元数据（显示名/描述）"""
+    COMPONENT_UI_REGISTRY[type] = ComponentUIMeta(label=label, description=description)
 
 
 # Output handler schemas — 延迟导入以避免循环依赖，见上方 registry 注释

@@ -22,7 +22,7 @@ from src.modules.time_utils import now_ms
 _CONNECT_INIT_WAIT_S = 1
 
 
-@decider("maibot")
+@decider("maibot", label="MaiBot 决策", description="调用 MaiBot 进行决策")
 class MaiBotDecider:
     """通过 WebSocket 与 MaiBot 通信，将 NormalizedMessage 转发给 MaiBot，并从 MaiBot 的回复中提取文本作为 Intent。"""
 

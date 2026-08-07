@@ -36,7 +36,7 @@ except ImportError:
     pass  # edge_tts可选，由配置决定使用哪个引擎
 
 
-@handler("edge_tts")
+@handler("edge_tts", label="Edge TTS", description="使用 Edge TTS 引擎进行文本转语音")
 class EdgeTTSHandler(AudioHandlerBase):
     """
     EdgeTTS Handler实现

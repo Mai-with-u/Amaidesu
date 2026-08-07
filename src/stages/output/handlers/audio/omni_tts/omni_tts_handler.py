@@ -37,7 +37,7 @@ except ImportError:
     pass
 
 
-@handler("omni_tts")
+@handler("omni_tts", label="Omni TTS", description="Omni TTS 语音合成")
 class OmniTTSHandler(AudioHandlerBase):
     """
     OmniTTS Handler实现

@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from src.modules.types import Intent
 
 
-@handler("debug_console")
+@handler("debug_console", label="调试控制台", description="调试信息输出控制台")
 class DebugConsoleHandler:
     """
     调试用控制台输出Handler

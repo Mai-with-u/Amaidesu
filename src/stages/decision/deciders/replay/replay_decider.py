@@ -25,7 +25,7 @@ from src.modules.types.base.normalized_message import NormalizedMessage
 from src.modules.time_utils import now_ms
 
 
-@decider("replay")
+@decider("replay", label="回放决策", description="输入重放（调试用）")
 class ReplayDecider:
     """
     输入重放决策提供者

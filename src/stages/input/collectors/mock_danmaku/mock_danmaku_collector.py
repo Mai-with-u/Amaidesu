@@ -21,7 +21,7 @@ from src.modules.time_utils import now_ms
 from src.modules.types.base.normalized_message import NormalizedMessage
 
 
-@collector("mock_danmaku")
+@collector("mock_danmaku", label="模拟弹幕", description="模拟弹幕输入，用于调试测试")
 class MockDanmakuCollector:
     """
     模拟弹幕输入Collector

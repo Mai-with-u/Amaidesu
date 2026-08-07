@@ -14,7 +14,7 @@
 - 这些装饰器替换了旧的 Collector/Decider/Handler 注册系统
 """
 
-from typing import TYPE_CHECKING, Dict, Protocol, Type, TypeVar, runtime_checkable
+from typing import TYPE_CHECKING, Dict, Optional, Protocol, Type, TypeVar, runtime_checkable
 
 if TYPE_CHECKING:
     from src.modules.types.capabilities import HandlerCapabilities
@@ -25,12 +25,19 @@ T = TypeVar("T")
 _HANDLERS: Dict[str, Type] = {}
 
 
-def handler(name: str):
+def handler(
+    name: str,
+    *,
+    label: Optional[str] = None,
+    description: Optional[str] = None,
+):
     """
     将类注册为 Output Handler 的装饰器
 
     Args:
         name: 唯一标识符（如 "tts", "subtitle"）
+        label: 配置页显示名。不传则显示 name 本身（英文标识，不做伪翻译）
+        description: 配置页显示描述。不传则为空
 
     Raises:
         ValueError: 如果名称已被注册
@@ -39,8 +46,8 @@ def handler(name: str):
         装饰器函数
 
     Example:
-        @handler("tts")
-        class TTSOutputHandler:
+        @handler("subtitle", label="字幕", description="字幕渲染")
+        class SubtitleHandler:
             pass
     """
 
@@ -49,15 +56,21 @@ def handler(name: str):
             raise ValueError(f"Handler '{name}' 已被注册")
         _HANDLERS[name] = cls
 
-        # 自动注册 ConfigSchema（如果组件定义了嵌套 ConfigSchema 类）
-        config_schema = getattr(cls, "ConfigSchema", None)
-        if config_schema is not None:
-            try:
-                from src.modules.config.schemas import register_config_schema
+        try:
+            from src.modules.config.schemas import (
+                register_component_ui,
+                register_config_schema,
+            )
 
+            # 自动注册 ConfigSchema（如果组件定义了嵌套 ConfigSchema 类）
+            config_schema = getattr(cls, "ConfigSchema", None)
+            if config_schema is not None:
                 register_config_schema(name, config_schema)
-            except ImportError:
-                pass  # schemas 模块不可用时静默跳过
+
+            # UI 元数据是组件属性，独立于 ConfigSchema（无嵌套 schema 的组件也可声明显示名）
+            register_component_ui(name, label or name, description or "")
+        except ImportError:
+            pass  # schemas 模块不可用时静默跳过
 
         return cls
 

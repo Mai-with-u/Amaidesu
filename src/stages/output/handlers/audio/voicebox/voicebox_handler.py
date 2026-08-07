@@ -31,7 +31,7 @@ DTYPE = np.int16
 BLOCKSIZE = 1024
 
 
-@handler("voicebox")
+@handler("voicebox", label="VoiceBox", description="VoiceBox 语音合成")
 class VoiceboxHandler(AudioHandlerBase):
     """
     Voicebox Handler 实现

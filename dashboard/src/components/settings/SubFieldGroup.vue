@@ -19,6 +19,7 @@
             size="small"
           />
         </div>
+        <div v-if="field.description" class="sub-card-desc">{{ field.description }}</div>
         <div v-show="expanded.has(field.key)" class="sub-card-body">
           <SubFieldGroup
             :fields="field.children"
@@ -153,6 +154,14 @@ function getChildrenChangeCount(field: ConfigFieldSchema): number {
 
 .sub-card-header:hover {
   background: var(--bg-hover);
+}
+
+.sub-card-desc {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  padding: 0 var(--spacing-md) var(--spacing-sm);
+  margin-top: -4px;
 }
 
 .sub-card-header-left {

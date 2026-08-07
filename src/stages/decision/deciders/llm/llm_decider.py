@@ -29,7 +29,7 @@ from src.modules.types.base.normalized_message import NormalizedMessage
 from src.modules.time_utils import now_ms
 
 
-@decider("llm")
+@decider("llm", label="LLM 决策", description="直接调用 LLM 生成回复")
 class LLMDecider:
     """
     LLM决策提供者

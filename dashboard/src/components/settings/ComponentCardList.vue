@@ -18,6 +18,7 @@
         v-for="card in componentCards"
         :key="card.key"
         :label="card.label"
+        :description="card.description"
         :component-key="card.key"
         :component-fields="card.children || []"
         :enabled-list="enabledList"

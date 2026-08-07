@@ -23,6 +23,9 @@
       </div>
     </div>
 
+    <!-- 组件描述 -->
+    <div v-if="description" class="card-desc">{{ description }}</div>
+
     <!-- 卡片体：展开时显示子字段，始终可展开（禁用时也可查看配置） -->
     <div v-if="componentFields.length > 0 && expanded" class="card-body">
       <SubFieldGroup
@@ -43,6 +46,7 @@ import SubFieldGroup from './SubFieldGroup.vue';
 
 const props = defineProps<{
   label: string;
+  description?: string;
   componentKey: string;
   enabledList: string[];
   componentFields: ConfigFieldSchema[];
@@ -141,6 +145,14 @@ function toggleEnabled(val: boolean) {
   font-size: 15px;
   font-weight: 600;
   color: var(--text-primary);
+}
+
+.card-desc {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  padding: 0 var(--spacing-lg) var(--spacing-sm);
+  margin-top: -4px;
 }
 
 .card-header-right {

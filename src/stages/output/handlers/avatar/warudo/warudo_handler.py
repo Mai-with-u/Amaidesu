@@ -65,7 +65,7 @@ except ImportError:
     WEBSOCKETS_AVAILABLE = False
 
 
-@handler("warudo")
+@handler("warudo", label="Warudo", description="Warudo 模型集成")
 class WarudoHandler(AvatarHandlerBase):
     """Warudo 虚拟形象控制 Handler"""
 

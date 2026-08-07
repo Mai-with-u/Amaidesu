@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from src.modules.types import Intent
 
 
-@handler("sticker")
+@handler("sticker", label="表情包", description="表情包渲染")
 class StickerHandler:
     """
     贴纸输出Handler

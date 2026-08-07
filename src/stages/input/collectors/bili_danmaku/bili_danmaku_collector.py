@@ -25,7 +25,7 @@ from src.modules.time_utils import now_ms
 from src.modules.types.base.normalized_message import NormalizedMessage
 
 
-@collector("bili_danmaku")
+@collector("bili_danmaku", label="B 站弹幕", description="从 Bilibili 直播间采集弹幕数据")
 class BiliDanmakuCollector:
     """
     Bilibili 直播弹幕 Collector

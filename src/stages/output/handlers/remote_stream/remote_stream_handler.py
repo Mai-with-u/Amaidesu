@@ -101,7 +101,7 @@ class ImageConfig(BaseModel):
     quality: int = 80
 
 
-@handler("remote_stream")
+@handler("remote_stream", label="远程流", description="远程音频流输出")
 class RemoteStreamHandler:
     """远程流媒体输出Handler"""
 

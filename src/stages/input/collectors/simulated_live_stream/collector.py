@@ -61,7 +61,7 @@ if TYPE_CHECKING:
     )
 
 
-@collector("simulated_live_stream")
+@collector("simulated_live_stream", label="模拟直播", description="模拟直播数据流（调试用）")
 class SimulatedLiveStreamCollector:
     """模拟直播间 InputCollector
 

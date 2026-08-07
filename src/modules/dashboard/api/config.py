@@ -203,36 +203,30 @@ def _extract_label(field: dict) -> str:
     return field.get("name", "")
 
 
-# 友好标签：英文下划线名 → 中文显示名
-# 用于将 schema generator 输出的 .title() 英文标签替换为更直观的中文标签
-_FRIENDLY_LABELS: dict[str, str] = {
-    # ---- Collectors（Input 阶段） ----
-    "console_input": "控制台输入",
-    "bili_danmaku": "B 站弹幕",
-    "bili_danmaku_official": "B 站官方弹幕",
-    "mainosaba": "主幕读取",
-    "mock_danmaku": "模拟弹幕",
-    "read_pingmu": "屏幕读取",
-    "stt": "语音识别",
-    # ---- Handlers（Output 阶段） ----
-    "edge_tts": "Edge TTS",
-    "gptsovits": "GPT-SoVITS",
-    "omni_tts": "Omni TTS",
-    "subtitle": "字幕",
-    "sticker": "表情包",
-    "vts": "VTubeStudio",
-    "warudo": "Warudo",
-    "vrchat": "VRChat",
-    "obs_control": "OBS 控制",
-    "debug_console": "调试控制台",
-    "remote_stream": "远程流",
-    # ---- Deciders（Decision 阶段） ----
-    "llm": "LLM 决策",
-    "maibot": "MaiBot 决策",
-    "amaidesu": "Amaidesu 决策",
-    "command": "命令决策",
-    "replay": "回放决策",
-}
+def _apply_component_meta(group_fields: list[dict]) -> list[dict]:
+    """用 ``COMPONENT_UI_REGISTRY`` 的组件元数据覆盖 ``_group_into_children`` 自动生成的标签。
+
+    匹配规则：字段 key 的最后一段（leaf）在 ``COMPONENT_UI_REGISTRY`` 中则覆盖
+    label/description（显示名/描述由组件装饰器声明，单一事实源头）。
+    未注册的容器保持原样（嵌套对象等非组件结构）。
+
+    递归处理 ``children`` 子树。
+    """
+    from src.modules.config.schemas import COMPONENT_UI_REGISTRY
+
+    result: list[dict] = []
+    for f in group_fields:
+        key = f.get("key", "")
+        parts = key.split(".")
+        if len(parts) >= 2:
+            leaf = parts[-1]
+            meta = COMPONENT_UI_REGISTRY.get(leaf)
+            if meta is not None:
+                f = {**f, "label": meta.label, "description": meta.description}
+        if f.get("children"):
+            f = {**f, "children": _apply_component_meta(f["children"])}
+        result.append(f)
+    return result
 
 
 def _convert_to_api_field(field: dict, main_config: dict) -> dict:
@@ -324,26 +318,6 @@ def _expand_sub_config_fields(group_fields: list[dict], main_config: dict) -> li
             expanded.append(_convert_to_api_field(sf, main_config))
 
     return expanded
-
-
-def _apply_friendly_labels(group_fields: list[dict]) -> list[dict]:
-    """用 ``_FRIENDLY_LABELS`` 替换 ``_group_into_children`` 自动生成的英文 .title() 标签。
-
-    递归处理 ``children`` 子树。匹配规则：字段 key 的最后一段在 ``_FRIENDLY_LABELS`` 中。
-    """
-    result: list[dict] = []
-    for f in group_fields:
-        key = f.get("key", "")
-        parts = key.split(".")
-        if len(parts) >= 2:
-            leaf = parts[-1]
-            friendly = _FRIENDLY_LABELS.get(leaf)
-            if friendly:
-                f = {**f, "label": friendly, "description": f"{friendly} 配置"}
-        if f.get("children"):
-            f = {**f, "children": _apply_friendly_labels(f["children"])}
-        result.append(f)
-    return result
 
 
 # section → TOML 文件映射（与 server.py _SECTION_TO_CONFIG_FILE 同步）
@@ -492,8 +466,8 @@ def _build_frontend_groups(config_service) -> dict:
 
         group_fields = _group_into_children(group_fields)
 
-        # 用友好中文标签覆盖 _group_into_children 自动生成的 .title() 英文标签
-        group_fields = _apply_friendly_labels(group_fields)
+        # 用组件注册表（装饰器声明的 label/description）覆盖自动生成的标签
+        group_fields = _apply_component_meta(group_fields)
 
         file_name = _SECTION_TO_FILE.get(section_key, "core.toml")
         groups.append(

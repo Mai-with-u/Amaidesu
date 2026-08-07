@@ -50,7 +50,7 @@ from .room_state_loop import RoomStateLoop
 from .timing_gate import TimingGate
 
 
-@decider("amaidesu")
+@decider("amaidesu", label="Amaidesu 决策", description="直播专用决策器（Planner + Replyer 两阶段）")
 class AmaidesuDecider:
     """直播专用决策器（双阶段编排：Planner + Replyer）。"""
 

@@ -34,7 +34,7 @@ except ImportError:
     obs = None
 
 
-@handler("obs_control")
+@handler("obs_control", label="OBS 控制", description="OBS 场景与源控制")
 class ObsControlHandler:
     """OBS控制Handler
 

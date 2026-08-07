@@ -207,7 +207,7 @@ class OutlineLabel:
         self._draw_text()
 
 
-@handler("subtitle")
+@handler("subtitle", label="字幕", description="字幕渲染")
 class SubtitleHandler:
     """
     字幕输出Handler

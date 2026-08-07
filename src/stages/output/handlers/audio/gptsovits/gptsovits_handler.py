@@ -61,7 +61,7 @@ def _sanitize_text_for_tts(text: str) -> str:
     return _TTS_UNSAFE_CHARS.sub("", text)
 
 
-@handler("gptsovits")
+@handler("gptsovits", label="GPT-SoVITS", description="使用 GPT-SoVITS 进行语音合成")
 class GPTSoVITSHandler(AudioHandlerBase):
     """
     GPTSoVITS Handler实现

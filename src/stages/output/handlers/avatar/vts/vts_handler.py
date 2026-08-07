@@ -44,7 +44,7 @@ except ImportError:
     pass
 
 
-@handler("vts")
+@handler("vts", label="VTubeStudio", description="VTubeStudio 模型驱动")
 class VTSHandler(AvatarHandlerBase):
     """VTS Handler 编排器"""
 

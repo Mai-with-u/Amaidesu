@@ -32,7 +32,7 @@ STATUS_CONTINUE_FRAME = 1
 STATUS_LAST_FRAME = 2
 
 
-@collector("stt")
+@collector("stt", label="语音识别", description="语音识别输入（STT）")
 class STTCollector:
     """
     语音转文字输入Collector

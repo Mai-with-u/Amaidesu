@@ -23,7 +23,7 @@ from src.modules.types.base.normalized_message import NormalizedMessage
 _ERROR_RETRY_INTERVAL_S = 1
 
 
-@collector("console_input")
+@collector("console_input", label="控制台输入", description="从控制台读取用户输入")
 class ConsoleInputCollector:
     """
     控制台输入Collector（重构后）

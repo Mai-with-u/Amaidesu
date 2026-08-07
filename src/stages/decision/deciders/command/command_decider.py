@@ -22,7 +22,7 @@ from .command_registry import CommandRegistry
 from .config import CommandDeciderConfig
 
 
-@decider("command")
+@decider("command", label="命令决策", description="通用命令意图路由")
 class CommandDecider:
     """通用命令意图路由器。
 

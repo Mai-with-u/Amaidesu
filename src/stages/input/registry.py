@@ -14,7 +14,7 @@
 - 这些装饰器替换了旧的 Collector/Decider/Handler 注册系统
 """
 
-from typing import TypeVar, Type, Dict
+from typing import Dict, Optional, Type, TypeVar
 
 T = TypeVar("T")
 
@@ -22,12 +22,19 @@ T = TypeVar("T")
 _COLLECTORS: Dict[str, Type] = {}
 
 
-def collector(name: str):
+def collector(
+    name: str,
+    *,
+    label: Optional[str] = None,
+    description: Optional[str] = None,
+):
     """
     将类注册为 Input Collector 的装饰器
 
     Args:
         name: 唯一标识符（如 "console", "bili_danmaku"）
+        label: 配置页显示名。不传则显示 name 本身（英文标识，不做伪翻译）
+        description: 配置页显示描述。不传则为空
 
     Raises:
         ValueError: 如果名称已被注册
@@ -36,7 +43,7 @@ def collector(name: str):
         装饰器函数
 
     Example:
-        @collector("console")
+        @collector("console", label="控制台输入", description="从控制台读取用户输入")
         class ConsoleInputCollector:
             pass
     """
@@ -46,15 +53,21 @@ def collector(name: str):
             raise ValueError(f"Collector '{name}' 已被注册")
         _COLLECTORS[name] = cls
 
-        # 自动注册 ConfigSchema（如果组件定义了嵌套 ConfigSchema 类）
-        config_schema = getattr(cls, "ConfigSchema", None)
-        if config_schema is not None:
-            try:
-                from src.modules.config.schemas import register_config_schema
+        try:
+            from src.modules.config.schemas import (
+                register_component_ui,
+                register_config_schema,
+            )
 
+            # 自动注册 ConfigSchema（如果组件定义了嵌套 ConfigSchema 类）
+            config_schema = getattr(cls, "ConfigSchema", None)
+            if config_schema is not None:
                 register_config_schema(name, config_schema)
-            except ImportError:
-                pass  # schemas 模块不可用时静默跳过
+
+            # UI 元数据是组件属性，独立于 ConfigSchema（无嵌套 schema 的组件也可声明显示名）
+            register_component_ui(name, label or name, description or "")
+        except ImportError:
+            pass  # schemas 模块不可用时静默跳过
 
         return cls
 

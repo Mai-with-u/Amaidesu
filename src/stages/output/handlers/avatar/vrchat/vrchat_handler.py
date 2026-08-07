@@ -32,7 +32,7 @@ except ImportError:
     SimpleUDPClient = None
 
 
-@handler("vrchat")
+@handler("vrchat", label="VRChat", description="VRChat 模型驱动")
 class VRChatHandler(AvatarHandlerBase):
     """
     VRChat Handler 实现
