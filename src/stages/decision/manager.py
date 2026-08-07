@@ -131,13 +131,15 @@ class DeciderManager:
         # 获取启用的Decider列表
         enabled_deciders = self._get_enabled_deciders(decision_config, decider_name)
 
-        if not enabled_deciders:
-            self.logger.warning("没有启用的Decider，将使用默认的maibot")
-            enabled_deciders = ["maibot"]
-
-        # 记录已加载的Decider
+        # 显式清空旧状态：空配置 = 停用 Decision 阶段，绝不兜底加载默认 Decider
         self._decider_names = enabled_deciders
         self._deciders = {}
+        self._current_decider = None
+        self._decider_name = None
+
+        if not enabled_deciders:
+            self.logger.warning("没有启用的 Decider，Decision 阶段停用")
+            return
 
         async with self._switch_lock:
             # 创建并初始化所有启用的Decider

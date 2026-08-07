@@ -232,14 +232,9 @@ class InputCollectorManager:
     async def load_from_config(self, config: dict[str, Any], config_service=None) -> list:
         self.logger.info("开始从配置加载InputCollector...")
 
-        enabled = config.get("enabled", True)
-        if not enabled:
-            self.logger.info("输入层已禁用（enabled=false）")
-            return []
-
-        enabled_collectors = config.get("enabled")
+        enabled_collectors = config.get("enabled") or []
         if not enabled_collectors:
-            self.logger.warning("未配置任何输入Collector（enabled为空）")
+            self.logger.warning("未配置任何输入Collector（enabled 为空或缺失），输入层停用")
             return []
 
         self.logger.info(f"配置了 {len(enabled_collectors)} 个输入Collector: {enabled_collectors}")

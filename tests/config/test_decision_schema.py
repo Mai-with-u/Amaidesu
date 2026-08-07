@@ -444,7 +444,8 @@ class TestDecisionConfigParseRealToml:
     def test_enabled_parses_to_list(self, schemas, real_decision_toml_data):
         cls = schemas["DecisionConfig"]
         cfg = cls.model_validate(real_decision_toml_data)
-        assert cfg.deciders.enabled == ["amaidesu"]
+        # 只断言解析为列表（内容由用户配置决定，空列表 = 停用 Decision 阶段，同样合法）
+        assert isinstance(cfg.deciders.enabled, list)
 
     def test_amaidesu_block_parses(self, schemas, real_decision_toml_data):
         cls = schemas["DecisionConfig"]

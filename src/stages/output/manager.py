@@ -417,9 +417,9 @@ class OutputHandlerManager:
         except ImportError as e:
             self.logger.warning(f"导入 handlers 包失败: {e}")
 
-        enabled = config.get("enabled", True)
-        if not enabled:
-            self.logger.info("输出Handler层已禁用（enabled=false）")
+        enabled_handlers = config.get("enabled") or []
+        if not enabled_handlers:
+            self.logger.warning("未配置任何输出Handler（enabled 为空或缺失），输出层停用")
             return
 
         self.concurrent_rendering = config.get("concurrent_rendering", True)
@@ -432,11 +432,6 @@ class OutputHandlerManager:
             f"error_handling={self.error_handling}, "
             f"timeout={self.render_timeout_ms}ms"
         )
-
-        enabled_handlers = config.get("enabled", [])
-        if not enabled_handlers:
-            self.logger.warning("未配置任何输出Handler（enabled为空）")
-            return
 
         self.logger.info(f"配置了 {len(enabled_handlers)} 个输出Handler: {enabled_handlers}")
 

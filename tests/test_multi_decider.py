@@ -9,8 +9,7 @@ Multi-Decider 支持测试
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from typing import Any, Dict, List
+from unittest.mock import AsyncMock, MagicMock
 
 # 导入 providers 模块以触发 @decider 装饰器注册
 from src.stages.decision import deciders  # noqa: F401
@@ -156,19 +155,20 @@ class TestMultiDeciderConfigLoading:
         assert len(manager._deciders) == 2
 
     @pytest.mark.asyncio
-    async def test_fallback_to_default_when_no_enabled_deciders(self, mock_services):
-        """测试没有启用 Decider 时使用默认值"""
+    async def test_no_deciders_loaded_when_enabled_empty(self, mock_services):
+        """测试没有启用 Decider 时不加载任何 Decider（不兜底 maibot）"""
         mock_event_bus = MagicMock()
         manager = _make_manager(mock_event_bus, mock_services)
 
-        # 空配置
+        # 空配置 / 空 enabled 列表
         decision_config = {}
 
         await manager.setup(decision_config=decision_config)
 
-        # 应该使用默认的 maibot
-        assert len(manager._deciders) == 1
-        assert "maibot" in manager._deciders
+        # 不应加载任何 Decider（含 maibot），Decision 阶段停用
+        assert len(manager._deciders) == 0
+        assert manager.get_decider_names() == []
+        assert manager.get_current_decider_name() is None
 
 
 class TestSpeechConflictWarning:
@@ -300,7 +300,7 @@ class TestMultiDeciderDecision:
         await manager.decide(test_message)
 
         # 验证所有 Decider 的 decide 都被调用了
-        for name, decider in manager._deciders.items():
+        for _name, decider in manager._deciders.items():
             decider.decide.assert_called_once_with(test_message)
 
     @pytest.mark.asyncio
@@ -366,11 +366,11 @@ class TestBackwardCompatibility:
 
         await manager.setup(decision_config=decision_config)
 
-        deciders = manager.get_deciders()
+        loaded_deciders = manager.get_deciders()
 
-        assert len(deciders) == 2
-        assert "maibot" in deciders
-        assert "llm" in deciders
+        assert len(loaded_deciders) == 2
+        assert "maibot" in loaded_deciders
+        assert "llm" in loaded_deciders
 
     @pytest.mark.asyncio
     async def test_get_decider_names_returns_name_list(self, mock_services):
@@ -481,8 +481,8 @@ class TestEdgeCases:
         manager._deciders["llm"].decide.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_empty_enabled_list_uses_default(self, mock_services):
-        """测试空 enabled 列表使用默认 Decider"""
+    async def test_empty_enabled_list_loads_nothing(self, mock_services):
+        """测试显式空 enabled 列表时不加载任何 Decider（不兜底 maibot）"""
         mock_event_bus = MagicMock()
         manager = _make_manager(mock_event_bus, mock_services)
 
@@ -490,6 +490,6 @@ class TestEdgeCases:
 
         await manager.setup(decision_config=decision_config)
 
-        # 应该使用默认的 maibot
-        assert len(manager._deciders) == 1
-        assert "maibot" in manager._deciders
+        # 不应加载任何 Decider（含 maibot）
+        assert len(manager._deciders) == 0
+        assert manager.get_decider_names() == []
