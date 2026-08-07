@@ -29,12 +29,17 @@ class WebSocketHandler:
     # 心跳超时倍数：连续 N 个心跳周期未收到 pong 视为僵尸连接并踢出
     HEARTBEAT_TIMEOUT_MULTIPLIER = 3
 
+    # 单连接发送队列上限：满时丢弃最旧保新，防止慢客户端导致内存无限增长
+    MAX_QUEUE_SIZE = 1024
+
     def __init__(self, heartbeat_interval: int = 30):
         self.heartbeat_interval = heartbeat_interval
         self._clients: Dict[str, WebSocket] = {}
         self._client_info: Dict[str, ClientInfo] = {}
         self._client_subscriptions: Dict[str, Set[str]] = {}
         self._last_pong: Dict[str, float] = {}
+        self._send_queues: Dict[str, asyncio.Queue[WebSocketMessage]] = {}
+        self._writer_tasks: Dict[str, "asyncio.Task[None]"] = {}
         self._broadcast_callbacks: List[Callable] = []
         self._running = False
 
@@ -57,9 +62,14 @@ class WebSocketHandler:
         )
         self._last_pong[client_id] = time.time()
 
+        # 每连接独立发送队列 + 单 writer task：串行发送，避免多协程并发写同一 socket
+        queue: asyncio.Queue[WebSocketMessage] = asyncio.Queue(maxsize=self.MAX_QUEUE_SIZE)
+        self._send_queues[client_id] = queue
+        self._writer_tasks[client_id] = asyncio.create_task(self._writer_loop(client_id, websocket, queue))
+
         logger.info(f"WebSocket 客户端连接: {client_id}，当前连接数: {self.client_count}")
 
-        # 发送欢迎消息
+        # 发送欢迎消息（入队，由 writer task 串行发送）
         await self._send_to_client(
             client_id,
             WebSocketMessage(
@@ -74,16 +84,24 @@ class WebSocketHandler:
 
         return client_id
 
+    def _remove_client(self, client_id: str) -> None:
+        """从注册表移除客户端（writer 异常清理与 disconnect 共用；不取消 writer task）"""
+        self._clients.pop(client_id, None)
+        self._client_subscriptions.pop(client_id, None)
+        self._client_info.pop(client_id, None)
+        self._last_pong.pop(client_id, None)
+
     async def disconnect(self, client_id: str) -> None:
-        """断开客户端连接"""
-        if client_id in self._clients:
-            del self._clients[client_id]
-        if client_id in self._client_subscriptions:
-            del self._client_subscriptions[client_id]
-        if client_id in self._client_info:
-            del self._client_info[client_id]
-        if client_id in self._last_pong:
-            del self._last_pong[client_id]
+        """断开客户端连接（取消 writer task 并清理注册表）"""
+        task = self._writer_tasks.pop(client_id, None)
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        self._send_queues.pop(client_id, None)
+        self._remove_client(client_id)
 
         logger.info(f"WebSocket 客户端断开: {client_id}，当前连接数: {self.client_count}")
 
@@ -139,21 +157,45 @@ class WebSocketHandler:
             ),
         )
 
+    async def _writer_loop(self, client_id: str, websocket: WebSocket, queue: asyncio.Queue[WebSocketMessage]) -> None:
+        """单连接写循环：唯一消费者，串行发送，避免并发写同一 socket。
+
+        发送失败（socket 已坏）时清理注册表；disconnect() 通过取消本任务完成清理。
+        """
+        try:
+            while True:
+                message = await queue.get()
+                await websocket.send_text(message.model_dump_json())
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"发送消息到客户端 {client_id} 失败（将清理连接）: {e}")
+            self._remove_client(client_id)
+
     async def _send_to_client(self, client_id: str, message: WebSocketMessage) -> bool:
-        """发送消息到指定客户端"""
-        if client_id not in self._clients:
+        """将消息入队到客户端发送队列（非阻塞）。
+
+        队列满时丢弃最旧的消息以保证新消息不丢失。返回 True 表示已入队
+        （实际发送由 writer task 完成；发送失败由 writer 清理连接）。
+        """
+        queue = self._send_queues.get(client_id)
+        if queue is None:
             return False
 
         try:
-            await self._clients[client_id].send_text(message.model_dump_json())
+            queue.put_nowait(message)
             return True
-        except Exception as e:
-            logger.error(f"发送消息到客户端 {client_id} 失败: {e}")
-            await self.disconnect(client_id)
-            return False
+        except asyncio.QueueFull:
+            # 队列满：丢弃最旧一条后重试，保证新消息优先送达
+            try:
+                queue.get_nowait()
+                queue.put_nowait(message)
+            except (asyncio.QueueEmpty, asyncio.QueueFull):
+                pass
+            return True
 
     async def broadcast(self, event_type: str, data: Dict[str, object], message_id: Optional[str] = None) -> int:
-        """广播消息到所有订阅了该事件的客户端"""
+        """广播消息到所有订阅了该事件的客户端（入队，由各客户端 writer task 串行发送）"""
         message = WebSocketMessage(
             type=event_type,
             timestamp=time.time(),
@@ -162,19 +204,13 @@ class WebSocketHandler:
         )
 
         success_count = 0
-        disconnected = []
 
-        for client_id, events in self._client_subscriptions.items():
+        # list() 快照：writer 异常清理可能并发修改注册表
+        for client_id, events in list(self._client_subscriptions.items()):
             # 检查客户端是否订阅了该事件
             if event_type in events or "*" in events:
                 if await self._send_to_client(client_id, message):
                     success_count += 1
-                else:
-                    disconnected.append(client_id)
-
-        # 清理断开的连接
-        for client_id in disconnected:
-            await self.disconnect(client_id)
 
         return success_count
 
