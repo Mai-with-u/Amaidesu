@@ -82,7 +82,7 @@ function eventRecordToSessionEvent(record: EventRecord): DebugSessionEvent | nul
 
   if (record.type === 'message.received') {
     return {
-      id: `his-${record.id}`,
+      id: record.id,
       type: 'message.received',
       timestamp: record.timestamp,
       message: parseMessageEvent(record.data, record.timestamp),
@@ -92,7 +92,7 @@ function eventRecordToSessionEvent(record: EventRecord): DebugSessionEvent | nul
 
   // decision.intent / output.render：deciderName 与实时分支保持一致
   return {
-    id: `his-${record.id}`,
+    id: record.id,
     type: record.type as 'decision.intent' | 'output.render',
     timestamp: record.timestamp,
     intent: parseIntentEvent(record.data, record.timestamp),
@@ -129,7 +129,7 @@ export const useSessionStore = defineStore('session', () => {
 
     if (message.type === 'message.received') {
       const data = message.data as Record<string, unknown>;
-      const eventId = `msg-${message.timestamp}-${crypto.randomUUID().slice(0, 6)}`;
+      const eventId = message.id ?? `msg-${message.timestamp}-${crypto.randomUUID().slice(0, 6)}`;
 
       if (events.value.some(e => e.id === eventId)) return;
 
@@ -143,7 +143,8 @@ export const useSessionStore = defineStore('session', () => {
       trimEvents();
     } else if (message.type === 'decision.intent') {
       const data = message.data as Record<string, unknown>;
-      const eventId = `intent-${message.timestamp}-${crypto.randomUUID().slice(0, 6)}`;
+      const eventId =
+        message.id ?? `intent-${message.timestamp}-${crypto.randomUUID().slice(0, 6)}`;
 
       if (events.value.some(e => e.id === eventId)) return;
 
@@ -159,7 +160,7 @@ export const useSessionStore = defineStore('session', () => {
       const data = message.data as Record<string, unknown>;
 
       events.value.push({
-        id: `output-${message.timestamp}-${crypto.randomUUID().slice(0, 6)}`,
+        id: message.id ?? `output-${message.timestamp}-${crypto.randomUUID().slice(0, 6)}`,
         type: 'output.render',
         timestamp: message.timestamp,
         intent: parseIntentEvent(data, message.timestamp),

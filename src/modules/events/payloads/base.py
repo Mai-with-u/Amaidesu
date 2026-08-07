@@ -4,9 +4,10 @@
 为所有事件 Payload 提供统一的字符串表示，用于 EventBus 的 debug 日志。
 """
 
+import uuid
 from typing import Any, Optional, Tuple
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class BasePayload(BaseModel):
@@ -18,6 +19,12 @@ class BasePayload(BaseModel):
 
     所有事件 Payload 都应继承此类而非直接继承 BaseModel。
     """
+
+    id: str = Field(
+        default_factory=lambda: str(uuid.uuid4()),
+        description="事件唯一 ID（uuid4）。EventBus 经 model_dump → model_validate 分发，"
+        "所有订阅者从同一 dict 读回该字段，保证记录与广播等通道拿到同一 id（幂等去重依据）",
+    )
 
     def _format_field_value(self, value: Any, indent: int = 0) -> str:
         """

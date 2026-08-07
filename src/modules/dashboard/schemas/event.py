@@ -4,9 +4,9 @@ WebSocket 事件 Schema
 定义 WebSocket 事件的数据模型。
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class WebSocketMessage(BaseModel):
@@ -15,6 +15,10 @@ class WebSocketMessage(BaseModel):
     type: str
     timestamp: float
     data: Dict[str, Any]
+    id: Optional[str] = Field(
+        default=None,
+        description="事件唯一 ID（与事件历史 EventRecord.id 同源，前端幂等去重依据）",
+    )
 
 
 class SubscribeRequest(BaseModel):

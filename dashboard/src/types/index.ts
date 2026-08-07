@@ -196,6 +196,8 @@ export interface WebSocketMessage {
   type: string;
   timestamp: number;
   data: Record<string, unknown>;
+  /** 事件唯一 ID（与历史 EventRecord.id 同源，前端幂等去重依据；旧后端可能缺失） */
+  id?: string;
 }
 
 export interface SubscribeRequest {

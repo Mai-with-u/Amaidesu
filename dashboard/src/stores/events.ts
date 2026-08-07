@@ -25,17 +25,14 @@ export const useEventsStore = defineStore('events', () => {
   function handleMessage(message: WebSocketMessage) {
     // 后端初始历史：与当前条目合并（幂等，任意到达顺序，避免替换吞掉已到达的实时事件）
     if (message.type === 'events.history') {
-      const history: LoggedEvent[] = ((message.data.events as LoggedEvent[]) ?? []).map(e => ({
-        ...e,
-        id: `his-${e.id}`,
-      }));
+      const history = (message.data.events as LoggedEvent[]) ?? [];
       events.value = mergeEvents(history, events.value);
       return;
     }
-    // 常规实时事件：附加去重 id 后合并（限长）
+    // 常规实时事件：附加去重 id 后合并（限长）；后端已带 id 时直接使用（与历史同源）
     events.value = mergeEvents(
       [],
-      [...events.value, { ...message, id: `live-${crypto.randomUUID()}` }],
+      [...events.value, { ...message, id: message.id ?? `live-${crypto.randomUUID()}` }],
     );
   }
 

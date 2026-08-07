@@ -20,6 +20,7 @@ from src.modules.events.payloads import (
     IntentPayload,
     MessageReadyPayload,
 )
+from src.modules.events.payloads.base import BasePayload
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
@@ -129,11 +130,11 @@ class EventBroadcaster:
             self._subscribe_event(event_name, self._create_component_handler(event_name), model_class=payload_class)
 
     def _create_component_handler(self, target_event_name: str) -> Callable:
-        async def handler(event_name: str, data: BaseModel, source: str) -> None:
+        async def handler(event_name: str, data: BasePayload, source: str) -> None:
             try:
                 dict_data = data.model_dump() if isinstance(data, BaseModel) else {}
                 event_type = self.COMPONENT_EVENT_TYPE_MAP.get(target_event_name, "collector.connected")
-                await self.ws_handler.broadcast(event_type, dict_data)
+                await self.ws_handler.broadcast(event_type, dict_data, message_id=data.id)
             except Exception as e:
                 logger.error(f"广播 component event 失败: {e}")
 
@@ -150,28 +151,30 @@ class EventBroadcaster:
     async def _on_input_message(self, event_name: str, data: MessageReadyPayload, source: str) -> None:
         try:
             dict_data = data.model_dump()
-            await self.ws_handler.broadcast("message.received", dict_data)
+            await self.ws_handler.broadcast("message.received", dict_data, message_id=data.id)
         except Exception as e:
             logger.error(f"广播 input message 失败: {e}")
 
     async def _on_decision_intent(self, event_name: str, data: IntentPayload, source: str) -> None:
         try:
             dict_data = data.model_dump()
-            await self.ws_handler.broadcast("decision.intent", dict_data)
+            await self.ws_handler.broadcast("decision.intent", dict_data, message_id=data.id)
         except Exception as e:
             logger.error(f"广播 decision intent 失败: {e}")
 
     async def _on_output_intent(self, event_name: str, data: IntentPayload, source: str) -> None:
         try:
             dict_data = data.model_dump()
-            await self.ws_handler.broadcast("output.render", dict_data)
+            await self.ws_handler.broadcast("output.render", dict_data, message_id=data.id)
         except Exception as e:
             logger.error(f"广播 output intent 失败: {e}")
 
     async def _on_core_event(self, event_name: str, data: Any, source: str) -> None:
         try:
             dict_data = {"event": event_name, "payload": self._safe_serialize(data)}
-            await self.ws_handler.broadcast("system.status", dict_data)
+            await self.ws_handler.broadcast(
+                "system.status", dict_data, message_id=data.id if isinstance(data, BasePayload) else None
+            )
         except Exception as e:
             logger.error(f"广播 core event 失败: {e}")
 
@@ -181,7 +184,9 @@ class EventBroadcaster:
                 "event": "error",
                 "message": self._safe_serialize(data) or "Unknown error",
             }
-            await self.ws_handler.broadcast("system.error", dict_data)
+            await self.ws_handler.broadcast(
+                "system.error", dict_data, message_id=data.id if isinstance(data, BasePayload) else None
+            )
         except Exception as e:
             logger.error(f"广播 core error 失败: {e}")
 

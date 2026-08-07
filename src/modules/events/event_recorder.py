@@ -27,6 +27,7 @@ from src.modules.events.payloads import (
     IntentPayload,
     MessageReadyPayload,
 )
+from src.modules.events.payloads.base import BasePayload
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
@@ -107,13 +108,14 @@ class EventHistoryRecorder:
     # 事件处理器
     # ------------------------------------------------------------------
 
-    async def _on_input_message(self, event_name: str, data: BaseModel, source: str) -> None:
+    async def _on_input_message(self, event_name: str, data: BasePayload, source: str) -> None:
         try:
             dict_data = data.model_dump()
             message = dict_data.get("message", {})
             summary = (message.get("text", "") if isinstance(message, dict) else str(message))[:200]
             self._record(
                 EventRecord(
+                    id=data.id,
                     type="message.received",
                     level="info",
                     source=dict_data.get("source", source),
@@ -124,13 +126,14 @@ class EventHistoryRecorder:
         except Exception as e:
             logger.warning(f"记录 input message 事件失败: {e}")
 
-    async def _on_decision_intent(self, event_name: str, data: BaseModel, source: str) -> None:
+    async def _on_decision_intent(self, event_name: str, data: BasePayload, source: str) -> None:
         try:
             dict_data = data.model_dump()
             intent_data = dict_data.get("intent_data", {})
             summary = (intent_data.get("speech", "") if isinstance(intent_data, dict) else str(intent_data))[:200]
             self._record(
                 EventRecord(
+                    id=data.id,
                     type="decision.intent",
                     level="info",
                     source=dict_data.get("name", source),
@@ -141,13 +144,14 @@ class EventHistoryRecorder:
         except Exception as e:
             logger.warning(f"记录 decision intent 事件失败: {e}")
 
-    async def _on_output_intent(self, event_name: str, data: BaseModel, source: str) -> None:
+    async def _on_output_intent(self, event_name: str, data: BasePayload, source: str) -> None:
         try:
             dict_data = data.model_dump()
             intent_data = dict_data.get("intent_data", {})
             summary = (intent_data.get("speech", "") if isinstance(intent_data, dict) else str(intent_data))[:200]
             self._record(
                 EventRecord(
+                    id=data.id,
                     type="output.render",
                     level="info",
                     source=dict_data.get("name", source),
@@ -158,11 +162,12 @@ class EventHistoryRecorder:
         except Exception as e:
             logger.warning(f"记录 output intent 事件失败: {e}")
 
-    async def _on_core_event(self, event_name: str, data: BaseModel, source: str) -> None:
+    async def _on_core_event(self, event_name: str, data: BasePayload, source: str) -> None:
         try:
             dict_data = {"event": event_name, "payload": self._safe_serialize(data)}
             self._record(
                 EventRecord(
+                    id=data.id,
                     type="system.status",
                     level="info",
                     source="dashboard",
@@ -173,7 +178,7 @@ class EventHistoryRecorder:
         except Exception as e:
             logger.warning(f"记录 core event 失败: {e}")
 
-    async def _on_core_error(self, event_name: str, data: BaseModel, source: str) -> None:
+    async def _on_core_error(self, event_name: str, data: BasePayload, source: str) -> None:
         try:
             dict_data = {
                 "event": "error",
@@ -181,6 +186,7 @@ class EventHistoryRecorder:
             }
             self._record(
                 EventRecord(
+                    id=data.id,
                     type="system.error",
                     level="error",
                     source="dashboard",
@@ -191,12 +197,13 @@ class EventHistoryRecorder:
         except Exception as e:
             logger.warning(f"记录 core error 事件失败: {e}")
 
-    async def _on_component_event(self, event_name: str, data: BaseModel, source: str) -> None:
+    async def _on_component_event(self, event_name: str, data: BasePayload, source: str) -> None:
         try:
             dict_data = data.model_dump() if isinstance(data, BaseModel) else {}
             event_type = _COMPONENT_EVENT_MAP.get(event_name, "system.status")
             self._record(
                 EventRecord(
+                    id=data.id,
                     type=event_type,
                     level=infer_event_level(event_type),
                     source=dict_data.get("name", "unknown"),

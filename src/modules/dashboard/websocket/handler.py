@@ -152,12 +152,13 @@ class WebSocketHandler:
             await self.disconnect(client_id)
             return False
 
-    async def broadcast(self, event_type: str, data: Dict[str, object]) -> int:
+    async def broadcast(self, event_type: str, data: Dict[str, object], message_id: Optional[str] = None) -> int:
         """广播消息到所有订阅了该事件的客户端"""
         message = WebSocketMessage(
             type=event_type,
             timestamp=time.time(),
             data=data,
+            id=message_id,
         )
 
         success_count = 0
