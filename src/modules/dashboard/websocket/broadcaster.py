@@ -11,6 +11,14 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set
 from pydantic import BaseModel
 
 from src.modules.events.names import CoreEvents
+from src.modules.events.event_type_map import (
+    COMPONENT_EVENT_TYPE_MAP,
+    DECISION_INTENT_TYPE,
+    MESSAGE_RECEIVED_TYPE,
+    OUTPUT_RENDER_TYPE,
+    SYSTEM_ERROR_TYPE,
+    SYSTEM_STATUS_TYPE,
+)
 from src.modules.events.payloads import (
     ConnectedPayload,
     CoreErrorPayload,
@@ -35,19 +43,6 @@ HISTORY_PUSH_LIMIT = 100
 
 class EventBroadcaster:
     """EventBus 事件广播器 - 将 EventBus 事件广播到 WebSocket 客户端"""
-
-    EVENT_TYPE_MAP = {
-        CoreEvents.INPUT_MESSAGE_RECEIVED: "message.received",
-        CoreEvents.DECISION_INTENT_GENERATED: "decision.intent",
-        CoreEvents.OUTPUT_INTENT_DISPATCHED: "output.render",
-    }
-
-    COMPONENT_EVENT_TYPE_MAP = {
-        CoreEvents.INPUT_CONNECTED: "collector.connected",
-        CoreEvents.INPUT_DISCONNECTED: "collector.disconnected",
-        CoreEvents.DECISION_CONNECTED: "decider.connected",
-        CoreEvents.DECISION_DISCONNECTED: "decider.disconnected",
-    }
 
     def __init__(
         self,
@@ -101,7 +96,7 @@ class EventBroadcaster:
             CoreEvents.CORE_SHUTDOWN: self._on_core_event,
             CoreEvents.CORE_ERROR: self._on_core_error,
         }
-        if event_name in self.COMPONENT_EVENT_TYPE_MAP:
+        if event_name in COMPONENT_EVENT_TYPE_MAP:
             return self._create_component_handler(event_name)
         return handler_map.get(event_name)
 
@@ -133,7 +128,7 @@ class EventBroadcaster:
         async def handler(event_name: str, data: BasePayload, source: str) -> None:
             try:
                 dict_data = data.model_dump() if isinstance(data, BaseModel) else {}
-                event_type = self.COMPONENT_EVENT_TYPE_MAP.get(target_event_name, "collector.connected")
+                event_type = COMPONENT_EVENT_TYPE_MAP.get(target_event_name, "collector.connected")
                 await self.ws_handler.broadcast(event_type, dict_data, message_id=data.id)
             except Exception as e:
                 logger.error(f"广播 component event 失败: {e}")
@@ -151,21 +146,21 @@ class EventBroadcaster:
     async def _on_input_message(self, event_name: str, data: MessageReadyPayload, source: str) -> None:
         try:
             dict_data = data.model_dump()
-            await self.ws_handler.broadcast("message.received", dict_data, message_id=data.id)
+            await self.ws_handler.broadcast(MESSAGE_RECEIVED_TYPE, dict_data, message_id=data.id)
         except Exception as e:
             logger.error(f"广播 input message 失败: {e}")
 
     async def _on_decision_intent(self, event_name: str, data: IntentPayload, source: str) -> None:
         try:
             dict_data = data.model_dump()
-            await self.ws_handler.broadcast("decision.intent", dict_data, message_id=data.id)
+            await self.ws_handler.broadcast(DECISION_INTENT_TYPE, dict_data, message_id=data.id)
         except Exception as e:
             logger.error(f"广播 decision intent 失败: {e}")
 
     async def _on_output_intent(self, event_name: str, data: IntentPayload, source: str) -> None:
         try:
             dict_data = data.model_dump()
-            await self.ws_handler.broadcast("output.render", dict_data, message_id=data.id)
+            await self.ws_handler.broadcast(OUTPUT_RENDER_TYPE, dict_data, message_id=data.id)
         except Exception as e:
             logger.error(f"广播 output intent 失败: {e}")
 
@@ -173,7 +168,7 @@ class EventBroadcaster:
         try:
             dict_data = {"event": event_name, "payload": self._safe_serialize(data)}
             await self.ws_handler.broadcast(
-                "system.status", dict_data, message_id=data.id if isinstance(data, BasePayload) else None
+                SYSTEM_STATUS_TYPE, dict_data, message_id=data.id if isinstance(data, BasePayload) else None
             )
         except Exception as e:
             logger.error(f"广播 core event 失败: {e}")
@@ -185,7 +180,7 @@ class EventBroadcaster:
                 "message": self._safe_serialize(data) or "Unknown error",
             }
             await self.ws_handler.broadcast(
-                "system.error", dict_data, message_id=data.id if isinstance(data, BasePayload) else None
+                SYSTEM_ERROR_TYPE, dict_data, message_id=data.id if isinstance(data, BasePayload) else None
             )
         except Exception as e:
             logger.error(f"广播 core error 失败: {e}")

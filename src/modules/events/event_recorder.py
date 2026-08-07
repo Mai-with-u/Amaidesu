@@ -17,6 +17,14 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 from pydantic import BaseModel
 
 from src.modules.events.event_history import EventRecord, EventHistoryService, infer_event_level
+from src.modules.events.event_type_map import (
+    COMPONENT_EVENT_TYPE_MAP,
+    DECISION_INTENT_TYPE,
+    MESSAGE_RECEIVED_TYPE,
+    OUTPUT_RENDER_TYPE,
+    SYSTEM_ERROR_TYPE,
+    SYSTEM_STATUS_TYPE,
+)
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import (
     ConnectedPayload,
@@ -34,14 +42,6 @@ if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
 
 logger = get_logger("EventHistoryRecorder")
-
-# 组件事件映射
-_COMPONENT_EVENT_MAP: dict[str, str] = {
-    CoreEvents.INPUT_CONNECTED: "collector.connected",
-    CoreEvents.INPUT_DISCONNECTED: "collector.disconnected",
-    CoreEvents.DECISION_CONNECTED: "decider.connected",
-    CoreEvents.DECISION_DISCONNECTED: "decider.disconnected",
-}
 
 
 class EventHistoryRecorder:
@@ -116,7 +116,7 @@ class EventHistoryRecorder:
             self._record(
                 EventRecord(
                     id=data.id,
-                    type="message.received",
+                    type=MESSAGE_RECEIVED_TYPE,
                     level="info",
                     source=dict_data.get("source", source),
                     summary=summary,
@@ -134,7 +134,7 @@ class EventHistoryRecorder:
             self._record(
                 EventRecord(
                     id=data.id,
-                    type="decision.intent",
+                    type=DECISION_INTENT_TYPE,
                     level="info",
                     source=dict_data.get("name", source),
                     summary=summary,
@@ -152,7 +152,7 @@ class EventHistoryRecorder:
             self._record(
                 EventRecord(
                     id=data.id,
-                    type="output.render",
+                    type=OUTPUT_RENDER_TYPE,
                     level="info",
                     source=dict_data.get("name", source),
                     summary=summary,
@@ -168,7 +168,7 @@ class EventHistoryRecorder:
             self._record(
                 EventRecord(
                     id=data.id,
-                    type="system.status",
+                    type=SYSTEM_STATUS_TYPE,
                     level="info",
                     source="dashboard",
                     summary=str(dict_data.get("event", dict_data))[:200],
@@ -187,7 +187,7 @@ class EventHistoryRecorder:
             self._record(
                 EventRecord(
                     id=data.id,
-                    type="system.error",
+                    type=SYSTEM_ERROR_TYPE,
                     level="error",
                     source="dashboard",
                     summary=str(dict_data.get("message", ""))[:200],
@@ -200,7 +200,7 @@ class EventHistoryRecorder:
     async def _on_component_event(self, event_name: str, data: BasePayload, source: str) -> None:
         try:
             dict_data = data.model_dump() if isinstance(data, BaseModel) else {}
-            event_type = _COMPONENT_EVENT_MAP.get(event_name, "system.status")
+            event_type = COMPONENT_EVENT_TYPE_MAP.get(event_name, SYSTEM_STATUS_TYPE)
             self._record(
                 EventRecord(
                     id=data.id,
