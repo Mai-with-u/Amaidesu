@@ -8,7 +8,7 @@ import asyncio
 import json
 import time
 import uuid
-from typing import Callable, Dict, List, Set
+from typing import Awaitable, Callable, Dict, List, Optional, Set
 
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -204,11 +204,23 @@ class WebSocketHandler:
                 except Exception as e:
                     logger.debug(f"关闭心跳超时连接失败（已忽略）: {e}")
 
-    async def run_client_handler(self, websocket: WebSocket) -> None:
-        """运行单个客户端的消息处理循环"""
+    async def run_client_handler(
+        self,
+        websocket: WebSocket,
+        on_connected: Optional[Callable[[str], Awaitable[None]]] = None,
+    ) -> None:
+        """运行单个客户端的消息处理循环。
+
+        Args:
+            websocket: 客户端 WebSocket 连接
+            on_connected: 连接建立后、接收循环开始前的可选异步回调（如推送历史），
+                接收 client_id 参数
+        """
         client_id = await self.connect(websocket)
 
         try:
+            if on_connected is not None:
+                await on_connected(client_id)
             while True:
                 message = await websocket.receive_text()
                 await self.handle_message(client_id, message)

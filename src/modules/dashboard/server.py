@@ -200,31 +200,21 @@ class DashboardServer:
         # 添加 WebSocket 路由
         @self.app.websocket("/ws")
         async def websocket_endpoint(websocket: WebSocket):
-            # 获取 client_id 用于推送历史日志
-            client_id = await self.ws_handler.connect(websocket)
-            # 推送历史日志
-            if self.log_streamer:
-                await self.log_streamer.broadcast_history(client_id)
-            # 推送事件历史（类似 LogStreamer 的模式）
-            if self.event_broadcaster:
-                await self.event_broadcaster.push_history_to_client(client_id)
-            # 运行客户端消息处理循环
-            try:
-                while True:
-                    message = await websocket.receive_text()
-                    await self.ws_handler.handle_message(client_id, message)
-            except WebSocketDisconnect:
-                pass
-            except asyncio.CancelledError:
-                # 关闭信号：静默退出（finally 负责 disconnect，避免 starlette 打印 ASGI traceback）
-                pass
-            except Exception as e:
-                self.logger.warning(f"WebSocket 消息循环异常（将清理连接）: {e}")
-            finally:
-                # 防御: dashboard.cleanup() 可能已把 ws_handler 置 None(WS handler task 是孤儿,
-                # 可能在 cleanup() 之后才走到 finally,直接调用会抛 AttributeError -> starlette traceback)
-                if self.ws_handler is not None:
-                    await self.ws_handler.disconnect(client_id)
+            ws_handler = self.ws_handler
+            # 防御: dashboard.cleanup() 可能已把 ws_handler 置 None（孤儿 WS task 场景），
+            # 直接调用会抛 AttributeError -> starlette traceback
+            if ws_handler is None:
+                await websocket.close()
+                return
+
+            # 连接建立后、接收循环开始前推送历史（日志 + 事件）
+            async def push_history(client_id: str) -> None:
+                if self.log_streamer:
+                    await self.log_streamer.broadcast_history(client_id)
+                if self.event_broadcaster:
+                    await self.event_broadcaster.push_history_to_client(client_id)
+
+            await ws_handler.run_client_handler(websocket, on_connected=push_history)
 
         # 启动心跳任务
         self._heartbeat_task = asyncio.create_task(self._run_heartbeat())
@@ -284,10 +274,8 @@ class DashboardServer:
             await self.event_broadcaster.stop()
             self.event_broadcaster = None
 
-        # 清理事件历史服务
-        if self.event_history:
-            self.event_history.cleanup()
-            self.event_history = None
+        # 释放事件历史服务引用（所有权在 main.py，缓冲清理由 owner 负责）
+        self.event_history = None
 
         # 停止心跳任务
         if self._heartbeat_task:

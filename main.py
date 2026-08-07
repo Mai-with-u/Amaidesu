@@ -654,6 +654,10 @@ async def run_shutdown(
             _saw_cancelled = _saw_cancelled or isinstance(e, asyncio.CancelledError)
             logger.error(f"停止事件历史记录器失败: {e}")
 
+    # 5.1 释放事件历史缓冲（所有权在应用层；Dashboard 停止时不清理，避免清空记录器数据）
+    if event_recorder and event_recorder.event_history:
+        event_recorder.event_history.cleanup()
+
     # 6. 等待待处理事件完成并清除所有监听器（EventBus 清理）
     logger.info("等待待处理事件完成...")
     if event_bus:
