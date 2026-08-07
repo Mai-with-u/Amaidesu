@@ -15,6 +15,28 @@ export const useLogsStore = defineStore('logs', () => {
   const isPaused = ref(false);
   const maxLogs = 500;
 
+  // 重连幂等：history 重推与已收到的实时日志按 (timestamp, module, message) 去重
+  const seenKeys = new Set<string>();
+  const MAX_SEEN_KEYS = 2000;
+
+  function logKey(entry: LogEntry) {
+    return `${entry.timestamp}|${entry.module}|${entry.message}`;
+  }
+
+  function isDuplicate(entry: LogEntry): boolean {
+    const key = logKey(entry);
+    if (seenKeys.has(key)) return true;
+    seenKeys.add(key);
+    if (seenKeys.size > MAX_SEEN_KEYS) {
+      // 淘汰最旧插入的 key，保持与日志窗口（maxLogs）同量级
+      for (const k of seenKeys) {
+        seenKeys.delete(k);
+        if (seenKeys.size <= MAX_SEEN_KEYS) break;
+      }
+    }
+    return false;
+  }
+
   let cachedModules: string[] = [];
   let logsCacheVersion = 0;
   let modulesCacheVersion = -1;
@@ -33,6 +55,7 @@ export const useLogsStore = defineStore('logs', () => {
     if (isPaused.value) return;
     if (message.type === 'log.entry' && message.data) {
       const logEntry = message.data as unknown as LogEntry;
+      if (isDuplicate(logEntry)) return;
       const newLogs = [...logs.value, logEntry];
       if (newLogs.length > maxLogs) {
         newLogs.splice(0, newLogs.length - maxLogs);

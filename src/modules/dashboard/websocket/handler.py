@@ -26,11 +26,15 @@ logger = get_logger("WebSocketHandler")
 class WebSocketHandler:
     """WebSocket 连接处理器"""
 
+    # 心跳超时倍数：连续 N 个心跳周期未收到 pong 视为僵尸连接并踢出
+    HEARTBEAT_TIMEOUT_MULTIPLIER = 3
+
     def __init__(self, heartbeat_interval: int = 30):
         self.heartbeat_interval = heartbeat_interval
         self._clients: Dict[str, WebSocket] = {}
         self._client_info: Dict[str, ClientInfo] = {}
         self._client_subscriptions: Dict[str, Set[str]] = {}
+        self._last_pong: Dict[str, float] = {}
         self._broadcast_callbacks: List[Callable] = []
         self._running = False
 
@@ -51,6 +55,7 @@ class WebSocketHandler:
             connected_at=time.time(),
             subscribed_events=[],
         )
+        self._last_pong[client_id] = time.time()
 
         logger.info(f"WebSocket 客户端连接: {client_id}，当前连接数: {self.client_count}")
 
@@ -77,6 +82,8 @@ class WebSocketHandler:
             del self._client_subscriptions[client_id]
         if client_id in self._client_info:
             del self._client_info[client_id]
+        if client_id in self._last_pong:
+            del self._last_pong[client_id]
 
         logger.info(f"WebSocket 客户端断开: {client_id}，当前连接数: {self.client_count}")
 
@@ -91,6 +98,7 @@ class WebSocketHandler:
                 await self._handle_subscribe(client_id, request)
             # 处理心跳响应
             elif data.get("type") == "pong":
+                self._last_pong[client_id] = time.time()
                 logger.debug(f"收到客户端 {client_id} 心跳响应")
             else:
                 logger.warning(f"未知消息类型: {data}")
@@ -170,15 +178,31 @@ class WebSocketHandler:
         return success_count
 
     async def send_heartbeat(self) -> None:
-        """发送心跳到所有客户端"""
+        """发送心跳到所有客户端，并踢出超过超时阈值未响应 pong 的连接"""
         message = WebSocketMessage(
             type="ping",
             timestamp=time.time(),
             data={},
         )
 
+        timeout = self.heartbeat_interval * self.HEARTBEAT_TIMEOUT_MULTIPLIER
+        now = time.time()
+        stale_clients: List[str] = []
+
         for client_id in list(self._clients.keys()):
             await self._send_to_client(client_id, message)
+            if now - self._last_pong.get(client_id, 0.0) > timeout:
+                stale_clients.append(client_id)
+
+        for client_id in stale_clients:
+            logger.warning(f"客户端 {client_id} 心跳超时（>{timeout}s 未响应 pong），断开连接")
+            websocket = self._clients.get(client_id)
+            await self.disconnect(client_id)
+            if websocket is not None:
+                try:
+                    await websocket.close()
+                except Exception as e:
+                    logger.debug(f"关闭心跳超时连接失败（已忽略）: {e}")
 
     async def run_client_handler(self, websocket: WebSocket) -> None:
         """运行单个客户端的消息处理循环"""
