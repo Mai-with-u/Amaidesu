@@ -53,7 +53,7 @@
       </div>
 
       <div class="action-buttons">
-        <!-- Decision component: Only Activate button -->
+        <!-- Decision component: 多 Decider 并行，每个可独立启用（未启用时点启动写入配置） -->
         <template v-if="component.phase === 'decision'">
           <el-button
             size="small"
@@ -62,7 +62,7 @@
             :loading="actionLoading['start']"
             @click="handleControl('start')"
           >
-            激活
+            启动
           </el-button>
         </template>
 

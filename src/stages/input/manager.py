@@ -182,8 +182,12 @@ class InputCollectorManager:
         return result
 
     def get_component_summaries(self) -> list[dict[str, Any]]:
-        """Dashboard 协议接口：返回 Input 阶段参与者状态摘要字典列表"""
-        return [
+        """Dashboard 协议接口：返回 Input 阶段参与者状态摘要字典列表
+
+        包含全部已注册 Collector：已实例化的标 is_enabled=True，
+        未启用（不在配置 enabled 列表）的补充为 is_enabled=False，便于前端展示与启用。
+        """
+        summaries = [
             {
                 "name": s["name"],
                 "phase": "input",
@@ -194,6 +198,21 @@ class InputCollectorManager:
             }
             for s in self.get_collector_status()
         ]
+        loaded = {s["name"] for s in summaries}
+        from src.stages.input.registry import list_collectors
+
+        for name in list_collectors():
+            if name not in loaded:
+                summaries.append(
+                    {
+                        "name": name,
+                        "phase": "input",
+                        "type": "collector",
+                        "is_started": False,
+                        "is_enabled": False,
+                    }
+                )
+        return summaries
 
     async def _run_collector(self, collector, collector_name: str) -> None:
         try:

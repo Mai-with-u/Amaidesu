@@ -393,8 +393,12 @@ class OutputHandlerManager:
         return UnifiedCapabilitiesView(actions=unified_actions)
 
     def get_component_summaries(self) -> list[dict[str, Any]]:
-        """Dashboard 协议接口：返回 Output 阶段参与者状态摘要字典列表"""
-        return [
+        """Dashboard 协议接口：返回 Output 阶段参与者状态摘要字典列表
+
+        包含全部已注册 Handler：已实例化的标 is_enabled=True，
+        未启用（不在配置 enabled 列表）的补充为 is_enabled=False，便于前端展示与启用。
+        """
+        summaries = [
             {
                 "name": s["name"],
                 "phase": "output",
@@ -405,6 +409,21 @@ class OutputHandlerManager:
             }
             for s in self.get_handler_status()
         ]
+        loaded = {s["name"] for s in summaries}
+        from src.stages.output.registry import list_handlers
+
+        for name in list_handlers():
+            if name not in loaded:
+                summaries.append(
+                    {
+                        "name": name,
+                        "phase": "output",
+                        "type": "handler",
+                        "is_started": False,
+                        "is_enabled": False,
+                    }
+                )
+        return summaries
 
     async def load_from_config(self, config: dict[str, Any], config_service=None):
         """从配置加载并创建所有OutputHandler（支持二级配置合并）"""

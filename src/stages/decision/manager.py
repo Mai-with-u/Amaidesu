@@ -535,8 +535,12 @@ class DeciderManager:
         return result
 
     def get_component_summaries(self) -> list[dict[str, Any]]:
-        """Dashboard 协议接口：返回 Decision 阶段参与者状态摘要字典列表"""
-        return [
+        """Dashboard 协议接口：返回 Decision 阶段参与者状态摘要字典列表
+
+        包含全部已注册 Decider：已实例化的标 is_enabled=True，
+        未启用（不在配置 enabled 列表）的补充为 is_enabled=False，便于前端展示与启用。
+        """
+        summaries = [
             {
                 "name": s["name"],
                 "phase": "decision",
@@ -546,6 +550,19 @@ class DeciderManager:
             }
             for s in self.get_decider_status()
         ]
+        loaded = {s["name"] for s in summaries}
+        for name in self.get_available_deciders():
+            if name not in loaded:
+                summaries.append(
+                    {
+                        "name": name,
+                        "phase": "decision",
+                        "type": "decider",
+                        "is_started": False,
+                        "is_enabled": False,
+                    }
+                )
+        return summaries
 
     def _subscribe_data_message_event(self) -> None:
         """订阅 input.message.ready 事件（防止重复订阅）

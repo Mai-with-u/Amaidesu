@@ -8,6 +8,10 @@ from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, HTTPException, Depends
 
+from src.modules.config.toml_utils import (
+    load_toml_with_comments,
+    write_toml_preserve,
+)
 from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.dashboard.schemas.component import (
     ComponentControlAction,
@@ -29,9 +33,45 @@ if TYPE_CHECKING:
 
 router = APIRouter()
 
-
 # 类型别名，用于依赖注入
 ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
+
+# phase → 配置 section（对应 TOML 文件的 [collectors]/[deciders]/[handlers] 段）
+_PHASE_TO_SECTION = {
+    "input": "collectors",
+    "decision": "deciders",
+    "output": "handlers",
+}
+
+
+def _enable_via_config(server: "DashboardServer", phase: str, name: str) -> ComponentControlResponse:
+    """把未启用组件写入对应阶段 TOML 的 enabled 列表（配置驱动，重启后生效）。
+
+    组件管理页对未启用组件点"启动/激活"时调用；已启用组件的启停仍走实例控制。
+    """
+    section = _PHASE_TO_SECTION[phase]
+    config_path = server.get_config_path(section)
+    if not config_path:
+        return ComponentControlResponse(success=False, message="Config file path not available")
+
+    try:
+        doc = load_toml_with_comments(str(config_path))
+        if section not in doc:
+            doc[section] = {}
+        enabled = list(doc[section].get("enabled") or [])
+        if name not in enabled:
+            enabled.append(name)
+            doc[section]["enabled"] = enabled
+
+        success, message = write_toml_preserve(str(config_path), doc, create_backup=False)
+        if not success:
+            return ComponentControlResponse(success=False, message=f"写入配置失败: {message}")
+        return ComponentControlResponse(
+            success=True,
+            message=f"组件 {name} 已加入启用列表（{section}.enabled），重启后生效",
+        )
+    except Exception as e:
+        return ComponentControlResponse(success=False, message=f"启用失败: {e}")
 
 
 @router.get("", response_model=ComponentListResponse)
@@ -108,6 +148,9 @@ async def _control_input_component(
             break
 
     if not component:
+        # 未启用组件：START 走配置启用，其余动作报错
+        if action == ComponentControlAction.START:
+            return _enable_via_config(server, "input", name)
         return ComponentControlResponse(success=False, message=f"Component not found: {name}")
 
     if action == ComponentControlAction.STOP:
@@ -141,9 +184,12 @@ async def _control_decision_component(
         return ComponentControlResponse(success=False, message=f"Component not found: {name}")
 
     if action in [ComponentControlAction.START, ComponentControlAction.RESTART]:
-        if hasattr(manager, "switch_decider"):
-            await manager.switch_decider(name, {})
-        return ComponentControlResponse(success=True, message=f"Switched to decider: {name}")
+        # 已加载 → 切换；未加载（未启用）→ 写配置，重启后生效
+        if name in manager.get_decider_names():
+            if hasattr(manager, "switch_decider"):
+                await manager.switch_decider(name, {})
+            return ComponentControlResponse(success=True, message=f"Switched to decider: {name}")
+        return _enable_via_config(server, "decision", name)
     elif action == ComponentControlAction.STOP:
         return ComponentControlResponse(success=False, message="Decision decider cannot be stopped")
 
@@ -160,6 +206,9 @@ async def _control_output_component(
 
     component = manager.get_handler_by_name(name) if hasattr(manager, "get_handler_by_name") else None
     if not component:
+        # 未启用组件：START 走配置启用，其余动作报错
+        if action == ComponentControlAction.START:
+            return _enable_via_config(server, "output", name)
         return ComponentControlResponse(success=False, message=f"Component not found: {name}")
 
     if action == ComponentControlAction.STOP:
