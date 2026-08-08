@@ -24,7 +24,6 @@ _DEAD_SECTIONS = {
     "spark_rtasr",
     "http_server",
     "event_bus",
-    "mcp",
     "handlers.expression_generator",
 }
 
@@ -37,6 +36,7 @@ _SECTION_MAP: dict[str, str] = {
     "maicore": "core.toml",
     "context": "core.toml",
     "dashboard": "core.toml",
+    "mcp": "core.toml",
     "logging": "core.toml",
     "pipelines": "core.toml",
     "llm": "model.toml",

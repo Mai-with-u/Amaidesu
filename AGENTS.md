@@ -74,6 +74,41 @@
 - 根目录不放图片/视频；图片放 `docs/images/`，视频放 `docs/videos/`
 - 详细规范见 [文档维护规范](docs/development/documentation-guide.md)
 
+### 配置 Schema 变更规则
+
+配置系统是"Schema 即真相"（Pydantic Schema 驱动生成/验证/迁移）。**任何对配置结构的修改都必须升配置版本号**，否则用户现有配置文件不会被自动升级，迁移机制沦为摆设（历史教训：`CONFIG_VERSION` 长期停在 0.4.0，每次启动只有漂移警告、从不自动升级）。
+
+**版本号机制**：
+- 唯一权威定义：`src/modules/config/multi_file_loader.py` 的 `CONFIG_VERSION`
+- `src/modules/config/core_schemas.py` 的 `MetaConfig.version` 默认值必须与 `CONFIG_VERSION` **同步修改**（改一必改二，防止新生成文件版本与检测目标不一致）
+- 用户文件中的版本号位于 `config/core.toml` 的 `[meta].version`，由系统在升级时自动写回（写回后下次启动不再重复提示）
+
+**必须升 CONFIG_VERSION（patch 级，如 0.4.0 → 0.4.1）的变更**：
+- 新增/删除/重命名字段（含 Collector/Decider/Handler 的 `ConfigSchema` 嵌套类）
+- 字段类型或约束变化（如 `str → list`、新增 Literal 选项、`gt/ge` 等约束调整）
+- 字段默认值语义变化（影响已有用户行为的默认值调整）
+- 配置段移动/拆分/合并
+
+**除升版本外还必须注册 `ConfigUpgradeHook`（minor 级，如 0.4.x → 0.5.0）的变更**——需要数据变换时：
+- 字段重命名、配置段拆分、类型转换、默认值调整等需改写旧数据的变更
+- 注册到 `src/modules/config/upgrade_hooks.py` 的 `CONFIG_UPGRADE_HOOKS`；hook 必须：**原地修改 dict、幂等**（重复执行结果一致）、返回变更字段路径列表
+- 每个 hook 必须配单元测试（旧结构输入 → 断言新结构输出）
+- 纯新增字段（无需数据变换）可不注册 hook，由写回机制自动补默认值
+
+**不需要升版本**：仅修改注释/description、纯内部实现重构（不改变 TOML 结构）。
+
+**变更时需同步检查的联动位置**：
+
+| 变更内容 | 需同步修改 |
+|---------|-----------|
+| 任何 Schema 变更 | `CONFIG_VERSION` + `MetaConfig.version` |
+| 需要数据变换 | `upgrade_hooks.py` 注册 hook + 迁移测试 |
+| 涉及旧配置段（迁移/死配置） | `migration.py` 的 `_SECTION_MAP` / `_DEAD_SECTIONS` |
+| 涉及 Dashboard 显示字段 | `schema_registry.py`（启动 coverage gate 会校验） |
+| 组件 Schema（Collector/Decider/Handler） | 对应 `tests/config/test_*_schema.py` 更新 |
+
+**验证要求**：提交前 `uv run pytest tests/config/ -q` 必须通过；注册了 hook 必须有对应迁移测试。禁止"只改 Schema 不升版本/不注册 hook"的提交。
+
 ## 常用命令
 
 ### 包管理器
@@ -399,4 +434,4 @@ logger.error("错误日志", exc_info=True)
 
 ---
 
-*最后更新：2026-08-02（重构为纯规则文件：硬规则与高频 API 内联，操作手册收敛至 docs/，删除与 docs/ 重复的内容）*
+*最后更新：2026-08-08（新增"配置 Schema 变更规则"：强制 Schema 变更同步升 CONFIG_VERSION、注册迁移钩子并配测试）*

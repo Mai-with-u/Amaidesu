@@ -25,6 +25,7 @@ from src.modules.config.schemas.base import BaseConfig, DriftReport, _set_toml_v
 from src.modules.config.core_schemas import CoreConfig
 from src.modules.config.model_schemas import ModelConfig
 from src.modules.config.schemas.simulator_schemas import SimulatorConfig
+from src.modules.config.upgrade_hooks import apply_upgrade_hooks
 from src.modules.logging import get_logger
 from pydantic import BaseModel
 
@@ -51,14 +52,26 @@ CONFIG_VERSION = "0.4.0"
 _CONFIG_FILES = ["core.toml", "model.toml", "input.toml", "decision.toml", "output.toml", "simulator.toml"]
 
 
-def _backup_file(file_path: Path, config_dir: Path) -> Path | None:
-    """备份配置文件到 config/old/ 目录"""
+def _backup_file(file_path: Path, config_dir: Path, batch_id: str | None = None) -> Path | None:
+    """备份配置文件到 config/old/ 目录
+
+    Args:
+        file_path: 源文件
+        config_dir: config/ 目录
+        batch_id: 批次目录名（同一批升级的文件共享同一目录，保留原文件名）；
+            为 None 时保持旧行为（文件名加时间戳后缀）
+    """
     if not file_path.exists():
         return None
     old_dir = config_dir / "old"
+    if batch_id:
+        old_dir = old_dir / batch_id
     old_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_name = f"{file_path.stem}_{timestamp}{file_path.suffix}"
+    if batch_id:
+        backup_name = f"{file_path.stem}{file_path.suffix}"
+    else:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_name = f"{file_path.stem}_{timestamp}{file_path.suffix}"
     backup_path = old_dir / backup_name
     shutil.copy2(file_path, backup_path)
     logger.info(f"已备份 {file_path.name} 到 {backup_path}")
@@ -473,6 +486,138 @@ def _generate_simulator_toml() -> str:
     return tomlkit.dumps(doc)
 
 
+def _table_from_model(instance: BaseModel) -> Any:
+    """把 BaseModel 实例序列化为 tomlkit Table（值 + description 注释，None 跳过）。
+
+    与 ``_schema_to_toml_table`` 的区别：值来自配置实例（用户数据 + 默认值），
+    而非纯 Schema 默认值；用于自动升级写回。
+    """
+    table = tomlkit.table()
+    for sub_name, sub_info in type(instance).model_fields.items():
+        value = getattr(instance, sub_name)
+        if value is None:
+            continue
+        if isinstance(value, BaseModel):
+            inner = _table_from_model(value)
+        elif isinstance(value, list) and value and all(isinstance(v, BaseModel) for v in value):
+            inner = tomlkit.aot()
+            for item in value:
+                inner.append(_table_from_model(item))
+        else:
+            inner = value
+        if sub_info.description:
+            table.add(tomlkit.comment(sub_info.description))
+        table[sub_name] = inner
+    return table
+
+
+def _dict_to_toml_table(data: dict[str, Any]) -> Any:
+    """把嵌套 dict 转为 tomlkit Table（用于 pipelines 等动态 dict 字段）。"""
+    table = tomlkit.table()
+    for key, value in data.items():
+        if isinstance(value, dict):
+            table[key] = _dict_to_toml_table(value)
+        else:
+            table[key] = value
+    return table
+
+
+def _serialize_instance_to_toml(schema_cls: type[BaseModel], instance: BaseModel) -> str:
+    """把配置实例序列化为多文件格式 TOML（顶层字段即顶层表/键值）。
+
+    core/model/simulator 三种文件通用：
+    - BaseModel 字段 → 顶层表（含 description 注释）
+    - list[BaseModel] 字段 → 数组表（``[[name]]``）
+    - dict 字段（如 pipelines）→ 子表
+    - 简单字段 → 键值 + 注释
+    """
+    doc = tomlkit.document()
+    for field_name, field_info in schema_cls.model_fields.items():
+        value = getattr(instance, field_name)
+        if isinstance(value, BaseModel):
+            table = _table_from_model(value)
+        elif isinstance(value, list) and value and all(isinstance(v, BaseModel) for v in value):
+            table = tomlkit.aot()
+            for item in value:
+                table.append(_table_from_model(item))
+        elif isinstance(value, dict):
+            table = _dict_to_toml_table(value)
+        else:
+            if field_info.description:
+                doc.add(tomlkit.comment(field_info.description))
+            doc[field_name] = value
+            doc.add(tomlkit.nl())
+            continue
+        if field_info.description:
+            doc.add(tomlkit.comment(field_info.description))
+        doc[field_name] = table
+        doc.add(tomlkit.nl())
+    return tomlkit.dumps(doc)
+
+
+def _write_back_schema_file(
+    config_dir: Path,
+    file_name: str,
+    schema_cls: type[BaseModel],
+    user_data: dict[str, Any],
+    *,
+    force_meta_version: str | None = None,
+    batch_id: str | None = None,
+) -> Path | None:
+    """自动升级写回：备份旧文件 → 用户值合并（缺失补默认、冗余已剥离）→ 序列化写回。
+
+    Args:
+        config_dir: config/ 目录
+        file_name: 目标文件名（core.toml / model.toml / simulator.toml）
+        schema_cls: Pydantic Schema 类
+        user_data: 已验证的用户配置 dict（``from_dict_with_drift_check`` 产物，冗余已剥离）
+        force_meta_version: 强制覆盖 meta.version（仅 core.toml 传 CONFIG_VERSION）
+        batch_id: 备份批次目录名（同一次升级的多个文件共享）
+
+    Returns:
+        备份文件路径（无旧文件时返回 None）
+    """
+    file_path = config_dir / file_name
+    data = dict(user_data)
+    if force_meta_version is not None:
+        meta = dict(data.get("meta", {}))
+        meta["version"] = force_meta_version
+        data["meta"] = meta
+
+    instance = schema_cls(**data)
+    content = _serialize_instance_to_toml(schema_cls, instance)
+    backup_path = _backup_file(file_path, config_dir, batch_id=batch_id)
+    file_path.write_text(content, encoding="utf-8-sig")
+    return backup_path
+
+
+def _ensure_required_files(config_dir: Path) -> list[str]:
+    """补齐缺失的必需配置文件（如旧 config.toml 迁移后缺 simulator.toml 等）。
+
+    Returns:
+        本次补齐的文件名列表
+    """
+    generated: list[str] = []
+    for fname in _CONFIG_FILES:
+        if (config_dir / fname).exists():
+            continue
+        logger.info(f"缺失配置文件 {fname}，自动生成...")
+        if fname == "core.toml":
+            (config_dir / fname).write_text(_generate_core_toml(), encoding="utf-8-sig")
+        elif fname == "model.toml":
+            (config_dir / fname).write_text(_generate_model_toml(), encoding="utf-8-sig")
+        elif fname == "input.toml":
+            (config_dir / fname).write_text(_generate_phase_toml("input"), encoding="utf-8-sig")
+        elif fname == "decision.toml":
+            (config_dir / fname).write_text(_generate_phase_toml("decision"), encoding="utf-8-sig")
+        elif fname == "output.toml":
+            (config_dir / fname).write_text(_generate_phase_toml("output"), encoding="utf-8-sig")
+        elif fname == "simulator.toml":
+            (config_dir / fname).write_text(_generate_simulator_toml(), encoding="utf-8-sig")
+        generated.append(fname)
+    return generated
+
+
 def generate_default_configs(config_dir: Path) -> None:
     """首次运行：从 Schema 生成默认配置文件
 
@@ -524,26 +669,22 @@ def _load_and_validate_schema(
 
     Returns:
         (model_dump 字典, 漂移报告)
+
+    注意：漂移（缺失/冗余字段）的日志由 ``load_config_dir`` 统一汇总输出，
+    本函数不打印逐条提示（写回闭环会一次性消化漂移）。
     """
     with open(file_path, "r", encoding="utf-8-sig") as f:
         doc = tomlkit.load(f)
 
     raw_data = doc.unwrap()
     instance, report = schema_cls.from_dict_with_drift_check(raw_data)
-
-    if report.has_drift:
-        for key in report.redundant:
-            logger.warning(f"{file_path.name}: 检测到冗余配置项 '{key}'（代码中已不存在）")
-        for key in report.missing:
-            logger.info(f"{file_path.name}: 补充缺失配置项 '{key}'（使用默认值）")
-
     return instance.model_dump(), report
 
 
 def load_config_dir(
     config_dir: Path,
 ) -> tuple[dict[str, Any], DriftReport]:
-    """加载 config/ 目录下所有配置文件
+    """加载 config/ 目录下所有配置文件（含自动升级闭环）
 
     Args:
         config_dir: config/ 目录路径
@@ -551,16 +692,47 @@ def load_config_dir(
     Returns:
         (合并后的配置字典, 综合漂移报告)
 
-    The merged config dict has keys:
-        "core", "model", "input", "decision", "output"
+    自动升级闭环（对齐 MaiBot 行为）：
+    1. 缺失文件自动补齐（如旧 config.toml 迁移后缺 simulator.toml）
+    2. core.toml 版本不一致 → 执行注册的 ConfigUpgradeHook → 写回并更新 [meta].version
+    3. 存在漂移（缺失/冗余字段）→ 备份 + 写回（缺失补默认值、冗余删除）
+    写回后漂移归零，下次启动不再重复提示。
     """
+    # 0. 补齐缺失文件
+    _ensure_required_files(config_dir)
+
     combined = DriftReport()
     result: dict[str, Any] = {}
+    # 版本检测（core.toml 的 [meta].version）
+    current_ver = get_config_version(config_dir)
+    version_changed = current_ver is not None and current_ver != CONFIG_VERSION
+    # 备份批次目录：同一次升级的所有文件共享（惰性创建）
+    batch_id: str | None = None
 
     # core.toml → CoreConfig
     core_path = config_dir / "core.toml"
     if core_path.exists():
         core_data, core_report = _load_and_validate_schema(core_path, CoreConfig)
+        # 版本升级：执行注册的升级钩子（数据变换）
+        if version_changed:
+            hook_result = apply_upgrade_hooks(core_data, "core.toml", current_ver or CONFIG_VERSION, CONFIG_VERSION)
+            if hook_result.migrated:
+                logger.warning(f"配置升级钩子已应用: {hook_result.reasons}")
+            core_data = hook_result.data
+        # 写回闭环：版本不一致 或 存在漂移
+        if version_changed or core_report.has_drift:
+            batch_id = batch_id or datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup = _write_back_schema_file(
+                config_dir, "core.toml", CoreConfig, core_data, force_meta_version=CONFIG_VERSION, batch_id=batch_id
+            )
+            logger.info(
+                f"core.toml 已自动升级: "
+                f"补齐 {len(core_report.missing)} 项({', '.join(core_report.missing) or '无'}), "
+                f"清理 {len(core_report.redundant)} 项({', '.join(core_report.redundant) or '无'}), "
+                f"版本 {current_ver or '?'} → {CONFIG_VERSION}"
+                + (f", 备份: {backup.relative_to(config_dir)}" if backup else "")
+            )
+            core_data, core_report = _load_and_validate_schema(core_path, CoreConfig)
         result["core"] = core_data
         combined.redundant.extend(f"core.{r}" for r in core_report.redundant)
         combined.missing.extend(f"core.{m}" for m in core_report.missing)
@@ -569,6 +741,16 @@ def load_config_dir(
     model_path = config_dir / "model.toml"
     if model_path.exists():
         model_data, model_report = _load_and_validate_schema(model_path, ModelConfig)
+        if model_report.has_drift:
+            batch_id = batch_id or datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup = _write_back_schema_file(config_dir, "model.toml", ModelConfig, model_data, batch_id=batch_id)
+            logger.info(
+                f"model.toml 已自动升级: "
+                f"补齐 {len(model_report.missing)} 项({', '.join(model_report.missing) or '无'}), "
+                f"清理 {len(model_report.redundant)} 项({', '.join(model_report.redundant) or '无'})"
+                + (f", 备份: {backup.relative_to(config_dir)}" if backup else "")
+            )
+            model_data, model_report = _load_and_validate_schema(model_path, ModelConfig)
         result["model"] = model_data
         combined.redundant.extend(f"model.{r}" for r in model_report.redundant)
         combined.missing.extend(f"model.{m}" for m in model_report.missing)
@@ -595,6 +777,18 @@ def load_config_dir(
     simulator_path = config_dir / "simulator.toml"
     if simulator_path.exists():
         simulator_data, simulator_report = _load_and_validate_schema(simulator_path, SimulatorConfig)
+        if simulator_report.has_drift:
+            batch_id = batch_id or datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup = _write_back_schema_file(
+                config_dir, "simulator.toml", SimulatorConfig, simulator_data, batch_id=batch_id
+            )
+            logger.info(
+                f"simulator.toml 已自动升级: "
+                f"补齐 {len(simulator_report.missing)} 项({', '.join(simulator_report.missing) or '无'}), "
+                f"清理 {len(simulator_report.redundant)} 项({', '.join(simulator_report.redundant) or '无'})"
+                + (f", 备份: {backup.relative_to(config_dir)}" if backup else "")
+            )
+            simulator_data, simulator_report = _load_and_validate_schema(simulator_path, SimulatorConfig)
         result["simulator"] = simulator_data
         combined.redundant.extend(f"simulator.{r}" for r in simulator_report.redundant)
         combined.missing.extend(f"simulator.{m}" for m in simulator_report.missing)

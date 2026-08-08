@@ -4,10 +4,12 @@ MCP Server 配置模型
 定义 MCP 服务的配置结构。
 """
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from src.modules.config.schemas.base import BaseConfig
 
 
-class MCPServerConfig(BaseModel):
+class MCPServerConfig(BaseConfig):
     """MCP Server 配置"""
 
     enabled: bool = Field(default=False, description="是否启用 MCP 服务")

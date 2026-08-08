@@ -13,6 +13,7 @@ from pydantic import Field
 
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.config.schemas.logging import LoggingConfig
+from src.modules.mcp.config import MCPServerConfig
 
 
 class MetaConfig(BaseConfig):
@@ -177,6 +178,7 @@ class CoreConfig(BaseConfig):
     context: ContextConfig = Field(default_factory=ContextConfig, description="上下文管理配置")
     events: EventHistoryConfig = Field(default_factory=EventHistoryConfig, description="事件历史记录配置")
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig, description="Dashboard 配置")
+    mcp: MCPServerConfig = Field(default_factory=MCPServerConfig, description="MCP 服务配置")
     logging: LoggingConfig = Field(default_factory=LoggingConfig, description="日志配置")
     pipelines: dict[str, Any] = Field(
         default_factory=lambda: {

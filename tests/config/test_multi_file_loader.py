@@ -83,11 +83,12 @@ class TestLoading:
         version = get_config_version(temp_config_dir)
         assert version == "0.4.0"
 
-    def test_drift_detection_on_stale_key(self, temp_config_dir):
+    def test_drift_fixed_on_load(self, temp_config_dir):
         generate_default_configs(temp_config_dir)
         core_path = temp_config_dir / "core.toml"
         content = core_path.read_text(encoding="utf-8")
         content += '\n[dg_lab]\napi = "stale"\n'
         core_path.write_text(content, encoding="utf-8")
         config, report = load_config_dir(temp_config_dir)
-        assert any("dg_lab" in r for r in report.redundant)
+        assert not report.redundant
+        assert "dg_lab" not in (temp_config_dir / "core.toml").read_text(encoding="utf-8")
