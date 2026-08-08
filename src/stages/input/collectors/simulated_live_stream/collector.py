@@ -134,7 +134,16 @@ class SimulatedLiveStreamCollector:
         return self._cfg
 
     async def start(self) -> None:
-        """初始化所有子组件并启动模拟器"""
+        """初始化所有子组件并启动模拟器
+
+        幂等：已运行时重复调用直接返回，避免重复初始化子组件/重复订阅事件。
+        同时清除停止信号，允许 stop() 后再次 start()（P0-1）。
+        """
+        if self.is_started:
+            self.logger.debug("模拟直播间 Collector 已处于运行状态，忽略重复 start")
+            return
+        # 清除停止信号：collect() 主循环以此判断退出，stop() 后不清理则无法再次运行
+        self._stop_event.clear()
         try:
             cfg = self._cfg
 
@@ -338,10 +347,14 @@ class SimulatedLiveStreamCollector:
         msg_type = self._pick_message_type()
 
         if msg_type == "gift" and self._gift_generator is not None:
-            return await self._gift_generator.generate_gift(context)
+            msg = await self._gift_generator.generate_gift(context)
+            self._record_usage(msg)
+            return msg
 
         if msg_type == "sc" and self._gift_generator is not None:
-            return await self._gift_generator.generate_sc(context)
+            msg = await self._gift_generator.generate_sc(context)
+            self._record_usage(msg)
+            return msg
 
         # 文本弹幕
         persona = self._select_persona()
@@ -397,6 +410,7 @@ class SimulatedLiveStreamCollector:
             user_nickname=msg.persona.user_nickname,
             platform="simulated",
             room_id=session_id,
+            session_id=session_id,
             importance=importance,
         )
 
