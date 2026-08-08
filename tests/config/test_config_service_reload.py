@@ -74,8 +74,6 @@ def config_dir_with_toml(tmp_path: Path) -> Path:
     for name in ("input", "decision", "output"):
         (cfg / f"{name}.toml").write_text("", encoding="utf-8")
 
-    (cfg / "simulator.toml").write_text("[simulator]\nenabled = false\n", encoding="utf-8")
-
     return cfg
 
 

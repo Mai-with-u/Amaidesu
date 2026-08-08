@@ -13,7 +13,11 @@ from src.modules.simulator.types import Persona, PersonaRole
 
 
 class PersonaPool:
-    """人设池管理：常驻 + 临时路人"""
+    """人设池管理：常驻 + 临时路人
+
+    常驻人设来自 ``data/simulator/residents.toml``（运行时数据，WebUI 生成/编辑）；
+    文件不存在时空池，仅生成临时路人。
+    """
 
     _PASSERBY_NAMES = [
         "路过的甲",
@@ -25,38 +29,39 @@ class PersonaPool:
     ]
     _PASSERBY_POOL_CAP = 50
 
-    def __init__(self, rng: Optional[random.Random] = None):
+    def __init__(self, rng: Optional[random.Random] = None, data_dir: Optional[Path] = None):
         self._rng = rng or random.Random()
         self._residents: List[Persona] = []
         self._passersby: List[Persona] = []  # temporary
         self._config: Optional[SimulatorConfigSchema] = None
         self._messages_by_role: Dict[str, int] = {}
         self._all_residents: List[Persona] = []
+        self._data_dir = data_dir or Path(__file__).resolve().parents[3] / "data" / "simulator"
 
     async def load(self, config: SimulatorConfigSchema) -> None:
-        """从 TOML 加载常驻人设，并应用运行时筛选配置。"""
+        """加载常驻人设并应用运行时筛选配置；数据文件不存在时为空池。"""
         self._config = config
-        residents_path = Path(config.residents_file)
-        if not residents_path.is_absolute():
-            project_root = Path(__file__).resolve().parents[3]
-            residents_path = project_root / residents_path
-
-        with residents_path.open("rb") as residents_file:
-            data = tomllib.load(residents_file)
-
-        items = data.get("residents", {}).get("items", [])
-        self._all_residents = [Persona.model_validate(item) for item in items]
+        residents_path = self._data_dir / "residents.toml"
+        self._all_residents = []
+        if residents_path.exists():
+            with residents_path.open("rb") as residents_file:
+                data = tomllib.load(residents_file)
+            items = data.get("residents", {}).get("items", [])
+            self._all_residents = [Persona.model_validate(item) for item in items]
         self._apply_resident_filter()
 
     def pick_one(self) -> Persona:
         """按配置概率和角色权重随机选择一个人设。
 
         路人池采用懒加载：命中路人概率时若池空则按需生成。
+        无常驻人设时降级为临时路人（不抛错）。
         """
         if self._config is None:
             raise RuntimeError("PersonaPool 尚未加载配置")
 
         choose_passerby = self._rng.random() < self._config.temp_passerby_ratio
+        if not self._residents:
+            choose_passerby = True
         if choose_passerby:
             if not self._passersby:
                 self.generate_temporary_passerby()

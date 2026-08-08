@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib
 import shutil
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Union, cast, get_args, get_origin
@@ -24,9 +25,9 @@ import tomlkit
 from src.modules.config.schemas.base import BaseConfig, DriftReport, _set_toml_value
 from src.modules.config.core_schemas import CoreConfig
 from src.modules.config.model_schemas import ModelConfig
-from src.modules.config.schemas.simulator_schemas import SimulatorConfig
 from src.modules.config.upgrade_hooks import apply_upgrade_hooks
 from src.modules.logging import get_logger
+from src.modules.simulator.config_schema import SimulatorConfigSchema
 from pydantic import BaseModel
 
 logger = get_logger("MultiFileLoader")
@@ -47,9 +48,38 @@ _PHASE_TO_REGISTRY: dict[tuple[str, str], str] = {
     ("output", "_HANDLERS"): "src.stages.output.registry",
 }
 
-CONFIG_VERSION = "0.4.0"
+CONFIG_VERSION = "0.5.0"
 
-_CONFIG_FILES = ["core.toml", "model.toml", "input.toml", "decision.toml", "output.toml", "simulator.toml"]
+_CONFIG_FILES = ["core.toml", "model.toml", "input.toml", "decision.toml", "output.toml"]
+
+
+@dataclass(frozen=True)
+class CrossFileMigration:
+    """跨文件配置迁移：把源文件中的某个段合并到目标文件（一次性）。
+
+    用于配置段跨文件移动（如 simulator.toml 的 [simulator] → core.toml）。
+    与 ``ConfigUpgradeHook`` 的区别：hook 只操作单文件 dict，本机制跨文件。
+    """
+
+    source_file: str
+    source_key: str
+    target_file: str
+    target_key: str
+    target_schema: type[BaseConfig] | None = None
+    """目标段字段的 Schema 类；提供时迁移值会先清洗（剥离已删除的旧字段）再合并"""
+
+
+# 已完成的跨文件迁移注册表（按时间顺序追加）
+CROSS_FILE_MIGRATIONS: tuple[CrossFileMigration, ...] = (
+    # 0.4.x → 0.5.0: simulator.toml 独立文件合并进 core.toml 的 [simulator]
+    CrossFileMigration(
+        source_file="simulator.toml",
+        source_key="simulator",
+        target_file="core.toml",
+        target_key="simulator",
+        target_schema=SimulatorConfigSchema,
+    ),
+)
 
 
 def _backup_file(file_path: Path, config_dir: Path, batch_id: str | None = None) -> Path | None:
@@ -468,24 +498,6 @@ def _generate_phase_toml(phase: str) -> str:
     return tomlkit.dumps(doc)
 
 
-def _generate_simulator_toml() -> str:
-    """生成 simulator.toml（模拟直播间独立配置域）"""
-    from src.modules.simulator.config_schema import SimulatorConfigSchema
-
-    doc = tomlkit.document()
-    doc.add(tomlkit.comment("模拟直播间配置 - 独立一等公民（非 InputCollector）"))
-    doc.add(tomlkit.nl())
-
-    try:
-        comp_table = _schema_to_toml_table(SimulatorConfigSchema)
-        doc["simulator"] = comp_table
-    except Exception as e:
-        logger.warning(f"生成模拟器配置模板失败: {e}")
-        doc["simulator"] = tomlkit.table()
-
-    return tomlkit.dumps(doc)
-
-
 def _table_from_model(instance: BaseModel) -> Any:
     """把 BaseModel 实例序列化为 tomlkit Table（值 + description 注释，None 跳过）。
 
@@ -612,8 +624,6 @@ def _ensure_required_files(config_dir: Path) -> list[str]:
             (config_dir / fname).write_text(_generate_phase_toml("decision"), encoding="utf-8-sig")
         elif fname == "output.toml":
             (config_dir / fname).write_text(_generate_phase_toml("output"), encoding="utf-8-sig")
-        elif fname == "simulator.toml":
-            (config_dir / fname).write_text(_generate_simulator_toml(), encoding="utf-8-sig")
         generated.append(fname)
     return generated
 
@@ -652,10 +662,6 @@ def generate_default_configs(config_dir: Path) -> None:
     output_path.write_text(_generate_phase_toml("output"), encoding="utf-8-sig")
     logger.info("已生成 output.toml")
 
-    simulator_path = config_dir / "simulator.toml"
-    simulator_path.write_text(_generate_simulator_toml(), encoding="utf-8-sig")
-    logger.info("已生成 simulator.toml")
-
 
 def _load_and_validate_schema(
     file_path: Path,
@@ -681,6 +687,46 @@ def _load_and_validate_schema(
     return instance.model_dump(), report
 
 
+def _apply_cross_file_migrations(config_dir: Path, core_data: dict[str, Any]) -> list[Path]:
+    """执行已注册的跨文件迁移，把旧文件中的配置段合并进目标文件。
+
+    Args:
+        config_dir: config/ 目录
+        core_data: 已加载的 core 配置 dict（原地修改：目标段缺失时合入）
+
+    Returns:
+        需要备份后移除的源文件路径列表（存在残留文件时）
+    """
+    to_remove: list[Path] = []
+    for migration in CROSS_FILE_MIGRATIONS:
+        source_path = config_dir / migration.source_file
+        if not source_path.exists():
+            continue
+        target_path = config_dir / migration.target_file
+        target_raw: dict[str, Any] = {}
+        if target_path.exists():
+            with open(target_path, "r", encoding="utf-8-sig") as f:
+                target_raw = tomlkit.load(f).unwrap()
+        with open(source_path, "r", encoding="utf-8-sig") as f:
+            source_doc = tomlkit.load(f).unwrap()
+        section = source_doc.get(migration.source_key)
+        if isinstance(section, dict) and migration.target_key not in target_raw:
+            if migration.target_schema is not None:
+                try:
+                    cleaned_instance, _ = migration.target_schema.from_dict_with_drift_check(section)
+                    section = cleaned_instance.model_dump()
+                except Exception as e:
+                    logger.warning(f"跨文件迁移 [{migration.source_file}] 数据清洗失败，跳过合并: {e}")
+                    continue
+            core_data[migration.target_key] = section
+            logger.info(
+                f"跨文件迁移: [{migration.source_file}].{migration.source_key} "
+                f"→ [{migration.target_file}].{migration.target_key}"
+            )
+        to_remove.append(source_path)
+    return to_remove
+
+
 def load_config_dir(
     config_dir: Path,
 ) -> tuple[dict[str, Any], DriftReport]:
@@ -693,9 +739,10 @@ def load_config_dir(
         (合并后的配置字典, 综合漂移报告)
 
     自动升级闭环（对齐 MaiBot 行为）：
-    1. 缺失文件自动补齐（如旧 config.toml 迁移后缺 simulator.toml）
-    2. core.toml 版本不一致 → 执行注册的 ConfigUpgradeHook → 写回并更新 [meta].version
-    3. 存在漂移（缺失/冗余字段）→ 备份 + 写回（缺失补默认值、冗余删除）
+    1. 缺失文件自动补齐
+    2. 跨文件迁移（如旧 simulator.toml → core.toml 的 [simulator]）
+    3. core.toml 版本不一致 → 执行注册的 ConfigUpgradeHook → 写回并更新 [meta].version
+    4. 存在漂移（缺失/冗余字段）→ 备份 + 写回（缺失补默认值、冗余删除）
     写回后漂移归零，下次启动不再重复提示。
     """
     # 0. 补齐缺失文件
@@ -719,8 +766,10 @@ def load_config_dir(
             if hook_result.migrated:
                 logger.warning(f"配置升级钩子已应用: {hook_result.reasons}")
             core_data = hook_result.data
-        # 写回闭环：版本不一致 或 存在漂移
-        if version_changed or core_report.has_drift:
+        # 跨文件迁移（如旧 simulator.toml → core 的 [simulator]）
+        migrated_files = _apply_cross_file_migrations(config_dir, core_data)
+        # 写回闭环：版本不一致 或 存在漂移 或 跨文件迁移
+        if version_changed or core_report.has_drift or migrated_files:
             batch_id = batch_id or datetime.now().strftime("%Y%m%d_%H%M%S")
             backup = _write_back_schema_file(
                 config_dir, "core.toml", CoreConfig, core_data, force_meta_version=CONFIG_VERSION, batch_id=batch_id
@@ -732,6 +781,9 @@ def load_config_dir(
                 f"版本 {current_ver or '?'} → {CONFIG_VERSION}"
                 + (f", 备份: {backup.relative_to(config_dir)}" if backup else "")
             )
+            for migrated_file in migrated_files:
+                _backup_file(migrated_file, config_dir, batch_id=batch_id)
+                migrated_file.unlink()
             core_data, core_report = _load_and_validate_schema(core_path, CoreConfig)
         result["core"] = core_data
         combined.redundant.extend(f"core.{r}" for r in core_report.redundant)
@@ -772,26 +824,6 @@ def load_config_dir(
     if output_path.exists():
         with open(output_path, "r", encoding="utf-8-sig") as f:
             result["output"] = tomlkit.load(f).unwrap()
-
-    # simulator.toml → SimulatorConfig
-    simulator_path = config_dir / "simulator.toml"
-    if simulator_path.exists():
-        simulator_data, simulator_report = _load_and_validate_schema(simulator_path, SimulatorConfig)
-        if simulator_report.has_drift:
-            batch_id = batch_id or datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup = _write_back_schema_file(
-                config_dir, "simulator.toml", SimulatorConfig, simulator_data, batch_id=batch_id
-            )
-            logger.info(
-                f"simulator.toml 已自动升级: "
-                f"补齐 {len(simulator_report.missing)} 项({', '.join(simulator_report.missing) or '无'}), "
-                f"清理 {len(simulator_report.redundant)} 项({', '.join(simulator_report.redundant) or '无'})"
-                + (f", 备份: {backup.relative_to(config_dir)}" if backup else "")
-            )
-            simulator_data, simulator_report = _load_and_validate_schema(simulator_path, SimulatorConfig)
-        result["simulator"] = simulator_data
-        combined.redundant.extend(f"simulator.{r}" for r in simulator_report.redundant)
-        combined.missing.extend(f"simulator.{m}" for m in simulator_report.missing)
 
     return result, combined
 

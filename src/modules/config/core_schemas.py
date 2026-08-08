@@ -14,12 +14,13 @@ from pydantic import Field
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.config.schemas.logging import LoggingConfig
 from src.modules.mcp.config import MCPServerConfig
+from src.modules.simulator.config_schema import SimulatorConfigSchema
 
 
 class MetaConfig(BaseConfig):
     """配置元数据"""
 
-    version: str = Field(default="0.4.0", description="配置版本号（用于自动迁移检测）")
+    version: str = Field(default="0.5.0", description="配置版本号（用于自动迁移检测）")
 
 
 class GeneralConfig(BaseConfig):
@@ -179,6 +180,9 @@ class CoreConfig(BaseConfig):
     events: EventHistoryConfig = Field(default_factory=EventHistoryConfig, description="事件历史记录配置")
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig, description="Dashboard 配置")
     mcp: MCPServerConfig = Field(default_factory=MCPServerConfig, description="MCP 服务配置")
+    simulator: SimulatorConfigSchema = Field(
+        default_factory=SimulatorConfigSchema, description="模拟直播间配置（数据文件位于 data/simulator/）"
+    )
     logging: LoggingConfig = Field(default_factory=LoggingConfig, description="日志配置")
     pipelines: dict[str, Any] = Field(
         default_factory=lambda: {

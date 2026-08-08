@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from src.modules.config.multi_file_loader import (
+    CONFIG_VERSION,
     generate_default_configs,
     get_config_version,
     load_config_dir,
@@ -25,7 +26,7 @@ class TestGeneration:
     def test_needs_generation_for_missing_dir(self, temp_config_dir):
         assert needs_generation(temp_config_dir) is True
 
-    def test_generate_creates_6_files(self, temp_config_dir):
+    def test_generate_creates_5_files(self, temp_config_dir):
         generate_default_configs(temp_config_dir)
         files = sorted(f.name for f in temp_config_dir.glob("*.toml"))
         assert files == [
@@ -34,7 +35,6 @@ class TestGeneration:
             "input.toml",
             "model.toml",
             "output.toml",
-            "simulator.toml",
         ]
 
     def test_needs_generation_false_after_generation(self, temp_config_dir):
@@ -81,7 +81,7 @@ class TestLoading:
     def test_get_config_version(self, temp_config_dir):
         generate_default_configs(temp_config_dir)
         version = get_config_version(temp_config_dir)
-        assert version == "0.4.0"
+        assert version == CONFIG_VERSION
 
     def test_drift_fixed_on_load(self, temp_config_dir):
         generate_default_configs(temp_config_dir)

@@ -37,6 +37,7 @@ _SECTION_MAP: dict[str, str] = {
     "context": "core.toml",
     "dashboard": "core.toml",
     "mcp": "core.toml",
+    "simulator": "core.toml",
     "logging": "core.toml",
     "pipelines": "core.toml",
     "llm": "model.toml",

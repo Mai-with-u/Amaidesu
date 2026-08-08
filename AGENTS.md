@@ -95,6 +95,11 @@
 - 每个 hook 必须配单元测试（旧结构输入 → 断言新结构输出）
 - 纯新增字段（无需数据变换）可不注册 hook，由写回机制自动补默认值
 
+**配置段跨文件移动**（如 `simulator.toml` 合并进 `core.toml`）必须注册 `CrossFileMigration`：
+- 注册到 `src/modules/config/multi_file_loader.py` 的 `CROSS_FILE_MIGRATIONS`（source_file/source_key → target_file/target_key）
+- 执行时机：`load_config_dir` 中目标段缺失时合并进目标文件，源文件备份到 `config/old/` 后移除
+- 必须配迁移测试（旧文件结构 → 断言目标段合并 + 源文件移除）
+
 **不需要升版本**：仅修改注释/description、纯内部实现重构（不改变 TOML 结构）。
 
 **变更时需同步检查的联动位置**：
@@ -103,6 +108,7 @@
 |---------|-----------|
 | 任何 Schema 变更 | `CONFIG_VERSION` + `MetaConfig.version` |
 | 需要数据变换 | `upgrade_hooks.py` 注册 hook + 迁移测试 |
+| 配置段跨文件移动 | `multi_file_loader.py` 注册 CrossFileMigration + 迁移测试 |
 | 涉及旧配置段（迁移/死配置） | `migration.py` 的 `_SECTION_MAP` / `_DEAD_SECTIONS` |
 | 涉及 Dashboard 显示字段 | `schema_registry.py`（启动 coverage gate 会校验） |
 | 组件 Schema（Collector/Decider/Handler） | 对应 `tests/config/test_*_schema.py` 更新 |
@@ -434,4 +440,4 @@ logger.error("错误日志", exc_info=True)
 
 ---
 
-*最后更新：2026-08-08（新增"配置 Schema 变更规则"：强制 Schema 变更同步升 CONFIG_VERSION、注册迁移钩子并配测试）*
+*最后更新：2026-08-08（新增"配置 Schema 变更规则"：强制 Schema 变更同步升 CONFIG_VERSION、注册迁移钩子并配测试；新增 CrossFileMigration 跨文件迁移条款）*

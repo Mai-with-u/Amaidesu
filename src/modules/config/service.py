@@ -61,7 +61,6 @@ _CONFIG_FILE_TO_SCOPE: Dict[str, str] = {
     "input.toml": "input",
     "decision.toml": "decision",
     "output.toml": "output",
-    "simulator.toml": "simulator",
 }
 
 
@@ -742,6 +741,8 @@ class ConfigService:
         from src.modules.config.model_schemas import LLMProfileConfig
         from src.modules.config.schema_generator import ConfigSchemaGenerator
         from src.modules.config.schemas.logging import LoggingConfig
+        from src.modules.mcp.config import MCPServerConfig
+        from src.modules.simulator.config_schema import SimulatorConfigSchema
 
         section_map: Dict[str, type] = {
             # core 子节
@@ -751,6 +752,8 @@ class ConfigService:
             "maicore": MaiCoreConfig,
             "context": ContextConfig,
             "dashboard": DashboardConfig,
+            "mcp": MCPServerConfig,
+            "simulator": SimulatorConfigSchema,
             "logging": LoggingConfig,
             # model 子节(新结构:所有 profile 共享同一 LLMProfileConfig,profile 引用 provider)
             "llm": LLMProfileConfig,

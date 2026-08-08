@@ -9,8 +9,6 @@ class SimulatorConfigSchema(BaseConfig):
     """模拟直播间调试工具配置 Schema"""
 
     enabled: bool = Field(default=False, description="是否启用模拟器")
-    residents_file: str = Field(default="config/simulator_residents.toml")
-    gifts_file: str = Field(default="config/simulator_gifts.toml")
     base_rate_per_minute: float = Field(
         default=6.0,
         ge=0.1,

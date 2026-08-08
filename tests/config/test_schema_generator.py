@@ -43,6 +43,7 @@ from src.modules.config.schema_generator import (
     get_field_count,
 )
 from src.modules.config.schemas.logging import LoggingConfig
+from src.modules.config.multi_file_loader import CONFIG_VERSION
 from src.modules.config.schema_registry import get_schema_registry
 
 
@@ -415,7 +416,7 @@ class TestCoreConfigGeneration:
     def test_meta_config_present(self):
         schema = ConfigSchemaGenerator.generate_config_schema(MetaConfig)
         by_name = {f["name"]: f for f in schema["fields"]}
-        assert by_name["version"]["default"] == "0.4.0"
+        assert by_name["version"]["default"] == CONFIG_VERSION
 
     def test_logging_config_via_collect_all_fields(self):
         """通过 CoreConfig 间接生成 logging schema，验证 fields 铺平正确。"""

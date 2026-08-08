@@ -2,6 +2,7 @@
 
 from src.modules.config.core_schemas import CoreConfig
 from src.modules.config.model_schemas import ModelConfig
+from src.modules.config.multi_file_loader import CONFIG_VERSION
 
 
 class TestCoreConfig:
@@ -12,7 +13,11 @@ class TestCoreConfig:
         assert c.persona.emotion_intensity == 7
         assert c.maicore.port == 8000
         assert c.dashboard.port == 60214
-        assert c.meta.version == "0.4.0"
+        assert c.meta.version == CONFIG_VERSION
+
+    def test_simulator_present(self):
+        c = CoreConfig()
+        assert c.simulator.enabled is False
 
     def test_logging_present(self):
         c = CoreConfig()

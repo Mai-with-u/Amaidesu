@@ -26,7 +26,6 @@ REQUIRED_FILES = [
     "input.toml",
     "decision.toml",
     "output.toml",
-    "simulator.toml",
 ]
 
 
@@ -61,13 +60,67 @@ def _append_section(config_dir: Path, section_toml: str) -> None:
 
 class TestMissingFileFill:
     def test_missing_files_are_generated(self, config_dir: Path):
-        for fname in ["model.toml", "input.toml", "decision.toml", "output.toml", "simulator.toml"]:
+        for fname in ["model.toml", "input.toml", "decision.toml", "output.toml"]:
             (config_dir / fname).unlink()
 
         load_config_dir(config_dir)
 
         for fname in REQUIRED_FILES:
             assert (config_dir / fname).exists(), f"{fname} 应被自动补齐"
+
+
+class TestCrossFileMigration:
+    def test_simulator_toml_merged_into_core(self, config_dir: Path):
+        # 模拟旧版用户：core.toml 无 [simulator] 段 + 残留 simulator.toml（含已删除的旧字段）
+        _remove_section(config_dir, "simulator")
+        (config_dir / "simulator.toml").write_text(
+            "[simulator]\nenabled = true\nbase_rate_per_minute = 12.0\n"
+            'residents_file = "config/simulator_residents.toml"\n'
+            'gifts_file = "config/simulator_gifts.toml"\n',
+            encoding="utf-8-sig",
+        )
+
+        config, _ = load_config_dir(config_dir)
+
+        assert not (config_dir / "simulator.toml").exists()
+        assert config["core"]["simulator"]["enabled"] is True
+        assert config["core"]["simulator"]["base_rate_per_minute"] == 12.0
+        assert "residents_file" not in config["core"]["simulator"]
+        assert "gifts_file" not in config["core"]["simulator"]
+
+    def test_simulator_migration_keeps_backup(self, config_dir: Path):
+        _remove_section(config_dir, "simulator")
+        (config_dir / "simulator.toml").write_text(
+            "[simulator]\nenabled = true\n", encoding="utf-8-sig"
+        )
+
+        load_config_dir(config_dir)
+
+        backup_dir = config_dir / "old"
+        batch_dirs = [p for p in backup_dir.iterdir() if p.is_dir()]
+        assert len(batch_dirs) == 1
+        assert (batch_dirs[0] / "simulator.toml").exists()
+
+    def test_core_version_bumped_after_migration(self, config_dir: Path):
+        _remove_section(config_dir, "simulator")
+        (config_dir / "simulator.toml").write_text(
+            "[simulator]\nenabled = true\n", encoding="utf-8-sig"
+        )
+
+        load_config_dir(config_dir)
+
+        assert get_config_version(config_dir) == CONFIG_VERSION
+
+    def test_existing_core_section_wins_over_leftover_source(self, config_dir: Path):
+        # core.toml 已含 [simulator]（用户已配置）→ 残留 simulator.toml 仅被清理，不覆盖用户值
+        (config_dir / "simulator.toml").write_text(
+            "[simulator]\nenabled = true\n", encoding="utf-8-sig"
+        )
+
+        config, _ = load_config_dir(config_dir)
+
+        assert not (config_dir / "simulator.toml").exists()
+        assert config["core"]["simulator"]["enabled"] is False
 
 
 class TestVersionUpgrade:

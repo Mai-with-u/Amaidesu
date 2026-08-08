@@ -214,11 +214,6 @@ config.toml.backup*
 *.toml
 /config/
 
-# Simulator preset files (no user secrets — checked-in templates)
-!config/simulator_residents.toml
-!config/simulator_gifts.toml
-!config/simulated_live_stream.toml.example
-
 # 根目录媒体文件（图片/视频不应放在仓库根目录）
 # 图片请放入 docs/images/，视频请放入 docs/videos/（或 docs 下合适子目录）
 /*.png
