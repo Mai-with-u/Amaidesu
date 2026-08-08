@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Annotated, Any, Dict, Optional, cast
+from typing import TYPE_CHECKING, Annotated, Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
@@ -130,14 +130,11 @@ async def start_simulator(server: ServerDep) -> Dict[str, Any]:
     collector = _get_collector(server)
     if collector is None:
         raise HTTPException(status_code=404, detail="模拟器 Collector 未加载")
-    if server.input_manager is None:
+    input_manager = server.input_manager
+    if input_manager is None:
         raise HTTPException(status_code=500, detail="InputCollectorManager 不可用")
     if getattr(collector, "is_started", False):
         return {"status": "already_running"}
-    # start_collector/stop_collector 由 InputCollectorManager 额外提供，未在
-    # ManagerStatusProvider 协议声明。组合根注入的是 InputCollectorManager 实例，
-    # 用 cast 避免对协议做类型断言（type: ignore 在本项目基于 pyright 下不生效）。
-    input_manager = cast(Any, server.input_manager)
     await input_manager.start_collector(collector)
     return {"status": "started"}
 
@@ -148,11 +145,11 @@ async def stop_simulator(server: ServerDep) -> Dict[str, Any]:
     collector = _get_collector(server)
     if collector is None:
         raise HTTPException(status_code=404, detail="模拟器 Collector 未加载")
-    if server.input_manager is None:
+    input_manager = server.input_manager
+    if input_manager is None:
         raise HTTPException(status_code=500, detail="InputCollectorManager 不可用")
     if not getattr(collector, "is_started", False):
         return {"status": "already_stopped"}
-    input_manager = cast(Any, server.input_manager)
     await input_manager.stop_collector(collector)
     return {"status": "stopped"}
 

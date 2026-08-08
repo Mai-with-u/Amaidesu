@@ -354,8 +354,10 @@ class InputCollectorManager:
             task.cancel()
             try:
                 await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
-            except (TimeoutError, asyncio.CancelledError, Exception):
-                pass
+            except asyncio.CancelledError:
+                pass  # 等待被外层取消（如请求中断），任务自身的 finally 仍会清理
+            except TimeoutError:
+                self.logger.warning(f"Collector '{name}' 停止确认超时，任务可能仍在运行")
 
         try:
             await collector.stop()
@@ -380,8 +382,10 @@ class InputCollectorManager:
             task.cancel()
             try:
                 await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
-            except (TimeoutError, asyncio.CancelledError, Exception):
-                pass
+            except asyncio.CancelledError:
+                pass  # 等待被外层取消（如请求中断），任务自身的 finally 仍会清理
+            except TimeoutError:
+                self.logger.warning(f"Collector '{name}' 停止确认超时，任务可能仍在运行")
         self._collector_tasks.pop(name, None)
 
         task = asyncio.create_task(self._run_collector(collector, name), name=f"InputCollector-{name}")
@@ -397,8 +401,10 @@ class InputCollectorManager:
             task.cancel()
             try:
                 await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
-            except (TimeoutError, asyncio.CancelledError, Exception):
-                pass
+            except asyncio.CancelledError:
+                pass  # 等待被外层取消（如请求中断），任务自身的 finally 仍会清理
+            except TimeoutError:
+                self.logger.warning(f"Collector '{name}' 停止确认超时，任务可能仍在运行")
 
         try:
             await collector.stop()
@@ -406,6 +412,10 @@ class InputCollectorManager:
             self.logger.error(f"停止Collector '{name}' 时出错: {e}", exc_info=True)
         self.logger.info(f"Collector '{name}' 已停止")
         return True
+
+    def get_collector_by_name(self, name: str):
+        """按注册名查找已加载的 Collector 实例（供 Dashboard 控制接口使用）。"""
+        return self._get_collector_by_name(name)
 
     def _get_collector_by_name(self, name: str):
         """按名称精确查找已加载的 Collector 实例"""
@@ -415,6 +425,9 @@ class InputCollectorManager:
         return None
 
     def _get_collector_name(self, collector) -> str:
+        registered_name = getattr(collector, "_registered_name", None)
+        if registered_name:
+            return registered_name
         class_name = collector.__class__.__name__
         if "Collector" in class_name:
             return class_name.replace("Collector", "")

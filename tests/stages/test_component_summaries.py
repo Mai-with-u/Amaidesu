@@ -4,6 +4,8 @@
 ``is_enabled=False``、``is_started=False``，供前端渲染"已禁用"卡片并启用。
 """
 
+import asyncio
+
 import pytest
 
 # 导入三个阶段包触发全部 @collector/@decider/@handler 注册
@@ -168,3 +170,130 @@ async def test_decision_enable_failure_on_unknown_decider():
     manager = DeciderManager(event_bus=EventBus())
     ok = await manager.enable_decider("not_a_real_decider", {})
     assert ok is False
+
+
+class _FakeCollector:
+    """带注册名的假 Collector（与 @collector 装饰器的反向引用行为一致）"""
+
+    _registered_name = "console_input"
+
+    def __init__(self):
+        self.is_started = False
+
+    async def start(self) -> None:
+        self.is_started = True
+
+    async def stop(self) -> None:
+        self.is_started = False
+
+    async def collect(self):
+        self.is_started = True
+        try:
+            while self.is_started:
+                await asyncio.sleep(0.01)
+                yield
+        finally:
+            self.is_started = False
+
+
+async def _wait_until_started(collector, timeout: float = 1.0) -> bool:
+    """轮询等待 Collector 运行任务真正启动（start 在独立 asyncio 任务中执行）。"""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        if collector.is_started:
+            return True
+        await asyncio.sleep(0.01)
+    return False
+
+
+def test_collector_name_prefers_registered_name():
+    """已加载 Collector 的名称应优先使用注册名，而非类名衍生（保证与配置/未启用项一致）。"""
+    manager = _empty_input_manager()
+    collector = _FakeCollector()
+    assert manager._get_collector_name(collector) == "console_input"
+
+    # 无 _registered_name 的类回退到类名衍生（兼容 Mock 等非装饰器类）
+    class _Plain:
+        pass
+
+    assert manager._get_collector_name(_Plain()) == "_Plain"
+
+
+def test_input_summaries_loaded_use_registered_name():
+    """已加载 Collector 的 summary 应使用注册名，避免与未启用补全项重复显示。"""
+    manager = _empty_input_manager()
+    manager._collectors = [_FakeCollector()]
+    names = [s["name"] for s in manager.get_component_summaries()]
+    assert names.count("console_input") == 1
+    loaded = next(s for s in manager.get_component_summaries() if s["name"] == "console_input")
+    assert loaded["is_enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_collector_by_name_finds_loaded():
+    """get_collector_by_name 应能按注册名找到已加载实例。"""
+    manager = _empty_input_manager()
+    collector = _FakeCollector()
+    manager._collectors = [collector]
+    assert manager.get_collector_by_name("console_input") is collector
+    assert manager.get_collector_by_name("not_loaded") is None
+
+
+@pytest.mark.asyncio
+async def test_control_input_component_start_stop_no_get_info():
+    """控制已加载 Collector 不应调用 get_info（InputCollector 无此方法，曾导致 AttributeError）。"""
+    from types import SimpleNamespace
+
+    from src.modules.dashboard.api.components import _control_input_component
+    from src.modules.dashboard.schemas.component import ComponentControlAction
+    from src.modules.events.event_bus import EventBus
+    from tests.mocks.mock_input_collector import MockInputCollector
+
+    manager = _empty_input_manager()
+    collector = MockInputCollector(config={}, event_bus=EventBus())
+    collector._registered_name = "console_input"
+    manager._collectors = [collector]
+    server = SimpleNamespace(
+        input_manager=manager,
+        config_service=None,
+        get_config_path=lambda section: None,
+    )
+
+    resp = await _control_input_component("console_input", ComponentControlAction.START, server)
+    assert resp.success is True
+    assert await _wait_until_started(collector)
+
+    resp = await _control_input_component("console_input", ComponentControlAction.STOP, server)
+    assert resp.success is True
+    assert collector.is_started is False
+
+
+@pytest.mark.asyncio
+async def test_control_input_component_restart_no_get_info():
+    """RESTART 已加载 Collector 不应调用 get_info，且应重新进入运行状态。"""
+    from types import SimpleNamespace
+
+    from src.modules.dashboard.api.components import _control_input_component
+    from src.modules.dashboard.schemas.component import ComponentControlAction
+    from src.modules.events.event_bus import EventBus
+    from tests.mocks.mock_input_collector import MockInputCollector
+
+    manager = _empty_input_manager()
+    collector = MockInputCollector(config={}, event_bus=EventBus())
+    collector._registered_name = "console_input"
+    manager._collectors = [collector]
+    server = SimpleNamespace(
+        input_manager=manager,
+        config_service=None,
+        get_config_path=lambda section: None,
+    )
+
+    resp = await _control_input_component("console_input", ComponentControlAction.RESTART, server)
+    assert resp.success is True
+    try:
+        assert await _wait_until_started(collector)
+    finally:
+        # 清理：停止并移除，避免遗留运行任务
+        await _control_input_component("console_input", ComponentControlAction.STOP, server)
+    assert collector.is_started is False

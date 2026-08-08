@@ -12,6 +12,9 @@ from src.modules.types.base.normalized_message import NormalizedMessage
 class MockInputCollector:
     """Mock 输入 Collector（用于测试）"""
 
+    # @collector 装饰器设置的反向引用；None 时 manager 回退到类名衍生
+    _registered_name: str | None = None
+
     def __init__(self, config: Dict[str, Any], event_bus: EventBus):
         self._config = config
         self._event_bus = event_bus

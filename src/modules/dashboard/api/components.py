@@ -165,13 +165,7 @@ async def _control_input_component(
     if not manager:
         return ComponentControlResponse(success=False, message="Input manager not available")
 
-    component = None
-    for c in manager._collectors:
-        info = c.get_info()
-        if info.get("name", c.__class__.__name__) == name:
-            component = c
-            break
-
+    component = manager.get_collector_by_name(name)
     if not component:
         # 未加载：START 动态创建并启动 + 写入配置；其余动作报错
         if action == ComponentControlAction.START:
@@ -187,14 +181,11 @@ async def _control_input_component(
         _disable_via_config(server, "input", name)
         return ComponentControlResponse(success=True, message=f"组件 {name} 已停止并从启用配置移除")
     elif action == ComponentControlAction.START:
-        if hasattr(component, "start"):
-            await component.start()
+        await manager.start_collector(component)
         return ComponentControlResponse(success=True, message=f"组件 {name} 已启动")
     elif action == ComponentControlAction.RESTART:
-        if hasattr(component, "stop"):
-            await component.stop()
-        if hasattr(component, "start"):
-            await component.start()
+        await manager.stop_collector(component)
+        await manager.start_collector(component)
         return ComponentControlResponse(success=True, message=f"组件 {name} 已重启")
 
     return ComponentControlResponse(success=False, message=f"Unknown action: {action}")

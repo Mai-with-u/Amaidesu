@@ -52,6 +52,8 @@ def collector(
         if name in _COLLECTORS:
             raise ValueError(f"Collector '{name}' 已被注册")
         _COLLECTORS[name] = cls
+        # 反向引用：通过实例/类即可查回注册名（与 register_event 的 _registered_event_name 同模式）
+        cls._registered_name = name  # type: ignore[attr-defined]
 
         try:
             from src.modules.config.schemas import (
