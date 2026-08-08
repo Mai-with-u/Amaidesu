@@ -27,11 +27,13 @@
   以保证 ``@register_event`` 装饰器被执行；其本身不再维护任何手写映射。
 """
 
-from typing import Dict, Optional, Type
+from typing import Callable, Dict, Optional, Type, TypeVar
 
 from pydantic import BaseModel
 
 from src.modules.logging import get_logger
+
+T = TypeVar("T", bound=Type[BaseModel])
 
 
 # ==================== 模块级注册表 ====================
@@ -44,7 +46,7 @@ EVENT_REGISTRY: Dict[str, Type[BaseModel]] = {}
 # ==================== 装饰器 API ====================
 
 
-def register_event(event_name: str):
+def register_event(event_name: str) -> Callable[[T], T]:
     """
     注册事件 Payload 类型的装饰器
 
@@ -70,7 +72,7 @@ def register_event(event_name: str):
             assert MessageReadyPayload._registered_event_name == "input.message.received"
     """
 
-    def decorator(cls: Type[BaseModel]) -> Type[BaseModel]:
+    def decorator(cls: T) -> T:
         existing = EVENT_REGISTRY.get(event_name)
         if existing is not None and existing is not cls:
             raise ValueError(f"事件 '{event_name}' 已被注册为 {existing.__name__}，不能再次注册为 {cls.__name__}")
