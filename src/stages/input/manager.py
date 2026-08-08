@@ -366,6 +366,47 @@ class InputCollectorManager:
         self.logger.info(f"Collector '{name}' 动态停用成功")
         return True
 
+    async def start_collector(self, collector) -> bool:
+        """启动（或重启）单个 Collector 的运行任务（供 Dashboard 启停控制）。
+
+        若任务已在运行则跳过；若任务已结束（stop 后 collect() 退出）则重新创建任务。
+        """
+        name = self._get_collector_name(collector)
+        task = self._collector_tasks.get(name)
+        if task and not task.done():
+            if getattr(collector, "is_started", False):
+                self.logger.info(f"Collector '{name}' 已在运行，跳过启动")
+                return True
+            task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
+            except (TimeoutError, asyncio.CancelledError, Exception):
+                pass
+        self._collector_tasks.pop(name, None)
+
+        task = asyncio.create_task(self._run_collector(collector, name), name=f"InputCollector-{name}")
+        self._collector_tasks[name] = task
+        self.logger.info(f"Collector '{name}' 已启动")
+        return True
+
+    async def stop_collector(self, collector) -> bool:
+        """停止单个 Collector：取消运行任务并调用 stop()（供 Dashboard 启停控制）。"""
+        name = self._get_collector_name(collector)
+        task = self._collector_tasks.pop(name, None)
+        if task and not task.done():
+            task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
+            except (TimeoutError, asyncio.CancelledError, Exception):
+                pass
+
+        try:
+            await collector.stop()
+        except Exception as e:
+            self.logger.error(f"停止Collector '{name}' 时出错: {e}", exc_info=True)
+        self.logger.info(f"Collector '{name}' 已停止")
+        return True
+
     def _get_collector_by_name(self, name: str):
         """按名称精确查找已加载的 Collector 实例"""
         for collector in self._collectors:
