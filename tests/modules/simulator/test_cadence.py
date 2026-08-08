@@ -1,11 +1,11 @@
-"""测试 CadenceGenerator - 泊松节奏 + 状态机"""
+﻿"""测试 CadenceGenerator - 泊松节奏 + 状态机"""
 
 import asyncio
 
-from src.stages.input.collectors.simulated_live_stream.cadence import (
+from src.modules.simulator.cadence import (
     CadenceGenerator,
 )
-from src.stages.input.collectors.simulated_live_stream.config_schema import (
+from src.modules.simulator.config_schema import (
     SimulatorConfigSchema,
 )
 

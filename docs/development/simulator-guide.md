@@ -16,20 +16,20 @@
              ContextService（主播最近发言）
 ```
 
-模拟器作为 InputCollector 运行，通过 **ContextService pull 模式**读取主播最近发言作为上下文。在 `auto` 节奏模式下订阅 `output.intent.finished` 作为元控制信号触发突发期（符合架构规则中 Input 阶段可订阅元控制信号的例外），不参与数据平面环路。
+模拟器是独立于 InputCollector 的「输入模拟服务」（`SimulatorService`），通过 **ContextService pull 模式**读取主播最近发言作为上下文。在 `auto` 节奏模式下订阅 `output.intent.finished` 作为元控制信号触发突发期（不参与数据平面环路）。
 
 ## 快速开始
 
 ### 最小配置
 
-在 `config/input.toml` 的 `[collectors]` 中添加：
+在 `config/simulator.toml` 中启用：
 
 ```toml
-[collectors]
-enabled = ["console_input", "simulated_live_stream"]
+[simulator]
+enabled = true
 ```
 
-> 注意：使用默认配置即可启动（不需要增加 `[collectors.simulated_live_stream]` 段）。
+> 注意：模拟器是独立服务，**不需要**加入 `config/input.toml` 的 `collectors.enabled` 列表。
 > 模拟器需要 LLM 配置（`[llm_fast]` provider）。
 
 ### 启动
@@ -115,7 +115,7 @@ is_temporary = false
 
 ## 礼物配置
 
-编辑 `config/simulator_gifts.toml` 可自定义模拟直播间可触发的礼物（概率与价值在 `config/input.toml` 的 `[collectors.simulated_live_stream]` 中配置，如 `gift_probability`）。
+编辑 `config/simulator_gifts.toml` 可自定义模拟直播间可触发的礼物（概率与价值在 `config/simulator.toml` 的 `[simulator]` 中配置，如 `gift_probability`）。
 
 ## 架构说明：
 
@@ -139,7 +139,7 @@ is_temporary = false
 | 模拟器不生成消息 | LLM 未配置或 Token 超限 | 检查 `config/model.toml`、Dashboard Token 统计 |
 | 消息全是暖场问候 | ContextService 为空 | 等待主播发言（模拟器 pull 模式依赖发言） |
 | 突发期不触发 | burst_min_interval_s 限制 | 降低突发最小间隔 |
-| Dashboard 看不到按钮 | 未启用 `simulated_live_stream` | 检查 `input.toml` 配置 |
+| Dashboard 看不到按钮 | 模拟器未启用 | 检查 `config/simulator.toml` 的 `enabled`，或通过 Dashboard API 手动启动 |
 | 消息太短/太长 | max_message_chars 配置 | 调整字符限制 |
 
 ## v1 限制

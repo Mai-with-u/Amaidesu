@@ -29,6 +29,7 @@ from src.stages.decision import DeciderManager
 from src.modules.pipeline import PipelineManager
 from src.stages.input.manager import InputCollectorManager
 from src.stages.output import OutputHandlerManager
+from src.modules.simulator import SimulatorService
 
 logger = get_logger("Main")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -236,6 +237,7 @@ async def create_app_components(
     Optional["DashboardServer"],
     Optional["MCPServerService"],
     Optional["EventHistoryRecorder"],
+    Optional[SimulatorService],
 ]:
     """创建并连接核心组件。
 
@@ -373,6 +375,24 @@ async def create_app_components(
     else:
         logger.info("未检测到输入配置，输入Collector功能将被禁用")
 
+    # 模拟直播间服务（独立一等公民，与 InputCollector 并列）
+    simulator_service: Optional[SimulatorService] = None
+    try:
+        simulator_service = SimulatorService(
+            event_bus=event_bus,
+            services_by_type={
+                LLMManager: llm_service,
+                PromptManager: prompt_manager,
+                ContextService: context_service,
+                EventHistoryService: event_history_service,
+            },
+        )
+        await simulator_service.setup(config_service)
+    except Exception as e:
+        logger.error(f"模拟器服务初始化失败: {e}", exc_info=True)
+        logger.warning("模拟器功能不可用，继续启动其他服务")
+        simulator_service = None
+
     # 输出Handler管理器 (Output 阶段)
     # 先于 Decision 阶段创建并启动，以便作为 CapabilitiesProvider 注入 DeciderManager，
     # 供 Decider 查询 Output 能力做动作选择（只读 Protocol，不违反单向数据流）。
@@ -462,6 +482,7 @@ async def create_app_components(
             dashboard_server = DashboardServer(
                 event_bus=event_bus,
                 input_manager=input_manager,
+                simulator_service=simulator_service,
                 decision_manager=decision_manager,
                 output_manager=output_manager,
                 context_service=context_service,
@@ -515,6 +536,7 @@ async def create_app_components(
         dashboard_server,
         mcp_service,
         event_recorder,
+        simulator_service,
     )
 
 
@@ -571,6 +593,7 @@ async def run_shutdown(
     dashboard_server: Optional["DashboardServer"] = None,
     mcp_service: Optional["MCPServerService"] = None,
     event_recorder: Optional["EventHistoryRecorder"] = None,
+    simulator_service: Optional[SimulatorService] = None,
 ) -> None:
     """按顺序执行关闭与清理。
 
@@ -603,6 +626,15 @@ async def run_shutdown(
         except (Exception, asyncio.CancelledError) as e:
             _saw_cancelled = _saw_cancelled or isinstance(e, asyncio.CancelledError)
             logger.error(f"停止输入Collector时出错: {e}")
+
+    if simulator_service:
+        logger.info("正在停止模拟器服务...")
+        try:
+            await simulator_service.cleanup()
+            logger.info("模拟器服务已停止并清理")
+        except (Exception, asyncio.CancelledError) as e:
+            _saw_cancelled = _saw_cancelled or isinstance(e, asyncio.CancelledError)
+            logger.error(f"停止模拟器服务时出错: {e}")
 
     if decision_manager:
         logger.info("正在清理 DeciderManager（取消订阅）...")
@@ -745,6 +777,7 @@ async def main() -> None:
         dashboard_server,
         mcp_service,
         event_recorder,
+        simulator_service,
     ) = await create_app_components(config, input_pipeline_manager, config_service, dev_webui=args.dev_webui)
 
     stop_event = asyncio.Event()
@@ -769,6 +802,7 @@ async def main() -> None:
         dashboard_server,
         mcp_service,
         event_recorder,
+        simulator_service,
     )
 
 

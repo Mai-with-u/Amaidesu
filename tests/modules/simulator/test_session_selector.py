@@ -1,10 +1,10 @@
-"""测试 SessionSelector"""
+﻿"""测试 SessionSelector"""
 
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.stages.input.collectors.simulated_live_stream.session_selector import (
+from src.modules.simulator.session_selector import (
     SessionSelector,
 )
 from src.modules.context.models import SessionInfo

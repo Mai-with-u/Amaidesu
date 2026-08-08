@@ -1,5 +1,4 @@
-"""
-模拟直播间 Dashboard API
+"""模拟直播间 Dashboard API
 
 提供模拟直播间的控制面板后端接口：
 - 状态查询（status/stats）
@@ -7,6 +6,9 @@
 - 运行时参数更新（params）
 - 手动触发（gift_rain/topic_injection）
 - Token 预算重置
+
+重构后通过 ``server.simulator_service`` 获取模拟器实例，
+不再依赖 ``input_manager.get_collectors()`` + 类名反查。
 """
 
 from __future__ import annotations
@@ -22,11 +24,14 @@ from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
+    from src.modules.simulator.service import SimulatorService
+    from src.modules.simulator.simulator import LiveStreamSimulator
 
 router = APIRouter()
 logger = get_logger("SimulatorAPI")
 
 ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
+
 
 # --- Schemas ---
 
@@ -64,14 +69,17 @@ class TriggerPayload(BaseModel):
 # --- Helper ---
 
 
-def _get_collector(server: DashboardServer) -> Any:
-    """从 InputManager 获取 SimulatedLiveStreamCollector 实例"""
-    if not server.input_manager:
+def _get_simulator_service(server: "DashboardServer") -> Optional["SimulatorService"]:
+    """从 DashboardServer 获取 SimulatorService 实例"""
+    return server.simulator_service
+
+
+def _get_simulator(server: "DashboardServer") -> Optional["LiveStreamSimulator"]:
+    """从 SimulatorService 获取模拟器实例"""
+    service = _get_simulator_service(server)
+    if service is None:
         return None
-    for c in server.input_manager.get_collectors():
-        if c.__class__.__name__ == "SimulatedLiveStreamCollector":
-            return c
-    return None
+    return service.simulator
 
 
 # --- Endpoints ---
@@ -80,36 +88,39 @@ def _get_collector(server: DashboardServer) -> Any:
 @router.get("/simulator/status")
 async def get_status(server: ServerDep) -> SimulatorStatus:
     """获取模拟器状态"""
-    collector = _get_collector(server)
-    if collector is None:
+    service = _get_simulator_service(server)
+    if service is None:
         return SimulatorStatus(is_collector_available=False)
+
+    sim = service.simulator
+    is_running = service.is_running
     return SimulatorStatus(
-        is_running=getattr(collector, "is_started", False),
-        current_state=getattr(collector, "is_started", False) and "running" or "stopped",
-        config_snapshot=collector.typed_config.model_dump() if hasattr(collector, "typed_config") else {},
-        is_collector_available=True,
+        is_running=is_running,
+        current_state="running" if is_running else "stopped",
+        config_snapshot=sim.typed_config.model_dump() if sim is not None else {},
+        is_collector_available=sim is not None,
     )
 
 
 @router.get("/simulator/stats")
 async def get_stats(server: ServerDep) -> SimulatorStats:
     """获取模拟器统计"""
-    collector = _get_collector(server)
-    if collector is None:
+    sim = _get_simulator(server)
+    if sim is None:
         return SimulatorStats()
     return SimulatorStats(
-        total_messages=getattr(collector, "_total_messages", 0),
-        total_tokens=getattr(collector, "_token_budget", None) and collector._token_budget.get_usage_last_hour() or 0,
-        messages_by_type=getattr(collector, "_messages_by_type", {}),
-        messages_by_role=collector._persona_pool.get_stats() if collector._persona_pool else {},
+        total_messages=getattr(sim, "_total_messages", 0),
+        total_tokens=getattr(sim, "_token_budget", None) and sim._token_budget.get_usage_last_hour() or 0,
+        messages_by_type=getattr(sim, "_messages_by_type", {}),
+        messages_by_role=sim._persona_pool.get_stats() if sim._persona_pool else {},
     )
 
 
 @router.get("/simulator/personas")
 async def get_personas(server: ServerDep) -> list[Dict[str, Any]]:
     """返回常驻人设列表"""
-    collector = _get_collector(server)
-    if collector is None or collector._persona_pool is None:
+    sim = _get_simulator(server)
+    if sim is None or sim._persona_pool is None:
         return []
     return [
         {
@@ -120,79 +131,73 @@ async def get_personas(server: ServerDep) -> list[Dict[str, Any]]:
             "guard_level": p.guard_level,
             "messages_generated": p.messages_generated,
         }
-        for p in collector._persona_pool.list_residents()
+        for p in sim._persona_pool.list_residents()
     ]
 
 
 @router.post("/simulator/start")
 async def start_simulator(server: ServerDep) -> Dict[str, Any]:
     """启动模拟器"""
-    collector = _get_collector(server)
-    if collector is None:
-        raise HTTPException(status_code=404, detail="模拟器 Collector 未加载")
-    input_manager = server.input_manager
-    if input_manager is None:
-        raise HTTPException(status_code=500, detail="InputCollectorManager 不可用")
-    if getattr(collector, "is_started", False):
+    service = _get_simulator_service(server)
+    if service is None:
+        raise HTTPException(status_code=404, detail="模拟器服务未加载")
+    if service.is_running:
         return {"status": "already_running"}
-    await input_manager.start_collector(collector)
+    await service.start()
     return {"status": "started"}
 
 
 @router.post("/simulator/stop")
 async def stop_simulator(server: ServerDep) -> Dict[str, Any]:
     """停止模拟器"""
-    collector = _get_collector(server)
-    if collector is None:
-        raise HTTPException(status_code=404, detail="模拟器 Collector 未加载")
-    input_manager = server.input_manager
-    if input_manager is None:
-        raise HTTPException(status_code=500, detail="InputCollectorManager 不可用")
-    if not getattr(collector, "is_started", False):
+    service = _get_simulator_service(server)
+    if service is None:
+        raise HTTPException(status_code=404, detail="模拟器服务未加载")
+    if not service.is_running:
         return {"status": "already_stopped"}
-    await input_manager.stop_collector(collector)
+    await service.stop()
     return {"status": "stopped"}
 
 
 @router.post("/simulator/params")
 async def update_params(params: SimulatorParams, server: ServerDep) -> Dict[str, Any]:
     """更新运行时参数"""
-    collector = _get_collector(server)
-    if collector is None:
-        raise HTTPException(status_code=404, detail="模拟器 Collector 未加载")
+    sim = _get_simulator(server)
+    if sim is None:
+        raise HTTPException(status_code=404, detail="模拟器服务未加载")
     update_dict = params.model_dump(exclude_none=True)
     if update_dict:
-        collector.update_runtime_config(**update_dict)
+        sim.update_runtime_config(**update_dict)
     return {"status": "updated", "params": update_dict}
 
 
 @router.post("/simulator/trigger/gift_rain")
 async def trigger_gift_rain(payload: TriggerPayload, server: ServerDep) -> Dict[str, Any]:
     """手动触发礼物雨"""
-    collector = _get_collector(server)
-    if collector is None:
-        raise HTTPException(status_code=404, detail="模拟器 Collector 未加载")
-    collector.trigger_gift_rain(payload.duration_s)
+    sim = _get_simulator(server)
+    if sim is None:
+        raise HTTPException(status_code=404, detail="模拟器服务未加载")
+    sim.trigger_gift_rain(payload.duration_s)
     return {"status": "gift_rain_triggered", "duration_s": payload.duration_s}
 
 
 @router.post("/simulator/trigger/topic_injection")
 async def trigger_topic_injection(payload: TriggerPayload, server: ServerDep) -> Dict[str, Any]:
     """注入话题到上下文"""
-    collector = _get_collector(server)
-    if collector is None:
-        raise HTTPException(status_code=404, detail="模拟器 Collector 未加载")
-    collector.trigger_topic_injection(payload.topic)
+    sim = _get_simulator(server)
+    if sim is None:
+        raise HTTPException(status_code=404, detail="模拟器服务未加载")
+    sim.trigger_topic_injection(payload.topic)
     return {"status": "topic_injected", "topic": payload.topic}
 
 
 @router.post("/simulator/reset_token_budget")
 async def reset_token_budget(server: ServerDep) -> Dict[str, Any]:
     """重置 Token 预算"""
-    collector = _get_collector(server)
-    if collector is None:
-        raise HTTPException(status_code=404, detail="模拟器 Collector 未加载")
-    collector.reset_token_budget()
+    sim = _get_simulator(server)
+    if sim is None:
+        raise HTTPException(status_code=404, detail="模拟器服务未加载")
+    sim.reset_token_budget()
     return {"status": "budget_reset"}
 
 
@@ -203,19 +208,19 @@ async def reset_token_budget(server: ServerDep) -> Dict[str, Any]:
 async def ws_simulator_stream(websocket: WebSocket):
     """WebSocket 实时推送模拟器生成的消息"""
     await websocket.accept()
-    # 尝试从 server 获取 collector
     try:
         server = get_dashboard_server()
     except Exception:
         await websocket.close(code=1011)
         return
-    collector = _get_collector(server)
-    if collector is None:
-        await websocket.send_json({"error": "模拟器 Collector 未加载"})
+
+    sim = _get_simulator(server)
+    if sim is None:
+        await websocket.send_json({"error": "模拟器服务未加载"})
         await websocket.close(code=1011)
         return
 
-    queue = collector.subscribe_for_ws()
+    queue = sim.subscribe_for_ws()
     try:
         while True:
             try:
@@ -231,11 +236,8 @@ async def ws_simulator_stream(websocket: WebSocket):
                     }
                 )
             except asyncio.CancelledError:
-                # 关闭信号：break 退出循环（finally 负责 unsubscribe）。
-                # CancelledError 是 BaseException，不被 except Exception/WebSocketDisconnect 捕获
                 break
             except asyncio.TimeoutError:
-                # 心跳 ping
                 try:
                     await websocket.send_json({"type": "ping"})
                 except Exception:
@@ -243,4 +245,4 @@ async def ws_simulator_stream(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
-        collector.unsubscribe_ws(queue)
+        sim.unsubscribe_ws(queue)

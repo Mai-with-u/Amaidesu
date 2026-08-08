@@ -97,7 +97,6 @@ Amaidesu/
 │   │   │   │   ├── mainosaba/
 │   │   │   │   ├── mock_danmaku/
 │   │   │   │   ├── read_pingmu/
-│   │   │   │   ├── simulated_live_stream/
 │   │   │   │   └── stt/
 │   │   │   └── shared/          # 输入阶段共享组件
 │   │   ├── decision/            # 决策阶段
@@ -142,6 +141,7 @@ Amaidesu/
 │       ├── pipeline/            # Pipeline 基类
 │       ├── prompts/             # 提示词管理
 │       ├── streaming/           # 音频流通道
+│       ├── simulator/           # 模拟直播间服务（独立一等公民，非采集器）
 │       ├── tts/                 # TTS 管理
 │       └── types/               # 共享类型
 │           ├── base/            # 基础类型
@@ -189,7 +189,7 @@ sequenceDiagram
 
 ## 阶段参与者列表
 
-### InputCollector（8个）
+### InputCollector（7个）
 
 | 名称 | 说明 | 位置 |
 |------|------|------|
@@ -199,8 +199,13 @@ sequenceDiagram
 | mainosaba | Mainosaba输入 | `src/stages/input/collectors/mainosaba/` |
 | mock_danmaku | 模拟弹幕（测试用） | `src/stages/input/collectors/mock_danmaku/` |
 | read_pingmu | PingMu读取 | `src/stages/input/collectors/read_pingmu/` |
-| simulated_live_stream | 模拟直播间（调试工具） | `src/stages/input/collectors/simulated_live_stream/` |
 | stt | 语音识别 | `src/stages/input/collectors/stt/` |
+
+### 模拟服务（1个，独立一等公民）
+
+| 名称 | 说明 | 位置 |
+|------|------|------|
+| SimulatorService | 模拟直播间（调试工具，LLM 生成观众消息；非采集器，独立生命周期与配置域） | `src/modules/simulator/` |
 
 ### Decider（5个）
 

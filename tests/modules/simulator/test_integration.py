@@ -1,13 +1,13 @@
-"""集成测试 - 模拟直播间 Collector"""
+﻿"""集成测试 - 模拟直播间 Collector"""
 
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.stages.input.collectors.simulated_live_stream.collector import (
-    SimulatedLiveStreamCollector,
+from src.modules.simulator.simulator import (
+    LiveStreamSimulator,
 )
-from src.stages.input.collectors.simulated_live_stream.types import (
+from src.modules.simulator.types import (
     GeneratedMessage,
     Persona,
     PersonaRole,
@@ -15,21 +15,26 @@ from src.stages.input.collectors.simulated_live_stream.types import (
 
 
 @pytest.mark.asyncio
-async def test_collector_registration():
-    from src.stages.input.registry import list_collectors
-    assert "simulated_live_stream" in list_collectors()
+async def test_simulator_registration():
+    from src.modules.config.schemas import (
+        COMPONENT_UI_REGISTRY,
+        CONFIG_SCHEMA_REGISTRY,
+    )
+
+    assert "simulator" in CONFIG_SCHEMA_REGISTRY
+    assert "simulator" in COMPONENT_UI_REGISTRY
 
 
 @pytest.mark.asyncio
 async def test_collector_instantiation():
-    collector = SimulatedLiveStreamCollector(config={}, event_bus=MagicMock())
+    collector = LiveStreamSimulator(config={}, event_bus=MagicMock())
     assert collector._cfg.base_rate_per_minute == 6.0  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
 async def test_collector_instantiation_with_full_config():
     config = {"base_rate_per_minute": 12.0, "burst_multiplier": 5.0, "enable_hater": True}
-    collector = SimulatedLiveStreamCollector(config=config, event_bus=MagicMock())
+    collector = LiveStreamSimulator(config=config, event_bus=MagicMock())
     assert collector._cfg.base_rate_per_minute == 12.0  # type: ignore[attr-defined]
     assert collector._cfg.burst_multiplier == 5.0  # type: ignore[attr-defined]
     assert collector._cfg.enable_hater is True  # type: ignore[attr-defined]
@@ -37,7 +42,7 @@ async def test_collector_instantiation_with_full_config():
 
 @pytest.mark.asyncio
 async def test_collector_start_with_di():
-    collector = SimulatedLiveStreamCollector(
+    collector = LiveStreamSimulator(
         config={}, event_bus=MagicMock(),
         llm_service=MagicMock(), prompt_service=MagicMock(),
         context_service=MagicMock(), event_history_service=MagicMock(),
@@ -56,14 +61,14 @@ async def test_collector_start_with_di():
 @pytest.mark.asyncio
 async def test_collector_config_validation():
     from pydantic import ValidationError
-    from src.stages.input.collectors.simulated_live_stream.config_schema import SimulatorConfigSchema
+    from src.modules.simulator.config_schema import SimulatorConfigSchema
     with pytest.raises(ValidationError):
         SimulatorConfigSchema(base_rate_per_minute=0.05)
 
 
 @pytest.mark.asyncio
 async def test_source_platform_not_real():
-    collector = SimulatedLiveStreamCollector(config={}, event_bus=MagicMock())
+    collector = LiveStreamSimulator(config={}, event_bus=MagicMock())
     msg = GeneratedMessage(
         text="test",
         persona=Persona(user_id="t", user_nickname="t", role=PersonaRole.FAN, personality="p", speaking_style="s"),
@@ -76,7 +81,7 @@ async def test_source_platform_not_real():
 
 @pytest.mark.asyncio
 async def test_stop_then_start_clears_stop_event():
-    collector = SimulatedLiveStreamCollector(
+    collector = LiveStreamSimulator(
         config={}, event_bus=MagicMock(),
         llm_service=MagicMock(), prompt_service=MagicMock(),
         context_service=MagicMock(), event_history_service=MagicMock(),
@@ -102,7 +107,7 @@ async def test_stop_then_start_clears_stop_event():
 
 @pytest.mark.asyncio
 async def test_to_normalized_message_preserves_session_id():
-    collector = SimulatedLiveStreamCollector(config={}, event_bus=MagicMock())
+    collector = LiveStreamSimulator(config={}, event_bus=MagicMock())
     msg = GeneratedMessage(
         text="test",
         persona=Persona(user_id="t", user_nickname="t", role=PersonaRole.FAN, personality="p", speaking_style="s"),
@@ -115,12 +120,12 @@ async def test_to_normalized_message_preserves_session_id():
 
 @pytest.mark.asyncio
 async def test_generate_message_gift_branch_records_usage():
-    from src.stages.input.collectors.simulated_live_stream.types import (
+    from src.modules.simulator.types import (
         GiftItem,
         StreamerContextSnapshot,
     )
 
-    collector = SimulatedLiveStreamCollector(config={}, event_bus=MagicMock())
+    collector = LiveStreamSimulator(config={}, event_bus=MagicMock())
     collector._llm_wrapper = MagicMock()  # type: ignore[attr-defined]
     collector._token_budget = MagicMock()  # type: ignore[attr-defined]
     collector._token_budget.is_budget_exceeded.return_value = False
@@ -144,12 +149,12 @@ async def test_generate_message_gift_branch_records_usage():
 
 @pytest.mark.asyncio
 async def test_generate_message_sc_branch_records_usage():
-    from src.stages.input.collectors.simulated_live_stream.types import (
+    from src.modules.simulator.types import (
         GiftItem,
         StreamerContextSnapshot,
     )
 
-    collector = SimulatedLiveStreamCollector(config={}, event_bus=MagicMock())
+    collector = LiveStreamSimulator(config={}, event_bus=MagicMock())
     collector._llm_wrapper = MagicMock()  # type: ignore[attr-defined]
     collector._token_budget = MagicMock()  # type: ignore[attr-defined]
     collector._token_budget.is_budget_exceeded.return_value = False

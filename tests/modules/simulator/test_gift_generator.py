@@ -1,13 +1,13 @@
-"""测试 GiftGenerator"""
+﻿"""测试 GiftGenerator"""
 
 import asyncio
 
 import pytest
 
-from src.stages.input.collectors.simulated_live_stream.config_schema import (
+from src.modules.simulator.config_schema import (
     SimulatorConfigSchema,
 )
-from src.stages.input.collectors.simulated_live_stream.gift_generator import (
+from src.modules.simulator.gift_generator import (
     GiftGenerator,
 )
 
@@ -22,7 +22,7 @@ async def test_load_gifts():
 
 @pytest.mark.asyncio
 async def test_generate_gift():
-    from src.stages.input.collectors.simulated_live_stream.types import (
+    from src.modules.simulator.types import (
         StreamerContextSnapshot,
     )
 
@@ -37,7 +37,7 @@ async def test_generate_gift():
 
 @pytest.mark.asyncio
 async def test_generate_sc_no_llm():
-    from src.stages.input.collectors.simulated_live_stream.types import (
+    from src.modules.simulator.types import (
         StreamerContextSnapshot,
     )
 
@@ -53,7 +53,7 @@ async def test_generate_sc_no_llm():
 
 @pytest.mark.asyncio
 async def test_generate_gift_excludes_sc_category():
-    from src.stages.input.collectors.simulated_live_stream.types import (
+    from src.modules.simulator.types import (
         StreamerContextSnapshot,
     )
 

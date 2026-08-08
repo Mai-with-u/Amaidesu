@@ -55,7 +55,8 @@ Amaidesu!
 
 ### 阶段参与者概览
 
-- **InputCollector (8个)**：控制台、弹幕、语音识别、模拟直播等
+- **InputCollector (7个)**：控制台、弹幕、语音识别等真实数据源
+- **模拟服务 (1个)**：模拟直播间（独立 SimulatorService，LLM 生成观众消息，调试用）
 - **Decider (5个)**：amaidesu（Planner/Replyer 两阶段，默认）、MaiBot、LLM、Command、回放
 - **OutputHandler (12个)**：TTS（Edge/GPT-SoVITS/Omni/VoiceBox）、字幕、VTS、OBS 等
 

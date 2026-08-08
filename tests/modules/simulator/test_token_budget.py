@@ -1,6 +1,6 @@
-"""测试 TokenBudgetController"""
+﻿"""测试 TokenBudgetController"""
 
-from src.stages.input.collectors.simulated_live_stream.token_budget import (
+from src.modules.simulator.token_budget import (
     TokenBudgetController,
 )
 

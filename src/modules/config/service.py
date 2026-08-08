@@ -61,6 +61,7 @@ _CONFIG_FILE_TO_SCOPE: Dict[str, str] = {
     "input.toml": "input",
     "decision.toml": "decision",
     "output.toml": "output",
+    "simulator.toml": "simulator",
 }
 
 
@@ -163,7 +164,7 @@ class ConfigService:
             self.logger.info(f"配置版本更新: {current_ver} → {CONFIG_VERSION}")
 
         self._main_config = {}
-        for category in ("core", "model", "input", "decision", "output"):
+        for category in ("core", "model", "input", "decision", "output", "simulator"):
             section_data = multi_config.get(category, {})
             if isinstance(section_data, dict):
                 for key, value in section_data.items():
@@ -622,7 +623,7 @@ class ConfigService:
         multi_config, _drift = load_config_dir(config_dir)
 
         flattened: Dict[str, Any] = {}
-        for category in ("core", "model", "input", "decision", "output"):
+        for category in ("core", "model", "input", "decision", "output", "simulator"):
             section_data = multi_config.get(category, {})
             if isinstance(section_data, dict):
                 for key, value in section_data.items():

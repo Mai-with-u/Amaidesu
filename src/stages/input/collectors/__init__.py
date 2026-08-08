@@ -23,7 +23,6 @@ from .console_input import ConsoleInputCollector
 from .mainosaba import MainosabaCollector
 from .mock_danmaku import MockDanmakuCollector
 from .read_pingmu import ReadPingmuCollector
-from .simulated_live_stream import SimulatedLiveStreamCollector
 from .stt import STTCollector
 
 __all__ = [
@@ -33,6 +32,5 @@ __all__ = [
     "BiliDanmakuOfficialCollector",
     "ReadPingmuCollector",
     "MainosabaCollector",
-    "SimulatedLiveStreamCollector",
     "STTCollector",
 ]

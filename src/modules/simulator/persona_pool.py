@@ -6,10 +6,10 @@ import uuid
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from src.stages.input.collectors.simulated_live_stream.config_schema import (
+from src.modules.simulator.config_schema import (
     SimulatorConfigSchema,
 )
-from src.stages.input.collectors.simulated_live_stream.types import Persona, PersonaRole
+from src.modules.simulator.types import Persona, PersonaRole
 
 
 class PersonaPool:
@@ -38,7 +38,7 @@ class PersonaPool:
         self._config = config
         residents_path = Path(config.residents_file)
         if not residents_path.is_absolute():
-            project_root = Path(__file__).resolve().parents[5]
+            project_root = Path(__file__).resolve().parents[3]
             residents_path = project_root / residents_path
 
         with residents_path.open("rb") as residents_file:

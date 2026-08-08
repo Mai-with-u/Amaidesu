@@ -1,13 +1,13 @@
-"""测试 ContextReader"""
+﻿"""测试 ContextReader"""
 
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.stages.input.collectors.simulated_live_stream.config_schema import (
+from src.modules.simulator.config_schema import (
     SimulatorConfigSchema,
 )
-from src.stages.input.collectors.simulated_live_stream.context_reader import (
+from src.modules.simulator.context_reader import (
     ContextServiceReader,
 )
 from src.modules.context.models import ConversationMessage, MessageRole

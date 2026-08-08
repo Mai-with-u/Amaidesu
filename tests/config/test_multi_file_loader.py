@@ -25,10 +25,17 @@ class TestGeneration:
     def test_needs_generation_for_missing_dir(self, temp_config_dir):
         assert needs_generation(temp_config_dir) is True
 
-    def test_generate_creates_5_files(self, temp_config_dir):
+    def test_generate_creates_6_files(self, temp_config_dir):
         generate_default_configs(temp_config_dir)
         files = sorted(f.name for f in temp_config_dir.glob("*.toml"))
-        assert files == ["core.toml", "decision.toml", "input.toml", "model.toml", "output.toml"]
+        assert files == [
+            "core.toml",
+            "decision.toml",
+            "input.toml",
+            "model.toml",
+            "output.toml",
+            "simulator.toml",
+        ]
 
     def test_needs_generation_false_after_generation(self, temp_config_dir):
         generate_default_configs(temp_config_dir)

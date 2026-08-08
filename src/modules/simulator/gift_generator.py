@@ -11,10 +11,10 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 from src.modules.logging import get_logger
-from src.stages.input.collectors.simulated_live_stream.config_schema import (
+from src.modules.simulator.config_schema import (
     SimulatorConfigSchema,
 )
-from src.stages.input.collectors.simulated_live_stream.types import (
+from src.modules.simulator.types import (
     GeneratedMessage,
     GiftItem,
     Persona,
@@ -45,7 +45,7 @@ class GiftGenerator:
 
     async def load(self) -> None:
         """从 TOML 加载礼物预设表"""
-        project_root = Path(__file__).resolve().parents[5]
+        project_root = Path(__file__).resolve().parents[3]
         gifts_path = project_root / self._config.gifts_file
 
         try:

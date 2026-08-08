@@ -1,16 +1,16 @@
-"""测试 PersonaPool"""
+﻿"""测试 PersonaPool"""
 
 import asyncio
 
 import pytest
 
-from src.stages.input.collectors.simulated_live_stream.config_schema import (
+from src.modules.simulator.config_schema import (
     SimulatorConfigSchema,
 )
-from src.stages.input.collectors.simulated_live_stream.persona_pool import (
+from src.modules.simulator.persona_pool import (
     PersonaPool,
 )
-from src.stages.input.collectors.simulated_live_stream.types import (
+from src.modules.simulator.types import (
     PersonaRole,
 )
 

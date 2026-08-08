@@ -24,6 +24,7 @@ import tomlkit
 from src.modules.config.schemas.base import BaseConfig, DriftReport, _set_toml_value
 from src.modules.config.core_schemas import CoreConfig
 from src.modules.config.model_schemas import ModelConfig
+from src.modules.config.schemas.simulator_schemas import SimulatorConfig
 from src.modules.logging import get_logger
 from pydantic import BaseModel
 
@@ -47,7 +48,7 @@ _PHASE_TO_REGISTRY: dict[tuple[str, str], str] = {
 
 CONFIG_VERSION = "0.4.0"
 
-_CONFIG_FILES = ["core.toml", "model.toml", "input.toml", "decision.toml", "output.toml"]
+_CONFIG_FILES = ["core.toml", "model.toml", "input.toml", "decision.toml", "output.toml", "simulator.toml"]
 
 
 def _backup_file(file_path: Path, config_dir: Path) -> Path | None:
@@ -454,8 +455,26 @@ def _generate_phase_toml(phase: str) -> str:
     return tomlkit.dumps(doc)
 
 
+def _generate_simulator_toml() -> str:
+    """生成 simulator.toml（模拟直播间独立配置域）"""
+    from src.modules.simulator.config_schema import SimulatorConfigSchema
+
+    doc = tomlkit.document()
+    doc.add(tomlkit.comment("模拟直播间配置 - 独立一等公民（非 InputCollector）"))
+    doc.add(tomlkit.nl())
+
+    try:
+        comp_table = _schema_to_toml_table(SimulatorConfigSchema)
+        doc["simulator"] = comp_table
+    except Exception as e:
+        logger.warning(f"生成模拟器配置模板失败: {e}")
+        doc["simulator"] = tomlkit.table()
+
+    return tomlkit.dumps(doc)
+
+
 def generate_default_configs(config_dir: Path) -> None:
-    """首次运行：从 Schema 生成 5 个默认配置文件
+    """首次运行：从 Schema 生成默认配置文件
 
     Args:
         config_dir: config/ 目录路径
@@ -487,6 +506,10 @@ def generate_default_configs(config_dir: Path) -> None:
     output_path = config_dir / "output.toml"
     output_path.write_text(_generate_phase_toml("output"), encoding="utf-8-sig")
     logger.info("已生成 output.toml")
+
+    simulator_path = config_dir / "simulator.toml"
+    simulator_path.write_text(_generate_simulator_toml(), encoding="utf-8-sig")
+    logger.info("已生成 simulator.toml")
 
 
 def _load_and_validate_schema(
@@ -567,6 +590,14 @@ def load_config_dir(
     if output_path.exists():
         with open(output_path, "r", encoding="utf-8-sig") as f:
             result["output"] = tomlkit.load(f).unwrap()
+
+    # simulator.toml → SimulatorConfig
+    simulator_path = config_dir / "simulator.toml"
+    if simulator_path.exists():
+        simulator_data, simulator_report = _load_and_validate_schema(simulator_path, SimulatorConfig)
+        result["simulator"] = simulator_data
+        combined.redundant.extend(f"simulator.{r}" for r in simulator_report.redundant)
+        combined.missing.extend(f"simulator.{m}" for m in simulator_report.missing)
 
     return result, combined
 

@@ -339,6 +339,7 @@ _SECTION_TO_FILE: dict[str, str] = {
     "collectors": "input.toml",
     "deciders": "decision.toml",
     "handlers": "output.toml",
+    "simulator": "simulator.toml",
 }
 
 _FILE_LABELS: dict[str, str] = {
@@ -347,6 +348,7 @@ _FILE_LABELS: dict[str, str] = {
     "input.toml": "🎤 输入",
     "decision.toml": "🤔 决策",
     "output.toml": "📤 输出",
+    "simulator.toml": "🎭 模拟器",
 }
 
 # section_key → 中文标签（无 registry 入口的 section 用此 fallback）
@@ -359,6 +361,7 @@ _SECTION_LABELS: dict[str, str] = {
     "meta": "元信息",
     "pipelines": "管道配置",
     "mcp": "MCP 服务",
+    "simulator": "模拟直播间",
 }
 
 
@@ -425,6 +428,7 @@ def _build_frontend_groups(config_service) -> dict:
     from src.modules.config.schemas.input_schemas import InputConfig
     from src.modules.config.schemas.output_schemas import OutputConfig
     from src.modules.config.schemas.decision_schemas import DecisionConfig
+    from src.modules.config.schemas.simulator_schemas import SimulatorConfig
 
     main_config = config_service.main_config or {}
     registry = get_schema_registry()
@@ -435,12 +439,14 @@ def _build_frontend_groups(config_service) -> dict:
     input_schema = ConfigSchemaGenerator.generate_config_schema(InputConfig)
     output_schema = ConfigSchemaGenerator.generate_config_schema(OutputConfig)
     decision_schema = ConfigSchemaGenerator.generate_config_schema(DecisionConfig)
+    simulator_schema = ConfigSchemaGenerator.generate_config_schema(SimulatorConfig)
     all_fields = (
         collect_all_fields(core_schema)
         + collect_all_fields(model_schema)
         + collect_all_fields(input_schema)
         + collect_all_fields(output_schema)
         + collect_all_fields(decision_schema)
+        + collect_all_fields(simulator_schema)
     )
     leaf_fields = [f for f in all_fields if "." in str(f.get("key", ""))]
 

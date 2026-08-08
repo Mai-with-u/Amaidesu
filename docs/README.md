@@ -30,7 +30,7 @@
 | [提示词管理](development/prompt-management.md) | PromptManager 使用 |
 | [依赖注入](development/dependency-injection.md) | 依赖注入约定与决策清单 |
 | [测试指南](development/testing-guide.md) | 测试规范和最佳实践 |
-| [模拟直播间工具](development/simulator-guide.md) | SimulatedLiveStream 调试工具使用 |
+| [模拟直播间工具](development/simulator-guide.md) | 模拟直播间服务（SimulatorService）使用 |
 | [文档维护规范](development/documentation-guide.md) | 文档编写、单一事实源与 ADR 规范 |
 
 ## 快速链接

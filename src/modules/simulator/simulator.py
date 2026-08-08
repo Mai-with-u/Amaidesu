@@ -1,11 +1,12 @@
-"""SimulatedLiveStreamCollector - 模拟直播间 InputCollector
+"""LiveStreamSimulator - 模拟直播间输入信号源
 
 LLM 驱动的模拟直播间调试工具，实时生成多样化的观众消息
 （文本弹幕/礼物/SuperChat），用于功能演示、压力测试和 Prompt 调试。
 
-架构合规：
-- ContextService 通过 pull 模式（get_history）读取，不订阅 output.*
-- 不向 ContextService 写入
+架构定位：
+- 独立的「输入模拟服务」（SimulatorService），与 InputCollector 并列
+- 通过发布 CoreEvents.INPUT_MESSAGE_RECEIVED 事件接入系统数据流
+- ContextService 通过 pull 模式（get_history）读取，不订阅 output.* 运行时结果
 - source="simulated_live_stream"，不冒充真实平台
 """
 
@@ -24,45 +25,45 @@ from src.modules.logging import get_logger
 from src.modules.prompts.manager import PromptManager
 from src.modules.time_utils import now_ms
 from src.modules.types.base.normalized_message import NormalizedMessage
-from src.stages.input.collectors.simulated_live_stream.cadence import (
+from src.modules.simulator.cadence import (
     CadenceGenerator,
 )
-from src.stages.input.collectors.simulated_live_stream.config_schema import (
+from src.modules.simulator.config_schema import (
     SimulatorConfigSchema,
 )
-from src.stages.input.collectors.simulated_live_stream.context_reader import (
+from src.modules.simulator.context_reader import (
     ContextServiceReader,
     EventHistoryReader,
 )
-from src.stages.input.collectors.simulated_live_stream.llm_wrapper import (
+from src.modules.simulator.llm_wrapper import (
     SimulatorLLMWrapper,
 )
-from src.stages.input.collectors.simulated_live_stream.persona_pool import (
+from src.modules.simulator.persona_pool import (
     PersonaPool,
 )
-from src.stages.input.collectors.simulated_live_stream.session_selector import (
+from src.modules.simulator.session_selector import (
     SessionSelector,
 )
-from src.stages.input.collectors.simulated_live_stream.token_budget import (
+from src.modules.simulator.token_budget import (
     TokenBudgetController,
 )
-from src.stages.input.collectors.simulated_live_stream.types import (
+from src.modules.simulator.types import (
     GeneratedMessage,
     Persona,
     StreamerContextSnapshot,
 )
-from src.stages.input.registry import collector
+from src.modules.simulator.registry import simulator
 from src.modules.context.service import ContextService as ContextServiceClass
 
 # GiftGenerator is imported lazily in start() — Task 14 creates it
 if TYPE_CHECKING:
-    from src.stages.input.collectors.simulated_live_stream.gift_generator import (  # noqa: F401
+    from src.modules.simulator.gift_generator import (  # noqa: F401
         GiftGenerator,
     )
 
 
-@collector("simulated_live_stream", label="模拟直播", description="模拟直播数据流（调试用）")
-class SimulatedLiveStreamCollector:
+@simulator
+class LiveStreamSimulator:
     """模拟直播间 InputCollector
 
     生命周期：start() → collect() [主循环] → stop()
@@ -73,8 +74,8 @@ class SimulatedLiveStreamCollector:
     - 仅 EventHistoryService → 使用 EventHistoryReader（maibot 降级）
     """
 
-    # ConfigSchema 使用独立的 SimulatorConfigSchema（不在内部嵌套）
-    # 这是 @collector 装饰器兼容性要求的占位
+    # ConfigSchema 使用独立的 SimulatorConfigSchema（类属性挂载给 @simulator 装饰器自动注册）
+    ConfigSchema = SimulatorConfigSchema
 
     def __init__(
         self,
@@ -172,7 +173,7 @@ class SimulatedLiveStreamCollector:
 
             # GiftGenerator 由 Task 14 创建 — 延迟导入
             try:
-                from src.stages.input.collectors.simulated_live_stream.gift_generator import (  # noqa: E402
+                from src.modules.simulator.gift_generator import (  # noqa: E402
                     GiftGenerator,
                 )
 

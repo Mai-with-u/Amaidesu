@@ -10,7 +10,7 @@ Amaidesu 采用 Input、Decision、Output 三阶段架构。Input 阶段由管�
 
 这套两段事件调度使 Handler 需要承担订阅、取消订阅和完成状态自报告等通用职责，也使新增 Handler 可能因遗漏 `COMPLETED` 报告而依赖超时兜底。三阶段采用不同的调用方式，增加了 Output 阶段的理解和维护成本。与此同时，`render_timeout_ms` 没有形成实际的渲染超时约束。
 
-`DISPATCHED` 仍被 Broadcaster 和 EventRecorder 等监控组件使用。`FINISHED` 仍有 MainosabaCollector、SimulatedLiveStream、EventHistoryService 和 Dashboard 四个下游消费者，因此两者的语义和可用性不能被一并移除。
+`DISPATCHED` 仍被 Broadcaster 和 EventRecorder 等监控组件使用。`FINISHED` 仍有 MainosabaCollector、LiveStreamSimulator（模拟直播间，原 SimulatedLiveStream）、EventHistoryService 和 Dashboard 四个下游消费者，因此两者的语义和可用性不能被一并移除。
 
 ## 决策（Decision）
 

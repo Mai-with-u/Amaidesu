@@ -41,6 +41,7 @@ tests/
 │   │   ├── test_prompt_manager.py
 │   │   └── test_prompt_quality.py
 │   ├── services/                    # 共享服务测试
+│   ├── simulator/                   # 模拟直播间服务测试
 │   ├── streaming/                   # 流媒体测试
 │   ├── tts/                         # TTS 服务测试
 │   │   ├── test_audio_device_manager.py

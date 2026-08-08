@@ -122,12 +122,6 @@ def _try_import_schema(collector_name: str) -> Optional[type]:
             )
 
             schema_cls = STTInputConfig
-        elif collector_name == "simulated_live_stream":
-            from src.stages.input.collectors.simulated_live_stream.config_schema import (  # noqa: E402
-                SimulatorConfigSchema,
-            )
-
-            schema_cls = SimulatorConfigSchema
     except Exception:
         schema_cls = None
 
@@ -189,7 +183,6 @@ class InputCollectorsConfig(BaseConfig):
     mock_danmaku: Optional[Any] = _optional_collector_field("mock_danmaku")
     read_pingmu: Optional[Any] = _optional_collector_field("read_pingmu")
     stt: Optional[Any] = _optional_collector_field("stt")
-    simulated_live_stream: Optional[Any] = _optional_collector_field("simulated_live_stream")
 
     @model_validator(mode="after")
     def _validate_collectors(self) -> "InputCollectorsConfig":
@@ -342,7 +335,6 @@ _PUBLIC_NAME_TO_COLLECTOR: Dict[str, str] = {
     "MockDanmakuConfigSchema": "mock_danmaku",
     "ReadPingmuConfigSchema": "read_pingmu",
     "STTConfigSchema": "stt",
-    "SimulatedLiveStreamConfigSchema": "simulated_live_stream",
 }
 
 
@@ -398,7 +390,6 @@ __all__ = [
     "MockDanmakuConfigSchema",  # noqa: F822
     "ReadPingmuConfigSchema",  # noqa: F822
     "STTConfigSchema",  # noqa: F822
-    "SimulatedLiveStreamConfigSchema",  # noqa: F822
     # 聚合容器
     "InputCollectorsConfig",
     "InputPipelinesConfig",

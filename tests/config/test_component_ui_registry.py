@@ -14,6 +14,8 @@ import pytest
 import src.stages.input.collectors  # noqa: F401
 import src.stages.decision.deciders  # noqa: F401
 import src.stages.output.handlers  # noqa: F401
+# 触发 @simulator 装饰器注册
+import src.modules.simulator  # noqa: F401
 
 from src.modules.config.schemas import (
     COMPONENT_UI_REGISTRY,
@@ -22,11 +24,7 @@ from src.modules.config.schemas import (
 
 
 def test_ui_registry_covers_all_schema_components():
-    """有配置 schema 的组件必须都有 UI 元数据（schema 注册表 ⊆ UI 注册表）。
-
-    反向不成立：无嵌套 ConfigSchema 的组件（如 simulated_live_stream）
-    只有 UI 元数据，不在 schema 注册表中。
-    """
+    """有配置 schema 的组件必须都有 UI 元数据（schema 注册表 ⊆ UI 注册表）。"""
     assert set(CONFIG_SCHEMA_REGISTRY) <= set(COMPONENT_UI_REGISTRY)
 
 

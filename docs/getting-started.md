@@ -132,8 +132,10 @@ uv run python main.py
 - `console_input` - 控制台输入（开发测试）
 - `bili_danmaku` - B站弹幕
 - `bili_danmaku_official` - B站官方弹幕
-- `simulated_live_stream` - 模拟直播间（调试）
 - `stt` - 语音转文字
+
+**模拟服务（独立，非采集器）：**
+- `SimulatorService` - 模拟直播间（调试工具，配置于 `config/simulator.toml`，详见 [模拟直播间工具](development/simulator-guide.md)）
 
 **决策 Decider：**
 - `amaidesu` - Amaidesu 决策（默认，Planner/Replyer 两阶段）

@@ -11,8 +11,8 @@ import random
 import time
 from typing import Optional
 
-from src.stages.input.collectors.simulated_live_stream.config_schema import SimulatorConfigSchema
-from src.stages.input.collectors.simulated_live_stream.types import BurstState
+from src.modules.simulator.config_schema import SimulatorConfigSchema
+from src.modules.simulator.types import BurstState
 
 
 class CadenceGenerator:

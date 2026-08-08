@@ -16,10 +16,10 @@ from src.modules.context.models import ConversationMessage, MessageRole
 from src.modules.context.service import ContextService
 from src.modules.events.event_history import EventHistoryService
 from src.modules.logging import get_logger
-from src.stages.input.collectors.simulated_live_stream.config_schema import (
+from src.modules.simulator.config_schema import (
     SimulatorConfigSchema,
 )
-from src.stages.input.collectors.simulated_live_stream.types import (
+from src.modules.simulator.types import (
     StreamerContextSnapshot,
 )
 

@@ -1,16 +1,16 @@
-"""测试 SimulatorLLMWrapper"""
+﻿"""测试 SimulatorLLMWrapper"""
 
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.stages.input.collectors.simulated_live_stream.config_schema import (
+from src.modules.simulator.config_schema import (
     SimulatorConfigSchema,
 )
-from src.stages.input.collectors.simulated_live_stream.llm_wrapper import (
+from src.modules.simulator.llm_wrapper import (
     SimulatorLLMWrapper,
 )
-from src.stages.input.collectors.simulated_live_stream.types import (
+from src.modules.simulator.types import (
     Persona,
     PersonaRole,
     StreamerContextSnapshot,
