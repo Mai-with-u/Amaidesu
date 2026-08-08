@@ -70,10 +70,18 @@ class GiftGenerator:
         except Exception as e:
             self._logger.error(f"加载礼物预设失败: {e}")
 
-    def _pick_random_gift(self) -> Optional[GiftItem]:
-        """按权重随机选择一个礼物"""
+    def _pick_random_gift(self, exclude_categories: Optional[set[str]] = None) -> Optional[GiftItem]:
+        """按权重随机选择一个礼物（可排除指定类别）"""
         if not self._gifts:
             return None
+        if exclude_categories:
+            candidates = [g for g in self._gifts if g.category not in exclude_categories]
+            if not candidates:
+                return None
+            weights = [
+                w for g, w in zip(self._gifts, self._weights, strict=True) if g.category not in exclude_categories
+            ]
+            return self._rng.choices(candidates, weights=weights, k=1)[0]
         return self._rng.choices(self._gifts, weights=self._weights, k=1)[0]
 
     async def generate_gift(self, context: StreamerContextSnapshot) -> Optional[GeneratedMessage]:
@@ -85,7 +93,7 @@ class GiftGenerator:
         Returns:
             GeneratedMessage（data_type="gift"）
         """
-        gift = self._pick_random_gift()
+        gift = self._pick_random_gift(exclude_categories={"sc"})
         if gift is None:
             return None
 

@@ -49,3 +49,31 @@ async def test_generate_sc_no_llm():
     assert msg is not None
     assert msg.data_type == "super_chat"
     assert msg.sc_amount_rmb is not None
+
+
+@pytest.mark.asyncio
+async def test_generate_gift_excludes_sc_category():
+    from src.stages.input.collectors.simulated_live_stream.types import (
+        StreamerContextSnapshot,
+    )
+
+    cfg = SimulatorConfigSchema()
+    gen = GiftGenerator(cfg)
+    await gen.load()
+    ctx = StreamerContextSnapshot()
+    for _ in range(50):
+        msg = await gen.generate_gift(ctx)
+        assert msg is not None
+        assert msg.data_type == "gift"
+        assert msg.gift is not None
+        assert msg.gift.category != "sc"
+
+
+@pytest.mark.asyncio
+async def test_pick_random_gift_exclude_categories():
+    cfg = SimulatorConfigSchema()
+    gen = GiftGenerator(cfg)
+    await gen.load()
+    picked = gen._pick_random_gift(exclude_categories={"sc"})  # type: ignore[attr-defined]
+    assert picked is not None
+    assert picked.category != "sc"
