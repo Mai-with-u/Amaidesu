@@ -64,7 +64,7 @@ if TYPE_CHECKING:
 
 @simulator
 class LiveStreamSimulator:
-    """模拟直播间 InputCollector
+    """模拟直播间（独立输入模拟服务）
 
     生命周期：start() → collect() [主循环] → stop()
     配置驱动启停，通过 DI 注入 LLMManager、ContextService 等依赖。
@@ -134,6 +134,19 @@ class LiveStreamSimulator:
         """返回解析后的配置快照（Dashboard API 使用）"""
         return self._cfg
 
+    async def setup(self) -> None:
+        """初始化数据平面组件（人设池 / LLM 包装器），与模拟器运行状态无关
+
+        幂等：组件已初始化则跳过。由 SimulatorService.setup() 在创建实例后立即调用，
+        使人设管理 API（列表/生成/编辑/删除）在模拟器未启动时也可用。
+        """
+        cfg = self._cfg
+        if self._persona_pool is None:
+            self._persona_pool = PersonaPool()
+            await self._persona_pool.load(cfg)
+        if self._llm_wrapper is None and self._llm_service is not None:
+            self._llm_wrapper = SimulatorLLMWrapper(cfg, self._llm_service, self._prompt_service)
+
     async def start(self) -> None:
         """初始化所有子组件并启动模拟器
 
@@ -141,20 +154,17 @@ class LiveStreamSimulator:
         同时清除停止信号，允许 stop() 后再次 start()（P0-1）。
         """
         if self.is_started:
-            self.logger.debug("模拟直播间 Collector 已处于运行状态，忽略重复 start")
+            self.logger.debug("模拟直播间已处于运行状态，忽略重复 start")
             return
         # 清除停止信号：collect() 主循环以此判断退出，stop() 后不清理则无法再次运行
         self._stop_event.clear()
         try:
             cfg = self._cfg
 
-            # 初始化组件
-            self._cadence = CadenceGenerator(cfg)
-            self._persona_pool = PersonaPool()
-            await self._persona_pool.load(cfg)
+            # 数据平面组件（幂等：setup() 阶段可能已初始化）
+            await self.setup()
 
-            if self._llm_service is not None:
-                self._llm_wrapper = SimulatorLLMWrapper(cfg, self._llm_service, self._prompt_service)
+            self._cadence = CadenceGenerator(cfg)
 
             # 自动选择上下文读取器
             if self._context_service is not None:
@@ -197,9 +207,9 @@ class LiveStreamSimulator:
                 self.logger.info("auto 模式：已订阅 output.intent.finished 触发突发")
 
             self.is_started = True
-            self.logger.info("模拟直播间 Collector 启动完成")
+            self.logger.info("模拟直播间启动完成")
         except Exception as e:
-            self.logger.error(f"模拟直播间 Collector 启动失败: {e}", exc_info=True)
+            self.logger.error(f"模拟直播间启动失败: {e}", exc_info=True)
             raise
 
     async def stop(self) -> None:
@@ -207,7 +217,7 @@ class LiveStreamSimulator:
         self.is_started = False
         self._stop_event.set()
         self._unsubscribe_speech_event()
-        self.logger.info("模拟直播间 Collector 已停止")
+        self.logger.info("模拟直播间已停止")
 
     async def cleanup(self) -> None:
         """清理资源"""
@@ -215,7 +225,7 @@ class LiveStreamSimulator:
         self.is_started = False
         self._unsubscribe_speech_event()
         self._subscribers.clear()
-        self.logger.info("模拟直播间 Collector 已清理")
+        self.logger.info("模拟直播间已清理")
 
     def _unsubscribe_speech_event(self) -> None:
         """取消主播发言事件订阅"""
@@ -230,7 +240,7 @@ class LiveStreamSimulator:
     def stream(self) -> AsyncIterator[NormalizedMessage]:
         """InputManager 契约：返回 AsyncIterator"""
         if not self.is_started:
-            raise RuntimeError("Collector 未启动，请先调用 start()")
+            raise RuntimeError("模拟直播间未启动，请先调用 start()")
 
         async def _generate():
             try:

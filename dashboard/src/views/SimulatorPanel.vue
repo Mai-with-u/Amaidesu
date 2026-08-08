@@ -166,7 +166,27 @@
 
       <el-card shadow="never" style="margin-top: 16px">
         <template #header>
-          <span>常驻人设 ({{ personas.length }})</span>
+          <div class="card-header-row">
+            <span>常驻人设 ({{ personas.length }})</span>
+            <div class="card-header-actions">
+              <el-input-number
+                v-model="generateCount"
+                :min="1"
+                :max="20"
+                size="small"
+                controls-position="right"
+                style="width: 90px"
+              />
+              <el-button
+                type="primary"
+                size="small"
+                :loading="generating"
+                @click="generatePersonas"
+              >
+                生成人设
+              </el-button>
+            </div>
+          </div>
         </template>
         <el-table :data="personas" size="small" stripe max-height="300">
           <el-table-column prop="user_nickname" label="昵称" width="140" />
@@ -178,18 +198,113 @@
           <el-table-column prop="fans_medal_level" label="粉丝牌" width="80" align="right" />
           <el-table-column prop="guard_level" label="大航海" width="80" align="right" />
           <el-table-column prop="messages_generated" label="发言数" width="80" align="right" />
+          <el-table-column label="性格/说话风格" min-width="180">
+            <template #default="{ row }">
+              <el-popover placement="top-start" :width="320" trigger="hover">
+                <template #reference>
+                  <span class="persona-trait-cell">查看详情</span>
+                </template>
+                <div class="persona-trait-popover">
+                  <div class="trait-label">性格</div>
+                  <div class="trait-value">{{ row.personality || '（空）' }}</div>
+                  <div class="trait-label" style="margin-top: 8px">说话风格</div>
+                  <div class="trait-value">{{ row.speaking_style || '（空）' }}</div>
+                </div>
+              </el-popover>
+            </template>
+          </el-table-column>
           <el-table-column prop="user_id" label="ID" min-width="140" />
+          <el-table-column label="操作" width="140" fixed="right">
+            <template #default="{ row }">
+              <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
+              <el-button link type="danger" size="small" @click="confirmDelete(row)">
+                删除
+              </el-button>
+            </template>
+          </el-table-column>
         </el-table>
       </el-card>
+
+      <el-dialog
+        v-model="editDialogVisible"
+        title="编辑人设"
+        width="520px"
+        :close-on-click-modal="false"
+      >
+        <el-form v-if="editingPersona" :model="editForm" label-width="100px" size="default">
+          <el-form-item label="昵称">
+            <el-input v-model="editForm.user_nickname" placeholder="昵称" />
+          </el-form-item>
+          <el-form-item label="角色">
+            <el-select v-model="editForm.role" style="width: 100%">
+              <el-option
+                v-for="opt in ROLE_OPTIONS"
+                :key="opt.value"
+                :label="opt.label"
+                :value="opt.value"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="性格">
+            <el-input
+              v-model="editForm.personality"
+              type="textarea"
+              :rows="3"
+              placeholder="性格特征描述"
+            />
+          </el-form-item>
+          <el-form-item label="说话风格">
+            <el-input
+              v-model="editForm.speaking_style"
+              type="textarea"
+              :rows="2"
+              placeholder="说话风格描述"
+            />
+          </el-form-item>
+          <el-form-item label="粉丝牌等级">
+            <el-input-number
+              v-model="editForm.fans_medal_level"
+              :min="0"
+              :max="40"
+              controls-position="right"
+            />
+          </el-form-item>
+          <el-form-item label="舰长等级">
+            <el-select v-model="editForm.guard_level" style="width: 100%">
+              <el-option :value="0" label="0 (无)" />
+              <el-option :value="1" label="1 (总督)" />
+              <el-option :value="2" label="2 (提督)" />
+              <el-option :value="3" label="3 (舰长)" />
+            </el-select>
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="editDialogVisible = false">取消</el-button>
+          <el-button type="primary" :loading="saving" @click="saveEdit">保存</el-button>
+        </template>
+      </el-dialog>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, onMounted, onUnmounted, computed } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { simulatorApi } from '@/api';
-import type { SimulatorStatus, SimulatorStats, SimulatorPersona } from '@/api';
+import type {
+  SimulatorStatus,
+  SimulatorStats,
+  SimulatorPersona,
+  PersonaUpdatePayload,
+} from '@/api';
+
+const ROLE_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'fan', label: 'fan' },
+  { value: 'teaser', label: 'teaser' },
+  { value: 'newcomer', label: 'newcomer' },
+  { value: 'veteran', label: 'veteran' },
+  { value: 'hater', label: 'hater' },
+];
 
 const status = reactive<SimulatorStatus>({
   is_running: false,
@@ -209,6 +324,27 @@ const stats = reactive<SimulatorStats>({
 const personas = ref<SimulatorPersona[]>([]);
 const toggling = ref(false);
 const injectTopic = ref('');
+const generateCount = ref(1);
+const generating = ref(false);
+const saving = ref(false);
+
+const editDialogVisible = ref(false);
+const editingPersona = ref<SimulatorPersona | null>(null);
+const editForm = reactive<{
+  user_nickname: string;
+  role: string;
+  personality: string;
+  speaking_style: string;
+  fans_medal_level: number;
+  guard_level: number;
+}>({
+  user_nickname: '',
+  role: 'fan',
+  personality: '',
+  speaking_style: '',
+  fans_medal_level: 0,
+  guard_level: 0,
+});
 
 const params = reactive({
   base_rate_per_minute: 6,
@@ -267,6 +403,83 @@ async function fetchPersonas() {
     personas.value = res.data;
   } catch {
     //
+  }
+}
+
+async function generatePersonas() {
+  generating.value = true;
+  try {
+    const res = await simulatorApi.generatePersonas(generateCount.value);
+    const count = res.data.personas?.length ?? generateCount.value;
+    const added = res.data.added ?? count;
+    const skipped = res.data.skipped ?? 0;
+    ElMessage.success(
+      skipped > 0
+        ? `已生成 ${count} 个，新增 ${added} 个（${skipped} 个重复已跳过）`
+        : `已生成 ${added} 个人设`,
+    );
+    await fetchPersonas();
+  } catch {
+    ElMessage.error('人设生成失败');
+  } finally {
+    generating.value = false;
+  }
+}
+
+function openEdit(row: SimulatorPersona) {
+  editingPersona.value = row;
+  editForm.user_nickname = row.user_nickname;
+  editForm.role = row.role;
+  editForm.personality = row.personality;
+  editForm.speaking_style = row.speaking_style;
+  editForm.fans_medal_level = row.fans_medal_level;
+  editForm.guard_level = row.guard_level;
+  editDialogVisible.value = true;
+}
+
+async function saveEdit() {
+  if (!editingPersona.value) return;
+  saving.value = true;
+  try {
+    const payload: PersonaUpdatePayload = {};
+    const original = editingPersona.value;
+    if (editForm.user_nickname !== original.user_nickname)
+      payload.user_nickname = editForm.user_nickname;
+    if (editForm.role !== original.role) payload.role = editForm.role;
+    if (editForm.personality !== original.personality) payload.personality = editForm.personality;
+    if (editForm.speaking_style !== original.speaking_style)
+      payload.speaking_style = editForm.speaking_style;
+    if (editForm.fans_medal_level !== original.fans_medal_level)
+      payload.fans_medal_level = editForm.fans_medal_level;
+    if (editForm.guard_level !== original.guard_level) payload.guard_level = editForm.guard_level;
+
+    await simulatorApi.updatePersona(original.user_id, payload);
+    ElMessage.success('人设已更新');
+    editDialogVisible.value = false;
+    await fetchPersonas();
+  } catch {
+    ElMessage.error('人设更新失败');
+  } finally {
+    saving.value = false;
+  }
+}
+
+async function confirmDelete(row: SimulatorPersona) {
+  try {
+    await ElMessageBox.confirm(`确定删除人设 "${row.user_nickname}" 吗？`, '删除确认', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    });
+  } catch {
+    return;
+  }
+  try {
+    await simulatorApi.deletePersona(row.user_id);
+    ElMessage.success('人设已删除');
+    await fetchPersonas();
+  } catch {
+    ElMessage.error('人设删除失败');
   }
 }
 
@@ -499,5 +712,41 @@ onUnmounted(() => {
 .message-item.super_chat .msg-text {
   color: var(--color-danger);
   font-weight: 600;
+}
+
+.card-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+}
+
+.card-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.persona-trait-cell {
+  color: var(--color-primary);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.persona-trait-cell:hover {
+  text-decoration: underline;
+}
+
+.persona-trait-popover .trait-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.persona-trait-popover .trait-value {
+  font-size: 13px;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 </style>

@@ -66,6 +66,20 @@ class TriggerPayload(BaseModel):
     persona_name: str = ""
 
 
+class PersonaGenerateRequest(BaseModel):
+    count: int = Field(default=1, ge=1, le=20, description="生成人设数量（1-20）")
+    roles: Optional[list[str]] = Field(default=None, description="允许的角色列表；缺省为全部非路人角色")
+
+
+class PersonaUpdateRequest(BaseModel):
+    user_nickname: Optional[str] = None
+    role: Optional[str] = None
+    personality: Optional[str] = None
+    speaking_style: Optional[str] = None
+    fans_medal_level: Optional[int] = Field(default=None, ge=0, le=40)
+    guard_level: Optional[int] = Field(default=None, ge=0, le=3)
+
+
 # --- Helper ---
 
 
@@ -80,6 +94,20 @@ def _get_simulator(server: "DashboardServer") -> Optional["LiveStreamSimulator"]
     if service is None:
         return None
     return service.simulator
+
+
+def _persona_to_dict(persona: Any) -> Dict[str, Any]:
+    """Persona → 前端字典（含编辑所需完整字段）"""
+    return {
+        "user_id": persona.user_id,
+        "user_nickname": persona.user_nickname,
+        "role": persona.role.value,
+        "personality": persona.personality,
+        "speaking_style": persona.speaking_style,
+        "fans_medal_level": persona.fans_medal_level,
+        "guard_level": persona.guard_level,
+        "messages_generated": persona.messages_generated,
+    }
 
 
 # --- Endpoints ---
@@ -122,17 +150,59 @@ async def get_personas(server: ServerDep) -> list[Dict[str, Any]]:
     sim = _get_simulator(server)
     if sim is None or sim._persona_pool is None:
         return []
-    return [
-        {
-            "user_id": p.user_id,
-            "user_nickname": p.user_nickname,
-            "role": p.role.value,
-            "fans_medal_level": p.fans_medal_level,
-            "guard_level": p.guard_level,
-            "messages_generated": p.messages_generated,
-        }
-        for p in sim._persona_pool.list_residents()
-    ]
+    return [_persona_to_dict(p) for p in sim._persona_pool.list_residents()]
+
+
+@router.post("/simulator/personas/generate")
+async def generate_personas(payload: PersonaGenerateRequest, server: ServerDep) -> Dict[str, Any]:
+    """LLM 批量生成常驻人设并持久化"""
+    sim = _get_simulator(server)
+    if sim is None or sim._persona_pool is None:
+        raise HTTPException(status_code=404, detail="模拟器服务未加载")
+    wrapper = getattr(sim, "_llm_wrapper", None)
+    if wrapper is None:
+        raise HTTPException(status_code=503, detail="模拟器 LLM 服务不可用")
+
+    existing = [p.user_nickname for p in sim._persona_pool.list_residents()]
+    personas = await wrapper.generate_personas(
+        count=payload.count,
+        roles=payload.roles,
+        existing_nicknames=existing,
+    )
+    if not personas:
+        raise HTTPException(status_code=502, detail="人设生成失败（LLM 无有效输出）")
+    added = sim._persona_pool.add_personas(personas)
+    return {
+        "status": "generated",
+        "personas": [_persona_to_dict(p) for p in personas],
+        "added": added,
+        "skipped": len(personas) - added,
+    }
+
+
+@router.put("/simulator/personas/{user_id}")
+async def update_persona(user_id: str, payload: PersonaUpdateRequest, server: ServerDep) -> Dict[str, Any]:
+    """更新常驻人设"""
+    sim = _get_simulator(server)
+    if sim is None or sim._persona_pool is None:
+        raise HTTPException(status_code=404, detail="模拟器服务未加载")
+    fields = payload.model_dump(exclude_none=True)
+    if not fields:
+        raise HTTPException(status_code=422, detail="没有可更新的字段")
+    if not sim._persona_pool.update_persona(user_id, fields):
+        raise HTTPException(status_code=404, detail=f"人设不存在: {user_id}")
+    return {"status": "updated"}
+
+
+@router.delete("/simulator/personas/{user_id}")
+async def delete_persona(user_id: str, server: ServerDep) -> Dict[str, Any]:
+    """删除常驻人设"""
+    sim = _get_simulator(server)
+    if sim is None or sim._persona_pool is None:
+        raise HTTPException(status_code=404, detail="模拟器服务未加载")
+    if not sim._persona_pool.delete_persona(user_id):
+        raise HTTPException(status_code=404, detail=f"人设不存在: {user_id}")
+    return {"status": "deleted"}
 
 
 @router.post("/simulator/start")

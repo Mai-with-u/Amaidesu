@@ -4,7 +4,7 @@
 - ContextServiceReader: 主路径（查询 ContextService 的 ASSISTANT 消息）
 - EventHistoryReader: 降级路径（maibot 模式，查询 EventHistory 的 output 事件）
 
-两者实现相同的接口（duck typing），Collector 不感知差异。
+两者实现相同的接口（duck typing），调用方不感知差异。
 """
 
 # pyright: reportDeprecated=false

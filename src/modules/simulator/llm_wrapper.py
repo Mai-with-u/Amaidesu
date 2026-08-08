@@ -2,6 +2,7 @@
 
 封装模拟直播间收集器所需的全部 LLM 调用：
 - 路人 / 常驻观众 / SuperChat / 暖场等 4 类消息生成
+- 常驻人设批量生成（generate_personas）
 - 并发控制 (``asyncio.Semaphore``)
 - 响应清洗（剥 ``<system>`` / ``think`` 标签、引号、空白、长度截断）
 - Token 用量累计与预算阈值
@@ -12,7 +13,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
+import uuid
 from typing import Dict, Optional, Tuple
 
 from src.modules.llm.manager import LLMManager, LLMResponse
@@ -21,7 +24,22 @@ from src.modules.prompts import get_prompt_manager
 from src.modules.prompts.manager import PromptManager
 
 from .config_schema import SimulatorConfigSchema
-from .types import GeneratedMessage, Persona, StreamerContextSnapshot
+from .types import GeneratedMessage, Persona, PersonaRole, StreamerContextSnapshot
+
+
+def _parse_persona_json(text: str) -> list[dict]:
+    """从 LLM 输出中解析人设 JSON 数组（容忍 markdown 代码块包裹与前后杂讯）。"""
+    cleaned = text.strip()
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE)
+    start = cleaned.find("[")
+    end = cleaned.rfind("]")
+    if start == -1 or end <= start:
+        return []
+    try:
+        data = json.loads(cleaned[start : end + 1])
+    except json.JSONDecodeError:
+        return []
+    return data if isinstance(data, list) else []
 
 
 class SimulatorLLMWrapper:
@@ -35,7 +53,7 @@ class SimulatorLLMWrapper:
     - 累加 token 用量、按预算阈值判断是否豁免
 
     线程/并发模型：
-    - 同一实例可在同一 asyncio event loop 内并发被调用（Collector 多路并发场景）
+    - 同一实例可在同一 asyncio event loop 内并发被调用（多路并发场景）
     - 通过 :class:`asyncio.Semaphore` 限制同时活跃的 LLM 请求数
 
     Note:
@@ -202,6 +220,60 @@ class SimulatorLLMWrapper:
             tokens_used=tokens,
         )
 
+    async def generate_personas(
+        self,
+        count: int = 1,
+        roles: Optional[list[str]] = None,
+        existing_nicknames: Optional[list[str]] = None,
+    ) -> list[Persona]:
+        """批量生成常驻观众人设（贴近真实 B 站观众）。
+
+        Args:
+            count: 生成数量（1-20）
+            roles: 允许的角色列表；缺省为全部非路人角色
+            existing_nicknames: 直播间已有的常驻观众昵称；传入后提示词会要求 LLM 避开
+
+        Returns:
+            生成的 Persona 列表（user_id 由本方法生成）；LLM 失败或解析失败时返回空列表
+        """
+        role_pool = roles or [r.value for r in PersonaRole if r != PersonaRole.PASSERBY]
+        existing_hint = ""
+        if existing_nicknames:
+            existing_hint = "以下昵称已被占用，严禁使用：" + "、".join(existing_nicknames[:30]) + "。"
+        prompt = self._prompts.render_safe(
+            "simulator/persona_generation",
+            count=count,
+            roles_hint="、".join(role_pool),
+            existing_nicknames_hint=existing_hint,
+            language=self._config.language,
+        )
+
+        result = await self._call_llm(prompt, truncate=False)
+        if result is None:
+            return []
+        text, _tokens = result
+
+        personas: list[Persona] = []
+        parsed_items = _parse_persona_json(text)[:count]
+        if not parsed_items:
+            self._logger.warning(f"generate_personas: LLM 输出无法解析为人设 JSON (len={len(text)}): {text[:200]!r}")
+        for item in parsed_items:
+            try:
+                personas.append(
+                    Persona(
+                        user_id=f"resident_{uuid.uuid4().hex[:8]}",
+                        user_nickname=item["user_nickname"],
+                        role=PersonaRole(item.get("role", "fan")),
+                        personality=item.get("personality", ""),
+                        speaking_style=item.get("speaking_style", ""),
+                        fans_medal_level=int(item.get("fans_medal_level", 0)),
+                        guard_level=int(item.get("guard_level", 0)),
+                    )
+                )
+            except (KeyError, ValueError, TypeError):
+                continue
+        return personas
+
     # === 公共 API：统计 / 配置更新 ===
 
     def get_token_usage(self) -> Dict[str, int]:
@@ -235,20 +307,12 @@ class SimulatorLLMWrapper:
 
     # === 内部：LLM 调用统一入口 ===
 
-    async def _call_llm(self, prompt: str) -> Optional[Tuple[str, int]]:
-        """调用 LLM 并清洗响应。
+    async def _chat_once(self, prompt: str, max_tokens: Optional[int]) -> Optional[LLMResponse]:
+        """单次 LLM 调用（信号量约束），失败返回 None。
 
-        流程：
-        1. 等待信号量
-        2. 调用 :meth:`LLMManager.chat`
-        3. 判断 ``success`` 与 ``content``
-        4. 清洗：去 ``<system>`` / ``think`` 块、首尾引号、空白
-        5. 按 :attr:`_config.max_message_chars` 截断
-        6. 累计 token 用量
-
-        Returns:
-            ``(cleaned_text, tokens_used)`` 元组；
-            任意环节失败（信号量拒绝、调用失败、空响应、异常）返回 ``None``。
+        Args:
+            max_tokens: 单次输出上限；None 表示不限制（交由 LLM profile/API 默认），
+                总消耗由 ``token_budget_per_hour`` 预算控制。
         """
         try:
             async with self._semaphore:
@@ -256,7 +320,7 @@ class SimulatorLLMWrapper:
                     prompt,
                     client_type=self._config.llm_client_type,
                     temperature=self._config.llm_temperature,
-                    max_tokens=self._config.llm_max_tokens,
+                    max_tokens=max_tokens,
                 )
         except asyncio.CancelledError:
             raise
@@ -267,20 +331,65 @@ class SimulatorLLMWrapper:
         if not response.success:
             self._logger.warning(f"LLM 调用未成功 (client={self._config.llm_client_type}, error={response.error!r})")
             return None
+        return response
+
+    async def _call_llm(
+        self,
+        prompt: str,
+        *,
+        truncate: bool = True,
+        max_tokens: Optional[int] = None,
+    ) -> Optional[Tuple[str, int]]:
+        """调用 LLM 并清洗响应。
+
+        流程：
+        1. 等待信号量并调用 :meth:`LLMManager.chat`
+        2. 判断 ``success`` 与 ``content``
+        3. 清洗：去 ``<system>`` / ``think`` 块、首尾引号、空白
+        4. 推理模型兜底：content 为空但存在 thinking（reasoning_content）时，
+           视为模型未输出正文，保持相同参数重试一次
+        5. 按 :attr:`_config.max_message_chars` 截断（``truncate=True`` 时）
+        6. 累计 token 用量
+
+        Args:
+            prompt: 提示词
+            truncate: 是否按消息长度截断（结构化工件如 JSON 应传 False）
+            max_tokens: 单次输出上限；None 表示不限制（由 profile/API 默认决定），
+                总消耗由 ``token_budget_per_hour`` 预算控制
+
+        Returns:
+            ``(cleaned_text, tokens_used)`` 元组；
+            任意环节失败（信号量拒绝、调用失败、空响应、异常）返回 ``None``。
+        """
+        response = await self._chat_once(prompt, max_tokens)
+        if response is None:
+            return None
 
         tokens_used = self._extract_total_tokens(response)
-
         raw_content = response.content or ""
         cleaned = self._clean_response(raw_content)
+
+        reasoning = getattr(response, "reasoning_content", None)
+        if not cleaned and reasoning:
+            self._logger.warning(f"_call_llm: content 为空但 thinking 存在 (len={len(reasoning)})，重试一次")
+            response = await self._chat_once(prompt, max_tokens)
+            if response is None:
+                return None
+            tokens_used = self._extract_total_tokens(response)
+            raw_content = response.content or ""
+            cleaned = self._clean_response(raw_content)
+
         if not cleaned:
             self._logger.warning(f"_call_llm: raw={raw_content!r} → cleaned 为空，跳过")
             return None
 
-        cleaned = self._truncate(cleaned, self._config.max_message_chars)
-        if not cleaned:
-            self._logger.warning(f"_call_llm: truncated 为空，跳过 (cleaned={cleaned!r})")
-            return None
+        if truncate:
+            cleaned = self._truncate(cleaned, self._config.max_message_chars)
+            if not cleaned:
+                self._logger.warning(f"_call_llm: truncated 为空，跳过 (cleaned={cleaned!r})")
+                return None
 
+        self._logger.info(f"_call_llm: 成功 (tokens={tokens_used}, len={len(cleaned)})")
         self._logger.debug(f"_call_llm: raw={raw_content!r} → cleaned={cleaned!r}")
         self._total_tokens += tokens_used
         return cleaned, tokens_used

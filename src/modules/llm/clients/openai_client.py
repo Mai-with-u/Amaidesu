@@ -43,7 +43,7 @@ class OpenAIClient(BaseLLMClient):
             default_query=client_config.default_query or None,
         )
         self.model = config.get("model", "gpt-4o-mini")
-        self.max_tokens = config.get("max_tokens", 1024)
+        self.max_tokens = config.get("max_tokens")
         self.temperature = config.get("temperature", 0.2)
         self.logger.info(f"OpenAI 客户端初始化完成 (模型: {self.model})")
 

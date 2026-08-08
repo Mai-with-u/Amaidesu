@@ -11,6 +11,7 @@ from src.modules.simulator.persona_pool import (
     PersonaPool,
 )
 from src.modules.simulator.types import (
+    Persona,
     PersonaRole,
 )
 
@@ -144,3 +145,78 @@ async def test_passerby_pool_cap():
     for _ in range(60):
         pool.generate_temporary_passerby()
     assert len(pool._passersby) <= 50  # type: ignore[attr-defined]
+
+
+# --- 持久化管理（add/update/delete） ---
+
+
+def _new_persona(user_id: str, nickname: str) -> Persona:
+    return Persona(
+        user_id=user_id,
+        user_nickname=nickname,
+        role=PersonaRole.FAN,
+        personality="测试性格",
+        speaking_style="测试风格",
+    )
+
+
+@pytest.mark.asyncio
+async def test_add_personas_persists(data_dir_with_residents):
+    cfg = SimulatorConfigSchema()
+    pool = PersonaPool(data_dir=data_dir_with_residents)
+    await pool.load(cfg)
+    pool.add_personas([_new_persona("resident_new", "新观众")])
+
+    pool2 = PersonaPool(data_dir=data_dir_with_residents)
+    await pool2.load(cfg)
+    ids = {p.user_id for p in pool2.list_residents()}
+    assert "resident_new" in ids
+
+
+@pytest.mark.asyncio
+async def test_update_persona_persists(data_dir_with_residents):
+    cfg = SimulatorConfigSchema()
+    pool = PersonaPool(data_dir=data_dir_with_residents)
+    await pool.load(cfg)
+    assert pool.update_persona("resident_000", {"user_nickname": "改名观众", "fans_medal_level": 30}) is True
+
+    pool2 = PersonaPool(data_dir=data_dir_with_residents)
+    await pool2.load(cfg)
+    updated = next(p for p in pool2.list_residents() if p.user_id == "resident_000")
+    assert updated.user_nickname == "改名观众"
+    assert updated.fans_medal_level == 30
+
+
+@pytest.mark.asyncio
+async def test_update_persona_not_found(data_dir_with_residents):
+    cfg = SimulatorConfigSchema()
+    pool = PersonaPool(data_dir=data_dir_with_residents)
+    await pool.load(cfg)
+    assert pool.update_persona("nonexistent", {"user_nickname": "x"}) is False
+
+
+@pytest.mark.asyncio
+async def test_delete_persona_persists(data_dir_with_residents):
+    cfg = SimulatorConfigSchema()
+    pool = PersonaPool(data_dir=data_dir_with_residents)
+    await pool.load(cfg)
+    assert pool.delete_persona("resident_000") is True
+    assert pool.delete_persona("resident_000") is False
+
+    pool2 = PersonaPool(data_dir=data_dir_with_residents)
+    await pool2.load(cfg)
+    ids = {p.user_id for p in pool2.list_residents()}
+    assert "resident_000" not in ids
+
+
+@pytest.mark.asyncio
+async def test_empty_pool_add_then_load(empty_data_dir):
+    cfg = SimulatorConfigSchema()
+    pool = PersonaPool(data_dir=empty_data_dir)
+    await pool.load(cfg)
+    pool.add_personas([_new_persona("resident_a", "观众甲"), _new_persona("resident_b", "观众乙")])
+    assert len(pool.list_residents()) == 2
+
+    pool2 = PersonaPool(data_dir=empty_data_dir)
+    await pool2.load(cfg)
+    assert len(pool2.list_residents()) == 2

@@ -20,7 +20,7 @@ from src.modules.simulator.config_schema import SimulatorConfigSchema
 class MetaConfig(BaseConfig):
     """配置元数据"""
 
-    version: str = Field(default="0.5.0", description="配置版本号（用于自动迁移检测）")
+    version: str = Field(default="0.5.1", description="配置版本号（用于自动迁移检测）")
 
 
 class GeneralConfig(BaseConfig):

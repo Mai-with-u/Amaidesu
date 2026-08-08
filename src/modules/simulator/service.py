@@ -56,6 +56,8 @@ class SimulatorService:
     async def setup(self, config_service: "ConfigService") -> None:
         """从 ConfigService 加载配置并创建模拟器实例
 
+        创建后立即初始化数据平面（人设池 / LLM 包装器），
+        因此人设管理 API 不依赖模拟器运行状态；
         若 ``simulator.enabled = true`` 则自动启动。
         """
         simulator_config = config_service.main_config.get("simulator", {})
@@ -69,6 +71,8 @@ class SimulatorService:
             config=simulator_config,
             services_by_type=services,
         )
+        if self._simulator is not None:
+            await self._simulator.setup()
 
         # 自动启动
         enabled = simulator_config.get("enabled", False)

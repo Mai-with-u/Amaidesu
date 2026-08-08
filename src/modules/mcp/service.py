@@ -69,8 +69,18 @@ class MCPServerService:
 
         self.logger.info(f"启动 MCP 服务器: {host}:{port} (stateless_http=True)")
 
+        # show_banner=False 关闭 FastMCP ASCII banner；log_level 与 access_log 控制
+        # uvicorn 日志，避免刷屏干扰主程序日志
         self._server_task = asyncio.create_task(
-            self._mcp.run_async(transport="http", host=host, port=port, stateless_http=True)
+            self._mcp.run_async(
+                transport="http",
+                host=host,
+                port=port,
+                stateless_http=True,
+                show_banner=False,
+                log_level="warning",
+                uvicorn_config={"access_log": False},
+            )
         )
 
         self._initialized = True

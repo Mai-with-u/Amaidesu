@@ -130,15 +130,36 @@ export interface SimulatorPersona {
   user_id: string;
   user_nickname: string;
   role: string;
+  personality: string;
+  speaking_style: string;
   fans_medal_level: number;
   guard_level: number;
   messages_generated: number;
+}
+
+export interface PersonaUpdatePayload {
+  user_nickname?: string;
+  role?: string;
+  personality?: string;
+  speaking_style?: string;
+  fans_medal_level?: number;
+  guard_level?: number;
 }
 
 export const simulatorApi = {
   getStatus: () => api.get<SimulatorStatus>('/simulator/status'),
   getStats: () => api.get<SimulatorStats>('/simulator/stats'),
   getPersonas: () => api.get<SimulatorPersona[]>('/simulator/personas'),
+  generatePersonas: (count: number, roles?: string[]) =>
+    api.post<{ status: string; personas: SimulatorPersona[]; added: number; skipped: number }>(
+      '/simulator/personas/generate',
+      { count, roles },
+      { timeout: 120000 },
+    ),
+  updatePersona: (userId: string, payload: PersonaUpdatePayload) =>
+    api.put<{ status: string }>(`/simulator/personas/${userId}`, payload),
+  deletePersona: (userId: string) =>
+    api.delete<{ status: string }>(`/simulator/personas/${userId}`),
   start: () => api.post<{ status: string }>('/simulator/start'),
   stop: () => api.post<{ status: string }>('/simulator/stop'),
   updateParams: (params: Record<string, unknown>) =>

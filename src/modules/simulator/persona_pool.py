@@ -6,6 +6,8 @@ import uuid
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import tomlkit
+
 from src.modules.simulator.config_schema import (
     SimulatorConfigSchema,
 )
@@ -103,6 +105,83 @@ class PersonaPool:
     def list_residents(self) -> List[Persona]:
         """返回当前可用常驻人设的列表副本。"""
         return list(self._residents)
+
+    def add_personas(self, personas: List[Persona]) -> int:
+        """批量新增常驻人设并持久化；昵称与已有常驻人设（含本批次内）重复的项会被跳过。
+
+        Returns:
+            实际新增的人设数量。
+        """
+        if not personas:
+            return 0
+        seen = {p.user_nickname for p in self._all_residents}
+        fresh: List[Persona] = []
+        for persona in personas:
+            if persona.user_nickname in seen:
+                continue
+            seen.add(persona.user_nickname)
+            fresh.append(persona)
+        if not fresh:
+            return 0
+        self._all_residents.extend(fresh)
+        self._apply_resident_filter()
+        self._save()
+        return len(fresh)
+
+    def update_persona(self, user_id: str, fields: Dict[str, object]) -> bool:
+        """按字段更新常驻人设（role 接受枚举值字符串）并持久化。
+
+        Returns:
+            True 更新成功；False 人设不存在
+        """
+        for persona in self._all_residents:
+            if persona.user_id != user_id:
+                continue
+            for key, value in fields.items():
+                if key == "role":
+                    persona.role = PersonaRole(str(value))
+                elif hasattr(persona, key):
+                    setattr(persona, key, value)
+            self._apply_resident_filter()
+            self._save()
+            return True
+        return False
+
+    def delete_persona(self, user_id: str) -> bool:
+        """删除常驻人设并持久化。
+
+        Returns:
+            True 删除成功；False 人设不存在
+        """
+        before = len(self._all_residents)
+        self._all_residents = [p for p in self._all_residents if p.user_id != user_id]
+        if len(self._all_residents) == before:
+            return False
+        self._apply_resident_filter()
+        self._save()
+        return True
+
+    def _save(self) -> None:
+        """持久化常驻人设到 data/simulator/residents.toml。"""
+        self._data_dir.mkdir(parents=True, exist_ok=True)
+        doc = tomlkit.document()
+        doc.add(tomlkit.comment("模拟直播间常驻人设（运行时数据，WebUI 管理）"))
+        residents_table = tomlkit.table()
+        items = tomlkit.aot()
+        for persona in self._all_residents:
+            item = tomlkit.table()
+            item["user_id"] = persona.user_id
+            item["user_nickname"] = persona.user_nickname
+            item["role"] = persona.role.value
+            item["personality"] = persona.personality
+            item["speaking_style"] = persona.speaking_style
+            item["fans_medal_level"] = persona.fans_medal_level
+            item["guard_level"] = persona.guard_level
+            item["is_temporary"] = persona.is_temporary
+            items.append(item)
+        residents_table["items"] = items
+        doc["residents"] = residents_table
+        (self._data_dir / "residents.toml").write_text(tomlkit.dumps(doc), encoding="utf-8")
 
     def get_stats(self) -> Dict[str, int]:
         """返回按角色分组的消息生成计数。"""

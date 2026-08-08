@@ -59,6 +59,42 @@ async def test_collector_start_with_di():
 
 
 @pytest.mark.asyncio
+async def test_setup_initializes_data_plane_without_starting():
+    collector = LiveStreamSimulator(
+        config={}, event_bus=MagicMock(),
+        llm_service=MagicMock(), prompt_service=MagicMock(),
+    )
+    await collector.setup()
+    assert collector._persona_pool is not None  # type: ignore[attr-defined]
+    assert collector._llm_wrapper is not None  # type: ignore[attr-defined]
+    assert collector.is_started is False
+    await collector.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_add_personas_skips_duplicate_nicknames(tmp_path):
+    from src.modules.simulator.persona_pool import PersonaPool
+    from src.modules.simulator.types import Persona, PersonaRole
+
+    def make_persona(nickname: str) -> Persona:
+        return Persona(
+            user_id=f"u_{nickname}",
+            user_nickname=nickname,
+            role=PersonaRole.FAN,
+            personality="p",
+            speaking_style="s",
+        )
+
+    pool = PersonaPool(data_dir=tmp_path)
+    assert pool.add_personas([make_persona("麦芽糖不加冰"), make_persona("晚风替你加油")]) == 2
+    assert pool.add_personas([make_persona("麦芽糖不加冰"), make_persona("新观众")]) == 1
+    nicknames = [p.user_nickname for p in pool.list_residents()]
+    assert nicknames.count("麦芽糖不加冰") == 1
+    assert "新观众" in nicknames
+    assert pool.add_personas([make_persona("麦芽糖不加冰")]) == 0
+
+
+@pytest.mark.asyncio
 async def test_collector_config_validation():
     from pydantic import ValidationError
     from src.modules.simulator.config_schema import SimulatorConfigSchema

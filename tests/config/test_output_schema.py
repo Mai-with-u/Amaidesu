@@ -33,7 +33,8 @@ def _load_output_toml(path: Path) -> Dict[str, Any]:
     """加载真实 output.toml（用于回归测试）"""
     import tomlkit
 
-    with open(path, "r", encoding="utf-8") as f:
+    # 用 utf-8-sig：multi_file_loader 生成的配置文件带 BOM
+    with open(path, "r", encoding="utf-8-sig") as f:
         doc = tomlkit.load(f)
     return doc.unwrap()
 

@@ -250,17 +250,17 @@ class TestGetConfigSchemaForSection:
         assert "style_constraints" in field_names
 
     def test_get_llm_section_schema(self, initialized_service):
-        """get_config_schema_for_section('llm') 返回 LLMRoleConfig 的 schema (新结构)"""
+        """get_config_schema_for_section('llm') 返回 LLMProfileConfig 的 schema (新结构)"""
         from src.modules.config.model_schemas import LLMProfileConfig
 
         schema = initialized_service.get_config_schema_for_section("llm")
 
         assert isinstance(schema, dict)
-        assert schema.get("className") == "LLMRoleConfig"
+        assert schema.get("className") == "LLMProfileConfig"
         assert "fields" in schema
 
         field_names = {f["name"] for f in schema["fields"]}
-        # 新 LLMRoleConfig 字段: provider/model/temperature/max_tokens + 可选 base_url/api_key 覆盖
+        # 新 LLMProfileConfig 字段: provider/model/temperature/max_tokens + 可选 base_url/api_key 覆盖
         assert "provider" in field_names
         assert "model" in field_names
         assert "temperature" in field_names

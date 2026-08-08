@@ -48,7 +48,9 @@ def load_toml_with_comments(toml_path: str) -> tomlkit.TOMLDocument:
     Returns:
         tomlkit.TOMLDocument 对象
     """
-    with open(toml_path, "r", encoding="utf-8") as f:
+    # 用 utf-8-sig 读取：multi_file_loader 写回使用 utf-8-sig（带 BOM），
+    # 若此处用 utf-8 会导致 BOM 残留为 \ufeff，tomlkit 报 "Empty key at line 1 col 0"
+    with open(toml_path, "r", encoding="utf-8-sig") as f:
         return tomlkit.load(f)
 
 
