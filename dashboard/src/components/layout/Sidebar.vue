@@ -23,6 +23,10 @@
           <el-icon><ChatLineRound /></el-icon>
           <span>调试会话</span>
         </el-menu-item>
+        <el-menu-item index="/live">
+          <el-icon><Odometer /></el-icon>
+          <span>直播间观察</span>
+        </el-menu-item>
 
         <!-- LLM 分组 -->
         <el-sub-menu index="llm-group">
@@ -95,6 +99,7 @@ import {
   TrendCharts,
   Clock,
   ChatLineRound,
+  Odometer,
   Tickets,
   Grid,
   ChatLineSquare,

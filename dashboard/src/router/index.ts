@@ -34,6 +34,11 @@ const router = createRouter({
       component: () => import('@/views/SessionHistory.vue'),
     },
     {
+      path: '/live',
+      name: 'live-observer',
+      component: () => import('@/views/LiveObserver.vue'),
+    },
+    {
       path: '/settings',
       name: 'settings',
       component: () => import('@/views/Settings.vue'),

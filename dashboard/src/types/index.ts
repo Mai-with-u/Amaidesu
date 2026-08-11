@@ -122,6 +122,8 @@ export interface NormalizedMessageData {
   platform?: string;
   room_id?: string;
   raw?: Record<string, unknown>;
+  /** 消息唯一 ID，用于链路分组（LiveObserver 用）；旧后端可能缺失 */
+  message_id?: string;
 }
 
 /** Intent 情绪 */
@@ -140,7 +142,12 @@ export interface IntentActionData {
 export interface IntentMetadataData {
   source_id: string;
   decision_time_ms: number;
+  /** 触发本 Intent 的源消息 ID，用于链路分组（LiveObserver 用）；旧后端可能缺失 */
+  source_message_id?: string;
 }
+
+/** 直播间观察页链路状态 */
+export type LiveChainStatus = 'pending' | 'deciding' | 'done';
 
 /** 决策意图（来自 WebSocket decision.intent / output.render 事件） */
 export interface IntentEventData {
