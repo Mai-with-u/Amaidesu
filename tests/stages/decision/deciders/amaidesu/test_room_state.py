@@ -189,6 +189,33 @@ class TestTopicExtraction:
             # 频次最高的应在前面
             assert snap.topics[0] == "啊"
 
+    def test_punctuation_and_emoji_filtered(self):
+        """标点 / emoji 等非汉字字符不应出现在 topics
+
+        回归测试（P0）：实测日志中 "？。！✨" 等字符霸榜话题关键词，
+        例如 "话题关键词: 播, 来, ？, 。, 主"。
+        """
+        rs = RoomState()
+        base = 1_000_000
+        # 标点 + emoji 高频出现，汉字低频
+        for i in range(10):
+            rs.update(_make_msg(f"？？？！！！✨😆 {i}"), now_ms=base + i * 100)
+        rs.update(_make_msg("游戏好玩"), now_ms=base + 10_000)
+        snap = rs.get_snapshot(now_ms=base + 11_000)
+        for noise in ["？", "！", "✨", "😆", "0", "9"]:
+            assert noise not in snap.topics, f"非汉字字符 {noise} 不应出现在 topics: {snap.topics}"
+        # 汉字仍能进入 topics
+        assert any(ch in snap.topics for ch in "游戏好玩"), f"汉字应进 topics: {snap.topics}"
+
+    def test_pure_non_cjk_message_yields_no_topics(self):
+        """纯标点/字母/数字消息不产生任何话题关键词"""
+        rs = RoomState()
+        base = 1_000_000
+        for i in range(5):
+            rs.update(_make_msg(f"!!!??? abc 123 {i}"), now_ms=base + i * 100)
+        snap = rs.get_snapshot(now_ms=base + 1_000)
+        assert snap.topics == [], f"纯非汉字消息 topics 应为空，实际: {snap.topics}"
+
 
 # ---------------------------------------------------------------------------
 # SC / 礼物 / 上舰 队列

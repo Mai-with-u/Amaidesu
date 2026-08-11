@@ -437,3 +437,83 @@ class TestPlannerHistoryInjection:
         rendered = kwargs["conversation_history"]
         assert "user: 观众问 1" in rendered
         assert "assistant: 主播答 1" in rendered
+
+
+# ---------------------------------------------------------------------------
+# 测试 9：决策一致性校验（低置信度降级静默）
+# ---------------------------------------------------------------------------
+
+
+class TestPlannerConfidenceGate:
+    """``should_reply=true`` 但 ``confidence`` 过低 → 降级静默（P0）。
+
+    回归场景（日志实测）：proactive 冷场触发时 LLM 曾输出
+    ``{"should_reply": true, "confidence": 0.00}`` 的矛盾决策，导致
+    主播"没话找话硬开口"。强制场景（SC/礼物/上舰）不受此限制。
+    """
+
+    @pytest.mark.asyncio
+    async def test_low_confidence_non_forced_silenced(self) -> None:
+        """非 forced + 低置信度 + should_reply=true → 降级为 should_reply=False"""
+        raw = json.dumps(
+            {
+                "should_reply": True,
+                "target": "all",
+                "topic_summary": "没想好聊什么",
+                "reply_guidance": "硬聊",
+                "confidence": 0.0,
+            }
+        )
+        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+
+        plan = await planner.plan([], forced=False)
+
+        assert plan is not None
+        assert plan.should_reply is False, "低置信度 + 非 forced 应降级静默"
+        assert plan.topic_summary == ""
+        assert plan.reply_guidance == ""
+
+    @pytest.mark.asyncio
+    async def test_low_confidence_non_forced_proactive_silenced(self) -> None:
+        """proactive 场景同样受校验（实测 08-05 的 confidence=0.00 即发生在冷场主动发言）"""
+        raw = json.dumps({"should_reply": True, "confidence": 0.1})
+        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+
+        plan = await planner.plan([], proactive=True)
+
+        assert plan is not None
+        assert plan.should_reply is False, "proactive 低置信度也应降级静默"
+
+    @pytest.mark.asyncio
+    async def test_low_confidence_forced_keeps_reply(self) -> None:
+        """forced 场景不受校验：SC/礼物/上舰即使置信度低也必须回应"""
+        raw = json.dumps({"should_reply": True, "target": "sc_user", "confidence": 0.0})
+        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+
+        plan = await planner.plan([], forced=True)
+
+        assert plan is not None
+        assert plan.should_reply is True, "forced 场景不应降级"
+        assert plan.target == "sc_user"
+
+    @pytest.mark.asyncio
+    async def test_high_confidence_non_forced_keeps_reply(self) -> None:
+        """非 forced + 高置信度 → 正常回复"""
+        raw = json.dumps({"should_reply": True, "target": "all", "confidence": 0.9})
+        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+
+        plan = await planner.plan([], forced=False)
+
+        assert plan is not None
+        assert plan.should_reply is True
+
+    @pytest.mark.asyncio
+    async def test_confidence_at_threshold_keeps_reply(self) -> None:
+        """置信度恰好等于阈值 0.3 时不应降级（边界 >= 语义）"""
+        raw = json.dumps({"should_reply": True, "confidence": 0.3})
+        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+
+        plan = await planner.plan([], forced=False)
+
+        assert plan is not None
+        assert plan.should_reply is True, "confidence=0.3 恰好等于阈值不应降级"

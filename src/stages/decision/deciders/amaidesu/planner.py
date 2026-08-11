@@ -37,6 +37,12 @@ from .room_state import RoomState, RoomStateSnapshot
 __all__ = ["Planner"]
 
 
+#: 决策一致性阈值：``should_reply=true`` 要求的最低置信度。
+#: LLM 偶发输出 ``confidence=0.0`` 却 ``should_reply=true`` 的矛盾决策
+#: （日志实测出现过），此时降级静默，避免"没话找话硬开口"。
+_MIN_CONFIDENCE_FOR_REPLY: float = 0.3
+
+
 # ---------------------------------------------------------------------------
 # 配置 Schema（最小子集）
 # ---------------------------------------------------------------------------
@@ -193,7 +199,26 @@ class Planner:
             self.logger.warning(f"Planner JSON 顶层非对象: {type(parsed).__name__}")
             return None
 
-        return self._build_plan(parsed)
+        plan = self._build_plan(parsed)
+        if plan is None:
+            return None
+
+        # 决策一致性校验：低置信度却要回复 → 矛盾决策，降级静默。
+        # 强制场景（SC/礼物/上舰）除外——付费内容必须回应，置信度不影响。
+        if not forced and plan.should_reply and plan.confidence < _MIN_CONFIDENCE_FOR_REPLY:
+            self.logger.info(
+                f"Planner 低置信度决策降级静默 "
+                f"(confidence={plan.confidence:.2f}, topic_summary={plan.topic_summary[:30]!r})"
+            )
+            return DecisionPlan(
+                should_reply=False,
+                target=None,
+                topic_summary="",
+                reply_guidance="",
+                confidence=plan.confidence,
+            )
+
+        return plan
 
     # ==================== 辅助方法 ====================
 

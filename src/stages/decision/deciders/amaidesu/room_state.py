@@ -45,9 +45,10 @@ HEAT_HIGH_THRESHOLD_MPS: float = 0.5
 #: topics 返回的最多关键词数
 TOPIC_TOP_K: int = 5
 
-#: 中文停用词表（高频无意义字）。后续可扩展。
+#: 中文停用词表（高频无意义字/语气词）。后续可扩展。
 _STOPWORDS: frozenset[str] = frozenset(
     "的了吗啊呀呢吧哦呐哈你我他她它是最和在有无要都也就还又把这被让给跟和与及个么不没很太非常"
+    "啦呗嘛嘞喔噢唔诶哎嗯哇嘿嘻哈"
 )
 
 
@@ -204,8 +205,9 @@ class RoomState:
         freq: dict[str, int] = {}
         for entry in self._window:
             for ch in entry.text:
-                # 过滤停用词与所有空白字符
-                if ch.isspace() or ch in _STOPWORDS:
+                # 只保留 CJK 汉字：过滤标点 / emoji / 数字 / 字母与停用词
+                # （实测日志中出现过 "？。！✨" 等高频噪声霸榜话题关键词）
+                if ch.isspace() or not ("\u4e00" <= ch <= "\u9fff") or ch in _STOPWORDS:
                     continue
                 freq[ch] = freq.get(ch, 0) + 1
         if not freq:
