@@ -30,8 +30,8 @@ _SUMMARY_CLIENT = "llm_summary"
 _SUMMARY_HISTORY_LIMIT = 20
 
 _SYSTEM_PROMPT = (
-    "你是直播话题摘要助手。根据最近的弹幕对话历史，用一句话（不超过30字）"
-    "总结当前直播间讨论的主要话题。只输出摘要内容，不要添加额外说明。"
+    "你是直播话题摘要助手。根据最近的观众弹幕，用一句话（不超过30字）"
+    "总结当前直播间观众正在讨论的主要话题。只输出摘要内容，不要添加额外说明。"
 )
 
 
@@ -39,6 +39,22 @@ def _cfg(config: Any, key: str, default: Any) -> Any:
     if isinstance(config, dict):
         return config.get(key, default)
     return getattr(config, key, default)
+
+
+def _is_real_danmaku(msg: Any) -> bool:
+    """判断消息是否为真实观众弹幕（话题摘要的唯一合法输入）。
+
+    主动发言写入 ContextService 时 user 消息内容为"（主动发言，主题：...）"
+    占位符，不是观众说的话；assistant 消息是主播自己的发言。两者都不能作为
+    "观众在聊什么"的话题来源——否则主播单口相声会被当成直播间话题，形成
+    自嗨循环（摘要 → Planner 延续 → 再发言 → 摘要复述，越聊越窄）。
+    """
+    role = getattr(msg, "role", None)
+    role_str = getattr(role, "value", str(role)) if role else ""
+    if role_str != "user":
+        return False
+    content = getattr(msg, "content", "") or ""
+    return not content.startswith("（主动发言")
 
 
 class RoomStateLoop:
@@ -147,7 +163,16 @@ class RoomStateLoop:
         if not history:
             return
 
-        history_text = self._format_history(history)
+        # 过滤非观众弹幕（主动发言占位符 / 主播回复），只保留真实观众弹幕
+        real_history = [m for m in history if _is_real_danmaku(m)]
+        if not real_history:
+            if self._room_state.get_snapshot(now_ms=now_ms).topic_summary:
+                self._room_state.set_topic_summary("", now_ms=now_ms)
+                self.logger.info("历史仅含主播主动发言，清空话题摘要（防自嗨循环）")
+            self._last_summary_ms = now_ms
+            return
+
+        history_text = self._format_history(real_history)
         if not history_text.strip():
             return
 

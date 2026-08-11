@@ -236,3 +236,131 @@ class TestRoomStateLoopLifecycle:
         )
         await loop._tick(now_ms=101_000)
         mock_llm.chat.assert_not_called()
+
+
+class _FakeRole:
+    """模拟 MessageRole 枚举（.value 为字符串）"""
+
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+
+def _make_history_msg(role: str, content: str) -> MagicMock:
+    m = MagicMock()
+    m.role = _FakeRole(role)
+    m.content = content
+    return m
+
+
+class TestRoomStateLoopSummaryFiltering:
+    """摘要输入分离：只基于真实观众弹幕，杀死自嗨循环（P1-5）
+
+    主动发言占位符（user 消息内容以"（主动发言"开头）与主播回复（assistant）
+    都不是观众话题来源；历史仅含这些消息时清空摘要，由 ProactiveTrigger 的
+    topic_required 兜底阻止无话题硬开口。
+    """
+
+    @pytest.mark.asyncio
+    async def test_placeholder_only_history_clears_summary(self):
+        """历史仅含主动发言占位符 + 主播回复 → 摘要清空，LLM 不被调用"""
+        rs = RoomState()
+        rs.set_topic_summary("主播在聊练琴趣事", now_ms=100_000)
+        mock_llm = _make_mock_llm(content="不应被使用")
+        mock_ctx = _make_mock_context(
+            messages=[
+                _make_history_msg("user", "（主动发言，主题：冷场主动闲聊近况）"),
+                _make_history_msg("assistant", "昨天折腾效果器到凌晨"),
+                _make_history_msg("user", "（主动发言，主题：延续效果器话题）"),
+                _make_history_msg("assistant", "串了六块单块噪音很大"),
+            ]
+        )
+
+        loop = RoomStateLoop(
+            config={},
+            room_state=rs,
+            llm_service=mock_llm,
+            context_service=mock_ctx,
+        )
+        await loop._summarize(now_ms=101_000)
+
+        mock_llm.chat.assert_not_called()
+        snap = rs.get_snapshot(now_ms=101_000)
+        assert snap.topic_summary == "", "纯主动发言历史应清空话题摘要"
+        assert snap.topic_summary_at_ms == 101_000
+
+    @pytest.mark.asyncio
+    async def test_mixed_history_llm_sees_only_real_danmaku(self):
+        """占位符与真实弹幕混合 → LLM 收到过滤后的历史（无占位符 / 无 assistant 行）"""
+        rs = RoomState()
+        _feed_active_messages(rs, base_ts=100_000, count=5)
+        mock_llm = _make_mock_llm(content="观众在问游戏")
+        mock_ctx = _make_mock_context(
+            messages=[
+                _make_history_msg("user", "（主动发言，主题：冷场闲聊）"),
+                _make_history_msg("assistant", "主播自说自话"),
+                _make_history_msg("user", "隔壁直播间来的: 今天播啥？"),
+                _make_history_msg("user", "麦芽糖不加冰: 主播冲鸭！"),
+            ]
+        )
+
+        loop = RoomStateLoop(
+            config={},
+            room_state=rs,
+            llm_service=mock_llm,
+            context_service=mock_ctx,
+        )
+        await loop._summarize(now_ms=101_000)
+
+        mock_llm.chat.assert_called_once()
+        call_kwargs = mock_llm.chat.await_args.kwargs
+        prompt = call_kwargs["prompt"]
+        assert "（主动发言" not in prompt, "占位符不应进入摘要 prompt"
+        assert "主播自说自话" not in prompt, "主播回复不应进入摘要 prompt"
+        assert "今天播啥" in prompt
+        assert "主播冲鸭" in prompt
+        snap = rs.get_snapshot(now_ms=101_000)
+        assert snap.topic_summary == "观众在问游戏"
+
+    @pytest.mark.asyncio
+    async def test_assistant_only_history_clears_summary(self):
+        """历史仅含主播回复（无任何 user 消息）→ 摘要清空"""
+        rs = RoomState()
+        rs.set_topic_summary("旧摘要", now_ms=100_000)
+        mock_llm = _make_mock_llm(content="不应被使用")
+        mock_ctx = _make_mock_context(
+            messages=[
+                _make_history_msg("assistant", "主播自说自话一"),
+                _make_history_msg("assistant", "主播自说自话二"),
+            ]
+        )
+
+        loop = RoomStateLoop(
+            config={},
+            room_state=rs,
+            llm_service=mock_llm,
+            context_service=mock_ctx,
+        )
+        await loop._summarize(now_ms=101_000)
+
+        mock_llm.chat.assert_not_called()
+        snap = rs.get_snapshot(now_ms=101_000)
+        assert snap.topic_summary == ""
+
+    @pytest.mark.asyncio
+    async def test_placeholder_only_without_prior_summary_no_llm(self):
+        """纯占位符历史且摘要本为空 → 不调 LLM、状态不变（幂等）"""
+        rs = RoomState()
+        mock_llm = _make_mock_llm(content="不应被使用")
+        mock_ctx = _make_mock_context(messages=[_make_history_msg("user", "（主动发言，主题：X）")])
+
+        loop = RoomStateLoop(
+            config={},
+            room_state=rs,
+            llm_service=mock_llm,
+            context_service=mock_ctx,
+        )
+        await loop._summarize(now_ms=101_000)
+
+        mock_llm.chat.assert_not_called()
+        snap = rs.get_snapshot(now_ms=101_000)
+        assert snap.topic_summary == ""
