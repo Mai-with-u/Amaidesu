@@ -517,3 +517,69 @@ class TestPlannerConfidenceGate:
 
         assert plan is not None
         assert plan.should_reply is True, "confidence=0.3 恰好等于阈值不应降级"
+
+
+# ---------------------------------------------------------------------------
+# 测试 10：摘要年龄标注
+# ---------------------------------------------------------------------------
+
+
+class TestPlannerSummaryAge:
+    """Planner prompt 中话题摘要附带生成年龄（P1-6）"""
+
+    @pytest.mark.asyncio
+    async def test_topic_summary_rendered_with_age(self) -> None:
+        """态势中话题摘要行包含 'X前更新' 年龄标注"""
+        raw = json.dumps({"should_reply": False})
+        llm = MagicMock()
+        llm.chat = AsyncMock(return_value=_make_llm_response(raw))
+        prompt = MagicMock()
+        prompt.render_safe = MagicMock(return_value="PROMPT")
+
+        rs = MagicMock()
+        snap = MagicMock(
+            heat="low",
+            topics=[],
+            sc_queue=[],
+            last_update_ms=102_000,
+            topic_summary="观众在问游戏",
+            topic_summary_at_ms=100_000,
+        )
+        rs.get_snapshot = MagicMock(return_value=snap)
+
+        planner = Planner(
+            config={"planner_client": "llm_fast"},
+            llm_service=llm,
+            prompt_service=prompt,
+            room_state=rs,
+        )
+        await planner.plan([], forced=False)
+
+        room_state_text = prompt.render_safe.call_args.kwargs["room_state"]
+        assert "观众在问游戏" in room_state_text
+        assert "前更新" in room_state_text, f"摘要行应含年龄标注: {room_state_text}"
+
+    @pytest.mark.asyncio
+    async def test_no_age_when_summary_missing(self) -> None:
+        """摘要为空时不渲染摘要行（无年龄标注）"""
+        raw = json.dumps({"should_reply": False})
+        llm = MagicMock()
+        llm.chat = AsyncMock(return_value=_make_llm_response(raw))
+        prompt = MagicMock()
+        prompt.render_safe = MagicMock(return_value="PROMPT")
+
+        rs = MagicMock()
+        snap = MagicMock(heat="low", topics=[], sc_queue=[], last_update_ms=102_000, topic_summary="")
+        rs.get_snapshot = MagicMock(return_value=snap)
+
+        planner = Planner(
+            config={"planner_client": "llm_fast"},
+            llm_service=llm,
+            prompt_service=prompt,
+            room_state=rs,
+        )
+        await planner.plan([], forced=False)
+
+        room_state_text = prompt.render_safe.call_args.kwargs["room_state"]
+        assert "话题摘要" not in room_state_text
+        assert "前更新" not in room_state_text

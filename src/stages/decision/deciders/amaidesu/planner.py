@@ -30,6 +30,7 @@ from typing import Any, List, Optional
 
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.logging import get_logger
+from src.modules.time_utils import format_duration_ms
 
 from .plan import DecisionPlan
 from .room_state import RoomState, RoomStateSnapshot
@@ -297,8 +298,16 @@ class Planner:
 
         # 话题摘要（Task 8 低频 LLM 摘要填充，默认空）
         topic_summary = getattr(snapshot, "topic_summary", "") or ""
-        if topic_summary:
-            parts.append(f"- 话题摘要: {topic_summary}")
+        if isinstance(topic_summary, str) and topic_summary:
+            # 标注摘要年龄：摘要刷新周期分钟级，而决策每秒级，
+            # 过时摘要会误导话题方向，年龄信息让 LLM 自行权衡
+            last_update = getattr(snapshot, "last_update_ms", 0)
+            summary_at = getattr(snapshot, "topic_summary_at_ms", 0)
+            age_ms = 0
+            if isinstance(last_update, int) and isinstance(summary_at, int):
+                age_ms = max(last_update - summary_at, 0)
+            age_text = format_duration_ms(age_ms)
+            parts.append(f"- 话题摘要: {topic_summary}（{age_text}前更新）")
 
         return "\n".join(parts) if parts else "- （暂无态势数据）"
 

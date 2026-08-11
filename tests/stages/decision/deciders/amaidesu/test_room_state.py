@@ -141,6 +141,15 @@ class TestHeatLevel:
         assert isinstance(snap, RoomStateSnapshot)
         assert snap.last_update_ms > 0
 
+    def test_last_message_ms_tracks_recent_danmaku(self):
+        """last_message_ms 反映最近一条弹幕时刻（供 RoomStateLoop 新弹幕门控）"""
+        rs = RoomState()
+        assert rs.last_message_ms is None, "未收到弹幕时应为 None"
+        rs.update(_make_msg("第一条"), now_ms=1_000)
+        assert rs.last_message_ms == 1_000
+        rs.update(_make_msg("第二条"), now_ms=5_000)
+        assert rs.last_message_ms == 5_000
+
 
 # ---------------------------------------------------------------------------
 # 话题提取

@@ -279,6 +279,15 @@ class RoomState:
         return self._last_speech_ms
 
     @property
+    def last_message_ms(self) -> Optional[int]:
+        """最近一条弹幕到达时刻（Unix 毫秒），尚未收到弹幕时为 None
+
+        供 RoomStateLoop 判断"上次摘要后是否有新弹幕"：
+        无新弹幕时摘要内容不会变化，可跳过 LLM 刷新。
+        """
+        return self._last_message_ms
+
+    @property
     def speech_count(self) -> int:
         """累计主动发言次数（自进程启动以来）
 

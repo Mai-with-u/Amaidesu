@@ -364,3 +364,73 @@ class TestRoomStateLoopSummaryFiltering:
         mock_llm.chat.assert_not_called()
         snap = rs.get_snapshot(now_ms=101_000)
         assert snap.topic_summary == ""
+
+
+class TestRoomStateLoopNewDanmakuGate:
+    """新弹幕门控：上次摘要后无新弹幕 → 跳过摘要 LLM 调用"""
+
+    @pytest.mark.asyncio
+    async def test_no_new_danmaku_skips_summarize(self):
+        """摘要后无新弹幕（间隔已到）→ _summarize 不被调用"""
+        rs = RoomState()
+        # 唯一弹幕在 100_000；模拟上次摘要恰好也在此刻之后
+        rs.update(_make_msg("旧弹幕"), now_ms=100_000)
+        mock_llm = _make_mock_llm(content="摘要")
+        mock_msg = MagicMock()
+        mock_msg.role.value = "user"
+        mock_msg.content = "弹幕"
+        mock_ctx = _make_mock_context(messages=[mock_msg])
+
+        loop = RoomStateLoop(
+            config={"room_state_llm_summary_interval_ms": 60_000},
+            room_state=rs,
+            llm_service=mock_llm,
+            context_service=mock_ctx,
+        )
+        loop._summarize = AsyncMock()
+        # 上次摘要时刻 == 最后弹幕时刻（100_000），tick 在 200_000（间隔已过）
+        loop._last_summary_ms = 100_000
+        await loop._tick(now_ms=200_000)
+
+        loop._summarize.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_new_danmaku_after_summary_triggers(self):
+        """摘要之后有新弹幕且间隔已到 → _summarize 被调用"""
+        rs = RoomState()
+        _feed_active_messages(rs, base_ts=100_000, count=5)
+        mock_llm = _make_mock_llm(content="摘要")
+        mock_msg = MagicMock()
+        mock_msg.role.value = "user"
+        mock_msg.content = "弹幕"
+        mock_ctx = _make_mock_context(messages=[mock_msg])
+
+        loop = RoomStateLoop(
+            config={"room_state_llm_summary_interval_ms": 60_000},
+            room_state=rs,
+            llm_service=mock_llm,
+            context_service=mock_ctx,
+        )
+        loop._summarize = AsyncMock()
+        loop._last_summary_ms = 100_000
+        # 摘要后 60s 内来了新弹幕（180_000），且 tick 在 200_000（间隔已到）
+        rs.update(_make_msg("新弹幕"), now_ms=180_000)
+        await loop._tick(now_ms=200_000)
+
+        loop._summarize.assert_awaited_once_with(now_ms=200_000)
+
+    def test_low_heat_interval_equals_base(self):
+        """low 热度间隔 = 基准间隔（不翻倍）：刷新与决策节奏解耦"""
+        rs = RoomState()
+        mock_llm = _make_mock_llm()
+        mock_ctx = _make_mock_context(messages=[])
+
+        loop = RoomStateLoop(
+            config={"room_state_llm_summary_interval_ms": 60_000},
+            room_state=rs,
+            llm_service=mock_llm,
+            context_service=mock_ctx,
+        )
+        assert loop._interval_for_heat("low") == 60_000
+        assert loop._interval_for_heat("medium") == 60_000
+        assert loop._interval_for_heat("high") == 30_000

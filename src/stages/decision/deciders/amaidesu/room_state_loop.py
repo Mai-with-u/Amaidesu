@@ -8,8 +8,9 @@
   ``room_state.update()`` 驱动，Loop 只读快照。
 - **独立 client**：摘要用独立 profile ``llm_summary``，不与前台 Planner（``llm_fast``）共用连接池。
 - **可注入时钟**：``_tick(now_ms=...)`` 接受确定性时间戳，测试无需 sleep。
-- **热度驱动频率**：high → 间隔减半（30s），medium → 基准间隔（60s），
-  low → 间隔翻倍（120s），冷场时仍按热度间隔更新（效果优先）。
+- **热度驱动频率 + 新弹幕门控**：high → 间隔减半（30s），medium/low → 基准间隔（60s）；
+  上次摘要后无新弹幕则跳过 LLM 调用（摘要内容不会变化）。"有新弹幕才刷新"保证
+  摘要与决策节奏解耦，冷场不空转。
 """
 
 import asyncio
@@ -140,14 +141,18 @@ class RoomStateLoop:
         if ts - self._last_summary_ms < interval:
             return
 
+        # 上次摘要后无新弹幕 → 摘要内容不会变化，跳过 LLM 调用（省成本；
+        # 这是把 low 热度间隔从 base*2 缩短到 base 的安全前提）
+        last_msg = getattr(self._room_state, "last_message_ms", None)
+        if last_msg is not None and last_msg <= self._last_summary_ms:
+            return
+
         await self._summarize(now_ms=ts)
 
     def _interval_for_heat(self, heat: str) -> int:
         base = self._summary_interval_ms
         if heat == "high":
             return max(base // 2, 5_000)
-        if heat == "low":
-            return base * 2
         return base
 
     async def _summarize(self, *, now_ms: int) -> None:
