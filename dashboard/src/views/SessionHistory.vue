@@ -146,9 +146,6 @@
                     {{ (event.intent.emotion.intensity * 100).toFixed(0) }}%
                   </template>
                 </el-tag>
-                <code v-if="event.intent.action" class="action-chip">
-                  {{ event.intent.action.name }}
-                </code>
                 <span class="meta-item">· {{ formatDecisionLatency(event) }}</span>
                 <span class="bubble-spacer" />
                 <span class="expand-hint">
@@ -162,8 +159,8 @@
             <div class="chat-avatar chat-avatar--intent" title="AI · Bot">M</div>
           </template>
 
-          <!-- output.render: 居中系统消息 -->
-          <template v-if="event.type === 'output.render' && event.intent">
+          <!-- output.render: 居中系统消息（仅当存在 action 时渲染） -->
+          <template v-if="event.type === 'output.render' && event.intent && event.intent.action">
             <div class="chat-system" @click="toggleExpand(event.id)">
               <span class="system-icon">⚙</span>
               <span class="system-text">
@@ -175,14 +172,6 @@
               >
                 {{ event.intent.action.name }}
               </code>
-              <span v-if="event.intent.speech" class="system-speech" :title="event.intent.speech">
-                ·
-                {{
-                  event.intent.speech.length > 40
-                    ? event.intent.speech.slice(0, 40) + '…'
-                    : event.intent.speech
-                }}
-              </span>
               <span class="bubble-spacer" />
               <span class="system-time">{{ formatMs(event.timestamp).split('.')[0] }}</span>
               <span class="expand-hint expand-hint--system">
@@ -1033,14 +1022,6 @@ onUnmounted(() => {
   font-weight: 500;
   color: #fff;
 }
-.chat-bubble--message .action-chip {
-  background: rgba(64, 158, 255, 0.12);
-  color: var(--color-primary);
-}
-.chat-bubble--intent .action-chip {
-  background: rgba(103, 194, 58, 0.12);
-  color: #4a9b2a;
-}
 .action-chip--mini {
   font-size: 10px;
   padding: 0 6px;
@@ -1075,15 +1056,6 @@ onUnmounted(() => {
 .system-text strong {
   color: var(--text-primary);
   font-weight: 600;
-}
-.system-speech {
-  font-style: italic;
-  color: var(--text-secondary);
-  font-size: 12px;
-  max-width: 360px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .system-time {
   font-family: var(--font-mono, 'Cascadia Code', monospace);
