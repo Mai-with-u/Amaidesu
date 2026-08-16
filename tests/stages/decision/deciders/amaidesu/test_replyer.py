@@ -368,3 +368,34 @@ class TestReplyerHistoryInjection:
 
         assert intent is not None
         assert intent.speech == "晚上好呀！"
+
+    @pytest.mark.asyncio
+    async def test_replyer_history_marks_proactive_placeholder_as_system(self) -> None:
+        """主动发言占位符渲染为 ``[系统]`` 标注，不被当成观众消息。
+
+        与 Planner 渲染逻辑对齐（回归：2026-08-16 日志显示占位符原样渲染为
+        ``user:`` 行，Replyer 可能误当成观众弹幕回应，导致话题跳跃）。
+        """
+
+        class _Msg:
+            def __init__(self, role: str, content: str) -> None:
+                self.role = role
+                self.content = content
+
+        history = [
+            _Msg("user", "（主动发言，主题：主动分享吉他学习近况）"),
+            _Msg("assistant", "今天练吉他终于把F和弦按响了"),
+            _Msg("user", "观众：主播好可爱"),
+        ]
+        r, _llm, prompt, _eb = _make_replyer(llm_return=_ok_payload())
+        plan = _make_plan()
+        persona = {"bot_name": "爱德丝", "personality": "p", "style_constraints": "s"}
+
+        await r.generate(plan, [], persona, history=history)
+
+        rendered = prompt.render_safe.call_args.kwargs["conversation_history"]
+        assert "[系统] （主动发言，主题：主动分享吉他学习近况）" in rendered
+        assert "user: （主动发言" not in rendered, (
+            f"主动发言占位符不应伪装成 user 弹幕，实际: {rendered!r}"
+        )
+        assert "user: 观众：主播好可爱" in rendered

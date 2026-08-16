@@ -438,6 +438,34 @@ class TestPlannerHistoryInjection:
         assert "user: 观众问 1" in rendered
         assert "assistant: 主播答 1" in rendered
 
+    @pytest.mark.asyncio
+    async def test_plan_marks_proactive_placeholder_as_system(self) -> None:
+        """主动发言写入历史的 user 占位（"（主动发言，主题：...）"）渲染为 ``[系统]`` 标注。
+
+        回归场景（日志实测 2026-08-16）：主动发言占位符原样渲染为 ``user:`` 行，
+        Planner 误认为是观众弹幕 → 反重复原则被误触发 → 每次主动发言都开新话题，
+        发言内容不连续（吉他→外卖→多肉→综艺）。修复后应为系统元数据而非用户消息。
+        """
+        raw = json.dumps({"should_reply": False})
+        planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+
+        history = [
+            _FakeHistoryMsg("user", "（主动发言，主题：开场寒暄：问候观众）"),
+            _FakeHistoryMsg("assistant", "哈喽晚上好，我是麦麦～"),
+            _FakeHistoryMsg("user", "一条真实弹幕：主播好可爱"),
+            _FakeHistoryMsg("assistant", "谢谢夸奖～"),
+        ]
+
+        await planner.plan([], proactive=True, history=history)
+
+        rendered = prompt.render_safe.call_args.kwargs["conversation_history"]
+        assert "[系统] （主动发言，主题：开场寒暄：问候观众）" in rendered
+        assert "user: （主动发言" not in rendered, (
+            f"主动发言占位符不应伪装成 user 弹幕，实际: {rendered!r}"
+        )
+        assert "user: 一条真实弹幕：主播好可爱" in rendered
+        assert "assistant: 谢谢夸奖～" in rendered
+
 
 # ---------------------------------------------------------------------------
 # 测试 9：决策一致性校验（低置信度降级静默）

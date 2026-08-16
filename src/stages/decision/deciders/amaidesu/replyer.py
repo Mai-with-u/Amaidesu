@@ -365,6 +365,11 @@ def _render_history_text(history: Optional[List[Any]]) -> str:
         role = getattr(msg, "role", None)
         role_str = getattr(role, "value", str(role)) if role else "user"
         content = getattr(msg, "content", "") or ""
+        # 主动发言的 user 占位（"（主动发言，主题：...）"）是系统元数据而非观众弹幕，
+        # 渲染为 [系统] 标注，避免 Replyer 误当成观众消息（与 Planner 渲染逻辑对齐）。
+        if role_str == "user" and content.startswith("（主动发言"):
+            lines.append(f"[系统] {content}")
+            continue
         lines.append(f"{role_str}: {content}")
     return "\n".join(lines)
 

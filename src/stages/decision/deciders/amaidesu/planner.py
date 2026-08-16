@@ -380,6 +380,13 @@ class Planner:
             role = getattr(msg, "role", None)
             role_str = getattr(role, "value", str(role)) if role else "user"
             content = getattr(msg, "content", "") or ""
+            # 主动发言写入历史的 user 占位（"（主动发言，主题：...）"）是系统元数据，
+            # 不是观众弹幕——若原样渲染为 user 行，Planner 会误认为"该话题观众已聊过"，
+            # 反重复原则被误触发导致每次主动发言都开新话题（内容不连续）。
+            # 渲染为 [系统] 标注，语义与 RoomStateLoop._is_real_danmaku 过滤逻辑对齐。
+            if role_str == "user" and content.startswith("（主动发言"):
+                lines.append(f"[系统] {content}")
+                continue
             lines.append(f"{role_str}: {content}")
         return "\n".join(lines)
 
