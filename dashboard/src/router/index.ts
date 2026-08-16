@@ -81,14 +81,9 @@ const router = createRouter({
       component: () => import('@/views/SimulatorPanel.vue'),
     },
     {
-      path: '/outline/editor',
-      name: 'outline-editor',
-      component: () => import('@/views/OutlineEditor.vue'),
-    },
-    {
       path: '/outline',
-      name: 'outline-status',
-      component: () => import('@/views/OutlineStatus.vue'),
+      name: 'outline-workbench',
+      component: () => import('@/views/OutlineWorkbench.vue'),
     },
   ],
 });

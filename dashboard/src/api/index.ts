@@ -25,6 +25,11 @@ import type {
   OutlineSegmentsResponse,
   OutlineFileWriteRequest,
   OutlineFileWriteResponse,
+  OutlineStateSnapshot,
+  OutlineTransitionsResponse,
+  OutlineControlAction,
+  OutlineControlResponse,
+  OutlineLoadResponse,
 } from '@/types';
 
 const api = axios.create({
@@ -110,13 +115,25 @@ export const capabilitiesApi = {
   list: () => api.get<UnifiedCapabilitiesView>('/capabilities'),
 };
 
-// Outline API — 直播大纲编辑（任务 11/13 配套）
+// Outline API — 直播大纲工作台（运行态 + 编辑）
 export const outlineApi = {
-  /** 获取当前大纲完整环节列表（供编辑页渲染） */
-  getSegments: () => api.get<OutlineSegmentsResponse>('/outline/segments'),
+  /** 获取运行时状态快照（状态栏 / 当前环节 / 整场进度） */
+  getState: () => api.get<OutlineStateSnapshot>('/outline/state'),
+  /** 加载指定路径的大纲 TOML 文件 */
+  loadOutline: (path: string) => api.post<OutlineLoadResponse>('/outline/load', { path }),
+  /** 手动控制推进（skip/pause/resume/rewind/jump） */
+  control: (action: OutlineControlAction, segmentId?: string) =>
+    api.post<OutlineControlResponse>('/outline/control', {
+      action,
+      ...(segmentId ? { segment_id: segmentId } : {}),
+    }),
   /** 把编辑后的大纲 TOML 写回磁盘（下一段生效） */
   saveFile: (request: OutlineFileWriteRequest) =>
     api.put<OutlineFileWriteResponse>('/outline/file', request),
+  /** 获取当前大纲完整环节列表（含 expanded 扩展内容） */
+  getSegments: () => api.get<OutlineSegmentsResponse>('/outline/segments'),
+  /** 获取环节推进历史（时间线） */
+  getTransitions: () => api.get<OutlineTransitionsResponse>('/outline/transitions'),
 };
 
 // Trace API

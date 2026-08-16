@@ -1,26 +1,21 @@
 <template>
-  <div class="outline-editor-page">
-    <header class="page-header">
-      <div class="header-left">
-        <h1 class="page-title">直播大纲编辑</h1>
-        <p class="page-subtitle">编辑 TOML 大纲（保存后下一环节生效）</p>
-      </div>
-      <div class="header-actions">
-        <el-button :loading="loading" @click="loadOutline">
-          <el-icon><Refresh /></el-icon>
-          重新加载
-        </el-button>
-        <el-button
-          type="primary"
-          :loading="saving"
-          :disabled="!loaded || segments.length === 0"
-          @click="handleSave"
-        >
-          <el-icon><Check /></el-icon>
-          保存
-        </el-button>
-      </div>
-    </header>
+  <div class="outline-editor-panel">
+    <!-- 顶部按钮行（嵌在 Tab 里，无页面标题） -->
+    <div class="panel-toolbar">
+      <el-button :loading="loading" @click="loadOutline">
+        <el-icon><Refresh /></el-icon>
+        重新加载
+      </el-button>
+      <el-button
+        type="primary"
+        :loading="saving"
+        :disabled="!loaded || segments.length === 0"
+        @click="handleSave"
+      >
+        <el-icon><Check /></el-icon>
+        保存
+      </el-button>
+    </div>
 
     <!-- 加载 / 错误 -->
     <div v-if="loading && !loaded" class="loading-container">
@@ -55,7 +50,7 @@
           <div class="card-header-row">
             <el-icon><Document /></el-icon>
             <span class="card-title">大纲元信息</span>
-            <el-tag size="small" type="info" effect="plain" v-if="meta.path">{{
+            <el-tag v-if="meta.path" size="small" type="info" effect="plain">{{
               meta.path
             }}</el-tag>
           </div>
@@ -192,7 +187,7 @@
                     @click="removeKeyPoint(idx, kpIdx)"
                   />
                 </div>
-                <el-button size="small" :icon="Plus" @click="addKeyPoint(idx)" class="add-kp-btn">
+                <el-button size="small" :icon="Plus" class="add-kp-btn" @click="addKeyPoint(idx)">
                   添加关键点
                 </el-button>
               </div>
@@ -248,7 +243,7 @@
                     @click="removeBranch(idx, brIdx)"
                   />
                 </div>
-                <el-button size="small" :icon="Plus" @click="addBranch(idx)" class="add-branch-btn">
+                <el-button size="small" :icon="Plus" class="add-branch-btn" @click="addBranch(idx)">
                   添加分支
                 </el-button>
               </div>
@@ -257,35 +252,6 @@
         </el-card>
       </div>
     </div>
-
-    <!-- 保存确认对话框（"下一环节生效"提示） -->
-    <el-dialog
-      v-model="showSuccessDialog"
-      title="大纲已保存"
-      width="460px"
-      :close-on-click-modal="false"
-      :show-close="false"
-    >
-      <div class="success-content">
-        <el-icon class="success-icon" :size="48" color="var(--color-success)">
-          <CircleCheckFilled />
-        </el-icon>
-        <p class="success-text">大纲 TOML 已写回磁盘</p>
-        <el-alert
-          type="warning"
-          title="下一环节生效"
-          description="当前环节不变；下一个 segment 切换时（或手动 skip/load）才会读取最新内容。"
-          show-icon
-          :closable="false"
-        />
-        <p v-if="lastSaveInfo" class="save-meta">
-          路径: <code>{{ lastSaveInfo.path }}</code> · 字节数: {{ lastSaveInfo.bytes_written }}
-        </p>
-      </div>
-      <template #footer>
-        <el-button type="primary" @click="showSuccessDialog = false">知道了</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -301,15 +267,19 @@ import {
   Loading,
   Plus,
   Refresh,
-  CircleCheckFilled,
 } from '@element-plus/icons-vue';
 import { outlineApi } from '@/api';
 import type { OutlineBranchData, OutlineSegmentData, OutlineSegmentsResponse } from '@/types';
 import { serializeOutlineToToml } from '@/utils/outlineToml';
 
+const emit = defineEmits<{
+  (e: 'reloaded'): void;
+}>();
+
 // ── 状态 ──────────────────────────────────────────────────
 const loading = ref(false);
 const saving = ref(false);
+const reloading = ref(false);
 const loadError = ref<string | null>(null);
 const loaded = ref(false);
 
@@ -321,8 +291,6 @@ const meta = reactive({
 });
 
 const segments = ref<(OutlineSegmentData & { __key: string })[]>([]);
-const showSuccessDialog = ref(false);
-const lastSaveInfo = ref<{ path: string; bytes_written?: number } | null>(null);
 
 // ── 加载 ──────────────────────────────────────────────────
 async function loadOutline() {
@@ -537,7 +505,7 @@ function removeBranch(segIdx: number, brIdx: number) {
   seg.branches.splice(brIdx, 1);
 }
 
-// ── 保存 ──────────────────────────────────────────────────
+// ── 保存（双按钮流程：仅保存 / 保存并重载） ─────────────
 async function handleSave() {
   if (validationErrors.value.length > 0) {
     ElMessageBox.alert(
@@ -577,12 +545,10 @@ async function handleSave() {
   try {
     const res = await outlineApi.saveFile({ path: meta.path, content: toml });
     const data = res.data;
-    lastSaveInfo.value = {
-      path: data.path ?? meta.path,
-      bytes_written: data.bytes_written,
-    };
-    showSuccessDialog.value = true;
-    ElMessage.success('大纲已保存（下一环节生效）');
+    const savedPath = data.path ?? meta.path;
+    const bytes = data.bytes_written;
+    ElMessage.success('大纲已保存到磁盘');
+    await promptReloadAfterSave(savedPath, bytes);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : '保存失败';
     ElMessage.error(`保存失败: ${msg}`);
@@ -590,46 +556,61 @@ async function handleSave() {
     saving.value = false;
   }
 }
+
+/** 保存成功后询问用户是否立即重新加载（热加载） */
+async function promptReloadAfterSave(savedPath: string, bytesWritten?: number): Promise<void> {
+  const byteText = bytesWritten != null ? `（${bytesWritten} 字节）` : '';
+  try {
+    await ElMessageBox.confirm(
+      `大纲已保存到磁盘${byteText}。运行时仍在使用旧大纲，是否立即重新加载？`,
+      '大纲已保存',
+      {
+        confirmButtonText: '保存并重载',
+        cancelButtonText: '仅保存',
+        type: 'info',
+        distinguishCancelAndClose: true,
+        closeOnClickModal: false,
+      },
+    );
+    // 用户选了「保存并重载」
+    await reloadOutlineFromDisk(savedPath);
+  } catch (action) {
+    // 'cancel' = 仅保存；'close' 同 cancel
+    if (action === 'close' || (action && typeof action === 'string')) {
+      // 仅保存：什么都不做
+    }
+  }
+}
+
+/** 调 loadOutline(path) 热加载新大纲 */
+async function reloadOutlineFromDisk(targetPath: string): Promise<void> {
+  reloading.value = true;
+  try {
+    await outlineApi.loadOutline(targetPath);
+    // 重新拉 segments（meta 会随 loadOutline 接口返回而更新；这里也同步刷新）
+    await loadOutline();
+    ElMessage.success('大纲已重新加载');
+    emit('reloaded');
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : '重新加载失败';
+    ElMessage.error(`重新加载失败: ${msg}`);
+  } finally {
+    reloading.value = false;
+  }
+}
 </script>
 
 <style scoped>
-.outline-editor-page {
+.outline-editor-panel {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - var(--header-height) - var(--spacing-lg) * 2);
-  overflow: hidden;
+  gap: var(--spacing-md);
 }
 
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: var(--spacing-md);
-  flex-shrink: 0;
-}
-
-.header-left {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-xs);
-}
-
-.page-title {
-  margin: 0;
-  font-size: 24px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.page-subtitle {
-  margin: 0;
-  font-size: 14px;
-  color: var(--text-secondary);
-}
-
-.header-actions {
+.panel-toolbar {
   display: flex;
   gap: var(--spacing-sm);
+  flex-shrink: 0;
 }
 
 .loading-container {
@@ -637,7 +618,7 @@ async function handleSave() {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  flex: 1;
+  padding: var(--spacing-lg) 0;
   color: var(--text-secondary);
 }
 
@@ -650,9 +631,6 @@ async function handleSave() {
 }
 
 .editor-content {
-  flex: 1;
-  overflow-y: auto;
-  padding-right: var(--spacing-sm);
   display: flex;
   flex-direction: column;
   gap: var(--spacing-md);
@@ -766,66 +744,5 @@ async function handleSave() {
 .add-branch-btn {
   align-self: flex-start;
   margin-top: var(--spacing-xs);
-}
-
-.success-content {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--spacing-md);
-  padding: var(--spacing-md) 0;
-}
-
-.success-icon {
-  margin-bottom: var(--spacing-xs);
-}
-
-.success-text {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-
-.save-meta {
-  margin: 0;
-  font-size: 12px;
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  text-align: center;
-}
-
-.save-meta code {
-  background: var(--bg-hover);
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-family: var(--font-mono);
-}
-
-/* 滚动条 */
-.editor-content::-webkit-scrollbar {
-  width: 6px;
-}
-.editor-content::-webkit-scrollbar-track {
-  background: transparent;
-}
-.editor-content::-webkit-scrollbar-thumb {
-  background: var(--border-color-dark);
-  border-radius: 3px;
-}
-.editor-content::-webkit-scrollbar-thumb:hover {
-  background: var(--text-secondary);
-}
-
-/* 响应式 */
-@media (max-width: 768px) {
-  .page-header {
-    flex-direction: column;
-    gap: var(--spacing-md);
-  }
-  .header-actions {
-    width: 100%;
-    justify-content: flex-end;
-  }
 }
 </style>

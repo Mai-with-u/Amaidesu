@@ -266,7 +266,16 @@ export interface OutlineBranchData {
   target_segment_id: string;
 }
 
-/** 大纲单个环节 */
+/** 环节的 AI 扩展内容（由 outline_loader 动态生成并缓存） */
+export interface ExpandedSegmentData {
+  opening_line: string;
+  topic_guidance: string;
+  talking_points: string[];
+}
+
+/** 大纲单个环节
+ *
+ * `expanded` 为可选：编辑页新建环节时不带该字段，运行态接口才会返回。 */
 export interface OutlineSegmentData {
   id: string;
   title: string;
@@ -275,6 +284,7 @@ export interface OutlineSegmentData {
   min_duration_ms?: number | null;
   key_points: string[];
   branches: OutlineBranchData[];
+  expanded?: ExpandedSegmentData | null;
 }
 
 /** `GET /api/v1/outline/segments` 响应 */
@@ -299,4 +309,79 @@ export interface OutlineFileWriteResponse {
   path: string;
   bytes_written?: number;
   note?: string;
+}
+
+/** 大纲运行时状态枚举（对应 outline_state.py 的 `OutlineStatus`） */
+export type OutlineRunStatus = 'inactive' | 'loading' | 'running' | 'completed' | 'unloaded';
+
+/** 快照中的当前环节（含运行时计时与扩展就绪标记） */
+export interface OutlineCurrentSegmentState {
+  id: string;
+  title: string;
+  duration_ms: number;
+  elapsed_ms: number;
+  remaining_ms: number;
+  expanded: boolean;
+  needs_expansion: boolean;
+}
+
+/** 快照中的下一环节预览 */
+export interface OutlineNextSegmentState {
+  id: string;
+  title: string;
+}
+
+/** `GET /api/v1/outline/state` 响应（对应 `OutlineState.get_snapshot()` 全字段） */
+export interface OutlineStateSnapshot {
+  status: OutlineRunStatus;
+  current_segment: OutlineCurrentSegmentState | null;
+  next_segment: OutlineNextSegmentState | null;
+  completed_count: number;
+  total_count: number;
+  is_paused: boolean;
+  elapsed_live_ms: number | null;
+  total_planned_ms: number | null;
+  progress_percent: number | null;
+  outline_id: string | null;
+  outline_title: string | null;
+  manually_overridden: boolean;
+}
+
+/** 单条环节推进记录 */
+export interface OutlineTransition {
+  segment_id: string;
+  title: string;
+  reason: string;
+  at_ms: number;
+  stayed_ms: number | null;
+}
+
+/** `GET /api/v1/outline/transitions` 响应 */
+export interface OutlineTransitionsResponse {
+  loaded: boolean;
+  transitions: OutlineTransition[];
+}
+
+/** 手动控制动作 */
+export type OutlineControlAction = 'skip' | 'pause' | 'resume' | 'rewind' | 'jump';
+
+/** `POST /api/v1/outline/control` 请求体 */
+export interface OutlineControlRequest {
+  action: OutlineControlAction;
+  segment_id?: string;
+}
+
+/** `POST /api/v1/outline/control` 响应 */
+export interface OutlineControlResponse {
+  status: string;
+  action: OutlineControlAction;
+  segment_id?: string | null;
+  current_segment_id?: string | null;
+}
+
+/** `POST /api/v1/outline/load` 响应 */
+export interface OutlineLoadResponse {
+  status: string;
+  path: string;
+  outline_id?: string | null;
 }
