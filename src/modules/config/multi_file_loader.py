@@ -48,7 +48,7 @@ _PHASE_TO_REGISTRY: dict[tuple[str, str], str] = {
     ("output", "_HANDLERS"): "src.stages.output.registry",
 }
 
-CONFIG_VERSION = "0.5.1"
+CONFIG_VERSION = "0.5.3"
 
 _CONFIG_FILES = ["core.toml", "model.toml", "input.toml", "decision.toml", "output.toml"]
 

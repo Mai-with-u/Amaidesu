@@ -462,5 +462,140 @@ class TestPureRuleContract:
             assert not hasattr(val, "fileno"), f"{name} 不应持有 fd"
 
 
+# ---------------------------------------------------------------------------
+# 大纲触发源（outline）限流独立性
+# ---------------------------------------------------------------------------
+# 直播大纲是内容推进而非救场——主播应按环节节奏持续发言，不应被为"防接龙/
+# 冷场救场"设计的低频限流（min_interval_ms=120s / max_per_hour=6 /
+# topic_required）卡死。新逻辑：
+# - outline_pending（环节切换即时信号）：仅受总开关约束，立即触发
+# - outline_ready（环节内持续发言信号）：绕过通用前置，用独立的
+#   outline_speech_interval_ms（默认 3s）控制节奏
+
+
+class TestOutlineBypass:
+    """outline 触发源绕过通用防接龙限流（min_interval / max_per_hour / topic_required）"""
+
+    def test_outline_pending_triggers_immediately(self):
+        """outline_pending=True 时仅受总开关约束，立即触发（环节切换即时信号）
+
+        场景：min_interval=120s 未到（last_speech 刚 1s 前），但需要切换新环节
+        并立即说开场白。即便公共前置会被拦，outline_pending 仍能立即返回
+        ``"outline"``。
+        """
+        t = _make_trigger(min_interval_ms=120_000, max_per_hour=6)
+        now = 1_000_000
+        # last_speech_ms 在 1 秒前，min_interval=120s → 公共前置会拦 cold/schedule
+        rs = _RoomStateMock(is_cold=True, topic_summary="聊游戏", last_speech_ms=now - 1_000)
+        assert t.should_trigger(
+            rs, now_ms=now, outline_pending=True
+        ) == "outline"
+
+    def test_outline_pending_blocks_when_disabled(self):
+        """outline_pending=True 在 enabled=False 时仍不触发（总开关不可绕）"""
+        t = _make_trigger(enabled=False)
+        rs = _RoomStateMock(is_cold=True, topic_summary="聊游戏", last_speech_ms=None)
+        assert t.should_trigger(
+            rs, now_ms=1_000_000, outline_pending=True
+        ) is None
+
+    def test_outline_ready_uses_own_interval_not_min_interval(self):
+        """outline_ready 绕过 min_interval，按 outline_speech_interval_ms 控制节奏
+
+        场景：last_speech 在 60s 前（> 3s outline_speech_interval 但 < 120s
+        min_interval）。修复前会因公共 min_interval 返回 None；修复后
+        outline_ready=True 立即返回 ``"outline"``（证明绕过 min_interval）。
+        """
+        t = _make_trigger(
+            min_interval_ms=120_000,
+            outline_speech_interval_ms=3_000,
+            max_per_hour=6,
+        )
+        now = 1_000_000
+        # 60s 前发言：> 3s 但 < 120s
+        rs = _RoomStateMock(
+            is_cold=True, topic_summary="聊游戏", last_speech_ms=now - 60_000
+        )
+        assert t.should_trigger(
+            rs, now_ms=now, outline_ready=True
+        ) == "outline"
+
+    def test_outline_ready_blocked_by_own_interval(self):
+        """outline_ready 受自己的 outline_speech_interval_ms 约束（仍可防接龙）
+
+        场景：last_speech 在 1s 前（< 3s outline_speech_interval）。即使
+        outline_ready=True，仍返回 None（避免大纲内部抢话）。
+        """
+        t = _make_trigger(
+            min_interval_ms=120_000,
+            outline_speech_interval_ms=3_000,
+            max_per_hour=6,
+        )
+        now = 1_000_000
+        rs = _RoomStateMock(
+            is_cold=True, topic_summary="聊游戏", last_speech_ms=now - 1_000
+        )
+        assert t.should_trigger(
+            rs, now_ms=now, outline_ready=True
+        ) is None
+
+    def test_outline_ready_ignores_max_per_hour(self):
+        """outline_ready 绕过 max_per_hour 限制（小时窗口不限制大纲推进）
+
+        场景：max_per_hour=1 且 hourly 窗口内已有 1 次触发记录。修复前会因
+        公共 max_per_hour 返回 None；修复后 outline_ready=True 立即返回
+        ``"outline"``（证明绕过 max_per_hour）。
+        """
+        t = _make_trigger(
+            min_interval_ms=0,
+            outline_speech_interval_ms=3_000,
+            max_per_hour=1,
+        )
+        rs = _RoomStateMock(is_cold=True, topic_summary="聊游戏", last_speech_ms=None)
+        now = 1_000_000
+        # 窗口内已记录 1 次（达到 max_per_hour=1 上限）
+        t.record_trigger("external", now_ms=now - 1_000)
+        # outline_ready=True → 应绕过 max_per_hour 限制
+        assert t.should_trigger(
+            rs, now_ms=now, outline_ready=True
+        ) == "outline"
+
+    def test_outline_ready_ignores_topic_required(self):
+        """outline_ready 绕过 topic_required 约束（大纲自带话题，不需 topic_summary）"""
+        t = _make_trigger(
+            min_interval_ms=0,
+            outline_speech_interval_ms=3_000,
+            topic_required=True,
+        )
+        rs = _RoomStateMock(
+            is_cold=False, topic_summary="", last_speech_ms=None
+        )
+        # topic_required=True 且 topic_summary 空——其他触发源会被拦
+        assert t.should_trigger(
+            rs, now_ms=1_000_000, outline_ready=True
+        ) == "outline"
+
+    def test_outline_pending_outranks_external(self):
+        """outline_pending 是环节切换即时信号，优先级高于 external_pending
+
+        场景：大纲推进到新环节（outline_pending=True）时即便同时有外部
+        API 触发（external_pending=True），仍以 outline_pending 为准——新环节
+        开场白必须立即说，不可被任意外部信号打断。outline_ready 与
+        external_pending 并存时则仍按既有优先级（external > outline）。
+        """
+        t = _make_trigger(min_interval_ms=0, outline_speech_interval_ms=3_000)
+        rs = _RoomStateMock(is_cold=True, topic_summary="聊游戏", last_speech_ms=None)
+        # external_pending + outline_pending 同时为 True → outline_pending 胜
+        # （环节切换即时信号优先于外部触发，理由：新环节开场白必须立即说）
+        assert t.should_trigger(
+            rs, now_ms=1_000_000, external_pending=True, outline_pending=True
+        ) == "outline"
+        # external_pending + outline_ready 同时为 True → external 胜
+        # （既有优先级：external > outline_ready）
+        assert t.should_trigger(
+            rs, now_ms=1_000_000, external_pending=True, outline_ready=True
+        ) == "external"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

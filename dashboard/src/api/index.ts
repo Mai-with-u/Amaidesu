@@ -22,6 +22,9 @@ import type {
   LLMRequestHistory,
   MessageListResponse,
   UnifiedCapabilitiesView,
+  OutlineSegmentsResponse,
+  OutlineFileWriteRequest,
+  OutlineFileWriteResponse,
 } from '@/types';
 
 const api = axios.create({
@@ -105,6 +108,15 @@ export const llmApi = {
 // Capabilities API
 export const capabilitiesApi = {
   list: () => api.get<UnifiedCapabilitiesView>('/capabilities'),
+};
+
+// Outline API — 直播大纲编辑（任务 11/13 配套）
+export const outlineApi = {
+  /** 获取当前大纲完整环节列表（供编辑页渲染） */
+  getSegments: () => api.get<OutlineSegmentsResponse>('/outline/segments'),
+  /** 把编辑后的大纲 TOML 写回磁盘（下一段生效） */
+  saveFile: (request: OutlineFileWriteRequest) =>
+    api.put<OutlineFileWriteResponse>('/outline/file', request),
 };
 
 // Trace API

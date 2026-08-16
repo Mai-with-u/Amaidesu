@@ -128,6 +128,7 @@ class Planner:
         forced: bool = False,
         proactive: bool = False,
         history: Optional[List[Any]] = None,
+        outline_text: Optional[str] = None,
     ) -> Optional[DecisionPlan]:
         """对一批弹幕做战术决策，产出 DecisionPlan。
 
@@ -144,6 +145,13 @@ class Planner:
                 ``MessageRole`` 枚举或字符串；``content`` 为字符串）。``None`` 表示
                 无历史可用，渲染为占位文本。会透传到 prompt 的 ``$conversation_history``
                 变量，供 LLM 决策时反重复（特别是主动发言时避免重复已聊过的话题）。
+            outline_text: 当前直播大纲的渲染文本（可选）。由调用方（如 AmaidesuDecider
+                Task 10 编排层）从 ``OutlineState`` 拼装后传入，描述当前环节的
+                title / task_description / key_points / 环节剩余时长 + 整场进度
+                （已进行时长 / 总计划时长 / 百分比）。``None`` 或空字符串时使用占位文本
+                "（当前无直播大纲）"——Planner 在未启用大纲机制时仍可正常工作。
+                透传到 prompt 的 ``$outline`` 变量，**注意**：是任务上下文注入，不
+                改变 Planner 零人设原则。
 
         Returns:
             DecisionPlan：解析成功时返回；LLM 异常 / 脏 JSON / 调用失败时返回 None，
@@ -156,6 +164,10 @@ class Planner:
         history_text = self._render_history(history)
         action_list = self._get_action_list()
 
+        # 大纲上下文：None / 空串时用占位文本，避免模板中出现字面 $outline
+        # 占位文本与模板中的"无大纲"提示对齐，让 LLM 知道"本场未启用大纲"
+        outline_render = outline_text if outline_text else "（当前无直播大纲）"
+
         # 2. 渲染 prompt（★ 无 persona 变量）
         #    forced / proactive 透传为字符串（"true"/"false"），对齐模板中的文档约定
         try:
@@ -167,6 +179,7 @@ class Planner:
                 proactive=str(proactive).lower(),
                 action_list=action_list,
                 conversation_history=history_text,
+                outline=outline_render,
             )
         except Exception as e:
             self.logger.error(f"渲染 Planner prompt 失败: {e}", exc_info=True)

@@ -253,3 +253,50 @@ export * from './llm';
 
 // Re-export Trace types
 export * from './trace';
+
+// ============================================================
+// 直播大纲 (Outline) 类型 — 对应 src/stages/decision/deciders/amaidesu/outline.py
+// 任务 11: Dashboard 在线编辑页 (Task 13)
+// ============================================================
+
+/** 大纲分支（环节内可选跳转） */
+export interface OutlineBranchData {
+  branch_id: string;
+  description: string;
+  target_segment_id: string;
+}
+
+/** 大纲单个环节 */
+export interface OutlineSegmentData {
+  id: string;
+  title: string;
+  task_description: string;
+  duration_ms: number;
+  min_duration_ms?: number | null;
+  key_points: string[];
+  branches: OutlineBranchData[];
+}
+
+/** `GET /api/v1/outline/segments` 响应 */
+export interface OutlineSegmentsResponse {
+  loaded: boolean;
+  outline_id?: string | null;
+  title?: string | null;
+  fallback_segment_id?: string | null;
+  path?: string | null;
+  segments: OutlineSegmentData[];
+}
+
+/** `PUT /api/v1/outline/file` 请求体 */
+export interface OutlineFileWriteRequest {
+  path: string;
+  content: string;
+}
+
+/** `PUT /api/v1/outline/file` 响应 */
+export interface OutlineFileWriteResponse {
+  status: string;
+  path: string;
+  bytes_written?: number;
+  note?: string;
+}

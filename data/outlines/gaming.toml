@@ -1,0 +1,48 @@
+# 游戏专场大纲示例:含 1 个分支
+#
+# 适用场景:某款游戏直播,玩家在某个环节可选择切换到另一款游戏。
+# 分支说明:在主游戏中,如果观众强烈反馈想看"恐怖游戏"片段,可跳到
+#          `horror_demo` 环节(branch target);其他情况按时间推进。
+
+outline_id = "gaming_session_v1"
+title = "游戏专场示例大纲"
+
+# fallback:分支未命中时(普通情况)回退到收尾
+# (放在 segments 之前以避免歧义,虽然 TOML 允许之后写,但更稳)
+fallback_segment_id = "gaming_outro"
+
+[[segments]]
+id = "gaming_intro"
+title = "游戏开场"
+task_description = "介绍今天要玩的游戏、版本、目标;简短预热。"
+duration_ms = 120000   # 2 分钟
+
+[[segments]]
+id = "main_game"
+title = "主游戏实况"
+task_description = "游玩主游戏;讲解操作、回应弹幕,允许即兴玩梗。"
+duration_ms = 1200000  # 20 分钟
+min_duration_ms = 600000  # 至少玩 10 分钟,不能秒跳
+key_points = [
+    "解说当前关卡思路",
+    "回应弹幕提议",
+]
+branches = [
+    { branch_id = "audience_wants_horror", description = "观众弹幕强烈反馈想看恐怖游戏片段(出现'恐怖'、'恐怖游戏'、'jump scare'等高频词),切到 horror_demo", target_segment_id = "horror_demo" },
+]
+
+[[segments]]
+id = "horror_demo"
+title = "恐怖游戏试玩片段"
+task_description = "短暂试玩恐怖游戏,主要展示氛围和 jump scare;保持反应夸张有趣。"
+duration_ms = 600000   # 10 分钟
+key_points = [
+    "展示气氛",
+    "夸张反应",
+]
+
+[[segments]]
+id = "gaming_outro"
+title = "游戏收尾"
+task_description = "感谢观看,聊聊下一场游戏计划;留个开放问题。"
+duration_ms = 120000   # 2 分钟

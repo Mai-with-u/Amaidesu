@@ -474,6 +474,152 @@ class DeciderManager:
         self.logger.info(f"触发主动发言: {len(triggered)} 个 Decider: {triggered}")
         return triggered
 
+    # ------------------------------------------------------------------
+    # 直播大纲（outline）鸭子类型转发
+    #
+    # 任务 11 产物：把 Dashboard 的大纲控制/查询/保存请求转发到实现了 outline_*
+    # 方法的 Decider（当前 AmaidesuDecider 在 T10 中实现）。任一 Decider 都未
+    # 实现时返回 ``{"error": "not_implemented", "status_code": 501, ...}``
+    # 风格响应，由 Dashboard API 层转换为 HTTP 501。
+    #
+    # 与 ``trigger_proactive`` 的关键区别：每个方法只取**首个**成功返回 dict 的
+    # Decider 结果（大纲是单例语义，多 Decider 同时持有大纲会造成状态分叉）。
+    # ------------------------------------------------------------------
+
+    async def outline_state(self) -> Dict[str, Any]:
+        """转发大纲状态查询到首个实现 ``outline_state`` 的 Decider。
+
+        期望 Decider 返回 ``OutlineState.get_snapshot()`` 风格 dict（含
+        ``status`` / ``current_segment`` / ``elapsed_live_ms`` 等字段），由
+        Dashboard API 层做字段重映射。
+
+        Returns:
+            Decider 返回的 dict；无 Decider 实现时返回 ``{"error":
+            "not_implemented", "status_code": 501, ...}`` 标记
+        """
+        return await self._dispatch_outline_call(
+            method_name="outline_state",
+            call=lambda decider: decider.outline_state(),
+        )
+
+    async def outline_load(self, path: str) -> Dict[str, Any]:
+        """转发大纲加载到首个实现 ``outline_load`` 的 Decider。
+
+        Args:
+            path: 大纲 TOML 文件路径（相对项目根或绝对路径）
+
+        Returns:
+            Decider 返回的 dict（成功 ``{"ok": True, ...}`` / 失败 ``{"ok":
+            False, "error": ..., "detail": ...}``）；无 Decider 实现时返回 501 标记
+        """
+        return await self._dispatch_outline_call(
+            method_name="outline_load",
+            call=lambda decider: decider.outline_load(path),
+        )
+
+    async def outline_control(self, action: str, **kwargs: Any) -> Dict[str, Any]:
+        """转发手动控制（skip/pause/resume/rewind/jump）到首个实现 ``outline_control`` 的 Decider。
+
+        Args:
+            action: 控制动作字符串（``skip`` / ``pause`` / ``resume`` / ``rewind`` / ``jump``）
+            **kwargs: 透传给 Decider 的额外参数（如 ``segment_id`` 用于 jump）
+
+        Returns:
+            Decider 返回的 dict；无 Decider 实现时返回 501 标记
+        """
+        return await self._dispatch_outline_call(
+            method_name="outline_control",
+            call=lambda decider: decider.outline_control(action, **kwargs),
+        )
+
+    async def outline_save_file(self, path: str, content: str) -> Dict[str, Any]:
+        """转发大纲 TOML 写回到首个实现 ``outline_save_file`` 的 Decider。
+
+        语义：保存到磁盘后**不**主动触发热重载——下一段生效是既定契约。
+
+        Args:
+            path: 目标 TOML 文件路径
+            content: TOML 完整内容（覆盖写入）
+
+        Returns:
+            Decider 返回的 dict；无 Decider 实现时返回 501 标记
+        """
+        return await self._dispatch_outline_call(
+            method_name="outline_save_file",
+            call=lambda decider: decider.outline_save_file(path, content),
+        )
+
+    async def outline_segments(self) -> Dict[str, Any]:
+        """转发"完整环节列表"查询到首个实现 ``outline_segments`` 的 Decider。
+
+        期望 Decider 返回 ``{"loaded": bool, "outline_id": ..., "title": ...,
+        "segments": [OutlineSegment, ...], ...}`` 格式，供 Dashboard 编辑页渲染。
+
+        Returns:
+            Decider 返回的 dict；无 Decider 实现时返回 501 标记
+        """
+        return await self._dispatch_outline_call(
+            method_name="outline_segments",
+            call=lambda decider: decider.outline_segments(),
+        )
+
+    async def _dispatch_outline_call(
+        self,
+        *,
+        method_name: str,
+        call: Any,
+    ) -> Dict[str, Any]:
+        """``outline_*`` 方法的鸭子类型分派助手。
+
+        行为契约：
+            - 遍历 ``self._deciders``，取**首个**实现 ``method_name`` 的 Decider 调用 ``call(decider)``
+            - 任一 Decider 异常被隔离（记录日志），不影响后续 Decider
+            - 取首个返回 dict 且 ``error != "not_implemented"`` 的结果
+            - 若无任何 Decider 实现 ``method_name``，或所有实现都失败 /
+              返回 ``not_implemented``，返回 ``{"error": "not_implemented",
+              "status_code": 501, "message": "..."}`` 标记
+
+        Args:
+            method_name: 方法名（仅用于日志/标记）
+            call: 单参数（decider）的可调用，调用对应 Decider 的 ``method_name`` 方法
+
+        Returns:
+            dict（Decider 透传结果或 501 标记）
+        """
+        if not self._deciders:
+            self.logger.warning(f"当前未设置任何 Decider，跳过大纲 {method_name} 转发")
+        else:
+            for name, decider in self._deciders.items():
+                if not hasattr(decider, method_name):
+                    continue
+                try:
+                    result = await call(decider)
+                except Exception as e:
+                    self.logger.error(
+                        f"Decider '{name}' 大纲 {method_name} 调用失败: {e}",
+                        exc_info=True,
+                    )
+                    continue
+                if isinstance(result, dict):
+                    # 透传 not_implemented 标记，跳过此 Decider（可能它声明了
+                    # 方法但内部放弃，由下一个 Decider 兜底——当前只有 Amaidesu
+                    # 实现，这里只是防御性写法）
+                    if result.get("error") == "not_implemented":
+                        continue
+                    return result
+                # Decider 返回非 dict 视为格式错误，跳过；保留本方法返回 501
+                self.logger.warning(f"Decider '{name}' 大纲 {method_name} 返回非 dict: {type(result).__name__}")
+
+        return {
+            "error": "not_implemented",
+            "status_code": 501,
+            "method": method_name,
+            "message": (
+                f"大纲 {method_name} 接口尚未由任何已激活的 Decider 实现。"
+                "请确认 AmaidesuDecider 已启用且支持 outline 功能。"
+            ),
+        }
+
     async def switch_decider(self, decider_name: str, config: Dict[str, Any]) -> None:
         """
         切换决策Decider（向后兼容方法）

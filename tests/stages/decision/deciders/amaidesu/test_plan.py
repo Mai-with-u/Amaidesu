@@ -4,7 +4,8 @@
 - 默认值构造
 - 字段赋值
 - `extra="forbid"` 拒绝未知字段（特别是已砍的 `wait_ms`）
-- `version` 默认 "1.0"
+- `version` 默认 "1.1"（自 2026-08 加入 may_advance/need_more_time/branch_id 后从 1.0 升 1.1）
+- 新增 AI 顺带评估字段（may_advance / need_more_time / branch_id）默认值与 JSON 解析
 """
 
 from __future__ import annotations
@@ -33,12 +34,15 @@ class TestDecisionPlanDefaults:
         assert plan.topic_summary == ""
         assert plan.reply_guidance == ""
         assert plan.confidence == 0.0
-        assert plan.version == "1.0"
+        assert plan.may_advance is False
+        assert plan.need_more_time is False
+        assert plan.branch_id is None
+        assert plan.version == "1.1"
 
-    def test_version_defaults_to_1_0(self) -> None:
-        """version 字段必须默认 "1.0"。"""
+    def test_version_defaults_to_1_1(self) -> None:
+        """version 字段必须默认 "1.1"。"""
         plan = DecisionPlan()
-        assert plan.version == "1.0"
+        assert plan.version == "1.1"
 
 
 class TestDecisionPlanAssignment:
@@ -59,7 +63,7 @@ class TestDecisionPlanAssignment:
         assert plan.reply_guidance == "回应"
         assert plan.confidence == pytest.approx(0.8)
         # version 未传，仍为默认
-        assert plan.version == "1.0"
+        assert plan.version == "1.1"
 
     def test_version_can_be_overridden(self) -> None:
         """version 可显式覆盖（未来 schema 迁移用）。"""
@@ -72,14 +76,17 @@ class TestDecisionPlanAssignment:
         dumped = plan.model_dump()
         assert dumped["should_reply"] is True
         assert dumped["target"] == "m1"
-        assert dumped["version"] == "1.0"
-        # 完整字段集
+        assert dumped["version"] == "1.1"
+        # 完整字段集（含 may_advance/need_more_time/branch_id 三个新增字段）
         assert set(dumped.keys()) == {
             "should_reply",
             "target",
             "topic_summary",
             "reply_guidance",
             "confidence",
+            "may_advance",
+            "need_more_time",
+            "branch_id",
             "version",
         }
 

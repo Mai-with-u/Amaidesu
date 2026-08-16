@@ -1,0 +1,42 @@
+# 通用直播大纲示例:开场 → 主题环节 → 互动 → 收尾
+#
+# 适用场景:无特定主题的聊天向直播,4 段约 25 分钟。
+# 注释:TOML 中以 # 开头的行会被忽略(可在编辑时被人类阅读)。
+
+outline_id = "live_generic_v1"
+title = "通用聊天直播大纲"
+
+[[segments]]
+id = "intro"
+title = "开场寒暄"
+task_description = "用轻松的语气开场,问候观众、聊聊今天的计划;如观众不多可主动分享近况。"
+duration_ms = 180000   # 3 分钟
+min_duration_ms = 60000  # 至少停留 1 分钟,避免秒过
+key_points = [
+    "问候 + 自报身份",
+    "今天大概会聊什么",
+]
+
+[[segments]]
+id = "main_topic"
+title = "主题环节"
+task_description = "围绕一个核心话题深入展开,可自由联想、举例;鼓励弹幕互动。"
+duration_ms = 900000   # 15 分钟
+min_duration_ms = 300000  # 至少停留 5 分钟,主题不能水
+key_points = [
+    "抛出问题吸引弹幕",
+    "回应观众观点",
+    "举具体例子",
+]
+
+[[segments]]
+id = "interaction"
+title = "互动环节"
+task_description = "读弹幕、回答问题、做小互动;节奏放慢,允许长回复。"
+duration_ms = 300000   # 5 分钟
+
+[[segments]]
+id = "outro"
+title = "收尾"
+task_description = "感谢观看、预告下次直播、留个开放问题邀请弹幕。"
+duration_ms = 120000   # 2 分钟

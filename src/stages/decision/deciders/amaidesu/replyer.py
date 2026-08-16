@@ -94,6 +94,7 @@ class Replyer:
         batch: List[NormalizedMessage],
         persona: Dict[str, Any],
         history: Optional[List[Any]] = None,
+        outline: Optional[str] = None,
     ) -> Optional[Intent]:
         """根据 Planner 的决策计划 + 弹幕批次 + 人设，生成实际回复 Intent。
 
@@ -112,6 +113,14 @@ class Replyer:
                      role 可能是枚举（取 `.value`），content 是 str。None 表示无历史可用，
                      渲染为占位文本。用于让 Replyer 看到自己最近说过的话，避免冷场时反复
                      生成相同句式。
+            outline: 当前直播大纲的渲染文本（可选）。由调用方（如 AmaidesuDecider
+                Task 10 编排层）从 ``OutlineState`` 拼装后传入，描述当前环节的
+                title / task_description / key_points / 环节剩余时长 + 整场进度
+                （已进行时长 / 总计划时长 / 百分比）。``None`` 或空字符串时使用占位文本
+                "（当前无直播大纲）"——Replyer 在未启用大纲机制时仍可正常工作。
+                透传到 prompt 的 ``$outline`` 变量。**注意**：$outline 是任务上下文
+                注入，不改变 Replyer 注入人设的分工（人设三件套 $personality /
+                $style_constraints / $bot_name 仍由本类负责注入）。
 
         Returns:
             Intent 实例；LLM 异常或解析失败时返回 None（silent 降级）。
@@ -124,8 +133,8 @@ class Replyer:
         # 惰性加载能力快照（用于动作白名单）
         self._ensure_capabilities()
 
-        # ① 注入人设 + 决策计划 + 弹幕上下文 + 会话历史，渲染 Replyer prompt
-        prompt = self._render_prompt(plan, batch, persona, history)
+        # ① 注入人设 + 决策计划 + 弹幕上下文 + 会话历史 + 大纲上下文，渲染 Replyer prompt
+        prompt = self._render_prompt(plan, batch, persona, history, outline)
 
         # ② 调用高质量 LLM（无 tools）
         try:
@@ -170,12 +179,17 @@ class Replyer:
         batch: List[NormalizedMessage],
         persona: Dict[str, Any],
         history: Optional[List[Any]] = None,
+        outline: Optional[str] = None,
     ) -> str:
-        """渲染 Replyer prompt，注入人设三件套 + 计划 + 弹幕 + 会话历史。
+        """渲染 Replyer prompt，注入人设三件套 + 计划 + 弹幕 + 会话历史 + 大纲上下文。
 
         人设分离承诺的另一半：$personality / $style_constraints / $bot_name 必须传给模板。
         会话历史用于让 Replyer 看到自己最近说过的话，避免冷场反复生成相同句式。
+        大纲上下文（$outline）是任务上下文注入（当前环节 / 整场进度），由调用方拼装后传入；
+        None / 空串时用占位文本，避免模板出现字面 $outline。
         """
+        # 大纲上下文：None / 空串时用占位文本，与 Planner 对齐
+        outline_render = outline if outline else "（当前无直播大纲）"
         return self._prompt_service.render_safe(
             _REPLYER_TEMPLATE,
             bot_name=persona.get("bot_name", self._bot_name),
@@ -185,6 +199,7 @@ class Replyer:
             danmaku_batch=_render_batch_text(batch),
             conversation_history=_render_history_text(history),
             action_list=self._action_list_str or "（当前无可用动作，action 请留空字符串）",
+            outline=outline_render,
         )
 
     # ==================== Intent 组装（情绪降级 + 动作白名单） ====================

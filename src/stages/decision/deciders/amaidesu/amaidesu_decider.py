@@ -39,9 +39,12 @@ from src.modules.prompts.manager import PromptManager
 from src.modules.types import Intent
 from src.modules.types.base.normalized_message import NormalizedMessage
 from src.modules.types.capabilities import CapabilitiesProvider
-from src.modules.time_utils import now_ms
+from src.modules.time_utils import format_duration_ms, now_ms
 
 from .message_buffer import MessageBuffer
+from .outline_loader import OutlineLoader
+from .outline_scheduler import OutlineScheduler
+from .outline_state import OutlineState
 from .planner import Planner
 from .proactive_trigger import ProactiveTrigger
 from .replyer import Replyer
@@ -142,6 +145,30 @@ class AmaidesuDecider:
         proactive_max_per_hour: int = Field(default=6, ge=1, description="每小时主动发言次数上限（频率限制）")
         proactive_topic_required: bool = Field(default=True, description="话题摘要缺失时是否跳过触发（防无话找话）")
 
+        # ===== 直播大纲（Live Stream Outline）字段（Task 2）=====
+        outline_enabled: bool = Field(default=False, description="直播大纲总开关（默认关闭，需显式开启）")
+        outline_path: str = Field(default="", description="大纲 TOML 文件路径（相对项目根）；为空时不加载任何大纲")
+        outline_expand_client: str = Field(
+            default="llm_outline",
+            description="AI 扩展用 LLM profile（独立连接池，仿 llm_summary 先例）",
+        )
+        outline_advance_eval_enabled: bool = Field(
+            default=True,
+            description="Planner 顺带评估开关：产出 may_advance / need_more_time / branch_id",
+        )
+        outline_scheduler_tick_ms: int = Field(
+            default=1000, ge=1, description="大纲调度循环 tick 间隔（毫秒），默认 1s"
+        )
+        outline_auto_start: bool = Field(
+            default=True,
+            description="setup 时自动加载并启动大纲（需 outline_enabled=True 且 outline_path 非空）",
+        )
+        outline_speech_interval_ms: int = Field(
+            default=3000,
+            ge=1000,
+            description="大纲环节内两次主动发言最小间隔（毫秒），仅 outline 触发源使用，不受 proactive_min_interval_ms 约束",
+        )
+
     def __init__(
         self,
         config: Dict[str, Any],
@@ -206,6 +233,7 @@ class AmaidesuDecider:
         # ProactiveTrigger 内部用 unprefixed 键（enabled / cold_timeout_ms / ...），
         # 而 ConfigSchema 字段为 proactive_* 前缀；这里手工构造 sub-dict 去掉前缀映射。
         # proactive_enabled → enabled（其余 6 个字段按规律映射）。
+        # outline_speech_interval_ms 是 outline 触发源独立字段，不走 proactive_ 前缀。
         self._proactive_trigger = ProactiveTrigger(
             config={
                 "enabled": self.typed_config.proactive_enabled,
@@ -215,10 +243,25 @@ class AmaidesuDecider:
                 "schedule_only_cold": self.typed_config.proactive_schedule_only_cold,
                 "max_per_hour": self.typed_config.proactive_max_per_hour,
                 "topic_required": self.typed_config.proactive_topic_required,
+                "outline_speech_interval_ms": self.typed_config.outline_speech_interval_ms,
             }
         )
         # 外部 API 触发的"一次性"待消费标志（DeciderManager.trigger_proactive → 这里）
         self._external_proactive_pending: bool = False
+
+        # ===== 直播大纲（Live Stream Outline）组件（Task 10）=====
+        # 仅在 setup() 中按 ``outline_enabled`` 决定是否构造。失败时全部置 None（降级为
+        # "无大纲"模式继续），不中断直播。所有 outline_* 鸭子类型方法在组件为 None 时
+        # 返回 501 风格响应，由 DeciderManager 透传给 Dashboard API 层。
+        self._outline_loader: Optional[OutlineLoader] = None
+        self._outline_state: Optional[OutlineState] = None
+        self._outline_scheduler: Optional[OutlineScheduler] = None
+        # 当前已加载的大纲文件路径（供 outline_load 重载 + outline_segments 暴露给前端）
+        self._outline_loader_path: Optional[str] = None
+        # 大纲推进回调触发的一次性"待消费"标志——on_advance 同步方法仅置位，
+        # 实际触发在 _maybe_flush 下一 tick 的 buffer 空分支内消费，行为对齐
+        # ``_external_proactive_pending`` 模式
+        self._outline_proactive_pending: bool = False
 
         # 旧字段保留（向后兼容 stats / get_info）
         self.client_type = self.typed_config.client
@@ -249,6 +292,11 @@ class AmaidesuDecider:
         self._flush_task = asyncio.create_task(self._flush_loop())
         # 启动房间状态后台摘要循环（默认启用，可通过 room_state_enabled=False 关闭）
         await self._room_state_loop.start()
+        # 启动直播大纲组件（Task 10）：
+        # 仅 outline_enabled=True 时构造；outline_path 为空 / 加载失败时降级为 None，
+        # 直播继续正常运行（outline_* 鸭子类型方法返回 501）。
+        if self.typed_config.outline_enabled:
+            await self._start_outline_components()
         self.logger.info(
             f"AmaidesuDecider 初始化完成 "
             f"(Planner client={self.typed_config.planner_client}, "
@@ -285,6 +333,19 @@ class AmaidesuDecider:
 
         # 停止房间状态后台摘要循环
         await self._room_state_loop.stop()
+
+        # 停止直播大纲调度循环（Task 10，仿 room_state_loop.stop() 模式）
+        if self._outline_scheduler is not None:
+            try:
+                await self._outline_scheduler.stop()
+            except Exception as e:
+                self.logger.error(f"停止 OutlineScheduler 失败: {e}", exc_info=True)
+            self._outline_scheduler = None
+        # 组件句柄清空，鸭子类型方法在 cleanup 后返回 501
+        self._outline_loader = None
+        self._outline_state = None
+        self._outline_loader_path = None
+        self._outline_proactive_pending = False
 
         if self._flush_task is not None:
             self._flush_task.cancel()
@@ -336,10 +397,21 @@ class AmaidesuDecider:
             # 必须放在锁内：保证"外部 trigger_proactive + 本 tick 主动触发"原子；
             # 锁外提前 return 会让 buffer 空时永远进不来此处。
             if self._buffer.is_empty:
+                # 一次性消费 _outline_proactive_pending（on_advance 同步置位 → 本 tick 消费）
+                # 与 _external_proactive_pending 同样在锁内消费，保证标志生命周期清晰
+                outline_pending = self._outline_proactive_pending
+                self._outline_proactive_pending = False
+                # outline_pending（环节切换即时信号）单独传给 ProactiveTrigger：仅受总开关
+                # 约束，立即触发；outline_ready（环节内持续发言信号）由 _is_outline_active
+                # 判定，绕过通用 min_interval/max_per_hour/topic_required，按
+                # outline_speech_interval_ms 节奏触发。
+                # 优先级：external > outline > schedule > cold（ProactiveTrigger 内部处理）
                 reason = self._proactive_trigger.should_trigger(
                     self._room_state,
                     now_ms(),
                     external_pending=self._external_proactive_pending,
+                    outline_pending=outline_pending,
+                    outline_ready=self._is_outline_active(),
                 )
                 # 一次性消费 external_pending（无论是否触发，都视为已处理）
                 self._external_proactive_pending = False
@@ -423,8 +495,18 @@ class AmaidesuDecider:
         self.logger.info(
             f"Planner 决策中 ({len(batch)} 条, 触发: {trigger_reason}, forced={forced}, proactive={proactive})"
         )
+        # 拼装 outline 上下文（Task 10）：从 OutlineState 取当前环节详情 + 整场进度信息
+        # → 渲染为 outline_text 注入 Planner/Replyer 的 $outline 变量。
+        # 大纲未激活时返回 None，Planner/Replyer 内部走"无大纲"占位。
+        outline_text = self._build_outline_text()
         try:
-            plan = await self._planner.plan(batch, forced=forced, proactive=proactive, history=history)
+            plan = await self._planner.plan(
+                batch,
+                forced=forced,
+                proactive=proactive,
+                history=history,
+                outline_text=outline_text,
+            )
         except Exception as e:
             # 防御性兜底：Planner 内部已捕获异常返回 None
             self.logger.error(f"Planner 调用异常: {e}", exc_info=True)
@@ -442,12 +524,14 @@ class AmaidesuDecider:
             self._timing_gate.record_result(replied=False)
             self._total_no_action += 1
             self.logger.info(f"Planner 决定本批不发言 (confidence={plan.confidence:.2f}, target={plan.target!r})")
+            # 消费 Planner 顺带评估（即便不发言：AI 也可能在 should_reply=false 时给出评估意见）
+            self._consume_plan_assessment(plan)
             return
 
         # ③ Replyer：基于 plan + 人设 + 弹幕生成 Intent
         persona = self._get_persona_config()
         try:
-            intent = await self._replyer.generate(plan, batch, persona, history=history)
+            intent = await self._replyer.generate(plan, batch, persona, history=history, outline=outline_text)
         except Exception as e:
             # 防御性兜底：Replyer 内部已捕获异常返回 None
             self.logger.error(f"Replyer 调用异常: {e}", exc_info=True)
@@ -491,6 +575,410 @@ class AmaidesuDecider:
             # ProactiveTrigger 只需 reason 后缀做日志/统计，本组件不区分处理。
             reason = trigger_reason.removeprefix("proactive:") if trigger_reason else "unknown"
             self._proactive_trigger.record_trigger(reason, now)
+
+        # ⑥ 消费 Planner 顺带评估（Task 10）：may_advance/need_more_time/branch_id
+        # Scheduler 内部"全默认值 = 尊重沉默"——即便 LLM 没输出评估字段也安全。
+        # 此处不阻塞当前发言：on_advance 触发的 proactive 在下一 tick 消费
+        self._consume_plan_assessment(plan)
+
+    # ==================== 直播大纲（Live Stream Outline）辅助方法（Task 10）====================
+
+    async def _start_outline_components(self) -> None:
+        """构造 + 启动大纲组件（Loader / State / Scheduler）。
+
+        流程：
+            1. 检查 ``outline_path`` 非空（为空时仅日志提示，不构造任何组件）
+            2. 构造 :class:`OutlineLoader` 并 ``await load(path)``
+            3. 构造 :class:`OutlineState` 并 ``start(outline)``（推进到首段、记锚点）
+            4. 构造 :class:`OutlineScheduler` 并 ``start()``，注入 ``on_advance`` 回调
+            5. 任意步骤异常 → log + 清理已构造组件 + 降级为 None（直播继续运行）
+
+        配置：
+            - ``outline_auto_start=False`` 时仅构造 Loader/State，不启动 Scheduler
+              （用于延迟启动场景，Task 10 默认 True）
+        """
+        path = self.typed_config.outline_path
+        if not path:
+            self.logger.info("大纲未配置路径（outline_path 为空），跳过加载")
+            return
+        try:
+            self._outline_loader = OutlineLoader(
+                llm_manager=self._llm_service,
+                prompt_manager=self._prompt_service,
+                config=self.typed_config,
+            )
+            outline = await self._outline_loader.load(path)
+            self._outline_state = OutlineState()
+            self._outline_state.start(outline)
+            self._outline_loader_path = path
+            if self.typed_config.outline_auto_start:
+                self._outline_scheduler = OutlineScheduler(
+                    config=self.typed_config,
+                    state=self._outline_state,
+                    loader=self._outline_loader,
+                    on_advance=self._on_outline_advance,
+                )
+                await self._outline_scheduler.start()
+            self.logger.info(
+                f"大纲已加载: path={path!r}, outline_id={outline.outline_id!r}, "
+                f"segments={len(outline.segments)}, "
+                f"auto_start={self.typed_config.outline_auto_start}"
+            )
+        except Exception as e:
+            self.logger.error(
+                f"大纲加载失败，降级为无大纲模式（直播继续）: {e}",
+                exc_info=True,
+            )
+            # 失败时清理已部分构造的组件
+            if self._outline_scheduler is not None:
+                try:
+                    await self._outline_scheduler.stop()
+                except Exception:
+                    pass
+            self._outline_loader = None
+            self._outline_state = None
+            self._outline_scheduler = None
+            self._outline_loader_path = None
+
+    def _is_outline_active(self) -> bool:
+        """当前是否处于"大纲激活且有当前环节"状态。
+
+        用于 ``_maybe_flush`` 判定 ``outline_ready`` 参数（Task 8 ProactiveTrigger 新增）
+        以及 ``_build_outline_text`` 是否返回非 None 内容。
+        """
+        if self._outline_state is None:
+            return False
+        if self._outline_state.status.value != "running":
+            return False
+        return self._outline_state.current_segment_id is not None
+
+    def _find_outline_segment(self, segment_id: str) -> Any:
+        """按 id 在当前大纲中查找环节对象（duck-typed）。
+
+        Args:
+            segment_id: 目标环节 id
+
+        Returns:
+            :class:`OutlineSegment` 或 None（未加载/未找到）
+        """
+        if self._outline_state is None or self._outline_state.outline is None:
+            return None
+        for seg in self._outline_state.outline.segments:
+            if getattr(seg, "id", None) == segment_id:
+                return seg
+        return None
+
+    def _build_outline_text(self) -> Optional[str]:
+        """拼装供 Planner/Replyer ``$outline`` 变量注入的文本（Task 10）。
+
+        格式（与 Task 7 模板约定一致）::
+
+            当前环节：<title>（第 N/M 环节）
+            任务：<task_description>
+            话题引导：<topic_guidance from expanded_cache, 可选>
+            关键节点：<key_points.join('、'), 可选>
+            环节剩余：约 <format_duration_ms(remaining_ms)>
+            整场进度：已进行 <elapsed> / 共 <total>（<pct>%）
+
+        Returns:
+            渲染后的多行文本；大纲未激活时返回 None（Planner/Replyer 走"无大纲"占位）。
+        """
+        if not self._is_outline_active():
+            return None
+        state = self._outline_state
+        assert state is not None  # 仅供类型推断，_is_outline_active 已守
+        seg_id = state.current_segment_id
+        if seg_id is None:
+            return None
+        seg = self._find_outline_segment(seg_id)
+        if seg is None:
+            return None
+        outline = state.outline
+        if outline is None:
+            return None
+        seg_ids = [s.id for s in outline.segments]
+        try:
+            idx = seg_ids.index(seg_id)
+        except ValueError:
+            return None
+        total = len(outline.segments)
+        title = getattr(seg, "title", "") or ""
+        task = getattr(seg, "task_description", "") or ""
+        key_points = list(getattr(seg, "key_points", []) or [])
+        # 话题引导：来自 OutlineLoader 异步扩展缓存（未扩展时退化为任务描述）
+        expanded = state.get_expanded(seg_id)
+        topic_guidance = (getattr(expanded, "topic_guidance", "") if expanded is not None else "") or task
+        remaining_ms = state.get_current_segment_remaining_ms()
+        elapsed_live = state.get_elapsed_live_ms()
+        total_planned = state.get_total_planned_ms()
+        progress_pct = state.get_progress_percent()
+
+        lines: List[str] = []
+        lines.append(f"当前环节：{title}（第 {idx + 1}/{total} 环节）")
+        if task:
+            lines.append(f"任务：{task}")
+        if topic_guidance and topic_guidance != task:
+            # 任务与引导内容一致时省略引导，避免冗余
+            lines.append(f"话题引导：{topic_guidance}")
+        if key_points:
+            lines.append(f"关键节点：{'、'.join(key_points)}")
+        lines.append(f"环节剩余：约 {format_duration_ms(remaining_ms)}")
+        if elapsed_live is not None and total_planned is not None and progress_pct is not None:
+            lines.append(
+                f"整场进度：已进行 {format_duration_ms(elapsed_live)} / "
+                f"共 {format_duration_ms(total_planned)}（{progress_pct:.0f}%）"
+            )
+        return "\n".join(lines)
+
+    def _consume_plan_assessment(self, plan: Any) -> None:
+        """消费 Planner 顺带产出的 AI 评估字段（Task 10 接线入口）。
+
+        委托 :meth:`OutlineScheduler.note_plan_assessment`；scheduler 内部对
+        "全默认值（may_advance=False / need_more_time=False / branch_id=None）"视为
+        尊重沉默，不会触发任何动作；本方法仅在 ``outline_scheduler`` 已构造 +
+        ``outline_advance_eval_enabled=True`` 时调用。
+
+        失败隔离：任何异常被吞掉 + log，不影响当前发言已发布的结果。
+        """
+        if not self.typed_config.outline_advance_eval_enabled:
+            return
+        if self._outline_scheduler is None:
+            return
+        if plan is None:
+            return
+        try:
+            self._outline_scheduler.note_plan_assessment(
+                may_advance=getattr(plan, "may_advance", False),
+                need_more_time=getattr(plan, "need_more_time", False),
+                branch_id=getattr(plan, "branch_id", None),
+            )
+        except Exception as e:
+            self.logger.error(f"消费 Planner 评估异常（不影响当前发言）: {e}", exc_info=True)
+
+    def _on_outline_advance(self, new_segment_id: str, reason: Optional[str]) -> None:
+        """``OutlineScheduler`` 推进回调（同步方法，签名由 Scheduler 定义）。
+
+        行为：仅置 ``_outline_proactive_pending=True``，让下一次 ``_maybe_flush`` 的
+        buffer 空分支以 ``outline`` 触发源立即触发一次 proactive 发言（按新环节
+        任务描述生成开场内容）。reason 仅做日志标注，不参与触发决策。
+
+        同步方法的原因：Scheduler 的 ``on_advance`` 签名为 ``Callable[[str, Optional[str]], None]``，
+        而 proactive 决策链由 ``_flush_loop`` 异步驱动——回调只需"埋点"，不直接调 LLM。
+        """
+        self._outline_proactive_pending = True
+        self.logger.info(
+            f"大纲推进回调: new_segment={new_segment_id!r}, reason={reason!r}, "
+            f"已置 outline_proactive_pending=True（下一 tick 消费）"
+        )
+
+    # ==================== 鸭子类型方法：Dashboard 控制接口（Task 10/11）====================
+
+    async def outline_state(self) -> Dict[str, Any]:
+        """返回当前大纲运行时快照（供 Dashboard ``GET /api/v1/outline/state``）。
+
+        透传 :meth:`OutlineState.get_snapshot`，字段契约与 API 层 ``_build_state_response``
+        期望一致（status / current_segment / next_segment / completed_count / total_count /
+        is_paused / elapsed_live_ms / total_planned_ms / progress_percent）。
+
+        Returns:
+            :class:`OutlineState.get_snapshot` 风格 dict；组件未构造时返回 501 风格
+            标记 dict（由 :class:`DeciderManager.outline_state` 透传给 Dashboard API 层
+            转换为 HTTP 501）。
+        """
+        if self._outline_state is None:
+            return {
+                "error": "not_implemented",
+                "status_code": 501,
+                "method": "outline_state",
+                "message": "大纲未激活（outline_enabled=False 或加载失败）",
+            }
+        try:
+            return self._outline_state.get_snapshot()
+        except Exception as e:
+            self.logger.error(f"outline_state 异常: {e}", exc_info=True)
+            return {"error": "unknown", "status_code": 500, "detail": str(e)}
+
+    async def outline_load(self, path: str) -> Dict[str, Any]:
+        """加载指定 TOML 大纲文件（供 Dashboard ``POST /api/v1/outline/load``）。
+
+        流程：
+            1. 检查组件已构造（无则惰性构造 Loader + State，便于用户在 outline_enabled=False
+               时仍可通过 API 加载大纲）
+            2. ``await loader.load(path)`` → :class:`StreamOutline`
+            3. ``state.unload()`` + ``state.start(new_outline)`` 重置运行时
+            4. 重启 Scheduler（先 stop 再 start，保持 on_advance 回调绑定）
+
+        Returns:
+            成功：``{"ok": True, "path": ..., "outline_id": ...}``；
+            失败：``{"ok": False, "error": "not_found" | "parse_error" | ..., "detail": ...}``。
+        """
+        try:
+            # 惰性构造（允许 outline_enabled=False 时通过 API 加载）
+            if self._outline_loader is None or self._outline_state is None:
+                self._outline_loader = OutlineLoader(
+                    llm_manager=self._llm_service,
+                    prompt_manager=self._prompt_service,
+                    config=self.typed_config,
+                )
+                self._outline_state = OutlineState()
+            loader = self._outline_loader
+            state = self._outline_state
+            assert loader is not None and state is not None  # 仅为类型推断
+            try:
+                outline = await loader.load(path)
+            except FileNotFoundError:
+                return {
+                    "ok": False,
+                    "error": "not_found",
+                    "detail": f"大纲文件不存在: {path}",
+                }
+            except (ValueError, Exception) as e:
+                # tomllib.TOMLDecodeError 与 pydantic.ValidationError 都属 Exception 子类
+                err_name = type(e).__name__
+                # 区分 TOML 语法错误与字段校验错误
+                if "TOML" in err_name or "Validation" in err_name:
+                    return {
+                        "ok": False,
+                        "error": "parse_error",
+                        "detail": str(e),
+                    }
+                return {
+                    "ok": False,
+                    "error": "load_failed",
+                    "detail": str(e),
+                }
+            # 重置 state + scheduler
+            if self._outline_scheduler is not None:
+                try:
+                    await self._outline_scheduler.stop()
+                except Exception as e:
+                    self.logger.warning(f"旧 scheduler 停止失败（继续重载）: {e}")
+            state.unload()
+            state.start(outline)
+            self._outline_loader_path = path
+            self._outline_scheduler = OutlineScheduler(
+                config=self.typed_config,
+                state=state,
+                loader=loader,
+                on_advance=self._on_outline_advance,
+            )
+            await self._outline_scheduler.start()
+            return {"ok": True, "path": path, "outline_id": outline.outline_id}
+        except Exception as e:
+            self.logger.error(f"outline_load 异常: {e}", exc_info=True)
+            return {"ok": False, "error": "unknown", "detail": str(e)}
+
+    async def outline_control(self, action: str, **kwargs: Any) -> Dict[str, Any]:
+        """手动控制大纲推进（供 Dashboard ``POST /api/v1/outline/control``）。
+
+        委托 :class:`OutlineState` 对应方法（skip / pause / resume / rewind / jump_to）。
+        失败隔离：异常被吞 + log，鸭子类型方法仍返回 200 + 错误字段（由 API 层映射）。
+
+        Args:
+            action: 控制动作字符串（skip / pause / resume / rewind / jump）
+            **kwargs: 透传参数（``segment_id`` 用于 jump）
+
+        Returns:
+            成功：``{"ok": True, "current_segment_id": ...}``；
+            失败：``{"ok": False, "error": "no_active_outline" | "invalid_action" |
+            "segment_not_found" | "unknown", "detail": ...}``。
+        """
+        if self._outline_state is None:
+            return {
+                "ok": False,
+                "error": "no_active_outline",
+                "detail": "大纲未加载（先调用 outline_load）",
+            }
+        state = self._outline_state
+        try:
+            if action == "skip":
+                state.skip()
+            elif action == "pause":
+                state.pause()
+            elif action == "resume":
+                state.resume()
+            elif action == "rewind":
+                state.rewind()
+            elif action == "jump":
+                seg_id = kwargs.get("segment_id")
+                if not seg_id:
+                    return {
+                        "ok": False,
+                        "error": "invalid_action",
+                        "detail": "jump 操作必须指定 segment_id",
+                    }
+                state.jump_to(seg_id)
+            else:
+                return {
+                    "ok": False,
+                    "error": "invalid_action",
+                    "detail": f"未知 action: {action!r}",
+                }
+        except ValueError as e:
+            return {"ok": False, "error": "segment_not_found", "detail": str(e)}
+        except Exception as e:
+            self.logger.error(f"outline_control 异常: {e}", exc_info=True)
+            return {"ok": False, "error": "unknown", "detail": str(e)}
+        return {"ok": True, "current_segment_id": state.current_segment_id}
+
+    async def outline_save_file(self, path: str, content: str) -> Dict[str, Any]:
+        """把编辑后的大纲 TOML 写回磁盘（供 Dashboard ``PUT /api/v1/outline/file``）。
+
+        语义：保存到磁盘**不**主动触发热重载——下一段生效是既定契约（Task 11）。
+        路径安全：拒绝含 ``..`` 段的路径，防越权写入。
+
+        Args:
+            path: 目标 TOML 文件路径（相对项目根或绝对路径）
+            content: TOML 完整内容（覆盖写入）
+
+        Returns:
+            成功：``{"ok": True, "path": ..., "bytes_written": ...}``；
+            失败：``{"ok": False, "error": "invalid_path" | "permission_denied" | ...}``。
+        """
+        try:
+            from pathlib import Path as _Path
+
+            p = _Path(path)
+            # 防越权：拒绝路径中含 .. 段
+            if ".." in p.parts:
+                return {
+                    "ok": False,
+                    "error": "invalid_path",
+                    "detail": f"路径含 .. 段: {path}",
+                }
+            p.parent.mkdir(parents=True, exist_ok=True)
+            data = content.encode("utf-8")
+            p.write_bytes(data)
+            return {"ok": True, "path": str(p), "bytes_written": len(data)}
+        except PermissionError as e:
+            return {"ok": False, "error": "permission_denied", "detail": str(e)}
+        except Exception as e:
+            self.logger.error(f"outline_save_file 异常: {e}", exc_info=True)
+            return {"ok": False, "error": "write_failed", "detail": str(e)}
+
+    async def outline_segments(self) -> Dict[str, Any]:
+        """返回当前大纲完整环节列表（供 Dashboard ``GET /api/v1/outline/segments``）。
+
+        字段契约（与 API 层 ``_build_segments_response`` 期望一致）：
+            - ``loaded``: bool
+            - ``outline_id`` / ``title`` / ``fallback_segment_id`` / ``path``
+            - ``segments``: 环节对象列表（每个含 id / title / task_description /
+              duration_ms / min_duration_ms / key_points / branches，API 层做序列化）
+
+        Returns:
+            大纲元数据 + segments 列表；未加载时返回 ``{"loaded": False, "segments": []}``。
+        """
+        if self._outline_state is None or self._outline_state.outline is None:
+            return {"loaded": False, "segments": []}
+        outline = self._outline_state.outline
+        return {
+            "loaded": True,
+            "outline_id": outline.outline_id,
+            "title": outline.title,
+            "fallback_segment_id": outline.fallback_segment_id,
+            "path": self._outline_loader_path,
+            "segments": list(outline.segments),
+        }
 
     # ==================== 辅助方法 ====================
 

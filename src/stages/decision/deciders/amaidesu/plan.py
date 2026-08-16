@@ -14,7 +14,15 @@
 - `topic_summary`: 当前话题摘要（来自态势缓存，给 Stage 2 提供上下文）
 - `reply_guidance`: 给 Replyer 的回复指引（语气、重点等）
 - `confidence`: 参与判断置信度 [0.0, 1.0]
+- `may_advance`: 本环节是否可提前推进（Planner 顺带评估，仅大纲激活时有意义）
+- `need_more_time`: 本环节是否需延长（Planner 顺带评估，仅大纲激活时有意义）
+- `branch_id`: 选择的分支 id（None=不分支；仅大纲激活时有意义）
 - `version`: schema 版本号，未来字段迁移时用于兼容性判断
+
+兼容性：
+- `may_advance`/`need_more_time`/`branch_id` 全部带默认值，旧 Planner 输出（无这些字段）的
+  JSON 仍可正常解析，本任务不接线 Planner 输出（Task 10 接线）。
+- `version` 由 "1.0" → "1.1"，仅作契约演进标记，不影响解析。
 """
 
 from __future__ import annotations
@@ -38,7 +46,10 @@ class DecisionPlan(BaseModel):
     topic_summary: str = ""
     reply_guidance: str = ""
     confidence: float = 0.0
-    version: str = "1.0"
+    may_advance: bool = False
+    need_more_time: bool = False
+    branch_id: Optional[str] = None
+    version: str = "1.1"
 
 
 __all__ = ["DecisionPlan"]

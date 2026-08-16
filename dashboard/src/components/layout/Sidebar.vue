@@ -68,6 +68,14 @@
           <el-icon><VideoCamera /></el-icon>
           <span>模拟直播间</span>
         </el-menu-item>
+        <el-menu-item index="/outline">
+          <el-icon><List /></el-icon>
+          <span>直播大纲</span>
+        </el-menu-item>
+        <el-menu-item index="/outline/editor">
+          <el-icon><EditPen /></el-icon>
+          <span>大纲编辑</span>
+        </el-menu-item>
         <el-menu-item index="/traces">
           <el-icon><Opportunity /></el-icon>
           <span>链路追踪</span>
@@ -106,6 +114,8 @@ import {
   ChatDotRound,
   Opportunity,
   VideoCamera,
+  List,
+  EditPen,
 } from '@element-plus/icons-vue';
 
 const route = useRoute();

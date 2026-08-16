@@ -73,6 +73,29 @@ curl -X POST http://127.0.0.1:60214/api/v1/proactive/speak \
 
 请求 body `{"topic_hint": "可选,≤200字符"}`,响应 `{"status": "queued", "deciders": [...]}`。Dashboard handler → `DeciderManager.trigger_proactive(topic_hint)` → `AmaidesuDecider.trigger_proactive(topic_hint)` 仅置一次性标志,实际触发受上述频率限制约束,不会立刻交叠到当前弹幕决策。`topic_hint` 仅日志标注,不参与触发决策。
 
+## 直播大纲机制（Outline）
+
+主播用 TOML 预定义直播环节流程，系统按**时间驱动 + AI 顺带评估**自动推进，零观众时也能按计划直播；弹幕可打断但保持大纲对齐。
+
+**组件**（均位于本目录）：
+
+| 文件 | 职责 |
+|------|------|
+| `outline.py` | 数据契约（StreamOutline/OutlineSegment/OutlineBranch）+ TOML 解析 |
+| `outline_loader.py` | TOML 加载 + 每环节动态 AI 扩展（`llm_outline` profile） |
+| `outline_state.py` | 运行时状态机 + 手动控制 + 整场时间轴锚点 |
+| `outline_scheduler.py` | 后台调度循环（时间到期推进 + 评估消费） |
+
+**推进机制**：Planner 每次决策顺带输出 `may_advance` / `need_more_time` / `branch_id`（定义于 `plan.py`，零额外 LLM 成本），由 `OutlineScheduler.note_plan_assessment()` 消费——提前/延长/分支跳转。时间到期自动推进兜底。
+
+**触发优先级**：`ProactiveTrigger` 新增 `outline` 触发源，链为 `external > outline > schedule > cold`；`topic_required` 对 outline 不适用（大纲本身提供话题）。
+
+**整场时间轴**：`outline_started_at_ms` 在 `start()` 时记录，`get_elapsed_live_ms()` / `get_total_planned_ms()` / `get_progress_percent()` 供提示词与 Dashboard 展示。
+
+**Dashboard 接口**：`/api/v1/outline/{state,load,control,file,segments}`（详见 `src/modules/dashboard/api/outline.py`）。
+
+**设计文档**：[`docs/architecture/outline-mechanism.md`](../../../../../docs/architecture/outline-mechanism.md)
+
 ## 如何扩展
 
 - **新增触发源**:在 `ProactiveTrigger.should_trigger()` 末尾加新分支,优先级位于 `cold` 之后(或不参与优先级链,直接返回新 reason);新增配置字段在 `AmaidesuDecider.ConfigSchema` 同步定义并在 `__init__` 手工映射到 unprefixed sub-dict。
@@ -91,4 +114,4 @@ curl -X POST http://127.0.0.1:60214/api/v1/proactive/speak \
 
 ---
 
-*最后更新:2026-08-04(创建,AmaidesuDecider 组件级使用说明)*
+*最后更新:2026-08-13(新增直播大纲机制 outline 组件说明)*

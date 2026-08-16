@@ -49,9 +49,11 @@ class ClientType:
     LLM_LOCAL = "llm_local"  # 本地LLM客户端（Ollama等）
     # 房间状态摘要专用 profile：独立 client 实例，避免与 Planner(llm_fast) 共享连接池（Task 8）
     LLM_SUMMARY = "llm_summary"
+    # 直播大纲专用 profile：独立 client 实例，避免与 Planner(llm_fast) 共享连接池；用于环节动态 AI 扩展
+    LLM_OUTLINE = "llm_outline"
 
     # 所有支持的客户端类型
-    ALL = [LLM, LLM_FAST, VLM, LLM_LOCAL, LLM_SUMMARY]
+    ALL = [LLM, LLM_FAST, VLM, LLM_LOCAL, LLM_SUMMARY, LLM_OUTLINE]
 
     # 默认客户端
     DEFAULT = LLM

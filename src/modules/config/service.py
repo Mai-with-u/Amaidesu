@@ -722,7 +722,7 @@ class ConfigService:
         Args:
             section: 节名 (例如 ``persona`` / ``llm`` / ``maicore`` /
                 ``dashboard`` / ``context`` / ``meta`` / ``general`` /
-                ``logging`` / ``llm_fast`` / ``vlm`` / ``llm_local`` / ``llm_summary``)。
+                ``logging`` / ``llm_fast`` / ``vlm`` / ``llm_local`` / ``llm_summary`` / ``llm_outline``)。
 
         Returns:
             ``ConfigSchemaGenerator.generate_config_schema`` 输出。
@@ -761,6 +761,7 @@ class ConfigService:
             "vlm": LLMProfileConfig,
             "llm_local": LLMProfileConfig,
             "llm_summary": LLMProfileConfig,
+            "llm_outline": LLMProfileConfig,
         }
 
         if section not in section_map:

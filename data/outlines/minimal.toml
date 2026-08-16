@@ -1,0 +1,18 @@
+# 最小验证大纲:2 段,每段 10 秒,供 QA 快速验证数据契约 / 解析 / 进度计算。
+#
+# 用途:不依赖真实直播时长,可在测试环境中快速跑完一个完整大纲循环。
+
+outline_id = "minimal_qa"
+title = "最小验证大纲"
+
+[[segments]]
+id = "qa_step_a"
+title = "QA 步骤 A"
+task_description = "用于 QA 验证的第一段,占位文本。"
+duration_ms = 10000  # 10 秒
+
+[[segments]]
+id = "qa_step_b"
+title = "QA 步骤 B"
+task_description = "用于 QA 验证的第二段,占位文本。"
+duration_ms = 10000  # 10 秒

@@ -94,6 +94,7 @@ def _build_group_to_pydantic() -> Dict[str, Type[BaseModel]]:
         "vlm": LLMProfileConfig,
         "llm_local": LLMProfileConfig,
         "llm_summary": LLMProfileConfig,
+        "llm_outline": LLMProfileConfig,
         "maicore": MaiCoreConfig,
         "context": ContextConfig,
         "dashboard": DashboardConfig,

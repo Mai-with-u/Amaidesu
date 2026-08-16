@@ -103,7 +103,7 @@ Amaidesu/
 │   │   │   ├── manager.py       # DeciderManager
 │   │   │   ├── registry.py      # @decider 装饰器注册表
 │   │   │   └── deciders/        # 决策 Decider
-│   │   │       ├── amaidesu/    # 默认决策器（Planner/Replyer 两阶段）
+│   │   │       ├── amaidesu/    # 默认决策器（Planner/Replyer 两阶段 + 直播大纲机制）
 │   │   │       ├── maibot/
 │   │   │       ├── llm/
 │   │   │       ├── command/
@@ -211,7 +211,7 @@ sequenceDiagram
 
 | 名称 | 说明 | 位置 |
 |------|------|------|
-| amaidesu | Amaidesu 决策（默认，Planner/Replyer 两阶段） | `src/stages/decision/deciders/amaidesu/` |
+| amaidesu | Amaidesu 决策（默认，Planner/Replyer 两阶段 + [直播大纲机制](outline-mechanism.md)） | `src/stages/decision/deciders/amaidesu/` |
 | maibot | MaiBot 决策 | `src/stages/decision/deciders/maibot/` |
 | llm | 本地 LLM 决策 | `src/stages/decision/deciders/llm/` |
 | command | 通用命令意图路由 | `src/stages/decision/deciders/command/` |
@@ -365,4 +365,4 @@ enabled = ["edge_tts", "subtitle", "vts"]
 
 ---
 
-*最后更新：2026-08-02（同步 OutputHandlerManager 直接调度、事件名 input.message.received / decision.intent.generated、组件列表与目录结构）*
+*最后更新：2026-08-13（组件清单与目录结构补充直播大纲机制）*

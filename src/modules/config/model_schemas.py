@@ -19,7 +19,7 @@ class LLMProviderConfig(BaseConfig):
     """API 提供商配置
 
     一个 provider 描述一个 API 端点（OpenAI 兼容）的连接细节，
-    可被多个 role 共享（llm / llm_fast / vlm / llm_local / llm_summary）。
+    可被多个 role 共享（llm / llm_fast / vlm / llm_local / llm_summary / llm_outline）。
 
     Attributes:
         name: provider 唯一名称，供 role.provider 引用
@@ -111,6 +111,7 @@ class ModelConfig(BaseConfig):
         vlm: 视觉语言模型使用预设（用于图像理解任务）
         llm_local: 本地模型使用预设（Ollama / LM Studio / vLLM 等）
         llm_summary: 房间状态摘要 LLM 使用预设（独立 client，避免与 Planner 共享连接池）
+        llm_outline: 直播大纲 LLM 使用预设（独立 client，避免与 Planner 共享连接池；用于环节动态扩展）
     """
 
     llm_providers: list[LLMProviderConfig] = Field(
@@ -124,6 +125,10 @@ class ModelConfig(BaseConfig):
     llm_summary: LLMProfileConfig = Field(
         default_factory=LLMProfileConfig,
         description="房间状态摘要 LLM 使用预设（独立 client，避免与 Planner 共享连接池）",
+    )
+    llm_outline: LLMProfileConfig = Field(
+        default_factory=LLMProfileConfig,
+        description="直播大纲 LLM 使用预设（独立 client，避免与 Planner 共享连接池；用于环节动态扩展）",
     )
 
     @model_validator(mode="after")
@@ -148,7 +153,7 @@ class ModelConfig(BaseConfig):
         # 此时不强制要求 'default' 存在，避免"配置一半就报错"。
         valid_names = set(names)
         explicitly_set_profiles = self.model_fields_set
-        for profile_field in ("llm", "llm_fast", "vlm", "llm_local", "llm_summary"):
+        for profile_field in ("llm", "llm_fast", "vlm", "llm_local", "llm_summary", "llm_outline"):
             if profile_field not in explicitly_set_profiles:
                 continue
             profile_cfg = getattr(self, profile_field)

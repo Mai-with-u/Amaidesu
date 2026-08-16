@@ -26,6 +26,8 @@
 - 需要如实汇报自己的工作进度，不得隐瞒问题不报，不得在未经用户允许的情况下降低任务达成标准
 - **提交代码前运行测试**：`uv run pytest tests/` 和 `uv run ruff check .`
 - **提交代码前进行格式化**: `uv run ruff format .`
+- **git 提交必须获得用户显式授权**：任何 `git commit` / `git push` 前必须确认用户明确要求（含"提交/commit/push"等词）。计划文件（`.omo/plans/*.md`）中的 Commit 策略**仅覆盖该计划范围内的任务**；计划之外的工作（bug 修复、追加功能、临时改动）即使复用同一委托模板，也**不得**继承提交授权——委托子代理时若任务超出计划范围，**禁止**在 prompt 中写入 commit 指令，改为"完成后展示结果，由用户决定是否提交"。
+- **git 提交体规范（Conventional Commits）**：格式 `type(scope): subject`（type ∈ feat/fix/docs/refactor/perf/test/chore；scope 用影响域，如 decision/dashboard/config/core/prompts）。subject 用**中文**简洁描述（≤50 字符）；body 用**中文**说明"为什么"（空行分隔，可留空）。Windows PowerShell 下提交 message 必须用 `git commit -F <file>`（UTF-8 文件）或双引号包裹（防 `$` 变量展开、防中文乱码）；提交后 `git log -1` 复核无乱码、无截断。**禁止**：英文 subject、乱码字符、特殊符号被 shell 吞掉、body 缺失"为什么"。
 
 ### 禁止事项
 
@@ -440,4 +442,4 @@ logger.error("错误日志", exc_info=True)
 
 ---
 
-*最后更新：2026-08-08（新增"配置 Schema 变更规则"：强制 Schema 变更同步升 CONFIG_VERSION、注册迁移钩子并配测试；新增 CrossFileMigration 跨文件迁移条款）*
+*最后更新：2026-08-16（新增"git 提交必须获得用户显式授权"与"git 提交体规范（Conventional Commits）"条款：计划内 Commit 策略不覆盖计划外工作；历史教训——修复任务擅自提交、提交体乱码/被 shell 吞掉）*

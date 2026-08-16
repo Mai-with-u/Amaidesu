@@ -45,6 +45,7 @@ _SECTION_MAP: dict[str, str] = {
     "vlm": "model.toml",
     "llm_local": "model.toml",
     "llm_summary": "model.toml",
+    "llm_outline": "model.toml",
     "collectors": "input.toml",
     "deciders": "decision.toml",
     "handlers": "output.toml",

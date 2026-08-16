@@ -80,6 +80,16 @@ const router = createRouter({
       name: 'simulator',
       component: () => import('@/views/SimulatorPanel.vue'),
     },
+    {
+      path: '/outline/editor',
+      name: 'outline-editor',
+      component: () => import('@/views/OutlineEditor.vue'),
+    },
+    {
+      path: '/outline',
+      name: 'outline-status',
+      component: () => import('@/views/OutlineStatus.vue'),
+    },
   ],
 });
 
