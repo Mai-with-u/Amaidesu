@@ -25,6 +25,7 @@ import tomlkit
 from src.modules.config.schemas.base import BaseConfig, DriftReport, _set_toml_value
 from src.modules.config.core_schemas import CoreConfig
 from src.modules.config.model_schemas import ModelConfig
+from src.modules.config.schemas.decision_schemas import DecisionConfig
 from src.modules.config.upgrade_hooks import apply_upgrade_hooks
 from src.modules.logging import get_logger
 from src.modules.simulator.config_schema import SimulatorConfigSchema
@@ -546,6 +547,9 @@ def _serialize_instance_to_toml(schema_cls: type[BaseModel], instance: BaseModel
     doc = tomlkit.document()
     for field_name, field_info in schema_cls.model_fields.items():
         value = getattr(instance, field_name)
+        if value is None:
+            # 可空字段（如 DecisionConfig.pipelines=None）省略不写，与 _table_from_model 行为一致
+            continue
         if isinstance(value, BaseModel):
             table = _table_from_model(value)
         elif isinstance(value, list) and value and all(isinstance(v, BaseModel) for v in value):
@@ -813,11 +817,38 @@ def load_config_dir(
         with open(input_path, "r", encoding="utf-8-sig") as f:
             result["input"] = tomlkit.load(f).unwrap()
 
-    # decision.toml → raw dict
+    # decision.toml → DecisionConfig（含漂移补齐写回闭环）
+    # 历史教训：曾以 raw dict 直读，Decider 组件 Schema 的新增字段（如大纲的
+    # outline_enabled/outline_path）永远不会被写回用户文件——缺失字段只在内存
+    # 里用默认值兜底（outline_enabled=False 静默关闭功能），用户无从感知。
+    # 现与 core/model 同构：漂移时备份 + 补默认值落盘，让组件字段变更可见。
+    # 验证失败（如 enabled 含未注册 decider）时回退 raw dict，不中断启动。
+    # pipelines 是可选扩展段（schema 声明"不强制写入"），缺失不视为漂移。
     decision_path = config_dir / "decision.toml"
     if decision_path.exists():
-        with open(decision_path, "r", encoding="utf-8-sig") as f:
-            result["decision"] = tomlkit.load(f).unwrap()
+        try:
+            decision_data, decision_report = _load_and_validate_schema(decision_path, DecisionConfig)
+            decision_report.missing = [m for m in decision_report.missing if m != "pipelines"]
+            if decision_report.has_drift:
+                batch_id = batch_id or datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup = _write_back_schema_file(
+                    config_dir, "decision.toml", DecisionConfig, decision_data, batch_id=batch_id
+                )
+                logger.info(
+                    f"decision.toml 已自动升级: "
+                    f"补齐 {len(decision_report.missing)} 项({', '.join(decision_report.missing) or '无'}), "
+                    f"清理 {len(decision_report.redundant)} 项({', '.join(decision_report.redundant) or '无'})"
+                    + (f", 备份: {backup.relative_to(config_dir)}" if backup else "")
+                )
+                decision_data, decision_report = _load_and_validate_schema(decision_path, DecisionConfig)
+                decision_report.missing = [m for m in decision_report.missing if m != "pipelines"]
+            result["decision"] = decision_data
+            combined.redundant.extend(f"decision.{r}" for r in decision_report.redundant)
+            combined.missing.extend(f"decision.{m}" for m in decision_report.missing)
+        except Exception as e:
+            logger.warning(f"decision.toml Schema 验证失败，回退 raw dict 加载: {e}")
+            with open(decision_path, "r", encoding="utf-8-sig") as f:
+                result["decision"] = tomlkit.load(f).unwrap()
 
     # output.toml → raw dict
     output_path = config_dir / "output.toml"

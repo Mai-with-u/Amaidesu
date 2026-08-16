@@ -192,6 +192,58 @@ class TestDriftWriteBack:
         assert (config_dir / "core.toml").read_text(encoding="utf-8-sig") == content_before
 
 
+class TestDecisionDriftWriteBack:
+    """decision.toml 漂移补齐（回归：大纲功能新增字段曾因 raw dict 直读永不写回）"""
+
+    def test_decision_missing_outline_fields_filled(self, config_dir: Path):
+        """`[deciders.amaidesu]` 缺失大纲字段（模拟旧配置文件）→ 自动补默认值落盘。"""
+        decision_path = config_dir / "decision.toml"
+        content = decision_path.read_text(encoding="utf-8-sig")
+        # 移除 outline_ 开头的所有字段行（含前一行注释），模拟升级前文件
+        import re as _re
+
+        content = _re.sub(r"# [^\n]*\n(?=outline_[a-z_]+ = )", "", content)
+        content = _re.sub(r"outline_[a-z_]+ = [^\n]*\n", "", content)
+        decision_path.write_text(content, encoding="utf-8-sig")
+
+        config, report = load_config_dir(config_dir)
+
+        # 写回后文件包含大纲字段（默认值）
+        written = decision_path.read_text(encoding="utf-8-sig")
+        assert "outline_enabled = false" in written
+        assert 'outline_path = ""' in written
+        # 加载结果包含大纲字段
+        assert "outline_enabled" in config["decision"]["deciders"]["amaidesu"]
+        # 写回闭环后重载无漂移（幂等）
+        assert not any("outline_enabled" in m for m in report.missing)
+        # 备份已创建
+        backup_dir = config_dir / "old"
+        batch_dirs = [p for p in backup_dir.iterdir() if p.is_dir()]
+        assert any((d / "decision.toml").exists() for d in batch_dirs)
+
+    def test_decision_clean_config_not_rewritten(self, config_dir: Path):
+        """无漂移的 decision.toml 不被重写（幂等，不产生备份）。"""
+        decision_path = config_dir / "decision.toml"
+        content_before = decision_path.read_text(encoding="utf-8-sig")
+
+        load_config_dir(config_dir)
+
+        assert decision_path.read_text(encoding="utf-8-sig") == content_before
+        backup_dir = config_dir / "old"
+        assert not backup_dir.exists() or not list(backup_dir.rglob("decision.toml"))
+
+    def test_decision_user_values_preserved(self, config_dir: Path):
+        """补齐缺失字段时保留用户已配置的值（如 enabled 列表）。"""
+        decision_path = config_dir / "decision.toml"
+        content = decision_path.read_text(encoding="utf-8-sig")
+        content = content.replace('enabled = ["maibot"]', 'enabled = ["amaidesu", "llm"]')
+        decision_path.write_text(content, encoding="utf-8-sig")
+
+        config, _ = load_config_dir(config_dir)
+
+        assert config["decision"]["deciders"]["enabled"] == ["amaidesu", "llm"]
+
+
 class TestMCPConfig:
     def test_mcp_config_preserved(self, config_dir: Path):
         core_path = config_dir / "core.toml"
