@@ -1,6 +1,6 @@
 <template>
   <div class="danmaku-container">
-    <div class="messages" ref="messagesRef">
+    <div ref="messagesRef" class="messages">
       <TransitionGroup name="message">
         <div v-for="msg in messages" :key="msg.id" class="message" :class="msg.message_type">
           <span class="username">{{ msg.user_name }}</span>
@@ -56,9 +56,10 @@ function getDisplayText(msg: DanmakuMessage): string {
       return `送出 ${msg.gift_name || '礼物'} x${msg.gift_count || 1}`;
     case 'superchat':
       return `¥${msg.sc_price || 0} ${msg.sc_message || msg.content}`;
-    case 'guard':
+    case 'guard': {
       const guardNames: Record<number, string> = { 1: '总督', 2: '提督', 3: '舰长' };
       return `开通了 ${guardNames[msg.guard_level || 3] || '大航海'}`;
+    }
     case 'enter':
       return '进入了直播间';
     default:

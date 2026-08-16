@@ -20,7 +20,13 @@
           <el-icon><Bottom /></el-icon>
           回到底部
         </el-button>
-        <el-button size="small" type="danger" plain :disabled="sortedChains.length === 0" @click="clearAll">
+        <el-button
+          size="small"
+          type="danger"
+          plain
+          :disabled="sortedChains.length === 0"
+          @click="clearAll"
+        >
           <el-icon><Delete /></el-icon>
           清空
         </el-button>
@@ -148,7 +154,11 @@
           </div>
 
           <!-- 消息卡 -->
-          <div v-if="chain.message" class="card card--message" @click="toggleExpand(chain.messageId, 'message')">
+          <div
+            v-if="chain.message"
+            class="card card--message"
+            @click="toggleExpand(chain.messageId, 'message')"
+          >
             <div class="card-head">
               <span class="card-icon">💬</span>
               <span class="card-title">消息</span>
@@ -162,11 +172,7 @@
               >
                 {{ chain.message.data_type }}
               </el-tag>
-              <el-tag
-                v-if="chain.message.user_nickname"
-                size="small"
-                effect="plain"
-              >
+              <el-tag v-if="chain.message.user_nickname" size="small" effect="plain">
                 {{ chain.message.user_nickname }}
               </el-tag>
               <span class="bubble-spacer" />
@@ -203,7 +209,9 @@
             <div class="card-head">
               <span class="card-icon">🧠</span>
               <span class="card-title">决策</span>
-              <el-tag size="small" effect="plain" type="success">{{ dec.deciderName || 'Decider' }}</el-tag>
+              <el-tag size="small" effect="plain" type="success">{{
+                dec.deciderName || 'Decider'
+              }}</el-tag>
               <el-tag
                 v-if="dec.intent.emotion"
                 size="small"
@@ -233,7 +241,10 @@
           </div>
 
           <!-- 决策中占位（pending 状态且无 decisions） -->
-          <div v-if="chain.status !== 'done' && chain.decisions.length === 0" class="card card--pending">
+          <div
+            v-if="chain.status !== 'done' && chain.decisions.length === 0"
+            class="card card--pending"
+          >
             <div class="card-head">
               <span class="card-icon">🧠</span>
               <span class="card-title">决策</span>
@@ -263,12 +274,20 @@
                 <span v-if="chain.output.deciderName">
                   已派发到 <strong>{{ chain.output.deciderName }}</strong>
                 </span>
-                <span v-if="chain.output.intent.action.parameters && Object.keys(chain.output.intent.action.parameters).length > 0">
+                <span
+                  v-if="
+                    chain.output.intent.action.parameters &&
+                    Object.keys(chain.output.intent.action.parameters).length > 0
+                  "
+                >
                   · {{ chain.output.intent.action.name }}(
                   <span class="mono">
                     {{
                       Object.entries(chain.output.intent.action.parameters)
-                        .map(([k, v]) => `${k}=${typeof v === 'string' ? `"${v}"` : JSON.stringify(v)}`)
+                        .map(
+                          ([k, v]) =>
+                            `${k}=${typeof v === 'string' ? `"${v}"` : JSON.stringify(v)}`,
+                        )
                         .join(', ')
                     }}
                   </span>
@@ -305,7 +324,12 @@
                 </div>
                 <div class="inject-field">
                   <label class="inject-field-label">data_type</label>
-                  <el-select v-model="danmakuDataType" size="small" :disabled="sending" style="width: 100%">
+                  <el-select
+                    v-model="danmakuDataType"
+                    size="small"
+                    :disabled="sending"
+                    style="width: 100%"
+                  >
                     <el-option label="text" value="text" />
                     <el-option label="gift" value="gift" />
                     <el-option label="super_chat" value="super_chat" />
@@ -349,7 +373,12 @@
               <div class="inject-fields inject-fields--two">
                 <div class="inject-field">
                   <label class="inject-field-label">emotion</label>
-                  <el-select v-model="intentEmotion" size="small" :disabled="sending" style="width: 100%">
+                  <el-select
+                    v-model="intentEmotion"
+                    size="small"
+                    :disabled="sending"
+                    style="width: 100%"
+                  >
                     <el-option label="neutral" value="neutral" />
                     <el-option label="happy" value="happy" />
                     <el-option label="excited" value="excited" />
@@ -540,9 +569,7 @@ function parseMessage(data: Record<string, unknown>): NormalizedMessageData {
   };
 }
 
-function parseIntent(
-  data: Record<string, unknown>,
-): IntentEventData {
+function parseIntent(data: Record<string, unknown>): IntentEventData {
   const intentData = (data?.intent_data as Record<string, unknown> | undefined) ?? {};
   const md = (intentData.metadata as Record<string, unknown> | undefined) ?? {};
   return {
@@ -605,10 +632,11 @@ function handleEvent(message: WebSocketMessage): void {
     const data = (message.data ?? {}) as Record<string, unknown>;
     const msgObj = (data.message as Record<string, unknown> | undefined) ?? {};
     const metaObj = (data.metadata as Record<string, unknown> | undefined) ?? {};
-    const idRaw = (msgObj.message_id as string | undefined)
-      ?? (metaObj.message_id as string | undefined)
-      ?? message.id
-      ?? `msg-${message.timestamp}`;
+    const idRaw =
+      (msgObj.message_id as string | undefined) ??
+      (metaObj.message_id as string | undefined) ??
+      message.id ??
+      `msg-${message.timestamp}`;
     const chain = ensureChain(idRaw, message.timestamp * 1000);
     chain.message = parseMessage(data);
     touchChain(chain, message.timestamp * 1000);
@@ -619,10 +647,11 @@ function handleEvent(message: WebSocketMessage): void {
   if (t === 'decision.intent') {
     const data = (message.data ?? {}) as Record<string, unknown>;
     const intent = parseIntent(data);
-    const srcId = intent.metadata.source_message_id
-      ?? intent.metadata.source_id
-      ?? lastDecidingKey
-      ?? `orphan-decision-${message.timestamp}`;
+    const srcId =
+      intent.metadata.source_message_id ??
+      intent.metadata.source_id ??
+      lastDecidingKey ??
+      `orphan-decision-${message.timestamp}`;
     const chain = ensureChain(srcId, message.timestamp * 1000);
     chain.decisions.push({
       id: message.id ?? `decision-${message.timestamp}-${chain.decisions.length}`,
@@ -641,10 +670,11 @@ function handleEvent(message: WebSocketMessage): void {
   if (t === 'output.render') {
     const data = (message.data ?? {}) as Record<string, unknown>;
     const intent = parseIntent(data);
-    const srcId = intent.metadata.source_message_id
-      ?? intent.metadata.source_id
-      ?? lastDecidingKey
-      ?? `orphan-output-${message.timestamp}`;
+    const srcId =
+      intent.metadata.source_message_id ??
+      intent.metadata.source_id ??
+      lastDecidingKey ??
+      `orphan-output-${message.timestamp}`;
     const chain = ensureChain(srcId, message.timestamp * 1000);
     chain.output = {
       id: message.id ?? `output-${message.timestamp}`,

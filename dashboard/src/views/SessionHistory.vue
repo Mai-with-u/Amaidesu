@@ -7,7 +7,7 @@
       </div>
       <div class="header-actions">
         <span class="event-count">{{ filteredEvents.length }} / {{ events.length }} 条</span>
-        <el-button @click="clearEvents" :disabled="events.length === 0" size="small">
+        <el-button :disabled="events.length === 0" size="small" @click="clearEvents">
           <el-icon><Delete /></el-icon>
           清空
         </el-button>

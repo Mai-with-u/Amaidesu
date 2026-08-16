@@ -134,7 +134,7 @@
             <template #header>
               <span>实时消息流 (最近 50 条)</span>
             </template>
-            <div class="message-stream" ref="messageStreamRef">
+            <div ref="messageStreamRef" class="message-stream">
               <div
                 v-for="(msg, i) in messageStream"
                 :key="i"
@@ -494,7 +494,7 @@ async function toggleSimulator() {
       ElMessage.success('模拟器已启动');
     }
     await fetchStatus();
-  } catch (e) {
+  } catch {
     ElMessage.error('操作失败');
   } finally {
     toggling.value = false;
