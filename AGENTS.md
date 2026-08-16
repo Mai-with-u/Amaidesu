@@ -117,6 +117,11 @@
 
 **验证要求**：提交前 `uv run pytest tests/config/ -q` 必须通过；注册了 hook 必须有对应迁移测试。禁止"只改 Schema 不升版本/不注册 hook"的提交。
 
+**升版本 ≠ 迁移生效（历史教训：2026-08-16 大纲功能静默失效）**：
+- 升 `CONFIG_VERSION` 只是"声明变更"，真正让用户文件升级的是 `load_config_dir` 的**漂移写回闭环**——该闭环只覆盖 `multi_file_loader.py` 中接入 `_load_and_validate_schema` + `_write_back_schema_file` 的文件。**当前全部 5 个文件（core/model/decision/input/output）均已接入**，未来新增配置文件必须同样接入，否则该文件的 Schema 变更永远不会写回用户文件（字段缺失只在内存兜底，功能静默失效）。
+- **每次 Schema 变更后必须实际验证迁移生效**：用 `uv run python -c "from src.modules.config.multi_file_loader import load_config_dir; load_config_dir(__import__('pathlib').Path('config'))"` 检查日志出现"已自动升级: 补齐 N 项"且对应字段落盘；或跑 `tests/config/test_config_auto_upgrade.py`（已覆盖全部文件的漂移补齐 + 幂等断言）。
+- **禁止"升了版本但没验证用户文件真的被升级"的提交**——版本号变化本身不保证迁移生效。
+
 ## 常用命令
 
 ### 包管理器
@@ -442,4 +447,4 @@ logger.error("错误日志", exc_info=True)
 
 ---
 
-*最后更新：2026-08-16（新增"git 提交必须获得用户显式授权"与"git 提交体规范（Conventional Commits）"条款：计划内 Commit 策略不覆盖计划外工作；历史教训——修复任务擅自提交、提交体乱码/被 shell 吞掉）*
+*最后更新：2026-08-16（新增"git 提交必须获得用户显式授权"与"git 提交体规范（Conventional Commits）"条款：计划内 Commit 策略不覆盖计划外工作；历史教训——修复任务擅自提交、提交体乱码/被 shell 吞掉；配置 Schema 变更规则补强"升版本 ≠ 迁移生效"：漂移写回闭环覆盖范围与迁移生效验证要求，历史教训——大纲功能配置缺失静默失效）*
