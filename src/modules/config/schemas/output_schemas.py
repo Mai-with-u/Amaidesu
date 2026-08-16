@@ -121,6 +121,10 @@ OmniTTSConfigSchema: Optional[type] = _try_load_handler_schema(
     "src.stages.output.handlers.audio.omni_tts.omni_tts_handler",
     "OmniTTSHandler",
 )
+VoiceBoxConfigSchema: Optional[type] = _try_load_handler_schema(
+    "src.stages.output.handlers.audio.voicebox.voicebox_handler",
+    "VoiceboxHandler",
+)
 RemoteStreamConfigSchema: Optional[type] = _try_load_handler_schema(
     "src.stages.output.handlers.remote_stream.remote_stream_handler",
     "RemoteStreamHandler",
@@ -219,6 +223,7 @@ class OutputHandlersConfig(BaseConfig):
     gptsovits: Optional[Any] = _optional_handler_field(GPTSoVITSConfigSchema)
     obs_control: Optional[Any] = _optional_handler_field(ObsControlConfigSchema)
     omni_tts: Optional[Any] = _optional_handler_field(OmniTTSConfigSchema)
+    voicebox: Optional[Any] = _optional_handler_field(VoiceBoxConfigSchema)
     remote_stream: Optional[Any] = _optional_handler_field(RemoteStreamConfigSchema)
     sticker: Optional[Any] = _optional_handler_field(StickerConfigSchema)
     subtitle: Optional[Any] = _optional_handler_field(SubtitleConfigSchema)
@@ -325,6 +330,7 @@ __all__ = [
     "GPTSoVITSConfigSchema",
     "ObsControlConfigSchema",
     "OmniTTSConfigSchema",
+    "VoiceBoxConfigSchema",
     "RemoteStreamConfigSchema",
     "StickerConfigSchema",
     "SubtitleConfigSchema",

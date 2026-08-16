@@ -26,6 +26,8 @@ from src.modules.config.schemas.base import BaseConfig, DriftReport, _set_toml_v
 from src.modules.config.core_schemas import CoreConfig
 from src.modules.config.model_schemas import ModelConfig
 from src.modules.config.schemas.decision_schemas import DecisionConfig
+from src.modules.config.schemas.input_schemas import InputConfig
+from src.modules.config.schemas.output_schemas import OutputConfig
 from src.modules.config.upgrade_hooks import apply_upgrade_hooks
 from src.modules.logging import get_logger
 from src.modules.simulator.config_schema import SimulatorConfigSchema
@@ -218,11 +220,13 @@ def _unwrap_optional(annotation: Any) -> Any:
     return annotation
 
 
-def _placeholder_for_type(annotation: Any) -> Any:
+def _placeholder_for_type(annotation: Any, field_info: Any = None) -> Any:
     """根据字段注解生成占位符值。
 
     用于必填字段：避免直接调用 schema_cls()（会触发 ValidationError），
     而是根据类型返回中性的占位符，配合 `[必填]` 注释提示用户填写。
+    有约束的数值字段返回满足约束的最小值（如 gt=0 → 1），避免占位符
+    自身违反约束导致配置验证失败。
     """
     origin = get_origin(annotation)
     args = get_args(annotation)
@@ -242,8 +246,23 @@ def _placeholder_for_type(annotation: Any) -> Any:
     if annotation is str:
         return "请填写"
     if annotation is int:
+        # 尊重 gt/ge 约束：gt=0 时占位符 0 会违反约束（如 B站 room_id）
+        for meta in getattr(field_info, "metadata", []) or []:
+            gt = getattr(meta, "gt", None)
+            if gt is not None and gt >= 0:
+                return int(gt) + 1
+            ge = getattr(meta, "ge", None)
+            if ge is not None and ge > 0:
+                return int(ge)
         return 0
     if annotation is float:
+        for meta in getattr(field_info, "metadata", []) or []:
+            gt = getattr(meta, "gt", None)
+            if gt is not None and gt >= 0:
+                return float(gt) + 1.0
+            ge = getattr(meta, "ge", None)
+            if ge is not None and ge > 0:
+                return float(ge)
         return 0.0
     if annotation is bool:
         return False
@@ -324,7 +343,7 @@ def _schema_to_toml_table(schema_cls: type[BaseModel]) -> Any:
             if constraint_hint:
                 parts.append(f"({constraint_hint})")
             table.add(tomlkit.comment(" ".join(parts)))
-            table[field_name] = _placeholder_for_type(unwrapped)
+            table[field_name] = _placeholder_for_type(unwrapped, field_info)
             continue
 
         try:
@@ -603,7 +622,17 @@ def _write_back_schema_file(
     instance = schema_cls(**data)
     content = _serialize_instance_to_toml(schema_cls, instance)
     backup_path = _backup_file(file_path, config_dir, batch_id=batch_id)
-    file_path.write_text(content, encoding="utf-8-sig")
+    # 保留原文件的 BOM 状态：生成器产出的文件带 BOM（utf-8-sig），用户手写的
+    # 文件通常无 BOM。若统一强制写 BOM，会污染手写文件（tomllib 等不支持 BOM
+    # 的解析器将无法读取），因此按原文件字节判断。
+    has_bom = False
+    try:
+        with open(file_path, "rb") as f:
+            has_bom = f.read(3) == b"\xef\xbb\xbf"
+    except OSError:
+        pass
+    encoding = "utf-8-sig" if has_bom else "utf-8"
+    file_path.write_text(content, encoding=encoding)
     return backup_path
 
 
@@ -665,6 +694,40 @@ def generate_default_configs(config_dir: Path) -> None:
     output_path = config_dir / "output.toml"
     output_path.write_text(_generate_phase_toml("output"), encoding="utf-8-sig")
     logger.info("已生成 output.toml")
+
+
+def _collect_empty_container_fields(schema_cls: type) -> set[str]:
+    """收集 schema 中"默认是空容器"的字段名集合（递归遍历嵌套 BaseConfig）。
+
+    空容器 = 默认值是空 dict / 空 list / 内容为空的 BaseConfig 实例。
+    与 TOML 生成器语义对齐：这些字段在生成模板中省略不写，
+    缺失时不应视为漂移（否则每次启动误判触发写回）。
+    """
+    result: set[str] = set()
+    for field_name, field_info in getattr(schema_cls, "model_fields", {}).items():
+        try:
+            default_value = field_info.get_default(call_default_factory=True)
+        except Exception:
+            default_value = None
+        if isinstance(default_value, BaseConfig):
+            if not default_value.model_dump():
+                result.add(field_name)
+            result |= _collect_empty_container_fields(type(default_value))
+        elif isinstance(default_value, (dict, list)) and not default_value:
+            result.add(field_name)
+    return result
+
+
+def _filter_optional_container_missing(report: DriftReport, schema_cls: type[BaseConfig]) -> None:
+    """从漂移报告中剔除"缺失但默认是空容器"的字段（原地修改 missing）。
+
+    与 TOML 生成器语义对齐：空容器默认值（空 dict / 空 list / 默认空 BaseConfig）
+    在生成模板中省略不写，因此缺失不应视为漂移——否则每次启动都会误判
+    漂移触发写回（如 decision/input/output 的 pipelines 可选扩展段、
+    bili_danmaku.message_config 等空 dict 字段）。
+    """
+    empty_fields = _collect_empty_container_fields(schema_cls)
+    report.missing = [m for m in report.missing if m.split(".")[-1] not in empty_fields]
 
 
 def _load_and_validate_schema(
@@ -811,11 +874,33 @@ def load_config_dir(
         combined.redundant.extend(f"model.{r}" for r in model_report.redundant)
         combined.missing.extend(f"model.{m}" for m in model_report.missing)
 
-    # input.toml → raw dict（组件配置在各 Manager 中单独验证）
+    # input.toml → InputConfig（含漂移补齐写回闭环，与 decision.toml 同构）
+    # 历史教训（decision.toml 同源）：组件 Schema 新增字段不会写回 raw dict 文件，
+    # 缺失字段只在内存兜底，用户无从感知。接入后缺失补默认值落盘。
+    # pipelines 是可选扩展段（schema 声明"不强制写入"），缺失不视为漂移。
     input_path = config_dir / "input.toml"
     if input_path.exists():
-        with open(input_path, "r", encoding="utf-8-sig") as f:
-            result["input"] = tomlkit.load(f).unwrap()
+        try:
+            input_data, input_report = _load_and_validate_schema(input_path, InputConfig)
+            _filter_optional_container_missing(input_report, InputConfig)
+            if input_report.has_drift:
+                batch_id = batch_id or datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup = _write_back_schema_file(config_dir, "input.toml", InputConfig, input_data, batch_id=batch_id)
+                logger.info(
+                    f"input.toml 已自动升级: "
+                    f"补齐 {len(input_report.missing)} 项({', '.join(input_report.missing) or '无'}), "
+                    f"清理 {len(input_report.redundant)} 项({', '.join(input_report.redundant) or '无'})"
+                    + (f", 备份: {backup.relative_to(config_dir)}" if backup else "")
+                )
+                input_data, input_report = _load_and_validate_schema(input_path, InputConfig)
+                _filter_optional_container_missing(input_report, InputConfig)
+            result["input"] = input_data
+            combined.redundant.extend(f"input.{r}" for r in input_report.redundant)
+            combined.missing.extend(f"input.{m}" for m in input_report.missing)
+        except Exception as e:
+            logger.warning(f"input.toml Schema 验证失败，回退 raw dict 加载: {e}")
+            with open(input_path, "r", encoding="utf-8-sig") as f:
+                result["input"] = tomlkit.load(f).unwrap()
 
     # decision.toml → DecisionConfig（含漂移补齐写回闭环）
     # 历史教训：曾以 raw dict 直读，Decider 组件 Schema 的新增字段（如大纲的
@@ -828,7 +913,7 @@ def load_config_dir(
     if decision_path.exists():
         try:
             decision_data, decision_report = _load_and_validate_schema(decision_path, DecisionConfig)
-            decision_report.missing = [m for m in decision_report.missing if m != "pipelines"]
+            _filter_optional_container_missing(decision_report, DecisionConfig)
             if decision_report.has_drift:
                 batch_id = batch_id or datetime.now().strftime("%Y%m%d_%H%M%S")
                 backup = _write_back_schema_file(
@@ -841,7 +926,7 @@ def load_config_dir(
                     + (f", 备份: {backup.relative_to(config_dir)}" if backup else "")
                 )
                 decision_data, decision_report = _load_and_validate_schema(decision_path, DecisionConfig)
-                decision_report.missing = [m for m in decision_report.missing if m != "pipelines"]
+                _filter_optional_container_missing(decision_report, DecisionConfig)
             result["decision"] = decision_data
             combined.redundant.extend(f"decision.{r}" for r in decision_report.redundant)
             combined.missing.extend(f"decision.{m}" for m in decision_report.missing)
@@ -850,11 +935,35 @@ def load_config_dir(
             with open(decision_path, "r", encoding="utf-8-sig") as f:
                 result["decision"] = tomlkit.load(f).unwrap()
 
-    # output.toml → raw dict
+    # output.toml → OutputConfig（含漂移补齐写回闭环，与 decision.toml 同构）
+    # 历史教训（decision.toml 同源）：组件 Schema 新增字段不会写回 raw dict 文件，
+    # 缺失字段只在内存兜底，用户无从感知。接入后缺失补默认值落盘。
+    # pipelines 是可选扩展段（schema 声明"不强制写入"），缺失不视为漂移。
     output_path = config_dir / "output.toml"
     if output_path.exists():
-        with open(output_path, "r", encoding="utf-8-sig") as f:
-            result["output"] = tomlkit.load(f).unwrap()
+        try:
+            output_data, output_report = _load_and_validate_schema(output_path, OutputConfig)
+            _filter_optional_container_missing(output_report, OutputConfig)
+            if output_report.has_drift:
+                batch_id = batch_id or datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup = _write_back_schema_file(
+                    config_dir, "output.toml", OutputConfig, output_data, batch_id=batch_id
+                )
+                logger.info(
+                    f"output.toml 已自动升级: "
+                    f"补齐 {len(output_report.missing)} 项({', '.join(output_report.missing) or '无'}), "
+                    f"清理 {len(output_report.redundant)} 项({', '.join(output_report.redundant) or '无'})"
+                    + (f", 备份: {backup.relative_to(config_dir)}" if backup else "")
+                )
+                output_data, output_report = _load_and_validate_schema(output_path, OutputConfig)
+                _filter_optional_container_missing(output_report, OutputConfig)
+            result["output"] = output_data
+            combined.redundant.extend(f"output.{r}" for r in output_report.redundant)
+            combined.missing.extend(f"output.{m}" for m in output_report.missing)
+        except Exception as e:
+            logger.warning(f"output.toml Schema 验证失败，回退 raw dict 加载: {e}")
+            with open(output_path, "r", encoding="utf-8-sig") as f:
+                result["output"] = tomlkit.load(f).unwrap()
 
     return result, combined
 

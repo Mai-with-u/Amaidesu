@@ -244,6 +244,55 @@ class TestDecisionDriftWriteBack:
         assert config["decision"]["deciders"]["enabled"] == ["amaidesu", "llm"]
 
 
+class TestInputOutputDriftWriteBack:
+    """input.toml / output.toml 漂移补齐（回归：与 decision.toml 同源的 raw dict 直读）"""
+
+    def test_input_missing_fields_filled(self, config_dir: Path):
+        """`[collectors.console_input]` 缺失字段 → 自动补默认值落盘。"""
+        input_path = config_dir / "input.toml"
+        content = input_path.read_text(encoding="utf-8-sig")
+        # 移除 console_input 段内的 user_id 行，模拟旧配置
+        content = content.replace("user_id = ", "x_removed = ")
+        input_path.write_text(content, encoding="utf-8-sig")
+
+        config, report = load_config_dir(config_dir)
+
+        written = input_path.read_text(encoding="utf-8-sig")
+        assert "user_id" in written
+        assert "x_removed" not in written
+        assert "console_input" in config["input"]["collectors"]
+        assert not any("console_input" in m for m in report.missing)
+
+    def test_output_missing_fields_filled(self, config_dir: Path):
+        """`[handlers]` 缺失元数据字段 → 自动补默认值落盘。"""
+        output_path = config_dir / "output.toml"
+        content = output_path.read_text(encoding="utf-8-sig")
+        content = content.replace("render_timeout_ms = 10000", "render_timeout_ms = 10000\n# x_dummy = 1")
+        output_path.write_text(content, encoding="utf-8-sig")
+
+        config, report = load_config_dir(config_dir)
+
+        written = output_path.read_text(encoding="utf-8-sig")
+        assert "completion_timeout_ms" in written
+        assert "handlers" in config["output"]
+        assert not any("completion_timeout_ms" in m for m in report.missing)
+
+    def test_phase_clean_config_not_rewritten(self, config_dir: Path):
+        """首次升级写回后，后续加载不再重写（幂等，不产生新备份）。"""
+        # 第一次加载：吸收首次升级写回（补齐缺失字段）
+        load_config_dir(config_dir)
+        input_before = (config_dir / "input.toml").read_text(encoding="utf-8-sig")
+        output_before = (config_dir / "output.toml").read_text(encoding="utf-8-sig")
+        backup_count_before = len(list((config_dir / "old").rglob("*.toml"))) if (config_dir / "old").exists() else 0
+
+        load_config_dir(config_dir)
+
+        assert (config_dir / "input.toml").read_text(encoding="utf-8-sig") == input_before
+        assert (config_dir / "output.toml").read_text(encoding="utf-8-sig") == output_before
+        backup_count_after = len(list((config_dir / "old").rglob("*.toml"))) if (config_dir / "old").exists() else 0
+        assert backup_count_after == backup_count_before
+
+
 class TestMCPConfig:
     def test_mcp_config_preserved(self, config_dir: Path):
         core_path = config_dir / "core.toml"
