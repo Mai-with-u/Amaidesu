@@ -31,6 +31,17 @@ class IntentMetadata(BaseModel):
 
     除决策来源 + 决策时间外,新增 `intent_id` 作为跨阶段唯一标识,
     用于 OutputHandlerManager 的两层事件聚合(把 per-handler 完成事件关联回同一个 intent)。
+
+    调试可观察性字段(T12 新增,默认 ``None``):
+    - ``trigger_reason``:决策原因标签(如 ``"forced"`` / ``"window_expired"`` /
+      ``"proactive:cold"`` / ``"proactive:schedule"`` / ``"proactive:external"`` /
+      ``"proactive:outline"``),由各 Decider 在构造 Intent 时填充
+    - ``outline_segment_id``:发言当时所在的大纲环节 id(整数资产——便于 Dashboard
+      把 Intent 与实际环节对齐,展示"这条回复对应哪个环节");未启用大纲或不在
+      任何环节时为 ``None``
+
+    两个字段均为可选,旧 Decider 不显式提供时保持 ``None``(Pydantic ``default=None``),
+    不会破坏既有调用方。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -42,6 +53,16 @@ class IntentMetadata(BaseModel):
         default_factory=_new_intent_id,
         description="Intent 唯一标识 (UUID4 hex 前 8 位)。由 IntentMetadata 自动生成,"
         "跨阶段用于关联同一 intent 的多个 handler 完成事件。",
+    )
+    trigger_reason: Optional[str] = Field(
+        default=None,
+        description="决策原因标签(弹幕驱动: 'forced' / 'window_expired' / 'batch_full' / "
+        "'idle_compensation';主动发言: 'proactive:cold' / 'proactive:schedule' / "
+        "'proactive:external' / 'proactive:outline')。供 Dashboard 调试端点展示。",
+    )
+    outline_segment_id: Optional[str] = Field(
+        default=None,
+        description="发言当时所在的大纲环节 id;未启用大纲或不在任何环节时为 None",
     )
 
 

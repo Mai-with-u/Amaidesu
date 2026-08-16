@@ -257,7 +257,7 @@ class OutlineScheduler:
             if seg is not None and elapsed >= seg.duration_ms:
                 next_id = self._next_segment_id(current_id)
                 if next_id is not None:
-                    self._state.advance_to(next_id, now_ms=ts)
+                    self._state.advance_to(next_id, reason=_REASON_TIME, now_ms=ts)
                     # 清掉旧 segment 的延长标记(进入新环节后允许再次延长)
                     self._extended.pop(current_id, None)
                     self._fire_on_advance(next_id, _REASON_TIME, ts)
@@ -366,7 +366,7 @@ class OutlineScheduler:
             if next_id is None:
                 # 末段:不主动跳(尊重自然完成)
                 return
-            self._state.advance_to(next_id, now_ms=ts)
+            self._state.advance_to(next_id, reason=_REASON_ASSESSMENT, now_ms=ts)
             self._extended.pop(current_id, None)
             self._fire_on_advance(next_id, _REASON_ASSESSMENT, ts)
             return
@@ -389,7 +389,7 @@ class OutlineScheduler:
         这里用 try/except 隔离(理论上 _resolve_branch_target 已校验过,但兜底防御)。
         """
         try:
-            self._state.jump_to(target_id, now_ms=now_ms)
+            self._state.jump_to(target_id, reason=reason, now_ms=now_ms)
         except ValueError as e:
             self.logger.warning(f"jump_to({target_id!r}) 失败: {e}")
             return

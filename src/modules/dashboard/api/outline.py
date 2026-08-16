@@ -3,11 +3,12 @@
 
 提供 WebUI 控制端点，把"加载/控制/查看/编辑"指令转发到 Decision 阶段：
 
-- ``GET  /api/v1/outline/state``     → 当前大纲运行时状态（环节/进度/暂停等）
-- ``POST /api/v1/outline/load``      → 加载指定 TOML 大纲文件
-- ``POST /api/v1/outline/control``   → skip/pause/resume/rewind/jump 手动控制
-- ``PUT  /api/v1/outline/file``      → 写回 TOML（下一段生效）
-- ``GET  /api/v1/outline/segments``  → 当前大纲完整环节列表（供编辑页渲染）
+- ``GET  /api/v1/outline/state``       → 当前大纲运行时状态（环节/进度/暂停等，透传快照全部字段）
+- ``GET  /api/v1/outline/transitions``  → 大纲推进历史（环形缓冲，最近 50 条）
+- ``POST /api/v1/outline/load``        → 加载指定 TOML 大纲文件
+- ``POST /api/v1/outline/control``     → skip/pause/resume/rewind/jump 手动控制
+- ``PUT  /api/v1/outline/file``        → 写回 TOML（下一段生效）
+- ``GET  /api/v1/outline/segments``    → 当前大纲完整环节列表（每段附 expanded 缓存内容）
 
 调用语义（参见 :mod:`src.stages.decision.manager`）：
 - manager 层用 ``hasattr`` 鸭子类型转发到"实现了 ``outline_*`` 接口"的 Decider
@@ -18,12 +19,17 @@
 注意
 ----
 - 本模块**只**负责 API 端点 + 字段映射 + 错误码转换；具体的 ``outline_state`` /
-  ``outline_load`` / ``outline_control`` / ``outline_save_file`` 实现由 Decider
-  (T10) 在 ``AmaidesuDecider`` 上提供鸭子类型方法。本模块不假定任何特定 Decider
-  类型，通过 ``hasattr`` 检查实现可用性。
+  ``outline_load`` / ``outline_control`` / ``outline_save_file`` /
+  ``outline_segments`` / ``outline_transitions`` 实现由 Decider (T10) 在
+  ``AmaidesuDecider`` 上提供鸭子类型方法。本模块不假定任何特定 Decider 类型，
+  通过 ``hasattr`` 检查实现可用性。
 - "下一段生效"是 ``PUT /outline/file`` 的既定契约：保存文件后**不**触发热重载，
   由下次 ``skip`` / 自然推进 / 重新 ``load`` 触发。Decider 侧可选择监听文件变化，
   但本 API 不主动触发。
+- ``GET /outline/state`` 透传 :meth:`OutlineState.get_snapshot` 的全部字段
+  （Status / CurrentSegment / NextSegment / CompletedCount / TotalCount / IsPaused /
+  ElapsedLiveMs / TotalPlannedMs / ProgressPercent / OutlineId / OutlineTitle /
+  ManuallyOverridden），不做白名单裁剪/重映射，方便调试端点看到完整信息。
 """
 
 from __future__ import annotations
@@ -124,69 +130,32 @@ def _raise_if_not_implemented(result: Any) -> None:
 
 
 def _build_state_response(snapshot: Dict[str, Any]) -> Dict[str, Any]:
-    """把 ``OutlineState.get_snapshot()`` 风格 dict 重映射为 API 约定响应。
+    """透传 ``OutlineState.get_snapshot()`` 全部字段，不做白名单裁剪/重映射。
 
-    字段对照（snapshot → API contract）::
-
-        snapshot.current_segment.{id, title, remaining_ms, expanded, needs_expansion}
-            → current_segment.{id, title, elapsed_ms, duration_ms, remaining_ms}
-                其中 elapsed_ms = max(0, duration_ms - remaining_ms)
-                      expanded_ready = expanded
-                      (needs_expansion 不透传给前端，避免混淆)
-
-        snapshot.elapsed_live_ms / total_planned_ms / progress_percent
-            → live_progress.{elapsed_ms, total_ms, percent}
+    行为说明：
+        - 完整透传 ``snapshot`` 字典本身（status / current_segment / next_segment /
+          completed_count / total_count / is_paused / elapsed_live_ms /
+          total_planned_ms / progress_percent / outline_id / outline_title /
+          manually_overridden 等全部字段）
+        - ``current_segment`` 嵌套 dict 保持原样（含 ``expanded`` / ``needs_expansion``
+          等调试字段），不再做 ``elapsed_ms`` 重算或 ``expanded_ready`` 包装
+        - 不再生成 ``live_progress`` / ``expanded_ready`` 字段——前端如需展示进度，
+          直接读 ``elapsed_live_ms`` / ``total_planned_ms`` / ``progress_percent``
+          即可
 
     Args:
         snapshot: ``OutlineState.get_snapshot()`` 返回的 dict（由 Decider 透传）
 
     Returns:
-        满足 API 约定的响应 dict
+        ``snapshot`` 自身的浅拷贝（防止外部修改影响内部状态）
     """
-    # ---- current_segment ----
-    raw_current = snapshot.get("current_segment")
-    current_segment: Optional[Dict[str, Any]] = None
-    if raw_current:
-        duration_ms = int(raw_current.get("duration_ms") or 0)
-        remaining_ms = int(raw_current.get("remaining_ms") or 0)
-        elapsed_ms = max(0, duration_ms - remaining_ms) if duration_ms > 0 else 0
-        current_segment = {
-            "id": raw_current.get("id"),
-            "title": raw_current.get("title", ""),
-            "elapsed_ms": elapsed_ms,
-            "duration_ms": duration_ms,
-            "remaining_ms": remaining_ms,
-        }
-
-    # ---- next_segment ----
-    next_segment = snapshot.get("next_segment")
-
-    # ---- live_progress ----
-    elapsed_live = snapshot.get("elapsed_live_ms")
-    total_planned = snapshot.get("total_planned_ms")
-    progress_percent = snapshot.get("progress_percent")
-    live_progress = {
-        "elapsed_ms": elapsed_live if elapsed_live is not None else 0,
-        "total_ms": total_planned if total_planned is not None else 0,
-        "percent": float(progress_percent) if progress_percent is not None else 0.0,
-    }
-
-    # ---- expanded_ready ----
-    expanded_ready = bool((raw_current or {}).get("expanded", False))
-
-    return {
-        "status": snapshot.get("status", "inactive"),
-        "current_segment": current_segment,
-        "next_segment": next_segment,
-        "completed_count": int(snapshot.get("completed_count", 0) or 0),
-        "total_count": int(snapshot.get("total_count", 0) or 0),
-        "is_paused": bool(snapshot.get("is_paused", False)),
-        "expanded_ready": expanded_ready,
-        "live_progress": live_progress,
-    }
+    return dict(snapshot)
 
 
-def _build_segments_response(snapshot_or_segments: Any) -> List[Dict[str, Any]]:
+def _build_segments_response(
+    snapshot_or_segments: Any,
+    expanded_cache: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
     """从 manager 返回值中提取完整环节列表，转换为编辑页友好的 dict。
 
     期望 ``manager.outline_segments()``（T10 提供）返回形如::
@@ -199,6 +168,10 @@ def _build_segments_response(snapshot_or_segments: Any) -> List[Dict[str, Any]]:
         - 遍历每个 segment，提取 ``id / title / task_description / duration_ms /
           min_duration_ms / key_points / branches`` 字段
         - ``branches`` 转 list-of-dict
+        - 每段附 ``expanded`` 字段：来自 ``expanded_cache``（duck-typed：可为
+          :class:`ExpandedSegment` Pydantic 模型或带 ``model_dump`` 的对象）；
+          缓存未命中时为 ``None``。``expanded_cache`` 是 :class:`OutlineState`
+          的扩展内容缓存（唯一权威），由 Decider 通过 ``outline_segments`` 透传。
     """
     if isinstance(snapshot_or_segments, dict):
         raw_segments = snapshot_or_segments.get("segments", [])
@@ -207,6 +180,7 @@ def _build_segments_response(snapshot_or_segments: Any) -> List[Dict[str, Any]]:
     else:
         raw_segments = []
 
+    cache: Dict[str, Any] = expanded_cache or {}
     result: List[Dict[str, Any]] = []
     for seg in raw_segments:
         branches_raw = getattr(seg, "branches", None) or []
@@ -218,6 +192,20 @@ def _build_segments_response(snapshot_or_segments: Any) -> List[Dict[str, Any]]:
             }
             for b in branches_raw
         ]
+        # expanded 字段：缓存中有则 model_dump()，否则 None
+        expanded: Optional[Dict[str, Any]] = None
+        seg_id = getattr(seg, "id", None)
+        if seg_id and seg_id in cache:
+            cached = cache[seg_id]
+            if hasattr(cached, "model_dump"):
+                try:
+                    expanded = cached.model_dump()
+                except Exception:
+                    expanded = None
+            elif isinstance(cached, dict):
+                expanded = dict(cached)
+            else:
+                expanded = None
         result.append(
             {
                 "id": getattr(seg, "id", ""),
@@ -227,6 +215,7 @@ def _build_segments_response(snapshot_or_segments: Any) -> List[Dict[str, Any]]:
                 "min_duration_ms": getattr(seg, "min_duration_ms", None),
                 "key_points": list(getattr(seg, "key_points", []) or []),
                 "branches": branches,
+                "expanded": expanded,
             }
         )
     return result
@@ -239,22 +228,32 @@ def _build_segments_response(snapshot_or_segments: Any) -> List[Dict[str, Any]]:
 
 @router.get("/outline/state")
 async def get_outline_state(server: ServerDep) -> Dict[str, Any]:
-    """获取当前大纲运行时状态。
+    """获取当前大纲运行时状态（透传 ``OutlineState.get_snapshot()`` 全部字段）。
 
     委托 ``DeciderManager.outline_state()``（鸭子类型转发到已实现该方法的 Decider）；
     若无 Decider 实现，manager 返回 ``{"error": "not_implemented", ...}``，本端点
     将其转换为 HTTP 501。
 
-    返回字段（与任务规格 11 一致）::
+    返回字段（== :meth:`OutlineState.get_snapshot` 的全部字段，snake_case 透传）::
 
         status: str
-        current_segment: {id, title, elapsed_ms, duration_ms, remaining_ms} | null
+        current_segment: {id, title, duration_ms, elapsed_ms, remaining_ms, expanded, needs_expansion} | null
         next_segment: {id, title} | null
         completed_count: int
         total_count: int
         is_paused: bool
-        expanded_ready: bool
-        live_progress: {elapsed_ms: int, total_ms: int, percent: float}
+        elapsed_live_ms: int | null
+        total_planned_ms: int | null
+        progress_percent: float | null
+        outline_id: str | null
+        outline_title: str | null
+        manually_overridden: bool
+
+    Note:
+        T12 重构：原 ``live_progress`` / ``expanded_ready`` 派生字段已废弃，
+        前端直接读 ``elapsed_live_ms`` / ``total_planned_ms`` 等基础字段即可。
+        ``current_segment`` 嵌套 dict 含 ``expanded`` / ``needs_expansion`` 字段
+        便于调试。
     """
     manager = _ensure_decision_manager(server)
 
@@ -380,8 +379,14 @@ async def get_outline_segments(server: ServerDep) -> Dict[str, Any]:
     """获取当前大纲完整环节列表（供编辑页渲染）。
 
     委托 ``DeciderManager.outline_segments()``（T10 提供）：返回当前已加载大纲的
-    完整环节数组 + 元数据。若无大纲加载 → 返回空 segments + ``loaded=False``。
-    无 Decider 实现 → HTTP 501。
+    完整环节数组 + 元数据。每段附带 ``expanded`` 字段，来自 ``OutlineState``
+    扩展缓存（未缓存时为 ``None``），便于 Dashboard 直接展示开场白/话题引导/
+    讨论要点而无需二次请求。
+
+    行为：
+        - 无大纲加载 → 返回 ``{"loaded": false, "segments": [...]}``（segments 仍为列表）
+        - 无 Decider 实现 → HTTP 501
+        - Decider 返回非 dict → HTTP 500
     """
     manager = _ensure_decision_manager(server)
     raw = await manager.outline_segments()  # type: ignore[attr-defined]
@@ -390,11 +395,46 @@ async def get_outline_segments(server: ServerDep) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raise HTTPException(status_code=500, detail="Decider 返回的 outline_segments 格式错误（非 dict）")
 
+    # 提取 expanded_cache（鸭子类型：Decider 可在 raw 中塞入 expanded_cache 字段）
+    # 若未提供则为空 dict——所有段 expanded=None（仍正常序列化）
+    expanded_cache: Optional[Dict[str, Any]] = None
+    if "expanded_cache" in raw and isinstance(raw["expanded_cache"], dict):
+        expanded_cache = raw["expanded_cache"]
+
     return {
         "loaded": bool(raw.get("loaded", False)),
         "outline_id": raw.get("outline_id"),
         "title": raw.get("title"),
         "fallback_segment_id": raw.get("fallback_segment_id"),
         "path": raw.get("path"),
-        "segments": _build_segments_response(raw),
+        "segments": _build_segments_response(raw, expanded_cache=expanded_cache),
+    }
+
+
+@router.get("/outline/transitions")
+async def get_outline_transitions(server: ServerDep) -> Dict[str, Any]:
+    """获取大纲推进历史（最近 50 条，oldest → newest）。
+
+    委托 ``DeciderManager.outline_transitions()``：返回::
+
+        {"loaded": bool, "transitions": [{segment_id, title, reason, at_ms, stayed_ms}, ...]}
+
+    用途：Dashboard 调试端点展示"为什么跳到这里 / 上一段停留多久"，
+    便于人工排查大纲推进异常。
+
+    行为：
+        - 大纲未激活 → 200 + ``{"loaded": false, "transitions": []}``
+        - 无 Decider 实现 → HTTP 501
+        - Decider 返回非 dict → HTTP 500
+    """
+    manager = _ensure_decision_manager(server)
+    raw = await manager.outline_transitions()  # type: ignore[attr-defined]
+    _raise_if_not_implemented(raw)
+
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=500, detail="Decider 返回的 outline_transitions 格式错误（非 dict）")
+
+    return {
+        "loaded": bool(raw.get("loaded", False)),
+        "transitions": list(raw.get("transitions", []) or []),
     }

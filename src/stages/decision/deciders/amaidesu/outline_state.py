@@ -62,11 +62,13 @@
 
 from __future__ import annotations
 
+from collections import deque
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
+    Deque,
     Dict,
     List,
     Optional,
@@ -86,6 +88,15 @@ if TYPE_CHECKING:
 
 
 __all__ = ["OutlineStatus", "OutlineState"]
+
+
+# ---------------------------------------------------------------------------
+# 推进历史环形缓冲容量
+# ---------------------------------------------------------------------------
+
+#: 推进历史环形缓冲容量（最近 50 条；超出时 deque 自动丢弃最早条目）
+#: 用于 Dashboard 大纲调试可观察性：展示"为什么跳到这里 / 上一段停留多久"
+TRANSITIONS_MAXLEN: int = 50
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +202,11 @@ class OutlineState:
         # 手动操作标记（skip/rewind/jump 后置 True）；Task 9 据此跳过自动推进
         self._manually_overridden: bool = False
 
+        # ----- 推进历史（环形缓冲，Duck-typed 最长 50 条）-----
+        # 顺序：oldest → newest；新条目 append 到右端，超出时左端自动丢弃。
+        # 由 Dashboard / 调试端点读取，纯可观察性，不影响状态机本身。
+        self._transitions: Deque[Dict[str, Any]] = deque(maxlen=TRANSITIONS_MAXLEN)
+
         # ----- 时钟注入 -----
         self._clock: Optional[Callable[[], int]] = clock
 
@@ -230,6 +246,7 @@ class OutlineState:
             6. 重置暂停状态：``is_paused=False``、``paused_elapsed_ms=0``、``_paused_at_ms=None``
             7. 重置 ``_manually_overridden=False``
             8. ``status = RUNNING``
+            9. 重置推进历史 ``_transitions`` 并写入首条 ``reason="start"``
 
         Args:
             outline: :class:`StreamOutline` 实例（duck-typed，仅访问
@@ -258,6 +275,18 @@ class OutlineState:
         self._paused_at_ms = None
         self.is_paused = False
         self._manually_overridden = False
+        # 推进历史：start 重置环形缓冲并写入首条（无 prev segment，stayed_ms=None）
+        self._transitions = deque(maxlen=TRANSITIONS_MAXLEN)
+        first_seg = segs[0]
+        self._transitions.append(
+            {
+                "segment_id": first_seg.id,
+                "title": getattr(first_seg, "title", "") or "",
+                "reason": "start",
+                "at_ms": now,
+                "stayed_ms": None,
+            }
+        )
         # 推进到首段
         self.current_segment_id = segs[0].id
         self.segment_started_at_ms = now
@@ -300,7 +329,7 @@ class OutlineState:
         self._paused_at_ms = None
         self.is_paused = False
 
-    def skip(self, *, now_ms: Optional[int] = None) -> None:
+    def skip(self, *, reason: str = "manual:skip", now_ms: Optional[int] = None) -> None:
         """当前环节标记完成，推进到下一段。
 
         语义：
@@ -314,13 +343,16 @@ class OutlineState:
             - 若已是最后一段：
                 * ``current_segment_id = None``、``status = COMPLETED``
             - 设置 ``_manually_overridden = True``
+            - 写入推进历史：``reason`` 默认为 ``"manual:skip"``
 
         Args:
+            reason: 推进历史记录的 reason 标签；默认 ``"manual:skip"``（Dashboard 手动 skip）
             now_ms: 推进时刻（Unix 毫秒）；``None`` 时使用注入 / 真实时钟
         """
         if self.status != OutlineStatus.RUNNING or self.current_segment_id is None:
             return
         current = self.current_segment_id
+        prev_started_at_ms = self.segment_started_at_ms
         now = self._resolve_now(now_ms)
         # 清除当前环节的扩展缓存（新段需重新生成）
         self.expanded_cache.pop(current, None)
@@ -331,9 +363,25 @@ class OutlineState:
         # 推进到下一段或标记 COMPLETED
         next_id = self._next_segment_id(current)
         if next_id is None:
+            # 末段 skip：记录一条历史，segment_id=None 表示已结束
+            self._record_transition(
+                new_segment_id=None,
+                new_title=None,
+                reason=reason,
+                prev_started_at_ms=prev_started_at_ms,
+                now=now,
+            )
             self.current_segment_id = None
             self.status = OutlineStatus.COMPLETED
         else:
+            next_seg = self._find_segment(next_id)
+            self._record_transition(
+                new_segment_id=next_id,
+                new_title=getattr(next_seg, "title", "") or None if next_seg is not None else None,
+                reason=reason,
+                prev_started_at_ms=prev_started_at_ms,
+                now=now,
+            )
             self.current_segment_id = next_id
             self.segment_started_at_ms = now
             self.paused_elapsed_ms = 0
@@ -341,7 +389,7 @@ class OutlineState:
             self.is_paused = False
         self._manually_overridden = True
 
-    def rewind(self, *, now_ms: Optional[int] = None) -> None:
+    def rewind(self, *, reason: str = "manual:rewind", now_ms: Optional[int] = None) -> None:
         """回退到上一未完成环节（撤销最近一次 skip / advance_to）。
 
         语义：
@@ -350,18 +398,29 @@ class OutlineState:
             - 重置 ``segment_started_at_ms = now``、暂停状态归零
             - 若 ``status`` 之前是 ``COMPLETED`` → 回到 ``RUNNING``（撤销完成态）
             - 设置 ``_manually_overridden = True``
+            - 写入推进历史：``reason`` 默认为 ``"manual:rewind"``
 
         Note:
             "上一未完成环节" = 刚刚被 ``skip()`` / ``advance_to()`` 标记完成的那个环节。
             这是单步撤销，不支持多步回退（多步回退可由调用方多次 ``rewind()`` 串联）。
 
         Args:
+            reason: 推进历史记录的 reason 标签；默认 ``"manual:rewind"``
             now_ms: 回退时刻（Unix 毫秒）；``None`` 时使用注入 / 真实时钟
         """
         if not self.completed_segment_ids:
             return
         prev = self.completed_segment_ids.pop()
+        prev_started_at_ms = self.segment_started_at_ms
         now = self._resolve_now(now_ms)
+        prev_seg = self._find_segment(prev)
+        self._record_transition(
+            new_segment_id=prev,
+            new_title=getattr(prev_seg, "title", "") or None if prev_seg is not None else None,
+            reason=reason,
+            prev_started_at_ms=prev_started_at_ms,
+            now=now,
+        )
         self.current_segment_id = prev
         self.segment_started_at_ms = now
         self.paused_elapsed_ms = 0
@@ -372,7 +431,13 @@ class OutlineState:
             self.status = OutlineStatus.RUNNING
         self._manually_overridden = True
 
-    def jump_to(self, segment_id: str, *, now_ms: Optional[int] = None) -> None:
+    def jump_to(
+        self,
+        segment_id: str,
+        *,
+        reason: str = "manual:jump",
+        now_ms: Optional[int] = None,
+    ) -> None:
         """跳转到指定环节（**不**标记当前环节为完成）。
 
         语义：
@@ -382,9 +447,11 @@ class OutlineState:
             - ``current_segment_id = segment_id``、``segment_started_at_ms = now``
             - 重置暂停状态；``status = RUNNING``
             - 设置 ``_manually_overridden = True``
+            - 写入推进历史：``reason`` 默认为 ``"manual:jump"``
 
         Args:
             segment_id: 目标环节 id（必须存在于当前 ``outline.segments``）
+            reason: 推进历史记录的 reason 标签；默认 ``"manual:jump"``
             now_ms: 跳转时刻（Unix 毫秒）；``None`` 时使用注入 / 真实时钟
 
         Raises:
@@ -395,6 +462,7 @@ class OutlineState:
         all_ids = {seg.id for seg in self.outline.segments}
         if segment_id not in all_ids:
             raise ValueError(f"jump_to 目标 segment_id={segment_id!r} 不在大纲中（可用: {sorted(all_ids)}）")
+        prev_started_at_ms = self.segment_started_at_ms
         now = self._resolve_now(now_ms)
         # 扩展标记：未在缓存 → 需要扩展；已在缓存 → 清掉标记
         if segment_id in self.expanded_cache:
@@ -402,6 +470,14 @@ class OutlineState:
         else:
             self._needs_expansion.add(segment_id)
         # 跳转
+        target_seg = self._find_segment(segment_id)
+        self._record_transition(
+            new_segment_id=segment_id,
+            new_title=getattr(target_seg, "title", "") or None if target_seg is not None else None,
+            reason=reason,
+            prev_started_at_ms=prev_started_at_ms,
+            now=now,
+        )
         self.current_segment_id = segment_id
         self.segment_started_at_ms = now
         self.paused_elapsed_ms = 0
@@ -410,7 +486,13 @@ class OutlineState:
         self.status = OutlineStatus.RUNNING
         self._manually_overridden = True
 
-    def advance_to(self, segment_id: str, *, now_ms: Optional[int] = None) -> None:
+    def advance_to(
+        self,
+        segment_id: str,
+        *,
+        reason: str = "advance",
+        now_ms: Optional[int] = None,
+    ) -> None:
         """自动推进到指定环节（**由调度器 Task 9 调用，区别于手动 skip**）。
 
         与 :meth:`skip` 的关键区别：
@@ -424,6 +506,9 @@ class OutlineState:
 
         Args:
             segment_id: 目标环节 id（通常 = 下一环节或分支跳转目标）
+            reason: 推进历史记录的 reason 标签；默认 ``"advance"``。
+                调度器（Task 9）传入 ``"outline:time"`` / ``"outline:assessment"`` /
+                ``"outline:branch"``，便于 Dashboard 区分自动 vs 手动
             now_ms: 推进时刻（Unix 毫秒）；``None`` 时使用注入 / 真实时钟
 
         Raises:
@@ -439,12 +524,22 @@ class OutlineState:
         if segment_id not in all_ids:
             raise ValueError(f"advance_to 目标 segment_id={segment_id!r} 不在大纲中（可用: {sorted(all_ids)}）")
         current = self.current_segment_id
+        prev_started_at_ms = self.segment_started_at_ms
         now = self._resolve_now(now_ms)
         # 标记完成 + 清除缓存（与 skip 一致）
         self.expanded_cache.pop(current, None)
         self._needs_expansion.discard(current)
         if current not in self.completed_segment_ids:
             self.completed_segment_ids.append(current)
+        # 记录推进历史
+        target_seg = self._find_segment(segment_id)
+        self._record_transition(
+            new_segment_id=segment_id,
+            new_title=getattr(target_seg, "title", "") or None if target_seg is not None else None,
+            reason=reason,
+            prev_started_at_ms=prev_started_at_ms,
+            now=now,
+        )
         # 推进
         self.current_segment_id = segment_id
         self.segment_started_at_ms = now
@@ -513,7 +608,70 @@ class OutlineState:
         self._paused_at_ms = None
         self.is_paused = False
         self._manually_overridden = False
+        self._transitions.clear()
         self.status = OutlineStatus.UNLOADED
+
+    # ------------------------------------------------------------------
+    # 推进历史（仅可观察性，不影响状态机本身）
+    # ------------------------------------------------------------------
+
+    def get_transitions(self) -> List[Dict[str, Any]]:
+        """返回推进历史副本（oldest → newest，最多最近 :data:`TRANSITIONS_MAXLEN` 条）。
+
+        供 Dashboard 调试端点使用，便于人工排查"为什么跳到这里 / 上一段停留多久"。
+        返回浅拷贝列表，外部修改不影响内部 deque；调用方共享 dict 引用（浅拷贝），
+        但本字段纯只读，正常使用无副作用。
+
+        Returns:
+            列表中每条为 ``{segment_id, title, reason, at_ms, stayed_ms}``：
+                - ``segment_id``: 推进到的新环节 id（末段 skip 时为 ``None``）
+                - ``title``: 新环节标题（无 segment_id 时为 ``None``）
+                - ``reason``: 推进原因（``"start"`` / ``"manual:skip"`` / ``"manual:jump"`` /
+                  ``"manual:rewind"`` / ``"outline:time"`` / ``"outline:assessment"`` /
+                  ``"outline:branch"`` 等）
+                - ``at_ms``: 推进时刻（Unix 毫秒）
+                - ``stayed_ms``: 上一段停留时长（毫秒；首条为 ``None``）
+        """
+        return list(self._transitions)
+
+    def _record_transition(
+        self,
+        *,
+        new_segment_id: Optional[str],
+        new_title: Optional[str],
+        reason: str,
+        prev_started_at_ms: int,
+        now: int,
+    ) -> None:
+        """写入一条推进历史（环形缓冲；超出 :data:`TRANSITIONS_MAXLEN` 自动丢弃最早）。
+
+        仅在 :meth:`start` / :meth:`skip` / :meth:`rewind` / :meth:`jump_to` /
+        :meth:`advance_to` 实际发生环节切换时调用；状态机 refuse 路径直接返回，
+        不记录。pause / resume / unload 不算环节切换，**不**记录。
+
+        ``stayed_ms`` 为 ``max(0, now - prev_started_at_ms)``；``prev_started_at_ms=0``
+        （未启动态）时返回 ``None``，避免误把"0"当作"停留 0ms"。
+
+        Args:
+            new_segment_id: 推进到的新环节 id；末段 skip 完成时为 ``None``
+            new_title: 新环节标题（用于 Dashboard 直接展示；无 segment_id 时为 ``None``）
+            reason: 推进原因标签（自由字符串，调用方承担命名一致）
+            prev_started_at_ms: 上一段开始时刻（Unix 毫秒；用于计算 stayed_ms）
+            now: 推进时刻（Unix 毫秒；通常已由调用方解析过 now_ms）
+        """
+        if prev_started_at_ms <= 0:
+            stayed_ms: Optional[int] = None
+        else:
+            stayed_ms = max(0, now - prev_started_at_ms)
+        self._transitions.append(
+            {
+                "segment_id": new_segment_id,
+                "title": new_title,
+                "reason": reason,
+                "at_ms": now,
+                "stayed_ms": stayed_ms,
+            }
+        )
 
     # ------------------------------------------------------------------
     # 整场时间轴：anchor-based 计算

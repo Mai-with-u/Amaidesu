@@ -553,7 +553,7 @@ class DeciderManager:
         """转发"完整环节列表"查询到首个实现 ``outline_segments`` 的 Decider。
 
         期望 Decider 返回 ``{"loaded": bool, "outline_id": ..., "title": ...,
-        "segments": [OutlineSegment, ...], ...}`` 格式，供 Dashboard 编辑页渲染。
+        "segments": [OutlineSegment, ...], ...}`` 格式,供 Dashboard 编辑页渲染。
 
         Returns:
             Decider 返回的 dict；无 Decider 实现时返回 501 标记
@@ -561,6 +561,21 @@ class DeciderManager:
         return await self._dispatch_outline_call(
             method_name="outline_segments",
             call=lambda decider: decider.outline_segments(),
+        )
+
+    async def outline_transitions(self) -> Dict[str, Any]:
+        """转发"推进历史"查询到首个实现 ``outline_transitions`` 的 Decider。
+
+        期望 Decider 返回 ``{"loaded": bool, "transitions": [...]}`` 格式,供
+        Dashboard 调试端点展示。每条历史含 ``segment_id`` / ``title`` / ``reason`` /
+        ``at_ms`` / ``stayed_ms`` 字段。
+
+        Returns:
+            Decider 返回的 dict；无 Decider 实现时返回 501 标记
+        """
+        return await self._dispatch_outline_call(
+            method_name="outline_transitions",
+            call=lambda decider: decider.outline_transitions(),
         )
 
     async def _dispatch_outline_call(

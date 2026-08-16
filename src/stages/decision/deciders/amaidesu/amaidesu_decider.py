@@ -547,6 +547,16 @@ class AmaidesuDecider:
         # ④ 发布 Intent + 保存上下文
         # 主动发言时 batch 为空，使用占位 source_message_id（不破坏 metadata 必填字段）
         intent.metadata.source_message_id = batch[-1].message_id if batch else "proactive"
+        # 填充可观察性字段（Task 调试大纲用）：trigger_reason 来自决策流程已知上下文，
+        # outline_segment_id 来自当前 OutlineState（未启用时保持 None）。
+        # 这两个字段是 IntentMetadata 的可选字段（Intent 默认 may be None），写不写都行
+        # —— 但要写就一次写齐，避免下游 dashboard 误判"发言与大纲无关"。
+        intent.metadata.trigger_reason = trigger_reason
+        intent.metadata.outline_segment_id = (
+            self._outline_state.current_segment_id
+            if self._is_outline_active() and self._outline_state is not None
+            else None
+        )
         await self._publish_intent(intent)
         # intent.speech 类型为 Optional[str]，但 Replyer 返回成功时必然非空
         # 主动发言时 USER 行携带 Planner 的主题（topic_summary），让后续决策显式看到
@@ -798,6 +808,25 @@ class AmaidesuDecider:
             self.logger.error(f"outline_state 异常: {e}", exc_info=True)
             return {"error": "unknown", "status_code": 500, "detail": str(e)}
 
+    async def outline_transitions(self) -> Dict[str, Any]:
+        """返回大纲推进历史（供 Dashboard ``GET /api/v1/outline/transitions``）。
+
+        透传 :meth:`OutlineState.get_transitions`，返回 ``{"loaded": True,
+        "transitions": [...]}``；组件未构造时返回 ``{"loaded": False, "transitions": []}``。
+        失败隔离：异常被吞 + log，鸭子类型方法仍返回正常响应（避免 500 中断调试端点）。
+
+        Returns:
+            推进历史 dict（含 ``loaded`` 标志）；大纲未激活时 ``loaded=False`` + 空列表。
+        """
+        if self._outline_state is None:
+            return {"loaded": False, "transitions": []}
+        try:
+            transitions = self._outline_state.get_transitions()
+        except Exception as e:
+            self.logger.error(f"outline_transitions 异常: {e}", exc_info=True)
+            return {"loaded": True, "transitions": []}
+        return {"loaded": True, "transitions": transitions}
+
     async def outline_load(self, path: str) -> Dict[str, Any]:
         """加载指定 TOML 大纲文件（供 Dashboard ``POST /api/v1/outline/load``）。
 
@@ -964,12 +993,15 @@ class AmaidesuDecider:
             - ``outline_id`` / ``title`` / ``fallback_segment_id`` / ``path``
             - ``segments``: 环节对象列表（每个含 id / title / task_description /
               duration_ms / min_duration_ms / key_points / branches，API 层做序列化）
+            - ``expanded_cache``: :class:`OutlineState.expanded_cache`（Duck-typed）；
+              API 层据此为每段附加 ``expanded`` 详情，未缓存段为 ``None``
 
         Returns:
-            大纲元数据 + segments 列表；未加载时返回 ``{"loaded": False, "segments": []}``。
+            大纲元数据 + segments 列表 + expanded_cache；未加载时返回
+            ``{"loaded": False, "segments": [], "expanded_cache": {}}``。
         """
         if self._outline_state is None or self._outline_state.outline is None:
-            return {"loaded": False, "segments": []}
+            return {"loaded": False, "segments": [], "expanded_cache": {}}
         outline = self._outline_state.outline
         return {
             "loaded": True,
@@ -978,6 +1010,7 @@ class AmaidesuDecider:
             "fallback_segment_id": outline.fallback_segment_id,
             "path": self._outline_loader_path,
             "segments": list(outline.segments),
+            "expanded_cache": self._outline_state.expanded_cache,
         }
 
     # ==================== 辅助方法 ====================
