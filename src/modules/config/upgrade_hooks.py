@@ -47,10 +47,37 @@ class UpgradeResult:
     reasons: list[str]
 
 
+def _migrate_mainosaba_to_text_adv_game(data: dict[str, Any]) -> list[str]:
+    """input.toml 0.5.4：``mainosaba`` 触点 → ``text_adv_game``。
+
+    - ``[collectors]`` 段键 ``mainosaba`` → ``text_adv_game``（子配置整体保留）
+    - ``[collectors].enabled`` 列表内 ``mainosaba`` → ``text_adv_game``
+
+    原地修改、幂等（重复执行时旧值已不存在，无事发生），返回变更路径列表。
+    """
+    changed: list[str] = []
+    collectors = data.get("collectors")
+    if isinstance(collectors, dict):
+        if "mainosaba" in collectors:
+            collectors["text_adv_game"] = collectors.pop("mainosaba")
+            changed.append("collectors.text_adv_game")
+        enabled = collectors.get("enabled")
+        if isinstance(enabled, list) and "mainosaba" in enabled:
+            collectors["enabled"] = ["text_adv_game" if v == "mainosaba" else v for v in enabled]
+            changed.append("collectors.enabled")
+    return changed
+
+
 # 升级钩子注册表
 # 添加新钩子时，在元组中追加 ConfigUpgradeHook 即可
 # 每个钩子在其 target_version 被跨越时执行一次
-CONFIG_UPGRADE_HOOKS: tuple[ConfigUpgradeHook, ...] = ()
+CONFIG_UPGRADE_HOOKS: tuple[ConfigUpgradeHook, ...] = (
+    ConfigUpgradeHook(
+        target_version="0.5.4",
+        config_file="input.toml",
+        migrate=_migrate_mainosaba_to_text_adv_game,
+    ),
+)
 
 
 def _parse_version(version: str) -> tuple[int, ...]:

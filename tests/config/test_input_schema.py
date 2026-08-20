@@ -159,7 +159,7 @@ class TestInputCollectorsConfig:
             "bili_danmaku",
             "bili_danmaku_official",
             "console_input",
-            "mainosaba",
+            "text_adv_game",
             "mock_danmaku",
             "read_pingmu",
             "stt",
@@ -215,12 +215,12 @@ class TestCollectorSchemaFieldCoverage:
         assert cfg.mock_danmaku.loop_playback is False
         assert cfg.mock_danmaku.start_immediately is True
 
-    def test_mainosaba_schema_fields(self):
+    def test_text_adv_game_schema_fields(self):
         from src.modules.config.schemas.input_schemas import InputCollectorsConfig
 
         cfg = InputCollectorsConfig(
-            mainosaba={
-                "type": "mainosaba",
+            text_adv_game={
+                "type": "text_adv_game",
                 "full_screen": True,
                 "check_interval": 2,
                 "screenshot_min_interval": 0.5,
@@ -229,8 +229,8 @@ class TestCollectorSchemaFieldCoverage:
                 "click_position": [100, 200],
             }
         )
-        assert cfg.mainosaba.control_method == "enter_key"
-        assert cfg.mainosaba.click_position == [100, 200]
+        assert cfg.text_adv_game.control_method == "enter_key"
+        assert cfg.text_adv_game.click_position == [100, 200]
 
     def test_read_pingmu_schema_fields(self):
         from src.modules.config.schemas.input_schemas import InputCollectorsConfig
@@ -409,7 +409,7 @@ class TestRealConfigValidation:
             "bili_danmaku",
             "bili_danmaku_official",
             "console_input",
-            "mainosaba",
+            "text_adv_game",
             "mock_danmaku",
             "read_pingmu",
             "stt",
@@ -432,13 +432,13 @@ class TestUISchemaHints:
     """Pydantic Schema 必须能被 ConfigSchemaGenerator 正确转换为 UI schema"""
 
     def test_control_method_is_select_in_schema(self):
-        """mainosaba.control_method 是 Literal，schema generator 必须输出 select + options"""
-        from src.stages.input.collectors.mainosaba.mainosaba_collector import (
-            MainosabaCollector,
+        """text_adv_game.control_method 是 Literal，schema generator 必须输出 select + options"""
+        from src.stages.input.collectors.text_adv_game.text_adv_game_collector import (
+            TextAdvGameCollector,
         )
         from src.modules.config.schema_generator import ConfigSchemaGenerator
 
-        schema = ConfigSchemaGenerator.generate_config_schema(MainosabaCollector.ConfigSchema)
+        schema = ConfigSchemaGenerator.generate_config_schema(TextAdvGameCollector.ConfigSchema)
         cm_field = next(f for f in schema["fields"] if f["name"] == "control_method")
         # Literal 自动映射为 select + options
         assert cm_field["type"] == "select"
@@ -554,7 +554,7 @@ class TestRobustness:
             "bili_danmaku",
             "bili_danmaku_official",
             "console_input",
-            "mainosaba",
+            "text_adv_game",
             "mock_danmaku",
             "read_pingmu",
             "stt",

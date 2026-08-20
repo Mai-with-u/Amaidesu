@@ -537,7 +537,7 @@ async def test_data_type_registered_text_constructs_ok():
 @pytest.mark.asyncio
 async def test_data_type_registered_game_text_constructs_ok():
     """已登记 data_type=game.text 构造成功（验证新增类型）。"""
-    message = NormalizedMessage(text="剧情", source="mainosaba_game", data_type="game.text")
+    message = NormalizedMessage(text="剧情", source="text_adv_game", data_type="game.text")
     assert message.data_type == "game.text"
 
 

@@ -7,7 +7,7 @@ Input Collectors - 输入 Collector 实现
 - BiliDanmakuCollector: B站弹幕Collector
 - BiliDanmakuOfficialCollector: B站官方弹幕Collector
 - ReadPingmuCollector: 屏幕读评输入Collector
-- MainosabaCollector: 游戏画面文本采集Collector
+- TextAdvGameCollector: 游戏画面文本采集Collector
 - STTCollector: 语音转文字输入Collector
 
 注意：RemoteStream组件已移动到 src/stages/output/handlers/remote_stream/
@@ -20,10 +20,10 @@ Input Collectors - 输入 Collector 实现
 from .bili_danmaku import BiliDanmakuCollector
 from .bili_danmaku_official import BiliDanmakuOfficialCollector
 from .console_input import ConsoleInputCollector
-from .mainosaba import MainosabaCollector
 from .mock_danmaku import MockDanmakuCollector
 from .read_pingmu import ReadPingmuCollector
 from .stt import STTCollector
+from .text_adv_game import TextAdvGameCollector
 
 __all__ = [
     "ConsoleInputCollector",
@@ -31,6 +31,6 @@ __all__ = [
     "BiliDanmakuCollector",
     "BiliDanmakuOfficialCollector",
     "ReadPingmuCollector",
-    "MainosabaCollector",
+    "TextAdvGameCollector",
     "STTCollector",
 ]

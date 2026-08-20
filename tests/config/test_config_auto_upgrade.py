@@ -321,3 +321,48 @@ class TestMCPConfig:
         doc = tomlkit.parse((config_dir / "core.toml").read_text(encoding="utf-8-sig")).unwrap()
         assert "cors_origins" not in doc["mcp"]
         assert doc["mcp"]["enabled"] is True
+
+class TestMainosabaToTextAdvGameMigration:
+    """input.toml 0.5.4：`[collectors.mainosaba]` → `[collectors.text_adv_game]`"""
+
+    def _inject_old_mainosaba(self, config_dir: Path) -> Path:
+        """注入旧版 mainosaba 段并把版本号降回 0.5.3，模拟升级前用户配置。"""
+        input_path = config_dir / "input.toml"
+        content = input_path.read_text(encoding="utf-8-sig")
+        content += "\n[collectors.mainosaba]\nfull_screen = false\n"
+        input_path.write_text(content, encoding="utf-8-sig")
+        _set_version(config_dir, "0.5.3")
+        return input_path
+
+    def test_mainosaba_section_migrated_to_text_adv_game(self, config_dir: Path):
+        input_path = self._inject_old_mainosaba(config_dir)
+
+        config, _ = load_config_dir(config_dir)
+
+        assert "mainosaba" not in config["input"]["collectors"]
+        assert "text_adv_game" in config["input"]["collectors"]
+        assert config["input"]["collectors"]["text_adv_game"]["full_screen"] is False
+        written = input_path.read_text(encoding="utf-8-sig")
+        assert "text_adv_game" in written
+        assert "mainosaba" not in written
+
+    def test_enabled_list_mainosaba_migrated(self, config_dir: Path):
+        input_path = config_dir / "input.toml"
+        content = input_path.read_text(encoding="utf-8-sig")
+        content = content.replace('enabled = [', 'enabled = ["mainosaba", ')
+        input_path.write_text(content, encoding="utf-8-sig")
+        _set_version(config_dir, "0.5.3")
+
+        config, _ = load_config_dir(config_dir)
+
+        assert "mainosaba" not in config["input"]["collectors"]["enabled"]
+        assert "text_adv_game" in config["input"]["collectors"]["enabled"]
+
+    def test_migration_idempotent(self, config_dir: Path):
+        input_path = self._inject_old_mainosaba(config_dir)
+        load_config_dir(config_dir)
+        written_after_first = input_path.read_text(encoding="utf-8-sig")
+
+        load_config_dir(config_dir)
+
+        assert input_path.read_text(encoding="utf-8-sig") == written_after_first

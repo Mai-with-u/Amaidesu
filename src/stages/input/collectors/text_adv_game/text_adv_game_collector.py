@@ -1,5 +1,5 @@
 """
-MainosabaCollector - 从游戏画面采集文本数据
+TextAdvGameCollector - 从游戏画面采集文本数据
 
 该Collector从《魔法少女的魔女裁判》游戏画面截取屏幕，
 使用VLM识别游戏文本，并产生NormalizedMessage。
@@ -44,13 +44,13 @@ class ControlMethod(Enum):
 
 
 @collector(
-    "mainosaba",
+    "text_adv_game",
     label="游戏画面读取",
     description="截取文字冒险游戏（ADV）画面，用 VLM 识别游戏文本并产生消息",
 )
-class MainosabaCollector:
+class TextAdvGameCollector:
     """
-    MainosabaCollector - 从游戏画面采集文本数据
+    TextAdvGameCollector - 从游戏画面采集文本数据
 
     职责：
     - 截取游戏画面
@@ -59,7 +59,7 @@ class MainosabaCollector:
     """
 
     class ConfigSchema(BaseConfig):
-        """Mainosaba游戏画面采集输入Collector配置"""
+        """文字冒险游戏画面采集输入Collector配置"""
 
         full_screen: bool = Field(default=True, description="全屏截图")
         game_region: Optional[List[int]] = Field(default=None, description="游戏区域 [x1, y1, x2, y2]")
@@ -100,7 +100,7 @@ class MainosabaCollector:
         prompt_manager: Optional[PromptManager] = None,
     ):
         """
-        初始化MainosabaCollector
+        初始化TextAdvGameCollector
 
         Args:
             config: 配置字典
@@ -157,7 +157,7 @@ class MainosabaCollector:
         self.is_started = False
 
     async def cleanup(self) -> None:
-        self.logger.info("MainosabaCollector 已清理")
+        self.logger.info("TextAdvGameCollector 已清理")
 
     async def collect(self) -> AsyncIterator[NormalizedMessage]:
         """采集游戏文本数据"""
@@ -193,13 +193,13 @@ class MainosabaCollector:
                             self.logger.debug(f"检测到新游戏文本: {game_text[:50]}...")
                             yield NormalizedMessage(
                                 text=game_text,
-                                source="mainosaba_game",
+                                source="text_adv_game",
                                 data_type="game.text",
                                 importance=0.5,
                                 timestamp_ms=now_ms(),
-                                user_id="mainosaba_game",
-                                user_nickname="Mainosaba游戏",
-                                platform="mainosaba",
+                                user_id="text_adv_game",
+                                user_nickname="文字冒险游戏",
+                                platform="text_adv_game",
                             )
                             self.last_game_text = game_text
                             self.last_message_time = time.time()
@@ -256,7 +256,7 @@ class MainosabaCollector:
         try:
             if not self.prompt_manager:
                 raise ValueError("prompt_manager 未注入，请检查 Collector 初始化配置")
-            prompt = self.prompt_manager.get_raw("input/mainosaba_ocr")
+            prompt = self.prompt_manager.get_raw("input/text_adv_game_ocr")
 
             image_data_url = f"data:image/png;base64,{image_base64}"
 

@@ -54,3 +54,7 @@ OutputHandlerManager 直接调用每个已启用 Handler 的 `handle(intent)`，
 - `DISPATCHED` 不再表示 Handler 已经通过事件收到意图，而只表示 Manager 已开始处理该意图，因此监控组件应按监控信号理解它。
 - Handler 的完成聚合集中在 OutputHandlerManager，Manager 需要继续负责并行处理、异常隔离和最终完成通知。
 - 直接调度减少了 Handler 与 EventBus 之间的调度耦合，但 Handler 间仍可使用既有的专用事件进行业务通信。
+
+---
+
+*2026-08-20 更新注记：本文正文为历史决策记录，不回改。`MainosabaCollector` 已更名为 `TextAdvGameCollector`（采集器服务文字冒险/视觉小说类游戏而非单一游戏），注册名/配置段同步改为 `text_adv_game`，语义不变。*

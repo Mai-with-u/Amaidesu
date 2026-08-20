@@ -42,7 +42,7 @@ src/modules/prompts/templates/
 │   ├── llm.md                   # LLM 对话模板
 │   └── llm_structured.md        # LLM 结构化输出模板
 ├── input/                      # 输入阶段提示词
-│   ├── mainosaba_ocr.md       # OCR 提示词
+│   ├── text_adv_game_ocr.md   # OCR 提示词
 │   ├── screen_context.md      # 屏幕上下文提示词
 │   ├── screen_description.md  # 屏幕描述提示词
 │   └── summarize.md           # 摘要提示词

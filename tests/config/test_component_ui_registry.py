@@ -5,7 +5,7 @@
 1. 与 ``CONFIG_SCHEMA_REGISTRY`` 一一对应（同 key 集）
 2. 每个组件都有非空显示名与描述
 3. 显示名不允许是占位伪翻译（.title() 派生或 "xx 配置" 模式）
-4. 回归：``mainosaba`` 显示名为"游戏画面读取"（曾误译为"主幕读取"）
+4. 回归：``text_adv_game`` 显示名为"游戏画面读取"（曾误译为"主幕读取"）
 """
 
 import pytest
@@ -49,6 +49,6 @@ def test_component_has_description(name):
     assert meta.description, f"{name} 缺少显示描述"
 
 
-def test_mainosaba_label_regression():
-    """回归：mainosaba 显示名是"游戏画面读取"，不得回退为"主幕读取"。"""
-    assert COMPONENT_UI_REGISTRY["mainosaba"].label == "游戏画面读取"
+def test_text_adv_game_label_regression():
+    """回归：text_adv_game 显示名是"游戏画面读取"，不得回退为"主幕读取"。"""
+    assert COMPONENT_UI_REGISTRY["text_adv_game"].label == "游戏画面读取"

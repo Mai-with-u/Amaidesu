@@ -98,7 +98,7 @@ def test_prompt_template_enter_byte_identical():
 def test_prompt_template_game_text_no_nickname():
     """game.text 类型 prompt 模板应与 source_prefix 特判输出一致：`[游戏] 内容`（无昵称）。"""
     spec = require_message_type("game.text")
-    rendered = spec.prompt_template.format(text="游戏剧情台词", nickname="Mainosaba游戏")
+    rendered = spec.prompt_template.format(text="游戏剧情台词", nickname="文字冒险游戏")
     assert rendered == "[游戏] 游戏剧情台词"
 
 

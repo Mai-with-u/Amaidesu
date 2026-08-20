@@ -1,5 +1,5 @@
 ---
-name: mainosaba_ocr
+name: text_adv_game_ocr
 version: "1.0"
 description: "游戏截图文本识别提示词"
 author: Amaidesu

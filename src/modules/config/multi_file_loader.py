@@ -51,7 +51,7 @@ _PHASE_TO_REGISTRY: dict[tuple[str, str], str] = {
     ("output", "_HANDLERS"): "src.stages.output.registry",
 }
 
-CONFIG_VERSION = "0.5.3"
+CONFIG_VERSION = "0.5.4"
 
 _CONFIG_FILES = ["core.toml", "model.toml", "input.toml", "decision.toml", "output.toml"]
 
@@ -881,6 +881,18 @@ def load_config_dir(
     input_path = config_dir / "input.toml"
     if input_path.exists():
         try:
+            # 版本升级钩子：先于 schema 校验执行——旧配置可能含已删除的段
+            # （如 [collectors.mainosaba] 在 extra="forbid" 下会直接校验失败），
+            # 必须先在 raw dict 上完成数据变换、写回文件，再进入校验/漂移闭环。
+            if version_changed:
+                with open(input_path, "r", encoding="utf-8-sig") as f:
+                    raw_input = tomlkit.load(f).unwrap()
+                hook_result = apply_upgrade_hooks(
+                    raw_input, "input.toml", current_ver or CONFIG_VERSION, CONFIG_VERSION
+                )
+                if hook_result.migrated:
+                    logger.warning(f"input.toml 配置升级钩子已应用: {hook_result.reasons}")
+                    input_path.write_text(tomlkit.dumps(raw_input), encoding="utf-8")
             input_data, input_report = _load_and_validate_schema(input_path, InputConfig)
             _filter_optional_container_missing(input_report, InputConfig)
             if input_report.has_drift:

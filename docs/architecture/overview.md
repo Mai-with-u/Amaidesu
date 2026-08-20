@@ -94,7 +94,7 @@ Amaidesu/
 │   │   │   │   ├── console_input/
 │   │   │   │   ├── bili_danmaku/
 │   │   │   │   ├── bili_danmaku_official/
-│   │   │   │   ├── mainosaba/
+│   │   │   │   ├── text_adv_game/
 │   │   │   │   ├── mock_danmaku/
 │   │   │   │   ├── read_pingmu/
 │   │   │   │   └── stt/
@@ -196,7 +196,7 @@ sequenceDiagram
 | console_input | 控制台输入 | `src/stages/input/collectors/console_input/` |
 | bili_danmaku | B站弹幕（第三方API） | `src/stages/input/collectors/bili_danmaku/` |
 | bili_danmaku_official | B站弹幕（官方WebSocket） | `src/stages/input/collectors/bili_danmaku_official/` |
-| mainosaba | Mainosaba输入 | `src/stages/input/collectors/mainosaba/` |
+| text_adv_game | 文字冒险游戏画面输入 | `src/stages/input/collectors/text_adv_game/` |
 | mock_danmaku | 模拟弹幕（测试用） | `src/stages/input/collectors/mock_danmaku/` |
 | read_pingmu | PingMu读取 | `src/stages/input/collectors/read_pingmu/` |
 | stt | 语音识别 | `src/stages/input/collectors/stt/` |

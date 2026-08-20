@@ -57,9 +57,9 @@ def test_render_enter_with_prefix():
     assert MessageBuffer.render_batch_text(msgs) == "[入场] 新人: 进入了直播间"
 
 
-def test_render_mainosaba_game_text_no_nickname():
+def test_render_text_adv_game_text_no_nickname():
     """game.text 类型：源前缀 `[游戏] `，**无**昵称——与原 source_prefix 特判输出一致。"""
-    msgs = [_msg("game.text", "游戏剧情台词", source="mainosaba_game", nickname="Mainosaba游戏")]
+    msgs = [_msg("game.text", "游戏剧情台词", source="text_adv_game", nickname="文字冒险游戏")]
     assert MessageBuffer.render_batch_text(msgs) == "[游戏] 游戏剧情台词"
 
 
@@ -94,10 +94,10 @@ def test_render_empty_batch():
     assert MessageBuffer.render_batch_text([]) == ""
 
 
-def test_render_mainosaba_batch_mixed():
-    """mainosaba_game 消息混在批次中——只有 mainosaba_game 走游戏前缀路径，其它走通用路径。"""
+def test_render_text_adv_game_batch_mixed():
+    """text_adv_game 消息混在批次中——只有 text_adv_game 走游戏前缀路径，其它走通用路径。"""
     msgs = [
-        _msg("game.text", "剧情", source="mainosaba_game", nickname="Mainosaba游戏"),
+        _msg("game.text", "剧情", source="text_adv_game", nickname="文字冒险游戏"),
         _msg("text", "弹幕", source="console", nickname="观众A"),
     ]
     assert MessageBuffer.render_batch_text(msgs) == "[游戏] 剧情\n观众A: 弹幕"
