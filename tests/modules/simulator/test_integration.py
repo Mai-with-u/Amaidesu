@@ -206,7 +206,7 @@ async def test_generate_message_sc_branch_records_usage():
         tokens_used=77,
     )
     collector._gift_generator.generate_sc = AsyncMock(return_value=sc_msg)
-    collector._pick_message_type = lambda: "sc"  # type: ignore[method-assign]
+    collector._pick_message_type = lambda: "super_chat"  # type: ignore[method-assign]
 
     msg = await collector._generate_message(StreamerContextSnapshot())
     assert msg is not None

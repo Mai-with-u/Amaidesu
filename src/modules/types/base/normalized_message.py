@@ -7,9 +7,10 @@
 from typing import Any, Optional
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src.modules.logging import get_logger
+from src.modules.types.message_type import require_message_type
 
 logger = get_logger(__name__)
 
@@ -26,7 +27,9 @@ class NormalizedMessage(BaseModel):
     Attributes:
             text: 用于 LLM 处理的文本描述
             source: 数据来源标识（如 "bili_danmaku_official", "console"）
-            data_type: 数据类型（text, gift, super_chat, guard, enter）
+            data_type: 数据类型（必须为已登记的 message_type，见
+                ``src/modules.types.message_type.MESSAGE_TYPE_REGISTRY``）。
+                构造期校验，未登记抛 ``MessageTypeNotRegistered``。
             importance: 重要性评分（0-1），用于过滤和优先级排序
             timestamp_ms: 消息时间戳，Unix epoch 毫秒（13 位整数）
                 通过 alias `timestamp` 保持向后兼容：旧调用仍可使用 `timestamp=...` 传入。
@@ -37,11 +40,11 @@ class NormalizedMessage(BaseModel):
             room_id: 直播间 ID（可选）
     """
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     text: str = Field(description="用于 LLM 处理的文本描述")
     source: str = Field(description="数据来源标识")
-    data_type: str = Field(default="text", description="数据类型")
+    data_type: str = Field(default="text", description="数据类型（必须为已登记的 message_type）")
     importance: float = Field(default=0.5, ge=0.0, le=1.0, description="重要性评分")
     timestamp_ms: int = Field(
         default=0,
@@ -57,6 +60,21 @@ class NormalizedMessage(BaseModel):
     room_id: Optional[str] = Field(default=None, description="直播间 ID")
     session_id: Optional[str] = Field(default=None, description="会话 ID，不填则所有采集器共享同一默认会话")
     message_id: str = Field(default_factory=lambda: uuid4().hex, description="消息唯一 ID,自动生成 UUID hex")
+
+    @field_validator("data_type")
+    @classmethod
+    def _validate_data_type(cls, v: str) -> str:
+        """data_type 构造期校验：必须是已登记的 message_type。
+
+        关口位置：所有 ``NormalizedMessage(...)`` 构造（含 ``model_validate`` 反序列化）
+        都会触发此校验。未登记抛 ``MessageTypeNotRegistered``——这是整个登记制的
+        "拦截点"，保证跨 7 个采集器 + 5 个消费点的 data_type 一定有封闭语义。
+
+        Raises:
+            MessageTypeNotRegistered: ``v`` 不在 ``MESSAGE_TYPE_REGISTRY`` 中。
+        """
+        require_message_type(v)
+        return v
 
     @property
     def display_text(self) -> str:

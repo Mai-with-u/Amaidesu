@@ -54,7 +54,7 @@ function getDisplayText(msg: DanmakuMessage): string {
   switch (msg.message_type) {
     case 'gift':
       return `送出 ${msg.gift_name || '礼物'} x${msg.gift_count || 1}`;
-    case 'superchat':
+    case 'super_chat':
       return `¥${msg.sc_price || 0} ${msg.sc_message || msg.content}`;
     case 'guard': {
       const guardNames: Record<number, string> = { 1: '总督', 2: '提督', 3: '舰长' };
@@ -149,7 +149,7 @@ body,
   backdrop-filter: blur(4px);
 }
 
-.message.danmaku {
+.message.text {
   border-left: 3px solid #00ff88;
 }
 
@@ -158,7 +158,7 @@ body,
   border-left: 3px solid #ff8800;
 }
 
-.message.superchat {
+.message.super_chat {
   background: linear-gradient(90deg, rgba(255, 107, 107, 0.3), rgba(107, 255, 107, 0.2));
   border-left: 3px solid #ff6b6b;
 }

@@ -39,6 +39,7 @@ from src.modules.prompts.manager import PromptManager
 from src.modules.types import Intent
 from src.modules.types.base.normalized_message import NormalizedMessage
 from src.modules.types.capabilities import CapabilitiesProvider
+from src.modules.types.message_type import require_message_type
 from src.modules.time_utils import format_duration_ms, now_ms
 
 from .message_buffer import MessageBuffer
@@ -182,6 +183,9 @@ class AmaidesuDecider:
     ):
         self.typed_config = self.ConfigSchema.from_dict(config)
         self.logger = get_logger("AmaidesuDecider")
+
+        for t in self.typed_config.force_data_types:
+            require_message_type(t)
 
         self._event_bus = event_bus
         self._llm_service = llm_service

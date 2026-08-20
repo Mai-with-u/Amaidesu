@@ -246,7 +246,6 @@ classDiagram
     BasePayload <|-- CoreStartupPayload
     BasePayload <|-- CoreShutdownPayload
     BasePayload <|-- CoreErrorPayload
-    BasePayload <|-- RawDataPayload
     BasePayload <|-- MessageReadyPayload
     BasePayload <|-- IntentActionPayload
     BasePayload <|-- IntentPayload
@@ -261,12 +260,12 @@ classDiagram
 
 > **架构演进**：早期版本中散落的 Payload 类（`DecisionRequestPayload`、
 > `ProviderConnectedPayload`、`RenderCompletedPayload`、`ErrorPayload` 等）
-> 已统一收敛。当前实际存在的 14 个具体 Payload 类（不含 `BasePayload`）如上图所示，全部定义在
+> 已统一收敛。当前实际存在的 13 个具体 Payload 类（不含 `BasePayload`）如上图所示，全部定义在
 > `src/modules/events/payloads/` 下按阶段分包（`core.py` / `input.py` / `decision.py` /
 > `output.py` / `connection.py` / `base.py`）。
 >
-> **注意**：`RawDataPayload`（`input.raw.data`）与 `IntentActionPayload`（`decision.intent.action`）
-> 为历史遗留定义——有 Payload 类但**无生产代码发布或订阅**（仅测试与兼容场景使用）。
+> **注意**：`IntentActionPayload`（`decision.intent.action`）为历史遗留定义——有 Payload
+> 类但**无生产代码发布或订阅**（仅测试与兼容场景使用）。
 
 ### 按阶段分类
 
@@ -282,7 +281,6 @@ classDiagram
 
 | Payload 类 | 事件名 | 用途 |
 |-----------|--------|------|
-| `RawDataPayload` | `input.raw.data` | 原始数据事件（⚠️ 仅定义，无生产发布者，保留供测试/兼容） |
 | `MessageReadyPayload` | `input.message.received` | 标准化消息就绪（Input → Decision） |
 
 #### Decision 阶段
@@ -597,4 +595,4 @@ class MyPayload(BasePayload):
 
 ---
 
-*最后更新：2026-07-31（OutputHandlerManager 改为直接调度，DISPATCHED 仅用于监控，完成跟踪收归 Manager）*
+*最后更新：2026-08-20（清理 `RawDataPayload`/`input.raw.data` 死代码引用，Payload 计数 14→13）*

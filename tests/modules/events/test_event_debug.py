@@ -18,7 +18,6 @@ from src.modules.events.payloads import (
     MessageReadyPayload,
     ConnectedPayload,
     DisconnectedPayload,
-    RawDataPayload,
 )
 from src.modules.events.payloads.base import BasePayload
 from src.modules.types import IntentAction, IntentEmotion
@@ -111,27 +110,30 @@ class TestBasePayload:
 class TestInputPayloads:
     """测试 Input Domain Payload 的字符串表示"""
 
-    def test_raw_data_payload_debug_string(self):
-        """测试 RawDataPayload 的字符串表示"""
-        payload = RawDataPayload(content="测试消息", source="console_input", data_type="text")
+    def test_message_ready_payload_from_normalized_message(self):
+        """测试从 NormalizedMessage 构造 MessageReadyPayload 的字符串表示。"""
+        from src.modules.types.base.normalized_message import NormalizedMessage
+
+        message = NormalizedMessage(text="测试消息", source="console_input", data_type="text")
+        payload = MessageReadyPayload.from_normalized_message(message)
         debug_str = str(payload)
 
-        # 新格式: [text] "测试消息"
-        assert "[text]" in debug_str
         assert "测试消息" in debug_str
 
-    def test_raw_data_payload_with_metadata(self):
-        """测试带元数据的 RawDataPayload"""
-        payload = RawDataPayload(
-            content="用户输入的文本",
+    def test_message_ready_payload_with_metadata(self):
+        """测试带元数据的 MessageReadyPayload。"""
+        from src.modules.types.base.normalized_message import NormalizedMessage
+
+        message = NormalizedMessage(
+            text="用户输入的文本",
             source="bili_danmaku",
             data_type="text",
-            metadata={"user_id": "12345", "username": "观众A"},
+            user_id="12345",
+            user_nickname="观众A",
         )
+        payload = MessageReadyPayload.from_normalized_message(message)
         debug_str = str(payload)
 
-        # RawDataPayload 有自定义的 __str__ 方法，格式为 [data_type] "content" (user_name)
-        assert "[text]" in debug_str
         assert "用户输入的文本" in debug_str
 
     def test_message_ready_payload_debug_string(self):
@@ -369,19 +371,17 @@ class TestEventBusDebugLog:
             async def handler(event_name, data, source):
                 received_data.append(data)
 
-            event_bus.on("test.event", handler, model_class=RawDataPayload)
+            event_bus.on("test.event", handler, model_class=MessageReadyPayload)
 
-            # 发布事件
-            payload = RawDataPayload(content="测试消息", source="test", data_type="text")
+            payload = MessageReadyPayload(
+                message={"text": "测试消息", "source": "test", "data_type": "text"},
+                source="test",
+            )
 
             await event_bus.emit("test.event", payload, source="test_source")
 
-            # 验证日志输出包含事件内容
             log_output = log_capture.getvalue()
-            # RawDataPayload 的特殊格式: [test.event] test_source: text
-            # 注意: 现在使用完整事件名，不再简化
             assert "[test.event]" in log_output
-            # source 是 "test_source"
             assert ": 测试消息" in log_output
         finally:
             # 清理 log handler

@@ -362,7 +362,7 @@ class LiveStreamSimulator:
             self._record_usage(msg)
             return msg
 
-        if msg_type == "sc" and self._gift_generator is not None:
+        if msg_type == "super_chat" and self._gift_generator is not None:
             msg = await self._gift_generator.generate_sc(context)
             self._record_usage(msg)
             return msg
@@ -393,11 +393,16 @@ class LiveStreamSimulator:
             return None
 
     def _pick_message_type(self) -> str:
-        """按概率选择消息类型：text / gift / sc"""
+        """按概率选择消息类型：text / gift / super_chat
+
+        返回值直接用于分支并保持与已登记 message_type（见
+        ``src.modules.types.message_type``）一致，避免内部 token 与
+        ``NormalizedMessage.data_type`` 取值产生偏差。
+        """
         cfg = self._cfg
         roll = random.random()
         if roll < cfg.sc_probability:
-            return "sc"
+            return "super_chat"
         elif roll < cfg.sc_probability + cfg.gift_probability:
             return "gift"
         return "text"

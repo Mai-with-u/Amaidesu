@@ -194,7 +194,7 @@ class MainosabaCollector:
                             yield NormalizedMessage(
                                 text=game_text,
                                 source="mainosaba_game",
-                                data_type="text",
+                                data_type="game.text",
                                 importance=0.5,
                                 timestamp_ms=now_ms(),
                                 user_id="mainosaba_game",

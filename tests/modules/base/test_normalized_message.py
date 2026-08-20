@@ -284,7 +284,7 @@ async def test_raw_arbitrary_object():
         text="测试",
         raw=custom_obj,
         source="test",
-        data_type="custom",
+        data_type="game.text",
         importance=0.5,
     )
 
@@ -299,7 +299,7 @@ async def test_raw_none():
         text="测试",
         raw=None,
         source="test",
-        data_type="none",
+        data_type="text",
         importance=0.5,
     )
 
@@ -332,7 +332,7 @@ async def test_raw_dict_object():
         text="测试",
         raw=dict_content,
         source="test",
-        data_type="dict_type",
+        data_type="text",
         importance=0.5,
     )
 
@@ -520,6 +520,50 @@ async def test_optional_fields_default_to_none():
     assert message.user_nickname is None
     assert message.platform is None
     assert message.room_id is None
+
+
+# =============================================================================
+# data_type 登记校验测试
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_data_type_registered_text_constructs_ok():
+    """已登记 data_type=text 构造成功。"""
+    message = NormalizedMessage(text="hi", source="t", data_type="text")
+    assert message.data_type == "text"
+
+
+@pytest.mark.asyncio
+async def test_data_type_registered_game_text_constructs_ok():
+    """已登记 data_type=game.text 构造成功（验证新增类型）。"""
+    message = NormalizedMessage(text="剧情", source="mainosaba_game", data_type="game.text")
+    assert message.data_type == "game.text"
+
+
+@pytest.mark.asyncio
+async def test_data_type_unregistered_raises():
+    """未登记 data_type 构造抛 ValidationError（来自 MessageTypeNotRegistered）。"""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as exc_info:
+        NormalizedMessage(text="hi", source="t", data_type="custom_xyz")
+    assert "custom_xyz" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_extra_field_forbidden():
+    """extra='forbid' 生效：未知字段构造抛 ValidationError。"""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as exc_info:
+        NormalizedMessage(
+            text="hi",
+            source="t",
+            data_type="text",
+            bogus_field=1,
+        )
+    assert "bogus_field" in str(exc_info.value)
 
 
 # =============================================================================

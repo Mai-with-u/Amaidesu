@@ -14,6 +14,7 @@ MessageBuffer - 弹幕聚合缓冲
 from typing import List, Optional, Tuple
 
 from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.types.message_type import require_message_type
 
 
 class MessageBuffer:
@@ -198,22 +199,10 @@ class MessageBuffer:
         Returns:
             多行文本，每行形如 "[醒目留言] 昵称: 内容"
         """
-        type_prefix = {
-            "super_chat": "[醒目留言] ",
-            "guard": "[上舰] ",
-            "gift": "[礼物] ",
-            "enter": "[入场] ",
-        }
-        source_prefix = {
-            "mainosaba_game": "[游戏] ",
-        }
         lines: List[str] = []
         for message in messages:
-            source_pre = source_prefix.get(message.source, "")
-            if source_pre:
-                lines.append(f"{source_pre}{message.text}")
-            else:
-                nickname = message.user_nickname or message.user_id or "观众"
-                pre = type_prefix.get(message.data_type, "")
-                lines.append(f"{pre}{nickname}: {message.text}")
+            spec = require_message_type(message.data_type)
+            nickname = message.user_nickname or message.user_id or "观众"
+            line = spec.prompt_template.format(text=message.text, nickname=nickname)
+            lines.append(line)
         return "\n".join(lines)

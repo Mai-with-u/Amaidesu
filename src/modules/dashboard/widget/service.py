@@ -198,7 +198,7 @@ class DanmakuWidgetService:
                     user_name=user_name,
                     user_id=user_id,
                     content=text,
-                    message_type=MessageType.DANMAKU,
+                    message_type=MessageType.TEXT,
                     timestamp=dt_timestamp,
                     importance=importance,
                     platform=platform,
@@ -274,7 +274,7 @@ class DanmakuWidgetService:
                     user_name=user_name,
                     user_id=user_id,
                     content=text,
-                    message_type=MessageType.DANMAKU,
+                    message_type=MessageType.TEXT,
                     timestamp=dt_timestamp,
                     importance=importance,
                     platform=platform,
@@ -289,7 +289,7 @@ class DanmakuWidgetService:
         if msg.importance < self.config.min_importance:
             return False
 
-        if msg.message_type == MessageType.DANMAKU and not self.config.show_danmaku:
+        if msg.message_type == MessageType.TEXT and not self.config.show_danmaku:
             return False
         if msg.message_type == MessageType.GIFT and not self.config.show_gift:
             return False

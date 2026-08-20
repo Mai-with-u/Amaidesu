@@ -31,6 +31,7 @@ from typing import Any, List, Optional
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.logging import get_logger
 from src.modules.time_utils import format_duration_ms
+from src.modules.types.message_type import require_message_type
 
 from .plan import DecisionPlan
 from .room_state import RoomState, RoomStateSnapshot
@@ -327,8 +328,9 @@ class Planner:
     def _render_batch(self, batch: List[Any]) -> str:
         """将一批弹幕渲染为文本块（供 prompt 注入）。
 
-        复用 MessageBuffer.render_batch_text 的格式约定，但保持独立实现以避免
-        对 MessageBuffer 的硬依赖（Planner 不关心缓冲逻辑）。
+        复用 MessageBuffer.render_batch_text 的格式约定（同一 message_type 在
+        Planner 与 MessageBuffer 渲染输出一致），但保持独立实现以避免对
+        MessageBuffer 的硬依赖（Planner 不关心缓冲逻辑）。
 
         Args:
             batch: 弹幕消息列表
@@ -344,15 +346,9 @@ class Planner:
             text = getattr(msg, "text", None) or str(msg)
             nickname = getattr(msg, "user_nickname", None) or getattr(msg, "user_id", None) or "观众"
             data_type = getattr(msg, "data_type", "text") or "text"
-
-            type_tag = {
-                "super_chat": "[醒目留言] ",
-                "guard": "[上舰] ",
-                "gift": "[礼物] ",
-                "enter": "[入场] ",
-            }.get(data_type, "")
-
-            lines.append(f"{type_tag}{nickname}: {text}")
+            spec = require_message_type(data_type)
+            line = spec.prompt_template.format(text=text, nickname=nickname)
+            lines.append(line)
         return "\n".join(lines)
 
     @staticmethod

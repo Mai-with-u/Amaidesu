@@ -27,6 +27,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
 from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.types.guard_levels import DEFAULT_GUARD_NAME, GUARD_LEVEL_NAMES
 
 from .client.websocket_client import BiliWebSocketClient
 
@@ -281,8 +282,7 @@ class BiliDanmakuOfficialCollector:
             )
 
         elif isinstance(bili_msg, GuardMessage):
-            guard_level_map = {1: "总督", 2: "提督", 3: "舰长"}
-            guard_name = guard_level_map.get(bili_msg.guard_level, "大航海")
+            guard_name = GUARD_LEVEL_NAMES.get(bili_msg.guard_level, DEFAULT_GUARD_NAME)
             description = f"{bili_msg.uname} 开通了 {guard_name}"
             self.logger.debug(f"[大航海] {description}")
             importance_scores = {1: 1.0, 2: 0.9, 3: 0.8}

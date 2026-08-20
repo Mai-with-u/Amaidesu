@@ -7,7 +7,7 @@
 import uuid
 from typing import TYPE_CHECKING, Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from src.modules.context.models import MessageRole
 from src.modules.dashboard.dependencies import get_dashboard_server
@@ -25,6 +25,7 @@ from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
 from src.modules.types.base.normalized_message import NormalizedMessage
 from src.modules.types.intent import Intent, IntentAction, IntentEmotion, IntentMetadata
+from src.modules.types.message_type import MessageTypeNotRegistered, require_message_type
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
@@ -48,7 +49,11 @@ async def inject_message(
         return InjectMessageResponse(success=False, error="Event bus not available")
 
     try:
-        # 构造 NormalizedMessage
+        try:
+            require_message_type(request.data_type)
+        except MessageTypeNotRegistered as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
         message = NormalizedMessage(
             text=request.text,
             source=request.source,
@@ -85,6 +90,8 @@ async def inject_message(
 
         return InjectMessageResponse(success=True, message_id=message_id)
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"注入消息失败: {e}")
         return InjectMessageResponse(success=False, error=str(e))

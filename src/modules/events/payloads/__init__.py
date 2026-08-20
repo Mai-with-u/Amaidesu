@@ -41,7 +41,6 @@ from .decision import (
 )
 from .input import (
     MessageReadyPayload,
-    RawDataPayload,
 )
 from .output import (
     OBSCommandPayload,
@@ -59,7 +58,6 @@ __all__ = [
     "CoreShutdownPayload",
     "CoreErrorPayload",
     # Input 阶段
-    "RawDataPayload",
     "MessageReadyPayload",
     # Decision 阶段
     "IntentPayload",

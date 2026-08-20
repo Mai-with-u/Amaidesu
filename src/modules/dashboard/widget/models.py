@@ -6,10 +6,13 @@
 """
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from src.modules.types.guard_levels import DEFAULT_GUARD_NAME, GUARD_LEVEL_NAMES
+from src.modules.types.message_type import require_message_type
 
 
 class SubtitleWidgetMessage(BaseModel):
@@ -30,15 +33,28 @@ class SubtitleWidgetConfig(BaseModel):
     position: str = Field(default="bottom", description="位置: top, bottom, center")
 
 
-class MessageType(str, Enum):
-    """消息类型枚举"""
+class MessageType(StrEnum):
+    """消息类型枚举。
 
-    DANMAKU = "danmaku"  # 普通弹幕
+    使用 ``StrEnum``（Python 3.11+）——成员本身就是 ``str``，所以：
+
+    - ``msg.message_type == MessageType.TEXT`` 直接生效（无需 ``.value``）
+    - JSON 序列化仍输出字符串值（前端 Danmaku.vue 不需要联动改动）
+
+    值与 ``NormalizedMessage.data_type`` 一一对齐（与
+    ``src.modules.types.message_type`` 登记表同源），仅 ``REPLY`` 是 widget 内部
+    类型（AI 回复，不来自 ``data_type``）。
+    """
+
+    TEXT = "text"  # 普通文本（与 data_type 对齐，原 DANMAKU）
     GIFT = "gift"  # 礼物
-    SUPER_CHAT = "superchat"  # SuperChat
+    SUPER_CHAT = "super_chat"  # SuperChat（与 data_type 对齐，原 SUPER_CHAT/superchat）
     GUARD = "guard"  # 大航海
     ENTER = "enter"  # 进入直播间
-    REPLY = "reply"  # AI 回复
+    REPLY = "reply"  # AI 回复（widget 独有）
+
+
+_DEFAULT_GUARD_LEVEL = 3
 
 
 class DanmakuWidgetMessage(BaseModel):
@@ -74,19 +90,23 @@ class DanmakuWidgetMessage(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
 
     def to_display_text(self) -> str:
-        """生成显示文本"""
-        if self.message_type == MessageType.GIFT:
-            return f"送出 {self.gift_name or '礼物'} x{self.gift_count or 1}"
-        elif self.message_type == MessageType.SUPER_CHAT:
-            return f"¥{self.sc_price or 0} {self.sc_message or self.content}"
-        elif self.message_type == MessageType.GUARD:
-            guard_names = {1: "总督", 2: "提督", 3: "舰长"}
-            guard_name = guard_names.get(self.guard_level or 3, "大航海")
-            return f"开通了 {guard_name}"
-        elif self.message_type == MessageType.ENTER:
-            return "进入了直播间"
-        else:
+        """生成显示文本。
+
+        显示模板从 ``MESSAGE_TYPE_REGISTRY`` 取——与 MessageBuffer / Planner / Simulator
+        共享同一事实源。``REPLY`` 是 widget 独有类型，无模板，按 content 兜底。
+        """
+        if self.message_type == MessageType.REPLY:
             return self.content
+
+        spec = require_message_type(self.message_type)
+        return spec.display_template.format(
+            content=self.content,
+            gift_name=self.gift_name or "礼物",
+            gift_count=self.gift_count or 1,
+            sc_price=self.sc_price or 0,
+            sc_message=self.sc_message or self.content,
+            guard_name=GUARD_LEVEL_NAMES.get(self.guard_level or _DEFAULT_GUARD_LEVEL, DEFAULT_GUARD_NAME),
+        )
 
 
 class DanmakuWidgetConfig(BaseModel):

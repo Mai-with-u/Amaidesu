@@ -2,7 +2,6 @@
 Input 阶段 事件 Payload 定义
 
 定义 Input 阶段 相关的事件 Payload 类型。
-- RawDataPayload: 原始数据事件
 - MessageReadyPayload: 标准化消息就绪事件
 """
 
@@ -16,102 +15,6 @@ from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.types.base.normalized_message import NormalizedMessage
-    from src.modules.types.base.raw_data import RawData
-
-
-@register_event("input.raw.data")
-class RawDataPayload(BasePayload):
-    """
-    原始数据事件 Payload
-
-    事件名：CoreEvents.DATA_RAW
-    发布者：InputCollector
-    订阅者：InputDomain (Input 阶段)
-
-    表示 InputCollector 从外部采集到的原始数据。
-    """
-
-    content: Any = Field(..., description="原始数据内容（bytes, str, dict等）")
-    source: str = Field(..., min_length=1, description="数据源标识符（如 'console_input', 'bili_danmaku'）")
-    data_type: str = Field(..., description="数据类型（如 'text', 'gift', 'super_chat'）")
-    timestamp_ms: int = Field(
-        default_factory=lambda: now_ms(),
-        alias="timestamp",
-        description="Unix 时间戳（毫秒）",
-    )
-    preserve_original: bool = Field(default=False, description="是否保留原始数据")
-    original_data: Optional[Any] = Field(default=None, description="原始数据（如果content已被处理）")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="额外元数据")
-
-    model_config = ConfigDict(
-        populate_by_name=True,
-        json_schema_extra={
-            "example": {
-                "content": "用户输入的文本",
-                "source": "console_input",
-                "data_type": "text",
-                "timestamp_ms": 1706745600000,
-                "metadata": {"user_id": "12345", "username": "观众A"},
-            }
-        },
-    )
-
-    def get_log_format(self) -> Optional[Tuple[str, str, Optional[str]]]:
-        """返回日志格式化信息"""
-        if isinstance(self.content, dict):
-            text = self.content.get("text", str(self.content))
-            user_name = self.content.get("user_name", "")
-        elif isinstance(self.content, str):
-            text = self.content
-            user_name = ""
-        else:
-            text = str(self.content)
-            user_name = ""
-
-        # 截断长文本
-        if len(text) > 50:
-            text = text[:47] + "..."
-        return text, user_name, None
-
-    def __str__(self) -> str:
-        """简化格式：[data_type] "content" (user_name)"""
-        # 提取 content 中的关键信息
-        if isinstance(self.content, dict):
-            text = self.content.get("text", "")
-            user_name = self.content.get("user_name", "")
-        elif isinstance(self.content, str):
-            text = self.content
-            user_name = ""
-        else:
-            text = str(self.content)
-            user_name = ""
-
-        # 构建格式：[data_type] "content" (user_name)
-        result = f'[{self.data_type}] "{text}"'
-        if user_name:
-            result += f" ({user_name})"
-        return result
-
-    @classmethod
-    def from_raw_data(cls, raw_data: "RawData") -> "RawDataPayload":
-        """
-        从 RawData 对象创建 Payload
-
-        Args:
-            raw_data: RawData 对象
-
-        Returns:
-            RawDataPayload 实例
-        """
-        return cls(
-            content=raw_data.content,
-            source=raw_data.source,
-            data_type=raw_data.data_type,
-            timestamp_ms=int(raw_data.timestamp * 1000),
-            preserve_original=raw_data.preserve_original,
-            original_data=raw_data.original_data,
-            metadata=raw_data.metadata.copy(),
-        )
 
 
 @register_event("input.message.received")

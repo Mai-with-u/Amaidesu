@@ -19,7 +19,7 @@ import pytest
 from pydantic import BaseModel, Field
 
 from src.modules.events.event_bus import EventBus
-from src.modules.events.payloads import RawDataPayload
+from src.modules.events.payloads import MessageReadyPayload
 from src.modules.events.registry import EVENT_REGISTRY, EventRegistry
 
 # =============================================================================
@@ -266,22 +266,22 @@ async def test_event_validation_with_registered_event(event_bus: EventBus):
     """测试已注册事件的验证功能"""
     received_data = []
 
-    async def handler(event_name, payload: RawDataPayload, source: str):
+    async def handler(event_name, payload: MessageReadyPayload, source: str):
         received_data.append(payload)
 
-    # 注册测试事件到 EVENT_REGISTRY，使 emit 时的数据验证能找到类型
-    EVENT_REGISTRY["core.test.validation.event"] = RawDataPayload
-    event_bus.on("core.test.validation.event", handler, RawDataPayload)
+    EVENT_REGISTRY["core.test.validation.event"] = MessageReadyPayload
+    event_bus.on("core.test.validation.event", handler, MessageReadyPayload)
 
-    # 发布符合验证的数据（使用 Payload 类）
-    valid_data = RawDataPayload(content="test content", source="test_source", data_type="text")
+    valid_data = MessageReadyPayload(
+        message={"text": "test content", "source": "test_source", "data_type": "text"},
+        source="test",
+    )
     await event_bus.emit("core.test.validation.event", valid_data, source="test")
     await asyncio.sleep(0.1)
 
     assert len(received_data) == 1
-    assert received_data[0].content == "test content"
+    assert received_data[0].message["text"] == "test content"
 
-    # 清理
     EVENT_REGISTRY.pop("core.test.validation.event", None)
 
 
