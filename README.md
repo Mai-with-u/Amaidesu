@@ -20,19 +20,16 @@ Amaidesu!
 
 ## 项目简介
 
-聊天机器人麦麦的 [VTubeStudio](https://github.com/DenchiSoft/VTubeStudio) 适配器。
-其聊天核心为 [麦麦Bot](https://github.com/MaiM-with-u/MaiBot)，一款专注于群组聊天的赛博网友 QQ BOT。
 
-**架构状态**：✅ 核心架构重构已完成，采用 3阶段架构 + 阶段参与者系统
+[麦麦Bot](https://github.com/MaiM-with-u/MaiBot)的虚拟主播框架。
+
+可通过插件连接MaiBot核心（后期不再以此为主），或者使用自带的Amaidesu核心
 
 </div>
 
 ## 架构概述
 
-### 3阶段架构数据流
-
 系统由 **Input（输入）→ Decision（决策）→ Output（输出）** 三个阶段组成，阶段之间通过 EventBus 松耦合通信：
-
 - **Input 阶段**：InputCollector 采集外部数据（弹幕、语音、控制台），标准化为 NormalizedMessage，经 Pipeline 过滤后发布
 - **Decision 阶段**：Decider 将 NormalizedMessage 决策为 Intent（回复内容 + 情绪 + 动作）
 - **Output 阶段**：OutputHandlerManager 运行 OutputPipeline 后，并行调用各 active Handler 渲染（TTS、字幕、VTS、OBS 等）
@@ -41,24 +38,6 @@ Amaidesu!
 1. **Input 阶段**：外部数据（弹幕、语音、控制台）→ NormalizedMessage → InputPipelines 过滤
 2. **Decision 阶段**：NormalizedMessage → Intent（amaidesu Planner/Replyer 两阶段，可替换为 MaiBot / LLM / Command）
 3. **Output 阶段**：Intent → OutputPipeline 过滤 → 并行渲染输出（TTS、字幕、VTS、表情等）
-
-### 核心组件
-
-| 组件 | 说明 |
-|------|------|
-| **EventBus** | 事件总线，跨阶段通信 |
-| **阶段参与者** | 功能封装：InputCollector / Decider / OutputHandler |
-| **Manager** | 阶段参与者生命周期管理 |
-| **Pipeline** | 消息预处理（限流、过滤等） |
-| **LLMManager** | LLM 调用统一接口 |
-| **AudioStreamChannel** | 音频流专用通道（TTS → VTS） |
-
-### 阶段参与者概览
-
-- **InputCollector (7个)**：控制台、弹幕、语音识别等真实数据源
-- **模拟服务 (1个)**：模拟直播间（独立 SimulatorService，LLM 生成观众消息，调试用）
-- **Decider (5个)**：amaidesu（Planner/Replyer 两阶段，默认）、MaiBot、LLM、Command、回放
-- **OutputHandler (12个)**：TTS（Edge/GPT-SoVITS/Omni/VoiceBox）、字幕、VTS、OBS 等
 
 架构图、完整组件清单与生命周期详见 [3阶段架构总览](docs/architecture/overview.md)。
 
