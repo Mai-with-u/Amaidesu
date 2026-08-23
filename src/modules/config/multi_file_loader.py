@@ -54,7 +54,9 @@ _PHASE_TO_SECTION: dict[str, str] = {
 _PHASE_TO_COMPONENTS_PKG: dict[str, str] = {
     "input": "src.stages.input.collectors",
     "decision": "src.stages.decision.deciders",
-    "output": "src.stages.output.handlers",
+    # Wave 4：output handlers 已迁移到 src.modules.tools.output/
+    # 这里仍指向旧路径以保持迁移期辅助函数可用；load_config_dir 不依赖该映射。
+    "output": "src.modules.tools.output",
 }
 _PHASE_TO_REGISTRY: dict[tuple[str, str], str] = {
     ("input", "_COLLECTORS"): "src.stages.input.registry",

@@ -757,7 +757,11 @@ async def main() -> None:
     import src.stages.input.collectors  # noqa: F401
     import src.stages.input.pipelines  # noqa: F401
     import src.stages.decision.deciders  # noqa: F401
-    import src.stages.output.handlers  # noqa: F401
+
+    # Wave 4：渲染 handler 已迁移到 modules/tools/output/，主程序不再依赖
+    # src/stages/output/handlers/。 OutputHandlerManager（W6/W8 收尾）
+    # 仍可通过 src.stages.output.manager 访问以保留向后兼容。
+    import src.stages.output.manager  # noqa: F401
     import src.stages.output.pipelines  # noqa: F401
 
     input_pipeline_manager = await create_pipeline_manager(stage="input", config=config)

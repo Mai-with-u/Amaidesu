@@ -97,57 +97,54 @@ def _try_load_handler_schema(module_path: str, class_name: str) -> Optional[type
         return None
 
 
-# 公共别名：XXXConfigSchema -> Handler.ConfigSchema
-# 调用方可通过这些符号访问对应 Handler 的 ConfigSchema，
-# 无需关心 Handler 模块的 import 时机。
+# 公共别名：XXXConfigSchema -> Provider.ConfigSchema
+# 调用方可通过这些符号访问对应 Provider 的 ConfigSchema，
+# 无需关心 Provider 模块的 import 时机。
+#
+# Wave 4 迁移后：所有 handler 改为 modules/tools/output/ 下的 Provider。
+# DebugConsoleHandler 已被 dump_intent() 函数替代，无 ConfigSchema。
 
-DebugConsoleConfigSchema: Optional[type] = _try_load_handler_schema(
-    "src.stages.output.handlers.debug_console.debug_console_handler",
-    "DebugConsoleHandler",
-)
+DebugConsoleConfigSchema: Optional[type] = None  # dump_intent 替代（DebugConfig dataclass）
 EdgeTTSConfigSchema: Optional[type] = _try_load_handler_schema(
-    "src.stages.output.handlers.audio.edge_tts.edge_tts_handler",
-    "EdgeTTSHandler",
+    "src.modules.tools.output.tts.edge_tts_tool",
+    "EdgeTTSProvider",
 )
 GPTSoVITSConfigSchema: Optional[type] = _try_load_handler_schema(
-    "src.stages.output.handlers.audio.gptsovits.gptsovits_handler",
-    "GPTSoVITSHandler",
+    "src.modules.tools.output.tts.gptsovits_tool",
+    "GPTSoVITSProvider",
 )
 ObsControlConfigSchema: Optional[type] = _try_load_handler_schema(
-    "src.stages.output.handlers.obs_control.obs_control_handler",
-    "ObsControlHandler",
+    "src.modules.tools.output.obs.obs_provider",
+    "OBSProvider",
 )
 OmniTTSConfigSchema: Optional[type] = _try_load_handler_schema(
-    "src.stages.output.handlers.audio.omni_tts.omni_tts_handler",
-    "OmniTTSHandler",
+    "src.modules.tools.output.tts.omni_tts_tool",
+    "OmniTTSProvider",
 )
 VoiceBoxConfigSchema: Optional[type] = _try_load_handler_schema(
-    "src.stages.output.handlers.audio.voicebox.voicebox_handler",
-    "VoiceboxHandler",
+    "src.modules.tools.output.tts.voicebox_tool",
+    "VoiceboxProvider",
 )
-RemoteStreamConfigSchema: Optional[type] = _try_load_handler_schema(
-    "src.stages.output.handlers.remote_stream.remote_stream_handler",
-    "RemoteStreamHandler",
-)
+RemoteStreamConfigSchema: Optional[type] = None  # 协议层无 ConfigSchema（保留消息类型）
 StickerConfigSchema: Optional[type] = _try_load_handler_schema(
-    "src.stages.output.handlers.sticker.sticker_handler",
-    "StickerHandler",
+    "src.modules.tools.output.sticker.sticker_helper",
+    "StickerHelper",
 )
 SubtitleConfigSchema: Optional[type] = _try_load_handler_schema(
-    "src.stages.output.handlers.subtitle.subtitle_handler",
-    "SubtitleHandler",
+    "src.modules.tools.output.subtitle.subtitle_service",
+    "SubtitleGuiService",
 )
 VRChatConfigSchema: Optional[type] = _try_load_handler_schema(
-    "src.stages.output.handlers.avatar.vrchat.vrchat_handler",
-    "VRChatHandler",
+    "src.modules.tools.output.vts.vrchat_provider",
+    "VRChatProvider",
 )
 VTSConfigSchema: Optional[type] = _try_load_handler_schema(
-    "src.stages.output.handlers.avatar.vts.vts_handler",
-    "VTSHandler",
+    "src.modules.tools.output.vts.vts_provider",
+    "VTSProvider",
 )
 WarudoConfigSchema: Optional[type] = _try_load_handler_schema(
-    "src.stages.output.handlers.avatar.warudo.warudo_handler",
-    "WarudoHandler",
+    "src.modules.tools.output.warudo.warudo_provider",
+    "WarudoProvider",
 )
 
 
