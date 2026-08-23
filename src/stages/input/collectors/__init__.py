@@ -1,36 +1,12 @@
 """
-Input Collectors - 输入 Collector 实现
+Input Collectors - 旧路径 Collector 注册入口（Wave 5 迁移后）
 
-包含各种 InputCollector 的具体实现：
-- ConsoleInputCollector: 控制台输入Collector
-- MockDanmakuCollector: 模拟弹幕Collector
-- BiliDanmakuCollector: B站弹幕Collector
-- BiliDanmakuOfficialCollector: B站官方弹幕Collector
-- ReadPingmuCollector: 屏幕读评输入Collector
-- TextAdvGameCollector: 游戏画面文本采集Collector
-- STTCollector: 语音转文字输入Collector
+W5 已迁移至 ``src/modules/collectors/``（base.py + 各类实现）。
+本包仅保留 ``text_adv_game``（未在 W5 范围，W7 才处理）。
 
-注意：RemoteStream组件已移动到 src/stages/output/handlers/remote_stream/
-作为 RemoteStreamHandler，因为它是一个输出Handler。
-
-收集器通过 @collector 装饰器自动注册到 registry.py 中的 _COLLECTORS 字典。
-导入此包会触发所有收集器的注册。
+新代码请直接 ``from src.modules.collectors.xxx import YyyCollector``。
 """
 
-from .bili_danmaku import BiliDanmakuCollector
-from .bili_danmaku_official import BiliDanmakuOfficialCollector
-from .console_input import ConsoleInputCollector
-from .mock_danmaku import MockDanmakuCollector
-from .read_pingmu import ReadPingmuCollector
-from .stt import STTCollector
 from .text_adv_game import TextAdvGameCollector
 
-__all__ = [
-    "ConsoleInputCollector",
-    "MockDanmakuCollector",
-    "BiliDanmakuCollector",
-    "BiliDanmakuOfficialCollector",
-    "ReadPingmuCollector",
-    "TextAdvGameCollector",
-    "STTCollector",
-]
+__all__ = ["TextAdvGameCollector"]

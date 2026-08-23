@@ -1,36 +1,39 @@
 """
-B站消息类型
+旧路径 bili_messages —— 仅作为 W5 迁移期间的向后兼容 re-export 垫片
 
-共享的 B 站弹幕消息数据类型，用于两个组件。
+迁移目标：``src/modules/types/bili/``（v2 / Wave 5 升为公共共享类型）。
+
+新代码请直接 ``from src.modules.types.bili import ...``。
 """
 
-from typing import Union
-
-from .base import BiliBaseMessage, BiliMessageType
-from .config import BiliMessageTypeConfig
-from .danmaku import DanmakuMessage
-from .enter import EnterMessage
-from .gift import GiftMessage
-from .guard import GuardMessage
-from .superchat import SuperChatMessage
-
-# BiliRawMessage Union 类型
-BiliRawMessage = Union[
+from src.modules.types.bili import (  # noqa: F401
+    AnchorInfo,
+    BlindGift,
+    BiliBaseMessage,
+    BiliMessageType,
+    BiliMessageTypeConfig,
+    BiliRawMessage,
+    ComboInfo,
     DanmakuMessage,
-    GiftMessage,
-    SuperChatMessage,
-    GuardMessage,
     EnterMessage,
-]
+    GiftMessage,
+    GuardMessage,
+    SuperChatMessage,
+    UserInfo,
+)
 
 __all__ = [
+    "AnchorInfo",
+    "BlindGift",
     "BiliBaseMessage",
     "BiliMessageType",
     "BiliMessageTypeConfig",
     "BiliRawMessage",
+    "ComboInfo",
     "DanmakuMessage",
     "EnterMessage",
     "GiftMessage",
     "GuardMessage",
     "SuperChatMessage",
+    "UserInfo",
 ]

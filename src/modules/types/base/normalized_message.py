@@ -60,6 +60,9 @@ class NormalizedMessage(BaseModel):
     room_id: Optional[str] = Field(default=None, description="直播间 ID")
     session_id: Optional[str] = Field(default=None, description="会话 ID，不填则所有采集器共享同一默认会话")
     message_id: str = Field(default_factory=lambda: uuid4().hex, description="消息唯一 ID,自动生成 UUID hex")
+    simulated: bool = Field(
+        default=False, description="是否模拟数据（数据溯源）；真实采集器一律 False，模拟采集器（mock）一律 True"
+    )
 
     @field_validator("data_type")
     @classmethod
