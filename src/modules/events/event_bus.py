@@ -7,6 +7,11 @@
 - 统计功能(emit/on调用计数、错误率、执行时间)
 - 生命周期管理(cleanup方法)
 - 类型化订阅支持(通过 model_class 参数自动反序列化)
+- 通配订阅支持（MQTT 风格，``*``=单层 ``#``=多层；详见 ``_is_wildcard_pattern``
+  与 ``_match_wildcard``）。默认行为与原有"精确匹配"完全一致；仅当订阅名包含
+  ``*`` 或 ``#`` 时才启用通配路径
+- 事件拦截器（``EventInterceptor`` / ``InterceptorChain``，详见
+  ``src/modules/events/interceptors``）。默认空链 ⇒ byte-identical 行为
 
 类型化订阅使用示例:
     from src.modules.events.payloads import CommandRouterData
@@ -17,6 +22,10 @@
         logger.debug(f"Received: {command}")
 
     event_bus.on("command_router.received", handle_command_typed, model_class=CommandRouterData)
+
+    # 通配订阅（MQTT 风格：``*``=单层 ``#``=多层；W1 阶段增量）
+    event_bus.on("room.message.#", handle_all_room_msgs, model_class=RoomMessagePayload)
+    event_bus.on("tool.result.#", handle_any_tool_result, model_class=ToolResultPayload)
 """
 
 import asyncio
@@ -28,6 +37,7 @@ from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from src.modules.events.interceptors import EventInterceptor, InterceptorChain
 from src.modules.events.registry import EventRegistry
 from src.modules.logging import get_logger
 
@@ -103,6 +113,8 @@ class EventBus:
         self._active_emits: Dict[str, asyncio.Event] = {}  # 跟踪活跃的 emit 操作
         self._background_tasks: set = set()  # 跟踪后台任务
         self._stats_lock = asyncio.Lock()  # 保护统计数据的并发访问
+        # 拦截器链（W1 新增）。默认空 ⇒ byte-identical 行为（emit 不调任何拦截器）
+        self._interceptor_chain = InterceptorChain()
         self.logger = get_logger("EventBus")
         self.logger.debug(f"EventBus 初始化完成 (stats={enable_stats}, validation=enabled)")
 
@@ -119,6 +131,104 @@ class EventBus:
 
         # 默认格式
         return f"[{event_name}] {source}: {data}"
+
+    @staticmethod
+    def _is_wildcard_pattern(pattern: str) -> bool:
+        """
+        判断订阅模式是否为通配模式
+
+        仅含字面量字符（含点号）的 pattern 视为精确匹配；含 ``*`` 或 ``#`` 时
+        视为通配模式。仅在通配模式下才走 ``_match_wildcard`` 路径，避免对
+        无通配订阅产生额外开销。
+        """
+        return "*" in pattern or "#" in pattern
+
+    @staticmethod
+    def _match_wildcard(pattern: str, event_name: str) -> bool:
+        """
+        MQTT 风格通配匹配
+
+        - ``*`` 消耗**恰好一个** dot-separated token（单层）
+        - ``#`` 仅在 pattern 末尾有效，消耗**≥0 个**剩余 token（多层，可匹配空）
+        - 其它字面量 token 必须**逐字符相等**
+        - 独立 ``#``（无前缀）匹配一切
+
+        Examples:
+            >>> EventBus._match_wildcard("room.*", "room.message")
+            True
+            >>> EventBus._match_wildcard("room.*", "room.message.danmaku")
+            False
+            >>> EventBus._match_wildcard("tool.result.#", "tool.result.speak")
+            True
+            >>> EventBus._match_wildcard("tool.result.#", "tool.result")
+            True
+            >>> EventBus._match_wildcard("tool.result.#", "tool.result.a.b.c")
+            True
+            >>> EventBus._match_wildcard("#", "anything.you.want")
+            True
+        """
+        # 独立 #：匹配一切（包括空事件名；正常业务不会发布空名事件）
+        if pattern == "#":
+            return True
+
+        pat_parts = pattern.split(".")
+        evt_parts = event_name.split(".")
+
+        # 先处理 # 后缀：pattern 必须以 # 结尾才有意义（前面已拦截单独 #）
+        # 在 pat 末尾为 # 时，剩余 evt 全部视为被 # 消耗（含空）
+        if pat_parts and pat_parts[-1] == "#":
+            prefix = pat_parts[:-1]
+            # 前缀必须按字面量匹配；前缀过长 ⇒ 必不可能匹配
+            if len(prefix) > len(evt_parts):
+                return False
+            # 前缀短于或等于 evt 时，# 消耗剩余部分；只比对公共前缀段
+            for p, e in zip(prefix, evt_parts[: len(prefix)], strict=False):
+                if p == "*":
+                    continue
+                if p != e:
+                    return False
+            return True
+
+        # 非 # 结尾：长度必须一致；逐段匹配（* 消耗 1 段）
+        if len(pat_parts) != len(evt_parts):
+            return False
+        for p, e in zip(pat_parts, evt_parts, strict=True):
+            if p == "*":
+                continue
+            if p != e:
+                return False
+        return True
+
+    @staticmethod
+    def _pattern_specificity(pattern: str) -> int:
+        """
+        计算 pattern 的具体度（值越大越具体）
+
+        排序规则（MQTT 直觉保持）：
+        - 字面量 token：+4（精确段贡献最大）
+        - ``*`` token：+2（单层通配——消耗恰好 1 段，比 ``#`` 更具体）
+        - ``#`` token：+1（多层通配——消耗 ≥0 段，最宽泛）
+        - 独立 ``#`` → 1（仅占位，无字面量前缀）
+
+        目的：精确订阅 ``room.message.danmaku`` > ``a.b``（字面量段）>
+        ``room.message.*`` > ``room.message.#`` > ``#``。
+        ``a.*.b`` vs ``a.b``：字面量段 ``b`` 远高于 ``*``，所以 ``a.b`` 更具体。
+
+        注意：精确订阅 specificity 在 ``_collect_handlers`` 中固定为
+        ``_EXACT_SPECIFICITY``（远大于任何通配，确保排序最前）。
+        """
+        if pattern == "#":
+            return 1
+        parts = pattern.split(".")
+        score = 0
+        for part in parts:
+            if part == "#":
+                score += 1
+            elif part == "*":
+                score += 2
+            else:
+                score += 4  # 字面量 token 权重大于 *
+        return score
 
     async def emit(
         self, event_name: str, data: BaseModel, source: str = "unknown", error_isolate: bool = True, wait: bool = False
@@ -140,6 +250,13 @@ class EventBus:
         Raises:
             TypeError: 如果 data 不是 BaseModel 实例
             Exception: 当 error_isolate=False 且处理器执行出错时抛出
+
+        分发流程：
+        1. 类型检查 → ``model_dump()`` → 数据验证 → **拦截器链** → handler 分发
+           其中拦截器链任一环节显式返回 ``None`` 即丢弃事件：不更新统计、不调用任何 handler
+        2. handler 查找：精确键 + 所有通配 pattern 键的并集（去重 HandlerWrapper）
+        3. 排序：先按 ``priority``，再按 pattern 具体度（精确名 > 具体通配 > 通用通配）
+        4. 统计**始终按真实 emit 的 event_name** 入键（与通配 pattern 解耦）
         """
         if self._is_cleanup:
             self.logger.warning(f"EventBus正在清理中，忽略事件: {event_name}")
@@ -160,19 +277,36 @@ class EventBus:
         if self.enable_validation:
             self._validate_event_data(event_name, dict_data)
 
-        handlers = self._handlers.get(event_name, [])
+        # === 拦截器链（在 handler 分发前；空链 ⇒ 字节级一致行为）===
+        # 拦截器看到的是 model_dump() 后的 dict，与下游 handler 数据形态一致。
+        if self._interceptor_chain:
+            processed = await self._interceptor_chain.apply(event_name, dict_data, source)
+            if processed is None:
+                # 任一拦截器显式返回 None：丢弃事件，直接返回
+                self.logger.debug(f"事件 {event_name} 被拦截器链丢弃（source={source}）")
+                return
+            dict_data = processed
+
+        # 收集 handler：精确键 + 所有通配 pattern 键的并集（去重 HandlerWrapper）
+        handlers = self._collect_handlers(event_name)
         if not handlers:
             self.logger.debug(f"事件 {event_name} 没有监听器")
             return
 
-        # 按优先级排序（数字越小越优先）
-        handlers = sorted(handlers, key=lambda h: h.priority)
+        # 按 (priority 升序, specificity 降序) 排序：
+        # - priority 越小越优先（沿用旧契约）
+        # - specificity 越大越优先（精确名 > 长字面量前缀通配 > 短通配 > 独立 #）
+        #   specificity 只对通配订阅有意义；精确订阅全得 ∞（取最大 specificity）
+        handlers = sorted(
+            handlers,
+            key=lambda item: (item[0].priority, -item[1]),
+        )
 
-        # 打印事件信息（INFO 级别）
+        # 打印事件信息（DEBUG 级别）
         log_message = self._format_event_log(event_name, data, source)
         self.logger.debug(log_message)
 
-        # 更新统计（使用锁保护）
+        # 更新统计（按真实 emit 的 event_name 入键，与通配 pattern 解耦）
         if self.enable_stats:
             async with self._stats_lock:
                 self._stats[event_name].emit_count += 1
@@ -189,9 +323,9 @@ class EventBus:
         # 定义带跟踪的 emit 逻辑
         async def emit_with_tracking():
             try:
-                # 并发执行所有处理器
+                # 并发执行所有处理器（handlers 此时是 ``(wrapper, specificity)`` 元组列表）
                 tasks = []
-                for wrapper in handlers:
+                for wrapper, _spec in handlers:
                     task = asyncio.create_task(
                         self._call_handler(wrapper, event_name, dict_data, source, error_isolate)
                     )
@@ -230,6 +364,46 @@ class EventBus:
             task = asyncio.create_task(emit_with_tracking())
             self._background_tasks.add(task)
             task.add_done_callback(lambda t: self._background_tasks.discard(t))
+
+    def _collect_handlers(self, event_name: str) -> List[tuple]:
+        """
+        收集事件的所有匹配 handler（精确键 + 通配 pattern 键并集）
+
+        返回 ``[(HandlerWrapper, specificity), ...]`` 元组列表。HandlerWrapper
+        按对象身份去重——同一 wrapper 被多个 pattern 引用时只取一次（保留
+        最高的 specificity 值）。
+
+        精确订阅的 specificity 固定为 ``_EXACT_SPECIFICITY``（远大于任何通配），
+        确保排序时**永远排在通配订阅之前**——与"精确订阅 = 字面意义最具体"的
+        直觉一致。
+        """
+        # 精确订阅 specificity 大于任何 _pattern_specificity 的合理上界
+        # （pattern 长度受命名约束 ≤4 段 + 字面量 token +2/段 + 通配 +1 ⇒ 上界 ≈ 8）
+        _EXACT_SPECIFICITY = 10_000
+
+        seen: Dict[int, tuple] = {}
+
+        # 1. 精确键
+        exact_handlers = self._handlers.get(event_name, [])
+        for wrapper in exact_handlers:
+            seen[id(wrapper)] = (wrapper, _EXACT_SPECIFICITY)
+
+        # 2. 通配 pattern 键
+        for pattern, handlers in self._handlers.items():
+            if pattern == event_name:
+                continue  # 已在精确键处理
+            if not self._is_wildcard_pattern(pattern):
+                continue  # 非通配且非精确键（防御）
+            if not self._match_wildcard(pattern, event_name):
+                continue
+            spec = self._pattern_specificity(pattern)
+            for wrapper in handlers:
+                key = id(wrapper)
+                # 取更高的 specificity（同一 wrapper 被多个 pattern 引用时）
+                if key not in seen or seen[key][1] < spec:
+                    seen[key] = (wrapper, spec)
+
+        return list(seen.values())
 
     async def _call_handler(
         self, wrapper: HandlerWrapper, event_name: str, data: Any, source: str, error_isolate: bool
@@ -323,8 +497,14 @@ class EventBus:
         取消订阅
 
         Args:
-            event_name: 事件名称
+            event_name: 事件名称（或通配 pattern，如 ``tool.result.#``）
             handler: 要移除的事件处理器函数（可以是原始处理器或包装后的处理器）
+
+        Notes:
+            - 通配 pattern 订阅可直接 ``off("tool.result.#", handler)`` 移除
+              （pattern 是 ``_handlers`` 的字典键，复用既有删除路径）
+            - 同一 handler 注册到多个 pattern 时，``off`` 仅移除指定 pattern
+              下的那条；其它 pattern 上的同 handler 引用需各自 ``off``
         """
         handlers = self._handlers.get(event_name, [])
         for i, wrapper in enumerate(handlers):
@@ -336,7 +516,46 @@ class EventBus:
 
         # 如果该事件没有监听器了，删除该条目
         if not handlers:
-            del self._handlers[event_name]
+            self._handlers.pop(event_name, None)
+
+    def add_interceptor(self, interceptor: "EventInterceptor") -> None:
+        """
+        注册一个事件拦截器（W1 新增）
+
+        拦截器按注册顺序串接；对每次 ``emit`` 的事件，在数据验证后、handler
+        分发前被顺序调用。可修改 payload（原地修改 / 返回新 dict）或显式
+        返回 ``None`` 丢弃事件。
+
+        默认空链 ⇒ ``emit`` 行为与未启用拦截器时字节级一致（``apply`` 短路）。
+
+        Args:
+            interceptor: 已实例化的 :class:`EventInterceptor` 子类
+        """
+        self._interceptor_chain.register(interceptor)
+        self.logger.debug(f"EventBus 挂载拦截器: {interceptor.name}")
+
+    def remove_interceptor(self, name: str) -> bool:
+        """
+        按 ``name`` 移除首个匹配的拦截器（W1 新增）
+
+        Args:
+            name: ``EventInterceptor.name`` 标识
+
+        Returns:
+            是否实际移除（``False`` 表示未找到）
+        """
+        removed = self._interceptor_chain.unregister(name)
+        if removed:
+            self.logger.debug(f"EventBus 卸载拦截器: {name}")
+        return removed
+
+    def get_interceptor_names(self) -> List[str]:
+        """
+        返回当前已挂载拦截器名称列表（按注册顺序）
+
+        主要用于测试与可观测性。
+        """
+        return [interceptor.name for interceptor in self._interceptor_chain._interceptors]  # noqa: SLF001
 
     def clear(self) -> None:
         """

@@ -4,9 +4,17 @@
 为 EventBus 事件提供类型安全的 Pydantic Payload 定义。
 
 模块结构：
-- input.py: Input 阶段 相关 Payload
-- decision.py: Decision 阶段 相关 Payload
-- output.py: Output 阶段 相关 Payload
+- core.py: Core 系统事件 Payload（core.startup/shutdown/error）
+- input.py: Input 阶段 相关 Payload（MessageReadyPayload）
+- decision.py: Decision 阶段 相关 Payload（Intent/Connected/Disconnected）
+- output.py: Output 阶段 相关 Payload（OBS/Sticker/IntentDispatched/HandlerCompleted）
+- connection.py: 通用组件事件 Payload（ConnectionEventPayload）
+- live.py: v2 语义域 — 场次生命周期（live.started/live.ended）
+- room.py: v2 语义域 — 直播间行为流（room.message.*）
+- game.py: v2 语义域 — 游戏里程碑（game.*）
+- agenda.py: v2 语义域 — Agenda 运行进度（agenda.update）
+- planner.py: v2 语义域 — 空转检查点（planner.checkpoint）
+- tool_result.py: v2 语义域 — 异步工具结果（tool.result.*，不绑定具体名）
 
 使用示例:
     from src.modules.events.payloads import MessageReadyPayload
@@ -28,6 +36,11 @@
 
 from src.modules.logging import get_logger
 
+from .agenda import (
+    AgendaItem,
+    AgendaPayload,
+)
+from .connection import ConnectionEventPayload
 from .core import (
     CoreErrorPayload,
     CoreShutdownPayload,
@@ -39,16 +52,28 @@ from .decision import (
     ConnectedPayload,
     DisconnectedPayload,
 )
+from .game import GamePayload
 from .input import (
     MessageReadyPayload,
 )
+from .live import LivePayload
 from .output import (
     OBSCommandPayload,
     OutputHandlerCompletedPayload,
     OutputIntentDispatchedPayload,
     StickerCommandPayload,
 )
-from .connection import ConnectionEventPayload
+from .planner import (
+    CheckpointAgendaPosition,
+    CheckpointPayload,
+)
+from .room import (
+    GiftInfo,
+    RoomMessagePayload,
+    RoomMessageUser,
+    SuperChatInfo,
+)
+from .tool_result import ToolResultPayload
 
 logger = get_logger("Payloads")
 
@@ -71,4 +96,21 @@ __all__ = [
     "StickerCommandPayload",
     # 组件 (通用)
     "ConnectionEventPayload",
+    # v2 语义域 — live
+    "LivePayload",
+    # v2 语义域 — room.message.*
+    "RoomMessageUser",
+    "GiftInfo",
+    "SuperChatInfo",
+    "RoomMessagePayload",
+    # v2 语义域 — game.*
+    "GamePayload",
+    # v2 语义域 — agenda
+    "AgendaItem",
+    "AgendaPayload",
+    # v2 语义域 — planner
+    "CheckpointAgendaPosition",
+    "CheckpointPayload",
+    # v2 语义域 — tool.result.*
+    "ToolResultPayload",
 ]

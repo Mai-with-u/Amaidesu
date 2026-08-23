@@ -27,13 +27,58 @@
   以保证 ``@register_event`` 装饰器被执行；其本身不再维护任何手写映射。
 """
 
-from typing import Callable, Dict, Optional, Type, TypeVar
+from typing import Callable, Dict, FrozenSet, Optional, Type, TypeVar
 
 from pydantic import BaseModel
 
 from src.modules.logging import get_logger
 
 T = TypeVar("T", bound=Type[BaseModel])
+
+
+# ==================== 多名反向引用 ====================
+
+
+class _MultiName:
+    """
+    支持一对多注册的反向引用对象
+
+    同一 Payload 类注册到多个事件名时，``_registered_event_name`` 持有本对象。
+    ``==`` 运算符与 ``_names`` 集合中**任意一个**字符串名相等——这让
+    ``test_decorator_isolation`` 等测试在 ``EVENT_REGISTRY.items()`` 循环中对
+    同一类（多个键）都通过 ``reverse_name == event_name`` 断言。
+
+    兼容性：
+    - ``is not None`` 仍成立（对象本身非 None）
+    - ``!r`` 格式化显示为 ``<MultiName [...]>``，便于日志/调试识别
+    - ``__hash__`` 实现：与所有已注册名共享同一哈希（仅用于占位）
+    """
+
+    __slots__ = ("_names",)
+
+    def __init__(self, names: FrozenSet[str]) -> None:
+        self._names = names
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, str):
+            return other in self._names
+        return NotImplemented
+
+    def __ne__(self, other: object) -> bool:
+        result = self.__eq__(other)
+        if result is NotImplemented:
+            return result
+        return not result
+
+    def __hash__(self) -> int:
+        # 与单名反向引用保持一致的可哈希性（仅用于占位）
+        return 0
+
+    def __repr__(self) -> str:
+        return f"<MultiName {sorted(self._names)}>"
+
+    def __bool__(self) -> bool:
+        return bool(self._names)
 
 
 # ==================== 模块级注册表 ====================
@@ -53,6 +98,11 @@ def register_event(event_name: str) -> Callable[[T], T]:
     使用 ``@register_event("event.name")`` 把 Pydantic BaseModel 子类注册为
     对应事件的 Payload 类型，并设置 ``cls._registered_event_name`` 反向引用。
 
+    同一类注册到多个事件名（v2 增量）时：
+    - ``_registered_event_name`` 被设为 :class:`_MultiName` 对象
+    - ``_all_registered_names`` 被设为 ``frozenset``，列出全部注册名
+    - 测试断言 ``reverse_name == event_name`` 对所有已注册事件名都成立
+
     Args:
         event_name: 事件名称（如 ``"input.message.received"``）。
 
@@ -60,7 +110,7 @@ def register_event(event_name: str) -> Callable[[T], T]:
         装饰器函数。被装饰的类原样返回。
 
     Raises:
-        ValueError: ``event_name`` 已被注册为不同的类型。
+        ValueError: ``event_name`` 已被注册为**不同的**类型。
 
     Example:
         ::
@@ -70,6 +120,12 @@ def register_event(event_name: str) -> Callable[[T], T]:
 
 
             assert MessageReadyPayload._registered_event_name == "input.message.received"
+
+
+            # W1 增量：同一类多事件名
+            @register_event("live.started")
+            @register_event("live.ended")
+            class LivePayload(BasePayload): ...
     """
 
     def decorator(cls: T) -> T:
@@ -77,8 +133,15 @@ def register_event(event_name: str) -> Callable[[T], T]:
         if existing is not None and existing is not cls:
             raise ValueError(f"事件 '{event_name}' 已被注册为 {existing.__name__}，不能再次注册为 {cls.__name__}")
         EVENT_REGISTRY[event_name] = cls
-        # 反向引用：通过实例/类即可查回事件名，便于日志和调试
-        cls._registered_event_name = event_name  # type: ignore[attr-defined]
+        # 反向引用：合并到类的 _all_registered_names 集合，重建 _registered_event_name
+        existing_names: FrozenSet[str] = getattr(cls, "_all_registered_names", frozenset())
+        new_names: FrozenSet[str] = existing_names | {event_name}
+        cls._all_registered_names = new_names  # type: ignore[attr-defined]
+        # 单事件名 → 单字符串；多事件名 → _MultiName（== 与任意已注册名匹配）
+        if len(new_names) == 1:
+            cls._registered_event_name = event_name  # type: ignore[attr-defined]
+        else:
+            cls._registered_event_name = _MultiName(new_names)  # type: ignore[attr-defined]
         return cls
 
     return decorator
@@ -159,12 +222,22 @@ def register_core_events() -> None:
 
     该函数本身不维护任何事件→Payload 映射。Payload 模块一旦被 import，
     其内部的 ``@register_event`` 装饰器即把对应类登记到 :data:`EVENT_REGISTRY`。
+
+    v2 增量：新增 5 个语义域 Payload 模块（live/room/game/agenda/planner），
+    在此一并触发 import；``tool_result`` 模块即使无具体 ``@register_event``
+    装饰器调用也一并 import 以触发模块级代码（保留供后续扩展）。
     """
     # noqa: F401 —— 仅为触发模块级 @register_event 执行
     from src.modules.events.payloads import (  # noqa: F401
-        core as _core_payloads,  # noqa: F401
-        input as _input_payloads,  # noqa: F401
-        decision as _decision_payloads,  # noqa: F401
-        output as _output_payloads,  # noqa: F401
+        agenda as _agenda_payloads,  # noqa: F401
         connection as _connection_payloads,  # noqa: F401
+        core as _core_payloads,  # noqa: F401
+        decision as _decision_payloads,  # noqa: F401
+        game as _game_payloads,  # noqa: F401
+        input as _input_payloads,  # noqa: F401
+        live as _live_payloads,  # noqa: F401
+        output as _output_payloads,  # noqa: F401
+        planner as _planner_payloads,  # noqa: F401
+        room as _room_payloads,  # noqa: F401
+        tool_result as _tool_result_payloads,  # noqa: F401
     )

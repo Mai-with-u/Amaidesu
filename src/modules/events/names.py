@@ -63,6 +63,37 @@ class CoreEvents:
 
     OUTPUT_STICKER_COMMAND = "output.sticker.command"
 
+    # ========== v2 语义域事件（live 场次生命周期） ==========
+    # 详见 .omo/drafts/amaidesu-v2-event-contract.md "live.*" 节
+    LIVE_STARTED = "live.started"
+    LIVE_ENDED = "live.ended"
+
+    # ========== v2 语义域事件（room.message.* 直播间行为流） ==========
+    # 行为流（发生的事）。注意：room.state.* 是**预留层**（契约决定，
+    # 默认不实现任何事件；将来若需主动广播订阅的状态变更才会启用，
+    # 不与行为流平铺同层）。详见 event-contract.md "room.*" 节。
+    ROOM_MESSAGE_DANMAKU = "room.message.danmaku"
+    ROOM_MESSAGE_GIFT = "room.message.gift"
+    ROOM_MESSAGE_SUPER_CHAT = "room.message.super_chat"
+    ROOM_MESSAGE_ENTER = "room.message.enter"
+
+    # ========== v2 语义域事件（game.* 游戏里程碑） ==========
+    # 低频、只发重大变化。三类：milestone / attention_required / error
+    GAME_MILESTONE = "game.milestone"
+    GAME_ATTENTION_REQUIRED = "game.attention_required"
+    GAME_ERROR = "game.error"
+
+    # ========== v2 语义域事件（agenda/planner） ==========
+    AGENDA_UPDATE = "agenda.update"
+    PLANNER_CHECKPOINT = "planner.checkpoint"
+
+    # ========== v2 语义域事件（tool 异步工具结果通配订阅模式） ==========
+    # **这是通配订阅模式专用**，不是被 emit 的具体事件名。emit 时使用具体名
+    # 如 "tool.result.speak"/"tool.result.summarize_timeline"。
+    # 订阅者可以 `event_bus.on("tool.result.#", ...)` 一站式监听所有工具结果。
+    # 详见 event-contract.md "tool.result.#" 节。
+    TOOL_RESULT_WILDCARD = "tool.result.#"
+
     @classmethod
     def get_all_events(cls) -> tuple[str, ...]:
         """
