@@ -1,12 +1,15 @@
-"""时间工具模块
+"""
+时间工具模块
 
 项目内所有时刻字段统一使用 **int 毫秒**（Unix epoch milliseconds）作为标准时间表示，
 时间相关的工具函数都集中在该模块中，避免在多个文件中重复实现 `time.time() * 1000`。
 
 设计原则：
 - 时刻字段（如事件时间戳）使用 `int` 毫秒，避免浮点精度问题。
-- 时长字段（如超时、节流间隔）同样使用 `int` 毫秒，与时刻字段保持单位一致。
-- 该模块不提供秒 ↔ 毫秒的单位转换函数，因为整个项目都统一为毫秒。
+- 时长字段（如超时、节拍间隔）同样使用 `int` 毫秒，与时刻字段保持单位一致。
+- Amaidesu 内部全毫秒零转换（§1.53 9d 定案）。
+- ``ms_to_s`` / ``s_to_ms`` 仅在 **MemoryProvider 接缝**调用（例如后插
+  AMemorixProvider 内部毫秒↔秒互转）；业务模块不应触发。
 """
 
 import time
@@ -89,3 +92,56 @@ def ms_to_datetime(ms: int) -> datetime:
         datetime: 对应的 datetime 对象（UTC 时区）
     """
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
+
+
+# =============================================================================
+# §1.53 9d 定案：毫秒 ↔ 秒 纯函数（仅 MemoryProvider 接缝调用）
+# =============================================================================
+
+
+def ms_to_s(ms: int) -> int:
+    """毫秒 → 秒（整数除法，截断小数部分）。
+
+    **调用约束（§1.53 9d）**：本函数**仅**在 ``MemoryProvider`` 接缝调用
+    ——例如后插 ``AMemorixProvider`` 内部把 Amaidesu 毫秒换算为
+    A_Memorix 秒世界。Amaidesu 业务模块内部全毫秒零转换。
+
+    Args:
+        ms: 毫秒数（非负整数）
+
+    Returns:
+        int: 对应秒数（截断小数）
+
+    Examples:
+        >>> ms_to_s(1500)
+        1
+        >>> ms_to_s(0)
+        0
+    """
+    if ms < 0:
+        # 防御：负值按 0 处理
+        return 0
+    return int(ms // 1000)
+
+
+def s_to_ms(s: int) -> int:
+    """秒 → 毫秒。
+
+    **调用约束（§1.53 9d）**：与 ``ms_to_s`` 配对，**仅**在 MemoryProvider
+    接缝调用（典型：接 A_Memorix 秒世界时做适配）。
+
+    Args:
+        s: 秒数（非负整数）
+
+    Returns:
+        int: 对应毫秒数
+
+    Examples:
+        >>> s_to_ms(2)
+        2000
+        >>> s_to_ms(0)
+        0
+    """
+    if s < 0:
+        return 0
+    return int(s * 1000)
