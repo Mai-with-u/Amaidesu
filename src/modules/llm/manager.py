@@ -49,19 +49,20 @@ class ClientType:
     LLM_LOCAL = "llm_local"  # 本地LLM客户端（Ollama等）
     # 房间状态摘要专用 profile：独立 client 实例，避免与 Planner(llm_fast) 共享连接池（Task 8）
     LLM_SUMMARY = "llm_summary"
-    # 直播大纲专用 profile：独立 client 实例，避免与 Planner(llm_fast) 共享连接池；用于环节动态 AI 扩展
-    LLM_OUTLINE = "llm_outline"
+    LLM_AGENDA = "llm_agenda"
+    LLM_OUTLINE = LLM_AGENDA
 
-    # 所有支持的客户端类型
-    ALL = [LLM, LLM_FAST, VLM, LLM_LOCAL, LLM_SUMMARY, LLM_OUTLINE]
+    ALL = [LLM, LLM_FAST, VLM, LLM_LOCAL, LLM_SUMMARY, LLM_AGENDA]
 
     # 默认客户端
     DEFAULT = LLM
 
     @classmethod
     def is_valid(cls, client_type: str) -> bool:
-        """检查客户端类型是否有效"""
-        return client_type in cls.ALL
+        """检查客户端类型是否有效（含 v2.0.0 别名兼容：llm_outline 与 llm_agenda 等价）"""
+        if client_type in cls.ALL:
+            return True
+        return client_type == cls.LLM_OUTLINE
 
     @classmethod
     def get_default_for_purpose(cls, purpose: str) -> str:
@@ -169,10 +170,17 @@ class LLMManager:
                 continue
             provider_name = profile_raw.get("provider", "default")
             if provider_name not in self._providers:
-                raise ValueError(
-                    f"LLM 角色 '{profile_key}' 引用的 provider '{provider_name}' 不存在。"
-                    f"可用: {list(self._providers.keys())}"
-                )
+                if provider_name == "default" and self._providers:
+                    provider_name = next(iter(self._providers))
+                    self.logger.warning(
+                        f"LLM 角色 '{profile_key}' 引用 provider 'default' 但未配置，"
+                        f"回退到首个可用 provider '{provider_name}'"
+                    )
+                else:
+                    raise ValueError(
+                        f"LLM 角色 '{profile_key}' 引用的 provider '{provider_name}' 不存在。"
+                        f"可用: {list(self._providers.keys())}"
+                    )
             provider_cfg, impl = self._providers[provider_name]
             # 合并配置: role 的非 None 值覆盖 provider 值(如 model/temperature);
             # role 的 None 值(默认)不覆盖,保留 provider 的 api_key/base_url

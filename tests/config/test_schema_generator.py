@@ -24,11 +24,10 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.modules.config.core_schemas import (
-    ContextConfig,
+    ContextAssemblerConfig,
     CoreConfig,
     DashboardConfig,
     GeneralConfig,
-    MaiCoreConfig,
     MetaConfig,
     PersonaConfig,
 )
@@ -44,7 +43,6 @@ from src.modules.config.schema_generator import (
 )
 from src.modules.config.schemas.logging import LoggingConfig
 from src.modules.config.multi_file_loader import CONFIG_VERSION
-from src.modules.config.schema_registry import get_schema_registry
 
 
 # ===========================================================================
@@ -361,12 +359,12 @@ class TestCoreConfigGeneration:
             "meta",
             "general",
             "persona",
-            "maicore",
             "context",
             "dashboard",
             "logging",
         ]:
             assert expected in nested_keys, f"CoreConfig missing nested subgroup: {expected}"
+        assert "maicore" not in nested_keys, "v2.0.0: maicore 已删除"
 
     def test_general_config_fields(self):
         schema = ConfigSchemaGenerator.generate_config_schema(GeneralConfig)
@@ -388,20 +386,15 @@ class TestCoreConfigGeneration:
         assert by_name["emotion_intensity"]["type"] == "integer"
         assert by_name["emotion_intensity"]["default"] == 7
 
-    def test_maicore_config_fields(self):
-        schema = ConfigSchemaGenerator.generate_config_schema(MaiCoreConfig)
-        by_name = {f["name"]: f for f in schema["fields"]}
-        assert by_name["host"]["default"] == "127.0.0.1"
-        assert by_name["port"]["type"] == "integer"
-        assert by_name["port"]["default"] == 8000
+    def test_maicore_config_removed(self):
+        from src.modules.config import core_schemas
+        assert not hasattr(core_schemas, "MaiCoreConfig"), "v2.0.0: MaiCoreConfig 必须删除"
 
     def test_context_config_fields(self):
-        schema = ConfigSchemaGenerator.generate_config_schema(ContextConfig)
+        schema = ConfigSchemaGenerator.generate_config_schema(ContextAssemblerConfig)
         by_name = {f["name"]: f for f in schema["fields"]}
-        assert by_name["max_messages_per_session"]["type"] == "integer"
-        assert by_name["max_sessions"]["type"] == "integer"
-        assert by_name["session_timeout_seconds"]["type"] == "integer"
-        assert by_name["enable_persistence"]["type"] == "boolean"
+        assert by_name["enabled"]["type"] == "boolean"
+        assert by_name["memory_recall_viewers"]["type"] == "integer"
 
     def test_dashboard_config_fields(self):
         schema = ConfigSchemaGenerator.generate_config_schema(DashboardConfig)
@@ -497,8 +490,7 @@ class TestModelConfigGeneration:
 _GROUP_CLASS = {
     "general": GeneralConfig,
     "persona": PersonaConfig,
-    "maicore": MaiCoreConfig,
-    "context": ContextConfig,
+    "context": ContextAssemblerConfig,
     "dashboard": DashboardConfig,
     "logging": LoggingConfig,
     "llm": LLMProfileConfig,
@@ -614,25 +606,14 @@ class TestFlattenUtilities:
         assert get_field_count(schema) == 4
 
 
-class TestRegistrySmoke:
-    """轻量级 smoke 测试：验证 registry 已初始化且分组齐全。
+class TestGeneratorSmoke:
+    """v2.0.0：schema_registry 已删除；保留 generator smoke 测试。"""
 
-    完整覆盖率由 ``scripts/check_schema_coverage.py`` 验证；这里只做
-    pytest 层级的 sanity check，确保 import 链路正确。
-    """
+    def test_generator_produces_core_schema(self):
+        schema = ConfigSchemaGenerator.generate_config_schema(CoreConfig)
+        assert schema["className"] == "CoreConfig"
+        assert "fields" in schema
 
-    def test_registry_loads(self):
-        registry = get_schema_registry()
-        groups = registry.get_all_groups()
-        assert len(groups) >= 7
-        keys = {g.key for g in groups}
-        assert "general" in keys
-        assert "persona" in keys
-        assert "llm" in keys
-
-    def test_registry_field_lookup(self):
-        registry = get_schema_registry()
-        # spot check 几个核心字段
-        f = registry.get_field("persona.bot_name")
-        assert f is not None
-        assert f.label == "VTuber 名字"
+    def test_generator_produces_model_schema(self):
+        schema = ConfigSchemaGenerator.generate_config_schema(ModelConfig)
+        assert schema["className"] == "ModelConfig"

@@ -1215,6 +1215,68 @@ def test_llm_response_error_case():
 
 
 # =============================================================================
+# A1.6 回归保护：llm_agenda profile 注册（v2.0.0 由 llm_outline 改名）
+# =============================================================================
+
+
+def test_client_type_includes_llm_agenda():
+    from src.modules.llm.manager import ClientType
+
+    assert "llm_agenda" in ClientType.ALL
+    assert ClientType.LLM_AGENDA == "llm_agenda"
+    assert ClientType.LLM_OUTLINE == "llm_agenda"
+    assert ClientType.LLM_AGENDA == ClientType.LLM_OUTLINE
+    assert len(ClientType.ALL) == len(set(ClientType.ALL))
+
+
+def test_client_type_is_valid_recognizes_llm_agenda():
+    from src.modules.llm.manager import ClientType
+
+    assert ClientType.is_valid("llm_agenda") is True
+
+
+@pytest.mark.asyncio
+async def test_setup_registers_llm_agenda_profile(llm_manager: LLMManager):
+    config = {
+        "llm_providers": [PROVIDER_CONFIG],
+        "llm_agenda": {
+            "provider": "test",
+            "model": "agenda-model",
+            "temperature": 0.5,
+        },
+    }
+    mock_backend_class = MagicMock(return_value=MagicMock())
+    with patch.dict(_client_impls, {"openai": mock_backend_class}):
+        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
+            await llm_manager.setup(config)
+
+    assert "llm_agenda" in llm_manager._clients
+    assert "llm_agenda" in llm_manager._profile_configs
+    profile = llm_manager._profile_configs["llm_agenda"]
+    assert profile["model"] == "agenda-model"
+    assert profile["temperature"] == 0.5
+
+
+@pytest.mark.asyncio
+async def test_setup_does_not_register_legacy_llm_outline_as_separate(
+    llm_manager: LLMManager,
+):
+    config = {
+        "llm_providers": [PROVIDER_CONFIG],
+        "llm_outline": {
+            "provider": "test",
+            "model": "outline-model",
+        },
+    }
+    mock_backend_class = MagicMock(return_value=MagicMock())
+    with patch.dict(_client_impls, {"openai": mock_backend_class}):
+        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
+            await llm_manager.setup(config)
+
+    assert "llm_outline" not in llm_manager._clients
+
+
+# =============================================================================
 # 运行入口
 # =============================================================================
 

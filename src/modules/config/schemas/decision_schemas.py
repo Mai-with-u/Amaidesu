@@ -70,32 +70,102 @@ from .base import BaseConfig
 # - 仅追加 json_schema_extra
 # - Pydantic v2 允许子类重定义字段元数据
 
-from src.stages.decision.deciders.amaidesu.amaidesu_decider import (  # noqa: F401
-    AmaidesuDecider,
-)
-from src.stages.decision.deciders.command.command_decider import (  # noqa: F401
-    CommandDecider,
-)
-from src.stages.decision.deciders.llm.llm_decider import (  # noqa: F401
-    LLMDecider,
-)
-from src.stages.decision.deciders.maibot.maibot_decider import (  # noqa: F401
-    MaiBotDecider,
-)
-from src.stages.decision.deciders.replay.replay_decider import (  # noqa: F401
-    ReplayDecider,
-)
+try:
+    from src.stages.decision.deciders.amaidesu.amaidesu_decider import (  # type: ignore[no-redef]  # v2.0.0 兼容：保留顶层 import 以不破坏外部 import AmaidesuDecider 的代码
+        AmaidesuDecider,
+    )
+    from src.stages.decision.deciders.command.command_decider import (  # type: ignore[no-redef]
+        CommandDecider,
+    )
+    from src.stages.decision.deciders.llm.llm_decider import (  # type: ignore[no-redef]
+        LLMDecider,
+    )
+    from src.stages.decision.deciders.maibot.maibot_decider import (  # type: ignore[no-redef]
+        MaiBotDecider,
+    )
+    from src.stages.decision.deciders.replay.replay_decider import (  # type: ignore[no-redef]
+        ReplayDecider,
+    )
+
+    _DECIDER_CLASSES_AVAILABLE = True
+except ImportError:
+    _DECIDER_CLASSES_AVAILABLE = False
+    AmaidesuDecider = None  # type: ignore[misc,assignment]
+    CommandDecider = None  # type: ignore[misc,assignment]
+    LLMDecider = None  # type: ignore[misc,assignment]
+    MaiBotDecider = None  # type: ignore[misc,assignment]
+    ReplayDecider = None  # type: ignore[misc,assignment]
 
 
 # 所有 Decider 共享的 type 标识字面量
 DeciderType = Literal["llm", "maibot", "amaidesu", "command", "replay"]
 
 
-class LLMDeciderConfigSchema(LLMDecider.ConfigSchema):
-    """LLM Decider 配置 Schema（含 Dashboard UI 元数据）
+def _try_load_decider_classes() -> None:
+    """尝试延迟加载 stages/decision/deciders/ 的 Decider 类，失败不抛异常。"""
+    global _AmaidesuDecider_cls, _MaiBotDecider_cls, _LLMDecider_cls, _CommandDecider_cls, _ReplayDecider_cls
+    if _AmaidesuDecider_cls is not None:
+        return
+    try:
+        from src.stages.decision.deciders.amaidesu.amaidesu_decider import AmaidesuDecider
+        from src.stages.decision.deciders.maibot.maibot_decider import MaiBotDecider
+        from src.stages.decision.deciders.llm.llm_decider import LLMDecider
+        from src.stages.decision.deciders.command.command_decider import CommandDecider
+        from src.stages.decision.deciders.replay.replay_decider import ReplayDecider
 
-    继承自 `LLMDecider.ConfigSchema`，本类仅追加 UI 元数据。
-    真实字段定义仍由 Decider 模块维护，避免重复定义。
+        _AmaidesuDecider_cls = AmaidesuDecider
+        _MaiBotDecider_cls = MaiBotDecider
+        _LLMDecider_cls = LLMDecider
+        _CommandDecider_cls = CommandDecider
+        _ReplayDecider_cls = ReplayDecider
+    except Exception as exc:  # noqa: BLE001 - 兼容期容忍缺失
+        import logging
+
+        logging.getLogger(__name__).debug(f"Decider 类延迟导入失败（兼容期正常）: {exc}")
+
+
+_AmaidesuDecider_cls = None
+_MaiBotDecider_cls = None
+_LLMDecider_cls = None
+_CommandDecider_cls = None
+_ReplayDecider_cls = None
+
+
+def _get_AmaidesuDecider():
+    if _AmaidesuDecider_cls is None:
+        _try_load_decider_classes()
+    return _AmaidesuDecider_cls
+
+
+def _get_MaiBotDecider():
+    if _MaiBotDecider_cls is None:
+        _try_load_decider_classes()
+    return _MaiBotDecider_cls
+
+
+def _get_LLMDecider():
+    if _LLMDecider_cls is None:
+        _try_load_decider_classes()
+    return _LLMDecider_cls
+
+
+def _get_CommandDecider():
+    if _CommandDecider_cls is None:
+        _try_load_decider_classes()
+    return _CommandDecider_cls
+
+
+def _get_ReplayDecider():
+    if _ReplayDecider_cls is None:
+        _try_load_decider_classes()
+    return _ReplayDecider_cls
+
+
+class LLMDeciderConfigSchema(BaseConfig):
+    """LLM Decider 配置 Schema（含 Dashboard UI 元数据，v2.0.0 兼容期壳）
+
+    v2.0.0 已由 ``agents_schemas.py`` 的 ``StreamerAgentConfig`` 替代。
+    保留本类仅为不破坏外部旧代码引用；实际字段定义由 stages/ 模块维护。
     """
 
     client: Literal["llm", "llm_fast", "vlm"] = Field(
@@ -116,8 +186,8 @@ class LLMDeciderConfigSchema(LLMDecider.ConfigSchema):
     )
 
 
-class MaiBotDeciderConfigSchema(MaiBotDecider.ConfigSchema):
-    """MaiBot Decider 配置 Schema（含 Dashboard UI 元数据）"""
+class MaiBotDeciderConfigSchema(BaseConfig):
+    """MaiBot Decider 配置 Schema（v2.0.0 兼容期壳）"""
 
     host: str = Field(
         default="localhost",
@@ -150,8 +220,11 @@ class MaiBotDeciderConfigSchema(MaiBotDecider.ConfigSchema):
     )
 
 
-class AmaidesuDeciderConfigSchema(AmaidesuDecider.ConfigSchema):
-    """Amaidesu Decider 配置 Schema（含 Dashboard UI 元数据）"""
+class AmaidesuDeciderConfigSchema(BaseConfig):
+    """Amaidesu Decider 配置 Schema（v2.0.0 兼容期壳）
+
+    v2.0.0 已由 ``agents_schemas.StreamerAgentConfig`` 替代。
+    """
 
     client: Literal["llm", "llm_fast", "vlm"] = Field(
         default="llm_fast",
@@ -171,8 +244,8 @@ class AmaidesuDeciderConfigSchema(AmaidesuDecider.ConfigSchema):
     )
 
 
-class CommandDeciderConfigSchema(CommandDecider.ConfigSchema):
-    """Command Decider 配置 Schema（含 Dashboard UI 元数据）"""
+class CommandDeciderConfigSchema(BaseConfig):
+    """Command Decider 配置 Schema（v2.0.0 兼容期壳）"""
 
     command_prefix: str = Field(
         default="/",
@@ -181,12 +254,17 @@ class CommandDeciderConfigSchema(CommandDecider.ConfigSchema):
     )
 
 
-class ReplayDeciderConfigSchema(ReplayDecider.ConfigSchema):
-    """Replay Decider 配置 Schema（含 Dashboard UI 元数据）
+class ReplayDeciderConfigSchema(BaseConfig):
+    """Replay Decider 配置 Schema（v2.0.0 兼容期壳）
 
     当前只有 1 个字段（add_default_action），无需 UI 元数据扩展，
     但保留子类壳以便统一命名约定与未来扩展。
     """
+
+    add_default_action: bool = Field(
+        default=True,
+        description="是否在输入流末尾补一个默认动作",
+    )
 
 
 # ---------------------------------------------------------------------------

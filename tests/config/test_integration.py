@@ -32,9 +32,11 @@ class TestFirstRunGeneration:
         assert config_dir.exists()
         assert (config_dir / "core.toml").exists()
         assert (config_dir / "model.toml").exists()
-        assert (config_dir / "input.toml").exists()
-        assert (config_dir / "decision.toml").exists()
-        assert (config_dir / "output.toml").exists()
+        assert (config_dir / "agents.toml").exists()
+        assert (config_dir / "tools.toml").exists()
+        assert (config_dir / "memory.toml").exists()
+        assert (config_dir / "storage.toml").exists()
+        assert (config_dir / "background.toml").exists()
 
     def test_first_run_sets_copied_flag(self, temp_project: Path):
         service = ConfigService(base_dir=str(temp_project))
@@ -53,8 +55,8 @@ class TestFirstRunGeneration:
         service.initialize()
 
         core_content = (temp_project / "config" / "core.toml").read_text(encoding="utf-8")
-        assert "pipelines.input.rate_limit" in core_content or "rate_limit" in core_content
-        assert "pipelines.input.similar_filter" in core_content or "similar_filter" in core_content
+        assert "rate_limit" in core_content
+        assert "similar_filter" in core_content
 
 
 class TestOldConfigMigration:

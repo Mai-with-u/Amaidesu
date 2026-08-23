@@ -1,14 +1,20 @@
-"""多文件配置加载器
+"""多文件配置加载器（v2.0.0）
 
-从 config/ 目录加载 5 个 TOML 配置文件，使用 Pydantic Schema 验证并检测漂移。
+从 config/ 目录加载 7 个 TOML 配置文件，使用 Pydantic Schema 验证并检测漂移。
 首次运行时从 Schema 默认值生成带注释的配置文件。
 
-配置文件结构:
-    config/core.toml     - 核心系统配置（general, persona, maicore, context...）
-    config/model.toml    - LLM/VLM 模型配置
-    config/input.toml    - Input 阶段（collectors 启用列表 + 各 collector 配置）
-    config/decision.toml - Decision 阶段（active decider + 各 decider 配置）
-    config/output.toml   - Output 阶段（handlers 启用列表 + 各 handler 配置）
+配置文件结构（v2.0.0 按域划分）:
+    config/core.toml         - 基础设施（meta/general/persona/context/events/logging/dashboard/mcp/simulator/pipelines）
+    config/model.toml        - LLM/VLM 模型配置（[[llm_providers]] + [llm]/[llm_fast]/[vlm]/[llm_local]/[llm_summary]/[llm_agenda]）
+    config/agents.toml       - 业务 Agent（替代旧决策/输出组件注册）
+    config/tools.toml        - 工具包启用/配置（替代旧 collectors/handlers）
+    config/memory.toml       - 记忆系统（backend 行切换，db_path 权威在 storage.toml）
+    config/storage.toml      - 存储（SQLite 路径，与 SimpleMemory 共用）
+    config/background.toml   - 后台维护（ticks/压缩）
+
+> **AGENTS.md 写回闭环**：所有 7 个文件均接入 ``_load_and_validate_schema``
+> + ``_write_back_schema_file``，漂移字段会自动写回用户文件（缺缺失补默认、
+> 冗余剥离、版本号更新）。未接入的文件其 Schema 变更永远不会写回用户文件。
 """
 
 from __future__ import annotations
@@ -25,9 +31,11 @@ import tomlkit
 from src.modules.config.schemas.base import BaseConfig, DriftReport, _set_toml_value
 from src.modules.config.core_schemas import CoreConfig
 from src.modules.config.model_schemas import ModelConfig
-from src.modules.config.schemas.decision_schemas import DecisionConfig
-from src.modules.config.schemas.input_schemas import InputConfig
-from src.modules.config.schemas.output_schemas import OutputConfig
+from src.modules.config.agents_schemas import AgentsRootConfig
+from src.modules.config.tools_schemas import ToolsRootConfig
+from src.modules.config.memory_schemas import MemoryRootConfig
+from src.modules.config.storage_schemas import StorageRootConfig
+from src.modules.config.background_schemas import BackgroundRootConfig
 from src.modules.config.upgrade_hooks import apply_upgrade_hooks
 from src.modules.logging import get_logger
 from src.modules.simulator.config_schema import SimulatorConfigSchema
@@ -35,6 +43,9 @@ from pydantic import BaseModel
 
 logger = get_logger("MultiFileLoader")
 
+# v2.0.0 兼容期：保留阶段→组件包/Registry 映射，W6 由 stages/ 业务代码迁移到新框架
+# （agent/tools）后清理。当前 _PHASE_TO_* 仅在 _generate_phase_toml 等迁移期辅助
+# 函数中使用，load_config_dir 不再依赖这些映射。
 _PHASE_TO_SECTION: dict[str, str] = {
     "input": "collectors",
     "decision": "deciders",
@@ -51,16 +62,29 @@ _PHASE_TO_REGISTRY: dict[tuple[str, str], str] = {
     ("output", "_HANDLERS"): "src.stages.output.registry",
 }
 
-CONFIG_VERSION = "0.5.4"
+# v2.0.0：major 级版本升级（破坏旧 [collectors/deciders/handlers] 段，按域重整为 7 文件）。
+# 权威定义：AGENTS.md "配置 Schema 变更规则" + 这里的 ``CONFIG_VERSION`` 与
+# ``MetaConfig.version`` 默认值必须同步修改（改一必改二）。
+CONFIG_VERSION = "2.0.0"
 
-_CONFIG_FILES = ["core.toml", "model.toml", "input.toml", "decision.toml", "output.toml"]
+# v2.0.0 配置文件清单（按域划分）：core / model / agents / tools / memory / storage / background
+_CONFIG_FILES = [
+    "core.toml",
+    "model.toml",
+    "agents.toml",
+    "tools.toml",
+    "memory.toml",
+    "storage.toml",
+    "background.toml",
+]
 
 
 @dataclass(frozen=True)
 class CrossFileMigration:
     """跨文件配置迁移：把源文件中的某个段合并到目标文件（一次性）。
 
-    用于配置段跨文件移动（如 simulator.toml 的 [simulator] → core.toml）。
+    用于配置段跨文件移动（如旧 input.toml/decision.toml/output.toml 的
+    [collectors]/[deciders]/[handlers] → 新 tools.toml/agents.toml 的对应段）。
     与 ``ConfigUpgradeHook`` 的区别：hook 只操作单文件 dict，本机制跨文件。
     """
 
@@ -81,6 +105,29 @@ CROSS_FILE_MIGRATIONS: tuple[CrossFileMigration, ...] = (
         target_file="core.toml",
         target_key="simulator",
         target_schema=SimulatorConfigSchema,
+    ),
+    # 2.0.0: input.toml → tools.toml 的 [tools.perception.config]
+    # （旧 [collectors] 段合并到 tools.toml 的感知工具包）
+    CrossFileMigration(
+        source_file="input.toml",
+        source_key="collectors",
+        target_file="tools.toml",
+        target_key="perception_config",  # 注入到 [tools.perception.config] 字典
+    ),
+    # 2.0.0: output.toml → tools.toml 的 [tools.output.config]
+    # （旧 [handlers] 段合并到 tools.toml 的输出工具包）
+    CrossFileMigration(
+        source_file="output.toml",
+        source_key="handlers",
+        target_file="tools.toml",
+        target_key="output_config",
+    ),
+    # 2.0.0: decision.toml → agents.toml 的 [agents] 段
+    CrossFileMigration(
+        source_file="decision.toml",
+        source_key="deciders",
+        target_file="agents.toml",
+        target_key="agents",
     ),
 )
 
@@ -114,7 +161,7 @@ def _backup_file(file_path: Path, config_dir: Path, batch_id: str | None = None)
 def _generate_core_toml() -> str:
     """生成 core.toml 内容（每个子配置为独立顶层 section）"""
     doc = tomlkit.document()
-    doc.add(tomlkit.comment("核心系统配置 - Amaidesu"))
+    doc.add(tomlkit.comment("核心系统配置 - Amaidesu v2.0.0"))
     doc.add(tomlkit.nl())
 
     core = CoreConfig()
@@ -153,7 +200,7 @@ def _generate_core_toml() -> str:
 def _generate_model_toml() -> str:
     """生成 model.toml 内容"""
     doc = tomlkit.document()
-    doc.add(tomlkit.comment("模型配置 - LLM/VLM 参数"))
+    doc.add(tomlkit.comment("模型配置 - LLM/VLM 参数（v2.0.0，llm_outline 改名为 llm_agenda）"))
     doc.add(tomlkit.nl())
 
     model = ModelConfig()
@@ -183,8 +230,6 @@ def _generate_model_toml() -> str:
             doc.add(tomlkit.nl())
         elif isinstance(field_value, list) and field_value and isinstance(field_value[0], BaseModel):
             # list[BaseModel] → TOML array-of-tables (`[[field_name]]`)
-            # 必须用 tomlkit.items.AoT 显式构造,才能确保输出 `[[name]]` 表头语法
-            # (doc.append() 单元素会被降级为 `[name]` 单表;array() 会输出内联 `[{}]`)
             if field_info.description:
                 doc.add(tomlkit.comment(field_info.description))
             from tomlkit.items import AoT
@@ -207,6 +252,46 @@ def _generate_model_toml() -> str:
     return tomlkit.dumps(doc)
 
 
+def _generate_domain_toml(
+    file_name: str,
+    schema_cls: type[BaseConfig],
+    *,
+    comment: str | None = None,
+) -> str:
+    """通用域文件生成器（agents/tools/memory/storage/background 共用）
+
+    与 ``_generate_core_toml`` 风格一致：顶层字段即顶层表，BaseModel 字段展开为子表。
+    """
+    doc = tomlkit.document()
+    doc.add(tomlkit.comment(comment or f"{file_name} 配置 - Amaidesu v2.0.0"))
+    doc.add(tomlkit.nl())
+
+    instance = schema_cls()
+
+    for field_name, _field_info in schema_cls.model_fields.items():
+        field_value = getattr(instance, field_name)
+
+        if isinstance(field_value, BaseModel):
+            sub_config = field_value.model_dump()
+            sub_cls = type(field_value)
+            table = tomlkit.table()
+
+            for sub_name, sub_info in sub_cls.model_fields.items():
+                if sub_info.description:
+                    table.add(tomlkit.comment(sub_info.description))
+                _set_toml_value(table, sub_name, sub_config.get(sub_name))
+
+            doc[field_name] = table
+            doc.add(tomlkit.nl())
+        else:
+            if _field_info.description:
+                doc.add(tomlkit.comment(_field_info.description))
+            doc[field_name] = field_value
+            doc.add(tomlkit.nl())
+
+    return tomlkit.dumps(doc)
+
+
 def _unwrap_optional(annotation: Any) -> Any:
     """解包 Optional[X] / Union[X, None] → X；其他类型原样返回。
 
@@ -221,13 +306,7 @@ def _unwrap_optional(annotation: Any) -> Any:
 
 
 def _placeholder_for_type(annotation: Any, field_info: Any = None) -> Any:
-    """根据字段注解生成占位符值。
-
-    用于必填字段：避免直接调用 schema_cls()（会触发 ValidationError），
-    而是根据类型返回中性的占位符，配合 `[必填]` 注释提示用户填写。
-    有约束的数值字段返回满足约束的最小值（如 gt=0 → 1），避免占位符
-    自身违反约束导致配置验证失败。
-    """
+    """根据字段注解生成占位符值。"""
     origin = get_origin(annotation)
     args = get_args(annotation)
 
@@ -246,7 +325,6 @@ def _placeholder_for_type(annotation: Any, field_info: Any = None) -> Any:
     if annotation is str:
         return "请填写"
     if annotation is int:
-        # 尊重 gt/ge 约束：gt=0 时占位符 0 会违反约束（如 B站 room_id）
         for meta in getattr(field_info, "metadata", []) or []:
             gt = getattr(meta, "gt", None)
             if gt is not None and gt >= 0:
@@ -272,10 +350,7 @@ def _placeholder_for_type(annotation: Any, field_info: Any = None) -> Any:
 
 
 def _extract_constraint_hints(field_info: Any) -> str:
-    """从 Pydantic v2 Field 的 metadata 中提取 gt/ge/lt/le/length 等约束提示。
-
-    用于在 `[必填]` 注释中追加约束条件，避免用户填入非法值。
-    """
+    """从 Pydantic v2 Field 的 metadata 中提取 gt/ge/lt/le/length 等约束提示。"""
     hints: list[str] = []
     for meta in field_info.metadata:
         cls_name = type(meta).__name__
@@ -297,18 +372,10 @@ def _extract_constraint_hints(field_info: Any) -> str:
 def _schema_to_toml_table(schema_cls: type[BaseModel]) -> Any:
     """从 Pydantic v2 Schema 类（不实例化）生成 tomlkit Table 模板。
 
-    处理规则：
-    - 简单字段（key-value）先输出，子表字段（嵌套 BaseModel / 非空 dict 默认值）后输出，
-      确保 TOML 语法合法（父表键值对必须在子表之前），且字段注释紧邻对应字段不产生孤儿注释。
-    - 必填字段（is_required() 为 True）→ 占位符值 + `# [必填]` 注释
-    - 有默认值（非 None、非空容器）→ 使用默认值 + description 注释
-    - 默认值为 None 或空 dict/空 list → 跳过
-
-    字段处理顺序在各类内部遵循 model_fields 的声明顺序，确保输出稳定。
+    保留迁移期能力，但 v2.0.0 已不依赖此函数（每个域用 _generate_domain_toml）。
     """
     table = tomlkit.table()
 
-    # 按字段类型分两类：简单字段（key-value）与 子表字段（sub-table）
     simple_fields: list[tuple[str, Any, Any]] = []
     subtable_fields: list[tuple[str, Any, Any]] = []
 
@@ -325,14 +392,13 @@ def _schema_to_toml_table(schema_cls: type[BaseModel]) -> Any:
                 default_value = field_info.get_default(call_default_factory=True)
             except Exception:
                 default_value = None
-            # 非空 dict 默认值会变成子表，归入子表类（避免触发 tomlkit 重排导致孤儿注释）
             if isinstance(default_value, dict) and default_value:
                 is_subtable = True
 
         target = subtable_fields if is_subtable else simple_fields
         target.append((field_name, field_info, unwrapped))
 
-    # 第一遍：输出所有简单字段（key-value），注释与值紧邻
+    # 第一遍：输出所有简单字段
     for field_name, field_info, unwrapped in simple_fields:
         if field_info.is_required():
             desc = field_info.description or ""
@@ -362,7 +428,7 @@ def _schema_to_toml_table(schema_cls: type[BaseModel]) -> Any:
 
         table[field_name] = default_value
 
-    # 第二遍：输出所有子表字段（嵌套 BaseModel / 非空 dict 默认值）
+    # 第二遍：输出所有子表字段
     for field_name, field_info, unwrapped in subtable_fields:
         is_nested_model = isinstance(unwrapped, type) and issubclass(unwrapped, BaseModel)
 
@@ -375,7 +441,6 @@ def _schema_to_toml_table(schema_cls: type[BaseModel]) -> Any:
                 continue
             if not isinstance(default_value, dict) or not default_value:
                 continue
-            # 手动构造子表（避免 _set_toml_value 在父表上转子表触发重排）
             sub_table = tomlkit.table()
             for sub_key, sub_value in default_value.items():
                 if isinstance(sub_value, dict):
@@ -386,7 +451,6 @@ def _schema_to_toml_table(schema_cls: type[BaseModel]) -> Any:
                 else:
                     sub_table[sub_key] = sub_value
 
-        # 字段注释：必填加 [必填] 标记，否则用 description
         if field_info.is_required():
             desc = field_info.description or ""
             if desc:
@@ -402,13 +466,9 @@ def _schema_to_toml_table(schema_cls: type[BaseModel]) -> Any:
 
 
 def _discover_components(phase: str) -> dict[str, type]:
-    """发现某阶段所有已注册组件的 ConfigSchema 类。
+    """发现某阶段所有已注册组件的 ConfigSchema 类（v2.0.0 兼容期保留）。
 
-    主动 import 阶段包，触发 @collector/@decider/@handler 装饰器注册，
-    然后枚举对应 registry 中的组件，提取其 ConfigSchema 嵌套类。
-
-    容错策略：组件包 import 失败（如 STT 缺少 torch 依赖）时，
-    仅记录 warning 并返回空 dict，调用方降级到不追加组件模板的行为。
+    W6 由 stages/ 业务代码迁移后清理。
     """
     components_pkg = _PHASE_TO_COMPONENTS_PKG.get(phase)
     section_key = _PHASE_TO_SECTION.get(phase)
@@ -449,14 +509,14 @@ def _discover_components(phase: str) -> dict[str, type]:
 def _generate_phase_toml(phase: str) -> str:
     """生成阶段配置文件（input.toml / decision.toml / output.toml）
 
-    文件结构：
-    1. 顶部骨架（启用列表等，按阶段硬编码）
-    2. 自动发现的各组件配置模板（从 ConfigSchema 推导，含必填标记）
+    v2.0.0 兼容期：仍为旧 input/decision/output 文件生成骨架，供 stages/
+    业务代码过渡使用。新配置写入由 CrossFileMigration 引导到 tools.toml /
+    agents.toml，源文件被备份后移除。
     """
     doc = tomlkit.document()
 
     if phase == "input":
-        doc.add(tomlkit.comment("Input 阶段配置 - Collectors"))
+        doc.add(tomlkit.comment("Input 阶段配置（v2.0.0 兼容期：下次启动将被迁移到 tools.toml [tools.perception]）"))
         doc.add(tomlkit.nl())
         table = tomlkit.table()
         table.add(tomlkit.comment("启用的 Collector 列表"))
@@ -464,19 +524,15 @@ def _generate_phase_toml(phase: str) -> str:
         doc["collectors"] = table
 
     elif phase == "decision":
-        doc.add(tomlkit.comment("Decision 阶段配置 - Deciders"))
+        doc.add(tomlkit.comment("Decision 阶段配置（v2.0.0 兼容期：下次启动将被迁移到 agents.toml [agents]）"))
         doc.add(tomlkit.nl())
         table = tomlkit.table()
-        table.add(tomlkit.comment("启用的 Decider 列表（可多选，所有启用的 Decider 将并行处理消息）"))
-        table["enabled"] = ["maibot"]
-        table.add(tomlkit.comment("可用 Decider（取消注释并添加到上方 enabled 列表即可启用）"))
-        table.add(tomlkit.comment('  "llm",      # LLM 直接决策'))
-        table.add(tomlkit.comment('  "command",  # 通用命令意图路由'))
-        table.add(tomlkit.comment('  "replay",   # 输入重放（调试用）'))
+        table.add(tomlkit.comment("启用的 Decider 列表"))
+        table["enabled"] = ["amaidesu"]
         doc["deciders"] = table
 
     elif phase == "output":
-        doc.add(tomlkit.comment("Output 阶段配置 - Handlers"))
+        doc.add(tomlkit.comment("Output 阶段配置（v2.0.0 兼容期：下次启动将被迁移到 tools.toml [tools.output]）"))
         doc.add(tomlkit.nl())
         table = tomlkit.table()
         table.add(tomlkit.comment("启用的 Handler 列表"))
@@ -519,11 +575,7 @@ def _generate_phase_toml(phase: str) -> str:
 
 
 def _table_from_model(instance: BaseModel) -> Any:
-    """把 BaseModel 实例序列化为 tomlkit Table（值 + description 注释，None 跳过）。
-
-    与 ``_schema_to_toml_table`` 的区别：值来自配置实例（用户数据 + 默认值），
-    而非纯 Schema 默认值；用于自动升级写回。
-    """
+    """把 BaseModel 实例序列化为 tomlkit Table（值 + description 注释，None 跳过）。"""
     table = tomlkit.table()
     for sub_name, sub_info in type(instance).model_fields.items():
         value = getattr(instance, sub_name)
@@ -544,7 +596,7 @@ def _table_from_model(instance: BaseModel) -> Any:
 
 
 def _dict_to_toml_table(data: dict[str, Any]) -> Any:
-    """把嵌套 dict 转为 tomlkit Table（用于 pipelines 等动态 dict 字段）。"""
+    """把嵌套 dict 转为 tomlkit Table。"""
     table = tomlkit.table()
     for key, value in data.items():
         if isinstance(value, dict):
@@ -555,19 +607,11 @@ def _dict_to_toml_table(data: dict[str, Any]) -> Any:
 
 
 def _serialize_instance_to_toml(schema_cls: type[BaseModel], instance: BaseModel) -> str:
-    """把配置实例序列化为多文件格式 TOML（顶层字段即顶层表/键值）。
-
-    core/model/simulator 三种文件通用：
-    - BaseModel 字段 → 顶层表（含 description 注释）
-    - list[BaseModel] 字段 → 数组表（``[[name]]``）
-    - dict 字段（如 pipelines）→ 子表
-    - 简单字段 → 键值 + 注释
-    """
+    """把配置实例序列化为多文件格式 TOML（顶层字段即顶层表/键值）。"""
     doc = tomlkit.document()
     for field_name, field_info in schema_cls.model_fields.items():
         value = getattr(instance, field_name)
         if value is None:
-            # 可空字段（如 DecisionConfig.pipelines=None）省略不写，与 _table_from_model 行为一致
             continue
         if isinstance(value, BaseModel):
             table = _table_from_model(value)
@@ -599,19 +643,7 @@ def _write_back_schema_file(
     force_meta_version: str | None = None,
     batch_id: str | None = None,
 ) -> Path | None:
-    """自动升级写回：备份旧文件 → 用户值合并（缺失补默认、冗余已剥离）→ 序列化写回。
-
-    Args:
-        config_dir: config/ 目录
-        file_name: 目标文件名（core.toml / model.toml / simulator.toml）
-        schema_cls: Pydantic Schema 类
-        user_data: 已验证的用户配置 dict（``from_dict_with_drift_check`` 产物，冗余已剥离）
-        force_meta_version: 强制覆盖 meta.version（仅 core.toml 传 CONFIG_VERSION）
-        batch_id: 备份批次目录名（同一次升级的多个文件共享）
-
-    Returns:
-        备份文件路径（无旧文件时返回 None）
-    """
+    """自动升级写回：备份旧文件 → 用户值合并（缺失补默认、冗余已剥离）→ 序列化写回。"""
     file_path = config_dir / file_name
     data = dict(user_data)
     if force_meta_version is not None:
@@ -622,9 +654,6 @@ def _write_back_schema_file(
     instance = schema_cls(**data)
     content = _serialize_instance_to_toml(schema_cls, instance)
     backup_path = _backup_file(file_path, config_dir, batch_id=batch_id)
-    # 保留原文件的 BOM 状态：生成器产出的文件带 BOM（utf-8-sig），用户手写的
-    # 文件通常无 BOM。若统一强制写 BOM，会污染手写文件（tomllib 等不支持 BOM
-    # 的解析器将无法读取），因此按原文件字节判断。
     has_bom = False
     try:
         with open(file_path, "rb") as f:
@@ -637,7 +666,7 @@ def _write_back_schema_file(
 
 
 def _ensure_required_files(config_dir: Path) -> list[str]:
-    """补齐缺失的必需配置文件（如旧 config.toml 迁移后缺 simulator.toml 等）。
+    """补齐缺失的必需配置文件（v2.0.0：7 个域文件）。
 
     Returns:
         本次补齐的文件名列表
@@ -651,58 +680,62 @@ def _ensure_required_files(config_dir: Path) -> list[str]:
             (config_dir / fname).write_text(_generate_core_toml(), encoding="utf-8-sig")
         elif fname == "model.toml":
             (config_dir / fname).write_text(_generate_model_toml(), encoding="utf-8-sig")
-        elif fname == "input.toml":
-            (config_dir / fname).write_text(_generate_phase_toml("input"), encoding="utf-8-sig")
-        elif fname == "decision.toml":
-            (config_dir / fname).write_text(_generate_phase_toml("decision"), encoding="utf-8-sig")
-        elif fname == "output.toml":
-            (config_dir / fname).write_text(_generate_phase_toml("output"), encoding="utf-8-sig")
+        elif fname == "agents.toml":
+            (config_dir / fname).write_text(
+                _generate_domain_toml(fname, AgentsRootConfig, comment="业务 Agent 配置"),
+                encoding="utf-8-sig",
+            )
+        elif fname == "tools.toml":
+            (config_dir / fname).write_text(
+                _generate_domain_toml(fname, ToolsRootConfig, comment="工具包配置"),
+                encoding="utf-8-sig",
+            )
+        elif fname == "memory.toml":
+            (config_dir / fname).write_text(
+                _generate_domain_toml(fname, MemoryRootConfig, comment="记忆系统配置"),
+                encoding="utf-8-sig",
+            )
+        elif fname == "storage.toml":
+            (config_dir / fname).write_text(
+                _generate_domain_toml(fname, StorageRootConfig, comment="存储配置（SQLite 路径单一权威）"),
+                encoding="utf-8-sig",
+            )
+        elif fname == "background.toml":
+            (config_dir / fname).write_text(
+                _generate_domain_toml(fname, BackgroundRootConfig, comment="后台维护配置"),
+                encoding="utf-8-sig",
+            )
         generated.append(fname)
     return generated
 
 
 def generate_default_configs(config_dir: Path) -> None:
-    """首次运行：从 Schema 生成默认配置文件
-
-    Args:
-        config_dir: config/ 目录路径
-    """
+    """首次运行：从 Schema 生成默认配置文件（v2.0.0：7 个域文件）"""
     config_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"生成默认配置到 {config_dir}")
 
-    # core.toml
-    core_path = config_dir / "core.toml"
-    core_path.write_text(_generate_core_toml(), encoding="utf-8-sig")
-    logger.info("已生成 core.toml")
-
-    # model.toml
-    model_path = config_dir / "model.toml"
-    model_path.write_text(_generate_model_toml(), encoding="utf-8-sig")
-    logger.info("已生成 model.toml")
-
-    # input.toml
-    input_path = config_dir / "input.toml"
-    input_path.write_text(_generate_phase_toml("input"), encoding="utf-8-sig")
-    logger.info("已生成 input.toml")
-
-    # decision.toml
-    decision_path = config_dir / "decision.toml"
-    decision_path.write_text(_generate_phase_toml("decision"), encoding="utf-8-sig")
-    logger.info("已生成 decision.toml")
-
-    # output.toml
-    output_path = config_dir / "output.toml"
-    output_path.write_text(_generate_phase_toml("output"), encoding="utf-8-sig")
-    logger.info("已生成 output.toml")
+    for fname, schema_cls, comment in (
+        ("core.toml", CoreConfig, "核心系统配置"),
+        ("model.toml", ModelConfig, "模型配置 - LLM/VLM 参数"),
+        ("agents.toml", AgentsRootConfig, "业务 Agent 配置"),
+        ("tools.toml", ToolsRootConfig, "工具包配置"),
+        ("memory.toml", MemoryRootConfig, "记忆系统配置"),
+        ("storage.toml", StorageRootConfig, "存储配置（SQLite 路径单一权威）"),
+        ("background.toml", BackgroundRootConfig, "后台维护配置"),
+    ):
+        path = config_dir / fname
+        if fname == "core.toml":
+            content = _generate_core_toml()
+        elif fname == "model.toml":
+            content = _generate_model_toml()
+        else:
+            content = _generate_domain_toml(fname, schema_cls, comment=comment)
+        path.write_text(content, encoding="utf-8-sig")
+        logger.info(f"已生成 {fname}")
 
 
 def _collect_empty_container_fields(schema_cls: type) -> set[str]:
-    """收集 schema 中"默认是空容器"的字段名集合（递归遍历嵌套 BaseConfig）。
-
-    空容器 = 默认值是空 dict / 空 list / 内容为空的 BaseConfig 实例。
-    与 TOML 生成器语义对齐：这些字段在生成模板中省略不写，
-    缺失时不应视为漂移（否则每次启动误判触发写回）。
-    """
+    """收集 schema 中"默认是空容器"的字段名集合。"""
     result: set[str] = set()
     for field_name, field_info in getattr(schema_cls, "model_fields", {}).items():
         try:
@@ -719,13 +752,7 @@ def _collect_empty_container_fields(schema_cls: type) -> set[str]:
 
 
 def _filter_optional_container_missing(report: DriftReport, schema_cls: type[BaseConfig]) -> None:
-    """从漂移报告中剔除"缺失但默认是空容器"的字段（原地修改 missing）。
-
-    与 TOML 生成器语义对齐：空容器默认值（空 dict / 空 list / 默认空 BaseConfig）
-    在生成模板中省略不写，因此缺失不应视为漂移——否则每次启动都会误判
-    漂移触发写回（如 decision/input/output 的 pipelines 可选扩展段、
-    bili_danmaku.message_config 等空 dict 字段）。
-    """
+    """从漂移报告中剔除"缺失但默认是空容器"的字段（原地修改 missing）。"""
     empty_fields = _collect_empty_container_fields(schema_cls)
     report.missing = [m for m in report.missing if m.split(".")[-1] not in empty_fields]
 
@@ -734,18 +761,7 @@ def _load_and_validate_schema(
     file_path: Path,
     schema_cls: type[BaseConfig],
 ) -> tuple[dict[str, Any], DriftReport]:
-    """加载单个 Schema 配置文件并验证
-
-    Args:
-        file_path: 配置文件路径
-        schema_cls: Pydantic Schema 类
-
-    Returns:
-        (model_dump 字典, 漂移报告)
-
-    注意：漂移（缺失/冗余字段）的日志由 ``load_config_dir`` 统一汇总输出，
-    本函数不打印逐条提示（写回闭环会一次性消化漂移）。
-    """
+    """加载单个 Schema 配置文件并验证。"""
     with open(file_path, "r", encoding="utf-8-sig") as f:
         doc = tomlkit.load(f)
 
@@ -754,50 +770,108 @@ def _load_and_validate_schema(
     return instance.model_dump(), report
 
 
-def _apply_cross_file_migrations(config_dir: Path, core_data: dict[str, Any]) -> list[Path]:
-    """执行已注册的跨文件迁移，把旧文件中的配置段合并进目标文件。
+def _apply_cross_file_migrations(
+    config_dir: Path,
+    target_file_data: dict[str, dict[str, Any]],
+    target_files: list[str],
+) -> list[Path]:
+    """执行已注册的跨文件迁移。
 
     Args:
         config_dir: config/ 目录
-        core_data: 已加载的 core 配置 dict（原地修改：目标段缺失时合入）
+        target_file_data: 已加载的目标文件数据（in-out 修改，如 tools_data）
+        target_files: 参与迁移的目标文件列表（按文件名）
 
     Returns:
-        需要备份后移除的源文件路径列表（存在残留文件时）
+        需要备份后移除的源文件路径列表
     """
     to_remove: list[Path] = []
     for migration in CROSS_FILE_MIGRATIONS:
         source_path = config_dir / migration.source_file
         if not source_path.exists():
             continue
-        target_path = config_dir / migration.target_file
-        target_raw: dict[str, Any] = {}
-        if target_path.exists():
-            with open(target_path, "r", encoding="utf-8-sig") as f:
-                target_raw = tomlkit.load(f).unwrap()
+        if migration.target_file not in target_files:
+            # 目标文件未在本次加载列表中，跳过（用户可能尚未升级到该域）
+            continue
+
+        target_raw = target_file_data.get(migration.target_file, {})
         with open(source_path, "r", encoding="utf-8-sig") as f:
             source_doc = tomlkit.load(f).unwrap()
+
         section = source_doc.get(migration.source_key)
-        if isinstance(section, dict) and migration.target_key not in target_raw:
-            if migration.target_schema is not None:
-                try:
-                    cleaned_instance, _ = migration.target_schema.from_dict_with_drift_check(section)
-                    section = cleaned_instance.model_dump()
-                except Exception as e:
-                    logger.warning(f"跨文件迁移 [{migration.source_file}] 数据清洗失败，跳过合并: {e}")
-                    continue
-            core_data[migration.target_key] = section
-            logger.info(
-                f"跨文件迁移: [{migration.source_file}].{migration.source_key} "
-                f"→ [{migration.target_file}].{migration.target_key}"
-            )
+        if not isinstance(section, dict):
+            continue
+
+        if migration.target_schema is not None:
+            try:
+                cleaned_instance, _ = migration.target_schema.from_dict_with_drift_check(section)
+                section = cleaned_instance.model_dump()
+            except Exception as e:
+                logger.warning(f"跨文件迁移 [{migration.source_file}] 数据清洗失败，跳过合并: {e}")
+                section = None
+
+        if section is None:
+            continue
+
+        migrated = False
+        if migration.target_key in ("perception_config", "output_config"):
+            pack_name = migration.target_key.split("_")[0]
+            tools_dict = target_raw.setdefault("tools", {})
+            pack_dict = tools_dict.setdefault(pack_name, {})
+            if not isinstance(pack_dict, dict):
+                pack_dict = {}
+                tools_dict[pack_name] = pack_dict
+            meta_dict = pack_dict.setdefault("config", {})
+            if isinstance(meta_dict, dict):
+                meta_dict.update(section)
+                migrated = bool(section)
+            else:
+                pack_dict["config"] = section
+                migrated = True
+        else:
+            if migration.target_key not in target_raw:
+                target_raw[migration.target_key] = section
+                migrated = True
+            elif isinstance(target_raw[migration.target_key], dict):
+                target_raw[migration.target_key].update(section)
+                migrated = bool(section)
+
+        if not migrated:
+            continue
+
+        logger.info(
+            f"跨文件迁移: [{migration.source_file}].{migration.source_key} "
+            f"→ [{migration.target_file}].{migration.target_key}"
+        )
         to_remove.append(source_path)
     return to_remove
+
+
+def _log_drift_writeback(
+    file_label: str,
+    backup_path: Path | None,
+    config_dir: Path,
+    missing: list[str],
+    redundant: list[str],
+    old_version: str | None,
+) -> None:
+    """统一的"已自动升级"日志格式（所有 7 个文件共用）。"""
+    backup_rel = f", 备份: {backup_path.relative_to(config_dir)}" if backup_path else ""
+    version_info = (
+        f", 版本 {old_version or '?'} → {CONFIG_VERSION}" if old_version and old_version != CONFIG_VERSION else ""
+    )
+    logger.info(
+        f"{file_label} 已自动升级: "
+        f"补齐 {len(missing)} 项({', '.join(missing) or '无'}), "
+        f"清理 {len(redundant)} 项({', '.join(redundant) or '无'})"
+        f"{version_info}{backup_rel}"
+    )
 
 
 def load_config_dir(
     config_dir: Path,
 ) -> tuple[dict[str, Any], DriftReport]:
-    """加载 config/ 目录下所有配置文件（含自动升级闭环）
+    """加载 config/ 目录下所有 7 个 TOML 配置文件（含自动升级闭环）
 
     Args:
         config_dir: config/ 目录路径
@@ -805,48 +879,44 @@ def load_config_dir(
     Returns:
         (合并后的配置字典, 综合漂移报告)
 
-    自动升级闭环（对齐 MaiBot 行为）：
+    自动升级闭环（AGENTS.md 规则全覆盖 7 个文件）：
     1. 缺失文件自动补齐
-    2. 跨文件迁移（如旧 simulator.toml → core.toml 的 [simulator]）
+    2. 跨文件迁移（如旧 input.toml → tools.toml 的 [tools.perception.config]）
     3. core.toml 版本不一致 → 执行注册的 ConfigUpgradeHook → 写回并更新 [meta].version
     4. 存在漂移（缺失/冗余字段）→ 备份 + 写回（缺失补默认值、冗余删除）
     写回后漂移归零，下次启动不再重复提示。
     """
-    # 0. 补齐缺失文件
+    # 0. 补齐缺失文件（7 个域文件）
     _ensure_required_files(config_dir)
 
     combined = DriftReport()
     result: dict[str, Any] = {}
-    # 版本检测（core.toml 的 [meta].version）
     current_ver = get_config_version(config_dir)
     version_changed = current_ver is not None and current_ver != CONFIG_VERSION
-    # 备份批次目录：同一次升级的所有文件共享（惰性创建）
     batch_id: str | None = None
 
-    # core.toml → CoreConfig
+    # 收集所有 7 个文件的目标数据（用于跨文件迁移）
+    loaded_data: dict[str, dict[str, Any]] = {}
+
+    # ====== 1. core.toml ======
     core_path = config_dir / "core.toml"
     if core_path.exists():
         core_data, core_report = _load_and_validate_schema(core_path, CoreConfig)
-        # 版本升级：执行注册的升级钩子（数据变换）
+        loaded_data["core.toml"] = core_data
         if version_changed:
             hook_result = apply_upgrade_hooks(core_data, "core.toml", current_ver or CONFIG_VERSION, CONFIG_VERSION)
             if hook_result.migrated:
-                logger.warning(f"配置升级钩子已应用: {hook_result.reasons}")
+                logger.warning(f"core.toml 配置升级钩子已应用: {hook_result.reasons}")
             core_data = hook_result.data
         # 跨文件迁移（如旧 simulator.toml → core 的 [simulator]）
-        migrated_files = _apply_cross_file_migrations(config_dir, core_data)
-        # 写回闭环：版本不一致 或 存在漂移 或 跨文件迁移
+        migrated_files = _apply_cross_file_migrations(config_dir, {"core.toml": core_data}, ["core.toml"])
         if version_changed or core_report.has_drift or migrated_files:
             batch_id = batch_id or datetime.now().strftime("%Y%m%d_%H%M%S")
             backup = _write_back_schema_file(
                 config_dir, "core.toml", CoreConfig, core_data, force_meta_version=CONFIG_VERSION, batch_id=batch_id
             )
-            logger.info(
-                f"core.toml 已自动升级: "
-                f"补齐 {len(core_report.missing)} 项({', '.join(core_report.missing) or '无'}), "
-                f"清理 {len(core_report.redundant)} 项({', '.join(core_report.redundant) or '无'}), "
-                f"版本 {current_ver or '?'} → {CONFIG_VERSION}"
-                + (f", 备份: {backup.relative_to(config_dir)}" if backup else "")
+            _log_drift_writeback(
+                "core.toml", backup, config_dir, core_report.missing, core_report.redundant, current_ver
             )
             for migrated_file in migrated_files:
                 _backup_file(migrated_file, config_dir, batch_id=batch_id)
@@ -856,136 +926,186 @@ def load_config_dir(
         combined.redundant.extend(f"core.{r}" for r in core_report.redundant)
         combined.missing.extend(f"core.{m}" for m in core_report.missing)
 
-    # model.toml → ModelConfig
+    # ====== 2. model.toml ======
     model_path = config_dir / "model.toml"
     if model_path.exists():
-        model_data, model_report = _load_and_validate_schema(model_path, ModelConfig)
-        if model_report.has_drift:
-            batch_id = batch_id or datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup = _write_back_schema_file(config_dir, "model.toml", ModelConfig, model_data, batch_id=batch_id)
-            logger.info(
-                f"model.toml 已自动升级: "
-                f"补齐 {len(model_report.missing)} 项({', '.join(model_report.missing) or '无'}), "
-                f"清理 {len(model_report.redundant)} 项({', '.join(model_report.redundant) or '无'})"
-                + (f", 备份: {backup.relative_to(config_dir)}" if backup else "")
-            )
+        try:
             model_data, model_report = _load_and_validate_schema(model_path, ModelConfig)
+        except Exception as e:
+            logger.warning(f"model.toml Schema 验证失败，回退 raw dict 加载: {e}")
+            with open(model_path, "r", encoding="utf-8-sig") as f:
+                model_data = tomlkit.load(f).unwrap()
+                model_report = DriftReport()
+        loaded_data["model.toml"] = model_data
+        if model_report.has_drift:
+            try:
+                batch_id = batch_id or datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup = _write_back_schema_file(config_dir, "model.toml", ModelConfig, model_data, batch_id=batch_id)
+                _log_drift_writeback(
+                    "model.toml", backup, config_dir, model_report.missing, model_report.redundant, current_ver
+                )
+            except Exception as e:
+                logger.warning(f"model.toml 写回失败（验证仍不通过），跳过: {e}")
         result["model"] = model_data
         combined.redundant.extend(f"model.{r}" for r in model_report.redundant)
         combined.missing.extend(f"model.{m}" for m in model_report.missing)
 
-    # input.toml → InputConfig（含漂移补齐写回闭环，与 decision.toml 同构）
-    # 历史教训（decision.toml 同源）：组件 Schema 新增字段不会写回 raw dict 文件，
-    # 缺失字段只在内存兜底，用户无从感知。接入后缺失补默认值落盘。
-    # pipelines 是可选扩展段（schema 声明"不强制写入"），缺失不视为漂移。
-    input_path = config_dir / "input.toml"
-    if input_path.exists():
+    # ====== 3. agents.toml ======
+    agents_path = config_dir / "agents.toml"
+    if agents_path.exists():
         try:
-            # 版本升级钩子：先于 schema 校验执行——旧配置可能含已删除的段
-            # （如 [collectors.mainosaba] 在 extra="forbid" 下会直接校验失败），
-            # 必须先在 raw dict 上完成数据变换、写回文件，再进入校验/漂移闭环。
-            if version_changed:
-                with open(input_path, "r", encoding="utf-8-sig") as f:
-                    raw_input = tomlkit.load(f).unwrap()
-                hook_result = apply_upgrade_hooks(
-                    raw_input, "input.toml", current_ver or CONFIG_VERSION, CONFIG_VERSION
-                )
-                if hook_result.migrated:
-                    logger.warning(f"input.toml 配置升级钩子已应用: {hook_result.reasons}")
-                    input_path.write_text(tomlkit.dumps(raw_input), encoding="utf-8")
-            input_data, input_report = _load_and_validate_schema(input_path, InputConfig)
-            _filter_optional_container_missing(input_report, InputConfig)
-            if input_report.has_drift:
-                batch_id = batch_id or datetime.now().strftime("%Y%m%d_%H%M%S")
-                backup = _write_back_schema_file(config_dir, "input.toml", InputConfig, input_data, batch_id=batch_id)
-                logger.info(
-                    f"input.toml 已自动升级: "
-                    f"补齐 {len(input_report.missing)} 项({', '.join(input_report.missing) or '无'}), "
-                    f"清理 {len(input_report.redundant)} 项({', '.join(input_report.redundant) or '无'})"
-                    + (f", 备份: {backup.relative_to(config_dir)}" if backup else "")
-                )
-                input_data, input_report = _load_and_validate_schema(input_path, InputConfig)
-                _filter_optional_container_missing(input_report, InputConfig)
-            result["input"] = input_data
-            combined.redundant.extend(f"input.{r}" for r in input_report.redundant)
-            combined.missing.extend(f"input.{m}" for m in input_report.missing)
-        except Exception as e:
-            logger.warning(f"input.toml Schema 验证失败，回退 raw dict 加载: {e}")
-            with open(input_path, "r", encoding="utf-8-sig") as f:
-                result["input"] = tomlkit.load(f).unwrap()
+            # 跨文件迁移（如旧 decision.toml 的 [deciders] → agents.toml 的 [agents]）
+            # 先读取 agents.toml 原始数据，让跨文件迁移注入
+            with open(agents_path, "r", encoding="utf-8-sig") as f:
+                raw_agents = tomlkit.load(f).unwrap()
+            loaded_data["agents.toml"] = raw_agents
+            migrated_files = _apply_cross_file_migrations(config_dir, loaded_data, list(loaded_data.keys()))
+            if migrated_files:
+                # 写回含迁移数据的 agents.toml
+                agents_path.write_text(tomlkit.dumps(raw_agents), encoding="utf-8")
 
-    # decision.toml → DecisionConfig（含漂移补齐写回闭环）
-    # 历史教训：曾以 raw dict 直读，Decider 组件 Schema 的新增字段（如大纲的
-    # outline_enabled/outline_path）永远不会被写回用户文件——缺失字段只在内存
-    # 里用默认值兜底（outline_enabled=False 静默关闭功能），用户无从感知。
-    # 现与 core/model 同构：漂移时备份 + 补默认值落盘，让组件字段变更可见。
-    # 验证失败（如 enabled 含未注册 decider）时回退 raw dict，不中断启动。
-    # pipelines 是可选扩展段（schema 声明"不强制写入"），缺失不视为漂移。
-    decision_path = config_dir / "decision.toml"
-    if decision_path.exists():
-        try:
-            decision_data, decision_report = _load_and_validate_schema(decision_path, DecisionConfig)
-            _filter_optional_container_missing(decision_report, DecisionConfig)
-            if decision_report.has_drift:
+            agents_data, agents_report = _load_and_validate_schema(agents_path, AgentsRootConfig)
+            _filter_optional_container_missing(agents_report, AgentsRootConfig)
+            if agents_report.has_drift or migrated_files:
                 batch_id = batch_id or datetime.now().strftime("%Y%m%d_%H%M%S")
                 backup = _write_back_schema_file(
-                    config_dir, "decision.toml", DecisionConfig, decision_data, batch_id=batch_id
+                    config_dir, "agents.toml", AgentsRootConfig, agents_data, batch_id=batch_id
                 )
-                logger.info(
-                    f"decision.toml 已自动升级: "
-                    f"补齐 {len(decision_report.missing)} 项({', '.join(decision_report.missing) or '无'}), "
-                    f"清理 {len(decision_report.redundant)} 项({', '.join(decision_report.redundant) or '无'})"
-                    + (f", 备份: {backup.relative_to(config_dir)}" if backup else "")
+                _log_drift_writeback(
+                    "agents.toml", backup, config_dir, agents_report.missing, agents_report.redundant, current_ver
                 )
-                decision_data, decision_report = _load_and_validate_schema(decision_path, DecisionConfig)
-                _filter_optional_container_missing(decision_report, DecisionConfig)
-            result["decision"] = decision_data
-            combined.redundant.extend(f"decision.{r}" for r in decision_report.redundant)
-            combined.missing.extend(f"decision.{m}" for m in decision_report.missing)
+                for migrated_file in migrated_files:
+                    if migrated_file.exists():
+                        _backup_file(migrated_file, config_dir, batch_id=batch_id)
+                        migrated_file.unlink()
+                agents_data, agents_report = _load_and_validate_schema(agents_path, AgentsRootConfig)
+                _filter_optional_container_missing(agents_report, AgentsRootConfig)
+            result["agents"] = agents_data
+            combined.redundant.extend(f"agents.{r}" for r in agents_report.redundant)
+            combined.missing.extend(f"agents.{m}" for m in agents_report.missing)
         except Exception as e:
-            logger.warning(f"decision.toml Schema 验证失败，回退 raw dict 加载: {e}")
-            with open(decision_path, "r", encoding="utf-8-sig") as f:
-                result["decision"] = tomlkit.load(f).unwrap()
+            logger.warning(f"agents.toml Schema 验证失败，回退 raw dict 加载: {e}")
+            with open(agents_path, "r", encoding="utf-8-sig") as f:
+                result["agents"] = tomlkit.load(f).unwrap()
 
-    # output.toml → OutputConfig（含漂移补齐写回闭环，与 decision.toml 同构）
-    # 历史教训（decision.toml 同源）：组件 Schema 新增字段不会写回 raw dict 文件，
-    # 缺失字段只在内存兜底，用户无从感知。接入后缺失补默认值落盘。
-    # pipelines 是可选扩展段（schema 声明"不强制写入"），缺失不视为漂移。
-    output_path = config_dir / "output.toml"
-    if output_path.exists():
+    # ====== 4. tools.toml ======
+    tools_path = config_dir / "tools.toml"
+    if tools_path.exists():
         try:
-            output_data, output_report = _load_and_validate_schema(output_path, OutputConfig)
-            _filter_optional_container_missing(output_report, OutputConfig)
-            if output_report.has_drift:
+            with open(tools_path, "r", encoding="utf-8-sig") as f:
+                raw_tools = tomlkit.load(f).unwrap()
+            loaded_data["tools.toml"] = raw_tools
+            # 跨文件迁移（如旧 input.toml/output.toml 的 [collectors]/[handlers] → tools.toml）
+            migrated_files = _apply_cross_file_migrations(config_dir, loaded_data, list(loaded_data.keys()))
+            if migrated_files:
+                tools_path.write_text(tomlkit.dumps(raw_tools), encoding="utf-8")
+
+            tools_data, tools_report = _load_and_validate_schema(tools_path, ToolsRootConfig)
+            _filter_optional_container_missing(tools_report, ToolsRootConfig)
+            if tools_report.has_drift or migrated_files:
                 batch_id = batch_id or datetime.now().strftime("%Y%m%d_%H%M%S")
                 backup = _write_back_schema_file(
-                    config_dir, "output.toml", OutputConfig, output_data, batch_id=batch_id
+                    config_dir, "tools.toml", ToolsRootConfig, tools_data, batch_id=batch_id
                 )
-                logger.info(
-                    f"output.toml 已自动升级: "
-                    f"补齐 {len(output_report.missing)} 项({', '.join(output_report.missing) or '无'}), "
-                    f"清理 {len(output_report.redundant)} 项({', '.join(output_report.redundant) or '无'})"
-                    + (f", 备份: {backup.relative_to(config_dir)}" if backup else "")
+                _log_drift_writeback(
+                    "tools.toml", backup, config_dir, tools_report.missing, tools_report.redundant, current_ver
                 )
-                output_data, output_report = _load_and_validate_schema(output_path, OutputConfig)
-                _filter_optional_container_missing(output_report, OutputConfig)
-            result["output"] = output_data
-            combined.redundant.extend(f"output.{r}" for r in output_report.redundant)
-            combined.missing.extend(f"output.{m}" for m in output_report.missing)
+                for migrated_file in migrated_files:
+                    if migrated_file.exists():
+                        _backup_file(migrated_file, config_dir, batch_id=batch_id)
+                        migrated_file.unlink()
+                tools_data, tools_report = _load_and_validate_schema(tools_path, ToolsRootConfig)
+                _filter_optional_container_missing(tools_report, ToolsRootConfig)
+            result["tools"] = tools_data
+            combined.redundant.extend(f"tools.{r}" for r in tools_report.redundant)
+            combined.missing.extend(f"tools.{m}" for m in tools_report.missing)
         except Exception as e:
-            logger.warning(f"output.toml Schema 验证失败，回退 raw dict 加载: {e}")
-            with open(output_path, "r", encoding="utf-8-sig") as f:
-                result["output"] = tomlkit.load(f).unwrap()
+            logger.warning(f"tools.toml Schema 验证失败，回退 raw dict 加载: {e}")
+            with open(tools_path, "r", encoding="utf-8-sig") as f:
+                result["tools"] = tomlkit.load(f).unwrap()
+
+    # ====== 5. memory.toml ======
+    memory_path = config_dir / "memory.toml"
+    if memory_path.exists():
+        try:
+            memory_data, memory_report = _load_and_validate_schema(memory_path, MemoryRootConfig)
+            _filter_optional_container_missing(memory_report, MemoryRootConfig)
+            if memory_report.has_drift:
+                batch_id = batch_id or datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup = _write_back_schema_file(
+                    config_dir, "memory.toml", MemoryRootConfig, memory_data, batch_id=batch_id
+                )
+                _log_drift_writeback(
+                    "memory.toml", backup, config_dir, memory_report.missing, memory_report.redundant, current_ver
+                )
+                memory_data, memory_report = _load_and_validate_schema(memory_path, MemoryRootConfig)
+                _filter_optional_container_missing(memory_report, MemoryRootConfig)
+            result["memory"] = memory_data
+            combined.redundant.extend(f"memory.{r}" for r in memory_report.redundant)
+            combined.missing.extend(f"memory.{m}" for m in memory_report.missing)
+        except Exception as e:
+            logger.warning(f"memory.toml Schema 验证失败，回退 raw dict 加载: {e}")
+            with open(memory_path, "r", encoding="utf-8-sig") as f:
+                result["memory"] = tomlkit.load(f).unwrap()
+
+    # ====== 6. storage.toml ======
+    storage_path = config_dir / "storage.toml"
+    if storage_path.exists():
+        try:
+            storage_data, storage_report = _load_and_validate_schema(storage_path, StorageRootConfig)
+            _filter_optional_container_missing(storage_report, StorageRootConfig)
+            if storage_report.has_drift:
+                batch_id = batch_id or datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup = _write_back_schema_file(
+                    config_dir, "storage.toml", StorageRootConfig, storage_data, batch_id=batch_id
+                )
+                _log_drift_writeback(
+                    "storage.toml", backup, config_dir, storage_report.missing, storage_report.redundant, current_ver
+                )
+                storage_data, storage_report = _load_and_validate_schema(storage_path, StorageRootConfig)
+                _filter_optional_container_missing(storage_report, StorageRootConfig)
+            result["storage"] = storage_data
+            combined.redundant.extend(f"storage.{r}" for r in storage_report.redundant)
+            combined.missing.extend(f"storage.{m}" for m in storage_report.missing)
+        except Exception as e:
+            logger.warning(f"storage.toml Schema 验证失败，回退 raw dict 加载: {e}")
+            with open(storage_path, "r", encoding="utf-8-sig") as f:
+                result["storage"] = tomlkit.load(f).unwrap()
+
+    # ====== 7. background.toml ======
+    background_path = config_dir / "background.toml"
+    if background_path.exists():
+        try:
+            background_data, background_report = _load_and_validate_schema(background_path, BackgroundRootConfig)
+            _filter_optional_container_missing(background_report, BackgroundRootConfig)
+            if background_report.has_drift:
+                batch_id = batch_id or datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup = _write_back_schema_file(
+                    config_dir, "background.toml", BackgroundRootConfig, background_data, batch_id=batch_id
+                )
+                _log_drift_writeback(
+                    "background.toml",
+                    backup,
+                    config_dir,
+                    background_report.missing,
+                    background_report.redundant,
+                    current_ver,
+                )
+                background_data, background_report = _load_and_validate_schema(background_path, BackgroundRootConfig)
+                _filter_optional_container_missing(background_report, BackgroundRootConfig)
+            result["background"] = background_data
+            combined.redundant.extend(f"background.{r}" for r in background_report.redundant)
+            combined.missing.extend(f"background.{m}" for m in background_report.missing)
+        except Exception as e:
+            logger.warning(f"background.toml Schema 验证失败，回退 raw dict 加载: {e}")
+            with open(background_path, "r", encoding="utf-8-sig") as f:
+                result["background"] = tomlkit.load(f).unwrap()
 
     return result, combined
 
 
 def needs_generation(config_dir: Path) -> bool:
-    """检查是否需要生成默认配置
-
-    Returns:
-        True 如果 config/ 目录不存在或没有任何 .toml 文件
-    """
+    """检查是否需要生成默认配置"""
     if not config_dir.exists():
         return True
     toml_files = list(config_dir.glob("*.toml"))
@@ -993,14 +1113,7 @@ def needs_generation(config_dir: Path) -> bool:
 
 
 def get_config_version(config_dir: Path) -> str | None:
-    """从 core.toml 读取配置版本号
-
-    Args:
-        config_dir: config/ 目录路径
-
-    Returns:
-        版本号字符串，如果不存在返回 None
-    """
+    """从 core.toml 读取配置版本号"""
     core_path = config_dir / "core.toml"
     if not core_path.exists():
         return None

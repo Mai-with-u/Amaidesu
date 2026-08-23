@@ -1,7 +1,14 @@
-"""旧配置文件迁移
+"""旧配置文件迁移（v2.0.0）
 
-将根目录的旧 config.toml 迁移到 config/ 目录下的 5 个拆分文件。
+将根目录的旧 config.toml 迁移到 config/ 目录下的 7 个拆分文件（v2.0.0）。
 自动备份旧文件到 config/old/，丢弃已确认的死配置。
+
+v2.0.0 文件映射：
+    meta/general/persona/context/events/dashboard/mcp/simulator/logging/pipelines → core.toml
+    llm/llm_fast/vlm/llm_local/llm_summary/llm_agenda → model.toml
+    deciders（决策组件）→ agents.toml（旧 enabled 列表 + 各 decider 子配置）
+    collectors（采集组件）→ tools.toml 的 [tools.perception.config]
+    handlers（输出组件）→ tools.toml 的 [tools.output.config]
 """
 
 from __future__ import annotations
@@ -18,24 +25,26 @@ from src.modules.logging import get_logger
 
 logger = get_logger("ConfigMigration")
 
-# 确认的死配置（代码中已无引用）
+# 确认的死配置（v2.0.0 代码中已无引用）
 _DEAD_SECTIONS = {
     "dg_lab",
     "spark_rtasr",
     "http_server",
     "event_bus",
     "handlers.expression_generator",
+    # v2.0.0 阶段组件段已由 CrossFileMigration 合并到 tools/agents
+    # 此处仅记录 [providers.*] 等深废弃路径
+    "providers",
 }
 
-# section 前缀 → 目标文件 映射
+# section 前缀 → 目标文件 映射（v2.0.0：7 文件）
 _SECTION_MAP: dict[str, str] = {
     "meta": "core.toml",
-    "type": "core.toml",
     "general": "core.toml",
     "persona": "core.toml",
-    "maicore": "core.toml",
     "context": "core.toml",
     "dashboard": "core.toml",
+    "events": "core.toml",
     "mcp": "core.toml",
     "simulator": "core.toml",
     "logging": "core.toml",
@@ -45,17 +54,25 @@ _SECTION_MAP: dict[str, str] = {
     "vlm": "model.toml",
     "llm_local": "model.toml",
     "llm_summary": "model.toml",
-    "llm_outline": "model.toml",
-    "collectors": "input.toml",
+    "llm_agenda": "model.toml",
+    "llm_outline": "model.toml",  # v2.0.0 改名 llm_outline → llm_agenda（旧字段由 upgrade hook 处理）
+    # 阶段组件段 → 新域文件（具体合并到对应子段由 write_toml_with_migrations 后续处理）
     "deciders": "decision.toml",
+    "collectors": "input.toml",
     "handlers": "output.toml",
+    # v2.0.0 新增字段（首次迁移即写入默认值）
+    "agents": "agents.toml",
+    "tools": "tools.toml",
+    "memory": "memory.toml",
+    "storage": "storage.toml",
+    "background": "background.toml",
 }
 
-# 旧路径前缀 → 新 section 名
+# 旧路径前缀 → 新 section 名（与 multi_file_loader.py CrossFileMigration 配合）
 _LEGACY_PREFIX_MAP: dict[str, str] = {
-    "providers.input": "collectors",
-    "providers.output": "handlers",
-    "providers.decision": "deciders",
+    "providers.input": "collectors",  # → tools.toml
+    "providers.output": "handlers",  # → tools.toml
+    "providers.decision": "deciders",  # → agents.toml
 }
 
 
@@ -70,7 +87,7 @@ class MigrationReport:
 
 
 def _resolve_target_file(section_name: str) -> str | None:
-    """根据 section 名确定目标文件
+    """根据 section 名确定目标文件（v2.0.0）
 
     处理嵌套 section（如 collectors.stt）和旧路径（如 providers.input.stt）。
     """
@@ -87,7 +104,7 @@ def _resolve_target_file(section_name: str) -> str | None:
     if top_key in _SECTION_MAP:
         return _SECTION_MAP[top_key]
 
-    # 旧路径匹配（providers.input.xxx → input.toml）
+    # 旧路径匹配（providers.input.xxx → tools.toml）
     for old_prefix, new_name in _LEGACY_PREFIX_MAP.items():
         if section_name.startswith(old_prefix):
             return _SECTION_MAP.get(new_name)
@@ -110,10 +127,9 @@ def _transform_section_name(section_name: str) -> str:
 
 
 def _migrate_deciders_keys(deciders_table: Any) -> None:
-    """迁移 deciders 旧键: active/available → enabled
+    """迁移 deciders 旧键: active/available → enabled（保留旧逻辑供 v1.x 用户）。
 
-    将旧的 active（单数选择）和 available（可用列表）转换为
-    新的 enabled（多选启用列表），与 Input/Output 阶段统一。
+    旧 active（单数选择）和 available（可用列表）→ enabled（多选启用列表）。
     """
     if "active" in deciders_table:
         active_val = deciders_table.pop("active")
@@ -138,7 +154,7 @@ def _migrate_deciders_keys(deciders_table: Any) -> None:
 
 
 def _migrate_collectors_keys(collectors_table: Any) -> None:
-    """迁移 collectors 中已删除的旧 collector 配置。"""
+    """迁移 collectors 中已删除的旧 collector配置。"""
     if "bili_danmaku_official_maicraft" in collectors_table:
         collectors_table.pop("bili_danmaku_official_maicraft")
         logger.warning(
@@ -155,16 +171,7 @@ def _migrate_collectors_keys(collectors_table: Any) -> None:
 
 
 def _migrate_pipelines_keys(pipelines_table: Any) -> None:
-    """迁移 pipelines 旧格式到阶段优先格式: pipelines.{name} → pipelines.{phase}.{name}
-
-    旧格式:
-        [pipelines.rate_limit]              # 扁平，默认属于 input
-        [pipelines.profanity_filter.output] # 嵌套，显式声明 output
-
-    新格式:
-        [pipelines.input.rate_limit]
-        [pipelines.output.profanity_filter]
-    """
+    """迁移 pipelines 旧格式到阶段优先格式（同 v1.x）。"""
     if "input" in pipelines_table or "output" in pipelines_table:
         return
 
@@ -194,7 +201,7 @@ def migrate_old_config(
     old_config_path: Path,
     new_config_dir: Path,
 ) -> MigrationReport:
-    """将旧 config.toml 迁移到新的多文件结构
+    """将旧 config.toml 迁移到新的多文件结构（v2.0.0：7 文件）
 
     Args:
         old_config_path: 旧 config.toml 路径（通常是项目根目录）
@@ -263,8 +270,18 @@ def migrate_old_config(
     shutil.copy2(old_config_path, report.backup_path)
     logger.info(f"旧配置已备份到: {report.backup_path}")
 
-    # 写入 5 个新文件
-    expected_files = ["core.toml", "model.toml", "input.toml", "decision.toml", "output.toml"]
+    expected_files = [
+        "core.toml",
+        "model.toml",
+        "agents.toml",
+        "tools.toml",
+        "memory.toml",
+        "storage.toml",
+        "background.toml",
+        "input.toml",
+        "decision.toml",
+        "output.toml",
+    ]
     for fname in expected_files:
         file_path = new_config_dir / fname
         if fname in file_groups:

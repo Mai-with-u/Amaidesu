@@ -31,11 +31,11 @@ from watchfiles import Change
 
 
 def _build_core_toml() -> str:
-    """生成最小可加载的 core.toml 内容"""
+    """生成最小可加载的 core.toml 内容（v2.0.0）。"""
     return (
         "[meta]\n"
         'type = "meta"\n'
-        'version = "0.4.0"\n'
+        'version = "2.0.0"\n'
         "\n"
         "[persona]\n"
         'type = "persona"\n'
@@ -44,7 +44,7 @@ def _build_core_toml() -> str:
 
 
 def _build_model_toml() -> str:
-    """生成最小可加载的 model.toml 内容（新 LLM 结构）"""
+    """生成最小可加载的 model.toml 内容（v2.0.0 新 LLM 结构）。"""
     return (
         "[[llm_providers]]\n"
         'name = "default"\n'
@@ -58,21 +58,19 @@ def _build_model_toml() -> str:
 
 @pytest.fixture
 def config_dir_with_toml(tmp_path: Path) -> Path:
-    """创建一个带有 5 个默认 TOML 配置文件的临时目录。
+    """创建一个带有 7 个默认 TOML 配置文件的临时目录（v2.0.0）。
 
     配置文件名与 Amaidesu 多文件加载约定一致：
-    core.toml / model.toml / input.toml / decision.toml / output.toml
+    core.toml / model.toml / agents.toml / tools.toml / memory.toml / storage.toml / background.toml
     """
     cfg = tmp_path / "config"
     cfg.mkdir()
 
-    # 最小可加载的 core.toml / model.toml
-    (cfg / "core.toml").write_text(_build_core_toml(), encoding="utf-8")
-    (cfg / "model.toml").write_text(_build_model_toml(), encoding="utf-8")
+    (cfg / "core.toml").write_text(_build_core_toml(), encoding="utf-8-sig")
+    (cfg / "model.toml").write_text(_build_model_toml(), encoding="utf-8-sig")
 
-    # 其余 3 个 phase 文件空字典即可
-    for name in ("input", "decision", "output"):
-        (cfg / f"{name}.toml").write_text("", encoding="utf-8")
+    for name in ("agents", "tools", "memory", "storage", "background"):
+        (cfg / f"{name}.toml").write_text("", encoding="utf-8-sig")
 
     return cfg
 
@@ -385,11 +383,19 @@ class TestFileWatcherLifecycle:
     async def test_watcher_monitors_all_config_files(
         self, initialized_service, config_dir_with_toml
     ):
-        """watcher 必须监听 config/ 下所有 5 个 TOML 文件"""
+        """watcher 必须监听 config/ 下所有 7 个 TOML 文件（v2.0.0）"""
         await initialized_service.start_file_watcher()
         try:
             watched_paths = [p.resolve() for p in initialized_service._file_watcher._paths]
-            for name in ("core.toml", "model.toml", "input.toml", "decision.toml", "output.toml"):
+            for name in (
+                "core.toml",
+                "model.toml",
+                "agents.toml",
+                "tools.toml",
+                "memory.toml",
+                "storage.toml",
+                "background.toml",
+            ):
                 expected = (config_dir_with_toml / name).resolve()
                 assert expected in watched_paths, f"watcher 应监听 {name}"
         finally:

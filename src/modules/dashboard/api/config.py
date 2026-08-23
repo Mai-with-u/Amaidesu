@@ -320,46 +320,85 @@ def _expand_sub_config_fields(group_fields: list[dict], main_config: dict) -> li
     return expanded
 
 
-# section → TOML 文件映射（与 server.py _SECTION_TO_CONFIG_FILE 同步）
+# section → TOML 文件映射（v2.0.0：7 文件）
 _SECTION_TO_FILE: dict[str, str] = {
     "meta": "core.toml",
     "general": "core.toml",
     "persona": "core.toml",
-    "maicore": "core.toml",
     "context": "core.toml",
     "dashboard": "core.toml",
+    "events": "core.toml",
     "logging": "core.toml",
     "pipelines": "core.toml",
     "mcp": "core.toml",
+    "simulator": "core.toml",
     "llm": "model.toml",
     "llm_fast": "model.toml",
     "vlm": "model.toml",
     "llm_local": "model.toml",
     "llm_providers": "model.toml",
-    "collectors": "input.toml",
-    "deciders": "decision.toml",
-    "handlers": "output.toml",
+    "llm_summary": "model.toml",
+    "llm_agenda": "model.toml",
+    "agents": "agents.toml",
+    "streamer": "agents.toml",
+    "tools": "tools.toml",
+    "perception": "tools.toml",
+    "understanding": "tools.toml",
+    "output": "tools.toml",
+    "content_engine": "tools.toml",
+    "external": "tools.toml",
+    "memory": "memory.toml",
+    "simple": "memory.toml",
+    "amemorix": "memory.toml",
+    "storage": "storage.toml",
+    "sqlite": "storage.toml",
+    "background": "background.toml",
+    "compressor": "background.toml",
 }
 
 _FILE_LABELS: dict[str, str] = {
     "core.toml": "🚀 核心",
     "model.toml": "🧠 模型",
-    "input.toml": "🎤 输入",
-    "decision.toml": "🤔 决策",
-    "output.toml": "📤 输出",
+    "agents.toml": "🤖 业务 Agent",
+    "tools.toml": "🔧 工具包",
+    "memory.toml": "💾 记忆",
+    "storage.toml": "📦 存储",
+    "background.toml": "⏱️ 后台",
 }
 
-# section_key → 中文标签（无 registry 入口的 section 用此 fallback）
 _SECTION_LABELS: dict[str, str] = {
     "llm": "主 LLM 配置",
     "llm_fast": "快速 LLM",
     "vlm": "视觉语言模型",
     "llm_local": "本地 LLM",
     "llm_providers": "LLM 提供商列表",
+    "llm_summary": "房间状态摘要 LLM",
+    "llm_agenda": "直播大纲 LLM",
     "meta": "元信息",
+    "general": "通用配置",
+    "persona": "VTuber 人设",
+    "context": "上下文组装器",
+    "events": "事件历史",
+    "dashboard": "Dashboard",
+    "logging": "日志",
     "pipelines": "管道配置",
     "mcp": "MCP 服务",
     "simulator": "模拟直播间",
+    "agents": "业务 Agent",
+    "streamer": "主播 Agent",
+    "tools": "工具包",
+    "perception": "感知工具包",
+    "understanding": "理解工具包",
+    "output": "输出工具包",
+    "content_engine": "内容引擎",
+    "external": "外部工具源",
+    "memory": "记忆系统",
+    "simple": "SimpleMemory",
+    "amemorix": "Amemorix",
+    "storage": "存储",
+    "sqlite": "SQLite 存储",
+    "background": "后台维护",
+    "compressor": "压缩 worker",
 }
 
 
@@ -415,33 +454,40 @@ def _group_into_children(fields: list[dict], _depth: int = 1) -> list[dict]:
 
 
 def _build_frontend_groups(config_service) -> dict:
-    """Schema 适配器：generator schema → {groups, version} 前端格式."""
+    """Schema 适配器：generator schema → {groups, version} 前端格式.
+
+    v2.0.0：使用 ``ConfigSchemaGenerator`` 直接输出（schema_registry 已废弃）。
+    label/icon 来自 ``_SECTION_LABELS`` 兜底表。
+    """
     from src.modules.config.schema_generator import (
         ConfigSchemaGenerator,
         collect_all_fields,
     )
-    from src.modules.config.schema_registry import get_schema_registry
     from src.modules.config.core_schemas import CoreConfig
     from src.modules.config.model_schemas import ModelConfig
-    from src.modules.config.schemas.input_schemas import InputConfig
-    from src.modules.config.schemas.output_schemas import OutputConfig
-    from src.modules.config.schemas.decision_schemas import DecisionConfig
+    from src.modules.config.agents_schemas import AgentsRootConfig
+    from src.modules.config.tools_schemas import ToolsRootConfig
+    from src.modules.config.memory_schemas import MemoryRootConfig
+    from src.modules.config.storage_schemas import StorageRootConfig
+    from src.modules.config.background_schemas import BackgroundRootConfig
 
     main_config = config_service.main_config or {}
-    registry = get_schema_registry()
-    reg_groups = {g.key: g for g in registry.get_all_groups()}
 
     core_schema = ConfigSchemaGenerator.generate_config_schema(CoreConfig)
     model_schema = ConfigSchemaGenerator.generate_config_schema(ModelConfig)
-    input_schema = ConfigSchemaGenerator.generate_config_schema(InputConfig)
-    output_schema = ConfigSchemaGenerator.generate_config_schema(OutputConfig)
-    decision_schema = ConfigSchemaGenerator.generate_config_schema(DecisionConfig)
+    agents_schema = ConfigSchemaGenerator.generate_config_schema(AgentsRootConfig)
+    tools_schema = ConfigSchemaGenerator.generate_config_schema(ToolsRootConfig)
+    memory_schema = ConfigSchemaGenerator.generate_config_schema(MemoryRootConfig)
+    storage_schema = ConfigSchemaGenerator.generate_config_schema(StorageRootConfig)
+    background_schema = ConfigSchemaGenerator.generate_config_schema(BackgroundRootConfig)
     all_fields = (
         collect_all_fields(core_schema)
         + collect_all_fields(model_schema)
-        + collect_all_fields(input_schema)
-        + collect_all_fields(output_schema)
-        + collect_all_fields(decision_schema)
+        + collect_all_fields(agents_schema)
+        + collect_all_fields(tools_schema)
+        + collect_all_fields(memory_schema)
+        + collect_all_fields(storage_schema)
+        + collect_all_fields(background_schema)
     )
     leaf_fields = [f for f in all_fields if "." in str(f.get("key", ""))]
 
@@ -456,30 +502,23 @@ def _build_frontend_groups(config_service) -> dict:
 
     groups: list[dict] = []
     for section_key, fields in section_map.items():
-        rg = reg_groups.get(section_key)
         group_fields: list[dict] = []
 
         for field in fields:
             group_fields.append(_convert_to_api_field(field, main_config))
 
-        # 注入 Any 字段的子 schema（collectors.console_input 等无 children 字段）
         group_fields = _expand_sub_config_fields(group_fields, main_config)
-
         group_fields = _group_into_children(group_fields)
-
-        # 用组件注册表（装饰器声明的 label/description）覆盖自动生成的标签
         group_fields = _apply_component_meta(group_fields)
 
         file_name = _SECTION_TO_FILE.get(section_key, "core.toml")
         groups.append(
             {
                 "key": section_key,
-                "label": rg.label
-                if rg and getattr(rg, "label", None)
-                else _SECTION_LABELS.get(section_key, section_key),
-                "description": getattr(rg, "description", "") if rg else "",
-                "icon": getattr(rg, "icon", None) if rg else None,
-                "order": getattr(rg, "order", 99) if rg else 99,
+                "label": _SECTION_LABELS.get(section_key, section_key),
+                "description": "",
+                "icon": None,
+                "order": 99,
                 "fields": group_fields,
                 "file_name": file_name,
                 "file_label": _FILE_LABELS.get(file_name, file_name),

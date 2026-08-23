@@ -29,7 +29,7 @@ def _build_core_toml() -> str:
     return (
         "[meta]\n"
         'type = "meta"\n'
-        'version = "0.4.0"\n'
+        'version = "2.0.0"\n'
         "\n"
         "[persona]\n"
         'type = "persona"\n'
@@ -56,10 +56,10 @@ def _build_model_toml() -> str:
 def config_dir_with_toml(tmp_path: Path) -> Path:
     cfg = tmp_path / "config"
     cfg.mkdir()
-    (cfg / "core.toml").write_text(_build_core_toml(), encoding="utf-8")
-    (cfg / "model.toml").write_text(_build_model_toml(), encoding="utf-8")
-    for name in ("input", "decision", "output"):
-        (cfg / f"{name}.toml").write_text("", encoding="utf-8")
+    (cfg / "core.toml").write_text(_build_core_toml(), encoding="utf-8-sig")
+    (cfg / "model.toml").write_text(_build_model_toml(), encoding="utf-8-sig")
+    for name in ("agents", "tools", "memory", "storage", "background"):
+        (cfg / f"{name}.toml").write_text("", encoding="utf-8-sig")
     return cfg
 
 
@@ -95,7 +95,8 @@ class TestGetConfigSchemaByTypeName:
         field_names = {f["name"] for f in schema["fields"]}
         assert "meta" in field_names
         assert "persona" in field_names
-        assert "maicore" in field_names
+        assert "context" in field_names
+        assert "maicore" not in field_names
 
     def test_get_model_schema_by_string(self, initialized_service):
         """get_config_schema('model') 必须返回 ModelConfig 的完整 schema"""
@@ -271,16 +272,20 @@ class TestGetConfigSchemaForSection:
         assert "api_key" in field_names
         assert "base_url" in field_names
 
-    def test_get_maicore_section_schema(self, initialized_service):
-        """get_config_schema_for_section('maicore') 返回 MaiCoreConfig 的 schema"""
-        schema = initialized_service.get_config_schema_for_section("maicore")
+    def test_get_maicore_section_schema_removed(self, initialized_service):
+        """v2.0.0：maicore 段已删除，应抛 ValueError。"""
+        with pytest.raises(ValueError):
+            initialized_service.get_config_schema_for_section("maicore")
 
-        assert isinstance(schema, dict)
-        assert schema.get("className") == "MaiCoreConfig"
+    def test_get_context_section_schema(self, initialized_service):
+        """v2.0.0：context 段映射为 ContextAssemblerConfig。"""
+        from src.modules.config.core_schemas import ContextAssemblerConfig
+
+        schema = initialized_service.get_config_schema_for_section("context")
+        assert schema.get("className") == "ContextAssemblerConfig"
         field_names = {f["name"] for f in schema["fields"]}
-        assert "host" in field_names
-        assert "port" in field_names
-        assert "token" in field_names
+        assert "enabled" in field_names
+        assert "memory_recall_viewers" in field_names
 
     def test_section_schema_has_nested_drilldown(self, initialized_service):
         """如果 schema 有 nested 字段，必须能通过 section 路径展开"""

@@ -11,7 +11,7 @@ class TestCoreConfig:
         assert c.general.platform_id == "amaidesu"
         assert c.persona.bot_name == "麦麦"
         assert c.persona.emotion_intensity == 7
-        assert c.maicore.port == 8000
+        assert c.context.enabled is True
         assert c.dashboard.port == 60214
         assert c.meta.version == CONFIG_VERSION
 

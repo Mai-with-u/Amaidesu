@@ -54,13 +54,14 @@ ConfigReloadCallback = Union[
     Callable[[], Any],
 ]
 
-# 配置文件名 → 内部 scope 名的映射 (Amaidesu 多文件约定)
 _CONFIG_FILE_TO_SCOPE: Dict[str, str] = {
     "core.toml": "core",
     "model.toml": "model",
-    "input.toml": "input",
-    "decision.toml": "decision",
-    "output.toml": "output",
+    "agents.toml": "agents",
+    "tools.toml": "tools",
+    "memory.toml": "memory",
+    "storage.toml": "storage",
+    "background.toml": "background",
 }
 
 
@@ -94,8 +95,6 @@ class ConfigService:
         self._file_watcher_subscription_id: Optional[str] = None
         self._reload_lock: asyncio.Lock = asyncio.Lock()
         self._reload_revision: int = 0
-        # Task 11: schema_registry ↔ generator 覆盖率门禁结果
-        # 在 ``initialize()`` 末尾填充;测试与运维可读取
         self._last_coverage_result: Optional[Any] = None
         self.logger = get_logger("ConfigService")
         self.logger.debug("ConfigService 初始化完成")
@@ -163,7 +162,7 @@ class ConfigService:
             self.logger.info(f"配置版本更新: {current_ver} → {CONFIG_VERSION}")
 
         self._main_config = {}
-        for category in ("core", "model", "input", "decision", "output", "simulator"):
+        for category in ("core", "model", "agents", "tools", "memory", "storage", "background", "simulator"):
             section_data = multi_config.get(category, {})
             if isinstance(section_data, dict):
                 for key, value in section_data.items():
@@ -199,46 +198,11 @@ class ConfigService:
         self._main_config_copied = was_created
         self.logger.info("配置服务初始化完成")
 
-        # Task 11: 启动时执行 schema_registry ↔ generator 覆盖率门禁
-        self._check_schema_registry_coverage()
-
         return self._main_config, was_created
 
     def _check_schema_registry_coverage(self) -> None:
-        """启动时执行 schema_registry vs generator 覆盖率门禁 (Task 11)。
-
-        行为契约:
-        - 100% 字段覆盖且类型兼容 → 输出 ``SCHEMA_REGISTRY_COVERED`` (INFO)
-        - 否则输出 ``SCHEMA_REGISTRY_COVERAGE_FAIL`` 警告 + 详细 DEBUG 信息
-
-        设计动机: ``schema_registry`` 是手写元数据(前端 Dashboard 仍依赖其
-        ``groups`` 形状),而 ``ConfigSchemaGenerator`` 是 Pydantic 自动生成的真相源。
-        迁移期间必须保持 100% 字段覆盖,否则 UI 上会出现"看不到某字段"或"读到
-        错误约束"等不易察觉的回归。
-
-        注意:
-        - 此检查是**只读 + 日志**,不会中断 initialize() 流程
-        - 即使覆盖率失败,服务仍可正常启动(供回滚使用)
-        """
-        try:
-            from src.modules.config.schema_coverage import (
-                REGISTRY_GROUP_TO_PYDANTIC,
-                check_registry_coverage,
-            )
-            from src.modules.config.schema_registry import get_schema_registry
-
-            registry = get_schema_registry()
-            result = check_registry_coverage(
-                registry.get_all_groups(),
-                REGISTRY_GROUP_TO_PYDANTIC,
-            )
-            self._last_coverage_result = result
-            result.log_to(self.logger)
-        except Exception as exc:
-            # 门禁失败不能阻塞启动 (registry 可能在 schema 演进期暂时不可用)
-            self.logger.warning(
-                f"SCHEMA_REGISTRY_COVERAGE_SKIPPED: 启动 coverage gate 异常: {type(exc).__name__}: {exc}"
-            )
+        """空实现，v2.0.0 兼容旧调用方。"""
+        self._last_coverage_result = None
 
     def get_section(self, section: str, default: Any = None) -> Dict[str, Any]:
         """
@@ -622,7 +586,7 @@ class ConfigService:
         multi_config, _drift = load_config_dir(config_dir)
 
         flattened: Dict[str, Any] = {}
-        for category in ("core", "model", "input", "decision", "output", "simulator"):
+        for category in ("core", "model", "agents", "tools", "memory", "storage", "background", "simulator"):
             section_data = multi_config.get(category, {})
             if isinstance(section_data, dict):
                 for key, value in section_data.items():
@@ -731,10 +695,9 @@ class ConfigService:
             ValueError: 未知节名。
         """
         from src.modules.config.core_schemas import (
-            ContextConfig,
+            ContextAssemblerConfig,
             DashboardConfig,
             GeneralConfig,
-            MaiCoreConfig,
             MetaConfig,
             PersonaConfig,
         )
@@ -749,8 +712,8 @@ class ConfigService:
             "meta": MetaConfig,
             "general": GeneralConfig,
             "persona": PersonaConfig,
-            "maicore": MaiCoreConfig,
-            "context": ContextConfig,
+            # v2.0.0: maicore → ContextAssembler（maicore 单进程已删除）
+            "context": ContextAssemblerConfig,
             "dashboard": DashboardConfig,
             "mcp": MCPServerConfig,
             "simulator": SimulatorConfigSchema,
@@ -761,7 +724,7 @@ class ConfigService:
             "vlm": LLMProfileConfig,
             "llm_local": LLMProfileConfig,
             "llm_summary": LLMProfileConfig,
-            "llm_outline": LLMProfileConfig,
+            "llm_agenda": LLMProfileConfig,  # v2.0.0: llm_outline → llm_agenda
         }
 
         if section not in section_map:

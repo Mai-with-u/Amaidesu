@@ -1,10 +1,15 @@
-"""核心系统配置 Schema 定义
+"""核心系统配置 Schema 定义（v2.0.0）
 
-定义所有非组件的系统级配置 Schema。
-这些配置拆分到 config/core.toml 文件中。
+定义所有非业务域的系统级配置 Schema，对应 ``config/core.toml`` 文件。
 
-包含：meta, general, persona, maicore, context, dashboard,
-event_bus, logging, mcp, pipelines。
+包含：meta, general, persona, context, events, dashboard, mcp, simulator, logging。
+
+> **v2.0.0 变化**：
+> - 删除 ``[maicore]`` 段（2.0.0 单进程无 MaiCore WebSocket 连接）
+> - ``[context]`` 由会话存储改造为 ContextAssembler 配置（§1.44）
+> - ``[pipelines]`` 仍位于 core.toml（阶段管道预留位）
+
+段树详见 ``.omo/drafts/amaidesu-v2-config-tree.md``（单一事实源）。
 """
 
 from typing import Any
@@ -20,20 +25,25 @@ from src.modules.simulator.config_schema import SimulatorConfigSchema
 class MetaConfig(BaseConfig):
     """配置元数据"""
 
-    version: str = Field(default="0.5.4", description="配置版本号（用于自动迁移检测）")
+    version: str = Field(
+        default="2.0.0",
+        description="配置版本号（用于自动迁移检测，权威定义于 multi_file_loader.py）",
+    )
 
 
 class GeneralConfig(BaseConfig):
     """通用配置"""
 
-    platform_id: str = Field(default="amaidesu", description="Amaidesu 在 MaiCore 中注册的平台标识符")
+    platform_id: str = Field(
+        default="amaidesu",
+        description="Amaidesu 进程标识（Dashboard / 日志 / 模拟器区分用）",
+    )
 
 
 class PersonaConfig(BaseConfig):
     """VTuber 人设配置
 
-    定义 VTuber 的性格和说话风格，
-    被 LLM Decider 等使用 LLM 的组件引用。
+    定义 VTuber 的性格和说话风格，被 Planner/Replyer 等 LLM Agent 引用。
     """
 
     bot_name: str = Field(default="麦麦", description="VTuber 名字")
@@ -53,34 +63,40 @@ class PersonaConfig(BaseConfig):
     )
 
 
-class MaiCoreConfig(BaseConfig):
-    """MaiCore 连接配置"""
+class ContextAssemblerConfig(BaseConfig):
+    """上下文组装器配置（v2.0.0 改造）
 
-    host: str = Field(default="127.0.0.1", description="MaiCore WebSocket 服务器地址")
-    port: int = Field(default=8000, description="MaiCore WebSocket 服务器端口")
-    token: str = Field(default="", description="认证 Token（如果 MaiCore 需要认证）")
+    旧版 ``ContextConfig`` 用于会话历史存储（memory/file）。
+    新版改造为 ContextAssembler 配置（§1.44）：决定 LLM 输入如何组装。
+    会话历史存储职责下放给 memory 后端，ContextAssembler 只负责"如何取"。
 
+    Attributes:
+        enabled: 是否启用上下文组装（关闭后 Agent 直接接收裸消息）
+        memory_recall_viewers: 每次组装召回的观众画像条数
+        memory_recall_long_term: 每次组装召回的长记忆条数
+        cache_ttl_ms: 组装快照缓存 TTL（毫秒，0 表示不缓存）
+    """
 
-class ContextConfig(BaseConfig):
-    """上下文管理配置"""
-
-    storage_type: str = Field(
-        default="memory",
-        description="存储类型: memory 或 file",
-        json_schema_extra={"x-ui-type": "select", "x-options": ["memory", "file"]},
+    enabled: bool = Field(
+        default=True,
+        description="是否启用上下文组装（关闭后 Agent 直接接收裸消息）",
     )
-    max_messages_per_session: int = Field(
-        default=50,
-        description="每个会话保留的最大消息数",
+    memory_recall_viewers: int = Field(
+        default=3,
+        ge=0,
+        le=20,
+        description="每次组装召回的观众画像条数上限",
     )
-    max_sessions: int = Field(default=100, description="最大会话数")
-    session_timeout_seconds: int = Field(
-        default=3600,
-        description="会话超时时间（秒）",
+    memory_recall_long_term: int = Field(
+        default=3,
+        ge=0,
+        le=20,
+        description="每次组装召回的长记忆条数上限",
     )
-    enable_persistence: bool = Field(
-        default=False,
-        description="启用持久化（暂未实现）",
+    cache_ttl_ms: int = Field(
+        default=1000,
+        ge=0,
+        description="组装快照缓存 TTL（毫秒，0 表示每次重新组装）",
     )
 
 
@@ -168,15 +184,31 @@ class EventHistoryConfig(BaseConfig):
 class CoreConfig(BaseConfig):
     """核心系统配置根类
 
-    聚合所有非组件的系统级配置。
-    对应 config/core.toml 文件。
+    聚合所有非业务域的系统级配置，对应 ``config/core.toml`` 文件。
+
+    v2.0.0 段树：
+    - ``[meta]``        — 配置元数据（CONFIG_VERSION 权威）
+    - ``[general]``     — 通用配置
+    - ``[persona]``     — VTuber 人设
+    - ``[context]``     — ContextAssembler 配置（替代旧会话存储）
+    - ``[events]``      — EventBus 事件历史
+    - ``[dashboard]``   — Web Dashboard
+    - ``[mcp]``         — MCP Provider
+    - ``[simulator]``   — 模拟直播间
+    - ``[logging]``     — 日志
+    - ``[pipelines]``   — 管道配置（动态键）
+
+    v2.0.0 删除：
+    - ``[maicore]``（旧 MaiCore WebSocket 连接，单进程下不再需要）
     """
 
     meta: MetaConfig = Field(default_factory=MetaConfig, description="配置元数据")
     general: GeneralConfig = Field(default_factory=GeneralConfig, description="通用配置")
     persona: PersonaConfig = Field(default_factory=PersonaConfig, description="VTuber 人设配置")
-    maicore: MaiCoreConfig = Field(default_factory=MaiCoreConfig, description="MaiCore 连接配置")
-    context: ContextConfig = Field(default_factory=ContextConfig, description="上下文管理配置")
+    context: ContextAssemblerConfig = Field(
+        default_factory=ContextAssemblerConfig,
+        description="上下文组装器配置（v2.0.0 替代旧会话存储）",
+    )
     events: EventHistoryConfig = Field(default_factory=EventHistoryConfig, description="事件历史记录配置")
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig, description="Dashboard 配置")
     mcp: MCPServerConfig = Field(default_factory=MCPServerConfig, description="MCP 服务配置")

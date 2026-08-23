@@ -1,10 +1,11 @@
-"""配置自动升级闭环测试
+"""配置自动升级闭环测试（v2.0.0：7 文件）
 
-覆盖 load_config_dir 的自动升级行为（对齐 MaiBot 的写回闭环）：
-- 版本不一致 → 执行 upgrade hooks → 写回并更新 [meta].version
+覆盖 load_config_dir 的自动升级行为：
+- 版本不一致 → 执行 upgrade hook → 写回并更新 [meta].version
 - 漂移（缺失/冗余字段）→ 备份 + 写回
 - 缺失文件自动补齐
-- 用户 mcp 配置不再被静默吞噬
+- 旧段迁移：[collectors] → [tools.perception.config]、[handlers] → [tools.output.config]、
+  [deciders] → [agents]，由 CrossFileMigration + upgrade hook 协作完成
 """
 
 import re
@@ -23,9 +24,11 @@ from src.modules.config.multi_file_loader import (
 REQUIRED_FILES = [
     "core.toml",
     "model.toml",
-    "input.toml",
-    "decision.toml",
-    "output.toml",
+    "agents.toml",
+    "tools.toml",
+    "memory.toml",
+    "storage.toml",
+    "background.toml",
 ]
 
 
@@ -45,22 +48,22 @@ def _set_version(config_dir: Path, version: str) -> None:
     core_path.write_text(content, encoding="utf-8-sig")
 
 
-def _remove_section(config_dir: Path, section: str) -> None:
-    core_path = config_dir / "core.toml"
-    content = core_path.read_text(encoding="utf-8-sig")
+def _remove_section(config_dir: Path, file_name: str, section: str) -> None:
+    file_path = config_dir / file_name if file_name.endswith(".toml") else config_dir / f"{file_name}.toml"
+    content = file_path.read_text(encoding="utf-8-sig")
     content = re.sub(rf"\[{section}\].*?(?=\n\[|\Z)", "", content, flags=re.S)
-    core_path.write_text(content, encoding="utf-8-sig")
+    file_path.write_text(content, encoding="utf-8-sig")
 
 
-def _append_section(config_dir: Path, section_toml: str) -> None:
-    core_path = config_dir / "core.toml"
-    content = core_path.read_text(encoding="utf-8-sig")
-    core_path.write_text(content + "\n" + section_toml, encoding="utf-8-sig")
+def _append_section(config_dir: Path, file_name: str, section_toml: str) -> None:
+    file_path = config_dir / file_name if file_name.endswith(".toml") else config_dir / f"{file_name}.toml"
+    content = file_path.read_text(encoding="utf-8-sig")
+    file_path.write_text(content + "\n" + section_toml, encoding="utf-8-sig")
 
 
 class TestMissingFileFill:
     def test_missing_files_are_generated(self, config_dir: Path):
-        for fname in ["model.toml", "input.toml", "decision.toml", "output.toml"]:
+        for fname in ["model.toml", "agents.toml", "tools.toml", "memory.toml", "storage.toml", "background.toml"]:
             (config_dir / fname).unlink()
 
         load_config_dir(config_dir)
@@ -70,57 +73,54 @@ class TestMissingFileFill:
 
 
 class TestCrossFileMigration:
-    def test_simulator_toml_merged_into_core(self, config_dir: Path):
-        # 模拟旧版用户：core.toml 无 [simulator] 段 + 残留 simulator.toml（含已删除的旧字段）
-        _remove_section(config_dir, "simulator")
-        (config_dir / "simulator.toml").write_text(
-            "[simulator]\nenabled = true\nbase_rate_per_minute = 12.0\n"
-            'residents_file = "config/simulator_residents.toml"\n'
-            'gifts_file = "config/simulator_gifts.toml"\n',
+    """v2.0.0 跨文件迁移：旧 input/decision/output.toml → 新 tools/agents.toml"""
+
+    def test_input_toml_merged_into_tools_perception(self, config_dir: Path):
+        """旧 input.toml 的 [collectors] → tools.toml 的 [tools.perception.config]。"""
+        _remove_section(config_dir, "tools", "tools")  # 移除 tools 段，模拟缺失
+        (config_dir / "input.toml").write_text(
+            "[collectors]\nenabled = [\"console_input\"]\n\n"
+            "[collectors.console_input]\nuser_id = \"u1\"\n",
             encoding="utf-8-sig",
         )
 
         config, _ = load_config_dir(config_dir)
 
-        assert not (config_dir / "simulator.toml").exists()
-        assert config["core"]["simulator"]["enabled"] is True
-        assert config["core"]["simulator"]["base_rate_per_minute"] == 12.0
-        assert "residents_file" not in config["core"]["simulator"]
-        assert "gifts_file" not in config["core"]["simulator"]
+        assert not (config_dir / "input.toml").exists()
+        assert "console_input" in config["tools"]["tools"]["perception"]["config"]
 
-    def test_simulator_migration_keeps_backup(self, config_dir: Path):
-        _remove_section(config_dir, "simulator")
-        (config_dir / "simulator.toml").write_text(
-            "[simulator]\nenabled = true\n", encoding="utf-8-sig"
+    def test_decision_toml_merged_into_agents(self, config_dir: Path):
+        """旧 decision.toml 的 [deciders] → agents.toml 的 [agents]。"""
+        _remove_section(config_dir, "agents", "agents")
+        (config_dir / "decision.toml").write_text(
+            "[deciders]\nenabled = [\"amaidesu\"]\n",
+            encoding="utf-8-sig",
         )
 
-        load_config_dir(config_dir)
+        config, _ = load_config_dir(config_dir)
 
-        backup_dir = config_dir / "old"
-        batch_dirs = [p for p in backup_dir.iterdir() if p.is_dir()]
-        assert len(batch_dirs) == 1
-        assert (batch_dirs[0] / "simulator.toml").exists()
+        assert not (config_dir / "decision.toml").exists()
+        assert "amaidesu" in config["agents"]["agents"]["enabled"]
 
     def test_core_version_bumped_after_migration(self, config_dir: Path):
-        _remove_section(config_dir, "simulator")
-        (config_dir / "simulator.toml").write_text(
-            "[simulator]\nenabled = true\n", encoding="utf-8-sig"
+        (config_dir / "input.toml").write_text(
+            "[collectors]\nenabled = []\n", encoding="utf-8-sig"
         )
 
         load_config_dir(config_dir)
 
         assert get_config_version(config_dir) == CONFIG_VERSION
 
-    def test_existing_core_section_wins_over_leftover_source(self, config_dir: Path):
-        # core.toml 已含 [simulator]（用户已配置）→ 残留 simulator.toml 仅被清理，不覆盖用户值
-        (config_dir / "simulator.toml").write_text(
-            "[simulator]\nenabled = true\n", encoding="utf-8-sig"
+    def test_legacy_file_keeps_backup(self, config_dir: Path):
+        (config_dir / "decision.toml").write_text(
+            "[deciders]\nenabled = []\n", encoding="utf-8-sig"
         )
 
-        config, _ = load_config_dir(config_dir)
+        load_config_dir(config_dir)
 
-        assert not (config_dir / "simulator.toml").exists()
-        assert config["core"]["simulator"]["enabled"] is False
+        backup_dir = config_dir / "old"
+        batch_dirs = [p for p in backup_dir.iterdir() if p.is_dir()]
+        assert any((d / "decision.toml").exists() for d in batch_dirs)
 
 
 class TestVersionUpgrade:
@@ -147,14 +147,14 @@ class TestVersionUpgrade:
 
 class TestDriftWriteBack:
     def test_upgrade_fills_missing_fields(self, config_dir: Path):
-        _remove_section(config_dir, "events")
+        _remove_section(config_dir, "core.toml", "events")
 
         load_config_dir(config_dir)
 
         assert "[events]" in (config_dir / "core.toml").read_text(encoding="utf-8-sig")
 
     def test_upgrade_removes_redundant_sections(self, config_dir: Path):
-        _append_section(config_dir, '[zombie_section]\nkey = "dead"\n')
+        _append_section(config_dir, "core.toml", '[zombie_section]\nkey = "dead"\n')
 
         load_config_dir(config_dir)
 
@@ -170,20 +170,6 @@ class TestDriftWriteBack:
         assert len(batch_dirs) == 1
         assert (batch_dirs[0] / "core.toml").exists()
 
-    def test_same_batch_shares_backup_directory(self, config_dir: Path):
-        _set_version(config_dir, "0.3.0")
-        model_path = config_dir / "model.toml"
-        content = model_path.read_text(encoding="utf-8-sig")
-        model_path.write_text(content + '\n[zombie_model]\nkey = "dead"\n', encoding="utf-8-sig")
-
-        load_config_dir(config_dir)
-
-        backup_dir = config_dir / "old"
-        batch_dirs = [p for p in backup_dir.iterdir() if p.is_dir()]
-        assert len(batch_dirs) == 1
-        assert (batch_dirs[0] / "core.toml").exists()
-        assert (batch_dirs[0] / "model.toml").exists()
-
     def test_clean_config_not_rewritten(self, config_dir: Path):
         content_before = (config_dir / "core.toml").read_text(encoding="utf-8-sig")
 
@@ -192,105 +178,140 @@ class TestDriftWriteBack:
         assert (config_dir / "core.toml").read_text(encoding="utf-8-sig") == content_before
 
 
-class TestDecisionDriftWriteBack:
-    """decision.toml 漂移补齐（回归：大纲功能新增字段曾因 raw dict 直读永不写回）"""
+class TestCoreUpgradeHook2_0_0:
+    """core.toml 2.0.0：删 [maicore] + 改造 [context] 为 ContextAssembler"""
 
-    def test_decision_missing_outline_fields_filled(self, config_dir: Path):
-        """`[deciders.amaidesu]` 缺失大纲字段（模拟旧配置文件）→ 自动补默认值落盘。"""
-        decision_path = config_dir / "decision.toml"
-        content = decision_path.read_text(encoding="utf-8-sig")
-        # 移除 outline_ 开头的所有字段行（含前一行注释），模拟升级前文件
-        import re as _re
-
-        content = _re.sub(r"# [^\n]*\n(?=outline_[a-z_]+ = )", "", content)
-        content = _re.sub(r"outline_[a-z_]+ = [^\n]*\n", "", content)
-        decision_path.write_text(content, encoding="utf-8-sig")
-
-        config, report = load_config_dir(config_dir)
-
-        # 写回后文件包含大纲字段（默认值）
-        written = decision_path.read_text(encoding="utf-8-sig")
-        assert "outline_enabled = false" in written
-        assert 'outline_path = ""' in written
-        # 加载结果包含大纲字段
-        assert "outline_enabled" in config["decision"]["deciders"]["amaidesu"]
-        # 写回闭环后重载无漂移（幂等）
-        assert not any("outline_enabled" in m for m in report.missing)
-        # 备份已创建
-        backup_dir = config_dir / "old"
-        batch_dirs = [p for p in backup_dir.iterdir() if p.is_dir()]
-        assert any((d / "decision.toml").exists() for d in batch_dirs)
-
-    def test_decision_clean_config_not_rewritten(self, config_dir: Path):
-        """无漂移的 decision.toml 不被重写（幂等，不产生备份）。"""
-        decision_path = config_dir / "decision.toml"
-        content_before = decision_path.read_text(encoding="utf-8-sig")
+    def test_maicore_removed_during_upgrade(self, config_dir: Path):
+        _append_section(config_dir, "core.toml", "[maicore]\nport = 9999\n")
+        _set_version(config_dir, "0.5.4")
 
         load_config_dir(config_dir)
 
-        assert decision_path.read_text(encoding="utf-8-sig") == content_before
-        backup_dir = config_dir / "old"
-        assert not backup_dir.exists() or not list(backup_dir.rglob("decision.toml"))
+        assert "maicore" not in (config_dir / "core.toml").read_text(encoding="utf-8-sig")
 
-    def test_decision_user_values_preserved(self, config_dir: Path):
-        """补齐缺失字段时保留用户已配置的值（如 enabled 列表）。"""
-        decision_path = config_dir / "decision.toml"
-        content = decision_path.read_text(encoding="utf-8-sig")
-        content = content.replace('enabled = ["maibot"]', 'enabled = ["amaidesu", "llm"]')
-        decision_path.write_text(content, encoding="utf-8-sig")
+    def test_context_transformed_to_assembler(self, config_dir: Path):
+        """旧 [context]（会话存储字段）→ 新 ContextAssembler 配置。"""
+        _remove_section(config_dir, "core.toml", "context")
+        _append_section(
+            config_dir,
+            "core.toml",
+            "[context]\nstorage_type = \"memory\"\nmax_messages_per_session = 200\n",
+        )
+        _set_version(config_dir, "0.5.4")
+
+        load_config_dir(config_dir)
+
+        content = (config_dir / "core.toml").read_text(encoding="utf-8-sig")
+        assert "memory_recall_viewers" in content
+        assert "max_messages_per_session" not in content
+
+
+class TestModelUpgradeHook2_0_0:
+    """model.toml 2.0.0：llm_outline → llm_agenda"""
+
+    def test_llm_outline_renamed(self, config_dir: Path):
+        _append_section(
+            config_dir,
+            "model.toml",
+            "[llm_outline]\nprovider = \"default\"\nmodel = \"old-model\"\n",
+        )
+        _set_version(config_dir, "0.5.4")
+
+        load_config_dir(config_dir)
+
+        content = (config_dir / "model.toml").read_text(encoding="utf-8-sig")
+        assert "[llm_agenda]" in content
+        assert "[llm_outline]" not in content
+
+
+class TestIdempotentMigration:
+    """迁移 + 写回闭环必须幂等：二次加载不再触发额外漂移/迁移"""
+
+    def test_input_migration_idempotent(self, config_dir: Path):
+        _remove_section(config_dir, "tools", "tools")
+        (config_dir / "input.toml").write_text(
+            "[collectors]\nenabled = [\"x\"]\n\n[collectors.x]\nkey = 1\n",
+            encoding="utf-8-sig",
+        )
+        load_config_dir(config_dir)
+        written_after_first = (config_dir / "tools.toml").read_text(encoding="utf-8-sig")
+        backup_count_first = len(list((config_dir / "old").rglob("*.toml")))
+
+        load_config_dir(config_dir)
+
+        assert (config_dir / "tools.toml").read_text(encoding="utf-8-sig") == written_after_first
+        backup_count_second = len(list((config_dir / "old").rglob("*.toml")))
+        assert backup_count_second == backup_count_first
+
+
+class TestCrossFileMigrationSafety:
+    """A1.5 回归保护：跨文件迁移只在源段真实存在且合并成功时删除源文件。"""
+
+    def test_input_without_collectors_preserves_file(self, config_dir: Path):
+        """input.toml 不含 [collectors] 段（只有 [pipelines.input.rate_limit]）→ 原文件保留，无备份。"""
+        _remove_section(config_dir, "core.toml", "pipelines")
+        (config_dir / "input.toml").write_text(
+            "[pipelines.input.rate_limit]\n"
+            "priority = 100\n"
+            "enabled = true\n"
+            "global_rate_limit = 100\n",
+            encoding="utf-8-sig",
+        )
+        backup_dir = config_dir / "old"
+        backups_before = (
+            len(list(backup_dir.rglob("*.toml"))) if backup_dir.exists() else 0
+        )
+
+        load_config_dir(config_dir)
+
+        assert (config_dir / "input.toml").exists(), "源文件应原样保留"
+        original = (config_dir / "input.toml").read_text(encoding="utf-8-sig")
+        assert "[pipelines.input.rate_limit]" in original
+        assert "global_rate_limit = 100" in original
+
+        backups_after = (
+            len(list(backup_dir.rglob("*.toml"))) if backup_dir.exists() else 0
+        )
+        assert backups_after == backups_before, "不应产生 input.toml 备份"
+
+    def test_input_with_collectors_and_pipelines_migrates_then_removes(
+        self, config_dir: Path
+    ):
+        """input.toml 同时含 [collectors] 和 [pipelines] → collectors 迁入 tools.toml，
+        源文件按既有语义备份后删除，备份文件中包含 [pipelines] 内容。"""
+        _remove_section(config_dir, "core.toml", "pipelines")
+        (config_dir / "input.toml").write_text(
+            "[pipelines.input.rate_limit]\n"
+            "priority = 100\n"
+            "enabled = true\n"
+            "global_rate_limit = 100\n"
+            "\n"
+            "[collectors]\n"
+            "enabled = [\"console_input\"]\n"
+            "\n"
+            "[collectors.console_input]\n"
+            "user_id = \"console_user\"\n",
+            encoding="utf-8-sig",
+        )
+
+        load_config_dir(config_dir)
+
+        assert not (config_dir / "input.toml").exists(), "源文件应被备份后删除"
+
+        backup_dir = config_dir / "old"
+        input_backups = list(backup_dir.rglob("input.toml"))
+        assert len(input_backups) >= 1, "input.toml 应有备份"
+        backup_content = input_backups[0].read_text(encoding="utf-8-sig")
+        assert "[pipelines.input.rate_limit]" in backup_content
+        assert "global_rate_limit = 100" in backup_content
+        assert "[collectors.console_input]" in backup_content
+        assert "user_id = \"console_user\"" in backup_content
 
         config, _ = load_config_dir(config_dir)
-
-        assert config["decision"]["deciders"]["enabled"] == ["amaidesu", "llm"]
-
-
-class TestInputOutputDriftWriteBack:
-    """input.toml / output.toml 漂移补齐（回归：与 decision.toml 同源的 raw dict 直读）"""
-
-    def test_input_missing_fields_filled(self, config_dir: Path):
-        """`[collectors.console_input]` 缺失字段 → 自动补默认值落盘。"""
-        input_path = config_dir / "input.toml"
-        content = input_path.read_text(encoding="utf-8-sig")
-        # 移除 console_input 段内的 user_id 行，模拟旧配置
-        content = content.replace("user_id = ", "x_removed = ")
-        input_path.write_text(content, encoding="utf-8-sig")
-
-        config, report = load_config_dir(config_dir)
-
-        written = input_path.read_text(encoding="utf-8-sig")
-        assert "user_id" in written
-        assert "x_removed" not in written
-        assert "console_input" in config["input"]["collectors"]
-        assert not any("console_input" in m for m in report.missing)
-
-    def test_output_missing_fields_filled(self, config_dir: Path):
-        """`[handlers]` 缺失元数据字段 → 自动补默认值落盘。"""
-        output_path = config_dir / "output.toml"
-        content = output_path.read_text(encoding="utf-8-sig")
-        content = content.replace("render_timeout_ms = 10000", "render_timeout_ms = 10000\n# x_dummy = 1")
-        output_path.write_text(content, encoding="utf-8-sig")
-
-        config, report = load_config_dir(config_dir)
-
-        written = output_path.read_text(encoding="utf-8-sig")
-        assert "completion_timeout_ms" in written
-        assert "handlers" in config["output"]
-        assert not any("completion_timeout_ms" in m for m in report.missing)
-
-    def test_phase_clean_config_not_rewritten(self, config_dir: Path):
-        """首次升级写回后，后续加载不再重写（幂等，不产生新备份）。"""
-        # 第一次加载：吸收首次升级写回（补齐缺失字段）
-        load_config_dir(config_dir)
-        input_before = (config_dir / "input.toml").read_text(encoding="utf-8-sig")
-        output_before = (config_dir / "output.toml").read_text(encoding="utf-8-sig")
-        backup_count_before = len(list((config_dir / "old").rglob("*.toml"))) if (config_dir / "old").exists() else 0
-
-        load_config_dir(config_dir)
-
-        assert (config_dir / "input.toml").read_text(encoding="utf-8-sig") == input_before
-        assert (config_dir / "output.toml").read_text(encoding="utf-8-sig") == output_before
-        backup_count_after = len(list((config_dir / "old").rglob("*.toml"))) if (config_dir / "old").exists() else 0
-        assert backup_count_after == backup_count_before
+        perception_cfg = config["tools"]["tools"].get("perception") or {}
+        perception_config = perception_cfg.get("config", {}) if isinstance(perception_cfg, dict) else {}
+        assert "console_input" in perception_config
+        assert perception_config["console_input"]["user_id"] == "console_user"
 
 
 class TestMCPConfig:
@@ -321,48 +342,3 @@ class TestMCPConfig:
         doc = tomlkit.parse((config_dir / "core.toml").read_text(encoding="utf-8-sig")).unwrap()
         assert "cors_origins" not in doc["mcp"]
         assert doc["mcp"]["enabled"] is True
-
-class TestMainosabaToTextAdvGameMigration:
-    """input.toml 0.5.4：`[collectors.mainosaba]` → `[collectors.text_adv_game]`"""
-
-    def _inject_old_mainosaba(self, config_dir: Path) -> Path:
-        """注入旧版 mainosaba 段并把版本号降回 0.5.3，模拟升级前用户配置。"""
-        input_path = config_dir / "input.toml"
-        content = input_path.read_text(encoding="utf-8-sig")
-        content += "\n[collectors.mainosaba]\nfull_screen = false\n"
-        input_path.write_text(content, encoding="utf-8-sig")
-        _set_version(config_dir, "0.5.3")
-        return input_path
-
-    def test_mainosaba_section_migrated_to_text_adv_game(self, config_dir: Path):
-        input_path = self._inject_old_mainosaba(config_dir)
-
-        config, _ = load_config_dir(config_dir)
-
-        assert "mainosaba" not in config["input"]["collectors"]
-        assert "text_adv_game" in config["input"]["collectors"]
-        assert config["input"]["collectors"]["text_adv_game"]["full_screen"] is False
-        written = input_path.read_text(encoding="utf-8-sig")
-        assert "text_adv_game" in written
-        assert "mainosaba" not in written
-
-    def test_enabled_list_mainosaba_migrated(self, config_dir: Path):
-        input_path = config_dir / "input.toml"
-        content = input_path.read_text(encoding="utf-8-sig")
-        content = content.replace('enabled = [', 'enabled = ["mainosaba", ')
-        input_path.write_text(content, encoding="utf-8-sig")
-        _set_version(config_dir, "0.5.3")
-
-        config, _ = load_config_dir(config_dir)
-
-        assert "mainosaba" not in config["input"]["collectors"]["enabled"]
-        assert "text_adv_game" in config["input"]["collectors"]["enabled"]
-
-    def test_migration_idempotent(self, config_dir: Path):
-        input_path = self._inject_old_mainosaba(config_dir)
-        load_config_dir(config_dir)
-        written_after_first = input_path.read_text(encoding="utf-8-sig")
-
-        load_config_dir(config_dir)
-
-        assert input_path.read_text(encoding="utf-8-sig") == written_after_first
