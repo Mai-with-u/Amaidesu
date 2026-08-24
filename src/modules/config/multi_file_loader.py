@@ -67,7 +67,9 @@ _PHASE_TO_REGISTRY: dict[tuple[str, str], str] = {
 # v2.0.0：major 级版本升级（破坏旧 [collectors/deciders/handlers] 段，按域重整为 7 文件）。
 # 权威定义：AGENTS.md "配置 Schema 变更规则" + 这里的 ``CONFIG_VERSION`` 与
 # ``MetaConfig.version`` 默认值必须同步修改（改一必改二）。
-CONFIG_VERSION = "2.0.0"
+# Wave 6：agents_schemas 重写（新增 AgendaIdle / BackgroundMaintainer / command_tool 字段）、
+# input_schemas 移除 text_adv_game → 升 patch 2.0.1。
+CONFIG_VERSION = "2.0.2"
 
 # v2.0.0 配置文件清单（按域划分）：core / model / agents / tools / memory / storage / background
 _CONFIG_FILES = [

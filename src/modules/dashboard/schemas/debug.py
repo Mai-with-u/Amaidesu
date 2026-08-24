@@ -2,11 +2,16 @@
 调试 Schema
 
 定义调试相关的数据模型。
+
+Wave 6 变更：
+- 移除 InjectIntentRequest / InjectIntentResponse（IntentPayload 已被 DISCARD，
+  /inject-intent 端点在新架构下无意义：决策出口=工具调用，无 Intent 事件）。
+- InjectMessageRequest / InjectMessageResponse 保留（room.message.* 事件用于联调）。
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Dict, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class InjectMessageRequest(BaseModel):
@@ -32,21 +37,3 @@ class EventBusStatsResponse(BaseModel):
     total_events: int = 0
     total_subscribers: int = 0
     events_by_name: Dict[str, int] = {}
-
-
-class InjectIntentRequest(BaseModel):
-    """注入 Intent 请求"""
-
-    text: Optional[str] = None  # 对应 Intent.original_text
-    response_text: Optional[str] = None  # 如果为空则使用 text
-    emotion: str = "neutral"
-    actions: List[Dict[str, Any]] = Field(default_factory=list, description="动作列表，每个包含 type, params, priority")
-    source: str = "dashboard_debug"
-
-
-class InjectIntentResponse(BaseModel):
-    """注入 Intent 响应"""
-
-    success: bool
-    intent_id: Optional[str] = None
-    error: Optional[str] = None

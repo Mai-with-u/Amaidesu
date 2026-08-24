@@ -1,10 +1,14 @@
-"""SimulatorService - 模拟直播间服务的生命周期管理器
+"""SimulatorService - 模拟直播间服务的生命周期管理器（Wave 6 / §1.46）
 
 与 InputCollectorManager 并列的独立一等公民，职责：
 - 创建模拟器实例（DI 注入 LLM / Prompt / ContextService / EventHistoryService）
 - 在独立 asyncio task 中驱动 ``start() → collect() → stop()`` 生命周期
-- 将模拟消息发布到 ``CoreEvents.INPUT_MESSAGE_RECEIVED`` 事件
+- 将模拟消息发布到 ``CoreEvents.ROOM_MESSAGE_*`` 事件（Wave 6 语义域事件）
 - 暴露 ``.simulator`` 属性供 Dashboard API 访问控制面
+
+Wave 6 变更：
+- 旧 ``input.message.received`` 事件 → 新 ``room.message.danmaku`` 事件
+- payload 从 ``MessageReadyPayload`` 改为 ``RoomMessagePayload``（与 bilibili collector 对齐）
 
 设计决策：
 - **不经过 Input Pipeline**：模拟器自带节奏控制（CadenceGenerator）和人设管理，
@@ -17,14 +21,16 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from src.modules.di.instantiation import instantiate_with_di
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.input import MessageReadyPayload
+from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.logging import get_logger
 from src.modules.simulator.simulator import LiveStreamSimulator
+from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.config.service import ConfigService
@@ -95,16 +101,25 @@ class SimulatorService:
         self.logger.info("模拟器服务已启动")
 
     async def _run(self) -> None:
-        """驱动模拟器主循环并发布 INPUT_MESSAGE_RECEIVED 事件"""
+        """驱动模拟器主循环并发布 ROOM_MESSAGE_DANMAKU 事件"""
         assert self._simulator is not None
         try:
             await self._simulator.start()
             async for message in self._simulator.collect():
                 if self._stop_event.is_set():
                     break
-                payload = MessageReadyPayload.from_normalized_message(message)
+                payload = RoomMessagePayload(
+                    live_session_id="live",
+                    message_type="danmaku",
+                    user=RoomMessageUser(
+                        id=str(getattr(message, "user_id", "") or f"sim-{uuid.uuid4().hex[:6]}"),
+                        name=str(getattr(message, "user_nickname", "") or "模拟观众"),
+                    ),
+                    content=str(getattr(message, "text", "") or ""),
+                    timestamp_ms=now_ms(),
+                )
                 await self.event_bus.emit(
-                    CoreEvents.INPUT_MESSAGE_RECEIVED,
+                    CoreEvents.ROOM_MESSAGE_DANMAKU,
                     payload,
                     source="simulated_live_stream",
                 )

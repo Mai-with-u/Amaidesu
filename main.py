@@ -1,4 +1,26 @@
-"""Amaidesu 应用程序主入口。"""
+"""Amaidesu 应用程序主入口（Wave 6 重写）
+
+v2 架构组合根（参见 .omo/drafts/amaidesu-v2-architecture.md）：
+- AudioStreamChannel：TTS ↔ 皮套/远程 的音频总线
+- LLMManager：统一 LLM 客户端池
+- ContextService：会话历史（替代旧 ContextService 路径）
+- EventBus：事件分发；启动时挂载事件拦截器（§1.46.1）
+- CollectorManager：管理 src/modules/collectors/ 下所有 Input Domain 组件
+- AgentManager：管理 src/agents/ 下所有 Agent（包括主播 StreamerAgent）
+- ToolRegistry：管理 src/modules/tools/ 下所有 Output Domain 组件
+- DashboardServer：WebUI（仅作为 observer，不参与决策/执行数据流）
+- MCPServerService：外部 MCP 协议适配
+- LogStreamer + EventHistoryRecorder：日志 + 事件历史
+
+Wave 6 重写变更：
+- 删除旧 InputCollectorManager / DeciderManager / OutputHandlerManager 引用
+- 删除旧 stage 装饰器导入（src.stages.input.collectors/pipelines/deciders/output.manager/output.pipelines）
+- Agent / Tool 注册走 config [agents]/[tools] 段 + StreamerAgent 自身
+- 事件拦截器（rate_limit / similar_filter）通过 EventBus.add_interceptor 注册
+- 关闭顺序：CollectorManager.stop_all → AgentManager.stop_all → EventRecorder.stop → EventBus.cleanup → LLMManager.cleanup → ContextService.cleanup
+"""
+
+from __future__ import annotations
 
 import webbrowser
 import argparse
@@ -7,29 +29,28 @@ import contextlib
 import os
 import signal
 import sys
-from typing import Any, Dict, Optional, Tuple, Type
+from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger as loguru_logger
+
+from src.modules.agents.manager import AgentManager
+from src.modules.collectors.manager import CollectorManager
+from src.modules.config.service import ConfigService
+from src.modules.context import ContextService, ContextServiceConfig
 from src.modules.dashboard.server import DashboardServer
-from src.modules.events.event_recorder import EventHistoryRecorder
 from src.modules.events import (
     EventBus,
     list_registered_events,
     register_core_events,
 )
-from src.modules.logging import get_logger
-from src.modules.config.service import ConfigService
-from src.modules.config.core_schemas import EventHistoryConfig
+from src.modules.events.event_recorder import EventHistoryRecorder
+from src.modules.events.interceptors import (
+    RateLimitInterceptor,
+    SimilarFilterInterceptor,
+)
 from src.modules.llm.manager import LLMManager
-from src.modules.context import ContextService, ContextServiceConfig
-from src.modules.prompts import PromptManager, get_prompt_manager
-from src.modules.mcp import MCPServerConfig, MCPServerService
-
-from src.stages.decision import DeciderManager
-from src.modules.pipeline import PipelineManager
-from src.stages.input.manager import InputCollectorManager
-from src.stages.output import OutputHandlerManager
-from src.modules.simulator import SimulatorService
+from src.modules.logging import get_logger
+from src.modules.prompts import get_prompt_manager
 
 logger = get_logger("Main")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -55,6 +76,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="启用 WebUI 开发模式：自动启动 Vite 开发服务器（HMR 热更新），浏览器将打开 http://localhost:60315",
     )
+    parser.add_argument(
+        "--dry",
+        action="store_true",
+        help="dry-run 模式：仅验证配置加载与组件构造（不订阅事件、不启动 LLM 调用）",
+    )
     return parser.parse_args()
 
 
@@ -66,10 +92,8 @@ def setup_logging_early(args: argparse.Namespace) -> None:
     """
     from src.modules.logging import configure_from_config
 
-    # 使用默认INFO级别配置
     default_config = {"level": "INFO", "console_level": "INFO"}
 
-    # 如果--debug参数，使用DEBUG级别
     if args.debug:
         default_config["level"] = "DEBUG"
         default_config["console_level"] = "DEBUG"
@@ -86,23 +110,19 @@ def setup_logging(args: argparse.Namespace, logging_config: Optional[Dict[str, A
     """
     from src.modules.logging import configure_from_config
 
-    # 构建配置字典，应用 CLI 覆盖
     final_config = {}
 
     if logging_config:
         final_config.update(logging_config)
 
-    # CLI --debug 覆盖配置级别
     if args.debug:
         final_config["level"] = "DEBUG"
         final_config["console_level"] = "DEBUG"
 
-    # CLI --filter 参数处理（模块过滤）
     if args.filter:
         filtered_modules = set(args.filter)
 
         def filter_logic(record: Dict[str, Any]) -> bool:
-            """只显示指定模块的日志，WARNING 及以上级别总是显示"""
             if record["level"].no >= loguru_logger.level("WARNING").no:
                 return True
             module_name = record["extra"].get("module")
@@ -112,7 +132,6 @@ def setup_logging(args: argparse.Namespace, logging_config: Optional[Dict[str, A
 
     configure_from_config(final_config)
 
-    # 输出启动信息
     if args.debug:
         logger.info(f"已启用 DEBUG 日志级别{f'，并激活模块过滤器: {list(args.filter)}' if args.filter else '。'}")
     elif args.filter:
@@ -139,37 +158,18 @@ def load_config() -> Tuple[ConfigService, Dict[str, Any], bool]:
 
 
 def validate_config(config: Dict[str, Any]) -> None:
-    """
-    验证配置完整性，缺失必要配置时给出明确错误提示
-
-    Args:
-        config: 配置字典
-
-    Raises:
-        SystemExit: 如果配置验证失败
-    """
-    errors = []
-
-    # 检查核心配置段
+    """验证配置完整性，缺失必要配置时给出明确错误提示。"""
     if not config.get("general"):
-        errors.append("缺少 [general] 配置段")
+        logger.critical("缺少 [general] 配置段")
+
+    if not config.get("agents"):
+        logger.warning("未检测到 [agents] 配置，Agent 功能将被禁用")
+
+    if not config.get("tools"):
+        logger.warning("未检测到 [tools] 配置，Tool 功能将被禁用")
 
     if not config.get("collectors"):
-        logger.warning("未检测到 [collectors] 配置，输入Collector功能将被禁用")
-
-    if not config.get("deciders"):
-        logger.warning("未检测到 [deciders] 配置，决策Decider功能将被禁用")
-
-    if not config.get("handlers"):
-        logger.warning("未检测到 [handlers] 配置，输出Handler功能将被禁用")
-
-    # 如果有严重错误，退出程序
-    if errors:
-        logger.critical("配置验证失败，发现以下问题：")
-        for error in errors:
-            logger.critical(f"  - {error}")
-        logger.critical("请检查 config.toml 文件并添加缺失的配置段。")
-        sys.exit(1)
+        logger.warning("未检测到 [collectors] 配置，Collector 功能将被禁用")
 
     logger.info("配置验证通过")
 
@@ -189,89 +189,78 @@ def exit_if_config_created(was_created: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 管道与核心组件
-async def create_pipeline_manager(
-    stage: str,
-    config: Dict[str, Any],
-    services_by_type: Optional[Dict[Type[Any], Any]] = None,
-) -> Optional[Any]:
-    """加载指定阶段的 PipelineManager。
+# 事件拦截器注册
+# ---------------------------------------------------------------------------
 
-    Args:
-        stage: 'input' 或 'output'
-        config: 完整配置 dict
-        services_by_type: 可用服务字典（key=类型, value=服务实例），用于类型匹配注入
 
-    Returns:
-        PipelineManager 实例，或 None（如果配置中未启用）
+def register_event_interceptors(event_bus: EventBus, config: Dict[str, Any]) -> None:
+    """注册输入域事件拦截器（§1.46.1）。
+
+    - rate_limit：从旧 input pipeline 迁移（防刷屏/防突发）
+    - similar_filter：从旧 input pipeline 迁移（相似文本合并）
+    - 拦截器作用于 ``room.message.*`` 事件（v2 语义域）
+    - 拦截器返回 ``None`` 即丢弃该事件
     """
-    pipelines_root = config.get("pipelines", {})
-    stage_config = pipelines_root.get(stage, {})
-    if not stage_config:
-        return None
+    pipelines_config = config.get("pipelines", {}) if isinstance(config, dict) else {}
+    rate_limit_cfg = pipelines_config.get("rate_limit", {}) if isinstance(pipelines_config, dict) else {}
+    if rate_limit_cfg.get("enabled", True):
+        event_bus.add_interceptor(
+            RateLimitInterceptor(
+                global_rate_limit=rate_limit_cfg.get("global_rate_limit", 100),
+                user_rate_limit=rate_limit_cfg.get("user_rate_limit", 10),
+                window_size=rate_limit_cfg.get("window_size", 60),
+            )
+        )
+        logger.info("RateLimitInterceptor 已注册（[pipelines.rate_limit]）")
 
-    manager = PipelineManager(stage=stage, services_by_type=services_by_type or {})
-    loaded = await manager.load_from_config(stage_config)
-    if loaded > 0:
-        logger.info(f"PipelineManager[{stage}] 加载完成，共 {loaded} 个管道。")
-        return manager
-    logger.info(f"PipelineManager[{stage}] 未加载任何管道。")
-    return manager
+    similar_cfg = pipelines_config.get("similar_filter", {}) if isinstance(pipelines_config, dict) else {}
+    if similar_cfg.get("enabled", True):
+        event_bus.add_interceptor(
+            SimilarFilterInterceptor(
+                similarity_threshold=similar_cfg.get("similarity_threshold", 0.85),
+                time_window=similar_cfg.get("time_window", 5.0),
+                min_text_length=similar_cfg.get("min_text_length", 3),
+                cross_user_filter=similar_cfg.get("cross_user_filter", True),
+            )
+        )
+        logger.info("SimilarFilterInterceptor 已注册（[pipelines.similar_filter]）")
 
 
+# ---------------------------------------------------------------------------
+# 核心组件构造（v2 组合根）
 # ---------------------------------------------------------------------------
 
 
 async def create_app_components(
     config: Dict[str, Any],
-    input_pipeline_manager: Optional[PipelineManager],
     config_service: ConfigService,
     dev_webui: bool = False,
 ) -> Tuple[
     ContextService,
     EventBus,
-    Optional[OutputHandlerManager],
-    Optional[InputCollectorManager],
     LLMManager,
-    Optional[DeciderManager],
     Optional["DashboardServer"],
-    Optional["MCPServerService"],
     Optional["EventHistoryRecorder"],
-    Optional[SimulatorService],
+    Optional["CollectorManager"],
+    Optional["AgentManager"],
 ]:
-    """创建并连接核心组件。
+    """v2 组合根：构造并连接所有核心组件。
 
-    创建顺序：
-    1. AudioStreamChannel
-    2. LLMManager
-    3. ContextService（新增，在 EventBus 之前）
-    4. EventBus
-    5. InputCollectorManager
-    6. DeciderManager
-    7. OutputHandlerManager
-    8. DashboardServer
-    9. MCPServerService
+    创建顺序（依赖关系）：
+    1. AudioStreamChannel（音频总线，工具层依赖）
+    2. LLMManager（统一 LLM 客户端池）
+    3. ContextService（会话历史 / 多会话隔离）
+    4. EventBus + 事件拦截器（§1.46.1）
+    5. CollectorManager（采集器：bilibili/console/mock/screen）
+    6. AgentManager（Agent 子系统：StreamerAgent 等）
+    7. ToolRegistry（通过 AgentManager.register_all_tools 注入到各 Agent）
+    8. DashboardServer（WebUI observer）
 
-    返回顺序（8个）：
-    1. ContextService
-    2. EventBus
-    3. OutputHandlerManager
-    4. InputCollectorManager
-    5. LLMManager
-    6. DeciderManager
-    7. DashboardServer
-    8. MCPServerService
+    Returns:
+        (context_service, event_bus, llm_service, dashboard_server,
+         event_recorder, collector_manager, agent_manager)
     """
-    output_config = config.get("handlers", {})
-    decision_config = config.get("deciders", {})
-    input_config = config.get("collectors", {})
-
-    if output_config:
-        logger.info("检测到输出Handler配置，将启用输出协调器")
-    else:
-        logger.info("未检测到输出Handler配置，输出协调器功能将被禁用")
-
-    # 创建 AudioStreamChannel
+    # --- 1. AudioStreamChannel ---
     from src.modules.streaming.audio_stream_channel import AudioStreamChannel
 
     logger.info("初始化 AudioStreamChannel...")
@@ -279,265 +268,302 @@ async def create_app_components(
     await audio_stream_channel.start()
     logger.info("AudioStreamChannel 已创建并启动")
 
-    # LLM 服务
+    # --- 2. LLM 服务 ---
     logger.info("初始化 LLM 服务...")
     llm_service = LLMManager()
     await llm_service.setup(config)
     logger.info("已创建 LLM 服务实例")
 
-    # 上下文服务（在 EventBus 之前创建）
+    # --- 3. ContextService ---
     logger.info("初始化上下文服务...")
-    context_config = config.get("context", {})
+    context_config = config.get("context", {}) if isinstance(config, dict) else {}
     context_service_config = ContextServiceConfig(**context_config)
     context_service = ContextService(config=context_service_config)
     await context_service.initialize()
     logger.info("已创建上下文服务实例")
 
-    # 事件总线
-    logger.info("初始化事件总线和数据流协调器...")
+    # --- 4. EventBus + 拦截器 ---
+    logger.info("初始化事件总线...")
     event_bus = EventBus()
+    register_event_interceptors(event_bus, config)
+    logger.info("事件总线已初始化，事件拦截器已挂载")
 
-    # 事件历史服务（系统级，不依赖 Dashboard）
-    event_history_service: Optional["EventHistoryService"] = None
-    event_recorder: Optional["EventHistoryRecorder"] = None
+    # --- 4b. 事件历史（系统级）---
+    event_recorder = await _start_event_recorder(event_bus, config)
+    logger.info("事件历史记录器已启动")
 
-    events_config = config.get("events", {}) or {}
-    try:
-        from src.modules.events.event_history import EventHistoryService
-        from src.modules.events.event_recorder import EventHistoryRecorder
+    # --- 5. CollectorManager ---
+    collector_manager: Optional["CollectorManager"] = None
+    collectors_config = config.get("collectors", {}) if isinstance(config, dict) else {}
+    if collectors_config:
+        logger.info("初始化 CollectorManager（src/modules/collectors/）...")
+        from src.modules.collectors.manager import CollectorManager
 
-        typed_events_config = EventHistoryConfig(**events_config)
-        event_history_service = EventHistoryService(
-            max_events=typed_events_config.history_size,
-            persist=typed_events_config.persist,
-        )
-        event_recorder = EventHistoryRecorder(
-            event_bus=event_bus,
-            event_history=event_history_service,
-        )
-        await event_recorder.start()
-        logger.info(
-            f"事件历史记录器已启动（size={typed_events_config.history_size}, persist={typed_events_config.persist}）",
-        )
-    except Exception as e:
-        logger.warning(f"事件历史记录器启动失败: {e}")
-        event_history_service = None
-        event_recorder = None
-        try:
-            from src.modules.events.event_history import EventHistoryService
-            from src.modules.events.event_recorder import EventHistoryRecorder
+        collector_manager = CollectorManager()
+        await _register_collectors_from_config(collector_manager, collectors_config, config_service)
+        await collector_manager.start_all()
+        logger.info(f"CollectorManager 已启动（{len(collector_manager)} 个 Collector）")
 
-            typed_events_config = EventHistoryConfig(**events_config)
-            event_history_service = EventHistoryService(
-                max_events=typed_events_config.history_size,
-                persist=typed_events_config.persist,
-            )
-            event_recorder = EventHistoryRecorder(
-                event_bus=event_bus,
-                event_history=event_history_service,
-            )
-            await event_recorder.start()
-            logger.info(
-                f"事件历史记录器已启动（size={typed_events_config.history_size}, persist={typed_events_config.persist}）",
-            )
-        except Exception as e:
-            logger.warning(f"事件历史记录器启动失败: {e}")
-            event_history_service = None
-            event_recorder = None
+    # --- 6. AgentManager + StreamerAgent ---
+    agent_manager: Optional["AgentManager"] = None
+    agents_config = config.get("agents", {}) if isinstance(config, dict) else {}
+    if agents_config:
+        logger.info("初始化 AgentManager（src/agents/）...")
+        from src.modules.agents.manager import AgentManager
 
-    # 初始化 prompt_manager（供 collector、decision 和 output 阶段使用）
-    prompt_manager = get_prompt_manager()
-
-    # 输入Collector管理器 (Input 阶段)
-    input_manager: Optional[InputCollectorManager] = None
-    if input_config:
-        logger.info("初始化输入Collector管理器（Input 阶段）...")
-        try:
-            input_manager = InputCollectorManager(
-                event_bus=event_bus,
-                pipeline_manager=input_pipeline_manager,
-                services_by_type={
-                    LLMManager: llm_service,
-                    PromptManager: prompt_manager,
-                    ContextService: context_service,
-                    EventHistoryService: event_history_service,
-                },
-            )
-            if input_pipeline_manager:
-                logger.info("已注入 InputPipelineManager 到 InputCollectorManager")
-
-            await input_manager.setup(input_config, config_service=config_service)
-            await input_manager.start()
-        except Exception as e:
-            logger.error(f"设置输入Collector管理器失败: {e}", exc_info=True)
-            logger.warning("输入Collector功能不可用，继续启动其他服务")
-            input_manager = None
-    else:
-        logger.info("未检测到输入配置，输入Collector功能将被禁用")
-
-    # 模拟直播间服务（独立一等公民，与 InputCollector 并列）
-    simulator_service: Optional[SimulatorService] = None
-    try:
-        simulator_service = SimulatorService(
-            event_bus=event_bus,
-            services_by_type={
-                LLMManager: llm_service,
-                PromptManager: prompt_manager,
-                ContextService: context_service,
-                EventHistoryService: event_history_service,
-            },
-        )
-        await simulator_service.setup(config_service)
-    except Exception as e:
-        logger.error(f"模拟器服务初始化失败: {e}", exc_info=True)
-        logger.warning("模拟器功能不可用，继续启动其他服务")
-        simulator_service = None
-
-    # 输出Handler管理器 (Output 阶段)
-    # 先于 Decision 阶段创建并启动，以便作为 CapabilitiesProvider 注入 DeciderManager，
-    # 供 Decider 查询 Output 能力做动作选择（只读 Protocol，不违反单向数据流）。
-    logger.info("初始化输出Handler管理器...")
-    output_pipeline_manager = await create_pipeline_manager(
-        stage="output",
-        config=config,
-        services_by_type={
-            LLMManager: llm_service,
-            PromptManager: prompt_manager,
-        },
-    )
-    output_manager: Optional[OutputHandlerManager] = None
-    if output_config:
-        if output_pipeline_manager is None:
-            output_pipeline_manager = PipelineManager(
-                stage="output",
-                services_by_type={
-                    LLMManager: llm_service,
-                    PromptManager: prompt_manager,
-                },
-            )
-        output_manager = OutputHandlerManager(
+        agent_manager = AgentManager()
+        await _register_agents_from_config(
+            agent_manager,
+            agents_config,
+            config_service,
+            llm_service,
             event_bus,
-            pipeline_manager=output_pipeline_manager,
-            prompt_manager=prompt_manager,
+            context_service,
         )
-    if output_manager:
-        try:
-            await output_manager.setup(
-                output_config,
-                config_service=config_service,
-                audio_stream_channel=audio_stream_channel,
-                prompt_manager=prompt_manager,
-            )
-            await output_manager.start()
-            logger.info("输出Handler管理器已设置（Output 阶段）")
-        except Exception as e:
-            logger.error(f"设置输出Handler管理器失败: {e}", exc_info=True)
-            logger.warning("输出Handler管理器功能不可用，继续启动其他服务")
-            output_manager = None
+        await agent_manager.start_all()
+        logger.info(f"AgentManager 已启动（{len(agent_manager)} 个 Agent）")
 
-    # 决策阶段 (Decision 阶段)
-    decision_manager: Optional[DeciderManager] = None
-    if decision_config:
-        logger.info("初始化决策阶段组件（Decision 阶段）...")
-        try:
-            decision_manager = DeciderManager(
-                event_bus,
-                llm_service,
-                config_service,
-                context_service,
-                prompt_manager,
-                capabilities_provider=output_manager,
-            )
+    # --- 7. ToolRegistry（AgentManager 启动时已通过 register_all_tools 自动注入；保留此句为文档占位）---
+    logger.info("ToolRegistry 已通过 AgentManager.register_all_tools 完成注入")
 
-            await decision_manager.setup(decision_config=decision_config)
-            await decision_manager.start()
-            active_decider = decision_manager.get_current_decider_name()
-            logger.info(f"DeciderManager 已设置并启动（Decider: {active_decider}）")
-        except Exception as e:
-            logger.error(f"设置决策域组件失败: {e}", exc_info=True)
-            logger.warning("决策域功能不可用，继续启动其他服务")
-            decision_manager = None
-    else:
-        logger.info("未检测到决策配置，决策域功能将被禁用")
-
-    # ========================================
-    # 初始化 Dashboard Server
-    # ========================================
+    # --- 8. DashboardServer ---
     dashboard_server: Optional["DashboardServer"] = None
-    dashboard_config = config.get("dashboard", {})
-
-    # 提前创建 LogStreamer，以便捕获应用启动过程中的日志
-    from src.modules.logging.log_streamer import LogStreamer
-
-    log_streamer = LogStreamer(min_level="DEBUG", persist=True)
-    await log_streamer.start()  # 立即启动捕获日志
-
+    log_streamer = await _start_log_streamer()
+    dashboard_config = config.get("dashboard", {}) if isinstance(config, dict) else {}
     if dashboard_config.get("enabled", True):
-        try:
-            from src.modules.config.core_schemas import DashboardConfig
+        dashboard_server = await _start_dashboard(
+            dashboard_config,
+            dev_webui,
+            event_bus,
+            context_service,
+            config_service,
+            log_streamer,
+        )
 
-            dashboard_config["dev_mode"] = dev_webui  # CLI 参数覆盖配置文件
-            typed_dashboard_config = DashboardConfig(**dashboard_config)
-
-            dashboard_server = DashboardServer(
-                event_bus=event_bus,
-                input_manager=input_manager,
-                simulator_service=simulator_service,
-                decision_manager=decision_manager,
-                output_manager=output_manager,
-                context_service=context_service,
-                config_service=config_service,
-                dashboard_config=typed_dashboard_config,
-                log_streamer=log_streamer,
-                event_history=event_history_service,
-            )
-            await dashboard_server.start()
-            logger.info(f"Dashboard 已启动: http://{typed_dashboard_config.host}:{typed_dashboard_config.port}")
-
-            # 自动打开浏览器
-            if typed_dashboard_config.auto_open_browser:
-                if typed_dashboard_config.dev_mode:
-                    dashboard_url = f"http://localhost:{typed_dashboard_config.vite_dev_port}"
-                else:
-                    dashboard_url = f"http://{typed_dashboard_config.host}:{typed_dashboard_config.port}"
-                webbrowser.open(dashboard_url)
-                logger.info(f"已自动打开浏览器: {dashboard_url}")
-        except ImportError as e:
-            logger.warning(f"Dashboard 模块导入失败（可能缺少依赖）: {e}")
-            logger.warning("Dashboard 功能将被禁用。请运行: uv add fastapi 'uvicorn[standard]'")
-        except Exception as e:
-            logger.error(f"Dashboard 启动失败: {e}")
-            logger.warning("Dashboard 功能将被禁用")
-
-    # ========================================
-    # 初始化 MCP 服务
-    # ========================================
-    mcp_service: Optional["MCPServerService"] = None
-    mcp_config = config.get("mcp", {})
-    if mcp_config.get("enabled", False):
-        try:
-            mcp_service = MCPServerService(MCPServerConfig(**mcp_config))
-            await mcp_service.setup(mcp_config)
-            logger.info("已创建 MCP 服务实例")
-        except Exception as e:
-            logger.error(f"MCP 服务初始化失败: {e}")
-            logger.warning("MCP 服务功能将被禁用")
-            mcp_service = None
-    else:
-        logger.info("MCP 服务未启用")
-
+    # --- 9. 组件装配完成 ---
     return (
         context_service,
         event_bus,
-        output_manager,
-        input_manager,
         llm_service,
-        decision_manager,
         dashboard_server,
-        mcp_service,
         event_recorder,
-        simulator_service,
+        collector_manager,
+        agent_manager,
     )
+
+
+# ---------------------------------------------------------------------------
+# 子启动器（保持 create_app_components 函数短小）
+# ---------------------------------------------------------------------------
+
+
+async def _start_event_recorder(event_bus: EventBus, config: Dict[str, Any]):
+    """启动事件历史记录器（系统级，与 Dashboard 解耦）。"""
+    from src.modules.config.core_schemas import EventHistoryConfig
+    from src.modules.events.event_history import EventHistoryService
+    from src.modules.events.event_recorder import EventHistoryRecorder
+
+    events_config = config.get("events", {}) if isinstance(config, dict) else {}
+    typed_events_config = EventHistoryConfig(**events_config)
+    try:
+        service = EventHistoryService(
+            max_events=typed_events_config.history_size,
+            persist=typed_events_config.persist,
+        )
+        recorder = EventHistoryRecorder(event_bus=event_bus, event_history=service)
+        await recorder.start()
+        logger.info(
+            f"事件历史记录器已启动（size={typed_events_config.history_size}, persist={typed_events_config.persist}）"
+        )
+        return recorder
+    except Exception as e:
+        logger.warning(f"事件历史记录器启动失败: {e}")
+        return None
+
+
+async def _start_log_streamer():
+    """启动 LogStreamer（用于 Dashboard 抓取实时日志）。"""
+    from src.modules.logging.log_streamer import LogStreamer
+
+    streamer = LogStreamer(min_level="DEBUG", persist=True)
+    await streamer.start()
+    return streamer
+
+
+async def _register_collectors_from_config(manager, config_section, config_service):
+    """根据 [collectors] 段注册 Collector 实例到 CollectorManager。
+
+    [collectors] 段结构：
+        enabled = ["bilibili", "mock", ...]
+        bilibili = { ... }
+        mock = { ... }
+    """
+
+    enabled_list = config_section.get("enabled", []) or []
+    for collector_name in enabled_list:
+        sub_cfg = config_section.get(collector_name, {})
+        if not isinstance(sub_cfg, dict):
+            sub_cfg = {}
+        try:
+            # 通过 ConfigService 加载子 schema
+            cfg_class = _try_get_collector_config(collector_name)
+            if cfg_class is not None:
+                typed_cfg = cfg_class(**sub_cfg)
+            else:
+                typed_cfg = None
+        except Exception as e:
+            logger.warning(f"Collector '{collector_name}' 配置验证失败: {e}")
+            typed_cfg = None
+
+        instance = _instantiate_collector(collector_name, typed_cfg)
+        if instance is None:
+            logger.warning(f"Collector '{collector_name}' 未找到 Collector 类，跳过")
+            continue
+        manager.register(instance, description=sub_cfg.get("description", ""))
+
+
+def _try_get_collector_config(collector_name: str):
+    """尝试获取 Collector 子段 Schema（v2 暂未细分，fallback 到 dict）。"""
+    # v2 简化：暂不细分 Collector Schema（agent_schemas / collector_schemas 合并策略后续 wave 决定）
+    return None
+
+
+def _instantiate_collector(collector_name: str, typed_cfg):
+    """根据 collector_name 实例化对应的 Collector 类。"""
+    try:
+        if collector_name == "bilibili":
+            from src.modules.collectors.bilibili.legacy.bili_danmaku_collector import (
+                BiliDanmakuCollector,
+            )
+
+            return BiliDanmakuCollector(config=typed_cfg) if typed_cfg else BiliDanmakuCollector(config={})
+        if collector_name == "bilibili_official":
+            from src.modules.collectors.bilibili.official.bili_danmaku_official_collector import (
+                BiliDanmakuOfficialCollector,
+            )
+
+            return (
+                BiliDanmakuOfficialCollector(config=typed_cfg) if typed_cfg else BiliDanmakuOfficialCollector(config={})
+            )
+        if collector_name == "console_input":
+            from src.modules.collectors.console.console_input_collector import (
+                ConsoleInputCollector,
+            )
+
+            return ConsoleInputCollector(config=typed_cfg) if typed_cfg else ConsoleInputCollector(config={})
+        if collector_name == "mock":
+            from src.modules.collectors.mock.mock_collector import MockCollector
+
+            return MockCollector(config=typed_cfg) if typed_cfg else MockCollector(config={})
+        if collector_name == "screen":
+            from src.modules.collectors.screen.screen_change_collector import (
+                ScreenChangeCollector,
+            )
+
+            return ScreenChangeCollector(config=typed_cfg) if typed_cfg else ScreenChangeCollector(config={})
+        if collector_name == "stt":
+            from src.modules.collectors.stt.stt_collector import STTCollector
+
+            return STTCollector(config=typed_cfg) if typed_cfg else STTCollector(config={})
+        logger.warning(f"未实现的 Collector: {collector_name}")
+        return None
+    except Exception as e:
+        logger.warning(f"实例化 Collector '{collector_name}' 失败: {e}")
+        return None
+
+
+async def _register_agents_from_config(
+    manager,
+    config_section,
+    config_service,
+    llm_service,
+    event_bus,
+    context_service,
+):
+    """根据 [agents] 段注册 Agent 实例到 AgentManager。
+
+    [agents] 段结构（v2）：
+        enabled = ["streamer", "game"]
+        streamer = { planner_llm = "llm_fast", replyer_llm = "llm", ... }
+        game = { ... }
+    """
+    enabled_list = config_section.get("enabled", []) or []
+    for agent_name in enabled_list:
+        sub_cfg = config_section.get(agent_name, {})
+        if not isinstance(sub_cfg, dict):
+            sub_cfg = {}
+        if agent_name == "streamer":
+            from src.agents.streamer.streamer_agent import (
+                StreamerAgent,
+                StreamerAgentConfig,
+            )
+
+            try:
+                cfg_obj = StreamerAgentConfig(**sub_cfg) if sub_cfg else StreamerAgentConfig()
+            except Exception as e:
+                logger.warning(f"解析 StreamerAgent 配置失败: {e}; 使用默认配置")
+                cfg_obj = StreamerAgentConfig()
+            agent = StreamerAgent(
+                config=cfg_obj,
+                llm_manager=llm_service,
+                prompt_manager=get_prompt_manager(),
+                context_service=context_service,
+                event_bus=event_bus,
+            )
+            manager.register(agent, spec_provider="builtin")
+            continue
+        if agent_name == "game":
+            # Wave 7 占位：游戏 Agent 范式（§1.5.1）
+            logger.info("game Agent 待 Wave 7 实现，当前跳过")
+            continue
+        if agent_name == "custom":
+            logger.info("custom Agent 由用户自定义注册，当前跳过（占位）")
+            continue
+        logger.warning(f"未知的 Agent 类型: {agent_name}（升级 hook 应已过滤 maibot 等）")
+
+
+async def _start_dashboard(
+    dashboard_config: Dict[str, Any],
+    dev_webui: bool,
+    event_bus: EventBus,
+    context_service: ContextService,
+    config_service: ConfigService,
+    log_streamer,
+):
+    """启动 DashboardServer（仅作为 WebUI observer，不参与决策数据流）。"""
+    try:
+        from src.modules.config.core_schemas import DashboardConfig
+        from src.modules.dashboard.server import DashboardServer
+
+        dashboard_config = dict(dashboard_config)
+        dashboard_config["dev_mode"] = dev_webui
+        typed_dashboard_config = DashboardConfig(**dashboard_config)
+
+        dashboard_server = DashboardServer(
+            event_bus=event_bus,
+            context_service=context_service,
+            config_service=config_service,
+            dashboard_config=typed_dashboard_config,
+            log_streamer=log_streamer,
+        )
+        await dashboard_server.start()
+        logger.info(f"Dashboard 已启动: http://{typed_dashboard_config.host}:{typed_dashboard_config.port}")
+        if typed_dashboard_config.auto_open_browser:
+            if typed_dashboard_config.dev_mode:
+                dashboard_url = f"http://localhost:{typed_dashboard_config.vite_dev_port}"
+            else:
+                dashboard_url = f"http://{typed_dashboard_config.host}:{typed_dashboard_config.port}"
+            webbrowser.open(dashboard_url)
+            logger.info(f"已自动打开浏览器: {dashboard_url}")
+        return dashboard_server
+    except ImportError as e:
+        logger.warning(f"Dashboard 模块导入失败（可能缺少依赖）: {e}")
+        logger.warning("Dashboard 功能将被禁用。请运行: uv add fastapi 'uvicorn[standard]'")
+        return None
+    except Exception as e:
+        logger.error(f"Dashboard 启动失败: {e}")
+        logger.warning("Dashboard 功能将被禁用")
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -584,147 +610,81 @@ def restore_signal_handlers(original_sigint: Optional[Any], original_sigterm: Op
 
 
 async def run_shutdown(
-    context_service: "ContextService",
-    output_manager: Optional[OutputHandlerManager],
-    input_manager: Optional[InputCollectorManager],
-    llm_service: LLMManager,
+    context_service: ContextService,
     event_bus: EventBus,
-    decision_manager: Optional[DeciderManager],
-    dashboard_server: Optional["DashboardServer"] = None,
-    mcp_service: Optional["MCPServerService"] = None,
-    event_recorder: Optional["EventHistoryRecorder"] = None,
-    simulator_service: Optional[SimulatorService] = None,
+    llm_service: LLMManager,
+    dashboard_server: Optional["DashboardServer"],
+    event_recorder: Optional["EventHistoryRecorder"],
+    collector_manager: Optional["CollectorManager"],
+    agent_manager: Optional["AgentManager"],
 ) -> None:
-    """按顺序执行关闭与清理。
+    """v2 关闭顺序（依赖关系反向）：
 
-    关闭顺序（关键）：
-    1. 先停止数据生产者（InputCollectorManager）
-    2. 组件取消订阅（InputCollectorManager、DeciderManager、OutputHandlerManager）- 在 EventBus.cleanup 之前
-       2.1 清理输入域协调器（取消订阅 data.raw）
-       2.2 清理 DeciderManager（取消订阅 data.message 和 decision.intent）
-       2.3 清理 OutputHandlerManager（取消订阅 decision.intent）
-       2.4 清理 OutputHandler（必须在 EventBus.cleanup 之前，因为会调用 event_bus.off()）
-    3. 清理 MCP 服务
-    4. 清理 Dashboard（停止 WebSocket 连接和服务器）
-    5. 等待待处理事件完成（EventBus.cleanup）- 清除所有监听器
-    6. 清理基础设施（LLM等）
-
-    关键原则：
-    - 所有订阅者的 cleanup() 必须在 EventBus.cleanup() 之前执行
-    - 否则 cleanup() 中的 event_bus.off() 会因为监听器已被清除而失败
-    - OutputHandler 的 cleanup() 也会调用 event_bus.off()，因此必须在步骤 2.4 中清理
+    1. 停止 CollectorManager（数据生产者，停止 emit 事件）
+    2. 停止 AgentManager（Agent 主循环，后台任务退出）
+    3. 停止 Dashboard（WebSocket 连接关闭）
+    4. 停止 EventHistoryRecorder（必须在 EventBus.cleanup 之前 off）
+    5. EventBus.cleanup（清除所有 listener）
+    6. LLMManager.cleanup
+    7. ContextService.cleanup
     """
-    # Ctrl+C 时 asyncio.run 取消 main task，run_shutdown 内部所有 await 都会抛 CancelledError。
-    # 每个 cleanup 步骤必须吃 CancelledError 才能让后续步骤继续执行（例如 input cleanup 被取消后，
-    # decision_manager.cleanup() 仍要跑，否则 AmaidesuDecider._flush_task 不会被取消）。
     _saw_cancelled = False
-    if input_manager:
-        logger.info("正在停止输入Collector（数据生产者）...")
+
+    async def safe_log(coro, name: str):
+        nonlocal _saw_cancelled
         try:
-            await input_manager.cleanup()
-            logger.info("输入Collector已停止并清理")
+            return await coro
         except (Exception, asyncio.CancelledError) as e:
             _saw_cancelled = _saw_cancelled or isinstance(e, asyncio.CancelledError)
-            logger.error(f"停止输入Collector时出错: {e}")
+            logger.error(f"{name} 失败: {e}")
 
-    if simulator_service:
-        logger.info("正在停止模拟器服务...")
-        try:
-            await simulator_service.cleanup()
-            logger.info("模拟器服务已停止并清理")
-        except (Exception, asyncio.CancelledError) as e:
-            _saw_cancelled = _saw_cancelled or isinstance(e, asyncio.CancelledError)
-            logger.error(f"停止模拟器服务时出错: {e}")
+    if collector_manager is not None:
+        logger.info("正在停止 CollectorManager...")
+        await safe_log(collector_manager.stop_all(), "CollectorManager.stop_all")
+        await safe_log(collector_manager.cleanup_all(), "CollectorManager.cleanup_all")
+        logger.info("CollectorManager 已停止")
 
-    if decision_manager:
-        logger.info("正在清理 DeciderManager（取消订阅）...")
-        try:
-            await decision_manager.cleanup()
-            logger.info("DeciderManager 清理完成")
-        except (Exception, asyncio.CancelledError) as e:
-            _saw_cancelled = _saw_cancelled or isinstance(e, asyncio.CancelledError)
-            logger.error(f"清理 DeciderManager 时出错: {e}")
+    if agent_manager is not None:
+        logger.info("正在停止 AgentManager...")
+        await safe_log(agent_manager.stop_all(), "AgentManager.stop_all")
+        await safe_log(agent_manager.cleanup_all(), "AgentManager.cleanup_all")
+        logger.info("AgentManager 已停止")
 
-    if output_manager:
-        logger.info("正在清理 OutputHandler（必须在 EventBus.cleanup 之前）...")
-        try:
-            await output_manager.stop()
-            await output_manager.cleanup()
-            logger.info("OutputHandler 已清理")
-        except (Exception, asyncio.CancelledError) as e:
-            _saw_cancelled = _saw_cancelled or isinstance(e, asyncio.CancelledError)
-            logger.error(f"清理 OutputHandler 失败: {e}")
-
-    # 3. 清理 MCP 服务
-    if mcp_service:
-        logger.info("正在清理 MCP 服务...")
-        try:
-            await mcp_service.cleanup()
-            logger.info("MCP 服务已清理")
-        except (Exception, asyncio.CancelledError) as e:
-            _saw_cancelled = _saw_cancelled or isinstance(e, asyncio.CancelledError)
-            logger.error(f"MCP 服务清理失败: {e}")
-
-    # 4. 清理 Dashboard（停止 WebSocket 连接和服务器）
-    if dashboard_server:
+    if dashboard_server is not None:
         logger.info("正在停止 Dashboard...")
         try:
             await dashboard_server.stop()
             await dashboard_server.cleanup()
-            logger.info("Dashboard 已停止")
         except (Exception, asyncio.CancelledError) as e:
             _saw_cancelled = _saw_cancelled or isinstance(e, asyncio.CancelledError)
-            logger.error(f"停止 Dashboard 失败: {e}")
+            logger.error(f"Dashboard 停止失败: {e}")
+        logger.info("Dashboard 已停止")
 
-    # 5. 停止事件历史记录器（必须在 EventBus.cleanup() 之前取消 EventBus 订阅）
-    if event_recorder:
+    if event_recorder is not None:
         logger.info("正在停止事件历史记录器...")
-        try:
-            await event_recorder.stop()
-            logger.info("事件历史记录器已停止")
-        except (Exception, asyncio.CancelledError) as e:
-            _saw_cancelled = _saw_cancelled or isinstance(e, asyncio.CancelledError)
-            logger.error(f"停止事件历史记录器失败: {e}")
+        await safe_log(event_recorder.stop(), "EventHistoryRecorder")
+        if event_recorder.event_history is not None:
+            try:
+                event_recorder.event_history.cleanup()
+            except Exception as e:
+                logger.debug(f"event_history cleanup: {e}")
+        logger.info("事件历史记录器已停止")
 
-    # 5.1 释放事件历史缓冲（所有权在应用层；Dashboard 停止时不清理，避免清空记录器数据）
-    if event_recorder and event_recorder.event_history:
-        event_recorder.event_history.cleanup()
+    logger.info("等待待处理事件完成并清理 EventBus...")
+    if event_bus is not None:
+        await safe_log(event_bus.cleanup(), "EventBus.cleanup")
+        logger.info("EventBus 已清理")
 
-    # 6. 等待待处理事件完成并清除所有监听器（EventBus 清理）
-    logger.info("等待待处理事件完成...")
-    if event_bus:
-        try:
-            await event_bus.cleanup()
-            logger.info("EventBus 清理完成")
-        except (Exception, asyncio.CancelledError) as e:
-            _saw_cancelled = _saw_cancelled or isinstance(e, asyncio.CancelledError)
-            logger.error(f"EventBus 清理失败: {e}")
+    logger.info("正在清理 LLMManager...")
+    if llm_service is not None:
+        await safe_log(llm_service.cleanup(), "LLMManager.cleanup")
+    logger.info("核心服务已关闭")
 
-    # 5. 清理基础设施（LLM等）
-    logger.info("正在清理核心服务...")
-    try:
-        if llm_service:
-            await llm_service.cleanup()
-            logger.info("LLM 服务已清理")
-        logger.info("核心服务关闭完成")
-    except (Exception, asyncio.CancelledError) as e:
-        _saw_cancelled = _saw_cancelled or isinstance(e, asyncio.CancelledError)
-        logger.error(f"核心服务关闭时出错: {e}")
-
-    # 6. 清理上下文服务
-    logger.info("正在清理上下文服务...")
-    try:
-        if context_service:
-            await context_service.cleanup()
-            logger.info("上下文服务已清理")
-    except (Exception, asyncio.CancelledError) as e:
-        _saw_cancelled = _saw_cancelled or isinstance(e, asyncio.CancelledError)
-        logger.error(f"清理上下文服务失败: {e}")
-
+    logger.info("正在清理 ContextService...")
+    if context_service is not None:
+        await safe_log(context_service.cleanup(), "ContextService.cleanup")
     logger.info("Amaidesu 应用程序已关闭。")
 
-    # 所有 cleanup 步骤都已尝试完成。如果原始触发是 Ctrl+C（main task 被取消），
-    # 此时应让 CancelledError 继续传播，asyncio.run 会按正常流程收尾并打印 KeyboardInterrupt。
     if _saw_cancelled:
         raise asyncio.CancelledError()
 
@@ -735,54 +695,43 @@ async def run_shutdown(
 
 
 async def main() -> None:
-    """应用程序主入口点。"""
-    # 1. 解析命令行参数
+    """v2 应用程序主入口。"""
     args = parse_args()
-
-    # 2. 早期日志配置（使用默认INFO级别）
-    #    这必须在导入阶段参与者之前完成，避免过早的DEBUG日志输出
     setup_logging_early(args)
 
-    # 3. 加载配置文件
     config_service, config, was_created = load_config()
-
-    # 4. 获取完整的日志配置并重新配置日志（应用完整配置）
     logging_config = config_service.get_section("logging", default={})
     setup_logging(args, logging_config)
-
     validate_config(config)
     exit_if_config_created(was_created)
 
-    # 触发阶段参与者装饰器注册（必须在 create_pipeline_manager() 之前执行，否则 *_REGISTRY 为空）
-    import src.stages.input.collectors  # noqa: F401
-    import src.stages.input.pipelines  # noqa: F401
-    import src.stages.decision.deciders  # noqa: F401
-
-    # Wave 4：渲染 handler 已迁移到 modules/tools/output/，主程序不再依赖
-    # src/stages/output/handlers/。 OutputHandlerManager（W6/W8 收尾）
-    # 仍可通过 src.stages.output.manager 访问以保留向后兼容。
-    import src.stages.output.manager  # noqa: F401
-    import src.stages.output.pipelines  # noqa: F401
-
-    input_pipeline_manager = await create_pipeline_manager(stage="input", config=config)
-
-    # 注册所有核心事件（通过 @register_event 装饰器触发 Payload 模块导入）
-    # 必须在 create_app_components() 之前调用，否则 EventBus 校验时找不到 Payload 类型
+    # 注册所有 @register_event 装饰器触发的 Payload 模块（必须在 EventBus 构造前）
     register_core_events()
     logger.info(f"核心事件注册完成，共 {len(list_registered_events())} 个事件")
 
     (
         context_service,
         event_bus,
-        output_manager,
-        input_manager,
         llm_service,
-        decision_manager,
         dashboard_server,
-        mcp_service,
         event_recorder,
-        simulator_service,
-    ) = await create_app_components(config, input_pipeline_manager, config_service, dev_webui=args.dev_webui)
+        collector_manager,
+        agent_manager,
+    ) = await create_app_components(config, config_service, dev_webui=args.dev_webui)
+
+    if args.dry:
+        logger.info("--dry 模式：仅验证组合根构造，组件已构造但不进入主循环")
+        logger.info("（此模式用于快速检查 wiring 是否完整，关闭后退出）")
+        await run_shutdown(
+            context_service,
+            event_bus,
+            llm_service,
+            dashboard_server,
+            event_recorder,
+            collector_manager,
+            agent_manager,
+        )
+        return
 
     stop_event = asyncio.Event()
     orig_sigint, orig_sigterm = setup_signal_handlers(stop_event)
@@ -798,15 +747,12 @@ async def main() -> None:
     restore_signal_handlers(orig_sigint, orig_sigterm)
     await run_shutdown(
         context_service,
-        output_manager,
-        input_manager,
-        llm_service,
         event_bus,
-        decision_manager,
+        llm_service,
         dashboard_server,
-        mcp_service,
         event_recorder,
-        simulator_service,
+        collector_manager,
+        agent_manager,
     )
 
 

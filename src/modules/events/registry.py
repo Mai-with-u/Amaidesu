@@ -232,12 +232,10 @@ def register_core_events() -> None:
         agenda as _agenda_payloads,  # noqa: F401
         connection as _connection_payloads,  # noqa: F401
         core as _core_payloads,  # noqa: F401
-        decision as _decision_payloads,  # noqa: F401
         game as _game_payloads,  # noqa: F401
-        input as _input_payloads,  # noqa: F401
         live as _live_payloads,  # noqa: F401
-        output as _output_payloads,  # noqa: F401
         planner as _planner_payloads,  # noqa: F401
         room as _room_payloads,  # noqa: F401
+        sticker as _sticker_payloads,  # noqa: F401
         tool_result as _tool_result_payloads,  # noqa: F401
     )

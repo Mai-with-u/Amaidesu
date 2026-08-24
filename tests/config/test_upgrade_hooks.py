@@ -227,3 +227,73 @@ class TestHookRegistry:
             "background.toml",
         ):
             assert expected in files, f"{expected} 缺少 2.0.0 升级 hook"
+
+
+class TestWave6Hooks2_0_1:
+    """Wave 6 收尾清理钩子（2.0.0 → 2.0.1）。"""
+
+    def test_core_2_0_1_strips_text_adv_game(self):
+        """core.toml 2.0.1：剥离残留的 text_adv_game 字段（Wave 6 删除）。"""
+        from src.modules.config.upgrade_hooks import _migrate_core_2_0_1
+
+        data = {"text_adv_game": {"full_screen": True}, "pipelines": {}}
+        changed = _migrate_core_2_0_1(data)
+        assert "text_adv_game" not in data
+        assert "text_adv_game" in changed
+
+    def test_core_2_0_1_idempotent(self):
+        """idempotent：无 text_adv_game 时不报错。"""
+        from src.modules.config.upgrade_hooks import _migrate_core_2_0_1
+
+        data = {"pipelines": {}}
+        changed = _migrate_core_2_0_1(data)
+        assert changed == []
+
+    def test_agents_2_0_1_strips_reply_probability(self):
+        """agents.toml 2.0.1：剥离残留的 reply_probability 字段（Wave 6 重构后已删除）。"""
+        from src.modules.config.upgrade_hooks import _migrate_agents_2_0_1
+
+        data = {"streamer": {"planner_llm": "llm_fast", "reply_probability": 0.7}}
+        changed = _migrate_agents_2_0_1(data)
+        assert "reply_probability" not in data["streamer"]
+        assert "streamer.reply_probability" in changed
+
+    def test_agents_2_0_1_preserves_other_fields(self):
+        """剥离 reply_probability 时其他字段保留。"""
+        from src.modules.config.upgrade_hooks import _migrate_agents_2_0_1
+
+        data = {"streamer": {"planner_llm": "llm_fast", "bot_name": "麦麦"}}
+        changed = _migrate_agents_2_0_1(data)
+        assert changed == []
+        assert data["streamer"]["planner_llm"] == "llm_fast"
+        assert data["streamer"]["bot_name"] == "麦麦"
+
+    def test_2_0_1_hooks_registered(self):
+        """Wave 6 2.0.1 升级钩子已注册。"""
+        v2_0_1_hooks = [h for h in CONFIG_UPGRADE_HOOKS if h.target_version == "2.0.1"]
+        files = {h.config_file for h in v2_0_1_hooks}
+        assert files == {"core.toml", "agents.toml"}
+
+    def test_core_2_0_2_strips_mcp_section(self):
+        """core.toml 2.0.2：剥离残留的 [mcp] 段（MCP 桥接服务已随 v2 移除）。"""
+        from src.modules.config.upgrade_hooks import _migrate_core_2_0_2
+
+        data = {"mcp": {"enabled": True}, "logging": {"level": "DEBUG"}}
+        changed = _migrate_core_2_0_2(data)
+        assert "mcp" not in data
+        assert "mcp" in changed
+        assert data["logging"] == {"level": "DEBUG"}
+
+    def test_core_2_0_2_idempotent(self):
+        """idempotent：无 [mcp] 段时不报错、无变更。"""
+        from src.modules.config.upgrade_hooks import _migrate_core_2_0_2
+
+        data = {"general": {}, "logging": {}}
+        changed = _migrate_core_2_0_2(data)
+        assert changed == []
+
+    def test_2_0_2_hook_registered(self):
+        """2.0.2 升级钩子已注册且作用于 core.toml。"""
+        v2_0_2_hooks = [h for h in CONFIG_UPGRADE_HOOKS if h.target_version == "2.0.2"]
+        assert len(v2_0_2_hooks) == 1
+        assert v2_0_2_hooks[0].config_file == "core.toml"

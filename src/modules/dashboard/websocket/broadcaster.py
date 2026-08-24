@@ -1,8 +1,15 @@
 """
-EventBus 事件广播器
+EventBus 事件广播器（Wave 6 重写）
 
 订阅 EventBus 事件并广播给 WebSocket 客户端。
-注意：事件记录已由 EventHistoryRecorder 独立处理（system 级，与 Dashboard 解耦）。
+
+Wave 6 变更：
+- INPUT_MESSAGE_RECEIVED → ROOM_MESSAGE_DANMAKU（v2 语义域事件）
+- DECISION_INTENT_GENERATED → 删除（Intent 已被 DISCARD）
+- OUTPUT_INTENT_DISPATCHED → 删除（OutputHandlerManager 已被 DISCARD）
+- INPUT_CONNECTED / INPUT_DISCONNECTED / DECISION_CONNECTED / DECISION_DISCONNECTED →
+  删除（Stage-glue 连接事件已废弃，统一由 ROOM_MESSAGE_* 表达）
+- IntentPayload / MessageReadyPayload → DISCARDED，使用 RoomMessagePayload
 """
 
 import time
@@ -13,20 +20,16 @@ from pydantic import BaseModel
 from src.modules.events.names import CoreEvents
 from src.modules.events.event_type_map import (
     COMPONENT_EVENT_TYPE_MAP,
-    DECISION_INTENT_TYPE,
-    MESSAGE_RECEIVED_TYPE,
-    OUTPUT_RENDER_TYPE,
+    PLANNER_CHECKPOINT_TYPE,
+    ROOM_MESSAGE_TYPE,
     SYSTEM_ERROR_TYPE,
     SYSTEM_STATUS_TYPE,
 )
 from src.modules.events.payloads import (
-    ConnectedPayload,
     CoreErrorPayload,
     CoreShutdownPayload,
     CoreStartupPayload,
-    DisconnectedPayload,
-    IntentPayload,
-    MessageReadyPayload,
+    RoomMessagePayload,
 )
 from src.modules.events.payloads.base import BasePayload
 from src.modules.logging import get_logger
@@ -54,7 +57,7 @@ class EventBroadcaster:
         self.event_bus = event_bus
         self.ws_handler = ws_handler
         self.subscribe_events = subscribe_events or []
-        self.event_history = event_history  # 仅用于 push_history_to_client
+        self.event_history = event_history
         self._subscribed_events: Set[str] = set()
         self._is_running = False
 
@@ -89,9 +92,8 @@ class EventBroadcaster:
 
     def _get_handler_for_event(self, event_name: str) -> Optional[Callable]:
         handler_map = {
-            CoreEvents.INPUT_MESSAGE_RECEIVED: self._on_input_message,
-            CoreEvents.DECISION_INTENT_GENERATED: self._on_decision_intent,
-            CoreEvents.OUTPUT_INTENT_DISPATCHED: self._on_output_intent,
+            CoreEvents.ROOM_MESSAGE_DANMAKU: self._on_room_message,
+            CoreEvents.PLANNER_CHECKPOINT: self._on_planner_checkpoint,
             CoreEvents.CORE_STARTUP: self._on_core_event,
             CoreEvents.CORE_SHUTDOWN: self._on_core_event,
             CoreEvents.CORE_ERROR: self._on_core_error,
@@ -102,10 +104,15 @@ class EventBroadcaster:
 
     def _subscribe_core_events(self) -> None:
         self._subscribe_event(
-            CoreEvents.INPUT_MESSAGE_RECEIVED, self._on_input_message, model_class=MessageReadyPayload
+            CoreEvents.ROOM_MESSAGE_DANMAKU,
+            self._on_room_message,
+            model_class=RoomMessagePayload,
         )
-        self._subscribe_event(CoreEvents.DECISION_INTENT_GENERATED, self._on_decision_intent, model_class=IntentPayload)
-        self._subscribe_event(CoreEvents.OUTPUT_INTENT_DISPATCHED, self._on_output_intent, model_class=IntentPayload)
+        self._subscribe_event(
+            CoreEvents.PLANNER_CHECKPOINT,
+            self._on_planner_checkpoint,
+            model_class=BasePayload,  # CheckpointPayload 兜底
+        )
 
     def _subscribe_system_events(self) -> None:
         for event_name, handler, payload_class in [
@@ -114,15 +121,6 @@ class EventBroadcaster:
             (CoreEvents.CORE_ERROR, self._on_core_error, CoreErrorPayload),
         ]:
             self._subscribe_event(event_name, handler, model_class=payload_class)
-
-        component_map = {
-            CoreEvents.INPUT_CONNECTED: ConnectedPayload,
-            CoreEvents.INPUT_DISCONNECTED: DisconnectedPayload,
-            CoreEvents.DECISION_CONNECTED: ConnectedPayload,
-            CoreEvents.DECISION_DISCONNECTED: DisconnectedPayload,
-        }
-        for event_name, payload_class in component_map.items():
-            self._subscribe_event(event_name, self._create_component_handler(event_name), model_class=payload_class)
 
     def _create_component_handler(self, target_event_name: str) -> Callable:
         async def handler(event_name: str, data: BasePayload, source: str) -> None:
@@ -143,32 +141,27 @@ class EventBroadcaster:
         except Exception as e:
             logger.error(f"订阅事件 {event_name} 失败: {e}")
 
-    async def _on_input_message(self, event_name: str, data: MessageReadyPayload, source: str) -> None:
+    async def _on_room_message(self, event_name: str, data: RoomMessagePayload, source: str) -> None:
         try:
             dict_data = data.model_dump()
-            await self.ws_handler.broadcast(MESSAGE_RECEIVED_TYPE, dict_data, message_id=data.id)
+            await self.ws_handler.broadcast(ROOM_MESSAGE_TYPE, dict_data, message_id=data.id)
         except Exception as e:
-            logger.error(f"广播 input message 失败: {e}")
+            logger.error(f"广播 room message 失败: {e}")
 
-    async def _on_decision_intent(self, event_name: str, data: IntentPayload, source: str) -> None:
+    async def _on_planner_checkpoint(self, event_name: str, data: BasePayload, source: str) -> None:
         try:
-            dict_data = data.model_dump()
-            await self.ws_handler.broadcast(DECISION_INTENT_TYPE, dict_data, message_id=data.id)
+            dict_data = data.model_dump() if isinstance(data, BaseModel) else {}
+            await self.ws_handler.broadcast(PLANNER_CHECKPOINT_TYPE, dict_data, message_id=data.id)
         except Exception as e:
-            logger.error(f"广播 decision intent 失败: {e}")
-
-    async def _on_output_intent(self, event_name: str, data: IntentPayload, source: str) -> None:
-        try:
-            dict_data = data.model_dump()
-            await self.ws_handler.broadcast(OUTPUT_RENDER_TYPE, dict_data, message_id=data.id)
-        except Exception as e:
-            logger.error(f"广播 output intent 失败: {e}")
+            logger.error(f"广播 planner checkpoint 失败: {e}")
 
     async def _on_core_event(self, event_name: str, data: Any, source: str) -> None:
         try:
             dict_data = {"event": event_name, "payload": self._safe_serialize(data)}
             await self.ws_handler.broadcast(
-                SYSTEM_STATUS_TYPE, dict_data, message_id=data.id if isinstance(data, BasePayload) else None
+                SYSTEM_STATUS_TYPE,
+                dict_data,
+                message_id=data.id if isinstance(data, BasePayload) else None,
             )
         except Exception as e:
             logger.error(f"广播 core event 失败: {e}")
@@ -180,7 +173,9 @@ class EventBroadcaster:
                 "message": self._safe_serialize(data) or "Unknown error",
             }
             await self.ws_handler.broadcast(
-                SYSTEM_ERROR_TYPE, dict_data, message_id=data.id if isinstance(data, BasePayload) else None
+                SYSTEM_ERROR_TYPE,
+                dict_data,
+                message_id=data.id if isinstance(data, BasePayload) else None,
             )
         except Exception as e:
             logger.error(f"广播 core error 失败: {e}")

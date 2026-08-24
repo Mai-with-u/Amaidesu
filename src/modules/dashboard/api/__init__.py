@@ -9,8 +9,7 @@ from src.modules.dashboard.api import (
     config,
     debug,
     messages,
-    outline,
     system,
 )
 
-__all__ = ["system", "components", "messages", "config", "debug", "outline"]
+__all__ = ["system", "components", "messages", "config", "debug"]

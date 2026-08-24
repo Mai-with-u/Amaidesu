@@ -20,8 +20,6 @@ from src.modules.dashboard.schemas.config_schema import (
 )
 from src.modules.dashboard.schemas.debug import (
     EventBusStatsResponse,
-    InjectIntentRequest,
-    InjectIntentResponse,
     InjectMessageRequest,
     InjectMessageResponse,
 )
@@ -98,8 +96,6 @@ __all__ = [
     # Debug
     "InjectMessageRequest",
     "InjectMessageResponse",
-    "InjectIntentRequest",
-    "InjectIntentResponse",
     "EventBusStatsResponse",
     # Event
     "WebSocketMessage",

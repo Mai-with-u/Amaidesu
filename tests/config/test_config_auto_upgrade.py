@@ -315,30 +315,33 @@ class TestCrossFileMigrationSafety:
 
 
 class TestMCPConfig:
-    def test_mcp_config_preserved(self, config_dir: Path):
+    """v2.0.2 起 [mcp] 段已删除（MCP 桥接服务随旧决策架构一并移除）。"""
+
+    def test_mcp_section_stripped_on_load(self, config_dir: Path):
         core_path = config_dir / "core.toml"
         content = core_path.read_text(encoding="utf-8-sig")
-        content = re.sub(r"(\[mcp\]\n(?:#[^\n]*\n)*enabled = )false", r"\1true", content)
+        if "[mcp]" not in content:
+            content += "\n[mcp]\nenabled = true\n"
+        else:
+            content = re.sub(r"\[mcp\]", "[mcp]", content)
         core_path.write_text(content, encoding="utf-8-sig")
 
         config, _ = load_config_dir(config_dir)
 
-        assert config["core"]["mcp"]["enabled"] is True
+        assert "mcp" not in config["core"]
+        written = (config_dir / "core.toml").read_text(encoding="utf-8-sig")
+        assert "[mcp]" not in written
 
-    def test_redundant_mcp_fields_cleaned(self, config_dir: Path):
+    def test_legacy_mcp_fields_cleaned(self, config_dir: Path):
         import tomlkit
 
         core_path = config_dir / "core.toml"
         content = core_path.read_text(encoding="utf-8-sig")
-        mcp_idx = content.index("\n[mcp]")
-        next_table_idx = content.find("\n[", mcp_idx + 4)
-        insert_pos = next_table_idx + 1 if next_table_idx != -1 else len(content)
-        content = content[:insert_pos] + 'cors_origins = ["http://x"]\n' + content[insert_pos:]
-        content = re.sub(r"(\[mcp\]\n(?:#[^\n]*\n)*enabled = )false", r"\1true", content)
+        if "[mcp]" not in content:
+            content += "\n[mcp]\nenabled = false\ncors_origins = [\"http://x\"]\n"
         core_path.write_text(content, encoding="utf-8-sig")
 
         load_config_dir(config_dir)
 
         doc = tomlkit.parse((config_dir / "core.toml").read_text(encoding="utf-8-sig")).unwrap()
-        assert "cors_origins" not in doc["mcp"]
-        assert doc["mcp"]["enabled"] is True
+        assert "mcp" not in doc

@@ -1,8 +1,15 @@
 """
-弹幕小部件服务
+弹幕小部件服务（Wave 6 重写）
 
-订阅输入事件，管理消息队列，并通过 WebSocket 广播给前端。
-用于 Warudo 等虚拟形象软件的网页道具场景。
+订阅 ``room.message.danmaku``（v2 语义域）事件并广播给前端；
+字幕订阅 v2 Agent 的 ``reply`` 工具结果事件。
+
+Wave 6 变更：
+- INPUT_MESSAGE_RECEIVED → ROOM_MESSAGE_DANMAKU（语义域事件）
+- DECISION_INTENT_GENERATED → planner.checkpoint / 自定义 reply 结果事件（无 Intent 后）
+- MessageReadyPayload → RoomMessagePayload
+- IntentPayload → 已 DISCARD；字幕源改为 StreamerAgent 调用 reply 工具时
+  通过自定义事件（如 ``tool.result.reply``）广播。
 """
 
 from collections import deque
@@ -17,8 +24,8 @@ from src.modules.dashboard.widget.models import (
     SubtitleWidgetMessage,
 )
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.decision import IntentPayload
-from src.modules.events.payloads.input import MessageReadyPayload
+from src.modules.events.payloads import RoomMessagePayload
+from src.modules.events.payloads.planner import CheckpointPayload
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
@@ -72,15 +79,16 @@ class DanmakuWidgetService:
             return
 
         self.event_bus.on(
-            CoreEvents.INPUT_MESSAGE_RECEIVED,
+            CoreEvents.ROOM_MESSAGE_DANMAKU,
             self._on_input_message,
-            model_class=MessageReadyPayload,
+            model_class=RoomMessagePayload,
         )
 
+        # 字幕订阅 v2 planner.checkpoint 事件（Agent emit 的空转检查点携带最近回复）
         self.event_bus.on(
-            CoreEvents.DECISION_INTENT_GENERATED,
-            self._on_decision_intent,
-            model_class=IntentPayload,
+            CoreEvents.PLANNER_CHECKPOINT,
+            self._on_planner_checkpoint,
+            model_class=CheckpointPayload,
         )
 
         self._is_running = True
@@ -90,8 +98,8 @@ class DanmakuWidgetService:
         if not self._is_running:
             return
 
-        self.event_bus.off(CoreEvents.INPUT_MESSAGE_RECEIVED, self._on_input_message)
-        self.event_bus.off(CoreEvents.DECISION_INTENT_GENERATED, self._on_decision_intent)
+        self.event_bus.off(CoreEvents.ROOM_MESSAGE_DANMAKU, self._on_input_message)
+        self.event_bus.off(CoreEvents.PLANNER_CHECKPOINT, self._on_planner_checkpoint)
 
         self._is_running = False
         self.logger.info("DanmakuWidgetService 已停止")
@@ -99,15 +107,17 @@ class DanmakuWidgetService:
     async def _on_input_message(
         self,
         event_name: str,
-        payload: MessageReadyPayload,
+        payload: RoomMessagePayload,
         source: str,
     ) -> None:
         try:
-            msg_dict = payload.message
-            self.logger.debug(
-                f"收到消息: {msg_dict.get('text', '')[:50]}, user_nickname={msg_dict.get('user_nickname')}, username={msg_dict.get('metadata', {}).get('username')}"
-            )
-            widget_msg = self._convert_dict_to_widget(msg_dict)
+            text = payload.content
+            self.logger.debug(f"收到弹幕: {text[:50]}, user={payload.user.name if payload.user else ''}")
+            widget_msg = self._convert_payload_to_widget(payload)
+            if widget_msg is None:
+                # 退化：尝试从 payload.model_dump() 取字段
+                dump = payload.model_dump() if hasattr(payload, "model_dump") else {}
+                widget_msg = self._convert_dict_to_widget(dump)
             if widget_msg is None:
                 return
 
@@ -121,26 +131,32 @@ class DanmakuWidgetService:
         except Exception as e:
             self.logger.error(f"处理输入消息失败: {e}", exc_info=True)
 
-    async def _on_decision_intent(
+    async def _on_planner_checkpoint(
         self,
         event_name: str,
-        payload: IntentPayload,
+        payload,
         source: str,
     ) -> None:
+        """订阅 planner.checkpoint 事件携带最近回复（字幕源）。
+
+        v2 架构无 IntentPayload 与 DECISION_INTENT_GENERATED；
+        Agent 通过 planner.checkpoint（§1.7 空转探测器）事件对外暴露最近一次
+        决策结果（含 speech），小部件订阅此事件做字幕广播。
+        """
         try:
-            intent_data = payload.intent_data
-            speech = intent_data.get("speech", "")
+            agenda_item = getattr(payload, "agenda_item", None) or {}
+            speech = agenda_item.get("speech", "") if isinstance(agenda_item, dict) else ""
+            if not speech:
+                # 退化：直接从 payload 取
+                speech = getattr(payload, "speech", "") or ""
             if not speech:
                 return
-
             if not self.config.show_subtitle:
                 return
-
             await self._broadcast_subtitle(speech)
             self.logger.debug(f"广播字幕: {speech[:30]}...")
-
         except Exception as e:
-            self.logger.error(f"处理决策意图失败: {e}", exc_info=True)
+            self.logger.error(f"处理 planner checkpoint 失败: {e}", exc_info=True)
 
     async def _broadcast_subtitle(self, text: str) -> None:
         if not self.subtitle_config.enabled:

@@ -1,67 +1,30 @@
 """
-事件名称常量定义（3阶段架构）
+事件名称常量定义（Wave 6 / §1.46 语义域事件）
 
 使用常量替代魔法字符串，提供 IDE 自动补全和重构支持。
 
-命名规范:
-- 格式: {phase}.{entity}.{verb}
-- 分隔符: 统一使用点号 (.)
-- 常量命名: 全大写 + 下划线
-- 动词链（按阶段流转）: received → generated → dispatched
-  - Input 阶段:   ...received  （Collector 接收外部数据）
-  - Decision 阶段: ...generated （Decider 生成意图）
-  - Output 阶段:  ...dispatched（OutputHandler 派发渲染）
-- 前缀去重: 阶段名已隐含组件类型，无需重复
-  - ✗ decision.decider.connected → ✓ decision.connected
-  - ✗ input.collector.connected  → ✓ input.connected
+命名规范（§1.46）：
+- 格式: 域.主体.动作（点分隔）
+- 域为语义域（live / room / game / agenda / planner / tool），不是阶段（input / decision / output）
+- 通配订阅：``*``=单层 ``#``=多层（MQTT 风格）
+
+Wave 6 删除（Stage-glue 胶水事件）：
+- ~~decision.intent.generated~~（无 Intent；决策出口=工具调用，无事件）
+- ~~output.intent.dispatched~~ / ~~output.intent.finished~~ / ~~output.handler.completed~~
+  （无 OutputHandlerManager；统一为 ToolRegistry.invoke）
+- ~~output.obs.command~~ / ~~output.sticker.command~~（→ 工具直接调用）
 
 详细规范请参考: docs/architecture/event-naming-convention.md
 """
 
 
 class CoreEvents:
-    """核心事件名称常量（3阶段架构）"""
+    """核心事件名称常量（Wave 6 语义域事件 + 核心系统事件）"""
 
     # ========== Core: 核心系统事件 ==========
-    # 核心启动/关闭事件
     CORE_STARTUP = "core.startup"
     CORE_SHUTDOWN = "core.shutdown"
     CORE_ERROR = "core.error"
-
-    # ========== Input 阶段: 输入阶段 ==========
-    # 标准化消息接收事件（由 Input 阶段发布，Decision 阶段订阅）
-    INPUT_MESSAGE_RECEIVED = "input.message.received"
-
-    # 组件 连接状态事件（去 collector 前缀：阶段名已隐含组件类型）
-    INPUT_CONNECTED = "input.connected"
-    INPUT_DISCONNECTED = "input.disconnected"
-
-    # ========== Decision 阶段: 决策阶段 ==========
-    # 意图生成完成事件（由 Decision 阶段发布，Output 阶段订阅）
-    DECISION_INTENT_GENERATED = "decision.intent.generated"
-
-    # 组件 连接状态事件（去 decider 前缀：阶段名已隐含组件类型）
-    DECISION_CONNECTED = "decision.connected"
-    DECISION_DISCONNECTED = "decision.disconnected"
-
-    # ========== Output 阶段: 输出阶段 ==========
-    # 过滤后意图派发事件（由 OutputHandlerManager 发布，OutputHandlers 订阅）
-    OUTPUT_INTENT_DISPATCHED = "output.intent.dispatched"
-
-    # 组件 连接状态事件（DEPRECATED 兼容垫片：实际未发射，保留以兼容外部代码如 broadcaster.py）
-    OUTPUT_HANDLER_CONNECTED = "output.handler.connected"  # DEPRECATED: not emitted, retained for backward compat
-    OUTPUT_HANDLER_DISCONNECTED = "output.handler.disconnected"  # DEPRECATED: not emitted, retained for backward compat
-
-    #     # 意图输出完成事件（OutputHandlerManager 分发完成后发出，供外部组件感知输出状态）
-    OUTPUT_INTENT_FINISHED = "output.intent.finished"
-
-    # 单个 Handler 完成事件（per-handler 完成通知，由 OutputHandler 作为协调者聚合后再发 FINISHED）
-    OUTPUT_HANDLER_COMPLETED = "output.handler.completed"
-
-    # OBS 控制事件（统一入口，所有 OBS 操作通过 payload.command 区分）
-    OUTPUT_OBS_COMMAND = "output.obs.command"
-
-    OUTPUT_STICKER_COMMAND = "output.sticker.command"
 
     # ========== v2 语义域事件（live 场次生命周期） ==========
     # 详见 .omo/drafts/amaidesu-v2-event-contract.md "live.*" 节
@@ -86,6 +49,10 @@ class CoreEvents:
     # ========== v2 语义域事件（agenda/planner） ==========
     AGENDA_UPDATE = "agenda.update"
     PLANNER_CHECKPOINT = "planner.checkpoint"
+
+    # ========== v2 保留：Sticker→VTS 单向信号（§1.46.1 定案） ==========
+    # Agent 在需要展示贴纸时直接 emit OUTPUT_STICKER_COMMAND；VTSProvider 订阅
+    OUTPUT_STICKER_COMMAND = "output.sticker.command"
 
     # ========== v2 语义域事件（tool 异步工具结果通配订阅模式） ==========
     # **这是通配订阅模式专用**，不是被 emit 的具体事件名。emit 时使用具体名
@@ -114,7 +81,7 @@ class CoreEvents:
 
     # 所有事件名集合（用于事件验证等）
     # 模块加载时自动更新
-    ALL_EVENTS = ()  # 占位符，模块末尾会被更新
+    ALL_EVENTS: tuple[str, ...] = ()  # 占位符，模块末尾会被更新
 
 
 # 在类定义后，模块级别自动更新 ALL_EVENTS

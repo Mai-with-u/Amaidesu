@@ -62,18 +62,6 @@ from .input_schemas import (  # noqa: E402
     get_input_collector_config,
 )
 
-# Decision stage schemas (Task 10)
-from .decision_schemas import (  # noqa: E402
-    AmaidesuDeciderConfigSchema,
-    CommandDeciderConfigSchema,
-    DecisionConfig,
-    DecisionDecidersConfig,
-    DecisionPipelinesConfig,
-    LLMDeciderConfigSchema,
-    MaiBotDeciderConfigSchema,
-    ReplayDeciderConfigSchema,
-)
-
 
 def get_config_schema(type: str, phase: Optional[str] = None) -> Type[BaseModel]:
     """
@@ -183,15 +171,6 @@ __all__ = [
     "InputCollectorsConfig",
     "InputPipelinesConfig",
     "get_input_collector_config",
-    # Decision decider schemas
-    "LLMDeciderConfigSchema",
-    "MaiBotDeciderConfigSchema",
-    "AmaidesuDeciderConfigSchema",
-    "CommandDeciderConfigSchema",
-    "ReplayDeciderConfigSchema",
-    "DecisionDecidersConfig",
-    "DecisionPipelinesConfig",
-    "DecisionConfig",
     # Non-component schemas
     "LoggingConfig",
     # Registry

@@ -14,18 +14,15 @@ from src.modules.dashboard.api import (
     debug,
     events,
     llm,
-    maibot,
     messages,
-    outline,
-    proactive,
-    simulator,
     system,
     traces,
 )
 
 
 def create_app() -> FastAPI:
-    """创建 FastAPI 应用"""
+    """创建 FastAPI 应用（v2 路由列表：已删除 maibot / outline / proactive / simulator 子路由，
+    模拟直播能力由 modules/collectors/mock 承载，WebUI 管理页后续波次重建）。"""
     app = FastAPI(
         title="Amaidesu Dashboard API",
         description="WebUI Dashboard REST API",
@@ -39,13 +36,9 @@ def create_app() -> FastAPI:
     app.include_router(config.router, prefix="/api/v1/config", tags=["Config"])
     app.include_router(debug.router, prefix="/api/v1/debug", tags=["Debug"])
     app.include_router(llm.router, prefix="/api/v1/llm", tags=["LLM"])
-    app.include_router(maibot.router, prefix="/api/v1/maibot", tags=["MaiBot"])
     app.include_router(capabilities.router, prefix="/api/v1", tags=["Capabilities"])
     app.include_router(events.router, prefix="/api/v1", tags=["Events"])
     app.include_router(traces.router, prefix="/api/v1", tags=["Traces"])
-    app.include_router(simulator.router, prefix="/api/v1", tags=["Simulator"])
-    app.include_router(proactive.router, prefix="/api/v1", tags=["Proactive"])
-    app.include_router(outline.router, prefix="/api/v1", tags=["Outline"])
 
     return app
 

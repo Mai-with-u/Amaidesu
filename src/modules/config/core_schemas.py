@@ -18,7 +18,6 @@ from pydantic import Field
 
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.config.schemas.logging import LoggingConfig
-from src.modules.mcp.config import MCPServerConfig
 from src.modules.simulator.config_schema import SimulatorConfigSchema
 
 
@@ -26,7 +25,7 @@ class MetaConfig(BaseConfig):
     """配置元数据"""
 
     version: str = Field(
-        default="2.0.0",
+        default="2.0.2",
         description="配置版本号（用于自动迁移检测，权威定义于 multi_file_loader.py）",
     )
 
@@ -193,7 +192,6 @@ class CoreConfig(BaseConfig):
     - ``[context]``     — ContextAssembler 配置（替代旧会话存储）
     - ``[events]``      — EventBus 事件历史
     - ``[dashboard]``   — Web Dashboard
-    - ``[mcp]``         — MCP Provider
     - ``[simulator]``   — 模拟直播间
     - ``[logging]``     — 日志
     - ``[pipelines]``   — 管道配置（动态键）
@@ -211,7 +209,6 @@ class CoreConfig(BaseConfig):
     )
     events: EventHistoryConfig = Field(default_factory=EventHistoryConfig, description="事件历史记录配置")
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig, description="Dashboard 配置")
-    mcp: MCPServerConfig = Field(default_factory=MCPServerConfig, description="MCP 服务配置")
     simulator: SimulatorConfigSchema = Field(
         default_factory=SimulatorConfigSchema, description="模拟直播间配置（数据文件位于 data/simulator/）"
     )

@@ -80,6 +80,60 @@ def _migrate_mainosaba_to_text_adv_game(data: dict[str, Any]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# 2.0.1 增量修复 hooks（Wave 6 收尾）
+# ---------------------------------------------------------------------------
+
+
+def _migrate_core_2_0_1(data: dict[str, Any]) -> list[str]:
+    """core.toml 2.0.1：清理 Wave 6 删除的 text_adv_game 段。
+
+    Wave 6 删除了 src/stages/input/collectors/text_adv_game/，但旧用户
+    config.toml 可能仍有 [input.text_adv_game] / [input.collectors.text_adv_game]
+    残留字段。此 hook 主动剥离这些残留（避免 schema 校验失败）。
+
+    原地修改、幂等，返回变更路径列表。
+    """
+    changed: list[str] = []
+    for key in ("text_adv_game",):
+        if key in data:
+            data.pop(key)
+            changed.append(key)
+    return changed
+
+
+def _migrate_agents_2_0_1(data: dict[str, Any]) -> list[str]:
+    """agents.toml 2.0.1：移除旧 reply_probability 字段（Wave 6 重构后已不再使用）。
+
+    原 StreamerAgentConfig 早期有 reply_probability 字段（被 Planner 决策代替），
+    v6 重新设计后该字段已删除。旧配置文件若残留 reply_probability 字段，
+    主动剥离（保留其他字段）。
+
+    原地修改、幂等，返回变更路径列表。
+    """
+    changed: list[str] = []
+    streamer = data.get("streamer")
+    if isinstance(streamer, dict) and "reply_probability" in streamer:
+        streamer.pop("reply_probability")
+        changed.append("streamer.reply_probability")
+    return changed
+
+
+def _migrate_core_2_0_2(data: dict[str, Any]) -> list[str]:
+    """core.toml 2.0.2：移除 ``[mcp]`` 段（MCP 桥接服务已随 v2 决策架构移除）。
+
+    MCP 服务依赖的 /api/v1/maibot/action 端点与 MaiBot 桥接一并删除，
+    配置段失去消费方，主动剥离避免死配置漂移告警。
+
+    原地修改、幂等，返回变更路径列表。
+    """
+    changed: list[str] = []
+    if "mcp" in data:
+        data.pop("mcp")
+        changed.append("mcp")
+    return changed
+
+
+# ---------------------------------------------------------------------------
 # 2.0.0 跨域迁移 hooks（核心改造）
 # ---------------------------------------------------------------------------
 
@@ -298,6 +352,22 @@ CONFIG_UPGRADE_HOOKS: tuple[ConfigUpgradeHook, ...] = (
         target_version="0.5.4",
         config_file="input.toml",
         migrate=_migrate_mainosaba_to_text_adv_game,
+    ),
+    # 2.0.1 Wave 6 收尾清理（清理 text_adv_game 残留字段 + 移除 reply_probability）
+    ConfigUpgradeHook(
+        target_version="2.0.1",
+        config_file="core.toml",
+        migrate=_migrate_core_2_0_1,
+    ),
+    ConfigUpgradeHook(
+        target_version="2.0.1",
+        config_file="agents.toml",
+        migrate=_migrate_agents_2_0_1,
+    ),
+    ConfigUpgradeHook(
+        target_version="2.0.2",
+        config_file="core.toml",
+        migrate=_migrate_core_2_0_2,
     ),
     # 2.0.0 七文件全量改造
     ConfigUpgradeHook(

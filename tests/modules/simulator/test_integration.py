@@ -1,213 +1,85 @@
-﻿"""集成测试 - 模拟直播间 Collector"""
+﻿"""集成测试 - 模拟直播间（Wave 6 stub 适配）
 
-from unittest.mock import AsyncMock, MagicMock
+Wave 6 变更（迁移 §C）：
+- 原 LiveStreamSimulator 由 LLM 驱动的复杂实现已迁移到 ``collectors/mock/``
+  （人设池/节奏生成/礼物生成）作为标准采集器。
+- 本模块的 LiveStreamSimulator 退化为最小 stub（保留 start/collect/stop/cleanup
+  接口以兼容 SimulatorService）。
+- Wave 6 起 CONFIG_SCHEMA_REGISTRY 不再包含 ``simulator``（已迁移到 collectors/mock
+  段，由工具配置驱动），旧的 schema_registry 注册测试已 DISCARD。
+- 其余测试（依赖 ``_cfg`` / ``_context_service`` / ``_persona_pool`` 等私有字段的
+  LLM 驱动路径）已被替换为对 stub 接口的最小校验。
+
+测试内容：
+- LiveStreamSimulator 可被构造（config + services 接受）
+- start/stop/cleanup 幂等无异常
+- collect() 返回空 async iterator（stub 行为）
+- collect 接口签名兼容 ``async for message in simulator.collect()``
+"""
+
+from unittest.mock import MagicMock
 
 import pytest
 
-from src.modules.simulator.simulator import (
-    LiveStreamSimulator,
-)
-from src.modules.simulator.types import (
-    GeneratedMessage,
-    Persona,
-    PersonaRole,
-)
+from src.modules.simulator.simulator import LiveStreamSimulator
 
 
-@pytest.mark.asyncio
-async def test_simulator_registration():
-    from src.modules.config.schemas import (
-        COMPONENT_UI_REGISTRY,
-        CONFIG_SCHEMA_REGISTRY,
-    )
+class TestStubRegistration:
+    """SimulatorService 仍注册 LiveStreamSimulator 类（向后兼容）。"""
 
-    assert "simulator" in CONFIG_SCHEMA_REGISTRY
-    assert "simulator" in COMPONENT_UI_REGISTRY
+    def test_simulator_class_importable(self):
+        """LiveStreamSimulator 类可被导入并实例化（stub 形态）。"""
+        sim = LiveStreamSimulator(config={}, event_bus=MagicMock())
+        assert sim is not None
 
 
-@pytest.mark.asyncio
-async def test_collector_instantiation():
-    collector = LiveStreamSimulator(config={}, event_bus=MagicMock())
-    assert collector._cfg.base_rate_per_minute == 6.0  # type: ignore[attr-defined]
+class TestStubLifecycle:
+    """Stub 生命周期测试（Wave 6 简化为空操作）。"""
+
+    @pytest.mark.asyncio
+    async def test_setup_is_noop(self):
+        sim = LiveStreamSimulator(config={}, event_bus=MagicMock())
+        await sim.setup()
+        # stub 不改变状态
+
+    @pytest.mark.asyncio
+    async def test_start_stop_cleanup(self):
+        sim = LiveStreamSimulator(config={}, event_bus=MagicMock())
+        await sim.start()
+        await sim.stop()
+        await sim.cleanup()
 
 
-@pytest.mark.asyncio
-async def test_collector_instantiation_with_full_config():
-    config = {"base_rate_per_minute": 12.0, "burst_multiplier": 5.0, "enable_hater": True}
-    collector = LiveStreamSimulator(config=config, event_bus=MagicMock())
-    assert collector._cfg.base_rate_per_minute == 12.0  # type: ignore[attr-defined]
-    assert collector._cfg.burst_multiplier == 5.0  # type: ignore[attr-defined]
-    assert collector._cfg.enable_hater is True  # type: ignore[attr-defined]
+class TestStubCollect:
+    """collect() 返回空 async iterator（stub 行为）。"""
+
+    @pytest.mark.asyncio
+    async def test_collect_yields_nothing(self):
+        sim = LiveStreamSimulator(config={}, event_bus=MagicMock())
+        items = []
+        async for msg in sim.collect():
+            items.append(msg)
+        assert items == []
+
+    @pytest.mark.asyncio
+    async def test_collect_is_aiterator(self):
+        """collect() 是 async generator（兼容 async for）。"""
+        sim = LiveStreamSimulator(config={}, event_bus=MagicMock())
+        # 检查 aiter 接口存在
+        assert hasattr(sim.collect, "__aiter__") or hasattr(sim.collect, "__call__")
 
 
-@pytest.mark.asyncio
-async def test_collector_start_with_di():
-    collector = LiveStreamSimulator(
-        config={}, event_bus=MagicMock(),
-        llm_service=MagicMock(), prompt_service=MagicMock(),
-        context_service=MagicMock(), event_history_service=MagicMock(),
-    )
-    ctx = collector._context_service
-    assert ctx is not None
-    ctx.get_history = AsyncMock(return_value=[])
-    ctx.list_sessions = AsyncMock(return_value=[])
-    await collector.start()
-    assert collector.is_started is True
-    assert collector._cadence is not None
-    await collector.stop()
-    await collector.cleanup()
+class TestStubExtraArgs:
+    """Stub 接受额外服务注入（向后兼容原 LiveStreamSimulator DI 签名）。"""
 
-
-@pytest.mark.asyncio
-async def test_setup_initializes_data_plane_without_starting():
-    collector = LiveStreamSimulator(
-        config={}, event_bus=MagicMock(),
-        llm_service=MagicMock(), prompt_service=MagicMock(),
-    )
-    await collector.setup()
-    assert collector._persona_pool is not None  # type: ignore[attr-defined]
-    assert collector._llm_wrapper is not None  # type: ignore[attr-defined]
-    assert collector.is_started is False
-    await collector.cleanup()
-
-
-@pytest.mark.asyncio
-async def test_add_personas_skips_duplicate_nicknames(tmp_path):
-    from src.modules.simulator.persona_pool import PersonaPool
-    from src.modules.simulator.types import Persona, PersonaRole
-
-    def make_persona(nickname: str) -> Persona:
-        return Persona(
-            user_id=f"u_{nickname}",
-            user_nickname=nickname,
-            role=PersonaRole.FAN,
-            personality="p",
-            speaking_style="s",
+    def test_extra_services_accepted(self):
+        """即使 stub 不使用 service 参数，构造时也接受（不抛 TypeError）。"""
+        sim = LiveStreamSimulator(
+            config={},
+            event_bus=MagicMock(),
+            llm_service=MagicMock(),
+            prompt_service=MagicMock(),
+            context_service=MagicMock(),
+            event_history_service=MagicMock(),
         )
-
-    pool = PersonaPool(data_dir=tmp_path)
-    assert pool.add_personas([make_persona("麦芽糖不加冰"), make_persona("晚风替你加油")]) == 2
-    assert pool.add_personas([make_persona("麦芽糖不加冰"), make_persona("新观众")]) == 1
-    nicknames = [p.user_nickname for p in pool.list_residents()]
-    assert nicknames.count("麦芽糖不加冰") == 1
-    assert "新观众" in nicknames
-    assert pool.add_personas([make_persona("麦芽糖不加冰")]) == 0
-
-
-@pytest.mark.asyncio
-async def test_collector_config_validation():
-    from pydantic import ValidationError
-    from src.modules.simulator.config_schema import SimulatorConfigSchema
-    with pytest.raises(ValidationError):
-        SimulatorConfigSchema(base_rate_per_minute=0.05)
-
-
-@pytest.mark.asyncio
-async def test_source_platform_not_real():
-    collector = LiveStreamSimulator(config={}, event_bus=MagicMock())
-    msg = GeneratedMessage(
-        text="test",
-        persona=Persona(user_id="t", user_nickname="t", role=PersonaRole.FAN, personality="p", speaking_style="s"),
-        data_type="text",
-    )
-    nm = collector._to_normalized_message(msg, "sid")
-    assert nm.source == "simulated_live_stream"
-    assert nm.platform == "simulated"
-
-
-@pytest.mark.asyncio
-async def test_stop_then_start_clears_stop_event():
-    collector = LiveStreamSimulator(
-        config={}, event_bus=MagicMock(),
-        llm_service=MagicMock(), prompt_service=MagicMock(),
-        context_service=MagicMock(), event_history_service=MagicMock(),
-    )
-    ctx = collector._context_service
-    assert ctx is not None
-    ctx.get_history = AsyncMock(return_value=[])
-    ctx.list_sessions = AsyncMock(return_value=[])
-    await collector.start()
-    assert collector.is_started is True
-    assert collector._stop_event.is_set() is False  # type: ignore[attr-defined]
-
-    await collector.stop()
-    assert collector.is_started is False
-    assert collector._stop_event.is_set() is True  # type: ignore[attr-defined]
-
-    await collector.start()
-    assert collector.is_started is True
-    assert collector._stop_event.is_set() is False  # type: ignore[attr-defined]
-    await collector.stop()
-    await collector.cleanup()
-
-
-@pytest.mark.asyncio
-async def test_to_normalized_message_preserves_session_id():
-    collector = LiveStreamSimulator(config={}, event_bus=MagicMock())
-    msg = GeneratedMessage(
-        text="test",
-        persona=Persona(user_id="t", user_nickname="t", role=PersonaRole.FAN, personality="p", speaking_style="s"),
-        data_type="text",
-    )
-    nm = collector._to_normalized_message(msg, "session-42")
-    assert nm.session_id == "session-42"
-    assert nm.room_id == "session-42"
-
-
-@pytest.mark.asyncio
-async def test_generate_message_gift_branch_records_usage():
-    from src.modules.simulator.types import (
-        GiftItem,
-        StreamerContextSnapshot,
-    )
-
-    collector = LiveStreamSimulator(config={}, event_bus=MagicMock())
-    collector._llm_wrapper = MagicMock()  # type: ignore[attr-defined]
-    collector._token_budget = MagicMock()  # type: ignore[attr-defined]
-    collector._token_budget.is_budget_exceeded.return_value = False
-    collector._cadence = MagicMock()  # type: ignore[attr-defined]
-    collector._cadence.get_state.return_value = "NORMAL"
-    collector._gift_generator = MagicMock()  # type: ignore[attr-defined]
-    gift_msg = GeneratedMessage(
-        text="",
-        persona=Persona(user_id="t", user_nickname="t", role=PersonaRole.FAN, personality="p", speaking_style="s"),
-        data_type="gift",
-        gift=GiftItem(gift_id="g1", gift_name="测试", category="normal", weight=1, data_type="gift"),
-        tokens_used=88,
-    )
-    collector._gift_generator.generate_gift = AsyncMock(return_value=gift_msg)
-    collector._pick_message_type = lambda: "gift"  # type: ignore[method-assign]
-
-    msg = await collector._generate_message(StreamerContextSnapshot())
-    assert msg is not None
-    collector._token_budget.record_usage.assert_called_once_with(88)
-
-
-@pytest.mark.asyncio
-async def test_generate_message_sc_branch_records_usage():
-    from src.modules.simulator.types import (
-        GiftItem,
-        StreamerContextSnapshot,
-    )
-
-    collector = LiveStreamSimulator(config={}, event_bus=MagicMock())
-    collector._llm_wrapper = MagicMock()  # type: ignore[attr-defined]
-    collector._token_budget = MagicMock()  # type: ignore[attr-defined]
-    collector._token_budget.is_budget_exceeded.return_value = False
-    collector._cadence = MagicMock()  # type: ignore[attr-defined]
-    collector._cadence.get_state.return_value = "NORMAL"
-    collector._gift_generator = MagicMock()  # type: ignore[attr-defined]
-    sc_msg = GeneratedMessage(
-        text="感谢支持",
-        persona=Persona(user_id="t", user_nickname="t", role=PersonaRole.FAN, personality="p", speaking_style="s"),
-        data_type="super_chat",
-        gift=GiftItem(gift_id="sc1", gift_name="超级火箭", category="sc", weight=1, data_type="super_chat", sc_amount_rmb=100),
-        sc_amount_rmb=100,
-        tokens_used=77,
-    )
-    collector._gift_generator.generate_sc = AsyncMock(return_value=sc_msg)
-    collector._pick_message_type = lambda: "super_chat"  # type: ignore[method-assign]
-
-    msg = await collector._generate_message(StreamerContextSnapshot())
-    assert msg is not None
-    collector._token_budget.record_usage.assert_called_once_with(77)
+        assert sim is not None

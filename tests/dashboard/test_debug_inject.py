@@ -1,7 +1,13 @@
-﻿"""debug 娉ㄥ叆鎺ュ彛娑堟伅绫诲瀷鐧藉悕鍗曟祴璇曘€?
-瑕嗙洊 ``POST /api/debug/inject-message``锛?1. 鏈櫥璁?data_type 鈫?400锛圝SON 閿欒浣撳惈绫诲瀷鍚嶏級
-2. 宸茬櫥璁?data_type 鈫?鎴愬姛娉ㄥ叆锛堜簨浠跺彂甯冿級
-3. event_bus 缂哄け鏃朵紭闆呴檷绾э紙success=False锛屼笉鎶?500锛?"""
+"""debug 注入接口消息类型白名单测试。
+
+覆盖 ``POST /api/v1/debug/inject-message``：
+1. 未登记 data_type → 400（JSON 错误体含类型名）
+2. 已登记 data_type → 成功注入（事件发布）
+3. event_bus 缺失时优雅降级（success=False，不抛 500）
+
+v2 适配说明：端点内部已改发 RoomMessagePayload（语义域事件），
+本测试只验证 HTTP 契约，与 payload 类型解耦。
+"""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,9 +22,6 @@ from src.modules.events.event_bus import EventBus
 def _make_server(event_bus) -> DashboardServer:
     return DashboardServer(
         event_bus=event_bus,
-        input_manager=None,
-        decision_manager=None,
-        output_manager=None,
         context_service=None,  # type: ignore[arg-type]
         config_service=None,  # type: ignore[arg-type]
         dashboard_config=DashboardConfig(host="127.0.0.1", port=60214),
@@ -37,7 +40,7 @@ def client():
 
 
 def _inject_payload(data_type: str) -> dict:
-    return {"text": "娴嬭瘯寮瑰箷", "data_type": data_type, "source": "test_debug"}
+    return {"text": "测试弹幕", "data_type": data_type, "source": "test_debug"}
 
 
 def test_unregistered_data_type_returns_400(client):

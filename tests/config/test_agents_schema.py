@@ -65,11 +65,6 @@ class TestAgentsConfigSubConfigs:
         assert cfg.streamer.planner_llm == "llm"
         assert cfg.streamer.replyer_llm == "llm_fast"
 
-    def test_streamer_budget_dict(self):
-        cfg = AgentsConfig(streamer={"budget": {"max_rounds": 5, "timeout_ms": 3000}})
-        assert cfg.streamer.budget["max_rounds"] == 5
-        assert cfg.streamer.budget["timeout_ms"] == 3000
-
     def test_game_subconfig(self):
         cfg = AgentsConfig(game={"enabled": True, "engine": "minecraft", "command_llm": "llm"})
         assert cfg.game.enabled is True
@@ -82,14 +77,17 @@ class TestStreamerAgentConfig:
         cfg = StreamerAgentConfig()
         assert cfg.planner_llm == "llm_fast"
         assert cfg.replyer_llm == "llm"
-        assert cfg.reply_probability == 0.7
         assert cfg.room_state_enabled is True
+        assert cfg.batch_window_ms == 3000
+        assert cfg.batch_max_size == 20
 
-    def test_reply_probability_range(self):
-        with pytest.raises(ValidationError):
-            StreamerAgentConfig(reply_probability=1.5)
-        with pytest.raises(ValidationError):
-            StreamerAgentConfig(reply_probability=-0.1)
+    def test_planner_replier_llm_overrides(self):
+        cfg = StreamerAgentConfig(
+            planner_llm="llm",
+            replyer_llm="llm_fast",
+        )
+        assert cfg.planner_llm == "llm"
+        assert cfg.replyer_llm == "llm_fast"
 
     def test_room_state_cold_timeout_must_be_non_negative(self):
         with pytest.raises(ValidationError):

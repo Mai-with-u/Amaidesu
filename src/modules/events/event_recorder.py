@@ -1,39 +1,33 @@
 """
-事件历史记录器
+事件历史记录器（Wave 6 / §1.46 语义域事件）
 
 独立的 EventBus 订阅者，将系统事件记录到 EventHistoryService。
 与 Dashboard / EventBroadcaster 解耦 —— 即使 WebUI 未启用也始终运行。
 
-记录的事件类型：
-- input → message.received
-- decision → decision.intent
-- output → output.render
-- 系统事件 → system.status / system.error
-- 组件连接/断开 → collector.connected / collector.disconnected / decider.*
+Wave 6 变更：
+- 移除 decision.intent.* / output.intent.* 订阅（已删除的事件，Stage-glue 胶水）
+- 移除 INPUT_MESSAGE_RECEIVED 订阅（Wave 6 输入事件名 → room.message.*）
+- 新增 room.message.* 订阅（核心行为流）
 """
 
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from pydantic import BaseModel
 
-from src.modules.events.event_history import EventRecord, EventHistoryService, infer_event_level
+from src.modules.events.event_history import EventRecord, EventHistoryService
 from src.modules.events.event_type_map import (
     COMPONENT_EVENT_TYPE_MAP,
-    DECISION_INTENT_TYPE,
-    MESSAGE_RECEIVED_TYPE,
-    OUTPUT_RENDER_TYPE,
+    ROOM_MESSAGE_TYPE,
     SYSTEM_ERROR_TYPE,
     SYSTEM_STATUS_TYPE,
 )
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import (
-    ConnectedPayload,
+    ConnectionEventPayload,
     CoreErrorPayload,
     CoreShutdownPayload,
     CoreStartupPayload,
-    DisconnectedPayload,
-    IntentPayload,
-    MessageReadyPayload,
+    RoomMessagePayload,
 )
 from src.modules.events.payloads.base import BasePayload
 from src.modules.logging import get_logger
@@ -59,18 +53,24 @@ class EventHistoryRecorder:
     async def start(self) -> None:
         """订阅所有需要记录的事件。"""
 
-        self._subscribe(CoreEvents.INPUT_MESSAGE_RECEIVED, self._on_input_message, model_class=MessageReadyPayload)
-        self._subscribe(CoreEvents.DECISION_INTENT_GENERATED, self._on_decision_intent, model_class=IntentPayload)
-        self._subscribe(CoreEvents.OUTPUT_INTENT_DISPATCHED, self._on_output_intent, model_class=IntentPayload)
+        self._subscribe(CoreEvents.ROOM_MESSAGE_DANMAKU, self._on_room_message, model_class=RoomMessagePayload)
+        self._subscribe(CoreEvents.ROOM_MESSAGE_GIFT, self._on_room_message, model_class=RoomMessagePayload)
+        self._subscribe(
+            CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
+            self._on_room_message,
+            model_class=RoomMessagePayload,
+        )
+        self._subscribe(CoreEvents.ROOM_MESSAGE_ENTER, self._on_room_message, model_class=RoomMessagePayload)
         self._subscribe(CoreEvents.CORE_STARTUP, self._on_core_event, model_class=CoreStartupPayload)
         self._subscribe(CoreEvents.CORE_SHUTDOWN, self._on_core_event, model_class=CoreShutdownPayload)
         self._subscribe(CoreEvents.CORE_ERROR, self._on_core_error, model_class=CoreErrorPayload)
+        self._subscribe(CoreEvents.PLANNER_CHECKPOINT, self._on_core_event, model_class=None)
+        self._subscribe(CoreEvents.AGENDA_UPDATE, self._on_core_event, model_class=None)
 
         component_model_map = {
-            CoreEvents.INPUT_CONNECTED: ConnectedPayload,
-            CoreEvents.INPUT_DISCONNECTED: DisconnectedPayload,
-            CoreEvents.DECISION_CONNECTED: ConnectedPayload,
-            CoreEvents.DECISION_DISCONNECTED: DisconnectedPayload,
+            CoreEvents.GAME_MILESTONE: ConnectionEventPayload,
+            CoreEvents.GAME_ATTENTION_REQUIRED: ConnectionEventPayload,
+            CoreEvents.GAME_ERROR: ConnectionEventPayload,
         }
         for event_name, payload_class in component_model_map.items():
             self._subscribe(event_name, self._on_component_event, model_class=payload_class)
@@ -88,86 +88,43 @@ class EventHistoryRecorder:
                 logger.warning(f"取消订阅 {event_name} 失败: {e}")
         self._subscriptions.clear()
 
-    # ------------------------------------------------------------------
-    # 内部
-    # ------------------------------------------------------------------
-
     def _subscribe(self, event_name: str, handler: Callable, model_class: Any = None) -> None:
-        """订阅单个事件。"""
         try:
-            self.event_bus.on(event_name, handler, model_class=model_class)
+            if model_class is None:
+                self.event_bus.on(event_name, handler, model_class=BasePayload)
+            else:
+                self.event_bus.on(event_name, handler, model_class=model_class)
             self._subscriptions[event_name] = handler
         except Exception as e:
             logger.error(f"订阅事件 {event_name} 失败: {e}")
 
     def _record(self, event: EventRecord) -> None:
-        """记录事件（短路保护）。"""
         self.event_history.record(event)
 
-    # ------------------------------------------------------------------
-    # 事件处理器
-    # ------------------------------------------------------------------
-
-    async def _on_input_message(self, event_name: str, data: BasePayload, source: str) -> None:
+    async def _on_room_message(self, event_name: str, data: BasePayload, source: str) -> None:
         try:
-            dict_data = data.model_dump()
-            message = dict_data.get("message", {})
-            summary = (message.get("text", "") if isinstance(message, dict) else str(message))[:200]
+            dict_data = data.model_dump() if isinstance(data, BaseModel) else {}
+            content = dict_data.get("content", "") or ""
+            summary = f"[{dict_data.get('message_type', 'unknown')}] {content}"[:200]
             self._record(
                 EventRecord(
-                    id=data.id,
-                    type=MESSAGE_RECEIVED_TYPE,
+                    id=data.id if hasattr(data, "id") else "",
+                    type=ROOM_MESSAGE_TYPE,
                     level="info",
-                    source=dict_data.get("source", source),
+                    source=dict_data.get("live_session_id", source),
                     summary=summary,
                     data=dict_data,
                 )
             )
         except Exception as e:
-            logger.warning(f"记录 input message 事件失败: {e}")
-
-    async def _on_decision_intent(self, event_name: str, data: BasePayload, source: str) -> None:
-        try:
-            dict_data = data.model_dump()
-            intent_data = dict_data.get("intent_data", {})
-            summary = (intent_data.get("speech", "") if isinstance(intent_data, dict) else str(intent_data))[:200]
-            self._record(
-                EventRecord(
-                    id=data.id,
-                    type=DECISION_INTENT_TYPE,
-                    level="info",
-                    source=dict_data.get("name", source),
-                    summary=summary,
-                    data=dict_data,
-                )
-            )
-        except Exception as e:
-            logger.warning(f"记录 decision intent 事件失败: {e}")
-
-    async def _on_output_intent(self, event_name: str, data: BasePayload, source: str) -> None:
-        try:
-            dict_data = data.model_dump()
-            intent_data = dict_data.get("intent_data", {})
-            summary = (intent_data.get("speech", "") if isinstance(intent_data, dict) else str(intent_data))[:200]
-            self._record(
-                EventRecord(
-                    id=data.id,
-                    type=OUTPUT_RENDER_TYPE,
-                    level="info",
-                    source=dict_data.get("name", source),
-                    summary=summary,
-                    data=dict_data,
-                )
-            )
-        except Exception as e:
-            logger.warning(f"记录 output intent 事件失败: {e}")
+            logger.warning(f"记录 room message 事件失败: {e}")
 
     async def _on_core_event(self, event_name: str, data: BasePayload, source: str) -> None:
         try:
             dict_data = {"event": event_name, "payload": self._safe_serialize(data)}
             self._record(
                 EventRecord(
-                    id=data.id,
+                    id=data.id if hasattr(data, "id") else "",
                     type=SYSTEM_STATUS_TYPE,
                     level="info",
                     source="dashboard",
@@ -186,7 +143,7 @@ class EventHistoryRecorder:
             }
             self._record(
                 EventRecord(
-                    id=data.id,
+                    id=data.id if hasattr(data, "id") else "",
                     type=SYSTEM_ERROR_TYPE,
                     level="error",
                     source="dashboard",
@@ -203,9 +160,9 @@ class EventHistoryRecorder:
             event_type = COMPONENT_EVENT_TYPE_MAP.get(event_name, SYSTEM_STATUS_TYPE)
             self._record(
                 EventRecord(
-                    id=data.id,
+                    id=data.id if hasattr(data, "id") else "",
                     type=event_type,
-                    level=infer_event_level(event_type),
+                    level="info",
                     source=dict_data.get("name", "unknown"),
                     summary=f"{event_type}: {dict_data.get('name', '')}",
                     data=dict_data,
@@ -213,10 +170,6 @@ class EventHistoryRecorder:
             )
         except Exception as e:
             logger.warning(f"记录 component event 失败: {e}")
-
-    # ------------------------------------------------------------------
-    # 工具
-    # ------------------------------------------------------------------
 
     def _safe_serialize(self, data: Any) -> Optional[str]:
         if data is None:

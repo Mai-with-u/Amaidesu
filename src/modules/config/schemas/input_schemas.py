@@ -98,12 +98,6 @@ def _try_import_schema(collector_name: str) -> Optional[type]:
             )
 
             schema_cls = ConsoleInputCollector.ConfigSchema
-        elif collector_name == "text_adv_game":
-            from src.stages.input.collectors.text_adv_game.text_adv_game_collector import (  # noqa: E402
-                TextAdvGameCollector,
-            )
-
-            schema_cls = TextAdvGameCollector.ConfigSchema
         elif collector_name == "mock_danmaku":
             from src.stages.input.collectors.mock_danmaku.mock_danmaku_collector import (  # noqa: E402
                 MockDanmakuCollector,
@@ -179,7 +173,6 @@ class InputCollectorsConfig(BaseConfig):
     bili_danmaku: Optional[Any] = _optional_collector_field("bili_danmaku")
     bili_danmaku_official: Optional[Any] = _optional_collector_field("bili_danmaku_official")
     console_input: Optional[Any] = _optional_collector_field("console_input")
-    text_adv_game: Optional[Any] = _optional_collector_field("text_adv_game")
     mock_danmaku: Optional[Any] = _optional_collector_field("mock_danmaku")
     read_pingmu: Optional[Any] = _optional_collector_field("read_pingmu")
     stt: Optional[Any] = _optional_collector_field("stt")
@@ -331,7 +324,6 @@ _PUBLIC_NAME_TO_COLLECTOR: Dict[str, str] = {
     "BiliDanmakuConfigSchema": "bili_danmaku",
     "BiliDanmakuOfficialConfigSchema": "bili_danmaku_official",
     "ConsoleInputConfigSchema": "console_input",
-    "TextAdvGameConfigSchema": "text_adv_game",
     "MockDanmakuConfigSchema": "mock_danmaku",
     "ReadPingmuConfigSchema": "read_pingmu",
     "STTConfigSchema": "stt",
@@ -412,9 +404,6 @@ if TYPE_CHECKING:
     )
     from src.stages.input.collectors.console_input.console_input_collector import (  # noqa: F401
         ConsoleInputCollector,
-    )
-    from src.stages.input.collectors.text_adv_game.text_adv_game_collector import (  # noqa: F401
-        TextAdvGameCollector,
     )
     from src.stages.input.collectors.mock_danmaku.mock_danmaku_collector import (  # noqa: F401
         MockDanmakuCollector,
