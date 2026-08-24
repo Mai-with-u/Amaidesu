@@ -52,9 +52,11 @@ _NEGATIVE_SENTINEL = "__failed__"  # 负缓存哨兵（区别于"未缓存"）
 
 
 def _try_import_schema(collector_name: str) -> Optional[type]:
-    """按需导入 Collector.ConfigSchema
+    """按需导入 Collector.ConfigSchema（v2：从 src.modules.collectors 加载）
 
     第一次调用时真正 import Collector 模块，之后从缓存读取。
+    Collector 模块现在位于 ``src.modules.collectors.*``（v2 目录），
+    与每个 Collector 子包公开 ``ConfigSchema`` 嵌套类一一对应。
 
     缓存策略：
     - **成功导入**：缓存为 schema 类，后续直接返回（避免重复 import 开销）
@@ -80,38 +82,38 @@ def _try_import_schema(collector_name: str) -> Optional[type]:
 
     schema_cls: Optional[type] = None
     try:
-        if collector_name == "bili_danmaku":
-            from src.stages.input.collectors.bili_danmaku.bili_danmaku_collector import (  # noqa: E402
+        if collector_name == "bilibili" or collector_name == "bili_danmaku":
+            from src.modules.collectors.bilibili.legacy.bili_danmaku_collector import (
                 BiliDanmakuCollector,
             )
 
             schema_cls = BiliDanmakuCollector.ConfigSchema
-        elif collector_name == "bili_danmaku_official":
-            from src.stages.input.collectors.bili_danmaku_official.bili_danmaku_official_collector import (  # noqa: E402
+        elif collector_name == "bilibili_official" or collector_name == "bili_danmaku_official":
+            from src.modules.collectors.bilibili.official.bili_danmaku_official_collector import (
                 BiliDanmakuOfficialCollector,
             )
 
             schema_cls = BiliDanmakuOfficialCollector.ConfigSchema
         elif collector_name == "console_input":
-            from src.stages.input.collectors.console_input.console_input_collector import (  # noqa: E402
+            from src.modules.collectors.console.console_input_collector import (
                 ConsoleInputCollector,
             )
 
             schema_cls = ConsoleInputCollector.ConfigSchema
-        elif collector_name == "mock_danmaku":
-            from src.stages.input.collectors.mock_danmaku.mock_danmaku_collector import (  # noqa: E402
-                MockDanmakuCollector,
+        elif collector_name == "mock" or collector_name == "mock_danmaku":
+            from src.modules.collectors.mock.mock_collector import (
+                MockCollector,
             )
 
-            schema_cls = MockDanmakuCollector.ConfigSchema
-        elif collector_name == "read_pingmu":
-            from src.stages.input.collectors.read_pingmu.read_pingmu_collector import (  # noqa: E402
-                ReadPingmuCollector,
+            schema_cls = MockCollector.ConfigSchema
+        elif collector_name == "screen" or collector_name == "read_pingmu":
+            from src.modules.collectors.screen.screen_change_collector import (
+                ScreenChangeCollector,
             )
 
-            schema_cls = ReadPingmuCollector.ConfigSchema
+            schema_cls = ScreenChangeCollector.ConfigSchema
         elif collector_name == "stt":
-            from src.stages.input.collectors.stt.config import (  # noqa: E402
+            from src.modules.collectors.stt.config import (
                 STTInputConfig,
             )
 
@@ -395,22 +397,23 @@ __all__ = [
 
 
 # 仅在类型检查时 import（运行时不需要，IDE/linter 友好）
+# v2: Collector 模块位于 src.modules.collectors.*（替换 src.stages.input.collectors.*）
 if TYPE_CHECKING:
-    from src.stages.input.collectors.bili_danmaku.bili_danmaku_collector import (  # noqa: F401
+    from src.modules.collectors.bilibili.legacy.bili_danmaku_collector import (  # noqa: F401
         BiliDanmakuCollector,
     )
-    from src.stages.input.collectors.bili_danmaku_official.bili_danmaku_official_collector import (  # noqa: F401
+    from src.modules.collectors.bilibili.official.bili_danmaku_official_collector import (  # noqa: F401
         BiliDanmakuOfficialCollector,
     )
-    from src.stages.input.collectors.console_input.console_input_collector import (  # noqa: F401
+    from src.modules.collectors.console.console_input_collector import (  # noqa: F401
         ConsoleInputCollector,
     )
-    from src.stages.input.collectors.mock_danmaku.mock_danmaku_collector import (  # noqa: F401
-        MockDanmakuCollector,
+    from src.modules.collectors.mock.mock_collector import (  # noqa: F401
+        MockCollector,
     )
-    from src.stages.input.collectors.read_pingmu.read_pingmu_collector import (  # noqa: F401
-        ReadPingmuCollector,
+    from src.modules.collectors.screen.screen_change_collector import (  # noqa: F401
+        ScreenChangeCollector,
     )
-    from src.stages.input.collectors.stt.config import (  # noqa: F401
+    from src.modules.collectors.stt.config import (  # noqa: F401
         STTInputConfig,
     )

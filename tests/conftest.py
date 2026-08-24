@@ -90,4 +90,5 @@ def llm_manager() -> LLMManager:
 
 
 # Domain 特定的 fixtures 通过各 domain 的 conftest.py 提供
-# 例如：tests/stages/input/conftest.py 提供 InputProvider 相关 fixtures
+# 例如：tests/modules/collectors/conftest.py 提供 Collector 相关 fixtures
+# （v2 后 src/stages/ 已删除，stages 路径不再存在）

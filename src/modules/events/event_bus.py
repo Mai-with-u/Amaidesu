@@ -456,7 +456,7 @@ class EventBus:
         Example:
             ```python
             # 类型化订阅（接收 Pydantic Model 对象）
-            event_bus.on("event.name", handler, model_class=MessageReadyPayload)
+            event_bus.on("room.message.danmaku", handler, model_class=RoomMessagePayload)
             ```
         """
 

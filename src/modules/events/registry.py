@@ -12,8 +12,8 @@
        from pydantic import BaseModel
 
 
-       @register_event("input.message.received")
-       class MessageReadyPayload(BaseModel): ...
+       @register_event("room.message.danmaku")
+       class RoomMessagePayload(BaseModel): ...
 
    装饰器是**幂等**的：不引入 import，不会因为 ``register_core_events()`` 未调用
    而失效。Payload 模块一旦被 import（任意路径），装饰器即生效。
@@ -84,7 +84,7 @@ class _MultiName:
 # ==================== 模块级注册表 ====================
 
 # 由 @register_event 装饰器填充。
-# Key 是事件名（如 "input.message.received"），Value 是 Pydantic Model 类型。
+# Key 是事件名（如 "room.message.danmaku"），Value 是 Pydantic Model 类型。
 EVENT_REGISTRY: Dict[str, Type[BaseModel]] = {}
 
 
@@ -104,7 +104,7 @@ def register_event(event_name: str) -> Callable[[T], T]:
     - 测试断言 ``reverse_name == event_name`` 对所有已注册事件名都成立
 
     Args:
-        event_name: 事件名称（如 ``"input.message.received"``）。
+        event_name: 事件名称（如 ``"room.message.danmaku"``）。
 
     Returns:
         装饰器函数。被装饰的类原样返回。
@@ -115,11 +115,11 @@ def register_event(event_name: str) -> Callable[[T], T]:
     Example:
         ::
 
-            @register_event("input.message.received")
-            class MessageReadyPayload(BaseModel): ...
+            @register_event("room.message.danmaku")
+            class RoomMessagePayload(BaseModel): ...
 
 
-            assert MessageReadyPayload._registered_event_name == "input.message.received"
+            assert RoomMessagePayload._registered_event_name == "room.message.danmaku"
 
 
             # W1 增量：同一类多事件名

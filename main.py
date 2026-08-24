@@ -158,20 +158,63 @@ def load_config() -> Tuple[ConfigService, Dict[str, Any], bool]:
 
 
 def validate_config(config: Dict[str, Any]) -> None:
-    """验证配置完整性，缺失必要配置时给出明确错误提示。"""
-    if not config.get("general"):
-        logger.critical("缺少 [general] 配置段")
+    """验证 v2 配置完整性，缺失必要配置时给出明确错误提示。
 
-    if not config.get("agents"):
+    v2 配置按 7 文件树划分（参见 multi_file_loader._CONFIG_FILES）：
+    core / model / agents / tools / memory / storage / background。
+    本函数只做"存在性 + 顶层类型"轻量检查；详细字段验证由各 ConfigSchema
+    在组件构造阶段自动完成（fail-fast 由 Pydantic 保证）。
+    """
+    if not isinstance(config, dict):
+        logger.critical("配置根对象不是 dict（schema 漂移？）")
+        return
+
+    # core.toml 段（meta / general / context / events / dashboard / logging / pipelines）
+    if "general" not in config or not isinstance(config["general"], dict):
+        logger.critical("缺少 [general] 配置段（core.toml）")
+
+    # model.toml 段（顶层无聚合键，llm_providers/llm/llm_fast 等散落，不强制）
+    # 不强制报错：model.toml 缺失时 LLM 调用会自然降级为 warning。
+
+    # agents.toml 段
+    agents_cfg = config.get("agents")
+    if not agents_cfg:
         logger.warning("未检测到 [agents] 配置，Agent 功能将被禁用")
+    elif not isinstance(agents_cfg, dict):
+        logger.warning("[agents] 配置类型异常（期望 dict），Agent 功能将被禁用")
 
-    if not config.get("tools"):
+    # tools.toml 段
+    tools_cfg = config.get("tools")
+    if not tools_cfg:
         logger.warning("未检测到 [tools] 配置，Tool 功能将被禁用")
+    elif not isinstance(tools_cfg, dict):
+        logger.warning("[tools] 配置类型异常（期望 dict），Tool 功能将被禁用")
 
-    if not config.get("collectors"):
-        logger.warning("未检测到 [collectors] 配置，Collector 功能将被禁用")
+    # collectors 子段位于 tools/agents 等聚合下，由各组件 Schema 自行校验
+    # 不再顶层检查（旧 [collectors] 已迁入 agents/agents_collectors）
 
-    logger.info("配置验证通过")
+    # memory.toml 段
+    memory_cfg = config.get("memory")
+    if not memory_cfg:
+        logger.debug("未检测到 [memory] 配置，使用 SimpleMemory 默认值")
+    elif not isinstance(memory_cfg, dict):
+        logger.warning("[memory] 配置类型异常（期望 dict），Memory 功能将退化")
+
+    # storage.toml 段
+    storage_cfg = config.get("storage")
+    if not storage_cfg:
+        logger.debug("未检测到 [storage] 配置，存储功能将仅 in-memory")
+    elif not isinstance(storage_cfg, dict):
+        logger.warning("[storage] 配置类型异常（期望 dict），存储功能将退化")
+
+    # background.toml 段
+    background_cfg = config.get("background")
+    if not background_cfg:
+        logger.debug("未检测到 [background] 配置，后台任务采用默认 tick")
+    elif not isinstance(background_cfg, dict):
+        logger.warning("[background] 配置类型异常（期望 dict），后台任务采用默认 tick")
+
+    logger.info("配置验证通过（v2 7-file tree 存在性 + 类型检查）")
 
 
 def exit_if_config_created(was_created: bool) -> None:

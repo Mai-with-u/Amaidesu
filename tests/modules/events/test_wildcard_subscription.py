@@ -484,7 +484,7 @@ class TestIsWildcardPattern:
 
     def test_literal_not_wildcard(self):
         assert self._is_wildcard("a.b.c") is False
-        assert self._is_wildcard("input.message.received") is False
+        assert self._is_wildcard("room.message.danmaku") is False
 
     def test_star_is_wildcard(self):
         assert self._is_wildcard("room.*") is True

@@ -132,8 +132,8 @@ def test_mixed_operations():
 
 def test_event_name_with_dots():
     """测试包含多个点的事件名"""
-    EVENT_REGISTRY["input.message.received"] = CoreEventData
-    assert EventRegistry.is_registered("input.message.received")
+    EVENT_REGISTRY["room.message.danmaku"] = CoreEventData
+    assert EventRegistry.is_registered("room.message.danmaku")
 
     EVENT_REGISTRY["core.test.nested.event"] = CoreEventData
     assert EventRegistry.is_registered("core.test.nested.event")

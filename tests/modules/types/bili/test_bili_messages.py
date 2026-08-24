@@ -1,11 +1,11 @@
 """
-B 站消息类型测试（v2 / Wave 5 迁移后）
+B 站消息类型测试（v2 / Wave 5+8 迁移后）
 
 迁移自 ``tests/stages/input/shared/bili_messages/test_bili_messages.py``，现
 通过 ``src.modules.types.bili`` 公共共享类型验证。
 
-W5 后 ``src.stages.input.shared.bili_messages`` 成为 re-export 垫片（向后兼容），
-新代码统一从 ``src.modules.types.bili`` 导入。
+Wave 8 后 ``src/stages/`` 整体删除，BiliMessageType 等类型已完全归并到
+``src.modules.types.bili``，无 re-export 垫片。
 """
 
 from src.modules.types.bili import (
