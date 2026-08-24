@@ -24,11 +24,15 @@
           collapse-tags-tooltip
           placeholder="事件类型"
           clearable
-          style="width: 200px"
+          style="width: 240px"
         >
-          <el-option label="弹幕消息 (message.received)" value="message.received" />
-          <el-option label="决策意图 (decision.intent)" value="decision.intent" />
-          <el-option label="渲染输出 (output.render)" value="output.render" />
+          <el-option label="房间消息 (room.message.*)" value="room.message" />
+          <el-option label="Agenda 发言 (agenda.*)" value="agenda" />
+          <el-option label="工具结果 (tool.result.*)" value="tool.result" />
+          <!-- 兼容旧事件名（v2 后端不再发布） -->
+          <el-option label="[旧] message.received" value="message.received" />
+          <el-option label="[旧] decision.intent" value="decision.intent" />
+          <el-option label="[旧] output.render" value="output.render" />
         </el-select>
         <el-input
           v-model="searchQuery"
@@ -55,7 +59,12 @@
           :class="['chat-row', `chat-row--${eventTypeToClass(event.type)}`]"
         >
           <!-- message.received: 左侧消息气泡（带头像） -->
-          <template v-if="event.type === 'message.received' && event.message">
+          <template
+            v-if="
+              (event.type.startsWith('room.message') || event.type === 'message.received') &&
+              event.message
+            "
+          >
             <div
               class="chat-avatar chat-avatar--message"
               :title="event.message.user_nickname || event.message.source || '用户'"
@@ -123,7 +132,14 @@
           </template>
 
           <!-- decision.intent: 右侧 AI 意图气泡（带头像） -->
-          <template v-if="event.type === 'decision.intent' && event.intent">
+          <template
+            v-if="
+              (event.type.startsWith('agenda') ||
+                event.type.startsWith('tool.result') ||
+                event.type === 'decision.intent') &&
+              event.intent
+            "
+          >
             <div class="chat-bubble chat-bubble--intent" @click="toggleExpand(event.id)">
               <div class="bubble-header">
                 <el-tag size="small" effect="plain" type="success">AI</el-tag>
@@ -160,7 +176,13 @@
           </template>
 
           <!-- output.render: 居中系统消息（仅当存在 action 时渲染） -->
-          <template v-if="event.type === 'output.render' && event.intent && event.intent.action">
+          <template
+            v-if="
+              (event.type.startsWith('tool.result') || event.type === 'output.render') &&
+              event.intent &&
+              event.intent.action
+            "
+          >
             <div class="chat-system" @click="toggleExpand(event.id)">
               <span class="system-icon">⚙</span>
               <span class="system-text">
@@ -562,11 +584,17 @@ function removeAction(index: number) {
 }
 
 // ===== 筛选 =====
+//
+// typeFilter 元素是事件名前缀（如 `room.message`），用于匹配完整事件名
+// （如 `room.message.danmaku`）。旧后端事件名（如 `message.received`）按全名匹配。
 const filteredEvents = computed(() => {
   let result = events.value;
 
   if (typeFilter.value.length > 0) {
-    result = result.filter(e => typeFilter.value.includes(e.type));
+    result = result.filter(e => {
+      const t = e.type;
+      return typeFilter.value.some(prefix => t === prefix || t.startsWith(`${prefix}.`));
+    });
   }
   if (searchQuery.value.trim()) {
     const q = searchQuery.value.toLowerCase();
@@ -612,8 +640,8 @@ function formatDecisionLatency(event: DebugSessionEvent): string {
 
 // ===== 样式辅助 =====
 function eventTypeToClass(type: string): string {
-  if (type === 'message.received') return 'message';
-  if (type === 'decision.intent') return 'intent';
+  if (type.startsWith('room.message') || type === 'message.received') return 'message';
+  if (type.startsWith('agenda') || type === 'decision.intent') return 'intent';
   return 'output';
 }
 

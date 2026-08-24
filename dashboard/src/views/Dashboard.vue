@@ -29,12 +29,12 @@
           </div>
           <div class="card-title-area">
             <div class="card-title-row">
-              <h3 class="card-title">Input 阶段</h3>
+              <h3 class="card-title">采集器</h3>
               <span class="health-badge" :class="getHealthStatus('input')">
                 {{ getHealthLabel('input') }}
               </span>
             </div>
-            <span class="card-subtitle">输入域</span>
+            <span class="card-subtitle">采集域（v2 room.message.*）</span>
           </div>
         </div>
         <div class="card-stats">
@@ -87,12 +87,12 @@
           </div>
           <div class="card-title-area">
             <div class="card-title-row">
-              <h3 class="card-title">Decision 阶段</h3>
+              <h3 class="card-title">Agent</h3>
               <span class="health-badge" :class="getHealthStatus('decision')">
                 {{ getHealthLabel('decision') }}
               </span>
             </div>
-            <span class="card-subtitle">决策域</span>
+            <span class="card-subtitle">决策域（v2 agenda.*）</span>
           </div>
         </div>
         <div class="card-stats">
@@ -143,12 +143,12 @@
           </div>
           <div class="card-title-area">
             <div class="card-title-row">
-              <h3 class="card-title">Output 阶段</h3>
+              <h3 class="card-title">工具</h3>
               <span class="health-badge" :class="getHealthStatus('output')">
                 {{ getHealthLabel('output') }}
               </span>
             </div>
-            <span class="card-subtitle">输出域</span>
+            <span class="card-subtitle">输出域（v2 tool.result.*）</span>
           </div>
         </div>
         <div class="card-stats">

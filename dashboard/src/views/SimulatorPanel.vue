@@ -1,47 +1,60 @@
 <template>
-  <div class="simulator-panel">
+  <div class="mock-control-panel">
     <header class="page-header">
       <div class="header-left">
-        <h1 class="page-title">模拟直播间</h1>
-        <p class="page-subtitle">LLM 模拟观众弹幕调试工具</p>
+        <h1 class="page-title">Mock 采集器控制面</h1>
+        <p class="page-subtitle">
+          v2 模拟直播间由 <code>modules/collectors/mock/</code> 承载；本面板用于启停与观测
+        </p>
       </div>
       <div class="header-actions">
         <el-button
           :type="status.is_running ? 'danger' : 'success'"
           :loading="toggling"
-          @click="toggleSimulator"
+          @click="toggleCollector"
         >
-          {{ status.is_running ? '停止模拟' : '启动模拟' }}
+          {{ status.is_running ? '停止 Mock' : '启动 Mock' }}
         </el-button>
-        <el-tag v-if="status.is_running" type="success" size="large" effect="dark">运行中</el-tag>
+        <el-tag v-if="status.is_running" type="success" size="large" effect="dark"> 运行中 </el-tag>
+        <el-tag
+          v-else-if="!status.is_collector_available"
+          type="warning"
+          size="large"
+          effect="plain"
+        >
+          未接入
+        </el-tag>
         <el-tag v-else type="info" size="large" effect="plain">已停止</el-tag>
       </div>
     </header>
 
-    <div class="simulator-content">
-      <el-row :gutter="16">
-        <el-col :span="6">
+    <div class="content">
+      <el-alert
+        v-if="!status.is_collector_available"
+        type="info"
+        title="Mock 控制面端点尚未挂载"
+        :description="'W8 证据：后端 /api/v1/simulator/* 已删除，/api/v1/mock/* 待补齐。当前面板降级为只读监控占位。'"
+        show-icon
+        :closable="false"
+      />
+
+      <el-row :gutter="16" style="margin-top: 16px">
+        <el-col :span="8">
           <div class="stat-card">
             <div class="stat-value">{{ stats.total_messages }}</div>
             <div class="stat-label">消息总数</div>
           </div>
         </el-col>
-        <el-col :span="6">
+        <el-col :span="8">
           <div class="stat-card">
-            <div class="stat-value">{{ stats.total_tokens }}</div>
-            <div class="stat-label">Token 用量</div>
+            <div class="stat-value">{{ stats.simulated_count }}</div>
+            <div class="stat-label">模拟消息（v2 独立计数）</div>
           </div>
         </el-col>
-        <el-col :span="6">
+        <el-col :span="8">
           <div class="stat-card">
-            <div class="stat-value">{{ Object.keys(personas).length }}</div>
+            <div class="stat-value">{{ personas.length }}</div>
             <div class="stat-label">常驻人设</div>
-          </div>
-        </el-col>
-        <el-col :span="6">
-          <div class="stat-card" @click="resetBudget">
-            <div class="stat-value clickable">{{ budgetRemaining }}</div>
-            <div class="stat-label">剩余 Token (点击重置)</div>
           </div>
         </el-col>
       </el-row>
@@ -59,15 +72,6 @@
                   <el-radio value="fixed">固定间隔</el-radio>
                   <el-radio value="auto">自适应突发</el-radio>
                 </el-radio-group>
-              </el-form-item>
-              <el-form-item v-if="params.cadence_mode === 'fixed'" label="固定间隔 (秒)">
-                <el-slider
-                  v-model="params.fixed_interval_s"
-                  :min="1"
-                  :max="60"
-                  :step="0.5"
-                  show-input
-                />
               </el-form-item>
               <el-form-item label="消息频率 (条/分)">
                 <el-slider
@@ -87,15 +91,6 @@
                   show-input
                 />
               </el-form-item>
-              <el-form-item label="路人比例">
-                <el-slider
-                  v-model="params.temp_passerby_ratio"
-                  :min="0"
-                  :max="1"
-                  :step="0.05"
-                  show-input
-                />
-              </el-form-item>
               <el-form-item label="礼物概率">
                 <el-slider
                   v-model="params.gift_probability"
@@ -106,7 +101,14 @@
                 />
               </el-form-item>
               <el-form-item>
-                <el-button type="primary" size="small" @click="updateParams">更新参数</el-button>
+                <el-button
+                  type="primary"
+                  size="small"
+                  :disabled="!status.is_collector_available"
+                  @click="updateParams"
+                >
+                  更新参数
+                </el-button>
               </el-form-item>
             </el-form>
           </el-card>
@@ -116,49 +118,53 @@
               <span>手动触发</span>
             </template>
             <el-space wrap>
-              <el-button type="warning" @click="triggerGiftRain">礼物雨 (30s)</el-button>
+              <el-button
+                type="warning"
+                :disabled="!status.is_collector_available"
+                @click="triggerGiftRain"
+              >
+                礼物雨 (30s)
+              </el-button>
               <el-input
                 v-model="injectTopic"
                 placeholder="输入话题"
                 size="small"
                 style="width: 200px"
+                :disabled="!status.is_collector_available"
               />
-              <el-button type="primary" @click="triggerTopicInjection">注入话题</el-button>
-              <el-button @click="resetBudget">重置 Token</el-button>
+              <el-button
+                type="primary"
+                :disabled="!status.is_collector_available"
+                @click="triggerTopicInjection"
+              >
+                注入话题
+              </el-button>
+              <el-button :disabled="!status.is_collector_available" @click="resetBudget">
+                重置 Token
+              </el-button>
             </el-space>
           </el-card>
         </el-col>
 
         <el-col :span="12">
-          <el-card shadow="never" style="height: 400px; display: flex; flex-direction: column">
+          <el-card shadow="never">
             <template #header>
-              <span>实时消息流 (最近 50 条)</span>
+              <span>simulated 标记说明（v2 数据溯源）</span>
             </template>
-            <div ref="messageStreamRef" class="message-stream">
-              <div
-                v-for="(msg, i) in messageStream"
-                :key="i"
-                class="message-item"
-                :class="msg.data_type"
-              >
-                <span class="msg-time">{{ msg.time }}</span>
-                <el-tag
-                  :type="
-                    msg.data_type === 'gift'
-                      ? 'warning'
-                      : msg.data_type === 'super_chat'
-                        ? 'danger'
-                        : ''
-                  "
-                  size="small"
-                  effect="plain"
-                >
-                  {{ msg.data_type }}
-                </el-tag>
-                <span class="msg-nick">{{ msg.user_nickname }}</span>
-                <span class="msg-text">{{ msg.text }}</span>
-              </div>
-              <div v-if="messageStream.length === 0" class="empty-stream">暂无消息</div>
+            <div class="explain-block">
+              <p>
+                v2 后端会在 <code>room.message.*</code> 事件的 payload 中标记
+                <code>simulated: true</code>； 消费方（viewers / topics /
+                画像统计）查询会主动排除模拟数据（迁移文档 §1.6 定案）。
+              </p>
+              <p>
+                模拟观众从来不是"观众"，只是测试输入；统计中即使长期重复运行、没有模拟运行记录也不计，
+                除非用户显式要求查看含模拟数据的统计。
+              </p>
+              <p class="hint">
+                当前前端 UI 收到 <code>room.message.*</code> 事件时会在卡片上加
+                <code>[模拟]</code> 角标， 不污染真实弹幕链路（LiveObserver 已支持 v2 payload）。
+              </p>
             </div>
           </el-card>
         </el-col>
@@ -167,7 +173,7 @@
       <el-card shadow="never" style="margin-top: 16px">
         <template #header>
           <div class="card-header-row">
-            <span>常驻人设 ({{ personas.length }})</span>
+            <span>常驻人设（{{ personas.length }}）</span>
             <div class="card-header-actions">
               <el-input-number
                 v-model="generateCount"
@@ -181,6 +187,7 @@
                 type="primary"
                 size="small"
                 :loading="generating"
+                :disabled="!status.is_collector_available"
                 @click="generatePersonas"
               >
                 生成人设
@@ -198,153 +205,57 @@
           <el-table-column prop="fans_medal_level" label="粉丝牌" width="80" align="right" />
           <el-table-column prop="guard_level" label="大航海" width="80" align="right" />
           <el-table-column prop="messages_generated" label="发言数" width="80" align="right" />
-          <el-table-column label="性格/说话风格" min-width="180">
-            <template #default="{ row }">
-              <el-popover placement="top-start" :width="320" trigger="hover">
-                <template #reference>
-                  <span class="persona-trait-cell">查看详情</span>
-                </template>
-                <div class="persona-trait-popover">
-                  <div class="trait-label">性格</div>
-                  <div class="trait-value">{{ row.personality || '（空）' }}</div>
-                  <div class="trait-label" style="margin-top: 8px">说话风格</div>
-                  <div class="trait-value">{{ row.speaking_style || '（空）' }}</div>
-                </div>
-              </el-popover>
-            </template>
-          </el-table-column>
-          <el-table-column prop="user_id" label="ID" min-width="140" />
           <el-table-column label="操作" width="140" fixed="right">
-            <template #default="{ row }">
-              <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
-              <el-button link type="danger" size="small" @click="confirmDelete(row)">
-                删除
-              </el-button>
+            <template #default>
+              <el-button link type="primary" size="small">编辑</el-button>
+              <el-button link type="danger" size="small">删除</el-button>
             </template>
           </el-table-column>
         </el-table>
+        <el-empty v-if="personas.length === 0" description="暂无常驻人设" :image-size="80" />
       </el-card>
-
-      <el-dialog
-        v-model="editDialogVisible"
-        title="编辑人设"
-        width="520px"
-        :close-on-click-modal="false"
-      >
-        <el-form v-if="editingPersona" :model="editForm" label-width="100px" size="default">
-          <el-form-item label="昵称">
-            <el-input v-model="editForm.user_nickname" placeholder="昵称" />
-          </el-form-item>
-          <el-form-item label="角色">
-            <el-select v-model="editForm.role" style="width: 100%">
-              <el-option
-                v-for="opt in ROLE_OPTIONS"
-                :key="opt.value"
-                :label="opt.label"
-                :value="opt.value"
-              />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="性格">
-            <el-input
-              v-model="editForm.personality"
-              type="textarea"
-              :rows="3"
-              placeholder="性格特征描述"
-            />
-          </el-form-item>
-          <el-form-item label="说话风格">
-            <el-input
-              v-model="editForm.speaking_style"
-              type="textarea"
-              :rows="2"
-              placeholder="说话风格描述"
-            />
-          </el-form-item>
-          <el-form-item label="粉丝牌等级">
-            <el-input-number
-              v-model="editForm.fans_medal_level"
-              :min="0"
-              :max="40"
-              controls-position="right"
-            />
-          </el-form-item>
-          <el-form-item label="舰长等级">
-            <el-select v-model="editForm.guard_level" style="width: 100%">
-              <el-option :value="0" label="0 (无)" />
-              <el-option :value="1" label="1 (总督)" />
-              <el-option :value="2" label="2 (提督)" />
-              <el-option :value="3" label="3 (舰长)" />
-            </el-select>
-          </el-form-item>
-        </el-form>
-        <template #footer>
-          <el-button @click="editDialogVisible = false">取消</el-button>
-          <el-button type="primary" :loading="saving" @click="saveEdit">保存</el-button>
-        </template>
-      </el-dialog>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onUnmounted, computed } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
-import { simulatorApi } from '@/api';
-import type {
-  SimulatorStatus,
-  SimulatorStats,
-  SimulatorPersona,
-  PersonaUpdatePayload,
-} from '@/api';
+/**
+ * Mock 采集器控制面（v2.0）
+ *
+ * W8 证据：原 `/api/v1/simulator/*` 路由已删除；前端改用 `mockCollectorApi`（后端补齐
+ * `/api/v1/mock/*` 时直接生效）。当前后端尚未挂载 mock 控制面，所有调用会 404/503，
+ * 页面降级为只读监控占位。
+ *
+ * v2 数据语义变化：
+ * - 所有模拟事件 payload 带 `simulated: true`（W3 §1.6 定案）
+ * - 统计查询强制排除 simulated 源（消费方约束）
+ * - 模拟观众不计入 viewers/topics 统计（除非显式要求）
+ */
+import { onMounted, onUnmounted, reactive, ref } from 'vue';
+import { ElMessage } from 'element-plus';
+import { mockCollectorApi } from '@/api';
+import type { MockCollectorStatus, MockCollectorStats, MockCollectorPersona } from '@/types';
 
-const ROLE_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: 'fan', label: 'fan' },
-  { value: 'teaser', label: 'teaser' },
-  { value: 'newcomer', label: 'newcomer' },
-  { value: 'veteran', label: 'veteran' },
-  { value: 'hater', label: 'hater' },
-];
-
-const status = reactive<SimulatorStatus>({
+const status = reactive<MockCollectorStatus>({
   is_running: false,
-  current_state: 'STOPPED',
   started_at_ms: 0,
   config_snapshot: {},
   is_collector_available: false,
 });
 
-const stats = reactive<SimulatorStats>({
+const stats = reactive<MockCollectorStats>({
   total_messages: 0,
+  simulated_count: 0,
   total_tokens: 0,
   messages_by_type: {},
-  messages_by_role: {},
 });
 
-const personas = ref<SimulatorPersona[]>([]);
+const personas = ref<MockCollectorPersona[]>([]);
 const toggling = ref(false);
 const injectTopic = ref('');
 const generateCount = ref(1);
 const generating = ref(false);
-const saving = ref(false);
-
-const editDialogVisible = ref(false);
-const editingPersona = ref<SimulatorPersona | null>(null);
-const editForm = reactive<{
-  user_nickname: string;
-  role: string;
-  personality: string;
-  speaking_style: string;
-  fans_medal_level: number;
-  guard_level: number;
-}>({
-  user_nickname: '',
-  role: 'fan',
-  personality: '',
-  speaking_style: '',
-  fans_medal_level: 0,
-  guard_level: 0,
-});
+let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 const params = reactive({
   base_rate_per_minute: 6,
@@ -354,19 +265,6 @@ const params = reactive({
   cadence_mode: 'uniform',
   fixed_interval_s: 10,
 });
-
-interface StreamMessage {
-  time: string;
-  data_type: string;
-  user_nickname: string;
-  text: string;
-}
-
-const messageStream = ref<StreamMessage[]>([]);
-let ws: WebSocket | null = null;
-let pollTimer: ReturnType<typeof setInterval> | null = null;
-
-const budgetRemaining = computed(() => Math.max(0, 50000 - stats.total_tokens));
 
 function roleTagType(role: string): string {
   const map: Record<string, string> = {
@@ -381,129 +279,57 @@ function roleTagType(role: string): string {
 
 async function fetchStatus() {
   try {
-    const res = await simulatorApi.getStatus();
+    const res = await mockCollectorApi.getStatus();
     Object.assign(status, res.data);
   } catch {
-    // Collector not available
+    // 端点尚未挂载（503/404），保持默认 is_collector_available=false
   }
 }
 
 async function fetchStats() {
   try {
-    const res = await simulatorApi.getStats();
+    const res = await mockCollectorApi.getStats();
     Object.assign(stats, res.data);
   } catch {
-    //
+    // 静默
   }
 }
 
 async function fetchPersonas() {
   try {
-    const res = await simulatorApi.getPersonas();
-    personas.value = res.data;
+    const res = await mockCollectorApi.getPersonas();
+    personas.value = res.data ?? [];
   } catch {
-    //
+    personas.value = [];
   }
 }
 
-async function generatePersonas() {
-  generating.value = true;
-  try {
-    const res = await simulatorApi.generatePersonas(generateCount.value);
-    const count = res.data.personas?.length ?? generateCount.value;
-    const added = res.data.added ?? count;
-    const skipped = res.data.skipped ?? 0;
-    ElMessage.success(
-      skipped > 0
-        ? `已生成 ${count} 个，新增 ${added} 个（${skipped} 个重复已跳过）`
-        : `已生成 ${added} 个人设`,
-    );
-    await fetchPersonas();
-  } catch {
-    ElMessage.error('人设生成失败');
-  } finally {
-    generating.value = false;
-  }
-}
-
-function openEdit(row: SimulatorPersona) {
-  editingPersona.value = row;
-  editForm.user_nickname = row.user_nickname;
-  editForm.role = row.role;
-  editForm.personality = row.personality;
-  editForm.speaking_style = row.speaking_style;
-  editForm.fans_medal_level = row.fans_medal_level;
-  editForm.guard_level = row.guard_level;
-  editDialogVisible.value = true;
-}
-
-async function saveEdit() {
-  if (!editingPersona.value) return;
-  saving.value = true;
-  try {
-    const payload: PersonaUpdatePayload = {};
-    const original = editingPersona.value;
-    if (editForm.user_nickname !== original.user_nickname)
-      payload.user_nickname = editForm.user_nickname;
-    if (editForm.role !== original.role) payload.role = editForm.role;
-    if (editForm.personality !== original.personality) payload.personality = editForm.personality;
-    if (editForm.speaking_style !== original.speaking_style)
-      payload.speaking_style = editForm.speaking_style;
-    if (editForm.fans_medal_level !== original.fans_medal_level)
-      payload.fans_medal_level = editForm.fans_medal_level;
-    if (editForm.guard_level !== original.guard_level) payload.guard_level = editForm.guard_level;
-
-    await simulatorApi.updatePersona(original.user_id, payload);
-    ElMessage.success('人设已更新');
-    editDialogVisible.value = false;
-    await fetchPersonas();
-  } catch {
-    ElMessage.error('人设更新失败');
-  } finally {
-    saving.value = false;
-  }
-}
-
-async function confirmDelete(row: SimulatorPersona) {
-  try {
-    await ElMessageBox.confirm(`确定删除人设 "${row.user_nickname}" 吗？`, '删除确认', {
-      confirmButtonText: '删除',
-      cancelButtonText: '取消',
-      type: 'warning',
-    });
-  } catch {
+async function toggleCollector() {
+  if (!status.is_collector_available) {
+    ElMessage.warning('Mock 控制面端点尚未挂载，无法启停');
     return;
   }
-  try {
-    await simulatorApi.deletePersona(row.user_id);
-    ElMessage.success('人设已删除');
-    await fetchPersonas();
-  } catch {
-    ElMessage.error('人设删除失败');
-  }
-}
-
-async function toggleSimulator() {
   toggling.value = true;
   try {
     if (status.is_running) {
-      await simulatorApi.stop();
-      ElMessage.success('模拟器已停止');
+      await mockCollectorApi.stop();
+      ElMessage.success('Mock 采集器已停止');
     } else {
-      await simulatorApi.start();
-      ElMessage.success('模拟器已启动');
+      await mockCollectorApi.start();
+      ElMessage.success('Mock 采集器已启动');
     }
     await fetchStatus();
   } catch {
-    ElMessage.error('操作失败');
+    ElMessage.error('操作失败（端点未挂载）');
   } finally {
     toggling.value = false;
   }
 }
 
 async function updateParams() {
+  if (!status.is_collector_available) return;
   try {
-    await simulatorApi.updateParams({ ...params });
+    await mockCollectorApi.updateParams({ ...params });
     ElMessage.success('参数已更新');
   } catch {
     ElMessage.error('参数更新失败');
@@ -511,8 +337,9 @@ async function updateParams() {
 }
 
 async function triggerGiftRain() {
+  if (!status.is_collector_available) return;
   try {
-    await simulatorApi.triggerGiftRain(30);
+    await mockCollectorApi.triggerGiftRain(30);
     ElMessage.success('礼物雨已触发');
   } catch {
     ElMessage.error('触发失败');
@@ -525,7 +352,7 @@ async function triggerTopicInjection() {
     return;
   }
   try {
-    await simulatorApi.triggerTopicInjection(injectTopic.value);
+    await mockCollectorApi.triggerTopicInjection(injectTopic.value.trim());
     ElMessage.success(`话题已注入: ${injectTopic.value}`);
     injectTopic.value = '';
   } catch {
@@ -534,8 +361,9 @@ async function triggerTopicInjection() {
 }
 
 async function resetBudget() {
+  if (!status.is_collector_available) return;
   try {
-    await simulatorApi.resetTokenBudget();
+    await mockCollectorApi.resetTokenBudget();
     ElMessage.success('Token 预算已重置');
     await fetchStats();
   } catch {
@@ -543,48 +371,26 @@ async function resetBudget() {
   }
 }
 
-function connectWebSocket() {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${window.location.host}/api/v1/ws/simulator/stream`;
-  ws = new WebSocket(wsUrl);
-
-  ws.onmessage = event => {
-    try {
-      const data = JSON.parse(event.data);
-      if (data.type === 'ping') return;
-      messageStream.value.unshift({
-        time: new Date().toLocaleTimeString('zh-CN', {
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-        }),
-        data_type: data.type || 'text',
-        user_nickname: data.user_nickname || '',
-        text: data.text || '',
-      });
-      if (messageStream.value.length > 50) {
-        messageStream.value = messageStream.value.slice(0, 50);
-      }
-    } catch {
-      // ignore malformed messages
-    }
-  };
-
-  ws.onclose = () => {
-    ws = null;
-  };
-
-  ws.onerror = () => {
-    ws = null;
-  };
+async function generatePersonas() {
+  if (!status.is_collector_available) return;
+  generating.value = true;
+  try {
+    const res = await mockCollectorApi.generatePersonas(generateCount.value);
+    const count = res.data.personas?.length ?? generateCount.value;
+    const added = res.data.added ?? count;
+    ElMessage.success(`已生成 ${added} 个人设`);
+    await fetchPersonas();
+  } catch {
+    ElMessage.error('人设生成失败');
+  } finally {
+    generating.value = false;
+  }
 }
 
 onMounted(async () => {
   await fetchStatus();
   await fetchStats();
   await fetchPersonas();
-  connectWebSocket();
-
   pollTimer = setInterval(async () => {
     await fetchStats();
     await fetchPersonas();
@@ -592,22 +398,21 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
-  if (ws) ws.close();
   if (pollTimer) clearInterval(pollTimer);
 });
 </script>
 
 <style scoped>
-.simulator-panel {
+.mock-control-panel {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - var(--header-height) - var(--spacing-lg) * 2);
-  overflow: hidden;
+  padding: var(--spacing-lg);
+  max-width: 1400px;
+  margin: 0 auto;
 }
 
 .page-header {
   margin-bottom: var(--spacing-md);
-  flex-shrink: 0;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -625,9 +430,10 @@ onUnmounted(() => {
   gap: var(--spacing-md);
 }
 
-.simulator-content {
-  flex: 1;
-  overflow-y: auto;
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
 }
 
 .stat-card {
@@ -636,7 +442,6 @@ onUnmounted(() => {
   border: 1px solid var(--border-color-light);
   padding: var(--spacing-lg);
   text-align: center;
-  cursor: default;
 }
 
 .stat-card .stat-value {
@@ -646,72 +451,33 @@ onUnmounted(() => {
   line-height: 1.2;
 }
 
-.stat-card .stat-value.clickable {
-  cursor: pointer;
-}
-
-.stat-card .stat-value.clickable:hover {
-  color: var(--color-danger);
-}
-
 .stat-card .stat-label {
   font-size: 13px;
   color: var(--text-secondary);
   margin-top: var(--spacing-xs);
 }
 
-.message-stream {
-  flex: 1;
-  overflow-y: auto;
-  font-size: 13px;
-}
-
-.message-item {
+.explain-block {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0;
-  border-bottom: 1px solid var(--border-color-light);
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-regular);
 }
 
-.message-item:last-child {
-  border-bottom: none;
-}
-
-.msg-time {
+.explain-block code {
+  background: var(--bg-hover);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
+}
+
+.explain-block .hint {
+  font-size: 12px;
   color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-.msg-nick {
-  font-weight: 600;
-  color: var(--text-primary);
-  white-space: nowrap;
-}
-
-.msg-text {
-  color: var(--text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-}
-
-.empty-stream {
-  color: var(--text-disabled);
-  text-align: center;
-  padding: var(--spacing-xl);
-}
-
-.message-item.gift .msg-text {
-  color: var(--color-warning);
-}
-
-.message-item.super_chat .msg-text {
-  color: var(--color-danger);
-  font-weight: 600;
+  font-style: italic;
 }
 
 .card-header-row {
@@ -727,26 +493,11 @@ onUnmounted(() => {
   gap: var(--spacing-sm);
 }
 
-.persona-trait-cell {
-  color: var(--color-primary);
-  cursor: pointer;
-  font-size: 13px;
-}
-
-.persona-trait-cell:hover {
-  text-decoration: underline;
-}
-
-.persona-trait-popover .trait-label {
+code {
+  font-family: var(--font-mono);
+  background: var(--bg-hover);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
   font-size: 12px;
-  color: var(--text-secondary);
-  font-weight: 600;
-}
-
-.persona-trait-popover .trait-value {
-  font-size: 13px;
-  color: var(--text-primary);
-  white-space: pre-wrap;
-  word-break: break-word;
 }
 </style>

@@ -121,18 +121,30 @@ function getEventTypeClass(item: WebSocketMessage): Record<string, boolean> {
   const eventType = item.type;
   const classMap: Record<string, boolean> = {};
 
-  // Event type color mapping
+  // 事件类型颜色映射（v2）
+  // 主路：room.message.*（采集器归一化消息）；其他观测事件来自 agenda/planner/tool/game/live
   const typeColors: Record<string, string> = {
+    // v2 主族
+    room: 'type-blue',
+    agenda: 'type-purple',
+    'tool.result': 'type-green',
+    planner: 'type-purple',
+    game: 'type-blue',
+    live: 'type-blue',
+    // v2 旧名兼容
     'message.received': 'type-blue',
     'decision.intent': 'type-purple',
     'output.render': 'type-green',
+    // 兼容旧连接事件
     'collector.connected': 'type-green',
     'collector.disconnected': 'type-red',
     'decider.connected': 'type-green',
     'decider.disconnected': 'type-red',
   };
 
-  const colorClass = typeColors[eventType];
+  // v2 事件名是带前缀的（如 room.message.danmaku、tool.result.reply）；
+  // 优先匹配完整名，再按 `eventType.split('.')[0]` 前缀兜底（room/agenda/planner/tool.result/game/live）
+  const colorClass = typeColors[eventType] ?? typeColors[eventType.split('.')[0] ?? ''];
   if (colorClass) {
     classMap[colorClass] = true;
   }

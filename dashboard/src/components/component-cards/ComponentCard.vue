@@ -1,8 +1,5 @@
 <template>
-  <div
-    class="component-card"
-    :class="[statusClass, { expanded: isExpanded, 'is-decision': component.phase === 'decision' }]"
-  >
+  <div class="component-card" :class="[statusClass, { expanded: isExpanded, 'is-agent': isAgent }]">
     <!-- Header Section - Compact -->
     <div class="component-header">
       <div class="component-title-row">
@@ -164,6 +161,12 @@ const props = defineProps<Props>();
 const emit = defineEmits<Emits>();
 
 const isExpanded = ref(false);
+
+/** v2 group 标识：优先读 `group`，回落到 `phase`（旧后端兼容） */
+const groupKey = computed(() => props.component.group || props.component.phase || '');
+
+/** v2 Agent 类组件（decision 旧 phase）样式标记 */
+const isAgent = computed(() => groupKey.value === 'agents' || groupKey.value === 'decision');
 
 const statusClass = computed(() => {
   if (!props.component.is_enabled) return 'disabled';

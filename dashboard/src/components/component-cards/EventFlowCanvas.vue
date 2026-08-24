@@ -40,8 +40,32 @@ interface Particle {
 
 const particles = ref<Particle[]>([]);
 
-// Event type to color mapping
+// 事件类型 → 颜色映射（v2）
+// 后端 v2 事件族：room.message.*（采集器统一消息）、agenda.*、tool.result.*、planner.*、game.*
+// 兼容旧事件名（仅在迁移期可能混入）
 const EVENT_COLORS: Record<string, { color: string; glow: string }> = {
+  // v2 主族
+  'room.message': {
+    color: 'var(--color-input)',
+    glow: 'var(--color-input)',
+  },
+  agenda: {
+    color: 'var(--color-decision)',
+    glow: 'var(--color-decision)',
+  },
+  'tool.result': {
+    color: 'var(--color-output)',
+    glow: 'var(--color-output)',
+  },
+  planner: {
+    color: 'var(--color-decision)',
+    glow: 'var(--color-decision)',
+  },
+  game: {
+    color: 'var(--color-primary)',
+    glow: 'var(--color-primary)',
+  },
+  // 兼容旧事件名（v2 后端不再发布，但前端保持渲染兜底）
   'message.received': {
     color: 'var(--color-input)',
     glow: 'var(--color-input)',

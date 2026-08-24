@@ -53,7 +53,7 @@
         </div>
 
         <div class="status-group">
-          <span class="status-group-label">决策</span>
+          <span class="status-group-label">Agent</span>
           <div class="status-chips">
             <el-tag
               :type="status?.decision_phase?.enabled ? 'success' : 'info'"
@@ -63,7 +63,7 @@
               {{
                 status?.decision_phase?.enabled
                   ? `在线 ${status?.decision_phase?.active_components || 0}/${status?.decision_phase?.total_components || 0}`
-                  : '未启用'
+                  : '未接入'
               }}
             </el-tag>
             <span
@@ -79,7 +79,7 @@
         </div>
 
         <div class="status-group">
-          <span class="status-group-label">输出</span>
+          <span class="status-group-label">工具</span>
           <div class="status-chips">
             <el-tag
               :type="status?.output_phase?.enabled ? 'success' : 'info'"
@@ -89,7 +89,7 @@
               {{
                 status?.output_phase?.enabled
                   ? `活跃 ${status?.output_phase?.active_components || 0}/${status?.output_phase?.total_components || 0}`
-                  : '未启用'
+                  : '未接入'
               }}
             </el-tag>
           </div>
@@ -625,10 +625,19 @@ function maybeCompleteChain(chain: Chain): void {
 }
 
 // ====== WebSocket 事件处理 ======
+//
+// v2 事件族（参考 `.omo/evidence/w8-api-contract.txt` + 迁移文档）：
+// - `room.message.*`：所有消息事件统一入口（采集器归一化后）
+// - `agenda.*`：Agenda 推动的发言（Planner 决策）
+// - `tool.result.*`：工具执行结果（替代旧 output.render）
+// - `live.*` / `planner.*` / `game.*`：其他观测事件，按需扩展
+//
+// 兼容旧事件名（v2 后端不再发布，但保留兜底）。
 function handleEvent(message: WebSocketMessage): void {
   const t = message.type;
 
-  if (t === 'message.received') {
+  // v2 主路：room.message.*
+  if (t.startsWith('room.message') || t === 'message.received') {
     const data = (message.data ?? {}) as Record<string, unknown>;
     const msgObj = (data.message as Record<string, unknown> | undefined) ?? {};
     const metaObj = (data.metadata as Record<string, unknown> | undefined) ?? {};
@@ -640,23 +649,27 @@ function handleEvent(message: WebSocketMessage): void {
     const chain = ensureChain(idRaw, message.timestamp * 1000);
     chain.message = parseMessage(data);
     touchChain(chain, message.timestamp * 1000);
-    stats.value.danmaku += 1;
+    // v2 数据溯源：模拟消息不计入弹幕统计
+    if (!chain.message.simulated) {
+      stats.value.danmaku += 1;
+    }
     return;
   }
 
-  if (t === 'decision.intent') {
+  // v2 Planner/Agenda 发言：agenda.*
+  if (t.startsWith('agenda') || t === 'decision.intent') {
     const data = (message.data ?? {}) as Record<string, unknown>;
     const intent = parseIntent(data);
     const srcId =
       intent.metadata.source_message_id ??
       intent.metadata.source_id ??
       lastDecidingKey ??
-      `orphan-decision-${message.timestamp}`;
+      `orphan-agenda-${message.timestamp}`;
     const chain = ensureChain(srcId, message.timestamp * 1000);
     chain.decisions.push({
-      id: message.id ?? `decision-${message.timestamp}-${chain.decisions.length}`,
+      id: message.id ?? `agenda-${message.timestamp}-${chain.decisions.length}`,
       timestamp: message.timestamp,
-      deciderName: (data?.name as string) ?? 'Decider',
+      deciderName: (data?.name as string) ?? 'Planner',
       intent,
     });
     chain.status = 'deciding';
@@ -667,19 +680,20 @@ function handleEvent(message: WebSocketMessage): void {
     return;
   }
 
-  if (t === 'output.render') {
+  // v2 工具执行结果：tool.result.* 替代旧 output.render
+  if (t.startsWith('tool.result') || t === 'output.render') {
     const data = (message.data ?? {}) as Record<string, unknown>;
     const intent = parseIntent(data);
     const srcId =
       intent.metadata.source_message_id ??
       intent.metadata.source_id ??
       lastDecidingKey ??
-      `orphan-output-${message.timestamp}`;
+      `orphan-tool-${message.timestamp}`;
     const chain = ensureChain(srcId, message.timestamp * 1000);
     chain.output = {
-      id: message.id ?? `output-${message.timestamp}`,
+      id: message.id ?? `tool-${message.timestamp}`,
       timestamp: message.timestamp,
-      deciderName: 'Output',
+      deciderName: 'Tool',
       intent,
     };
     maybeCompleteChain(chain);
@@ -687,6 +701,7 @@ function handleEvent(message: WebSocketMessage): void {
     return;
   }
 
+  // 兼容旧连接事件
   if (t === 'collector.connected' || t === 'collector.disconnected') {
     const data = (message.data ?? {}) as Record<string, unknown>;
     const name = (data?.name as string) ?? 'unknown';

@@ -1,3 +1,13 @@
+/**
+ * Dashboard API 客户端（v2.0）
+ *
+ * W8 证据：maibot / outline / proactive / simulator 子路由已删除。模拟直播间能力由
+ * `modules/collectors/mock/` 承载，WebUI 管理页后续波次补齐 mock 控制面。
+ *
+ * 仍在使用的端点：system / components / messages / config / debug / llm /
+ * capabilities / events / traces
+ */
+
 import axios from 'axios';
 import type {
   SystemStatusResponse,
@@ -22,14 +32,10 @@ import type {
   LLMRequestHistory,
   MessageListResponse,
   UnifiedCapabilitiesView,
-  OutlineSegmentsResponse,
-  OutlineFileWriteRequest,
-  OutlineFileWriteResponse,
-  OutlineStateSnapshot,
-  OutlineTransitionsResponse,
-  OutlineControlAction,
-  OutlineControlResponse,
-  OutlineLoadResponse,
+  MockCollectorStatus,
+  MockCollectorStats,
+  MockCollectorPersona,
+  MockPersonaUpdatePayload,
 } from '@/types';
 
 const api = axios.create({
@@ -40,14 +46,19 @@ const api = axios.create({
   },
 });
 
-// System API
+// ===== 系统 =====
+
 export const systemApi = {
   getStatus: () => api.get<SystemStatusResponse>('/system/status'),
   getStats: () => api.get<SystemStatsResponse>('/system/stats'),
   getHealth: () => api.get<{ status: string; timestamp: number }>('/system/health'),
 };
 
-// Component API
+// ===== 组件 =====
+//
+// 后端 `/api/v1/components` 当前返回 `{input:[], decision:[], output:[]}`（W8 证据）：
+// 三个 Manager 未被注入，所以列表恒空。v2 新架构分组键为 `collectors / agents / tools`，
+// 但当前端点尚未更新；前端按现状保留 phase 字段，新增 group 字段待后端补齐。
 export const componentApi = {
   getAll: () => api.get<ComponentListResponse>('/components'),
   getOne: (phase: string, name: string) =>
@@ -56,7 +67,10 @@ export const componentApi = {
     api.post<ComponentControlResponse>(`/components/${phase}/${name}/control`, request),
 };
 
-// Config API
+// ===== 配置 =====
+//
+// 后端 `/api/v1/config` 返回 7 文件合并的扁平 dict（core / model / agents / tools /
+// memory / storage / background）；`/api/v1/config/schema` 返回按文件归类的 groups。
 export const configApi = {
   get: () => api.get<ConfigResponse>('/config'),
   getSchema: () => api.get<ConfigSchemaResponse>('/config/schema'),
@@ -64,7 +78,7 @@ export const configApi = {
   restart: () => api.post<ConfigUpdateResponse>('/config/restart'),
 };
 
-// Debug API
+// ===== 调试注入 =====
 export const debugApi = {
   injectMessage: (request: InjectMessageRequest) =>
     api.post<InjectMessageResponse>('/debug/inject-message', request),
@@ -73,26 +87,7 @@ export const debugApi = {
   getEventBusStats: () => api.get<EventBusStatsResponse>('/debug/event-bus/stats'),
 };
 
-// MaiBot API
-export interface MaibotActionRequest {
-  text?: string;
-  emotion?: { name: string; intensity: number };
-  action?: { name: string; parameters: Record<string, unknown> };
-}
-
-export interface MaibotActionResponse {
-  success: boolean;
-  intent_id?: string;
-  message?: string;
-  error?: string;
-}
-
-export const maibotApi = {
-  triggerAction: (request: MaibotActionRequest) =>
-    api.post<MaibotActionResponse>('/maibot/action', request),
-};
-
-// Message API
+// ===== 会话消息 =====
 export const messageApi = {
   getSessionMessages: (sessionId: string, limit: number = 100) =>
     api.get<MessageListResponse>(`/messages/sessions/${sessionId}/messages`, {
@@ -100,7 +95,7 @@ export const messageApi = {
     }),
 };
 
-// LLM API
+// ===== LLM =====
 export const llmApi = {
   getUsage: () => api.get<Record<string, LLMUsageStats>>('/llm/usage'),
   getUsageSummary: () => api.get<LLMUsageSummary>('/llm/usage/summary'),
@@ -110,96 +105,46 @@ export const llmApi = {
   getAvailableDates: () => api.get<string[]>('/llm/history/dates'),
 };
 
-// Capabilities API
+// ===== Capabilities（v2 工具 action 清单） =====
 export const capabilitiesApi = {
   list: () => api.get<UnifiedCapabilitiesView>('/capabilities'),
 };
 
-// Outline API — 直播大纲工作台（运行态 + 编辑）
-export const outlineApi = {
-  /** 获取运行时状态快照（状态栏 / 当前环节 / 整场进度） */
-  getState: () => api.get<OutlineStateSnapshot>('/outline/state'),
-  /** 加载指定路径的大纲 TOML 文件 */
-  loadOutline: (path: string) => api.post<OutlineLoadResponse>('/outline/load', { path }),
-  /** 手动控制推进（skip/pause/resume/rewind/jump） */
-  control: (action: OutlineControlAction, segmentId?: string) =>
-    api.post<OutlineControlResponse>('/outline/control', {
-      action,
-      ...(segmentId ? { segment_id: segmentId } : {}),
-    }),
-  /** 把编辑后的大纲 TOML 写回磁盘（下一段生效） */
-  saveFile: (request: OutlineFileWriteRequest) =>
-    api.put<OutlineFileWriteResponse>('/outline/file', request),
-  /** 获取当前大纲完整环节列表（含 expanded 扩展内容） */
-  getSegments: () => api.get<OutlineSegmentsResponse>('/outline/segments'),
-  /** 获取环节推进历史（时间线） */
-  getTransitions: () => api.get<OutlineTransitionsResponse>('/outline/transitions'),
-};
-
-// Trace API
-export * from './traces';
-
-// Simulator API
-export interface SimulatorStatus {
-  is_running: boolean;
-  current_state: string;
-  started_at_ms: number;
-  config_snapshot: Record<string, unknown>;
-  is_collector_available: boolean;
-}
-
-export interface SimulatorStats {
-  total_messages: number;
-  total_tokens: number;
-  messages_by_type: Record<string, number>;
-  messages_by_role: Record<string, number>;
-}
-
-export interface SimulatorPersona {
-  user_id: string;
-  user_nickname: string;
-  role: string;
-  personality: string;
-  speaking_style: string;
-  fans_medal_level: number;
-  guard_level: number;
-  messages_generated: number;
-}
-
-export interface PersonaUpdatePayload {
-  user_nickname?: string;
-  role?: string;
-  personality?: string;
-  speaking_style?: string;
-  fans_medal_level?: number;
-  guard_level?: number;
-}
-
-export const simulatorApi = {
-  getStatus: () => api.get<SimulatorStatus>('/simulator/status'),
-  getStats: () => api.get<SimulatorStats>('/simulator/stats'),
-  getPersonas: () => api.get<SimulatorPersona[]>('/simulator/personas'),
-  generatePersonas: (count: number, roles?: string[]) =>
-    api.post<{ status: string; personas: SimulatorPersona[]; added: number; skipped: number }>(
-      '/simulator/personas/generate',
-      { count, roles },
+// ===== Mock 采集器控制面（v2 新增） =====
+//
+// W8 路由：`/api/v1/simulator/*` 已删除。下列方法当前调用 404/503；前端调用时
+// 应 try/catch 并显示"mock 采集器未启用"提示。后续波次后端会补齐 mock 控制面端点
+// （挂载在 `/api/v1/mock/*` 或新增独立 router），此处 API 形态保留以便平滑切换。
+export const mockCollectorApi = {
+  getStatus: () => api.get<MockCollectorStatus>('/mock/status'),
+  getStats: () => api.get<MockCollectorStats>('/mock/stats'),
+  getPersonas: () => api.get<MockCollectorPersona[]>('/mock/personas'),
+  generatePersonas: (count: number) =>
+    api.post<{ status: string; personas: MockCollectorPersona[]; added: number; skipped: number }>(
+      '/mock/personas/generate',
+      { count },
       { timeout: 120000 },
     ),
-  updatePersona: (userId: string, payload: PersonaUpdatePayload) =>
-    api.put<{ status: string }>(`/simulator/personas/${userId}`, payload),
-  deletePersona: (userId: string) =>
-    api.delete<{ status: string }>(`/simulator/personas/${userId}`),
-  start: () => api.post<{ status: string }>('/simulator/start'),
-  stop: () => api.post<{ status: string }>('/simulator/stop'),
+  updatePersona: (userId: string, payload: MockPersonaUpdatePayload) =>
+    api.put<{ status: string }>(`/mock/personas/${userId}`, payload),
+  deletePersona: (userId: string) => api.delete<{ status: string }>(`/mock/personas/${userId}`),
+  start: () => api.post<{ status: string }>('/mock/start'),
+  stop: () => api.post<{ status: string }>('/mock/stop'),
   updateParams: (params: Record<string, unknown>) =>
-    api.post<{ status: string; params: Record<string, unknown> }>('/simulator/params', params),
-  triggerGiftRain: (duration_s: number = 30) =>
-    api.post<{ status: string; duration_s: number }>('/simulator/trigger/gift_rain', {
-      duration_s,
+    api.post<{ status: string; params: Record<string, unknown> }>('/mock/params', params),
+  triggerGiftRain: (durationS: number = 30) =>
+    api.post<{ status: string; duration_s: number }>('/mock/trigger/gift_rain', {
+      duration_s: durationS,
     }),
   triggerTopicInjection: (topic: string) =>
-    api.post<{ status: string; topic: string }>('/simulator/trigger/topic_injection', { topic }),
-  resetTokenBudget: () => api.post<{ status: string }>('/simulator/reset_token_budget'),
+    api.post<{ status: string; topic: string }>('/mock/trigger/topic_injection', { topic }),
+  resetTokenBudget: () => api.post<{ status: string }>('/mock/reset_token_budget'),
 };
+
+// ===== Trace =====
+//
+// `traces.ts` 当前实现：GET /traces（按 message_id 聚合 room.message 事件） +
+// GET /traces/{message_id}。v2 实现仅返回 message + event，decision/outputs 字段为空。
+export * from './traces';
 
 export default api;

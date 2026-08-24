@@ -202,13 +202,13 @@
             <div class="dt-dot" />
             <div class="dt-card">
               <div class="dt-card-header">
-                <span class="dt-card-title">📤 输出</span>
+                <span class="dt-card-title">📤 输出（tool.result）</span>
                 <el-tag size="small" type="success" effect="plain">
-                  {{ currentTrace.outputs.length }} 个 Handler
+                  {{ (currentTrace.outputs ?? []).length }} 个 Handler
                 </el-tag>
               </div>
-              <div v-if="currentTrace.outputs.length === 0" class="dt-empty-hint">
-                无 Handler 处理此 Intent
+              <div v-if="(currentTrace.outputs ?? []).length === 0" class="dt-empty-hint">
+                v2 Trace 接口当前不返回 Handler 列表（trace.py 仅聚合 room.message 事件）
               </div>
               <div v-else class="dt-output-list">
                 <div v-for="(out, i) in currentTrace.outputs" :key="i" class="dt-output-row">
@@ -449,23 +449,31 @@ function closeTraceDrawer() {
 }
 
 // 从事件的 data 中提取关联的 message_id
-// 三种事件都能关联到同一条链路：
-//   message.received → data.message.message_id
-//   decision.intent  → data.intent_data.metadata.source_message_id
-//   output.render    → data.intent_data.metadata.source_message_id
+// v2 事件关联到同一条链路：
+//   room.message.*  → data.message.message_id
+//   agenda.* / tool.result.* / planner.* → data.intent_data.metadata.source_message_id
+// 兼容旧事件名（v2 后端不再发布）
 function getMessageId(event: { type: string; data: Record<string, unknown> }): string | null {
-  if (event.type === 'message.received') {
+  // v2 主路：room.message.*
+  if (event.type.startsWith('room.message') || event.type === 'message.received') {
     const msg = event.data?.message as Record<string, unknown> | undefined;
     if (!msg) return null;
     const id = msg.message_id;
     return typeof id === 'string' && id.length > 0 ? id : null;
   }
-  if (event.type === 'decision.intent' || event.type === 'output.render') {
+  // v2: agenda.* / tool.result.* / planner.* + 旧 decision.intent / output.render
+  if (
+    event.type.startsWith('agenda') ||
+    event.type.startsWith('tool.result') ||
+    event.type.startsWith('planner') ||
+    event.type === 'decision.intent' ||
+    event.type === 'output.render'
+  ) {
     const intentData = event.data?.intent_data as Record<string, unknown> | undefined;
     if (!intentData) return null;
     const metadata = intentData.metadata as Record<string, unknown> | undefined;
     if (!metadata) return null;
-    const id = metadata.source_message_id;
+    const id = metadata.source_message_id ?? metadata.message_id;
     return typeof id === 'string' && id.length > 0 ? id : null;
   }
   return null;
@@ -502,14 +510,26 @@ function copyText(text: string) {
   });
 }
 
-// 获取事件类型的 CSS 类
+// 获取事件类型的 CSS 类（v2 事件族颜色映射）
 function getEventClass(type: string): string {
-  if (type.includes('input') || type.includes('message')) return 'type-input';
-  if (type.includes('decision') || type.includes('intent')) return 'type-decision';
-  if (type.includes('output') || type.includes('render')) return 'type-output';
+  // v2 主族
+  if (type.startsWith('room.message') || type.includes('message')) return 'type-input';
+  if (
+    type.startsWith('agenda') ||
+    type.startsWith('planner') ||
+    type.includes('decision') ||
+    type.includes('intent')
+  ) {
+    return 'type-decision';
+  }
+  if (type.startsWith('tool.result') || type.includes('output') || type.includes('render')) {
+    return 'type-output';
+  }
+  if (type.startsWith('game')) return 'type-collector';
   if (type.includes('error')) return 'type-error';
   if (type.includes('collector')) return 'type-collector';
   if (type.includes('system') || type.includes('heartbeat')) return 'type-system';
+  if (type.startsWith('live')) return 'type-system';
   return 'type-default';
 }
 

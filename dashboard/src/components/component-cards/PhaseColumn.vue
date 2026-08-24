@@ -1,9 +1,9 @@
 <template>
-  <section class="phase-column" :style="phaseStyleVars">
-    <!-- Phase title area -->
+  <section class="group-column" :style="groupStyleVars">
+    <!-- Group title area -->
     <div class="section-header">
       <div class="section-title">
-        <span class="phase-icon">
+        <span class="group-icon">
           <component :is="icon" />
         </span>
         <h2>{{ title }}</h2>
@@ -27,8 +27,21 @@ import { computed } from 'vue';
 import type { Component } from 'vue';
 import type { ComponentSummary } from '@/types';
 
+/**
+ * Group 列组件（v2）
+ *
+ * W8 证据：后端 `/api/v1/components` 当前返回 `{input:[], decision:[], output:[]}` 三个空数组
+ * （DashboardServer 的三个 Manager 未被 main.py 注入）。v2 新架构分组键为
+ * `collectors / agents / tools`，但当前端点尚未更新；为兼容现状，`group` 属性接受
+ * 旧 phase 名（input/decision/output）与 v2 group 名（collectors/agents/tools）。
+ *
+ * 颜色映射同时支持 v2 CSS 变量（--color-collector/--color-agent/--color-tool）
+ * 与旧 phase 变量（--color-input/--color-decision/--color-output）。
+ */
+
 interface Props {
-  phase: 'input' | 'decision' | 'output';
+  /** v2: collectors | agents | tools（旧：input | decision | output） */
+  group: string;
   title: string;
   components: ComponentSummary[];
   icon: Component;
@@ -37,7 +50,7 @@ interface Props {
 
 interface Emits {
   (e: 'refresh'): void;
-  (e: 'control', phase: string, name: string, action: 'start' | 'stop' | 'restart'): void;
+  (e: 'control', group: string, name: string, action: 'start' | 'stop' | 'restart'): void;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -46,36 +59,56 @@ const props = withDefaults(defineProps<Props>(), {
 
 defineEmits<Emits>();
 
-const phaseStyleVars = computed(() => {
-  const colorMap = {
+const groupStyleVars = computed(() => {
+  // v2 group → CSS 变量映射；缺变量时回落到旧 phase 变量
+  const colorMap: Record<string, Record<string, string>> = {
+    // v2 新分组
+    collectors: {
+      '--group-color': 'var(--color-collector, var(--color-input))',
+      '--group-color-bg': 'var(--color-collector-bg, var(--color-input-bg))',
+    },
+    agents: {
+      '--group-color': 'var(--color-agent, var(--color-decision))',
+      '--group-color-bg': 'var(--color-agent-bg, var(--color-decision-bg))',
+    },
+    tools: {
+      '--group-color': 'var(--color-tool, var(--color-output))',
+      '--group-color-bg': 'var(--color-tool-bg, var(--color-output-bg))',
+    },
+    // 旧 phase 兼容（v2 后端未更新前仍会下发）
     input: {
-      '--phase-color': 'var(--color-input)',
-      '--phase-color-bg': 'var(--color-input-bg)',
+      '--group-color': 'var(--color-input)',
+      '--group-color-bg': 'var(--color-input-bg)',
     },
     decision: {
-      '--phase-color': 'var(--color-decision)',
-      '--phase-color-bg': 'var(--color-decision-bg)',
+      '--group-color': 'var(--color-decision)',
+      '--group-color-bg': 'var(--color-decision-bg)',
     },
     output: {
-      '--phase-color': 'var(--color-output)',
-      '--phase-color-bg': 'var(--color-output-bg)',
+      '--group-color': 'var(--color-output)',
+      '--group-color-bg': 'var(--color-output-bg)',
     },
   };
-  return colorMap[props.phase];
+  return colorMap[props.group] ?? colorMap.input;
 });
 
 const emptyText = computed(() => {
-  const textMap = {
+  const textMap: Record<string, string> = {
+    // v2 默认文案
+    collectors: '暂无采集器',
+    agents: '暂无 Agent',
+    tools: '暂无工具',
+    // 旧 phase 兼容
     input: '暂无 Input 组件',
     decision: '暂无 Decision 组件',
     output: '暂无 Output 组件',
   };
-  return textMap[props.phase];
+  return textMap[props.group] ?? '暂无组件';
 });
 </script>
 
 <style scoped>
-.phase-column {
+.group-column {
   margin-bottom: var(--spacing-xl);
   position: relative;
 }
@@ -101,26 +134,26 @@ const emptyText = computed(() => {
   margin: 0;
 }
 
-/* Phase Icon */
-.phase-icon {
+/* Group Icon */
+.group-icon {
   width: 24px;
   height: 24px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--phase-color);
+  color: var(--group-color);
   transition: color var(--transition-normal);
 }
 
-.phase-icon :deep(svg) {
+.group-icon :deep(svg) {
   width: 20px;
   height: 20px;
 }
 
 /* Count Badge */
 .count-badge {
-  background: var(--phase-color-bg);
-  color: var(--phase-color);
+  background: var(--group-color-bg);
+  color: var(--group-color);
   font-size: 12px;
   font-weight: 600;
   padding: 2px 8px;
@@ -138,11 +171,11 @@ const emptyText = computed(() => {
 }
 
 /* Empty State */
-.phase-column :deep(.el-empty) {
+.group-column :deep(.el-empty) {
   padding: var(--spacing-xl) 0;
 }
 
-.phase-column :deep(.el-empty__description) {
+.group-column :deep(.el-empty__description) {
   color: var(--text-secondary);
 }
 </style>

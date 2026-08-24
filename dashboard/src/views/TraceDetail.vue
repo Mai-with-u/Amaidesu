@@ -109,7 +109,7 @@
               <div class="card-header">
                 <span class="card-title">
                   <el-icon><ChatLineRound /></el-icon>
-                  消息 — Input 阶段
+                  消息 — room.message
                 </span>
                 <el-tag size="small" effect="plain" type="primary">
                   {{ trace.message.source }}
@@ -147,7 +147,7 @@
               <div class="card-header">
                 <span class="card-title">
                   <el-icon><MagicStick /></el-icon>
-                  决策 — Decision 阶段
+                  决策 — agenda / tool.result
                 </span>
                 <div class="header-tags">
                   <el-tag size="small" effect="plain" type="warning">
@@ -191,7 +191,7 @@
 
         <!-- 时间箭头 -->
         <div class="timeline-arrow">
-          <span class="arrow-label mono">→ 输出阶段</span>
+          <span class="arrow-label mono">→ tool.result</span>
         </div>
 
         <!-- 输出卡片（Output 阶段） -->
@@ -202,21 +202,24 @@
               <div class="card-header">
                 <span class="card-title">
                   <el-icon><Promotion /></el-icon>
-                  输出 — Output 阶段
+                  输出 — tool.result
                 </span>
-                <el-tag size="small" type="success"> {{ trace.outputs.length }} 个 Handler </el-tag>
+                <el-tag size="small" type="success"> {{ outputs.length }} 个 Handler </el-tag>
               </div>
             </template>
 
-            <div v-if="trace.outputs.length === 0" class="no-outputs">
+            <div v-if="outputs.length === 0" class="no-outputs">
               <el-icon :size="32" color="var(--text-placeholder)">
                 <InfoFilled />
               </el-icon>
-              <span>没有任何 Handler 注册处理此 Intent</span>
+              <span
+                >v2 后端 Trace 接口当前不返回 Handler 列表（trace.py:107 仅聚合 room.message
+                事件）</span
+              >
             </div>
 
             <div v-else class="output-list">
-              <div v-for="(output, idx) in trace.outputs" :key="idx" class="output-row">
+              <div v-for="(output, idx) in outputs" :key="idx" class="output-row">
                 <div class="output-status">
                   <el-icon class="status-icon"><Check /></el-icon>
                 </div>
@@ -246,11 +249,11 @@
         <div class="timeline-summary">
           <el-card class="summary-card" shadow="never">
             <div class="summary-content">
-              <span class="summary-label">总耗时</span>
-              <span class="summary-value mono">
+              <span v-if="trace.total_elapsed_ms != null" class="summary-label">总耗时</span>
+              <span v-if="trace.total_elapsed_ms != null" class="summary-value mono">
                 {{ formatLatency(trace.total_elapsed_ms) }}
               </span>
-              <span class="summary-divider">|</span>
+              <span v-if="trace.total_elapsed_ms != null" class="summary-divider">|</span>
               <span class="summary-label">消息 ID</span>
               <span class="summary-id mono" :title="trace.message_id">
                 {{ trace.message_id }}
@@ -307,7 +310,10 @@ const notFound = ref(false);
 
 // ==================== 计算属性 ====================
 
-/** 从消息时间戳到决策时间的耗时（毫秒） */
+/** v2 后端 trace 接口可能不返回 outputs 字段（旧结构）；做防御性兜底 */
+const outputs = computed(() => trace.value?.outputs ?? []);
+
+/** 从消息时间戳到决策时间的耗时（毫秒，v2 通常为 0：trace 不包含决策记录） */
 const decisionLatency = computed(() => {
   if (!trace.value?.decision) return 0;
   return trace.value.decision.elapsed_ms;
@@ -385,7 +391,7 @@ function formatDateTimeMs(tsMs: number): string {
   });
 }
 
-function formatLatency(ms: number): string {
+function formatLatency(ms: number | null | undefined): string {
   if (ms === null || ms === undefined || isNaN(ms)) return '—';
   if (ms < 1000) return `${Math.round(ms)}ms`;
   return `${(ms / 1000).toFixed(2)}s`;

@@ -4,6 +4,13 @@ import { systemApi } from '@/api';
 import type { SystemStatusResponse } from '@/types';
 import { useComponentsStore } from './components';
 
+/**
+ * 系统状态 store（v2.0）
+ *
+ * W8 证据：`/api/v1/system/status` 当前返回 `input_phase/decision_phase/output_phase`
+ * 全为 null（DashboardServer 三个 Manager 未被 main.py 注入）。前端应优雅降级：
+ * 视为"未启用"，不阻塞轮询。
+ */
 export const useSystemStore = defineStore('system', () => {
   const status = ref<SystemStatusResponse | null>(null);
   const loading = ref(false);
@@ -29,7 +36,6 @@ export const useSystemStore = defineStore('system', () => {
 
   async function _pollOnce() {
     await fetchStatus();
-    // 在函数内部惰性调用 useComponentsStore，避免 setup 顶层的初始化顺序问题
     const componentsStore = useComponentsStore();
     await componentsStore.fetchComponents();
   }

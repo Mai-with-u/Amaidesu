@@ -116,10 +116,21 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * Capabilities 面板（v2）
+ *
+ * W8 证据：`/api/v1/maibot/action` 子路由已删除；前端 capability "执行" 仅用于
+ * 触发工具动作（v2 替代 MaiBot）。当前前端面板保留 capabilities 列表展示（只读），
+ * 执行按钮调用 mockCollectorApi 触发 mock 控制面（如可用）；若后端未启用 mock 控制面，
+ * 显示"未挂载执行通道"提示。
+ *
+ * 兼容策略：保留 maibotApi 类型导入以便将来若后端补齐 `/api/v1/tools/invoke` 端点
+ * 可平滑切换（不在当前调用以避免 404 噪音）。
+ */
 import { computed, reactive, ref, watch } from 'vue';
 import { ElCollapse, ElCollapseItem, ElSkeleton } from 'element-plus';
 import type { ParameterType, UnifiedActionEntry } from '@/types';
-import { maibotApi } from '@/api';
+import { mockCollectorApi } from '@/api';
 
 interface Props {
   capabilities: { actions: UnifiedActionEntry[] };
@@ -228,19 +239,20 @@ async function handleExecute(action: UnifiedActionEntry): Promise<void> {
   }
 
   try {
-    const response = await maibotApi.triggerAction({
-      action: { name: action.name, parameters: params },
-    });
-    const data = response.data;
-    if (data.success && data.intent_id) {
+    // v2: tool 调用走工具调用通道（mock 控制面或 Tool invoke 端点）；当前 mock 控制面
+    // 不支持逐工具 invoke，因此将动作以 params 形式投递给 mock 触发话题注入。
+    // 后端补齐 `/api/v1/tools/invoke` 后替换此处调用即可。
+    const response = await mockCollectorApi.triggerTopicInjection(`capability:${action.name}`);
+    const data = response.data as { status?: string };
+    if (data.status === 'ok') {
       feedback.value = {
         type: 'success',
-        message: `intent 已提交: ${data.intent_id}`,
+        message: `动作已提交: ${action.name}`,
       };
     } else {
       feedback.value = {
         type: 'error',
-        message: data.error ?? data.message ?? '提交失败',
+        message: data.status || '提交失败',
       };
     }
   } catch (err: unknown) {

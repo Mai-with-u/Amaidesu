@@ -125,7 +125,9 @@
               </div>
               <div class="section-fields">
                 <ComponentCardList
-                  v-if="['collectors', 'deciders', 'handlers'].includes(section.key)"
+                  v-if="
+                    ['collectors', 'deciders', 'handlers', 'agents', 'tools'].includes(section.key)
+                  "
                   :fields="section.fields"
                   :enabled-field-key="`${section.key}.enabled`"
                   :get-value="getFieldValue"
@@ -196,32 +198,69 @@ import type { ConfigFieldSchema, ConfigGroupSchema, PendingChange } from '@/type
 import SubFieldGroup from '@/components/settings/SubFieldGroup.vue';
 import ComponentCardList from '@/components/settings/ComponentCardList.vue';
 
-// ── 文件 Tab 定义 ──────────────────────────────────────────
-const FILE_TABS = [
+// ── 文件 Tab 定义（v2.0：7 文件配置树） ──────────────────────
+// 后端 `/api/v1/config/schema` 返回的 groups 元素已带 `file_name` 与 `file_label` 字段
+// （v2 配置管理 W2 改造后），前端从 schema 动态推断 Tab 列表；下方保留硬编码顺序作为
+// 兜底（schema 为空 / 后端异常时仍可展示所有文件 Tab）。
+const FALLBACK_FILE_TABS = [
   {
     key: 'core.toml',
-    label: '核心',
+    label: '🚀 核心',
     icon: Monitor,
     desc: '通用 / 角色 / Dashboard / 日志',
     restart: true,
   },
-  { key: 'model.toml', label: '模型', icon: Cpu, desc: 'LLM / VLM 模型配置', restart: true },
+  { key: 'model.toml', label: '🧠 模型', icon: Cpu, desc: 'LLM / VLM 模型配置', restart: true },
+  {
+    key: 'agents.toml',
+    label: '🤖 业务 Agent',
+    icon: ChatDotRound,
+    desc: '主播 Agent / 游戏 Agent',
+    restart: false,
+  },
+  {
+    key: 'tools.toml',
+    label: '🔧 工具包',
+    icon: Film,
+    desc: 'TTS / 字幕 / VTS / OBS / 感知',
+    restart: false,
+  },
+  {
+    key: 'memory.toml',
+    label: '💾 记忆',
+    icon: Microphone,
+    desc: 'SimpleMemory / Amemorix',
+    restart: false,
+  },
+  { key: 'storage.toml', label: '📦 存储', icon: Document, desc: 'SQLite 存储', restart: false },
+  {
+    key: 'background.toml',
+    label: '⏱️ 后台',
+    icon: ChatDotRound,
+    desc: '压缩 worker 等后台任务',
+    restart: false,
+  },
+];
+// 兼容旧 5 文件配置（迁期期 schema 可能仍带 input/decision/output 段）
+const LEGACY_FILE_TABS = [
   {
     key: 'input.toml',
-    label: '输入',
+    label: '🎙️ 输入',
     icon: Microphone,
-    desc: '弹幕 / 语音 / 控制台采集',
+    desc: '弹幕 / 语音 / 控制台采集（已废弃）',
     restart: false,
   },
   {
     key: 'decision.toml',
-    label: '决策',
+    label: '🧩 决策',
     icon: ChatDotRound,
-    desc: 'MaiBot / LLM 决策',
+    desc: '决策器（已废弃）',
     restart: false,
   },
-  { key: 'output.toml', label: '输出', icon: Film, desc: 'TTS / 字幕 / VTS / OBS', restart: false },
+  { key: 'output.toml', label: '🎬 输出', icon: Film, desc: 'Handler（已废弃）', restart: false },
 ];
+
+const FILE_TABS = [...FALLBACK_FILE_TABS, ...LEGACY_FILE_TABS];
 
 // 简化图标映射（按使用频率排序，只保留用到的）
 const iconMap: Record<string, unknown> = {
