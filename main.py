@@ -513,8 +513,36 @@ async def _register_agents_from_config(
             manager.register(agent, spec_provider="builtin")
             continue
         if agent_name == "game":
-            # Wave 7 占位：游戏 Agent 范式（§1.5.1）
-            logger.info("game Agent 待 Wave 7 实现，当前跳过")
+            try:
+                from src.agents.game.text_adv import (
+                    TextAdvGameAgent,
+                    TextAdvGameConfig,
+                )
+                from src.modules.tools.content_engine import StubContentEngine
+
+                game_cfg_dict = sub_cfg if isinstance(sub_cfg, dict) else {}
+                engine_name = str(game_cfg_dict.get("engine", "text_adv") or "text_adv")
+                if engine_name != "text_adv":
+                    logger.warning(f"game Agent 引擎 '{engine_name}' 尚未实现（仅 text_adv），跳过")
+                    continue
+
+                try:
+                    text_adv_cfg = TextAdvGameConfig(**{k: v for k, v in game_cfg_dict.items() if k != "engine"})
+                except Exception as e:
+                    logger.warning(f"解析 TextAdvGameConfig 失败: {e}; 使用默认配置")
+                    text_adv_cfg = TextAdvGameConfig()
+
+                text_adv_agent = TextAdvGameAgent(
+                    config=text_adv_cfg,
+                    content_engine=StubContentEngine(engine_kind="text_adv"),
+                    llm_manager=llm_service,
+                    prompt_manager=get_prompt_manager(),
+                    event_bus=event_bus,
+                )
+                manager.register(text_adv_agent, spec_provider="game")
+                logger.info(f"TextAdvGameAgent 已注册 (engine={engine_name})")
+            except Exception as e:
+                logger.warning(f"game Agent 注册失败: {e}")
             continue
         if agent_name == "custom":
             logger.info("custom Agent 由用户自定义注册，当前跳过（占位）")
