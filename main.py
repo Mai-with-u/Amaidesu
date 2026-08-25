@@ -169,7 +169,7 @@ def validate_config(config: Dict[str, Any]) -> None:
         logger.critical("配置根对象不是 dict（schema 漂移？）")
         return
 
-    # core.toml 段（meta / general / context / events / dashboard / logging / pipelines）
+    # core.toml 段（meta / general / context / events / dashboard / logging / interceptors）
     if "general" not in config or not isinstance(config["general"], dict):
         logger.critical("缺少 [general] 配置段（core.toml）")
 
@@ -244,8 +244,8 @@ def register_event_interceptors(event_bus: EventBus, config: Dict[str, Any]) -> 
     - 拦截器作用于 ``room.message.*`` 事件（v2 语义域）
     - 拦截器返回 ``None`` 即丢弃该事件
     """
-    pipelines_config = config.get("pipelines", {}) if isinstance(config, dict) else {}
-    rate_limit_cfg = pipelines_config.get("rate_limit", {}) if isinstance(pipelines_config, dict) else {}
+    interceptors_config = config.get("interceptors", {}) if isinstance(config, dict) else {}
+    rate_limit_cfg = interceptors_config.get("rate_limit", {}) if isinstance(interceptors_config, dict) else {}
     if rate_limit_cfg.get("enabled", True):
         event_bus.add_interceptor(
             RateLimitInterceptor(
@@ -254,9 +254,9 @@ def register_event_interceptors(event_bus: EventBus, config: Dict[str, Any]) -> 
                 window_size=rate_limit_cfg.get("window_size", 60),
             )
         )
-        logger.info("RateLimitInterceptor 已注册（[pipelines.rate_limit]）")
+        logger.info("RateLimitInterceptor 已注册（[interceptors.rate_limit]）")
 
-    similar_cfg = pipelines_config.get("similar_filter", {}) if isinstance(pipelines_config, dict) else {}
+    similar_cfg = interceptors_config.get("similar_filter", {}) if isinstance(interceptors_config, dict) else {}
     if similar_cfg.get("enabled", True):
         event_bus.add_interceptor(
             SimilarFilterInterceptor(
@@ -266,7 +266,7 @@ def register_event_interceptors(event_bus: EventBus, config: Dict[str, Any]) -> 
                 cross_user_filter=similar_cfg.get("cross_user_filter", True),
             )
         )
-        logger.info("SimilarFilterInterceptor 已注册（[pipelines.similar_filter]）")
+        logger.info("SimilarFilterInterceptor 已注册（[interceptors.similar_filter]）")
 
 
 # ---------------------------------------------------------------------------
@@ -336,14 +336,16 @@ async def create_app_components(
     logger.info("事件历史记录器已启动")
 
     # --- 5. CollectorManager ---
+    # v2：采集器配置位于 tools.toml 的 [tools.perception.config]（旧 [collectors] 段已迁移）
     collector_manager: Optional["CollectorManager"] = None
-    collectors_config = config.get("collectors", {}) if isinstance(config, dict) else {}
+    tools_perception = (config.get("tools") or {}).get("perception", {}) if isinstance(config, dict) else {}
+    collectors_config = tools_perception.get("config", {}) if isinstance(tools_perception, dict) else {}
     if collectors_config:
         logger.info("初始化 CollectorManager（src/modules/collectors/）...")
         from src.modules.collectors.manager import CollectorManager
 
         collector_manager = CollectorManager()
-        await _register_collectors_from_config(collector_manager, collectors_config, config_service)
+        await _register_collectors_from_config(collector_manager, collectors_config, config_service, event_bus)
         await collector_manager.start_all()
         logger.info(f"CollectorManager 已启动（{len(collector_manager)} 个 Collector）")
 
@@ -380,6 +382,9 @@ async def create_app_components(
             event_bus,
             context_service,
             config_service,
+            collector_manager,
+            agent_manager,
+            llm_service,
             log_streamer,
         )
 
@@ -433,86 +438,26 @@ async def _start_log_streamer():
     return streamer
 
 
-async def _register_collectors_from_config(manager, config_section, config_service):
-    """根据 [collectors] 段注册 Collector 实例到 CollectorManager。
+async def _register_collectors_from_config(manager, config_section, config_service, event_bus=None):
+    """根据 [tools.perception.config] 段注册 Collector 实例到 CollectorManager。
 
-    [collectors] 段结构：
-        enabled = ["bilibili", "mock", ...]
-        bilibili = { ... }
-        mock = { ... }
+    v2 段结构（tools.toml）：
+        enabled = ["bili_danmaku", "mock_danmaku", ...]
+        bili_danmaku = { ... }
+        mock_danmaku = { ... }
     """
+    from src.modules.collectors.factory import instantiate_collector
 
     enabled_list = config_section.get("enabled", []) or []
     for collector_name in enabled_list:
         sub_cfg = config_section.get(collector_name, {})
         if not isinstance(sub_cfg, dict):
             sub_cfg = {}
-        try:
-            # 通过 ConfigService 加载子 schema
-            cfg_class = _try_get_collector_config(collector_name)
-            if cfg_class is not None:
-                typed_cfg = cfg_class(**sub_cfg)
-            else:
-                typed_cfg = None
-        except Exception as e:
-            logger.warning(f"Collector '{collector_name}' 配置验证失败: {e}")
-            typed_cfg = None
-
-        instance = _instantiate_collector(collector_name, typed_cfg)
+        instance = instantiate_collector(collector_name, sub_cfg, event_bus=event_bus)
         if instance is None:
             logger.warning(f"Collector '{collector_name}' 未找到 Collector 类，跳过")
             continue
         manager.register(instance, description=sub_cfg.get("description", ""))
-
-
-def _try_get_collector_config(collector_name: str):
-    """尝试获取 Collector 子段 Schema（v2 暂未细分，fallback 到 dict）。"""
-    # v2 简化：暂不细分 Collector Schema（agent_schemas / collector_schemas 合并策略后续 wave 决定）
-    return None
-
-
-def _instantiate_collector(collector_name: str, typed_cfg):
-    """根据 collector_name 实例化对应的 Collector 类。"""
-    try:
-        if collector_name == "bilibili":
-            from src.modules.collectors.bilibili.legacy.bili_danmaku_collector import (
-                BiliDanmakuCollector,
-            )
-
-            return BiliDanmakuCollector(config=typed_cfg) if typed_cfg else BiliDanmakuCollector(config={})
-        if collector_name == "bilibili_official":
-            from src.modules.collectors.bilibili.official.bili_danmaku_official_collector import (
-                BiliDanmakuOfficialCollector,
-            )
-
-            return (
-                BiliDanmakuOfficialCollector(config=typed_cfg) if typed_cfg else BiliDanmakuOfficialCollector(config={})
-            )
-        if collector_name == "console_input":
-            from src.modules.collectors.console.console_input_collector import (
-                ConsoleInputCollector,
-            )
-
-            return ConsoleInputCollector(config=typed_cfg) if typed_cfg else ConsoleInputCollector(config={})
-        if collector_name == "mock":
-            from src.modules.collectors.mock.mock_collector import MockCollector
-
-            return MockCollector(config=typed_cfg) if typed_cfg else MockCollector(config={})
-        if collector_name == "screen":
-            from src.modules.collectors.screen.screen_change_collector import (
-                ScreenChangeCollector,
-            )
-
-            return ScreenChangeCollector(config=typed_cfg) if typed_cfg else ScreenChangeCollector(config={})
-        if collector_name == "stt":
-            from src.modules.collectors.stt.stt_collector import STTCollector
-
-            return STTCollector(config=typed_cfg) if typed_cfg else STTCollector(config={})
-        logger.warning(f"未实现的 Collector: {collector_name}")
-        return None
-    except Exception as e:
-        logger.warning(f"实例化 Collector '{collector_name}' 失败: {e}")
-        return None
 
 
 async def _register_agents_from_config(
@@ -599,7 +544,10 @@ async def _start_dashboard(
     event_bus: EventBus,
     context_service: ContextService,
     config_service: ConfigService,
-    log_streamer,
+    collector_manager: Optional["CollectorManager"] = None,
+    agent_manager: Optional["AgentManager"] = None,
+    llm_service=None,
+    log_streamer=None,
 ):
     """启动 DashboardServer（仅作为 WebUI observer，不参与决策数据流）。"""
     try:
@@ -615,6 +563,11 @@ async def _start_dashboard(
             context_service=context_service,
             config_service=config_service,
             dashboard_config=typed_dashboard_config,
+            collector_manager=collector_manager,
+            agent_manager=agent_manager,
+            tool_registry=(agent_manager._tool_registry if agent_manager else None),
+            llm_manager=llm_service,
+            prompt_manager=get_prompt_manager(),
             log_streamer=log_streamer,
         )
         await dashboard_server.start()

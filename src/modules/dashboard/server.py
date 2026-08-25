@@ -9,7 +9,7 @@ import json
 import socket
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from fastapi import WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
@@ -57,7 +57,7 @@ _SECTION_TO_CONFIG_FILE: dict[str, str] = {
     "dashboard": "core.toml",
     "events": "core.toml",
     "logging": "core.toml",
-    "pipelines": "core.toml",
+    "interceptors": "core.toml",
     "mcp": "core.toml",
     "simulator": "core.toml",
     "llm": "model.toml",
@@ -97,6 +97,11 @@ class DashboardServer:
         input_manager: Optional[ManagerStatusProvider] = None,
         decision_manager: Optional[ManagerStatusProvider] = None,
         output_manager: Optional[ManagerStatusProvider] = None,
+        collector_manager: Optional[Any] = None,
+        agent_manager: Optional[Any] = None,
+        tool_registry: Optional[Any] = None,
+        llm_manager: Optional[Any] = None,
+        prompt_manager: Optional[Any] = None,
         log_streamer: Optional[LogStreamer] = None,
         event_history: Optional["EventHistoryService"] = None,
         simulator_service: Optional["SimulatorService"] = None,
@@ -105,6 +110,11 @@ class DashboardServer:
         self.input_manager = input_manager
         self.decision_manager = decision_manager
         self.output_manager = output_manager
+        self.collector_manager = collector_manager
+        self.agent_manager = agent_manager
+        self.tool_registry = tool_registry
+        self.llm_manager = llm_manager
+        self.prompt_manager = prompt_manager
         self.context_service = context_service
         self.config_service = config_service
         self.simulator_service = simulator_service

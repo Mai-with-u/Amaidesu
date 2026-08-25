@@ -22,10 +22,11 @@ class ComponentSummary(BaseModel):
     """组件摘要信息"""
 
     name: str
-    phase: str  # input/decision/output
+    phase: str  # input/decision/output（v2 group 是主字段，phase 保留兼容）
     type: str
     is_started: bool
     is_enabled: bool
+    group: Optional[str] = None  # v2 分组：collectors/agents/tools
 
 
 class ComponentDetail(BaseModel):
@@ -41,11 +42,16 @@ class ComponentDetail(BaseModel):
 
 
 class ComponentListResponse(BaseModel):
-    """组件列表响应"""
+    """组件列表响应（v2：collectors/agents/tools 三组 + 旧阶段兼容字段）"""
 
-    input: list[ComponentSummary]
-    decision: list[ComponentSummary]
-    output: list[ComponentSummary]
+    # v2 分组（前端主数据源）
+    collectors: list[ComponentSummary] = []
+    agents: list[ComponentSummary] = []
+    tools: list[ComponentSummary] = []
+    # 旧阶段兼容（deprecated，前端有 phase→group 兜底）
+    input: list[ComponentSummary] = []
+    decision: list[ComponentSummary] = []
+    output: list[ComponentSummary] = []
 
 
 class ComponentDetailResponse(BaseModel):

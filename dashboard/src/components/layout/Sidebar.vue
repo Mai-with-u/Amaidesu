@@ -9,7 +9,7 @@
         </el-menu-item>
         <el-menu-item index="/components">
           <el-icon><Connection /></el-icon>
-          <span>组件管理（采集器/Agent/工具）</span>
+          <span>组件管理</span>
         </el-menu-item>
         <el-menu-item index="/eventlog">
           <el-icon><Document /></el-icon>
