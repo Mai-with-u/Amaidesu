@@ -101,7 +101,7 @@ class TestLoading:
         generate_default_configs(temp_config_dir)
         version = get_config_version(temp_config_dir)
         assert version == CONFIG_VERSION
-        assert version == "2.0.2"
+        assert version == "2.0.3"
 
     def test_drift_fixed_on_load(self, temp_config_dir):
         generate_default_configs(temp_config_dir)

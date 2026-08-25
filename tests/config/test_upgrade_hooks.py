@@ -297,3 +297,66 @@ class TestWave6Hooks2_0_1:
         v2_0_2_hooks = [h for h in CONFIG_UPGRADE_HOOKS if h.target_version == "2.0.2"]
         assert len(v2_0_2_hooks) == 1
         assert v2_0_2_hooks[0].config_file == "core.toml"
+
+    def test_model_2_0_3_fixes_invalid_provider(self):
+        """model.toml 2.0.3：无效 provider（默认 'default'）重写为首个可用 provider。"""
+        from src.modules.config.upgrade_hooks import _migrate_model_2_0_3
+
+        data = {
+            "llm_providers": [{"name": "deepseek"}, {"name": "local"}],
+            "llm_agenda": {"provider": "default"},
+            "llm": {"provider": "deepseek"},
+        }
+        changed = _migrate_model_2_0_3(data)
+        assert data["llm_agenda"]["provider"] == "deepseek"
+        assert data["llm"]["provider"] == "deepseek"
+        assert "llm_agenda.provider" in changed
+        assert "llm.provider" not in changed
+
+    def test_model_2_0_3_handles_llm_outline_rename(self):
+        """自包含：残留 llm_outline 时先改名再修 provider（版本门控下 2.0.0 钩子不再触发）。"""
+        from src.modules.config.upgrade_hooks import _migrate_model_2_0_3
+
+        data = {
+            "llm_providers": [{"name": "siliconflow"}],
+            "llm_outline": {"provider": "default"},
+        }
+        changed = _migrate_model_2_0_3(data)
+        assert "llm_outline" not in data
+        assert data["llm_agenda"]["provider"] == "siliconflow"
+        assert "llm_agenda" in changed
+
+    def test_model_2_0_3_idempotent(self):
+        """幂等：全部合法时无变更。"""
+        from src.modules.config.upgrade_hooks import _migrate_model_2_0_3
+
+        data = {
+            "llm_providers": [{"name": "deepseek"}],
+            "llm_agenda": {"provider": "deepseek"},
+        }
+        changed = _migrate_model_2_0_3(data)
+        assert changed == []
+
+    def test_agents_2_0_3_filters_enabled(self):
+        """agents.toml 2.0.3：过滤失效 Agent 类型，空后回退 streamer。"""
+        from src.modules.config.upgrade_hooks import _migrate_agents_2_0_3
+
+        data = {"agents": {"enabled": ["maibot", "amaidesu"]}}
+        changed = _migrate_agents_2_0_3(data)
+        assert data["agents"]["enabled"] == ["streamer"]
+        assert "agents.enabled" in changed
+
+    def test_agents_2_0_3_keeps_valid(self):
+        """幂等：仅合法值时无变更。"""
+        from src.modules.config.upgrade_hooks import _migrate_agents_2_0_3
+
+        data = {"agents": {"enabled": ["streamer", "game"]}}
+        changed = _migrate_agents_2_0_3(data)
+        assert data["agents"]["enabled"] == ["streamer", "game"]
+        assert changed == []
+
+    def test_2_0_3_hooks_registered(self):
+        """2.0.3 升级钩子已注册（model + agents）。"""
+        v2_0_3_hooks = [h for h in CONFIG_UPGRADE_HOOKS if h.target_version == "2.0.3"]
+        files = {h.config_file for h in v2_0_3_hooks}
+        assert files == {"model.toml", "agents.toml"}

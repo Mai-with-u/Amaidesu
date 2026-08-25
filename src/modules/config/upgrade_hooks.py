@@ -118,6 +118,70 @@ def _migrate_agents_2_0_1(data: dict[str, Any]) -> list[str]:
     return changed
 
 
+def _migrate_model_2_0_3(data: dict[str, Any]) -> list[str]:
+    """model.toml 2.0.3：修复无效 provider 引用（自包含，不依赖 2.0.0 钩子）。
+
+    版本门控下 2.0.0 的 ``llm_outline → llm_agenda`` 改名钩子不会对已
+    越过 2.0.0 的文件再触发；本钩子自行处理改名 + 将无效/缺失的
+    profile.provider（如残留默认值 "default"）重写为首个可用 provider。
+
+    无效引用会导致 Schema 校验失败 → 写回跳过 → 漂移修复永远无法落盘。
+
+    原地修改、幂等，返回变更路径列表。
+    """
+    changed: list[str] = []
+    if "llm_outline" in data and "llm_agenda" not in data:
+        data["llm_agenda"] = data.pop("llm_outline")
+        changed.append("llm_agenda")
+        changed.append("llm_outline")
+
+    providers = data.get("llm_providers")
+    if not isinstance(providers, list):
+        return changed
+    available = [p.get("name") for p in providers if isinstance(p, dict) and p.get("name")]
+    if not available:
+        return changed
+    first = available[0]
+    for profile in ("llm", "llm_fast", "vlm", "llm_local", "llm_summary", "llm_agenda"):
+        cfg = data.get(profile)
+        if isinstance(cfg, dict):
+            prov = cfg.get("provider")
+            if prov not in available:
+                cfg["provider"] = first
+                changed.append(f"{profile}.provider")
+        elif profile == "llm_agenda":
+            data["llm_agenda"] = {"provider": first}
+            changed.append("llm_agenda")
+    return changed
+
+
+def _migrate_agents_2_0_3(data: dict[str, Any]) -> list[str]:
+    """agents.toml 2.0.3：过滤失效 Agent 类型并剥离旧决策时代子节。
+
+    旧配置含 "maibot" 等 enabled 值与 ``[agents.llm]/[agents.maibot]``
+    等子节；前者不在 AgentType Literal 内，后者违反 extra="forbid"，
+    均导致 Schema 校验失败并回退 raw dict 加载。过滤后列表为空时
+    回退默认 ["streamer"]，保证应用开箱可用。
+
+    原地修改、幂等，返回变更路径列表。
+    """
+    changed: list[str] = []
+    agents = data.get("agents")
+    if not isinstance(agents, dict):
+        return changed
+    enabled = agents.get("enabled")
+    if isinstance(enabled, list):
+        valid = [v for v in enabled if isinstance(v, str) and v in ("streamer", "game", "custom")]
+        if len(valid) != len(enabled):
+            agents["enabled"] = valid or ["streamer"]
+            changed.append("agents.enabled")
+    for key in ("llm", "maibot", "amaidesu", "replay", "command"):
+        if key in agents:
+            del agents[key]
+            changed.append(f"agents.{key}")
+    return changed
+
+
 def _migrate_core_2_0_2(data: dict[str, Any]) -> list[str]:
     """core.toml 2.0.2：移除 ``[mcp]`` 段（MCP 桥接服务已随 v2 决策架构移除）。
 
@@ -368,6 +432,16 @@ CONFIG_UPGRADE_HOOKS: tuple[ConfigUpgradeHook, ...] = (
         target_version="2.0.2",
         config_file="core.toml",
         migrate=_migrate_core_2_0_2,
+    ),
+    ConfigUpgradeHook(
+        target_version="2.0.3",
+        config_file="model.toml",
+        migrate=_migrate_model_2_0_3,
+    ),
+    ConfigUpgradeHook(
+        target_version="2.0.3",
+        config_file="agents.toml",
+        migrate=_migrate_agents_2_0_3,
     ),
     # 2.0.0 七文件全量改造
     ConfigUpgradeHook(

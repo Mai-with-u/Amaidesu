@@ -69,7 +69,7 @@ _PHASE_TO_REGISTRY: dict[tuple[str, str], str] = {
 # ``MetaConfig.version`` 默认值必须同步修改（改一必改二）。
 # Wave 6：agents_schemas 重写（新增 AgendaIdle / BackgroundMaintainer / command_tool 字段）、
 # input_schemas 移除 text_adv_game → 升 patch 2.0.1。
-CONFIG_VERSION = "2.0.2"
+CONFIG_VERSION = "2.0.3"
 
 # v2.0.0 配置文件清单（按域划分）：core / model / agents / tools / memory / storage / background
 _CONFIG_FILES = [
@@ -761,6 +761,35 @@ def _filter_optional_container_missing(report: DriftReport, schema_cls: type[Bas
     report.missing = [m for m in report.missing if m.split(".")[-1] not in empty_fields]
 
 
+def _apply_file_upgrade_hooks(
+    config_dir: Path,
+    file_name: str,
+    schema_cls: type[BaseModel],
+    raw_data: dict[str, Any],
+    current_ver: str | None,
+) -> None:
+    """对单个配置文件执行版本升级钩子并尝试写回。
+
+    钩子幂等可重复执行；迁移成功后用写回闭环持久化修复结果，
+    使后续 ``_load_and_validate_schema`` 从已修复的磁盘数据校验。
+    写回失败（数据仍不合法）时保留原配置，由调用方回退 raw dict。
+    """
+    hook_result = apply_upgrade_hooks(raw_data, file_name, current_ver or CONFIG_VERSION, CONFIG_VERSION)
+    if hook_result.migrated:
+        logger.warning(f"{file_name} 配置升级钩子已应用: {hook_result.reasons}")
+        try:
+            _write_back_schema_file(
+                config_dir,
+                file_name,
+                schema_cls,
+                hook_result.data,
+                batch_id=datetime.now().strftime("%Y%m%d_%H%M%S"),
+            )
+            logger.info(f"{file_name} 升级钩子修复已写回")
+        except Exception as e:
+            logger.warning(f"{file_name} 升级钩子写回失败，保留原配置: {e}")
+
+
 def _load_and_validate_schema(
     file_path: Path,
     schema_cls: type[BaseConfig],
@@ -934,6 +963,10 @@ def load_config_dir(
     model_path = config_dir / "model.toml"
     if model_path.exists():
         try:
+            with open(model_path, "r", encoding="utf-8-sig") as f:
+                raw_model = tomlkit.load(f).unwrap()
+            loaded_data["model.toml"] = raw_model
+            _apply_file_upgrade_hooks(config_dir, "model.toml", ModelConfig, raw_model, current_ver)
             model_data, model_report = _load_and_validate_schema(model_path, ModelConfig)
         except Exception as e:
             logger.warning(f"model.toml Schema 验证失败，回退 raw dict 加载: {e}")
@@ -963,6 +996,7 @@ def load_config_dir(
             with open(agents_path, "r", encoding="utf-8-sig") as f:
                 raw_agents = tomlkit.load(f).unwrap()
             loaded_data["agents.toml"] = raw_agents
+            _apply_file_upgrade_hooks(config_dir, "agents.toml", AgentsRootConfig, raw_agents, current_ver)
             migrated_files = _apply_cross_file_migrations(config_dir, loaded_data, list(loaded_data.keys()))
             if migrated_files:
                 # 写回含迁移数据的 agents.toml
@@ -999,6 +1033,7 @@ def load_config_dir(
             with open(tools_path, "r", encoding="utf-8-sig") as f:
                 raw_tools = tomlkit.load(f).unwrap()
             loaded_data["tools.toml"] = raw_tools
+            _apply_file_upgrade_hooks(config_dir, "tools.toml", ToolsRootConfig, raw_tools, current_ver)
             # 跨文件迁移（如旧 input.toml/output.toml 的 [collectors]/[handlers] → tools.toml）
             migrated_files = _apply_cross_file_migrations(config_dir, loaded_data, list(loaded_data.keys()))
             if migrated_files:
@@ -1032,6 +1067,10 @@ def load_config_dir(
     memory_path = config_dir / "memory.toml"
     if memory_path.exists():
         try:
+            with open(memory_path, "r", encoding="utf-8-sig") as f:
+                raw_memory = tomlkit.load(f).unwrap()
+            loaded_data["memory.toml"] = raw_memory
+            _apply_file_upgrade_hooks(config_dir, "memory.toml", MemoryRootConfig, raw_memory, current_ver)
             memory_data, memory_report = _load_and_validate_schema(memory_path, MemoryRootConfig)
             _filter_optional_container_missing(memory_report, MemoryRootConfig)
             if memory_report.has_drift:
@@ -1056,6 +1095,10 @@ def load_config_dir(
     storage_path = config_dir / "storage.toml"
     if storage_path.exists():
         try:
+            with open(storage_path, "r", encoding="utf-8-sig") as f:
+                raw_storage = tomlkit.load(f).unwrap()
+            loaded_data["storage.toml"] = raw_storage
+            _apply_file_upgrade_hooks(config_dir, "storage.toml", StorageRootConfig, raw_storage, current_ver)
             storage_data, storage_report = _load_and_validate_schema(storage_path, StorageRootConfig)
             _filter_optional_container_missing(storage_report, StorageRootConfig)
             if storage_report.has_drift:
@@ -1080,6 +1123,10 @@ def load_config_dir(
     background_path = config_dir / "background.toml"
     if background_path.exists():
         try:
+            with open(background_path, "r", encoding="utf-8-sig") as f:
+                raw_background = tomlkit.load(f).unwrap()
+            loaded_data["background.toml"] = raw_background
+            _apply_file_upgrade_hooks(config_dir, "background.toml", BackgroundRootConfig, raw_background, current_ver)
             background_data, background_report = _load_and_validate_schema(background_path, BackgroundRootConfig)
             _filter_optional_container_missing(background_report, BackgroundRootConfig)
             if background_report.has_drift:
