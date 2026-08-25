@@ -138,22 +138,17 @@ class BiliDanmakuOfficialCollector(BaseCollector):
         return _generate()
 
     async def start(self) -> None:
-        """兼容旧 InputCollectorManager 的启动入口（直接调用亦可；新架构用 BaseCollector.start）
-
-        新 CollectorManager 走 BaseCollector.start → _on_start。
-        旧 InputCollectorManager 直接调用 start()。两者都需要实现。
-        """
-        # 避免与 BaseCollector.start() 的状态机冲突：
-        # 当通过 CollectorManager 走时，会先进入我们的 start() 然后 BaseCollector.start() 会再调用一次。
-        # 为兼容两条路径，此处仅做旧语义标志位，新状态机由 BaseCollector 管理。
+        """启动：开后台任务消费 collect()（内部 emit room.message.*）。"""
         if not self.is_started:
             self.is_started = True
-            self.logger.debug("BiliDanmakuOfficialCollector.is_started 已设置")
+            await self._start_collect_task()
+            self.logger.debug("BiliDanmakuOfficialCollector 后台采集任务已启动")
 
     async def stop(self) -> None:
-        """兼容旧 InputCollectorManager 的停止入口"""
+        """停止：取消后台采集任务。"""
         if self.is_started:
             self.is_started = False
+            await self._stop_collect_task()
             self.logger.debug("BiliDanmakuOfficialCollector.is_started 已清空")
 
     async def cleanup(self) -> None:

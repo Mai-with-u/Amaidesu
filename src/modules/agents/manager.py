@@ -105,6 +105,83 @@ class AgentManager:
     def list_running(self) -> List[str]:
         return [name for name, reg in self._agents.items() if reg.agent.state == AgentState.RUNNING]
 
+    # -------------------- 动态启停（Dashboard 组件管理调用） --------------------
+
+    def get_agent_by_name(self, name: str) -> Optional[BaseAgent]:
+        """按注册名查找已加载的 Agent 实例（段名=注册名）。"""
+        reg = self._agents.get(name)
+        return reg.agent if reg is not None else None
+
+    async def start_agent(self, name: str) -> bool:
+        """启动（或重启）单个已注册 Agent。"""
+        reg = self._agents.get(name)
+        if reg is None:
+            return False
+        if reg.agent.state == AgentState.RUNNING:
+            return True
+        try:
+            await reg.agent.start()
+        except Exception as exc:  # noqa: BLE001 - 边界
+            logger.error(f"Agent '{name}' 单实例启动失败: {exc}", exc_info=True)
+            return False
+        return reg.agent.state == AgentState.RUNNING
+
+    async def stop_agent(self, name: str) -> bool:
+        """停止单个 Agent：调用 stop()（不 unregister）。"""
+        reg = self._agents.get(name)
+        if reg is None:
+            return False
+        try:
+            await reg.agent.stop()
+        except Exception as exc:  # noqa: BLE001 - 边界
+            logger.error(f"Agent '{name}' 单实例停止失败: {exc}", exc_info=True)
+            return False
+        return True
+
+    async def enable_agent(
+        self,
+        name: str,
+        config: Optional[dict] = None,
+        *,
+        llm_manager: Optional[object] = None,
+        prompt_manager: Optional[object] = None,
+        context_service: Optional[object] = None,
+        event_bus: Optional[object] = None,
+        tool_registry: Optional[ToolRegistry] = None,
+    ) -> bool:
+        """动态启用 Agent：实例化（配置段名）→ 注册 → 启动。
+
+        段名 = 注册名：实例化后强制对齐实例 name 为段名，保证
+        list_agents()/get_by_name() 与配置 enabled 列表一致。
+        """
+        from src.modules.agents.factory import instantiate_agent
+
+        instance = instantiate_agent(
+            name,
+            config or {},
+            llm_manager=llm_manager,
+            prompt_manager=prompt_manager,
+            context_service=context_service,
+            event_bus=event_bus,
+            tool_registry=tool_registry,
+        )
+        if instance is None:
+            logger.warning(f"未实现的 Agent: {name}")
+            return False
+        if instance.name != name:
+            instance.name = name
+        if not self.register(instance):
+            return False
+        return await self.start_agent(name)
+
+    async def disable_agent(self, name: str) -> bool:
+        """动态停用 Agent：停止 → unregister。"""
+        if not await self.stop_agent(name):
+            return False
+        self.unregister(name)
+        logger.info(f"Agent '{name}' 已动态停用")
+        return True
+
     def __len__(self) -> int:
         return len(self._agents)
 

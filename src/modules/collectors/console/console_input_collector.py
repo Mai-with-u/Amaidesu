@@ -5,6 +5,7 @@ ConsoleInputCollector —— 控制台输入采集器（v2 / Wave 5 迁移）
 按 §1.46 + .omo/drafts/amaidesu-v2-migration.md §C：
 - 继承 ``BaseCollector``（流型感知者）
 - 支持命令：exit() / /gift / /sc / /guard / /help
+- v2 主动推事件：start() 开后台任务读 stdin → emit room.message.* （volatile.v2）
 - 保留 ``collect()`` AsyncIterator 出口兼容旧 InputCollectorManager
 
 verbatim 边界：命令解析、NormalizedMessage 构造 —— 未改动。
@@ -21,12 +22,22 @@ from pydantic import Field
 from src.modules.collectors.base import BaseCollector
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
 from src.modules.types.base.normalized_message import NormalizedMessage
 
 # 控制台输入循环异常后重试间隔（秒）
 _ERROR_RETRY_INTERVAL_S = 1
+
+# data_type → (事件名, message_type, 是否需要 content)
+_MESSAGE_TYPE_TO_EVENT = {
+    "text": (CoreEvents.ROOM_MESSAGE_DANMAKU, "danmaku"),
+    "gift": (CoreEvents.ROOM_MESSAGE_GIFT, "gift"),
+    "super_chat": (CoreEvents.ROOM_MESSAGE_SUPER_CHAT, "super_chat"),
+    "guard": (CoreEvents.ROOM_MESSAGE_ENTER, "enter"),
+}
 
 
 class ConsoleInputCollector(BaseCollector):
@@ -62,6 +73,9 @@ class ConsoleInputCollector(BaseCollector):
         self.logger.info(f"ConsoleInputCollector初始化完成 (user: {self.user_nickname})")
 
         self.is_started: bool = False
+        # v2 主动推事件：后台输入循环任务
+        self._input_task: Optional[asyncio.Task] = None
+        self._input_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # 旧 InputCollectorManager 兼容接口
@@ -81,22 +95,111 @@ class ConsoleInputCollector(BaseCollector):
         return _generate()
 
     async def start(self) -> None:
-        """兼容旧 InputCollectorManager 的启动入口"""
-        if not self.is_started:
+        """启动：开后台任务循环 stdin → emit room.message.*（v2 主动推）。"""
+        async with self._input_lock:
+            if self.is_started:
+                return
             self.is_started = True
+            self._input_task = asyncio.create_task(self._run_input_loop())
+            self.logger.info("控制台输入后台循环已启动")
 
     async def stop(self) -> None:
-        """兼容旧 InputCollectorManager 的停止入口"""
-        if self.is_started:
+        """停止：取消后台循环任务。"""
+        async with self._input_lock:
+            if not self.is_started:
+                return
             self.is_started = False
+            task = self._input_task
+            self._input_task = None
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        self.logger.info("控制台输入循环已停止")
 
     async def cleanup(self) -> None:
         """清理资源"""
+        await self.stop()
         self.logger.info("ConsoleInputCollector cleanup完成")
+
+    # ------------------------------------------------------------------
+    # v2 主动推事件：后台输入循环
+    # ------------------------------------------------------------------
+
+    async def _run_input_loop(self) -> None:
+        """后台任务：实时读 stdin，构造 NormalizedMessage 并 emit 语义事件。"""
+        loop = asyncio.get_event_loop()
+        self.logger.info("控制台输入已准备就绪。输入 'exit()' 来停止。")
+
+        while self.is_started:
+            try:
+                line = await loop.run_in_executor(None, sys.stdin.readline)
+                text = line.strip()
+
+                if not text:
+                    continue
+
+                if text.lower() == "exit()":
+                    self.logger.info("收到 'exit()' 命令，正在停止...")
+                    break
+
+                if text.startswith("/"):
+                    message = await self._handle_command(text)
+                    if message:
+                        await self._emit_semantic_event(message)
+                else:
+                    message = NormalizedMessage(
+                        text=text,
+                        source=self.name,
+                        data_type="text",
+                        importance=0.5,
+                        timestamp_ms=now_ms(),
+                        raw=None,
+                        user_id=self.user_id,
+                        user_nickname=self.user_nickname,
+                        platform="console",
+                    )
+                    await self._emit_semantic_event(message)
+
+            except asyncio.CancelledError:
+                self.logger.info("控制台输入循环被取消")
+                break
+            except Exception as e:
+                self.logger.error(f"控制台输入循环出错: {e}", exc_info=True)
+                await asyncio.sleep(_ERROR_RETRY_INTERVAL_S)
+
+        self.logger.info("控制台输入循环结束")
+
+    async def _emit_semantic_event(self, normalized_msg: NormalizedMessage) -> None:
+        """构造 RoomMessagePayload 并 emit 对应 room.message.* 事件（v2）。"""
+        mapping = _MESSAGE_TYPE_TO_EVENT.get(normalized_msg.data_type)
+        if mapping is None:
+            self.logger.debug(f"未知 data_type '{normalized_msg.data_type}'，跳过 emit")
+            return
+        event_name, message_type = mapping
+
+        payload = RoomMessagePayload(
+            live_session_id="console",
+            message_type=message_type,  # type: ignore[arg-type]
+            user=RoomMessageUser(
+                id=str(normalized_msg.user_id or "console_user"),
+                name=str(normalized_msg.user_nickname or "控制台"),
+            ),
+            content=normalized_msg.text or "",
+            timestamp_ms=normalized_msg.timestamp_ms,
+        )
+        await self.emit_event(event_name, payload)
+        self.logger.info(f"已 emit {event_name} (content='{normalized_msg.text[:40]}')")
+
+    # ------------------------------------------------------------------
+    # 旧 collect() 生成器兼容（外部消费者不存在时保留接口）
+    # ------------------------------------------------------------------
 
     async def collect(self) -> AsyncIterator[NormalizedMessage]:
         """
-        启动控制台输入，直接返回 NormalizedMessage 流
+        启动控制台输入，直接返回 NormalizedMessage 流（旧兼容出口）
 
         支持的命令:
         - exit(): 退出

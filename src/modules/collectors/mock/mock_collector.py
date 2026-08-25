@@ -119,15 +119,18 @@ class MockCollector(BaseCollector):
         return _generate()
 
     async def start(self) -> None:
-        """兼容旧 InputCollectorManager 的启动入口"""
+        """启动：重置停止事件，开后台任务消费 collect()（内部 emit room.message.*）。"""
         if not self.is_started:
             self.is_started = True
+            self._stop_event.clear()
+            await self._start_collect_task()
 
     async def stop(self) -> None:
-        """兼容旧 InputCollectorManager 的停止入口"""
+        """停止：取消后台消费任务。"""
         if self.is_started:
             self.is_started = False
             self._stop_event.set()
+            await self._stop_collect_task()
 
     async def cleanup(self) -> None:
         """清理资源"""

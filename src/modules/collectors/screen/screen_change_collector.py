@@ -94,14 +94,16 @@ class ScreenChangeCollector(BaseCollector):
         return _generate()
 
     async def start(self) -> None:
-        """兼容旧 InputCollectorManager 的启动入口"""
+        """启动：开后台任务消费 collect()（基类兜底 emit room.message.*）。"""
         if not self.is_started:
             self.is_started = True
+            await self._start_collect_task()
 
     async def stop(self) -> None:
-        """兼容旧 InputCollectorManager 的停止入口"""
+        """停止：取消后台消费任务。"""
         if self.is_started:
             self.is_started = False
+            await self._stop_collect_task()
 
     async def cleanup(self) -> None:
         """清理资源"""
