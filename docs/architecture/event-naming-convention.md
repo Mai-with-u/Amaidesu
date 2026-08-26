@@ -228,7 +228,6 @@ sequenceDiagram
     EB->>DC: 转发 input.message.received
     DC->>EB: emit(decision.intent.generated)
     EB->>OHM: 转发 decision.intent.generated
-    OHM->>OHM: OutputPipeline 过滤
     OHM->>EB: emit(output.intent.dispatched) 监控信号
     Note over EB: DISPATCHED 仅供监控组件观察
     OHM->>OH: 直接调用 handle(intent)

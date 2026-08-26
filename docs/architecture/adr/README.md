@@ -26,7 +26,7 @@ ADR 记录已经作出的决定，不替代实现文档，也不用于记录迁�
 
 ## 现有 ADR
 
-- [ADR-001：Pipeline 使用依赖注入而非 Context Object](001-pipeline-uses-di-not-context.md)
-- [ADR-002：Pipeline[T] 泛型基类设计](002-pipeline-generic-abstraction.md)
-- [ADR-003：@pipeline 装饰器注册机制](003-pipeline-decorator-registration.md)
+- [ADR-001：Pipeline 使用依赖注入而非 Context Object](001-pipeline-uses-di-not-context.md)（已废弃：管道系统移除）
+- [ADR-002：Pipeline[T] 泛型基类设计](002-pipeline-generic-abstraction.md)（已废弃：管道系统移除）
+- [ADR-003：@pipeline 装饰器注册机制](003-pipeline-decorator-registration.md)（已废弃：管道系统移除）
 - [ADR-004：OutputHandlerManager 直接调度 Handler](004-output-direct-dispatch.md)

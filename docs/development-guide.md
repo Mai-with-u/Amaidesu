@@ -16,14 +16,14 @@
 
 | 类型 | 命名风格 | 示例 |
 |------|---------|------|
-| 类名 | PascalCase | `EventBus`, `InputCollector`, `InputPipeline` |
+| 类名 | PascalCase | `EventBus`, `InputCollector`, `RateLimitInterceptor` |
 | 函数/方法名 | snake_case | `send_to_maibot`, `register_websocket_handler` |
 | 变量名 | snake_case | `handler_config`, `event_bus` |
 | 私有成员 | 前导下划线 | `_message_handlers`, `_is_connected` |
 | Collector 类 | 以 `Collector` 结尾 | `ConsoleInputCollector`, `BiliDanmakuCollector` |
 | Decider 类 | 以 `Decider` 结尾 | `MaiBotDecider`, `LLMDecider` |
 | Handler 类 | 以 `Handler` 结尾 | `EdgeTTSHandler`, `SubtitleHandler` |
-| 管道类 | 以 `Pipeline` 结尾 | `RateLimitPipeline`, `SimilarTextFilterPipeline` |
+| 拦截器类 | 以 `Interceptor` 结尾 | `RateLimitInterceptor`, `SimilarFilterInterceptor` |
 | 常量类 | PascalCase | `CoreEvents`, `Emotion` |
 
 ### 1.3 注释规范
@@ -89,7 +89,7 @@ from pydantic import BaseModel, Field
 | 类型 | 使用场景 | 示例 |
 |------|----------|------|
 | **Pydantic BaseModel** | 所有数据模型、配置 Schema、事件 Payload | `class UserConfig(BaseModel)` |
-| **dataclass** | 仅用于简单的内部统计/包装类 | `@dataclass class PipelineStats` |
+| **dataclass** | 仅用于简单的内部统计/包装类 | `@dataclass class CollectorStats` |
 | **Protocol** | 定义接口协议 | `class CapabilitiesProvider(Protocol)` |
 | **Enum** | 定义常量集合 | `class Emotion(str, Enum)` |
 
@@ -138,8 +138,8 @@ class Intent(BaseModel):
 from dataclasses import dataclass
 
 @dataclass
-class PipelineStats:
-    """Pipeline 统计信息"""
+class CollectorStats:
+    ""u91c7u96c6u5668u7edfu8ba1u4fe1u606f""
     processed_count: int = 0
     dropped_count: int = 0
     error_count: int = 0
@@ -367,7 +367,7 @@ docs: 更新开发规范文档
 - Collector 配置：`[collectors]`
 - Decider 配置：`[deciders]`
 - Handler 配置：`[handlers]`
-- 管道配置：`[pipelines.*]`
+- 拦截器配置：`[interceptors.*]`（core.toml）
 
 ### 9.2 配置示例
 
@@ -416,7 +416,7 @@ enabled = ["subtitle", "vts", "edge_tts"]
 ## 相关文档
 
 - [阶段参与者开发](development/component-guide.md) - 阶段参与者开发详解
-- [管道开发](development/pipeline-guide.md) - Pipeline 开发详解
+- [事件系统](architecture/event-system.md#事件拦截器interceptor) - 事件拦截器开发详解
 - [提示词管理](development/prompt-management.md) - PromptManager 使用
 - [测试指南](development/testing-guide.md) - 测试规范和最佳实践
 - [3阶段架构](architecture/overview.md) - 架构设计详解

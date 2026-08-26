@@ -368,9 +368,9 @@ if config_service.is_config_enabled("bili_danmaku", phase="input"):
 # 获取某阶段全部配置
 all_input = config_service.get_all_configs(phase="input")
 
-# Pipeline 配置
-pipe_cfg = config_service.get_pipeline_config("rate_limit", phase="input")
-if config_service.is_pipeline_enabled("rate_limit", phase="input"):
+# 拦截器配置
+pipe_cfg = config_service.get_interceptor_config("rate_limit")
+if config_service.is_interceptor_enabled("rate_limit"):
     # ...
 ```
 
@@ -391,7 +391,7 @@ uv run python main.py
 ## 相关文档
 
 - [阶段参与者开发指南](component-guide.md) - 如何开发自定义阶段参与者
-- [管道开发指南](pipeline-guide.md) - 如何开发自定义 Pipeline
+- [事件拦截器](../architecture/event-system.md#事件拦截器interceptor) - 如何开发自定义拦截器
 - [开发规范](../development-guide.md) - 代码风格和约定
 - [3阶段架构](../architecture/overview.md) - 架构设计总览
 - [事件系统](../architecture/event-system.md) - EventBus 使用指南

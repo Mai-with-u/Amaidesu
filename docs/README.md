@@ -26,7 +26,7 @@
 | 文档 | 说明 |
 |------|------|
 | [阶段参与者开发](development/component-guide.md) | 阶段参与者开发详解 |
-| [管道开发](development/pipeline-guide.md) | Pipeline 开发详解 |
+| [事件系统](architecture/event-system.md#事件拦截器interceptor) | EventBus 与事件拦截器（含开发指南） |
 | [提示词管理](development/prompt-management.md) | PromptManager 使用 |
 | [依赖注入](development/dependency-injection.md) | 依赖注入约定与决策清单 |
 | [测试指南](development/testing-guide.md) | 测试规范和最佳实践 |

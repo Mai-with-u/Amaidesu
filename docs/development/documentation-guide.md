@@ -50,7 +50,7 @@ docs/
 │   └── adr/               # 架构决策记录
 ├── development/           # 开发实操
 │   ├── component-guide.md # 阶段参与者开发
-│   ├── pipeline-guide.md  # 管道开发
+│   ├── simulator-guide.md # 模拟直播间工具
 │   ├── prompt-management.md
 │   ├── dependency-injection.md
 │   ├── testing-guide.md
@@ -65,7 +65,7 @@ docs/
 | 内容类型 | 放哪里 |
 |---------|--------|
 | 全局架构事实（事件表、组件清单、数据流图） | `docs/architecture/` |
-| 开发实操（怎么写 Collector/Pipeline/测试） | `docs/development/` |
+| 开发实操（怎么写 Collector/拦截器/测试） | `docs/development/` |
 | 组件级使用说明 | 跟随代码（组件目录下的 `README.md`） |
 | 图片 | `docs/images/` |
 | 视频 | `docs/videos/` |

@@ -23,7 +23,7 @@ Amaidesu 采用 3 阶段架构，阶段参与者分为三种类型：
                           ↓
                   Intent (event: decision.intent.generated)
                            ↓
-       OutputHandlerManager 运行 Pipeline 并发出监控信号
+       Manager 发出监控信号
                            ↓
        Manager 直接并行调用 active Handler.handle(intent)
                            ↓
@@ -113,7 +113,7 @@ class MyOutputHandler:
 
 ## 4. Handler 直接调度模式
 
-Handler 不订阅 `OUTPUT_INTENT_DISPATCHED`。`OutputHandlerManager` 运行 OutputPipeline 后，会为每个 active Handler 创建任务并直接调用 `handle(intent)`。
+Handler 不订阅 `OUTPUT_INTENT_DISPATCHED`。Manager 会为每个 active Handler 创建任务并直接调用 `handle(intent)`。
 
 ### 4.1 推荐实现
 
@@ -257,5 +257,5 @@ assert handler.get_last_intent().speech == test_intent.speech
 - [3 阶段架构总览](../architecture/overview.md)
 - [数据流规则](../architecture/data-flow.md)
 - [事件系统](../architecture/event-system.md)
-- [管道开发](pipeline-guide.md)
+- [事件拦截器](../architecture/event-system.md#事件拦截器interceptor)
 - [测试指南](testing-guide.md)

@@ -23,9 +23,9 @@ class TestCoreConfig:
         c = CoreConfig()
         assert c.logging.level == "INFO"
 
-    def test_pipelines_is_dict(self):
+    def test_interceptors_is_dict(self):
         c = CoreConfig()
-        assert isinstance(c.pipelines, dict)
+        assert isinstance(c.interceptors, dict)
 
 
 class TestModelConfig:

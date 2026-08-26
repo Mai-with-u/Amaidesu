@@ -360,3 +360,86 @@ class TestWave6Hooks2_0_1:
         v2_0_3_hooks = [h for h in CONFIG_UPGRADE_HOOKS if h.target_version == "2.0.3"]
         files = {h.config_file for h in v2_0_3_hooks}
         assert files == {"model.toml", "agents.toml"}
+
+
+class TestCoreHook2_0_4:
+    """core.toml 2.0.4：``[pipelines]`` → ``[interceptors]`` 正名（§1.46.1 收官）。"""
+
+    def test_pipelines_renamed_to_interceptors(self):
+        from src.modules.config.upgrade_hooks import _migrate_core_2_0_4
+
+        data: dict = {
+            "pipelines": {
+                "input": {
+                    "rate_limit": {"limit": 5, "priority": 1},
+                    "similar_filter": {"enabled": True, "priority": 2},
+                },
+                "output": {"profanity_filter": {"priority": 0}},
+            }
+        }
+        changed = _migrate_core_2_0_4(data)
+        assert "pipelines" not in data
+        assert set(data.get("interceptors", {})) == {"rate_limit", "similar_filter"}
+        assert "profanity_filter" not in data.get("interceptors", {})
+        assert "priority" not in data["interceptors"]["rate_limit"]
+        assert changed == ["interceptors"]
+
+    def test_flat_pipelines_compat(self):
+        """v1 遗留：``pipelines`` 根级扁平键也迁移。"""
+        from src.modules.config.upgrade_hooks import _migrate_core_2_0_4
+
+        data: dict = {"pipelines": {"rate_limit": {"limit": 3}}}
+        changed = _migrate_core_2_0_4(data)
+        assert data.get("interceptors") == {"rate_limit": {"limit": 3}}
+        assert changed == ["interceptors"]
+
+    def test_idempotent(self):
+        """重复执行无副作用。"""
+        from src.modules.config.upgrade_hooks import _migrate_core_2_0_4
+
+        data: dict = {
+            "pipelines": {"input": {"rate_limit": {"limit": 1}}},
+            "interceptors": {"existing": {"x": 1}},
+        }
+        _migrate_core_2_0_4(data)
+        second = dict(data)
+        changed = _migrate_core_2_0_4(data)
+        assert changed == []
+        assert data == second  # 幂等：二次执行不改数据
+
+    def test_merge_preserves_existing_interceptors(self):
+        """已有 [interceptors] 键时迁移项并入，不整体覆盖。"""
+        from src.modules.config.upgrade_hooks import _migrate_core_2_0_4
+
+        data: dict = {
+            "pipelines": {"input": {"rate_limit": {"limit": 1}}},
+            "interceptors": {"existing": {"x": 1}},
+        }
+        changed = _migrate_core_2_0_4(data)
+        assert data["interceptors"]["existing"] == {"x": 1}
+        assert data["interceptors"]["rate_limit"] == {"limit": 1}
+        assert changed == ["interceptors"]
+
+    def test_2_0_4_hook_registered(self):
+        """2.0.4 升级钩子已注册（core 正名 + input/output 防御剥离）。"""
+        v2_0_4_hooks = [h for h in CONFIG_UPGRADE_HOOKS if h.target_version == "2.0.4"]
+        assert {h.config_file for h in v2_0_4_hooks} == {"core.toml", "input.toml", "output.toml"}
+
+
+class TestStageStripHook2_0_4:
+    """input/output.toml 2.0.4：剥离遗留 [pipelines] 死段。"""
+
+    def test_input_strips_pipelines(self):
+        from src.modules.config.upgrade_hooks import _strip_pipelines_2_0_4
+
+        data = {"collectors": {"enabled": ["console_input"]}, "pipelines": {"input": {"rate_limit": {}}}}
+        changed = _strip_pipelines_2_0_4(data)
+        assert "pipelines" not in data
+        assert changed == ["pipelines"]
+
+    def test_strip_idempotent(self):
+        from src.modules.config.upgrade_hooks import _strip_pipelines_2_0_4
+
+        data = {"collectors": {"enabled": ["console_input"]}}
+        changed = _strip_pipelines_2_0_4(data)
+        assert changed == []

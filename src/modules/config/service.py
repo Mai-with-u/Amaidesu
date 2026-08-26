@@ -77,7 +77,7 @@ class ConfigService:
 
         general_config = config_service.get_section("general")
         input_config = config_service.get_config_with_defaults("console", "input")
-        pipeline_config = config_service.get_pipeline_config("throttle")
+        interceptor_config = config_service.get_interceptor_config("rate_limit")
 
         # 热重载
         config_service.register_reload_callback(my_callback)
@@ -262,24 +262,23 @@ class ConfigService:
         else:
             return self._main_config.get(key, default)
 
-    def get_pipeline_config(self, pipeline_name: str, phase: str = "input") -> Dict[str, Any]:
+    def get_interceptor_config(self, interceptor_name: str) -> Dict[str, Any]:
         """
-        获取管道配置
+        获取事件拦截器配置
 
-        配置来源：主配置文件中 [pipelines.phase.pipeline_name]
+        配置来源：主配置文件中 [interceptors.interceptor_name]
 
         Args:
-            pipeline_name: 管道名称（如 "rate_limit", "similar_filter"）
-            phase: 阶段（"input" 或 "output"，默认 "input"）
+            interceptor_name: 拦截器名称（如 "rate_limit", "similar_filter"）
 
         Returns:
-            管道配置字典
+            拦截器配置字典
         """
         if not self._initialized:
             self.logger.warning("ConfigService 未初始化，返回空配置")
             return {}
 
-        return self.get_section("pipelines", {}).get(phase, {}).get(pipeline_name, {}).copy()
+        return self.get_section("interceptors", {}).get(interceptor_name, {}).copy()
 
     def get_all_configs(self, phase: str = "input") -> Dict[str, Dict[str, Any]]:
         """
@@ -307,13 +306,13 @@ class ConfigService:
             name: cfg.copy() for name, cfg in section.items() if name not in exclude_fields and isinstance(cfg, dict)
         }
 
-    def get_all_pipeline_configs(self) -> Dict[str, Dict[str, Any]]:
-        """获取所有管道的配置"""
+    def get_all_interceptor_configs(self) -> Dict[str, Dict[str, Any]]:
+        """获取所有事件拦截器的配置"""
         if not self._initialized:
             self.logger.warning("ConfigService 未初始化，返回空配置")
             return {}
 
-        return self.get_section("pipelines", {}).copy()
+        return self.get_section("interceptors", {}).copy()
 
     def is_config_enabled(self, name: str, phase: str = "input") -> bool:
         """
@@ -338,15 +337,15 @@ class ConfigService:
         enabled_list = self.get_section(section_name, {}).get("enabled", [])
         return name in enabled_list
 
-    def is_pipeline_enabled(self, pipeline_name: str, phase: str = "input") -> bool:
+    def is_interceptor_enabled(self, interceptor_name: str) -> bool:
         """
-        检查管道是否启用
+        检查事件拦截器是否启用
 
-        管道启用的条件：在 [pipelines.phase.pipeline_name] 中定义了 `priority` 键。
+        启用语义与 main.py 注册逻辑一致：``[interceptors.<name>]`` 的
+        ``enabled`` 键，缺省视为启用（拦截器以默认参数注册）。
 
         Args:
-            pipeline_name: 管道名称
-            phase: 阶段（"input" 或 "output"，默认 "input"）
+            interceptor_name: 拦截器名称
 
         Returns:
             是否启用
@@ -355,11 +354,11 @@ class ConfigService:
             self.logger.warning("ConfigService 未初始化，返回 False")
             return False
 
-        pipelines_config = self.get_section("pipelines", {})
-        phase_config = pipelines_config.get(phase, {})
-        pipeline_config = phase_config.get(pipeline_name, {})
+        interceptor_config = self.get_section("interceptors", {}).get(interceptor_name, {})
+        if not isinstance(interceptor_config, dict):
+            return True
 
-        return "priority" in pipeline_config
+        return bool(interceptor_config.get("enabled", True))
 
     # ========== 组件配置方法 ==========
 

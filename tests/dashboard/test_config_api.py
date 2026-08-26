@@ -4,7 +4,7 @@
 
 1. **GET /api/v1/config** — 返回当前合并配置 (扁平化的 main_config)
 2. **PATCH /api/v1/config** — 根据节名路由到正确的 TOML 文件:
-   - core 节 (general/persona/context/dashboard/logging/mcp/pipelines/meta/events) → core.toml
+   - core 节 (general/persona/context/dashboard/logging/interceptors/meta/events) → core.toml
    - model 节 (llm/llm_fast/vlm/llm_local/llm_summary/llm_agenda/llm_providers) → model.toml
    - agents 节 (agents/streamer) → agents.toml
    - tools 节 (tools/perception/output/...) → tools.toml
@@ -253,8 +253,8 @@ class TestGetConfigPath:
             assert result is not None, f"{section} 应返回非 None"
             assert Path(result).name == "model.toml", f"{section} 应路由到 model.toml"
 
-    def test_get_path_for_pipelines_returns_core_toml(self, dashboard_server, config_dir):
-        result = dashboard_server.get_config_path("pipelines")
+    def test_get_path_for_interceptors_returns_core_toml(self, dashboard_server, config_dir):
+        result = dashboard_server.get_config_path("interceptors")
         assert result is not None
         assert Path(result).name == "core.toml"
 

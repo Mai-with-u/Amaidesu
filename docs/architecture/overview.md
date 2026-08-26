@@ -17,9 +17,12 @@ flowchart TB
         IP1[InputCollector]
         IP2[InputCollector]
         IP3[InputCollector]
-        ICM[InputCollectorManager]
+        ICM[CollectorManager]
         NM[NormalizedMessage]
-        Pipeline[Pipeline 过滤]
+    end
+
+    subgraph EventBusLayer["EventBus 事件拦截层"]
+        INT[事件拦截器<br/>去重/限流/相似过滤]
     end
 
     subgraph DecisionStage["Decision 阶段 决策阶段"]
@@ -29,8 +32,7 @@ flowchart TB
 
     subgraph OutputStage["Output 阶段 输出阶段"]
         direction TB
-        OPM[OutputHandlerManager]
-        OPipeline[OutputPipeline 过滤]
+        OPM[ToolRegistry / 渲染工具]
         OP1[TTS]
         OP2[字幕]
         OP3[虚拟形象]
@@ -44,15 +46,14 @@ flowchart TB
     IP2 --> ICM
     IP3 --> ICM
     ICM --> NM
-    NM --> Pipeline
-    ICM -->|"EventBus: input.message.received"| DP
+    NM -->|"EventBus: input.message.received"| INT
+    INT --> DP
     DP --> Intent
     DP -->|"EventBus: decision.intent.generated"| OPM
-    OPM --> OPipeline
-    OPipeline --> OP1
-    OPipeline --> OP2
-    OPipeline --> OP3
-    OPipeline --> OP4
+    OPM --> OP1
+    OPM --> OP2
+    OPM --> OP3
+    OPM --> OP4
 ```
 
 ## 数据流
@@ -60,11 +61,11 @@ flowchart TB
 ```
 外部输入（弹幕、游戏、语音）
         ↓
-【Input 阶段】InputCollector → NormalizedMessage → Pipeline 过滤
-        ↓ EventBus: input.message.received
+【Input 阶段】InputCollector → NormalizedMessage
+        ↓ EventBus: input.message.received（经事件拦截器：去重/限流/相似过滤）
 【Decision 阶段】Decider → Intent
         ↓ EventBus: decision.intent.generated
-【Output 阶段】OutputHandlerManager → OutputPipeline → OutputHandlers
+【Output 阶段】渲染工具（TTS、字幕、虚拟形象等）直接并行渲染
 ```
 
 ### 数据类型流
@@ -80,74 +81,35 @@ flowchart LR
 
 ```
 Amaidesu/
-├── main.py                      # CLI 入口，程序启动入口
+├── main.py                      # CLI 入口 + v2 组合根（组件构造与生命周期）
 ├── config/                      # 配置目录（多文件结构，首次运行自动生成）
 ├── src/
-│   ├── stages/                  # 业务阶段
-│   │   ├── input/               # 输入阶段
-│   │   │   ├── manager.py       # InputCollectorManager
-│   │   │   ├── registry.py      # @collector 装饰器注册表
-│   │   │   ├── pipelines/       # 输入管道
-│   │   │   │   ├── rate_limit/  # 频率限制管道
-│   │   │   │   └── similar_filter/ # 相似过滤管道
-│   │   │   ├── collectors/      # 输入 Collector
-│   │   │   │   ├── console_input/
-│   │   │   │   ├── bili_danmaku/
-│   │   │   │   ├── bili_danmaku_official/
-│   │   │   │   ├── text_adv_game/
-│   │   │   │   ├── mock_danmaku/
-│   │   │   │   ├── read_pingmu/
-│   │   │   │   └── stt/
-│   │   │   └── shared/          # 输入阶段共享组件
-│   │   ├── decision/            # 决策阶段
-│   │   │   ├── manager.py       # DeciderManager
-│   │   │   ├── registry.py      # @decider 装饰器注册表
-│   │   │   └── deciders/        # 决策 Decider
-│   │   │       ├── amaidesu/    # 默认决策器（Planner/Replyer 两阶段 + 直播大纲机制）
-│   │   │       ├── maibot/
-│   │   │       ├── llm/
-│   │   │       ├── command/
-│   │   │       └── replay/
-│   │   └── output/              # 输出阶段
-│   │       ├── manager.py       # OutputHandlerManager
-│   │       ├── registry.py      # @handler 装饰器注册表
-│   │       ├── pipelines/       # 输出管道
-│   │       │   └── profanity_filter/
-│   │       └── handlers/        # 输出 Handler
-│   │           ├── audio/       # TTS 音频
-│   │           │   ├── edge_tts/
-│   │           │   ├── gptsovits/
-│   │           │   ├── omni_tts/
-│   │           │   └── voicebox/
-│   │           ├── avatar/      # 虚拟形象
-│   │           │   ├── vts/
-│   │           │   ├── warudo/
-│   │           │   └── vrchat/
-│   │           ├── subtitle/
-│   │           ├── sticker/
-│   │           ├── obs_control/
-│   │           ├── remote_stream/
-│   │           └── debug_console/
-│   └── modules/                 # 核心模块（共享基础设施）
-│       ├── avatar/              # 虚拟形象共享组件（IdleMotionController 等）
-│       ├── config/              # 配置管理
-│       ├── context/             # 上下文服务
-│       ├── dashboard/           # Dashboard API
+│   ├── agents/                  # 业务 Agent（主播 StreamerAgent：planner/replyer/agenda）
+│   └── modules/                 # 共享模块（基础设施 + 领域组件）
+│       ├── agents/              # AgentManager（Agent 注册与生命周期）
+│       ├── collectors/          # 输入采集域（CollectorManager + 各 Collector）
+│       │   ├── bilibili/        #   B 站弹幕（legacy / official）
+│       │   ├── console/         #   控制台输入
+│       │   ├── mock/            #   模拟弹幕
+│       │   ├── screen/          #   屏幕变化
+│       │   └── stt/             #   语音识别
+│       ├── tools/               # 输出渲染域（ToolRegistry + 渲染工具）
+│       │   └── output/          #   tts / subtitle / vts / warudo / obs / sticker…
+│       ├── events/              # EventBus + 事件拦截器（rate_limit / similar_filter）
+│       │   └── interceptors/    #   EventInterceptor / InterceptorChain
+│       ├── config/              # 配置管理（多文件 Schema 驱动 + 升级钩子）
+│       ├── context/             # ContextAssembler 快照组装
+│       ├── dashboard/           # Web Dashboard API
 │       ├── di/                  # 依赖注入
-│       ├── events/              # 事件系统
-│       ├── llm/                 # LLM 服务
+│       ├── llm/                 # LLM 服务（provider + profile 两层）
 │       ├── logging/             # 日志系统
-│       ├── mcp/                 # MCP 服务
-│       ├── pipeline/            # Pipeline 基类
+│       ├── memory/              # MemoryProvider
 │       ├── prompts/             # 提示词管理
-│       ├── streaming/           # 音频流通道
 │       ├── simulator/           # 模拟直播间服务（独立一等公民，非采集器）
-│       ├── tts/                 # TTS 管理
-│       └── types/               # 共享类型
-│           ├── base/            # 基础类型
-│           ├── capabilities.py  # CapabilitiesProvider 协议
-│           ├── emotion_vocab.py # Emotion 枚举
-│           └── intent.py        # Intent 类型
+│       ├── storage/             # SQLite 存储层
+│       ├── streaming/           # 音频流通道
+│       ├── tts/                 # TTS 客户端
+│       └── types/               # 共享类型（NormalizedMessage / Intent 等）
 └── docs/                       # 项目文档
     ├── architecture/           # 架构文档
     └── development/            # 开发指南
@@ -258,7 +220,7 @@ sequenceDiagram
 | Decider | `setup()` | `cleanup()` | `decide()` |
 | OutputHandler | `init()` | `cleanup()` | `handle(intent)`（Manager 直接调用，不订阅调度事件） |
 
-**关键差异**：OutputHandler 与 Input/Decision 不同——它**不订阅阶段调度事件**，由 `OutputHandlerManager` 在 OutputPipeline 过滤后直接调用 `handle(intent)`。完整说明见 [阶段参与者开发](../development/component-guide.md)。
+**关键差异**：OutputHandler 与 Input/Decision 不同——它**不订阅阶段调度事件**，由 Manager 直接调用 `handle(intent)`。完整说明见 [阶段参与者开发](../development/component-guide.md)。
 
 ### 事件系统
 
@@ -273,18 +235,17 @@ sequenceDiagram
 | `output.intent.dispatched` | 监控信号（Broadcaster/EventRecorder 等观察，不触发 Handler） |
 | `output.intent.finished` | Manager 聚合全部 handler 完成后发布 |
 
-> **直接调度说明**：`OutputHandlerManager` 是 Output 阶段唯一调度点——订阅 `decision.intent.generated`，运行 OutputPipeline，发布 `output.intent.dispatched` 监控信号，然后为每个 active Handler 创建任务并直接调用 `handle(intent)`，用 `gather` 等待全部完成后发布 `output.intent.finished`。Handler 不订阅 `output.intent.dispatched`，也不发布 `output.handler.completed`（后者为 Manager 内部语义，详见 [事件系统](event-system.md)）。
+> **直接调度说明**：Output 域调度点是唯一分发出口——订阅 `decision.intent.generated`，发布 `output.intent.dispatched` 监控信号，然后为每个 active Handler 创建任务并直接调用 `handle(intent)`，用 `gather` 等待全部完成后发布 `output.intent.finished`。Handler 不订阅 `output.intent.dispatched`，也不发布 `output.handler.completed`（后者为 Manager 内部语义，详见 [事件系统](event-system.md)）。
 
-### 管道（Pipeline）
+### 事件拦截器（Interceptor）
 
-管道用于在消息处理流程中进行预处理/后处理：
+"在事件路上拦一下做点事"的全局单点（§1.46.1）：emit 后、订阅者收到前，所有事件过同一道拦截器链（挂在 EventBus 分发层）。
 
-**输入管道（Input Pipeline）**：
-- `rate_limit` - 频率限制
+**内置拦截器**：
+- `rate_limit` - 频率限制（防刷屏/防突发）
 - `similar_filter` - 相似消息过滤
 
-**输出管道（Output Pipeline）**：
-- `profanity_filter` - 脏话过滤
+语义契约沿袭自旧管道 Process：返回原事件=透传 / 新事件=转换 / `None`=丢弃。敏感词净化不在拦截器层——主播发言统一出口在 Replyer（ProfanityFilter）。配置见 `core.toml` 的 `[interceptors.*]`。
 
 ### 音频流系统
 
@@ -359,10 +320,9 @@ enabled = ["edge_tts", "subtitle", "vts"]
 ## 相关文档
 
 - [数据流规则](data-flow.md) - 数据流约束和规则
-- [事件系统](event-system.md) - EventBus 使用指南
+- [事件系统](event-system.md) - EventBus 与事件拦截器使用指南
 - [阶段参与者开发](../development/component-guide.md) - 阶段参与者开发详解
-- [管道开发](../development/pipeline-guide.md) - Pipeline 开发详解
 
 ---
 
-*最后更新：2026-08-13（组件清单与目录结构补充直播大纲机制）*
+*最后更新：2026-08-25（§1.46.1 收官：管道→事件拦截器正名，移除 OutputPipeline/Pipeline 叙事；目录树更新为 v2 实际布局）*

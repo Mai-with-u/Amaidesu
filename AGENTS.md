@@ -13,7 +13,7 @@
 | 理解架构设计 | [3阶段架构](docs/architecture/overview.md) |
 | 理解事件系统 | [事件系统](docs/architecture/event-system.md) |
 | 开发 Collector/Decider/Handler | [阶段参与者开发](docs/development/component-guide.md) |
-| 开发 Pipeline | [管道开发](docs/development/pipeline-guide.md) |
+| 开发事件拦截器 | [事件系统](docs/architecture/event-system.md#事件拦截器interceptor) |
 | 管理提示词 | [提示词管理](docs/development/prompt-management.md) |
 | 编写测试 | [测试指南](docs/development/testing-guide.md) |
 
@@ -168,7 +168,7 @@ uv run ruff check --fix .  # 自动修复
 | 类型 | 使用场景 | 示例 |
 |------|----------|------|
 | **Pydantic BaseModel** | 所有数据模型、配置 Schema、事件 Payload | `class UserConfig(BaseModel)` |
-| **dataclass** | 仅用于简单的内部统计/包装类 | `@dataclass class PipelineStats` |
+| **dataclass** | 仅用于简单的内部统计/包装类 | `@dataclass class CollectorStats` |
 | **Protocol** | 定义接口协议 | `class CapabilitiesProvider(Protocol)` |
 
 **详细规范**：[开发规范 - 数据类型选用](docs/development-guide.md#3-数据类型选用规范)
@@ -177,10 +177,10 @@ uv run ruff check --fix .  # 自动修复
 
 | 类型 | 命名风格 | 示例 |
 |------|---------|------|
-| 类名 | PascalCase | `EventBus`, `InputCollector`, `InputPipeline` |
+| 类名 | PascalCase | `EventBus`, `InputCollector`, `RateLimitInterceptor` |
 | 函数/方法/变量名 | snake_case | `send_to_maibot`, `handler_config` |
 | 私有成员 | 前导下划线 | `_message_handlers`, `_is_connected` |
-| Collector/Decider/Handler/Pipeline 类 | 以类型名结尾 | `ConsoleInputCollector`, `LLMDecider`, `EdgeTTSHandler`, `RateLimitPipeline` |
+| Collector/Agent/工具/拦截器类 | 以类型名结尾 | `ConsoleInputCollector`, `StreamerAgent`, `EdgeTTSHandler`, `RateLimitInterceptor` |
 
 **详细规范**：[开发规范](docs/development-guide.md)
 
@@ -207,7 +207,7 @@ uv run ruff check --fix .  # 自动修复
 **注意**: InputCollector 使用 `start()`/`stop()` 是因为它需要返回异步生成器（AsyncIterator），
 而 Decider 使用 `setup()`/`cleanup()` 是因为它是事件订阅者。
 
-OutputHandler 的 `init()` 与 `cleanup()` 只管理自身资源及专用事件通信（如 `OUTPUT_STICKER_COMMAND`），不处理阶段调度事件。`OutputHandlerManager` 在 OutputPipeline 过滤后直接调用 active Handler 的 `handle(intent)`。
+OutputHandler 的 `init()` 与 `cleanup()` 只管理自身资源及专用事件通信（如 `OUTPUT_STICKER_COMMAND`），不处理阶段调度事件。Manager 直接调用 active Handler 的 `handle(intent)`。
 
 > **单一事实源**：生命周期表的权威定义在 [开发规范 §10.2](docs/development-guide.md#102-阶段参与者生命周期)。若两侧不一致，以 development-guide.md 为准并同步本表。
 
@@ -235,18 +235,19 @@ enabled = ["amaidesu"]
 enabled = ["edge_tts", "subtitle", "vts"]
 ```
 
-## 管道开发
+## 事件拦截器开发
 
-管道用于在消息处理流程中进行预处理/后处理，位于 Input/Output 阶段内部。
+事件拦截器是挂在 EventBus 分发层的全局单点（§1.46.1）：emit 后、订阅者收到前，所有事件过同一道拦截器链。旧 Pipeline 系统已移除。
 
-### 添加新 Pipeline
+### 添加新拦截器
 
-1. 继承 `Pipeline[NormalizedMessage]`（Input）或 `Pipeline["Intent"]`（Output）
-2. 加 `@pipeline("name")` 装饰器（stage 从基类自动推断）
-3. 实现 `_process()` 方法
-4. 返回原对象继续传递，返回新对象（`model_copy`）转换，返回 `None` 丢弃消息
+1. 继承 `EventInterceptor`（`src/modules/events/interceptors/base.py`）
+2. 实现 `name` 属性（唯一标识）与 `intercept()` 方法
+3. 在 `main.py` 的 `register_event_interceptors()` 中实例化并 `event_bus.add_interceptor()`
+4. 配置放 `core.toml` 的 `[interceptors.<name>]`
+5. `intercept()` 返回 dict 放行（可原地修改 payload）、返回 `None` 丢弃事件
 
-**详细指南**：[管道开发](docs/development/pipeline-guide.md)
+**详细指南**：[事件系统 - 事件拦截器](docs/architecture/event-system.md#事件拦截器interceptor)
 
 ## 依赖注入约定
 
@@ -320,7 +321,7 @@ event_bus.on(CoreEvents.INPUT_MESSAGE_RECEIVED, self.handle_message, model_class
 
 #### Manager 直接调度与完成跟踪
 
-`OutputHandlerManager` 是 Output 阶段唯一的调度点：订阅 `decision.intent.generated` → 运行 OutputPipeline → 发布 `output.intent.dispatched` 监控信号 → 为每个 active Handler 创建任务并直接调用 `handle(intent)`（`asyncio.wait_for` 落实 `render_timeout_ms`，隔离超时与异常）→ `gather` 等待全部完成后发布 `output.intent.finished`。Handler 不订阅 `output.intent.dispatched`，也不发布 `output.handler.completed`。
+`OutputHandlerManager` 是 Output 阶段唯一的调度点：订阅 `decision.intent.generated` → 发布 `output.intent.dispatched` 监控信号 → 为每个 active Handler 创建任务并直接调用 `handle(intent)`（`asyncio.wait_for` 落实 `render_timeout_ms`，隔离超时与异常）→ `gather` 等待全部完成后发布 `output.intent.finished`。Handler 不订阅 `output.intent.dispatched`，也不发布 `output.handler.completed`。
 
 ### 事件注册
 
@@ -417,7 +418,7 @@ logger.error("错误日志", exc_info=True)
 ## 配置文件
 
 - 配置文件使用 TOML 格式，目录 `config/`（多文件结构，首次运行从 Schema 自动生成）
-- Collector 配置 `[collectors]` / Decider 配置 `[deciders]` / Handler 配置 `[handlers]` / 管道配置 `[pipelines.*]`
+- Collector 配置 `[collectors]` / Decider 配置 `[deciders]` / Handler 配置 `[handlers]` / 拦截器配置 `[interceptors.*]`
 
 ## 目录结构
 
@@ -441,10 +442,10 @@ logger.error("错误日志", exc_info=True)
 ### 开发指南
 - [开发规范](docs/development-guide.md) - 代码风格和约定
 - [阶段参与者开发](docs/development/component-guide.md) - Collector/Decider/Handler 开发详解
-- [管道开发](docs/development/pipeline-guide.md) - Pipeline 开发详解
+- [事件拦截器](docs/architecture/event-system.md#事件拦截器interceptor) - 事件拦截器开发详解
 - [提示词管理](docs/development/prompt-management.md) - PromptManager 使用
 - [测试指南](docs/development/testing-guide.md) - 测试规范和最佳实践
 
 ---
 
-*最后更新：2026-08-16（新增"git 提交必须获得用户显式授权"与"git 提交体规范（Conventional Commits）"条款：计划内 Commit 策略不覆盖计划外工作；历史教训——修复任务擅自提交、提交体乱码/被 shell 吞掉；配置 Schema 变更规则补强"升版本 ≠ 迁移生效"：漂移写回闭环覆盖范围与迁移生效验证要求，历史教训——大纲功能配置缺失静默失效）*
+*最后更新：2026-08-25（§1.46.1 收官：移除旧 Pipeline 系统与 `src/modules/pipeline/`，"管道开发"章节改写为"事件拦截器开发"；配置 `[pipelines]` 正名 `[interceptors]`（CONFIG_VERSION 2.0.4）；历史教训——重构"新建替代物"后必须同步"清除旧物+文档"，否则虚构叙事误导后续开发者）*

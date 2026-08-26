@@ -227,65 +227,53 @@ async def test_error_isolation(collector_manager, event_bus):
     await collector_manager.stop_all_collectors()
 ```
 
-### 3.3 Pipeline 测试
+### 3.3 事件拦截器测试
 
 ```python
-"""测试 RateLimitInputPipeline
+"""测试 RateLimitInterceptor
 
-运行: uv run pytest tests/stages/input/pipelines/test_rate_limit_pipeline.py -v
+运行: uv run pytest tests/modules/events/test_interceptors.py -v
 """
 
 import pytest
 
-from src.stages.input.pipelines.rate_limit.pipeline import RateLimitInputPipeline
-from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.events.interceptors.rate_limit import RateLimitInterceptor
 
 
 @pytest.fixture
-def rate_limit_pipeline():
-    """创建限流管道实例"""
-    config = {
-        "global_rate_limit": 10,
-        "user_rate_limit": 3,
-        "window_size": 60,
-    }
-    return RateLimitInputPipeline(config)
+def interceptor():
+    """创建限流拦截器实例"""
+    return RateLimitInterceptor(
+        global_rate_limit=10,
+        user_rate_limit=3,
+        window_size=60,
+    )
 
 
-def create_message(text: str, user_id: str = "test_user") -> NormalizedMessage:
-    """创建测试用的 NormalizedMessage"""
-    return NormalizedMessage(text=text, source="test", user_id=user_id)
-
-
-def test_pipeline_creation(rate_limit_pipeline):
-    """测试管道创建"""
-    assert rate_limit_pipeline._global_rate_limit == 10
-    assert rate_limit_pipeline._user_rate_limit == 3
+def create_payload(text: str, user_id: str = "test_user") -> dict:
+    """创建测试用的事件 payload（model_dump 后的 dict 形态）"""
+    return {"text": text, "user_id": user_id, "source": "test"}
 
 
 @pytest.mark.asyncio
-async def test_process_message_pass(rate_limit_pipeline):
-    """测试消息通过限流"""
-    message = create_message("测试消息")
-    result = await rate_limit_pipeline._process(message)
-    assert result == message
+async def test_intercept_pass(interceptor):
+    """测试事件通过限流"""
+    result = await interceptor.intercept("room.message.danmaku", create_payload("测试消息"), "Test")
+    assert result is not None
 
 
 @pytest.mark.asyncio
-async def test_process_message_rate_limited(rate_limit_pipeline):
-    """测试消息被限流"""
-    config = {"global_rate_limit": 2, "user_rate_limit": 10, "window_size": 60}
-    pipeline = RateLimitInputPipeline(config)
+async def test_intercept_rate_limited(interceptor):
+    """测试超出频率的事件被丢弃"""
+    slow = RateLimitInterceptor(global_rate_limit=2, user_rate_limit=10, window_size=60)
 
-    # 前两条消息通过
-    assert await pipeline._process(create_message("消息1", "user1")) is not None
-    assert await pipeline._process(create_message("消息2", "user1")) is not None
+    # 前两条通过
+    assert await slow.intercept("room.message.danmaku", create_payload("消息1", "user1"), "T") is not None
+    assert await slow.intercept("room.message.danmaku", create_payload("消息2", "user1"), "T") is not None
 
-    # 第三条消息被限流
-    result = await pipeline._process(create_message("消息3", "user1"))
-    assert result is None
+    # 第三条被丢弃（返回 None）
+    assert await slow.intercept("room.message.danmaku", create_payload("消息3", "user1"), "T") is None
 ```
-
 ### 3.4 Mock 对象
 
 项目在 `tests/mocks/` 目录中提供了常用的 Mock 对象：
@@ -483,14 +471,14 @@ async def test_feature_requiring_config():
 
 ### 6.1 单元测试
 
-测试单个组件（Collector、Pipeline、Manager）的功能。
+测试单个组件（Collector、Interceptor、Manager）的功能。
 
 ```python
-# tests/stages/input/pipelines/test_rate_limit_pipeline.py
-def test_rate_limit_pipeline_creation():
-    """测试管道创建"""
-    pipeline = RateLimitInputPipeline(config)
-    assert pipeline is not None
+# tests/modules/events/test_interceptors.py
+def test_rate_limit_interceptor_creation():
+    """测试拦截器创建"""
+    interceptor = RateLimitInterceptor(global_rate_limit=10)
+    assert interceptor is not None
 ```
 
 ### 6.2 集成测试
@@ -498,14 +486,13 @@ def test_rate_limit_pipeline_creation():
 测试多个组件协作。
 
 ```python
-# tests/integration/test_amaidesu_plugin.py
-# 需要 import: PipelineManager / RateLimitInputPipeline / InputCollectorManager
+# tests/integration/
+# 需要 import: EventBus / RateLimitInterceptor
 @pytest.mark.asyncio
-async def test_collector_manager_with_pipeline(event_bus):
-    """测试 CollectorManager 与 Pipeline 集成"""
-    pipeline_manager = PipelineManager("input")
-    pipeline_manager.register_pipeline(RateLimitInputPipeline(config))
-    manager = InputCollectorManager(event_bus, pipeline_manager=pipeline_manager)
+async def test_event_bus_with_interceptor(event_bus):
+    """测试 EventBus 与拦截器集成"""
+    event_bus.add_interceptor(RateLimitInterceptor(global_rate_limit=10))
+    await event_bus.emit("room.message.danmaku", payload, source="Test")
     ...
 ```
 
@@ -630,7 +617,7 @@ async def event_bus():
 
 - [开发规范](../development-guide.md) - 代码风格和数据类型规范
 - [阶段参与者开发](component-guide.md) - 阶段参与者开发指南
-- [管道开发](pipeline-guide.md) - Pipeline 开发指南
+- [事件拦截器](../architecture/event-system.md#事件拦截器interceptor) - 事件拦截器开发指南
 - [事件系统](../architecture/event-system.md) - EventBus 使用指南
 
 ---

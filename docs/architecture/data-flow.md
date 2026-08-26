@@ -22,11 +22,11 @@ Amaidesu 项目采用 3 阶段架构，数据在各阶段之间按照固定方�
 ```
 外部输入（弹幕、语音、控制台）
         ↓
-【Input 阶段】数据采集 → 标准化 → Pipeline 过滤
+【Input 阶段】数据采集 → 标准化
         ↓ EventBus: input.message.received
 【Decision 阶段】处理消息 → 生成 Intent
         ↓ EventBus: decision.intent.generated
-【Output 阶段】参数生成 → Pipeline 过滤 → Manager 直接并行渲染
+【Output 阶段】参数生成 → Manager 直接并行渲染
         ├─ EventBus: output.intent.dispatched（监控信号）
         └─ OutputHandlerManager → OutputHandlers
 ```
@@ -125,7 +125,7 @@ class MyOutputHandler:
         await self.render(intent)
 ```
 
-`OutputHandlerManager` 在 OutputPipeline 过滤后直接调用 active handler 的 `handle(intent)`。
+Manager 直接调用 active handler 的 `handle(intent)`（无管道过滤层；事件级净化由 EventBus 拦截器在分发前完成，见 [事件系统](event-system.md)）。
 
 ### 允许模式：Decision 拉取 Output 能力做动作选择（发现平面）
 
@@ -200,7 +200,7 @@ Output（实现）──▶ CapabilitiesProvider（抽象，在 modules）◀─
 
 `OutputHandlerManager` 是 Output 阶段的唯一调度点：
 
-1. 订阅 `decision.intent.generated` 并运行 OutputPipeline。
+1. 订阅 `decision.intent.generated`。
 2. 发布 `output.intent.dispatched`，供 Broadcaster、EventRecorder 等组件监控。
 3. 为每个 active handler 创建任务，直接调用 `handler.handle(intent)`。
 4. `_run_handler` 使用 `asyncio.wait_for` 落实 `render_timeout_ms`，并隔离单个 handler 的超时与异常。配置为 `0` 时不设超时。
@@ -263,7 +263,7 @@ class MyDecider:
 
 #### OutputHandler（Manager 直接调度）
 
-> OutputHandler 不订阅 `decision.intent.generated` 或 `output.intent.dispatched`。`OutputHandlerManager` 统一运行 OutputPipeline，然后直接调用每个 active handler 的 `handle(intent)`。
+> OutputHandler 不订阅 `decision.intent.generated` 或 `output.intent.dispatched`。Manager 直接调用每个 active handler 的 `handle(intent)`。
 
 ```python
 class MyOutputHandler:
@@ -274,11 +274,11 @@ class MyOutputHandler:
 
 ### Manager 直接调度说明
 
-`OutputHandlerManager` 订阅 `decision.intent.generated`，统一运行 OutputPipeline。过滤通过后，它先发布 `output.intent.dispatched` 监控信号，再为每个 active handler 创建任务并直接调用 `handle(intent)`。
+Manager 订阅 `decision.intent.generated`。收到意图后，它先发布 `output.intent.dispatched` 监控信号，再为每个 active handler 创建任务并直接调用 `handle(intent)`。
 
 这种设计保证：
 
-- Pipeline 过滤逻辑只在 Manager 中执行一次。
+- 意图分发只在 Manager 中执行一次（事件级净化已前置到 EventBus 拦截器）。
 - `output.intent.dispatched` 只供 Broadcaster、EventRecorder 等监控组件订阅，不是 Handler 的调度通道。
 - Handler 只实现 `handle(intent)`，不管理阶段流转事件的订阅、取消订阅或完成通知。
 - `_run_handler` 通过 `asyncio.wait_for` 执行 `render_timeout_ms`，单个 Handler 超时或异常不会阻止其他 Handler。
@@ -306,7 +306,7 @@ Amaidesu 项目使用两种不同的通信机制来处理不同类型的数据�
 
 - `input.message.received`：标准化消息接收
 - `decision.intent.generated`：决策意图生成
-- `output.intent.dispatched`：Pipeline 过滤后的意图监控信号
+- `output.intent.dispatched`：意图分发监控信号
 - `output.obs.command`：OBS 统一命令入口
 - `core.startup` / `core.shutdown`：系统生命周期事件
 
@@ -518,7 +518,10 @@ flowchart TB
     subgraph Input["【Input 阶段】输入阶段"]
         IP[InputCollector]
         NM[NormalizedMessage]
-        Pipeline[InputPipeline<br/>频率限制<br/>相似过滤]
+    end
+
+    subgraph EventBusLayer["EventBus 拦截层"]
+        INT[事件拦截器<br/>频率限制 / 相似过滤]
     end
 
     subgraph Decision["【Decision 阶段】决策阶段"]
@@ -528,8 +531,7 @@ flowchart TB
     end
 
     subgraph Output["【Output 阶段】输出阶段"]
-        OPM[OutputHandlerManager<br/>订阅 + 过滤 + 直接调度]
-        OPipeline[OutputPipeline<br/>脏话过滤]
+        OPM[Manager<br/>订阅 + 直接调度]
         TTS[TTS Handler<br/>EdgeTTS/GPTSoVITS]
         Sub[字幕 Handler]
         Avatar[Avatar Handler<br/>VTS/Warudo/VRChat]
@@ -542,13 +544,11 @@ flowchart TB
 
     External --> IP
     IP --> NM
-    NM --> Pipeline
-    Pipeline -->|input.message.received| DM
+    NM -->|input.message.received| INT
+    INT --> DM
     DM --> DP
     DP --> Intent
     Intent -->|decision.intent.generated| OPM
-    OPM --> OPipeline
-    OPipeline --> OPM
     OPM -.->|output.intent.dispatched<br/>监控信号| Monitor[Broadcaster / EventRecorder]
     OPM -->|handle(intent)| TTS
     OPM -->|handle(intent)| Sub
@@ -592,7 +592,6 @@ sequenceDiagram
     Note over OPM,EB: Output 阶段（direct dispatch）
 
     EB->>OPM: 转发 decision.intent.generated
-    OPM->>OPM: OutputPipeline 过滤
     OPM->>EB: emit(output.intent.dispatched, IntentPayload)
     Note over EB: DISPATCHED 仅供监控组件观察
     par 并行直接调用

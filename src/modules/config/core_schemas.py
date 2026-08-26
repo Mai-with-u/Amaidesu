@@ -7,7 +7,10 @@
 > **v2.0.0 变化**：
 > - 删除 ``[maicore]`` 段（2.0.0 单进程无 MaiCore WebSocket 连接）
 > - ``[context]`` 由会话存储改造为 ContextAssembler 配置（§1.44）
-> - ``[pipelines]`` 仍位于 core.toml（阶段管道预留位）
+>
+> **v2.0.4 变化**：
+> - ``[pipelines]`` 正名为 ``[interceptors]``（§1.46.1 管道→事件拦截器迁移收官；
+>   阶段嵌套拍平为 ``[interceptors.<name>]``，output 侧 profanity_filter 已归 Replyer）
 
 段树详见 ``.omo/drafts/amaidesu-v2-config-tree.md``（单一事实源）。
 """
@@ -25,7 +28,7 @@ class MetaConfig(BaseConfig):
     """配置元数据"""
 
     version: str = Field(
-        default="2.0.3",
+        default="2.0.4",
         description="配置版本号（用于自动迁移检测，权威定义于 multi_file_loader.py）",
     )
 
@@ -194,7 +197,7 @@ class CoreConfig(BaseConfig):
     - ``[dashboard]``   — Web Dashboard
     - ``[simulator]``   — 模拟直播间
     - ``[logging]``     — 日志
-    - ``[pipelines]``   — 管道配置（动态键）
+    - ``[interceptors]`` — 事件拦截器配置（动态键；2.0.4 由 ``[pipelines]`` 正名）
 
     v2.0.0 删除：
     - ``[maicore]``（旧 MaiCore WebSocket 连接，单进程下不再需要）
@@ -213,35 +216,21 @@ class CoreConfig(BaseConfig):
         default_factory=SimulatorConfigSchema, description="模拟直播间配置（数据文件位于 data/simulator/）"
     )
     logging: LoggingConfig = Field(default_factory=LoggingConfig, description="日志配置")
-    pipelines: dict[str, Any] = Field(
+    interceptors: dict[str, Any] = Field(
         default_factory=lambda: {
-            "input": {
-                "rate_limit": {
-                    "priority": 100,
-                    "enabled": True,
-                    "global_rate_limit": 100,
-                    "user_rate_limit": 10,
-                    "window_size": 60,
-                },
-                "similar_filter": {
-                    "priority": 500,
-                    "enabled": True,
-                    "similarity_threshold": 0.85,
-                    "time_window": 5.0,
-                    "min_text_length": 3,
-                    "cross_user_filter": True,
-                },
+            "rate_limit": {
+                "enabled": True,
+                "global_rate_limit": 100,
+                "user_rate_limit": 10,
+                "window_size": 60,
             },
-            "output": {
-                "profanity_filter": {
-                    "enabled": True,
-                    "priority": 100,
-                    "words": ["测试脏话", "示例敏感词"],
-                    "replacement": "***",
-                    "case_sensitive": False,
-                    "drop_on_match": False,
-                },
+            "similar_filter": {
+                "enabled": True,
+                "similarity_threshold": 0.85,
+                "time_window": 5.0,
+                "min_text_length": 3,
+                "cross_user_filter": True,
             },
         },
-        description="管道配置（动态键，如 rate_limit, similar_filter 等）",
+        description="事件拦截器配置（动态键，如 rate_limit / similar_filter；2.0.4 由 [pipelines] 正名）",
     )

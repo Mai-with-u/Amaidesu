@@ -30,7 +30,7 @@ Amaidesu 使用 **纯 DI（Pure DI）/ 手动 DI**——不依赖容器，符合
 
 | 类型 | 例子 | 模式 |
 |------|------|------|
-| **服务对象** | LLMManager、EventBus、Database、PipelineManager | DI 注入 |
+| **服务对象** | LLMManager、EventBus、Database、SimulatorService | DI 注入 |
 | **数据对象** | HTTP Request、Session、User Preferences、Trace ID | Context / 参数 |
 | **值对象** | Money、Date、Address | 不可变 dataclass |
 
@@ -53,9 +53,9 @@ class LLMDecider:
         self._prompt_service = prompt_service
 ```
 
-### 反射式装配（PipelineManager / DeciderManager）
+### 反射式装配（组件工厂 / 服务实例化）
 
-`DeciderManager._instantiate_decider()` 和 `PipelineManager._instantiate_pipeline()` 都通过 `instantiate_with_di()`（类型匹配 DI）按需注入服务：
+组件工厂与服务实例化（如 `SimulatorService` 构造依赖、Dashboard 组件装配）通过 `instantiate_with_di()`（类型匹配 DI）按需注入服务：
 
 ```python
 from src.modules.di import instantiate_with_di
@@ -66,9 +66,9 @@ services_by_type = {
     PromptManager: prompt_manager,
 }
 
-pipeline = instantiate_with_di(
-    pipeline_cls,
-    config=pipeline_config,          # __init__ 的 config 参数自动注入
+component = instantiate_with_di(
+    component_cls,
+    config=component_config,          # __init__ 的 config 参数自动注入
     services_by_type=services_by_type,
 )
 ```
@@ -79,7 +79,7 @@ pipeline = instantiate_with_di(
 - 基本类型（`Dict[str, Any]`、`int` 等）不参与注入，只通过 `config` 传入
 - 有默认值的参数在服务缺失时跳过（让默认值生效）；缺失必填服务抛 `DependencyInjectionError`
 
-每个 Pipeline 只收到自己声明的依赖，不需要的服务不会传入。
+每个组件只收到自己声明的依赖，不需要的服务不会传入。
 
 ### 循环依赖的处理
 
@@ -92,8 +92,7 @@ if TYPE_CHECKING:
     from src.modules.llm.manager import LLMManager
 
 
-class MyPipeline(Pipeline["Intent"]):
-    def __init__(self, config, llm_service: "LLMManager"):  # 字符串注解
+class MyCollector(BaseCollector):`n    def __init__(self, config, event_bus: "EventBus"):  # 字符串注解
         ...
 ```
 
@@ -110,13 +109,12 @@ class BadContext:
     prompt_service: Optional[Any] = None
 
 
-class BadPipeline:
-    def __init__(self, config, context: BadContext):
+class BadComponent:`n    def __init__(self, config, context: BadContext):
         self._llm = context.llm_service  # 隐藏依赖，类型丢失
 ```
 
 **为什么错**：
-- 依赖隐式（看签名不知道 Pipeline 需要什么）
+- 依赖隐式（看签名不知道组件需要什么）
 - 类型丢失（`Optional[Any]`）
 - 错误延迟到运行时（构造时不知道 `context.llm_service` 是不是 None）
 - 上帝对象风险（Context 会无限增长）
@@ -125,8 +123,7 @@ class BadPipeline:
 
 ```python
 # 正确
-class GoodPipeline:
-    def __init__(self, config, llm_service: "LLMManager"):
+class GoodComponent:`n    def __init__(self, config, event_bus: "EventBus"):
         self._llm = llm_service  # 显式依赖，类型安全
 ```
 
@@ -146,7 +143,7 @@ class PluginContext:
         ...
 ```
 
-**PluginContext 与 OutputPipelineContext 的区别**：
+**核心层与假想的插件层区别**：
 - **核心层（项目内部）**：用 DI，类型完全已知
 - **插件层（未来第三方）**：用 PluginContext，框架无法预知用户需求
 
@@ -168,4 +165,4 @@ class PluginContext:
 
 ## 相关 ADR
 
-- ADR-001：Pipeline 用 DI 不用 Context
+- ADR-001：Pipeline 曾用 DI 替代 Context（ADR 已随管道系统移除而废弃，DI 原则沿用）

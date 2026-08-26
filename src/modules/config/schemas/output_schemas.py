@@ -46,8 +46,10 @@
 - **OutputHandlersConfig**：`[handlers]` 段的聚合模型。
   包含启用元数据（enabled / concurrent_rendering / error_handling / render_timeout_ms /
   completion_timeout_ms）以及每个 Handler 的可选子配置。
-- **OutputPipelinesConfig**：`[pipelines]` 段（默认空 dict）。
 - **OutputConfig**：`config/output.toml` 文件对应的根模型。
+
+  > v2.0.4：原 `OutputPipelinesConfig` 容器已删除——OutputPipeline 随 §1.46.1
+  > 定案移除，敏感词净化归 Replyer（ProfanityFilter）。
 
 设计原则：
 - 不修改 Handler 内部代码，仅在调用时延迟加载其 `ConfigSchema` 嵌套类。
@@ -230,27 +232,6 @@ class OutputHandlersConfig(BaseConfig):
 
 
 # ---------------------------------------------------------------------------
-# Output 阶段 Pipeline 容器（与 core_schemas.pipelines 风格一致）
-# ---------------------------------------------------------------------------
-
-
-class OutputPipelinesConfig(BaseConfig):
-    """`[pipelines]` 段容器
-
-    使用动态键 dict 存储任意 pipeline（如 `profanity_filter` 等）。
-    键名不限，由具体 pipeline 自行解析；值是 free-form 字典。
-
-    当前 `config/output.toml` 不强制写入此段，但保留以便未来扩展；
-    默认空 dict，缺省时不影响 `OutputConfig` 验证。
-    """
-
-    pipelines: Dict[str, Dict[str, Any]] = Field(
-        default_factory=dict,
-        description="Output 阶段管道配置（动态键，如 profanity_filter 等）",
-    )
-
-
-# ---------------------------------------------------------------------------
 # 顶层 OutputConfig（对应 config/output.toml 根）
 # ---------------------------------------------------------------------------
 
@@ -268,9 +249,6 @@ class OutputConfig(BaseConfig):
                 "concurrent_rendering": True,
                 ...,
                 "<handler_name>": {...}
-            },
-            "pipelines": {
-                "<pipeline_name>": {...}
             }
         }
     """
@@ -278,11 +256,6 @@ class OutputConfig(BaseConfig):
     handlers: OutputHandlersConfig = Field(
         default_factory=OutputHandlersConfig,
         description="`[handlers]` 段聚合",
-    )
-
-    pipelines: OutputPipelinesConfig = Field(
-        default_factory=OutputPipelinesConfig,
-        description="`[pipelines]` 段聚合（可选，默认空）",
     )
 
 
@@ -336,7 +309,6 @@ __all__ = [
     "WarudoConfigSchema",
     # 聚合容器
     "OutputHandlersConfig",
-    "OutputPipelinesConfig",
     # 顶层根模型
     "OutputConfig",
     # 向后兼容

@@ -7,11 +7,11 @@
   在此处用 ``XXXConfigSchema`` 别名导出，避免调用方硬编码 Collector 内部类名。
 - **InputCollectorsConfig**：聚合所有 Collector 子配置的容器；
   每个 Collector 都是 ``Optional``，未启用则保持 ``None``。
-- **InputPipelinesConfig**：与 ``core_schemas.pipelines`` 一致的动态键 dict 容器
-  （为未来扩展预留，当前 ``input.toml`` 不含 pipeline 段，实际配置在
-  ``core.toml`` 的 ``[pipelines.input.*]`` 中）。
 - **InputConfig**：``config/input.toml`` 文件对应的根模型。
-  字段：``type / collectors / pipelines``。
+  字段：``type / collectors``。
+
+  > v2.0.4：原 ``InputPipelinesConfig`` 容器已删除——输入侧净化职责由事件
+  > 拦截器承担（§1.46.1），配置位于 ``core.toml`` 的 ``[interceptors.*]``。
 
 设计原则：
 - 不修改 Collector 内部代码，仅导入并重导出其 ``ConfigSchema`` 嵌套类。
@@ -253,27 +253,6 @@ class InputCollectorsConfig(BaseConfig):
 
 
 # ---------------------------------------------------------------------------
-# Input 阶段 Pipeline 容器（与 core_schemas.pipelines 风格一致）
-# ---------------------------------------------------------------------------
-
-
-class InputPipelinesConfig(BaseConfig):
-    """Input 阶段 Pipeline 配置容器
-
-    使用动态键 dict 存储任意 pipeline（如 ``rate_limit`` / ``similar_filter`` 等）。
-
-    注意：当前 ``config/input.toml`` 不含 pipeline 段，所有 Input Pipeline 实际配置
-    在 ``config/core.toml`` 的 ``[pipelines.input.*]`` 中。此处保留容器类型
-    以保持与 Output 阶段的对称性，并为未来扩展预留接口。
-    """
-
-    pipelines: Dict[str, Dict[str, Any]] = Field(
-        default_factory=dict,
-        description="Input 阶段管道配置（动态键，如 rate_limit / similar_filter 等）",
-    )
-
-
-# ---------------------------------------------------------------------------
 # 顶层 InputConfig（对应 config/input.toml）
 # ---------------------------------------------------------------------------
 
@@ -305,11 +284,6 @@ class InputConfig(BaseConfig):
     collectors: InputCollectorsConfig = Field(
         default_factory=InputCollectorsConfig,
         description="所有 Collector 子配置聚合（含 enabled 列表）",
-    )
-
-    pipelines: InputPipelinesConfig = Field(
-        default_factory=InputPipelinesConfig,
-        description="Input 阶段 Pipeline 配置",
     )
 
 
@@ -386,7 +360,6 @@ __all__ = [
     "STTConfigSchema",  # noqa: F822
     # 聚合容器
     "InputCollectorsConfig",
-    "InputPipelinesConfig",
     # 顶层根模型
     "InputConfig",
     # 工厂函数

@@ -50,7 +50,6 @@ def register_component_ui(type: str, label: str, description: str) -> None:
 from .output_schemas import (  # noqa: E402
     OutputConfig,
     OutputHandlersConfig,
-    OutputPipelinesConfig,
     get_output_config,
 )
 
@@ -58,7 +57,6 @@ from .output_schemas import (  # noqa: E402
 from .input_schemas import (  # noqa: E402
     InputCollectorsConfig,
     InputConfig,
-    InputPipelinesConfig,
     get_input_collector_config,
 )
 
@@ -164,12 +162,10 @@ __all__ = [
     # Output handler schemas
     "OutputConfig",
     "OutputHandlersConfig",
-    "OutputPipelinesConfig",
     "get_output_config",
     # Input collector schemas
     "InputConfig",
     "InputCollectorsConfig",
-    "InputPipelinesConfig",
     "get_input_collector_config",
     # Non-component schemas
     "LoggingConfig",

@@ -197,6 +197,61 @@ def _migrate_core_2_0_2(data: dict[str, Any]) -> list[str]:
     return changed
 
 
+def _migrate_core_2_0_4(data: dict[str, Any]) -> list[str]:
+    """core.toml 2.0.4：``[pipelines]`` 正名为 ``[interceptors]``（§1.46.1 收官）。
+
+    旧结构为阶段嵌套（input/output 子层），新结构拍平为拦截器名直挂：
+    - 取 ``pipelines.input`` 子节作为拦截器集合（rate_limit / similar_filter）
+    - 兼容历史上直接挂在 pipelines 根的扁平键（v1 遗留形态）
+    - 丢弃 ``output`` 子节（OutputPipeline 已删；敏感词净化归 Replyer）
+    - ``priority`` 字段随管道调度语义废弃，剥离
+    - 已存在的 ``[interceptors]`` 键保留，迁移项以 setdefault 并入
+
+    原地修改、幂等（重复执行时 ``pipelines`` 已不存在，无事发生），
+    返回变更路径列表。
+    """
+    changed: list[str] = []
+    pipelines = data.get("pipelines")
+    if not isinstance(pipelines, dict):
+        return changed
+
+    data.pop("pipelines")
+
+    raw_staged = pipelines.get("input")
+    staged_input: dict[str, Any] = raw_staged if isinstance(raw_staged, dict) else {}
+    existing = data.get("interceptors")
+    merged: dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
+    for source in (staged_input, pipelines):
+        for name, cfg in source.items():
+            if name in ("input", "output") or not isinstance(cfg, dict):
+                continue
+            if name in merged:
+                continue
+            merged[name] = {k: v for k, v in cfg.items() if k != "priority"}
+
+    if not isinstance(existing, dict) or merged != existing:
+        data["interceptors"] = merged
+        changed.append("interceptors")
+    else:
+        changed.append("pipelines")
+    return changed
+
+
+def _strip_pipelines_2_0_4(data: dict[str, Any]) -> list[str]:
+    """input.toml / output.toml 2.0.4：剥离遗留 ``[pipelines]`` 死段。
+
+    管道配置已正名至 core.toml ``[interceptors]``；阶段文件中的残留段无
+    Schema 字段承接（extra="forbid"），不剥离将导致永久验证失败循环。
+
+    原地修改、幂等，返回变更路径列表。
+    """
+    changed: list[str] = []
+    if "pipelines" in data:
+        data.pop("pipelines")
+        changed.append("pipelines")
+    return changed
+
+
 # ---------------------------------------------------------------------------
 # 2.0.0 跨域迁移 hooks（核心改造）
 # ---------------------------------------------------------------------------
@@ -442,6 +497,22 @@ CONFIG_UPGRADE_HOOKS: tuple[ConfigUpgradeHook, ...] = (
         target_version="2.0.3",
         config_file="agents.toml",
         migrate=_migrate_agents_2_0_3,
+    ),
+    # 2.0.4 管道→事件拦截器正名收官（§1.46.1）
+    ConfigUpgradeHook(
+        target_version="2.0.4",
+        config_file="core.toml",
+        migrate=_migrate_core_2_0_4,
+    ),
+    ConfigUpgradeHook(
+        target_version="2.0.4",
+        config_file="input.toml",
+        migrate=_strip_pipelines_2_0_4,
+    ),
+    ConfigUpgradeHook(
+        target_version="2.0.4",
+        config_file="output.toml",
+        migrate=_strip_pipelines_2_0_4,
     ),
     # 2.0.0 七文件全量改造
     ConfigUpgradeHook(

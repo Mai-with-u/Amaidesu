@@ -7,6 +7,7 @@ Amaidesu 项目采用 **发布-订阅（Pub/Sub）模式** 构建事件驱动架
 - [架构概述](#架构概述)
 - [核心组件](#核心组件)
 - [核心 API](#核心-api)
+- [事件拦截器](#事件拦截器interceptor)
 - [核心事件常量](#核心事件常量)
 - [事件载荷类型](#事件载荷类型)
 - [核心特性](#核心特性)
@@ -46,8 +47,9 @@ flowchart LR
 **数据流规则**：
 - **Input 阶段** 发布 `input.message.received` 事件，携带标准化消息
 - **Decision 阶段** 订阅并处理消息，发布 `decision.intent.generated` 事件
-- **Output 阶段** 由 `OutputHandlerManager` 订阅意图事件，运行 Pipeline，发布 `output.intent.dispatched` 监控信号，并直接并行调用 active handler 的 `handle(intent)`
+- **Output 阶段** 由 Manager 订阅意图事件，发布 `output.intent.dispatched` 监控信号，并直接并行调用 active handler 的 `handle(intent)`
 - Manager 等待全部 Handler 完成后发布 `output.intent.finished`
+- **事件拦截器**（§1.46.1）：emit 后、订阅者收到前，事件先过 EventBus 分发层的拦截器链（去重/限流/相似过滤），一次拦截、所有订阅者共享净化后结果
 
 详细规则见 [数据流规则](data-flow.md)。
 
@@ -179,6 +181,54 @@ event_bus.reset_stats(event_name: Optional[str] = None)
 | `last_emit_time` | `float` | 最后发布时间（Unix 时间戳） |
 | `last_error_time` | `float` | 最后错误时间（Unix 时间戳） |
 | `total_execution_time_ms` | `float` | 总执行时间（毫秒） |
+
+---
+
+## 事件拦截器（Interceptor）
+
+"在事件路上拦一下做点事"的全局单点（§1.46.1，取代旧输入/输出管道）：emit 后、订阅者收到前，**所有事件过同一道拦截器链**——一次拦截，所有订阅者共享净化后结果。
+
+### 位置与语义
+
+```
+collectors → emit 事件 → 【事件拦截器 · EventBus 分发层 · 全局一次】→ 订阅者
+                            去重 / 限流 / 敏感词 / 转换 / 统计
+```
+
+- **与订阅正交**：拦截器处理"数据噪声"，订阅模型处理"谁关心什么"
+- **被动驱动**：被事件流触发才干活，不是自主角色
+
+### 核心 API
+
+```python
+from src.modules.events.interceptors import EventInterceptor, InterceptorChain
+
+class MyInterceptor(EventInterceptor):
+    @property
+    def name(self) -> str:
+        return "my_filter"
+
+    async def intercept(self, event_name, payload, source):
+        # payload 是 model_dump() 后的 dict（可原地修改）
+        if is_noise(payload):
+            return None          # None = 丢弃事件，handler 不会被调用
+        return payload           # dict = 放行（可原地修改后返回）
+
+event_bus.add_interceptor(MyInterceptor())   # 挂载（emit 时自动过链）
+event_bus.remove_interceptor("my_filter")    # 按 name 卸载
+event_bus.get_interceptor_names()            # 查看已挂载拦截器
+```
+
+### 内置拦截器
+
+| 拦截器 | 文件 | 职责 |
+|--------|------|------|
+| `RateLimitInterceptor` | `interceptors/rate_limit.py` | 全局/单用户频率限制（防刷屏） |
+| `SimilarFilterInterceptor` | `interceptors/similar_filter.py` | 相似文本合并 |
+
+注册入口在 `main.py` 的 `register_event_interceptors()`，配置来自 `core.toml` 的 `[interceptors.<name>]`（`enabled` 缺省视为启用）。
+
+> 敏感词净化不在拦截器层——主播发言统一出口在 Replyer 的 ProfanityFilter（§1.46.1 定案）。
 
 ---
 
@@ -509,7 +559,6 @@ sequenceDiagram
 
     Note over OHM,EB: Output 阶段
 
-    OHM->>OHM: OutputPipeline 过滤
     OHM->>EB: emit(output.intent.dispatched) 监控信号
     par 直接并行调用 active handler
         OHM->>OP: handle(intent)
