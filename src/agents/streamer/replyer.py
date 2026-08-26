@@ -44,7 +44,7 @@ _DEFAULT_PERSONALITY = "活泼开朗，有些调皮，喜欢和直播间观众�
 _DEFAULT_STYLE_CONSTRAINTS = "口语化、简短，像在直播间和观众聊天，避免机械式回复"
 
 # Replyer 模板名（Stage 2，含 $personality/$style_constraints/$bot_name 人设注入）
-_REPLYER_TEMPLATE = "decision/amaidesu_replyer"
+_REPLYER_TEMPLATE = "amaidesu_replyer"
 
 
 class Replyer:
@@ -100,7 +100,7 @@ class Replyer:
         """根据 Planner 的决策计划 + 弹幕批次 + 人设，生成实际回复。
 
         流程：
-        1. 注入人设：render 'decision/amaidesu_replyer'（含 $personality/$style_constraints/$bot_name）。
+        1. 注入人设：render 'amaidesu_replyer'（含 $personality/$style_constraints/$bot_name）。
         2. 调用高质量 LLM（replyer_llm，默认 llm），**不传 tools**。
         3. 清理 + 解析 JSON → {text, emotion, action, action_parameters}。
         4. 组装：情绪降级 neutral、动作白名单校验（非法丢弃保留 speech）。

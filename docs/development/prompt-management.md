@@ -1,4 +1,4 @@
-# 提示词管理与配置管理
+﻿# 提示词管理与配置管理
 
 本文档详细介绍 Amaidesu 项目中的提示词管理和配置管理机制。
 
@@ -11,11 +11,12 @@
 项目使用 **PromptManager** 统一管理所有 LLM 提示词。PromptManager 提供模板加载、变量替换、元数据解析等功能。
 
 **核心特性：**
-- 从文件系统加载 `.md` 模板文件
-- 解析 YAML Frontmatter 元数据
+- 从多个扫描根加载 `.md` 模板文件（组件内聚 `prompts/` 目录 + 中央目录）
+- 解析 YAML Frontmatter 元数据，以 `name` 字段作为声明式注册键
 - 使用 `$variable` 语法进行变量替换
 - 支持严格模式和安全模式渲染
 - 支持模板 Section 提取
+- 键重复注册 fail-fast（抛 ValueError，防止静默覆盖）
 
 ### 2. 快速开始
 
@@ -25,37 +26,36 @@ from src.modules.prompts import get_prompt_manager
 # 获取全局单例（推荐）
 pm = get_prompt_manager()
 
-# 或者手动创建实例
+# 或者手动创建实例（不启用 src 约定扫描，用于测试隔离）
 from src.modules.prompts.manager import PromptManager
 pm = PromptManager()
 pm.load_all()
 ```
 
-### 3. 模板目录结构
+### 3. 模板目录结构（内聚式）
+
+提示词文件**内聚在消费组件的 `prompts/` 目录下**，由 PromptManager 按
+`src/**/prompts/` 约定自动发现；模板键来自 frontmatter 的 `name` 字段，
+与文件位置解耦。
 
 ```
-src/modules/prompts/templates/
-├── decision/                    # 决策阶段提示词
-│   ├── amaidesu_planner.md      # Amaidesu Planner 模板（两阶段，零人设注入）
-│   ├── amaidesu_replyer.md      # Amaidesu Replyer 模板
-│   ├── amaidesu_timing_gate.md  # 时机门控模板
-│   ├── llm.md                   # LLM 对话模板
-│   └── llm_structured.md        # LLM 结构化输出模板
-├── input/                      # 输入阶段提示词
-│   ├── text_adv_game_ocr.md   # OCR 提示词
-│   ├── screen_context.md      # 屏幕上下文提示词
-│   ├── screen_description.md  # 屏幕描述提示词
-│   └── summarize.md           # 摘要提示词
-├── output/                     # 输出阶段提示词
-│   ├── avatar_expression.md    # 虚拟形象表情模板
-│   ├── speech.md               # 语音合成模板
-│   └── vts_hotkey.md           # VTS 热键模板
-└── simulator/                  # 模拟直播间提示词
-    ├── passerby_message.md     # 临时路人消息
-    ├── sc_message.md           # Super Chat 消息
-    ├── viewer_message.md       # 观众消息
-    └── warmup_message.md       # 暖场期消息
+src/
+├── agents/streamer/prompts/          # 主播 Agent 提示词
+│   ├── amaidesu_planner.md           # Planner 模板（两阶段，零人设注入）
+│   ├── amaidesu_replyer.md           # Replyer 模板
+│   └── agenda_expand.md              # 大纲环节动态扩展模板
+├── modules/tools/output/vts/prompts/
+│   └── vts_hotkey.md                 # VTS 热键模板
+└── modules/simulator/prompts/        # 模拟直播间提示词
+    ├── passerby_message.md           # 临时路人消息
+    ├── persona_generation.md         # 常驻观众人设批量生成
+    ├── sc_message.md                 # Super Chat 消息
+    ├── viewer_message.md             # 观众消息
+    └── warmup_message.md             # 暖场期消息
 ```
+
+跨组件共享的提示词可放中央目录 `src/modules/prompts/templates/`（按相对路径
+作为兜底键），但优先推荐内聚到消费方。
 
 ### 4. 模板格式 (YAML Frontmatter)
 
@@ -63,33 +63,35 @@ src/modules/prompts/templates/
 
 ```yaml
 ---
-name: local_llm
-version: "2.0"
-description: "本地 LLM 决策模板"
+name: amaidesu_replyer
+version: "1.1"
+description: "Amaidesu 直播回复生成模板 - 基于 Planner 的 DecisionPlan 生成实际回复 JSON {text, emotion, action, action_parameters}（含人设注入）"
 author: Amaidesu
-tags: [decision, llm]
+tags: [decision, live, vtuber, replyer, persona]
 variables:
-  - text
   - bot_name
   - personality
-  - user_name
+  - style_constraints
+  - plan
 ---
 
 # 模板内容...
-你是一个 AI VTuber，名字叫 $bot_name。
-$user_name 说：$text
+你叫 $bot_name，是一位正在 B 站进行实时直播的 AI VTuber。
 ```
 
 **元数据字段说明：**
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `name` | string | 是 | 模板名称 |
+| `name` | string | 是 | **模板注册键**（全局唯一，消费方 render 时使用；重复声明会在加载时抛 ValueError） |
 | `version` | string | 否 | 模板版本 |
 | `description` | string | 否 | 模板描述 |
 | `author` | string | 否 | 作者 |
 | `tags` | list[string] | 否 | 标签列表 |
 | `variables` | list[string] | 否 | 模板变量列表 |
+
+> 未声明 `name` 的模板以相对扫描根的路径为兜底键（如中央目录下
+> `decision/llm.md` → 键 `decision/llm`），但**推荐始终显式声明 name**。
 
 ### 5. 使用方式
 
@@ -97,14 +99,14 @@ $user_name 说：$text
 
 ```python
 # 获取原始模板内容（含 Frontmatter）
-raw_template = pm.get_raw("decision/llm")
+raw_template = pm.get_raw("amaidesu_replyer")
 ```
 
 #### 5.2 渲染模板（严格模式）
 
 ```python
 # 渲染模板，缺失变量会抛出 KeyError
-prompt = pm.render("decision/llm", text="你好啊", bot_name="麦麦", personality="活泼开朗", user_name="小明")
+prompt = pm.render("amaidesu_replyer", bot_name="麦麦", personality="活泼开朗", style_constraints="...", plan={})
 ```
 
 **严格模式特点：**
@@ -115,7 +117,7 @@ prompt = pm.render("decision/llm", text="你好啊", bot_name="麦麦", personal
 
 ```python
 # 安全模式渲染，缺失变量保留原样
-prompt = pm.render_safe("decision/llm", text="你好")
+prompt = pm.render_safe("amaidesu_replyer", bot_name="麦麦")
 ```
 
 **安全模式特点：**
@@ -127,8 +129,7 @@ prompt = pm.render_safe("decision/llm", text="你好")
 ```python
 # 提取并渲染模板中的特定 section
 system_msg = pm.extract_section(
-    "decision/llm",
-    "System Prompt",
+    "amaidesu_replyer",`n    "System Prompt",
     bot_name="麦麦",
     personality="活泼开朗"
 )
@@ -144,8 +145,7 @@ system_msg = pm.extract_section(
 ```python
 # 获取排除指定 section 的内容（如排除 User Message 获取系统提示）
 system_prompt = pm.extract_content_without_section(
-    "decision/llm",
-    "User Message",
+    "amaidesu_replyer",`n    "User Message",
     text="你好",
     bot_name="麦麦"
 )
@@ -156,67 +156,63 @@ system_prompt = pm.extract_content_without_section(
 ```python
 # 列出所有已加载的模板
 templates = pm.list_templates()
-# ['decision/llm', 'output/speech', 'output/vts_hotkey', ...]
+# ['agenda_expand', 'amaidesu_planner', 'amaidesu_replyer', 'vts_hotkey', ...]
 
 # 获取模板元数据
-metadata = pm.get_metadata("decision/llm")
-# TemplateMetadata(name='local_llm', version='2.0', ...)
+metadata = pm.get_metadata("amaidesu_replyer")
+# TemplateMetadata(name='amaidesu_replyer', version='1.1', ...)
 ```
 
 ### 6. 模板示例
 
-#### 6.1 决策模板示例
+#### 6.1 回复生成模板示例（节选自 amaidesu_replyer.md）
 
 ```yaml
 ---
-name: local_llm
-version: "2.0"
-description: "本地 LLM 决策模板"
+name: amaidesu_replyer
+version: "1.1"
+description: "Amaidesu 直播回复生成模板"
 variables:
-  - text
   - bot_name
   - personality
-  - user_name
-  - max_length
-tags: [decision, llm]
+  - style_constraints
+  - plan
+tags: [decision, live, vtuber, replyer, persona]
 ---
 
-你是一个 AI VTuber，名字叫 $bot_name。
+# ① 人设注入层
+
+你叫 $bot_name，是一位正在 B 站进行实时直播的 AI VTuber。
 
 ## 人设特征
 性格：$personality
 
-## 用户消息
-$user_name 说：$text
+## 风格约束
+$style_constraints
 
-## 请生成回复
-回复长度控制在 $max_length 字以内。
-
-## 示例
-用户: 大家好！
-回复: 哈哈，大家好呀！很高兴见到你们~
+## 决策计划
+$plan
 ```
 
-### 7. 在阶段参与者中使用
+### 7. 在组件中使用
 
 ```python
 from src.modules.prompts import get_prompt_manager
 
-class MyDecider:
-    async def setup(self):
+class MyComponent:
+    def setup(self):
         self._prompt_mgr = get_prompt_manager()
 
-    async def decide(self, message: NormalizedMessage) -> None:
-        # 渲染模板
-        prompt = self._prompt_mgr.render(
-            "decision/llm",
-            text=message.text,
+    def build_prompt(self) -> str:
+        # 渲染模板（键 = 模板 frontmatter 的 name）
+        prompt = self._prompt_mgr.render_safe(
+            "amaidesu_replyer",
             bot_name="麦麦",
             personality="活泼开朗",
-            user_name="大家",
-            max_length=50
+            style_constraints="口语化、简短",
+            plan="{}",
         )
-        # 调用 LLM...
+        return prompt
 ```
 
 ---
@@ -395,3 +391,7 @@ uv run python main.py
 - [开发规范](../development-guide.md) - 代码风格和约定
 - [3阶段架构](../architecture/overview.md) - 架构设计总览
 - [事件系统](../architecture/event-system.md) - EventBus 使用指南
+
+---
+
+*最后更新：2026-08-26（提示词内聚化重构：模板迁入消费组件 prompts/ 目录，键改用 frontmatter name 声明式键 + src/**/prompts 约定自动发现 + 重复键 fail-fast；删除 8 个零消费死模板）*

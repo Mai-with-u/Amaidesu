@@ -127,10 +127,22 @@ class PromptManager:
     Prompt 模板管理器
 
     职责：
-    - 从指定目录加载所有 .md 模板文件
+    - 从多个扫描根发现并加载所有 .md 模板文件（多根发现）
     - 解析 YAML frontmatter 元数据
     - 提供 template 语法 ($variable) 的渲染功能
     - 支持严格模式和安全模式渲染
+
+    模板键规则（声明式键，与文件位置解耦）：
+    - 优先使用 frontmatter 的 ``name`` 字段作为全局唯一键
+    - 未声明 ``name`` 时兜底使用相对扫描根的路径（去扩展名、``/`` 分隔）
+    - 键重复注册立即抛出 :class:`ValueError`（fail-fast，防止静默覆盖）
+
+    扫描根：
+    - 中央目录 ``src/modules/prompts/templates``（兼容保留，可放跨组件共享提示词）
+    - 约定内聚目录：``src/**/prompts/``——组件把提示词放在自己包内的
+      ``prompts/`` 子目录即可被自动发现。该约定扫描仅在 ``auto_scan_src=True``
+      时启用（全局单例 ``get_prompt_manager`` 默认开启；裸构造默认关闭，
+      保证单元测试的隔离性）
 
     使用示例：
         ```python
@@ -138,89 +150,165 @@ class PromptManager:
         prompt_manager = PromptManager()
         prompt_manager.load_all()
 
-        # 渲染模板
-        result = prompt_manager.render("decision/intent", user_name="Alice", message="你好")
+        # 渲染模板（键来自模板 frontmatter 的 name 字段）
+        result = prompt_manager.render("amaidesu_replyer", text="你好")
 
         # 安全模式渲染（缺失变量保留原样）
-        result = prompt_manager.render_safe("decision/intent", user_name="Alice")
+        result = prompt_manager.render_safe("amaidesu_replyer", text="你好")
 
         # 获取元数据
-        metadata = prompt_manager.get_metadata("decision/intent")
+        metadata = prompt_manager.get_metadata("amaidesu_replyer")
         ```
     """
 
-    def __init__(self, templates_dir: Optional[str] = None):
+    def __init__(
+        self,
+        templates_dir: Optional[str] = None,
+        auto_scan_src: bool = False,
+    ):
         """
         初始化 Prompt 管理器
 
         Args:
-            templates_dir: 模板目录路径，默认为 src/prompts/templates
+            templates_dir: 中央模板目录路径，默认为 src/modules/prompts/templates。
+                该目录与约定扫描根共同构成发现范围。
+            auto_scan_src: 是否按 ``src/**/prompts/`` 约定扫描内聚提示词目录。
+                生产单例应开启；测试裸构造保持关闭以隔离真实仓库模板。
         """
         if templates_dir is None:
-            # 默认模板目录
+            # 默认中央模板目录
             templates_dir = str(Path(__file__).parent / "templates")
 
         self.logger = get_logger("PromptManager")
         self.templates_dir = Path(templates_dir)
+        self.auto_scan_src = auto_scan_src
+        self._extra_roots: list[Path] = []
         self._templates: Dict[str, PromptTemplate] = {}
 
-    def load_all(self) -> None:
-        """加载所有 .md 模板文件"""
-        if not self.templates_dir.exists():
-            self.logger.warning(f"模板目录不存在: {self.templates_dir}")
-            return
+    def register_scan_root(self, path: "Path | str") -> None:
+        """注册额外的模板扫描根（在 load_all 之前调用）
 
-        # 递归查找所有 .md 文件
-        for md_file in self.templates_dir.rglob("*.md"):
-            # 计算相对于 templates_dir 的路径作为模板名称
-            rel_path = md_file.relative_to(self.templates_dir)
-            # 移除 .md 扩展名，并将路径分隔符统一为 /
-            template_name = str(rel_path.with_suffix("")).replace("\\", "/")
+        用于测试注入或非常规布局；生产环境通常依赖 src/**/prompts/ 约定扫描。
 
+        Args:
+            path: 要追加扫描的目录
+        """
+        self._extra_roots.append(Path(path))
+
+    def _discover_scan_roots(self) -> list[Path]:
+        """发现全部模板扫描根
+
+        组成（按优先序）：
+        1. 显式注册的额外根（``register_scan_root``）
+        2. 中央目录 ``templates_dir``
+        3. 约定内聚目录：``<src/>**/prompts/``（排除 prompts 包自身，
+           仅当 ``auto_scan_src=True``）
+
+        Returns:
+            去重后的扫描根列表（排序保证确定性）
+        """
+        seen: set[Path] = set()
+        roots: list[Path] = []
+
+        def _add(candidate: Path) -> None:
             try:
-                self._load_template(template_name, md_file)
-            except Exception as e:
-                self.logger.error(f"加载模板失败 {template_name}: {e}", exc_info=True)
+                resolved = candidate.resolve()
+            except OSError:
+                return
+            if resolved not in seen:
+                seen.add(resolved)
+                roots.append(candidate)
+
+        for extra in self._extra_roots:
+            _add(extra)
+        _add(self.templates_dir)
+
+        if self.auto_scan_src:
+            # 约定扫描：<src/>**/prompts/
+            package_dir = Path(__file__).resolve().parent  # src/modules/prompts
+            src_root = package_dir.parents[1]  # src/
+            for prompts_dir in sorted(src_root.rglob("prompts")):
+                if not prompts_dir.is_dir():
+                    continue
+                if prompts_dir == package_dir:
+                    # prompts 包自身不作为扫描根（其 templates 子目录已是中央根）
+                    continue
+                _add(prompts_dir)
+
+        return roots
+
+    def load_all(self) -> None:
+        """加载所有扫描根下的 .md 模板文件"""
+        self._templates.clear()
+
+        for root in self._discover_scan_roots():
+            if not root.exists():
+                if root == self.templates_dir:
+                    self.logger.debug(f"中央模板目录不存在，跳过: {root}")
+                continue
+
+            # 递归查找该根下所有 .md 文件
+            for md_file in sorted(root.rglob("*.md")):
+                # 兜底键：相对扫描根的路径（去扩展名、统一 / 分隔）
+                rel_path = md_file.relative_to(root)
+                fallback_name = str(rel_path.with_suffix("")).replace("\\", "/")
+
+                try:
+                    self._load_template(fallback_name, md_file)
+                except ValueError:
+                    # 键冲突必须 fail-fast，禁止静默吞掉导致行为漂移
+                    raise
+                except Exception as e:
+                    self.logger.error(f"加载模板失败 {fallback_name}: {e}", exc_info=True)
 
         self.logger.info(f"已加载 {len(self._templates)} 个模板")
 
-    def _load_template(self, name: str, path: Path) -> None:
+    def _load_template(self, fallback_name: str, path: Path) -> None:
         """
         加载单个模板文件
 
         Args:
-            name: 模板名称
+            fallback_name: 兜底键（相对扫描根的路径名），仅在 frontmatter
+                未声明 ``name`` 时使用
             path: 模板文件路径
 
         Raises:
-            ValueError: 如果文件不存在或解析失败
+            ValueError: 模板键与已注册模板冲突（fail-fast）
         """
         # 读取文件内容
         raw_content = path.read_text(encoding="utf-8")
 
         # 解析 frontmatter
-        frontmatter, content = self._parse_frontmatter(raw_content)
+        frontmatter_data, content = self._parse_frontmatter(raw_content)
 
-        # 构建元数据
+        # 声明式键优先：frontmatter name > 路径兜底键
+        declared = frontmatter_data.get("name")
+        template_name = str(declared).strip() if declared else fallback_name
+
+        existing = self._templates.get(template_name)
+        if existing is not None:
+            raise ValueError(f"模板键冲突: '{template_name}' 已由 {existing.path} 注册，拒绝加载重复文件 {path}")
+
+        # 构建元数据（metadata.name 与注册键保持一致）
         metadata = TemplateMetadata(
-            name=name,
-            description=frontmatter.get("description"),
-            version=frontmatter.get("version"),
-            variables=frontmatter.get("variables") or [],
-            author=frontmatter.get("author"),
-            tags=frontmatter.get("tags") or [],
+            name=template_name,
+            description=frontmatter_data.get("description"),
+            version=frontmatter_data.get("version"),
+            variables=frontmatter_data.get("variables") or [],
+            author=frontmatter_data.get("author"),
+            tags=frontmatter_data.get("tags") or [],
         )
 
         # 存储模板
-        self._templates[name] = PromptTemplate(
-            name=name,
+        self._templates[template_name] = PromptTemplate(
+            name=template_name,
             content=content,
             raw=raw_content,
             metadata=metadata,
             path=path,
         )
 
-        self.logger.debug(f"已加载模板: {name}")
+        self.logger.debug(f"已加载模板: {template_name}")
 
     def _parse_frontmatter(self, content: str) -> tuple[Dict[str, Any], str]:
         """
@@ -404,12 +492,15 @@ def get_prompt_manager() -> PromptManager:
     """
     获取 PromptManager 全局单例
 
+    单例启用 ``auto_scan_src``：按 ``src/**/prompts/`` 约定发现各组件
+    内聚的提示词目录。
+
     Returns:
         PromptManager 实例（惰性初始化）
     """
     global _prompt_manager_singleton
     if _prompt_manager_singleton is None:
-        _prompt_manager_singleton = PromptManager()
+        _prompt_manager_singleton = PromptManager(auto_scan_src=True)
         _prompt_manager_singleton.load_all()
     return _prompt_manager_singleton
 

@@ -274,13 +274,13 @@ short_reply = await llm_manager.chat_fast("翻译成英文")  # 快速对话
 
 ## 提示词管理
 
-项目使用 **PromptManager** 统一管理所有 LLM 提示词。
+项目使用 **PromptManager** 统一管理所有 LLM 提示词。模板键为**声明式键**（frontmatter `name` 字段），提示词文件内聚在消费组件的 `prompts/` 目录下，由 `src/**/prompts/` 约定自动发现。
 
 ```python
 from src.modules.prompts import get_prompt_manager
 
-prompt = get_prompt_manager().get_raw("decision/llm")          # 获取原始提示词
-prompt = get_prompt_manager().render("output/vts_hotkey", text="用户消息", hotkey_list_str="smile, wave")
+prompt = get_prompt_manager().get_raw("amaidesu_replyer")      # 获取原始提示词
+prompt = get_prompt_manager().render("vts_hotkey", text="用户消息", hotkey_list_str="smile, wave")
 ```
 
 **详细指南**：[提示词管理](docs/development/prompt-management.md)

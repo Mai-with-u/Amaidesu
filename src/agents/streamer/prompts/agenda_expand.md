@@ -1,5 +1,5 @@
 ---
-name: outline_expand
+name: agenda_expand
 version: "1.0"
 description: "直播大纲环节动态扩展模板 - 根据环节任务描述生成开场白/话题引导/讨论要点(无 $outline 时降级到基础任务)"
 variables:

@@ -111,7 +111,7 @@ class HotkeyMatcher:
         if not self._prompt_service:
             self.logger.debug("prompt_service 未注入,LLM hotkey matching 降级为关闭")
             return None
-        prompt = self._prompt_service.render("output/vts_hotkey", text=text, hotkey_list_str=hotkey_str)
+        prompt = self._prompt_service.render("vts_hotkey", text=text, hotkey_list_str=hotkey_str)
 
         try:
             if not self._openai_client:

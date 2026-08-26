@@ -93,8 +93,9 @@ class AgendaLoader:
     - ``config``：配置字典或对象；读取 ``agenda_expand_client``（默认 ``llm_agenda``）
     """
 
-    #: AI 扩展专用提示词模板名（Wave 6 重命名，原 decision/outline_expand）
-    TEMPLATE_NAME: str = "decision/agenda_expand"
+    #: AI 扩展专用提示词模板键（内聚于本包 prompts/agenda_expand.md，
+    #: 由 frontmatter name 声明；原中央目录文件名 outline_expand 已随 v2 内聚化正名）
+    TEMPLATE_NAME: str = "agenda_expand"
 
     #: 默认 LLM profile（独立连接池，仿 llm_summary 先例）
     DEFAULT_EXPAND_CLIENT: str = "llm_agenda"
@@ -145,7 +146,7 @@ class AgendaLoader:
         """对单个环节做 AI 扩展。
 
         流程：
-        1. 渲染 prompt（``decision/agenda_expand``）
+        1. 渲染 prompt（``agenda_expand``）
         2. 调 LLM（独立 profile ``llm_agenda``）
         3. 解析 JSON（含三步清理 + 重试）
         4. 失败 fallback 到 ``segment.task_description``

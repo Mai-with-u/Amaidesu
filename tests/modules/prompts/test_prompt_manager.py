@@ -299,17 +299,15 @@ class TestGlobalSingleton:
         assert id(manager2) != manager_id
 
     def test_singleton_loads_templates(self):
-        """测试单例自动加载模板"""
+        """测试单例自动加载模板（中央目录可不存在，约定扫描照常发现内聚提示词）"""
         reset_prompt_manager()
 
-        # 使用真实的模板目录
+        # 使用真实的模板发现机制
         manager = get_prompt_manager()
-        # 验证已初始化（templates_dir 存在）
-        assert manager.templates_dir.exists()
-
-        # 列出模板（可能为空，但不应该抛出异常）
+        # 中央模板目录已随内聚化清空，允许不存在
         templates = manager.list_templates()
         assert isinstance(templates, list)
+        assert "amaidesu_replyer" in templates
 
     def test_template_render_escaped_dollar(self):
         """测试转义的美元符号"""
@@ -382,3 +380,105 @@ Content: $input -> $output
             # 验证可以渲染
             result = manager.render("simple", var="test")
             assert result == "Simple content: test"
+
+
+class TestDeclarativeKeys:
+    """声明式键（frontmatter name 优先）与多根发现测试"""
+
+    def test_frontmatter_name_overrides_path_key(self):
+        """frontmatter 声明的 name 应作为注册键，而非文件路径"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            templates_dir = Path(tmpdir)
+            (templates_dir / "decision").mkdir(parents=True)
+            template_path = templates_dir / "decision" / "intent.md"
+            template_path.write_text(
+                "---\nname: my_custom_key\ndescription: 测试\n---\n内容 $var",
+                encoding="utf-8",
+            )
+
+            manager = PromptManager(templates_dir=tmpdir)
+            manager.load_all()
+
+            assert "my_custom_key" in manager.list_templates()
+            assert "decision/intent" not in manager.list_templates()
+            assert manager.get_metadata("my_custom_key").name == "my_custom_key"
+
+    def test_duplicate_name_raises_valueerror(self):
+        """两个模板声明同名键时 load_all 应 fail-fast"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            templates_dir = Path(tmpdir)
+            for filename in ("a.md", "b.md"):
+                (templates_dir / filename).write_text(
+                    "---\nname: same_key\n---\n内容", encoding="utf-8"
+                )
+
+            manager = PromptManager(templates_dir=tmpdir)
+            with pytest.raises(ValueError, match="模板键冲突"):
+                manager.load_all()
+
+    def test_register_scan_root_discovers_extra_dir(self):
+        """register_scan_root 注册的目录应被 load_all 发现"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            central = Path(tmpdir) / "central"
+            central.mkdir()
+            component_prompts = Path(tmpdir) / "component" / "prompts"
+            component_prompts.mkdir(parents=True)
+            (component_prompts / "tool_action.md").write_text(
+                "---\nname: tool_action\n---\n动作 $action",
+                encoding="utf-8",
+            )
+
+            manager = PromptManager(templates_dir=str(central))
+            manager.register_scan_root(component_prompts)
+            manager.load_all()
+
+            assert manager.render("tool_action", action="挥手") == "动作 挥手"
+
+    def test_bare_manager_does_not_scan_src_by_default(self):
+        """裸构造不启用 src 约定扫描，保证测试隔离（中央目录为空则无模板）"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = PromptManager(templates_dir=tmpdir)
+            manager.load_all()
+            assert manager.list_templates() == []
+
+    def test_singleton_enables_auto_scan(self):
+        """生产单例应开启 src 约定扫描"""
+        reset_prompt_manager()
+        try:
+            manager = get_prompt_manager()
+            assert manager.auto_scan_src is True
+        finally:
+            reset_prompt_manager()
+
+
+class TestRealRepoTemplates:
+    """真实仓库集成测试：约定扫描发现各组件内聚提示词"""
+
+    def test_singleton_loads_exactly_expected_keys(self):
+        """全仓加载后键集合应精确等于 9 个声明式键（防漂移回归网）"""
+        reset_prompt_manager()
+        try:
+            manager = get_prompt_manager()
+            assert set(manager.list_templates()) == {
+                "amaidesu_planner",
+                "amaidesu_replyer",
+                "agenda_expand",
+                "vts_hotkey",
+                "viewer_message",
+                "sc_message",
+                "passerby_message",
+                "warmup_message",
+                "persona_generation",
+            }
+        finally:
+            reset_prompt_manager()
+
+    def test_agenda_expand_renders_after_rename_fix(self):
+        """agenda_expand（原 outline_expand 错位）应可正常渲染"""
+        reset_prompt_manager()
+        try:
+            manager = get_prompt_manager()
+            rendered = manager.render_safe("agenda_expand", title="开场")
+            assert "开场" in rendered or len(rendered) > 0
+        finally:
+            reset_prompt_manager()

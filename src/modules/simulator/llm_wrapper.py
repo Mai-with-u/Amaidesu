@@ -46,7 +46,8 @@ class SimulatorLLMWrapper:
     """模拟器 LLM 调用包装器：处理 prompt 渲染、调用、清洗、token 统计。
 
     职责范围：
-    - 渲染 ``simulator/*`` 系列的 prompt 模板
+    - 渲染本包 ``prompts/`` 内聚的 5 个 prompt 模板（viewer_message 等，
+      键来自各模板 frontmatter 的 name）
     - 通过 :class:`LLMManager` 发起 chat 调用，受信号量约束
     - 清洗 LLM 原始输出（去 ``<system>`` / ``think`` 标签、首尾引号、空白）
     - 按 ``max_message_chars`` 截断
@@ -113,7 +114,7 @@ class SimulatorLLMWrapper:
         recent_speech = "\n".join(context.recent_messages[-3:]) if context.recent_messages else "(主播尚未发言)"
 
         prompt = self._prompts.render_safe(
-            "simulator/viewer_message",
+            "viewer_message",
             persona_name=persona.user_nickname,
             persona_role=persona.role.value,
             persona_personality=persona.personality,
@@ -147,7 +148,7 @@ class SimulatorLLMWrapper:
         recent_speech = "\n".join(context.recent_messages[-3:]) if context.recent_messages else "(主播尚未发言)"
 
         prompt = self._prompts.render_safe(
-            "simulator/sc_message",
+            "sc_message",
             persona_name=persona.user_nickname,
             persona_personality=persona.personality,
             streamer_recent_speech=recent_speech,
@@ -178,7 +179,7 @@ class SimulatorLLMWrapper:
         recent_speech = "\n".join(context.recent_messages[-3:]) if context.recent_messages else "(主播尚未发言)"
 
         prompt = self._prompts.render_safe(
-            "simulator/passerby_message",
+            "passerby_message",
             streamer_recent_speech=recent_speech,
             recent_chat_context="(略)",
             language=self._config.language,
@@ -200,7 +201,7 @@ class SimulatorLLMWrapper:
     async def generate_warmup_message(self, persona: Persona) -> Optional[GeneratedMessage]:
         """生成暖场期弹幕（主播尚未开口阶段）。"""
         prompt = self._prompts.render_safe(
-            "simulator/warmup_message",
+            "warmup_message",
             persona_name=persona.user_nickname,
             persona_personality=persona.personality,
             persona_speaking_style=persona.speaking_style,
@@ -241,7 +242,7 @@ class SimulatorLLMWrapper:
         if existing_nicknames:
             existing_hint = "以下昵称已被占用，严禁使用：" + "、".join(existing_nicknames[:30]) + "。"
         prompt = self._prompts.render_safe(
-            "simulator/persona_generation",
+            "persona_generation",
             count=count,
             roles_hint="、".join(role_pool),
             existing_nicknames_hint=existing_hint,

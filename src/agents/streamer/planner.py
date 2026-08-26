@@ -16,7 +16,7 @@
    注入 prompt，让 Planner 决策时能反重复（特别是主动发言时避免重复已聊过的话题）。
 
 数据流：
-    batch + room_state.snapshot + history + forced/proactive ──▶ render_safe('decision/amaidesu_planner')
+    batch + room_state.snapshot + history + forced/proactive ──▶ render_safe('amaidesu_planner')
         ──▶ llm_service.chat(prompt, client_type=planner_llm)
         ──▶ _clean_llm_json + json.loads
         ──▶ DecisionPlan（或 None）
@@ -24,8 +24,8 @@
 Wave 6 变更：
 - 移除 AmaidesuDecider 包裹层 → 直接作为 StreamerAgent 内部组件
 - 配置 schema 字段对齐 agents_schemas.StreamerAgentConfig（planner_llm 等）
-- 模板名保持 ``decision/amaidesu_planner``（PromptManager 注册了同名模板，
-  Wave 6 重构统一在 §event 切事件时连同 prompt 重命名；本 wave 保持兼容）
+- 提示词内聚于本包 prompts/ 目录，键来自模板 frontmatter 的
+  ``name: amaidesu_planner``（原中央目录 decision/ 前缀已随 v2 内聚化移除）
 """
 
 from __future__ import annotations
@@ -81,7 +81,7 @@ class Planner:
     """
 
     #: Planner 专用的提示词模板名（v2，零人设注入）
-    TEMPLATE_NAME: str = "decision/amaidesu_planner"
+    TEMPLATE_NAME: str = "amaidesu_planner"
 
     def __init__(
         self,
