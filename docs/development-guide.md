@@ -9,35 +9,32 @@
 - **注释和文档**：使用中文编写注释和文档字符串
 - **变量命名**：使用 snake_case（如 `provider_config`, `event_bus`）
 - **函数命名**：使用 snake_case（如 `send_to_maibot`, `register_websocket_handler`）
-- **类命名**：使用 PascalCase（如 `EventBus`, `InputCollector`）
-- **常量命名**：使用 CamelCase（如 `CoreEvents`, `Emotion`）
+- **类命名**：使用 PascalCase（如 `EventBus`, `CollectorManager`）
+- **常量命名**：使用 CamelCase（如 `CoreEvents`, `RoomMessagePayload`）
 
 ### 1.2 命名约定表
 
 | 类型 | 命名风格 | 示例 |
 |------|---------|------|
-| 类名 | PascalCase | `EventBus`, `InputCollector`, `RateLimitInterceptor` |
+| 类名 | PascalCase | `EventBus`, `CollectorManager`, `RateLimitInterceptor`, `StreamerAgent`, `EdgeTTSProvider` |
 | 函数/方法名 | snake_case | `send_to_maibot`, `register_websocket_handler` |
-| 变量名 | snake_case | `handler_config`, `event_bus` |
+| 变量名 | snake_case | `provider_config`, `event_bus` |
 | 私有成员 | 前导下划线 | `_message_handlers`, `_is_connected` |
-| Collector 类 | 以 `Collector` 结尾 | `ConsoleInputCollector`, `BiliDanmakuCollector` |
-| Decider 类 | 以 `Decider` 结尾 | `MaiBotDecider`, `LLMDecider` |
-| Handler 类 | 以 `Handler` 结尾 | `EdgeTTSHandler`, `SubtitleHandler` |
-| 拦截器类 | 以 `Interceptor` 结尾 | `RateLimitInterceptor`, `SimilarFilterInterceptor` |
-| 常量类 | PascalCase | `CoreEvents`, `Emotion` |
+| Collector/Agent/工具/拦截器类 | 以类型名结尾 | `ConsoleInputCollector` / `StreamerAgent` / `EdgeTTSProvider` / `RateLimitInterceptor` |
+| 常量类 | PascalCase | `CoreEvents` |
 
 ### 1.3 注释规范
 
 ```python
-class MyHandler:
+class MyComponent:
     """
-    Handler 类的中文文档说明
+    组件类的中文文档说明
 
     负责描述这个类的职责和主要功能。
     """
 
-    async def handle(self, intent: "Intent") -> None:
-        """执行意图渲染，将 Intent 输出到目标设备"""
+    async def execute(self, payload: "PayloadType") -> None:
+        """执行业务逻辑，把 payload 送到目标位置"""
         # 处理具体逻辑
         pass
 ```
@@ -97,37 +94,36 @@ from pydantic import BaseModel, Field
 
 ```python
 from pydantic import BaseModel, Field, ConfigDict, field_validator
-from typing import Dict, Any, Optional
+from typing import Literal, Optional
 from enum import Enum
 
 class Emotion(str, Enum):
-    """全局情感枚举（共享给所有 avatar handler，12 个值）"""
+    """全局共享情绪词表（12 个值；详见 src/modules/types/emotion_vocab.py）"""
     NEUTRAL = "neutral"
     HAPPY = "happy"
     # ...
 
-class IntentEmotion(BaseModel):
-    """意图情绪（枚举名 + intensity 0-1）"""
+# v2 事件 Payload 通用形态——继承 BasePayload + 嵌套 BaseModel + Literal 约束
+# 真实字段与处理逻辑以 src/modules/events/payloads/room.py 为准
+
+class RoomMessageUser(BaseModel):
+    """直播间消息发送者（嵌套子结构示例）"""
     model_config = ConfigDict(extra="forbid")
-    name: str = Field(..., description="情绪名，必须是 Emotion 枚举值之一")
-    intensity: float = Field(default=0.5, ge=0.0, le=1.0)
+    id: str = Field(..., description="用户唯一 ID")
+    name: str = Field(..., description="用户昵称（显示名）")
 
-    @field_validator("name")
-    @classmethod
-    def _validate_emotion_name(cls, v: str) -> str:
-        valid = {e.value for e in Emotion}
-        if v not in valid:
-            raise ValueError(f"emotion.name '{v}' 不在全局 Emotion 枚举中({sorted(valid)})")
-        return v
-
-class Intent(BaseModel):
-    """决策意图（平台无关，核心数据结构）"""
+class RoomMessagePayload(BaseModel):
+    """room.message.* 直播间行为流事件 Payload（v2 语义域事件）"""
     model_config = ConfigDict(extra="forbid")
 
-    speech: Optional[str] = Field(default=None, description="AI 要说的话")
-    metadata: "IntentMetadata" = Field(..., description="意图元数据（必填）")
-    emotion: Optional["IntentEmotion"] = Field(default=None, description="情绪")
-    action: Optional["IntentAction"] = Field(default=None, description="动作")
+    live_session_id: str = Field(..., description="场次唯一 ID")
+    message_type: Literal["danmaku", "gift", "super_chat", "enter"] = Field(
+        ...,
+        description="消息类型（与存储 live_chat.message_type 枚举一致）",
+    )
+    user: RoomMessageUser = Field(..., description="发送者信息")
+    content: str = Field(default="", description="文本内容（弹幕/SC 文本；其他类型为空）")
+    importance: float = Field(default=0.5, ge=0.0, le=1.0)
 ```
 
 ### 3.3 dataclass 使用示例
@@ -176,8 +172,8 @@ logger.error("错误日志", exc_info=True)  # 错误信息，包含堆栈
 使用 `--filter` 参数时，传入 `get_logger` 的第一个参数（类名或模块名）决定是否显示：
 
 ```bash
-# 只显示 SubtitleHandler 和 EdgeTTSHandler 的日志
-uv run python main.py --filter SubtitleHandler EdgeTTSHandler
+# 只显示 EdgeTTSProvider 和 StreamerAgent 的日志
+uv run python main.py --filter EdgeTTSProvider StreamerAgent
 ```
 
 ## 5. 事件使用规范
@@ -189,49 +185,77 @@ uv run python main.py --filter SubtitleHandler EdgeTTSHandler
 ```python
 from src.modules.events.names import CoreEvents
 
-# ✅ 正确：使用常量
-await event_bus.emit(CoreEvents.INPUT_MESSAGE_RECEIVED, normalized_message)
-event_bus.on(CoreEvents.OUTPUT_INTENT_DISPATCHED, self._on_intent, model_class=IntentPayload)
+# ✅ 正确：使用语义域常量
+await event_bus.emit(CoreEvents.ROOM_MESSAGE_DANMAKU, danmaku_payload)
+event_bus.on(CoreEvents.PLANNER_CHECKPOINT, self._on_checkpoint, model_class=CheckpointPayload)
+
+# 通配订阅：监听所有工具异步结果回传
+event_bus.on(CoreEvents.TOOL_RESULT_WILDCARD, self._on_tool_result, model_class=ToolResultPayload)
 
 # ❌ 错误：硬编码字符串
-await event_bus.emit("input.message.received", normalized_message)
+await event_bus.emit("room.message.danmaku", payload)
 ```
 
-### 5.2 CoreEvents 常用常量
+### 5.2 事件命名约定与常用常量
+
+v2 事件名按**语义域**组织（`live.*` / `room.message.*` / `game.*` / `agenda.*` / `planner.checkpoint` / `tool.result.#`），命名空间按"领域 / 主题 / 动作"点分，不掺阶段前缀：
 
 ```python
 class CoreEvents:
-    # 核心事件
-    INPUT_MESSAGE_RECEIVED = "input.message.received"
-    DECISION_INTENT_GENERATED = "decision.intent.generated"
-    OUTPUT_INTENT_DISPATCHED = "output.intent.dispatched"
-    OUTPUT_INTENT_FINISHED = "output.intent.finished"
-
-    # 系统事件
+    # 核心系统事件
     CORE_STARTUP = "core.startup"
     CORE_SHUTDOWN = "core.shutdown"
     CORE_ERROR = "core.error"
+
+    # live.* 场次生命周期
+    LIVE_STARTED = "live.started"
+    LIVE_ENDED = "live.ended"
+
+    # room.message.* 直播间行为流
+    ROOM_MESSAGE_DANMAKU = "room.message.danmaku"
+    ROOM_MESSAGE_GIFT = "room.message.gift"
+    ROOM_MESSAGE_SUPER_CHAT = "room.message.super_chat"
+    ROOM_MESSAGE_ENTER = "room.message.enter"
+
+    # game.* 游戏里程碑（低频、只发重大变化）
+    GAME_MILESTONE = "game.milestone"
+    GAME_ATTENTION_REQUIRED = "game.attention_required"
+    GAME_ERROR = "game.error"
+
+    # agenda / planner 编排进度
+    AGENDA_UPDATE = "agenda.update"
+    PLANNER_CHECKPOINT = "planner.checkpoint"
+
+    # v2 保留的 Sticker→VTS 单向信号（§1.46.1）
+    OUTPUT_STICKER_COMMAND = "output.sticker.command"
+
+    # 异步工具结果通配订阅模式（emit 用具体名，如 "tool.result.speak"）
+    TOOL_RESULT_WILDCARD = "tool.result.#"
 ```
 
-> 完整常量列表（含 `input.connected` / `decision.disconnected` / `output.obs.command` / `output.sticker.command` 等）见 [事件系统](architecture/event-system.md#核心事件常量)。
+> 完整常量表（含订阅者/Payload 形状）见 [事件系统](architecture/event-system.md#核心事件)。
 
 ### 5.3 事件 Payload 要求
 
-核心事件使用 Pydantic Model 作为 Payload：
+每个事件都应声明结构化 Pydantic Payload，订阅时通过 `model_class` 自动反序列化：
 
 ```python
 from pydantic import BaseModel, Field
 
-class IntentPayload(BaseModel):
-    """Intent 事件载荷"""
-    intent: Intent = Field(..., description="意图对象")
+class ToolResultPayload(BaseModel):
+    """tool.result.* 异步工具结果 Payload（v2 fire-and-forget 结果回传通道）"""
+    tool_name: str = Field(..., description="工具名（与 emit 时具体事件名后缀一致）")
+    status: str = Field(..., description="success / error")
+    result: dict = Field(default_factory=dict, description="执行结果数据")
 ```
+
+实际 Payload 定义见 `src/modules/events/payloads/{room,live,game,agenda,planner,tool_result,...}.py`，通过 `@register_event` 装饰器自动注册到 `EVENT_REGISTRY`。完整索引见 [事件 Payload 模块](architecture/event-system.md#payload-模块索引)。
 
 ## 6. 禁止事项
 
 | 禁止 | 原因 | 替代方案 |
 |------|------|----------|
-| ❌ 创建新的 Plugin | 插件系统已移除 | 创建阶段参与者 |
+| ❌ 创建新的 Plugin | 插件系统已移除 | 创建 Collector / Agent / 工具 |
 | ❌ 使用服务注册机制 | 已废弃 | 使用 EventBus |
 | ❌ 硬编码事件名字符串 | 避免拼写错误 | 使用 `CoreEvents` 常量 |
 | ❌ 使用空的 except 块 | 隐藏错误 | 记录日志并处理 |
@@ -239,17 +263,19 @@ class IntentPayload(BaseModel):
 | ❌ 在修复 bug 时进行大规模重构 | 扩大风险范围 | 只修复 bug |
 | ❌ 提交未验证的代码 | 可能破坏构建 | 先运行测试和 lint |
 | ❌ 类变量中存储可变对象 | 共享状态问题 | 使用 `__init__` 初始化 |
-| ❌ 在 main.py 中直接创建阶段参与者 | 违反配置驱动原则 | 使用 Manager + 配置驱动 |
+| ❌ 在 main.py 中直接硬编码业务组件 | 违反配置驱动原则 | 使用对应 Manager + 配置驱动 |
 
-### 6.1 架构约束：3阶段数据流规则
+### 6.1 架构约束：数据流与边界规则
 
-严格遵守单向数据流：**Input 阶段 → Decision 阶段 → Output 阶段**
+严格遵守单向数据流：**采集器 emit 语义域事件 → Agent 订阅消费 → 工具被调用 → 结果通过 `tool.result.#` 通配事件回传**（结果不回灌采集器，也不经工具推事件回流 Agent）。
 
 | 禁止模式 | 说明 |
 |---------|------|
-| ❌ OutputHandler 订阅 Input 事件 | 绕过 Decision 阶段，破坏分层 |
-| ❌ Decider 订阅 Output 事件 | 创建循环依赖 |
-| ❌ InputCollector 订阅 Decision/Output 的数据事件 | Input 应只发布数据，不订阅下游结果数据；但元控制信号（如 `output.intent.finished`）除外 |
+| ❌ 工具订阅 `room.message.*` 等数据事件 | 工具是被动契约；结果通过 `tool.result.<name>` 单向回传，工具不可反向驱动数据 |
+| ❌ 框架模块 `src/modules/` 反向 import 业务包 `src/agents/` | 分层规则：业务包可依赖框架，框架不依赖业务包；违反即打破分层 |
+| ❌ 业务 Agent 通过"订阅工具推送事件"做发现 | Agent 可只读查询 `CapabilitiesProvider` 元数据做动作选择，不得靠工具推事件回流 |
+
+> 完整三层规则（数据平面 / 分层规则 / 发现平面）见 [AGENTS.md §架构约束](../AGENTS.md) 与 [数据流规则](architecture/data-flow.md)。
 
 ## 7. 测试规范
 
@@ -296,18 +322,32 @@ async def test_event_emission(event_bus: EventBus):
 
 ### 7.3 测试目录结构
 
+测试目录与 `src/` 的 v2 布局对应：`modules/`（共享模块）+ `agents/`（业务 Agent）。
+
 ```
 tests/
-├── architecture/       # 架构约束测试
-├── config/             # 配置系统测试
-├── modules/            # 共享模块测试（与 src/modules/ 对应）
-├── stages/             # 阶段测试（与 src/stages/ 对应）
-├── integration/        # 集成测试
-├── mocks/              # 测试用 Mock 对象
-└── conftest.py         # 全局共享 fixtures
+├── architecture/           # 架构约束测试（分层依赖 / 事件流约束）
+├── agents/                 # 业务 Agent 测试（含 game/text_adv）
+├── characterization/       # 特征化测试（占位与历史快照）
+├── config/                 # 配置系统测试
+├── dashboard/              # Web Dashboard 测试
+├── integration/            # 集成测试
+├── mocks/                  # 测试用 Mock 对象
+└── modules/                # 模块层测试（对应 src/modules/）
+    ├── agents/             # Agent 框架 + StreamerAgent 组件
+    ├── base/               # NormalizedMessage 等基类
+    ├── collectors/         # bilibili / console / mock / screen / stt
+    ├── config/             # 配置 Schema / 升级 hook / 漂移写回
+    ├── context/            # ContextAssembler 快照组装
+    ├── events/             # EventBus / 拦截器 / Payload 注册表
+    ├── llm/                # LLMManager 与客户端
+    ├── memory/             # MemoryProvider / SimpleMemory
+    ├── storage/            # SQLite 存储层
+    ├── tools/              # 工具契约（ToolSpec / Registry / ResultBlock）
+    └── tts/                # TTS 客户端
 ```
 
-> 完整测试目录结构、命名规范与编写指南见 [测试指南](development/testing-guide.md#2-测试目录结构)。
+> 完整测试目录结构、命名规范与编写指南见 [测试指南](development/testing-guide.md#2-测试目录结构)；权威定义随代码演进维护在 [tests/README.md](../tests/README.md)。
 
 ## 8. 提交前检查
 
@@ -353,9 +393,9 @@ uv run ruff format .
 使用清晰的中文提交信息，描述本次修改的内容：
 
 ```
-feat: 添加新的字幕 Handler
+feat: 添加新字幕工具
 fix: 修复弹幕解析的边界情况
-refactor: 重构阶段参与者生命周期管理
+refactor: 重构组件生命周期管理
 docs: 更新开发规范文档
 ```
 
@@ -364,61 +404,63 @@ docs: 更新开发规范文档
 ### 9.1 配置文件格式
 
 - 使用 TOML 格式
-- Collector 配置：`[collectors]`
-- Decider 配置：`[deciders]`
-- Handler 配置：`[handlers]`
-- 拦截器配置：`[interceptors.*]`（core.toml）
+- 业务 Agent 启用：`agents.toml` 的 `[agents].enabled`
+- 工具包启用：`tools.toml` 的 `[tools].enabled`
+- 感知包内采集器开关：`tools.toml` 的 `[tools.perception.config.enabled]`
+- 渲染包内具体工具开关：`tools.toml` 的 `[tools.output.config.enabled]`
+- 拦截器配置：`core.toml` 的 `[interceptors.*]`
 
 ### 9.2 配置示例
 
 ```toml
-# 输入 Collector
-[collectors]
-enabled = ["console_input", "bili_danmaku"]
+# agents.toml —— Agent 启用
+[agents]
+enabled = ["streamer"]      # 可选: streamer / game / custom
 
-# 决策 Decider
-[deciders]
-enabled = ["amaidesu"]
+# tools.toml —— 工具包启用（采集器挂在 perception 包下）
+[tools]
+enabled = ["perception", "output"]
 
-# 输出 Handler
-[handlers]
-enabled = ["subtitle", "vts", "edge_tts"]
+# tools.toml —— 感知包具体采集器
+[tools.perception.config]
+enabled = ["console_input"]
+
+# tools.toml —— 输出包具体工具
+[tools.output.config]
+enabled = ["edge_tts", "subtitle"]
+
+# core.toml —— 事件拦截器
+[interceptors.rate_limit]
+enabled = true
 ```
 
-> 配置为多文件结构：`config/core.toml` / `input.toml` / `decision.toml` / `output.toml` / `model.toml`。LLM 采用 provider + profile 两层结构（`[[llm_providers]]` + `[llm] provider=`），详见 [快速开始 - 编辑配置文件](getting-started.md#25-编辑配置文件)。
+> 配置为多文件结构：`config/core.toml` / `model.toml` / `agents.toml` / `tools.toml` / `memory.toml` / `storage.toml` / `background.toml`（七文件配置）。LLM 采用 provider + profile 两层结构（`[[llm_providers]]` + `[llm] provider=`），详见 [快速开始 - 编辑配置文件](getting-started.md#25-编辑配置文件)。
 
-## 10. 阶段参与者开发规范
+## 10. 组件开发速查
 
-### 10.1 阶段参与者类型
+新增组件按三范式（Collector / Agent / 工具）落在对应位置：
+
+### 10.1 组件类型与位置
 
 | 类型 | 职责 | 位置 |
 |------|------|------|
-| InputCollector | 从外部数据源采集数据 | `src/stages/input/collectors/` |
-| Decider | 处理 NormalizedMessage 生成 Intent | `src/stages/decision/deciders/` |
-| OutputHandler | 渲染到目标设备 | `src/stages/output/handlers/` |
+| 采集器 Collector | 持续流型数据源，主动 emit 语义域事件 | `src/modules/collectors/<域>/` |
+| 业务 Agent | 自主驱动主体（主播 Planner/Replyer、game text_adv 等） | `src/agents/<family>/<name>/` |
+| 工具 Tool | 被动能力契约（渲染/感知/内容引擎），经 ToolRegistry 调度 | `src/modules/tools/<包>/` 或 Agent 包内 |
 
-### 10.2 阶段参与者生命周期
+### 10.2 添加新组件
 
-| 参与者类型 | 启动方法 | 停止方法 | 业务入口 |
-|--------------|---------|---------|----------|
-| InputCollector | `start()` | `stop()` + `cleanup()` | `collect()`（AsyncIterator 产出消息） |
-| Decider | `setup()` | `cleanup()` | `decide()`（订阅消息处理） |
-| OutputHandler | `init()` | `cleanup()` | `handle(intent)`（Manager 直接调用，不订阅阶段调度事件） |
-
-### 10.3 添加新阶段参与者步骤
-
-1. 继承对应的基类（InputCollector/Decider/OutputHandler）
-2. 使用 `@collector`/`@decider`/`@handler` 装饰器注册
-3. 在配置文件中启用
-
-详见：[阶段参与者开发](development/component-guide.md)
+完整骨架代码、生命周期方法（`start/stop/cleanup`）、`CollectorManager` / `AgentManager` / `ToolRegistry` 三类管理器的统一规范，已迁移至 [组件开发指南](development/component-guide.md)。新增组件按该指南三范式开发即可。
 
 ## 相关文档
 
-- [阶段参与者开发](development/component-guide.md) - 阶段参与者开发详解
-- [事件系统](architecture/event-system.md#事件拦截器interceptor) - 事件拦截器开发详解
+- [组件开发指南](development/component-guide.md) - Collector / Agent / 工具三范式
+- [v2 架构总览](architecture/overview.md) - Agent+工具+存储+编排架构设计
+- [数据流规则](architecture/data-flow.md) - 数据流约束与边界规则
+- [事件系统](architecture/event-system.md) - EventBus 与事件拦截器
 - [提示词管理](development/prompt-management.md) - PromptManager 使用
 - [测试指南](development/testing-guide.md) - 测试规范和最佳实践
-- [3阶段架构](architecture/overview.md) - 架构设计详解
-- [事件系统](architecture/event-system.md) - EventBus 使用指南
-- [数据流规则](architecture/data-flow.md) - 数据流约束和规则
+
+---
+
+*最后更新：2026-08-26（v2.0.0 全面落库——切到 Agent+工具+存储+编排架构、语义域事件、七文件配置体系；测试目录与 component-guide 链接同步；生命周期与三范式细节迁移至 component-guide）*

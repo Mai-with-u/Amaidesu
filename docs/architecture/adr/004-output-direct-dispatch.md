@@ -1,6 +1,6 @@
 # ADR-004：OutputHandlerManager 直接调度 Handler
 
-- 状态：已采纳
+- 状态：已废弃（2026-08-25，v2.0.0 移除三阶段架构与 OutputHandlerManager，决策出口改为主播 Agent 调用 reply 工具；本文保留作历史记录，继任决策见 [ADR-005](005-v2-agent-tool-architecture.md)）
 - 日期：2026-07-31
 - 实现提交：`f9078e65dff65d61efe0daa6e83589ba95a8e409`（refactor(output): OutputHandlerManager 改为直接调度 Handler，移除事件样板代码）
 

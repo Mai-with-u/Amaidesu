@@ -28,11 +28,11 @@
 示例（AGENTS.md 核心事件表）：
 
 ```markdown
-| 事件名 | 方向 |
+| 事件名 | 说明 |
 |--------|------|
-| `input.message.received` | Input → Decision |
+| `room.message.danmaku/gift/super_chat/enter` | 直播间行为流（采集器发布，StreamerAgent/EventRecorder 订阅） |
 
-> **单一事实源**：完整事件表见 [事件系统](../architecture/event-system.md#事件载荷类型)。
+> **单一事实源**：完整事件表见 [事件系统](../architecture/event-system.md#事件事实表)。
 ```
 
 ## 2. 目录结构约定
@@ -43,13 +43,13 @@ docs/
 ├── getting-started.md     # 新手快速开始
 ├── development-guide.md   # 开发规范总纲（代码风格、命名、数据类型）
 ├── architecture/          # 架构理解
-│   ├── overview.md        # 3阶段架构总览（权威图 + 组件清单）
+│   ├── overview.md        # 架构总览（v2 全景图 + 组件清单）
 │   ├── data-flow.md       # 数据流约束规则
 │   ├── event-system.md    # 事件系统（权威事件表）
 │   ├── event-naming-convention.md  # 事件命名规范
 │   └── adr/               # 架构决策记录
 ├── development/           # 开发实操
-│   ├── component-guide.md # 阶段参与者开发
+│   ├── component-guide.md # 组件开发指南（三范式）
 │   ├── simulator-guide.md # 模拟直播间工具
 │   ├── prompt-management.md
 │   ├── dependency-injection.md
@@ -145,7 +145,7 @@ docs/
 
 - [AGENTS.md 文档维护规则](../../AGENTS.md#文档维护规则) - 核心规则（单一事实源表）
 - [开发规范](../development-guide.md) - 代码风格和数据类型规范
-- [3阶段架构总览](../architecture/overview.md) - 权威组件清单与数据流图
+- [架构总览](../architecture/overview.md) - 权威组件清单与数据流图
 
 ---
 

@@ -23,23 +23,25 @@ Amaidesu!
 
 [麦麦Bot](https://github.com/MaiM-with-u/MaiBot)的虚拟主播框架。
 
-可通过插件连接MaiBot核心（后期不再以此为主），或者使用自带的Amaidesu核心
+使用自带的 **Amaidesu 核心**（Agent + 工具 + 存储 + 编排架构），驱动虚拟主播完成弹幕互动、语音合成、虚拟形象控制与直播编排。
 
 </div>
 
 ## 架构概述
 
-系统由 **Input（输入）→ Decision（决策）→ Output（输出）** 三个阶段组成，阶段之间通过 EventBus 松耦合通信：
-- **Input 阶段**：InputCollector 采集外部数据（弹幕、语音、控制台），标准化为 NormalizedMessage 后经 EventBus 发布（事件拦截器做去重/限流/相似过滤）
-- **Decision 阶段**：Decider 将 NormalizedMessage 决策为 Intent（回复内容 + 情绪 + 动作）
-- **Output 阶段**：Manager 直接并行调度各渲染工具（TTS、字幕、VTS、OBS 等；敏感词净化归 Replyer）
+**Amaidesu 2.0.0 = Agent（自主主体）+ 工具（能力契约）+ 存储（状态/记忆）+ 编排（Agenda 节目单）**
+
+- **采集器（Collector）**：持续采集外部数据（B站弹幕、语音、屏幕变化、控制台），经 EventBus 以语义域事件（`room.message.*` 等）主动推送，事件拦截器做限流/相似过滤
+- **业务 Agent**：主播 Agent 自主决策——MessageBuffer 聚合弹幕 → Planner 决策循环 → Replyer 表达引擎生成回复/情绪/动作；游戏代理（AI 玩家）为另一范式
+- **工具（Tool）**：被动能力契约，经 ToolRegistry 统一调度——TTS、字幕、VTS/Warudo 皮套、OBS、屏幕感知等约 60 个工具
+- **存储与记忆**：SQLite 11 表记录场次/消息/礼物/SC/Agenda；SimpleMemory 提供观众画像与关键词召回
 
 **数据流**：
-1. **Input 阶段**：外部数据（弹幕、语音、控制台）→ NormalizedMessage → EventBus（事件拦截器净化）
-2. **Decision 阶段**：NormalizedMessage → Intent（amaidesu Planner/Replyer 两阶段，可替换为 MaiBot / LLM / Command）
-3. **Output 阶段**：Intent → 并行渲染输出（TTS、字幕、VTS、表情等）
+1. 外部输入 → 采集器 emit `room.message.danmaku/gift/super_chat/enter` → [事件拦截器]
+2. 主播 Agent 订阅消费：聚合缓冲 → Planner 判断是否回复（置信度门槛）→ Replyer 生成表达
+3. 通过工具调用渲染输出（`reply` 返回 speech/emotion/action，TTS 等渲染工具合成播出）
 
-架构图、完整组件清单与生命周期详见 [3阶段架构总览](docs/architecture/overview.md)。
+架构图、完整组件清单与生命周期详见 [架构总览](docs/architecture/overview.md)。
 
 ## 安装与运行
 
@@ -72,7 +74,10 @@ uv run python main.py
 uv run python main.py --debug
 
 # 过滤日志（只显示指定模块）
-uv run python main.py --filter EdgeTTSHandler SubtitleHandler
+uv run python main.py --filter StreamerAgent ConsoleInputCollector
+
+# 仅验证组合根装配后立即退出
+uv run python main.py --dry
 ```
 
 ### Web Dashboard
@@ -124,19 +129,19 @@ pnpm run dev      # → Vite 启动在 http://localhost:60315
 - [开发规范](docs/development-guide.md) - 代码风格和约定
 
 ### 架构理解
-- [3阶段架构总览](docs/architecture/overview.md) - 架构详解
+- [v2.0.0 架构叙事](docs/architecture/v2-architecture.md) - 重构缘由与设计推导（先读这篇）
+- [架构总览](docs/architecture/overview.md) - v2.0.0 组件清单与目录结构
 - [数据流规则](docs/architecture/data-flow.md) - 数据流约束
 - [事件系统](docs/architecture/event-system.md) - EventBus 使用
 - [事件命名规范](docs/architecture/event-naming-convention.md) - 事件命名规则
 - [架构决策记录](docs/architecture/adr/README.md) - ADR 决策清单
 
 ### 开发指南
-- [阶段参与者开发](docs/development/component-guide.md)
+- [组件开发指南](docs/development/component-guide.md) - 采集器/工具/Agent 三范式
 - [事件系统](docs/architecture/event-system.md#事件拦截器interceptor) - 事件拦截器开发
 - [提示词管理](docs/development/prompt-management.md)
 - [依赖注入](docs/development/dependency-injection.md)
 - [测试指南](docs/development/testing-guide.md)
-- [模拟直播间工具](docs/development/simulator-guide.md)
 - [文档维护规范](docs/development/documentation-guide.md)
 
 ## Git 工作流

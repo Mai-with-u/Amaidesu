@@ -21,21 +21,32 @@ test = [
 
 ## 2. 测试目录结构
 
-测试按 3 阶段架构组织，目录结构与 `src/` 对应。**权威且完整的目录结构见 [tests/README.md](../../tests/README.md#目录结构)**（位于测试目录内，随代码演进维护）：
+测试按 v2 布局组织（`modules/` 框架模块 + `agents/` 业务 Agent），目录结构与 `src/` 对应。**权威且完整的目录结构见 [tests/README.md](../../tests/README.md#目录结构)**（位于测试目录内，随代码演进维护）：
 
 ```
 tests/
-├── architecture/           # 架构约束测试
-├── characterization/       # 特征化测试
+├── architecture/           # 架构约束测试（分层依赖 / 事件流约束）
+├── agents/                 # 业务 Agent 测试（含 game/text_adv 等）
+├── characterization/       # 特征化测试（占位与历史快照）
 ├── config/                 # 配置系统测试
-├── dashboard/              # Web Dashboard 测试
+├── dashboard/              # Dashboard API 与服务
 ├── integration/            # 集成测试
 ├── mocks/                  # Mock 对象
-├── modules/                # 共享模块测试（与 src/modules/ 对应）
-├── stages/                 # 阶段测试（与 src/stages/ 对应）
-├── conftest.py             # 全局共享 fixtures
-├── test_decorator_registry.py
-└── test_multi_decider.py
+└── modules/                # 模块层测试（对应 src/modules/）
+    ├── agents/             # Agent 框架 + StreamerAgent 组件
+    │   └── streamer/       # planner / replyer / agenda / 决策循环
+    ├── base/               # NormalizedMessage 等基类
+    ├── collectors/         # bilibili / console / mock / screen / stt
+    ├── config/             # 配置 Schema / 升级 hook / 漂移写回
+    ├── context/            # ContextAssembler 快照组装
+    ├── events/             # EventBus / 拦截器 / Payload 注册表（含 test_interceptors.py）
+    ├── llm/                # LLMManager 与客户端
+    ├── memory/             # MemoryProvider / SimpleMemory
+    ├── storage/            # SQLite 存储层
+    ├── tools/              # 工具契约（ToolSpec / Registry / ResultBlock）
+    │   └── output/         # 渲染工具（vts / warudo / tts / obs / subtitle…）
+    ├── tts/                # TTS 客户端
+    └── types/              # 共享类型（bili 消息等）
 ```
 
 ### 命名规范
@@ -137,95 +148,94 @@ async def test_event_bus_error_isolation(event_bus):
     assert "before_error" in results
     assert "normal" in results
 ```
-
-### 3.2 阶段参与者测试
+### 3.2 采集器测试
 
 ```python
-"""测试 InputCollector
+"""测试 BaseCollector / CollectorManager（v2 采集器框架）
 
-运行: uv run pytest tests/stages/input/ -v
+运行: uv run pytest tests/modules/collectors/ -v
 """
 
-import asyncio
 import pytest
 
-from src.stages.input.manager import InputCollectorManager
+from src.modules.collectors import BaseCollector, CollectorManager
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads import MessageReadyPayload
-from src.modules.types.base.normalized_message import NormalizedMessage
-from tests.mocks.mock_input_collector import MockInputCollector
+from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 
 
-class FailingMockCollector(MockInputCollector):
-    """模拟失败的 Collector"""
+class _FakeEventBus:
+    """捕获 emit 的桩（替代真实 EventBus）"""
 
-    async def start(self):
-        raise RuntimeError("启动失败")
+    def __init__(self) -> None:
+        self.events: list[tuple[str, object]] = []
+
+    async def emit(self, event_name: str, payload, **kwargs):
+        self.events.append((event_name, payload))
+
+
+class _SampleCollector(BaseCollector):
+    """最小可测的 Collector 子类（与 tests/modules/collectors/test_collector_manager.py 中同形态）"""
+    name = "sample_collector"
+    description = "示例采集器（用于测试）"
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.started = False
+
+    async def _on_start(self) -> None:
+        self.started = True
+
+    async def _on_stop(self) -> None:
+        self.started = False
 
 
 @pytest.fixture
-def collector_manager(event_bus):
-    """创建 InputCollectorManager 实例"""
-    return InputCollectorManager(event_bus)
+def manager() -> CollectorManager:
+    return CollectorManager()
+
+
+@pytest.fixture
+def sample_collector() -> _SampleCollector:
+    return _SampleCollector()
+
+
+def test_register_dedup(manager, sample_collector):
+    """Collector 注册与去重"""
+    assert manager.register(sample_collector) is True
+    assert manager.register(sample_collector) is False  # 同名 Collector 跳过
 
 
 @pytest.mark.asyncio
-async def test_collector_start_and_stop(collector_manager, event_bus):
-    """测试 Collector 启动和停止"""
-    collector = MockInputCollector({"name": "test_collector", "auto_exit": True}, event_bus)
+async def test_collector_emit_room_message(sample_collector):
+    """v2：Collector 主动推语义域事件（room.message.danmaku 等）"""
+    bus = _FakeEventBus()
+    sample_collector.set_event_bus(bus)
 
-    await collector_manager.start_all_collectors([collector])
-    assert collector_manager._is_started is True
-
-    await collector_manager.stop_all_collectors()
-    assert collector_manager._is_started is False
-
-
-@pytest.mark.asyncio
-async def test_collector_data_flow(collector_manager, event_bus):
-    """测试 Collector 数据流"""
-    collected = []
-
-    async def on_message(event_name, payload, source):
-        collected.append(payload)
-
-    event_bus.on(CoreEvents.INPUT_MESSAGE_RECEIVED, on_message, model_class=MessageReadyPayload)
-
-    collector = MockInputCollector({"name": "test_collector"}, event_bus)
-    await collector_manager.start_all_collectors([collector])
-
-    # 添加测试数据
-    msg = NormalizedMessage(
-        text="测试",
-        source="test",
-        data_type="text",
-        importance=0.5,
+    payload = RoomMessagePayload(
+        live_session_id="ls_test_001",
+        message_type="danmaku",
+        user=RoomMessageUser(id="u1", name="观众A"),
+        content="主播好可爱！",
     )
-    collector.add_test_data(msg)
+    await bus.emit(CoreEvents.ROOM_MESSAGE_DANMAKU, payload)
 
-    await asyncio.sleep(0.3)
-
-    assert len(collected) == 1
-    assert collected[0].message["text"] == "测试"
-
-    await collector_manager.stop_all_collectors()
+    assert bus.events[-1][0] == CoreEvents.ROOM_MESSAGE_DANMAKU
+    assert bus.events[-1][1].content == "主播好可爱！"
 
 
 @pytest.mark.asyncio
-async def test_error_isolation(collector_manager, event_bus):
-    """测试错误隔离"""
-    collectors = [
-        MockInputCollector({"name": "good_collector"}, event_bus),
-        FailingMockCollector({"name": "failing_collector"}, event_bus),
-    ]
+async def test_collector_start_lifecycle(sample_collector):
+    """Collector start/stop 生命周期（start 进入 RUNNING，stop 进入 STOPPED）"""
+    from src.modules.collectors.base import CollectorState
 
-    await collector_manager.start_all_collectors(collectors)
+    await sample_collector.start()
+    assert sample_collector.state == CollectorState.RUNNING
 
-    # 单个 Collector 失败不应影响整体
-    assert collector_manager._is_started is True
-
-    await collector_manager.stop_all_collectors()
+    await sample_collector.stop()
+    assert sample_collector.state == CollectorState.STOPPED
 ```
+
+> 真实触发链与各子采集器（console/bilibili/stt/screen/mock）的差异化测试见 [tests/modules/collectors/](../../tests/modules/collectors/)：每个采集器一个测试文件，覆盖该采集器特有的输入源与语义域事件组合。完整的错误隔离与 `CollectorManager` 健康监控测试见 `tests/modules/collectors/test_collector_manager.py`。
 
 ### 3.3 事件拦截器测试
 
@@ -274,35 +284,50 @@ async def test_intercept_rate_limited(interceptor):
     # 第三条被丢弃（返回 None）
     assert await slow.intercept("room.message.danmaku", create_payload("消息3", "user1"), "T") is None
 ```
-### 3.4 Mock 对象
+### 3.4 Mock 对象与桩
 
-项目在 `tests/mocks/` 目录中提供了常用的 Mock 对象：
-
-```python
-from tests.mocks.mock_input_collector import MockInputCollector
-from tests.mocks.mock_output_handler import MockOutputHandler
-from tests.mocks.mock_decision_decider import MockDecider
-
-# 使用 MockInputCollector 进行测试
-collector = MockInputCollector({"name": "test"}, event_bus)
-collector.add_test_data(normalized_message)
-```
-
-#### 自定义 Mock Collector
+v2 测试通常在测试文件内定义小型桩，避免跨文件 Mock 依赖。常见两类：
 
 ```python
-class CustomMockInputCollector(MockInputCollector):
-    """自定义 Mock Collector"""
+# 在你的测试文件中定义（贴近 tests/modules/collectors/ 现有风格）
+from src.modules.collectors import BaseCollector
 
-    def __init__(self, config=None, event_bus=None, fail_on_start=False):
-        super().__init__(config or {}, event_bus)
-        self.fail_on_start = fail_on_start
 
-    async def start(self):
-        if self.fail_on_start:
-            raise RuntimeError("模拟启动失败")
-        await super().start()
+class _FakeEventBus:
+    """捕获 emit 的桩（替代真实 EventBus）"""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, object]] = []
+
+    async def emit(self, event_name: str, payload, **kwargs):
+        self.events.append((event_name, payload))
+
+
+class _SampleCollector(BaseCollector):
+    """最小可测的 Collector 子类（与 tests/modules/collectors/test_collector_manager.py 同步）"""
+    name = "sample_collector"
+    description = "示例采集器（用于测试）"
+
+    async def _on_start(self) -> None:
+        self.started = True
+
+    async def _on_stop(self) -> None:
+        self.started = False
 ```
+
+#### 自定义失败注入
+
+模拟 Collector 启动失败时，在 `_SampleCollector` 子类中重写对应生命周期方法：
+
+```python
+class _FailingCollector(_SampleCollector):
+    """启动时失败的 Collector（用于错误隔离测试）"""
+
+    async def _on_start(self) -> None:
+        raise RuntimeError("模拟启动失败")
+```
+
+更完整的错误隔离测试与 `CollectorManager` 健康监控见 `tests/modules/collectors/test_collector_manager.py`；采集器专用 Mock 见 `src/modules/collectors/mock/`（与 v2 测试同处一套 Mock 框架）。
 
 ## 4. 运行测试
 
@@ -483,29 +508,34 @@ def test_rate_limit_interceptor_creation():
 
 ### 6.2 集成测试
 
-测试多个组件协作。
+`tests/integration/` 验证 Amaidesu 与外部宿主（如 MaiBot）的集成边界。当前主用例：
 
 ```python
-# tests/integration/
-# 需要 import: EventBus / RateLimitInterceptor
-@pytest.mark.asyncio
-async def test_event_bus_with_interceptor(event_bus):
-    """测试 EventBus 与拦截器集成"""
-    event_bus.add_interceptor(RateLimitInterceptor(global_rate_limit=10))
-    await event_bus.emit("room.message.danmaku", payload, source="Test")
+# tests/integration/test_amaidesu_plugin.py
+def test_manifest_version():
+    """验证 Amaidesu 作为 MaiBot 插件的清单字段（manifest_version / id / sdk.min_version）"""
     ...
 ```
+
+跨组件协作的 EventBus / 拦截器 / 采集器链路测试已下沉到 `tests/modules/events/test_interceptors.py` 与 `tests/modules/agents/`，不属于本目录。
 
 ### 6.3 架构测试
 
-验证架构约束（数据流方向、依赖关系）。
+验证架构约束（v2 四层依赖方向 + 事件流约束）。`tests/architecture/` 下两组：
 
 ```python
 # tests/architecture/test_dependency_direction.py
-def test_core_does_not_import_stage():
-    """验证 Core 层不依赖 Stage 层"""
+def test_input_domain_does_not_import_agent_or_tool(self):
+    """Input 层（采集器）不得 import Agent 或 Tool"""
+    ...
+
+# tests/architecture/test_event_flow_constraints.py
+def test_tool_does_not_subscribe_to_input_events(self):
+    """工具不得订阅 room.message.* 等数据事件"""
     ...
 ```
+
+四层依赖方向（Core ← Input ← Agent ← Tool）由 `test_proper_layer_hierarchy` 强制保证；事件流约束（单向、防环）由 `test_event_based_communication_pattern` 验证。
 
 ## 7. Fixtures 共享
 
@@ -523,19 +553,21 @@ async def event_bus() -> EventBus:
     await bus.cleanup()
 ```
 
-### 7.2 阶段特定 Fixtures
+### 7.2 模块特定 Fixtures
 
-在 `tests/stages/*/conftest.py` 中定义特定阶段的 fixtures：
+按需在 `tests/<子域>/conftest.py` 中定义该子域共享的 fixtures。现有 conftest.py 位置：`tests/conftest.py`（全局）、`tests/integration/conftest.py`、`tests/modules/llm/conftest.py`、`tests/modules/tools/output/warudo/conftest.py`。
 
 ```python
-# tests/stages/input/conftest.py
+# tests/modules/<子域>/conftest.py（如该子域需共享 fixture 可新建）
+import pytest
+
+from src.modules.collectors import CollectorManager
+
+
 @pytest.fixture
-def sample_collectors(event_bus):
-    """创建示例 Collector 列表"""
-    return [
-        MockInputCollector({"name": "collector1"}, event_bus),
-        MockInputCollector({"name": "collector2"}, event_bus),
-    ]
+def manager() -> CollectorManager:
+    """CollectorManager 实例（共享给该子域所有测试）"""
+    return CollectorManager()
 ```
 
 ## 8. 调试测试
@@ -616,10 +648,10 @@ async def event_bus():
 ## 10. 相关文档
 
 - [开发规范](../development-guide.md) - 代码风格和数据类型规范
-- [阶段参与者开发](component-guide.md) - 阶段参与者开发指南
+- [组件开发指南](component-guide.md) - 组件三范式开发指南
 - [事件拦截器](../architecture/event-system.md#事件拦截器interceptor) - 事件拦截器开发指南
 - [事件系统](../architecture/event-system.md) - EventBus 使用指南
 
 ---
 
-*最后更新：2026-08-02（同步测试目录结构与 Manager 路径，InputCollectorManager 位于 src/stages/input/manager.py）*
+*最后更新：2026-08-26（v2.0.0 全面落库——测试目录按 src/modules+src/agents 双层布局重排；移除 `tests/stages/` 整目录与各阶段旧 Mock 文件引用；采集器示例切到 BaseCollector / CollectorManager + 语义域事件 ROOM_MESSAGE_DANMAKU；架构测试与 fixtures 路径切到 v2 四层 Core ← Input ← Agent ← Tool）*

@@ -15,17 +15,18 @@
 
 | 文档 | 说明 |
 |------|------|
-| [3阶段架构总览](architecture/overview.md) | 3阶段架构详解 |
+| [v2.0.0 架构叙事](architecture/v2-architecture.md) | 重构缘由与设计推导（连续叙事，先读这篇） |
+| [架构总览](architecture/overview.md) | v2.0.0 Agent+工具+存储+编排架构详解（速查） |
 | [数据流规则](architecture/data-flow.md) | 数据流约束和规则 |
 | [事件系统](architecture/event-system.md) | EventBus 使用指南 |
-| [事件命名规范](architecture/event-naming-convention.md) | 事件命名规则与动词链 |
+| [事件命名规范](architecture/event-naming-convention.md) | 语义域事件命名规则 |
 | [架构决策记录](architecture/adr/README.md) | ADR 格式说明与决策清单 |
 
 ### 开发指南
 
 | 文档 | 说明 |
 |------|------|
-| [阶段参与者开发](development/component-guide.md) | 阶段参与者开发详解 |
+| [组件开发指南](development/component-guide.md) | 采集器/工具/Agent 三范式开发详解 |
 | [事件系统](architecture/event-system.md#事件拦截器interceptor) | EventBus 与事件拦截器（含开发指南） |
 | [提示词管理](development/prompt-management.md) | PromptManager 使用 |
 | [依赖注入](development/dependency-injection.md) | 依赖注入约定与决策清单 |

@@ -250,54 +250,33 @@ input_config = config_service.get_config_with_defaults(
 
 ### 3. 配置文件结构
 
-配置为**多文件**结构（`config/` 目录），按关注点拆分：
+配置为**七文件**结构（`config/` 目录，v2.0.0），按关注点拆分：
 
 | 文件 | 内容 |
 |------|------|
-| `core.toml` | 核心配置（`[general]` / `[persona]` / `[logging]` / `[dashboard]` 等） |
-| `model.toml` | LLM provider 池（`[[llm_providers]]`）+ 各 profile（`[llm]` / `[llm_fast]` / `[vlm]` / `[llm_local]`） |
-| `input.toml` | 输入阶段（`[collectors]` 启用列表 + 各 Collector 配置节） |
-| `decision.toml` | 决策阶段（`[deciders]` 启用列表 + 各 Decider 配置节） |
-| `output.toml` | 输出阶段（`[handlers]` 启用列表 + 各 Handler 配置节） |
+| `core.toml` | 核心配置（`[general]` / `[persona]` / `[logging]` / `[dashboard]` / `[interceptors.*]` 等） |
+| `model.toml` | LLM provider 池（`[[llm_providers]]`）+ 各 profile（`[llm]` / `[llm_fast]` / `[vlm]` / `[llm_local]` / `[llm_summary]` / `[llm_agenda]`） |
+| `agents.toml` | Agent 启用与配置（`[agents].enabled` + streamer/game 子段） |
+| `tools.toml` | 工具包启用与配置（`[tools].enabled` + 采集器挂 `[tools.perception.config]`、渲染挂 `[tools.output.config]`） |
+| `memory.toml` | 记忆系统（`[memory]` backend=simple\|amemorix） |
+| `storage.toml` | 存储层（`[storage]` sqlite） |
+| `background.toml` | 后台任务（`[background]` compressor 等） |
 
-### 4. 阶段参与者配置
+### 4. 组件启用配置
 
-在对应配置文件的启用列表中添加参与者名称：
-
-```toml
-# config/input.toml
-[collectors]
-enabled = ["console_input", "bili_danmaku"]
-
-# config/output.toml
-[handlers]
-enabled = ["subtitle", "vts", "edge_tts"]
-
-# config/decision.toml
-[deciders]
-enabled = ["amaidesu"]
-```
-
-每个阶段参与者可以有独立的配置节（位于同一配置文件）：
+在对应配置文件的启用列表中添加组件名称：
 
 ```toml
-# config/input.toml
-[collectors.bili_danmaku_official]
-id_code = "your_id_code"
-app_id = "your_app_id"
-access_key = "your_access_key"
+# config/agents.toml —— Agent 启用
+[agents]
+enabled = ["streamer"]        # 可选: streamer / game / custom
 
-# config/output.toml
-[handlers.subtitle]
-font_size = 32
-window_width = 1000
-window_height = 720
-
-# config/decision.toml
-[deciders.maibot]
-host = "127.0.0.1"
-port = 8000
+# config/tools.toml —— 工具包启用
+[tools]
+enabled = ["perception", "output"]
 ```
+
+每个组件的独立配置节位于对应工具包/Agent 段内（Schema 权威定义见 `src/modules/config/*_schemas.py`，Pydantic Schema 驱动生成/校验/迁移）。
 
 ### 5. 配置合并
 
@@ -310,40 +289,14 @@ Schema 默认值（优先级低） → 配置文件覆盖（优先级高）
 #### 5.1 获取合并后的配置
 
 ```python
-# 获取带默认值合并的配置（phase 指定阶段）
+# 获取带默认值合并的组件配置（phase 为兼容参数：input=采集器 / output=渲染工具）
 config = config_service.get_config_with_defaults(
-    "console_input",      # 参与者名称
-    phase="input"         # 阶段：input / decision / output
+    "console_input",      # 组件名称
+    phase="input"
 )
 ```
 
-#### 5.2 Schema 配置类
-
-每个阶段参与者在自身模块内定义 `ConfigSchema` 嵌套类：
-
-```python
-# src/stages/input/collectors/console_input/console_input_collector.py
-from pydantic import Field
-from src.modules.config.schemas.base import BaseConfig
-
-
-class ConsoleInputCollector:
-    """ConsoleInputCollector 配置"""
-
-    class ConfigSchema(BaseConfig):
-        type: str = "console_input"
-
-        # 命令行提示符
-        prompt: str = Field(default="> ", description="命令行提示符")
-
-        # 是否启用历史记录
-        history_enabled: bool = Field(default=True, description="是否启用历史记录")
-
-        # 最大历史记录数
-        max_history: int = Field(default=100, description="最大历史记录数")
-```
-
-> `src/modules/config/schemas/input_schemas.py` 通过 `_try_import_schema()` 延迟导入各 Collector 的 `ConfigSchema` 并重导出为 `XXXConfigSchema` 别名（如 `InputCollectorsConfig` 聚合容器），避免循环 import。开发者只需关注参与者内的 `ConfigSchema` 定义，聚合由配置模块自动完成。
+> Schema 权威定义在 `src/modules/config/{core,model,agents,tools,memory,storage,background}_schemas.py`（Pydantic），组件嵌套配置类随所属域定义，由 `multi_file_loader` 的漂移写回闭环自动补齐用户文件缺失字段。
 
 ### 6. 配置 API
 
@@ -354,17 +307,14 @@ general = config_service.get_section("general")
 # 获取配置项
 platform_id = config_service.get("platform_id", section="general")
 
-# 获取带默认值的参与者配置
-cfg = config_service.get_config_with_defaults("bili_danmaku", phase="input")
+# 获取带默认值的组件配置
+cfg = config_service.get_config_with_defaults("console_input", phase="input")
 
-# 检查参与者是否启用（phase 指定阶段）
-if config_service.is_config_enabled("bili_danmaku", phase="input"):
+# 检查组件是否启用
+if config_service.is_config_enabled("console_input", phase="input"):
     # ...
 
-# 获取某阶段全部配置
-all_input = config_service.get_all_configs(phase="input")
-
-# 拦截器配置
+# 拦截器配置（core.toml [interceptors.*]）
 pipe_cfg = config_service.get_interceptor_config("rate_limit")
 if config_service.is_interceptor_enabled("rate_limit"):
     # ...
@@ -372,26 +322,26 @@ if config_service.is_interceptor_enabled("rate_limit"):
 
 ### 7. 配置文件生成与热重载
 
-- **首次运行**：`ConfigService.initialize()` 通过 `ConfigSchemaGenerator` 从 Schema 自动生成 `config/` 目录及全部配置文件
+- **首次运行**：`ConfigService.initialize()` 从 Pydantic Schema 自动生成 `config/` 目录及全部配置文件
 - **热重载**：`FileWatcher` 监听配置文件变更，通过 `register_reload_callback(callback)` 注册回调感知变化
 - **迁移**：`migration.py` / `upgrade_hooks.py` 处理配置版本升级
 
 ```bash
 # 首次运行自动生成 config/ 目录
 uv run python main.py
-# → 生成 core.toml, model.toml, input.toml, decision.toml, output.toml
+# → 生成 core.toml, model.toml, agents.toml, tools.toml, memory.toml, storage.toml, background.toml
 ```
 
 ---
 
 ## 相关文档
 
-- [阶段参与者开发指南](component-guide.md) - 如何开发自定义阶段参与者
+- [组件开发指南](component-guide.md) - 如何开发自定义采集器/工具/Agent
 - [事件拦截器](../architecture/event-system.md#事件拦截器interceptor) - 如何开发自定义拦截器
 - [开发规范](../development-guide.md) - 代码风格和约定
-- [3阶段架构](../architecture/overview.md) - 架构设计总览
+- [架构总览](../architecture/overview.md) - v2.0.0 架构设计总览
 - [事件系统](../architecture/event-system.md) - EventBus 使用指南
 
 ---
 
-*最后更新：2026-08-26（提示词内聚化重构：模板迁入消费组件 prompts/ 目录，键改用 frontmatter name 声明式键 + src/**/prompts 约定自动发现 + 重复键 fail-fast；删除 8 个零消费死模板）*
+*最后更新：2026-08-26（v2.0.0 对齐：配置章节切七文件体系、配置 API 示例更新为现行 ConfigService 方法；提示词内聚化重构：模板迁入消费组件 prompts/ 目录，键改用 frontmatter name 声明式键 + src/**/prompts 约定自动发现 + 重复键 fail-fast）*
