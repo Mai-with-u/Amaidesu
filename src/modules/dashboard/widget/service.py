@@ -191,6 +191,76 @@ class DanmakuWidgetService:
             except Exception as e:
                 self.logger.error(f"广播字幕失败: {e}", exc_info=True)
 
+    def _convert_payload_to_widget(
+        self,
+        payload: RoomMessagePayload,
+    ) -> Optional[DanmakuWidgetMessage]:
+        """RoomMessagePayload 直转（v2 主路径，结构化字段）。"""
+        try:
+            user_name = payload.user.name if payload.user else "匿名用户"
+            user_id = payload.user.id if payload.user else ""
+            timestamp = (
+                datetime.fromtimestamp(payload.timestamp_ms / 1000.0) if payload.timestamp_ms else datetime.now()
+            )
+            importance = 0.5
+            platform = "unknown"
+            room_id = payload.live_session_id or None
+
+            if payload.message_type == "gift":
+                return DanmakuWidgetMessage(
+                    user_name=user_name,
+                    user_id=user_id,
+                    content=payload.content or "",
+                    message_type=MessageType.GIFT,
+                    timestamp=timestamp,
+                    importance=importance,
+                    gift_name=payload.gift.name if payload.gift else None,
+                    gift_count=payload.gift.count if payload.gift else None,
+                    platform=platform,
+                    room_id=room_id,
+                )
+
+            if payload.message_type == "super_chat":
+                return DanmakuWidgetMessage(
+                    user_name=user_name,
+                    user_id=user_id,
+                    content=payload.content or "",
+                    message_type=MessageType.SUPER_CHAT,
+                    timestamp=timestamp,
+                    importance=importance,
+                    sc_price=payload.sc.amount if payload.sc else None,
+                    sc_message=payload.content or None,
+                    platform=platform,
+                    room_id=room_id,
+                )
+
+            if payload.message_type == "enter":
+                return DanmakuWidgetMessage(
+                    user_name=user_name,
+                    user_id=user_id,
+                    content=payload.content or "",
+                    message_type=MessageType.ENTER,
+                    timestamp=timestamp,
+                    importance=importance,
+                    platform=platform,
+                    room_id=room_id,
+                )
+
+            return DanmakuWidgetMessage(
+                user_name=user_name,
+                user_id=user_id,
+                content=payload.content or "",
+                message_type=MessageType.TEXT,
+                timestamp=timestamp,
+                importance=importance,
+                platform=platform,
+                room_id=room_id,
+            )
+
+        except Exception as e:
+            self.logger.error(f"转换 RoomMessagePayload 失败: {e}", exc_info=True)
+            return None
+
     def _convert_dict_to_widget(self, msg_dict: Dict[str, Any]) -> Optional[DanmakuWidgetMessage]:
         try:
             metadata = msg_dict.get("metadata", {})
