@@ -499,7 +499,7 @@ async def my_lightweight_tool(invocation: ToolInvocation) -> ToolExecutionResult
 
 - **Agent 专属工具**：Agent 子类 `_register_tools()` 方法（参考 `StreamerAgent._register_tools`、`TextAdvGameAgent._register_tools`）。在 Agent `_on_start` 阶段调用。
 - **公用 builtin 工具**：在装配根（`main.py` 或专用 wiring 模块）调 `register_xxx_tool(registry)`，通常 `AudioStreamChannel` 启动后 / `LLMManager.setup` 之后立即注册。
-- **Agent 工具聚合**：`AgentManager.register_all_tools()` 兜底——`_make_agent_tool_bridge` 默认返回失败 result 占位（无实际 dispatch），但 Agent 子类手动调 `_register_tools()` 才会**真正生效**（基类的桥接函数是占位实现）。
+- **工具注册聚合**：生产路径下不存在任何 manager 级聚合函数（旧 `register_all_tools` / `collect_tool_specs` / `_make_agent_tool_bridge` 已删除）——Agent 子类在 `_register_tools()` 中自己 `registry.register_provider(provider)`；`tools/output/*` 等公用 builtin 包由 `main.py` 的 `bind_core_tools(registry, slice)` 显式调 `register_*_tools(registry, config)`；L1 `@tool` 待注册条目由 `bind_pending_tools(registry)` flush；启动结束后 `audit_tools(registry)` 只做只读审计、列出未实现声明并 warning，不参与注入。
 
 ### 测试要点
 
@@ -741,7 +741,7 @@ class MyToolProvider(ToolProvider):
 | ② 注册工厂 | `src/modules/agents/factory.py` | `SUPPORTED_AGENTS` 元组加 `<注册名>`；加 `if name == "<注册名>":` 分支做 `instantiate_agent` |
 | ③ 写配置 | `config/agents.toml` 的 `[agents]` | `enabled = ["<注册名>"]` + `[agents.<注册名>]` 子段（参考 `StreamerAgentConfig` 字段） |
 | ④ 装配调用 | `main.py._register_agents_from_config` 或 `AgentManager.enable_agent(name, config, ...)` | 工厂实例化 → 构造器注入依赖 → `manager.register(agent, spec_provider="<builtin\|game\|mcp>")` → `manager.start_agent(name)` |
-| ⑤ 工具自动注入 | `AgentManager.register_all_tools(registry)` | 在 Agent 注册后调用一次，遍历所有 Agent 的 `list_tools()` 注入到 `ToolRegistry`（基类桥接是占位，**真实注册需子类 `_register_tools`**） |
+| ⑤ 工具接线 | `bind_core_tools` / `bind_pending_tools` / Agent 子类 `_register_tools()` | 装配根 `main.py` 在 `start_all` 之前先调 `bind_core_tools(registry, [tools.output.config] slice)` 注册 9 个 output 包、再调 `bind_pending_tools(registry)` flush L1 `@tool` pending；随后 `start_all` 触发每个 Agent 子类的 `_register_tools()` 自己 `registry.register_provider(provider)`；结束后 `audit_tools(registry)` 列出未实现声明并 warning |
 | ⑥ Dashboard | 自动可见 | 组件管理页从 `SUPPORTED_AGENTS` 拉清单 |
 
 **业务包放置规范**（防"插件换皮"红线）：
@@ -755,7 +755,7 @@ class MyToolProvider(ToolProvider):
 
 - 启动装配：`main.py._register_agents_from_config` 遍历 `[agents].enabled` 列表逐个 `instantiate_agent` → `AgentManager.register` → `AgentManager.start_all`
 - 动态启停：Dashboard / API 通过 `AgentManager.enable_agent(name, config, ...)` / `disable_agent(name)`（内部走 `instantiate_agent`）
-- 工具聚合：`AgentManager.register_all_tools(registry)` 在装配根一次性调用，把所有 Agent `list_tools()` 收集后注册到 `ToolRegistry`
+- 工具接线：装配根 `main.py` 在 `start_all` 之前显式 `bind_core_tools(registry, slice)` 与 `bind_pending_tools(registry)`；`start_all` 触发各 Agent 子类 `_register_tools()` 自注册；结束后 `audit_tools(registry)` 仅做只读审计
 
 ### 测试要点
 
@@ -830,7 +830,7 @@ class MyToolProvider(ToolProvider):
 ### 已知缺口
 
 - **TTS 渲染工具需显式注册**：`edge_tts_synthesize` 工具当前未自动接入 StreamerAgent 成功后的数据流。要让文本 → 音频，需在 `main.py` 或专用 wiring 模块显式 `register_provider(EdgeTTSProvider(...))` 到 `ToolRegistry`，并由业务侧（外部脚本 / Dashboard / 另一个 Agent）显式 `tool_registry.invoke(invocation)` 调用。
-- **Agent 工具聚合的基类桥接是占位**：`AgentManager.register_all_tools` 默认返回失败 `ToolExecutionResult`（参见 `manager.py::_make_agent_tool_bridge`）——**真实工具注册必须在 Agent 子类的 `_register_tools()` 中手动 `registry.register_provider(provider)`**。基类方法只保证 `list_tools()` 声明的工具 spec 进入 registry，impl 由 Agent 自身管理。
+- **工具注册路径唯一**：`AgentManager` 不再聚合工具注册（旧 `register_all_tools` / `collect_tool_specs` / `_make_agent_tool_bridge` 已删除）——真实注册只走两条：① Agent 子类 `_register_tools()` 中自己 `registry.register_provider(provider)`；② 公用 builtin 包在 `main.py` 由 `bind_core_tools(registry, slice)` 显式调 `register_*_tools(registry, config)`（或 `bind_pending_tools(registry)` flush L1 `@tool` pending）。装配结束后 `AgentManager.audit_tools(registry)` 返回未实现声明列表并 warning，不写任何工具实现。
 
 ---
 
@@ -857,4 +857,4 @@ class MyToolProvider(ToolProvider):
 
 ---
 
-*最后更新：2026-08-25（v2.0.0 三范式重写：彻底替换旧"阶段参与者（InputCollector/Decider/OutputHandler）"叙事，统一为「添加采集器 / 添加工具 / 添加 Agent」三范式；以 src/modules/{collectors,tools,agents}/ 与 src/agents/ 为权威基类/协议；删除 Intent / @pipeline / src/stages 引用；保留对配置 [agents]/[tools.perception.config]/[tools.output.config] 的指引）*
+*最后更新：2026-08-27（v2.0.5 工具注册路径重写：删除所有 `AgentManager.register_all_tools` / `collect_tool_specs` / `_make_agent_tool_bridge` 引用，统一为「Agent 子类 `_register_tools()` 自注册 + 装配根 `bind_core_tools(registry, slice)` + `bind_pending_tools(registry)` 显式注入 + `audit_tools(registry)` 只读审计」；同步刷新 L502「谁调用注册」、L744 步骤 ⑤、L758「谁调用注册」、L833「已知缺口」四处表述）*

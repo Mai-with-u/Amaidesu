@@ -7,7 +7,9 @@ Amaidesu 工具层（Wave 3 新增）
 - ``ResultBlock`` 多模态结果块（text / image base64+mime）
 - ``ToolRegistry`` 注册中心：按名分发 / 去重 / 失败兜底（不抛）
 - ``ToolProvider`` Protocol：声明一组工具的统一来源（builtin/game/mcp）
-- ``@tool`` 装饰器（进程内轻量声明）
+- ``@tool`` 装饰器（双模式：pending 表 / 显式 registry）
+- ``bind_pending_tools(registry)`` —— 把 pending 表刷入 registry
+- ``bind_core_tools(registry, config)`` —— 装配核心工具包（见 bootstrap.py）
 
 权威参考：
 - 架构主文档 .omo/drafts/amaidesu-v2-architecture.md §1.5 / §1.5.1
@@ -27,8 +29,25 @@ Amaidesu 工具层（Wave 3 新增）
 ## 失败兜底
 ``ToolRegistry.invoke()`` 永不抛异常：未知工具 → 失败 ToolExecutionResult；
 执行异常 → 失败 ToolExecutionResult（带 error_message）。
+
+## 注册路径（生产）
+组合根（``main.py``）按以下顺序装配，**禁止**使用 ``default_tool_registry()``：
+
+```python
+from src.modules.tools import ToolRegistry
+from src.modules.tools import bind_pending_tools, bind_core_tools
+
+registry = ToolRegistry()
+bind_core_tools(registry, config=...)  # L2 Provider 注入
+bind_pending_tools(registry)  # L1 @tool pending 刷入
+```
+
+``default_tool_registry()`` / ``set_default_registry()`` 仅供旧测试兼容，
+详见 ``src.modules.tools.registry`` 警告。
 """
 
+from src.modules.tools.bootstrap import bind_core_tools
+from src.modules.tools.decorator import bind_pending_tools, tool
 from src.modules.tools.models import (
     ResultBlock,
     ToolExecutionResult,
@@ -37,15 +56,21 @@ from src.modules.tools.models import (
 )
 from src.modules.tools.provider import ToolProvider, make_provider_from_specs
 from src.modules.tools.registry import ToolRegistry
-from src.modules.tools.decorator import tool
 
 __all__ = [
+    # 数据契约
     "ToolSpec",
     "ToolInvocation",
     "ToolExecutionResult",
     "ResultBlock",
+    # Provider 协议
     "ToolProvider",
     "make_provider_from_specs",
+    # 注册中心
     "ToolRegistry",
+    # L1 装饰器
     "tool",
+    # 装配入口（生产路径）
+    "bind_pending_tools",
+    "bind_core_tools",
 ]

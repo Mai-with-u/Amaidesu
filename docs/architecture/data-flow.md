@@ -131,7 +131,7 @@ flowchart TB
 v2 不再有"插件系统"。所有新功能通过 Agent 包内聚实现，框架零改动。具体规则：
 
 - **Planner/Replyer 是 StreamerAgent 的内部器官，不得注册为工具**。它们是 Agent 的决策循环与表达引擎（`planner.py` / `replyer.py` 同处 `src/agents/streamer/`），内部直接 await，不经 ToolRegistry 中转。"把 Planner 注册成工具"就是插件换皮的典型形态——把 Agent 内脏拆出来假装是工具。
-- **内容特有逻辑全部内聚到 `src/agents/<family>/<name>/` 包内**。例：新增"MC Agent" → 在 `src/agents/game/minecraft/` 建包，内含 `agent.py`（继承 `BaseAgent`）、`engine.py`（实现 `ContentEngine` Protocol）、`state.py` 等。`AgentManager.register_all_tools` 会自动把 `list_tools()` 暴露到全局 ToolRegistry。
+- **内容特有逻辑全部内聚到 `src/agents/<family>/<name>/` 包内**。例：新增"MC Agent" → 在 `src/agents/game/minecraft/` 建包，内含 `agent.py`（继承 `BaseAgent`）、`engine.py`（实现 `ContentEngine` Protocol）、`state.py` 等；Agent 自有工具在 `_register_tools()` 中自己 `registry.register_provider(provider)`；公用 builtin 由装配根 `main.py` 的 `bind_core_tools(registry, slice)` 显式调 `register_*_tools(registry, config)`，`bind_pending_tools(registry)` flush L1 `@tool` pending；启动结束 `audit_tools` 审计。
 - **加内容 = 加包 + 配置**，框架层零改动。**禁止**为新功能在 `src/modules/` 加新域；**禁止**通过 monkey-patching 或 import 副作用往框架注入行为。
 - **快照型能力是被调才干活的工具，持续流型才是采集器**。`look_at_screen`（截图感知，返回当前画面）是工具，因为它被 LLM 决策时才看一眼；屏幕持续变化检测（`ScreenChangeCollector`）才是采集器，因为它推"屏幕变了"事件流。判别口诀："谁驱动谁"——能自我维持状态/轮询/心跳的是 Agent，只在被调用时执行的是 Tool。
 
@@ -237,4 +237,4 @@ v2 中不同数据走不同通道，不要混用：
 
 ---
 
-*最后更新：2026-08-25（v2.0.0 数据流规则重写：删除三阶段 Input/Decision/Output 叙事，改为 Agent+工具+采集器+拦截器+存储语义域事件流；保留三层面约束骨架与"能挥手吗/挥手成功了吗"口诀；新增 v2 禁止模式表与端到端链路核验（ConsoleInputCollector._run_input_loop L131 → _emit_semantic_event L175 → StreamerAgent._on_danmaku_received L462-467 订阅 L470 处理 → handle_message L497 RoomState.update + TimingGate.is_forced + MessageBuffer.add → _flush_loop L519 → Planner.plan planner_llm=llm_fast 不传 tools → 直接 await ReplyToolProvider.invoke reply_tool.py L170 → Replyer.generate replyer_llm=llm 人设+ProfanityFilter → {speech,emotion,action} → 落库+planner.checkpoint 空转检查；声明本文档为数据流与边界规则权威处并指向 event-system.md/overview.md 链接）*
+*最后更新：2026-08-27（v2.0.5 工具注册路径对齐：防换皮红线节 MC Agent 示例改为 Agent 子类 `_register_tools()` 自注册 + 装配根 `bind_core_tools` / `bind_pending_tools` 显式注入 + `audit_tools` 只读审计；删除 `AgentManager.register_all_tools` 引用）*

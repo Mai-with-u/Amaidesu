@@ -148,7 +148,7 @@ event_bus.on("tool.result.#", self.on_tool_result, model_class=ToolResultPayload
 
 添加组件三步：
 1. 采集器：继承 `BaseCollector`，实现 `collect()`；配置写 `tools.toml` 的 `[tools.perception.config]`
-2. 工具：实现 `ToolProvider`（或 Agent 内提供 `list_tools()`），经 `tool_registry.register_provider(...)` 注册（生产模式为 ToolProvider 类；`@tool` 装饰器存在但生产零使用）
+2. 工具：实现 `ToolProvider`（或 Agent 内提供 `list_tools()`），经 `tool_registry.register_provider(...)` 注册（生产模式为 ToolProvider 类；`@tool` 装饰器双模式——无 `registry=` 时入模块级 pending 表，由装配根 `bind_pending_tools(registry)` flush；带 `registry=` 时立即注册，仅测试/本地用）
 3. Agent：继承 `BaseAgent`，放 `src/agents/<family>/<name>/` 自包含包；在 `agents.toml` 的 `[agents].enabled` 启用、`src/modules/agents/factory.py` 登记
 
 > **单一事实源**：三范式完整指南（含最小骨架代码、装配路径、生命周期表）见 [组件开发指南](docs/development/component-guide.md)。
@@ -274,4 +274,4 @@ Web Dashboard 两种模式（生产 60214 / 开发 60315）说明见 [快速开�
 
 ---
 
-*最后更新：2026-08-26（渐进式披露重组：压缩 507→约 300 行——手册级内容全部降级为 docs/ 链接，删除 v2 架构章/通信模式/数据类型与命名详表等重复叙事；保留全部硬约束：架构红线、配置 Schema 变更规则、多工作树规程；新增"高频 API 速查"节）*
+*最后更新：2026-08-27（v2.0.5 工具注册路径对齐：高频 API 速查节 `@tool` 装饰器注释改双模式——无 `registry=` 入模块级 pending 表由 `bind_pending_tools` flush，带 `registry=` 立即注册仅测试/本地用；`default_tool_registry` 单例仅测试兼容，生产禁用）*

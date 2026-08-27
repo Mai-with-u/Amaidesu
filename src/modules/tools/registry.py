@@ -43,7 +43,19 @@ _default_registry: Optional["ToolRegistry"] = None
 
 
 def default_tool_registry() -> "ToolRegistry":
-    """获取/创建默认注册器（进程内单例）。"""
+    """获取/创建默认注册器（进程内单例）。
+
+    .. warning::
+        **仅用于测试兼容**——生产代码禁止使用。
+
+    生产路径应：
+    1. 由组合根显式构造 ``ToolRegistry()`` 实例
+    2. 调用 ``bind_core_tools(registry, config)`` 注入 L2 Provider
+    3. 调用 ``bind_pending_tools(registry)`` 刷入 L1 ``@tool`` 装饰的工具
+
+    该单例仅保留以兼容依赖 ``default_tool_registry()`` 的旧测试；
+    ``set_default_registry(None)`` 可用于测试间重置隔离。
+    """
     global _default_registry
     if _default_registry is None:
         _default_registry = ToolRegistry()
@@ -51,7 +63,14 @@ def default_tool_registry() -> "ToolRegistry":
 
 
 def set_default_registry(registry: Optional["ToolRegistry"]) -> None:
-    """设置/清除默认注册器。"""
+    """设置/清除默认注册器。
+
+    .. warning::
+        **仅用于测试兼容**——生产代码禁止使用。
+
+    仅供测试在用例间重置默认注册器以保证隔离；
+    生产路径应在组合根构造专属 registry，不依赖全局单例。
+    """
     global _default_registry
     _default_registry = registry
 

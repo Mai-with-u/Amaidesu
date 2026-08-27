@@ -39,7 +39,6 @@ from src.agents.game.text_adv import (
     TextAdvGameAgent,
     TextAdvGameAgentState,
     TextAdvGameConfig,
-    TextAdvToolProvider,
     build_text_adv_agent,
 )
 from src.agents.game.text_adv.state import TextAdvOption
@@ -506,7 +505,6 @@ async def test_look_at_screen_with_fake_backend_returns_image_block() -> None:
 async def test_stub_content_engine_round_trip() -> None:
     """StubContentEngine：start/send_input/stop/get_state 全部正常。"""
     from src.modules.tools.content_engine import (
-        ContentEngineProvider,
         StubContentEngine,
         ContentInput,
     )
@@ -558,17 +556,30 @@ async def test_agent_manager_lifecycle_for_text_adv() -> None:
     assert agent.state == AgentState.STOPPED
 
 
-async def test_agent_manager_collect_tool_specs_includes_game_tools() -> None:
-    """AgentManager.collect_tool_specs 把 Agent 专属工具聚合。"""
-    manager = AgentManager()
-    build_text_adv_agent(
+async def test_game_tools_audited_when_registered_via_registry() -> None:
+    """AgentManager.audit_tools：Agent 自身把工具注册到 registry 后，audit 不报告缺失。
+
+    反向验证：换空 registry → audit 应报告 game 工具。
+    """
+    registry = ToolRegistry()
+    manager = AgentManager(tool_registry=registry)
+    agent = build_text_adv_agent(
         config=TextAdvGameConfig(),
         agent_manager=manager,
+        content_engine=FakeContentEngine(),
+        tool_registry=registry,
     )
-    pairs = manager.collect_tool_specs()
-    names = {spec.name for spec, _ in pairs}
-    assert "choose_option" in names
-    assert "get_story" in names
+
+    await agent.start()
+    assert registry.has("choose_option")
+    assert registry.has("get_story")
+
+    assert manager.audit_tools(registry) == []
+
+    empty_registry = ToolRegistry()
+    assert sorted(manager.audit_tools(empty_registry)) == ["choose_option", "get_story"]
+
+    await agent.stop()
 
 
 # =============================================================================
@@ -595,12 +606,9 @@ async def test_perception_failure_emits_game_error_event(
     started_agent: Dict[str, object],
 ) -> None:
     """感知失败（FakeScreenCapture 抛异常）→ emit game.error。"""
-    from src.modules.tools.models import ToolInvocation
-
     agent: TextAdvGameAgent = started_agent["agent"]  # type: ignore[assignment]
     event_bus: EventBus = started_agent["event_bus"]  # type: ignore[assignment]
     registry: ToolRegistry = started_agent["registry"]  # type: ignore[assignment]
-    capture: FakeScreenCapture = started_agent["perception_capture"]  # type: ignore[assignment]
 
     # 替换 look_at_screen 工具的 capture 为抛异常的 Fake
     class BoomCapture:

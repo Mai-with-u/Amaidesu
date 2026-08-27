@@ -13,12 +13,11 @@ BaseAgent / AgentManager / AgentControl 单元测试（Wave 3 / §1.49）
 
 from __future__ import annotations
 
-from typing import AsyncGenerator, Iterable, List
+from typing import AsyncGenerator, Iterable
 
 import pytest
 
 from src.modules.agents import (
-    AgentControl,
     AgentManager,
     AgentState,
     BaseAgent,
@@ -301,24 +300,59 @@ async def test_agent_manager_start_all_stop_all(sample_agent: _SampleAgent) -> N
     assert sample_agent.state == AgentState.STOPPED
 
 
-async def test_agent_manager_collect_tool_specs(sample_agent: _SampleAgent) -> None:
-    """collect_tool_specs 把 Agent 工具聚合成 (spec, impl) 对。"""
+async def test_audit_tools_reports_missing_when_impl_absent(
+    sample_agent: _SampleAgent,
+) -> None:
+    """audit_tools：Agent 声明了工具但 registry 未注册 → 报告缺失。"""
     mgr = AgentManager()
     mgr.register(sample_agent)
-    pairs = mgr.collect_tool_specs()
-    assert len(pairs) == 1
-    spec, impl = pairs[0]
-    assert spec.name == "sample_tool"
+    reg = ToolRegistry()  # 空 registry，无任何工具
+    assert mgr.audit_tools(reg) == ["sample_tool"]
 
 
-async def test_agent_manager_register_all_tools(sample_agent: _SampleAgent) -> None:
-    """register_all_tools 把 Agent 工具推进 ToolRegistry。"""
+async def test_audit_tools_empty_when_impl_registered(
+    sample_agent: _SampleAgent,
+) -> None:
+    """audit_tools：Agent 声明的工具已被注册（impl 来自 Agent 自身） → 缺失列表为空。"""
     mgr = AgentManager()
     mgr.register(sample_agent)
     reg = ToolRegistry()
-    registered = mgr.register_all_tools(reg)
-    assert registered == 1
-    assert reg.has("sample_tool")
+
+    # 真实注册：把 sample_agent 声明的 spec + 一个最小实现塞进 registry
+    spec = next(iter(sample_agent.list_tools()))
+
+    async def _impl(invocation: ToolInvocation) -> ToolExecutionResult:
+        return ToolExecutionResult(
+            tool_name="sample_tool",
+            success=True,
+            content="ok",
+        )
+
+    assert reg.register(spec, _impl) is True
+    assert mgr.audit_tools(reg) == []
+
+
+async def test_audit_tools_skips_agents_whose_list_tools_raises(
+    sample_agent: _SampleAgent,
+) -> None:
+    """audit_tools：list_tools 抛异常的 Agent 被跳过，审计不崩。"""
+
+    class _RaisingListTools(BaseAgent):
+        name = "raising_list_tools"
+        description = "raises on list_tools"
+
+        def list_tools(self):
+            raise RuntimeError("list_tools exploded")
+
+    mgr = AgentManager()
+    mgr.register(sample_agent)
+    mgr.register(_RaisingListTools())
+    reg = ToolRegistry()
+
+    # sample_agent 的 sample_tool 仍应被报告为缺失；
+    # raising Agent 不应导致审计崩溃。
+    missing = mgr.audit_tools(reg)
+    assert missing == ["sample_tool"]
 
 
 async def test_agent_manager_unregister_only_when_stopped() -> None:

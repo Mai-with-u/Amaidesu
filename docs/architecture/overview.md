@@ -66,7 +66,7 @@ flowchart TB
     Planner -->|tools.invoke| Mem
     Bus -.->|wildcard| Game
     Game -->|tools.invoke| CE
-    Manager["AgentManager (内置)<br/>register_all_tools"] -.->|注入| Registry
+    Manager["AgentManager (内置)<br/>audit_tools (只读)"] -.->|审计| Registry
     Dashboard["Dashboard (observer)<br/>REST + WS"] -.-> Bus
 ```
 
@@ -147,8 +147,11 @@ sequenceDiagram
     Main->>Int: 4) register_event_interceptors（rate_limit + similar_filter）
     Main->>Rec: 5) EventHistoryRecorder.start
     Main->>Col: 6) CollectorManager + _register_collectors_from_config + start_all
-    Main->>Agt: 7) AgentManager + _register_agents_from_config + start_all
-    Note over Agt: start_all 期间 AgentManager.register_all_tools<br/>把 Agent.list_tools() 聚合到 ToolRegistry
+    Main->>Agt: 7) AgentManager + _register_agents_from_config
+    Main->>Reg: 7a) bind_core_tools(registry, [tools.output.config] slice)（9 个 output 包自注册）
+    Main->>Reg: 7b) bind_pending_tools(registry)（flush L1 @tool pending）
+    Main->>Agt: 7c) start_all（触发各 Agent._register_tools 自注册）
+    Main->>Agt: 7d) audit_tools(registry)（只读审计 + 未实现声明 warning）
     Main->>Log: 8) LogStreamer.start（持久化实时日志）
     Main->>Dash: 9) DashboardServer.start（仅 observer；ImportError 降级 warning）
     Main->>Main: setup_signal_handlers + stop_event.wait
@@ -210,7 +213,7 @@ sequenceDiagram
 | 文件 | 内容 |
 |------|------|
 | `base.py` | `BaseAgent` 协议六面（§1.49）：1.生命周期（start/stop/cleanup + 工厂重建）、2.工具提供（`list_tools()`）、3.事件上报（`emit_event` + `emits_events` 可选声明）、4.状态读写（`_state` + heartbeat）、5.健康（`note_heartbeat/is_alive/dead_threshold_ms`）、6.元数据（`name/description`）。状态机：`CREATED → STARTING → RUNNING → PAUSED → STOPPING → STOPPED → ERRORED`。 |
-| `manager.py` | `AgentManager`：注册 / 启动（LIFO） / 停止 / cleanup / 动态启停（`start_agent`/`stop_agent`/`enable_agent`/`disable_agent`）；`collect_tool_specs()` + `register_all_tools(registry)` 把 Agent 工具聚合到 ToolRegistry |
+| `manager.py` | `AgentManager`：注册 / 启动（LIFO） / 停止 / cleanup / 动态启停（`start_agent`/`stop_agent`/`enable_agent`/`disable_agent`）；`audit_tools(registry) -> list[str]` 启动后只读审计未实现工具声明（不参与注册） |
 | `control.py` | `AgentControl`（直调接口） + `AgentControlProvider`（注册到 ToolRegistry），对外暴露 6 个 builtin 工具：`pause_agent` / `resume_agent` / `shutdown_agent` / `restart_agent` / `list_agents` / `agent_state` |
 | `factory.py` | `SUPPORTED_AGENTS = ("streamer", "game")` + `instantiate_agent(name, config, ...)` 中央化配置名 → 类映射，供组合根与 Dashboard 动态启停共用 |
 
@@ -301,7 +304,7 @@ EventBus 是唯一跨主体通信机制。事件命名采用语义域形式（`r
 v2 不再支持"插件系统"——`src/modules/plugins/` 已移除。新功能通过 **Agent 包内聚**实现：
 
 - **内容特有逻辑全部内聚**到 `src/agents/<family>/<name>/`，框架层（`src/modules/`）**零改动**
-- 例：新增"MC Agent" → 在 `src/agents/game/minecraft/` 建包，内含 `agent.py`（继承 `BaseAgent`）、`engine.py`（实现 `ContentEngine` Protocol）、`state.py` 等；`AgentManager.register_all_tools` 会自动把 `list_tools()` 暴露到全局 ToolRegistry
+- 例：新增"MC Agent" → 在 `src/agents/game/minecraft/` 建包，内含 `agent.py`（继承 `BaseAgent`）、`engine.py`（实现 `ContentEngine` Protocol）、`state.py` 等；Agent 自有工具在 `_register_tools()` 中自己 `registry.register_provider(provider)`；公用 builtin 由 `bind_core_tools` 显式装配；启动结束 `audit_tools` 审计
 - 例：新增"播报 Agent" → 在 `src/agents/announcer/` 建包，自己订阅自己感兴趣的事件，自己实现 `list_tools()`
 - **禁止**为新功能在 `src/modules/` 加新域（除非它真的是跨阶段基础设施）；**禁止**通过 monkey-patching 或 import 副作用往框架注入行为
 
@@ -389,4 +392,4 @@ bili_danmaku_official = { ... }
 
 ---
 
-*最后更新：2026-08-25（v2.0.0 架构对齐：移除旧三阶段叙事，切换为 Agent+Tool+存储+Agenda 架构；启动时序更新为 9 步真实顺序；组件清单按 src/modules/collectors + src/modules/tools/output|perception|content_engine + Agent 框架层/业务层 + AgentControl 重排；工具族按 provider=builtin|game 溯源并总计约 60 个；目录树保留 v2 布局并标注 src/modules/simulator/ 已脱线；新增"已知缺口"小节如实记录 register_*_tools 未自动调用、AudioStreamChannel 组合根悬空、simulator 空壳三处）*
+*最后更新：2026-08-27（v2.0.5 工具注册路径对齐：mermaid 节点 `AgentManager` 改 `audit_tools (只读)`；启动时序在 `start_all` 前补 `bind_core_tools` / `bind_pending_tools` 两步、`start_all` 后补 `audit_tools` 一步；`manager.py` 行删除 `register_all_tools` / `collect_tool_specs` 改为 `audit_tools` 只读审计；MC Agent 示例改为 Agent 子类自注册 + 显式 bind）*

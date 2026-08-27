@@ -349,9 +349,8 @@ class StreamerAgent(BaseAgent):
         """Agent 启动钩子：订阅事件 + 启动后台任务 + 注册工具。"""
         self._running = True
 
-        # 1. 注册自己的工具到 ToolRegistry
-        if self._tool_registry is not None:
-            self._register_tools()
+        # 1. 构造并（若有 registry）注册自己的工具 Provider
+        self._register_tools()
 
         # 2. 订阅 room.message.*（collectors emit 的语义域事件）
         if self._event_bus is not None:
@@ -403,11 +402,34 @@ class StreamerAgent(BaseAgent):
     # ==================================================================
 
     def list_tools(self) -> Iterable[ToolSpec]:
-        """声明本 Agent 暴露的工具。
+        """声明本 Agent 暴露的工具（§1.49 协议面 2）。
 
-        通过 AgentManager.register_all_tools 时聚合到 ToolRegistry。
+        单一事实源：tool spec 完全源自三个工具 Provider（ReplyToolProvider /
+        ProactiveToolProvider / CommandToolProvider）。Provider 在 ``_register_tools``
+        里无条件构造，并经 ``ToolRegistry.register_provider`` 自行发布——本方法只
+        是把这些 Provider 各自 ``list_tools()`` 的返回聚合起来供审计方对账
+        ToolRegistry 是否已注册同名 spec（AgentManager.audit_missing_tools），
+        本方法本身**不读 registry、不写 registry、不调用 Provider.invoke**。
+
+        前置启动窗口兜底：Provider 槽位在 ``__init__`` 里被置 None，直到
+        ``_on_start → _register_tools`` 才会被实例化。若此时审计方已注册 Agent
+        但尚未 ``start()``，三个 Provider 全为 None，必须回退到直接调用
+        ``build_*_tool_spec`` 工厂函数构造 spec——工厂函数与 Provider 路径走的是
+        同一套 spec 定义，无事实源漂移；该兜底仅为"审计先行"语义保留。
         """
-        # Agent 本身只声明自己的 spec 集合；实际 invoke 由 Provider 处理
+        if any(p is not None for p in (self._reply_provider, self._proactive_provider, self._command_provider)):
+            specs: List[ToolSpec] = []
+            for provider in (
+                self._reply_provider,
+                self._proactive_provider,
+                self._command_provider,
+            ):
+                if provider is not None:
+                    specs.extend(provider.list_tools())
+            return specs
+
+        # 预启动窗口：Provider 尚未构造（Agent 已 register 但未 start），
+        # 直接调用工厂函数构造三个 spec（与 Provider 路径等价）。
         from .reply_tool import build_reply_tool_spec
         from .proactive_tool import build_proactive_tool_spec
         from .command_tool import build_command_tool_spec
@@ -419,18 +441,20 @@ class StreamerAgent(BaseAgent):
         ]
 
     def _register_tools(self) -> None:
-        """注册 reply / proactive / command 三个工具 Provider 到 ToolRegistry。"""
-        if self._tool_registry is None:
-            return
+        """构造三个工具 Provider 并注册到 ToolRegistry（若存在）。
 
-        # reply tool
+        Provider 构造与 registry 解耦：``_make_two_stage_decision`` 直接调用
+        ``_reply_provider.invoke``（Agent 决策循环内脏路径），不依赖外部
+        ToolRegistry 是否注入；registry 存在时才把 Provider 挂上去供外部消费。
+        """
+
+        # reply tool（无条件构造——决策循环直连调用依赖）
         self._reply_provider = ReplyToolProvider(
             replyer=self._replyer,
             persona=self._persona_provider or {},
             history_provider=(self._read_history_sync if self._context is not None else None),
             agenda_text_provider=self._build_agenda_text_sync,
         )
-        self._tool_registry.register_provider(self._reply_provider)
 
         # proactive tool
         self._proactive_provider = ProactiveToolProvider(
@@ -440,13 +464,18 @@ class StreamerAgent(BaseAgent):
             agenda_pending=lambda: self._agenda_proactive_pending,
             agenda_ready=self._is_agenda_active,
         )
-        self._tool_registry.register_provider(self._proactive_provider)
 
         # command tool
         self._command_provider = CommandToolProvider(
             command_prefix=self.typed_config.command_prefix,
             command_mappings=self.typed_config.command_mappings,
         )
+
+        if self._tool_registry is None:
+            return
+
+        self._tool_registry.register_provider(self._reply_provider)
+        self._tool_registry.register_provider(self._proactive_provider)
         self._tool_registry.register_provider(self._command_provider)
 
         self._logger.info("StreamerAgent 3 个工具已注册：reply / should_speak_proactively / parse_command")

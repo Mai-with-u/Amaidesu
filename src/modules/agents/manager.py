@@ -3,20 +3,26 @@ AgentManager —— 框架 Agent 统一管理（Wave 3 / §1.49）
 
 - 注册 Agent（按名；重复 → 跳过后注册）
 - 统一启动 / 停止 / cleanup
-- 暴露工具：把每个 Agent list_tools() 收集后委托给 ToolRegistry
 - 心跳 + 监控 + 可重建性（崩溃重启前提）
+
+工具聚合责任边界：
+- Agent 子类在 ``_on_start`` / ``_register_tools`` 内部构造 ToolProvider 并调用
+  ``registry.register_provider(...)``（所有权内聚到 Agent 包内）。
+- AgentManager 仅提供 ``audit_tools(registry)`` 纯只读审计：列出 Agent 已声明
+  但 registry 未注册的工具名，便于组合根在启动后日志告警。
+- **不再**提供 ``register_all_tools`` / ``collect_tool_specs`` —— 框架侧合成占位
+  实现桥接会污染真实注册路径，违反 Agent 主体性。
 """
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
-from src.modules.tools.models import ToolSpec
 from src.modules.tools.registry import ToolRegistry
 
 logger = get_logger("AgentManager")
@@ -217,61 +223,57 @@ class AgentManager:
             except Exception as exc:  # noqa: BLE001 - 边界
                 logger.error(f"Agent '{name}' cleanup 失败: {exc}", exc_info=True)
 
-    # -------------------- 工具聚合 --------------------
+    # -------------------- 工具审计 --------------------
 
-    def collect_tool_specs(self) -> List[Tuple[ToolSpec, Callable]]:
-        """从所有 Agent 收集 (ToolSpec, impl) 对。
+    def audit_tools(self, registry: ToolRegistry) -> List[str]:
+        """审计：列出 Agent 已声明但 registry 未注册的工具名（纯只读）。
 
-        与 ToolRegistry 集成由调用方负责：
-        ``for spec, impl in manager.collect_tool_specs(): registry.register(spec, impl)``
+        遍历所有已注册 Agent 的 ``list_tools()`` 声明；对每个 spec name：
+        - 若 ``registry.has(name)`` 为 False，加入缺失列表。
+        - 若同名 spec 被 2+ 个 Agent 声明，记 warning，**不**在缺失列表中重复
+          （重复声明对"是否已注册"无影响）。
+
+        Args:
+            registry: 工具注册中心（实际项目里的 ``ToolRegistry`` 实例）。
+
+        Returns:
+            排序后的缺失 spec name 列表（每个 name 至多出现一次）。
+
+        防御：
+        - 若 ``agent.list_tools()`` 抛异常 → log warning + skip 该 Agent（不污染审计）。
+        - 若 ``list_tools()`` 返回 ``None`` → 跳过该 Agent（不计入）。
         """
-        pairs: List[Tuple[ToolSpec, Callable]] = []
-        for reg in self._agents.values():
-            spec_iter = reg.agent.list_tools()
+        missing: List[str] = []
+        # 跨 Agent 的同名声明追踪：name -> 首次声明的 Agent 注册名
+        declared_by: Dict[str, str] = {}
+
+        for agent_name, reg in self._agents.items():
+            try:
+                spec_iter = reg.agent.list_tools()
+            except Exception as exc:  # noqa: BLE001 - 审计边界，失败不中断
+                logger.warning(
+                    f"Agent '{agent_name}' 的 list_tools() 抛异常，已跳过审计: {exc}",
+                    exc_info=True,
+                )
+                continue
+
             if spec_iter is None:
                 continue
+
             for spec in spec_iter:
-                # 这里只暴露 spec；impl 通常通过一个桥接函数（基于 Agent 名）
-                # 因为 ToolInvocation 直接拿到 ToolSpec 字段做参数解析
-                pairs.append((spec, _make_agent_tool_bridge(reg.agent, spec.name)))
-        return pairs
+                name = spec.name
+                first_agent = declared_by.get(name)
+                if first_agent is not None:
+                    logger.warning(
+                        f"工具 '{name}' 被多个 Agent 声明：'{first_agent}' 与 "
+                        f"'{agent_name}'；审计按首次声明记，重复声明不再计入缺失列表"
+                    )
+                    continue
+                declared_by[name] = agent_name
+                if not registry.has(name):
+                    missing.append(name)
 
-    def register_all_tools(self, registry: Optional[ToolRegistry] = None) -> int:
-        """把 Agent 工具全部注册到 ToolRegistry（默认用构造时注入的）。"""
-        target = registry if registry is not None else self._tool_registry
-        if target is None:
-            return 0
-        count = 0
-        pairs = self.collect_tool_specs()
-        for spec, impl in pairs:
-            ok = target.register(spec, impl)
-            if ok:
-                count += 1
-        return count
-
-
-# -------------------- 桥接：Agent → Tool --------------------
-
-
-def _make_agent_tool_bridge(agent: BaseAgent, tool_name: str):
-    """为 Agent 上的某个工具构造 impl 桥接（base agent 自己处理参数）。"""
-
-    # 简单实现：实际 W4 业务层会用更细的 dispatch（每个 Agent 的 list_tools
-    # 返回一组 ToolSpec，spec.parameters_schema + Agent 上 dispatch）
-    # 此处基类行为：直接返回失败 ToolExecutionResult 作为占位
-    async def _bridge(invocation):  # type: ignore[no-untyped-def]
-        from src.modules.tools.models import ToolExecutionResult
-
-        return ToolExecutionResult(
-            tool_name=tool_name,
-            success=False,
-            error_message=(
-                f"Agent '{agent.name}' 上的工具 '{tool_name}' 未在具体子类中实现 dispatch"
-                f"；请在 Agent 子类覆写 list_tools 后提供实现"
-            ),
-        )
-
-    return _bridge
+        return sorted(missing)
 
 
 __all__ = ["AgentManager", "AgentRegistration"]

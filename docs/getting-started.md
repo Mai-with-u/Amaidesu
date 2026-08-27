@@ -417,7 +417,9 @@ vite_dev_port = 60315                               # Vite 开发服务器端口
 [Info] CollectorManager 已启动（N 个 Collector）
 [Info] 初始化 AgentManager（src/agents/）...
 [Info] AgentManager 已启动（N 个 Agent）
-[Info] ToolRegistry 已通过 AgentManager.register_all_tools 完成注入
+[Info] ToolRegistry 已创建（AgentManager 构造时注入；9 个 output 包经 bind_core_tools 注册 M 个工具）
+[Info] bind_pending_tools 完成（flush L1 @tool pending N 个）
+[Info] AgentManager.audit_tools 完成；未实现声明：T（0 即通过）
 [Info] 核心事件注册完成，共 N 个事件
 [Info] 应用程序正在运行。按 Ctrl+C 退出。
 ```
@@ -445,4 +447,4 @@ vite_dev_port = 60315                               # Vite 开发服务器端口
 - **控制台交互**已可用；弹幕采集、屏幕识别、语音转写需对应第三方凭据（id_code / appid / VLM API Key 等）。
 - 完整字段定义在 `src/modules/config/*_schemas.py`；本指南只覆盖"首次跑通"的最小集。
 
-*最后更新：2026-08-25（v2.0.0 七文件配置对齐：`config/` 改 core / model / agents / tools / memory / storage / background 七文件，旧 input/decision/output 三文件 + `[collectors]/[deciders]/[handlers]` 段自动迁移并备份至 `config/old/`；启用列表移至 `agents.toml[agents]` 与 `tools.toml[tools]`；事件拦截器从旧 pipeline 收归 `core.toml[interceptors.*]`）*
+*最后更新：2026-08-27（启动日志对齐 v2.0.5 工具注册路径：移除 `AgentManager.register_all_tools` 注入日志，改为 ToolRegistry 构造 + `bind_core_tools`（9 个 output 包）+ `bind_pending_tools`（flush L1 `@tool`）+ `audit_tools` 四步只读审计序列）*

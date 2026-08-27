@@ -233,16 +233,22 @@ async def test_to_llm_definitions_shape(registry: ToolRegistry) -> None:
 # =============================================================================
 
 
-def test_tool_decorator_registers_in_default_registry():
-    """@tool 装饰器将工具注册进默认 registry（清理后隔离）。"""
+def test_tool_decorator_pending_mode_does_not_touch_default_registry():
+    """@tool 装饰器无 ``registry=`` 时只入 pending 表，不污染默认 registry。
+
+    验证 pending 模式：装饰器**不**触发 ``default_tool_registry()``。
+    """
+    from src.modules.tools.decorator import _clear_pending, _pending_count
     from src.modules.tools.registry import (
         default_tool_registry,
         set_default_registry,
     )
 
-    # 隔离默认 registry
+    _clear_pending()
+    # 隔离默认 registry：用 sentinel 检测是否被污染
     saved = default_tool_registry()
-    set_default_registry(ToolRegistry())
+    sentinel = ToolRegistry()
+    set_default_registry(sentinel)
     try:
         @tool(description="hi")
         async def hi(invocation: ToolInvocation) -> ToolExecutionResult:
@@ -251,10 +257,26 @@ def test_tool_decorator_registers_in_default_registry():
         spec = hi.tool_spec  # type: ignore[attr-defined]
         assert spec.name == "hi"
         assert spec.description == "hi"
-        reg = default_tool_registry()
-        assert reg.has("hi")
+        # pending 模式不应触碰默认 registry
+        assert _pending_count() == 1
+        assert sentinel.has("hi") is False, "pending 模式不应写入默认单例"
     finally:
         set_default_registry(saved)
+        _clear_pending()
+
+
+def test_tool_decorator_explicit_registry_mode():
+    """@tool 装饰器传 ``registry=`` 时立即注册到该 registry（测试兼容路径）。"""
+    reg = ToolRegistry()
+
+    @tool(description="hi", registry=reg)
+    async def hi(invocation: ToolInvocation) -> ToolExecutionResult:
+        return ToolExecutionResult(tool_name="hi", success=True, content="hello")
+
+    spec = hi.tool_spec  # type: ignore[attr-defined]
+    assert spec.name == "hi"
+    assert spec.description == "hi"
+    assert reg.has("hi")
 
 
 # =============================================================================

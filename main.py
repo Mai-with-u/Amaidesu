@@ -296,7 +296,7 @@ async def create_app_components(
     4. EventBus + 事件拦截器（§1.46.1）
     5. CollectorManager（采集器：bilibili/console/mock/screen）
     6. AgentManager（Agent 子系统：StreamerAgent 等）
-    7. ToolRegistry（通过 AgentManager.register_all_tools 注入到各 Agent）
+    7. ToolRegistry（bind_core_tools/bind_pending_tools 显式接线 + Agent 自注册，audit_tools 审计）
     8. DashboardServer（WebUI observer）
 
     Returns:
@@ -355,8 +355,12 @@ async def create_app_components(
     if agents_config:
         logger.info("初始化 AgentManager（src/agents/）...")
         from src.modules.agents.manager import AgentManager
+        from src.modules.tools import ToolRegistry
+        from src.modules.tools.bootstrap import bind_core_tools
+        from src.modules.tools.decorator import bind_pending_tools
 
-        agent_manager = AgentManager()
+        tool_registry = ToolRegistry()
+        agent_manager = AgentManager(tool_registry=tool_registry)
         await _register_agents_from_config(
             agent_manager,
             agents_config,
@@ -364,12 +368,44 @@ async def create_app_components(
             llm_service,
             event_bus,
             context_service,
+            tool_registry,
         )
+
+        # --- 6b. 核心工具包（output/* 的 L2 Provider） + L1 @tool pending 刷入 ---
+        # 在 agent_manager.start_all() 之前完成 → StreamerAgent._on_start()
+        # 调用 _register_tools() 时 registry 已就绪，可与 L2/L1 工具同台。
+        # 配置切片取法与 step 5 的 tools.perception.config 一致：先取
+        # [tools.output] 子段（ToolPackMeta），再取其 .config 字典作为
+        # bind_core_tools 入参；缺失则降级为 {}（多数包将走 schema 默认）。
+        tools_output_pack = (config.get("tools") or {}).get("output", {}) if isinstance(config, dict) else {}
+        output_tools_config = tools_output_pack.get("config", {}) if isinstance(tools_output_pack, dict) else {}
+        if not isinstance(output_tools_config, dict):
+            output_tools_config = {}
+        core_report = bind_core_tools(tool_registry, output_tools_config)
+        core_succeeded = sum(1 for c in core_report.values() if c > 0)
+        core_failed = [name for name, count in core_report.items() if count == 0]
+        logger.info(
+            f"核心工具包已绑定: 成功 {core_succeeded}/{len(core_report)}"
+            f"，合计新增 {sum(core_report.values())} 个工具" + (f"，失败包: {core_failed}" if core_failed else "")
+        )
+        pending_count = bind_pending_tools(tool_registry)
+        if pending_count > 0:
+            logger.info(f"@tool pending 已刷入 {pending_count} 个工具")
+        else:
+            logger.debug("@tool pending 表为空（L1 装饰器路径今日无产出）")
+
         await agent_manager.start_all()
         logger.info(f"AgentManager 已启动（{len(agent_manager)} 个 Agent）")
 
-    # --- 7. ToolRegistry（AgentManager 启动时已通过 register_all_tools 自动注入；保留此句为文档占位）---
-    logger.info("ToolRegistry 已通过 AgentManager.register_all_tools 完成注入")
+    # --- 7. ToolRegistry 工具审计：所有 Agent 声明的工具是否都已注册实现 ---
+    if agent_manager is not None and agent_manager._tool_registry is not None:
+        registry = agent_manager._tool_registry
+        logger.info(f"ToolRegistry 就绪（{len(registry)} 个工具已注册）")
+        missing = agent_manager.audit_tools(registry)
+        if missing:
+            logger.warning(f"审计发现 {len(missing)} 个已声明但缺失实现的工具: {missing}")
+        else:
+            logger.info("工具审计通过：所有 Agent 声明的工具均已在 ToolRegistry 中找到实现")
 
     # --- 8. DashboardServer ---
     dashboard_server: Optional["DashboardServer"] = None
@@ -467,6 +503,7 @@ async def _register_agents_from_config(
     llm_service,
     event_bus,
     context_service,
+    tool_registry=None,
 ):
     """根据 [agents] 段注册 Agent 实例到 AgentManager。
 
@@ -497,6 +534,7 @@ async def _register_agents_from_config(
                 prompt_manager=get_prompt_manager(),
                 context_service=context_service,
                 event_bus=event_bus,
+                tool_registry=tool_registry,
             )
             manager.register(agent, spec_provider="builtin")
             continue
