@@ -96,6 +96,28 @@ class ToolPackMeta(BaseConfig):
 # ---------------------------------------------------------------------------
 
 
+class LookAtScreenToolConfig(BaseConfig):
+    """[tools.look_at_screen] 屏幕快照同步工具配置。
+
+    ``look_at_screen`` 是 L2 DI 工具（快照型→被调才看）：组合根在
+    ``enabled=true`` 时注入 Pillow 截图后端并注册到 ToolRegistry。
+    与 ``[tools.perception]``（采集器包配置，流型事件源）**无关**——
+    命名分属两个域，勿混。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(
+        default=True,
+        description="是否在组合根注册 look_at_screen 工具（游戏 Agent 感知依赖它）",
+    )
+    default_max_width: int = Field(
+        default=1280,
+        ge=0,
+        description="默认图像缩放最大宽度（像素，0=不缩放；省 token 用）",
+    )
+
+
 class ToolsConfig(BaseConfig):
     """[tools] 段聚合
 
@@ -146,6 +168,11 @@ class ToolsConfig(BaseConfig):
     external: Optional[ToolPackMeta] = Field(
         default=None,
         description="外部工具源（MCP Provider，配置在 core.toml [mcp] 段）",
+        json_schema_extra={"x-ui-type": "object"},
+    )
+    look_at_screen: Optional[LookAtScreenToolConfig] = Field(
+        default_factory=LookAtScreenToolConfig,
+        description="屏幕快照同步工具（L2 DI，被调才看；enabled=true 时组合根注入 Pillow 后端）",
         json_schema_extra={"x-ui-type": "object"},
     )
 

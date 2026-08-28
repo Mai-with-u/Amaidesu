@@ -71,7 +71,9 @@ _PHASE_TO_REGISTRY: dict[tuple[str, str], str] = {
 # input_schemas 移除 text_adv_game → 升 patch 2.0.1。
 # v2.0.6：B2 人设供应链修复——PersonaConfig 新增 behavior_style（Planner 决策侧注入），
 # 装配根 main._register_agents_from_config 接通 persona 段 → StreamerAgent.persona_provider。
-CONFIG_VERSION = "2.0.6"
+# v2.0.7：W7 前置——tools_schemas 新增 [tools.look_at_screen]（屏幕快照同步工具开关），
+# 组合根 main 接线 Pillow 截图后端 + register_provider。
+CONFIG_VERSION = "2.0.7"
 
 # v2.0.0 配置文件清单（按域划分）：core / model / agents / tools / memory / storage / background
 _CONFIG_FILES = [

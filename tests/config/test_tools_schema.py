@@ -18,6 +18,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.modules.config.tools_schemas import (
+    LookAtScreenToolConfig,
     ToolPackMeta,
     ToolPackType,
     ToolsConfig,
@@ -104,3 +105,31 @@ class TestToolPackTypeLiteral:
         values = get_args(ToolPackType)
         assert "perception" in values
         assert "output" in values
+
+
+class TestLookAtScreenToolConfig:
+    """[tools.look_at_screen] 屏幕快照工具段（v2.0.7 W7 前置）"""
+
+    def test_default_construction(self):
+        cfg = LookAtScreenToolConfig()
+        assert cfg.enabled is True
+        assert cfg.default_max_width == 1280
+
+    def test_tools_config_default_not_none(self):
+        cfg = ToolsConfig()
+        assert isinstance(cfg.look_at_screen, LookAtScreenToolConfig)
+
+    def test_extra_forbid(self):
+        with pytest.raises(ValidationError):
+            LookAtScreenToolConfig(unknown_field=1)
+
+    def test_round_trip(self):
+        cfg = ToolsConfig()
+        dumped = cfg.model_dump()
+        cfg2 = ToolsConfig.model_validate(dumped)
+        assert cfg2.look_at_screen == cfg.look_at_screen
+
+    def test_enabled_true_accepted(self):
+        cfg = LookAtScreenToolConfig(enabled=True, default_max_width=0)
+        assert cfg.enabled is True
+        assert cfg.default_max_width == 0

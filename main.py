@@ -400,6 +400,28 @@ async def create_app_components(
         memory_tool_count = bind_memory_tools(tool_registry, memory)
         logger.info(f"query_memory 记忆检索工具已注册（新增 {memory_tool_count} 个）")
 
+        # --- 6d. 屏幕快照工具 look_at_screen（L2 DI：组合根注入 Pillow 截图后端）---
+        # bootstrap 明文不接管 DI 工具（见 bootstrap.py 注释），由组合根按开关装配
+        las_cfg = (config.get("tools") or {}).get("look_at_screen", {}) if isinstance(config, dict) else {}
+        if isinstance(las_cfg, dict) and las_cfg.get("enabled", True):
+            from src.modules.tools.perception.look_at_screen import LookAtScreenProvider
+            from src.modules.tools.perception.pil_capture import PillowImageGrabCapture
+
+            tool_registry.register_provider(
+                LookAtScreenProvider(
+                    screen_capture=PillowImageGrabCapture(),
+                    default_max_width=int(las_cfg.get("default_max_width", 1280) or 0),
+                )
+            )
+            logger.info("look_at_screen 已注册（Pillow 截图后端）")
+
+        agents_enabled = ((config.get("agents") or {}).get("enabled") or []) if isinstance(config, dict) else []
+        if {"game", "text_adv_game"} & set(agents_enabled) and "look_at_screen" not in tool_registry:
+            logger.warning(
+                "游戏 Agent 已启用但 look_at_screen 未注册"
+                "（[tools.look_at_screen].enabled=false？）——感知将走空快照降级路径"
+            )
+
         await agent_manager.start_all()
         logger.info(f"AgentManager 已启动（{len(agent_manager)} 个 Agent）")
 
