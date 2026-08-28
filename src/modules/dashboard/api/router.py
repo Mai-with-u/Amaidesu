@@ -15,14 +15,22 @@ from src.modules.dashboard.api import (
     events,
     llm,
     messages,
+    mock,
+    simulator,
     system,
     traces,
 )
 
 
 def create_app() -> FastAPI:
-    """创建 FastAPI 应用（v2 路由列表：已删除 maibot / outline / proactive / simulator 子路由，
-    模拟直播能力由 modules/collectors/mock 承载，WebUI 管理页后续波次重建）。"""
+    """创建 FastAPI 应用。
+
+    v2 路由列表（Wave N / ADR-006 follow-up 后续波次）：
+    - 删除 maibot / outline / proactive 旧阶段路由；
+    - 模拟直播能力由 ``SimulatorService``（LLM 生成式模拟）+ ``MockCollector``
+      （确定性 JSONL 回放）双承载，分别挂载在 ``/api/v1/simulator/*`` 与
+      ``/api/v1/mock/*`` 控制面。
+    """
     app = FastAPI(
         title="Amaidesu Dashboard API",
         description="WebUI Dashboard REST API",
@@ -39,6 +47,10 @@ def create_app() -> FastAPI:
     app.include_router(capabilities.router, prefix="/api/v1", tags=["Capabilities"])
     app.include_router(events.router, prefix="/api/v1", tags=["Events"])
     app.include_router(traces.router, prefix="/api/v1", tags=["Traces"])
+
+    # 模拟器与 Mock 采集器控制面（ADR-006 follow-up）
+    app.include_router(simulator.router, prefix="/api/v1/simulator", tags=["Simulator"])
+    app.include_router(mock.router, prefix="/api/v1/mock", tags=["MockCollector"])
 
     return app
 

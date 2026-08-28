@@ -1,400 +1,286 @@
 <template>
-  <div class="mock-control-panel">
+  <div class="simulator-page">
     <header class="page-header">
       <div class="header-left">
-        <h1 class="page-title">Mock 采集器控制面</h1>
+        <h1 class="page-title">LLM 模拟器（开发基础设施）</h1>
         <p class="page-subtitle">
-          v2 模拟直播间由 <code>modules/collectors/mock/</code> 承载；本面板用于启停与观测
+          ADR-006：<code>SimulatorService</code> 是生成式虚拟直播间，仅在
+          <code>[simulator].enabled = true</code> 时组合根装配。确定性 JSONL 回放由
+          <code>MockCollector</code> 承载，控制面归位到「组件 → 采集器」。
         </p>
       </div>
       <div class="header-actions">
         <el-button
+          v-if="status.enabled && status.is_available"
           :type="status.is_running ? 'danger' : 'success'"
-          :loading="toggling"
-          @click="toggleCollector"
+          :loading="toggling === 'toggle'"
+          @click="toggleSimulator"
         >
-          {{ status.is_running ? '停止 Mock' : '启动 Mock' }}
+          {{ status.is_running ? '停止模拟器' : '启动模拟器' }}
         </el-button>
-        <el-tag v-if="status.is_running" type="success" size="large" effect="dark"> 运行中 </el-tag>
-        <el-tag
-          v-else-if="!status.is_collector_available"
-          type="warning"
-          size="large"
-          effect="plain"
-        >
-          未接入
+        <el-tag v-if="!status.enabled" type="info" size="large" effect="plain"> 未启用 </el-tag>
+        <el-tag v-else-if="!status.is_available" type="warning" size="large" effect="plain">
+          未注入
         </el-tag>
-        <el-tag v-else type="info" size="large" effect="plain">已停止</el-tag>
+        <el-tag v-else-if="status.is_running" type="success" size="large" effect="dark">
+          运行中
+        </el-tag>
+        <el-tag v-else type="warning" size="large" effect="plain">已停止</el-tag>
       </div>
     </header>
 
     <div class="content">
+      <!-- ============================================================ -->
+      <!-- 空态：enabled=false 引导去 Settings                          -->
+      <!-- ============================================================ -->
       <el-alert
-        v-if="!status.is_collector_available"
+        v-if="!status.enabled"
         type="info"
-        title="Mock 控制面端点尚未挂载"
-        :description="'W8 证据：后端 /api/v1/simulator/* 已删除，/api/v1/mock/* 待补齐。当前面板降级为只读监控占位。'"
+        title="模拟器当前未启用"
+        :description="'请在 config/core.toml 的 [simulator] 段将 enabled 设为 true 并重启应用。运行时切换开关需要重启。'"
         show-icon
         :closable="false"
       />
 
-      <el-row :gutter="16" style="margin-top: 16px">
+      <el-alert
+        v-else-if="!status.is_available"
+        type="warning"
+        title="配置启用但服务未注入"
+        :description="'通常因为 LLMManager 缺失（如 --dry 模式），或组合根跳过 [simulator] 装配。请检查 config/core.toml 的 [simulator] 与 [llm_providers] 段。'"
+        show-icon
+        :closable="false"
+      />
+
+      <!-- ============================================================ -->
+      <!-- 摘要行：3 个 stat chip                                       -->
+      <!-- ============================================================ -->
+      <el-row v-if="status.is_available" :gutter="16" style="margin-top: 16px">
         <el-col :span="8">
           <div class="stat-card">
-            <div class="stat-value">{{ stats.total_messages }}</div>
-            <div class="stat-label">消息总数</div>
+            <div class="stat-value">{{ status.enabled ? '已启用' : '已禁用' }}</div>
+            <div class="stat-label">[simulator].enabled</div>
           </div>
         </el-col>
         <el-col :span="8">
           <div class="stat-card">
-            <div class="stat-value">{{ stats.simulated_count }}</div>
-            <div class="stat-label">模拟消息（v2 独立计数）</div>
+            <div :class="['stat-value', status.is_running ? 'is-on' : 'is-off']">
+              {{ status.is_running ? '是' : '否' }}
+            </div>
+            <div class="stat-label">运行中</div>
           </div>
         </el-col>
         <el-col :span="8">
           <div class="stat-card">
-            <div class="stat-value">{{ personas.length }}</div>
-            <div class="stat-label">常驻人设</div>
+            <div class="stat-value mono">{{ llmLabel }}</div>
+            <div class="stat-label">LLM client</div>
           </div>
         </el-col>
       </el-row>
 
-      <el-row :gutter="16" style="margin-top: 16px">
+      <el-row v-if="status.is_available" :gutter="16" style="margin-top: 16px">
         <el-col :span="12">
           <el-card shadow="never">
             <template #header>
-              <span>运行时参数</span>
+              <span>关键配置（只读）</span>
             </template>
-            <el-form label-width="160px" size="small">
-              <el-form-item label="节奏模式">
-                <el-radio-group v-model="params.cadence_mode">
-                  <el-radio value="uniform">均匀随机</el-radio>
-                  <el-radio value="fixed">固定间隔</el-radio>
-                  <el-radio value="auto">自适应突发</el-radio>
-                </el-radio-group>
-              </el-form-item>
-              <el-form-item label="消息频率 (条/分)">
-                <el-slider
-                  v-model="params.base_rate_per_minute"
-                  :min="0.5"
-                  :max="30"
-                  :step="0.5"
-                  show-input
-                />
-              </el-form-item>
-              <el-form-item label="突发倍率">
-                <el-slider
-                  v-model="params.burst_multiplier"
-                  :min="1"
-                  :max="10"
-                  :step="0.5"
-                  show-input
-                />
-              </el-form-item>
-              <el-form-item label="礼物概率">
-                <el-slider
-                  v-model="params.gift_probability"
-                  :min="0"
-                  :max="0.5"
-                  :step="0.01"
-                  show-input
-                />
-              </el-form-item>
-              <el-form-item>
-                <el-button
-                  type="primary"
-                  size="small"
-                  :disabled="!status.is_collector_available"
-                  @click="updateParams"
-                >
-                  更新参数
-                </el-button>
-              </el-form-item>
-            </el-form>
-          </el-card>
-
-          <el-card shadow="never" style="margin-top: 16px">
-            <template #header>
-              <span>手动触发</span>
-            </template>
-            <el-space wrap>
-              <el-button
-                type="warning"
-                :disabled="!status.is_collector_available"
-                @click="triggerGiftRain"
-              >
-                礼物雨 (30s)
-              </el-button>
-              <el-input
-                v-model="injectTopic"
-                placeholder="输入话题"
-                size="small"
-                style="width: 200px"
-                :disabled="!status.is_collector_available"
-              />
-              <el-button
-                type="primary"
-                :disabled="!status.is_collector_available"
-                @click="triggerTopicInjection"
-              >
-                注入话题
-              </el-button>
-              <el-button :disabled="!status.is_collector_available" @click="resetBudget">
-                重置 Token
-              </el-button>
-            </el-space>
+            <el-descriptions :column="1" size="small" border>
+              <el-descriptions-item label="基础消息率">
+                {{ formatNumber(status.config.base_rate_per_minute) }} 条/分钟
+              </el-descriptions-item>
+              <el-descriptions-item label="节奏模式">
+                {{ status.config.cadence_mode || 'uniform' }}
+              </el-descriptions-item>
+              <el-descriptions-item label="礼物概率">
+                {{ formatPercent(status.config.gift_probability) }}
+              </el-descriptions-item>
+              <el-descriptions-item label="SC 概率">
+                {{ formatPercent(status.config.sc_probability) }}
+              </el-descriptions-item>
+              <el-descriptions-item label="LLM client">
+                {{ status.config.llm_client_type || 'llm_fast' }}
+              </el-descriptions-item>
+              <el-descriptions-item label="LLM 温度">
+                {{ formatNumber(status.config.llm_temperature) }}
+              </el-descriptions-item>
+              <el-descriptions-item label="Token 预算">
+                {{ formatNumber(status.config.token_budget_per_hour) }} / 小时
+              </el-descriptions-item>
+              <el-descriptions-item label="最大并发">
+                {{ status.config.max_concurrent_llm ?? '—' }}
+              </el-descriptions-item>
+              <el-descriptions-item label="生成语言">
+                {{ status.config.language || 'zh' }}
+              </el-descriptions-item>
+              <el-descriptions-item v-if="status.config.fallback_session_id" label="Session">
+                {{ status.config.fallback_session_id }}
+              </el-descriptions-item>
+            </el-descriptions>
+            <p class="hint">
+              修改以上任一字段请编辑
+              <code>config/core.toml</code> 的
+              <code>[simulator]</code> 段并重启应用（运行时不支持热改）。
+            </p>
           </el-card>
         </el-col>
-
         <el-col :span="12">
           <el-card shadow="never">
             <template #header>
-              <span>simulated 标记说明（v2 数据溯源）</span>
+              <span>如何观测模拟消息</span>
             </template>
             <div class="explain-block">
               <p>
-                v2 后端会在 <code>room.message.*</code> 事件的 payload 中标记
-                <code>simulated: true</code>； 消费方（viewers / topics /
-                画像统计）查询会主动排除模拟数据（迁移文档 §1.6 定案）。
+                模拟器生成的消息以 <code>room.message.*</code> 事件推送到 EventBus，payload 携带
+                <code>simulated: true</code>
+                数据溯源标记；统计查询会主动排除模拟数据（迁移文档 §1.6）。
               </p>
               <p>
-                模拟观众从来不是"观众"，只是测试输入；统计中即使长期重复运行、没有模拟运行记录也不计，
-                除非用户显式要求查看含模拟数据的统计。
+                可在「直播间观察」页看到 <code>[模拟]</code>
+                角标的消息；亦可在 EventLog 页按
+                <code>room.message.danmaku</code> 过滤，配合关注 payload 的
+                <code>user.name</code> 是否为常见模拟昵称。
               </p>
-              <p class="hint">
-                当前前端 UI 收到 <code>room.message.*</code> 事件时会在卡片上加
-                <code>[模拟]</code> 角标， 不污染真实弹幕链路（LiveObserver 已支持 v2 payload）。
+              <p>
+                预算耗尽（<code>token_budget_per_hour</code>）时，模拟器进入 5s
+                等待恢复，期间不会产生新消息但仍响应启停信号。
               </p>
             </div>
           </el-card>
         </el-col>
       </el-row>
 
-      <el-card shadow="never" style="margin-top: 16px">
+      <el-card v-if="status.is_available" shadow="never" style="margin-top: 16px">
         <template #header>
           <div class="card-header-row">
-            <span>常驻人设（{{ personas.length }}）</span>
-            <div class="card-header-actions">
-              <el-input-number
-                v-model="generateCount"
-                :min="1"
-                :max="20"
-                size="small"
-                controls-position="right"
-                style="width: 90px"
-              />
-              <el-button
-                type="primary"
-                size="small"
-                :loading="generating"
-                :disabled="!status.is_collector_available"
-                @click="generatePersonas"
-              >
-                生成人设
-              </el-button>
-            </div>
+            <span>确定性 JSONL 回放（MockCollector）</span>
+            <el-tag size="small" type="info" effect="plain">ADR-006</el-tag>
           </div>
         </template>
-        <el-table :data="personas" size="small" stripe max-height="300">
-          <el-table-column prop="user_nickname" label="昵称" width="140" />
-          <el-table-column prop="role" label="角色" width="80">
-            <template #default="{ row }">
-              <el-tag :type="roleTagType(row.role)" size="small">{{ row.role }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="fans_medal_level" label="粉丝牌" width="80" align="right" />
-          <el-table-column prop="guard_level" label="大航海" width="80" align="right" />
-          <el-table-column prop="messages_generated" label="发言数" width="80" align="right" />
-          <el-table-column label="操作" width="140" fixed="right">
-            <template #default>
-              <el-button link type="primary" size="small">编辑</el-button>
-              <el-button link type="danger" size="small">删除</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-        <el-empty v-if="personas.length === 0" description="暂无常驻人设" :image-size="80" />
+        <div class="explain-block">
+          <p>
+            <strong>MockCollector</strong>（采集器名 <code>mock</code>）只承担确定 性 JSONL
+            回放，发出的消息同样携带 <code>simulated: true</code>。需要在
+            <code>config/tools.toml</code> 的 <code>[tools.perception.config].enabled</code> 中添加
+            <code>"mock"</code> 后重启应用，由 <code>CollectorManager</code> 装配。
+          </p>
+          <p>
+            它的启停 / 配置查看统一在「<router-link to="/collectors" class="inline-link"
+              >组件 → 采集器</router-link
+            >」页管理（与 B 站 / 屏幕等其他采集器同源入口，避免控制面碎片化）。
+          </p>
+          <p class="hint">
+            当前 SimulatorPanel 不暴露 mock 启停入口——按 ADR-006 收敛语义到
+            唯一承载者，避免重复入口引发状态不一致。
+          </p>
+        </div>
       </el-card>
+
+      <p v-if="lastError" class="error-hint">{{ lastError }}</p>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 /**
- * Mock 采集器控制面（v2.0）
+ * SimulatorPanel —— SimulatorService 控制面（ADR-006 follow-up）
  *
- * W8 证据：原 `/api/v1/simulator/*` 路由已删除；前端改用 `mockCollectorApi`（后端补齐
- * `/api/v1/mock/*` 时直接生效）。当前后端尚未挂载 mock 控制面，所有调用会 404/503，
- * 页面降级为只读监控占位。
+ * 数据源：`/api/v1/simulator/*`（详见 src/modules/dashboard/api/simulator.py）。
+ * 形态：单列 stat chips + 关键配置只读摘要 + 配套说明。
  *
- * v2 数据语义变化：
- * - 所有模拟事件 payload 带 `simulated: true`（W3 §1.6 定案）
- * - 统计查询强制排除 simulated 源（消费方约束）
- * - 模拟观众不计入 viewers/topics 统计（除非显式要求）
+ * 设计取舍：
+ * - 模拟器在生产默认 enabled=false——空态用 el-alert 引导去 Settings 而不是显示
+ *   404/disabled 占位；这与"我是开发基础设施"的定位相符：开发者知道在哪开开关。
+ * - MockCollector 启停不重复暴露：归位到「组件 → 采集器」页，与 B 站等其它
+ *   采集器同源控制，避免控制面碎片化（详见 docs/architecture/adr/006-…）。
  */
-import { onMounted, onUnmounted, reactive, ref } from 'vue';
+import { onMounted, onUnmounted, reactive, ref, computed } from 'vue';
 import { ElMessage } from 'element-plus';
-import { mockCollectorApi } from '@/api';
-import type { MockCollectorStatus, MockCollectorStats, MockCollectorPersona } from '@/types';
+import { simulatorApi } from '@/api';
+import type { SimulatorControlResponse } from '@/types';
 
-const status = reactive<MockCollectorStatus>({
+interface SimulatorStatusState {
+  enabled: boolean;
+  is_available: boolean;
+  is_running: boolean;
+  message: string;
+  config: Record<string, unknown>;
+}
+
+const status = reactive<SimulatorStatusState>({
+  enabled: false,
+  is_available: false,
   is_running: false,
-  started_at_ms: 0,
-  config_snapshot: {},
-  is_collector_available: false,
+  message: '',
+  config: {},
 });
 
-const stats = reactive<MockCollectorStats>({
-  total_messages: 0,
-  simulated_count: 0,
-  total_tokens: 0,
-  messages_by_type: {},
-});
-
-const personas = ref<MockCollectorPersona[]>([]);
-const toggling = ref(false);
-const injectTopic = ref('');
-const generateCount = ref(1);
-const generating = ref(false);
+const toggling = ref<'toggle' | 'start' | 'stop' | null>(null);
+const lastError = ref('');
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-const params = reactive({
-  base_rate_per_minute: 6,
-  burst_multiplier: 3,
-  temp_passerby_ratio: 0.3,
-  gift_probability: 0.05,
-  cadence_mode: 'uniform',
-  fixed_interval_s: 10,
+const llmLabel = computed(() => {
+  const v = status.config.llm_client_type;
+  return typeof v === 'string' && v ? v : 'llm_fast';
 });
 
-function roleTagType(role: string): string {
-  const map: Record<string, string> = {
-    fan: 'success',
-    teaser: 'warning',
-    newcomer: 'info',
-    hater: 'danger',
-    veteran: 'primary',
-  };
-  return map[role] || '';
+function formatNumber(v: unknown): string {
+  if (typeof v === 'number') {
+    if (Number.isInteger(v)) return v.toString();
+    return v.toFixed(2);
+  }
+  return '—';
+}
+
+function formatPercent(v: unknown): string {
+  if (typeof v === 'number') return `${(v * 100).toFixed(1)}%`;
+  return '—';
 }
 
 async function fetchStatus() {
   try {
-    const res = await mockCollectorApi.getStatus();
-    Object.assign(status, res.data);
-  } catch {
-    // 端点尚未挂载（503/404），保持默认 is_collector_available=false
+    const res = await simulatorApi.getStatus();
+    const data = res.data;
+    status.enabled = !!data.enabled;
+    status.is_available = !!data.is_available;
+    status.is_running = !!data.is_running;
+    status.message = typeof data.message === 'string' ? data.message : '';
+    status.config =
+      data.config && typeof data.config === 'object' && !Array.isArray(data.config)
+        ? (data.config as Record<string, unknown>)
+        : {};
+    lastError.value = '';
+  } catch (err) {
+    // enabled=false 时 status 仍返回（不抛 404）—— 此处 try/catch 仅兜底偶发网络错误
+    lastError.value = err instanceof Error ? `状态获取失败：${err.message}` : '状态获取失败';
   }
 }
 
-async function fetchStats() {
+async function handleControl(action: 'start' | 'stop') {
+  toggling.value = action;
   try {
-    const res = await mockCollectorApi.getStats();
-    Object.assign(stats, res.data);
-  } catch {
-    // 静默
-  }
-}
-
-async function fetchPersonas() {
-  try {
-    const res = await mockCollectorApi.getPersonas();
-    personas.value = res.data ?? [];
-  } catch {
-    personas.value = [];
-  }
-}
-
-async function toggleCollector() {
-  if (!status.is_collector_available) {
-    ElMessage.warning('Mock 控制面端点尚未挂载，无法启停');
-    return;
-  }
-  toggling.value = true;
-  try {
-    if (status.is_running) {
-      await mockCollectorApi.stop();
-      ElMessage.success('Mock 采集器已停止');
+    const res = action === 'start' ? await simulatorApi.start() : await simulatorApi.stop();
+    const payload: SimulatorControlResponse = res.data;
+    if (payload.success) {
+      ElMessage.success(payload.message || (action === 'start' ? '已启动' : '已停止'));
     } else {
-      await mockCollectorApi.start();
-      ElMessage.success('Mock 采集器已启动');
+      ElMessage.warning(payload.message || '操作被拒绝');
     }
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '操作失败');
+  } finally {
+    toggling.value = null;
     await fetchStatus();
-  } catch {
-    ElMessage.error('操作失败（端点未挂载）');
-  } finally {
-    toggling.value = false;
   }
 }
 
-async function updateParams() {
-  if (!status.is_collector_available) return;
-  try {
-    await mockCollectorApi.updateParams({ ...params });
-    ElMessage.success('参数已更新');
-  } catch {
-    ElMessage.error('参数更新失败');
-  }
-}
-
-async function triggerGiftRain() {
-  if (!status.is_collector_available) return;
-  try {
-    await mockCollectorApi.triggerGiftRain(30);
-    ElMessage.success('礼物雨已触发');
-  } catch {
-    ElMessage.error('触发失败');
-  }
-}
-
-async function triggerTopicInjection() {
-  if (!injectTopic.value.trim()) {
-    ElMessage.warning('请输入话题');
-    return;
-  }
-  try {
-    await mockCollectorApi.triggerTopicInjection(injectTopic.value.trim());
-    ElMessage.success(`话题已注入: ${injectTopic.value}`);
-    injectTopic.value = '';
-  } catch {
-    ElMessage.error('话题注入失败');
-  }
-}
-
-async function resetBudget() {
-  if (!status.is_collector_available) return;
-  try {
-    await mockCollectorApi.resetTokenBudget();
-    ElMessage.success('Token 预算已重置');
-    await fetchStats();
-  } catch {
-    ElMessage.error('重置失败');
-  }
-}
-
-async function generatePersonas() {
-  if (!status.is_collector_available) return;
-  generating.value = true;
-  try {
-    const res = await mockCollectorApi.generatePersonas(generateCount.value);
-    const count = res.data.personas?.length ?? generateCount.value;
-    const added = res.data.added ?? count;
-    ElMessage.success(`已生成 ${added} 个人设`);
-    await fetchPersonas();
-  } catch {
-    ElMessage.error('人设生成失败');
-  } finally {
-    generating.value = false;
-  }
+async function toggleSimulator() {
+  if (!status.enabled || !status.is_available) return;
+  await handleControl(status.is_running ? 'stop' : 'start');
 }
 
 onMounted(async () => {
   await fetchStatus();
-  await fetchStats();
-  await fetchPersonas();
-  pollTimer = setInterval(async () => {
-    await fetchStats();
-    await fetchPersonas();
-  }, 5000);
+  // 5s 轮询以捕捉按钮外的状态变化（如 token 预算耗尽、其它面板启停）
+  pollTimer = setInterval(fetchStatus, 5000);
 });
 
 onUnmounted(() => {
@@ -403,7 +289,7 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.mock-control-panel {
+.simulator-page {
   display: flex;
   flex-direction: column;
   padding: var(--spacing-lg);
@@ -415,19 +301,22 @@ onUnmounted(() => {
   margin-bottom: var(--spacing-md);
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  gap: var(--spacing-md);
 }
 
 .header-left {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-xs);
+  min-width: 0;
 }
 
 .header-actions {
   display: flex;
   align-items: center;
   gap: var(--spacing-md);
+  flex-shrink: 0;
 }
 
 .content {
@@ -449,6 +338,19 @@ onUnmounted(() => {
   font-weight: 700;
   color: var(--color-primary);
   line-height: 1.2;
+}
+
+.stat-card .stat-value.mono {
+  font-family: var(--font-mono);
+  font-size: 22px;
+}
+
+.stat-card .stat-value.is-on {
+  color: var(--color-success);
+}
+
+.stat-card .stat-value.is-off {
+  color: var(--text-placeholder);
 }
 
 .stat-card .stat-label {
@@ -487,10 +389,34 @@ onUnmounted(() => {
   gap: var(--spacing-md);
 }
 
-.card-header-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
+.hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: var(--spacing-sm);
+  font-style: italic;
+}
+
+.hint code {
+  font-family: var(--font-mono);
+  background: var(--bg-hover);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+.inline-link {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+.inline-link:hover {
+  text-decoration: underline;
+}
+
+.error-hint {
+  font-size: 12px;
+  color: var(--color-danger, #f56c6c);
+  margin: var(--spacing-sm) 0 0;
 }
 
 code {

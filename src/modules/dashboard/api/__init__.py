@@ -9,7 +9,9 @@ from src.modules.dashboard.api import (
     config,
     debug,
     messages,
+    mock,
+    simulator,
     system,
 )
 
-__all__ = ["system", "components", "messages", "config", "debug"]
+__all__ = ["system", "components", "messages", "config", "debug", "simulator", "mock"]

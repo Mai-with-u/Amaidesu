@@ -207,65 +207,6 @@
             </section>
           </div>
         </el-tab-pane>
-
-        <!-- Tab 3: Mock 采集器触发（v2 替代旧 Maibot 控制） -->
-        <el-tab-pane name="mock">
-          <template #label>
-            <span class="tab-label">
-              <el-icon><Pointer /></el-icon>
-              Mock 采集器触发
-            </span>
-          </template>
-
-          <div class="tab-content-wrapper">
-            <el-alert
-              type="info"
-              title="Mock 采集器触发（v2 替代旧 MaiBot 桥接）"
-              description="v2 中 MaiBot 不再作为决策核心；模拟/触发能力由 modules/collectors/mock/ 承载。当前端点 /api/v1/mock/* 待后端补齐。"
-              show-icon
-              :closable="false"
-              class="error-alert"
-            />
-            <div class="inject-layout" style="margin-top: 16px">
-              <section class="inject-panel">
-                <div class="panel-header">
-                  <div class="panel-title">
-                    <el-icon class="title-icon"><Pointer /></el-icon>
-                    <span>话题注入</span>
-                  </div>
-                  <el-tag size="small" type="success" effect="plain">v2</el-tag>
-                </div>
-                <el-form
-                  :model="mockForm"
-                  label-position="top"
-                  class="inject-form"
-                  @submit.prevent="triggerMockTopic"
-                >
-                  <el-form-item label="话题文本" required>
-                    <el-input
-                      v-model="mockForm.topic"
-                      type="textarea"
-                      :rows="3"
-                      placeholder="输入要通过 mock 注入的话题..."
-                      resize="none"
-                    />
-                  </el-form-item>
-                  <el-form-item>
-                    <el-button
-                      type="primary"
-                      :loading="mockLoading"
-                      :disabled="!mockForm.topic.trim()"
-                      @click="triggerMockTopic"
-                    >
-                      <el-icon><Pointer /></el-icon>
-                      触发话题注入
-                    </el-button>
-                  </el-form-item>
-                </el-form>
-              </section>
-            </div>
-          </div>
-        </el-tab-pane>
       </el-tabs>
     </div>
   </div>
@@ -282,9 +223,8 @@ import {
   Refresh,
   Delete,
   RefreshRight,
-  Pointer,
 } from '@element-plus/icons-vue';
-import { debugApi, mockCollectorApi } from '@/api';
+import { debugApi } from '@/api';
 import type { EventBusStatsResponse, InjectMessageRequest } from '@/types';
 
 // Tab state
@@ -359,33 +299,6 @@ async function retryInject(item: InjectHistoryItem) {
     importance: item.importance,
   };
   await injectMessage();
-}
-
-// ============ Mock 采集器触发 Tab（v2 替代旧 MaiBot 控制） ============
-
-const mockForm = ref({
-  topic: '',
-});
-
-const mockLoading = ref(false);
-
-async function triggerMockTopic() {
-  const topic = mockForm.value.topic.trim();
-  if (!topic) {
-    ElMessage.warning('请输入话题');
-    return;
-  }
-  mockLoading.value = true;
-  try {
-    await mockCollectorApi.triggerTopicInjection(topic);
-    ElMessage.success(`话题已注入: ${topic}`);
-    mockForm.value.topic = '';
-  } catch (err) {
-    console.error('Mock 采集器触发失败', err);
-    ElMessage.warning('Mock 采集器端点尚未挂载（v2 后端管理通道待补齐）');
-  } finally {
-    mockLoading.value = false;
-  }
 }
 
 // ============ EventBus 统计 Tab ============

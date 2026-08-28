@@ -1,11 +1,13 @@
 /**
  * Dashboard API 客户端（v2.0）
  *
- * W8 证据：maibot / outline / proactive / simulator 子路由已删除。模拟直播间能力由
- * `modules/collectors/mock/` 承载，WebUI 管理页后续波次补齐 mock 控制面。
+ * 模拟直播能力控制面：
+ * - ``simulatorApi`` → ``/api/v1/simulator/*``：LLM 驱动的 SimulatorService（ADR-006）
+ * - ``mockCollectorApi`` → ``/api/v1/mock/*``：确定性 JSONL 回放 MockCollector
  *
- * 仍在使用的端点：system / components / messages / config / debug / llm /
- * capabilities / events / traces
+ * 历史 AD-008 半吊子模式（人设 / 礼物雨 / 话题注入 / token 预算）已被 ADR-006
+ * 推翻并移除；旧 mockCollectorApi 的对应方法同步下线（前端调用会触发 404，由
+ * 调用方 try/catch 兜底）。
  */
 
 import axios from 'axios';
@@ -30,9 +32,8 @@ import type {
   LLMRequestHistory,
   UnifiedCapabilitiesView,
   MockCollectorStatus,
-  MockCollectorStats,
-  MockCollectorPersona,
-  MockPersonaUpdatePayload,
+  SimulatorStatus,
+  SimulatorControlResponse,
 } from '@/types';
 
 const api = axios.create({
@@ -94,35 +95,28 @@ export const capabilitiesApi = {
   list: () => api.get<UnifiedCapabilitiesView>('/capabilities'),
 };
 
-// ===== Mock 采集器控制面（v2 新增） =====
+// ===== Simulator 控制面（ADR-006：LLM 驱动生成式虚拟直播间） =====
 //
-// W8 路由：`/api/v1/simulator/*` 已删除。下列方法当前调用 404/503；前端调用时
-// 应 try/catch 并显示"mock 采集器未启用"提示。后续波次后端会补齐 mock 控制面端点
-// （挂载在 `/api/v1/mock/*` 或新增独立 router），此处 API 形态保留以便平滑切换。
+// 控制 SimulatorService 的启停与状态查询。enabled=false 时 status 仍返回
+// （不抛 404）；start 会拒绝并提示需要修改配置后重启。
+export const simulatorApi = {
+  getStatus: () => api.get<SimulatorStatus>('/simulator/status'),
+  start: () => api.post<SimulatorControlResponse>('/simulator/start'),
+  stop: () => api.post<SimulatorControlResponse>('/simulator/stop'),
+};
+
+// ===== Mock 采集器控制面（ADR-006：确定性 JSONL 回放器） =====
+//
+// 代理 CollectorManager 的 ``mock`` 实例启停。控制面与通用
+// ``/api/v1/components/collectors/mock/control`` 等价；前端保留 ``/mock/*`` 路径
+// 是为与 ``/api/v1/simulator/*`` 做语义区隔（LLM 仿真 vs JSONL 回放）。
+//
+// ADR-006 已移除 simulator 半吊子模式（人设 / 参数 / 礼物雨 / 话题注入 / token
+// 预算），对应方法已被下线——前端若有遗留调用，应改走到「组件 → 采集器」通用页。
 export const mockCollectorApi = {
   getStatus: () => api.get<MockCollectorStatus>('/mock/status'),
-  getStats: () => api.get<MockCollectorStats>('/mock/stats'),
-  getPersonas: () => api.get<MockCollectorPersona[]>('/mock/personas'),
-  generatePersonas: (count: number) =>
-    api.post<{ status: string; personas: MockCollectorPersona[]; added: number; skipped: number }>(
-      '/mock/personas/generate',
-      { count },
-      { timeout: 120000 },
-    ),
-  updatePersona: (userId: string, payload: MockPersonaUpdatePayload) =>
-    api.put<{ status: string }>(`/mock/personas/${userId}`, payload),
-  deletePersona: (userId: string) => api.delete<{ status: string }>(`/mock/personas/${userId}`),
-  start: () => api.post<{ status: string }>('/mock/start'),
-  stop: () => api.post<{ status: string }>('/mock/stop'),
-  updateParams: (params: Record<string, unknown>) =>
-    api.post<{ status: string; params: Record<string, unknown> }>('/mock/params', params),
-  triggerGiftRain: (durationS: number = 30) =>
-    api.post<{ status: string; duration_s: number }>('/mock/trigger/gift_rain', {
-      duration_s: durationS,
-    }),
-  triggerTopicInjection: (topic: string) =>
-    api.post<{ status: string; topic: string }>('/mock/trigger/topic_injection', { topic }),
-  resetTokenBudget: () => api.post<{ status: string }>('/mock/reset_token_budget'),
+  start: () => api.post<MockCollectorStatus>('/mock/start'),
+  stop: () => api.post<MockCollectorStatus>('/mock/stop'),
 };
 
 // ===== Trace =====

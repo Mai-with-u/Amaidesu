@@ -299,46 +299,57 @@ export interface UnifiedCapabilitiesView {
   actions: UnifiedActionEntry[];
 }
 
-// ==================== Mock 采集器控制面 ====================
+// ==================== Simulator 控制面（ADR-006） ====================
 
 /**
- * Mock 采集器状态（v2 模拟直播间能力由 `modules/collectors/mock/` 承载）。
+ * SimulatorService 实时状态（`/api/v1/simulator/status` 响应）。
  *
- * 前端调用 mock 控制面 404/503 时显示"mock 采集器未启用"。
+ * 字段语义：
+ * - ``enabled``：当前进程在组合根加载时 ``[simulator].enabled`` 的值；
+ *   即便 ``enabled=false`` 端点仍返回（不抛 404），前端据此渲染"未启用"空态
+ *   并引导用户去 `Settings` 打开开关。
+ * - ``is_available``：当前进程内存里是否持有 SimulatorService 实例（用于
+ *   区分"配置启用但 LLMManager 未注入导致 setup 提前返回"与"完全没装配"）。
+ * - ``is_running``：当前是否在生成循环里。
+ * - ``message``：后端的状态说明文案（直接展示）。
+ * - ``config``：只读配置摘要（见 backend `simulator._CONFIG_SUMMARY_KEYS`）。
+ */
+export interface SimulatorStatus {
+  enabled: boolean;
+  is_available: boolean;
+  is_running: boolean;
+  message: string;
+  config: Record<string, unknown>;
+}
+
+/**
+ * Simulator 启停响应（`/api/v1/simulator/start` 与 `…/stop` 共用）。
+ */
+export interface SimulatorControlResponse {
+  success: boolean;
+  message: string;
+  is_running?: boolean;
+}
+
+// ==================== Mock 采集器控制面（ADR-006 收敛后） ====================
+
+/**
+ * Mock 采集器状态（`/api/v1/mock/status` 响应）。
+ *
+ * ADR-006 收敛后 mock 采集器只承担确定性 JSONL 回放；其暴露字段
+ * （name/description/config）与 CollectorManager 注册实例一致。控制面
+ * 不再承载旧"模拟器半吊子模式"的人设 / 礼物雨 / 话题注入 / token 预算
+ * 等端点——对应类型 ``MockCollectorStats`` / ``MockCollectorPersona`` /
+ * ``MockPersonaUpdatePayload`` 已删除。
  */
 export interface MockCollectorStatus {
+  is_available: boolean;
   is_running: boolean;
-  started_at_ms: number;
-  config_snapshot: Record<string, unknown>;
-  /** 后端是否注册了 mock 采集器；若为 false，前端显示"mock 采集器未启用" */
-  is_collector_available: boolean;
-}
-
-export interface MockCollectorStats {
-  total_messages: number;
-  simulated_count: number; // v2 新增：模拟消息计数（独立于真实消息）
-  total_tokens: number;
-  messages_by_type: Record<string, number>;
-}
-
-export interface MockCollectorPersona {
-  user_id: string;
-  user_nickname: string;
-  role: string;
-  personality: string;
-  speaking_style: string;
-  fans_medal_level: number;
-  guard_level: number;
-  messages_generated: number;
-}
-
-export interface MockPersonaUpdatePayload {
-  user_nickname?: string;
-  role?: string;
-  personality?: string;
-  speaking_style?: string;
-  fans_medal_level?: number;
-  guard_level?: number;
+  name: string;
+  description: string;
+  /** 只读配置摘要（log_file_path / send_interval / loop_playback / emit_semantic_events） */
+  config: Record<string, unknown>;
+  message: string;
 }
 
 // ==================== 导出 settings / llm / trace 子模块 ====================
