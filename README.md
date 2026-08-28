@@ -34,7 +34,7 @@ Amaidesu!
 - **采集器（Collector）**：持续采集外部数据（B站弹幕、语音、屏幕变化、控制台），经 EventBus 以语义域事件（`room.message.*` 等）主动推送，事件拦截器做限流/相似过滤
 - **业务 Agent**：主播 Agent 自主决策——MessageBuffer 聚合弹幕 → Planner 决策循环 → Replyer 表达引擎生成回复/情绪/动作；游戏代理（AI 玩家）为另一范式
 - **工具（Tool）**：被动能力契约，经 ToolRegistry 统一调度——TTS、字幕、VTS/Warudo 皮套、OBS、屏幕感知等约 60 个工具
-- **存储与记忆**：SQLite 11 表记录场次/消息/礼物/SC/Agenda；SimpleMemory 提供观众画像与关键词召回
+- **存储与记忆**：SQLite 11 表记录场次/消息/礼物/SC/Agenda；SimpleMemory 提供跨场关键词记忆召回——决策上下文自动注入相关记忆，LLM 亦可主动调用 `query_memory` 工具检索
 
 **数据流**：
 1. 外部输入 → 采集器 emit `room.message.danmaku/gift/super_chat/enter` → [事件拦截器]

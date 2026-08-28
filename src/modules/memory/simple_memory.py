@@ -7,6 +7,30 @@ SimpleMemory —— 关键词召回实现（Wave 3 / §1.50）
 - 召回 = 简单 LIKE 关键词匹配（不使用 embedding，§1.50 简单版）
 - 维护（maintain）= 简单按 timestamp_ms 衰减分数；空实现基准
 
+## 召回分词策略（§1.50 + Wave 8 中文召回修复）
+
+主场景是中文弹幕直播间：原始实现 ``query.split(" ")`` 对"弹幕互动有什么"
+这种无空格中文句子只产出**一个**长 token，"弹幕互动有什么" 整段作为 LIKE 模式
+几乎零命中（实际文本里不会原样出现）。改为 ``_extract_keywords`` 启发式：
+
+1. **第一阶段切分**：按空白 + 中英文常见标点切（保留 CJK 段完整）
+2. **第二阶段按类型处理**：
+   - ASCII 英文/数字词（长度 ≥ 2）→ 整段保留（"minecraft"、"OAI" 等）
+   - CJK 连续段：
+     - 长度 2-6 → 取整段
+     - 长度 > 6 → 2-gram 滑动窗口（如"弹幕互动有什么" → "弹幕"、"幕互"、
+       "互动"、"动有"、"有什"、"什么"）
+3. **去重 + 保序 + 截断到 ``max_keywords``**
+
+**已知局限**（后续可换 FTS5 / jieba）：
+- 不分语义边界（"我想看动漫" → "我想"、"想看"、"看动"、"动漫"，无意义 2-gram 噪声）
+- 不区分停用词（"的/了/是"会被当 2-gram 命中）
+- 无词性标注、无归一化（"弹幕"/"彈幕" 视为不同 token）
+
+接口冻结（Streamer Agent 等并行模块依赖现状）：
+``recall / ingest / get_person_profile / upsert_person_profile / maintain``
+签名禁止修改。
+
 ## 存储说明
 本模块在 SQLiteStore 数据库里**追加** 2 张表（与 11 表不在权威 schema 中，
 仅 SimpleMemory 内部用，命名加 ``_memory_`` 前缀避免与 11 表冲突）：
@@ -24,6 +48,7 @@ SimpleMemory —— 关键词召回实现（Wave 3 / §1.50）
 
 from __future__ import annotations
 
+import re
 from typing import Any, List, Optional
 
 from src.modules.logging import get_logger
@@ -33,6 +58,89 @@ from src.modules.storage.sqlite_store import SQLiteStore
 from src.modules.time_utils import now_ms
 
 logger = get_logger("SimpleMemory")
+
+
+# =============================================================================
+# 分词启发式（Wave 8 / 中文召回修复）
+# =============================================================================
+
+# CJK 统一表意 + 扩展 A（覆盖 99% 现代中文；扩展 B-F 罕用词不覆盖以省 regex）
+_CJK_SEGMENT = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]+")
+
+# 空白 + 中英文常见标点（CJK 字符本身不在内，得以保留为连续段）
+_SPLITTER = re.compile(
+    r"[\s\u3000"
+    r"\u3001\u3002"
+    r"\uff0c\uff01\uff1f\uff1b\uff1a"
+    r"\u201c\u201d\u2018\u2019"
+    r"\u300a\u300b\u3008\u3009"
+    r"\uff08\uff09\u3010\u3011"
+    r"\.\!\?\,\;\:\(\)\[\]\{\}\<\>\/\\\|\+\=\-\_\*"
+    r"]+"
+)
+
+# ASCII 英文 / 数字 连续段
+_ASCII_WORD = re.compile(r"[A-Za-z0-9]+")
+
+
+def _extract_keywords(query: str, max_keywords: int = 8) -> List[str]:
+    """从 ``query`` 中抽取用于 LIKE 召回的关键词列表。
+
+    策略详见模块 docstring "召回分词策略"一节。
+
+    Args:
+        query: 用户查询文本（可能含中文 / 英文 / 数字 / 标点混合）
+        max_keywords: 最大返回关键词数（默认 8，对齐 LIKE 性能 + 噪声抑制）
+
+    Returns:
+        去重 + 保序的关键词列表。空查询 / 无有效 token 时返回空列表。
+    """
+    if not query or not isinstance(query, str):
+        return []
+    cleaned = query.strip()
+    if not cleaned:
+        return []
+
+    tokens = [t for t in _SPLITTER.split(cleaned) if t]
+    if not tokens:
+        return []
+
+    seen: set[str] = set()
+    result: List[str] = []
+
+    def _try_add(keyword: str) -> bool:
+        """尝试去重添加；返回 ``True`` 表示已触发 ``max_keywords`` 截断。"""
+        if not keyword or keyword in seen:
+            return False
+        seen.add(keyword)
+        result.append(keyword)
+        return len(result) >= max_keywords
+
+    for token in tokens:
+        # ASCII 英文/数字词：长度 ≥ 2 才保留（避免 1-char 噪声）
+        for m in _ASCII_WORD.finditer(token):
+            word = m.group()
+            if len(word) >= 2 and _try_add(word):
+                return result[:max_keywords]
+
+        # CJK 连续段：按长度分桶处理
+        for m in _CJK_SEGMENT.finditer(token):
+            seg = m.group()
+            length = len(seg)
+            if length < 2:
+                # 单字 CJK 召回噪声大（命中停用词/通用字），跳过
+                continue
+            if length <= 6:
+                if _try_add(seg):
+                    return result[:max_keywords]
+            else:
+                # 长度 > 6：2-gram 滑动窗口（任何子串都有命中概率）
+                for i in range(length - 1):
+                    gram = seg[i : i + 2]
+                    if _try_add(gram):
+                        return result[:max_keywords]
+
+    return result[:max_keywords]
 
 
 # SimpleMemory 私有 DDL（不属 11 表，仅 SimpleMemory 后端使用）
@@ -76,7 +184,8 @@ class SimpleMemory(MemoryProvider):
         """关键词召回：对 _memory_facts 做 LIKE 匹配；O(n) 子集扫描足以起步。"""
         if not query or not query.strip():
             return []
-        keywords = [k for k in query.replace("\n", " ").split(" ") if len(k) >= 2][:8]
+        # Wave 8 中文召回修复：CJK-aware 分词；不再用 query.split(" ")
+        keywords = _extract_keywords(query, max_keywords=8)
         if not keywords:
             return []
 

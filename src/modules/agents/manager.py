@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.logging import get_logger
@@ -40,15 +40,26 @@ class AgentRegistration:
 
 
 class AgentManager:
-    """统一管理：注册 / 启动 / 监控 / 重启所有 Agent。"""
+    """统一管理：注册 / 启动 / 监控 / 重启所有 Agent。
+
+    Attributes:
+        tool_registry: 构造时注入的默认 ``ToolRegistry``；传给
+            ``enable_agent`` 时如未显式覆盖则用此成员（Dashboard 动态启停
+            场景可能不传 tool_registry，回退到成员避免 Agent 拿 None）。
+        memory: 构造时注入的默认 ``MemoryProvider`` 实例；Agent（如
+            ``StreamerAgent``）构造时需要它做观众画像/长记忆读写。Dashboard
+            动态启用 Agent 时如未显式传 ``memory``，回退到此成员。
+    """
 
     def __init__(
         self,
         *,
         tool_registry: Optional[ToolRegistry] = None,
+        memory: Optional[Any] = None,
     ) -> None:
         self._agents: Dict[str, AgentRegistration] = {}
         self._tool_registry = tool_registry
+        self._memory = memory
         self._lock = asyncio.Lock()
 
     # -------------------- 注册 --------------------
@@ -154,13 +165,20 @@ class AgentManager:
         context_service: Optional[object] = None,
         event_bus: Optional[object] = None,
         tool_registry: Optional[ToolRegistry] = None,
+        memory: Optional[Any] = None,
     ) -> bool:
         """动态启用 Agent：实例化（配置段名）→ 注册 → 启动。
 
         段名 = 注册名：实例化后强制对齐实例 name 为段名，保证
         list_agents()/get_by_name() 与配置 enabled 列表一致。
+
+        ``tool_registry`` / ``memory`` 未显式传入时回退到 ``__init__`` 成员；
+        Dashboard 动态启停场景一般不传这两个，回退保证 Agent 不再拿到 None。
         """
         from src.modules.agents.factory import instantiate_agent
+
+        effective_registry = tool_registry if tool_registry is not None else self._tool_registry
+        effective_memory = memory if memory is not None else self._memory
 
         instance = instantiate_agent(
             name,
@@ -169,7 +187,8 @@ class AgentManager:
             prompt_manager=prompt_manager,
             context_service=context_service,
             event_bus=event_bus,
-            tool_registry=tool_registry,
+            tool_registry=effective_registry,
+            memory=effective_memory,
         )
         if instance is None:
             logger.warning(f"未实现的 Agent: {name}")

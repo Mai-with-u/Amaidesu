@@ -29,6 +29,9 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, Optional
 
+from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms as _real_now_ms
 
@@ -50,6 +53,8 @@ _DEFAULT_SUMMARY_CLIENT = "llm_summary"
 _DEFAULT_WINDOW_EVENT_THRESHOLD = 200
 # 压缩队列上限
 _DEFAULT_COMPRESSOR_QUEUE_MAX = 100
+# 高价值事件记忆去抖窗口（同一用户相邻写入最小间隔，毫秒）
+_EVENT_INGEST_DEBOUNCE_MS = 60_000
 
 # 摘要 LLM 系统提示词（与原 RoomStateLoop 同构）
 _SUMMARY_SYSTEM_PROMPT = (
@@ -72,6 +77,10 @@ class BackgroundMaintainer:
 
     非 Agent（无 LLM 主决策权），纯机械循环 + 后台压缩任务。
     通过构造器注入依赖（room_state / storage store / llm_service）。
+
+    §1.50 写入面：摘要成功落地后 ``await memory.ingest(...)`` 写入"topic_summary"
+    事实；并通过 ``EventBus`` 订阅高价值事件（礼物 / SC），同样写入事实记忆。
+    两者均做异常降级，避免下游故障阻塞后台记账主循环。
     """
 
     def __init__(
@@ -83,6 +92,8 @@ class BackgroundMaintainer:
         live_session_store: Optional[Any] = None,
         context_service: Optional[Any] = None,
         session_id: str = "live",
+        memory: Optional[Any] = None,
+        event_bus: Optional[EventBus] = None,
     ) -> None:
         """初始化。
 
@@ -98,6 +109,9 @@ class BackgroundMaintainer:
             live_session_store: ``live_sessions`` 存储接口（duck-typed；轻循环写状态）
             context_service: 上下文服务（可选；供压缩 worker 读历史）
             session_id: 当前场次 ID（默认 "live"）
+            memory: §1.50 记忆后端（鸭子类型 ``MemoryProvider``）。``None`` 时关闭
+                摘要/事件两路写入功能——BackgroundMaintainer 整体降级为"只记账"。
+            event_bus: 可选 ``EventBus``；提供时 ``start()`` 阶段订阅礼物/SC 事件。
         """
         self._config = config
         self._room_state = room_state
@@ -105,6 +119,12 @@ class BackgroundMaintainer:
         self._live_session_store = live_session_store
         self._context_service = context_service
         self._session_id = session_id
+        # §1.50 写入面——memory / event_bus 由 main.py 装配；None 时整体降级
+        self._memory = memory
+        self._event_bus = event_bus
+        # 同用户去抖时间戳表（user_id → last_ingest_ms）
+        self._last_ingest_ms: Dict[str, int] = {}
+        self._subscribed = False
         self._logger = get_logger("BackgroundMaintainer")
 
         self._light_tick_ms: int = _cfg(config, "light_tick_ms", _DEFAULT_LIGHT_TICK_MS)
@@ -130,13 +150,19 @@ class BackgroundMaintainer:
         if self._running:
             return
         self._running = True
+        # §1.50 写入面：高价值事件订阅（礼物 / SC）→ memory.ingest
+        # 仅当 memory 与 event_bus 同时存在时启用（功能可关闭）
+        if self._event_bus is not None and self._memory is not None:
+            self._subscribe_high_value_events()
         self._light_task = asyncio.create_task(self._light_loop())
         self._compress_task = asyncio.create_task(self._compress_loop())
         self._logger.info(
             f"BackgroundMaintainer 已启动 "
             f"(light_tick={self._light_tick_ms}ms, "
             f"summary_interval={self._summary_interval_ms}ms, "
-            f"window_threshold={self._window_event_threshold})"
+            f"window_threshold={self._window_event_threshold}, "
+            f"memory={'on' if self._memory is not None else 'off'}, "
+            f"event_bus={'on' if self._event_bus is not None else 'off'})"
         )
 
     async def stop(self) -> None:
@@ -152,6 +178,97 @@ class BackgroundMaintainer:
         self._light_task = None
         self._compress_task = None
         self._logger.info("BackgroundMaintainer 已停止")
+
+    # ------------------------------------------------------------------
+    # §1.50 写入面：摘要 ingest + 高价值事件订阅
+    # ------------------------------------------------------------------
+
+    async def _ingest_topic_summary(self, summary: str) -> None:
+        """把摘要成功落地的 topic_summary 写入 §1.50 记忆。
+
+        调用契约：仅在 ``_summarize_topic`` 成功拿到非空 summary 后调用。
+        异常降级——下游故障不应阻塞后台记账主循环。
+        """
+        if self._memory is None or not summary:
+            return
+        try:
+            await self._memory.ingest(
+                text=summary,
+                source="topic_summary",
+                tags=["topic", "auto_summary"],
+            )
+        except Exception as exc:
+            # ingest 失败仅记 warning，不阻断 §1.7 主循环
+            self._logger.warning(f"记忆写入失败 (topic_summary): {exc}")
+
+    def _subscribe_high_value_events(self) -> None:
+        """订阅礼物 / SC 事件（仅在 memory 与 event_bus 都注入时启用）。"""
+        assert self._event_bus is not None  # noqa: S101  start() 已 guard
+        # 防重复订阅：subscribe 标识——start 多次调用只挂一次
+        if getattr(self, "_subscribed", False):
+            return
+        self._event_bus.on(
+            CoreEvents.ROOM_MESSAGE_GIFT,
+            self._handle_memory_event,
+            model_class=RoomMessagePayload,
+        )
+        self._event_bus.on(
+            CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
+            self._handle_memory_event,
+            model_class=RoomMessagePayload,
+        )
+        self._subscribed = True
+        self._logger.info("BackgroundMaintainer 已订阅礼物/SC 事件 → 记忆 ingest")
+
+    async def _handle_memory_event(
+        self,
+        event_name: str,
+        payload: RoomMessagePayload,
+        source: str,
+    ) -> None:
+        """处理礼物 / SC 事件：格式化中文事实 → memory.ingest。
+
+        去抖策略：60 秒内同一 user_id 只写一次（成员 dict 记 last_ingest_ms），
+        避免高价值事件高频刷屏时把记忆库塞爆。
+        """
+        if self._memory is None:
+            return
+        try:
+            user_id = getattr(payload.user, "id", "") or ""
+            nickname = getattr(payload.user, "name", "") or "观众"
+
+            # 按事件类型拼事实文本
+            if payload.message_type == "gift":
+                gift_name = getattr(payload.gift, "name", "礼物") if payload.gift else "礼物"
+                count = getattr(payload.gift, "count", 1) if payload.gift else 1
+                fact = (
+                    f"{nickname} 送出礼物 {gift_name}（×{count}）" if count > 1 else f"{nickname} 送出礼物 {gift_name}"
+                )
+                tags = ["gift"]
+            elif payload.message_type == "super_chat":
+                amount = getattr(payload.sc, "amount", 0.0) if payload.sc else 0.0
+                text = (payload.content or "").strip()
+                if text:
+                    fact = f"{nickname} 发送 SC（¥{amount:.0f}）：{text}"
+                else:
+                    fact = f"{nickname} 发送 SC（¥{amount:.0f}）"
+                tags = ["super_chat"]
+            else:
+                return
+
+            # 同用户 60 秒去抖
+            if user_id:
+                now = _real_now_ms()
+                last_map = getattr(self, "_last_ingest_ms", {})
+                last = last_map.get(user_id, 0)
+                if last and now - last < _EVENT_INGEST_DEBOUNCE_MS:
+                    return
+                last_map[user_id] = now
+
+            await self._memory.ingest(text=fact, source="live_event", tags=tags)
+        except Exception as exc:
+            # ingest 失败仅记 warning——下游故障不阻断记账主循环
+            self._logger.warning(f"高价值事件记忆写入失败 ({event_name}): {exc}")
 
     # ------------------------------------------------------------------
     # 轻循环（周期 tick ~5s）
@@ -319,6 +436,8 @@ class BackgroundMaintainer:
             self._room_state.set_topic_summary(summary, now_ms=now_ms)
             self._last_summary_ms = now_ms
             self._logger.debug(f"话题摘要已更新: {summary[:50]}")
+            # §1.50 写入面：摘要成功落地后 ingest，失败不阻断记账
+            await self._ingest_topic_summary(summary)
         else:
             self._logger.warning("话题摘要 LLM 返回失败")
 

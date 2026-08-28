@@ -28,6 +28,7 @@ def instantiate_agent(
     context_service: Optional[Any] = None,
     event_bus: Any = None,
     tool_registry: Any = None,
+    memory: Any = None,
 ) -> Optional[BaseAgent]:
     """按名实例化 Agent；未知名字返回 None。"""
     config = config if isinstance(config, dict) else {}
@@ -49,6 +50,7 @@ def instantiate_agent(
             context_service=context_service,
             event_bus=event_bus,
             tool_registry=tool_registry,
+            memory=memory,
         )
 
     if name == "game":

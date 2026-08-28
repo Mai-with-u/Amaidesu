@@ -50,6 +50,7 @@ from src.modules.events.interceptors import (
 from src.modules.llm.manager import LLMManager
 from src.modules.logging import get_logger
 from src.modules.prompts import get_prompt_manager
+from src.modules.storage.sqlite_store import SQLiteStore
 
 logger = get_logger("Main")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -285,12 +286,14 @@ async def create_app_components(
     Optional["EventHistoryRecorder"],
     Optional["CollectorManager"],
     Optional["AgentManager"],
+    "SQLiteStore",
 ]:
     """v2 组合根：构造并连接所有核心组件。
 
     创建顺序（依赖关系）：
     1. LLMManager（统一 LLM 客户端池）
     2. ContextService（会话历史 / 多会话隔离）
+    2b. 存储与记忆（SQLiteStore + SimpleMemory，§1.50 组合根接线）
     3. EventBus + 事件拦截器（§1.46.1）
     4. CollectorManager（采集器：bilibili/console/mock/screen）
     5. AgentManager（Agent 子系统：StreamerAgent 等）
@@ -299,7 +302,7 @@ async def create_app_components(
 
     Returns:
         (context_service, event_bus, llm_service, dashboard_server,
-         event_recorder, collector_manager, agent_manager)
+         event_recorder, collector_manager, agent_manager, sqlite_store)
     """
     # --- 1. LLM 服务 ---
     logger.info("初始化 LLM 服务...")
@@ -314,6 +317,13 @@ async def create_app_components(
     context_service = ContextService(config=context_service_config)
     await context_service.initialize()
     logger.info("已创建上下文服务实例")
+
+    # --- 2b. 存储与记忆（§1.50：SQLiteStore + SimpleMemory 组合根接线）---
+    from src.modules.memory.bootstrap import build_memory_stack
+
+    logger.info("初始化存储与记忆（SQLiteStore + SimpleMemory）...")
+    sqlite_store, memory = await build_memory_stack(config)
+    logger.info(f"存储与记忆已就绪（db={sqlite_store.db_path}）")
 
     # --- 3. EventBus + 拦截器 ---
     logger.info("初始化事件总线...")
@@ -345,12 +355,13 @@ async def create_app_components(
     if agents_config:
         logger.info("初始化 AgentManager（src/agents/）...")
         from src.modules.agents.manager import AgentManager
+        from src.modules.memory.bootstrap import bind_memory_tools
         from src.modules.tools import ToolRegistry
         from src.modules.tools.bootstrap import bind_core_tools
         from src.modules.tools.decorator import bind_pending_tools
 
         tool_registry = ToolRegistry()
-        agent_manager = AgentManager(tool_registry=tool_registry)
+        agent_manager = AgentManager(tool_registry=tool_registry, memory=memory)
         await _register_agents_from_config(
             agent_manager,
             agents_config,
@@ -359,6 +370,7 @@ async def create_app_components(
             event_bus,
             context_service,
             tool_registry,
+            memory,
         )
 
         # --- 6b. 核心工具包（output/* 的 L2 Provider） + L1 @tool pending 刷入 ---
@@ -383,6 +395,10 @@ async def create_app_components(
             logger.info(f"@tool pending 已刷入 {pending_count} 个工具")
         else:
             logger.debug("@tool pending 表为空（L1 装饰器路径今日无产出）")
+
+        # --- 6c. 记忆检索工具（§1.51 第二路：LLM 主动 query_memory）---
+        memory_tool_count = bind_memory_tools(tool_registry, memory)
+        logger.info(f"query_memory 记忆检索工具已注册（新增 {memory_tool_count} 个）")
 
         await agent_manager.start_all()
         logger.info(f"AgentManager 已启动（{len(agent_manager)} 个 Agent）")
@@ -423,6 +439,7 @@ async def create_app_components(
         event_recorder,
         collector_manager,
         agent_manager,
+        sqlite_store,
     )
 
 
@@ -494,6 +511,7 @@ async def _register_agents_from_config(
     event_bus,
     context_service,
     tool_registry=None,
+    memory=None,
 ):
     """根据 [agents] 段注册 Agent 实例到 AgentManager。
 
@@ -501,6 +519,8 @@ async def _register_agents_from_config(
         enabled = ["streamer", "game"]
         streamer = { planner_llm = "llm_fast", replyer_llm = "llm", ... }
         game = { ... }
+
+    memory 为 §1.50 记忆后端（SimpleMemory），仅 streamer Agent 消费。
     """
     enabled_list = config_section.get("enabled", []) or []
     for agent_name in enabled_list:
@@ -525,6 +545,7 @@ async def _register_agents_from_config(
                 context_service=context_service,
                 event_bus=event_bus,
                 tool_registry=tool_registry,
+                memory=memory,
             )
             manager.register(
                 agent,
@@ -677,6 +698,8 @@ async def run_shutdown(
     event_recorder: Optional["EventHistoryRecorder"],
     collector_manager: Optional["CollectorManager"],
     agent_manager: Optional["AgentManager"],
+    *,
+    sqlite_store: Optional["SQLiteStore"] = None,
 ) -> None:
     """v2 关闭顺序（依赖关系反向）：
 
@@ -687,6 +710,7 @@ async def run_shutdown(
     5. EventBus.cleanup（清除所有 listener）
     6. LLMManager.cleanup
     7. ContextService.cleanup
+    8. SQLiteStore.close（存储落盘收尾，最后关闭）
     """
     _saw_cancelled = False
 
@@ -743,6 +767,11 @@ async def run_shutdown(
     logger.info("正在清理 ContextService...")
     if context_service is not None:
         await safe_log(context_service.cleanup(), "ContextService.cleanup")
+
+    if sqlite_store is not None:
+        logger.info("正在关闭 SQLiteStore...")
+        await safe_log(sqlite_store.close(), "SQLiteStore.close")
+
     logger.info("Amaidesu 应用程序已关闭。")
 
     if _saw_cancelled:
@@ -777,6 +806,7 @@ async def main() -> None:
         event_recorder,
         collector_manager,
         agent_manager,
+        sqlite_store,
     ) = await create_app_components(config, config_service, dev_webui=args.dev_webui)
 
     if args.dry:
@@ -790,6 +820,7 @@ async def main() -> None:
             event_recorder,
             collector_manager,
             agent_manager,
+            sqlite_store=sqlite_store,
         )
         return
 
@@ -813,6 +844,7 @@ async def main() -> None:
         event_recorder,
         collector_manager,
         agent_manager,
+        sqlite_store=sqlite_store,
     )
 
 

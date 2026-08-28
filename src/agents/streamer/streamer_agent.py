@@ -201,6 +201,7 @@ class StreamerAgent(BaseAgent):
         capabilities_provider: Optional[Any] = None,
         sqlite_store: Optional[Any] = None,
         persona_provider: Optional[Any] = None,
+        memory: Any = None,
     ) -> None:
         """初始化主播 Agent。
 
@@ -214,6 +215,11 @@ class StreamerAgent(BaseAgent):
             capabilities_provider: 可选工具能力提供者（用于 reply 动作白名单）
             sqlite_store: 可选 ``SQLiteStore``（live_sessions + agenda_runtime 持久化）
             persona_provider: 可选人设字典来源（鸭子类型：callable 返回 dict / dict 本身）
+            memory: 可选 §1.50 记忆后端（实现 ``MemoryProvider`` 协议，含
+                ``recall(query, top_k)`` / ``ingest(text, source, tags)``）。
+                传 ``None`` 时记忆相关功能整体降级——Planner 走无记忆路径，
+                BackgroundMaintainer 跳过 ingest 写入。这是契约保证的"功能
+                可关闭"而非"崩溃友好"。
         """
         super().__init__(event_bus=event_bus)
         self.typed_config = config
@@ -225,6 +231,8 @@ class StreamerAgent(BaseAgent):
         self._capabilities_provider = capabilities_provider
         self._sqlite = sqlite_store
         self._persona_provider = persona_provider
+        # §1.50 记忆后端（可选；None 时记忆相关功能整体降级）
+        self._memory = memory
         self._logger = get_logger("StreamerAgent")
 
         # ===== 内部子组件 =====
@@ -252,6 +260,7 @@ class StreamerAgent(BaseAgent):
             prompt_service=prompt_manager,
             room_state=self._room_state,
             capabilities_provider=capabilities_provider,
+            memory=memory,
         )
 
         # 敏感词过滤器（§1.46.1）
@@ -308,6 +317,8 @@ class StreamerAgent(BaseAgent):
             llm_service=llm_manager,
             live_session_store=sqlite_store,  # duck-typed: update_live_session_heartbeat
             context_service=context_service,
+            memory=memory,  # §1.50 写入面：摘要 → ingest；None 时降级
+            event_bus=event_bus,  # 高价值事件（礼物/SC）→ ingest
         )
 
         # 后台 flush 循环（Wave 6 Agent 主循环——替代 AmaidesuDecider._flush_loop）

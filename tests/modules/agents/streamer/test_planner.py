@@ -280,11 +280,12 @@ class TestPlannerForcedFlag:
 
 
 class TestPlannerAgendaContext:
-    """Agenda 上下文注入测试（Wave 6：agenda 替代 outline）。"""
+    """Agenda 上下文注入测试（v2.2：agenda_text 进入 PlannerAssembler 的
+    stage_descriptions 字段，最终落地在 ``$context_block`` 的"环节描述"段）。"""
 
     @pytest.mark.asyncio
     async def test_plan_agenda_text_passed_to_prompt(self) -> None:
-        """agenda_text 非 None → 透传到 prompt 的 $agenda 变量。"""
+        """agenda_text 非空 → 透传到 prompt 的 $context_block 内"环节描述"段。"""
         raw = json.dumps({"should_reply": False})
         planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
 
@@ -292,15 +293,312 @@ class TestPlannerAgendaContext:
         await planner.plan([], forced=False, agenda_text=agenda_text)
 
         kwargs = prompt.render_safe.call_args.kwargs
-        assert kwargs.get("agenda") == agenda_text
+        assert "context_block" in kwargs
+        assert agenda_text in kwargs["context_block"]
 
     @pytest.mark.asyncio
     async def test_plan_no_agenda_text_uses_placeholder(self) -> None:
-        """agenda_text=None/空 → 使用占位文本。"""
+        """agenda_text=None/空 → 环节描述段使用 "（无）" 占位。"""
         raw = json.dumps({"should_reply": False})
         planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
 
         await planner.plan([], forced=False, agenda_text=None)
 
         kwargs = prompt.render_safe.call_args.kwargs
-        assert kwargs.get("agenda") == "（当前无节目单）"
+        assert "context_block" in kwargs
+        # PlannerAssembler 默认 placeholder
+        assert "## 环节描述\n（无）" in kwargs["context_block"]
+
+
+class TestPlannerContextBlockStructure:
+    """PlannerAssembler 8 段结构透出到 context_block 的契约测试。"""
+
+    @pytest.mark.asyncio
+    async def test_context_block_has_eight_sections(self) -> None:
+        """context_block 必须包含 PlannerAssembler 的全部 8 段标题。"""
+        raw = json.dumps({"should_reply": False})
+        planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+
+        await planner.plan([], forced=True)
+
+        kwargs = prompt.render_safe.call_args.kwargs
+        block = kwargs["context_block"]
+        for title in (
+            "系统人格",
+            "可用工具",
+            "环节描述",
+            "时间线摘要",
+            "直播流（窗口）",
+            "直播间快照",
+            "工作记忆",
+            "记忆召回",
+        ):
+            assert f"## {title}" in block, f"context_block 缺少 8 段之：{title}"
+
+    @pytest.mark.asyncio
+    async def test_context_block_contains_danmaku_batch(self) -> None:
+        """弹幕批次内容必须出现在 context_block 的"直播流（窗口）"段。"""
+        raw = json.dumps({"should_reply": False})
+        # 构造一个带 user_nickname 的 NormalizedMessage 鸭子
+        msg = MagicMock()
+        msg.text = "主播好可爱"
+        msg.user_nickname = "观众A"
+        msg.user_id = "u_a"
+        msg.data_type = "text"
+        planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+
+        await planner.plan([msg], forced=False)
+
+        kwargs = prompt.render_safe.call_args.kwargs
+        block = kwargs["context_block"]
+        assert "## 直播流（窗口）" in block
+        # 弹幕内容透传到段内（planner._render_batch 格式）
+        assert "主播好可爱" in block
+        assert "观众A" in block
+
+    @pytest.mark.asyncio
+    async def test_context_block_contains_environment(self) -> None:
+        """直播间快照段含 EnvironmentBlock 渲染字段（未读摘要/key_changes）。"""
+        raw = json.dumps({"should_reply": False})
+        snapshot = MagicMock()
+        snapshot.heat = "high"
+        snapshot.topics = ["游戏", "上号"]
+        snapshot.sc_queue = []
+        snapshot.topic_summary = "观众在聊游戏"
+        snapshot.topic_summary_at_ms = 0
+        snapshot.last_update_ms = 1
+
+        llm = MagicMock()
+        llm.chat = AsyncMock(return_value=_make_llm_response(raw))
+        prompt = MagicMock()
+        prompt.render_safe = MagicMock(return_value="PROMPT")
+        rs = MagicMock()
+        rs.get_snapshot = MagicMock(return_value=snapshot)
+
+        planner = Planner(
+            config={"planner_llm": "llm_fast"},
+            llm_service=llm,
+            prompt_service=prompt,
+            room_state=rs,
+        )
+        await planner.plan([], forced=False)
+
+        kwargs = prompt.render_safe.call_args.kwargs
+        block = kwargs["context_block"]
+        assert "## 直播间快照" in block
+        # EnvironmentBlock 渲染字段透出
+        assert "未读摘要" in block
+        assert "观众在聊游戏" in block
+        # key_changes 透传 topics 列表
+        assert "游戏" in block or "上号" in block
+
+
+class TestPlannerMemoryRecall:
+    """§1.50 记忆召回契约测试。"""
+
+    @pytest.mark.asyncio
+    async def test_memory_recall_injects_hits_into_context_block(self) -> None:
+        """fake memory 返回 hits → context_block 的"记忆召回"段含格式化文本。"""
+        from src.modules.memory.models import MemoryHit
+
+        raw = json.dumps({"should_reply": False})
+        hits = [
+            MemoryHit(
+                memory_id=1,
+                kind="fact",
+                text="上周聊过类似游戏话题",
+                score=0.87,
+                timestamp_ms=1_700_000_000_000,
+                metadata={"source": "topic_summary"},
+            ),
+            MemoryHit(
+                memory_id=2,
+                kind="fact",
+                text="观众A 经常问技术问题",
+                score=0.55,
+                timestamp_ms=1_700_000_000_000,
+                metadata={"source": "live_event"},
+            ),
+        ]
+
+        memory = MagicMock()
+        memory.recall = AsyncMock(return_value=hits)
+
+        snapshot = MagicMock()
+        snapshot.heat = "low"
+        snapshot.topics = []
+        snapshot.sc_queue = []
+        snapshot.topic_summary = "游戏讨论"
+        snapshot.topic_summary_at_ms = 0
+        snapshot.last_update_ms = 1
+
+        llm = MagicMock()
+        llm.chat = AsyncMock(return_value=_make_llm_response(raw))
+        prompt = MagicMock()
+        prompt.render_safe = MagicMock(return_value="PROMPT")
+        rs = MagicMock()
+        rs.get_snapshot = MagicMock(return_value=snapshot)
+
+        planner = Planner(
+            config={"planner_llm": "llm_fast"},
+            llm_service=llm,
+            prompt_service=prompt,
+            room_state=rs,
+            memory=memory,
+            recall_top_k=3,
+        )
+        await planner.plan([], forced=False)
+
+        # memory.recall 被调过，query 含 topic_summary
+        memory.recall.assert_awaited_once()
+        call_args = memory.recall.await_args
+        assert "游戏讨论" in call_args.args[0]
+        assert call_args.kwargs.get("top_k") == 3
+
+        kwargs = prompt.render_safe.call_args.kwargs
+        block = kwargs["context_block"]
+        # hits 文本透出
+        assert "上周聊过类似游戏话题" in block
+        assert "观众A 经常问技术问题" in block
+        # 格式化约定：score 精度 2 + source 透传
+        assert "0.87" in block
+        assert "src=topic_summary" in block
+        assert "src=live_event" in block
+
+    @pytest.mark.asyncio
+    async def test_memory_recall_truncates_long_text(self) -> None:
+        """单条 hit 文本超过 80 字需截断（_RECALL_HIT_TEXT_CHARS）。"""
+        from src.modules.memory.models import MemoryHit
+
+        raw = json.dumps({"should_reply": False})
+        long_text = "这是一条非常长的记忆测试文本" * 10  # 超过 80 字符
+        hits = [
+            MemoryHit(
+                memory_id=1,
+                kind="fact",
+                text=long_text,
+                score=0.7,
+                timestamp_ms=0,
+                metadata={"source": "x"},
+            ),
+        ]
+
+        memory = MagicMock()
+        memory.recall = AsyncMock(return_value=hits)
+
+        snapshot = MagicMock()
+        snapshot.heat = "low"
+        snapshot.topics = []
+        snapshot.sc_queue = []
+        snapshot.topic_summary = "t"
+        snapshot.topic_summary_at_ms = 0
+        snapshot.last_update_ms = 1
+
+        llm = MagicMock()
+        llm.chat = AsyncMock(return_value=_make_llm_response(raw))
+        prompt = MagicMock()
+        prompt.render_safe = MagicMock(return_value="PROMPT")
+        rs = MagicMock()
+        rs.get_snapshot = MagicMock(return_value=snapshot)
+
+        planner = Planner(
+            config={"planner_llm": "llm_fast"},
+            llm_service=llm,
+            prompt_service=prompt,
+            room_state=rs,
+            memory=memory,
+        )
+        await planner.plan([], forced=False)
+
+        kwargs = prompt.render_safe.call_args.kwargs
+        block = kwargs["context_block"]
+        # 长文本被截到 80 字以内（不再展开全文）
+        assert long_text not in block
+        # 截断标记出现
+        assert "…" in block
+
+    @pytest.mark.asyncio
+    async def test_memory_none_renders_placeholder_only(self) -> None:
+        """memory=None 时流程不炸，且 prompt 含"（暂无）"占位。"""
+        raw = json.dumps({"should_reply": False})
+        planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+
+        plan = await planner.plan([], forced=False)
+
+        assert plan is not None  # 流程不炸
+        kwargs = prompt.render_safe.call_args.kwargs
+        # PlannerAssembler 的 memory_recall_section 为空串时填"（暂无）"
+        assert "## 记忆召回\n（暂无）" in kwargs["context_block"]
+
+    @pytest.mark.asyncio
+    async def test_memory_recall_empty_hits_renders_placeholder(self) -> None:
+        """memory 返回空 list → 仍走模板占位（"暂无"），不等同于崩溃。"""
+        raw = json.dumps({"should_reply": False})
+        memory = MagicMock()
+        memory.recall = AsyncMock(return_value=[])
+
+        snapshot = MagicMock()
+        snapshot.heat = "low"
+        snapshot.topics = []
+        snapshot.sc_queue = []
+        snapshot.topic_summary = "t"
+        snapshot.topic_summary_at_ms = 0
+        snapshot.last_update_ms = 1
+
+        llm = MagicMock()
+        llm.chat = AsyncMock(return_value=_make_llm_response(raw))
+        prompt = MagicMock()
+        prompt.render_safe = MagicMock(return_value="PROMPT")
+        rs = MagicMock()
+        rs.get_snapshot = MagicMock(return_value=snapshot)
+
+        planner = Planner(
+            config={"planner_llm": "llm_fast"},
+            llm_service=llm,
+            prompt_service=prompt,
+            room_state=rs,
+            memory=memory,
+        )
+        await planner.plan([], forced=False)
+
+        memory.recall.assert_awaited_once()
+        kwargs = prompt.render_safe.call_args.kwargs
+        assert "## 记忆召回\n（暂无）" in kwargs["context_block"]
+
+    @pytest.mark.asyncio
+    async def test_memory_recall_exception_does_not_crash(self) -> None:
+        """memory.recall 抛异常 → Planner 不炸，返回 DecisionPlan（决策流程降级）。"""
+        raw = json.dumps({"should_reply": False})
+        memory = MagicMock()
+        memory.recall = AsyncMock(side_effect=RuntimeError("vector store 炸了"))
+
+        snapshot = MagicMock()
+        snapshot.heat = "low"
+        snapshot.topics = []
+        snapshot.sc_queue = []
+        snapshot.topic_summary = "t"
+        snapshot.topic_summary_at_ms = 0
+        snapshot.last_update_ms = 1
+
+        llm = MagicMock()
+        llm.chat = AsyncMock(return_value=_make_llm_response(raw))
+        prompt = MagicMock()
+        prompt.render_safe = MagicMock(return_value="PROMPT")
+        rs = MagicMock()
+        rs.get_snapshot = MagicMock(return_value=snapshot)
+
+        planner = Planner(
+            config={"planner_llm": "llm_fast"},
+            llm_service=llm,
+            prompt_service=prompt,
+            room_state=rs,
+            memory=memory,
+        )
+        plan = await planner.plan([], forced=False)
+
+        # 召回失败不阻断决策——降级到无记忆路径
+        assert plan is not None
+        assert plan.should_reply is False
+        # memory_recall_section 为空 → 模板占位
+        kwargs = prompt.render_safe.call_args.kwargs
+        assert "## 记忆召回\n（暂无）" in kwargs["context_block"]

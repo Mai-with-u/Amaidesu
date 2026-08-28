@@ -35,8 +35,11 @@ import re
 from typing import Any, List, Optional
 
 from src.modules.config.schemas.base import BaseConfig
+from src.modules.context.assembler import AssemblerInputs, PlannerAssembler
+from src.modules.context.snapshot import EnvironmentBlock
 from src.modules.logging import get_logger
-from src.modules.time_utils import format_duration_ms
+from src.modules.memory.models import MemoryHit
+from src.modules.time_utils import format_duration_ms, now_ms
 from src.modules.types.message_type import require_message_type
 
 from .plan import DecisionPlan
@@ -49,6 +52,16 @@ __all__ = ["Planner"]
 #: LLM 偶发输出 `confidence=0.0` 却 `should_reply=true` 的矛盾决策
 #: （日志实测出现过），此时降级静默，避免"没话找话硬开口"。
 _MIN_CONFIDENCE_FOR_REPLY: float = 0.3
+
+#: 默认记忆召回条数（Planner 每轮决策注入的 hit 上限）。
+#: 配置面不允许暴露——记忆质量先稳定再调参，避免污染用户配置文件。
+_DEFAULT_RECALL_TOP_K: int = 3
+
+#: 弹幕批次拼接到召回 query 的最大字符数（控 query 长度，避免污染召回）。
+_RECALL_QUERY_BATCH_CHARS: int = 200
+
+#: 单条召回 hit 文本截断长度（控制 prompt 体积）。
+_RECALL_HIT_TEXT_CHARS: int = 80
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +103,8 @@ class Planner:
         prompt_service: Any,
         room_state: RoomState,
         capabilities_provider: Any = None,
+        memory: Any = None,
+        recall_top_k: int = _DEFAULT_RECALL_TOP_K,
     ) -> None:
         """初始化 Planner。
 
@@ -104,6 +119,11 @@ class Planner:
             room_state: 直播间态势规则层实例（``RoomState``）
             capabilities_provider: 可选的能力提供者，用于向 prompt 注入可用动作清单。
                 None 时 prompt 的 action_list 为空串。
+            memory: §1.50 记忆后端（鸭子类型 ``MemoryProvider``）。``None`` 时记忆
+                召回段落渲染为 ``（暂无）``，Planner 走无记忆决策路径。功能可关闭
+                而非崩溃友好——主控装配时未注入则 Planner 整体降级。
+            recall_top_k: 每轮注入 prompt 的最大命中条数，默认 3。仅 Planner 内部
+                使用，不暴露用户配置（记忆质量先稳定再调参）。
         """
         # 解析配置（容忍 dict / 已解析对象 / None）
         if config is None:
@@ -123,6 +143,13 @@ class Planner:
         self._prompt_service = prompt_service
         self._room_state = room_state
         self._capabilities_provider = capabilities_provider
+        # §1.50 记忆后端与召回深度
+        self._memory = memory
+        self._recall_top_k = recall_top_k
+
+        # PlannerAssembler 一份实例（assemble 纯函数，但保留成员以便未来
+        # 缓存 stable_prefix_hash 做 LLM 缓存前缀命中）
+        self._assembler = PlannerAssembler()
 
         self.logger = get_logger("Planner")
 
@@ -164,29 +191,63 @@ class Planner:
             DecisionPlan：解析成功时返回；LLM 异常 / 脏 JSON / 调用失败时返回 None，
             由调用方（StreamerAgent 主循环）处理降级。
         """
-        # 1. 组装上下文
+        # 1. 组装上下文（v2.2：PlannerAssembler 单一装配路径）
         snapshot = self._room_state.get_snapshot()
-        room_state_text = self._render_room_state(snapshot)
         danmaku_text = self._render_batch(batch)
         history_text = self._render_history(history)
         action_list = self._get_action_list()
 
-        # Agenda 上下文：None / 空串时用占位文本，避免模板中出现字面 $agenda
-        # 占位文本与模板中的"无 Agenda"提示对齐，让 LLM 知道"本场未启用 Agenda"
-        agenda_render = agenda_text if agenda_text else "（当前无节目单）"
+        # 2. 直播流窗口：历史在上、当前批在下（显式多对一，不强行一问一答）
+        recent_chat_parts: List[str] = []
+        if history_text and history_text != "（暂无对话历史）":
+            recent_chat_parts.append(history_text)
+        if danmaku_text and danmaku_text != "（本批无弹幕）":
+            recent_chat_parts.append(danmaku_text)
+        recent_chat_window = "\n\n".join(recent_chat_parts) if recent_chat_parts else "（暂无）"
 
-        # 2. 渲染 prompt（★ 无 persona 变量）
+        # 3. 直播间快照（EnvironmentBlock：分钟级缓存友好）
+        current_ms = now_ms()
+        env_block = EnvironmentBlock(
+            minute_bucket_ms=(current_ms // 60000) * 60000,
+            # 暂无"开播时刻"字段——按任务约定传 0，模板按 0ms 处理
+            duration_so_far_ms=0,
+            current_stage_label=None,  # Planner 零上下文承诺；环节标题由 Replyer 用
+            unread_summary=getattr(snapshot, "topic_summary", "") or "",
+            key_changes=list(getattr(snapshot, "topics", []) or []),
+        )
+
+        # 4. 记忆召回（§1.50）：recall(query, top_k) → 文本行
+        memory_recall_section = await self._recall_memory(snapshot, batch)
+
+        # 5. PlannerAssembler 输入（★ Planner 零人设承诺 → persona=""）
+        try:
+            assembler_inputs = AssemblerInputs(
+                persona="",
+                tool_definitions_block=action_list,
+                current_stage_label=None,
+                stage_descriptions=agenda_text or "",
+                timeline_blocks=[],
+                recent_chat_window=recent_chat_window,
+                environment=env_block,
+                working_memory=None,
+                memory_recall_section=memory_recall_section,
+                reply_intent="",
+                topic_subset="",
+                agent_kind="planner",
+            )
+            snapshot_assembled = self._assembler.assemble(assembler_inputs)
+        except Exception as e:
+            self.logger.error(f"PlannerAssembler 组装失败: {e}", exc_info=True)
+            return None
+
+        # 6. 渲染 prompt（★ 仅三个变量：context_block / forced / proactive）
         #    forced / proactive 透传为字符串（"true"/"false"），对齐模板中的文档约定
         try:
             prompt = self._prompt_service.render_safe(
                 self.TEMPLATE_NAME,
-                room_state=room_state_text,
-                danmaku_batch=danmaku_text,
+                context_block=snapshot_assembled.rendered_text,
                 forced=str(forced).lower(),
                 proactive=str(proactive).lower(),
-                action_list=action_list,
-                conversation_history=history_text,
-                agenda=agenda_render,
             )
         except Exception as e:
             self.logger.error(f"渲染 Planner prompt 失败: {e}", exc_info=True)
@@ -289,6 +350,59 @@ class Planner:
             # Pydantic ValidationError 等其他异常也走降级
             self.logger.warning(f"构造 DecisionPlan 失败: {e}")
             return None
+
+    async def _recall_memory(
+        self,
+        snapshot: RoomStateSnapshot,
+        batch: List[Any],
+    ) -> str:
+        """调 §1.50 记忆后端召回相关历史片段，格式化为 prompt 注入文本。
+
+        Query 组装策略（任务约定）：
+        - 基础 = RoomState.topic_summary（非空时）
+        - 拼接 = 本批弹幕文本前 200 字符
+        - 无 memory / 无 hits / 异常 → 空串；Assembler 兜底 "（暂无）"
+
+        Args:
+            snapshot: RoomState 快照（取 topic_summary）
+            batch: 当前批弹幕（取前 200 字符文本）
+
+        Returns:
+            多行召回文本；无内容时返回空串
+        """
+        if self._memory is None:
+            return ""
+
+        topic_summary = (getattr(snapshot, "topic_summary", "") or "").strip()
+        batch_text = self._render_batch(batch)
+        # batch_text 已是 MessageBuffer 格式化的 "name: text" 行；这里只截前 200 字符
+        batch_head = (batch_text or "").strip()[:_RECALL_QUERY_BATCH_CHARS]
+        query_parts = [p for p in (topic_summary, batch_head) if p]
+        query = "\n".join(query_parts) if query_parts else ""
+        if not query:
+            return ""
+
+        try:
+            hits: List[MemoryHit] = await self._memory.recall(query, top_k=self._recall_top_k)
+        except Exception as exc:
+            # 召回失败不阻断决策——整体降级静默
+            self.logger.warning(f"记忆召回失败: {exc}")
+            return ""
+
+        if not hits:
+            return ""
+
+        lines: List[str] = []
+        for hit in hits:
+            text = (getattr(hit, "text", "") or "").replace("\n", " ").strip()
+            if len(text) > _RECALL_HIT_TEXT_CHARS:
+                text = text[:_RECALL_HIT_TEXT_CHARS].rstrip() + "…"
+            score = getattr(hit, "score", 0.0) or 0.0
+            metadata = getattr(hit, "metadata", {}) or {}
+            source = metadata.get("source", "unknown")
+            lines.append(f"- [{score:.2f} | src={source}] {text}")
+
+        return "\n".join(lines)
 
     def _render_room_state(self, snapshot: RoomStateSnapshot) -> str:
         """将直播间态势快照渲染为人类可读的文本块（供 prompt 注入）。
