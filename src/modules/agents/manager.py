@@ -76,7 +76,7 @@ class AgentManager:
         Args:
             agent: BaseAgent 实例
             description: 显示描述（默认用 agent.description）
-            spec_provider: 工具来源溯源（"builtin"/"game"/"mcp"）
+            spec_provider: 工具来源溯源（"builtin"/"game"；"mcp" 预留枚举值，暂无实现）
         """
         if not agent.name:
             logger.warning(

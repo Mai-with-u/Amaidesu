@@ -49,7 +49,7 @@ RESTART_REQUIRED_PREFIXES = [
     "maicore.",
     "dashboard.",
     "logging.",
-    "mcp.",
+    # v2.0.9 D2：mcp 段已弃用（upgrade_hooks.py 2.0.2 主动剥离），从重启列表中移除避免误导
 ]
 
 
@@ -330,7 +330,6 @@ _SECTION_TO_FILE: dict[str, str] = {
     "events": "core.toml",
     "logging": "core.toml",
     "pipelines": "core.toml",
-    "mcp": "core.toml",
     "simulator": "core.toml",
     "llm": "model.toml",
     "llm_fast": "model.toml",
@@ -382,7 +381,6 @@ _SECTION_LABELS: dict[str, str] = {
     "dashboard": "Dashboard",
     "logging": "日志",
     "pipelines": "管道配置",
-    "mcp": "MCP 服务",
     "simulator": "模拟直播间",
     "agents": "业务 Agent",
     "streamer": "主播 Agent",

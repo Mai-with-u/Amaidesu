@@ -443,3 +443,82 @@ class TestStageStripHook2_0_4:
         data = {"collectors": {"enabled": ["console_input"]}}
         changed = _strip_pipelines_2_0_4(data)
         assert changed == []
+
+
+class TestToolsHook2_0_9:
+    """tools.toml 2.0.9：剥离 [tools.perception.config.read_pingmu] 的 VLM 自管字段。
+
+    审计 D1 收编：VLM 调用统一走 ``LLMManager.chat_vision``，原 aiohttp 路径的
+    api_key/base_url/model_name 三字段失去消费者，剥离避免漂移告警与误导。
+    """
+
+    def test_strips_three_dead_keys(self):
+        from src.modules.config.upgrade_hooks import _migrate_tools_2_0_9
+
+        data = {
+            "tools": {
+                "enabled": ["perception"],
+                "perception": {
+                    "enabled": True,
+                    "provider": "builtin",
+                    "config": {
+                        "enabled": ["read_pingmu"],
+                        "read_pingmu": {
+                            "api_key": "",
+                            "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                            "model_name": "qwen2.5-vl-72b-instruct",
+                            "screenshot_interval": 0.3,
+                            "diff_threshold": 25.0,
+                            "max_cached_images": 5,
+                        },
+                    },
+                },
+            },
+        }
+        changed = _migrate_tools_2_0_9(data)
+        assert "tools.perception.config.read_pingmu.api_key" in changed
+        assert "tools.perception.config.read_pingmu.base_url" in changed
+        assert "tools.perception.config.read_pingmu.model_name" in changed
+
+        read_pingmu = data["tools"]["perception"]["config"]["read_pingmu"]
+        assert "api_key" not in read_pingmu
+        assert "base_url" not in read_pingmu
+        assert "model_name" not in read_pingmu
+        # 其他字段保留
+        assert read_pingmu["screenshot_interval"] == 0.3
+        assert read_pingmu["max_cached_images"] == 5
+
+    def test_idempotent_when_keys_already_absent(self):
+        from src.modules.config.upgrade_hooks import _migrate_tools_2_0_9
+
+        data = {
+            "tools": {
+                "perception": {
+                    "config": {
+                        "read_pingmu": {
+                            "screenshot_interval": 0.3,
+                            "max_cached_images": 5,
+                        },
+                    },
+                },
+            },
+        }
+        changed = _migrate_tools_2_0_9(data)
+        assert changed == []
+        # 二次执行仍幂等
+        changed_again = _migrate_tools_2_0_9(data)
+        assert changed_again == []
+
+    def test_noop_when_path_missing(self):
+        """tools/perception/config/read_pingmu 任一层缺失均安全返回。"""
+        from src.modules.config.upgrade_hooks import _migrate_tools_2_0_9
+
+        assert _migrate_tools_2_0_9({}) == []
+        assert _migrate_tools_2_0_9({"tools": {"perception": None}}) == []
+        assert _migrate_tools_2_0_9({"tools": {"perception": {}}}) == []
+        assert (
+            _migrate_tools_2_0_9(
+                {"tools": {"perception": {"config": {"read_pingmu": "not-a-dict"}}}}
+            )
+            == []
+        )

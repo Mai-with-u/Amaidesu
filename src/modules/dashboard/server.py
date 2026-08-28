@@ -58,7 +58,6 @@ _SECTION_TO_CONFIG_FILE: dict[str, str] = {
     "events": "core.toml",
     "logging": "core.toml",
     "interceptors": "core.toml",
-    "mcp": "core.toml",
     "simulator": "core.toml",
     "llm": "model.toml",
     "llm_fast": "model.toml",

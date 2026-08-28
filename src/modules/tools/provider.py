@@ -1,7 +1,7 @@
 """
 ToolProvider Protocol（Wave 3 / §1.5）
 
-每个提供方（builtin / game / mcp）实现 ``ToolProvider`` 接口：
+每个提供方（builtin / game）实现 ``ToolProvider`` 接口；``"mcp"`` 是预留枚举值，v2 决策架构移除 MCP 桥接后暂无实现。
 - ``list_tools() -> Iterable[ToolSpec]`` 声明自己拥有的工具
 - ``invoke(invocation) -> ToolExecutionResult`` 执行（同步语义：sync 工具等到结果；async 工具仅返回成功受理）
 

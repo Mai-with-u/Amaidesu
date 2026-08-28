@@ -1,8 +1,12 @@
 """
-ScreenReader —— 屏幕变化 → VLM 文本（v2 / Wave 5 迁移）
+ScreenReader —— 屏幕变化 → VLM 文本（v2 / Wave 5 迁移 → v2.0.9 收编）
 
 迁移自 ``src/stages/input/collectors/read_pingmu/``（占位补全）。仅在
 ``ScreenAnalyzer`` 检测到屏幕**变化**时才调用 VLM，避免无变化的轮询浪费 token。
+
+v2.0.9 收编：原本用裸 aiohttp 自带 api_key/base_url/model_name 绕过
+LLMManager profile 体系；现统一改为 ``LLMManager.chat_vision(client_type="vlm")``，
+key/model/重试/日志走 model.toml 的 ``[vlm]`` profile 与 ``[[llm_providers]]`` 池。
 
 verbatim 边界：缓存去重策略（最近 ``max_cached_images`` 张图像哈希，避免重复调用）、
 回调式上下文更新（不破坏 Collector 主循环）。
@@ -10,7 +14,6 @@ verbatim 边界：缓存去重策略（最近 ``max_cached_images`` 张图像哈
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import io
 from collections import deque
@@ -19,13 +22,17 @@ from typing import Any, Awaitable, Callable, Deque, Optional
 
 from src.modules.logging import get_logger
 
-try:
-    import aiohttp
+# 注：v2.0.9 移除 aiohttp 依赖（VLM 调用统一走 LLMManager → chat_vision → OpenAIClient.vision）。
+# 图像以 bytes 形式传入 chat_vision，由 OpenAIClient._path_or_url_to_data_url 自动 data-URL 化。
 
-    _AIOHTTP_AVAILABLE = True
-except ImportError:
-    aiohttp = None
-    _AIOHTTP_AVAILABLE = False
+# VLM 调用的 prompt 模板（v2.0.9 收编：从原 aiohttp payload 的 user message content 迁移）。
+_VLM_PROMPT = "请描述当前屏幕内容（简明扼要）"
+
+# 屏幕分析 system message（提示模型保持客观、聚焦可见内容）。
+_VLM_SYSTEM_MESSAGE = (
+    "你是 VTuber 主播的屏幕感知助手。请根据用户提供的截图，简明扼要地描述屏幕上的关键内容"
+    "（如打开的窗口、正在进行的操作、文字内容等），便于主播理解屏幕上下文并据此回应弹幕。"
+)
 
 
 @dataclass(slots=True)
@@ -33,7 +40,7 @@ class ScreenAnalysisResult:
     """单次屏幕分析结果（VLM 输出）"""
 
     new_current_context: str  # 新识别的屏幕文本/上下文
-    raw_response: dict[str, Any]  # VLM 原始响应
+    raw_response: dict[str, Any]  # VLM 原始响应（来自 LLMResponse 字段）
 
 
 class ScreenReader:
@@ -43,19 +50,20 @@ class ScreenReader:
     - 仅在屏幕发生变化（``ScreenAnalyzer`` 触发回调）时才调用 VLM，省 token
     - 维护最近 ``max_cached_images`` 张图像哈希作为缓存；相同 hash 直接跳过
     - 通过 ``set_context_update_callback`` 注入主循环的上下文更新入口
+    - v2.0.9：VLM 调用统一经由 :class:`LLMManager.chat_vision`，key/model/重试/日志由
+      ``config/model.toml`` 的 ``[vlm]`` profile + ``[[llm_providers]]`` 池统一管理
     """
 
     def __init__(
         self,
-        api_key: str = "",
-        base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        model_name: str = "qwen2.5-vl-72b-instruct",
         max_cached_images: int = 5,
+        llm_manager: Optional[Any] = None,
     ):
-        self.api_key = api_key
-        self.base_url = base_url
-        self.model_name = model_name
+        # v2.0.9：移除 api_key/base_url/model_name 参数（统一走 model.toml）。
+        # llm_manager 为 None 时保留"跳过 VLM 调用 + 返回说明性结果"的降级语义，
+        # 与旧版 api_key 为空时的行为等价，便于未配置 VLM 场景（仅做缓存去重）。
         self.max_cached_images = max_cached_images
+        self._llm_manager = llm_manager
 
         self.logger = get_logger("ScreenReader")
         self._image_hash_cache: Deque[str] = deque(maxlen=max_cached_images)
@@ -93,54 +101,47 @@ class ScreenReader:
         return result
 
     async def _call_vlm(self, image: Any, change_data: dict[str, Any]) -> Optional[ScreenAnalysisResult]:
-        """调用 VLM API"""
-        if not self.api_key:
-            self.logger.debug("未配置 api_key，跳过 VLM 调用")
+        """通过 LLMManager 调用 VLM（v2.0.9 收编路径）。
+
+        降级语义：
+        - 未注入 llm_manager → 返回带 "skipped" 标记的说明性 ScreenAnalysisResult
+          （与旧版 api_key 为空时等价，便于未配置 VLM 的场景仅做缓存去重）
+        - llm_manager 注入但 chat_vision 失败 → 返回 None（异常分支由调用方按既有
+          日志路径处理）
+        """
+        if self._llm_manager is None:
+            self.logger.debug("未注入 llm_manager，跳过 VLM 调用（仅缓存去重生效）")
             return ScreenAnalysisResult(
-                new_current_context="[ScreenReader 未配置 api_key，仅缓存去重生效]",
+                new_current_context="[ScreenReader 未注入 llm_manager，仅缓存去重生效]",
                 raw_response={"skipped": True},
             )
-        if not _AIOHTTP_AVAILABLE:
-            self.logger.warning("缺少 aiohttp，无法调用 VLM")
-            return None
 
         try:
-            image_b64 = self._image_to_base64(image)
-            payload = {
-                "model": self.model_name,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": f"data:image/png;base64,{image_b64}"},
-                            },
-                            {
-                                "type": "text",
-                                "text": "请描述当前屏幕内容（简明扼要）",
-                            },
-                        ],
-                    }
-                ],
-            }
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            }
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{self.base_url}/chat/completions",
-                    headers=headers,
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=30),
-                ) as response:
-                    data = await response.json()
-            text = self._extract_text(data)
-            return ScreenAnalysisResult(new_current_context=text, raw_response=data)
+            image_bytes = self._image_to_bytes(image)
+            response = await self._llm_manager.chat_vision(
+                prompt=_VLM_PROMPT,
+                images=[image_bytes],
+                client_type="vlm",
+                system_message=_VLM_SYSTEM_MESSAGE,
+            )
         except Exception as e:
-            self.logger.error(f"VLM 调用失败: {e}", exc_info=True)
+            self.logger.error(f"VLM 调用异常: {e}", exc_info=True)
             return None
+
+        if not response.success:
+            self.logger.warning(
+                f"VLM 调用未成功 (error={response.error!r}); 降级为不返回分析结果（缓存已记录，不重复触发）"
+            )
+            return None
+
+        text = (response.content or "").strip()
+        raw = {
+            "model": response.model,
+            "usage": response.usage,
+            "success": response.success,
+            "reasoning_content": getattr(response, "reasoning_content", None),
+        }
+        return ScreenAnalysisResult(new_current_context=text, raw_response=raw)
 
     @staticmethod
     def _hash_image(image: Any) -> str:
@@ -153,25 +154,12 @@ class ScreenReader:
             return hashlib.sha256(str(id(image)).encode()).hexdigest()
 
     @staticmethod
-    def _image_to_base64(image: Any) -> str:
-        """PIL 图像 → base64 字符串（PNG）"""
+    def _image_to_bytes(image: Any) -> bytes:
+        """PIL 图像 → PNG 字节流（供 LLMManager.chat_vision 作为 image 参数）。
+
+        chat_vision 的 OpenAIClient 后端接受 ``bytes``，由
+        ``_infer_mime_from_bytes`` 自动推断 ``image/png`` 并 base64 编码。
+        """
         buf = io.BytesIO()
         image.save(buf, format="PNG")
-        return base64.b64encode(buf.getvalue()).decode("utf-8")
-
-    @staticmethod
-    def _extract_text(vlm_response: dict[str, Any]) -> str:
-        """从 VLM 响应中提取文本"""
-        try:
-            choices = vlm_response.get("choices", [])
-            if choices:
-                message = choices[0].get("message", {})
-                content = message.get("content", "")
-                if isinstance(content, str):
-                    return content
-                if isinstance(content, list):
-                    parts = [item.get("text", "") for item in content if isinstance(item, dict)]
-                    return "".join(parts)
-            return ""
-        except Exception:
-            return ""
+        return buf.getvalue()

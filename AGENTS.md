@@ -274,4 +274,4 @@ Web Dashboard 两种模式（生产 60214 / 开发 60315）说明见 [快速开�
 
 ---
 
-*最后更新：2026-08-27（v2.0.5 工具注册路径对齐：高频 API 速查节 `@tool` 装饰器注释改双模式——无 `registry=` 入模块级 pending 表由 `bind_pending_tools` flush，带 `registry=` 立即注册仅测试/本地用；`default_tool_registry` 单例仅测试兼容，生产禁用）*
+*最后更新：2026-08-29（v2.0.9 D1 VLM 收编 + D2 MCP 清残留：高频 API 速查节"事件系统"未改；事件 Payload / 配置 Schema / 三范式 / 拦截器节未改；本次仅在配置纪律段新增 CONFIG_VERSION→2.0.9 同步、升级钩子、迁移测试对应条目已在 `tests/config/test_upgrade_hooks.py` 的 TestToolsHook2_0_9 内覆盖）*

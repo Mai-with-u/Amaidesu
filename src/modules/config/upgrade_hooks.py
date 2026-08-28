@@ -460,6 +460,45 @@ def _migrate_background_2_0_0(data: dict[str, Any]) -> list[str]:
     return changed
 
 
+def _migrate_tools_2_0_9(data: dict[str, Any]) -> list[str]:
+    """tools.toml 2.0.9：剥离 ``[tools.perception.config.read_pingmu]`` 死键。
+
+    审计 D1：VLM 收编后，ScreenChangeCollector.ConfigSchema 移除 ``api_key`` /
+    ``base_url`` / ``model_name`` 三字段（统一走 ``model.toml`` 的 ``[vlm]`` profile
+    + ``[[llm_providers]]`` 池）。原配置残留会触发 Schema 漂移告警，且永远无人读取。
+
+    路径钻取：``[tools] → [perception] → [config] → [read_pingmu]``；任一中间层
+    类型错误（应 dict）则放弃该路径返回，保持其他字段完整。
+
+    原地修改、幂等（重复执行时三键已不存在，无事发生），返回变更路径列表。
+    """
+    changed: list[str] = []
+
+    tools = data.get("tools")
+    if not isinstance(tools, dict):
+        return changed
+
+    perception = tools.get("perception")
+    if not isinstance(perception, dict):
+        return changed
+
+    perception_cfg = perception.get("config")
+    if not isinstance(perception_cfg, dict):
+        return changed
+
+    read_pingmu = perception_cfg.get("read_pingmu")
+    if not isinstance(read_pingmu, dict):
+        return changed
+
+    dead_keys = ("api_key", "base_url", "model_name")
+    for key in dead_keys:
+        if key in read_pingmu:
+            del read_pingmu[key]
+            changed.append(f"tools.perception.config.read_pingmu.{key}")
+
+    return changed
+
+
 # ---------------------------------------------------------------------------
 # 升级钩子注册表
 # ---------------------------------------------------------------------------
@@ -549,6 +588,12 @@ CONFIG_UPGRADE_HOOKS: tuple[ConfigUpgradeHook, ...] = (
         target_version="2.0.0",
         config_file="background.toml",
         migrate=_migrate_background_2_0_0,
+    ),
+    # 2.0.9 D1 VLM 收编：剥离 [tools.perception.config.read_pingmu] 的 VLM 自管字段
+    ConfigUpgradeHook(
+        target_version="2.0.9",
+        config_file="tools.toml",
+        migrate=_migrate_tools_2_0_9,
     ),
 )
 

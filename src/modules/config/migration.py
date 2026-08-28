@@ -4,11 +4,16 @@
 自动备份旧文件到 config/old/，丢弃已确认的死配置。
 
 v2.0.0 文件映射：
-    meta/general/persona/context/events/dashboard/mcp/simulator/logging/pipelines → core.toml
+    meta/general/persona/context/events/dashboard/simulator/logging/pipelines → core.toml
     llm/llm_fast/vlm/llm_local/llm_summary/llm_agenda → model.toml
     deciders（决策组件）→ agents.toml（旧 enabled 列表 + 各 decider 子配置）
     collectors（采集组件）→ tools.toml 的 [tools.perception.config]
     handlers（输出组件）→ tools.toml 的 [tools.output.config]
+
+v2.0.9 收编：删除 ``mcp`` 死映射。审计 D2 发现 mcp 已弃用（upgrade_hooks.py:
+:migrate_core_2_0_2` 主动剥离 ``[mcp]`` 段），但 ``_SECTION_MAP`` 仍保留
+``"mcp": "core.toml"`` 形成死引用，迁移时会把外部旧 config 的 ``[mcp]`` 段错误
+地写入新 core.toml。删除映射后由 upgrade_hooks 接管剥离职责，与死段处理统一。
 """
 
 from __future__ import annotations
@@ -45,7 +50,6 @@ _SECTION_MAP: dict[str, str] = {
     "context": "core.toml",
     "dashboard": "core.toml",
     "events": "core.toml",
-    "mcp": "core.toml",
     "simulator": "core.toml",
     "logging": "core.toml",
     "pipelines": "core.toml",

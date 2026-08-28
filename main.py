@@ -375,7 +375,13 @@ async def create_app_components(
         from src.modules.collectors.manager import CollectorManager
 
         collector_manager = CollectorManager()
-        await _register_collectors_from_config(collector_manager, collectors_config, config_service, event_bus)
+        await _register_collectors_from_config(
+            collector_manager,
+            collectors_config,
+            config_service,
+            event_bus,
+            llm_service=llm_service,
+        )
         await collector_manager.start_all()
         logger.info(f"CollectorManager 已启动（{len(collector_manager)} 个 Collector）")
 
@@ -580,13 +586,22 @@ async def _start_log_streamer():
     return streamer
 
 
-async def _register_collectors_from_config(manager, config_section, config_service, event_bus=None):
+async def _register_collectors_from_config(
+    manager,
+    config_section,
+    config_service,
+    event_bus=None,
+    llm_service=None,
+):
     """根据 [tools.perception.config] 段注册 Collector 实例到 CollectorManager。
 
     v2 段结构（tools.toml）：
         enabled = ["bili_danmaku", "mock_danmaku", ...]
         bili_danmaku = { ... }
         mock_danmaku = { ... }
+
+    v2.0.9 收编：新增可选 ``llm_service`` 参数，透传给需要 VLM 的采集器（仅
+    ``screen``/``read_pingmu``）。其余 collector 不消费 LLMManager，参数被忽略。
     """
     from src.modules.collectors.factory import instantiate_collector
 
@@ -595,7 +610,12 @@ async def _register_collectors_from_config(manager, config_section, config_servi
         sub_cfg = config_section.get(collector_name, {})
         if not isinstance(sub_cfg, dict):
             sub_cfg = {}
-        instance = instantiate_collector(collector_name, sub_cfg, event_bus=event_bus)
+        instance = instantiate_collector(
+            collector_name,
+            sub_cfg,
+            event_bus=event_bus,
+            llm_manager=llm_service,
+        )
         if instance is None:
             logger.warning(f"Collector '{collector_name}' 未找到 Collector 类，跳过")
             continue

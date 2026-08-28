@@ -6,7 +6,7 @@ Amaidesu 工具层（Wave 3 新增）
   （slots=True，对齐 §1.5 定案）
 - ``ResultBlock`` 多模态结果块（text / image base64+mime）
 - ``ToolRegistry`` 注册中心：按名分发 / 去重 / 失败兜底（不抛）
-- ``ToolProvider`` Protocol：声明一组工具的统一来源（builtin/game/mcp）
+- ``ToolProvider`` Protocol：声明一组工具的统一来源（builtin/game；"mcp" 预留枚举值，暂无实现）
 - ``@tool`` 装饰器（双模式：pending 表 / 显式 registry）
 - ``bind_pending_tools(registry)`` —— 把 pending 表刷入 registry
 - ``bind_core_tools(registry, config)`` —— 装配核心工具包（见 bootstrap.py）
@@ -24,7 +24,8 @@ Amaidesu 工具层（Wave 3 新增）
 ## provider 来源溯源
 - "builtin"：进程内框架内置（含 AgentControl、speak 等）
 - "game"   ：玩家引擎 Agent 声明的工具（动态，list_tools 返回）
-- "mcp"    ：MCP Provider 唯一协议适配点
+- "mcp"    ：预留枚举值（v2 决策架构移除 MCP 桥接后暂无实现；保留以备未来重启；
+            详见 .omo/audits/2026-08-27-unfinished-systems-audit.md D2）
 
 ## 失败兜底
 ``ToolRegistry.invoke()`` 永不抛异常：未知工具 → 失败 ToolExecutionResult；

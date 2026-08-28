@@ -202,7 +202,7 @@ sequenceDiagram
 | `bili_danmaku` | `src/modules/collectors/bilibili/legacy/` | v2 主动推（`_emit_semantic_events=True`） | B 站第三方 HTTP API 弹幕 |
 | `console_input` | `src/modules/collectors/console/` | 兜底转发（基类 `_emit_normalized_message` 把 `data_type` 映射为 `room.message.danmaku/gift/super_chat/enter`） | 控制台输入 |
 | `mock_danmaku` | `src/modules/collectors/mock/` | v2 主动推；**v2.0.7+ ADR-006 收敛后仅保留 JSONL 回放**（LLM 驱动仿真由 `src/modules/simulator/` 的 `SimulatorService` 承担，二者互补不互斥） | 确定性 JSONL 回放器 |
-| `screen_change` | `src/modules/collectors/screen/` | 兜底转发 | 屏幕变化检测（`screen_change_collector.py`）；同目录另有 `screen_reader.py` + `screen_analyzer.py` 辅助 |
+| `screen_change` | `src/modules/collectors/screen/` | 兜底转发 | 屏幕变化检测（`screen_change_collector.py`）；同目录另有 `screen_reader.py`（v2.0.9 起 VLM 走 LLMManager.chat_vision 收编）+ `screen_analyzer.py` 辅助 |
 | `stt` | `src/modules/collectors/stt/` | 兜底转发 | 语音识别（`stt_collector.py` + `config.py`） |
 
 注：列表实际为 6 条，"5 类"指 5 个采集域（bilibili 拆为 official/legacy）。**采集配置位置在 `tools.toml` 的 `[tools.perception.config]`**——旧版放在独立的采集配置段，已迁移至此。`_register_collectors_from_config` 读 `enabled` 子段逐项 `instantiate_collector` 并注册到 `CollectorManager`。
@@ -392,7 +392,7 @@ bili_danmaku_official = { ... }
 
 ---
 
-*最后更新：2026-08-28（v2.0.8 Sticker 事件链全链删除——`StickerHelper` 零实例化零调用、C1 治理收口；全景图 mermaid 节点 EventBus / ToolRegistry 移除 `output.sticker.command` / `sticker(走事件)` 引用；目录结构 `output/` 描述去掉 `sticker /`；组件清单表删除 Sticker 行（"0（走事件）"）；末尾合计公式 + 注释移除 Sticker；事件系统摘要段删除 `output.sticker.command` 示例）*
+*最后更新：2026-08-29（v2.0.9 D1 VLM 收编 + D2 MCP 清残留：组件清单表 `screen_change` 行加注"screen_reader.py VLM 走 LLMManager.chat_vision 收编"；其他段未改动）*
 
 *上次更新：2026-08-28（ADR-006 落地：mock_danmaku 表格描述收敛为"确定性 JSONL 回放器（LLM 仿真由 simulator/ SimulatorService 承担）"；`simulator/` 目录条目改写为开发基础设施描述；启动时序补 4b SimulatorService 步骤（条件装配，--dry 强制 auto_start=False）、关闭时序补 1.5 SimulatorService 关闭步骤；已知缺口第 3 条由 `simulator/` 已脱线替换为"存储记账器 simulated 列写入链缺口"——`live_chat`/`gifts`/`super_chats` 表已有列但记账器未从 payload 读取，**不升 SCHEMA_VERSION**）*
 

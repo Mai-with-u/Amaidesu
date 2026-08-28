@@ -63,7 +63,7 @@ class ToolPackMeta(BaseConfig):
     enabled: bool = Field(default=True, description="是否启用此工具包")
     provider: Literal["builtin", "game", "mcp"] = Field(
         default="builtin",
-        description="工具包提供方（builtin=框架内置, game=游戏 Agent, mcp=MCP 外部源）",
+        description="工具包提供方（builtin=框架内置, game=游戏 Agent；mcp=预留枚举值，暂无实现）",
         json_schema_extra={
             "x-ui-type": "select",
             "x-options": ["builtin", "game", "mcp"],
@@ -167,7 +167,7 @@ class ToolsConfig(BaseConfig):
     )
     external: Optional[ToolPackMeta] = Field(
         default=None,
-        description="外部工具源（MCP Provider，配置在 core.toml [mcp] 段）",
+        description="外部工具源（v2 决策架构移除 MCP 桥接后暂无实现；保留 schema 供未来重启）",
         json_schema_extra={"x-ui-type": "object"},
     )
     look_at_screen: Optional[LookAtScreenToolConfig] = Field(

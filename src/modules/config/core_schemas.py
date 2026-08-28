@@ -2,11 +2,13 @@
 
 定义所有非业务域的系统级配置 Schema，对应 ``config/core.toml`` 文件。
 
-包含：meta, general, persona, context, events, dashboard, mcp, simulator, logging。
+包含：meta, general, persona, context, events, dashboard, simulator, logging, interceptors。
 
 > **v2.0.0 变化**：
 > - 删除 ``[maicore]`` 段（2.0.0 单进程无 MaiCore WebSocket 连接）
 > - ``[context]`` 由会话存储改造为 ContextAssembler 配置（§1.44）
+> - ``[mcp]`` 段在 2.0.2 起被 upgrade hook 主动剥离（详见 upgrade_hooks._migrate_core_2_0_2），
+>   不再纳入新配置文件的段列表
 >
 > **v2.0.4 变化**：
 > - ``[pipelines]`` 正名为 ``[interceptors]``（§1.46.1 管道→事件拦截器迁移收官；
@@ -28,7 +30,7 @@ class MetaConfig(BaseConfig):
     """配置元数据"""
 
     version: str = Field(
-        default="2.0.8",
+        default="2.0.9",
         description="配置版本号（用于自动迁移检测，权威定义于 multi_file_loader.py）",
     )
 

@@ -137,7 +137,7 @@ enabled = ["perception", "output"]   # 工具包启用列表
 # 感知工具包（屏幕/音频/弹幕/遥测）
 [tools.perception]
 enabled = true
-provider = "builtin"                 # builtin=框架内置 / game=游戏 Agent / mcp=外部源
+provider = "builtin"                 # builtin=框架内置 / game=游戏 Agent / mcp=预留枚举值暂无实现
 
 # 工具包具体配置（采集器在此声明）
 [tools.perception.config]
@@ -239,7 +239,7 @@ uv run python main.py --dry
 | `console_input` | 控制台输入（开发测试，零依赖） | `user_id` / `user_nickname` |
 | `bili_danmaku` | B 站 legacy 弹幕（轮询） | `room_id` / `poll_interval` |
 | `bili_danmaku_official` | B 站官方长连弹幕 | `id_code` / `app_id` / `access_key(_secret)` / `api_host` |
-| `read_pingmu` | 屏幕变化检测（VLM） | `api_key` / `model_name` / `screenshot_interval` / `diff_threshold` |
+| `read_pingmu` | 屏幕变化检测（VLM） | `screenshot_interval` / `diff_threshold` / `check_window` / `max_cache_size` / `max_cached_images`（VLM key/model 走 `model.toml [vlm]` profile） |
 | `stt` | 语音转文字（讯飞 ASR + VAD） | `stt.iflytek_asr` / `stt.vad` / `stt.audio` / `stt.message_config` |
 | `mock_danmaku` | 从 `data/*.jsonl` 回放（调试用） | `log_file_path` / `send_interval` / `loop_playback` |
 
@@ -266,7 +266,7 @@ uv run python main.py --dry
 | `output` | `edge_tts_synthesize` / `push_subtitle` / `vts_trigger_hotkey` / `obs_switch_scene` | 渲染族：TTS / 字幕 / 皮套控制 / OBS 场景切换 |
 | `builtin`（Streamer 自带） | `reply` / `query_memory` / `parse_command` / `should_speak_proactively` | 主播内置工具（开 `streamer` 即生效） |
 | `game` | （由具体游戏 Agent 注入） | 游戏专属推进工具（如 text_adv 的截图+点击） |
-| `external` | （MCP 来源） | 外部工具源，配置在 `core.toml [mcp]` |
+| `external` | （预留） | 外部工具源（v2.0.9 收编：MCP 桥接已移除，schema 保留供未来重启） |
 
 ### 3.4 事件拦截器
 
@@ -445,4 +445,4 @@ vite_dev_port = 60315                               # Vite 开发服务器端口
 - **控制台交互**已可用；弹幕采集、屏幕识别、语音转写需对应第三方凭据（id_code / appid / VLM API Key 等）。
 - 完整字段定义在 `src/modules/config/*_schemas.py`；本指南只覆盖"首次跑通"的最小集。
 
-*最后更新：2026-08-27（启动日志对齐 v2.0.5 工具注册路径：移除 `AgentManager.register_all_tools` 注入日志，改为 ToolRegistry 构造 + `bind_core_tools`（9 个 output 包）+ `bind_pending_tools`（flush L1 `@tool`）+ `audit_tools` 四步只读审计序列）*
+*最后更新：2026-08-29（v2.0.9 D1 VLM 收编 + D2 MCP 清残留：采集器表 `read_pingmu` 关键子配置去掉 `api_key`/`model_name`（VLM key/model 走 `model.toml [vlm]` profile）；工具包表 `external` 行改"预留"；`tools.perception` provider 注释更新为"mcp=预留枚举值暂无实现"）*

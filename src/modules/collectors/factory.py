@@ -30,9 +30,18 @@ SUPPORTED_COLLECTORS: tuple[str, ...] = (
 
 
 def instantiate_collector(
-    name: str, config: Optional[dict[str, Any]] = None, event_bus: Any = None
+    name: str,
+    config: Optional[dict[str, Any]] = None,
+    event_bus: Any = None,
+    llm_manager: Any = None,
 ) -> Optional[BaseCollector]:
-    """按名实例化采集器；未知名字返回 None。"""
+    """按名实例化采集器；未知名字返回 None。
+
+    v2.0.9：新增可选 ``llm_manager`` 参数。仅 ``screen``（read_pingmu）需要
+    LLMManager 调用 VLM；其余 collector 沿用事件总线即可。llm_manager 在 main.py
+    装配时从步骤 1（llm_service）透传至屏幕采集器，避免 ScreenReader 自带 aiohttp
+    绕过统一 profile 管理（D1 收编）。
+    """
     if name == "bili_danmaku":
         from src.modules.collectors.bilibili.legacy.bili_danmaku_collector import BiliDanmakuCollector
 
@@ -54,7 +63,11 @@ def instantiate_collector(
     if name == "read_pingmu":
         from src.modules.collectors.screen.screen_change_collector import ScreenChangeCollector
 
-        return ScreenChangeCollector(config=config or {}, event_bus=event_bus)
+        return ScreenChangeCollector(
+            config=config or {},
+            event_bus=event_bus,
+            llm_manager=llm_manager,
+        )
     if name == "stt":
         from src.modules.collectors.stt.stt_collector import STTCollector
 

@@ -5,7 +5,7 @@
 - 时刻/时长字段约定：``*_ms``（毫秒 int）；不在本模块涉及时间字段
 - 多模态结果：``ResultBlock(kind)`` 支持 "text" / "image"
 - ``kind``：sync / async（唯一判别维度）
-- ``provider``：builtin / game / mcp（来源溯源）
+- ``provider``：builtin / game（来源溯源）；"mcp" 预留枚举值，v2 决策架构移除 MCP 桥接后暂无实现
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ class ToolSpec:
         kind: "sync"（gather 等齐结果）/ "async"（fire-and-forget）
         result_event: 异步工具结果事件名，默认 ``tool.result.<name>``；
                       可定制（如 set_goal → ``tool.result.set_goal_feedback``）
-        provider: 来源溯源，"builtin" / "game" / "mcp"
+        provider: 来源溯源，"builtin" / "game"；"mcp" 预留枚举值，暂无实现
         output_schema: 可选的 JSON Schema 形态的输出描述
     """
 

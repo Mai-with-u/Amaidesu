@@ -43,14 +43,14 @@ class ScreenChangeCollector(BaseCollector):
     description = "屏幕变化采集（差异检测 + VLM 缓存去重）"
 
     class ConfigSchema(BaseConfig):
-        """屏幕变化采集器配置"""
+        """屏幕变化采集器配置
 
-        api_key: str = Field(default="", description="API密钥")
-        base_url: str = Field(
-            default="https://dashscope.aliyuncs.com/compatible-mode/v1",
-            description="API基础URL",
-        )
-        model_name: str = Field(default="qwen2.5-vl-72b-instruct", description="模型名称")
+        v2.0.9 收编：移除 ``api_key`` / ``base_url`` / ``model_name`` 三个字段。
+        原字段由 ScreenReader 自带 aiohttp 自管 VLM 调用，现统一改为
+        :class:`LLMManager.chat_vision(client_type="vlm")`；key/model/重试/日志
+        全部走 ``config/model.toml`` 的 ``[vlm]`` profile + ``[[llm_providers]]`` 池。
+        """
+
         screenshot_interval: float = Field(default=0.3, description="截图间隔（秒）", ge=0.1)
         diff_threshold: float = Field(default=25.0, description="差异阈值", ge=0.0)
         check_window: int = Field(default=3, description="检查窗口", ge=1)
@@ -61,11 +61,15 @@ class ScreenChangeCollector(BaseCollector):
         self,
         config: Optional[Dict[str, Any]] = None,
         event_bus: Optional[EventBus] = None,
+        llm_manager: Optional[Any] = None,
     ):
         super().__init__(event_bus=event_bus)
         self.config = config or {}
         self.logger = get_logger(self.__class__.__name__)
         self.typed_config = self.ConfigSchema.from_dict(self.config)
+        # v2.0.9：llm_manager 注入 ScreenReader；为 None 时走"跳过 VLM 调用"降级语义
+        # （仅缓存去重生效，与旧版 api_key 为空等价）。
+        self._llm_manager = llm_manager
 
         self.screen_analyzer: Optional[ScreenAnalyzer] = None
         self.screen_reader: Optional[ScreenReader] = None
@@ -128,10 +132,8 @@ class ScreenChangeCollector(BaseCollector):
 
         try:
             self.screen_reader = ScreenReader(
-                api_key=self.typed_config.api_key,
-                base_url=self.typed_config.base_url,
-                model_name=self.typed_config.model_name,
                 max_cached_images=self.typed_config.max_cached_images,
+                llm_manager=self._llm_manager,
             )
 
             self.screen_analyzer = ScreenAnalyzer(

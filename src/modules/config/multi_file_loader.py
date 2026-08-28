@@ -4,7 +4,7 @@
 首次运行时从 Schema 默认值生成带注释的配置文件。
 
 配置文件结构（v2.0.0 按域划分）:
-    config/core.toml         - 基础设施（meta/general/persona/context/events/logging/dashboard/mcp/simulator/pipelines）
+    config/core.toml         - 基础设施（meta/general/persona/context/events/logging/dashboard/simulator/pipelines/interceptors）
     config/model.toml        - LLM/VLM 模型配置（[[llm_providers]] + [llm]/[llm_fast]/[vlm]/[llm_local]/[llm_summary]/[llm_agenda]）
     config/agents.toml       - 业务 Agent（替代旧决策/输出组件注册）
     config/tools.toml        - 工具包启用/配置（替代旧 collectors/handlers）
@@ -73,7 +73,11 @@ _PHASE_TO_REGISTRY: dict[tuple[str, str], str] = {
 # 装配根 main._register_agents_from_config 接通 persona 段 → StreamerAgent.persona_provider。
 # v2.0.7：W7 前置——tools_schemas 新增 [tools.look_at_screen]（屏幕快照同步工具开关），
 # 组合根 main 接线 Pillow 截图后端 + register_provider。
-CONFIG_VERSION = "2.0.8"
+# v2.0.8：Sticker 事件链全链删除（output_schemas 删 sticker 字段），CONFIG_VERSION 升 patch。
+# v2.0.9：D1 VLM 收编——ScreenChangeCollector.ConfigSchema 移除 api_key/base_url/model_name
+# 三字段；VLM 调用统一走 LLMManager.chat_vision(client_type="vlm")（model.toml [vlm] profile）。
+# tools.toml 同步注册 2.0.9 升级钩子剥离 [tools.perception.config.read_pingmu] 死键。
+CONFIG_VERSION = "2.0.9"
 
 # v2.0.0 配置文件清单（按域划分）：core / model / agents / tools / memory / storage / background
 _CONFIG_FILES = [

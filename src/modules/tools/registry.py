@@ -128,7 +128,7 @@ class ToolRegistry:
         """返回所有已注册工具的 spec。
 
         Args:
-            provider: 可选过滤（"builtin" / "game" / "mcp"）
+            provider: 可选过滤（"builtin" / "game"；"mcp" 预留枚举值，暂无实现）
         """
         specs = [spec for spec, _ in self._tools.values()]
         if provider is not None:
