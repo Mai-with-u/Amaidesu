@@ -226,9 +226,6 @@ class CoreEvents:
     AGENDA_UPDATE = "agenda.update"
     PLANNER_CHECKPOINT = "planner.checkpoint"
 
-    # v2 保留的 Sticker→VTS 单向信号（§1.46.1）
-    OUTPUT_STICKER_COMMAND = "output.sticker.command"
-
     # 异步工具结果通配订阅模式（emit 用具体名，如 "tool.result.speak"）
     TOOL_RESULT_WILDCARD = "tool.result.#"
 ```
@@ -463,4 +460,6 @@ enabled = true
 
 ---
 
-*最后更新：2026-08-26（v2.0.0 全面落库——切到 Agent+工具+存储+编排架构、语义域事件、七文件配置体系；测试目录与 component-guide 链接同步；生命周期与三范式细节迁移至 component-guide）*
+*最后更新：2026-08-28（v2.0.8 Sticker 事件链全链删除——`OUTPUT_STICKER_COMMAND = "output.sticker.command"` 从 §5.2 CoreEvents 示例常量代码块移除（v2.0.0 残留的"v2 保留 Sticker→VTS 单向信号（§1.46.1）"引用同步删除，C1 治理收口））*
+
+*上次更新：2026-08-26（v2.0.0 全面落库——切到 Agent+工具+存储+编排架构、语义域事件、七文件配置体系；测试目录与 component-guide 链接同步；生命周期与三范式细节迁移至 component-guide）*

@@ -46,7 +46,7 @@ flowchart TB
     end
 
     subgraph Bus["EventBus 语义域事件"]
-        EB["room.message.danmaku / gift / super_chat / enter<br/>planner.checkpoint<br/>output.sticker.command<br/>tool.result.name"]
+        EB["room.message.danmaku / gift / super_chat / enter<br/>planner.checkpoint<br/>tool.result.name"]
     end
 
     subgraph StreamerAgent["StreamerAgent src/agents/streamer/"]
@@ -239,6 +239,8 @@ v2 中不同数据走不同通道，不要混用：
 
 ---
 
-*最后更新：2026-08-28（ADR-006 落地：§1 事件流向图 Ext 子图新增 SimulatorService 节点（条件装配，仅开发期；与 MockCollector JSONL 回放互补不互斥）；二者均发布 `room.message.*` payload 且 `simulated=True` 溯源，统计查询 `WHERE simulated = 0` 排除）*
+*最后更新：2026-08-28（v2.0.8 Sticker 事件链全链删除——`output.sticker.command` / Sticker→VTS 单向信号链路随 C1 治理收口：StickerHelper 零实例化零调用、消费端 VTSProvider 仅空转订阅；§1 事件流向图 EventBus 子图枚举事件清单移除 `output.sticker.command`）*
+
+*上次更新：2026-08-28（ADR-006 落地：§1 事件流向图 Ext 子图新增 SimulatorService 节点（条件装配，仅开发期；与 MockCollector JSONL 回放互补不互斥）；二者均发布 `room.message.*` payload 且 `simulated=True` 溯源，统计查询 `WHERE simulated = 0` 排除）*
 
 *上次更新：2026-08-27（v2.0.6 AudioStreamChannel 拆除：通信机制选型表删除 pub-sub 行、改写为"已拆除的 AudioStreamChannel"说明段；图例说明补一句口型同步链路已拆除；v2.0.5 工具注册路径对齐：防换皮红线节 MC Agent 示例改为 Agent 子类 `_register_tools()` 自注册 + 装配根 `bind_core_tools` / `bind_pending_tools` 显式注入 + `audit_tools` 只读审计；删除 `AgentManager.register_all_tools` 引用）*

@@ -128,10 +128,6 @@ VoiceBoxConfigSchema: Optional[type] = _try_load_handler_schema(
     "VoiceboxProvider",
 )
 RemoteStreamConfigSchema: Optional[type] = None  # 协议层无 ConfigSchema（保留消息类型）
-StickerConfigSchema: Optional[type] = _try_load_handler_schema(
-    "src.modules.tools.output.sticker.sticker_helper",
-    "StickerHelper",
-)
 SubtitleConfigSchema: Optional[type] = _try_load_handler_schema(
     "src.modules.tools.output.subtitle.subtitle_service",
     "SubtitleGuiService",
@@ -224,7 +220,6 @@ class OutputHandlersConfig(BaseConfig):
     omni_tts: Optional[Any] = _optional_handler_field(OmniTTSConfigSchema)
     voicebox: Optional[Any] = _optional_handler_field(VoiceBoxConfigSchema)
     remote_stream: Optional[Any] = _optional_handler_field(RemoteStreamConfigSchema)
-    sticker: Optional[Any] = _optional_handler_field(StickerConfigSchema)
     subtitle: Optional[Any] = _optional_handler_field(SubtitleConfigSchema)
     vrchat: Optional[Any] = _optional_handler_field(VRChatConfigSchema)
     vts: Optional[Any] = _optional_handler_field(VTSConfigSchema)
@@ -302,7 +297,6 @@ __all__ = [
     "OmniTTSConfigSchema",
     "VoiceBoxConfigSchema",
     "RemoteStreamConfigSchema",
-    "StickerConfigSchema",
     "SubtitleConfigSchema",
     "VRChatConfigSchema",
     "VTSConfigSchema",

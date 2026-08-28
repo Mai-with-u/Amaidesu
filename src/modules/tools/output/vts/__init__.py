@@ -14,7 +14,8 @@
 迁移策略（与 .omo/drafts/amaidesu-v2-migration.md A 段对齐）:
 - 引擎子件 verbatim：仅修改 ``from src.stages.output...`` → ``from src.modules.tools.output.vts...``
 - VTSProvider/VRChatProvider drop base-class 继承（AvatarHandlerBase），改为 ToolProvider 协议
-- ``OUTPUT_STICKER_COMMAND`` 事件订阅保留在 ``VTSProvider.setup()``，生命周期内自管
+- v2.0.8 收口：移除 ``OUTPUT_STICKER_COMMAND`` 事件订阅链（C1 治理）；
+  ``vts_load_sticker`` 工具保留，Agent 可直接传 ``file_name`` 调用
 """
 
 from .expression_controller import ExpressionController

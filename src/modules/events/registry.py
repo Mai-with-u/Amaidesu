@@ -236,6 +236,5 @@ def register_core_events() -> None:
         live as _live_payloads,  # noqa: F401
         planner as _planner_payloads,  # noqa: F401
         room as _room_payloads,  # noqa: F401
-        sticker as _sticker_payloads,  # noqa: F401
         tool_result as _tool_result_payloads,  # noqa: F401
     )

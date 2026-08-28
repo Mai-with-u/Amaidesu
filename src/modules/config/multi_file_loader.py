@@ -73,7 +73,7 @@ _PHASE_TO_REGISTRY: dict[tuple[str, str], str] = {
 # 装配根 main._register_agents_from_config 接通 persona 段 → StreamerAgent.persona_provider。
 # v2.0.7：W7 前置——tools_schemas 新增 [tools.look_at_screen]（屏幕快照同步工具开关），
 # 组合根 main 接线 Pillow 截图后端 + register_provider。
-CONFIG_VERSION = "2.0.7"
+CONFIG_VERSION = "2.0.8"
 
 # v2.0.0 配置文件清单（按域划分）：core / model / agents / tools / memory / storage / background
 _CONFIG_FILES = [

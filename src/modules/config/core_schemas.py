@@ -28,7 +28,7 @@ class MetaConfig(BaseConfig):
     """配置元数据"""
 
     version: str = Field(
-        default="2.0.7",
+        default="2.0.8",
         description="配置版本号（用于自动迁移检测，权威定义于 multi_file_loader.py）",
     )
 

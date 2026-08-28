@@ -16,7 +16,7 @@ OutputHandler 改写为 ToolProvider 协议实现：
   - ``vts_get_parameter_value``  - 读取参数
   - ``vts_trigger_hotkey``    - 触发热键
   - ``vts_load_item``         - 加载 VTS 道具/贴纸
-  - ``vts_load_sticker``      - 由 ``OUTPUT_STICKER_COMMAND`` 触发
+  - ``vts_load_sticker``      - 直接调用加载贴纸文件（file_name 为 VTS 可访问路径）
   - ``vts_set_idle_enabled``  - 启停 idle 拟人动画
   - ``vts_reconnect``         - 手动触发重连
   - ``vts_get_stats``         - 读取状态统计
@@ -25,7 +25,9 @@ OutputHandler 改写为 ToolProvider 协议实现：
 - 引擎逻辑 verbatim（来自 VTSHandler + LipSyncProcessor + ExpressionController
   + HotkeyMatcher + IdleMotionController，零改动）
 - 仅修改 import 路径与外层结构（去 base 继承，注入 ToolProvider 接口）
-- ``OUTPUT_STICKER_COMMAND`` 事件订阅保留在 ``setup()`` 钩子内
+- v2.0.8 收口：移除 ``OUTPUT_STICKER_COMMAND`` 事件订阅链（C1 治理）：
+  StickerHelper 零实例化零调用，VTSProvider 仅空转订阅；
+  ``vts_load_sticker`` 工具保留（正当 VTS 能力，Agent 可直接传 ``file_name`` 调用）
 """
 
 from __future__ import annotations
@@ -35,7 +37,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 
 from src.modules.events.event_bus import EventBus
-from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
 from src.modules.tools.models import (
     ToolExecutionResult,
@@ -219,7 +220,6 @@ class VTSProvider:
             "clap": "Clap",
             "motion": "Motion",
         }
-        self._sticker_subscribed = False
 
         self._vts: Any = None
         self._vts_api_lock = asyncio.Lock()
@@ -363,7 +363,7 @@ class VTSProvider:
             ),
             ToolSpec(
                 name="vts_load_sticker",
-                description="VTS 加载贴纸（由 OUTPUT_STICKER_COMMAND 事件触发）",
+                description="VTS 加载贴纸文件（file_name 为 VTS 可访问路径）",
                 kind="sync",
                 provider="builtin",
             ),
@@ -425,7 +425,6 @@ class VTSProvider:
                 instance_id = await self.load_item(**{k: v for k, v in args.items() if k != ""})
                 return _ok("vts_load_item", instance_id is not None, {"instance_id": instance_id})
             if invocation.tool_name == "vts_load_sticker":
-                # 由 OUTPUT_STICKER_COMMAND 触发；直接传 payload 模式
                 instance_id = await self.load_item(
                     file_name=str(args.get("file_name", "sticker.png")),
                     custom_data_base64=str(args.get("image_base64", "")),
@@ -490,36 +489,12 @@ class VTSProvider:
         self._reconnect_task = asyncio.create_task(self._reconnect_loop())
         self._reconnect_task.set_name(f"{self.__class__.__name__}.reconnect_loop")
 
-        # 订阅贴纸事件（保留 OUTPUT_STICKER_COMMAND 事件链路）
-        if self.event_bus and not getattr(self, "_sticker_subscribed", False):
-            from src.modules.events.payloads import StickerCommandPayload
-
-            self.event_bus.on(
-                CoreEvents.OUTPUT_STICKER_COMMAND,
-                self._on_sticker_command,
-                StickerCommandPayload,
-            )
-            self._sticker_subscribed = True
-
         self._has_started = True
 
     async def cleanup(self) -> None:
         """清理资源（对应旧 VTSHandler.cleanup()）"""
         if not self._has_started:
             return
-
-        # 取消贴纸订阅
-        sticker_handler = getattr(self, "_on_sticker_command", None)
-        if self.event_bus and getattr(self, "_sticker_subscribed", False) and sticker_handler is not None:
-            try:
-                self.event_bus.off(
-                    CoreEvents.OUTPUT_STICKER_COMMAND,
-                    sticker_handler,
-                )
-            except Exception as e:
-                self.logger.warning(f"取消订阅 {CoreEvents.OUTPUT_STICKER_COMMAND} 失败: {e}")
-            finally:
-                self._sticker_subscribed = False
 
         await self._disconnect()
         self._has_started = False
@@ -845,29 +820,6 @@ class VTSProvider:
             self.logger.warning(f"关闭 VTS 连接异常: {e}")
         finally:
             self._is_connected = False
-
-    async def _on_sticker_command(self, event_name: str, payload: Any, source: str) -> None:
-        if payload.target_handler != "vts":
-            return
-        self.logger.info(f"收到贴纸触发: sticker_id={payload.sticker_id}")
-        if not payload.image_base64:
-            self.logger.debug("贴纸事件未携带 image_base64，跳过渲染")
-            return
-        try:
-            instance_id = await self.load_item(
-                file_name=f"{payload.sticker_id}.png",
-                position_x=payload.position_x or 0.0,
-                position_y=payload.position_y or 0.0,
-                size=payload.size or 0.33,
-                rotation=payload.rotation or 0,
-                fade_time=0.5,
-                order=10,
-                custom_data_base64=payload.image_base64,
-            )
-            if instance_id:
-                self.logger.debug(f"贴纸已加载到 VTS: {instance_id}")
-        except Exception as e:
-            self.logger.error(f"加载贴纸到 VTS 失败: {e}", exc_info=True)
 
 
 # =============================================================================

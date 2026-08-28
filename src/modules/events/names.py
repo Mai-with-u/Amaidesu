@@ -12,7 +12,12 @@ Wave 6 删除（Stage-glue 胶水事件）：
 - ~~decision.intent.generated~~（无 Intent；决策出口=工具调用，无事件）
 - ~~output.intent.dispatched~~ / ~~output.intent.finished~~ / ~~output.handler.completed~~
   （无 OutputHandlerManager；统一为 ToolRegistry.invoke）
-- ~~output.obs.command~~ / ~~output.sticker.command~~（→ 工具直接调用）
+- ~~output.obs.command~~（→ 工具直接调用）
+
+v2.0.8 删除（C1 治理收口）：
+- ~~output.sticker.command~~（StickerHelper 零实例化零调用、消费端 VTSProvider
+  仅空转订阅；接电线也救不了——没有 LLM 工具暴露贴纸触发，未来做表情功能
+  时再重新设计）
 
 详细规范请参考: docs/architecture/event-naming-convention.md
 """
@@ -49,10 +54,6 @@ class CoreEvents:
     # ========== v2 语义域事件（agenda/planner） ==========
     AGENDA_UPDATE = "agenda.update"
     PLANNER_CHECKPOINT = "planner.checkpoint"
-
-    # ========== v2 保留：Sticker→VTS 单向信号（§1.46.1 定案） ==========
-    # Agent 在需要展示贴纸时直接 emit OUTPUT_STICKER_COMMAND；VTSProvider 订阅
-    OUTPUT_STICKER_COMMAND = "output.sticker.command"
 
     # ========== v2 语义域事件（tool 异步工具结果通配订阅模式） ==========
     # **这是通配订阅模式专用**，不是被 emit 的具体事件名。emit 时使用具体名

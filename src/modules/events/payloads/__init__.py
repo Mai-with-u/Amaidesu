@@ -6,12 +6,17 @@
 Wave 6 变更：
 - 删除 decision.py / output.py（无 Intent；Stage-glue 胶水事件不再使用）
 - 删除 IntentPayload / IntentActionPayload / OutputIntentDispatchedPayload /
-  OutputHandlerCompletedPayload / OBSCommandPayload / StickerCommandPayload
-  （Wave 6 决策出口 = reply 工具调用，无 Intent；OBS/Sticker → 工具直接调用）
+  OutputHandlerCompletedPayload / OBSCommandPayload（Wave 6 决策出口 = reply
+  工具调用，无 Intent；OBS → 工具直接调用）
 - 保留 ConnectedPayload / DisconnectedPayload（RoomMessagePayload 含同构字段，
   旧连接/断开事件已删除 → 仅供向后兼容导入）
 
-模块结构（Wave 6）：
+v2.0.8 变更（C1 治理收口）：
+- 删除 sticker.py（StickerCommandPayload）+ Sticker→VTS 单向信号链路——
+  StickerHelper 零实例化零调用、消费端 VTSProvider 仅空转订阅；
+  未来做表情功能时重新设计，本轮不留事件链
+
+模块结构（v2.0.8）：
 - core.py: Core 系统事件 Payload（core.startup/shutdown/error）
 - connection.py: 通用组件事件 Payload（ConnectionEventPayload）
 - live.py: v2 语义域 — 场次生命周期（live.started/live.ended）
@@ -62,7 +67,6 @@ from .room import (
     RoomMessageUser,
     SuperChatInfo,
 )
-from .sticker import StickerCommandPayload
 from .tool_result import ToolResultPayload
 
 logger = get_logger("Payloads")
@@ -89,8 +93,6 @@ __all__ = [
     # v2 语义域 — planner
     "CheckpointAgendaPosition",
     "CheckpointPayload",
-    # v2 保留：Sticker→VTS 单向信号
-    "StickerCommandPayload",
     # v2 语义域 — tool.result.*
     "ToolResultPayload",
 ]

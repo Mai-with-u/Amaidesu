@@ -30,7 +30,7 @@ flowchart TB
     end
 
     subgraph Bus["EventBus（语义域事件）"]
-        EB["room.message.danmaku / gift / super_chat / enter<br/>planner.checkpoint<br/>output.sticker.command<br/>+ 通配订阅"]
+        EB["room.message.danmaku / gift / super_chat / enter<br/>planner.checkpoint<br/>+ 通配订阅"]
     end
 
     subgraph Streamer["StreamerAgent (src/agents/streamer/)"]
@@ -45,7 +45,7 @@ flowchart TB
     end
 
     subgraph Registry["ToolRegistry (src/modules/tools/)"]
-        Out["output 族<br/>tts×4 / subtitle / vts×13 / vrchat×3<br/>warudo×13 / obs×4 / sticker(走事件) / remote_stream"]
+        Out["output 族<br/>tts×4 / subtitle / vts×13 / vrchat×3<br/>warudo×13 / obs×4 / remote_stream"]
         Per["perception 族<br/>look_at_screen"]
         CE["content_engine 族<br/>5 工具（generic 游戏契约）"]
         Mem["memory 族<br/>query_memory"]
@@ -91,7 +91,7 @@ Amaidesu/
 │       │   ├── screen/          #   屏幕变化
 │       │   └── stt/             #   语音识别
 │       ├── tools/               # 工具族（ToolRegistry + 各 Provider；按 provider=builtin|game 溯源）
-│       │   ├── output/          #   tts / subtitle / vts / warudo / obs / sticker / remote_stream / debug
+│       │   ├── output/          #   tts / subtitle / vts / warudo / obs / remote_stream / debug
 │       │   ├── perception/      #   look_at_screen（同步快照工具）
 │       │   └── content_engine/  #   通用游戏引擎契约（5 工具 + StubContentEngine）
 │       ├── events/              # EventBus + 事件拦截器（rate_limit / similar_filter）
@@ -249,7 +249,6 @@ sequenceDiagram
 | VRChat | `builtin` | 3 | `vrchat_set_expression` / `vrchat_trigger_gesture` / `vrchat_get_stats` |
 | Warudo | `builtin` | 13 | `warudo_set_expression` / `warudo_trigger_hotkey` / `warudo_body_action` / `warudo_head_action` / `warudo_direct_action` / `warudo_push_subtitle` / `warudo_throw_fish` / `warudo_set_sight` / `warudo_set_eyebrow` / `warudo_set_eye` / `warudo_set_pupil` / `warudo_set_mouth` / `warudo_get_stats` |
 | OBS | `builtin` | 4 | `obs_send_text` / `obs_switch_scene` / `obs_set_source_visibility` / `obs_send_test` |
-| Sticker | — | 0（**走事件** `output.sticker.command`） | Agent 直接 `emit_event("output.sticker.command", payload)`，由订阅者消费，不进 ToolRegistry |
 | Remote Stream | — | 0（仅 `MessageType`/`StreamMessage` 协议 + `AudioConfig`/`ImageConfig`，无工具） | 留待外部 WebSocket 脚手架接入 |
 | Debug | — | 0（`dump_intent` 是函数非工具，DebugConfig 是 dataclass） | 调试输出 |
 | Perception | `builtin` | 1 | `look_at_screen`（同步快照工具，注入 `ScreenCapture`/`TextReader` 后端；无后端时返回成功 + 空文本，不抛异常） |
@@ -258,7 +257,7 @@ sequenceDiagram
 | Streamer 自带 | `builtin`（来自 Agent `list_tools()`） | 3 | `reply` / `should_speak_proactively` / `parse_command` |
 | Agent Control | `builtin` | 6 | `pause_agent` / `resume_agent` / `shutdown_agent` / `restart_agent` / `list_agents` / `agent_state` |
 
-合计：8 + 3 + 13 + 3 + 13 + 4 + 1 + 5 + 1 + 3 + 6 = **60 个工具**（Sticker/Remote Stream/Debug 不计）。
+合计：8 + 3 + 13 + 3 + 13 + 4 + 1 + 5 + 1 + 3 + 6 = **60 个工具**（Remote Stream/Debug 不计）。
 
 ## 核心概念
 
@@ -286,7 +285,7 @@ sequenceDiagram
 
 ### 事件系统（摘要）
 
-EventBus 是唯一跨主体通信机制。事件命名采用语义域形式（`room.message.danmaku` / `planner.checkpoint` / `output.sticker.command` 等），支持通配订阅（`room.message.*`）。完整事件表（含发布者/订阅者/Payload 类型）见 [事件系统](event-system.md)；命名规则见 [事件命名规范](event-naming-convention.md)。
+EventBus 是唯一跨主体通信机制。事件命名采用语义域形式（`room.message.danmaku` / `planner.checkpoint` 等），支持通配订阅（`room.message.*`）。完整事件表（含发布者/订阅者/Payload 类型）见 [事件系统](event-system.md)；命名规则见 [事件命名规范](event-naming-convention.md)。
 
 ### 事件拦截器（Interceptor）
 
@@ -393,6 +392,8 @@ bili_danmaku_official = { ... }
 
 ---
 
-*最后更新：2026-08-28（ADR-006 落地：mock_danmaku 表格描述收敛为"确定性 JSONL 回放器（LLM 仿真由 simulator/ SimulatorService 承担）"；`simulator/` 目录条目改写为开发基础设施描述；启动时序补 4b SimulatorService 步骤（条件装配，--dry 强制 auto_start=False）、关闭时序补 1.5 SimulatorService 关闭步骤；已知缺口第 3 条由 `simulator/` 已脱线替换为"存储记账器 simulated 列写入链缺口"——`live_chat`/`gifts`/`super_chats` 表已有列但记账器未从 payload 读取，**不升 SCHEMA_VERSION**）*
+*最后更新：2026-08-28（v2.0.8 Sticker 事件链全链删除——`StickerHelper` 零实例化零调用、C1 治理收口；全景图 mermaid 节点 EventBus / ToolRegistry 移除 `output.sticker.command` / `sticker(走事件)` 引用；目录结构 `output/` 描述去掉 `sticker /`；组件清单表删除 Sticker 行（"0（走事件）"）；末尾合计公式 + 注释移除 Sticker；事件系统摘要段删除 `output.sticker.command` 示例）*
+
+*上次更新：2026-08-28（ADR-006 落地：mock_danmaku 表格描述收敛为"确定性 JSONL 回放器（LLM 仿真由 simulator/ SimulatorService 承担）"；`simulator/` 目录条目改写为开发基础设施描述；启动时序补 4b SimulatorService 步骤（条件装配，--dry 强制 auto_start=False）、关闭时序补 1.5 SimulatorService 关闭步骤；已知缺口第 3 条由 `simulator/` 已脱线替换为"存储记账器 simulated 列写入链缺口"——`live_chat`/`gifts`/`super_chats` 表已有列但记账器未从 payload 读取，**不升 SCHEMA_VERSION**）*
 
 *上次更新：2026-08-27（v2.0.6 AudioStreamChannel 拆除：组合根阶 1 步骤删除、`src/modules/streaming/` 全包 `git rm`、4 个 TTS 工具 + VTS/Warudo/VRChat Provider 移除 audio_stream_channel 注入、`lip_sync_subscriber.py` 删除；`LipSyncProcessor.on_start/on_chunk/on_end` 通道回调删除（会话方法保留）；`remote_stream` 模块 docstring 移除 AudioBus 引用；启动时序 mermaid 同步去除 `Audio` 参与者，本节"已知缺口"对应条目重写为拆除说明；目录结构去掉 `streaming/` 行；v2.0.5 工具注册路径对齐：mermaid 节点 `AgentManager` 改 `audit_tools (只读)`；启动时序在 `start_all` 前补 `bind_core_tools` / `bind_pending_tools` 两步、`start_all` 后补 `audit_tools` 一步；`manager.py` 行删除 `register_all_tools` / `collect_tool_specs` 改为 `audit_tools` 只读审计；MC Agent 示例改为 Agent 子类自注册 + 显式 bind）*

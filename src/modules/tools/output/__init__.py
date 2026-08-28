@@ -9,7 +9,6 @@
 | ``tts/``     | 4 个 TTS Provider（EdgeTTS / GPTSoVITS / OmniTTS / Voicebox） |
 | ``subtitle/`` | Subtitle GUI 服务 + push_subtitle 工具（拆分） |
 | ``obs/``     | OBS Provider（3 个工具：send_text / switch_scene / set_source_visibility） |
-| ``sticker/`` | StickerHelper（Agent 直接 emit OUTPUT_STICKER_COMMAND） |
 | ``remote_stream/`` | 消息协议 + 分发器（无 websocket 脚手架） |
 | ``debug/``   | dump_intent 调试函数（替换 DebugConsoleHandler） |
 
@@ -32,7 +31,6 @@ from src.modules.tools.output.remote_stream import (
     RemoteStreamTypes,
     StreamMessage,
 )
-from src.modules.tools.output.sticker import StickerHelper
 from src.modules.tools.output.subtitle import (
     SubtitleGuiService,
     SubtitleProvider,
@@ -125,8 +123,6 @@ __all__ = [
     "OBSProvider",
     "create_obs_provider",
     "register_obs_tools",
-    # Sticker
-    "StickerHelper",
     # RemoteStream
     "MessageType",
     "StreamMessage",

@@ -11,7 +11,7 @@
 ## TL;DR
 
 > 事件名 = **域.子类（可选）.动作**，已发生事实语义（过去时），无阶段化、无动词链。
-> 域 = **领域**（live/room/game/agenda/planner/tool/core/output.sticker），**不是阶段**（input/decision/output 已删除）。
+> 域 = **领域**（live/room/game/agenda/planner/tool/core），**不是阶段**（input/decision/output 已删除）。
 > 一个概念一个名字（查术语表，不混用同义词）；一个动词一个意思（细化，不要 `updated` / `data` 这种泛词）。
 > 起名前先查这里；7 条自查清单不过 → 停下重审。
 
@@ -25,7 +25,7 @@
 
 | 部分 | 必填 | 说明 | 示例 |
 |---|---|---|---|
-| `域` | ✅ | 事件所属**领域**（非阶段）：live/room/game/agenda/planner/tool/core；特例 `output.sticker` 保留作设备控制 | `room` |
+| `域` | ✅ | 事件所属**领域**（非阶段）：live/room/game/agenda/planner/tool/core | `room` |
 | `子类` | 可选 | 该域内的**子层**：`message`（行为流）/ `state`（状态快照）/ `result`（工具结果）/ `command`（命令下发）/ `checkpoint`（检查点提醒） | `message` |
 | `动作` | ✅ | **已发生的事实**（过去时语义）：具体、单一、无歧义 | `danmaku` |
 
@@ -37,7 +37,7 @@
 
 ## 2. 语义域枚举及职责
 
-Amaidesu 当前共 7 个语义域 + 1 个保留特例（`output.sticker`）。每个域有自己的职责边界，事件**只能在所属域内**。
+Amaidesu 当前共 7 个语义域。每个域有自己的职责边界，事件**只能在所属域内**。
 
 | 域 | 职责 | 典型事件 |
 |---|---|---|
@@ -48,7 +48,8 @@ Amaidesu 当前共 7 个语义域 + 1 个保留特例（`output.sticker`）。�
 | **agenda** | AgendaItem 运行进度变更（节目单打勾 / 改时间 / 插入）。**仅变更即发**，不是周期性状态广播 | `agenda.update` |
 | **planner** | Planner 检查点提醒（纯提醒零决策）。**唯一合法的"低频周期性"事件**（Planner 空闲 + 无 pending 异步 + 队列空 + 有未完成 AgendaItem 四判据全过才发） | `planner.checkpoint` |
 | **tool.result** | 异步工具结果回传（fire-and-forget 完成后）。**通配 pattern**：`tool.result.#` 一站式监听所有工具结果；emit 时用具体名 `tool.result.<tool_name>` | `tool.result.speak` / `tool.result.summarize_timeline` |
-| **output.sticker**（特例） | Sticker → VTS 单向信号（§1.46.1 保留事件，设备控制特例，**不归到任何语义域**） | `output.sticker.command` |
+
+> **v2.0.8 收口**：原 `output.sticker` 特例域（`output.sticker.command`，§1.46.1 保留事件）已随 C1 治理删除——StickerHelper 零实例化零调用、消费端 VTSProvider 仅空转订阅；接电线也救不了（无 LLM 工具暴露贴纸触发）。未来做表情功能时重新设计，本轮不留事件链。
 
 ---
 
@@ -93,7 +94,7 @@ Amaidesu 当前共 7 个语义域 + 1 个保留特例（`output.sticker`）。�
 | `.message.*` | 行为流（发生的事实 / 内容流入） | `room.message.danmaku` |
 | `.state.*` | 状态（当前属性快照） | `room.state.heat` |
 | `.result.#` | 工具 / 异步结果回传 | `tool.result.speak` |
-| `.command` / `.control` | 命令下发（vs 已发生事件） | `room.control`（假设）/ `output.sticker.command` |
+| `.command` / `.control` | 命令下发（vs 已发生事件） | `room.control`（假设） |
 | `.checkpoint` | 检查点提醒（§1.7 纯提醒零决策） | `planner.checkpoint` |
 
 **关键区别**：
@@ -113,7 +114,6 @@ Amaidesu 当前共 7 个语义域 + 1 个保留特例（`output.sticker`）。�
 | ✅ 单事件 + action | ❌ 拆多事件 |
 |---|---|
 | `room.control` + `action: Literal["set_title", "ban_user", "mute"]`（假设） | `room.set_title` / `room.ban_user` / `room.mute`（拆碎接口面膨胀） |
-| `output.sticker.command`（§1.46.1） | 拆成 `output.sticker.show` / `output.sticker.hide` / `output.sticker.replace` |
 
 **判定**：
 
@@ -213,14 +213,11 @@ class CoreEvents:
     AGENDA_UPDATE = "agenda.update"
     PLANNER_CHECKPOINT = "planner.checkpoint"
 
-    # Sticker 特例（§1.46.1 保留）
-    OUTPUT_STICKER_COMMAND = "output.sticker.command"
-
     # 工具结果通配（仅订阅标识，emit 用具体名 tool.result.<tool_name>）
     TOOL_RESULT_WILDCARD = "tool.result.#"
 ```
 
-完整事件清单（15 常量 + 1 通配占位符）见 [事件系统 - 事件事实表](event-system.md#事件事实表)。
+完整事件清单（14 常量 + 1 通配占位符）见 [事件系统 - 事件事实表](event-system.md#事件事实表)。
 
 ---
 
@@ -259,7 +256,6 @@ class CoreEvents:
 | 工具 speak 完成 | `tool.result.speak` | `output.speak.done`（散到输出域） | ⑧ 工具结果散落 |
 | 工具时间线总结 | `tool.result.summarize_timeline` | `planner.timeline_ready`（散到 planner 域） | ⑧ 工具结果散落 |
 | 房间控制（未来） | `room.control` + `action: Literal[...]` | `room.set_title` / `room.ban` / `room.mute`（拆碎） | ⑥ 命令拆分 |
-| 贴纸（Sticker → VTS） | `output.sticker.command`（特例保留） | `vts.show_sticker`（落工具实现） / 归 `room.sticker.command`（语义错位） | 特例保留（§1.46.1） |
 | 系统启动 | `core.startup` | `system.startup`（重复 system 前缀） / `core.started`（与事件名一致而非字段） | ⑦ 概念名统一 |
 | 决策意图（v1 已删） | （无 Intent；v2 决策出口 = 工具调用，无事件） | `decision.intent.generated` | ① 阶段命名 + 无业务实体 |
 
@@ -275,7 +271,7 @@ class CoreEvents:
 | 层数 | 最多 3 | 最多 4（子类存在时） |
 | 动词 | 带方向性（进 / 决策 / 出） | 已发生事实（完成态、过去时） |
 | 行为 / 状态 | 同层平铺（如 `room.danmaku` + `room.online`） | **强制分层**：行为流 `.message.*` vs 状态 `.state.*` |
-| 命令类 | 拆多事件（早期 `OUTPUT_OBS_SEND_TEXT` 等） | 单事件 + payload 判别（如 `output.sticker.command`） |
+| 命令类 | 拆多事件（早期 `OUTPUT_OBS_SEND_TEXT` 等） | 单事件 + payload 判别（v2 实际未触发任何保留命令事件；`output.obs.*` 与 `output.sticker.*` 等命令类已在 Wave 6 / v2.0.8 删除） |
 | 工具结果 | 散落到 `output.*` | 统一 `tool.result.#` 通配 |
 
 ---
@@ -289,7 +285,7 @@ class CoreEvents:
 - 引入 MQTT 风格通配订阅（`*` 单层 / `#` 多层）+ specificity 排序
 - 类 → 多事件共享（`LivePayload` 双注册 / `RoomMessagePayload` 四注册 / `GamePayload` 三注册）
 - 行为 / 状态分层（`room.message.*` vs `room.state.*` 预留层）
-- Sticker → VTS 单向信号保留（`output.sticker.command`，§1.46.1）
+- Sticker → VTS 单向信号保留（`output.sticker.command`，§1.46.1；v2.0.8 删除）
 
 ### 2026-06-23：动词链重构 + OBS 合并（已废弃）
 
@@ -313,4 +309,6 @@ class CoreEvents:
 
 ---
 
-*最后更新：2026-08-25（v2.0.0 语义域事件对齐：取代 v1 三阶段命名规范；新增语义域枚举/职责、行为 vs 状态分层、命令类合并、工具结果统一、自查 7 条清单、正反例对照）*
+*最后更新：2026-08-28（v2.0.8 Sticker 事件链全链删除：`output.sticker` 特例域从"语义域枚举及职责"表移除并改为 v2.0.8 收口说明（域计数 7+1→7）；TL;DR/语法表/§5 子层示例/§6 单事件 + action 表/§10 CoreEvents 常量代码块/§12 正反例对照表全数清除 `output.sticker.command` 引用；§13 v1 对照表命令类描述同步改写（`output.sticker.command` 不再作为 v2 命令类示例）；§14 迁移历史 `2026-08-22` 行补注 "v2.0.8 删除"；§10 末尾常量计数 15→14）*
+
+*上次更新：2026-08-25（v2.0.0 语义域事件对齐：取代 v1 三阶段命名规范；新增语义域枚举/职责、行为 vs 状态分层、命令类合并、工具结果统一、自查 7 条清单、正反例对照）*

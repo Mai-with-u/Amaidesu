@@ -87,10 +87,10 @@ src/modules/events/
 ├── event_history.py      # 事件历史查询服务
 ├── event_recorder.py     # 事件记录器（监控组件，订阅语义域事件落库）
 ├── registry.py           # @register_event 装饰器 + EVENT_REGISTRY
-├── names.py              # CoreEvents 常量（15 + 通配占位符）
+├── names.py              # CoreEvents 常量（14 + 通配占位符）
 ├── event_type_map.py     # 事件名 → 组件类型映射（组件事件专用）
 └── payloads/
-    ├── __init__.py       # Payload 统一导出（9 个域模块）
+    ├── __init__.py       # Payload 统一导出（8 个域模块）
     ├── base.py           # BasePayload 基类
     ├── core.py           # core.* Payload（3 个事件分别注册）
     ├── connection.py     # connection.event Payload（通用组件事件）
@@ -99,7 +99,6 @@ src/modules/events/
     ├── game.py           # game.* Payload（一类三注册）
     ├── agenda.py         # agenda.update Payload
     ├── planner.py        # planner.checkpoint Payload
-    ├── sticker.py        # output.sticker.command Payload（Sticker→VTS 单向信号）
     └── tool_result.py    # tool.result.* Payload（不绑定具体名）
 ```
 
@@ -275,9 +274,9 @@ EventBus 支持 **MQTT 风格**通配订阅（仅订阅名包含 `*` 或 `#` 时
 
 ## 事件事实表
 
-> **单一事实源**：本表是 Amaidesu 当前全部 15 个事件常量 + 1 个通配占位符的权威定义。任何新增/删除/重命名事件，**必须先修改本表再写代码**。
+> **单一事实源**：本表是 Amaidesu 当前全部 14 个事件常量 + 1 个通配占位符的权威定义。任何新增/删除/重命名事件，**必须先修改本表再写代码**。
 
-事件命名遵循 v2 语义域规范（详见 [事件命名规范](event-naming-convention.md)）：`<域>.<子类>.<动作>`，**域 = 领域**（live/room/game/agenda/planner/tool/core/output.sticker），**不是阶段**。
+事件命名遵循 v2 语义域规范（详见 [事件命名规范](event-naming-convention.md)）：`<域>.<子类>.<动作>`，**域 = 领域**（live/room/game/agenda/planner/tool/core），**不是阶段**。
 
 ### 完整事件表
 
@@ -298,7 +297,6 @@ EventBus 支持 **MQTT 风格**通配订阅（仅订阅名包含 `*` 或 `#` 时
 | `game.error` | `GamePayload` | 游戏 Agent | `EventRecorder`（L77）；`Broadcaster`（`event_type_map` 转发） | 游戏异常；`event_type="error"` |
 | `agenda.update` | `AgendaPayload` | Planner（调 `update_agenda_item` 工具后）→ 存储更新后发出 | `EventRecorder`（L68，`model_class=None` 兜底） | AgendaItem 运行进度变更（done / schedule / insert） |
 | `planner.checkpoint` | `CheckpointPayload` | 空转探测器（后台轻循环，§1.7） | `EventRecorder`（L67，`model_class=None` 兜底）；`Broadcaster`（L96 / L112-115 `_subscribe_core_events`）；`Widget`（`widget/service.py` L88-92） | 空转检查点提醒（纯提醒零决策，携带当前 AgendaItem 定位） |
-| `output.sticker.command` | `StickerCommandPayload` | Sticker Helper / Agent（§1.46.1 保留事件） | VTS Provider | 贴纸命令（StickerHelper → VTS 单向信号） |
 | `tool.result.<tool_name>` | `ToolResultPayload` | 异步工具执行层（fire-and-forget 完成后） | 订阅者通常用 `tool.result.#` 通配，handler 按 `payload.tool_name` 分发 | **异步工具结果回传**（事件名不固定，emit 时用具体 `tool.result.<tool_name>`，如 `tool.result.speak` / `tool.result.summarize_timeline`） |
 | `tool.result.#`（**通配占位符**，**不预注册**到 `EVENT_REGISTRY`） | 无（仅订阅标识） | 无（仅订阅标识） | 无（仅订阅标识） | **仅供订阅者使用的通配 pattern**：订阅 `event_bus.on("tool.result.#", ...)` 一站式监听所有工具结果。`CoreEvents.TOOL_RESULT_WILDCARD = "tool.result.#"`（`names.py` L62）保留作订阅标识常量，**不在 names.py 的 `get_all_events()` 反射收集范围内**（按 `value.islower() and "." in value` 筛选时该字符串通过，但 `_validate_event_data` 找不到具体注册类型时仅 debug 警告，不阻断 emit） |
 
@@ -342,7 +340,6 @@ classDiagram
     BasePayload <|-- GamePayload
     BasePayload <|-- AgendaPayload
     BasePayload <|-- CheckpointPayload
-    BasePayload <|-- StickerCommandPayload
     BasePayload <|-- ToolResultPayload
     BaseModel <|-- RoomMessageUser
     BaseModel <|-- GiftInfo
@@ -351,7 +348,7 @@ classDiagram
     BaseModel <|-- CheckpointAgendaPosition
 ```
 
-> 当前实际存在的 12 个 Payload 类（含 `BasePayload`）+ 5 个嵌套子结构（`RoomMessageUser` / `GiftInfo` / `SuperChatInfo` / `AgendaItem` / `CheckpointAgendaPosition`），全部定义在 `src/modules/events/payloads/` 下按域分包。
+> 当前实际存在的 11 个 Payload 类（含 `BasePayload`）+ 5 个嵌套子结构（`RoomMessageUser` / `GiftInfo` / `SuperChatInfo` / `AgendaItem` / `CheckpointAgendaPosition`），全部定义在 `src/modules/events/payloads/` 下按域分包。
 
 ### 按域分类
 
@@ -396,11 +393,7 @@ classDiagram
 | `AgendaPayload` | `agenda.update` | AgendaItem 运行进度变更（`action: Literal["done","schedule","insert"]`） |
 | `CheckpointPayload` | `planner.checkpoint` | 空转检查点提醒（携带 `agenda_item` 定位 + `timeline_summary` + `duration_ms`） |
 
-#### Output Sticker（特例）
-
-| Payload 类 | 事件名 | 用途 |
-|-----------|--------|------|
-| `StickerCommandPayload` | `output.sticker.command` | 贴纸命令（§1.46.1 保留事件，StickerHelper → VTS Provider 单向信号；不在 v2 阶段化语义域，但保留作设备控制特例） |
+> **v2.0.8 收口**：原 `Output Sticker（特例）` 节（`output.sticker.command` / `StickerCommandPayload`）已随 C1 治理删除——StickerHelper 零实例化零调用、消费端 VTSProvider 仅空转订阅；接电线也救不了（无 LLM 工具暴露贴纸触发）。未来做表情功能时重新设计，本轮不留事件链。
 
 #### Tool Result 域
 
@@ -479,12 +472,11 @@ def register_core_events() -> None:
         agenda as _agenda_payloads, connection as _connection_payloads,
         core as _core_payloads, game as _game_payloads,
         live as _live_payloads, planner as _planner_payloads,
-        room as _room_payloads, sticker as _sticker_payloads,
-        tool_result as _tool_result_payloads,
+        room as _room_payloads, tool_result as _tool_result_payloads,
     )
 ```
 
-> v2 增量为 9 个 Payload 模块（`agenda` / `connection` / `core` / `game` / `live` / `planner` / `room` / `sticker` / `tool_result`），均在 `register_core_events()` 一并触发 import。`tool_result` 模块即使无具体 `@register_event` 装饰器调用也一并 import 以触发模块级代码（保留供后续扩展）。
+> v2 增量为 8 个 Payload 模块（`agenda` / `connection` / `core` / `game` / `live` / `planner` / `room` / `tool_result`），均在 `register_core_events()` 一并触发 import。`tool_result` 模块即使无具体 `@register_event` 装饰器调用也一并 import 以触发模块级代码（保留供后续扩展）。
 
 ---
 
@@ -842,4 +834,6 @@ class MyPayload(BasePayload):
 
 ---
 
-*最后更新：2026-08-25（v2.0.0 语义域事件对齐：移除三阶段事件表，新增 15 常量 + 通配占位符事实表，新增 MQTT 通配订阅章节，重写 Payload/订阅者/拦截器作用域）*
+*最后更新：2026-08-28（v2.0.8 Sticker 事件链全链删除——`output.sticker.command` / `StickerCommandPayload` 从常量表、Payload 模块清单、payloads 子树、register_core_events 模块触发列表全数移除；事件表行删除；目录树 payload 模块计数 9→8、CoreEvents 常量计数 15→14；Payload 继承类图与计数 12→11；"Output Sticker（特例）"节删除并改为 v2.0.8 收口说明；事实表行数与"事件数量"行首同步）*
+
+*上次更新：2026-08-25（v2.0.0 语义域事件对齐：移除三阶段事件表，新增 15 常量 + 通配占位符事实表，新增 MQTT 通配订阅章节，重写 Payload/订阅者/拦截器作用域）*
