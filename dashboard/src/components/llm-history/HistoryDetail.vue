@@ -95,7 +95,6 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
-import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js';
 import 'highlight.js/styles/github-dark.css';
@@ -183,11 +182,18 @@ function formatJsonHighlight(obj: unknown): string {
   }
 }
 
-// Markdown 渲染（带 XSS 防护）
+// Markdown 渲染（带 XSS 防护）：极简 markdown 子集，足够 LLM 提示词展示
 function renderMarkdown(text: string | null): string {
   if (!text) return '';
-  const html = marked(text) as string;
-  return DOMPurify.sanitize(html);
+  const escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
+    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n/g, '<br>');
+  return DOMPurify.sanitize(escaped);
 }
 
 function handleClose(value: boolean) {

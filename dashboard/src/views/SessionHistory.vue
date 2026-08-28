@@ -2,8 +2,8 @@
   <div class="debug-session">
     <header class="page-header">
       <div class="header-left">
-        <h1 class="page-title">调试会话</h1>
-        <p class="page-subtitle">NormalizedMessage → Intent → Output 全链路事件追踪</p>
+        <h1 class="page-title">会话调试</h1>
+        <p class="page-subtitle">Agent 全链路事件流：用户消息 → Agent 决策 → 工具结果</p>
       </div>
       <div class="header-actions">
         <span class="event-count">{{ filteredEvents.length }} / {{ events.length }} 条</span>
@@ -22,17 +22,16 @@
           multiple
           collapse-tags
           collapse-tags-tooltip
-          placeholder="事件类型"
+          placeholder="事件域"
           clearable
           style="width: 240px"
         >
           <el-option label="房间消息 (room.message.*)" value="room.message" />
-          <el-option label="Agenda 发言 (agenda.*)" value="agenda" />
+          <el-option label="Planner 决策 (planner.*)" value="planner" />
+          <el-option label="Agenda 节目单 (agenda.*)" value="agenda" />
           <el-option label="工具结果 (tool.result.*)" value="tool.result" />
-          <!-- 兼容旧事件名（v2 后端不再发布） -->
-          <el-option label="[旧] message.received" value="message.received" />
-          <el-option label="[旧] decision.intent" value="decision.intent" />
-          <el-option label="[旧] output.render" value="output.render" />
+          <el-option label="游戏事件 (game.*)" value="game" />
+          <el-option label="核心事件 (core.*)" value="core" />
         </el-select>
         <el-input
           v-model="searchQuery"
@@ -58,13 +57,8 @@
           :key="event.id"
           :class="['chat-row', `chat-row--${eventTypeToClass(event.type)}`]"
         >
-          <!-- message.received: 左侧消息气泡（带头像） -->
-          <template
-            v-if="
-              (event.type.startsWith('room.message') || event.type === 'message.received') &&
-              event.message
-            "
-          >
+          <!-- 用户消息气泡（左侧 · room.message.*） -->
+          <template v-if="event.type.startsWith('room.message') && event.message">
             <div
               class="chat-avatar chat-avatar--message"
               :title="event.message.user_nickname || event.message.source || '用户'"
@@ -131,19 +125,18 @@
             </div>
           </template>
 
-          <!-- decision.intent: 右侧 AI 意图气泡（带头像） -->
+          <!-- Agent 行为气泡（中心 · planner.checkpoint / agenda.*） -->
           <template
             v-if="
-              (event.type.startsWith('agenda') ||
-                event.type.startsWith('tool.result') ||
-                event.type === 'decision.intent') &&
-              event.intent
+              (event.type.startsWith('planner') || event.type.startsWith('agenda')) && event.intent
             "
           >
-            <div class="chat-bubble chat-bubble--intent" @click="toggleExpand(event.id)">
+            <div class="chat-bubble chat-bubble--agent" @click="toggleExpand(event.id)">
               <div class="bubble-header">
-                <el-tag size="small" effect="plain" type="success">AI</el-tag>
-                <span class="bubble-sender">{{ event.deciderName || 'Decider' }}</span>
+                <el-tag size="small" effect="plain" :type="agentTagType(event.type)">
+                  {{ agentBadgeLabel(event.type) }}
+                </el-tag>
+                <span class="bubble-sender">{{ event.deciderName || 'Agent' }}</span>
                 <span class="bubble-spacer" />
                 <span class="bubble-time">{{ formatMs(event.timestamp).split('.')[0] }}</span>
               </div>
@@ -172,278 +165,308 @@
                 <pre class="json-view" v-html="formatJson(event)" />
               </div>
             </div>
-            <div class="chat-avatar chat-avatar--intent" title="AI · Bot">M</div>
           </template>
 
-          <!-- output.render: 居中系统消息（仅当存在 action 时渲染） -->
+          <!-- 工具结果卡片（右侧 · tool.result.*，含 action 时渲染） -->
           <template
-            v-if="
-              (event.type.startsWith('tool.result') || event.type === 'output.render') &&
-              event.intent &&
-              event.intent.action
-            "
+            v-if="event.type.startsWith('tool.result') && event.intent && event.intent.action"
           >
-            <div class="chat-system" @click="toggleExpand(event.id)">
-              <span class="system-icon">⚙</span>
-              <span class="system-text">
-                已派发到 <strong>{{ event.deciderName || 'Output' }}</strong>
-              </span>
-              <code
-                v-if="event.intent.action"
-                class="action-chip action-chip--mini action-chip--system"
+            <div class="chat-bubble chat-bubble--tool" @click="toggleExpand(event.id)">
+              <div class="bubble-header">
+                <el-tag size="small" effect="plain" type="success">工具</el-tag>
+                <span class="bubble-sender">{{ event.deciderName || 'Tool' }}</span>
+                <span class="bubble-spacer" />
+                <span class="bubble-time">{{ formatMs(event.timestamp).split('.')[0] }}</span>
+              </div>
+              <div class="bubble-text bubble-text--speech">
+                <span class="speech-marker">⚙</span>
+                <span>执行动作 </span>
+                <code class="action-chip action-chip--mini">{{ event.intent.action.name }}</code>
+              </div>
+              <div
+                v-if="
+                  event.intent.action.parameters &&
+                  Object.keys(event.intent.action.parameters).length > 0
+                "
+                class="bubble-meta"
               >
-                {{ event.intent.action.name }}
-              </code>
-              <span class="bubble-spacer" />
-              <span class="system-time">{{ formatMs(event.timestamp).split('.')[0] }}</span>
-              <span class="expand-hint expand-hint--system">
-                {{ expanded.has(event.id) ? '▲' : '▾' }}
-              </span>
-            </div>
-            <div v-if="expanded.has(event.id)" class="chat-system-detail">
-              <pre class="json-view" v-html="formatJson(event)" />
+                <span class="meta-item">
+                  {{ JSON.stringify(event.intent.action.parameters) }}
+                </span>
+                <span class="bubble-spacer" />
+                <span class="expand-hint">
+                  {{ expanded.has(event.id) ? '收起 ▲' : '查看详情 ▾' }}
+                </span>
+              </div>
+              <div v-if="expanded.has(event.id)" class="bubble-detail">
+                <pre class="json-view" v-html="formatJson(event)" />
+              </div>
             </div>
           </template>
         </div>
       </div>
     </div>
 
-    <!-- 底部输入区：手动注入消息用于测试 -->
+    <!-- 底部注入区：折叠到"高级" -->
     <div class="inject-area">
-      <div class="inject-group">
-        <div class="inject-label">
-          <el-tag size="small" type="info">注入消息 (NormalizedMessage)</el-tag>
-        </div>
-        <div class="inject-fields">
-          <div class="inject-field">
-            <label class="inject-field-label">source</label>
-            <el-input
-              v-model="danmakuSource"
-              size="small"
-              placeholder="dashboard"
-              :disabled="sending"
-            />
-          </div>
-          <div class="inject-field">
-            <label class="inject-field-label">data_type</label>
-            <el-select
-              v-model="danmakuDataType"
-              size="small"
-              :disabled="sending"
-              style="width: 100%"
-            >
-              <el-option label="text" value="text" />
-              <el-option label="gift" value="gift" />
-              <el-option label="super_chat" value="super_chat" />
-              <el-option label="guard" value="guard" />
-              <el-option label="enter" value="enter" />
-            </el-select>
-          </div>
-          <div class="inject-field">
-            <label class="inject-field-label">
-              importance
-              <span class="inject-field-value">{{ danmakuImportance.toFixed(2) }}</span>
-            </label>
-            <el-slider
-              v-model="danmakuImportance"
-              :min="0"
-              :max="1"
-              :step="0.05"
-              :disabled="sending"
-              size="small"
-            />
-          </div>
-        </div>
-        <el-input
-          v-model="danmakuInput"
-          type="textarea"
-          placeholder="输入弹幕文本..."
-          :rows="2"
-          :disabled="sending"
-          @keydown.enter.ctrl="sendDanmaku"
-        />
-        <el-button type="primary" size="small" :loading="sending" @click="sendDanmaku">
-          <el-icon><Promotion /></el-icon>
-          发送
-        </el-button>
-      </div>
-      <div class="inject-group">
-        <div class="inject-label">
-          <el-tag size="small" type="success">注入意图 (Intent)</el-tag>
-        </div>
-        <div class="inject-fields inject-fields--two">
-          <div class="inject-field">
-            <label class="inject-field-label">emotion</label>
-            <el-select v-model="intentEmotion" size="small" :disabled="sending" style="width: 100%">
-              <el-option label="happy" value="happy" />
-              <el-option label="sad" value="sad" />
-              <el-option label="angry" value="angry" />
-              <el-option label="excited" value="excited" />
-              <el-option label="neutral" value="neutral" />
-              <el-option label="surprised" value="surprised" />
-              <el-option label="fearful" value="fearful" />
-              <el-option label="disgusted" value="disgusted" />
-              <el-option label="grateful" value="grateful" />
-              <el-option label="relaxed" value="relaxed" />
-              <el-option label="puzzled" value="puzzled" />
-              <el-option label="bored" value="bored" />
-            </el-select>
-          </div>
-          <div class="inject-field">
-            <label class="inject-field-label">source</label>
-            <el-input
-              v-model="intentSource"
-              size="small"
-              placeholder="dashboard"
-              :disabled="sending"
-            />
-          </div>
-        </div>
-        <div class="inject-actions">
-          <div class="inject-actions-header">
-            <span class="inject-actions-title">动作 (IntentAction[])</span>
-            <el-button size="small" text type="primary" :disabled="sending" @click="addAction">
-              <el-icon><Plus /></el-icon>
-              <span>添加动作</span>
-            </el-button>
-          </div>
-          <div v-if="intentActions.length === 0" class="inject-actions-empty">暂无动作</div>
-          <div v-else class="inject-actions-list">
-            <div v-for="(action, idx) in intentActions" :key="idx" class="inject-action-row">
-              <div class="inject-action-header">
-                <el-select
-                  v-model="action.actionName"
-                  filterable
-                  :loading="loadingCapabilities"
-                  :disabled="sending || loadingCapabilities"
-                  placeholder="选择动作..."
-                  no-data-text="暂无可用动作"
-                  size="small"
-                  class="inject-action-select"
-                  @change="onActionSelect(idx)"
-                >
-                  <el-option
-                    v-if="capabilitiesError"
-                    :label="`加载失败: ${capabilitiesError}`"
-                    value="__error__"
-                    disabled
-                  />
-                  <el-option-group
-                    v-for="group in groupedAvailableActions"
-                    :key="group.handlerPrefix"
-                    :label="group.handlerPrefix"
-                  >
-                    <el-option
-                      v-for="entry in group.actions"
-                      :key="entry.name"
-                      :label="getLocalName(entry.name)"
-                      :value="entry.name"
-                    >
-                      <div class="action-opt-row">
-                        <span class="action-opt-label">{{ getLocalName(entry.name) }}</span>
-                        <span v-if="entry.description" class="action-opt-desc">
-                          {{ entry.description }}
-                        </span>
-                      </div>
-                    </el-option>
-                  </el-option-group>
-                </el-select>
-                <el-input-number
-                  v-model="action.priority"
-                  size="small"
-                  :min="0"
-                  :max="10"
-                  :step="1"
-                  :disabled="sending"
-                  controls-position="right"
-                  class="inject-action-priority"
-                />
-                <el-button
-                  size="small"
-                  type="danger"
-                  text
-                  :disabled="sending"
-                  class="inject-action-remove"
-                  title="移除动作"
-                  @click="removeAction(idx)"
-                >
-                  ✕
-                </el-button>
+      <el-collapse v-model="advancedOpen">
+        <el-collapse-item name="advanced" title="高级 · 手动注入消息 / 意图">
+          <div class="advanced-grid">
+            <div class="inject-group">
+              <div class="inject-label">
+                <el-tag size="small" type="info">注入消息 (NormalizedMessage)</el-tag>
               </div>
-              <div
-                v-if="
-                  action.actionName &&
-                  getActionSpec(action.actionName) &&
-                  Object.keys(getActionSpec(action.actionName)!.parameters).length > 0
-                "
-                class="inject-action-params"
-              >
-                <div
-                  v-for="(spec, key) in getActionSpec(action.actionName)!.parameters"
-                  :key="key"
-                  class="inject-param-row"
-                >
-                  <label class="inject-param-label">
-                    <span class="inject-param-key">{{ key }}</span>
-                    <span v-if="spec.required" class="inject-param-required" title="必填">*</span>
-                    <el-tooltip v-if="spec.description" :content="spec.description" placement="top">
-                      <span class="inject-param-help">?</span>
-                    </el-tooltip>
+              <div class="inject-fields">
+                <div class="inject-field">
+                  <label class="inject-field-label">source</label>
+                  <el-input
+                    v-model="danmakuSource"
+                    size="small"
+                    placeholder="dashboard"
+                    :disabled="sending"
+                  />
+                </div>
+                <div class="inject-field">
+                  <label class="inject-field-label">data_type</label>
+                  <el-select
+                    v-model="danmakuDataType"
+                    size="small"
+                    :disabled="sending"
+                    style="width: 100%"
+                  >
+                    <el-option label="text" value="text" />
+                    <el-option label="gift" value="gift" />
+                    <el-option label="super_chat" value="super_chat" />
+                    <el-option label="guard" value="guard" />
+                    <el-option label="enter" value="enter" />
+                  </el-select>
+                </div>
+                <div class="inject-field">
+                  <label class="inject-field-label">
+                    importance
+                    <span class="inject-field-value">{{ danmakuImportance.toFixed(2) }}</span>
                   </label>
-                  <div class="inject-param-control">
-                    <el-input
-                      v-if="spec.type === 'string'"
-                      v-model="action.params[key]"
-                      size="small"
-                      :disabled="sending"
-                      placeholder="string"
-                    />
-                    <el-input-number
-                      v-else-if="spec.type === 'integer'"
-                      v-model="action.params[key]"
-                      :step="1"
-                      :precision="0"
-                      :min="spec.minimum"
-                      :max="spec.maximum"
-                      size="small"
-                      controls-position="right"
-                      class="inject-param-number"
-                    />
-                    <el-input-number
-                      v-else-if="spec.type === 'number'"
-                      v-model="action.params[key]"
-                      :step="1"
-                      :min="spec.minimum"
-                      :max="spec.maximum"
-                      size="small"
-                      controls-position="right"
-                      class="inject-param-number"
-                    />
-                    <el-switch
-                      v-else-if="spec.type === 'boolean'"
-                      v-model="action.params[key]"
-                      size="small"
-                      :disabled="sending"
-                    />
+                  <el-slider
+                    v-model="danmakuImportance"
+                    :min="0"
+                    :max="1"
+                    :step="0.05"
+                    :disabled="sending"
+                    size="small"
+                  />
+                </div>
+              </div>
+              <el-input
+                v-model="danmakuInput"
+                type="textarea"
+                placeholder="输入弹幕文本..."
+                :rows="2"
+                :disabled="sending"
+                @keydown.enter.ctrl="sendDanmaku"
+              />
+              <el-button type="primary" size="small" :loading="sending" @click="sendDanmaku">
+                <el-icon><Promotion /></el-icon>
+                发送
+              </el-button>
+            </div>
+
+            <div class="inject-group">
+              <div class="inject-label">
+                <el-tag size="small" type="success">注入意图 (Intent)</el-tag>
+              </div>
+              <div class="inject-fields inject-fields--two">
+                <div class="inject-field">
+                  <label class="inject-field-label">emotion</label>
+                  <el-select
+                    v-model="intentEmotion"
+                    size="small"
+                    :disabled="sending"
+                    style="width: 100%"
+                  >
+                    <el-option label="happy" value="happy" />
+                    <el-option label="sad" value="sad" />
+                    <el-option label="angry" value="angry" />
+                    <el-option label="excited" value="excited" />
+                    <el-option label="neutral" value="neutral" />
+                    <el-option label="surprised" value="surprised" />
+                    <el-option label="fearful" value="fearful" />
+                    <el-option label="disgusted" value="disgusted" />
+                    <el-option label="grateful" value="grateful" />
+                    <el-option label="relaxed" value="relaxed" />
+                    <el-option label="puzzled" value="puzzled" />
+                    <el-option label="bored" value="bored" />
+                  </el-select>
+                </div>
+                <div class="inject-field">
+                  <label class="inject-field-label">source</label>
+                  <el-input
+                    v-model="intentSource"
+                    size="small"
+                    placeholder="dashboard"
+                    :disabled="sending"
+                  />
+                </div>
+              </div>
+              <div class="inject-actions">
+                <div class="inject-actions-header">
+                  <span class="inject-actions-title">动作 (IntentAction[])</span>
+                  <el-button
+                    size="small"
+                    text
+                    type="primary"
+                    :disabled="sending"
+                    @click="addAction"
+                  >
+                    <el-icon><Plus /></el-icon>
+                    <span>添加动作</span>
+                  </el-button>
+                </div>
+                <div v-if="intentActions.length === 0" class="inject-actions-empty">暂无动作</div>
+                <div v-else class="inject-actions-list">
+                  <div v-for="(action, idx) in intentActions" :key="idx" class="inject-action-row">
+                    <div class="inject-action-header">
+                      <el-select
+                        v-model="action.actionName"
+                        filterable
+                        :loading="loadingCapabilities"
+                        :disabled="sending || loadingCapabilities"
+                        placeholder="选择动作..."
+                        no-data-text="暂无可用动作"
+                        size="small"
+                        class="inject-action-select"
+                        @change="onActionSelect(idx)"
+                      >
+                        <el-option
+                          v-if="capabilitiesError"
+                          :label="`加载失败: ${capabilitiesError}`"
+                          value="__error__"
+                          disabled
+                        />
+                        <el-option-group
+                          v-for="group in groupedAvailableActions"
+                          :key="group.handlerPrefix"
+                          :label="group.handlerPrefix"
+                        >
+                          <el-option
+                            v-for="entry in group.actions"
+                            :key="entry.name"
+                            :label="getLocalName(entry.name)"
+                            :value="entry.name"
+                          >
+                            <div class="action-opt-row">
+                              <span class="action-opt-label">{{ getLocalName(entry.name) }}</span>
+                              <span v-if="entry.description" class="action-opt-desc">
+                                {{ entry.description }}
+                              </span>
+                            </div>
+                          </el-option>
+                        </el-option-group>
+                      </el-select>
+                      <el-input-number
+                        v-model="action.priority"
+                        size="small"
+                        :min="0"
+                        :max="10"
+                        :step="1"
+                        :disabled="sending"
+                        controls-position="right"
+                        class="inject-action-priority"
+                      />
+                      <el-button
+                        size="small"
+                        type="danger"
+                        text
+                        :disabled="sending"
+                        class="inject-action-remove"
+                        title="移除动作"
+                        @click="removeAction(idx)"
+                      >
+                        ✕
+                      </el-button>
+                    </div>
+                    <div
+                      v-if="
+                        action.actionName &&
+                        getActionSpec(action.actionName) &&
+                        Object.keys(getActionSpec(action.actionName)!.parameters).length > 0
+                      "
+                      class="inject-action-params"
+                    >
+                      <div
+                        v-for="(spec, key) in getActionSpec(action.actionName)!.parameters"
+                        :key="key"
+                        class="inject-param-row"
+                      >
+                        <label class="inject-param-label">
+                          <span class="inject-param-key">{{ key }}</span>
+                          <span v-if="spec.required" class="inject-param-required" title="必填"
+                            >*</span
+                          >
+                          <el-tooltip
+                            v-if="spec.description"
+                            :content="spec.description"
+                            placement="top"
+                          >
+                            <span class="inject-param-help">?</span>
+                          </el-tooltip>
+                        </label>
+                        <div class="inject-param-control">
+                          <el-input
+                            v-if="spec.type === 'string'"
+                            v-model="action.params[key]"
+                            size="small"
+                            :disabled="sending"
+                            placeholder="string"
+                          />
+                          <el-input-number
+                            v-else-if="spec.type === 'integer'"
+                            v-model="action.params[key]"
+                            :step="1"
+                            :precision="0"
+                            :min="spec.minimum"
+                            :max="spec.maximum"
+                            size="small"
+                            controls-position="right"
+                            class="inject-param-number"
+                          />
+                          <el-input-number
+                            v-else-if="spec.type === 'number'"
+                            v-model="action.params[key]"
+                            :step="1"
+                            :min="spec.minimum"
+                            :max="spec.maximum"
+                            size="small"
+                            controls-position="right"
+                            class="inject-param-number"
+                          />
+                          <el-switch
+                            v-else-if="spec.type === 'boolean'"
+                            v-model="action.params[key]"
+                            size="small"
+                            :disabled="sending"
+                          />
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
+              <el-input
+                v-model="intentInput"
+                type="textarea"
+                placeholder="输入主播回应文本..."
+                :rows="2"
+                :disabled="sending"
+                @keydown.enter.ctrl="sendMockIntent"
+              />
+              <el-button type="success" size="small" :loading="sending" @click="sendMockIntent">
+                <el-icon><Promotion /></el-icon>
+                发送
+              </el-button>
             </div>
           </div>
-        </div>
-        <el-input
-          v-model="intentInput"
-          type="textarea"
-          placeholder="输入主播回应文本..."
-          :rows="2"
-          :disabled="sending"
-          @keydown.enter.ctrl="sendMockIntent"
-        />
-        <el-button type="success" size="small" :loading="sending" @click="sendMockIntent">
-          <el-icon><Promotion /></el-icon>
-          发送
-        </el-button>
-      </div>
+        </el-collapse-item>
+      </el-collapse>
     </div>
   </div>
 </template>
@@ -640,10 +663,27 @@ function formatDecisionLatency(event: DebugSessionEvent): string {
 
 // ===== 样式辅助 =====
 function eventTypeToClass(type: string): string {
-  if (type.startsWith('room.message') || type === 'message.received') return 'message';
-  if (type.startsWith('agenda') || type === 'decision.intent') return 'intent';
-  return 'output';
+  if (type.startsWith('room.message')) return 'message';
+  if (type.startsWith('planner') || type.startsWith('agenda')) return 'agent';
+  if (type.startsWith('tool.result')) return 'tool';
+  return 'agent';
 }
+
+function agentBadgeLabel(type: string): string {
+  if (type.startsWith('planner')) return '规划';
+  if (type.startsWith('agenda.update')) return 'Agenda';
+  if (type.startsWith('agenda.speech')) return '发言';
+  return 'Agent';
+}
+
+function agentTagType(type: string): 'success' | 'warning' | 'info' {
+  if (type.startsWith('planner')) return 'warning';
+  if (type.startsWith('agenda.update')) return 'info';
+  if (type.startsWith('agenda.speech')) return 'success';
+  return 'info';
+}
+
+const advancedOpen = ref<string[]>([]);
 
 function dataTypeTagType(dt: string): 'info' | 'warning' | 'success' | 'danger' | '' {
   if (dt === 'text') return 'info';
@@ -846,14 +886,11 @@ onUnmounted(() => {
 .chat-row--message {
   justify-content: flex-start;
 }
-.chat-row--intent {
-  justify-content: flex-end;
-}
-.chat-row--output {
-  flex-direction: column;
-  align-items: center;
+.chat-row--agent {
   justify-content: center;
-  gap: 4px;
+}
+.chat-row--tool {
+  justify-content: flex-end;
 }
 
 @keyframes chatBubbleIn {
@@ -886,8 +923,11 @@ onUnmounted(() => {
 .chat-avatar--message {
   background: linear-gradient(135deg, #5fa8ff 0%, #3a7bd5 100%);
 }
-.chat-avatar--intent {
-  background: linear-gradient(135deg, #67c23a 0%, #4a9b2a 100%);
+.chat-avatar--agent {
+  background: linear-gradient(135deg, #a78bfa 0%, #6d28d9 100%);
+}
+.chat-avatar--tool {
+  background: linear-gradient(135deg, #34d399 0%, #059669 100%);
 }
 
 /* ===== 气泡 ===== */
@@ -916,17 +956,30 @@ onUnmounted(() => {
   box-shadow: 0 4px 14px rgba(64, 158, 255, 0.18);
   border-color: rgba(64, 158, 255, 0.4);
 }
-.chat-bubble--intent {
+.chat-bubble--agent {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border-radius: 12px;
+  border: 1px solid var(--border-color-light);
+  border-left: 3px solid var(--color-agent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  max-width: min(80%, 640px);
+}
+.chat-bubble--agent:hover {
+  box-shadow: 0 4px 14px rgba(139, 92, 246, 0.18);
+  border-color: rgba(139, 92, 246, 0.4);
+}
+.chat-bubble--tool {
   background: var(--bg-elevated);
   color: var(--text-primary);
   border-radius: 16px 16px 4px 16px;
   border: 1px solid var(--border-color-light);
-  border-left: 3px solid #67c23a;
+  border-right: 3px solid var(--color-tool);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
-.chat-bubble--intent:hover {
-  box-shadow: 0 4px 14px rgba(64, 158, 255, 0.18);
-  border-color: rgba(64, 158, 255, 0.4);
+.chat-bubble--tool:hover {
+  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.18);
+  border-color: rgba(16, 185, 129, 0.4);
 }
 
 /* 气泡头部 */
@@ -940,7 +993,10 @@ onUnmounted(() => {
 .chat-bubble--message .bubble-header {
   color: var(--text-secondary);
 }
-.chat-bubble--intent .bubble-header {
+.chat-bubble--agent .bubble-header {
+  color: var(--text-secondary);
+}
+.chat-bubble--tool .bubble-header {
   color: var(--text-secondary);
 }
 .bubble-sender {
@@ -950,7 +1006,10 @@ onUnmounted(() => {
 .chat-bubble--message .bubble-sender {
   color: var(--text-primary);
 }
-.chat-bubble--intent .bubble-sender {
+.chat-bubble--agent .bubble-sender {
+  color: var(--text-primary);
+}
+.chat-bubble--tool .bubble-sender {
   color: var(--text-primary);
 }
 .bubble-spacer {
@@ -992,7 +1051,10 @@ onUnmounted(() => {
 .chat-bubble--message .bubble-meta {
   color: var(--text-placeholder);
 }
-.chat-bubble--intent .bubble-meta {
+.chat-bubble--agent .bubble-meta {
+  color: var(--text-placeholder);
+}
+.chat-bubble--tool .bubble-meta {
   color: var(--text-placeholder);
 }
 .meta-item {
@@ -1007,7 +1069,10 @@ onUnmounted(() => {
 .chat-bubble--message .expand-hint {
   color: var(--color-primary);
 }
-.chat-bubble--intent .expand-hint {
+.chat-bubble--agent .expand-hint {
+  color: var(--color-primary);
+}
+.chat-bubble--tool .expand-hint {
   color: var(--color-primary);
 }
 
@@ -1055,60 +1120,6 @@ onUnmounted(() => {
   padding: 0 6px;
 }
 
-/* ===== 系统消息（居中、紧凑） ===== */
-.chat-system {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
-  border-radius: 999px;
-  background: var(--bg-page);
-  color: var(--text-primary);
-  font-size: 12px;
-  cursor: pointer;
-  transition: background var(--transition-fast);
-  border: 1px solid var(--border-color-light);
-  max-width: min(80%, 600px);
-}
-.chat-system:hover {
-  background: var(--bg-hover);
-}
-.system-icon {
-  font-size: 11px;
-  opacity: 0.65;
-}
-.system-text {
-  font-weight: 500;
-  color: var(--text-primary);
-}
-.system-text strong {
-  color: var(--text-primary);
-  font-weight: 600;
-}
-.system-time {
-  font-family: var(--font-mono, 'Cascadia Code', monospace);
-  font-size: 11px;
-  opacity: 0.65;
-  color: var(--text-secondary);
-}
-.action-chip--system {
-  background: rgba(64, 158, 255, 0.12);
-  color: var(--color-primary);
-}
-.expand-hint--system {
-  font-size: 10px;
-  color: var(--text-placeholder);
-  margin-left: 2px;
-}
-
-.chat-system-detail {
-  width: min(80%, 600px);
-  border-radius: 8px;
-  overflow: hidden;
-  margin-top: 4px;
-  background: #1e1e2e;
-}
-
 /* ===== JSON 详情 ===== */
 .bubble-detail {
   margin-top: 10px;
@@ -1141,14 +1152,17 @@ onUnmounted(() => {
 
 /* ===== 注入区 ===== */
 .inject-area {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--spacing-md);
-  padding: var(--spacing-md);
   background: var(--bg-card);
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-color-light);
   flex-shrink: 0;
+  padding: 0 var(--spacing-md);
+}
+.advanced-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--spacing-md);
+  padding: var(--spacing-sm) 0 var(--spacing-md);
 }
 .inject-group {
   display: flex;

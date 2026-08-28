@@ -9,9 +9,24 @@ const router = createRouter({
       component: () => import('@/views/Dashboard.vue'),
     },
     {
+      path: '/collectors',
+      name: 'collectors',
+      component: () => import('@/views/Collectors.vue'),
+    },
+    {
+      path: '/agents',
+      name: 'agents',
+      component: () => import('@/views/Agents.vue'),
+    },
+    {
+      path: '/tools',
+      name: 'tools',
+      component: () => import('@/views/Tools.vue'),
+    },
+    {
+      // v2 路由拆分后保留旧路径兼容：直接跳转到采集器管理页
       path: '/components',
-      name: 'components',
-      component: () => import('@/views/Components.vue'),
+      redirect: '/collectors',
     },
     {
       path: '/eventlog',

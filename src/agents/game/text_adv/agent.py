@@ -108,7 +108,7 @@ class TextAdvGameAgent(BaseAgent):
     """
 
     # ----- 协议 6：元数据 -----
-    name = "text_adv_game_agent"
+    name = "game"
     description = "文字冒险游戏 Agent —— Wave 7 §1.5.1 范式验证示例"
 
     # ----- 协议 3：事件族声明 -----

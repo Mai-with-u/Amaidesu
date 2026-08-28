@@ -1,210 +1,123 @@
 <template>
   <div class="dashboard">
-    <!-- 页面标题 -->
     <header class="page-header">
       <div class="header-left">
-        <h1 class="page-title">系统监控</h1>
-        <p class="page-subtitle">实时监控系统运行状态</p>
+        <h1 class="page-title">运行总览</h1>
+        <p class="page-subtitle">组件运行状态 · 事件吞吐 · LLM 用量 · Agenda 节目单</p>
       </div>
       <div class="header-actions">
-        <router-link to="/eventlog">
-          <el-button type="primary" plain>
-            <el-icon><Document /></el-icon>
-            查看事件日志
-          </el-button>
-        </router-link>
+        <el-tag :type="status?.running ? 'success' : 'danger'" effect="plain" size="small">
+          {{ status?.running ? '运行中' : '已停止' }}
+        </el-tag>
+        <el-button type="primary" plain @click="$router.push('/eventlog')">
+          <el-icon><Document /></el-icon>
+          事件流
+        </el-button>
       </div>
     </header>
 
-    <!-- Domain 状态卡片 -->
-    <section class="phase-cards">
-      <div class="phase-card" :class="{ active: status?.input_phase?.enabled }">
-        <div class="card-header">
-          <div class="card-icon input">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <polyline points="7 10 12 15 17 10" />
-              <line x1="12" y1="15" x2="12" y2="3" />
-            </svg>
-          </div>
-          <div class="card-title-area">
-            <div class="card-title-row">
-              <h3 class="card-title">采集器</h3>
-              <span class="health-badge" :class="getHealthStatus('input')">
-                {{ getHealthLabel('input') }}
-              </span>
-            </div>
-            <span class="card-subtitle">采集域（v2 room.message.*）</span>
-          </div>
-        </div>
-        <div class="card-stats">
-          <div class="stat">
-            <span class="stat-value">{{ status?.input_phase?.active_components || 0 }}</span>
-            <span class="stat-label">运行中</span>
-          </div>
-          <div class="stat-divider"></div>
-          <div class="stat">
-            <span class="stat-value">{{ status?.input_phase?.total_components || 0 }}</span>
-            <span class="stat-label">总计</span>
-          </div>
-        </div>
-        <div class="card-footer">
-          <div class="phase-actions">
-            <el-button
-              size="small"
-              type="success"
-              plain
-              :loading="phaseLoading.input === 'start'"
-              :disabled="!status?.input_phase?.enabled || allComponentsRunning('input')"
-              @click="startAllComponents('input')"
-            >
-              启动全部
-            </el-button>
-            <el-button
-              size="small"
-              type="danger"
-              plain
-              :loading="phaseLoading.input === 'stop'"
-              :disabled="!status?.input_phase?.enabled || allComponentsStopped('input')"
-              @click="stopAllComponents('input')"
-            >
-              停止全部
-            </el-button>
-          </div>
-        </div>
+    <!-- KPI 顶栏（全局指标；各组件域数字只出现在下方组卡片，不在此重复） -->
+    <section class="kpi-row">
+      <div class="kpi-card kpi-eventbus">
+        <div class="kpi-label">EventBus 总吞吐</div>
+        <div class="kpi-value mono">{{ formatCount(status?.event_bus?.total_events ?? 0) }}</div>
+        <div class="kpi-sub">累计事件数</div>
       </div>
 
-      <div class="phase-card" :class="{ active: status?.decision_phase?.enabled }">
-        <div class="card-header">
-          <div class="card-icon decision">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="3" />
-              <path d="M12 1v6m0 6v10" />
-              <path d="m4.22 4.22 4.24 4.24m7.08 7.08 4.24 4.24" />
-              <path d="M1 12h6m6 0h10" />
-              <path d="m4.22 19.78 4.24-4.24m7.08-7.08 4.24-4.24" />
-            </svg>
-          </div>
-          <div class="card-title-area">
-            <div class="card-title-row">
-              <h3 class="card-title">Agent</h3>
-              <span class="health-badge" :class="getHealthStatus('decision')">
-                {{ getHealthLabel('decision') }}
-              </span>
-            </div>
-            <span class="card-subtitle">决策域（v2 agenda.*）</span>
-          </div>
-        </div>
-        <div class="card-stats">
-          <div class="stat">
-            <span class="stat-value">{{ status?.decision_phase?.active_components || 0 }}</span>
-            <span class="stat-label">运行中</span>
-          </div>
-          <div class="stat-divider"></div>
-          <div class="stat">
-            <span class="stat-value">{{ status?.decision_phase?.total_components || 0 }}</span>
-            <span class="stat-label">总计</span>
-          </div>
-        </div>
-        <div class="card-footer">
-          <div class="phase-actions">
-            <el-button
-              size="small"
-              type="success"
-              plain
-              :loading="phaseLoading.decision === 'start'"
-              :disabled="!status?.decision_phase?.enabled || allComponentsRunning('decision')"
-              @click="startAllComponents('decision')"
-            >
-              启动全部
-            </el-button>
-            <el-button
-              size="small"
-              type="danger"
-              plain
-              :loading="phaseLoading.decision === 'stop'"
-              :disabled="!status?.decision_phase?.enabled || allComponentsStopped('decision')"
-              @click="stopAllComponents('decision')"
-            >
-              停止全部
-            </el-button>
-          </div>
-        </div>
+      <div class="kpi-card kpi-uptime">
+        <div class="kpi-label">运行时长</div>
+        <div class="kpi-value mono">{{ formatUptime(status?.uptime_seconds ?? 0) }}</div>
+        <div class="kpi-sub">本次启动以来</div>
       </div>
 
-      <div class="phase-card" :class="{ active: status?.output_phase?.enabled }">
-        <div class="card-header">
-          <div class="card-icon output">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <polyline points="17 8 12 3 7 8" />
-              <line x1="12" y1="3" x2="12" y2="15" />
-            </svg>
-          </div>
-          <div class="card-title-area">
-            <div class="card-title-row">
-              <h3 class="card-title">工具</h3>
-              <span class="health-badge" :class="getHealthStatus('output')">
-                {{ getHealthLabel('output') }}
-              </span>
-            </div>
-            <span class="card-subtitle">输出域（v2 tool.result.*）</span>
-          </div>
-        </div>
-        <div class="card-stats">
-          <div class="stat">
-            <span class="stat-value">{{ status?.output_phase?.active_components || 0 }}</span>
-            <span class="stat-label">运行中</span>
-          </div>
-          <div class="stat-divider"></div>
-          <div class="stat">
-            <span class="stat-value">{{ status?.output_phase?.total_components || 0 }}</span>
-            <span class="stat-label">总计</span>
-          </div>
-        </div>
-        <div class="card-footer">
-          <div class="phase-actions">
-            <el-button
-              size="small"
-              type="success"
-              plain
-              :loading="phaseLoading.output === 'start'"
-              :disabled="!status?.output_phase?.enabled || allComponentsRunning('output')"
-              @click="startAllComponents('output')"
-            >
-              启动全部
-            </el-button>
-            <el-button
-              size="small"
-              type="danger"
-              plain
-              :loading="phaseLoading.output === 'stop'"
-              :disabled="!status?.output_phase?.enabled || allComponentsStopped('output')"
-              @click="stopAllComponents('output')"
-            >
-              停止全部
-            </el-button>
-          </div>
-        </div>
+      <div class="kpi-card kpi-llm">
+        <div class="kpi-label">LLM 今日成本</div>
+        <div class="kpi-value mono">{{ llmCostText }}</div>
+        <div class="kpi-sub">{{ llmCostSub }}</div>
+      </div>
+
+      <div class="kpi-card kpi-agenda">
+        <div class="kpi-label">当前 Agenda</div>
+        <div class="kpi-value mono">—</div>
+        <div class="kpi-sub">节目单管理通道规划中</div>
       </div>
     </section>
 
-    <!-- 系统信息 -->
+    <!-- 组件分组卡片 -->
+    <section class="group-cards">
+      <article
+        v-for="card in groupCards"
+        :key="card.key"
+        class="group-card"
+        :class="`group-card--${card.key}`"
+      >
+        <div class="card-header">
+          <div class="card-icon" :class="`card-icon--${card.key}`">
+            <component :is="card.icon" />
+          </div>
+          <div class="card-title-area">
+            <div class="card-title-row">
+              <h3 class="card-title">{{ card.title }}</h3>
+              <span class="health-badge" :class="healthClass(card.key)">
+                {{ healthLabel(card.key) }}
+              </span>
+            </div>
+            <span class="card-subtitle">{{ card.subtitle }}</span>
+          </div>
+        </div>
+
+        <div class="card-stats">
+          <div class="stat">
+            <span class="stat-value mono">{{ card.started }}</span>
+            <span class="stat-label">{{ card.statPrimary }}</span>
+          </div>
+          <div class="stat-divider" />
+          <div class="stat">
+            <span class="stat-value mono">{{ card.total }}</span>
+            <span class="stat-label">{{ card.statSecondary }}</span>
+          </div>
+        </div>
+
+        <div class="card-footer">
+          <div class="footer-actions">
+            <el-button
+              v-if="card.supportsRuntimeStop"
+              size="small"
+              type="success"
+              plain
+              :loading="batchLoading[card.key] === 'start'"
+              :disabled="card.started === card.total"
+              @click="batchControl(card.key, 'start')"
+            >
+              启动全部
+            </el-button>
+            <el-button
+              v-if="card.supportsRuntimeStop"
+              size="small"
+              type="danger"
+              plain
+              :loading="batchLoading[card.key] === 'stop'"
+              :disabled="card.started === 0"
+              @click="batchControl(card.key, 'stop')"
+            >
+              停止全部
+            </el-button>
+            <span v-else class="tool-hint">工具组为被动调用，无运行时启停</span>
+            <span class="footer-spacer" />
+            <el-button text size="small" type="primary" @click="goGroupPage(card.key)">
+              查看组件 →
+            </el-button>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <!-- 系统元信息 -->
     <section class="system-info-section">
       <div class="section-header">
-        <h2 class="section-title">系统信息</h2>
+        <h2 class="section-title">运行时元信息</h2>
       </div>
       <div class="info-grid">
-        <div class="info-card">
-          <span class="info-label">运行状态</span>
-          <span class="info-value" :class="{ running: status?.running }">
-            {{ status?.running ? '运行中' : '已停止' }}
-          </span>
-        </div>
-        <div class="info-card">
-          <span class="info-label">运行时间</span>
-          <span class="info-value mono">{{ formatUptime(status?.uptime_seconds || 0) }}</span>
-        </div>
         <div class="info-card">
           <span class="info-label">版本</span>
           <span class="info-value mono">{{ status?.version || '-' }}</span>
@@ -213,317 +126,263 @@
           <span class="info-label">Python</span>
           <span class="info-value mono">{{ status?.python_version || '-' }}</span>
         </div>
-      </div>
-    </section>
-
-    <!-- 快捷链接 -->
-    <section class="quick-links-section">
-      <div class="section-header">
-        <h2 class="section-title">快捷入口</h2>
-      </div>
-      <div class="quick-links">
-        <router-link to="/eventlog" class="quick-link-card">
-          <div class="quick-link-icon">
-            <el-icon :size="24"><Document /></el-icon>
-          </div>
-          <div class="quick-link-content">
-            <h4 class="quick-link-title">事件日志</h4>
-            <p class="quick-link-desc">实时监控系统事件流，支持筛选和搜索</p>
-          </div>
-        </router-link>
-        <router-link to="/components" class="quick-link-card">
-          <div class="quick-link-icon">
-            <el-icon :size="24"><Connection /></el-icon>
-          </div>
-          <div class="quick-link-content">
-            <h4 class="quick-link-title">组件管理</h4>
-            <p class="quick-link-desc">管理各阶段的组件启停状态</p>
-          </div>
-        </router-link>
-        <router-link to="/devtools" class="quick-link-card">
-          <div class="quick-link-icon">
-            <el-icon :size="24"><Tools /></el-icon>
-          </div>
-          <div class="quick-link-content">
-            <h4 class="quick-link-title">开发工具</h4>
-            <p class="quick-link-desc">消息注入和 EventBus 统计</p>
-          </div>
-        </router-link>
-        <router-link to="/settings" class="quick-link-card">
-          <div class="quick-link-icon">
-            <el-icon :size="24"><Setting /></el-icon>
-          </div>
-          <div class="quick-link-content">
-            <h4 class="quick-link-title">系统设置</h4>
-            <p class="quick-link-desc">配置管理，保存后可重启服务</p>
-          </div>
-        </router-link>
-        <router-link to="/danmaku" target="_blank" class="quick-link-card">
-          <div class="quick-link-icon">
-            <el-icon :size="24"><ChatLineSquare /></el-icon>
-          </div>
-          <div class="quick-link-content">
-            <h4 class="quick-link-title">弹幕小部件</h4>
-            <p class="quick-link-desc">独立的弹幕显示窗口</p>
-          </div>
-        </router-link>
-        <router-link to="/subtitle" target="_blank" class="quick-link-card">
-          <div class="quick-link-icon">
-            <el-icon :size="24"><ChatDotRound /></el-icon>
-          </div>
-          <div class="quick-link-content">
-            <h4 class="quick-link-title">字幕小部件</h4>
-            <p class="quick-link-desc">独立的字幕显示窗口</p>
-          </div>
-        </router-link>
-      </div>
-    </section>
-
-    <!-- 小部件信息 -->
-    <section class="widget-info-section">
-      <div class="section-header">
-        <h2 class="section-title">小部件访问地址</h2>
-        <el-button type="primary" size="small" text @click="showWidgetInfo = !showWidgetInfo">
-          {{ showWidgetInfo ? '收起' : '展开' }}
-          <el-icon :class="{ 'is-rotate': showWidgetInfo }">
-            <ArrowDown />
-          </el-icon>
-        </el-button>
-      </div>
-      <el-collapse-transition>
-        <div v-show="showWidgetInfo" class="widget-urls">
-          <div class="widget-url-card">
-            <div class="widget-url-info">
-              <span class="widget-url-label">弹幕小部件</span>
-              <code class="widget-url-value">{{ baseUrl }}/danmaku</code>
-            </div>
-            <el-button
-              class="copy-btn"
-              type="primary"
-              size="small"
-              text
-              @click="copyUrl(`${baseUrl}/danmaku`)"
-            >
-              <el-icon><CopyDocument /></el-icon>
-              复制
-            </el-button>
-          </div>
-          <div class="widget-url-card">
-            <div class="widget-url-info">
-              <span class="widget-url-label">字幕小部件</span>
-              <code class="widget-url-value">{{ baseUrl }}/subtitle</code>
-            </div>
-            <el-button
-              class="copy-btn"
-              type="primary"
-              size="small"
-              text
-              @click="copyUrl(`${baseUrl}/subtitle`)"
-            >
-              <el-icon><CopyDocument /></el-icon>
-              复制
-            </el-button>
-          </div>
+        <div class="info-card">
+          <span class="info-label">小部件入口</span>
+          <span class="info-value mono">{{ baseUrl }}/danmaku · /subtitle</span>
         </div>
-      </el-collapse-transition>
+      </div>
     </section>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
-import {
-  Document,
-  Connection,
-  Tools,
-  Setting,
-  ChatLineSquare,
-  ChatDotRound,
-  CopyDocument,
-  ArrowDown,
-} from '@element-plus/icons-vue';
+import { computed, onMounted, onUnmounted, h, ref } from 'vue';
+import { useRouter } from 'vue-router';
+import { Document } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
-import { useSystemStore, useComponentsStore } from '@/stores';
 import { storeToRefs } from 'pinia';
-import type { ComponentSummary } from '@/types';
+import { useSystemStore, useComponentsStore } from '@/stores';
+import { capabilitiesApi, llmApi } from '@/api';
+import type { LLMUsageSummary } from '@/types';
 
 const systemStore = useSystemStore();
 const componentsStore = useComponentsStore();
+const router = useRouter();
 
 const { status } = storeToRefs(systemStore);
-const { components } = storeToRefs(componentsStore);
 
-const phaseLoading = ref<Record<string, 'start' | 'stop' | null>>({
-  input: null,
-  decision: null,
-  output: null,
+/** 能力条目总数（ToolRegistry 运行时 spec 数，与工具目录页同源） */
+const toolCapabilityCount = ref<number | null>(null);
+
+// ====== KPI / 卡片数据 ======
+
+interface GroupCard {
+  key: 'collectors' | 'agents' | 'tools';
+  title: string;
+  subtitle: string;
+  started: number;
+  total: number;
+  statPrimary: string;
+  statSecondary: string;
+  icon: Record<string, unknown>;
+  supportsRuntimeStop: boolean;
+}
+
+const CollectorIcon = {
+  render() {
+    return h(
+      'svg',
+      { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2' },
+      [
+        h('path', { d: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4' }),
+        h('polyline', { points: '7,10 12,15 17,10' }),
+        h('line', { x1: '12', y1: '15', x2: '12', y2: '3' }),
+      ],
+    );
+  },
+};
+
+const AgentIcon = {
+  render() {
+    return h(
+      'svg',
+      { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2' },
+      [
+        h('rect', { x: '4', y: '4', width: '16', height: '16', rx: '2', ry: '2' }),
+        h('rect', { x: '9', y: '9', width: '6', height: '6' }),
+        h('line', { x1: '9', y1: '1', x2: '9', y2: '4' }),
+        h('line', { x1: '15', y1: '1', x2: '15', y2: '4' }),
+        h('line', { x1: '9', y1: '20', x2: '9', y2: '23' }),
+        h('line', { x1: '15', y1: '20', x2: '15', y2: '23' }),
+      ],
+    );
+  },
+};
+
+const ToolIcon = {
+  render() {
+    return h(
+      'svg',
+      { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2' },
+      [
+        h('path', {
+          d: 'M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z',
+        }),
+      ],
+    );
+  },
+};
+
+function startedCount(group: 'collectors' | 'agents' | 'tools'): number {
+  const list = componentsStore.components?.[group];
+  if (!list || list.length === 0) return 0;
+  return list.filter(c => c.is_started).length;
+}
+
+function totalCount(group: 'collectors' | 'agents' | 'tools'): number {
+  return componentsStore.components?.[group]?.length ?? 0;
+}
+
+const groupCards = computed<GroupCard[]>(() => {
+  const cards: GroupCard[] = [
+    {
+      key: 'collectors',
+      title: '采集器',
+      subtitle: '数据入口（v2 room.message.*）',
+      started: startedCount('collectors'),
+      total: totalCount('collectors'),
+      statPrimary: '运行中',
+      statSecondary: '已配置',
+      icon: CollectorIcon,
+      supportsRuntimeStop: true,
+    },
+    {
+      key: 'agents',
+      title: 'Agent',
+      subtitle: '决策主体（v2 planner.*）',
+      started: startedCount('agents'),
+      total: totalCount('agents'),
+      statPrimary: '运行中',
+      statSecondary: '已配置',
+      icon: AgentIcon,
+      supportsRuntimeStop: true,
+    },
+    {
+      key: 'tools',
+      title: '工具',
+      subtitle: '能力契约（v2 tool.result.*）',
+      started: totalCount('tools'),
+      total: toolCapabilityCount.value ?? totalCount('tools'),
+      statPrimary: '提供方',
+      statSecondary: '能力条目',
+      icon: ToolIcon,
+      supportsRuntimeStop: false,
+    },
+  ];
+  return cards;
 });
 
-// Widget info visibility
-const showWidgetInfo = ref(false);
-
-// Base URL for widget links
-const baseUrl = computed(() => window.location.origin);
-
-// Copy widget URL to clipboard
-function copyUrl(url: string) {
-  navigator.clipboard
-    .writeText(url)
-    .then(() => {
-      ElMessage.success('URL 已复制到剪贴板');
-    })
-    .catch(() => {
-      ElMessage.error('复制失败');
-    });
+function healthClass(group: 'collectors' | 'agents' | 'tools'): string {
+  const card = groupCards.value.find(c => c.key === group);
+  if (!card) return 'status-disabled';
+  if (card.total === 0) return 'status-disabled';
+  if (card.key === 'tools') return 'status-healthy';
+  if (card.started === card.total) return 'status-healthy';
+  if (card.started === 0) return 'status-stopped';
+  return 'status-warning';
 }
 
-function getPhaseComponents(phase: string): ComponentSummary[] {
-  if (!components.value) return [];
-  return components.value[phase as keyof typeof components.value] || [];
+function healthLabel(group: 'collectors' | 'agents' | 'tools'): string {
+  const cls = healthClass(group);
+  if (cls === 'status-disabled') return '未配置';
+  if (cls === 'status-stopped') return '已停止';
+  if (cls === 'status-warning') return '部分运行';
+  return '正常运行';
 }
 
-function allComponentsRunning(phase: string): boolean {
-  const phaseComponents = getPhaseComponents(phase);
-  if (phaseComponents.length === 0) return true;
-  return phaseComponents.every(p => p.is_started);
-}
+// ====== 批量启停（采集器 / Agent）======
 
-function allComponentsStopped(phase: string): boolean {
-  const phaseComponents = getPhaseComponents(phase);
-  if (phaseComponents.length === 0) return true;
-  return phaseComponents.every(p => !p.is_started);
-}
+const batchLoading = ref<Record<'collectors' | 'agents' | 'tools', 'start' | 'stop' | null>>({
+  collectors: null,
+  agents: null,
+  tools: null,
+});
 
-function getHealthStatus(phase: string): string {
-  const phaseStatus = status.value?.[`${phase}_phase` as keyof typeof status.value] as
-    | { enabled?: boolean; active_components?: number; total_components?: number }
-    | undefined;
-
-  if (!phaseStatus?.enabled || phaseStatus.total_components === 0) {
-    return 'status-disabled';
-  }
-
-  const activeCount = phaseStatus.active_components || 0;
-  const totalCount = phaseStatus.total_components || 0;
-
-  if (activeCount === totalCount) {
-    return 'status-healthy';
-  } else if (activeCount === 0) {
-    return 'status-stopped';
-  } else {
-    return 'status-warning';
-  }
-}
-
-function getHealthLabel(phase: string): string {
-  const phaseStatus = status.value?.[`${phase}_phase` as keyof typeof status.value] as
-    | { enabled?: boolean; active_components?: number; total_components?: number }
-    | undefined;
-
-  if (!phaseStatus?.enabled || phaseStatus.total_components === 0) {
-    return '已禁用';
-  }
-
-  const activeCount = phaseStatus.active_components || 0;
-  const totalCount = phaseStatus.total_components || 0;
-
-  if (activeCount === totalCount) {
-    return '正常运行';
-  } else if (activeCount === 0) {
-    return '已停止';
-  } else {
-    return '部分异常';
-  }
-}
-
-async function startAllComponents(phase: string) {
-  const phaseComponents = getPhaseComponents(phase);
-  const stoppedComponents = phaseComponents.filter(p => !p.is_started && p.is_enabled);
-
-  if (stoppedComponents.length === 0) {
-    ElMessage.info('所有组件已在运行中');
+async function batchControl(group: 'collectors' | 'agents' | 'tools', action: 'start' | 'stop') {
+  if (group === 'tools') {
+    ElMessage.info('工具组无运行时启停语义');
     return;
   }
-
-  phaseLoading.value[phase] = 'start';
-
+  batchLoading.value[group] = action;
   try {
-    const results = await Promise.allSettled(
-      stoppedComponents.map(p => componentsStore.controlComponent(phase, p.name, 'start')),
-    );
-
-    const failed = results.filter(r => r.status === 'rejected');
-    const succeeded = results.length - failed.length;
-
-    if (failed.length === 0) {
-      ElMessage.success(`已启动 ${succeeded} 个组件`);
+    const { succeeded, failed } = await componentsStore.batchControl(group, action);
+    if (succeeded === 0 && failed === 0) {
+      ElMessage.info(action === 'start' ? '所有组件已在运行中' : '所有组件已停止');
+    } else if (failed === 0) {
+      ElMessage.success(`已${action === 'start' ? '启动' : '停止'} ${succeeded} 个组件`);
     } else {
-      ElMessage.warning(`启动完成: ${succeeded} 成功, ${failed.length} 失败`);
+      ElMessage.warning(
+        `${action === 'start' ? '启动' : '停止'}完成：${succeeded} 成功, ${failed} 失败`,
+      );
     }
-
     await systemStore.fetchStatus();
   } catch (error) {
-    ElMessage.error('批量启动失败');
-    console.error('Batch start error:', error);
+    ElMessage.error('批量操作失败');
+    console.error('Batch control error:', error);
   } finally {
-    phaseLoading.value[phase] = null;
+    batchLoading.value[group] = null;
   }
 }
 
-async function stopAllComponents(phase: string) {
-  const phaseComponents = getPhaseComponents(phase);
-  const runningComponents = phaseComponents.filter(p => p.is_started);
+// ====== LLM 今日成本 ======
 
-  if (runningComponents.length === 0) {
-    ElMessage.info('所有组件已停止');
-    return;
-  }
+const llmSummary = ref<LLMUsageSummary | null>(null);
+const llmSummaryError = ref<string | null>(null);
 
-  phaseLoading.value[phase] = 'stop';
-
+async function fetchLLMSummary() {
   try {
-    const results = await Promise.allSettled(
-      runningComponents.map(p => componentsStore.controlComponent(phase, p.name, 'stop')),
-    );
-
-    const failed = results.filter(r => r.status === 'rejected');
-    const succeeded = results.length - failed.length;
-
-    if (failed.length === 0) {
-      ElMessage.success(`已停止 ${succeeded} 个组件`);
-    } else {
-      ElMessage.warning(`停止完成: ${succeeded} 成功, ${failed.length} 失败`);
-    }
-
-    await systemStore.fetchStatus();
-  } catch (error) {
-    ElMessage.error('批量停止失败');
-    console.error('Batch stop error:', error);
-  } finally {
-    phaseLoading.value[phase] = null;
+    const response = await llmApi.getUsageSummary();
+    llmSummary.value = response.data;
+    llmSummaryError.value = null;
+  } catch (e) {
+    llmSummaryError.value = e instanceof Error ? e.message : '获取 LLM 用量失败';
+    llmSummary.value = null;
   }
 }
 
-// Format uptime as human-readable string
+const llmCostText = computed(() => {
+  if (!llmSummary.value) return llmSummaryError.value ? '—' : '...';
+  const summary = llmSummary.value as unknown as { today_cost?: number; today_tokens?: number };
+  if (typeof summary.today_cost === 'number') {
+    return `$${summary.today_cost.toFixed(2)}`;
+  }
+  if (typeof summary.today_tokens === 'number') {
+    return `${formatCount(summary.today_tokens)} tok`;
+  }
+  return '—';
+});
+
+const llmCostSub = computed(() => {
+  if (!llmSummary.value) return llmSummaryError.value ?? '加载中';
+  return '今日累计';
+});
+
+// ====== 工具函数 ======
+
 function formatUptime(seconds: number): string {
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   const secs = Math.floor(seconds % 60);
-
-  if (hours > 0) {
-    return `${hours}h ${minutes}m ${secs}s`;
-  } else if (minutes > 0) {
-    return `${minutes}m ${secs}s`;
-  } else {
-    return `${secs}s`;
-  }
+  if (hours > 0) return `${hours}h ${minutes}m ${secs}s`;
+  if (minutes > 0) return `${minutes}m ${secs}s`;
+  return `${secs}s`;
 }
 
-// Lifecycle management
+function formatCount(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
+  return `${(n / 1_000_000).toFixed(2)}M`;
+}
+
+const baseUrl = computed(() => window.location.origin);
+
+function goGroupPage(group: 'collectors' | 'agents' | 'tools') {
+  router.push({ path: `/${group}` });
+}
+
+// ====== 生命周期 ======
+
 onMounted(async () => {
   await systemStore.fetchStatus();
   await componentsStore.fetchComponents();
   systemStore.startPolling(1000);
+  void fetchLLMSummary();
+  try {
+    const res = await capabilitiesApi.list();
+    toolCapabilityCount.value = res.data.actions.length;
+  } catch {
+    toolCapabilityCount.value = null; // 失败时回退显示提供方数
+  }
 });
 
 onUnmounted(() => {
@@ -537,7 +396,6 @@ onUnmounted(() => {
   margin: 0 auto;
 }
 
-/* 页面标题 */
 .page-header {
   display: flex;
   justify-content: space-between;
@@ -552,18 +410,114 @@ onUnmounted(() => {
 }
 
 .header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
   flex-shrink: 0;
 }
 
-/* Domain 卡片 */
-.phase-cards {
+/* ===== KPI ===== */
+
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-lg);
+}
+
+.kpi-card {
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-color-light);
+  padding: var(--spacing-md) var(--spacing-md);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  position: relative;
+  overflow: hidden;
+}
+
+.kpi-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--border-color);
+}
+
+.kpi-uptime::before {
+  background: var(--color-live);
+}
+.kpi-eventbus::before {
+  background: var(--color-primary);
+}
+.kpi-llm::before {
+  background: var(--color-warning);
+}
+.kpi-agenda::before {
+  background: var(--color-agenda);
+}
+
+.kpi-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.kpi-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.kpi-divider {
+  color: var(--text-placeholder);
+  font-weight: 400;
+  font-size: 16px;
+}
+
+.kpi-total {
+  color: var(--text-secondary);
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.kpi-sub {
+  font-size: 11px;
+  color: var(--text-placeholder);
+}
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--spacing-md);
+}
+
+.section-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+/* ===== 三组卡片 ===== */
+
+.group-cards {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: var(--spacing-md);
   margin-bottom: var(--spacing-lg);
 }
 
-.phase-card {
+.group-card {
   background: var(--bg-card);
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-color-light);
@@ -574,7 +528,7 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
-.phase-card::before {
+.group-card::before {
   content: '';
   position: absolute;
   top: 0;
@@ -582,16 +536,22 @@ onUnmounted(() => {
   right: 0;
   height: 3px;
   background: var(--border-color);
-  transition: background var(--transition-normal);
 }
 
-.phase-card.active::before {
-  background: var(--color-success);
+.group-card--collectors::before {
+  background: var(--color-collector);
 }
 
-.phase-card:hover {
+.group-card--agents::before {
+  background: var(--color-agent);
+}
+
+.group-card--tools::before {
+  background: var(--color-tool);
+}
+
+.group-card:hover {
   box-shadow: var(--shadow-md);
-  transform: translateY(-2px);
 }
 
 .card-header {
@@ -602,8 +562,8 @@ onUnmounted(() => {
 }
 
 .card-icon {
-  width: 48px;
-  height: 48px;
+  width: 44px;
+  height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -611,28 +571,29 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
-.card-icon svg {
-  width: 24px;
-  height: 24px;
+.card-icon :deep(svg) {
+  width: 22px;
+  height: 22px;
 }
 
-.card-icon.input {
-  background-color: var(--color-input-bg);
-  color: var(--color-input);
+.card-icon--collectors {
+  background-color: var(--color-collector-bg);
+  color: var(--color-collector);
 }
 
-.card-icon.decision {
-  background-color: var(--color-decision-bg);
-  color: var(--color-decision);
+.card-icon--agents {
+  background-color: var(--color-agent-bg);
+  color: var(--color-agent);
 }
 
-.card-icon.output {
-  background-color: var(--color-output-bg);
-  color: var(--color-output);
+.card-icon--tools {
+  background-color: var(--color-tool-bg);
+  color: var(--color-tool);
 }
 
 .card-title-area {
   flex: 1;
+  min-width: 0;
 }
 
 .card-title-row {
@@ -658,25 +619,20 @@ onUnmounted(() => {
   font-weight: 600;
   padding: 2px 8px;
   border-radius: var(--radius-sm);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
 }
 
 .health-badge.status-healthy {
   background-color: var(--color-success-light);
   color: var(--color-success);
 }
-
 .health-badge.status-warning {
   background-color: var(--color-warning-light);
   color: var(--color-warning);
 }
-
 .health-badge.status-stopped {
   background-color: var(--color-danger-light);
   color: var(--color-danger);
 }
-
 .health-badge.status-disabled {
   background-color: var(--bg-hover);
   color: var(--text-secondary);
@@ -696,10 +652,9 @@ onUnmounted(() => {
 }
 
 .stat-value {
-  font-size: 24px;
+  font-size: 22px;
   font-weight: 700;
   color: var(--text-primary);
-  font-family: var(--font-mono);
 }
 
 .stat-label {
@@ -710,35 +665,36 @@ onUnmounted(() => {
 
 .stat-divider {
   width: 1px;
-  height: 32px;
+  height: 28px;
   background-color: var(--border-color-light);
 }
 
 .card-footer {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
 }
 
-.phase-actions {
+.footer-actions {
   display: flex;
+  align-items: center;
   gap: var(--spacing-xs);
+  flex-wrap: wrap;
 }
 
-/* 系统信息 */
+.footer-spacer {
+  flex: 1;
+}
+
+.tool-hint {
+  font-size: 12px;
+  color: var(--text-placeholder);
+  font-style: italic;
+}
+
+/* ===== 系统信息 ===== */
+
 .system-info-section {
   margin-bottom: var(--spacing-lg);
-}
-
-.section-header {
-  margin-bottom: var(--spacing-md);
-}
-
-.section-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin: 0;
 }
 
 .info-grid {
@@ -765,146 +721,25 @@ onUnmounted(() => {
 }
 
 .info-value {
-  font-size: 15px;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-
-.info-value.mono {
-  font-family: var(--font-mono);
-}
-
-.info-value.running {
-  color: var(--color-success);
-}
-
-/* 快捷入口 */
-.quick-links-section {
-  margin-bottom: var(--spacing-lg);
-}
-
-.quick-links {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: var(--spacing-md);
-}
-
-.quick-link-card {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-md);
-  padding: var(--spacing-md);
-  background: var(--bg-card);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-color-light);
-  text-decoration: none;
-  color: inherit;
-  transition: all var(--transition-fast);
-}
-
-.quick-link-card:hover {
-  border-color: var(--color-primary);
-  box-shadow: var(--shadow-sm);
-  transform: translateY(-2px);
-}
-
-.quick-link-icon {
-  width: 48px;
-  height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-hover);
-  border-radius: var(--radius-md);
-  color: var(--color-primary);
-  flex-shrink: 0;
-}
-
-.quick-link-content {
-  flex: 1;
-  min-width: 0;
-}
-
-.quick-link-title {
-  margin: 0 0 4px;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.quick-link-desc {
-  margin: 0;
-  font-size: 12px;
-  color: var(--text-secondary);
-  line-height: 1.4;
-}
-
-/* 小部件信息区域 */
-.widget-info-section {
-  margin-bottom: var(--spacing-lg);
-}
-
-.widget-urls {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-md);
-}
-
-.widget-url-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--spacing-md);
-  background: var(--bg-card);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-color-light);
-}
-
-.widget-url-info {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-md);
-}
-
-.widget-url-label {
   font-size: 14px;
   font-weight: 500;
   color: var(--text-primary);
 }
 
-.widget-url-value {
-  font-size: 13px;
-  font-family: var(--font-mono);
-  color: var(--text-secondary);
-  background: var(--bg-hover);
-  padding: 4px 8px;
-  border-radius: var(--radius-sm);
-}
-
-.copy-btn {
-  flex-shrink: 0;
-}
-
-.is-rotate {
-  transform: rotate(180deg);
-}
-
-/* Utility Classes */
 .mono {
   font-family: var(--font-mono);
 }
 
-/* Responsive */
+/* ===== 响应式 ===== */
+
 @media (max-width: 1200px) {
-  .phase-cards {
-    grid-template-columns: repeat(2, 1fr);
+  .kpi-row {
+    grid-template-columns: repeat(3, 1fr);
   }
-
+  .group-cards {
+    grid-template-columns: 1fr;
+  }
   .info-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-
-  .quick-links {
     grid-template-columns: repeat(2, 1fr);
   }
 }
@@ -914,12 +749,10 @@ onUnmounted(() => {
     flex-direction: column;
     gap: var(--spacing-md);
   }
-
-  .phase-cards {
-    grid-template-columns: 1fr;
+  .kpi-row {
+    grid-template-columns: repeat(2, 1fr);
   }
-
-  .quick-links {
+  .info-grid {
     grid-template-columns: 1fr;
   }
 }

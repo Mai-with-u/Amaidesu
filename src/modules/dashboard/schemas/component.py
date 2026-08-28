@@ -27,6 +27,7 @@ class ComponentSummary(BaseModel):
     is_started: bool
     is_enabled: bool
     group: Optional[str] = None  # v2 分组：collectors/agents/tools
+    description: str = ""  # 描述（来自管理器注册/工具规格；前端可选展示）
 
 
 class ComponentDetail(BaseModel):

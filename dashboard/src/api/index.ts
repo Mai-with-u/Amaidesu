@@ -11,9 +11,7 @@
 import axios from 'axios';
 import type {
   SystemStatusResponse,
-  SystemStatsResponse,
   ComponentListResponse,
-  ComponentDetail,
   ComponentControlRequest,
   ComponentControlResponse,
   ConfigResponse,
@@ -30,7 +28,6 @@ import type {
   LLMHistoryQueryParams,
   LLMHistoryResponse,
   LLMRequestHistory,
-  MessageListResponse,
   UnifiedCapabilitiesView,
   MockCollectorStatus,
   MockCollectorStats,
@@ -50,21 +47,17 @@ const api = axios.create({
 
 export const systemApi = {
   getStatus: () => api.get<SystemStatusResponse>('/system/status'),
-  getStats: () => api.get<SystemStatsResponse>('/system/stats'),
   getHealth: () => api.get<{ status: string; timestamp: number }>('/system/health'),
 };
 
 // ===== 组件 =====
 //
-// 后端 `/api/v1/components` 当前返回 `{input:[], decision:[], output:[]}`（W8 证据）：
-// 三个 Manager 未被注入，所以列表恒空。v2 新架构分组键为 `collectors / agents / tools`，
-// 但当前端点尚未更新；前端按现状保留 phase 字段，新增 group 字段待后端补齐。
+// 后端 `/api/v1/components` 按 v2 分组 `collectors / agents / tools` 返回组件清单；
+// 控制端点路径参数为 `group`（旧后端为 `phase`，迁移完成后无须兼容）。
 export const componentApi = {
   getAll: () => api.get<ComponentListResponse>('/components'),
-  getOne: (phase: string, name: string) =>
-    api.get<{ component: ComponentDetail }>(`/components/${phase}/${name}`),
-  control: (phase: string, name: string, request: ComponentControlRequest) =>
-    api.post<ComponentControlResponse>(`/components/${phase}/${name}/control`, request),
+  control: (group: string, name: string, request: ComponentControlRequest) =>
+    api.post<ComponentControlResponse>(`/components/${group}/${name}/control`, request),
 };
 
 // ===== 配置 =====
@@ -87,14 +80,6 @@ export const debugApi = {
   getEventBusStats: () => api.get<EventBusStatsResponse>('/debug/event-bus/stats'),
 };
 
-// ===== 会话消息 =====
-export const messageApi = {
-  getSessionMessages: (sessionId: string, limit: number = 100) =>
-    api.get<MessageListResponse>(`/messages/sessions/${sessionId}/messages`, {
-      params: { limit },
-    }),
-};
-
 // ===== LLM =====
 export const llmApi = {
   getUsage: () => api.get<Record<string, LLMUsageStats>>('/llm/usage'),
@@ -102,7 +87,6 @@ export const llmApi = {
   getHistory: (params: LLMHistoryQueryParams) =>
     api.get<LLMHistoryResponse>('/llm/history', { params }),
   getRequestById: (requestId: string) => api.get<LLMRequestHistory>(`/llm/history/${requestId}`),
-  getAvailableDates: () => api.get<string[]>('/llm/history/dates'),
 };
 
 // ===== Capabilities（v2 工具 action 清单） =====
@@ -143,8 +127,8 @@ export const mockCollectorApi = {
 
 // ===== Trace =====
 //
-// `traces.ts` 当前实现：GET /traces（按 message_id 聚合 room.message 事件） +
-// GET /traces/{message_id}。v2 实现仅返回 message + event，decision/outputs 字段为空。
+// `traces.ts`：GET /traces（最近链路列表）+ GET /traces/{message_id}（按 message_id
+// 聚合 messages/planning/execution 三段事件；planning/execution 可能为空数组）。
 export * from './traces';
 
 export default api;

@@ -180,7 +180,7 @@ class StreamerAgent(BaseAgent):
     """
 
     # -----协议 6：元数据（必须覆写）-----
-    name = "streamer_agent"
+    name = "streamer"
     description = "Streamer Agent - 主播决策 + 表达 + 后台维护（Wave 6 §1.4）"
 
     # -----协议 3：事件族声明（可选）-----

@@ -1,15 +1,19 @@
 /**
  * Trace 全链路追踪类型定义（v2.0）
  *
- * 对应后端 `/api/v1/traces` 接口返回的数据结构。
+ * 对应后端 `/api/v1/traces` 与 `/api/v1/traces/{message_id}` 接口返回的数据结构。
  *
- * v2 行为流（参考 `.omo/evidence/w8-api-contract.txt`）：
+ * v2 行为流：
  * - 链路起点：采集器发布 `room.message.*` 事件，`EventRecord.data.message.message_id` 关联
- * - 链路上游：Planner 通过 `tool.result.*` 与 `agenda.*` 间接观测（不再写 decision.intent/output.render）
- * - 后端 `traces.py:107` 搜索策略：仅匹配 `room.message` 事件 + message_id 聚合
+ * - 链路上游：Planner 通过 `planner.checkpoint` 事件观测决策
+ * - 链路下游：`tool.result.*` + `agenda.*` 间接观测执行
  *
- * v2 trace payload 仅返回 room.message 事件本体，不包含 decision/output 字段
- * （W8 evidence §3：当前 `_build_trace` 仅构造 `trace.message` + `trace.event`）。
+ * 后端 `/traces/{message_id}` 聚合三段：
+ * - `messages`：触发链路的所有 room.message 事件（数组，必填）
+ * - `planning`：planner.checkpoint 事件数组（可为空）
+ * - `execution`：tool.result.* + agenda.* 事件数组（可为空）
+ *
+ * 旧字段 `decision/outputs/total_elapsed_ms` 已删除（统一通过 `segments` 三段 + 时间戳推算耗时）。
  */
 
 export interface TraceMessage {
@@ -22,58 +26,31 @@ export interface TraceMessage {
   user_nickname?: string | null;
 }
 
-/** v2 暂无 decision/output 字段；保留兼容旧后端，运行时为 null/undefined。 */
-export interface TraceStageTiming {
-  timestamp: number;
-  elapsed_ms: number;
-}
-
-export interface TraceDecision extends TraceStageTiming {
-  decider: string;
-  speech: string;
-  emotion?: TraceEmotion | null;
-  action?: TraceAction | null;
-}
-
-export interface TraceEmotion {
-  name: string;
-  intensity: number;
-}
-
-export interface TraceAction {
-  name: string;
-  parameters: Record<string, unknown>;
-}
-
-export interface TraceOutput extends TraceStageTiming {
-  handler: string;
-  speech: string;
-  action?: TraceAction | null;
+/** trace segments 中的单条事件片段（消息/决策/执行三段共用） */
+export interface TraceSegmentEntry {
+  type: string;
+  /** 毫秒时间戳（Unix epoch ms） */
+  timestamp_ms: number;
+  data: Record<string, unknown>;
 }
 
 /**
- * 单条消息的完整链路追踪（v2）。
+ * Trace 聚合响应（v2）。
  *
- * 必填：`message_id` + `message` + `event`。
- * 可选：`decision`/`outputs`/`total_elapsed_ms` —— 后端 v2 简化实现可能不返回，
- * 渲染时需要兜底（如 v2 当前仅返回 message + event）。
+ * 必填：`message_id` + `segments.messages`。
+ * 可选：`segments.planning` / `segments.execution` —— 后端实现可能为空数组。
  */
 export interface Trace {
   message_id: string;
-  message: TraceMessage;
-  /** 触发消息的原始事件记录（v2 新增） */
-  event?: {
-    name: string;
-    timestamp: number;
-  };
-  /** v2 暂无；旧后端兼容保留 */
-  decision?: TraceDecision | null;
-  /** v2 暂无；旧后端兼容保留 */
-  outputs?: TraceOutput[];
-  /** v2 暂无；旧后端兼容保留 */
-  total_elapsed_ms?: number | null;
-  /** v2 新增：消息是否来自 mock 采集器（统计查询应排除） */
+  /** 是否来自 mock 采集器（统计查询应排除） */
   simulated?: boolean;
+  /** v2 实现可能不再计算总耗时（前端可自行推算）；保留字段以备后端补回 */
+  total_elapsed_ms?: number | null;
+  segments: {
+    messages: TraceSegmentEntry[];
+    planning: TraceSegmentEntry[];
+    execution: TraceSegmentEntry[];
+  };
 }
 
 export interface TraceListResponse {

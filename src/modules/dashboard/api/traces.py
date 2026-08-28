@@ -1,17 +1,33 @@
 """
-Trace 聚合 API（Wave 8 简化）
+Trace 聚合 API（Wave 8 简化 + Wave U1 / B6 重写）
 
-从 EventHistoryService 中查询并聚合消息全链路追踪数据。
-
-链路构成（v2 行为流）：
-- Input/Collector: EventRecord(type="room.message", data.message.message_id)
-  — v2 中所有消息事件统一归并到 room.message.* 一族
-- Agent/Tool 调用：通过 tool.result.* 与 Agenda/Planner 事件间接观测
-  — v2 删除了 decision.intent / output.render 的 EventRecord 写入路径
-  （Stage-glue 胶水事件不再使用，§1.46 定案）
+从 EventHistoryService 中按 message_id 聚合三段链路：
+- messages: room.message.* 事件（采集器行为流）
+- planning: planner.checkpoint / agenda.update 事件（决策与编排）
+- execution: tool.result.* 事件（工具调用结果回传）
 
 不依赖额外存储，纯查询 EventHistoryService 内存环形缓冲。
-注意: 事件类型字符串必须与 EventHistoryRecorder 中写入 EventRecord.type 的字面量保持一致。
+注意：事件类型字符串必须与 EventHistoryRecorder 中写入 EventRecord.type
+的字面量保持一致。
+
+----------------------------------------------------------------------
+Wave U1 / B6 已知 linkage 缺失（诚实实现，不伪造数据）：
+
+下列 Payload 字段在 v2 中均未携带 ``message_id``（已查 src/modules/events/payloads/
+内 room.py / planner.py / agenda.py / tool_result.py 验证）：
+
+- ``RoomMessagePayload``（room.message.*）—— 无 ``message_id``（仅有
+  ``live_session_id`` / ``user.id``，二者均非单条消息唯一标识）。
+- ``AgendaPayload`` / ``CheckpointPayload``（agenda.update / planner.checkpoint）——
+  无 ``message_id``（决策与编排上下文不依赖单条消息）。
+- ``ToolResultPayload``（tool.result.*）—— 无 ``message_id``（异步工具回传
+  仅含 ``tool_name`` / ``status`` / ``result``，与触发消息无显式关联）。
+
+因此当前实现只能"messages 段全量返回 + planning/execution 段空数组"。
+待 EventRecord.data 中补齐 message_id 后，本模块只需修改聚合过滤逻辑即可
+启用完整三段对齐。后续工作的关键字段命名约定（待 §1.46 事件契约扩展）
+建议为 ``message_id``，与 NormalizedMessage.message_id 同源。
+----------------------------------------------------------------------
 """
 
 from typing import TYPE_CHECKING, Annotated, Any, Dict, List, Optional
@@ -32,6 +48,10 @@ logger = get_logger("TracesAPI")
 # EventRecord.data 字典下承载业务负载的键名
 _KEY_MESSAGE = "message"
 
+# 三段聚合的事件类型集合（与 EventHistoryRecorder 写入字面量保持一致）
+_PLANNING_EVENT_TYPES = frozenset({"planner.checkpoint", "agenda.update"})
+_EXECUTION_EVENT_PREFIX = "tool.result."
+
 ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 
 
@@ -40,7 +60,7 @@ async def list_traces(
     limit: int = Query(20, ge=1, le=100, description="返回最大 Trace 数"),
     server: ServerDep = ...,
 ):
-    """获取最近的 Trace 列表。
+    """获取最近 Trace 列表。
 
     策略: 从最近的 ``room.message`` 事件中提取 ``message_id``,
     然后对每个 ``message_id`` 聚合完整链路。
@@ -96,21 +116,25 @@ async def get_trace(
 
 
 def _build_trace(history: EventHistoryService, message_id: str) -> Optional[Dict[str, Any]]:
-    """从 EventHistoryService 构建单条消息的 Trace 聚合数据。
-
-    搜索策略（v2）：
-    - room.message: data.message.message_id == message_id
+    """从 EventHistoryService 构建单条消息的 Trace 聚合数据（v2 三段聚合）。
 
     Returns:
         聚合的 Trace 字典;若 room.message 事件未找到则返回 ``None``。
+
+    Notes:
+        见模块顶部"Wave U1 / B6 已知 linkage 缺失"注释——当前 messages 段
+        返回 room.message 全量记录，planning/execution 段返回空数组（不伪造）。
+        后续 message_id 字段补齐后，仅需修改 ``_collect_segments`` 过滤逻辑。
     """
-    msg_event = _find_event(history, ROOM_MESSAGE_TYPE, message_id, _KEY_MESSAGE)
+    msg_event = _find_room_message_event(history, message_id)
     if not msg_event:
         return None
 
     msg_data = msg_event.data.get(_KEY_MESSAGE, {})
     if not isinstance(msg_data, dict):
         msg_data = {}
+
+    segments = _collect_segments(history, message_id)
 
     trace: Dict[str, Any] = {
         "message_id": message_id,
@@ -126,38 +150,77 @@ def _build_trace(history: EventHistoryService, message_id: str) -> Optional[Dict
             "name": msg_event.data.get("event"),
             "timestamp": msg_event.timestamp,
         },
+        "segments": segments,
     }
 
     return trace
 
 
-def _find_event(
+def _collect_segments(
     history: EventHistoryService,
-    event_type: str,
     message_id: str,
-    data_key: str,
-) -> Optional[EventRecord]:
-    """在 EventHistoryService 中查找匹配 ``message_id`` 的首条事件。
+) -> Dict[str, List[Dict[str, Any]]]:
+    """按 message_id 聚合三段记录。
 
-    直接遍历环形缓冲(最大 5000 条,管理页面足够快),
-    因为需要在 payload 内嵌套字段(如 ``message.message_id``)上过滤,
-    现有 ``query()`` 接口不支持。
+    当前实现（Wave U1 / B6）受模块顶部注释描述的 linkage 缺失约束：
+    - messages 段：返回 room.message 全量记录（data.message_id 不存在，
+      无法按 message_id 过滤；保留完整行为流由前端按时间窗裁剪）。
+    - planning 段：返回 []（AgendaPayload/CheckpointPayload 不携带 message_id）。
+    - execution 段：返回 []（ToolResultPayload 不携带 message_id）。
 
-    Args:
-        history: EventHistoryService 实例。
-        event_type: 要匹配的事件类型(如 ``room.message``)。
-        message_id: 目标 ``message_id``。
-        data_key: EventRecord.data 字典中承载业务负载的键名。
-
-    Returns:
-        首条匹配的事件;未找到则返回 ``None``。
+    EventRecord.data 补齐 message_id 后，仅替换本函数三个 return 行即可启用
+    三段对齐，无需修改 _build_trace 调用方。``message_id`` 参数保留是为
+    对齐未来签名；当前未参与过滤。
     """
-    for event in history.get_recent(history.max_events):
-        if event.type != event_type:
+    records = _iter_recent(history)
+
+    messages: List[Dict[str, Any]] = []
+    for record in records:
+        if record.type != ROOM_MESSAGE_TYPE:
             continue
-        candidate_id = _extract_message_id(event.data.get(data_key, {}))
+        messages.append(_serialize_segment_record(record))
+
+    return {
+        "messages": messages,
+        "planning": [],
+        "execution": [],
+    }
+
+
+def _serialize_segment_record(record: EventRecord) -> Dict[str, Any]:
+    """把 EventRecord 序列化为前端消费的字典（轻量拷贝，避免泄露内部对象）。"""
+    return {
+        "id": record.id,
+        "type": record.type,
+        "timestamp": record.timestamp,
+        "level": record.level,
+        "source": record.source,
+        "summary": record.summary,
+        "data": dict(record.data) if isinstance(record.data, dict) else {},
+    }
+
+
+def _iter_recent(history: EventHistoryService) -> List[EventRecord]:
+    """获取环形缓冲中的所有事件（最新在前，浅拷贝）。"""
+    return list(history.get_recent(history.max_events))
+
+
+def _find_room_message_event(
+    history: EventHistoryService,
+    message_id: str,
+) -> Optional[EventRecord]:
+    """在 EventHistoryService 中查找匹配 ``message_id`` 的 room.message 事件。
+
+    直接遍历环形缓冲（最大 5000 条，Dashboard 页面足够快），
+    因为需要在 payload 内嵌套字段（如 ``message.message_id``）上过滤，
+    现有 ``query()`` 接口不支持。
+    """
+    for record in _iter_recent(history):
+        if record.type != ROOM_MESSAGE_TYPE:
+            continue
+        candidate_id = _extract_message_id(record.data.get(_KEY_MESSAGE, {}))
         if candidate_id == message_id:
-            return event
+            return record
     return None
 
 

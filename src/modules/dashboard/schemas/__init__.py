@@ -54,19 +54,17 @@ from src.modules.dashboard.schemas.component import (
     ComponentSummary,
 )
 from src.modules.dashboard.schemas.system import (
-    PhaseStatus,
-    EventStats,
+    EventBusStats,
+    GroupStatus,
     HealthResponse,
-    SystemStatsResponse,
     SystemStatusResponse,
 )
 
 __all__ = [
     # System
-    "EventStats",
-    "PhaseStatus",
+    "EventBusStats",
+    "GroupStatus",
     "SystemStatusResponse",
-    "SystemStatsResponse",
     "HealthResponse",
     # 组件
     "ComponentControlAction",

@@ -3,9 +3,12 @@
 覆盖:
 1. GET /api/v1/components — 返回三组（collectors/agents/tools），
    未启用组件以 is_enabled=False 占位
-2. POST /api/v1/components/{phase}/{name}/control start — 未启用组件
+2. POST /api/v1/components/{group}/{name}/control start — 未启用组件
    加入对应 TOML enabled 列表（幂等写回）
 3. POST control stop — 组件从 TOML enabled 列表移除
+
+Wave U1 / B7 变更：
+- 路径参数 ``phase`` → ``group``（取值 collectors/agents/tools）
 """
 
 from __future__ import annotations
@@ -132,7 +135,7 @@ def test_list_components_returns_all_groups_with_disabled(client: TestClient) ->
 
 
 def test_control_start_dynamically_starts_collector(client: TestClient, config_dir: Path) -> None:
-    resp = client.post("/api/v1/components/input/mock_danmaku/control", json={"action": "start"})
+    resp = client.post("/api/v1/components/collectors/mock_danmaku/control", json={"action": "start"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["success"] is True
@@ -146,8 +149,8 @@ def test_control_start_dynamically_starts_collector(client: TestClient, config_d
 
 
 def test_control_stop_dynamically_stops_collector(client: TestClient, config_dir: Path) -> None:
-    client.post("/api/v1/components/input/mock_danmaku/control", json={"action": "start"})
-    resp = client.post("/api/v1/components/input/mock_danmaku/control", json={"action": "stop"})
+    client.post("/api/v1/components/collectors/mock_danmaku/control", json={"action": "start"})
+    resp = client.post("/api/v1/components/collectors/mock_danmaku/control", json={"action": "stop"})
     assert resp.status_code == 200
     assert resp.json()["success"] is True
 
@@ -164,8 +167,8 @@ def test_control_stop_dynamically_stops_collector(client: TestClient, config_dir
 
 
 def test_control_start_is_idempotent(client: TestClient) -> None:
-    first = client.post("/api/v1/components/input/mock_danmaku/control", json={"action": "start"})
-    second = client.post("/api/v1/components/input/mock_danmaku/control", json={"action": "start"})
+    first = client.post("/api/v1/components/collectors/mock_danmaku/control", json={"action": "start"})
+    second = client.post("/api/v1/components/collectors/mock_danmaku/control", json={"action": "start"})
     assert first.json()["success"] is True
     assert second.json()["success"] is True
     listed = client.get("/api/v1/components").json()
@@ -173,6 +176,6 @@ def test_control_start_is_idempotent(client: TestClient) -> None:
     assert collectors["mock_danmaku"]["is_enabled"] is True
 
 
-def test_control_unknown_phase_returns_400(client: TestClient) -> None:
+def test_control_unknown_group_returns_400(client: TestClient) -> None:
     resp = client.post("/api/v1/components/unknown/foo/control", json={"action": "start"})
     assert resp.status_code == 400

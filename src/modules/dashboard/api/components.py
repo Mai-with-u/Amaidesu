@@ -4,11 +4,16 @@
 提供 采集器 / Agent / 工具 三组组件的状态查询和控制接口。
 数据源为拍平后的主配置（ConfigService.main_config）与运行时
 CollectorManager / AgentManager / ToolRegistry。
+
+Wave U1 / B7 变更：
+- 路径参数 ``phase`` → ``group``（语义统一到 v2 命名；前端同步切换）
+- 允许 ``group`` ∈ {"collectors", "agents", "tools"}
+- ComponentSummary.description 字段由管理器注册/工具规格填充（空串兜底）
 """
 
 from typing import TYPE_CHECKING, Annotated, Any, Dict, List
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from src.modules.config.toml_utils import (
     load_toml_with_comments,
@@ -33,12 +38,12 @@ router = APIRouter()
 # 类型别名，用于依赖注入
 ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 
-# v2：phase（前端旧字段）→ (配置文件顶层段, doc 嵌套键路径, 显示组)
+# v2：group（路径参数）→ (配置文件顶层段, doc 嵌套键路径)
 # doc 路径从 TOML 文件顶层段开始（tools.toml 顶层是 [tools]）
-_PHASE_TO_V2_CONFIG: Dict[str, tuple[str, List[str], str]] = {
-    "input": ("tools", ["tools", "perception", "config"], "collectors"),
-    "decision": ("agents", ["agents"], "agents"),
-    "output": ("tools", ["tools", "output", "config"], "tools"),
+_GROUP_TO_CONFIG: Dict[str, tuple[str, List[str]]] = {
+    "collectors": ("tools", ["tools", "perception", "config"]),
+    "agents": ("agents", ["agents"]),
+    "tools": ("tools", ["tools", "output", "config"]),
 }
 
 
@@ -65,18 +70,18 @@ def _get_enabled_in_doc(doc: Dict[str, Any], path_keys: List[str]) -> List[str]:
     return list(enabled) if isinstance(enabled, list) else []
 
 
-def _sync_enabled_config(server: "DashboardServer", phase: str, name: str, *, enable: bool) -> ComponentControlResponse:
-    """把组件名加入/移除对应配置段的 enabled 列表（幂等写回）。
+def _sync_enabled_config(server: "DashboardServer", group: str, name: str, *, enable: bool) -> ComponentControlResponse:
+    """把组件名加入/移除对应配置段 enabled 列表（幂等写回）。
 
-    phase 映射（v2）：
-    - input（采集器）→ tools.toml ``[tools.perception.config].enabled``
-    - decision（Agent）→ agents.toml ``[agents].enabled``
-    - output（工具）→ tools.toml ``[tools.output.config].enabled``
+    group 映射（v2）：
+    - collectors → tools.toml ``[tools.perception.config].enabled``
+    - agents → agents.toml ``[agents].enabled``
+    - tools → tools.toml ``[tools.output.config].enabled``
     """
-    section_info = _PHASE_TO_V2_CONFIG.get(phase)
+    section_info = _GROUP_TO_CONFIG.get(group)
     if section_info is None:
-        return ComponentControlResponse(success=False, message=f"未知阶段: {phase}")
-    top_section, path_keys, _ = section_info
+        return ComponentControlResponse(success=False, message=f"未知组件组: {group}")
+    top_section, path_keys = section_info
 
     config_path = server.get_config_path(top_section)
     if not config_path:
@@ -115,51 +120,53 @@ async def list_components(server: ServerDep) -> ComponentListResponse:
     )
 
 
-@router.get("/{phase}/{name}", response_model=ComponentDetailResponse)
+@router.get("/{group}/{name}", response_model=ComponentDetailResponse)
 async def get_component(
-    phase: str,
+    group: str,
     name: str,
     server: ServerDep,
 ) -> ComponentDetailResponse:
-    """获取单个组件详情"""
+    """获取单个组件详情（v2：group ∈ {collectors, agents, tools}）"""
+    if group not in _GROUP_TO_CONFIG:
+        raise HTTPException(status_code=404, detail=f"Unknown component group: {group}")
     main_config = server.config_service.main_config if server.config_service else {}
     grouped = get_v2_component_list(main_config, server)
-    group = _PHASE_TO_V2_CONFIG.get(phase, (None, None, phase))[2]
-    target_group = "collectors" if group == "collectors" else ("agents" if group == "agents" else "tools")
-    for summary in grouped.get(target_group, []):
+    for summary in grouped.get(group, []):
         if summary.name == name:
             return ComponentDetailResponse(component=ComponentDetail(**summary.model_dump()))
+    raise HTTPException(status_code=404, detail=f"Component not found: {group}/{name}")
 
-    raise HTTPException(status_code=404, detail=f"Component not found: {phase}/{name}")
 
-
-@router.post("/{phase}/{name}/control", response_model=ComponentControlResponse)
+@router.post("/{group}/{name}/control", response_model=ComponentControlResponse)
 async def control_component(
-    phase: str,
+    group: str,
     name: str,
     request: ComponentControlRequest,
     server: ServerDep,
 ) -> ComponentControlResponse:
-    """控制组件：优先动态启停（实例→配置），失败回退配置写回（重启后生效）"""
-    if phase not in _PHASE_TO_V2_CONFIG:
-        raise HTTPException(status_code=400, detail=f"Invalid phase: {phase}")
+    """控制组件：优先动态启停（实例→配置），失败回退配置写回（重启后生效）
+
+    group ∈ {"collectors", "agents", "tools"}（Wave U1 / B7 起，路径参数统一为 group）。
+    """
+    if group not in _GROUP_TO_CONFIG:
+        raise HTTPException(status_code=400, detail=f"Invalid group: {group}")
 
     if request.action == ComponentControlAction.START:
-        dyn = await _try_dynamic_start(server, phase, name)
+        dyn = await _try_dynamic_start(server, group, name)
         if dyn is not None and dyn.success:
             resp = dyn
         else:
-            resp = _sync_enabled_config(server, phase, name, enable=True)
+            resp = _sync_enabled_config(server, group, name, enable=True)
     elif request.action == ComponentControlAction.STOP:
-        dyn_resp = await _try_dynamic_stop(server, phase, name)
-        resp = dyn_resp or _sync_enabled_config(server, phase, name, enable=False)
+        dyn_resp = await _try_dynamic_stop(server, group, name)
+        resp = dyn_resp or _sync_enabled_config(server, group, name, enable=False)
     elif request.action == ComponentControlAction.RESTART:
-        stop_resp = await _try_dynamic_stop(server, phase, name)
-        stop_resp = stop_resp or _sync_enabled_config(server, phase, name, enable=False)
+        stop_resp = await _try_dynamic_stop(server, group, name)
+        stop_resp = stop_resp or _sync_enabled_config(server, group, name, enable=False)
         if not stop_resp.success:
             return stop_resp
-        dyn = await _try_dynamic_start(server, phase, name)
-        resp = dyn if dyn is not None and dyn.success else _sync_enabled_config(server, phase, name, enable=True)
+        dyn = await _try_dynamic_start(server, group, name)
+        resp = dyn if dyn is not None and dyn.success else _sync_enabled_config(server, group, name, enable=True)
     else:
         return ComponentControlResponse(success=False, message=f"Unknown action: {request.action}")
 
@@ -168,11 +175,11 @@ async def control_component(
     return resp
 
 
-async def _try_dynamic_start(server: "DashboardServer", phase: str, name: str) -> ComponentControlResponse | None:
+async def _try_dynamic_start(server: "DashboardServer", group: str, name: str) -> ComponentControlResponse | None:
     """尝试动态启动组件（实例化+注册+start）。返回 None 表示不可动态启动。"""
-    top_section, _path_keys, group = _PHASE_TO_V2_CONFIG[phase]
+    top_section, _path_keys = _GROUP_TO_CONFIG[group]
     main_config = server.config_service.main_config if server.config_service else {}
-    sub_cfg = _read_sub_config(main_config, top_section, phase, name)
+    sub_cfg = _read_sub_config(main_config, top_section, group, name)
 
     if group == "collectors":
         manager = server.collector_manager
@@ -185,7 +192,7 @@ async def _try_dynamic_start(server: "DashboardServer", phase: str, name: str) -
             )
         ok = await manager.enable_collector(name, sub_cfg, event_bus=getattr(server, "event_bus", None))
         if ok:
-            _sync_enabled_config(server, phase, name, enable=True)
+            _sync_enabled_config(server, group, name, enable=True)
             return ComponentControlResponse(success=True, message=f"组件 {name} 已启动并加入启用配置")
         return ComponentControlResponse(success=False, message=f"组件 {name} 启动失败（已尝试动态启用）")
 
@@ -207,24 +214,22 @@ async def _try_dynamic_start(server: "DashboardServer", phase: str, name: str) -
             event_bus=getattr(server, "event_bus", None),
         )
         if ok:
-            _sync_enabled_config(server, phase, name, enable=True)
+            _sync_enabled_config(server, group, name, enable=True)
             return ComponentControlResponse(success=True, message=f"Agent {name} 已启动并加入启用配置")
         return ComponentControlResponse(success=False, message=f"Agent {name} 启动失败（已尝试动态启用）")
 
     return None  # tools 组：无实例语义，走配置写回
 
 
-async def _try_dynamic_stop(server: "DashboardServer", phase: str, name: str) -> ComponentControlResponse | None:
+async def _try_dynamic_stop(server: "DashboardServer", group: str, name: str) -> ComponentControlResponse | None:
     """尝试动态停止组件（stop+unregister+配置移除）。返回 None 表示无实例可停。"""
-    top_section, _path_keys, group = _PHASE_TO_V2_CONFIG[phase]
-
     if group == "collectors":
         manager = server.collector_manager
         if manager is None or manager.get_collector_by_name(name) is None:
             return None
         ok = await manager.disable_collector(name)
         if ok:
-            _sync_enabled_config(server, phase, name, enable=False)
+            _sync_enabled_config(server, group, name, enable=False)
             return ComponentControlResponse(success=True, message=f"组件 {name} 已停止并从启用配置移除")
         return ComponentControlResponse(success=False, message=f"组件 {name} 停止失败")
 
@@ -234,19 +239,19 @@ async def _try_dynamic_stop(server: "DashboardServer", phase: str, name: str) ->
             return None
         ok = await manager.disable_agent(name)
         if ok:
-            _sync_enabled_config(server, phase, name, enable=False)
+            _sync_enabled_config(server, group, name, enable=False)
             return ComponentControlResponse(success=True, message=f"Agent {name} 已停止并从启用配置移除")
         return ComponentControlResponse(success=False, message=f"Agent {name} 停止失败")
 
     return None
 
 
-def _read_sub_config(main_config: dict, top_section: str, phase: str, name: str) -> dict:
+def _read_sub_config(main_config: dict, top_section: str, group: str, name: str) -> dict:
     """读取组件的子段配置 dict（无则空 dict）。"""
     if top_section == "tools":
-        if phase == "input":
+        if group == "collectors":
             return dict((main_config.get("tools") or {}).get("perception", {}).get("config", {}).get(name) or {})
-        if phase == "output":
+        if group == "tools":
             return dict((main_config.get("tools") or {}).get("output", {}).get("config", {}).get(name) or {})
     if top_section == "agents":
         return dict((main_config.get("agents") or {}).get(name) or {})

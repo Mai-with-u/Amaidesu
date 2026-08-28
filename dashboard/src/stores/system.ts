@@ -7,9 +7,8 @@ import { useComponentsStore } from './components';
 /**
  * 系统状态 store（v2.0）
  *
- * W8 证据：`/api/v1/system/status` 当前返回 `input_phase/decision_phase/output_phase`
- * 全为 null（DashboardServer 三个 Manager 未被 main.py 注入）。前端应优雅降级：
- * 视为"未启用"，不阻塞轮询。
+ * `/api/v1/system/status` 返回 running/uptime/version/python_version + groups.{collectors,agents,tools}
+ * + event_bus.total_events。旧 input/decision/output 三阶段字段已删除，前端读 groups。
  */
 export const useSystemStore = defineStore('system', () => {
   const status = ref<SystemStatusResponse | null>(null);

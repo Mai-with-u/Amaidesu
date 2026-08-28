@@ -8,6 +8,11 @@ v2 另提供基于配置全集 + 运行时 Manager 的摘要构建函数：
 - 配置全集 = agents.toml [agents] 子键 / tools.toml [tools.perception.config] /
   [tools.output.config] 子键（"可用组件"清单）
 - 未在启用列表的组件以 is_enabled=False 占位（组件管理页可快速启用）
+
+description 来源（Wave U1 / B7 增强）：
+- 采集器：CollectorManager._collectors[name].description（注册时填写）
+- Agent：AgentManager._agents[name].description
+- 工具：ToolRegistry.list_tools() 中 ToolSpec.description
 """
 
 from typing import Any, Dict, List, Optional
@@ -81,6 +86,7 @@ def get_v2_component_list(config_main: Optional[Dict[str, Any]], server: Any) ->
 
     未在启用列表中的组件以 ``is_enabled=False`` 占位，组件管理页可快速启停。
     运行时状态（is_started）优先取 Manager 实际状态。
+    description 字段在已注册实例存在时取管理器/ToolSpec 的描述，否则空串。
 
     Args:
         config_main: 拍平后的主配置 dict（ConfigService.main_config）。
@@ -89,6 +95,15 @@ def get_v2_component_list(config_main: Optional[Dict[str, Any]], server: Any) ->
     config_main = config_main or {}
     running_collectors = _running_names(getattr(server, "collector_manager", None), "list_running")
     running_agents = _running_names(getattr(server, "agent_manager", None), "list_running")
+    collector_descriptions = _manager_descriptions(
+        getattr(server, "collector_manager", None),
+        "_collectors",
+    )
+    agent_descriptions = _manager_descriptions(
+        getattr(server, "agent_manager", None),
+        "_agents",
+    )
+    tool_descriptions = _tool_descriptions(getattr(server, "tool_registry", None))
 
     collectors = _build_from_config(
         config_root=_nested(config_main, "tools", "perception", "config"),
@@ -97,10 +112,12 @@ def get_v2_component_list(config_main: Optional[Dict[str, Any]], server: Any) ->
         phase="input",
         component_type="collector",
         running_names=running_collectors,
+        descriptions=collector_descriptions,
     )
     agents = _build_agent_components(
         agents_section=config_main.get("agents") or {},
         running_names=running_agents,
+        descriptions=agent_descriptions,
     )
     tools = _build_from_config(
         config_root=_nested(config_main, "tools", "output", "config"),
@@ -109,6 +126,7 @@ def get_v2_component_list(config_main: Optional[Dict[str, Any]], server: Any) ->
         phase="output",
         component_type="tool",
         running_names=set(),
+        descriptions=tool_descriptions,
     )
     return {"collectors": collectors, "agents": agents, "tools": tools}
 
@@ -121,6 +139,45 @@ def _running_names(manager: Any, method: str) -> set[str]:
         return set(getter())
     except TypeError:
         return set()
+
+
+def _manager_descriptions(manager: Any, attr_name: str) -> Dict[str, str]:
+    """从 CollectorManager / AgentManager 提取已注册实例的 description 字典。
+
+    通过内部 ``_collectors`` / ``_agents`` 字典读取（与 ``list_running`` 等
+    现有 helpers 同源；不引入新的 Manager 公开 API 以避免改动面扩散）。
+    防御：manager/属性不存在 / 结构不匹配时返回空 dict。
+    """
+    if manager is None:
+        return {}
+    internal = getattr(manager, attr_name, None)
+    if not isinstance(internal, dict):
+        return {}
+    result: Dict[str, str] = {}
+    for key, reg in internal.items():
+        desc = getattr(reg, "description", "") or ""
+        if desc:
+            result[key] = desc
+    return result
+
+
+def _tool_descriptions(registry: Any) -> Dict[str, str]:
+    """从 ToolRegistry 提取已注册 ToolSpec 的 description 字典。
+
+    工具规格的 description 是 LLM 视角的描述，Dashboard 组件管理页可复用。
+    """
+    if registry is None:
+        return {}
+    try:
+        specs = registry.list_tools()
+    except Exception:
+        return {}
+    result: Dict[str, str] = {}
+    for spec in specs:
+        desc = getattr(spec, "description", "") or ""
+        if desc:
+            result[spec.name] = desc
+    return result
 
 
 def _nested(config: Dict[str, Any], *keys: str) -> Any:
@@ -140,6 +197,7 @@ def _build_from_config(
     phase: str,
     component_type: str,
     running_names: set[str],
+    descriptions: Dict[str, str],
 ) -> List[ComponentSummary]:
     components: List[ComponentSummary] = []
     for name in config_root:
@@ -154,6 +212,7 @@ def _build_from_config(
                 type=component_type,
                 is_started=is_enabled and name in running_names,
                 is_enabled=is_enabled,
+                description=descriptions.get(name, ""),
             )
         )
     return components
@@ -162,6 +221,7 @@ def _build_from_config(
 def _build_agent_components(
     agents_section: Dict[str, Any],
     running_names: set[str],
+    descriptions: Dict[str, str],
 ) -> List[ComponentSummary]:
     enabled_list = list(agents_section.get("enabled") or [])
     components: List[ComponentSummary] = []
@@ -177,6 +237,7 @@ def _build_agent_components(
                 type="agent",
                 is_started=is_enabled and name in running_names,
                 is_enabled=is_enabled,
+                description=descriptions.get(name, ""),
             )
         )
     return components

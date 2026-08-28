@@ -45,7 +45,7 @@ export const useSettingsStore = defineStore('settings', () => {
         'vlm.',
         'llm_local.',
         'llm_providers.',
-        'maicore.',
+        'core.',
         'dashboard.',
         'logging.',
       ];

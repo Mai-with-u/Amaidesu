@@ -1,89 +1,80 @@
 <template>
   <div class="sidebar">
-    <!-- 扁平导航 -->
     <nav class="sidebar-nav">
       <el-menu :default-active="currentRoute" class="sidebar-menu" router>
         <el-menu-item index="/">
           <el-icon><Monitor /></el-icon>
-          <span>仪表盘</span>
+          <span>运行总览</span>
         </el-menu-item>
-        <el-menu-item index="/components">
+        <el-menu-item index="/live">
+          <el-icon><VideoCamera /></el-icon>
+          <span>直播间观察</span>
+        </el-menu-item>
+        <el-menu-item index="/collectors">
           <el-icon><Connection /></el-icon>
-          <span>组件管理</span>
+          <span>采集器</span>
+        </el-menu-item>
+        <el-menu-item index="/agents">
+          <el-icon><Cpu /></el-icon>
+          <span>Agent</span>
+        </el-menu-item>
+        <el-menu-item index="/tools">
+          <el-icon><Tools /></el-icon>
+          <span>工具目录</span>
         </el-menu-item>
         <el-menu-item index="/eventlog">
           <el-icon><Document /></el-icon>
-          <span>事件日志</span>
+          <span>事件流</span>
         </el-menu-item>
         <el-menu-item index="/logs">
           <el-icon><Tickets /></el-icon>
-          <span>日志查看器</span>
-        </el-menu-item>
-        <el-menu-item index="/session">
-          <el-icon><ChatLineRound /></el-icon>
-          <span>调试会话</span>
-        </el-menu-item>
-        <el-menu-item index="/live">
-          <el-icon><Odometer /></el-icon>
-          <span>直播间观察</span>
-        </el-menu-item>
-
-        <!-- LLM 分组 -->
-        <el-sub-menu index="llm-group">
-          <template #title>
-            <el-icon><Cpu /></el-icon>
-            <span>LLM 监控</span>
-          </template>
-          <el-menu-item index="/llm/usage">
-            <el-icon><TrendCharts /></el-icon>
-            <span>用量统计</span>
-          </el-menu-item>
-          <el-menu-item index="/llm/history">
-            <el-icon><Clock /></el-icon>
-            <span>请求历史</span>
-          </el-menu-item>
-        </el-sub-menu>
-
-        <!-- 小部件分组 -->
-        <el-sub-menu index="widget-group">
-          <template #title>
-            <el-icon><Grid /></el-icon>
-            <span>小部件</span>
-          </template>
-          <el-menu-item index="/danmaku">
-            <el-icon><ChatLineSquare /></el-icon>
-            <span>弹幕小部件</span>
-          </el-menu-item>
-          <el-menu-item index="/subtitle">
-            <el-icon><ChatDotRound /></el-icon>
-            <span>字幕小部件</span>
-          </el-menu-item>
-        </el-sub-menu>
-
-        <el-menu-item index="/devtools">
-          <el-icon><Tools /></el-icon>
-          <span>开发工具</span>
-        </el-menu-item>
-        <el-menu-item index="/simulator">
-          <el-icon><VideoCamera /></el-icon>
-          <span>Mock 采集器</span>
+          <span>日志</span>
         </el-menu-item>
         <el-menu-item index="/outline">
           <el-icon><List /></el-icon>
           <span>Agenda 工作台</span>
         </el-menu-item>
+
+        <div class="sidebar-divider" />
+
+        <el-menu-item index="/session">
+          <el-icon><ChatLineRound /></el-icon>
+          <span>会话调试</span>
+        </el-menu-item>
+        <el-menu-item index="/devtools">
+          <el-icon><Cpu /></el-icon>
+          <span>开发者工具</span>
+        </el-menu-item>
         <el-menu-item index="/traces">
           <el-icon><Opportunity /></el-icon>
-          <span>链路追踪</span>
+          <span>Trace 链路</span>
+        </el-menu-item>
+        <el-menu-item index="/llm/usage">
+          <el-icon><TrendCharts /></el-icon>
+          <span>LLM 用量</span>
+        </el-menu-item>
+        <el-menu-item index="/llm/history">
+          <el-icon><Clock /></el-icon>
+          <span>LLM 历史</span>
         </el-menu-item>
         <el-menu-item index="/settings">
           <el-icon><Setting /></el-icon>
-          <span>系统设置</span>
+          <span>设置</span>
+        </el-menu-item>
+
+        <div class="sidebar-divider" />
+        <div class="sidebar-pinned-label">小部件</div>
+        <el-menu-item index="/danmaku">
+          <el-icon><ChatLineSquare /></el-icon>
+          <span>弹幕</span>
+        </el-menu-item>
+        <el-menu-item index="/subtitle">
+          <el-icon><ChatDotRound /></el-icon>
+          <span>字幕</span>
         </el-menu-item>
       </el-menu>
     </nav>
 
-    <!-- 底部版本信息 -->
     <div class="sidebar-footer">
       <span class="version">v0.1.0</span>
     </div>
@@ -103,9 +94,7 @@ import {
   TrendCharts,
   Clock,
   ChatLineRound,
-  Odometer,
   Tickets,
-  Grid,
   ChatLineSquare,
   ChatDotRound,
   Opportunity,
@@ -131,15 +120,14 @@ const currentRoute = computed(() => route.path);
   padding: var(--spacing-md) 0;
 }
 
-/* 菜单样式 */
 .sidebar-menu {
   border-right: none;
   background-color: transparent;
 }
 
 .sidebar-menu :deep(.el-menu-item) {
-  height: 44px;
-  line-height: 44px;
+  height: 40px;
+  line-height: 40px;
   margin: 2px var(--spacing-sm);
   border-radius: var(--radius-md);
   color: var(--text-regular);
@@ -170,50 +158,25 @@ const currentRoute = computed(() => route.path);
 }
 
 .sidebar-menu :deep(.el-menu-item .el-icon) {
-  font-size: 18px;
+  font-size: 17px;
   margin-right: var(--spacing-sm);
 }
 
-/* 子菜单样式 */
-.sidebar-menu :deep(.el-sub-menu) {
-  margin: 2px var(--spacing-sm);
+.sidebar-divider {
+  height: 1px;
+  margin: var(--spacing-sm) var(--spacing-lg);
+  background-color: var(--border-color-light);
 }
 
-.sidebar-menu :deep(.el-sub-menu__title) {
-  height: 44px;
-  line-height: 44px;
-  border-radius: var(--radius-md);
-  color: var(--text-regular);
-  transition: all var(--transition-fast);
+.sidebar-pinned-label {
+  padding: 4px var(--spacing-lg) var(--spacing-xs);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-placeholder);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
 }
 
-.sidebar-menu :deep(.el-sub-menu__title:hover) {
-  background-color: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.sidebar-menu :deep(.el-sub-menu .el-icon) {
-  font-size: 18px;
-  margin-right: var(--spacing-sm);
-}
-
-.sidebar-menu :deep(.el-sub-menu .el-menu) {
-  background-color: transparent;
-  padding-left: 0;
-}
-
-.sidebar-menu :deep(.el-sub-menu .el-menu-item) {
-  height: 40px;
-  line-height: 40px;
-  padding-left: 48px !important;
-  margin: 1px var(--spacing-sm);
-}
-
-.sidebar-menu :deep(.el-sub-menu.is-active > .el-sub-menu__title) {
-  color: var(--color-primary);
-}
-
-/* 底部版本信息 */
 .sidebar-footer {
   padding: var(--spacing-md) var(--spacing-lg);
   border-top: 1px solid var(--border-color-light);

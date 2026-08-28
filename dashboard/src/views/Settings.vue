@@ -241,26 +241,8 @@ const FALLBACK_FILE_TABS = [
     restart: false,
   },
 ];
-// 兼容旧 5 文件配置（迁期期 schema 可能仍带 input/decision/output 段）
-const LEGACY_FILE_TABS = [
-  {
-    key: 'input.toml',
-    label: '🎙️ 输入',
-    icon: Microphone,
-    desc: '弹幕 / 语音 / 控制台采集（已废弃）',
-    restart: false,
-  },
-  {
-    key: 'decision.toml',
-    label: '🧩 决策',
-    icon: ChatDotRound,
-    desc: '决策器（已废弃）',
-    restart: false,
-  },
-  { key: 'output.toml', label: '🎬 输出', icon: Film, desc: 'Handler（已废弃）', restart: false },
-];
 
-const FILE_TABS = [...FALLBACK_FILE_TABS, ...LEGACY_FILE_TABS];
+const FILE_TABS = FALLBACK_FILE_TABS;
 
 // 简化图标映射（按使用频率排序，只保留用到的）
 const iconMap: Record<string, unknown> = {

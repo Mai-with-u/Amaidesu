@@ -15,7 +15,7 @@
           <section class="card empty-state-card">
             <el-empty
               v-if="!loading && !loadError"
-              description="Agenda 引擎尚未接入后端管理通道"
+              description="Agenda 管理通道规划中（V1）"
               :image-size="120"
             >
               <template #default>

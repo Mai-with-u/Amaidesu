@@ -28,12 +28,10 @@ const MAX_EVENTS = 200;
 // 主路：room.message（v2 默认）；其他观测事件来自 Agenda/Planner/Tool 通道
 const SESSION_EVENT_TYPES = new Set<string>([
   'room.message',
+  'agenda.update',
   'agenda.speech',
+  'planner.checkpoint',
   'tool.result',
-  // 兼容旧后端
-  'message.received',
-  'decision.intent',
-  'output.render',
 ]);
 
 // ===== 解析纯函数（实时事件与 events.history 历史共用） =====
@@ -108,7 +106,7 @@ function eventRecordToSessionEvent(record: EventRecord): DebugSessionEvent | nul
   if (!SESSION_EVENT_TYPES.has(record.type)) return null;
 
   // v2 默认：room.message.*
-  if (record.type.startsWith('room.message') || record.type === 'message.received') {
+  if (record.type.startsWith('room.message')) {
     return {
       id: record.id,
       type: record.type,
@@ -122,16 +120,15 @@ function eventRecordToSessionEvent(record: EventRecord): DebugSessionEvent | nul
     };
   }
 
-  // v2 agenda / tool / 旧 decision.intent / output.render
+  // v2: agenda.* / planner.* / tool.result.* 一律视为意图/工具事件
   return {
     id: record.id,
     type: record.type,
     timestamp: record.timestamp,
     intent: parseIntentEvent(record.data, record.timestamp),
-    deciderName:
-      record.type === 'output.render' || record.type.startsWith('tool.result')
-        ? 'Output/Tool'
-        : (record.data?.name as string) || 'Decider',
+    deciderName: record.type.startsWith('tool.result')
+      ? 'Tool'
+      : (record.data?.name as string) || 'Planner',
   };
 }
 
@@ -162,7 +159,7 @@ export const useSessionStore = defineStore('session', () => {
     }
 
     // v2: room.message.* 一律视为消息事件
-    if (message.type.startsWith('room.message') || message.type === 'message.received') {
+    if (message.type.startsWith('room.message')) {
       const data = message.data as Record<string, unknown>;
       const eventId = message.id ?? `msg-${message.timestamp}-${crypto.randomUUID().slice(0, 6)}`;
       if (events.value.some(e => e.id === eventId)) return;
@@ -177,12 +174,11 @@ export const useSessionStore = defineStore('session', () => {
       return;
     }
 
-    // v2: agenda.* / tool.result.* / 旧 decision.intent / output.render
+    // v2: agenda.* / planner.* / tool.result.*
     if (
       message.type.startsWith('agenda') ||
-      message.type.startsWith('tool.result') ||
-      message.type === 'decision.intent' ||
-      message.type === 'output.render'
+      message.type.startsWith('planner') ||
+      message.type.startsWith('tool.result')
     ) {
       const data = message.data as Record<string, unknown>;
       const eventId =
@@ -193,10 +189,9 @@ export const useSessionStore = defineStore('session', () => {
         type: message.type,
         timestamp: message.timestamp,
         intent: parseIntentEvent(data, message.timestamp),
-        deciderName:
-          message.type === 'output.render' || message.type.startsWith('tool.result')
-            ? 'Output/Tool'
-            : (data?.name as string) || 'Decider',
+        deciderName: message.type.startsWith('tool.result')
+          ? 'Tool'
+          : (data?.name as string) || 'Planner',
       });
       trimEvents();
     }

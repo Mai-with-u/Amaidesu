@@ -131,7 +131,7 @@
           <div v-else class="empty-state">暂无日志</div>
         </div>
 
-        <!-- Slot for additional content (EventLogPanel) -->
+        <!-- Slot for additional content (e.g. CapabilitiesPanel) -->
         <slot name="detail-panel"></slot>
       </div>
     </el-collapse-transition>
@@ -162,11 +162,11 @@ const emit = defineEmits<Emits>();
 
 const isExpanded = ref(false);
 
-/** v2 group 标识：优先读 `group`，回落到 `phase`（旧后端兼容） */
-const groupKey = computed(() => props.component.group || props.component.phase || '');
+/** v2 group 标识（collectors / agents / tools） */
+const groupKey = computed(() => props.component.group ?? '');
 
-/** v2 Agent 类组件（decision 旧 phase）样式标记 */
-const isAgent = computed(() => groupKey.value === 'agents' || groupKey.value === 'decision');
+/** v2 Agent 类组件样式标记 */
+const isAgent = computed(() => groupKey.value === 'agents');
 
 const statusClass = computed(() => {
   if (!props.component.is_enabled) return 'disabled';
@@ -371,7 +371,7 @@ function formatLogTime(timestamp: string): string {
 }
 
 .stat-badge:first-child .stat-icon {
-  color: var(--color-input);
+  color: var(--color-collector);
 }
 
 .stat-badge:nth-child(2) .stat-icon {
@@ -459,7 +459,7 @@ function formatLogTime(timestamp: string): string {
 }
 
 .events-section .section-icon {
-  color: var(--color-input);
+  color: var(--color-collector);
 }
 
 .logs-section .section-icon {

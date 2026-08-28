@@ -137,123 +137,91 @@
 
         <!-- 链路详情 -->
         <div v-else-if="currentTrace" class="drawer-trace">
-          <!-- 消息 -->
+          <!-- 消息段 -->
           <div class="dt-node input">
             <div class="dt-dot" />
             <div class="dt-card">
               <div class="dt-card-header">
-                <span class="dt-card-title">📩 消息</span>
-                <el-tag size="small" type="primary" effect="plain">{{
-                  currentTrace.message.source
-                }}</el-tag>
+                <span class="dt-card-title">📩 消息段</span>
+                <el-tag size="small" type="primary" effect="plain">
+                  {{ currentTrace.segments.messages.length }} 条
+                </el-tag>
               </div>
-              <div class="dt-message-text">{{ currentTrace.message.text }}</div>
-              <div class="dt-message-meta">
-                <span>{{ formatDrawerTime(currentTrace.message.timestamp_ms) }}</span>
-                <span v-if="currentTrace.message.user_nickname || currentTrace.message.user_id">
-                  👤 {{ currentTrace.message.user_nickname || currentTrace.message.user_id }}
-                </span>
-              </div>
+              <template v-if="currentTrace.segments.messages.length > 0">
+                <div
+                  v-for="(m, i) in currentTrace.segments.messages"
+                  :key="i"
+                  class="dt-segment-row"
+                >
+                  <span class="dt-segment-type mono">{{ m.type }}</span>
+                  <span class="dt-segment-time mono">{{ formatDrawerTime(m.timestamp_ms) }}</span>
+                  <pre class="dt-segment-data mono">{{ JSON.stringify(m.data, null, 2) }}</pre>
+                </div>
+              </template>
+              <div v-else class="dt-empty-hint">暂无消息段事件</div>
             </div>
           </div>
 
-          <!-- 箭头 -->
+          <!-- 决策段 -->
           <div class="dt-arrow">
-            <span class="dt-arrow-label">{{
-              formatDrawerLatency(currentTrace.decision?.elapsed_ms)
-            }}</span>
+            <span class="dt-arrow-label">→ 决策段</span>
           </div>
 
-          <!-- 决策 -->
           <div class="dt-node decision">
             <div class="dt-dot" />
             <div class="dt-card">
               <div class="dt-card-header">
-                <span class="dt-card-title">🧠 决策</span>
+                <span class="dt-card-title">🧠 决策段（planner.checkpoint）</span>
                 <el-tag size="small" type="warning" effect="plain">
-                  {{ currentTrace.decision?.decider || '无' }}
+                  {{ currentTrace.segments.planning.length }} 条
                 </el-tag>
               </div>
-              <template v-if="currentTrace.decision">
-                <div class="dt-speech">💬 {{ currentTrace.decision.speech }}</div>
-                <div v-if="currentTrace.decision.emotion" class="dt-meta-row">
-                  😊 {{ currentTrace.decision.emotion.name }} ({{
-                    currentTrace.decision.emotion.intensity.toFixed(2)
-                  }})
-                </div>
-                <div v-if="currentTrace.decision.action" class="dt-meta-row">
-                  🎬 <code>{{ currentTrace.decision.action.name }}</code>
-                  <span v-if="Object.keys(currentTrace.decision.action.parameters).length"
-                    >({{ JSON.stringify(currentTrace.decision.action.parameters) }})</span
-                  >
+              <template v-if="currentTrace.segments.planning.length > 0">
+                <div
+                  v-for="(p, i) in currentTrace.segments.planning"
+                  :key="i"
+                  class="dt-segment-row"
+                >
+                  <span class="dt-segment-type mono">{{ p.type }}</span>
+                  <span class="dt-segment-time mono">{{ formatDrawerTime(p.timestamp_ms) }}</span>
+                  <pre class="dt-segment-data mono">{{ JSON.stringify(p.data, null, 2) }}</pre>
                 </div>
               </template>
-              <div v-else class="dt-empty-hint">未生成决策（消息被过滤）</div>
+              <div v-else class="dt-empty-hint">该链路暂无此段事件记录</div>
             </div>
           </div>
 
-          <!-- 箭头 -->
+          <!-- 执行段 -->
           <div class="dt-arrow">
-            <span class="dt-arrow-label">→ 输出</span>
+            <span class="dt-arrow-label">→ 执行段</span>
           </div>
 
-          <!-- 输出 -->
           <div class="dt-node outputs">
             <div class="dt-dot" />
             <div class="dt-card">
               <div class="dt-card-header">
-                <span class="dt-card-title">📤 输出（tool.result）</span>
+                <span class="dt-card-title">⚙ 执行段（tool.result.* + agenda.*）</span>
                 <el-tag size="small" type="success" effect="plain">
-                  {{ (currentTrace.outputs ?? []).length }} 个 Handler
+                  {{ currentTrace.segments.execution.length }} 条
                 </el-tag>
               </div>
-              <div v-if="(currentTrace.outputs ?? []).length === 0" class="dt-empty-hint">
-                v2 Trace 接口当前不返回 Handler 列表（trace.py 仅聚合 room.message 事件）
-              </div>
-              <div v-else class="dt-output-list">
-                <div v-for="(out, i) in currentTrace.outputs" :key="i" class="dt-output-row">
-                  <div class="dt-output-main">
-                    <el-icon class="dt-ok"><Check /></el-icon>
-                    <el-tag size="small" type="success" effect="dark">{{ out.handler }}</el-tag>
-                    <span class="dt-elapsed">{{ formatDrawerLatency(out.elapsed_ms) }}</span>
-                  </div>
-                  <div v-if="out.speech" class="dt-output-detail dt-speech">
-                    💬 <span>{{ out.speech }}</span>
-                  </div>
-                  <div v-if="out.action" class="dt-output-detail">
-                    🎬 <code>{{ out.action.name }}</code>
-                    <span v-if="Object.keys(out.action.parameters).length" class="dt-action-params">
-                      {{ JSON.stringify(out.action.parameters) }}
-                    </span>
-                  </div>
+              <template v-if="currentTrace.segments.execution.length > 0">
+                <div
+                  v-for="(e, i) in currentTrace.segments.execution"
+                  :key="i"
+                  class="dt-segment-row"
+                >
+                  <span class="dt-segment-type mono">{{ e.type }}</span>
+                  <span class="dt-segment-time mono">{{ formatDrawerTime(e.timestamp_ms) }}</span>
+                  <pre class="dt-segment-data mono">{{ JSON.stringify(e.data, null, 2) }}</pre>
                 </div>
-              </div>
+              </template>
+              <div v-else class="dt-empty-hint">该链路暂无此段事件记录</div>
             </div>
           </div>
 
           <!-- 汇总 -->
           <div class="dt-summary">
-            <div class="dt-summary-main">
-              <span
-                >总耗时
-                <strong>{{ formatDrawerLatency(currentTrace.total_elapsed_ms) }}</strong></span
-              >
-              <span class="dt-divider">|</span>
-              <span
-                >消息来源
-                <el-tag size="small" type="info" effect="plain">{{
-                  currentTrace.message.source
-                }}</el-tag></span
-              >
-              <span
-                v-if="currentTrace.message.user_nickname || currentTrace.message.user_id"
-                class="dt-divider"
-                >|</span
-              >
-              <span v-if="currentTrace.message.user_nickname || currentTrace.message.user_id">
-                用户 {{ currentTrace.message.user_nickname || currentTrace.message.user_id }}
-              </span>
-            </div>
             <div class="dt-summary-id">
               <span class="dt-summary-label">消息 ID</span>
               <code class="dt-full-id">{{ currentTrace.message_id }}</code>
@@ -275,7 +243,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick, markRaw } from 'vue';
-import { Document, VideoPause, VideoPlay, Search, Delete, Check } from '@element-plus/icons-vue';
+import { Document, VideoPause, VideoPlay, Search, Delete } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { useEventsStore } from '@/stores';
 import { storeToRefs } from 'pinia';
@@ -452,22 +420,19 @@ function closeTraceDrawer() {
 // v2 事件关联到同一条链路：
 //   room.message.*  → data.message.message_id
 //   agenda.* / tool.result.* / planner.* → data.intent_data.metadata.source_message_id
-// 兼容旧事件名（v2 后端不再发布）
 function getMessageId(event: { type: string; data: Record<string, unknown> }): string | null {
   // v2 主路：room.message.*
-  if (event.type.startsWith('room.message') || event.type === 'message.received') {
+  if (event.type.startsWith('room.message')) {
     const msg = event.data?.message as Record<string, unknown> | undefined;
     if (!msg) return null;
     const id = msg.message_id;
     return typeof id === 'string' && id.length > 0 ? id : null;
   }
-  // v2: agenda.* / tool.result.* / planner.* + 旧 decision.intent / output.render
+  // v2: agenda.* / tool.result.* / planner.*
   if (
     event.type.startsWith('agenda') ||
     event.type.startsWith('tool.result') ||
-    event.type.startsWith('planner') ||
-    event.type === 'decision.intent' ||
-    event.type === 'output.render'
+    event.type.startsWith('planner')
   ) {
     const intentData = event.data?.intent_data as Record<string, unknown> | undefined;
     if (!intentData) return null;
@@ -488,7 +453,7 @@ function openTrace(event: { type: string; data: Record<string, unknown> }) {
   }
 }
 
-// Trace 抽屉内的时间/延迟格式化
+// Trace 抽屉内的时间格式化
 function formatDrawerTime(tsMs: number): string {
   if (!tsMs) return '';
   return new Date(tsMs).toLocaleTimeString('zh-CN', {
@@ -496,12 +461,6 @@ function formatDrawerTime(tsMs: number): string {
     minute: '2-digit',
     second: '2-digit',
   });
-}
-
-function formatDrawerLatency(ms: number | undefined | null): string {
-  if (ms == null) return '';
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 function copyText(text: string) {
@@ -512,24 +471,15 @@ function copyText(text: string) {
 
 // 获取事件类型的 CSS 类（v2 事件族颜色映射）
 function getEventClass(type: string): string {
-  // v2 主族
-  if (type.startsWith('room.message') || type.includes('message')) return 'type-input';
-  if (
-    type.startsWith('agenda') ||
-    type.startsWith('planner') ||
-    type.includes('decision') ||
-    type.includes('intent')
-  ) {
-    return 'type-decision';
-  }
-  if (type.startsWith('tool.result') || type.includes('output') || type.includes('render')) {
-    return 'type-output';
-  }
-  if (type.startsWith('game')) return 'type-collector';
+  if (type.startsWith('room.message')) return 'type-collector';
+  if (type.startsWith('agenda')) return 'type-agent';
+  if (type.startsWith('planner')) return 'type-agent';
+  if (type.startsWith('tool.result')) return 'type-tool';
+  if (type.startsWith('game')) return 'type-game';
+  if (type.startsWith('live')) return 'type-live';
+  if (type.startsWith('core')) return 'type-system';
   if (type.includes('error')) return 'type-error';
-  if (type.includes('collector')) return 'type-collector';
-  if (type.includes('system') || type.includes('heartbeat')) return 'type-system';
-  if (type.startsWith('live')) return 'type-system';
+  if (type.startsWith('system')) return 'type-system';
   return 'type-default';
 }
 
@@ -713,29 +663,34 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
-.event-type.type-input {
-  background-color: var(--color-input-bg);
-  color: var(--color-input);
+.event-type.type-collector {
+  background-color: var(--color-collector-bg);
+  color: var(--color-collector);
 }
 
-.event-type.type-decision {
-  background-color: var(--color-decision-bg);
-  color: var(--color-decision);
+.event-type.type-agent {
+  background-color: var(--color-agent-bg);
+  color: var(--color-agent);
 }
 
-.event-type.type-output {
-  background-color: var(--color-output-bg);
-  color: var(--color-output);
+.event-type.type-tool {
+  background-color: var(--color-tool-bg);
+  color: var(--color-tool);
+}
+
+.event-type.type-game {
+  background-color: var(--color-game-bg, var(--bg-hover));
+  color: var(--color-game, var(--text-secondary));
+}
+
+.event-type.type-live {
+  background-color: var(--color-live-bg, var(--bg-hover));
+  color: var(--color-live, var(--text-secondary));
 }
 
 .event-type.type-error {
   background-color: var(--color-danger-bg);
   color: var(--color-danger);
-}
-
-.event-type.type-collector {
-  background-color: var(--color-warning-light);
-  color: var(--color-warning);
 }
 
 .event-type.type-system {
@@ -780,13 +735,47 @@ onUnmounted(() => {
 }
 
 .dt-node.input .dt-dot {
-  background: var(--color-primary);
+  background: var(--color-collector);
 }
 .dt-node.decision .dt-dot {
-  background: var(--color-warning);
+  background: var(--color-agent);
 }
 .dt-node.outputs .dt-dot {
-  background: var(--color-success);
+  background: var(--color-tool);
+}
+
+.dt-segment-row {
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--border-color-light);
+}
+.dt-segment-row:last-child {
+  border-bottom: none;
+}
+.dt-segment-type {
+  display: inline-block;
+  padding: 1px 6px;
+  background: var(--bg-active);
+  color: var(--color-primary);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 600;
+}
+.dt-segment-time {
+  float: right;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.dt-segment-data {
+  margin: 6px 0 0;
+  padding: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color-light);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  color: var(--text-regular);
+  overflow-x: auto;
+  max-height: 200px;
+  white-space: pre;
 }
 
 .dt-card {

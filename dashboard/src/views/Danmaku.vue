@@ -74,19 +74,14 @@ function connect() {
   ws.onmessage = event => {
     try {
       const data = JSON.parse(event.data);
-      // v2: 房间消息统一为 room.message.*；模拟消息（simulated=true）不在弹幕小部件展示
+      // v2: 房间消息统一为 room.message.*（含 danmaku/gift/super_chat/enter）；
+      // 模拟消息（simulated=true）不在弹幕小部件展示
       if (
         (data.type === 'room.message' || data.type?.startsWith('room.message.')) &&
         data.data?.simulated !== true
       ) {
         const msg = (data.data?.message ?? data) as DanmakuMessage;
         addMessage(msg);
-      } else if (
-        data.type === 'new_message' &&
-        (data.message?.simulated ?? data.simulated) !== true
-      ) {
-        // 兼容旧后端
-        addMessage(data.message);
       } else if (data.type === 'history') {
         messages.value = data.messages
           .filter((m: { simulated?: boolean }) => m.simulated !== true)

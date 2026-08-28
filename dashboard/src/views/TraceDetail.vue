@@ -65,10 +65,10 @@
             {{ item.message_id.slice(0, 8) }}
           </span>
           <span class="trace-source">
-            <el-tag size="small" effect="plain" type="info">{{ item.message.source }}</el-tag>
+            <el-tag size="small" effect="plain" type="info">{{ firstMessageSource(item) }}</el-tag>
           </span>
-          <span class="trace-text">{{ item.message.text }}</span>
-          <span class="trace-time mono">{{ formatTime(item.message.timestamp_ms) }}</span>
+          <span class="trace-text">{{ firstMessageText(item) }}</span>
+          <span class="trace-time mono">{{ formatTime(firstMessageTimestamp(item)) }}</span>
           <span class="trace-elapsed mono">{{ formatLatency(item.total_elapsed_ms) }}</span>
           <span class="trace-arrow">
             <el-icon><ArrowRight /></el-icon>
@@ -101,7 +101,7 @@
 
       <!-- 详情数据 -->
       <div v-else-if="trace" class="trace-timeline">
-        <!-- 消息卡片（Input 阶段） -->
+        <!-- 消息卡片（messages 段） -->
         <div class="timeline-node input">
           <div class="node-dot" />
           <el-card class="node-card" shadow="hover">
@@ -112,89 +112,66 @@
                   消息 — room.message
                 </span>
                 <el-tag size="small" effect="plain" type="primary">
-                  {{ trace.message.source }}
+                  {{ trace.segments.messages.length }} 条
                 </el-tag>
               </div>
             </template>
-            <div class="message-content">{{ trace.message.text }}</div>
-            <div class="message-meta">
-              <span>
-                <el-icon><Clock /></el-icon>
-                {{ formatDateTimeMs(trace.message.timestamp_ms) }}
-              </span>
-              <span v-if="trace.message.user_nickname || trace.message.user_id">
-                <el-icon><User /></el-icon>
-                {{ trace.message.user_nickname || trace.message.user_id }}
-              </span>
-              <span>
-                <el-icon><Document /></el-icon>
-                {{ trace.message.data_type }}
-              </span>
+            <template v-if="trace.segments.messages.length > 0">
+              <div v-for="(m, i) in trace.segments.messages" :key="i" class="segment-block">
+                <div class="segment-meta">
+                  <span class="mono">{{ m.type }}</span>
+                  <span class="mono">{{ formatDateTimeMs(m.timestamp_ms) }}</span>
+                </div>
+                <pre class="segment-data">{{ JSON.stringify(m.data, null, 2) }}</pre>
+              </div>
+            </template>
+            <div v-else class="no-outputs">
+              <span>暂无消息段事件</span>
             </div>
           </el-card>
         </div>
 
         <!-- 时间箭头 -->
         <div class="timeline-arrow">
-          <span class="arrow-label mono">→ {{ formatLatency(decisionLatency) }}</span>
+          <span class="arrow-label mono">→ 决策段</span>
         </div>
 
-        <!-- 决策卡片（Decision 阶段） -->
+        <!-- 决策卡片（planning 段） -->
         <div class="timeline-node decision">
           <div class="node-dot" />
-          <el-card v-if="trace.decision" class="node-card" shadow="hover">
+          <el-card class="node-card" shadow="hover">
             <template #header>
               <div class="card-header">
                 <span class="card-title">
                   <el-icon><MagicStick /></el-icon>
-                  决策 — agenda / tool.result
+                  决策 — planner.checkpoint
                 </span>
-                <div class="header-tags">
-                  <el-tag size="small" effect="plain" type="warning">
-                    {{ trace.decision.decider }}
-                  </el-tag>
-                  <el-tag size="small" type="success">
-                    耗时 {{ formatLatency(trace.decision.elapsed_ms) }}
-                  </el-tag>
-                </div>
+                <el-tag size="small" type="warning">
+                  {{ trace.segments.planning.length }} 条
+                </el-tag>
               </div>
             </template>
-            <div class="speech-bubble">
-              <span class="bubble-label">回复</span>
-              <span class="bubble-text">{{ trace.decision.speech }}</span>
+            <template v-if="trace.segments.planning.length > 0">
+              <div v-for="(p, i) in trace.segments.planning" :key="i" class="segment-block">
+                <div class="segment-meta">
+                  <span class="mono">{{ p.type }}</span>
+                  <span class="mono">{{ formatDateTimeMs(p.timestamp_ms) }}</span>
+                </div>
+                <pre class="segment-data">{{ JSON.stringify(p.data, null, 2) }}</pre>
+              </div>
+            </template>
+            <div v-else class="no-outputs">
+              <span>该链路暂无此段事件记录</span>
             </div>
-            <div v-if="trace.decision.emotion" class="meta-row">
-              <span class="meta-key">情绪</span>
-              <el-tag
-                size="small"
-                :type="emotionTagType(trace.decision.emotion.name)"
-                effect="light"
-              >
-                {{ emotionEmoji(trace.decision.emotion.name) }}
-                {{ trace.decision.emotion.name }}
-                ({{ trace.decision.emotion.intensity.toFixed(2) }})
-              </el-tag>
-            </div>
-            <div v-if="trace.decision.action" class="meta-row">
-              <span class="meta-key">动作</span>
-              <code class="action-name mono">{{ trace.decision.action.name }}</code>
-              <span v-if="hasActionParams(trace.decision.action.parameters)" class="action-params">
-                ({{ formatActionParams(trace.decision.action.parameters) }})
-              </span>
-            </div>
-          </el-card>
-
-          <el-card v-else class="node-card" shadow="never">
-            <el-empty description="未生成决策（消息被过滤或被节流）" :image-size="60" />
           </el-card>
         </div>
 
         <!-- 时间箭头 -->
         <div class="timeline-arrow">
-          <span class="arrow-label mono">→ tool.result</span>
+          <span class="arrow-label mono">→ 执行段</span>
         </div>
 
-        <!-- 输出卡片（Output 阶段） -->
+        <!-- 执行卡片（execution 段） -->
         <div class="timeline-node outputs">
           <div class="node-dot" />
           <el-card class="node-card" shadow="hover">
@@ -202,62 +179,37 @@
               <div class="card-header">
                 <span class="card-title">
                   <el-icon><Promotion /></el-icon>
-                  输出 — tool.result
+                  执行 — tool.result.* / agenda.*
                 </span>
-                <el-tag size="small" type="success"> {{ outputs.length }} 个 Handler </el-tag>
+                <el-tag size="small" type="success">
+                  {{ trace.segments.execution.length }} 条
+                </el-tag>
               </div>
             </template>
-
-            <div v-if="outputs.length === 0" class="no-outputs">
-              <el-icon :size="32" color="var(--text-placeholder)">
-                <InfoFilled />
-              </el-icon>
-              <span
-                >v2 后端 Trace 接口当前不返回 Handler 列表（trace.py:107 仅聚合 room.message
-                事件）</span
-              >
-            </div>
-
-            <div v-else class="output-list">
-              <div v-for="(output, idx) in outputs" :key="idx" class="output-row">
-                <div class="output-status">
-                  <el-icon class="status-icon"><Check /></el-icon>
+            <template v-if="trace.segments.execution.length > 0">
+              <div v-for="(e, i) in trace.segments.execution" :key="i" class="segment-block">
+                <div class="segment-meta">
+                  <span class="mono">{{ e.type }}</span>
+                  <span class="mono">{{ formatDateTimeMs(e.timestamp_ms) }}</span>
                 </div>
-                <div class="output-body">
-                  <div class="output-top">
-                    <el-tag size="small" effect="plain" type="success">
-                      {{ output.handler }}
-                    </el-tag>
-                    <span class="output-elapsed mono">
-                      {{ formatLatency(output.elapsed_ms) }}
-                    </span>
-                  </div>
-                  <div v-if="output.speech" class="output-speech">{{ output.speech }}</div>
-                  <div v-if="output.action" class="output-action">
-                    <code class="action-name mono">{{ output.action.name }}</code>
-                    <span v-if="hasActionParams(output.action.parameters)" class="action-params">
-                      ({{ formatActionParams(output.action.parameters) }})
-                    </span>
-                  </div>
-                </div>
+                <pre class="segment-data">{{ JSON.stringify(e.data, null, 2) }}</pre>
               </div>
+            </template>
+            <div v-else class="no-outputs">
+              <span>该链路暂无此段事件记录</span>
             </div>
           </el-card>
         </div>
 
-        <!-- 总耗时 -->
+        <!-- 汇总 -->
         <div class="timeline-summary">
           <el-card class="summary-card" shadow="never">
             <div class="summary-content">
-              <span v-if="trace.total_elapsed_ms != null" class="summary-label">总耗时</span>
-              <span v-if="trace.total_elapsed_ms != null" class="summary-value mono">
-                {{ formatLatency(trace.total_elapsed_ms) }}
-              </span>
-              <span v-if="trace.total_elapsed_ms != null" class="summary-divider">|</span>
               <span class="summary-label">消息 ID</span>
               <span class="summary-id mono" :title="trace.message_id">
                 {{ trace.message_id }}
               </span>
+              <span v-if="trace.simulated" class="summary-tag-simulated">模拟数据</span>
             </div>
           </el-card>
         </div>
@@ -274,17 +226,12 @@ import {
   ArrowRight,
   Refresh,
   ChatLineRound,
-  Clock,
-  User,
-  Document,
   MagicStick,
   Promotion,
-  Check,
-  InfoFilled,
   Loading,
 } from '@element-plus/icons-vue';
 import { tracesApi } from '@/api';
-import type { Trace } from '@/types';
+import type { Trace, TraceSegmentEntry } from '@/types';
 
 const route = useRoute();
 const router = useRouter();
@@ -310,14 +257,7 @@ const notFound = ref(false);
 
 // ==================== 计算属性 ====================
 
-/** v2 后端 trace 接口可能不返回 outputs 字段（旧结构）；做防御性兜底 */
-const outputs = computed(() => trace.value?.outputs ?? []);
-
-/** 从消息时间戳到决策时间的耗时（毫秒，v2 通常为 0：trace 不包含决策记录） */
-const decisionLatency = computed(() => {
-  if (!trace.value?.decision) return 0;
-  return trace.value.decision.elapsed_ms;
-});
+// 旧 decision / outputs 字段已删除；segments 由 messages/planning/execution 三段组成
 
 // ==================== 列表数据获取 ====================
 
@@ -397,50 +337,42 @@ function formatLatency(ms: number | null | undefined): string {
   return `${(ms / 1000).toFixed(2)}s`;
 }
 
-function emotionEmoji(name: string): string {
-  const emojiMap: Record<string, string> = {
-    happy: '😊',
-    sad: '😢',
-    angry: '😠',
-    surprised: '😮',
-    fearful: '😨',
-    disgusted: '😖',
-    neutral: '😐',
-    confused: '😕',
-    shy: '😳',
-    proud: '😌',
-    excited: '🤩',
-    calm: '😌',
+// ==================== 列表展示：从 segments.messages[0] 派生首条消息展示字段 ====================
+
+interface NormalizedMessageView {
+  source: string;
+  text: string;
+  timestamp_ms: number;
+}
+
+function extractNormalizedMessage(
+  entry: TraceSegmentEntry | undefined,
+): NormalizedMessageView | null {
+  if (!entry) return null;
+  const data = entry.data ?? {};
+  const inner = (data.message as Record<string, unknown> | undefined) ?? {};
+  return {
+    source: (inner.source as string) ?? (data.source as string) ?? 'unknown',
+    text: (inner.text as string) ?? '',
+    timestamp_ms: entry.timestamp_ms ?? 0,
   };
-  return emojiMap[name] || '🎭';
 }
 
-function emotionTagType(name: string): 'success' | 'warning' | 'info' | 'danger' | 'primary' {
-  const typeMap: Record<string, 'success' | 'warning' | 'info' | 'danger' | 'primary'> = {
-    happy: 'success',
-    excited: 'success',
-    proud: 'success',
-    calm: 'primary',
-    neutral: 'info',
-    confused: 'warning',
-    surprised: 'warning',
-    shy: 'warning',
-    sad: 'info',
-    angry: 'danger',
-    fearful: 'danger',
-    disgusted: 'danger',
-  };
-  return typeMap[name] || 'info';
+function firstMessage(item: Trace): NormalizedMessageView | null {
+  const first = item.segments?.messages?.[0];
+  return extractNormalizedMessage(first);
 }
 
-function hasActionParams(params: Record<string, unknown>): boolean {
-  return params && Object.keys(params).length > 0;
+function firstMessageSource(item: Trace): string {
+  return firstMessage(item)?.source ?? 'unknown';
 }
 
-function formatActionParams(params: Record<string, unknown>): string {
-  return Object.entries(params)
-    .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
-    .join(', ');
+function firstMessageText(item: Trace): string {
+  return firstMessage(item)?.text ?? '(无文本)';
+}
+
+function firstMessageTimestamp(item: Trace): number {
+  return firstMessage(item)?.timestamp_ms ?? 0;
 }
 
 // ==================== 自动刷新（仅列表模式） ====================
@@ -676,12 +608,12 @@ onUnmounted(() => {
   width: 2px;
   background: linear-gradient(
     to bottom,
-    var(--color-input) 0%,
-    var(--color-input) 25%,
-    var(--color-decision) 25%,
-    var(--color-decision) 50%,
-    var(--color-output) 50%,
-    var(--color-output) 100%
+    var(--color-collector) 0%,
+    var(--color-collector) 33%,
+    var(--color-agent) 33%,
+    var(--color-agent) 66%,
+    var(--color-tool) 66%,
+    var(--color-tool) 100%
   );
 }
 
@@ -703,15 +635,15 @@ onUnmounted(() => {
 }
 
 .timeline-node.input .node-dot {
-  border-color: var(--color-input);
+  border-color: var(--color-collector);
 }
 
 .timeline-node.decision .node-dot {
-  border-color: var(--color-decision);
+  border-color: var(--color-agent);
 }
 
 .timeline-node.outputs .node-dot {
-  border-color: var(--color-output);
+  border-color: var(--color-tool);
 }
 
 .node-card {
@@ -726,15 +658,15 @@ onUnmounted(() => {
 }
 
 .timeline-node.input .node-card {
-  border-left: 3px solid var(--color-input);
+  border-left: 3px solid var(--color-collector);
 }
 
 .timeline-node.decision .node-card {
-  border-left: 3px solid var(--color-decision);
+  border-left: 3px solid var(--color-agent);
 }
 
 .timeline-node.outputs .node-card {
-  border-left: 3px solid var(--color-output);
+  border-left: 3px solid var(--color-tool);
 }
 
 .card-header {
@@ -872,7 +804,7 @@ onUnmounted(() => {
 }
 
 .output-row:hover {
-  border-color: var(--color-output);
+  border-color: var(--color-tool);
 }
 
 .output-status {
@@ -949,6 +881,43 @@ onUnmounted(() => {
 /* 总耗时卡片 */
 .timeline-summary {
   margin-top: var(--spacing-md);
+}
+
+.segment-block {
+  padding: var(--spacing-sm) 0;
+  border-bottom: 1px dashed var(--border-color-light);
+}
+.segment-block:last-child {
+  border-bottom: none;
+}
+.segment-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+.segment-data {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color-light);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-regular);
+  max-height: 220px;
+  overflow: auto;
+}
+.summary-tag-simulated {
+  margin-left: var(--spacing-sm);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--color-warning-light);
+  color: var(--color-warning);
+  font-size: 11px;
+  font-weight: 500;
 }
 
 .summary-card {

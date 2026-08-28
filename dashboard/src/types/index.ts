@@ -3,40 +3,47 @@
 
 // ==================== 系统状态 ====================
 
-export interface EventStats {
-  total_emits: number;
-  total_subscribers: number;
+/**
+ * 单个组件分组（collectors / agents / tools）的运行统计。
+ *
+ * 后端 `/api/v1/system/status` 中的 `groups.<name>` 字段：组件注册表派生。
+ */
+export interface GroupStatus {
+  enabled: boolean;
+  /** 已启动（运行时状态） */
+  started: number;
+  /** 已启用（配置）总数 */
+  total: number;
+}
+
+/**
+ * EventBus 总吞吐统计（顶层暴露，不再走 phase）。
+ */
+export interface EventBusStats {
+  total_events: number;
 }
 
 /**
  * 系统状态响应（v2.0）。
  *
- * W8 证据：`/api/v1/system/status` 当前返回 `input_phase/decision_phase/output_phase` 全为 `null`，
- * 因为 DashboardServer 的三个 Manager 未被 main.py 注入。前端应优雅降级：所有 phase 字段
- * 可选，缺失时视为"未启用"。
+ * 字段说明（与后端 `/api/v1/system/status` 对齐）：
+ * - `running` / `uptime_seconds` / `version` / `python_version`：运行时元信息
+ * - `groups`：三组组件运行统计（collectors / agents / tools）
+ * - `event_bus`：EventBus 全局吞吐
+ *
+ * 旧 input/decision/output 三阶段字段已删除，前端读 `groups.<name>`。
  */
 export interface SystemStatusResponse {
   running: boolean;
   uptime_seconds: number;
   version: string;
   python_version: string;
-  /** v2 已废弃（保留兼容）：始终为 null 或 undefined */
-  input_phase?: PhaseStatus | null;
-  decision_phase?: PhaseStatus | null;
-  output_phase?: PhaseStatus | null;
-}
-
-export interface PhaseStatus {
-  enabled: boolean;
-  active_components: number;
-  total_components: number;
-  event_stats?: EventStats;
-}
-
-export interface SystemStatsResponse {
-  total_messages: number;
-  total_intents: number;
-  event_bus_stats?: EventStats;
+  groups: {
+    collectors: GroupStatus;
+    agents: GroupStatus;
+    tools: GroupStatus;
+  };
+  event_bus: EventBusStats;
 }
 
 // ==================== 组件 ====================
@@ -44,43 +51,36 @@ export interface SystemStatsResponse {
 /**
  * 组件摘要（v2）。
  *
- * 后端 `/api/v1/components` 当前返回 `{input: [], decision: [], output: []}`（W8 证据）；
- * 三个 Manager 未被注入，所以列表始终为空。v2 新架构使用 group 字段替代 phase：
-  - `collectors`：采集器（原 input 阶段）
-  - `agents`：业务 Agent（替代 decision 阶段语义）
-  - `tools`：工具（替代 output 阶段语义）
- *
- * 前端保留 `phase` 字段以适配后端当前响应；视觉层重命名为"采集器 / Agent / 工具"。
+ * 字段：
+ * - `name`：组件名（控制路径用）
+ * - `group`：v2 唯一分组键 `collectors | agents | tools`
+ * - `type`：组件类名或类型标识
+ * - `kind`：组件语义种类（如 chat / expression / avatar / perception）
+ * - `description`：人类可读描述（来自 ConfigSchema，缺失时为空串）
+ * - `is_started`：当前是否已启动（运行时状态）
+ * - `is_enabled`：是否在配置中启用
  */
 export interface ComponentSummary {
   name: string;
-  /** @deprecated v2 已废弃，统一用 `group` */
-  phase?: string;
-  /** v2 新增：collectors / agents / tools */
-  group?: string;
+  group: 'collectors' | 'agents' | 'tools';
   type: string;
+  kind?: string;
+  description?: string;
   is_started: boolean;
   is_enabled: boolean;
-  /** v2 新增：组件所属种类（如 chat / expression / avatar / perception） */
-  kind?: string;
 }
 
 export interface ComponentListResponse {
-  /** v2 新增的分组字段（当前后端未填充，恒为空数组） */
-  collectors?: ComponentSummary[];
-  agents?: ComponentSummary[];
-  tools?: ComponentSummary[];
-  /** @deprecated v2 已废弃：保留兼容 */
-  input?: ComponentSummary[];
-  decision?: ComponentSummary[];
-  output?: ComponentSummary[];
+  collectors: ComponentSummary[];
+  agents: ComponentSummary[];
+  tools: ComponentSummary[];
 }
 
 export interface ComponentDetail {
   name: string;
-  phase?: string;
-  group?: string;
+  group: 'collectors' | 'agents' | 'tools';
   type: string;
+  description?: string;
   is_started: boolean;
   is_enabled: boolean;
   config?: Record<string, unknown>;
@@ -103,9 +103,8 @@ export interface ComponentControlResponse {
 /**
  * 配置响应（v2）。
  *
- * 后端 `/api/v1/config` 当前返回 `{config: {...}}`，顶层是合并后的字典（来自 core / model +
- * agents / tools / memory / storage / background 七个 TOML 文件）。前端应通过 key 前缀
- * 路由到对应文件（见 Settings.vue 的 _SECTION_TO_FILE 推断）。
+ * 后端 `/api/v1/config` 返回 7 文件合并的扁平 dict（core / model / agents / tools /
+ * memory / storage / background）。
  */
 export interface ConfigResponse {
   config: Record<string, unknown>;
@@ -149,7 +148,7 @@ export interface InjectIntentResponse {
 // ==================== v2 消息与会话 ====================
 
 /**
- * v2 统一消息载荷。W8 后端实现：
+ * v2 统一消息载荷。后端实现：
  * - 弹幕/进房等所有消息统一发布为 `room.message.*`（采集器归一化后）
  * - Planner 的发言通过 `tool.result.<tool_name>` 与 `agenda.*` 间接观测
  * - 历史 EventRecord.type 字段字面量必须与后端一致
@@ -191,31 +190,29 @@ export interface IntentMetadataData {
 }
 
 /** v2 直播间观察页链路状态 */
-export type LiveChainStatus = 'pending' | 'deciding' | 'done';
+export type LiveChainStatus = 'pending' | 'planning' | 'done';
 
 /**
- * v2 调试会话事件：保留消息事件（room.message.*）；决策/输出事件在 v2 中已被工具结果
- * 取代，前端通过 `room.message` + `agenda.*` + `tool.result.*` 三族观测链路。
+ * v2 调试会话事件：仅保留语义域家族。
  *
- * 旧类型 `message.received | decision.intent | output.render` 仅在兼容旧后端时使用；
- * 新后端不再发布这三个事件名。
+ * 旧类型 `message.received | decision.intent | output.render` 已删除（v2 后端不再发布）；
+ * 新链路通过 `room.message.*` + `agenda.*` + `tool.result.*` 三族观测。
  */
 export type DebugSessionEventType =
   | 'room.message' // 统一消息事件（v2 默认）
-  | 'agenda.speech' // Agenda 推动的发言（v2 新增）
-  | 'tool.result' // 工具执行结果（v2 新增）
-  | 'message.received' // @deprecated v2 已删除
-  | 'decision.intent' // @deprecated v2 已删除
-  | 'output.render'; // @deprecated v2 已删除
+  | 'agenda.update' // Agenda 节目单更新（v2）
+  | 'agenda.speech' // Agenda 推动的发言（v2）
+  | 'planner.checkpoint' // Planner 决策检查点（v2）
+  | 'tool.result'; // 工具执行结果（v2）
 
 export interface DebugSessionEvent {
   id: string;
   type: DebugSessionEventType | string;
   timestamp: number;
-  // message.* / room.message 事件专有字段
+  // room.message 事件专有字段
   message?: NormalizedMessageData;
   source?: string;
-  // agenda.speech / tool.result 事件专有字段
+  // agenda / planner / tool.result 事件专有字段
   intent?: IntentEventData;
   deciderName?: string;
 }
@@ -225,17 +222,6 @@ export interface IntentEventData {
   emotion?: IntentEmotionData;
   action?: IntentActionData;
   metadata: IntentMetadataData;
-}
-
-/** @deprecated 旧 ChatMessage（保留兼容，新代码应使用 DebugSessionEvent） */
-export interface ChatMessage {
-  id: string;
-  type: 'normalized_message' | 'intent';
-  sender: string;
-  content: string;
-  timestamp: number;
-  emotion?: string;
-  priority?: number;
 }
 
 // ==================== ContextService / 会话历史 ====================
@@ -263,7 +249,7 @@ export interface MessageListResponse {
  *
  * `type` 字段统一是 v2 语义域事件名前缀。常见：
  * - `room.message.danmaku` / `room.message.gift` / `room.message.super_chat` / `room.message.enter`
- * - `agenda.*` / `planner.*` / `tool.result.*` / `game.*` / `live.*`
+ * - `agenda.*` / `planner.*` / `tool.result.<name>` / `game.*` / `live.*`
  */
 export interface WebSocketMessage {
   type: string;
@@ -302,7 +288,7 @@ export interface ParameterSpec {
   maximum?: number;
 }
 
-/** v2 工具 action（替代旧 MaibotAction）。 */
+/** v2 工具 action（来自真实 ToolRegistry）。name 形如 `<provider>.<tool>`。 */
 export interface UnifiedActionEntry {
   name: string;
   description?: string;
@@ -318,8 +304,7 @@ export interface UnifiedCapabilitiesView {
 /**
  * Mock 采集器状态（v2 模拟直播间能力由 `modules/collectors/mock/` 承载）。
  *
- * W8 证据：dashboard 已删除 `/api/v1/simulator/*` 子路由。当前前端调用 503；
- * 类型保留以便后端将来补齐 mock 控制面接口。
+ * 前端调用 mock 控制面 404/503 时显示"mock 采集器未启用"。
  */
 export interface MockCollectorStatus {
   is_running: boolean;

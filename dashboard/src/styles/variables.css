@@ -75,13 +75,23 @@
     -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', monospace;
 
-  /* Domain 颜色 */
-  --color-input: #3b82f6;
-  --color-input-bg: rgba(59, 130, 246, 0.1);
-  --color-decision: #8b5cf6;
-  --color-decision-bg: rgba(139, 92, 246, 0.1);
-  --color-output: #10b981;
-  --color-output-bg: rgba(16, 185, 129, 0.1);
+  /* Domain 颜色（v2 三组语义） */
+  --color-collector: #3b82f6;
+  --color-collector-bg: rgba(59, 130, 246, 0.1);
+  --color-agent: #8b5cf6;
+  --color-agent-bg: rgba(139, 92, 246, 0.1);
+  --color-tool: #10b981;
+  --color-tool-bg: rgba(16, 185, 129, 0.1);
+  --color-agenda: #f59e0b;
+  --color-agenda-bg: rgba(245, 158, 11, 0.1);
+  --color-planner: #6366f1;
+  --color-planner-bg: rgba(99, 102, 241, 0.1);
+  --color-game: #ec4899;
+  --color-game-bg: rgba(236, 72, 153, 0.1);
+  --color-live: #14b8a6;
+  --color-live-bg: rgba(20, 184, 166, 0.1);
+  --color-system: #6b7280;
+  --color-system-bg: rgba(107, 114, 128, 0.1);
 
   /* 动画 */
   --transition-fast: 0.15s ease;
@@ -138,11 +148,21 @@
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
   --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
 
-  /* Domain 颜色 - 深色模式调整 */
-  --color-input: #58a6ff;
-  --color-input-bg: rgba(56, 139, 253, 0.15);
-  --color-decision: #bc8cff;
-  --color-decision-bg: rgba(163, 113, 247, 0.15);
-  --color-output: #3fb950;
-  --color-output-bg: rgba(63, 185, 80, 0.15);
+  /* Domain 颜色 - 深色模式（v2 三组语义） */
+  --color-collector: #58a6ff;
+  --color-collector-bg: rgba(56, 139, 253, 0.15);
+  --color-agent: #bc8cff;
+  --color-agent-bg: rgba(163, 113, 247, 0.15);
+  --color-tool: #3fb950;
+  --color-tool-bg: rgba(63, 185, 80, 0.15);
+  --color-agenda: #fbbf24;
+  --color-agenda-bg: rgba(251, 191, 36, 0.15);
+  --color-planner: #818cf8;
+  --color-planner-bg: rgba(129, 140, 248, 0.15);
+  --color-game: #f472b6;
+  --color-game-bg: rgba(244, 114, 182, 0.15);
+  --color-live: #2dd4bf;
+  --color-live-bg: rgba(45, 212, 191, 0.15);
+  --color-system: #9ca3af;
+  --color-system-bg: rgba(156, 163, 175, 0.15);
 }

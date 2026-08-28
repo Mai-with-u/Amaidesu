@@ -526,7 +526,11 @@ async def _register_agents_from_config(
                 event_bus=event_bus,
                 tool_registry=tool_registry,
             )
-            manager.register(agent, spec_provider="builtin")
+            manager.register(
+                agent,
+                spec_provider="builtin",
+                description="直播主播决策主体：聚合弹幕 → Planner 决策 → Replyer 表达",
+            )
             continue
         if agent_name == "game":
             try:
@@ -555,7 +559,11 @@ async def _register_agents_from_config(
                     prompt_manager=get_prompt_manager(),
                     event_bus=event_bus,
                 )
-                manager.register(text_adv_agent, spec_provider="game")
+                manager.register(
+                    text_adv_agent,
+                    spec_provider="game",
+                    description="游戏 AI 玩家代理（text_adv 文字冒险引擎）",
+                )
                 logger.info(f"TextAdvGameAgent 已注册 (engine={engine_name})")
             except Exception as e:
                 logger.warning(f"game Agent 注册失败: {e}")

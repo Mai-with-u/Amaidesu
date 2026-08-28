@@ -1,5 +1,5 @@
 """
-EventBus 事件广播器（Wave 6 重写）
+EventBus 事件广播器（Wave 6 重写，Wave U1 / B5 补订阅）
 
 订阅 EventBus 事件并广播给 WebSocket 客户端。
 
@@ -10,6 +10,13 @@ Wave 6 变更：
 - INPUT_CONNECTED / INPUT_DISCONNECTED / DECISION_CONNECTED / DECISION_DISCONNECTED →
   删除（Stage-glue 连接事件已废弃，统一由 ROOM_MESSAGE_* 表达）
 - IntentPayload / MessageReadyPayload → DISCARDED，使用 RoomMessagePayload
+
+Wave U1 / B5 变更（plan: webui-v2-adaptation.md §2）：
+- 新增订阅 CoreEvents.ROOM_MESSAGE_{GIFT,SUPER_CHAT,ENTER}（WS type "room.message"，
+  与 danmaku 一致让前端按消息家族聚合）
+- 新增订阅 CoreEvents.AGENDA_UPDATE（WS type "agenda.update"）
+- 新增订阅 CoreEvents.TOOL_RESULT_WILDCARD（WS type 沿用具体事件名
+  tool.result.<tool_name>，payload=ToolResultPayload.model_dump）
 """
 
 import time
@@ -26,10 +33,12 @@ from src.modules.events.event_type_map import (
     SYSTEM_STATUS_TYPE,
 )
 from src.modules.events.payloads import (
+    AgendaPayload,
     CoreErrorPayload,
     CoreShutdownPayload,
     CoreStartupPayload,
     RoomMessagePayload,
+    ToolResultPayload,
 )
 from src.modules.events.payloads.base import BasePayload
 from src.modules.logging import get_logger
@@ -93,7 +102,12 @@ class EventBroadcaster:
     def _get_handler_for_event(self, event_name: str) -> Optional[Callable]:
         handler_map = {
             CoreEvents.ROOM_MESSAGE_DANMAKU: self._on_room_message,
+            CoreEvents.ROOM_MESSAGE_GIFT: self._on_room_message,
+            CoreEvents.ROOM_MESSAGE_SUPER_CHAT: self._on_room_message,
+            CoreEvents.ROOM_MESSAGE_ENTER: self._on_room_message,
             CoreEvents.PLANNER_CHECKPOINT: self._on_planner_checkpoint,
+            CoreEvents.AGENDA_UPDATE: self._on_agenda_update,
+            CoreEvents.TOOL_RESULT_WILDCARD: self._on_tool_result,
             CoreEvents.CORE_STARTUP: self._on_core_event,
             CoreEvents.CORE_SHUTDOWN: self._on_core_event,
             CoreEvents.CORE_ERROR: self._on_core_error,
@@ -108,10 +122,30 @@ class EventBroadcaster:
             self._on_room_message,
             model_class=RoomMessagePayload,
         )
+        for event_name in (
+            CoreEvents.ROOM_MESSAGE_GIFT,
+            CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
+            CoreEvents.ROOM_MESSAGE_ENTER,
+        ):
+            self._subscribe_event(
+                event_name,
+                self._on_room_message,
+                model_class=RoomMessagePayload,
+            )
         self._subscribe_event(
             CoreEvents.PLANNER_CHECKPOINT,
             self._on_planner_checkpoint,
             model_class=BasePayload,  # CheckpointPayload 兜底
+        )
+        self._subscribe_event(
+            CoreEvents.AGENDA_UPDATE,
+            self._on_agenda_update,
+            model_class=AgendaPayload,
+        )
+        self._subscribe_event(
+            CoreEvents.TOOL_RESULT_WILDCARD,
+            self._on_tool_result,
+            model_class=ToolResultPayload,
         )
 
     def _subscribe_system_events(self) -> None:
@@ -154,6 +188,20 @@ class EventBroadcaster:
             await self.ws_handler.broadcast(PLANNER_CHECKPOINT_TYPE, dict_data, message_id=data.id)
         except Exception as e:
             logger.error(f"广播 planner checkpoint 失败: {e}")
+
+    async def _on_agenda_update(self, event_name: str, data: AgendaPayload, source: str) -> None:
+        try:
+            dict_data = data.model_dump() if isinstance(data, BaseModel) else {}
+            await self.ws_handler.broadcast("agenda.update", dict_data, message_id=data.id)
+        except Exception as e:
+            logger.error(f"广播 agenda update 失败: {e}")
+
+    async def _on_tool_result(self, event_name: str, data: ToolResultPayload, source: str) -> None:
+        try:
+            dict_data = data.model_dump() if isinstance(data, BaseModel) else {}
+            await self.ws_handler.broadcast(event_name, dict_data, message_id=data.id)
+        except Exception as e:
+            logger.error(f"广播 tool result 失败: {e}")
 
     async def _on_core_event(self, event_name: str, data: Any, source: str) -> None:
         try:

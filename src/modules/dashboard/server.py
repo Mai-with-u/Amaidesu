@@ -44,7 +44,6 @@ if TYPE_CHECKING:
     from src.modules.context.service import ContextService
     from src.modules.events.event_bus import EventBus
     from src.modules.events.event_history import EventHistoryService
-    from src.modules.simulator.service import SimulatorService
 
 from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
 from src.modules.dashboard.websocket.handler import WebSocketHandler
@@ -104,7 +103,6 @@ class DashboardServer:
         prompt_manager: Optional[Any] = None,
         log_streamer: Optional[LogStreamer] = None,
         event_history: Optional["EventHistoryService"] = None,
-        simulator_service: Optional["SimulatorService"] = None,
     ):
         self.event_bus = event_bus
         self.input_manager = input_manager
@@ -117,7 +115,6 @@ class DashboardServer:
         self.prompt_manager = prompt_manager
         self.context_service = context_service
         self.config_service = config_service
-        self.simulator_service = simulator_service
 
         self.port = dashboard_config.port
         self.host = dashboard_config.host

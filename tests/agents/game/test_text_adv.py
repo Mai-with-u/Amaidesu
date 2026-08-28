@@ -1,4 +1,4 @@
-"""TextAdvGameAgent 单元测试 + 感知-推进-闭环 QA Scenario（Wave 7）
+﻿"""TextAdvGameAgent 单元测试 + 感知-推进-闭环 QA Scenario（Wave 7）
 
 QA Scenario（acceptance criteria）：
     Tool: Bash
@@ -166,7 +166,7 @@ async def started_agent(
 
 def test_text_adv_agent_metadata() -> None:
     """协议 6：name / description。"""
-    assert TextAdvGameAgent.name == "text_adv_game_agent"
+    assert TextAdvGameAgent.name == "game"
     assert "文字冒险" in TextAdvGameAgent.description
 
 
@@ -198,8 +198,8 @@ def test_text_adv_agent_factory_registers_in_manager() -> None:
         agent_manager=manager,
         live_session_id="test",
     )
-    assert "text_adv_game_agent" in manager
-    assert manager.get("text_adv_game_agent") is agent
+    assert "game" in manager
+    assert manager.get("game") is agent
 
 
 # =============================================================================
@@ -551,7 +551,7 @@ async def test_agent_manager_lifecycle_for_text_adv() -> None:
         agent_manager=manager,
     )
     await manager.start_all()
-    assert "text_adv_game_agent" in manager.list_running()
+    assert "game" in manager.list_running()
     await manager.stop_all()
     assert agent.state == AgentState.STOPPED
 
