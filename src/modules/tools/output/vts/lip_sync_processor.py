@@ -6,12 +6,9 @@ LipSyncProcessor - VTS 口型同步处理器
 
 import asyncio
 import time
-from typing import TYPE_CHECKING, Any, Callable, Coroutine, Dict, Optional
+from typing import Any, Callable, Coroutine, Dict, Optional
 
 from src.modules.logging import get_logger
-
-if TYPE_CHECKING:
-    from src.modules.streaming.audio_chunk import AudioChunk, AudioMetadata
 
 
 class LipSyncProcessor:
@@ -102,32 +99,6 @@ class LipSyncProcessor:
         self.audio_playback_start_time: Optional[float] = None
         self._last_update_time = 0.0
         self._lip_sync_task: Optional[asyncio.Task] = None
-
-    async def on_start(self, metadata: "AudioMetadata") -> None:
-        """AudioStreamChannel: 音频流开始回调"""
-        if not self._is_connected():
-            return
-        self.logger.debug(f"收到音频流开始通知: {metadata.text[:30]}...")
-        await self.start_session(metadata.text)
-
-    async def on_chunk(self, chunk: "AudioChunk") -> None:
-        """AudioStreamChannel: 音频块回调"""
-        if not self._is_connected():
-            return
-        try:
-            from src.modules.streaming.audio_utils import resample_audio
-
-            audio_data = resample_audio(chunk.data, chunk.sample_rate, self._sample_rate)
-            await self.process_audio(audio_data, self._sample_rate)
-        except Exception as e:
-            self.logger.error(f"处理音频块失败: {e}")
-
-    async def on_end(self, metadata: "AudioMetadata") -> None:
-        """AudioStreamChannel: 音频流结束回调"""
-        if not self._is_connected():
-            return
-        self.logger.debug("收到音频流结束通知")
-        await self.stop_session()
 
     def _rest_value(self, name: str) -> float:
         """参数的静止值（未配置时为 0.0）"""

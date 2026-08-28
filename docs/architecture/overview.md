@@ -70,7 +70,7 @@ flowchart TB
     Dashboard["Dashboard (observer)<br/>REST + WS"] -.-> Bus
 ```
 
-> 上图省略了几个常驻配角：`LogStreamer`（向 Dashboard 推实时日志）、`EventHistoryRecorder`（事件历史持久化/查看）、`AudioStreamChannel`（TTS↔皮套的音频总线，组合根已创建但未注入下游，见"已知缺口"）。
+> 上图省略了几个常驻配角：`LogStreamer`（向 Dashboard 推实时日志）、`EventHistoryRecorder`（事件历史持久化/查看）。v2 pull 编排下不引入扇出通道；lip-sync 由皮套软件自行截取本地音频流，或由后续工具 invoke 能力重建。
 
 ## 目录结构
 
@@ -106,7 +106,6 @@ Amaidesu/
 │       ├── prompts/             # PromptManager（声明式键自动发现）
 │       ├── simulator/           # 已脱线（仅残留 prompts 子目录；模拟输入由 collectors/mock 承载）
 │       ├── storage/             # SQLite 存储层
-│       ├── streaming/           # AudioStreamChannel（TTS ↔ 皮套/远程 的音频总线）
 │       ├── tts/                 # TTS 客户端
 │       └── types/               # 共享类型（NormalizedMessage 等）
 ├── dashboard/                   # 前端 SPA（pnpm 构建到 dashboard/dist/，60214 静态挂载）
@@ -124,7 +123,6 @@ Amaidesu/
 sequenceDiagram
     autonumber
     participant Main as main.py
-    participant Audio as AudioStreamChannel
     participant LLM as LLMManager
     participant Ctx as ContextService
     participant Bus as EventBus
@@ -140,20 +138,19 @@ sequenceDiagram
     Main->>Main: validate_config(7 文件存在性)
     Main->>Main: exit_if_config_created
     Main->>Main: register_core_events (EventBus 构造前)
-    Main->>Audio: 1) 创建 AudioStreamChannel("tts") + start
-    Main->>LLM: 2) setup(config)
-    Main->>Ctx: 3) initialize()
-    Main->>Bus: 4) 创建 EventBus
-    Main->>Int: 4) register_event_interceptors（rate_limit + similar_filter）
-    Main->>Rec: 5) EventHistoryRecorder.start
-    Main->>Col: 6) CollectorManager + _register_collectors_from_config + start_all
-    Main->>Agt: 7) AgentManager + _register_agents_from_config
-    Main->>Reg: 7a) bind_core_tools(registry, [tools.output.config] slice)（9 个 output 包自注册）
-    Main->>Reg: 7b) bind_pending_tools(registry)（flush L1 @tool pending）
-    Main->>Agt: 7c) start_all（触发各 Agent._register_tools 自注册）
-    Main->>Agt: 7d) audit_tools(registry)（只读审计 + 未实现声明 warning）
-    Main->>Log: 8) LogStreamer.start（持久化实时日志）
-    Main->>Dash: 9) DashboardServer.start（仅 observer；ImportError 降级 warning）
+    Main->>LLM: 1) setup(config)
+    Main->>Ctx: 2) initialize()
+    Main->>Bus: 3) 创建 EventBus
+    Main->>Int: 3) register_event_interceptors（rate_limit + similar_filter）
+    Main->>Rec: 3) EventHistoryRecorder.start
+    Main->>Col: 4) CollectorManager + _register_collectors_from_config + start_all
+    Main->>Agt: 5) AgentManager + _register_agents_from_config
+    Main->>Reg: 5a) bind_core_tools(registry, [tools.output.config] slice)（9 个 output 包自注册）
+    Main->>Reg: 5b) bind_pending_tools(registry)（flush L1 @tool pending）
+    Main->>Agt: 5c) start_all（触发各 Agent._register_tools 自注册）
+    Main->>Agt: 5d) audit_tools(registry)（只读审计 + 未实现声明 warning）
+    Main->>Log: 6) LogStreamer.start（持久化实时日志）
+    Main->>Dash: 7) DashboardServer.start（仅 observer；ImportError 降级 warning）
     Main->>Main: setup_signal_handlers + stop_event.wait
 ```
 
@@ -312,7 +309,7 @@ v2 不再支持"插件系统"——`src/modules/plugins/` 已移除。新功能�
 
 ### ③ 依赖注入
 
-服务对象（`EventBus` / `LLMManager` / `PromptManager` / `ContextService` / `AudioStreamChannel` / `ConfigService`）一律构造器注入；数据对象（Payload、配置 dict）走参数或 `**kwargs`。**禁止**把服务塞进 Context 容器传递。
+服务对象（`EventBus` / `LLMManager` / `PromptManager` / `ContextService` / `ConfigService`）一律构造器注入；数据对象（Payload、配置 dict）走参数或 `**kwargs`。**禁止**把服务塞进 Context 容器传递。
 
 ```python
 # v2 实例：StreamerAgent 构造（main.py:_register_agents_from_config）
@@ -376,7 +373,7 @@ bili_danmaku_official = { ... }
 
 1. **渲染工具 `register_*_tools` 无自动调用点**。`src/modules/tools/output/` 下各子包（tts/subtitle/vts/warudo/obs）都暴露了 `register_xxx_tools(registry, config)` 函数，但 `main.py` 的 `create_app_components` 内**没有任何一行调用**。后果：这些工具族在默认 wiring 下不会出现在 `ToolRegistry` 中，LLM 看不到它们。修复方向：组合根按 `[tools.output.<族>]` 段（如 `[tools.output.tts.edge_tts]`）自动调用对应 `register_*_tools`；或文档化要求用户在 wiring 阶段手动注册。**当前需要用户/集成方在 `main.py` 或自定义 wiring 处显式调用 `register_*_tools`**。
 
-2. **AudioStreamChannel 组合根悬空**。`create_app_components` 第 1 步创建 `audio_stream_channel = AudioStreamChannel("tts")` 并 `start()`，但**未注入到任何下游**（VTS / Warudo Provider 的 `create_*_provider` 都接受 `audio_stream_channel` 参数，但当前未传入）。后果：TTS 输出音频与皮套口型同步链路未接通。修复方向：把 `audio_stream_channel` 传给 `_register_agents_from_config` 或独立的工具注册步骤，让 `create_vts_provider`/`create_warudo_provider` 拿到引用。
+2. **AudioStreamChannel 已拆除（2026-08-27）**。v2 pull 编排下无扇出场景，audio pub-sub 链路（`src/modules/streaming/`，300+ 行：AudioStreamChannel / AudioChunk / BackpressureStrategy）已删除；TTS 输出回归本地 `AudioDeviceManager.play_audio`；皮套口型同步责任短期由皮套软件自取本地音频流 / 中期由工具 invoke 能力重建。`LipSyncProcessor` 保留（无其他活跃调用方时仅作历史兜底，可按 git 历史回滚）。
 
 3. **`src/modules/simulator/` 已脱线**。该目录仅残留 `prompts/` 子目录 + `__pycache__/`，业务代码已迁出。模拟输入（模拟弹幕、模拟直播间）现在由 `src/modules/collectors/mock/` 承载（`mock_collector.py` 注释明确说明"合并自旧 mock_danmaku 域 + `src/modules/simulator/`"）。组合根不引用 `simulator` 包。**残留的 `src/modules/simulator/prompts/` 与空壳目录应在清理阶段移除**，但目前不影响功能。
 
@@ -392,4 +389,4 @@ bili_danmaku_official = { ... }
 
 ---
 
-*最后更新：2026-08-27（v2.0.5 工具注册路径对齐：mermaid 节点 `AgentManager` 改 `audit_tools (只读)`；启动时序在 `start_all` 前补 `bind_core_tools` / `bind_pending_tools` 两步、`start_all` 后补 `audit_tools` 一步；`manager.py` 行删除 `register_all_tools` / `collect_tool_specs` 改为 `audit_tools` 只读审计；MC Agent 示例改为 Agent 子类自注册 + 显式 bind）*
+*最后更新：2026-08-27（v2.0.6 AudioStreamChannel 拆除：组合根阶 1 步骤删除、`src/modules/streaming/` 全包 `git rm`、4 个 TTS 工具 + VTS/Warudo/VRChat Provider 移除 audio_stream_channel 注入、`lip_sync_subscriber.py` 删除；`LipSyncProcessor.on_start/on_chunk/on_end` 通道回调删除（会话方法保留）；`remote_stream` 模块 docstring 移除 AudioBus 引用；启动时序 mermaid 同步去除 `Audio` 参与者，本节"已知缺口"对应条目重写为拆除说明；目录结构去掉 `streaming/` 行；v2.0.5 工具注册路径对齐：mermaid 节点 `AgentManager` 改 `audit_tools (只读)`；启动时序在 `start_all` 前补 `bind_core_tools` / `bind_pending_tools` 两步、`start_all` 后补 `audit_tools` 一步；`manager.py` 行删除 `register_all_tools` / `collect_tool_specs` 改为 `audit_tools` 只读审计；MC Agent 示例改为 Agent 子类自注册 + 显式 bind）*

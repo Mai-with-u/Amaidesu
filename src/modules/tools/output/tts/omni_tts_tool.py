@@ -23,7 +23,6 @@ from pydantic import Field
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
-from src.modules.streaming.audio_stream_channel import AudioStreamChannel
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 
 if TYPE_CHECKING:
@@ -79,11 +78,9 @@ class OmniTTSProvider:
         self,
         config: Dict[str, Any],
         event_bus: Optional[EventBus] = None,
-        audio_stream_channel: Optional[AudioStreamChannel] = None,
     ):
         self.config = config
         self.event_bus = event_bus
-        self.audio_stream_channel = audio_stream_channel
         self.logger = get_logger(self.__class__.__name__)
 
         self.typed_config = self.ConfigSchema.from_dict(config)
@@ -210,11 +207,7 @@ class OmniTTSProvider:
     async def handle_speech(self, text: str) -> None:
         """对应父类模板方法 handle()（verbatim）"""
         async with self.tts_lock:
-            await self._notify_audio_start(text)
-            try:
-                await self._synthesize(text)
-            finally:
-                await self._notify_audio_end(text)
+            await self._synthesize(text)
 
     async def _synthesize(self, text: str) -> None:
         """verbatim _synthesize（不补文本清洗，保留已知 bug）"""
@@ -285,44 +278,10 @@ class OmniTTSProvider:
                 for _ in range(block_size):
                     raw_block += bytes([self.input_pcm_queue.popleft()])
 
-                await self._publish_chunk(
-                    data=raw_block,
-                    sample_rate=self.sample_rate,
-                    channels=self.channels,
-                    sequence=self.sequence_count,
-                )
                 self.sequence_count += 1
                 self.audio_data_queue.append(raw_block)
         except Exception as e:
             self.logger.error(f"解码音频数据失败: {e}")
-
-    async def _notify_audio_start(self, text: str) -> None:
-        if self.audio_stream_channel:
-            from src.modules.streaming.audio_chunk import AudioMetadata
-
-            await self.audio_stream_channel.notify_start(AudioMetadata(text=text, sample_rate=0, channels=0))
-
-    async def _notify_audio_end(self, text: str) -> None:
-        if self.audio_stream_channel:
-            from src.modules.streaming.audio_chunk import AudioMetadata
-
-            await self.audio_stream_channel.notify_end(AudioMetadata(text=text, sample_rate=0, channels=0))
-
-    async def _publish_chunk(self, data: bytes, sample_rate: int, channels: int, sequence: int) -> None:
-        if self.audio_stream_channel:
-            import time as _time
-
-            from src.modules.streaming.audio_chunk import AudioChunk
-
-            await self.audio_stream_channel.publish(
-                AudioChunk(
-                    data=data,
-                    sample_rate=sample_rate,
-                    channels=channels,
-                    sequence=sequence,
-                    timestamp=_time.time(),
-                )
-            )
 
     def get_stats(self) -> Dict[str, Any]:
         return {
@@ -354,12 +313,10 @@ def _fail(tool_name: str, error_message: str) -> ToolExecutionResult:
 def create_omni_tts_provider(
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
-    audio_stream_channel: Optional[AudioStreamChannel] = None,
 ) -> OmniTTSProvider:
     return OmniTTSProvider(
         config=config,
         event_bus=event_bus,
-        audio_stream_channel=audio_stream_channel,
     )
 
 
@@ -367,12 +324,10 @@ def register_omni_tts_tools(
     registry: Any,
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
-    audio_stream_channel: Optional[AudioStreamChannel] = None,
 ) -> OmniTTSProvider:
     provider = create_omni_tts_provider(
         config=config,
         event_bus=event_bus,
-        audio_stream_channel=audio_stream_channel,
     )
     if hasattr(registry, "register_provider"):
         registry.register_provider(provider)

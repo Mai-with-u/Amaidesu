@@ -1,7 +1,6 @@
 """Amaidesu 应用程序主入口（Wave 6 重写）
 
 v2 架构组合根（参见 .omo/drafts/amaidesu-v2-architecture.md）：
-- AudioStreamChannel：TTS ↔ 皮套/远程 的音频总线
 - LLMManager：统一 LLM 客户端池
 - ContextService：会话历史（替代旧 ContextService 路径）
 - EventBus：事件分发；启动时挂载事件拦截器（§1.46.1）
@@ -290,34 +289,25 @@ async def create_app_components(
     """v2 组合根：构造并连接所有核心组件。
 
     创建顺序（依赖关系）：
-    1. AudioStreamChannel（音频总线，工具层依赖）
-    2. LLMManager（统一 LLM 客户端池）
-    3. ContextService（会话历史 / 多会话隔离）
-    4. EventBus + 事件拦截器（§1.46.1）
-    5. CollectorManager（采集器：bilibili/console/mock/screen）
-    6. AgentManager（Agent 子系统：StreamerAgent 等）
-    7. ToolRegistry（bind_core_tools/bind_pending_tools 显式接线 + Agent 自注册，audit_tools 审计）
-    8. DashboardServer（WebUI observer）
+    1. LLMManager（统一 LLM 客户端池）
+    2. ContextService（会话历史 / 多会话隔离）
+    3. EventBus + 事件拦截器（§1.46.1）
+    4. CollectorManager（采集器：bilibili/console/mock/screen）
+    5. AgentManager（Agent 子系统：StreamerAgent 等）
+    6. ToolRegistry（bind_core_tools/bind_pending_tools 显式接线 + Agent 自注册，audit_tools 审计）
+    7. DashboardServer（WebUI observer）
 
     Returns:
         (context_service, event_bus, llm_service, dashboard_server,
          event_recorder, collector_manager, agent_manager)
     """
-    # --- 1. AudioStreamChannel ---
-    from src.modules.streaming.audio_stream_channel import AudioStreamChannel
-
-    logger.info("初始化 AudioStreamChannel...")
-    audio_stream_channel = AudioStreamChannel("tts")
-    await audio_stream_channel.start()
-    logger.info("AudioStreamChannel 已创建并启动")
-
-    # --- 2. LLM 服务 ---
+    # --- 1. LLM 服务 ---
     logger.info("初始化 LLM 服务...")
     llm_service = LLMManager()
     await llm_service.setup(config)
     logger.info("已创建 LLM 服务实例")
 
-    # --- 3. ContextService ---
+    # --- 2. ContextService ---
     logger.info("初始化上下文服务...")
     context_config = config.get("context", {}) if isinstance(config, dict) else {}
     context_service_config = ContextServiceConfig(**context_config)
@@ -325,17 +315,17 @@ async def create_app_components(
     await context_service.initialize()
     logger.info("已创建上下文服务实例")
 
-    # --- 4. EventBus + 拦截器 ---
+    # --- 3. EventBus + 拦截器 ---
     logger.info("初始化事件总线...")
     event_bus = EventBus()
     register_event_interceptors(event_bus, config)
     logger.info("事件总线已初始化，事件拦截器已挂载")
 
-    # --- 4b. 事件历史（系统级）---
+    # --- 3b. 事件历史（系统级）---
     event_recorder = await _start_event_recorder(event_bus, config)
     logger.info("事件历史记录器已启动")
 
-    # --- 5. CollectorManager ---
+    # --- 4. CollectorManager ---
     # v2：采集器配置位于 tools.toml 的 [tools.perception.config]（旧 [collectors] 段已迁移）
     collector_manager: Optional["CollectorManager"] = None
     tools_perception = (config.get("tools") or {}).get("perception", {}) if isinstance(config, dict) else {}
@@ -349,7 +339,7 @@ async def create_app_components(
         await collector_manager.start_all()
         logger.info(f"CollectorManager 已启动（{len(collector_manager)} 个 Collector）")
 
-    # --- 6. AgentManager + StreamerAgent ---
+    # --- 5. AgentManager + StreamerAgent ---
     agent_manager: Optional["AgentManager"] = None
     agents_config = config.get("agents", {}) if isinstance(config, dict) else {}
     if agents_config:
@@ -397,7 +387,7 @@ async def create_app_components(
         await agent_manager.start_all()
         logger.info(f"AgentManager 已启动（{len(agent_manager)} 个 Agent）")
 
-    # --- 7. ToolRegistry 工具审计：所有 Agent 声明的工具是否都已注册实现 ---
+    # --- 6. ToolRegistry 工具审计：所有 Agent 声明的工具是否都已注册实现 ---
     if agent_manager is not None and agent_manager._tool_registry is not None:
         registry = agent_manager._tool_registry
         logger.info(f"ToolRegistry 就绪（{len(registry)} 个工具已注册）")
@@ -407,7 +397,7 @@ async def create_app_components(
         else:
             logger.info("工具审计通过：所有 Agent 声明的工具均已在 ToolRegistry 中找到实现")
 
-    # --- 8. DashboardServer ---
+    # --- 7. DashboardServer ---
     dashboard_server: Optional["DashboardServer"] = None
     log_streamer = await _start_log_streamer()
     dashboard_config = config.get("dashboard", {}) if isinstance(config, dict) else {}
@@ -424,7 +414,7 @@ async def create_app_components(
             log_streamer,
         )
 
-    # --- 9. 组件装配完成 ---
+    # --- 8. 组件装配完成 ---
     return (
         context_service,
         event_bus,

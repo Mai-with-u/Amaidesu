@@ -1,6 +1,5 @@
 """Warudo 工具模块（Wave 4 迁移）"""
 
-from .lip_sync_subscriber import WarudoLipSyncSubscriber
 from .state.warudo_state_manager import (
     EyebrowState,
     EyeState,
@@ -37,5 +36,4 @@ __all__ = [
     "ThrowFishTask",
     "TypingActionTask",
     "ActionSender",
-    "WarudoLipSyncSubscriber",
 ]

@@ -183,7 +183,7 @@ core / model / agents / tools / memory / storage / background 七文件按领域
 如实的欠账清单（详见 [架构总览](overview.md) 已知缺口小节）：
 
 - **渲染工具注册接线未自动化**：TTS/字幕/VTS 等 `register_*_tools` 尚无组合根调用点，当前默认装配下需显式注册；
-- **AudioStreamChannel 在组合根悬空**（创建后未传递、未纳入关闭序列）；
+- **AudioStreamChannel 已拆除**（v2 pull 编排下无扇出场景，lip-sync 责任归皮套软件 + 工具 invoke 能力的重建）；
 - **迁移期遗留待清理**：`src/modules/config/schemas/input_schemas.py`、`output_schemas.py`（不再被加载的旧 Schema）、`src/modules/simulator/`（已被 mock 采集器取代的死代码候选）、main.py 顶部过期 docstring；
 - `@tool` 装饰器与 ToolProvider 双路径并存，实际主路径为 ToolProvider 类。
 
@@ -202,4 +202,4 @@ core / model / agents / tools / memory / storage / background 七文件按领域
 
 ---
 
-*最后更新：2026-08-26（首版：四代架构史、主体性判据、防换皮铁闸、全景与九 Wave 落地叙事）*
+*最后更新：2026-08-27（v2.0.6 AudioStreamChannel 拆除：九节"遗留与下一步"对应条目改写为拆除说明；首版：四代架构史、主体性判据、防换皮铁闸、全景与九 Wave 落地叙事）*

@@ -81,7 +81,7 @@ flowchart TB
     Bus -.->|on tool.result.| Planner
 ```
 
-> 图例说明：实线箭头是当前主链路；虚线箭头是辅助通道（空转检查点、工具异步结果回传、渲染工具后置调用）。AudioStreamChannel（TTS ↔ 皮套口型同步）见文末"通信机制选型"。
+> 图例说明：实线箭头是当前主链路；虚线箭头是辅助通道（空转检查点、工具异步结果回传、渲染工具后置调用）。皮套口型同步链路已拆除（见文末"通信机制选型"末段）。
 
 ---
 
@@ -216,7 +216,8 @@ v2 中不同数据走不同通道，不要混用：
 |------|------|---------|--------------|
 | **EventBus** | 元数据事件（房间消息、状态变更、工具结果、规划检查点） | 小型 JSON/Pydantic 对象 | `room.message.danmaku` / `tool.result.synthesize` / `planner.checkpoint` |
 | **ToolRegistry.invoke** | 同步/异步工具调用 | 调用方持有 `ToolExecutionResult` | `await registry.invoke("reply", args)` / `await registry.invoke("edge_tts_synthesize", args)` |
-| **AudioStreamChannel** | TTS 音频块流（TTS ↔ 皮套口型同步） | 大型二进制音频块 + 背压策略 | `channel.publish(AudioChunk)` / `channel.subscribe("vts", callback)` |
+
+**已拆除的 AudioStreamChannel（v2.0.6）**：TTS 音频块流的 pub-sub（`publish(AudioChunk)` + `subscribe(name, callbacks)` + 背压策略）已删除。原因：v2 是 pull-style 工具编排——音频数据走 ToolRegistry 调用的返回值（`ToolExecutionResult`），不再走扇出通道。皮套口型同步短期由皮套软件自取本地音频流（系统声音 / WASAPI loopback），中期由"工具 invoke 驱动 VTS 写入"的能力重建，均不依赖 push 通道。
 
 **EventBus 与 ToolRegistry 的边界**：事件总线是"发生了什么事"的广播；ToolRegistry 是"我要做什么事"的直接调用。同一工具调用既可以同步等结果，也可以 fire-and-forget 后让工具异步 emit `tool.result.<name>` 由订阅者回收——这两种语义在 v2 都允许，工具实现侧在 `invoke()` 内自行决定。
 
@@ -237,4 +238,4 @@ v2 中不同数据走不同通道，不要混用：
 
 ---
 
-*最后更新：2026-08-27（v2.0.5 工具注册路径对齐：防换皮红线节 MC Agent 示例改为 Agent 子类 `_register_tools()` 自注册 + 装配根 `bind_core_tools` / `bind_pending_tools` 显式注入 + `audit_tools` 只读审计；删除 `AgentManager.register_all_tools` 引用）*
+*最后更新：2026-08-27（v2.0.6 AudioStreamChannel 拆除：通信机制选型表删除 pub-sub 行、改写为"已拆除的 AudioStreamChannel"说明段；图例说明补一句口型同步链路已拆除；v2.0.5 工具注册路径对齐：防换皮红线节 MC Agent 示例改为 Agent 子类 `_register_tools()` 自注册 + 装配根 `bind_core_tools` / `bind_pending_tools` 显式注入 + `audit_tools` 只读审计；删除 `AgentManager.register_all_tools` 引用）*

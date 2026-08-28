@@ -37,7 +37,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
-from src.modules.streaming.audio_stream_channel import AudioStreamChannel
 from src.modules.tools.models import (
     ToolExecutionResult,
     ToolInvocation,
@@ -50,7 +49,7 @@ from .idle_motion_controller import IdleMotionController
 from .lip_sync_processor import LipSyncProcessor
 
 if TYPE_CHECKING:
-    from src.modules.streaming.backpressure import BackpressureStrategy
+    pass
 
 
 LLM_AVAILABLE = False
@@ -160,7 +159,7 @@ class VTSProvider:
     """VTS 虚拟形象 ToolProvider
 
     实现 ToolProvider 协议 + VTSHandler 编排器职责（verbatim）。
-    推荐通过 ``create_vts_provider(config, event_bus, audio_stream_channel)``
+    推荐通过 ``create_vts_provider(config, event_bus)``
     构造与 setup/cleanup 流程管理。
     """
 
@@ -187,13 +186,11 @@ class VTSProvider:
         self,
         config: Dict[str, Any],
         event_bus: Optional[EventBus] = None,
-        audio_stream_channel: Optional[AudioStreamChannel] = None,
         prompt_service: Any = None,
     ):
         # 配置
         self.config = config
         self.event_bus = event_bus
-        self.audio_stream_channel = audio_stream_channel
         self._prompt_service = prompt_service
         self.logger = get_logger(self.__class__.__name__)
 
@@ -228,7 +225,6 @@ class VTSProvider:
         self._vts_api_lock = asyncio.Lock()
         self._is_connecting = False
         self._reconnect_task: Optional[asyncio.Task] = None
-        self._vts_subscription_id: Optional[str] = None
         self._is_connected = False
         self._has_started = False
 
@@ -787,18 +783,6 @@ class VTSProvider:
                 )
             except Exception as e:
                 self.logger.warning(f"应用常驻微笑基线失败: {e}")
-
-            if self.audio_stream_channel and not self._vts_subscription_id:
-                from src.modules.streaming.backpressure import SubscriberConfig
-
-                self._vts_subscription_id = await self.audio_stream_channel.subscribe(
-                    name="vts_lip_sync",
-                    on_audio_start=self.lip_sync.on_start,
-                    on_audio_chunk=self.lip_sync.on_chunk,
-                    on_audio_end=self.lip_sync.on_end,
-                    config=SubscriberConfig(queue_size=500, backpressure_strategy=BackpressureStrategy.DROP_OLDEST),
-                )
-                self.logger.info("VTS 已订阅 AudioStreamChannel")
         except Exception as e:
             self.logger.error(f"VTS 连接失败: {e}")
             self._is_connected = False
@@ -851,14 +835,6 @@ class VTSProvider:
             await self.idle_motion.stop()
         except Exception as e:
             self.logger.warning(f"停止 idle 动画失败: {e}")
-
-        if self._vts_subscription_id and self.audio_stream_channel:
-            try:
-                await self.audio_stream_channel.unsubscribe(self._vts_subscription_id)
-            except Exception as e:
-                self.logger.error(f"取消 AudioStreamChannel 订阅失败: {e}")
-            finally:
-                self._vts_subscription_id = None
 
         if not self._is_connected or not self._vts:
             return
@@ -919,14 +895,12 @@ def _fail(tool_name: str, error_message: str) -> ToolExecutionResult:
 def create_vts_provider(
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
-    audio_stream_channel: Optional[AudioStreamChannel] = None,
     prompt_service: Any = None,
 ) -> VTSProvider:
     """构造 VTSProvider 实例（不启动，由调用方 setup）"""
     return VTSProvider(
         config=config,
         event_bus=event_bus,
-        audio_stream_channel=audio_stream_channel,
         prompt_service=prompt_service,
     )
 
@@ -935,14 +909,12 @@ def register_vts_tools(
     registry: Any,
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
-    audio_stream_channel: Optional[AudioStreamChannel] = None,
     prompt_service: Any = None,
 ) -> VTSProvider:
     """构造 VTSProvider 并注册到 registry。返回 Provider 实例供调用方管理生命周期。"""
     provider = create_vts_provider(
         config=config,
         event_bus=event_bus,
-        audio_stream_channel=audio_stream_channel,
         prompt_service=prompt_service,
     )
     if hasattr(registry, "register_provider"):

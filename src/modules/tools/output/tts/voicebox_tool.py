@@ -21,7 +21,6 @@ from pydantic import Field
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
-from src.modules.streaming.audio_stream_channel import AudioStreamChannel
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 
 if TYPE_CHECKING:
@@ -61,11 +60,9 @@ class VoiceboxProvider:
         self,
         config: Dict[str, Any],
         event_bus: Optional[EventBus] = None,
-        audio_stream_channel: Optional[AudioStreamChannel] = None,
     ):
         self.config = config
         self.event_bus = event_bus
-        self.audio_stream_channel = audio_stream_channel
         self.logger = get_logger(self.__class__.__name__)
 
         self.typed_config = self.ConfigSchema.from_dict(config)
@@ -180,11 +177,7 @@ class VoiceboxProvider:
         if self.tts_lock is None:
             self.tts_lock = asyncio.Lock()
         async with self.tts_lock:
-            await self._notify_audio_start(text)
-            try:
-                await self._synthesize(text)
-            finally:
-                await self._notify_audio_end(text)
+            await self._synthesize(text)
 
     async def _synthesize(self, text: str) -> None:
         """verbatim _synthesize"""
@@ -205,18 +198,6 @@ class VoiceboxProvider:
         if len(audio_array) == 0:
             self.logger.warning("Voicebox 返回空音频，跳过播放")
             return
-
-        chunk_size = BLOCKSIZE * CHANNELS
-        chunk_index = 0
-        for i in range(0, len(audio_array), chunk_size):
-            chunk_data = audio_array[i : i + chunk_size]
-            await self._publish_chunk(
-                data=chunk_data.tobytes(),
-                sample_rate=self.sample_rate,
-                channels=CHANNELS,
-                sequence=chunk_index,
-            )
-            chunk_index += 1
 
         await self.audio_manager.play_audio(audio_array)
 
@@ -290,34 +271,6 @@ class VoiceboxProvider:
             self.logger.debug(f"下载音频: id={generation_id}, 大小={len(data)} 字节")
             return data
 
-    async def _notify_audio_start(self, text: str) -> None:
-        if self.audio_stream_channel:
-            from src.modules.streaming.audio_chunk import AudioMetadata
-
-            await self.audio_stream_channel.notify_start(AudioMetadata(text=text, sample_rate=0, channels=0))
-
-    async def _notify_audio_end(self, text: str) -> None:
-        if self.audio_stream_channel:
-            from src.modules.streaming.audio_chunk import AudioMetadata
-
-            await self.audio_stream_channel.notify_end(AudioMetadata(text=text, sample_rate=0, channels=0))
-
-    async def _publish_chunk(self, data: bytes, sample_rate: int, channels: int, sequence: int) -> None:
-        if self.audio_stream_channel:
-            import time as _time
-
-            from src.modules.streaming.audio_chunk import AudioChunk
-
-            await self.audio_stream_channel.publish(
-                AudioChunk(
-                    data=data,
-                    sample_rate=sample_rate,
-                    channels=channels,
-                    sequence=sequence,
-                    timestamp=_time.time(),
-                )
-            )
-
     def get_stats(self) -> Dict[str, Any]:
         return {
             "name": self.__class__.__name__,
@@ -347,12 +300,10 @@ def _fail(tool_name: str, error_message: str) -> ToolExecutionResult:
 def create_voicebox_provider(
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
-    audio_stream_channel: Optional[AudioStreamChannel] = None,
 ) -> VoiceboxProvider:
     return VoiceboxProvider(
         config=config,
         event_bus=event_bus,
-        audio_stream_channel=audio_stream_channel,
     )
 
 
@@ -360,12 +311,10 @@ def register_voicebox_tools(
     registry: Any,
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
-    audio_stream_channel: Optional[AudioStreamChannel] = None,
 ) -> VoiceboxProvider:
     provider = create_voicebox_provider(
         config=config,
         event_bus=event_bus,
-        audio_stream_channel=audio_stream_channel,
     )
     if hasattr(registry, "register_provider"):
         registry.register_provider(provider)

@@ -21,7 +21,6 @@ from pydantic import Field
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
-from src.modules.streaming.audio_stream_channel import AudioStreamChannel
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 
 if TYPE_CHECKING:
@@ -65,11 +64,9 @@ class EdgeTTSProvider:
         self,
         config: Dict[str, Any],
         event_bus: Optional[EventBus] = None,
-        audio_stream_channel: Optional[AudioStreamChannel] = None,
     ):
         self.config = config
         self.event_bus = event_bus
-        self.audio_stream_channel = audio_stream_channel
         self.logger = get_logger(self.__class__.__name__)
 
         self.typed_config = self.ConfigSchema.from_dict(config)
@@ -158,29 +155,15 @@ class EdgeTTSProvider:
             self.logger.debug("TTS 文本为空，跳过渲染")
             return
         async with self.tts_lock:
-            await self._notify_audio_start(text)
-            try:
-                await self._synthesize(text)
-            finally:
-                await self._notify_audio_end(text)
+            await self._synthesize(text)
 
     async def _synthesize(self, text: str) -> None:
-        """执行 TTS 合成 + publish + 播放（对应父类 handle() 模板）"""
+        """执行 TTS 合成 + 播放（对应父类 handle() 模板）"""
         self.logger.debug(f"开始 TTS 渲染: '{text[:30]}...'")
         try:
             audio_array, samplerate = await self._edge_tts_synthesize(text)
             duration_seconds = len(audio_array) / samplerate if samplerate > 0 else 3.0
             self.logger.debug(f"音频时长: {duration_seconds:.3f}秒")
-
-            chunk_size = 1024
-            for i in range(0, len(audio_array), chunk_size):
-                chunk_data = audio_array[i : i + chunk_size]
-                await self._publish_chunk(
-                    data=chunk_data.tobytes(),
-                    sample_rate=samplerate,
-                    channels=1,
-                    sequence=i // chunk_size,
-                )
 
             self.logger.debug("开始播放音频...")
             await self.audio_manager.play_audio(audio_array)
@@ -230,34 +213,6 @@ class EdgeTTSProvider:
                 manager.set_output_device(device_index=index)
         self.audio_manager = manager
 
-    async def _notify_audio_start(self, text: str) -> None:
-        if self.audio_stream_channel:
-            from src.modules.streaming.audio_chunk import AudioMetadata
-
-            await self.audio_stream_channel.notify_start(AudioMetadata(text=text, sample_rate=0, channels=0))
-
-    async def _notify_audio_end(self, text: str) -> None:
-        if self.audio_stream_channel:
-            from src.modules.streaming.audio_chunk import AudioMetadata
-
-            await self.audio_stream_channel.notify_end(AudioMetadata(text=text, sample_rate=0, channels=0))
-
-    async def _publish_chunk(self, data: bytes, sample_rate: int, channels: int, sequence: int) -> None:
-        if self.audio_stream_channel:
-            import time as _time
-
-            from src.modules.streaming.audio_chunk import AudioChunk
-
-            await self.audio_stream_channel.publish(
-                AudioChunk(
-                    data=data,
-                    sample_rate=sample_rate,
-                    channels=channels,
-                    sequence=sequence,
-                    timestamp=_time.time(),
-                )
-            )
-
     def get_stats(self) -> Dict[str, Any]:
         return {
             "name": self.__class__.__name__,
@@ -287,12 +242,10 @@ def _fail(tool_name: str, error_message: str) -> ToolExecutionResult:
 def create_edge_tts_provider(
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
-    audio_stream_channel: Optional[AudioStreamChannel] = None,
 ) -> EdgeTTSProvider:
     return EdgeTTSProvider(
         config=config,
         event_bus=event_bus,
-        audio_stream_channel=audio_stream_channel,
     )
 
 
@@ -300,12 +253,10 @@ def register_edge_tts_tools(
     registry: Any,
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
-    audio_stream_channel: Optional[AudioStreamChannel] = None,
 ) -> EdgeTTSProvider:
     provider = create_edge_tts_provider(
         config=config,
         event_bus=event_bus,
-        audio_stream_channel=audio_stream_channel,
     )
     if hasattr(registry, "register_provider"):
         registry.register_provider(provider)

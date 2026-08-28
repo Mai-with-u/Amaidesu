@@ -17,7 +17,6 @@ from typing import Any, Dict, Optional
 
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
-from src.modules.streaming.audio_stream_channel import AudioStreamChannel
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 
 # python-osc 软降级
@@ -99,11 +98,9 @@ class VRChatProvider:
         self,
         config: Dict[str, Any],
         event_bus: Optional[EventBus] = None,
-        audio_stream_channel: Optional[AudioStreamChannel] = None,
     ):
         self.config = config
         self.event_bus = event_bus
-        self.audio_stream_channel = audio_stream_channel
         self.logger = get_logger(self.__class__.__name__)
 
         # 配置
@@ -266,12 +263,10 @@ def _fail(tool_name: str, error_message: str) -> ToolExecutionResult:
 def create_vrchat_provider(
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
-    audio_stream_channel: Optional[AudioStreamChannel] = None,
 ) -> VRChatProvider:
     return VRChatProvider(
         config=config,
         event_bus=event_bus,
-        audio_stream_channel=audio_stream_channel,
     )
 
 
@@ -279,12 +274,10 @@ def register_vrchat_tools(
     registry: Any,
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
-    audio_stream_channel: Optional[AudioStreamChannel] = None,
 ) -> VRChatProvider:
     provider = create_vrchat_provider(
         config=config,
         event_bus=event_bus,
-        audio_stream_channel=audio_stream_channel,
     )
     if hasattr(registry, "register_provider"):
         registry.register_provider(provider)

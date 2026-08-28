@@ -5,8 +5,7 @@ RemoteStreamTypes - 远程流消息协议与配置（Wave 4 拆分）
 
 - **保留**：``MessageType`` / ``StreamMessage`` / ``AudioConfig`` / ``ImageConfig``
   + 消息分发器（``_process_message``）
-- **删除**：websocket 服务端/客户端脚手架、``OUTPUT_OBS_COMMAND`` 事件订阅、
-  ``AudioStreamChannel`` 订阅（音频通过新架构的 AudioBus 传输，不再走此模块）
+- **删除**：websocket 服务端/客户端脚手架、``OUTPUT_OBS_COMMAND`` 事件订阅
 
 新架构下，远程流传输由独立 transport 层负责，本模块仅作为：
 - 消息协议定义（前后端共享）

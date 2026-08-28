@@ -22,7 +22,6 @@ from pydantic import Field
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
-from src.modules.streaming.audio_stream_channel import AudioStreamChannel
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tts import GPTSoVITSClient
 
@@ -103,11 +102,9 @@ class GPTSoVITSProvider:
         self,
         config: Dict[str, Any],
         event_bus: Optional[EventBus] = None,
-        audio_stream_channel: Optional[AudioStreamChannel] = None,
     ):
         self.config = config
         self.event_bus = event_bus
-        self.audio_stream_channel = audio_stream_channel
         self.logger = get_logger(self.__class__.__name__)
 
         self.typed_config = self.ConfigSchema.from_dict(config)
@@ -253,8 +250,6 @@ class GPTSoVITSProvider:
 
         try:
             async with self.tts_lock:
-                await self._notify_audio_start(final_text)
-
                 audio_stream = self.tts_client.tts_stream(  # type: ignore[union-attr]
                     text=final_text,
                     text_lang=self.text_language,
@@ -277,17 +272,10 @@ class GPTSoVITSProvider:
                 chunk_index = 0
                 async for chunk in self._process_audio_stream(audio_stream):
                     if chunk is not None:
-                        await self._publish_chunk(
-                            data=chunk.tobytes(),
-                            sample_rate=self.sample_rate,
-                            channels=CHANNELS,
-                            sequence=chunk_index,
-                        )
                         self.audio_manager.write_chunk(chunk)
                         chunk_index += 1
 
                 self.audio_manager.stop_stream()
-                await self._notify_audio_end(final_text)
 
             self.logger.debug(f"TTS 播放完成: '{final_text[:30]}...'")
             self.render_count += 1
@@ -320,34 +308,6 @@ class GPTSoVITSProvider:
             self.logger.error(f"处理音频流失败: {e}", exc_info=True)
             raise
 
-    async def _notify_audio_start(self, text: str) -> None:
-        if self.audio_stream_channel:
-            from src.modules.streaming.audio_chunk import AudioMetadata
-
-            await self.audio_stream_channel.notify_start(AudioMetadata(text=text, sample_rate=0, channels=0))
-
-    async def _notify_audio_end(self, text: str) -> None:
-        if self.audio_stream_channel:
-            from src.modules.streaming.audio_chunk import AudioMetadata
-
-            await self.audio_stream_channel.notify_end(AudioMetadata(text=text, sample_rate=0, channels=0))
-
-    async def _publish_chunk(self, data: bytes, sample_rate: int, channels: int, sequence: int) -> None:
-        if self.audio_stream_channel:
-            import time as _time
-
-            from src.modules.streaming.audio_chunk import AudioChunk
-
-            await self.audio_stream_channel.publish(
-                AudioChunk(
-                    data=data,
-                    sample_rate=sample_rate,
-                    channels=channels,
-                    sequence=sequence,
-                    timestamp=_time.time(),
-                )
-            )
-
     def get_stats(self) -> Dict[str, Any]:
         return {
             "name": self.__class__.__name__,
@@ -377,12 +337,10 @@ def _fail(tool_name: str, error_message: str) -> ToolExecutionResult:
 def create_gptsovits_provider(
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
-    audio_stream_channel: Optional[AudioStreamChannel] = None,
 ) -> GPTSoVITSProvider:
     return GPTSoVITSProvider(
         config=config,
         event_bus=event_bus,
-        audio_stream_channel=audio_stream_channel,
     )
 
 
@@ -390,12 +348,10 @@ def register_gptsovits_tools(
     registry: Any,
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
-    audio_stream_channel: Optional[AudioStreamChannel] = None,
 ) -> GPTSoVITSProvider:
     provider = create_gptsovits_provider(
         config=config,
         event_bus=event_bus,
-        audio_stream_channel=audio_stream_channel,
     )
     if hasattr(registry, "register_provider"):
         registry.register_provider(provider)

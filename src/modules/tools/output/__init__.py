@@ -5,7 +5,7 @@
 | 子包 | 内容 |
 |---|---|
 | ``vts/``     | VTS 全家桶 + VRChat（VTSHandler, LipSyncProcessor, ExpressionController, HotkeyMatcher, IdleMotionController, VRChatProvider） |
-| ``warudo/``  | Warudo 全家桶（WarudoProvider + 5 state 类 + 5 后台任务 + SubtitleManager + Sender + LipSyncSubscriber） |
+| ``warudo/``  | Warudo 全家桶（WarudoProvider + 5 state 类 + 5 后台任务 + SubtitleManager + Sender） |
 | ``tts/``     | 4 个 TTS Provider（EdgeTTS / GPTSoVITS / OmniTTS / Voicebox） |
 | ``subtitle/`` | Subtitle GUI 服务 + push_subtitle 工具（拆分） |
 | ``obs/``     | OBS Provider（3 个工具：send_text / switch_scene / set_source_visibility） |

@@ -498,7 +498,7 @@ async def my_lightweight_tool(invocation: ToolInvocation) -> ToolExecutionResult
 **谁调用注册？**
 
 - **Agent 专属工具**：Agent 子类 `_register_tools()` 方法（参考 `StreamerAgent._register_tools`、`TextAdvGameAgent._register_tools`）。在 Agent `_on_start` 阶段调用。
-- **公用 builtin 工具**：在装配根（`main.py` 或专用 wiring 模块）调 `register_xxx_tool(registry)`，通常 `AudioStreamChannel` 启动后 / `LLMManager.setup` 之后立即注册。
+- **公用 builtin 工具**：在装配根（`main.py` 或专用 wiring 模块）调 `register_xxx_tool(registry)`，通常在 `LLMManager.setup` 之后立即注册。
 - **工具注册聚合**：生产路径下不存在任何 manager 级聚合函数（旧 `register_all_tools` / `collect_tool_specs` / `_make_agent_tool_bridge` 已删除）——Agent 子类在 `_register_tools()` 中自己 `registry.register_provider(provider)`；`tools/output/*` 等公用 builtin 包由 `main.py` 的 `bind_core_tools(registry, slice)` 显式调 `register_*_tools(registry, config)`；L1 `@tool` 待注册条目由 `bind_pending_tools(registry)` flush；启动结束后 `audit_tools(registry)` 只做只读审计、列出未实现声明并 warning，不参与注入。
 
 ### 测试要点

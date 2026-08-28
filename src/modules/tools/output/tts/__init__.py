@@ -6,8 +6,9 @@
 
 迁移策略（与 .omo/drafts/amaidesu-v2-migration.md A 段对齐）:
 - ``EdgeTTS`` / ``GPTSoVITS`` / ``Voicebox``: ConfigSchema / init / setup /
-  ``_synthesize`` verbatim；仅构造器注入（``AudioStreamChannel`` 改为可选），
-  工具通过 ``ToolRegistry.invoke()`` 入口调用 ``handle_speech()``。
+  ``_synthesize`` verbatim；仅本地音频设备播放（``AudioDeviceManager``），不再
+  通过扇出通道分发音频块；工具通过 ``ToolRegistry.invoke()`` 入口调用
+  ``handle_speech()``。
 - ``OmniTTS``: 仅迁移不改造（不补文本清洗，不修复 KeyError 已知问题）。
 """
 

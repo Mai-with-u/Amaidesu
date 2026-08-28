@@ -5,8 +5,7 @@ WarudoProvider - Warudo 虚拟形象工具集（Wave 4 / §1.5）
 从 3 阶段 OutputHandler 改写为 ToolProvider 协议实现：
 
 - 引擎子件（``WarudoStateManager`` + 5 state 类 / 5 后台任务 / ``WarudoSubtitleManager``
-  / ``ActionSender`` / ``WarudoLipSyncSubscriber``）verbatim 复用，仅
-  import 路径变更。
+  / ``ActionSender``）verbatim 复用，仅 import 路径变更。
 - ``AvatarHandlerBase`` 继承被去除；ToolProvider 协议由本类自身实现。
 - 暴露的工具：
   - ``warudo_set_expression``   - 设置 blendshape 表情参数
@@ -33,12 +32,8 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
-from src.modules.streaming.audio_stream_channel import (
-    AudioStreamChannel,
-)
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 
-from .lip_sync_subscriber import WarudoLipSyncSubscriber
 from .state.warudo_state_manager import WarudoStateManager
 from .subtitle.subtitle_manager import WarudoSubtitleManager
 from .tasks.blink_task import BlinkTask
@@ -199,22 +194,15 @@ class WarudoProvider:
         self,
         config: Dict[str, Any],
         event_bus: Optional[EventBus] = None,
-        audio_stream_channel: Optional[AudioStreamChannel] = None,
     ):
         self.config = config
         self.event_bus = event_bus
-        self.audio_stream_channel = audio_stream_channel
         self.logger = get_logger(self.__class__.__name__)
 
         # 配置
         self.ws_host: str = str(config.get("ws_host", "localhost"))
         self.ws_port: int = int(config.get("ws_port", 19190))
         self.reconnect_delay_seconds: float = float(config.get("reconnect_delay_seconds", 5.0))
-        self.lip_sync_enabled: bool = bool(config.get("lip_sync_enabled", True))
-        self.lip_sync_sample_rate: int = int(config.get("lip_sync_sample_rate", 16000))
-        self.lip_sync_volume_threshold: float = float(config.get("lip_sync_volume_threshold", 0.01))
-        self.lip_sync_smoothing_factor: float = float(config.get("lip_sync_smoothing_factor", 0.3))
-        self.lip_sync_sensitivity: float = float(config.get("lip_sync_sensitivity", 0.5))
         self.subtitle_enabled: bool = bool(config.get("subtitle_enabled", True))
         self.subtitle_port: int = int(config.get("subtitle_port", 8766))
         self.subtitle_show_status: bool = bool(config.get("subtitle_show_status", False))
@@ -242,7 +230,6 @@ class WarudoProvider:
         self._connection_task: Optional[asyncio.Task] = None
         self._should_stop: bool = False
         self._first_connection: bool = True
-        self._lip_sync_sub_id: Optional[str] = None
 
         # 单实例 ActionSender
         self._action_sender = ActionSender()
@@ -280,20 +267,6 @@ class WarudoProvider:
                 port=self.subtitle_port,
                 show_status=self.subtitle_show_status,
                 logger=self.logger,
-            )
-
-        self.lip_sync: Optional[WarudoLipSyncSubscriber] = None
-        if self.lip_sync_enabled and audio_stream_channel is not None:
-            self.lip_sync = WarudoLipSyncSubscriber(
-                state_manager=self.state_manager,
-                logger_name=f"{self.__class__.__name__}.LipSync",
-                sample_rate=self.lip_sync_sample_rate,
-                volume_threshold=self.lip_sync_volume_threshold,
-                smoothing_factor=self.lip_sync_smoothing_factor,
-                vowel_detection_sensitivity=self.lip_sync_sensitivity,
-                is_connected=lambda: self._is_connected,
-                on_audio_start_hook=self.on_audio_start_proxy,
-                on_audio_end_hook=self.on_audio_end_proxy,
             )
 
         self._is_connected = False
@@ -462,15 +435,6 @@ class WarudoProvider:
         if not self._has_started:
             return
 
-        # 取消音频订阅
-        if self._lip_sync_sub_id and self.audio_stream_channel:
-            try:
-                await self.audio_stream_channel.unsubscribe(self._lip_sync_sub_id)
-            except Exception as e:
-                self.logger.error(f"取消 lip-sync 订阅失败: {e}")
-            finally:
-                self._lip_sync_sub_id = None
-
         # 停止后台任务
         try:
             await self.blink_task.stop()
@@ -553,20 +517,12 @@ class WarudoProvider:
             self.talking_head_task.is_talking = False
         self.state_manager.sight_state.set_state("camera", 0.0)
 
-    async def on_audio_start_proxy(self) -> None:
-        await self.start_talking()
-
-    async def on_audio_end_proxy(self) -> None:
-        await self.stop_talking()
-
     def get_stats(self) -> Dict[str, Any]:
         return {
             "name": self.__class__.__name__,
             "is_connected": self._is_connected,
             "render_count": self.render_count,
             "error_count": self.error_count,
-            "lip_sync_enabled": self.lip_sync is not None,
-            "lip_sync_subscribed": self._lip_sync_sub_id is not None,
             "subtitle_enabled": self.subtitle_manager is not None,
             "talking_head_running": self.talking_head_task.running if self.talking_head_task else False,
         }
@@ -724,24 +680,6 @@ class WarudoProvider:
             except Exception as e:
                 self.logger.error(f"启动字幕服务器失败: {e}")
 
-        if self.lip_sync is not None and self.audio_stream_channel is not None:
-            try:
-                from src.modules.streaming.backpressure import BackpressureStrategy, SubscriberConfig
-
-                self._lip_sync_sub_id = await self.audio_stream_channel.subscribe(
-                    name="warudo_lip_sync",
-                    on_audio_start=self.lip_sync.on_start,
-                    on_audio_chunk=self.lip_sync.on_chunk,
-                    on_audio_end=self.lip_sync.on_end,
-                    config=SubscriberConfig(
-                        queue_size=200,
-                        backpressure_strategy=BackpressureStrategy.DROP_NEWEST,
-                    ),
-                )
-                self.logger.info("已订阅 AudioStreamChannel 进行 lip-sync")
-            except Exception as e:
-                self.logger.error(f"订阅 AudioStreamChannel 失败: {e}")
-
 
 # =============================================================================
 # 工厂 / 注册辅助
@@ -768,12 +706,10 @@ def _fail(tool_name: str, error_message: str) -> ToolExecutionResult:
 def create_warudo_provider(
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
-    audio_stream_channel: Optional[AudioStreamChannel] = None,
 ) -> WarudoProvider:
     return WarudoProvider(
         config=config,
         event_bus=event_bus,
-        audio_stream_channel=audio_stream_channel,
     )
 
 
@@ -781,12 +717,10 @@ def register_warudo_tools(
     registry: Any,
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
-    audio_stream_channel: Optional[AudioStreamChannel] = None,
 ) -> WarudoProvider:
     provider = create_warudo_provider(
         config=config,
         event_bus=event_bus,
-        audio_stream_channel=audio_stream_channel,
     )
     if hasattr(registry, "register_provider"):
         registry.register_provider(provider)
