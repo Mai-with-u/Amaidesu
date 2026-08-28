@@ -25,7 +25,8 @@ flowchart TB
     subgraph Ext["外部输入"]
         Bili["B 站弹幕 official / legacy"]
         Cons["控制台"]
-        Mock["模拟输入"]
+        Mock["模拟输入<br/>(MockCollector JSONL 回放)"]
+        Sim["模拟输入<br/>(SimulatorService LLM 仿真<br/>条件装配，仅开发期)"]
         Mic["麦克风 STT"]
         Screen["屏幕变化"]
     end
@@ -238,4 +239,6 @@ v2 中不同数据走不同通道，不要混用：
 
 ---
 
-*最后更新：2026-08-27（v2.0.6 AudioStreamChannel 拆除：通信机制选型表删除 pub-sub 行、改写为"已拆除的 AudioStreamChannel"说明段；图例说明补一句口型同步链路已拆除；v2.0.5 工具注册路径对齐：防换皮红线节 MC Agent 示例改为 Agent 子类 `_register_tools()` 自注册 + 装配根 `bind_core_tools` / `bind_pending_tools` 显式注入 + `audit_tools` 只读审计；删除 `AgentManager.register_all_tools` 引用）*
+*最后更新：2026-08-28（ADR-006 落地：§1 事件流向图 Ext 子图新增 SimulatorService 节点（条件装配，仅开发期；与 MockCollector JSONL 回放互补不互斥）；二者均发布 `room.message.*` payload 且 `simulated=True` 溯源，统计查询 `WHERE simulated = 0` 排除）*
+
+*上次更新：2026-08-27（v2.0.6 AudioStreamChannel 拆除：通信机制选型表删除 pub-sub 行、改写为"已拆除的 AudioStreamChannel"说明段；图例说明补一句口型同步链路已拆除；v2.0.5 工具注册路径对齐：防换皮红线节 MC Agent 示例改为 Agent 子类 `_register_tools()` 自注册 + 装配根 `bind_core_tools` / `bind_pending_tools` 显式注入 + `audit_tools` 只读审计；删除 `AgentManager.register_all_tools` 引用）*

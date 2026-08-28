@@ -118,6 +118,11 @@ class RoomMessagePayload(BasePayload):
         default_factory=lambda: now_ms(),
         description="事件时间戳（Unix 毫秒）",
     )
+    simulated: bool = Field(
+        default=False,
+        description="数据溯源标记：True=模拟/回放源（mock_collector 或 SimulatorService）"
+        "，统计与入库需过滤（参照 §1.6 / ADR-006）",
+    )
 
     model_config = ConfigDict(
         json_schema_extra={

@@ -87,7 +87,7 @@ Amaidesu/
 │       ├── collectors/          # 输入采集域（BaseCollector + CollectorManager + 各域 Collector）
 │       │   ├── bilibili/        #   B 站弹幕（legacy 第三方 / official WebSocket）
 │       │   ├── console/         #   控制台输入
-│       │   ├── mock/            #   模拟弹幕（合并自旧 mock_danmaku + simulator，见"已知缺口"）
+│       │   ├── mock/            #   确定性 JSONL 回放器（v2.0.7+ ADR-006：仅 jsonl 模式，模拟输入由 simulator/ 接管）
 │       │   ├── screen/          #   屏幕变化
 │       │   └── stt/             #   语音识别
 │       ├── tools/               # 工具族（ToolRegistry + 各 Provider；按 provider=builtin|game 溯源）
@@ -104,7 +104,7 @@ Amaidesu/
 │       ├── logging/             # 日志 + LogStreamer
 │       ├── memory/              # MemoryProvider + SimpleMemory + query_memory 工具
 │       ├── prompts/             # PromptManager（声明式键自动发现）
-│       ├── simulator/           # 已脱线（仅残留 prompts 子目录；模拟输入由 collectors/mock 承载）
+│       ├── simulator/           # v2.0.7+ ADR-006：LLM 驱动仿真器（开发基础设施）；[simulator].enabled=true 时组合根装配；服务类 SimulatorService + 8 个核心实现类（persona_pool / cadence / gift_generator / llm_wrapper / session_selector / token_budget / types / config_schema）。默认 enabled=false，生产零沾染。详见 docs/development/simulator-guide.md。
 │       ├── storage/             # SQLite 存储层
 │       ├── tts/                 # TTS 客户端
 │       └── types/               # 共享类型（NormalizedMessage 等）
@@ -129,6 +129,7 @@ sequenceDiagram
     participant Int as 拦截器链
     participant Rec as EventHistoryRecorder
     participant Col as CollectorManager
+    participant Sim as SimulatorService<br/>（条件装配）
     participant Agt as AgentManager
     participant Log as LogStreamer
     participant Dash as DashboardServer
@@ -144,6 +145,7 @@ sequenceDiagram
     Main->>Int: 3) register_event_interceptors（rate_limit + similar_filter）
     Main->>Rec: 3) EventHistoryRecorder.start
     Main->>Col: 4) CollectorManager + _register_collectors_from_config + start_all
+    Main->>Sim: 4b) SimulatorService.setup(auto_start=not args.dry)<br/>（条件：[simulator].enabled=true；--dry 强制 auto_start=False 不产生 LLM 调用）
     Main->>Agt: 5) AgentManager + _register_agents_from_config
     Main->>Reg: 5a) bind_core_tools(registry, [tools.output.config] slice)（9 个 output 包自注册）
     Main->>Reg: 5b) bind_pending_tools(registry)（flush L1 @tool pending）
@@ -170,6 +172,7 @@ sequenceDiagram
     autonumber
     participant Main as main.py
     participant Col as CollectorManager
+    participant Sim as SimulatorService<br/>（条件装配）
     participant Agt as AgentManager
     participant Dash as DashboardServer
     participant Rec as EventHistoryRecorder
@@ -178,6 +181,7 @@ sequenceDiagram
     participant Ctx as ContextService
 
     Main->>Col: 1) stop_all() + cleanup_all()
+    Main->>Sim: 1.5) stop() + cleanup()（条件：装配了 SimulatorService）
     Main->>Agt: 2) stop_all() + cleanup_all()
     Main->>Dash: 3) stop() + cleanup()
     Main->>Rec: 4) stop() + event_history.cleanup()
@@ -197,7 +201,7 @@ sequenceDiagram
 | `bili_danmaku_official` | `src/modules/collectors/bilibili/official/` | v2 主动推（`_emit_semantic_events=True`，collect 内自行 emit `room.message.*`） | B 站官方 WebSocket 弹幕；含 `client/proto.py` + `client/websocket_client.py` |
 | `bili_danmaku` | `src/modules/collectors/bilibili/legacy/` | v2 主动推（`_emit_semantic_events=True`） | B 站第三方 HTTP API 弹幕 |
 | `console_input` | `src/modules/collectors/console/` | 兜底转发（基类 `_emit_normalized_message` 把 `data_type` 映射为 `room.message.danmaku/gift/super_chat/enter`） | 控制台输入 |
-| `mock_danmaku` | `src/modules/collectors/mock/` | v2 主动推；合并了旧 `mock_danmaku` 与 `simulator` 的数据与逻辑 | 模拟弹幕 / 模拟直播间 |
+| `mock_danmaku` | `src/modules/collectors/mock/` | v2 主动推；**v2.0.7+ ADR-006 收敛后仅保留 JSONL 回放**（LLM 驱动仿真由 `src/modules/simulator/` 的 `SimulatorService` 承担，二者互补不互斥） | 确定性 JSONL 回放器 |
 | `screen_change` | `src/modules/collectors/screen/` | 兜底转发 | 屏幕变化检测（`screen_change_collector.py`）；同目录另有 `screen_reader.py` + `screen_analyzer.py` 辅助 |
 | `stt` | `src/modules/collectors/stt/` | 兜底转发 | 语音识别（`stt_collector.py` + `config.py`） |
 
@@ -375,7 +379,7 @@ bili_danmaku_official = { ... }
 
 2. **AudioStreamChannel 已拆除（2026-08-27）**。v2 pull 编排下无扇出场景，audio pub-sub 链路（`src/modules/streaming/`，300+ 行：AudioStreamChannel / AudioChunk / BackpressureStrategy）已删除；TTS 输出回归本地 `AudioDeviceManager.play_audio`；皮套口型同步责任短期由皮套软件自取本地音频流 / 中期由工具 invoke 能力重建。`LipSyncProcessor` 保留（无其他活跃调用方时仅作历史兜底，可按 git 历史回滚）。
 
-3. **`src/modules/simulator/` 已脱线**。该目录仅残留 `prompts/` 子目录 + `__pycache__/`，业务代码已迁出。模拟输入（模拟弹幕、模拟直播间）现在由 `src/modules/collectors/mock/` 承载（`mock_collector.py` 注释明确说明"合并自旧 mock_danmaku 域 + `src/modules/simulator/`"）。组合根不引用 `simulator` 包。**残留的 `src/modules/simulator/prompts/` 与空壳目录应在清理阶段移除**，但目前不影响功能。
+3. **存储记账器未从 payload 取 `simulated` 写入 SQLite 列**。`live_chat` / `gifts` / `super_chats` 表已有 `simulated INTEGER NOT NULL DEFAULT 0` 贯穿列（`src/modules/storage/schema.py:149/163/177`），但记账器写入链尚未从 `RoomMessagePayload.simulated` 读取该字段写入对应列。修复方向：记账器订阅 `room.message.*` 事件，从 payload 取值写入对应列；**不需升 `SCHEMA_VERSION`**（表结构已就位，仅缺数据迁移链）。本任务停在 payload 层标记完成（详见 ADR-006 §C 与 [模拟器指南 §4](../development/simulator-guide.md#4-simulated-溯源)）。
 
 ## 相关文档
 
@@ -389,4 +393,6 @@ bili_danmaku_official = { ... }
 
 ---
 
-*最后更新：2026-08-27（v2.0.6 AudioStreamChannel 拆除：组合根阶 1 步骤删除、`src/modules/streaming/` 全包 `git rm`、4 个 TTS 工具 + VTS/Warudo/VRChat Provider 移除 audio_stream_channel 注入、`lip_sync_subscriber.py` 删除；`LipSyncProcessor.on_start/on_chunk/on_end` 通道回调删除（会话方法保留）；`remote_stream` 模块 docstring 移除 AudioBus 引用；启动时序 mermaid 同步去除 `Audio` 参与者，本节"已知缺口"对应条目重写为拆除说明；目录结构去掉 `streaming/` 行；v2.0.5 工具注册路径对齐：mermaid 节点 `AgentManager` 改 `audit_tools (只读)`；启动时序在 `start_all` 前补 `bind_core_tools` / `bind_pending_tools` 两步、`start_all` 后补 `audit_tools` 一步；`manager.py` 行删除 `register_all_tools` / `collect_tool_specs` 改为 `audit_tools` 只读审计；MC Agent 示例改为 Agent 子类自注册 + 显式 bind）*
+*最后更新：2026-08-28（ADR-006 落地：mock_danmaku 表格描述收敛为"确定性 JSONL 回放器（LLM 仿真由 simulator/ SimulatorService 承担）"；`simulator/` 目录条目改写为开发基础设施描述；启动时序补 4b SimulatorService 步骤（条件装配，--dry 强制 auto_start=False）、关闭时序补 1.5 SimulatorService 关闭步骤；已知缺口第 3 条由 `simulator/` 已脱线替换为"存储记账器 simulated 列写入链缺口"——`live_chat`/`gifts`/`super_chats` 表已有列但记账器未从 payload 读取，**不升 SCHEMA_VERSION**）*
+
+*上次更新：2026-08-27（v2.0.6 AudioStreamChannel 拆除：组合根阶 1 步骤删除、`src/modules/streaming/` 全包 `git rm`、4 个 TTS 工具 + VTS/Warudo/VRChat Provider 移除 audio_stream_channel 注入、`lip_sync_subscriber.py` 删除；`LipSyncProcessor.on_start/on_chunk/on_end` 通道回调删除（会话方法保留）；`remote_stream` 模块 docstring 移除 AudioBus 引用；启动时序 mermaid 同步去除 `Audio` 参与者，本节"已知缺口"对应条目重写为拆除说明；目录结构去掉 `streaming/` 行；v2.0.5 工具注册路径对齐：mermaid 节点 `AgentManager` 改 `audit_tools (只读)`；启动时序在 `start_all` 前补 `bind_core_tools` / `bind_pending_tools` 两步、`start_all` 后补 `audit_tools` 一步；`manager.py` 行删除 `register_all_tools` / `collect_tool_specs` 改为 `audit_tools` 只读审计；MC Agent 示例改为 Agent 子类自注册 + 显式 bind）*

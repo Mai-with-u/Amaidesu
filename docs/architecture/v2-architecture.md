@@ -184,7 +184,8 @@ core / model / agents / tools / memory / storage / background 七文件按领域
 
 - **渲染工具注册接线未自动化**：TTS/字幕/VTS 等 `register_*_tools` 尚无组合根调用点，当前默认装配下需显式注册；
 - **AudioStreamChannel 已拆除**（v2 pull 编排下无扇出场景，lip-sync 责任归皮套软件 + 工具 invoke 能力的重建）；
-- **迁移期遗留待清理**：`src/modules/config/schemas/input_schemas.py`、`output_schemas.py`（不再被加载的旧 Schema）、`src/modules/simulator/`（已被 mock 采集器取代的死代码候选）、main.py 顶部过期 docstring；
+- **迁移期遗留待清理**：`src/modules/config/schemas/input_schemas.py`、`output_schemas.py`（不再被加载的旧 Schema）、main.py 顶部过期 docstring；
+- **存储记账器 `simulated` 列写入链**：`live_chat` / `gifts` / `super_chats` 表已有 `simulated INTEGER NOT NULL DEFAULT 0` 贯穿列（schema 已就位），但记账器尚未从 `RoomMessagePayload.simulated` 读取该字段写入对应列——属存储侧改造，**不升 SCHEMA_VERSION**（详见 ADR-006 §C + [模拟器指南 §4](development/simulator-guide.md#4-simulated-溯源)）；
 - `@tool` 装饰器与 ToolProvider 双路径并存，实际主路径为 ToolProvider 类。
 
 这些不影响架构成立，但属于"叙事已更新、细节待抹平"的部分，将在后续迭代中逐项消化。
@@ -202,4 +203,6 @@ core / model / agents / tools / memory / storage / background 七文件按领域
 
 ---
 
-*最后更新：2026-08-27（v2.0.6 AudioStreamChannel 拆除：九节"遗留与下一步"对应条目改写为拆除说明；首版：四代架构史、主体性判据、防换皮铁闸、全景与九 Wave 落地叙事）*
+*最后更新：2026-08-28（ADR-006 翻转：九节"遗留与下一步"删除"src/modules/simulator/（已被 mock 采集器取代的死代码候选）"行，替换为"存储记账器 simulated 列写入链缺口"——`live_chat`/`gifts`/`super_chats` 表已有列但记账器未从 payload 读取，**不升 SCHEMA_VERSION**；simulator 包按 ADR-006 重新激活为开发基础设施）*
+
+*上次更新：2026-08-27（v2.0.6 AudioStreamChannel 拆除：九节"遗留与下一步"对应条目改写为拆除说明；首版：四代架构史、主体性判据、防换皮铁闸、全景与九 Wave 落地叙事）*

@@ -25,9 +25,9 @@ def test_mock_inherits_base_collector() -> None:
 
 
 def test_mock_metadata() -> None:
-    """元数据正确"""
+    """元数据正确（ADR-006 收敛后 MockCollector = 确定性 JSONL 回放器）"""
     assert MockCollector.name == "mock"
-    assert "模拟" in MockCollector.description
+    assert "JSONL" in MockCollector.description or "回放" in MockCollector.description
 
 
 def test_mock_normalized_message_carries_simulated_flag() -> None:
@@ -55,7 +55,7 @@ def test_mock_normalized_message_carries_simulated_flag() -> None:
 
 def test_mock_jsonl_loads_default_data() -> None:
     """JSONL 模式：从默认 data/msg_default.jsonl 加载消息"""
-    collector = MockCollector(config={"mode": "jsonl"})
+    collector = MockCollector(config={})
     assert collector is not None
     # 不启动循环，只验证数据加载函数能跑通
     asyncio.run(collector._load_message_lines())
@@ -63,17 +63,42 @@ def test_mock_jsonl_loads_default_data() -> None:
     assert len(collector._message_lines) > 0, "JSONL 默认数据应能加载"
 
 
-def test_mock_simulator_mode_has_gifts_pool() -> None:
-    """simulator 模式：礼物清单（来自 simulator_gifts.toml 素材池）正确分类加载
+def test_mock_only_supports_jsonl_mode() -> None:
+    """ADR-006 收敛后 MockCollector 仅保留 jsonl 模式，无 simulator 模式字段。
 
-    验证人设池/礼物生成器覆盖：原 mock 合并了 simulator 的素材池，
-    本测试保证 W5 合并后素材池逻辑仍工作。
+    验证 ConfigSchema 已移除 mode 字段（jsonl 是唯一保留模式）。
     """
-    collector = MockCollector(config={"mode": "simulator"})
-    gifts = asyncio.run(collector._load_gifts())
-    assert gifts, "礼物清单应能加载"
-    # 至少 normal + sc 类别
-    assert "normal" in gifts or "sc" in gifts
-    # 加载了至少一个礼物
-    total = sum(len(v) for v in gifts.values())
-    assert total > 0, f"应至少加载 1 个礼物，实际 {total}"
+    from src.modules.collectors.mock.mock_collector import MockCollector as MC
+
+    schema_fields = set(MC.ConfigSchema.model_fields.keys())
+    assert "mode" not in schema_fields, "ConfigSchema.mode 字段已移除（ADR-006）"
+    # jsonl 模式字段必须保留
+    assert "log_file_path" in schema_fields
+    assert "send_interval" in schema_fields
+    assert "loop_playback" in schema_fields
+
+
+def test_mock_normalized_message_carries_simulated_flag_for_payload() -> None:
+    """所有从 mock 产出的 payload 携带 simulated=True（数据溯源，§1.6 / ADR-006）
+
+    验证 _emit_danmaku 透传 simulated 标记到 RoomMessagePayload（存储层过滤依据）。
+    """
+    from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
+
+    msg = NormalizedMessage(
+        text="测试弹幕",
+        source="mock",
+        data_type="text",
+        importance=0.5,
+        timestamp_ms=0,
+        simulated=True,
+    )
+    payload = RoomMessagePayload(
+        live_session_id="test_session",
+        message_type="danmaku",
+        user=RoomMessageUser(id="u1", name="user"),
+        content=msg.text,
+        timestamp_ms=msg.timestamp_ms,
+        simulated=bool(msg.simulated),
+    )
+    assert payload.simulated is True, "payload.simulated 字段必须透传 NormalizedMessage.simulated"

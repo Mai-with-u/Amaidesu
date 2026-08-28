@@ -16,7 +16,7 @@ Wave 6 重写变更：
 - 删除旧 stage 装饰器导入（src.stages.input.collectors/pipelines/deciders/output.manager/output.pipelines）
 - Agent / Tool 注册走 config [agents]/[tools] 段 + StreamerAgent 自身
 - 事件拦截器（rate_limit / similar_filter）通过 EventBus.add_interceptor 注册
-- 关闭顺序：CollectorManager.stop_all → AgentManager.stop_all → EventRecorder.stop → EventBus.cleanup → LLMManager.cleanup → ContextService.cleanup
+- 关闭顺序：CollectorManager.stop_all → SimulatorService.stop → AgentManager.stop_all → EventRecorder.stop → EventBus.cleanup → LLMManager.cleanup → ContextService.cleanup
 """
 
 from __future__ import annotations
@@ -50,6 +50,7 @@ from src.modules.events.interceptors import (
 from src.modules.llm.manager import LLMManager
 from src.modules.logging import get_logger
 from src.modules.prompts import get_prompt_manager
+from src.modules.simulator import SimulatorService
 from src.modules.storage.sqlite_store import SQLiteStore
 
 logger = get_logger("Main")
@@ -278,6 +279,8 @@ async def create_app_components(
     config: Dict[str, Any],
     config_service: ConfigService,
     dev_webui: bool = False,
+    *,
+    simulator_auto_start: bool = True,
 ) -> Tuple[
     ContextService,
     EventBus,
@@ -286,6 +289,7 @@ async def create_app_components(
     Optional["EventHistoryRecorder"],
     Optional["CollectorManager"],
     Optional["AgentManager"],
+    Optional["SimulatorService"],
     "SQLiteStore",
 ]:
     """v2 组合根：构造并连接所有核心组件。
@@ -296,13 +300,22 @@ async def create_app_components(
     2b. 存储与记忆（SQLiteStore + SimpleMemory，§1.50 组合根接线）
     3. EventBus + 事件拦截器（§1.46.1）
     4. CollectorManager（采集器：bilibili/console/mock/screen）
+    4b. SimulatorService（ADR-006：LLM 模拟器，开发基础设施；[simulator].enabled=true 时装配并启动）
     5. AgentManager（Agent 子系统：StreamerAgent 等）
     6. ToolRegistry（bind_core_tools/bind_pending_tools 显式接线 + Agent 自注册，audit_tools 审计）
     7. DashboardServer（WebUI observer）
 
+    Args:
+        config: 完整配置字典
+        config_service: 配置服务实例
+        dev_webui: 是否启用 WebUI 开发模式
+        simulator_auto_start: 是否允许 SimulatorService 自动启动主循环。
+            ``--dry`` 模式传 False，避免产生 LLM 调用。
+
     Returns:
         (context_service, event_bus, llm_service, dashboard_server,
-         event_recorder, collector_manager, agent_manager, sqlite_store)
+         event_recorder, collector_manager, agent_manager,
+         simulator_service, sqlite_store)
     """
     # --- 1. LLM 服务 ---
     logger.info("初始化 LLM 服务...")
@@ -348,6 +361,28 @@ async def create_app_components(
         await _register_collectors_from_config(collector_manager, collectors_config, config_service, event_bus)
         await collector_manager.start_all()
         logger.info(f"CollectorManager 已启动（{len(collector_manager)} 个 Collector）")
+
+    # --- 4b. SimulatorService（ADR-006：开发基础设施）---
+    # 默认 enabled=false 生产零装配；enabled=true 时装配并自动启动（除非 --dry）。
+    # 装配需 LLMManager + EventBus + ConfigService（注入 services_by_type 供 LLMManager 类型 key 查找）。
+    simulator_service: Optional["SimulatorService"] = None
+    simulator_cfg = config.get("simulator", {}) if isinstance(config, dict) else {}
+    if isinstance(simulator_cfg, dict) and simulator_cfg.get("enabled", False):
+        logger.info("初始化 SimulatorService（src/modules/simulator/）...")
+        simulator_service = SimulatorService(
+            event_bus=event_bus,
+            services_by_type={type(llm_service): llm_service},
+        )
+        await simulator_service.setup(
+            config_service,
+            auto_start=simulator_auto_start,
+        )
+        if simulator_service.is_running:
+            logger.info("SimulatorService 已启动（[simulator].enabled=true）")
+        else:
+            logger.info("SimulatorService 已装配（enabled=true 但未启动，见 auto_start）")
+    else:
+        logger.debug("[simulator].enabled=false，零装配 SimulatorService")
 
     # --- 5. AgentManager + StreamerAgent ---
     agent_manager: Optional["AgentManager"] = None
@@ -461,6 +496,7 @@ async def create_app_components(
         event_recorder,
         collector_manager,
         agent_manager,
+        simulator_service,
         sqlite_store,
     )
 
@@ -744,19 +780,22 @@ async def run_shutdown(
     event_recorder: Optional["EventHistoryRecorder"],
     collector_manager: Optional["CollectorManager"],
     agent_manager: Optional["AgentManager"],
+    simulator_service: Optional["SimulatorService"],
     *,
     sqlite_store: Optional["SQLiteStore"] = None,
 ) -> None:
     """v2 关闭顺序（依赖关系反向）：
 
     1. 停止 CollectorManager（数据生产者，停止 emit 事件）
-    2. 停止 AgentManager（Agent 主循环，后台任务退出）
-    3. 停止 Dashboard（WebSocket 连接关闭）
-    4. 停止 EventHistoryRecorder（必须在 EventBus.cleanup 之前 off）
-    5. EventBus.cleanup（清除所有 listener）
-    6. LLMManager.cleanup
-    7. ContextService.cleanup
-    8. SQLiteStore.close（存储落盘收尾，最后关闭）
+    2. 停止 SimulatorService（ADR-006：开发基础设施，归类为输入域下游组件，
+       排在生产组件之后、EventBus.cleanup 之前）
+    3. 停止 AgentManager（Agent 主循环，后台任务退出）
+    4. 停止 Dashboard（WebSocket 连接关闭）
+    5. 停止 EventHistoryRecorder（必须在 EventBus.cleanup 之前 off）
+    6. EventBus.cleanup（清除所有 listener）
+    7. LLMManager.cleanup
+    8. ContextService.cleanup
+    9. SQLiteStore.close（存储落盘收尾，最后关闭）
     """
     _saw_cancelled = False
 
@@ -773,6 +812,12 @@ async def run_shutdown(
         await safe_log(collector_manager.stop_all(), "CollectorManager.stop_all")
         await safe_log(collector_manager.cleanup_all(), "CollectorManager.cleanup_all")
         logger.info("CollectorManager 已停止")
+
+    if simulator_service is not None:
+        logger.info("正在停止 SimulatorService...")
+        await safe_log(simulator_service.stop(), "SimulatorService.stop")
+        await safe_log(simulator_service.cleanup(), "SimulatorService.cleanup")
+        logger.info("SimulatorService 已停止")
 
     if agent_manager is not None:
         logger.info("正在停止 AgentManager...")
@@ -852,8 +897,14 @@ async def main() -> None:
         event_recorder,
         collector_manager,
         agent_manager,
+        simulator_service,
         sqlite_store,
-    ) = await create_app_components(config, config_service, dev_webui=args.dev_webui)
+    ) = await create_app_components(
+        config,
+        config_service,
+        dev_webui=args.dev_webui,
+        simulator_auto_start=not args.dry,
+    )
 
     if args.dry:
         logger.info("--dry 模式：仅验证组合根构造，组件已构造但不进入主循环")
@@ -866,6 +917,7 @@ async def main() -> None:
             event_recorder,
             collector_manager,
             agent_manager,
+            simulator_service,
             sqlite_store=sqlite_store,
         )
         return
@@ -890,6 +942,7 @@ async def main() -> None:
         event_recorder,
         collector_manager,
         agent_manager,
+        simulator_service,
         sqlite_store=sqlite_store,
     )
 

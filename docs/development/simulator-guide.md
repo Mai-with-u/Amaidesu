@@ -1,231 +1,201 @@
-# 模拟直播间调试工具
+# 模拟直播间开发基础设施
 
-## 现状（务必先读）
+> **v2.0.7+（ADR-006 已落地）**：本文按 [ADR-006：LLM 模拟器是官方开发基础设施，mock 采集器仅承担确定性回放](../architecture/adr/006-simulator-is-dev-infrastructure.md) 重写。**模拟器（`SimulatorService`）与 mock 采集器（`MockCollector`）是两种互补的开发工具——前者是 LLM 驱动的生成式仿真（开放性行为锻炼），后者是确定性 JSONL 回放（固定剧本与 bug 复现）。** 不要把它们当成"二选一"。
 
-v1 的 `SimulatorService`（独立输入模拟服务）已从组合根脱线，是候选移除项。当前模拟直播间输入**全部**由**模拟采集器** `MockCollector`（`src/modules/collectors/mock/mock_collector.py`）承担，`MockCollector` 继承 `BaseCollector`，作为持续流型感知者通过 EventBus 发布 `room.message.*` 语义事件，与真实弹幕走完全相同的数据通路。
+## 1. 定位与架构位置
 
-具体脱线说明：
+**模拟器 = 开发基础设施**（与 Dashboard / `--dry` / 日志系统同类），不属于生产直播组件：
 
-- `src/modules/simulator/simulator.py`：`LiveStreamSimulator` 已退化为最小 stub（`async for message in simulator.collect()` 返回空 async iterator，**不**产生任何消息）。模块顶部 docstring 明确指出 "真实模拟（人设池/节奏生成/礼物生成）的复杂逻辑由 `collectors/mock/` 取代"。
-- `src/modules/simulator/service.py`：`SimulatorService` 类仍存在（保留向后兼容接口供 Dashboard API 调用），但内部实例化的 `LiveStreamSimulator` 是 stub，所以即便构造并 `start()`，实际也不会向 EventBus 推送任何消息。
-- `main.py` 组合根：`grep SimulatorService main.py` 无实例化代码。`create_app_components()` 只走 CollectorManager → AgentManager → Dashboard 装配链，不创建 `SimulatorService`。
+- **默认关闭**：`[simulator].enabled = false`（生产零沾染）；
+- **按需装配**：组合根 `main.create_app_components` 在步骤 4b（CollectorManager 之后、AgentManager 之前）实例化 `SimulatorService` 并挂入生命周期；
+- **数据二等**：模拟器产生的事件 payload `simulated=True` 溯源标记贯穿，统计与入库一律排除（详见 §4）。
 
-若需旧 `SimulatorService` 的"LLM 驱动人设池 / 节奏生成 / 礼物模拟"能力，请改用 `MockCollector` 的 `mode="simulator"`（不引入 LLM 依赖，使用内置节奏 + 素材池）；若需要 LLM 驱动生成，当前请走真实采集器（如 `bili_danmaku_official`）接入真实直播间或自定义 Collector。
+**主体性判据检验**（AGENTS.md 红线）：模拟器不采集任何东西（不是采集器），不被调才干活（不是工具）；四态节奏与人设池自我驱动——按判据是 Agent 形态，但服务于开发者而非观众，故归入**开发工具域**以可选装配的开发服务形态存在。详见 ADR-006 第 33 行。
 
-## 历史沿革（背景）
+## 2. 快速上手
 
-- **v1**：模拟器是独立服务 `SimulatorService`，订阅 `output.intent.finished` 作元控制信号，通过 ContextService pull 模式读取主播最近发言作为 LLM 生成上下文，emit `room.message.*` 事件。
-- **v2（Wave 5 合并迁移）**：旧三阶段架构下的 mock 采集器与 `src/modules/simulator/` 合并到 `src/modules/collectors/mock/`，统一为 `MockCollector`，继承 `BaseCollector`，双模式（`jsonl` / `simulator`）。
-- **v2（Wave 6 §1.46）**：`SimulatorService` 退化为 stub 占位，仅保留接口兼容。
+### 2.1 启用方式
 
-下文统一按 v2 现状描述。
+在 `config/core.toml` 的 `[simulator]` 段设 `enabled = true`：
 
-## 数据流
+```toml
+# config/core.toml
+[simulator]
+enabled = true                                  # 启用模拟器（开发期临时开启）
+llm_client_type = "llm_fast"                    # 用 llm_fast profile（便宜/快）
+llm_temperature = 0.9                           # 创造性稍高
+token_budget_per_hour = 50000                   # 1 小时滑动窗口 token 硬上限
+```
+
+启动 `uv run python main.py`，观察到以下日志即装配成功：
+
+```
+INFO | SimulatorService - 模拟器配置已启用，自动启动中...
+INFO | SimulatorService - 模拟器服务已启动
+```
+
+`--dry` 模式下 `simulator_auto_start = False`，组合根**不**调用 `start()`，**不**产生任何 LLM 调用，验证 wiring 后立即退出。
+
+### 2.2 配置字段（22 个）
+
+| 字段 | 默认 | 说明 |
+|------|------|------|
+| `enabled` | `false` | 总开关；生产保持 `false` |
+| `base_rate_per_minute` | `6.0` | 基础消息率（条/分钟），`ge=0.1, le=60` |
+| `burst_multiplier` | `3.0` | BURST 态倍率（`ge=1.0, le=10`） |
+| `burst_min_interval_s` | `30.0` | 两次突发最小间隔（秒） |
+| `burst_cooldown_s` | `60.0` | 突发态持续时间（秒） |
+| `temp_passerby_ratio` | `0.3` | 路人比例（`ge=0.0, le=1.0`） |
+| `gift_probability` | `0.05` | 每条消息是礼物的概率 |
+| `sc_probability` | `0.01` | 每条消息是 SC 的概率 |
+| `context_window_size` | `5` | 读取主播上下文消息数（`ge=1, le=20`） |
+| `idle_threshold_s` | `300.0` | 主播无活动进入 IDLE 的阈值 |
+| `idle_rate_multiplier` | `0.2` | IDLE 态生成率倍率 |
+| `warmup_duration_s` | `300.0` | 启动暖场期时长 |
+| `max_message_chars` | `50` | 单条消息最大字符数 |
+| `llm_client_type` | `"llm_fast"` | LLM profile（`llm` / `llm_fast` / `vlm` 等） |
+| `llm_temperature` | `0.9` | LLM 采样温度 |
+| `token_budget_per_hour` | `50000` | 1 小时滑动窗口 token 硬上限 |
+| `max_concurrent_llm` | `8` | 最大并发 LLM 请求数 |
+| `enable_hater` | `false` | 是否启用黑粉人设（仅 dev） |
+| `language` | `"zh"` | 生成消息语言 |
+| `session_strategy` | `"smart"` | session 选择策略 |
+| `fallback_session_id` | `"simulated_viewers"` | 无活跃 session 时使用的 fallback |
+| `stats_persistence` | `false` | 是否持久化统计（v1 仅 in-memory） |
+| `cadence_mode` | `"uniform"` | 节奏模式：`uniform` / `fixed` / `auto` |
+| `fixed_interval_s` | `10.0` | `fixed` 模式的固定间隔（秒，`ge=1.0, le=120.0`） |
+
+> **JSONL 数据文件**：`gifts.toml` / `residents.toml` 位于 `data/simulator/`（运行时数据，由 simulator 包通过 `Path(__file__).resolve().parents[3] / "data" / "simulator"` 引用，可编辑）。**与 mock 采集器的数据目录分离**——mock 采集器的 `data/` 不再承载 simulator 字段。
+
+## 3. 工作原理（六组件编排）
+
+`SimulatorService` 是**生命周期管理器**，不亲自生成消息；它实例化本包 8 个核心实现类构建生成循环：
 
 ```text
-MockCollector.collect()
-  ├─ mode=jsonl    → 解析 data/msg_default.jsonl → NormalizedMessage(simulated=True)
-  └─ mode=simulator→ 内置节奏 + 素材池          → NormalizedMessage(simulated=True)
-                      │
-                      ▼
-       emit room.message.{danmaku,gift,super_chat,enter}
-                      │
-                      ▼
-            StreamerAgent 订阅消费（与其他采集器同链路）
+┌─────────────────────────────────────────────────────────────┐
+│ SimulatorService._run() 主循环（src/modules/simulator/service.py）│
+└─────────────────────────────────────────────────────────────┘
+                            │
+        ┌───────────────────┼───────────────────┐
+        ▼                   ▼                   ▼
+ CadenceGenerator      PersonaPool       SessionSelector
+（节奏状态机）         （人选池）          （活跃会话选择）
+  uniform/fixed/auto    常驻+路人加权       smart 策略
+        │                   │            fallback_session_id
+        │                   ▼
+        │              pick_one() → Persona
+        ▼
+ next_delay_seconds()  ┌──────────────────────┐
+        │              │ 概率分支             │
+        ▼              │  < gift_probability  │
+ (按间隔等待)          │    → GiftGenerator   │
+                       │  否则                │
+                       │    → SimulatorLLMWrapper│
+                       └──────────────────────┘
+                                  │
+                                  ▼
+                     RoomMessagePayload(simulated=True)
+                                  │
+                                  ▼
+                  EventBus.emit(ROOM_MESSAGE_DANMAKU, source="simulated_live_stream")
 ```
 
-## 快速开始
+### 3.1 八个核心实现类
 
-### 启用方式
+| 类 | 职责 | 文件 |
+|----|------|------|
+| `PersonaPool` | 常驻 + 临时路人混合池，加权选择 | `persona_pool.py` |
+| `CadenceGenerator` | WARMUP/NORMAL/BURST/IDLE 四态节奏机 | `cadence.py` |
+| `GiftGenerator` | 礼物/SC 生成（含 SC 文本 LLM 调用） | `gift_generator.py` |
+| `SimulatorLLMWrapper` | LLM 调用包装（prompt 渲染 + 信号量 + 响应清洗 + token 累计） | `llm_wrapper.py` |
+| `SessionSelector` | ContextService 活跃 session 智能选择（60s TTL 缓存） | `session_selector.py` |
+| `TokenBudgetController` | 1 小时滑动窗口 + 80%/100% 两级阈值 | `token_budget.py` |
+| `StreamerContextSnapshot` | 主播上下文快照数据结构 | `types.py` |
+| `SimulatorConfigSchema` | 配置 Pydantic Schema | `config_schema.py` |
 
-`MockCollector` 是采集器，按 v2 采集器约定在 `config/tools.toml` 的 `[tools.perception.config]` 下启用，**不**使用旧的 `config/simulator.toml` 或 `config/input.toml` 的 `collectors.enabled` 列表。
+### 3.2 主循环行为（service.py `_run()`）
 
-```toml
-# config/tools.toml
-[tools]
-enabled = ["perception"]
+1. **预算硬上限**：`token_budget.is_budget_exceeded()` → 跳过生成但保留循环可被 `stop_event` 唤醒
+2. **节奏间隔**：`cadence.next_delay_seconds()` → 用 `asyncio.wait_for(stop_event.wait(), timeout=delay)` 实现"可中断的间隔等待"
+3. **人选**：`persona_pool.pick_one()` → 按 `temp_passerby_ratio` 权重在常驻与路人之间选择
+4. **会话**：`session_selector.select_session(fallback_id)` → 选活跃 session 或 fallback
+5. **概率分支**：掷骰子 `< gift_probability` → `gift_generator.generate_gift()`；否则 → `llm_wrapper.generate_viewer_message()`
+6. **token 累计**：成功调用后 `token_budget.record_usage(tokens)`
+7. **emit**：`RoomMessagePayload(simulated=True, ...)` → `EventBus.emit(ROOM_MESSAGE_DANMAKU, source="simulated_live_stream")`
 
-[tools.perception.config]
-enabled = ["mock_danmaku"]                # 启用模拟采集器
-                                           # 注意是配置在 [tools.perception.config] 下，不是顶层 [collectors]
+### 3.3 LLM 缺失降级
 
-[tools.perception.config.mock_danmaku]
-mode = "jsonl"                             # "jsonl"（默认）| "simulator"
-log_file_path = "msg_default.jsonl"        # JSONL 文件名（相对 data_dir）
-send_interval = 1.0                        # JSONL 发送间隔（秒，ge=0.1）
-loop_playback = true                       # JSONL 到末尾是否循环
-emit_semantic_events = true                # 是否 emit room.message.* 语义事件
+`setup()` 通过 duck-type 在 `services_by_type` 探测 LLMManager（需 `chat` + `chat_fast` + `setup` 三属性）。**未注入时 warning 降级**：
 
-# simulator 模式字段（mode=simulator 时生效）
-base_rate_per_minute = 6.0                 # 基础消息率（条/分钟，ge=0.1, le=60）
-burst_multiplier = 3.0                     # 突发期倍率（ge=1.0, le=10）
-warmup_duration_s = 0.0                    # 启动暖场期时长（秒）
-gift_probability = 0.05                    # 礼物概率（ge=0.0, le=0.5）
-sc_probability = 0.01                      # SC 概率（ge=0.0, le=0.1）
-enable_hater = false                       # 是否启用黑粉人设
-gifts_toml = "simulator_gifts.toml"        # 礼物清单文件名（相对 data_dir）
-residents_toml = "simulator_residents.toml"# 常驻人设文件名（相对 data_dir）
+```
+WARNING | SimulatorService - simulator: LLMManager 未通过 services_by_type 注入，
+         LLM 生成循环将被禁用（仅数据平面就绪）
 ```
 
-`data_dir` 由 `MockCollector` 内部固定为 `src/modules/collectors/mock/data/`（即 `Path(__file__).resolve().parent / "data"`，**不**从 `config/` 根目录读取）。
+数据平面（人设池/节奏/礼物清单）正常就绪，但 `_llm_wrapper is None` → `start()` 不启动（"模拟器实例未创建" warning）。**主循环不抛异常**，可独立调试数据平面。
 
-### 启动
+### 3.4 取消传播语义
 
-```bash
-uv run python main.py
-```
+- 主循环 `_run()`：`except asyncio.CancelledError: debug 日志后 raise`——保持 task 取消语义
+- `stop()`：`asyncio.wait_for(self._task)` + `current_task.cancelling() > 0` 区分"stop() 主动 cancel" vs "stop() 被外层 cancel"，后者必须 `raise` 让外层看到取消
+- 关闭链：`CollectorManager.stop_all → SimulatorService.stop → AgentManager.stop_all → EventRecorder.stop → EventBus.cleanup → LLMManager.cleanup → ContextService.cleanup`
 
-`CollectorManager` 自动按 `enabled` 列表实例化 `MockCollector` 并 `start_all()`，无需手动调用。
+## 4. simulated 溯源
 
-### 查看效果
+模拟器与 mock 采集器产出的事件 payload 全部携带 `simulated=True` 数据溯源标记（`RoomMessagePayload.simulated: bool = Field(default=False, ...)`）。
 
-- **WebUI 控制面板**：http://127.0.0.1:60214 → 侧栏"模拟直播间"（Dashboard 端兼容老 `SimulatorService` API，但实际数据来源是 `MockCollector`）
-- 实时消息流通过 `room.message.*` 事件订阅，与其他采集器共用同一通路
+**§1.6 用户拍板定案**（mock 采集器删除 simulator 半吊子模式后的统一约定）：
 
-## 双模式说明
+- **存储表**：`live_chat` / `gifts` / `super_chats` 三表均带 `simulated INTEGER NOT NULL DEFAULT 0` 贯穿列（`src/modules/storage/schema.py:149/163/177`）
+- **统计查询**：`WHERE simulated = 0` 排除模拟样本，避免污染真实观众数据指标
+- **payload 层**：当前 simulator 与 mock_collector 已贯穿；存储记账器从 payload 读取 `simulated` 写入对应列的改造属存储侧任务（**不升 SCHEMA_VERSION**，表结构已就位）
 
-### `jsonl`（默认）
+**语义区分**：模拟器与 mock 采集器共享 `simulated=True` 标记——它们都是"非真实观众"。消费方无需区分来源，只需过滤"是真实观众数据 vs 是开发期模拟/回放"。
 
-从 `data/msg_default.jsonl` 按速率逐行回放，每行一条 JSON：
+## 5. mock_collector 与模拟器的关系
 
-```json
-{"text": "弹幕内容", "user_name": "用户名", "user_id": "user_001"}
-```
+**两种互补的开发工具，不互斥**：
 
-- `send_interval` 控制两条之间的间隔（秒）
-- `loop_playback = true` 时到末尾自动重置索引
-- 零 LLM 依赖，最轻量，适合 CI / 单元测试与回放固定剧本
+| 维度 | MockCollector（确定性 JSONL 回放） | SimulatorService（LLM 驱动仿真） |
+|------|------------------------------------|--------------------------------|
+| **目的** | 回归测试、bug 复现、固定剧本演练 | Agent 开放性行为锻炼、压力测试、真实交互模拟 |
+| **数据来源** | `data/msg_default.jsonl` 等 JSONL 文件 | LLM 实时生成（基于 persona + 主播上下文） |
+| **LLM 依赖** | 零 | 必需（profile 由 `llm_client_type` 配置） |
+| **Token 成本** | 0 | 受 `token_budget_per_hour` 控制 |
+| **启用方式** | `[tools.perception.config].enabled` 含 `mock_danmaku` | `[simulator].enabled = true` |
+| **关闭默认** | enabled 由 `[tools.perception.config].enabled` 控制 | `enabled = false`（生产零沾染） |
+| **Payload 标记** | `simulated=True`（同 simulator） | `simulated=True` |
 
-### `simulator`
+**何时用哪个**：
 
-内置节奏 + 素材池生成，不引入 LLM（避免与已脱线的 `SimulatorService` 重复）。
+- **CI 自动化测试**：用 `MockCollector` JSONL 模式——确定性、可复现、零 LLM 成本
+- **开发期手工调试主播 Agent 行为**：用 `SimulatorService`——需要看到 Agent 对"开放性观众消息"的反应，硬编码 5 句模板做不到
+- **bug 复现**：用 `MockCollector` + 现场采集的 JSONL——把当时观众消息录下来反复重放
+- **压力测试**：用 `SimulatorService` + 高 `base_rate_per_minute`（如 60 条/分钟）——生成足够多观众消息暴露 Agent 边界条件
 
-- 简化泊松间隔：`60 / base_rate_per_minute` 秒的 0.5~1.5 倍抖动
-- `warmup_duration_s`：启动后前 N 秒视为暖场期（当前实现为静默跳过，不输出消息）
-- 随机掷骰子决定 `data_type`：`< sc_probability` 产出 SC；`< sc_probability + gift_probability` 产出礼物；其余产出文本弹幕（内置文案："模拟弹幕消息"、"主播好可爱！" 等）
+**ADR-006 决策基础**：两者不可互相替代——固定世界测确定性，生成世界测开放性行为。硬编码模板对 Replyer 语境理解零锻炼价值。详见 ADR-006 第 30 行（"硬约束："段）与第 34 行（"对原拍板的再审判"段）。
 
-## 数据溯源：simulated 标记
+## 6. 与 v1 的差异
 
-所有 `MockCollector` 产出的 `NormalizedMessage` 均带 `simulated=True`：
-
-- 事件 Payload (`RoomMessagePayload`) 的 `live_session_id` 默认为 `"simulated_default"`
-- `user.id` 来自 JSONL `user_id` 字段或 `sim_xxxx` 随机数；`simulator` 模式文本弹幕固定 user_id 形如 `sim_1000~9999`、user_name `"模拟观众"`
-
-存储层在 `live_chat` / `gifts` / `super_chats` 三张表均带 `simulated INTEGER NOT NULL DEFAULT 0` 贯穿列，约定由 Collector 在写入时打标。消费方做统计时应 `WHERE simulated = 0` 排除模拟样本，避免污染真实观众数据指标。
-
-## 素材池
-
-`MockCollector` 加载路径固定为 `src/modules/collectors/mock/data/`，**不**从 `config/` 根目录读取同名文件。
-
-| 文件 | 实际消费方 | 备注 |
-|------|------------|------|
-| `src/modules/collectors/mock/data/simulator_gifts.toml` | `MockCollector._load_gifts()`（`simulator` 模式） | 礼物清单，按 `category`（`normal` / `medium` / `premium` / `sc`）分组，字段：`gift_id` / `gift_name` / `category` / `weight` / `data_type`（SC 加 `sc_amount_rmb`） |
-| `src/modules/collectors/mock/data/simulator_residents.toml` | 当前**无**消费方 | `MockCollector` 配置字段 `residents_toml` 已声明，但 `_collect_simulator()` 用内置文本弹幕，**未**读取人设池。该字段是后续 LLM 驱动扩展的预留位 |
-| `config/simulator_gifts.toml`（项目根 `config/`） | 当前**无**消费方 | v1 遗留文件，`MockCollector` 不从此处读取 |
-| `config/simulator_residents.toml`（项目根 `config/`） | 当前**无**消费方 | v1 遗留文件，根 `config/` 与 `src/.../data/` 双份不一致，**根 `config/` 版已无人消费** |
-
-**操作建议**：
-
-- 修改 `simulator_gifts.toml`（礼物清单）：编辑 `src/modules/collectors/mock/data/simulator_gifts.toml`（运行时实际加载此份）
-- 修改 `simulator_residents.toml`（人设清单）：编辑 `src/modules/collectors/mock/data/simulator_residents.toml`，但当前 `simulator` 模式未消费该文件，改动不会生效；待未来接入人设池后会自动生效
-- `config/` 根目录下的同名文件已无人消费，可按需清理或保留作为历史参考
-
-## 如何造一批测试弹幕
-
-两种路径，按需选用。
-
-### 路径 A：JSONL 回放（推荐，零 LLM 依赖）
-
-1. 准备 JSONL 文件，每行一条：
-
-   ```jsonl
-   {"text": "测试弹幕 1", "user_name": "测试用户 A", "user_id": "test_001"}
-   {"text": "测试弹幕 2", "user_name": "测试用户 B", "user_id": "test_002"}
-   {"text": "主播好可爱", "user_name": "测试用户 A", "user_id": "test_001"}
-   ```
-
-2. 放入 `src/modules/collectors/mock/data/<your_file>.jsonl`（如 `msg_test.jsonl`）
-
-3. 编辑 `config/tools.toml`，将 `mock_danmaku` 段改为：
-
-   ```toml
-   [tools.perception.config.mock_danmaku]
-   mode = "jsonl"
-   log_file_path = "msg_test.jsonl"
-   send_interval = 0.5
-   loop_playback = true
-   ```
-
-4. 启动 `uv run python main.py`，观察 Dashboard 弹幕面板
-
-### 路径 B：内置节奏（零配置）
-
-适合临时看效果或做粗略压力测试：
-
-```toml
-[tools.perception.config.mock_danmaku]
-mode = "simulator"
-base_rate_per_minute = 30.0      # 提高频率
-gift_probability = 0.1
-sc_probability = 0.02
-warmup_duration_s = 0.0
-```
-
-### 路径 C：批量单元测试
-
-`MockCollector` 继承 `BaseCollector`，可用 `pytest` 直接驱动 `collect()` 协程，无需启动主程序。参考 `tests/modules/collectors/test_mock_collector.py`。
-
-```python
-import pytest
-from src.modules.collectors.mock import MockCollector
-
-@pytest.mark.asyncio
-async def test_mock_jsonl_replay(event_bus):
-    collector = MockCollector(
-        config={"mode": "jsonl", "log_file_path": "msg_test.jsonl", "send_interval": 0.0},
-        event_bus=event_bus,
-    )
-    await collector.start()
-    seen = []
-    async for msg in collector.collect():
-        seen.append(msg.text)
-        if len(seen) >= 3:
-            break
-    await collector.cleanup()
-    assert len(seen) >= 3
-```
-
-## SimulatorService 兼容性说明
-
-为不破坏依赖 `simulator_service.simulator.*` 字段的 Dashboard API，`SimulatorService` 类与 `LiveStreamSimulator` stub 仍保留。但实际无消息产出，新建功能**不要**走该路径，统一改用 `MockCollector`。
-
-Dashboard 侧"模拟直播间"页面部分 UI 控件（如礼物雨触发、话题注入、Token 预算重置）历史上指向 `SimulatorService` 控制面。当前若开启 `MockCollector` 的 `mode=simulator`，UI 上对应按钮不会真正触发额外行为，只由 `MockCollector` 按内置节奏产出弹幕。
-
-## 故障排查
-
-| 问题 | 原因 | 解决 |
-|------|------|------|
-| 没有任何模拟弹幕 | `MockCollector` 未启用 | 检查 `config/tools.toml` 的 `[tools.perception.config].enabled` 列表是否包含 `mock_danmaku` |
-| 模拟弹幕全是空文本 | `mode=simulator` 模式下内置文案随机生成，确认 `data_type` 分布正常 | 检查 `base_rate_per_minute` 是否合理（默认 6 条/分钟） |
-| 模拟数据混进真实观众统计 | 消费方未过滤 `simulated=0` | SQL 加上 `WHERE simulated = 0`（参见 schema 中 `simulated` 贯穿列约定） |
-| 编辑了 `config/simulator_gifts.toml` 不生效 | `MockCollector` 实际加载 `src/modules/collectors/mock/data/simulator_gifts.toml`，不读根 `config/` | 编辑内置 `data/` 下文件，或在 `mock_danmaku` 配置段显式指定 `gifts_toml = "<your_file>.toml"` 后放入 `data/` |
-| Dashboard 看不到"模拟直播间"按钮 | Dashboard 配置未启用 | 检查 `config/core.toml` 的 `[dashboard]` 段 |
-| 礼物种类不对 | `simulator_gifts.toml` 文件路径错 | 默认值 `simulator_gifts.toml`，必须放 `src/modules/collectors/mock/data/` |
-
-## 与单向数据流的关系
-
-- `MockCollector` 是 Input Domain 采集器，只 publish 不 subscribe，符合数据流规则
-- 所有 `room.message.*` 事件携带 `simulated=True` 数据溯源标记，消费方按需过滤
-- 不订阅 Output 事件（数据流红线，见[数据流规则](../architecture/data-flow.md)）
-- 不写入 ContextService（只发事件，事件回放链路不受影响）
-
-## 相关文档
-
-- 事件语义域表：[事件系统](../architecture/event-system.md)
-- 数据流红线：[数据流规则](../architecture/data-flow.md)
-- 采集器开发范式：[组件开发指南](../development/component-guide.md)
-- Agenda 编排：[节目单编排机制](../architecture/agenda-mechanism.md)
+| 维度 | v1（已废弃） | v2（当前） |
+|------|--------------|------------|
+| **架构位置** | `SimulatorService` 独立服务 + `LiveStreamSimulator` 类本体 | `SimulatorService` 生命周期管理器 + 8 个核心实现类协作 |
+| **生命周期** | 通过 ContextService pull 模式读主播上下文 + 订阅 `output.intent.finished` 元控制信号 | 独立 `[simulator].enabled` 控制 + 直接 emit 到 EventBus |
+| **关闭状态** | 在 v2 Wave 6 退化为 stub（`async for message in simulator.collect()` 返回空），未装配 | 按 ADR-006 恢复，组合根步骤 4b 装配，`enabled=false` 零沾染 |
+| **LLM 调用** | 由 `LiveStreamSimulator` 内聚调用 | 通过 `SimulatorLLMWrapper` 解耦，支持 prompt 渲染/响应清洗/token 累计/信号量 |
+| **数据治理** | 模拟数据混在真实流中 | `simulated=True` 贯穿 payload → 存储，统计一律排除 |
+| **配套 mock 采集器** | `src/stages/input/collectors/mock_danmaku/`（旧三阶段） | `src/modules/collectors/mock/MockCollector`（v2 BaseCollector 子类），纯 JSONL 回放 |
 
 ---
 
-*最后更新：2026-08-26（按 v2 现状重写：明确 SimulatorService 已脱线 / 候选移除；模拟输入由 MockCollector 承担；描述 jsonl + simulator 双模式用法、素材池角色、造测试弹幕步骤）*
+## 相关文档
+
+- [ADR-006：LLM 模拟器是官方开发基础设施，mock 采集器仅承担确定性回放](../architecture/adr/006-simulator-is-dev-infrastructure.md) — 本文档的决策定案
+- [架构总览 - 组件清单](../architecture/overview.md#组件清单) — 速查
+- [数据流规则](../architecture/data-flow.md) — 模拟器不订阅下游事件（采集器红线不适用，但语义等价）
+- [事件系统](../architecture/event-system.md) — `room.message.*` 事件事实表
+- [组件开发指南](../development/component-guide.md) — Agent/工具/采集器三范式
+
+---
+
+*最后更新：2026-08-28（按 ADR-006 重写：定位从"调试工具候选移除"翻转回"开发基础设施"；删除 stub 时代叙事 + simulator 模式过时引用；新增六组件编排图、配置字段表、LLM 缺失降级说明、simulated 溯源定案引用、mock vs simulator 对照表、v1 vs v2 差异表；§3 取消传播语义显式标注；§5 强调互补不互斥）*
