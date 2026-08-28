@@ -101,7 +101,10 @@ class TestLoading:
         generate_default_configs(temp_config_dir)
         version = get_config_version(temp_config_dir)
         assert version == CONFIG_VERSION
-        assert version == "2.0.4"
+        # v2.0.6：PersonaConfig 新增 behavior_style 字段，CONFIG_VERSION 同步升 patch。
+        # 此处硬编码版本号与 CONFIG_VERSION 锁定一致——升版本时**必须**同步更新，
+        # 否则"升了版本但没改测试"会让回归用例失明。
+        assert version == "2.0.6"
 
     def test_drift_fixed_on_load(self, temp_config_dir):
         generate_default_configs(temp_config_dir)

@@ -82,20 +82,82 @@ class TestPlannerHappyPath:
 
 
 class TestPlannerPersonaIsolation:
-    """人设分离承诺：Planner prompt 零人设变量。"""
+    """人设分离承诺（v2.0.6 B2 反转后）：
+
+    Planner prompt 注入 ``behavior_style``（行动准则 → 决策侧），
+    但仍**不**注入 ``personality`` / ``style_constraints`` / ``bot_name``
+    （身份与表达层 → 仅进 Replyer 表达侧）。
+    """
 
     @pytest.mark.asyncio
-    async def test_plan_no_persona_in_prompt(self) -> None:
-        """render_safe 调用 kwargs 中不得包含任何 persona 变量。"""
+    async def test_plan_behavior_style_injected_others_excluded(self) -> None:
+        """render_safe kwargs 必须含 $behavior_style；不含 $personality/$style_constraints/$bot_name。
+
+        反转自 v2.0.5 的"零人设"契约：现在注入行动准则（behavior_style），
+        但身份/表达人设仍严格隔离（不进 Planner 表达侧）。MaiBot 三层人格拆分
+        在 Amaidesu 的映射：personality+style_constraints=表达侧（Replyer），
+        behavior_style=决策侧（Planner）。
+        """
         raw = json.dumps({"should_reply": False})
         planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
 
         await planner.plan([], forced=False)
 
         kwargs = prompt.render_safe.call_args.kwargs
-        assert "personality" not in kwargs, "Planner prompt 不得注入 personality"
-        assert "style_constraints" not in kwargs, "Planner prompt 不得注入 style_constraints"
-        assert "bot_name" not in kwargs, "Planner prompt 不得注入 bot_name"
+        # 决策侧：必须注入 behavior_style
+        assert "behavior_style" in kwargs, (
+            "Planner prompt 必须注入 $behavior_style（行动准则）"
+        )
+        # 身份/表达侧：仍必须隔离
+        assert "personality" not in kwargs, "Planner prompt 不得注入 personality（仅 Replyer 消费）"
+        assert "style_constraints" not in kwargs, (
+            "Planner prompt 不得注入 style_constraints（仅 Replyer 消费）"
+        )
+        assert "bot_name" not in kwargs, "Planner prompt 不得注入 bot_name（仅 Replyer 消费）"
+
+    @pytest.mark.asyncio
+    async def test_plan_behavior_style_default_placeholder_when_empty(self) -> None:
+        """behavior_style 未注入时（空串），Planner 应渲染占位文本而非字面 $behavior_style。"""
+        raw = json.dumps({"should_reply": False})
+        # _make_planner 不传 behavior_style → Planner 内部 _behavior_style=""
+        planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+
+        await planner.plan([], forced=False)
+
+        kwargs = prompt.render_safe.call_args.kwargs
+        rendered = kwargs.get("behavior_style")
+        assert isinstance(rendered, str), "behavior_style 渲染值必须是字符串"
+        # 占位文本包含"未配置"标识，避免字面 ``$behavior_style`` 漏到 prompt
+        assert "未配置" in rendered or "行动准则" in rendered, (
+            f"behavior_style 空时应渲染占位文本，实际: {rendered!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_plan_behavior_style_propagates_when_set(self) -> None:
+        """显式传入 behavior_style 时，渲染值必须如实透传（不做过滤/截断）。"""
+        raw = json.dumps({"should_reply": False})
+        # 直接构造 Planner 注入 behavior_style
+        llm = MagicMock()
+        llm.chat = AsyncMock(return_value=_make_llm_response(raw))
+        prompt = MagicMock()
+        prompt.render_safe = MagicMock(return_value="PROMPT")
+        rs = MagicMock()
+        rs.get_snapshot = MagicMock(return_value=MagicMock(heat="low", topics=[], sc_queue=[]))
+
+        custom_style = "积极与观众互动，收到礼物和SC及时致谢"
+        planner = Planner(
+            config={"planner_llm": "llm_fast"},
+            llm_service=llm,
+            prompt_service=prompt,
+            room_state=rs,
+            behavior_style=custom_style,
+        )
+        await planner.plan([], forced=True)
+
+        kwargs = prompt.render_safe.call_args.kwargs
+        assert kwargs.get("behavior_style") == custom_style, (
+            f"behavior_style 渲染值应等于透传值，实际: {kwargs.get('behavior_style')!r}"
+        )
 
 
 class TestPlannerClientType:

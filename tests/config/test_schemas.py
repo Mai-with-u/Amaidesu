@@ -11,9 +11,23 @@ class TestCoreConfig:
         assert c.general.platform_id == "amaidesu"
         assert c.persona.bot_name == "麦麦"
         assert c.persona.emotion_intensity == 7
+        # v2.0.6：PersonaConfig 新增 behavior_style 字段，Planner 决策侧注入。
+        # 默认值由 core_schemas 权威定义；测试以存在性 + 非空即可锁定契约，
+        # 文本变化由其他用例覆盖。
+        assert isinstance(c.persona.behavior_style, str)
+        assert c.persona.behavior_style, "behavior_style 默认值不应为空"
         assert c.context.enabled is True
         assert c.dashboard.port == 60214
         assert c.meta.version == CONFIG_VERSION
+
+    def test_persona_behavior_style_default_matches_config_version(self):
+        """v2.0.6: CONFIG_VERSION 与 behavior_style 字段必须同时存在（防漂移）。"""
+        assert CONFIG_VERSION == "2.0.6", "CONFIG_VERSION 必须与本次升级同步"
+        c = CoreConfig()
+        # 显式断言 behavior_style 默认值已落盘（防止上游"升了版本但没加字段"的回退）。
+        assert c.persona.behavior_style.startswith("积极与观众互动"), (
+            "behavior_style 默认文本与 core_schemas 权威定义漂移，请回归"
+        )
 
     def test_simulator_present(self):
         c = CoreConfig()

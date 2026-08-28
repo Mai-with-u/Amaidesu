@@ -39,9 +39,20 @@ from .message_buffer import MessageBuffer
 from .plan import DecisionPlan
 
 # 默认人设兜底值（persona dict 缺字段时使用）
-_DEFAULT_BOT_NAME = "爱德丝"
-_DEFAULT_PERSONALITY = "活泼开朗，有些调皮，喜欢和直播间观众互动"
-_DEFAULT_STYLE_CONSTRAINTS = "口语化、简短，像在直播间和观众聊天，避免机械式回复"
+#
+# 优先级链（与 B2 v2.0.6 修复对齐）：
+# 1. persona dict 中的同名键（来自 config/core.toml 的 [persona] 段，由装配根
+#    main._register_agents_from_config 拉取后透传给 StreamerAgent.persona_provider，
+#    再经 ReplyToolProvider._resolve_persona 解析后传给 Replyer.generate(persona=...)）。
+# 2. StreamerAgentConfig.bot_name（agents.toml 显式覆盖）。
+# 3. 本模块 _DEFAULT_* 常量（仅当 persona dict 完全缺失/字段缺位时兜底，避免冷启动崩）。
+#
+# v2.0.6 统一：_DEFAULT_BOT_NAME 改为 '麦麦'，personality/style_constraints 文本与
+# core_schemas.PersonaConfig 默认值对齐；不允许 config 模块反向依赖 agents 层，
+# 故这里复制文本（保持依赖方向 agents → config 干净）。
+_DEFAULT_BOT_NAME = "麦麦"
+_DEFAULT_PERSONALITY = "活泼开朗，有些调皮，喜欢和观众互动"
+_DEFAULT_STYLE_CONSTRAINTS = "口语化，使用网络流行语，避免机械式回复，适当使用emoji"
 
 # Replyer 模板名（Stage 2，含 $personality/$style_constraints/$bot_name 人设注入）
 _REPLYER_TEMPLATE = "amaidesu_replyer"

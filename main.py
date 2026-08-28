@@ -538,6 +538,29 @@ async def _register_agents_from_config(
             except Exception as e:
                 logger.warning(f"解析 StreamerAgent 配置失败: {e}; 使用默认配置")
                 cfg_obj = StreamerAgentConfig()
+
+            # v2.0.6 B2 修复：从 config_service 拉取 [persona] 段，构造 StreamerAgent
+            # 时透传为 persona_provider。优先级链：persona dict（来自 core.toml）
+            # > StreamerAgentConfig.bot_name > _DEFAULT_*。缺段时退化为空 dict，
+            # 由下游 Replyer 走 _DEFAULT_* 兜底，避免装配失败阻断冷启动。
+            persona_provider_dict = {}
+            if config_service is not None:
+                try:
+                    persona_provider_dict = dict(config_service.get_section("persona", default={}) or {})
+                except Exception as exc:
+                    logger.warning(f"读取 [persona] 配置段失败，回退为空 dict: {exc}")
+                    persona_provider_dict = {}
+            if persona_provider_dict:
+                logger.info(
+                    f"StreamerAgent 已注入 persona: bot_name={persona_provider_dict.get('bot_name', '<缺>')!r}, "
+                    f"behavior_style={'<已注入>' if persona_provider_dict.get('behavior_style') else '<缺失>'}"
+                )
+            else:
+                logger.warning(
+                    "[persona] 配置段为空，StreamerAgent.persona_provider 将传空 dict；"
+                    "Replyer/Planner 走 _DEFAULT_* 兜底（请检查 config/core.toml）"
+                )
+
             agent = StreamerAgent(
                 config=cfg_obj,
                 llm_manager=llm_service,
@@ -546,6 +569,7 @@ async def _register_agents_from_config(
                 event_bus=event_bus,
                 tool_registry=tool_registry,
                 memory=memory,
+                persona_provider=persona_provider_dict,
             )
             manager.register(
                 agent,

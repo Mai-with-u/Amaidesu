@@ -29,8 +29,14 @@ def instantiate_agent(
     event_bus: Any = None,
     tool_registry: Any = None,
     memory: Any = None,
+    persona_provider: Optional[Any] = None,
 ) -> Optional[BaseAgent]:
-    """按名实例化 Agent；未知名字返回 None。"""
+    """按名实例化 Agent；未知名字返回 None。
+
+    v2.0.6 B2 修复：新增 ``persona_provider`` 关键字参数透传给 StreamerAgent。
+    装配根（main._register_agents_from_config）从 config_service.get_section("persona")
+    拉取 persona dict 传入；缺省 None 时 StreamerAgent 走 _DEFAULT_* 兜底。
+    """
     config = config if isinstance(config, dict) else {}
 
     if name == "streamer":
@@ -51,6 +57,7 @@ def instantiate_agent(
             event_bus=event_bus,
             tool_registry=tool_registry,
             memory=memory,
+            persona_provider=persona_provider,
         )
 
     if name == "game":

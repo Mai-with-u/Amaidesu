@@ -107,7 +107,11 @@ class StreamerAgentConfig(BaseConfig):
     force_importance: float = _PydField(default=0.8, ge=0.0, le=1.0, description="importance 达到该值则强制响应")
 
     # --- 人设 ---
-    bot_name: str = _PydField(default="爱德丝", description="VTuber 名称")
+    # v2.0.6 B2 修复：默认值统一为 '麦麦'（与 core_schemas.PersonaConfig.bot_name
+    # 默认值 + config/core.toml 真实值对齐）；历史 '爱德丝' 已弃用。
+    # 优先级链：persona dict（来自 core.toml，经装配根注入 StreamerAgent.persona_provider）
+    # > StreamerAgentConfig.bot_name（agents.toml 显式覆盖）> 本字段默认值。
+    bot_name: str = _PydField(default="麦麦", description="VTuber 名称")
     history_limit: int = _PydField(default=30, ge=0, description="构建 prompt 时引用的历史消息条数")
     enable_action_selection: bool = _PydField(
         default=True,
@@ -251,6 +255,17 @@ class StreamerAgent(BaseAgent):
         self._room_state = RoomState()
 
         # Stage 1: Planner（决策核心，Agent 内脏——非工具）
+        # v2.0.6 B2 修复：从 self._persona_provider（装配根注入的 [persona] dict）
+        # 提取 behavior_style（行动准则）并透传给 Planner；persona_provider 是 dict
+        # 或可调用对象两种形式，统一用鸭子类型断言。
+        _behavior_style = ""
+        if self._persona_provider is not None:
+            try:
+                _persona_dict = self._persona_provider() if callable(self._persona_provider) else self._persona_provider
+                if isinstance(_persona_dict, dict):
+                    _behavior_style = str(_persona_dict.get("behavior_style") or "")
+            except Exception as exc:
+                self._logger.warning(f"Planner 读取 persona_provider.behavior_style 失败: {exc}")
         self._planner = Planner(
             config={
                 "planner_llm": config.planner_llm,
@@ -261,6 +276,7 @@ class StreamerAgent(BaseAgent):
             room_state=self._room_state,
             capabilities_provider=capabilities_provider,
             memory=memory,
+            behavior_style=_behavior_style,
         )
 
         # 敏感词过滤器（§1.46.1）

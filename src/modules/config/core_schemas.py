@@ -28,7 +28,7 @@ class MetaConfig(BaseConfig):
     """配置元数据"""
 
     version: str = Field(
-        default="2.0.4",
+        default="2.0.6",
         description="配置版本号（用于自动迁移检测，权威定义于 multi_file_loader.py）",
     )
 
@@ -46,22 +46,35 @@ class PersonaConfig(BaseConfig):
     """VTuber 人设配置
 
     定义 VTuber 的性格和说话风格，被 Planner/Replyer 等 LLM Agent 引用。
+
+    v2.0.6 新增 ``behavior_style``（行为准则/行动风格）字段，
+    对齐 MaiBot 三层人格拆分：
+    - ``personality``：身份特征 → 仅注入 Replyer（表达侧）
+    - ``style_constraints``：表达风格 → 仅注入 Replyer（表达侧）
+    - ``behavior_style``：行动准则 → 仅注入 Planner（决策侧，何时发言 / 聊什么 / 何时沉默）
+
+    装配根（main._register_agents_from_config）将该段作为 dict 整体透传给
+    StreamerAgent.persona_provider，Planner/Replyer 按职责各自读取对应字段。
     """
 
     bot_name: str = Field(default="麦麦", description="VTuber 名字")
     personality: str = Field(
         default="活泼开朗，有些调皮，喜欢和观众互动",
-        description="性格描述（50字以内）",
+        description="性格描述（50字以内，仅注入 Replyer 表达侧）",
     )
     style_constraints: str = Field(
         default="口语化，使用网络流行语，避免机械式回复，适当使用emoji",
-        description="说话风格约束（指导 LLM 生成回复的风格）",
+        description="说话风格约束（指导 Replyer 表达，仅注入表达侧）",
     )
     user_name: str = Field(default="大家", description="对观众的称呼")
     max_response_length: int = Field(default=50, description="回复长度限制（字数）")
     emotion_intensity: int = Field(
         default=7,
         description="情感表达强度 (1-10, 1=平淡, 10=丰富)",
+    )
+    behavior_style: str = Field(
+        default="积极与观众互动，收到礼物和SC及时致谢，冷场时主动开新话题，遇到争议保持风度不纠缠",
+        description="Planner 行动准则：何时参与聊天、如何观察局面、何时保持安静（仅注入 Planner 决策，不进 Replyer 表达）",
     )
 
 

@@ -1,11 +1,12 @@
 ---
 name: amaidesu_planner
-version: "2.2"
-description: "Amaidesu 两阶段决策 - Planner 阶段模板：判断直播间是否需要主播介入，输出决策计划 JSON（无人设注入；v2.2 由 PlannerAssembler 单一上下文槽组装）"
+version: "2.3"
+description: "Amaidesu 两阶段决策 - Planner 阶段模板：判断直播间是否需要主播介入，输出决策计划 JSON（v2.3：PlannerAssembler 八段上下文 + behavior_style 决策侧人设准则注入；personality/style_constraints/bot_name 仅进 Replyer 表达侧）"
 variables:
   - context_block
   - forced
   - proactive
+  - behavior_style
 author: Amaidesu
 tags: [decision, live, vtuber, danmaku, planner, two-stage]
 ---
@@ -39,6 +40,16 @@ $context_block
 > 8. **记忆召回**（§1.50）：由 SimpleMemory `recall(topic_summary, batch_text)` 召回的语义相关历史记忆（含相关度分数与来源），用于让 Planner 在反重复/语境延续时参考过去的直播片段。无记忆后端或召回为空时为 `（暂无）`。
 >
 > **请把上述八段整体视为当前决策的上下文输入**——你不需要逐段单独解读，按需取用即可。
+
+# ②-b 行为风格准则（决策侧注入，v2.0.6 B2）
+
+## 行为风格
+
+$behavior_style
+
+> 以上行为风格帮助你决策**何时发言、谈论什么话题、何时保持安静**——它只指导"该不该开口 / 开口聊什么"，**不**指导"具体怎么说、用什么语气"。措辞、句式、人设表达由下游 Replyer 负责。
+>
+> 当 `$behavior_style` 显示为"（未配置行动准则……）"占位文本时，请按通用直播决策原则（直播间中心感、反复读、SC/礼物强制回应等）自行判断。
 
 ## 强制回应标志
 

@@ -83,7 +83,7 @@ class TestReplyerGenerate:
         """mock LLM 返回合法 JSON → 生成包含 speech/emotion/action 的 dict。"""
         r, _llm, _prompt = _make_replyer(llm_return=_ok_payload(text="好耶！", emotion="happy"))
         plan = _make_plan()
-        persona = {"bot_name": "爱德丝", "personality": "活泼", "style_constraints": "口语化"}
+        persona = {"bot_name": "麦麦", "personality": "活泼", "style_constraints": "口语化"}
 
         result = await r.generate(plan, [], persona)
 
@@ -101,7 +101,7 @@ class TestReplyerGenerate:
         r, _llm, prompt = _make_replyer(llm_return=_ok_payload())
         plan = _make_plan()
         persona = {
-            "bot_name": "爱德丝",
+            "bot_name": "麦麦",
             "personality": "活泼开朗，有些调皮",
             "style_constraints": "口语化、简短",
         }
@@ -114,7 +114,7 @@ class TestReplyerGenerate:
         assert "style_constraints" in kwargs
         assert kwargs["style_constraints"] == "口语化、简短"
         assert "bot_name" in kwargs
-        assert kwargs["bot_name"] == "爱德丝"
+        assert kwargs["bot_name"] == "麦麦"
         assert "plan" in kwargs
         assert "danmaku_batch" in kwargs
 
@@ -123,7 +123,7 @@ class TestReplyerGenerate:
         """断言 chat 调用使用 replyer_llm（默认 'llm'，与 Planner 的 llm_fast 分离）。"""
         r, llm, _prompt = _make_replyer(llm_return=_ok_payload())
         plan = _make_plan()
-        persona = {"bot_name": "爱德丝", "personality": "p", "style_constraints": "s"}
+        persona = {"bot_name": "麦麦", "personality": "p", "style_constraints": "s"}
 
         await r.generate(plan, [], persona)
 
@@ -134,7 +134,7 @@ class TestReplyerGenerate:
         """断言 LLM 调用不含 tools 参数（Replyer 不做 function calling）。"""
         r, llm, _prompt = _make_replyer(llm_return=_ok_payload())
         plan = _make_plan()
-        persona = {"bot_name": "爱德丝", "personality": "p", "style_constraints": "s"}
+        persona = {"bot_name": "麦麦", "personality": "p", "style_constraints": "s"}
 
         await r.generate(plan, [], persona)
 
@@ -146,7 +146,7 @@ class TestReplyerGenerate:
         """非法 emotion（不在 12 枚举内）→ 降级为 neutral，speech 保留。"""
         r, _llm, _prompt = _make_replyer(llm_return=_ok_payload(text="嗯嗯", emotion="这不是情绪"))
         plan = _make_plan()
-        persona = {"bot_name": "爱德丝", "personality": "p", "style_constraints": "s"}
+        persona = {"bot_name": "麦麦", "personality": "p", "style_constraints": "s"}
 
         result = await r.generate(plan, [], persona)
 
@@ -165,7 +165,7 @@ class TestReplyerGenerate:
             capabilities=view,
         )
         plan = _make_plan()
-        persona = {"bot_name": "爱德丝", "personality": "p", "style_constraints": "s"}
+        persona = {"bot_name": "麦麦", "personality": "p", "style_constraints": "s"}
 
         result = await r.generate(plan, [], persona)
 
@@ -178,7 +178,7 @@ class TestReplyerGenerate:
         """LLM 调用抛异常 → 返回 None（silent 降级），不抛出。"""
         r, llm, _prompt = _make_replyer(llm_side_effect=RuntimeError("LLM 挂了"))
         plan = _make_plan()
-        persona = {"bot_name": "爱德丝", "personality": "p", "style_constraints": "s"}
+        persona = {"bot_name": "麦麦", "personality": "p", "style_constraints": "s"}
 
         result = await r.generate(plan, [], persona)
 

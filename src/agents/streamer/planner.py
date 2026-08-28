@@ -5,18 +5,24 @@
 - 产出 DecisionPlan：目标对象 / 话题摘要 / 回复指引 / 置信度
 - **不写台词**（那是 Replyer 的职责）
 
-核心契约：
-1. **人设隔离**：Planner 的 prompt **零人设变量**（不传 $personality / $style_constraints /
-   $bot_name）。人设由 Replyer（Stage 2）注入。这是两阶段拆分的 1:1 承诺。
-2. **快速模型**：使用 ``planner_llm``（默认 ``llm_fast``），与 Replyer 的
+核心契约（v2.0.6 B2 人设供应链修复后反转）：
+1. **人设行为准则注入**：Planner prompt 注入 ``$behavior_style``（行动准则：何时参与聊天、
+   如何观察局面、何时保持安静）——该字段来自 config/core.toml 的 [persona].behavior_style，
+   由 StreamerAgent 装配时透传给 Planner。
+2. **身份/表达人设隔离**：Planner prompt **不传** ``$personality`` / ``$style_constraints`` /
+   ``$bot_name``——这三件套是身份与表达层，仅注入 Replyer（Stage 2）。这是 MaiBot
+   三层人格拆分（personality / reply_style / behavior_style）的"Amaidesu 映射"：
+   personality + style_constraints = 表达侧（Replyer），behavior_style = 决策侧（Planner）。
+3. **快速模型**：使用 ``planner_llm``（默认 ``llm_fast``），与 Replyer 的
    ``replyer_llm``（默认 ``llm``）分离，避免共享客户端实例。
-3. **无工具调用**：`chat()` 调用不传 ``tools`` 参数——Planner 只做结构化 JSON 输出。
-4. **降级安全**：LLM 异常 / 脏 JSON 均返回 ``None``，由调用方（StreamerAgent 主循环）处理降级。
-5. **历史感知**：可选注入最近对话历史（``history``），渲染为 ``$conversation_history``
+4. **无工具调用**：`chat()` 调用不传 ``tools`` 参数——Planner 只做结构化 JSON 输出。
+5. **降级安全**：LLM 异常 / 脏 JSON 均返回 ``None``，由调用方（StreamerAgent 主循环）处理降级。
+6. **历史感知**：可选注入最近对话历史（``history``），渲染为 ``$conversation_history``
    注入 prompt，让 Planner 决策时能反重复（特别是主动发言时避免重复已聊过的话题）。
 
 数据流：
-    batch + room_state.snapshot + history + forced/proactive ──▶ render_safe('amaidesu_planner')
+    batch + room_state.snapshot + history + forced/proactive + behavior_style
+        ──▶ render_safe('amaidesu_planner')
         ──▶ llm_service.chat(prompt, client_type=planner_llm)
         ──▶ _clean_llm_json + json.loads
         ──▶ DecisionPlan（或 None）
@@ -26,6 +32,8 @@ Wave 6 变更：
 - 配置 schema 字段对齐 agents_schemas.StreamerAgentConfig（planner_llm 等）
 - 提示词内聚于本包 prompts/ 目录，键来自模板 frontmatter 的
   ``name: amaidesu_planner``（原中央目录 decision/ 前缀已随 v2 内聚化移除）
+- v2.0.6：注入 behavior_style（决策侧）；personality/style_constraints/bot_name
+  仍仅由 Replyer 消费（表达侧）。
 """
 
 from __future__ import annotations
@@ -105,6 +113,7 @@ class Planner:
         capabilities_provider: Any = None,
         memory: Any = None,
         recall_top_k: int = _DEFAULT_RECALL_TOP_K,
+        behavior_style: str = "",
     ) -> None:
         """初始化 Planner。
 
@@ -124,6 +133,10 @@ class Planner:
                 而非崩溃友好——主控装配时未注入则 Planner 整体降级。
             recall_top_k: 每轮注入 prompt 的最大命中条数，默认 3。仅 Planner 内部
                 使用，不暴露用户配置（记忆质量先稳定再调参）。
+            behavior_style: v2.0.6 新增——人设行为准则（来自 [persona].behavior_style）。
+                仅注入 Planner prompt 的 ``$behavior_style`` 变量，指导"何时发言 / 聊
+                什么话题 / 何时保持安静"等行动决策；不会反向泄露到 Replyer 表达侧。
+                缺省空串时模板会渲染为占位文本（不让 LLM 看到字面 ``$behavior_style``）。
         """
         # 解析配置（容忍 dict / 已解析对象 / None）
         if config is None:
@@ -150,6 +163,10 @@ class Planner:
         # PlannerAssembler 一份实例（assemble 纯函数，但保留成员以便未来
         # 缓存 stable_prefix_hash 做 LLM 缓存前缀命中）
         self._assembler = PlannerAssembler()
+
+        # v2.0.6 B2：决策侧人设准则存储。空串表示上层未注入（罕见：装配时 persona 段缺字段），
+        # 渲染时使用占位文本避免模板出现字面 ``$behavior_style``，行为退化为"无准则"。
+        self._behavior_style: str = behavior_style or ""
 
         self.logger = get_logger("Planner")
 
@@ -240,14 +257,19 @@ class Planner:
             self.logger.error(f"PlannerAssembler 组装失败: {e}", exc_info=True)
             return None
 
-        # 6. 渲染 prompt（★ 仅三个变量：context_block / forced / proactive）
-        #    forced / proactive 透传为字符串（"true"/"false"），对齐模板中的文档约定
+        # 6. 渲染 prompt（★ 四个变量：context_block / forced / proactive / behavior_style）
+        #    forced / proactive 透传为字符串（"true"/"false"），对齐模板中的文档约定。
+        #    v2.0.6 B2：behavior_style 仅注入 Planner 决策侧（指导"何时发言/聊什么/何时沉默"），
+        #    personality/style_constraints/bot_name 仍仅由 Replyer 表达侧注入，
+        #    身份/表达与行动准则分离。behavior_style 空串时使用占位文本避免字面 $behavior_style。
+        behavior_style_render = self._behavior_style or "（未配置行动准则，请依据直播间态势与对话历史自行决策）"
         try:
             prompt = self._prompt_service.render_safe(
                 self.TEMPLATE_NAME,
                 context_block=snapshot_assembled.rendered_text,
                 forced=str(forced).lower(),
                 proactive=str(proactive).lower(),
+                behavior_style=behavior_style_render,
             )
         except Exception as e:
             self.logger.error(f"渲染 Planner prompt 失败: {e}", exc_info=True)

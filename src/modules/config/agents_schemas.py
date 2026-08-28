@@ -100,7 +100,10 @@ class StreamerAgentConfig(BaseConfig):
     force_importance: float = Field(default=0.8, ge=0.0, le=1.0, description="importance 达到该值则强制响应")
 
     # --- 人设 ---
-    bot_name: str = Field(default="爱德丝", description="VTuber 名称")
+    # v2.0.6 B2 修复：默认值统一为 '麦麦'（与 core_schemas.PersonaConfig.bot_name
+    # 默认值 + config/core.toml 真实值 + src/agents/streamer/streamer_agent.py
+    # 的 StreamerAgentConfig.bot_name 默认值四源对齐）；历史 '爱德丝' 已弃用。
+    bot_name: str = Field(default="麦麦", description="VTuber 名称")
     history_limit: int = Field(default=30, ge=0, description="构建 prompt 时引用的历史消息条数")
     enable_action_selection: bool = Field(
         default=True,
