@@ -109,8 +109,9 @@ class TestSimulatorWiring:
             config_service=config_service,
             dev_webui=False,
         )
-        # 元组 8 项 → 9 项：第 8 项 (index=7) 是 simulator_service
-        assert len(result) == 9, f"组合根元组应返回 9 项，实际 {len(result)}"
+        # 元组 9 项 → 10 项（v2.0.5 新增 storage_ledger 在尾）：
+        # 第 8 项 (index=7) 是 simulator_service；第 10 项 (index=9) 是 storage_ledger
+        assert len(result) == 10, f"组合根元组应返回 10 项，实际 {len(result)}"
         simulator_service = result[7]
         assert simulator_service is None, (
             "enabled=false 时 simulator_service 应为 None（零装配）"
@@ -246,4 +247,5 @@ class TestMainDryModeShutdown:
             agent_manager=result[6],
             simulator_service=simulator_service,
             sqlite_store=result[8],
+            storage_ledger=result[9],
         )

@@ -21,6 +21,7 @@ from src.modules.storage.schema import (
     list_expected_tables,
 )
 from src.modules.storage.sqlite_store import SQLiteStore, sqlite_store
+from src.modules.storage.storage_ledger import StorageLedger, make_room_message
 
 __all__ = [
     "ManagedSQLiteConnection",
@@ -31,4 +32,6 @@ __all__ = [
     "list_expected_tables",
     "SQLiteStore",
     "sqlite_store",
+    "StorageLedger",
+    "make_room_message",
 ]

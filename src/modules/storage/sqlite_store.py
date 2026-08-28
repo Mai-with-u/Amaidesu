@@ -240,6 +240,116 @@ class SQLiteStore:
 
         await self._run_in_executor(_exec)
 
+    # -------------------- 领域写入方法（v2.0.5 / ADR-006 溯源链收口）--------------------
+    # 三表均带 simulated 贯穿列（schema.py:149/163/177），详见 schema.py "命名硬规则"。
+    # 这里只承接 RoomMessagePayload → 表的写入入口；表结构权威在 schema.py，本层不复制。
+
+    async def insert_live_chat(
+        self,
+        *,
+        live_session_id: int,
+        timestamp_ms: int,
+        sender_role: str,
+        content: str,
+        message_type: str,
+        sender_id: Optional[str] = None,
+        sender_name: Optional[str] = None,
+        tool_result: Optional[str] = None,
+        simulated: bool = False,
+    ) -> int:
+        """插入一条 live_chat 行，返回 lastrowid。"""
+
+        def _exec() -> int:
+            with self._manager.transaction() as conn:
+                cur = conn.execute(
+                    "INSERT INTO live_chat ("
+                    "live_session_id, timestamp_ms, sender_role, sender_id, sender_name,"
+                    " content, message_type, tool_result, simulated"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        live_session_id,
+                        timestamp_ms,
+                        sender_role,
+                        sender_id,
+                        sender_name,
+                        content,
+                        message_type,
+                        tool_result,
+                        1 if simulated else 0,
+                    ),
+                )
+                return int(cur.lastrowid or 0)
+
+        return await self._run_in_executor(_exec)
+
+    async def insert_gift(
+        self,
+        *,
+        live_session_id: int,
+        timestamp_ms: int,
+        user_id: str,
+        user_name: str,
+        gift_name: str,
+        gift_count: int,
+        simulated: bool = False,
+    ) -> int:
+        """插入一条 gifts 行，返回 lastrowid。"""
+
+        def _exec() -> int:
+            with self._manager.transaction() as conn:
+                cur = conn.execute(
+                    "INSERT INTO gifts ("
+                    "live_session_id, timestamp_ms, user_id, user_name,"
+                    " gift_name, gift_count, simulated"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        live_session_id,
+                        timestamp_ms,
+                        user_id,
+                        user_name,
+                        gift_name,
+                        gift_count,
+                        1 if simulated else 0,
+                    ),
+                )
+                return int(cur.lastrowid or 0)
+
+        return await self._run_in_executor(_exec)
+
+    async def insert_super_chat(
+        self,
+        *,
+        live_session_id: int,
+        timestamp_ms: int,
+        user_id: str,
+        user_name: str,
+        amount: float,
+        message: str,
+        simulated: bool = False,
+    ) -> int:
+        """插入一条 super_chats 行，返回 lastrowid。"""
+
+        def _exec() -> int:
+            with self._manager.transaction() as conn:
+                cur = conn.execute(
+                    "INSERT INTO super_chats ("
+                    "live_session_id, timestamp_ms, user_id, user_name,"
+                    " amount, message, simulated"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        live_session_id,
+                        timestamp_ms,
+                        user_id,
+                        user_name,
+                        amount,
+                        message,
+                        1 if simulated else 0,
+                    ),
+                )
+                return int(cur.lastrowid or 0)
+
+        return await self._run_in_executor(_exec)
+
     async def transaction(self):
         """返回异步事务上下文管理器（与原始 ``manager.transaction`` 类似）。
 

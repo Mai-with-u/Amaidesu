@@ -16,7 +16,8 @@ Wave 6 重写变更：
 - 删除旧 stage 装饰器导入（src.stages.input.collectors/pipelines/deciders/output.manager/output.pipelines）
 - Agent / Tool 注册走 config [agents]/[tools] 段 + StreamerAgent 自身
 - 事件拦截器（rate_limit / similar_filter）通过 EventBus.add_interceptor 注册
-- 关闭顺序：CollectorManager.stop_all → SimulatorService.stop → AgentManager.stop_all → EventRecorder.stop → EventBus.cleanup → LLMManager.cleanup → ContextService.cleanup
+- v2.0.5：StorageLedger（room.message.# → live_chat/gifts/super_chats）装配在 EventHistoryRecorder 之后、CollectorManager 之前；关闭链加 5b
+- 关闭顺序：CollectorManager.stop_all → SimulatorService.stop → AgentManager.stop_all → EventRecorder.stop → StorageLedger.stop → EventBus.cleanup → LLMManager.cleanup → ContextService.cleanup
 """
 
 from __future__ import annotations
@@ -52,6 +53,7 @@ from src.modules.logging import get_logger
 from src.modules.prompts import get_prompt_manager
 from src.modules.simulator import SimulatorService
 from src.modules.storage.sqlite_store import SQLiteStore
+from src.modules.storage.storage_ledger import StorageLedger
 
 logger = get_logger("Main")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -281,6 +283,7 @@ async def create_app_components(
     dev_webui: bool = False,
     *,
     simulator_auto_start: bool = True,
+    storage_ledger_auto_start: bool = True,
 ) -> Tuple[
     ContextService,
     EventBus,
@@ -291,6 +294,7 @@ async def create_app_components(
     Optional["AgentManager"],
     Optional["SimulatorService"],
     "SQLiteStore",
+    Optional["StorageLedger"],
 ]:
     """v2 组合根：构造并连接所有核心组件。
 
@@ -299,6 +303,7 @@ async def create_app_components(
     2. ContextService（会话历史 / 多会话隔离）
     2b. 存储与记忆（SQLiteStore + SimpleMemory，§1.50 组合根接线）
     3. EventBus + 事件拦截器（§1.46.1）
+    3c. StorageLedger（v2.0.5 / ADR-006 溯源链收口：订阅 room.message.# 落 live_chat/gifts/super_chats）
     4. CollectorManager（采集器：bilibili/console/mock/screen）
     4b. SimulatorService（ADR-006：LLM 模拟器，开发基础设施；[simulator].enabled=true 时装配并启动）
     5. AgentManager（Agent 子系统：StreamerAgent 等）
@@ -311,11 +316,14 @@ async def create_app_components(
         dev_webui: 是否启用 WebUI 开发模式
         simulator_auto_start: 是否允许 SimulatorService 自动启动主循环。
             ``--dry`` 模式传 False，避免产生 LLM 调用。
+        storage_ledger_auto_start: 是否启动 StorageLedger 订阅。
+            ``--dry`` 模式传 False，避免组合根冒烟时事件被处理（写入数据库）。
+            关闭链（``run_shutdown``）无论如何都会 ``stop()`` 一次，幂等安全。
 
     Returns:
         (context_service, event_bus, llm_service, dashboard_server,
          event_recorder, collector_manager, agent_manager,
-         simulator_service, sqlite_store)
+         simulator_service, sqlite_store, storage_ledger)
     """
     # --- 1. LLM 服务 ---
     logger.info("初始化 LLM 服务...")
@@ -347,6 +355,15 @@ async def create_app_components(
     # --- 3b. 事件历史（系统级）---
     event_recorder = await _start_event_recorder(event_bus, config)
     logger.info("事件历史记录器已启动")
+
+    # --- 3c. StorageLedger（v2.0.5 / ADR-006 溯源链收口：room.message.# → 业务表）---
+    # 与 EventHistoryRecorder 同层（同事件→不同写目标），位置在 EventBus/事件历史之后、
+    # CollectorManager 之前——采集器 emit 在前、ledger 订阅落库在后，时序自然成立。
+    storage_ledger: Optional[StorageLedger] = await _start_storage_ledger(
+        event_bus,
+        sqlite_store,
+        auto_start=storage_ledger_auto_start,
+    )
 
     # --- 4. CollectorManager ---
     # v2：采集器配置位于 tools.toml 的 [tools.perception.config]（旧 [collectors] 段已迁移）
@@ -485,6 +502,7 @@ async def create_app_components(
             agent_manager,
             llm_service,
             log_streamer,
+            simulator_service,
         )
 
     # --- 8. 组件装配完成 ---
@@ -498,6 +516,7 @@ async def create_app_components(
         agent_manager,
         simulator_service,
         sqlite_store,
+        storage_ledger,
     )
 
 
@@ -527,6 +546,28 @@ async def _start_event_recorder(event_bus: EventBus, config: Dict[str, Any]):
         return recorder
     except Exception as e:
         logger.warning(f"事件历史记录器启动失败: {e}")
+        return None
+
+
+async def _start_storage_ledger(
+    event_bus: EventBus,
+    sqlite_store: SQLiteStore,
+    *,
+    auto_start: bool = True,
+) -> Optional[StorageLedger]:
+    """构造 StorageLedger 并按 ``auto_start`` 决定是否订阅。
+
+    ``--dry`` 模式传 ``auto_start=False`` 仅构造不订阅，避免组合根冒烟
+    时落无关测试数据；``run_shutdown`` 仍然 stop 一次（leader 幂等）。
+    """
+    try:
+        ledger = StorageLedger(event_bus=event_bus, sqlite_store=sqlite_store)
+        if auto_start:
+            await ledger.start()
+        logger.info(f"StorageLedger 已构造（auto_start={auto_start}；订阅 room.message.# → 业务表）")
+        return ledger
+    except Exception as exc:
+        logger.warning(f"StorageLedger 构造/启动失败: {exc}")
         return None
 
 
@@ -687,6 +728,7 @@ async def _start_dashboard(
     agent_manager: Optional["AgentManager"] = None,
     llm_service=None,
     log_streamer=None,
+    simulator_service: Optional["SimulatorService"] = None,
 ):
     """启动 DashboardServer（仅作为 WebUI observer，不参与决策数据流）。"""
     try:
@@ -708,6 +750,7 @@ async def _start_dashboard(
             llm_manager=llm_service,
             prompt_manager=get_prompt_manager(),
             log_streamer=log_streamer,
+            simulator_service=simulator_service,
         )
         await dashboard_server.start()
         logger.info(f"Dashboard 已启动: http://{typed_dashboard_config.host}:{typed_dashboard_config.port}")
@@ -783,6 +826,7 @@ async def run_shutdown(
     simulator_service: Optional["SimulatorService"],
     *,
     sqlite_store: Optional["SQLiteStore"] = None,
+    storage_ledger: Optional["StorageLedger"] = None,
 ) -> None:
     """v2 关闭顺序（依赖关系反向）：
 
@@ -792,6 +836,8 @@ async def run_shutdown(
     3. 停止 AgentManager（Agent 主循环，后台任务退出）
     4. 停止 Dashboard（WebSocket 连接关闭）
     5. 停止 EventHistoryRecorder（必须在 EventBus.cleanup 之前 off）
+    5b. 停止 StorageLedger（与 EventHistoryRecorder 同性质：必须在 EventBus.cleanup 之前 off，
+        否则 event_bus.off 失败；顺序在 EventHistoryRecorder 之后即可）
     6. EventBus.cleanup（清除所有 listener）
     7. LLMManager.cleanup
     8. ContextService.cleanup
@@ -844,6 +890,11 @@ async def run_shutdown(
             except Exception as e:
                 logger.debug(f"event_history cleanup: {e}")
         logger.info("事件历史记录器已停止")
+
+    if storage_ledger is not None:
+        logger.info("正在停止 StorageLedger...")
+        await safe_log(storage_ledger.stop(), "StorageLedger")
+        logger.info("StorageLedger 已停止")
 
     logger.info("等待待处理事件完成并清理 EventBus...")
     if event_bus is not None:
@@ -899,11 +950,13 @@ async def main() -> None:
         agent_manager,
         simulator_service,
         sqlite_store,
+        storage_ledger,
     ) = await create_app_components(
         config,
         config_service,
         dev_webui=args.dev_webui,
         simulator_auto_start=not args.dry,
+        storage_ledger_auto_start=not args.dry,
     )
 
     if args.dry:
@@ -919,6 +972,7 @@ async def main() -> None:
             agent_manager,
             simulator_service,
             sqlite_store=sqlite_store,
+            storage_ledger=storage_ledger,
         )
         return
 
@@ -944,6 +998,7 @@ async def main() -> None:
         agent_manager,
         simulator_service,
         sqlite_store=sqlite_store,
+        storage_ledger=storage_ledger,
     )
 
 
