@@ -868,6 +868,170 @@ class StreamerAgent(BaseAgent):
         self._logger.info(f"Agenda 推进回调: new_segment={new_segment_id!r}, reason={reason!r}")
 
     # ==================================================================
+    # 公开门面：供 Dashboard API 读取与控制 Agenda
+    # ==================================================================
+
+    def is_agenda_available(self) -> bool:
+        """判定 Agenda 是否对外可用（Agent 已启动且 Agenda 组件就绪）。
+
+        - 返回 ``True`` 仅当 ``AgendaState`` 已挂载并加载过 agenda；
+        - 返回 ``False`` 表示 Dashboard 工作台应降级为不可用视图。
+        """
+        return self._agenda_state.agenda is not None
+
+    def get_agenda_view(self, *, now_ms: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        """聚合 Dashboard 工作台所需的全部 Agenda 视图数据。
+
+        Returns:
+            ``None`` 当 Agenda 未加载（agent 未启用或 agenda 组件未就绪）；
+            否则返回::
+
+                {
+                    "snapshot": dict,  # AgendaState.get_snapshot() 原样
+                    "transitions": list[dict],  # 最近 50 条状态机转移
+                    "segments": list[dict],  # 节目单环节清单（含 branch_count / expanded / needs_expansion）
+                    "expanded": dict[str, dict | None],  # 每个环节的扩展内容缓存
+                }
+        """
+        state = self._agenda_state
+        if state.agenda is None:
+            return None
+
+        snapshot = state.get_snapshot(now_ms=now_ms)
+        transitions = state.get_transitions()
+
+        segments_view: List[Dict[str, Any]] = []
+        expanded_view: Dict[str, Optional[Dict[str, Any]]] = {}
+        for seg in getattr(state.agenda, "segments", []) or []:
+            seg_id = getattr(seg, "id", None)
+            if not seg_id:
+                continue
+            segments_view.append(
+                {
+                    "id": seg_id,
+                    "title": getattr(seg, "title", "") or "",
+                    "duration_ms": int(getattr(seg, "duration_ms", 0) or 0),
+                    "min_duration_ms": getattr(seg, "min_duration_ms", None),
+                    "task_description": getattr(seg, "task_description", "") or "",
+                    "key_points": list(getattr(seg, "key_points", []) or []),
+                    "branch_count": len(list(getattr(seg, "branches", []) or [])),
+                    "expanded": state.get_expanded(seg_id) is not None,
+                    "needs_expansion": state.needs_expansion(seg_id),
+                }
+            )
+            expanded_obj = state.get_expanded(seg_id)
+            if expanded_obj is None:
+                expanded_view[seg_id] = None
+            else:
+                expanded_view[seg_id] = {
+                    "opening_line": getattr(expanded_obj, "opening_line", "") or "",
+                    "topic_guidance": getattr(expanded_obj, "topic_guidance", "") or "",
+                    "talking_points": list(getattr(expanded_obj, "talking_points", []) or []),
+                }
+
+        return {
+            "snapshot": snapshot,
+            "transitions": transitions,
+            "segments": segments_view,
+            "expanded": expanded_view,
+        }
+
+    async def agenda_control(
+        self,
+        action: str,
+        *,
+        segment_id: Optional[str] = None,
+        path: Optional[str] = None,
+        now_ms: Optional[int] = None,
+    ) -> tuple[bool, str, Optional[Dict[str, Any]]]:
+        """执行 Dashboard 手动控制动作（pause/resume/skip/rewind/jump/unload/start）。
+
+        仅做转发与异常包装，不改变 AgendaState 既有行为；调用方可凭 ``success`` /
+        ``message`` / ``snapshot`` 三元组渲染 UI。
+
+        Args:
+            action: 控制动作名（pause/resume/skip/rewind/jump/unload/start）
+            segment_id: jump 必填；其它动作忽略
+            path: start 必填；指向 Agenda TOML（相对/绝对均可）
+            now_ms: 可选时间戳（默认走 AgendaState 注入时钟或真实时钟）
+
+        Returns:
+            ``(success, message, snapshot)``：失败时 ``snapshot`` 为 ``None``，
+            成功或部分成功（start 加载成功）时 ``snapshot`` 为最新 ``get_snapshot()``。
+        """
+        state = self._agenda_state
+
+        def _snap() -> Optional[Dict[str, Any]]:
+            try:
+                return state.get_snapshot(now_ms=now_ms)
+            except Exception as exc:  # pragma: no cover - 防御
+                self._logger.warning(f"agenda_control 取快照失败: {exc}")
+                return None
+
+        try:
+            if action == "pause":
+                state.pause(now_ms=now_ms)
+                return True, "已暂停", _snap()
+            if action == "resume":
+                state.resume(now_ms=now_ms)
+                return True, "已恢复", _snap()
+            if action == "skip":
+                new_id = state.skip(now_ms=now_ms)
+                msg = f"已跳过到 {new_id}" if new_id else "已到末尾，节目单完成"
+                return True, msg, _snap()
+            if action == "rewind":
+                new_id = state.rewind(now_ms=now_ms)
+                msg = f"已回退到 {new_id}" if new_id else "已在首段，无法回退"
+                return True, msg, _snap()
+            if action == "jump":
+                if not segment_id:
+                    return False, "jump 必须提供 segment_id", None
+                state.jump_to(segment_id, now_ms=now_ms)
+                return True, f"已跳转到 {segment_id}", _snap()
+            if action == "unload":
+                state.unload(now_ms=now_ms)
+                return True, "已卸载节目单", None
+            if action == "start":
+                if not path:
+                    return False, "start 必须提供 path", None
+                loader = self._build_agenda_loader()
+                if loader is None:
+                    return False, "AgendaLoader 无法构造（缺少 LLM/Prompt 服务）", None
+                try:
+                    agenda = await loader.load(path)
+                except FileNotFoundError as exc:
+                    return False, f"TOML 文件不存在: {exc}", None
+                except PermissionError as exc:
+                    return False, f"读取 TOML 权限不足: {exc}", None
+                except Exception as exc:
+                    return False, f"TOML 解析失败: {exc}", None
+                state.start(agenda, now_ms=now_ms)
+                return True, f"已启动节目单 {agenda.agenda_id}", _snap()
+            return False, f"未知 action: {action!r}", None
+        except ValueError as exc:
+            # jump_to 不存在的 segment_id 等契约级错误
+            return False, str(exc), _snap()
+        except Exception as exc:
+            # 状态机内部错误（如 unload 后再操作）统一兜底，避免 dashboard 500
+            self._logger.warning(f"agenda_control {action!r} 异常: {exc}", exc_info=True)
+            return False, f"控制失败: {exc}", _snap()
+
+    def _build_agenda_loader(self) -> Optional["AgendaLoader"]:
+        """构造（或复用）AgendaLoader；start 动作需要时调用。"""
+        if self._agenda_loader is not None:
+            return self._agenda_loader
+        if self._llm is None or self._prompt is None:
+            return None
+        self._agenda_loader = AgendaLoader(
+            llm_manager=self._llm,
+            prompt_manager=self._prompt,
+            config={
+                "agenda_expand_client": self.typed_config.agenda_expand_client,
+            },
+        )
+        return self._agenda_loader
+
+    # ==================================================================
     # 历史读取（duck-typed 鸭子接口）
     # ==================================================================
 

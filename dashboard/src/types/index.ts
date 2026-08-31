@@ -352,6 +352,153 @@ export interface MockCollectorStatus {
   message: string;
 }
 
+// ==================== Agenda（节目单控制面） ====================
+
+/**
+ * 节目单运行时状态（`/api/v1/agenda/state` 的 `snapshot` 字段）。
+ *
+ * - `status`：五态机 `inactive | loading | running | completed | unloaded`；
+ *   前端据此切换"未加载"/"运行中"/"已结束"三套布局。
+ * - `is_paused`：仅 running 期间有效；前端据此 toggle 暂停/继续按钮与本地 tick。
+ * - `manually_overridden`：用户手动跳过/调整过进度，提示"手动模式"角标。
+ * - `current_segment.elapsed_ms` 为后端最近一次上报的累计已播毫秒；
+ *   `remaining_ms = duration_ms - elapsed_ms`，前端用 1s 本地 tick 重算显示。
+ * - `progress_percent / elapsed_live_ms / total_planned_ms`：可能为 null
+ *   （节目单尚未完整规划或快照缺失），前端按 fallback 处理。
+ */
+export interface AgendaSnapshot {
+  status: 'inactive' | 'loading' | 'running' | 'completed' | 'unloaded';
+  current_segment: AgendaCurrentSegmentView | null;
+  next_segment: AgendaNextSegmentView | null;
+  completed_count: number;
+  total_count: number;
+  is_paused: boolean;
+  elapsed_live_ms: number | null;
+  total_planned_ms: number | null;
+  progress_percent: number | null;
+  agenda_id: string | null;
+  agenda_title: string | null;
+  manually_overridden: boolean;
+}
+
+/**
+ * 当前环节视图（快照嵌入对象）。
+ *
+ * `expanded` 表示环节是否已完成扩展内容生成（前端据此隐藏 "扩展内容生成中" 提示）；
+ * `needs_expansion` 为后端判定的"是否需要扩展"——若为 true 且未 expanded 则展示 warning。
+ */
+export interface AgendaCurrentSegmentView {
+  id: string;
+  title: string;
+  duration_ms: number;
+  elapsed_ms: number;
+  remaining_ms: number;
+  expanded: boolean;
+  needs_expansion: boolean;
+}
+
+/** 下一环节提示（仅 id/title，不含完整配置）。 */
+export interface AgendaNextSegmentView {
+  id: string;
+  title: string;
+}
+
+/**
+ * 节目单环节完整定义（`/api/v1/agenda/state` 的 `segments` 字段）。
+ *
+ * - `inserted_by` / `starts_at_ms` 为后端可选扩展字段，前端按有/无决定是否渲染"来源"和"计划开始"列。
+ * - `key_points` / `branch_count` 在 drawer 展示。
+ * - `expanded` 与 `needs_expansion` 同步 snapshot.current_segment 的对应字段。
+ */
+export interface AgendaSegmentView {
+  id: string;
+  title: string;
+  duration_ms: number;
+  min_duration_ms: number | null;
+  task_description: string;
+  key_points: string[];
+  branch_count: number;
+  expanded: boolean;
+  needs_expansion: boolean;
+  inserted_by?: 'human' | 'ai';
+  starts_at_ms?: number | null;
+}
+
+/** 环节扩展内容（key 为 segment_id，null 表示尚未生成）。 */
+export interface AgendaExpandedContent {
+  opening_line: string;
+  topic_guidance: string;
+  talking_points: string[];
+}
+
+/** 节目单推进历史（最近 50 条，时间倒序由后端保证）。 */
+export interface AgendaTransitionEntry {
+  event: string;
+  segment_id: string;
+  reason: string;
+  timestamp_ms: number;
+}
+
+/** 节目单运行时配置摘要（只读；写需走 Settings 页）。 */
+export interface AgendaConfig {
+  agenda_enabled: boolean;
+  agenda_path: string;
+  agenda_auto_start: boolean;
+}
+
+/**
+ * `GET /api/v1/agenda/state` 完整响应。
+ *
+ * - `available=false` 表示后端未启用 agenda（config.agenda_enabled=false 或
+ *   AgendaManager 未注入），前端按"不可用态"渲染引导用户去 Settings。
+ * - `message` 在 available=false 时填入原因文案，available=true 时为 null。
+ * - `transitions` / `segments` / `expanded` 仅在 available=true 时非空。
+ */
+export interface AgendaStateResponse {
+  available: boolean;
+  message: string | null;
+  snapshot: AgendaSnapshot | null;
+  transitions: AgendaTransitionEntry[];
+  segments: AgendaSegmentView[];
+  expanded: Record<string, AgendaExpandedContent | null>;
+  config: AgendaConfig;
+}
+
+/**
+ * 节目单控制动作枚举（与后端 control 端点对齐）。
+ *
+ * - `pause` / `resume` / `skip` / `rewind` / `unload` 仅在 running 期间合法；
+ * - `jump` 需要 `segment_id`；
+ * - `start` 需要 `path`（未加载态启动用）。
+ */
+export type AgendaControlAction =
+  | 'pause'
+  | 'resume'
+  | 'skip'
+  | 'rewind'
+  | 'unload'
+  | 'jump'
+  | 'start';
+
+/** `POST /api/v1/agenda/control` 请求体。 */
+export interface AgendaControlRequest {
+  action: AgendaControlAction;
+  segment_id?: string;
+  path?: string;
+}
+
+/**
+ * `POST /api/v1/agenda/control` 响应。
+ *
+ * `success=false` 时 `message` 填错误原因（前端用 ElMessage 弹窗）；成功时
+ * `snapshot` 是控制后最新快照（前端用其刷新展示，避免 WS 抖动期的闪烁）。
+ */
+export interface AgendaControlResponse {
+  success: boolean;
+  message: string;
+  snapshot: AgendaSnapshot | null;
+}
+
 // ==================== 导出 settings / llm / trace 子模块 ====================
 
 export * from './settings';

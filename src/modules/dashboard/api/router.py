@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.modules.dashboard.api import (
+    agenda,
     capabilities,
     components,
     config,
@@ -47,6 +48,7 @@ def create_app() -> FastAPI:
     app.include_router(capabilities.router, prefix="/api/v1", tags=["Capabilities"])
     app.include_router(events.router, prefix="/api/v1", tags=["Events"])
     app.include_router(traces.router, prefix="/api/v1", tags=["Traces"])
+    app.include_router(agenda.router, prefix="/api/v1/agenda", tags=["Agenda"])
 
     # 模拟器与 Mock 采集器控制面（ADR-006 follow-up）
     app.include_router(simulator.router, prefix="/api/v1/simulator", tags=["Simulator"])

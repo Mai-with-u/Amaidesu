@@ -5,6 +5,7 @@ Dashboard API 路由模块
 """
 
 from src.modules.dashboard.api import (
+    agenda,
     components,
     config,
     debug,
@@ -14,4 +15,4 @@ from src.modules.dashboard.api import (
     system,
 )
 
-__all__ = ["system", "components", "messages", "config", "debug", "simulator", "mock"]
+__all__ = ["system", "components", "messages", "config", "debug", "simulator", "mock", "agenda"]

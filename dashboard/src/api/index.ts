@@ -34,6 +34,9 @@ import type {
   MockCollectorStatus,
   SimulatorStatus,
   SimulatorControlResponse,
+  AgendaStateResponse,
+  AgendaControlRequest,
+  AgendaControlResponse,
 } from '@/types';
 
 const api = axios.create({
@@ -124,5 +127,19 @@ export const mockCollectorApi = {
 // `traces.ts`：GET /traces（最近链路列表）+ GET /traces/{message_id}（按 message_id
 // 聚合 messages/planning/execution 三段事件；planning/execution 可能为空数组）。
 export * from './traces';
+
+// ===== Agenda（节目单控制面） =====
+//
+// `GET /agenda/state`：当前节目单运行时快照（available / snapshot / transitions /
+// segments / expanded / config）。available=false 时 snapshot=null，前端按不可用
+// 态渲染引导用户去设置页开启。
+// `POST /agenda/control`：手动控制（pause / resume / skip / rewind / unload /
+// jump / start），返回最新 snapshot；前端只在收到响应后做错误提示，正常状态
+// 由后端通过 `agenda.update` / `planner.checkpoint` 事件推上来。
+export const agendaApi = {
+  getState: () => api.get<AgendaStateResponse>('/agenda/state'),
+  control: (request: AgendaControlRequest) =>
+    api.post<AgendaControlResponse>('/agenda/control', request),
+};
 
 export default api;
