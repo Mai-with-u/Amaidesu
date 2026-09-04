@@ -3,7 +3,7 @@
 中央化 main.py 原有的 if/elif 实例化链（Single Source of Truth），
 供启动装配与 Dashboard 动态启停复用。
 
-配置名与类名映射（v2 命名）：
+配置名与类名映射：
 - bili_danmaku         → BiliDanmakuCollector（legacy）
 - bili_danmaku_official→ BiliDanmakuOfficialCollector
 - console_input        → ConsoleInputCollector
@@ -37,10 +37,9 @@ def instantiate_collector(
 ) -> Optional[BaseCollector]:
     """按名实例化采集器；未知名字返回 None。
 
-    v2.0.9：新增可选 ``llm_manager`` 参数。仅 ``screen``（read_pingmu）需要
-    LLMManager 调用 VLM；其余 collector 沿用事件总线即可。llm_manager 在 main.py
-    装配时从步骤 1（llm_service）透传至屏幕采集器，避免 ScreenReader 自带 aiohttp
-    绕过统一 profile 管理（D1 收编）。
+    ``llm_manager`` 为可选参数：仅 ``screen``（read_pingmu）需要 LLMManager
+    调用 VLM；其余 collector 沿用事件总线即可。传入 llm_manager 后透传至屏幕
+    采集器，避免 ScreenReader 自带 aiohttp 绕过统一 profile 管理。
     """
     if name == "bili_danmaku":
         from src.modules.collectors.bilibili.legacy.bili_danmaku_collector import BiliDanmakuCollector

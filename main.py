@@ -1,9 +1,9 @@
-"""Amaidesu 应用程序主入口（Wave 6 重写）
+"""Amaidesu 应用程序主入口。
 
-v2 架构组合根（参见 .omo/drafts/amaidesu-v2-architecture.md）：
+v2 架构组合根：
 - LLMManager：统一 LLM 客户端池
-- ContextService：会话历史（替代旧 ContextService 路径）
-- EventBus：事件分发；启动时挂载事件拦截器（§1.46.1）
+- ContextService：会话历史/多会话隔离
+- EventBus：事件分发；启动时挂载事件拦截器
 - CollectorManager：管理 src/modules/collectors/ 下所有 Input Domain 组件
 - AgentManager：管理 src/agents/ 下所有 Agent（包括主播 StreamerAgent）
 - ToolRegistry：管理 src/modules/tools/ 下所有 Output Domain 组件
@@ -11,13 +11,7 @@ v2 架构组合根（参见 .omo/drafts/amaidesu-v2-architecture.md）：
 - MCPServerService：外部 MCP 协议适配
 - LogStreamer + EventHistoryRecorder：日志 + 事件历史
 
-Wave 6 重写变更：
-- 删除旧 InputCollectorManager / DeciderManager / OutputHandlerManager 引用
-- 删除旧 stage 装饰器导入（src.stages.input.collectors/pipelines/deciders/output.manager/output.pipelines）
-- Agent / Tool 注册走 config [agents]/[tools] 段 + StreamerAgent 自身
-- 事件拦截器（rate_limit / similar_filter）通过 EventBus.add_interceptor 注册
-- v2.0.5：StorageLedger（room.message.# → live_chat/gifts/super_chats）装配在 EventHistoryRecorder 之后、CollectorManager 之前；关闭链加 5b
-- 关闭顺序：CollectorManager.stop_all → SimulatorService.stop → AgentManager.stop_all → EventRecorder.stop → StorageLedger.stop → EventBus.cleanup → LLMManager.cleanup → ContextService.cleanup
+关闭顺序：CollectorManager.stop_all → SimulatorService.stop → AgentManager.stop_all → EventRecorder.stop → StorageLedger.stop → EventBus.cleanup → LLMManager.cleanup → ContextService.cleanup
 """
 
 from __future__ import annotations
@@ -33,8 +27,12 @@ from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger as loguru_logger
 
+from src.agents.game.text_adv import TextAdvGameAgent, TextAdvGameConfig
+from src.agents.streamer.streamer_agent import StreamerAgent, StreamerAgentConfig
 from src.modules.agents.manager import AgentManager
+from src.modules.collectors.factory import instantiate_collector
 from src.modules.collectors.manager import CollectorManager
+from src.modules.config.core_schemas import DashboardConfig, EventHistoryConfig
 from src.modules.config.service import ConfigService
 from src.modules.context import ContextService, ContextServiceConfig
 from src.modules.dashboard.server import DashboardServer
@@ -43,17 +41,26 @@ from src.modules.events import (
     list_registered_events,
     register_core_events,
 )
+from src.modules.events.event_history import EventHistoryService
 from src.modules.events.event_recorder import EventHistoryRecorder
 from src.modules.events.interceptors import (
     RateLimitInterceptor,
     SimilarFilterInterceptor,
 )
 from src.modules.llm.manager import LLMManager
-from src.modules.logging import get_logger
+from src.modules.logging import configure_from_config, get_logger
+from src.modules.logging.log_streamer import LogStreamer
+from src.modules.memory.bootstrap import bind_memory_tools, build_memory_stack
 from src.modules.prompts import get_prompt_manager
 from src.modules.simulator import SimulatorService
 from src.modules.storage.sqlite_store import SQLiteStore
 from src.modules.storage.storage_ledger import StorageLedger
+from src.modules.tools import ToolRegistry
+from src.modules.tools.bootstrap import bind_core_tools
+from src.modules.tools.content_engine import StubContentEngine
+from src.modules.tools.decorator import bind_pending_tools
+from src.modules.tools.perception.look_at_screen import LookAtScreenProvider
+from src.modules.tools.perception.pil_capture import PillowImageGrabCapture
 
 logger = get_logger("Main")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -93,8 +100,6 @@ def setup_logging_early(args: argparse.Namespace) -> None:
     使用默认的INFO级别，避免DEBUG日志过早输出。
     完整的日志配置会在load_config后再次调用。
     """
-    from src.modules.logging import configure_from_config
-
     default_config = {"level": "INFO", "console_level": "INFO"}
 
     if args.debug:
@@ -111,8 +116,6 @@ def setup_logging(args: argparse.Namespace, logging_config: Optional[Dict[str, A
         args: 命令行参数
         logging_config: 日志配置字典（从 ConfigService.get_section("logging") 获取）
     """
-    from src.modules.logging import configure_from_config
-
     final_config = {}
 
     if logging_config:
@@ -161,9 +164,9 @@ def load_config() -> Tuple[ConfigService, Dict[str, Any], bool]:
 
 
 def validate_config(config: Dict[str, Any]) -> None:
-    """验证 v2 配置完整性，缺失必要配置时给出明确错误提示。
+    """验证配置完整性，缺失必要配置时给出明确错误提示。
 
-    v2 配置按 7 文件树划分（参见 multi_file_loader._CONFIG_FILES）：
+    配置按 7 文件树划分（参见 multi_file_loader._CONFIG_FILES）：
     core / model / agents / tools / memory / storage / background。
     本函数只做"存在性 + 顶层类型"轻量检查；详细字段验证由各 ConfigSchema
     在组件构造阶段自动完成（fail-fast 由 Pydantic 保证）。
@@ -240,11 +243,11 @@ def exit_if_config_created(was_created: bool) -> None:
 
 
 def register_event_interceptors(event_bus: EventBus, config: Dict[str, Any]) -> None:
-    """注册输入域事件拦截器（§1.46.1）。
+    """注册输入域事件拦截器。
 
-    - rate_limit：从旧 input pipeline 迁移（防刷屏/防突发）
-    - similar_filter：从旧 input pipeline 迁移（相似文本合并）
-    - 拦截器作用于 ``room.message.*`` 事件（v2 语义域）
+    - rate_limit：防刷屏/防突发
+    - similar_filter：相似文本合并
+    - 拦截器作用于 ``room.message.*`` 事件
     - 拦截器返回 ``None`` 即丢弃该事件
     """
     interceptors_config = config.get("interceptors", {}) if isinstance(config, dict) else {}
@@ -296,19 +299,12 @@ async def create_app_components(
     "SQLiteStore",
     Optional["StorageLedger"],
 ]:
-    """v2 组合根：构造并连接所有核心组件。
+    """组合根：构造并连接所有核心组件。
 
-    创建顺序（依赖关系）：
-    1. LLMManager（统一 LLM 客户端池）
-    2. ContextService（会话历史 / 多会话隔离）
-    2b. 存储与记忆（SQLiteStore + SimpleMemory，§1.50 组合根接线）
-    3. EventBus + 事件拦截器（§1.46.1）
-    3c. StorageLedger（v2.0.5 / ADR-006 溯源链收口：订阅 room.message.# 落 live_chat/gifts/super_chats）
-    4. CollectorManager（采集器：bilibili/console/mock/screen）
-    4b. SimulatorService（ADR-006：LLM 模拟器，开发基础设施；[simulator].enabled=true 时装配并启动）
-    5. AgentManager（Agent 子系统：StreamerAgent 等）
-    6. ToolRegistry（bind_core_tools/bind_pending_tools 显式接线 + Agent 自注册，audit_tools 审计）
-    7. DashboardServer（WebUI observer）
+    按依赖关系构造：LLM/ContextService 为基座，再装存储与记忆、EventBus 与拦截器，
+    然后 EventHistoryRecorder + StorageLedger（溯源链收口），Collector/Simulator/Agent
+    按各自配置开关装配，ToolRegistry 在 Agent 启动前完成 L2/L1 接线与审计，
+    最后挂 DashboardServer 作为 WebUI observer。
 
     Args:
         config: 完整配置字典
@@ -325,13 +321,13 @@ async def create_app_components(
          event_recorder, collector_manager, agent_manager,
          simulator_service, sqlite_store, storage_ledger)
     """
-    # --- 1. LLM 服务 ---
+    # --- LLM 服务 ---
     logger.info("初始化 LLM 服务...")
     llm_service = LLMManager()
     await llm_service.setup(config)
     logger.info("已创建 LLM 服务实例")
 
-    # --- 2. ContextService ---
+    # --- ContextService ---
     logger.info("初始化上下文服务...")
     context_config = config.get("context", {}) if isinstance(config, dict) else {}
     context_service_config = ContextServiceConfig(**context_config)
@@ -339,41 +335,35 @@ async def create_app_components(
     await context_service.initialize()
     logger.info("已创建上下文服务实例")
 
-    # --- 2b. 存储与记忆（§1.50：SQLiteStore + SimpleMemory 组合根接线）---
-    from src.modules.memory.bootstrap import build_memory_stack
-
+    # --- 存储与记忆（SQLiteStore + SimpleMemory）---
     logger.info("初始化存储与记忆（SQLiteStore + SimpleMemory）...")
     sqlite_store, memory = await build_memory_stack(config)
     logger.info(f"存储与记忆已就绪（db={sqlite_store.db_path}）")
 
-    # --- 3. EventBus + 拦截器 ---
+    # --- EventBus + 拦截器 ---
     logger.info("初始化事件总线...")
     event_bus = EventBus()
     register_event_interceptors(event_bus, config)
     logger.info("事件总线已初始化，事件拦截器已挂载")
 
-    # --- 3b. 事件历史（系统级）---
+    # --- 事件历史（系统级）---
     event_recorder = await _start_event_recorder(event_bus, config)
     logger.info("事件历史记录器已启动")
 
-    # --- 3c. StorageLedger（v2.0.5 / ADR-006 溯源链收口：room.message.# → 业务表）---
-    # 与 EventHistoryRecorder 同层（同事件→不同写目标），位置在 EventBus/事件历史之后、
-    # CollectorManager 之前——采集器 emit 在前、ledger 订阅落库在后，时序自然成立。
+    # --- StorageLedger（订阅 room.message.# 落业务表）---
     storage_ledger: Optional[StorageLedger] = await _start_storage_ledger(
         event_bus,
         sqlite_store,
         auto_start=storage_ledger_auto_start,
     )
 
-    # --- 4. CollectorManager ---
-    # v2：采集器配置位于 tools.toml 的 [tools.perception.config]（旧 [collectors] 段已迁移）
+    # --- CollectorManager ---
+    # 采集器配置位于 tools.toml 的 [tools.perception.config]
     collector_manager: Optional["CollectorManager"] = None
     tools_perception = (config.get("tools") or {}).get("perception", {}) if isinstance(config, dict) else {}
     collectors_config = tools_perception.get("config", {}) if isinstance(tools_perception, dict) else {}
     if collectors_config:
         logger.info("初始化 CollectorManager（src/modules/collectors/）...")
-        from src.modules.collectors.manager import CollectorManager
-
         collector_manager = CollectorManager()
         await _register_collectors_from_config(
             collector_manager,
@@ -385,7 +375,7 @@ async def create_app_components(
         await collector_manager.start_all()
         logger.info(f"CollectorManager 已启动（{len(collector_manager)} 个 Collector）")
 
-    # --- 4b. SimulatorService（ADR-006：开发基础设施）---
+    # --- SimulatorService（开发基础设施）---
     # 默认 enabled=false 生产零装配；enabled=true 时装配并自动启动（除非 --dry）。
     # 装配需 LLMManager + EventBus + ConfigService（注入 services_by_type 供 LLMManager 类型 key 查找）。
     simulator_service: Optional["SimulatorService"] = None
@@ -407,17 +397,11 @@ async def create_app_components(
     else:
         logger.debug("[simulator].enabled=false，零装配 SimulatorService")
 
-    # --- 5. AgentManager + StreamerAgent ---
+    # --- AgentManager + StreamerAgent ---
     agent_manager: Optional["AgentManager"] = None
     agents_config = config.get("agents", {}) if isinstance(config, dict) else {}
     if agents_config:
         logger.info("初始化 AgentManager（src/agents/）...")
-        from src.modules.agents.manager import AgentManager
-        from src.modules.memory.bootstrap import bind_memory_tools
-        from src.modules.tools import ToolRegistry
-        from src.modules.tools.bootstrap import bind_core_tools
-        from src.modules.tools.decorator import bind_pending_tools
-
         tool_registry = ToolRegistry()
         agent_manager = AgentManager(tool_registry=tool_registry, memory=memory)
         await _register_agents_from_config(
@@ -431,10 +415,10 @@ async def create_app_components(
             memory,
         )
 
-        # --- 6b. 核心工具包（output/* 的 L2 Provider） + L1 @tool pending 刷入 ---
+        # --- 核心工具包（output/* 的 L2 Provider） + L1 @tool pending 刷入 ---
         # 在 agent_manager.start_all() 之前完成 → StreamerAgent._on_start()
         # 调用 _register_tools() 时 registry 已就绪，可与 L2/L1 工具同台。
-        # 配置切片取法与 step 5 的 tools.perception.config 一致：先取
+        # 配置切片取法与 tools.perception.config 一致：先取
         # [tools.output] 子段（ToolPackMeta），再取其 .config 字典作为
         # bind_core_tools 入参；缺失则降级为 {}（多数包将走 schema 默认）。
         tools_output_pack = (config.get("tools") or {}).get("output", {}) if isinstance(config, dict) else {}
@@ -454,17 +438,14 @@ async def create_app_components(
         else:
             logger.debug("@tool pending 表为空（L1 装饰器路径今日无产出）")
 
-        # --- 6c. 记忆检索工具（§1.51 第二路：LLM 主动 query_memory）---
+        # --- 记忆检索工具（LLM 主动 query_memory）---
         memory_tool_count = bind_memory_tools(tool_registry, memory)
         logger.info(f"query_memory 记忆检索工具已注册（新增 {memory_tool_count} 个）")
 
-        # --- 6d. 屏幕快照工具 look_at_screen（L2 DI：组合根注入 Pillow 截图后端）---
+        # --- 屏幕快照工具 look_at_screen（L2 DI：组合根注入 Pillow 截图后端）---
         # bootstrap 明文不接管 DI 工具（见 bootstrap.py 注释），由组合根按开关装配
         las_cfg = (config.get("tools") or {}).get("look_at_screen", {}) if isinstance(config, dict) else {}
         if isinstance(las_cfg, dict) and las_cfg.get("enabled", True):
-            from src.modules.tools.perception.look_at_screen import LookAtScreenProvider
-            from src.modules.tools.perception.pil_capture import PillowImageGrabCapture
-
             tool_registry.register_provider(
                 LookAtScreenProvider(
                     screen_capture=PillowImageGrabCapture(),
@@ -483,7 +464,7 @@ async def create_app_components(
         await agent_manager.start_all()
         logger.info(f"AgentManager 已启动（{len(agent_manager)} 个 Agent）")
 
-    # --- 6. ToolRegistry 工具审计：所有 Agent 声明的工具是否都已注册实现 ---
+    # --- ToolRegistry 工具审计：所有 Agent 声明的工具是否都已注册实现 ---
     if agent_manager is not None and agent_manager._tool_registry is not None:
         registry = agent_manager._tool_registry
         logger.info(f"ToolRegistry 就绪（{len(registry)} 个工具已注册）")
@@ -493,7 +474,7 @@ async def create_app_components(
         else:
             logger.info("工具审计通过：所有 Agent 声明的工具均已在 ToolRegistry 中找到实现")
 
-    # --- 7. DashboardServer ---
+    # --- DashboardServer ---
     dashboard_server: Optional["DashboardServer"] = None
     log_streamer = await _start_log_streamer()
     dashboard_config = config.get("dashboard", {}) if isinstance(config, dict) else {}
@@ -511,7 +492,7 @@ async def create_app_components(
             simulator_service,
         )
 
-    # --- 8. 组件装配完成 ---
+    # --- 组件装配完成 ---
     return (
         context_service,
         event_bus,
@@ -533,10 +514,6 @@ async def create_app_components(
 
 async def _start_event_recorder(event_bus: EventBus, config: Dict[str, Any]):
     """启动事件历史记录器（系统级，与 Dashboard 解耦）。"""
-    from src.modules.config.core_schemas import EventHistoryConfig
-    from src.modules.events.event_history import EventHistoryService
-    from src.modules.events.event_recorder import EventHistoryRecorder
-
     events_config = config.get("events", {}) if isinstance(config, dict) else {}
     typed_events_config = EventHistoryConfig(**events_config)
     try:
@@ -579,8 +556,6 @@ async def _start_storage_ledger(
 
 async def _start_log_streamer():
     """启动 LogStreamer（用于 Dashboard 抓取实时日志）。"""
-    from src.modules.logging.log_streamer import LogStreamer
-
     streamer = LogStreamer(min_level="DEBUG", persist=True)
     await streamer.start()
     return streamer
@@ -600,11 +575,9 @@ async def _register_collectors_from_config(
         bili_danmaku = { ... }
         mock_danmaku = { ... }
 
-    v2.0.9 收编：新增可选 ``llm_service`` 参数，透传给需要 VLM 的采集器（仅
+    新增可选 ``llm_service`` 参数，透传给需要 VLM 的采集器（仅
     ``screen``/``read_pingmu``）。其余 collector 不消费 LLMManager，参数被忽略。
     """
-    from src.modules.collectors.factory import instantiate_collector
-
     enabled_list = config_section.get("enabled", []) or []
     for collector_name in enabled_list:
         sub_cfg = config_section.get(collector_name, {})
@@ -639,7 +612,7 @@ async def _register_agents_from_config(
         streamer = { planner_llm = "llm_fast", replyer_llm = "llm", ... }
         game = { ... }
 
-    memory 为 §1.50 记忆后端（SimpleMemory），仅 streamer Agent 消费。
+    memory 为 SimpleMemory 记忆后端，仅 streamer Agent 消费。
     """
     enabled_list = config_section.get("enabled", []) or []
     for agent_name in enabled_list:
@@ -647,18 +620,13 @@ async def _register_agents_from_config(
         if not isinstance(sub_cfg, dict):
             sub_cfg = {}
         if agent_name == "streamer":
-            from src.agents.streamer.streamer_agent import (
-                StreamerAgent,
-                StreamerAgentConfig,
-            )
-
             try:
                 cfg_obj = StreamerAgentConfig(**sub_cfg) if sub_cfg else StreamerAgentConfig()
             except Exception as e:
                 logger.warning(f"解析 StreamerAgent 配置失败: {e}; 使用默认配置")
                 cfg_obj = StreamerAgentConfig()
 
-            # v2.0.6 B2 修复：从 config_service 拉取 [persona] 段，构造 StreamerAgent
+            # 从 config_service 拉取 [persona] 段，构造 StreamerAgent
             # 时透传为 persona_provider。优先级链：persona dict（来自 core.toml）
             # > StreamerAgentConfig.bot_name > _DEFAULT_*。缺段时退化为空 dict，
             # 由下游 Replyer 走 _DEFAULT_* 兜底，避免装配失败阻断冷启动。
@@ -698,12 +666,6 @@ async def _register_agents_from_config(
             continue
         if agent_name == "game":
             try:
-                from src.agents.game.text_adv import (
-                    TextAdvGameAgent,
-                    TextAdvGameConfig,
-                )
-                from src.modules.tools.content_engine import StubContentEngine
-
                 game_cfg_dict = sub_cfg if isinstance(sub_cfg, dict) else {}
                 engine_name = str(game_cfg_dict.get("engine", "text_adv") or "text_adv")
                 if engine_name != "text_adv":
@@ -752,9 +714,6 @@ async def _start_dashboard(
 ):
     """启动 DashboardServer（仅作为 WebUI observer，不参与决策数据流）。"""
     try:
-        from src.modules.config.core_schemas import DashboardConfig
-        from src.modules.dashboard.server import DashboardServer
-
         dashboard_config = dict(dashboard_config)
         dashboard_config["dev_mode"] = dev_webui
         typed_dashboard_config = DashboardConfig(**dashboard_config)
@@ -848,21 +807,7 @@ async def run_shutdown(
     sqlite_store: Optional["SQLiteStore"] = None,
     storage_ledger: Optional["StorageLedger"] = None,
 ) -> None:
-    """v2 关闭顺序（依赖关系反向）：
-
-    1. 停止 CollectorManager（数据生产者，停止 emit 事件）
-    2. 停止 SimulatorService（ADR-006：开发基础设施，归类为输入域下游组件，
-       排在生产组件之后、EventBus.cleanup 之前）
-    3. 停止 AgentManager（Agent 主循环，后台任务退出）
-    4. 停止 Dashboard（WebSocket 连接关闭）
-    5. 停止 EventHistoryRecorder（必须在 EventBus.cleanup 之前 off）
-    5b. 停止 StorageLedger（与 EventHistoryRecorder 同性质：必须在 EventBus.cleanup 之前 off，
-        否则 event_bus.off 失败；顺序在 EventHistoryRecorder 之后即可）
-    6. EventBus.cleanup（清除所有 listener）
-    7. LLMManager.cleanup
-    8. ContextService.cleanup
-    9. SQLiteStore.close（存储落盘收尾，最后关闭）
-    """
+    """按依赖关系反向关闭：先停数据生产者 CollectorManager，再停 SimulatorService 与 AgentManager，然后 Dashboard 与事件历史/StorageLedger（必须在 EventBus.cleanup 之前 off，否则 listener 解绑失败），最后 EventBus/ContextService/LLMManager 清理，SQLiteStore.close 收尾落盘。"""
     _saw_cancelled = False
 
     async def safe_log(coro, name: str):
@@ -946,7 +891,7 @@ async def run_shutdown(
 
 
 async def main() -> None:
-    """v2 应用程序主入口。"""
+    """应用程序主入口。"""
     args = parse_args()
     setup_logging_early(args)
 

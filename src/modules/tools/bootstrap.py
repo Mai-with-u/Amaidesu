@@ -1,5 +1,5 @@
 """
-工具层组合根装配入口（Wave 8 / 工具注册重构）
+工具层组合根装配入口
 
 集中装配 Amaidesu 框架自带的"核心"工具包到指定 ``ToolRegistry``，
 并把 ``@tool`` 装饰器挂起的 pending 工具刷入同一 registry。
@@ -16,7 +16,7 @@
 - **与 L2 Provider 注册语义对齐**——输出包内已有 ``register_<x>_tools``
   函数，统一调用入口（不改 provider 内部）
 - **不感知 Agent 层**——bootstrap 只调 provider 的 register 函数，
-  不引入对 ``src/agents/**`` 的依赖（架构红线 §1.5）
+  不引入对 ``src/agents/**`` 的依赖（架构红线：工具不感知 Agent 层）
 
 ## 调用示例（main.py 装配阶段）
 
@@ -48,7 +48,7 @@ bind_pending_tools(registry)  # 刷入 @tool pending
 - ``perception`` / ``content_engine`` 是 L2 DI 工具（需 ``ScreenCapture`` /
   ``ContentEngine`` 注入），无 ``register_*_tools`` 入口，由组合根在
   知道具体依赖后再 ``registry.register_provider(...)`` 注入——**不在本
-  bootstrap 范围**（架构红线 §1.5）
+  bootstrap 范围**（架构红线：工具不感知 Agent 层）
 """
 
 from __future__ import annotations

@@ -1,21 +1,21 @@
 """
-ToolRegistry —— 工具注册中心（Wave 3 / §1.5）
+ToolRegistry —— 工具注册中心
 
 - 按名分发工具
 - 去重（先注册保留）
 - 调用失败兜底（不抛异常，返回失败 ``ToolExecutionResult``）
 - 接受 ``ToolProvider`` 整体注册（Provider.list_tools 全量展开）
 
-权威定案：.omo/drafts/amaidesu-v2-architecture.md §1.5 末尾
-> 统一由 ToolRegistry：register（去重保留先注册）/ list_tools / invoke
-> （异常→error result 兜底）/ to_llm_definitions（内部→LLM 转换层，
-> 解耦协议）
+接口约定：register（去重保留先注册）/ list_tools / invoke
+（异常→error result 兜底）/ to_llm_definitions（内部→LLM 转换层，
+解耦协议）
 """
 
 from __future__ import annotations
 
 import asyncio
 import inspect
+import time
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
 
 from src.modules.logging import get_logger
@@ -152,8 +152,6 @@ class ToolRegistry:
         注意：实施方返回的已经是 ToolExecutionResult；此处只做包一层 +
         未找到时兜底。
         """
-        import time as _time
-
         pair = self._tools.get(invocation.tool_name)
         if pair is None:
             logger.warning(
@@ -163,7 +161,7 @@ class ToolRegistry:
                 tool_name=invocation.tool_name,
                 success=False,
                 error_message=f"未知工具: '{invocation.tool_name}'",
-                timestamp_ms=int(_time.time() * 1000),
+                timestamp_ms=int(time.time() * 1000),
             )
         _spec, impl = pair
         try:
@@ -177,7 +175,7 @@ class ToolRegistry:
                 tool_name=invocation.tool_name,
                 success=False,
                 error_message=f"{type(exc).__name__}: {exc}",
-                timestamp_ms=int(_time.time() * 1000),
+                timestamp_ms=int(time.time() * 1000),
             )
 
     async def invoke_many(

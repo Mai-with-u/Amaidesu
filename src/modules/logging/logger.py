@@ -4,6 +4,7 @@
 应在应用启动时（main.py）调用 configure_from_config() 进行配置。
 """
 
+import datetime
 import json
 import os
 import sys
@@ -165,8 +166,6 @@ def configure_from_config(config_dict: dict | None = None) -> None:
             # 根据 split_by_session 决定文件名格式
             if split_by_session:
                 # 按会话分割：每次启动生成新文件
-                import datetime
-
                 time_suffix = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 file_path = os.path.join(directory, f"amaidesu_{time_suffix}.log")
             else:

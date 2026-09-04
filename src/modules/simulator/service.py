@@ -1,4 +1,4 @@
-"""SimulatorService - 模拟直播间服务的生命周期管理器（ADR-006）
+"""SimulatorService - 模拟直播间服务的生命周期管理器
 
 定位：**官方开发基础设施**（与 Dashboard / ``--dry`` / 日志系统同类），不属于生产
 直播组件。``[simulator].enabled = true`` 时由组合根装配并自动启动（默认 ``false``，
@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import uuid
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from src.modules.events.event_bus import EventBus
@@ -262,14 +263,12 @@ class SimulatorService:
         session_id: str,
     ) -> None:
         """构造带 simulated=True 溯源标记的 RoomMessagePayload 并 emit。"""
-        import uuid as _uuid
-
         assert self._config_obj is not None
         payload = RoomMessagePayload(
             live_session_id=session_id or self._config_obj.fallback_session_id,
             message_type=message_type,  # type: ignore[arg-type]
             user=RoomMessageUser(
-                id=str(getattr(persona, "user_id", "") or f"sim-{_uuid.uuid4().hex[:6]}"),
+                id=str(getattr(persona, "user_id", "") or f"sim-{uuid.uuid4().hex[:6]}"),
                 name=str(getattr(persona, "user_nickname", "") or "模拟观众"),
             ),
             content=str(text or ""),

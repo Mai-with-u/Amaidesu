@@ -1,5 +1,5 @@
 """
-ToolRegistry 单元测试（Wave 3 / §1.5）
+ToolRegistry 单元测试。
 
 覆盖：
 - 注册 / 去重（先注册保留）
@@ -46,7 +46,7 @@ def registry() -> ToolRegistry:
 async def test_invoke_unknown_tool_returns_failure_result_not_raises(
     registry: ToolRegistry,
 ) -> None:
-    """§1.5 核心契约：未知工具 invoke 必须返回失败 ToolExecutionResult，不抛异常。"""
+    """核心契约：未知工具 invoke 必须返回失败 ToolExecutionResult，不抛异常。"""
     inv = ToolInvocation(tool_name="definitely_not_a_tool", source="test")
     # 关键：不应抛——直接 await 即可
     result = await registry.invoke(inv)
@@ -250,6 +250,7 @@ def test_tool_decorator_pending_mode_does_not_touch_default_registry():
     sentinel = ToolRegistry()
     set_default_registry(sentinel)
     try:
+
         @tool(description="hi")
         async def hi(invocation: ToolInvocation) -> ToolExecutionResult:
             return ToolExecutionResult(tool_name="hi", success=True, content="hello")

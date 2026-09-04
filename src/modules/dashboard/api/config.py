@@ -13,6 +13,7 @@
 PATCH 通过 ``key`` 的首段 (例如 ``persona.bot_name`` → ``persona``) 路由到正确的 TOML 文件。
 """
 
+from collections import defaultdict
 from typing import TYPE_CHECKING, Annotated, Any, Dict, Optional
 import asyncio
 import os
@@ -49,7 +50,7 @@ RESTART_REQUIRED_PREFIXES = [
     "maicore.",
     "dashboard.",
     "logging.",
-    # v2.0.9 D2：mcp 段已弃用（upgrade_hooks.py 2.0.2 主动剥离），从重启列表中移除避免误导
+    # mcp 段已弃用（upgrade_hooks 主动剥离），从重启列表中移除避免误导
 ]
 
 
@@ -320,7 +321,7 @@ def _expand_sub_config_fields(group_fields: list[dict], main_config: dict) -> li
     return expanded
 
 
-# section → TOML 文件映射（v2.0.0：7 文件）
+# section → TOML 文件映射（7 文件）
 _SECTION_TO_FILE: dict[str, str] = {
     "meta": "core.toml",
     "general": "core.toml",
@@ -410,8 +411,6 @@ def _group_into_children(fields: list[dict], _depth: int = 1) -> list[dict]:
     ``type="object"`` 又是更深层字段的父级），只保留容器（children），丢弃扁平字段，
     避免前端渲染出空卡片或 ``[object Object]``。
     """
-    from collections import defaultdict
-
     nxt = _depth + 1
     grouped: dict[str, list[dict]] = defaultdict(list)
     for field in fields:
@@ -454,7 +453,7 @@ def _group_into_children(fields: list[dict], _depth: int = 1) -> list[dict]:
 def _build_frontend_groups(config_service) -> dict:
     """Schema 适配器：generator schema → {groups, version} 前端格式.
 
-    v2.0.0：使用 ``ConfigSchemaGenerator`` 直接输出（schema_registry 已废弃）。
+    使用 ``ConfigSchemaGenerator`` 直接输出（schema_registry 已废弃）。
     label/icon 来自 ``_SECTION_LABELS`` 兜底表。
     """
     from src.modules.config.schema_generator import (

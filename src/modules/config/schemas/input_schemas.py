@@ -10,8 +10,8 @@
 - **InputConfig**：``config/input.toml`` 文件对应的根模型。
   字段：``type / collectors``。
 
-  > v2.0.4：原 ``InputPipelinesConfig`` 容器已删除——输入侧净化职责由事件
-  > 拦截器承担（§1.46.1），配置位于 ``core.toml`` 的 ``[interceptors.*]``。
+  > ``InputPipelinesConfig`` 容器已删除——输入侧净化职责由事件
+  > 拦截器承担，配置位于 ``core.toml`` 的 ``[interceptors.*]``。
 
 设计原则：
 - 不修改 Collector 内部代码，仅导入并重导出其 ``ConfigSchema`` 嵌套类。
@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from pydantic import ConfigDict, Field, model_validator
 
-from .base import BaseConfig
+from .base import BaseConfig, DriftReport
 
 
 # ---------------------------------------------------------------------------
@@ -52,10 +52,10 @@ _NEGATIVE_SENTINEL = "__failed__"  # 负缓存哨兵（区别于"未缓存"）
 
 
 def _try_import_schema(collector_name: str) -> Optional[type]:
-    """按需导入 Collector.ConfigSchema（v2：从 src.modules.collectors 加载）
+    """按需导入 Collector.ConfigSchema
 
     第一次调用时真正 import Collector 模块，之后从缓存读取。
-    Collector 模块现在位于 ``src.modules.collectors.*``（v2 目录），
+    Collector 模块位于 ``src.modules.collectors.*``，
     与每个 Collector 子包公开 ``ConfigSchema`` 嵌套类一一对应。
 
     缓存策略：
@@ -215,8 +215,6 @@ class InputCollectorsConfig(BaseConfig):
         做递归漂移检测。本类的 Collector 字段类型为 ``Optional[Any]``（为了规避循环
         import），所以需要在 override 中显式对每个 Collector 字段调用递归检测。
         """
-        from .base import DriftReport
-
         report = DriftReport()
 
         class_fields = set(cls.model_fields.keys())
@@ -370,7 +368,6 @@ __all__ = [
 
 
 # 仅在类型检查时 import（运行时不需要，IDE/linter 友好）
-# v2: Collector 模块位于 src.modules.collectors.*（替换 src.stages.input.collectors.*）
 if TYPE_CHECKING:
     from src.modules.collectors.bilibili.legacy.bili_danmaku_collector import (  # noqa: F401
         BiliDanmakuCollector,

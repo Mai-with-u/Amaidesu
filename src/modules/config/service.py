@@ -7,7 +7,7 @@ ConfigService - 统一的配置管理服务
 - 支持 Collector/Decider/Handler 等组件的配置获取
 - 配置合并策略：主配置覆盖组件配置
 - 二级配置合并：Schema默认值 → 主配置覆盖
-- 配置热重载 (Task 7): FileWatcher + 回调机制 + Schema API
+- 配置热重载：FileWatcher + 回调机制 + Schema API
 """
 
 import asyncio
@@ -89,7 +89,7 @@ class ConfigService:
         self._main_config: Dict[str, Any] = {}
         self._main_config_copied = False
         self._initialized = False
-        # 热重载状态 (Task 7 新增)
+        # 热重载状态
         self._reload_callbacks: List[ConfigReloadCallback] = []
         self._file_watcher: Optional["FileWatcher"] = None
         self._file_watcher_subscription_id: Optional[str] = None
@@ -201,7 +201,7 @@ class ConfigService:
         return self._main_config, was_created
 
     def _check_schema_registry_coverage(self) -> None:
-        """空实现，v2.0.0 兼容旧调用方。"""
+        """空实现，兼容旧调用方。"""
         self._last_coverage_result = None
 
     def get_section(self, section: str, default: Any = None) -> Dict[str, Any]:
@@ -458,7 +458,7 @@ class ConfigService:
         config = section.get(name, {})
         return config.copy() if isinstance(config, dict) else {}
 
-    # ========== 热重载 + Schema API (Task 7) ==========
+    # ========== 热重载 + Schema API ==========
 
     def register_reload_callback(self, callback: ConfigReloadCallback) -> None:
         """注册配置热重载回调。
@@ -710,7 +710,7 @@ class ConfigService:
             "meta": MetaConfig,
             "general": GeneralConfig,
             "persona": PersonaConfig,
-            # v2.0.0: maicore → ContextAssembler（maicore 单进程已删除）
+            # maicore → ContextAssembler（maicore 单进程已删除）
             "context": ContextAssemblerConfig,
             "dashboard": DashboardConfig,
             "simulator": SimulatorConfigSchema,
@@ -721,7 +721,7 @@ class ConfigService:
             "vlm": LLMProfileConfig,
             "llm_local": LLMProfileConfig,
             "llm_summary": LLMProfileConfig,
-            "llm_agenda": LLMProfileConfig,  # v2.0.0: llm_outline → llm_agenda
+            "llm_agenda": LLMProfileConfig,  # llm_outline → llm_agenda
         }
 
         if section not in section_map:

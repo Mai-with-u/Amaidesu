@@ -1,5 +1,5 @@
 """
-mock 采集器注册 + 基本 import 测试 + simulated 数据溯源测试（Wave 5）
+mock 采集器注册 + 基本 import 测试 + simulated 数据溯源测试。
 
 覆盖：
 - MockCollector 继承 BaseCollector
@@ -25,7 +25,7 @@ def test_mock_inherits_base_collector() -> None:
 
 
 def test_mock_metadata() -> None:
-    """元数据正确（ADR-006 收敛后 MockCollector = 确定性 JSONL 回放器）"""
+    """元数据正确（收敛后 MockCollector = 确定性 JSONL 回放器）"""
     assert MockCollector.name == "mock"
     assert "JSONL" in MockCollector.description or "回放" in MockCollector.description
 
@@ -64,14 +64,14 @@ def test_mock_jsonl_loads_default_data() -> None:
 
 
 def test_mock_only_supports_jsonl_mode() -> None:
-    """ADR-006 收敛后 MockCollector 仅保留 jsonl 模式，无 simulator 模式字段。
+    """收敛后 MockCollector 仅保留 jsonl 模式，无 simulator 模式字段。
 
     验证 ConfigSchema 已移除 mode 字段（jsonl 是唯一保留模式）。
     """
     from src.modules.collectors.mock.mock_collector import MockCollector as MC
 
     schema_fields = set(MC.ConfigSchema.model_fields.keys())
-    assert "mode" not in schema_fields, "ConfigSchema.mode 字段已移除（ADR-006）"
+    assert "mode" not in schema_fields, "ConfigSchema.mode 字段已移除（收敛）"
     # jsonl 模式字段必须保留
     assert "log_file_path" in schema_fields
     assert "send_interval" in schema_fields
@@ -79,7 +79,7 @@ def test_mock_only_supports_jsonl_mode() -> None:
 
 
 def test_mock_normalized_message_carries_simulated_flag_for_payload() -> None:
-    """所有从 mock 产出的 payload 携带 simulated=True（数据溯源，§1.6 / ADR-006）
+    """所有从 mock 产出的 payload 携带 simulated=True（数据溯源）
 
     验证 _emit_danmaku 透传 simulated 标记到 RoomMessagePayload（存储层过滤依据）。
     """

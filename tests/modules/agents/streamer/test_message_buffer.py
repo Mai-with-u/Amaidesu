@@ -1,6 +1,6 @@
-"""MessageBuffer 单元测试（Wave 6 Streamer Agent 内部批状态）。
+"""MessageBuffer 单元测试（Streamer Agent 内部批状态）。
 
-重点验证 idle 补偿公式 verbatim 保留（§1.7 唯一改写禁区）。
+重点验证 idle 补偿公式 verbatim 保留（唯一改写禁区）。
 """
 
 from __future__ import annotations
@@ -92,7 +92,7 @@ class TestMessageBufferShouldFlush:
         assert reason == "window_expired"
 
     def test_idle_compensation_formula_verbatim(self) -> None:
-        """§1.7 idle 补偿公式 verbatim：
+        """idle 补偿公式 verbatim：
         idle_equivalent = min(idle_ms / avg_interval_ms, batch_max_size - 1)
         equivalent_count = actual_size + idle_equivalent
         """
@@ -130,8 +130,6 @@ class TestMessageBufferRender:
     """render_batch_text 静态方法。"""
 
     def test_render_empty(self) -> None:
-        from src.agents.streamer.message_buffer import MessageBuffer
-
         text = MessageBuffer.render_batch_text([])
         assert text == ""
 

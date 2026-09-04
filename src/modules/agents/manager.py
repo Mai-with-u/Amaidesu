@@ -1,5 +1,5 @@
 """
-AgentManager —— 框架 Agent 统一管理（Wave 3 / §1.49）
+AgentManager —— 框架 Agent 统一管理
 
 - 注册 Agent（按名；重复 → 跳过后注册）
 - 统一启动 / 停止 / cleanup
@@ -36,7 +36,7 @@ class AgentRegistration:
     agent: BaseAgent
     description: str = ""
     registered_at_ms: int = 0
-    spec_provider: str = "builtin"  # §1.5 provider 来源溯源
+    spec_provider: str = "builtin"  # 工具来源溯源标记
 
 
 class AgentManager:

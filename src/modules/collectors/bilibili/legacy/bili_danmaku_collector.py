@@ -1,8 +1,6 @@
 """
-BiliDanmakuCollector —— Bilibili 旧版弹幕采集器（v2 / Wave 5 迁移）
+BiliDanmakuCollector —— Bilibili 旧版弹幕采集器
 
-迁移自 ``src/stages/input/collectors/bili_danmaku/bili_danmaku_collector.py``。
-按 .omo/drafts/amaidesu-v2-migration.md §C：
 - 与官方版（``official/``）并列保留，旧版 WebSocket 作为备选采集器
 - 继承 ``BaseCollector``，emit ``room.message.danmaku`` 语义事件
 - 保留 ``collect()`` AsyncIterator 出口，供旧 InputCollectorManager 过渡期
@@ -49,7 +47,6 @@ class BiliDanmakuCollector(BaseCollector):
         room_id: int = Field(..., description="直播间ID", gt=0)
         poll_interval: int = Field(default=3, description="轮询间隔（秒）", ge=1)
         message_config: dict = Field(default_factory=dict, description="消息配置")
-        # v2 新增：emit 语义域事件开关
         emit_semantic_events: bool = Field(default=True, description="emit room.message.danmaku 语义事件")
 
     def __init__(
@@ -211,7 +208,7 @@ class BiliDanmakuCollector(BaseCollector):
                         for item in new_danmakus:
                             normalized_msg = await self._create_danmaku_message(item)
                             if normalized_msg:
-                                # v2：emit room.message.danmaku 语义事件
+                                # emit room.message.danmaku 语义事件
                                 if self._emit_semantic_events:
                                     await self._emit_semantic_event(normalized_msg)
                                 yield normalized_msg
@@ -232,7 +229,7 @@ class BiliDanmakuCollector(BaseCollector):
             self.logger.exception(f"处理 Bilibili 弹幕时发生未知错误: {e}")
 
     async def _emit_semantic_event(self, normalized_msg: NormalizedMessage) -> None:
-        """emit room.message.danmaku 语义事件（v2）"""
+        """emit room.message.danmaku 语义事件"""
         try:
             payload = RoomMessagePayload(
                 live_session_id=str(normalized_msg.room_id or "unknown"),

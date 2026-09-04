@@ -1,4 +1,4 @@
-"""Replyer - 主播 Agent Stage 2 表达引擎（Wave 6 / §1.4）
+"""Replyer - 主播 Agent Stage 2 表达引擎
 
 设计原则（人设分离承诺）：
 - Planner（Stage 1）：**零人设**，只决定"要不要回复 / 回复谁 / 聊什么"，输出 DecisionPlan。
@@ -10,7 +10,7 @@
 - 只生成并**返回** dict（含 speech/emotion/action），**不**直接调用 reply_tool，
   reply_tool 是 Agent 暴露给 LLM 调用的工具入口（Stage 2 内脏 + 工具入口分层）。
 - **不调用 tools**（不做 function calling，纯文本 JSON 输出）。
-- **敏感词净化**（§1.46.1）：原 output/pipelines/profanity_filter 的词表过滤逻辑
+- **敏感词净化**（输出端）：原 output/pipelines/profanity_filter 的词表过滤逻辑
   verbatim 归此地——"嘴"端净化（不再经 output 阶段"通用净化"）。
 - 复用 Planner 既有模式：`_clean_llm_json` 三步清理、情绪降级 neutral、动作白名单校验。
 
@@ -19,9 +19,9 @@
 - 能力白名单逻辑（`_ensure_capabilities` / `_build_action`）与原 replyer.py 保持一致，
   但在此独立实现，避免双向耦合。
 
-Wave 6 变更：
+迁移记录：
 - 原 ``stages/decision/deciders/amaidesu/replyer.py`` → ``agents/streamer/replyer.py``
-- ``Intent`` 输出 → dict 输出（Wave 6 已删除 Intent 类型，工具调用参数即边界）
+- ``Intent`` 输出 → dict 输出（Intent 类型已删除，工具调用参数即边界）
 - ``replyer_client`` 配置键保留（向后兼容）；同时接受 ``replyer_llm``（新 agents_schemas 命名）
 - 净化：内置 profanity filter（词表 + 替换 + drop_on_match 选项）
 """
@@ -34,20 +34,21 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from src.modules.logging import get_logger
 from src.modules.types.capabilities import CapabilitiesProvider, UnifiedCapabilitiesView
+from src.modules.types.emotion_vocab import Emotion
 
 from .message_buffer import MessageBuffer
 from .plan import DecisionPlan
 
 # 默认人设兜底值（persona dict 缺字段时使用）
 #
-# 优先级链（与 B2 v2.0.6 修复对齐）：
+# 优先级链：
 # 1. persona dict 中的同名键（来自 config/core.toml 的 [persona] 段，由装配根
 #    main._register_agents_from_config 拉取后透传给 StreamerAgent.persona_provider，
 #    再经 ReplyToolProvider._resolve_persona 解析后传给 Replyer.generate(persona=...)）。
 # 2. StreamerAgentConfig.bot_name（agents.toml 显式覆盖）。
 # 3. 本模块 _DEFAULT_* 常量（仅当 persona dict 完全缺失/字段缺位时兜底，避免冷启动崩）。
 #
-# v2.0.6 统一：_DEFAULT_BOT_NAME 改为 '麦麦'，personality/style_constraints 文本与
+# _DEFAULT_BOT_NAME = '麦麦'、personality/style_constraints 文本与
 # core_schemas.PersonaConfig 默认值对齐；不允许 config 模块反向依赖 agents 层，
 # 故这里复制文本（保持依赖方向 agents → config 干净）。
 _DEFAULT_BOT_NAME = "麦麦"
@@ -81,10 +82,10 @@ class Replyer:
             llm_service: LLM 管理器（使用 replyer_llm 指定的高质量客户端）。
             prompt_service: 提示词管理器（渲染 amaidesu_replyer 模板）。
             capabilities_provider: 工具能力提供者（可选，用于动作白名单校验）。
-            profanity_filter: 敏感词过滤器（§1.46.1 净化入口；None 表示不净化）。
+            profanity_filter: 敏感词过滤器（输出端净化入口；None 表示不净化）。
         """
         self._config: Dict[str, Any] = config or {}
-        # Wave 6 字段对齐：replyer_llm（新 agents_schemas 命名）+ replyer_client（向后兼容）
+        # replyer_llm（新 agents_schemas 命名）+ replyer_client（向后兼容）
         self.replyer_llm: str = self._config.get("replyer_llm", self._config.get("replyer_client", "llm"))
         self._enable_action_selection: bool = self._config.get("enable_action_selection", True)
         self._bot_name: str = self._config.get("bot_name", _DEFAULT_BOT_NAME)
@@ -115,7 +116,7 @@ class Replyer:
         2. 调用高质量 LLM（replyer_llm，默认 llm），**不传 tools**。
         3. 清理 + 解析 JSON → {text, emotion, action, action_parameters}。
         4. 组装：情绪降级 neutral、动作白名单校验（非法丢弃保留 speech）。
-        5. **敏感词净化**（§1.46.1）：profanity_filter 净化 speech（替换或丢弃）。
+        5. **敏感词净化**（输出端）：profanity_filter 净化 speech（替换或丢弃）。
         6. 返回 dict（不发布事件；reply_tool 负责 ToolExecutionResult 包装）。
 
         Args:
@@ -184,7 +185,7 @@ class Replyer:
         # ④ 组装回复（情绪降级 + 动作白名单）
         result = self._create_result(parsed_data, speech, plan)
 
-        # ⑤ 敏感词净化（§1.46.1 净化职责归 Replyer）
+        # ⑤ 敏感词净化（净化职责归 Replyer 表达引擎）
         result = self._apply_profanity_filter(result)
         if result is None:
             self.logger.warning("Replyer 输出被 profanity filter 丢弃（drop_on_match=True）")
@@ -239,8 +240,6 @@ class Replyer:
         - 非法 action（不在白名单）→ 丢弃 action，保留 speech。
         """
         emotion_raw = str(parsed_data.get("emotion", "neutral")).lower()
-        from src.modules.types.emotion_vocab import Emotion  # 延迟导入避免顶层耦合
-
         valid_emotion_names = {e.value for e in Emotion}
         if emotion_raw in valid_emotion_names:
             emotion_name = emotion_raw
@@ -292,13 +291,13 @@ class Replyer:
             "parameters": parameters,
         }
 
-    # ==================== 敏感词净化（§1.46.1 verbatim 归此地） ====================
+    # ==================== 敏感词净化（输出端；行为 verbatim 保留） ====================
 
     def _apply_profanity_filter(
         self,
         result: Optional[Dict[str, Any]],
     ) -> Optional[Dict[str, Any]]:
-        """敏感词净化（§1.46.1 输出管道 → Replyer 表达引擎内部净化）。
+        """敏感词净化（输出管道 → Replyer 表达引擎内部净化）。
 
         Args:
             result: 待净化的回复 dict（含 speech / emotion / action）
@@ -366,12 +365,12 @@ class Replyer:
 
 
 # ============================================================================
-# ProfanityFilter —— 敏感词净化（§1.46.1 verbatim 移植自 output/pipelines/profanity_filter）
+# ProfanityFilter —— 敏感词净化（行为 verbatim 移植自 output/pipelines/profanity_filter）
 # ============================================================================
 
 
 class ProfanityFilter:
-    """敏感词过滤器（Wave 6 从 output 管道搬到 Replyer 内部）。
+    """敏感词过滤器（从 output 管道搬到 Replyer 内部）。
 
     原 ``stages/output/pipelines/profanity_filter/pipeline.py`` 中：
     - ``enabled``（bool）：总开关
@@ -380,7 +379,7 @@ class ProfanityFilter:
     - ``case_sensitive``（bool）：是否大小写敏感
     - ``drop_on_match``（bool）：命中时是否整条丢弃（True → 返回 None）
 
-    Wave 6 行为保留 verbatim；仅适配 §1.46.1 "嘴"端净化职责。
+    行为保留 verbatim；仅适配"嘴"端净化职责。
 
     使用示例：
         >>> flt = ProfanityFilter(words=["脏话A", "脏话B"], replacement="***", drop_on_match=False)

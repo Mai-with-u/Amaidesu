@@ -48,8 +48,8 @@
   completion_timeout_ms）以及每个 Handler 的可选子配置。
 - **OutputConfig**：`config/output.toml` 文件对应的根模型。
 
-  > v2.0.4：原 `OutputPipelinesConfig` 容器已删除——OutputPipeline 随 §1.46.1
-  > 定案移除，敏感词净化归 Replyer（ProfanityFilter）。
+  > 原 `OutputPipelinesConfig` 容器已删除——OutputPipeline 定案移除，
+  > 敏感词净化归 Replyer（ProfanityFilter）。
 
 设计原则：
 - 不修改 Handler 内部代码，仅在调用时延迟加载其 `ConfigSchema` 嵌套类。
@@ -103,7 +103,7 @@ def _try_load_handler_schema(module_path: str, class_name: str) -> Optional[type
 # 调用方可通过这些符号访问对应 Provider 的 ConfigSchema，
 # 无需关心 Provider 模块的 import 时机。
 #
-# Wave 4 迁移后：所有 handler 改为 modules/tools/output/ 下的 Provider。
+# 所有 handler 已改为 modules/tools/output/ 下的 Provider。
 # DebugConsoleHandler 已被 dump_intent() 函数替代，无 ConfigSchema。
 
 DebugConsoleConfigSchema: Optional[type] = None  # dump_intent 替代（DebugConfig dataclass）

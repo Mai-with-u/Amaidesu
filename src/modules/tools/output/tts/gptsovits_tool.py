@@ -1,11 +1,8 @@
 """
-GPTSoVITSProvider - GPT-SoVITS 语音合成工具（Wave 4 / §1.5）
+GPTSoVITSProvider - GPT-SoVITS 语音合成工具
 
-迁移自 ``src.stages.output.handlers.audio.gptsovits.GPTSoVITSHandler``：
-
-- 引擎 verbatim（GPT-SoVITS 客户端初始化 + 流式合成 + AudioDeviceManager 播放）
-- ``AudioHandlerBase`` 继承被去除；ToolProvider 协议由本类自身实现
-- 文本清洗（``_sanitize_text_for_tts``）verbatim 保留
+- 引擎：GPT-SoVITS 客户端初始化 + 流式合成 + AudioDeviceManager 播放
+- ToolProvider 协议由本类自身实现
 - 工具 ``gptsovits_synthesize(text)`` 调用 ``handle_speech()`` 入口
 """
 
@@ -29,7 +26,7 @@ if TYPE_CHECKING:
     pass
 
 
-# 音频流参数（verbatim）
+# 音频流参数
 CHANNELS = 1
 DTYPE = np.int16
 BLOCKSIZE = 1024
@@ -37,7 +34,7 @@ SAMPLE_SIZE = DTYPE().itemsize
 BUFFER_REQUIRED_BYTES = BLOCKSIZE * CHANNELS * SAMPLE_SIZE
 
 
-# GPT-SoVITS 中文归一化器文本清洗（verbatim）
+# GPT-SoVITS 中文归一化器文本清洗
 _TTS_UNSAFE_CHARS = re.compile(
     r"[^\u4e00-\u9fff"
     r"\u3000-\u303f"
@@ -51,7 +48,7 @@ _TTS_UNSAFE_CHARS = re.compile(
 
 
 def _sanitize_text_for_tts(text: str) -> str:
-    """白名单清洗（verbatim，规避 GPT-SoVITS KeyError bug）"""
+    """白名单字符集规避 KeyError bug"""
     return _TTS_UNSAFE_CHARS.sub("", text)
 
 
@@ -240,7 +237,7 @@ class GPTSoVITSProvider:
         original_text = text.strip()
         self.logger.debug(f"准备 TTS: '{original_text[:50]}...'")
 
-        # 文本清洗（verbatim）
+        # 文本清洗
         final_text = _sanitize_text_for_tts(original_text)
         if final_text != original_text:
             self.logger.debug(f"文本清洗: 移除了 {len(original_text) - len(final_text)} 个不支持字符")
@@ -286,7 +283,7 @@ class GPTSoVITSProvider:
             raise
 
     async def _process_audio_stream(self, audio_stream):
-        """verbatim 处理音频流（同步/异步迭代器）"""
+        """处理音频流（同步/异步迭代器）"""
         from src.modules.tools.output.tts.wav_decoder import decode_wav_chunk
 
         try:

@@ -1,10 +1,9 @@
 """
-Architecture tests to enforce proper data flow constraints（Wave 6 重写）
+架构数据流约束测试。
 
-Wave 6 重写：原 3-domain Input→Decision→Output 架构已被 EventBus + Agent + Tool 体系取代。
-新数据流：collectors emit → agent subscribe（room.message.*）→ tool invoke（reply tool）。
+数据流：collectors emit → agent subscribe（room.message.*）→ tool invoke（reply tool）。
 
-Wave 6 事件约定（src/modules/events/names.py）：
+事件约定（src/modules/events/names.py 定义）：
 - 行为流（Input Domain emit）：
     - room.message.danmaku / gift / super_chat / enter
 - Agent Domain subscribe：
@@ -20,7 +19,7 @@ from pathlib import Path
 from typing import Dict, List
 
 
-# v2 语义域事件（Wave 6 实际定义）
+# v2 语义域事件（取自 src/modules/events/names.py）
 INPUT_EVENTS = {
     "room.message.danmaku",
     "room.message.gift",
@@ -157,14 +156,13 @@ class TestEventFlowConstraints:
         Tool 是被动调用（reply tool / should_speak_proactively tool），不订阅事件。
         """
         tool_subscriptions = get_all_subscriptions_in_domain("tool")
-        violations = [
-            sub
-            for sub in tool_subscriptions
-            if sub["event_name"] in INPUT_EVENTS
-        ]
+        violations = [sub for sub in tool_subscriptions if sub["event_name"] in INPUT_EVENTS]
         if violations:
             violation_details = "\n".join(
-                [f"  - {v['class_name']} in {v['file_path']}:{v['line_number']} subscribes to {v['event_name']}" for v in violations]
+                [
+                    f"  - {v['class_name']} in {v['file_path']}:{v['line_number']} subscribes to {v['event_name']}"
+                    for v in violations
+                ]
             )
             raise AssertionError(
                 f"Tool layer MUST NOT subscribe to Input events.\n"
@@ -173,7 +171,7 @@ class TestEventFlowConstraints:
             )
 
     def test_agent_does_not_subscribe_to_input_for_decision(self):
-        """Agent 不订阅 Input 事件做『决策』（§1.44 决策流已废）。
+        """Agent 不订阅 Input 事件做『决策』（决策流已废）。
 
         v2 架构下 Planner 通过 EventBus 订阅 room.message.*，但 agent 域内『决定订阅
         Decision 事件』的代码路径不再存在（Planner 是 Agent 内部组件）。
@@ -182,13 +180,16 @@ class TestEventFlowConstraints:
         # 允许 Agent 订阅 room.message.*（Planner 必须订阅弹幕驱动决策）
         # 仅检测是否订阅了其他 Agent 的输出事件
         violations = [
-            sub for sub in agent_subscriptions
-            if sub["event_name"] not in INPUT_EVENTS
-            and not sub["event_name"].startswith("tool.result.")
+            sub
+            for sub in agent_subscriptions
+            if sub["event_name"] not in INPUT_EVENTS and not sub["event_name"].startswith("tool.result.")
         ]
         if violations:
             violation_details = "\n".join(
-                [f"  - {v['class_name']} in {v['file_path']}:{v['line_number']} subscribes to {v['event_name']}" for v in violations]
+                [
+                    f"  - {v['class_name']} in {v['file_path']}:{v['line_number']} subscribes to {v['event_name']}"
+                    for v in violations
+                ]
             )
             raise AssertionError(
                 f"Agent layer subscribes to unexpected events (allowed: room.message.* or tool.result.*).\n"
@@ -224,12 +225,12 @@ class TestEventFlowConstraints:
 
         if all_violations:
             violation_details = "\n".join(
-                [f"  - [{v['domain']}] {v['class']} in {v['file']}:{v['line']}: {v['violation']}" for v in all_violations]
+                [
+                    f"  - [{v['domain']}] {v['class']} in {v['file']}:{v['line']}: {v['violation']}"
+                    for v in all_violations
+                ]
             )
-            raise AssertionError(
-                f"Found {len(all_violations)} domain boundary violation(s):\n"
-                f"{violation_details}"
-            )
+            raise AssertionError(f"Found {len(all_violations)} domain boundary violation(s):\n{violation_details}")
 
     def test_proper_event_chain_documented(self):
         """文档化数据流：Input emit room.message.* → Agent subscribe → Tool invoke。
@@ -238,8 +239,6 @@ class TestEventFlowConstraints:
         Domain 订阅模式（与 v1 三阶段 Input→Decision→Output 不同）。
         """
         agent_subs = get_all_subscriptions_in_domain("agent")
-        agent_subscribes_input = any(
-            sub["event_name"] in INPUT_EVENTS for sub in agent_subs
-        )
+        agent_subscribes_input = any(sub["event_name"] in INPUT_EVENTS for sub in agent_subs)
         # 此测试仅作文档化：Agent 应订阅 Input 事件
         assert agent_subscribes_input or len(agent_subs) == 0

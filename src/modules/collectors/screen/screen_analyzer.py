@@ -1,10 +1,9 @@
 """
-ScreenAnalyzer —— 屏幕差异检测（v2 / Wave 5 迁移）
+ScreenAnalyzer —— 屏幕差异检测
 
-迁移自 ``src/stages/input/collectors/read_pingmu/``（之前作为同名模块引用但未实际
-存在的占位；本次 W5 重新实现 verbatim）。``ScreenChangeCollector`` 通过回调收到
-``change_data`` 后调用 ``ScreenReader.process_screen_change`` 处理；本类仅负责
-持续截图、计算差异、缓存最近若干帧、变更时触发 ``on_change`` 回调。
+``ScreenChangeCollector`` 通过回调收到 ``change_data`` 后调用
+``ScreenReader.process_screen_change`` 处理；本类仅负责持续截图、计算差异、
+缓存最近若干帧、变更时触发 ``on_change`` 回调。
 
 verbatim 边界：图像哈希差值算法、滑动窗口缓存策略 —— 与设计一致。
 """

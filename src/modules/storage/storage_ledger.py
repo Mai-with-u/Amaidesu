@@ -1,9 +1,9 @@
 """
-StorageLedger —— 直播间消息流落库记账器（v2.0.5 / ADR-006 溯源链收口）
+StorageLedger —— 直播间消息流落库记账器
 
 与 EventHistoryRecorder 同类（订阅事件→处理），但写目标不同：
 - EventHistoryRecorder → 事件历史服务（dashboard 用）
-- StorageLedger       → SQLiteStore 业务表（§1.6 live chat 行业标准数据平面）
+- StorageLedger       → SQLiteStore 业务表（live chat 行业标准数据平面）
 
 ## 职责
 - 订阅 ``room.message.#``（MQTT 风格通配），按 payload.message_type 分发：
@@ -17,7 +17,7 @@ StorageLedger —— 直播间消息流落库记账器（v2.0.5 / ADR-006 溯源
 ## 不做什么
 - 不主动建 live_sessions 行（由未来的 session_manager 负责），这里只把
   payload.live_session_id（str）通过稳定 hash 映射为 INTEGER 主键。
-- 不做统计查询（消费者层 ``WHERE simulated=0`` 见 ADR-006 §1.6）
+- 不做统计查询（消费者层 ``WHERE simulated=0``）
 - 不改 schema（表结构冻结在 v1；simulated 列已存在）
 
 ## 装配
@@ -32,11 +32,14 @@ import hashlib
 from typing import TYPE_CHECKING, Callable, Dict, Optional
 
 from src.modules.events.payloads.room import (
+    GiftInfo,
     RoomMessagePayload,
     RoomMessageUser,
+    SuperChatInfo,
 )
 from src.modules.logging import get_logger
 from src.modules.storage.sqlite_store import SQLiteStore
+from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
@@ -219,9 +222,6 @@ def make_room_message(
 
     生产代码应走对应采集器/simulator 自然产出。
     """
-    from src.modules.events.payloads.room import GiftInfo, SuperChatInfo
-    from src.modules.time_utils import now_ms
-
     if user is None:
         user = RoomMessageUser(id="tester", name="测试观众")
 

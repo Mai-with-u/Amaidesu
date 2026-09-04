@@ -1,10 +1,8 @@
 """
-EdgeTTSProvider - Edge TTS 语音合成工具（Wave 4 / §1.5）
+EdgeTTSProvider - Edge TTS 语音合成工具
 
-迁移自 ``src.stages.output.handlers.audio.edge_tts.EdgeTTSHandler``：
-
-- 引擎 verbatim（Edge TTS 临时文件合成 + soundfile 读取 + AudioDeviceManager 播放）
-- ``AudioHandlerBase`` 继承被去除；ToolProvider 协议由本类自身实现
+- 引擎：Edge TTS 临时文件合成 + soundfile 读取 + AudioDeviceManager 播放
+- ToolProvider 协议由本类自身实现
 - 工具 ``edge_tts_synthesize(text)`` 调用 ``handle_speech()`` 入口
 """
 
@@ -172,7 +170,7 @@ class EdgeTTSProvider:
             raise RuntimeError(f"TTS 渲染失败: {e}") from e
 
     async def _edge_tts_synthesize(self, text: str):
-        """调用 Edge TTS 合成（verbatim）"""
+        """调用 Edge TTS 合成"""
         if "edge_tts" not in globals():
             raise RuntimeError("Edge TTS 未安装")
         tmp_filename = None
@@ -195,7 +193,7 @@ class EdgeTTSProvider:
                     pass
 
     def _setup_audio_device(self) -> None:
-        """初始化音频设备管理器（verbatim）"""
+        """初始化音频设备管理器"""
         from src.modules.tts import AudioDeviceManager
 
         manager = AudioDeviceManager(sample_rate=48000, channels=1, dtype=np.float32)

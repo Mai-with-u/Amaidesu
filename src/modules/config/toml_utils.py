@@ -147,7 +147,7 @@ def get_config_value(config_path: str, section: str, key: str, default: Any = No
         return default
 
 
-# ==================== 版本管理所需函数 ====================
+# ========== 版本管理所需函数 ==========
 
 
 def read_toml_preserve(file_path: str) -> tomlkit.TOMLDocument:
@@ -374,7 +374,7 @@ def _merge_arrays(
         return user_array if user_array else template_array
 
 
-# ==================== 辅助函数 ====================
+# ========== 辅助函数 ==========
 
 
 def get_backup_path(file_path: str) -> str:

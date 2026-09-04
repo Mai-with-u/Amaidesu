@@ -14,7 +14,7 @@ import numpy as np
 
 from src.modules.logging import get_logger
 
-# 检查依赖
+# sounddevice 是可选依赖：缺失时保持模块可加载，相关 API 走优雅降级路径
 DEPENDENCIES_OK = False
 try:
     import sounddevice as sd

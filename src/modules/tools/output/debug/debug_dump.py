@@ -1,15 +1,9 @@
 """
-dump_intent - 调试用 Intent 打印函数（Wave 4 替换 DebugConsoleHandler）
+dump_intent - 调试用 Intent 打印函数
 
-迁移自 ``src.stages.output.handlers.debug_console.DebugConsoleHandler``：
-
-- **删**：@handler 装饰器 / handle(intent) 接口 / OutputHandlerManager 派发
-- **替换为**：``dump_intent(intent)`` 纯函数 + 可选 ``DebugConfig`` 控制开关
-- 调用方直接 ``import dump_intent``，传 ``Intent`` 即可格式化打印
-
-迁移策略（与 .omo/drafts/amaidesu-v2-migration.md A 段对齐）:
-- 字段遍历顺序 verbatim（speech / identity / source_context / emotion / action / metadata）
-- ``DebugConfig`` 字段与原 handler.ConfigSchema 一一对应
+- 调用方直接 `import dump_intent`，传 `Intent` 即可格式化打印
+- 字段遍历顺序：speech / identity / source_context / emotion / action / metadata
+- `DebugConfig` 控制各段是否打印
 - 配置可作为参数传入，不强制注入 ConfigService（避免依赖耦合）
 """
 
@@ -17,6 +11,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+from src.modules.time_utils import ms_to_datetime
 
 if TYPE_CHECKING:
     from src.modules.types import Intent
@@ -58,7 +54,6 @@ def dump_intent(intent: "Intent", config: DebugConfig | None = None) -> None:
     print("\n[Identity]")
     print(f"  Intent ID:  {intent.metadata.intent_id}")
     print(f"  Source ID:  {intent.metadata.source_id}")
-    from src.modules.time_utils import ms_to_datetime
 
     decision_dt = ms_to_datetime(intent.metadata.decision_time_ms)
     print(f"  Decision:   {decision_dt} ({intent.metadata.decision_time_ms} ms)")

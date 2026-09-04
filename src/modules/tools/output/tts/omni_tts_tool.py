@@ -1,12 +1,10 @@
 """
-OmniTTSProvider - Omni TTS 语音合成工具（Wave 4 / §1.5）
+OmniTTSProvider - Omni TTS 语音合成工具
 
-迁移自 ``src.stages.output.handlers.audio.omni_tts.OmniTTSHandler``：
-
-- **仅迁移不改造**（用户拍板：不准合并到 GPTSoVITS，不补文本清洗，
+- 仅迁移不改造（不准合并到 GPTSoVITS，不补文本清洗，
   不修复 KeyError 已知问题，保持现状）
-- 引擎 verbatim（GPT-SoVITS HTTP 流式请求 + wav 解码 + AudioDeviceManager 播放）
-- ``AudioHandlerBase`` 继承被去除；ToolProvider 协议由本类自身实现
+- 引擎：GPT-SoVITS HTTP 流式请求 + wav 解码 + AudioDeviceManager 播放
+- ToolProvider 协议由本类自身实现
 - 工具 ``omni_tts_synthesize(text)`` 调用 ``handle_speech()`` 入口
 """
 
@@ -205,12 +203,12 @@ class OmniTTSProvider:
     # ===== 业务方法 =====
 
     async def handle_speech(self, text: str) -> None:
-        """对应父类模板方法 handle()（verbatim）"""
+        """TTS 播放入口"""
         async with self.tts_lock:
             await self._synthesize(text)
 
     async def _synthesize(self, text: str) -> None:
-        """verbatim _synthesize（不补文本清洗，保留已知 bug）"""
+        """合成并缓冲（不补文本清洗，保留已知 bug）"""
         self.sequence_count = 0
         try:
             audio_stream = self._tts_stream(text)
@@ -223,7 +221,7 @@ class OmniTTSProvider:
             raise
 
     def _tts_stream(self, text: str):
-        """verbatim HTTP 流式 TTS 请求"""
+        """HTTP 流式 TTS 请求"""
         if not self.ref_audio_path:
             raise ValueError("未设置参考音频")
 
@@ -260,7 +258,7 @@ class OmniTTSProvider:
         return response.iter_content(chunk_size=4096)
 
     async def _decode_and_buffer(self, wav_chunk) -> None:
-        """verbatim 解码 WAV 并缓冲（保留已知 KeyError bug）"""
+        """解码 WAV 并缓冲（保留已知 KeyError bug）"""
         from src.modules.tools.output.tts.wav_decoder import extract_pcm_from_wav
 
         try:

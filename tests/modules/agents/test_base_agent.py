@@ -1,5 +1,5 @@
 """
-BaseAgent / AgentManager / AgentControl 单元测试（Wave 3 / §1.49）
+BaseAgent / AgentManager / AgentControl 单元测试（框架统一控制）
 
 覆盖：
 - BaseAgent 协议六面（生命周期 / 工具提供 / 事件上报 / 状态 / 心跳 / 元数据）
@@ -23,7 +23,7 @@ from src.modules.agents import (
     BaseAgent,
     build_agent_control_provider,
 )
-from src.modules.tools import ToolInvocation, ToolRegistry
+from src.modules.tools import ToolInvocation, ToolProvider, ToolRegistry
 from src.modules.tools.models import ToolExecutionResult, ToolSpec
 
 
@@ -97,6 +97,7 @@ def test_protocol_six_facets(sample_agent: _SampleAgent) -> None:
 
 def test_metadata_is_required(sample_agent: _SampleAgent) -> None:
     """子类未设置 name 时——基类不自动填，由 AgentManager.register 显式拒绝（保错位）。"""
+
     class _Anon(BaseAgent):
         def list_tools(self):
             return []
@@ -225,7 +226,7 @@ def test_is_alive_threshold_respected(sample_agent: _SampleAgent) -> None:
     assert sample_agent.is_alive(dead_threshold_ms=10**15) is True
 
 
-# -------------------- 控制（§1.49 框架统一控制） --------------------
+# -------------------- 控制（框架统一控制面） --------------------
 
 
 async def test_pause_resume_invocations(started_agent: _SampleAgent) -> None:
@@ -417,9 +418,7 @@ async def test_agent_control_invoke_pause_agent(sample_agent: _SampleAgent) -> N
     reg = ToolRegistry()
     reg.register_provider(control_provider)
 
-    res = await reg.invoke(
-        ToolInvocation(tool_name="pause_agent", arguments={"name": "sample_agent"})
-    )
+    res = await reg.invoke(ToolInvocation(tool_name="pause_agent", arguments={"name": "sample_agent"}))
     assert res.success is True
     assert sample_agent.state == AgentState.PAUSED
 
@@ -448,9 +447,7 @@ async def test_agent_control_invoke_agent_state(sample_agent: _SampleAgent) -> N
     reg = ToolRegistry()
     reg.register_provider(control_provider)
 
-    res = await reg.invoke(
-        ToolInvocation(tool_name="agent_state", arguments={"name": "sample_agent"})
-    )
+    res = await reg.invoke(ToolInvocation(tool_name="agent_state", arguments={"name": "sample_agent"}))
     assert res.success is True
     assert "running" in res.content
     assert "sample_agent" in res.content
@@ -467,16 +464,13 @@ async def test_agent_control_invoke_unknown_agent_returns_failure(
     reg = ToolRegistry()
     reg.register_provider(control_provider)
 
-    res = await reg.invoke(
-        ToolInvocation(tool_name="pause_agent", arguments={"name": "absent"})
-    )
+    res = await reg.invoke(ToolInvocation(tool_name="pause_agent", arguments={"name": "absent"}))
     assert res.success is False
     assert "未找到" in res.error_message or "absent" in res.error_message
 
 
 async def test_agent_control_provider_is_provider(sample_agent: _SampleAgent) -> None:
     """control_provider 满足 ToolProvider 协议。"""
-    from src.modules.tools import ToolProvider
 
     mgr = AgentManager()
     mgr.register(sample_agent)

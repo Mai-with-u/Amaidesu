@@ -1,5 +1,5 @@
 """
-StorageLedger 集成测试（v2.0.5 / ADR-006 溯源链收口）
+StorageLedger 集成测试（溯源链收口）
 
 覆盖：
 - mock EventBus 发 RoomMessagePayload → 落库行数 + 列值
@@ -21,7 +21,7 @@ import pytest
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.room import RoomMessageUser
+from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.storage.sqlite_store import SQLiteStore
 from src.modules.storage.storage_ledger import StorageLedger, make_room_message
 
@@ -70,9 +70,7 @@ async def ledger(event_bus: EventBus, store: SQLiteStore) -> AsyncGenerator[Stor
 async def test_ledger_dispatches_danmaku_to_live_chat(
     ledger: StorageLedger, store: SQLiteStore, event_bus: EventBus
 ) -> None:
-    payload = make_room_message(
-        message_type="danmaku", content="主播好可爱", simulated=False, session_id="ls_d1"
-    )
+    payload = make_room_message(message_type="danmaku", content="主播好可爱", simulated=False, session_id="ls_d1")
     await event_bus.emit(CoreEvents.ROOM_MESSAGE_DANMAKU, payload, source="test", wait=True)
 
     rows = await store.execute("SELECT * FROM live_chat WHERE message_type='danmaku'")
@@ -86,9 +84,7 @@ async def test_ledger_dispatches_danmaku_to_live_chat(
 
 
 @pytest.mark.asyncio
-async def test_ledger_dispatches_gift_to_gifts(
-    ledger: StorageLedger, store: SQLiteStore, event_bus: EventBus
-) -> None:
+async def test_ledger_dispatches_gift_to_gifts(ledger: StorageLedger, store: SQLiteStore, event_bus: EventBus) -> None:
     payload = make_room_message(
         message_type="gift",
         gift_name="小星星",
@@ -126,9 +122,7 @@ async def test_ledger_dispatches_super_chat_to_super_chats(
 
 
 @pytest.mark.asyncio
-async def test_ledger_enter_does_not_persist(
-    ledger: StorageLedger, store: SQLiteStore, event_bus: EventBus
-) -> None:
+async def test_ledger_enter_does_not_persist(ledger: StorageLedger, store: SQLiteStore, event_bus: EventBus) -> None:
     """enter 事件 schema 无对应明细表——debug 日志后丢弃，不应落任何业务表。"""
     payload = make_room_message(message_type="enter", session_id="ls_e1")
     await event_bus.emit(CoreEvents.ROOM_MESSAGE_ENTER, payload, source="test", wait=True)
@@ -163,12 +157,8 @@ async def test_ledger_mixed_real_and_simulated_excluded(
     ledger: StorageLedger, store: SQLiteStore, event_bus: EventBus
 ) -> None:
     """混合真实+模拟写入后，``WHERE simulated=0`` 只返回真实。"""
-    real_payload = make_room_message(
-        message_type="danmaku", content="真弹幕", simulated=False, session_id="real"
-    )
-    sim_payload = make_room_message(
-        message_type="danmaku", content="假弹幕", simulated=True, session_id="sim"
-    )
+    real_payload = make_room_message(message_type="danmaku", content="真弹幕", simulated=False, session_id="real")
+    sim_payload = make_room_message(message_type="danmaku", content="假弹幕", simulated=True, session_id="sim")
     await event_bus.emit(CoreEvents.ROOM_MESSAGE_DANMAKU, real_payload, source="t", wait=True)
     await event_bus.emit(CoreEvents.ROOM_MESSAGE_DANMAKU, sim_payload, source="t", wait=True)
 
@@ -190,9 +180,7 @@ async def test_ledger_session_pk_stable_across_events(
     """同一 live_session_id 字符串的所有事件应落同一 live_chat.live_session_id INTEGER。"""
     s = "stable_session"
     for i in range(3):
-        p = make_room_message(
-            message_type="danmaku", content=f"弹幕{i}", session_id=s, simulated=False
-        )
+        p = make_room_message(message_type="danmaku", content=f"弹幕{i}", session_id=s, simulated=False)
         await event_bus.emit(CoreEvents.ROOM_MESSAGE_DANMAKU, p, source="t", wait=True)
 
     rows = await store.execute("SELECT live_session_id FROM live_chat ORDER BY id")
@@ -207,9 +195,7 @@ async def test_ledger_session_pk_stable_across_events(
 
 
 @pytest.mark.asyncio
-async def test_ledger_write_failure_does_not_break_subsequent_writes(
-    event_bus: EventBus, store: SQLiteStore
-) -> None:
+async def test_ledger_write_failure_does_not_break_subsequent_writes(event_bus: EventBus, store: SQLiteStore) -> None:
     """注入一次写入异常后，下一条事件仍能落库；handler 不抛出。"""
     ledger = StorageLedger(event_bus=event_bus, sqlite_store=store)
     await ledger.start()
@@ -220,8 +206,6 @@ async def test_ledger_write_failure_does_not_break_subsequent_writes(
     # 让 user.id 为空字符串 → insert 仍合法；改用让 payload.gift=None 触发（payload.gift 在
     # make_room_message 中按 message_type 强制设置，这里改直接构造一个 gift 事件但
     # gift=None 的 payload 测一下。改路径：直接 emit 一个手写 payload.gift=None。
-
-    from src.modules.events.payloads.room import RoomMessagePayload
 
     broken = RoomMessagePayload(
         live_session_id="broken",
@@ -254,9 +238,7 @@ async def test_ledger_write_failure_does_not_break_subsequent_writes(
 
 
 @pytest.mark.asyncio
-async def test_ledger_stop_unsubscribes(
-    event_bus: EventBus, store: SQLiteStore
-) -> None:
+async def test_ledger_stop_unsubscribes(event_bus: EventBus, store: SQLiteStore) -> None:
     """stop 后再 emit 不应再触发落库。"""
     ledger = StorageLedger(event_bus=event_bus, sqlite_store=store)
     await ledger.start()

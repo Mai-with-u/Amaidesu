@@ -3,7 +3,7 @@
 中央化 main.py 原有的 streamer/game/custom 分支（Single Source of Truth），
 供启动装配与 Dashboard 动态启停复用。
 
-配置名映射（v2 命名）：
+配置名映射：
 - streamer → StreamerAgent
 - game    → TextAdvGameAgent（引擎 text_adv）
 - custom  → 用户自定义注册（占位，不实例化）
@@ -33,9 +33,9 @@ def instantiate_agent(
 ) -> Optional[BaseAgent]:
     """按名实例化 Agent；未知名字返回 None。
 
-    v2.0.6 B2 修复：新增 ``persona_provider`` 关键字参数透传给 StreamerAgent。
-    装配根（main._register_agents_from_config）从 config_service.get_section("persona")
-    拉取 persona dict 传入；缺省 None 时 StreamerAgent 走 _DEFAULT_* 兜底。
+    ``persona_provider`` 关键字参数透传给 StreamerAgent；装配根从
+    ``config_service.get_section("persona")`` 拉取 persona dict 传入，
+    缺省 None 时 StreamerAgent 走 ``_DEFAULT_*`` 兜底。
     """
     config = config if isinstance(config, dict) else {}
 

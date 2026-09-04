@@ -51,7 +51,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.modules.llm.clients.base import _client_impls
-from src.modules.llm.manager import LLMManager, LLMResponse, RetryConfig
+from src.modules.llm.manager import LLMManager, LLMResponse, RetryConfig, ClientType
 
 # =============================================================================
 # Test Constants - 标准配置
@@ -1215,13 +1215,11 @@ def test_llm_response_error_case():
 
 
 # =============================================================================
-# A1.6 回归保护：llm_agenda profile 注册（v2.0.0 由 llm_outline 改名）
+# A1.6 回归保护：llm_agenda profile 注册（由 llm_outline 改名）
 # =============================================================================
 
 
 def test_client_type_includes_llm_agenda():
-    from src.modules.llm.manager import ClientType
-
     assert "llm_agenda" in ClientType.ALL
     assert ClientType.LLM_AGENDA == "llm_agenda"
     assert ClientType.LLM_OUTLINE == "llm_agenda"
@@ -1230,8 +1228,6 @@ def test_client_type_includes_llm_agenda():
 
 
 def test_client_type_is_valid_recognizes_llm_agenda():
-    from src.modules.llm.manager import ClientType
-
     assert ClientType.is_valid("llm_agenda") is True
 
 

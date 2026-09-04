@@ -13,7 +13,7 @@ ConfigProxy 是配置热重载的关键: 把 `self.config = config` 的快照模
 7. asyncio 并发访问安全
 
 参考实现:
-- MaiBot-v1.0.0/src/config/config.py:688-707 (_ConfigProxy)
+- MaiBot 上游仓库 config/config.py 的 _ConfigProxy
 - scripts/poc_proxy_test.py (已验证 21/21)
 """
 
@@ -24,9 +24,6 @@ from typing import Any
 
 import pytest
 from pydantic import BaseModel, Field
-
-
-# 注意: ConfigProxy 模块在 PHASE 2 才会创建 — 这里先 import 报错以确认 RED
 
 
 # =============================================================================

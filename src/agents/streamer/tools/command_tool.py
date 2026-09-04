@@ -1,16 +1,16 @@
-"""command_tool - 主播命令解析工具（Wave 6 / §1.5）
+"""command_tool - 主播命令解析工具
 
 **真工具**——通过 ``ToolProvider`` 注册到 ToolRegistry，供 LLM 调用。
 底层执行器是 ``CommandParser`` + ``CommandRegistry``（**不**注册为工具；
 这是纯解析层）。
 
-Wave 6 设计：
+设计要点：
 - 原 ``CommandDecider``（订阅 input.message.received 自动跑）→ REWRITE 为 Tool
   （LLM 显式调用：用户发命令 → Planner 检测到 → 调 parse_command 工具）
 - 命令执行（action 路由）：原 CommandDecider 只生成 Intent 然后 publish 事件；
   新架构下命令执行通过调用对应 action 工具完成（如 attack 调 vts 工具）
 
-§1.5 工具契约：
+工具契约：
 - kind: ``"sync"``（纯解析立即返回）
 - provider: ``"builtin"``（框架内置）
 - arguments: ``{text}``（待解析的命令文本）
@@ -25,6 +25,7 @@ from typing import Any, Iterable, Optional
 from src.modules.logging import get_logger
 from src.modules.tools import ToolInvocation, ToolSpec
 from src.modules.tools.models import ToolExecutionResult
+from src.modules.types.base.normalized_message import NormalizedMessage
 
 from ..command.command_parser import CommandParser
 from ..command.command_registry import CommandRegistry
@@ -133,8 +134,6 @@ class CommandToolProvider:
             )
 
         # 用一个 dummy NormalizedMessage 满足 parser 接口
-        from src.modules.types.base.normalized_message import NormalizedMessage
-
         dummy_msg = NormalizedMessage(text=text, source="command_tool")
         cmd = self._parser.parse_command(text, dummy_msg)
         if cmd is None:

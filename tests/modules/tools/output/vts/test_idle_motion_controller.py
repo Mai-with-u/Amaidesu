@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from src.modules.tools.output.vts.idle_motion_controller import IdleMotionController
+from src.modules.tools.output.vts.idle_motion_controller import AxisWander, IdleMotionController
 
 
 @pytest.fixture
@@ -278,8 +278,6 @@ async def test_extra_params_are_swayed_independently():
 def test_axis_wander_irregular_rhythm():
     """AxisWander：输出有界、存在随机停留（连续不变），且整体有运动"""
     import random
-
-    from src.modules.tools.output.vts.idle_motion_controller import AxisWander
 
     w = AxisWander(
         random.Random(42),

@@ -163,8 +163,6 @@ class LogStreamer:
 
     async def broadcast_history(self, client_id: str) -> int:
         """向指定客户端推送历史日志"""
-        import time
-
         history = await self.get_recent_logs()
         if not history:
             return 0
@@ -176,7 +174,7 @@ class LogStreamer:
         for log_entry in history:
             message = WebSocketMessage(
                 type="log.entry",
-                timestamp=time.time(),  # 使用当前时间作为消息发送时间
+                timestamp=time_mod.time(),  # 使用当前时间作为消息发送时间
                 data=log_entry,
             )
             try:

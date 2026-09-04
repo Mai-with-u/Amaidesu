@@ -1,15 +1,9 @@
 """
-SubtitleGuiService - 字幕 GUI 长驻 Tk 线程服务（Wave 4 拆分）
+SubtitleGuiService - 字幕 GUI 长驻 Tk 线程服务
 
-从 ``src.stages.output.handlers.subtitle.SubtitleHandler`` 拆出 GUI 后端
-（CustomTkinter 窗口、长驻线程、文本队列、自动隐藏、右键菜单、拖动）。
+CustomTkinter 窗口、长驻线程、文本队列、自动隐藏、右键菜单、拖动。
 该服务不在 Tool 系统内，由 main.py 在应用启动时直接实例化并调用
 ``start()``，字幕文本通过 ``push_subtitle(text)`` 入队（线程安全）。
-
-迁移策略（与 .omo/drafts/amaidesu-v2-migration.md A 段对齐）:
-- GUI 后端 verbatim 保留（CustomTkinter 窗口行为、配置字段、定时器、菜单）
-- 去除 EventBus / @handler 装饰器 / handle(intent) 接口
-- 队列 + 后台 Tk 线程协议不变；外部调用方改为 ``service.push_subtitle(text)``
 """
 
 from __future__ import annotations

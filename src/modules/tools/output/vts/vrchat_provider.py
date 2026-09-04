@@ -1,10 +1,8 @@
 """
-VRChatProvider - VRChat OSC 虚拟形象工具集（Wave 4 / §1.5）
+VRChatProvider - VRChat OSC 虚拟形象工具集
 
-迁移自 ``src.stages.output.handlers.avatar.vrchat.VRChatHandler``：
-
-- 引擎零改动（OSC 客户端初始化、参数写入、手势触发）
-- ``AvatarHandlerBase`` 继承被去除；ToolProvider 协议由本类自身实现。
+- 引擎：OSC 客户端初始化、参数写入、手势触发
+- ToolProvider 协议由本类自身实现
 - 暴露的工具：
   - ``vrchat_set_expression``  - 设置 VRChat OSC 表情参数
   - ``vrchat_trigger_gesture`` - 触发 VRChat 手势

@@ -1,4 +1,4 @@
-"""Agent 配置 Schema 定义（v2.0.0 / Wave 6）
+"""Agent 配置 Schema 定义
 
 定义 ``config/agents.toml`` 的 Pydantic 聚合模型。
 
@@ -21,11 +21,6 @@
 - 业务 Agent 替代旧决策/输出组件注册（[deciders]/[handlers] → [agents.*]）
 - 复用 profile 名（planner_llm = "llm"）引用 model.toml 的 LLM profile
 - ``budget`` 用嵌套 dict 而非独立 BaseConfig（保持简洁，字段少）
-
-Wave 6 变更：
-- StreamerAgentConfig 字段对齐 agents/streamer/streamer_agent.py：planner_llm / replyer_llm
-- 保留旧字段名（planner_client / replyer_client）作为向后兼容映射
-- 旧 AmaidesuDecider 字段（batch_window_ms / force_data_types 等）搬到 StreamerAgentConfig
 """
 
 from __future__ import annotations
@@ -43,21 +38,21 @@ from src.modules.config.schemas.base import BaseConfig
 
 
 AgentType = Literal[
-    "streamer",  # 主播 Agent（Planner+Replyer，旧 Amaidesu Decider 替代）
+    "streamer",  # 主播 Agent（Planner+Replyer）
     "game",  # 游戏 Agent（占位，具体游戏子类型用 game.<name>）
     "custom",  # 自定义 Agent
 ]
 
 
 # ---------------------------------------------------------------------------
-# [agents.streamer] 配置（替代旧 [deciders.amaidesu] 等）
+# [agents.streamer] 配置
 # ---------------------------------------------------------------------------
 
 
 class StreamerAgentConfig(BaseConfig):
-    """主播 Agent 配置（Wave 6 重命名：StreamerAgentConfig）
+    """主播 Agent 配置
 
-    替代旧版 ``[deciders.amaidesu]`` 段。融合 Planner + Replyer 两阶段决策。
+    融合 Planner + Replyer 两阶段决策。
 
     Attributes:
         planner_llm: 决策阶段使用的 LLM profile 名（引用 model.toml）
@@ -66,9 +61,9 @@ class StreamerAgentConfig(BaseConfig):
         proactive_cold_timeout_ms: 冷场判定阈值（毫秒）
         proactive_min_interval_ms: 两次主动发言最小间隔（毫秒）
         proactive_max_per_hour: 每小时主动发言次数上限
-        agenda_enabled: 是否启用 Agenda（替代旧 outline_enabled）
+        agenda_enabled: 是否启用 Agenda
         agenda_path: Agenda TOML 文件路径
-        profanity_enabled: 是否启用敏感词净化（§1.46.1）
+        profanity_enabled: 是否启用敏感词净化（输出端）
         command_prefix: 命令前缀
         command_mappings: 命令映射 {name: action}
     """
@@ -100,9 +95,6 @@ class StreamerAgentConfig(BaseConfig):
     force_importance: float = Field(default=0.8, ge=0.0, le=1.0, description="importance 达到该值则强制响应")
 
     # --- 人设 ---
-    # v2.0.6 B2 修复：默认值统一为 '麦麦'（与 core_schemas.PersonaConfig.bot_name
-    # 默认值 + config/core.toml 真实值 + src/agents/streamer/streamer_agent.py
-    # 的 StreamerAgentConfig.bot_name 默认值四源对齐）；历史 '爱德丝' 已弃用。
     bot_name: str = Field(default="麦麦", description="VTuber 名称")
     history_limit: int = Field(default=30, ge=0, description="构建 prompt 时引用的历史消息条数")
     enable_action_selection: bool = Field(
@@ -110,7 +102,7 @@ class StreamerAgentConfig(BaseConfig):
         description="是否让 LLM 从工具能力中选择动作",
     )
 
-    # --- 房间状态后台预处理（§1.7 后台双任务：轻循环）---
+    # --- 房间状态后台预处理（后台双任务：轻循环）---
     room_state_enabled: bool = Field(default=True, description="是否启用房间状态后台预处理")
     room_state_cold_timeout_ms: int = Field(default=60_000, ge=0, description="房间冷场判定阈值（毫秒）")
     room_state_llm_summary_interval_ms: int = Field(default=60_000, ge=0, description="低频 LLM 摘要间隔（毫秒）")
@@ -119,7 +111,7 @@ class StreamerAgentConfig(BaseConfig):
         description="房间状态摘要专用 LLM profile",
     )
 
-    # --- 主动发言（Wave 6 新结构）---
+    # --- 主动发言 ---
     proactive_enabled: bool = Field(default=False, description="主动发言总开关（默认关闭）")
     proactive_cold_timeout_ms: int = Field(default=45_000, ge=0, description="冷场判定阈值（毫秒）")
     proactive_min_interval_ms: int = Field(default=120_000, ge=0, description="两次主动发言最小间隔")
@@ -128,7 +120,7 @@ class StreamerAgentConfig(BaseConfig):
     proactive_max_per_hour: int = Field(default=6, ge=1, description="每小时主动发言次数上限")
     proactive_topic_required: bool = Field(default=True, description="话题缺失时跳过触发")
 
-    # --- Agenda（§1.7 重命名 outline→agenda）---
+    # --- Agenda（原 outline 更名）---
     agenda_enabled: bool = Field(default=False, description="Agenda 总开关")
     agenda_path: str = Field(default="", description="Agenda TOML 文件路径")
     agenda_expand_client: str = Field(default="llm_agenda", description="AI 扩展用 LLM profile")
@@ -137,14 +129,14 @@ class StreamerAgentConfig(BaseConfig):
     agenda_auto_start: bool = Field(default=True, description="setup 时自动加载并启动 Agenda")
     agenda_speech_interval_ms: int = Field(default=3_000, ge=1000, description="Agenda 环节内两次主动发言最小间隔")
 
-    # --- 敏感词净化（§1.46.1）---
+    # --- 敏感词净化（输出端）---
     profanity_enabled: bool = Field(default=False, description="敏感词净化开关")
     profanity_words: List[str] = Field(default_factory=list, description="敏感词列表")
     profanity_replacement: str = Field(default="***", description="替换字符")
     profanity_case_sensitive: bool = Field(default=False, description="是否大小写敏感")
     profanity_drop_on_match: bool = Field(default=False, description="命中时是否整条丢弃")
 
-    # --- 命令解析（Wave 6：CommandDecider → parse_command 工具）---
+    # --- 命令解析 ---
     command_prefix: str = Field(default="/", description="命令前缀")
     command_mappings: Dict[str, str] = Field(
         default_factory=lambda: {
@@ -159,15 +151,14 @@ class StreamerAgentConfig(BaseConfig):
 
 
 # ---------------------------------------------------------------------------
-# [agents.game] 配置（占位 — W3 由 game Agent 框架补全）
+# [agents.game] 配置（占位，由具体游戏 Agent 实现补全字段）
 # ---------------------------------------------------------------------------
 
 
 class GameAgentConfig(BaseConfig):
     """游戏 Agent 配置（占位）
 
-    替代旧版游戏相关配置段。``engine`` 标识具体游戏实现
-    （如 "minecraft" / "stardew" 等），W3 由具体游戏 Agent 实现补全字段。
+    ``engine`` 标识具体游戏实现（如 "minecraft" / "stardew" 等）。
     """
 
     enabled: bool = Field(default=True, description="是否启用游戏 Agent")
@@ -214,7 +205,7 @@ class AgentsConfig(BaseConfig):
     )
     game: Optional[GameAgentConfig] = Field(
         default=None,
-        description="游戏 Agent 通用配置（具体游戏子段由 W3 补全）",
+        description="游戏 Agent 通用配置（具体游戏子段由对应游戏 Agent 实现补全）",
         json_schema_extra={"x-ui-type": "object"},
     )
 

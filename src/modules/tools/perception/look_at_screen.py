@@ -1,6 +1,6 @@
-"""look_at_screen 工具 —— 屏幕快照同步工具（v2.0.0 / Wave 7）
+"""look_at_screen 工具 —— 屏幕快照同步工具
 
-按架构 §1.5.1 定案：
+按架构定案：
 - 屏幕画面 = **快照型** → 同步工具（gather 等齐结果）
 - 任何 Agent 都可调用（公共工具，放 ``tools/perception/``）
 - 后端（屏幕采集 / 文本识别）通过 Protocol 注入
@@ -13,12 +13,12 @@
         → TextReader.read(image)         (str or None, 可选)
         → ToolExecutionResult (text content + image block)
 
-落地形态（Wave 7）：
+落地形态：
 - 后端注入即可用：测试用 ``FakeScreenCapture`` + ``FakeTextReader`` 跑通感知-推进闭环
 - 生产环境：注入基于 pyautogui / mss / dxcam 的真实采集后端（与屏幕采集器同源，
   但本工具只暴露**调用即看**的同步接口，不做变化检测轮询）
 
-设计要点（§1.2 "判别口诀"）：
+设计要点（判别口诀）：
 - ✅ 只暴露"能力契约"（ToolSpec + ToolProvider）
 - ✅ 后端可换可 mock（Protocol 注入）
 - ❌ 不内置采集器逻辑（流型归 collectors/screen/，本工具只快照）
@@ -27,6 +27,7 @@
 
 from __future__ import annotations
 
+import base64
 import time
 from dataclasses import dataclass
 from typing import Iterable, List, Optional, Protocol, Tuple
@@ -164,7 +165,7 @@ def build_look_at_screen_spec() -> ToolSpec:
 
 
 class LookAtScreenProvider(ToolProvider):
-    """``look_at_screen`` 工具的 ToolProvider（§1.5 Provider 协议）。
+    """``look_at_screen`` 工具的 ToolProvider（Provider 协议）。
 
     通过构造器注入屏幕采集 / 文本读取后端；测试可传 ``None`` 表示优雅降级。
 
@@ -282,8 +283,6 @@ class LookAtScreenProvider(ToolProvider):
         # 5) 缩放（占位：当前不真做缩放，只在文本里声明 max_width；后续实现可加）
         #    简化原则：宁可不缩放也别误删信息。
         # 6) 组装 result
-        import base64
-
         blocks: List[ResultBlock] = []
         if text:
             blocks.append(ResultBlock(kind="text", text=text))

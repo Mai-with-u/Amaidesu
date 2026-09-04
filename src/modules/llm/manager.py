@@ -47,7 +47,7 @@ class ClientType:
     LLM_FAST = "llm_fast"  # 快速LLM客户端（低延迟任务）
     VLM = "vlm"  # 视觉语言模型客户端（图像理解）
     LLM_LOCAL = "llm_local"  # 本地LLM客户端（Ollama等）
-    # 房间状态摘要专用 profile：独立 client 实例，避免与 Planner(llm_fast) 共享连接池（Task 8）
+    # 房间状态摘要专用 profile：独立 client 实例，避免与 Planner(llm_fast) 共享连接池
     LLM_SUMMARY = "llm_summary"
     LLM_AGENDA = "llm_agenda"
     LLM_OUTLINE = LLM_AGENDA
@@ -59,7 +59,7 @@ class ClientType:
 
     @classmethod
     def is_valid(cls, client_type: str) -> bool:
-        """检查客户端类型是否有效（含 v2.0.0 别名兼容：llm_outline 与 llm_agenda 等价）"""
+        """检查客户端类型是否有效（含别名兼容：llm_outline 与 llm_agenda 等价）"""
         if client_type in cls.ALL:
             return True
         return client_type == cls.LLM_OUTLINE
@@ -189,6 +189,8 @@ class LLMManager:
             # 用合并配置(含 model/temperature/max_tokens)初始化客户端
             self._clients[profile_key] = impl(merged)
 
+        # 必须函数体内 import：测试用 patch 拦截（src.modules.llm.clients.token_usage_manager.TokenUsageManager），
+        # 顶部 import 会使 patch 失效（参见 tests/modules/llm/test_llm_manager.py）
         from src.modules.llm.clients.token_usage_manager import TokenUsageManager
 
         self._token_manager = TokenUsageManager(use_global=True)
@@ -197,8 +199,6 @@ class LLMManager:
             f"LLMManager 初始化完成，providers: {list(self._providers.keys())}, "
             f"profiles: {list(self._profile_configs.keys())}"
         )
-
-    # === 主要调用接口 ===
 
     async def chat(
         self,
@@ -624,6 +624,8 @@ class LLMManager:
             start_time: 请求开始时间
         """
         try:
+            # 必须函数体内 import：测试用 patch 拦截该路径，顶部 import 会使 patch 失效
+            # （参见 tests/modules/llm/test_llm_manager.py）
             from src.modules.llm.request_history_manager import (
                 RequestRecord,
                 TokenUsage,

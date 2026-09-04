@@ -1,7 +1,7 @@
-"""StreamerAgent - 主播 Agent（Wave 6 / §1.4 / §1.49 BaseAgent 子类）
+"""StreamerAgent - 主播 Agent（BaseAgent 子类）
 
-§1.4 定案：主播 Agent = Planner（决策核心）+ reply 工具（入口）+ Replyer（表达引擎），一体。
-§1.49 协议六面（最小契约）：
+主播 Agent = Planner（决策核心）+ reply 工具（入口）+ Replyer（表达引擎），一体。
+协议六面（最小契约）：
 
 | # | 面 | 内容 |
 |---|---|---|
@@ -12,7 +12,7 @@
 | 5 | 健康 | BaseAgent 心跳协议 |
 | 6 | 元数据 | name / description |
 
-接入方式（§1.49 继承 + 构造注入）：
+接入方式（继承 + 构造注入）：
 ```python
 agent = StreamerAgent(
     config=streamer_agent_config,
@@ -29,7 +29,7 @@ await agent.start()
 await agent.cleanup()
 ```
 
-Wave 6 重构要点：
+实现要点：
 - 移除 AmaidesuDecider wrapper：Agent 本身直接编排子组件
 - 新增 toolset：reply / proactive / command 三个 @tool
 - 后台双任务（BackgroundMaintainer）取代 RoomStateLoop + 部分 AmaidesuDecider 职责
@@ -49,9 +49,11 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.logging import get_logger
-from src.modules.tools import ToolSpec
+from src.modules.tools import ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
+from src.modules.time_utils import format_duration_ms, now_ms
 from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.types.message_type import require_message_type
 
 from .agenda.agenda_idle import AgendaIdle
 from .agenda.agenda_loader import AgendaLoader
@@ -81,11 +83,11 @@ from pydantic import Field as _PydField
 class StreamerAgentConfig(BaseConfig):
     """主播 Agent 配置 Schema（替代旧 AmaidesuDecider.ConfigSchema）。
 
-    Wave 6 重构后字段名对齐 agents_schemas.StreamerAgentConfig（planner_llm / replyer_llm）
+    字段名对齐 agents_schemas.StreamerAgentConfig（planner_llm / replyer_llm）
     + 保留旧字段（replyer_client / planner_client）作为向后兼容映射。
     """
 
-    # --- 两阶段 LLM profile（Wave 6 新字段）---
+    # --- 两阶段 LLM profile：Planner 用 llm_fast，Replyer 用 llm ---
     planner_llm: str = _PydField(default="llm_fast", description="Planner 使用的 LLM profile")
     replyer_llm: str = _PydField(default="llm", description="Replyer 使用的 LLM profile")
 
@@ -107,8 +109,8 @@ class StreamerAgentConfig(BaseConfig):
     force_importance: float = _PydField(default=0.8, ge=0.0, le=1.0, description="importance 达到该值则强制响应")
 
     # --- 人设 ---
-    # v2.0.6 B2 修复：默认值统一为 '麦麦'（与 core_schemas.PersonaConfig.bot_name
-    # 默认值 + config/core.toml 真实值对齐）；历史 '爱德丝' 已弃用。
+    # 默认值 '麦麦' 与 core_schemas.PersonaConfig.bot_name 默认值 +
+    # config/core.toml 真实值对齐；历史 '爱德丝' 已弃用。
     # 优先级链：persona dict（来自 core.toml，经装配根注入 StreamerAgent.persona_provider）
     # > StreamerAgentConfig.bot_name（agents.toml 显式覆盖）> 本字段默认值。
     bot_name: str = _PydField(default="麦麦", description="VTuber 名称")
@@ -118,7 +120,7 @@ class StreamerAgentConfig(BaseConfig):
         description="是否让 LLM 从工具能力中选择动作",
     )
 
-    # --- 房间状态后台预处理（§1.7 后台双任务：轻循环）---
+    # --- 房间状态后台预处理（后台双任务：轻循环）---
     room_state_enabled: bool = _PydField(default=True, description="是否启用房间状态后台预处理")
     room_state_cold_timeout_ms: int = _PydField(default=60_000, ge=0, description="房间冷场判定阈值（毫秒）")
     room_state_llm_summary_interval_ms: int = _PydField(default=60_000, ge=0, description="低频 LLM 摘要间隔（毫秒）")
@@ -136,7 +138,7 @@ class StreamerAgentConfig(BaseConfig):
     proactive_max_per_hour: int = _PydField(default=6, ge=1, description="每小时主动发言次数上限")
     proactive_topic_required: bool = _PydField(default=True, description="话题摘要缺失时是否跳过触发")
 
-    # --- Agenda（§1.7）---
+    # --- Agenda ---
     agenda_enabled: bool = _PydField(default=False, description="Agenda 总开关（默认关闭）")
     agenda_path: str = _PydField(default="", description="Agenda TOML 文件路径")
     agenda_expand_client: str = _PydField(default="llm_agenda", description="AI 扩展用 LLM profile")
@@ -145,14 +147,14 @@ class StreamerAgentConfig(BaseConfig):
     agenda_auto_start: bool = _PydField(default=True, description="setup 时自动加载并启动 Agenda")
     agenda_speech_interval_ms: int = _PydField(default=3_000, ge=1000, description="Agenda 环节内两次主动发言最小间隔")
 
-    # --- 敏感词净化（§1.46.1）---
+    # --- 敏感词净化（输出端）---
     profanity_enabled: bool = _PydField(default=False, description="敏感词净化开关")
     profanity_words: List[str] = _PydField(default_factory=list, description="敏感词列表")
     profanity_replacement: str = _PydField(default="***", description="替换字符")
     profanity_case_sensitive: bool = _PydField(default=False, description="是否大小写敏感")
     profanity_drop_on_match: bool = _PydField(default=False, description="命中时是否整条丢弃")
 
-    # --- 命令解析（Wave 6：CommandDecider → parse_command 工具）---
+    # --- 命令解析：parse_command 工具 ---
     command_prefix: str = _PydField(default="/", description="命令前缀")
     command_mappings: Dict[str, str] = _PydField(
         default_factory=lambda: {
@@ -174,7 +176,7 @@ class StreamerAgentConfig(BaseConfig):
 class StreamerAgent(BaseAgent):
     """主播 Agent：编排 Planner + Replyer + 工具 + 后台任务 + Agenda。
 
-    实现 §1.49 协议六面：
+    实现协议六面：
     1. 生命周期（start/stop/cleanup）
     2. 工具提供：reply / should_speak_proactively / parse_command（3 个 @tool）
     3. 事件上报：emit（planner.checkpoint 等）；订阅 room.message.*
@@ -185,7 +187,7 @@ class StreamerAgent(BaseAgent):
 
     # -----协议 6：元数据（必须覆写）-----
     name = "streamer"
-    description = "Streamer Agent - 主播决策 + 表达 + 后台维护（Wave 6 §1.4）"
+    description = "Streamer Agent - 主播决策 + 表达 + 后台维护"
 
     # -----协议 3：事件族声明（可选）-----
     emits_events = (
@@ -219,7 +221,7 @@ class StreamerAgent(BaseAgent):
             capabilities_provider: 可选工具能力提供者（用于 reply 动作白名单）
             sqlite_store: 可选 ``SQLiteStore``（live_sessions + agenda_runtime 持久化）
             persona_provider: 可选人设字典来源（鸭子类型：callable 返回 dict / dict 本身）
-            memory: 可选 §1.50 记忆后端（实现 ``MemoryProvider`` 协议，含
+            memory: 可选记忆后端（实现 ``MemoryProvider`` 协议，含
                 ``recall(query, top_k)`` / ``ingest(text, source, tags)``）。
                 传 ``None`` 时记忆相关功能整体降级——Planner 走无记忆路径，
                 BackgroundMaintainer 跳过 ingest 写入。这是契约保证的"功能
@@ -235,7 +237,7 @@ class StreamerAgent(BaseAgent):
         self._capabilities_provider = capabilities_provider
         self._sqlite = sqlite_store
         self._persona_provider = persona_provider
-        # §1.50 记忆后端（可选；None 时记忆相关功能整体降级）
+        # 记忆后端（可选；None 时记忆相关功能整体降级）
         self._memory = memory
         self._logger = get_logger("StreamerAgent")
 
@@ -255,7 +257,7 @@ class StreamerAgent(BaseAgent):
         self._room_state = RoomState()
 
         # Stage 1: Planner（决策核心，Agent 内脏——非工具）
-        # v2.0.6 B2 修复：从 self._persona_provider（装配根注入的 [persona] dict）
+        # 从 self._persona_provider（装配根注入的 [persona] dict）
         # 提取 behavior_style（行动准则）并透传给 Planner；persona_provider 是 dict
         # 或可调用对象两种形式，统一用鸭子类型断言。
         _behavior_style = ""
@@ -279,7 +281,7 @@ class StreamerAgent(BaseAgent):
             behavior_style=_behavior_style,
         )
 
-        # 敏感词过滤器（§1.46.1）
+        # 敏感词过滤器（输出净化；None 表示不启用）
         self._profanity_filter = ProfanityFilter(
             words=config.profanity_words if config.profanity_enabled else None,
             replacement=config.profanity_replacement,
@@ -320,7 +322,7 @@ class StreamerAgent(BaseAgent):
         self._agenda_loader: Optional[AgendaLoader] = None
         self._agenda_idle: Optional[AgendaIdle] = None
 
-        # 后台维护器（§1.7 双任务：轻循环 + 压缩 worker）
+        # 后台维护器（双任务：轻循环 + 压缩 worker）
         background_config = {
             "light_tick_ms": 5_000,
             "cold_timeout_ms": config.room_state_cold_timeout_ms,
@@ -333,11 +335,11 @@ class StreamerAgent(BaseAgent):
             llm_service=llm_manager,
             live_session_store=sqlite_store,  # duck-typed: update_live_session_heartbeat
             context_service=context_service,
-            memory=memory,  # §1.50 写入面：摘要 → ingest；None 时降级
+            memory=memory,  # 记忆写入面：摘要 → ingest；None 时降级
             event_bus=event_bus,  # 高价值事件（礼物/SC）→ ingest
         )
 
-        # 后台 flush 循环（Wave 6 Agent 主循环——替代 AmaidesuDecider._flush_loop）
+        # 后台 flush 循环（Agent 主循环）
         self._flush_task: Optional[asyncio.Task] = None
         self._flush_lock = asyncio.Lock()
         self._running = False
@@ -429,7 +431,7 @@ class StreamerAgent(BaseAgent):
     # ==================================================================
 
     def list_tools(self) -> Iterable[ToolSpec]:
-        """声明本 Agent 暴露的工具（§1.49 协议面 2）。
+        """声明本 Agent 暴露的工具（协议面 2）。
 
         单一事实源：tool spec 完全源自三个工具 Provider（ReplyToolProvider /
         ProactiveToolProvider / CommandToolProvider）。Provider 在 ``_register_tools``
@@ -533,8 +535,6 @@ class StreamerAgent(BaseAgent):
         if payload.message_type != "danmaku":
             return
         try:
-            from src.modules.types.message_type import require_message_type
-
             msg = NormalizedMessage(
                 text=payload.content,
                 source=source or "room.message.danmaku",
@@ -552,8 +552,6 @@ class StreamerAgent(BaseAgent):
 
     async def handle_message(self, msg: NormalizedMessage) -> None:
         """处理一条弹幕（collectors → Agent 入口；测试也可直接调）。"""
-        from src.modules.time_utils import now_ms
-
         self._total_messages += 1
         # 1. RoomState 热度信号
         self._room_state.update(msg, now_ms=now_ms())
@@ -569,7 +567,7 @@ class StreamerAgent(BaseAgent):
             self._logger.info(f"外部主动发言触发: {topic_hint}")
 
     # ==================================================================
-    # 后台 flush 循环（Wave 6 Agent 主循环，替代 AmaidesuDecider._flush_loop）
+    # 后台 flush 循环（Agent 主循环）
     # ==================================================================
 
     async def _flush_loop(self) -> None:
@@ -586,9 +584,7 @@ class StreamerAgent(BaseAgent):
             raise
 
     async def _maybe_flush(self) -> None:
-        """判断是否应该取出一批并做两阶段决策（与 AmaidesuDecider._maybe_flush 同构）。"""
-        from src.modules.time_utils import now_ms
-
+        """判断是否应该取出一批并做两阶段决策。"""
         if self._flush_lock.locked():
             return
 
@@ -650,8 +646,6 @@ class StreamerAgent(BaseAgent):
         proactive: bool = False,
     ) -> None:
         """两阶段决策：Planner → 消费 plan 评估 + 触发 reply 工具。"""
-        from src.modules.time_utils import now_ms
-
         # 1. 读历史（duck-typed）
         history = await self._read_history("live")
 
@@ -723,8 +717,6 @@ class StreamerAgent(BaseAgent):
         batch: List[NormalizedMessage],
     ) -> Any:
         """构造 reply 工具的 ToolInvocation。"""
-        from src.modules.tools import ToolInvocation
-
         return ToolInvocation(
             tool_name="reply",
             arguments={
@@ -765,8 +757,6 @@ class StreamerAgent(BaseAgent):
 
     def _build_agenda_text(self) -> Optional[str]:
         """拼装 Agenda 渲染文本（注入 Planner/Replyer $agenda 变量）。"""
-        from src.modules.time_utils import format_duration_ms
-
         if not self._is_agenda_active():
             return None
         state = self._agenda_state

@@ -1,8 +1,8 @@
-"""AgendaState 单元测试（Wave 6 Streamer Agent 节目单运行时状态机 + Storage 适配）。"""
+"""AgendaState 单元测试（Streamer Agent 节目单运行时状态机 + Storage 适配）。"""
 
 from __future__ import annotations
 
-from src.agents.streamer.agenda.agenda import Agenda, AgendaSegment
+from src.agents.streamer.agenda import Agenda, AgendaSegment, parse_agenda_toml
 from src.agents.streamer.agenda.agenda_state import AgendaState, AgendaStatus
 
 
@@ -216,8 +216,6 @@ duration_ms = 5000
         path = tmp_path / "test.toml"
         path.write_text(toml_content, encoding="utf-8")
 
-        from src.agents.streamer.agenda.agenda import parse_agenda_toml
-
         agenda = parse_agenda_toml(path)
         assert agenda.agenda_id == "x"
         assert agenda.title == "test"
@@ -240,7 +238,6 @@ duration_ms = 500
         path = tmp_path / "invalid.toml"
         path.write_text(toml_content, encoding="utf-8")
 
-        from src.agents.streamer.agenda.agenda import parse_agenda_toml
         import pytest
 
         with pytest.raises(Exception):  # ValidationError

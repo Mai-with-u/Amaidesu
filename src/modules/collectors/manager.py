@@ -1,5 +1,5 @@
 """
-CollectorManager —— 采集器生命周期管理（Wave 3 / §1.52）
+CollectorManager —— 采集器生命周期管理
 
 设计对称 AgentManager：
 - 注册 / 启动 / 停止 / cleanup
@@ -78,8 +78,8 @@ class CollectorManager:
     def list_running(self) -> List[str]:
         """返回运行中的采集器。
 
-        兼容层状态优先：具体 Collectors（W5 迁移前）覆写 start()/stop() 维护
-        自身 ``is_started`` 标志而绕过基类状态机，基类 ``state`` 停在 CREATED；故
+        兼容层状态优先：具体 Collectors 可能覆写 start()/stop() 维护自身
+        ``is_started`` 标志而绕过基类状态机，基类 ``state`` 停在 CREATED；故
         以 ``is_started`` 为准，基类 RUNNING 状态作参考。
         """
         running: List[str] = []

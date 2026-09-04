@@ -1,10 +1,8 @@
 """
-VoiceboxProvider - Voicebox 语音合成工具（Wave 4 / §1.5）
+VoiceboxProvider - Voicebox 语音合成工具
 
-迁移自 ``src.stages.output.handlers.audio.voicebox.VoiceboxHandler``：
-
-- 引擎 verbatim（Voicebox HTTP API: POST /generate → SSE 轮询 → GET /audio）
-- ``AudioHandlerBase`` 继承被去除；ToolProvider 协议由本类自身实现
+- 引擎：Voicebox HTTP API（POST /generate → SSE 轮询 → GET /audio）
+- ToolProvider 协议由本类自身实现
 - 工具 ``voicebox_synthesize(text)`` 调用 ``handle_speech()`` 入口
 """
 
@@ -173,14 +171,14 @@ class VoiceboxProvider:
         self.logger.info("VoiceboxProvider 清理完成")
 
     async def handle_speech(self, text: str) -> None:
-        """对应父类模板方法 handle()（verbatim）"""
+        """TTS 播放入口"""
         if self.tts_lock is None:
             self.tts_lock = asyncio.Lock()
         async with self.tts_lock:
             await self._synthesize(text)
 
     async def _synthesize(self, text: str) -> None:
-        """verbatim _synthesize"""
+        """合成并播放"""
         if not self._session or self._session.closed:
             raise RuntimeError("Voicebox HTTP 会话未初始化")
         if not self.profile_id:
@@ -202,7 +200,7 @@ class VoiceboxProvider:
         await self.audio_manager.play_audio(audio_array)
 
     async def _create_generation(self, text: str) -> str:
-        """verbatim POST /generate"""
+        """POST /generate"""
         if not self._session or self._session.closed:
             raise RuntimeError("Voicebox HTTP 会话未初始化")
         payload = {
@@ -228,7 +226,7 @@ class VoiceboxProvider:
             return gen_id
 
     async def _wait_for_completion(self, generation_id: str) -> None:
-        """verbatim SSE 轮询"""
+        """SSE 轮询生成状态"""
         if not self._session or self._session.closed:
             raise RuntimeError("Voicebox HTTP 会话未初始化")
         url = f"{self.base_url}/generate/{generation_id}/status"
@@ -258,7 +256,7 @@ class VoiceboxProvider:
                     raise RuntimeError(f"Voicebox 生成失败: {err}")
 
     async def _download_audio(self, generation_id: str) -> bytes:
-        """verbatim GET /audio"""
+        """GET /audio 下载音频"""
         if not self._session or self._session.closed:
             raise RuntimeError("Voicebox HTTP 会话未初始化")
         url = f"{self.base_url}/audio/{generation_id}"

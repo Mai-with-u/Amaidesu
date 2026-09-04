@@ -1,5 +1,5 @@
 """
-配置加载集成测试（v2.0.0）
+配置加载集成测试
 
 测试二级配置合并系统：
 1. Schema默认值（Pydantic）
@@ -17,7 +17,7 @@ import tempfile
 import pytest
 from pydantic import BaseModel
 
-from src.modules.config.service import ConfigService
+from src.modules.config.service import ConfigService, deep_merge_configs
 
 
 class InputProviderSchema(BaseModel):
@@ -83,7 +83,7 @@ platform_id = "test"
 
 
 def test_agent_enabled_check_based_on_list_v2(temp_base_dir):
-    """v2.0.0：agents 段 enabled 列表应包含用户启用项。"""
+    """agents 段 enabled 列表应包含用户启用项。"""
     _write_main_config(
         temp_base_dir,
         """
@@ -151,8 +151,6 @@ enabled = ["test_input"]
 
 
 def test_deep_merge_basic_types():
-    from src.modules.config.service import deep_merge_configs
-
     base = {"a": 1, "b": 2}
     override = {"b": 20, "c": 3}
 
@@ -164,8 +162,6 @@ def test_deep_merge_basic_types():
 
 
 def test_deep_merge_nested_dicts_simple():
-    from src.modules.config.service import deep_merge_configs
-
     base = {"a": 1, "nested": {"x": 10, "y": 20}}
     override = {"nested": {"y": 200, "z": 30}, "b": 2}
 
@@ -179,8 +175,6 @@ def test_deep_merge_nested_dicts_simple():
 
 
 def test_deep_merge_lists():
-    from src.modules.config.service import deep_merge_configs
-
     base = {"items": [1, 2, 3]}
     override = {"items": [4, 5]}
 
@@ -190,8 +184,6 @@ def test_deep_merge_lists():
 
 
 def test_deep_merge_none_values():
-    from src.modules.config.service import deep_merge_configs
-
     base = {"a": 1, "b": 2}
     override = {"b": None, "c": 3}
 

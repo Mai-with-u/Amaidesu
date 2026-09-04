@@ -98,7 +98,7 @@ def register_event(event_name: str) -> Callable[[T], T]:
     使用 ``@register_event("event.name")`` 把 Pydantic BaseModel 子类注册为
     对应事件的 Payload 类型，并设置 ``cls._registered_event_name`` 反向引用。
 
-    同一类注册到多个事件名（v2 增量）时：
+    同一类注册到多个事件名时：
     - ``_registered_event_name`` 被设为 :class:`_MultiName` 对象
     - ``_all_registered_names`` 被设为 ``frozenset``，列出全部注册名
     - 测试断言 ``reverse_name == event_name`` 对所有已注册事件名都成立
@@ -122,7 +122,6 @@ def register_event(event_name: str) -> Callable[[T], T]:
             assert RoomMessagePayload._registered_event_name == "room.message.danmaku"
 
 
-            # W1 增量：同一类多事件名
             @register_event("live.started")
             @register_event("live.ended")
             class LivePayload(BasePayload): ...
@@ -223,9 +222,9 @@ def register_core_events() -> None:
     该函数本身不维护任何事件→Payload 映射。Payload 模块一旦被 import，
     其内部的 ``@register_event`` 装饰器即把对应类登记到 :data:`EVENT_REGISTRY`。
 
-    v2 增量：新增 5 个语义域 Payload 模块（live/room/game/agenda/planner），
-    在此一并触发 import；``tool_result`` 模块即使无具体 ``@register_event``
-    装饰器调用也一并 import 以触发模块级代码（保留供后续扩展）。
+    触发各语义域 Payload 模块（live/room/game/agenda/planner 等）的导入，
+    让 ``@register_event`` 装饰器执行；``tool_result`` 模块即使无具体
+    ``@register_event`` 装饰器调用也一并 import 以触发模块级代码。
     """
     # noqa: F401 —— 仅为触发模块级 @register_event 执行
     from src.modules.events.payloads import (  # noqa: F401

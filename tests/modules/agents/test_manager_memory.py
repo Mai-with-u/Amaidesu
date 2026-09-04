@@ -1,15 +1,15 @@
 """
-AgentManager memory/tool_registry 回退逻辑测试（Wave 8 / 记忆接线修复）
+AgentManager memory/tool_registry 回退逻辑测试。
 
 覆盖：
 - ``AgentManager(memory=m)`` → ``self._memory`` 持有
 - ``enable_agent(name)`` 不传 ``memory`` → 回退到成员（Dashboard 场景）
 - ``enable_agent(name, memory=explicit)`` → 显式值覆盖成员
-- ``tool_registry`` 同样的回退逻辑（顺手修复的既存缺陷）
+- ``tool_registry`` 同样的回退逻辑
 - ``instantiate_agent`` 接受 ``memory`` 关键字（工厂侧透传验证）
 
 通过 ``unittest.mock.patch`` stub ``factory.instantiate_agent``，避免真实构造
-``StreamerAgent``（其 ``memory`` 形参由并行代理添加，本任务不依赖）。
+``StreamerAgent``（其 ``memory`` 形参由并行代理添加）。
 """
 
 from __future__ import annotations

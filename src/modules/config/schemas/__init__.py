@@ -53,7 +53,7 @@ from .output_schemas import (  # noqa: E402
     get_output_config,
 )
 
-# Input stage schemas (Task 8)
+# Input stage schemas
 from .input_schemas import (  # noqa: E402
     InputCollectorsConfig,
     InputConfig,

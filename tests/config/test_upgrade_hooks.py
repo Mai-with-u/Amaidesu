@@ -1,4 +1,4 @@
-"""升级 Hook 单元测试（v2.0.0：每条 hook 配测试，旧→新结构断言）
+"""升级 Hook 单元测试（每条 hook 配测试，旧→新结构断言）
 
 AGENTS.md 钩子契约：
 - 原地修改：hook 接收 dict 并直接修改
@@ -11,13 +11,22 @@ from __future__ import annotations
 from src.modules.config.upgrade_hooks import (
     CONFIG_UPGRADE_HOOKS,
     _migrate_agents_2_0_0,
+    _migrate_agents_2_0_1,
+    _migrate_agents_2_0_3,
     _migrate_background_2_0_0,
     _migrate_core_2_0_0,
+    _migrate_core_2_0_1,
+    _migrate_core_2_0_2,
+    _migrate_core_2_0_4,
     _migrate_mainosaba_to_text_adv_game,
     _migrate_memory_2_0_0,
     _migrate_model_2_0_0,
+    _migrate_model_2_0_3,
     _migrate_storage_2_0_0,
     _migrate_tools_2_0_0,
+    _migrate_tools_2_0_9,
+    _strip_pipelines_2_0_4,
+    _version_in_range,
     apply_upgrade_hooks,
 )
 
@@ -180,7 +189,6 @@ class TestMainosabaHookLegacy:
 class TestApplyUpgradeHooks:
     def test_version_range_filters_hooks(self):
         """apply_upgrade_hooks 应只触发 (old_ver, target_ver] 范围内的 hook。"""
-        from src.modules.config.upgrade_hooks import _version_in_range
 
         assert _version_in_range("0.5.4", "2.0.0", "2.0.0") is True
         assert _version_in_range("0.5.3", "2.0.0", "2.0.0") is True
@@ -230,11 +238,10 @@ class TestHookRegistry:
 
 
 class TestWave6Hooks2_0_1:
-    """Wave 6 收尾清理钩子（2.0.0 → 2.0.1）。"""
+    """收尾清理钩子（2.0.0 → 2.0.1）。"""
 
     def test_core_2_0_1_strips_text_adv_game(self):
-        """core.toml 2.0.1：剥离残留的 text_adv_game 字段（Wave 6 删除）。"""
-        from src.modules.config.upgrade_hooks import _migrate_core_2_0_1
+        """core.toml 2.0.1：剥离残留的 text_adv_game 字段。"""
 
         data = {"text_adv_game": {"full_screen": True}, "pipelines": {}}
         changed = _migrate_core_2_0_1(data)
@@ -243,15 +250,13 @@ class TestWave6Hooks2_0_1:
 
     def test_core_2_0_1_idempotent(self):
         """idempotent：无 text_adv_game 时不报错。"""
-        from src.modules.config.upgrade_hooks import _migrate_core_2_0_1
 
         data = {"pipelines": {}}
         changed = _migrate_core_2_0_1(data)
         assert changed == []
 
     def test_agents_2_0_1_strips_reply_probability(self):
-        """agents.toml 2.0.1：剥离残留的 reply_probability 字段（Wave 6 重构后已删除）。"""
-        from src.modules.config.upgrade_hooks import _migrate_agents_2_0_1
+        """agents.toml 2.0.1：剥离残留的 reply_probability 字段。"""
 
         data = {"streamer": {"planner_llm": "llm_fast", "reply_probability": 0.7}}
         changed = _migrate_agents_2_0_1(data)
@@ -260,7 +265,6 @@ class TestWave6Hooks2_0_1:
 
     def test_agents_2_0_1_preserves_other_fields(self):
         """剥离 reply_probability 时其他字段保留。"""
-        from src.modules.config.upgrade_hooks import _migrate_agents_2_0_1
 
         data = {"streamer": {"planner_llm": "llm_fast", "bot_name": "麦麦"}}
         changed = _migrate_agents_2_0_1(data)
@@ -269,14 +273,13 @@ class TestWave6Hooks2_0_1:
         assert data["streamer"]["bot_name"] == "麦麦"
 
     def test_2_0_1_hooks_registered(self):
-        """Wave 6 2.0.1 升级钩子已注册。"""
+        """2.0.1 升级钩子已注册。"""
         v2_0_1_hooks = [h for h in CONFIG_UPGRADE_HOOKS if h.target_version == "2.0.1"]
         files = {h.config_file for h in v2_0_1_hooks}
         assert files == {"core.toml", "agents.toml"}
 
     def test_core_2_0_2_strips_mcp_section(self):
         """core.toml 2.0.2：剥离残留的 [mcp] 段（MCP 桥接服务已随 v2 移除）。"""
-        from src.modules.config.upgrade_hooks import _migrate_core_2_0_2
 
         data = {"mcp": {"enabled": True}, "logging": {"level": "DEBUG"}}
         changed = _migrate_core_2_0_2(data)
@@ -286,7 +289,6 @@ class TestWave6Hooks2_0_1:
 
     def test_core_2_0_2_idempotent(self):
         """idempotent：无 [mcp] 段时不报错、无变更。"""
-        from src.modules.config.upgrade_hooks import _migrate_core_2_0_2
 
         data = {"general": {}, "logging": {}}
         changed = _migrate_core_2_0_2(data)
@@ -300,7 +302,6 @@ class TestWave6Hooks2_0_1:
 
     def test_model_2_0_3_fixes_invalid_provider(self):
         """model.toml 2.0.3：无效 provider（默认 'default'）重写为首个可用 provider。"""
-        from src.modules.config.upgrade_hooks import _migrate_model_2_0_3
 
         data = {
             "llm_providers": [{"name": "deepseek"}, {"name": "local"}],
@@ -315,7 +316,6 @@ class TestWave6Hooks2_0_1:
 
     def test_model_2_0_3_handles_llm_outline_rename(self):
         """自包含：残留 llm_outline 时先改名再修 provider（版本门控下 2.0.0 钩子不再触发）。"""
-        from src.modules.config.upgrade_hooks import _migrate_model_2_0_3
 
         data = {
             "llm_providers": [{"name": "siliconflow"}],
@@ -328,7 +328,6 @@ class TestWave6Hooks2_0_1:
 
     def test_model_2_0_3_idempotent(self):
         """幂等：全部合法时无变更。"""
-        from src.modules.config.upgrade_hooks import _migrate_model_2_0_3
 
         data = {
             "llm_providers": [{"name": "deepseek"}],
@@ -339,7 +338,6 @@ class TestWave6Hooks2_0_1:
 
     def test_agents_2_0_3_filters_enabled(self):
         """agents.toml 2.0.3：过滤失效 Agent 类型，空后回退 streamer。"""
-        from src.modules.config.upgrade_hooks import _migrate_agents_2_0_3
 
         data = {"agents": {"enabled": ["maibot", "amaidesu"]}}
         changed = _migrate_agents_2_0_3(data)
@@ -348,7 +346,6 @@ class TestWave6Hooks2_0_1:
 
     def test_agents_2_0_3_keeps_valid(self):
         """幂等：仅合法值时无变更。"""
-        from src.modules.config.upgrade_hooks import _migrate_agents_2_0_3
 
         data = {"agents": {"enabled": ["streamer", "game"]}}
         changed = _migrate_agents_2_0_3(data)
@@ -363,11 +360,9 @@ class TestWave6Hooks2_0_1:
 
 
 class TestCoreHook2_0_4:
-    """core.toml 2.0.4：``[pipelines]`` → ``[interceptors]`` 正名（§1.46.1 收官）。"""
+    """core.toml 2.0.4：``[pipelines]`` → ``[interceptors]`` 正名（收官）。"""
 
     def test_pipelines_renamed_to_interceptors(self):
-        from src.modules.config.upgrade_hooks import _migrate_core_2_0_4
-
         data: dict = {
             "pipelines": {
                 "input": {
@@ -386,7 +381,6 @@ class TestCoreHook2_0_4:
 
     def test_flat_pipelines_compat(self):
         """v1 遗留：``pipelines`` 根级扁平键也迁移。"""
-        from src.modules.config.upgrade_hooks import _migrate_core_2_0_4
 
         data: dict = {"pipelines": {"rate_limit": {"limit": 3}}}
         changed = _migrate_core_2_0_4(data)
@@ -395,7 +389,6 @@ class TestCoreHook2_0_4:
 
     def test_idempotent(self):
         """重复执行无副作用。"""
-        from src.modules.config.upgrade_hooks import _migrate_core_2_0_4
 
         data: dict = {
             "pipelines": {"input": {"rate_limit": {"limit": 1}}},
@@ -409,7 +402,6 @@ class TestCoreHook2_0_4:
 
     def test_merge_preserves_existing_interceptors(self):
         """已有 [interceptors] 键时迁移项并入，不整体覆盖。"""
-        from src.modules.config.upgrade_hooks import _migrate_core_2_0_4
 
         data: dict = {
             "pipelines": {"input": {"rate_limit": {"limit": 1}}},
@@ -430,16 +422,12 @@ class TestStageStripHook2_0_4:
     """input/output.toml 2.0.4：剥离遗留 [pipelines] 死段。"""
 
     def test_input_strips_pipelines(self):
-        from src.modules.config.upgrade_hooks import _strip_pipelines_2_0_4
-
         data = {"collectors": {"enabled": ["console_input"]}, "pipelines": {"input": {"rate_limit": {}}}}
         changed = _strip_pipelines_2_0_4(data)
         assert "pipelines" not in data
         assert changed == ["pipelines"]
 
     def test_strip_idempotent(self):
-        from src.modules.config.upgrade_hooks import _strip_pipelines_2_0_4
-
         data = {"collectors": {"enabled": ["console_input"]}}
         changed = _strip_pipelines_2_0_4(data)
         assert changed == []
@@ -453,8 +441,6 @@ class TestToolsHook2_0_9:
     """
 
     def test_strips_three_dead_keys(self):
-        from src.modules.config.upgrade_hooks import _migrate_tools_2_0_9
-
         data = {
             "tools": {
                 "enabled": ["perception"],
@@ -489,8 +475,6 @@ class TestToolsHook2_0_9:
         assert read_pingmu["max_cached_images"] == 5
 
     def test_idempotent_when_keys_already_absent(self):
-        from src.modules.config.upgrade_hooks import _migrate_tools_2_0_9
-
         data = {
             "tools": {
                 "perception": {
@@ -511,14 +495,8 @@ class TestToolsHook2_0_9:
 
     def test_noop_when_path_missing(self):
         """tools/perception/config/read_pingmu 任一层缺失均安全返回。"""
-        from src.modules.config.upgrade_hooks import _migrate_tools_2_0_9
 
         assert _migrate_tools_2_0_9({}) == []
         assert _migrate_tools_2_0_9({"tools": {"perception": None}}) == []
         assert _migrate_tools_2_0_9({"tools": {"perception": {}}}) == []
-        assert (
-            _migrate_tools_2_0_9(
-                {"tools": {"perception": {"config": {"read_pingmu": "not-a-dict"}}}}
-            )
-            == []
-        )
+        assert _migrate_tools_2_0_9({"tools": {"perception": {"config": {"read_pingmu": "not-a-dict"}}}}) == []

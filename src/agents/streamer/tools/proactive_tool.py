@@ -1,15 +1,15 @@
-"""should_speak_proactively - 主播主动发言触发工具（Wave 6 / §1.5）
+"""should_speak_proactively - 主播主动发言触发工具
 
 **真工具**——通过 ``@tool`` 装饰器注册到 ToolRegistry，供 LLM 调用。
 调用入口由 StreamerAgent 设置（提供 invoke 桥接）；底层判定器是
 ``ProactiveTrigger`` 纯规则组件（**不**注册为工具）。
 
-Wave 6 迁移：
+迁移要点：
 - 原 ``stages/decision/deciders/amaidesu/proactive_trigger.py`` 纯规则组件保留
   并复用（Stage 2 内脏，不注册工具）。
 - ``should_speak_proactively`` 工具 = LLM 调用入口，底层调 ``ProactiveTrigger.should_trigger``。
 
-§1.5 工具契约：
+工具契约：
 - kind: ``"sync"``（即时查询结果，不是 fire-and-forget）
 - provider: ``"builtin"``（框架内置）
 - arguments: ``{}``（空，无外部输入——所有触发依据来自内部 room_state）
@@ -18,6 +18,7 @@ Wave 6 迁移：
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 from src.modules.logging import get_logger
@@ -103,8 +104,6 @@ class ProactiveToolProvider:
         if provider is None:
             return False
         if callable(provider):
-            import inspect
-
             try:
                 result = provider()
             except Exception as exc:

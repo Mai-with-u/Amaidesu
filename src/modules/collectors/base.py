@@ -1,13 +1,11 @@
 """
-BaseCollector —— 采集器抽象基类（Wave 3 / §1.52）
+BaseCollector —— 采集器抽象基类
 
-采集器（§1.52 框架层第三种角色）= 流型感知者，世界→系统入口，主动推事件。
+采集器 = 流型感知者，世界→系统入口，主动推事件。
 - 与 Input/Output 阶段的旧名"input collector"是同一概念的事件名演化
 - 不是工具（非同步/异步二类）
 - 协议面：start / stop / cleanup 生命周期
 - emit 由 EventBus 注入；构造器注入 pattern
-
-Wave 3 仅定义抽象基类；具体采集器（bilibili/console/stt/mock）由 W5 迁移。
 """
 
 from __future__ import annotations
@@ -16,6 +14,7 @@ import asyncio
 from enum import Enum
 from typing import Any, AsyncIterator, Optional
 
+from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
 
@@ -55,7 +54,7 @@ class BaseCollector:
         self._lock = asyncio.Lock()
         self._started_at_ms: int = 0
         self._stopped_at_ms: int = 0
-        # v2 主动推事件：collect() 生成器的后台消费任务（让内部 emit 真正执行）
+        # 主动推事件：collect() 生成器的后台消费任务（让内部 emit 真正执行）
         self._collect_task: Optional["asyncio.Task[Any]"] = None
         logger.debug(f"Collector '{self.name}' 构造完成（描述: {self.description[:40] or '<空>'}…）")
 
@@ -98,7 +97,7 @@ class BaseCollector:
         await self._on_cleanup()
         logger.debug(f"Collector '{self.name}' 资源已清理")
 
-    # ----- v2 主动推事件：collect() 后台消费任务 -----
+    # ----- 主动推事件：collect() 后台消费任务 -----
 
     async def _start_collect_task(self) -> None:
         """启动后台任务消费 ``collect()`` 生成器（触发内部 emit 逻辑）。
@@ -164,8 +163,6 @@ class BaseCollector:
             logger.debug(f"未知 data_type '{data_type}'，跳过 emit")
             return
 
-        from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
-
         event_name, message_type = mapping
         payload = RoomMessagePayload(
             live_session_id="console",
@@ -186,7 +183,7 @@ class BaseCollector:
 
         Returns:
             AsyncIterator[NormalizedMessage]：由基类 ``_consume_collect()``
-            后台迭代（v2 主动推事件模式）。具体采集器必须实现。
+            后台迭代（主动推事件模式）。具体采集器必须实现。
         """
         raise NotImplementedError(f"Collector '{self.name}' 未实现 collect()")
 

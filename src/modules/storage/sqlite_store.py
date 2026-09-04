@@ -1,9 +1,9 @@
 """
-SQLiteStore —— 异步友好的 SQLite 访问层（Wave 3 新增）
+SQLiteStore —— 异步友好的 SQLite 访问层
 
 ## 设计目标
 - **store 内部统一防漏**：所有同步 sqlite 调用统一在 ``asyncio.to_thread``
-  中执行，调用方不需手动 to_thread（避免"忘 to_thread"坑，对齐 §1.50）
+  中执行，调用方不需手动 to_thread（避免"忘 to_thread"坑）
 - **透明封装**：把 ``SQLiteConnectionManager`` 的同步 API 映射成 async
 - **schema 迁移自动应用**：``initialize()`` 时自动 ``CREATE TABLE IF NOT EXISTS``
   并写入 ``schema_migrations``
@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+import time
 from functools import partial
 from pathlib import Path
 from typing import Any, List, Optional
@@ -240,7 +241,7 @@ class SQLiteStore:
 
         await self._run_in_executor(_exec)
 
-    # -------------------- 领域写入方法（v2.0.5 / ADR-006 溯源链收口）--------------------
+    # -------------------- 领域写入方法 --------------------
     # 三表均带 simulated 贯穿列（schema.py:149/163/177），详见 schema.py "命名硬规则"。
     # 这里只承接 RoomMessagePayload → 表的写入入口；表结构权威在 schema.py，本层不复制。
 
@@ -392,13 +393,11 @@ class SQLiteStore:
             existing = conn.execute("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").fetchone()
             current_version = int(existing["version"]) if existing else 0
             if current_version < SCHEMA_VERSION:
-                import time as _time
-
                 # 单调自增：插入 [current+1, SCHEMA_VERSION] 之间所有缺失版本
                 for version in range(current_version + 1, SCHEMA_VERSION + 1):
                     conn.execute(
                         "INSERT OR IGNORE INTO schema_migrations(version, applied_at_ms) VALUES (?, ?)",
-                        (version, int(_time.time() * 1000)),
+                        (version, int(time.time() * 1000)),
                     )
                 logger.info(f"SQLiteStore schema 已应用: version={SCHEMA_VERSION}（前版本={current_version}）")
             elif current_version > SCHEMA_VERSION:

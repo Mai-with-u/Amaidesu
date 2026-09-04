@@ -1,8 +1,6 @@
 """
-STTCollector —— 语音转文字采集器（v2 / Wave 5 迁移）
+STTCollector —— 语音转文字采集器
 
-迁移自 ``src/stages/input/collectors/stt/stt_collector.py``。
-按 .omo/drafts/amaidesu-v2-migration.md §C：
 - 继承 ``BaseCollector``（流型感知者）
 - 保留 ``collect()`` AsyncIterator 出口兼容旧 InputCollectorManager
 

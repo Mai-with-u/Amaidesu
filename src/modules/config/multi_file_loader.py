@@ -1,19 +1,19 @@
-"""多文件配置加载器（v2.0.0）
+"""多文件配置加载器
 
 从 config/ 目录加载 7 个 TOML 配置文件，使用 Pydantic Schema 验证并检测漂移。
 首次运行时从 Schema 默认值生成带注释的配置文件。
 
-配置文件结构（v2.0.0 按域划分）:
+配置文件结构（按域划分）:
     config/core.toml         - 基础设施（meta/general/persona/context/events/logging/dashboard/simulator/pipelines/interceptors）
     config/model.toml        - LLM/VLM 模型配置（[[llm_providers]] + [llm]/[llm_fast]/[vlm]/[llm_local]/[llm_summary]/[llm_agenda]）
-    config/agents.toml       - 业务 Agent（替代旧决策/输出组件注册）
-    config/tools.toml        - 工具包启用/配置（替代旧 collectors/handlers）
+    config/agents.toml       - 业务 Agent
+    config/tools.toml        - 工具包启用/配置
     config/memory.toml       - 记忆系统（backend 行切换，db_path 权威在 storage.toml）
     config/storage.toml      - 存储（SQLite 路径，与 SimpleMemory 共用）
     config/background.toml   - 后台维护（ticks/压缩）
 
 > **AGENTS.md 写回闭环**：所有 7 个文件均接入 ``_load_and_validate_schema``
-> + ``_write_back_schema_file``，漂移字段会自动写回用户文件（缺缺失补默认、
+> + ``_write_back_schema_file``，漂移字段会自动写回用户文件（缺失补默认、
 > 冗余剥离、版本号更新）。未接入的文件其 Schema 变更永远不会写回用户文件。
 """
 
@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Literal, Union, cast, get_args, get_origin
 
 import tomlkit
+from tomlkit.items import AoT
 
 from src.modules.config.schemas.base import BaseConfig, DriftReport, _set_toml_value
 from src.modules.config.core_schemas import CoreConfig
@@ -43,9 +44,7 @@ from pydantic import BaseModel
 
 logger = get_logger("MultiFileLoader")
 
-# v2.0.0 兼容期：保留阶段→组件包/Registry 映射，W6 由 stages/ 业务代码迁移到新框架
-# （agent/tools）后清理。当前 _PHASE_TO_* 仅在 _generate_phase_toml 等迁移期辅助
-# 函数中使用，load_config_dir 不再依赖这些映射。
+# 阶段→组件包/Registry 映射（迁移期辅助函数使用，load_config_dir 不依赖）
 _PHASE_TO_SECTION: dict[str, str] = {
     "input": "collectors",
     "decision": "deciders",
@@ -54,8 +53,7 @@ _PHASE_TO_SECTION: dict[str, str] = {
 _PHASE_TO_COMPONENTS_PKG: dict[str, str] = {
     "input": "src.stages.input.collectors",
     "decision": "src.stages.decision.deciders",
-    # Wave 4：output handlers 已迁移到 src.modules.tools.output/
-    # 这里仍指向旧路径以保持迁移期辅助函数可用；load_config_dir 不依赖该映射。
+    # output handlers 已迁移到 src.modules.tools.output/
     "output": "src.modules.tools.output",
 }
 _PHASE_TO_REGISTRY: dict[tuple[str, str], str] = {
@@ -64,22 +62,11 @@ _PHASE_TO_REGISTRY: dict[tuple[str, str], str] = {
     ("output", "_HANDLERS"): "src.stages.output.registry",
 }
 
-# v2.0.0：major 级版本升级（破坏旧 [collectors/deciders/handlers] 段，按域重整为 7 文件）。
-# 权威定义：AGENTS.md "配置 Schema 变更规则" + 这里的 ``CONFIG_VERSION`` 与
-# ``MetaConfig.version`` 默认值必须同步修改（改一必改二）。
-# Wave 6：agents_schemas 重写（新增 AgendaIdle / BackgroundMaintainer / command_tool 字段）、
-# input_schemas 移除 text_adv_game → 升 patch 2.0.1。
-# v2.0.6：B2 人设供应链修复——PersonaConfig 新增 behavior_style（Planner 决策侧注入），
-# 装配根 main._register_agents_from_config 接通 persona 段 → StreamerAgent.persona_provider。
-# v2.0.7：W7 前置——tools_schemas 新增 [tools.look_at_screen]（屏幕快照同步工具开关），
-# 组合根 main 接线 Pillow 截图后端 + register_provider。
-# v2.0.8：Sticker 事件链全链删除（output_schemas 删 sticker 字段），CONFIG_VERSION 升 patch。
-# v2.0.9：D1 VLM 收编——ScreenChangeCollector.ConfigSchema 移除 api_key/base_url/model_name
-# 三字段；VLM 调用统一走 LLMManager.chat_vision(client_type="vlm")（model.toml [vlm] profile）。
-# tools.toml 同步注册 2.0.9 升级钩子剥离 [tools.perception.config.read_pingmu] 死键。
+# 配置版本号。权威定义：本文件的 ``CONFIG_VERSION`` 与 ``MetaConfig.version``
+# 默认值必须同步修改（改一必改二）。详见 AGENTS.md "配置 Schema 变更规则"。
 CONFIG_VERSION = "2.0.9"
 
-# v2.0.0 配置文件清单（按域划分）：core / model / agents / tools / memory / storage / background
+# 配置文件清单（按域划分）：core / model / agents / tools / memory / storage / background
 _CONFIG_FILES = [
     "core.toml",
     "model.toml",
@@ -110,7 +97,7 @@ class CrossFileMigration:
 
 # 已完成的跨文件迁移注册表（按时间顺序追加）
 CROSS_FILE_MIGRATIONS: tuple[CrossFileMigration, ...] = (
-    # 0.4.x → 0.5.0: simulator.toml 独立文件合并进 core.toml 的 [simulator]
+    # simulator.toml 独立文件合并进 core.toml 的 [simulator]
     CrossFileMigration(
         source_file="simulator.toml",
         source_key="simulator",
@@ -118,23 +105,21 @@ CROSS_FILE_MIGRATIONS: tuple[CrossFileMigration, ...] = (
         target_key="simulator",
         target_schema=SimulatorConfigSchema,
     ),
-    # 2.0.0: input.toml → tools.toml 的 [tools.perception.config]
-    # （旧 [collectors] 段合并到 tools.toml 的感知工具包）
+    # input.toml → tools.toml 的 [tools.perception.config]
     CrossFileMigration(
         source_file="input.toml",
         source_key="collectors",
         target_file="tools.toml",
         target_key="perception_config",  # 注入到 [tools.perception.config] 字典
     ),
-    # 2.0.0: output.toml → tools.toml 的 [tools.output.config]
-    # （旧 [handlers] 段合并到 tools.toml 的输出工具包）
+    # output.toml → tools.toml 的 [tools.output.config]
     CrossFileMigration(
         source_file="output.toml",
         source_key="handlers",
         target_file="tools.toml",
         target_key="output_config",
     ),
-    # 2.0.0: decision.toml → agents.toml 的 [agents] 段
+    # decision.toml → agents.toml 的 [agents] 段
     CrossFileMigration(
         source_file="decision.toml",
         source_key="deciders",
@@ -173,7 +158,7 @@ def _backup_file(file_path: Path, config_dir: Path, batch_id: str | None = None)
 def _generate_core_toml() -> str:
     """生成 core.toml 内容（每个子配置为独立顶层 section）"""
     doc = tomlkit.document()
-    doc.add(tomlkit.comment("核心系统配置 - Amaidesu v2.0.0"))
+    doc.add(tomlkit.comment("核心系统配置 - Amaidesu"))
     doc.add(tomlkit.nl())
 
     core = CoreConfig()
@@ -212,7 +197,7 @@ def _generate_core_toml() -> str:
 def _generate_model_toml() -> str:
     """生成 model.toml 内容"""
     doc = tomlkit.document()
-    doc.add(tomlkit.comment("模型配置 - LLM/VLM 参数（v2.0.0，llm_outline 改名为 llm_agenda）"))
+    doc.add(tomlkit.comment("模型配置 - LLM/VLM 参数"))
     doc.add(tomlkit.nl())
 
     model = ModelConfig()
@@ -244,7 +229,6 @@ def _generate_model_toml() -> str:
             # list[BaseModel] → TOML array-of-tables (`[[field_name]]`)
             if field_info.description:
                 doc.add(tomlkit.comment(field_info.description))
-            from tomlkit.items import AoT
 
             tables = []
             for item in field_value:
@@ -275,7 +259,7 @@ def _generate_domain_toml(
     与 ``_generate_core_toml`` 风格一致：顶层字段即顶层表，BaseModel 字段展开为子表。
     """
     doc = tomlkit.document()
-    doc.add(tomlkit.comment(comment or f"{file_name} 配置 - Amaidesu v2.0.0"))
+    doc.add(tomlkit.comment(comment or f"{file_name} 配置 - Amaidesu"))
     doc.add(tomlkit.nl())
 
     instance = schema_cls()
@@ -384,7 +368,7 @@ def _extract_constraint_hints(field_info: Any) -> str:
 def _schema_to_toml_table(schema_cls: type[BaseModel]) -> Any:
     """从 Pydantic v2 Schema 类（不实例化）生成 tomlkit Table 模板。
 
-    保留迁移期能力，但 v2.0.0 已不依赖此函数（每个域用 _generate_domain_toml）。
+    保留迁移期能力，但当前已不依赖此函数（每个域用 _generate_domain_toml）。
     """
     table = tomlkit.table()
 
@@ -478,10 +462,7 @@ def _schema_to_toml_table(schema_cls: type[BaseModel]) -> Any:
 
 
 def _discover_components(phase: str) -> dict[str, type]:
-    """发现某阶段所有已注册组件的 ConfigSchema 类（v2.0.0 兼容期保留）。
-
-    W6 由 stages/ 业务代码迁移后清理。
-    """
+    """发现某阶段所有已注册组件的 ConfigSchema 类（迁移期保留）。"""
     components_pkg = _PHASE_TO_COMPONENTS_PKG.get(phase)
     section_key = _PHASE_TO_SECTION.get(phase)
     registry_attr = {"input": "_COLLECTORS", "decision": "_DECIDERS", "output": "_HANDLERS"}.get(phase)
@@ -521,14 +502,14 @@ def _discover_components(phase: str) -> dict[str, type]:
 def _generate_phase_toml(phase: str) -> str:
     """生成阶段配置文件（input.toml / decision.toml / output.toml）
 
-    v2.0.0 兼容期：仍为旧 input/decision/output 文件生成骨架，供 stages/
+    仍为旧 input/decision/output 文件生成骨架，供 stages/
     业务代码过渡使用。新配置写入由 CrossFileMigration 引导到 tools.toml /
     agents.toml，源文件被备份后移除。
     """
     doc = tomlkit.document()
 
     if phase == "input":
-        doc.add(tomlkit.comment("Input 阶段配置（v2.0.0 兼容期：下次启动将被迁移到 tools.toml [tools.perception]）"))
+        doc.add(tomlkit.comment("Input 阶段配置（兼容期：下次启动将被迁移到 tools.toml [tools.perception]）"))
         doc.add(tomlkit.nl())
         table = tomlkit.table()
         table.add(tomlkit.comment("启用的 Collector 列表"))
@@ -536,7 +517,7 @@ def _generate_phase_toml(phase: str) -> str:
         doc["collectors"] = table
 
     elif phase == "decision":
-        doc.add(tomlkit.comment("Decision 阶段配置（v2.0.0 兼容期：下次启动将被迁移到 agents.toml [agents]）"))
+        doc.add(tomlkit.comment("Decision 阶段配置（兼容期：下次启动将被迁移到 agents.toml [agents]）"))
         doc.add(tomlkit.nl())
         table = tomlkit.table()
         table.add(tomlkit.comment("启用的 Decider 列表"))
@@ -544,7 +525,7 @@ def _generate_phase_toml(phase: str) -> str:
         doc["deciders"] = table
 
     elif phase == "output":
-        doc.add(tomlkit.comment("Output 阶段配置（v2.0.0 兼容期：下次启动将被迁移到 tools.toml [tools.output]）"))
+        doc.add(tomlkit.comment("Output 阶段配置（兼容期：下次启动将被迁移到 tools.toml [tools.output]）"))
         doc.add(tomlkit.nl())
         table = tomlkit.table()
         table.add(tomlkit.comment("启用的 Handler 列表"))
@@ -678,7 +659,7 @@ def _write_back_schema_file(
 
 
 def _ensure_required_files(config_dir: Path) -> list[str]:
-    """补齐缺失的必需配置文件（v2.0.0：7 个域文件）。
+    """补齐缺失的必需配置文件（7 个域文件）。
 
     Returns:
         本次补齐的文件名列表
@@ -722,7 +703,7 @@ def _ensure_required_files(config_dir: Path) -> list[str]:
 
 
 def generate_default_configs(config_dir: Path) -> None:
-    """首次运行：从 Schema 生成默认配置文件（v2.0.0：7 个域文件）"""
+    """首次运行：从 Schema 生成默认配置文件（7 个域文件）"""
     config_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"生成默认配置到 {config_dir}")
 

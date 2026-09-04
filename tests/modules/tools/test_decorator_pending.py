@@ -1,5 +1,5 @@
 """
-@tool 装饰器 pending + bind 双模式测试（Wave 8 / 工具注册重构）
+@tool 装饰器 pending + bind 双模式测试。
 
 覆盖：
 - (a) 无 ``registry=`` 参数的 ``@tool`` 进入 pending 表，不接触任何全局单例

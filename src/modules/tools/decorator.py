@@ -1,5 +1,5 @@
 """
-@tool 装饰器（Wave 3 / §1.5）
+@tool 装饰器
 
 进程内轻量声明：将一个 ``async`` 函数声明为工具，自动生成 ToolSpec 并
 注册。**双模式**：
@@ -20,7 +20,7 @@
 注意：
 - **不取代 ToolProvider**：有状态的（MCP/游戏 Agent）请直接实现 Provider，
   然后 ``registry.register_provider(provider)``
-- 默认 ``provider="builtin"``（§1.5 来源溯源）
+- 默认 ``provider="builtin"``（来源溯源标记）
 - 入口装配示例：
   ````python
   from src.modules.tools.bootstrap import bind_core_tools
@@ -36,6 +36,7 @@
 from __future__ import annotations
 
 import inspect
+import time
 from functools import wraps
 from typing import Any, Awaitable, Callable, List, Optional, Tuple
 
@@ -173,9 +174,7 @@ def tool(
         # 内部把原函数的返回值/异常包装成 ToolExecutionResult
         @wraps(fn)
         async def _wrapped(invocation: ToolInvocation) -> ToolExecutionResult:
-            import time as _time
-
-            started_ms = int(_time.time() * 1000)
+            started_ms = int(time.time() * 1000)
             try:
                 return_value = await fn(invocation)
             except Exception as exc:  # noqa: BLE001 - 边界处兜底
@@ -183,23 +182,23 @@ def tool(
                     tool_name=tool_name,
                     success=False,
                     error_message=f"{type(exc).__name__}: {exc}",
-                    timestamp_ms=int(_time.time() * 1000),
-                    duration_ms=int(_time.time() * 1000) - started_ms,
+                    timestamp_ms=int(time.time() * 1000),
+                    duration_ms=int(time.time() * 1000) - started_ms,
                 )
             # 返回值已是 ToolExecutionResult → 透传
             if isinstance(return_value, ToolExecutionResult):
                 if return_value.timestamp_ms == 0:
-                    return_value.timestamp_ms = int(_time.time() * 1000)
+                    return_value.timestamp_ms = int(time.time() * 1000)
                 if return_value.duration_ms == 0:
-                    return_value.duration_ms = int(_time.time() * 1000) - started_ms
+                    return_value.duration_ms = int(time.time() * 1000) - started_ms
                 return return_value
             # 其他返回值 → 包成成功 result
             return ToolExecutionResult(
                 tool_name=tool_name,
                 success=True,
                 content=str(return_value) if return_value is not None else "",
-                timestamp_ms=int(_time.time() * 1000),
-                duration_ms=int(_time.time() * 1000) - started_ms,
+                timestamp_ms=int(time.time() * 1000),
+                duration_ms=int(time.time() * 1000) - started_ms,
             )
 
         # 暴露 spec 给需要时查询（两种模式都设置，便于调试 / 审计）

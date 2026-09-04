@@ -1,23 +1,23 @@
-"""TextAdvGameAgent —— 文字冒险游戏 Agent（Wave 7 范式验证示例）
+"""TextAdvGameAgent —— 文字冒险游戏 Agent
 
-按架构 §1.4 / §1.49 / §1.5.1 定案：
+按架构定案：
 - 继承 ``BaseAgent``（协议六面全部实现）
 - 构造注入依赖（llm/prompt/event_bus/tool_registry/content_engine/...）
 - 自带 game 专属工具（``choose_option`` / ``get_story``），provider="game"
 - 复用公用感知工具 ``look_at_screen``（provider="builtin"）—— 通过 ToolRegistry 调
 - 复用公用 content_engine 控制面（provider="builtin"）
-- 内部状态 ``TextAdvGameAgentState``（§1.31 内容状态内部自由）
+- 内部状态 ``TextAdvGameAgentState``（内容状态内部自由）
 - 感知-决策-推进闭环：``on_state_change`` → look_at_screen → decide → choose_option
-- 不继承任何"组合式引擎"（§1.49 "无组合式引擎" 定案）
+- 不继承任何"组合式引擎"（无组合式引擎定案）
 
-协议六面（最小契约，§1.49）：
+协议六面（最小契约）：
 
 | # | 面 | 内容 |
 |---|---|---|
 | 1 | 生命周期 | start/stop/cleanup（默认实现） |
 | 2 | 工具提供 | list_tools() → choose_option + get_story（provider="game"） |
 | 3 | 事件上报 | emit game.milestone / game.attention_required / game.error |
-| 4 | 状态读写 | 内部 TextAdvGameAgentState（§1.31 内容状态） |
+| 4 | 状态读写 | 内部 TextAdvGameAgentState（内容状态） |
 | 5 | 健康 | BaseAgent 心跳（默认实现） |
 | 6 | 元数据 | name / description |
 """
@@ -41,6 +41,7 @@ from src.modules.tools.content_engine import (
     ContentEngineProvider,
     StubContentEngine,
 )
+from src.modules.tools.models import ToolInvocation
 from src.modules.tools.registry import ToolRegistry
 
 from .state import TextAdvGameAgentState, TextAdvOption
@@ -64,9 +65,9 @@ __all__ = [
 
 
 class TextAdvGameConfig(BaseConfig):
-    """文字冒险游戏 Agent 配置（Wave 7 新增）
+    """文字冒险游戏 Agent 配置
 
-    字段对齐 §1.31 / §1.52.1 范式（§1.2 "判别口诀"）：
+    字段对齐状态独立范式（判别口诀）：
     - 只有**该游戏特有**的配置在这里（其它公用配置走 ``modules/``）
     - 没有 schema 新增到 ``[agents.game]`` 顶层（沿用 ``GameAgentConfig.engine`` 字段）
     - 默认值即可跑（构造 StubContentEngine，无需外部游戏进程）
@@ -75,7 +76,7 @@ class TextAdvGameConfig(BaseConfig):
     # 标识（仅用于日志 / 多实例区分；不参与 tool dispatch）
     engine_kind: str = _PydField(default="text_adv", description="游戏引擎标识")
 
-    # 推进策略：Wave 7 简化 = 选第一个 option（测试可断言）；后续可换 LLM 决策
+    # 推进策略：first_option=首选项（简化版，测试可断言）；llm=LLM 选择（待实现）
     decision_strategy: str = _PydField(
         default="first_option",
         description="推进策略（first_option=首选项；llm=LLM 选择——待实现）",
@@ -94,9 +95,9 @@ class TextAdvGameConfig(BaseConfig):
 
 
 class TextAdvGameAgent(BaseAgent):
-    """文字冒险游戏 Agent（Wave 7 范式验证示例）
+    """文字冒险游戏 Agent
 
-    关键演示点（证明 §1.49 范式）：
+    关键演示点（证明协议范式）：
     1. **零框架改动**：本文件**不修改**任何 ``modules/agents/`` / ``modules/tools/`` 文件
     2. **构造注入**：所有依赖经 ``__init__`` 参数传入（可 mock / 可替换）
     3. **list_tools**：仅声明 Agent 专属工具（provider="game"），公用感知工具不声明
@@ -109,7 +110,7 @@ class TextAdvGameAgent(BaseAgent):
 
     # ----- 协议 6：元数据 -----
     name = "game"
-    description = "文字冒险游戏 Agent —— Wave 7 §1.5.1 范式验证示例"
+    description = "文字冒险游戏 Agent"
 
     # ----- 协议 3：事件族声明 -----
     emits_events = (
@@ -134,7 +135,7 @@ class TextAdvGameAgent(BaseAgent):
         Args:
             config: TextAdvGameConfig 实例
             content_engine: 内容引擎（默认 StubContentEngine）
-            llm_manager: 可选 LLMManager（Wave 7 简化版未用，保留接口以备未来扩展）
+            llm_manager: 可选 LLMManager（简化版未用，保留接口以备未来扩展）
             prompt_manager: 可选 PromptManager（同上）
             event_bus: 可选 EventBus（emit game.* 事件）
             tool_registry: 可选 ToolRegistry（注册 Agent 专属工具）
@@ -149,7 +150,7 @@ class TextAdvGameAgent(BaseAgent):
         self._content_engine: ContentEngine = content_engine or StubContentEngine()
         self._live_session_id = live_session_id or "wave7_session"
 
-        # §1.31 内容状态（Agent 内部自由）；避免与 BaseAgent.state 属性同名故用 _game_state
+        # 内容状态（Agent 内部自由）；避免与 BaseAgent.state 属性同名故用 _game_state
         self._game_state: TextAdvGameAgentState = TextAdvGameAgentState()
 
         # ToolProvider 实例（在 _on_start 中注册进 ToolRegistry）
@@ -272,7 +273,7 @@ class TextAdvGameAgent(BaseAgent):
         await self.emit_event(CoreEvents.GAME_ERROR, payload)
 
     # ==================================================================
-    # 感知-推进-循环（§1.4 / §1.5.1 闭环）
+    # 感知-推进-循环（闭环）
     # ==================================================================
 
     async def feed_state_change(
@@ -285,7 +286,7 @@ class TextAdvGameAgent(BaseAgent):
             步骤：
                 1. 调公用 look_at_screen 工具（验证感知触发）
                 2. 解析 → 更新内部状态
-                3. 决策（Wave 7 简化：首选项）
+                3. 决策（简化：首选项）
                 4. 调 choose_option 触发推进（验证推进触发）
                 5. emit game.milestone 报告推进
             返回：本次闭环的统计 + 状态快照
@@ -334,7 +335,7 @@ class TextAdvGameAgent(BaseAgent):
             # 无变化 → 不推进（避免空转）
             return result
 
-        # ---- 步骤 3：决策（首选项）----
+        # ---- 步骤 3：决策（默认首选项）----
         chosen = self._game_state.pick_default_option()
         if chosen is None:
             await self.emit_attention_required("无可选选项，等待新场景")
@@ -387,8 +388,6 @@ class TextAdvGameAgent(BaseAgent):
 
 def _make_invocation(tool_name: str, *, arguments: Dict[str, Any], source: str):
     """构造 ToolInvocation（避免顶层 import 长路径污染）。"""
-    from src.modules.tools.models import ToolInvocation
-
     return ToolInvocation(
         tool_name=tool_name,
         arguments=arguments,

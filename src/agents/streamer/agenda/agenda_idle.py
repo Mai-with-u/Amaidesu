@@ -1,4 +1,4 @@
-"""AgendaIdle - 节目单后台调度循环（Wave 6 / §1.7 重命名为"空转探测器/Agenda 调度"）
+"""AgendaIdle - 节目单后台调度循环（空转探测器/Agenda 调度）
 
 职责边界（重要）
 ----------------
@@ -8,10 +8,10 @@
 **不**实现 LLM 扩展（``agenda_loader.py``）、
 **不**订阅 EventBus、**不**直接 emit 任何事件。
 
-Wave 6 设计变更（vs 原 outline_scheduler.py）：
+设计变更（vs 原 outline_scheduler.py）：
 - 类名 ``OutlineScheduler`` → ``AgendaIdle``
 - 文件名 ``outline_scheduler.py`` → ``agenda_idle.py``
-- 强调"空转探测器"角色（§1.7：判据 ① 决策循环 idle + ② 无 pending 异步工具 +
+- 强调"空转探测器"角色（判据 ① 决策循环 idle + ② 无 pending 异步工具 +
   ③ 事件队列空 + ④ 有未完成 AgendaItem；全过 → emit planner.checkpoint 提醒）
 - 保留后台调度 + AI 顺带评估消费逻辑（与原 outline_scheduler 同构）
 
@@ -64,6 +64,8 @@ from typing import (
 
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms as _real_now_ms
+
+from .agenda_state import AgendaStatus
 
 
 if TYPE_CHECKING:
@@ -212,8 +214,6 @@ class AgendaIdle:
         if nxt_id is None:
             self._state.completed_segment_ids.append(current_id)
             self._state.current_segment_id = None
-            from .agenda_state import AgendaStatus
-
             self._state.status = AgendaStatus.COMPLETED
             self._state._append_transition(
                 event="auto_advance_to_end",
@@ -232,15 +232,15 @@ class AgendaIdle:
                 self._logger.error(f"on_advance 回调异常: {exc}", exc_info=True)
 
     def _is_idle(self) -> bool:
-        """判定当前是否处于"空转"状态（§1.7 判据）。
+        """判定当前是否处于"空转"状态。
 
-        Wave 6 简化版（仅条件 ④）—— Planner 自身维护 idle 状态，
+        简化版（仅条件 ④）—— Planner 自身维护 idle 状态，
         调度器只检查"有未完成 AgendaItem"。
         """
         return self._state.status.value == "running" and self._state.current_segment_id is not None
 
     def _emit_checkpoint(self, now_ms: int) -> None:
-        """空转条件全过 → emit planner.checkpoint 提醒（§1.7）。"""
+        """空转条件全过 → emit planner.checkpoint 提醒。"""
         bus = self._event_bus
         if bus is None:
             return
