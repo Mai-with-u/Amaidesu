@@ -35,8 +35,8 @@ from src.modules.logging import get_logger
 from src.modules.tools import ToolInvocation, ToolSpec
 from src.modules.tools.models import ToolExecutionResult
 
-from .plan import DecisionPlan
-from .replyer import Replyer
+from ..plan import DecisionPlan
+from ..replyer import Replyer
 
 __all__ = ["build_reply_tool_spec", "build_reply_tool_invoker", "register_reply_tool"]
 

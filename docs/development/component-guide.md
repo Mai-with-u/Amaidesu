@@ -516,8 +516,8 @@ async def my_lightweight_tool(invocation: ToolInvocation) -> ToolExecutionResult
 |------|------|------|
 | `look_at_screen`（公用 builtin，屏幕快照） | `src/modules/tools/perception/look_at_screen.py` | 路径 ① |
 | `choose_option` / `get_story`（Agent 专属 game Provider） | `src/agents/game/text_adv/tools.py` | 路径 ①（`provider="game"`） |
-| `reply`（Agent 专属 builtin Provider） | `src/agents/streamer/reply_tool.py` | 路径 ①（`provider="builtin"`） |
-| `should_speak_proactively` / `parse_command`（Agent 专属 builtin Provider） | `src/agents/streamer/proactive_tool.py`、`src/agents/streamer/command_tool.py` | 路径 ① |
+| `reply`（Agent 专属 builtin Provider） | `src/agents/streamer/tools/reply_tool.py` | 路径 ①（`provider="builtin"`） |
+| `should_speak_proactively` / `parse_command`（Agent 专属 builtin Provider） | `src/agents/streamer/tools/proactive_tool.py`、`src/agents/streamer/tools/command_tool.py` | 路径 ① |
 | ContentEngine 控制面（`provider="builtin"`） | `src/modules/tools/content_engine.py` | 路径 ① |
 | `@tool` 装饰器示例 | `src/modules/tools/decorator.py`（内含使用范例） | 路径 ② |
 
@@ -771,7 +771,7 @@ class MyToolProvider(ToolProvider):
 | 范例 | 文件 | 说明 |
 |------|------|------|
 | StreamerAgent（业务 Agent） | `src/agents/streamer/streamer_agent.py` | 完整范例：订阅事件 + 后台双任务 + Agenda + 三工具 Provider |
-| StreamerAgent 工具 | `src/agents/streamer/{reply_tool,proactive_tool,command_tool}.py` | `provider="builtin"`；StreamerAgent 内部用 |
+| StreamerAgent 工具 | `src/agents/streamer/tools/{reply_tool,proactive_tool,command_tool}.py` | `provider="builtin"`；StreamerAgent 内部用 |
 | TextAdvGameAgent（游戏 Agent） | `src/agents/game/text_adv/agent.py` | 自包含包；`provider="game"`；感知-推进闭环 |
 | TextAdvGameAgent 工具 | `src/agents/game/text_adv/tools.py` | `provider="game"`；Agent 专属推进工具 |
 | StreamerAgent 便捷工厂 | `src/agents/streamer/streamer_agent.py::build_streamer_agent` | 构造 + register 一站式 |
@@ -823,7 +823,7 @@ class MyToolProvider(ToolProvider):
 | Agent 订阅 | `src/agents/streamer/streamer_agent.py::_subscribe_events` | 在 `_on_start` 中挂；priority=50 |
 | 弹幕聚合 | `src/agents/streamer/message_buffer.py` + `timing_gate.py` | 批窗口 / 强制响应规则 |
 | Planner 决策 | `src/agents/streamer/planner.py` | 调用 `llm_fast` profile；输出 `DecisionPlan` |
-| Reply 工具 | `src/agents/streamer/reply_tool.py` | 调 Replyer 表达引擎 |
+| Reply 工具 | `src/agents/streamer/tools/reply_tool.py` | 调 Replyer 表达引擎 |
 | Replyer 表达 | `src/agents/streamer/replyer.py` | 调 `llm` profile + ProfanityFilter |
 | 渲染 TTS（**已知缺口**） | 需在装配处显式注册 `edge_tts_synthesize` 工具（路径 ① `ToolProvider` 类）；当前不在 StreamerAgent 自动链路 | 见下方"已知缺口" |
 
@@ -857,4 +857,4 @@ class MyToolProvider(ToolProvider):
 
 ---
 
-*最后更新：2026-08-27（v2.0.5 工具注册路径重写：删除所有 `AgentManager.register_all_tools` / `collect_tool_specs` / `_make_agent_tool_bridge` 引用，统一为「Agent 子类 `_register_tools()` 自注册 + 装配根 `bind_core_tools(registry, slice)` + `bind_pending_tools(registry)` 显式注入 + `audit_tools(registry)` 只读审计」；同步刷新 L502「谁调用注册」、L744 步骤 ⑤、L758「谁调用注册」、L833「已知缺口」四处表述）*
+*最后更新：2026-09-04（streamer 包子包化重组：工具范例路径表 L519-520、Agent 范例表 L774、端到端消息流表 L826 的 `reply_tool`/`proactive_tool`/`command_tool` 路径更新为 `src/agents/streamer/tools/*_tool.py`）*

@@ -220,19 +220,20 @@ sequenceDiagram
 
 #### 业务层（`src/agents/`）
 
-`src/agents/streamer/` 主播 Agent 的 21 个模块按角色分组：
+`src/agents/streamer/` 主播 Agent 包：顶层平铺内脏与协作组件，强内聚簇收进子包（`agenda/` 子系统 / `tools/` 工具壳层 / `command/` 解析原语）：
 
 | 角色 | 模块 |
 |------|------|
 | **入口与编排** | `streamer_agent.py`（继承 `BaseAgent`，编排子组件）、`__init__.py` |
 | **决策循环（Planner）** | `planner.py`（planner_llm 调 `chat()` 不传 tools，结构化 JSON 输出）、`plan.py`（plan 数据结构） |
 | **表达引擎（Replyer）** | `replyer.py`（replyer_llm 调 `chat()` 不传 tools，纯文本 JSON + ProfanityFilter） |
-| **节目单（Agenda）** | `agenda.py` / `agenda_loader.py` / `agenda_store.py` / `agenda_state.py` / `agenda_idle.py`（5 文件：编排本身内聚在 Agent 内，直播内容=配置+Planner 上下文/行为模式变化，不是代码模块） |
+| **主动发言规则** | `proactive_trigger.py`（纯规则触发器，主循环直接驱动；经 `tools/proactive_tool.py` 包装为工具供 LLM 查询） |
+| **节目单（Agenda）** | `agenda/` 子包：`agenda.py`（数据契约）/ `agenda_loader.py` / `agenda_state.py` / `agenda_store.py` / `agenda_idle.py`（5 文件：编排本身内聚在 Agent 内，直播内容=配置+Planner 上下文/行为模式变化，不是代码模块） |
 | **房间与消息** | `room_state.py`（直播间状态聚合）、`message_buffer.py`（弹幕聚合窗口：默认 3s/20 条） |
 | **后台维护** | `background.py`（双任务 BackgroundMaintainer 取代旧 RoomStateLoop） |
-| **工具实现** | `reply_tool.py`（`reply`）、`proactive_tool.py`（`should_speak_proactively`，底层 `proactive_trigger.py`）、`command_tool.py`（`parse_command`） |
+| **工具壳层** | `tools/` 子包：`reply_tool.py`（`reply`）、`proactive_tool.py`（`should_speak_proactively`）、`command_tool.py`（`parse_command`）——Agent 专属 builtin 工具入口，只包装顶层内脏，不含决策/表达逻辑 |
 | **时序门** | `timing_gate.py` |
-| **命令解析** | `command/command.py` + `command/command_parser.py` + `command/command_registry.py` |
+| **命令解析** | `command/command.py` + `command/command_parser.py` + `command/command_registry.py`（`tools/command_tool.py` 的底层纯解析原语） |
 | **提示词** | `prompts/amaidesu_planner.md` + `prompts/amaidesu_replyer.md` + `prompts/agenda_expand.md` |
 
 `src/agents/game/text_adv/` 文字冒险 GameAgent 范例（§1.5.1 content_engine 范式）：`agent.py`（继承 `BaseAgent`）、`state.py`（剧情状态）、`tools.py`（游戏侧 dispatch），构造时注入 `content_engine=StubContentEngine(engine_kind="text_adv")`，通过 `content_engine_*` 5 工具间接驱动引擎；预留 `engine` 配置项以便未来挂 `MinecraftEngine` 等真实实现。
@@ -272,7 +273,7 @@ sequenceDiagram
 
 **判别口诀**："谁驱动谁"——能自我维持状态/轮询/心跳的就是 Agent，只在被调用时执行的就是 Tool。
 
-> **直播内容 = 编排配置 + Planner 上下文/行为模式的变化，不是代码模块**。一份节目单不会新增 Agent 或 Tool，只是改变 `StreamerAgent` 加载的 Agenda、Planner 提示词上下文与 Replyer 行为模式。这就是为什么 `src/agents/streamer/` 内的 `agenda_*.py` 等模块是 StreamerAgent 内部子组件，而非顶级模块。
+> **直播内容 = 编排配置 + Planner 上下文/行为模式的变化，不是代码模块**。一份节目单不会新增 Agent 或 Tool，只是改变 `StreamerAgent` 加载的 Agenda、Planner 提示词上下文与 Replyer 行为模式。这就是为什么 `agenda_*.py` 等模块收在 `src/agents/streamer/agenda/` 子包内——它们是 StreamerAgent 内部子组件，而非顶级模块或可注册工具。
 
 ### 生命周期
 
@@ -392,7 +393,7 @@ bili_danmaku_official = { ... }
 
 ---
 
-*最后更新：2026-08-29（v2.0.9 D1 VLM 收编 + D2 MCP 清残留：组件清单表 `screen_change` 行加注"screen_reader.py VLM 走 LLMManager.chat_vision 收编"；其他段未改动）*
+*最后更新：2026-09-04（streamer 包子包化重组：角色表按 `agenda/` 子系统 + `tools/` 工具壳层重写，`proactive_trigger` 独立"主动发言规则"行；"直播内容非代码模块"段改指 `src/agents/streamer/agenda/` 子包）*
 
 *上次更新：2026-08-28（ADR-006 落地：mock_danmaku 表格描述收敛为"确定性 JSONL 回放器（LLM 仿真由 simulator/ SimulatorService 承担）"；`simulator/` 目录条目改写为开发基础设施描述；启动时序补 4b SimulatorService 步骤（条件装配，--dry 强制 auto_start=False）、关闭时序补 1.5 SimulatorService 关闭步骤；已知缺口第 3 条由 `simulator/` 已脱线替换为"存储记账器 simulated 列写入链缺口"——`live_chat`/`gifts`/`super_chats` 表已有列但记账器未从 payload 读取，**不升 SCHEMA_VERSION**）*
 

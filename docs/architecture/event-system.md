@@ -818,7 +818,7 @@ class MyPayload(BasePayload):
 
 ## 旧名处置说明
 
-> **v1 三阶段事件（`input.message.received` / `decision.intent.generated` / `output.intent.dispatched` / `output.intent.finished` / `output.handler.completed` / `output.obs.command` / `output.handler.connected` 等）已随 v2 重构删除**。`names.py` 中仅存划线标记（`~~decision.intent.generated~~` 等迁移注释），不提供常量定义。代码中残留的旧名字符串均为迁移注释（如 `src/agents/streamer/__init__.py` L30、`src/modules/collectors/mock/mock_collector.py` L12、`src/modules/simulator/service.py` L10），不参与运行时事件分发。
+> **v1 三阶段事件（`input.message.received` / `decision.intent.generated` / `output.intent.dispatched` / `output.intent.finished` / `output.handler.completed` / `output.obs.command` / `output.handler.connected` 等）已随 v2 重构删除**。`names.py` 中仅存划线标记（`~~decision.intent.generated~~` 等迁移注释），不提供常量定义。代码中残留的旧名字符串均为迁移注释（如 `src/agents/streamer/__init__.py` L34、`src/modules/collectors/mock/mock_collector.py` L12、`src/modules/simulator/service.py` L10），不参与运行时事件分发。
 
 如发现代码中实际 emit / on 旧名事件（**非注释**），按"重构未完成"缺陷处理，须立即改为对应 v2 语义域事件。
 
@@ -834,6 +834,6 @@ class MyPayload(BasePayload):
 
 ---
 
-*最后更新：2026-08-28（v2.0.8 Sticker 事件链全链删除——`output.sticker.command` / `StickerCommandPayload` 从常量表、Payload 模块清单、payloads 子树、register_core_events 模块触发列表全数移除；事件表行删除；目录树 payload 模块计数 9→8、CoreEvents 常量计数 15→14；Payload 继承类图与计数 12→11；"Output Sticker（特例）"节删除并改为 v2.0.8 收口说明；事实表行数与"事件数量"行首同步）*
+*最后更新：2026-09-04（streamer 包子包化重组：旧名处置说明中 `src/agents/streamer/__init__.py` 迁移注释行号 L30 → L34，因模块清单注释随子包化重写）*
 
 *上次更新：2026-08-25（v2.0.0 语义域事件对齐：移除三阶段事件表，新增 15 常量 + 通配占位符事实表，新增 MQTT 通配订阅章节，重写 Payload/订阅者/拦截器作用域）*

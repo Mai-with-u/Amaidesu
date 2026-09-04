@@ -8,7 +8,7 @@
 
 ## 模块归属
 
-Agenda 子系统全部位于 `src/agents/streamer/`，是主播 Agent 的内部契约，不跨 Agent 共享：
+Agenda 子系统全部位于 `src/agents/streamer/agenda/` 子包（主播 Agent 内部契约，不跨 Agent 共享）：
 
 | 文件 | 职责 |
 |------|------|
@@ -398,7 +398,7 @@ temperature = 0.7
 
 ## 架构约束
 
-- Agenda 子系统全部位于 `src/agents/streamer/`（主播 Agent 内部契约），不跨 Agent 共享
+- Agenda 子系统全部位于 `src/agents/streamer/agenda/` 子包（主播 Agent 内部契约），不跨 Agent 共享
 - 不新增事件类型，复用 `agenda.update` / `planner.checkpoint` 语义域事件（事件表权威定义见[事件系统](./event-system.md)）
 - `AgendaIdle` 不直接 emit 业务事件，通过 `on_advance` 回调通知 Agent 走正常决策链
 - 不订阅 Output 事件（数据流红线，见[数据流规则](./data-flow.md)）
@@ -406,4 +406,4 @@ temperature = 0.7
 
 ---
 
-*最后更新：2026-08-26（由 outline-mechanism.md 经 git mv 重命名并按 v2 Agenda 子系统重写：模型→加载→空转→持久化→事件→配置组织；原 Outline 术语统一替换为 Agenda）*
+*最后更新：2026-09-04（streamer 包子包化重组：Agenda 子系统收拢 `src/agents/streamer/agenda/` 子包，§模块归属与 §架构约束路径同步更新）*

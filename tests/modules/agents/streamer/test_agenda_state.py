@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from src.agents.streamer.agenda import Agenda, AgendaSegment
-from src.agents.streamer.agenda_state import AgendaState, AgendaStatus
+from src.agents.streamer.agenda.agenda import Agenda, AgendaSegment
+from src.agents.streamer.agenda.agenda_state import AgendaState, AgendaStatus
 
 
 def _make_agenda() -> Agenda:
@@ -191,7 +191,7 @@ class TestAgendaStateExpansion:
         state = AgendaState()
         agenda = _make_agenda()
         state.start(agenda, now_ms=1_000)
-        from src.agents.streamer.agenda_loader import ExpandedSegment
+        from src.agents.streamer.agenda.agenda_loader import ExpandedSegment
 
         expanded = ExpandedSegment(segment_id="s1", opening_line="嗨", topic_guidance="嗨")
         state.cache_expanded(expanded)
@@ -216,7 +216,7 @@ duration_ms = 5000
         path = tmp_path / "test.toml"
         path.write_text(toml_content, encoding="utf-8")
 
-        from src.agents.streamer.agenda import parse_agenda_toml
+        from src.agents.streamer.agenda.agenda import parse_agenda_toml
 
         agenda = parse_agenda_toml(path)
         assert agenda.agenda_id == "x"
@@ -240,7 +240,7 @@ duration_ms = 500
         path = tmp_path / "invalid.toml"
         path.write_text(toml_content, encoding="utf-8")
 
-        from src.agents.streamer.agenda import parse_agenda_toml
+        from src.agents.streamer.agenda.agenda import parse_agenda_toml
         import pytest
 
         with pytest.raises(Exception):  # ValidationError

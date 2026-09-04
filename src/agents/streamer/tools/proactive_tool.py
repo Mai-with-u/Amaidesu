@@ -25,8 +25,8 @@ from src.modules.time_utils import now_ms
 from src.modules.tools import ToolInvocation, ToolSpec
 from src.modules.tools.models import ToolExecutionResult
 
-from .proactive_trigger import ProactiveTrigger
-from .room_state import RoomState
+from ..proactive_trigger import ProactiveTrigger
+from ..room_state import RoomState
 
 __all__ = ["build_proactive_tool_spec", "ProactiveToolProvider", "register_proactive_tool"]
 

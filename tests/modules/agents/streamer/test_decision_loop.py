@@ -219,7 +219,7 @@ async def test_decision_loop_planner_no_reply_path():
 @pytest.mark.asyncio
 async def test_decision_loop_proactive_tool_invoke():
     """should_speak_proactively 工具可独立调用：返回触发 reason 或 None。"""
-    from src.agents.streamer.proactive_tool import ProactiveToolProvider, register_proactive_tool
+    from src.agents.streamer.tools.proactive_tool import ProactiveToolProvider, register_proactive_tool
     from src.agents.streamer.proactive_trigger import ProactiveTrigger
     from src.agents.streamer.room_state import RoomState
 
@@ -258,7 +258,7 @@ async def test_decision_loop_proactive_tool_invoke():
 @pytest.mark.asyncio
 async def test_decision_loop_parse_command_tool():
     """parse_command 工具：返回解析后的命令 dict（is_command + name + args + action）。"""
-    from src.agents.streamer.command_tool import CommandToolProvider, register_command_tool
+    from src.agents.streamer.tools.command_tool import CommandToolProvider, register_command_tool
 
     provider = CommandToolProvider(
         command_prefix="/",

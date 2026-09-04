@@ -53,19 +53,19 @@ from src.modules.tools import ToolSpec
 from src.modules.tools.registry import ToolRegistry
 from src.modules.types.base.normalized_message import NormalizedMessage
 
-from .agenda_idle import AgendaIdle
-from .agenda_loader import AgendaLoader
-from .agenda_state import AgendaState
+from .agenda.agenda_idle import AgendaIdle
+from .agenda.agenda_loader import AgendaLoader
+from .agenda.agenda_state import AgendaState
 from .background import BackgroundMaintainer
-from .command_tool import CommandToolProvider
 from .message_buffer import MessageBuffer
 from .planner import Planner
-from .proactive_tool import ProactiveToolProvider
 from .proactive_trigger import ProactiveTrigger
-from .reply_tool import ReplyToolProvider
 from .replyer import ProfanityFilter, Replyer
 from .room_state import RoomState
 from .timing_gate import TimingGate
+from .tools.command_tool import CommandToolProvider
+from .tools.proactive_tool import ProactiveToolProvider
+from .tools.reply_tool import ReplyToolProvider
 
 __all__ = ["StreamerAgent", "StreamerAgentConfig", "build_streamer_agent"]
 
@@ -457,9 +457,9 @@ class StreamerAgent(BaseAgent):
 
         # 预启动窗口：Provider 尚未构造（Agent 已 register 但未 start），
         # 直接调用工厂函数构造三个 spec（与 Provider 路径等价）。
-        from .reply_tool import build_reply_tool_spec
-        from .proactive_tool import build_proactive_tool_spec
-        from .command_tool import build_command_tool_spec
+        from .tools.reply_tool import build_reply_tool_spec
+        from .tools.proactive_tool import build_proactive_tool_spec
+        from .tools.command_tool import build_command_tool_spec
 
         return [
             build_reply_tool_spec(),

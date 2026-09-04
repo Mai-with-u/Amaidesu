@@ -3,7 +3,7 @@
 Wave 6 迁移：原 ``stages/decision/deciders/command/`` 子包整体移植到
 ``src/agents/streamer/command/``；保持纯解析职责（不订阅事件、不调 LLM、
 不发布 Intent）。CommandDecider 已 REWRITE 为 Tool（见
-``agents/streamer/command_tool.py``）。
+``agents/streamer/tools/command_tool.py``）。
 """
 
 from .command import Command

@@ -26,8 +26,8 @@ from src.modules.logging import get_logger
 from src.modules.tools import ToolInvocation, ToolSpec
 from src.modules.tools.models import ToolExecutionResult
 
-from .command.command_parser import CommandParser
-from .command.command_registry import CommandRegistry
+from ..command.command_parser import CommandParser
+from ..command.command_registry import CommandRegistry
 
 __all__ = ["CommandToolProvider", "build_command_tool_spec", "register_command_tool"]
 
