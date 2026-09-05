@@ -12,13 +12,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
-from unittest.mock import MagicMock, patch
+from typing import Optional
+from unittest.mock import MagicMock
 
 import pytest
 from loguru import logger as _loguru_logger
 
-from src.modules.tts import build_tts_infrastructure
+from src.modules.tts import TTSProvider, build_tts_infrastructure
 
 
 # ---------------------------------------------------------------------------
@@ -34,9 +34,7 @@ class _LoguruCapture:
     def __enter__(self) -> "_LoguruCapture":
         def _sink(message) -> None:
             r = message.record
-            self.records.append(
-                {"level": r["level"].name, "message": r["message"], "module": r["name"]}
-            )
+            self.records.append({"level": r["level"].name, "message": r["message"], "module": r["name"]})
 
         self._sink_id = _loguru_logger.add(_sink, level="DEBUG")
         return self
@@ -101,7 +99,8 @@ class TestKnownProviders:
             }
         )
         assert isinstance(result, EdgeTTSProvider)
-        # 子配置正确透传（typed_config 字段）
+        assert isinstance(result, TTSProvider)
+        assert isinstance(result.typed_config, EdgeTTSProvider.ConfigSchema)
         assert result.typed_config.voice == "zh-CN-YunxiNeural"
 
     def test_gptsovits_constructs_provider(self):
@@ -116,6 +115,7 @@ class TestKnownProviders:
             }
         )
         assert isinstance(result, GPTSoVITSProvider)
+        assert isinstance(result, TTSProvider)
         assert result.host == "10.0.0.1"
         assert result.port == 9881
 
@@ -131,6 +131,7 @@ class TestKnownProviders:
             }
         )
         assert isinstance(result, VoiceboxProvider)
+        assert isinstance(result, TTSProvider)
         assert result.profile_id == "abc-123"
 
     def test_omni_tts_constructs_provider(self):
@@ -145,12 +146,14 @@ class TestKnownProviders:
             }
         )
         assert isinstance(result, OmniTTSProvider)
+        assert isinstance(result, TTSProvider)
         assert result.host == "192.168.0.1"
         assert result.port == 9999
 
     def test_event_bus_passed_through_to_engine(self):
         """event_bus 注入 → 引擎持有该引用。"""
         from src.modules.events.event_bus import EventBus
+        from src.modules.tts.edge_tts_tool import EdgeTTSProvider
 
         bus = EventBus()
         result = build_tts_infrastructure(
@@ -158,26 +161,25 @@ class TestKnownProviders:
             event_bus=bus,
         )
         assert result is not None
+        assert isinstance(result, EdgeTTSProvider)
+        assert isinstance(result, TTSProvider)
         assert result.event_bus is bus
 
     def test_missing_sub_config_uses_schema_defaults(self):
         """子配置缺失 → 工厂用空 dict 构造，引擎走 Schema 默认值。"""
         from src.modules.tts.edge_tts_tool import EdgeTTSProvider
 
-        result = build_tts_infrastructure(
-            {"enabled": True, "provider": "edge_tts"}
-        )
+        result = build_tts_infrastructure({"enabled": True, "provider": "edge_tts"})
         assert isinstance(result, EdgeTTSProvider)
-        # 缺省 voice
+        assert isinstance(result, TTSProvider)
+        assert isinstance(result.typed_config, EdgeTTSProvider.ConfigSchema)
         assert result.typed_config.voice == "zh-CN-XiaoxiaoNeural"
 
     def test_sub_config_not_dict_falls_back_to_empty(self):
         """子配置形态非 dict（字符串 / 数字）→ 当空 dict 处理。"""
         from src.modules.tts.edge_tts_tool import EdgeTTSProvider
 
-        result = build_tts_infrastructure(
-            {"enabled": True, "provider": "edge_tts", "edge_tts": "oops"}
-        )
+        result = build_tts_infrastructure({"enabled": True, "provider": "edge_tts", "edge_tts": "oops"})
         assert isinstance(result, EdgeTTSProvider)
 
 
@@ -191,17 +193,12 @@ class TestUnknownProviderFallback:
         """未知 provider 名 → ERROR 日志 + 回退到 edge_tts（仍可装配）。"""
         from src.modules.tts.edge_tts_tool import EdgeTTSProvider
 
-        result = build_tts_infrastructure(
-            {"enabled": True, "provider": "definitely_not_a_real_engine"}
-        )
+        result = build_tts_infrastructure({"enabled": True, "provider": "definitely_not_a_real_engine"})
         assert isinstance(result, EdgeTTSProvider)
+        assert isinstance(result, TTSProvider)
 
         # ERROR 日志记录未知 provider + 回退信息
-        error_records = [
-            r
-            for r in loguru_capture.records
-            if r["level"] == "ERROR" and "未知" in r["message"]
-        ]
+        error_records = [r for r in loguru_capture.records if r["level"] == "ERROR" and "未知" in r["message"]]
         assert error_records, "未知 provider 应记录 ERROR 日志"
 
 
@@ -220,9 +217,7 @@ class TestConstructionFailure:
         original = assembly._PROVIDER_FACTORIES["edge_tts"]
         assembly._PROVIDER_FACTORIES["edge_tts"] = broken_factory
         try:
-            result = build_tts_infrastructure(
-                {"enabled": True, "provider": "edge_tts"}
-            )
+            result = build_tts_infrastructure({"enabled": True, "provider": "edge_tts"})
         finally:
             assembly._PROVIDER_FACTORIES["edge_tts"] = original
 

@@ -859,4 +859,4 @@ class MyToolProvider(ToolProvider):
 
 ---
 
-*最后更新：2026-09-05（v2.0.12 §8 概念修正：TTS 退役出工具池。端到端消息流时序步骤 12-14：worker 改 `await speak(text, utterance_id)`（注入的 speak 适配器，绑定 `tts_engine.handle_speech`）；步骤 12 标注 VTS 仍是 ToolRegistry 中的工具；步骤 13 标注 TTS 引擎自身——基础模块、非工具——发布 utterance 事件 + ToolRegistry 中零 TTS 条目。关键要点表发声队列行补"构造期注入 speak 适配器"；TTS 播出行改写为"`src/modules/tts/` 基础模块 + `build_tts_infrastructure` 装配入口"。已知缺口"TTS 渲染工具需显式注册" → "TTS 已基础模块化（原缺口已闭环 + v2.0.12 §8 修正）"+ 装配期注入直连说明。装饰器两条路径对比表"现有生产工具"行删除 `src/modules/tools/output/tts/__init__.py` 陈旧引用）*
+*最后更新：2026-09-05（v2.0.12 §8 概念修正：TTS 提升为基础设施。端到端消息流时序步骤 12-14：worker 改 `await speak(text, utterance_id)`（注入的 speak 适配器，绑定 `tts_engine.handle_speech`）；步骤 12 标注 VTS 仍是 ToolRegistry 中的工具；步骤 13 标注 TTS 引擎自身——基础模块、非工具——发布 utterance 事件 + ToolRegistry 中零 TTS 条目。关键要点表发声队列行补"构造期注入 speak 适配器"；TTS 播出行改写为"`src/modules/tts/` 基础模块 + `build_tts_infrastructure` 装配入口"。已知缺口"TTS 渲染工具需显式注册" → "TTS 已基础模块化（原缺口已闭环 + v2.0.12 §8 修正）"+ 装配期注入直连说明。装饰器两条路径对比表"现有生产工具"行删除 `src/modules/tools/output/tts/__init__.py` 陈旧引用；同日术语统一：'退役出工具池'改为'提升为基础设施'（避免误导为降级））*

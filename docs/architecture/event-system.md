@@ -860,6 +860,6 @@ class MyPayload(BasePayload):
 
 ---
 
-*最后更新：2026-09-05（v2.0.12 §8 概念修正：TTS 退役出工具池。事件事实表 `tts.utterance.*` 三事件发布者由"TTS 引擎工具自身"改为"TTS 引擎（基础模块，非工具）"+ 装配期单选构造注入 StreamerAgent 说明；TTS Utterance 域小节发布者条款改写："发布者"由"TTS 引擎工具自身 + `invoke` 收到非空 `utterance_id`"改为"TTS 引擎自身（基础模块，非工具）+ `handle_speech` 收到非空 `utterance_id`"；订阅者段 [数据流规则] 章节锚点 §5 → §6（消费者通道三分法已迁至 §6）；Payload 形状差异、终点广播防环约束、发布-only 三条不变）*
+*最后更新：2026-09-05（v2.0.12 §8 概念修正：TTS 提升为基础设施。事件事实表 `tts.utterance.*` 三事件发布者由"TTS 引擎工具自身"改为"TTS 引擎（基础模块，非工具）"+ 装配期单选构造注入 StreamerAgent 说明；TTS Utterance 域小节发布者条款改写："发布者"由"TTS 引擎工具自身 + `invoke` 收到非空 `utterance_id`"改为"TTS 引擎自身（基础模块，非工具）+ `handle_speech` 收到非空 `utterance_id`"；订阅者段 [数据流规则] 章节锚点 §5 → §6（消费者通道三分法已迁至 §6）；Payload 形状差异、终点广播防环约束、发布-only 三条不变；同日术语统一：'退役出工具池'改为'提升为基础设施'（避免误导为降级））*
 
 *上次更新：2026-08-25（v2.0.0 语义域事件对齐：移除三阶段事件表，新增 15 常量 + 通配占位符事实表，新增 MQTT 通配订阅章节，重写 Payload/订阅者/拦截器作用域）*

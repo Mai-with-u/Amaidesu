@@ -46,7 +46,7 @@ flowchart TB
     end
 
     subgraph Registry["ToolRegistry (src/modules/tools/)"]
-        Out["output 族<br/>（TTS 退役后已不含 TTS）<br/>subtitle / vts×13 / vrchat×3<br/>warudo×13 / obs×4 / remote_stream"]
+        Out["output 族<br/>（TTS 提升为基础设施后已不含 TTS）<br/>subtitle / vts×13 / vrchat×3<br/>warudo×13 / obs×4 / remote_stream"]
         Per["perception 族<br/>look_at_screen"]
         CE["content_engine 族<br/>5 工具（generic 游戏契约）"]
         Mem["memory 族<br/>query_memory"]
@@ -103,7 +103,7 @@ Amaidesu/
 │       │   ├── screen/          #   屏幕变化
 │       │   └── stt/             #   语音识别
 │       ├── tools/               # 工具族（ToolRegistry + 各 Provider；按 provider=builtin|game 溯源）
-│       │   ├── output/          #   subtitle / vts / warudo / obs / remote_stream / debug（TTS 已在 v2.0.12 退役出工具池，迁至 src/modules/tts/ 基础模块）
+│       │   ├── output/          #   subtitle / vts / warudo / obs / remote_stream / debug（TTS 已在 v2.0.12 提升为基础设施，迁至 src/modules/tts/ 基础模块）
 │       │   ├── perception/      #   look_at_screen（同步快照工具）
 │       │   └── content_engine/  #   通用游戏引擎契约（5 工具 + StubContentEngine）
 │       ├── events/              # EventBus + 事件拦截器（rate_limit / similar_filter）
@@ -254,11 +254,11 @@ sequenceDiagram
 
 ### ③ 工具族
 
-总览：**v2.0.12 起约 51 个工具**（TTS 已退役出工具池，迁至 `src/modules/tts/` 基础模块；ToolRegistry 中零 TTS 条目）；按 `provider ∈ {"builtin", "game"}` 溯源；`register_provider` 走 `ToolRegistry.register`。TTS 装配由 `build_tts_infrastructure(core [tts], event_bus)` 在组合根直接完成（按 `core.toml [tts].provider` 单选构造引擎实例），结果注入 StreamerAgent 构造期——不再经 ToolRegistry；非 TTS 工具族（subtitle / vts / warudo / obs / vrchat）的装配由 `bind_core_tools` 按 `[tools.output.config]` 的 `enabled` 列表驱动，详见 [启动时序](#启动时序) 5a 步骤。其余已知缺口见"已知缺口"。
+总览：**v2.0.12 起约 51 个工具**（TTS 已提升为基础设施，迁至 `src/modules/tts/` 基础模块；ToolRegistry 中零 TTS 条目）；按 `provider ∈ {"builtin", "game"}` 溯源；`register_provider` 走 `ToolRegistry.register`。TTS 装配由 `build_tts_infrastructure(core [tts], event_bus)` 在组合根直接完成（按 `core.toml [tts].provider` 单选构造引擎实例），结果注入 StreamerAgent 构造期——不再经 ToolRegistry；非 TTS 工具族（subtitle / vts / warudo / obs / vrchat）的装配由 `bind_core_tools` 按 `[tools.output.config]` 的 `enabled` 列表驱动，详见 [启动时序](#启动时序) 5a 步骤。其余已知缺口见"已知缺口"。
 
 | 族 | Provider | 工具数 | 工具名 |
 |----|----------|-------|--------|
-| TTS | （基础模块） | **v2.0.12 退役出工具池**：4 引擎 Provider（`EdgeTTSProvider` / `GPTSoVITSProvider` / `VoiceboxProvider` / `OmniTTSProvider`）位于 `src/modules/tts/`，不再注册到 ToolRegistry；装配入口 `build_tts_infrastructure(tts_config, event_bus=None)` 按 `core.toml [tts].provider` 单选构造实例供 StreamerAgent 注入；未知 provider 回退 `edge_tts`。引擎自身在 `handle_speech(text, utterance_id=None)` 入口完成合成 + 播放，并按需发布 `tts.utterance.*` 三事件，详见 [ADR-007](adr/007-tts-infrastructure-pipeline.md)。 |
+| TTS | （基础模块） | **v2.0.12 提升为基础设施**：4 引擎 Provider（`EdgeTTSProvider` / `GPTSoVITSProvider` / `VoiceboxProvider` / `OmniTTSProvider`）位于 `src/modules/tts/`，不再注册到 ToolRegistry；装配入口 `build_tts_infrastructure(tts_config, event_bus=None)` 按 `core.toml [tts].provider` 单选构造实例供 StreamerAgent 注入；未知 provider 回退 `edge_tts`。引擎自身在 `handle_speech(text, utterance_id=None)` 入口完成合成 + 播放，并按需发布 `tts.utterance.*` 三事件，详见 [ADR-007](adr/007-tts-infrastructure-pipeline.md)。 |
 | Subtitle | `builtin` | 3 | `push_subtitle` / `subtitle_clear` / `subtitle_show_test` |
 | VTS | `builtin` | 13 | `vts_smile` / `vts_close_eyes` / `vts_open_eyes` / `vts_set_expression` / `vts_set_parameter_value` / `vts_get_parameter_value` / `vts_trigger_hotkey` / `vts_load_item` / `vts_load_sticker` / `vts_set_idle_enabled` / `vts_reconnect` / `vts_get_stats` / `vts_lip_sync` |
 | VRChat | `builtin` | 3 | `vrchat_set_expression` / `vrchat_trigger_gesture` / `vrchat_get_stats` |
@@ -272,7 +272,7 @@ sequenceDiagram
 | Streamer 自带 | `builtin`（来自 Agent `list_tools()`） | 3 | `reply` / `should_speak_proactively` / `parse_command` |
 | Agent Control | `builtin` | 6 | `pause_agent` / `resume_agent` / `shutdown_agent` / `restart_agent` / `list_agents` / `agent_state` |
 
-合计：3 + 13 + 3 + 13 + 4 + 1 + 5 + 1 + 3 + 6 ≈ **51 个工具**（Remote Stream/Debug 不计；v2.0.12 起 TTS 退役出工具池，工具数从 v2.0.10 的 53 降至 51——TTS Facade 1 个 + 选中引擎入口 1 个 共 2 个已迁出）。
+合计：3 + 13 + 3 + 13 + 4 + 1 + 5 + 1 + 3 + 6 ≈ **51 个工具**（Remote Stream/Debug 不计；v2.0.12 起 TTS 提升为基础设施，工具数从 v2.0.10 的 53 降至 51——TTS Facade 1 个 + 选中引擎入口 1 个 共 2 个已迁出）。
 
 ## 核心概念
 
@@ -374,7 +374,7 @@ render_timeout_ms = 60000            # 单 utterance 超时（覆盖合成+播�
 api_url = "ws://127.0.0.1:9880"
 # ... gptsovits 引擎连接参数
 
-# tools.toml —— 启用哪些工具族（TTS 一族已在 v2.0.12 退役出工具池，本表完全不含 TTS）
+# tools.toml —— 启用哪些工具族（TTS 一族已在 v2.0.12 提升为基础设施，本表完全不含 TTS）
 [tools]
 enabled = ["perception", "output"]  # 顶层族启用开关（具体工具族内子工具通过该族的 register_provider 注册）
 
@@ -407,7 +407,7 @@ enabled = ["vts", "subtitle", "warudo", "obs"]  # 非 TTS 工具族：bind_core_
 3. **`tts.utterance.*` 订阅端接线尚未实现**。v2.0.10 三事件已发布，但当前生产代码**暂无订阅者**（字幕 Provider 由 StreamerAgent 通过 `speech` 文本直接 fire-and-forget，不订阅 utterance 事件；记账器同样预留）。字幕精准对齐是 utterance 事件的首要目标消费者，待字幕子系统接入事件总线后即可启用。详见 [事件系统 §TTS Utterance 域](event-system.md#tts-utterance-域v2010-新增) 与 [ADR-007 §后果](adr/007-tts-infrastructure-pipeline.md#后果consequences) 遗留项。
 
 > **v2.0.12 已闭环（§8 概念修正后最终态）**：原"渲染工具 `register_*_tools` 无自动调用点"——
-> - **TTS**：v2.0.12 起整体退役出工具池，由 `src/modules/tts/build_tts_infrastructure(core [tts], event_bus)` 装配期直接构造引擎实例并注入 StreamerAgent，ToolRegistry 中零 TTS 条目；
+> - **TTS**：v2.0.12 起整体提升为基础设施，由 `src/modules/tts/build_tts_infrastructure(core [tts], event_bus)` 装配期直接构造引擎实例并注入 StreamerAgent，ToolRegistry 中零 TTS 条目；
 > - **非 TTS 工具族**（subtitle / vts / warudo / obs / vrchat）：由 `bind_core_tools` 按 `[tools.output.config]` 的 `enabled` 列表驱动自注册。
 > 详见 [启动时序](#启动时序) 5a0 / 5a 两步与 [ADR-007 §8 概念修正](adr/007-tts-infrastructure-pipeline.md#8-概念修正2026-09-05-落地adr-007-据此修订)。
 
@@ -423,7 +423,7 @@ enabled = ["vts", "subtitle", "warudo", "obs"]  # 非 TTS 工具族：bind_core_
 
 ---
 
-*最后更新：2026-09-05（v2.0.12 §8 概念修正：TTS 退役出工具池。全景图：ToolRegistry 子图移除 TTS Facade + 引擎×4 节点并标注"TTS 退役后已不含 TTS"，新增"共享基础设施 `src/modules/`"子图含 `tts/` 与 `audio/` 两个节点；UtteranceQueue→TTS 箭头直连基础模块节点（不再是 ToolRegistry 路由）。目录结构：`src/modules/tools/output/tts/` 子目录删除注释，新增 `src/modules/tts/` 段（4 Provider + common + gptsovits_client + wav_decoder + assembly）。启动时序：5a0 步骤改为 `build_tts_infrastructure` 装配期构造引擎实例注入 StreamerAgent（不再走 ToolRegistry）；5a 标注"TTS 已不在此列"。StreamerAgent 包角色表：发言管线行改为"构造期注入 `speak` 适配器 + 后台串行 `await speak(text, utterance_id)`，不再经 ToolRegistry"。工具族总览：v2.0.10 约 53 → v2.0.12 约 51；TTS 行整段重写为"基础模块"行（4 Provider 在 `src/modules/tts/`，按 `[tts].provider` 单选构造，不注册 ToolRegistry）；合计说明去掉 TTS 工具数。配置示例：`[tts]` 段行为参数补 `render_timeout_ms = 60000`；新增 `[tts.gptsovits]` 引擎子段示例；`tools.toml` 注释改为"TTS 一族已在 v2.0.12 退役出工具池，本表完全不含 TTS"，删除原 `[tools.output.tts.gptsovits]` 子段示例。已知缺口闭环段：v2.0.10 → v2.0.12 §8 概念修正后最终态——TTS 由 `build_tts_infrastructure` 装配期注入，非 TTS 工具族由 `bind_core_tools` 列表驱动）*
+*最后更新：2026-09-05（v2.0.12 §8 概念修正：TTS 提升为基础设施。全景图：ToolRegistry 子图移除 TTS Facade + 引擎×4 节点并标注"TTS 提升为基础设施后已不含 TTS"，新增"共享基础设施 `src/modules/`"子图含 `tts/` 与 `audio/` 两个节点；UtteranceQueue→TTS 箭头直连基础模块节点（不再是 ToolRegistry 路由）。目录结构：`src/modules/tools/output/tts/` 子目录删除注释，新增 `src/modules/tts/` 段（4 Provider + common + gptsovits_client + wav_decoder + assembly）。启动时序：5a0 步骤改为 `build_tts_infrastructure` 装配期构造引擎实例注入 StreamerAgent（不再走 ToolRegistry）；5a 标注"TTS 已不在此列"。StreamerAgent 包角色表：发言管线行改为"构造期注入 `speak` 适配器 + 后台串行 `await speak(text, utterance_id)`，不再经 ToolRegistry"。工具族总览：v2.0.10 约 53 → v2.0.12 约 51；TTS 行整段重写为"基础模块"行（4 Provider 在 `src/modules/tts/`，按 `[tts].provider` 单选构造，不注册 ToolRegistry）；合计说明去掉 TTS 工具数。配置示例：`[tts]` 段行为参数补 `render_timeout_ms = 60000`；新增 `[tts.gptsovits]` 引擎子段示例；`tools.toml` 注释改为"TTS 一族已在 v2.0.12 提升为基础设施，本表完全不含 TTS"，删除原 `[tools.output.tts.gptsovits]` 子段示例。已知缺口闭环段：v2.0.10 → v2.0.12 §8 概念修正后最终态——TTS 由 `build_tts_infrastructure` 装配期注入，非 TTS 工具族由 `bind_core_tools` 列表驱动；同日术语统一：'退役出工具池'改为'提升为基础设施'（避免误导为降级））*
 
 *上次更新：2026-08-28（ADR-006 落地：mock_danmaku 表格描述收敛为"确定性 JSONL 回放器（LLM 仿真由 simulator/ SimulatorService 承担）"；`simulator/` 目录条目改写为开发基础设施描述；启动时序补 4b SimulatorService 步骤（条件装配，--dry 强制 auto_start=False）、关闭时序补 1.5 SimulatorService 关闭步骤；已知缺口第 3 条由 `simulator/` 已脱线替换为"存储记账器 simulated 列写入链缺口"——`live_chat`/`gifts`/`super_chats` 表已有列但记账器未从 payload 读取，**不升 SCHEMA_VERSION**）*
 

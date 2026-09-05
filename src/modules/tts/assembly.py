@@ -43,6 +43,7 @@ from src.modules.logging import get_logger
 from .edge_tts_tool import create_edge_tts_provider
 from .gptsovits_tool import create_gptsovits_provider
 from .omni_tts_tool import create_omni_tts_provider
+from .protocol import TTSProvider
 from .voicebox_tool import create_voicebox_provider
 
 if TYPE_CHECKING:
@@ -74,7 +75,7 @@ _PROVIDER_DESCRIPTIONS = {
 def build_tts_infrastructure(
     tts_config: Any,
     event_bus: Optional["EventBus"] = None,
-) -> Optional[Any]:
+) -> Optional[TTSProvider]:
     """按 ``[tts]`` 配置构造选中的 TTS 引擎实例；未启用返回 ``None``。
 
     Args:
@@ -84,10 +85,13 @@ def build_tts_infrastructure(
             生命周期事件；为 None 时引擎静默跳过事件发布（手动 / 直调场景）。
 
     Returns:
-        构造成功的 TTS 引擎 Provider 实例；以下情况返回 ``None``：
+        构造成功的 ``TTSProvider`` 协议实例（结构契约见 ``protocol.py``）；
+        以下情况返回 ``None``：
 
         - ``enabled=False`` 或缺段；
-        - 选中 provider 工厂调用异常（依赖缺失 / 配置非法等），fail-soft。
+        - 选中 provider 工厂调用异常（依赖缺失 / 配置非法等），fail-soft；
+        - 工厂返回的对象**结构上不满足** ``TTSProvider`` 契约（缺方法 /
+          形态异常），fail-fast（装配边界兜底，避免脏对象注入下游）。
     """
     logger = get_logger("TTSAssembly")
 
@@ -124,6 +128,17 @@ def build_tts_infrastructure(
             f"build_tts_infrastructure: 构造 {provider} 引擎失败（{_PROVIDER_DESCRIPTIONS[provider]}）"
             f"：{type(exc).__name__}: {exc}",
             exc_info=True,
+        )
+        return None
+
+    # 装配边界 fail-fast：工厂返回的对象必须结构上满足 TTSProvider 契约
+    # （PROVIDER_NAME / name / setup / cleanup / handle_speech / get_stats /
+    # ConfigSchema）。@runtime_checkable 仅校验成员存在性，签名留给静态
+    # 类型系统；任何意外形态（None / dict / 缺方法实例）都视作装配失败。
+    if not isinstance(engine, TTSProvider):
+        logger.error(
+            f"build_tts_infrastructure: {provider} 工厂返回的对象不满足 TTSProvider 契约"
+            f"（type={type(engine).__name__}），装配失败"
         )
         return None
 

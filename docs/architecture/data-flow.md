@@ -212,7 +212,7 @@ v2 不再有"插件系统"。所有新功能通过 Agent 包内聚实现，框�
 
 - **每一步都是单向流动**。控制台输入 → EventBus → StreamerAgent → 工具调用 → 返回值，全程无环。Planner→Replyer 是同 Agent 内 await，不经事件中转（v2 删除 `decision.intent.generated` 的原因）。
 - **拦截器层是全局单点**。RateLimit/SimilarFilter 作用于 `room.message.*`，所有订阅者共享净化后的结果。`core.*` / `live.*` / `planner.checkpoint` / `tts.utterance.*` 等不经过拦截器。
-- **TTS 是基础模块而非工具**（v2.0.12 §8 修正）。每句 reply 落库即发声——`reply.result.content` 的 `speech` 字段由 StreamerAgent 主动入 UtteranceQueue，不依赖 LLM 决策调用 TTS 工具（事实上 TTS 已退役出 ToolRegistry）；装配期 `build_tts_infrastructure(core [tts], event_bus)` 按 `[tts].provider` 单选构造引擎实例并直接注入 StreamerAgent，运行时由 UtteranceQueue 通过注入的 `speak` 适配器调 `engine.handle_speech`——零 Facade 路由层、零 ToolRegistry 条目。`core.toml [tts]` 自包含（行为参数 + 四引擎子段），`tools.toml` 无任何 TTS 段，详见 ADR-007。
+- **TTS 是基础模块而非工具**（v2.0.12 §8 修正）。每句 reply 落库即发声——`reply.result.content` 的 `speech` 字段由 StreamerAgent 主动入 UtteranceQueue，不依赖 LLM 决策调用 TTS 工具（事实上 TTS 已提升为基础设施、移出 ToolRegistry）；装配期 `build_tts_infrastructure(core [tts], event_bus)` 按 `[tts].provider` 单选构造引擎实例并直接注入 StreamerAgent，运行时由 UtteranceQueue 通过注入的 `speak` 适配器调 `engine.handle_speech`——零 Facade 路由层、零 ToolRegistry 条目。`core.toml [tts]` 自包含（行为参数 + 四引擎子段），`tools.toml` 无任何 TTS 段，详见 ADR-007。
 - **planner.checkpoint 是空转检查点**。由 `BackgroundMaintainer` 后台任务定期触发，不在主链路每轮都发，仅用于"主播长时间未发言"的提醒与 Agenda 推进。
 
 ---
@@ -262,7 +262,7 @@ v2 中不同数据走不同通道，不要混用：
 
 ---
 
-*最后更新：2026-09-05（v2.0.12 §8 概念修正：TTS 退役出工具池。§1 事件流向图 Tools 子图移除 TTS Facade + 引擎组节点并迁至新增 `InFra 基础模块 src/modules/tts/` 子图（含 TTS 引擎实例节点）；图例说明改写——speech 经 UtteranceQueue 串行送入装配期注入的 `tts_engine.handle_speech`，VTS 仍是工具、TTS 不再是。§5 链路示例"回复文本就绪"段：worker 串行 `await speak(text, utterance_id)`（注入的 speak 适配器，绑定 `tts_engine.handle_speech`）；§5 链路关键性质"TTS 是基础设施而非工具"段改写为"TTS 是基础模块而非工具（v2.0.12 §8 修正）"+ 装配期注入直连说明 + 配置 `core [tts]` 自包含。§6 通信机制选型表：`ToolRegistry.invoke` 行示例改为 `vts_set_expression`（VTS 仍是工具，TTS 不再列入此行）；新增"基础模块直调"行说明 `tts_engine.handle_speech`。§6 TTS 消费者通道三分法"设计要点"直调段：UtteranceQueue + TTS Facade → UtteranceQueue → 注入的 `tts_engine.handle_speech`）*
+*最后更新：2026-09-05（v2.0.12 §8 概念修正：TTS 提升为基础设施。§1 事件流向图 Tools 子图移除 TTS Facade + 引擎组节点并迁至新增 `InFra 基础模块 src/modules/tts/` 子图（含 TTS 引擎实例节点）；图例说明改写——speech 经 UtteranceQueue 串行送入装配期注入的 `tts_engine.handle_speech`，VTS 仍是工具、TTS 不再是。§5 链路示例"回复文本就绪"段：worker 串行 `await speak(text, utterance_id)`（注入的 speak 适配器，绑定 `tts_engine.handle_speech`）；§5 链路关键性质"TTS 是基础设施而非工具"段改写为"TTS 是基础模块而非工具（v2.0.12 §8 修正）"+ 装配期注入直连说明 + 配置 `core [tts]` 自包含。§6 通信机制选型表：`ToolRegistry.invoke` 行示例改为 `vts_set_expression`（VTS 仍是工具，TTS 不再列入此行）；新增"基础模块直调"行说明 `tts_engine.handle_speech`。§6 TTS 消费者通道三分法"设计要点"直调段：UtteranceQueue + TTS Facade → UtteranceQueue → 注入的 `tts_engine.handle_speech`；同日术语统一：'退役出工具池'改为'提升为基础设施'（避免误导为降级））*
 
 *上次更新：2026-08-28（v2.0.8 Sticker 事件链全链删除——`output.sticker.command` / Sticker→VTS 单向信号链路随 C1 治理收口：StickerHelper 零实例化零调用、消费端 VTSProvider 仅空转订阅；§1 事件流向图 EventBus 子图枚举事件清单移除 `output.sticker.command`）*
 

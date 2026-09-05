@@ -33,7 +33,7 @@ Amaidesu!
 
 - **采集器（Collector）**：持续采集外部数据（B站弹幕、语音、屏幕变化、控制台），经 EventBus 以语义域事件（`room.message.*` 等）主动推送，事件拦截器做限流/相似过滤
 - **业务 Agent**：主播 Agent 自主决策——MessageBuffer 聚合弹幕 → Planner 决策循环 → Replyer 表达引擎生成回复/情绪/动作；游戏代理（AI 玩家）为另一范式
-- **工具（Tool）**：被动能力契约，经 ToolRegistry 统一调度——字幕、VTS/Warudo 皮套、OBS、屏幕感知等约 51 个工具（v2.0.12 起 TTS 已退役出工具池，成为基础模块）
+- **工具（Tool）**：被动能力契约，经 ToolRegistry 统一调度——字幕、VTS/Warudo 皮套、OBS、屏幕感知等约 51 个工具（v2.0.12 起 TTS 已提升为基础设施，迁出 ToolRegistry）
 - **TTS 基础设施**：`src/modules/tts/` 包内自治（4 引擎 Provider：`EdgeTTSProvider` / `GPTSoVITSProvider` / `VoiceboxProvider` / `OmniTTSProvider`），由 `core.toml [tts].provider` 装配期单选构造，注入 StreamerAgent 直接调用 `handle_speech`——不走 ToolRegistry
 - **存储与记忆**：SQLite 11 表记录场次/消息/礼物/SC/Agenda；SimpleMemory 提供跨场关键词记忆召回——决策上下文自动注入相关记忆，LLM 亦可主动调用 `query_memory` 工具检索
 

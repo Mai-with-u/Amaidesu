@@ -182,7 +182,7 @@ core / model / agents / tools / memory / storage / background 七文件按领域
 
 如实的欠账清单（详见 [架构总览](overview.md) 已知缺口小节）：
 
-- **TTS 族装配已闭环 + §8 概念修正后最终态**（v2.0.12）：TTS 整体退役出工具池，迁至 `src/modules/tts/` 基础模块；装配期由 `build_tts_infrastructure(core [tts], event_bus)` 按 `[tts].provider` 单选构造引擎实例并直接注入 StreamerAgent；ToolRegistry 中零 TTS 条目；`[tts].enabled=false` 不构造引擎。其余非 TTS 工具族（subtitle / vts / warudo / obs / vrchat）由 `bind_core_tools` 按 `[tools.output.config] enabled` 列表驱动自注册（v2.0.10 起）。详见 [ADR-007](adr/007-tts-infrastructure-pipeline.md) 与 [架构总览 - 已知缺口](overview.md#已知缺口)。
+- **TTS 族装配已闭环 + §8 概念修正后最终态**（v2.0.12）：TTS 整体提升为基础设施，迁至 `src/modules/tts/` 基础模块；装配期由 `build_tts_infrastructure(core [tts], event_bus)` 按 `[tts].provider` 单选构造引擎实例并直接注入 StreamerAgent；ToolRegistry 中零 TTS 条目；`[tts].enabled=false` 不构造引擎。其余非 TTS 工具族（subtitle / vts / warudo / obs / vrchat）由 `bind_core_tools` 按 `[tools.output.config] enabled` 列表驱动自注册（v2.0.10 起）。详见 [ADR-007](adr/007-tts-infrastructure-pipeline.md) 与 [架构总览 - 已知缺口](overview.md#已知缺口)。
 - **AudioStreamChannel 已拆除**（v2 pull 编排下无扇出场景，lip-sync 责任归皮套软件 + 工具 invoke 能力的重建）；
 - **迁移期遗留待清理**：`src/modules/config/schemas/input_schemas.py`、`output_schemas.py`（不再被加载的旧 Schema）、main.py 顶部过期 docstring；
 - **存储记账器 `simulated` 列写入链**：`live_chat` / `gifts` / `super_chats` 表已有 `simulated INTEGER NOT NULL DEFAULT 0` 贯穿列（schema 已就位），但记账器尚未从 `RoomMessagePayload.simulated` 读取该字段写入对应列——属存储侧改造，**不升 SCHEMA_VERSION**（详见 ADR-006 §C + [模拟器指南 §4](development/simulator-guide.md#4-simulated-溯源)）；
@@ -203,6 +203,6 @@ core / model / agents / tools / memory / storage / background 七文件按领域
 
 ---
 
-*最后更新：2026-09-05（v2.0.12 §8 概念修正：TTS 退役出工具池成为基础模块。"工具层（被动能力，ToolRegistry 注册）"表格工具例子删除 TTS（"TTS 自 v2.0.12 §8 修正起已是基础模块"）；Mermaid 工具层节点 T1 标注"TTS 自 v2.0.12 §8 起迁至基础模块层"；九节"遗留与下一步"原 TTS 闭环条目改写为"TTS 族装配已闭环 + §8 概念修正后最终态（v2.0.12）"+ `build_tts_infrastructure` 装配期注入说明 + ToolRegistry 零 TTS 条目）*
+*最后更新：2026-09-05（v2.0.12 §8 概念修正：TTS 提升为基础设施（基础模块）。"工具层（被动能力，ToolRegistry 注册）"表格工具例子删除 TTS（"TTS 自 v2.0.12 §8 修正起已是基础模块"）；Mermaid 工具层节点 T1 标注"TTS 自 v2.0.12 §8 起迁至基础模块层"；九节"遗留与下一步"原 TTS 闭环条目改写为"TTS 族装配已闭环 + §8 概念修正后最终态（v2.0.12）"+ `build_tts_infrastructure` 装配期注入说明 + ToolRegistry 零 TTS 条目；同日术语统一：'退役出工具池'改为'提升为基础设施'（避免误导为降级））*
 
 *上次更新：2026-08-27（v2.0.6 AudioStreamChannel 拆除：九节"遗留与下一步"对应条目改写为拆除说明；首版：四代架构史、主体性判据、防换皮铁闸、全景与九 Wave 落地叙事）*

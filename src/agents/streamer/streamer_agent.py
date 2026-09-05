@@ -41,7 +41,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Dict, Iterable, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 
 from src.modules.agents.base import BaseAgent
 from src.modules.agents.manager import AgentManager
@@ -74,6 +74,9 @@ from .utterance_queue import (
     DEFAULT_RENDER_TIMEOUT_MS,
     UtteranceQueue,
 )
+
+if TYPE_CHECKING:
+    from src.modules.tts import TTSProvider
 
 __all__ = ["StreamerAgent", "StreamerAgentConfig", "build_streamer_agent"]
 
@@ -215,7 +218,7 @@ class StreamerAgent(BaseAgent):
         persona_provider: Optional[Any] = None,
         memory: Any = None,
         speech_config: Optional[Dict[str, Any]] = None,
-        tts_engine: Optional[Any] = None,
+        tts_engine: Optional["TTSProvider"] = None,
     ) -> None:
         """初始化主播 Agent。
 
@@ -246,10 +249,12 @@ class StreamerAgent(BaseAgent):
 
                 ``None`` 或 ``enabled=False`` 时发言管线整体关闭（决策循环
                 行为与改造前完全一致）。
-            tts_engine: 可选 TTS 引擎 Provider 实例（由
-                ``src.modules.tts.build_tts_infrastructure`` 构造）。
-                ``None`` 或 ``speech_config.enabled=False`` 时发言管线整体
-                关闭。引擎实例直接持有，由编排队列调用其
+            tts_engine: 可选 TTS 引擎 Provider 实例（须满足
+                ``src.modules.tts.TTSProvider`` 结构契约，由
+                ``src.modules.tts.build_tts_infrastructure`` 在装配期
+                构造并通过 ``isinstance`` 校验后注入）。``None`` 或
+                ``speech_config.enabled=False`` 时发言管线整体关闭。
+                引擎实例直接持有，由编排队列调用其
                 ``handle_speech(text, utterance_id)``，不再经 ``ToolRegistry``。
         """
         super().__init__(event_bus=event_bus)

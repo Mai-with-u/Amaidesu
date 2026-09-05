@@ -31,6 +31,7 @@ from .common import (
 from .edge_tts_tool import EdgeTTSProvider, create_edge_tts_provider
 from .gptsovits_tool import GPTSoVITSProvider, create_gptsovits_provider
 from .omni_tts_tool import OmniTTSProvider, create_omni_tts_provider
+from .protocol import TTSProvider
 from .voicebox_tool import VoiceboxProvider, create_voicebox_provider
 from .wav_decoder import decode_wav_chunk, extract_pcm_from_wav
 
@@ -40,6 +41,7 @@ __all__ = [
     "GPTSoVITSProvider",
     "OmniTTSProvider",
     "VoiceboxProvider",
+    "TTSProvider",
     # 工厂函数
     "create_edge_tts_provider",
     "create_gptsovits_provider",

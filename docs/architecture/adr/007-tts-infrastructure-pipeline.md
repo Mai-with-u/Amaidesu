@@ -1,6 +1,6 @@
 # ADR-007：TTS 作为配置驱动基础设施（reply → utterance 事件 → 引擎）
 
-- 状态：已采纳（2026-09-04 定案 / 2026-09-05 实现落库；同日 §8 概念修正：TTS 退役出工具池，本 ADR 已按最终状态修订）
+- 状态：已采纳（2026-09-04 定案 / 2026-09-05 实现落库；同日 §8 概念修正：TTS 提升为基础设施（退出工具池），本 ADR 已按最终状态修订）
 - 日期：2026-09-04（定案）/ 2026-09-05（实现落库 + 概念修正并修订本 ADR）
 - 实现提交：`d86b640964cb5a1898e757a8cdd3506ed1e3eb94`（refactor(tts): TTS 退役出工具池重构为基础模块）
 
@@ -22,7 +22,7 @@ v2.0.0 重构后，Amaidesu 已确立 Agent + 工具 + 存储 + 编排的主体�
 
 > **主体性判据**（ADR-005）：Agent 与工具的唯一判别是"谁驱动谁"——自我驱动的是 Agent（拥有主循环/心跳/状态机），被调才干活的是工具。TTS 引擎没有自主循环、没有 Agent 调用入口，**事实上是基础设施而非工具**——之前把它塞进 ToolRegistry 只是因为"渲染调用天然看起来像工具调用"。
 
-修正后，TTS 引擎从工具池**整体退役**，成为 `src/modules/tts/` 包内自治的基础模块：
+修正后，TTS 引擎**整体提升为基础设施**，成为 `src/modules/tts/` 包内自治的基础模块：
 - 引擎自身暴露 `handle_speech(text, utterance_id=None)` / `setup()` / `cleanup()` / `get_stats()` / `ConfigSchema`，不再实现 `ToolProvider` 协议；
 - 装配入口为 `src/modules/tts/assembly.py::build_tts_infrastructure(tts_config, event_bus=None)`，按 `core.toml [tts].provider` 构造唯一引擎实例并直接注入 StreamerAgent；
 - StreamerAgent 构造期接收 `tts_engine` 实例并把 `engine.handle_speech` 适配为 `speak` 可调用对象注入 `UtteranceQueue`；
@@ -117,4 +117,4 @@ v2.0.0 重构后，Amaidesu 已确立 Agent + 工具 + 存储 + 编排的主体�
 
 ---
 
-*最后更新：2026-09-05（§8 概念修正落库后修订——TTS 引擎从工具池整体退役为 `src/modules/tts/` 基础模块；ToolProvider 形态 / TTS Facade / ToolRegistry 条目全部清除；装配入口改为 `build_tts_infrastructure(tts_config, event_bus=None)` 按 `[tts].provider` 单选构造并直接注入 StreamerAgent；配置 `core.toml [tts]` 自包含行为参数 + 四引擎子段、`tools.toml` 零 TTS 段、`CONFIG_VERSION` 升至 2.0.12；§决策 1 主体性、§替代方案"Facade 路由"条改为"曾采纳后 §8 否定"如实记录；§后果增"TTS 彻底基础模块化 / 装配入口单一 / 配置自包含"三条收益；文末状态行补"§8 修正已按最终状态修订"）*
+*最后更新：2026-09-05（§8 概念修正落库后修订——TTS 引擎整体提升为基础设施（`src/modules/tts/` 基础模块）；ToolProvider 形态 / TTS Facade / ToolRegistry 条目全部清除；装配入口改为 `build_tts_infrastructure(tts_config, event_bus=None)` 按 `[tts].provider` 单选构造并直接注入 StreamerAgent；配置 `core.toml [tts]` 自包含行为参数 + 四引擎子段、`tools.toml` 零 TTS 段、`CONFIG_VERSION` 升至 2.0.12；§决策 1 主体性、§替代方案"Facade 路由"条改为"曾采纳后 §8 否定"如实记录；§后果增"TTS 彻底基础模块化 / 装配入口单一 / 配置自包含"三条收益；文末状态行补"§8 修正已按最终状态修订"；同日术语统一：'退役出工具池'改为'提升为基础设施'（避免误导为降级；ADR 顶部的实现提交行保留原 commit 描述引文与 hash 不动——这是 git 历史事实））*

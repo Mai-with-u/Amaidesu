@@ -11,7 +11,7 @@
 | ``remote_stream/`` | 消息协议 + 分发器（无 websocket 脚手架） |
 | ``debug/``   | dump_intent 调试函数（替换 DebugConsoleHandler） |
 
-注：TTS 引擎已退役出工具池，迁移至 ``src/modules/tts/`` 基础模块包（与
+注：TTS 引擎已提升为基础设施，迁移至 ``src/modules/tts/`` 基础模块包（与
 ``src/modules/audio/`` 平级）。TTS 不再是 Agent 调用的工具，而是配置驱动的
 语音基础设施组件。
 
