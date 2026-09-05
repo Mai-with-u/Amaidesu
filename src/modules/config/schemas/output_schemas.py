@@ -6,10 +6,6 @@
 
     [handlers]
     enabled = ["subtitle", "vts"]
-    concurrent_rendering = true
-    error_handling = "continue"  # continue | stop
-    render_timeout_ms = 10000  # 0 = 无限制
-    completion_timeout_ms = 30000  # 两层事件聚合超时(毫秒),0 表示不限制
 
     [handlers.subtitle]
     type = "subtitle"
@@ -26,10 +22,6 @@
     {
         "handlers": {
             "enabled": [...],
-            "concurrent_rendering": True,
-            "error_handling": "continue",
-            "render_timeout_ms": 10000,
-            "completion_timeout_ms": 30000,
             "subtitle": {...},
             ...
         },
@@ -44,12 +36,19 @@
 - **每个 Handler 的 ConfigSchema 重导出**：从原 Handler 模块导入 `ConfigSchema`，
   在此处用 `XXXConfigSchema` 别名导出，避免调用方硬编码 Handler 内部类名。
 - **OutputHandlersConfig**：`[handlers]` 段的聚合模型。
-  包含启用元数据（enabled / concurrent_rendering / error_handling / render_timeout_ms /
-  completion_timeout_ms）以及每个 Handler 的可选子配置。
+  仅含 ``enabled`` 元数据与每个 Handler 的可选子配置。
 - **OutputConfig**：`config/output.toml` 文件对应的根模型。
 
   > 原 `OutputPipelinesConfig` 容器已删除——OutputPipeline 定案移除，
   > 敏感词净化归 Replyer（ProfanityFilter）。
+
+v2.0.10 收尾清理（调度字段下放至 core [tts]）：
+- 移除 ``concurrent_rendering``：v1 输出阶段并发模型已废弃，无消费者
+- 移除 ``error_handling``：v1 错误策略字段，无消费者
+- 移除 ``completion_timeout_ms``：v1 两层事件聚合 watchdog，无消费者
+- 移除 ``render_timeout_ms``：v1 单 Handler 渲染超时；调度语义升级为 TTS
+  基础设施总超时，统一上移至 core.toml ``[tts].render_timeout_ms``，
+  由 v2.0.10 的 ``CrossFileMigration`` 完成迁移
 
 设计原则：
 - 不修改 Handler 内部代码，仅在调用时延迟加载其 `ConfigSchema` 嵌套类。
@@ -61,7 +60,7 @@
 from __future__ import annotations
 
 import importlib
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import ConfigDict, Field
 
@@ -172,8 +171,10 @@ def _optional_handler_field(schema_cls: Optional[type]) -> Any:
 class OutputHandlersConfig(BaseConfig):
     """`[handlers]` 段聚合模型
 
-    包含 Output 阶段运行元数据（enabled / concurrent_rendering / error_handling /
-    render_timeout_ms / completion_timeout_ms）以及每个 Handler 的可选子配置。
+    包含 Output 阶段运行元数据（``enabled``）以及每个 Handler 的可选子配置。
+
+    v2.0.10 起不再持有调度字段——并发渲染 / 错误策略 / 渲染超时 / 聚合 watchdog
+    均已废弃，统一迁移至 core.toml ``[tts]`` 的 TTS 基础设施配置。
 
     使用 `extra="forbid"` 拒绝未知 Handler 子段，避免拼写错误静默通过。
     """
@@ -184,32 +185,6 @@ class OutputHandlersConfig(BaseConfig):
     enabled: List[str] = Field(
         default_factory=list,
         description="启用的 Handler 名称列表",
-    )
-    concurrent_rendering: bool = Field(
-        default=True,
-        description="是否并发渲染（true: 多个 Handler 并行；false: 顺序执行）",
-        json_schema_extra={"x-ui-type": "boolean"},
-    )
-    error_handling: Literal["continue", "stop"] = Field(
-        default="continue",
-        description="错误处理策略：continue 继续执行其他 Handler；stop 出错立即停止",
-        json_schema_extra={
-            "x-ui-type": "select",
-            "x-options": ["continue", "stop"],
-        },
-    )
-    render_timeout_ms: int = Field(
-        default=10000,
-        ge=0,
-        description="单个 Handler 渲染超时（毫秒），0 表示不限制",
-        json_schema_extra={"x-ui-type": "integer", "x-min": 0},
-    )
-    completion_timeout_ms: int = Field(
-        default=30000,
-        ge=0,
-        description="两层事件聚合 watchdog 超时(毫秒):per-handler 完成事件超时未到齐则强制"
-        "发 OUTPUT_INTENT_FINISHED 并 warn 日志。0 表示不启用 watchdog。",
-        json_schema_extra={"x-ui-type": "integer", "x-min": 0},
     )
 
     # ----- 每个 Handler 的可选子配置 -----

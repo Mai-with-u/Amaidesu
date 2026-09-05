@@ -6,11 +6,14 @@
 |---|---|
 | ``vts/``     | VTS 全家桶 + VRChat（VTSHandler, LipSyncProcessor, ExpressionController, HotkeyMatcher, IdleMotionController, VRChatProvider） |
 | ``warudo/``  | Warudo 全家桶（WarudoProvider + 5 state 类 + 5 后台任务 + SubtitleManager + Sender） |
-| ``tts/``     | 4 个 TTS Provider（EdgeTTS / GPTSoVITS / OmniTTS / Voicebox） |
 | ``subtitle/`` | Subtitle GUI 服务 + push_subtitle 工具（拆分） |
 | ``obs/``     | OBS Provider（3 个工具：send_text / switch_scene / set_source_visibility） |
 | ``remote_stream/`` | 消息协议 + 分发器（无 websocket 脚手架） |
 | ``debug/``   | dump_intent 调试函数（替换 DebugConsoleHandler） |
+
+注：TTS 引擎已退役出工具池，迁移至 ``src/modules/tts/`` 基础模块包（与
+``src/modules/audio/`` 平级）。TTS 不再是 Agent 调用的工具，而是配置驱动的
+语音基础设施组件。
 
 迁移策略（与 .omo/drafts/amaidesu-v2-migration.md A 段对齐）:
 - 引擎内部 verbatim（callback 解耦零改动）
@@ -36,20 +39,6 @@ from src.modules.tools.output.subtitle import (
     SubtitleProvider,
     create_subtitle_provider,
     register_subtitle_tools,
-)
-from src.modules.tools.output.tts import (
-    EdgeTTSProvider,
-    GPTSoVITSProvider,
-    OmniTTSProvider,
-    VoiceboxProvider,
-    create_edge_tts_provider,
-    create_gptsovits_provider,
-    create_omni_tts_provider,
-    create_voicebox_provider,
-    register_edge_tts_tools,
-    register_gptsovits_tools,
-    register_omni_tts_tools,
-    register_voicebox_tools,
 )
 from src.modules.tools.output.vts import (
     ExpressionController,
@@ -101,19 +90,6 @@ __all__ = [
     "ActionSender",
     "create_warudo_provider",
     "register_warudo_tools",
-    # TTS
-    "EdgeTTSProvider",
-    "GPTSoVITSProvider",
-    "OmniTTSProvider",
-    "VoiceboxProvider",
-    "create_edge_tts_provider",
-    "create_gptsovits_provider",
-    "create_omni_tts_provider",
-    "create_voicebox_provider",
-    "register_edge_tts_tools",
-    "register_gptsovits_tools",
-    "register_omni_tts_tools",
-    "register_voicebox_tools",
     # Subtitle
     "SubtitleProvider",
     "SubtitleGuiService",

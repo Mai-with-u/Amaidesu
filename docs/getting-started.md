@@ -158,7 +158,7 @@ user_nickname = "控制台"
 
 #### 启用渲染输出（可选）
 
-`[tools.output]` 包是 TTS / 字幕 / 皮套 / OBS 等渲染工具的统一入口，默认就启用，但**当前版本默认未在 `config.enabled` 里勾选任何具体渲染工具**，详见下方"已知限制"。
+`[tools.output]` 包是字幕 / 皮套 / OBS 等渲染工具的统一入口，装配由 `config.enabled` 列表勾选控制。**TTS 不在此列**——语音已成为基础模块（v2.0.12 §8 修正：从工具池整体退役），由 `config/core.toml` 的 `[tts]` 段独立控制（`enabled = true` 即主播每句话自动合成播出，`provider` 选择引擎；`build_tts_infrastructure` 按 `[tts].provider` 单选构造引擎实例注入 StreamerAgent，ToolRegistry 中零 TTS 条目），详见下方说明与 [ADR-007](architecture/adr/007-tts-infrastructure-pipeline.md)。
 
 ```toml
 # config/tools.toml（接在上文 [tools.perception] 之后）
@@ -168,13 +168,12 @@ provider = "builtin"
 
 [tools.output.config]
 enabled = ["subtitle", "vts"]        # 仅示例：勾上后会按同名子段加载配置
-concurrent_rendering = true
-render_timeout_ms = 10000
-completion_timeout_ms = 30000
 
-[tools.output.config.edge_tts]
-type = "edge_tts"
-voice = "zh-CN-XiaoxiaoNeural"
+# TTS 不在 tools 配置里，语音由 core.toml 独立控制：
+# config/core.toml
+# [tts]
+# enabled = true                     # 开启后主播每句话自动合成播出
+# provider = "gptsovits"             # 引擎选择（edge_tts/gptsovits/voicebox/omni_tts）
 ```
 
 ### 2.6 再次运行
@@ -224,7 +223,7 @@ uv run python main.py --dry
 | **业务 Agent（Agent）** | 拥有内部状态与工具的主循环体；订阅事件、决策、调用工具 | `src/agents/` | `[agents]` + `[agents.<name>]` |
 | **工具（Tool）** | 单一能力函数（@tool 装饰器），由 Agent 在决策时按需调用 | `src/modules/tools/` | `[tools.<pack>.config]` |
 
-> 渲染工具（TTS / 字幕 / VTS / OBS 等）在 v2 中以 **Tool Provider** 的形式注册：开启 `[tools.output]` 后，工具包内的组件会注册到 `ToolRegistry` 中，LLM 可以像调用普通工具一样触发渲染。详见 [组件开发指南](development/component-guide.md)。
+> 渲染工具（字幕 / VTS / OBS 等）在 v2 中以 **Tool Provider** 的形式注册：开启 `[tools.output]` 后，工具包内的组件会注册到 `ToolRegistry` 中。**TTS 是例外**——语音已成为基础模块（v2.0.12 §8 修正：从工具池整体退役），位于 `src/modules/tts/`，由 `config/core.toml` 的 `[tts]` 段驱动装配（`build_tts_infrastructure` 按 `[tts].provider` 单选构造引擎实例注入 StreamerAgent，ToolRegistry 中零 TTS 条目；开启后主播每句话自动播出），详见 [组件开发指南](development/component-guide.md) 与 [ADR-007](architecture/adr/007-tts-infrastructure-pipeline.md)。
 
 ### 3.3 可用组件清单
 
@@ -263,7 +262,7 @@ uv run python main.py --dry
 | 工具包（`[tools.<pack>]`） | 代表工具 | 说明 |
 |----------------------------|---------|------|
 | `perception` | `look_at_screen` | 屏幕感知（VLM 调用） |
-| `output` | `edge_tts_synthesize` / `push_subtitle` / `vts_trigger_hotkey` / `obs_switch_scene` | 渲染族：TTS / 字幕 / 皮套控制 / OBS 场景切换 |
+| `output` | `push_subtitle` / `vts_trigger_hotkey` / `obs_switch_scene` | 渲染族：字幕 / 皮套控制 / OBS 场景切换（TTS 已退役出工具池，迁至 `src/modules/tts/` 基础模块） |
 | `builtin`（Streamer 自带） | `reply` / `query_memory` / `parse_command` / `should_speak_proactively` | 主播内置工具（开 `streamer` 即生效） |
 | `game` | （由具体游戏 Agent 注入） | 游戏专属推进工具（如 text_adv 的截图+点击） |
 | `external` | （预留） | 外部工具源（v2.0.9 收编：MCP 桥接已移除，schema 保留供未来重启） |
@@ -441,8 +440,8 @@ vite_dev_port = 60315                               # Vite 开发服务器端口
 
 ### 已知限制
 
-- **渲染工具（TTS / 字幕 / VTS / OBS 等）的"工具注册接线"仍在完善中**。当前 `[tools.output]` 包已就位、采集器与 Agent 闭环可用，但 LLM 通过工具调用触发具体渲染工具的链路还在收尾，启用后未必能直接出声。建议先用 `console_input` + `streamer` Agent 把控制台交互跑通，再按需勾选渲染工具并实测。
+- **TTS 已基础模块化**（v2.0.12 §8 修正：TTS 退役出工具池）：在 `config/core.toml` 的 `[tts]` 段设 `enabled = true` 后，主播每句回复自动合成播出（引擎由 `provider` 选择，默认 `gptsovits` 需本地服务在跑；无本地服务可用 `edge_tts`，仅需网络）。字幕 / 皮套 / OBS 等渲染工具仍按 `[tools.output.config]` 的 `enabled` 列表勾选装配。
 - **控制台交互**已可用；弹幕采集、屏幕识别、语音转写需对应第三方凭据（id_code / appid / VLM API Key 等）。
 - 完整字段定义在 `src/modules/config/*_schemas.py`；本指南只覆盖"首次跑通"的最小集。
 
-*最后更新：2026-08-29（v2.0.9 D1 VLM 收编 + D2 MCP 清残留：采集器表 `read_pingmu` 关键子配置去掉 `api_key`/`model_name`（VLM key/model 走 `model.toml [vlm]` profile）；工具包表 `external` 行改"预留"；`tools.perception` provider 注释更新为"mcp=预留枚举值暂无实现"）*
+*最后更新：2026-09-05（v2.0.12 §8 概念修正：TTS 退役出工具池成为基础模块。§2.5 启用渲染输出节：TTS 注释补写为"v2.0.12 §8 修正：从工具池整体退役"+"ToolRegistry 中零 TTS 条目 + `build_tts_infrastructure` 装配期注入 StreamerAgent"+ 指向 ADR-007。§3.2 组件类型表注脚同上修订。§3.3 可用组件清单 output 工具包行：删除过时的 `edge_tts_synthesize`（TTS 不再是工具），代表工具改写为"字幕 / 皮套控制 / OBS 场景切换"+ 注脚"TTS 已退役出工具池，迁至 `src/modules/tts/` 基础模块"。§6 已知限制：TTS 由"已基础设施化"补写为"已基础模块化（v2.0.12 §8 修正：TTS 退役出工具池）"）*

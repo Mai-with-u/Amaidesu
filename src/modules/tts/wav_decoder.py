@@ -44,7 +44,7 @@ def extract_pcm_from_wav(wav_data: bytes) -> bytes:
         return wav_data[pcm_start:]
 
     except Exception as e:
-        logger.warning(f"WAV header 解析失败，返回原始数据: {e}")
+        logger.warning("WAV header 解析失败，返回原始数据: : {}", e)
         return wav_data
 
 
@@ -76,5 +76,5 @@ async def decode_wav_chunk(wav_chunk: bytes, dtype=np.int16) -> Optional[np.ndar
         return audio_array
 
     except Exception as e:
-        logger.warning(f"WAV chunk 解码失败，返回 None: {e}")
+        logger.warning("WAV chunk 解码失败，返回 None: : {}", e)
         return None

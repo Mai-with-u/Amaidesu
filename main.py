@@ -54,6 +54,7 @@ from src.modules.memory.bootstrap import bind_memory_tools, build_memory_stack
 from src.modules.prompts import get_prompt_manager
 from src.modules.simulator import SimulatorService
 from src.modules.storage.sqlite_store import SQLiteStore
+from src.modules.tts import build_tts_infrastructure
 from src.modules.storage.storage_ledger import StorageLedger
 from src.modules.tools import ToolRegistry
 from src.modules.tools.bootstrap import bind_core_tools
@@ -397,6 +398,20 @@ async def create_app_components(
     else:
         logger.debug("[simulator].enabled=false，零装配 SimulatorService")
 
+    # --- 核心配置预读：TTS 基础设施段 [tts] ---
+    #  AgentManager 注册 StreamerAgent 时需要 speech_config（max_queue /
+    #  render_timeout_ms / enabled），TTS 引擎装配由 build_tts_infrastructure
+    #  按 [tts].provider 选择；两处都消费同一段，提前预读避免重复取值。
+    tts_section = config.get("tts", {}) if isinstance(config, dict) else {}
+    if not isinstance(tts_section, dict):
+        tts_section = {}
+    tts_enabled = bool(tts_section.get("enabled", False))
+    tts_provider = str(tts_section.get("provider", "edge_tts") or "edge_tts")
+    if tts_enabled:
+        logger.info(f"[tts] 基础设施启用：provider='{tts_provider}'（引擎将直接注入 StreamerAgent）")
+    else:
+        logger.info("[tts] 基础设施关闭：TTS 引擎不构造")
+
     # --- AgentManager + StreamerAgent ---
     agent_manager: Optional["AgentManager"] = None
     agents_config = config.get("agents", {}) if isinstance(config, dict) else {}
@@ -404,6 +419,11 @@ async def create_app_components(
         logger.info("初始化 AgentManager（src/agents/）...")
         tool_registry = ToolRegistry()
         agent_manager = AgentManager(tool_registry=tool_registry, memory=memory)
+
+        # TTS 引擎实例（基础设施，不经 ToolRegistry）：按 [tts] 段装配；
+        # 失败 / 关闭时返回 None，StreamerAgent 走 TTS 关闭路径。
+        tts_engine = build_tts_infrastructure(tts_section, event_bus=event_bus)
+
         await _register_agents_from_config(
             agent_manager,
             agents_config,
@@ -413,6 +433,8 @@ async def create_app_components(
             context_service,
             tool_registry,
             memory,
+            tts_section=tts_section,
+            tts_engine=tts_engine,
         )
 
         # --- 核心工具包（output/* 的 L2 Provider） + L1 @tool pending 刷入 ---
@@ -421,11 +443,17 @@ async def create_app_components(
         # 配置切片取法与 tools.perception.config 一致：先取
         # [tools.output] 子段（ToolPackMeta），再取其 .config 字典作为
         # bind_core_tools 入参；缺失则降级为 {}（多数包将走 schema 默认）。
+        # TTS 装配由核心 [tts] 段驱动（见 build_tts_infrastructure），
+        # bind_core_tools 不再处理 TTS。
         tools_output_pack = (config.get("tools") or {}).get("output", {}) if isinstance(config, dict) else {}
         output_tools_config = tools_output_pack.get("config", {}) if isinstance(tools_output_pack, dict) else {}
         if not isinstance(output_tools_config, dict):
             output_tools_config = {}
-        core_report = bind_core_tools(tool_registry, output_tools_config)
+
+        core_report = bind_core_tools(
+            tool_registry,
+            output_tools_config,
+        )
         core_succeeded = sum(1 for c in core_report.values() if c > 0)
         core_failed = [name for name, count in core_report.items() if count == 0]
         logger.info(
@@ -604,6 +632,9 @@ async def _register_agents_from_config(
     context_service,
     tool_registry=None,
     memory=None,
+    *,
+    tts_section: Optional[Dict[str, Any]] = None,
+    tts_engine: Optional[Any] = None,
 ):
     """根据 [agents] 段注册 Agent 实例到 AgentManager。
 
@@ -613,6 +644,11 @@ async def _register_agents_from_config(
         game = { ... }
 
     memory 为 SimpleMemory 记忆后端，仅 streamer Agent 消费。
+
+    tts_section 为核心 ``[tts]`` 段，仅 streamer Agent 在构造时消费
+    ``speech_config``（enabled / max_queue / render_timeout_ms）。
+    tts_engine 为对应 Provider 实例（由 build_tts_infrastructure 构造），
+    streamer Agent 直接持有并由编排队列调用其 ``handle_speech``。
     """
     enabled_list = config_section.get("enabled", []) or []
     for agent_name in enabled_list:
@@ -648,6 +684,13 @@ async def _register_agents_from_config(
                     "Replyer/Planner 走 _DEFAULT_* 兜底（请检查 config/core.toml）"
                 )
 
+            tts = tts_section if isinstance(tts_section, dict) else {}
+            speech_cfg = {
+                "enabled": bool(tts.get("enabled", False)),
+                "max_queue": int(tts.get("max_queue", 3) or 3),
+                "render_timeout_ms": int(tts.get("render_timeout_ms", 10000) or 0),
+            }
+
             agent = StreamerAgent(
                 config=cfg_obj,
                 llm_manager=llm_service,
@@ -657,6 +700,8 @@ async def _register_agents_from_config(
                 tool_registry=tool_registry,
                 memory=memory,
                 persona_provider=persona_provider_dict,
+                speech_config=speech_cfg,
+                tts_engine=tts_engine,
             )
             manager.register(
                 agent,

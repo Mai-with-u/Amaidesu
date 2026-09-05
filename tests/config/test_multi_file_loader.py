@@ -108,7 +108,12 @@ class TestLoading:
         # v2.0.8：Sticker 事件链全链删除（output_schemas 删 sticker 字段），CONFIG_VERSION 升 patch。
         # v2.0.9：D1 VLM 收编——ScreenChangeCollector 移除 api_key/base_url/model_name；
         # VLM 调用统一走 LLMManager.chat_vision(client_type="vlm")。
-        assert version == "2.0.9"
+        # v2.0.10：TTS 基础设施重塑——core.toml 新增 [tts]，tools.toml 剥离
+        # OutputHandlersConfig 调度字段与 Provider 死字段，render_timeout_ms 上移。
+        # v2.0.11：发声等待超时语义修正——覆盖合成+播放全周期，默认 10s → 60s。
+        # v2.0.12：TTS 彻底基础模块化——tools.toml 四个引擎连接/合成子段
+        # （edge_tts/gptsovits/voicebox/omni_tts）整体迁入 core.toml [tts.<engine>]。
+        assert version == "2.0.12"
 
     def test_drift_fixed_on_load(self, temp_config_dir):
         generate_default_configs(temp_config_dir)

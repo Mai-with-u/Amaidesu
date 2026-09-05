@@ -40,6 +40,7 @@ await agent.cleanup()
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any, Dict, Iterable, List, Optional
 
 from src.modules.agents.base import BaseAgent
@@ -68,6 +69,11 @@ from .timing_gate import TimingGate
 from .tools.command_tool import CommandToolProvider
 from .tools.proactive_tool import ProactiveToolProvider
 from .tools.reply_tool import ReplyToolProvider
+from .utterance_queue import (
+    DEFAULT_MAX_QUEUE,
+    DEFAULT_RENDER_TIMEOUT_MS,
+    UtteranceQueue,
+)
 
 __all__ = ["StreamerAgent", "StreamerAgentConfig", "build_streamer_agent"]
 
@@ -208,6 +214,8 @@ class StreamerAgent(BaseAgent):
         sqlite_store: Optional[Any] = None,
         persona_provider: Optional[Any] = None,
         memory: Any = None,
+        speech_config: Optional[Dict[str, Any]] = None,
+        tts_engine: Optional[Any] = None,
     ) -> None:
         """初始化主播 Agent。
 
@@ -217,7 +225,8 @@ class StreamerAgent(BaseAgent):
             prompt_manager: ``PromptManager`` 实例
             context_service: 可选 ``ContextService``（持久化对话历史）
             event_bus: 可选 ``EventBus``（Agent 通过它订阅 room.message.* / emit planner.checkpoint）
-            tool_registry: 可选 ``ToolRegistry``（Agent 把自己的工具注册进去）
+            tool_registry: 可选 ``ToolRegistry``（Agent 把自己的工具注册进去；
+                VTS 表情工具仍走该 registry，TTS 不再走）
             capabilities_provider: 可选工具能力提供者（用于 reply 动作白名单）
             sqlite_store: 可选 ``SQLiteStore``（live_sessions + agenda_runtime 持久化）
             persona_provider: 可选人设字典来源（鸭子类型：callable 返回 dict / dict 本身）
@@ -226,6 +235,22 @@ class StreamerAgent(BaseAgent):
                 传 ``None`` 时记忆相关功能整体降级——Planner 走无记忆路径，
                 BackgroundMaintainer 跳过 ingest 写入。这是契约保证的"功能
                 可关闭"而非"崩溃友好"。
+            speech_config: 可选发言管线配置（来自核心 ``[tts]`` 段）。
+                形态::
+
+                    {
+                        "enabled": bool,  # 是否启用 TTS 下游管线
+                        "max_queue": int,  # 队列容量（默认 3）
+                        "render_timeout_ms": int,  # 单 utterance 超时（默认 10000）
+                    }
+
+                ``None`` 或 ``enabled=False`` 时发言管线整体关闭（决策循环
+                行为与改造前完全一致）。
+            tts_engine: 可选 TTS 引擎 Provider 实例（由
+                ``src.modules.tts.build_tts_infrastructure`` 构造）。
+                ``None`` 或 ``speech_config.enabled=False`` 时发言管线整体
+                关闭。引擎实例直接持有，由编排队列调用其
+                ``handle_speech(text, utterance_id)``，不再经 ``ToolRegistry``。
         """
         super().__init__(event_bus=event_bus)
         self.typed_config = config
@@ -363,11 +388,25 @@ class StreamerAgent(BaseAgent):
         self._proactive_provider: Optional[ProactiveToolProvider] = None
         self._command_provider: Optional[CommandToolProvider] = None
 
+        # ===== 发言管线（speech → TTS / emotion → VTS）=====
+        # 仅当显式启用且 tts_engine 注入时才构造队列；否则决策循环行为
+        # 与改造前一致（只读 result.success，不消费 result.content）。
+        speech_cfg = speech_config or {}
+        self._tts_enabled: bool = bool(speech_cfg.get("enabled", False))
+        self._speech_max_queue: int = int(speech_cfg.get("max_queue", DEFAULT_MAX_QUEUE))
+        self._speech_render_timeout_ms: int = int(speech_cfg.get("render_timeout_ms", DEFAULT_RENDER_TIMEOUT_MS))
+        self._tts_engine = tts_engine
+        self._utterance_queue: Optional[UtteranceQueue] = None
+        # utterance_id 自增计数器（进程内单调；启动时复位为 0，首次自增到 1）
+        self._utterance_seq: int = 0
+
         self._logger.info(
             f"StreamerAgent 已构造 "
             f"(planner_llm={config.planner_llm}, replyer_llm={config.replyer_llm}, "
             f"proactive_enabled={config.proactive_enabled}, "
-            f"agenda_enabled={config.agenda_enabled})"
+            f"agenda_enabled={config.agenda_enabled}, "
+            f"tts_enabled={self._tts_enabled}, "
+            f"tts_engine={'<已注入>' if tts_engine is not None else '<未注入>'})"
         )
 
     # ==================================================================
@@ -396,11 +435,46 @@ class StreamerAgent(BaseAgent):
         if self.typed_config.agenda_enabled and self.typed_config.agenda_auto_start:
             await self._start_agenda_components()
 
+        # 6. 启动发言管线（speech → TTS / emotion → VTS）
+        # 仅在 TTS 显式启用且 tts_engine 注入时构造；否则保持禁用（决策循环
+        # 行为与改造前一致：只读 result.success，不消费 result.content）。
+        if self._tts_enabled:
+            if self._tts_engine is None:
+                self._logger.warning("TTS 已启用但未注入 tts_engine，发言管线降级为关闭")
+                self._tts_enabled = False
+            else:
+                try:
+                    engine = self._tts_engine
+
+                    async def _speak(text: str, utterance_id: Optional[str] = None) -> None:
+                        """编排队列 → TTS 引擎的 speak 适配器。"""
+                        await engine.handle_speech(text, utterance_id=utterance_id)
+
+                    self._utterance_queue = UtteranceQueue(
+                        speak=_speak,
+                        logger_name="StreamerAgent.UtteranceQueue",
+                        max_queue=self._speech_max_queue,
+                        render_timeout_ms=self._speech_render_timeout_ms,
+                    )
+                    await self._utterance_queue.start()
+                except Exception as exc:
+                    self._logger.warning(f"启动发言管线失败，已降级为关闭: {exc}")
+                    self._utterance_queue = None
+                    self._tts_enabled = False
+
         self._logger.info("StreamerAgent 已启动")
 
     async def _on_stop(self) -> None:
         """Agent 停止钩子。"""
         self._running = False
+
+        # 停止发言管线（TTS 队列先停，保证不遗留 invoke 在飞）
+        if self._utterance_queue is not None:
+            try:
+                await self._utterance_queue.stop()
+            except Exception as exc:
+                self._logger.warning(f"停止发言管线失败: {exc}")
+            self._utterance_queue = None
 
         # 停止后台双任务
         try:
@@ -694,6 +768,10 @@ class StreamerAgent(BaseAgent):
             self._logger.warning(f"Reply 工具返回失败: {result.error_message}")
             return
 
+        # 5.5 解析 reply payload 并分发到发言管线（speech → TTS / emotion → VTS）。
+        # 决策循环契约：此分支任何异常都不能阻断后续 RoomState/Agenda 更新。
+        self._dispatch_speech_and_emotion(result.content)
+
         # 6. 成功：保存上下文 + 记录发言时刻 + 频率限制
         self._total_replies += 1
         self._room_state.record_speech(now_ms())
@@ -727,6 +805,136 @@ class StreamerAgent(BaseAgent):
             },
             source="streamer_agent",
         )
+
+    # ==================================================================
+    # 发言管线（speech → TTS / emotion → VTS）
+    # ==================================================================
+
+    # emotion → VTS 表情参数映射（与 VTSProvider._emotion_map 形态一致）。
+    # 独立保留一份是为了让 StreamerAgent 在不持有 VTSProvider 实例时
+    # 也能把 emotion 翻译为可调用参数；与 VTSProvider 的真实映射解耦
+    # 也便于单测直接断言。
+    _EMOTION_TO_VTS_PARAMS: Dict[str, Dict[str, float]] = {
+        "happy": {"MouthSmile": 1.0},
+        "surprised": {"EyeOpenLeft": 1.0, "EyeOpenRight": 1.0, "MouthOpen": 0.5},
+        "sad": {"MouthSmile": -0.3, "EyeOpenLeft": 0.7, "EyeOpenRight": 0.7},
+        "angry": {"EyeOpenLeft": 0.6, "EyeOpenRight": 0.6, "MouthSmile": -0.5},
+        "shy": {"MouthSmile": 0.3, "EyeOpenLeft": 0.8, "EyeOpenRight": 0.8},
+        "love": {"MouthSmile": 0.8, "EyeOpenLeft": 0.9, "EyeOpenRight": 0.9},
+        "excited": {"MouthSmile": 1.0, "EyeOpenLeft": 1.0, "EyeOpenRight": 1.0},
+        "confused": {"EyeOpenLeft": 0.7, "EyeOpenRight": 0.7, "MouthOpen": 0.2},
+        "scared": {"EyeOpenLeft": 0.5, "EyeOpenRight": 0.5, "MouthOpen": 0.3},
+        "neutral": {},
+    }
+
+    def _next_utterance_id(self) -> str:
+        """生成下一个 utterance_id（格式 ``utt_{epoch_ms}_{seq}``）。
+
+        自增计数器在 ``__init__`` 中初始化为 0，首次调用返回 seq=1。
+        seq 是进程内单调递增，保证同场内 utterance_id 唯一。
+        """
+        self._utterance_seq += 1
+        return f"utt_{now_ms()}_{self._utterance_seq}"
+
+    def _dispatch_speech_and_emotion(self, reply_content: Any) -> None:
+        """解析 reply payload 并触发下游管线（决策循环安全：永不抛异常）。
+
+        Args:
+            reply_content: ``ToolExecutionResult.content``（JSON 字符串），
+                解码为 ``{speech, emotion, action, metadata}``。
+
+        行为契约：
+        - JSON 解析失败 → WARN 日志 + 直接返回（决策循环不受影响）
+        - TTS 未启用 → 解析完即返回（不入队、不触发 VTS）
+        - speech 非空 → 生成 utterance_id + 入队（异步，fire-and-forget）
+        - emotion 非空 → ``asyncio.create_task`` 调 VTS 表情工具（fire-and-forget）
+        - action 字段：当前锁定范围**不接入**（决策调用路径，独立议题）
+        """
+        if not isinstance(reply_content, str) or not reply_content:
+            # reply 工具约定 content 为 JSON 字符串；空内容视作无发言
+            return
+
+        try:
+            payload = json.loads(reply_content)
+        except (TypeError, ValueError) as exc:
+            self._logger.warning(f"reply payload JSON 解析失败，跳过发言管线: {exc}")
+            return
+
+        if not isinstance(payload, dict):
+            self._logger.warning("reply payload 非 dict，跳过发言管线")
+            return
+
+        speech = payload.get("speech", "")
+        emotion = payload.get("emotion", "")
+        # action 字段：当前范围明确不接入决策调用（独立议题）；
+        # 这里只读取不消费，避免后续扩张时无谓往返。
+        action = payload.get("action", "")
+        _ = action  # 显式标注当前未使用，便于后续 grep 排查
+        _ = payload.get("metadata", {})  # metadata 当前也不消费
+
+        # TTS 关闭时整个发言管线退化为空（决策循环行为与改造前一致）
+        if not self._tts_enabled or self._utterance_queue is None:
+            return
+
+        # speech 非空 → 入 TTS 队列
+        if isinstance(speech, str) and speech.strip():
+            utterance_id = self._next_utterance_id()
+            try:
+                asyncio.create_task(self._utterance_queue.enqueue(utterance_id, speech))
+            except Exception as exc:
+                self._logger.warning("utterance 入队失败（已忽略）: utterance_id={}, err={}", utterance_id, exc)
+
+        # emotion 非空 → fire-and-forget VTS 表情调用
+        if isinstance(emotion, str) and emotion.strip():
+            self._schedule_vts_emotion(emotion.strip())
+
+    def _schedule_vts_emotion(self, emotion: str) -> None:
+        """异步触发 VTS 表情调用（fire-and-forget，失败不影响决策循环）。
+
+        VTS 工具契约（vts_set_expression）::
+
+            arguments = {
+                "parameters": {param_name: value, ...},  # 表情参数映射
+                "weight": float,                         # 混合权重（默认 1.0）
+            }
+
+        若 emotion 不在已知映射表中，DEBUG 日志提示"无映射"并跳过；
+        已知映射但参数为空（如 ``neutral``）也照样发起调用，让 VTS
+        工具自身的静默处理逻辑统一接管（不做空表达式的特判短路）。
+        """
+        vts_params = self._EMOTION_TO_VTS_PARAMS.get(emotion)
+        if vts_params is None:
+            self._logger.debug(f"emotion '{emotion}' 未在已知映射表中，跳过 VTS 调用")
+            return
+
+        # 在闭包外捕获 registry 引用：避免 LSP 跨闭包推断失败，
+        # 同时确保 _invoke_vts 在工具尚未注入时不会抛 AttributeError。
+        registry = self._tool_registry
+        if registry is None:
+            self._logger.debug(f"emotion '{emotion}' 触发条件不满足（tool_registry 缺失），跳过")
+            return
+
+        invocation = ToolInvocation(
+            tool_name="vts_set_expression",
+            arguments={
+                "parameters": dict(vts_params),
+                "weight": 1.0,
+            },
+            source="streamer_agent.emotion",
+        )
+
+        async def _invoke_vts() -> None:
+            try:
+                await registry.invoke(invocation)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - 异步背景任务边界
+                self._logger.warning(f"VTS 表情调用异常（已忽略）: emotion={emotion}, err={exc}")
+
+        try:
+            asyncio.create_task(_invoke_vts())
+        except RuntimeError as exc:
+            self._logger.warning(f"VTS 表情任务创建失败（已忽略）: emotion={emotion}, err={exc}")
 
     def _consume_plan_assessment(self, plan: Any) -> None:
         """消费 Planner 评估字段，灌入 AgendaIdle。"""
@@ -1091,6 +1299,7 @@ def build_streamer_agent(
     sqlite_store: Optional[Any] = None,
     persona_provider: Optional[Any] = None,
     spec_provider: str = "builtin",
+    speech_config: Optional[Dict[str, Any]] = None,
 ) -> StreamerAgent:
     """便捷工厂：构造 StreamerAgent + 注册到 AgentManager。
 
@@ -1099,6 +1308,8 @@ def build_streamer_agent(
         其余参数同 ``StreamerAgent.__init__``
         agent_manager: ``AgentManager`` 实例（构造完后 register 到管理器）
         spec_provider: provider 来源溯源（"builtin"/"game"/"mcp"），默认 builtin
+        speech_config: 发言管线配置（来自核心 ``[tts]`` 段；可选，组合根接线
+            由独立任务负责）。
 
     Returns:
         构造好的 StreamerAgent（已 register 到 agent_manager）
@@ -1113,6 +1324,7 @@ def build_streamer_agent(
         capabilities_provider=capabilities_provider,
         sqlite_store=sqlite_store,
         persona_provider=persona_provider,
+        speech_config=speech_config,
     )
     agent_manager.register(agent, spec_provider=spec_provider)
     return agent

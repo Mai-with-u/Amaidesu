@@ -67,7 +67,7 @@ Amaidesu 的业务层组织方式经历过四代。git 历史考实了这条演�
 | | 驱动方式 | 循环/目标 | 例子 |
 |---|---|---|---|
 | **Agent** | 自我驱动，没人调也在跑 | 有 | 主播 Planner 决策循环、游戏代理 AI 玩家 |
-| **工具** | 被动驱动，被调才干活 | 无 | Replyer 表达引擎、TTS、屏幕捕捉、VLM |
+| **工具** | 被动驱动，被调才干活 | 无 | Replyer 表达引擎、屏幕捕捉、VLM（TTS 自 v2.0.12 §8 修正起已是基础模块，不再是工具） |
 
 以及一句对内容生产者的解放：**直播内容是编排配置 + Planner 上下文/行为模式的变化，不是代码模块。** 加一档节目不需要写代码，加一类游戏才需要一个新 Agent 包。
 
@@ -113,7 +113,7 @@ flowchart TB
         GA["游戏代理 TextAdvGameAgent<br/>感知/推进/循环内聚（AI 玩家范式）"]
     end
     subgraph Tools["工具层（被动能力，ToolRegistry 注册）"]
-        T1["output：TTS×4 / 字幕 / VTS / Warudo / OBS…"]
+        T1["output：字幕 / VTS / Warudo / OBS…<br/>（TTS 自 v2.0.12 §8 起迁至基础模块层）"]
         T2["perception：look_at_screen"]
         T3["content_engine：游戏控制面"]
         T4["memory / agent 控制 / streamer 自带 reply 等"]
@@ -182,7 +182,7 @@ core / model / agents / tools / memory / storage / background 七文件按领域
 
 如实的欠账清单（详见 [架构总览](overview.md) 已知缺口小节）：
 
-- **渲染工具注册接线未自动化**：TTS/字幕/VTS 等 `register_*_tools` 尚无组合根调用点，当前默认装配下需显式注册；
+- **TTS 族装配已闭环 + §8 概念修正后最终态**（v2.0.12）：TTS 整体退役出工具池，迁至 `src/modules/tts/` 基础模块；装配期由 `build_tts_infrastructure(core [tts], event_bus)` 按 `[tts].provider` 单选构造引擎实例并直接注入 StreamerAgent；ToolRegistry 中零 TTS 条目；`[tts].enabled=false` 不构造引擎。其余非 TTS 工具族（subtitle / vts / warudo / obs / vrchat）由 `bind_core_tools` 按 `[tools.output.config] enabled` 列表驱动自注册（v2.0.10 起）。详见 [ADR-007](adr/007-tts-infrastructure-pipeline.md) 与 [架构总览 - 已知缺口](overview.md#已知缺口)。
 - **AudioStreamChannel 已拆除**（v2 pull 编排下无扇出场景，lip-sync 责任归皮套软件 + 工具 invoke 能力的重建）；
 - **迁移期遗留待清理**：`src/modules/config/schemas/input_schemas.py`、`output_schemas.py`（不再被加载的旧 Schema）、main.py 顶部过期 docstring；
 - **存储记账器 `simulated` 列写入链**：`live_chat` / `gifts` / `super_chats` 表已有 `simulated INTEGER NOT NULL DEFAULT 0` 贯穿列（schema 已就位），但记账器尚未从 `RoomMessagePayload.simulated` 读取该字段写入对应列——属存储侧改造，**不升 SCHEMA_VERSION**（详见 ADR-006 §C + [模拟器指南 §4](development/simulator-guide.md#4-simulated-溯源)）；
@@ -203,6 +203,6 @@ core / model / agents / tools / memory / storage / background 七文件按领域
 
 ---
 
-*最后更新：2026-08-28（ADR-006 翻转：九节"遗留与下一步"删除"src/modules/simulator/（已被 mock 采集器取代的死代码候选）"行，替换为"存储记账器 simulated 列写入链缺口"——`live_chat`/`gifts`/`super_chats` 表已有列但记账器未从 payload 读取，**不升 SCHEMA_VERSION**；simulator 包按 ADR-006 重新激活为开发基础设施）*
+*最后更新：2026-09-05（v2.0.12 §8 概念修正：TTS 退役出工具池成为基础模块。"工具层（被动能力，ToolRegistry 注册）"表格工具例子删除 TTS（"TTS 自 v2.0.12 §8 修正起已是基础模块"）；Mermaid 工具层节点 T1 标注"TTS 自 v2.0.12 §8 起迁至基础模块层"；九节"遗留与下一步"原 TTS 闭环条目改写为"TTS 族装配已闭环 + §8 概念修正后最终态（v2.0.12）"+ `build_tts_infrastructure` 装配期注入说明 + ToolRegistry 零 TTS 条目）*
 
 *上次更新：2026-08-27（v2.0.6 AudioStreamChannel 拆除：九节"遗留与下一步"对应条目改写为拆除说明；首版：四代架构史、主体性判据、防换皮铁闸、全景与九 Wave 落地叙事）*

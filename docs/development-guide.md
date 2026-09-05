@@ -424,7 +424,7 @@ enabled = ["console_input"]
 
 # tools.toml —— 输出包具体工具
 [tools.output.config]
-enabled = ["edge_tts", "subtitle"]
+enabled = ["subtitle", "vts"]  # TTS 已于 v2.0.12 退役出工具池，迁至 src/modules/tts/ 基础模块——不再在本表列出
 
 # core.toml —— 事件拦截器
 [interceptors.rate_limit]

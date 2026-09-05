@@ -17,7 +17,7 @@
 段树详见 ``.omo/drafts/amaidesu-v2-config-tree.md``（单一事实源）。
 """
 
-from typing import Any
+from typing import Any, Dict
 
 from pydantic import Field
 
@@ -30,7 +30,7 @@ class MetaConfig(BaseConfig):
     """配置元数据"""
 
     version: str = Field(
-        default="2.0.9",
+        default="2.0.12",
         description="配置版本号（用于自动迁移检测，权威定义于 multi_file_loader.py）",
     )
 
@@ -198,6 +198,81 @@ class EventHistoryConfig(BaseConfig):
     )
 
 
+class TTSConfig(BaseConfig):
+    """TTS 基础设施配置。
+
+    TTS 是主播级基础设施——开启后每句回复都会自动 TTS 合成并播放。
+    与具体 TTS 引擎（edge_tts / gptsovits / voicebox / omni_tts）解耦：
+    调度开关（开/关、目标引擎、播放队列与超时）与每个引擎的连接/合成参数
+    全部位于本段；不再拆分至 tools.toml。
+
+    演进轨迹：
+    - v2.0.10：调度字段从 ``[tools.output.config]`` 上移至 core.toml ``[tts]``。
+    - v2.0.11：``render_timeout_ms`` 默认 10s → 60s（覆盖合成+播放全周期）。
+    - v2.0.12：四个引擎的连接/合成子段从 tools.toml ``[tools.output.config.<engine>]``
+      整体迁移到本段 ``[tts.<engine>]``；TTS 引擎作为基础模块（不再走工具池），
+      故其全部配置自包含于 core.toml。tools.toml 仅保留真正作为工具的输出能力
+      （subtitle / vts / obs / ...）。
+
+    引擎子段使用 free-form dict——各引擎的详细 ConfigSchema 嵌在引擎模块内部，
+    本段避免反向 import 引入循环依赖；具体键的校验/补全由 multi_file_loader
+    的 provider schema 补全机制按需加载引擎 ConfigSchema 后执行（迁移期允
+    许在子段缺失键时按 Provider ConfigSchema 默认值补齐）。
+
+    Attributes:
+        enabled: TTS 总开关；关闭后即便底层引擎构造完成也不会自动发声。
+        provider: 装配时据此选择唯一激活引擎（edge_tts/gptsovits/voicebox/omni_tts）。
+            装配期决定引擎实例，运行时不再有 Facade 路由层。
+        max_queue: 发声播放队列上限；队列满时丢最旧一条保证新鲜度。
+        render_timeout_ms: 单次发声（合成+播放）超时（毫秒）；0 表示不限制。
+        edge_tts: EdgeTTS 引擎参数（仅 provider=edge_tts 时生效）。
+        gptsovits: GPT-SoVITS 引擎参数（仅 provider=gptsovits 时生效）。
+        voicebox: Voicebox 引擎参数（仅 provider=voicebox 时生效；需填写 profile_id）。
+        omni_tts: OmniTTS 引擎参数（仅 provider=omni_tts 时生效）。
+    """
+
+    enabled: bool = Field(
+        default=True,
+        description="TTS 基础设施开关：开启后主播每句话都会 TTS",
+    )
+    provider: str = Field(
+        default="gptsovits",
+        description="装配时据此选择唯一激活引擎（edge_tts/gptsovits/voicebox/omni_tts）",
+        json_schema_extra={
+            "x-ui-type": "select",
+            "x-options": ["edge_tts", "gptsovits", "voicebox", "omni_tts"],
+        },
+    )
+    max_queue: int = Field(
+        default=3,
+        ge=1,
+        le=20,
+        description="发声播放队列上限，满时丢最旧",
+    )
+    render_timeout_ms: int = Field(
+        default=60000,
+        ge=0,
+        description="单次发声等待超时（合成+播放，毫秒）；0 表示不限制。"
+        "播放时长与语音等长，此值是防引擎卡死的兜底而非正常耗时上限",
+    )
+    edge_tts: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="EdgeTTS 引擎参数（仅 provider=edge_tts 时生效）",
+    )
+    gptsovits: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="GPT-SoVITS 引擎参数（仅 provider=gptsovits 时生效）",
+    )
+    voicebox: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Voicebox 引擎参数（仅 provider=voicebox 时生效；需填写 profile_id）",
+    )
+    omni_tts: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="OmniTTS 引擎参数（仅 provider=omni_tts 时生效）",
+    )
+
+
 class CoreConfig(BaseConfig):
     """核心系统配置根类
 
@@ -213,6 +288,16 @@ class CoreConfig(BaseConfig):
     - ``[simulator]``   — 模拟直播间
     - ``[logging]``     — 日志
     - ``[interceptors]`` — 事件拦截器配置（动态键；2.0.4 由 ``[pipelines]`` 正名）
+
+    v2.0.10 新增：
+    - ``[tts]``         — TTS 基础设施（开关/目标引擎/队列/超时）；由旧
+      ``tools.toml [tools.output.config]`` 的 ``render_timeout_ms`` 上移而来
+
+    v2.0.12 新增：
+    - ``[tts.<engine>]`` — 四个 TTS 引擎的连接/合成参数子段
+      （edge_tts / gptsovits / voicebox / omni_tts），由
+      ``tools.toml [tools.output.config.<engine>]`` 整体迁移而来；
+      TTS 彻底基础模块化后不再有工具子配置。
 
     v2.0.0 删除：
     - ``[maicore]``（旧 MaiCore WebSocket 连接，单进程下不再需要）
@@ -248,4 +333,8 @@ class CoreConfig(BaseConfig):
             },
         },
         description="事件拦截器配置（动态键，如 rate_limit / similar_filter；2.0.4 由 [pipelines] 正名）",
+    )
+    tts: TTSConfig = Field(
+        default_factory=TTSConfig,
+        description="TTS 基础设施配置（开关/目标引擎/队列/超时 + 引擎子段；2.0.10 调度字段上移，2.0.12 引擎连接参数从 tools.toml 整体迁入）",
     )

@@ -51,7 +51,7 @@ class TestGPTSoVITSClient:
         assert client._prompt_text == "测试文本"
 
     def test_set_refer_audio_empty_audio_path(self, client):
-        """测试设置空的音频路径"""
+        """测试设置空音频路径"""
         with pytest.raises(ValueError, match="audio_path 不能为空"):
             client.set_refer_audio("", "测试文本")
 
@@ -134,15 +134,18 @@ class TestGPTSoVITSClient:
         )
 
         assert params["text"] == "测试文本"
-        assert params["text_lang"] == "zh"
-        assert params["ref_audio_path"] == "/path/to/audio.wav"
+        assert params["text_language"] == "zh"
+        assert params["refer_wav_path"] == "/path/to/audio.wav"
         assert params["prompt_text"] == "测试文本"
-        assert params["prompt_lang"] == "zh"
+        assert params["prompt_language"] == "zh"
 
     def test_build_params_no_ref_audio(self, client):
-        """测试构建参数时没有参考音频"""
-        with pytest.raises(ValueError, match="未设置参考音频"):
-            client._build_params(text="测试文本")
+        """未设置参考音频：参数省略参考音频三键（服务端用默认）"""
+        params = client._build_params(text="测试文本")
+        assert "refer_wav_path" not in params
+        assert "prompt_text" not in params
+        assert "prompt_language" not in params
+        assert params["text"] == "测试文本"
 
     @patch("src.modules.tts.gptsovits_client.requests.get")
     def test_tts_success(self, mock_get, client):

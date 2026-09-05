@@ -25,6 +25,7 @@ v2.0.8 变更（C1 治理收口）：
 - agenda.py: v2 语义域 — Agenda 运行进度（agenda.update）
 - planner.py: v2 语义域 — 空转检查点（planner.checkpoint）
 - tool_result.py: v2 语义域 — 异步工具结果（tool.result.*，不绑定具体名）
+- utterance.py: v2 语义域 — TTS 一次发声实例生命周期（tts.utterance.*）
 
 使用示例:
     from src.modules.events.payloads import RoomMessagePayload
@@ -68,6 +69,11 @@ from .room import (
     SuperChatInfo,
 )
 from .tool_result import ToolResultPayload
+from .utterance import (
+    UtteranceFailedPayload,
+    UtteranceFinishedPayload,
+    UtteranceStartedPayload,
+)
 
 logger = get_logger("Payloads")
 
@@ -95,4 +101,8 @@ __all__ = [
     "CheckpointPayload",
     # v2 语义域 — tool.result.*
     "ToolResultPayload",
+    # v2 语义域 — tts.utterance.*
+    "UtteranceStartedPayload",
+    "UtteranceFinishedPayload",
+    "UtteranceFailedPayload",
 ]

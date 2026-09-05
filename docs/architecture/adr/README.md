@@ -32,3 +32,4 @@ ADR 记录已经作出的决定，不替代实现文档，也不用于记录迁�
 - [ADR-004：OutputHandlerManager 直接调度 Handler](004-output-direct-dispatch.md)（已废弃：三阶段架构移除）
 - [ADR-005：v2.0.0 采用 Agent + 工具 + 存储 + 编排架构](005-v2-agent-tool-architecture.md)
 - [ADR-006：LLM 模拟器是官方开发基础设施，mock 采集器仅承担确定性回放](006-simulator-is-dev-infrastructure.md)
+- [ADR-007：TTS 作为配置驱动基础设施（reply → utterance 事件 → 引擎）；§8 修正后 TTS 退役出工具池，为基础模块](007-tts-infrastructure-pipeline.md)

@@ -321,22 +321,12 @@ def test_bind_core_tools_rejects_non_registry() -> None:
 def test_bind_core_tools_with_no_config_returns_report_with_all_keys(
     registry: ToolRegistry,
 ) -> None:
-    """``config=None`` 不抛异常；9 个核心包都进报告，count 非负。"""
+    """``config=None`` 不抛异常；非 TTS 包按 enabled 白名单全记 0。"""
     report = bind_core_tools(registry, config=None)
     assert isinstance(report, dict)
-    # 所有 9 个核心包都在报告里
-    assert set(report.keys()) == {
-        "edge_tts",
-        "gptsovits",
-        "omni_tts",
-        "voicebox",
-        "vts",
-        "vrchat",
-        "warudo",
-        "obs",
-        "subtitle",
-    }
-    # count 非负（多数 provider ConfigSchema 有默认值，仍能构造）
+    # 非 TTS 包键均在报告里（空 enabled 列表 → 一律 0）
+    assert set(report.keys()) == {"vts", "vrchat", "warudo", "obs", "subtitle"}
+    # count 非负
     for _pkg, count in report.items():
         assert count >= 0, f"报告值不应为负：{count}"
 
@@ -362,16 +352,12 @@ def test_bind_core_tools_isolates_per_package_failure(
     registry: ToolRegistry,
 ) -> None:
     """单包失败不阻断其他包——验证 try/except 隔离。"""
-    # 只给 subtitle 一个看上去合法的最小配置（其它包空 config → 失败）
-    # 注意：subtitle 的 ConfigSchema 在 setup 时未必强制要 config 字段
-    # 这里核心诉求是：失败不应让整个 bind 抛异常
     report = bind_core_tools(
         registry,
-        config={"subtitle": {"type": "subtitle"}},  # 其它包失败
+        config={"subtitle": {"type": "subtitle"}},  # 其它非 TTS 包失败
     )
-    # 报告必须返回 9 个 key（每个核心包都被尝试过）
-    assert len(report) == 9
-    # 至少 1 个包（subtitle）成功路径或 0 不重要，关键是都不抛
+    # 报告 key 集合 = 非 TTS 包键（5 个）
+    assert set(report.keys()) == {"vts", "vrchat", "warudo", "obs", "subtitle"}
     for count in report.values():
         assert count >= 0
 

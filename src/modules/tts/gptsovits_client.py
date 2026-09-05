@@ -216,22 +216,23 @@ class GPTSoVITSClient:
         """
         # 使用传入的 ref_audio_path 和 prompt_text，否则使用持久化的值
         ref_audio_path = ref_audio_path or self._ref_audio_path
-        if not ref_audio_path:
-            raise ValueError("未设置参考音频，请先调用 set_refer_audio 设置参考音频和提示文本")
-
         prompt_text = prompt_text if prompt_text is not None else self._prompt_text
 
         # 语言检测
         if text_lang:
             text_lang = self._detect_language(text, text_lang)
 
-        return {
+        params: Dict[str, Any] = {
             "text": text,
             "text_language": text_lang,
-            "refer_wav_path": ref_audio_path,
-            "prompt_text": prompt_text,
-            "prompt_language": prompt_lang or "zh",
         }
+        # 参考音频三键仅在已设置时携带；省略时服务端使用其启动参数
+        # 配置的默认参考音频（GPT-SoVITS API 约定），不再本地强制拦截
+        if ref_audio_path:
+            params["refer_wav_path"] = ref_audio_path
+            params["prompt_text"] = prompt_text
+            params["prompt_language"] = prompt_lang or "zh"
+        return params
 
     def tts(
         self,
@@ -417,5 +418,5 @@ class GPTSoVITSClient:
                 self.logger.warning(f"GPT-SoVITS 服务器响应异常: {response.status_code}")
             return is_connected
         except Exception as e:
-            self.logger.error(f"检查 GPT-SoVITS 连接失败: {e}")
+            self.logger.error("检查 GPT-SoVITS 连接失败: : {}", e)
             return False

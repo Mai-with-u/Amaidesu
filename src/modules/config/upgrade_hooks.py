@@ -499,6 +499,55 @@ def _migrate_tools_2_0_9(data: dict[str, Any]) -> list[str]:
     return changed
 
 
+def _migrate_tools_2_0_10(data: dict[str, Any]) -> list[str]:
+    """tools.toml 2.0.10：剥离 TTS 基础设施重塑遗留的 9 个死字段。
+
+    TTS 基础设施从 [tools.output.config] 提到 core.toml [tts]，原属
+    ``OutputHandlersConfig`` 的 3 个调度字段与 4 个 Provider 的 ``output_device_name``
+    以及 OmniTTS 的 ``use_vts_lip_sync`` / ``use_subtitle`` 均已无人读取，统一切除。
+
+    ``render_timeout_ms`` 由 CrossFileMigration 移至 core.toml ``[tts]``，不在本钩子
+    处理范围内。
+
+    任一中间层缺失或类型错误均安全返回，保持其他字段完整。
+
+    原地修改、幂等（重复执行时死字段已不存在，无事发生），返回变更路径列表。
+    """
+    changed: list[str] = []
+
+    tools = data.get("tools")
+    if not isinstance(tools, dict):
+        return changed
+
+    output = tools.get("output")
+    if not isinstance(output, dict):
+        return changed
+
+    output_cfg = output.get("config")
+    if not isinstance(output_cfg, dict):
+        return changed
+
+    for dead_key in ("concurrent_rendering", "error_handling", "completion_timeout_ms"):
+        if dead_key in output_cfg:
+            del output_cfg[dead_key]
+            changed.append(f"tools.output.config.{dead_key}")
+
+    for provider_key in ("edge_tts", "gptsovits", "omni_tts", "voicebox"):
+        provider_cfg = output_cfg.get(provider_key)
+        if isinstance(provider_cfg, dict) and "output_device_name" in provider_cfg:
+            del provider_cfg["output_device_name"]
+            changed.append(f"tools.output.config.{provider_key}.output_device_name")
+
+    omni_cfg = output_cfg.get("omni_tts")
+    if isinstance(omni_cfg, dict):
+        for dead_key in ("use_vts_lip_sync", "use_subtitle"):
+            if dead_key in omni_cfg:
+                del omni_cfg[dead_key]
+                changed.append(f"tools.output.config.omni_tts.{dead_key}")
+
+    return changed
+
+
 # ---------------------------------------------------------------------------
 # 升级钩子注册表
 # ---------------------------------------------------------------------------
@@ -594,6 +643,12 @@ CONFIG_UPGRADE_HOOKS: tuple[ConfigUpgradeHook, ...] = (
         target_version="2.0.9",
         config_file="tools.toml",
         migrate=_migrate_tools_2_0_9,
+    ),
+    # TTS 基础设施重塑收尾：剥离 9 个 OutputHandlersConfig / Provider 死字段
+    ConfigUpgradeHook(
+        target_version="2.0.10",
+        config_file="tools.toml",
+        migrate=_migrate_tools_2_0_10,
     ),
 )
 

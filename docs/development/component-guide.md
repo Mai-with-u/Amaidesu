@@ -316,7 +316,7 @@ async def asyncio_sleep_ms(ms: int) -> None:
 | 注册到指定 registry | ✅ 传任意 `ToolRegistry` 实例 | ❌ 默认进 `default_tool_registry()` 单例；要隔离需 `registry=...` 参数 |
 | 多工具聚合 | ✅ 一个 Provider 可声明多个 `ToolSpec` | ❌ 一函数一工具 |
 | 测试隔离 | ✅ Fake 后端构造后注入 Provider，干净 | ⚠️ 默认污染全局 registry，需 `clear()` |
-| 现有生产工具 | ✅ `look_at_screen` / `choose_option` / `get_story` / `reply` / `should_speak_proactively` / `parse_command` / ContentEngine 控制面 | ❌ **生产零使用**；仅 `look_at_screen` 旧测试 / `src/modules/tools/output/tts/__init__.py` 等轻量声明 |
+| 现有生产工具 | ✅ `look_at_screen` / `choose_option` / `get_story` / `reply` / `should_speak_proactively` / `parse_command` / ContentEngine 控制面 | ❌ **生产零使用**；仅 `look_at_screen` 旧测试 等轻量声明 |
 | 推荐主路径 | ✅ **推荐** | ⚠️ 轻量声明 path（测试/未来用） |
 
 ### 最小骨架代码
@@ -806,12 +806,13 @@ class MyToolProvider(ToolProvider):
         ↓ LLM（llm profile，高质量模型）+ 人设 prompt + 敏感词净化
 11. ToolExecutionResult{success=True, content=json({speech, emotion, action, metadata})}
         ↓
-12. Agent 收到 result.success → 落账（统计 + 持久化 + 房间状态更新）
+12. Agent 解析 result.content → speech 生成 utterance_id 入 UtteranceQueue（fire-and-forget，不阻塞决策循环）；
+    emotion → 直调 vts_set_expression 工具（仍是 ToolRegistry 中的工具）；action 暂不消费
         ↓
-13. 下游渲染（**已知缺口**）：TTS 渲染需要**显式**注册并调用 edge_tts_synthesize 工具；
-    该渲染工具当前**不在** StreamerAgent 自动链路上——需要在装配处显式注册并由业务侧调用
+13. 队列 worker 串行 await speak(text, utterance_id)（speak 是构造期注入的适配器，绑定装配期由 build_tts_infrastructure 选中的 tts_engine.handle_speech）→ 引擎合成 + 播放
+    （TTS 引擎自身——基础模块，非工具——发布 tts.utterance.started/finished/failed 事件供字幕等消费者订阅；ToolRegistry 中零 TTS 条目）
         ↓
-14. edge_tts_synthesize → 音频 → 皮套 / 远端播放
+14. 音频经 AudioDeviceManager（src/modules/audio/）输出到扬声器
 ```
 
 **关键要点**：
@@ -825,11 +826,12 @@ class MyToolProvider(ToolProvider):
 | Planner 决策 | `src/agents/streamer/planner.py` | 调用 `llm_fast` profile；输出 `DecisionPlan` |
 | Reply 工具 | `src/agents/streamer/tools/reply_tool.py` | 调 Replyer 表达引擎 |
 | Replyer 表达 | `src/agents/streamer/replyer.py` | 调 `llm` profile + ProfanityFilter |
-| 渲染 TTS（**已知缺口**） | 需在装配处显式注册 `edge_tts_synthesize` 工具（路径 ① `ToolProvider` 类）；当前不在 StreamerAgent 自动链路 | 见下方"已知缺口" |
+| 发声队列 | `src/agents/streamer/utterance_queue.py` | FIFO 串行；满时丢最旧；单条 render_timeout_ms 看门狗；构造期注入 `speak` 适配器（绑定 `tts_engine.handle_speech`） |
+| TTS 播出 | `src/modules/tts/` 基础模块（4 引擎 Provider）+ `build_tts_infrastructure` 装配入口 | 引擎（`handle_speech`）发 `tts.utterance.*` 事件；详见 ADR-007 |
 
 ### 已知缺口
 
-- **TTS 渲染工具需显式注册**：`edge_tts_synthesize` 工具当前未自动接入 StreamerAgent 成功后的数据流。要让文本 → 音频，需在 `main.py` 或专用 wiring 模块显式 `register_provider(EdgeTTSProvider(...))` 到 `ToolRegistry`，并由业务侧（外部脚本 / Dashboard / 另一个 Agent）显式 `tool_registry.invoke(invocation)` 调用。
+- **TTS 已基础模块化（原缺口已闭环 + v2.0.12 §8 修正）**：`core.toml [tts].enabled = true` 后，`build_tts_infrastructure` 装配期按 `[tts].provider` 单选构造引擎实例，StreamerAgent 构造期接收并把 `engine.handle_speech` 注入 UtteranceQueue；reply 产出的 speech 经 UtteranceQueue → 引擎 `handle_speech` 播出（不走 ToolRegistry，零 TTS 工具条目）。设计决策见 [ADR-007](../architecture/adr/007-tts-infrastructure-pipeline.md)。
 - **工具注册路径唯一**：`AgentManager` 不再聚合工具注册（旧 `register_all_tools` / `collect_tool_specs` / `_make_agent_tool_bridge` 已删除）——真实注册只走两条：① Agent 子类 `_register_tools()` 中自己 `registry.register_provider(provider)`；② 公用 builtin 包在 `main.py` 由 `bind_core_tools(registry, slice)` 显式调 `register_*_tools(registry, config)`（或 `bind_pending_tools(registry)` flush L1 `@tool` pending）。装配结束后 `AgentManager.audit_tools(registry)` 返回未实现声明列表并 warning，不写任何工具实现。
 
 ---
@@ -857,4 +859,4 @@ class MyToolProvider(ToolProvider):
 
 ---
 
-*最后更新：2026-09-04（streamer 包子包化重组：工具范例路径表 L519-520、Agent 范例表 L774、端到端消息流表 L826 的 `reply_tool`/`proactive_tool`/`command_tool` 路径更新为 `src/agents/streamer/tools/*_tool.py`）*
+*最后更新：2026-09-05（v2.0.12 §8 概念修正：TTS 退役出工具池。端到端消息流时序步骤 12-14：worker 改 `await speak(text, utterance_id)`（注入的 speak 适配器，绑定 `tts_engine.handle_speech`）；步骤 12 标注 VTS 仍是 ToolRegistry 中的工具；步骤 13 标注 TTS 引擎自身——基础模块、非工具——发布 utterance 事件 + ToolRegistry 中零 TTS 条目。关键要点表发声队列行补"构造期注入 speak 适配器"；TTS 播出行改写为"`src/modules/tts/` 基础模块 + `build_tts_infrastructure` 装配入口"。已知缺口"TTS 渲染工具需显式注册" → "TTS 已基础模块化（原缺口已闭环 + v2.0.12 §8 修正）"+ 装配期注入直连说明。装饰器两条路径对比表"现有生产工具"行删除 `src/modules/tools/output/tts/__init__.py` 陈旧引用）*

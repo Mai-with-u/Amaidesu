@@ -171,11 +171,17 @@ class TestDriftWriteBack:
         assert (batch_dirs[0] / "core.toml").exists()
 
     def test_clean_config_not_rewritten(self, config_dir: Path):
-        content_before = (config_dir / "core.toml").read_text(encoding="utf-8-sig")
+        """稳定配置不被反复重写。
+
+        首次 load 允许 Provider 子段补全重写（引擎子段缺键时自动补全）；
+        文件稳定后，再次 load 不应产生任何写回（防无限重写/抖动）。
+        """
+        load_config_dir(config_dir)
+        content_after_first = (config_dir / "core.toml").read_text(encoding="utf-8-sig")
 
         load_config_dir(config_dir)
 
-        assert (config_dir / "core.toml").read_text(encoding="utf-8-sig") == content_before
+        assert (config_dir / "core.toml").read_text(encoding="utf-8-sig") == content_after_first
 
 
 class TestCoreUpgradeHook2_0_0:
@@ -259,7 +265,7 @@ class TestCrossFileMigrationSafety:
         )
         backup_dir = config_dir / "old"
         backups_before = (
-            len(list(backup_dir.rglob("*.toml"))) if backup_dir.exists() else 0
+            len([p for p in backup_dir.rglob("*.toml") if "input.toml" in p.name]) if backup_dir.exists() else 0
         )
 
         load_config_dir(config_dir)
@@ -270,7 +276,7 @@ class TestCrossFileMigrationSafety:
         assert "global_rate_limit = 100" in original
 
         backups_after = (
-            len(list(backup_dir.rglob("*.toml"))) if backup_dir.exists() else 0
+            len([p for p in backup_dir.rglob("*.toml") if "input.toml" in p.name]) if backup_dir.exists() else 0
         )
         assert backups_after == backups_before, "不应产生 input.toml 备份"
 

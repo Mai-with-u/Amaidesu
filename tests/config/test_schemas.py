@@ -22,7 +22,11 @@ class TestCoreConfig:
 
     def test_persona_behavior_style_default_matches_config_version(self):
         """v2.0.6: CONFIG_VERSION 与 behavior_style 字段必须同时存在（防漂移）。"""
-        assert CONFIG_VERSION >= "2.0.6", "CONFIG_VERSION 必须不低于本次升级（2.0.6）"
+        from src.modules.config.upgrade_hooks import _parse_version
+
+        assert _parse_version(CONFIG_VERSION) >= _parse_version("2.0.6"), (
+            "CONFIG_VERSION 必须不低于本次升级（2.0.6）"
+        )
         c = CoreConfig()
         # 显式断言 behavior_style 默认值已落盘（防止上游"升了版本但没加字段"的回退）。
         assert c.persona.behavior_style.startswith("积极与观众互动"), (

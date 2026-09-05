@@ -20,11 +20,12 @@
 from __future__ import annotations
 
 import importlib
+import re
 import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal, Union, cast, get_args, get_origin
+from typing import Any, Callable, Literal, Optional, Union, cast, get_args, get_origin
 
 import tomlkit
 from tomlkit.items import AoT
@@ -64,7 +65,7 @@ _PHASE_TO_REGISTRY: dict[tuple[str, str], str] = {
 
 # 配置版本号。权威定义：本文件的 ``CONFIG_VERSION`` 与 ``MetaConfig.version``
 # 默认值必须同步修改（改一必改二）。详见 AGENTS.md "配置 Schema 变更规则"。
-CONFIG_VERSION = "2.0.9"
+CONFIG_VERSION = "2.0.12"
 
 # 配置文件清单（按域划分）：core / model / agents / tools / memory / storage / background
 _CONFIG_FILES = [
@@ -93,6 +94,10 @@ class CrossFileMigration:
     target_key: str
     target_schema: type[BaseConfig] | None = None
     """目标段字段的 Schema 类；提供时迁移值会先清洗（剥离已删除的旧字段）再合并"""
+    source_nested_path: tuple[str, ...] | None = None
+    """单值移动模式的源下钻路径；从 source_key 段继续下钻取单值；同时需提供 target_nested_path"""
+    target_nested_path: tuple[str, ...] | None = None
+    """单值移动模式的目标下钻路径；与 source_nested_path 一一对应"""
 
 
 # 已完成的跨文件迁移注册表（按时间顺序追加）
@@ -125,6 +130,51 @@ CROSS_FILE_MIGRATIONS: tuple[CrossFileMigration, ...] = (
         source_key="deciders",
         target_file="agents.toml",
         target_key="agents",
+    ),
+    # TTS 基础设施重塑：tools.toml [tools.output.config].render_timeout_ms
+    # 上移至 core.toml [tts].render_timeout_ms（保留用户原值）
+    CrossFileMigration(
+        source_file="tools.toml",
+        source_key="tools",
+        target_file="core.toml",
+        target_key="tts",
+        source_nested_path=("output", "config", "render_timeout_ms"),
+        target_nested_path=("render_timeout_ms",),
+    ),
+    # TTS 彻底基础模块化：tools.toml 中四个引擎连接/合成子段整体迁入
+    # core.toml [tts.<engine>]，用户原值完整搬运；源子段从 tools.toml 删除
+    # 但 tools.toml 文件本身保留（TTS 之外的工具仍在其中）。
+    CrossFileMigration(
+        source_file="tools.toml",
+        source_key="tools",
+        target_file="core.toml",
+        target_key="tts",
+        source_nested_path=("output", "config", "edge_tts"),
+        target_nested_path=("edge_tts",),
+    ),
+    CrossFileMigration(
+        source_file="tools.toml",
+        source_key="tools",
+        target_file="core.toml",
+        target_key="tts",
+        source_nested_path=("output", "config", "gptsovits"),
+        target_nested_path=("gptsovits",),
+    ),
+    CrossFileMigration(
+        source_file="tools.toml",
+        source_key="tools",
+        target_file="core.toml",
+        target_key="tts",
+        source_nested_path=("output", "config", "voicebox"),
+        target_nested_path=("voicebox",),
+    ),
+    CrossFileMigration(
+        source_file="tools.toml",
+        source_key="tools",
+        target_file="core.toml",
+        target_key="tts",
+        source_nested_path=("output", "config", "omni_tts"),
+        target_nested_path=("omni_tts",),
     ),
 )
 
@@ -568,7 +618,12 @@ def _generate_phase_toml(phase: str) -> str:
 
 
 def _table_from_model(instance: BaseModel) -> Any:
-    """把 BaseModel 实例序列化为 tomlkit Table（值 + description 注释，None 跳过）。"""
+    """把 BaseModel 实例序列化为 tomlkit Table（值 + description 注释，None 跳过）。
+
+    dict 值（free-form 子段）不加容器级 description 注释——注释插在父表流
+    会与子表表头错位，且破坏按表头定位键值的文本消费者；子段内字段的
+    注释由字段级 description 在具体 Schema 序列化路径中提供。
+    """
     table = tomlkit.table()
     for sub_name, sub_info in type(instance).model_fields.items():
         value = getattr(instance, sub_name)
@@ -580,6 +635,8 @@ def _table_from_model(instance: BaseModel) -> Any:
             inner = tomlkit.aot()
             for item in value:
                 inner.append(_table_from_model(item))
+        elif isinstance(value, dict):
+            inner = _dict_to_toml_table(value)
         else:
             inner = value
         if sub_info.description:
@@ -599,8 +656,18 @@ def _dict_to_toml_table(data: dict[str, Any]) -> Any:
     return table
 
 
-def _serialize_instance_to_toml(schema_cls: type[BaseModel], instance: BaseModel) -> str:
-    """把配置实例序列化为多文件格式 TOML（顶层字段即顶层表/键值）。"""
+def _serialize_instance_to_toml(
+    schema_cls: type[BaseModel],
+    instance: BaseModel,
+    *,
+    compact: bool = False,
+) -> str:
+    """把配置实例序列化为多文件格式 TOML（顶层字段即顶层表/键值）。
+
+    Args:
+        compact: 紧凑模式——字段之间不插入空行（供子段补全生成使用，
+            使补全段与用户手写风格一致）；整文件写回保持默认的宽松排版。
+    """
     doc = tomlkit.document()
     for field_name, field_info in schema_cls.model_fields.items():
         value = getattr(instance, field_name)
@@ -613,18 +680,140 @@ def _serialize_instance_to_toml(schema_cls: type[BaseModel], instance: BaseModel
             for item in value:
                 table.append(_table_from_model(item))
         elif isinstance(value, dict):
+            # dict 子段（free-form）不加容器级注释：文本稳定性优先；
+            # 字段级注释由各 Provider Schema 的字段 description 在补全/写回路径提供
             table = _dict_to_toml_table(value)
         else:
             if field_info.description:
                 doc.add(tomlkit.comment(field_info.description))
             doc[field_name] = value
-            doc.add(tomlkit.nl())
+            if not compact:
+                doc.add(tomlkit.nl())
             continue
-        if field_info.description:
+        if field_info.description and not isinstance(value, dict):
             doc.add(tomlkit.comment(field_info.description))
         doc[field_name] = table
-        doc.add(tomlkit.nl())
+        if not compact:
+            doc.add(tomlkit.nl())
     return tomlkit.dumps(doc)
+
+
+# 子段名 → ConfigSchema 延迟加载器，按配置宿主分两组：
+# - TTS 引擎是基础模块，配置宿主为 core.toml [tts]
+# - 其余渲染工具仍是 Agent 工具，配置宿主为 tools.toml [tools.output.config]
+# Schema 嵌在 Provider 类内部且 Provider 模块 import 较重（audio/网络依赖），
+# 因此仅在补全流程实际运行时才加载；加载失败（依赖缺失）时跳过该子段。
+_TTS_ENGINE_SCHEMA_LOADERS: dict[str, Callable[[], Optional[type[BaseModel]]]] = {
+    "edge_tts": lambda: _try_import_provider_schema("src.modules.tts.edge_tts_tool", "EdgeTTSProvider"),
+    "gptsovits": lambda: _try_import_provider_schema("src.modules.tts.gptsovits_tool", "GPTSoVITSProvider"),
+    "omni_tts": lambda: _try_import_provider_schema("src.modules.tts.omni_tts_tool", "OmniTTSProvider"),
+    "voicebox": lambda: _try_import_provider_schema("src.modules.tts.voicebox_tool", "VoiceboxProvider"),
+}
+
+_TOOL_PROVIDER_SCHEMA_LOADERS: dict[str, Callable[[], Optional[type[BaseModel]]]] = {
+    "subtitle": lambda: _try_import_provider_schema(
+        "src.modules.tools.output.subtitle.subtitle_service", "SubtitleGuiService"
+    ),
+    "vts": lambda: _try_import_provider_schema("src.modules.tools.output.vts.vts_provider", "VTSProvider"),
+    "vrchat": lambda: _try_import_provider_schema("src.modules.tools.output.vts.vrchat_provider", "VRChatProvider"),
+    "warudo": lambda: _try_import_provider_schema("src.modules.tools.output.warudo.warudo_provider", "WarudoProvider"),
+    "obs": lambda: _try_import_provider_schema("src.modules.tools.output.obs.obs_provider", "OBSProvider"),
+}
+
+
+def _try_import_provider_schema(module_path: str, provider_name: str) -> Optional[type[BaseModel]]:
+    """延迟加载 Provider 模块并返回其 ConfigSchema；失败返回 None。"""
+    try:
+        import importlib
+
+        module = importlib.import_module(module_path)
+        cls = getattr(module, provider_name, None)
+        if cls is None:
+            return None
+        return getattr(cls, "ConfigSchema", None)
+    except Exception:
+        return None
+
+
+def _complete_provider_config_sections(
+    config_dir: Path,
+    section_container: dict[str, Any],
+    table_prefix: str,
+    schema_loaders: dict[str, Callable[[], Optional[type[BaseModel]]]],
+    file_name: str,
+    batch_id: str | None = None,
+) -> list[str]:
+    """Provider 子配置补全：``[<table_prefix>.<name>]`` 缺失键由 Provider
+    ConfigSchema 默认值补齐，并以 Schema 注释格式重写该子段（用户已填值保留）。
+
+    Provider 子段是 free-form dict，不参与宿主文件根 Schema 校验；Provider 新增
+    配置字段时用户文件无法感知。本函数在宿主文件加载后运行，把"模板滞后"
+    的字段补进用户文件，使配置文件始终自描述（字段 + 注释说明）。
+
+    Args:
+        config_dir: 配置目录（备份与读写宿主文件）。
+        section_container: 宿主文件中承载各子段的容器 dict（如 core.toml 的
+            ``[tts]`` 段或 tools.toml 的 ``[tools.output.config]`` 段内存表示），
+            补全结果同步回写。
+        table_prefix: 子段表头前缀（``"tts"`` 或 ``"tools.output.config"``）。
+        schema_loaders: 子段名 → ConfigSchema 延迟加载器。
+        file_name: 宿主文件名（``"core.toml"`` / ``"tools.toml"``）。
+        batch_id: 备份批次号。
+
+    Returns:
+        被补全的子段名列表（如 ``["gptsovits"]``）。
+    """
+    file_path = config_dir / file_name
+    if not file_path.exists():
+        return []
+
+    try:
+        text = file_path.read_text(encoding="utf-8-sig")
+    except OSError:
+        return []
+
+    completed: list[str] = []
+    for key, schema_loader in schema_loaders.items():
+        user_data = section_container.get(key)
+        if not isinstance(user_data, dict):
+            continue
+        schema_cls = schema_loader()
+        if schema_cls is None:
+            continue
+        defaults = schema_cls().model_dump()
+        missing_keys = [k for k in defaults if k not in user_data]
+        if not missing_keys:
+            continue
+
+        merged = {**defaults, **user_data}
+        instance = schema_cls(**merged)
+        body = _serialize_instance_to_toml(schema_cls, instance, compact=True)
+        new_section = f"[{table_prefix}.{key}]\n{body}"
+
+        # 文本级整段替换：从子段表头到下一个表头（或文件尾）
+        pattern = re.compile(rf"(?ms)^\[{re.escape(table_prefix)}\.{re.escape(key)}\][ \t]*\r?\n.*?(?=^\[|\Z)")
+        if not pattern.search(text):
+            # 用户文件中该子段整段缺失：追加到容器表头之后
+            header_pattern = re.compile(rf"(?m)^(\[{re.escape(table_prefix)}\][ \t]*\r?\n)")
+            if header_pattern.search(text):
+                text = header_pattern.sub(lambda m, s=new_section: m.group(1) + s + "\n", text, count=1)
+            else:
+                text = text.rstrip("\n") + "\n\n" + new_section
+        else:
+            text = pattern.sub(lambda _m, s=new_section: s, text)
+
+        # 同步内存中的容器，保持文件与本次加载结果一致
+        section_container[key] = merged
+        completed.append(key)
+        logger.info(f"{file_name} 子段 '{key}' 补全 {len(missing_keys)} 个缺失配置项（含注释说明）")
+
+    if completed:
+        try:
+            _backup_file(file_path, config_dir, batch_id=batch_id)
+            file_path.write_text(text, encoding="utf-8")
+        except OSError as e:
+            logger.warning(f"{file_name} 子段补全写回失败（内存中已补齐）: {e}")
+    return completed
 
 
 def _write_back_schema_file(
@@ -796,7 +985,7 @@ def _apply_cross_file_migrations(
     config_dir: Path,
     target_file_data: dict[str, dict[str, Any]],
     target_files: list[str],
-) -> list[Path]:
+) -> tuple[list[Path], set[str]]:
     """执行已注册的跨文件迁移。
 
     Args:
@@ -805,9 +994,13 @@ def _apply_cross_file_migrations(
         target_files: 参与迁移的目标文件列表（按文件名）
 
     Returns:
-        需要备份后移除的源文件路径列表
+        ``(to_remove, modified_targets)``：
+        - ``to_remove``：需要备份后移除的源文件路径列表（旧阶段文件整体淘汰）
+        - ``modified_targets``：被本次迁移修改过的目标文件名集合，用于触发目标
+          文件的写回闭环（迁移虽未漂移字段，但内存字典已被改动，落盘才能持久化）
     """
     to_remove: list[Path] = []
+    modified_targets: set[str] = set()
     for migration in CROSS_FILE_MIGRATIONS:
         source_path = config_dir / migration.source_file
         if not source_path.exists():
@@ -819,6 +1012,23 @@ def _apply_cross_file_migrations(
         target_raw = target_file_data.get(migration.target_file, {})
         with open(source_path, "r", encoding="utf-8-sig") as f:
             source_doc = tomlkit.load(f).unwrap()
+
+        # 单值深嵌套移动模式（见 CrossFileMigration 文档）
+        if migration.source_nested_path is not None and migration.target_nested_path is not None:
+            source_path_keys = (migration.source_key, *migration.source_nested_path)
+            target_path_keys = (migration.target_key, *migration.target_nested_path)
+            source_value = _drill_get(source_doc, source_path_keys)
+            if source_value is None:
+                continue
+            _drill_set(target_raw, target_path_keys, source_value)
+            _drill_del(source_doc, source_path_keys)
+            _write_toml_preserve_bom(source_path, tomlkit.dumps(source_doc))
+            modified_targets.add(migration.target_file)
+            logger.info(
+                f"跨文件迁移(单值): [{migration.source_file}]."
+                f"{'.'.join(source_path_keys)} → [{migration.target_file}].{'.'.join(target_path_keys)}"
+            )
+            continue
 
         section = source_doc.get(migration.source_key)
         if not isinstance(section, dict):
@@ -861,12 +1071,62 @@ def _apply_cross_file_migrations(
         if not migrated:
             continue
 
+        modified_targets.add(migration.target_file)
         logger.info(
             f"跨文件迁移: [{migration.source_file}].{migration.source_key} "
             f"→ [{migration.target_file}].{migration.target_key}"
         )
         to_remove.append(source_path)
-    return to_remove
+    return to_remove, modified_targets
+
+
+def _drill_get(data: dict[str, Any], path: tuple[str, ...]) -> Any:
+    """沿 path 逐层下钻 dict 取值；任一层缺失或非 dict 返回 None。"""
+    current: Any = data
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        if key not in current:
+            return None
+        current = current[key]
+    return current
+
+
+def _drill_set(data: dict[str, Any], path: tuple[str, ...], value: Any) -> None:
+    """沿 path 逐层下钻设置值；中间缺失的 dict 自动创建（原地修改）。"""
+    current = data
+    for key in path[:-1]:
+        next_val = current.get(key)
+        if not isinstance(next_val, dict):
+            next_val = {}
+            current[key] = next_val
+        current = next_val
+    current[path[-1]] = value
+
+
+def _drill_del(data: dict[str, Any], path: tuple[str, ...]) -> None:
+    """沿 path 逐层下钻删除末键；路径不完整时静默 no-op（原地修改）。"""
+    current = data
+    for key in path[:-1]:
+        if not isinstance(current, dict):
+            return
+        if key not in current:
+            return
+        current = current[key]
+    if isinstance(current, dict):
+        current.pop(path[-1], None)
+
+
+def _write_toml_preserve_bom(file_path: Path, content: str) -> None:
+    """写回 TOML 文件，保留原有 BOM（utf-8-sig 格式）。"""
+    has_bom = False
+    try:
+        with open(file_path, "rb") as f:
+            has_bom = f.read(3) == b"\xef\xbb\xbf"
+    except OSError:
+        pass
+    encoding = "utf-8-sig" if has_bom else "utf-8"
+    file_path.write_text(content, encoding=encoding)
 
 
 def _log_drift_writeback(
@@ -931,8 +1191,10 @@ def load_config_dir(
                 logger.warning(f"core.toml 配置升级钩子已应用: {hook_result.reasons}")
             core_data = hook_result.data
         # 跨文件迁移（如旧 simulator.toml → core 的 [simulator]）
-        migrated_files = _apply_cross_file_migrations(config_dir, {"core.toml": core_data}, ["core.toml"])
-        if version_changed or core_report.has_drift or migrated_files:
+        migrated_files, modified_targets = _apply_cross_file_migrations(
+            config_dir, {"core.toml": core_data}, ["core.toml"]
+        )
+        if version_changed or core_report.has_drift or migrated_files or modified_targets:
             batch_id = batch_id or datetime.now().strftime("%Y%m%d_%H%M%S")
             backup = _write_back_schema_file(
                 config_dir, "core.toml", CoreConfig, core_data, force_meta_version=CONFIG_VERSION, batch_id=batch_id
@@ -944,6 +1206,25 @@ def load_config_dir(
                 _backup_file(migrated_file, config_dir, batch_id=batch_id)
                 migrated_file.unlink()
             core_data, core_report = _load_and_validate_schema(core_path, CoreConfig)
+            _filter_optional_container_missing(core_report, CoreConfig)
+
+        # TTS 引擎是基础模块，其参数子段（[tts.<engine>]）为 free-form dict，
+        # 不参与 CoreConfig 校验；按引擎 ConfigSchema 补齐缺失键并以注释写回，
+        # 使引擎参数在配置文件中自描述（否则新增字段用户无从得知）。
+        tts_section = core_data.get("tts", {}) if isinstance(core_data, dict) else {}
+        if isinstance(tts_section, dict):
+            tts_completed = _complete_provider_config_sections(
+                config_dir,
+                tts_section,
+                table_prefix="tts",
+                schema_loaders=_TTS_ENGINE_SCHEMA_LOADERS,
+                file_name="core.toml",
+                batch_id=batch_id,
+            )
+            if tts_completed:
+                # 补全改变了文件，重新加载以取到与磁盘一致的最新内容
+                core_data, core_report = _load_and_validate_schema(core_path, CoreConfig)
+
         result["core"] = core_data
         combined.redundant.extend(f"core.{r}" for r in core_report.redundant)
         combined.missing.extend(f"core.{m}" for m in core_report.missing)
@@ -986,14 +1267,16 @@ def load_config_dir(
                 raw_agents = tomlkit.load(f).unwrap()
             loaded_data["agents.toml"] = raw_agents
             _apply_file_upgrade_hooks(config_dir, "agents.toml", AgentsRootConfig, raw_agents, current_ver)
-            migrated_files = _apply_cross_file_migrations(config_dir, loaded_data, list(loaded_data.keys()))
-            if migrated_files:
+            migrated_files, modified_targets = _apply_cross_file_migrations(
+                config_dir, loaded_data, list(loaded_data.keys())
+            )
+            if migrated_files or modified_targets:
                 # 写回含迁移数据的 agents.toml
                 agents_path.write_text(tomlkit.dumps(raw_agents), encoding="utf-8")
 
             agents_data, agents_report = _load_and_validate_schema(agents_path, AgentsRootConfig)
             _filter_optional_container_missing(agents_report, AgentsRootConfig)
-            if agents_report.has_drift or migrated_files:
+            if agents_report.has_drift or migrated_files or modified_targets:
                 batch_id = batch_id or datetime.now().strftime("%Y%m%d_%H%M%S")
                 backup = _write_back_schema_file(
                     config_dir, "agents.toml", AgentsRootConfig, agents_data, batch_id=batch_id
@@ -1024,13 +1307,15 @@ def load_config_dir(
             loaded_data["tools.toml"] = raw_tools
             _apply_file_upgrade_hooks(config_dir, "tools.toml", ToolsRootConfig, raw_tools, current_ver)
             # 跨文件迁移（如旧 input.toml/output.toml 的 [collectors]/[handlers] → tools.toml）
-            migrated_files = _apply_cross_file_migrations(config_dir, loaded_data, list(loaded_data.keys()))
-            if migrated_files:
+            migrated_files, modified_targets = _apply_cross_file_migrations(
+                config_dir, loaded_data, list(loaded_data.keys())
+            )
+            if migrated_files or modified_targets:
                 tools_path.write_text(tomlkit.dumps(raw_tools), encoding="utf-8")
 
             tools_data, tools_report = _load_and_validate_schema(tools_path, ToolsRootConfig)
             _filter_optional_container_missing(tools_report, ToolsRootConfig)
-            if tools_report.has_drift or migrated_files:
+            if tools_report.has_drift or migrated_files or modified_targets:
                 batch_id = batch_id or datetime.now().strftime("%Y%m%d_%H%M%S")
                 backup = _write_back_schema_file(
                     config_dir, "tools.toml", ToolsRootConfig, tools_data, batch_id=batch_id
@@ -1044,6 +1329,27 @@ def load_config_dir(
                         migrated_file.unlink()
                 tools_data, tools_report = _load_and_validate_schema(tools_path, ToolsRootConfig)
                 _filter_optional_container_missing(tools_report, ToolsRootConfig)
+
+            # Provider 子配置补全：引擎/皮套等子段为 free-form dict，不参与
+            # ToolsRootConfig 校验；此处按各 Provider ConfigSchema 补齐缺失键
+            # 并以注释格式写回，使配置文件自描述（否则新增字段用户无从得知）。
+            tools_root = tools_data.get("tools", {}) if isinstance(tools_data, dict) else {}
+            output_pack = tools_root.get("output", {}) if isinstance(tools_root, dict) else {}
+            output_cfg = output_pack.get("config", {}) if isinstance(output_pack, dict) else {}
+            if isinstance(output_cfg, dict):
+                completed = _complete_provider_config_sections(
+                    config_dir,
+                    output_cfg,
+                    table_prefix="tools.output.config",
+                    schema_loaders=_TOOL_PROVIDER_SCHEMA_LOADERS,
+                    file_name="tools.toml",
+                    batch_id=batch_id,
+                )
+                if completed:
+                    # 补全改变了文件，重新加载以取到与磁盘一致的最新内容
+                    tools_data, tools_report = _load_and_validate_schema(tools_path, ToolsRootConfig)
+                    _filter_optional_container_missing(tools_report, ToolsRootConfig)
+
             result["tools"] = tools_data
             combined.redundant.extend(f"tools.{r}" for r in tools_report.redundant)
             combined.missing.extend(f"tools.{m}" for m in tools_report.missing)

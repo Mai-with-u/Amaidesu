@@ -49,17 +49,21 @@ flowchart TB
         EB["room.message.danmaku / gift / super_chat / enter<br/>planner.checkpoint<br/>tool.result.name"]
     end
 
-    subgraph StreamerAgent["StreamerAgent src/agents/streamer/"]
+subgraph StreamerAgent["StreamerAgent src/agents/streamer/"]
         MB["MessageBuffer 弹幕聚合缓冲"]
         Planner["Planner 决策循环<br/>planner_llm = llm_fast<br/>不传 tools"]
         Reply["Replyer 表达引擎<br/>replyer_llm = llm<br/>人设 + ProfanityFilter"]
         Agenda["Agenda 子系统<br/>节目单 + idle 补偿"]
+        UQ["UtteranceQueue<br/>FIFO 串行播放队列<br/>丢最旧 / 单 worker<br/>注入 speak 适配器"]
     end
 
     subgraph Tools["工具族 src/modules/tools/"]
         RT["reply 工具<br/>ReplyToolProvider"]
-        TTS["edge_tts_synthesize 等渲染工具"]
-        Other["perception / content_engine / memory / agent_control"]
+        Other["perception / content_engine / memory / agent_control<br/>+ VTS / 字幕 / OBS 等渲染工具"]
+    end
+
+    subgraph InFra["基础模块 src/modules/tts/"]
+        TTSEng["TTS 引擎实例（装配期注入）<br/>EdgeTTSProvider / GPTSoVITSProvider<br/>VoiceboxProvider / OmniTTSProvider"]
     end
 
     subgraph Storage["存储 SQLite 11 表"]
@@ -72,17 +76,18 @@ flowchart TB
     Bus -->|on 精确订阅 priority=50| MB
     MB --> Planner
     Planner -->|置信度门槛<br/>直接 await invoke| RT
-    RT --> Reply
     Reply -->|speech / emotion / action| RT
     Reply -->|落库| DB
     Planner -.->|空转触发| Bus
     Planner -->|tools.invoke| Other
-    RT -.->|invoke 后再渲染| TTS
-    TTS -.->|tool.result.synthesize 等回传| Bus
+    RT -.->|解析 result.content<br/>speech 入队| UQ
+    UQ -->|fire-and-forget<br/>后台 worker 串行 await speak| TTSEng
+    TTSEng -.->|started / finished / failed| Bus
     Bus -.->|on tool.result.| Planner
+    RT -.->|emotion 直接 invoke| Other
 ```
 
-> 图例说明：实线箭头是当前主链路；虚线箭头是辅助通道（空转检查点、工具异步结果回传、渲染工具后置调用）。皮套口型同步链路已拆除（见文末"通信机制选型"末段）。
+> 图例说明：实线箭头是当前主链路；虚线箭头是辅助通道（空转检查点、工具异步结果回传、TTS 生命周期事件广播、emotion 直调）。reply 的 speech 字段经 UtteranceQueue 串行送入装配期注入的 `tts_engine` 实例（`build_tts_infrastructure` 按 `core.toml [tts].provider` 单选构造后直接注入 StreamerAgent），由其 `handle_speech(text, utterance_id)` 完成合成 + 播放——不再经 ToolRegistry；emotion 字段由 StreamerAgent 解析后**直接 invoke** `vts_set_expression` 工具，不经事件；TTS 引擎自身（基础模块）播放生命周期发布 `tts.utterance.*` 三事件。皮套口型同步链路已拆除（见文末"通信机制选型"末段）。
 
 ---
 
@@ -191,20 +196,23 @@ v2 不再有"插件系统"。所有新功能通过 Agent 包内聚实现，框�
          └─ 解析 {speech, emotion, action} 三元组
          └─ ProfanityFilter 敏感词净化（替换/丢弃/放行三策略）
 
-6. 结果落库 + 后续信号
-   └─ ToolExecutionResult.success=True，content 为 JSON 字符串
+6. 结果落库 + 发言管线分发
+   └─ ToolExecutionResult.success=True，content 为 JSON 字符串（`{speech, emotion, action, metadata}`）
    └─ 存储层写入 messages 表（danmaku → message；reply → 同表关联 user=bot）
    └─ 空转探测器（BackgroundMaintainer）定期触发 planner.checkpoint 检查是否漏回
-   └─ 回复文本就绪 → 如需 TTS 渲染，需另行 await edge_tts_synthesize 工具
-      └─ 工具完成后异步 emit("tool.result.edge_tts_synthesize", ToolExecutionResult)
-      └─ Planner/Observer 按需订阅 tool.result.# 通配或具体名
+   └─ **StreamerAgent 消费 `result.content` 触发发言管线（v2.0.12 §8 修正后）**（`streamer_agent.py` _dispatch_speech_and_emotion）：
+      ├─ speech 非空 → 生成 `utt_{epoch_ms}_{seq}` → UtteranceQueue.enqueue（fire-and-forget）→ 后台 worker 串行 `await speak(text, utterance_id)`（`speak` 是构造期注入的适配器，绑定 `tts_engine.handle_speech`）
+      │  └─ `tts_engine` 是装配期由 `build_tts_infrastructure(core [tts], event_bus)` 按 `[tts].provider` 选中的唯一引擎实例（edge_tts / gptsovits / voicebox / omni_tts），构造期直接注入 StreamerAgent
+      │     └─ 引擎播放时按 `tts.utterance.*` 三事件发布生命周期（started / finished / failed）；事件是终点广播，消费者不得触发新决策
+      └─ emotion 非空 → **直接 invoke** `vts_set_expression`（不经事件，不入 UtteranceQueue；VTS 仍是 ToolRegistry 中的工具，TTS 不再是）
+      └─ action 字段：当前范围明确不接入（独立议题，解析但不消费）
 ```
 
 链路关键性质：
 
 - **每一步都是单向流动**。控制台输入 → EventBus → StreamerAgent → 工具调用 → 返回值，全程无环。Planner→Replyer 是同 Agent 内 await，不经事件中转（v2 删除 `decision.intent.generated` 的原因）。
-- **拦截器层是全局单点**。RateLimit/SimilarFilter 作用于 `room.message.*`，所有订阅者共享净化后的结果。`core.*` / `live.*` / `planner.checkpoint` 等不经过拦截器。
-- **TTS 渲染不绑死在 reply 工具内**。`reply` 工具只生成文本表达；如需合成语音，须在 Planner 决策后另行调用渲染工具（`edge_tts_synthesize` 等）。当前组合根的 `register_*_tools` 未自动调用，详见 [架构总览 - 已知缺口](overview.md#已知缺口)。
+- **拦截器层是全局单点**。RateLimit/SimilarFilter 作用于 `room.message.*`，所有订阅者共享净化后的结果。`core.*` / `live.*` / `planner.checkpoint` / `tts.utterance.*` 等不经过拦截器。
+- **TTS 是基础模块而非工具**（v2.0.12 §8 修正）。每句 reply 落库即发声——`reply.result.content` 的 `speech` 字段由 StreamerAgent 主动入 UtteranceQueue，不依赖 LLM 决策调用 TTS 工具（事实上 TTS 已退役出 ToolRegistry）；装配期 `build_tts_infrastructure(core [tts], event_bus)` 按 `[tts].provider` 单选构造引擎实例并直接注入 StreamerAgent，运行时由 UtteranceQueue 通过注入的 `speak` 适配器调 `engine.handle_speech`——零 Facade 路由层、零 ToolRegistry 条目。`core.toml [tts]` 自包含（行为参数 + 四引擎子段），`tools.toml` 无任何 TTS 段，详见 ADR-007。
 - **planner.checkpoint 是空转检查点**。由 `BackgroundMaintainer` 后台任务定期触发，不在主链路每轮都发，仅用于"主播长时间未发言"的提醒与 Agenda 推进。
 
 ---
@@ -215,12 +223,27 @@ v2 中不同数据走不同通道，不要混用：
 
 | 通道 | 用途 | 数据特征 | 典型事件/调用 |
 |------|------|---------|--------------|
-| **EventBus** | 元数据事件（房间消息、状态变更、工具结果、规划检查点） | 小型 JSON/Pydantic 对象 | `room.message.danmaku` / `tool.result.synthesize` / `planner.checkpoint` |
-| **ToolRegistry.invoke** | 同步/异步工具调用 | 调用方持有 `ToolExecutionResult` | `await registry.invoke("reply", args)` / `await registry.invoke("edge_tts_synthesize", args)` |
+| **EventBus** | 元数据事件（房间消息、状态变更、工具结果、规划检查点、TTS 生命周期） | 小型 JSON/Pydantic 对象 | `room.message.danmaku` / `tool.result.synthesize` / `planner.checkpoint` / `tts.utterance.started` |
+| **ToolRegistry.invoke** | 同步/异步工具调用 | 调用方持有 `ToolExecutionResult` | `await registry.invoke("reply", args)` / `await registry.invoke("vts_set_expression", args)` |
+| **基础模块直调** | TTS 引擎由装配期注入，运行时绕过 ToolRegistry | 调用方持有引擎实例 | `await tts_engine.handle_speech(text, utterance_id)`（StreamerAgent 内部 speak 适配器；TTS 已不在工具池） |
 
 **已拆除的 AudioStreamChannel（v2.0.6）**：TTS 音频块流的 pub-sub（`publish(AudioChunk)` + `subscribe(name, callbacks)` + 背压策略）已删除。原因：v2 是 pull-style 工具编排——音频数据走 ToolRegistry 调用的返回值（`ToolExecutionResult`），不再走扇出通道。皮套口型同步短期由皮套软件自取本地音频流（系统声音 / WASAPI loopback），中期由"工具 invoke 驱动 VTS 写入"的能力重建，均不依赖 push 通道。
 
 **EventBus 与 ToolRegistry 的边界**：事件总线是"发生了什么事"的广播；ToolRegistry 是"我要做什么事"的直接调用。同一工具调用既可以同步等结果，也可以 fire-and-forget 后让工具异步 emit `tool.result.<name>` 由订阅者回收——这两种语义在 v2 都允许，工具实现侧在 `invoke()` 内自行决定。
+
+**TTS 消费者的通道三分法（v2.0.10）**：不同消费方与语音的时间耦合度不同，通道选择按耦合度匹配：
+
+| 耦合度 | 通道 | 典型消费方 | 数据形态 |
+|--------|------|-----------|---------|
+| **帧级**（需要逐块 PCM 同步） | **工具 invoke 参数**（流式）—— 暂留白，详见 ADR-007 §后果 | （未来）皮套口型精准同步 | 原始音频块 |
+| **起止对齐**（与播放区间对齐） | **订阅 `tts.utterance.started` / `finished`** | （预留）字幕写入器、播放耗时记账器 | `UtteranceStartedPayload` / `UtteranceFinishedPayload` |
+| **无耦合**（独立于播放时机） | **直接 invoke 工具**（不经 TTS 队列、不经事件） | emotion → `vts_set_expression`、action → （暂未接线） | 工具自身契约 |
+
+设计要点：
+
+- **帧级通道未建**：口型同步当前由皮套软件自取本地音频流（系统声音 / WASAPI loopback）兜底，invoke 参数流式接口留白待真需求；预建立会引入 YAGNI 风险。
+- **事件通道是终点广播**：消费者不得基于 `tts.utterance.*` 触发新一轮决策（"TTS→决策→TTS"会成环）；可做的记账 / 释放锁 / 字幕对齐不构成新决策。
+- **直接 invoke 由 Agent 包内完成**：StreamerAgent 解析 `reply.result.content` 后，speech 走 UtteranceQueue → 注入的 `tts_engine.handle_speech`（装配期直连，零 ToolRegistry）；emotion 走直接 `vts_set_expression`（仍在 ToolRegistry 中）；action 当前范围明确不接入决策（独立议题）。
 
 ---
 
@@ -239,7 +262,9 @@ v2 中不同数据走不同通道，不要混用：
 
 ---
 
-*最后更新：2026-08-28（v2.0.8 Sticker 事件链全链删除——`output.sticker.command` / Sticker→VTS 单向信号链路随 C1 治理收口：StickerHelper 零实例化零调用、消费端 VTSProvider 仅空转订阅；§1 事件流向图 EventBus 子图枚举事件清单移除 `output.sticker.command`）*
+*最后更新：2026-09-05（v2.0.12 §8 概念修正：TTS 退役出工具池。§1 事件流向图 Tools 子图移除 TTS Facade + 引擎组节点并迁至新增 `InFra 基础模块 src/modules/tts/` 子图（含 TTS 引擎实例节点）；图例说明改写——speech 经 UtteranceQueue 串行送入装配期注入的 `tts_engine.handle_speech`，VTS 仍是工具、TTS 不再是。§5 链路示例"回复文本就绪"段：worker 串行 `await speak(text, utterance_id)`（注入的 speak 适配器，绑定 `tts_engine.handle_speech`）；§5 链路关键性质"TTS 是基础设施而非工具"段改写为"TTS 是基础模块而非工具（v2.0.12 §8 修正）"+ 装配期注入直连说明 + 配置 `core [tts]` 自包含。§6 通信机制选型表：`ToolRegistry.invoke` 行示例改为 `vts_set_expression`（VTS 仍是工具，TTS 不再列入此行）；新增"基础模块直调"行说明 `tts_engine.handle_speech`。§6 TTS 消费者通道三分法"设计要点"直调段：UtteranceQueue + TTS Facade → UtteranceQueue → 注入的 `tts_engine.handle_speech`）*
+
+*上次更新：2026-08-28（v2.0.8 Sticker 事件链全链删除——`output.sticker.command` / Sticker→VTS 单向信号链路随 C1 治理收口：StickerHelper 零实例化零调用、消费端 VTSProvider 仅空转订阅；§1 事件流向图 EventBus 子图枚举事件清单移除 `output.sticker.command`）*
 
 *上次更新：2026-08-28（ADR-006 落地：§1 事件流向图 Ext 子图新增 SimulatorService 节点（条件装配，仅开发期；与 MockCollector JSONL 回放互补不互斥）；二者均发布 `room.message.*` payload 且 `simulated=True` 溯源，统计查询 `WHERE simulated = 0` 排除）*
 

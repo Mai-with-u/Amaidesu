@@ -55,6 +55,17 @@ class CoreEvents:
     AGENDA_UPDATE = "agenda.update"
     PLANNER_CHECKPOINT = "planner.checkpoint"
 
+    # ========== v2 语义域事件（tts 一次发声实例生命周期） ==========
+    # 由 TTS 工具自身发布（已持有 event_bus 的 create_xxx_provider 既有签名）。
+    # 三个事件描述"同一次发声实例"在不同时间点的状态，ut utterance_id 串联为全链路关联键。
+    # started 触发于"开始出声"时刻：流式引擎=首块 PCM 写声卡，全量引擎=play_audio 调用。
+    # finished 触发于播放完成时刻（百毫秒级精度，硬件声卡缓冲残余不在信号内）。
+    # failed 触发于合成或播放失败时刻。
+    # 这三个事件是终点广播：消费者不得触发新决策（防环约束）。
+    TTS_UTTERANCE_STARTED = "tts.utterance.started"
+    TTS_UTTERANCE_FINISHED = "tts.utterance.finished"
+    TTS_UTTERANCE_FAILED = "tts.utterance.failed"
+
     # ========== v2 语义域事件（tool 异步工具结果通配订阅模式） ==========
     # **这是通配订阅模式专用**，不是被 emit 的具体事件名。emit 时使用具体名
     # 如 "tool.result.speak"/"tool.result.summarize_timeline"。

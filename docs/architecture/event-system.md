@@ -87,10 +87,10 @@ src/modules/events/
 ├── event_history.py      # 事件历史查询服务
 ├── event_recorder.py     # 事件记录器（监控组件，订阅语义域事件落库）
 ├── registry.py           # @register_event 装饰器 + EVENT_REGISTRY
-├── names.py              # CoreEvents 常量（14 + 通配占位符）
+├── names.py              # CoreEvents 常量（17 + 通配占位符；v2.0.10 新增 TTS_UTTERANCE_STARTED/FINISHED/FAILED 三个）
 ├── event_type_map.py     # 事件名 → 组件类型映射（组件事件专用）
 └── payloads/
-    ├── __init__.py       # Payload 统一导出（8 个域模块）
+    ├── __init__.py       # Payload 统一导出（9 个域模块）
     ├── base.py           # BasePayload 基类
     ├── core.py           # core.* Payload（3 个事件分别注册）
     ├── connection.py     # connection.event Payload（通用组件事件）
@@ -99,7 +99,8 @@ src/modules/events/
     ├── game.py           # game.* Payload（一类三注册）
     ├── agenda.py         # agenda.update Payload
     ├── planner.py        # planner.checkpoint Payload
-    └── tool_result.py    # tool.result.* Payload（不绑定具体名）
+    ├── tool_result.py    # tool.result.* Payload（不绑定具体名）
+    └── utterance.py     # tts.utterance.* Payload（三类三注册：started / finished / failed）
 ```
 
 ---
@@ -274,7 +275,7 @@ EventBus 支持 **MQTT 风格**通配订阅（仅订阅名包含 `*` 或 `#` 时
 
 ## 事件事实表
 
-> **单一事实源**：本表是 Amaidesu 当前全部 14 个事件常量 + 1 个通配占位符的权威定义。任何新增/删除/重命名事件，**必须先修改本表再写代码**。
+> **单一事实源**：本表是 Amaidesu 当前全部 17 个事件常量 + 1 个通配占位符的权威定义。任何新增/删除/重命名事件，**必须先修改本表再写代码**。
 
 事件命名遵循 v2 语义域规范（详见 [事件命名规范](event-naming-convention.md)）：`<域>.<子类>.<动作>`，**域 = 领域**（live/room/game/agenda/planner/tool/core），**不是阶段**。
 
@@ -299,6 +300,9 @@ EventBus 支持 **MQTT 风格**通配订阅（仅订阅名包含 `*` 或 `#` 时
 | `planner.checkpoint` | `CheckpointPayload` | 空转探测器（后台轻循环，§1.7） | `EventRecorder`（L67，`model_class=None` 兜底）；`Broadcaster`（L96 / L112-115 `_subscribe_core_events`）；`Widget`（`widget/service.py` L88-92） | 空转检查点提醒（纯提醒零决策，携带当前 AgendaItem 定位） |
 | `tool.result.<tool_name>` | `ToolResultPayload` | 异步工具执行层（fire-and-forget 完成后） | 订阅者通常用 `tool.result.#` 通配，handler 按 `payload.tool_name` 分发 | **异步工具结果回传**（事件名不固定，emit 时用具体 `tool.result.<tool_name>`，如 `tool.result.speak` / `tool.result.summarize_timeline`） |
 | `tool.result.#`（**通配占位符**，**不预注册**到 `EVENT_REGISTRY`） | 无（仅订阅标识） | 无（仅订阅标识） | 无（仅订阅标识） | **仅供订阅者使用的通配 pattern**：订阅 `event_bus.on("tool.result.#", ...)` 一站式监听所有工具结果。`CoreEvents.TOOL_RESULT_WILDCARD = "tool.result.#"`（`names.py` L62）保留作订阅标识常量，**不在 names.py 的 `get_all_events()` 反射收集范围内**（按 `value.islower() and "." in value` 筛选时该字符串通过，但 `_validate_event_data` 找不到具体注册类型时仅 debug 警告，不阻断 emit） |
+| `tts.utterance.started` | `UtteranceStartedPayload` | TTS 引擎（基础模块，非工具；`src/modules/tts/` 下 4 个 Provider 之一，按 `core.toml [tts].provider` 装配期单选构造后注入 StreamerAgent）——仅在 `handle_speech` 收到非空 `utterance_id` 参数时发布；流式引擎=首块 PCM 写声卡，全量引擎=`play_audio` 调用 | 字幕写入器、编排层记账器等状态联动消费者（**当前生产代码暂无订阅——字幕订阅接线属后续工作，本表如实标记预留**） | 一次发声开始。Payload 含 `utterance_id`（全链路关联键，编排层生成 `utt_{epoch_ms}_{seq}`）、`speech_text`、`engine`（`edge`/`gptsovits`/`omni`/`voicebox`）、`duration_ms`（Optional[int]：全量引擎=合成后精确值；流式引擎合成未完=None）、`timestamp_ms`。 |
+| `tts.utterance.finished` | `UtteranceFinishedPayload` | TTS 引擎（基础模块）在播放完成时刻（百毫秒级精度，不含声卡硬件缓冲残余） | 编排层（句末再决策 / 释放锁）、存储（落 reply 耗时）、后台记账器（**预留**） | 一次发声播放完成。`duration_ms` 由 PCM 样本数÷采样率精确计算；事件名常量 `CoreEvents.TTS_UTTERANCE_FINISHED`。 |
+| `tts.utterance.failed` | `UtteranceFailedPayload` | TTS 引擎（基础模块）在合成或播放失败时（合成错误、WebSocket 断开、音频设备异常等任何阶段） | 编排层（错误兜底 / 重试决策）、存储（落失败记录）（**预留**） | 一次发声失败。Payload 含 `error_message`（异常 message / 错误码 / 阶段标记）。事件名常量 `CoreEvents.TTS_UTTERANCE_FAILED`。 |
 
 ### 类 → 多事件共享
 
@@ -341,6 +345,9 @@ classDiagram
     BasePayload <|-- AgendaPayload
     BasePayload <|-- CheckpointPayload
     BasePayload <|-- ToolResultPayload
+    BasePayload <|-- UtteranceStartedPayload
+    BasePayload <|-- UtteranceFinishedPayload
+    BasePayload <|-- UtteranceFailedPayload
     BaseModel <|-- RoomMessageUser
     BaseModel <|-- GiftInfo
     BaseModel <|-- SuperChatInfo
@@ -348,7 +355,7 @@ classDiagram
     BaseModel <|-- CheckpointAgendaPosition
 ```
 
-> 当前实际存在的 11 个 Payload 类（含 `BasePayload`）+ 5 个嵌套子结构（`RoomMessageUser` / `GiftInfo` / `SuperChatInfo` / `AgendaItem` / `CheckpointAgendaPosition`），全部定义在 `src/modules/events/payloads/` 下按域分包。
+> 当前实际存在的 14 个 Payload 类（含 `BasePayload`）+ 5 个嵌套子结构（`RoomMessageUser` / `GiftInfo` / `SuperChatInfo` / `AgendaItem` / `CheckpointAgendaPosition`），全部定义在 `src/modules/events/payloads/` 下按域分包。
 
 ### 按域分类
 
@@ -400,6 +407,24 @@ classDiagram
 | Payload 类 | 事件名 | 用途 |
 |-----------|--------|------|
 | `ToolResultPayload`（**不绑定**具体事件名） | `tool.result.<tool_name>`（emit 时动态填） | 异步工具结果回传；订阅者用 `tool.result.#` 通配监听后按 `tool_name` 字段分发 |
+
+#### TTS Utterance 域（v2.0.10 新增）
+
+| Payload 类 | 事件名 | 用途 |
+|-----------|--------|------|
+| `UtteranceStartedPayload` | `tts.utterance.started` | 一次发声开始。Payload 含 `utterance_id`（编排层生成 `utt_{epoch_ms}_{seq}`，全链路关联键）、`speech_text`、`engine`、`duration_ms`（Optional：全量引擎=合成后精确值；流式引擎合成未完=None）、`timestamp_ms`。 |
+| `UtteranceFinishedPayload` | `tts.utterance.finished` | 一次发声播放完成。`duration_ms` 由 PCM 样本数÷采样率精确计算（百毫秒级精度，不含声卡硬件缓冲残余）。 |
+| `UtteranceFailedPayload` | `tts.utterance.failed` | 一次发声失败（合成错误 / WebSocket 断开 / 音频设备异常）。Payload 含 `error_message`。 |
+
+**契约要点**：
+
+- **发布者**：仅 TTS 引擎自身（基础模块，非工具；`src/modules/tts/` 下 4 个 Provider：`EdgeTTSProvider` / `GPTSoVITSProvider` / `VoiceboxProvider` / `OmniTTSProvider`，由 `build_tts_infrastructure(core [tts], event_bus)` 按 `core.toml [tts].provider` 单选构造后注入 StreamerAgent），且**只在 `handle_speech` 收到非空 `utterance_id` 参数时**发布——调用方（StreamerAgent 通过 UtteranceQueue）未携带该参数则不发事件，纯基础设施语义。
+- **started 时机**：流式引擎 = 首块 PCM 写声卡；全量引擎 = `play_audio` 调用。
+- **finished 精度**：百毫秒级（不达 DAC 采样点精度）；声卡硬件缓冲残余**不在**信号内，因此 finished 事件是引擎回调信号而非播放端物理信号。
+- **订阅者**：当前生产代码**暂无订阅者**——字幕订阅接线属后续工作（事实：现有字幕 Provider 由 `StreamerAgent._dispatch_speech_and_emotion` 通过 speech 文本直接 fire-and-forget，不订阅 utterance 事件）；编排层记账、释放锁等消费者同样预留。Consumer taxonomy 与通道选择依据见 [数据流规则 §6](data-flow.md)。
+- **防环约束**：`tts.utterance.*` 是**终点广播**，消费者不得基于这些事件触发新一轮决策（会形成 "TTS→决策→TTS" 无限循环）。
+- **发布-only**：TTS 引擎自身只发事件、不订阅任何事件（`utterance_queue.py` 注释明文约束）。
+- **Payload 形状差异**：三个事件 Payload 形状不同（started 含 `speech_text` + `duration_ms` 可选；finished 强调播放时长；failed 强调错误信息）——分开定义比统一形状加判别字段更不易误填。
 
 ### BasePayload 特性
 
@@ -473,10 +498,11 @@ def register_core_events() -> None:
         core as _core_payloads, game as _game_payloads,
         live as _live_payloads, planner as _planner_payloads,
         room as _room_payloads, tool_result as _tool_result_payloads,
+        utterance as _utterance_payloads,
     )
 ```
 
-> v2 增量为 8 个 Payload 模块（`agenda` / `connection` / `core` / `game` / `live` / `planner` / `room` / `tool_result`），均在 `register_core_events()` 一并触发 import。`tool_result` 模块即使无具体 `@register_event` 装饰器调用也一并 import 以触发模块级代码（保留供后续扩展）。
+> v2 增量为 9 个 Payload 模块（`agenda` / `connection` / `core` / `game` / `live` / `planner` / `room` / `tool_result` / `utterance`），均在 `register_core_events()` 一并触发 import。`tool_result` 模块即使无具体 `@register_event` 装饰器调用也一并 import 以触发模块级代码（保留供后续扩展）；`utterance` 模块承担 v2.0.10 新增的 `tts.utterance.*` 三事件 Payload。
 
 ---
 
@@ -834,6 +860,6 @@ class MyPayload(BasePayload):
 
 ---
 
-*最后更新：2026-09-04（streamer 包子包化重组：旧名处置说明中 `src/agents/streamer/__init__.py` 迁移注释行号 L30 → L34，因模块清单注释随子包化重写）*
+*最后更新：2026-09-05（v2.0.12 §8 概念修正：TTS 退役出工具池。事件事实表 `tts.utterance.*` 三事件发布者由"TTS 引擎工具自身"改为"TTS 引擎（基础模块，非工具）"+ 装配期单选构造注入 StreamerAgent 说明；TTS Utterance 域小节发布者条款改写："发布者"由"TTS 引擎工具自身 + `invoke` 收到非空 `utterance_id`"改为"TTS 引擎自身（基础模块，非工具）+ `handle_speech` 收到非空 `utterance_id`"；订阅者段 [数据流规则] 章节锚点 §5 → §6（消费者通道三分法已迁至 §6）；Payload 形状差异、终点广播防环约束、发布-only 三条不变）*
 
 *上次更新：2026-08-25（v2.0.0 语义域事件对齐：移除三阶段事件表，新增 15 常量 + 通配占位符事实表，新增 MQTT 通配订阅章节，重写 Payload/订阅者/拦截器作用域）*
