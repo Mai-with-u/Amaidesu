@@ -113,7 +113,7 @@ class TestLoading:
         # v2.0.11：发声等待超时语义修正——覆盖合成+播放全周期，默认 10s → 60s。
         # v2.0.12：TTS 彻底基础模块化——tools.toml 四个引擎连接/合成子段
         # （edge_tts/gptsovits/voicebox/omni_tts）整体迁入 core.toml [tts.<engine>]。
-        assert version == "2.0.12"
+        assert version == "2.0.13"
 
     def test_drift_fixed_on_load(self, temp_config_dir):
         generate_default_configs(temp_config_dir)

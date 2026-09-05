@@ -1,24 +1,19 @@
-"""渲染工具模块（Wave 4 顶层入口）
+"""渲染工具模块顶层入口
 
-迁移自 ``src.stages/output/handlers/`` 的所有渲染实现，按组件族拆分到子包：
+按组件族拆分到子包：
 
 | 子包 | 内容 |
 |---|---|
 | ``vts/``     | VTS 全家桶 + VRChat（VTSHandler, LipSyncProcessor, ExpressionController, HotkeyMatcher, IdleMotionController, VRChatProvider） |
 | ``warudo/``  | Warudo 全家桶（WarudoProvider + 5 state 类 + 5 后台任务 + SubtitleManager + Sender） |
-| ``subtitle/`` | Subtitle GUI 服务 + push_subtitle 工具（拆分） |
+| ``subtitle/`` | Subtitle GUI 服务导出（``SubtitleGuiService``）——工具形态已退役，字幕基础设施由 ``src/modules/subtitle/`` 自治装配 |
 | ``obs/``     | OBS Provider（3 个工具：send_text / switch_scene / set_source_visibility） |
 | ``remote_stream/`` | 消息协议 + 分发器（无 websocket 脚手架） |
 | ``debug/``   | dump_intent 调试函数（替换 DebugConsoleHandler） |
 
-注：TTS 引擎已提升为基础设施，迁移至 ``src/modules/tts/`` 基础模块包（与
-``src/modules/audio/`` 平级）。TTS 不再是 Agent 调用的工具，而是配置驱动的
-语音基础设施组件。
-
-迁移策略（与 .omo/drafts/amaidesu-v2-migration.md A 段对齐）:
-- 引擎内部 verbatim（callback 解耦零改动）
-- 去 base 继承（AvatarHandlerBase / AudioHandlerBase 消失）
-- ToolProvider 协议统一入口
+注：TTS 与字幕均已提升为基础设施。TTS 由 ``src/modules/tts/`` 自治装配；
+字幕由 ``src/modules/subtitle/build_subtitle_infrastructure`` 自治装配。两者
+均不通过 ``ToolRegistry`` 注册为可调用工具，而是配置驱动的语音/字幕组件。
 """
 
 from src.modules.tools.output.debug import DebugConfig, dump_intent
@@ -33,12 +28,6 @@ from src.modules.tools.output.remote_stream import (
     MessageType,
     RemoteStreamTypes,
     StreamMessage,
-)
-from src.modules.tools.output.subtitle import (
-    SubtitleGuiService,
-    SubtitleProvider,
-    create_subtitle_provider,
-    register_subtitle_tools,
 )
 from src.modules.tools.output.vts import (
     ExpressionController,
@@ -90,11 +79,6 @@ __all__ = [
     "ActionSender",
     "create_warudo_provider",
     "register_warudo_tools",
-    # Subtitle
-    "SubtitleProvider",
-    "SubtitleGuiService",
-    "create_subtitle_provider",
-    "register_subtitle_tools",
     # OBS
     "OBSProvider",
     "create_obs_provider",

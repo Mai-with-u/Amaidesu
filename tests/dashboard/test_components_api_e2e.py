@@ -58,10 +58,7 @@ enabled = true
 provider = "builtin"
 
 [tools.output.config]
-enabled = ["subtitle"]
-
-[tools.output.config.subtitle]
-font_size = 28
+enabled = ["vts"]
 
 [tools.output.config.vts]
 vts_host = "localhost"
@@ -129,9 +126,8 @@ def test_list_components_returns_all_groups_with_disabled(client: TestClient) ->
     assert agents["game"]["is_enabled"] is False
 
     tools = {c["name"]: c for c in data["tools"]}
-    assert set(tools) == {"subtitle", "vts"}
-    assert tools["subtitle"]["is_enabled"] is True
-    assert tools["vts"]["is_enabled"] is False
+    assert set(tools) == {"vts"}
+    assert tools["vts"]["is_enabled"] is True
 
 
 def test_control_start_dynamically_starts_collector(client: TestClient, config_dir: Path) -> None:

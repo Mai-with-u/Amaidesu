@@ -1,15 +1,11 @@
 """
-弹幕小部件服务（Wave 6 重写）
+弹幕小部件服务。
 
-订阅 ``room.message.danmaku``（v2 语义域）事件并广播给前端；
-字幕订阅 v2 Agent 的 ``reply`` 工具结果事件。
-
-Wave 6 变更：
-- INPUT_MESSAGE_RECEIVED → ROOM_MESSAGE_DANMAKU（语义域事件）
-- DECISION_INTENT_GENERATED → planner.checkpoint / 自定义 reply 结果事件（无 Intent 后）
-- MessageReadyPayload → RoomMessagePayload
-- IntentPayload → 已 DISCARD；字幕源改为 StreamerAgent 调用 reply 工具时
-  通过自定义事件（如 ``tool.result.reply``）广播。
+订阅 ``room.message.danmaku``（语义域事件）并广播给前端 WebSocket
+客户端；字幕显示由字幕基础设施 ``SubtitleService`` 通过
+``DashboardBackend`` 驱动——本服务暴露 ``show_subtitle`` /
+``clear_subtitle`` 公开方法供 Backend 调用，自身不再订阅
+``planner.checkpoint`` 等业务事件做字幕拉取（语义错位的历史路径）。
 """
 
 from collections import deque
@@ -25,7 +21,6 @@ from src.modules.dashboard.widget.models import (
 )
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import RoomMessagePayload
-from src.modules.events.payloads.planner import CheckpointPayload
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
@@ -84,13 +79,6 @@ class DanmakuWidgetService:
             model_class=RoomMessagePayload,
         )
 
-        # 字幕订阅 v2 planner.checkpoint 事件（Agent emit 的空转检查点携带最近回复）
-        self.event_bus.on(
-            CoreEvents.PLANNER_CHECKPOINT,
-            self._on_planner_checkpoint,
-            model_class=CheckpointPayload,
-        )
-
         self._is_running = True
         self.logger.info(f"DanmakuWidgetService 已启动 (max_messages={self.config.max_messages})")
 
@@ -99,7 +87,6 @@ class DanmakuWidgetService:
             return
 
         self.event_bus.off(CoreEvents.ROOM_MESSAGE_DANMAKU, self._on_input_message)
-        self.event_bus.off(CoreEvents.PLANNER_CHECKPOINT, self._on_planner_checkpoint)
 
         self._is_running = False
         self.logger.info("DanmakuWidgetService 已停止")
@@ -131,40 +118,27 @@ class DanmakuWidgetService:
         except Exception as e:
             self.logger.error(f"处理输入消息失败: {e}", exc_info=True)
 
-    async def _on_planner_checkpoint(
-        self,
-        event_name: str,
-        payload,
-        source: str,
-    ) -> None:
-        """订阅 planner.checkpoint 事件携带最近回复（字幕源）。
+    async def show_subtitle(self, text: str, duration_ms: Optional[int] = None) -> None:
+        """显示一条字幕（字幕基础设施 Backend 的调用入口）。
 
-        v2 架构无 IntentPayload 与 DECISION_INTENT_GENERATED；
-        Agent 通过 planner.checkpoint（§1.7 空转探测器）事件对外暴露最近一次
-        决策结果（含 speech），小部件订阅此事件做字幕广播。
+        构造 ``SubtitleWidgetMessage`` 并追加到字幕队列，然后通过
+        ``_subtitle_callback`` / ``_broadcast_callback`` 推送给前端
+        WebSocket 客户端（``/ws/subtitle``）。由 ``DashboardBackend.show``
+        在 ``SubtitleService.show`` 广播路径上调用。
+
+        Args:
+            text: 字幕文本内容。
+            duration_ms: 自动隐藏时长（毫秒）；``None`` 时回退到
+                ``subtitle_config.auto_hide_after_ms``。合法范围由
+                ``SubtitleWidgetMessage`` Pydantic Schema 校验。
         """
-        try:
-            agenda_item = getattr(payload, "agenda_item", None) or {}
-            speech = agenda_item.get("speech", "") if isinstance(agenda_item, dict) else ""
-            if not speech:
-                # 退化：直接从 payload 取
-                speech = getattr(payload, "speech", "") or ""
-            if not speech:
-                return
-            if not self.config.show_subtitle:
-                return
-            await self._broadcast_subtitle(speech)
-            self.logger.debug(f"广播字幕: {speech[:30]}...")
-        except Exception as e:
-            self.logger.error(f"处理 planner checkpoint 失败: {e}", exc_info=True)
-
-    async def _broadcast_subtitle(self, text: str) -> None:
         if not self.subtitle_config.enabled:
             return
 
+        effective_duration_ms = duration_ms if duration_ms is not None else self.subtitle_config.auto_hide_after_ms
         subtitle_msg = SubtitleWidgetMessage(
             text=text,
-            duration_ms=self.subtitle_config.auto_hide_after_ms,
+            duration_ms=effective_duration_ms,
         )
         self.subtitle_messages.append(subtitle_msg)
 
@@ -190,6 +164,43 @@ class DanmakuWidgetService:
                 await self._broadcast_callback(data)
             except Exception as e:
                 self.logger.error(f"广播字幕失败: {e}", exc_info=True)
+
+    async def clear_subtitle(self) -> None:
+        """清空当前字幕显示（字幕基础设施 Backend 的调用入口）。
+
+        清空本地字幕队列并广播一条空文本消息（前端按 ``text == ""``
+        识别为清空信号，``duration_ms == 0`` 抑制自动隐藏计时）。由
+        ``DashboardBackend.clear`` 在 ``SubtitleService.clear`` 广播
+        路径上调用。
+        """
+        if not self.subtitle_config.enabled:
+            self.subtitle_messages.clear()
+            return
+
+        self.subtitle_messages.clear()
+
+        data = {
+            "type": "subtitle",
+            "text": "",
+            "duration_ms": 0,
+            "font_size": self.subtitle_config.font_size,
+            "font_color": self.subtitle_config.font_color,
+            "background_color": self.subtitle_config.background_color,
+            "border_color": self.subtitle_config.border_color,
+            "position": self.subtitle_config.position,
+        }
+
+        if self._subtitle_callback:
+            try:
+                await self._subtitle_callback(data)
+            except Exception as e:
+                self.logger.error(f"广播清空字幕到subtitle端失败: {e}", exc_info=True)
+
+        if self._broadcast_callback:
+            try:
+                await self._broadcast_callback(data)
+            except Exception as e:
+                self.logger.error(f"广播清空字幕失败: {e}", exc_info=True)
 
     def _convert_payload_to_widget(
         self,

@@ -351,3 +351,24 @@ class TestMCPConfig:
 
         doc = tomlkit.parse((config_dir / "core.toml").read_text(encoding="utf-8-sig")).unwrap()
         assert "mcp" not in doc
+
+
+class TestSubtitleMigration:
+    """字幕基础设施化跨文件迁移：tools.toml [tools.output.config.subtitle] → core.toml [subtitle].tk_gui。"""
+
+    def test_subtitle_config_migrated_into_core(self, config_dir: Path):
+        """旧 [tools.output.config.subtitle] 整体迁入 [subtitle].tk_gui，用户值保留。"""
+        _remove_section(config_dir, "core", "subtitle")
+        _remove_section(config_dir, "tools", "tools")
+        (config_dir / "tools.toml").write_text(
+            "[tools.output.config.subtitle]\nwindow_width = 1000\nfont_size = 30\n",
+            encoding="utf-8-sig",
+        )
+
+        config, _ = load_config_dir(config_dir)
+
+        assert config["core"]["subtitle"]["enabled"] is True
+        assert config["core"]["subtitle"]["tk_gui"]["window_width"] == 1000
+        assert config["core"]["subtitle"]["tk_gui"]["font_size"] == 30
+        tools_content = (config_dir / "tools.toml").read_text(encoding="utf-8-sig")
+        assert "subtitle" not in tools_content

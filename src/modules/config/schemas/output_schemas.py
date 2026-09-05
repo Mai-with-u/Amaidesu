@@ -128,7 +128,7 @@ VoiceBoxConfigSchema: Optional[type] = _try_load_handler_schema(
 )
 RemoteStreamConfigSchema: Optional[type] = None  # 协议层无 ConfigSchema（保留消息类型）
 SubtitleConfigSchema: Optional[type] = _try_load_handler_schema(
-    "src.modules.tools.output.subtitle.subtitle_service",
+    "src.modules.subtitle.backends.tk_gui_service",
     "SubtitleGuiService",
 )
 VRChatConfigSchema: Optional[type] = _try_load_handler_schema(

@@ -42,7 +42,6 @@ bind_pending_tools(registry)
 | ``"vrchat"`` | ``register_vrchat_tools`` | VRChat OSC 桥接 |
 | ``"warudo"`` | ``register_warudo_tools`` | Warudo 控制 |
 | ``"obs"`` | ``register_obs_tools`` | OBS Studio 控制 |
-| ``"subtitle"`` | ``register_subtitle_tools`` | 字幕 GUI 服务 |
 
 注意：
 
@@ -51,11 +50,19 @@ bind_pending_tools(registry)
   知道具体依赖后再 ``registry.register_provider(...)`` 注入——**不在本
   bootstrap 范围**（架构红线：工具不感知 Agent 层）
 
-## TTS 装配说明
+## TTS 与字幕装配说明
 
-TTS 是基础设施而非工具，由 ``src/modules/tts/build_tts_infrastructure``
-按核心 ``[tts]`` 段构造引擎实例并由 ``StreamerAgent`` 直接持有调用，
-不经 ``ToolRegistry``。本模块不介入 TTS 装配。
+TTS 与字幕均为基础设施而非工具：
+
+- TTS 由 ``src/modules/tts/build_tts_infrastructure`` 按核心 ``[tts]``
+  段构造引擎实例并由 ``StreamerAgent`` 直接持有调用
+- 字幕由 ``src/modules/subtitle/build_subtitle_infrastructure`` 按
+  ``[tools.output.config.subtitle]`` 段构造 ``SubtitleService`` 实例并
+  注入 ``StreamerAgent`` 直接调用
+
+两者均不经 ``ToolRegistry``。本模块不介入 TTS / 字幕装配。
+``[tools.output.config].enabled`` 列表中若残留 ``"subtitle"`` 旧条目，
+将被静默忽略（白名单已无对应映射项；迁移期间保持冷启动不报错）。
 """
 
 from __future__ import annotations
@@ -98,19 +105,12 @@ def _load_obs() -> Callable[..., Any]:
     return register_obs_tools
 
 
-def _load_subtitle() -> Callable[..., Any]:
-    from src.modules.tools.output.subtitle.subtitle_provider import register_subtitle_tools
-
-    return register_subtitle_tools
-
-
 # 非 TTS 输出包表（bootstrap 装配时按 [tools.output.config].enabled 白名单选择）
 _NON_TTS_PACKAGES: List[_EntrySpec] = [
     ("vts", "VTubeStudio 控制", _load_vts),
     ("vrchat", "VRChat OSC 桥接", _load_vrchat),
     ("warudo", "Warudo 控制", _load_warudo),
     ("obs", "OBS Studio 控制", _load_obs),
-    ("subtitle", "字幕 GUI 服务", _load_subtitle),
 ]
 
 # 对外保留的 _CORE_PACKAGES 兼容名（指代当前实现会装配的全部非 TTS 包）。

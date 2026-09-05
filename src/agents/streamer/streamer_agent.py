@@ -78,6 +78,7 @@ from .utterance_queue import (
 )
 
 if TYPE_CHECKING:
+    from src.modules.subtitle import SubtitleService
     from src.modules.tts import TTSProvider
 
 __all__ = ["StreamerAgent", "StreamerAgentConfig", "build_streamer_agent"]
@@ -221,6 +222,7 @@ class StreamerAgent(BaseAgent):
         memory: Any = None,
         speech_config: Optional[Dict[str, Any]] = None,
         tts_engine: Optional["TTSProvider"] = None,
+        subtitle_service: Optional["SubtitleService"] = None,
     ) -> None:
         """初始化主播 Agent。
 
@@ -258,6 +260,11 @@ class StreamerAgent(BaseAgent):
                 ``speech_config.enabled=False`` 时发言管线整体关闭。
                 引擎实例直接持有，由编排队列调用其
                 ``handle_speech(text, utterance_id)``，不再经 ``ToolRegistry``。
+            subtitle_service: 可选字幕服务实例（须满足
+                ``src.modules.subtitle.SubtitleService`` 结构契约），
+                装配期由字幕基建工厂构造后注入；``None`` 时发言管线
+                跳过字幕显示，与 TTS 关闭正交——字幕关闭不影响业务事件
+                与 TTS 入队，仅关闭视觉字幕渲染通道。
         """
         super().__init__(event_bus=event_bus)
         self.typed_config = config
@@ -403,6 +410,7 @@ class StreamerAgent(BaseAgent):
         self._speech_max_queue: int = int(speech_cfg.get("max_queue", DEFAULT_MAX_QUEUE))
         self._speech_render_timeout_ms: int = int(speech_cfg.get("render_timeout_ms", DEFAULT_RENDER_TIMEOUT_MS))
         self._tts_engine = tts_engine
+        self._subtitle_service = subtitle_service
         self._utterance_queue: Optional[UtteranceQueue] = None
         # utterance_id 自增计数器（进程内单调；启动时复位为 0，首次自增到 1）
         self._utterance_seq: int = 0
@@ -897,6 +905,7 @@ class StreamerAgent(BaseAgent):
             utterance_id = self._next_utterance_id()
             self._emit_streamer_speech(utterance_id, cleaned_speech, cleaned_emotion)
             self._record_streamer_speech_history(cleaned_speech, cleaned_emotion)
+            self._schedule_subtitle_show(cleaned_speech, utterance_id)
             if self._tts_enabled and self._utterance_queue is not None:
                 try:
                     asyncio.create_task(self._utterance_queue.enqueue(utterance_id, cleaned_speech))
@@ -957,6 +966,31 @@ class StreamerAgent(BaseAgent):
             asyncio.create_task(_do_record())
         except RuntimeError as exc:
             self._logger.warning(f"主播发言历史任务创建失败（已忽略）: err={exc}")
+
+    def _schedule_subtitle_show(self, text: str, utterance_id: str) -> None:
+        """异步触发字幕推送（fire-and-forget；缺字幕服务跳过，失败不抛异常）。
+
+        调用 ``SubtitleService.show(text, utterance_id)``：服务内部并行
+        广播到所有已注册 Backend，单 Backend 故障隔离由服务负责，本方法
+        只关心"任务跑出去"。与 ``_emit_streamer_speech`` 同模式——
+        决策循环同步路径绝不 await 异步操作。
+        """
+        service = self._subtitle_service
+        if service is None:
+            return
+
+        async def _do_show() -> None:
+            try:
+                await service.show(text, utterance_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - 异步背景任务边界
+                self._logger.warning(f"字幕 show 异常（已忽略）: utterance_id={utterance_id}, err={exc}")
+
+        try:
+            asyncio.create_task(_do_show())
+        except RuntimeError as exc:
+            self._logger.warning(f"字幕 show 任务创建失败（已忽略）: utterance_id={utterance_id}, err={exc}")
 
     def _schedule_vts_emotion(self, emotion: str) -> None:
         """异步触发 VTS 表情调用（fire-and-forget，失败不影响决策循环）。

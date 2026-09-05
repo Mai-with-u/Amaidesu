@@ -17,7 +17,7 @@
 段树详见 ``.omo/drafts/amaidesu-v2-config-tree.md``（单一事实源）。
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from pydantic import Field
 
@@ -30,7 +30,7 @@ class MetaConfig(BaseConfig):
     """配置元数据"""
 
     version: str = Field(
-        default="2.0.12",
+        default="2.0.13",
         description="配置版本号（用于自动迁移检测，权威定义于 multi_file_loader.py）",
     )
 
@@ -273,6 +273,40 @@ class TTSConfig(BaseConfig):
     )
 
 
+class SubtitleInfraConfig(BaseConfig):
+    """字幕基础设施配置。
+
+    字幕是主播级基础设施——配置启用后百分百工作，不由 Agent 决定用
+    不用。行为参数（enabled / backends）与各后端渲染参数（tk_gui
+    子段）全部位于本段。
+
+    Attributes:
+        enabled: 字幕总开关；开启后主播发言自动经 SubtitleService 广播
+            到全部启用后端。
+        backends: 启用的字幕后端列表（多后端可同时启用，如 tk_gui /
+            dashboard）。
+        tk_gui: Tk GUI 字幕后端参数（键对应 SubtitleGuiService.ConfigSchema；
+            free-form dict，缺失键由多文件加载器的后端 schema 补全机制填充）。
+    """
+
+    enabled: bool = Field(
+        default=True,
+        description="字幕基础设施开关：开启后主播发言自动显示字幕",
+    )
+    backends: List[str] = Field(
+        default_factory=lambda: ["tk_gui"],
+        description="启用的字幕后端列表（可多后端同时启用：tk_gui / dashboard）",
+        json_schema_extra={
+            "x-ui-type": "multi-select",
+            "x-options": ["tk_gui", "dashboard"],
+        },
+    )
+    tk_gui: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Tk GUI 字幕后端参数（SubtitleGuiService.ConfigSchema 键；缺失键自动补齐）",
+    )
+
+
 class CoreConfig(BaseConfig):
     """核心系统配置根类
 
@@ -337,4 +371,8 @@ class CoreConfig(BaseConfig):
     tts: TTSConfig = Field(
         default_factory=TTSConfig,
         description="TTS 基础设施配置（开关/目标引擎/队列/超时 + 引擎子段；2.0.10 调度字段上移，2.0.12 引擎连接参数从 tools.toml 整体迁入）",
+    )
+    subtitle: SubtitleInfraConfig = Field(
+        default_factory=SubtitleInfraConfig,
+        description="字幕基础设施配置（开关/后端列表 + tk_gui 子段；由 tools.toml [tools.output.config.subtitle] 迁移而来）",
     )

@@ -55,6 +55,8 @@ from src.modules.memory.bootstrap import bind_memory_tools, build_memory_stack
 from src.modules.prompts import get_prompt_manager
 from src.modules.simulator import SimulatorService
 from src.modules.storage.sqlite_store import SQLiteStore
+from src.modules.subtitle import build_subtitle_infrastructure
+from src.modules.subtitle.backends import DashboardBackend
 from src.modules.tts import build_tts_infrastructure
 from src.modules.storage.storage_ledger import StorageLedger
 from src.modules.tools import ToolRegistry
@@ -413,6 +415,22 @@ async def create_app_components(
     else:
         logger.info("[tts] 基础设施关闭：TTS 引擎不构造")
 
+    # --- 核心配置预读：字幕基础设施段 [subtitle] ---
+    #  AgentManager 注册 StreamerAgent 时需要 subtitle_service（注入后
+    #  编排层驱动字幕显示）；配置源为 core.toml [subtitle]，该段数据由
+    #  跨文件迁移自 tools.toml [tools.output.config.subtitle] 而来。
+    subtitle_section = config.get("subtitle", {}) if isinstance(config, dict) else {}
+    if not isinstance(subtitle_section, dict):
+        subtitle_section = {}
+    logger.info(
+        f"[subtitle] 基础设施段预读完毕（keys={list(subtitle_section.keys()) if subtitle_section else '<空，使用默认>'}）"
+    )
+
+    # 字幕基础设施实例——提到 agents_config 分支之外构建，Dashboard
+    # 也消费同一引用（widget 字幕由 DashboardBackend 桥接），保证
+    # 两处指向同一可变对象。
+    subtitle_service = build_subtitle_infrastructure(subtitle_section)
+
     # --- AgentManager + StreamerAgent ---
     agent_manager: Optional["AgentManager"] = None
     agents_config = config.get("agents", {}) if isinstance(config, dict) else {}
@@ -436,6 +454,7 @@ async def create_app_components(
             memory,
             tts_section=tts_section,
             tts_engine=tts_engine,
+            subtitle_service=subtitle_service,
         )
 
         # --- 核心工具包（output/* 的 L2 Provider） + L1 @tool pending 刷入 ---
@@ -444,12 +463,11 @@ async def create_app_components(
         # 配置切片取法与 tools.perception.config 一致：先取
         # [tools.output] 子段（ToolPackMeta），再取其 .config 字典作为
         # bind_core_tools 入参；缺失则降级为 {}（多数包将走 schema 默认）。
-        # TTS 装配由核心 [tts] 段驱动（见 build_tts_infrastructure），
-        # bind_core_tools 不再处理 TTS。
+        # TTS/字幕装配由核心 [tts]/[subtitle] 段驱动（见各自 build 入口），
+        # bind_core_tools 不再处理 TTS/字幕。
         tools_output_pack = (config.get("tools") or {}).get("output", {}) if isinstance(config, dict) else {}
-        output_tools_config = tools_output_pack.get("config", {}) if isinstance(tools_output_pack, dict) else {}
-        if not isinstance(output_tools_config, dict):
-            output_tools_config = {}
+        output_pack_cfg = tools_output_pack.get("config", {}) if isinstance(tools_output_pack, dict) else {}
+        output_tools_config = output_pack_cfg if isinstance(output_pack_cfg, dict) else {}
 
         core_report = bind_core_tools(
             tool_registry,
@@ -520,6 +538,20 @@ async def create_app_components(
             log_streamer,
             simulator_service,
         )
+
+    # Dashboard 字幕后端注册：StreamerAgent 与 Dashboard 共享同一
+    # subtitle_service 引用，新 Backend 注册后 show/clear 自动广播到 widget。
+    # 仅当 [subtitle].backends 显式包含 "dashboard" 时注册——纯 tk_gui
+    # 配置不应拉起 Dashboard 广播链路。
+    if dashboard_server is not None and dashboard_server.widget_service is not None:
+        subtitle_backends = (
+            subtitle_section.get("backends", ["tk_gui"]) if isinstance(subtitle_section, dict) else ["tk_gui"]
+        )
+        if not isinstance(subtitle_backends, list):
+            subtitle_backends = ["tk_gui"]
+        if "dashboard" in subtitle_backends:
+            subtitle_service.register_backend(DashboardBackend(dashboard_server.widget_service))
+            logger.info("DashboardBackend 已注册到 subtitle_service")
 
     # --- 组件装配完成 ---
     return (
@@ -636,6 +668,7 @@ async def _register_agents_from_config(
     *,
     tts_section: Optional[Dict[str, Any]] = None,
     tts_engine: Optional[Any] = None,
+    subtitle_service: Optional[Any] = None,
 ):
     """根据 [agents] 段注册 Agent 实例到 AgentManager。
 
@@ -650,6 +683,10 @@ async def _register_agents_from_config(
     ``speech_config``（enabled / max_queue / render_timeout_ms）。
     tts_engine 为对应 Provider 实例（由 build_tts_infrastructure 构造），
     streamer Agent 直接持有并由编排队列调用其 ``handle_speech``。
+
+    subtitle_service 为字幕基础设施实例（由 build_subtitle_infrastructure
+    构造）；streamer Agent 在编排路径上调用其 ``show`` / ``clear``，
+    与 TTS 关闭正交——字幕关闭不影响业务事件与 TTS 入队。
     """
     enabled_list = config_section.get("enabled", []) or []
     for agent_name in enabled_list:
@@ -703,6 +740,7 @@ async def _register_agents_from_config(
                 persona_provider=persona_provider_dict,
                 speech_config=speech_cfg,
                 tts_engine=tts_engine,
+                subtitle_service=subtitle_service,
             )
             manager.register(
                 agent,

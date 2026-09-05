@@ -65,7 +65,7 @@ _PHASE_TO_REGISTRY: dict[tuple[str, str], str] = {
 
 # 配置版本号。权威定义：本文件的 ``CONFIG_VERSION`` 与 ``MetaConfig.version``
 # 默认值必须同步修改（改一必改二）。详见 AGENTS.md "配置 Schema 变更规则"。
-CONFIG_VERSION = "2.0.12"
+CONFIG_VERSION = "2.0.13"
 
 # 配置文件清单（按域划分）：core / model / agents / tools / memory / storage / background
 _CONFIG_FILES = [
@@ -175,6 +175,16 @@ CROSS_FILE_MIGRATIONS: tuple[CrossFileMigration, ...] = (
         target_key="tts",
         source_nested_path=("output", "config", "omni_tts"),
         target_nested_path=("omni_tts",),
+    ),
+    # 字幕基础设施化：tools.toml [tools.output.config.subtitle]（Tk GUI 服务
+    # 参数）整体迁入 core.toml [subtitle].tk_gui，旧值完整搬运。
+    CrossFileMigration(
+        source_file="tools.toml",
+        source_key="tools",
+        target_file="core.toml",
+        target_key="subtitle",
+        source_nested_path=("output", "config", "subtitle"),
+        target_nested_path=("tk_gui",),
     ),
 )
 
@@ -711,13 +721,15 @@ _TTS_ENGINE_SCHEMA_LOADERS: dict[str, Callable[[], Optional[type[BaseModel]]]] =
 }
 
 _TOOL_PROVIDER_SCHEMA_LOADERS: dict[str, Callable[[], Optional[type[BaseModel]]]] = {
-    "subtitle": lambda: _try_import_provider_schema(
-        "src.modules.tools.output.subtitle.subtitle_service", "SubtitleGuiService"
-    ),
     "vts": lambda: _try_import_provider_schema("src.modules.tools.output.vts.vts_provider", "VTSProvider"),
     "vrchat": lambda: _try_import_provider_schema("src.modules.tools.output.vts.vrchat_provider", "VRChatProvider"),
     "warudo": lambda: _try_import_provider_schema("src.modules.tools.output.warudo.warudo_provider", "WarudoProvider"),
     "obs": lambda: _try_import_provider_schema("src.modules.tools.output.obs.obs_provider", "OBSProvider"),
+}
+
+# 字幕后端是基础设施（非工具），其 tk_gui 子段配置宿主为 core.toml [subtitle]。
+_SUBTITLE_BACKEND_SCHEMA_LOADERS: dict[str, Callable[[], Optional[type[BaseModel]]]] = {
+    "tk_gui": lambda: _try_import_provider_schema("src.modules.subtitle.backends.tk_gui_service", "SubtitleGuiService"),
 }
 
 
@@ -1223,6 +1235,22 @@ def load_config_dir(
             )
             if tts_completed:
                 # 补全改变了文件，重新加载以取到与磁盘一致的最新内容
+                core_data, core_report = _load_and_validate_schema(core_path, CoreConfig)
+
+        # 字幕后端是基础设施，其参数子段（[subtitle.tk_gui]）为 free-form dict，
+        # 不参与 CoreConfig 校验；按后端 ConfigSchema 补齐缺失键并以注释写回，
+        # 使后端参数在配置文件中自描述（否则新增字段用户无从得知）。
+        subtitle_section = core_data.get("subtitle", {}) if isinstance(core_data, dict) else {}
+        if isinstance(subtitle_section, dict):
+            subtitle_completed = _complete_provider_config_sections(
+                config_dir,
+                subtitle_section,
+                table_prefix="subtitle",
+                schema_loaders=_SUBTITLE_BACKEND_SCHEMA_LOADERS,
+                file_name="core.toml",
+                batch_id=batch_id,
+            )
+            if subtitle_completed:
                 core_data, core_report = _load_and_validate_schema(core_path, CoreConfig)
 
         result["core"] = core_data

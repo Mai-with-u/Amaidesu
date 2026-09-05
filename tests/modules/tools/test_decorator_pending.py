@@ -324,9 +324,7 @@ def test_bind_core_tools_with_no_config_returns_report_with_all_keys(
     """``config=None`` 不抛异常；非 TTS 包按 enabled 白名单全记 0。"""
     report = bind_core_tools(registry, config=None)
     assert isinstance(report, dict)
-    # 非 TTS 包键均在报告里（空 enabled 列表 → 一律 0）
-    assert set(report.keys()) == {"vts", "vrchat", "warudo", "obs", "subtitle"}
-    # count 非负
+    assert set(report.keys()) == {"vts", "vrchat", "warudo", "obs"}
     for _pkg, count in report.items():
         assert count >= 0, f"报告值不应为负：{count}"
 
@@ -354,10 +352,9 @@ def test_bind_core_tools_isolates_per_package_failure(
     """单包失败不阻断其他包——验证 try/except 隔离。"""
     report = bind_core_tools(
         registry,
-        config={"subtitle": {"type": "subtitle"}},  # 其它非 TTS 包失败
+        config={"vts": {"type": "vts"}},  # 其它非 TTS 包失败
     )
-    # 报告 key 集合 = 非 TTS 包键（5 个）
-    assert set(report.keys()) == {"vts", "vrchat", "warudo", "obs", "subtitle"}
+    assert set(report.keys()) == {"vts", "vrchat", "warudo", "obs"}
     for count in report.values():
         assert count >= 0
 
