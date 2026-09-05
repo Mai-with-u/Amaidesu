@@ -3,7 +3,7 @@
 # pyright: reportDeprecated=false
 
 from enum import Enum
-from typing import ClassVar, Dict, List, Optional
+from typing import ClassVar, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -31,6 +31,8 @@ class Persona(BaseModel):
     speaking_style: str
     fans_medal_level: int = Field(default=0, ge=0, le=40)
     guard_level: int = Field(default=0, ge=0, le=3)
+    # 上下文窗口大小覆盖（None=按角色默认；表达"该角色对直播间的关注度"）
+    context_window_size: Optional[int] = Field(default=None, ge=1, le=50)
     is_temporary: bool = False
     is_active: bool = True
     messages_generated: int = 0
@@ -82,15 +84,3 @@ class BurstState(BaseModel):
     is_active: bool = False
     started_at_ms: int = 0
     last_triggered_at_ms: int = 0
-
-
-class SimulatorStats(BaseModel):
-    """模拟器运行统计。"""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
-
-    total_messages: int = 0
-    total_tokens: int = 0
-    messages_by_type: Dict[str, int] = Field(default_factory=dict)
-    messages_by_role: Dict[str, int] = Field(default_factory=dict)
-    started_at_ms: int = 0

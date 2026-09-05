@@ -114,19 +114,19 @@ def test_noemit_collector_gets_fallback_emit() -> None:
     assert payload.content == "屏幕内容"  # type: ignore[attr-defined]
 
 
-def test_manager_dynamic_enable_running_state() -> None:
-    """CollectorManager.enable_collector 后 list_running 含该采集器（真实运行态）。"""
+def test_manager_dynamic_register_start_stop() -> None:
+    """CollectorManager 动态注册→启动→停止→注销全链（真实运行态）。"""
     from src.modules.collectors.manager import CollectorManager
 
     async def run():
         cm = CollectorManager()
-        ok = await cm.enable_collector("mock_danmaku", {"send_interval": 1.0})
+        ok = await cm.enable_collector("console_input", {})
         assert ok is True
-        assert "mock_danmaku" in cm.list_running()
-        inst = cm.get_collector_by_name("mock_danmaku")
+        assert "console_input" in cm.list_running()
+        inst = cm.get_collector_by_name("console_input")
         assert inst is not None
         assert getattr(inst, "is_started", False) is True
-        await cm.disable_collector("mock_danmaku")
-        assert "mock_danmaku" not in cm.list_collectors()
+        await cm.disable_collector("console_input")
+        assert "console_input" not in cm.list_collectors()
 
     asyncio.run(run())

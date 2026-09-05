@@ -230,7 +230,7 @@ git switch -c task/<名称> v2.0.0
 uv sync && uv run pytest tests/ -q
 ```
 - **交集预检（硬性前置）**：列出新任务目标文件集，与主工作区未提交变更求交集；非零重叠时改为协调串行，不得开工
-- 被 `.gitignore` 排除但测试所需文件（如 `tests/modules/prompts/golden_datasets/*.jsonl`、mock 采集器 `data/` 素材）需从主工作区手动复制或经 post-checkout 钩子补齐
+- 被 `.gitignore` 排除但测试所需文件（如 `tests/modules/prompts/golden_datasets/*.jsonl`）需从主工作区手动复制或经 post-checkout 钩子补齐
 
 **收口固定动作**：
 1. 提交前照常测试 + lint（铁律不变）；提交仍须用户显式授权

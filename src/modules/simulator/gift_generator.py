@@ -1,18 +1,14 @@
 """礼物和 SuperChat 消息生成器
 
 加权随机选择礼物，SC 文本通过 LLM 生成。
-礼物清单为运行时数据（data/simulator/gifts.toml）：首次加载时写入内置默认清单，
-之后用户可自由编辑（增删礼物、调整权重/价格）。
+礼物目录持久化在 SQLite ``sim_gifts`` 表（运行时数据，WebUI 管理），
+首次启动由内置种子导入，本类持有内存缓存，增删改写穿 DB。
 """
 
 from __future__ import annotations
 
 import random
-import tomllib
-from pathlib import Path
-from typing import Any, List, Optional
-
-import tomlkit
+from typing import Any, Dict, List, Optional
 
 from src.modules.logging import get_logger
 from src.modules.simulator.config_schema import (
@@ -25,115 +21,116 @@ from src.modules.simulator.types import (
     PersonaRole,
     StreamerContextSnapshot,
 )
+from src.modules.storage.sqlite_store import SQLiteStore
 
-# 内置默认礼物清单（首次启动落盘到 data/simulator/gifts.toml 供用户编辑）
-_DEFAULT_GIFTS: list[dict[str, Any]] = [
-    {"gift_id": "small_heart", "gift_name": "小心心", "category": "normal", "weight": 10, "data_type": "gift"},
-    {"gift_id": "la_tiao", "gift_name": "辣条", "category": "normal", "weight": 10, "data_type": "gift"},
-    {"gift_id": "da_call", "gift_name": "打call", "category": "normal", "weight": 10, "data_type": "gift"},
-    {"gift_id": "gan_bei", "gift_name": "干杯", "category": "normal", "weight": 10, "data_type": "gift"},
-    {"gift_id": "bi_xin", "gift_name": "比心", "category": "normal", "weight": 10, "data_type": "gift"},
-    {"gift_id": "hua_shi_kua_kua", "gift_name": "花式夸夸", "category": "medium", "weight": 5, "data_type": "gift"},
-    {"gift_id": "miao_wu_bao_bao", "gift_name": "喵呜抱抱", "category": "medium", "weight": 5, "data_type": "gift"},
-    {"gift_id": "dian_zan", "gift_name": "点赞", "category": "medium", "weight": 5, "data_type": "gift"},
-    {"gift_id": "yan_hua", "gift_name": "烟花", "category": "medium", "weight": 5, "data_type": "gift"},
-    {"gift_id": "fen_si_deng_pai", "gift_name": "粉丝团灯牌", "category": "premium", "weight": 2, "data_type": "gift"},
-    {"gift_id": "jing_xi_mang_he", "gift_name": "惊喜盲盒", "category": "premium", "weight": 2, "data_type": "gift"},
-    {"gift_id": "xiao_dian_shi", "gift_name": "小电视", "category": "premium", "weight": 2, "data_type": "gift"},
-    {
-        "gift_id": "sc_50",
-        "gift_name": "SC 50元",
-        "category": "sc",
-        "weight": 1,
-        "data_type": "super_chat",
-        "sc_amount_rmb": 50,
-    },
-    {
-        "gift_id": "sc_100",
-        "gift_name": "SC 100元",
-        "category": "sc",
-        "weight": 1,
-        "data_type": "super_chat",
-        "sc_amount_rmb": 100,
-    },
-    {
-        "gift_id": "sc_500",
-        "gift_name": "SC 500元",
-        "category": "sc",
-        "weight": 1,
-        "data_type": "super_chat",
-        "sc_amount_rmb": 500,
-    },
-]
+# sim_gifts 允许通过 update_gift 更新的字段（与 DB 白名单一致的运行时防线）
+_GIFT_UPDATABLE_FIELDS = frozenset({"gift_name", "category", "weight", "data_type", "sc_amount_rmb"})
 
 
 class GiftGenerator:
     """礼物和 SC 生成器
 
-    礼物清单来自 ``data/simulator/gifts.toml``（运行时数据，首次自动生成默认清单），
+    礼物目录来自 SQLite ``sim_gifts`` 表（启动时由内置种子导入），
     按权重随机选择。普通礼物直接拼接模板，SC 通过 LLM 调用生成文本。
     """
 
     def __init__(
         self,
         config: SimulatorConfigSchema,
+        sqlite_store: SQLiteStore,
         llm_wrapper: Any = None,
         rng: Optional[random.Random] = None,
-        data_dir: Optional[Path] = None,
     ):
         self._config = config
+        self._store = sqlite_store
         self._llm_wrapper = llm_wrapper
         self._rng = rng or random.Random()
         self._logger = get_logger("GiftGenerator")
         self._gifts: List[GiftItem] = []
         self._weights: List[int] = []
-        self._data_dir = data_dir or Path(__file__).resolve().parents[3] / "data" / "simulator"
 
     async def load(self) -> None:
-        """加载礼物清单；data/simulator/gifts.toml 不存在时写入内置默认清单"""
-        gifts_path = self._data_dir / "gifts.toml"
-        if not gifts_path.exists():
-            self._data_dir.mkdir(parents=True, exist_ok=True)
-            self._write_default_gifts(gifts_path)
-            self._logger.info(f"已生成默认礼物清单: {gifts_path}")
+        """从 DB 加载礼物目录到内存缓存。"""
+        rows = await self._store.list_sim_gifts()
+        self._gifts = [
+            GiftItem(
+                gift_id=row["gift_id"],
+                gift_name=row["gift_name"],
+                category=row["category"],
+                weight=row["weight"],
+                data_type=row["data_type"],
+                sc_amount_rmb=row["sc_amount_rmb"],
+            )
+            for row in rows
+        ]
+        self._weights = [gift.weight for gift in self._gifts]
+        self._logger.info(f"已加载 {len(self._gifts)} 个礼物")
 
-        try:
-            with open(gifts_path, "rb") as f:
-                data = tomllib.load(f)
+    # -------------------- 礼物目录 CRUD（写穿 DB + 刷新缓存） --------------------
 
-            self._gifts = []
-            self._weights = []
-            for item in data["gifts"]["items"]:
-                gift = GiftItem(
-                    gift_id=item["gift_id"],
-                    gift_name=item["gift_name"],
-                    category=item["category"],
-                    weight=item["weight"],
-                    data_type=item["data_type"],
-                    sc_amount_rmb=item.get("sc_amount_rmb"),
-                )
-                self._gifts.append(gift)
-                self._weights.append(item["weight"])
+    def list_gifts(self) -> List[GiftItem]:
+        """返回礼物目录的列表副本。"""
+        return list(self._gifts)
 
-            self._logger.info(f"已加载 {len(self._gifts)} 个礼物")
-        except Exception as e:
-            self._logger.error(f"加载礼物预设失败: {e}")
+    async def add_gift(self, gift: GiftItem) -> bool:
+        """新增礼物；gift_id 已存在时返回 False。"""
+        if any(g.gift_id == gift.gift_id for g in self._gifts):
+            return False
+        await self._store.insert_sim_gift(
+            gift_id=gift.gift_id,
+            gift_name=gift.gift_name,
+            category=gift.category,
+            weight=gift.weight,
+            data_type=gift.data_type,
+            sc_amount_rmb=gift.sc_amount_rmb,
+        )
+        self._gifts.append(gift)
+        self._weights.append(gift.weight)
+        return True
 
-    def _write_default_gifts(self, path: Path) -> None:
-        """把内置默认礼物清单写入 gifts.toml"""
-        doc = tomlkit.document()
-        doc.add(tomlkit.comment("模拟直播间礼物清单（运行时数据，可自由编辑）"))
-        doc.add(tomlkit.comment("类别与权重：normal 普通 / medium 中级 / premium 高级 / sc 大额 SC"))
-        gifts_table = tomlkit.table()
-        items = tomlkit.aot()
-        for gift in _DEFAULT_GIFTS:
-            item_table = tomlkit.table()
-            for key, value in gift.items():
-                item_table[key] = value
-            items.append(item_table)
-        gifts_table["items"] = items
-        doc["gifts"] = gifts_table
-        path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+    async def update_gift(self, gift_id: str, fields: Dict[str, object]) -> bool:
+        """按字段更新礼物（白名单校验）并刷新缓存。
+
+        Returns:
+            True 更新成功；False 礼物不存在。
+        """
+        unknown = set(fields) - _GIFT_UPDATABLE_FIELDS
+        if unknown:
+            raise ValueError(f"update_gift 非法字段: {sorted(unknown)}")
+        updated = await self._store.update_sim_gift(gift_id=gift_id, fields=fields)
+        if not updated:
+            return False
+        row = next((r for r in await self._store.list_sim_gifts() if r["gift_id"] == gift_id), None)
+        target = next((g for g in self._gifts if g.gift_id == gift_id), None)
+        if row is not None and target is not None:
+            refreshed = GiftItem(
+                gift_id=row["gift_id"],
+                gift_name=row["gift_name"],
+                category=row["category"],
+                weight=row["weight"],
+                data_type=row["data_type"],
+                sc_amount_rmb=row["sc_amount_rmb"],
+            )
+            self._gifts[self._gifts.index(target)] = refreshed
+            self._weights = [g.weight for g in self._gifts]
+        return True
+
+    async def delete_gift(self, gift_id: str) -> bool:
+        """删除礼物并刷新缓存。
+
+        Returns:
+            True 删除成功；False 礼物不存在。
+        """
+        deleted = await self._store.delete_sim_gift(gift_id=gift_id)
+        if not deleted:
+            return False
+        target = next((g for g in self._gifts if g.gift_id == gift_id), None)
+        if target is not None:
+            self._gifts.remove(target)
+            self._weights = [g.weight for g in self._gifts]
+        return True
+
+    # -------------------- 生成 --------------------
 
     def _pick_random_gift(self, exclude_categories: Optional[set[str]] = None) -> Optional[GiftItem]:
         """按权重随机选择一个礼物（可排除指定类别）"""

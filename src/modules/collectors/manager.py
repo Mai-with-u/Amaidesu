@@ -133,7 +133,7 @@ class CollectorManager:
         list_collectors()/get_by_name() 与配置 enabled 列表一致。
 
         Args:
-            name: 配置段名（如 "mock_danmaku"）。
+            name: 配置段名（如 "console_input"）。
             config: 子段配置 dict。
             event_bus: 可选 EventBus（注入采集器）。
         """

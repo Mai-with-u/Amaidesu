@@ -32,6 +32,8 @@ from src.modules.config.upgrade_hooks import (
     _migrate_tools_2_0_0,
     _migrate_tools_2_0_9,
     _migrate_tools_2_0_10,
+    _migrate_tools_2_0_14,
+    _migrate_core_2_0_14,
     _strip_pipelines_2_0_4,
     _version_in_range,
     apply_upgrade_hooks,
@@ -1045,3 +1047,80 @@ class TestCoreTTSSchema:
         from src.modules.config.multi_file_loader import CONFIG_VERSION
 
         assert MetaConfig().version == CONFIG_VERSION
+
+
+class TestToolsHook2_0_14:
+    """tools.toml 2.0.14：移除 MockCollector 配置段与 enabled 引用。
+
+    回放语义收敛进 SimulatorService（mode=replay），MockCollector 整体删除。
+    """
+
+    def test_removes_mock_section_and_enabled_ref(self):
+        data = {
+            "tools": {
+                "perception": {
+                    "enabled": True,
+                    "provider": "builtin",
+                    "config": {
+                        "enabled": ["bili_danmaku", "mock_danmaku"],
+                        "bili_danmaku": {"room_id": 1},
+                        "mock_danmaku": {"send_interval": 1.0, "loop_playback": True},
+                    },
+                },
+            },
+        }
+        changed = _migrate_tools_2_0_14(data)
+        assert "tools.perception.config.mock_danmaku" in changed
+        assert "tools.perception.config.enabled" in changed
+
+        cfg = data["tools"]["perception"]["config"]
+        assert "mock_danmaku" not in cfg
+        assert cfg["enabled"] == ["bili_danmaku"]
+        # 其他采集器段保留
+        assert cfg["bili_danmaku"] == {"room_id": 1}
+
+    def test_idempotent_when_already_absent(self):
+        data = {
+            "tools": {
+                "perception": {
+                    "config": {"enabled": ["bili_danmaku"], "bili_danmaku": {"room_id": 1}},
+                },
+            },
+        }
+        assert _migrate_tools_2_0_14(data) == []
+        assert _migrate_tools_2_0_14(data) == []
+
+    def test_noop_when_path_missing(self):
+        assert _migrate_tools_2_0_14({}) == []
+        assert _migrate_tools_2_0_14({"tools": None}) == []
+        assert _migrate_tools_2_0_14({"tools": {"perception": {}}}) == []
+        assert _migrate_tools_2_0_14({"tools": {"perception": {"config": "not-a-dict"}}}) == []
+
+
+class TestCoreHook2_0_14:
+    """core.toml 2.0.14：移除 simulator.stats_persistence 死字段。"""
+
+    def test_removes_dead_field(self):
+        data = {
+            "simulator": {
+                "enabled": True,
+                "mode": "generate",
+                "stats_persistence": False,
+            },
+        }
+        changed = _migrate_core_2_0_14(data)
+        assert changed == ["simulator.stats_persistence"]
+        assert "stats_persistence" not in data["simulator"]
+        # 其他字段保留
+        assert data["simulator"]["enabled"] is True
+        assert data["simulator"]["mode"] == "generate"
+
+    def test_idempotent_when_already_absent(self):
+        data = {"simulator": {"enabled": False}}
+        assert _migrate_core_2_0_14(data) == []
+        assert _migrate_core_2_0_14(data) == []
+
+    def test_noop_when_path_missing(self):
+        assert _migrate_core_2_0_14({}) == []
+        assert _migrate_core_2_0_14({"simulator": None}) == []
+        assert _migrate_core_2_0_14({"simulator": "not-a-dict"}) == []

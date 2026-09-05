@@ -350,10 +350,60 @@ class EventHistoryService:
             self.logger.warning(f"写入事件持久化文件失败 ({self._current_file_path}): {exc!r}")
 
 
+# ------------------------------------------------------------------ #
+# 模块级读回 API（录制回放用，无实例状态）                            #
+# ------------------------------------------------------------------ #
+
+
+def _resolve_persist_dir(persist_dir: Optional[Path] = None) -> Path:
+    """解析录制目录：未指定时用项目根下的默认目录（与写入侧同一约定）。"""
+    if persist_dir is not None:
+        return persist_dir
+    project_root = Path(__file__).resolve().parents[3]
+    return project_root / DEFAULT_PERSIST_DIR
+
+
+def list_recorded_dates(persist_dir: Optional[Path] = None) -> List[str]:
+    """列出有录制文件的日期（``YYYY-MM-DD``），按时间正序。
+
+    录制文件由 EventHistoryService 的持久化写入（``data/events/*.jsonl``），
+    本函数只扫描目录不解析内容，供回放端选择录制日期。
+    """
+    root = _resolve_persist_dir(persist_dir)
+    if not root.exists():
+        return []
+    dates = [p.stem for p in root.glob("*.jsonl") if len(p.stem) == 10 and p.stem[4] == "-" and p.stem[7] == "-"]
+    return sorted(dates)
+
+
+def read_day_events(date_str: str, persist_dir: Optional[Path] = None) -> List[EventRecord]:
+    """读取指定日期的全量录制事件（按文件顺序 = 时间正序）。
+
+    单行解析失败时跳过该行（与读取恢复语义一致）；日期无录制文件时返回空列表。
+    """
+    root = _resolve_persist_dir(persist_dir)
+    file_path = root / f"{date_str}.jsonl"
+    if not file_path.exists():
+        return []
+    events: List[EventRecord] = []
+    with open(file_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                events.append(EventRecord.model_validate_json(line))
+            except Exception:
+                continue
+    return events
+
+
 __all__ = [
     "EventRecord",
     "EventHistoryService",
     "infer_event_level",
+    "list_recorded_dates",
+    "read_day_events",
     "DEFAULT_MAX_EVENTS",
     "DEFAULT_PERSIST_DIR",
     "SUMMARY_MAX_LENGTH",

@@ -62,7 +62,6 @@ def _make_config() -> dict:
                 "config": {
                     "enabled": ["bili_danmaku"],
                     "bili_danmaku": {"room_id": 1},
-                    "mock_danmaku": {},
                     "read_pingmu": {},
                 },
             },
@@ -85,16 +84,16 @@ def test_list_includes_disabled_collectors() -> None:
     grouped = get_v2_component_list(config, server)
 
     by_name = {c.name: c for c in grouped["collectors"]}
-    assert set(by_name) == {"bili_danmaku", "mock_danmaku", "read_pingmu"}
+    assert set(by_name) == {"bili_danmaku", "read_pingmu"}
 
     danmaku = by_name["bili_danmaku"]
     assert danmaku.group == "collectors"
     assert danmaku.is_enabled is True
     assert danmaku.is_started is True
 
-    mock = by_name["mock_danmaku"]
-    assert mock.is_enabled is False
-    assert mock.is_started is False
+    screen = by_name["read_pingmu"]
+    assert screen.is_enabled is False
+    assert screen.is_started is False
 
 
 def test_list_includes_disabled_agents() -> None:
@@ -160,7 +159,7 @@ class TestDescriptionEnrichment:
         grouped = get_v2_component_list(config, server)
         by_name = {c.name: c for c in grouped["collectors"]}
         assert by_name["bili_danmaku"].description == "B站弹幕接收器"
-        assert by_name["mock_danmaku"].description == ""
+        assert by_name["read_pingmu"].description == ""
 
     def test_agent_description_from_manager(self) -> None:
         config = _make_config()

@@ -119,7 +119,7 @@ flowchart TB
         T4["memory / agent 控制 / streamer 自带 reply 等"]
     end
     subgraph Infra["框架设施"]
-        COL["Collectors ×5<br/>bilibili/console/mock/screen/stt"]
+        COL["Collectors ×4<br/>bilibili/console/screen/stt"]
         BUS["EventBus + 语义域事件 + 拦截器"]
         STO["SQLite 11 表"]
     end

@@ -2,7 +2,7 @@
 SQLiteStore 单元测试（Wave 3 / §1.50 / §1.53 9b）
 
 覆盖：
-- 11 张权威表 + schema_migrations 全部建出
+- 13 张权威表 + schema_migrations 全部建出
 - schema_migrations 记录当前版本
 - ``simulated`` 列存在且默认 0（§1.6 贯穿列）
 - 消费者 WHERE ``simulated=0`` 排除模拟数据（viewers / topics 统计视图中模拟数据零污染）
@@ -50,21 +50,21 @@ async def store(temp_db_path: Path) -> AsyncGenerator[SQLiteStore, None]:
 
 
 # =============================================================================
-# 11 张权威表 + schema_migrations
+# 13 张权威表 + schema_migrations
 # =============================================================================
 
 
 @pytest.mark.asyncio
-async def test_eleven_tables_created(store: SQLiteStore) -> None:
-    """11 张权威表 + schema_migrations 全部应被建立。"""
+async def test_all_expected_tables_created(store: SQLiteStore) -> None:
+    """13 张权威表 + schema_migrations 全部应被建立。"""
     for table_name in list_expected_tables():
         exists = await store.table_exists(table_name)
         assert exists, f"缺少权威表: {table_name}"
-    # 总数 = 11 业务表 + 1 schema_migrations = 12
+    # 总数 = 13 业务表 + 1 schema_migrations
     tables = await store.list_tables()
     expected_count = len(list_expected_tables())
     assert len(tables) >= expected_count, f"表数 {len(tables)} < 期望 {expected_count}"
-    # 业务表 11 张都在
+    # 业务表 13 张都在
     business_tables = [t for t in list_expected_tables() if t != "schema_migrations"]
     for t in business_tables:
         assert t in tables, f"业务表 {t} 不在 sqlite_master"

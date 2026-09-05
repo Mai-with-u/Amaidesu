@@ -548,6 +548,62 @@ def _migrate_tools_2_0_10(data: dict[str, Any]) -> list[str]:
     return changed
 
 
+def _migrate_tools_2_0_14(data: dict[str, Any]) -> list[str]:
+    """tools.toml 2.0.14：移除 MockCollector 配置段与 enabled 引用。
+
+    回放语义收敛进 SimulatorService（mode=replay），MockCollector 整体删除，
+    ``[tools.perception.config.mock_danmaku]`` 子段及 enabled 列表中的
+    ``"mock_danmaku"`` 引用成为死配置——不清除会在每次启动时告警且永远无人读取。
+
+    原地修改、幂等（重复执行时该段已不存在，无事发生），返回变更路径列表。
+    """
+    changed: list[str] = []
+
+    tools = data.get("tools")
+    if not isinstance(tools, dict):
+        return changed
+
+    perception = tools.get("perception")
+    if not isinstance(perception, dict):
+        return changed
+
+    perception_cfg = perception.get("config")
+    if not isinstance(perception_cfg, dict):
+        return changed
+
+    if "mock_danmaku" in perception_cfg:
+        del perception_cfg["mock_danmaku"]
+        changed.append("tools.perception.config.mock_danmaku")
+
+    enabled = perception_cfg.get("enabled")
+    if isinstance(enabled, list) and "mock_danmaku" in enabled:
+        perception_cfg["enabled"] = [item for item in enabled if item != "mock_danmaku"]
+        changed.append("tools.perception.config.enabled")
+
+    return changed
+
+
+def _migrate_core_2_0_14(data: dict[str, Any]) -> list[str]:
+    """core.toml 2.0.14：移除 simulator.stats_persistence 死字段。
+
+    模拟统计是进程内开发观测，持久化统计无跨场分析需求
+    （跨场分析走 live_chat/gifts 表 + simulated 过滤），字段从未有实现。
+
+    原地修改、幂等，返回变更路径列表。
+    """
+    changed: list[str] = []
+
+    simulator = data.get("simulator")
+    if not isinstance(simulator, dict):
+        return changed
+
+    if "stats_persistence" in simulator:
+        del simulator["stats_persistence"]
+        changed.append("simulator.stats_persistence")
+
+    return changed
+
+
 # ---------------------------------------------------------------------------
 # 升级钩子注册表
 # ---------------------------------------------------------------------------
@@ -649,6 +705,18 @@ CONFIG_UPGRADE_HOOKS: tuple[ConfigUpgradeHook, ...] = (
         target_version="2.0.10",
         config_file="tools.toml",
         migrate=_migrate_tools_2_0_10,
+    ),
+    # 回放收敛进模拟器（mode=replay）：MockCollector 配置段整体移除
+    ConfigUpgradeHook(
+        target_version="2.0.14",
+        config_file="tools.toml",
+        migrate=_migrate_tools_2_0_14,
+    ),
+    # 模拟器统计持久化死字段移除
+    ConfigUpgradeHook(
+        target_version="2.0.14",
+        config_file="core.toml",
+        migrate=_migrate_core_2_0_14,
     ),
 )
 

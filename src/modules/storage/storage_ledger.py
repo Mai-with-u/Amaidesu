@@ -60,6 +60,17 @@ logger = get_logger("StorageLedger")
 _ROOM_MESSAGE_WILDCARD = "room.message.#"
 
 
+def session_pk_to_int(session_id: str) -> int:
+    """把 payload.live_session_id（str）映射为 live_chat.live_session_id（INTEGER）。
+
+    策略：MD5 前 8 hex 字符 → 32 位无符号整数。稳定、跨进程一致、无外部依赖。
+    数值无业务语义，仅做 FK；写入（StorageLedger）与读取（如模拟器的世界
+    窗口查询）必须共用本函数，保证同一 session 字符串映射到同一整数主键。
+    """
+    digest = hashlib.md5(session_id.encode("utf-8")).hexdigest()[:8]
+    return int(digest, 16)
+
+
 class StorageLedger:
     """直播间行为流落库记账器。
 
@@ -254,17 +265,8 @@ class StorageLedger:
 
     @staticmethod
     def _session_pk_to_int(session_id: str) -> int:
-        """把 payload.live_session_id（str）映射为 live_chat.live_session_id（INTEGER）。
-
-        策略：MD5 前 8 hex 字符 → 32 位无符号整数。稳定、跨进程一致、无外部依赖。
-        数值无业务语义，仅做 FK；后续若建 live_sessions 索引表/反向查 map，
-        可以同算法重算。
-
-        注：直播业务一场session 一致性优先于 PK 美观；本算法稳定输出
-        同一 str_id 同一 int_id，避免重复事件对应不同 PK 导致后续聚合失败。
-        """
-        digest = hashlib.md5(session_id.encode("utf-8")).hexdigest()[:8]
-        return int(digest, 16)
+        """委托模块级 ``session_pk_to_int``（写入与读取共用的唯一映射实现）。"""
+        return session_pk_to_int(session_id)
 
     def _session_pk(self, session_id: str) -> int:
         cached = self._session_pk_cache.get(session_id)
@@ -323,4 +325,4 @@ def make_room_message(
     return RoomMessagePayload(**common)
 
 
-__all__ = ["StorageLedger", "make_room_message"]
+__all__ = ["StorageLedger", "make_room_message", "session_pk_to_int"]

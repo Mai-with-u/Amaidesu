@@ -50,8 +50,7 @@ enabled = ["bili_danmaku"]
 [tools.perception.config.bili_danmaku]
 room_id = 1
 
-[tools.perception.config.mock_danmaku]
-send_interval = 1.0
+[tools.perception.config.console_input]
 
 [tools.output]
 enabled = true
@@ -113,11 +112,11 @@ def test_list_components_returns_all_groups_with_disabled(client: TestClient) ->
     assert set(data) == {"collectors", "agents", "tools", "input", "decision", "output"}
 
     collectors = {c["name"]: c for c in data["collectors"]}
-    assert set(collectors) == {"bili_danmaku", "mock_danmaku"}
+    assert set(collectors) == {"bili_danmaku", "console_input"}
     assert collectors["bili_danmaku"]["is_enabled"] is True
     assert collectors["bili_danmaku"]["is_started"] is False  # 未动态启动前不运行
-    assert collectors["mock_danmaku"]["is_enabled"] is False
-    assert collectors["mock_danmaku"]["is_started"] is False
+    assert collectors["console_input"]["is_enabled"] is False
+    assert collectors["console_input"]["is_started"] is False
 
     agents = {c["name"]: c for c in data["agents"]}
     assert set(agents) == {"streamer", "game"}
@@ -131,22 +130,22 @@ def test_list_components_returns_all_groups_with_disabled(client: TestClient) ->
 
 
 def test_control_start_dynamically_starts_collector(client: TestClient, config_dir: Path) -> None:
-    resp = client.post("/api/v1/components/collectors/mock_danmaku/control", json={"action": "start"})
+    resp = client.post("/api/v1/components/collectors/console_input/control", json={"action": "start"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["success"] is True
 
     listed = client.get("/api/v1/components").json()
     collectors = {c["name"]: c for c in listed["collectors"]}
-    assert collectors["mock_danmaku"]["is_enabled"] is True
+    assert collectors["console_input"]["is_enabled"] is True
     # 注：TestClient 每请求独立事件循环，后台消费任务跨请求会被取消，
     # is_started 反映配置启用状态（真实运行态由 CollectorManager 单测覆盖）
-    assert "mock_danmaku" in [c["name"] for c in listed["collectors"]]
+    assert "console_input" in [c["name"] for c in listed["collectors"]]
 
 
 def test_control_stop_dynamically_stops_collector(client: TestClient, config_dir: Path) -> None:
-    client.post("/api/v1/components/collectors/mock_danmaku/control", json={"action": "start"})
-    resp = client.post("/api/v1/components/collectors/mock_danmaku/control", json={"action": "stop"})
+    client.post("/api/v1/components/collectors/console_input/control", json={"action": "start"})
+    resp = client.post("/api/v1/components/collectors/console_input/control", json={"action": "stop"})
     assert resp.status_code == 200
     assert resp.json()["success"] is True
 
@@ -154,22 +153,22 @@ def test_control_stop_dynamically_stops_collector(client: TestClient, config_dir
     # 子段名仍在（配置），但 enabled 列表应已移除该组件
     enabled_match = re.search(r"\[tools\.perception\.config\]\s*enabled = (\[.*?\])", content)
     assert enabled_match is not None
-    assert '"mock_danmaku"' not in enabled_match.group(1)
+    assert '"console_input"' not in enabled_match.group(1)
 
     listed = client.get("/api/v1/components").json()
     collectors = {c["name"]: c for c in listed["collectors"]}
-    assert collectors["mock_danmaku"]["is_enabled"] is False
-    assert collectors["mock_danmaku"]["is_started"] is False
+    assert collectors["console_input"]["is_enabled"] is False
+    assert collectors["console_input"]["is_started"] is False
 
 
 def test_control_start_is_idempotent(client: TestClient) -> None:
-    first = client.post("/api/v1/components/collectors/mock_danmaku/control", json={"action": "start"})
-    second = client.post("/api/v1/components/collectors/mock_danmaku/control", json={"action": "start"})
+    first = client.post("/api/v1/components/collectors/console_input/control", json={"action": "start"})
+    second = client.post("/api/v1/components/collectors/console_input/control", json={"action": "start"})
     assert first.json()["success"] is True
     assert second.json()["success"] is True
     listed = client.get("/api/v1/components").json()
     collectors = {c["name"]: c for c in listed["collectors"]}
-    assert collectors["mock_danmaku"]["is_enabled"] is True
+    assert collectors["console_input"]["is_enabled"] is True
 
 
 def test_control_unknown_group_returns_400(client: TestClient) -> None:

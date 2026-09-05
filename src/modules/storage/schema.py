@@ -1,7 +1,7 @@
 """
 存储 Schema 定义（Wave 3 / §1.50 / §1.53 9b 定案）
 
-本模块是 11 张表的**单一事实源**，对应权威文档
+本模块是 13 张表的**单一事实源**，对应权威文档
 ``.omo/drafts/amaidesu-v2-storage-schema.md``。如需变更表结构，先修改该
 权威文档再同步本文件。
 
@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级（见 AGENTS.md §"配置 Schema 变更规则"）
-SCHEMA_VERSION: int = 1
+SCHEMA_VERSION: int = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,7 +37,7 @@ class SchemaMigration:
 
 
 # =============================================================================
-# 11 张表 + schema_migrations（按权威文档顺序）
+# 13 张表 + schema_migrations（按权威文档顺序）
 # =============================================================================
 # - live_sessions           场次 + 直播实时状态（一场一行）
 # - live_chat               全量直播消息流（行业 live chat）
@@ -50,6 +50,8 @@ class SchemaMigration:
 # - game_events             游戏里程碑事件
 # - timeline_summary        摘要层
 # - llm_usage               LLM 调用记录
+# - sim_personas            模拟器常驻观众人设（运行时数据，WebUI 管理）
+# - sim_gifts               模拟器礼物目录（运行时数据，WebUI 管理）
 # - schema_migrations       版本管理
 # =============================================================================
 
@@ -90,6 +92,12 @@ def build_schema_sql() -> str:
         # llm_usage —— LLM 调用记录
         + _LLM_USAGE_SQL
         + "\n"
+        # sim_personas —— 模拟器常驻观众人设
+        + _SIM_PERSONAS_SQL
+        + "\n"
+        # sim_gifts —— 模拟器礼物目录
+        + _SIM_GIFTS_SQL
+        + "\n"
         # schema_migrations —— 版本管理
         + _SCHEMA_MIGRATIONS_SQL
     )
@@ -109,6 +117,8 @@ def list_expected_tables() -> List[str]:
         "game_events",
         "timeline_summary",
         "llm_usage",
+        "sim_personas",
+        "sim_gifts",
         "schema_migrations",
     ]
 
@@ -280,6 +290,40 @@ CREATE TABLE IF NOT EXISTS llm_usage (
     cost               REAL NOT NULL,
     duration_ms        INTEGER NOT NULL,
     timestamp_ms       INTEGER NOT NULL
+);
+""".strip()
+
+
+_SIM_PERSONAS_SQL = """
+CREATE TABLE IF NOT EXISTS sim_personas (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id             TEXT NOT NULL UNIQUE,
+    user_nickname       TEXT NOT NULL,
+    role                TEXT NOT NULL,
+    personality         TEXT NOT NULL,
+    speaking_style      TEXT NOT NULL,
+    fans_medal_level    INTEGER NOT NULL DEFAULT 0,
+    guard_level         INTEGER NOT NULL DEFAULT 0,
+    context_window_size INTEGER,
+    is_active           INTEGER NOT NULL DEFAULT 1,
+    messages_generated  INTEGER NOT NULL DEFAULT 0,
+    created_at_ms       INTEGER NOT NULL,
+    updated_at_ms       INTEGER NOT NULL
+);
+""".strip()
+
+
+_SIM_GIFTS_SQL = """
+CREATE TABLE IF NOT EXISTS sim_gifts (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    gift_id          TEXT NOT NULL UNIQUE,
+    gift_name        TEXT NOT NULL,
+    category         TEXT NOT NULL,
+    weight           INTEGER NOT NULL DEFAULT 1,
+    data_type        TEXT NOT NULL,
+    sc_amount_rmb    INTEGER,
+    created_at_ms    INTEGER NOT NULL,
+    updated_at_ms    INTEGER NOT NULL
 );
 """.strip()
 

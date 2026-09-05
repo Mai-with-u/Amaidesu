@@ -13,7 +13,6 @@ flowchart TB
         Cons["控制台"]
         Screen["屏幕变化"]
         Mic["麦克风 STT"]
-        Mock["模拟输入<br/>(mock 采集器)"]
     end
 
     subgraph Collectors["Collectors (src/modules/collectors/)"]
@@ -22,7 +21,6 @@ flowchart TB
         CCons["ConsoleInput"]
         CMic["STT"]
         CScreen["ScreenChange"]
-        CMock["Mock"]
     end
 
     subgraph Interceptors["[拦截器] 房间消息净化（§1.46.1）"]
@@ -99,7 +97,6 @@ Amaidesu/
 │       ├── collectors/          # 输入采集域（BaseCollector + CollectorManager + 各域 Collector）
 │       │   ├── bilibili/        #   B 站弹幕（legacy 第三方 / official WebSocket）
 │       │   ├── console/         #   控制台输入
-│       │   ├── mock/            #   确定性 JSONL 回放器（v2.0.7+ ADR-006：仅 jsonl 模式，模拟输入由 simulator/ 接管）
 │       │   ├── screen/          #   屏幕变化
 │       │   └── stt/             #   语音识别
 │       ├── tools/               # 工具族（ToolRegistry + 各 Provider；按 provider=builtin|game 溯源）
@@ -117,7 +114,7 @@ Amaidesu/
 │       ├── logging/             # 日志 + LogStreamer
 │       ├── memory/              # MemoryProvider + SimpleMemory + query_memory 工具
 │       ├── prompts/             # PromptManager（声明式键自动发现）
-│       ├── simulator/           # v2.0.7+ ADR-006：LLM 驱动仿真器（开发基础设施）；[simulator].enabled=true 时组合根装配；服务类 SimulatorService + 8 个核心实现类（persona_pool / cadence / gift_generator / llm_wrapper / session_selector / token_budget / types / config_schema）。默认 enabled=false，生产零沾染。详见 docs/development/simulator-guide.md。
+│       ├── simulator/           # 世界模拟器（开发基础设施，ADR-006）：三模式发射器（generate LLM 生成 / replay 录制回放 / off）；SimulatorService + PersonaPool / CadenceGenerator / GiftGenerator / SimulatorLLMWrapper / SessionSelector / TokenBudgetController / ReplayEngine；人设礼物入 SQLite（sim_personas/sim_gifts + 内置种子），观众上下文读 live_chat 窗口。默认 enabled=false，生产零沾染。详见 docs/development/simulator-guide.md。
 │       ├── storage/             # SQLite 存储层（StorageLedger 唯一写穿入口：订阅 room.message.# + streamer.speech，写 live_chat/gifts/super_chats + 维护 viewers 统计；SQLiteStore 提供领域查询如 list_recent_live_chat）
 │       └── types/               # 共享类型（NormalizedMessage 等）
 ├── dashboard/                   # 前端 SPA（pnpm 构建到 dashboard/dist/，60214 静态挂载）
@@ -214,7 +211,6 @@ sequenceDiagram
 | `bili_danmaku_official` | `src/modules/collectors/bilibili/official/` | v2 主动推（`_emit_semantic_events=True`，collect 内自行 emit `room.message.*`） | B 站官方 WebSocket 弹幕；含 `client/proto.py` + `client/websocket_client.py` |
 | `bili_danmaku` | `src/modules/collectors/bilibili/legacy/` | v2 主动推（`_emit_semantic_events=True`） | B 站第三方 HTTP API 弹幕 |
 | `console_input` | `src/modules/collectors/console/` | 兜底转发（基类 `_emit_normalized_message` 把 `data_type` 映射为 `room.message.danmaku/gift/super_chat/enter`） | 控制台输入 |
-| `mock_danmaku` | `src/modules/collectors/mock/` | v2 主动推；**v2.0.7+ ADR-006 收敛后仅保留 JSONL 回放**（LLM 驱动仿真由 `src/modules/simulator/` 的 `SimulatorService` 承担，二者互补不互斥） | 确定性 JSONL 回放器 |
 | `screen_change` | `src/modules/collectors/screen/` | 兜底转发 | 屏幕变化检测（`screen_change_collector.py`）；同目录另有 `screen_reader.py`（v2.0.9 起 VLM 走 LLMManager.chat_vision 收编）+ `screen_analyzer.py` 辅助 |
 | `stt` | `src/modules/collectors/stt/` | 兜底转发 | 语音识别（`stt_collector.py` + `config.py`） |
 
@@ -423,7 +419,7 @@ enabled = ["vts", "subtitle", "warudo", "obs"]  # 非 TTS 工具族：bind_core_
 
 ---
 
-*最后更新：2026-09-05（上下文四层架构落地：ContextService 定位为 L1 对话配对窗口——目录结构注释更新为"DialogueTurn 存取 + 启动时从 live_chat 回灌"；storage/ 目录注释补充 StorageLedger 唯一写穿入口（room.message.# + streamer.speech → live_chat/gifts/super_chats + viewers 统计）与 SQLiteStore 领域查询说明）*
+*最后更新：2026-09-05（世界发射器统一（ADR-006 修订）：MockCollector 整体删除——Mermaid 图 Ext 子图 Mock 节点与 Collectors 子图 CMock 节点移除、目录结构 collectors/mock/ 行删除、采集器组件表 mock_danmaku 行删除；确定性回放由 `SimulatorService` mode=replay 承载（详见 ADR-006 修订记录）。上下文四层架构落地：ContextService 定位为 L1 对话配对窗口——目录结构注释更新为"DialogueTurn 存取 + 启动时从 live_chat 回灌"；storage/ 目录注释补充 StorageLedger 唯一写穿入口（room.message.# + streamer.speech → live_chat/gifts/super_chats + viewers 统计）与 SQLiteStore 领域查询说明）*
 
 *最后更新：2026-09-05（v2.0.12 §8 概念修正：TTS 提升为基础设施。全景图：ToolRegistry 子图移除 TTS Facade + 引擎×4 节点并标注"TTS 提升为基础设施后已不含 TTS"，新增"共享基础设施 `src/modules/`"子图含 `tts/` 与 `audio/` 两个节点；UtteranceQueue→TTS 箭头直连基础模块节点（不再是 ToolRegistry 路由）。目录结构：`src/modules/tools/output/tts/` 子目录删除注释，新增 `src/modules/tts/` 段（4 Provider + common + gptsovits_client + wav_decoder + assembly）。启动时序：5a0 步骤改为 `build_tts_infrastructure` 装配期构造引擎实例注入 StreamerAgent（不再走 ToolRegistry）；5a 标注"TTS 已不在此列"。StreamerAgent 包角色表：发言管线行改为"构造期注入 `speak` 适配器 + 后台串行 `await speak(text, utterance_id)`，不再经 ToolRegistry"。工具族总览：v2.0.10 约 53 → v2.0.12 约 51；TTS 行整段重写为"基础模块"行（4 Provider 在 `src/modules/tts/`，按 `[tts].provider` 单选构造，不注册 ToolRegistry）；合计说明去掉 TTS 工具数。配置示例：`[tts]` 段行为参数补 `render_timeout_ms = 60000`；新增 `[tts.gptsovits]` 引擎子段示例；`tools.toml` 注释改为"TTS 一族已在 v2.0.12 提升为基础设施，本表完全不含 TTS"，删除原 `[tools.output.tts.gptsovits]` 子段示例。已知缺口闭环段：v2.0.10 → v2.0.12 §8 概念修正后最终态——TTS 由 `build_tts_infrastructure` 装配期注入，非 TTS 工具族由 `bind_core_tools` 列表驱动；同日术语统一：'退役出工具池'改为'提升为基础设施'（避免误导为降级））*
 

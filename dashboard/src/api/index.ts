@@ -2,8 +2,8 @@
  * Dashboard API 客户端（v2）
  *
  * 模拟直播能力控制面：
- * - ``simulatorApi`` → ``/api/v1/simulator/*``：LLM 驱动的 SimulatorService（ADR-006）
- * - ``mockCollectorApi`` → ``/api/v1/mock/*``：确定性 JSONL 回放 MockCollector
+ * - ``simulatorApi`` → ``/api/v1/simulator/*``：世界模拟器 SimulatorService
+ *   （generate 生成 / replay 录制回放三模式）
  */
 
 import axios from 'axios';
@@ -25,8 +25,9 @@ import type {
   LLMHistoryResponse,
   LLMRequestHistory,
   UnifiedCapabilitiesView,
-  MockCollectorStatus,
   SimulatorStatus,
+  SimPersona,
+  SimGift,
   SimulatorControlResponse,
   AgendaStateResponse,
   AgendaControlRequest,
@@ -97,26 +98,33 @@ export const capabilitiesApi = {
   list: () => api.get<UnifiedCapabilitiesView>('/capabilities'),
 };
 
-// ===== Simulator 控制面（ADR-006：LLM 驱动生成式虚拟直播间） =====
+// ===== Simulator 控制面（世界模拟器：generate 生成 / replay 回放） =====
 //
-// 控制 SimulatorService 的启停与状态查询。enabled=false 时 status 仍返回
-// （不抛 404）；start 会拒绝并提示需要修改配置后重启。
+// 控制 SimulatorService 的启停与状态查询，以及运行时数据（常驻人设 /
+// 礼物目录 CRUD、回放日期选择）。enabled=false 时 status 仍返回（不抛
+// 404）；start 会拒绝并提示需要修改配置后重启。
 export const simulatorApi = {
   getStatus: () => api.get<SimulatorStatus>('/simulator/status'),
-  start: () => api.post<SimulatorControlResponse>('/simulator/start'),
+  start: (replayDate?: string) =>
+    api.post<SimulatorControlResponse>('/simulator/start', replayDate ? { replay_date: replayDate } : {}),
   stop: () => api.post<SimulatorControlResponse>('/simulator/stop'),
-};
+  listReplayDates: () => api.get<{ dates: string[] }>('/simulator/replay/dates'),
 
-// ===== Mock 采集器控制面（ADR-006：确定性 JSONL 回放器） =====
-//
-// 代理 CollectorManager 的 ``mock`` 实例启停。控制面与通用
-// ``/api/v1/components/collectors/mock/control`` 等价；独立 ``/mock/*`` 路径
-// 是为与 ``/api/v1/simulator/*`` 做语义区隔（LLM 仿真 vs JSONL 回放）。
-// 人设 / 礼物雨 / 话题注入等生成式能力归 SimulatorService，不在本控制面。
-export const mockCollectorApi = {
-  getStatus: () => api.get<MockCollectorStatus>('/mock/status'),
-  start: () => api.post<MockCollectorStatus>('/mock/start'),
-  stop: () => api.post<MockCollectorStatus>('/mock/stop'),
+  listPersonas: () => api.get<{ personas: SimPersona[]; is_available: boolean }>('/simulator/personas'),
+  createPersona: (payload: Partial<SimPersona>) =>
+    api.post<{ success: boolean; message?: string; persona?: SimPersona }>('/simulator/personas', payload),
+  updatePersona: (userId: string, payload: Partial<SimPersona>) =>
+    api.patch<{ success: boolean; message?: string }>(`/simulator/personas/${userId}`, payload),
+  deletePersona: (userId: string) =>
+    api.delete<{ success: boolean; message?: string }>(`/simulator/personas/${userId}`),
+
+  listGifts: () => api.get<{ gifts: SimGift[]; is_available: boolean }>('/simulator/gifts'),
+  createGift: (payload: Partial<SimGift>) =>
+    api.post<{ success: boolean; message?: string; gift?: SimGift }>('/simulator/gifts', payload),
+  updateGift: (giftId: string, payload: Partial<SimGift>) =>
+    api.patch<{ success: boolean; message?: string }>(`/simulator/gifts/${giftId}`, payload),
+  deleteGift: (giftId: string) =>
+    api.delete<{ success: boolean; message?: string }>(`/simulator/gifts/${giftId}`),
 };
 
 // ===== Trace =====

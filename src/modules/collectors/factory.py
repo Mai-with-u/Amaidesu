@@ -7,7 +7,6 @@
 - bili_danmaku         → BiliDanmakuCollector（legacy）
 - bili_danmaku_official→ BiliDanmakuOfficialCollector
 - console_input        → ConsoleInputCollector
-- mock_danmaku         → MockCollector
 - read_pingmu          → ScreenChangeCollector
 - stt                  → STTCollector
 """
@@ -23,7 +22,6 @@ SUPPORTED_COLLECTORS: tuple[str, ...] = (
     "bili_danmaku",
     "bili_danmaku_official",
     "console_input",
-    "mock_danmaku",
     "read_pingmu",
     "stt",
 )
@@ -55,10 +53,6 @@ def instantiate_collector(
         from src.modules.collectors.console.console_input_collector import ConsoleInputCollector
 
         return ConsoleInputCollector(config=config or {}, event_bus=event_bus)
-    if name == "mock_danmaku":
-        from src.modules.collectors.mock.mock_collector import MockCollector
-
-        return MockCollector(config=config or {}, event_bus=event_bus)
     if name == "read_pingmu":
         from src.modules.collectors.screen.screen_change_collector import ScreenChangeCollector
 

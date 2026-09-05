@@ -233,7 +233,7 @@ export interface RoomMessageEventData {
   content?: string;
   gift?: { name?: string; count?: number } | null;
   sc?: { amount?: number } | null;
-  /** 模拟数据溯源（true=simulator/mock 产生） */
+  /** 模拟数据溯源（true=模拟器生成/回放；统计查询必须排除） */
   simulated?: boolean;
   /** Unix 毫秒 */
   timestamp_ms?: number;
@@ -354,8 +354,43 @@ export interface SimulatorStatus {
   enabled: boolean;
   is_available: boolean;
   is_running: boolean;
+  /** 当前运行模式（off/generate/replay） */
+  mode: string;
+  replay_progress: SimulatorReplayProgress | null;
   message: string;
   config: Record<string, unknown>;
+}
+
+/** replay 模式回放进度 */
+export interface SimulatorReplayProgress {
+  date: string | null;
+  total: number;
+  remaining: number;
+}
+
+/** 模拟器常驻人设（sim_personas 表的运行时视图） */
+export interface SimPersona {
+  user_id: string;
+  user_nickname: string;
+  role: string;
+  personality: string;
+  speaking_style: string;
+  fans_medal_level: number;
+  guard_level: number;
+  context_window_size: number | null;
+  is_temporary: boolean;
+  is_active: boolean;
+  messages_generated: number;
+}
+
+/** 模拟器礼物目录条目（sim_gifts 表的运行时视图） */
+export interface SimGift {
+  gift_id: string;
+  gift_name: string;
+  category: string;
+  weight: number;
+  data_type: string;
+  sc_amount_rmb: number | null;
 }
 
 /**
@@ -365,27 +400,6 @@ export interface SimulatorControlResponse {
   success: boolean;
   message: string;
   is_running?: boolean;
-}
-
-// ==================== Mock 采集器控制面（ADR-006 收敛后） ====================
-
-/**
- * Mock 采集器状态（`/api/v1/mock/status` 响应）。
- *
- * ADR-006 收敛后 mock 采集器只承担确定性 JSONL 回放；其暴露字段
- * （name/description/config）与 CollectorManager 注册实例一致。控制面
- * 不再承载旧"模拟器半吊子模式"的人设 / 礼物雨 / 话题注入 / token 预算
- * 等端点——对应类型 ``MockCollectorStats`` / ``MockCollectorPersona`` /
- * ``MockPersonaUpdatePayload`` 已删除。
- */
-export interface MockCollectorStatus {
-  is_available: boolean;
-  is_running: boolean;
-  name: string;
-  description: string;
-  /** 只读配置摘要（log_file_path / send_interval / loop_playback / emit_semantic_events） */
-  config: Record<string, unknown>;
-  message: string;
 }
 
 // ==================== Agenda（节目单控制面） ====================

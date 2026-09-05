@@ -10,7 +10,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+import shutil
+import tempfile
+from pathlib import Path
+from typing import Any, AsyncGenerator, Dict, Generator
 
 import pytest
 
@@ -19,6 +22,22 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.simulator import SimulatorService
 from src.modules.simulator.cadence import CadenceGenerator
+from src.modules.storage import SQLiteStore
+
+
+@pytest.fixture
+def temp_db_path() -> Generator[Path, None, None]:
+    td = Path(tempfile.mkdtemp(prefix="sim-speech-"))
+    yield td / "test.db"
+    shutil.rmtree(td, ignore_errors=True)
+
+
+@pytest.fixture
+async def sim_store(temp_db_path: Path) -> AsyncGenerator[SQLiteStore, None]:
+    s = SQLiteStore(temp_db_path)
+    await s.initialize()
+    yield s
+    await s.close()
 
 
 class _FakeLLMService:
@@ -55,10 +74,11 @@ def fake_llm() -> _FakeLLMService:
     return _FakeLLMService()
 
 
-async def _start_with_cadence(event_bus: EventBus, fake_llm: _FakeLLMService) -> SimulatorService:
+async def _start_with_cadence(event_bus: EventBus, fake_llm: _FakeLLMService, store: SQLiteStore) -> SimulatorService:
     """构造并 start 一个 SimulatorService，cadence 已构造。"""
     service = SimulatorService(
         event_bus=event_bus,
+        sqlite_store=store,
         services_by_type={type(fake_llm): fake_llm},
     )
     await service.setup(
@@ -80,9 +100,9 @@ async def _start_with_cadence(event_bus: EventBus, fake_llm: _FakeLLMService) ->
 
 
 @pytest.mark.asyncio
-async def test_start_subscribes_streamer_speech_handler(event_bus: EventBus, fake_llm: _FakeLLMService) -> None:
+async def test_start_subscribes_streamer_speech_handler(event_bus: EventBus, fake_llm: _FakeLLMService, sim_store: SQLiteStore) -> None:
     """start 后订阅生效（_subscribed_streamer_speech = True）。"""
-    service = await _start_with_cadence(event_bus, fake_llm)
+    service = await _start_with_cadence(event_bus, fake_llm, sim_store)
     try:
         assert service._subscribed_streamer_speech is True
         # EventBus 实际注册了 STREAMER_SPEECH handler
@@ -92,9 +112,9 @@ async def test_start_subscribes_streamer_speech_handler(event_bus: EventBus, fak
 
 
 @pytest.mark.asyncio
-async def test_streamer_speech_event_triggers_cadence_notify(event_bus: EventBus, fake_llm: _FakeLLMService) -> None:
+async def test_streamer_speech_event_triggers_cadence_notify(event_bus: EventBus, fake_llm: _FakeLLMService, sim_store: SQLiteStore) -> None:
     """手动 emit ``streamer.speech`` → cadence.notify_streamer_activity 被调用。"""
-    service = await _start_with_cadence(event_bus, fake_llm)
+    service = await _start_with_cadence(event_bus, fake_llm, sim_store)
     try:
         cadence = service._cadence
         assert cadence is not None
@@ -123,9 +143,9 @@ async def test_streamer_speech_event_triggers_cadence_notify(event_bus: EventBus
 
 
 @pytest.mark.asyncio
-async def test_stop_unsubscribes_streamer_speech_handler(event_bus: EventBus, fake_llm: _FakeLLMService) -> None:
+async def test_stop_unsubscribes_streamer_speech_handler(event_bus: EventBus, fake_llm: _FakeLLMService, sim_store: SQLiteStore) -> None:
     """stop() 后解绑 STREAMER_SPEECH：再次 emit 不触发 cadence。"""
-    service = await _start_with_cadence(event_bus, fake_llm)
+    service = await _start_with_cadence(event_bus, fake_llm, sim_store)
     # stop 之前 cadence 应在 NORMAL
     cadence = service._cadence
     assert cadence is not None
@@ -153,9 +173,9 @@ async def test_stop_unsubscribes_streamer_speech_handler(event_bus: EventBus, fa
 
 
 @pytest.mark.asyncio
-async def test_double_start_does_not_double_subscribe(event_bus: EventBus, fake_llm: _FakeLLMService) -> None:
+async def test_double_start_does_not_double_subscribe(event_bus: EventBus, fake_llm: _FakeLLMService, sim_store: SQLiteStore) -> None:
     """重复 start() 不重复挂 handler（_subscribed_streamer_speech flag 守护）。"""
-    service = await _start_with_cadence(event_bus, fake_llm)
+    service = await _start_with_cadence(event_bus, fake_llm, sim_store)
     try:
         # 记录订阅后的 handler 数
         handler_count_before = len(event_bus._handlers[CoreEvents.STREAMER_SPEECH])
@@ -177,9 +197,9 @@ async def test_double_start_does_not_double_subscribe(event_bus: EventBus, fake_
 
 
 @pytest.mark.asyncio
-async def test_handler_only_calls_notify_no_llm_side_effect(event_bus: EventBus, fake_llm: _FakeLLMService) -> None:
+async def test_handler_only_calls_notify_no_llm_side_effect(event_bus: EventBus, fake_llm: _FakeLLMService, sim_store: SQLiteStore) -> None:
     """handler 仅同步调 notify + 记 DEBUG，不应触发 LLM 调用或决策出口。"""
-    service = await _start_with_cadence(event_bus, fake_llm)
+    service = await _start_with_cadence(event_bus, fake_llm, sim_store)
     try:
         cadence = service._cadence
         assert cadence is not None
@@ -210,7 +230,7 @@ async def test_handler_only_calls_notify_no_llm_side_effect(event_bus: EventBus,
 
 
 @pytest.mark.asyncio
-async def test_disabled_config_does_not_subscribe(event_bus: EventBus, fake_llm: _FakeLLMService) -> None:
+async def test_disabled_config_does_not_subscribe(event_bus: EventBus, fake_llm: _FakeLLMService, sim_store: SQLiteStore) -> None:
     """``enabled=false`` 时 setup() 不构造子系统，也不订阅 streamer.speech。"""
     # 用无 LLM 注入路径（services_by_type={}），setup 在 llm_service is None 处 return
     service = SimulatorService(

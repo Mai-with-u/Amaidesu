@@ -394,13 +394,14 @@ async def create_app_components(
 
     # --- SimulatorService（开发基础设施）---
     # 默认 enabled=false 生产零装配；enabled=true 时装配并自动启动（除非 --dry）。
-    # 装配需 LLMManager + EventBus + ConfigService（注入 services_by_type 供 LLMManager 类型 key 查找）。
+    # 装配需 SQLiteStore（人设/礼物/世界窗口）+ LLMManager（generate 模式）+ EventBus + ConfigService。
     simulator_service: Optional["SimulatorService"] = None
     simulator_cfg = config.get("simulator", {}) if isinstance(config, dict) else {}
     if isinstance(simulator_cfg, dict) and simulator_cfg.get("enabled", False):
         logger.info("初始化 SimulatorService（src/modules/simulator/）...")
         simulator_service = SimulatorService(
             event_bus=event_bus,
+            sqlite_store=sqlite_store,
             services_by_type={type(llm_service): llm_service},
         )
         await simulator_service.setup(
@@ -752,9 +753,9 @@ async def _register_collectors_from_config(
     """根据 [tools.perception.config] 段注册 Collector 实例到 CollectorManager。
 
     v2 段结构（tools.toml）：
-        enabled = ["bili_danmaku", "mock_danmaku", ...]
+        enabled = ["bili_danmaku", "console_input", ...]
         bili_danmaku = { ... }
-        mock_danmaku = { ... }
+        console_input = { ... }
 
     新增可选 ``llm_service`` 参数，透传给需要 VLM 的采集器（仅
     ``screen``/``read_pingmu``）。其余 collector 不消费 LLMManager，参数被忽略。

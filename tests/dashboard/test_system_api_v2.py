@@ -46,9 +46,6 @@ enabled = ["bili_danmaku"]
 [tools.perception.config.bili_danmaku]
 room_id = 1
 
-[tools.perception.config.mock_danmaku]
-send_interval = 1.0
-
 [tools.output]
 enabled = true
 provider = "builtin"
@@ -158,7 +155,7 @@ def test_status_groups_count_correctly(client: TestClient) -> None:
     resp = client.get("/api/v1/system/status").json()
 
     collectors = resp["groups"]["collectors"]
-    assert collectors["total"] == 2  # bili_danmaku + mock_danmaku
+    assert collectors["total"] == 1  # bili_danmaku
     assert collectors["enabled"] == 1  # bili_danmaku 启用
 
     agents = resp["groups"]["agents"]

@@ -100,12 +100,6 @@ def _try_import_schema(collector_name: str) -> Optional[type]:
             )
 
             schema_cls = ConsoleInputCollector.ConfigSchema
-        elif collector_name == "mock" or collector_name == "mock_danmaku":
-            from src.modules.collectors.mock.mock_collector import (
-                MockCollector,
-            )
-
-            schema_cls = MockCollector.ConfigSchema
         elif collector_name == "screen" or collector_name == "read_pingmu":
             from src.modules.collectors.screen.screen_change_collector import (
                 ScreenChangeCollector,
@@ -175,7 +169,6 @@ class InputCollectorsConfig(BaseConfig):
     bili_danmaku: Optional[Any] = _optional_collector_field("bili_danmaku")
     bili_danmaku_official: Optional[Any] = _optional_collector_field("bili_danmaku_official")
     console_input: Optional[Any] = _optional_collector_field("console_input")
-    mock_danmaku: Optional[Any] = _optional_collector_field("mock_danmaku")
     read_pingmu: Optional[Any] = _optional_collector_field("read_pingmu")
     stt: Optional[Any] = _optional_collector_field("stt")
 
@@ -298,7 +291,6 @@ _PUBLIC_NAME_TO_COLLECTOR: Dict[str, str] = {
     "BiliDanmakuConfigSchema": "bili_danmaku",
     "BiliDanmakuOfficialConfigSchema": "bili_danmaku_official",
     "ConsoleInputConfigSchema": "console_input",
-    "MockDanmakuConfigSchema": "mock_danmaku",
     "ReadPingmuConfigSchema": "read_pingmu",
     "STTConfigSchema": "stt",
 }
@@ -377,9 +369,6 @@ if TYPE_CHECKING:
     )
     from src.modules.collectors.console.console_input_collector import (  # noqa: F401
         ConsoleInputCollector,
-    )
-    from src.modules.collectors.mock.mock_collector import (  # noqa: F401
-        MockCollector,
     )
     from src.modules.collectors.screen.screen_change_collector import (  # noqa: F401
         ScreenChangeCollector,

@@ -1,5 +1,7 @@
 """模拟直播间的配置 Schema。"""
 
+from typing import Optional
+
 from pydantic import Field
 
 from src.modules.config.schemas.base import BaseConfig
@@ -8,7 +10,32 @@ from src.modules.config.schemas.base import BaseConfig
 class SimulatorConfigSchema(BaseConfig):
     """模拟直播间调试工具配置 Schema"""
 
-    enabled: bool = Field(default=False, description="是否启用模拟器")
+    enabled: bool = Field(default=False, description="是否启用模拟器（装配开关；false 时零装配）")
+    mode: str = Field(
+        default="generate",
+        description="世界模式: generate=LLM 生成 / replay=录制回放 / off=装配但不运行",
+        pattern="^(generate|replay|off)$",
+    )
+    # ---- replay 模式参数 ----
+    replay_date: Optional[str] = Field(
+        default=None,
+        description="replay 模式默认回放的录制日期（YYYY-MM-DD，对应 data/events/{date}.jsonl）",
+    )
+    replay_speed: float = Field(
+        default=1.0,
+        ge=0.1,
+        le=100.0,
+        description="回放速度倍率（相邻消息间隔除以该值；100 近似全速）",
+    )
+    replay_gap_cap_s: float = Field(
+        default=60.0,
+        ge=1.0,
+        description="回放相邻消息的间隔上限（秒），截断超长冷场",
+    )
+    replay_simulated_only: bool = Field(
+        default=False,
+        description="回放时是否仅回放 simulated 消息（False 时真实+模拟录制内容都回放）",
+    )
     base_rate_per_minute: float = Field(
         default=6.0,
         ge=0.1,
@@ -43,7 +70,6 @@ class SimulatorConfigSchema(BaseConfig):
     language: str = Field(default="zh", description="生成消息语言")
     session_strategy: str = Field(default="smart", description="session 选择策略")
     fallback_session_id: str = Field(default="simulated_viewers")
-    stats_persistence: bool = Field(default=False, description="是否持久化统计（v1 仅 in-memory）")
     cadence_mode: str = Field(
         default="uniform", description="节奏模式: uniform=均匀随机, fixed=固定间隔, auto=自适应突发"
     )

@@ -25,7 +25,7 @@ flowchart TB
     subgraph Ext["外部输入"]
         Bili["B 站弹幕 official / legacy"]
         Cons["控制台"]
-        Mock["模拟输入<br/>(MockCollector JSONL 回放)"]
+        Sim["模拟世界<br/>(SimulatorService generate/replay)"]
         Sim["模拟输入<br/>(SimulatorService LLM 仿真<br/>条件装配，仅开发期)"]
         Mic["麦克风 STT"]
         Screen["屏幕变化"]
@@ -36,7 +36,7 @@ flowchart TB
         C1["BiliDanmakuOfficial"]
         C2["BiliDanmakuLegacy"]
         C3["ConsoleInput"]
-        C4["Mock"]
+        C4["Simulator"]
         C5["STT"]
         C6["ScreenChange"]
     end
@@ -262,7 +262,7 @@ v2 中不同数据走不同通道，不要混用：
 
 ---
 
-*最后更新：2026-09-05（v2.0.12 §8 概念修正：TTS 提升为基础设施。§1 事件流向图 Tools 子图移除 TTS Facade + 引擎组节点并迁至新增 `InFra 基础模块 src/modules/tts/` 子图（含 TTS 引擎实例节点）；图例说明改写——speech 经 UtteranceQueue 串行送入装配期注入的 `tts_engine.handle_speech`，VTS 仍是工具、TTS 不再是。§5 链路示例"回复文本就绪"段：worker 串行 `await speak(text, utterance_id)`（注入的 speak 适配器，绑定 `tts_engine.handle_speech`）；§5 链路关键性质"TTS 是基础设施而非工具"段改写为"TTS 是基础模块而非工具（v2.0.12 §8 修正）"+ 装配期注入直连说明 + 配置 `core [tts]` 自包含。§6 通信机制选型表：`ToolRegistry.invoke` 行示例改为 `vts_set_expression`（VTS 仍是工具，TTS 不再列入此行）；新增"基础模块直调"行说明 `tts_engine.handle_speech`。§6 TTS 消费者通道三分法"设计要点"直调段：UtteranceQueue + TTS Facade → UtteranceQueue → 注入的 `tts_engine.handle_speech`；同日术语统一：'退役出工具池'改为'提升为基础设施'（避免误导为降级））*
+*最后更新：2026-09-05（ADR-006 修订：Ext 子图 MockCollector 节点改为 SimulatorService（generate 生成 / replay 回放统一承载，world 发射器唯一）；世界状态唯一事实源——模拟弹幕经 StorageLedger 落 live_chat（simulated 列），观众上下文读取 live_chat 最近窗口。v2.0.12 §8 概念修正：TTS 提升为基础设施。§1 事件流向图 Tools 子图移除 TTS Facade + 引擎组节点并迁至新增 `InFra 基础模块 src/modules/tts/` 子图（含 TTS 引擎实例节点）；图例说明改写——speech 经 UtteranceQueue 串行送入装配期注入的 `tts_engine.handle_speech`，VTS 仍是工具、TTS 不再是。§5 链路示例"回复文本就绪"段：worker 串行 `await speak(text, utterance_id)`（注入的 speak 适配器，绑定 `tts_engine.handle_speech`）；§5 链路关键性质"TTS 是基础设施而非工具"段改写为"TTS 是基础模块而非工具（v2.0.12 §8 修正）"+ 装配期注入直连说明 + 配置 `core [tts]` 自包含。§6 通信机制选型表：`ToolRegistry.invoke` 行示例改为 `vts_set_expression`（VTS 仍是工具，TTS 不再列入此行）；新增"基础模块直调"行说明 `tts_engine.handle_speech`。§6 TTS 消费者通道三分法"设计要点"直调段：UtteranceQueue + TTS Facade → UtteranceQueue → 注入的 `tts_engine.handle_speech`；同日术语统一：'退役出工具池'改为'提升为基础设施'（避免误导为降级））*
 
 *上次更新：2026-08-28（v2.0.8 Sticker 事件链全链删除——`output.sticker.command` / Sticker→VTS 单向信号链路随 C1 治理收口：StickerHelper 零实例化零调用、消费端 VTSProvider 仅空转订阅；§1 事件流向图 EventBus 子图枚举事件清单移除 `output.sticker.command`）*
 

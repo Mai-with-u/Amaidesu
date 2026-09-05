@@ -41,13 +41,13 @@
           <el-icon><ChatLineRound /></el-icon>
           <span>会话调试</span>
         </el-menu-item>
+        <el-menu-item index="/simulator">
+          <el-icon><MagicStick /></el-icon>
+          <span>世界模拟器</span>
+        </el-menu-item>
         <el-menu-item index="/devtools">
           <el-icon><Cpu /></el-icon>
           <span>开发者工具</span>
-        </el-menu-item>
-        <el-menu-item index="/simulator">
-          <el-icon><VideoPlay /></el-icon>
-          <span>模拟器</span>
         </el-menu-item>
         <el-menu-item index="/traces">
           <el-icon><Opportunity /></el-icon>
@@ -104,7 +104,7 @@ import {
   Opportunity,
   VideoCamera,
   List,
-  VideoPlay,
+  MagicStick,
 } from '@element-plus/icons-vue';
 
 const route = useRoute();

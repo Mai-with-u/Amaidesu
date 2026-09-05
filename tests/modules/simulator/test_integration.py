@@ -14,7 +14,10 @@ LLM 注入：service.py:_find_llm_service 用 duck-type 检测 services_by_type
 from __future__ import annotations
 
 import asyncio
-from typing import Any, AsyncIterator, Dict, List, Optional
+import shutil
+import tempfile
+from pathlib import Path
+from typing import Any, AsyncGenerator, Dict, Generator, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -23,6 +26,22 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.simulator import SimulatorService
+from src.modules.storage import SQLiteStore
+
+
+@pytest.fixture
+def temp_db_path() -> Generator[Path, None, None]:
+    td = Path(tempfile.mkdtemp(prefix="sim-int-"))
+    yield td / "test.db"
+    shutil.rmtree(td, ignore_errors=True)
+
+
+@pytest.fixture
+async def sim_store(temp_db_path: Path) -> AsyncGenerator[SQLiteStore, None]:
+    s = SQLiteStore(temp_db_path)
+    await s.initialize()
+    yield s
+    await s.close()
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +145,7 @@ class TestSetupAndReadConfig:
 
 
 @pytest.mark.asyncio
-async def test_enabled_emits_danmaku_with_simulated_flag() -> None:
+async def test_enabled_emits_danmaku_with_simulated_flag(sim_store: SQLiteStore) -> None:
     """enabled=true + mock EventBus 下启动 → emit room.message.danmaku 且 payload.simulated=True。"""
     event_bus = EventBus()
     received: List[RoomMessagePayload] = []
@@ -145,6 +164,7 @@ async def test_enabled_emits_danmaku_with_simulated_flag() -> None:
     fake_llm = _FakeLLMService(reply="测试弹幕", tokens=5)
     service = SimulatorService(
         event_bus=event_bus,
+        sqlite_store=sim_store,
         services_by_type={type(fake_llm): fake_llm},
     )
     await service.setup(
@@ -207,12 +227,13 @@ class TestStopCleanupIdempotent:
         await service.cleanup()  # 重复调用不抛
 
     @pytest.mark.asyncio
-    async def test_full_lifecycle_cleanup(self) -> None:
+    async def test_full_lifecycle_cleanup(self, sim_store: SQLiteStore) -> None:
         """start → stop → cleanup → 再次 cleanup 全流程幂等。"""
         event_bus = EventBus()
         fake_llm = _FakeLLMService()
         service = SimulatorService(
             event_bus=event_bus,
+            sqlite_store=sim_store,
             services_by_type={type(fake_llm): fake_llm},
         )
         await service.setup(
@@ -239,12 +260,13 @@ class TestCancelledErrorPropagation:
     """stop() / cleanup() 期间外层 CancelledError 必须透传，不被吞成正常返回。"""
 
     @pytest.mark.asyncio
-    async def test_stop_propagates_cancellation(self) -> None:
+    async def test_stop_propagates_cancellation(self, sim_store: SQLiteStore) -> None:
         """在 stop() 内部模拟外层取消：CancelledError 必须传播到调用方。"""
         event_bus = EventBus()
         fake_llm = _FakeLLMService()
         service = SimulatorService(
             event_bus=event_bus,
+            sqlite_store=sim_store,
             services_by_type={type(fake_llm): fake_llm},
         )
         await service.setup(
@@ -264,12 +286,13 @@ class TestCancelledErrorPropagation:
             await service.stop()
 
     @pytest.mark.asyncio
-    async def test_run_loop_re_raises_cancelled(self) -> None:
+    async def test_run_loop_re_raises_cancelled(self, sim_store: SQLiteStore) -> None:
         """主循环 _run() 捕获 CancelledError 后必须重新 raise，保持任务取消语义。"""
         event_bus = EventBus()
         fake_llm = _FakeLLMService()
         service = SimulatorService(
             event_bus=event_bus,
+            sqlite_store=sim_store,
             services_by_type={type(fake_llm): fake_llm},
         )
         await service.setup(
