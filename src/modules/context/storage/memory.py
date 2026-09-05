@@ -6,7 +6,7 @@ import asyncio
 import time
 from typing import Dict, List, Optional
 
-from src.modules.context.models import ConversationMessage, SessionInfo
+from src.modules.context.models import ConversationMessage, DialogueTurn, MessageRole, SessionInfo
 from src.modules.logging import get_logger
 
 
@@ -28,34 +28,88 @@ class MemoryStorage:
     async def add_message(self, message: ConversationMessage) -> None:
         """添加消息到会话"""
         async with self._lock:
-            session_id = message.session_id
+            await self._append_message_locked(message)
 
-            # 检查会话数限制
-            if session_id not in self._sessions:
-                if len(self._sessions) >= self.max_sessions:
-                    # 删除最旧的会话
-                    oldest_session = min(self._session_info.items(), key=lambda x: x[1].created_at)[0]
-                    await self._delete_session_no_lock(oldest_session)
-                    self.logger.debug(f"达到会话数限制，删除最旧会话: {oldest_session}")
+    async def _append_message_locked(self, message: ConversationMessage) -> None:
+        """追加单条消息到会话（无锁，必须在持有 self._lock 时调用）。
 
-                # 创建新会话
-                self._sessions[session_id] = []
-                self._session_info[session_id] = SessionInfo(session_id=session_id)
+        与 add_message 共享的写入核心：处理会话容量上限、按 FIFO 淘汰
+        最旧消息、维护 SessionInfo。供 add_message（外部单条写入）和
+        seed_turns（批量回灌）共用，避免逻辑重复。
+        """
+        session_id = message.session_id
 
-            # 检查消息数限制
-            messages = self._sessions[session_id]
-            if len(messages) >= self.max_messages_per_session:
-                # 删除最旧的消息
-                removed = messages.pop(0)
-                self.logger.debug(f"会话 {session_id} 达到消息数限制，删除最旧消息: {removed.message_id}")
+        # 检查会话数限制
+        if session_id not in self._sessions:
+            if len(self._sessions) >= self.max_sessions:
+                # 删除最旧的会话
+                oldest_session = min(self._session_info.items(), key=lambda x: x[1].created_at)[0]
+                await self._delete_session_no_lock(oldest_session)
+                self.logger.debug(f"达到会话数限制，删除最旧会话: {oldest_session}")
 
-            # 添加新消息
-            messages.append(message)
+            # 创建新会话
+            self._sessions[session_id] = []
+            self._session_info[session_id] = SessionInfo(session_id=session_id)
 
-            # 更新会话信息
-            session_info = self._session_info[session_id]
-            session_info.message_count = len(messages)
-            session_info.last_active = message.timestamp
+        # 检查消息数限制
+        messages = self._sessions[session_id]
+        if len(messages) >= self.max_messages_per_session:
+            # 删除最旧的消息
+            removed = messages.pop(0)
+            self.logger.debug(f"会话 {session_id} 达到消息数限制，删除最旧消息: {removed.message_id}")
+
+        # 添加新消息
+        messages.append(message)
+
+        # 更新会话信息
+        session_info = self._session_info[session_id]
+        session_info.message_count = len(messages)
+        session_info.last_active = message.timestamp
+
+    async def seed_turns(self, session_id: str, turns: List[DialogueTurn]) -> int:
+        """批量灌入对话配对轮（重启回灌用）。
+
+        将 turns 扁平化为逐条消息并追加到 session 尾部（保持现有逐条
+        存储形态）：viewer_messages 每条作为独立 USER 消息，assistant_message
+        非空时紧随其后追加 ASSISTANT 消息，整体顺序与 turns 列表一致。
+        返回实际写入的消息条数（含被 FIFO 淘汰的部分，按"写入了多少"计）。
+
+        - 受 max_messages_per_session FIFO 约束（与自然流式写入行为一致，
+          超限时丢弃最旧消息，被淘汰的也算入返回值）
+        - timestamp 使用 turn.start_timestamp（viewer）/ end_timestamp
+          （assistant）以保证顺序与时间语义
+        - 复用 _append_message_locked 的写入核心逻辑（会话容量、淘汰、
+          SessionInfo 更新），与 add_message 行为等价
+        - 空列表直接返回 0，不会创建空 session（避免无意义的空桶）
+        """
+        if not turns:
+            return 0
+
+        appended = 0
+        async with self._lock:
+            for turn in turns:
+                for viewer_text in turn.viewer_messages:
+                    msg = ConversationMessage(
+                        session_id=session_id,
+                        role=MessageRole.USER,
+                        content=viewer_text,
+                        timestamp=turn.start_timestamp,
+                    )
+                    await self._append_message_locked(msg)
+                    appended += 1
+
+                if turn.assistant_message is not None:
+                    msg = ConversationMessage(
+                        session_id=session_id,
+                        role=MessageRole.ASSISTANT,
+                        content=turn.assistant_message,
+                        emotion=turn.assistant_emotion,
+                        timestamp=turn.end_timestamp,
+                    )
+                    await self._append_message_locked(msg)
+                    appended += 1
+
+        return appended
 
     async def get_messages(
         self,

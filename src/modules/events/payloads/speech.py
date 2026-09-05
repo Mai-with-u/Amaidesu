@@ -15,6 +15,9 @@ v2 语义域事件 Payload 定义：streamer.speech
 - 不携带 ``live_session_id``：场次归属由订阅方按自身上下文关联（先例：
   ``tts.utterance.*`` Payload 同样不带，场次归属归订阅方解析）。
 - ``emotion`` 可选：存在则带上，不存在显式 None，便于下游按字段过滤。
+- ``target_user_id`` 可选：代表"这条发言回复的观众 user_id"，
+  None 表示主动发言/无特定回复对象。下游存储记账器据此顺路维护
+  viewers 的 ``replied_count`` 写穿。
 """
 
 from typing import Optional
@@ -43,6 +46,9 @@ class StreamerSpeechPayload(BasePayload):
             与 ``tts.utterance.*`` 共享同一键空间。
         text: 主播发言文本（已 strip；空字符串不触发本事件）。
         emotion: 关联情绪标签（可选；有则带上）。
+        target_user_id: 这条发言回复的观众 user_id（可选；主动发言/无特定
+            对象时为 ``None``）。下游落库组件可据此维护 viewers 的
+            ``replied_count`` 写穿。
         timestamp_ms: 事件发布时间戳（Unix 毫秒），用于日志/排序，
             与回复生成时刻解耦（防止事件总线异步分发时与实际发言时刻混用）。
     """
@@ -50,6 +56,10 @@ class StreamerSpeechPayload(BasePayload):
     utterance_id: str = Field(..., description="一次发言实例的唯一 ID（编排层生成，全链路关联键）")
     text: str = Field(..., description="主播发言文本")
     emotion: Optional[str] = Field(default=None, description="关联情绪标签（可选）")
+    target_user_id: Optional[str] = Field(
+        default=None,
+        description="这条发言回复的观众 user_id（主动发言/无特定对象时为 None）",
+    )
     timestamp_ms: int = Field(
         default_factory=lambda: now_ms(),
         description="事件发布时间戳（Unix 毫秒）",

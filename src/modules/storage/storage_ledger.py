@@ -7,11 +7,17 @@ StorageLedger —— 直播间消息流落库记账器
 
 ## 职责
 - 订阅 ``room.message.#``（MQTT 风格通配），按 payload.message_type 分发：
-  - ``danmaku``   → live_chat
-  - ``gift``      → gifts
-  - ``super_chat`` → super_chats
+  - ``danmaku``   → live_chat（+ 顺路 upsert viewers.message_count）
+  - ``gift``      → gifts（+ 顺路 upsert viewers.gift_count）
+  - ``super_chat`` → super_chats（SC 属 high-value，统计计数走 SimpleMemory 语义层，不混入 viewers）
   - ``enter``     → 当前 schema 无 enter 明细表 → debug 日志后丢弃（live_sessions 心跳与 enter 概念无关，独自走 session_manager，不在本层职责）
-- 端到端贯通 ``simulated`` 字段：payload.simulated → 表列 simulated INTEGER
+- viewers 写穿伴随：选在主表落库同点 upsert，避免后台 tick 的重复扫描与时序问题；SC 不计入保持现有行为
+- 订阅 ``streamer.speech`` 业务事件（主播发言），写入 live_chat（sender_role="assistant"，message_type="speak"）。
+  StreamerSpeechPayload 不携带 live_session_id，由构造期注入的 session_id 提供；未注入则
+  记 debug 日志后跳过（保持与现有"单条失败/缺关键字段降级"风格一致）。
+  若 payload.target_user_id 非空，顺路调用 upsert_viewer_replied 把该观众的
+  replied_count/interaction_count +1，形成"主播回复 → 观众被回复计数"闭环。
+- 端到端贯通 ``simulated`` 字段：payload.simulated → 表列 simulated INTEGER（主播发言天然非模拟，记 False）
 - 写入异常降级：单条失败 try/except 记 error 日志，不抛出、不影响主循环（即使记账器挂了，直播流也跑）
 
 ## 不做什么
@@ -31,12 +37,14 @@ from __future__ import annotations
 import hashlib
 from typing import TYPE_CHECKING, Callable, Dict, Optional
 
+from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import (
     GiftInfo,
     RoomMessagePayload,
     RoomMessageUser,
     SuperChatInfo,
 )
+from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.logging import get_logger
 from src.modules.storage.sqlite_store import SQLiteStore
 from src.modules.time_utils import now_ms
@@ -63,9 +71,12 @@ class StorageLedger:
         self,
         event_bus: "EventBus",
         sqlite_store: SQLiteStore,
+        *,
+        session_id: Optional[str] = None,
     ) -> None:
         self.event_bus = event_bus
         self.sqlite_store = sqlite_store
+        self._session_id: Optional[str] = session_id
         # per-instance 字符串→整数 session_pk 缓存（同进程内稳定）
         self._session_pk_cache: Dict[str, int] = {}
         # 订阅句柄表（stop 时按 event_name 取消）
@@ -84,10 +95,20 @@ class StorageLedger:
             model_class=RoomMessagePayload,
         )
         self._subscriptions[_ROOM_MESSAGE_WILDCARD] = handler
+
+        speech_handler = self._on_streamer_speech
+        self.event_bus.on(
+            CoreEvents.STREAMER_SPEECH,
+            speech_handler,
+            model_class=StreamerSpeechPayload,
+        )
+        self._subscriptions[CoreEvents.STREAMER_SPEECH] = speech_handler
+
         self._started = True
         logger.info(
             f"StorageLedger 已订阅 {_ROOM_MESSAGE_WILDCARD}"
-            "（danmaku→live_chat / gift→gifts / super_chat→super_chats / enter→debug 丢弃）",
+            "（danmaku→live_chat / gift→gifts / super_chat→super_chats / enter→debug 丢弃）"
+            f" + {CoreEvents.STREAMER_SPEECH}（→live_chat, sender_role=assistant）",
         )
 
     async def stop(self) -> None:
@@ -127,6 +148,11 @@ class StorageLedger:
                     message_type=msg_type,
                     simulated=payload.simulated,
                 )
+                await self.sqlite_store.upsert_viewer_message(
+                    user_id=payload.user.id,
+                    user_name=payload.user.name,
+                    timestamp_ms=payload.timestamp_ms,
+                )
                 return
             if msg_type == "gift":
                 gift = payload.gift
@@ -141,6 +167,11 @@ class StorageLedger:
                     gift_name=gift.name,
                     gift_count=int(gift.count),
                     simulated=payload.simulated,
+                )
+                await self.sqlite_store.upsert_viewer_gift(
+                    user_id=payload.user.id,
+                    user_name=payload.user.name,
+                    timestamp_ms=payload.timestamp_ms,
                 )
                 return
             if msg_type == "super_chat":
@@ -169,6 +200,53 @@ class StorageLedger:
             logger.error(
                 f"StorageLedger 写入失败（event={event_name}, message_type={getattr(payload, 'message_type', '?')}, "
                 f"simulated={getattr(payload, 'simulated', '?')}): {exc}",
+                exc_info=True,
+            )
+
+    async def _on_streamer_speech(
+        self,
+        event_name: str,
+        payload: StreamerSpeechPayload,
+        source: str,
+    ) -> None:
+        """``streamer.speech`` 回调：主播发言写入 live_chat（sender_role=assistant）。
+
+        StreamerSpeechPayload 不携带 live_session_id——本类持有的 ``_session_id`` 由
+        组合根注入（构造期）；未注入时记 debug 跳过，不与现有行为冲突。
+
+        若 ``payload.target_user_id`` 非空，在主表 insert 之后顺路调用
+        ``upsert_viewer_replied``，把对应观众的 ``replied_count`` /
+        ``interaction_count`` +1，形成"主播回复 → 观众被回复计数"的闭环。
+
+        异常隔离：单条失败仅记 error 日志，不抛出（即使记账器挂了，主直播流仍跑）。
+        """
+        try:
+            session_id = self._session_id
+            if session_id is None:
+                logger.debug(
+                    f"{CoreEvents.STREAMER_SPEECH} 事件未配置 session_id，跳过落库"
+                    f"（utterance_id={payload.utterance_id}）",
+                )
+                return
+            live_pk = self._session_pk(session_id)
+            await self.sqlite_store.insert_live_chat(
+                live_session_id=live_pk,
+                timestamp_ms=payload.timestamp_ms,
+                sender_role="assistant",
+                sender_name="主播",
+                content=payload.text,
+                message_type="speak",
+                simulated=False,
+            )
+            if payload.target_user_id:
+                await self.sqlite_store.upsert_viewer_replied(
+                    user_id=payload.target_user_id,
+                    timestamp_ms=payload.timestamp_ms,
+                )
+        except Exception as exc:  # noqa: BLE001 边界处吸收 + 日志
+            logger.error(
+                f"StorageLedger 写入主播发言失败（event={event_name}, "
+                f"utterance_id={getattr(payload, 'utterance_id', '?')}）：{exc}",
                 exc_info=True,
             )
 

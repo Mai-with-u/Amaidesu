@@ -21,7 +21,6 @@ from src.modules.context import (
     ContextAssembler,
     EnvironmentBlock,
     PlannerAssembler,
-    ReplyerAssembler,
     SectionStability,
     Snapshot,
     TimelineBlock,
@@ -147,31 +146,7 @@ def test_get_stable_prefix_only_stable_sections() -> None:
     assert "WINDOW-CHANGEABLE" not in stable_text, "动态段不应出现在 stable prefix"
 
 
-# =============================================================================
-# ReplyerAssembler：精简组装器
-# =============================================================================
-
-
-def test_replyer_assembler_simplified_layout() -> None:
-    """Replyer 精简：人格 → 发言意图 → 话题子集 → 时间块分钟级（置尾）。"""
-    replyer = ReplyerAssembler()
-    snap = replyer.assemble(
-        AssemblerInputs(
-            persona="你是一个虚拟主播",
-            reply_intent="鼓励观众继续互动",
-            topic_subset="Minecraft 进展",
-            timeline_blocks=[TimelineBlock(0, 60_000, "刚才聊到 MC")],
-            agent_kind="replyer",
-        )
-    )
-    titles = [sec.title for sec in snap.sections]
-    # 必须含：人格/发言意图/话题子集/时间块
-    assert "系统人格" in titles
-    assert "发言意图" in titles
-    assert "话题子集" in titles
-    assert "时间块（分钟级）" in titles
-    # 时间块必须是最后一节（§1.44：时间块分钟级 + 放尾部）
-    assert titles[-1] == "时间块（分钟级）", "时间块应置尾（§1.44 缓存前缀优先）"
+# ReplyerAssembler 已删除（无生产调用方，旧插件遗留）——对应测试随删
 
 
 # =============================================================================

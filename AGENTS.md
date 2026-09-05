@@ -271,7 +271,7 @@ Web Dashboard 两种模式（生产 60214 / 开发 60315）说明见 [快速开�
 
 - **命名约定**：类名 PascalCase（`EventBus`、`CollectorManager`、`StreamerAgent`）；函数/变量 snake_case；私有成员前导下划线；Collector/Agent/工具/拦截器类以类型名结尾（`ConsoleInputCollector` / `StreamerAgent` / `EdgeTTSProvider` / `RateLimitInterceptor`）。详细规范见 [开发规范](docs/development-guide.md)
 - **数据类型**：数据模型/配置 Schema/事件 Payload 用 Pydantic BaseModel；简单内部统计用 dataclass；接口协议用 Protocol
-- ContextService 提供会话历史/多会话隔离，ContextAssembler（`src/modules/context/`）为 Planner/Replyer 组装快照上下文（纯函数）
+- ContextService 是 L1 对话配对窗口（内存，`DialogueTurn` 配对视图；不持久化——启动时由组合根从 SQLite `live_chat` 通过 `seed_dialogue_turns` 回灌，见 `main.py::_bootstrap_context_from_live_chat`），ContextAssembler（`src/modules/context/`）为 Planner/Replyer 组装快照上下文（纯函数）
 - 核心布局：`src/modules/`（框架模块）+ `src/agents/`（业务 Agent：streamer/game）+ `config/`（七文件配置）+ `docs/`（文档），详见 [架构总览](docs/architecture/overview.md#目录结构)
 - 日志过滤：`--filter` 参数传入 `get_logger` 的第一个参数（类名或模块名）
 
@@ -296,4 +296,4 @@ Web Dashboard 两种模式（生产 60214 / 开发 60315）说明见 [快速开�
 
 ---
 
-*最后更新：2026-09-05（v2.0.12 §8 概念修正：TTS 提升为基础设施（基础模块）。架构红线节"主体性判据"工具例子清单中 TTS 加注"自 v2.0.12 §8 修正起已是基础模块，不再是工具"——其余三例仍为工具；高频 API 速查节"事件系统" + "命名约定" + "依赖注入"未改；事件 Payload / 配置 Schema / 三范式 / 拦截器节未改；同日术语统一：'退役出工具池'改为'提升为基础设施'（避免误导为降级））*
+*最后更新：2026-09-05（上下文四层架构落地：「其他约定」节 ContextService 条目补充为"L1 对话配对窗口（内存，DialogueTurn 配对视图；不持久化——启动时由组合根从 SQLite `live_chat` 通过 `seed_dialogue_turns` 回灌，见 `main.py::_bootstrap_context_from_live_chat`）"；「高频 API 速查」节未改；同日 v2.0.12 §8 概念修正：TTS 提升为基础设施（基础模块）。架构红线节"主体性判据"工具例子清单中 TTS 加注"自 v2.0.12 §8 修正起已是基础模块，不再是工具"——其余三例仍为工具；高频 API 速查节"事件系统" + "命名约定" + "依赖注入"未改；事件 Payload / 配置 Schema / 三范式 / 拦截器节未改；同日术语统一：'退役出工具池'改为'提升为基础设施'（避免误导为降级））*

@@ -8,7 +8,7 @@ Wave 3 仅**纯新增** ContextAssembler 纯函数，与该目录下旧 ``Contex
 - ``ContextAssembler``：纯函数组件（无循环、无定时、无 LLM）
 - ``Snapshot``：组装快照（稳定→动态排序 / 时间块分钟级置尾 / 直播流非对话历史）
 - ``AssembledSection``：section 单元（带稳定性 hint 便于 LLM 缓存前缀优先）
-- ``PlannerAssembler`` / ``ReplyerAssembler``：每类 Agent 一个 Assembler 实例
+- ``PlannerAssembler``：每类 Agent 一个 Assembler 实例
 
 ## 旧兼容
 - ``ContextService`` / ``ContextServiceConfig`` / ``ConversationMessage`` /
@@ -33,7 +33,6 @@ from src.modules.context.assembler import (
     AssemblerInputs,
     ContextAssembler,
     PlannerAssembler,
-    ReplyerAssembler,
     SectionStability,
     Snapshot,
 )
@@ -52,7 +51,6 @@ __all__ = [
     "AssemblerInputs",
     "ContextAssembler",
     "PlannerAssembler",
-    "ReplyerAssembler",
     "Snapshot",
     "SectionStability",
     "EnvironmentBlock",

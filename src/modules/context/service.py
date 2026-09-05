@@ -12,7 +12,7 @@ ContextService - 对话上下文管理服务
 from typing import Any, Dict, List, Optional
 
 from src.modules.context.config import ContextServiceConfig, StorageType
-from src.modules.context.models import ConversationMessage, MessageRole, SessionInfo
+from src.modules.context.models import ConversationMessage, DialogueTurn, MessageRole, SessionInfo
 from src.modules.context.storage.memory import MemoryStorage
 from src.modules.logging import get_logger
 
@@ -190,6 +190,126 @@ class ContextService:
         self.logger.debug(f"获取会话 {session_id} 的历史，共 {len(messages)} 条消息")
 
         return messages
+
+    async def seed_dialogue_turns(
+        self,
+        session_id: str,
+        turns: List[DialogueTurn],
+    ) -> int:
+        """批量回灌对话配对轮（启动时从 live_chat 构造后调用）。
+
+        委托存储层 ``seed_turns``，将 turns 扁平化为逐条消息追加到
+        会话窗口（保持 FIFO 上限约束）。返回实际写入条数。
+
+        启动时由组合根从持久化层构造 DialogueTurn 列表后调用，让
+        重启后 Planner/Replyer 仍保有"最近说过什么"的反重复记忆。
+        主存储形态仍是逐条消息；本方法只是批量回灌入口，不改变
+        存储语义。
+
+        Args:
+            session_id: 会话ID
+            turns: 要回灌的对话轮次列表
+
+        Returns:
+            实际写入的消息条数
+
+        Raises:
+            RuntimeError: 如果服务未初始化
+        """
+        if not self._initialized:
+            raise RuntimeError("ContextService 未初始化，请先调用 initialize()")
+
+        appended = await self._storage.seed_turns(session_id, turns)
+
+        self.logger.debug(f"回灌对话轮次到会话 {session_id}，写入 {appended} 条消息（输入 {len(turns)} 轮）")
+
+        return appended
+
+    async def get_dialogue_history(
+        self,
+        session_id: str,
+        limit: Optional[int] = None,
+        before_timestamp: Optional[float] = None,
+    ) -> List[DialogueTurn]:
+        """按**配对视图**获取最近对话（观众消息组 → 主播回复为一道轮次）。
+
+        从存储层逐条消息反向聚合为 DialogueTurn：一条 ASSISTANT
+        及其之前的连续 USER 消息组成一轮；连续多条 USER（无 ASSISTANT
+        间隔）归入同一轮；SYSTEM 消息归入观众侧；trailing 的 USER
+        （尚未被回复）也作为最后一轮返回（assistant_message=None）。
+
+        主存储形态仍是逐条消息，本方法只做"配对视图"的聚合投影，
+        供 Planner/Replyer 一次性看到"观众问了什么 + 主播怎么回的"。
+
+        Args:
+            session_id: 会话ID
+            limit: 限制返回的轮次数（None 表示不限制；先全量聚合再取最近 N 轮）
+            before_timestamp: 只返回此时间戳之前的轮（按轮 start_timestamp 过滤）
+
+        Returns:
+            DialogueTurn 列表（按时间正序排列，旧→新）
+
+        Raises:
+            RuntimeError: 如果服务未初始化
+        """
+        if not self._initialized:
+            raise RuntimeError("ContextService 未初始化，请先调用 initialize()")
+
+        # 不在存储层做 before_timestamp 过滤：过滤粒度是"轮"，跨轮边界
+        # 需要看完整序列，先全量拉取在 Python 侧聚合后再按轮 start_timestamp 过滤
+        messages = await self._storage.get_messages(session_id)
+
+        turns: List[DialogueTurn] = []
+        pending_viewers: List[str] = []
+        pending_start_ts: Optional[float] = None
+        pending_end_ts: Optional[float] = None
+
+        for msg in messages:
+            ts = msg.timestamp
+            if msg.role == MessageRole.ASSISTANT:
+                # ASSISTANT 闭合当前轮；兼容无 viewer 的孤立 assistant（建一条空 viewer 轮）
+                turns.append(
+                    DialogueTurn(
+                        session_id=session_id,
+                        viewer_messages=list(pending_viewers),
+                        assistant_message=msg.content,
+                        assistant_emotion=msg.emotion,
+                        start_timestamp=pending_start_ts if pending_start_ts is not None else ts,
+                        end_timestamp=ts,
+                    )
+                )
+                pending_viewers = []
+                pending_start_ts = None
+                pending_end_ts = None
+            else:
+                # USER / SYSTEM：归入观众侧
+                if pending_start_ts is None:
+                    pending_start_ts = ts
+                pending_viewers.append(msg.content)
+                pending_end_ts = ts
+
+        # 尾部未闭合的轮（trailing viewers，无 assistant）
+        if pending_viewers or pending_start_ts is not None:
+            turns.append(
+                DialogueTurn(
+                    session_id=session_id,
+                    viewer_messages=pending_viewers,
+                    assistant_message=None,
+                    assistant_emotion=None,
+                    start_timestamp=pending_start_ts if pending_start_ts is not None else 0.0,
+                    end_timestamp=pending_end_ts if pending_end_ts is not None else 0.0,
+                )
+            )
+
+        if before_timestamp is not None:
+            turns = [t for t in turns if t.start_timestamp < before_timestamp]
+
+        if limit is not None:
+            turns = turns[-limit:]
+
+        self.logger.debug(f"聚合会话 {session_id} 对话视图，共 {len(turns)} 轮（消息 {len(messages)} 条）")
+
+        return turns
 
     async def build_context(
         self,

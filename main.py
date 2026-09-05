@@ -36,6 +36,7 @@ from src.modules.collectors.manager import CollectorManager
 from src.modules.config.core_schemas import DashboardConfig, EventHistoryConfig
 from src.modules.config.service import ConfigService
 from src.modules.context import ContextService, ContextServiceConfig
+from src.modules.context.models import DialogueTurn
 from src.modules.dashboard.server import DashboardServer
 from src.modules.events import (
     EventBus,
@@ -68,6 +69,11 @@ from src.modules.tools.perception.pil_capture import PillowImageGrabCapture
 
 logger = get_logger("Main")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# live 场次的默认 session_id——与 StreamerAgent 内
+# ``_record_streamer_speech_history`` / ``_read_history`` 一致使用 "live" 字面量；
+# StorageLedger 写入主播发言、ContextService 回灌历史都消费同一字符串。
+_LIVE_SESSION_ID = "live"
 
 
 # ---------------------------------------------------------------------------
@@ -344,6 +350,12 @@ async def create_app_components(
     sqlite_store, memory = await build_memory_stack(config)
     logger.info(f"存储与记忆已就绪（db={sqlite_store.db_path}）")
 
+    # --- 启动回灌：ContextService ← live_chat（重启失忆修复）---
+    # 必须在 StorageLedger 之前：回灌只读 live_chat，与后续订阅无依赖；但语义上
+    # 紧跟存储就绪（SQLiteStore 已 initialize）——先让主播/Planner 一启动就看到上次
+    # 说过什么。函数内已 try/except，外层不再重复包裹。
+    await _bootstrap_context_from_live_chat(context_service, sqlite_store)
+
     # --- EventBus + 拦截器 ---
     logger.info("初始化事件总线...")
     event_bus = EventBus()
@@ -359,6 +371,7 @@ async def create_app_components(
         event_bus,
         sqlite_store,
         auto_start=storage_ledger_auto_start,
+        session_id=_LIVE_SESSION_ID,
     )
 
     # --- CollectorManager ---
@@ -598,21 +611,127 @@ async def _start_storage_ledger(
     sqlite_store: SQLiteStore,
     *,
     auto_start: bool = True,
+    session_id: Optional[str] = None,
 ) -> Optional[StorageLedger]:
     """构造 StorageLedger 并按 ``auto_start`` 决定是否订阅。
 
     ``--dry`` 模式传 ``auto_start=False`` 仅构造不订阅，避免组合根冒烟
     时落无关测试数据；``run_shutdown`` 仍然 stop 一次（leader 幂等）。
+
+    ``session_id`` 注入后，主播发言（``streamer.speech``）会落 ``live_chat``
+    的 assistant 行；不注入则保持 debug 跳过策略（与既有降级风格一致）。
     """
     try:
-        ledger = StorageLedger(event_bus=event_bus, sqlite_store=sqlite_store)
+        ledger = StorageLedger(
+            event_bus=event_bus,
+            sqlite_store=sqlite_store,
+            session_id=session_id,
+        )
         if auto_start:
             await ledger.start()
-        logger.info(f"StorageLedger 已构造（auto_start={auto_start}；订阅 room.message.# → 业务表）")
+        logger.info(
+            f"StorageLedger 已构造（auto_start={auto_start}；session_id={session_id!r}；"
+            "订阅 room.message.# → 业务表 + streamer.speech → live_chat.assistant）"
+        )
         return ledger
     except Exception as exc:
         logger.warning(f"StorageLedger 构造/启动失败: {exc}")
         return None
+
+
+async def _bootstrap_context_from_live_chat(
+    context_service: ContextService,
+    sqlite_store: SQLiteStore,
+    session_id: str = _LIVE_SESSION_ID,
+    message_limit: int = 60,
+) -> int:
+    """启动时从 live_chat 回灌最近对话到 ContextService（重启失忆修复）。
+
+    取指定场次最近 ``message_limit`` 条消息（时间正序），按 ``sender_role``
+    聚合为 ``DialogueTurn``：观众行追加到当前轮的 ``viewer_messages``；
+    主播行闭合当前轮（``assistant_message`` 取主播内容，``end_timestamp``
+    取该消息时间戳）。尾部未闭合的观众消息也作为最后一轮（assistant 为
+    ``None``）。``live_chat.live_session_id`` 是 MD5 映射的 INTEGER 主键，
+    必须复用 ``StorageLedger._session_pk_to_int`` 才能命中同一场次数据。
+
+    回灌失败仅记 warning，不阻断启动：live 场次无历史时静默跳过（返回 0）。
+
+    Args:
+        context_service: 目标上下文服务。
+        sqlite_store: 持久化存储（读 live_chat）。
+        session_id: 直播场次 session_id（与 StreamerAgent / StorageLedger 同源）。
+        message_limit: 取最近多少条原消息（聚合后轮数会更少）。
+
+    Returns:
+        实际灌入的轮数（不含失败轮）。
+    """
+    try:
+        # session_id 字符串 → live_chat.live_session_id INTEGER 必须复用
+        # StorageLedger 的 MD5 映射（同源同 pk，否则查不到同场数据）
+        pk = StorageLedger._session_pk_to_int(session_id)
+        rows = await sqlite_store.list_recent_live_chat(
+            live_session_id=pk,
+            limit=message_limit,
+        )
+    except Exception as exc:  # noqa: BLE001 - 启动边界，不阻断
+        logger.warning(f"ContextService 回灌读取 live_chat 失败（不影响启动）: {exc}")
+        return 0
+
+    if not rows:
+        logger.debug(f"ContextService 回灌跳过：live_chat 中 session_id={session_id!r} 无历史消息")
+        return 0
+
+    turns: list = []
+    pending_viewers: list = []
+    pending_start_ts: Optional[float] = None
+    pending_end_ts: Optional[float] = None
+
+    for row in rows:
+        # row["timestamp_ms"] 是 INTEGER 毫秒；DialogueTurn 用 float 秒
+        # （与 ContextService 现有 time.time() 语义一致）
+        ts_sec = float(row["timestamp_ms"]) / 1000.0
+        if row["sender_role"] == "assistant":
+            turns.append(
+                DialogueTurn(
+                    session_id=session_id,
+                    viewer_messages=list(pending_viewers),
+                    assistant_message=row["content"],
+                    assistant_emotion=None,
+                    start_timestamp=pending_start_ts if pending_start_ts is not None else ts_sec,
+                    end_timestamp=ts_sec,
+                )
+            )
+            pending_viewers = []
+            pending_start_ts = None
+            pending_end_ts = None
+        else:
+            if pending_start_ts is None:
+                pending_start_ts = ts_sec
+            pending_viewers.append(row["content"])
+            pending_end_ts = ts_sec
+
+    if pending_viewers or pending_start_ts is not None:
+        turns.append(
+            DialogueTurn(
+                session_id=session_id,
+                viewer_messages=pending_viewers,
+                assistant_message=None,
+                assistant_emotion=None,
+                start_timestamp=pending_start_ts if pending_start_ts is not None else 0.0,
+                end_timestamp=pending_end_ts if pending_end_ts is not None else 0.0,
+            )
+        )
+
+    try:
+        await context_service.seed_dialogue_turns(session_id, turns)
+    except Exception as exc:  # noqa: BLE001 - 启动边界，不阻断
+        logger.warning(f"ContextService 回灌写入失败（不影响启动）: {exc}")
+        return 0
+
+    logger.info(
+        f"ContextService 已从 live_chat 回灌 {len(turns)} 轮对话（session_id={session_id!r}，原消息 {len(rows)} 条）"
+    )
+    return len(turns)
 
 
 async def _start_log_streamer():

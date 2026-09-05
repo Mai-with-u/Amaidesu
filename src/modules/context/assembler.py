@@ -11,13 +11,11 @@ ContextAssembler —— 纯函数上下文组装（Wave 3 / §1.44）
 
 ## 每类 Agent 一个 Assembler
 - PlannerAss：全量（人格 + 工具 + 环节 + 时间线 + 直播流 + 摘要 + 工作记忆）
-- ReplyerAss：精简（人格 + 风格 + 发言意图 + 话题子集）
 - GameAgentAss：自身（目标 + 状态 + 指令）—— 自给，**框架不主动拼**
 
 ## 接口
 - ``ContextAssembler``：基类（不可直接用）
 - ``PlannerAssembler``：默认全量组装器
-- ``ReplyerAssembler``：精简组装器（人格 + 话题子集 + 当前发言意图）
 - ``assemble()`` 同步纯函数；返回 ``Snapshot``
 """
 
@@ -249,68 +247,6 @@ class PlannerAssembler(ContextAssembler):
         )
 
 
-class ReplyerAssembler(ContextAssembler):
-    """Replyer 精简组装器（§1.44）
-
-    顺序：人格 → 风格 / 发言意图 → 话题子集 → 时间块分钟级（置尾）
-    """
-
-    agent_kind = "replyer"
-
-    def assemble(self, inputs: AssemblerInputs) -> Snapshot:
-        sections: List[AssembledSection] = []
-
-        # 1. 人格
-        sections.append(
-            AssembledSection(
-                title="系统人格",
-                body=inputs.persona or "（未配置 persona）",
-                stability=SectionStability.STABLE,
-            )
-        )
-
-        # 2. 当前发言意图
-        sections.append(
-            AssembledSection(
-                title="发言意图",
-                body=inputs.reply_intent or "（未提供）",
-                stability=SectionStability.DYNAMIC,
-            )
-        )
-
-        # 3. 话题子集
-        sections.append(
-            AssembledSection(
-                title="话题子集",
-                body=inputs.topic_subset or "（暂无）",
-                stability=SectionStability.STABLE,
-            )
-        )
-
-        # 4. 时间块分钟级（置尾——§1.44：时间块分钟级 + 放尾部）
-        # 即使 Replyer 也遵守这一约定，把时间块稳定前置使 LLM 缓存命中前缀
-        timeline_body = _render_timeline_blocks(inputs.timeline_blocks)
-        sections.append(
-            AssembledSection(
-                title="时间块（分钟级）",
-                body=timeline_body or "（暂无）",
-                stability=SectionStability.DYNAMIC,  # 时间块即使分钟级也在尾
-            )
-        )
-
-        rendered = _render_sections(sections)
-        hash_buf = _HashBuffer()
-        hash_buf.feed(_render_sections([s for s in sections if s.stability == SectionStability.STABLE]))
-
-        return Snapshot(
-            agent_kind=self.agent_kind,
-            sections=sections,
-            rendered_text=rendered,
-            assembled_at_ms=now_ms(),
-            stable_prefix_hash=hex(hash_buf.value()),
-        )
-
-
 # =============================================================================
 # 渲染辅助（纯函数）
 # =============================================================================
@@ -370,7 +306,6 @@ def _render_working_memory(wm: Optional[WorkingMemoryTrace]) -> str:
 __all__ = [
     "ContextAssembler",
     "PlannerAssembler",
-    "ReplyerAssembler",
     "SectionStability",
     "AssembledSection",
     "Snapshot",

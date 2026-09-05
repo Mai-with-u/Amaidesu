@@ -6,7 +6,7 @@ ContextService 数据模型
 
 import time
 from enum import Enum
-from typing import Optional
+from typing import List, Optional
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -38,3 +38,19 @@ class SessionInfo(BaseModel):
     created_at: float = Field(default_factory=time.time, description="创建时间")
     last_active: float = Field(default_factory=time.time, description="最后活跃时间")
     message_count: int = Field(default=0, description="消息数量")
+
+
+class DialogueTurn(BaseModel):
+    """一轮对话配对：观众消息组 + 主播回复（若有）。
+
+    回灌时从 live_chat 按时间戳配对构造；现场直播时由 StreamerAgent
+    逐条 add_message 累积。本模型仅定义数据形态，存储层仍以逐条消息
+    为主存储形态（与 ContextService 的 L1 配对窗口定位一致）。
+    """
+
+    session_id: str = Field(..., description="会话ID")
+    viewer_messages: List[str] = Field(default_factory=list, description="本轮的观众消息（按时间正序）")
+    assistant_message: Optional[str] = Field(default=None, description="主播回复（可能尚未产生，即本轮为纯观众输入）")
+    assistant_emotion: Optional[str] = Field(default=None, description="主播回复情绪标签（可选）")
+    start_timestamp: float = Field(default_factory=time.time, description="轮次开始时间戳（第一条观众消息）")
+    end_timestamp: float = Field(default_factory=time.time, description="轮次结束时间戳（主播回复或最后一条消息）")

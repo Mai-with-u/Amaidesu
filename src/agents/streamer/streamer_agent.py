@@ -205,7 +205,6 @@ class StreamerAgent(BaseAgent):
     emits_events = (
         CoreEvents.PLANNER_CHECKPOINT,
         CoreEvents.AGENDA_UPDATE,
-        CoreEvents.STREAMER_SPEECH,
     )
 
     def __init__(
@@ -734,6 +733,10 @@ class StreamerAgent(BaseAgent):
     # 后台 flush 循环（Agent 主循环）
     # ==================================================================
 
+    # ==================================================================
+    # 后台 flush 循环（Agent 主循环）
+    # ==================================================================
+
     async def _flush_loop(self) -> None:
         """后台循环：周期性检查缓冲并触发批次决策。"""
         interval = max(self.typed_config.tick_interval_ms / 1000.0, 0.05)
@@ -897,7 +900,11 @@ class StreamerAgent(BaseAgent):
 
         # 5.5 解析 reply payload 并分发到发言管线（speech → TTS / emotion → VTS）。
         # 决策循环契约：此分支任何异常都不能阻断后续 RoomState/Agenda 更新。
-        speech_info = self._dispatch_speech_and_emotion(reply_result.content)
+        # replied_count 闭环：从 batch 反查本次回复的观众 user_id，透传到发言管线。
+        speech_info = self._dispatch_speech_and_emotion(
+            reply_result.content,
+            self._resolve_reply_target_user(plan, batch),
+        )
         if speech_info is not None:
             result["speech"], result["emotion"], result["utterance_id"] = speech_info
 
@@ -908,7 +915,7 @@ class StreamerAgent(BaseAgent):
             reason = trigger_reason.removeprefix("proactive:") if trigger_reason else "unknown"
             self._proactive_trigger.record_trigger(reason, now_ms())
 
-        # 7. 消费 Planner 顺带评估（灌入 AgendaIdle）
+        # 7. 消费 Planner 顺带评估（灌注 AgendaIdle）
         self._consume_plan_assessment(plan)
 
         # 8. 持久化 Agenda runtime
@@ -936,6 +943,38 @@ class StreamerAgent(BaseAgent):
             },
             source="streamer_agent",
         )
+
+    def _resolve_reply_target_user(
+        self,
+        plan: Any,
+        batch: List[NormalizedMessage],
+    ) -> Optional[str]:
+        """从 batch 反查本次回复的观众 user_id。
+
+        ``DecisionPlan.target`` 是弹幕 ``message_id`` 或文本片段，本身不含
+        user_id；必须从 batch 里命中对应消息才能拿到 ``user_id``。匹配顺序：
+        message_id 等值 → text 包含/相等。全未命中时保守兜底为 batch 最后
+        一条消息的 user_id（"回复最后那条"通常是意图所指）；batch 为空或
+        target 为空时返回 None。该方法只做反查，不写状态、不发事件；异常
+        吞掉记 warning 不上抛（决策循环必须继续）。
+        """
+        target = getattr(plan, "target", None)
+        if not isinstance(target, str) or not target:
+            return None
+        if not batch:
+            return None
+
+        try:
+            for msg in batch:
+                if getattr(msg, "message_id", None) == target:
+                    return getattr(msg, "user_id", None)
+                msg_text = getattr(msg, "text", None)
+                if isinstance(msg_text, str) and msg_text and (target in msg_text or msg_text == target):
+                    return getattr(msg, "user_id", None)
+            return getattr(batch[-1], "user_id", None)
+        except Exception as exc:
+            self._logger.warning(f"反查 reply target user 异常: {exc}")
+            return None
 
     # ==================================================================
     # 发言管线（speech → TTS / emotion → VTS）
@@ -967,17 +1006,18 @@ class StreamerAgent(BaseAgent):
         self._utterance_seq += 1
         return f"utt_{now_ms()}_{self._utterance_seq}"
 
-    def _dispatch_speech_and_emotion(self, reply_content: Any) -> Optional[tuple]:
+    def _dispatch_speech_and_emotion(
+        self,
+        reply_content: Any,
+        reply_target_user_id: Optional[str] = None,
+    ) -> Optional[tuple]:
         """解析 reply payload 并触发下游管线（决策循环安全：永不抛异常）。
 
         Args:
             reply_content: ``ToolExecutionResult.content``（JSON 字符串），
                 解码为 ``{speech, emotion, action, metadata}``。
-
-        Returns:
-            ``(speech, emotion, utterance_id)`` 三元组——speech 非空且管线
-            走到发布时返回，供调用方（如调试门面）回传发言信息；
-            JSON 解析失败 / 非 dict / speech 为空时返回 ``None``。
+            reply_target_user_id: 本次回复的观众 user_id（可选；透传到
+                ``streamer.speech`` 业务事件，None 表示主动发言/无特定对象）。
 
         行为契约：
         - JSON 解析失败 → WARN 日志 + 直接返回（决策循环不受影响）
@@ -1024,7 +1064,7 @@ class StreamerAgent(BaseAgent):
         # TTS 启用时复用同一 utterance_id 入 TTS 队列。
         if cleaned_speech:
             utterance_id = self._next_utterance_id()
-            self._emit_streamer_speech(utterance_id, cleaned_speech, cleaned_emotion)
+            self._emit_streamer_speech(utterance_id, cleaned_speech, cleaned_emotion, reply_target_user_id)
             self._record_streamer_speech_history(cleaned_speech, cleaned_emotion)
             self._schedule_subtitle_show(cleaned_speech, utterance_id)
             if self._tts_enabled and self._utterance_queue is not None:
@@ -1036,7 +1076,13 @@ class StreamerAgent(BaseAgent):
 
         return None
 
-    def _emit_streamer_speech(self, utterance_id: str, text: str, emotion: Optional[str]) -> None:
+    def _emit_streamer_speech(
+        self,
+        utterance_id: str,
+        text: str,
+        emotion: Optional[str],
+        target_user_id: Optional[str] = None,
+    ) -> None:
         """发布 ``streamer.speech`` 业务事件（fire-and-forget；下游不得触发新决策）。"""
         if self._event_bus is None:
             return
@@ -1044,6 +1090,7 @@ class StreamerAgent(BaseAgent):
             utterance_id=utterance_id,
             text=text,
             emotion=emotion,
+            target_user_id=target_user_id,
         )
 
         async def _do_emit() -> None:
