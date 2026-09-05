@@ -25,7 +25,6 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import RoomMessagePayload, RoomMessageUser
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
-from src.modules.types.base.normalized_message import NormalizedMessage
 from src.modules.types.message_type import MessageTypeNotRegistered, require_message_type
 
 if TYPE_CHECKING:
@@ -44,7 +43,11 @@ async def inject_message(
     request: InjectMessageRequest,
     server: ServerDep,
 ) -> InjectMessageResponse:
-    """注入测试消息到系统（Wave 6：发布 room.message.danmaku）"""
+    """注入测试消息到系统（发布 room.message.danmaku，走真实弹幕链路）。
+
+    会话语义：消息写入 ContextService 的 ``live`` 会话——主播 Agent 的
+    决策历史固定读 ``live``，写入其他会话会让注入弹幕永远不进决策上下文。
+    """
     event_bus = server.event_bus
     if not event_bus:
         return InjectMessageResponse(success=False, error="Event bus not available")
@@ -55,15 +58,9 @@ async def inject_message(
         except MessageTypeNotRegistered as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
 
-        message = NormalizedMessage(
-            text=request.text,
-            source=request.source,
-            data_type=request.data_type,
-            importance=request.importance,
-            timestamp=now_ms(),
-        )
-
-        # 通过 EventBus 发布 room.message.danmaku（v2 语义域事件）
+        # 通过 EventBus 发布 room.message.danmaku（v2 语义域事件）。
+        # user.name 用 source 承载昵称——前端注入的"来源标识"在直播间语境
+        # 就是观众昵称，Agent 侧统一读 user_nickname。
         payload = RoomMessagePayload(
             live_session_id=request.source,
             message_type="danmaku",
@@ -84,7 +81,7 @@ async def inject_message(
         if context_service:
             try:
                 await context_service.add_message(
-                    session_id=request.source,
+                    session_id="live",
                     role=MessageRole.USER,
                     content=request.text,
                 )
@@ -93,8 +90,6 @@ async def inject_message(
 
         message_id = str(uuid.uuid4())
         logger.info(f"注入消息成功: {message_id}")
-        # suppress unused var
-        _ = message
         return InjectMessageResponse(success=True, message_id=message_id)
 
     except HTTPException:

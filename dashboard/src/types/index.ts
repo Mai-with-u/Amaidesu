@@ -131,18 +131,91 @@ export interface EventBusStatsResponse {
   events_by_name: Record<string, number>;
 }
 
-export interface InjectIntentRequest {
-  text?: string;
-  responseText?: string;
-  emotion?: string;
-  actions?: Record<string, any>[];
-  source?: string;
+// ==================== Streamer 测试台（主播发言调试） ====================
+
+/**
+ * 模拟弹幕（单条）。nickname 空时后端用「测试观众」占位。
+ */
+export interface StreamerTestDanmaku {
+  nickname?: string;
+  text: string;
 }
 
-export interface InjectIntentResponse {
+/**
+ * 两阶段决策的 Stage 1 产物（DecisionPlan 五字段透传）。
+ * `should_reply=false` 时 speech 为 null——"没回复"是有效测试结果。
+ */
+export interface StreamerDecisionPlan {
+  should_reply: boolean;
+  target?: string | null;
+  topic_summary?: string;
+  reply_guidance?: string;
+  confidence?: number;
+}
+
+/**
+ * `POST /api/v1/streamer/test-decision` 请求体。
+ *
+ * `batch` 与 `proactive` 互斥：主动发言由房间状态驱动，不接受弹幕批次；
+ * `forced=true` 豁免 Planner 低置信度降级（与 SC/礼物强制响应同语义）。
+ */
+export interface StreamerTestDecisionRequest {
+  batch?: StreamerTestDanmaku[];
+  forced?: boolean;
+  proactive?: boolean;
+}
+
+/**
+ * `POST /api/v1/streamer/test-decision` 响应（同步长请求，典型 10~30s）。
+ *
+ * `success=true` 表示门面调用成功；决策本身的失败（Planner 拒绝/LLM 异常）
+ * 由 `error` / `plan` 如实表达，不算 API 失败。
+ */
+export interface StreamerTestDecisionResponse {
   success: boolean;
-  intent_id?: string;
-  error?: string;
+  message?: string | null;
+  error?: string | null;
+  trigger_reason?: string | null;
+  proactive?: boolean;
+  forced?: boolean;
+  elapsed_ms?: number | null;
+  plan?: StreamerDecisionPlan | null;
+  speech?: string | null;
+  emotion?: string | null;
+  utterance_id?: string | null;
+}
+
+/** `GET /api/v1/streamer/status` 响应（agent 未注册时 available=false）。 */
+export interface StreamerStatusResponse {
+  available: boolean;
+  message?: string | null;
+  config: {
+    proactive_enabled?: boolean;
+    agenda_enabled?: boolean;
+    batch_window_ms?: number;
+    planner_llm?: string;
+    replyer_llm?: string;
+  };
+  statistics: Record<string, number>;
+}
+
+/** `POST /api/v1/streamer/trigger-proactive` 请求体。 */
+export interface TriggerProactiveRequest {
+  topic_hint?: string;
+}
+
+/** `POST /api/v1/streamer/trigger-proactive` 响应（置位语义，非立即触发）。 */
+export interface TriggerProactiveResponse {
+  success: boolean;
+  message: string;
+}
+
+/** WS `streamer.speech` 事件 payload（StreamerSpeechPayload.model_dump）。 */
+export interface StreamerSpeechEventData {
+  utterance_id: string;
+  text: string;
+  emotion?: string | null;
+  timestamp_ms?: number;
 }
 
 // ==================== v2 消息与会话 ====================

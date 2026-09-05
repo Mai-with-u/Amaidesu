@@ -205,6 +205,7 @@ class StreamerAgent(BaseAgent):
     emits_events = (
         CoreEvents.PLANNER_CHECKPOINT,
         CoreEvents.AGENDA_UPDATE,
+        CoreEvents.STREAMER_SPEECH,
     )
 
     def __init__(
@@ -655,6 +656,80 @@ class StreamerAgent(BaseAgent):
         if topic_hint:
             self._logger.info(f"外部主动发言触发: {topic_hint}")
 
+    async def debug_test_decision(
+        self,
+        *,
+        batch: Optional[List[Dict[str, str]]] = None,
+        forced: bool = False,
+        proactive: bool = False,
+    ) -> Dict[str, Any]:
+        """调试门面：手动驱动一次完整两阶段决策并回传中间产物（Dashboard 专用）。
+
+        与真实链路的差异（有意为之，均为测试诉求）：
+        - **绕过 MessageBuffer 聚合窗口**：弹幕批次直接进入决策，不等 3s 聚合；
+        - **proactive=True 时绕过 ProactiveTrigger 四道限流**（proactive_enabled /
+          防接龙间隔 / 每小时上限 / 话题要求）——测试"主播主动开口"不受配置卡死；
+          测限流本身请走 ``trigger_external_proactive``（真实链路）；
+        - ``forced=True`` 时 Planner 的低置信度降级豁免（与 SC/礼物强制响应同语义）。
+
+        与真实链路的一致性（核心承诺）：Planner / Replyer / 发言管线 /
+        RoomState / 限流记账全部走同一份代码——本方法不复制任何决策编排逻辑，
+        仅持有 ``_flush_lock`` 防止与后台 flush 循环并发决策。
+
+        Args:
+            batch: 模拟弹幕列表，元素 ``{"nickname": str, "text": str}``；
+                ``proactive=True`` 时必须为空/None（主动发言无弹幕批次）。
+            forced: 是否强制响应（透传 Planner 的 ``$forced``）。
+            proactive: 是否主动发言决策（透传 Planner 的 ``$proactive``）。
+
+        Returns:
+            ``_make_two_stage_decision`` 的决策结果视图 + ``success`` /
+            ``elapsed_ms`` 字段；入参校验失败时返回 ``success=False`` + ``error``。
+        """
+        if proactive and batch:
+            return {
+                "success": False,
+                "error": "proactive 模式不接受弹幕批次（主动发言由房间状态驱动，batch 置空）",
+            }
+        if not proactive and not (batch and any(str(item.get("text", "")).strip() for item in batch)):
+            return {"success": False, "error": "弹幕批次为空：请至少提供一条 text 非空的弹幕"}
+
+        messages: List[NormalizedMessage] = []
+        for item in batch or []:
+            text = str(item.get("text", "")).strip()
+            if not text:
+                continue
+            nickname = str(item.get("nickname", "")).strip() or "测试观众"
+            messages.append(
+                NormalizedMessage(
+                    text=text,
+                    source="dashboard.debug",
+                    data_type="text",
+                    importance=0.5,
+                    timestamp=now_ms(),
+                    user_id=f"debug_{nickname}",
+                    user_nickname=nickname,
+                )
+            )
+
+        started_ms = now_ms()
+        trigger_reason = "proactive:dashboard_debug" if proactive else "dashboard:debug_test"
+        try:
+            async with self._flush_lock:
+                result = await self._make_two_stage_decision(
+                    messages,
+                    forced=forced,
+                    trigger_reason=trigger_reason,
+                    proactive=proactive,
+                )
+        except Exception as exc:
+            self._logger.error(f"调试决策执行异常: {exc}", exc_info=True)
+            return {"success": False, "error": f"debug_test_decision 执行异常: {exc}"}
+
+        result["success"] = True
+        result["elapsed_ms"] = now_ms() - started_ms
+        return result
+
     # ==================================================================
     # 后台 flush 循环（Agent 主循环）
     # ==================================================================
@@ -733,8 +808,33 @@ class StreamerAgent(BaseAgent):
         forced: bool,
         trigger_reason: str,
         proactive: bool = False,
-    ) -> None:
-        """两阶段决策：Planner → 消费 plan 评估 + 触发 reply 工具。"""
+    ) -> Dict[str, Any]:
+        """两阶段决策：Planner → 消费 plan 评估 + 触发 reply 工具。
+
+        Returns:
+            决策结果视图（正常 flush 循环忽略返回值；调试门面
+            ``debug_test_decision`` 消费它向 Dashboard 回传完整中间产物）::
+
+                {
+                    "trigger_reason": str,
+                    "proactive": bool,
+                    "plan": {"should_reply", "target", "topic_summary", "reply_guidance", "confidence"} | None,
+                    "speech": str | None,
+                    "emotion": str | None,
+                    "utterance_id": str | None,
+                    "error": str | None,  # planner/reply 失败原因，成功为 None
+                }
+        """
+        result: Dict[str, Any] = {
+            "trigger_reason": trigger_reason,
+            "proactive": proactive,
+            "plan": None,
+            "speech": None,
+            "emotion": None,
+            "utterance_id": None,
+            "error": None,
+        }
+
         # 1. 读历史（duck-typed）
         history = await self._read_history("live")
 
@@ -753,39 +853,53 @@ class StreamerAgent(BaseAgent):
         except Exception as exc:
             self._logger.error(f"Planner 调用异常: {exc}", exc_info=True)
             plan = None
+            result["error"] = f"planner_failed: {exc}"
 
         if plan is None:
             self._planner_failures += 1
             self._total_no_action += 1
-            return
+            result["error"] = result["error"] or "planner_failed: 返回 None（LLM 异常/脏 JSON/低置信度）"
+            return result
+
+        result["plan"] = {
+            "should_reply": plan.should_reply,
+            "target": plan.target,
+            "topic_summary": plan.topic_summary,
+            "reply_guidance": plan.reply_guidance,
+            "confidence": plan.confidence,
+        }
 
         # 4. Plan 裁决
         if not plan.should_reply:
             self._total_no_action += 1
             self._consume_plan_assessment(plan)
-            return
+            return result
 
         # 5. 触发 reply 工具（StreamerAgent 直接调 reply Provider.invoke，
         #    跳过 LLM chat loop——Agent 内脏直连 LLM executor）
         try:
-            result = await self._reply_provider.invoke(  # type: ignore[union-attr]
+            reply_result = await self._reply_provider.invoke(  # type: ignore[union-attr]
                 self._make_reply_invocation(plan, batch)
             )
         except Exception as exc:
             self._logger.error(f"Reply 工具调用异常: {exc}", exc_info=True)
             self._replyer_failures += 1
             self._total_no_action += 1
-            return
+            result["error"] = f"reply_tool_failed: {exc}"
+            return result
 
-        if not result.success:
+        if not reply_result.success:
             self._replyer_failures += 1
             self._total_no_action += 1
-            self._logger.warning(f"Reply 工具返回失败: {result.error_message}")
-            return
+            self._logger.warning(f"Reply 工具返回失败: {reply_result.error_message}")
+            result["error"] = f"reply_tool_failed: {reply_result.error_message}"
+            return result
 
         # 5.5 解析 reply payload 并分发到发言管线（speech → TTS / emotion → VTS）。
         # 决策循环契约：此分支任何异常都不能阻断后续 RoomState/Agenda 更新。
-        self._dispatch_speech_and_emotion(result.content)
+        speech_info = self._dispatch_speech_and_emotion(reply_result.content)
+        if speech_info is not None:
+            result["speech"], result["emotion"], result["utterance_id"] = speech_info
 
         # 6. 成功：保存上下文 + 记录发言时刻 + 频率限制
         self._total_replies += 1
@@ -803,6 +917,8 @@ class StreamerAgent(BaseAgent):
                 await self._agenda_state.persist_runtime()
             except Exception:
                 pass
+
+        return result
 
     def _make_reply_invocation(
         self,
@@ -851,12 +967,17 @@ class StreamerAgent(BaseAgent):
         self._utterance_seq += 1
         return f"utt_{now_ms()}_{self._utterance_seq}"
 
-    def _dispatch_speech_and_emotion(self, reply_content: Any) -> None:
+    def _dispatch_speech_and_emotion(self, reply_content: Any) -> Optional[tuple]:
         """解析 reply payload 并触发下游管线（决策循环安全：永不抛异常）。
 
         Args:
             reply_content: ``ToolExecutionResult.content``（JSON 字符串），
                 解码为 ``{speech, emotion, action, metadata}``。
+
+        Returns:
+            ``(speech, emotion, utterance_id)`` 三元组——speech 非空且管线
+            走到发布时返回，供调用方（如调试门面）回传发言信息；
+            JSON 解析失败 / 非 dict / speech 为空时返回 ``None``。
 
         行为契约：
         - JSON 解析失败 → WARN 日志 + 直接返回（决策循环不受影响）
@@ -869,17 +990,17 @@ class StreamerAgent(BaseAgent):
         """
         if not isinstance(reply_content, str) or not reply_content:
             # reply 工具约定 content 为 JSON 字符串；空内容视作无发言
-            return
+            return None
 
         try:
             payload = json.loads(reply_content)
         except (TypeError, ValueError) as exc:
             self._logger.warning(f"reply payload JSON 解析失败，跳过发言管线: {exc}")
-            return
+            return None
 
         if not isinstance(payload, dict):
             self._logger.warning("reply payload 非 dict，跳过发言管线")
-            return
+            return None
 
         speech = payload.get("speech", "")
         emotion = payload.get("emotion", "")
@@ -911,6 +1032,9 @@ class StreamerAgent(BaseAgent):
                     asyncio.create_task(self._utterance_queue.enqueue(utterance_id, cleaned_speech))
                 except Exception as exc:
                     self._logger.warning("utterance 入队失败（已忽略）: utterance_id={}, err={}", utterance_id, exc)
+            return cleaned_speech, cleaned_emotion, utterance_id
+
+        return None
 
     def _emit_streamer_speech(self, utterance_id: str, text: str, emotion: Optional[str]) -> None:
         """发布 ``streamer.speech`` 业务事件（fire-and-forget；下游不得触发新决策）。"""

@@ -18,6 +18,7 @@ from src.modules.dashboard.api import (
     messages,
     mock,
     simulator,
+    streamer,
     system,
     traces,
 )
@@ -49,6 +50,7 @@ def create_app() -> FastAPI:
     app.include_router(events.router, prefix="/api/v1", tags=["Events"])
     app.include_router(traces.router, prefix="/api/v1", tags=["Traces"])
     app.include_router(agenda.router, prefix="/api/v1/agenda", tags=["Agenda"])
+    app.include_router(streamer.router, prefix="/api/v1/streamer", tags=["Streamer"])
 
     # 模拟器与 Mock 采集器控制面（ADR-006 follow-up）
     app.include_router(simulator.router, prefix="/api/v1/simulator", tags=["Simulator"])

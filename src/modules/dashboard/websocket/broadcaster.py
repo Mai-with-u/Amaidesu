@@ -38,6 +38,7 @@ from src.modules.events.payloads import (
     CoreShutdownPayload,
     CoreStartupPayload,
     RoomMessagePayload,
+    StreamerSpeechPayload,
     ToolResultPayload,
 )
 from src.modules.events.payloads.base import BasePayload
@@ -107,6 +108,7 @@ class EventBroadcaster:
             CoreEvents.ROOM_MESSAGE_ENTER: self._on_room_message,
             CoreEvents.PLANNER_CHECKPOINT: self._on_planner_checkpoint,
             CoreEvents.AGENDA_UPDATE: self._on_agenda_update,
+            CoreEvents.STREAMER_SPEECH: self._on_streamer_speech,
             CoreEvents.TOOL_RESULT_WILDCARD: self._on_tool_result,
             CoreEvents.CORE_STARTUP: self._on_core_event,
             CoreEvents.CORE_SHUTDOWN: self._on_core_event,
@@ -141,6 +143,11 @@ class EventBroadcaster:
             CoreEvents.AGENDA_UPDATE,
             self._on_agenda_update,
             model_class=AgendaPayload,
+        )
+        self._subscribe_event(
+            CoreEvents.STREAMER_SPEECH,
+            self._on_streamer_speech,
+            model_class=StreamerSpeechPayload,
         )
         self._subscribe_event(
             CoreEvents.TOOL_RESULT_WILDCARD,
@@ -195,6 +202,13 @@ class EventBroadcaster:
             await self.ws_handler.broadcast("agenda.update", dict_data, message_id=data.id)
         except Exception as e:
             logger.error(f"广播 agenda update 失败: {e}")
+
+    async def _on_streamer_speech(self, event_name: str, data: StreamerSpeechPayload, source: str) -> None:
+        try:
+            dict_data = data.model_dump() if isinstance(data, BaseModel) else {}
+            await self.ws_handler.broadcast("streamer.speech", dict_data, message_id=data.id)
+        except Exception as e:
+            logger.error(f"广播 streamer speech 失败: {e}")
 
     async def _on_tool_result(self, event_name: str, data: ToolResultPayload, source: str) -> None:
         try:

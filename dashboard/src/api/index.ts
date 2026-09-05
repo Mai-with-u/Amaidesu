@@ -19,8 +19,6 @@ import type {
   ConfigResponse,
   InjectMessageRequest,
   InjectMessageResponse,
-  InjectIntentRequest,
-  InjectIntentResponse,
   EventBusStatsResponse,
   ConfigSchemaResponse,
   ConfigUpdateRequest,
@@ -37,6 +35,11 @@ import type {
   AgendaStateResponse,
   AgendaControlRequest,
   AgendaControlResponse,
+  StreamerStatusResponse,
+  StreamerTestDecisionRequest,
+  StreamerTestDecisionResponse,
+  TriggerProactiveRequest,
+  TriggerProactiveResponse,
 } from '@/types';
 
 const api = axios.create({
@@ -76,11 +79,13 @@ export const configApi = {
 };
 
 // ===== 调试注入 =====
+//
+// `injectMessage` 发布 `room.message.danmaku` 走真实弹幕链路（消息写入
+// `live` 会话，主播 Agent 决策历史可读）。旧 `injectIntent`（/debug/inject-intent）
+// 已随 v2 删除（决策出口=工具调用，无 Intent 事件），前端不再保留调用。
 export const debugApi = {
   injectMessage: (request: InjectMessageRequest) =>
     api.post<InjectMessageResponse>('/debug/inject-message', request),
-  injectIntent: (request: InjectIntentRequest) =>
-    api.post<InjectIntentResponse>('/debug/inject-intent', request),
   getEventBusStats: () => api.get<EventBusStatsResponse>('/debug/event-bus/stats'),
 };
 
@@ -127,6 +132,24 @@ export const mockCollectorApi = {
 // `traces.ts`：GET /traces（最近链路列表）+ GET /traces/{message_id}（按 message_id
 // 聚合 messages/planning/execution 三段事件；planning/execution 可能为空数组）。
 export * from './traces';
+
+// ===== Streamer 测试台（主播发言调试） =====
+//
+// `GET /streamer/status`：主播 Agent 状态 + 运行统计 + 配置摘要（agent 未注册时
+// available=false，前端按空态渲染）。
+// `POST /streamer/test-decision`：手动驱动一次两阶段决策（Planner → Replyer），
+// 同步长请求（两段 LLM，典型 10~30s），单独放宽 timeout 至 120s。
+// `POST /streamer/trigger-proactive`：真实限流链路的外部主动发言触发（置位语义，
+// 下个 flush tick 经限流判定后才可能开口）。
+export const streamerApi = {
+  getStatus: () => api.get<StreamerStatusResponse>('/streamer/status'),
+  testDecision: (request: StreamerTestDecisionRequest) =>
+    api.post<StreamerTestDecisionResponse>('/streamer/test-decision', request, {
+      timeout: 120000,
+    }),
+  triggerProactive: (request: TriggerProactiveRequest) =>
+    api.post<TriggerProactiveResponse>('/streamer/trigger-proactive', request),
+};
 
 // ===== Agenda（节目单控制面） =====
 //

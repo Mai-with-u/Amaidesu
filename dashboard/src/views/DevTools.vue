@@ -207,13 +207,337 @@
             </section>
           </div>
         </el-tab-pane>
+
+        <!-- Tab 3: 主播发言测试 -->
+        <el-tab-pane name="streamer">
+          <template #label>
+            <span class="tab-label">
+              <el-icon><ChatLineRound /></el-icon>
+              主播发言测试
+            </span>
+          </template>
+
+          <div class="tab-content-wrapper">
+            <!-- Agent 未启用空态 -->
+            <el-alert
+              v-if="streamerStatus !== null && !streamerStatus.available"
+              type="warning"
+              title="主播 Agent 未启用"
+              :description="
+                streamerStatus.message ||
+                '请在 agents.toml 的 [agents].enabled 启用 streamer 后重启。'
+              "
+              show-icon
+              :closable="false"
+              style="margin-bottom: 16px"
+            />
+
+            <div class="streamer-layout">
+              <!-- 左列：触发面板 + 决策结果 -->
+              <div class="streamer-left">
+                <section class="inject-panel">
+                  <div class="panel-header">
+                    <div class="panel-title">
+                      <el-icon class="title-icon"><ChatLineRound /></el-icon>
+                      <span>触发决策</span>
+                    </div>
+                    <el-tag size="small" type="warning" effect="plain">开发工具</el-tag>
+                  </div>
+
+                  <el-form label-position="top">
+                    <el-form-item label="触发模式">
+                      <el-radio-group v-model="testMode" :disabled="testing">
+                        <el-radio value="danmaku">模拟弹幕（真实决策链路）</el-radio>
+                        <el-radio value="proactive">主动发言（直跑，绕过限流）</el-radio>
+                      </el-radio-group>
+                    </el-form-item>
+
+                    <template v-if="testMode === 'danmaku'">
+                      <el-form-item label="弹幕批次">
+                        <div class="danmaku-rows">
+                          <div v-for="(item, idx) in testDanmaku" :key="idx" class="danmaku-row">
+                            <el-input
+                              v-model="item.nickname"
+                              placeholder="昵称（默认：测试观众）"
+                              size="small"
+                              class="danmaku-nickname"
+                              :disabled="testing"
+                            />
+                            <el-input
+                              v-model="item.text"
+                              placeholder="弹幕文本"
+                              size="small"
+                              class="danmaku-text"
+                              :disabled="testing"
+                              @keydown.enter.prevent="runTest"
+                            />
+                            <el-button
+                              size="small"
+                              text
+                              type="danger"
+                              :disabled="testing || testDanmaku.length <= 1"
+                              @click="removeDanmaku(idx)"
+                            >
+                              ✕
+                            </el-button>
+                          </div>
+                          <el-button
+                            size="small"
+                            text
+                            type="primary"
+                            :disabled="testing"
+                            @click="addDanmaku"
+                          >
+                            + 添加弹幕
+                          </el-button>
+                        </div>
+                      </el-form-item>
+
+                      <el-form-item>
+                        <el-checkbox v-model="testForced" :disabled="testing">
+                          强制响应（forced，豁免低置信度降级）
+                        </el-checkbox>
+                      </el-form-item>
+                    </template>
+
+                    <el-alert
+                      v-if="testMode === 'proactive' && !proactiveEnabled"
+                      type="info"
+                      :closable="false"
+                      show-icon
+                      title="主动发言默认关闭（proactive_enabled=false）"
+                      description="直跑模式不受该开关影响；只有右侧「真实限流链路触发」才依赖它。"
+                      style="margin-bottom: 12px"
+                    />
+
+                    <el-form-item>
+                      <el-button
+                        type="primary"
+                        :loading="testing"
+                        :disabled="!streamerAvailable || !canRunTest"
+                        @click="runTest"
+                      >
+                        <el-icon><Promotion /></el-icon>
+                        触发决策（两段 LLM，约 10~30s）
+                      </el-button>
+                    </el-form-item>
+                  </el-form>
+                </section>
+
+                <!-- 决策结果卡片 -->
+                <section class="inject-panel">
+                  <div class="panel-header">
+                    <div class="panel-title">
+                      <el-icon class="title-icon"><Document /></el-icon>
+                      <span>决策结果</span>
+                    </div>
+                    <el-tag v-if="testResult?.elapsed_ms != null" size="small" effect="plain">
+                      {{ (testResult.elapsed_ms / 1000).toFixed(1) }}s
+                    </el-tag>
+                  </div>
+
+                  <el-empty v-if="!testResult" description="尚未触发决策" :image-size="80" />
+
+                  <template v-else>
+                    <!-- 失败提示（API 调用层失败） -->
+                    <el-alert
+                      v-if="!testResult.success"
+                      type="error"
+                      :title="testResult.message || '触发失败'"
+                      :description="testResult.error || ''"
+                      show-icon
+                      :closable="false"
+                      style="margin-bottom: 12px"
+                    />
+
+                    <template v-if="testResult.plan">
+                      <div class="result-section-title">
+                        Stage 1 · Planner
+                        <el-tag
+                          :type="testResult.plan.should_reply ? 'success' : 'info'"
+                          size="small"
+                          effect="plain"
+                        >
+                          {{ testResult.plan.should_reply ? '回复' : '保持沉默' }}
+                        </el-tag>
+                        <span v-if="testResult.plan.confidence != null" class="result-meta">
+                          confidence {{ testResult.plan.confidence.toFixed(2) }}
+                        </span>
+                      </div>
+                      <el-descriptions :column="1" size="small" border class="plan-desc">
+                        <el-descriptions-item label="target">
+                          {{ testResult.plan.target || '—' }}
+                        </el-descriptions-item>
+                        <el-descriptions-item label="topic_summary">
+                          {{ testResult.plan.topic_summary || '—' }}
+                        </el-descriptions-item>
+                        <el-descriptions-item label="reply_guidance">
+                          {{ testResult.plan.reply_guidance || '—' }}
+                        </el-descriptions-item>
+                      </el-descriptions>
+
+                      <!-- 沉默提示 -->
+                      <el-alert
+                        v-if="!testResult.plan.should_reply"
+                        type="info"
+                        title="Planner 决定不回复"
+                        description="如需主播一定开口，勾选「强制响应」或改用主动发言直跑模式。"
+                        show-icon
+                        :closable="false"
+                        style="margin-top: 12px"
+                      />
+                    </template>
+
+                    <template v-if="testResult.speech">
+                      <div class="result-section-title" style="margin-top: 16px">
+                        Stage 2 · 主播发言
+                        <el-tag
+                          v-if="testResult.emotion"
+                          size="small"
+                          type="success"
+                          effect="plain"
+                        >
+                          {{ testResult.emotion }}
+                        </el-tag>
+                      </div>
+                      <div class="speech-bubble">
+                        {{ testResult.speech }}
+                      </div>
+                      <div v-if="testResult.utterance_id" class="utterance-id">
+                        {{ testResult.utterance_id }}
+                      </div>
+                    </template>
+
+                    <!-- 决策级失败（Planner/Replyer） -->
+                    <el-alert
+                      v-if="testResult.success && testResult.error"
+                      type="warning"
+                      :title="testResult.error"
+                      show-icon
+                      :closable="false"
+                      style="margin-top: 12px"
+                    />
+                  </template>
+                </section>
+              </div>
+
+              <!-- 右列：实时发言流 + 统计 + 真实链路触发 -->
+              <div class="streamer-right">
+                <section class="history-panel">
+                  <div class="panel-header">
+                    <div class="panel-title">
+                      <el-icon class="title-icon"><Clock /></el-icon>
+                      <span>主播发言流</span>
+                      <el-badge :value="speechStream.length" :max="99" class="history-badge" />
+                    </div>
+                    <el-button
+                      size="small"
+                      :icon="Delete"
+                      :disabled="speechStream.length === 0"
+                      @click="speechStream = []"
+                    >
+                      清空
+                    </el-button>
+                  </div>
+
+                  <div v-if="speechStream.length > 0" class="speech-stream">
+                    <div v-for="item in speechStream" :key="item.utterance_id" class="speech-item">
+                      <div class="speech-item-header">
+                        <span class="speech-item-time">{{ item.time }}</span>
+                        <el-tag v-if="item.emotion" size="small" effect="plain">
+                          {{ item.emotion }}
+                        </el-tag>
+                      </div>
+                      <div class="speech-item-text">{{ item.text }}</div>
+                      <div class="utterance-id">{{ item.utterance_id }}</div>
+                    </div>
+                  </div>
+                  <el-empty v-else description="等待 streamer.speech 事件" :image-size="80" />
+                  <p class="ws-hint">
+                    由 WebSocket <code>streamer.speech</code> 事件驱动：手动触发的决策与真实
+                    弹幕引发的发言都会汇入此处（TTS/字幕联动可用 utterance_id 对账）。
+                  </p>
+                </section>
+
+                <section class="inject-panel">
+                  <div class="panel-header">
+                    <div class="panel-title">
+                      <el-icon class="title-icon"><DataAnalysis /></el-icon>
+                      <span>运行统计</span>
+                    </div>
+                    <el-button
+                      size="small"
+                      :icon="Refresh"
+                      :loading="statusLoading"
+                      @click="fetchStreamerStatus"
+                    >
+                      刷新
+                    </el-button>
+                  </div>
+
+                  <div v-if="streamerStatus?.available" class="stats-overview">
+                    <div class="stat-card">
+                      <div class="stat-value">{{ statistics.total_replies ?? 0 }}</div>
+                      <div class="stat-label">总回复</div>
+                    </div>
+                    <div class="stat-card">
+                      <div class="stat-value">{{ statistics.total_proactive ?? 0 }}</div>
+                      <div class="stat-label">主动发言</div>
+                    </div>
+                    <div class="stat-card">
+                      <div class="stat-value">{{ statistics.planner_failures ?? 0 }}</div>
+                      <div class="stat-label">Planner 失败</div>
+                    </div>
+                    <div class="stat-card">
+                      <div class="stat-value">{{ statistics.replyer_failures ?? 0 }}</div>
+                      <div class="stat-label">Replyer 失败</div>
+                    </div>
+                  </div>
+                  <el-empty v-else description="Agent 未启用" :image-size="60" />
+                </section>
+
+                <section class="inject-panel">
+                  <div class="panel-header">
+                    <div class="panel-title">
+                      <el-icon class="title-icon"><Position /></el-icon>
+                      <span>真实限流链路触发</span>
+                    </div>
+                  </div>
+                  <el-input
+                    v-model="proactiveTopicHint"
+                    placeholder="话题提示（可选，仅用于日志）"
+                    size="small"
+                    style="margin-bottom: 8px"
+                    :disabled="triggeringProactive"
+                  />
+                  <el-button
+                    size="small"
+                    type="warning"
+                    :loading="triggeringProactive"
+                    :disabled="!streamerAvailable"
+                    @click="triggerProactive"
+                  >
+                    置位外部主动发言（走真实限流）
+                  </el-button>
+                  <p class="ws-hint">
+                    仅置位 pending：下个 flush tick 由 ProactiveTrigger 判定（防接龙 / 每小时上限 /
+                    话题要求），任一不满足则静默丢弃——用于测试限流本身。
+                    <template v-if="!proactiveEnabled">
+                      当前 <code>proactive_enabled=false</code>，真实链路会静默失效。
+                    </template>
+                  </p>
+                </section>
+              </div>
+            </div>
+          </div>
+        </el-tab-pane>
       </el-tabs>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { ElMessage } from 'element-plus';
 import {
   Position,
@@ -223,9 +547,19 @@ import {
   Refresh,
   Delete,
   RefreshRight,
+  ChatLineRound,
+  Document,
 } from '@element-plus/icons-vue';
-import { debugApi } from '@/api';
-import type { EventBusStatsResponse, InjectMessageRequest } from '@/types';
+import { debugApi, streamerApi } from '@/api';
+import { useWebSocketStore } from '@/stores/websocket';
+import type {
+  EventBusStatsResponse,
+  InjectMessageRequest,
+  StreamerSpeechEventData,
+  StreamerStatusResponse,
+  StreamerTestDecisionResponse,
+  WebSocketMessage,
+} from '@/types';
 
 // Tab state
 const activeTab = ref('inject');
@@ -328,9 +662,146 @@ async function fetchEventBusStats() {
   }
 }
 
+// ============ 主播发言测试 Tab ============
+type TestMode = 'danmaku' | 'proactive';
+
+interface DanmakuDraft {
+  nickname: string;
+  text: string;
+}
+
+interface SpeechStreamItem {
+  utterance_id: string;
+  text: string;
+  emotion?: string | null;
+  time: string;
+}
+
+const testMode = ref<TestMode>('danmaku');
+const testDanmaku = ref<DanmakuDraft[]>([{ nickname: '', text: '' }]);
+const testForced = ref(false);
+const testing = ref(false);
+const testResult = ref<StreamerTestDecisionResponse | null>(null);
+
+const streamerStatus = ref<StreamerStatusResponse | null>(null);
+const statusLoading = ref(false);
+
+const proactiveTopicHint = ref('');
+const triggeringProactive = ref(false);
+
+const speechStream = ref<SpeechStreamItem[]>([]);
+const MAX_SPEECH_STREAM = 50;
+
+const wsStore = useWebSocketStore();
+
+const streamerAvailable = computed(() => streamerStatus.value?.available ?? false);
+const proactiveEnabled = computed(() => streamerStatus.value?.config?.proactive_enabled ?? false);
+const statistics = computed(() => streamerStatus.value?.statistics ?? {});
+
+const canRunTest = computed(() => {
+  if (testMode.value === 'proactive') return true;
+  return testDanmaku.value.some(d => d.text.trim());
+});
+
+function addDanmaku() {
+  testDanmaku.value.push({ nickname: '', text: '' });
+}
+
+function removeDanmaku(idx: number) {
+  testDanmaku.value.splice(idx, 1);
+}
+
+async function fetchStreamerStatus() {
+  statusLoading.value = true;
+  try {
+    const res = await streamerApi.getStatus();
+    streamerStatus.value = res.data;
+  } catch (err) {
+    console.error('获取主播 Agent 状态失败:', err);
+  } finally {
+    statusLoading.value = false;
+  }
+}
+
+async function runTest() {
+  if (!canRunTest.value || testing.value) return;
+  testing.value = true;
+  testResult.value = null;
+  try {
+    const request =
+      testMode.value === 'proactive'
+        ? { proactive: true }
+        : {
+            batch: testDanmaku.value
+              .filter(d => d.text.trim())
+              .map(d => ({ nickname: d.nickname.trim() || undefined, text: d.text.trim() })),
+            forced: testForced.value,
+          };
+    const res = await streamerApi.testDecision(request);
+    testResult.value = res.data;
+    if (!res.data.success) {
+      ElMessage.warning(res.data.message || res.data.error || '触发被拒绝');
+    } else if (res.data.speech) {
+      ElMessage.success('主播已发言');
+    }
+    // 触发后刷新统计（无论成败都会推进计数器）
+    void fetchStreamerStatus();
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? `触发失败：${err.message}` : '触发失败');
+  } finally {
+    testing.value = false;
+  }
+}
+
+async function triggerProactive() {
+  triggeringProactive.value = true;
+  try {
+    const res = await streamerApi.triggerProactive({
+      topic_hint: proactiveTopicHint.value.trim() || undefined,
+    });
+    if (res.data.success) {
+      ElMessage.info(res.data.message);
+    } else {
+      ElMessage.warning(res.data.message);
+    }
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '触发失败');
+  } finally {
+    triggeringProactive.value = false;
+  }
+}
+
+// WS streamer.speech → 发言流
+function handleStreamerSpeech(msg: WebSocketMessage): void {
+  if (msg.type !== 'streamer.speech') return;
+  const data = msg.data as unknown as StreamerSpeechEventData;
+  if (!data?.utterance_id || typeof data.text !== 'string') return;
+  // WS message.timestamp 为秒；发言时间取事件发布时刻（若 payload 携带）
+  const tsMs = data.timestamp_ms ?? msg.timestamp * 1000;
+  speechStream.value.unshift({
+    utterance_id: data.utterance_id,
+    text: data.text,
+    emotion: data.emotion,
+    time: new Date(tsMs).toLocaleTimeString('zh-CN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }),
+  });
+  if (speechStream.value.length > MAX_SPEECH_STREAM) {
+    speechStream.value.length = MAX_SPEECH_STREAM;
+  }
+}
+
 // 初始化
 onMounted(() => {
   fetchEventBusStats();
+  void fetchStreamerStatus();
+  wsStore.subscribe(handleStreamerSpeech);
+});
+
+onUnmounted(() => {
+  wsStore.unsubscribe(handleStreamerSpeech);
 });
 </script>
 
@@ -567,6 +1038,130 @@ onMounted(() => {
   color: var(--color-primary);
 }
 
+/* 主播发言测试 Tab 样式 */
+.streamer-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: var(--spacing-lg);
+}
+
+.streamer-left,
+.streamer-right {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+  min-width: 0;
+}
+
+.danmaku-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  width: 100%;
+}
+
+.danmaku-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.danmaku-nickname {
+  flex: 0 0 180px;
+}
+
+.danmaku-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.result-section-title {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: var(--spacing-sm);
+}
+
+.result-meta {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.plan-desc {
+  margin-bottom: 0;
+}
+
+.speech-bubble {
+  background: var(--bg-hover);
+  border-left: 3px solid var(--color-primary);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-md) var(--spacing-lg);
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+}
+
+.utterance-id {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-placeholder);
+  margin-top: var(--spacing-xs);
+}
+
+.speech-stream {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.speech-item {
+  background: var(--bg-hover);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+}
+
+.speech-item-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+  margin-bottom: 4px;
+}
+
+.speech-item-time {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.speech-item-text {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+.ws-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.7;
+  margin: var(--spacing-sm) 0 0;
+}
+
+.ws-hint code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--bg-hover);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
 /* 滚动条样式 */
 .tab-content-wrapper::-webkit-scrollbar {
   width: 8px;
@@ -591,6 +1186,10 @@ onMounted(() => {
   .inject-layout {
     grid-template-columns: 1fr;
   }
+
+  .streamer-layout {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 768px) {
@@ -599,7 +1198,16 @@ onMounted(() => {
   }
 
   .stats-overview {
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .danmaku-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .danmaku-nickname {
+    flex: none;
   }
 }
 </style>

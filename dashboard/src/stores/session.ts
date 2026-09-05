@@ -19,7 +19,6 @@ import type {
   NormalizedMessageData,
   IntentEventData,
   WebSocketMessage,
-  InjectIntentRequest,
 } from '@/types';
 
 const MAX_EVENTS = 200;
@@ -220,28 +219,6 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
-  async function sendIntent(
-    text?: string,
-    emotion: string = 'neutral',
-    source: string = 'dashboard',
-    responseText?: string,
-    actions: Record<string, any>[] = [],
-  ) {
-    sending.value = true;
-    try {
-      const request: InjectIntentRequest = {
-        text: text || undefined,
-        responseText,
-        emotion,
-        source,
-        actions,
-      };
-      await debugApi.injectIntent(request);
-    } finally {
-      sending.value = false;
-    }
-  }
-
   function clearEvents() {
     events.value = [];
   }
@@ -250,7 +227,6 @@ export const useSessionStore = defineStore('session', () => {
     events,
     sending,
     sendNormalizedMessage,
-    sendIntent,
     clearEvents,
   };
 });

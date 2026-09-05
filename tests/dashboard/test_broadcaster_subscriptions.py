@@ -21,6 +21,7 @@ from src.modules.events.payloads import (
     AgendaItem,
     RoomMessagePayload,
     RoomMessageUser,
+    StreamerSpeechPayload,
     ToolResultPayload,
 )
 
@@ -165,6 +166,33 @@ async def test_tool_result_wildcard_preserves_concrete_event_name(bus_and_handle
     assert call.args[0] == "tool.result.speak"
     assert call.args[1]["tool_name"] == "speak"
     assert call.args[1]["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_streamer_speech_broadcast_as_streamer_speech_type(bus_and_handler) -> None:
+    """streamer.speech → ws type 'streamer.speech'（payload 含 utterance_id/text/emotion）。"""
+    from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
+
+    bus, ws = bus_and_handler
+    broadcaster = EventBroadcaster(event_bus=bus, ws_handler=ws)
+    await broadcaster.start()
+
+    payload = StreamerSpeechPayload(
+        utterance_id="utt_1700000000000_1",
+        text="欢迎来到直播间！",
+        emotion="happy",
+    )
+    handler, _model_cls = bus.subscribed[CoreEvents.STREAMER_SPEECH]
+    await handler(CoreEvents.STREAMER_SPEECH, payload, source="test")
+
+    ws.broadcast.assert_awaited_once()
+    call = ws.broadcast.await_args
+    assert call.args[0] == "streamer.speech"
+    assert isinstance(call.args[1], dict)
+    assert call.args[1]["utterance_id"] == "utt_1700000000000_1"
+    assert call.args[1]["text"] == "欢迎来到直播间！"
+    assert call.args[1]["emotion"] == "happy"
+    assert call.kwargs.get("message_id") == payload.id
 
 
 @pytest.mark.asyncio
