@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
+from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.logging import get_logger
 from src.modules.simulator.cadence import CadenceGenerator
 from src.modules.simulator.config_schema import SimulatorConfigSchema
@@ -75,6 +76,8 @@ class SimulatorService:
         self._llm_wrapper: Optional[SimulatorLLMWrapper] = None
         self._session_selector: Optional[SessionSelector] = None
         self._token_budget: Optional[TokenBudgetController] = None
+        # 防重复订阅：start 多次调用只挂一次（与 background._subscribed 模式一致）
+        self._subscribed_streamer_speech: bool = False
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -168,10 +171,59 @@ class SimulatorService:
             self.logger.warning("模拟器实例未创建（setup 未注入 LLMManager？），请先调用 setup()")
             return
 
+        self._subscribe_streamer_speech()
+
         self._stop_event.clear()
         self._task = asyncio.create_task(self._run(), name="SimulatorService")
         self._is_started = True
         self.logger.info("模拟器服务已启动")
+
+    def _subscribe_streamer_speech(self) -> None:
+        """订阅 ``streamer.speech`` 业务事件 → cadence.notify_streamer_activity。
+
+        防重复订阅：start 多次调用只挂一次（与 background._subscribed 同模式）。
+        cadence 暂未构造时跳过（setup 早期阶段或 enabled=false 路径）。
+        """
+        if self._subscribed_streamer_speech:
+            return
+        if self._cadence is None:
+            return
+        self.event_bus.on(
+            CoreEvents.STREAMER_SPEECH,
+            self._on_streamer_speech,
+            model_class=StreamerSpeechPayload,
+        )
+        self._subscribed_streamer_speech = True
+        self.logger.debug("已订阅 streamer.speech → cadence.notify_streamer_activity")
+
+    def _unsubscribe_streamer_speech(self) -> None:
+        """解绑 ``streamer.speech`` 订阅（stop 时调用）。"""
+        if not self._subscribed_streamer_speech:
+            return
+        try:
+            self.event_bus.off(CoreEvents.STREAMER_SPEECH, self._on_streamer_speech)
+        except Exception as exc:
+            self.logger.debug(f"streamer.speech 解绑失败（已忽略）: {exc}")
+        self._subscribed_streamer_speech = False
+
+    def _on_streamer_speech(
+        self,
+        event_name: str,
+        payload: StreamerSpeechPayload,
+        source: str,
+    ) -> None:
+        """处理 ``streamer.speech`` 事件：唤醒 cadence 节奏。
+
+        handler 内部仅同步调 ``notify_streamer_activity`` + 记 DEBUG 日志：
+        - 不同步触发任何 LLM 调用或决策出口（防环：本事件为业务信号，订阅者不得
+          反向触发表演类副作用）
+        - 异常被 EventBus 包装层捕获记 ERROR，本方法不主动吞或抛
+        """
+        cadence = self._cadence
+        if cadence is None:
+            return
+        cadence.notify_streamer_activity()
+        self.logger.debug(f"收到 streamer.speech → 已通知 cadence：utterance_id={payload.utterance_id}")
 
     async def _run(self) -> None:
         """驱动模拟器主循环并发布 ROOM_MESSAGE_DANMAKU 事件。
@@ -294,6 +346,9 @@ class SimulatorService:
             return
         self._is_started = False
         self._stop_event.set()
+
+        # 解绑 streamer.speech 订阅（防 stop 后旧 handler 残留触发 cadence）
+        self._unsubscribe_streamer_speech()
 
         if self._task is not None:
             self._task.cancel()

@@ -240,7 +240,11 @@ async def test_payload_not_dict_logs_and_skips(loguru_capture):
 
 @pytest.mark.asyncio
 async def test_tts_disabled_means_no_enqueue_and_no_vts_call():
-    """speech_config.enabled=False → 不构造队列、不入队、不调 VTS。"""
+    """speech_config.enabled=False → 不构造队列、不入队、不调 VTS。
+
+    新增：主播发言业务事件（``streamer.speech``）与 TTS 启用正交——TTS 关闭时仍
+    生成 ``utterance_id`` 用于业务事件关联键，但 TTS 入队与 VTS 表情调用都被门控掉。
+    """
     agent = _build_streamer_agent(
         tts_engine=_MockTTSEngine(),
         speech_config={"enabled": False, "max_queue": 3, "render_timeout_ms": 1000},
@@ -250,7 +254,7 @@ async def test_tts_disabled_means_no_enqueue_and_no_vts_call():
         assert agent._utterance_queue is None
         assert agent._tts_enabled is False
 
-        # 即使有 speech + emotion 也不应触发
+        # 即使有 speech + emotion 也不应触发 TTS / VTS
         payload = {
             "speech": "会被忽略",
             "emotion": "happy",
@@ -268,8 +272,9 @@ async def test_tts_disabled_means_no_enqueue_and_no_vts_call():
 
         await asyncio.sleep(0.05)
         assert called["vts"] is False, "TTS disabled 时不应触发 VTS 调用"
-        # seq 不递增（没有任何 utterance_id 被生成）
-        assert agent._utterance_seq == 0
+        # seq 仍递增（utterance_id 现在用于 streamer.speech 业务事件关联键，
+        # 与 TTS 启用与否正交）
+        assert agent._utterance_seq == 1
     finally:
         await agent._on_stop()
 

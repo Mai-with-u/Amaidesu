@@ -46,9 +46,11 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 from src.modules.agents.base import BaseAgent
 from src.modules.agents.manager import AgentManager
 from src.modules.config.schemas.base import BaseConfig
+from src.modules.context.models import MessageRole
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import RoomMessagePayload
+from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.logging import get_logger
 from src.modules.tools import ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
@@ -850,8 +852,10 @@ class StreamerAgent(BaseAgent):
 
         行为契约：
         - JSON 解析失败 → WARN 日志 + 直接返回（决策循环不受影响）
-        - TTS 未启用 → 解析完即返回（不入队、不触发 VTS）
-        - speech 非空 → 生成 utterance_id + 入队（异步，fire-and-forget）
+        - TTS 未启用 → 仍发布 ``streamer.speech`` 业务事件 + 写入 ContextService 历史
+          （TTS 启用与否与主播发言业务事实正交；下游消费者仅依赖业务事件）
+        - speech 非空 → 生成 utterance_id + 发布业务事件 + 写入历史；TTS 启用时
+          复用同一 utterance_id 入 TTS 队列（与 ``tts.utterance.*`` 共用关联键）
         - emotion 非空 → ``asyncio.create_task`` 调 VTS 表情工具（fire-and-forget）
         - action 字段：当前锁定范围**不接入**（决策调用路径，独立议题）
         """
@@ -877,21 +881,82 @@ class StreamerAgent(BaseAgent):
         _ = action  # 显式标注当前未使用，便于后续 grep 排查
         _ = payload.get("metadata", {})  # metadata 当前也不消费
 
-        # TTS 关闭时整个发言管线退化为空（决策循环行为与改造前一致）
-        if not self._tts_enabled or self._utterance_queue is None:
+        cleaned_speech = speech.strip() if isinstance(speech, str) else ""
+        emotion_str = emotion.strip() if isinstance(emotion, str) else ""
+        cleaned_emotion: Optional[str] = emotion_str or None
+
+        # emotion → VTS 表情调用跟随 TTS 启用门：TTS 关闭（无语音/无声卡场景）
+        # 时 avatar 表情随同关闭，避免与改造前的"管线整体退化"语义漂移。
+        # 与 speech 派发独立（speech 空但 emotion 非空时仍可触发）。
+        if cleaned_emotion and self._tts_enabled and self._utterance_queue is not None:
+            self._schedule_vts_emotion(cleaned_emotion)
+
+        # speech 非空：先发布业务事件 + 写历史（与 TTS 启用与否正交），
+        # TTS 启用时复用同一 utterance_id 入 TTS 队列。
+        if cleaned_speech:
+            utterance_id = self._next_utterance_id()
+            self._emit_streamer_speech(utterance_id, cleaned_speech, cleaned_emotion)
+            self._record_streamer_speech_history(cleaned_speech, cleaned_emotion)
+            if self._tts_enabled and self._utterance_queue is not None:
+                try:
+                    asyncio.create_task(self._utterance_queue.enqueue(utterance_id, cleaned_speech))
+                except Exception as exc:
+                    self._logger.warning("utterance 入队失败（已忽略）: utterance_id={}, err={}", utterance_id, exc)
+
+    def _emit_streamer_speech(self, utterance_id: str, text: str, emotion: Optional[str]) -> None:
+        """发布 ``streamer.speech`` 业务事件（fire-and-forget；下游不得触发新决策）。"""
+        if self._event_bus is None:
+            return
+        payload = StreamerSpeechPayload(
+            utterance_id=utterance_id,
+            text=text,
+            emotion=emotion,
+        )
+
+        async def _do_emit() -> None:
+            try:
+                await self._event_bus.emit(
+                    CoreEvents.STREAMER_SPEECH,
+                    payload,
+                    source="streamer_agent.speech",
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - 异步背景任务边界
+                self._logger.warning(f"streamer.speech 发布失败（已忽略）: utterance_id={utterance_id}, err={exc}")
+
+        try:
+            asyncio.create_task(_do_emit())
+        except RuntimeError as exc:
+            self._logger.warning(f"streamer.speech 任务创建失败（已忽略）: utterance_id={utterance_id}, err={exc}")
+
+    def _record_streamer_speech_history(self, text: str, emotion: Optional[str]) -> None:
+        """把主播发言写入 ContextService 历史（fire-and-forget；缺 context_service 跳过）。
+
+        会话 id 与现有 ``_read_history_sync`` / ``_read_history`` 一致，使用
+        ``"live"`` 作为 live 场次默认 session_id；下游 Planner/Replyer 共享同一历史。
+        """
+        ctx = self._context
+        if ctx is None:
             return
 
-        # speech 非空 → 入 TTS 队列
-        if isinstance(speech, str) and speech.strip():
-            utterance_id = self._next_utterance_id()
+        async def _do_record() -> None:
             try:
-                asyncio.create_task(self._utterance_queue.enqueue(utterance_id, speech))
-            except Exception as exc:
-                self._logger.warning("utterance 入队失败（已忽略）: utterance_id={}, err={}", utterance_id, exc)
+                await ctx.add_message(  # type: ignore[union-attr]
+                    session_id="live",
+                    role=MessageRole.ASSISTANT,
+                    content=text,
+                    emotion=emotion,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - 异步背景任务边界
+                self._logger.warning(f"主播发言写入 ContextService 历史失败（已忽略）: err={exc}")
 
-        # emotion 非空 → fire-and-forget VTS 表情调用
-        if isinstance(emotion, str) and emotion.strip():
-            self._schedule_vts_emotion(emotion.strip())
+        try:
+            asyncio.create_task(_do_record())
+        except RuntimeError as exc:
+            self._logger.warning(f"主播发言历史任务创建失败（已忽略）: err={exc}")
 
     def _schedule_vts_emotion(self, emotion: str) -> None:
         """异步触发 VTS 表情调用（fire-and-forget，失败不影响决策循环）。

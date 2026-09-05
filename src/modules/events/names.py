@@ -1,20 +1,18 @@
 """
-事件名称常量定义（Wave 6 / §1.46 语义域事件）
+事件名称常量定义（v2 语义域事件）
 
 使用常量替代魔法字符串，提供 IDE 自动补全和重构支持。
 
-命名规范（§1.46）：
+命名规范：
 - 格式: 域.主体.动作（点分隔）
-- 域为语义域（live / room / game / agenda / planner / tool），不是阶段（input / decision / output）
+- 域为语义域（live / room / game / agenda / planner / tool / streamer），不是阶段（input / decision / output）
 - 通配订阅：``*``=单层 ``#``=多层（MQTT 风格）
 
-Wave 6 删除（Stage-glue 胶水事件）：
+v2 收口删除（Stage-glue 胶水事件）：
 - ~~decision.intent.generated~~（无 Intent；决策出口=工具调用，无事件）
 - ~~output.intent.dispatched~~ / ~~output.intent.finished~~ / ~~output.handler.completed~~
   （无 OutputHandlerManager；统一为 ToolRegistry.invoke）
 - ~~output.obs.command~~（→ 工具直接调用）
-
-v2.0.8 删除（C1 治理收口）：
 - ~~output.sticker.command~~（StickerHelper 零实例化零调用、消费端 VTSProvider
   仅空转订阅；接电线也救不了——没有 LLM 工具暴露贴纸触发，未来做表情功能
   时再重新设计）
@@ -65,6 +63,13 @@ class CoreEvents:
     TTS_UTTERANCE_STARTED = "tts.utterance.started"
     TTS_UTTERANCE_FINISHED = "tts.utterance.finished"
     TTS_UTTERANCE_FAILED = "tts.utterance.failed"
+
+    # ========== v2 语义域事件（streamer 主播发言业务事实） ==========
+    # 主播 Agent 已生成一条发言的业务事实：与 TTS 启用与否正交，下游消费者
+    # （Simulator 节奏唤醒、ContextService 历史写入、字幕器、未来回放）拿到
+    # 同一份业务信号，不依赖声卡/TTS 引擎是否存在。
+    # utterance_id 与 tts.utterance.* 共用同一关联键（编排层生成，全链路串联）。
+    STREAMER_SPEECH = "streamer.speech"
 
     # ========== v2 语义域事件（tool 异步工具结果通配订阅模式） ==========
     # **这是通配订阅模式专用**，不是被 emit 的具体事件名。emit 时使用具体名

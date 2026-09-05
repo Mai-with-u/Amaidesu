@@ -16,7 +16,7 @@ v2.0.8 变更（C1 治理收口）：
   StickerHelper 零实例化零调用、消费端 VTSProvider 仅空转订阅；
   未来做表情功能时重新设计，本轮不留事件链
 
-模块结构（v2.0.8）：
+模块结构（v2）：
 - core.py: Core 系统事件 Payload（core.startup/shutdown/error）
 - connection.py: 通用组件事件 Payload（ConnectionEventPayload）
 - live.py: v2 语义域 — 场次生命周期（live.started/live.ended）
@@ -26,6 +26,7 @@ v2.0.8 变更（C1 治理收口）：
 - planner.py: v2 语义域 — 空转检查点（planner.checkpoint）
 - tool_result.py: v2 语义域 — 异步工具结果（tool.result.*，不绑定具体名）
 - utterance.py: v2 语义域 — TTS 一次发声实例生命周期（tts.utterance.*）
+- speech.py: v2 语义域 — 主播发言业务事实（streamer.speech）
 
 使用示例:
     from src.modules.events.payloads import RoomMessagePayload
@@ -68,6 +69,7 @@ from .room import (
     RoomMessageUser,
     SuperChatInfo,
 )
+from .speech import StreamerSpeechPayload
 from .tool_result import ToolResultPayload
 from .utterance import (
     UtteranceFailedPayload,
@@ -105,4 +107,6 @@ __all__ = [
     "UtteranceStartedPayload",
     "UtteranceFinishedPayload",
     "UtteranceFailedPayload",
+    # v2 语义域 — streamer.speech
+    "StreamerSpeechPayload",
 ]
