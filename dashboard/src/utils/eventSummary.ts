@@ -3,7 +3,8 @@
 // Dashboard 速率面板、Collectors/Agents 实时流均需要把 WebSocketMessage
 // 折算成"一行可读的运维摘要"。把规则集中到一处可避免三处各自维护带来的
 // 行为漂移。摘要规则：
-//   - room.message.* → "{message_type} · {user.name/id}: {content 截断}"
+//   - room.message（WS 统一类型）→ "{message_type} · {user.name/id}: {content 截断}"
+//   - streamer.speech → "发言: {text}"
 //   - tool.result.<name> → "{tool_name} · {status} [+ error tail]"
 //   - agenda.* → "{action} {item.label}"
 //   - planner.* → 1-2 个最有意义的 kv（active/next 或 timeline_summary 截断）
@@ -17,19 +18,25 @@
 /**
  * 按业务族抽取事件的人类可读摘要。
  *
- * @param type 事件 type（如 `room.message.danmaku`）
+ * @param type 事件 type（WS 广播类型，如 `room.message` / `tool.result.speak`）
  * @param data 事件 data 载荷（任意可 JSON 反序列化对象）
  * @returns 单行摘要（已做长度截断；省略号 `…` 收尾）
- */
-export function summarizeEvent(type: string, data: unknown): string {
+ */export function summarizeEvent(type: string, data: unknown): string {
   const d = (data ?? {}) as Record<string, unknown>;
 
-  if (type.startsWith('room.message.')) {
-    const messageType = pickString(d.message_type, 12) || type.replace('room.message.', '');
+  // WS 层把 4 种 room.message.* EventBus 事件统一广播为 "room.message"，
+  // 消息种类由 payload.message_type 判别。
+  if (type === 'room.message') {
+    const messageType = pickString(d.message_type, 12) || 'danmaku';
     const user = (d.user as { name?: string; id?: string } | undefined) ?? null;
     const userLabel = user?.name || (user?.id ? `#${user.id}` : '匿名');
     const content = pickString(d.content, 24);
     return content ? `${messageType} · ${userLabel}: ${content}` : `${messageType} · ${userLabel}`;
+  }
+
+  if (type === 'streamer.speech') {
+    const text = pickString(d.text, 32);
+    return text ? `发言: ${text}` : type;
   }
 
   if (type.startsWith('tool.result.')) {

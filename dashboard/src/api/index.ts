@@ -1,13 +1,9 @@
 /**
- * Dashboard API 客户端（v2.0）
+ * Dashboard API 客户端（v2）
  *
  * 模拟直播能力控制面：
  * - ``simulatorApi`` → ``/api/v1/simulator/*``：LLM 驱动的 SimulatorService（ADR-006）
  * - ``mockCollectorApi`` → ``/api/v1/mock/*``：确定性 JSONL 回放 MockCollector
- *
- * 历史 AD-008 半吊子模式（人设 / 礼物雨 / 话题注入 / token 预算）已被 ADR-006
- * 推翻并移除；旧 mockCollectorApi 的对应方法同步下线（前端调用会触发 404，由
- * 调用方 try/catch 兜底）。
  */
 
 import axios from 'axios';
@@ -59,8 +55,7 @@ export const systemApi = {
 
 // ===== 组件 =====
 //
-// 后端 `/api/v1/components` 按 v2 分组 `collectors / agents / tools` 返回组件清单；
-// 控制端点路径参数为 `group`（旧后端为 `phase`，迁移完成后无须兼容）。
+// 后端 `/api/v1/components` 按 v2 分组 `collectors / agents / tools` 返回组件清单；// 控制端点路径参数为 `group`。
 export const componentApi = {
   getAll: () => api.get<ComponentListResponse>('/components'),
   control: (group: string, name: string, request: ComponentControlRequest) =>
@@ -81,8 +76,7 @@ export const configApi = {
 // ===== 调试注入 =====
 //
 // `injectMessage` 发布 `room.message.danmaku` 走真实弹幕链路（消息写入
-// `live` 会话，主播 Agent 决策历史可读）。旧 `injectIntent`（/debug/inject-intent）
-// 已随 v2 删除（决策出口=工具调用，无 Intent 事件），前端不再保留调用。
+// `live` 会话，主播 Agent 决策历史可读）。
 export const debugApi = {
   injectMessage: (request: InjectMessageRequest) =>
     api.post<InjectMessageResponse>('/debug/inject-message', request),
@@ -116,11 +110,9 @@ export const simulatorApi = {
 // ===== Mock 采集器控制面（ADR-006：确定性 JSONL 回放器） =====
 //
 // 代理 CollectorManager 的 ``mock`` 实例启停。控制面与通用
-// ``/api/v1/components/collectors/mock/control`` 等价；前端保留 ``/mock/*`` 路径
+// ``/api/v1/components/collectors/mock/control`` 等价；独立 ``/mock/*`` 路径
 // 是为与 ``/api/v1/simulator/*`` 做语义区隔（LLM 仿真 vs JSONL 回放）。
-//
-// ADR-006 已移除 simulator 半吊子模式（人设 / 参数 / 礼物雨 / 话题注入 / token
-// 预算），对应方法已被下线——前端若有遗留调用，应改走到「组件 → 采集器」通用页。
+// 人设 / 礼物雨 / 话题注入等生成式能力归 SimulatorService，不在本控制面。
 export const mockCollectorApi = {
   getStatus: () => api.get<MockCollectorStatus>('/mock/status'),
   start: () => api.post<MockCollectorStatus>('/mock/start'),

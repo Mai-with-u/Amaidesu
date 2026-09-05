@@ -221,80 +221,42 @@ export interface StreamerSpeechEventData {
 // ==================== v2 消息与会话 ====================
 
 /**
- * v2 统一消息载荷。后端实现：
- * - 弹幕/进房等所有消息统一发布为 `room.message.*`（采集器归一化后）
- * - Planner 的发言通过 `tool.result.<tool_name>` 与 `agenda.*` 间接观测
- * - 历史 EventRecord.type 字段字面量必须与后端一致
+ * v2 房间消息载荷（RoomMessagePayload.model_dump 的扁平结构）。
  *
- * payload 结构：`data.message.message_id` 是消息唯一 ID（LiveObserver 链路分组依据）。
+ * 后端把 4 种 room.message.* EventBus 事件统一以 WS 类型 "room.message" 广播，
+ * 消息种类由 `message_type` 判别；payload 本身无 source / message_id 字段。
  */
-export interface NormalizedMessageData {
-  text: string;
-  source: string;
-  data_type: string;
-  importance: number;
-  /** 毫秒时间戳（Unix epoch ms） */
-  timestamp_ms: number;
-  user_id?: string;
-  user_nickname?: string;
-  platform?: string;
-  room_id?: string;
-  raw?: Record<string, unknown>;
-  /** 消息唯一 ID，用于链路分组（LiveObserver 用） */
-  message_id?: string;
-  /** v2 新增：模拟数据溯源（true=mock 采集器；统计查询必须排除） */
+export interface RoomMessageEventData {
+  live_session_id?: string;
+  message_type: 'danmaku' | 'gift' | 'super_chat' | 'enter' | string;
+  user?: { id?: string; name?: string } | null;
+  content?: string;
+  gift?: { name?: string; count?: number } | null;
+  sc?: { amount?: number } | null;
+  /** 模拟数据溯源（true=simulator/mock 产生） */
   simulated?: boolean;
+  /** Unix 毫秒 */
+  timestamp_ms?: number;
 }
-
-export interface IntentEmotionData {
-  name: string;
-  intensity: number;
-}
-
-export interface IntentActionData {
-  name: string;
-  parameters: Record<string, unknown>;
-}
-
-export interface IntentMetadataData {
-  source_id: string;
-  decision_time_ms: number;
-  source_message_id?: string;
-}
-
-/** v2 直播间观察页链路状态 */
-export type LiveChainStatus = 'pending' | 'planning' | 'done';
 
 /**
- * v2 调试会话事件：仅保留语义域家族。
- *
- * 旧类型 `message.received | decision.intent | output.render` 已删除（v2 后端不再发布）；
- * 新链路通过 `room.message.*` + `agenda.*` + `tool.result.*` 三族观测。
+ * v2 调试会话事件（会话调试页数据轴）——v2 对话闭环的三类观测点：
+ * - 观众消息：room.message（WS 统一类型）
+ * - 主播发言：streamer.speech
+ * - 决策/编排/工具：planner.checkpoint / agenda.update / tool.result.*（摘要行）
  */
-export type DebugSessionEventType =
-  | 'room.message' // 统一消息事件（v2 默认）
-  | 'agenda.update' // Agenda 节目单更新（v2）
-  | 'agenda.speech' // Agenda 推动的发言（v2）
-  | 'planner.checkpoint' // Planner 决策检查点（v2）
-  | 'tool.result'; // 工具执行结果（v2）
-
 export interface DebugSessionEvent {
   id: string;
-  type: DebugSessionEventType | string;
+  type: string;
+  /** Unix 秒（继承 WebSocketMessage / EventRecord 的 timestamp） */
   timestamp: number;
-  // room.message 事件专有字段
-  message?: NormalizedMessageData;
-  source?: string;
-  // agenda / planner / tool.result 事件专有字段
-  intent?: IntentEventData;
-  deciderName?: string;
-}
-
-export interface IntentEventData {
-  speech?: string;
-  emotion?: IntentEmotionData;
-  action?: IntentActionData;
-  metadata: IntentMetadataData;
+  kind: 'message' | 'speech' | 'system';
+  /** kind === 'message' 时的房间消息载荷 */
+  message?: RoomMessageEventData;
+  /** kind === 'speech' 时的主播发言载荷 */
+  speech?: StreamerSpeechEventData;
+  /** 原始载荷（详情展开用） */
+  data?: Record<string, unknown>;
 }
 
 // ==================== ContextService / 会话历史 ====================
@@ -320,9 +282,10 @@ export interface MessageListResponse {
 /**
  * WebSocket 消息（v2）。
  *
- * `type` 字段统一是 v2 语义域事件名前缀。常见：
- * - `room.message.danmaku` / `room.message.gift` / `room.message.super_chat` / `room.message.enter`
- * - `agenda.*` / `planner.*` / `tool.result.<name>` / `game.*` / `live.*`
+ * `type` 字段是 WS 广播类型：4 种 room.message.* EventBus 事件统一广播为
+ * `room.message`（消息种类由 payload.message_type 判别）；其余沿用事件名
+ * （`streamer.speech` / `agenda.update` / `planner.checkpoint` /
+ * `tool.result.<name>` / `game.*` / `live.*` / `system.*`）。
  */
 export interface WebSocketMessage {
   type: string;

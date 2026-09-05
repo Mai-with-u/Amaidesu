@@ -1,8 +1,8 @@
 """
 弹幕小部件服务。
 
-订阅 ``room.message.danmaku``（语义域事件）并广播给前端 WebSocket
-客户端；字幕显示由字幕基础设施 ``SubtitleService`` 通过
+订阅 ``room.message.*`` 四种语义域事件（弹幕/礼物/SC/进场）并广播给前端
+WebSocket 客户端；字幕显示由字幕基础设施 ``SubtitleService`` 通过
 ``DashboardBackend`` 驱动——本服务暴露 ``show_subtitle`` /
 ``clear_subtitle`` 公开方法供 Backend 调用，自身不再订阅
 ``planner.checkpoint`` 等业务事件做字幕拉取（语义错位的历史路径）。
@@ -73,11 +73,17 @@ class DanmakuWidgetService:
             self.logger.warning("DanmakuWidgetService 已经在运行中")
             return
 
-        self.event_bus.on(
+        for event_name in (
             CoreEvents.ROOM_MESSAGE_DANMAKU,
-            self._on_input_message,
-            model_class=RoomMessagePayload,
-        )
+            CoreEvents.ROOM_MESSAGE_GIFT,
+            CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
+            CoreEvents.ROOM_MESSAGE_ENTER,
+        ):
+            self.event_bus.on(
+                event_name,
+                self._on_input_message,
+                model_class=RoomMessagePayload,
+            )
 
         self._is_running = True
         self.logger.info(f"DanmakuWidgetService 已启动 (max_messages={self.config.max_messages})")
@@ -86,7 +92,13 @@ class DanmakuWidgetService:
         if not self._is_running:
             return
 
-        self.event_bus.off(CoreEvents.ROOM_MESSAGE_DANMAKU, self._on_input_message)
+        for event_name in (
+            CoreEvents.ROOM_MESSAGE_DANMAKU,
+            CoreEvents.ROOM_MESSAGE_GIFT,
+            CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
+            CoreEvents.ROOM_MESSAGE_ENTER,
+        ):
+            self.event_bus.off(event_name, self._on_input_message)
 
         self._is_running = False
         self.logger.info("DanmakuWidgetService 已停止")
@@ -229,6 +241,7 @@ class DanmakuWidgetService:
                     gift_count=payload.gift.count if payload.gift else None,
                     platform=platform,
                     room_id=room_id,
+                    simulated=payload.simulated,
                 )
 
             if payload.message_type == "super_chat":
@@ -243,6 +256,7 @@ class DanmakuWidgetService:
                     sc_message=payload.content or None,
                     platform=platform,
                     room_id=room_id,
+                    simulated=payload.simulated,
                 )
 
             if payload.message_type == "enter":
@@ -255,6 +269,7 @@ class DanmakuWidgetService:
                     importance=importance,
                     platform=platform,
                     room_id=room_id,
+                    simulated=payload.simulated,
                 )
 
             return DanmakuWidgetMessage(
@@ -266,6 +281,7 @@ class DanmakuWidgetService:
                 importance=importance,
                 platform=platform,
                 room_id=room_id,
+                simulated=payload.simulated,
             )
 
         except Exception as e:
@@ -300,6 +316,7 @@ class DanmakuWidgetService:
                     importance=importance,
                     platform=platform,
                     room_id=room_id,
+                    simulated=bool(msg_dict.get("simulated", False)),
                 )
 
             elif data_type == "gift":
@@ -319,6 +336,7 @@ class DanmakuWidgetService:
                     gift_price=float(gift_price) if gift_price else None,
                     platform=platform,
                     room_id=room_id,
+                    simulated=bool(msg_dict.get("simulated", False)),
                 )
 
             elif data_type == "super_chat":
@@ -336,6 +354,7 @@ class DanmakuWidgetService:
                     sc_message=sc_message,
                     platform=platform,
                     room_id=room_id,
+                    simulated=bool(msg_dict.get("simulated", False)),
                 )
 
             elif data_type == "guard":
@@ -351,6 +370,7 @@ class DanmakuWidgetService:
                     guard_level=guard_level,
                     platform=platform,
                     room_id=room_id,
+                    simulated=bool(msg_dict.get("simulated", False)),
                 )
 
             elif data_type == "enter":
@@ -363,6 +383,7 @@ class DanmakuWidgetService:
                     importance=importance,
                     platform=platform,
                     room_id=room_id,
+                    simulated=bool(msg_dict.get("simulated", False)),
                 )
 
             else:
@@ -376,6 +397,7 @@ class DanmakuWidgetService:
                     importance=importance,
                     platform=platform,
                     room_id=room_id,
+                    simulated=bool(msg_dict.get("simulated", False)),
                 )
 
         except Exception as e:

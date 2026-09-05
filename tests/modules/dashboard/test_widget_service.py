@@ -14,6 +14,7 @@ import pytest
 from src.modules.dashboard.widget.models import MessageType
 from src.modules.dashboard.widget.service import DanmakuWidgetService
 from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import (
     GiftInfo,
     RoomMessagePayload,
@@ -84,6 +85,41 @@ def test_convert_enter_message() -> None:
     msg = svc._convert_payload_to_widget(_make_payload(message_type="enter", content=""))
     assert msg is not None
     assert msg.message_type == MessageType.ENTER
+
+
+def test_convert_simulated_flag_propagates() -> None:
+    """simulated 溯源标记从 payload 贯通到 widget 消息，前端靠它过滤模拟弹幕。"""
+    svc = _make_service()
+    real = svc._convert_payload_to_widget(_make_payload(simulated=False))
+    assert real is not None
+    assert real.simulated is False
+    fake = svc._convert_payload_to_widget(_make_payload(simulated=True))
+    assert fake is not None
+    assert fake.simulated is True
+
+
+@pytest.mark.asyncio
+async def test_start_subscribes_all_room_message_events() -> None:
+    """弹幕小部件需订阅全部 4 种 room.message 事件（礼物/SC/进场也要上屏）。"""
+    svc = _make_service()
+    await svc.start()
+    try:
+        for event_name in (
+            CoreEvents.ROOM_MESSAGE_DANMAKU,
+            CoreEvents.ROOM_MESSAGE_GIFT,
+            CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
+            CoreEvents.ROOM_MESSAGE_ENTER,
+        ):
+            assert svc.event_bus._handlers.get(event_name), f"缺少订阅: {event_name}"
+    finally:
+        await svc.stop()
+    for event_name in (
+        CoreEvents.ROOM_MESSAGE_DANMAKU,
+        CoreEvents.ROOM_MESSAGE_GIFT,
+        CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
+        CoreEvents.ROOM_MESSAGE_ENTER,
+    ):
+        assert not svc.event_bus._handlers.get(event_name), f"stop 后未解除订阅: {event_name}"
 
 
 @pytest.mark.asyncio

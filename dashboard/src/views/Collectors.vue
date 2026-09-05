@@ -240,10 +240,11 @@ import type { ComponentControlAction, ComponentSummary } from '@/types';
 import { summarizeEvent } from '@/utils/eventSummary';
 
 // ============================================================
-// 归因映射：采集器名 → 事件类型前缀白名单（Case B）
+// 归因映射：采集器名 → 消息族白名单（payload.message_type 判别）
 // ============================================================
 //
-// 核对来源：
+// 核对来源（采集器在 EventBus 上发 room.message.* 事件；Dashboard WS 层把
+// 4 种事件统一广播为 "room.message"，消息种类由 payload.message_type 携带）：
 // - console_input_collector.py: `_emit_semantic_event` 按 data_type 发 4 种事件
 // - bili_danmaku_official_collector.py: WS 弹幕/礼物/SC/进房全部走 _emit_semantic_event
 // - bili_danmaku_collector.py (legacy): 仅 _emit_semantic_event 发 room.message.danmaku
@@ -252,59 +253,63 @@ import { summarizeEvent } from '@/utils/eventSummary';
 // - stt_collector.py: 基类 _emit_normalized_message 兜底（data_type=text → danmaku）
 //
 // 规则：
-// - 命中事件 type 前缀 ∈ 列表 → 视为该采集器产生的。
-// - 多个前缀用 'room.message.*' 之类通配符（前端 startsWith 匹配）。
-// - 未列出的采集器 → 默认按 room.message.* 兜底（保持旧行为，避免漏数据）。
+// - 列表列出该采集器会产生的 message_type 值。
+// - 未列出的采集器 → 空列表 = 匹配全部消息族（兜底，避免漏数据）。
 const COLLECTOR_EVENT_FAMILIES: Record<string, readonly string[]> = {
-  console_input: [
-    'room.message.danmaku',
-    'room.message.gift',
-    'room.message.super_chat',
-    'room.message.enter',
-  ],
-  bili_danmaku: ['room.message.danmaku'],
-  bili_danmaku_official: [
-    'room.message.danmaku',
-    'room.message.gift',
-    'room.message.super_chat',
-    'room.message.enter',
-  ],
-  mock: [
-    'room.message.danmaku',
-    'room.message.gift',
-    'room.message.super_chat',
-    'room.message.enter',
-  ],
-  screen_change: ['room.message.danmaku'],
-  stt: ['room.message.danmaku'],
+  console_input: ['danmaku', 'gift', 'super_chat', 'enter'],
+  bili_danmaku: ['danmaku'],
+  bili_danmaku_official: ['danmaku', 'gift', 'super_chat', 'enter'],
+  mock: ['danmaku', 'gift', 'super_chat', 'enter'],
+  screen_change: ['danmaku'],
+  stt: ['danmaku'],
 };
 
-const DEFAULT_FAMILY_PREFIXES = ['room.message.'];
+/** Dashboard WS 把 4 种 room.message.* EventBus 事件统一广播为此类型 */
+const ROOM_MESSAGE_WS_TYPE = 'room.message';
+
+/** 空列表 = 不区分消息族，匹配全部 room.message 事件 */
+const DEFAULT_FAMILIES: readonly string[] = [];
 
 function getFamiliesFor(name: string | null): readonly string[] {
-  if (!name) return DEFAULT_FAMILY_PREFIXES;
-  return COLLECTOR_EVENT_FAMILIES[name] ?? DEFAULT_FAMILY_PREFIXES;
+  if (!name) return DEFAULT_FAMILIES;
+  return COLLECTOR_EVENT_FAMILIES[name] ?? DEFAULT_FAMILIES;
 }
 
 const attributionMode = computed(() => {
   const sel = selectedName.value;
-  if (!sel) return '按事件族兜底（room.message.*）';
-  return COLLECTOR_EVENT_FAMILIES[sel] ? '按事件族近似归属' : '按事件族兜底（room.message.*）';
+  if (!sel) return '按消息族兜底（room.message）';
+  return COLLECTOR_EVENT_FAMILIES[sel] ? '按消息族近似归属' : '按消息族兜底（room.message）';
 });
 
-/** 事件族 → 人话标签（归因族 chip 展示用，避免拼技术事件名） */
+/** message_type → 人话标签（归因族 chip 展示用，避免拼技术事件名） */
 const FAMILY_HUMAN_LABELS: Record<string, string> = {
-  'room.message.danmaku': '弹幕',
-  'room.message.gift': '礼物',
-  'room.message.super_chat': 'SC',
-  'room.message.enter': '进场',
+  danmaku: '弹幕',
+  gift: '礼物',
+  super_chat: 'SC',
+  enter: '进场',
 };
 
-const attributionFamiliesLabel = computed(() =>
-  getFamiliesFor(selectedName.value)
-    .map(f => FAMILY_HUMAN_LABELS[f] ?? f.replace('room.message.', ''))
-    .join(' / '),
-);
+const attributionFamiliesLabel = computed(() => {
+  const families = getFamiliesFor(selectedName.value);
+  if (families.length === 0) return '全部消息族';
+  return families.map(f => FAMILY_HUMAN_LABELS[f] ?? f).join(' / ');
+});
+
+/**
+ * 判断一条 WS 事件是否归属给定消息族。
+ * WS 层把 4 种 room.message.* EventBus 事件统一广播为 "room.message"，
+ * 由 payload.message_type 判别；families 为空 = 全部消息。
+ */
+function matchesRoomMessageFamily(
+  type: string,
+  data: unknown,
+  families: readonly string[],
+): boolean {
+  if (type !== ROOM_MESSAGE_WS_TYPE) return false;
+  if (families.length === 0) return true;
+  const messageType = (data as Record<string, unknown> | null)?.message_type;
+  return typeof messageType === 'string' && families.includes(messageType);
+}
 
 // ============================================================
 // Store + 状态
@@ -432,12 +437,12 @@ watch(
   [events, selectedName, paused],
   ([evts, sel, isPaused]) => {
     if (isPaused || !sel) return;
-    const prefixes = COLLECTOR_EVENT_FAMILIES[sel] ?? DEFAULT_FAMILY_PREFIXES;
+    const families = getFamiliesFor(sel);
     // 取 store 末尾一段（最多 STREAM_CAP * 2），按时间升序，过滤归属，写入缓冲。
     const slice = evts.slice(-STREAM_CAP * 2);
     const fresh: StreamItem[] = [];
     for (const e of slice) {
-      if (!prefixes.some(p => e.type.startsWith(p))) continue;
+      if (!matchesRoomMessageFamily(e.type, e.data, families)) continue;
       fresh.push({
         id: e.id,
         eventType: e.type,

@@ -4,7 +4,8 @@
  * 对应后端 `/api/v1/traces` 与 `/api/v1/traces/{message_id}` 接口返回的数据结构。
  *
  * v2 行为流：
- * - 链路起点：采集器发布 `room.message.*` 事件，`EventRecord.data.message.message_id` 关联
+ * - 链路起点：采集器发布 room.message.* 事件（WS 统一类型 "room.message"），
+ *   链路键 = 扁平 payload 顶层 `id`（BasePayload uuid，与 EventRecord.id / WS 消息 id 同源）
  * - 链路上游：Planner 通过 `planner.checkpoint` 事件观测决策
  * - 链路下游：`tool.result.*` + `agenda.*` 间接观测执行
  *

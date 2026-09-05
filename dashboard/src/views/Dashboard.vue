@@ -31,15 +31,15 @@
       </div>
 
       <div class="kpi-card kpi-llm">
-        <div class="kpi-label">LLM 今日成本</div>
+        <div class="kpi-label">LLM 成本</div>
         <div class="kpi-value mono">{{ llmCostText }}</div>
         <div class="kpi-sub">{{ llmCostSub }}</div>
       </div>
 
-      <div class="kpi-card kpi-agenda">
+      <div class="kpi-card kpi-agenda" title="查看 Agenda 工作台" @click="router.push('/outline')">
         <div class="kpi-label">当前 Agenda</div>
-        <div class="kpi-value mono">—</div>
-        <div class="kpi-sub">节目单管理通道规划中</div>
+        <div class="kpi-value mono kpi-value-agenda">{{ agendaKpiValue }}</div>
+        <div class="kpi-sub">{{ agendaKpiSub }}</div>
       </div>
     </section>
 
@@ -136,17 +136,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, h, ref } from 'vue';
+import { computed, onMounted, onUnmounted, h, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { Document } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { storeToRefs } from 'pinia';
-import { useSystemStore, useComponentsStore } from '@/stores';
-import { capabilitiesApi, llmApi } from '@/api';
-import type { LLMUsageSummary } from '@/types';
+import { useSystemStore, useComponentsStore, useEventsStore } from '@/stores';
+import { capabilitiesApi, llmApi, agendaApi } from '@/api';
+import type { AgendaStateResponse, LLMUsageSummary } from '@/types';
 
 const systemStore = useSystemStore();
 const componentsStore = useComponentsStore();
+const eventsStore = useEventsStore();
 const router = useRouter();
 
 const { status } = storeToRefs(systemStore);
@@ -332,20 +333,65 @@ async function fetchLLMSummary() {
 
 const llmCostText = computed(() => {
   if (!llmSummary.value) return llmSummaryError.value ? '—' : '...';
-  const summary = llmSummary.value as unknown as { today_cost?: number; today_tokens?: number };
-  if (typeof summary.today_cost === 'number') {
-    return `$${summary.today_cost.toFixed(2)}`;
+  if (llmSummary.value.total_cost > 0) {
+    return `¥${llmSummary.value.total_cost.toFixed(2)}`;
   }
-  if (typeof summary.today_tokens === 'number') {
-    return `${formatCount(summary.today_tokens)} tok`;
+  if (llmSummary.value.total_tokens > 0) {
+    return `${formatCount(llmSummary.value.total_tokens)} tok`;
   }
-  return '—';
+  return '¥0.00';
 });
 
 const llmCostSub = computed(() => {
   if (!llmSummary.value) return llmSummaryError.value ?? '加载中';
-  return '今日累计';
+  return '累计（人民币）';
 });
+
+// ====== 当前 Agenda KPI ======
+//
+// 初始拉一次 /agenda/state，之后由 events store 里的 agenda.update 事件触发重拉
+//（不做周期轮询；快照同样会经 planner.checkpoint 后端推送链保持新鲜）。
+
+const agendaState = ref<AgendaStateResponse | null>(null);
+
+async function fetchAgendaState() {
+  try {
+    const response = await agendaApi.getState();
+    agendaState.value = response.data;
+  } catch {
+    agendaState.value = null;
+  }
+}
+
+const agendaKpiValue = computed(() => {
+  const state = agendaState.value;
+  const snap = state?.snapshot;
+  if (!state?.available || !snap) return '未启用';
+  if (snap.status === 'running') return snap.current_segment?.title || '进行中';
+  if (snap.status === 'loading') return '加载中';
+  if (snap.status === 'completed') return '已完结';
+  return '未加载';
+});
+
+const agendaKpiSub = computed(() => {
+  const state = agendaState.value;
+  const snap = state?.snapshot;
+  if (!state?.available || !snap) return '去 Agenda 工作台开启';
+  if (snap.status === 'running') {
+    if (snap.is_paused) return '已暂停';
+    return `环节 ${snap.completed_count + 1} / ${snap.total_count}`;
+  }
+  if (snap.status === 'completed') return '节目单播放完毕';
+  return '去 Agenda 工作台加载节目单';
+});
+
+// agenda.update 到达时重拉快照（取 store 末条事件类型做触发信号）
+watch(
+  () => eventsStore.events[eventsStore.events.length - 1]?.type,
+  type => {
+    if (type === 'agenda.update') void fetchAgendaState();
+  },
+);
 
 // ====== 工具函数 ======
 
@@ -377,6 +423,7 @@ onMounted(async () => {
   await componentsStore.fetchComponents();
   systemStore.startPolling(1000);
   void fetchLLMSummary();
+  void fetchAgendaState();
   try {
     const res = await capabilitiesApi.list();
     toolCapabilityCount.value = res.data.actions.length;
@@ -458,6 +505,17 @@ onUnmounted(() => {
 }
 .kpi-agenda::before {
   background: var(--color-agenda);
+}
+
+.kpi-agenda {
+  cursor: pointer;
+}
+
+.kpi-value-agenda {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
 }
 
 .kpi-label {

@@ -109,6 +109,17 @@
                 <p v-if="entry.note" class="act-note">{{ entry.note }}</p>
               </div>
 
+              <!-- 主播发言（streamer.speech）：脱轴右靠的发言行 -->
+              <div v-else-if="entry.kind === 'speech'" class="act is-speech">
+                <div class="act-head">
+                  <span class="act-kind act-kind--speech">主播</span>
+                  <span v-if="entry.note" class="act-emotion">{{ entry.note }}</span>
+                  <span class="grow" />
+                  <time class="stamp mono">{{ relativeTime(entry.tsSec) }}</time>
+                </div>
+                <p class="act-text">🎤 {{ entry.text }}</p>
+              </div>
+
               <!-- 观众发声：弹幕 / 礼物 / SC -->
               <div v-else class="chat" :class="`chat--${entry.kind}`">
                 <span class="avatar" aria-hidden="true">{{ entry.initial }}</span>
@@ -145,8 +156,9 @@
  *
  * 数据来源：events store（全局 WS 事件缓冲，main.ts 已启动订阅），只读消费。
  * 渲染字段一律取自后端真实 Payload（src/modules/events/payloads/）：
- * - room.message.*  → message_type / user{id,name} / content / gift{name,count} / sc{amount}
- * - tool.result.*   → tool_name / status / result / error_message
+ * - room.message     → message_type / user{id,name} / content / gift{name,count} / sc{amount}
+ * - streamer.speech  → text / emotion
+ * - tool.result.*    → tool_name / status / result / error_message
  * - agenda.update   → action / item{order,label,note,starts_at_ms,expected_ms} / changed_at_ms
  * - game.milestone  → message / game / scene
  * 字段缺失时回落到共享的 summarizeEvent()，不臆造字段。
@@ -180,7 +192,15 @@ const AGENDA_ACTION_LABEL: Record<string, string> = {
 // 类型
 // ============================================================
 
-type EntryKind = 'danmaku' | 'gift' | 'super_chat' | 'enter' | 'tool' | 'agenda' | 'milestone';
+type EntryKind =
+  | 'danmaku'
+  | 'gift'
+  | 'super_chat'
+  | 'enter'
+  | 'speech'
+  | 'tool'
+  | 'agenda'
+  | 'milestone';
 
 /** 事件缓冲条目：events store 在 WebSocketMessage 上补了去重 id */
 type FeedEvent = WebSocketMessage & { id: string };
@@ -323,13 +343,13 @@ function makeEntry(base: {
   };
 }
 
-/** 观众行为流：room.message.*（RoomMessagePayload，message_type 判别） */
+/** 观众行为流：room.message（RoomMessagePayload 扁平载荷，message_type 判别） */
 function fromRoomMessage(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
   const tsSec = toSeconds(event.timestamp);
   const actor = userLabel(data.user);
   const content = str(data.content);
   const fallback = () => content || summarizeEvent(event.type, data);
-  const messageType = str(data.message_type) || event.type.slice('room.message.'.length);
+  const messageType = str(data.message_type) || 'danmaku';
 
   if (messageType === 'gift') {
     const gift = isRecord(data.gift) ? data.gift : null;
@@ -398,6 +418,20 @@ function fromToolResult(event: FeedEvent, data: Record<string, unknown>): ShowEn
   });
 }
 
+/** 主播发言：streamer.speech（StreamerSpeechPayload） */
+function fromSpeech(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
+  const emotion = str(data.emotion);
+  return makeEntry({
+    id: event.id,
+    kind: 'speech',
+    tsSec: toSeconds(event.timestamp),
+    actor: '主播',
+    text: str(data.text) || summarizeEvent(event.type, data),
+    note: emotion,
+    speak: true,
+  });
+}
+
 /** 环节推进：agenda.update（AgendaPayload） */
 function fromAgenda(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
   const item = isRecord(data.item) ? data.item : {};
@@ -424,10 +458,12 @@ function fromMilestone(event: FeedEvent, data: Record<string, unknown>): ShowEnt
   });
 }
 
-/** 非演出事件（planner.* / live.* / core.* / system.* 等）返回 null，不进时间线 */
+/** 非演出事件（planner.* / live.* / system.* 等）返回 null，不进时间线 */
 function toEntry(event: FeedEvent): ShowEntry | null {
   const data = isRecord(event.data) ? event.data : {};
-  if (event.type.startsWith('room.message.')) return fromRoomMessage(event, data);
+  // WS 广播把 4 种 room.message.* 统一为 "room.message"，种类由 payload.message_type 判别
+  if (event.type === 'room.message') return fromRoomMessage(event, data);
+  if (event.type === 'streamer.speech') return fromSpeech(event, data);
   if (event.type.startsWith('tool.result.')) return fromToolResult(event, data);
   if (event.type === 'agenda.update') return fromAgenda(event, data);
   if (event.type === 'game.milestone') return fromMilestone(event, data);
@@ -1118,6 +1154,10 @@ onUnmounted(() => {
   background: var(--color-danger-bg);
   border-right-color: var(--color-danger);
 }
+.act.is-speech {
+  background: var(--color-agent-bg);
+  border-right: 2px solid var(--color-agent);
+}
 
 .act-head {
   display: flex;
@@ -1135,6 +1175,18 @@ onUnmounted(() => {
 }
 .act.is-failed .act-kind {
   color: var(--color-danger);
+}
+.act-kind--speech {
+  color: var(--color-agent);
+}
+.act-emotion {
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-agent);
+  background: var(--color-agent-bg);
+  flex-shrink: 0;
 }
 
 .act-tool {

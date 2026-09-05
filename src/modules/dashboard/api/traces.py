@@ -11,22 +11,17 @@ Trace 聚合 API（Wave 8 简化 + Wave U1 / B6 重写）
 的字面量保持一致。
 
 ----------------------------------------------------------------------
-Wave U1 / B6 已知 linkage 缺失（诚实实现，不伪造数据）：
+链路键说明（诚实实现，不伪造数据）：
 
-下列 Payload 字段在 v2 中均未携带 ``message_id``（已查 src/modules/events/payloads/
-内 room.py / planner.py / agenda.py / tool_result.py 验证）：
+``BasePayload.id``（uuid4，model_dump → model_validate 分发全程稳定）是
+room.message 事件的天然链路键——``EventRecord.id``、``EventRecord.data["id"]``
+与 WS 消息 id 三者同源。messages 段据此实现按 ``message_id`` 精确对齐。
 
-- ``RoomMessagePayload``（room.message.*）—— 无 ``message_id``（仅有
-  ``live_session_id`` / ``user.id``，二者均非单条消息唯一标识）。
-- ``AgendaPayload`` / ``CheckpointPayload``（agenda.update / planner.checkpoint）——
-  无 ``message_id``（决策与编排上下文不依赖单条消息）。
-- ``ToolResultPayload``（tool.result.*）—— 无 ``message_id``（异步工具回传
-  仅含 ``tool_name`` / ``status`` / ``result``，与触发消息无显式关联）。
-
-因此当前实现只能"messages 段全量返回 + planning/execution 段空数组"。
-待 EventRecord.data 中补齐 message_id 后，本模块只需修改聚合过滤逻辑即可
-启用完整三段对齐。后续工作的关键字段命名约定（待 §1.46 事件契约扩展）
-建议为 ``message_id``，与 NormalizedMessage.message_id 同源。
+planning / execution 段仍为空数组：``AgendaPayload`` / ``CheckpointPayload`` /
+``ToolResultPayload`` 的事件 id 标识的是各自事件，与触发消息之间没有关联键
+（已查 src/modules/events/payloads/ 内 planner.py / agenda.py / tool_result.py
+验证）。待事件契约扩展关联字段后，仅需修改 ``_collect_segments`` 的两个空段
+即可启用三段对齐。
 ----------------------------------------------------------------------
 """
 
@@ -44,9 +39,6 @@ if TYPE_CHECKING:
 
 router = APIRouter()
 logger = get_logger("TracesAPI")
-
-# EventRecord.data 字典下承载业务负载的键名
-_KEY_MESSAGE = "message"
 
 # 三段聚合的事件类型集合（与 EventHistoryRecorder 写入字面量保持一致）
 _PLANNING_EVENT_TYPES = frozenset({"planner.checkpoint", "agenda.update"})
@@ -122,32 +114,31 @@ def _build_trace(history: EventHistoryService, message_id: str) -> Optional[Dict
         聚合的 Trace 字典;若 room.message 事件未找到则返回 ``None``。
 
     Notes:
-        见模块顶部"Wave U1 / B6 已知 linkage 缺失"注释——当前 messages 段
-        返回 room.message 全量记录，planning/execution 段返回空数组（不伪造）。
-        后续 message_id 字段补齐后，仅需修改 ``_collect_segments`` 过滤逻辑。
+        见模块顶部"链路键说明"——messages 段按链路键精确对齐；
+        planning/execution 段因载荷间无关联键暂返回空数组（不伪造）。
     """
     msg_event = _find_room_message_event(history, message_id)
     if not msg_event:
         return None
 
-    msg_data = msg_event.data.get(_KEY_MESSAGE, {})
-    if not isinstance(msg_data, dict):
-        msg_data = {}
+    # v2 扁平 RoomMessagePayload：content / message_type / user{...} / live_session_id
+    flat = msg_event.data if isinstance(msg_event.data, dict) else {}
+    user = flat.get("user") if isinstance(flat.get("user"), dict) else {}
 
     segments = _collect_segments(history, message_id)
 
     trace: Dict[str, Any] = {
         "message_id": message_id,
         "message": {
-            "text": msg_data.get("text", "") or msg_data.get("content", ""),
-            "source": msg_data.get("source", ""),
-            "data_type": msg_data.get("data_type", ""),
-            "timestamp_ms": msg_data.get("timestamp_ms", 0),
-            "user_id": msg_data.get("user_id"),
-            "user_nickname": msg_data.get("user_nickname") or msg_data.get("user_name"),
+            "text": flat.get("content", ""),
+            "source": flat.get("live_session_id", ""),
+            "data_type": flat.get("message_type", ""),
+            "timestamp_ms": flat.get("timestamp_ms", 0),
+            "user_id": user.get("id"),
+            "user_nickname": user.get("name"),
         },
         "event": {
-            "name": msg_event.data.get("event"),
+            "name": msg_event.type,
             "timestamp": msg_event.timestamp,
         },
         "segments": segments,
@@ -162,21 +153,20 @@ def _collect_segments(
 ) -> Dict[str, List[Dict[str, Any]]]:
     """按 message_id 聚合三段记录。
 
-    当前实现（Wave U1 / B6）受模块顶部注释描述的 linkage 缺失约束：
-    - messages 段：返回 room.message 全量记录（data.message_id 不存在，
-      无法按 message_id 过滤；保留完整行为流由前端按时间窗裁剪）。
-    - planning 段：返回 []（AgendaPayload/CheckpointPayload 不携带 message_id）。
-    - execution 段：返回 []（ToolResultPayload 不携带 message_id）。
+    - messages 段：按链路键（payload 顶层 ``id``）精确对齐的 room.message 记录。
+    - planning 段：返回 []（CheckpointPayload/AgendaPayload 与触发消息无关联键）。
+    - execution 段：返回 []（ToolResultPayload 与触发消息无关联键）。
 
-    EventRecord.data 补齐 message_id 后，仅替换本函数三个 return 行即可启用
-    三段对齐，无需修改 _build_trace 调用方。``message_id`` 参数保留是为
-    对齐未来签名；当前未参与过滤。
+    待事件契约扩展跨事件关联字段后，仅替换本函数 planning/execution 两个
+    空段的过滤逻辑即可启用三段对齐，无需修改 ``_build_trace`` 调用方。
     """
     records = _iter_recent(history)
 
     messages: List[Dict[str, Any]] = []
     for record in records:
         if record.type != ROOM_MESSAGE_TYPE:
+            continue
+        if _extract_message_id(record.data) != message_id:
             continue
         messages.append(_serialize_segment_record(record))
 
@@ -188,11 +178,15 @@ def _collect_segments(
 
 
 def _serialize_segment_record(record: EventRecord) -> Dict[str, Any]:
-    """把 EventRecord 序列化为前端消费的字典（轻量拷贝，避免泄露内部对象）。"""
+    """把 EventRecord 序列化为前端消费的字典（轻量拷贝，避免泄露内部对象）。
+
+    ``timestamp_ms`` 由 ``timestamp``（Unix 秒）换算，前端统一消费毫秒。
+    """
     return {
         "id": record.id,
         "type": record.type,
         "timestamp": record.timestamp,
+        "timestamp_ms": int(record.timestamp * 1000),
         "level": record.level,
         "source": record.source,
         "summary": record.summary,
@@ -218,38 +212,30 @@ def _find_room_message_event(
     for record in _iter_recent(history):
         if record.type != ROOM_MESSAGE_TYPE:
             continue
-        candidate_id = _extract_message_id(record.data.get(_KEY_MESSAGE, {}))
+        candidate_id = _extract_message_id(record.data)
         if candidate_id == message_id:
             return record
     return None
 
 
 def _extract_message_id_from_received(event: EventRecord) -> str:
-    """从 ``room.message`` 事件中提取 ``message_id``。
-
-    优先从 ``data.message.message_id`` 获取;若不存在则尝试 ``data.metadata.message_id``。
-    """
-    return _extract_message_id(event.data.get(_KEY_MESSAGE, {}))
+    """从 ``room.message`` 事件记录中提取链路键。"""
+    return _extract_message_id(event.data)
 
 
-def _extract_message_id(payload: Any) -> str:
-    """从 ``room.message`` payload 中提取 ``message_id``。
+def _extract_message_id(event_data: Any) -> str:
+    """从 ``room.message`` 事件的 data 字典中提取链路键。
 
-    提取规则: ``payload.message_id``（v2 行为流统一字段）。
+    链路键 = 扁平 payload 的顶层 ``id``（``BasePayload.id`` uuid4，与
+    ``EventRecord.id`` / WS 消息 id 同源）。
 
     Args:
-        payload: EventRecord.data.message 字典或可空值。
+        event_data: ``EventRecord.data`` 字典或可空值。
 
     Returns:
-        提取到的 ``message_id``;无法提取时返回空字符串。
+        链路键;无法提取时返回空字符串。
     """
-    if not isinstance(payload, dict):
+    if not isinstance(event_data, dict):
         return ""
-    mid = payload.get("message_id", "")
-    if isinstance(mid, str) and mid:
-        return mid
-    metadata = payload.get("metadata", {})
-    if isinstance(metadata, dict):
-        mid = metadata.get("message_id", "")
-        return mid if isinstance(mid, str) else ""
-    return ""
+    mid = event_data.get("id", "")
+    return mid if isinstance(mid, str) else ""

@@ -1,12 +1,10 @@
 /**
- * 调试会话状态管理（v2.0）
+ * 会话调试状态管理（v2 会话视图）
  *
- * 适配 v2 行为变化（参考 `.omo/evidence/w8-api-contract.txt`）：
- * - 后端不再发布 `decision.intent` / `output.render` 事件（v2 决策出口=工具调用，不再有 Intent）
- * - 所有消息事件统一为 `room.message.*` 一族（采集器归一化后）
- * - Planner/Replyer 发言通过 `agenda.*` / `tool.result.*` / `planner.checkpoint` 间接观测
- *
- * 兼容策略：同时接受 v2 新事件名与旧事件名，旧事件名仅在兼容旧后端时生效。
+ * 数据轴 = v2 对话闭环的三类观测点：
+ * - 观众消息：room.message（WS 统一类型，payload 为扁平 RoomMessagePayload）
+ * - 主播发言：streamer.speech（Planner → Replyer 产出）
+ * - 决策/编排/工具：planner.checkpoint / agenda.update / tool.result.*（过程行）
  */
 
 import { defineStore } from 'pinia';
@@ -16,119 +14,57 @@ import { debugApi } from '@/api';
 import type {
   DebugSessionEvent,
   EventRecord,
-  NormalizedMessageData,
-  IntentEventData,
+  RoomMessageEventData,
+  StreamerSpeechEventData,
   WebSocketMessage,
 } from '@/types';
 
 const MAX_EVENTS = 200;
 
-// ===== v2 调试会话关注的事件类型 =====
-// 主路：room.message（v2 默认）；其他观测事件来自 Agenda/Planner/Tool 通道
-const SESSION_EVENT_TYPES = new Set<string>([
-  'room.message',
-  'agenda.update',
-  'agenda.speech',
-  'planner.checkpoint',
-  'tool.result',
-]);
-
-// ===== 解析纯函数（实时事件与 events.history 历史共用） =====
-
-/**
- * v2 消息事件解析：兼容 `room.message.*` 与旧 `message.received`。
- * payload 结构：`data.message.message_id` 是消息唯一 ID。
- */
-function parseMessageEvent(
-  data: Record<string, unknown>,
-  fallbackTimestamp: number,
-): NormalizedMessageData {
-  const msg = data?.message as Record<string, unknown> | undefined;
-  if (!msg) {
-    return {
-      text: (data?.text as string) || '',
-      source: (data?.source as string) || 'unknown',
-      data_type: 'text',
-      importance: 0.5,
-      timestamp_ms: fallbackTimestamp,
-    };
-  }
-  return {
-    text: (msg.text as string) || '',
-    source: (msg.source as string) || (data?.source as string) || 'unknown',
-    data_type: (msg.data_type as string) || 'text',
-    importance: (msg.importance as number) ?? 0.5,
-    timestamp_ms: (msg.timestamp_ms as number) ?? 0,
-    user_id: msg.user_id as string | undefined,
-    user_nickname: msg.user_nickname as string | undefined,
-    platform: msg.platform as string | undefined,
-    room_id: msg.room_id as string | undefined,
-    raw: msg.raw as Record<string, unknown> | undefined,
-    message_id: msg.message_id as string | undefined,
-    simulated: msg.simulated as boolean | undefined,
-  };
+/** 是否为会话页关注的决策/编排/工具事件 */
+function isSystemEventType(type: string): boolean {
+  return (
+    type.startsWith('planner') || type.startsWith('agenda') || type.startsWith('tool.result')
+  );
 }
 
-/**
- * v2 决策/工具事件解析：v2 主要来源是 `agenda.speech` 与 `tool.result.*`，
- * payload 结构与旧 `decision.intent` 类似（speech/emotion/action/metadata）。
- */
-function parseIntentEvent(
+/** 统一解析：WS 消息与 events.history 历史共用；非会话关注类型返回 null */
+function toSessionEvent(
+  id: string,
+  type: string,
+  timestamp: number,
   data: Record<string, unknown>,
-  fallbackTimestamp: number,
-): IntentEventData {
-  const intentData = data?.intent_data as Record<string, unknown> | undefined;
-  const sourceName = (data?.name as string) || (data?.agent as string) || 'unknown';
-  if (!intentData) {
+): DebugSessionEvent | null {
+  if (type === 'room.message') {
     return {
-      metadata: {
-        source_id: sourceName,
-        decision_time_ms: fallbackTimestamp,
-      },
+      id,
+      type,
+      timestamp,
+      kind: 'message',
+      message: data as unknown as RoomMessageEventData,
+      data,
     };
   }
-  const md = (intentData.metadata as Record<string, unknown> | undefined) ?? {};
-  return {
-    speech: intentData.speech as string | undefined,
-    emotion: intentData.emotion as IntentEventData['emotion'] | undefined,
-    action: intentData.action as IntentEventData['action'] | undefined,
-    metadata: {
-      source_id: (md.source_id as string) || sourceName,
-      decision_time_ms: (md.decision_time_ms as number) ?? fallbackTimestamp,
-      source_message_id: md.source_message_id as string | undefined,
-    },
-  };
-}
-
-/** 后端 EventRecord → DebugSessionEvent；非会话事件类型返回 null */
-function eventRecordToSessionEvent(record: EventRecord): DebugSessionEvent | null {
-  if (!SESSION_EVENT_TYPES.has(record.type)) return null;
-
-  // v2 默认：room.message.*
-  if (record.type.startsWith('room.message')) {
+  if (type === 'streamer.speech') {
     return {
-      id: record.id,
-      type: record.type,
-      timestamp: record.timestamp,
-      message: parseMessageEvent(record.data, record.timestamp),
-      source:
-        (record.data?.source as string) ||
-        ((record.data?.message as Record<string, unknown> | undefined)?.source as string) ||
-        record.source ||
-        'unknown',
+      id,
+      type,
+      timestamp,
+      kind: 'speech',
+      speech: data as unknown as StreamerSpeechEventData,
+      data,
     };
   }
-
-  // v2: agenda.* / planner.* / tool.result.* 一律视为意图/工具事件
-  return {
-    id: record.id,
-    type: record.type,
-    timestamp: record.timestamp,
-    intent: parseIntentEvent(record.data, record.timestamp),
-    deciderName: record.type.startsWith('tool.result')
-      ? 'Tool'
-      : (record.data?.name as string) || 'Planner',
-  };
+  if (isSystemEventType(type)) {
+    return {
+      id,
+      type,
+      timestamp,
+      kind: 'system',
+      data,
+    };
+  }
+  return null;
 }
 
 /** 合并历史与当前事件：按 id 去重、时间升序、限长 */
@@ -151,49 +87,19 @@ export const useSessionStore = defineStore('session', () => {
     // 后端推送的历史：与当前事件合并（幂等）
     if (message.type === 'events.history') {
       const history = ((message.data.events as EventRecord[]) ?? [])
-        .map(eventRecordToSessionEvent)
+        .map(record => toSessionEvent(record.id, record.type, record.timestamp, record.data))
         .filter((e): e is DebugSessionEvent => e !== null);
       events.value = mergeEvents(history, events.value);
       return;
     }
 
-    // v2: room.message.* 一律视为消息事件
-    if (message.type.startsWith('room.message')) {
-      const data = message.data as Record<string, unknown>;
-      const eventId = message.id ?? `msg-${message.timestamp}-${crypto.randomUUID().slice(0, 6)}`;
-      if (events.value.some(e => e.id === eventId)) return;
-      events.value.push({
-        id: eventId,
-        type: message.type,
-        timestamp: message.timestamp,
-        message: parseMessageEvent(data, message.timestamp),
-        source: (data?.source as string) || 'unknown',
-      });
-      trimEvents();
-      return;
-    }
+    const eventId = message.id ?? `${message.type}-${message.timestamp}-${crypto.randomUUID().slice(0, 6)}`;
+    if (events.value.some(e => e.id === eventId)) return;
 
-    // v2: agenda.* / planner.* / tool.result.*
-    if (
-      message.type.startsWith('agenda') ||
-      message.type.startsWith('planner') ||
-      message.type.startsWith('tool.result')
-    ) {
-      const data = message.data as Record<string, unknown>;
-      const eventId =
-        message.id ?? `intent-${message.timestamp}-${crypto.randomUUID().slice(0, 6)}`;
-      if (events.value.some(e => e.id === eventId)) return;
-      events.value.push({
-        id: eventId,
-        type: message.type,
-        timestamp: message.timestamp,
-        intent: parseIntentEvent(data, message.timestamp),
-        deciderName: message.type.startsWith('tool.result')
-          ? 'Tool'
-          : (data?.name as string) || 'Planner',
-      });
-      trimEvents();
-    }
+    const event = toSessionEvent(eventId, message.type, message.timestamp, message.data);
+    if (!event) return;
+    events.value.push(event);
+    trimEvents();
   }
 
   function trimEvents() {

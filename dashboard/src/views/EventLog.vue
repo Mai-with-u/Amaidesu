@@ -268,8 +268,8 @@ const selectedTypes = ref<string[]>([]);
 const showHiddenEvents = ref(false);
 const expandedEvents = ref<Set<string>>(new Set());
 
-// 默认隐藏的事件类型（系统噪音）
-const HIDDEN_EVENT_TYPES = ['system.heartbeat', 'heartbeat', 'ping', 'pong', 'log.entry'];
+// 默认隐藏的非事件流消息：日志通道专用消息不进事件面板
+const HIDDEN_EVENT_TYPES = ['log.entry'];
 
 // 动态图标
 const pausePlayIcon = computed(() => (isPaused.value ? markRaw(VideoPlay) : markRaw(VideoPause)));
@@ -416,29 +416,13 @@ function closeTraceDrawer() {
   traceError.value = '';
 }
 
-// 从事件的 data 中提取关联的 message_id
-// v2 事件关联到同一条链路：
-//   room.message.*  → data.message.message_id
-//   agenda.* / tool.result.* / planner.* → data.intent_data.metadata.source_message_id
+// 从事件的 data 中提取链路键（message_id）
+// v2 链路键 = room.message 扁平 payload 的顶层 `id`（BasePayload uuid，与
+// EventRecord.id / WS 消息 id 同源）。决策/工具事件与触发消息之间暂无关联键，
+// 不参与链路定位。
 function getMessageId(event: { type: string; data: Record<string, unknown> }): string | null {
-  // v2 主路：room.message.*
-  if (event.type.startsWith('room.message')) {
-    const msg = event.data?.message as Record<string, unknown> | undefined;
-    if (!msg) return null;
-    const id = msg.message_id;
-    return typeof id === 'string' && id.length > 0 ? id : null;
-  }
-  // v2: agenda.* / tool.result.* / planner.*
-  if (
-    event.type.startsWith('agenda') ||
-    event.type.startsWith('tool.result') ||
-    event.type.startsWith('planner')
-  ) {
-    const intentData = event.data?.intent_data as Record<string, unknown> | undefined;
-    if (!intentData) return null;
-    const metadata = intentData.metadata as Record<string, unknown> | undefined;
-    if (!metadata) return null;
-    const id = metadata.source_message_id ?? metadata.message_id;
+  if (event.type === 'room.message') {
+    const id = event.data?.id;
     return typeof id === 'string' && id.length > 0 ? id : null;
   }
   return null;
@@ -469,15 +453,16 @@ function copyText(text: string) {
   });
 }
 
-// 获取事件类型的 CSS 类（v2 事件族颜色映射）
+// 获取事件类型的 CSS 类（v2 事件族颜色映射；core.* 经 WS 包装为 system.*）
 function getEventClass(type: string): string {
   if (type.startsWith('room.message')) return 'type-collector';
+  if (type === 'streamer.speech') return 'type-agent';
   if (type.startsWith('agenda')) return 'type-agent';
   if (type.startsWith('planner')) return 'type-agent';
   if (type.startsWith('tool.result')) return 'type-tool';
+  if (type.startsWith('tts.utterance')) return 'type-tool';
   if (type.startsWith('game')) return 'type-game';
   if (type.startsWith('live')) return 'type-live';
-  if (type.startsWith('core')) return 'type-system';
   if (type.includes('error')) return 'type-error';
   if (type.startsWith('system')) return 'type-system';
   return 'type-default';

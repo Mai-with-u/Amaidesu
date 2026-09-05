@@ -86,6 +86,7 @@ class DanmakuWidgetMessage(BaseModel):
     # 来源信息
     platform: str = Field(default="bilibili", description="平台来源")
     room_id: Optional[str] = Field(default=None, description="直播间 ID")
+    simulated: bool = Field(default=False, description="模拟消息标记（simulator/mock 产生，供前端过滤）")
 
     model_config = ConfigDict(use_enum_values=True)
 

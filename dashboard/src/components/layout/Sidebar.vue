@@ -45,6 +45,10 @@
           <el-icon><Cpu /></el-icon>
           <span>开发者工具</span>
         </el-menu-item>
+        <el-menu-item index="/simulator">
+          <el-icon><VideoPlay /></el-icon>
+          <span>模拟器</span>
+        </el-menu-item>
         <el-menu-item index="/traces">
           <el-icon><Opportunity /></el-icon>
           <span>Trace 链路</span>
@@ -100,6 +104,7 @@ import {
   Opportunity,
   VideoCamera,
   List,
+  VideoPlay,
 } from '@element-plus/icons-vue';
 
 const route = useRoute();

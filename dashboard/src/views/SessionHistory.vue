@@ -3,7 +3,7 @@
     <header class="page-header">
       <div class="header-left">
         <h1 class="page-title">会话调试</h1>
-        <p class="page-subtitle">Agent 全链路事件流：用户消息 → Agent 决策 → 工具结果</p>
+        <p class="page-subtitle">v2 对话闭环：观众消息 → 主播发言（Planner / Agenda / 工具作为过程行）</p>
       </div>
       <div class="header-actions">
         <span class="event-count">{{ filteredEvents.length }} / {{ events.length }} 条</span>
@@ -26,12 +26,11 @@
           clearable
           style="width: 240px"
         >
-          <el-option label="房间消息 (room.message.*)" value="room.message" />
+          <el-option label="观众消息 (room.message)" value="room.message" />
+          <el-option label="主播发言 (streamer.speech)" value="streamer.speech" />
           <el-option label="Planner 决策 (planner.*)" value="planner" />
           <el-option label="Agenda 节目单 (agenda.*)" value="agenda" />
           <el-option label="工具结果 (tool.result.*)" value="tool.result" />
-          <el-option label="游戏事件 (game.*)" value="game" />
-          <el-option label="核心事件 (core.*)" value="core" />
         </el-select>
         <el-input
           v-model="searchQuery"
@@ -44,75 +43,42 @@
       </div>
     </section>
 
-    <!-- 聊天事件流 -->
+    <!-- 会话流 -->
     <div ref="timelineRef" class="timeline-container">
       <div v-if="filteredEvents.length === 0" class="empty-state">
         <el-icon class="empty-icon"><Timer /></el-icon>
         <span>{{ events.length === 0 ? '等待事件...' : '没有匹配的事件' }}</span>
+        <span class="empty-hint">注入一条弹幕，或在开发者工具里驱动一次主播决策</span>
       </div>
 
       <div v-else class="chat-stream">
         <div
           v-for="event in filteredEvents"
           :key="event.id"
-          :class="['chat-row', `chat-row--${eventTypeToClass(event.type)}`]"
+          :class="['chat-row', `chat-row--${event.kind}`]"
         >
-          <!-- 用户消息气泡（左侧 · room.message.*） -->
-          <template v-if="event.type.startsWith('room.message') && event.message">
-            <div
-              class="chat-avatar chat-avatar--message"
-              :title="event.message.user_nickname || event.message.source || '用户'"
-            >
-              {{
-                (
-                  (event.message.user_nickname && event.message.user_nickname[0]) ||
-                  (event.message.source && event.message.source[0]) ||
-                  '?'
-                ).toUpperCase()
-              }}
+          <!-- 观众消息（左侧气泡 · room.message） -->
+          <template v-if="event.kind === 'message' && event.message">
+            <div class="chat-avatar chat-avatar--message" :title="userNameOf(event)">
+              {{ initialOf(userNameOf(event)) }}
             </div>
             <div class="chat-bubble chat-bubble--message" @click="toggleExpand(event.id)">
               <div class="bubble-header">
-                <el-tag size="small" effect="plain" type="info">
-                  {{ event.message.source }}
+                <el-tag size="small" effect="plain" :type="messageTypeTagType(event.message.message_type)">
+                  {{ messageTypeLabel(event.message.message_type) }}
                 </el-tag>
-                <el-tag
-                  v-if="event.message.data_type"
-                  size="small"
-                  :type="dataTypeTagType(event.message.data_type)"
-                >
-                  {{ event.message.data_type }}
+                <el-tag v-if="event.message.simulated" size="small" effect="plain" type="warning">
+                  模拟
                 </el-tag>
-                <span class="bubble-sender">{{
-                  event.message.user_nickname || event.message.source || '匿名用户'
-                }}</span>
+                <span class="bubble-sender">{{ userNameOf(event) }}</span>
                 <span class="bubble-spacer" />
                 <span class="bubble-time">{{ formatMs(event.timestamp).split('.')[0] }}</span>
               </div>
-              <div class="bubble-text">{{ event.message.text }}</div>
+              <div class="bubble-text">{{ messageTextOf(event) }}</div>
               <div class="bubble-meta">
-                <span class="importance-pill">
-                  <span class="importance-bar-mini">
-                    <span
-                      class="importance-fill"
-                      :style="{
-                        width: `${((event.message.importance ?? 0.5) * 100).toFixed(0)}%`,
-                      }"
-                    />
-                  </span>
-                  <span>优先级 {{ ((event.message.importance ?? 0.5) * 100).toFixed(0) }}%</span>
-                </span>
-                <span v-if="event.message.user_nickname" class="meta-item">
-                  · {{ event.message.user_nickname }}
-                </span>
-                <span v-if="event.message.user_id" class="meta-item">
-                  · UID {{ event.message.user_id }}
-                </span>
-                <span v-if="event.message.platform" class="meta-item">
-                  · {{ event.message.platform }}
-                </span>
-                <span v-if="event.message.room_id" class="meta-item">
-                  · 房间 {{ event.message.room_id }}
+                <span v-if="event.message.user?.id" class="meta-item">UID {{ event.message.user.id }}</span>
+                <span v-if="event.message.live_session_id" class="meta-item">
+                    · {{ event.message.live_session_id }}
                 </span>
                 <span class="bubble-spacer" />
                 <span class="expand-hint">
@@ -125,37 +91,22 @@
             </div>
           </template>
 
-          <!-- Agent 行为气泡（中心 · planner.checkpoint / agenda.*） -->
-          <template
-            v-if="
-              (event.type.startsWith('planner') || event.type.startsWith('agenda')) && event.intent
-            "
-          >
-            <div class="chat-bubble chat-bubble--agent" @click="toggleExpand(event.id)">
+          <!-- 主播发言（右侧气泡 · streamer.speech） -->
+          <template v-else-if="event.kind === 'speech' && event.speech">
+            <div class="chat-bubble chat-bubble--speech" @click="toggleExpand(event.id)">
               <div class="bubble-header">
-                <el-tag size="small" effect="plain" :type="agentTagType(event.type)">
-                  {{ agentBadgeLabel(event.type) }}
-                </el-tag>
-                <span class="bubble-sender">{{ event.deciderName || 'Agent' }}</span>
+                <el-tag size="small" effect="plain" type="success">主播</el-tag>
+                <span v-if="event.speech.emotion" class="emotion-chip">
+                  {{ event.speech.emotion }}
+                </span>
                 <span class="bubble-spacer" />
                 <span class="bubble-time">{{ formatMs(event.timestamp).split('.')[0] }}</span>
               </div>
-              <div v-if="event.intent.speech" class="bubble-text bubble-text--speech">
-                <span class="speech-marker">💬</span>{{ event.intent.speech }}
-              </div>
-              <div v-if="event.intent.emotion || event.intent.action" class="bubble-meta">
-                <el-tag
-                  v-if="event.intent.emotion"
-                  size="small"
-                  effect="plain"
-                  :type="emotionTagType(event.intent.emotion.name)"
-                >
-                  {{ event.intent.emotion.name }}
-                  <template v-if="event.intent.emotion.intensity != null">
-                    {{ (event.intent.emotion.intensity * 100).toFixed(0) }}%
-                  </template>
-                </el-tag>
-                <span class="meta-item">· {{ formatDecisionLatency(event) }}</span>
+              <div class="bubble-text bubble-text--speech">🎤 {{ event.speech.text }}</div>
+              <div class="bubble-meta">
+                <span v-if="event.speech.utterance_id" class="meta-item mono-meta">
+                  {{ event.speech.utterance_id }}
+                </span>
                 <span class="bubble-spacer" />
                 <span class="expand-hint">
                   {{ expanded.has(event.id) ? '收起 ▲' : '查看详情 ▾' }}
@@ -165,38 +116,21 @@
                 <pre class="json-view" v-html="formatJson(event)" />
               </div>
             </div>
+            <div class="chat-avatar chat-avatar--speech" title="主播">主</div>
           </template>
 
-          <!-- 工具结果卡片（右侧 · tool.result.*，含 action 时渲染） -->
-          <template
-            v-if="event.type.startsWith('tool.result') && event.intent && event.intent.action"
-          >
-            <div class="chat-bubble chat-bubble--tool" @click="toggleExpand(event.id)">
-              <div class="bubble-header">
-                <el-tag size="small" effect="plain" type="success">工具</el-tag>
-                <span class="bubble-sender">{{ event.deciderName || 'Tool' }}</span>
-                <span class="bubble-spacer" />
+          <!-- 决策/编排/工具过程行（居中 · planner / agenda / tool.result） -->
+          <template v-else-if="event.kind === 'system'">
+            <div
+              :class="['system-strip', { 'is-expanded': expanded.has(event.id) }]"
+              @click="toggleExpand(event.id)"
+            >
+              <div class="system-strip-head">
+                <el-tag size="small" effect="plain" :type="systemBadgeType(event.type)">
+                  {{ systemBadgeLabel(event.type) }}
+                </el-tag>
+                <span class="system-summary">{{ systemSummary(event) }}</span>
                 <span class="bubble-time">{{ formatMs(event.timestamp).split('.')[0] }}</span>
-              </div>
-              <div class="bubble-text bubble-text--speech">
-                <span class="speech-marker">⚙</span>
-                <span>执行动作 </span>
-                <code class="action-chip action-chip--mini">{{ event.intent.action.name }}</code>
-              </div>
-              <div
-                v-if="
-                  event.intent.action.parameters &&
-                  Object.keys(event.intent.action.parameters).length > 0
-                "
-                class="bubble-meta"
-              >
-                <span class="meta-item">
-                  {{ JSON.stringify(event.intent.action.parameters) }}
-                </span>
-                <span class="bubble-spacer" />
-                <span class="expand-hint">
-                  {{ expanded.has(event.id) ? '收起 ▲' : '查看详情 ▾' }}
-                </span>
               </div>
               <div v-if="expanded.has(event.id)" class="bubble-detail">
                 <pre class="json-view" v-html="formatJson(event)" />
@@ -214,7 +148,7 @@
           <div class="advanced-grid">
             <div class="inject-group">
               <div class="inject-label">
-                <el-tag size="small" type="info">注入消息 (NormalizedMessage)</el-tag>
+                <el-tag size="small" type="info">注入消息（→ room.message.danmaku）</el-tag>
               </div>
               <div class="inject-fields">
                 <div class="inject-field">
@@ -281,7 +215,8 @@ import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue';
 import { storeToRefs } from 'pinia';
 import { Delete, Timer, Search, Promotion } from '@element-plus/icons-vue';
 import { useSessionStore } from '@/stores/session';
-import type { DebugSessionEvent } from '@/types';
+import { summarizeEvent } from '@/utils/eventSummary';
+import type { DebugSessionEvent, RoomMessageEventData } from '@/types';
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js/lib/core';
 import json from 'highlight.js/lib/languages/json';
@@ -301,11 +236,12 @@ const danmakuInput = ref('');
 const danmakuSource = ref('dashboard');
 const danmakuDataType = ref('text');
 const danmakuImportance = ref(1);
+const advancedOpen = ref<string[]>([]);
 
 // ===== 筛选 =====
 //
-// typeFilter 元素是事件名前缀（如 `room.message`），用于匹配完整事件名
-// （如 `room.message.danmaku`）。旧后端事件名（如 `message.received`）按全名匹配。
+// typeFilter 元素是事件名前缀（如 `planner`），完整事件名按「全等或带点后缀」匹配；
+// 统一广播类型（room.message / streamer.speech）按全等命中。
 const filteredEvents = computed(() => {
   let result = events.value;
 
@@ -330,6 +266,67 @@ function toggleExpand(id: string) {
   expanded.value = next;
 }
 
+// ===== 消息气泡渲染 =====
+
+const MESSAGE_TYPE_LABELS: Record<string, string> = {
+  danmaku: '弹幕',
+  gift: '礼物',
+  super_chat: 'SC',
+  enter: '进场',
+};
+
+function messageTypeLabel(type: string): string {
+  return MESSAGE_TYPE_LABELS[type] ?? type;
+}
+
+function messageTypeTagType(type: string): 'info' | 'warning' | 'danger' | 'success' {
+  if (type === 'gift') return 'warning';
+  if (type === 'super_chat') return 'danger';
+  return 'info';
+}
+
+function userNameOf(event: DebugSessionEvent): string {
+  const user = event.message?.user;
+  return user?.name || user?.id || '匿名观众';
+}
+
+function initialOf(name: string): string {
+  const chars = Array.from(name.replace(/^#/, ''));
+  return chars.length > 0 ? chars[0].toUpperCase() : '?';
+}
+
+/** 消息主体文案：gift/enter 无正文，按 message_type 派生（与弹幕小部件口径一致） */
+function messageTextOf(event: DebugSessionEvent): string {
+  const m = event.message as RoomMessageEventData | undefined;
+  if (!m) return '';
+  if (m.message_type === 'gift') {
+    return `送出 ${m.gift?.name || '礼物'} ×${m.gift?.count ?? 1}`;
+  }
+  if (m.message_type === 'enter') {
+    return '进入了直播间';
+  }
+  return m.content || '';
+}
+
+// ===== 过程行渲染 =====
+
+function systemBadgeLabel(type: string): string {
+  if (type.startsWith('planner')) return 'Planner';
+  if (type.startsWith('agenda')) return 'Agenda';
+  if (type.startsWith('tool.result')) return '工具';
+  return '系统';
+}
+
+function systemBadgeType(type: string): 'info' | 'warning' | 'success' {
+  if (type.startsWith('planner')) return 'warning';
+  if (type.startsWith('tool.result')) return 'success';
+  return 'info';
+}
+
+function systemSummary(event: DebugSessionEvent): string {
+  return summarizeEvent(event.type, event.data);
+}
+
 // ===== 格式化 =====
 function formatMs(ts: number): string {
   const d = new Date(ts * 1000);
@@ -340,62 +337,9 @@ function formatMs(ts: number): string {
 }
 
 function formatJson(event: DebugSessionEvent): string {
-  const obj: Record<string, unknown> = {};
-  if (event.message) obj.message = event.message;
-  if (event.intent) obj.intent = event.intent;
-  if (event.deciderName) obj.deciderName = event.deciderName;
-  const str = JSON.stringify(obj, null, 2);
+  const str = JSON.stringify(event.data ?? {}, null, 2);
   const highlighted = hljs.highlight(str, { language: 'json' }).value;
   return DOMPurify.sanitize(highlighted);
-}
-
-function formatDecisionLatency(event: DebugSessionEvent): string {
-  if (!event.intent?.metadata?.decision_time_ms || !event.timestamp) return '-';
-  const wsTsMs = event.timestamp * 1000;
-  const decisionMs = event.intent.metadata.decision_time_ms;
-  const diff = Math.abs(wsTsMs - decisionMs);
-  return diff < 1000 ? `${diff}ms` : `${(diff / 1000).toFixed(1)}s`;
-}
-
-// ===== 样式辅助 =====
-function eventTypeToClass(type: string): string {
-  if (type.startsWith('room.message')) return 'message';
-  if (type.startsWith('planner') || type.startsWith('agenda')) return 'agent';
-  if (type.startsWith('tool.result')) return 'tool';
-  return 'agent';
-}
-
-function agentBadgeLabel(type: string): string {
-  if (type.startsWith('planner')) return '规划';
-  if (type.startsWith('agenda.update')) return 'Agenda';
-  if (type.startsWith('agenda.speech')) return '发言';
-  return 'Agent';
-}
-
-function agentTagType(type: string): 'success' | 'warning' | 'info' {
-  if (type.startsWith('planner')) return 'warning';
-  if (type.startsWith('agenda.update')) return 'info';
-  if (type.startsWith('agenda.speech')) return 'success';
-  return 'info';
-}
-
-const advancedOpen = ref<string[]>([]);
-
-function dataTypeTagType(dt: string): 'info' | 'warning' | 'success' | 'danger' | '' {
-  if (dt === 'text') return 'info';
-  if (dt === 'gift' || dt === 'super_chat') return 'warning';
-  if (dt === 'guard') return 'danger';
-  if (dt === 'enter') return 'success';
-  return '';
-}
-
-function emotionTagType(name: string): 'success' | 'warning' | 'danger' | 'info' | '' {
-  const positive = ['happy', 'excited', 'surprised', 'grateful', 'relaxed'];
-  const negative = ['sad', 'angry', 'fearful', 'disgusted'];
-  if (positive.includes(name)) return 'success';
-  if (negative.includes(name)) return 'danger';
-  if (name === 'neutral') return 'info';
-  return 'warning';
 }
 
 // ===== 操作 =====
@@ -493,7 +437,7 @@ onUnmounted(() => {
   flex-wrap: wrap;
 }
 
-/* ===== 滚动容器（保留原状以驱动 autoScroll 行为） ===== */
+/* ===== 滚动容器 ===== */
 .timeline-container {
   flex: 1;
   overflow-y: auto;
@@ -529,7 +473,7 @@ onUnmounted(() => {
   color: var(--text-placeholder);
 }
 
-/* ===== 聊天事件流 ===== */
+/* ===== 会话流 ===== */
 .chat-stream {
   padding: var(--spacing-md) var(--spacing-md) var(--spacing-lg);
   display: flex;
@@ -547,11 +491,11 @@ onUnmounted(() => {
 .chat-row--message {
   justify-content: flex-start;
 }
-.chat-row--agent {
-  justify-content: center;
-}
-.chat-row--tool {
+.chat-row--speech {
   justify-content: flex-end;
+}
+.chat-row--system {
+  justify-content: center;
 }
 
 @keyframes chatBubbleIn {
@@ -584,11 +528,8 @@ onUnmounted(() => {
 .chat-avatar--message {
   background: linear-gradient(135deg, #5fa8ff 0%, #3a7bd5 100%);
 }
-.chat-avatar--agent {
+.chat-avatar--speech {
   background: linear-gradient(135deg, #a78bfa 0%, #6d28d9 100%);
-}
-.chat-avatar--tool {
-  background: linear-gradient(135deg, #34d399 0%, #059669 100%);
 }
 
 /* ===== 气泡 ===== */
@@ -617,30 +558,17 @@ onUnmounted(() => {
   box-shadow: 0 4px 14px rgba(64, 158, 255, 0.18);
   border-color: rgba(64, 158, 255, 0.4);
 }
-.chat-bubble--agent {
+.chat-bubble--speech {
   background: var(--bg-elevated);
   color: var(--text-primary);
-  border-radius: 12px;
+  border-radius: 16px 4px 16px 16px;
   border: 1px solid var(--border-color-light);
-  border-left: 3px solid var(--color-agent);
+  border-right: 3px solid var(--color-agent);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-  max-width: min(80%, 640px);
 }
-.chat-bubble--agent:hover {
+.chat-bubble--speech:hover {
   box-shadow: 0 4px 14px rgba(139, 92, 246, 0.18);
   border-color: rgba(139, 92, 246, 0.4);
-}
-.chat-bubble--tool {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-  border-radius: 16px 16px 4px 16px;
-  border: 1px solid var(--border-color-light);
-  border-right: 3px solid var(--color-tool);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-}
-.chat-bubble--tool:hover {
-  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.18);
-  border-color: rgba(16, 185, 129, 0.4);
 }
 
 /* 气泡头部 */
@@ -650,27 +578,11 @@ onUnmounted(() => {
   gap: 6px;
   margin-bottom: 4px;
   font-size: 12px;
-}
-.chat-bubble--message .bubble-header {
-  color: var(--text-secondary);
-}
-.chat-bubble--agent .bubble-header {
-  color: var(--text-secondary);
-}
-.chat-bubble--tool .bubble-header {
   color: var(--text-secondary);
 }
 .bubble-sender {
   font-weight: 600;
   font-size: 13px;
-}
-.chat-bubble--message .bubble-sender {
-  color: var(--text-primary);
-}
-.chat-bubble--agent .bubble-sender {
-  color: var(--text-primary);
-}
-.chat-bubble--tool .bubble-sender {
   color: var(--text-primary);
 }
 .bubble-spacer {
@@ -695,10 +607,6 @@ onUnmounted(() => {
   font-size: 15px;
   font-weight: 500;
 }
-.speech-marker {
-  margin-right: 4px;
-  display: inline-block;
-}
 
 /* 元信息行 */
 .bubble-meta {
@@ -708,77 +616,58 @@ onUnmounted(() => {
   margin-top: 4px;
   font-size: 11px;
   flex-wrap: wrap;
-}
-.chat-bubble--message .bubble-meta {
-  color: var(--text-placeholder);
-}
-.chat-bubble--agent .bubble-meta {
-  color: var(--text-placeholder);
-}
-.chat-bubble--tool .bubble-meta {
   color: var(--text-placeholder);
 }
 .meta-item {
   opacity: 0.85;
+}
+.mono-meta {
+  font-family: var(--font-mono, 'Cascadia Code', monospace);
+  font-size: 10px;
 }
 .expand-hint {
   margin-left: auto;
   font-size: 11px;
   font-weight: 500;
   user-select: none;
-}
-.chat-bubble--message .expand-hint {
-  color: var(--color-primary);
-}
-.chat-bubble--agent .expand-hint {
-  color: var(--color-primary);
-}
-.chat-bubble--tool .expand-hint {
   color: var(--color-primary);
 }
 
-/* 优先级 pill */
-.importance-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 1px 8px;
+/* 情绪芯片（v2 情绪为纯文本标签） */
+.emotion-chip {
+  padding: 0 8px;
   border-radius: 10px;
-  background: var(--bg-page);
-  font-weight: 500;
+  background: var(--bg-page, rgba(0, 0, 0, 0.04));
   font-size: 11px;
   color: var(--text-secondary);
 }
-.importance-bar-mini {
-  width: 32px;
-  height: 4px;
-  background: rgba(0, 0, 0, 0.08);
-  border-radius: 2px;
-  overflow: hidden;
-  display: inline-block;
-}
-.importance-fill {
-  display: block;
-  height: 100%;
-  background: linear-gradient(90deg, #f56c6c, #e6a23c, #67c23a);
-  border-radius: 2px;
-  transition: width var(--transition-normal);
-}
 
-/* 动作芯片 */
-.action-chip {
-  display: inline-block;
-  padding: 1px 8px;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.2);
-  font-family: var(--font-mono, 'Cascadia Code', monospace);
-  font-size: 11px;
-  font-weight: 500;
-  color: #fff;
+/* ===== 过程行（planner / agenda / tool.result） ===== */
+.system-strip {
+  display: flex;
+  flex-direction: column;
+  max-width: min(80%, 640px);
+  padding: 4px 12px;
+  border-radius: 12px;
+  background: var(--bg-page, rgba(0, 0, 0, 0.03));
+  border: 1px dashed var(--border-color-light);
+  cursor: pointer;
+  transition: border-color var(--transition-fast);
 }
-.action-chip--mini {
-  font-size: 10px;
-  padding: 0 6px;
+.system-strip:hover {
+  border-color: var(--color-primary);
+}
+.system-strip-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.system-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ===== JSON 详情 ===== */
@@ -840,9 +729,6 @@ onUnmounted(() => {
   grid-template-columns: 1fr 1fr 1fr;
   gap: var(--spacing-sm);
   align-items: end;
-}
-.inject-fields--two {
-  grid-template-columns: 1fr 1fr;
 }
 .inject-field {
   display: flex;

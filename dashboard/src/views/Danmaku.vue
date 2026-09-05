@@ -24,6 +24,8 @@ interface DanmakuMessage {
   sc_price?: number;
   sc_message?: string;
   guard_level?: number;
+  /** 模拟消息标记（simulator/mock 产生），弹幕小部件不展示 */
+  simulated?: boolean;
 }
 
 const messages = ref<DanmakuMessage[]>([]);
@@ -74,18 +76,19 @@ function connect() {
   ws.onmessage = event => {
     try {
       const data = JSON.parse(event.data);
-      // v2: 房间消息统一为 room.message.*（含 danmaku/gift/super_chat/enter）；
+      // /ws/danmaku 专用协议（与主 WS 事件流无关）：
+      // - 实时推送：{ type: "new_message", message: {...} }
+      // - 连接握手：{ type: "history", messages: [...] }（最近 15 条）
       // 模拟消息（simulated=true）不在弹幕小部件展示
-      if (
-        (data.type === 'room.message' || data.type?.startsWith('room.message.')) &&
-        data.data?.simulated !== true
-      ) {
-        const msg = (data.data?.message ?? data) as DanmakuMessage;
-        addMessage(msg);
+      if (data.type === 'new_message') {
+        const msg = data.message as DanmakuMessage | undefined;
+        if (msg && msg.simulated !== true) {
+          addMessage(msg);
+        }
       } else if (data.type === 'history') {
-        messages.value = data.messages
-          .filter((m: { simulated?: boolean }) => m.simulated !== true)
-          .map((m: DanmakuMessage) => ({ ...m, id: generateId() }));
+        messages.value = (data.messages as DanmakuMessage[])
+          .filter(m => m.simulated !== true)
+          .map(m => ({ ...m, id: generateId() }));
       }
     } catch (e) {
       console.error('解析消息失败:', e);

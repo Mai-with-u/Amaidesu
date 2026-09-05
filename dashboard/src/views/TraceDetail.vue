@@ -349,11 +349,22 @@ function extractNormalizedMessage(
   entry: TraceSegmentEntry | undefined,
 ): NormalizedMessageView | null {
   if (!entry) return null;
+  // v2 扁平 RoomMessagePayload：content / message_type / live_session_id / user{name}
   const data = entry.data ?? {};
   const inner = (data.message as Record<string, unknown> | undefined) ?? {};
+  const user = (data.user as Record<string, unknown> | undefined) ?? {};
+  const text =
+    (inner.text as string) ??
+    (data.content as string) ??
+    (data.message_type === 'enter' ? '进入了直播间' : '');
   return {
-    source: (inner.source as string) ?? (data.source as string) ?? 'unknown',
-    text: (inner.text as string) ?? '',
+    source:
+      (inner.source as string) ??
+      (data.live_session_id as string) ??
+      (data.source as string) ??
+      (user.name as string) ??
+      'unknown',
+    text,
     timestamp_ms: entry.timestamp_ms ?? 0,
   };
 }
