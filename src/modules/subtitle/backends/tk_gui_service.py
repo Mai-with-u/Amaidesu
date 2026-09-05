@@ -9,11 +9,14 @@ CustomTkinter 窗口、长驻线程、文本队列、自动隐藏、右键菜单
 from __future__ import annotations
 
 import contextlib
+import glob
+import os
 import queue
 import threading
 import tkinter as tk
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
+from PIL import Image, ImageColor, ImageFilter, ImageFont, ImageTk
 from pydantic import Field
 
 from src.modules.config.schemas.base import BaseConfig
@@ -30,7 +33,13 @@ except ImportError:
 
 
 class OutlineLabel:
-    """CustomTkinter 描边标签（verbatim 复用 SubtitleHandler 写法）"""
+    """PIL 二值渲染的描边标签。
+
+    Canvas 原生文字带抗锯齿：描边像素与色键背景混合后不再匹配透明色，
+    ``-transparentcolor`` 打孔会残留脏边。改由 Pillow 以 1-bit mask
+    （无抗锯齿）渲染文字、膨胀 mask 生成描边，合成图仅含三种纯色像素——
+    背景色/描边色/文字色，打孔后零残留。
+    """
 
     def __init__(
         self,
@@ -68,6 +77,11 @@ class OutlineLabel:
         self.outline_width = outline_width
         self.outline_enabled = outline_enabled
         self.font_obj = font
+        # font 元组的字号是磅（point）；PIL truetype 按像素（px）渲染，
+        # 换算系数 96dpi/72dpi = 4/3，对齐 Tk canvas 时代的观感字号。
+        self.font_size_px = font[1] if font else 28
+        self._font_px = round(self.font_size_px * 4 / 3)
+        self._photo: Any = None
         self._background_color = background_color
 
         canvas_kwargs = {
@@ -101,9 +115,10 @@ class OutlineLabel:
         self._draw_text()
 
     def _draw_text(self):
+        self.canvas.delete("all")
+        self._photo = None
         if not self.display_text:
             return
-        self.canvas.delete("all")
         bg_color = self._background_color if self._background_color else "gray15"
         try:
             self.canvas.configure(bg=bg_color)
@@ -113,47 +128,94 @@ class OutlineLabel:
         canvas_height = self.canvas.winfo_height()
         if canvas_width <= 1 or canvas_height <= 1:
             return
-        x = canvas_width // 2
-        y = canvas_height // 2
-        if self.outline_enabled and self.outline_width > 0:
-            for dx in range(-self.outline_width, self.outline_width + 1):
-                for dy in range(-self.outline_width, self.outline_width + 1):
-                    if dx == 0 and dy == 0:
-                        continue
-                    if dx * dx + dy * dy <= self.outline_width * self.outline_width:
-                        if self.font_obj:
-                            self.canvas.create_text(
-                                x + dx,
-                                y + dy,
-                                text=self.display_text,
-                                font=self.font_obj,
-                                fill=self.outline_color,
-                                anchor="center",
-                                width=canvas_width - 20,
-                            )
-                        else:
-                            self.canvas.create_text(
-                                x + dx,
-                                y + dy,
-                                text=self.display_text,
-                                fill=self.outline_color,
-                                anchor="center",
-                                width=canvas_width - 20,
-                            )
-        if self.font_obj:
-            self.canvas.create_text(
-                x,
-                y,
-                text=self.display_text,
-                font=self.font_obj,
-                fill=self.text_color,
-                anchor="center",
-                width=canvas_width - 20,
-            )
-        else:
-            self.canvas.create_text(
-                x, y, text=self.display_text, fill=self.text_color, anchor="center", width=canvas_width - 20
-            )
+        img = self._render_text(canvas_width, canvas_height, bg_color)
+        if img is None:
+            return
+        try:
+            self._photo = ImageTk.PhotoImage(img)
+            self.canvas.create_image(canvas_width // 2, canvas_height // 2, image=self._photo)
+        except Exception:
+            self.logger.error("PIL 字幕渲染失败（ImageTk 不可用？）", exc_info=True)
+
+    def _render_text(self, width: int, height: int, bg_color: str) -> Optional[Image.Image]:
+        """按色键背景合成文字+描边。
+
+        文字 mask 用 1-bit（无抗锯齿）渲染，然后膨胀生成描边 mask——
+        最终图像只有三种像素（背景色/描边色/文字色），供 ``-transparentcolor``
+        打孔实现零残留透明（抗锯齿灰度像素会残留成脏边）。
+        """
+        font = self._load_font()
+        if font is None:
+            return None
+        lines = self._wrap_lines(font, width)
+        if not lines:
+            return None
+        try:
+            bg_rgb = ImageColor.getrgb(bg_color)
+            text_rgb = ImageColor.getrgb(self.text_color)
+            outline_rgb = ImageColor.getrgb(self.outline_color)
+        except Exception:
+            return None
+
+        img = Image.new("RGB", (width, height), bg_rgb)
+        line_h = int(self._font_px * 1.35)
+        total_h = len(lines) * line_h
+        y = (height - total_h) // 2
+        for line in lines:
+            # getmask(mode="1") 返回 ImagingCore（无抗锯齿，字节为 0/255 二值）；
+            # 转 Image("L") 后膨胀/合成，像素保持纯色（无灰度中间值）。
+            mask_core = font.getmask(line, mode="1")
+            mask_w, mask_h = mask_core.size
+            if mask_w <= 0 or mask_h <= 0:
+                continue
+            mask_l = Image.frombytes("L", (mask_w, mask_h), bytes(mask_core))
+            x = (width - mask_w) // 2
+            if self.outline_enabled and self.outline_width > 0:
+                outline_l = mask_l.filter(ImageFilter.MaxFilter(self.outline_width * 2 + 1))
+                img.paste(Image.new("RGB", outline_l.size, outline_rgb), (x, y), outline_l)
+            img.paste(Image.new("RGB", mask_l.size, text_rgb), (x, y), mask_l)
+            y += line_h
+        return img
+
+    def _load_font(self) -> Optional[ImageFont.FreeTypeFont]:
+        """解析字体路径：先用字体族名（Pillow Windows 走注册表），失败后退化为
+        ``C:\\Windows\\Fonts`` 匹配族名关键词或常见中文兜底字体。"""
+        if not self.font_obj:
+            return None
+        try:
+            return ImageFont.truetype(self.font_obj[0], self._font_px)
+        except Exception:
+            pass
+        family_key = (self.font_obj[0] or "").lower().replace(" ", "")
+        try:
+            for path in glob.glob(r"C:\Windows\Fonts\*.tt[cf]"):
+                name = os.path.basename(path).lower().replace(" ", "")
+                if family_key in name:
+                    return ImageFont.truetype(path, self._font_px)
+        except Exception:
+            pass
+        for fallback in ("msyh.ttc", "msyhbd.ttc", "simhei.ttf", "simsun.ttc"):
+            try:
+                return ImageFont.truetype(fallback, self._font_px)
+            except Exception:
+                continue
+        return None
+
+    def _wrap_lines(self, font, max_width: int) -> List[str]:
+        text = (self.display_text or "").strip()
+        if not text:
+            return []
+        lines: List[str] = []
+        current = ""
+        for ch in text:
+            if font.getlength(current + ch) > max_width - 20 and current:
+                lines.append(current)
+                current = ch
+            else:
+                current += ch
+        if current:
+            lines.append(current)
+        return lines
 
     def configure_text(self, text="", **kwargs):
         if text != "":
@@ -302,8 +364,20 @@ class SubtitleGuiService:
             self.root.title(window_title)
             self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
 
+            # OBS 友好模式：无边框窗口（去掉标题栏）+ 色度键颜色整窗打孔透明，
+            # -transparentcolor 已承担背景透明——若再叠加 -alpha（window_alpha）
+            # 会导致整窗（含文字）不可见（Windows Tk 已知合成冲突），故强制 alpha=1.0。
+            if self.obs_friendly_mode:
+                self.root.overrideredirect(True)
+                try:
+                    self.root.attributes("-transparentcolor", self.chroma_key_color)
+                except Exception:
+                    self.logger.error("设置透明背景失败（-transparentcolor 不可用）", exc_info=True)
+                self.root.attributes("-alpha", 1.0)
+            else:
+                self.root.attributes("-alpha", self.window_alpha)
+
             self.root.attributes("-topmost", self.always_on_top)
-            self.root.attributes("-alpha", self.window_alpha)
 
             if self.always_show_window and self.show_in_taskbar:
                 if self.window_minimizable:
@@ -322,16 +396,15 @@ class SubtitleGuiService:
             y = screen_height - self.window_height - self.window_offset_y
             self.root.geometry(f"{self.window_width}x{self.window_height}+{x}+{y}")
 
-            if self.use_chroma_key:
-                try:
-                    self.root.configure(fg_color=self.chroma_key_color)
-                except Exception:
-                    self.logger.error("设置色度颜色失败", exc_info=True)
-            else:
-                try:
-                    self.root.configure(fg_color=self.background_color)
-                except Exception:
-                    self.logger.error("设置背景颜色失败", exc_info=True)
+            # 背景：OBS 友好模式或色度键开启时用色度键颜色作"透明打孔色"，
+            # 否则用配置的背景色。
+            effective_background = (
+                self.chroma_key_color if (self.obs_friendly_mode or self.use_chroma_key) else self.background_color
+            )
+            try:
+                self.root.configure(fg_color=effective_background)
+            except Exception:
+                self.logger.error("设置背景颜色失败", exc_info=True)
 
             font_tuple = (self.font_family, self.font_size, self.font_weight)
             self.text_label = OutlineLabel(
@@ -342,7 +415,7 @@ class SubtitleGuiService:
                 outline_color=self.outline_color,
                 outline_width=self.outline_width,
                 outline_enabled=self.outline_enabled,
-                background_color=self.background_color,
+                background_color=effective_background,
                 logger=self.logger,
             )
             self.text_label.pack(expand=True, fill="both", padx=10, pady=5)
@@ -490,7 +563,13 @@ class SubtitleGuiService:
 
     def _minimize_window(self):
         if self.root and self.always_show_window:
-            self.root.iconify()
+            if self.obs_friendly_mode:
+                # 无边框窗口没有任务栏图标，iconify 无法恢复——改为隐藏，
+                # 右键菜单"显示窗口"可以恢复。
+                self.root.withdraw()
+                self.is_visible = False
+            else:
+                self.root.iconify()
 
     def _show_window(self):
         if self.root:
