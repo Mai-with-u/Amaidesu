@@ -23,6 +23,7 @@ import contextlib
 import os
 import signal
 import sys
+import time
 from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger as loguru_logger
@@ -989,6 +990,20 @@ async def main() -> None:
     stop_event = asyncio.Event()
     orig_sigint, orig_sigterm = setup_signal_handlers(stop_event)
 
+    # 事件循环心跳探测：sleep(1) 的唤醒间隔异常拉长，说明循环被同步
+    # 调用冻结（如阻塞式 HTTP/控制台写入），输入丢行类问题由此定位
+    async def event_loop_heartbeat() -> None:
+        last = time.perf_counter()
+        while True:
+            await asyncio.sleep(1)
+            now = time.perf_counter()
+            gap = now - last
+            last = now
+            if gap > 2.5:
+                logger.warning(f"事件循环心跳间隔 {gap:.1f}s（存在同步阻塞调用冻结循环）")
+
+    heartbeat_task = asyncio.create_task(event_loop_heartbeat(), name="event-loop-heartbeat")
+
     logger.info("应用程序正在运行。按 Ctrl+C 退出。")
 
     try:
@@ -996,6 +1011,10 @@ async def main() -> None:
         logger.info("收到关闭信号，开始执行清理...")
     except KeyboardInterrupt:
         logger.info("检测到 KeyboardInterrupt，开始清理...")
+    finally:
+        heartbeat_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await heartbeat_task
 
     restore_signal_handlers(orig_sigint, orig_sigterm)
     await run_shutdown(

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from pydantic import Field
@@ -31,6 +32,11 @@ from src.modules.types.base.normalized_message import NormalizedMessage
 # 控制台输入循环异常后重试间隔（秒）
 _ERROR_RETRY_INTERVAL_S = 1
 
+# 控制台输入专用线程池：stdin 阻塞读独占线程，与默认线程池中的其他
+# 阻塞任务（HTTP 同步调用、文件 IO 等）隔离——共享池线程被占满时，
+# readline 任务会排队延迟调度，用户输入的行要多次回车才被消费。
+_STDIN_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="console-stdin")
+
 # data_type → (事件名, message_type, 是否需要 content)
 _MESSAGE_TYPE_TO_EVENT = {
     "text": (CoreEvents.ROOM_MESSAGE_DANMAKU, "danmaku"),
@@ -38,6 +44,11 @@ _MESSAGE_TYPE_TO_EVENT = {
     "super_chat": (CoreEvents.ROOM_MESSAGE_SUPER_CHAT, "super_chat"),
     "guard": (CoreEvents.ROOM_MESSAGE_ENTER, "enter"),
 }
+
+
+def _read_stdin_line_with_diag() -> str:
+    """阻塞读一行 stdin（在专用线程池中执行）。"""
+    return sys.stdin.readline()
 
 
 class ConsoleInputCollector(BaseCollector):
@@ -99,6 +110,13 @@ class ConsoleInputCollector(BaseCollector):
         async with self._input_lock:
             if self.is_started:
                 return
+            import os as _os
+
+            if _os.environ.get("TERM_PROGRAM") == "vscode":
+                self.logger.warning(
+                    "检测到 VSCode 集成终端：其 shell integration 会向 stdin 注入命令流，"
+                    "干扰控制台输入（丢字符/丢行）。建议改用 Windows Terminal 或独立 PowerShell 窗口运行。"
+                )
             self.is_started = True
             self._input_task = asyncio.create_task(self._run_input_loop())
             self.logger.info("控制台输入后台循环已启动")
@@ -135,7 +153,7 @@ class ConsoleInputCollector(BaseCollector):
 
         while self.is_started:
             try:
-                line = await loop.run_in_executor(None, sys.stdin.readline)
+                line = await loop.run_in_executor(_STDIN_EXECUTOR, _read_stdin_line_with_diag)
                 text = line.strip()
 
                 if not text:
@@ -218,7 +236,7 @@ class ConsoleInputCollector(BaseCollector):
 
             while self.is_started:
                 try:
-                    line = await loop.run_in_executor(None, sys.stdin.readline)
+                    line = await loop.run_in_executor(_STDIN_EXECUTOR, _read_stdin_line_with_diag)
                     text = line.strip()
 
                     if not text:
