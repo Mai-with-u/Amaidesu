@@ -36,6 +36,7 @@ from src.modules.config.upgrade_hooks import (
     _migrate_core_2_0_14,
     _migrate_tools_2_0_15,
     _migrate_tools_2_0_18,
+    _migrate_tools_2_0_19,
     _strip_pipelines_2_0_4,
     _version_in_range,
     apply_upgrade_hooks,
@@ -1327,3 +1328,119 @@ class TestToolsHook2_0_18:
         assert _migrate_tools_2_0_18({}) == []
         assert _migrate_tools_2_0_18({"tools": None}) == []
         assert _migrate_tools_2_0_18({"tools": {}}) == []
+
+
+class TestToolsHook2_0_19:
+    """_migrate_tools_2_0_19：vts llm_* 死配置清理"""
+
+    def _data_with_llm_keys(self) -> dict:
+        return {
+            "tools": {
+                "avatar": {
+                    "vts": {
+                        "enabled": True,
+                        "config": {
+                            "vts_host": "localhost",
+                            "vts_port": 8001,
+                            "llm_matching_enabled": False,
+                            "llm_model": "gpt-4o-mini",
+                            "llm_temperature": 0.7,
+                            "llm_max_tokens": 50,
+                            "llm_api_key": "sk-x",
+                            "llm_base_url": "http://x",
+                        },
+                    }
+                }
+            }
+        }
+
+    def test_removes_llm_keys_and_keeps_others(self):
+        data = self._data_with_llm_keys()
+        changed = _migrate_tools_2_0_19(data)
+
+        vts_config = data["tools"]["avatar"]["vts"]["config"]
+        for key in (
+            "llm_matching_enabled",
+            "llm_model",
+            "llm_temperature",
+            "llm_max_tokens",
+            "llm_api_key",
+            "llm_base_url",
+        ):
+            assert key not in vts_config
+        assert vts_config["vts_host"] == "localhost"
+        assert vts_config["vts_port"] == 8001
+        assert len(changed) == 6
+        assert "tools.avatar.vts.config.llm_matching_enabled" in changed
+
+    def test_migrates_vrchat_from_old_output_section(self):
+        data = {
+            "tools": {
+                "output": {
+                    "config": {
+                        "enabled": ["vts", "vrchat"],
+                        "vrchat": {"vrc_host": "127.0.0.1", "vrc_out_port": 9000},
+                        "vts": {"vts_host": "localhost"},
+                    }
+                }
+            }
+        }
+        changed = _migrate_tools_2_0_19(data)
+
+        avatar = data["tools"]["avatar"]
+        assert avatar["vrchat"]["enabled"] is True
+        assert avatar["vrchat"]["config"] == {"vrc_host": "127.0.0.1", "vrc_out_port": 9000}
+        assert "tools.avatar.vrchat" in changed
+        # 旧段已随 2.0.18 复用逻辑删除
+        assert "output" not in data["tools"]
+
+    def test_full_migration_from_old_tree(self):
+        """从 2.0.17 旧树一步到位：域拆分 + vrchat 补迁 + llm_* 清理"""
+        data = {
+            "tools": {
+                "output": {
+                    "config": {
+                        "enabled": ["vts", "vrchat"],
+                        "vts": {
+                            "vts_host": "localhost",
+                            "llm_matching_enabled": False,
+                            "llm_model": "gpt-4o-mini",
+                        },
+                        "vrchat": {"vrc_host": "127.0.0.1"},
+                        "warudo": {"ws_port": 19190},
+                        "obs": {"host": "127.0.0.1:4455"},
+                    }
+                },
+                "look_at_screen": {"enabled": True},
+                "external": {"config": {"servers": {}}},
+            }
+        }
+        changed = _migrate_tools_2_0_19(data)
+
+        tools = data["tools"]
+        assert tools["avatar"]["vts"]["config"]["vts_host"] == "localhost"
+        assert tools["avatar"]["vrchat"]["config"] == {"vrc_host": "127.0.0.1"}
+        assert tools["avatar"]["warudo"]["config"] == {"ws_port": 19190}
+        assert tools["studio"]["obs"]["config"] == {"host": "127.0.0.1:4455"}
+        assert tools["vision"]["enabled"] is True
+        assert "mcp" in tools
+        for key in ("llm_matching_enabled", "llm_model"):
+            assert key not in tools["avatar"]["vts"]["config"]
+        assert "output" not in tools
+        assert "look_at_screen" not in tools
+        assert "external" not in tools
+        assert "tools.avatar.vrchat" in changed
+
+    def test_idempotent(self):
+        data = self._data_with_llm_keys()
+        first = _migrate_tools_2_0_19(data)
+        second = _migrate_tools_2_0_19(data)
+        assert first != []
+        assert second == []
+
+    def test_noop_when_path_missing(self):
+        assert _migrate_tools_2_0_19({}) == []
+        assert _migrate_tools_2_0_19({"tools": None}) == []
+        assert _migrate_tools_2_0_19({"tools": {}}) == []
+        assert _migrate_tools_2_0_19({"tools": {"avatar": {}}}) == []
+        assert _migrate_tools_2_0_19({"tools": {"avatar": {"vts": {}}}}) == []

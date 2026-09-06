@@ -66,7 +66,7 @@ _PHASE_TO_REGISTRY: dict[tuple[str, str], str] = {
 
 # 配置版本号。权威定义：本文件的 ``CONFIG_VERSION`` 与 ``MetaConfig.version``
 # 默认值必须同步修改（改一必改二）。详见 AGENTS.md "配置 Schema 变更规则"。
-CONFIG_VERSION = "2.0.18"
+CONFIG_VERSION = "2.0.19"
 
 # 配置文件清单（按域划分）：core / model / agents / tools / memory / storage / background
 _CONFIG_FILES = [
@@ -657,10 +657,16 @@ def _table_from_model(instance: BaseModel) -> Any:
 
 
 def _dict_to_toml_table(data: dict[str, Any]) -> Any:
-    """把嵌套 dict 转为 tomlkit Table。"""
+    """把嵌套 dict 转 tomlkit Table（值为 Pydantic 模型时递归展开为表）。
+
+    动态域字段（如 ``avatar: Dict[str, AvatarDomainConfig]``）的模型值
+    若不展开，tomlkit 无法序列化直接报错。
+    """
     table = tomlkit.table()
     for key, value in data.items():
-        if isinstance(value, dict):
+        if isinstance(value, BaseModel):
+            table[key] = _table_from_model(value)
+        elif isinstance(value, dict):
             table[key] = _dict_to_toml_table(value)
         else:
             table[key] = value
@@ -723,7 +729,7 @@ _TTS_ENGINE_SCHEMA_LOADERS: dict[str, Callable[[], Optional[type[BaseModel]]]] =
 
 _TOOL_PROVIDER_SCHEMA_LOADERS: dict[str, Callable[[], Optional[type[BaseModel]]]] = {
     "vts": lambda: _try_import_provider_schema("src.modules.avatar.vts.vts_provider", "VTSProvider"),
-    "vrchat": lambda: _try_import_provider_schema("src.modules.avatar.vts.vrchat_provider", "VRChatProvider"),
+    "vrchat": lambda: _try_import_provider_schema("src.modules.avatar.vrchat.vrchat_provider", "VRChatProvider"),
     "warudo": lambda: _try_import_provider_schema("src.modules.avatar.warudo.warudo_provider", "WarudoProvider"),
     "obs": lambda: _try_import_provider_schema("src.modules.studio.obs.obs_provider", "OBSProvider"),
 }

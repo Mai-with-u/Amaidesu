@@ -125,7 +125,7 @@ SubtitleConfigSchema: Optional[type] = _try_load_handler_schema(
     "SubtitleGuiService",
 )
 VRChatConfigSchema: Optional[type] = _try_load_handler_schema(
-    "src.modules.avatar.vts.vrchat_provider",
+    "src.modules.avatar.vrchat.vrchat_provider",
     "VRChatProvider",
 )
 VTSConfigSchema: Optional[type] = _try_load_handler_schema(

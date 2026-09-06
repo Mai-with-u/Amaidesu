@@ -121,7 +121,8 @@ class TestLoading:
         # data/events/ JSONL 文件改为 SQLite event_history 表。
         # v2.0.18：工具域开关重构——[tools.output] 拆 avatar/studio、look_at_screen→vision、
         # external→mcp，CONFIG_VERSION 升 patch。
-        assert version == "2.0.18"
+        # v2.0.19：旧树→新树自足全量迁移（含 vrchat 补迁）+ vts llm_* 死配置清理。
+        assert version == "2.0.19"
 
     def test_drift_fixed_on_load(self, temp_config_dir):
         generate_default_configs(temp_config_dir)

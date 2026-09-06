@@ -719,6 +719,75 @@ def _migrate_tools_2_0_18(data: dict[str, Any]) -> list[str]:
     return changed
 
 
+def _migrate_tools_2_0_19(data: dict[str, Any]) -> list[str]:
+    """tools.toml 2.0.19：自足完成旧树→新树全量迁移 + vts llm_* 死配置清理。
+
+    为什么重做 2.0.18 的迁移：``current_ver`` 取自 core.toml 的
+    ``[meta].version``，而各域文件的实际结构可能落后于它（2.0.18 写回失败、
+    或 core.toml 已随更早版本升上去导致左开区间跳过 2.0.18 钩子）。本钩子
+    幂等覆盖全部旧结构，保证任意起始版本 ≤ 2.0.19 的文件一次跑完迁移。
+
+    - 补迁 vrchat（2.0.18 遗漏）：``[tools.output].config.vrchat`` →
+      ``[tools.avatar.vrchat]``——必须在 2.0.18 删除旧 output 段之前搬出，
+      否则用户值随整段删除丢失
+    - 复用 2.0.18 迁移（vts/warudo/obs 域拆分 + look_at_screen/external 更名
+      + 删除旧段）
+    - 删除 ``avatar.vts.config`` 的 ``llm_*`` 死键（LLM 热键匹配链已删除，
+      被"按名触发 + 工具描述携带热键清单"取代）
+
+    原地修改、幂等：无旧结构且无死键时返回空列表。
+    """
+    changed: list[str] = []
+
+    tools = data.get("tools")
+    if not isinstance(tools, dict):
+        return changed
+
+    # --- 1. vrchat 补迁（先于 2.0.18 删段） ---
+    output = tools.get("output")
+    if isinstance(output, dict):
+        output_cfg = output.get("config")
+        if isinstance(output_cfg, dict) and "vrchat" in output_cfg:
+            avatar = tools.setdefault("avatar", {})
+            if "vrchat" not in avatar:
+                vrc_cfg = output_cfg.get("vrchat")
+                avatar["vrchat"] = {
+                    "enabled": True,
+                    "config": vrc_cfg if isinstance(vrc_cfg, dict) else {},
+                }
+                changed.append("tools.avatar.vrchat")
+
+    # --- 2. 复用 2.0.18 全量迁移（幂等） ---
+    changed.extend(_migrate_tools_2_0_18(data))
+
+    # --- 3. vts llm_* 死键清理 ---
+    avatar = tools.get("avatar")
+    if not isinstance(avatar, dict):
+        return changed
+
+    vts = avatar.get("vts")
+    if not isinstance(vts, dict):
+        return changed
+
+    vts_config = vts.get("config")
+    if not isinstance(vts_config, dict):
+        return changed
+
+    for key in [
+        "llm_matching_enabled",
+        "llm_model",
+        "llm_temperature",
+        "llm_max_tokens",
+        "llm_api_key",
+        "llm_base_url",
+    ]:
+        if key in vts_config:
+            del vts_config[key]
+            changed.append(f"tools.avatar.vts.config.{key}")
+
+    return changed
+
+
 CONFIG_UPGRADE_HOOKS: tuple[ConfigUpgradeHook, ...] = (
     # 历史钩子（保留供回滚，新文件不再触发）
     ConfigUpgradeHook(
@@ -839,6 +908,12 @@ CONFIG_UPGRADE_HOOKS: tuple[ConfigUpgradeHook, ...] = (
         target_version="2.0.18",
         config_file="tools.toml",
         migrate=_migrate_tools_2_0_18,
+    ),
+    # vts llm_* 死配置清理（LLM 热键匹配链已删除）
+    ConfigUpgradeHook(
+        target_version="2.0.19",
+        config_file="tools.toml",
+        migrate=_migrate_tools_2_0_19,
     ),
 )
 
