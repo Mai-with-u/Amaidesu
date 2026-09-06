@@ -18,7 +18,7 @@ class MetaConfig(BaseConfig):
     """配置元数据"""
 
     version: str = Field(
-        default="2.0.16",
+        default="2.0.17",
         description="配置版本号（用于自动迁移检测，权威定义于 multi_file_loader.py）",
     )
 
@@ -169,7 +169,7 @@ class EventHistoryConfig(BaseConfig):
     )
     persist: bool = Field(
         default=True,
-        description="是否将事件历史持久化到 data/events/",
+        description="是否将事件历史持久化到 SQLite event_history 表",
     )
 
 

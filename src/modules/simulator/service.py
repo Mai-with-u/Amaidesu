@@ -153,7 +153,7 @@ class SimulatorService:
         await self._gift_generator.load()
 
         self._token_budget = TokenBudgetController(budget_per_hour=self._config_obj.token_budget_per_hour)
-        self._replay_engine = ReplayEngine(config=self._config_obj)
+        self._replay_engine = ReplayEngine(config=self._config_obj, sqlite_store=self._store)
 
         # 实例化 LLM 包装器（需 LLMManager，DI 注入或 warning；replay 模式不需要）
         llm_service = self._find_llm_service()
@@ -218,7 +218,7 @@ class SimulatorService:
             if self._replay_engine is None:
                 self.logger.warning("模拟器回放引擎未构造，不启动")
                 return
-            loaded = self._replay_engine.load(date_str)
+            loaded = await self._replay_engine.load(date_str)
             if loaded == 0:
                 self.logger.warning(f"回放日期 {date_str} 无可回放消息，不启动")
                 return

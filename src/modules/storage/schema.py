@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 4
+SCHEMA_VERSION: int = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,7 +50,7 @@ class SchemaMigration:
 
 
 # =============================================================================
-# 13 张业务表 + 模块私有表 + schema_migrations
+# 15 张业务表 + 模块私有表 + schema_migrations
 # =============================================================================
 # - live_sessions           场次 + 直播实时状态（一场一行）
 # - live_chat               全量直播消息流（行业 live chat）
@@ -63,6 +63,8 @@ class SchemaMigration:
 # - game_events             游戏里程碑事件
 # - timeline_summary        摘要层
 # - llm_usage               LLM 调用记录
+# - llm_requests            LLM 请求历史（完整请求/响应，dashboard 历史页数据源）
+# - event_history           语义域事件流（录制回放 + dashboard 事件历史持久层）
 # - sim_personas            模拟器常驻观众人设（运行时数据，WebUI 管理）
 # - sim_gifts               模拟器礼物目录（运行时数据，WebUI 管理）
 # - _memory_facts           SimpleMemory 事实记忆（模块私有）
@@ -107,6 +109,12 @@ def build_schema_sql() -> str:
         # llm_usage —— LLM 调用记录
         + _LLM_USAGE_SQL
         + "\n"
+        # llm_requests —— LLM 请求历史（完整请求/响应）
+        + _LLM_REQUESTS_SQL
+        + "\n"
+        # event_history —— 语义域事件流（录制回放 + 事件历史持久层）
+        + _EVENT_HISTORY_SQL
+        + "\n"
         # sim_personas —— 模拟器常驻观众人设
         + _SIM_PERSONAS_SQL
         + "\n"
@@ -137,6 +145,8 @@ def list_expected_tables() -> List[str]:
         "game_events",
         "timeline_summary",
         "llm_usage",
+        "llm_requests",
+        "event_history",
         "sim_personas",
         "sim_gifts",
         "schema_migrations",
@@ -384,6 +394,53 @@ CREATE TABLE IF NOT EXISTS _memory_profiles (
     summary         TEXT NOT NULL DEFAULT '',
     updated_at_ms   INTEGER NOT NULL
 );
+""".strip()
+
+
+# --- event_history —— 语义域事件流（EventHistoryService 落库）---
+# payload 存完整载荷 JSON（回放端按 event_name 取回后直接反序列化）；
+# 按日查询与按事件名过滤都是热路径，时间与 (事件名, 时间) 建索引。
+
+_EVENT_HISTORY_SQL = """
+CREATE TABLE IF NOT EXISTS event_history (
+    seq           INTEGER PRIMARY KEY AUTOINCREMENT,
+    record_id     TEXT NOT NULL,
+    event_name    TEXT NOT NULL,
+    timestamp_ms  INTEGER NOT NULL,
+    level         TEXT NOT NULL DEFAULT 'info',
+    source        TEXT NOT NULL DEFAULT '',
+    summary       TEXT NOT NULL DEFAULT '',
+    payload       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_event_history_ts ON event_history(timestamp_ms);
+CREATE INDEX IF NOT EXISTS idx_event_history_name_ts ON event_history(event_name, timestamp_ms);
+""".strip()
+
+
+# --- llm_requests —— LLM 请求历史（RequestHistoryManager 落库）---
+# usage 拆平为三列以便 SQL 聚合（statistics/费用汇总）；request_params 与
+# tool_calls 结构不定，存 JSON 文本。dashboard 历史页按时间倒序分页查询。
+
+_LLM_REQUESTS_SQL = """
+CREATE TABLE IF NOT EXISTS llm_requests (
+    request_id          TEXT PRIMARY KEY,
+    timestamp_ms        INTEGER NOT NULL,
+    client_type         TEXT NOT NULL DEFAULT '',
+    model_name          TEXT NOT NULL DEFAULT '',
+    request_params      TEXT,
+    response_content    TEXT,
+    reasoning_content   TEXT,
+    tool_calls          TEXT,
+    prompt_tokens       INTEGER NOT NULL DEFAULT 0,
+    completion_tokens   INTEGER NOT NULL DEFAULT 0,
+    total_tokens        INTEGER NOT NULL DEFAULT 0,
+    cost                REAL NOT NULL DEFAULT 0,
+    success             INTEGER NOT NULL DEFAULT 1,
+    error               TEXT,
+    latency_ms          INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_llm_requests_ts ON llm_requests(timestamp_ms);
+CREATE INDEX IF NOT EXISTS idx_llm_requests_model ON llm_requests(model_name);
 """.strip()
 
 

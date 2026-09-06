@@ -84,16 +84,67 @@ def test_status_reports_mode_and_availability(client: TestClient) -> None:
 
 
 def test_replay_dates_empty(client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """无录制文件时返回空列表。
+    """event_history 表无录制记录时返回空列表。
 
-    目录打桩到临时路径：默认目录（data/events）在本机可能存有历史录制，
-    测试只关心"空目录 → 空列表"的契约。
+    端点经默认 store 工厂取连接；打桩到临时空库，测试只关心"空表 → 空列表"的契约
+    （默认库在本机可能存有历史录制）。
     """
-    monkeypatch.setattr(
-        "src.modules.events.event_history.DEFAULT_PERSIST_DIR", str(tmp_path)
-    )
-    body = client.get("/api/v1/simulator/replay/dates").json()
-    assert body == {"dates": []}
+    import asyncio
+
+    from src.modules.storage.sqlite_store import SQLiteStore
+
+    async def _make() -> SQLiteStore:
+        store = SQLiteStore(tmp_path / "replay-dates.db")
+        await store.initialize()
+        return store
+
+    store = asyncio.run(_make())
+    monkeypatch.setattr("src.modules.dashboard.api.simulator.get_default_store", lambda: store)
+    try:
+        body = client.get("/api/v1/simulator/replay/dates").json()
+        assert body == {"dates": []}
+    finally:
+        asyncio.run(store.close())
+
+
+def test_replay_dates_from_event_history(client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """event_history 表有弹幕录制时按时间正序返回日期（其他事件名不混入）。"""
+    import asyncio
+
+    from src.modules.events.names import CoreEvents
+    from src.modules.storage.sqlite_store import SQLiteStore
+
+    async def _make() -> SQLiteStore:
+        store = SQLiteStore(tmp_path / "replay-dates-populated.db")
+        await store.initialize()
+        await store.insert_event(
+            record_id="rec-2",
+            event_name=CoreEvents.ROOM_MESSAGE_DANMAKU,
+            timestamp_ms=1_790_000_000_000,  # 晚日期
+            payload_json="{}",
+        )
+        await store.insert_event(
+            record_id="rec-1",
+            event_name=CoreEvents.ROOM_MESSAGE_DANMAKU,
+            timestamp_ms=1_750_000_000_000,  # 早日期
+            payload_json="{}",
+        )
+        await store.insert_event(
+            record_id="rec-noise",
+            event_name="core.startup",
+            timestamp_ms=1_760_000_000_000,
+            payload_json="{}",
+        )
+        return store
+
+    store = asyncio.run(_make())
+    monkeypatch.setattr("src.modules.dashboard.api.simulator.get_default_store", lambda: store)
+    try:
+        body = client.get("/api/v1/simulator/replay/dates").json()
+        assert body["dates"] == sorted(body["dates"])
+        assert len(body["dates"]) == 2  # core.startup 不计入
+    finally:
+        asyncio.run(store.close())
 
 
 # ---------------------------------------------------------------------------

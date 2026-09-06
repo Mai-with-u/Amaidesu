@@ -1,35 +1,39 @@
 """
 事件历史记录服务
 
-为 Dashboard 提供事件环形缓冲存储,并支持可选的每日 JSONL 文件持久化。
-由 EventBroadcaster 在广播事件给 WebSocket 客户端之前调用以记录它们。
+为 Dashboard 提供事件环形缓冲存储，并支持可选的 SQLite 持久化
+（``event_history`` 表），录制回放与跨重启的事件历史都以它为事实源。
 
 设计要点:
-- 内存中只保留最近 N 条事件(`collections.deque(maxlen=...)`),无外部依赖
-- 可选每日滚动文件持久化(`data/events/YYYY-MM-DD.jsonl`)
-- 文件写入不阻塞主流程:在事件循环内通过 `asyncio.to_thread` 卸载,
-  在无事件循环环境(同步上下文)中同步追加
-- 不做单例,由持有者(EventBroadcaster)实例化并注入
+- 内存中只保留最近 N 条事件(``collections.deque(maxlen=...)``)，供
+  Dashboard 热路径查询（recent / 游标续传 / 按场次过滤）
+- 可选持久化到 ``event_history`` 表：写入经 ``asyncio.create_task``
+  fire-and-forget，失败仅告警，不影响事件流
+- 启动时 ``backfill_today_from_store`` 从表回灌当日事件，替代旧的
+  读当日 JSONL 文件恢复
+- 不做单例，由持有者（EventBroadcaster / main 组合根）实例化并注入
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
 from collections import deque
 from datetime import datetime
-from pathlib import Path
-from typing import Any, Deque, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Deque, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src.modules.logging import get_logger
 
+if TYPE_CHECKING:
+    from src.modules.storage.sqlite_store import SQLiteStore
+
 
 # 默认参数
 DEFAULT_MAX_EVENTS = 5000
-DEFAULT_PERSIST_DIR = "data/events"
 SUMMARY_MAX_LENGTH = 200
 ALLOWED_LEVELS = ("info", "warn", "error")
 
@@ -41,20 +45,25 @@ class EventRecord(BaseModel):
 
     字段说明:
     - `id`: 唯一标识,默认 uuid4()
-    - `type`: 事件类型,如 "message.received" / "decision.intent" / "output.render" /
-      "collector.connected" / "system.error"
+    - `type`: 事件类型名,如 "room.message" / "system.status"（广播兼容名,
+      同类事件可能共用一个粗粒度 type）
+    - `event_name`: EventBus 精确事件名（如 ``room.message.danmaku``）；
+      空字符串表示未知,落库时退回 `type`
     - `timestamp`: 事件时刻(Unix 秒),默认 `time.time()`
+    - `timestamp_ms`: 事件时刻(Unix 毫秒);空则落库时由 `timestamp` 换算
     - `level`: 严重级别,限定为 "info" | "warn" | "error"
-    - `source`: 数据源标识,如 "bili_danmaku" / "maibot" / "dashboard"
+    - `source`: 数据源标识,如 "bili_danmaku" / "dashboard"
     - `summary`: 人类可读的一行摘要,不超过 200 字符
     - `data`: 完整的序列化载荷字典(可能很大)
     """
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="事件唯一 ID(uuid4)")
-    type: str = Field(..., description="事件类型,如 message.received / system.error")
+    type: str = Field(..., description="事件类型名,如 room.message / system.status")
+    event_name: str = Field(default="", description="EventBus 精确事件名;空则落库退回 type")
     timestamp: float = Field(default_factory=time.time, description="事件时刻,Unix 秒(time.time())")
+    timestamp_ms: Optional[int] = Field(default=None, description="事件时刻,Unix 毫秒;空则由 timestamp 换算")
     level: str = Field(default="info", description="严重级别,info | warn | error")
-    source: str = Field(..., description="数据源标识,如 bili_danmaku / maibot / dashboard")
+    source: str = Field(..., description="数据源标识,如 bili_danmaku / dashboard")
     summary: str = Field(
         default="",
         max_length=SUMMARY_MAX_LENGTH,
@@ -98,11 +107,11 @@ def infer_event_level(event_type: str) -> str:
 class EventHistoryService:
     """事件环形缓冲历史服务。
 
-    在内存中保留最近 N 条事件(默认 5000),可选择性地把每条事件追加到
-    按日滚动的 JSONL 文件(`data/events/YYYY-MM-DD.jsonl`)。
+    在内存中保留最近 N 条事件(默认 5000),可选择性地把每条事件写入
+    ``event_history`` 表（``persist=True`` 且注入 SQLiteStore 时生效）。
 
     用法:
-    - 由 EventBroadcaster 实例化一个并通过构造器注入
+    - 由组合根实例化并注入 SQLiteStore,再交给 EventHistoryRecorder
     - 不是单例;多个实例相互独立
     """
 
@@ -110,14 +119,14 @@ class EventHistoryService:
         self,
         max_events: int = DEFAULT_MAX_EVENTS,
         persist: bool = False,
-        persist_dir: str = DEFAULT_PERSIST_DIR,
+        sqlite_store: Optional["SQLiteStore"] = None,
     ) -> None:
         """初始化事件历史服务。
 
         Args:
             max_events: 环形缓冲容量(deque maxlen),必须为正整数
-            persist: 是否启用 JSONL 文件持久化
-            persist_dir: 持久化根目录,相对项目根(`Amaidesu/`)
+            persist: 是否启用 ``event_history`` 表持久化
+            sqlite_store: 持久化目标;persist=True 但未注入时仅保留内存缓冲
 
         Raises:
             ValueError: 当 `max_events` 非正数
@@ -127,113 +136,110 @@ class EventHistoryService:
 
         self.max_events: int = max_events
         self.persist: bool = persist
+        self._sqlite_store = sqlite_store
         self.logger = get_logger(self.__class__.__name__)
 
         # 内存环形缓冲
         self._buffer: Deque[EventRecord] = deque(maxlen=max_events)
 
-        # 持久化目录(懒创建)
-        self._persist_dir: Optional[Path] = None
-        self._current_date: Optional[str] = None
-        self._current_file_path: Optional[Path] = None
-        if self.persist:
-            project_root = Path(__file__).resolve().parents[3]
-            self._persist_dir = (project_root / persist_dir).resolve()
-            self._persist_dir.mkdir(parents=True, exist_ok=True)
-            self.logger.info(f"事件历史 JSONL 持久化已启用,目录: {self._persist_dir}")
-            self._load_from_disk()
+        if self.persist and sqlite_store is None:
+            self.logger.warning("事件历史 persist=True 但未注入 SQLiteStore，仅保留内存缓冲")
 
     # ------------------------------------------------------------------ #
-    # 内部:磁盘恢复                                                      #
-    # ------------------------------------------------------------------ #
-
-    def _load_from_disk(self) -> None:
-        """启动时从当日 JSONL 文件恢复历史事件到内存环形缓冲。
-
-        仅当 persist=True 且当日文件存在时生效。
-        恢复过程中发生任何 I/O 错误仅记录日志,不影响服务启动。
-        """
-        if self._persist_dir is None:
-            return
-        today = self._date_string(time.time())
-        file_path = self._file_path_for_date(today)
-        if not file_path.exists():
-            return
-        try:
-            count = 0
-            with open(file_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        event = EventRecord.model_validate_json(line)
-                        self._buffer.append(event)
-                        count += 1
-                    except Exception:
-                        continue
-            self.logger.info(f"从磁盘恢复 {count} 条历史事件 ({file_path})")
-        except Exception as exc:
-            self.logger.warning(f"从磁盘恢复事件失败 ({file_path}): {exc!r}")
-
-    # ------------------------------------------------------------------ #
-    # 内部:日期与文件路径                                                #
+    # 内部                                                                #
     # ------------------------------------------------------------------ #
 
     @staticmethod
     def _date_string(timestamp: float) -> str:
-        """把 Unix 秒格式化为 `YYYY-MM-DD`。"""
+        """把 Unix 秒格式化为 `YYYY-MM-DD`（本地时区）。"""
         return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
 
-    def _file_path_for_date(self, date_str: str) -> Path:
-        """根据日期串构造当日 JSONL 文件的完整路径。"""
-        if self._persist_dir is None:
-            raise RuntimeError("persist is disabled; _persist_dir is None")
-        return self._persist_dir / f"{date_str}.jsonl"
+    @staticmethod
+    def _resolve_timestamp_ms(event: EventRecord) -> int:
+        """事件毫秒时刻：优先 payload 带来的 timestamp_ms，否则由秒换算。"""
+        if event.timestamp_ms is not None:
+            return event.timestamp_ms
+        return int(event.timestamp * 1000)
+
+    async def _persist_event(self, event: EventRecord) -> None:
+        """写单条事件到 ``event_history`` 表；失败仅告警（记账旁路语义）。"""
+        try:
+            await self._sqlite_store.insert_event(
+                record_id=event.id,
+                event_name=event.event_name or event.type,
+                timestamp_ms=self._resolve_timestamp_ms(event),
+                level=event.level,
+                source=event.source,
+                summary=event.summary,
+                payload_json=json.dumps(event.data, ensure_ascii=False, default=str),
+            )
+        except Exception as exc:  # noqa: BLE001 边界处吸收 + 日志
+            self.logger.warning(f"事件历史写库失败 (event={event.event_name or event.type}): {exc}")
 
     # ------------------------------------------------------------------ #
     # 公开 API                                                            #
     # ------------------------------------------------------------------ #
 
     def record(self, event: EventRecord) -> None:
-        """记录一条事件到环形缓冲,并在 `persist=True` 时附加到当日 JSONL。
+        """记录一条事件到环形缓冲,并在 persist 生效时异步写库。
 
-        文件 I/O 不会阻塞调用方:
-        - 当存在运行中的事件循环时,append 通过 `asyncio.to_thread` 卸载到线程池
-        - 当无事件循环(纯同步上下文)时,降级为同步追加
-
-        Args:
-            event: 待记录的事件对象
+        写库不阻塞调用方：事件循环内 fire-and-forget；无事件循环
+        （纯同步上下文）时仅保留内存缓冲。
         """
         # 1) 内存缓冲始终立即写入(deque 自动处理 maxlen 淘汰)
         self._buffer.append(event)
 
-        # 2) 持久化开关关闭时直接返回
-        if not self.persist or self._persist_dir is None:
+        # 2) 持久化开关或存储缺失时直接返回
+        if not self.persist or self._sqlite_store is None:
             return
-
-        # 序列化一次,避免在线程中重复构造
-        line = event.model_dump_json()
 
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            # 没有运行中的事件循环:降级为同步写入(可接受,单行 JSON 很小)
-            self._append_to_file(line, event.timestamp)
+            # 无运行中的事件循环：仅内存缓冲（buffer 已写入）
             return
 
-        # 在事件循环内:fire-and-forget 写入,失败仅记录日志
-        loop.create_task(asyncio.to_thread(self._append_to_file, line, event.timestamp))
+        loop.create_task(self._persist_event(event))
+
+    async def backfill_today_from_store(self) -> int:
+        """启动回灌：从 ``event_history`` 表载入当日事件到环形缓冲。
+
+        替代旧实现"读当日 JSONL 文件恢复"；解析失败的行跳过。
+        返回回灌条数（persist 未生效或无存储时返回 0）。
+        """
+        if not self.persist or self._sqlite_store is None:
+            return 0
+        today = self._date_string(time.time())
+        try:
+            rows = await self._sqlite_store.get_day_events(today)
+        except Exception as exc:  # noqa: BLE001 回灌失败不阻塞启动
+            self.logger.warning(f"事件历史回灌失败 ({today}): {exc}")
+            return 0
+
+        count = 0
+        for row in rows:
+            try:
+                record = EventRecord(
+                    id=row["record_id"],
+                    type=row["event_name"],
+                    event_name=row["event_name"],
+                    timestamp=row["timestamp_ms"] / 1000,
+                    timestamp_ms=row["timestamp_ms"],
+                    level=row["level"],
+                    source=row["source"] or "",
+                    summary=row["summary"] or "",
+                    data=json.loads(row["payload"]),
+                )
+            except Exception:
+                continue
+            self._buffer.append(record)
+            count += 1
+        if count:
+            self.logger.info(f"事件历史已从库回灌 {count} 条 ({today})")
+        return count
 
     def get_recent(self, limit: int = 100) -> List[EventRecord]:
-        """返回环形缓冲中最近 `limit` 条事件,按时间倒序(最新在前)。
-
-        Args:
-            limit: 返回的最大条数;<=0 时返回空列表
-
-        Returns:
-            事件列表(可能少于 limit;若缓冲为空则为空列表)
-        """
+        """返回环形缓冲中最近 `limit` 条事件,按时间倒序(最新在前)。"""
         if limit <= 0:
             return []
         # 旧 -> 新;倒序后取尾部(最新的)
@@ -244,13 +250,6 @@ class EventHistoryService:
 
         用于客户端断线/刷新后按游标补缺口。游标未命中（过旧被环形缓冲淘汰
         或未知 id）时退化为最近 `limit` 条——客户端按 id 去重合并，语义仍正确。
-
-        Args:
-            event_id: 客户端上次收到的最后一条事件 id
-            limit: 返回的最大条数;<=0 时返回空列表
-
-        Returns:
-            事件列表（旧→新）；游标未命中时为最近窗口
         """
         if limit <= 0:
             return []
@@ -269,10 +268,6 @@ class EventHistoryService:
 
         命中条件：事件 data 携带 ``live_session_id`` 且等于给定主键
         （场次盖章拦截器保证业务事件统一携带）。供单场时间线回看。
-
-        Args:
-            live_session_id: ``live_sessions`` 表 INTEGER 主键
-            limit: 返回的最大条数;<=0 时返回空列表
         """
         if limit <= 0:
             return []
@@ -291,19 +286,10 @@ class EventHistoryService:
         before_timestamp: Optional[float] = None,
         limit: int = 100,
     ) -> List[EventRecord]:
-        """基于内存环形缓冲的过滤查询(不读磁盘)。
+        """基于内存环形缓冲的过滤查询(不读库)。
 
         结果按时间倒序(最新在前)。当 `before_timestamp` 指定时,只返回
         严格 `timestamp < before_timestamp` 的事件(用于分页游标)。
-
-        Args:
-            types: 事件类型白名单(OR 语义);None 表示不过滤
-            level: 精确匹配的严重级别;None 表示不过滤
-            before_timestamp: 仅返回时间戳严格小于该值的事件;用于分页
-            limit: 返回的最大条数;<=0 时返回空列表
-
-        Returns:
-            事件列表(可能少于 limit)
         """
         if limit <= 0:
             return []
@@ -323,12 +309,7 @@ class EventHistoryService:
         return results
 
     def get_statistics(self) -> Dict[str, Any]:
-        """聚合当前环形缓冲的统计信息(不读磁盘)。
-
-        Returns:
-            包含 `total` / `by_type` / `by_level` / `by_source` / `capacity`
-            / `oldest_timestamp` / `newest_timestamp` 的字典
-        """
+        """聚合当前环形缓冲的统计信息(不读库)。"""
         type_counts: Dict[str, int] = {}
         level_counts: Dict[str, int] = {}
         source_counts: Dict[str, int] = {}
@@ -358,98 +339,18 @@ class EventHistoryService:
         }
 
     def cleanup(self) -> None:
-        """释放资源:清空环形缓冲并重置当日文件缓存。
+        """释放资源:清空环形缓冲。
 
-        注意:不会删除磁盘上已写入的 JSONL 文件(由外部策略管理)。
+        注意:不会删除 ``event_history`` 表中的已写入数据（由外部策略管理）。
         """
         self._buffer.clear()
-        self._current_date = None
-        self._current_file_path = None
-
-    # ------------------------------------------------------------------ #
-    # 内部:文件 I/O                                                       #
-    # ------------------------------------------------------------------ #
-
-    def _append_to_file(self, line: str, timestamp: float) -> None:
-        """同步把单个 JSON 行追加到当日 JSONL 文件(`append` 模式)。
-
-        由 `record()` 通过 `asyncio.to_thread` 调用,或在无事件循环时直接调用。
-        任何 I/O 失败都只写日志,不抛异常。
-
-        Args:
-            line: 已序列化的 JSON 字符串
-            timestamp: 用于确定当日文件的时间戳
-        """
-        if self._persist_dir is None:
-            return
-        try:
-            date_str = self._date_string(timestamp)
-            # 日期切换或首次调用 -> 重新计算文件路径
-            if date_str != self._current_date or self._current_file_path is None:
-                self._current_date = date_str
-                self._current_file_path = self._file_path_for_date(date_str)
-            with open(self._current_file_path, "a", encoding="utf-8") as f:
-                f.write(line + "\n")
-        except Exception as exc:  # noqa: BLE001 - I/O 失败仅记录
-            self.logger.warning(f"写入事件持久化文件失败 ({self._current_file_path}): {exc!r}")
-
-
-# ------------------------------------------------------------------ #
-# 模块级读回 API（录制回放用，无实例状态）                            #
-# ------------------------------------------------------------------ #
-
-
-def _resolve_persist_dir(persist_dir: Optional[Path] = None) -> Path:
-    """解析录制目录：未指定时用项目根下的默认目录（与写入侧同一约定）。"""
-    if persist_dir is not None:
-        return persist_dir
-    project_root = Path(__file__).resolve().parents[3]
-    return project_root / DEFAULT_PERSIST_DIR
-
-
-def list_recorded_dates(persist_dir: Optional[Path] = None) -> List[str]:
-    """列出有录制文件的日期（``YYYY-MM-DD``），按时间正序。
-
-    录制文件由 EventHistoryService 的持久化写入（``data/events/*.jsonl``），
-    本函数只扫描目录不解析内容，供回放端选择录制日期。
-    """
-    root = _resolve_persist_dir(persist_dir)
-    if not root.exists():
-        return []
-    dates = [p.stem for p in root.glob("*.jsonl") if len(p.stem) == 10 and p.stem[4] == "-" and p.stem[7] == "-"]
-    return sorted(dates)
-
-
-def read_day_events(date_str: str, persist_dir: Optional[Path] = None) -> List[EventRecord]:
-    """读取指定日期的全量录制事件（按文件顺序 = 时间正序）。
-
-    单行解析失败时跳过该行（与读取恢复语义一致）；日期无录制文件时返回空列表。
-    """
-    root = _resolve_persist_dir(persist_dir)
-    file_path = root / f"{date_str}.jsonl"
-    if not file_path.exists():
-        return []
-    events: List[EventRecord] = []
-    with open(file_path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                events.append(EventRecord.model_validate_json(line))
-            except Exception:
-                continue
-    return events
 
 
 __all__ = [
     "EventRecord",
     "EventHistoryService",
     "infer_event_level",
-    "list_recorded_dates",
-    "read_day_events",
     "DEFAULT_MAX_EVENTS",
-    "DEFAULT_PERSIST_DIR",
     "SUMMARY_MAX_LENGTH",
     "ALLOWED_LEVELS",
 ]

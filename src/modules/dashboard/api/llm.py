@@ -74,7 +74,7 @@ async def get_history(
 ) -> LLMHistoryListResponse:
     """获取请求历史列表"""
     history_manager = get_global_request_history_manager()
-    result = history_manager.get_history(
+    result = await history_manager.get_history(
         client_type=client_type,
         model_name=model_name,
         start_time=start_time,
@@ -101,7 +101,7 @@ async def get_history(
 async def get_request_by_id(request_id: str) -> Optional[LLMRequestHistoryResponse]:
     """获取单个请求详情"""
     history_manager = get_global_request_history_manager()
-    record = history_manager.get_request_by_id(request_id)
+    record = await history_manager.get_request_by_id(request_id)
 
     if not record:
         return None
@@ -113,7 +113,7 @@ async def get_request_by_id(request_id: str) -> Optional[LLMRequestHistoryRespon
 async def get_available_dates() -> List[str]:
     """获取有记录的日期列表（降序）"""
     history_manager = get_global_request_history_manager()
-    return history_manager.get_available_dates()
+    return await history_manager.get_available_dates()
 
 
 @router.get("/history/statistics", response_model=LLMHistoryStatisticsResponse)
@@ -123,7 +123,7 @@ async def get_statistics(
 ) -> LLMHistoryStatisticsResponse:
     """获取历史统计信息"""
     history_manager = get_global_request_history_manager()
-    stats = history_manager.get_statistics(start_time=start_time, end_time=end_time)
+    stats = await history_manager.get_statistics(start_time=start_time, end_time=end_time)
 
     # 转换 model_stats
     model_stats: Dict[str, LLMHistoryStatisticsModelStats] = {}

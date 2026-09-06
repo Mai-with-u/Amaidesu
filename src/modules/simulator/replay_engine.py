@@ -1,6 +1,6 @@
-"""录制回放引擎：把 EventHistory 录制的世界快照按原节奏重新发射。
+"""录制回放引擎：把 event_history 表录制的世界快照按原节奏重新发射。
 
-录制源是 ``data/events/YYYY-MM-DD.jsonl``（EventHistoryService 全量事件落盘），
+录制源是 ``event_history`` 表（EventHistoryService 全量事件落库），
 本引擎过滤出 ``room.message.danmaku`` 事件、还原原始 payload，按相邻消息的
 毫秒时间戳差值调度重放。回放消息统一携带 ``simulated=True`` 溯源标记——
 它们是"被重新注入的输入流"，不进真实数据统计。
@@ -8,13 +8,16 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import List, Optional
+import json
+from typing import TYPE_CHECKING, List, Optional
 
-from src.modules.events.event_history import read_day_events
+from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.logging import get_logger
 from src.modules.simulator.config_schema import SimulatorConfigSchema
+
+if TYPE_CHECKING:
+    from src.modules.storage.sqlite_store import SQLiteStore
 
 
 class ReplayEngine:
@@ -24,9 +27,9 @@ class ReplayEngine:
     ``next_gap_seconds()`` 的间隔调度 emit → 队列空即回放结束。
     """
 
-    def __init__(self, config: SimulatorConfigSchema, persist_dir: Optional[Path] = None) -> None:
+    def __init__(self, config: SimulatorConfigSchema, sqlite_store: "SQLiteStore") -> None:
         self._config = config
-        self._persist_dir = persist_dir
+        self._sqlite_store = sqlite_store
         self.logger = get_logger("ReplayEngine")
         self._queue: List[RoomMessagePayload] = []
         self._cursor = 0
@@ -47,24 +50,30 @@ class ReplayEngine:
         """本次回放加载的总条数。"""
         return len(self._queue)
 
-    def load(self, date_str: str, *, simulated_only: Optional[bool] = None) -> int:
+    async def load(self, date_str: str, *, simulated_only: Optional[bool] = None) -> int:
         """读取指定日期录制并构建回放队列，返回加载条数。
 
         Args:
-            date_str: 录制日期（``YYYY-MM-DD``）
+            date_str: 录制日期（``YYYY-MM-DD``，本地时区）
             simulated_only: 是否仅回放录制时已标记 simulated 的消息；
                 None 时用配置的 ``replay_simulated_only``。
         """
         if simulated_only is None:
             simulated_only = self._config.replay_simulated_only
 
+        rows = await self._sqlite_store.get_day_events(date_str, event_name=CoreEvents.ROOM_MESSAGE_DANMAKU)
+
         entries: List[RoomMessagePayload] = []
-        for record in read_day_events(date_str, self._persist_dir):
-            if record.type != "room.message.danmaku":
+        for row in rows:
+            try:
+                data = json.loads(row["payload"])
+            except Exception as exc:
+                self.logger.debug(f"回放跳过无法解析的录制记录: {exc}")
+                continue
+            if not isinstance(data, dict):
                 continue
             # 兼容旧录制（场次主键化前 live_session_id 为房间字符串）：统一清零，
             # 回放事件经场次盖章拦截器归属到当前回放场次
-            data = dict(record.data)
             if not isinstance(data.get("live_session_id"), int):
                 data["live_session_id"] = 0
             try:
@@ -78,7 +87,7 @@ class ReplayEngine:
                 continue
             entries.append(payload)
 
-        # 文件顺序即时间正序，这里仅防御乱序录制：按 timestamp_ms 稳定排序
+        # 行序即时间正序，这里仅防御乱序录制：按 timestamp_ms 稳定排序
         entries.sort(key=lambda p: p.timestamp_ms)
         self._queue = entries
         self._cursor = 0

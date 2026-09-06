@@ -6,7 +6,7 @@ import asyncio
 import json
 import sys
 import time as time_mod
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -29,6 +29,8 @@ class LogStreamer:
         max_logs: int = 500,
         persist: bool = False,
         persist_dir: str = DEFAULT_PERSIST_DIR,
+        persist_min_level: str = "INFO",
+        persist_retention_days: int = 14,
     ):
         """
         Args:
@@ -37,11 +39,16 @@ class LogStreamer:
             max_logs: 最大缓存的日志条数
             persist: 是否启用 JSONL 文件持久化
             persist_dir: 持久化目录（相对项目根）
+            persist_min_level: 落盘最低级别（内存缓冲仍按 min_level；
+                DEBUG 级全量落盘增长过快，默认只落 INFO 及以上）
+            persist_retention_days: 落盘文件保留天数，启动时清理更早的文件
         """
         self.ws_handler = ws_handler
         self.min_level = min_level
         self.max_logs = max_logs
         self.persist = persist
+        self.persist_min_level = persist_min_level.upper()
+        self.persist_retention_days = max(0, persist_retention_days)
         self._handler_id: Optional[int] = None
         self._is_running = False
         self._log_buffer: list[dict[str, Any]] = []  # 历史日志缓冲区
@@ -55,6 +62,7 @@ class LogStreamer:
             project_root = Path(__file__).resolve().parents[3]
             self._persist_dir = (project_root / persist_dir).resolve()
             self._persist_dir.mkdir(parents=True, exist_ok=True)
+            self._cleanup_expired_persist_files()
             self._load_from_disk()
 
     # ------------------------------------------------------------------ #
@@ -64,6 +72,28 @@ class LogStreamer:
     @staticmethod
     def _date_string(timestamp: float) -> str:
         return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
+
+    def _cleanup_expired_persist_files(self) -> None:
+        """启动时清理超过保留期的落盘文件（按文件名日期判定，解析失败按 mtime）。"""
+        if self._persist_dir is None or self.persist_retention_days <= 0:
+            return
+        cutoff = datetime.now() - timedelta(days=self.persist_retention_days)
+        removed = 0
+        for file_path in self._persist_dir.glob("*.jsonl"):
+            try:
+                try:
+                    file_date = datetime.strptime(file_path.stem, "%Y-%m-%d")
+                except ValueError:
+                    file_date = datetime.fromtimestamp(file_path.stat().st_mtime)
+                if file_date < cutoff:
+                    file_path.unlink()
+                    removed += 1
+            except OSError as exc:
+                loguru_logger.bind(module="LogStreamer").warning(f"清理过期日志文件失败 ({file_path}): {exc}")
+        if removed:
+            loguru_logger.bind(module="LogStreamer").info(
+                f"已清理 {removed} 个超过 {self.persist_retention_days} 天的日志落盘文件"
+            )
 
     def _load_from_disk(self) -> None:
         """启动时从当日 JSONL 文件恢复日志到内存缓冲。"""
@@ -148,13 +178,19 @@ class LogStreamer:
         return True
 
     async def _add_to_buffer(self, log_entry: dict[str, Any]) -> None:
-        """将日志添加到缓冲区并持久化到磁盘。"""
-        if self.persist:
+        """将日志添加到缓冲区；落盘按 persist_min_level 过滤（缓冲保留全量）。"""
+        if self.persist and self._level_rank(log_entry.get("level", "")) >= self._level_rank(self.persist_min_level):
             self._append_to_file(log_entry)
         async with self._buffer_lock:
             self._log_buffer.append(log_entry)
             if len(self._log_buffer) > self.max_logs:
                 self._log_buffer.pop(0)
+
+    @staticmethod
+    def _level_rank(level: str) -> int:
+        """日志级别名 → 序数值（loguru 级别名大小写不敏感比较）。"""
+        order = {"TRACE": 0, "DEBUG": 10, "INFO": 20, "SUCCESS": 25, "WARNING": 30, "ERROR": 40, "CRITICAL": 50}
+        return order.get(level.upper(), 20)
 
     async def get_recent_logs(self, count: int = 500) -> list[dict[str, Any]]:
         """获取最近的日志"""

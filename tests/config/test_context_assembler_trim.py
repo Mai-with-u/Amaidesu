@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from src.modules.config.multi_file_loader import (
+    CONFIG_VERSION,
     generate_default_configs,
     load_config_dir,
 )
@@ -62,7 +63,7 @@ class TestContextAssemblerFieldTrim:
         assert context_cfg["enabled"] is True
 
         written = core_path.read_text(encoding="utf-8-sig")
-        assert 'version = "2.0.16"' in written
+        assert f'version = "{CONFIG_VERSION}"' in written
 
     def test_user_values_of_kept_fields_preserved(self, config_dir):
         """保留字段的用户值不被默认值覆盖。"""

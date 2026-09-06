@@ -1,3 +1,5 @@
+*最后更新：2026-09-06（持久层文件存储收口：①`event_history` 表落地——EventHistoryRecorder 订阅的语义域事件全量落库（替代 data/events/*.jsonl，SCHEMA_VERSION 升至 5），录制回放数据源与 Dashboard 事件历史持久层同源；②`llm_requests` 表落地——RequestHistoryManager 请求历史入库，dashboard LLM 历史页改 SQL 分页（根治旧实现每次记录全量重写当日 JSON 文件的写放大），`[events].persist` 语义改写库、CONFIG_VERSION 2.0.17；③SQLiteStore 迁移前自动备份——版本推进前在线快照到 data/backups/（不自动清理）；④历史 JSONL 已导入真实库，data/events 与 data/llm_history 待应用重启后删除）*
+
 # 架构总览（v2.0.0）
 
 Amaidesu 是一个 **AI VTuber 框架**，v2.0.0 采用 **Agent（自主主体）+ 工具（能力契约）+ 存储（状态/记忆）+ 编排（Agenda 节目单）** 架构。系统采用**三通道协作**作为跨主体通信机制——命令（工具，主播→游戏，目标级意图，如 choose_option）、事件（EventBus，游戏→主播，里程碑/异常）、状态（工具，主播按需主动读取游戏封装读接口，如 get_story——按游戏实际需要设计，不强制单一 getStatus），事件拦截器挂在分发层做语义净化；Collector 从外部世界推入房间消息，Agent 拥有自己的决策循环并消费 ToolRegistry 中的工具完成表达与控制，Dashboard 仅作为 observer，不参与数据流。

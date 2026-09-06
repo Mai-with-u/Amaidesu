@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 import time
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -1009,6 +1010,261 @@ class SQLiteStore:
 
         return await self._run_in_executor(_exec)
 
+    # -------------------- 事件历史（event_history） --------------------
+
+    async def insert_event(
+        self,
+        *,
+        record_id: str,
+        event_name: str,
+        timestamp_ms: int,
+        level: str = "info",
+        source: str = "",
+        summary: str = "",
+        payload_json: str = "{}",
+    ) -> int:
+        """插入一条事件历史行，返回 lastrowid。"""
+
+        def _exec() -> int:
+            with self._manager.transaction() as conn:
+                cur = conn.execute(
+                    "INSERT INTO event_history ("
+                    "record_id, event_name, timestamp_ms, level, source, summary, payload"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (record_id, event_name, timestamp_ms, level, source, summary, payload_json),
+                )
+                return int(cur.lastrowid or 0)
+
+        return await self._run_in_executor(_exec)
+
+    async def list_event_dates(self, event_name: str) -> List[str]:
+        """列出指定事件名有记录的本地日期（``YYYY-MM-DD``，时间正序）。"""
+        rows = await self.execute(
+            "SELECT DISTINCT date(timestamp_ms / 1000, 'unixepoch', 'localtime') AS d"
+            " FROM event_history WHERE event_name = ? ORDER BY d",
+            (event_name,),
+        )
+        return [str(row["d"]) for row in rows if row["d"] is not None]
+
+    async def get_day_events(self, date_str: str, *, event_name: Optional[str] = None) -> List[Dict[str, Any]]:
+        """读取指定本地日期的事件历史行（时间正序）；``event_name`` 为 None 时取全部事件。
+
+        返回 dict 行（record_id / event_name / timestamp_ms / level / source / summary / payload），
+        payload 为原始 JSON 字符串，由调用方解析。
+        """
+        if event_name is not None:
+            sql = (
+                "SELECT record_id, event_name, timestamp_ms, level, source, summary, payload"
+                " FROM event_history WHERE event_name = ?"
+                " AND date(timestamp_ms / 1000, 'unixepoch', 'localtime') = ?"
+                " ORDER BY timestamp_ms, seq"
+            )
+            params: Any = (event_name, date_str)
+        else:
+            sql = (
+                "SELECT record_id, event_name, timestamp_ms, level, source, summary, payload"
+                " FROM event_history"
+                " WHERE date(timestamp_ms / 1000, 'unixepoch', 'localtime') = ?"
+                " ORDER BY timestamp_ms, seq"
+            )
+            params = (date_str,)
+        rows = await self.execute(sql, params)
+        return [dict(row) for row in rows]
+
+    # -------------------- LLM 请求历史（llm_requests） --------------------
+
+    async def insert_llm_request(
+        self,
+        *,
+        request_id: str,
+        timestamp_ms: int,
+        client_type: str = "",
+        model_name: str = "",
+        request_params_json: Optional[str] = None,
+        response_content: Optional[str] = None,
+        reasoning_content: Optional[str] = None,
+        tool_calls_json: Optional[str] = None,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        total_tokens: int = 0,
+        cost: float = 0.0,
+        success: bool = True,
+        error: Optional[str] = None,
+        latency_ms: int = 0,
+    ) -> bool:
+        """插入一条请求历史行；``request_id`` 冲突时忽略（幂等）。
+
+        Returns:
+            True 实际插入；False 已存在被忽略。
+        """
+
+        def _exec() -> bool:
+            with self._manager.transaction() as conn:
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO llm_requests ("
+                    "request_id, timestamp_ms, client_type, model_name, request_params, response_content,"
+                    " reasoning_content, tool_calls, prompt_tokens, completion_tokens, total_tokens,"
+                    " cost, success, error, latency_ms"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        request_id,
+                        timestamp_ms,
+                        client_type,
+                        model_name,
+                        request_params_json,
+                        response_content,
+                        reasoning_content,
+                        tool_calls_json,
+                        prompt_tokens,
+                        completion_tokens,
+                        total_tokens,
+                        cost,
+                        1 if success else 0,
+                        error,
+                        latency_ms,
+                    ),
+                )
+                return cur.rowcount > 0
+
+        return await self._run_in_executor(_exec)
+
+    @staticmethod
+    def _llm_request_where(
+        *,
+        client_type: Optional[str],
+        model_name: Optional[str],
+        start_time: Optional[int],
+        end_time: Optional[int],
+        success_only: Optional[bool],
+    ) -> "tuple[str, List[Any]]":
+        """组装 llm_requests 查询的 WHERE 子句（子句全部为代码内常量）。"""
+        clauses: List[str] = []
+        params: List[Any] = []
+        if client_type:
+            clauses.append("client_type = ?")
+            params.append(client_type)
+        if model_name:
+            clauses.append("model_name = ?")
+            params.append(model_name)
+        if start_time is not None:
+            clauses.append("timestamp_ms >= ?")
+            params.append(start_time)
+        if end_time is not None:
+            clauses.append("timestamp_ms <= ?")
+            params.append(end_time)
+        if success_only is not None:
+            clauses.append("success = ?")
+            params.append(1 if success_only else 0)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        return where, params
+
+    async def query_llm_requests(
+        self,
+        *,
+        client_type: Optional[str] = None,
+        model_name: Optional[str] = None,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None,
+        success_only: Optional[bool] = None,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> Dict[str, Any]:
+        """按条件分页查询请求历史（时间倒序），返回 ``{"total", "rows"}``（原始 dict 行）。"""
+        where, params = self._llm_request_where(
+            client_type=client_type,
+            model_name=model_name,
+            start_time=start_time,
+            end_time=end_time,
+            success_only=success_only,
+        )
+
+        def _exec() -> Dict[str, Any]:
+            with self._manager.transaction() as conn:
+                total = int(
+                    conn.execute(f"SELECT COUNT(*) AS n FROM llm_requests{where}", tuple(params)).fetchone()["n"]  # noqa: S608 子句为代码内常量
+                )
+                offset = max(0, (page - 1) * page_size)
+                rows = conn.execute(
+                    f"SELECT * FROM llm_requests{where} ORDER BY timestamp_ms DESC LIMIT ? OFFSET ?",  # noqa: S608 子句为代码内常量
+                    (*params, page_size, offset),
+                ).fetchall()
+                return {"total": total, "rows": [dict(row) for row in rows]}
+
+        return await self._run_in_executor(_exec)
+
+    async def get_llm_request_by_id(self, request_id: str) -> Optional[Dict[str, Any]]:
+        """按 request_id 取单条请求历史，未命中返回 None。"""
+        rows = await self.execute("SELECT * FROM llm_requests WHERE request_id = ?", (request_id,))
+        return dict(rows[0]) if rows else None
+
+    async def delete_llm_requests_before(self, *, before_date: Optional[str] = None) -> int:
+        """删除请求历史；``before_date``（本地日 YYYY-MM-DD）为 None 时清空全部，返回删除行数。"""
+
+        def _exec() -> int:
+            with self._manager.transaction() as conn:
+                if before_date is None:
+                    cur = conn.execute("DELETE FROM llm_requests")
+                else:
+                    cutoff_ms = int(datetime.strptime(before_date, "%Y-%m-%d").timestamp() * 1000)
+                    cur = conn.execute("DELETE FROM llm_requests WHERE timestamp_ms < ?", (cutoff_ms,))
+                return int(cur.rowcount or 0)
+
+        return await self._run_in_executor(_exec)
+
+    async def llm_request_available_dates(self) -> List[str]:
+        """列出有请求历史记录的本地日期（降序）。"""
+        rows = await self.execute(
+            "SELECT DISTINCT date(timestamp_ms / 1000, 'unixepoch', 'localtime') AS d FROM llm_requests ORDER BY d DESC"
+        )
+        return [str(row["d"]) for row in rows if row["d"] is not None]
+
+    async def llm_request_statistics(
+        self,
+        *,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """聚合请求历史统计：总体指标 + 按模型 + 按客户端类型（一次方法三次查询）。"""
+        where, params = self._llm_request_where(
+            client_type=None,
+            model_name=None,
+            start_time=start_time,
+            end_time=end_time,
+            success_only=None,
+        )
+
+        def _exec() -> Dict[str, Any]:
+            with self._manager.transaction() as conn:
+                overall = conn.execute(
+                    "SELECT COUNT(*) AS total,"
+                    " COALESCE(SUM(success), 0) AS success_count,"
+                    " COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,"
+                    " COALESCE(SUM(completion_tokens), 0) AS completion_tokens,"
+                    " COALESCE(SUM(total_tokens), 0) AS total_tokens,"
+                    " COALESCE(SUM(cost), 0) AS total_cost,"
+                    " COALESCE(AVG(latency_ms), 0) AS avg_latency"
+                    f" FROM llm_requests{where}",  # noqa: S608 子句为代码内常量
+                    tuple(params),
+                ).fetchone()
+                model_rows = conn.execute(
+                    "SELECT model_name, COUNT(*) AS count,"
+                    " COALESCE(SUM(total_tokens), 0) AS total_tokens,"
+                    " COALESCE(SUM(cost), 0) AS total_cost"
+                    f" FROM llm_requests{where} GROUP BY model_name",  # noqa: S608 子句为代码内常量
+                    tuple(params),
+                ).fetchall()
+                client_rows = conn.execute(
+                    f"SELECT client_type, COUNT(*) AS count FROM llm_requests{where} GROUP BY client_type",  # noqa: S608 子句为代码内常量
+                    tuple(params),
+                ).fetchall()
+                return {
+                    "overall": dict(overall) if overall else {},
+                    "by_model": [dict(row) for row in model_rows],
+                    "by_client": [dict(row) for row in client_rows],
+                }
+
+        return await self._run_in_executor(_exec)
+
     # -------------------- 内部 --------------------
 
     async def _run_in_executor(self, fn, /, *args, **kwargs):
@@ -1027,6 +1283,11 @@ class SQLiteStore:
 
     def _apply_schema_blocking(self) -> None:
         """同步执行 schema 应用；由 ``initialize()`` 在 executor 内调度。"""
+        # 升版前先快照旧库（备份失败只告警，不阻塞迁移）
+        pre_version = self._peek_pre_migration_version_blocking()
+        if pre_version is not None:
+            self._backup_before_migration(pre_version)
+
         # 应用 DDL（IF NOT EXISTS 幂等，含最新列）
         with self._manager.transaction() as conn:
             conn.executescript(build_schema_sql())
@@ -1053,6 +1314,53 @@ class SQLiteStore:
                 )
             else:
                 logger.debug(f"SQLiteStore schema 已是当前版本: {SCHEMA_VERSION}")
+
+    def _peek_pre_migration_version_blocking(self) -> Optional[int]:
+        """DDL 前探测旧库版本；返回 ``None`` 表示无需备份（全新库或已是最新版本）。"""
+        if not self._db_path.exists():
+            return None
+        try:
+            conn = sqlite3.connect(str(self._db_path))
+            try:
+                tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                if not tables:
+                    return None
+                if "schema_migrations" not in tables:
+                    # 有业务表但无版本记录：前版本时代的旧库，按版本 0 处理
+                    return 0
+                row = conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()
+                version = int(row[0]) if row and row[0] is not None else 0
+                return version if version < SCHEMA_VERSION else None
+            finally:
+                conn.close()
+        except sqlite3.Error as exc:
+            logger.warning(f"探测 schema 版本失败（跳过迁移前备份）: {exc}")
+            return None
+
+    def _backup_before_migration(self, pre_version: int) -> None:
+        """用 SQLite 在线备份 API 快照当前库到 ``<db目录>/backups/``。
+
+        备份文件不自动清理，由用户自行管理；备份失败仅告警，不阻塞迁移
+        （启动可用性优先于备份完备性）。
+        """
+        try:
+            backup_dir = self._db_path.parent / "backups"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            # 微秒精度：避免同秒多次备份（或极快重连）时同名覆盖
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S%f")
+            target = backup_dir / f"{self._db_path.stem}-pre-v{SCHEMA_VERSION}-{stamp}.db"
+            source = sqlite3.connect(str(self._db_path))
+            try:
+                destination = sqlite3.connect(str(target))
+                try:
+                    source.backup(destination)
+                finally:
+                    destination.close()
+            finally:
+                source.close()
+            logger.info(f"schema 迁移前备份完成（v{pre_version} → v{SCHEMA_VERSION}，不自动清理）: {target}")
+        except Exception as exc:  # noqa: BLE001 备份失败不阻塞迁移
+            logger.warning(f"schema 迁移前备份失败，继续迁移: {exc}")
 
 
 __all__ = ["SQLiteStore", "sqlite_store", "set_default_store"]

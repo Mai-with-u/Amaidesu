@@ -84,7 +84,7 @@ flowchart LR
 src/modules/events/
 ├── __init__.py           # 模块导出
 ├── event_bus.py          # EventBus 核心实现（emit / on / off / 通配 / 拦截器）
-├── event_history.py      # 事件历史查询服务
+├── event_history.py      # 事件历史查询服务（内存环形缓冲 + event_history 表持久化/回灌）
 ├── event_recorder.py     # 事件记录器（监控组件，订阅语义域事件落库）
 ├── registry.py           # @register_event 装饰器 + EVENT_REGISTRY
 ├── names.py              # CoreEvents 常量（17 + 通配占位符；v2.0.10 新增 TTS_UTTERANCE_STARTED/FINISHED/FAILED 三个）
@@ -861,6 +861,8 @@ class MyPayload(BasePayload):
 - [架构决策记录](adr/README.md)
 
 ---
+
+*最后更新：2026-09-06（事件历史持久层迁移：EventHistoryRecorder 记录面从 `data/events/*.jsonl` 每日文件改为 SQLite `event_history` 表——`EventHistoryService` 保留内存环形缓冲供 Dashboard 热查询（recent/游标续传/按场次过滤不变），落库经 fire-and-forget 异步写、失败仅告警；启动时 `backfill_today_from_store` 从表回灌当日事件（Dashboard 重启不再丢当日历史）；`EventRecord` 新增 `event_name`（EventBus 精确事件名，修正旧录制 type 粗粒度导致回放过滤永不命中的缺陷）与 `timestamp_ms` 字段；`[events].persist` 语义改为写库，CONFIG_VERSION 2.0.17）*
 
 *最后更新：2026-09-06（遗留接线补全：`agenda.update` 由 `StreamerAgent` 在环节推进/手动控制后实际发布——此前只有订阅端，Dashboard/OutlineWorkbench 依赖该事件重拉节目单快照；`AgendaIdle` 推进到末尾补上缺失的 on_advance 回调）
 

@@ -52,6 +52,7 @@ from src.modules.events.interceptors import (
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import CoreShutdownPayload, CoreStartupPayload
 from src.modules.llm.manager import LLMManager
+from src.modules.llm.request_history_manager import get_global_request_history_manager
 from src.modules.logging import configure_from_config, get_logger
 from src.modules.logging.log_streamer import LogStreamer
 from src.modules.memory.bootstrap import bind_memory_tools, build_memory_stack
@@ -352,6 +353,8 @@ async def create_app_components(
     logger.info("初始化 LLM 服务...")
     llm_service = LLMManager(sqlite_store=sqlite_store)
     await llm_service.setup(config)
+    # 请求历史落库目标注入（全局单例可能已被惰性创建，须显式 attach）
+    get_global_request_history_manager().attach_store(sqlite_store)
     logger.info("已创建 LLM 服务实例")
 
     # --- ContextService（L1 对话配对窗口，内置默认配置）---
@@ -386,7 +389,7 @@ async def create_app_components(
     logger.info("事件总线已初始化，事件拦截器已挂载")
 
     # --- 事件历史（系统级）---
-    event_recorder = await _start_event_recorder(event_bus, config)
+    event_recorder = await _start_event_recorder(event_bus, config, sqlite_store)
     logger.info("事件历史记录器已启动")
 
     # --- StorageLedger（订阅 room.message.# 落业务表）---
@@ -616,7 +619,7 @@ async def create_app_components(
 # ---------------------------------------------------------------------------
 
 
-async def _start_event_recorder(event_bus: EventBus, config: Dict[str, Any]):
+async def _start_event_recorder(event_bus: EventBus, config: Dict[str, Any], sqlite_store: "SQLiteStore"):
     """启动事件历史记录器（系统级，与 Dashboard 解耦）。"""
     events_config = config.get("events", {}) if isinstance(config, dict) else {}
     typed_events_config = EventHistoryConfig(**events_config)
@@ -624,9 +627,13 @@ async def _start_event_recorder(event_bus: EventBus, config: Dict[str, Any]):
         service = EventHistoryService(
             max_events=typed_events_config.history_size,
             persist=typed_events_config.persist,
+            sqlite_store=sqlite_store,
         )
         recorder = EventHistoryRecorder(event_bus=event_bus, event_history=service)
         await recorder.start()
+        if typed_events_config.persist:
+            # 启动回灌：从 event_history 表载入当日事件（dashboard 重启不丢当日历史）
+            await service.backfill_today_from_store()
         logger.info(
             f"事件历史记录器已启动（size={typed_events_config.history_size}, persist={typed_events_config.persist}）"
         )

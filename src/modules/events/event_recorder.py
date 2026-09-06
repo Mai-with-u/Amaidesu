@@ -107,6 +107,12 @@ class EventHistoryRecorder:
     def _record(self, event: EventRecord) -> None:
         self.event_history.record(event)
 
+    @staticmethod
+    def _payload_timestamp_ms(data: Any) -> Optional[int]:
+        """从载荷提取毫秒时刻；载荷未携带时返回 None（落库时退回记录时刻换算）。"""
+        value = getattr(data, "timestamp_ms", None)
+        return int(value) if isinstance(value, (int, float)) else None
+
     async def _on_room_message(self, event_name: str, data: BasePayload, source: str) -> None:
         try:
             dict_data = data.model_dump() if isinstance(data, BaseModel) else {}
@@ -116,6 +122,8 @@ class EventHistoryRecorder:
                 EventRecord(
                     id=data.id if hasattr(data, "id") else "",
                     type=ROOM_MESSAGE_TYPE,
+                    event_name=event_name,
+                    timestamp_ms=self._payload_timestamp_ms(data),
                     level="info",
                     source=dict_data.get("live_session_id", source),
                     summary=summary,
@@ -132,6 +140,8 @@ class EventHistoryRecorder:
                 EventRecord(
                     id=data.id if hasattr(data, "id") else "",
                     type=SYSTEM_STATUS_TYPE,
+                    event_name=event_name,
+                    timestamp_ms=self._payload_timestamp_ms(data),
                     level="info",
                     source="dashboard",
                     summary=str(dict_data.get("event", dict_data))[:200],
@@ -151,6 +161,8 @@ class EventHistoryRecorder:
                 EventRecord(
                     id=data.id if hasattr(data, "id") else "",
                     type=SYSTEM_ERROR_TYPE,
+                    event_name=event_name,
+                    timestamp_ms=self._payload_timestamp_ms(data),
                     level="error",
                     source="dashboard",
                     summary=str(dict_data.get("message", ""))[:200],
@@ -172,6 +184,8 @@ class EventHistoryRecorder:
                 EventRecord(
                     id=data.id if hasattr(data, "id") else "",
                     type=event_name,
+                    event_name=event_name,
+                    timestamp_ms=self._payload_timestamp_ms(data),
                     level="info",
                     source=str(dict_data.get("live_session_id", "") or source),
                     summary=summary[:200],
@@ -188,6 +202,8 @@ class EventHistoryRecorder:
                 EventRecord(
                     id=data.id if hasattr(data, "id") else "",
                     type=event_name,
+                    event_name=event_name,
+                    timestamp_ms=self._payload_timestamp_ms(data),
                     level="info",
                     source=str(dict_data.get("live_session_id", "") or source),
                     summary=f"{event_name}: {dict_data.get('message', '')}"[:200],

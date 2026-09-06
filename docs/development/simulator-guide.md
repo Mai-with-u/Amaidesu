@@ -1,3 +1,5 @@
+*最后更新：2026-09-06（录制回放数据源迁移：`data/events/*.jsonl` 文件 → SQLite `event_history` 表；读回 API 由模块级函数改为 `SQLiteStore.list_event_dates()` / `get_day_events(date, event_name=...)`，历史 JSONL 已全量导入真实库后文件退役）*
+
 # 世界模拟器开发基础设施
 
 > **世界发射器统一（ADR-006 修订版）**：`SimulatorService` 是唯一的模拟消息发射器，三模式切换——
@@ -45,7 +47,7 @@ INFO | SimulatorService - 模拟器服务已启动（mode=generate）
 | 模式 | 行为 | 适用场景 |
 |------|------|---------|
 | `generate` | 四态节奏驱动：选人设 → 读世界窗口 → LLM 生成弹幕/概率礼物/SC | 开放性行为锻炼，暴露 Agent 真实表现 |
-| `replay` | 读 `data/events/YYYY-MM-DD.jsonl` 录制，按原节奏重放（可调速度） | 确定性回归测试、bug 复现 |
+| `replay` | 读 SQLite `event_history` 表录制，按原节奏重放（可调速度） | 确定性回归测试、bug 复现 |
 | `off` | 装配但不运行世界 | 只用人设/礼物 CRUD 与观测，不产生消息 |
 
 replay 模式的录制日期可在启动时通过配置 `replay_date` 指定，或在 Dashboard「世界模拟器」页运行期选择；`replay_speed` 倍率加速，`replay_gap_cap_s` 截断超长冷场。
@@ -124,8 +126,8 @@ replay 模式的录制日期可在启动时通过配置 `replay_date` 指定，�
 
 ## 6. 录制与回放
 
-- **录制源**：EventHistoryService 落盘的 `data/events/YYYY-MM-DD.jsonl`（全量事件、payload 完整 model_dump）——录制即世界快照，无需第二种录制格式；
-- **读回 API**：`list_recorded_dates()` / `read_day_events(date, persist_dir)`（`src/modules/events/event_history.py` 模块级函数，无实例状态）；
+- **录制源**：EventHistoryService 落库的 SQLite `event_history` 表（全量事件、payload 完整 model_dump JSON）——录制即世界快照，无需第二种录制格式；
+- **读回 API**：`SQLiteStore.list_event_dates()` / `get_day_events(date, event_name=...)`（按本地日期过滤，时间正序）；
 - **回放队列**：`ReplayEngine` 过滤 `room.message.danmaku` 事件、还原 payload、按相邻毫秒时间戳差值调度；
 - **典型用法**：真实直播一晚 → 次日用 replay 模式重放给主播 Agent 锻炼（`replay_simulated_only=false` 回放全部真实弹幕）。
 

@@ -117,7 +117,9 @@ class TestLoading:
         # v2.0.14：模拟器世界重构——三模式运行时数据入库（schema 新表）。
         # v2.0.15：僵尸配置收口——output 白名单/死子段清理、obs_control 改名 obs、
         # perception 剥离已删除的 text_adv_game 采集器。
-        assert version == "2.0.16"
+        # v2.0.17：事件历史与 LLM 请求历史入库——[events].persist 语义从
+        # data/events/ JSONL 文件改为 SQLite event_history 表。
+        assert version == "2.0.17"
 
     def test_drift_fixed_on_load(self, temp_config_dir):
         generate_default_configs(temp_config_dir)
