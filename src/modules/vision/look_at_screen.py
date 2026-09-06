@@ -115,6 +115,8 @@ class TextReader(Protocol):
 # 工具规格
 # ---------------------------------------------------------------------------
 
+# 提供者标识统一来源（ToolSpec.provider / 追溯用），避免字面量重复
+PROVIDER_NAME = "vision"
 
 LOOK_AT_SCREEN_SPEC = ToolSpec(
     name="look_at_screen",
@@ -140,7 +142,7 @@ LOOK_AT_SCREEN_SPEC = ToolSpec(
         "required": [],
     },
     kind="sync",
-    provider="builtin",
+    provider=PROVIDER_NAME,
     output_schema={
         "type": "object",
         "properties": {

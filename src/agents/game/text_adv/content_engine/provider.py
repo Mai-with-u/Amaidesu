@@ -224,6 +224,8 @@ class FakeContentEngine:
 # ToolProvider：把 ContentEngine 封装成 5 个工具
 # ---------------------------------------------------------------------------
 
+# 提供者标识统一来源（ToolSpec.provider / 追溯用），避免字面量重复
+PROVIDER_NAME = "game"
 
 _CONTENT_ENGINE_SPECS: List[ToolSpec] = [
     ToolSpec(
@@ -231,14 +233,14 @@ _CONTENT_ENGINE_SPECS: List[ToolSpec] = [
         description="启动游戏内容引擎（同步调用；等待引擎就绪或返回失败）。",
         parameters_schema={"type": "object", "properties": {}, "required": []},
         kind="sync",
-        provider="builtin",
+        provider=PROVIDER_NAME,
     ),
     ToolSpec(
         name="content_engine_stop",
         description="停止游戏内容引擎（释放资源）。",
         parameters_schema={"type": "object", "properties": {}, "required": []},
         kind="sync",
-        provider="builtin",
+        provider=PROVIDER_NAME,
     ),
     ToolSpec(
         name="content_engine_send_input",
@@ -265,21 +267,21 @@ _CONTENT_ENGINE_SPECS: List[ToolSpec] = [
             "required": ["kind"],
         },
         kind="sync",
-        provider="builtin",
+        provider=PROVIDER_NAME,
     ),
     ToolSpec(
         name="content_engine_status",
         description="查询内容引擎运行状态（running / engine_kind / 扩展字段）。",
         parameters_schema={"type": "object", "properties": {}, "required": []},
         kind="sync",
-        provider="builtin",
+        provider=PROVIDER_NAME,
     ),
     ToolSpec(
         name="content_engine_get_state",
         description="读取引擎侧持久状态（自由 dict；具体 schema 由各游戏 Agent 定义）。",
         parameters_schema={"type": "object", "properties": {}, "required": []},
         kind="sync",
-        provider="builtin",
+        provider=PROVIDER_NAME,
     ),
 ]
 

@@ -35,6 +35,9 @@ logger = get_logger("text_adv_tools")
 # ToolSpec 工厂
 # ---------------------------------------------------------------------------
 
+# 提供者标识统一来源（ToolSpec.provider / 追溯用），避免字面量重复
+PROVIDER_NAME = "game"
+
 
 def build_choose_option_spec() -> ToolSpec:
     """``text_adv_choose_option`` 工具规格——游戏推进核心入口"""
@@ -56,7 +59,7 @@ def build_choose_option_spec() -> ToolSpec:
             "required": ["option_id"],
         },
         kind="sync",
-        provider="game",
+        provider=PROVIDER_NAME,
         output_schema={
             "type": "object",
             "properties": {
@@ -78,7 +81,7 @@ def build_get_story_spec() -> ToolSpec:
         ),
         parameters_schema={"type": "object", "properties": {}, "required": []},
         kind="sync",
-        provider="game",
+        provider=PROVIDER_NAME,
         output_schema={
             "type": "object",
             "properties": {

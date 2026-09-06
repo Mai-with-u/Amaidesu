@@ -84,7 +84,7 @@ def to_spec(
         description=description,
         parameters_schema=input_schema if isinstance(input_schema, dict) else None,
         kind="sync",
-        provider=provider,  # type: ignore[arg-type]  # "mcp"/"game" 均为合法 Literal
+        provider=provider,
     )
 
 
