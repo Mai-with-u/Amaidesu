@@ -1,4 +1,4 @@
-"""Tools 配置 Schema 定义（v2.0.0）
+"""Tools 配置 Schema 定义
 
 定义 ``config/tools.toml`` 的 Pydantic 聚合模型。
 
@@ -17,10 +17,9 @@
     ...
 
 设计原则：
-- 替代旧版 [collectors]（感知）和 [handlers]（输出）阶段组件注册
 - 感知/理解/输出按"能力包"分组（而非按阶段）
-- 工具配置细节由具体 Tool Provider 提供（Pydantic ConfigSchema 在 W3 落地）
-- 本文件提供聚合容器与元数据，组件字段留待 ToolRegistry 注入（W3 接入）
+- 工具配置细节由具体 Tool Provider 的 Pydantic ConfigSchema 提供
+- 本文件提供聚合容器与元数据，组件字段由 ToolRegistry 注入
 """
 
 from __future__ import annotations
@@ -57,7 +56,7 @@ class ToolPackMeta(BaseConfig):
     Attributes:
         enabled: 是否启用此工具包
         provider: 提供方（builtin/game/mcp）
-        config: 提供方具体配置（动态键，W3 由 ToolRegistry 注入具体 Schema）
+        config: 提供方具体配置（动态键，由 ToolRegistry 注入具体 Schema）
     """
 
     enabled: bool = Field(default=True, description="是否启用此工具包")
@@ -76,10 +75,10 @@ class ToolPackMeta(BaseConfig):
 
 
 # ---------------------------------------------------------------------------
-# 兼容旧组件的容器（保留名字以利迁移期 Dashboard 显示）
+# 组件级配置的承载方式
 # ---------------------------------------------------------------------------
-# 旧版 [collectors.bili_danmaku] / [handlers.subtitle] 等组件级配置，
-# 在 tools.toml 中归入对应工具包的 config 字典里。
+# [tools.perception.config.bili_danmaku] / [tools.output.config.subtitle] 等
+# 组件级配置，归入对应工具包的 config 字典里。
 # 例如：
 #   [tools.perception.config.bili_danmaku]
 #   platform = "bilibili"
@@ -88,7 +87,7 @@ class ToolPackMeta(BaseConfig):
 #   window_width = 800
 #
 # 不为每个组件定义独立 BaseConfig（避免组件字段耦合到 Schema），
-# W3 由 ToolRegistry 在启动时对 config dict 做 Pydantic 校验。
+# 由 ToolRegistry 在启动时对 config dict 做 Pydantic 校验。
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
-"""SQLiteAgendaStore - AgendaStore 协议的 SQLite 实现（Wave 6 / §1.7 Storage 适配）
+"""SQLiteAgendaStore - AgendaStore 协议的 SQLite 实现
 
-§1.7 持久化定案：
+持久化分工：
 - 原始大纲 → ``agenda_plan`` 表（只读基准；本模块不直接写，由 agenda_loader.load → parse_agenda_toml 注入）
 - 运行进度 → ``agenda_runtime`` 表（Agent 改；本模块提供 CRUD）
 - 持久化走已定 Storage Schema（11 schema 表 + schema_migrations）；无需新 Storage 接口
@@ -9,7 +9,7 @@
 供 ``AgendaState.persist_runtime()`` / ``AgendaState.restore_runtime()`` 调用。
 
 实现要点：
-- ``load_agenda_plan`` 不实现（W6 不在 Storage 中存储原始大纲；由 agenda_loader 直接解析 TOML）
+- ``load_agenda_plan`` 不实现（原始大纲不入 Storage；由 agenda_loader 直接解析 TOML）
 - ``dump_agenda_runtime`` / ``append_agenda_runtime`` / ``delete_agenda_runtime`` 提供完整 CRUD
 - 全部操作走 SQLiteStore.execute() / execute_fetchone()（线程安全 + async 友好）
 """
@@ -47,7 +47,7 @@ class SQLiteAgendaStore:
     # --------- interface methods (duck-typed AgendaStore) ---------
 
     async def load_agenda_plan(self, agenda_id: str) -> Optional[dict]:
-        """加载 agenda_plan 行。W6 不实现原始大纲持久化（保留接口兼容性）。"""
+        """加载 agenda_plan 行。不实现原始大纲持久化（保留接口兼容性）。"""
         return None  # 原始大纲走 TOML 解析，不入 SQLite
 
     async def dump_agenda_runtime(self, agenda_id: str) -> List[dict]:

@@ -135,7 +135,7 @@ class EdgeTTSProvider:
             await self._synthesize(text, utterance_id=utterance_id)
 
     async def _synthesize(self, text: str, utterance_id: Optional[str] = None) -> None:
-        """执行 TTS 合成 + 播放（对应父类 handle() 模板）"""
+        """执行 TTS 合成 + 播放"""
         self.logger.debug(f"开始 TTS 渲染: '{text[:30]}...'")
         try:
             audio_array, samplerate = await self._edge_tts_synthesize(text)

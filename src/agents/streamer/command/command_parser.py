@@ -1,7 +1,5 @@
 """
-命令解析器模块（Wave 6 纯解析保留）
-
-Wave 6 迁移：原 ``stages/decision/deciders/command/command_parser.py`` verbatim 移植。
+命令解析器模块。
 """
 
 import re

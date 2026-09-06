@@ -10,8 +10,7 @@
 - **InputConfig**：``config/input.toml`` 文件对应的根模型。
   字段：``type / collectors``。
 
-  > ``InputPipelinesConfig`` 容器已删除——输入侧净化职责由事件
-  > 拦截器承担，配置位于 ``core.toml`` 的 ``[interceptors.*]``。
+  > 输入侧净化职责由事件拦截器承担，配置位于 ``core.toml`` 的 ``[interceptors.*]``。
 
 设计原则：
 - 不修改 Collector 内部代码，仅导入并重导出其 ``ConfigSchema`` 嵌套类。
@@ -38,12 +37,10 @@ from .base import BaseConfig, DriftReport
 # 延迟加载：Collector ConfigSchema 解析
 # ---------------------------------------------------------------------------
 #
-# 背景：
-#   1. ``base.py`` 在 import 时被 Collector 模块引用
-#   2. Collector 模块通过 ``@collector`` 装饰器 → ``register_config_schema``
-#      反向引用 ``src.modules.config.schemas`` 的导出
-#   3. 若本模块在 import 阶段就 import Collector，会形成环
-#   4. 解决：使用 ``_try_import_schema`` 在模型实例化时才真正 import
+# ``base.py`` 在 import 时被 Collector 模块引用，而 Collector 模块又通过
+# ``@collector`` 装饰器 → ``register_config_schema`` 反向引用
+# ``src.modules.config.schemas`` 的导出；若本模块在 import 阶段就 import
+# Collector 会形成环，故使用 ``_try_import_schema`` 在模型实例化时才真正 import。
 #
 # 缓存：成功导入的 schema 类会被存到 ``_COLLECTOR_SCHEMA_CACHE`` 避免重复 import。
 
@@ -62,8 +59,8 @@ def _try_import_schema(collector_name: str) -> Optional[type]:
     - **成功导入**：缓存为 schema 类，后续直接返回（避免重复 import 开销）
     - **失败导入**：缓存为 ``_NEGATIVE_SENTINEL``，但下次调用会重试
 
-    为什么不用 ``None`` 缓存失败？因为 ``_try_import_schema`` 可能在循环 import 场景下
-    被调用（Collector 模块加载中触发 → 导入失败 → 此时应允许重试），而 ``None``
+    失败不缓存为 ``None``：本函数可能在循环 import 场景下被调用
+    （Collector 模块加载中触发 → 导入失败 → 此时应允许重试），而 ``None``
     与"未配置"无法区分。
 
     Args:
@@ -76,8 +73,7 @@ def _try_import_schema(collector_name: str) -> Optional[type]:
         cached = _COLLECTOR_SCHEMA_CACHE[collector_name]
         if cached is not _NEGATIVE_SENTINEL:
             return cached
-        # 负缓存：清空后重试（处理循环 import 场景：
-        # Collector 模块加载中触发本函数 → 失败 → 后续调用应重试）
+        # 负缓存：清空后重试（Collector 模块加载中触发的失败允许后续重试）
         del _COLLECTOR_SCHEMA_CACHE[collector_name]
 
     schema_cls: Optional[type] = None
@@ -282,7 +278,7 @@ class InputConfig(BaseConfig):
 # 公共 API 别名：XXXConfigSchema
 # ---------------------------------------------------------------------------
 #
-# 调用方通常期望使用 ``XXXConfigSchema`` 这样的稳定公开名（与 output_schemas.py 风格一致）。
+# 调用方通常期望使用 ``XXXConfigSchema`` 这样的稳定公开名。
 # 此处使用 ``__getattr__`` 级别延迟加载：模块加载时不预解析任何 Collector，
 # 第一次访问 ``BiliDanmakuConfigSchema`` 等别名时才触发 ``_try_import_schema``。
 # 这是为了规避循环 import（Collector 模块在加载时会反向引用本模块）。

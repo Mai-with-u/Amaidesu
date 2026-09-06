@@ -1,11 +1,11 @@
-"""文字冒险游戏内部状态（§1.31 内容状态内部自由）
+"""文字冒险游戏内部状态（内容状态内部自由）
 
-按架构 §1.31 + §1.49 第 4 面定案：
+状态归属约定：
 - 内容特有状态（剧情节点 / 选项列表 / 历史栈）= Agent 包内部自由
 - 框架**不**为内容状态提供 ORM / 数据库表（仅按 Agent 名字空间隔离状态写入口）
 - 其它 Agent（包括主播 Agent）通过 ``game.*`` 事件或主动 query 工具读
 
-本模块只实现 Wave 7 范式验证所需的最小状态机：
+本模块实现文字冒险游戏所需的最小状态机：
 - 剧情段（``scene_id`` / ``scene_text``）
 - 选项列表（``options``：id → label）
 - 历史（最近 N 步选择）
@@ -34,7 +34,7 @@ class TextAdvOption:
 
 @dataclass(slots=True)
 class TextAdvGameAgentState:
-    """文字冒险游戏 Agent 内部状态（§1.31 内容状态）
+    """文字冒险游戏 Agent 内部状态（内容状态内部自由）
 
     Attributes:
         scene_id: 当前剧情段 ID
@@ -69,7 +69,7 @@ class TextAdvGameAgentState:
         self.options = list(options)
 
     def pick_default_option(self) -> Optional[TextAdvOption]:
-        """选默认选项（Wave 7 简化策略 = 第一个）。
+        """选默认选项（简化策略 = 第一个）。
 
         真实游戏 Agent 可用 LLM 做更聪明选择；本示例使用确定性策略以保证
         "perception → advance → loop" 在测试环境可断言。

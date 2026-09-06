@@ -8,8 +8,7 @@
 --------
 
 - **基础模块自治装配**——字幕是基础设施（非工具），装配逻辑放在
-  ``src/modules/subtitle/`` 包内（``src/modules/subtitle/assembly.py``），
-  与 ``build_tts_infrastructure`` 同构
+  本包内自治完成，与 ``build_tts_infrastructure`` 同构
 - **Tk GUI 服务生命周期归属装配层**——``SubtitleGuiService.start()``
   在本装配入口调用以启动 Tk 长驻线程（daemon）；Tk 线程是 Backend
   功能前提（``push_subtitle`` 入队后需 Tk 线程消费），不在此处启动
@@ -19,23 +18,6 @@
 - **fail-soft 语义**——配置非 dict / 构造异常 / GUI 不可用时统一返回
   一个空 Backend 的 ``SubtitleService``（调用方按"已装配但无后端"
   语义降级，不抛错阻断冷启动）
-- **不动既有 Tool 路径**——``SubtitleProvider`` / ``bind_core_tools``
-  中字幕段装配仍按原路径走（尚未迁移），本入口只把 Tk GUI 服务接入
-  新的 ``SubtitleService`` 基础设施路径；``SubtitleProvider`` 退役是
-  后续独立片
-
-装配流程示意::
-
-    subtitle_config (dict)             #  tools.toml [tools.output.config.subtitle]
-        ↓
-    build_subtitle_infrastructure(subtitle_config)
-        ├─ config 非 dict → WARN + 返回空 SubtitleService
-        ├─ SubtitleGuiService(config) 失败 → ERROR + 返回空 SubtitleService
-        ├─ SubtitleGuiService(config) 成功
-        │   ├─ enabled=True → start() 启动 Tk daemon 线程
-        │   └─ enabled=False → INFO 跳过（CustomTkinter 不可用）
-        ├─ TkGuiBackend(service=gui_service)
-        └─ SubtitleService.register_backend(backend) → 返回 service
 """
 
 from __future__ import annotations

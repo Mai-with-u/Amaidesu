@@ -1,9 +1,7 @@
 """
-命令数据结构模块（Wave 6 纯解析保留）
+命令数据结构模块。
 
-Wave 6 迁移：原 ``stages/decision/deciders/command/command.py`` verbatim 移植；
-从 decider 子包挪到 ``src/agents/streamer/command/`` 子包，保持纯解析职责
-（不发 Intent、不订阅事件、不调 LLM）。
+纯解析职责（不发 Intent、不订阅事件、不调 LLM）。
 """
 
 from dataclasses import dataclass

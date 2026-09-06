@@ -1,11 +1,7 @@
 """
-Warudo 字幕管理器 - 完整的 ReplyGenerationManager 移植
+Warudo 字幕管理器
 
-迁移自旧插件 plugins_backup/warudo/talk_subtitle.py,适配新架构:
-- 移除全局单例(get_reply_generation_manager) — 新架构用 DI
-- 移除 aiohttp_cors(简化,OBS 浏览器源不需要复杂 CORS)
-- 保持 aiohttp 启动 / WebSocket 广播 / 4 种消息协议完整
-- 3 秒超时保护关闭逻辑保留
+启动 aiohttp HTTP + WebSocket 服务器,为 OBS 浏览器源提供实时字幕推送。
 
 WebSocket 协议(JSON 消息):
 - {action: "start", user_name: str}       - 开始新回复
@@ -110,7 +106,7 @@ class WarudoSubtitleManager:
         self.logger.info("正在停止字幕 Web 服务器...")
 
         try:
-            # 1. 关闭所有 WebSocket
+            # 关闭所有 WebSocket
             websockets_copy = self.websockets.copy()
             close_tasks = []
             for ws in websockets_copy:
@@ -124,14 +120,14 @@ class WarudoSubtitleManager:
                     self.logger.warning("WebSocket 关闭超时,强制继续")
             self.websockets.clear()
 
-            # 2. 停止 site
+            # 停止 site
             if self.site:
                 try:
                     await asyncio.wait_for(self.site.stop(), timeout=3.0)
                 except asyncio.TimeoutError:
                     self.logger.warning("TCPSite 停止超时,强制继续")
 
-            # 3. 清理 runner
+            # 清理 runner
             if self.runner:
                 try:
                     await asyncio.wait_for(self.runner.cleanup(), timeout=3.0)

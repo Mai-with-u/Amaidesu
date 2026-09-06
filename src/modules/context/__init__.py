@@ -1,8 +1,9 @@
 """
-Amaidesu Context 模块（Wave 3 新增 + 旧 ContextService 并行共存）
+Amaidesu Context 模块
 
-Wave 3 仅**纯新增** ContextAssembler 纯函数，与该目录下旧 ``ContextService``
-**并行共存**，不删旧代码（§1.44 定案：旧路径需受 W4 业务迁移收口）。
+本目录并行提供两套 API：
+- **ContextAssembler**：纯函数上下文组装（无循环、无定时、无 LLM）
+- **ContextService**：对话上下文管理服务（既有 API，保留避免破坏现有 import 路径）
 
 ## 提供
 - ``ContextAssembler``：纯函数组件（无循环、无定时、无 LLM）
@@ -10,15 +11,13 @@ Wave 3 仅**纯新增** ContextAssembler 纯函数，与该目录下旧 ``Contex
 - ``AssembledSection``：section 单元（带稳定性 hint 便于 LLM 缓存前缀优先）
 - ``PlannerAssembler``：每类 Agent 一个 Assembler 实例
 
-## 旧兼容
+## 兼容导出
 - ``ContextService`` / ``ContextServiceConfig`` / ``ConversationMessage`` /
-  ``MessageRole`` / ``SessionInfo`` / ``StorageType`` —— 旧 API 仍可被旧代码
-  引用，避免破坏 W3 外的现有 import 路径。
-
-权威参考：.omo/drafts/amaidesu-v2-architecture.md §1.44
+  ``MessageRole`` / ``SessionInfo`` / ``StorageType`` —— 既有 API 仍可被
+  现有代码引用。
 """
 
-# 旧 ContextService API（保留供旧模块使用）
+# ContextService API（保留供既有模块使用）
 from src.modules.context.config import ContextServiceConfig, StorageType
 from src.modules.context.models import (
     ConversationMessage,
@@ -27,7 +26,7 @@ from src.modules.context.models import (
 )
 from src.modules.context.service import ContextService
 
-# Wave 3 新增 API（纯函数 ContextAssembler）
+# 纯函数 ContextAssembler API
 from src.modules.context.assembler import (
     AssembledSection,
     AssemblerInputs,
@@ -39,14 +38,14 @@ from src.modules.context.assembler import (
 from src.modules.context.snapshot import EnvironmentBlock, TimelineBlock, WorkingMemoryTrace
 
 __all__ = [
-    # 旧 ContextService（与新 ContextAssembler 并行共存，不删）
+    # ContextService（与 ContextAssembler 并行共存）
     "ContextService",
     "ContextServiceConfig",
     "ConversationMessage",
     "MessageRole",
     "SessionInfo",
     "StorageType",
-    # Wave 3 新增
+    # 纯函数 ContextAssembler
     "AssembledSection",
     "AssemblerInputs",
     "ContextAssembler",

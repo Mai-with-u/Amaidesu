@@ -1,5 +1,5 @@
 """
-v2 语义域事件 Payload 定义：tts.utterance.* 一次发声实例生命周期
+事件 Payload 定义：tts.utterance.* 一次发声实例生命周期
 
 定义 ``tts.utterance.started`` / ``tts.utterance.finished`` /
 ``tts.utterance.failed`` 三个事件的 Payload。

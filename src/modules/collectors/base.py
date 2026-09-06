@@ -2,7 +2,6 @@
 BaseCollector —— 采集器抽象基类
 
 采集器 = 流型感知者，世界→系统入口，主动推事件。
-- 与 Input/Output 阶段的旧名"input collector"是同一概念的事件名演化
 - 不是工具（非同步/异步二类）
 - 协议面：start / stop / cleanup 生命周期
 - emit 由 EventBus 注入；构造器注入 pattern

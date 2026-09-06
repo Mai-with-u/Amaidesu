@@ -1,11 +1,8 @@
 """TkGuiBackend - 包装现有 SubtitleGuiService 的字幕 Backend
 
-历史背景：早期字幕作为 Tool 系统内的 ``SubtitleProvider``，其
-渲染后端是 ``SubtitleGuiService``——长驻 Tk 线程 + 文本队列 +
-自动隐藏。字幕升级为基础设施后，本 Backend 把 GUI 服务接入新
-``SubtitleBackend`` 协议，**只组合引用**。GUI 服务本体（
-``tk_gui_service``）随基础设施一同迁入本包。``tk_gui_service``
-原文件自 ``src/modules/tools/output/subtitle`` 以 ``git mv`` 迁移。
+包装 ``SubtitleGuiService``——长驻 Tk 线程 + 文本队列 + 自动隐藏的
+GUI 渲染服务，实现 ``SubtitleBackend`` 协议，**只组合引用**。
+GUI 服务本体（``tk_gui_service``）与本 Backend 同包。
 
 职责：
 
@@ -19,8 +16,7 @@
 生命周期：
 
 - Backend **不**实例化 ``SubtitleGuiService``——装配层在构造
-  GUI 服务并 ``start()`` 启动 Tk 线程后，再注入本 Backend。这与
-  ``SubtitleProvider.attach_service`` 的注入模式一脉相承。
+  GUI 服务并 ``start()`` 启动 Tk 线程后，再注入本 Backend。
 - Backend 自身无 setup / cleanup；本协议未要求生命周期方法。
 """
 

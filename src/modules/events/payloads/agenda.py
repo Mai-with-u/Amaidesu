@@ -1,10 +1,10 @@
 """
-v2 语义域事件 Payload 定义：agenda.update
+事件 Payload 定义：agenda.update
 
 定义 ``agenda.update`` 事件 Payload（AgendaItem 运行进度变更）。
-对应存储 ``agenda_runtime`` 表（见 .omo/drafts/amaidesu-v2-storage-schema.md）。
+对应存储 ``agenda_runtime`` 表。
 
-按契约（.omo/drafts/amaidesu-v2-event-contract.md "agenda.*" 节）：
+契约约定：
 - AgendaItem = **运行进度条目**（与 agenda_plan 原始大纲只读基准区分）
 - action 判别："done"（打勾完成） / "schedule"（改时间表） / "insert"（插入新条目）
 - ``inserted_by`` 字段区分人类编排者与 AI 自动插入（human/ai）

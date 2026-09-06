@@ -1,16 +1,11 @@
-"""Agenda - 直播节目单数据契约（Wave 6 / §1.7）
+"""Agenda - 直播节目单数据契约
 
 设计要点
 --------
 - 与 :mod:`plan.py` 的 ``DecisionPlan`` 同类：**主播 Agent 内部契约**，不跨 Agent
-  共享，因此放在 ``src/agents/streamer/`` 下，而不是 ``src/modules/types/``。
+  共享，内聚于 ``src/agents/streamer/`` 下。
 - 描述一场直播的**预定义节目单**：通过 TOML 文件预定义环节流程，系统按**时间驱动
   + AI 顺带评估**自动推进；零观众也能按计划直播，弹幕可打断但保持节目单对齐。
-- 重命名（原 ``outline.py`` → ``agenda.py``，§1.7 已定案）：
-  - ``StreamOutline`` → ``Agenda``
-  - ``OutlineSegment`` → ``AgendaSegment``
-  - ``OutlineBranch`` → ``AgendaBranch``
-  - ``parse_outline_toml`` → ``parse_agenda_toml``
 - ``extra="forbid"``:与代码库其他 Pydantic 模型保持一致,严格拒绝未知字段。
 
 字段说明
@@ -31,7 +26,7 @@
 - ``target_segment_id``:跳转目标环节的 ``id``,必须指向存在的 ``segment_id``
 
 ``Agenda`` —— 整场节目单
-- ``agenda_id``:节目单唯一标识(原 outline_id 重命名)
+- ``agenda_id``:节目单唯一标识
 - ``title``:节目单标题(面向人)
 - ``segments``:环节列表,非空;每个环节 ``id`` 唯一
 - ``fallback_segment_id``:分支未命中时的回退目标环节 ``id``(可选)

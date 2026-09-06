@@ -28,9 +28,9 @@ try:
     import uvicorn
 
     # 显式指定 sansio 实现避免触发 websockets.legacy 弃用警告。
-    # 注：uvicorn 0.49 仍未修复 auto.py 的 legacy 引用；uvicorn 0.50+ 将以字符串选项 'websockets-sansio' 公开支持，
-    # 届时应改为 ws="websockets-sansio" 并删除此处导入。
-    # 降级 websockets 到 13.x 不可行：uvicorn 引用了 websockets 14+ 才引入的 WebSocketServerProtocol。
+    # 当前 uvicorn 尚未将 websockets-sansio 暴露为字符串选项，
+    # 且 uvicorn 依赖的 websockets 版本引入了 sansio 实现，因此在此处直接导入类传入 ws=。
+    # 后续若 uvicorn 支持字符串选项，可改为 ws="websockets-sansio" 并删除此处导入。
     from uvicorn.protocols.websockets.websockets_sansio_impl import WebSocketsSansIOProtocol
 
     UVICORN_AVAILABLE = True
@@ -117,7 +117,7 @@ class DashboardServer:
         self.prompt_manager = prompt_manager
         self.context_service = context_service
         self.config_service = config_service
-        # ADR-006 follow-up：注入 SimulatorService 让 `/api/v1/simulator/*` 控制面可用。
+        # 注入 SimulatorService 让 `/api/v1/simulator/*` 控制面可用。
         # 未注入（如默认生产配置 enabled=false）时相关端点仍可调用（返回 is_available=false）。
         self.simulator_service = simulator_service
         # 注入 LiveSessionManager 让 `/api/v1/sessions/*` 控制面可用（场次开启/结束/删除）。
@@ -194,7 +194,7 @@ class DashboardServer:
             self.logger.info("前端未构建，仅 API 模式运行")
 
         # 预绑定端口：在任何副作用（broadcaster/log_streamer/vite/心跳）之前完成，
-        # 端口被占用时在此失败，避免先打印“已启动”再退出的假象（issue #69）。
+        # 端口被占用时在此失败，避免先打印“已启动”再退出的假象。
         config = uvicorn.Config(
             app=self.app,
             host=self.host,

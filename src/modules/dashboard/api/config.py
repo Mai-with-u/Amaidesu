@@ -50,7 +50,7 @@ RESTART_REQUIRED_PREFIXES = [
     "maicore.",
     "dashboard.",
     "logging.",
-    # mcp 段已弃用（upgrade_hooks 主动剥离），从重启列表中移除避免误导
+    # mcp 段由 upgrade_hooks 主动剥离，无需列在重启前缀里
 ]
 
 

@@ -1,6 +1,4 @@
-# Bilibili WebSocket 协议处理器（v2 迁移）
-# 迁移自 src/stages/input/collectors/bili_danmaku_official/client/proto.py
-# 实现 verbatim —— 仅迁移位置
+# Bilibili WebSocket 协议处理器
 
 import logging
 import struct

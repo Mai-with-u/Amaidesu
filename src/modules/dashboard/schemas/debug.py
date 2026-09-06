@@ -2,11 +2,6 @@
 调试 Schema
 
 定义调试相关的数据模型。
-
-Wave 6 变更：
-- 移除 InjectIntentRequest / InjectIntentResponse（IntentPayload 已被 DISCARD，
-  /inject-intent 端点在新架构下无意义：决策出口=工具调用，无 Intent 事件）。
-- InjectMessageRequest / InjectMessageResponse 保留（room.message.* 事件用于联调）。
 """
 
 from typing import Dict, Optional

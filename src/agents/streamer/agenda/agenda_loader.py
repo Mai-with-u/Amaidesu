@@ -1,22 +1,21 @@
-"""AgendaLoader - 节目单 TOML 加载器 + 每环节动态 AI 扩展器（Wave 6 / §1.7）
+"""AgendaLoader - 节目单 TOML 加载器 + 每环节动态 AI 扩展器
 
 职责
 ----
-1. **TOML 加载**：读取主播预定义的节目单 TOML → 解析为 :class:`Agenda`。
-2. **环节扩展**：环节进入时调用 LLM（独立 profile ``llm_agenda``，Wave 6 由
-   ``llm_outline`` 重命名）生成开场白 / 话题引导 / 讨论要点（``ExpandedSegment``），
-   缓存注入提示词。
+- **TOML 加载**：读取主播预定义的节目单 TOML → 解析为 :class:`Agenda`。
+- **环节扩展**：环节进入时调用 LLM（独立 profile ``llm_agenda``）生成
+  开场白 / 话题引导 / 讨论要点（``ExpandedSegment``），缓存注入提示词。
 
 设计要点
 --------
-- **主播 Agent 内部组件**：与 :mod:`plan.py` 的 ``DecisionPlan`` 同类，置于
-  ``src/agents/streamer/`` 而非 ``src/modules/types/``。
-- **独立 LLM profile**：使用 ``llm_agenda``（v2 重命名）与 Planner(llm_fast) /
-  Replyer(llm) 隔离连接池——仿 ``RoomStateLoop`` 使用 ``llm_summary`` 的先例。
+- **主播 Agent 内部组件**：与 :mod:`plan.py` 的 ``DecisionPlan`` 同类，
+  内聚于 Agent 包内。
+- **独立 LLM profile**：使用 ``llm_agenda`` 与 Planner(llm_fast) /
+  Replyer(llm) 隔离连接池。
 - **绝不抛异常中断环节**：LLM 调用失败 / 脏 JSON / 解析异常 → 1 次重试 → 仍失败则
   fallback（``opening_line=""``、``topic_guidance=segment.task_description``、
   ``talking_points=[]``）。
-- **JSON 解析容错**：复用 ``Planner._clean_llm_json`` 的三步清理模式
+- **JSON 解析容错**：清理 LLM 返回的 JSON
   （剥离 ```json 包裹、截取首末 { }、修复尾随逗号）。
 - **零事件发布**：Loader 纯组件，**不**直接 emit 任何事件——调度通知由
   ``agenda_idle`` 通过 ``on_advance`` 回调驱动 Agent 走正常决策链。
@@ -94,10 +93,10 @@ class AgendaLoader:
     """
 
     #: AI 扩展专用提示词模板键（内聚于本包 prompts/agenda_expand.md，
-    #: 由 frontmatter name 声明；原中央目录文件名 outline_expand 已随 v2 内聚化正名）
+    #: 由 frontmatter name 声明）
     TEMPLATE_NAME: str = "agenda_expand"
 
-    #: 默认 LLM profile（独立连接池，仿 llm_summary 先例）
+    #: 默认 LLM profile（独立连接池）
     DEFAULT_EXPAND_CLIENT: str = "llm_agenda"
 
     def __init__(
@@ -114,7 +113,7 @@ class AgendaLoader:
         if config is None:
             self._expand_client = self.DEFAULT_EXPAND_CLIENT
         elif isinstance(config, dict):
-            # 同时支持 agenda_expand_client（新命名）+ outline_expand_client（向后兼容）
+            # 同时支持 agenda_expand_client 与 outline_expand_client（向后兼容）
             self._expand_client = config.get(
                 "agenda_expand_client",
                 config.get("outline_expand_client", self.DEFAULT_EXPAND_CLIENT),
@@ -137,7 +136,7 @@ class AgendaLoader:
         Returns:
             校验通过的 Agenda 实例
         """
-        # 同步解析；Wave 6 不引入异步 IO（TOML 加载是轻量操作）
+        # 同步解析，不引入异步 IO（TOML 加载是轻量操作）
         return parse_agenda_toml(Path(path))
 
     # -------- 环节 AI 扩展 --------
@@ -145,11 +144,8 @@ class AgendaLoader:
     async def expand_segment(self, segment: AgendaSegment) -> ExpandedSegment:
         """对单个环节做 AI 扩展。
 
-        流程：
-        1. 渲染 prompt（``agenda_expand``）
-        2. 调 LLM（独立 profile ``llm_agenda``）
-        3. 解析 JSON（含三步清理 + 重试）
-        4. 失败 fallback 到 ``segment.task_description``
+        流程：渲染 prompt（``agenda_expand``）→ 调 LLM（独立 profile ``llm_agenda``）
+        → 解析 JSON（含清理 + 重试）→ 失败 fallback 到 ``segment.task_description``。
 
         Args:
             segment: 待扩展的 AgendaSegment
@@ -204,7 +200,7 @@ class AgendaLoader:
 
 
 def _clean_llm_json(raw_output: str) -> str:
-    """清理 LLM 返回的 JSON 字符串（与 Planner._clean_llm_json 同构三步清理）。"""
+    """清理 LLM 返回的 JSON 字符串（剥离代码块包裹、截取首末花括号、修复尾随逗号）。"""
     cleaned = raw_output.strip()
     cleaned = re.sub(r"^```json\s*", "", cleaned)
     cleaned = re.sub(r"^```\s*", "", cleaned)

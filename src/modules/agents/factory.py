@@ -1,7 +1,6 @@
 """Agent 实例化工厂（配置名 → 具体类）
 
-中央化 main.py 原有的 streamer/game/custom 分支（Single Source of Truth），
-供启动装配与 Dashboard 动态启停复用。
+配置名 → 具体类的唯一映射，供启动装配与 Dashboard 动态启停复用。
 
 配置名映射：
 - streamer → StreamerAgent
@@ -15,7 +14,7 @@ from typing import Any, Optional
 
 from src.modules.agents.base import BaseAgent
 
-# 已实现的 Agent 注册名（组件管理页"可用组件"清单来源）
+# 已实现的 Agent 注册名
 SUPPORTED_AGENTS: tuple[str, ...] = ("streamer", "game")
 
 

@@ -1,20 +1,8 @@
-"""核心系统配置 Schema 定义（v2.0.0）
+"""核心系统配置 Schema 定义
 
 定义所有非业务域的系统级配置 Schema，对应 ``config/core.toml`` 文件。
 
 包含：meta, general, persona, context, events, dashboard, simulator, logging, interceptors。
-
-> **v2.0.0 变化**：
-> - 删除 ``[maicore]`` 段（2.0.0 单进程无 MaiCore WebSocket 连接）
-> - ``[context]`` 由会话存储改造为 ContextAssembler 配置（§1.44）
-> - ``[mcp]`` 段在 2.0.2 起被 upgrade hook 主动剥离（详见 upgrade_hooks._migrate_core_2_0_2），
->   不再纳入新配置文件的段列表
->
-> **v2.0.4 变化**：
-> - ``[pipelines]`` 正名为 ``[interceptors]``（§1.46.1 管道→事件拦截器迁移收官；
->   阶段嵌套拍平为 ``[interceptors.<name>]``，output 侧 profanity_filter 已归 Replyer）
-
-段树详见 ``.omo/drafts/amaidesu-v2-config-tree.md``（单一事实源）。
 """
 
 from typing import Any, Dict, List
@@ -49,14 +37,13 @@ class PersonaConfig(BaseConfig):
 
     定义 VTuber 的性格和说话风格，被 Planner/Replyer 等 LLM Agent 引用。
 
-    v2.0.6 新增 ``behavior_style``（行为准则/行动风格）字段，
-    对齐 MaiBot 三层人格拆分：
+    三个文本字段按消费侧分层注入：
     - ``personality``：身份特征 → 仅注入 Replyer（表达侧）
     - ``style_constraints``：表达风格 → 仅注入 Replyer（表达侧）
     - ``behavior_style``：行动准则 → 仅注入 Planner（决策侧，何时发言 / 聊什么 / 何时沉默）
 
-    装配根（main._register_agents_from_config）将该段作为 dict 整体透传给
-    StreamerAgent.persona_provider，Planner/Replyer 按职责各自读取对应字段。
+    装配根将该段作为 dict 整体透传给 StreamerAgent.persona_provider，
+    Planner/Replyer 按职责各自读取对应字段。
     """
 
     bot_name: str = Field(default="麦麦", description="VTuber 名字")
@@ -81,11 +68,10 @@ class PersonaConfig(BaseConfig):
 
 
 class ContextAssemblerConfig(BaseConfig):
-    """上下文组装器配置（v2.0.0 改造）
+    """上下文组装器配置
 
-    旧版 ``ContextConfig`` 用于会话历史存储（memory/file）。
-    新版改造为 ContextAssembler 配置（§1.44）：决定 LLM 输入如何组装。
-    会话历史存储职责下放给 memory 后端，ContextAssembler 只负责"如何取"。
+    决定 LLM 输入如何组装。会话历史存储职责归 memory 后端，
+    ContextAssembler 只负责"如何取"。
 
     Attributes:
         enabled: 是否启用上下文组装（关闭后 Agent 直接接收裸消息）
@@ -204,15 +190,7 @@ class TTSConfig(BaseConfig):
     TTS 是主播级基础设施——开启后每句回复都会自动 TTS 合成并播放。
     与具体 TTS 引擎（edge_tts / gptsovits / voicebox / omni_tts）解耦：
     调度开关（开/关、目标引擎、播放队列与超时）与每个引擎的连接/合成参数
-    全部位于本段；不再拆分至 tools.toml。
-
-    演进轨迹：
-    - v2.0.10：调度字段从 ``[tools.output.config]`` 上移至 core.toml ``[tts]``。
-    - v2.0.11：``render_timeout_ms`` 默认 10s → 60s（覆盖合成+播放全周期）。
-    - v2.0.12：四个引擎的连接/合成子段从 tools.toml ``[tools.output.config.<engine>]``
-      整体迁移到本段 ``[tts.<engine>]``；TTS 引擎作为基础模块（不再走工具池），
-      故其全部配置自包含于 core.toml。tools.toml 仅保留真正作为工具的输出能力
-      （subtitle / vts / obs / ...）。
+    全部位于本段，不拆分至 tools.toml。
 
     引擎子段使用 free-form dict——各引擎的详细 ConfigSchema 嵌在引擎模块内部，
     本段避免反向 import 引入循环依赖；具体键的校验/补全由 multi_file_loader
@@ -312,29 +290,18 @@ class CoreConfig(BaseConfig):
 
     聚合所有非业务域的系统级配置，对应 ``config/core.toml`` 文件。
 
-    v2.0.0 段树：
+    段树：
     - ``[meta]``        — 配置元数据（CONFIG_VERSION 权威）
     - ``[general]``     — 通用配置
     - ``[persona]``     — VTuber 人设
-    - ``[context]``     — ContextAssembler 配置（替代旧会话存储）
+    - ``[context]``     — ContextAssembler 配置
     - ``[events]``      — EventBus 事件历史
     - ``[dashboard]``   — Web Dashboard
     - ``[simulator]``   — 模拟直播间
     - ``[logging]``     — 日志
-    - ``[interceptors]`` — 事件拦截器配置（动态键；2.0.4 由 ``[pipelines]`` 正名）
-
-    v2.0.10 新增：
-    - ``[tts]``         — TTS 基础设施（开关/目标引擎/队列/超时）；由旧
-      ``tools.toml [tools.output.config]`` 的 ``render_timeout_ms`` 上移而来
-
-    v2.0.12 新增：
-    - ``[tts.<engine>]`` — 四个 TTS 引擎的连接/合成参数子段
-      （edge_tts / gptsovits / voicebox / omni_tts），由
-      ``tools.toml [tools.output.config.<engine>]`` 整体迁移而来；
-      TTS 彻底基础模块化后不再有工具子配置。
-
-    v2.0.0 删除：
-    - ``[maicore]``（旧 MaiCore WebSocket 连接，单进程下不再需要）
+    - ``[interceptors]`` — 事件拦截器配置（动态键）
+    - ``[tts]``         — TTS 基础设施（开关/目标引擎/队列/超时 + 引擎子段）
+    - ``[subtitle]``    — 字幕基础设施
     """
 
     meta: MetaConfig = Field(default_factory=MetaConfig, description="配置元数据")

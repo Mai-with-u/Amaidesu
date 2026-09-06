@@ -1,11 +1,11 @@
 """
-工具契约数据类（Wave 3 / §1.5 定案）
+工具契约数据类
 
 - 全部 ``slots=True`` 减少内存占用
 - 时刻/时长字段约定：``*_ms``（毫秒 int）；不在本模块涉及时间字段
 - 多模态结果：``ResultBlock(kind)`` 支持 "text" / "image"
 - ``kind``：sync / async（唯一判别维度）
-- ``provider``：builtin / game（来源溯源）；"mcp" 预留枚举值，v2 决策架构移除 MCP 桥接后暂无实现
+- ``provider``：builtin / game（来源溯源）；"mcp" 预留枚举值，暂无实现
 """
 
 from __future__ import annotations
@@ -13,10 +13,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional
 
-# 工具判别维度（§1.5）：sync（gather 等齐）/ async（fire-and-forget + 事件回传）
+# 工具判别维度：sync（gather 等齐）/ async（fire-and-forget + 事件回传）
 Kind = Literal["sync", "async"]
 
-# 工具来源溯源（§1.5 v2.17 定案，合并 MaiBot 的 provider_name+type 双字段）
+# 工具来源溯源：builtin（内置）/ game（游戏侧）/ mcp（预留）
 Provider = Literal["builtin", "game", "mcp"]
 
 # 多模态结果块种类

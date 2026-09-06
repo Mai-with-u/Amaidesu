@@ -262,19 +262,19 @@ class LipSyncProcessor:
             return
         self._last_update_time = now
 
-        # 1. 先衰减已有元音值，让嘴巴能在音节间隙闭上
+        # 先衰减已有元音值，让嘴巴能在音节间隙闭上
         #    使用可配置衰减系数，较慢衰减让元音嘴型更连续
         for vowel in self.current_vowel_values:
             self.current_vowel_values[vowel] *= self._vowel_decay
 
-        # 2. 更新检测到的元音（取较大值，保持瞬时响应）
+        # 更新检测到的元音（取较大值，保持瞬时响应）
         for vowel, value in vowel_values.items():
             smoothed = self._smoothing_factor * value + (1 - self._smoothing_factor) * self.current_vowel_values.get(
                 vowel, 0
             )
             self.current_vowel_values[vowel] = max(self.current_vowel_values[vowel], smoothed)
 
-        # 3. 静音检测：音量极低时直接闭嘴
+        # 静音检测：音量极低时直接闭嘴
         if volume < self._silence_threshold:
             if self.current_mouth_open > 0.02:
                 await self._set_parameter("MouthOpen", 0.0, weight=1)
@@ -283,31 +283,31 @@ class LipSyncProcessor:
             self.current_volume = volume
             return
 
-        # 4. 计算基于音量的张嘴幅度
+        # 计算基于音量的张嘴幅度
         #    使用幂曲线 + max_mouth_open 缩放，让嘴型更多分布在 0~0.5 区间，
         #    只有强音才接近最大张嘴，避免长时间大张。
         scaled_volume = min(1.0, volume * self._volume_gain)
         volume_open = (scaled_volume**self._power_curve) * self._max_mouth_open
 
-        # 5. 计算元音张嘴幅度，只取开口元音 A/O，并受音量抑制
+        # 计算元音张嘴幅度，只取开口元音 A/O，并受音量抑制
         vowel_open = max(
             self.current_vowel_values.get("A", 0),
             self.current_vowel_values.get("O", 0),
         )
         vowel_open *= self._vowel_open_weight * (0.3 + 0.7 * volume)
 
-        # 6. 结合音量和元音
+        # 结合音量和元音
         mouth_open = max(volume_open, vowel_open)
 
-        # 7. 低音量时额外衰减，让句子中的气口/停顿自然闭嘴
+        # 低音量时额外衰减，让句子中的气口/停顿自然闭嘴
         if volume < self._close_mouth_threshold:
             mouth_open *= 0.2 + 0.8 * (volume / self._close_mouth_threshold)
 
-        # 8. 限制最大张嘴幅度
+        # 限制最大张嘴幅度
         mouth_open = min(self._max_mouth_open, mouth_open)
         self._target_mouth_open = mouth_open
 
-        # 9. 平滑过渡：每帧向目标值插值，避免嘴型跳变
+        # 平滑过渡：每帧向目标值插值，避免嘴型跳变
         lerp_speed = self._mouth_open_lerp_speed
         # 闭嘴比张嘴稍快，让气口更干净
         if mouth_open < self.current_mouth_open:

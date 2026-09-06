@@ -1,13 +1,8 @@
-"""POC FileWatcher (based on MaiBot's file_watcher)
+"""文件监视器（watchfiles 的异步封装）
 
-Source of truth: E:\\01_Projects\\Code\\AI\\MaiBot\\MaiBot-v1.0.0\\src\\config\\file_watcher.py
-
-Adaptations for Amaidesu:
-- Use Amaidesu's logger (src.modules.logging.get_logger) instead of MaiBot's
-- Keep the public API identical so the POC test mirrors MaiBot behavior
-
-This module is a proof-of-concept for Windows compatibility verification.
-It is NOT integrated into ConfigService yet (that is Wave 2).
+提供文件/目录变更的订阅与回调分发：``FileChange`` 变更记录、
+``FileWatchSubscription`` 订阅句柄、``FileWatcher`` 监视器本体（含
+匹配过滤与回调失败统计）。尚未接入 ConfigService 的热重载链路。
 """
 
 from dataclasses import dataclass

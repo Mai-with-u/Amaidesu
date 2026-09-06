@@ -1,17 +1,16 @@
-"""Planner - 主播 Agent 主循环 / 决策核心（Wave 6 / §1.4）
+"""Planner - 主播 Agent 主循环 / 决策核心
 
 职责（Agent 内脏，**不是工具**）：
 - 判断当前弹幕批次是否值得主播介入（should_reply）
 - 产出 DecisionPlan：目标对象 / 话题摘要 / 回复指引 / 置信度
 - **不写台词**（那是 Replyer 的职责）
 
-核心契约（v2.0.6 B2 人设供应链修复后反转）：
+核心契约：
 1. **人设行为准则注入**：Planner prompt 注入 ``$behavior_style``（行动准则：何时参与聊天、
    如何观察局面、何时保持安静）——该字段来自 config/core.toml 的 [persona].behavior_style，
    由 StreamerAgent 装配时透传给 Planner。
 2. **身份/表达人设隔离**：Planner prompt **不传** ``$personality`` / ``$style_constraints`` /
-   ``$bot_name``——这三件套是身份与表达层，仅注入 Replyer（Stage 2）。这是 MaiBot
-   三层人格拆分（personality / reply_style / behavior_style）的"Amaidesu 映射"：
+   ``$bot_name``——这三件套是身份与表达层，仅注入 Replyer（表达引擎）。人设按三层拆分：
    personality + style_constraints = 表达侧（Replyer），behavior_style = 决策侧（Planner）。
 3. **快速模型**：使用 ``planner_llm``（默认 ``llm_fast``），与 Replyer 的
    ``replyer_llm``（默认 ``llm``）分离，避免共享客户端实例。
@@ -27,13 +26,8 @@
         ──▶ _clean_llm_json + json.loads
         ──▶ DecisionPlan（或 None）
 
-Wave 6 变更：
-- 移除 AmaidesuDecider 包裹层 → 直接作为 StreamerAgent 内部组件
-- 配置 schema 字段对齐 agents_schemas.StreamerAgentConfig（planner_llm 等）
-- 提示词内聚于本包 prompts/ 目录，键来自模板 frontmatter 的
-  ``name: amaidesu_planner``（原中央目录 decision/ 前缀已随 v2 内聚化移除）
-- v2.0.6：注入 behavior_style（决策侧）；personality/style_constraints/bot_name
-  仍仅由 Replyer 消费（表达侧）。
+提示词内聚于本包 prompts/ 目录，键来自模板 frontmatter 的
+``name: amaidesu_planner``。
 """
 
 from __future__ import annotations
@@ -95,13 +89,13 @@ class _PlannerConfig(BaseConfig):
 
 
 class Planner:
-    """主播 Agent Stage 1 决策核心：判断"要不要参与 + 如何参与"。
+    """主播 Agent 决策核心：判断"要不要参与 + 如何参与"。
 
     非线程安全；仅在 StreamerAgent 的单一 asyncio 事件循环内使用。
     通过 ``plan()`` 方法驱动，**不订阅 EventBus**——它是 Agent 内部子组件。
     """
 
-    #: Planner 专用的提示词模板名（v2，零人设注入）
+    #: Planner 专用的提示词模板名（零人设注入）
     TEMPLATE_NAME: str = "amaidesu_planner"
 
     def __init__(
@@ -128,12 +122,12 @@ class Planner:
             room_state: 直播间态势规则层实例（``RoomState``）
             capabilities_provider: 可选的能力提供者，用于向 prompt 注入可用动作清单。
                 None 时 prompt 的 action_list 为空串。
-            memory: §1.50 记忆后端（鸭子类型 ``MemoryProvider``）。``None`` 时记忆
+            memory: 记忆后端（鸭子类型 ``MemoryProvider``）。``None`` 时记忆
                 召回段落渲染为 ``（暂无）``，Planner 走无记忆决策路径。功能可关闭
                 而非崩溃友好——主控装配时未注入则 Planner 整体降级。
             recall_top_k: 每轮注入 prompt 的最大命中条数，默认 3。仅 Planner 内部
                 使用，不暴露用户配置（记忆质量先稳定再调参）。
-            behavior_style: v2.0.6 新增——人设行为准则（来自 [persona].behavior_style）。
+            behavior_style: 人设行为准则（来自 [persona].behavior_style）。
                 仅注入 Planner prompt 的 ``$behavior_style`` 变量，指导"何时发言 / 聊
                 什么话题 / 何时保持安静"等行动决策；不会反向泄露到 Replyer 表达侧。
                 缺省空串时模板会渲染为占位文本（不让 LLM 看到字面 ``$behavior_style``）。
@@ -156,7 +150,7 @@ class Planner:
         self._prompt_service = prompt_service
         self._room_state = room_state
         self._capabilities_provider = capabilities_provider
-        # §1.50 记忆后端与召回深度
+        # 记忆后端与召回深度
         self._memory = memory
         self._recall_top_k = recall_top_k
 
@@ -164,7 +158,7 @@ class Planner:
         # 缓存 stable_prefix_hash 做 LLM 缓存前缀命中）
         self._assembler = PlannerAssembler()
 
-        # v2.0.6 B2：决策侧人设准则存储。空串表示上层未注入（罕见：装配时 persona 段缺字段），
+        # 决策侧人设准则存储。空串表示上层未注入（罕见：装配时 persona 段缺字段），
         # 渲染时使用占位文本避免模板出现字面 ``$behavior_style``，行为退化为"无准则"。
         self._behavior_style: str = behavior_style or ""
 
@@ -222,13 +216,13 @@ class Planner:
         self.last_request_id = None
         self.last_failure = None
 
-        # 1. 组装上下文（v2.2：PlannerAssembler 单一装配路径）
+        # 组装上下文（PlannerAssembler 单一装配路径）
         snapshot = self._room_state.get_snapshot()
         danmaku_text = self._render_batch(batch)
         history_text = self._render_history(history)
         action_list = self._get_action_list()
 
-        # 2. 直播流窗口：历史在上、当前批在下（显式多对一，不强行一问一答）
+        # 直播流窗口：历史在上、当前批在下（显式多对一，不强行一问一答）
         recent_chat_parts: List[str] = []
         if history_text and history_text != "（暂无对话历史）":
             recent_chat_parts.append(history_text)
@@ -236,7 +230,7 @@ class Planner:
             recent_chat_parts.append(danmaku_text)
         recent_chat_window = "\n\n".join(recent_chat_parts) if recent_chat_parts else "（暂无）"
 
-        # 3. 直播间快照（EnvironmentBlock：分钟级缓存友好）
+        # 直播间快照（EnvironmentBlock：分钟级缓存友好）
         current_ms = now_ms()
         env_block = EnvironmentBlock(
             minute_bucket_ms=(current_ms // 60000) * 60000,
@@ -247,10 +241,10 @@ class Planner:
             key_changes=list(getattr(snapshot, "topics", []) or []),
         )
 
-        # 4. 记忆召回（§1.50）：recall(query, top_k) → 文本行
+        # 记忆召回：recall(query, top_k) → 文本行
         memory_recall_section = await self._recall_memory(snapshot, batch)
 
-        # 5. PlannerAssembler 输入（★ Planner 零人设承诺 → persona=""）
+        # PlannerAssembler 输入（★ Planner 零人设承诺 → persona=""）
         try:
             assembler_inputs = AssemblerInputs(
                 persona="",
@@ -272,9 +266,9 @@ class Planner:
             self.last_failure = f"assembler_failed: {e}"
             return None
 
-        # 6. 渲染 prompt（★ 四个变量：context_block / forced / proactive / behavior_style）
+        # 渲染 prompt（★ 四个变量：context_block / forced / proactive / behavior_style）
         #    forced / proactive 透传为字符串（"true"/"false"），对齐模板中的文档约定。
-        #    v2.0.6 B2：behavior_style 仅注入 Planner 决策侧（指导"何时发言/聊什么/何时沉默"），
+        #    behavior_style 仅注入 Planner 决策侧（指导"何时发言/聊什么/何时沉默"），
         #    personality/style_constraints/bot_name 仍仅由 Replyer 表达侧注入，
         #    身份/表达与行动准则分离。behavior_style 空串时使用占位文本避免字面 $behavior_style。
         behavior_style_render = self._behavior_style or "（未配置行动准则，请依据直播间态势与对话历史自行决策）"
@@ -291,7 +285,7 @@ class Planner:
             self.last_failure = f"prompt_render_failed: {e}"
             return None
 
-        # 3. 调用 LLM（★ 无 tools 参数）
+        # 调用 LLM（★ 无 tools 参数）
         try:
             response = await self._llm_service.chat(
                 prompt=prompt,
@@ -302,7 +296,7 @@ class Planner:
             self.last_failure = f"llm_error: {e}"
             return None
 
-        # 4. 提取文本内容（兼容 LLMResponse / str 两种返回形式）
+        # 提取文本内容（兼容 LLMResponse / str 两种返回形式）
         content = self._extract_content(response)
         if content is None:
             self.logger.warning("Planner LLM 返回空内容或调用失败（success=False）")
@@ -312,7 +306,7 @@ class Planner:
         self.last_raw_content = content
         self.last_request_id = getattr(response, "request_id", None) or None
 
-        # 5. 清理 + 解析 JSON → DecisionPlan
+        # 清理 + 解析 JSON → DecisionPlan
         cleaned = self._clean_llm_json(content)
         try:
             parsed = json.loads(cleaned)
@@ -406,7 +400,7 @@ class Planner:
         snapshot: RoomStateSnapshot,
         batch: List[Any],
     ) -> str:
-        """调 §1.50 记忆后端召回相关历史片段，格式化为 prompt 注入文本。
+        """调记忆后端召回相关历史片段，格式化为 prompt 注入文本。
 
         Query 组装策略（任务约定）：
         - 基础 = RoomState.topic_summary（非空时）
@@ -567,7 +561,7 @@ class Planner:
 
         从 capabilities_provider 惰性查询；无 provider 或查询失败时返回空串
         （prompt 模板中 ``$action_list`` 会被 ``render_safe`` 保留为字面子串，
-        但 Planner 的模板 v2 未使用该变量，空串足够）。
+        但 Planner 的模板未使用该变量，空串足够）。
 
         Returns:
             动作清单文本；无可用动作时返回空串
@@ -591,10 +585,8 @@ class Planner:
     def _clean_llm_json(raw_output: str) -> str:
         """清理 LLM 返回的 JSON 字符串。
 
-        三步清理（与原 Planner._clean_llm_json 一致）：
-        1. 剥离 `````json`` / ``````` 代码块包裹
-        2. 截取首个 ``{`` 到末个 ``}`` 之间的内容（去掉 JSON 前后的解释文字）
-        3. 修复尾随逗号（``,}`` → ``}``，``,]`` → ``]``）
+        清理步骤：剥离 `````json`` / ``````` 代码块包裹、截取首个 ``{`` 到末个 ``}``
+        之间的内容（去掉 JSON 前后的解释文字）、修复尾随逗号（``,}`` → ``}``，``,]`` → ``]``）。
 
         Args:
             raw_output: LLM 原始返回文本

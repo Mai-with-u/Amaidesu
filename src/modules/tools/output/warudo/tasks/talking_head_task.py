@@ -1,7 +1,6 @@
 """
 Warudo TalkingHeadTask - 说话时的随机头部动作任务
 
-迁移自旧插件 plugins_backup/warudo/small_actions/talking_head.py。
 当 is_talking=True 时,周期性发送带轻微噪声的正弦波头部位置,
 模拟人说话时的自然头部微动。停止说话时回归零位。
 

@@ -1,6 +1,4 @@
-# Bilibili官方WebSocket客户端（v2 迁移）
-# 迁移自 src/stages/input/collectors/bili_danmaku_official/client/websocket_client.py
-# 网络层 verbatim —— 仅迁移位置与 import 路径
+# Bilibili官方WebSocket客户端
 
 from __future__ import annotations
 
@@ -25,8 +23,8 @@ from .proto import Proto
 # 禁用HTTPS证书警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# B站官方 WebSocket 心跳间隔（秒）：平台要求每 30s 发一次心跳保活
-# 实测 B 站服务器约 10s 无活动即关闭连接，故设为 5s 留足余量
+# B站官方 WebSocket 心跳间隔（秒）：平台要求每 30s 心跳保活；
+# 服务器约 10s 无活动即断连，故设 5s 留足余量
 _WS_HEARTBEAT_INTERVAL_S = 5
 _APP_HEARTBEAT_INTERVAL_S = 20
 

@@ -1,9 +1,9 @@
 """
-ContextAssembler —— 纯函数上下文组装（Wave 3 / §1.44）
+ContextAssembler —— 纯函数上下文组装
 
 ## 定位
 - **纯函数组件**（无循环/无定时/无 LLM，被 Planner 每轮调用）
-- 与 PromptManager 同级被调服务层（不取代旧 ContextService）
+- 与 PromptManager 同级被调服务层
 - 组装顺序：稳定 → 动态（缓存前缀优先）
 - 时间块分钟级 + 放尾部
 - 直播流非对话历史（多对一，不强行"一问一答"）
@@ -106,7 +106,7 @@ class AssemblerInputs:
     recent_chat_window: str = ""  # 最近一段时间窗口内的直播聊天（多对一流）
     environment: Optional[EnvironmentBlock] = None
     working_memory: Optional[WorkingMemoryTrace] = None
-    memory_recall_section: str = ""  # §1.50 记忆召回面（ContextAssembler 内由 memory.recall 取得）
+    memory_recall_section: str = ""  # 记忆召回面（由 memory.recall 取得）
     reply_intent: str = ""  # Replyer 专用：当前发言意图
     topic_subset: str = ""  # Replyer 专用：相关话题子集
 
@@ -121,7 +121,7 @@ class AssemblerInputs:
 
 @dataclass(slots=True)
 class _HashBuffer:
-    """轻量 stable 段 hash 计算（无需外部库；DX 算法足够用于缓存 hint）"""
+    """轻量 stable 段 hash 计算（无需外部库；精度足够用于缓存前缀 hint）"""
 
     state: int = 5381
 
@@ -143,16 +143,16 @@ class ContextAssembler:
 
 
 class PlannerAssembler(ContextAssembler):
-    """Planner 全量组装器（§1.44）
+    """Planner 全量组装器
 
-    顺序（稳定 → 动态）：
-    1. system 人格（stable）
-    2. 工具定义（stable）
-    3. 环节描述（stable）
-    4. 时间线摘要（stable）
-    5. 直播流历史窗口（stable 缓存前缀当窗口期内）
-    6. 直播间快照（dynamic）
-    7. 工作记忆（dynamic）
+    组装顺序（稳定 → 动态）：
+    - system 人格（stable）
+    - 工具定义（stable）
+    - 环节描述（stable）
+    - 时间线摘要（stable）
+    - 直播流历史窗口（窗口期内可作缓存前缀）
+    - 直播间快照（dynamic）
+    - 工作记忆（dynamic）
     """
 
     agent_kind = "planner"
@@ -160,7 +160,7 @@ class PlannerAssembler(ContextAssembler):
     def assemble(self, inputs: AssemblerInputs) -> Snapshot:
         sections: List[AssembledSection] = []
 
-        # 1. system 人格
+        # system 人格
         sections.append(
             AssembledSection(
                 title="系统人格",
@@ -169,7 +169,7 @@ class PlannerAssembler(ContextAssembler):
             )
         )
 
-        # 2. 工具定义
+        # 工具定义
         sections.append(
             AssembledSection(
                 title="可用工具",
@@ -178,7 +178,7 @@ class PlannerAssembler(ContextAssembler):
             )
         )
 
-        # 3. 环节描述
+        # 环节描述
         sections.append(
             AssembledSection(
                 title="环节描述",
@@ -187,7 +187,7 @@ class PlannerAssembler(ContextAssembler):
             )
         )
 
-        # 4. 时间线摘要
+        # 时间线摘要
         sections.append(
             AssembledSection(
                 title="时间线摘要",
@@ -196,7 +196,7 @@ class PlannerAssembler(ContextAssembler):
             )
         )
 
-        # 5. 直播流窗口
+        # 直播流窗口
         sections.append(
             AssembledSection(
                 title="直播流（窗口）",
@@ -205,7 +205,7 @@ class PlannerAssembler(ContextAssembler):
             )
         )
 
-        # 6. 直播间快照（环境）
+        # 直播间快照（环境）
         env_body = _render_environment(inputs.environment)
         sections.append(
             AssembledSection(
@@ -215,7 +215,7 @@ class PlannerAssembler(ContextAssembler):
             )
         )
 
-        # 7. 工作记忆
+        # 工作记忆
         sections.append(
             AssembledSection(
                 title="工作记忆",
@@ -224,7 +224,7 @@ class PlannerAssembler(ContextAssembler):
             )
         )
 
-        # 8. 记忆召回面（§1.50）
+        # 记忆召回面
         sections.append(
             AssembledSection(
                 title="记忆召回",
@@ -291,7 +291,7 @@ def _render_environment(env: Optional[EnvironmentBlock]) -> str:
 
 
 def _render_working_memory(wm: Optional[WorkingMemoryTrace]) -> str:
-    """渲染工作记忆（本轮工具链——§1.51 归一化）。"""
+    """渲染工作记忆（本轮工具链）。"""
     if wm is None or (not wm.tool_call_pairs and not wm.pending_tool_calls):
         return "（空）"
     lines: List[str] = []

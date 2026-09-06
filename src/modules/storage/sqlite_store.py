@@ -14,14 +14,6 @@ SQLiteStore —— 异步友好的 SQLite 访问层
   推荐复用 ``sqlite_store()`` 工厂，``SQLiteStore`` 也可独立实例化）
 - 所有方法都是 ``async``
 - 真同步调用放在 ``_run_in_executor`` 内部（防漏原则）
-
-## 验收
-- 测试 ``tests/modules/storage/`` 覆盖：
-  - 13 张业务表 + 模块私有表全部创建（schema 统一建表）
-  - schema_migrations 记录并单调推进到当前版本（迁移回调幂等）
-  - simulated 列存在且默认 False
-  - live_sessions 场次开行/结账/级联删除、llm_usage 插入等领域方法
-  - ``table_exists`` / ``list_tables`` / ``is_healthy``
 """
 
 from __future__ import annotations
@@ -168,7 +160,7 @@ class SQLiteStore:
     async def assert_schema_ready(self) -> None:
         """断言 13 张表 + schema_migrations 全部存在；缺一即抛 RuntimeError。
 
-        用于启动健康检查；不通过即阻止启动（与 MaiBot 行为一致）。
+        用于启动健康检查；不通过即阻止启动。
         """
         actual = set(await self.list_tables())
         expected = set(list_expected_tables())
@@ -245,7 +237,7 @@ class SQLiteStore:
         await self._run_in_executor(_exec)
 
     # -------------------- 领域写入方法 --------------------
-    # 三表均带 simulated 贯穿列（schema.py:149/163/177），详见 schema.py "命名硬规则"。
+    # 三表均带 simulated 贯穿列，详见 schema.py "命名硬规则"。
     # 这里只承接 RoomMessagePayload → 表的写入入口；表结构权威在 schema.py，本层不复制。
 
     async def insert_live_chat(
@@ -413,7 +405,7 @@ class SQLiteStore:
         return await self._run_in_executor(_exec)
 
     # -------------------- live_sessions 场次状态 --------------------
-    # 场次行由 LiveSessionManager（src/modules/session/）创建与结账：一行 =
+    # 场次行由 LiveSessionManager 创建与结账：一行 =
     # 一场直播（有开始/结束边界），主键 AUTOINCREMENT；房间/频道是普通属性列。
     # 本层只提供行级领域方法，不持有"当前场次"状态。
 
@@ -1035,12 +1027,12 @@ class SQLiteStore:
 
     def _apply_schema_blocking(self) -> None:
         """同步执行 schema 应用；由 ``initialize()`` 在 executor 内调度。"""
-        # 1. 应用 DDL（IF NOT EXISTS 幂等，含最新列）
+        # 应用 DDL（IF NOT EXISTS 幂等，含最新列）
         with self._manager.transaction() as conn:
             conn.executescript(build_schema_sql())
 
-        # 2. 推进版本：执行 [current+1, SCHEMA_VERSION] 区间内的迁移回调
-        #    （回调原地修改、幂等），随后写入版本记录
+        # 推进版本：执行 [current+1, SCHEMA_VERSION] 区间内的迁移回调
+        # （回调原地修改、幂等），随后写入版本记录
         with self._manager.transaction() as conn:
             existing = conn.execute("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").fetchone()
             current_version = int(existing["version"]) if existing else 0

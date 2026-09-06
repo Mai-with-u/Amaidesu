@@ -1,10 +1,7 @@
 """
-ScreenChangeCollector —— 屏幕变化采集器（v2 / Wave 5 迁移）
+ScreenChangeCollector —— 屏幕变化采集器
 
-迁移自 ``src/stages/input/collectors/read_pingmu/read_pingmu_collector.py``：
-- 类名：``ReadPingmuCollector`` → ``ScreenChangeCollector``
-- 模块：``read_pingmu`` → ``screen``（去拼音）
-- 组合：``ScreenAnalyzer``（差异检测）+ ``ScreenReader``（VLM 分析 + 缓存去重）verbatim
+- 组合：``ScreenAnalyzer``（差异检测）+ ``ScreenReader``（VLM 分析 + 缓存去重）
 - 继承：``BaseCollector``（流型感知者，主动推事件）
 - 保留：``collect()`` AsyncIterator 出口兼容旧 InputCollectorManager 过渡期
 """
@@ -45,10 +42,9 @@ class ScreenChangeCollector(BaseCollector):
     class ConfigSchema(BaseConfig):
         """屏幕变化采集器配置
 
-        v2.0.9 收编：移除 ``api_key`` / ``base_url`` / ``model_name`` 三个字段。
-        原字段由 ScreenReader 自带 aiohttp 自管 VLM 调用，现统一改为
-        :class:`LLMManager.chat_vision(client_type="vlm")`；key/model/重试/日志
-        全部走 ``config/model.toml`` 的 ``[vlm]`` profile + ``[[llm_providers]]`` 池。
+        VLM 调用统一走 :class:`LLMManager.chat_vision(client_type="vlm")`；
+        key/model/重试/日志全部走 ``config/model.toml`` 的 ``[vlm]`` profile +
+        ``[[llm_providers]]`` 池，本 Schema 不含 VLM 连接字段。
         """
 
         screenshot_interval: float = Field(default=0.3, description="截图间隔（秒）", ge=0.1)
@@ -67,8 +63,8 @@ class ScreenChangeCollector(BaseCollector):
         self.config = config or {}
         self.logger = get_logger(self.__class__.__name__)
         self.typed_config = self.ConfigSchema.from_dict(self.config)
-        # v2.0.9：llm_manager 注入 ScreenReader；为 None 时走"跳过 VLM 调用"降级语义
-        # （仅缓存去重生效，与旧版 api_key 为空等价）。
+        # llm_manager 注入 ScreenReader；为 None 时走"跳过 VLM 调用"降级语义
+        # （仅缓存去重生效）。
         self._llm_manager = llm_manager
 
         self.screen_analyzer: Optional[ScreenAnalyzer] = None

@@ -1,7 +1,6 @@
 """
 Warudo 字幕 HTML/CSS/JS 模板
 
-迁移自旧插件 plugins_backup/warudo/talk_subtitle.py 的 reply_index_handler。
 内嵌为 Python 常量,避免引入静态文件依赖。
 
 特性:

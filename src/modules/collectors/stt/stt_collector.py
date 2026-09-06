@@ -3,8 +3,7 @@ STTCollector —— 语音转文字采集器
 
 - 继承 ``BaseCollector``（流型感知者）
 - 保留 ``collect()`` AsyncIterator 出口兼容旧 InputCollectorManager
-
-verbatim 边界：讯飞 WebSocket 流式 ASR、Silero VAD、音频采集 —— 未改动。
+- 技术栈：讯飞 WebSocket 流式 ASR、Silero VAD、音频采集
 """
 
 from __future__ import annotations

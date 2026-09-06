@@ -6,16 +6,15 @@
 - 与 TTS 引擎解耦：TTS 引擎自行发布 ``tts.utterance.*`` 生命周期事件，
   本队列不参与事件发布，避免越权。
 
-设计原则（与 StreamerAgent 发言管线约束一致）：
+设计原则（StreamerAgent 发言管线约束）：
 - 队列溢出采用"丢最旧"策略（FIFO 满时先弹队首再入队）
 - 单 worker 串行保证播放顺序，避免叠加/打断
 - 入队即返回（fire-and-forget），不阻塞上游决策循环的 tick 节奏
 - 单 utterance 超时由 `render_timeout_ms` 看门狗保护（防止合成/播放卡死拖垮队列）
 - 丢弃的 utterance 不进入 TTS 引擎，自然不会触发 ``tts.utterance.*`` 事件
 
-约束（AGENTS.md）：
+约定：
 - 时刻字段使用 int 毫秒；时长字段命名 ``_ms``
-- 不引用文档章节编号 / ADR 编号
 - 内部函数就近组织，避免超长单文件
 """
 

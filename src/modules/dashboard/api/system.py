@@ -1,12 +1,7 @@
 """
 系统状态 API
 
-提供系统运行状态的查询接口（v2 适配 Wave U1 / B1-B2）。
-
-v2 变化：
-- 移除 input/decision/output 阶段字段（旧版引用 v1 manager 但从未注入）
-- 改为 groups: {collectors, agents, tools} + event_bus: {total_events} 视图
-- 删除 /api/v1/system/stats 端点（与 SystemStatsResponse 一并废弃）
+提供系统运行状态的查询接口。
 """
 
 import sys

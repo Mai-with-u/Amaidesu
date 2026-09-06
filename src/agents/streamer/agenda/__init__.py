@@ -1,7 +1,6 @@
 """主播 Agent Agenda（节目单）子系统子包。
 
-Agenda 子系统是主播 Agent 的**内部契约与编排**（不跨 Agent 共享、不注册为工具），
-机制文档见 ``docs/architecture/agenda-mechanism.md``。
+Agenda 子系统是主播 Agent 的**内部契约与编排**（不跨 Agent 共享、不注册为工具）。
 
 模块按数据流分层：
 - ``agenda``          - 节目单数据契约（Agenda/AgendaSegment/AgendaBranch + TOML 解析）

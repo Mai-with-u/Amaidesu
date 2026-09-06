@@ -1,14 +1,14 @@
-"""配置升级钩子系统（v2.0.0）
+"""配置升级钩子系统
 
 提供版本驱动的配置迁移机制。
 当配置版本跨越特定版本号时，自动执行对应的迁移函数。
 
 使用方式：
-    1. 定义迁移函数：def _my_migrate(data: dict) -> list[str]
-    2. 注册钩子：在 CONFIG_UPGRADE_HOOKS 中添加 ConfigUpgradeHook
-    3. 启动时自动触发：apply_upgrade_hooks(data, file, old_ver, new_ver)
+    定义迁移函数（``def _my_migrate(data: dict) -> list[str]``），
+    在 CONFIG_UPGRADE_HOOKS 中注册 ConfigUpgradeHook，
+    启动时由 apply_upgrade_hooks(data, file, old_ver, new_ver) 自动触发。
 
-AGENTS.md 钩子契约：
+钩子契约：
 - **原地修改**：hook 接收 dict 并直接修改，不返回新对象
 - **幂等**：重复执行结果一致（首次执行后旧值已不存在，再次执行无事发生）
 - **返回变更路径列表**：hook 返回本次修改的字段路径列表
@@ -54,12 +54,12 @@ class UpgradeResult:
 
 
 # ---------------------------------------------------------------------------
-# 0.5.4 → 1.0.0 阶段迁移 hooks（沿用历史 mainosaba 改名）
+# 早期阶段迁移 hooks
 # ---------------------------------------------------------------------------
 
 
 def _migrate_mainosaba_to_text_adv_game(data: dict[str, Any]) -> list[str]:
-    """兼容期 hook（旧 input.toml 已废弃；v2.0.0 此函数不再被新文件触发，保留供回滚）。
+    """兼容期 hook（保留供回滚，现有配置体系不再触发）。
 
     - ``[collectors]`` 段键 ``mainosaba`` → ``text_adv_game``（子配置整体保留）
     - ``[collectors].enabled`` 列表内 ``mainosaba`` → ``text_adv_game``
@@ -80,16 +80,15 @@ def _migrate_mainosaba_to_text_adv_game(data: dict[str, Any]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# 2.0.1 增量修复 hooks（Wave 6 收尾）
+# 增量修复 hooks
 # ---------------------------------------------------------------------------
 
 
 def _migrate_core_2_0_1(data: dict[str, Any]) -> list[str]:
-    """core.toml 2.0.1：清理 Wave 6 删除的 text_adv_game 段。
+    """core.toml 2.0.1：剥离 text_adv_game 残留段。
 
-    Wave 6 删除了 src/stages/input/collectors/text_adv_game/，但旧用户
-    config.toml 可能仍有 [input.text_adv_game] / [input.collectors.text_adv_game]
-    残留字段。此 hook 主动剥离这些残留（避免 schema 校验失败）。
+    旧配置文件可能仍残留 [input.text_adv_game] / [input.collectors.text_adv_game]
+    字段，此 hook 主动剥离（避免 schema 校验失败）。
 
     原地修改、幂等，返回变更路径列表。
     """
@@ -102,11 +101,9 @@ def _migrate_core_2_0_1(data: dict[str, Any]) -> list[str]:
 
 
 def _migrate_agents_2_0_1(data: dict[str, Any]) -> list[str]:
-    """agents.toml 2.0.1：移除旧 reply_probability 字段（Wave 6 重构后已不再使用）。
+    """agents.toml 2.0.1：移除 reply_probability 死字段。
 
-    原 StreamerAgentConfig 早期有 reply_probability 字段（被 Planner 决策代替），
-    v6 重新设计后该字段已删除。旧配置文件若残留 reply_probability 字段，
-    主动剥离（保留其他字段）。
+    该字段已由 Planner 决策代替，旧配置文件若残留则主动剥离（保留其他字段）。
 
     原地修改、幂等，返回变更路径列表。
     """
@@ -119,10 +116,9 @@ def _migrate_agents_2_0_1(data: dict[str, Any]) -> list[str]:
 
 
 def _migrate_model_2_0_3(data: dict[str, Any]) -> list[str]:
-    """model.toml 2.0.3：修复无效 provider 引用（自包含，不依赖 2.0.0 钩子）。
+    """model.toml 2.0.3：修复无效 provider 引用。
 
-    版本门控下 2.0.0 的 ``llm_outline → llm_agenda`` 改名钩子不会对已
-    越过 2.0.0 的文件再触发；本钩子自行处理改名 + 将无效/缺失的
+    自包含钩子：自行处理 ``llm_outline → llm_agenda`` 改名，并将无效/缺失的
     profile.provider（如残留默认值 "default"）重写为首个可用 provider。
 
     无效引用会导致 Schema 校验失败 → 写回跳过 → 漂移修复永远无法落盘。
@@ -156,10 +152,10 @@ def _migrate_model_2_0_3(data: dict[str, Any]) -> list[str]:
 
 
 def _migrate_agents_2_0_3(data: dict[str, Any]) -> list[str]:
-    """agents.toml 2.0.3：过滤失效 Agent 类型并剥离旧决策时代子节。
+    """agents.toml 2.0.3：过滤失效 Agent 类型并剥离无 Schema 承接的子节。
 
-    旧配置含 "maibot" 等 enabled 值与 ``[agents.llm]/[agents.maibot]``
-    等子节；前者不在 AgentType Literal 内，后者违反 extra="forbid"，
+    残留的 "maibot" 等 enabled 值不在 AgentType Literal 内，
+    ``[agents.llm]/[agents.maibot]`` 等子节违反 extra="forbid"，
     均导致 Schema 校验失败并回退 raw dict 加载。过滤后列表为空时
     回退默认 ["streamer"]，保证应用开箱可用。
 
@@ -183,10 +179,9 @@ def _migrate_agents_2_0_3(data: dict[str, Any]) -> list[str]:
 
 
 def _migrate_core_2_0_2(data: dict[str, Any]) -> list[str]:
-    """core.toml 2.0.2：移除 ``[mcp]`` 段（MCP 桥接服务已随 v2 决策架构移除）。
+    """core.toml 2.0.2：移除 ``[mcp]`` 死段。
 
-    MCP 服务依赖的 /api/v1/maibot/action 端点与 MaiBot 桥接一并删除，
-    配置段失去消费方，主动剥离避免死配置漂移告警。
+    MCP 桥接服务已不存在，配置段失去消费方，主动剥离避免死配置漂移告警。
 
     原地修改、幂等，返回变更路径列表。
     """
@@ -198,13 +193,13 @@ def _migrate_core_2_0_2(data: dict[str, Any]) -> list[str]:
 
 
 def _migrate_core_2_0_4(data: dict[str, Any]) -> list[str]:
-    """core.toml 2.0.4：``[pipelines]`` 正名为 ``[interceptors]``（§1.46.1 收官）。
+    """core.toml 2.0.4：``[pipelines]`` 正名为 ``[interceptors]``。
 
-    旧结构为阶段嵌套（input/output 子层），新结构拍平为拦截器名直挂：
+    将阶段嵌套结构（input/output 子层）拍平为拦截器名直挂：
     - 取 ``pipelines.input`` 子节作为拦截器集合（rate_limit / similar_filter）
-    - 兼容历史上直接挂在 pipelines 根的扁平键（v1 遗留形态）
-    - 丢弃 ``output`` 子节（OutputPipeline 已删；敏感词净化归 Replyer）
-    - ``priority`` 字段随管道调度语义废弃，剥离
+    - 兼容直接挂在 pipelines 根的扁平键
+    - 丢弃 ``output`` 子节（敏感词净化归 Replyer）
+    - 剥离随管道调度语义废弃的 ``priority`` 字段
     - 已存在的 ``[interceptors]`` 键保留，迁移项以 setdefault 并入
 
     原地修改、幂等（重复执行时 ``pipelines`` 已不存在，无事发生），
@@ -238,9 +233,9 @@ def _migrate_core_2_0_4(data: dict[str, Any]) -> list[str]:
 
 
 def _strip_pipelines_2_0_4(data: dict[str, Any]) -> list[str]:
-    """input.toml / output.toml 2.0.4：剥离遗留 ``[pipelines]`` 死段。
+    """input.toml / output.toml 2.0.4：剥离 ``[pipelines]`` 死段。
 
-    管道配置已正名至 core.toml ``[interceptors]``；阶段文件中的残留段无
+    管道配置归 core.toml ``[interceptors]``；阶段文件中的残留段无
     Schema 字段承接（extra="forbid"），不剥离将导致永久验证失败循环。
 
     原地修改、幂等，返回变更路径列表。
@@ -253,19 +248,18 @@ def _strip_pipelines_2_0_4(data: dict[str, Any]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# 2.0.0 跨域迁移 hooks（核心改造）
+# 跨域迁移 hooks
 # ---------------------------------------------------------------------------
 
 
 def _migrate_core_2_0_0(data: dict[str, Any]) -> list[str]:
     """core.toml 2.0.0：删 ``[maicore]`` + 改造 ``[context]`` 为 ContextAssembler 配置。
 
-    旧 [maicore] 段（host/port/token）→ 2.0.0 单进程不需要 MaiCore 连接，
-    直接删除（字段已无人引用，旧客户端连接走 [mcp] 段）。
+    [maicore] 段（host/port/token）：单进程无 MaiCore 连接，直接删除。
 
-    旧 [context] 段（storage_type/max_messages_per_session/...）→ 新
-    [context] 段（enabled/memory_recall_viewers/memory_recall_long_term/
-    cache_ttl_ms），旧字段全部丢弃（语义已变：会话存储职责下放给 memory 后端）。
+    [context] 段（storage_type/max_messages_per_session/...）重建为
+    ContextAssembler 配置（enabled/memory_recall_viewers/memory_recall_long_term/
+    cache_ttl_ms），原字段全部丢弃（会话存储职责归 memory 后端）。
 
     原地修改、幂等，返回变更路径列表。
     """
@@ -322,9 +316,9 @@ def _migrate_model_2_0_0(data: dict[str, Any]) -> list[str]:
 def _migrate_tools_2_0_0(data: dict[str, Any]) -> list[str]:
     """tools.toml 2.0.0：补齐缺失的默认结构。
 
-    旧 [collectors]/[handlers] 段通过 CrossFileMigration 合并到
+    [collectors]/[handlers] 段由 CrossFileMigration 合并到
     ``[tools.perception.config]`` / ``[tools.output.config]``，本 hook 仅负责
-    兜底：用户全新升级时若 tools.toml 已生成但无任何工具包，补充 enabled 列表
+    兜底：若 tools.toml 已生成但无任何工具包，补充 enabled 列表
     和默认结构。
 
     原地修改、幂等。
@@ -351,9 +345,8 @@ def _migrate_tools_2_0_0(data: dict[str, Any]) -> list[str]:
 def _migrate_agents_2_0_0(data: dict[str, Any]) -> list[str]:
     """agents.toml 2.0.0：补齐缺失的默认结构。
 
-    旧 [deciders] 段通过 CrossFileMigration 合并到 ``[agents]`` 段，本 hook 负责：
-    1. ``enabled`` 列表兜底（含旧 enabled 列表的迁移项）
-    2. 默认 streamer 子配置
+    [deciders] 段由 CrossFileMigration 合并到 ``[agents]`` 段，本 hook 负责
+    ``enabled`` 列表兜底与默认 streamer 子配置补齐。
 
     原地修改、幂等。
     """
@@ -389,8 +382,8 @@ def _migrate_agents_2_0_0(data: dict[str, Any]) -> list[str]:
 def _migrate_memory_2_0_0(data: dict[str, Any]) -> list[str]:
     """memory.toml 2.0.0：兜底 backend 默认值。
 
-    新文件首次生成时 backend="simple" 已写入，但用户从旧 config.toml 迁移时
-    可能没有 [memory] 段。这里补默认。
+    首次生成的文件已写入 backend="simple"；由旧版单文件配置迁移而来的
+    文件可能没有 [memory] 段，这里补默认。
 
     原地修改、幂等。
     """
@@ -463,9 +456,9 @@ def _migrate_background_2_0_0(data: dict[str, Any]) -> list[str]:
 def _migrate_tools_2_0_9(data: dict[str, Any]) -> list[str]:
     """tools.toml 2.0.9：剥离 ``[tools.perception.config.read_pingmu]`` 死键。
 
-    审计 D1：VLM 收编后，ScreenChangeCollector.ConfigSchema 移除 ``api_key`` /
-    ``base_url`` / ``model_name`` 三字段（统一走 ``model.toml`` 的 ``[vlm]`` profile
-    + ``[[llm_providers]]`` 池）。原配置残留会触发 Schema 漂移告警，且永远无人读取。
+    ScreenChangeCollector.ConfigSchema 不含 ``api_key`` / ``base_url`` /
+    ``model_name`` 三字段（VLM 统一走 ``model.toml`` 的 ``[vlm]`` profile
+    + ``[[llm_providers]]`` 池）。残留配置会触发 Schema 漂移告警，且无人读取。
 
     路径钻取：``[tools] → [perception] → [config] → [read_pingmu]``；任一中间层
     类型错误（应 dict）则放弃该路径返回，保持其他字段完整。
@@ -500,11 +493,11 @@ def _migrate_tools_2_0_9(data: dict[str, Any]) -> list[str]:
 
 
 def _migrate_tools_2_0_10(data: dict[str, Any]) -> list[str]:
-    """tools.toml 2.0.10：剥离 TTS 基础设施重塑遗留的 9 个死字段。
+    """tools.toml 2.0.10：剥离 TTS 迁走后遗留的 9 个死字段。
 
-    TTS 基础设施从 [tools.output.config] 提到 core.toml [tts]，原属
-    ``OutputHandlersConfig`` 的 3 个调度字段与 4 个 Provider 的 ``output_device_name``
-    以及 OmniTTS 的 ``use_vts_lip_sync`` / ``use_subtitle`` 均已无人读取，统一切除。
+    TTS 配置归 core.toml [tts] 后，原属 ``OutputHandlersConfig`` 的 3 个调度
+    字段、4 个 Provider 的 ``output_device_name`` 以及 OmniTTS 的
+    ``use_vts_lip_sync`` / ``use_subtitle`` 均无人读取，统一切除。
 
     ``render_timeout_ms`` 由 CrossFileMigration 移至 core.toml ``[tts]``，不在本钩子
     处理范围内。
@@ -551,9 +544,9 @@ def _migrate_tools_2_0_10(data: dict[str, Any]) -> list[str]:
 def _migrate_tools_2_0_14(data: dict[str, Any]) -> list[str]:
     """tools.toml 2.0.14：移除 MockCollector 配置段与 enabled 引用。
 
-    回放语义收敛进 SimulatorService（mode=replay），MockCollector 整体删除，
+    回放由 SimulatorService（mode=replay）承担，MockCollector 不复存在，
     ``[tools.perception.config.mock_danmaku]`` 子段及 enabled 列表中的
-    ``"mock_danmaku"`` 引用成为死配置——不清除会在每次启动时告警且永远无人读取。
+    ``"mock_danmaku"`` 引用成为死配置——不清除会在每次启动时告警且无人读取。
 
     原地修改、幂等（重复执行时该段已不存在，无事发生），返回变更路径列表。
     """
@@ -586,8 +579,8 @@ def _migrate_tools_2_0_14(data: dict[str, Any]) -> list[str]:
 def _migrate_core_2_0_14(data: dict[str, Any]) -> list[str]:
     """core.toml 2.0.14：移除 simulator.stats_persistence 死字段。
 
-    模拟统计是进程内开发观测，持久化统计无跨场分析需求
-    （跨场分析走 live_chat/gifts 表 + simulated 过滤），字段从未有实现。
+    模拟统计是进程内开发观测，跨场分析走 live_chat/gifts 表 + simulated 过滤，
+    该字段无消费方。
 
     原地修改、幂等，返回变更路径列表。
     """
@@ -608,9 +601,9 @@ def _migrate_tools_2_0_15(data: dict[str, Any]) -> list[str]:
     """tools.toml 2.0.15：清理输出/感知白名单与子段中的僵尸条目。
 
     ``[tools.output.config]`` / ``[tools.perception.config]`` 是 free-form dict，
-    Schema 漂移检测不剥离，僵尸条目会永久滞留用户文件，本钩子一次性收口：
-    - output enabled 中的 ``"subtitle"``：字幕已提升为核心基础设施
-      （core.toml [subtitle]），不再经工具池装配；
+    Schema 漂移检测不剥离，僵尸条目会永久滞留用户文件，本钩子统一清除：
+    - output enabled 中的 ``"subtitle"``：字幕是核心基础设施
+      （core.toml [subtitle]），不经工具池装配；
     - output 死子段 ``debug_console`` / ``sticker`` / ``remote_stream``：
       消费代码已删除或退化为纯类型桩；
     - output 子段 ``obs_control`` 改名 ``obs``：与 bootstrap 装配键及
@@ -671,13 +664,13 @@ def _migrate_tools_2_0_15(data: dict[str, Any]) -> list[str]:
 
 
 CONFIG_UPGRADE_HOOKS: tuple[ConfigUpgradeHook, ...] = (
-    # 0.5.4 历史钩子（保留供回滚，新文件不再触发）
+    # 历史钩子（保留供回滚，新文件不再触发）
     ConfigUpgradeHook(
         target_version="0.5.4",
         config_file="input.toml",
         migrate=_migrate_mainosaba_to_text_adv_game,
     ),
-    # 2.0.1 Wave 6 收尾清理（清理 text_adv_game 残留字段 + 移除 reply_probability）
+    # 增量修复钩子（text_adv_game 残留 + reply_probability 死字段 + pipelines 正名）
     ConfigUpgradeHook(
         target_version="2.0.1",
         config_file="core.toml",
@@ -703,7 +696,7 @@ CONFIG_UPGRADE_HOOKS: tuple[ConfigUpgradeHook, ...] = (
         config_file="agents.toml",
         migrate=_migrate_agents_2_0_3,
     ),
-    # 2.0.4 管道→事件拦截器正名收官（§1.46.1）
+    # 管道→事件拦截器正名
     ConfigUpgradeHook(
         target_version="2.0.4",
         config_file="core.toml",
@@ -719,7 +712,7 @@ CONFIG_UPGRADE_HOOKS: tuple[ConfigUpgradeHook, ...] = (
         config_file="output.toml",
         migrate=_strip_pipelines_2_0_4,
     ),
-    # 2.0.0 七文件全量改造
+    # 七文件默认结构兜底
     ConfigUpgradeHook(
         target_version="2.0.0",
         config_file="core.toml",
@@ -755,19 +748,19 @@ CONFIG_UPGRADE_HOOKS: tuple[ConfigUpgradeHook, ...] = (
         config_file="background.toml",
         migrate=_migrate_background_2_0_0,
     ),
-    # 2.0.9 D1 VLM 收编：剥离 [tools.perception.config.read_pingmu] 的 VLM 自管字段
+    # 剥离 [tools.perception.config.read_pingmu] 的 VLM 自管字段
     ConfigUpgradeHook(
         target_version="2.0.9",
         config_file="tools.toml",
         migrate=_migrate_tools_2_0_9,
     ),
-    # TTS 基础设施重塑收尾：剥离 9 个 OutputHandlersConfig / Provider 死字段
+    # 剥离 9 个 OutputHandlersConfig / Provider 死字段
     ConfigUpgradeHook(
         target_version="2.0.10",
         config_file="tools.toml",
         migrate=_migrate_tools_2_0_10,
     ),
-    # 回放收敛进模拟器（mode=replay）：MockCollector 配置段整体移除
+    # MockCollector 配置段整体移除
     ConfigUpgradeHook(
         target_version="2.0.14",
         config_file="tools.toml",

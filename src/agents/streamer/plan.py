@@ -1,10 +1,10 @@
-"""DecisionPlan - 主播 Agent Stage 1 输出 / Stage 2 输入契约（Wave 6 / §1.4）。
+"""DecisionPlan - 主播 Agent 决策阶段输出 / 表达阶段输入契约。
 
-设计原则（与原 ``plan.py`` 保持一致）：
+设计原则：
 - 这是主播 Agent **内部**数据结构，不跨 Agent 共享，因此放在
   ``src/agents/streamer/`` 下，而不是 ``src/modules/types/``。
-- Planner（Stage 1）产出 DecisionPlan，Replyer（Stage 2）消费它生成实际发言。
-- 字段集最小化：只保留 Stage 2 真正需要的决策信息，不加投机性未来字段。
+- Planner（决策阶段）产出 DecisionPlan，Replyer（表达阶段）消费它生成实际发言。
+- 字段集最小化：只保留表达阶段真正需要的决策信息，不加投机性未来字段。
 - ``extra="forbid"``：与代码库其他 Pydantic 模型一致，严格拒绝未知字段。
 
 字段说明：
@@ -12,7 +12,7 @@
 - ``target``: 要回应的弹幕 message_id 或片段（None 表示无特定目标）
 - ``reply_to``: 本轮回复所指向弹幕的 message_id（Planner 从批次编号中选取；
   与 live_chat 观众行 message_id 构成"回复了哪条"的可查询关联）
-- ``topic_summary``: 当前话题摘要（来自态势缓存，给 Stage 2 提供上下文）
+- ``topic_summary``: 当前话题摘要（来自态势缓存，给表达阶段提供上下文）
 - ``reply_guidance``: 给 Replyer 的回复指引（语气、重点等）
 - ``confidence``: 参与判断置信度 [0.0, 1.0]
 - ``silent_reason``: 静默原因标记。``low_confidence``=LLM 想回但被本地低置信度
@@ -22,8 +22,7 @@
 
 兼容性：
 - ``may_advance`` / ``need_more_time`` / ``branch_id`` / ``reply_to`` / ``silent_reason``
-  全部带默认值，旧 Planner 输出（无这些字段）的 JSON 仍可正常解析。
-- ``version`` 由 "1.1" 升到 "2.0"（Wave 6：Agent 重命名）。
+  全部带默认值，缺少这些字段的 JSON 仍可正常解析。
 """
 
 from __future__ import annotations
@@ -34,9 +33,9 @@ from pydantic import BaseModel, ConfigDict
 
 
 class DecisionPlan(BaseModel):
-    """Stage 1 决策产出 / Stage 2 消费的结构化计划。
+    """决策阶段产出 / 表达阶段消费的结构化计划。
 
-    所有字段都有默认值，允许 Stage 1 在"不参与"场景下直接 ``DecisionPlan()``
+    所有字段都有默认值，允许决策阶段在"不参与"场景下直接 ``DecisionPlan()``
     返回一个语义清晰的空计划。
     """
 

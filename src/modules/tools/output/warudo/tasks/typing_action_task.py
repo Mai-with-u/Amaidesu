@@ -1,8 +1,7 @@
 """
 Warudo TypingActionTask - 打字时的手机抖动动作
 
-迁移自旧插件 plugins_backup/warudo/small_actions/typing_action.py。
-旧实现: 当 is_typing=True 时,周期性发送带噪声的 phone_position 动作,
+当 is_typing=True 时,周期性发送带噪声的 phone_position 动作,
 模拟看手机打字时的轻微抖动。1/2 概率触发(模拟偶尔不看手机的情况)。
 
 设计要点:

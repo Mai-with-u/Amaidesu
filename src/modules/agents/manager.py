@@ -10,7 +10,7 @@ AgentManager —— 框架 Agent 统一管理
   ``registry.register_provider(...)``（所有权内聚到 Agent 包内）。
 - AgentManager 仅提供 ``audit_tools(registry)`` 纯只读审计：列出 Agent 已声明
   但 registry 未注册的工具名，便于组合根在启动后日志告警。
-- **不再**提供 ``register_all_tools`` / ``collect_tool_specs`` —— 框架侧合成占位
+- 不提供 ``register_all_tools`` / ``collect_tool_specs`` —— 框架侧合成占位
   实现桥接会污染真实注册路径，违反 Agent 主体性。
 """
 

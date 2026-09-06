@@ -1,12 +1,9 @@
 """
-WarudoProvider - Warudo 虚拟形象工具集（Wave 4 / §1.5）
+WarudoProvider - Warudo 虚拟形象工具集
 
-迁移自 ``src.stages.output.handlers.avatar.warudo.WarudoHandler``，将其
-从 3 阶段 OutputHandler 改写为 ToolProvider 协议实现：
+ToolProvider 协议实现，编排各引擎子件（``WarudoStateManager`` / 后台任务 /
+``WarudoSubtitleManager`` / ``ActionSender``）：
 
-- 引擎子件（``WarudoStateManager`` + 5 state 类 / 5 后台任务 / ``WarudoSubtitleManager``
-  / ``ActionSender``）verbatim 复用，仅 import 路径变更。
-- ``AvatarHandlerBase`` 继承被去除；ToolProvider 协议由本类自身实现。
 - 暴露的工具：
   - ``warudo_set_expression``   - 设置 blendshape 表情参数
   - ``warudo_trigger_hotkey``   - 触发热键
@@ -130,7 +127,7 @@ _WARUDO_STATE_SCHEMA: Dict[str, Any] = {
 class WarudoProvider:
     """Warudo 虚拟形象 ToolProvider
 
-    实现 ToolProvider 协议 + WarudoHandler 编排器职责（verbatim）。
+    实现 ToolProvider 协议，编排各引擎子件。
     """
 
     PROVIDER_NAME = "warudo"
@@ -527,7 +524,7 @@ class WarudoProvider:
             "talking_head_running": self.talking_head_task.running if self.talking_head_task else False,
         }
 
-    # ===== 内部辅助（verbatim 复用 WarudoHandler 写法） =====
+    # ===== 内部辅助 =====
 
     @property
     def _ws_closed(self) -> bool:

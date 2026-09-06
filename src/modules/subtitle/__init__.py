@@ -11,15 +11,15 @@
   ``clear`` 两个成员。无流式方法——打字机观感由前端模板动画承担。
 - ``SubtitleService``：核心服务，持有多个 Backend 并行广播，单
   Backend 故障隔离；暴露幂等 ``start`` / ``stop`` 生命周期。
-- ``backends.TkGuiBackend``：包装既有 ``SubtitleGuiService``（长驻
-  Tk 线程 + 字幕渲染后端），把 Tool 系统遗留的 GUI 服务接入新协议。
+- ``backends.TkGuiBackend``：包装 ``SubtitleGuiService``（长驻
+  Tk 线程 + 字幕渲染后端）。
 - ``backends.DashboardBackend``：包装 Dashboard 的弹幕小部件字幕展示
   位（``/ws/subtitle`` WebSocket），由主组合根注入 widget_service。
 
 设计要点：
 
-- **不抽基类**：与 ``TTSProvider`` 同源决策——历史拒绝 ``BaseSubtitleBackend``
-  抽象类抽取（不同后端执行模型差异大，强抽基类 = 抽象泄漏）。
+- **不抽基类**：不同后端执行模型差异大，强抽基类 = 抽象泄漏；
+  只用结构类型协议。
 - **故障隔离**：单 Backend 抛异常被 ``SubtitleService`` 在并行
   广播时捕获并记 ERROR（带后端类名），不向上传播——多后端语义是
   "任一后端坏了不挡其他后端"，与 TTS 单选引擎不同。

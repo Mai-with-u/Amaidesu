@@ -6,8 +6,8 @@
   调度）
 - ``show`` / ``clear`` 调用时向**全部** Backend 并行广播，单 Backend
   故障隔离（抛异常仅记 ERROR，不拖垮其他 Backend）
-- 暴露 ``start`` / ``stop`` 幂等生命周期（与 ``src.modules.simulator`` 的
-  服务同模式：``_is_started`` 标志位 + 早退）
+- 暴露 ``start`` / ``stop`` 幂等生命周期
+  （``_is_started`` 标志位 + 早退）
 
 设计决策：
 

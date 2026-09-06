@@ -1,6 +1,6 @@
 """look_at_screen 工具 —— 屏幕快照同步工具
 
-按架构定案：
+定位：
 - 屏幕画面 = **快照型** → 同步工具（gather 等齐结果）
 - 任何 Agent 都可调用（公共工具，放 ``tools/perception/``）
 - 后端（屏幕采集 / 文本识别）通过 Protocol 注入
@@ -220,7 +220,7 @@ class LookAtScreenProvider(ToolProvider):
         if max_width <= 0:
             max_width = self._default_max_width
 
-        # 1) 采集后端不可用 → 优雅降级（不抛，返回成功 + 空文本 + 警告块）
+        # 采集后端不可用 → 优雅降级（不抛，返回成功 + 空文本 + 警告块）
         if self._capture is None:
             return ToolExecutionResult(
                 tool_name="look_at_screen",
@@ -241,7 +241,7 @@ class LookAtScreenProvider(ToolProvider):
                 duration_ms=int(time.time() * 1000) - started_ms,
             )
 
-        # 2) 调用采集后端（捕获异常 → 失败 result，不抛）
+        # 调用采集后端（捕获异常 → 失败 result，不抛）
         try:
             result = self._capture.capture(region=region)
         except Exception as exc:  # noqa: BLE001 - 边界处兜底
@@ -254,7 +254,7 @@ class LookAtScreenProvider(ToolProvider):
                 duration_ms=int(time.time() * 1000) - started_ms,
             )
 
-        # 3) 采集后端返回 None（场景：无显示/无权限）→ 同样优雅
+        # 采集后端返回 None（场景：无显示/无权限）→ 同样优雅降级
         if result.image is None:
             return ToolExecutionResult(
                 tool_name="look_at_screen",
@@ -271,7 +271,7 @@ class LookAtScreenProvider(ToolProvider):
                 duration_ms=int(time.time() * 1000) - started_ms,
             )
 
-        # 4) 可选 OCR/VLM 文本提取
+        # 可选 OCR/VLM 文本提取
         text = ""
         if self._reader is not None:
             try:
@@ -280,9 +280,9 @@ class LookAtScreenProvider(ToolProvider):
                 logger.warning(f"look_at_screen TextReader 失败: {exc}", exc_info=True)
                 text = ""
 
-        # 5) 缩放（占位：当前不真做缩放，只在文本里声明 max_width；后续实现可加）
+        # 缩放：当前不真做缩放，只在文本里声明 max_width
         #    简化原则：宁可不缩放也别误删信息。
-        # 6) 组装 result
+        # 组装 result
         blocks: List[ResultBlock] = []
         if text:
             blocks.append(ResultBlock(kind="text", text=text))

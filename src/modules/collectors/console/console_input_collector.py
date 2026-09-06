@@ -1,14 +1,10 @@
 """
-ConsoleInputCollector —— 控制台输入采集器（v2 / Wave 5 迁移）
+ConsoleInputCollector —— 控制台输入采集器
 
-迁移自 ``src/stages/input/collectors/console_input/console_input_collector.py``。
-按 §1.46 + .omo/drafts/amaidesu-v2-migration.md §C：
 - 继承 ``BaseCollector``（流型感知者）
 - 支持命令：exit() / /gift / /sc / /guard / /help
-- v2 主动推事件：start() 开后台任务读 stdin → emit room.message.* （volatile.v2）
+- 主动推事件：start() 开后台任务读 stdin → emit room.message.*（volatile）
 - 保留 ``collect()`` AsyncIterator 出口兼容旧 InputCollectorManager
-
-verbatim 边界：命令解析、NormalizedMessage 构造 —— 未改动。
 """
 
 from __future__ import annotations
@@ -84,7 +80,7 @@ class ConsoleInputCollector(BaseCollector):
         self.logger.info(f"ConsoleInputCollector初始化完成 (user: {self.user_nickname})")
 
         self.is_started: bool = False
-        # v2 主动推事件：后台输入循环任务
+        # 主动推事件：后台输入循环任务
         self._input_task: Optional[asyncio.Task] = None
         self._input_lock = asyncio.Lock()
 
@@ -106,7 +102,7 @@ class ConsoleInputCollector(BaseCollector):
         return _generate()
 
     async def start(self) -> None:
-        """启动：开后台任务循环 stdin → emit room.message.*（v2 主动推）。"""
+        """启动：开后台任务循环 stdin → emit room.message.*（主动推）。"""
         async with self._input_lock:
             if self.is_started:
                 return
@@ -143,7 +139,7 @@ class ConsoleInputCollector(BaseCollector):
         self.logger.info("ConsoleInputCollector cleanup完成")
 
     # ------------------------------------------------------------------
-    # v2 主动推事件：后台输入循环
+    # 主动推事件：后台输入循环
     # ------------------------------------------------------------------
 
     async def _run_input_loop(self) -> None:
@@ -191,7 +187,7 @@ class ConsoleInputCollector(BaseCollector):
         self.logger.info("控制台输入循环结束")
 
     async def _emit_semantic_event(self, normalized_msg: NormalizedMessage) -> None:
-        """构造 RoomMessagePayload 并 emit 对应 room.message.* 事件（v2）。"""
+        """构造 RoomMessagePayload 并 emit 对应 room.message.* 事件。"""
         mapping = _MESSAGE_TYPE_TO_EVENT.get(normalized_msg.data_type)
         if mapping is None:
             self.logger.debug(f"未知 data_type '{normalized_msg.data_type}'，跳过 emit")

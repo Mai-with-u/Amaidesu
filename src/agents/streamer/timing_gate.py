@@ -1,12 +1,7 @@
-"""TimingGate - 直播节奏门控（Wave 6 仅保留 is_forced）
+"""TimingGate - 直播节奏门控（仅保留强制触发判定）
 
-设计变更（Wave 6）：
-- 移除：采样率（participation_rate）/ no_action 退避（backoff_*）相关状态与逻辑。
-  原因：Agent 重构（Wave 6）后，"要不要发言"已由 Planner 决定（should_reply），
-  节奏门控不再需要在 Agent 内部做概率采样/退避。
-- 保留：``is_forced`` / ``batch_is_forced``（强制触发判定，醒目留言/上舰/高 importance → forced）。
-- 移除：``should_act`` / ``record_result`` 方法签名（仅 AmaidesuDecider 调用，
-  Agent 不再需要这些胶水）。
+"要不要发言"由 Planner 决定（should_reply），本类只负责强制触发判定：
+``is_forced`` / ``batch_is_forced``（醒目留言/上舰/高 importance → forced）。
 
 本类为纯逻辑（无 IO），状态机由 StreamerAgent 单实例持有。
 """

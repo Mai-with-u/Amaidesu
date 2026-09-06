@@ -1,4 +1,4 @@
-"""Background 配置 Schema 定义（v2.0.0）
+"""Background 配置 Schema 定义
 
 定义 ``config/background.toml`` 的 Pydantic 聚合模型。
 
@@ -10,8 +10,8 @@
     queue_max = 100
 
 设计原则：
-- 后台维护任务（§1.7）的轻量循环 + 压缩 worker 参数
-- ``compressor_concurrency=1`` 是默认值（保顺序，§1.7 定案）
+- 后台维护任务的轻量循环 + 压缩 worker 参数
+- ``compressor_concurrency=1`` 是默认值（保顺序）
 - 后续若增加其他后台 worker（如清理任务），可扩展为子段
 """
 
@@ -30,7 +30,7 @@ from src.modules.config.schemas.base import BaseConfig
 class CompressorConfig(BaseConfig):
     """压缩 worker 配置
 
-    负责房间状态摘要的压缩（§1.7）。
+    负责房间状态摘要的压缩。
     """
 
     concurrency: int = Field(

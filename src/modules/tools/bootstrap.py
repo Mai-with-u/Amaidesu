@@ -61,8 +61,8 @@ TTS 与字幕均为基础设施而非工具：
   注入 ``StreamerAgent`` 直接调用
 
 两者均不经 ``ToolRegistry``。本模块不介入 TTS / 字幕装配。
-``[tools.output.config].enabled`` 列表中若残留 ``"subtitle"`` 旧条目，
-将被静默忽略（白名单已无对应映射项；迁移期间保持冷启动不报错）。
+``[tools.output.config].enabled`` 列表中的 ``"subtitle"`` 条目会被静默忽略
+（字幕不由本模块装配；白名单无对应映射项）。
 """
 
 from __future__ import annotations
@@ -113,9 +113,8 @@ _NON_TTS_PACKAGES: List[_EntrySpec] = [
     ("obs", "OBS Studio 控制", _load_obs),
 ]
 
-# 对外保留的 _CORE_PACKAGES 兼容名（指代当前实现会装配的全部非 TTS 包）。
-# 实际装配不再无条件遍历——由 enabled 列表门控；这里保留符号供外部
-# 静态分析 / 类型检查不被打脸。运行时不再使用。
+# 对外保留的 _CORE_PACKAGES 兼容名（指代全部非 TTS 包）。运行时不使用，
+# 仅供外部静态分析 / 类型检查引用；实际装配由 enabled 列表门控。
 _CORE_PACKAGES: List[_EntrySpec] = list(_NON_TTS_PACKAGES)
 
 
@@ -139,8 +138,7 @@ def _resolve_provider_config(raw_config: Dict[str, Any], key: str) -> Dict[str, 
 def _resolve_enabled_list(raw_config: Dict[str, Any]) -> List[str]:
     """从 ``[tools.output.config].enabled`` 列表读出非 TTS 包白名单。
 
-    缺失或非列表时返回空列表（视作"什么也不装配"，与新契约一致——避免隐式
-    行为漂移）。
+    缺失或非列表时返回空列表（视作"什么也不装配"，避免隐式行为漂移）。
     """
     enabled = raw_config.get("enabled") if isinstance(raw_config, dict) else None
     if not isinstance(enabled, list):
@@ -165,7 +163,7 @@ def bind_core_tools(
         registry: 目标注册器（由调用方构造并持有）
         config: ``[tools.output.config]`` 子配置，键名见
             ``_NON_TTS_PACKAGES``；传 ``None`` 表示所有非 TTS 包走"空配置"，
-            由于新契约下白名单为空，将一律不装配
+            白名单为空时将一律不装配
 
     Returns:
         ``{package_name: new_tool_count}`` 报告。失败 / 跳过包

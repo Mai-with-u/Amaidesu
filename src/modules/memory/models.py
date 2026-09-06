@@ -1,11 +1,11 @@
 """
-MemoryProvider 数据类（Wave 3 / §1.50）
+MemoryProvider 数据类
 
 - ``MemoryHit``：召回结果（一次命中）
 - ``MemoryWriteResult``：写入结果
 - ``PersonProfile``：观众语义画像（与 viewers 表的客观统计正交）
 
-## 命名准则（§1.6 / §1.50）
+## 命名准则
 - 观众画像字段用语义词（标签 / 摘要），**不是**客观统计（统计归 viewers 表）
 - Profile 键 = ``user_id = person_id``（与 viewers 主键同键）
 - 写入时刻 / 重要度都用毫秒 int（``*_ms``）
@@ -57,7 +57,7 @@ class MemoryWriteResult:
 class PersonProfile:
     """观众语义画像
 
-    ## 设计要点（§1.50 简单版）
+    ## 设计要点
     - 主键 = ``person_id``（= viewers.user_id）
     - 标签列表 + 摘要文本（LLM 总结"是怎样的人"）
     - **注意**：观众客观统计（message_count / gift_count 等）归 viewers 表；

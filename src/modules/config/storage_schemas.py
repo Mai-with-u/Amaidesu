@@ -1,4 +1,4 @@
-"""Storage 配置 Schema 定义（v2.0.0）
+"""Storage 配置 Schema 定义
 
 定义 ``config/storage.toml`` 的 Pydantic 聚合模型。
 
@@ -13,8 +13,8 @@
 > 避免分叉）。
 
 设计原则：
-- 目前仅支持 SQLite 后端（W3 由 storage 框架接入）
-- 复用 MaiBot SQLiteConnectionManager 方案（每线程连接+WAL+SAVEPOINT，§1.39）
+- 目前仅支持 SQLite 后端
+- SQLite 连接管理采用每线程连接 + WAL + SAVEPOINT 方案
 - 后续若增加 Postgres 等后端，可扩展为 ``[storage.postgres]`` 等子段
 """
 

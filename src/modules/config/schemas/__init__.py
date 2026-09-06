@@ -22,7 +22,7 @@ class ComponentUIMeta:
     """组件 UI 元数据（配置页展示用）。
 
     由 ``@collector/@decider/@handler`` 装饰器在注册组件时一并登记，
-    是组件显示名/描述的唯一事实源头（替代旧 ``_FRIENDLY_LABELS`` 硬编码表）。
+    是组件显示名/描述的唯一事实源。
     """
 
     label: str
@@ -46,7 +46,7 @@ def register_component_ui(type: str, label: str, description: str) -> None:
     COMPONENT_UI_REGISTRY[type] = ComponentUIMeta(label=label, description=description)
 
 
-# Output handler schemas — 延迟导入以避免循环依赖，见上方 registry 注释
+# Output handler schemas — 延迟导入以避免循环依赖
 from .output_schemas import (  # noqa: E402
     OutputConfig,
     OutputHandlersConfig,

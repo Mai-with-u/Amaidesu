@@ -4,9 +4,9 @@
 
 | 子包 | 内容 |
 |---|---|
-| ``vts/``     | VTS 全家桶 + VRChat（VTSHandler, LipSyncProcessor, ExpressionController, HotkeyMatcher, IdleMotionController, VRChatProvider） |
-| ``warudo/``  | Warudo 全家桶（WarudoProvider + 5 state 类 + 5 后台任务 + SubtitleManager + Sender） |
-| ``subtitle/`` | Subtitle GUI 服务导出（``SubtitleGuiService``）——工具形态已退役，字幕基础设施由 ``src/modules/subtitle/`` 自治装配 |
+| ``vts/``     | VTS 全家桶 + VRChat（VTSProvider, LipSyncProcessor, ExpressionController, HotkeyMatcher, IdleMotionController, VRChatProvider） |
+| ``warudo/``  | Warudo 全家桶（WarudoProvider + 状态类 + 后台任务 + SubtitleManager + Sender） |
+| ``subtitle/`` | Subtitle GUI 服务导出（``SubtitleGuiService``）；字幕基础设施由 subtitle 模块自治装配 |
 | ``obs/``     | OBS Provider（3 个工具：send_text / switch_scene / set_source_visibility） |
 | ``remote_stream/`` | 消息协议 + 分发器（无 websocket 脚手架） |
 

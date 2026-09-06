@@ -14,11 +14,10 @@ ABC**），用于：
 - 测试统一断言 ``isinstance(provider, TTSProvider)``，证明装配结果满
   足契约（防止后续重构时契约意外漂移）。
 
-设计约束（与 ADR-007 一致）：
+设计约束：
 
-- **结构类型，不抽基类**——历史决策明确拒绝 ``BaseTTSProvider`` 抽象类
-  抽取（Provider 执行模型差异大，强抽基类 = 抽象泄漏），本协议只
-  声明成员形状，不约束实现方式；
+- **结构类型，不抽基类**——Provider 执行模型差异大，强抽基类 = 抽象
+  泄漏；本协议只声明成员形状，不约束实现方式；
 - **不引入运行时注册表 / Manager**——装配由 ``build_tts_infrastructure``
   静态映射完成，不存在"协议找实现"的运行时发现；
 - **调用方零耦合**——使用方通过 ``TYPE_CHECKING`` 导入本协议，避免
@@ -26,7 +25,7 @@ ABC**），用于：
 - **运行时检查仅用于 fail-fast 校验**——``@runtime_checkable`` 让
   ``isinstance`` 在装配边界兜底，常规调用路径仍走静态类型收窄。
 
-成员（与 ADR-007 契约一一对应）：
+成员：
 
 - ``PROVIDER_NAME: str`` 类级标识
 - ``name: str`` 实例属性（典型实现为 ``@property`` 返回 ``PROVIDER_NAME``）
@@ -36,7 +35,7 @@ ABC**），用于：
 - ``def get_stats(self) -> Dict[str, Any]`` 状态查询
 - ``class ConfigSchema(BaseConfig)`` 嵌套配置 Schema
 
-参考模式：``src/modules/tools/provider.py`` 的 ``ToolProvider(Protocol)``。
+参考模式：工具系统的 ``ToolProvider(Protocol)``。
 """
 
 from __future__ import annotations
@@ -53,7 +52,7 @@ class TTSProvider(Protocol):
     任何实现了全部成员（``PROVIDER_NAME`` / ``name`` / ``setup`` /
     ``cleanup`` / ``handle_speech`` / ``get_stats`` / ``ConfigSchema``）
     的类都被视为满足契约，无需显式继承本协议——这是 Python 结构类型
-    系统的 duck-typed 风格，配套 ADR-007 的"不抽基类"决策。
+    系统的 duck-typed 风格，只声明成员形状，不抽基类。
 
     装配层 ``build_tts_infrastructure`` 在工厂返回后用
     ``isinstance(engine, TTSProvider)`` 兜底校验；调用方按

@@ -1,4 +1,4 @@
-"""Warudo 工具模块（Wave 4 迁移）"""
+"""Warudo 工具模块"""
 
 from .state.warudo_state_manager import (
     EyebrowState,

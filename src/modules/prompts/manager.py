@@ -5,8 +5,6 @@
 - 解析 YAML frontmatter 元数据
 - 使用 string.Template 进行变量替换
 - 严格模式和安全模式渲染
-
-设计文档: refactor/design/prompt_manager.md
 """
 
 from pathlib import Path

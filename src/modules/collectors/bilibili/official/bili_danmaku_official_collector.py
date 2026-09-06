@@ -1,13 +1,9 @@
 """
-BiliDanmakuOfficialCollector —— Bilibili 官方弹幕采集器（v2 / Wave 5 迁移）
+BiliDanmakuOfficialCollector —— Bilibili 官方弹幕采集器
 
-迁移自 ``src/stages/input/collectors/bili_danmaku_official/bili_danmaku_official_collector.py``。
-按 §1.46 + .omo/drafts/amaidesu-v2-migration.md §C：
 - 继承 ``BaseCollector``（流型感知者，世界→系统入口，主动推事件）
 - 默认 emit ``room.message.*`` 语义域事件（danmaku/gift/super_chat/enter）
 - 仍保留 ``collect()`` AsyncIterator 出口，供旧 InputCollectorManager 过渡期复用
-
-verbatim 边界：协议解析、WebSocket 客户端、心跳/重连逻辑、重要性算法 —— 未改动。
 """
 
 from __future__ import annotations
@@ -68,7 +64,7 @@ class BiliDanmakuOfficialCollector(BaseCollector):
         context_tags: Optional[list] = Field(default=None, description="Prompt上下文标签")
         enable_template_info: bool = Field(default=False, description="启用模板信息")
         template_items: dict = Field(default_factory=dict, description="模板项")
-        # v2 新增：是否 emit 语义域事件（默认 True）
+        # 是否 emit 语义域事件（默认 True）
         emit_semantic_events: bool = Field(default=True, description="emit room.message.* 语义事件")
 
     def __init__(
@@ -234,7 +230,7 @@ class BiliDanmakuOfficialCollector(BaseCollector):
 
             normalized_msg = self._create_normalized_message(bili_message)
 
-            # v2：emit 语义域事件 room.message.*
+            # emit 语义域事件 room.message.*
             if self._emit_semantic_events:
                 await self._emit_semantic_event(bili_message, normalized_msg)
 
@@ -246,7 +242,7 @@ class BiliDanmakuOfficialCollector(BaseCollector):
             self.logger.debug(f"失败消息数据: cmd={message_data.get('cmd')}")
 
     async def _emit_semantic_event(self, bili_msg: BiliBaseMessage, normalized_msg: NormalizedMessage) -> None:
-        """emit room.message.* 语义域事件（v2）"""
+        """emit room.message.* 语义域事件"""
         try:
             user_id = str(getattr(bili_msg, "open_id", None) or "unknown")
             user_name = str(getattr(bili_msg, "uname", None) or "unknown")

@@ -4,12 +4,12 @@
 提供 Collector/Decider/Handler 状态查询的公共接口。
 基于 ManagerStatusProvider 协议与阶段层解耦。
 
-v2 另提供基于配置全集 + 运行时 Manager 的摘要构建函数：
+另提供基于配置全集 + 运行时 Manager 的摘要构建函数：
 - 配置全集 = agents.toml [agents] 子键 / tools.toml [tools.perception.config] /
   [tools.output.config] 子键（"可用组件"清单）
 - 未在启用列表的组件以 is_enabled=False 占位（组件管理页可快速启用）
 
-description 来源（Wave U1 / B7 增强）：
+description 来源：
 - 采集器：CollectorManager._collectors[name].description（注册时填写）
 - Agent：AgentManager._agents[name].description
 - 工具：ToolRegistry.list_tools() 中 ToolSpec.description

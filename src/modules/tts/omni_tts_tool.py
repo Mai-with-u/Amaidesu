@@ -160,10 +160,9 @@ class OmniTTSProvider:
     async def _synthesize(self, text: str, utterance_id: Optional[str] = None) -> None:
         """HTTP 流式拉取 → 解码 → AudioDeviceManager 流式播放
 
-        之前的实现只把解码缓冲到 ``audio_data_queue``，从未真正出声；本次改造
-        按 GPT-SoVITS 的流式播放模式重写：start_stream → 每块 write_chunk →
-        stop_stream。started 在首块 PCM 写声卡前发布（流式引擎合成未完，
-        duration_ms=None）；finished 在 stop_stream 后发布。
+        流式播放按 start_stream → 每块 write_chunk → stop_stream 模式进行。
+        started 在首块 PCM 写声卡前发布（流式引擎合成未完，duration_ms=None）；
+        finished 在 stop_stream 后发布。
         """
         self.sequence_count = 0
 
@@ -257,9 +256,7 @@ class OmniTTSProvider:
     def _decode_to_pcm(self, wav_chunk) -> Optional[np.ndarray]:
         """解码 WAV 块为 int16 numpy 数组，失败返回 None。
 
-        之前 ``_decode_and_buffer`` 把 PCM 缓冲到 ``input_pcm_queue`` 后手工切片
-        1024 字节块再追加到 ``audio_data_queue``；现在直接整块解码交给
-        AudioDeviceManager 流式播放，避免保留历史 KeyError bug 的拼接逻辑。
+        整块解码后交给 AudioDeviceManager 流式播放。
         """
         # 函数体内导入：单元测试 patch wav_decoder.extract_pcm_from_wav 拦截
         # 解码，顶部导入会使 patch 失效

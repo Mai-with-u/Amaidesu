@@ -356,7 +356,7 @@ def _detect_project_root() -> str:
         1. 从当前文件向上查找，直到找到包含 pyproject.toml 的目录
         2. 如果找不到，则使用当前文件的 src 的父目录
     """
-    # 当前文件所在目录: src/services/config/schemas/
+    # 当前文件所在目录: src/modules/config/schemas/
     current_dir = Path(__file__).parent.absolute()
 
     # 向上查找项目根目录（查找 pyproject.toml）
@@ -370,7 +370,7 @@ def _detect_project_root() -> str:
         if (parent / "pyproject.toml").exists():
             return str(parent)
 
-    # 如果找不到，假设当前目录是 src/services/config/schemas，返回项目根目录
+    # 如果找不到，假设当前目录是 src/modules/config/schemas，返回项目根目录
     return str(current_dir.parent.parent.parent.parent)
 
 

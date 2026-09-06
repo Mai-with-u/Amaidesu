@@ -1,26 +1,26 @@
 """
-SimpleMemory —— 关键词召回实现（Wave 3 / §1.50）
+SimpleMemory —— 关键词召回实现
 
 ## 设计
 - 内部使用 SQLiteStore，**复用 11 表基座**（个人 SQL 层另起二表，事务在
   ``SQLiteStore`` 上走，避免分散存储后端）
-- 召回 = 简单 LIKE 关键词匹配（不使用 embedding，§1.50 简单版）
+- 召回 = 简单 LIKE 关键词匹配（不使用 embedding）
 - 维护（maintain）= 简单按 timestamp_ms 衰减分数；空实现基准
 
-## 召回分词策略（§1.50 + Wave 8 中文召回修复）
+## 召回分词策略
 
-主场景是中文弹幕直播间：原始实现 ``query.split(" ")`` 对"弹幕互动有什么"
-这种无空格中文句子只产出**一个**长 token，"弹幕互动有什么" 整段作为 LIKE 模式
-几乎零命中（实际文本里不会原样出现）。改为 ``_extract_keywords`` 启发式：
+主场景是中文弹幕直播间：直接 ``query.split(" ")`` 对"弹幕互动有什么"这种
+无空格中文句子只产出**一个**长 token，整段作为 LIKE 模式几乎零命中
+（实际文本里不会原样出现），故用 ``_extract_keywords`` 启发式分词：
 
-1. **第一阶段切分**：按空白 + 中英文常见标点切（保留 CJK 段完整）
-2. **第二阶段按类型处理**：
-   - ASCII 英文/数字词（长度 ≥ 2）→ 整段保留（"minecraft"、"OAI" 等）
-   - CJK 连续段：
-     - 长度 2-6 → 取整段
-     - 长度 > 6 → 2-gram 滑动窗口（如"弹幕互动有什么" → "弹幕"、"幕互"、
-       "互动"、"动有"、"有什"、"什么"）
-3. **去重 + 保序 + 截断到 ``max_keywords``**
+- 第一阶段切分：按空白 + 中英文常见标点切（保留 CJK 段完整）
+- 第二阶段按类型处理：
+  - ASCII 英文/数字词（长度 ≥ 2）→ 整段保留（"minecraft"、"OAI" 等）
+  - CJK 连续段：
+    - 长度 2-6 → 取整段
+    - 长度 > 6 → 2-gram 滑动窗口（如"弹幕互动有什么" → "弹幕"、"幕互"、
+      "互动"、"动有"、"有什"、"什么"）
+- 去重 + 保序 + 截断到 ``max_keywords``
 
 **已知局限**（后续可换 FTS5 / jieba）：
 - 不分语义边界（"我想看动漫" → "我想"、"想看"、"看动"、"动漫"，无意义 2-gram 噪声）
@@ -38,7 +38,7 @@ SimpleMemory —— 关键词召回实现（Wave 3 / §1.50）
 - ``_memory_facts``：事实/事件记忆条目
 - ``_memory_profiles``：观众语义画像
 
-``SimpleMemory.initialize()`` 只做表自检，不再自带 DDL——建表职责单一归
+``SimpleMemory.initialize()`` 只做表自检，不带 DDL——建表职责单一归
 schema.py，避免两处 DDL 漂移。未来接 A_Memorix 时整体替换。
 
 ## 时间单位
@@ -62,7 +62,7 @@ logger = get_logger("SimpleMemory")
 
 
 # =============================================================================
-# 分词启发式（Wave 8 / 中文召回修复）
+# 分词启发式（CJK-aware）
 # =============================================================================
 
 # CJK 统一表意 + 扩展 A（覆盖 99% 现代中文；扩展 B-F 罕用词不覆盖以省 regex）
@@ -86,8 +86,6 @@ _ASCII_WORD = re.compile(r"[A-Za-z0-9]+")
 
 def _extract_keywords(query: str, max_keywords: int = 8) -> List[str]:
     """从 ``query`` 中抽取用于 LIKE 召回的关键词列表。
-
-    策略详见模块 docstring "召回分词策略"一节。
 
     Args:
         query: 用户查询文本（可能含中文 / 英文 / 数字 / 标点混合）
@@ -165,7 +163,7 @@ class SimpleMemory(MemoryProvider):
         """关键词召回：对 _memory_facts 做 LIKE 匹配；O(n) 子集扫描足以起步。"""
         if not query or not query.strip():
             return []
-        # Wave 8 中文召回修复：CJK-aware 分词；不再用 query.split(" ")
+        # CJK-aware 分词（中文无空格句子需切出可命中的子串关键词）
         keywords = _extract_keywords(query, max_keywords=8)
         if not keywords:
             return []
@@ -268,8 +266,7 @@ class SimpleMemory(MemoryProvider):
 
         ts = now_ms()
         tags_str = ",".join(merged_tags)
-        # 使用参数化占位符避免 SQL 注入（Oracle 审查：原实现 f-string 拼接存在
-        # 注入风险，且 _sql_escape 仅转义单引号，对分号/双引号/反斜杠无防护）。
+        # 使用参数化占位符避免 SQL 注入（f-string 拼接对分号/双引号/反斜杠等无防护）
         await self._store.execute(
             "INSERT INTO _memory_profiles(person_id, display_name, tags, summary, updated_at_ms) "
             "VALUES (?, ?, ?, ?, ?) "
@@ -287,8 +284,7 @@ class SimpleMemory(MemoryProvider):
         )
 
     async def maintain(self) -> None:
-        """占位：未来可加 LRU/衰减/合并。当前不做事。"""
-        # 留口子：稳定接口里给"维护"一个位置，但不强制做事
+        """维护操作占位：当前不做任何事，保留接口扩展点（LRU/衰减/合并）。"""
         return None
 
 

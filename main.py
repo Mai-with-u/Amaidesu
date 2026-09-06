@@ -1,6 +1,6 @@
 """Amaidesu 应用程序主入口。
 
-v2 架构组合根：
+架构组合根：
 - LLMManager：统一 LLM 客户端池
 - ContextService：会话历史/多会话隔离
 - EventBus：事件分发；启动时挂载事件拦截器
@@ -179,7 +179,7 @@ def load_config() -> Tuple[ConfigService, Dict[str, Any], bool]:
 def validate_config(config: Dict[str, Any]) -> None:
     """验证配置完整性，缺失必要配置时给出明确错误提示。
 
-    配置按 7 文件树划分（参见 multi_file_loader._CONFIG_FILES）：
+    配置按 7 文件树划分：
     core / model / agents / tools / memory / storage / background。
     本函数只做"存在性 + 顶层类型"轻量检查；详细字段验证由各 ConfigSchema
     在组件构造阶段自动完成（fail-fast 由 Pydantic 保证）。
@@ -209,8 +209,8 @@ def validate_config(config: Dict[str, Any]) -> None:
     elif not isinstance(tools_cfg, dict):
         logger.warning("[tools] 配置类型异常（期望 dict），Tool 功能将被禁用")
 
-    # collectors 子段位于 tools/agents 等聚合下，由各组件 Schema 自行校验
-    # 不再顶层检查（旧 [collectors] 已迁入 agents/agents_collectors）
+    # collectors 子段位于 tools/agents 等聚合下，由各组件 Schema 自行校验，
+    # 不做顶层检查
 
     # memory.toml 段
     memory_cfg = config.get("memory")
@@ -293,7 +293,7 @@ def register_event_interceptors(event_bus: EventBus, config: Dict[str, Any], ses
 
 
 # ---------------------------------------------------------------------------
-# 核心组件构造（v2 组合根）
+# 核心组件构造（组合根）
 # ---------------------------------------------------------------------------
 
 
@@ -451,8 +451,7 @@ async def create_app_components(
 
     # --- 核心配置预读：字幕基础设施段 [subtitle] ---
     #  AgentManager 注册 StreamerAgent 时需要 subtitle_service（注入后
-    #  编排层驱动字幕显示）；配置源为 core.toml [subtitle]，该段数据由
-    #  跨文件迁移自 tools.toml [tools.output.config.subtitle] 而来。
+    #  编排层驱动字幕显示）；配置源为 core.toml [subtitle]。
     subtitle_section = config.get("subtitle", {}) if isinstance(config, dict) else {}
     if not isinstance(subtitle_section, dict):
         subtitle_section = {}
@@ -771,7 +770,7 @@ async def _register_collectors_from_config(
 ):
     """根据 [tools.perception.config] 段注册 Collector 实例到 CollectorManager。
 
-    v2 段结构（tools.toml）：
+    段结构（tools.toml）：
         enabled = ["bili_danmaku", "console_input", ...]
         bili_danmaku = { ... }
         console_input = { ... }
@@ -813,7 +812,7 @@ async def _register_agents_from_config(
 ):
     """根据 [agents] 段注册 Agent 实例到 AgentManager。
 
-    [agents] 段结构（v2）：
+    [agents] 段结构：
         enabled = ["streamer", "game"]
         streamer = { planner_llm = "llm_fast", replyer_llm = "llm", ... }
         game = { ... }

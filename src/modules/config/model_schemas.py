@@ -1,4 +1,4 @@
-"""模型配置 Schema 定义（v2.0.0）
+"""模型配置 Schema 定义
 
 定义 LLM/VLM 模型配置的 Pydantic Schema，采用"Provider + Profile"两层结构：
 
@@ -8,9 +8,6 @@
 
 这种拆分允许多个 profile 共享同一个 provider（例如 llm / llm_fast 都用 deepseek），
 同时让每个 profile 只描述自己关心的字段（model/temperature/max_tokens）。
-
-v2.0.0 变化：
-- ``llm_outline`` 改名为 ``llm_agenda``（Outline→Agenda 命名统一）
 """
 
 from pydantic import Field, model_validator
@@ -22,7 +19,7 @@ class LLMProviderConfig(BaseConfig):
     """API 提供商配置
 
     一个 provider 描述一个 API 端点（OpenAI 兼容）的连接细节，
-    可被多个 role 共享（llm / llm_fast / vlm / llm_local / llm_summary / llm_outline）。
+    可被多个 role 共享（llm / llm_fast / vlm / llm_local / llm_summary / llm_agenda）。
 
     Attributes:
         name: provider 唯一名称，供 role.provider 引用
@@ -114,7 +111,7 @@ class ModelConfig(BaseConfig):
         vlm: 视觉语言模型使用预设（用于图像理解任务）
         llm_local: 本地模型使用预设（Ollama / LM Studio / vLLM 等）
         llm_summary: 房间状态摘要 LLM 使用预设（独立 client，避免与 Planner 共享连接池）
-        llm_agenda: 直播大纲 LLM 使用预设（v2.0.0 由 llm_outline 改名；独立 client，Agenda AI 生成初始大纲）
+        llm_agenda: 直播大纲 LLM 使用预设（独立 client，Agenda AI 生成初始大纲）
     """
 
     llm_providers: list[LLMProviderConfig] = Field(

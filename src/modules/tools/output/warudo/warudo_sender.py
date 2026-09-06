@@ -18,7 +18,7 @@ _logger = get_logger("WarudoActionSender")
 class ActionSender:
     """Warudo 动作发送器
 
-    作为实例注入到 WarudoHandler 中(避免每次调用都新建实例)。
+    以实例形式注入持有(避免每次调用都新建实例)。
     """
 
     def __init__(self, websocket: Optional[Any] = None):

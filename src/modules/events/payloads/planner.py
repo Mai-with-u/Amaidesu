@@ -1,11 +1,11 @@
 """
-v2 语义域事件 Payload 定义：planner 域 / streamer 决策管线
+事件 Payload 定义：planner 域 / streamer 决策管线
 
 - ``planner.checkpoint``：空转检查点事件（纯提醒零决策）
 - ``planner.decision``：决策轮记录事件（每轮两阶段决策结束发一条）
 - ``streamer.stage``：决策管线阶段状态事件（状态变化即发射）
 
-``planner.checkpoint`` 按契约（.omo/drafts/amaidesu-v2-event-contract.md "planner.checkpoint" 节）：
+``planner.checkpoint`` 契约约定：
 - 判据全过才发（Planner 空闲 + 无 pending 异步 + 事件队列空 + 有未完成 AgendaItem）
 - 提供当前 AgendaItem 定位（``active``/``next``/``expected_ms``）让 Planner 知道"我在哪、要到哪去"
 - ``timeline_summary`` 给出近期时序摘要（人类可读）

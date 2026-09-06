@@ -1,17 +1,13 @@
 """
-Capabilities API（v2 适配 Wave U1 / B3）
+Capabilities API
 
 暴露已注册工具的能力查询端点（只读）：
 - GET /api/v1/capabilities  ->  工具清单（按 provider 限定名）
 
-数据源：``DashboardServer.tool_registry.list_tools()``，与 OutputHandlerManager
-彻底解耦（v2 中已不存在 output_manager）。
+数据源：``DashboardServer.tool_registry.list_tools()``。
 
 ⚠️ 协调点：本端点提供**只读**注册表内省。工具体系团队若后续提供正式的
 ``/api/v1/tools`` 端点（含调用能力），本端点可并存或由其替代。
-
-删除（Wave U1 / B4）：
-- ~~GET /api/v1/handlers~~ — v1 遗物，零消费
 """
 
 from typing import TYPE_CHECKING, Any, Dict, List

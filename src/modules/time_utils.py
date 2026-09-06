@@ -7,7 +7,7 @@
 设计原则：
 - 时刻字段（如事件时间戳）使用 `int` 毫秒，避免浮点精度问题。
 - 时长字段（如超时、节拍间隔）同样使用 `int` 毫秒，与时刻字段保持单位一致。
-- Amaidesu 内部全毫秒零转换（§1.53 9d 定案）。
+- Amaidesu 内部全毫秒零转换。
 - ``ms_to_s`` / ``s_to_ms`` 仅在 **MemoryProvider 接缝**调用（例如后插
   AMemorixProvider 内部毫秒↔秒互转）；业务模块不应触发。
 """
@@ -95,14 +95,14 @@ def ms_to_datetime(ms: int) -> datetime:
 
 
 # =============================================================================
-# §1.53 9d 定案：毫秒 ↔ 秒 纯函数（仅 MemoryProvider 接缝调用）
+# 毫秒 ↔ 秒 纯函数（仅 MemoryProvider 接缝调用）
 # =============================================================================
 
 
 def ms_to_s(ms: int) -> int:
     """毫秒 → 秒（整数除法，截断小数部分）。
 
-    **调用约束（§1.53 9d）**：本函数**仅**在 ``MemoryProvider`` 接缝调用
+    **调用约束**：本函数**仅**在 ``MemoryProvider`` 接缝调用
     ——例如后插 ``AMemorixProvider`` 内部把 Amaidesu 毫秒换算为
     A_Memorix 秒世界。Amaidesu 业务模块内部全毫秒零转换。
 
@@ -127,7 +127,7 @@ def ms_to_s(ms: int) -> int:
 def s_to_ms(s: int) -> int:
     """秒 → 毫秒。
 
-    **调用约束（§1.53 9d）**：与 ``ms_to_s`` 配对，**仅**在 MemoryProvider
+    **调用约束**：与 ``ms_to_s`` 配对，**仅**在 MemoryProvider
     接缝调用（典型：接 A_Memorix 秒世界时做适配）。
 
     Args:

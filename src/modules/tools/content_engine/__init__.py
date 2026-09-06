@@ -1,7 +1,7 @@
 """
-Amaidesu 内容引擎工具包（v2.0.0 / Wave 7）
+Amaidesu 内容引擎工具包
 
-按架构 §1.5.1 + §1.52 定案：
+定位：
 - **内容引擎 = 通用游戏控制器**（start/stop/status/send_input）
 - 是控制面（control plane），不是游戏实现
 - 游戏 Agent 通过它驱动具体游戏进程（MC / 文字冒险 / ...）

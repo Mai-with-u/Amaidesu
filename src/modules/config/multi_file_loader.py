@@ -12,9 +12,9 @@
     config/storage.toml      - 存储（SQLite 路径，与 SimpleMemory 共用）
     config/background.toml   - 后台维护（ticks/压缩）
 
-> **AGENTS.md 写回闭环**：所有 7 个文件均接入 ``_load_and_validate_schema``
+> **写回闭环**：所有 7 个文件均接入 ``_load_and_validate_schema``
 > + ``_write_back_schema_file``，漂移字段会自动写回用户文件（缺失补默认、
-> 冗余剥离、版本号更新）。未接入的文件其 Schema 变更永远不会写回用户文件。
+> 冗余剥离、版本号更新）。未接入写回闭环的文件，其 Schema 变更不会落到用户文件。
 """
 
 from __future__ import annotations
@@ -64,7 +64,7 @@ _PHASE_TO_REGISTRY: dict[tuple[str, str], str] = {
 }
 
 # 配置版本号。权威定义：本文件的 ``CONFIG_VERSION`` 与 ``MetaConfig.version``
-# 默认值必须同步修改（改一必改二）。详见 AGENTS.md "配置 Schema 变更规则"。
+# 默认值必须同步修改（改一必改二）。
 CONFIG_VERSION = "2.0.15"
 
 # 配置文件清单（按域划分）：core / model / agents / tools / memory / storage / background
@@ -102,7 +102,7 @@ class CrossFileMigration:
 
 # 已完成的跨文件迁移注册表（按时间顺序追加）
 CROSS_FILE_MIGRATIONS: tuple[CrossFileMigration, ...] = (
-    # simulator.toml 独立文件合并进 core.toml 的 [simulator]
+    # simulator.toml → core.toml 的 [simulator] 段
     CrossFileMigration(
         source_file="simulator.toml",
         source_key="simulator",
@@ -131,8 +131,8 @@ CROSS_FILE_MIGRATIONS: tuple[CrossFileMigration, ...] = (
         target_file="agents.toml",
         target_key="agents",
     ),
-    # TTS 基础设施重塑：tools.toml [tools.output.config].render_timeout_ms
-    # 上移至 core.toml [tts].render_timeout_ms（保留用户原值）
+    # tools.toml [tools.output.config].render_timeout_ms 上移至
+    # core.toml [tts].render_timeout_ms（保留用户原值）
     CrossFileMigration(
         source_file="tools.toml",
         source_key="tools",
@@ -141,9 +141,9 @@ CROSS_FILE_MIGRATIONS: tuple[CrossFileMigration, ...] = (
         source_nested_path=("output", "config", "render_timeout_ms"),
         target_nested_path=("render_timeout_ms",),
     ),
-    # TTS 彻底基础模块化：tools.toml 中四个引擎连接/合成子段整体迁入
-    # core.toml [tts.<engine>]，用户原值完整搬运；源子段从 tools.toml 删除
-    # 但 tools.toml 文件本身保留（TTS 之外的工具仍在其中）。
+    # tools.toml 中四个 TTS 引擎的连接/合成子段整体迁入 core.toml [tts.<engine>]，
+    # 用户原值完整搬运；源子段从 tools.toml 删除但 tools.toml 文件本身保留
+    # （TTS 之外的工具仍在其中）。
     CrossFileMigration(
         source_file="tools.toml",
         source_key="tools",
@@ -176,8 +176,8 @@ CROSS_FILE_MIGRATIONS: tuple[CrossFileMigration, ...] = (
         source_nested_path=("output", "config", "omni_tts"),
         target_nested_path=("omni_tts",),
     ),
-    # 字幕基础设施化：tools.toml [tools.output.config.subtitle]（Tk GUI 服务
-    # 参数）整体迁入 core.toml [subtitle].tk_gui，旧值完整搬运。
+    # tools.toml [tools.output.config.subtitle]（Tk GUI 服务参数）整体迁入
+    # core.toml [subtitle].tk_gui，用户原值完整搬运。
     CrossFileMigration(
         source_file="tools.toml",
         source_key="tools",
@@ -1025,7 +1025,7 @@ def _apply_cross_file_migrations(
         with open(source_path, "r", encoding="utf-8-sig") as f:
             source_doc = tomlkit.load(f).unwrap()
 
-        # 单值深嵌套移动模式（见 CrossFileMigration 文档）
+        # 单值深嵌套移动模式
         if migration.source_nested_path is not None and migration.target_nested_path is not None:
             source_path_keys = (migration.source_key, *migration.source_nested_path)
             target_path_keys = (migration.target_key, *migration.target_nested_path)
@@ -1173,14 +1173,14 @@ def load_config_dir(
     Returns:
         (合并后的配置字典, 综合漂移报告)
 
-    自动升级闭环（AGENTS.md 规则全覆盖 7 个文件）：
-    1. 缺失文件自动补齐
-    2. 跨文件迁移（如旧 input.toml → tools.toml 的 [tools.perception.config]）
-    3. core.toml 版本不一致 → 执行注册的 ConfigUpgradeHook → 写回并更新 [meta].version
-    4. 存在漂移（缺失/冗余字段）→ 备份 + 写回（缺失补默认值、冗余删除）
+    自动升级闭环（覆盖全部 7 个文件）：
+    缺失文件自动补齐；跨文件迁移（如旧 input.toml → tools.toml 的
+    [tools.perception.config]）；core.toml 版本不一致时执行注册的
+    ConfigUpgradeHook 并写回、更新 [meta].version；存在漂移（缺失/冗余字段）
+    时备份 + 写回（缺失补默认值、冗余删除）。
     写回后漂移归零，下次启动不再重复提示。
     """
-    # 0. 补齐缺失文件（7 个域文件）
+    # 补齐缺失文件（7 个域文件）
     _ensure_required_files(config_dir)
 
     combined = DriftReport()
@@ -1289,8 +1289,8 @@ def load_config_dir(
     agents_path = config_dir / "agents.toml"
     if agents_path.exists():
         try:
-            # 跨文件迁移（如旧 decision.toml 的 [deciders] → agents.toml 的 [agents]）
-            # 先读取 agents.toml 原始数据，让跨文件迁移注入
+            # 先读取 agents.toml 原始数据，让跨文件迁移有注入目标
+            # （decision.toml 的 [deciders] → [agents]）
             with open(agents_path, "r", encoding="utf-8-sig") as f:
                 raw_agents = tomlkit.load(f).unwrap()
             loaded_data["agents.toml"] = raw_agents
@@ -1334,7 +1334,7 @@ def load_config_dir(
                 raw_tools = tomlkit.load(f).unwrap()
             loaded_data["tools.toml"] = raw_tools
             _apply_file_upgrade_hooks(config_dir, "tools.toml", ToolsRootConfig, raw_tools, current_ver)
-            # 跨文件迁移（如旧 input.toml/output.toml 的 [collectors]/[handlers] → tools.toml）
+            # 跨文件迁移（阶段文件的组件段 → tools.toml）
             migrated_files, modified_targets = _apply_cross_file_migrations(
                 config_dir, loaded_data, list(loaded_data.keys())
             )

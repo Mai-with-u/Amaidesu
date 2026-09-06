@@ -1,5 +1,5 @@
 """
-Trace 聚合 API（Wave 8 简化 + Wave U1 / B6 重写）
+Trace 聚合 API
 
 从 EventHistoryService 中按 message_id 聚合三段链路：
 - messages: room.message.* 事件（采集器行为流）

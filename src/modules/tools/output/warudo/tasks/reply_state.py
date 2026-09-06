@@ -1,18 +1,15 @@
 """
 Warudo ReplyState - 有限状态机
 
-重构自旧插件 plugins_backup/warudo/reply_state.py(commit 78a0c46)。
-
-新架构下的状态机简化:
+状态机范围:
 - 只保留 is_talking(由 lip-sync 音频流 on_start/on_end 驱动)
 - is_thinking/is_replying/is_viewing/start_internal_thinking/typing 等
-  旧状态在新架构下无源(MaiCore message_segment.type="state" 不再存在),
-  标记为 [DECISION NEEDED],暂不实现。
+  状态当前无事件源,标记为 [DECISION NEEDED],暂不实现。
 
 被外部调用的入口:
-- start_talking() - 由 WarudoHandler.on_audio_start_proxy() 调用
-- stop_talking() - 由 WarudoHandler.on_audio_end_proxy() 调用
-- deal_state(state: str) - 保留接口但对无源状态记录 warning + TODO
+- start_talking() - 由音频开始回调调用
+- stop_talking() - 由音频结束回调调用
+- deal_state(state: str) - 字符串状态入口,对无源状态记录 warning + TODO
 """
 
 import logging
@@ -112,12 +109,10 @@ class ReplyState:
         - "start_talking" / "stop_talking" - 由外部直接调用 start_talking/stop_talking 即可
 
         [DECISION NEEDED] 无源状态(暂不实现):
-        - "start_thinking" - 旧插件由 MaiCore state 事件触发,新架构无源
-        - "finish_thinking" - 同上
-        - "start_replying" - 同上
-        - "start_viewing" - 旧实现触发抛鱼 + 视线切到弹幕,新架构无源
-        - "start_internal_thinking" - 同上(手机视线)
-        - "typing" / "stop_typing" - 旧实现触发打字动画,新架构无源
+        - "start_thinking" / "finish_thinking" / "start_replying" - 无事件源
+        - "start_viewing" - 语义为抛鱼 + 视线切到弹幕,无事件源
+        - "start_internal_thinking" - 语义为手机视线,无事件源
+        - "typing" / "stop_typing" - 语义为打字动画,无事件源
 
         Args:
             state: 状态字符串

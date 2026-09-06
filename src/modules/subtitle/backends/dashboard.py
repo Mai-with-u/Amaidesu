@@ -5,15 +5,8 @@
 到 widget 的 ``show_subtitle`` / ``clear_subtitle`` 公开方法，最终通
 过 WebSocket（``/ws/subtitle``）推送给 OBS 浏览器源等前端展示位。
 
-历史背景：
-
-v2 早期 Dashboard 字幕小部件订阅 ``planner.checkpoint`` 业务事件
-拉字幕——但 ``CheckpointPayload`` 无 ``speech`` 字段，handler 永远
-``return``，字幕静默失效。字幕升级为基础设施后，本 Backend 把
-widget 暴露的 ``show_subtitle`` / ``clear_subtitle`` 接入新
-``SubtitleBackend`` 协议——内容源从 ``planner.checkpoint`` 拉取改为
-``SubtitleService.show`` 主动广播（由编排层订阅 ``streamer.speech``
-驱动）。
+内容源：``SubtitleService.show`` 主动广播（由编排层订阅
+``streamer.speech`` 驱动）；widget 自身不订阅业务事件。
 
 职责：
 

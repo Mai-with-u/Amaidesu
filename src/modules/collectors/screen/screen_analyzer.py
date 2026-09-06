@@ -4,8 +4,6 @@ ScreenAnalyzer —— 屏幕差异检测
 ``ScreenChangeCollector`` 通过回调收到 ``change_data`` 后调用
 ``ScreenReader.process_screen_change`` 处理；本类仅负责持续截图、计算差异、
 缓存最近若干帧、变更时触发 ``on_change`` 回调。
-
-verbatim 边界：图像哈希差值算法、滑动窗口缓存策略 —— 与设计一致。
 """
 
 from __future__ import annotations

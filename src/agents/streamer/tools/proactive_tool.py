@@ -2,12 +2,10 @@
 
 **真工具**——通过 ``@tool`` 装饰器注册到 ToolRegistry，供 LLM 调用。
 调用入口由 StreamerAgent 设置（提供 invoke 桥接）；底层判定器是
-``ProactiveTrigger`` 纯规则组件（**不**注册为工具）。
+``ProactiveTrigger`` 纯规则组件（表达引擎内脏，**不**注册为工具）。
 
-迁移要点：
-- 原 ``stages/decision/deciders/amaidesu/proactive_trigger.py`` 纯规则组件保留
-  并复用（Stage 2 内脏，不注册工具）。
-- ``should_speak_proactively`` 工具 = LLM 调用入口，底层调 ``ProactiveTrigger.should_trigger``。
+``should_speak_proactively`` 工具 = LLM 调用入口，底层调
+``ProactiveTrigger.should_trigger``。
 
 工具契约：
 - kind: ``"sync"``（即时查询结果，不是 fire-and-forget）

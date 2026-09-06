@@ -1,14 +1,12 @@
 """
-ScreenReader —— 屏幕变化 → VLM 文本（v2 / Wave 5 迁移 → v2.0.9 收编）
+ScreenReader —— 屏幕变化 → VLM 文本
 
-迁移自 ``src/stages/input/collectors/read_pingmu/``（占位补全）。仅在
-``ScreenAnalyzer`` 检测到屏幕**变化**时才调用 VLM，避免无变化的轮询浪费 token。
+仅在 ``ScreenAnalyzer`` 检测到屏幕**变化**时才调用 VLM，避免无变化的轮询浪费 token。
 
-v2.0.9 收编：原本用裸 aiohttp 自带 api_key/base_url/model_name 绕过
-LLMManager profile 体系；现统一改为 ``LLMManager.chat_vision(client_type="vlm")``，
-key/model/重试/日志走 model.toml 的 ``[vlm]`` profile 与 ``[[llm_providers]]`` 池。
+VLM 调用统一走 ``LLMManager.chat_vision(client_type="vlm")``，key/model/重试/日志
+走 model.toml 的 ``[vlm]`` profile 与 ``[[llm_providers]]`` 池。
 
-verbatim 边界：缓存去重策略（最近 ``max_cached_images`` 张图像哈希，避免重复调用）、
+缓存去重策略：最近 ``max_cached_images`` 张图像哈希，避免重复调用；
 回调式上下文更新（不破坏 Collector 主循环）。
 """
 
@@ -22,10 +20,10 @@ from typing import Any, Awaitable, Callable, Deque, Optional
 
 from src.modules.logging import get_logger
 
-# 注：v2.0.9 移除 aiohttp 依赖（VLM 调用统一走 LLMManager → chat_vision → OpenAIClient.vision）。
+# 注：不依赖 aiohttp（VLM 调用统一走 LLMManager → chat_vision → OpenAIClient.vision）。
 # 图像以 bytes 形式传入 chat_vision，由 OpenAIClient._path_or_url_to_data_url 自动 data-URL 化。
 
-# VLM 调用的 prompt 模板（v2.0.9 收编：从原 aiohttp payload 的 user message content 迁移）。
+# VLM 调用的 prompt 模板。
 _VLM_PROMPT = "请描述当前屏幕内容（简明扼要）"
 
 # 屏幕分析 system message（提示模型保持客观、聚焦可见内容）。
@@ -50,7 +48,7 @@ class ScreenReader:
     - 仅在屏幕发生变化（``ScreenAnalyzer`` 触发回调）时才调用 VLM，省 token
     - 维护最近 ``max_cached_images`` 张图像哈希作为缓存；相同 hash 直接跳过
     - 通过 ``set_context_update_callback`` 注入主循环的上下文更新入口
-    - v2.0.9：VLM 调用统一经由 :class:`LLMManager.chat_vision`，key/model/重试/日志由
+    - VLM 调用统一经由 :class:`LLMManager.chat_vision`，key/model/重试/日志由
       ``config/model.toml`` 的 ``[vlm]`` profile + ``[[llm_providers]]`` 池统一管理
     """
 
@@ -59,9 +57,9 @@ class ScreenReader:
         max_cached_images: int = 5,
         llm_manager: Optional[Any] = None,
     ):
-        # v2.0.9：移除 api_key/base_url/model_name 参数（统一走 model.toml）。
+        # VLM 连接配置统一走 model.toml。
         # llm_manager 为 None 时保留"跳过 VLM 调用 + 返回说明性结果"的降级语义，
-        # 与旧版 api_key 为空时的行为等价，便于未配置 VLM 场景（仅做缓存去重）。
+        # 便于未配置 VLM 场景（仅做缓存去重）。
         self.max_cached_images = max_cached_images
         self._llm_manager = llm_manager
 
@@ -101,11 +99,11 @@ class ScreenReader:
         return result
 
     async def _call_vlm(self, image: Any, change_data: dict[str, Any]) -> Optional[ScreenAnalysisResult]:
-        """通过 LLMManager 调用 VLM（v2.0.9 收编路径）。
+        """通过 LLMManager 调用 VLM。
 
         降级语义：
         - 未注入 llm_manager → 返回带 "skipped" 标记的说明性 ScreenAnalysisResult
-          （与旧版 api_key 为空时等价，便于未配置 VLM 的场景仅做缓存去重）
+          （便于未配置 VLM 的场景仅做缓存去重）
         - llm_manager 注入但 chat_vision 失败 → 返回 None（异常分支由调用方按既有
           日志路径处理）
         """

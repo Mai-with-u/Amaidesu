@@ -1,5 +1,5 @@
 """
-AgentControl —— 框架级 Agent 控制（Wave 3 / §1.49）
+AgentControl —— 框架级 Agent 控制
 
 - pause / resume / shutdown / restart 框架级工具
 - provider="builtin"（框架内置提供，非独立源）
@@ -134,26 +134,24 @@ class AgentControl:
         if agent is None:
             logger.warning(f"restart_agent: 未找到 Agent '{name}'")
             return False
-        # 1. stop 当前实例
+        # stop 当前实例
         await agent.stop()
-        # 2. 工厂重建
+        # 工厂重建
         try:
             new_agent = agent.clone()
         except Exception as exc:  # noqa: BLE001
             logger.error(f"Agent '{name}' 工厂重建失败: {exc}", exc_info=True)
             return False
         new_agent.increment_restart_counter()
-        # 3. 替换管理器中的实例
-        #    注意：这里仅替换引用，调用方需保证旧实例已停止（已 stop）
+        # 替换管理器中的实例：
+        #    仅替换引用，调用方需保证旧实例已停止（已 stop）
         #    并未清理 event_bus 注入；生产环境建议 Agent 自行管理重建流程
-        # 这里我们更新 manager 内部指向新的实例：
-        #   - 用 __setattr__ 替换内部 dict[name] 中的 agent
-        # 由于 _agents 是 dict，需要内部接口：
+        # 通过 manager 的注册表（_agents dict）替换旧实例
         reg = self._manager._agents.get(name)  # type: ignore[attr-defined]  # noqa: SLF001
         if reg is None:
             return False
         reg.agent = new_agent  # type: ignore[attr-defined]
-        # 4. start 新实例
+        # start 新实例
         await new_agent.start()
         return True
 

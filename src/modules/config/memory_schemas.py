@@ -1,4 +1,4 @@
-"""Memory 配置 Schema 定义（v2.0.0）
+"""Memory 配置 Schema 定义
 
 定义 ``config/memory.toml`` 的 Pydantic 聚合模型。
 
@@ -14,9 +14,8 @@
 > 库，路径权威在 storage.toml 的 ``[storage.sqlite].db_path``。
 
 设计原则：
-- ``backend`` 字面量（simple | amemorix），一键切换存储后端（§1.50）
-- SimpleMemory 的具体字段（W3 由 MemoryProvider 实现补全）
-- 遵循 v2.0.0 域分文件原则，记忆与存储解耦（共享 db_path）
+- ``backend`` 字面量（simple | amemorix），一键切换存储后端
+- 记忆与存储分文件配置、彼此解耦（共享 db_path）
 """
 
 from __future__ import annotations
@@ -40,7 +39,7 @@ MemoryBackend = Literal[
 
 
 # ---------------------------------------------------------------------------
-# SimpleMemory 配置（替代旧 [context] 段的会话存储）
+# SimpleMemory 配置
 # ---------------------------------------------------------------------------
 
 
@@ -75,7 +74,7 @@ class SimpleMemoryConfig(BaseConfig):
 
 
 # ---------------------------------------------------------------------------
-# Amemorix 配置（占位，W3 由外部 MemoryProvider 补全）
+# Amemorix 配置（占位，由外部 MemoryProvider 补全）
 # ---------------------------------------------------------------------------
 
 

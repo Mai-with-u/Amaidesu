@@ -9,9 +9,8 @@
 - **不做流式**：``show`` 一次性推送全量文本，不接受 chunk / token 粒度
   调用。打字机观感由前端模板动画承担（前端用整段文本做字符级渐进
   渲染），后端不负责流式。
-- **不抽基类**：与同包内其他基础设施协议的"结构类型，不抽基类"原则
-  一致——历史决策明确拒绝 ``BaseSubtitleBackend`` 抽象类抽取（不同
-  后端执行模型差异大，强抽基类 = 抽象泄漏）。
+- **不抽基类**：不同后端执行模型差异大，强抽基类 = 抽象泄漏；
+  只用结构类型协议。
 - **运行时校验仅用于 fail-fast**：``@runtime_checkable`` 让
   ``isinstance`` 在装配边界兜底，常规调用路径仍走静态类型收窄。
 - **错误传播交由调用方决定**：单后端的异常由 ``SubtitleService`` 在
@@ -26,7 +25,7 @@
 - ``async def show(text, utterance_id=None) -> None`` 推送一次字幕
 - ``async def clear() -> None`` 清空字幕
 
-参考模式：``src.modules.tts.protocol`` 的 ``TTSProvider``。
+参考模式：TTS 包的 ``TTSProvider``。
 """
 
 from __future__ import annotations

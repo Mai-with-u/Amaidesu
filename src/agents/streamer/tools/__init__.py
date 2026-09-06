@@ -2,8 +2,8 @@
 
 三个模块均为**真工具**（``provider="builtin"``），只做"包装内脏 → LLM 可调工具"
 的薄壳：本身不含决策/表达逻辑，被包装的内脏（Replyer / ProactiveTrigger /
-command 解析原语）留在上层目录，确保"Planner/Replyer 等内脏永不注册为工具"
-红线的物理边界清晰。
+command 解析原语）留在上层目录，确保"Planner/Replyer 等内脏不注册为工具"
+的物理边界清晰。
 
 - ``reply_tool``        - ``reply`` 工具入口（包装 Replyer 表达引擎）
 - ``proactive_tool``    - ``should_speak_proactively`` 工具入口（包装 ProactiveTrigger）

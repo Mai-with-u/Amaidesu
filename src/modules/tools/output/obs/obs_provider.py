@@ -1,17 +1,12 @@
 """
-OBSProvider - OBS 控制工具集（Wave 4 拆分）
+OBSProvider - OBS 控制工具集
 
-将原 ``ObsControlHandler`` 拆分为三个独立工具：
+提供三个工具：
 - ``obs_send_text``          - 发送文本到 OBS 文本源（含逐字效果）
 - ``obs_switch_scene``       - 切换 OBS 场景
 - ``obs_set_source_visibility`` - 控制源可见性
 
-迁移策略（与 .omo/drafts/amaidesu-v2-migration.md A 段对齐）:
-- 三个命令 verbatim 保留（``_send_text_to_obs`` / ``switch_scene`` /
-  ``set_source_visibility``）
-- 旧 ``OUTPUT_OBS_COMMAND`` 事件通道已由工具直连调用取代（事件常量保留至 W6/W8 清理）
-- ``obsws-python`` 软降级不变
-- ``ConfigSchema`` 字段 verbatim 保留
+通过 ``obsws-python`` 控制 OBS Studio；依赖缺失时软降级。
 """
 
 from __future__ import annotations
@@ -70,7 +65,7 @@ class OBSProvider:
     PROVIDER_NAME = "obs_control"
 
     class ConfigSchema(BaseConfig):
-        """OBS 控制配置（verbatim 自旧 ObsControlHandler.ConfigSchema）"""
+        """OBS 控制配置"""
 
         type: str = "obs_control"
         host: str = Field(default="localhost", description="OBS WebSocket 主机地址")

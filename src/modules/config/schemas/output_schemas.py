@@ -39,16 +39,11 @@
   仅含 ``enabled`` 元数据与每个 Handler 的可选子配置。
 - **OutputConfig**：`config/output.toml` 文件对应的根模型。
 
-  > 原 `OutputPipelinesConfig` 容器已删除——OutputPipeline 定案移除，
-  > 敏感词净化归 Replyer（ProfanityFilter）。
+  > 敏感词净化归 Replyer（ProfanityFilter），不在本文件配置。
 
-v2.0.10 收尾清理（调度字段下放至 core [tts]）：
-- 移除 ``concurrent_rendering``：v1 输出阶段并发模型已废弃，无消费者
-- 移除 ``error_handling``：v1 错误策略字段，无消费者
-- 移除 ``completion_timeout_ms``：v1 两层事件聚合 watchdog，无消费者
-- 移除 ``render_timeout_ms``：v1 单 Handler 渲染超时；调度语义升级为 TTS
-  基础设施总超时，统一上移至 core.toml ``[tts].render_timeout_ms``，
-  由 v2.0.10 的 ``CrossFileMigration`` 完成迁移
+调度字段（并发渲染 / 错误策略 / 渲染超时 / 聚合 watchdog）不在此定义，
+统一由 core.toml ``[tts]`` 的 TTS 基础设施配置承担
+（``render_timeout_ms`` 经 CrossFileMigration 迁移）。
 
 设计原则：
 - 不修改 Handler 内部代码，仅在调用时延迟加载其 `ConfigSchema` 嵌套类。
@@ -72,10 +67,9 @@ from .base import BaseConfig
 # ---------------------------------------------------------------------------
 #
 # 这些类由 `@handler("name")` 装饰器在 Handler 模块加载时自动注册到
-# `CONFIG_SCHEMA_REGISTRY`（见 `src.modules.config.schemas.__init__`）。
-# 此处仅在调用方实际访问 `*ConfigSchema` 符号时才 import 对应 Handler 模块，
-# 一来避免 handler 模块被本配置模块反向 import（可能触发循环依赖），
-# 二来与旧 `_try_import_obs_control_schema` 的延迟加载风格保持一致。
+# `CONFIG_SCHEMA_REGISTRY`。此处仅在调用方实际访问 `*ConfigSchema` 符号时
+# 才 import 对应 Handler 模块，避免 handler 模块被本配置模块反向 import
+# （可能触发循环依赖）。
 
 
 def _try_load_handler_schema(module_path: str, class_name: str) -> Optional[type]:
@@ -102,8 +96,7 @@ def _try_load_handler_schema(module_path: str, class_name: str) -> Optional[type
 # 调用方可通过这些符号访问对应 Provider 的 ConfigSchema，
 # 无需关心 Provider 模块的 import 时机。
 #
-# 所有 handler 已改为 modules/tools/output/ 下的 Provider。
-# DebugConsoleHandler 已被 dump_intent() 函数替代，无 ConfigSchema。
+# Handler 实现位于 modules/tools/output/ 下的 Provider。
 
 DebugConsoleConfigSchema: Optional[type] = None  # dump_intent 替代（DebugConfig dataclass）
 EdgeTTSConfigSchema: Optional[type] = _try_load_handler_schema(
@@ -172,9 +165,7 @@ class OutputHandlersConfig(BaseConfig):
     """`[handlers]` 段聚合模型
 
     包含 Output 阶段运行元数据（``enabled``）以及每个 Handler 的可选子配置。
-
-    v2.0.10 起不再持有调度字段——并发渲染 / 错误策略 / 渲染超时 / 聚合 watchdog
-    均已废弃，统一迁移至 core.toml ``[tts]`` 的 TTS 基础设施配置。
+    不持有调度字段——渲染调度由 core.toml ``[tts]`` 的 TTS 基础设施配置承担。
 
     使用 `extra="forbid"` 拒绝未知 Handler 子段，避免拼写错误静默通过。
     """
@@ -233,9 +224,9 @@ class OutputConfig(BaseConfig):
 # 向后兼容导出
 # ---------------------------------------------------------------------------
 #
-# 保留旧 API 表面以避免破坏既有调用方。
-# 注：实际 Schema 注册由 `@handler()` 装饰器在导入 Handler 模块时自动完成；
-# OUTPUT_CONFIG_MAP 保留为空 dict 仅作为占位。
+# 保留既有调用方的 API 表面。
+# Schema 注册由 `@handler()` 装饰器在导入 Handler 模块时自动完成；
+# OUTPUT_CONFIG_MAP 为空 dict，仅作占位。
 
 OUTPUT_CONFIG_MAP: Dict[str, type] = {}
 

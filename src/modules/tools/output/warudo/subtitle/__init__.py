@@ -1,4 +1,4 @@
-"""Warudo 字幕系统（迁移至 modules/tools/output）"""
+"""Warudo 字幕系统"""
 
 from .subtitle_manager import WarudoSubtitleManager
 from .templates import render_subtitle_html

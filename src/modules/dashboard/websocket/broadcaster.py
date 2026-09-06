@@ -1,22 +1,20 @@
 """
-EventBus 事件广播器（Wave 6 重写，Wave U1 / B5 补订阅）
+EventBus 事件广播器
 
 订阅 EventBus 事件并广播给 WebSocket 客户端。
 
-Wave 6 变更：
-- INPUT_MESSAGE_RECEIVED → ROOM_MESSAGE_DANMAKU（v2 语义域事件）
-- DECISION_INTENT_GENERATED → 删除（Intent 已被 DISCARD）
-- OUTPUT_INTENT_DISPATCHED → 删除（OutputHandlerManager 已被 DISCARD）
-- INPUT_CONNECTED / INPUT_DISCONNECTED / DECISION_CONNECTED / DECISION_DISCONNECTED →
-  删除（Stage-glue 连接事件已废弃，统一由 ROOM_MESSAGE_* 表达）
-- IntentPayload / MessageReadyPayload → DISCARDED，使用 RoomMessagePayload
-
-Wave U1 / B5 变更（plan: webui-v2-adaptation.md §2）：
-- 新增订阅 CoreEvents.ROOM_MESSAGE_{GIFT,SUPER_CHAT,ENTER}（WS type "room.message"，
-  与 danmaku 一致让前端按消息家族聚合）
-- 新增订阅 CoreEvents.AGENDA_UPDATE（WS type "agenda.update"）
-- 新增订阅 CoreEvents.TOOL_RESULT_WILDCARD（WS type 沿用具体事件名
-  tool.result.<tool_name>，payload=ToolResultPayload.model_dump）
+订阅的事件族：
+- ``room.message.*``（danmaku / gift / super_chat / enter） → WS type ``"room.message"``
+- ``planner.checkpoint`` → WS type 来自 ``PLANNER_CHECKPOINT_TYPE``
+- ``planner.decision`` / ``streamer.stage`` / ``live.started`` / ``live.ended``
+  → WS type = 事件名（直通）
+- ``agenda.update`` → WS type ``"agenda.update"``
+- ``streamer.speech`` → WS type ``"streamer.speech"``
+- ``tool.result.#`` 通配 → WS type = 具体事件名（``tool.result.<tool_name>``），
+  payload 为 ``ToolResultPayload.model_dump``
+- ``core.startup`` / ``core.shutdown`` → WS type 来自 ``SYSTEM_STATUS_TYPE``
+- ``core.error`` → WS type 来自 ``SYSTEM_ERROR_TYPE``
+- 组件事件（``COMPONENT_EVENT_TYPE_MAP`` 涵盖的事件）按映射表输出
 """
 
 import time

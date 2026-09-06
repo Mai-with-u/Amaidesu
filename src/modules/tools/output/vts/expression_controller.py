@@ -113,7 +113,7 @@ class ExpressionController:
                 "TrackingParameterListResponse",
             ):
                 data = response.get("data", {})
-                # 新版响应：defaultParameters + customParameters；旧版：model_parameters
+                # 兼容不同响应形态：defaultParameters + customParameters 或 model_parameters
                 params = (
                     data.get("defaultParameters", [])
                     + data.get("customParameters", [])

@@ -1,4 +1,4 @@
-"""ProactiveTrigger - 主播主动发言的纯规则触发判定组件（Wave 6 verbatim 移植）
+"""ProactiveTrigger - 主播主动发言的纯规则触发判定组件
 
 职责边界（重要）
 ----------------
@@ -10,8 +10,7 @@
 当前 Agenda 环节任务描述）自行决定；本组件不持有 prompt 模板、不调用 LLM、
 不预设话题 fallback 链。
 
-设计要点（沿用 ``RoomState`` 的纯规则风格，verbatim 移植自
-``stages/decision/deciders/amaidesu/proactive_trigger.py``）
+设计要点（纯规则风格）
 ----------------------------------------------
 - **无 I/O、无 LLM 调用、无 EventBus、无 asyncio**：所有时间通过参数注入
   （``now_ms``），便于确定性测试，禁止 ``time.sleep``。
@@ -58,7 +57,7 @@ __all__ = ["ProactiveTrigger"]
 
 
 # ---------------------------------------------------------------------------
-# 默认配置（与 .omo/plans/proactive-speech.md Task 6 的 AmaidesuConfig 默认值对齐）
+# 默认配置
 # ---------------------------------------------------------------------------
 
 _DEFAULT_ENABLED: bool = True
@@ -134,10 +133,10 @@ class ProactiveTrigger:
     ) -> str | None:
         """判定当前 tick 是否应触发主动发言。
 
-        优先级顺序：``external > outline > schedule > cold``。
+        优先级顺序：``external > agenda > schedule > cold``。
 
         公共前置条件（仅对 ``external`` / ``schedule`` / ``cold`` 生效）：
-        - ``enabled=False`` → 永不触发（含 outline）
+        - ``enabled=False`` → 永不触发（含 agenda）
         - ``min_interval_ms`` 防接龙（对照 ``room_state.last_speech_ms``）
         - ``max_per_hour`` hourly 滑窗
         - ``topic_required`` 话题缺失则跳过
@@ -147,19 +146,19 @@ class ProactiveTrigger:
         触发源对 ``topic_required`` 的依赖差异：
         - ``external`` / ``schedule`` / ``cold`` 均受 ``topic_required``
           约束（外部 API 用户**或**定时/冷场发言需要话题支撑）。
-        - ``outline`` **不**受 ``topic_required`` 约束（Agenda 本身提供话题，
+        - ``agenda`` **不**受 ``topic_required`` 约束（Agenda 本身提供话题，
           来自当前环节任务描述，不依赖 ``room_state.topic_summary``）。
 
-        Agenda 触发源（outline）的限流独立性
+        Agenda 触发源的限流独立性
         ---------------------------------
         节目单是**内容推进**而非**救场**——主播应按环节节奏持续发言，不应
         被为"防接龙/冷场救场"设计的低频限流卡死：
 
-        - ``outline_pending=True``（环节切换即时信号）：仅受总开关约束，
-          立即触发 ``"outline"``，新环节开场白必须马上说，不等任何间隔。
-        - ``outline_ready=True``（环节内持续发言信号）：绕过公共
+        - ``agenda_pending=True``（环节切换即时信号）：仅受总开关约束，
+          立即触发 ``"agenda"``，新环节开场白必须马上说，不等任何间隔。
+        - ``agenda_ready=True``（环节内持续发言信号）：绕过公共
           ``min_interval_ms`` / ``max_per_hour`` / ``topic_required`` 三道
-          前置，使用独立的 ``outline_speech_interval_ms``（默认 3 秒防抖，
+          前置，使用独立的 ``agenda_speech_interval_ms``（默认 3 秒防抖，
           对照 ``last_speech_ms``）控制发言节奏。观众弹幕回应仍会刷新
           ``last_speech_ms``，自然推迟下一句大纲发言（刚回完观众就推话题
           很赶，这个联动保留）。
@@ -187,7 +186,7 @@ class ProactiveTrigger:
             ``"external"`` / ``"agenda"`` / ``"schedule"`` / ``"cold"`` ——
             表示应触发并给出原因；``None`` —— 表示不触发。
         """
-        # 总开关（所有源适用，含 outline）
+        # 总开关（所有源适用，含 agenda）
         if not self._enabled:
             return None
 
@@ -198,8 +197,7 @@ class ProactiveTrigger:
 
         last_speech_ms = getattr(room_state, "last_speech_ms", None)
 
-        # external：最高优先级（受 min_interval/max_per_hour/topic_required，既有行为）。
-        # ——把原公共前置②③的检查移入 external 分支内（行为等价）
+        # external：最高优先级（受 min_interval/max_per_hour/topic_required）
         if external_pending:
             if last_speech_ms is not None and (now_ms - last_speech_ms) < self._min_interval_ms:
                 return None

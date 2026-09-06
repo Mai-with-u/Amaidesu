@@ -1,17 +1,15 @@
 """
-BaseAgent —— Agent 协议六面（Wave 3 / §1.49 定案）
+BaseAgent —— Agent 协议六面
 
 框架对 Agent 的**唯一要求**（最小契约）；Agent 内部完全自由。
 
 ## 协议六面（最小契约）
-| # | 面 | 内容 |
-|---|---|---|
-| 1 | 生命周期 | start / stop / cleanup + 可重建性（工厂重建崩溃实例） |
-| 2 | 工具提供 | list_tools() → 声明暴露的工具 |
-| 3 | 事件上报 | 自由 emit + 可选声明事件族 |
-| 4 | 状态读写 | 框架给**状态写入口**，按 Agent 名字空间隔离 |
-| 5 | 健康 | 统一心跳协议 |
-| 6 | 元数据 | name / description |
+- 生命周期：start / stop / cleanup + 可重建性（工厂重建崩溃实例）
+- 工具提供：list_tools() → 声明暴露的工具
+- 事件上报：自由 emit + 可选声明事件族
+- 状态读写：框架给**状态写入口**，按 Agent 名字空间隔离
+- 健康：统一心跳协议
+- 元数据：name / description
 
 ## 接入方式：继承 + 构造注入
 ```python
@@ -49,7 +47,7 @@ EventBusLike = Any
 
 
 class AgentState(str, Enum):
-    """Agent 状态机（§1.49 默认实现，子类钩子可选覆盖）"""
+    """Agent 状态机（默认实现，子类钩子可选覆盖）"""
 
     CREATED = "created"
     STARTING = "starting"
@@ -62,7 +60,7 @@ class AgentState(str, Enum):
 
 @dataclass(slots=True)
 class AgentHeartbeat:
-    """心跳记录（§1.49 第 5 面：统一心跳协议）"""
+    """心跳记录（统一心跳协议）"""
 
     agent_name: str
     last_heartbeat_ms: int = 0
@@ -71,12 +69,12 @@ class AgentHeartbeat:
 
 
 class BaseAgent(abc.ABC):
-    """Agent 协议基类（§1.49）。
+    """Agent 协议基类。
 
     子类必须实现：
-    - ``list_tools()``（协议 2：工具提供）
-    - 至少 ``start()`` 的核心动作（协议 1：生命周期）
-    - 提供 ``name`` / ``description``（协议 6：元数据）
+    - ``list_tools()``（工具提供）
+    - 至少 ``start()`` 的核心动作（生命周期）
+    - 提供 ``name`` / ``description``（元数据）
 
     子类**可选**覆盖：
     - ``_on_pause`` / ``_on_resume`` / ``_on_shutdown`` 钩子
@@ -84,11 +82,11 @@ class BaseAgent(abc.ABC):
     - ``_cleanup()`` 额外清理
     """
 
-    # ----- 协议 6：元数据（子类**必须**覆写）-----
+    # ----- 元数据（子类**必须**覆写）-----
     name: str = ""  # 子类必填
     description: str = ""  # 子类必填
 
-    # ----- 协议 3：事件族声明（可选）-----
+    # ----- 事件族声明（可选）-----
     emits_events: Iterable[str] = ()  # 子类可声明自己发哪些事件族
 
     # ----- 内部状态 -----
@@ -105,7 +103,7 @@ class BaseAgent(abc.ABC):
         self._lock = asyncio.Lock()
         logger.debug(f"Agent '{self.name or '<未命名>'}' 构造完成（描述: {self.description[:40] or '<空>'}…）")
 
-    # ---------------- 协议 1：生命周期 ----------------
+    # ---------------- 生命周期 ----------------
 
     async def start(self) -> None:
         """默认实现：状态机；子类应 ``super().start()`` 或覆写 _on_start。"""
@@ -176,7 +174,7 @@ class BaseAgent(abc.ABC):
         """子类停机钩子（更严格，可能停止外部资源）"""
         return None  # 默认空操作：子类覆写
 
-    # ----- 控制操作（§1.49 框架统一控制，由 AgentControl 工具调用） -----
+    # ----- 控制操作（框架统一控制，由 AgentControl 工具调用） -----
 
     async def pause(self) -> None:
         async with self._lock:
@@ -200,13 +198,13 @@ class BaseAgent(abc.ABC):
         await self._on_shutdown()
         logger.info(f"Agent '{self.name}' 已 shutdown")
 
-    # ---------------- 协议 2：工具提供 ----------------
+    # ---------------- 工具提供 ----------------
 
     @abc.abstractmethod
     def list_tools(self) -> Iterable[ToolSpec]:
         """声明本 Agent 暴露的工具。空集合表示不暴露。"""
 
-    # ---------------- 协议 3：事件上报 ----------------
+    # ---------------- 事件上报 ----------------
 
     async def emit_event(
         self,
@@ -224,7 +222,7 @@ class BaseAgent(abc.ABC):
             source=source or self.name,
         )
 
-    # ---------------- 协议 4：状态读写 ----------------
+    # ---------------- 状态读写 ----------------
 
     @property
     def state(self) -> AgentState:
@@ -235,7 +233,7 @@ class BaseAgent(abc.ABC):
         return self._heartbeat
 
     def note_heartbeat(self) -> None:
-        """统一心跳：写入当前时刻（§1.49 第 5 面）。"""
+        """统一心跳：写入当前时刻。"""
         self._heartbeat.last_heartbeat_ms = now_ms()
         self._heartbeat.is_alive = True
 

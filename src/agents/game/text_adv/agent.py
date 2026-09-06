@@ -1,6 +1,6 @@
 """TextAdvGameAgent —— 文字冒险游戏 Agent
 
-按架构定案：
+设计：
 - 继承 ``BaseAgent``（协议六面全部实现）
 - 构造注入依赖（llm/prompt/event_bus/tool_registry/content_engine/...）
 - 自带 game 专属工具（``choose_option`` / ``get_story``），provider="game"
@@ -11,15 +11,12 @@
 - 不继承任何"组合式引擎"（无组合式引擎定案）
 
 协议六面（最小契约）：
-
-| # | 面 | 内容 |
-|---|---|---|
-| 1 | 生命周期 | start/stop/cleanup（默认实现） |
-| 2 | 工具提供 | list_tools() → choose_option + get_story（provider="game"） |
-| 3 | 事件上报 | emit game.milestone / game.attention_required / game.error |
-| 4 | 状态读写 | 内部 TextAdvGameAgentState（内容状态） |
-| 5 | 健康 | BaseAgent 心跳（默认实现） |
-| 6 | 元数据 | name / description |
+- 生命周期：start/stop/cleanup（默认实现）
+- 工具提供：list_tools() → choose_option + get_story（provider="game"）
+- 事件上报：emit game.milestone / game.attention_required / game.error
+- 状态读写：内部 TextAdvGameAgentState（内容状态）
+- 健康：BaseAgent 心跳（默认实现）
+- 元数据：name / description
 """
 
 from __future__ import annotations
@@ -97,22 +94,19 @@ class TextAdvGameConfig(BaseConfig):
 class TextAdvGameAgent(BaseAgent):
     """文字冒险游戏 Agent
 
-    关键演示点（证明协议范式）：
-    1. **零框架改动**：本文件**不修改**任何 ``modules/agents/`` / ``modules/tools/`` 文件
-    2. **构造注入**：所有依赖经 ``__init__`` 参数传入（可 mock / 可替换）
-    3. **list_tools**：仅声明 Agent 专属工具（provider="game"），公用感知工具不声明
-    4. **感知复用**：通过 ``ToolRegistry.invoke("look_at_screen")`` 调公用工具
-    5. **推进专属**："choose_option" 翻译为 content_engine 输入
-
-    范式验证：加新游戏 = 新建 ``agents/game/<name>/`` + 注册
-    （main.py 一行 dispatch），框架代码零改动。
+    实现方式：
+    - 零框架改动：本文件**不修改**任何 ``modules/agents/`` / ``modules/tools/`` 文件
+    - 构造注入：所有依赖经 ``__init__`` 参数传入（可 mock / 可替换）
+    - list_tools：仅声明 Agent 专属工具（provider="game"），公用感知工具不声明
+    - 感知复用：通过 ``ToolRegistry.invoke("look_at_screen")`` 调公用工具
+    - 推进专属："choose_option" 翻译为 content_engine 输入
     """
 
-    # ----- 协议 6：元数据 -----
+    # ----- 元数据 -----
     name = "game"
     description = "文字冒险游戏 Agent"
 
-    # ----- 协议 3：事件族声明 -----
+    # ----- 事件族声明 -----
     emits_events = (
         CoreEvents.GAME_MILESTONE,
         CoreEvents.GAME_ATTENTION_REQUIRED,
@@ -170,17 +164,17 @@ class TextAdvGameAgent(BaseAgent):
         )
 
     # ==================================================================
-    # 协议 1：生命周期
+    # 生命周期
     # ==================================================================
 
     async def _on_start(self) -> None:
         """启动钩子：注册 Agent 专属工具 + 启动 content_engine。"""
-        # 1) 注册 Agent 专属工具（choose_option / get_story）
+        # 注册 Agent 专属工具（choose_option / get_story）
         if self._tool_registry is not None:
             self._register_tools()
             self._register_content_engine()
 
-        # 2) 启动 content_engine（如果未启动）
+        # 启动 content_engine（如果未启动）
         await self._safe_engine_start()
 
         self._logger.info("TextAdvGameAgent 已启动")
@@ -193,7 +187,7 @@ class TextAdvGameAgent(BaseAgent):
             self._logger.warning(f"停止 ContentEngine 失败: {exc}")
 
     # ==================================================================
-    # 协议 2：工具提供（list_tools）
+    # 工具提供（list_tools）
     # ==================================================================
 
     def list_tools(self) -> Iterable[ToolSpec]:
@@ -230,7 +224,7 @@ class TextAdvGameAgent(BaseAgent):
             self._logger.warning(f"ContentEngine.start() 失败: {exc}")
 
     # ==================================================================
-    # 协议 3：事件上报（game.* 语义域）
+    # 事件上报（game.* 语义域）
     # ==================================================================
 
     async def emit_milestone(self, message: str, *, scene: str = "") -> None:
@@ -281,14 +275,11 @@ class TextAdvGameAgent(BaseAgent):
     ) -> Dict[str, Any]:
         """外部 API：注入"游戏画面变化"→ 触发一次感知-推进闭环。
 
-        这是范式验证的**核心入口**：
+        感知-推进闭环的核心入口：
             输入：屏幕文本 + 选项列表（mock 数据或真实采集）
-            步骤：
-                1. 调公用 look_at_screen 工具（验证感知触发）
-                2. 解析 → 更新内部状态
-                3. 决策（简化：首选项）
-                4. 调 choose_option 触发推进（验证推进触发）
-                5. emit game.milestone 报告推进
+            过程：调公用 look_at_screen 工具感知 → 解析更新内部状态 →
+            决策（简化：首选项）→ 调 choose_option 触发推进 →
+            emit game.milestone 报告推进
             返回：本次闭环的统计 + 状态快照
 
         测试场景通过此方法验证"感知调用 + 推进触发 + 循环闭合"。
@@ -306,7 +297,7 @@ class TextAdvGameAgent(BaseAgent):
             "engine_input_accepted": False,
         }
 
-        # ---- 步骤 1：感知（调公用 look_at_screen）----
+        # ---- 感知（调公用 look_at_screen）----
         screen_text = new_screen_text
         try:
             perception = await self._tool_registry.invoke(
@@ -326,7 +317,7 @@ class TextAdvGameAgent(BaseAgent):
             await self.emit_error(f"感知异常: {type(exc).__name__}: {exc}")
             return result
 
-        # ---- 步骤 2：解析（更新内部状态）----
+        # ---- 解析（更新内部状态）----
         changed = self._game_state.apply_screen_text(screen_text)
         if options is not None:
             self._game_state.set_options(options)
@@ -335,14 +326,14 @@ class TextAdvGameAgent(BaseAgent):
             # 无变化 → 不推进（避免空转）
             return result
 
-        # ---- 步骤 3：决策（默认首选项）----
+        # ---- 决策（默认首选项）----
         chosen = self._game_state.pick_default_option()
         if chosen is None:
             await self.emit_attention_required("无可选选项，等待新场景")
             return result
         result["decision"] = chosen.option_id
 
-        # ---- 步骤 4：推进（调 choose_option）----
+        # ---- 推进（调 choose_option）----
         try:
             advance_result = await self._tool_registry.invoke(
                 _make_invocation(
@@ -355,7 +346,7 @@ class TextAdvGameAgent(BaseAgent):
             result["advance_called"] = True
             if advance_result.success:
                 result["engine_input_accepted"] = True
-                # ---- 步骤 5：里程碑上报 ----
+                # ---- 里程碑上报 ----
                 await self.emit_milestone(
                     f"已选择选项 {chosen.option_id}（{chosen.label}）",
                     scene=self._game_state.scene_id,

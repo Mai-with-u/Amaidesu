@@ -1,5 +1,5 @@
 """
-事件名称常量定义（v2 语义域事件）
+事件名称常量定义
 
 使用常量替代魔法字符串，提供 IDE 自动补全和重构支持。
 
@@ -7,22 +7,11 @@
 - 格式: 域.主体.动作（点分隔）
 - 域为语义域（live / room / game / agenda / planner / tool / streamer），不是阶段（input / decision / output）
 - 通配订阅：``*``=单层 ``#``=多层（MQTT 风格）
-
-v2 收口删除（Stage-glue 胶水事件）：
-- ~~decision.intent.generated~~（无 Intent；决策出口=工具调用，无事件）
-- ~~output.intent.dispatched~~ / ~~output.intent.finished~~ / ~~output.handler.completed~~
-  （无 OutputHandlerManager；统一为 ToolRegistry.invoke）
-- ~~output.obs.command~~（→ 工具直接调用）
-- ~~output.sticker.command~~（StickerHelper 零实例化零调用、消费端 VTSProvider
-  仅空转订阅；接电线也救不了——没有 LLM 工具暴露贴纸触发，未来做表情功能
-  时再重新设计）
-
-详细规范请参考: docs/architecture/event-naming-convention.md
 """
 
 
 class CoreEvents:
-    """核心事件名称常量（Wave 6 语义域事件 + 核心系统事件）"""
+    """核心事件名称常量"""
 
     # ========== Core: 核心系统事件 ==========
     CORE_STARTUP = "core.startup"
@@ -38,7 +27,7 @@ class CoreEvents:
     # ========== v2 语义域事件（room.message.* 直播间行为流） ==========
     # 行为流（发生的事）。注意：room.state.* 是**预留层**（契约决定，
     # 默认不实现任何事件；将来若需主动广播订阅的状态变更才会启用，
-    # 不与行为流平铺同层）。详见 event-contract.md "room.*" 节。
+    # 不与行为流平铺同层）。
     ROOM_MESSAGE_DANMAKU = "room.message.danmaku"
     ROOM_MESSAGE_GIFT = "room.message.gift"
     ROOM_MESSAGE_SUPER_CHAT = "room.message.super_chat"
@@ -86,7 +75,6 @@ class CoreEvents:
     # **这是通配订阅模式专用**，不是被 emit 的具体事件名。emit 时使用具体名
     # 如 "tool.result.speak"/"tool.result.summarize_timeline"。
     # 订阅者可以 `event_bus.on("tool.result.#", ...)` 一站式监听所有工具结果。
-    # 详见 event-contract.md "tool.result.#" 节。
     TOOL_RESULT_WILDCARD = "tool.result.#"
 
     @classmethod

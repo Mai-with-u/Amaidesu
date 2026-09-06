@@ -2,15 +2,12 @@
 
 主播 Agent = Planner（决策核心）+ reply 工具（入口）+ Replyer（表达引擎），一体。
 协议六面（最小契约）：
-
-| # | 面 | 内容 |
-|---|---|---|
-| 1 | 生命周期 | start/stop/cleanup + 可重建性 |
-| 2 | 工具提供 | list_tools() → 暴露 reply / should_speak_proactively / parse_command |
-| 3 | 事件上报 | emit（planner.checkpoint 等；订阅 room.message.danmaku 等） |
-| 4 | 状态读写 | RoomState / AgendaState 内部组件 |
-| 5 | 健康 | BaseAgent 心跳协议 |
-| 6 | 元数据 | name / description |
+- 生命周期：start/stop/cleanup + 可重建性
+- 工具提供：list_tools() → 暴露 reply / should_speak_proactively / parse_command
+- 事件上报：emit（planner.checkpoint 等；订阅 room.message.danmaku 等）
+- 状态读写：RoomState / AgendaState 内部组件
+- 健康：BaseAgent 心跳协议
+- 元数据：name / description
 
 接入方式（继承 + 构造注入）：
 ```python
@@ -28,13 +25,6 @@ await agent.start()
 # Agent now: subscribes room.message.danmaku → buffers → planner → reply tool → ...
 await agent.cleanup()
 ```
-
-实现要点：
-- 移除 AmaidesuDecider wrapper：Agent 本身直接编排子组件
-- 新增 toolset：reply / proactive / command 三个 @tool
-- 后台双任务（BackgroundMaintainer）取代 RoomStateLoop + 部分 AmaidesuDecider 职责
-- 持久化走 SQLiteStore（live_sessions + agenda_runtime）
-- 删除 Intent：决策出口=reply 工具调用，零 Intent 事件
 """
 
 from __future__ import annotations
@@ -98,27 +88,27 @@ from pydantic import Field as _PydField
 
 
 class StreamerAgentConfig(BaseConfig):
-    """主播 Agent 配置 Schema（替代旧 AmaidesuDecider.ConfigSchema）。
+    """主播 Agent 配置 Schema。
 
-    字段名对齐 agents_schemas.StreamerAgentConfig（planner_llm / replyer_llm）
-    + 保留旧字段（replyer_client / planner_client）作为向后兼容映射。
+    planner_llm / replyer_llm 为标准字段名；旧字段名（replyer_client / planner_client）
+    作为向后兼容映射保留。
     """
 
     # --- 两阶段 LLM profile：Planner 用 llm_fast，Replyer 用 llm ---
     planner_llm: str = _PydField(default="llm_fast", description="Planner 使用的 LLM profile")
     replyer_llm: str = _PydField(default="llm", description="Replyer 使用的 LLM profile")
 
-    # 旧字段名兼容（向后兼容旧 [agents.amaidesu] 段）
+    # 旧字段名兼容
     planner_client: str = _PydField(default="llm_fast", description="（兼容字段）Planner LLM client")
     replyer_client: str = _PydField(default="llm", description="（兼容字段）Replyer LLM client")
 
-    # --- Stage 1 弹幕聚合（idle 补偿公式保留）---
+    # --- 弹幕聚合（含 idle 补偿公式）---
     batch_window_ms: int = _PydField(default=3000, ge=0, description="弹幕聚合时间窗口（毫秒）")
     batch_max_size: int = _PydField(default=20, ge=1, description="单批最多聚合的弹幕条数")
     tick_interval_ms: int = _PydField(default=300, ge=50, description="后台聚合检查间隔（毫秒）")
     enable_idle_compensation: bool = _PydField(default=True, description="空窗补偿开关")
 
-    # --- Stage 1 强制触发 ---
+    # --- 强制触发 ---
     force_data_types: List[str] = _PydField(
         default_factory=lambda: ["super_chat", "guard", "gift"],
         description="强制响应的数据类型",
@@ -127,7 +117,7 @@ class StreamerAgentConfig(BaseConfig):
 
     # --- 人设 ---
     # 默认值 '麦麦' 与 core_schemas.PersonaConfig.bot_name 默认值 +
-    # config/core.toml 真实值对齐；历史 '爱德丝' 已弃用。
+    # config/core.toml 真实值对齐。
     # 优先级链：persona dict（来自 core.toml，经装配根注入 StreamerAgent.persona_provider）
     # > StreamerAgentConfig.bot_name（agents.toml 显式覆盖）> 本字段默认值。
     bot_name: str = _PydField(default="麦麦", description="VTuber 名称")
@@ -194,19 +184,19 @@ class StreamerAgent(BaseAgent):
     """主播 Agent：编排 Planner + Replyer + 工具 + 后台任务 + Agenda。
 
     实现协议六面：
-    1. 生命周期（start/stop/cleanup）
-    2. 工具提供：reply / should_speak_proactively / parse_command（3 个 @tool）
-    3. 事件上报：emit（planner.checkpoint 等）；订阅 room.message.*
-    4. 状态读写：内部 RoomState / AgendaState / MessageBuffer
-    5. 健康：BaseAgent 心跳
-    6. 元数据：name / description
+    - 生命周期（start/stop/cleanup）
+    - 工具提供：reply / should_speak_proactively / parse_command（3 个 @tool）
+    - 事件上报：emit（planner.checkpoint 等）；订阅 room.message.*
+    - 状态读写：内部 RoomState / AgendaState / MessageBuffer
+    - 健康：BaseAgent 心跳
+    - 元数据：name / description
     """
 
-    # -----协议 6：元数据（必须覆写）-----
+    # -----元数据（必须覆写）-----
     name = "streamer"
     description = "Streamer Agent - 主播决策 + 表达 + 后台维护"
 
-    # -----协议 3：事件族声明（可选）-----
+    # -----事件族声明（可选）-----
     emits_events = (
         CoreEvents.PLANNER_CHECKPOINT,
         CoreEvents.AGENDA_UPDATE,
@@ -291,7 +281,7 @@ class StreamerAgent(BaseAgent):
         self._logger = get_logger("StreamerAgent")
 
         # ===== 内部子组件 =====
-        # Stage 1: 弹幕聚合缓冲 + 强制触发判定
+        # 弹幕聚合缓冲 + 强制触发判定
         self._buffer = MessageBuffer(
             batch_window_ms=config.batch_window_ms,
             batch_max_size=config.batch_max_size,
@@ -305,7 +295,7 @@ class StreamerAgent(BaseAgent):
         # 房间态势（纯规则滑动窗口）
         self._room_state = RoomState()
 
-        # Stage 1: Planner（决策核心，Agent 内脏——非工具）
+        # Planner（决策核心，Agent 内脏——非工具）
         # 从 self._persona_provider（装配根注入的 [persona] dict）
         # 提取 behavior_style（行动准则）并透传给 Planner；persona_provider 是 dict
         # 或可调用对象两种形式，统一用鸭子类型断言。
@@ -339,7 +329,7 @@ class StreamerAgent(BaseAgent):
             enabled=config.profanity_enabled,
         )
 
-        # Stage 2: Replyer（表达引擎，Agent 内脏——非工具）
+        # Replyer（表达引擎，Agent 内脏——非工具）
         self._replyer = Replyer(
             config={
                 "replyer_llm": config.replyer_llm,
@@ -439,32 +429,32 @@ class StreamerAgent(BaseAgent):
         )
 
     # ==================================================================
-    # 协议 6 + 1：生命周期
+    # 生命周期
     # ==================================================================
 
     async def _on_start(self) -> None:
         """Agent 启动钩子：订阅事件 + 启动后台任务 + 注册工具。"""
         self._running = True
 
-        # 1. 构造并（若有 registry）注册自己的工具 Provider
+        # 构造并（若有 registry）注册自己的工具 Provider
         self._register_tools()
 
-        # 2. 订阅 room.message.*（collectors emit 的语义域事件）
+        # 订阅 room.message.*（collectors emit 的语义域事件）
         if self._event_bus is not None:
             self._subscribe_events()
 
-        # 3. 启动后台 flush 循环
+        # 启动后台 flush 循环
         self._flush_task = asyncio.create_task(self._flush_loop())
 
-        # 4. 启动后台双任务（轻循环 + 压缩 worker）
+        # 启动后台双任务（轻循环 + 压缩 worker）
         if self.typed_config.room_state_enabled:
             await self._background.start()
 
-        # 5. 启动 Agenda 组件
+        # 启动 Agenda 组件
         if self.typed_config.agenda_enabled and self.typed_config.agenda_auto_start:
             await self._start_agenda_components()
 
-        # 6. 启动发言管线（speech → TTS / emotion → VTS）
+        # 启动发言管线（speech → TTS / emotion → VTS）
         # 仅在 TTS 显式启用且 tts_engine 注入时构造；否则保持禁用（决策循环
         # 行为与改造前一致：只读 result.success，不消费 result.content）。
         if self._tts_enabled:
@@ -530,11 +520,11 @@ class StreamerAgent(BaseAgent):
         self._logger.info("StreamerAgent 已停止")
 
     # ==================================================================
-    # 协议 2：工具提供（list_tools）
+    # 工具提供（list_tools）
     # ==================================================================
 
     def list_tools(self) -> Iterable[ToolSpec]:
-        """声明本 Agent 暴露的工具（协议面 2）。
+        """声明本 Agent 暴露的工具。
 
         单一事实源：tool spec 完全源自三个工具 Provider（ReplyToolProvider /
         ProactiveToolProvider / CommandToolProvider）。Provider 在 ``_register_tools``
@@ -613,7 +603,7 @@ class StreamerAgent(BaseAgent):
         self._logger.info("StreamerAgent 3 个工具已注册：reply / should_speak_proactively / parse_command")
 
     # ==================================================================
-    # 协议 3：事件订阅
+    # 事件订阅
     # ==================================================================
 
     def _subscribe_events(self) -> None:
@@ -661,11 +651,11 @@ class StreamerAgent(BaseAgent):
     async def handle_message(self, msg: NormalizedMessage) -> None:
         """处理一条弹幕（collectors → Agent 入口；测试也可直接调）。"""
         self._total_messages += 1
-        # 1. RoomState 热度信号
+        # RoomState 热度信号
         self._room_state.update(msg, now_ms=now_ms())
-        # 2. TimingGate 强制判定
+        # TimingGate 强制判定
         forced = self._timing_gate.is_forced(msg)
-        # 3. 入缓冲
+        # 入缓冲
         self._buffer.add(msg, arrival_ms=now_ms(), forced=forced)
 
     def trigger_external_proactive(self, topic_hint: Optional[str] = None) -> None:
@@ -752,10 +742,6 @@ class StreamerAgent(BaseAgent):
     # 后台 flush 循环（Agent 主循环）
     # ==================================================================
 
-    # ==================================================================
-    # 后台 flush 循环（Agent 主循环）
-    # ==================================================================
-
     async def _flush_loop(self) -> None:
         """后台循环：周期性检查缓冲并触发批次决策。"""
         interval = max(self.typed_config.tick_interval_ms / 1000.0, 0.05)
@@ -775,7 +761,7 @@ class StreamerAgent(BaseAgent):
             return
 
         async with self._flush_lock:
-            # 分支 2：buffer 空时 → 主动发言判定
+            # buffer 空时 → 主动发言判定
             if self._buffer.is_empty:
                 agenda_pending = self._agenda_proactive_pending
                 self._agenda_proactive_pending = False
@@ -798,7 +784,7 @@ class StreamerAgent(BaseAgent):
                     )
                 return
 
-            # 分支 1：弹幕聚合 → 两阶段决策
+            # 弹幕聚合 → 两阶段决策
             now = now_ms()
             avg_interval_ms = self._estimate_avg_interval_ms()
             flush_due, flush_reason = self._buffer.should_flush(now, avg_interval_ms=avg_interval_ms)
@@ -936,13 +922,13 @@ class StreamerAgent(BaseAgent):
             "total_duration_ms": now_ms() - started_ms,
         }
 
-        # 1. 读历史（duck-typed）
+        # 读历史（duck-typed）
         history = await self._read_history("live")
 
-        # 2. 拼装 Agenda 上下文
+        # 拼装 Agenda 上下文
         agenda_text = self._build_agenda_text()
 
-        # 3. Planner 决策（失败细节经 Planner.last_failure 带出，供决策事件区分降级原因）
+        # Planner 决策（失败细节经 Planner.last_failure 带出，供决策事件区分降级原因）
         planner_started_ms = now_ms()
         try:
             plan = await self._planner.plan(
@@ -982,15 +968,15 @@ class StreamerAgent(BaseAgent):
         result["reply_to_message_id"] = plan.reply_to
         result["silent_reason"] = plan.silent_reason
 
-        # 4. Plan 裁决
+        # Plan 裁决
         if not plan.should_reply:
             self._total_no_action += 1
             self._consume_plan_assessment(plan)
             result["total_duration_ms"] = now_ms() - started_ms
             return result
 
-        # 5. 触发 reply 工具（StreamerAgent 直接调 reply Provider.invoke，
-        #    跳过 LLM chat loop——Agent 内脏直连 LLM executor）
+        # 触发 reply 工具（StreamerAgent 直接调 reply Provider.invoke，
+        # 跳过 LLM chat loop——Agent 内脏直连 LLM executor）
         reply_started_ms = now_ms()
         try:
             reply_result = await self._reply_provider.invoke(  # type: ignore[union-attr]
@@ -1014,7 +1000,7 @@ class StreamerAgent(BaseAgent):
             result["total_duration_ms"] = now_ms() - started_ms
             return result
 
-        # 5.5 解析 reply payload 并分发到发言管线（speech → TTS / emotion → VTS）。
+        # 解析 reply payload 并分发到发言管线（speech → TTS / emotion → VTS）。
         # 决策循环契约：此分支任何异常都不能阻断后续 RoomState/Agenda 更新。
         # replied_count 闭环：从 batch 反查本次回复的观众 user_id，透传到发言管线；
         # reply_to_message_id（Planner 指向的具体弹幕）随发言事件落库，形成
@@ -1027,17 +1013,17 @@ class StreamerAgent(BaseAgent):
         if speech_info is not None:
             result["speech"], result["emotion"], result["utterance_id"] = speech_info
 
-        # 6. 成功：保存上下文 + 记录发言时刻 + 频率限制
+        # 成功：保存上下文 + 记录发言时刻 + 频率限制
         self._total_replies += 1
         self._room_state.record_speech(now_ms())
         if proactive:
             reason = trigger_reason.removeprefix("proactive:") if trigger_reason else "unknown"
             self._proactive_trigger.record_trigger(reason, now_ms())
 
-        # 7. 消费 Planner 顺带评估（灌注 AgendaIdle）
+        # 消费 Planner 顺带评估（灌注 AgendaIdle）
         self._consume_plan_assessment(plan)
 
-        # 8. 持久化 Agenda runtime
+        # 持久化 Agenda runtime
         if self._agenda_idle is not None and self._agenda_state.agenda is not None:
             try:
                 await self._agenda_state.persist_runtime()

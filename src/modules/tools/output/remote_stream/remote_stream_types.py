@@ -1,21 +1,11 @@
 """
-RemoteStreamTypes - 远程流消息协议与配置（Wave 4 拆分）
+RemoteStreamTypes - 远程流消息协议与配置
 
-迁移自 ``src.stages.output.handlers.remote_stream.RemoteStreamHandler``：
-
-- **保留**：``MessageType`` / ``StreamMessage`` / ``AudioConfig`` / ``ImageConfig``
-  + 消息分发器（``_process_message``）
-- **删除**：websocket 服务端/客户端脚手架、``OUTPUT_OBS_COMMAND`` 事件订阅
-
-新架构下，远程流传输由独立 transport 层负责，本模块仅作为：
+远程流传输由独立 transport 层负责，本模块仅作为：
 - 消息协议定义（前后端共享）
 - 消息处理工具（解析 incoming messages）
 - AudioConfig / ImageConfig（前后端协商格式）
-
-迁移策略（与 .omo/drafts/amaidesu-v2-migration.md A 段对齐）:
-- 70% 是 websocket 脚手架——新架构的 transport 由其他模块负责
-- 保留数据形状（MessageType / StreamMessage / AudioConfig / ImageConfig）
-- 保留消息分发器（``dispatch_message`` 工具函数）
+- 消息分发器（``dispatch_message`` 工具函数）
 """
 
 from __future__ import annotations
@@ -124,7 +114,7 @@ class RemoteStreamTypes:
         on_status: Optional[Callable[[Dict[str, Any]], Any]] = None,
         on_error: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> None:
-        """消息分发器（同步版本，移植自 RemoteStreamHandler._process_message）
+        """消息分发器（同步版本）
 
         根据 ``message.type`` 调用对应的回调；未匹配的回调忽略。
         """

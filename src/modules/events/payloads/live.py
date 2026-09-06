@@ -1,11 +1,11 @@
 """
-v2 语义域事件 Payload 定义：live.* 直播场次生命周期
+事件 Payload 定义：live.* 直播场次生命周期
 
 定义 ``live.started`` / ``live.ended`` 场次生命周期事件 Payload。
 
 场次 = 一段有开始/结束边界的直播时间段（LiveSessionManager 维护，
-一房多场：房间是场次之上的静态属性）。这两个事件此前仅在命名表中
-预留，自场次管理职责落地起由 LiveSessionManager 作为唯一发布方：
+一房多场：房间是场次之上的静态属性）。由 LiveSessionManager 作为
+唯一发布方：
 
 - ``live.started``：显式场次开启（手动开启 / 模拟器回放自动开启）。
   默认场次（scratch 兜底行）的复用**不**发本事件——它不是一场直播。

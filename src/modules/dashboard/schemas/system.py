@@ -1,13 +1,7 @@
 """
 系统状态 Schema
 
-定义系统状态相关的数据模型（v2 适配 Wave U1 / B1-B2）。
-
-v2 变化：
-- 移除 PhaseStatus（旧 input/decision/output 阶段字段，主线从未注入 v1 manager）
-- 引入 GroupStatus 表达采集器/Agent/工具三组的启用/运行/总数计数
-- 引入 EventBusStats 表达 EventBus 总吞吐量
-- 移除 SystemStatsResponse（与 /system/stats 端点一并删除）
+定义系统状态相关的数据模型。
 """
 
 from pydantic import BaseModel

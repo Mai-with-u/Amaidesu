@@ -4,8 +4,6 @@ BiliDanmakuCollector —— Bilibili 旧版弹幕采集器
 - 与官方版（``official/``）并列保留，旧版 WebSocket 作为备选采集器
 - 继承 ``BaseCollector``，emit ``room.message.danmaku`` 语义事件
 - 保留 ``collect()`` AsyncIterator 出口，供旧 InputCollectorManager 过渡期
-
-verbatim 边界：API 轮询逻辑、错误重试、时间戳处理 —— 未改动。
 """
 
 from __future__ import annotations

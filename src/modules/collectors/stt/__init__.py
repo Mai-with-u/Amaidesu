@@ -1,5 +1,4 @@
-# 语音转文字采集器（v2 / Wave 5 迁移）
-# 迁移自 src/stages/input/collectors/stt/
+# 语音转文字采集器
 from .config import (
     AudioConfig,
     IflytekAsrConfig,

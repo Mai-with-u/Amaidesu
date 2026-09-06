@@ -1,4 +1,4 @@
-"""RoomState - 直播间态势规则层（Wave 6 / §1.7 后台记账职责）
+"""RoomState - 直播间态势规则层（后台记账职责）
 
 计算直播间的"态势快照"（态势 = heat + topics + SC 队列），供 Streamer Agent
 的 Planner 注入 prompt 使用。**纯规则、零 LLM 调用**。
@@ -11,7 +11,7 @@
   更精细的 NLP 留给 background.py 压缩 worker 中的 LLM 摘要)。
 - **持久化去耦合**:RoomState 不直接写数据库,纯内存滑动窗口 + 末次快照缓存;
   后台记账由 background.py 周期读取 get_snapshot() → 写 ``live_sessions`` 表
-  (§1.7 双任务模型)。
+  (双任务模型的轻循环)。
 
 热度阈值(基于弹幕速率 msg/s,窗口 60s):
     < 0.1 msg/s (即 < 1 条/10s) → "low"    冷场

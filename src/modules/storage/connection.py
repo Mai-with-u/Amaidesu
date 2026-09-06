@@ -1,17 +1,11 @@
 """
-SQLite 连接管理器（复用 MaiBot 模式）
+SQLite 连接管理器
 
-复用 MaiBot-v1.0.0 的 SQLiteConnectionManager 实现（src/A_memorix/core/storage/sqlite_connection.py，176 行），
 按线程管理连接 + WAL + SAVEPOINT 嵌套事务 + 受管事务深度。
 
-差异点：
-- 把 import 路径换成 Amaidesu 项目路径
-- 保留 PRAGMA 配置（journal_mode=WAL / synchronous=NORMAL / cache_size=-64000 / temp_store=MEMORY / foreign_keys=ON）
-- savepoint 命名前缀用 ``amaidesu_tx_`` 区分（与 a_memorix_tx_ 避免冲突，多基座共存时安全）
-
-权威参考：
-- §1.50 SQLite 接入 = 复用 MaiBot 方案
-- MaiBot 源码：E:\\01_Projects\\Code\\AI\\MaiBot\\MaiBot-v1.0.0\\src\\A_memorix\\core\\storage\\sqlite_connection.py
+要点：
+- 统一 PRAGMA 配置（journal_mode=WAL / synchronous=NORMAL / cache_size=-64000 / temp_store=MEMORY / foreign_keys=ON）
+- savepoint 命名前缀用 ``amaidesu_tx_`` 标识本项目事务，避免与其他系统的 savepoint 冲突
 """
 
 from __future__ import annotations
@@ -26,7 +20,7 @@ from typing import Dict, Iterator, Optional, Set
 class ManagedSQLiteConnection(sqlite3.Connection):
     """在显式事务中延迟业务方法自行触发的提交和回滚。
 
-    与 MaiBot 同款行为：
+    受管事务行为：
     - 当处于受管事务作用域（transaction scope）中时，业务调用 ``commit()`` 不会真正提交，
       业务调用 ``rollback()`` 仅登记"该层需要回滚"
     - ``transaction()`` 上下文退出时按 SAVEPOINT 嵌套语义处理回滚/提交
@@ -107,7 +101,7 @@ class SQLiteConnectionManager:
             factory=ManagedSQLiteConnection,
         )
         connection.row_factory = sqlite3.Row
-        # PRAGMA 配置：与 MaiBot 完全对齐
+        # 统一 PRAGMA 配置
         connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA synchronous=NORMAL")
         connection.execute("PRAGMA cache_size=-64000")

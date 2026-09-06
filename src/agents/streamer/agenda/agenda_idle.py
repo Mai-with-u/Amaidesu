@@ -8,14 +8,10 @@
 **不**实现 LLM 扩展（``agenda_loader.py``）、
 **不**订阅 EventBus、**不**直接 emit 任何事件。
 
-设计变更（vs 原 outline_scheduler.py）：
-- 类名 ``OutlineScheduler`` → ``AgendaIdle``
-- 文件名 ``outline_scheduler.py`` → ``agenda_idle.py``
-- 强调"空转探测器"角色（判据 ① 决策循环 idle + ② 无 pending 异步工具 +
-  ③ 事件队列空 + ④ 有未完成 AgendaItem；全过 → emit planner.checkpoint 提醒）
-- 保留后台调度 + AI 顺带评估消费逻辑（与原 outline_scheduler 同构）
+"空转探测器"判据：决策循环 idle + 无 pending 异步工具 + 事件队列空 +
+有未完成 AgendaItem；全过 → emit planner.checkpoint 提醒。
 
-设计要点（沿用 RoomStateLoop 范式）
+设计要点
 ----------------------------------------------
 - **生命周期**：
   ``start()`` 创建后台 asyncio.Task → ``_loop()`` 周期调用 ``_tick()`` →
@@ -47,7 +43,7 @@
   - ``setup()`` 创建 ``AgendaLoader`` + ``AgendaState`` + ``AgendaIdle``，
     注入 ``on_advance`` 回调 → ``idle.start()``；
   - 每轮决策后调 ``idle.note_plan_assessment(...)`` 灌入 Planner 评估；
-  - ``cleanup()`` 调 ``idle.stop()``（仿 RoomStateLoop.stop()）。
+  - ``cleanup()`` 调 ``idle.stop()``。
 - Dashboard：只读 ``AgendaState.get_snapshot()``（不动 Scheduler）。
 """
 

@@ -1,8 +1,7 @@
 """
 Warudo ThrowFishTask - 抛鱼动画(单次触发)
 
-迁移自旧插件 plugins_backup/warudo/small_actions/throw_fish.py。
-对齐 fish.json 蓝图: ON_WEBSOCKET_ACTION("throw_fish", Integer).
+动作契约: ON_WEBSOCKET_ACTION("throw_fish", Integer).
 
 设计要点:
 - 单次触发型(非循环)

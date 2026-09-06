@@ -7,8 +7,7 @@
 --------
 
 - **基础模块自治装配**——TTS 是基础设施（非工具），装配逻辑放在
-  ``src/modules/tts/`` 包内（``src/modules/tts/assembly.py``），
-  工具层 ``bind_core_tools`` 不再介入
+  ``src/modules/tts/`` 包内自治完成，不经过工具层
 - **构造签名统一**——四个引擎 Provider 均为 ``Provider(config: dict,
   event_bus: EventBus | None = None)``；本函数按 ``[tts.<engine>]`` 子段
   提取子配置后用对应工厂函数构造
@@ -17,21 +16,6 @@
   到 ``edge_tts``（装配兜底）
 - **已知 provider**——``edge_tts`` / ``gptsovits`` / ``voicebox`` / ``omni_tts``；
   其余名字一律视作未知
-
-装配流程示意::
-
-    tts_section (dict)              # core.toml [tts] 段
-        enabled: bool
-        provider: str               # edge_tts / gptsovits / voicebox / omni_tts
-        max_queue: int              # 队列容量（StreamerAgent 消费）
-        render_timeout_ms: int      # 单 utterance 超时（StreamerAgent 消费）
-        [tts.<engine>]: dict        # 引擎子配置（位于 tts_section 内部作为子键）
-
-    build_tts_infrastructure(tts_section, event_bus=bus)
-        ├─ enabled=False → None
-        ├─ provider 未知 → ERROR + 回退到 edge_tts
-        ├─ 取 sub = tts_section[provider]（缺则 {}）
-        └─ factory(sub, event_bus) → Provider instance | None（异常兜底）
 """
 
 from __future__ import annotations
@@ -51,7 +35,7 @@ if TYPE_CHECKING:
 
 
 # 已知 provider 集合。装配时按 [tts].provider 单选；未知 provider 回退到
-# edge_tts 并记 ERROR 日志（与历史 bootstrap 装配语义一致）。
+# edge_tts 并记 ERROR 日志。
 _KNOWN_PROVIDERS = frozenset({"edge_tts", "gptsovits", "voicebox", "omni_tts"})
 
 # provider 名 → 工厂函数。延迟 import 改在工厂函数内部完成；本映射只是

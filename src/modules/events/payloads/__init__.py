@@ -8,14 +8,14 @@ RoomMessagePayload 保留 ConnectedPayload / DisconnectedPayload 同构字段，
 
 模块结构：
 - core.py: Core 系统事件 Payload（core.startup/shutdown/error）
-- live.py: v2 语义域 — 场次生命周期（live.started/live.ended，LiveSessionManager 发布）
-- room.py: v2 语义域 — 直播间行为流（room.message.*）
-- game.py: v2 语义域 — 游戏里程碑（game.*）
-- agenda.py: v2 语义域 — Agenda 运行进度（agenda.update）
-- planner.py: v2 语义域 — 空转检查点 / 决策轮记录 / 阶段状态（planner.checkpoint / planner.decision / streamer.stage）
-- tool_result.py: v2 语义域 — 异步工具结果（tool.result.*，不绑定具体名）
-- utterance.py: v2 语义域 — TTS 一次发声实例生命周期（tts.utterance.*）
-- speech.py: v2 语义域 — 主播发言业务事实（streamer.speech）
+- live.py: 场次生命周期（live.started/live.ended，LiveSessionManager 发布）
+- room.py: 直播间行为流（room.message.*）
+- game.py: 游戏里程碑（game.*）
+- agenda.py: Agenda 运行进度（agenda.update）
+- planner.py: 空转检查点 / 决策轮记录 / 阶段状态（planner.checkpoint / planner.decision / streamer.stage）
+- tool_result.py: 异步工具结果（tool.result.*，不绑定具体名）
+- utterance.py: TTS 一次发声实例生命周期（tts.utterance.*）
+- speech.py: 主播发言业务事实（streamer.speech）
 
 使用示例:
     from src.modules.events.payloads import RoomMessagePayload
@@ -78,31 +78,31 @@ __all__ = [
     "CoreStartupPayload",
     "CoreShutdownPayload",
     "CoreErrorPayload",
-    # v2 语义域 — live
+    # live 语义域 — 场次生命周期
     "LiveStartedPayload",
     "LiveEndedPayload",
-    # v2 语义域 — room.message.*
+    # room.message.* 直播间行为流
     "RoomMessageUser",
     "GiftInfo",
     "SuperChatInfo",
     "RoomMessagePayload",
-    # v2 语义域 — game.*
+    # game.* 游戏里程碑
     "GamePayload",
-    # v2 语义域 — agenda
+    # agenda 语义域 — 节目单运行进度
     "AgendaItem",
     "AgendaPayload",
-    # v2 语义域 — planner / streamer 决策管线
+    # planner / streamer 决策管线
     "CheckpointAgendaPosition",
     "CheckpointPayload",
     "PlannerBatchItem",
     "PlannerDecisionPayload",
     "StreamerStagePayload",
-    # v2 语义域 — tool.result.*
+    # tool.result.* 异步工具结果
     "ToolResultPayload",
-    # v2 语义域 — tts.utterance.*
+    # tts.utterance.* 发声实例生命周期
     "UtteranceStartedPayload",
     "UtteranceFinishedPayload",
     "UtteranceFailedPayload",
-    # v2 语义域 — streamer.speech
+    # streamer.speech 主播发言业务事实
     "StreamerSpeechPayload",
 ]

@@ -1,9 +1,5 @@
 """
 WAV 解码工具模块
-
-提取自:
-- src/stages/output/handlers/gptsovits/gptsovits_provider.py:273-331
-- src/stages/output/handlers/omni_tts/omni_tts_provider.py:302-320
 """
 
 import base64

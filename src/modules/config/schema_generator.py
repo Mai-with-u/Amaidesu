@@ -1,18 +1,11 @@
 """
-POC Schema Generator — 从 Pydantic Config 类自动生成 UI Schema
+Schema Generator — 从 Pydantic Config 类自动生成 UI Schema
 
-背景
-----
-本模块是 MaiBot v1.0.0 ``ConfigSchemaGenerator`` 的 Amaidesu 适配版 (POC)。
-MaiBot 的原版依赖其自研 ``ConfigBase``，本版本改用 Pydantic v2 BaseModel (含 Amaidesu 的
-``BaseConfig`` 子类)，遵循 Amaidesu 项目的现有约束：
+从 Pydantic v2 配置类（含 Amaidesu 的 ``BaseConfig`` 子类）生成
+Dashboard / WebUI 可消费的 schema dict，不修改既有模型、不引入额外运行时依赖。
 
-- 不修改既有 Pydantic 模型或业务逻辑
-- 不引入 MaiBot 的运行时依赖
-- 输出 dict 形状与 MaiBot 原版兼容，便于后续对接 Dashboard / WebUI
-
-输出 Schema 形状 (与 MaiBot 对齐)
---------------------------------
+输出 Schema 形状
+----------------
 ::
 
     {
@@ -28,12 +21,11 @@ MaiBot 的原版依赖其自研 ``ConfigBase``，本版本改用 Pydantic v2 Bas
         }
     }
 
-POC 限制 (后续替换 schema_registry 时需要扩展)
-----------------------------------------------
+限制
+----
 - 仅支持 Pydantic v2 Field 约束 (ge, le, gt, lt, pattern, min_length, max_length)。
-- ``__ui_parent__`` / ``__ui_label__`` / ``__ui_advanced__`` 等 MaiBot UI 标记，Amaidesu
-  项目当前未使用，保留读取能力但不影响输出。
-- ``AMemorix*`` 可见性策略来自 MaiBot 私域逻辑，本版本不做平移。
+- ``__ui_parent__`` / ``__ui_label__`` / ``__ui_advanced__`` 等 UI 标记当前
+  未使用，保留读取能力但不影响输出。
 """
 
 from __future__ import annotations
@@ -94,16 +86,16 @@ def _is_basemodel_subclass(annotation: Any) -> bool:
 class ConfigSchemaGenerator:
     """将 Pydantic 配置类转为 UI 友好的 schema dict。"""
 
-    # ----- 字段文档（兼容 MaiBot 接口） ------------------------------------
+    # ----- 字段文档 -----
     @staticmethod
     @lru_cache(maxsize=None)
     def _get_class_field_docs(config_class: type) -> Dict[str, str]:
-        """提取字段文档（兼容 MaiBot ``ConfigBase.get_class_field_docs``）。"""
+        """提取字段文档：若配置类提供 ``get_class_field_docs`` 方法则调用。"""
         getter = getattr(config_class, "get_class_field_docs", None)
         if callable(getter):
             try:
                 result = getter()
-                # MaiBot 的 ConfigBase 可能返回 dict[bytes, bytes]，统一转 str
+                # get_class_field_docs 可能返回 dict[bytes, bytes]，统一转 str
                 if isinstance(result, dict):
                     return {str(k): str(v) for k, v in result.items()}
             except Exception as exc:
@@ -112,7 +104,7 @@ class ConfigSchemaGenerator:
 
     @staticmethod
     def _build_label(label: str) -> Dict[str, str]:
-        """构造多语言标签 dict（与 MaiBot 形状一致）。"""
+        """构造多语言标签 dict。"""
         return {"zh_CN": label}
 
     # ----- 类型映射 ----------------------------------------------------------
@@ -120,10 +112,10 @@ class ConfigSchemaGenerator:
     def _map_field_type(cls, annotation: Any) -> str:
         """把 Python 类型注解映射为 UI 类型字符串。
 
-        返回值集合（与 MaiBot 对齐）：``string``、``integer``、``number``、
+        返回值集合：``string``、``integer``、``number``、
         ``boolean``、``array``、``object``、``select``。
         """
-        # 1. Optional[X] 剥皮
+        # Optional[X] 剥皮
         unwrapped = _unwrap_optional(annotation)
         if unwrapped is not annotation:
             return cls._map_field_type(unwrapped)
@@ -244,7 +236,7 @@ class ConfigSchemaGenerator:
         """构造单个字段的 UI schema。"""
         field_type = cls._map_field_type(annotation)
         raw_description = field_docs.get(field_name, field_info.description or "")
-        # _wrap_ 标记来自 MaiBot docstring 约定，转换为换行符
+        # _wrap_ 标记转换为换行符
         description = raw_description.replace("_wrap_", "\n").strip("\n")
 
         schema: Dict[str, Any] = {
@@ -323,7 +315,7 @@ class ConfigSchemaGenerator:
         config_class: type,
         include_nested: bool = True,
     ) -> Dict[str, Any]:
-        """Pydantic 类 -> UI schema dict（兼容 MaiBot ``generate_schema``）。"""
+        """Pydantic 类 -> UI schema dict（generate_config_schema 的兼容入口）。"""
         return cls.generate_config_schema(config_class, include_nested=include_nested)
 
     @classmethod
@@ -333,7 +325,7 @@ class ConfigSchemaGenerator:
         include_nested: bool = True,
         skip_internal_fields: bool = True,
     ) -> Dict[str, Any]:
-        """Pydantic 类 -> UI schema dict（兼容 MaiBot ``generate_config_schema``）。
+        """Pydantic 类 -> UI schema dict。
 
         Args:
             config_class: Pydantic BaseModel 子类（建议继承 ``BaseConfig``）。
@@ -380,7 +372,7 @@ class ConfigSchemaGenerator:
             "nested": nested,
         }
 
-        # UI 分组元数据（兼容 MaiBot __ui_*__；Amaidesu 当前未使用）
+        # UI 分组元数据（__ui_*__ 类标记；当前未使用）
         ui_parent = getattr(config_class, "__ui_parent__", "")
         ui_label = getattr(config_class, "__ui_label__", "")
         ui_advanced = bool(getattr(config_class, "__ui_advanced__", False))

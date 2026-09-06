@@ -125,7 +125,7 @@ class SimulatorService:
             self.logger.warning("simulator 配置不是 dict，跳过创建")
             return
 
-        # 1. 解析配置（dict → SimulatorConfigSchema Pydantic 实例）
+        # 解析配置（dict → SimulatorConfigSchema Pydantic 实例）
         try:
             self._config_obj = SimulatorConfigSchema(**simulator_config)
         except Exception as exc:
@@ -136,10 +136,10 @@ class SimulatorService:
             self.logger.warning("simulator: SQLiteStore 未注入，人设/礼物/上下文功能不可用，跳过创建")
             return
 
-        # 2. 启动期一次性种子导入（空表才插内置默认值；幂等）
+        # 启动期一次性种子导入（空表才插内置默认值；幂等）
         await seed_simulator_data(self._store)
 
-        # 3. 实例化数据平面（人设池 / 节奏 / 礼物 / 预算 / 会话 / 回放）
+        # 实例化数据平面（人设池 / 节奏 / 礼物 / 预算 / 会话 / 回放）
         self._persona_pool = PersonaPool(sqlite_store=self._store, rng=random.Random())
         await self._persona_pool.load(self._config_obj)
 
@@ -155,7 +155,7 @@ class SimulatorService:
         self._token_budget = TokenBudgetController(budget_per_hour=self._config_obj.token_budget_per_hour)
         self._replay_engine = ReplayEngine(config=self._config_obj)
 
-        # 4. 实例化 LLM 包装器（需 LLMManager，DI 注入或 warning；replay 模式不需要）
+        # 实例化 LLM 包装器（需 LLMManager，DI 注入或 warning；replay 模式不需要）
         llm_service = self._find_llm_service()
         if llm_service is None:
             if self._config_obj.mode == "generate":
@@ -173,7 +173,7 @@ class SimulatorService:
             # 让礼物生成器也能用同一个 LLM 包装器（生成 SC 文本）
             self._gift_generator._llm_wrapper = self._llm_wrapper
 
-        # 5. 自动启动（按 [simulator].enabled 或 auto_start 显式覆盖）
+        # 自动启动（按 [simulator].enabled 或 auto_start 显式覆盖）
         if auto_start is None:
             auto_start = self._config_obj.enabled
         if auto_start:

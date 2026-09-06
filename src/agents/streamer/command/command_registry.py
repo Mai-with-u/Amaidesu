@@ -1,4 +1,4 @@
-"""命令注册表模块（Wave 6 纯解析保留）"""
+"""命令注册表模块。"""
 
 from typing import Dict, Optional
 

@@ -1,5 +1,5 @@
 """
-v2 语义域事件 Payload 定义：streamer.speech
+事件 Payload 定义：streamer.speech
 
 定义 ``streamer.speech`` 主播发言业务事件 Payload。
 

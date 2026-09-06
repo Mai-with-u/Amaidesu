@@ -1,12 +1,12 @@
 """文字冒险 Agent 专属工具（choose_option / get_story）
 
-按架构 §1.5.1 / §1.49 第 2 面定案：
+工具归属约定：
 - 游戏专属推进工具 = 游戏 Agent 自己准备（list_tools 声明）
 - provider="game"（来源溯源：玩家引擎 Agent 声明的工具）
 - 这些工具**不是**公用感知/控制工具 —— 它们内含游戏域逻辑
   （option_id → content_engine 翻译）
 
-落地两个工具：
+提供两个工具：
 - ``choose_option``：推进（核心推进工具）
 - ``get_story``：读当前剧情段（只读）
 """
@@ -103,7 +103,7 @@ class TextAdvToolProvider(ToolProvider):
     持有 :class:`TextAdvGameAgentState` 和 :class:`ContentEngine`，
     把选项推进翻译为 content_engine 输入调用。
 
-    注入模式（§1.49 继承 + 构造注入）：
+    注入模式（继承 + 构造注入）：
         >>> provider = TextAdvToolProvider(state=state, engine=engine)
         >>> registry.register_provider(provider)
     """

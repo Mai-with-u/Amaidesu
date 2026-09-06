@@ -1,18 +1,16 @@
-"""BackgroundMaintainer - 主播 Agent 后台维护（Wave 6 / §1.7 双任务模型）
+"""BackgroundMaintainer - 主播 Agent 后台维护（双任务模型）
 
-§1.7 定案：
-- 双任务（不是 1 个、不是 N 个）：
-  ① 轻循环（周期 tick ~5s，纯机械，永不被阻塞）
-  ② 压缩 worker（触发驱动，等 asyncio.Queue）
+双任务模型（不是 1 个、不是 N 个）：
+- 轻循环（周期 tick ~5s，纯机械，永不被阻塞）
+- 压缩 worker（触发驱动，等 asyncio.Queue）
 - Why 2 个不回 1 个：慢任务（LLM 秒级）不冻结快任务节拍
 - Why 不 N 个：快任务合并无成本、管理复杂度封顶
 - 生命周期：BackgroundMaintainer（非 Agent 无 LLM）统一 start/stop/cleanup
-- 后台 Loop 重定位（Wave 6）：
-  从"注入上下文者"改为"记账者+提醒者"——不再注入上下文，
+- 后台 Loop 的角色是"记账者+提醒者"——不注入上下文，
   只写状态（live_sessions）+发提醒；Planner 上下文统一由
   ContextAssembler 从存储/事件装配（单一路径，无多路注入冲突）
 
-职责（Wave 6）：
+职责：
 - **轻循环**（periodic tick ~5s）：
   - 直播间状态记账（热度/统计 → 写 live_sessions 表）
   - 话题增量聚合（关键词计数 O(1)，内存态）
@@ -56,7 +54,7 @@ _DEFAULT_COMPRESSOR_QUEUE_MAX = 100
 # 高价值事件记忆去抖窗口（同一用户相邻写入最小间隔，毫秒）
 _EVENT_INGEST_DEBOUNCE_MS = 60_000
 
-# 摘要 LLM 系统提示词（与原 RoomStateLoop 同构）
+# 摘要 LLM 系统提示词
 _SUMMARY_SYSTEM_PROMPT = (
     "你是直播话题摘要助手。根据最近的观众弹幕，用一句话（不超过30字）"
     "总结当前直播间观众正在讨论的主要话题。只输出摘要内容，不要添加额外说明。"
@@ -73,12 +71,12 @@ def _cfg(config: Any, key: str, default: Any) -> Any:
 
 
 class BackgroundMaintainer:
-    """主播 Agent 后台维护器（§1.7 双任务模型：轻循环 + 压缩 worker）。
+    """主播 Agent 后台维护器（双任务模型：轻循环 + 压缩 worker）。
 
     非 Agent（无 LLM 主决策权），纯机械循环 + 后台压缩任务。
     通过构造器注入依赖（room_state / storage store / llm_service）。
 
-    §1.50 写入面：摘要成功落地后 ``await memory.ingest(...)`` 写入"topic_summary"
+    记忆写入面：摘要成功落地后 ``await memory.ingest(...)`` 写入"topic_summary"
     事实；并通过 ``EventBus`` 订阅高价值事件（礼物 / SC），同样写入事实记忆。
     两者均做异常降级，避免下游故障阻塞后台记账主循环。
     """
@@ -116,7 +114,7 @@ class BackgroundMaintainer:
             context_service: 上下文服务（可选；供压缩 worker 读历史）
             session_id: ContextService 会话键（默认 "live"——L1 对话窗口的
                 逻辑键，与存储层场次主键无关）
-            memory: §1.50 记忆后端（鸭子类型 ``MemoryProvider``）。``None`` 时关闭
+            memory: 记忆后端（鸭子类型 ``MemoryProvider``）。``None`` 时关闭
                 摘要/事件两路写入功能——BackgroundMaintainer 整体降级为"只记账"。
             event_bus: 可选 ``EventBus``；提供时 ``start()`` 阶段订阅礼物/SC 事件。
             sqlite_store: 可选 ``SQLiteStore``；提供时每次摘要成功后写
@@ -161,7 +159,7 @@ class BackgroundMaintainer:
         if self._running:
             return
         self._running = True
-        # §1.50 写入面：高价值事件订阅（礼物 / SC）→ memory.ingest
+        # 记忆写入面：高价值事件订阅（礼物 / SC）→ memory.ingest
         # 仅当 memory 与 event_bus 同时存在时启用（功能可关闭）
         if self._event_bus is not None and self._memory is not None:
             self._subscribe_high_value_events()
@@ -191,11 +189,11 @@ class BackgroundMaintainer:
         self._logger.info("BackgroundMaintainer 已停止")
 
     # ------------------------------------------------------------------
-    # §1.50 写入面：摘要 ingest + 高价值事件订阅
+    # 记忆写入面：摘要 ingest + 高价值事件订阅
     # ------------------------------------------------------------------
 
     async def _ingest_topic_summary(self, summary: str) -> None:
-        """把摘要成功落地的 topic_summary 写入 §1.50 记忆。
+        """把摘要成功落地的 topic_summary 写入记忆。
 
         调用契约：仅在 ``_summarize_topic`` 成功拿到非空 summary 后调用。
         异常降级——下游故障不应阻塞后台记账主循环。
@@ -209,7 +207,7 @@ class BackgroundMaintainer:
                 tags=["topic", "auto_summary"],
             )
         except Exception as exc:
-            # ingest 失败仅记 warning，不阻断 §1.7 主循环
+            # ingest 失败仅记 warning，不阻断后台主循环
             self._logger.warning(f"记忆写入失败 (topic_summary): {exc}")
 
     def _subscribe_high_value_events(self) -> None:
@@ -286,7 +284,7 @@ class BackgroundMaintainer:
     # ------------------------------------------------------------------
 
     async def _light_loop(self) -> None:
-        """轻循环主入口（§1.7 ①：纯机械，永不被阻塞）。"""
+        """轻循环主入口（纯机械，永不被阻塞）。"""
         interval = max(self._light_tick_ms / 1000.0, 0.1)
         try:
             while self._running:
@@ -349,7 +347,7 @@ class BackgroundMaintainer:
         )
 
     async def _maybe_summarize(self, now_ms: int) -> None:
-        """摘要门控（§1.7）：按热度频率调用 LLM（走 chat_fast profile）。"""
+        """摘要门控：按热度频率调用 LLM（走 chat_fast profile）。"""
         if self._llm_service is None or self._context_service is None:
             return
         snap = self._room_state.get_snapshot(now_ms=now_ms)
@@ -376,9 +374,9 @@ class BackgroundMaintainer:
 
     def _check_compression_window(self, now_ms: int) -> None:
         """窗口滑动检查：事件量/时间阈值 → put 压缩队列。"""
-        # 暂用 last_message_ms + size 触发；Wave 6 简化为基于热度阈值
+        # 暂用 last_message_ms + size 触发；当前为基于热度阈值的简化判定
         snap = self._room_state.get_snapshot(now_ms=now_ms)
-        # TODO: Wave 6 简化——后续可接入更复杂的窗口判定（事件量 > threshold）
+        # TODO: 后续可接入更复杂的窗口判定（事件量 > threshold）
         # 当前实现：每 5 分钟触发一次窗口压缩（与 summary 同步）
         if snap.topics and len(snap.topics) >= 5:
             try:
@@ -391,7 +389,7 @@ class BackgroundMaintainer:
     # ------------------------------------------------------------------
 
     async def _compress_loop(self) -> None:
-        """压缩 worker 主入口（§1.7 ②：并发=1，顺序保证）。"""
+        """压缩 worker 主入口（并发=1，顺序保证）。"""
         try:
             while self._running:
                 try:
@@ -416,7 +414,7 @@ class BackgroundMaintainer:
         task_type = task.get("type")
         if task_type == "summary":
             await self._summarize_topic(task.get("now_ms", _real_now_ms()))
-        # 其它类型（W6 暂不实现；留给后续）
+        # 其它类型（暂不实现；留给后续）
 
     async def _summarize_topic(self, now_ms: int) -> None:
         """调 LLM 生成话题摘要（chat_fast profile）。"""

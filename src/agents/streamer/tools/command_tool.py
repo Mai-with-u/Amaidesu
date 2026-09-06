@@ -5,10 +5,10 @@
 这是纯解析层）。
 
 设计要点：
-- 原 ``CommandDecider``（订阅 input.message.received 自动跑）→ REWRITE 为 Tool
-  （LLM 显式调用：用户发命令 → Planner 检测到 → 调 parse_command 工具）
-- 命令执行（action 路由）：原 CommandDecider 只生成 Intent 然后 publish 事件；
-  新架构下命令执行通过调用对应 action 工具完成（如 attack 调 vts 工具）
+- 命令解析为 LLM 显式调用的工具：用户发命令 → Planner 检测到 → 调
+  parse_command 工具
+- 命令执行（action 路由）：通过调用对应 action 工具完成
+  （如 attack 调 vts 工具）
 
 工具契约：
 - kind: ``"sync"``（纯解析立即返回）

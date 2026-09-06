@@ -1,10 +1,10 @@
 """
-v2 语义域事件 Payload 定义：game.* 游戏里程碑
+事件 Payload 定义：game.* 游戏里程碑
 
 定义 3 类游戏事件 Payload（milestone / attention_required / error）。
-对应存储 ``game_events`` 表（见 .omo/drafts/amaidesu-v2-storage-schema.md）。
+对应存储 ``game_events`` 表。
 
-按契约（.omo/drafts/amaidesu-v2-event-contract.md "game.*" 节）：
+契约约定：
 - 低频、只发重大变化（挖到钻石 / 通关章节 / 安全阀偏差 / 异常）
 - 同一 ``GamePayload`` 类在 3 个事件名下复用，通过 ``event_type`` 字段判别
 - ``scene`` 字段携带场景信息（关卡坐标 / 区块名等自由文本），便于回顾
@@ -31,7 +31,7 @@ class GamePayload(BasePayload):
     - ``game.attention_required`` — 安全阀偏差报告（"我先回血再去挖钻石"）
     - ``game.error`` — 游戏异常
 
-    发布者：游戏 Agent（§1.49 BaseAgent 事件上报面）
+    发布者：游戏 Agent（BaseAgent 事件上报面）
     订阅者：主播 Planner（监听重大变化做决策）
 
     Attributes:

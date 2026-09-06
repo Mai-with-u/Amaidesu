@@ -1,10 +1,7 @@
-"""B 站消息类型 —— 公共共享类型（v2 / Wave 5 迁移）
+"""B 站消息类型 —— 公共共享类型
 
-按 §1.46 + .omo/drafts/amaidesu-v2-migration.md §C：从
-``src/stages/input/shared/bili_messages/`` 升为公共共享类型，供 B 站相关
-采集器（官方/旧版）共用。
-
-不依赖采集器/事件总线，可被任何模块安全 import。
+供 B 站相关采集器（官方/旧版）共用；不依赖采集器/事件总线，
+可被任何模块安全 import。
 """
 
 from src.modules.types.bili.base import BiliBaseMessage, BiliMessageType

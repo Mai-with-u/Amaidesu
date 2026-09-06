@@ -1,7 +1,5 @@
 """
-STTCollector 配置 Schema（v2 迁移）
-
-迁移自 ``src/stages/input/collectors/stt/config.py``，verbatim。
+STTCollector 配置 Schema。
 """
 
 from typing import Any, Dict, List, Optional

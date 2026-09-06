@@ -1,12 +1,7 @@
 """
-调试 API（Wave 6 重写）
+调试 API
 
 提供调试和测试接口。
-
-Wave 6 变更：
-- 移除 ``/inject-intent`` 端点（Intent 已被 DISCARD，决策出口=工具调用）。
-- ``/inject-message`` 端点改为发布 ``room.message.danmaku`` 事件（v2 语义域事件）。
-- 移除对 ``payloads.decision.IntentPayload`` 和 ``payloads.input.MessageReadyPayload`` 的依赖。
 """
 
 import uuid

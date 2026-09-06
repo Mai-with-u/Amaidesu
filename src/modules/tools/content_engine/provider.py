@@ -1,13 +1,13 @@
-"""ContentEngine Protocol + Provider（v2.0.0 / Wave 7）
+"""ContentEngine Protocol + Provider
 
-按架构 §1.5.1 定案：
+定位：
 - ContentEngine = 通用游戏控制器控制面（start/stop/send_input/status/get_state）
 - 是"接口契约"，不是游戏实现
 - 游戏 Agent 通过它驱动具体游戏进程（MC / 文字冒险 / ...）
 - 本模块是 **control plane** —— 落地点是 ToolProvider + Protocol，
   具体游戏引擎（MinecraftEngine / TextAdvEngine / ...）由各游戏 Agent 包自己实现
 
-判别（§1.2 判别哲学）：
+判别：
 - ✅ 提供"通用能力契约"（任何游戏都能套用）
 - ✅ 后端可换可 mock（Protocol + 构造注入）
 - ❌ 不实现任何具体游戏的逻辑
@@ -94,17 +94,17 @@ class ContentEngineStatus:
 
 
 class ContentEngine(Protocol):
-    """通用游戏控制器接口（§1.5.1 控制面）。
+    """通用游戏控制器接口（控制面）。
 
         游戏 Agent 通过构造器注入具体实现（TextAdvEngine / MinecraftEngine / ...）；
         本协议只规定**所有引擎都必须能回答的最小问题**——
         start / stop / send_input / status / get_state。
 
-        实现要点（来自 §1.2 判别）：
+        实现要点：
     - ✅ 接口稳定（游戏 Agent 只依赖这 5 个方法）
     - ✅ 实现可换（mock / stub / 真实引擎 都满足）
     - ❌ 不在本协议里塞游戏特定字段（如 MC 的世界坐标 / 文字冒险的剧情节点）
-            ——那些归各 Agent 包内部状态，§1.31 内容状态内部自由
+            ——那些归各 Agent 包内部，内容状态内部自由
     """
 
     async def start(self) -> None:
@@ -292,7 +292,7 @@ def build_content_engine_specs() -> List[ToolSpec]:
 class ContentEngineProvider(ToolProvider):
     """把 ContentEngine 封装成 5 个工具注册到 ToolRegistry。
 
-    工具来源 provider="builtin"（框架基础设施，按 §1.5 provider 溯源）。
+    工具来源 provider="builtin"（框架基础设施）。
     注意：本 Provider **不实现具体游戏逻辑**——它只是 ContentEngine 的薄包装。
     """
 

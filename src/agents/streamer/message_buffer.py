@@ -1,5 +1,5 @@
 """
-MessageBuffer - 弹幕聚合缓冲（Wave 6 / §1.7 重定位为 Agent 内部批状态）
+MessageBuffer - 弹幕聚合缓冲（StreamerAgent 内部批状态）
 
 直播场景下弹幕高频突发，逐条调用 LLM 既慢又贵。MessageBuffer 在一个时间/条数
 窗口内聚合多条 NormalizedMessage，由 StreamerAgent 的主循环统一取出一批做决策。
@@ -9,8 +9,6 @@ MessageBuffer - 弹幕聚合缓冲（Wave 6 / §1.7 重定位为 Agent 内部批
 - 标记本批是否包含"强制触发"消息（如醒目留言/上舰），用于跳过节奏采样立即响应
 - 内置 should_flush() 判定逻辑，支持空窗补偿（idle compensation）：当窗口过期但消息
   数不足时，按空窗时间折算等效消息数，达到阈值则触发，避免慢直播流长时间无响应
-- **重定位（Wave 6）**：原 AmaidesuDecider 后台循环内部子组件 → StreamerAgent
-  内部批状态；批次判定的语义与 idle 补偿公式保持不变（公式 verbatim 保留）。
 """
 
 from typing import List, Optional, Tuple
@@ -131,7 +129,7 @@ class MessageBuffer:
         *,
         avg_interval_ms: Optional[float] = None,
     ) -> Tuple[bool, str]:
-        """判断是否应该触发批次刷新（idle 补偿公式 verbatim 保留）。
+        """判断是否应该触发批次刷新（含 idle 补偿公式）。
 
         触发条件（按优先级从高到低，任一满足即触发）::
 
@@ -143,7 +141,7 @@ class MessageBuffer:
             6. 时间窗口到期 + 空窗折算 >= batch_max_size   → reason="idle_compensation"
             7. 时间窗口到期 + 空窗折算 < batch_max_size    → 不触发（继续等待）
 
-        空窗补偿折算（参考 MaiBot maisaka/turn_gates.py，公式 verbatim 保留）::
+        空窗补偿折算::
 
             idle_equivalent = min(idle_ms / avg_interval_ms, batch_max_size - 1)
             equivalent_count = actual_size + idle_equivalent
@@ -157,26 +155,26 @@ class MessageBuffer:
         Returns:
             (should_flush, reason) 元组
         """
-        # 1. 强制触发
+        # 强制触发
         if self._force:
             return True, "forced"
 
-        # 2. 条数达标
+        # 条数达标
         if self.size >= self._batch_max_size:
             return True, "batch_full"
 
-        # 3. 窗口未到期
+        # 窗口未到期
         window_expired = self._first_arrival_ms > 0 and (now_ms - self._first_arrival_ms) >= self._batch_window_ms
         if not window_expired:
             return False, "window_not_expired"
 
-        # 4-5. 窗口到期，无补偿或无数据 → 直接触发
+        # 窗口到期，无补偿或无数据 → 直接触发
         if not self._enable_idle_compensation:
             return True, "window_expired"
         if avg_interval_ms is None or avg_interval_ms <= 0:
             return True, "window_expired"
 
-        # 6-7. 空窗补偿折算（公式 verbatim 保留）
+        # 空窗补偿折算
         idle_ms = max(0, now_ms - self._last_arrival_ms)
         threshold = self._batch_max_size
         idle_equivalent = min(

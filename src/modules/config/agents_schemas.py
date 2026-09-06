@@ -18,7 +18,7 @@
     command_llm = "llm"
 
 设计原则：
-- 业务 Agent 替代旧决策/输出组件注册（[deciders]/[handlers] → [agents.*]）
+- 业务 Agent 统一经 ``[agents]`` 段注册启用
 - 复用 profile 名（planner_llm = "llm"）引用 model.toml 的 LLM profile
 - ``budget`` 用嵌套 dict 而非独立 BaseConfig（保持简洁，字段少）
 """
@@ -77,17 +77,17 @@ class StreamerAgentConfig(BaseConfig):
         description="Replyer 使用的 LLM profile 名（默认 llm 高质量模型）",
     )
 
-    # 旧字段名兼容（向后兼容旧 [agents.amaidesu] 段）
+    # 旧字段名兼容
     planner_client: str = Field(default="llm_fast", description="（兼容字段）Planner LLM client")
     replyer_client: str = Field(default="llm", description="（兼容字段）Replyer LLM client")
 
-    # --- Stage 1 弹幕聚合 ---
+    # --- 弹幕聚合 ---
     batch_window_ms: int = Field(default=3000, ge=0, description="弹幕聚合时间窗口（毫秒）")
     batch_max_size: int = Field(default=20, ge=1, description="单批最多聚合的消息条数")
     tick_interval_ms: int = Field(default=300, ge=50, description="后台聚合检查间隔（毫秒）")
     enable_idle_compensation: bool = Field(default=True, description="空窗补偿开关")
 
-    # --- Stage 1 强制触发 ---
+    # --- 强制触发 ---
     force_data_types: List[str] = Field(
         default_factory=lambda: ["super_chat", "guard", "gift"],
         description="强制响应的数据类型",
@@ -120,7 +120,7 @@ class StreamerAgentConfig(BaseConfig):
     proactive_max_per_hour: int = Field(default=6, ge=1, description="每小时主动发言次数上限")
     proactive_topic_required: bool = Field(default=True, description="话题缺失时跳过触发")
 
-    # --- Agenda（原 outline 更名）---
+    # --- Agenda ---
     agenda_enabled: bool = Field(default=False, description="Agenda 总开关")
     agenda_path: str = Field(default="", description="Agenda TOML 文件路径")
     agenda_expand_client: str = Field(default="llm_agenda", description="AI 扩展用 LLM profile")

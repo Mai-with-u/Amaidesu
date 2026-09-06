@@ -1,5 +1,5 @@
 """
-query_memory 工具（Wave 3 / §1.50 / §1.51 双路之第二路）
+query_memory 工具
 
 LLM 可调用 ``query_memory(query, top_k)`` 返回相关记忆；结果以
 ``ToolExecutionResult.content`` 文本形式呈现（最多 N 条）。
@@ -7,8 +7,8 @@ LLM 可调用 ``query_memory(query, top_k)`` 返回相关记忆；结果以
 注册方式：可通过 ``default_tool_registry().register_provider(QueryMemoryToolProvider(memory))``
 或全局单例 ``build_query_memory_tool()`` 提供默认空壳后绑定 memory provider。
 
-时间字段：timestamp_ms 在 Amaidesu 内部使用毫秒（§1.53 9d），本工具不引
-入秒/毫秒转换（仅在切换 AMemorixProvider 时由 Provider 内部负责）。
+时间字段：timestamp_ms 在 Amaidesu 内部使用毫秒，本工具不引入秒/毫秒转换
+（仅在切换 AMemorixProvider 时由 Provider 内部负责）。
 """
 
 from __future__ import annotations

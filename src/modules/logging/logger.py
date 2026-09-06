@@ -73,16 +73,16 @@ def configure_from_config(config_dict: dict | None = None) -> None:
     split_by_session = config_dict.get("split_by_session", False) if config_dict else False
     console_level = config_dict.get("console_level", "INFO") if config_dict else "INFO"
 
-    # 0. 清除 loguru 的默认处理器（如果存在）
+    # 清除 loguru 的默认处理器（如果存在）
     # loguru 会在第一次使用时自动添加一个默认的 stderr 处理器
     # 我们需要完全移除它以避免日志重复
     loguru_logger.remove()
 
-    # 1. 重置状态变量
+    # 重置状态变量
     _DEFAULT_HANDLER_ID = None
     _HANDLER_IDS.clear()
 
-    # 3. 添加带颜色的 stderr 处理器
+    # 添加带颜色的 stderr 处理器
     # 解析 filter 配置
     filter_config = config_dict.get("filter") if config_dict else None
 
@@ -114,7 +114,7 @@ def configure_from_config(config_dict: dict | None = None) -> None:
     )
     _HANDLER_IDS.append(stderr_handler_id)
 
-    # 4. 若 enabled=True，添加文件处理器
+    # 若 enabled=True，添加文件处理器
     if enabled:
         # 按需创建目录
         if not os.path.exists(directory):

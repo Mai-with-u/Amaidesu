@@ -23,7 +23,7 @@
 
     event_bus.on("command_router.received", handle_command_typed, model_class=CommandRouterData)
 
-    # 通配订阅（MQTT 风格：``*``=单层 ``#``=多层；W1 阶段增量）
+    # 通配订阅（MQTT 风格：``*``=单层 ``#``=多层）
     event_bus.on("room.message.#", handle_all_room_msgs, model_class=RoomMessagePayload)
     event_bus.on("tool.result.#", handle_any_tool_result, model_class=ToolResultPayload)
 """
@@ -113,7 +113,7 @@ class EventBus:
         self._active_emits: Dict[str, asyncio.Event] = {}  # 跟踪活跃的 emit 操作
         self._background_tasks: set = set()  # 跟踪后台任务
         self._stats_lock = asyncio.Lock()  # 保护统计数据的并发访问
-        # 拦截器链（W1 新增）。默认空 ⇒ byte-identical 行为（emit 不调任何拦截器）
+        # 拦截器链。默认空 ⇒ byte-identical 行为（emit 不调任何拦截器）
         self._interceptor_chain = InterceptorChain()
         self.logger = get_logger("EventBus")
         self.logger.debug(f"EventBus 初始化完成 (stats={enable_stats}, validation=enabled)")
@@ -251,12 +251,11 @@ class EventBus:
             TypeError: 如果 data 不是 BaseModel 实例
             Exception: 当 error_isolate=False 且处理器执行出错时抛出
 
-        分发流程：
-        1. 类型检查 → ``model_dump()`` → 数据验证 → **拦截器链** → handler 分发
-           其中拦截器链任一环节显式返回 ``None`` 即丢弃事件：不更新统计、不调用任何 handler
-        2. handler 查找：精确键 + 所有通配 pattern 键的并集（去重 HandlerWrapper）
-        3. 排序：先按 ``priority``，再按 pattern 具体度（精确名 > 具体通配 > 通用通配）
-        4. 统计**始终按真实 emit 的 event_name** 入键（与通配 pattern 解耦）
+        分发流程：类型检查 → ``model_dump()`` → 数据验证 → **拦截器链** → handler 分发。
+        拦截器链任一环节显式返回 ``None`` 即丢弃事件：不更新统计、不调用任何 handler。
+        handler 查找取精确键与所有通配 pattern 键的并集（去重 HandlerWrapper）；
+        排序先按 ``priority``，再按 pattern 具体度（精确名 > 具体通配 > 通用通配）；
+        统计始终按真实 emit 的 event_name 入键（与通配 pattern 解耦）。
         """
         if self._is_cleanup:
             self.logger.warning(f"EventBus正在清理中，忽略事件: {event_name}")
@@ -383,12 +382,12 @@ class EventBus:
 
         seen: Dict[int, tuple] = {}
 
-        # 1. 精确键
+        # 精确键
         exact_handlers = self._handlers.get(event_name, [])
         for wrapper in exact_handlers:
             seen[id(wrapper)] = (wrapper, _EXACT_SPECIFICITY)
 
-        # 2. 通配 pattern 键
+        # 通配 pattern 键
         for pattern, handlers in self._handlers.items():
             if pattern == event_name:
                 continue  # 已在精确键处理
@@ -520,7 +519,7 @@ class EventBus:
 
     def add_interceptor(self, interceptor: "EventInterceptor") -> None:
         """
-        注册一个事件拦截器（W1 新增）
+        注册一个事件拦截器
 
         拦截器按注册顺序串接；对每次 ``emit`` 的事件，在数据验证后、handler
         分发前被顺序调用。可修改 payload（原地修改 / 返回新 dict）或显式
@@ -536,7 +535,7 @@ class EventBus:
 
     def remove_interceptor(self, name: str) -> bool:
         """
-        按 ``name`` 移除首个匹配的拦截器（W1 新增）
+        按 ``name`` 移除首个匹配的拦截器
 
         Args:
             name: ``EventInterceptor.name`` 标识

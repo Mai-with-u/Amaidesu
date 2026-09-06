@@ -1,7 +1,7 @@
 """默认 DB 路径——推迟到 storage 模块导入时再解析（避免循环依赖）
 
-Wave 3 阶段尚未与 config 完整对接，默认路径先指向 ``data/amaidesu.db``
-（用户可在 W4 集成 config 后通过 ``set_default_store()`` 切换）。
+默认路径指向 ``data/amaidesu.db``；需要自定义路径时通过
+``set_default_store()`` 切换。
 """
 
 from __future__ import annotations

@@ -1,17 +1,17 @@
 """
-v2 语义域事件 Payload 定义：room.message.* 直播间行为流
+事件 Payload 定义：room.message.* 直播间行为流
 
 定义 4 类直播间"行为流"事件 Payload（弹幕/礼物/SC/进房）。
 对应存储 ``live_chat`` / ``gifts`` / ``super_chats`` 表。
 
-按契约（.omo/drafts/amaidesu-v2-event-contract.md "room.message.*" 节）：
+契约约定：
 - 统一 ``RoomMessagePayload`` + ``message_type`` 判别（与存储 ``live_chat.message_type`` 一致）
 - ``room.message.#`` 通配订阅时按 ``message_type`` 分发
 - 礼物/SC 放在结构化字段（``gift``/``sc``），不混进 ``content``
 - 所有时间字段统一毫秒（``timestamp_ms``）
 
 注意：
-- ``room.state.*`` 是**预留层**，本模块不定义其事件（见 .omo/drafts/amaidesu-v2-event-naming.md ②行为/状态分层）
+- ``room.state.*`` 是**预留层**，本模块不定义其事件（行为/状态分层）
 """
 
 from typing import Literal, Optional
@@ -130,8 +130,7 @@ class RoomMessagePayload(BasePayload):
     )
     simulated: bool = Field(
         default=False,
-        description="数据溯源标记：True=模拟/回放源（SimulatorService 生成或回放）"
-        "，统计与入库需过滤（参照 §1.6 / ADR-006）",
+        description="数据溯源标记：True=模拟/回放源（SimulatorService 生成或回放）" "，统计与入库需过滤",
     )
 
     model_config = ConfigDict(

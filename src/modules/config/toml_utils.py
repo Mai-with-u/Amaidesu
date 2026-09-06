@@ -191,17 +191,17 @@ def write_toml_preserve(
     temp_path = file_path.with_suffix(".tmp")
 
     try:
-        # 1. 创建备份
+        # 创建备份
         if create_backup and file_path.exists():
             backup_path = get_backup_path(str(file_path))
             shutil.copy2(file_path, backup_path)
             logger.debug(f"已创建备份: {backup_path}")
 
-        # 2. 写入临时文件
+        # 写入临时文件
         with open(temp_path, "w", encoding="utf-8") as f:
             tomlkit.dump(data, f)
 
-        # 3. 验证 TOML 格式
+        # 验证 TOML 格式
         if tomllib is not None:
             try:
                 with open(temp_path, "rb") as f:
@@ -210,7 +210,7 @@ def write_toml_preserve(
                 temp_path.unlink(missing_ok=True)
                 return False, f"TOML 验证失败: {e}"
 
-        # 4. 原子重命名
+        # 原子重命名
         if file_path.exists():
             file_path.unlink()
         temp_path.rename(file_path)
@@ -300,7 +300,7 @@ def _merge_dicts(
     """
     result = {}
 
-    # 1. 处理模板中的键
+    # 处理模板中的键
     for key, template_value in template.items():
         current_path = f"{path}.{key}" if path else key
 
@@ -336,7 +336,7 @@ def _merge_dicts(
                 # 使用用户值
                 result[key] = user_value
 
-    # 2. 保留用户自定义字段
+    # 保留用户自定义字段
     for key in user:
         if key not in template:
             result[key] = user[key]
@@ -380,9 +380,7 @@ def _merge_arrays(
 def get_backup_path(file_path: str) -> str:
     """生成备份文件路径
 
-    策略:
-    1. 如果 config.toml.backup 不存在，直接使用
-    2. 如果存在，添加时间戳
+    策略：``<file>.backup`` 不存在时直接使用；已存在则追加时间戳。
 
     Args:
         file_path: 原文件路径

@@ -2,7 +2,7 @@
 
 提供 Warudo 模型的面部状态管理功能。
 
-情绪氛围管理已迁移到 Decision 层（LLMDecider 通过 ContextService.get_ambient_mood() 实现）。
+情绪氛围管理不在本模块范围（由 Decision 层负责）。
 """
 
 from .warudo_state_manager import (

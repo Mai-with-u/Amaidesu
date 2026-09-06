@@ -21,7 +21,7 @@
 - 模块私有表以 ``_`` 前缀命名，表达"非业务数据平面、仅所属模块读写"
 
 ## Schema 迁移机制
-- ``schema_migrations(version PK, applied_at_ms)``（复用 MaiBot 模式）
+- ``schema_migrations(version PK, applied_at_ms)``
 - ``SCHEMA_VERSION`` 常量 = 当前权威版本
 - ``SCHEMA_MIGRATIONS``：version → 迁移回调（原地修改、幂等）。``SQLiteStore``
   在推进版本时按序执行；回调内部用列存在性检查保证对新建库与已迁移库安全
@@ -37,13 +37,13 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Callable, Dict, List
 
-# 当前 Schema 版本——改动表结构时必须同步升级（见 AGENTS.md §"配置 Schema 变更规则"）
+# 当前 Schema 版本——改动表结构时必须同步升级
 SCHEMA_VERSION: int = 4
 
 
 @dataclass(frozen=True, slots=True)
 class SchemaMigration:
-    """单次迁移记录（MaiBot 模式）"""
+    """单次迁移记录"""
 
     version: int
     applied_at_ms: int

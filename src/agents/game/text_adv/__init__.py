@@ -1,11 +1,11 @@
-"""文字冒险游戏 Agent —— Wave 7 范式验证示例
+"""文字冒险游戏 Agent
 
-本子包是 ``src/agents/game/`` 下的**第一个**示例游戏 Agent，用于验证
-"加内容 = 加包 + 配置，框架零改动" 范式（§1.49 / §1.52 / §1.5.1）。
+``src/agents/game/`` 下的示例游戏 Agent，体现
+"加内容 = 加包 + 配置，框架零改动" 的包设计。
 
 组成（全部自包含，无外部游戏特定依赖）：
 - :class:`TextAdvGameConfig` — Agent 配置 Schema（Pydantic）
-- :class:`TextAdvGameAgentState` — 游戏内部状态（§1.31 内容状态内部自由）
+- :class:`TextAdvGameAgentState` — 游戏内部状态（内容状态内部自由）
 - :class:`TextAdvToolProvider` — Agent 专属工具（``choose_option`` / ``get_story``）
 - :class:`TextAdvGameAgent` — 主 Agent（继承 BaseAgent）
 

@@ -1,14 +1,12 @@
 """
-组件管理 API（v2）
+组件管理 API
 
 提供 采集器 / Agent / 工具 三组组件的状态查询和控制接口。
 数据源为拍平后的主配置（ConfigService.main_config）与运行时
 CollectorManager / AgentManager / ToolRegistry。
 
-Wave U1 / B7 变更：
-- 路径参数 ``phase`` → ``group``（语义统一到 v2 命名；前端同步切换）
-- 允许 ``group`` ∈ {"collectors", "agents", "tools"}
-- ComponentSummary.description 字段由管理器注册/工具规格填充（空串兜底）
+路径参数 ``group`` ∈ {"collectors", "agents", "tools"}；ComponentSummary.description
+由管理器注册/工具规格填充（空串兜底）。
 """
 
 from typing import TYPE_CHECKING, Annotated, Any, Dict, List
@@ -126,7 +124,7 @@ async def get_component(
     name: str,
     server: ServerDep,
 ) -> ComponentDetailResponse:
-    """获取单个组件详情（v2：group ∈ {collectors, agents, tools}）"""
+    """获取单个组件详情（group ∈ {collectors, agents, tools}）"""
     if group not in _GROUP_TO_CONFIG:
         raise HTTPException(status_code=404, detail=f"Unknown component group: {group}")
     main_config = server.config_service.main_config if server.config_service else {}
@@ -146,7 +144,7 @@ async def control_component(
 ) -> ComponentControlResponse:
     """控制组件：优先动态启停（实例→配置），失败回退配置写回（重启后生效）
 
-    group ∈ {"collectors", "agents", "tools"}（Wave U1 / B7 起，路径参数统一为 group）。
+    group ∈ {"collectors", "agents", "tools"}（路径参数统一为 group）。
     """
     if group not in _GROUP_TO_CONFIG:
         raise HTTPException(status_code=400, detail=f"Invalid group: {group}")

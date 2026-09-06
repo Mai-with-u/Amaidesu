@@ -3,10 +3,7 @@ ContextService - 对话上下文管理服务
 
 提供对话历史存储和多会话管理功能。
 
-设计模式参考 LLMManager：
-- __init__(): 构造函数，接收配置
-- initialize(): 初始化服务
-- cleanup(): 清理资源
+生命周期：__init__() 接收配置 → initialize() 初始化服务 → cleanup() 清理资源。
 """
 
 from typing import Any, Dict, List, Optional
@@ -23,8 +20,8 @@ class ContextService:
 
     参考 LLMManager 的设计模式，作为 Core 层基础设施服务。
 
-    生命周期：
-        __init__() -> initialize() -> [使用 API] -> cleanup()
+    生命周期：__init__() 构造并接收配置，initialize() 完成初始化，
+    之后使用各 API，最终 cleanup() 释放资源。
 
     职责：
         - 管理多个会话的对话历史
@@ -267,7 +264,7 @@ class ContextService:
         for msg in messages:
             ts = msg.timestamp
             if msg.role == MessageRole.ASSISTANT:
-                # ASSISTANT 闭合当前轮；兼容无 viewer 的孤立 assistant（建一条空 viewer 轮）
+                # ASSISTANT 闭合当前轮；无 viewer 的孤立 assistant 建一条空 viewer 轮
                 turns.append(
                     DialogueTurn(
                         session_id=session_id,

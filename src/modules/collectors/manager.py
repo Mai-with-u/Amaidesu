@@ -1,7 +1,7 @@
 """
 CollectorManager —— 采集器生命周期管理
 
-设计对称 AgentManager：
+与 AgentManager 对称的职责面：
 - 注册 / 启动 / 停止 / cleanup
 - start_all / stop_all / cleanup_all
 - 健康监控（运行中状态）

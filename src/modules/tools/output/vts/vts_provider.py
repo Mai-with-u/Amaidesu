@@ -1,12 +1,10 @@
 """
-VTSProvider - VTS 虚拟形象工具集（Wave 4 / §1.5）
+VTSProvider - VTS 虚拟形象工具集
 
-迁移自 ``src.stages.output.handlers.avatar.vts.VTSHandler``，将其从 3 阶段
-OutputHandler 改写为 ToolProvider 协议实现：
+ToolProvider 协议实现，把 VTS 全家桶能力封装为工具：
 
 - 引擎子件（``LipSyncProcessor`` / ``ExpressionController`` / ``HotkeyMatcher``
-  / ``IdleMotionController``）经 callback 解耦，verbatim 复用。
-- ``AvatarHandlerBase`` 继承被去除；ToolProvider 协议由本类自身实现。
+  / ``IdleMotionController``）经 callback 解耦，可独立复用。
 - 暴露的工具：
   - ``vts_smile``             - 设置 MouthSmile 参数
   - ``vts_close_eyes``        - 闭眼
@@ -20,14 +18,6 @@ OutputHandler 改写为 ToolProvider 协议实现：
   - ``vts_set_idle_enabled``  - 启停 idle 拟人动画
   - ``vts_reconnect``         - 手动触发重连
   - ``vts_get_stats``         - 读取状态统计
-
-迁移策略与权威参考：
-- 引擎逻辑 verbatim（来自 VTSHandler + LipSyncProcessor + ExpressionController
-  + HotkeyMatcher + IdleMotionController，零改动）
-- 仅修改 import 路径与外层结构（去 base 继承，注入 ToolProvider 接口）
-- v2.0.8 收口：移除 ``OUTPUT_STICKER_COMMAND`` 事件订阅链（C1 治理）：
-  StickerHelper 零实例化零调用，VTSProvider 仅空转订阅；
-  ``vts_load_sticker`` 工具保留（正当 VTS 能力，Agent 可直接传 ``file_name`` 调用）
 """
 
 from __future__ import annotations
@@ -159,7 +149,7 @@ _VTS_SET_IDLE_SCHEMA: Dict[str, Any] = {
 class VTSProvider:
     """VTS 虚拟形象 ToolProvider
 
-    实现 ToolProvider 协议 + VTSHandler 编排器职责（verbatim）。
+    实现 ToolProvider 协议，编排各引擎子件。
     推荐通过 ``create_vts_provider(config, event_bus)``
     构造与 setup/cleanup 流程管理。
     """
@@ -231,7 +221,7 @@ class VTSProvider:
         self.render_count = 0
         self.error_count = 0
 
-        # 子组件 — verbatim 复用（构造签名不变）
+        # 子组件
         self.lip_sync = LipSyncProcessor(
             logger_name=f"{self.__class__.__name__}.LipSync",
             sample_rate=self.sample_rate,
@@ -454,7 +444,7 @@ class VTSProvider:
     # ===== 生命周期 =====
 
     async def setup(self) -> None:
-        """Provider 生命周期入口（对应旧 VTSHandler.init()）"""
+        """Provider 生命周期入口"""
         if self._has_started:
             self.logger.warning("VTSProvider 已启动，跳过重复 setup")
             return
@@ -492,7 +482,7 @@ class VTSProvider:
         self._has_started = True
 
     async def cleanup(self) -> None:
-        """清理资源（对应旧 VTSHandler.cleanup()）"""
+        """清理资源"""
         if not self._has_started:
             return
 
@@ -500,7 +490,7 @@ class VTSProvider:
         self._has_started = False
         self.logger.info(f"{self.__class__.__name__} 已停止")
 
-    # ===== 业务方法（保留旧 VTSHandler 接口） =====
+    # ===== 业务方法 =====
 
     async def smile(self, value: float = 1) -> bool:
         return await self.expression.smile(value)
@@ -631,7 +621,7 @@ class VTSProvider:
             "llm_matching_enabled": bool(self.config.get("llm_matching_enabled", False)),
         }
 
-    # ===== 内部辅助（verbatim 复用 VTSHandler 写法） =====
+    # ===== 内部辅助 =====
 
     async def _idle_set_param_proxy(self, parameter_name: str, value: float) -> bool:
         if not parameter_name:

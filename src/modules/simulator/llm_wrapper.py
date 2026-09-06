@@ -58,8 +58,8 @@ class SimulatorLLMWrapper:
     - 通过 :class:`asyncio.Semaphore` 限制同时活跃的 LLM 请求数
 
     Note:
-        - 当前任务用累计总量与 ``token_budget_per_hour`` 做简单阈值比较；
-          Task 15 会接入基于滑动窗口的更精细预算控制。
+        - 预算控制当前用累计总量与 ``token_budget_per_hour`` 做简单阈值比较；
+          后续可接入基于滑动窗口的更精细预算控制。
         - 本类不直接读写 :class:`Persona`，所有 ``Persona`` 实例由调用方持有。
     """
 
@@ -288,7 +288,7 @@ class SimulatorLLMWrapper:
     def is_budget_exceeded(self) -> bool:
         """判断累计 token 是否已达到 :attr:`SimulatorConfigSchema.token_budget_per_hour`。
 
-        当前用总累计量做粗略阈值；后续 Task 15 将替换为滑动窗口实现。
+        当前用总累计量做粗略阈值；后续可替换为滑动窗口实现。
         """
         return self._total_tokens >= self._config.token_budget_per_hour
 
@@ -343,14 +343,12 @@ class SimulatorLLMWrapper:
     ) -> Optional[Tuple[str, int]]:
         """调用 LLM 并清洗响应。
 
-        流程：
-        1. 等待信号量并调用 :meth:`LLMManager.chat`
-        2. 判断 ``success`` 与 ``content``
-        3. 清洗：去 ``<system>`` / ``think`` 块、首尾引号、空白
-        4. 推理模型兜底：content 为空但存在 thinking（reasoning_content）时，
-           视为模型未输出正文，保持相同参数重试一次
-        5. 按 :attr:`_config.max_message_chars` 截断（``truncate=True`` 时）
-        6. 累计 token 用量
+        流程：等待信号量并调用 :meth:`LLMManager.chat` → 判断 ``success`` 与
+        ``content`` → 清洗（去 ``<system>`` / ``think`` 块、首尾引号、空白）→
+        推理模型兜底（content 为空但存在 thinking（reasoning_content）时，视为
+        模型未输出正文，保持相同参数重试一次）→ 按
+        :attr:`_config.max_message_chars` 截断（``truncate=True`` 时）→ 累计
+        token 用量。
 
         Args:
             prompt: 提示词
@@ -417,11 +415,8 @@ class SimulatorLLMWrapper:
     def _clean_response(cls, raw: str) -> str:
         """按固定顺序清洗 LLM 原始输出。
 
-        1. 去掉 ``<system>...</system>`` 块
-        2. 去掉 ``think...think`` 块
-        3. ``strip()``
-        4. 去掉首尾成对引号（英文 / 中文）
-        5. 再次 ``strip()``
+        依次：去掉 ``<system>...</system>`` 块、去掉 ``think...think`` 块、
+        ``strip()``、去掉首尾成对引号（英文 / 中文）、再次 ``strip()``。
         """
         if not raw:
             return ""

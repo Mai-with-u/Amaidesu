@@ -236,14 +236,14 @@ class OutlineLabel:
 class SubtitleGuiService:
     """字幕 GUI 服务（长驻 Tk 线程）
 
-    与新架构的集成方式：
-    - ``SubtitleProvider`` 通过 ``service`` 依赖注入调用 ``push_subtitle(text)``
-    - ``start()`` / ``stop()`` 在 main.py 组合根中管理生命周期
+    集成方式：
+    - 字幕后端通过 ``service`` 依赖注入调用 ``push_subtitle(text)``
+    - ``start()`` / ``stop()`` 在组合根中管理生命周期
     - 字幕渲染走 GUI 服务，不走 ToolResult 反馈给 LLM
     """
 
     class ConfigSchema(BaseConfig):
-        """字幕 GUI 配置（verbatim 自旧 SubtitleHandler.ConfigSchema）"""
+        """字幕 GUI 配置"""
 
         type: str = "subtitle"
 
@@ -353,7 +353,7 @@ class SubtitleGuiService:
             self.logger.error(f"放入字幕队列时出错: {e}", exc_info=True)
 
     def _run_gui(self) -> None:
-        """verbatim 自旧 SubtitleHandler._run_gui()"""
+        """Tk GUI 主循环（长驻线程入口）"""
         if not CTK_AVAILABLE or ctk is None:
             return
         try:

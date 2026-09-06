@@ -30,7 +30,7 @@ StorageLedger —— 直播间消息流落库记账器
 - 不改 schema（表结构权威在 schema.py）
 
 ## 装配
-- 由 main.py 组合根构造：传入 EventBus + SQLiteStore + LiveSessionManager，调用 ``await ledger.start()``
+- 构造时传入 EventBus + SQLiteStore + LiveSessionManager，随后调用 ``await ledger.start()``
 - ``--dry`` 模式跳过订阅（保留构造便于冒烟，stop 仍可被调）
 - run_shutdown 关闭链：放在 EventHistoryRecorder.stop 之后、EventBus.cleanup 之前
 """

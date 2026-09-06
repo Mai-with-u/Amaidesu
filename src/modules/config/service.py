@@ -710,7 +710,6 @@ class ConfigService:
             "meta": MetaConfig,
             "general": GeneralConfig,
             "persona": PersonaConfig,
-            # maicore → ContextAssembler（maicore 单进程已删除）
             "context": ContextAssemblerConfig,
             "dashboard": DashboardConfig,
             "simulator": SimulatorConfigSchema,
@@ -721,7 +720,7 @@ class ConfigService:
             "vlm": LLMProfileConfig,
             "llm_local": LLMProfileConfig,
             "llm_summary": LLMProfileConfig,
-            "llm_agenda": LLMProfileConfig,  # llm_outline → llm_agenda
+            "llm_agenda": LLMProfileConfig,
         }
 
         if section not in section_map:

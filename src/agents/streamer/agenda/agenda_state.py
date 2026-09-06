@@ -1,4 +1,4 @@
-"""AgendaState - 节目单运行时状态机 + Storage 适配（Wave 6 / §1.7）
+"""AgendaState - 节目单运行时状态机 + Storage 适配
 
 职责边界（重要）
 ----------------
@@ -7,11 +7,11 @@
 （``agenda_idle.py``）、**不**调用 LLM（``agenda_loader.py``）、
 **不**订阅 EventBus。
 
-设计要点（沿用 ``OutlineState`` / ``RoomState`` 范式）
+设计要点
 ---------------------------------------------------------
 - **可注入时钟**：所有方法接受可选 ``now_ms`` 参数（无参调用退回真实时钟），
   测试中传入确定性时间戳即可重现任意暂停/跳转场景，**禁止**依赖 ``time.sleep``。
-- **Storage 适配（Wave 6 新增）**：
+- **Storage 适配**：
   - 原始大纲 → ``agenda_plan`` 表（只读基准）
   - 运行进度 → ``agenda_runtime`` 表（Agent 改）
   - 适配方法：``load_agenda_plan(agenda_id)`` / ``dump_agenda_runtime()`` /
@@ -129,7 +129,7 @@ class AgendaStatus(Enum):
 
 @runtime_checkable
 class AgendaStore(Protocol):
-    """节目单存储接口（duck-typed Protocol；Wave 6 新增）。
+    """节目单存储接口（duck-typed Protocol）。
 
     接口要求：
     - ``load_agenda_plan(agenda_id) -> Optional[dict]``：返回 agenda_plan 行（含 label / order /
@@ -139,7 +139,7 @@ class AgendaStore(Protocol):
     - ``append_agenda_runtime(runtime_rows) -> None``：追加新行
     - ``delete_agenda_runtime(agenda_id) -> None``：删除该 agenda_id 的全部 runtime 行
 
-    实现：SQLiteStore（Wave 6 后台记账调用）；测试时可注入 InMemoryAgendaStore。
+    实现：SQLiteStore（后台记账调用）；测试时可注入 InMemoryAgendaStore。
     """
 
     async def load_agenda_plan(self, agenda_id: str) -> Optional[dict]: ...
@@ -271,7 +271,7 @@ class AgendaState:
             clock: 可选时钟回调（无参 → int 毫秒）；用于测试中注入确定性时间。
                 优先级：方法参数 ``now_ms`` > ``clock()`` > 真实时钟。
             store: 可选 AgendaStore 适配（duck-typed）。
-                默认 None 表示不持久化（in-memory 模式）；Wave 6 后台记账器会注入。
+                默认 None 表示不持久化（in-memory 模式）；后台记账器会注入。
         """
         # ----- 状态机字段 -----
         self.status: AgendaStatus = AgendaStatus.INACTIVE
@@ -528,7 +528,7 @@ class AgendaState:
     def get_elapsed_live_ms(self, *, now_ms: Optional[int] = None) -> Optional[int]:
         """返回整场直播经过时长（Unix 毫秒）。
 
-        未启动返回 None；wall clock 推进（不扣除暂停时长——与 OutlineState 一致）。
+        未启动返回 None；wall clock 推进（不扣除暂停时长）。
         """
         if self.agenda_started_at_ms is None:
             return None
@@ -680,9 +680,9 @@ class AgendaState:
         completed = []
         current_id: Optional[str] = None
         for row_dict in rows:
-            seg_id = row_dict.get("label") or ""  # AgendaRuntimeRow.label 存了 segment_id 替代
-            # 注：上面 label 存的是 title；这里需要找更明确的映射
-            # 修订：通过 order 找 segment_id
+            seg_id = row_dict.get("label") or ""
+            # AgendaRuntimeRow.label 存的是 title，不能反查 segment_id；
+            # 改用 order 定位对应 segment 再取其 id
             order = row_dict.get("order", 0)
             segments = list(getattr(agenda, "segments", []) or [])
             if order < len(segments):

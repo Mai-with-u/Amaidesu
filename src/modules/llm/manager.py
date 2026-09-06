@@ -2,8 +2,6 @@
 LLM 管理器 - 核心基础设施
 
 提供统一的 LLM 调用接口，管理多个 LLM 客户端类型（llm, llm_fast, vlm 等）
-
-设计文档: refactor/design/llm_manager.md
 """
 
 import asyncio
