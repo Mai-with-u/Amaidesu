@@ -238,6 +238,7 @@ class Planner:
         proactive: bool = False,
         history: Optional[List[Any]] = None,
         agenda_text: Optional[str] = None,
+        game_narrative: str = "",
     ) -> Optional[DecisionPlan]:
         """对一批弹幕做战术决策，产出 DecisionPlan。
 
@@ -332,6 +333,7 @@ class Planner:
         #    personality/style_constraints/bot_name 仍仅由 Replyer 表达侧注入，
         #    身份/表达与行动准则分离。behavior_style 空串时使用占位文本避免字面 $behavior_style。
         behavior_style_render = self._behavior_style or "（未配置行动准则，请依据直播间态势与对话历史自行决策）"
+        game_narrative_render = game_narrative or "（当前没有游戏叙事）"
         try:
             prompt = self._prompt_service.render_safe(
                 self.TEMPLATE_NAME,
@@ -339,6 +341,7 @@ class Planner:
                 forced=str(forced).lower(),
                 proactive=str(proactive).lower(),
                 behavior_style=behavior_style_render,
+                game_narrative=game_narrative_render,
             )
         except Exception as e:
             self.logger.error(f"渲染 Planner prompt 失败: {e}", exc_info=True)

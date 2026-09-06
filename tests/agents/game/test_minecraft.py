@@ -219,6 +219,21 @@ def test_factory_instantiates_minecraft() -> None:
     assert [s.name for s in agent.list_tools()] == ["mc_todo", "mc_memo", "mc_get_state", "mc_set_goal"]
 
 
+def test_factory_defaults_to_minecraft_engine() -> None:
+    """无 engine 键时默认 minecraft（与 agents_schemas GameAgentConfig.engine 默认一致）。"""
+    from src.modules.agents.factory import instantiate_agent
+
+    agent = instantiate_agent(
+        "game",
+        {},
+        llm_manager=None,
+        prompt_manager=None,
+        event_bus=MagicMock(),
+        tool_registry=None,
+    )
+    assert isinstance(agent, MinecraftAgent)
+
+
 # ---------------------------------------------------------------------------
 # LLM 决策接入（think 不再 noop）
 # ---------------------------------------------------------------------------

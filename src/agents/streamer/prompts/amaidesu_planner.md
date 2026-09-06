@@ -7,6 +7,7 @@ variables:
   - forced
   - proactive
   - behavior_style
+  - game_narrative
 author: Amaidesu
 tags: [decision, live, vtuber, danmaku, planner, two-stage]
 ---

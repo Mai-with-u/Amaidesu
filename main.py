@@ -931,7 +931,7 @@ async def _register_agents_from_config(
         if agent_name == "game":
             try:
                 game_cfg_dict = sub_cfg if isinstance(sub_cfg, dict) else {}
-                engine_name = str(game_cfg_dict.get("engine", "text_adv") or "text_adv")
+                engine_name = str(game_cfg_dict.get("engine", "minecraft") or "minecraft")
 
                 if engine_name == "minecraft":
                     from src.agents.game.minecraft import MinecraftAgent

@@ -60,7 +60,7 @@ def instantiate_agent(
         )
 
     if name == "game":
-        engine_name = str(config.get("engine", "text_adv") or "text_adv")
+        engine_name = str(config.get("engine", "minecraft") or "minecraft")
         if engine_name == "minecraft":
             from src.agents.game.minecraft import MinecraftAgent
             from src.agents.game.minecraft.config import MinecraftConfig

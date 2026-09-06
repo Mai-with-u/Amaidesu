@@ -38,12 +38,14 @@ from src.modules.context.models import MessageRole
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.agenda import AgendaItem, AgendaPayload
+from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.planner import (
     PlannerBatchItem,
     PlannerDecisionPayload,
     StreamerStagePayload,
 )
 from src.modules.events.payloads.room import RoomMessagePayload
+from pydantic import Field as _PydField
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.logging import get_logger
 from src.modules.tools import ToolInvocation, ToolSpec
@@ -77,13 +79,13 @@ if TYPE_CHECKING:
 
 __all__ = ["StreamerAgent", "StreamerAgentConfig", "build_streamer_agent"]
 
+# 游戏叙事摘要保留条数（近期叙事够用；进 Planner 上下文）
+_MAX_GAME_NARRATIVE = 10
+
 
 # ---------------------------------------------------------------------------
 # 配置 Schema
 # ---------------------------------------------------------------------------
-
-
-from pydantic import Field as _PydField
 
 
 class StreamerAgentConfig(BaseConfig):
@@ -409,6 +411,9 @@ class StreamerAgent(BaseAgent):
         self._planner_failures = 0
         self._replyer_failures = 0
 
+        # 游戏叙事摘要（订阅 game.* 收集，最多保留 N 条；进 Planner 上下文）
+        self._game_narrative_blocks: List[str] = []
+
         # 工具 Provider 实例（用于 invoke）
         self._reply_provider: Optional[ReplyToolProvider] = None
         self._proactive_provider: Optional[ProactiveToolProvider] = None
@@ -617,7 +622,7 @@ class StreamerAgent(BaseAgent):
     # ==================================================================
 
     def _subscribe_events(self) -> None:
-        """订阅 room.message.* 事件（collectors emit 的语义域事件）。"""
+        """订阅 room.message.* + game.* 事件（collectors emit 的语义域事件）。"""
         if self._event_bus is None:
             return
         self._event_bus.on(
@@ -626,7 +631,40 @@ class StreamerAgent(BaseAgent):
             model_class=RoomMessagePayload,
             priority=50,
         )
-        self._logger.info("StreamerAgent 已订阅 room.message.danmaku")
+        # 游戏叙事（三通道·事件）：游戏 Agent（如 MinecraftAgent）emit game.*
+        # → 主播侧收集最近叙事，进 Planner 上下文（按 payload.game 过滤可扩展到多游戏）
+        self._event_bus.on(
+            CoreEvents.GAME_MILESTONE,
+            self._on_game_event,
+            model_class=GamePayload,
+            priority=40,
+        )
+        self._event_bus.on(
+            CoreEvents.GAME_ATTENTION_REQUIRED,
+            self._on_game_event,
+            model_class=GamePayload,
+            priority=40,
+        )
+        self._logger.info("StreamerAgent 已订阅 room.message.danmaku / game.*")
+
+    async def _on_game_event(
+        self,
+        event_name: str,
+        payload: GamePayload,
+        source: str,
+    ) -> None:
+        """game.* 事件回调：收集最近游戏叙事（保留 N 条，进 Planner 上下文）。"""
+        try:
+            line = f"[{payload.game}] {payload.message}"
+            self._game_narrative_blocks.append(line)
+            if len(self._game_narrative_blocks) > _MAX_GAME_NARRATIVE:
+                self._game_narrative_blocks = self._game_narrative_blocks[-_MAX_GAME_NARRATIVE:]
+        except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
+            self._logger.warning(f"收集游戏叙事失败: {exc}")
+
+    def _game_narrative_text(self) -> str:
+        """导出最近游戏叙事摘要文本（Planner 上下文用）。"""
+        return "\n".join(self._game_narrative_blocks)
 
     async def _on_danmaku_received(
         self,
@@ -938,6 +976,9 @@ class StreamerAgent(BaseAgent):
         # 拼装 Agenda 上下文
         agenda_text = self._build_agenda_text()
 
+        # 游戏叙事（三通道·事件：MinecraftAgent 等 emit 的 game.* 摘要）
+        game_narrative = self._game_narrative_text()
+
         # Planner 决策（失败细节经 Planner.last_failure 带出，供决策事件区分降级原因）
         planner_started_ms = now_ms()
         try:
@@ -947,6 +988,7 @@ class StreamerAgent(BaseAgent):
                 proactive=proactive,
                 history=history,
                 agenda_text=agenda_text,
+                game_narrative=game_narrative,
             )
         except Exception as exc:
             self._logger.error(f"Planner 调用异常: {exc}", exc_info=True)
