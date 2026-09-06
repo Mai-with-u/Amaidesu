@@ -70,7 +70,7 @@ async def test_start_creates_scratch_and_resolves_to_it(store: SQLiteStore, bus:
     assert row is not None
     assert row["source"] == "scratch"
     assert row["stream_id"] == SCRATCH_STREAM_ID
-    # 临时场次是兜底桶，不是一场直播：不发 live.started
+    # 默认场次是兜底桶，不是一场直播：不发 live.started
     assert collector.started == []
     # 反复解析稳定
     assert await manager.resolve_pk() == pk
@@ -177,7 +177,7 @@ async def test_delete_session_cascades_and_scratch_rebuilds(store: SQLiteStore, 
     rows = await store.execute("SELECT * FROM live_chat")
     assert rows == []
 
-    # 临时场次删除后下次解析自动重建
+    # 默认场次删除后下次解析自动重建
     rebuilt = await manager.resolve_pk()
     assert rebuilt != scratch_pk
 

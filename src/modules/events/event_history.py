@@ -239,6 +239,50 @@ class EventHistoryService:
         # 旧 -> 新;倒序后取尾部(最新的)
         return list(self._buffer)[::-1][:limit]
 
+    def get_since(self, event_id: str, limit: int = 500) -> List[EventRecord]:
+        """游标续传：返回 `event_id` 之后（不含）的事件，按时间正序（旧→新）。
+
+        用于客户端断线/刷新后按游标补缺口。游标未命中（过旧被环形缓冲淘汰
+        或未知 id）时退化为最近 `limit` 条——客户端按 id 去重合并，语义仍正确。
+
+        Args:
+            event_id: 客户端上次收到的最后一条事件 id
+            limit: 返回的最大条数;<=0 时返回空列表
+
+        Returns:
+            事件列表（旧→新）；游标未命中时为最近窗口
+        """
+        if limit <= 0:
+            return []
+        buffer = list(self._buffer)
+        cursor = -1
+        for index in range(len(buffer) - 1, -1, -1):
+            if buffer[index].id == event_id:
+                cursor = index
+                break
+        if cursor == -1:
+            return buffer[-limit:]
+        return buffer[cursor + 1 :][-limit:]
+
+    def get_by_session(self, live_session_id: int, limit: int = 500) -> List[EventRecord]:
+        """按场次主键过滤缓冲事件，按时间正序（旧→新）。
+
+        命中条件：事件 data 携带 ``live_session_id`` 且等于给定主键
+        （场次盖章拦截器保证业务事件统一携带）。供单场时间线回看。
+
+        Args:
+            live_session_id: ``live_sessions`` 表 INTEGER 主键
+            limit: 返回的最大条数;<=0 时返回空列表
+        """
+        if limit <= 0:
+            return []
+        hits = [
+            record
+            for record in self._buffer
+            if isinstance(record.data, dict) and record.data.get("live_session_id") == live_session_id
+        ]
+        return hits[-limit:]
+
     def query(
         self,
         *,

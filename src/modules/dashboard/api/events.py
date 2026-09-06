@@ -26,12 +26,19 @@ async def list_events(
     type: Optional[str] = Query(None, description="事件类型筛选，逗号分隔"),
     level: Optional[str] = Query(None, description="严重级别筛选"),
     before_timestamp: Optional[float] = Query(None, description="游标：返回此时间戳之前的事件"),
+    since_id: Optional[str] = Query(None, description="游标：返回此事件 id 之后的事件（断线/刷新续传）"),
     server: ServerDep = ...,
 ):
     """获取事件历史（基于内存环形缓冲，支持筛选和游标分页）"""
     history_service = server.event_history
     if not history_service:
         return {"events": [], "total": 0, "has_more": False}
+
+    if since_id:
+        # 游标续传：返回 since_id 之后的缺口（旧→新）；游标未命中退化为最近窗口，
+        # 客户端按 id 去重合并
+        gap = history_service.get_since(since_id, limit=limit)
+        return {"events": [e.model_dump() for e in gap], "total": len(gap), "has_more": False}
 
     types_list = type.split(",") if type else None
     events = history_service.query(

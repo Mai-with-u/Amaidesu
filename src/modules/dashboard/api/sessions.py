@@ -5,13 +5,13 @@
 - ``GET  /sessions``           场次列表（倒序 + 消息数，供控制台场次侧边栏）
 - ``POST /sessions/open``      开启新场次（进行中场次先自动结束）
 - ``POST /sessions/{id}/close`` 结束指定场次（须为当前进行中场次）
-- ``DELETE /sessions/{id}``    删除场次（级联清除明细；临时场次删除后自动重建）
+- ``DELETE /sessions/{id}``    删除场次（级联清除明细；默认场次删除后自动重建）
 
 场次归属由 ``LiveSessionManager`` 负责（唯一事实源）；本层只做参数校验与
 结果序列化，不含场次语义。
 """
 
-from typing import TYPE_CHECKING, Annotated, Any, List, Optional
+from typing import TYPE_CHECKING, Annotated, Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -92,16 +92,28 @@ def _row_to_item(row: Any, active_pk: Optional[int]) -> SessionItem:
     )
 
 
+# 来源筛选白名单（防脏值进 SQL 语义层）
+_SESSION_SOURCE_FILTERS = frozenset({"manual", "replay", "scratch", "legacy"})
+
+
 @router.get("", response_model=SessionListResponse)
 async def list_sessions(
     server: ServerDep,
     limit: Annotated[int, Query(ge=1, le=200, description="最多返回条数")] = 50,
+    source: Annotated[Optional[str], Query(description="来源筛选：manual / replay / scratch / legacy")] = None,
+    q: Annotated[Optional[str], Query(description="标题关键字筛选")] = None,
 ) -> SessionListResponse:
-    """列出直播场次（按开始时间倒序，附消息数）。"""
+    """列出直播场次（默认场次置顶，其余按开始时间倒序，附消息数），支持来源与标题筛选。"""
     manager = _require_session_manager(server)
     if manager is None:
         raise HTTPException(status_code=503, detail="LiveSessionManager 未装配")
-    rows = await manager.list_sessions(limit=limit)
+    if source is not None and source != "" and source not in _SESSION_SOURCE_FILTERS:
+        raise HTTPException(status_code=400, detail=f"非法来源筛选: {source}")
+    rows = await manager.list_sessions(
+        limit=limit,
+        source=source or None,
+        title_keyword=(q or "").strip() or None,
+    )
     active_pk = manager.active_pk
     return SessionListResponse(
         items=[_row_to_item(row, active_pk) for row in rows],
@@ -139,6 +151,66 @@ async def close_session(session_id: int, server: ServerDep) -> SessionActionResp
         )
     closed = await manager.close_session(reason="API 手动结束")
     return SessionActionResponse(success=closed, detail="场次已结束" if closed else "结束失败")
+
+
+# 回看时间线只消费事件历史中的这些类型——消息/发言已由明细行承载，
+# 事件记录仅补充明细表没有的决策与状态事实
+_TIMELINE_EVENT_TYPES = frozenset(
+    {
+        "planner.decision",
+        "streamer.stage",
+        "live.started",
+        "live.ended",
+        "agenda.update",
+        "game.milestone",
+    }
+)
+
+
+@router.get("/{session_id}/timeline")
+async def session_timeline(
+    session_id: int,
+    server: ServerDep,
+    limit: Annotated[int, Query(ge=1, le=2000, description="最多返回条数")] = 500,
+) -> Dict[str, Any]:
+    """单场时间线回看：明细行（消息/发言/礼物/SC）+ 事件历史（决策/阶段/边界）按时间合并。
+
+    与实时视图（WS 推送）共用同一条目形状的语义：前端用同一套卡片渲染。
+    事件历史为内存环形缓冲，重启后事件侧条目不可回看（明细行不受影响）。
+    """
+    manager = _require_session_manager(server)
+    if manager is None:
+        raise HTTPException(status_code=503, detail="LiveSessionManager 未装配")
+    row = await manager.store.get_live_session(live_session_id=session_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"场次不存在: {session_id}")
+
+    items: list[dict] = []
+    for item in await manager.get_session_details(session_id, limit=limit):
+        # 礼物/SC 明细行与 room.message 事件同义，统一映射为前端卡片 kind
+        kind = item["kind"]
+        if kind == "gift_row":
+            item["kind"] = "gift"
+        elif kind == "super_chat_row":
+            item["kind"] = "super_chat"
+        items.append(item)
+
+    event_history = getattr(server, "event_history", None)
+    if event_history is not None:
+        for record in event_history.get_by_session(session_id, limit=limit):
+            if record.type not in _TIMELINE_EVENT_TYPES:
+                continue
+            items.append(
+                {
+                    "kind": "event",
+                    "event_type": record.type,
+                    "ts_ms": int(record.timestamp * 1000),
+                    "data": record.data,
+                }
+            )
+
+    items.sort(key=lambda item: item["ts_ms"])
+    return {"live_session_id": session_id, "items": items[-limit:]}
 
 
 @router.delete("/{session_id}", response_model=SessionActionResponse)

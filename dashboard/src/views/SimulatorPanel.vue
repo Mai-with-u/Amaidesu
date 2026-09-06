@@ -19,7 +19,9 @@
           {{ status.is_running ? '停止世界循环' : '启动世界循环' }}
         </el-button>
         <el-tag v-if="!status.enabled" type="info" size="large" effect="plain"> 未启用 </el-tag>
-        <el-tag v-else-if="!status.is_available" type="warning" size="large" effect="plain"> 未注入 </el-tag>
+        <el-tag v-else-if="!status.is_available" type="warning" size="large" effect="plain">
+          未注入
+        </el-tag>
         <el-tag v-else-if="status.is_running" type="success" size="large" effect="dark">
           运行中 · {{ modeLabel }}
         </el-tag>
@@ -86,10 +88,13 @@
                     </el-button>
                   </el-form-item>
                 </el-form>
-                <div v-if="status.is_running && status.mode === 'replay' && replayProgress" class="replay-progress">
+                <div
+                  v-if="status.is_running && status.mode === 'replay' && replayProgress"
+                  class="replay-progress"
+                >
                   <p>
-                    正在回放 <strong>{{ replayProgress.date }}</strong>：
-                    剩余 {{ replayProgress.remaining }} / {{ replayProgress.total }} 条
+                    正在回放 <strong>{{ replayProgress.date }}</strong
+                    >： 剩余 {{ replayProgress.remaining }} / {{ replayProgress.total }} 条
                   </p>
                   <el-progress
                     :percentage="replayPercent"
@@ -98,7 +103,8 @@
                   />
                 </div>
                 <p class="hint">
-                  回放读取 <code>data/events/YYYY-MM-DD.jsonl</code>（事件历史录制），按原节奏重放弹幕；
+                  回放读取
+                  <code>data/events/YYYY-MM-DD.jsonl</code>（事件历史录制），按原节奏重放弹幕；
                   回放消息带 <code>simulated</code> 标记，落库时间戳刷新为当前时刻。
                 </p>
               </el-card>
@@ -126,7 +132,9 @@
                   </el-descriptions-item>
                 </el-descriptions>
                 <p class="hint">
-                  启动按 <code>[simulator].mode</code> 走生成或回放；此处选日期启动回放可在运行期临时指定录制日。
+                  启动按
+                  <code>[simulator].mode</code>
+                  走生成或回放；此处选日期启动回放可在运行期临时指定录制日。
                 </p>
               </el-card>
             </el-col>
@@ -141,7 +149,9 @@
             <template #header>
               <div class="card-header-row">
                 <span>常驻观众（SQLite sim_personas 表，增删改即时落库）</span>
-                <el-button type="primary" size="small" @click="openPersonaDialog()">新增人设</el-button>
+                <el-button type="primary" size="small" @click="openPersonaDialog()"
+                  >新增人设</el-button
+                >
               </div>
             </template>
             <el-table :data="personas" stripe size="small">
@@ -151,8 +161,18 @@
                   <el-tag size="small" :type="roleTagType(row.role)">{{ row.role }}</el-tag>
                 </template>
               </el-table-column>
-              <el-table-column prop="personality" label="性格" min-width="200" show-overflow-tooltip />
-              <el-table-column prop="speaking_style" label="说话风格" min-width="160" show-overflow-tooltip />
+              <el-table-column
+                prop="personality"
+                label="性格"
+                min-width="200"
+                show-overflow-tooltip
+              />
+              <el-table-column
+                prop="speaking_style"
+                label="说话风格"
+                min-width="160"
+                show-overflow-tooltip
+              />
               <el-table-column prop="fans_medal_level" label="牌级" width="70" />
               <el-table-column prop="guard_level" label="舰" width="60" />
               <el-table-column prop="context_window_size" label="窗口" width="70">
@@ -162,8 +182,12 @@
               </el-table-column>
               <el-table-column label="操作" width="130" fixed="right">
                 <template #default="{ row }">
-                  <el-button link type="primary" size="small" @click="openPersonaDialog(row)">编辑</el-button>
-                  <el-button link type="danger" size="small" @click="removePersona(row)">删除</el-button>
+                  <el-button link type="primary" size="small" @click="openPersonaDialog(row)"
+                    >编辑</el-button
+                  >
+                  <el-button link type="danger" size="small" @click="removePersona(row)"
+                    >删除</el-button
+                  >
                 </template>
               </el-table-column>
             </el-table>
@@ -178,7 +202,9 @@
             <template #header>
               <div class="card-header-row">
                 <span>礼物清单（SQLite sim_gifts 表，按权重随机触发）</span>
-                <el-button type="primary" size="small" @click="openGiftDialog()">新增礼物</el-button>
+                <el-button type="primary" size="small" @click="openGiftDialog()"
+                  >新增礼物</el-button
+                >
               </div>
             </template>
             <el-table :data="gifts" stripe size="small">
@@ -186,7 +212,9 @@
               <el-table-column prop="gift_name" label="名称" width="160" />
               <el-table-column prop="category" label="类别" width="110">
                 <template #default="{ row }">
-                  <el-tag size="small" :type="categoryTagType(row.category)">{{ row.category }}</el-tag>
+                  <el-tag size="small" :type="categoryTagType(row.category)">{{
+                    row.category
+                  }}</el-tag>
                 </template>
               </el-table-column>
               <el-table-column prop="weight" label="权重" width="80" />
@@ -198,8 +226,12 @@
               </el-table-column>
               <el-table-column label="操作" width="130" fixed="right">
                 <template #default="{ row }">
-                  <el-button link type="primary" size="small" @click="openGiftDialog(row)">编辑</el-button>
-                  <el-button link type="danger" size="small" @click="removeGift(row)">删除</el-button>
+                  <el-button link type="primary" size="small" @click="openGiftDialog(row)"
+                    >编辑</el-button
+                  >
+                  <el-button link type="danger" size="small" @click="removeGift(row)"
+                    >删除</el-button
+                  >
                 </template>
               </el-table-column>
             </el-table>
@@ -259,8 +291,9 @@
                     <code>simulated: true</code> 溯源标记；统计查询会主动排除模拟数据。
                   </p>
                   <p>
-                    观众上下文（世界窗口）从 SQLite <code>live_chat</code> 公共流读取——弹幕与主播发言同表，
-                    per-persona 窗口大小按"角色天性 → 人设覆盖"两级裁剪。
+                    观众上下文（世界窗口）从 SQLite
+                    <code>live_chat</code> 公共流读取——弹幕与主播发言同表， per-persona
+                    窗口大小按"角色天性 → 人设覆盖"两级裁剪。
                   </p>
                   <p>
                     预算耗尽（<code>token_budget_per_hour</code>）时，模拟器进入 5s
@@ -312,7 +345,9 @@
             :max="50"
             placeholder="留空=角色默认"
           />
-          <span class="hint" style="margin-left: 8px">留空 = 按角色默认（老观众看得多、路人看得少）</span>
+          <span class="hint" style="margin-left: 8px"
+            >留空 = 按角色默认（老观众看得多、路人看得少）</span
+          >
         </el-form-item>
       </el-form>
       <template #footer>
@@ -324,10 +359,18 @@
     <!-- ============================================================ -->
     <!-- 礼物编辑对话框                                                -->
     <!-- ============================================================ -->
-    <el-dialog v-model="giftDialogVisible" :title="giftForm.gift_id ? '编辑礼物' : '新增礼物'" width="480px">
+    <el-dialog
+      v-model="giftDialogVisible"
+      :title="giftForm.gift_id ? '编辑礼物' : '新增礼物'"
+      width="480px"
+    >
       <el-form :model="giftForm" label-width="110px" size="default">
         <el-form-item label="礼物 ID" required>
-          <el-input v-model="giftForm.gift_id" :disabled="!!giftFormOriginalId" placeholder="英文/数字/下划线" />
+          <el-input
+            v-model="giftForm.gift_id"
+            :disabled="!!giftFormOriginalId"
+            placeholder="英文/数字/下划线"
+          />
         </el-form-item>
         <el-form-item label="名称" required>
           <el-input v-model="giftForm.gift_name" maxlength="50" />
@@ -624,7 +667,9 @@ async function savePersona() {
         context_window_size: personaForm.context_window_size ?? null,
       };
       const res = await simulatorApi.updatePersona(personaFormOriginalId.value, payload);
-      res.data.success ? ElMessage.success('已保存') : ElMessage.warning(res.data.message || '保存失败');
+      res.data.success
+        ? ElMessage.success('已保存')
+        : ElMessage.warning(res.data.message || '保存失败');
     } else {
       const res = await simulatorApi.createPersona({
         user_nickname: personaForm.user_nickname,
@@ -635,7 +680,9 @@ async function savePersona() {
         guard_level: personaForm.guard_level,
         context_window_size: personaForm.context_window_size ?? null,
       });
-      res.data.success ? ElMessage.success('已新增') : ElMessage.warning(res.data.message || '新增失败');
+      res.data.success
+        ? ElMessage.success('已新增')
+        : ElMessage.warning(res.data.message || '新增失败');
     }
     personaDialogVisible.value = false;
     await fetchPersonas();
@@ -648,13 +695,17 @@ async function savePersona() {
 
 async function removePersona(row: SimPersona) {
   try {
-    await ElMessageBox.confirm(`确认删除人设「${row.user_nickname}」？`, '删除确认', { type: 'warning' });
+    await ElMessageBox.confirm(`确认删除人设「${row.user_nickname}」？`, '删除确认', {
+      type: 'warning',
+    });
   } catch {
     return;
   }
   try {
     const res = await simulatorApi.deletePersona(row.user_id);
-    res.data.success ? ElMessage.success('已删除') : ElMessage.warning(res.data.message || '删除失败');
+    res.data.success
+      ? ElMessage.success('已删除')
+      : ElMessage.warning(res.data.message || '删除失败');
     await fetchPersonas();
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '删除失败');
@@ -689,7 +740,9 @@ async function saveGift() {
         sc_amount_rmb: giftForm.sc_amount_rmb ?? null,
       };
       const res = await simulatorApi.updateGift(giftFormOriginalId.value, payload);
-      res.data.success ? ElMessage.success('已保存') : ElMessage.warning(res.data.message || '保存失败');
+      res.data.success
+        ? ElMessage.success('已保存')
+        : ElMessage.warning(res.data.message || '保存失败');
     } else {
       const res = await simulatorApi.createGift({
         gift_id: giftForm.gift_id,
@@ -699,7 +752,9 @@ async function saveGift() {
         data_type: giftForm.data_type,
         sc_amount_rmb: giftForm.sc_amount_rmb ?? null,
       });
-      res.data.success ? ElMessage.success('已新增') : ElMessage.warning(res.data.message || '新增失败');
+      res.data.success
+        ? ElMessage.success('已新增')
+        : ElMessage.warning(res.data.message || '新增失败');
     }
     giftDialogVisible.value = false;
     await fetchGifts();
@@ -712,13 +767,17 @@ async function saveGift() {
 
 async function removeGift(row: SimGift) {
   try {
-    await ElMessageBox.confirm(`确认删除礼物「${row.gift_name}」？`, '删除确认', { type: 'warning' });
+    await ElMessageBox.confirm(`确认删除礼物「${row.gift_name}」？`, '删除确认', {
+      type: 'warning',
+    });
   } catch {
     return;
   }
   try {
     const res = await simulatorApi.deleteGift(row.gift_id);
-    res.data.success ? ElMessage.success('已删除') : ElMessage.warning(res.data.message || '删除失败');
+    res.data.success
+      ? ElMessage.success('已删除')
+      : ElMessage.warning(res.data.message || '删除失败');
     await fetchGifts();
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '删除失败');

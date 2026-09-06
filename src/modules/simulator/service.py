@@ -237,7 +237,7 @@ class SimulatorService:
         self._is_started = True
 
         # 回放自动开/关场次：一场回放天然是一场直播——启动即开（source=replay），
-        # stop 时收口。其余模式不开场次（消息归临时兜底场次）。
+        # stop 时收口。其余模式不开场次（消息归默认场次）。
         if mode == "replay" and self._session_manager is not None:
             self._opened_session_pk = await self._session_manager.open_session(
                 title=f"回放 {date_str}",

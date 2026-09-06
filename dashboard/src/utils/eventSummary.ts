@@ -21,7 +21,7 @@
  * @param type 事件 type（WS 广播类型，如 `room.message` / `tool.result.speak`）
  * @param data 事件 data 载荷（任意可 JSON 反序列化对象）
  * @returns 单行摘要（已做长度截断；省略号 `…` 收尾）
- */export function summarizeEvent(type: string, data: unknown): string {
+ */ export function summarizeEvent(type: string, data: unknown): string {
   const d = (data ?? {}) as Record<string, unknown>;
 
   // WS 层把 4 种 room.message.* EventBus 事件统一广播为 "room.message"，

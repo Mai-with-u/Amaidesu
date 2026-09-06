@@ -38,6 +38,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { llmApi } from '@/api';
 import type { LLMRequestHistory, LLMHistoryQueryParams } from '@/types';
@@ -119,6 +120,28 @@ async function showDetail(row: LLMRequestHistory) {
     ElMessage.error(error instanceof Error ? error.message : '获取详情失败');
   }
 }
+
+// 直达详情：外部页面（如直播控制台决策卡）经 ?request_id= 跳入时自动打开
+const route = useRoute();
+async function openFromQuery() {
+  const requestId = String(route.query.request_id ?? '').trim();
+  if (!requestId) return;
+  try {
+    const response = await llmApi.getRequestById(requestId);
+    if (response.data) {
+      currentDetail.value = response.data;
+      detailVisible.value = true;
+    } else {
+      ElMessage.warning(`未找到请求: ${requestId}`);
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '获取详情失败');
+  }
+}
+
+onMounted(() => {
+  void openFromQuery();
+});
 
 // 防抖定时器
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;

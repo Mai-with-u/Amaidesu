@@ -3,7 +3,9 @@
     <header class="page-header">
       <div class="header-left">
         <h1 class="page-title">会话调试</h1>
-        <p class="page-subtitle">v2 对话闭环：观众消息 → 主播发言（Planner / Agenda / 工具作为过程行）</p>
+        <p class="page-subtitle">
+          v2 对话闭环：观众消息 → 主播发言（Planner / Agenda / 工具作为过程行）
+        </p>
       </div>
       <div class="header-actions">
         <span class="event-count">{{ filteredEvents.length }} / {{ events.length }} 条</span>
@@ -64,7 +66,11 @@
             </div>
             <div class="chat-bubble chat-bubble--message" @click="toggleExpand(event.id)">
               <div class="bubble-header">
-                <el-tag size="small" effect="plain" :type="messageTypeTagType(event.message.message_type)">
+                <el-tag
+                  size="small"
+                  effect="plain"
+                  :type="messageTypeTagType(event.message.message_type)"
+                >
                   {{ messageTypeLabel(event.message.message_type) }}
                 </el-tag>
                 <el-tag v-if="event.message.simulated" size="small" effect="plain" type="warning">
@@ -76,9 +82,11 @@
               </div>
               <div class="bubble-text">{{ messageTextOf(event) }}</div>
               <div class="bubble-meta">
-                <span v-if="event.message.user?.id" class="meta-item">UID {{ event.message.user.id }}</span>
+                <span v-if="event.message.user?.id" class="meta-item"
+                  >UID {{ event.message.user.id }}</span
+                >
                 <span v-if="event.message.live_session_id" class="meta-item">
-                    · {{ event.message.live_session_id }}
+                  · {{ event.message.live_session_id }}
                 </span>
                 <span class="bubble-spacer" />
                 <span class="expand-hint">

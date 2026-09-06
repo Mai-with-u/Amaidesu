@@ -8,7 +8,7 @@
         </el-menu-item>
         <el-menu-item index="/live">
           <el-icon><VideoCamera /></el-icon>
-          <span>直播间观察</span>
+          <span>直播控制台</span>
         </el-menu-item>
         <el-menu-item index="/collectors">
           <el-icon><Connection /></el-icon>

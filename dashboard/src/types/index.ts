@@ -554,3 +554,43 @@ export interface AgendaControlResponse {
 export * from './settings';
 export * from './llm';
 export * from './trace';
+
+// ===== 直播场次（直播控制台） =====
+
+/** 场次列表条目（GET /api/v1/live-sessions） */
+export interface LiveSessionItem {
+  live_session_id: number;
+  /** 场次来源：manual=手动 / replay=模拟器回放 / scratch=默认场次兜底 / legacy=历史遗留 */
+  source: string;
+  title: string | null;
+  room_id: string;
+  platform: string;
+  started_at_ms: number;
+  /** NULL = 进行中 */
+  ended_at_ms: number | null;
+  message_count: number;
+  /** 是否为当前进行中的显式场次 */
+  is_active: boolean;
+}
+
+export interface LiveSessionListResponse {
+  items: LiveSessionItem[];
+  active_session_id: number | null;
+}
+
+/** 单场时间线条目（GET /api/v1/live-sessions/{id}/timeline） */
+export interface SessionTimelineItem {
+  /** danmaku / gift / super_chat / speech / event */
+  kind: string;
+  ts_ms: number;
+  /** kind=event 时的事件类型（planner.decision / streamer.stage / live.* 等） */
+  event_type?: string;
+  /** kind=event 时的事件负载 */
+  data?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface SessionTimelineResponse {
+  live_session_id: number;
+  items: SessionTimelineItem[];
+}

@@ -111,7 +111,7 @@ class BackgroundMaintainer:
             live_session_store: ``live_sessions`` 存储接口（duck-typed；轻循环写状态）
             session_manager: 场次管理器（``LiveSessionManager`` 或鸭子类型；
                 提供 ``async resolve_pk() -> int``）。心跳与话题快照的场次归属
-                经它解析（显式场次进行中取其主键，否则临时兜底场次）；``None``
+                经它解析（显式场次进行中取其主键，否则默认场次）；``None``
                 时两路写入整体降级跳过。
             context_service: 上下文服务（可选；供压缩 worker 读历史）
             session_id: ContextService 会话键（默认 "live"——L1 对话窗口的
@@ -325,7 +325,7 @@ class BackgroundMaintainer:
         """把当前 RoomState 快照写入 live_sessions 表（后台记账，每轻 tick 一次心跳）。
 
         场次归属经 ``LiveSessionManager.resolve_pk()`` 解析（显式场次进行中
-        取其主键，否则临时兜底场次）；管理器缺失时降级跳过——心跳不建行，
+        取其主键，否则默认场次）；管理器缺失时降级跳过——心跳不建行，
         场次行的创建/结账归 LiveSessionManager。
         """
         if self._live_session_store is None or self._session_manager is None:

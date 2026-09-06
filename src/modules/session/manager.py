@@ -6,14 +6,14 @@
 - 行级写入经 ``SQLiteStore`` 的 live_sessions 领域方法（主键 AUTOINCREMENT）；
 - 生命周期广播 ``live.started`` / ``live.ended`` 事件；
 - 对下游（StorageLedger / 场次盖章拦截器 / 模拟器 / Dashboard API）暴露
-  ``resolve_pk()``——显式场次进行中返回其主键，否则返回临时场次主键。
+  ``resolve_pk()``——显式场次进行中返回其主键，否则返回默认场次主键。
 
 ## 防膨胀设计
 
 把"开场次"从进程启动的副作用变为**显式业务动作**：
 
 - 进程启动**不**自动开新场次；
-- 无显式场次期间，所有消息归属一个**临时场次**（scratch 兜底桶，固定复用
+- 无显式场次期间，所有消息归属一个**默认场次**（scratch 兜底桶，固定复用
   一行）——链路行为与正式场次完全一致（落库/回灌/决策上下文），但不膨胀；
 - 显式场次由手动开关或模拟器回放开启；结束时若无任何明细行则整行丢弃
   （空场次不留行）；
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 
 logger = get_logger("LiveSessionManager")
 
-# 临时兜底场次的 stream_id 标记（房间语义上的"无房间"哨兵值）
+# 默认场次的 stream_id 标记（房间语义上的"无房间"哨兵值）
 SCRATCH_STREAM_ID = "__scratch__"
 
 
@@ -45,7 +45,7 @@ class LiveSessionManager:
 
     不变量：
     - 至多一个显式进行中场次（开启新场次前自动结束旧场次）；
-    - 临时场次行存在且未结束（懒创建，被删除后下次解析自动重建）；
+    - 默认场次行存在且未结束（懒创建，被删除后下次解析自动重建）；
     - 空显式场次在结账时整行丢弃。
     """
 
@@ -70,7 +70,7 @@ class LiveSessionManager:
     # -------------------- 生命周期 --------------------
 
     async def start(self) -> None:
-        """启动：收口上次残留 + 确保临时场次就位。幂等。"""
+        """启动：收口上次残留 + 确保默认场次就位。幂等。"""
         if self._started:
             return
 
@@ -84,7 +84,7 @@ class LiveSessionManager:
                 f"（ended_at_ms 补为最后活动时刻 {ended}）"
             )
 
-        # 2. 临时场次就位
+        # 2. 默认场次就位
         await self._ensure_scratch()
 
         self._started = True
@@ -185,7 +185,7 @@ class LiveSessionManager:
     async def delete_session(self, live_session_id: int) -> bool:
         """删除场次（级联清明细）。进行中场次先自动结束再删。
 
-        临时场次也可删（下次解析自动重建）。目标行不存在返回 False——
+        默认场次也可删（下次解析自动重建）。目标行不存在返回 False——
         注意进行中的空场次在收口阶段即被整行丢弃，本方法先探明行存在
         再收口，避免"收口即删光 → DELETE 落空"被误报为不存在。
         """
@@ -204,7 +204,7 @@ class LiveSessionManager:
     # -------------------- 场次归属解析 --------------------
 
     async def resolve_pk(self) -> int:
-        """解析"当前场次"主键：显式场次进行中返回其主键，否则临时场次主键。
+        """解析"当前场次"主键：显式场次进行中返回其主键，否则默认场次主键。
 
         下游（StorageLedger 写明细 / 场次盖章拦截器 / 模拟器世界窗口）统一
         经此归属，不再各自维护场次语义。
@@ -214,7 +214,7 @@ class LiveSessionManager:
         return await self._ensure_scratch()
 
     async def _ensure_scratch(self) -> int:
-        """确保临时兜底场次行存在并返回其主键（幂等，跨进程单行）。"""
+        """确保默认场次兜底行存在并返回其主键（幂等，跨进程单行）。"""
         if self._scratch_pk is not None:
             return self._scratch_pk
         row = await self._store.get_scratch_live_session()
@@ -225,17 +225,17 @@ class LiveSessionManager:
             stream_id=SCRATCH_STREAM_ID,
             platform="scratch",
             started_at_ms=now_ms(),
-            title="临时场次（未显式开启期间的消息兜底）",
+            title="默认场次（未显式开启场次时的消息归属）",
             source="scratch",
         )
-        logger.info(f"临时兜底场次已创建: id={self._scratch_pk}")
+        logger.info(f"默认场次兜底行已创建: id={self._scratch_pk}")
         return self._scratch_pk
 
     # -------------------- 查询访问面 --------------------
 
     @property
     def active_pk(self) -> Optional[int]:
-        """当前显式进行中场次主键；无则 None（不回退临时场次）。"""
+        """当前显式进行中场次主键；无则 None（不回退默认场次）。"""
         return self._active_pk
 
     @property
@@ -243,9 +243,87 @@ class LiveSessionManager:
         """当前显式场次的来源（manual / replay）；无显式场次为空串。"""
         return self._active_source
 
-    async def list_sessions(self, *, limit: int = 50) -> List:
-        """场次列表（倒序 + 消息数），供 Dashboard API / 控制台侧边栏。"""
-        return await self._store.list_live_sessions(limit=limit)
+    async def list_sessions(
+        self,
+        *,
+        limit: int = 50,
+        source: Optional[str] = None,
+        title_keyword: Optional[str] = None,
+    ) -> List:
+        """场次列表（默认场次置顶 + 显式场次倒序 + 消息数），供 Dashboard API / 控制台侧边栏。"""
+        return await self._store.list_live_sessions(limit=limit, source=source, title_keyword=title_keyword)
+
+    @property
+    def store(self) -> "SQLiteStore":
+        """底层存储（回看数据面只读访问）。"""
+        return self._store
+
+    async def get_session_details(self, live_session_id: int, *, limit: int = 300) -> List[dict]:
+        """单场明细行（live_chat + gifts + super_chats 合并，时间正序）。
+
+        回看时间线的数据面：把三张明细表拉平为带 kind 的条目流，
+        消息行带 message_id / reply_to_message_id 关联键。
+        """
+        rows = await self._store.list_recent_live_chat(live_session_id=live_session_id, limit=limit)
+        items: List[dict] = []
+        for row in rows:
+            ts = int(row["timestamp_ms"])
+            if row["sender_role"] == "assistant":
+                items.append(
+                    {
+                        "kind": "speech",
+                        "ts_ms": ts,
+                        "text": row["content"],
+                        "reply_to_message_id": row["reply_to_message_id"],
+                        "simulated": False,
+                    }
+                )
+            else:
+                items.append(
+                    {
+                        "kind": str(row["message_type"]),
+                        "ts_ms": ts,
+                        "user_name": row["sender_name"] or "",
+                        "user_id": row["sender_id"] or "",
+                        "content": row["content"],
+                        "message_id": row["message_id"],
+                        "simulated": bool(row["simulated"]),
+                    }
+                )
+        gift_rows = await self._store.execute(
+            "SELECT * FROM gifts WHERE live_session_id=? ORDER BY timestamp_ms ASC LIMIT ?",
+            (live_session_id, limit),
+        )
+        for row in gift_rows:
+            items.append(
+                {
+                    "kind": "gift_row",
+                    "ts_ms": int(row["timestamp_ms"]),
+                    "user_name": row["user_name"],
+                    "user_id": row["user_id"],
+                    "gift_name": row["gift_name"],
+                    "gift_count": int(row["gift_count"]),
+                    "simulated": bool(row["simulated"]),
+                }
+            )
+        sc_rows = await self._store.execute(
+            "SELECT * FROM super_chats WHERE live_session_id=? ORDER BY timestamp_ms ASC LIMIT ?",
+            (live_session_id, limit),
+        )
+        for row in sc_rows:
+            items.append(
+                {
+                    "kind": "super_chat_row",
+                    "ts_ms": int(row["timestamp_ms"]),
+                    "user_name": row["user_name"],
+                    "user_id": row["user_id"],
+                    "content": row["message"],
+                    "amount": float(row["amount"]),
+                    "simulated": bool(row["simulated"]),
+                }
+            )
+        items.sort(key=lambda item: item["ts_ms"])
+        return items[-limit:]
 
 
 __all__ = ["LiveSessionManager", "SCRATCH_STREAM_ID"]

@@ -13,7 +13,7 @@
 - ``live_sessions`` 一行 = 一场直播（有开始/结束边界）；房间/频道是场次之上的
   静态属性（``stream_id`` 普通属性列，**不参与主键语义**，一房多场）
 - ``live_sessions.source`` 标记场次来源（manual=手动 / replay=模拟器回放 /
-  scratch=临时兜底桶 / legacy=历史遗留行）
+  scratch=默认场次兜底 / legacy=历史遗留行）
 - ``live_chat.message_id`` 与 ``live_chat.reply_to_message_id`` 构成"主播发言
   回复了哪条观众弹幕"的关联键（互动分析数据面）
 - ``live_chat`` / ``gifts`` / ``super_chats`` 表加 ``simulated`` 贯穿列

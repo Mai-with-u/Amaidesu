@@ -37,6 +37,9 @@ import type {
   StreamerTestDecisionResponse,
   TriggerProactiveRequest,
   TriggerProactiveResponse,
+  LiveSessionListResponse,
+  SessionTimelineResponse,
+  WebSocketMessage,
 } from '@/types';
 
 const api = axios.create({
@@ -106,13 +109,20 @@ export const capabilitiesApi = {
 export const simulatorApi = {
   getStatus: () => api.get<SimulatorStatus>('/simulator/status'),
   start: (replayDate?: string) =>
-    api.post<SimulatorControlResponse>('/simulator/start', replayDate ? { replay_date: replayDate } : {}),
+    api.post<SimulatorControlResponse>(
+      '/simulator/start',
+      replayDate ? { replay_date: replayDate } : {},
+    ),
   stop: () => api.post<SimulatorControlResponse>('/simulator/stop'),
   listReplayDates: () => api.get<{ dates: string[] }>('/simulator/replay/dates'),
 
-  listPersonas: () => api.get<{ personas: SimPersona[]; is_available: boolean }>('/simulator/personas'),
+  listPersonas: () =>
+    api.get<{ personas: SimPersona[]; is_available: boolean }>('/simulator/personas'),
   createPersona: (payload: Partial<SimPersona>) =>
-    api.post<{ success: boolean; message?: string; persona?: SimPersona }>('/simulator/personas', payload),
+    api.post<{ success: boolean; message?: string; persona?: SimPersona }>(
+      '/simulator/personas',
+      payload,
+    ),
   updatePersona: (userId: string, payload: Partial<SimPersona>) =>
     api.patch<{ success: boolean; message?: string }>(`/simulator/personas/${userId}`, payload),
   deletePersona: (userId: string) =>
@@ -125,6 +135,35 @@ export const simulatorApi = {
     api.patch<{ success: boolean; message?: string }>(`/simulator/gifts/${giftId}`, payload),
   deleteGift: (giftId: string) =>
     api.delete<{ success: boolean; message?: string }>(`/simulator/gifts/${giftId}`),
+};
+
+// ===== 直播场次（直播控制台） =====
+//
+// `GET /live-sessions`：场次列表（倒序 + 消息数，含默认场次兜底行）。
+// `POST /live-sessions/open`：开启新场次（进行中场次自动结束）。
+// `POST /live-sessions/{id}/close`：结束场次（空场次整行丢弃）。
+// `DELETE /live-sessions/{id}`：删除场次（级联清明细）。
+// `GET /live-sessions/{id}/timeline`：单场时间线回看（明细行 + 事件历史合并）。
+export const liveSessionsApi = {
+  list: (params?: { source?: string; q?: string; limit?: number }) =>
+    api.get<LiveSessionListResponse>('/live-sessions', { params }),
+  open: (payload?: { title?: string }) =>
+    api.post<{ live_session_id: number }>('/live-sessions/open', payload ?? {}),
+  close: (id: number) =>
+    api.post<{ success: boolean; detail: string }>(`/live-sessions/${id}/close`),
+  remove: (id: number) => api.delete<{ success: boolean; detail: string }>(`/live-sessions/${id}`),
+  timeline: (id: number, limit = 500) =>
+    api.get<SessionTimelineResponse>(`/live-sessions/${id}/timeline`, { params: { limit } }),
+};
+
+// ===== 事件历史（游标续传） =====
+//
+// `GET /events?since_id=`：返回游标之后的事件缺口（断线/刷新后由 store 调用补齐）。
+export const eventsApi = {
+  list: (params?: { since_id?: string; limit?: number }) =>
+    api.get<{ events: WebSocketMessage[]; total: number; has_more: boolean }>('/events', {
+      params,
+    }),
 };
 
 // ===== Trace =====

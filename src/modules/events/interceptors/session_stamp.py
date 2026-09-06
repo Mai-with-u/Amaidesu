@@ -3,7 +3,7 @@
 发布方（采集器/模拟器/Agent）不感知"当前是哪一场"——场次归属是存储与
 观察侧的关心点。本拦截器挂在 EventBus 分发链上，凡携带 ``live_session_id``
 字段且值为 0（未归属）的 payload，统一盖章为 ``LiveSessionManager.resolve_pk()``
-的解析结果（显式场次进行中取其主键，否则临时兜底场次）。
+的解析结果（显式场次进行中取其主键，否则默认场次）。
 
 事件经过拦截器后，下游所有消费者（StorageLedger 落库 / EventHistoryRecorder
 记录 / Dashboard WS 广播 / traces）看到同一份已归属的场次 ID——单点注入，

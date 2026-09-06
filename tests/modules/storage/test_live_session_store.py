@@ -262,3 +262,36 @@ def test_fake_session_manager_contract() -> None:
     import asyncio
 
     assert asyncio.run(manager.resolve_pk()) == 7
+
+
+# ===== 场次列表排序与筛选 =====
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_scratch_first_then_desc(store: SQLiteStore) -> None:
+    """默认场次恒置顶；显式场次按开始时间倒序（即使显式场次比默认场次更新）。"""
+    await store.insert_live_session(started_at_ms=1_000, source="manual", title="早场")
+    scratch = await store.insert_live_session(source="scratch", started_at_ms=2_000)
+    newest = await store.insert_live_session(started_at_ms=9_000, source="manual", title="新场")
+
+    rows = await store.list_live_sessions()
+    ids = [int(r["id"]) for r in rows]
+    assert ids[0] == scratch, "默认场次必须置顶"
+    assert ids[1] == newest
+    assert ids[2] == int(rows[2]["id"])
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_filters_by_source_and_title(store: SQLiteStore) -> None:
+    await store.insert_live_session(started_at_ms=1_000, source="manual", title="周五晚间场")
+    await store.insert_live_session(started_at_ms=2_000, source="replay", title="回放 2026-09-01")
+    await store.insert_live_session(started_at_ms=3_000, source="manual", title="周末午间场")
+
+    manual_only = await store.list_live_sessions(source="manual")
+    assert [str(r["title"]) for r in manual_only] == ["周末午间场", "周五晚间场"]
+
+    keyword = await store.list_live_sessions(title_keyword="晚间")
+    assert [str(r["title"]) for r in keyword] == ["周五晚间场"]
+
+    both = await store.list_live_sessions(source="replay", title_keyword="不存在的标题")
+    assert both == []

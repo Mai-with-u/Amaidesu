@@ -462,7 +462,7 @@ class SQLiteStore:
         audience_total: int,
         updated_at_ms: int,
     ) -> bool:
-        """更新场次实时状态（热度/计数心跳）。行不存在（如临时场次被清理）返回 False。"""
+        """更新场次实时状态（热度/计数心跳）。行不存在（如默认场次被清理）返回 False。"""
 
         def _exec() -> bool:
             with self._manager.transaction() as conn:
@@ -484,7 +484,7 @@ class SQLiteStore:
         return await self._run_in_executor(_exec)
 
     async def get_scratch_live_session(self) -> Optional[sqlite3.Row]:
-        """查临时兜底场次行（source='scratch' 且未结束）；不存在返回 None。"""
+        """查默认场次兜底行（source='scratch' 且未结束）；不存在返回 None。"""
 
         def _exec() -> Optional[sqlite3.Row]:
             with self._manager.transaction() as conn:
@@ -545,8 +545,34 @@ class SQLiteStore:
 
         return await self._run_in_executor(_exec)
 
-    async def list_live_sessions(self, *, limit: int = 50) -> List[sqlite3.Row]:
-        """列出场次（按开始时间倒序，附消息数），供场次列表/回看选择。"""
+    async def list_live_sessions(
+        self,
+        *,
+        limit: int = 50,
+        source: Optional[str] = None,
+        title_keyword: Optional[str] = None,
+    ) -> List[sqlite3.Row]:
+        """列出场次（附消息数），供场次列表/回看选择。
+
+        排序：默认场次（scratch 兜底行）恒置顶，其余按开始时间倒序。
+        筛选：``source`` 精确匹配来源；``title_keyword`` 对 title 做包含匹配。
+
+        Args:
+            limit: 最多返回条数
+            source: 来源过滤（manual / replay / scratch / legacy）；None 不过滤
+            title_keyword: 标题关键字；None 或空串不过滤
+        """
+
+        conditions: List[str] = []
+        params: List[object] = []
+        if source:
+            conditions.append("s.source=?")
+            params.append(source)
+        if title_keyword:
+            conditions.append("s.title LIKE ?")
+            params.append(f"%{title_keyword}%")
+        where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        params.append(limit)
 
         def _exec() -> List[sqlite3.Row]:
             with self._manager.transaction() as conn:
@@ -555,8 +581,9 @@ class SQLiteStore:
                         "SELECT s.*, ("
                         "SELECT COUNT(*) FROM live_chat c WHERE c.live_session_id = s.id"
                         ") AS message_count "
-                        "FROM live_sessions s ORDER BY s.started_at_ms DESC LIMIT ?",
-                        (limit,),
+                        f"FROM live_sessions s {where_clause} "
+                        "ORDER BY (s.source='scratch') DESC, s.started_at_ms DESC LIMIT ?",
+                        params,
                     ).fetchall()
                 )
 
