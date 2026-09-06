@@ -208,7 +208,7 @@ class TestCoreUpgradeHook2_0_0:
         load_config_dir(config_dir)
 
         content = (config_dir / "core.toml").read_text(encoding="utf-8-sig")
-        assert "memory_recall_viewers" in content
+        assert "memory_recall_long_term" in content
         assert "max_messages_per_session" not in content
 
 

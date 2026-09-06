@@ -218,6 +218,12 @@ class AgendaIdle:
                 now_ms=_real_now_ms(),
             )
             self._logger.info(f"Agenda 推进到末尾，已完成（reason={reason}）")
+            # 与正常推进对称回调（new_segment_id 传空串），让发布方广播最后一个环节的完成
+            if self._on_advance is not None:
+                try:
+                    self._on_advance("", reason)
+                except Exception as exc:
+                    self._logger.error(f"on_advance 回调异常: {exc}", exc_info=True)
             return
         self._state.advance_to(nxt_id)
         self._logger.info(f"Agenda 自动推进：{current_id} → {nxt_id}（reason={reason}）")

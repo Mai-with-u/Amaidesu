@@ -18,7 +18,7 @@ class MetaConfig(BaseConfig):
     """配置元数据"""
 
     version: str = Field(
-        default="2.0.15",
+        default="2.0.16",
         description="配置版本号（用于自动迁移检测，权威定义于 multi_file_loader.py）",
     )
 
@@ -70,36 +70,25 @@ class PersonaConfig(BaseConfig):
 class ContextAssemblerConfig(BaseConfig):
     """上下文组装器配置
 
-    决定 LLM 输入如何组装。会话历史存储职责归 memory 后端，
-    ContextAssembler 只负责"如何取"。
+    会话历史存储职责在 memory 后端（ContextService 只做 L1 配对窗口），
+    本段控制 Planner 的上下文组装路径与记忆召回强度。
 
     Attributes:
-        enabled: 是否启用上下文组装（关闭后 Agent 直接接收裸消息）
-        memory_recall_viewers: 每次组装召回的观众画像条数
-        memory_recall_long_term: 每次组装召回的长记忆条数
-        cache_ttl_ms: 组装快照缓存 TTL（毫秒，0 表示不缓存）
+        enabled: 是否启用组装器路径（关闭后 Planner 跳过组装器与记忆召回，
+            直接以直播流窗口文本作为 context_block）
+        memory_recall_long_term: 每次决策召回的长记忆条数上限
+            （SimpleMemory._memory_facts 关键词召回）
     """
 
     enabled: bool = Field(
         default=True,
-        description="是否启用上下文组装（关闭后 Agent 直接接收裸消息）",
-    )
-    memory_recall_viewers: int = Field(
-        default=3,
-        ge=0,
-        le=20,
-        description="每次组装召回的观众画像条数上限",
+        description="是否启用组装器路径（关闭后 Planner 跳过组装器与记忆召回，直接以直播流窗口文本注入）",
     )
     memory_recall_long_term: int = Field(
         default=3,
         ge=0,
         le=20,
-        description="每次组装召回的长记忆条数上限",
-    )
-    cache_ttl_ms: int = Field(
-        default=1000,
-        ge=0,
-        description="组装快照缓存 TTL（毫秒，0 表示每次重新组装）",
+        description="每次决策召回的长记忆条数上限",
     )
 
 

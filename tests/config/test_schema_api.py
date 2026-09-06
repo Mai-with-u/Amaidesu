@@ -285,7 +285,7 @@ class TestGetConfigSchemaForSection:
         assert schema.get("className") == "ContextAssemblerConfig"
         field_names = {f["name"] for f in schema["fields"]}
         assert "enabled" in field_names
-        assert "memory_recall_viewers" in field_names
+        assert "memory_recall_long_term" in field_names
 
     def test_section_schema_has_nested_drilldown(self, initialized_service):
         """如果 schema 有 nested 字段，必须能通过 section 路径展开"""

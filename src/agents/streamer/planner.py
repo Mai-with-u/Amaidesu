@@ -107,6 +107,7 @@ class Planner:
         capabilities_provider: Any = None,
         memory: Any = None,
         recall_top_k: int = _DEFAULT_RECALL_TOP_K,
+        context_enabled: bool = True,
         behavior_style: str = "",
     ) -> None:
         """初始化 Planner。
@@ -125,8 +126,11 @@ class Planner:
             memory: 记忆后端（鸭子类型 ``MemoryProvider``）。``None`` 时记忆
                 召回段落渲染为 ``（暂无）``，Planner 走无记忆决策路径。功能可关闭
                 而非崩溃友好——主控装配时未注入则 Planner 整体降级。
-            recall_top_k: 每轮注入 prompt 的最大命中条数，默认 3。仅 Planner 内部
-                使用，不暴露用户配置（记忆质量先稳定再调参）。
+            recall_top_k: 每轮注入 prompt 的最大命中条数，默认 3。
+                装配时由 core.toml [context].memory_recall_long_term 驱动。
+            context_enabled: 组装器路径开关（core.toml [context].enabled）。
+                False 时跳过记忆召回与组装器，直接以直播流窗口文本作为
+                context_block（裸消息路径）。
             behavior_style: 人设行为准则（来自 [persona].behavior_style）。
                 仅注入 Planner prompt 的 ``$behavior_style`` 变量，指导"何时发言 / 聊
                 什么话题 / 何时保持安静"等行动决策；不会反向泄露到 Replyer 表达侧。
@@ -153,6 +157,8 @@ class Planner:
         # 记忆后端与召回深度
         self._memory = memory
         self._recall_top_k = recall_top_k
+        # [context].enabled：False 时走裸消息路径（跳过召回与组装器）
+        self._context_enabled = context_enabled
 
         # PlannerAssembler 一份实例（assemble 纯函数，但保留成员以便未来
         # 缓存 stable_prefix_hash 做 LLM 缓存前缀命中）
@@ -230,41 +236,46 @@ class Planner:
             recent_chat_parts.append(danmaku_text)
         recent_chat_window = "\n\n".join(recent_chat_parts) if recent_chat_parts else "（暂无）"
 
-        # 直播间快照（EnvironmentBlock：分钟级缓存友好）
-        current_ms = now_ms()
-        env_block = EnvironmentBlock(
-            minute_bucket_ms=(current_ms // 60000) * 60000,
-            # 暂无"开播时刻"字段——按任务约定传 0，模板按 0ms 处理
-            duration_so_far_ms=0,
-            current_stage_label=None,  # Planner 零上下文承诺；环节标题由 Replyer 用
-            unread_summary=getattr(snapshot, "topic_summary", "") or "",
-            key_changes=list(getattr(snapshot, "topics", []) or []),
-        )
-
-        # 记忆召回：recall(query, top_k) → 文本行
-        memory_recall_section = await self._recall_memory(snapshot, batch)
-
-        # PlannerAssembler 输入（★ Planner 零人设承诺 → persona=""）
-        try:
-            assembler_inputs = AssemblerInputs(
-                persona="",
-                tool_definitions_block=action_list,
-                current_stage_label=None,
-                stage_descriptions=agenda_text or "",
-                timeline_blocks=[],
-                recent_chat_window=recent_chat_window,
-                environment=env_block,
-                working_memory=None,
-                memory_recall_section=memory_recall_section,
-                reply_intent="",
-                topic_subset="",
-                agent_kind="planner",
+        # 3~5. 组装器路径（[context].enabled=False 时走裸消息：context_block=直播流窗口）
+        if self._context_enabled:
+            # 直播间快照（EnvironmentBlock：分钟级缓存友好）
+            current_ms = now_ms()
+            env_block = EnvironmentBlock(
+                minute_bucket_ms=(current_ms // 60000) * 60000,
+                # 暂无"开播时刻"字段——按任务约定传 0，模板按 0ms 处理
+                duration_so_far_ms=0,
+                current_stage_label=None,  # Planner 零上下文承诺；环节标题由 Replyer 用
+                unread_summary=getattr(snapshot, "topic_summary", "") or "",
+                key_changes=list(getattr(snapshot, "topics", []) or []),
             )
-            snapshot_assembled = self._assembler.assemble(assembler_inputs)
-        except Exception as e:
-            self.logger.error(f"PlannerAssembler 组装失败: {e}", exc_info=True)
-            self.last_failure = f"assembler_failed: {e}"
-            return None
+
+            # 记忆召回：recall(query, top_k) → 文本行
+            memory_recall_section = await self._recall_memory(snapshot, batch)
+
+            # PlannerAssembler 输入（★ Planner 零人设承诺 → persona=""）
+            try:
+                assembler_inputs = AssemblerInputs(
+                    persona="",
+                    tool_definitions_block=action_list,
+                    current_stage_label=None,
+                    stage_descriptions=agenda_text or "",
+                    timeline_blocks=[],
+                    recent_chat_window=recent_chat_window,
+                    environment=env_block,
+                    working_memory=None,
+                    memory_recall_section=memory_recall_section,
+                    reply_intent="",
+                    topic_subset="",
+                    agent_kind="planner",
+                )
+                snapshot_assembled = self._assembler.assemble(assembler_inputs)
+            except Exception as e:
+                self.logger.error(f"PlannerAssembler 组装失败: {e}", exc_info=True)
+                self.last_failure = f"assembler_failed: {e}"
+                return None
+            context_block = snapshot_assembled.rendered_text
+        else:
+            context_block = recent_chat_window
 
         # 渲染 prompt（★ 四个变量：context_block / forced / proactive / behavior_style）
         #    forced / proactive 透传为字符串（"true"/"false"），对齐模板中的文档约定。
@@ -275,7 +286,7 @@ class Planner:
         try:
             prompt = self._prompt_service.render_safe(
                 self.TEMPLATE_NAME,
-                context_block=snapshot_assembled.rendered_text,
+                context_block=context_block,
                 forced=str(forced).lower(),
                 proactive=str(proactive).lower(),
                 behavior_style=behavior_style_render,

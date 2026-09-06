@@ -169,7 +169,7 @@ event_bus.on(
 
 **model_class 必填**：`on()` 内部 `typed_wrapper` 强制用 `model_class.model_validate(dict_data)` 反序列化。**不指定 model_class 会导致订阅失败 / 类型不安全**。
 
-> 注意：事件记录器（EventRecorder）在订阅 `planner.checkpoint` / `agenda.update` 时显式传 `model_class=None`（v2 兜底，待相关 Payload 模型完全迁移后再补齐）。
+> 注意：事件记录器（EventRecorder）订阅 `planner.checkpoint` / `agenda.update` 时使用注册类型 `CheckpointPayload` / `AgendaPayload`（不再 BasePayload 兜底丢字段）。
 
 #### 取消订阅（off）
 
@@ -295,7 +295,7 @@ EventBus 支持 **MQTT 风格**通配订阅（仅订阅名包含 `*` 或 `#` 时
 | `game.milestone` | `GamePayload` | 游戏 Agent（§1.49 BaseAgent 事件上报面） | `EventRecorder`（L75 `component_model_map`）；`Broadcaster`（通过 `event_type_map` 转发给组件 handler）；`StorageLedger`（通配订阅 `game.*` → `game_events` 表） | 游戏重大进展（挖到钻石 / 通关章节）；`event_type="milestone"` |
 | `game.attention_required` | `GamePayload` | 游戏 Agent | `EventRecorder`（L76）；`Broadcaster`（`event_type_map` 转发）；`StorageLedger`（`game.*` 通配 → `game_events`） | 安全阀偏差报告（"我先回血再去挖钻石"）；`event_type="attention_required"` |
 | `game.error` | `GamePayload` | 游戏 Agent | `EventRecorder`（L77）；`Broadcaster`（`event_type_map` 转发）；`StorageLedger`（`game.*` 通配 → `game_events`） | 游戏异常；`event_type="error"` |
-| `agenda.update` | `AgendaPayload` | Planner（调 `update_agenda_item` 工具后）→ 存储更新后发出 | `EventRecorder`（L68，`model_class=None` 兜底） | AgendaItem 运行进度变更（done / schedule / insert） |
+| `agenda.update` | `AgendaPayload` | `StreamerAgent`（Agenda 环节推进/手动控制后；AgendaSegment 适配为运行进度条目形状） | `EventRecorder` + Dashboard Broadcaster（前端订阅以触发节目单快照重拉） | AgendaItem 运行进度变更（done=环节完成 / schedule=进度位置变更；insert 预留） |
 | `planner.checkpoint` | `CheckpointPayload` | 空转探测器（后台轻循环，§1.7） | `EventRecorder`（L67，`model_class=None` 兜底）；`Broadcaster`（L96 / L112-115 `_subscribe_core_events`）；`Widget`（`widget/service.py` L88-92） | 空转检查点提醒（纯提醒零决策，携带当前 AgendaItem 定位） |
 | `planner.decision` | `PlannerDecisionPayload` | `StreamerAgent`（`_make_two_stage_decision` 收口，每轮恰好一条，成功/失败/低置信度降级全覆盖） | `EventRecorder`（`_on_named_event`，type=事件名）、`Broadcaster`（WS type `planner.decision`）、观察器（决策卡） | 决策轮记录：`round_id`（`rnd_{epoch_ms}_{seq}`，本轮弹幕批次/决策/发言/工具结果共同关联键）、触发原因、批次摘要、决策结论、`reply_to_message_id`（回复关联键）、`silent_reason`（low_confidence=低置信度压制）、`error`、`planner_raw`（截断原文）、`llm_request_id`（请求历史指针）、分段耗时 |
 | `streamer.stage` | `StreamerStagePayload` | `StreamerAgent`（决策循环边界：planning → idle） | `EventRecorder`（`_on_named_event`）、`Broadcaster`（WS type `streamer.stage`）、观察器（状态条） | 决策管线阶段状态（`stage`：planning/replying/idle；`agent_state`：running/wait）；LLM 挂起时状态条停格即证据 |
@@ -861,6 +861,8 @@ class MyPayload(BasePayload):
 - [架构决策记录](adr/README.md)
 
 ---
+
+*最后更新：2026-09-06（遗留接线补全：`agenda.update` 由 `StreamerAgent` 在环节推进/手动控制后实际发布——此前只有订阅端，Dashboard/OutlineWorkbench 依赖该事件重拉节目单快照；`AgendaIdle` 推进到末尾补上缺失的 on_advance 回调）
 
 *最后更新：2026-09-06（接线收口：删除 `connection.event` 死注册及其 Payload——零发布零订阅，`EventRecorder` 的 game.* 订阅 model_class 由误用的 `ConnectionEventPayload` 修正为 `GamePayload`、`planner.checkpoint`/`agenda.update` 由 BasePayload 兜底修正为注册类型；`tool.result.<name>` 由 `ToolRegistry.invoke` 在工具执行完成后广播（挂载 EventBus 时），Dashboard Broadcaster 的 `tool.result.#` 通配订阅自此有数据源；拦截器作用域落地为声明式 `scope_prefixes` 机制——限流/相似过滤显式声明 `room.message.*` 域，实现与本文档既有声明一致；Payload 目录树补 `speech.py`）
 

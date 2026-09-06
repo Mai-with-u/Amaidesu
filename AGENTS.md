@@ -211,7 +211,7 @@ logger.info("信息日志"); logger.error("错误日志", exc_info=True)
 ### 依赖注入 / 配置读取
 
 - **服务对象**（LLMManager、PromptManager、EventBus 等）→ 构造器注入（DI）；禁止把服务塞进 Context 容器传递。详见 [依赖注入指南](docs/development/dependency-injection.md)
-- 配置：`config/` 目录 **7 文件**（core/model/agents/tools/memory/storage/background，首次运行从 Schema 自动生成；CONFIG_VERSION 2.0.15）；Agent 启用 `[agents].enabled` / 工具包启用 `[tools].enabled` / 拦截器配置 `[interceptors.*]`
+- 配置：`config/` 目录 **7 文件**（core/model/agents/tools/memory/storage/background，首次运行从 Schema 自动生成；CONFIG_VERSION 2.0.16）；Agent 启用 `[agents].enabled` / 工具包启用 `[tools].enabled` / 拦截器配置 `[interceptors.*]`
 
 ## 多工作树并行开发
 
@@ -295,6 +295,8 @@ Web Dashboard 两种模式（生产 60214 / 开发 60315）说明见 [快速开�
 - [测试指南](docs/development/testing-guide.md) - 测试规范和最佳实践
 
 ---
+
+*最后更新：2026-09-06（遗留接线补全：core.toml [context] 段与 Planner 组装路径实际接线——enabled 开关（false 时跳过组装器与记忆召回、以直播流窗口文本作为 context_block）+ memory_recall_long_term 驱动 Planner.recall_top_k；删除无实现载体的 memory_recall_viewers（SimpleMemory 无画像批量召回接口）与 cache_ttl_ms（纯函数组装器 + 每批动态窗口下无正确缓存语义），CONFIG_VERSION 2.0.15 → 2.0.16，漂移写回自动清理用户文件冗余键；agenda.update 由 StreamerAgent 在环节推进/手动控制后实际发布（此前只有订阅端，前端Dashboard/OutlineWorkbench 依赖该事件重拉节目单快照）；新增 CoreEvents.ROOM_MESSAGE_WILDCARD 通配订阅常量，storage_ledger 字面量改用常量）*
 
 *最后更新：2026-09-06（接线收口：CONFIG_VERSION 2.0.4 → 2.0.15（实际值以 `multi_file_loader.py` 为准，此前本文档长期标注 2.0.4 已严重滞后）；2.0.15 收口 tools.toml 僵尸配置（output enabled 剥离 subtitle、删除 debug_console/sticker/remote_stream 死子段、obs_control 改名 obs、perception 剥离已删除的 text_adv_game 采集器），新增 `_migrate_tools_2_0_15` 钩子及迁移测试；拦截器新增 声明式作用域 `scope_prefixes`（空 = 不限域），限流/相似过滤显式限定 `room.message.*`；`ToolRegistry` 可挂载 EventBus 广播 `tool.result.<name>`；组合根发布 `core.startup`/`core.shutdown`；修复 EventHistoryRecorder 对 game.* 订阅的 model_class 错配；删除 v1 遗留：`src/modules/di/`（反射式装配，文档已同步）、`types/intent.py` 类型闭环、`integrations/amaidesu_plugin/`、`tests/mocks/` 死 mock、一次性 scripts；pyproject 清理零引用依赖）*
 

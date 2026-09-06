@@ -60,8 +60,8 @@ if TYPE_CHECKING:
 logger = get_logger("StorageLedger")
 
 
-# 通配订阅名：覆盖 room.message.danmaku/gift/super_chat/enter 四类
-_ROOM_MESSAGE_WILDCARD = "room.message.#"
+# 通配订阅名：覆盖 room.message.danmaku/gift/super_chat/enter 四类（常量定义见 CoreEvents）
+_ROOM_MESSAGE_WILDCARD = CoreEvents.ROOM_MESSAGE_WILDCARD
 # 通配订阅名：覆盖 game.milestone / game.attention_required / game.error（单层）
 _GAME_EVENT_WILDCARD = "game.*"
 

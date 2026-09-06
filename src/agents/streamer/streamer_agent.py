@@ -39,6 +39,7 @@ from src.modules.config.schemas.base import BaseConfig
 from src.modules.context.models import MessageRole
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.agenda import AgendaItem, AgendaPayload
 from src.modules.events.payloads.planner import (
     PlannerBatchItem,
     PlannerDecisionPayload,
@@ -215,6 +216,7 @@ class StreamerAgent(BaseAgent):
         sqlite_store: Optional[Any] = None,
         persona_provider: Optional[Any] = None,
         memory: Any = None,
+        context_assembler_config: Optional[Any] = None,
         speech_config: Optional[Dict[str, Any]] = None,
         tts_engine: Optional["TTSProvider"] = None,
         subtitle_service: Optional["SubtitleService"] = None,
@@ -233,6 +235,8 @@ class StreamerAgent(BaseAgent):
             capabilities_provider: 可选工具能力提供者（用于 reply 动作白名单）
             sqlite_store: 可选 ``SQLiteStore``（live_sessions + agenda_runtime 持久化）
             persona_provider: 可选人设字典来源（鸭子类型：callable 返回 dict / dict 本身）
+            context_assembler_config: 可选 ``ContextAssemblerConfig``（core.toml [context] 段；
+                控制 Planner 组装路径开关与长记忆召回条数；None 时 Planner 走内置默认）
             memory: 可选记忆后端（实现 ``MemoryProvider`` 协议，含
                 ``recall(query, top_k)`` / ``ingest(text, source, tags)``）。
                 传 ``None`` 时记忆相关功能整体降级——Planner 走无记忆路径，
@@ -317,6 +321,16 @@ class StreamerAgent(BaseAgent):
             room_state=self._room_state,
             capabilities_provider=capabilities_provider,
             memory=memory,
+            recall_top_k=(
+                int(getattr(context_assembler_config, "memory_recall_long_term", 3) or 3)
+                if context_assembler_config is not None
+                else 3
+            ),
+            context_enabled=(
+                bool(getattr(context_assembler_config, "enabled", True))
+                if context_assembler_config is not None
+                else True
+            ),
             behavior_style=_behavior_style,
         )
 
@@ -1544,6 +1558,7 @@ class StreamerAgent(BaseAgent):
             if self._event_bus is not None:
                 self._agenda_idle.attach_event_bus(self._event_bus)
             await self._agenda_idle.start()
+            self._emit_agenda_change(action="schedule", segment_id=self._agenda_state.current_segment_id)
 
             self._logger.info(
                 f"Agenda 已加载: path={path!r}, agenda_id={agenda.agenda_id!r}, segments={len(agenda.segments)}"
@@ -1553,10 +1568,53 @@ class StreamerAgent(BaseAgent):
             self._agenda_idle = None
             self._agenda_loader = None
 
+    def _emit_agenda_change(self, *, action: str, segment_id: Optional[str], done: bool = False) -> None:
+        """按环节 id 查找环节对象并广播 ``agenda.update``；查不到（无节目单/无环节）静默跳过。"""
+        segment = self._find_agenda_segment(segment_id) if segment_id else None
+        if segment is None:
+            return
+        self._emit_agenda_update(action=action, segment=segment, done=done)
+
+    def _emit_agenda_update(self, *, action: str, segment: Any, done: bool = False) -> None:
+        """广播 ``agenda.update``（环节变更；fire-and-forget）。
+
+        Dashboard 前端（Dashboard / OutlineWorkbench）订阅该事件触发节目单
+        快照重拉，环节推进/跳转/回退后 UI 才能即时刷新。payload 的
+        ``AgendaItem`` 是运行进度条目形状，这里从状态机的 ``AgendaSegment``
+        适配：label←title、expected_ms←duration_ms、order←segments 索引。
+
+        Args:
+            action: payload 动作（done=环节完成 / schedule=进度位置变更）
+            segment: 变更涉及的环节对象（``AgendaSegment`` 或 duck-typed）
+            done: 环节是否已完成
+        """
+        if self._event_bus is None:
+            return
+        segments = getattr(self._agenda_state.agenda, "segments", None) or []
+        segment_id = getattr(segment, "id", "")
+        order = next((i for i, s in enumerate(segments) if getattr(s, "id", None) == segment_id), 0)
+        item = AgendaItem(
+            plan_id=str(getattr(self._agenda_state, "agenda_id", "") or ""),
+            order=order,
+            label=str(getattr(segment, "title", "") or segment_id),
+            starts_at_ms=int(getattr(self._agenda_state, "segment_started_at_ms", 0) or 0) or None,
+            expected_ms=int(getattr(segment, "duration_ms", 0) or 0) or None,
+            done=done,
+            current=False,
+        )
+        payload = AgendaPayload(live_session_id="live", action=action, item=item)
+        asyncio.create_task(self._event_bus.emit(CoreEvents.AGENDA_UPDATE, payload, source="StreamerAgent"))
+
     def _on_agenda_advance(self, new_segment_id: str, reason: Optional[str]) -> None:
         """AgendaIdle 推进回调（同步方法）。"""
         self._agenda_proactive_pending = True
         self._logger.info(f"Agenda 推进回调: new_segment={new_segment_id!r}, reason={reason!r}")
+        # 推进即上一环节完成 → 广播 agenda.update（前端重拉节目单快照）
+        completed = self._agenda_state.completed_segment_ids
+        prev_id = completed[-1] if completed else None
+        prev_segment = self._find_agenda_segment(prev_id) if prev_id else None
+        if prev_segment is not None:
+            self._emit_agenda_update(action="done", segment=prev_segment, done=True)
 
     # ==================================================================
     # 公开门面：供 Dashboard API 读取与控制 Agenda
@@ -1668,16 +1726,20 @@ class StreamerAgent(BaseAgent):
                 return True, "已恢复", _snap()
             if action == "skip":
                 new_id = state.skip(now_ms=now_ms)
+                completed = state.completed_segment_ids
+                self._emit_agenda_change(action="done", segment_id=completed[-1] if completed else None, done=True)
                 msg = f"已跳过到 {new_id}" if new_id else "已到末尾，节目单完成"
                 return True, msg, _snap()
             if action == "rewind":
                 new_id = state.rewind(now_ms=now_ms)
+                self._emit_agenda_change(action="schedule", segment_id=new_id)
                 msg = f"已回退到 {new_id}" if new_id else "已在首段，无法回退"
                 return True, msg, _snap()
             if action == "jump":
                 if not segment_id:
                     return False, "jump 必须提供 segment_id", None
                 state.jump_to(segment_id, now_ms=now_ms)
+                self._emit_agenda_change(action="schedule", segment_id=segment_id)
                 return True, f"已跳转到 {segment_id}", _snap()
             if action == "unload":
                 state.unload(now_ms=now_ms)
@@ -1697,6 +1759,7 @@ class StreamerAgent(BaseAgent):
                 except Exception as exc:
                     return False, f"TOML 解析失败: {exc}", None
                 state.start(agenda, now_ms=now_ms)
+                self._emit_agenda_change(action="schedule", segment_id=state.current_segment_id)
                 return True, f"已启动节目单 {agenda.agenda_id}", _snap()
             return False, f"未知 action: {action!r}", None
         except ValueError as exc:

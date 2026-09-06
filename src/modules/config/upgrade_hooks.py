@@ -257,9 +257,9 @@ def _migrate_core_2_0_0(data: dict[str, Any]) -> list[str]:
 
     [maicore] 段（host/port/token）：单进程无 MaiCore 连接，直接删除。
 
-    [context] 段（storage_type/max_messages_per_session/...）重建为
-    ContextAssembler 配置（enabled/memory_recall_viewers/memory_recall_long_term/
-    cache_ttl_ms），原字段全部丢弃（会话存储职责归 memory 后端）。
+    旧 [context] 段（storage_type/max_messages_per_session/...）→ 新
+    [context] 段（enabled/memory_recall_long_term），旧字段全部丢弃
+    （语义已变：会话存储职责下放给 memory 后端）。
 
     原地修改、幂等，返回变更路径列表。
     """
@@ -272,9 +272,7 @@ def _migrate_core_2_0_0(data: dict[str, Any]) -> list[str]:
     if context is None:
         data["context"] = {
             "enabled": True,
-            "memory_recall_viewers": 3,
             "memory_recall_long_term": 3,
-            "cache_ttl_ms": 1000,
         }
         changed.append("context")
         return changed
@@ -283,9 +281,7 @@ def _migrate_core_2_0_0(data: dict[str, Any]) -> list[str]:
         old_keys = set(context.keys())
         new_context = {
             "enabled": bool(context.get("enabled", True)),
-            "memory_recall_viewers": 3,
             "memory_recall_long_term": 3,
-            "cache_ttl_ms": 1000,
         }
         new_keys = set(new_context.keys())
         data["context"] = new_context

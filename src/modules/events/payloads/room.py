@@ -130,7 +130,7 @@ class RoomMessagePayload(BasePayload):
     )
     simulated: bool = Field(
         default=False,
-        description="数据溯源标记：True=模拟/回放源（SimulatorService 生成或回放）" "，统计与入库需过滤",
+        description="数据溯源标记：True=模拟/回放源（SimulatorService 生成或回放），统计与入库需过滤",
     )
 
     model_config = ConfigDict(

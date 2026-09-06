@@ -77,6 +77,13 @@ class CoreEvents:
     # 订阅者可以 `event_bus.on("tool.result.#", ...)` 一站式监听所有工具结果。
     TOOL_RESULT_WILDCARD = "tool.result.#"
 
+    # ========== v2 语义域事件（直播间行为流通配订阅模式） ==========
+    # 与 TOOL_RESULT_WILDCARD 同性质的通配订阅标识，不是被 emit 的具体事件名。
+    # 覆盖 room.message.danmaku / gift / super_chat / enter 四类；
+    # 持久层订阅 `event_bus.on(CoreEvents.ROOM_MESSAGE_WILDCARD, ...)`
+    # 一站式落业务表。
+    ROOM_MESSAGE_WILDCARD = "room.message.#"
+
     @classmethod
     def get_all_events(cls) -> tuple[str, ...]:
         """

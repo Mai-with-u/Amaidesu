@@ -394,7 +394,7 @@ class TestCoreConfigGeneration:
         schema = ConfigSchemaGenerator.generate_config_schema(ContextAssemblerConfig)
         by_name = {f["name"]: f for f in schema["fields"]}
         assert by_name["enabled"]["type"] == "boolean"
-        assert by_name["memory_recall_viewers"]["type"] == "integer"
+        assert by_name["memory_recall_long_term"]["type"] == "integer"
 
     def test_dashboard_config_fields(self):
         schema = ConfigSchemaGenerator.generate_config_schema(DashboardConfig)

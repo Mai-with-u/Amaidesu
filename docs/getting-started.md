@@ -196,10 +196,10 @@ uv run python main.py --dry
 
 | 配置文件 | 顶层段 | 说明 |
 |---------|--------|------|
-| `core.toml` | `[meta]` | 配置元数据（`CONFIG_VERSION=2.0.15`，自动写回） |
+| `core.toml` | `[meta]` | 配置元数据（`CONFIG_VERSION=2.0.16`，自动写回） |
 | `core.toml` | `[general]` | 进程标识（Dashboard / 日志 / 模拟器区分用） |
 | `core.toml` | `[persona]` | VTuber 人设（bot_name / personality / style_constraints / max_response_length） |
-| `core.toml` | `[context]` | 上下文组装器（memory_recall_* / cache_ttl_ms） |
+| `core.toml` | `[context]` | 上下文组装器（enabled / memory_recall_long_term） |
 | `core.toml` | `[events]` | 事件历史环形缓冲（history_size / persist） |
 | `core.toml` | `[dashboard]` | Web Dashboard 配置（端口 / CORS / 心跳） |
 | `core.toml` | `[simulator]` | 模拟直播间（开关 + LLM 节奏 + token 预算） |

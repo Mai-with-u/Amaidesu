@@ -726,3 +726,88 @@ class TestPlannerObservability:
         await planner.plan([])
         assert planner.last_raw_content == raw
         assert planner.last_request_id == "req_abc123"
+# =============================================================================
+# [context] 组装器路径开关（context_enabled）与召回条数透传
+# =============================================================================
+
+
+class TestPlannerContextEnabled:
+    """core.toml [context] 段接线：enabled=False 走裸消息路径、召回条数由配置驱动。"""
+
+    @pytest.mark.asyncio
+    async def test_context_disabled_skips_recall_and_assembler(self) -> None:
+        """enabled=False → memory.recall 不被调用、context_block 为裸窗口文本。"""
+        raw = json.dumps({"should_reply": False})
+        llm = MagicMock()
+        llm.chat = AsyncMock(return_value=_make_llm_response(raw))
+        prompt = MagicMock()
+        prompt.render_safe = MagicMock(return_value="PROMPT")
+        rs = MagicMock()
+        rs.get_snapshot = MagicMock(return_value=MagicMock(heat="low", topics=[], sc_queue=[]))
+        memory = MagicMock()
+        memory.recall = AsyncMock(return_value=[])
+
+        planner = Planner(
+            config={"planner_llm": "llm_fast"},
+            llm_service=llm,
+            prompt_service=prompt,
+            room_state=rs,
+            memory=memory,
+            context_enabled=False,
+        )
+        await planner.plan([], forced=True)
+
+        memory.recall.assert_not_called()
+        kwargs = prompt.render_safe.call_args.kwargs
+        context_block = kwargs["context_block"]
+        # 裸窗口文本不携带组装器的 section 渲染标记
+        assert "## 系统人格" not in context_block
+        assert "## 可用工具" not in context_block
+
+    @pytest.mark.asyncio
+    async def test_recall_top_k_passed_to_memory(self) -> None:
+        """recall_top_k 透传给 memory.recall（装配链：[context].memory_recall_long_term）。"""
+        raw = json.dumps({"should_reply": False})
+        llm = MagicMock()
+        llm.chat = AsyncMock(return_value=_make_llm_response(raw))
+        prompt = MagicMock()
+        prompt.render_safe = MagicMock(return_value="PROMPT")
+        rs = MagicMock()
+        rs.get_snapshot = MagicMock(return_value=MagicMock(heat="low", topics=[], sc_queue=[], topic_summary=""))
+        memory = MagicMock()
+        memory.recall = AsyncMock(return_value=[])
+
+        planner = Planner(
+            config={"planner_llm": "llm_fast"},
+            llm_service=llm,
+            prompt_service=prompt,
+            room_state=rs,
+            memory=memory,
+            recall_top_k=7,
+        )
+        await planner.plan([], forced=True)
+
+        memory.recall.assert_called_once()
+        assert memory.recall.call_args.kwargs.get("top_k") == 7
+
+    @pytest.mark.asyncio
+    async def test_context_enabled_keeps_assembler_path(self) -> None:
+        """默认（enabled=True）仍走组装器路径：context_block 含 section 渲染标记。"""
+        raw = json.dumps({"should_reply": False})
+        llm = MagicMock()
+        llm.chat = AsyncMock(return_value=_make_llm_response(raw))
+        prompt = MagicMock()
+        prompt.render_safe = MagicMock(return_value="PROMPT")
+        rs = MagicMock()
+        rs.get_snapshot = MagicMock(return_value=MagicMock(heat="low", topics=[], sc_queue=[]))
+
+        planner = Planner(
+            config={"planner_llm": "llm_fast"},
+            llm_service=llm,
+            prompt_service=prompt,
+            room_state=rs,
+        )
+        await planner.plan([], forced=True)
+
+        kwargs = prompt.render_safe.call_args.kwargs
+        assert "## 系统人格" in kwargs["context_block"]

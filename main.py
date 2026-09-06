@@ -32,9 +32,9 @@ from src.agents.streamer.streamer_agent import StreamerAgent, StreamerAgentConfi
 from src.modules.agents.manager import AgentManager
 from src.modules.collectors.factory import instantiate_collector
 from src.modules.collectors.manager import CollectorManager
-from src.modules.config.core_schemas import DashboardConfig, EventHistoryConfig
+from src.modules.config.core_schemas import ContextAssemblerConfig, DashboardConfig, EventHistoryConfig
 from src.modules.config.service import ConfigService
-from src.modules.context import ContextService, ContextServiceConfig
+from src.modules.context import ContextService
 from src.modules.context.models import DialogueTurn
 from src.modules.dashboard.server import DashboardServer
 from src.modules.events import (
@@ -354,13 +354,17 @@ async def create_app_components(
     await llm_service.setup(config)
     logger.info("已创建 LLM 服务实例")
 
-    # --- ContextService ---
+    # --- ContextService（L1 对话配对窗口，内置默认配置）---
     logger.info("初始化上下文服务...")
-    context_config = config.get("context", {}) if isinstance(config, dict) else {}
-    context_service_config = ContextServiceConfig(**context_config)
-    context_service = ContextService(config=context_service_config)
+    context_service = ContextService()
     await context_service.initialize()
     logger.info("已创建上下文服务实例")
+
+    # --- [context] 组装器配置（Schema 权威：core_schemas.ContextAssemblerConfig）---
+    # 控制 Planner 的组装路径开关与长记忆召回条数；CoreService 构造走内置默认。
+    context_assembler_config = ContextAssemblerConfig.from_dict(
+        config.get("context", {}) if isinstance(config, dict) else {}
+    )
 
     # --- 启动回灌：ContextService ← live_chat（重启失忆修复）---
     # 必须在 StorageLedger 之前：回灌只读 live_chat，与后续订阅无依赖；但语义上
@@ -486,6 +490,7 @@ async def create_app_components(
             context_service,
             tool_registry,
             memory,
+            context_assembler_config=context_assembler_config,
             tts_section=tts_section,
             tts_engine=tts_engine,
             subtitle_service=subtitle_service,
@@ -805,6 +810,7 @@ async def _register_agents_from_config(
     tool_registry=None,
     memory=None,
     *,
+    context_assembler_config: Optional[Any] = None,
     tts_section: Optional[Dict[str, Any]] = None,
     tts_engine: Optional[Any] = None,
     subtitle_service: Optional[Any] = None,
@@ -879,6 +885,7 @@ async def _register_agents_from_config(
                 tool_registry=tool_registry,
                 memory=memory,
                 persona_provider=persona_provider_dict,
+                context_assembler_config=context_assembler_config,
                 speech_config=speech_cfg,
                 tts_engine=tts_engine,
                 subtitle_service=subtitle_service,

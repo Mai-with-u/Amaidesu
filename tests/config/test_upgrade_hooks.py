@@ -62,7 +62,7 @@ class TestCoreHook2_0_0:
         changed = _migrate_core_2_0_0(data)
         assert "context" in changed
         assert "max_messages_per_session" not in data["context"]
-        assert "memory_recall_viewers" in data["context"]
+        assert "memory_recall_long_term" in data["context"]
         assert data["context"]["enabled"] is True
 
     def test_context_added_when_missing(self):
