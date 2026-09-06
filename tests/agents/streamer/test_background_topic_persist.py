@@ -4,7 +4,7 @@
 覆盖：
 - _persist_topic_snapshot：timeline_summary 一行一段摘要历史，窗口为 [上次摘要, 本次]
 - topics 快照投影：本场旧行被清除后插入最新关键词行 + 摘要句行
-- session 主键与 StorageLedger 同一映射（跨表可 JOIN）
+- 场次主键经 LiveSessionManager 解析（跨表可 JOIN）
 - 未注入 sqlite_store 时整体跳过，不报错
 """
 
@@ -19,7 +19,7 @@ import pytest
 
 from src.agents.streamer.background import BackgroundMaintainer
 from src.agents.streamer.room_state import RoomState
-from src.modules.storage.sqlite_store import SQLiteStore, session_id_to_pk
+from src.modules.storage.sqlite_store import SQLiteStore
 
 
 @pytest.fixture
@@ -37,13 +37,22 @@ async def store(temp_db_path: Path) -> AsyncGenerator[SQLiteStore, None]:
     await s.close()
 
 
-def _make_maintainer(store: SQLiteStore) -> BackgroundMaintainer:
+class _FakeSessionManager:
+    def __init__(self, pk: int) -> None:
+        self._pk = pk
+
+    async def resolve_pk(self) -> int:
+        return self._pk
+
+
+def _make_maintainer(store: SQLiteStore, pk: int = 777) -> BackgroundMaintainer:
     room_state = RoomState()
     room_state.set_topic_summary("占位", now_ms=1)
     return BackgroundMaintainer(
         {"summary_interval_ms": 60_000},
         room_state=room_state,
         live_session_store=store,
+        session_manager=_FakeSessionManager(pk),
         sqlite_store=store,
         session_id="live",
     )
@@ -51,14 +60,14 @@ def _make_maintainer(store: SQLiteStore) -> BackgroundMaintainer:
 
 @pytest.mark.asyncio
 async def test_persist_writes_timeline_and_topics(store: SQLiteStore) -> None:
-    maintainer = _make_maintainer(store)
+    maintainer = _make_maintainer(store, pk=777)
     await maintainer._persist_topic_snapshot(
         "观众在讨论新版本更新", now_ms=120_000, previous_summary_ms=60_000
     )
 
     timeline = await store.execute("SELECT * FROM timeline_summary")
     assert len(timeline) == 1
-    assert timeline[0]["live_session_id"] == session_id_to_pk("live")
+    assert timeline[0]["live_session_id"] == 777
     assert timeline[0]["start_ms"] == 60_000
     assert timeline[0]["end_ms"] == 120_000
     assert timeline[0]["summary"] == "观众在讨论新版本更新"

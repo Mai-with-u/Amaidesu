@@ -32,6 +32,9 @@ class LLMResponse(BaseModel):
     tool_calls: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     reasoning_content: Optional[str] = None
     error: Optional[str] = None
+    # 本次调用的请求历史 ID（request_history_manager 落库键）。调用方（如
+    # Planner 决策事件）用它作为"查看完整请求"的指针；失败路径同样回填。
+    request_id: str = ""
 
 
 class RetryConfig(BaseModel):
@@ -595,6 +598,9 @@ class LLMManager:
                     start_time=start_time,
                 )
 
+                # 回填请求历史 ID（调用方以此作为"查看完整请求"的指针）
+                result.request_id = request_id
+
                 return result
 
             except Exception as e:
@@ -606,7 +612,7 @@ class LLMManager:
 
         # 所有重试失败
         self.logger.error(f"所有 LLM 调用重试失败 (客户端: {client_type}): {last_error}")
-        result = LLMResponse(success=False, content=None, error=str(last_error))
+        result = LLMResponse(success=False, content=None, error=str(last_error), request_id=request_id)
 
         # 记录失败的请求历史
         self._record_request_history(

@@ -30,7 +30,8 @@ class CoreEvents:
     CORE_ERROR = "core.error"
 
     # ========== v2 语义域事件（live 场次生命周期） ==========
-    # 详见 .omo/drafts/amaidesu-v2-event-contract.md "live.*" 节
+    # 发布者：LiveSessionManager（场次管理唯一事实源）。
+    # 场次 = 一段有开始/结束边界的直播时间段；房间是场次之上的静态属性。
     LIVE_STARTED = "live.started"
     LIVE_ENDED = "live.ended"
 
@@ -52,6 +53,16 @@ class CoreEvents:
     # ========== v2 语义域事件（agenda/planner） ==========
     AGENDA_UPDATE = "agenda.update"
     PLANNER_CHECKPOINT = "planner.checkpoint"
+
+    # ========== v2 语义域事件（planner 决策轮记录） ==========
+    # 每轮两阶段决策结束发一条（成功/失败/低置信度降级全覆盖），观察器的
+    # 决策卡数据源；round_id 为本轮弹幕批次/决策/发言/工具结果的共同关联键。
+    PLANNER_DECISION = "planner.decision"
+
+    # ========== v2 语义域事件（streamer 决策管线阶段状态） ==========
+    # 决策管线阶段变化即发射（planning/replying/idle），观察器状态条数据源：
+    # LLM 挂起时状态条停格即证据。
+    STREAMER_STAGE = "streamer.stage"
 
     # ========== v2 语义域事件（tts 一次发声实例生命周期） ==========
     # 由 TTS 工具自身发布（已持有 event_bus 的 create_xxx_provider 既有签名）。

@@ -42,7 +42,6 @@ class SimpleTestEvent(BaseModel):
 def _make_danmaku_payload(text: str = "hello") -> RoomMessagePayload:
     """构造一个合法的 RoomMessagePayload（danmaku 类型）"""
     return RoomMessagePayload(
-        live_session_id="ls_test",
         message_type="danmaku",
         user=RoomMessageUser(id="u1", name="tester"),
         content=text,

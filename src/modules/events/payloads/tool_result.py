@@ -11,7 +11,7 @@ v2 语义域事件 Payload 定义：tool.result.* 异步工具结果
   本 Payload **不直接落存储**
 """
 
-from typing import Any, Dict, Literal
+from typing import Any, Dict, Literal, Optional
 
 from pydantic import ConfigDict, Field
 
@@ -36,6 +36,10 @@ class ToolResultPayload(BasePayload):
 
     Attributes:
         tool_name: 工具名（与 emit 时使用的具体事件名后缀一致，如 "speak"/"summarize_timeline"）
+        live_session_id: 场次主键（live_sessions.id）。发布方不填，由事件总线的
+            场次盖章拦截器统一注入当前进行中场次；0 表示未归属。
+        round_id: 关联的决策轮次 ID（可选）。工具调用发生在某轮决策上下文内时
+            由调用方填写，供观察器把工具结果与决策轮成组。
         status: 执行状态（success=成功完成 / error=执行失败）
         result: 工具执行结果数据（结构由各工具自行定义）；
             **W3 的 ToolExecutionResult 落地后收紧类型**（届时替换 ``Dict[str, Any]`` 为具体类型）
@@ -44,6 +48,14 @@ class ToolResultPayload(BasePayload):
     """
 
     tool_name: str = Field(..., description="工具名（与具体事件名后缀一致，如 'speak'/'summarize_timeline'）")
+    live_session_id: int = Field(
+        default=0,
+        description="场次主键（live_sessions.id）；发布方不填，由场次盖章拦截器注入；0=未归属",
+    )
+    round_id: Optional[str] = Field(
+        default=None,
+        description="关联的决策轮次 ID；工具调用不在决策轮上下文内时为 None",
+    )
     status: Literal["success", "error"] = Field(..., description="执行状态（success/error）")
     # W3 的 ToolExecutionResult 落地后收紧类型
     result: Dict[str, Any] = Field(

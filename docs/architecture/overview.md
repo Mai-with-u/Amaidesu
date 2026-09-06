@@ -103,7 +103,7 @@ Amaidesu/
 │       │   ├── output/          #   subtitle / vts / warudo / obs / remote_stream / debug（TTS 已在 v2.0.12 提升为基础设施，迁至 src/modules/tts/ 基础模块）
 │       │   ├── perception/      #   look_at_screen（同步快照工具）
 │       │   └── content_engine/  #   通用游戏引擎契约（5 工具 + StubContentEngine）
-│       ├── events/              # EventBus + 事件拦截器（rate_limit / similar_filter）
+│       ├── events/              # EventBus + 事件拦截器（session_stamp 场次盖章 / rate_limit / similar_filter）
 │       │   ├── interceptors/    #   EventInterceptor 协议 + InterceptorChain
 │       │   └── payloads/        #   Payload 按域分包（v2.0.10 新增 utterance.py 承载 tts.utterance.* 三事件）
 │       ├── config/              # 配置管理（多文件 Schema 驱动 + 升级钩子）
@@ -114,8 +114,9 @@ Amaidesu/
 │       ├── logging/             # 日志 + LogStreamer
 │       ├── memory/              # MemoryProvider + SimpleMemory + query_memory 工具
 │       ├── prompts/             # PromptManager（声明式键自动发现）
-│       ├── simulator/           # 世界模拟器（开发基础设施，ADR-006）：三模式发射器（generate LLM 生成 / replay 录制回放 / off）；SimulatorService + PersonaPool / CadenceGenerator / GiftGenerator / SimulatorLLMWrapper / SessionSelector / TokenBudgetController / ReplayEngine；人设礼物入 SQLite（sim_personas/sim_gifts + 内置种子），观众上下文读 live_chat 窗口。默认 enabled=false，生产零沾染。详见 docs/development/simulator-guide.md。
-│       ├── storage/             # SQLite 存储层（StorageLedger 唯一写穿入口：订阅 room.message.# + streamer.speech，写 live_chat/gifts/super_chats + 维护 viewers 统计；SQLiteStore 提供领域查询如 list_recent_live_chat）
+│       ├── session/             # 直播场次管理（LiveSessionManager：开启/结束/删除/归属解析/防膨胀；live.started/ended 唯一发布方；临时兜底场次）
+│       ├── simulator/           # 世界模拟器（开发基础设施，ADR-006）：三模式发射器（generate LLM 生成 / replay 录制回放 / off）；SimulatorService + PersonaPool / CadenceGenerator / GiftGenerator / SimulatorLLMWrapper / TokenBudgetController / ReplayEngine；回放启停自动开/关场次；人设礼物入 SQLite（sim_personas/sim_gifts + 内置种子），观众上下文读 live_chat 窗口。默认 enabled=false，生产零沾染。详见 docs/development/simulator-guide.md。
+│       ├── storage/             # SQLite 存储层（StorageLedger 唯一写穿入口：订阅 room.message.# + streamer.speech，按 LiveSessionManager 解析的场次归属写 live_chat/gifts/super_chats + 维护 viewers 统计；SQLiteStore 提供领域查询与场次行管理；live_chat 含 message_id/reply_to_message_id 回复关联列）
 │       └── types/               # 共享类型（NormalizedMessage 等）
 ├── dashboard/                   # 前端 SPA（pnpm 构建到 dashboard/dist/，60214 静态挂载）
 ├── tests/                       # 顶层分组：agents / architecture / config / dashboard / integration / modules（+ characterization / mocks 支撑）
@@ -424,6 +425,8 @@ enabled = ["vts", "subtitle", "warudo", "obs"]  # 非 TTS 工具族：bind_core_
 - [测试指南](../development/testing-guide.md) - 测试分层（agents/architecture/config/dashboard/integration/modules + characterization/mocks 支撑）
 
 ---
+
+*最后更新：2026-09-06（场次语义落地：新增 src/modules/session/（LiveSessionManager，场次唯一事实源——开启/结束/删除/归属解析/防膨胀，live.started/ended 唯一发布方；启动不自动开新场次，无显式场次期间消息归临时兜底场次单行复用）；live_sessions 主键语义从「房间号哈希映射」修正为「一场直播一行」（AUTOINCREMENT + source 列，房间降为普通属性），SCHEMA_VERSION 升至 4（v3→v4 迁移：存量行标记 legacy 并封闭悬空行，live_chat 增加 message_id/reply_to_message_id 回复关联列与索引）；事件层场次归属改由 SessionStampInterceptor 单点盖章（发布方不再填 live_session_id）；决策可观测：planner.decision（决策轮记录）与 streamer.stage（阶段状态）两事件上线，Planner 输出 reply_to 指向具体弹幕 message_id；模拟器回放自动开/关场次，SessionSelector 退役；Dashboard 新增 /api/v1/live-sessions 控制面）*
 
 *最后更新：2026-09-06（持久层写链补全：①`live_sessions` 心跳落链接通——`SQLiteStore.update_live_session_heartbeat` 首次心跳开行 + `end_live_session` 关闭链结账，`BackgroundMaintainer` 去除 hasattr 静默防御；②SimpleMemory 私有表 `_memory_facts`/`_memory_profiles` DDL 收编进 `storage/schema.py` 统一版本管理，`SCHEMA_VERSION` 升至 3，`SimpleMemory.initialize()` 改为表自检；③`llm_usage` 落库——`LLMManager` 构造器注入 `SQLiteStore`，成功调用旁路写明细，装配顺序调整为存储栈先于 LLM 服务；④`timeline_summary` + `topics` 落库——`BackgroundMaintainer` 摘要成功后写摘要历史与话题快照投影；⑤已知缺口清单重写：移除已闭环的 simulated 溯源条目，新增"非缺口"小节（agenda_plan/enter/simulated），新增 game_events 无写链条目；⑥删除 `SQLiteStore.transaction()` NotImplementedError 占位；⑦批次5：`StorageLedger` 扩展订阅 `game.*`（milestone/attention_required/error）落库 `game_events` 表，缺口清单对应条目改为「有写链但暂无数据源」。session_id→INTEGER 主键映射收敛为 `sqlite_store.session_id_to_pk` 单一权威，`StorageLedger._session_pk_to_int` 改为薄委托）*
 

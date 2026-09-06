@@ -25,6 +25,8 @@ COMPONENT_EVENT_TYPE_MAP: dict[str, str] = {
 # 事件类型名常量（广播/记录 handler 直接使用的字符串）
 ROOM_MESSAGE_TYPE = "room.message"
 PLANNER_CHECKPOINT_TYPE = "planner.checkpoint"
+PLANNER_DECISION_TYPE = "planner.decision"
+STREAMER_STAGE_TYPE = "streamer.stage"
 AGENDA_UPDATE_TYPE = "agenda.update"
 SYSTEM_STATUS_TYPE = "system.status"
 SYSTEM_ERROR_TYPE = "system.error"
@@ -33,6 +35,8 @@ __all__ = [
     "COMPONENT_EVENT_TYPE_MAP",
     "ROOM_MESSAGE_TYPE",
     "PLANNER_CHECKPOINT_TYPE",
+    "PLANNER_DECISION_TYPE",
+    "STREAMER_STAGE_TYPE",
     "AGENDA_UPDATE_TYPE",
     "SYSTEM_STATUS_TYPE",
     "SYSTEM_ERROR_TYPE",

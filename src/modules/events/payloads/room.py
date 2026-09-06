@@ -96,7 +96,10 @@ class RoomMessagePayload(BasePayload):
     订阅者：Planner（订 ``room.message.danmaku`` 高价值醒来）、后台记账器（订 ``room.*`` 写 live_sessions 状态）
 
     Attributes:
-        live_session_id: 场次 ID（与存储 live_chat FK 一致）
+        live_session_id: 场次主键（live_sessions.id）。发布方（采集器/模拟器）不填，
+            由事件总线的场次盖章拦截器统一注入当前进行中场次；0 表示未归属。
+        message_id: 消息唯一 ID（平台消息 ID 或发布方生成）。落库 live_chat.message_id，
+            与主播发言行的 reply_to_message_id 构成"回复了哪条弹幕"的关联键。
         message_type: 消息类型（Literal 与存储 live_chat.message_type 一致；通配订阅 ``room.message.#`` 时按此分发）
         user: 发送者信息
         content: 文本内容（弹幕/SC 文本；其他类型为空）
@@ -105,7 +108,14 @@ class RoomMessagePayload(BasePayload):
         timestamp_ms: 事件时间戳（Unix 毫秒）
     """
 
-    live_session_id: str = Field(..., description="场次唯一 ID")
+    live_session_id: int = Field(
+        default=0,
+        description="场次主键（live_sessions.id）；发布方不填，由场次盖章拦截器注入；0=未归属",
+    )
+    message_id: str = Field(
+        default="",
+        description="消息唯一 ID（平台消息 ID 或发布方生成）；与主播发言 reply_to_message_id 构成回复关联键",
+    )
     message_type: Literal["danmaku", "gift", "super_chat", "enter"] = Field(
         ...,
         description="消息类型。通配订阅 room.message.# 时按此字段分发（与存储 live_chat.message_type 枚举一致）",
@@ -127,7 +137,8 @@ class RoomMessagePayload(BasePayload):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "live_session_id": "ls_20260822_001",
+                "live_session_id": 1,
+                "message_id": "9f2c8a1b",
                 "message_type": "danmaku",
                 "user": {"id": "12345", "name": "观众A"},
                 "content": "主播好可爱！",

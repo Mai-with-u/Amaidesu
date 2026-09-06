@@ -10,8 +10,18 @@ from src.modules.dashboard.api import (
     config,
     debug,
     messages,
+    sessions,
     simulator,
     system,
 )
 
-__all__ = ["system", "components", "messages", "config", "debug", "simulator", "agenda"]
+__all__ = [
+    "system",
+    "components",
+    "messages",
+    "config",
+    "debug",
+    "simulator",
+    "agenda",
+    "sessions",
+]

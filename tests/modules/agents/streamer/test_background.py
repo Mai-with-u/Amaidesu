@@ -33,7 +33,6 @@ from src.modules.events.payloads.room import (
 def _make_gift_payload(user_id: str = "u1", user_name: str = "观众A") -> RoomMessagePayload:
     """构造礼物事件 payload。"""
     return RoomMessagePayload(
-        live_session_id="live",
         message_type="gift",
         user=RoomMessageUser(id=user_id, name=user_name),
         content="",
@@ -49,7 +48,6 @@ def _make_sc_payload(
 ) -> RoomMessagePayload:
     """构造 SC 事件 payload。"""
     return RoomMessagePayload(
-        live_session_id="live",
         message_type="super_chat",
         user=RoomMessageUser(id=user_id, name=user_name),
         content=text,
@@ -167,7 +165,6 @@ class TestBackgroundHighValueEventIngest:
         """礼物 count > 1 时事实末尾加 "（×N）"。"""
         maintainer, memory = _make_maintainer()
         payload = RoomMessagePayload(
-            live_session_id="live",
             message_type="gift",
             user=RoomMessageUser(id="u1", name="A"),
             content="",
@@ -265,7 +262,6 @@ class TestBackgroundHighValueEventIngest:
         """非 gift/SC 事件（如 danmaku）由 message_type gate 直接跳过，ingest 不被调。"""
         maintainer, memory = _make_maintainer()
         payload = RoomMessagePayload(
-            live_session_id="live",
             message_type="danmaku",
             user=RoomMessageUser(id="u1", name="A"),
             content="主播好可爱",

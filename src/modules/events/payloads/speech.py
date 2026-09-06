@@ -12,8 +12,12 @@ v2 语义域事件 Payload 定义：streamer.speech
 - ``utterance_id`` 为全链路关联键（编排层生成，格式 ``utt_{epoch_ms}_{seq}``，
   进程内单调递增、单场唯一），与 ``tts.utterance.*`` 共用同一关联键，串联
   reply 记录、TTS 事件、字幕、存储等通道。
-- 不携带 ``live_session_id``：场次归属由订阅方按自身上下文关联（先例：
-  ``tts.utterance.*`` Payload 同样不带，场次归属归订阅方解析）。
+- ``live_session_id``：场次主键（live_sessions.id）。发布方不填，由事件总线的
+  场次盖章拦截器统一注入当前进行中场次；0 表示未归属。
+- ``reply_to_message_id``：本条发言回复的那条弹幕的 message_id（可选），来自
+  Planner 决策输出——"主播回应了哪条观众消息"的关联事实，与 live_chat
+  观众行的 message_id 构成外键关系，供互动分析查询；None 表示主动发言
+  或未指向特定弹幕。
 - ``emotion`` 可选：存在则带上，不存在显式 None，便于下游按字段过滤。
 - ``target_user_id`` 可选：代表"这条发言回复的观众 user_id"，
   None 表示主动发言/无特定回复对象。下游存储记账器据此顺路维护
@@ -44,6 +48,10 @@ class StreamerSpeechPayload(BasePayload):
         utterance_id: 一次发言实例的唯一 ID（编排层生成，格式
             ``utt_{epoch_ms}_{seq}``，进程内自增、单场唯一），全链路关联键，
             与 ``tts.utterance.*`` 共享同一键空间。
+        live_session_id: 场次主键（live_sessions.id）；发布方不填，由场次盖章
+            拦截器注入当前进行中场次；0 表示未归属。
+        reply_to_message_id: 本条发言回复的那条弹幕的 message_id（可选）；
+            None 表示主动发言或未指向特定弹幕。
         text: 主播发言文本（已 strip；空字符串不触发本事件）。
         emotion: 关联情绪标签（可选；有则带上）。
         target_user_id: 这条发言回复的观众 user_id（可选；主动发言/无特定
@@ -54,6 +62,14 @@ class StreamerSpeechPayload(BasePayload):
     """
 
     utterance_id: str = Field(..., description="一次发言实例的唯一 ID（编排层生成，全链路关联键）")
+    live_session_id: int = Field(
+        default=0,
+        description="场次主键（live_sessions.id）；发布方不填，由场次盖章拦截器注入；0=未归属",
+    )
+    reply_to_message_id: Optional[str] = Field(
+        default=None,
+        description="本条发言回复的那条弹幕的 message_id；None 表示主动发言或未指向特定弹幕",
+    )
     text: str = Field(..., description="主播发言文本")
     emotion: Optional[str] = Field(default=None, description="关联情绪标签（可选）")
     target_user_id: Optional[str] = Field(

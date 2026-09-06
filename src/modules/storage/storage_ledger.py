@@ -10,33 +10,34 @@ StorageLedger —— 直播间消息流落库记账器
   - ``danmaku``   → live_chat（+ 顺路 upsert viewers.message_count）
   - ``gift``      → gifts（+ 顺路 upsert viewers.gift_count）
   - ``super_chat`` → super_chats（SC 属 high-value，统计计数走 SimpleMemory 语义层，不混入 viewers）
-  - ``enter``     → 当前 schema 无 enter 明细表 → debug 日志后丢弃（live_sessions 心跳与 enter 概念无关，独自走 session_manager，不在本层职责）
+  - ``enter``     → 当前 schema 无 enter 明细表 → debug 日志后丢弃（场次状态归 LiveSessionManager，不在本层职责）
 - viewers 写穿伴随：选在主表落库同点 upsert，避免后台 tick 的重复扫描与时序问题；SC 不计入保持现有行为
 - 订阅 ``streamer.speech`` 业务事件（主播发言），写入 live_chat（sender_role="assistant"，message_type="speak"）。
-  StreamerSpeechPayload 不携带 live_session_id，由构造期注入的 session_id 提供；未注入则
-  记 debug 日志后跳过（保持与现有"单条失败/缺关键字段降级"风格一致）。
+  场次归属取 payload.live_session_id（场次盖章拦截器已注入；0 时回退 LiveSessionManager 解析）。
   若 payload.target_user_id 非空，顺路调用 upsert_viewer_replied 把该观众的
   replied_count/interaction_count +1，形成"主播回复 → 观众被回复计数"闭环。
+  payload.reply_to_message_id 落 live_chat.reply_to_message_id 列——"主播回应了
+  哪条弹幕"是可查询事实（观众行 message_id ↔ 主播行 reply_to_message_id）。
 - 订阅 ``game.*``（milestone / attention_required / error，按 payload.event_type 判别），写入 game_events 表。
   游戏代理（AI 玩家）尚未上线，当前无发布方——写链先行接通，事件出现即落库。
 - 端到端贯通 ``simulated`` 字段：payload.simulated → 表列 simulated INTEGER（主播发言/游戏事件天然非模拟，记 False）
 - 写入异常降级：单条失败 try/except 记 error 日志，不抛出、不影响主循环（即使记账器挂了，直播流也跑）
 
 ## 不做什么
-- 不主动建 live_sessions 行（由心跳首次写入即开行），这里只把
-  payload.live_session_id（str）通过稳定 hash 映射为 INTEGER 主键。
+- 不主动建 live_sessions 行（场次行归 LiveSessionManager 创建/结账），这里只
+  消费已归属的场次主键写明细。
 - 不做统计查询（消费者层 ``WHERE simulated=0``）
 - 不改 schema（表结构权威在 schema.py）
 
 ## 装配
-- 由 main.py 组合根构造：传入 EventBus + SQLiteStore，调用 ``await ledger.start()``
+- 由 main.py 组合根构造：传入 EventBus + SQLiteStore + LiveSessionManager，调用 ``await ledger.start()``
 - ``--dry`` 模式跳过订阅（保留构造便于冒烟，stop 仍可被调）
 - run_shutdown 关闭链：放在 EventHistoryRecorder.stop 之后、EventBus.cleanup 之前
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, Dict, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game import GamePayload
@@ -48,11 +49,12 @@ from src.modules.events.payloads.room import (
 )
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.logging import get_logger
-from src.modules.storage.sqlite_store import SQLiteStore, session_id_to_pk
+from src.modules.storage.sqlite_store import SQLiteStore
 from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
+    from src.modules.session.manager import LiveSessionManager
 
 
 logger = get_logger("StorageLedger")
@@ -62,15 +64,6 @@ logger = get_logger("StorageLedger")
 _ROOM_MESSAGE_WILDCARD = "room.message.#"
 # 通配订阅名：覆盖 game.milestone / game.attention_required / game.error（单层）
 _GAME_EVENT_WILDCARD = "game.*"
-
-
-def session_pk_to_int(session_id: str) -> int:
-    """把 payload.live_session_id（str）映射为表主键（INTEGER）。
-
-    薄委托：权威算法在 ``sqlite_store.session_id_to_pk``（心跳开行、明细写入、
-    启动回灌共用）。保留本模块级名字是因为既有消费方（如模拟器服务）从这里导入。
-    """
-    return session_id_to_pk(session_id)
 
 
 class StorageLedger:
@@ -85,15 +78,14 @@ class StorageLedger:
         event_bus: "EventBus",
         sqlite_store: SQLiteStore,
         *,
-        session_id: Optional[str] = None,
+        session_manager: Optional["LiveSessionManager"] = None,
     ) -> None:
         self.event_bus = event_bus
         self.sqlite_store = sqlite_store
-        self._session_id: Optional[str] = session_id
-        # per-instance 字符串→整数 session_pk 缓存（同进程内稳定）
-        self._session_pk_cache: Dict[str, int] = {}
+        # 场次归属解析（payload 未盖章时回退）；None 时按无场次降级跳过
+        self._session_manager = session_manager
         # 订阅句柄表（stop 时按 event_name 取消）
-        self._subscriptions: Dict[str, Callable] = {}
+        self._subscriptions: dict[str, Callable] = {}
         self._started = False
 
     async def start(self) -> None:
@@ -158,7 +150,7 @@ class StorageLedger:
         """
         try:
             msg_type = payload.message_type
-            live_pk = self._session_pk(payload.live_session_id)
+            live_pk = await self._resolve_live_pk(payload.live_session_id)
             if msg_type == "danmaku":
                 await self.sqlite_store.insert_live_chat(
                     live_session_id=live_pk,
@@ -168,6 +160,7 @@ class StorageLedger:
                     sender_name=payload.user.name,
                     content=payload.content or "",
                     message_type=msg_type,
+                    message_id=payload.message_id or None,
                     simulated=payload.simulated,
                 )
                 await self.sqlite_store.upsert_viewer_message(
@@ -233,8 +226,12 @@ class StorageLedger:
     ) -> None:
         """``streamer.speech`` 回调：主播发言写入 live_chat（sender_role=assistant）。
 
-        StreamerSpeechPayload 不携带 live_session_id——本类持有的 ``_session_id`` 由
-        组合根注入（构造期）；未注入时记 debug 跳过，不与现有行为冲突。
+        场次归属：payload.live_session_id 已由场次盖章拦截器注入；为 0 时回退
+        ``LiveSessionManager.resolve_pk()``；两者皆不可用时记 debug 跳过（与
+        现有"单条失败/缺关键字段降级"风格一致）。
+
+        ``payload.reply_to_message_id`` 落 live_chat.reply_to_message_id 列，
+        与观众行的 message_id 构成"回复了哪条弹幕"的可查询关联。
 
         若 ``payload.target_user_id`` 非空，在主表 insert 之后顺路调用
         ``upsert_viewer_replied``，把对应观众的 ``replied_count`` /
@@ -243,14 +240,13 @@ class StorageLedger:
         异常隔离：单条失败仅记 error 日志，不抛出（即使记账器挂了，主直播流仍跑）。
         """
         try:
-            session_id = self._session_id
-            if session_id is None:
+            live_pk = await self._resolve_live_pk(payload.live_session_id)
+            if live_pk is None:
                 logger.debug(
-                    f"{CoreEvents.STREAMER_SPEECH} 事件未配置 session_id，跳过落库"
-                    f"（utterance_id={payload.utterance_id}）",
+                    f"{CoreEvents.STREAMER_SPEECH} 事件无法归属场次（未盖章且无 LiveSessionManager），"
+                    f"跳过落库（utterance_id={payload.utterance_id}）",
                 )
                 return
-            live_pk = self._session_pk(session_id)
             await self.sqlite_store.insert_live_chat(
                 live_session_id=live_pk,
                 timestamp_ms=payload.timestamp_ms,
@@ -258,6 +254,7 @@ class StorageLedger:
                 sender_name="主播",
                 content=payload.text,
                 message_type="speak",
+                reply_to_message_id=payload.reply_to_message_id or None,
                 simulated=False,
             )
             if payload.target_user_id:
@@ -280,11 +277,15 @@ class StorageLedger:
     ) -> None:
         """``game.*`` 通配回调：游戏里程碑/安全阀/异常写入 game_events 表。
 
-        ``live_session_id`` 优先取 payload 自带值（游戏代理知道自己身处哪场直播）；
+        场次归属走 ``LiveSessionManager.resolve_pk()``（payload 自带的
+        ``live_session_id`` 是游戏侧的字符串标识，非存储主键，不消费）；
         写入异常隔离：单条失败仅记 error 日志，不抛出。
         """
         try:
-            live_pk = self._session_pk(payload.live_session_id)
+            live_pk = await self._resolve_live_pk()
+            if live_pk is None:
+                logger.debug(f"game.* 事件无法归属场次，跳过落库（event_type={payload.event_type}）")
+                return
             await self.sqlite_store.execute(
                 "INSERT INTO game_events (live_session_id, game, event_type, message, scene, timestamp_ms) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
@@ -304,26 +305,23 @@ class StorageLedger:
                 exc_info=True,
             )
 
-    # -------------------- session_id 字符串 → live_chat.live_session_id INTEGER 映射 --------------------
+    # -------------------- 场次归属解析 --------------------
 
-    @staticmethod
-    def _session_pk_to_int(session_id: str) -> int:
-        """薄委托：权威算法在 ``sqlite_store.session_id_to_pk``（单一映射实现）。"""
-        return session_id_to_pk(session_id)
+    async def _resolve_live_pk(self, stamped_pk: int = 0) -> Optional[int]:
+        """解析明细行的场次主键。
 
-    def _session_pk(self, session_id: str) -> int:
-        cached = self._session_pk_cache.get(session_id)
-        if cached is not None:
-            return cached
-        pk = self._session_pk_to_int(session_id)
-        self._session_pk_cache[session_id] = pk
-        return pk
-
-    # -------------------- 辅助 --------------------
-
-    def session_pk_cache_size(self) -> int:
-        """返回已缓存的 session_id 数量（测试可读）。"""
-        return len(self._session_pk_cache)
+        优先消费 payload 上已盖章的 ``live_session_id``（>0）；为 0 时回退
+        ``LiveSessionManager.resolve_pk()``；管理器不可用返回 None（调用方降级）。
+        """
+        if stamped_pk and stamped_pk > 0:
+            return stamped_pk
+        if self._session_manager is None:
+            return None
+        try:
+            return await self._session_manager.resolve_pk()
+        except Exception as exc:  # noqa: BLE001 归属失败降级，不阻断主直播流
+            logger.warning(f"场次归属解析失败，明细行跳过落库: {exc}")
+            return None
 
 
 # ===== 辅助：仅测试用（构造 RoomMessagePayload 便利）=====
@@ -332,7 +330,8 @@ class StorageLedger:
 def make_room_message(
     *,
     message_type: str = "danmaku",
-    session_id: str = "test_session",
+    live_session_id: int = 0,
+    message_id: str = "",
     user: Optional[RoomMessageUser] = None,
     content: str = "",
     gift_name: str = "小星星",
@@ -343,13 +342,15 @@ def make_room_message(
 ) -> RoomMessagePayload:
     """构造 ``RoomMessagePayload``：仅供测试/示例，避免重复样板。
 
-    生产代码应走对应采集器/simulator 自然产出。
+    生产代码应走对应采集器/simulator 自然产出。``live_session_id`` 默认 0
+    （未归属），由场次盖章拦截器或测试内显式指定。
     """
     if user is None:
         user = RoomMessageUser(id="tester", name="测试观众")
 
     common: dict = {
-        "live_session_id": session_id,
+        "live_session_id": live_session_id,
+        "message_id": message_id,
         "message_type": message_type,  # type: ignore[arg-type]
         "user": user,
         "content": content,
@@ -368,4 +369,4 @@ def make_room_message(
     return RoomMessagePayload(**common)
 
 
-__all__ = ["StorageLedger", "make_room_message", "session_pk_to_int"]
+__all__ = ["StorageLedger", "make_room_message"]

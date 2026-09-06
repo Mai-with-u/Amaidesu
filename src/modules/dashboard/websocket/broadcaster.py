@@ -37,8 +37,12 @@ from src.modules.events.payloads import (
     CoreErrorPayload,
     CoreShutdownPayload,
     CoreStartupPayload,
+    LiveEndedPayload,
+    LiveStartedPayload,
+    PlannerDecisionPayload,
     RoomMessagePayload,
     StreamerSpeechPayload,
+    StreamerStagePayload,
     ToolResultPayload,
 )
 from src.modules.events.payloads.base import BasePayload
@@ -107,6 +111,10 @@ class EventBroadcaster:
             CoreEvents.ROOM_MESSAGE_SUPER_CHAT: self._on_room_message,
             CoreEvents.ROOM_MESSAGE_ENTER: self._on_room_message,
             CoreEvents.PLANNER_CHECKPOINT: self._on_planner_checkpoint,
+            CoreEvents.PLANNER_DECISION: self._on_named_event,
+            CoreEvents.STREAMER_STAGE: self._on_named_event,
+            CoreEvents.LIVE_STARTED: self._on_named_event,
+            CoreEvents.LIVE_ENDED: self._on_named_event,
             CoreEvents.AGENDA_UPDATE: self._on_agenda_update,
             CoreEvents.STREAMER_SPEECH: self._on_streamer_speech,
             CoreEvents.TOOL_RESULT_WILDCARD: self._on_tool_result,
@@ -153,6 +161,27 @@ class EventBroadcaster:
             CoreEvents.TOOL_RESULT_WILDCARD,
             self._on_tool_result,
             model_class=ToolResultPayload,
+        )
+        # 决策可观测 + 场次生命周期（WS type 与事件名一致）
+        self._subscribe_event(
+            CoreEvents.PLANNER_DECISION,
+            self._on_named_event,
+            model_class=PlannerDecisionPayload,
+        )
+        self._subscribe_event(
+            CoreEvents.STREAMER_STAGE,
+            self._on_named_event,
+            model_class=StreamerStagePayload,
+        )
+        self._subscribe_event(
+            CoreEvents.LIVE_STARTED,
+            self._on_named_event,
+            model_class=LiveStartedPayload,
+        )
+        self._subscribe_event(
+            CoreEvents.LIVE_ENDED,
+            self._on_named_event,
+            model_class=LiveEndedPayload,
         )
 
     def _subscribe_system_events(self) -> None:
@@ -216,6 +245,14 @@ class EventBroadcaster:
             await self.ws_handler.broadcast(event_name, dict_data, message_id=data.id)
         except Exception as e:
             logger.error(f"广播 tool result 失败: {e}")
+
+    async def _on_named_event(self, event_name: str, data: BasePayload, source: str) -> None:
+        """通用直通广播：WS type = 事件名（planner.decision / streamer.stage / live.*）。"""
+        try:
+            dict_data = data.model_dump() if isinstance(data, BaseModel) else {}
+            await self.ws_handler.broadcast(event_name, dict_data, message_id=data.id)
+        except Exception as e:
+            logger.error(f"广播 {event_name} 失败: {e}")
 
     async def _on_core_event(self, event_name: str, data: Any, source: str) -> None:
         try:

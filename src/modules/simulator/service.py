@@ -41,11 +41,9 @@ from src.modules.simulator.llm_wrapper import SimulatorLLMWrapper
 from src.modules.simulator.persona_pool import PersonaPool
 from src.modules.simulator.replay_engine import ReplayEngine
 from src.modules.simulator.seed_data import seed_simulator_data
-from src.modules.simulator.session_selector import SessionSelector
 from src.modules.simulator.token_budget import TokenBudgetController
 from src.modules.simulator.types import PersonaRole, StreamerContextSnapshot
 from src.modules.storage.sqlite_store import SQLiteStore
-from src.modules.storage.storage_ledger import session_pk_to_int
 from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:
@@ -68,7 +66,7 @@ class SimulatorService:
     """世界模拟器 — 唯一的 room.message.* 模拟发射器
 
     管理 ``PersonaPool`` / ``CadenceGenerator`` / ``GiftGenerator`` /
-    ``SimulatorLLMWrapper`` / ``SessionSelector`` / ``TokenBudgetController`` /
+    ``SimulatorLLMWrapper`` / ``TokenBudgetController`` /
     ``ReplayEngine``，按 ``mode`` 驱动生成或回放循环，向 EventBus 推送带
     ``simulated=True`` 溯源标记的 ``room.message.*`` 事件。
     """
@@ -78,9 +76,13 @@ class SimulatorService:
         event_bus: EventBus,
         sqlite_store: Optional[SQLiteStore] = None,
         services_by_type: Optional[Dict[type, Any]] = None,
+        session_manager: Optional[Any] = None,
     ) -> None:
         self.event_bus = event_bus
         self._store = sqlite_store
+        # 场次管理器：世界窗口读取按其解析当前场次；回放启停自动开/关场次
+        self._session_manager = session_manager
+        self._opened_session_pk: Optional[int] = None
         self._services_by_type = services_by_type or {}
         self._task: Optional[asyncio.Task[None]] = None
         self._stop_event = asyncio.Event()
@@ -94,7 +96,6 @@ class SimulatorService:
         self._cadence: Optional[CadenceGenerator] = None
         self._gift_generator: Optional[GiftGenerator] = None
         self._llm_wrapper: Optional[SimulatorLLMWrapper] = None
-        self._session_selector: Optional[SessionSelector] = None
         self._token_budget: Optional[TokenBudgetController] = None
         self._replay_engine: Optional[ReplayEngine] = None
         # 防重复订阅：start 多次调用只挂一次（与 background._subscribed 模式一致）
@@ -151,7 +152,6 @@ class SimulatorService:
         )
         await self._gift_generator.load()
 
-        self._session_selector = SessionSelector()
         self._token_budget = TokenBudgetController(budget_per_hour=self._config_obj.token_budget_per_hour)
         self._replay_engine = ReplayEngine(config=self._config_obj)
 
@@ -235,6 +235,15 @@ class SimulatorService:
             name=f"SimulatorService-{mode}",
         )
         self._is_started = True
+
+        # 回放自动开/关场次：一场回放天然是一场直播——启动即开（source=replay），
+        # stop 时收口。其余模式不开场次（消息归临时兜底场次）。
+        if mode == "replay" and self._session_manager is not None:
+            self._opened_session_pk = await self._session_manager.open_session(
+                title=f"回放 {date_str}",
+                source="replay",
+            )
+
         self.logger.info(f"模拟器服务已启动（mode={mode}）")
 
     def _subscribe_streamer_speech(self) -> None:
@@ -299,7 +308,6 @@ class SimulatorService:
         assert self._persona_pool is not None
         assert self._llm_wrapper is not None
         assert self._gift_generator is not None
-        assert self._session_selector is not None
         assert self._token_budget is not None
         assert self._config_obj is not None
 
@@ -327,13 +335,9 @@ class SimulatorService:
                 # 选人设（临时路人 / 常驻）
                 persona = self._persona_pool.pick_one()
 
-                # 选会话上下文
-                session_id = await self._session_selector.select_session(
-                    fallback_id=self._config_obj.fallback_session_id
-                )
-
                 # 世界窗口：按 persona 关注度读 live_chat 最近公共流
-                window = await self._fetch_world_window(persona=persona, session_id=session_id)
+                # （场次归属经 LiveSessionManager 解析当前场次）
+                window = await self._fetch_world_window(persona=persona)
                 context.recent_messages = window
 
                 # 概率触发礼物事件（否则走普通弹幕）
@@ -345,7 +349,6 @@ class SimulatorService:
                             message_type=gift_event.data_type or "gift",
                             text=gift_event.text,
                             persona=gift_event.persona,
-                            session_id=session_id,
                         )
                         self._persona_pool.record_message(gift_event.persona)
                         continue
@@ -364,7 +367,6 @@ class SimulatorService:
                     message_type="danmaku",
                     text=generated.text,
                     persona=persona,
-                    session_id=session_id,
                 )
                 self._persona_pool.record_message(persona)
         except asyncio.CancelledError:
@@ -374,14 +376,16 @@ class SimulatorService:
         except Exception as exc:
             self.logger.error(f"模拟器生成循环异常: {exc}", exc_info=True)
 
-    async def _fetch_world_window(self, *, persona: Any, session_id: str) -> List[str]:
+    async def _fetch_world_window(self, *, persona: Any) -> List[str]:
         """按 persona 关注度读取 live_chat 最近公共流窗口。
 
         窗口大小优先级：persona.context_window_size（个性）> 角色默认（天性）
         > config.context_window_size（全局兜底）。公共流同时包含观众弹幕与
         主播发言（sender_role=viewer/assistant），即"这个观众眼中的直播间"。
+        场次归属经 LiveSessionManager 解析当前场次（未显式开场次时为临时
+        兜底场次）；管理器缺失或读取失败时返回空窗口（本轮无上下文）。
         """
-        if self._store is None or self._config_obj is None:
+        if self._store is None or self._config_obj is None or self._session_manager is None:
             return []
         role = getattr(persona, "role", None)
         limit = (
@@ -390,8 +394,9 @@ class SimulatorService:
             or self._config_obj.context_window_size
         )
         try:
+            live_pk = await self._session_manager.resolve_pk()
             rows = await self._store.list_recent_live_chat(
-                live_session_id=session_pk_to_int(session_id),
+                live_session_id=live_pk,
                 limit=limit,
             )
         except Exception as exc:
@@ -411,7 +416,6 @@ class SimulatorService:
         语义），live_session_id 替换为当前场次（回放内容作为"现在的输入流"注入）。
         """
         assert self._replay_engine is not None
-        assert self._session_selector is not None
         assert self._config_obj is not None
 
         engine = self._replay_engine
@@ -430,21 +434,22 @@ class SimulatorService:
                     self.logger.info(f"回放完成: date={replay_date} 共 {engine.total} 条")
                     break
 
-                session_id = await self._session_selector.select_session(
-                    fallback_id=self._config_obj.fallback_session_id
-                )
-                await self._emit_replay_payload(payload, session_id=session_id)
+                await self._emit_replay_payload(payload)
         except asyncio.CancelledError:
             self.logger.debug("模拟器回放循环被取消")
             raise
         except Exception as exc:
             self.logger.error(f"模拟器回放循环异常: {exc}", exc_info=True)
 
-    async def _emit_replay_payload(self, payload: RoomMessagePayload, *, session_id: str) -> None:
-        """原样回放一条录制消息（时间戳刷新 + 场次替换 + simulated 标记保持）。"""
+    async def _emit_replay_payload(self, payload: RoomMessagePayload) -> None:
+        """原样回放一条录制消息（时间戳刷新 + simulated 标记保持）。
+
+        场次归属不在此填写——回放启动时已自动开启回放场次，事件经场次盖章
+        拦截器归属到该场；message_id 保留录制值（跨回放可复现同一条消息）。
+        """
         replayed = payload.model_copy(
             update={
-                "live_session_id": session_id or (self._config_obj.fallback_session_id if self._config_obj else ""),
+                "live_session_id": 0,
                 "timestamp_ms": now_ms(),
             }
         )
@@ -464,12 +469,14 @@ class SimulatorService:
         message_type: str,
         text: str,
         persona: Any,
-        session_id: str,
     ) -> None:
-        """构造带 simulated=True 溯源标记的 RoomMessagePayload 并 emit。"""
-        assert self._config_obj is not None
+        """构造带 simulated=True 溯源标记的 RoomMessagePayload 并 emit。
+
+        场次归属（live_session_id）不在此填写——由事件总线的场次盖章拦截器
+        统一注入当前场次；message_id 现场生成，作为回复关联键落库。
+        """
         payload = RoomMessagePayload(
-            live_session_id=session_id or self._config_obj.fallback_session_id,
+            message_id=uuid.uuid4().hex,
             message_type=message_type,  # type: ignore[arg-type]
             user=RoomMessageUser(
                 id=str(getattr(persona, "user_id", "") or f"sim-{uuid.uuid4().hex[:6]}"),
@@ -516,6 +523,15 @@ class SimulatorService:
                     raise
                 self.logger.debug("模拟器 task 取消完成（stop 主动发起）")
             self._task = None
+
+        # 回放场次收口（自动开启的场次随回放结束自动结束）
+        if self._opened_session_pk is not None and self._session_manager is not None:
+            try:
+                await self._session_manager.close_session(reason="回放结束")
+            except Exception as exc:  # noqa: BLE001 收口失败不阻断停止
+                self.logger.warning(f"回放场次收口失败（已忽略）: {exc}")
+            self._opened_session_pk = None
+
         self._active_mode = "off"
         self.logger.info("模拟器服务已停止")
 
@@ -527,7 +543,6 @@ class SimulatorService:
         self._persona_pool = None
         self._cadence = None
         self._gift_generator = None
-        self._session_selector = None
         self._token_budget = None
         self._replay_engine = None
         self._config_obj = None

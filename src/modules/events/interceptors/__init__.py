@@ -4,11 +4,13 @@
 提供 EventBus 分发前的可插拔处理层。具体拦截器实例：
 - ``rate_limit.RateLimitInterceptor`` —— 滑动窗口限流（迁移自旧 input pipeline）
 - ``similar_filter.SimilarFilterInterceptor`` —— 相似文本过滤（迁移自旧 input pipeline）
+- ``session_stamp.SessionStampInterceptor`` —— 场次归属盖章（业务事件注入当前场次主键）
 
 模块结构：
 - base.py：``EventInterceptor`` 抽象基类
 - chain.py：``InterceptorChain`` 链式容器（顺序应用 + 异常隔离 + 丢弃传播）
 - rate_limit.py / similar_filter.py：W5 从旧 input pipeline 迁移的拦截器实例
+- session_stamp.py：场次盖章拦截器（LiveSessionManager 单点注入，全链一致）
 
 EventBus 集成：通过 ``EventBus.add_interceptor`` / ``remove_interceptor``
 将拦截器挂到内部 ``InterceptorChain``；``emit()`` 在数据验证后、handler
@@ -20,11 +22,13 @@ EventBus 集成：通过 ``EventBus.add_interceptor`` / ``remove_interceptor``
 from src.modules.events.interceptors.base import EventInterceptor
 from src.modules.events.interceptors.chain import InterceptorChain
 from src.modules.events.interceptors.rate_limit import RateLimitInterceptor
+from src.modules.events.interceptors.session_stamp import SessionStampInterceptor
 from src.modules.events.interceptors.similar_filter import SimilarFilterInterceptor
 
 __all__ = [
     "EventInterceptor",
     "InterceptorChain",
     "RateLimitInterceptor",
+    "SessionStampInterceptor",
     "SimilarFilterInterceptor",
 ]

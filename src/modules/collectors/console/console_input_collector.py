@@ -199,7 +199,8 @@ class ConsoleInputCollector(BaseCollector):
         event_name, message_type = mapping
 
         payload = RoomMessagePayload(
-            live_session_id="console",
+            # 场次归属由场次盖章拦截器统一注入；message_id 透传（回复关联键）
+            message_id=normalized_msg.message_id,
             message_type=message_type,  # type: ignore[arg-type]
             user=RoomMessageUser(
                 id=str(normalized_msg.user_id or "console_user"),

@@ -273,7 +273,6 @@ async def test_event_validation_with_registered_event(event_bus: EventBus):
     event_bus.on("core.test.validation.event", handler, RoomMessagePayload)
 
     valid_data = RoomMessagePayload(
-        live_session_id="test_session",
         message_type="danmaku",
         user=RoomMessageUser(id="test_source", name="测试观众"),
         content="test content",

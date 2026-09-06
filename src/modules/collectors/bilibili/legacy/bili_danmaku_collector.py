@@ -232,7 +232,8 @@ class BiliDanmakuCollector(BaseCollector):
         """emit room.message.danmaku 语义事件"""
         try:
             payload = RoomMessagePayload(
-                live_session_id=str(normalized_msg.room_id or "unknown"),
+                # 场次归属由场次盖章拦截器统一注入；message_id 透传（回复关联键）
+                message_id=normalized_msg.message_id,
                 message_type="danmaku",
                 user=RoomMessageUser(
                     id=str(normalized_msg.user_id or "unknown"),

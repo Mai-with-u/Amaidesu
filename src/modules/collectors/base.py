@@ -166,7 +166,9 @@ class BaseCollector:
 
         event_name, message_type = mapping
         payload = RoomMessagePayload(
-            live_session_id="console",
+            # 场次归属（live_session_id）由事件总线的场次盖章拦截器统一注入，
+            # 采集器不感知"当前是哪一场"
+            message_id=str(getattr(message, "message_id", "") or ""),
             message_type=message_type,  # type: ignore[arg-type]
             user=RoomMessageUser(
                 id=str(getattr(message, "user_id", None) or "unknown"),

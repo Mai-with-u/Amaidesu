@@ -664,3 +664,65 @@ class TestPlannerMemoryRecall:
         # memory_recall_section 为空 → 模板占位
         kwargs = prompt.render_safe.call_args.kwargs
         assert "## 记忆召回\n（暂无）" in kwargs["context_block"]
+
+class TestPlannerObservability:
+    """决策可观测副产品：reply_to 解析 / 静默标记 / 失败原因 / 请求历史指针。"""
+
+    @pytest.mark.asyncio
+    async def test_reply_to_parsed_from_llm_output(self) -> None:
+        raw = json.dumps(
+            {
+                "should_reply": True,
+                "target": "观众A",
+                "reply_to": "abc123",
+                "topic_summary": "回应提问",
+                "reply_guidance": "回答问题",
+                "confidence": 0.9,
+            }
+        )
+        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+        plan = await planner.plan([])
+        assert plan is not None
+        assert plan.reply_to == "abc123"
+
+    @pytest.mark.asyncio
+    async def test_reply_to_absent_defaults_none(self) -> None:
+        raw = json.dumps({"should_reply": True, "target": "all", "confidence": 0.9})
+        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+        plan = await planner.plan([])
+        assert plan is not None
+        assert plan.reply_to is None
+
+    @pytest.mark.asyncio
+    async def test_low_confidence_downgrade_marks_silent_reason(self) -> None:
+        raw = json.dumps({"should_reply": True, "target": "all", "confidence": 0.0})
+        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+        plan = await planner.plan([], forced=False)
+        assert plan is not None
+        assert plan.should_reply is False
+        assert plan.silent_reason == "low_confidence", "被裁决压制的静默必须与 LLM 自主沉默可区分"
+
+    @pytest.mark.asyncio
+    async def test_last_failure_captures_json_parse_error(self) -> None:
+        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response("这不是JSON{"))
+        plan = await planner.plan([])
+        assert plan is None
+        assert planner.last_failure is not None
+        assert "json_parse_failed" in planner.last_failure
+
+    @pytest.mark.asyncio
+    async def test_last_failure_none_on_success(self) -> None:
+        raw = json.dumps({"should_reply": False, "confidence": 0.9})
+        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+        await planner.plan([])
+        assert planner.last_failure is None
+
+    @pytest.mark.asyncio
+    async def test_raw_content_and_request_id_captured(self) -> None:
+        raw = json.dumps({"should_reply": False, "confidence": 0.9})
+        resp = _make_llm_response(raw)
+        resp.request_id = "req_abc123"
+        planner, _llm, _prompt, _rs = _make_planner(llm_return=resp)
+        await planner.plan([])
+        assert planner.last_raw_content == raw
+        assert planner.last_request_id == "req_abc123"

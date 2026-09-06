@@ -98,3 +98,91 @@ async def test_simple_memory_initialize_fails_fast_on_missing_tables(temp_db_pat
             await memory.initialize()
     finally:
         await store.close()
+
+
+@pytest.mark.asyncio
+async def test_v3_to_v4_migration_semantics(temp_db_path: Path) -> None:
+    """v3 形状的旧库升级到 v4：source 列标记 legacy + 悬空行封闭 + 回复关联列 + 索引。"""
+    import sqlite3
+
+    conn = sqlite3.connect(temp_db_path)
+    conn.executescript(
+        """
+        CREATE TABLE live_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            stream_id TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            started_at_ms INTEGER NOT NULL,
+            ended_at_ms INTEGER,
+            title TEXT,
+            heat INTEGER NOT NULL DEFAULT 0,
+            viewer_count INTEGER NOT NULL DEFAULT 0,
+            audience_total INTEGER NOT NULL DEFAULT 0,
+            updated_at_ms INTEGER NOT NULL
+        );
+        CREATE TABLE live_chat (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            live_session_id INTEGER NOT NULL,
+            timestamp_ms INTEGER NOT NULL,
+            sender_role TEXT NOT NULL,
+            sender_id TEXT,
+            sender_name TEXT,
+            content TEXT NOT NULL,
+            message_type TEXT NOT NULL,
+            tool_result TEXT,
+            simulated INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE schema_migrations (
+            version INTEGER PRIMARY KEY,
+            applied_at_ms INTEGER NOT NULL
+        );
+        INSERT INTO schema_migrations(version, applied_at_ms) VALUES (3, 0);
+        INSERT INTO live_sessions(id, stream_id, platform, started_at_ms, updated_at_ms)
+            VALUES (99, 'room1', 'bilibili', 1000, 5000);
+        INSERT INTO live_sessions(id, stream_id, platform, started_at_ms, ended_at_ms, updated_at_ms)
+            VALUES (98, 'room1', 'bilibili', 500, 4000, 4000);
+        INSERT INTO live_chat(live_session_id, timestamp_ms, sender_role, content, message_type, simulated)
+            VALUES (99, 1100, 'viewer', '旧弹幕', 'danmaku', 0);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    store = SQLiteStore(temp_db_path)
+    await store.initialize()
+    try:
+        assert await store.get_schema_version() == SCHEMA_VERSION
+
+        rows = await store.execute("SELECT * FROM live_sessions ORDER BY id")
+        by_id = {int(r["id"]): r for r in rows}
+        # 存量行标记 legacy（房间号哈希映射时代的遗留数据）
+        assert by_id[99]["source"] == "legacy"
+        assert by_id[98]["source"] == "legacy"
+        # 悬空遗留行封闭到最后活动时刻；已结账行保留原结束时间
+        assert by_id[99]["ended_at_ms"] == 5_000
+        assert by_id[98]["ended_at_ms"] == 4_000
+
+        cols = await store.execute("PRAGMA table_info(live_chat)")
+        names = {r["name"] for r in cols}
+        assert {"message_id", "reply_to_message_id"} <= names
+
+        idx = await store.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_live_chat_message_id'"
+        )
+        assert len(idx) == 1
+
+        # 业务数据原样保留
+        chat = await store.execute("SELECT content FROM live_chat")
+        assert [r["content"] for r in chat] == ["旧弹幕"]
+    finally:
+        await store.close()
+
+    # 幂等：再次 initialize 不破坏数据、不重复迁移
+    store2 = SQLiteStore(temp_db_path)
+    await store2.initialize()
+    try:
+        assert await store2.get_schema_version() == SCHEMA_VERSION
+        chat = await store2.execute("SELECT content FROM live_chat")
+        assert [r["content"] for r in chat] == ["旧弹幕"]
+    finally:
+        await store2.close()

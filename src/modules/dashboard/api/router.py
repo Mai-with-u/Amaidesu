@@ -16,6 +16,7 @@ from src.modules.dashboard.api import (
     events,
     llm,
     messages,
+    sessions,
     simulator,
     streamer,
     system,
@@ -52,6 +53,9 @@ def create_app() -> FastAPI:
 
     # 模拟器控制面（generate / replay 三模式工作台）
     app.include_router(simulator.router, prefix="/api/v1/simulator", tags=["Simulator"])
+
+    # 直播场次控制面（列表 / 开启 / 结束 / 删除，LiveSessionManager 承载）
+    app.include_router(sessions.router, prefix="/api/v1/live-sessions", tags=["Sessions"])
 
     return app
 

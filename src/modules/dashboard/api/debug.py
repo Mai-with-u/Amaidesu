@@ -61,8 +61,11 @@ async def inject_message(
         # 通过 EventBus 发布 room.message.danmaku（v2 语义域事件）。
         # user.name 用 source 承载昵称——前端注入的"来源标识"在直播间语境
         # 就是观众昵称，Agent 侧统一读 user_nickname。
+        # 场次归属（live_session_id）由场次盖章拦截器统一注入；message_id
+        # 现场生成，与响应回传同一 ID（可对账"注入 → 决策 → 回复"链路）。
+        message_id = str(uuid.uuid4())
         payload = RoomMessagePayload(
-            live_session_id=request.source,
+            message_id=message_id,
             message_type="danmaku",
             user=RoomMessageUser(
                 id=request.source,
@@ -88,7 +91,6 @@ async def inject_message(
             except Exception as e:
                 logger.warning(f"存储消息到 ContextService 失败: {e}")
 
-        message_id = str(uuid.uuid4())
         logger.info(f"注入消息成功: {message_id}")
         return InjectMessageResponse(success=True, message_id=message_id)
 

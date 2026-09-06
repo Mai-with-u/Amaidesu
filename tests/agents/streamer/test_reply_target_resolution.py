@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import List, Optional
 from unittest.mock import MagicMock
 
@@ -146,3 +147,46 @@ async def test_emit_streamer_speech_passes_target():
     assert captured[0].text == "你好"
     assert captured[0].emotion == "neutral"
     assert captured[0].target_user_id == "viewer123"
+
+
+class TestReplyToMessageIdResolution:
+    """plan.reply_to（Planner 指向的具体弹幕 message_id）优先于 target 文本匹配。"""
+
+    @pytest.mark.asyncio
+    async def test_reply_to_hits_exact_message_id(self) -> None:
+        agent = _make_minimal_agent()
+        batch = [
+            _make_msg(text="今天玩什么？", user_id="u1", message_id="m1"),
+            _make_msg(text="主播好可爱", user_id="u2", message_id="m2"),
+        ]
+        plan = DecisionPlan(should_reply=True, target="观众A", reply_to="m2", confidence=0.9)
+        user_id = agent._resolve_reply_target_user(plan, batch)
+        assert user_id == "u2", "reply_to 应精确命中对应弹幕的观众"
+
+    @pytest.mark.asyncio
+    async def test_reply_to_miss_returns_none_no_fallback(self) -> None:
+        agent = _make_minimal_agent()
+        batch = [_make_msg(text="今天玩什么？", user_id="u1", message_id="m1")]
+        plan = DecisionPlan(should_reply=True, reply_to="不存在的id", confidence=0.9)
+        user_id = agent._resolve_reply_target_user(plan, batch)
+        assert user_id is None, "reply_to 未命中时不做文本兜底（防误关联）"
+
+    @pytest.mark.asyncio
+    async def test_speech_payload_carries_reply_to_message_id(self) -> None:
+        """_dispatch_speech_and_emotion 把 reply_to_message_id 透传到 streamer.speech 事件。"""
+        bus = EventBus()
+        received: list = []
+
+        async def _capture(name, payload, source):
+            received.append(payload)
+
+        bus.on(CoreEvents.STREAMER_SPEECH, _capture, model_class=StreamerSpeechPayload)
+        agent = _make_minimal_agent(event_bus=bus)
+        reply_payload = json.dumps({"speech": "回复内容", "emotion": "happy"}, ensure_ascii=False)
+        agent._dispatch_speech_and_emotion(reply_payload, "u1", reply_to_message_id="m9")
+        await asyncio.sleep(0.05)
+        await bus.cleanup()
+
+        assert len(received) == 1
+        assert received[0].reply_to_message_id == "m9"
+        assert received[0].target_user_id == "u1"

@@ -4,7 +4,7 @@
 - 正常路径：viewer + assistant 交错 → 聚合轮数正确，get_history 可见
 - 空库路径：返回 0 不抛
 - 纯 viewer 路径：尾部未闭合轮 → assistant_message=None
-- session_id 字符串 → live_chat.live_session_id INTEGER 映射一致性
+- 跨场次取全局最新窗口（回灌不依赖场次主键映射）
 
 回灌函数定义于 ``main._bootstrap_context_from_live_chat``，由组合根在
 启动时调用——本测试通过直接 import 触发验证，避免起 EventBus/LLM。
@@ -22,7 +22,6 @@ import pytest
 from main import _LIVE_SESSION_ID, _bootstrap_context_from_live_chat
 from src.modules.context import ContextService
 from src.modules.storage.sqlite_store import SQLiteStore
-from src.modules.storage.storage_ledger import StorageLedger
 
 
 @pytest.fixture
@@ -53,7 +52,7 @@ async def test_bootstrap_seeds_turns_from_live_chat(
     store: SQLiteStore, context_service: ContextService
 ) -> None:
     """viewer+assistant 交错 → 聚合为多轮，get_history 可见消息。"""
-    pk = StorageLedger._session_pk_to_int(_LIVE_SESSION_ID)
+    pk = 12345  # 任意主键：回灌按全局最新窗口取数，不依赖场次映射
     base = 1_700_000_000_000  # ms
 
     # 时间正序插入 6 条：viewer / assistant / viewer / viewer / assistant / viewer
@@ -118,7 +117,7 @@ async def test_bootstrap_single_viewer_no_assistant(
     store: SQLiteStore, context_service: ContextService
 ) -> None:
     """纯 viewer 行：返回 1 轮（assistant_message=None）。"""
-    pk = StorageLedger._session_pk_to_int(_LIVE_SESSION_ID)
+    pk = 12345  # 任意主键：回灌按全局最新窗口取数
     base = 1_700_000_000_000
 
     await store.insert_live_chat(
@@ -141,16 +140,3 @@ async def test_bootstrap_single_viewer_no_assistant(
     assert turns[0].assistant_message is None
 
 
-def test_session_pk_consistency() -> None:
-    """session_id → INTEGER pk 映射必须稳定（同源同 pk）。
-
-    写入路径（StorageLedger._session_pk）和回灌查询路径（list_recent_live_chat
-    入参）共用 _session_pk_to_int；任何一方换算法都会查不到同场数据。
-    """
-    pk_a = StorageLedger._session_pk_to_int(_LIVE_SESSION_ID)
-    pk_b = StorageLedger._session_pk_to_int(_LIVE_SESSION_ID)
-    assert pk_a == pk_b
-    # 不同 session_id 必须不同 pk（防撞）
-    assert pk_a != StorageLedger._session_pk_to_int("other_session")
-    # 32 位无符号整数范围（MD5 前 8 hex）
-    assert 0 <= pk_a < 2**32

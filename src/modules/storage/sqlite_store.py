@@ -5,8 +5,8 @@ SQLiteStore —— 异步友好的 SQLite 访问层
 - **store 内部统一防漏**：所有同步 sqlite 调用统一在 ``asyncio.to_thread``
   中执行，调用方不需手动 to_thread（避免"忘 to_thread"坑）
 - **透明封装**：把 ``SQLiteConnectionManager`` 的同步 API 映射成 async
-- **schema 迁移自动应用**：``initialize()`` 时自动 ``CREATE TABLE IF NOT EXISTS``
-  并写入 ``schema_migrations``
+- **schema 迁移自动应用**：``initialize()`` 时自动 ``CREATE TABLE IF NOT EXISTS``、
+  按版本执行 ``SCHEMA_MIGRATIONS`` 迁移回调并写入 ``schema_migrations``
 - **诊断输出**：提供 ``is_healthy()`` / ``table_exists()`` / 表清单等自检方法
 
 ## 重要不变量
@@ -18,16 +18,15 @@ SQLiteStore —— 异步友好的 SQLite 访问层
 ## 验收
 - 测试 ``tests/modules/storage/`` 覆盖：
   - 13 张业务表 + 模块私有表全部创建（schema 统一建表）
-  - schema_migrations 记录并单调推进到当前版本
+  - schema_migrations 记录并单调推进到当前版本（迁移回调幂等）
   - simulated 列存在且默认 False
-  - live_sessions 心跳/结账、llm_usage 插入等领域方法
+  - live_sessions 场次开行/结账/级联删除、llm_usage 插入等领域方法
   - ``table_exists`` / ``list_tables`` / ``is_healthy``
 """
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import sqlite3
 import time
 from functools import partial
@@ -37,6 +36,7 @@ from typing import Any, Dict, List, Optional
 from src.modules.logging import get_logger
 from src.modules.storage.connection import ManagedSQLiteConnection, SQLiteConnectionManager
 from src.modules.storage.schema import (
+    SCHEMA_MIGRATIONS,
     SCHEMA_VERSION,
     build_schema_sql,
     list_expected_tables,
@@ -45,25 +45,6 @@ from src.modules.time_utils import now_ms
 
 
 logger = get_logger("SQLiteStore")
-
-
-# =============================================================================
-# 场次标识映射
-# =============================================================================
-
-
-def session_id_to_pk(session_id: str) -> int:
-    """把场次字符串 ID 映射为 ``live_sessions.id`` / ``*.live_session_id`` 的 INTEGER 主键。
-
-    这是字符串场次 ID 到整数主键的**唯一权威映射**：``live_sessions`` 心跳开行、
-    ``StorageLedger`` 写明细、``ContextService`` 启动回灌都必须走同一算法，
-    否则同一场次的数据会散落在不同主键下无法聚合。
-
-    算法：MD5 前 8 位十六进制 → 32 位无符号整数。稳定、跨进程一致、无外部依赖；
-    数值本身无业务语义，仅做主键/外键。
-    """
-    digest = hashlib.md5(session_id.encode("utf-8")).hexdigest()[:8]
-    return int(digest, 16)
 
 
 # =============================================================================
@@ -277,18 +258,24 @@ class SQLiteStore:
         message_type: str,
         sender_id: Optional[str] = None,
         sender_name: Optional[str] = None,
+        message_id: Optional[str] = None,
+        reply_to_message_id: Optional[str] = None,
         tool_result: Optional[str] = None,
         simulated: bool = False,
     ) -> int:
-        """插入一条 live_chat 行，返回 lastrowid。"""
+        """插入一条 live_chat 行，返回 lastrowid。
+
+        ``message_id``（观众行）/ ``reply_to_message_id``（主播行）构成
+        "主播发言回复了哪条弹幕"的关联键（互动分析数据面）。
+        """
 
         def _exec() -> int:
             with self._manager.transaction() as conn:
                 cur = conn.execute(
                     "INSERT INTO live_chat ("
                     "live_session_id, timestamp_ms, sender_role, sender_id, sender_name,"
-                    " content, message_type, tool_result, simulated"
-                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " content, message_type, message_id, reply_to_message_id, tool_result, simulated"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         live_session_id,
                         timestamp_ms,
@@ -297,6 +284,8 @@ class SQLiteStore:
                         sender_name,
                         content,
                         message_type,
+                        message_id,
+                        reply_to_message_id,
                         tool_result,
                         1 if simulated else 0,
                     ),
@@ -424,73 +413,152 @@ class SQLiteStore:
         return await self._run_in_executor(_exec)
 
     # -------------------- live_sessions 场次状态 --------------------
-    # 场次行由心跳"首次写入即开行"：不引入独立的 session_manager，谁先心跳谁开行，
-    # 后续心跳只更新热度/计数。这样 StorageLedger 写明细时引用的场次主键必然有行可依。
+    # 场次行由 LiveSessionManager（src/modules/session/）创建与结账：一行 =
+    # 一场直播（有开始/结束边界），主键 AUTOINCREMENT；房间/频道是普通属性列。
+    # 本层只提供行级领域方法，不持有"当前场次"状态。
 
-    async def update_live_session_heartbeat(
+    async def insert_live_session(
         self,
         *,
-        session_id: str,
-        heat: int,
-        viewer_count: int,
-        audience_total: int,
-        updated_at_ms: int,
-        platform: Optional[str] = None,
-    ) -> None:
-        """写入一次场次心跳：行不存在则开行（``started_at_ms = updated_at_ms``），
-        已存在则只更新 ``heat`` / ``viewer_count`` / ``audience_total`` / ``updated_at_ms``。
+        stream_id: str = "",
+        platform: str = "unknown",
+        started_at_ms: int,
+        title: Optional[str] = None,
+        source: str = "manual",
+    ) -> int:
+        """插入一场新场次（``ended_at_ms`` 为 NULL 即进行中），返回场次主键。"""
 
-        ``platform`` 仅在开行时生效（未知填 ``"unknown"``），后续心跳不覆盖。
-        ``stream_id`` 落原始 ``session_id`` 字符串，便于从主键反查场次。
-        """
-        pk = session_id_to_pk(session_id)
-
-        def _exec() -> None:
+        def _exec() -> int:
             with self._manager.transaction() as conn:
-                conn.execute(
+                cur = conn.execute(
                     "INSERT INTO live_sessions ("
-                    "id, stream_id, platform, started_at_ms, heat, viewer_count, audience_total, updated_at_ms"
-                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
-                    "ON CONFLICT(id) DO UPDATE SET "
-                    "heat=excluded.heat, "
-                    "viewer_count=excluded.viewer_count, "
-                    "audience_total=excluded.audience_total, "
-                    "updated_at_ms=excluded.updated_at_ms",
-                    (
-                        pk,
-                        session_id,
-                        platform or "unknown",
-                        updated_at_ms,
-                        heat,
-                        viewer_count,
-                        audience_total,
-                        updated_at_ms,
-                    ),
+                    "stream_id, platform, started_at_ms, title, source, updated_at_ms"
+                    ") VALUES (?, ?, ?, ?, ?, ?)",
+                    (stream_id, platform, started_at_ms, title, source, started_at_ms),
                 )
+                return int(cur.lastrowid or 0)
 
-        await self._run_in_executor(_exec)
+        return await self._run_in_executor(_exec)
 
-    async def end_live_session(self, *, session_id: str, ended_at_ms: int) -> bool:
-        """写入场次结束时间；返回是否命中已开行的场次（从未心跳过的场次无行可结）。"""
-        pk = session_id_to_pk(session_id)
+    async def close_live_session(self, *, live_session_id: int, ended_at_ms: int) -> bool:
+        """写入场次结束时间（幂等：已结束的场次不覆盖）。返回是否命中行。"""
 
         def _exec() -> bool:
             with self._manager.transaction() as conn:
                 cur = conn.execute(
-                    "UPDATE live_sessions SET ended_at_ms=?, updated_at_ms=? WHERE id=?",
-                    (ended_at_ms, ended_at_ms, pk),
+                    "UPDATE live_sessions SET ended_at_ms=?, updated_at_ms=? WHERE id=? AND ended_at_ms IS NULL",
+                    (ended_at_ms, ended_at_ms, live_session_id),
                 )
                 return cur.rowcount > 0
 
         return await self._run_in_executor(_exec)
 
-    async def get_live_session(self, *, session_id: str) -> Optional[sqlite3.Row]:
-        """按场次字符串 ID 查 ``live_sessions`` 单行；未开行返回 ``None``。"""
-        pk = session_id_to_pk(session_id)
+    async def update_live_session_stats(
+        self,
+        *,
+        live_session_id: int,
+        heat: int,
+        viewer_count: int,
+        audience_total: int,
+        updated_at_ms: int,
+    ) -> bool:
+        """更新场次实时状态（热度/计数心跳）。行不存在（如临时场次被清理）返回 False。"""
+
+        def _exec() -> bool:
+            with self._manager.transaction() as conn:
+                cur = conn.execute(
+                    "UPDATE live_sessions SET heat=?, viewer_count=?, audience_total=?, updated_at_ms=? WHERE id=?",
+                    (heat, viewer_count, audience_total, updated_at_ms, live_session_id),
+                )
+                return cur.rowcount > 0
+
+        return await self._run_in_executor(_exec)
+
+    async def get_live_session(self, *, live_session_id: int) -> Optional[sqlite3.Row]:
+        """按场次主键查单行；未命中返回 None。"""
 
         def _exec() -> Optional[sqlite3.Row]:
             with self._manager.transaction() as conn:
-                return conn.execute("SELECT * FROM live_sessions WHERE id=?", (pk,)).fetchone()
+                return conn.execute("SELECT * FROM live_sessions WHERE id=?", (live_session_id,)).fetchone()
+
+        return await self._run_in_executor(_exec)
+
+    async def get_scratch_live_session(self) -> Optional[sqlite3.Row]:
+        """查临时兜底场次行（source='scratch' 且未结束）；不存在返回 None。"""
+
+        def _exec() -> Optional[sqlite3.Row]:
+            with self._manager.transaction() as conn:
+                return conn.execute(
+                    "SELECT * FROM live_sessions WHERE source='scratch' AND ended_at_ms IS NULL ORDER BY id LIMIT 1"
+                ).fetchone()
+
+        return await self._run_in_executor(_exec)
+
+    async def list_dangling_live_sessions(self) -> List[sqlite3.Row]:
+        """列出未结账的显式场次（ended_at_ms IS NULL 且非 scratch）。
+
+        用于启动期收口：上次进程未正常退出的残留"进行中"场次。
+        """
+
+        def _exec() -> List[sqlite3.Row]:
+            with self._manager.transaction() as conn:
+                return list(
+                    conn.execute(
+                        "SELECT * FROM live_sessions WHERE ended_at_ms IS NULL AND source != 'scratch'"
+                    ).fetchall()
+                )
+
+        return await self._run_in_executor(_exec)
+
+    async def count_session_details(self, *, live_session_id: int) -> int:
+        """统计场次明细行数（live_chat + gifts + super_chats），供空场次判定。"""
+
+        def _exec() -> int:
+            with self._manager.transaction() as conn:
+                row = conn.execute(
+                    "SELECT ("
+                    "(SELECT COUNT(*) FROM live_chat WHERE live_session_id=?) + "
+                    "(SELECT COUNT(*) FROM gifts WHERE live_session_id=?) + "
+                    "(SELECT COUNT(*) FROM super_chats WHERE live_session_id=?)"
+                    ") AS n",
+                    (live_session_id, live_session_id, live_session_id),
+                ).fetchone()
+                return int(row["n"]) if row else 0
+
+        return await self._run_in_executor(_exec)
+
+    async def delete_live_session(self, *, live_session_id: int) -> bool:
+        """删除场次行并级联清除其明细数据。
+
+        级联范围：live_chat / gifts / super_chats / topics / game_events /
+        timeline_summary（均以 ``live_session_id`` 引用场次主键）。
+        **不含** agenda_plan / agenda_runtime——这两张表虽带同名列，但该列
+        实际存的是 agenda_id（历史约定），与场次主键无关，误删会破坏节目单。
+        """
+
+        def _exec() -> bool:
+            with self._manager.transaction() as conn:
+                for table in ("live_chat", "gifts", "super_chats", "topics", "game_events", "timeline_summary"):
+                    conn.execute(f"DELETE FROM {table} WHERE live_session_id=?", (live_session_id,))  # noqa: S608 表名为代码内常量
+                cur = conn.execute("DELETE FROM live_sessions WHERE id=?", (live_session_id,))
+                return cur.rowcount > 0
+
+        return await self._run_in_executor(_exec)
+
+    async def list_live_sessions(self, *, limit: int = 50) -> List[sqlite3.Row]:
+        """列出场次（按开始时间倒序，附消息数），供场次列表/回看选择。"""
+
+        def _exec() -> List[sqlite3.Row]:
+            with self._manager.transaction() as conn:
+                return list(
+                    conn.execute(
+                        "SELECT s.*, ("
+                        "SELECT COUNT(*) FROM live_chat c WHERE c.live_session_id = s.id"
+                        ") AS message_count "
+                        "FROM live_sessions s ORDER BY s.started_at_ms DESC LIMIT ?",
+                        (limit,),
+                    ).fetchall()
+                )
 
         return await self._run_in_executor(_exec)
 
@@ -540,6 +608,25 @@ class SQLiteStore:
                     )
                 rows = cur.fetchall()
             # DESC 取到的是 [新→旧]，反转回 [旧→新] 满足调用方约定
+            return list(reversed(rows))
+
+        return await self._run_in_executor(_exec)
+
+    async def list_latest_live_chat(self, *, limit: int = 60) -> List[sqlite3.Row]:
+        """取全局最近 ``limit`` 条消息（跨场次），按时间**正序**返回（旧→新）。
+
+        启动回灌语义：重启后主播应延续"最近一段对话"，跨场次取全局最新
+        窗口（上一次结束的场次天然位于窗口尾部）。实现同 ``list_recent_live_chat``：
+        先 DESC LIMIT 再 Python 内反转。
+        """
+
+        def _exec() -> List[sqlite3.Row]:
+            with self._manager.transaction() as conn:
+                cur = conn.execute(
+                    "SELECT * FROM live_chat ORDER BY timestamp_ms DESC LIMIT ?",
+                    (limit,),
+                )
+                rows = cur.fetchall()
             return list(reversed(rows))
 
         return await self._run_in_executor(_exec)
@@ -921,18 +1008,20 @@ class SQLiteStore:
 
     def _apply_schema_blocking(self) -> None:
         """同步执行 schema 应用；由 ``initialize()`` 在 executor 内调度。"""
-        # 1. 应用 DDL（IF NOT EXISTS 幂等）
+        # 1. 应用 DDL（IF NOT EXISTS 幂等，含最新列）
         with self._manager.transaction() as conn:
             conn.executescript(build_schema_sql())
 
-        # 2. 写入/校对 schema_migrations 记录
-        #    注：依赖 SELECT/INSERT 不依赖任何业务表，独立完成
+        # 2. 推进版本：执行 [current+1, SCHEMA_VERSION] 区间内的迁移回调
+        #    （回调原地修改、幂等），随后写入版本记录
         with self._manager.transaction() as conn:
             existing = conn.execute("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").fetchone()
             current_version = int(existing["version"]) if existing else 0
             if current_version < SCHEMA_VERSION:
-                # 单调自增：插入 [current+1, SCHEMA_VERSION] 之间所有缺失版本
                 for version in range(current_version + 1, SCHEMA_VERSION + 1):
+                    migration = SCHEMA_MIGRATIONS.get(version)
+                    if migration is not None:
+                        migration(conn)
                     conn.execute(
                         "INSERT OR IGNORE INTO schema_migrations(version, applied_at_ms) VALUES (?, ?)",
                         (version, int(time.time() * 1000)),
@@ -947,7 +1036,7 @@ class SQLiteStore:
                 logger.debug(f"SQLiteStore schema 已是当前版本: {SCHEMA_VERSION}")
 
 
-__all__ = ["SQLiteStore", "sqlite_store", "set_default_store", "session_id_to_pk"]
+__all__ = ["SQLiteStore", "sqlite_store", "set_default_store"]
 
 
 # 引入 ManagedSQLiteConnection 仅为类型导出便利（不在 __all__）

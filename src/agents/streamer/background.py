@@ -33,7 +33,6 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.logging import get_logger
-from src.modules.storage.sqlite_store import session_id_to_pk
 from src.modules.time_utils import now_ms as _real_now_ms
 
 from .room_state import RoomState
@@ -91,6 +90,7 @@ class BackgroundMaintainer:
         room_state: RoomState,
         llm_service: Optional[Any] = None,
         live_session_store: Optional[Any] = None,
+        session_manager: Optional[Any] = None,
         context_service: Optional[Any] = None,
         session_id: str = "live",
         memory: Optional[Any] = None,
@@ -109,8 +109,13 @@ class BackgroundMaintainer:
             room_state: ``RoomState`` 实例（轻循环读取快照）
             llm_service: LLM 管理器（可选；压缩 worker 调用）
             live_session_store: ``live_sessions`` 存储接口（duck-typed；轻循环写状态）
+            session_manager: 场次管理器（``LiveSessionManager`` 或鸭子类型；
+                提供 ``async resolve_pk() -> int``）。心跳与话题快照的场次归属
+                经它解析（显式场次进行中取其主键，否则临时兜底场次）；``None``
+                时两路写入整体降级跳过。
             context_service: 上下文服务（可选；供压缩 worker 读历史）
-            session_id: 当前场次 ID（默认 "live"）
+            session_id: ContextService 会话键（默认 "live"——L1 对话窗口的
+                逻辑键，与存储层场次主键无关）
             memory: §1.50 记忆后端（鸭子类型 ``MemoryProvider``）。``None`` 时关闭
                 摘要/事件两路写入功能——BackgroundMaintainer 整体降级为"只记账"。
             event_bus: 可选 ``EventBus``；提供时 ``start()`` 阶段订阅礼物/SC 事件。
@@ -121,6 +126,7 @@ class BackgroundMaintainer:
         self._room_state = room_state
         self._llm_service = llm_service
         self._live_session_store = live_session_store
+        self._session_manager = session_manager
         self._context_service = context_service
         self._session_id = session_id
         # 写入面——memory / event_bus / sqlite_store 由 main.py 装配；None 时各自降级
@@ -316,16 +322,26 @@ class BackgroundMaintainer:
             self._logger.warning(f"压缩窗口检查失败: {exc}")
 
     async def _write_live_session(self, now_ms: int) -> None:
-        """把当前 RoomState 快照写入 live_sessions 表（后台记账，每轻 tick 一次心跳）。"""
-        if self._live_session_store is None:
+        """把当前 RoomState 快照写入 live_sessions 表（后台记账，每轻 tick 一次心跳）。
+
+        场次归属经 ``LiveSessionManager.resolve_pk()`` 解析（显式场次进行中
+        取其主键，否则临时兜底场次）；管理器缺失时降级跳过——心跳不建行，
+        场次行的创建/结账归 LiveSessionManager。
+        """
+        if self._live_session_store is None or self._session_manager is None:
             return
         snapshot = self._room_state.get_snapshot(now_ms=now_ms)
         # 热度数字映射：low=1, medium=2, high=3
         heat_map = {"low": 1, "medium": 2, "high": 3}
         heat_int = heat_map.get(snapshot.heat, 1)
 
-        await self._live_session_store.update_live_session_heartbeat(
-            session_id=self._session_id,
+        try:
+            live_pk = await self._session_manager.resolve_pk()
+        except Exception as exc:  # noqa: BLE001 记账降级，不阻断轻循环
+            self._logger.warning(f"场次归属解析失败，跳过本次心跳: {exc}")
+            return
+        await self._live_session_store.update_live_session_stats(
+            live_session_id=live_pk,
             heat=heat_int,
             viewer_count=0,  # TODO: 接入观众统计
             audience_total=0,
@@ -455,13 +471,14 @@ class BackgroundMaintainer:
         - ``timeline_summary``：一行一段摘要历史，窗口为 [上次摘要时刻, 本次]
         - ``topics``：当前话题快照投影——先清本场旧行再插最新关键词 + 摘要句，
           消费者读到的永远是当前话题状态（历史轨迹由 timeline_summary 承担）
+        - 场次归属经 ``LiveSessionManager.resolve_pk()`` 解析；管理器缺失时降级跳过
 
         异常降级：落库失败仅 warning，不阻断后台记账循环。
         """
-        if self._sqlite_store is None:
+        if self._sqlite_store is None or self._session_manager is None:
             return
         try:
-            live_pk = session_id_to_pk(self._session_id)
+            live_pk = await self._session_manager.resolve_pk()
             window_start = previous_summary_ms or max(now_ms - self._summary_interval_ms, 0)
             await self._sqlite_store.execute(
                 "INSERT INTO timeline_summary (live_session_id, start_ms, end_ms, summary, tags) VALUES (?, ?, ?, ?, ?)",

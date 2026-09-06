@@ -168,6 +168,15 @@ class Planner:
         # 渲染时使用占位文本避免模板出现字面 ``$behavior_style``，行为退化为"无准则"。
         self._behavior_style: str = behavior_style or ""
 
+        # 最近一次 plan() 的可观测副产品（决策事件消费；每轮 plan() 入口重置）：
+        # - last_raw_content: LLM 原始返回文本（截断前的完整内容，观察器自行截断）
+        # - last_request_id: LLM 请求历史 ID（"查看完整请求"的指针）
+        # - last_failure: 失败原因（成功为 None；当前 plan() 失败只返回 None，
+        #   失败细节经此带出，决策事件才能区分"LLM 出错/解析失败/构造失败"）
+        self.last_raw_content: str = ""
+        self.last_request_id: Optional[str] = None
+        self.last_failure: Optional[str] = None
+
         self.logger = get_logger("Planner")
 
     # ==================== 主入口 ====================
@@ -208,6 +217,11 @@ class Planner:
             DecisionPlan：解析成功时返回；LLM 异常 / 脏 JSON / 调用失败时返回 None，
             由调用方（StreamerAgent 主循环）处理降级。
         """
+        # 可观测副产品复位：本轮的原始输出/请求 ID/失败原因由各路径写入
+        self.last_raw_content = ""
+        self.last_request_id = None
+        self.last_failure = None
+
         # 1. 组装上下文（v2.2：PlannerAssembler 单一装配路径）
         snapshot = self._room_state.get_snapshot()
         danmaku_text = self._render_batch(batch)
@@ -255,6 +269,7 @@ class Planner:
             snapshot_assembled = self._assembler.assemble(assembler_inputs)
         except Exception as e:
             self.logger.error(f"PlannerAssembler 组装失败: {e}", exc_info=True)
+            self.last_failure = f"assembler_failed: {e}"
             return None
 
         # 6. 渲染 prompt（★ 四个变量：context_block / forced / proactive / behavior_style）
@@ -273,6 +288,7 @@ class Planner:
             )
         except Exception as e:
             self.logger.error(f"渲染 Planner prompt 失败: {e}", exc_info=True)
+            self.last_failure = f"prompt_render_failed: {e}"
             return None
 
         # 3. 调用 LLM（★ 无 tools 参数）
@@ -283,13 +299,18 @@ class Planner:
             )
         except Exception as e:
             self.logger.warning(f"Planner LLM 调用异常，返回 None 由调用方降级: {e}")
+            self.last_failure = f"llm_error: {e}"
             return None
 
         # 4. 提取文本内容（兼容 LLMResponse / str 两种返回形式）
         content = self._extract_content(response)
         if content is None:
             self.logger.warning("Planner LLM 返回空内容或调用失败（success=False）")
+            self.last_failure = "llm_empty_content"
             return None
+        # 可观测副产品：原始输出 + 请求历史指针（鸭子类型 str 响应无 request_id）
+        self.last_raw_content = content
+        self.last_request_id = getattr(response, "request_id", None) or None
 
         # 5. 清理 + 解析 JSON → DecisionPlan
         cleaned = self._clean_llm_json(content)
@@ -297,14 +318,17 @@ class Planner:
             parsed = json.loads(cleaned)
         except json.JSONDecodeError as e:
             self.logger.warning(f"Planner JSON 解析失败: {e}, 原始内容前 200 字: {cleaned[:200]}")
+            self.last_failure = f"json_parse_failed: {e}"
             return None
 
         if not isinstance(parsed, dict):
             self.logger.warning(f"Planner JSON 顶层非对象: {type(parsed).__name__}")
+            self.last_failure = "json_not_object"
             return None
 
         plan = self._build_plan(parsed)
         if plan is None:
+            self.last_failure = "plan_build_failed"
             return None
 
         # 决策一致性校验：低置信度却要回复 → 矛盾决策，降级静默。
@@ -314,14 +338,17 @@ class Planner:
                 f"Planner 低置信度决策降级静默 "
                 f"(confidence={plan.confidence:.2f}, topic_summary={plan.topic_summary[:30]!r})"
             )
+            self.last_failure = None
             return DecisionPlan(
                 should_reply=False,
                 target=None,
                 topic_summary="",
                 reply_guidance="",
                 confidence=plan.confidence,
+                silent_reason="low_confidence",
             )
 
+        self.last_failure = None
         return plan
 
     # ==================== 辅助方法 ====================
@@ -361,6 +388,7 @@ class Planner:
             return DecisionPlan(
                 should_reply=bool(parsed.get("should_reply", False)),
                 target=(parsed.get("target") or None),
+                reply_to=(str(parsed.get("reply_to")) if parsed.get("reply_to") else None),
                 topic_summary=str(parsed.get("topic_summary", "") or ""),
                 reply_guidance=str(parsed.get("reply_guidance", "") or ""),
                 confidence=float(parsed.get("confidence", 0.0) or 0.0),
@@ -474,6 +502,9 @@ class Planner:
         Planner 与 MessageBuffer 渲染输出一致），但保持独立实现以避免对
         MessageBuffer 的硬依赖（Planner 不关心缓冲逻辑）。
 
+        每行末尾追加 ``[id:...]`` 消息编号——Planner 输出 ``reply_to`` 时必须
+        引用该编号（回复关联 reply_to_message_id 的来源）；无 ID 的消息省略。
+
         Args:
             batch: 弹幕消息列表
 
@@ -490,6 +521,9 @@ class Planner:
             data_type = getattr(msg, "data_type", "text") or "text"
             spec = require_message_type(data_type)
             line = spec.prompt_template.format(text=text, nickname=nickname)
+            message_id = getattr(msg, "message_id", None)
+            if message_id:
+                line = f"{line} [id:{message_id}]"
             lines.append(line)
         return "\n".join(lines)
 

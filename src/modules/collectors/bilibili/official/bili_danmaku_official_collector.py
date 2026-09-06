@@ -248,13 +248,12 @@ class BiliDanmakuOfficialCollector(BaseCollector):
     async def _emit_semantic_event(self, bili_msg: BiliBaseMessage, normalized_msg: NormalizedMessage) -> None:
         """emit room.message.* 语义域事件（v2）"""
         try:
-            room_id = str(getattr(bili_msg, "room_id", 0)) or "unknown"
             user_id = str(getattr(bili_msg, "open_id", None) or "unknown")
             user_name = str(getattr(bili_msg, "uname", None) or "unknown")
 
             if isinstance(bili_msg, DanmakuMessage):
                 payload = RoomMessagePayload(
-                    live_session_id=room_id,
+                    message_id=normalized_msg.message_id,
                     message_type="danmaku",
                     user=RoomMessageUser(id=user_id, name=user_name),
                     content=bili_msg.msg,
@@ -263,7 +262,7 @@ class BiliDanmakuOfficialCollector(BaseCollector):
                 await self.emit_event(CoreEvents.ROOM_MESSAGE_DANMAKU, payload)
             elif isinstance(bili_msg, EnterMessage):
                 payload = RoomMessagePayload(
-                    live_session_id=room_id,
+                    message_id=normalized_msg.message_id,
                     message_type="enter",
                     user=RoomMessageUser(id=user_id, name=user_name),
                     content="",
@@ -273,7 +272,7 @@ class BiliDanmakuOfficialCollector(BaseCollector):
             elif isinstance(bili_msg, GiftMessage):
                 actual_num = max(bili_msg.gift_num, bili_msg.combo_info.combo_count)
                 payload = RoomMessagePayload(
-                    live_session_id=room_id,
+                    message_id=normalized_msg.message_id,
                     message_type="gift",
                     user=RoomMessageUser(id=user_id, name=user_name),
                     content="",
@@ -283,7 +282,7 @@ class BiliDanmakuOfficialCollector(BaseCollector):
                 await self.emit_event(CoreEvents.ROOM_MESSAGE_GIFT, payload)
             elif isinstance(bili_msg, SuperChatMessage):
                 payload = RoomMessagePayload(
-                    live_session_id=room_id,
+                    message_id=normalized_msg.message_id,
                     message_type="super_chat",
                     user=RoomMessageUser(id=user_id, name=user_name),
                     content=bili_msg.message,

@@ -21,7 +21,7 @@ from src.modules.storage.schema import (
     list_expected_tables,
     list_private_tables,
 )
-from src.modules.storage.sqlite_store import SQLiteStore, session_id_to_pk, sqlite_store
+from src.modules.storage.sqlite_store import SQLiteStore, sqlite_store
 from src.modules.storage.storage_ledger import StorageLedger, make_room_message
 
 __all__ = [
@@ -33,7 +33,6 @@ __all__ = [
     "list_expected_tables",
     "list_private_tables",
     "SQLiteStore",
-    "session_id_to_pk",
     "sqlite_store",
     "StorageLedger",
     "make_room_message",

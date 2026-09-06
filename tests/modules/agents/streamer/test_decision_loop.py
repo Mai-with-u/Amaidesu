@@ -28,11 +28,11 @@ from src.modules.tools import ToolRegistry, ToolInvocation
 from src.modules.tools.models import ToolExecutionResult
 from src.modules.types.base.normalized_message import NormalizedMessage
 from src.modules.events.payloads.base import BasePayload
+from src.modules.events.payloads.planner import PlannerDecisionPayload, StreamerStagePayload
 
 
 def _make_payload(text: str = "主播好可爱") -> RoomMessagePayload:
     return RoomMessagePayload(
-        live_session_id="live",
         message_type="danmaku",
         user=RoomMessageUser(id="u1", name="观众A"),
         content=text,
@@ -48,6 +48,10 @@ def _make_normalized(text: str = "主播好可爱") -> NormalizedMessage:
         user_id="u1",
         user_nickname="观众A",
     )
+
+
+def _replyer_json() -> str:
+    return json.dumps({"text": "谢谢支持！", "emotion": "happy"}, ensure_ascii=False)
 
 
 def _make_llm(content: str):
@@ -342,3 +346,108 @@ async def test_decision_loop_handle_message_direct():
 
     # 统计：消息已入缓冲
     assert agent.get_statistics()["total_messages"] == 1
+
+class TestDecisionObservability:
+    """决策可观测收口：每轮决策恰好一条 planner.decision + 阶段事件成对。"""
+
+    @pytest.mark.asyncio
+    async def test_decision_round_emits_decision_and_stage_events(self):
+        agent, bus, registry, llm, prompt = _setup_agent()
+
+        decisions: list = []
+        stages: list = []
+
+        async def _on_decision(name, payload, source):
+            decisions.append(payload)
+
+        async def _on_stage(name, payload, source):
+            stages.append(payload)
+
+        bus.on(CoreEvents.PLANNER_DECISION, _on_decision, model_class=PlannerDecisionPayload)
+        bus.on(CoreEvents.STREAMER_STAGE, _on_stage, model_class=StreamerStagePayload)
+
+        await agent.start()
+        try:
+            payload = _make_payload("主播好可爱！")
+            await bus.emit(CoreEvents.ROOM_MESSAGE_DANMAKU, payload, source="bilibili", wait=True)
+            await asyncio.sleep(0.3)
+
+            assert len(decisions) == 1, f"每轮决策应恰好一条 planner.decision，实际 {len(decisions)}"
+            d = decisions[0]
+            assert d.round_id.startswith("rnd_")
+            assert d.should_reply is True
+            assert d.utterance_id and d.utterance_id.startswith("utt_")
+            assert d.error is None
+            assert d.silent_reason is None
+            assert d.total_duration_ms >= 0
+            assert isinstance(d.batch, list) and len(d.batch) == 1
+            assert d.batch[0].user_name == "观众A"
+
+            assert [s.stage for s in stages] == ["planning", "idle"], "阶段事件应成对（planning → idle）"
+            assert stages[0].agent_state == "running"
+            assert stages[1].agent_state == "wait"
+            assert stages[0].round_id == d.round_id
+        finally:
+            await agent.stop()
+            await bus.cleanup()
+
+    @pytest.mark.asyncio
+    async def test_planner_failure_still_emits_decision_event(self):
+        """Planner 失败（脏 JSON）也必须发决策事件——失败可见性是核心价值。"""
+        agent, bus, registry, llm, prompt = _setup_agent()
+        llm.chat = AsyncMock(side_effect=[_make_llm("这不是JSON{")])
+
+        decisions: list = []
+
+        async def _on_decision(name, payload, source):
+            decisions.append(payload)
+
+        bus.on(CoreEvents.PLANNER_DECISION, _on_decision, model_class=PlannerDecisionPayload)
+
+        await agent.start()
+        try:
+            await bus.emit(CoreEvents.ROOM_MESSAGE_DANMAKU, _make_payload("hi"), source="t", wait=True)
+            await asyncio.sleep(0.3)
+
+            assert len(decisions) == 1
+            d = decisions[0]
+            assert d.should_reply is False
+            assert d.error is not None
+            assert "json_parse_failed" in d.error
+        finally:
+            await agent.stop()
+            await bus.cleanup()
+
+    @pytest.mark.asyncio
+    async def test_reply_to_flows_into_decision_event(self):
+        """Planner 输出 reply_to → 决策事件携带 reply_to_message_id（互动分析关联键）。"""
+        agent, bus, registry, llm, prompt = _setup_agent()
+        planner_json = json.dumps(
+            {
+                "should_reply": True,
+                "target": "观众A",
+                "reply_to": "msg_abc",
+                "topic_summary": "回应",
+                "reply_guidance": "回应夸奖",
+                "confidence": 0.9,
+            }
+        )
+        llm.chat = AsyncMock(side_effect=[_make_llm(planner_json), _make_llm(_replyer_json())])
+
+        decisions: list = []
+
+        async def _on_decision(name, payload, source):
+            decisions.append(payload)
+
+        bus.on(CoreEvents.PLANNER_DECISION, _on_decision, model_class=PlannerDecisionPayload)
+
+        await agent.start()
+        try:
+            await bus.emit(CoreEvents.ROOM_MESSAGE_DANMAKU, _make_payload("主播好可爱"), source="t", wait=True)
+            await asyncio.sleep(0.3)
+
+            assert len(decisions) == 1
+            assert decisions[0].reply_to_message_id == "msg_abc"
+        finally:
+            await agent.stop()
+            await bus.cleanup()

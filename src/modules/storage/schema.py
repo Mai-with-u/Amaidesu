@@ -10,6 +10,12 @@
 ## 命名硬规则
 - 时间字段一律 ``*_ms``（毫秒 int）
 - 场次叫 ``live_sessions``，消息流叫 ``live_chat``（live chat 行业标准）
+- ``live_sessions`` 一行 = 一场直播（有开始/结束边界）；房间/频道是场次之上的
+  静态属性（``stream_id`` 普通属性列，**不参与主键语义**，一房多场）
+- ``live_sessions.source`` 标记场次来源（manual=手动 / replay=模拟器回放 /
+  scratch=临时兜底桶 / legacy=历史遗留行）
+- ``live_chat.message_id`` 与 ``live_chat.reply_to_message_id`` 构成"主播发言
+  回复了哪条观众弹幕"的关联键（互动分析数据面）
 - ``live_chat`` / ``gifts`` / ``super_chats`` 表加 ``simulated`` 贯穿列
   （模拟数据用 False 默认 / True 标记，消费方 WHERE ``simulated=0`` 排除模拟数据）
 - 模块私有表以 ``_`` 前缀命名，表达"非业务数据平面、仅所属模块读写"
@@ -17,7 +23,9 @@
 ## Schema 迁移机制
 - ``schema_migrations(version PK, applied_at_ms)``（复用 MaiBot 模式）
 - ``SCHEMA_VERSION`` 常量 = 当前权威版本
-- ``build_schema_sql()`` 返回完整建表 DDL（IF NOT EXISTS 幂等）
+- ``SCHEMA_MIGRATIONS``：version → 迁移回调（原地修改、幂等）。``SQLiteStore``
+  在推进版本时按序执行；回调内部用列存在性检查保证对新建库与已迁移库安全
+- ``build_schema_sql()`` 返回完整建表 DDL（IF NOT EXISTS 幂等，含最新列）
 - ``list_expected_tables()`` 返回启动自检必须存在的业务表名（不含私有表：
   私有表随所属模块后端启用与否而变化，不纳入"缺一即拒启"的闸门）
 - ``list_private_tables()`` 返回模块私有表名（所属模块自检用）
@@ -25,11 +33,12 @@
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
-from typing import List
+from typing import Callable, Dict, List
 
 # 当前 Schema 版本——改动表结构时必须同步升级（见 AGENTS.md §"配置 Schema 变更规则"）
-SCHEMA_VERSION: int = 3
+SCHEMA_VERSION: int = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,11 +159,12 @@ def list_private_tables() -> List[str]:
 _LIVE_SESSIONS_SQL = """
 CREATE TABLE IF NOT EXISTS live_sessions (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    stream_id       TEXT NOT NULL,
-    platform        TEXT NOT NULL,
+    stream_id       TEXT NOT NULL DEFAULT '',
+    platform        TEXT NOT NULL DEFAULT 'unknown',
     started_at_ms   INTEGER NOT NULL,
     ended_at_ms     INTEGER,
     title           TEXT,
+    source          TEXT NOT NULL DEFAULT 'manual',
     heat            INTEGER NOT NULL DEFAULT 0,
     viewer_count    INTEGER NOT NULL DEFAULT 0,
     audience_total  INTEGER NOT NULL DEFAULT 0,
@@ -174,6 +184,8 @@ CREATE TABLE IF NOT EXISTS live_chat (
     sender_name      TEXT,
     content          TEXT NOT NULL,
     message_type     TEXT NOT NULL,
+    message_id       TEXT,
+    reply_to_message_id TEXT,
     tool_result      TEXT,
     simulated        INTEGER NOT NULL DEFAULT 0
 );
@@ -383,8 +395,48 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 """.strip()
 
 
+# =============================================================================
+# 版本迁移回调（version → 原地修改、幂等）
+# =============================================================================
+# SQLiteStore 推进 schema_migrations 版本时按序执行；回调内部用列存在性检查
+# 保证对"新建库（DDL 已含最新列）"与"重复执行"都安全。
+
+
+def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    """检查表列是否存在（PRAGMA table_info）。"""
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()  # noqa: S608 表名为代码内常量
+    return any(row[1] == column for row in rows)
+
+
+def _migrate_v4_session_semantics(conn: sqlite3.Connection) -> None:
+    """v3 → v4：场次主键语义修正（一房多场）+ 回复关联列。
+
+    - ``live_sessions`` 增加 ``source`` 列：旧库经 ADD COLUMN 补列时默认
+      ``'legacy'``——所有存量行都是"房间号哈希映射"时代的遗留数据，天然标记；
+      新建库的 DDL 默认 ``'manual'``（回调检测到列已存在则跳过）。
+    - 存量遗留行收口：``ended_at_ms`` 为空的补为 ``updated_at_ms``（历史行
+      没有可重建的结束边界，以其最后活动时刻封闭，避免永远显示"进行中"）。
+    - ``live_chat`` 增加 ``message_id`` / ``reply_to_message_id`` 列与消息 ID 索引。
+    """
+    if not _column_exists(conn, "live_sessions", "source"):
+        conn.execute("ALTER TABLE live_sessions ADD COLUMN source TEXT NOT NULL DEFAULT 'legacy'")
+    # 遗留行封闭（幂等：COALESCE 保留已有结束时间）
+    conn.execute("UPDATE live_sessions SET ended_at_ms = updated_at_ms WHERE source = 'legacy' AND ended_at_ms IS NULL")
+    if not _column_exists(conn, "live_chat", "message_id"):
+        conn.execute("ALTER TABLE live_chat ADD COLUMN message_id TEXT")
+    if not _column_exists(conn, "live_chat", "reply_to_message_id"):
+        conn.execute("ALTER TABLE live_chat ADD COLUMN reply_to_message_id TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_live_chat_message_id ON live_chat(message_id)")
+
+
+SCHEMA_MIGRATIONS: Dict[int, Callable[[sqlite3.Connection], None]] = {
+    4: _migrate_v4_session_semantics,
+}
+
+
 __all__ = [
     "SCHEMA_VERSION",
+    "SCHEMA_MIGRATIONS",
     "SchemaMigration",
     "build_schema_sql",
     "list_expected_tables",

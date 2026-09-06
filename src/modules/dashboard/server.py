@@ -104,6 +104,7 @@ class DashboardServer:
         log_streamer: Optional[LogStreamer] = None,
         event_history: Optional["EventHistoryService"] = None,
         simulator_service: Optional["SimulatorService"] = None,
+        session_manager: Optional[Any] = None,
     ):
         self.event_bus = event_bus
         self.input_manager = input_manager
@@ -119,6 +120,9 @@ class DashboardServer:
         # ADR-006 follow-up：注入 SimulatorService 让 `/api/v1/simulator/*` 控制面可用。
         # 未注入（如默认生产配置 enabled=false）时相关端点仍可调用（返回 is_available=false）。
         self.simulator_service = simulator_service
+        # 注入 LiveSessionManager 让 `/api/v1/sessions/*` 控制面可用（场次开启/结束/删除）。
+        # 未注入时相关端点返回 is_available=false，不影响其余 API。
+        self.session_manager = session_manager
 
         self.port = dashboard_config.port
         self.host = dashboard_config.host

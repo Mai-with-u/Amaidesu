@@ -46,6 +46,7 @@ from src.modules.events.event_history import EventHistoryService
 from src.modules.events.event_recorder import EventHistoryRecorder
 from src.modules.events.interceptors import (
     RateLimitInterceptor,
+    SessionStampInterceptor,
     SimilarFilterInterceptor,
 )
 from src.modules.events.names import CoreEvents
@@ -55,13 +56,13 @@ from src.modules.logging import configure_from_config, get_logger
 from src.modules.logging.log_streamer import LogStreamer
 from src.modules.memory.bootstrap import bind_memory_tools, build_memory_stack
 from src.modules.prompts import get_prompt_manager
+from src.modules.session import LiveSessionManager
 from src.modules.simulator import SimulatorService
 from src.modules.storage.sqlite_store import SQLiteStore
 from src.modules.subtitle import build_subtitle_infrastructure
 from src.modules.subtitle.backends import DashboardBackend
 from src.modules.tts import build_tts_infrastructure
 from src.modules.storage.storage_ledger import StorageLedger
-from src.modules.time_utils import now_ms
 from src.modules.tools import ToolRegistry
 from src.modules.tools.bootstrap import bind_core_tools
 from src.modules.tools.content_engine import StubContentEngine
@@ -72,9 +73,9 @@ from src.modules.tools.perception.pil_capture import PillowImageGrabCapture
 logger = get_logger("Main")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# live 场次的默认 session_id——与 StreamerAgent 内
+# live 场次的 ContextService 会话键——与 StreamerAgent 内
 # ``_record_streamer_speech_history`` / ``_read_history`` 一致使用 "live" 字面量；
-# StorageLedger 写入主播发言、ContextService 回灌历史都消费同一字符串。
+# 这是 L1 对话窗口的逻辑键（内存），与存储层 live_sessions 场次主键无关。
 _LIVE_SESSION_ID = "live"
 
 
@@ -254,14 +255,18 @@ def exit_if_config_created(was_created: bool) -> None:
 # ---------------------------------------------------------------------------
 
 
-def register_event_interceptors(event_bus: EventBus, config: Dict[str, Any]) -> None:
+def register_event_interceptors(event_bus: EventBus, config: Dict[str, Any], session_manager: Any = None) -> None:
     """注册输入域事件拦截器。
 
+    - session_stamp：场次归属盖章（业务事件统一注入当前场次主键；框架级必挂）
     - rate_limit：防刷屏/防突发
     - similar_filter：相似文本合并
-    - 拦截器作用于 ``room.message.*`` 事件
     - 拦截器返回 ``None`` 即丢弃该事件
     """
+    if session_manager is not None:
+        event_bus.add_interceptor(SessionStampInterceptor(session_manager))
+        logger.info("SessionStampInterceptor 已注册（场次归属单点注入）")
+
     interceptors_config = config.get("interceptors", {}) if isinstance(config, dict) else {}
     rate_limit_cfg = interceptors_config.get("rate_limit", {}) if isinstance(interceptors_config, dict) else {}
     if rate_limit_cfg.get("enabled", True):
@@ -299,6 +304,7 @@ async def create_app_components(
     *,
     simulator_auto_start: bool = True,
     storage_ledger_auto_start: bool = True,
+    session_manager_auto_start: bool = True,
 ) -> Tuple[
     ContextService,
     EventBus,
@@ -310,13 +316,14 @@ async def create_app_components(
     Optional["SimulatorService"],
     "SQLiteStore",
     Optional["StorageLedger"],
+    "LiveSessionManager",
 ]:
     """组合根：构造并连接所有核心组件。
 
-    按依赖关系构造：LLM/ContextService 为基座，再装存储与记忆、EventBus 与拦截器，
-    然后 EventHistoryRecorder + StorageLedger（溯源链收口），Collector/Simulator/Agent
-    按各自配置开关装配，ToolRegistry 在 Agent 启动前完成 L2/L1 接线与审计，
-    最后挂 DashboardServer 作为 WebUI observer。
+    按依赖关系构造：LLM/ContextService 为基座，再装存储与记忆、EventBus 与
+    拦截器与场次管理，然后 EventHistoryRecorder + StorageLedger（溯源链收口），
+    Collector/Simulator/Agent 按各自配置开关装配，ToolRegistry 在 Agent 启动前
+    完成 L2/L1 接线与审计，最后挂 DashboardServer 作为 WebUI observer。
 
     Args:
         config: 完整配置字典
@@ -327,11 +334,13 @@ async def create_app_components(
         storage_ledger_auto_start: 是否启动 StorageLedger 订阅。
             ``--dry`` 模式传 False，避免组合根冒烟时事件被处理（写入数据库）。
             关闭链（``run_shutdown``）无论如何都会 ``stop()`` 一次，幂等安全。
+        session_manager_auto_start: 是否启动 LiveSessionManager（残留场次收口 +
+            临时兜底场次就位）。``--dry`` 模式传 False，避免冒烟写库。
 
     Returns:
         (context_service, event_bus, llm_service, dashboard_server,
          event_recorder, collector_manager, agent_manager,
-         simulator_service, sqlite_store, storage_ledger)
+         simulator_service, sqlite_store, storage_ledger, session_manager)
     """
     # --- 存储与记忆（SQLiteStore + SimpleMemory）---
     # 必须先于 LLMManager 构造：LLMManager 需要注入 store 做 llm_usage 落库
@@ -359,10 +368,17 @@ async def create_app_components(
     # 说过什么。函数内已 try/except，外层不再重复包裹。
     await _bootstrap_context_from_live_chat(context_service, sqlite_store)
 
-    # --- EventBus + 拦截器 ---
+    # --- EventBus + 场次管理 + 拦截器 ---
     logger.info("初始化事件总线...")
     event_bus = EventBus()
-    register_event_interceptors(event_bus, config)
+
+    # LiveSessionManager：场次唯一事实源（开启/结束/删除/归属解析/防膨胀）。
+    # 启动不自动开新场次；无显式场次期间消息归属临时兜底场次（固定复用一行）。
+    session_manager = LiveSessionManager(sqlite_store, event_bus)
+    if session_manager_auto_start:
+        await session_manager.start()
+
+    register_event_interceptors(event_bus, config, session_manager=session_manager)
     logger.info("事件总线已初始化，事件拦截器已挂载")
 
     # --- 事件历史（系统级）---
@@ -374,7 +390,7 @@ async def create_app_components(
         event_bus,
         sqlite_store,
         auto_start=storage_ledger_auto_start,
-        session_id=_LIVE_SESSION_ID,
+        session_manager=session_manager,
     )
 
     # --- CollectorManager ---
@@ -406,6 +422,7 @@ async def create_app_components(
             event_bus=event_bus,
             sqlite_store=sqlite_store,
             services_by_type={type(llm_service): llm_service},
+            session_manager=session_manager,
         )
         await simulator_service.setup(
             config_service,
@@ -473,6 +490,7 @@ async def create_app_components(
             tts_section=tts_section,
             tts_engine=tts_engine,
             subtitle_service=subtitle_service,
+            session_manager=session_manager,
         )
 
         # --- 核心工具包（output/* 的 L2 Provider） + L1 @tool pending 刷入 ---
@@ -556,6 +574,7 @@ async def create_app_components(
             log_streamer,
             simulator_service,
             event_recorder,
+            session_manager,
         )
 
     # Dashboard 字幕后端注册：StreamerAgent 与 Dashboard 共享同一
@@ -584,6 +603,7 @@ async def create_app_components(
         simulator_service,
         sqlite_store,
         storage_ledger,
+        session_manager,
     )
 
 
@@ -617,26 +637,27 @@ async def _start_storage_ledger(
     sqlite_store: SQLiteStore,
     *,
     auto_start: bool = True,
-    session_id: Optional[str] = None,
+    session_manager: Optional["LiveSessionManager"] = None,
 ) -> Optional[StorageLedger]:
     """构造 StorageLedger 并按 ``auto_start`` 决定是否订阅。
 
     ``--dry`` 模式传 ``auto_start=False`` 仅构造不订阅，避免组合根冒烟
     时落无关测试数据；``run_shutdown`` 仍然 stop 一次（leader 幂等）。
 
-    ``session_id`` 注入后，主播发言（``streamer.speech``）会落 ``live_chat``
-    的 assistant 行；不注入则保持 debug 跳过策略（与既有降级风格一致）。
+    ``session_manager`` 注入后，主播发言（``streamer.speech``）与观众明细
+    按其解析的当前场次归属落 ``live_chat`` 等业务表；不注入则按无场次降级
+    跳过（与既有降级风格一致）。
     """
     try:
         ledger = StorageLedger(
             event_bus=event_bus,
             sqlite_store=sqlite_store,
-            session_id=session_id,
+            session_manager=session_manager,
         )
         if auto_start:
             await ledger.start()
         logger.info(
-            f"StorageLedger 已构造（auto_start={auto_start}；session_id={session_id!r}；"
+            f"StorageLedger 已构造（auto_start={auto_start}；场次归属经 LiveSessionManager 解析；"
             "订阅 room.message.# → 业务表 + streamer.speech → live_chat.assistant）"
         )
         return ledger
@@ -653,38 +674,32 @@ async def _bootstrap_context_from_live_chat(
 ) -> int:
     """启动时从 live_chat 回灌最近对话到 ContextService（重启失忆修复）。
 
-    取指定场次最近 ``message_limit`` 条消息（时间正序），按 ``sender_role``
+    取全局最近 ``message_limit`` 条消息（跨场次，时间正序），按 ``sender_role``
     聚合为 ``DialogueTurn``：观众行追加到当前轮的 ``viewer_messages``；
     主播行闭合当前轮（``assistant_message`` 取主播内容，``end_timestamp``
     取该消息时间戳）。尾部未闭合的观众消息也作为最后一轮（assistant 为
-    ``None``）。``live_chat.live_session_id`` 是 MD5 映射的 INTEGER 主键，
-    必须复用 ``StorageLedger._session_pk_to_int`` 才能命中同一场次数据。
+    ``None``）。跨场次取全局最新窗口——上一次结束的场次天然位于窗口尾部，
+    主播重启后延续"最近一段对话"。
 
-    回灌失败仅记 warning，不阻断启动：live 场次无历史时静默跳过（返回 0）。
+    回灌失败仅记 warning，不阻断启动：无历史时静默跳过（返回 0）。
 
     Args:
         context_service: 目标上下文服务。
         sqlite_store: 持久化存储（读 live_chat）。
-        session_id: 直播场次 session_id（与 StreamerAgent / StorageLedger 同源）。
+        session_id: ContextService 会话键（L1 对话窗口逻辑键，固定 "live"）。
         message_limit: 取最近多少条原消息（聚合后轮数会更少）。
 
     Returns:
         实际灌入的轮数（不含失败轮）。
     """
     try:
-        # session_id 字符串 → live_chat.live_session_id INTEGER 必须复用
-        # StorageLedger 的 MD5 映射（同源同 pk，否则查不到同场数据）
-        pk = StorageLedger._session_pk_to_int(session_id)
-        rows = await sqlite_store.list_recent_live_chat(
-            live_session_id=pk,
-            limit=message_limit,
-        )
+        rows = await sqlite_store.list_latest_live_chat(limit=message_limit)
     except Exception as exc:  # noqa: BLE001 - 启动边界，不阻断
         logger.warning(f"ContextService 回灌读取 live_chat 失败（不影响启动）: {exc}")
         return 0
 
     if not rows:
-        logger.debug(f"ContextService 回灌跳过：live_chat 中 session_id={session_id!r} 无历史消息")
+        logger.debug("ContextService 回灌跳过：live_chat 无历史消息")
         return 0
 
     turns: list = []
@@ -794,6 +809,7 @@ async def _register_agents_from_config(
     tts_section: Optional[Dict[str, Any]] = None,
     tts_engine: Optional[Any] = None,
     subtitle_service: Optional[Any] = None,
+    session_manager: Optional[Any] = None,
 ):
     """根据 [agents] 段注册 Agent 实例到 AgentManager。
 
@@ -867,6 +883,7 @@ async def _register_agents_from_config(
                 speech_config=speech_cfg,
                 tts_engine=tts_engine,
                 subtitle_service=subtitle_service,
+                session_manager=session_manager,
             )
             manager.register(
                 agent,
@@ -922,6 +939,7 @@ async def _start_dashboard(
     log_streamer=None,
     simulator_service: Optional["SimulatorService"] = None,
     event_recorder: Optional["EventHistoryRecorder"] = None,
+    session_manager: Optional["LiveSessionManager"] = None,
 ):
     """启动 DashboardServer（仅作为 WebUI observer，不参与决策数据流）。"""
     try:
@@ -941,6 +959,7 @@ async def _start_dashboard(
             prompt_manager=get_prompt_manager(),
             log_streamer=log_streamer,
             simulator_service=simulator_service,
+            session_manager=session_manager,
             # 事件历史服务所有权在 EventHistoryRecorder，这里共享引用供
             # REST（/events、/traces）与 WS（events.history 推送）读取
             event_history=(event_recorder.event_history if event_recorder else None),
@@ -1020,6 +1039,7 @@ async def run_shutdown(
     *,
     sqlite_store: Optional["SQLiteStore"] = None,
     storage_ledger: Optional["StorageLedger"] = None,
+    session_manager: Optional["LiveSessionManager"] = None,
 ) -> None:
     """按依赖关系反向关闭：先停数据生产者 CollectorManager，再停 SimulatorService 与 AgentManager，然后 Dashboard 与事件历史/StorageLedger（必须在 EventBus.cleanup 之前 off，否则 listener 解绑失败），最后 EventBus/ContextService/LLMManager 清理，SQLiteStore.close 收尾落盘。"""
     _saw_cancelled = False
@@ -1084,12 +1104,14 @@ async def run_shutdown(
         await safe_log(storage_ledger.stop(), "StorageLedger")
         logger.info("StorageLedger 已停止")
 
-    # 场次结账：给本次直播的 live_sessions 行写 ended_at_ms（从未心跳开行的场次无行可结，返回 False）
-    if sqlite_store is not None:
+    # 场次结账：进行中的显式场次在进程退出时收口（live.ended 事件 + 结束时间；
+    # 空场次整行丢弃）。临时兜底场次保留（跨进程复用，不膨胀）。
+    if session_manager is not None:
         await safe_log(
-            sqlite_store.end_live_session(session_id=_LIVE_SESSION_ID, ended_at_ms=now_ms()),
+            session_manager.close_session(reason="进程退出"),
             "live_sessions 场次结账",
         )
+        await safe_log(session_manager.stop(), "LiveSessionManager.stop")
 
     logger.info("等待待处理事件完成并清理 EventBus...")
     if event_bus is not None:
@@ -1146,12 +1168,14 @@ async def main() -> None:
         simulator_service,
         sqlite_store,
         storage_ledger,
+        session_manager,
     ) = await create_app_components(
         config,
         config_service,
         dev_webui=args.dev_webui,
         simulator_auto_start=not args.dry,
         storage_ledger_auto_start=not args.dry,
+        session_manager_auto_start=not args.dry,
     )
 
     # 启动完成广播：此时 EventHistoryRecorder 已就绪，core.startup 会进事件历史
@@ -1175,6 +1199,7 @@ async def main() -> None:
             simulator_service,
             sqlite_store=sqlite_store,
             storage_ledger=storage_ledger,
+            session_manager=session_manager,
         )
         return
 
@@ -1219,6 +1244,7 @@ async def main() -> None:
         simulator_service,
         sqlite_store=sqlite_store,
         storage_ledger=storage_ledger,
+        session_manager=session_manager,
     )
 
 

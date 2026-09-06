@@ -25,7 +25,6 @@ from src.modules.events.payloads.room import (
 
 def _make_payload(**overrides: Any) -> RoomMessagePayload:
     kwargs: dict[str, Any] = dict(
-        live_session_id="ls_test",
         message_type="danmaku",
         user=RoomMessageUser(id="u1", name="观众A"),
         content="主播好可爱",
@@ -47,7 +46,8 @@ def test_convert_danmaku_message() -> None:
     assert msg.user_name == "观众A"
     assert msg.user_id == "u1"
     assert msg.content == "主播好可爱"
-    assert msg.room_id == "ls_test"
+    # 场次归属由盖章拦截器注入；单元构造未盖章（0）→ room_id 为 None
+    assert msg.room_id is None
 
 
 def test_convert_gift_message() -> None:

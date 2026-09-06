@@ -89,7 +89,6 @@ async def test_room_message_events_broadcast_as_room_message_type(bus_and_handle
         CoreEvents.ROOM_MESSAGE_ENTER,
     ):
         payload = RoomMessagePayload(
-            live_session_id="ls_test",
             message_type=(
                 "gift"
                 if source_event.endswith("gift")

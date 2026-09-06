@@ -227,7 +227,8 @@ class DanmakuWidgetService:
             )
             importance = 0.5
             platform = "unknown"
-            room_id = payload.live_session_id or None
+            # 场次主键（int）转字符串承载（DanmakuWidgetMessage.room_id 为 str；0=未归属 → None）
+            room_id = str(payload.live_session_id) if payload.live_session_id else None
 
             if payload.message_type == "gift":
                 return DanmakuWidgetMessage(

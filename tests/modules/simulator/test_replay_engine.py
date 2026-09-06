@@ -36,7 +36,6 @@ def _payload(
     simulated: bool = False,
 ) -> RoomMessagePayload:
     return RoomMessagePayload(
-        live_session_id="live",
         message_type="danmaku",
         user=RoomMessageUser(id=f"uid_{user}", name=user),
         content=content,

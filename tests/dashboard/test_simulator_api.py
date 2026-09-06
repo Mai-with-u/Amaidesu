@@ -83,7 +83,15 @@ def test_status_reports_mode_and_availability(client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_replay_dates_empty(client: TestClient) -> None:
+def test_replay_dates_empty(client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """无录制文件时返回空列表。
+
+    目录打桩到临时路径：默认目录（data/events）在本机可能存有历史录制，
+    测试只关心"空目录 → 空列表"的契约。
+    """
+    monkeypatch.setattr(
+        "src.modules.events.event_history.DEFAULT_PERSIST_DIR", str(tmp_path)
+    )
     body = client.get("/api/v1/simulator/replay/dates").json()
     assert body == {"dates": []}
 

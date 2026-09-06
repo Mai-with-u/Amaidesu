@@ -11,7 +11,6 @@ from pydantic import BaseModel
 
 from src.modules.events.event_history import EventRecord, EventHistoryService
 from src.modules.events.event_type_map import (
-    COMPONENT_EVENT_TYPE_MAP,
     ROOM_MESSAGE_TYPE,
     SYSTEM_ERROR_TYPE,
     SYSTEM_STATUS_TYPE,
@@ -24,7 +23,11 @@ from src.modules.events.payloads import (
     CoreShutdownPayload,
     CoreStartupPayload,
     GamePayload,
+    LiveEndedPayload,
+    LiveStartedPayload,
+    PlannerDecisionPayload,
     RoomMessagePayload,
+    StreamerStagePayload,
 )
 from src.modules.events.payloads.base import BasePayload
 from src.modules.logging import get_logger
@@ -63,6 +66,12 @@ class EventHistoryRecorder:
         self._subscribe(CoreEvents.CORE_ERROR, self._on_core_error, model_class=CoreErrorPayload)
         self._subscribe(CoreEvents.PLANNER_CHECKPOINT, self._on_core_event, model_class=CheckpointPayload)
         self._subscribe(CoreEvents.AGENDA_UPDATE, self._on_core_event, model_class=AgendaPayload)
+
+        # 决策可观测 + 场次生命周期（type=事件名独立记录；观察器按场回看的数据源）
+        self._subscribe(CoreEvents.PLANNER_DECISION, self._on_named_event, model_class=PlannerDecisionPayload)
+        self._subscribe(CoreEvents.STREAMER_STAGE, self._on_named_event, model_class=StreamerStagePayload)
+        self._subscribe(CoreEvents.LIVE_STARTED, self._on_named_event, model_class=LiveStartedPayload)
+        self._subscribe(CoreEvents.LIVE_ENDED, self._on_named_event, model_class=LiveEndedPayload)
 
         component_model_map = {
             CoreEvents.GAME_MILESTONE: GamePayload,
@@ -151,17 +160,37 @@ class EventHistoryRecorder:
         except Exception as e:
             logger.warning(f"记录 core error 事件失败: {e}")
 
-    async def _on_component_event(self, event_name: str, data: BasePayload, source: str) -> None:
+    async def _on_named_event(self, event_name: str, data: BasePayload, source: str) -> None:
+        """通用命名事件记录：type = 事件名（planner.decision / streamer.stage / live.*）。
+
+        场次主键进 ``source`` 字段，供按场过滤回看。
+        """
         try:
             dict_data = data.model_dump() if isinstance(data, BaseModel) else {}
-            event_type = COMPONENT_EVENT_TYPE_MAP.get(event_name, SYSTEM_STATUS_TYPE)
+            summary = str(dict_data.get("detail") or dict_data.get("title") or dict_data.get("reason") or event_name)
             self._record(
                 EventRecord(
                     id=data.id if hasattr(data, "id") else "",
-                    type=event_type,
+                    type=event_name,
                     level="info",
-                    source=dict_data.get("name", "unknown"),
-                    summary=f"{event_type}: {dict_data.get('name', '')}",
+                    source=str(dict_data.get("live_session_id", "") or source),
+                    summary=summary[:200],
+                    data=dict_data,
+                )
+            )
+        except Exception as e:
+            logger.warning(f"记录 {event_name} 事件失败: {e}")
+
+    async def _on_component_event(self, event_name: str, data: BasePayload, source: str) -> None:
+        try:
+            dict_data = data.model_dump() if isinstance(data, BaseModel) else {}
+            self._record(
+                EventRecord(
+                    id=data.id if hasattr(data, "id") else "",
+                    type=event_name,
+                    level="info",
+                    source=str(dict_data.get("live_session_id", "") or source),
+                    summary=f"{event_name}: {dict_data.get('message', '')}"[:200],
                     data=dict_data,
                 )
             )

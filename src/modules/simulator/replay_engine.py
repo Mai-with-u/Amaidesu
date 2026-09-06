@@ -62,8 +62,13 @@ class ReplayEngine:
         for record in read_day_events(date_str, self._persist_dir):
             if record.type != "room.message.danmaku":
                 continue
+            # 兼容旧录制（场次主键化前 live_session_id 为房间字符串）：统一清零，
+            # 回放事件经场次盖章拦截器归属到当前回放场次
+            data = dict(record.data)
+            if not isinstance(data.get("live_session_id"), int):
+                data["live_session_id"] = 0
             try:
-                payload = RoomMessagePayload.model_validate(record.data)
+                payload = RoomMessagePayload.model_validate(data)
             except Exception as exc:
                 self.logger.debug(f"回放跳过无法解析的录制记录: {exc}")
                 continue

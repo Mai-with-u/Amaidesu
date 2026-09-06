@@ -10,14 +10,19 @@
 字段说明：
 - ``should_reply``: 是否参与回复（Planner 核心裁决）
 - ``target``: 要回应的弹幕 message_id 或片段（None 表示无特定目标）
+- ``reply_to``: 本轮回复所指向弹幕的 message_id（Planner 从批次编号中选取；
+  与 live_chat 观众行 message_id 构成"回复了哪条"的可查询关联）
 - ``topic_summary``: 当前话题摘要（来自态势缓存，给 Stage 2 提供上下文）
 - ``reply_guidance``: 给 Replyer 的回复指引（语气、重点等）
 - ``confidence``: 参与判断置信度 [0.0, 1.0]
+- ``silent_reason``: 静默原因标记。``low_confidence``=LLM 想回但被本地低置信度
+  裁决压制（should_reply 改写为 False）；None=无本地压制（LLM 自己决定沉默）。
+  仅由 Planner 降级路径填写，LLM 原生输出不产生该字段。
 - ``may_advance`` / ``need_more_time`` / ``branch_id``: Planner 顺带评估（仅 Agenda 激活时有意义）
 
 兼容性：
-- ``may_advance`` / ``need_more_time`` / ``branch_id`` 全部带默认值，旧 Planner 输出
-  （无这些字段）的 JSON 仍可正常解析。
+- ``may_advance`` / ``need_more_time`` / ``branch_id`` / ``reply_to`` / ``silent_reason``
+  全部带默认值，旧 Planner 输出（无这些字段）的 JSON 仍可正常解析。
 - ``version`` 由 "1.1" 升到 "2.0"（Wave 6：Agent 重命名）。
 """
 
@@ -39,9 +44,11 @@ class DecisionPlan(BaseModel):
 
     should_reply: bool = False
     target: Optional[str] = None
+    reply_to: Optional[str] = None
     topic_summary: str = ""
     reply_guidance: str = ""
     confidence: float = 0.0
+    silent_reason: Optional[str] = None
     may_advance: bool = False
     need_more_time: bool = False
     branch_id: Optional[str] = None

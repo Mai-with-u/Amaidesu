@@ -49,6 +49,11 @@ from src.modules.config.schemas.base import BaseConfig
 from src.modules.context.models import MessageRole
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.planner import (
+    PlannerBatchItem,
+    PlannerDecisionPayload,
+    StreamerStagePayload,
+)
 from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.logging import get_logger
@@ -223,6 +228,7 @@ class StreamerAgent(BaseAgent):
         speech_config: Optional[Dict[str, Any]] = None,
         tts_engine: Optional["TTSProvider"] = None,
         subtitle_service: Optional["SubtitleService"] = None,
+        session_manager: Optional[Any] = None,
     ) -> None:
         """初始化主播 Agent。
 
@@ -265,6 +271,9 @@ class StreamerAgent(BaseAgent):
                 装配期由字幕基建工厂构造后注入；``None`` 时发言管线
                 跳过字幕显示，与 TTS 关闭正交——字幕关闭不影响业务事件
                 与 TTS 入队，仅关闭视觉字幕渲染通道。
+            session_manager: 可选 ``LiveSessionManager``（场次唯一事实源）。
+                后台心跳按其解析的当前场次主键写 live_sessions 实时状态；
+                ``None`` 时心跳降级跳过（场次归属由管理器负责，Agent 不自建）。
         """
         super().__init__(event_bus=event_bus)
         self.typed_config = config
@@ -275,6 +284,7 @@ class StreamerAgent(BaseAgent):
         self._tool_registry = tool_registry
         self._capabilities_provider = capabilities_provider
         self._sqlite = sqlite_store
+        self._session_manager = session_manager
         self._persona_provider = persona_provider
         # 记忆后端（可选；None 时记忆相关功能整体降级）
         self._memory = memory
@@ -372,7 +382,8 @@ class StreamerAgent(BaseAgent):
             background_config,
             room_state=self._room_state,
             llm_service=llm_manager,
-            live_session_store=sqlite_store,  # live_sessions 心跳落库（SQLiteStore.update_live_session_heartbeat）
+            live_session_store=sqlite_store,  # live_sessions 实时状态落库（按 session_manager 解析的当前场次）
+            session_manager=session_manager,  # 场次归属解析（None 时心跳降级跳过）
             context_service=context_service,
             memory=memory,  # 记忆写入面：摘要 → ingest；None 时降级
             event_bus=event_bus,  # 高价值事件（礼物/SC）→ ingest
@@ -415,6 +426,8 @@ class StreamerAgent(BaseAgent):
         self._utterance_queue: Optional[UtteranceQueue] = None
         # utterance_id 自增计数器（进程内单调；启动时复位为 0，首次自增到 1）
         self._utterance_seq: int = 0
+        # 决策轮次自增计数器（round_id 生成用；与 utterance_seq 同风格）
+        self._round_seq: int = 0
 
         self._logger.info(
             f"StreamerAgent 已构造 "
@@ -625,7 +638,9 @@ class StreamerAgent(BaseAgent):
         if payload.message_type != "danmaku":
             return
         try:
-            msg = NormalizedMessage(
+            # message_id 透传 payload 值（采集器/模拟器生成，落库与回复关联同键）；
+            # 缺省时 NormalizedMessage 自动生成 UUID，保证批次内 [id:] 编号可用
+            msg_kwargs: Dict[str, Any] = dict(
                 text=payload.content,
                 source=source or "room.message.danmaku",
                 data_type="text",
@@ -634,6 +649,9 @@ class StreamerAgent(BaseAgent):
                 user_id=payload.user.id,
                 user_nickname=payload.user.name,
             )
+            if payload.message_id:
+                msg_kwargs["message_id"] = payload.message_id
+            msg = NormalizedMessage(**msg_kwargs)
             require_message_type(msg.data_type)
         except Exception as exc:
             self._logger.warning(f"弹幕事件转 NormalizedMessage 失败: {exc}")
@@ -813,30 +831,109 @@ class StreamerAgent(BaseAgent):
         trigger_reason: str,
         proactive: bool = False,
     ) -> Dict[str, Any]:
-        """两阶段决策：Planner → 消费 plan 评估 + 触发 reply 工具。
+        """两阶段决策外壳：Planner → 消费 plan 评估 + 触发 reply 工具。
+
+        决策可观测收口（每轮恰好一条 planner.decision，成功/失败/降级全覆盖）：
+        生成本轮 ``round_id``，边界处发射 ``streamer.stage``（planning → idle），
+        决策收口处发射 ``planner.decision``——观察者据此回答"主播为什么这么做/
+        为什么没反应"，无需翻日志。两阶段执行逻辑在 ``_decide_round``。
 
         Returns:
             决策结果视图（正常 flush 循环忽略返回值；调试门面
             ``debug_test_decision`` 消费它向 Dashboard 回传完整中间产物）::
 
                 {
+                    "round_id": str,
                     "trigger_reason": str,
                     "proactive": bool,
-                    "plan": {"should_reply", "target", "topic_summary", "reply_guidance", "confidence"} | None,
+                    "forced": bool,
+                    "plan": {
+                        "should_reply",
+                        "target",
+                        "reply_to",
+                        "topic_summary",
+                        "reply_guidance",
+                        "confidence",
+                        "silent_reason",
+                    }
+                    | None,
                     "speech": str | None,
                     "emotion": str | None,
                     "utterance_id": str | None,
+                    "reply_to_message_id": str | None,  # 回复关联键
+                    "silent_reason": str | None,  # low_confidence=低置信度压制
                     "error": str | None,  # planner/reply 失败原因，成功为 None
+                    "planner_raw": str,  # Planner LLM 原始输出（截断）
+                    "llm_request_id": str | None,  # LLM 请求历史指针
+                    "planner_duration_ms": int,
+                    "reply_duration_ms": int,
+                    "total_duration_ms": int,
                 }
         """
+        round_id = self._next_round_id()
+        started_ms = now_ms()
+        await self._emit_streamer_stage(
+            stage="planning",
+            agent_state="running",
+            round_id=round_id,
+            detail=trigger_reason,
+        )
+        result = await self._decide_round(
+            batch,
+            round_id=round_id,
+            started_ms=started_ms,
+            forced=forced,
+            trigger_reason=trigger_reason,
+            proactive=proactive,
+        )
+        await self._emit_planner_decision(result, batch)
+        closing = "决策轮结束"
+        if result.get("speech"):
+            closing += "：发言已出"
+        elif result.get("error"):
+            closing += f"：{result['error']}"
+        elif result.get("silent_reason"):
+            closing += f"：静默（{result['silent_reason']}）"
+        await self._emit_streamer_stage(
+            stage="idle",
+            agent_state="wait",
+            round_id=round_id,
+            detail=closing,
+        )
+        return result
+
+    async def _decide_round(
+        self,
+        batch: List[NormalizedMessage],
+        *,
+        round_id: str,
+        started_ms: int,
+        forced: bool,
+        trigger_reason: str,
+        proactive: bool,
+    ) -> Dict[str, Any]:
+        """两阶段决策执行体（被 ``_make_two_stage_decision`` 外壳驱动）。
+
+        决策过程副产品（原始输出/请求 ID/分段耗时）随 ``result`` 带回，
+        由外壳统一发射决策事件；本方法不直接发事件。
+        """
         result: Dict[str, Any] = {
+            "round_id": round_id,
             "trigger_reason": trigger_reason,
             "proactive": proactive,
+            "forced": forced,
             "plan": None,
             "speech": None,
             "emotion": None,
             "utterance_id": None,
+            "reply_to_message_id": None,
+            "silent_reason": None,
             "error": None,
+            "planner_raw": "",
+            "llm_request_id": None,
+            "planner_duration_ms": 0,
+            "reply_duration_ms": 0,
+            "total_duration_ms": now_ms() - started_ms,
         }
 
         # 1. 读历史（duck-typed）
@@ -845,7 +942,8 @@ class StreamerAgent(BaseAgent):
         # 2. 拼装 Agenda 上下文
         agenda_text = self._build_agenda_text()
 
-        # 3. Planner 决策
+        # 3. Planner 决策（失败细节经 Planner.last_failure 带出，供决策事件区分降级原因）
+        planner_started_ms = now_ms()
         try:
             plan = await self._planner.plan(
                 batch,
@@ -858,29 +956,42 @@ class StreamerAgent(BaseAgent):
             self._logger.error(f"Planner 调用异常: {exc}", exc_info=True)
             plan = None
             result["error"] = f"planner_failed: {exc}"
+        result["planner_duration_ms"] = now_ms() - planner_started_ms
+        result["planner_raw"] = (getattr(self._planner, "last_raw_content", "") or "")[:2000]
+        result["llm_request_id"] = getattr(self._planner, "last_request_id", None)
 
         if plan is None:
             self._planner_failures += 1
             self._total_no_action += 1
-            result["error"] = result["error"] or "planner_failed: 返回 None（LLM 异常/脏 JSON/低置信度）"
+            detail = getattr(self._planner, "last_failure", None)
+            result["error"] = result["error"] or (
+                f"planner_failed: {detail}" if detail else "planner_failed: 返回 None（LLM 异常/脏 JSON/低置信度）"
+            )
+            result["total_duration_ms"] = now_ms() - started_ms
             return result
 
         result["plan"] = {
             "should_reply": plan.should_reply,
             "target": plan.target,
+            "reply_to": plan.reply_to,
             "topic_summary": plan.topic_summary,
             "reply_guidance": plan.reply_guidance,
             "confidence": plan.confidence,
+            "silent_reason": plan.silent_reason,
         }
+        result["reply_to_message_id"] = plan.reply_to
+        result["silent_reason"] = plan.silent_reason
 
         # 4. Plan 裁决
         if not plan.should_reply:
             self._total_no_action += 1
             self._consume_plan_assessment(plan)
+            result["total_duration_ms"] = now_ms() - started_ms
             return result
 
         # 5. 触发 reply 工具（StreamerAgent 直接调 reply Provider.invoke，
         #    跳过 LLM chat loop——Agent 内脏直连 LLM executor）
+        reply_started_ms = now_ms()
         try:
             reply_result = await self._reply_provider.invoke(  # type: ignore[union-attr]
                 self._make_reply_invocation(plan, batch)
@@ -890,21 +1001,28 @@ class StreamerAgent(BaseAgent):
             self._replyer_failures += 1
             self._total_no_action += 1
             result["error"] = f"reply_tool_failed: {exc}"
+            result["reply_duration_ms"] = now_ms() - reply_started_ms
+            result["total_duration_ms"] = now_ms() - started_ms
             return result
+        result["reply_duration_ms"] = now_ms() - reply_started_ms
 
         if not reply_result.success:
             self._replyer_failures += 1
             self._total_no_action += 1
             self._logger.warning(f"Reply 工具返回失败: {reply_result.error_message}")
             result["error"] = f"reply_tool_failed: {reply_result.error_message}"
+            result["total_duration_ms"] = now_ms() - started_ms
             return result
 
         # 5.5 解析 reply payload 并分发到发言管线（speech → TTS / emotion → VTS）。
         # 决策循环契约：此分支任何异常都不能阻断后续 RoomState/Agenda 更新。
-        # replied_count 闭环：从 batch 反查本次回复的观众 user_id，透传到发言管线。
+        # replied_count 闭环：从 batch 反查本次回复的观众 user_id，透传到发言管线；
+        # reply_to_message_id（Planner 指向的具体弹幕）随发言事件落库，形成
+        # "主播回应了哪条弹幕"的可查询关联。
         speech_info = self._dispatch_speech_and_emotion(
             reply_result.content,
             self._resolve_reply_target_user(plan, batch),
+            reply_to_message_id=plan.reply_to,
         )
         if speech_info is not None:
             result["speech"], result["emotion"], result["utterance_id"] = speech_info
@@ -926,6 +1044,7 @@ class StreamerAgent(BaseAgent):
             except Exception:
                 pass
 
+        result["total_duration_ms"] = now_ms() - started_ms
         return result
 
     def _make_reply_invocation(
@@ -952,20 +1071,27 @@ class StreamerAgent(BaseAgent):
     ) -> Optional[str]:
         """从 batch 反查本次回复的观众 user_id。
 
-        ``DecisionPlan.target`` 是弹幕 ``message_id`` 或文本片段，本身不含
-        user_id；必须从 batch 里命中对应消息才能拿到 ``user_id``。匹配顺序：
-        message_id 等值 → text 包含/相等。全未命中时保守兜底为 batch 最后
-        一条消息的 user_id（"回复最后那条"通常是意图所指）；batch 为空或
-        target 为空时返回 None。该方法只做反查，不写状态、不发事件；异常
-        吞掉记 warning 不上抛（决策循环必须继续）。
+        优先消费 ``plan.reply_to``（Planner 指向的弹幕 message_id——按
+        message_id 等值命中即可）；未提供时回退 ``plan.target``（弹幕
+        ``message_id`` 或文本片段）匹配：message_id 等值 → text 包含/相等。
+        全未命中时保守兜底为 batch 最后一条消息的 user_id（"回复最后那条"
+        通常是意图所指）；batch 为空或 target 为空时返回 None。该方法只做
+        反查，不写状态、不发事件；异常吞掉记 warning 不上抛（决策循环必须继续）。
         """
-        target = getattr(plan, "target", None)
+        reply_to = getattr(plan, "reply_to", None)
+        target = reply_to or getattr(plan, "target", None)
         if not isinstance(target, str) or not target:
             return None
         if not batch:
             return None
 
         try:
+            # reply_to 是精确 message_id，等值命中即返回
+            if reply_to:
+                for msg in batch:
+                    if getattr(msg, "message_id", None) == reply_to:
+                        return getattr(msg, "user_id", None)
+                return None
             for msg in batch:
                 if getattr(msg, "message_id", None) == target:
                     return getattr(msg, "user_id", None)
@@ -1007,10 +1133,105 @@ class StreamerAgent(BaseAgent):
         self._utterance_seq += 1
         return f"utt_{now_ms()}_{self._utterance_seq}"
 
+    def _next_round_id(self) -> str:
+        """生成下一个决策轮次 ID（格式 ``rnd_{epoch_ms}_{seq}``）。
+
+        与 utterance_id 同风格的进程内单调关联键：本轮弹幕批次、决策记录、
+        发言、工具结果经它成组（观察器按轮渲染）。
+        """
+        self._round_seq += 1
+        return f"rnd_{now_ms()}_{self._round_seq}"
+
+    async def _emit_streamer_stage(
+        self,
+        *,
+        stage: str,
+        agent_state: str,
+        round_id: Optional[str] = None,
+        detail: str = "",
+    ) -> None:
+        """发布 ``streamer.stage`` 阶段状态事件（决策循环内直接 await，保证先后顺序）。"""
+        if self._event_bus is None:
+            return
+        payload = StreamerStagePayload(
+            stage=stage,
+            agent_state=agent_state,
+            round_id=round_id,
+            detail=detail,
+        )
+        try:
+            await self._event_bus.emit(
+                CoreEvents.STREAMER_STAGE,
+                payload,
+                source="streamer_agent.stage",
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 观测事件不阻断决策循环
+            self._logger.warning(f"streamer.stage 发布失败（已忽略）: stage={stage}, err={exc}")
+
+    async def _emit_planner_decision(self, result: Dict[str, Any], batch: List[NormalizedMessage]) -> None:
+        """发布 ``planner.decision`` 决策轮记录事件（决策循环内直接 await，保证先于 idle 状态）。
+
+        从 ``_decide_round`` 的结果视图构造决策事件：触发原因、批次摘要、
+        决策结论、回复关联、失败原因、原始输出指针与分段耗时全部入事件，
+        观察者与互动分析不再依赖日志。
+        """
+        if self._event_bus is None:
+            return
+        # 关联/指针字段统一收口为 str（鸭子类型 mock 响应可能带任意对象属性）
+        request_id = result.get("llm_request_id")
+        reply_to = result.get("reply_to_message_id")
+        silent = result.get("silent_reason")
+        payload = PlannerDecisionPayload(
+            round_id=str(result.get("round_id") or ""),
+            trigger_reason=str(result.get("trigger_reason") or ""),
+            proactive=bool(result.get("proactive")),
+            forced=bool(result.get("forced")),
+            batch=[
+                PlannerBatchItem(
+                    message_id=str(getattr(msg, "message_id", "") or ""),
+                    user_id=str(getattr(msg, "user_id", "") or ""),
+                    user_name=str(getattr(msg, "user_nickname", "") or ""),
+                    text=(str(getattr(msg, "text", "") or ""))[:120],
+                )
+                for msg in batch or []
+            ],
+            should_reply=bool((result.get("plan") or {}).get("should_reply", False)),
+            target=(
+                str((result.get("plan") or {}).get("target")) if (result.get("plan") or {}).get("target") else None
+            ),
+            topic_summary=str((result.get("plan") or {}).get("topic_summary", "") or ""),
+            reply_guidance=str((result.get("plan") or {}).get("reply_guidance", "") or ""),
+            confidence=float((result.get("plan") or {}).get("confidence", 0.0) or 0.0),
+            reply_to_message_id=str(reply_to) if reply_to else None,
+            silent_reason=str(silent) if silent else None,
+            speech=(str(result["speech"]) if result.get("speech") else None),
+            emotion=(str(result["emotion"]) if result.get("emotion") else None),
+            utterance_id=(str(result["utterance_id"]) if result.get("utterance_id") else None),
+            error=(str(result["error"]) if result.get("error") else None),
+            planner_raw=str(result.get("planner_raw", "") or ""),
+            llm_request_id=str(request_id) if request_id else None,
+            planner_duration_ms=int(result.get("planner_duration_ms", 0) or 0),
+            reply_duration_ms=int(result.get("reply_duration_ms", 0) or 0),
+            total_duration_ms=int(result.get("total_duration_ms", 0) or 0),
+        )
+        try:
+            await self._event_bus.emit(
+                CoreEvents.PLANNER_DECISION,
+                payload,
+                source="streamer_agent.decision",
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 观测事件不阻断决策循环
+            self._logger.warning(f"planner.decision 发布失败（已忽略）: round_id={result.get('round_id')}, err={exc}")
+
     def _dispatch_speech_and_emotion(
         self,
         reply_content: Any,
         reply_target_user_id: Optional[str] = None,
+        reply_to_message_id: Optional[str] = None,
     ) -> Optional[tuple]:
         """解析 reply payload 并触发下游管线（决策循环安全：永不抛异常）。
 
@@ -1019,6 +1240,8 @@ class StreamerAgent(BaseAgent):
                 解码为 ``{speech, emotion, action, metadata}``。
             reply_target_user_id: 本次回复的观众 user_id（可选；透传到
                 ``streamer.speech`` 业务事件，None 表示主动发言/无特定对象）。
+            reply_to_message_id: 本次回复所指向弹幕的 message_id（可选；
+                来自 Planner 决策输出，透传到发言事件并落库为互动关联）。
 
         行为契约：
         - JSON 解析失败 → WARN 日志 + 直接返回（决策循环不受影响）
@@ -1065,7 +1288,13 @@ class StreamerAgent(BaseAgent):
         # TTS 启用时复用同一 utterance_id 入 TTS 队列。
         if cleaned_speech:
             utterance_id = self._next_utterance_id()
-            self._emit_streamer_speech(utterance_id, cleaned_speech, cleaned_emotion, reply_target_user_id)
+            self._emit_streamer_speech(
+                utterance_id,
+                cleaned_speech,
+                cleaned_emotion,
+                reply_target_user_id,
+                reply_to_message_id=reply_to_message_id,
+            )
             self._record_streamer_speech_history(cleaned_speech, cleaned_emotion)
             self._schedule_subtitle_show(cleaned_speech, utterance_id)
             if self._tts_enabled and self._utterance_queue is not None:
@@ -1083,6 +1312,7 @@ class StreamerAgent(BaseAgent):
         text: str,
         emotion: Optional[str],
         target_user_id: Optional[str] = None,
+        reply_to_message_id: Optional[str] = None,
     ) -> None:
         """发布 ``streamer.speech`` 业务事件（fire-and-forget；下游不得触发新决策）。"""
         if self._event_bus is None:
@@ -1092,6 +1322,7 @@ class StreamerAgent(BaseAgent):
             text=text,
             emotion=emotion,
             target_user_id=target_user_id,
+            reply_to_message_id=reply_to_message_id,
         )
 
         async def _do_emit() -> None:

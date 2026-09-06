@@ -1,7 +1,7 @@
 ---
 name: amaidesu_planner
-version: "2.3"
-description: "Amaidesu 两阶段决策 - Planner 阶段模板：判断直播间是否需要主播介入，输出决策计划 JSON（v2.3：PlannerAssembler 八段上下文 + behavior_style 决策侧人设准则注入；personality/style_constraints/bot_name 仅进 Replyer 表达侧）"
+version: "2.4"
+description: "Amaidesu 两阶段决策 - Planner 阶段模板：判断直播间是否需要主播介入，输出决策计划 JSON（v2.4：新增 reply_to 字段——当回复针对某条具体弹幕时，必须以该弹幕的 [id:...] 编号作为 reply_to 输出，形成'回复了哪条弹幕'的关联事实）"
 variables:
   - context_block
   - forced
@@ -140,7 +140,7 @@ proactive = $proactive
 
 严格输出以下 JSON 格式，不要添加 ```json 标记或任何其他文字：
 
-{"should_reply": true, "target": "用户名或'all'", "topic_summary": "一句话概述本轮要围绕的话题", "reply_guidance": "给Replyer的方向性指引", "confidence": 0.8}
+{"should_reply": true, "target": "用户名或'all'", "reply_to": "被回复弹幕的[id:]编号或null", "topic_summary": "一句话概述本轮要围绕的话题", "reply_guidance": "给Replyer的方向性指引", "confidence": 0.8}
 
 ### 字段说明（严格对齐 DecisionPlan 模型）
 
@@ -149,6 +149,11 @@ proactive = $proactive
   - 某个具体用户名：当回应某条点名/提问/SC 时。
   - `"all"`：当面向全直播间（主动开口、围绕话题、感谢全体等）。
   - 空串 `""`：当 `should_reply=false` 时。
+- **reply_to** (string | null)：本轮回复所指向的那条弹幕。
+  - 当 `should_reply=true` 且回复针对**某一条具体弹幕**（点名/提问/SC/礼物留言）时，必须填该弹幕行末尾 `[id:...]` 中的编号（原样照抄，不要改写）。
+  - 当回复面向全直播间、或无法对应到单条弹幕时，填 `null`。
+  - 当 `should_reply=false` 时，填 `null`。
+  - **禁止**编造编号、引用上一批弹幕的编号、或把文本片段当作编号。
 - **topic_summary** (string)：用一句话（≤30 字）概括本轮要围绕的话题或动作。Replyer 会以此作为聚焦点。例：`"感谢SC并回应关于游戏的提问"`、`"主动聊一聊当前游戏剧情"`、`"无视本批，保持静默"`。
 - **reply_guidance** (string)：给 Replyer 的**任务式、方向性**指引（不是台词！）。描述本轮回复的目标、要点、态度倾向、需要避开的雷区等。例：`"用户'XXX'问了游戏难度，请以主播视角简短回答，可以带一点吐槽，不要长篇大论"`。长度建议 50-150 字。
 - **confidence** (float, 0-1)：你对这个决策的置信度。0.5 以下表示很纠结，0.9 以上表示非常确定。
@@ -158,3 +163,4 @@ proactive = $proactive
 - ❌ 在 `reply_guidance` 里直接写出主播的台词（那是 Replyer 的职责）。
 - ❌ 输出 DecisionPlan 之外的任何字段（如 `text` / `emotion` / `action` / 节奏控制参数等，这些都由后续阶段处理）。
 - ❌ 输出非 JSON 文本、添加注释、使用 markdown 代码块包裹。
+- ❌ `reply_to` 填用户名、文本片段或编造的编号（编号只能来自本批弹幕行末尾的 `[id:...]`）。

@@ -13,7 +13,6 @@ from src.modules.events.event_bus import EventBus
 from src.modules.simulator.service import SimulatorService
 from src.modules.simulator.types import Persona, PersonaRole
 from src.modules.storage import SQLiteStore
-from src.modules.storage.storage_ledger import session_pk_to_int
 
 
 @pytest.fixture
@@ -31,7 +30,13 @@ async def store(temp_db_path: Path) -> AsyncGenerator[SQLiteStore, None]:
     await s.close()
 
 
-SESSION_ID = "simulated_viewers"
+# 测试用场次管理器替身：固定返回预置主键（模拟"当前场次"解析结果）
+SESSION_PK = 888
+
+
+class _FakeSessionManager:
+    async def resolve_pk(self) -> int:
+        return SESSION_PK
 
 
 class _FakeConfigService:
@@ -43,14 +48,14 @@ class _FakeConfigService:
 
 async def _setup_service(store: SQLiteStore) -> SimulatorService:
     """构造并 setup 一个不自动启动的 SimulatorService"""
-    service = SimulatorService(event_bus=EventBus(), sqlite_store=store)
+    service = SimulatorService(event_bus=EventBus(), sqlite_store=store, session_manager=_FakeSessionManager())
     await service.setup(_FakeConfigService())
     return service
 
 
 async def _seed_chat(store: SQLiteStore, count: int = 20) -> None:
-    """写入 count 条消息到 live_chat 模拟场次（含主播发言，公共流混合）"""
-    pk = session_pk_to_int(SESSION_ID)
+    """写入 count 条消息到 live_chat 当前场次（含主播发言，公共流混合）"""
+    pk = SESSION_PK
     base_ts = 1_700_000_000_000
     for i in range(count):
         role = "assistant" if i % 5 == 0 else "viewer"
@@ -84,7 +89,7 @@ async def test_window_reads_mixed_stream(store: SQLiteStore) -> None:
     await _seed_chat(store, count=10)
     service = await _setup_service(store)
 
-    window = await service._fetch_world_window(persona=_persona(PersonaRole.FAN), session_id=SESSION_ID)
+    window = await service._fetch_world_window(persona=_persona(PersonaRole.FAN))
 
     assert any(line.startswith("主播:") for line in window), "主播发言应进入公共流窗口"
     assert any(line.startswith("观众") for line in window), "观众弹幕应进入公共流窗口"
@@ -97,8 +102,8 @@ async def test_window_per_role_defaults(store: SQLiteStore) -> None:
     await _seed_chat(store, count=20)
     service = await _setup_service(store)
 
-    veteran_window = await service._fetch_world_window(persona=_persona(PersonaRole.VETERAN), session_id=SESSION_ID)
-    passerby_window = await service._fetch_world_window(persona=_persona(PersonaRole.PASSERBY), session_id=SESSION_ID)
+    veteran_window = await service._fetch_world_window(persona=_persona(PersonaRole.VETERAN))
+    passerby_window = await service._fetch_world_window(persona=_persona(PersonaRole.PASSERBY))
 
     assert len(veteran_window) == 12
     assert len(passerby_window) == 2
@@ -111,7 +116,7 @@ async def test_window_persona_override_wins(store: SQLiteStore) -> None:
     service = await _setup_service(store)
 
     window = await service._fetch_world_window(
-        persona=_persona(PersonaRole.VETERAN, window=3), session_id=SESSION_ID
+        persona=_persona(PersonaRole.VETERAN, window=3),
     )
     assert len(window) == 3
 
@@ -122,7 +127,7 @@ async def test_window_latest_messages_last(store: SQLiteStore) -> None:
     await _seed_chat(store, count=20)
     service = await _setup_service(store)
 
-    window = await service._fetch_world_window(persona=_persona(PersonaRole.VETERAN), session_id=SESSION_ID)
+    window = await service._fetch_world_window(persona=_persona(PersonaRole.VETERAN))
     assert window[-1].endswith("消息19"), "最新消息应在窗口末尾"
 
 
@@ -130,7 +135,7 @@ async def test_window_latest_messages_last(store: SQLiteStore) -> None:
 async def test_window_session_isolation(store: SQLiteStore) -> None:
     """窗口按场次隔离：其他场次的消息不进入。"""
     await _seed_chat(store, count=5)
-    other_pk = session_pk_to_int("live")
+    other_pk = SESSION_PK + 1
     await store.insert_live_chat(
         live_session_id=other_pk,
         timestamp_ms=1_700_000_999_000,
@@ -142,5 +147,5 @@ async def test_window_session_isolation(store: SQLiteStore) -> None:
     )
     service = await _setup_service(store)
 
-    window = await service._fetch_world_window(persona=_persona(PersonaRole.FAN), session_id=SESSION_ID)
+    window = await service._fetch_world_window(persona=_persona(PersonaRole.FAN))
     assert all("别场" not in line for line in window)
