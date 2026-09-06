@@ -38,48 +38,23 @@ Amaidesu 使用 **纯 DI（Pure DI）/ 手动 DI**——不依赖容器，符合
 
 ### 构造器注入（标准模式）
 
+组件在构造函数签名中显式声明所需服务，由组合根（`main.py::create_app_components`）构造并注入：
+
 ```python
-@decider("llm")
-class LLMDecider:
+class MyCollector(BaseCollector):
     def __init__(
         self,
         config: Dict[str, Any],
         event_bus: "EventBus",
-        llm_service: "LLMManager",
-        prompt_service: "PromptManager",
+        llm_manager: "LLMManager",
     ):
         self._event_bus = event_bus
-        self._llm_service = llm_service
-        self._prompt_service = prompt_service
+        self._llm_manager = llm_manager
 ```
 
-### 反射式装配（组件工厂 / 服务实例化）
-
-组件工厂与服务实例化（如 `SimulatorService` 构造依赖、Dashboard 组件装配）通过 `instantiate_with_di()`（类型匹配 DI）按需注入服务：
-
-```python
-from src.modules.di import instantiate_with_di
-
-services_by_type = {
-    EventBus: event_bus,
-    LLMManager: llm_service,
-    PromptManager: prompt_manager,
-}
-
-component = instantiate_with_di(
-    component_cls,
-    config=component_config,          # __init__ 的 config 参数自动注入
-    services_by_type=services_by_type,
-)
-```
-
-匹配规则（见 `src/modules/di/instantiation.py`）：
-- **按类型注解匹配**（非参数名）：`__init__` 参数的类型注解在 `services_by_type` 字典中查找服务
-- `Optional[X]` 自动解包为 `X`；`Union[X, Y]` 任一类型匹配即可
-- 基本类型（`Dict[str, Any]`、`int` 等）不参与注入，只通过 `config` 传入
-- 有默认值的参数在服务缺失时跳过（让默认值生效）；缺失必填服务抛 `DependencyInjectionError`
-
-每个组件只收到自己声明的依赖，不需要的服务不会传入。
+装配发生在组合根：每个组件的依赖在 `main.py` 中显式构造、显式传入——
+没有反射式实例化工具，也没有服务定位器。每个组件只收到自己声明的依赖，
+不需要的服务不会传入。
 
 ### 循环依赖的处理
 
@@ -92,7 +67,8 @@ if TYPE_CHECKING:
     from src.modules.llm.manager import LLMManager
 
 
-class MyCollector(BaseCollector):`n    def __init__(self, config, event_bus: "EventBus"):  # 字符串注解
+class MyCollector(BaseCollector):
+    def __init__(self, config, event_bus: "EventBus"):  # 字符串注解
         ...
 ```
 
@@ -109,7 +85,8 @@ class BadContext:
     prompt_service: Optional[Any] = None
 
 
-class BadComponent:`n    def __init__(self, config, context: BadContext):
+class BadComponent:
+    def __init__(self, config, context: BadContext):
         self._llm = context.llm_service  # 隐藏依赖，类型丢失
 ```
 
@@ -123,7 +100,8 @@ class BadComponent:`n    def __init__(self, config, context: BadContext):
 
 ```python
 # 正确
-class GoodComponent:`n    def __init__(self, config, event_bus: "EventBus"):
+class GoodComponent:
+    def __init__(self, config, event_bus: "EventBus"):
         self._llm = llm_service  # 显式依赖，类型安全
 ```
 
@@ -166,3 +144,7 @@ class PluginContext:
 ## 相关 ADR
 
 - ADR-001：Pipeline 曾用 DI 替代 Context（ADR 已随管道系统移除而废弃，DI 原则沿用）
+
+---
+
+*最后更新：2026-09-06（删除反射式装配节：src/modules/di 已随 v2 组合根显式装配移除；示例改为 v2 组件；修复代码块损坏字符）*

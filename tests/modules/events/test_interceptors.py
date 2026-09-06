@@ -12,7 +12,7 @@ EventBus 事件拦截器测试
 运行: uv run pytest tests/modules/events/test_interceptors.py -v
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 from pydantic import BaseModel, Field
@@ -117,6 +117,28 @@ class _RecordCallInterceptor(EventInterceptor):
         source: str,
     ) -> Optional[Dict[str, Any]]:
         self._record.append(self._name)
+        return payload
+
+
+class _ScopedAppendInterceptor(EventInterceptor):
+    """声明了 ``scope_prefixes`` 的追加拦截器（用于作用域过滤测试）"""
+
+    def __init__(self, marker: str, scope: Tuple[str, ...]) -> None:
+        self._marker = marker
+        self.scope_prefixes = scope
+
+    @property
+    def name(self) -> str:
+        return f"scoped_append_{self._marker}"
+
+    async def intercept(
+        self,
+        event_name: str,
+        payload: Dict[str, Any],
+        source: str,
+    ) -> Optional[Dict[str, Any]]:
+        if "message" in payload and isinstance(payload["message"], str):
+            payload["message"] = payload["message"] + self._marker
         return payload
 
 
@@ -379,6 +401,51 @@ class TestEventBusInterceptorIntegration:
         await event_bus.emit("evt", SimpleTestEvent(message="x"), source="s", wait=True)
 
         assert received == []
+
+
+# =============================================================================
+# 拦截器作用域测试
+# =============================================================================
+
+
+class TestInterceptorScope:
+    """``EventInterceptor.scope_prefixes`` 作用域过滤行为"""
+
+    @pytest.mark.asyncio
+    async def test_scoped_interceptor_skipped_out_of_scope(self):
+        """声明作用域后，域外事件不经过该拦截器"""
+        chain = InterceptorChain()
+        chain.register(_ScopedAppendInterceptor("[R]", ("room.message.",)))
+
+        result = await chain.apply("game.milestone", {"message": "x"}, "src")
+        assert result == {"message": "x"}  # 域外：未追加
+
+    @pytest.mark.asyncio
+    async def test_scoped_interceptor_applies_in_scope(self):
+        """声明作用域后，域内事件正常经过该拦截器"""
+        chain = InterceptorChain()
+        chain.register(_ScopedAppendInterceptor("[R]", ("room.message.",)))
+
+        result = await chain.apply("room.message.danmaku", {"message": "x"}, "src")
+        assert result == {"message": "x[R]"}
+
+    @pytest.mark.asyncio
+    async def test_empty_scope_applies_to_all_events(self):
+        """空作用域元组 = 不限域，对所有事件生效（基类默认）"""
+        chain = InterceptorChain()
+        chain.register(_AppendInterceptor("[A]"))  # 未声明作用域
+
+        for event_name in ("game.error", "room.message.gift", "tool.result.speak"):
+            result = await chain.apply(event_name, {"message": "x"}, "src")
+            assert result == {"message": "x[A]"}
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_interceptor_declares_room_message_scope(self):
+        """限流/相似过滤拦截器显式声明 room.message.* 作用域（防下游事件误伤）"""
+        from src.modules.events.interceptors import RateLimitInterceptor, SimilarFilterInterceptor
+
+        assert RateLimitInterceptor.scope_prefixes == ("room.message.",)
+        assert SimilarFilterInterceptor.scope_prefixes == ("room.message.",)
 
 
 # =============================================================================

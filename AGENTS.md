@@ -211,7 +211,7 @@ logger.info("信息日志"); logger.error("错误日志", exc_info=True)
 ### 依赖注入 / 配置读取
 
 - **服务对象**（LLMManager、PromptManager、EventBus 等）→ 构造器注入（DI）；禁止把服务塞进 Context 容器传递。详见 [依赖注入指南](docs/development/dependency-injection.md)
-- 配置：`config/` 目录 **7 文件**（core/model/agents/tools/memory/storage/background，首次运行从 Schema 自动生成；CONFIG_VERSION 2.0.4）；Agent 启用 `[agents].enabled` / 工具包启用 `[tools].enabled` / 拦截器配置 `[interceptors.*]`
+- 配置：`config/` 目录 **7 文件**（core/model/agents/tools/memory/storage/background，首次运行从 Schema 自动生成；CONFIG_VERSION 2.0.15）；Agent 启用 `[agents].enabled` / 工具包启用 `[tools].enabled` / 拦截器配置 `[interceptors.*]`
 
 ## 多工作树并行开发
 
@@ -296,4 +296,6 @@ Web Dashboard 两种模式（生产 60214 / 开发 60315）说明见 [快速开�
 
 ---
 
-*最后更新：2026-09-05（上下文四层架构落地：「其他约定」节 ContextService 条目补充为"L1 对话配对窗口（内存，DialogueTurn 配对视图；不持久化——启动时由组合根从 SQLite `live_chat` 通过 `seed_dialogue_turns` 回灌，见 `main.py::_bootstrap_context_from_live_chat`）"；「高频 API 速查」节未改；同日 v2.0.12 §8 概念修正：TTS 提升为基础设施（基础模块）。架构红线节"主体性判据"工具例子清单中 TTS 加注"自 v2.0.12 §8 修正起已是基础模块，不再是工具"——其余三例仍为工具；高频 API 速查节"事件系统" + "命名约定" + "依赖注入"未改；事件 Payload / 配置 Schema / 三范式 / 拦截器节未改；同日术语统一：'退役出工具池'改为'提升为基础设施'（避免误导为降级））*
+*最后更新：2026-09-06（接线收口：CONFIG_VERSION 2.0.4 → 2.0.15（实际值以 `multi_file_loader.py` 为准，此前本文档长期标注 2.0.4 已严重滞后）；2.0.15 收口 tools.toml 僵尸配置（output enabled 剥离 subtitle、删除 debug_console/sticker/remote_stream 死子段、obs_control 改名 obs、perception 剥离已删除的 text_adv_game 采集器），新增 `_migrate_tools_2_0_15` 钩子及迁移测试；拦截器新增 声明式作用域 `scope_prefixes`（空 = 不限域），限流/相似过滤显式限定 `room.message.*`；`ToolRegistry` 可挂载 EventBus 广播 `tool.result.<name>`；组合根发布 `core.startup`/`core.shutdown`；修复 EventHistoryRecorder 对 game.* 订阅的 model_class 错配；删除 v1 遗留：`src/modules/di/`（反射式装配，文档已同步）、`types/intent.py` 类型闭环、`integrations/amaidesu_plugin/`、`tests/mocks/` 死 mock、一次性 scripts；pyproject 清理零引用依赖）*
+
+*上次更新：2026-09-05（上下文四层架构落地：「其他约定」节 ContextService 条目补充为"L1 对话配对窗口（内存，DialogueTurn 配对视图；不持久化——启动时由组合根从 SQLite `live_chat` 通过 `seed_dialogue_turns` 回灌，见 `main.py::_bootstrap_context_from_live_chat`）"；「高频 API 速查」节未改；同日 v2.0.12 §8 概念修正：TTS 提升为基础设施（基础模块）。架构红线节"主体性判据"工具例子清单中 TTS 加注"自 v2.0.12 §8 修正起已是基础模块，不再是工具"——其余三例仍为工具；高频 API 速查节"事件系统" + "命名约定" + "依赖注入"未改；事件 Payload / 配置 Schema / 三范式 / 拦截器节未改；同日术语统一：'退役出工具池'改为'提升为基础设施'（避免误导为降级））

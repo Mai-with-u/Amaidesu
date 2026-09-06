@@ -1,17 +1,11 @@
 """
-RateLimitInterceptor —— 限流事件拦截器（v2 / Wave 5）
+RateLimitInterceptor —— 限流事件拦截器
 
-由 ``src/stages/input/pipelines/rate_limit/pipeline.py`` 转换（Pipeline → Interceptor）。
-
-差异：旧版是 ``Pipeline[NormalizedMessage]._process``；新版拦截 ``room.message.*`` /
-``input.message.received`` 等事件，按 (event_name + user_id) 键做滑动窗口限流。
+拦截 ``room.message.*`` 事件（作用域见 ``EventInterceptor.scope_prefixes``），
+按 (event_name + user_id) 键做滑动窗口限流：
 - 全局消息频率限制（滑动窗口）
 - 用户级消息频率限制（滑动窗口）
 - 超限返回 ``None`` 丢弃事件
-
-verbatim 边界：滑动窗口算法、过期清理逻辑 —— 未改动。
-仅调整：基类（Pipeline → EventInterceptor）、接口签名（item → event_name/payload/source）、
-统计点（self._stats → 仅日志）。
 """
 
 from __future__ import annotations
@@ -43,6 +37,10 @@ class RateLimitInterceptor(EventInterceptor):
         user_rate_limit (int): 每用户上限（默认 10）
         window_size (int): 滑动窗口大小（秒，默认 60）
     """
+
+    # 只拦截直播间行为流：user_id 提取对其他域 payload 无意义，会全部
+    # 落入 "unknown_user" 桶造成误丢
+    scope_prefixes = ("room.message.",)
 
     def __init__(
         self,

@@ -604,6 +604,67 @@ def _migrate_core_2_0_14(data: dict[str, Any]) -> list[str]:
     return changed
 
 
+def _migrate_tools_2_0_15(data: dict[str, Any]) -> list[str]:
+    """tools.toml 2.0.15：清理输出/感知白名单与子段中的僵尸条目。
+
+    ``[tools.output.config]`` / ``[tools.perception.config]`` 是 free-form dict，
+    Schema 漂移检测不剥离，僵尸条目会永久滞留用户文件，本钩子一次性收口：
+    - output enabled 中的 ``"subtitle"``：字幕已提升为核心基础设施
+      （core.toml [subtitle]），不再经工具池装配；
+    - output 死子段 ``debug_console`` / ``sticker`` / ``remote_stream``：
+      消费代码已删除或退化为纯类型桩；
+    - output 子段 ``obs_control`` 改名 ``obs``：与 bootstrap 装配键及
+      Schema 补全键对齐（旧键名导致该段配置永不生效）；
+    - perception enabled 中的 ``"text_adv_game"`` 及其子段：该采集器已删除。
+
+    原地修改、幂等，返回变更路径列表。
+    """
+    changed: list[str] = []
+
+    tools = data.get("tools")
+    if not isinstance(tools, dict):
+        return changed
+
+    # --- output 侧 ---
+    output = tools.get("output")
+    if isinstance(output, dict):
+        output_cfg = output.get("config")
+        if isinstance(output_cfg, dict):
+            enabled = output_cfg.get("enabled")
+            if isinstance(enabled, list) and "subtitle" in enabled:
+                enabled.remove("subtitle")
+                changed.append("tools.output.config.enabled")
+
+            for dead_key in ("debug_console", "sticker", "remote_stream"):
+                if dead_key in output_cfg:
+                    del output_cfg[dead_key]
+                    changed.append(f"tools.output.config.{dead_key}")
+
+            # obs_control → obs：装配键 / Schema 补全键统一用 "obs"
+            if "obs_control" in output_cfg and "obs" not in output_cfg:
+                output_cfg["obs"] = output_cfg.pop("obs_control")
+                changed.append("tools.output.config.obs")
+            elif "obs_control" in output_cfg:
+                del output_cfg["obs_control"]
+                changed.append("tools.output.config.obs_control")
+
+    # --- perception 侧 ---
+    perception = tools.get("perception")
+    if isinstance(perception, dict):
+        perception_cfg = perception.get("config")
+        if isinstance(perception_cfg, dict):
+            enabled = perception_cfg.get("enabled")
+            if isinstance(enabled, list) and "text_adv_game" in enabled:
+                enabled.remove("text_adv_game")
+                changed.append("tools.perception.config.enabled")
+
+            if "text_adv_game" in perception_cfg:
+                del perception_cfg["text_adv_game"]
+                changed.append("tools.perception.config.text_adv_game")
+
+    return changed
+
+
 # ---------------------------------------------------------------------------
 # 升级钩子注册表
 # ---------------------------------------------------------------------------
@@ -717,6 +778,12 @@ CONFIG_UPGRADE_HOOKS: tuple[ConfigUpgradeHook, ...] = (
         target_version="2.0.14",
         config_file="core.toml",
         migrate=_migrate_core_2_0_14,
+    ),
+    # 僵尸配置收口：output 白名单死条目 + 死子段 + obs_control 改名 + perception 死采集器
+    ConfigUpgradeHook(
+        target_version="2.0.15",
+        config_file="tools.toml",
+        migrate=_migrate_tools_2_0_15,
     ),
 )
 

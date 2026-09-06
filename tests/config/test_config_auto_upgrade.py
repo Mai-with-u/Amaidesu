@@ -372,3 +372,64 @@ class TestSubtitleMigration:
         assert config["core"]["subtitle"]["tk_gui"]["font_size"] == 30
         tools_content = (config_dir / "tools.toml").read_text(encoding="utf-8-sig")
         assert "subtitle" not in tools_content
+
+class TestSimulatorMigration:
+    """simulator.toml 独立文件 → core.toml [simulator]（带 SimulatorConfigSchema 清洗）。"""
+
+    def test_simulator_toml_migrated_into_core(self, config_dir: Path):
+        """旧 simulator.toml [simulator] 段迁入 core.toml [simulator]，用户值保留，源文件备份后删除。"""
+        _remove_section(config_dir, "core", "simulator")
+        (config_dir / "simulator.toml").write_text(
+            "[simulator]\nenabled = true\nbase_rate_per_minute = 9.5\n",
+            encoding="utf-8-sig",
+        )
+
+        config, _ = load_config_dir(config_dir)
+
+        assert not (config_dir / "simulator.toml").exists(), "源文件应被备份后删除"
+        assert config["core"]["simulator"]["enabled"] is True
+        assert config["core"]["simulator"]["base_rate_per_minute"] == 9.5
+
+    def test_simulator_constraint_violation_skips_merge_and_preserves_file(self, config_dir: Path):
+        """simulator.toml 数据违反 Schema 约束（清洗失败）→ 跳过合并、源文件保留。"""
+        _remove_section(config_dir, "core", "simulator")
+        # base_rate_per_minute 约束为 0.1..60.0，999.0 触发 ValidationError
+        (config_dir / "simulator.toml").write_text(
+            "[simulator]\nenabled = true\nbase_rate_per_minute = 999.0\n",
+            encoding="utf-8-sig",
+        )
+
+        config, _ = load_config_dir(config_dir)
+
+        assert (config_dir / "simulator.toml").exists(), "清洗失败应保留源文件待人工处理"
+        simulator_cfg = config["core"].get("simulator") or {}
+        assert simulator_cfg.get("base_rate_per_minute") != 999.0
+
+
+class TestOutputHandlersMigration:
+    """output.toml [handlers] → tools.toml [tools.output.config]。"""
+
+    def test_handlers_migrated_into_tools_output_config(self, config_dir: Path):
+        """旧 output.toml [handlers] 段并入 [tools.output.config]，源文件备份后删除。"""
+        (config_dir / "output.toml").write_text(
+            "[handlers]\nenabled = [\"vts\"]\n\n[handlers.vts]\nws_url = \"ws://127.0.0.1:8001\"\n",
+            encoding="utf-8-sig",
+        )
+
+        config, _ = load_config_dir(config_dir)
+
+        assert not (config_dir / "output.toml").exists(), "源文件应被备份后删除"
+        tools_cfg = config["tools"]["tools"]["output"]["config"]
+        assert "vts" in tools_cfg["enabled"]
+        assert tools_cfg["vts"]["ws_url"] == "ws://127.0.0.1:8001"
+
+    def test_output_toml_without_handlers_preserves_file(self, config_dir: Path):
+        """output.toml 不含 [handlers] 段 → 不迁移，源文件保留。"""
+        (config_dir / "output.toml").write_text(
+            "[other_section]\nfoo = 1\n",
+            encoding="utf-8-sig",
+        )
+
+        load_config_dir(config_dir)
+
+        assert (config_dir / "output.toml").exists(), "无 [handlers] 时源文件应原样保留"

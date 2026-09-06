@@ -113,7 +113,11 @@ class TestLoading:
         # v2.0.11：发声等待超时语义修正——覆盖合成+播放全周期，默认 10s → 60s。
         # v2.0.12：TTS 彻底基础模块化——tools.toml 四个引擎连接/合成子段
         # （edge_tts/gptsovits/voicebox/omni_tts）整体迁入 core.toml [tts.<engine>]。
-        assert version == "2.0.14"
+        # v2.0.13：字幕基础设施化——tools.toml 字幕子段迁入 core.toml [subtitle].tk_gui。
+        # v2.0.14：模拟器世界重构——三模式运行时数据入库（schema 新表）。
+        # v2.0.15：僵尸配置收口——output 白名单/死子段清理、obs_control 改名 obs、
+        # perception 剥离已删除的 text_adv_game 采集器。
+        assert version == "2.0.15"
 
     def test_drift_fixed_on_load(self, temp_config_dir):
         generate_default_configs(temp_config_dir)

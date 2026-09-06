@@ -8,7 +8,6 @@ v2 架构组合根：
 - AgentManager：管理 src/agents/ 下所有 Agent（包括主播 StreamerAgent）
 - ToolRegistry：管理 src/modules/tools/ 下所有 Output Domain 组件
 - DashboardServer：WebUI（仅作为 observer，不参与决策/执行数据流）
-- MCPServerService：外部 MCP 协议适配
 - LogStreamer + EventHistoryRecorder：日志 + 事件历史
 
 关闭顺序：CollectorManager.stop_all → SimulatorService.stop → AgentManager.stop_all → EventRecorder.stop → StorageLedger.stop → EventBus.cleanup → LLMManager.cleanup → ContextService.cleanup
@@ -49,6 +48,8 @@ from src.modules.events.interceptors import (
     RateLimitInterceptor,
     SimilarFilterInterceptor,
 )
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads import CoreShutdownPayload, CoreStartupPayload
 from src.modules.llm.manager import LLMManager
 from src.modules.logging import configure_from_config, get_logger
 from src.modules.logging.log_streamer import LogStreamer
@@ -452,7 +453,8 @@ async def create_app_components(
     agents_config = config.get("agents", {}) if isinstance(config, dict) else {}
     if agents_config:
         logger.info("初始化 AgentManager（src/agents/）...")
-        tool_registry = ToolRegistry()
+        # 挂载 EventBus：工具调用完成后广播 tool.result.<name>（Dashboard 溯源消费）
+        tool_registry = ToolRegistry(event_bus=event_bus)
         agent_manager = AgentManager(tool_registry=tool_registry, memory=memory)
 
         # TTS 引擎实例（基础设施，不经 ToolRegistry）：按 [tts] 段装配；
@@ -518,7 +520,7 @@ async def create_app_components(
             logger.info("look_at_screen 已注册（Pillow 截图后端）")
 
         agents_enabled = ((config.get("agents") or {}).get("enabled") or []) if isinstance(config, dict) else []
-        if {"game", "text_adv_game"} & set(agents_enabled) and "look_at_screen" not in tool_registry:
+        if "game" in agents_enabled and "look_at_screen" not in tool_registry:
             logger.warning(
                 "游戏 Agent 已启用但 look_at_screen 未注册"
                 "（[tools.look_at_screen].enabled=false？）——感知将走空快照降级路径"
@@ -846,10 +848,11 @@ async def _register_agents_from_config(
                 )
 
             tts = tts_section if isinstance(tts_section, dict) else {}
+            # render_timeout_ms 兜底与 Schema 默认一致（防引擎卡死的上限语义）
             speech_cfg = {
                 "enabled": bool(tts.get("enabled", False)),
                 "max_queue": int(tts.get("max_queue", 3) or 3),
-                "render_timeout_ms": int(tts.get("render_timeout_ms", 10000) or 0),
+                "render_timeout_ms": int(tts.get("render_timeout_ms", 60000) or 0),
             }
 
             agent = StreamerAgent(
@@ -1029,6 +1032,15 @@ async def run_shutdown(
             _saw_cancelled = _saw_cancelled or isinstance(e, asyncio.CancelledError)
             logger.error(f"{name} 失败: {e}")
 
+    # 关闭起点广播：趁 EventHistoryRecorder 还在订阅，先落 core.shutdown
+    if event_bus is not None:
+        with contextlib.suppress(Exception):
+            await event_bus.emit(
+                CoreEvents.CORE_SHUTDOWN,
+                CoreShutdownPayload(event=CoreEvents.CORE_SHUTDOWN, message="Amaidesu 开始关闭"),
+                source="Main",
+            )
+
     if collector_manager is not None:
         logger.info("正在停止 CollectorManager...")
         await safe_log(collector_manager.stop_all(), "CollectorManager.stop_all")
@@ -1140,6 +1152,13 @@ async def main() -> None:
         dev_webui=args.dev_webui,
         simulator_auto_start=not args.dry,
         storage_ledger_auto_start=not args.dry,
+    )
+
+    # 启动完成广播：此时 EventHistoryRecorder 已就绪，core.startup 会进事件历史
+    await event_bus.emit(
+        CoreEvents.CORE_STARTUP,
+        CoreStartupPayload(event=CoreEvents.CORE_STARTUP, message="Amaidesu 组件装配完成"),
+        source="Main",
     )
 
     if args.dry:

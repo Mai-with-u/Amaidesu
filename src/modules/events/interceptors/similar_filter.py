@@ -1,15 +1,9 @@
 """
-SimilarFilterInterceptor —— 相似文本过滤事件拦截器（v2 / Wave 5）
+SimilarFilterInterceptor —— 相似文本过滤事件拦截器
 
-由 ``src/stages/input/pipelines/similar_filter/pipeline.py`` 转换（Pipeline → Interceptor）。
-
-差异：旧版是 ``Pipeline[NormalizedMessage]._process``；新版拦截事件 payload，
-对其中文本字段做相似度匹配，超阈值返回 ``None`` 丢弃事件。
-
-verbatim 边界：相似度算法（difflib SequenceMatcher + 包含关系加权）、
-跨用户过滤策略 —— 未改动。
-仅调整：基类（Pipeline → EventInterceptor）、接口签名（item → event_name/payload/source）、
-group_id 改为 source 字段。
+拦截 ``room.message.*`` 事件（作用域见 ``EventInterceptor.scope_prefixes``），
+对 payload 中的文本字段做相似度匹配，超阈值返回 ``None`` 丢弃事件；
+相似度算法为 difflib SequenceMatcher + 包含关系加权，支持跨用户过滤。
 """
 
 from __future__ import annotations
@@ -40,6 +34,9 @@ class SimilarFilterInterceptor(EventInterceptor):
         min_text_length (int): 最小处理文本长度（默认 3）
         cross_user_filter (bool): 是否跨用户比较（默认 True）
     """
+
+    # 只过滤直播间行为流：避免把主播发言/工具结果等业务事件的相似文本误杀
+    scope_prefixes = ("room.message.",)
 
     def __init__(
         self,

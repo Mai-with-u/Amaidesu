@@ -1,10 +1,10 @@
 """
 基础数据类型定义
 
-定义了核心数据结构和类型。
+定义核心数据结构：NormalizedMessage（标准化消息）。
 """
 
-from .base import NormalizedMessage
+from .normalized_message import NormalizedMessage
 
 __all__ = [
     "NormalizedMessage",

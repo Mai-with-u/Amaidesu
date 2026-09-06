@@ -34,6 +34,7 @@ from src.modules.config.upgrade_hooks import (
     _migrate_tools_2_0_10,
     _migrate_tools_2_0_14,
     _migrate_core_2_0_14,
+    _migrate_tools_2_0_15,
     _strip_pipelines_2_0_4,
     _version_in_range,
     apply_upgrade_hooks,
@@ -518,6 +519,118 @@ class TestToolsHook2_0_9:
         assert _migrate_tools_2_0_9({"tools": {"perception": None}}) == []
         assert _migrate_tools_2_0_9({"tools": {"perception": {}}}) == []
         assert _migrate_tools_2_0_9({"tools": {"perception": {"config": {"read_pingmu": "not-a-dict"}}}}) == []
+
+
+class TestToolsHook2_0_15:
+    """tools.toml 2.0.15：僵尸配置收口。
+
+    - output enabled 中的 "subtitle"（字幕已提升核心基础设施）
+    - output 死子段 debug_console / sticker / remote_stream
+    - output 子段 obs_control 改名 obs（对齐装配键）
+    - perception enabled 中 "text_adv_game" 及其子段（采集器已删除）
+    """
+
+    def test_strips_zombie_output_entries_and_renames_obs(self):
+        data = {
+            "tools": {
+                "output": {
+                    "config": {
+                        "enabled": ["subtitle", "vts"],
+                        "debug_console": {"enabled": True},
+                        "sticker": {"path": "stickers/"},
+                        "remote_stream": {"host": "127.0.0.1"},
+                        "obs_control": {"host": "127.0.0.1", "port": 4455},
+                        "vts": {"ws_url": "ws://127.0.0.1:8001"},
+                    },
+                },
+            },
+        }
+        changed = _migrate_tools_2_0_15(data)
+
+        assert "tools.output.config.enabled" in changed
+        assert "tools.output.config.debug_console" in changed
+        assert "tools.output.config.sticker" in changed
+        assert "tools.output.config.remote_stream" in changed
+        assert "tools.output.config.obs" in changed
+
+        cfg = data["tools"]["output"]["config"]
+        assert cfg["enabled"] == ["vts"]
+        assert "debug_console" not in cfg
+        assert "sticker" not in cfg
+        assert "remote_stream" not in cfg
+        assert "obs_control" not in cfg
+        assert cfg["obs"]["host"] == "127.0.0.1"
+        assert cfg["obs"]["port"] == 4455
+        assert cfg["vts"]["ws_url"] == "ws://127.0.0.1:8001"
+
+    def test_strips_zombie_perception_entries(self):
+        data = {
+            "tools": {
+                "perception": {
+                    "config": {
+                        "enabled": ["text_adv_game", "console_input"],
+                        "text_adv_game": {"engine": "text_adv"},
+                        "console_input": {"user_id": "console_user"},
+                    },
+                },
+            },
+        }
+        changed = _migrate_tools_2_0_15(data)
+
+        assert "tools.perception.config.enabled" in changed
+        assert "tools.perception.config.text_adv_game" in changed
+
+        cfg = data["tools"]["perception"]["config"]
+        assert cfg["enabled"] == ["console_input"]
+        assert "text_adv_game" not in cfg
+        assert cfg["console_input"]["user_id"] == "console_user"
+
+    def test_obs_rename_skipped_when_obs_already_exists(self):
+        """已有 obs 段时直接丢弃 obs_control（不覆盖用户现有配置）。"""
+        data = {
+            "tools": {
+                "output": {
+                    "config": {
+                        "obs": {"host": "10.0.0.1"},
+                        "obs_control": {"host": "127.0.0.1"},
+                    },
+                },
+            },
+        }
+        changed = _migrate_tools_2_0_15(data)
+
+        cfg = data["tools"]["output"]["config"]
+        assert "tools.output.config.obs_control" in changed
+        assert "tools.output.config.obs" not in changed
+        assert cfg["obs"] == {"host": "10.0.0.1"}
+        assert "obs_control" not in cfg
+
+    def test_idempotent(self):
+        data = {
+            "tools": {
+                "output": {
+                    "config": {
+                        "enabled": ["subtitle", "vts"],
+                        "sticker": {},
+                        "obs_control": {"host": "h"},
+                    },
+                },
+                "perception": {
+                    "config": {
+                        "enabled": ["text_adv_game"],
+                        "text_adv_game": {},
+                    },
+                },
+            },
+        }
+        _migrate_tools_2_0_15(data)
+        changed_again = _migrate_tools_2_0_15(data)
+        assert changed_again == []
+
+    def test_missing_sections_noop(self):
+        assert _migrate_tools_2_0_15({}) == []
+        assert _migrate_tools_2_0_15({"tools": {}}) == []
+        assert _migrate_tools_2_0_15({"tools": {"output": {}, "perception": {}}}) == []
 
 
 class TestToolsHook2_0_10:

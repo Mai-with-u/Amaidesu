@@ -4,6 +4,7 @@
 ``InterceptorChain`` 持有按注册顺序排列的拦截器列表，对单个事件依次应用：
 - 拦截器返回 ``dict``（放行）：payload 传给下一个拦截器，最终传给下游 handler
 - 拦截器返回 ``None``（丢弃）：立即终止链，返回 ``None``
+- 事件名不匹配拦截器 ``scope_prefixes``：跳过该拦截器（声明了作用域时）
 - 拦截器抛异常：**捕获 + 记录 + 视为 pass-through**（不影响后续拦截器或 handler），
   与"丢事件"语义严格区分——异常不应导致事件被丢弃（事件量小、宁可放过不可错过）
 
@@ -87,10 +88,17 @@ class InterceptorChain:
             - ``dict``：放行的 payload（可能被链中拦截器原地修改）；handler 将接收此值
             - ``None``：事件被丢弃（任一拦截器返回 ``None`` 立即终止）
 
+        作用域：拦截器声明了 ``scope_prefixes`` 时，仅事件名匹配前缀才应用；
+        空元组 = 不限域。域外事件直接跳过（防输入域拦截器误伤下游事件）。
+
         异常处理：拦截器抛出的任何异常都被捕获 + 记录 + 视为 pass-through；
         异常**绝不**导致事件被丢弃。这是与"显式返回 None"的关键区别。
         """
         for interceptor in self._interceptors:
+            if interceptor.scope_prefixes and not any(
+                event_name.startswith(prefix) for prefix in interceptor.scope_prefixes
+            ):
+                continue
             try:
                 result = await interceptor.intercept(event_name, payload, source)
             except Exception as e:

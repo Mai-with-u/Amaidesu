@@ -14,6 +14,7 @@ import asyncio
 from enum import Enum
 from typing import Any, AsyncIterator, Optional
 
+from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
@@ -153,10 +154,10 @@ class BaseCollector:
         """
         data_type = getattr(message, "data_type", "text")
         event_map = {
-            "text": ("room.message.danmaku", "danmaku"),
-            "gift": ("room.message.gift", "gift"),
-            "super_chat": ("room.message.super_chat", "super_chat"),
-            "guard": ("room.message.enter", "enter"),
+            "text": (CoreEvents.ROOM_MESSAGE_DANMAKU, "danmaku"),
+            "gift": (CoreEvents.ROOM_MESSAGE_GIFT, "gift"),
+            "super_chat": (CoreEvents.ROOM_MESSAGE_SUPER_CHAT, "super_chat"),
+            "guard": (CoreEvents.ROOM_MESSAGE_ENTER, "enter"),
         }
         mapping = event_map.get(data_type)
         if mapping is None:

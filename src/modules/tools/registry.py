@@ -5,6 +5,8 @@ ToolRegistry —— 工具注册中心
 - 去重（先注册保留）
 - 调用失败兜底（不抛异常，返回失败 ``ToolExecutionResult``）
 - 接受 ``ToolProvider`` 整体注册（Provider.list_tools 全量展开）
+- 可选挂载 ``EventBus``：每次调用完成后 emit ``tool.result.<name>``，
+  供 Dashboard 溯源（broadcaster 通配订阅 ``tool.result.#``）
 
 接口约定：register（去重保留先注册）/ list_tools / invoke
 （异常→error result 兜底）/ to_llm_definitions（内部→LLM 转换层，
@@ -16,8 +18,9 @@ from __future__ import annotations
 import asyncio
 import inspect
 import time
-from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Iterable, List, Optional
 
+from src.modules.events.payloads.tool_result import ToolResultPayload
 from src.modules.logging import get_logger
 from src.modules.tools.models import (
     Provider,
@@ -26,6 +29,9 @@ from src.modules.tools.models import (
     ToolSpec,
 )
 from src.modules.tools.provider import ToolProvider
+
+if TYPE_CHECKING:
+    from src.modules.events.event_bus import EventBus
 
 # 工具实现签名：接受 ToolInvocation，返回 await ToolExecutionResult
 ToolImplCallable = Callable[[ToolInvocation], Awaitable[ToolExecutionResult]]
@@ -83,11 +89,13 @@ def set_default_registry(registry: Optional["ToolRegistry"]) -> None:
 class ToolRegistry:
     """工具注册中心。"""
 
-    def __init__(self) -> None:
+    def __init__(self, event_bus: Optional["EventBus"] = None) -> None:
         # 按 name 索引：首次注册优先（去重）
         self._tools: Dict[str, tuple[ToolSpec, ToolImplCallable]] = {}
         # Provider 引用（仅诊断 / 重复检测）
         self._providers: List[ToolProvider] = []
+        # 可选事件总线：挂载后每次调用完成 emit tool.result.<name>
+        self._event_bus = event_bus
 
     # -------------------- 注册 --------------------
 
@@ -150,7 +158,8 @@ class ToolRegistry:
         """调用工具。永远不抛异常（未知/失败 → 失败 result）。
 
         注意：实施方返回的已经是 ToolExecutionResult；此处只做包一层 +
-        未找到时兜底。
+        未找到时兜底。挂载了 EventBus 时，找到工具并执行完成（无论成败）
+        都会 emit ``tool.result.<name>``；emit 失败不影响调用结果。
         """
         pair = self._tools.get(invocation.tool_name)
         if pair is None:
@@ -163,20 +172,42 @@ class ToolRegistry:
                 error_message=f"未知工具: '{invocation.tool_name}'",
                 timestamp_ms=int(time.time() * 1000),
             )
-        _spec, impl = pair
+        spec, impl = pair
         try:
-            return await impl(invocation)
+            result = await impl(invocation)
         except Exception as exc:  # noqa: BLE001 - 兜底边界
             logger.error(
                 f"ToolRegistry 调用工具 '{invocation.tool_name}' 时抛出异常: {exc}",
                 exc_info=True,
             )
-            return ToolExecutionResult(
+            result = ToolExecutionResult(
                 tool_name=invocation.tool_name,
                 success=False,
                 error_message=f"{type(exc).__name__}: {exc}",
                 timestamp_ms=int(time.time() * 1000),
             )
+        await self._emit_tool_result(spec, result)
+        return result
+
+    async def _emit_tool_result(self, spec: ToolSpec, result: ToolExecutionResult) -> None:
+        """广播工具结果事件（``tool.result.<name>``）；任何失败仅记日志。"""
+        if self._event_bus is None:
+            return
+        try:
+            if isinstance(result.structured_content, dict):
+                result_data: Dict[str, Any] = result.structured_content
+            else:
+                result_data = {"content": result.content}
+            payload = ToolResultPayload(
+                tool_name=result.tool_name,
+                status="success" if result.success else "error",
+                result=result_data,
+                error_message=result.error_message,
+                timestamp_ms=result.timestamp_ms or int(time.time() * 1000),
+            )
+            await self._event_bus.emit(spec.resolve_result_event(), payload, source="ToolRegistry")
+        except Exception as exc:  # noqa: BLE001 - 观测旁路，不反噬调用方
+            logger.warning(f"tool.result 事件广播失败（工具: {spec.name}）: {exc}")
 
     async def invoke_many(
         self,

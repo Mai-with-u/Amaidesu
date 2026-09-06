@@ -229,7 +229,6 @@ def register_core_events() -> None:
     # noqa: F401 —— 仅为触发模块级 @register_event 执行
     from src.modules.events.payloads import (  # noqa: F401
         agenda as _agenda_payloads,  # noqa: F401
-        connection as _connection_payloads,  # noqa: F401
         core as _core_payloads,  # noqa: F401
         game as _game_payloads,  # noqa: F401
         live as _live_payloads,  # noqa: F401

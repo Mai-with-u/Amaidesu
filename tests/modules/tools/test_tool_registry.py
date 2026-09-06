@@ -14,6 +14,7 @@ ToolRegistry 单元测试。
 
 from __future__ import annotations
 
+import asyncio
 from typing import List
 
 import pytest
@@ -296,3 +297,76 @@ def test_registry_collections_protocol(registry: ToolRegistry) -> None:
     spec = registry.get("x")
     assert spec is not None
     assert spec.name == "x"
+
+
+# =============================================================================
+# tool.result.<name> 结果事件广播
+# =============================================================================
+
+
+async def test_invoke_emits_tool_result_event_when_event_bus_attached() -> None:
+    """挂载 EventBus 后，调用完成 emit tool.result.<name>（success 路径）。"""
+    from src.modules.events.event_bus import EventBus
+    from src.modules.events.payloads.tool_result import ToolResultPayload
+
+    bus = EventBus(enable_stats=False)
+    received: list[tuple[str, ToolResultPayload]] = []
+
+    async def _on_result(event_name: str, payload: ToolResultPayload, source: str) -> None:
+        received.append((event_name, payload))
+
+    bus.on("tool.result.#", _on_result, ToolResultPayload)
+
+    registry = ToolRegistry(event_bus=bus)
+
+    async def _ok(inv: ToolInvocation) -> ToolExecutionResult:
+        return ToolExecutionResult(tool_name=inv.tool_name, success=True, content="done")
+
+    registry.register(ToolSpec(name="my_tool", description="d", kind="sync"), _ok)
+    res = await registry.invoke(ToolInvocation(tool_name="my_tool", source="test"))
+    assert res.success is True
+    await asyncio.sleep(0.01)  # emit 为 fire-and-forget，让派发任务跑完
+    assert len(received) == 1
+    event_name, payload = received[0]
+    assert event_name == "tool.result.my_tool"
+    assert payload.tool_name == "my_tool"
+    assert payload.status == "success"
+    assert payload.result == {"content": "done"}
+
+
+async def test_invoke_emits_tool_result_error_event(registry: ToolRegistry) -> None:
+    """实现异常路径同样广播（status=error），且不反噬调用结果。"""
+    from src.modules.events.event_bus import EventBus
+    from src.modules.events.payloads.tool_result import ToolResultPayload
+
+    bus = EventBus(enable_stats=False)
+    received: list[ToolResultPayload] = []
+
+    async def _on_result(event_name: str, payload: ToolResultPayload, source: str) -> None:
+        received.append(payload)
+
+    bus.on("tool.result.#", _on_result, ToolResultPayload)
+    registry._event_bus = bus
+
+    async def _bad(inv: ToolInvocation) -> ToolExecutionResult:
+        raise RuntimeError("boom!")
+
+    registry.register(ToolSpec(name="bad_tool", description="d", kind="sync"), _bad)
+    res = await registry.invoke(ToolInvocation(tool_name="bad_tool"))
+    assert res.success is False
+    await asyncio.sleep(0.01)  # emit 为 fire-and-forget，让派发任务跑完
+    assert len(received) == 1
+    assert received[0].status == "error"
+    assert "boom!" in received[0].error_message
+
+
+async def test_invoke_without_event_bus_skips_emit(registry: ToolRegistry) -> None:
+    """未挂载 EventBus（默认）不广播——行为与旧版一致。"""
+    registry._event_bus = None
+
+    async def _ok(inv: ToolInvocation) -> ToolExecutionResult:
+        return ToolExecutionResult(tool_name=inv.tool_name, success=True)
+
+    registry.register(ToolSpec(name="quiet", description="d", kind="sync"), _ok)
+    res = await registry.invoke(ToolInvocation(tool_name="quiet"))
+    assert res.success is True  # 不抛即通过

@@ -1,24 +1,13 @@
 """
-事件 Payload 模块（按域组织 / Wave 6）
+事件 Payload 模块（按语义域组织）
 
-为 EventBus 事件提供类型安全的 Pydantic Payload 定义。
+为 EventBus 事件提供类型安全的 Pydantic Payload 定义，每个 Payload 经
+``@register_event`` 绑定到具体事件名（tool.result.* 为通配族，不绑定具体名）。
+RoomMessagePayload 保留 ConnectedPayload / DisconnectedPayload 同构字段，
+供旧连接/断开语义的兼容导入。
 
-Wave 6 变更：
-- 删除 decision.py / output.py（无 Intent；Stage-glue 胶水事件不再使用）
-- 删除 IntentPayload / IntentActionPayload / OutputIntentDispatchedPayload /
-  OutputHandlerCompletedPayload / OBSCommandPayload（Wave 6 决策出口 = reply
-  工具调用，无 Intent；OBS → 工具直接调用）
-- 保留 ConnectedPayload / DisconnectedPayload（RoomMessagePayload 含同构字段，
-  旧连接/断开事件已删除 → 仅供向后兼容导入）
-
-v2.0.8 变更（C1 治理收口）：
-- 删除 sticker.py（StickerCommandPayload）+ Sticker→VTS 单向信号链路——
-  StickerHelper 零实例化零调用、消费端 VTSProvider 仅空转订阅；
-  未来做表情功能时重新设计，本轮不留事件链
-
-模块结构（v2）：
+模块结构：
 - core.py: Core 系统事件 Payload（core.startup/shutdown/error）
-- connection.py: 通用组件事件 Payload（ConnectionEventPayload）
 - live.py: v2 语义域 — 场次生命周期（live.started/live.ended）
 - room.py: v2 语义域 — 直播间行为流（room.message.*）
 - game.py: v2 语义域 — 游戏里程碑（game.*）
@@ -51,7 +40,6 @@ from .agenda import (
     AgendaItem,
     AgendaPayload,
 )
-from .connection import ConnectionEventPayload
 from .core import (
     CoreErrorPayload,
     CoreShutdownPayload,
@@ -84,8 +72,6 @@ __all__ = [
     "CoreStartupPayload",
     "CoreShutdownPayload",
     "CoreErrorPayload",
-    # 组件 (通用)
-    "ConnectionEventPayload",
     # v2 语义域 — live
     "LivePayload",
     # v2 语义域 — room.message.*

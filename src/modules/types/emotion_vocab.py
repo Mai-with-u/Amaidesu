@@ -1,9 +1,7 @@
 """Emotion 全局枚举。
 
 所有阶段共享的情绪词汇表(12 个值)。
-放在 `src.modules.types` 而非 `src.stages.output` 是为了避免:
-- `types.intent` -> `stages.output.emotion_vocab` -> `stages.output.__init__` -> `manager`
-  -> 又间接 import `types.Intent` 的循环。
+放在 `src.modules.types` 供采集器/Agent/工具各层直接引用，避免跨层依赖。
 """
 
 from enum import Enum

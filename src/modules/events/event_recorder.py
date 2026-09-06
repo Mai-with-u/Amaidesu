@@ -1,13 +1,8 @@
 """
-事件历史记录器（Wave 6 / §1.46 语义域事件）
+事件历史记录器（语义域事件）
 
 独立的 EventBus 订阅者，将系统事件记录到 EventHistoryService。
 与 Dashboard / EventBroadcaster 解耦 —— 即使 WebUI 未启用也始终运行。
-
-Wave 6 变更：
-- 移除 decision.intent.* / output.intent.* 订阅（已删除的事件，Stage-glue 胶水）
-- 移除 INPUT_MESSAGE_RECEIVED 订阅（Wave 6 输入事件名 → room.message.*）
-- 新增 room.message.* 订阅（核心行为流）
 """
 
 from typing import TYPE_CHECKING, Any, Callable, Optional
@@ -23,10 +18,12 @@ from src.modules.events.event_type_map import (
 )
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import (
-    ConnectionEventPayload,
+    AgendaPayload,
+    CheckpointPayload,
     CoreErrorPayload,
     CoreShutdownPayload,
     CoreStartupPayload,
+    GamePayload,
     RoomMessagePayload,
 )
 from src.modules.events.payloads.base import BasePayload
@@ -64,13 +61,13 @@ class EventHistoryRecorder:
         self._subscribe(CoreEvents.CORE_STARTUP, self._on_core_event, model_class=CoreStartupPayload)
         self._subscribe(CoreEvents.CORE_SHUTDOWN, self._on_core_event, model_class=CoreShutdownPayload)
         self._subscribe(CoreEvents.CORE_ERROR, self._on_core_error, model_class=CoreErrorPayload)
-        self._subscribe(CoreEvents.PLANNER_CHECKPOINT, self._on_core_event, model_class=None)
-        self._subscribe(CoreEvents.AGENDA_UPDATE, self._on_core_event, model_class=None)
+        self._subscribe(CoreEvents.PLANNER_CHECKPOINT, self._on_core_event, model_class=CheckpointPayload)
+        self._subscribe(CoreEvents.AGENDA_UPDATE, self._on_core_event, model_class=AgendaPayload)
 
         component_model_map = {
-            CoreEvents.GAME_MILESTONE: ConnectionEventPayload,
-            CoreEvents.GAME_ATTENTION_REQUIRED: ConnectionEventPayload,
-            CoreEvents.GAME_ERROR: ConnectionEventPayload,
+            CoreEvents.GAME_MILESTONE: GamePayload,
+            CoreEvents.GAME_ATTENTION_REQUIRED: GamePayload,
+            CoreEvents.GAME_ERROR: GamePayload,
         }
         for event_name, payload_class in component_model_map.items():
             self._subscribe(event_name, self._on_component_event, model_class=payload_class)

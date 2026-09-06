@@ -9,14 +9,12 @@
 | ``subtitle/`` | Subtitle GUI 服务导出（``SubtitleGuiService``）——工具形态已退役，字幕基础设施由 ``src/modules/subtitle/`` 自治装配 |
 | ``obs/``     | OBS Provider（3 个工具：send_text / switch_scene / set_source_visibility） |
 | ``remote_stream/`` | 消息协议 + 分发器（无 websocket 脚手架） |
-| ``debug/``   | dump_intent 调试函数（替换 DebugConsoleHandler） |
 
 注：TTS 与字幕均已提升为基础设施。TTS 由 ``src/modules/tts/`` 自治装配；
 字幕由 ``src/modules/subtitle/build_subtitle_infrastructure`` 自治装配。两者
 均不通过 ``ToolRegistry`` 注册为可调用工具，而是配置驱动的语音/字幕组件。
 """
 
-from src.modules.tools.output.debug import DebugConfig, dump_intent
 from src.modules.tools.output.obs import (
     OBSProvider,
     create_obs_provider,
@@ -89,7 +87,4 @@ __all__ = [
     "AudioConfig",
     "ImageConfig",
     "RemoteStreamTypes",
-    # Debug
-    "DebugConfig",
-    "dump_intent",
 ]

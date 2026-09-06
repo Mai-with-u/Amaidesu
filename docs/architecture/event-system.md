@@ -93,13 +93,13 @@ src/modules/events/
     ├── __init__.py       # Payload 统一导出（9 个域模块）
     ├── base.py           # BasePayload 基类
     ├── core.py           # core.* Payload（3 个事件分别注册）
-    ├── connection.py     # connection.event Payload（通用组件事件）
     ├── live.py           # live.* Payload（一类双注册）
     ├── room.py           # room.message.* Payload（一类四注册）
     ├── game.py           # game.* Payload（一类三注册）
     ├── agenda.py         # agenda.update Payload
     ├── planner.py        # planner.checkpoint Payload
     ├── tool_result.py    # tool.result.* Payload（不绑定具体名）
+    ├── speech.py         # streamer.speech Payload（主播发言业务事实）
     └── utterance.py     # tts.utterance.* Payload（三类三注册：started / finished / failed）
 ```
 
@@ -151,7 +151,7 @@ await event_bus.emit(
 **分发流程**（`event_bus.py` L254-259 注释定案）：
 
 1. **类型检查** → `model_dump()` 序列化 → 数据验证
-2. **拦截器链**：任一拦截器显式返回 `None` 即丢弃事件（不更新统计、不调用任何 handler）
+2. **拦截器链**：仅应用 ``scope_prefixes`` 匹配该事件名的拦截器（未声明作用域的全局生效）；任一拦截器显式返回 `None` 即丢弃事件（不更新统计、不调用任何 handler）
 3. **handler 收集**：精确键 + 所有通配 pattern 键的并集（按 HandlerWrapper 对象身份去重）
 4. **handler 排序**：按 `(priority 升序, specificity 降序)`，精确订阅永远先于通配订阅
 5. **统计**：始终按真实 emit 的 `event_name` 入键（与通配 pattern 解耦）
@@ -269,7 +269,7 @@ EventBus 支持 **MQTT 风格**通配订阅（仅订阅名包含 `*` 或 `#` 时
 
 ### 当前生产状态
 
-> **当前生产代码尚未使用通配订阅**。所有 on() 调用均为精确订阅（如 `event_bus.on(CoreEvents.ROOM_MESSAGE_DANMAKU, ...)`）。通配能力保留供未来扩展（如 Planner 一次性监听所有 `tool.result.#`），可通过 `event_bus.on("tool.result.#", handler, model_class=ToolResultPayload)` 启用，handler 内按 `payload.tool_name` 字段分发。
+> **生产代码的通配订阅**：Dashboard Broadcaster 订阅 `tool.result.#` 一站式接收工具结果事件（`tool.result` 事件由 `ToolRegistry.invoke` 广播，见事件表）。Planner 如需一次性监听所有工具结果，同样可通过 `event_bus.on("tool.result.#", handler, model_class=ToolResultPayload)` 启用，handler 内按 `payload.tool_name` 字段分发。
 
 ---
 
@@ -286,7 +286,6 @@ EventBus 支持 **MQTT 风格**通配订阅（仅订阅名包含 `*` 或 `#` 时
 | `core.startup` | `CoreStartupPayload` | `main.py` 启动流程 | `EventRecorder`（L64）、`Broadcaster`（L97-100 字典映射 / L120 系统事件循环订阅） | 系统启动通知 |
 | `core.shutdown` | `CoreShutdownPayload` | `main.py` 关闭流程 | `EventRecorder`（L65）、`Broadcaster`（L98 / L120） | 系统关闭通知 |
 | `core.error` | `CoreErrorPayload` | 各组件错误兜底发射 | `EventRecorder`（L66）、`Broadcaster`（L99 / L120） | 系统级错误 |
-| `connection.event` | `ConnectionEventPayload` | 各连接管理组件 | `EventRecorder`（通过 `component_model_map` 注册） | 通用组件连接/断开事件（v2 复用字段填通用组件事件） |
 | `live.started` | `LivePayload` | 组合根 / 直播接入层 | 存储（建 `live_sessions` 行）、`RoomState` 记账器 | 开播；Payload 填 `started_at_ms` |
 | `live.ended` | `LivePayload` | 组合根 / 直播接入层 | 存储（更新 `live_sessions.ended_at_ms`）、`RoomState` 记账器 | 下播；Payload 填 `ended_at_ms` |
 | `room.message.danmaku` | `RoomMessagePayload` | **6 处**：`bilibili/official/collector.py` L263（`bili_danmaku_official_collector.py`）；`bilibili/legacy/collector.py` L247（`bili_danmaku_collector.py`）；`console_input_collector.py` L193（_emit_semantic_event，L36-39 `data_type=text→danmaku` 映射）；`collectors/base.py` L157-170（兜底转发，`data_type=text→danmaku`）；`dashboard/api/debug.py` L78（debug 注入）；`simulator/service.py`（generate 生成 / replay 回放统一发射） | `StreamerAgent`（`streamer_agent.py`，priority=50）；`EventRecorder`（`event_recorder.py`）；`StorageLedger`（`storage_ledger.py`，`room.message.#` 通配 → live_chat/gifts/super_chats 落库 + viewers 统计）；`Broadcaster`（`websocket/broadcaster.py` handler_map / `_subscribe_core_events`）；`Widget`（`widget/service.py`） | 弹幕；Payload `message_type="danmaku"`，填 `content` |
@@ -299,7 +298,7 @@ EventBus 支持 **MQTT 风格**通配订阅（仅订阅名包含 `*` 或 `#` 时
 | `agenda.update` | `AgendaPayload` | Planner（调 `update_agenda_item` 工具后）→ 存储更新后发出 | `EventRecorder`（L68，`model_class=None` 兜底） | AgendaItem 运行进度变更（done / schedule / insert） |
 | `planner.checkpoint` | `CheckpointPayload` | 空转探测器（后台轻循环，§1.7） | `EventRecorder`（L67，`model_class=None` 兜底）；`Broadcaster`（L96 / L112-115 `_subscribe_core_events`）；`Widget`（`widget/service.py` L88-92） | 空转检查点提醒（纯提醒零决策，携带当前 AgendaItem 定位） |
 | `streamer.speech` | `StreamerSpeechPayload` | `StreamerAgent`（`_dispatch_speech_and_emotion`，speech 非空时；`streamer_agent.py`） | `SimulatorService`（节奏唤醒，`simulator/service.py`）；`Broadcaster`（`websocket/broadcaster.py` handler_map + `_subscribe_core_events`，WS type `streamer.speech`） | 主播发言业务事实（与 TTS 启用正交）；Payload 含 `utterance_id` / `text` / `emotion` / `target_user_id`（可选，回复对象，落库与 `viewers.replied_count` 闭环用；场次归属归订阅方解析，payload 不带 `live_session_id`） |
-| `tool.result.<tool_name>` | `ToolResultPayload` | 异步工具执行层（fire-and-forget 完成后） | 订阅者通常用 `tool.result.#` 通配，handler 按 `payload.tool_name` 分发 | **异步工具结果回传**（事件名不固定，emit 时用具体 `tool.result.<tool_name>`，如 `tool.result.speak` / `tool.result.summarize_timeline`） |
+| `tool.result.<tool_name>` | `ToolResultPayload` | `ToolRegistry.invoke`（工具执行完成后，无论成败均广播；未挂载 EventBus 时跳过） | Dashboard Broadcaster（`tool.result.#` 通配）与 traces 查询；handler 按 `payload.tool_name` 分发 | **工具结果回传**（事件名不固定，emit 时用具体 `tool.result.<tool_name>`，如 `tool.result.speak`；`ToolSpec.result_event` 可定制名） |
 | `tool.result.#`（**通配占位符**，**不预注册**到 `EVENT_REGISTRY`） | 无（仅订阅标识） | 无（仅订阅标识） | 无（仅订阅标识） | **仅供订阅者使用的通配 pattern**：订阅 `event_bus.on("tool.result.#", ...)` 一站式监听所有工具结果。`CoreEvents.TOOL_RESULT_WILDCARD = "tool.result.#"`（`names.py` L62）保留作订阅标识常量，**不在 names.py 的 `get_all_events()` 反射收集范围内**（按 `value.islower() and "." in value` 筛选时该字符串通过，但 `_validate_event_data` 找不到具体注册类型时仅 debug 警告，不阻断 emit） |
 | `tts.utterance.started` | `UtteranceStartedPayload` | TTS 引擎（基础模块，非工具；`src/modules/tts/` 下 4 个 Provider 之一，按 `core.toml [tts].provider` 装配期单选构造后注入 StreamerAgent）——仅在 `handle_speech` 收到非空 `utterance_id` 参数时发布；流式引擎=首块 PCM 写声卡，全量引擎=`play_audio` 调用 | 字幕写入器、编排层记账器等状态联动消费者（**当前生产代码暂无订阅——字幕订阅接线属后续工作，本表如实标记预留**） | 一次发声开始。Payload 含 `utterance_id`（全链路关联键，编排层生成 `utt_{epoch_ms}_{seq}`）、`speech_text`、`engine`（`edge`/`gptsovits`/`omni`/`voicebox`）、`duration_ms`（Optional[int]：全量引擎=合成后精确值；流式引擎合成未完=None）、`timestamp_ms`。 |
 | `tts.utterance.finished` | `UtteranceFinishedPayload` | TTS 引擎（基础模块）在播放完成时刻（百毫秒级精度，不含声卡硬件缓冲残余） | 编排层（句末再决策 / 释放锁）、存储（落 reply 耗时）、后台记账器（**预留**） | 一次发声播放完成。`duration_ms` 由 PCM 样本数÷采样率精确计算；事件名常量 `CoreEvents.TTS_UTTERANCE_FINISHED`。 |
@@ -321,7 +320,7 @@ EventBus 支持 **MQTT 风格**通配订阅（仅订阅名包含 `*` 或 `#` 时
 - `ROOM_MESSAGE_DANMAKU` / `GIFT` / `SUPER_CHAT` / `ENTER`（4 类 RoomMessagePayload）
 - `CORE_STARTUP` / `CORE_SHUTDOWN` / `CORE_ERROR`
 - `PLANNER_CHECKPOINT` / `AGENDA_UPDATE`（`model_class=None` 兜底）
-- `GAME_MILESTONE` / `GAME_ATTENTION_REQUIRED` / `GAME_ERROR`（通过 `component_model_map` 复用 `ConnectionEventPayload` 类型占位）
+- `GAME_MILESTONE` / `GAME_ATTENTION_REQUIRED` / `GAME_ERROR`（`EventRecorder` 以 `GamePayload` 订阅）
 
 > **注意**：当前 `room.message.gift` / `super_chat` / `enter` 三个事件的**订阅者仅 `EventRecorder`**，记账入库但不驱动决策（决策侧仅消费 `danmaku` 高价值信号）。其他潜在订阅点（礼物感谢 / 进房欢迎 / SC 复读）尚未接入，待规划。
 
@@ -339,7 +338,6 @@ classDiagram
     BasePayload <|-- CoreStartupPayload
     BasePayload <|-- CoreShutdownPayload
     BasePayload <|-- CoreErrorPayload
-    BasePayload <|-- ConnectionEventPayload
     BasePayload <|-- LivePayload
     BasePayload <|-- RoomMessagePayload
     BasePayload <|-- GamePayload
@@ -372,7 +370,6 @@ classDiagram
 
 | Payload 类 | 事件名 | 用途 |
 |-----------|--------|------|
-| `ConnectionEventPayload` | `connection.event` | 通用组件事件（含 `name` / `layer` / `reason` / `will_retry` / `timestamp_ms` / `metadata`） |
 
 #### Live 域（场次生命周期）
 
@@ -407,7 +404,7 @@ classDiagram
 
 | Payload 类 | 事件名 | 用途 |
 |-----------|--------|------|
-| `ToolResultPayload`（**不绑定**具体事件名） | `tool.result.<tool_name>`（emit 时动态填） | 异步工具结果回传；订阅者用 `tool.result.#` 通配监听后按 `tool_name` 字段分发 |
+| `ToolResultPayload`（**不绑定**具体事件名） | `tool.result.<tool_name>`（emit 时动态填） | 工具结果回传（`ToolRegistry.invoke` 广播）；订阅者用 `tool.result.#` 通配监听后按 `tool_name` 字段分发 |
 
 #### TTS Utterance 域（v2.0.10 新增）
 
@@ -495,7 +492,7 @@ class RoomMessagePayload(BasePayload):
 ```python
 def register_core_events() -> None:
     from src.modules.events.payloads import (  # noqa: F401
-        agenda as _agenda_payloads, connection as _connection_payloads,
+        agenda as _agenda_payloads,
         core as _core_payloads, game as _game_payloads,
         live as _live_payloads, planner as _planner_payloads,
         room as _room_payloads, tool_result as _tool_result_payloads,
@@ -503,13 +500,13 @@ def register_core_events() -> None:
     )
 ```
 
-> v2 增量为 9 个 Payload 模块（`agenda` / `connection` / `core` / `game` / `live` / `planner` / `room` / `tool_result` / `utterance`），均在 `register_core_events()` 一并触发 import。`tool_result` 模块即使无具体 `@register_event` 装饰器调用也一并 import 以触发模块级代码（保留供后续扩展）；`utterance` 模块承担 v2.0.10 新增的 `tts.utterance.*` 三事件 Payload。
+> v2 增量为 9 个 Payload 模块（`agenda` / `core` / `game` / `live` / `planner` / `room` / `speech` / `tool_result` / `utterance`），均在 `register_core_events()` 一并触发 import。`tool_result` 模块即使无具体 `@register_event` 装饰器调用也一并 import 以触发模块级代码（保留供后续扩展）；`utterance` 模块承担 v2.0.10 新增的 `tts.utterance.*` 三事件 Payload。
 
 ---
 
 ## 事件拦截器（Interceptor）
 
-> **作用域说明**：当前内置拦截器（`RateLimitInterceptor` / `SimilarFilterInterceptor`）作用于 **`room.message.*` 域**事件（v2 语义域，从旧 input pipeline 迁移过来）。其他语义域如 `core.*` / `live.*` / `game.*` 不经拦截器链。
+> **作用域说明**：拦截器通过类属性 ``scope_prefixes`` 声明作用的事件域前缀（空元组 = 不限域）；事件名不匹配任何前缀时链直接跳过该拦截器。内置的 `RateLimitInterceptor` / `SimilarFilterInterceptor` 显式声明 **`room.message.*` 域**（按 user_id/text 字段设计，对其他域 payload 无意义），因此 `core.*` / `live.*` / `game.*` / `tool.result.*` 等下游事件不会经过它们。
 
 "在事件路上拦一下做点事"的全局单点（§1.46.1，取代旧输入/输出管道）：emit 后、订阅者收到前，**所有事件过同一道拦截器链**。一次拦截，所有订阅者共享净化后结果。
 
@@ -572,7 +569,7 @@ format_duration_ms(1234)             # "1.2s"
 **注意事项**：
 
 - 禁止使用秒为单位的字段（如 `timestamp_s` / `duration_seconds`），如需人类阅读用 `ms_to_datetime()` 转换
-- 历史代码中的 `timestamp` 字段通过 Pydantic `alias` 兼容（`alias="timestamp"`，实际字段为 `timestamp_ms`，见 `connection.py` L22-26）
+- 历史代码中的 `timestamp` 字段通过 Pydantic `alias` 兼容（`alias="timestamp"`，实际字段为 `timestamp_ms`）
 
 ---
 
@@ -860,6 +857,8 @@ class MyPayload(BasePayload):
 - [架构决策记录](adr/README.md)
 
 ---
+
+*最后更新：2026-09-06（接线收口：删除 `connection.event` 死注册及其 Payload——零发布零订阅，`EventRecorder` 的 game.* 订阅 model_class 由误用的 `ConnectionEventPayload` 修正为 `GamePayload`、`planner.checkpoint`/`agenda.update` 由 BasePayload 兜底修正为注册类型；`tool.result.<name>` 由 `ToolRegistry.invoke` 在工具执行完成后广播（挂载 EventBus 时），Dashboard Broadcaster 的 `tool.result.#` 通配订阅自此有数据源；拦截器作用域落地为声明式 `scope_prefixes` 机制——限流/相似过滤显式声明 `room.message.*` 域，实现与本文档既有声明一致；Payload 目录树补 `speech.py`）
 
 *最后更新：2026-09-06（事件事实表 `game.milestone` / `game.attention_required` / `game.error` 三行订阅者列新增 `StorageLedger`（通配订阅 `game.*` → `game_events` 表，按 `event_type` 判别；写链先行接通，游戏代理上线即自动落库））*
 

@@ -53,6 +53,10 @@ _SECTION_MAP: dict[str, str] = {
     "simulator": "core.toml",
     "logging": "core.toml",
     "pipelines": "core.toml",
+    # v2 引入的核心段（若出现在待迁移的旧合并版 config.toml 中，归位 core.toml；
+    # tts / subtitle 同为核心段，但仅由 7 文件体系生成、不出现于旧版文件，
+    # 故不入表——落入即按未知段丢弃）
+    "interceptors": "core.toml",
     "llm": "model.toml",
     "llm_fast": "model.toml",
     "vlm": "model.toml",

@@ -1,6 +1,6 @@
 [project]
 name = "amaidesu"
-version = "0.1.0"
+version = "2.0.0"
 description = "MaiBot VTuber - AI VTuber Assistant with MaiBot Integration"
 readme = "README.md"
 license = { text = "MIT" }
@@ -17,29 +17,21 @@ dependencies = [
     # 日志和配置
     "loguru>=0.7.0",
     "toml>=0.10.0",
-    "python-logging-loki>=0.3.0",
     # 数据验证
     "pydantic>=2.0",
-    # MCP
-    "fastmcp>=2.0.0",
-    # MaiBot 消息协议
-    "maim-message==0.6.8",
     # VTube Studio 控制
     "pyvts>=0.3.0",
     # TTS 相关
     "edge-tts>=6.1.0",
     "sounddevice>=0.4.0",
     "soundfile>=0.12.0",
-    "pygame>=2.5.0",
     # 音频处理
-    "librosa>=0.10.0",
     "scipy>=1.10.0",
     # 图像和屏幕捕获
     "mss>=9.0.0",
     "numpy>=1.24.0",
     "Pillow>=10.0.0",
     # LLM API
-    "dashscope>=1.14.0",
     "openai>=1.0.0",
     "json_repair>=0.15.0",
     # OBS 控制

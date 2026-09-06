@@ -1,8 +1,7 @@
 """
 事件拦截器抽象基类
 
-定义 ``EventInterceptor`` 接口，供具体拦截器（rate_limit/similar_filter 等，
-W5 实现）继承。
+定义 ``EventInterceptor`` 接口，供具体拦截器（rate_limit/similar_filter 等）继承。
 
 设计要点：
 - ``intercept`` 入参 ``payload`` 是 ``dict[str, Any]``（来自 ``model_dump()``），
@@ -14,7 +13,7 @@ W5 实现）继承。
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 
 class EventInterceptor(ABC):
@@ -29,6 +28,12 @@ class EventInterceptor(ABC):
     注意：``intercept`` 看到的 ``payload`` 是 ``model_dump()`` 后的 ``dict``，
     而非 ``BaseModel`` 实例——与下游 handler 接收的数据形态一致。
     """
+
+    # 拦截器作用的事件域前缀；空元组 = 不限域（对所有事件生效）。
+    # 事件名不匹配任何前缀时链会跳过该拦截器。只按特定事件域字段设计的
+    # 拦截器（如限流/相似过滤按 user_id/text）应显式收窄作用域，
+    # 避免对 game.*/tool.result.* 等下游事件误伤。
+    scope_prefixes: Tuple[str, ...] = ()
 
     @property
     @abstractmethod
