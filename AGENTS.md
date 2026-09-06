@@ -25,7 +25,7 @@
 - 移动或者重命名文件的时候注意使用 `git mv` 保留历史记录
 - 使用中文和用户沟通以及编写文档、注释
 - 需要如实汇报自己的工作进度，不得隐瞒问题不报，不得在未经用户允许的情况下降低任务达成标准
-- **提交代码前运行测试**：`uv run pytest tests/` 和 `uv run ruff check .`；**提交前格式化**：`uv run ruff format .`
+- **测试策略（改动范围优先）**：改哪里测哪里——只跑改动相关的测试文件（如 `uv run pytest tests/agents/game/test_minecraft.py -q`）+ `uv run ruff check`（限改动文件）。**全量 `uv run pytest tests/` 仅在收口/并入主线/跨模块重构时跑**，常规改动禁止跑全量（150s+ 浪费）。提交前：目标测试绿 + ruff 绿。**提交前格式化**：`uv run ruff format .`
 - **git 提交必须获得用户显式授权**：任何 `git commit` / `git push` 前必须确认用户明确要求（含"提交/commit/push"等词）。计划文件（`.omo/plans/*.md`）中的 Commit 策略**仅覆盖该计划范围内的任务**；计划之外的工作（bug 修复、追加功能、临时改动）即使复用同一委托模板，也**不得**继承提交授权——委托子代理时若任务超出计划范围，**禁止**在 prompt 中写入 commit 指令，改为"完成后展示结果，由用户决定是否提交"。
 - **git 提交体规范（Conventional Commits）**：格式 `type(scope): subject`（type ∈ feat/fix/docs/refactor/perf/test/chore；scope 用影响域，如 decision/dashboard/config/core/prompts）。subject 用**中文**简洁描述（≤50 字符）；body 用**中文**说明"为什么"（空行分隔，可留空）。Windows PowerShell 下提交 message 必须用 `git commit -F <file>`（UTF-8 文件）或双引号包裹（防 `$` 变量展开、防中文乱码）；提交后 `git log -1` 复核无乱码、无截断。**禁止**：英文 subject、乱码字符、特殊符号被 shell 吞掉、body 缺失"为什么"。
 
@@ -301,3 +301,5 @@ Web Dashboard 两种模式（生产 60214 / 开发 60315）说明见 [快速开�
 *最后更新：2026-09-06（接线收口：CONFIG_VERSION 2.0.4 → 2.0.15（实际值以 `multi_file_loader.py` 为准，此前本文档长期标注 2.0.4 已严重滞后）；2.0.15 收口 tools.toml 僵尸配置（output enabled 剥离 subtitle、删除 debug_console/sticker/remote_stream 死子段、obs_control 改名 obs、perception 剥离已删除的 text_adv_game 采集器），新增 `_migrate_tools_2_0_15` 钩子及迁移测试；拦截器新增 声明式作用域 `scope_prefixes`（空 = 不限域），限流/相似过滤显式限定 `room.message.*`；`ToolRegistry` 可挂载 EventBus 广播 `tool.result.<name>`；组合根发布 `core.startup`/`core.shutdown`；修复 EventHistoryRecorder 对 game.* 订阅的 model_class 错配；删除 v1 遗留：`src/modules/di/`（反射式装配，文档已同步）、`types/intent.py` 类型闭环、`integrations/amaidesu_plugin/`、`tests/mocks/` 死 mock、一次性 scripts；pyproject 清理零引用依赖）*
 
 *上次更新：2026-09-05（上下文四层架构落地：「其他约定」节 ContextService 条目补充为"L1 对话配对窗口（内存，DialogueTurn 配对视图；不持久化——启动时由组合根从 SQLite `live_chat` 通过 `seed_dialogue_turns` 回灌，见 `main.py::_bootstrap_context_from_live_chat`）"；「高频 API 速查」节未改；同日 v2.0.12 §8 概念修正：TTS 提升为基础设施（基础模块）。架构红线节"主体性判据"工具例子清单中 TTS 加注"自 v2.0.12 §8 修正起已是基础模块，不再是工具"——其余三例仍为工具；高频 API 速查节"事件系统" + "命名约定" + "依赖注入"未改；事件 Payload / 配置 Schema / 三范式 / 拦截器节未改；同日术语统一：'退役出工具池'改为'提升为基础设施'（避免误导为降级））
+
+*最后更新：2026-09-06（测试策略强化：改哪里测哪里——常规改动只跑相关测试文件 + ruff（限改动文件），全量 `pytest tests/` 仅限收口/并入主线/跨模块重构；替换原"提交代码前运行测试"条目措辞）*

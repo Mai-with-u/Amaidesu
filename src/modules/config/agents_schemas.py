@@ -5,7 +5,7 @@
 段树结构（TOML 视角）::
 
     [agents]
-    enabled = ["streamer", "game.minecraft"]
+    enabled = ["streamer", "game"]
 
     [agents.streamer]
     planner_llm = "llm"
