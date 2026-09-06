@@ -60,12 +60,27 @@ def instantiate_agent(
         )
 
     if name == "game":
+        engine_name = str(config.get("engine", "text_adv") or "text_adv")
+        if engine_name == "minecraft":
+            from src.agents.game.minecraft import MinecraftAgent
+            from src.agents.game.minecraft.config import MinecraftConfig
+
+            try:
+                minecraft_cfg = MinecraftConfig(**{k: v for k, v in config.items() if k != "engine"})
+            except Exception:
+                minecraft_cfg = MinecraftConfig()
+            return MinecraftAgent(
+                config=minecraft_cfg,
+                llm_manager=llm_manager,
+                prompt_manager=prompt_manager,
+                event_bus=event_bus,
+                tool_registry=tool_registry,
+            )
+        if engine_name != "text_adv":
+            return None
         from src.agents.game.text_adv import TextAdvGameAgent, TextAdvGameConfig
         from src.agents.game.text_adv.content_engine import StubContentEngine
 
-        engine_name = str(config.get("engine", "text_adv") or "text_adv")
-        if engine_name != "text_adv":
-            return None
         try:
             text_adv_cfg = TextAdvGameConfig(**{k: v for k, v in config.items() if k != "engine"})
         except Exception:

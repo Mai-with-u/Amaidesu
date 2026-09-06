@@ -408,9 +408,7 @@ class TestDeclarativeKeys:
         with tempfile.TemporaryDirectory() as tmpdir:
             templates_dir = Path(tmpdir)
             for filename in ("a.md", "b.md"):
-                (templates_dir / filename).write_text(
-                    "---\nname: same_key\n---\n内容", encoding="utf-8"
-                )
+                (templates_dir / filename).write_text("---\nname: same_key\n---\n内容", encoding="utf-8")
 
             manager = PromptManager(templates_dir=tmpdir)
             with pytest.raises(ValueError, match="模板键冲突"):
@@ -455,7 +453,7 @@ class TestRealRepoTemplates:
     """真实仓库集成测试：约定扫描发现各组件内聚提示词"""
 
     def test_singleton_loads_exactly_expected_keys(self):
-        """全仓加载后键集合应精确等于 8 个声明式键（防漂移回归网）"""
+        """全仓加载后键集合应精确等于 9 个声明式键（防漂移回归网）"""
         reset_prompt_manager()
         try:
             manager = get_prompt_manager()
@@ -468,6 +466,7 @@ class TestRealRepoTemplates:
                 "passerby_message",
                 "warmup_message",
                 "persona_generation",
+                "amaidesu_minecraft_decide",
             }
         finally:
             reset_prompt_manager()

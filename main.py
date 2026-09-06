@@ -932,8 +932,32 @@ async def _register_agents_from_config(
             try:
                 game_cfg_dict = sub_cfg if isinstance(sub_cfg, dict) else {}
                 engine_name = str(game_cfg_dict.get("engine", "text_adv") or "text_adv")
+
+                if engine_name == "minecraft":
+                    from src.agents.game.minecraft import MinecraftAgent
+                    from src.agents.game.minecraft.config import MinecraftConfig
+
+                    try:
+                        minecraft_cfg = MinecraftConfig(**{k: v for k, v in game_cfg_dict.items() if k != "engine"})
+                    except Exception as e:
+                        logger.warning(f"解析 MinecraftConfig 失败: {e}; 使用默认配置")
+                        minecraft_cfg = MinecraftConfig()
+                    minecraft_agent = MinecraftAgent(
+                        config=minecraft_cfg,
+                        llm_manager=llm_service,
+                        prompt_manager=get_prompt_manager(),
+                        event_bus=event_bus,
+                        tool_registry=tool_registry,
+                    )
+                    manager.register(
+                        minecraft_agent,
+                        spec_provider="game",
+                        description="游戏 AI 玩家代理（Minecraft / MaiCraftMod）",
+                    )
+                    logger.info(f"MinecraftAgent 已注册 (engine={engine_name})")
+                    continue
                 if engine_name != "text_adv":
-                    logger.warning(f"game Agent 引擎 '{engine_name}' 尚未实现（仅 text_adv），跳过")
+                    logger.warning(f"game Agent 引擎 '{engine_name}' 尚未实现（仅 text_adv/minecraft），跳过")
                     continue
 
                 try:

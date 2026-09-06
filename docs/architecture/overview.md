@@ -41,8 +41,9 @@ flowchart TB
         UQ["UtteranceQueue<br/>FIFO 串行播放队列<br/>丢最旧 / 单 worker / 渲染超时"]
     end
 
-    subgraph Game["GameAgent (src/agents/game/text_adv/)"]
+    subgraph Game["GameAgent (src/agents/game/)"]
         TextAdv["TextAdvGameAgent<br/>+ StubContentEngine<br/>+ content_engine_* 5 工具"]
+        MC["MinecraftAgent<br/>+ maicraft 语义工具（MCP）<br/>+ mc_todo / mc_memo / mc_get_state / mc_set_goal"]
     end
 
     subgraph Registry["ToolRegistry (src/modules/tools/)"]
@@ -89,9 +90,11 @@ Amaidesu/
 ├── main.py                      # CLI 入口 + v2 组合根（组件构造与生命周期）
 ├── config/                      # 配置目录（多文件结构，首次运行自动生成）
 ├── src/
-│   ├── agents/                  # 业务 Agent（v2 仅含 StreamerAgent + GameAgent/text_adv 范例）
+│   ├── agents/                  # 业务 Agent（StreamerAgent + GameAgent：text_adv/minecraft 范例）
 │   │   ├── streamer/            #   主播 Agent（Planner/Replyer/Agenda/工具/后台维护）
-│   │   └── game/text_adv/       #   文字冒险 GameAgent 范例（content_engine 范式）
+│   │   └── game/                #   游戏 Agent（AI 玩家范式）
+│   │       ├── text_adv/        #     文字冒险 GameAgent 范例（content_engine 范式）
+│   │       └── minecraft/       #     Minecraft GameAgent（maicraft MCP 语义工具 + mc_todo/mc_memo/mc_get_state/mc_set_goal）
 │   └── modules/                 # 共享模块（基础设施 + 领域组件）
 │       ├── agents/              # Agent 框架层：BaseAgent 协议六面 / AgentManager / AgentControl 6 工具 / factory(SUPPORTED_AGENTS)
 │       ├── audio/               # v2.0.10 抽出：AudioDeviceManager（声卡播放 / 录音），原 `src/modules/tts/audio_device_manager.py` 上移
