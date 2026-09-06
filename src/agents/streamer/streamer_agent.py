@@ -18,7 +18,6 @@ agent = StreamerAgent(
     context_service=context,
     event_bus=bus,
     tool_registry=registry,
-    capabilities_provider=None,
     sqlite_store=store,
 )
 await agent.start()
@@ -212,7 +211,6 @@ class StreamerAgent(BaseAgent):
         context_service: Optional[Any] = None,
         event_bus: Optional[EventBus] = None,
         tool_registry: Optional[ToolRegistry] = None,
-        capabilities_provider: Optional[Any] = None,
         sqlite_store: Optional[Any] = None,
         persona_provider: Optional[Any] = None,
         memory: Any = None,
@@ -231,8 +229,8 @@ class StreamerAgent(BaseAgent):
             context_service: 可选 ``ContextService``（持久化对话历史）
             event_bus: 可选 ``EventBus``（Agent 通过它订阅 room.message.* / emit planner.checkpoint）
             tool_registry: 可选 ``ToolRegistry``（Agent 把自己的工具注册进去；
-                VTS 表情工具仍走该 registry，TTS 不再走）
-            capabilities_provider: 可选工具能力提供者（用于 reply 动作白名单）
+                VTS 表情工具仍走该 registry，TTS 不再走；
+                Planner/Replyer 也从它读取 game 工具清单做动作选择）
             sqlite_store: 可选 ``SQLiteStore``（live_sessions + agenda_runtime 持久化）
             persona_provider: 可选人设字典来源（鸭子类型：callable 返回 dict / dict 本身）
             context_assembler_config: 可选 ``ContextAssemblerConfig``（core.toml [context] 段；
@@ -276,7 +274,6 @@ class StreamerAgent(BaseAgent):
         self._context = context_service
         self._event_bus = event_bus
         self._tool_registry = tool_registry
-        self._capabilities_provider = capabilities_provider
         self._sqlite = sqlite_store
         self._session_manager = session_manager
         self._persona_provider = persona_provider
@@ -319,7 +316,7 @@ class StreamerAgent(BaseAgent):
             llm_service=llm_manager,
             prompt_service=prompt_manager,
             room_state=self._room_state,
-            capabilities_provider=capabilities_provider,
+            tool_registry=tool_registry,
             memory=memory,
             recall_top_k=(
                 int(getattr(context_assembler_config, "memory_recall_long_term", 3) or 3)
@@ -353,7 +350,7 @@ class StreamerAgent(BaseAgent):
             },
             llm_service=llm_manager,
             prompt_service=prompt_manager,
-            capabilities_provider=capabilities_provider,
+            tool_registry=tool_registry,
             profanity_filter=self._profanity_filter,
         )
 
@@ -1851,7 +1848,6 @@ def build_streamer_agent(
     context_service: Optional[Any] = None,
     event_bus: Optional[EventBus] = None,
     tool_registry: Optional[ToolRegistry] = None,
-    capabilities_provider: Optional[Any] = None,
     sqlite_store: Optional[Any] = None,
     persona_provider: Optional[Any] = None,
     spec_provider: str = "builtin",
@@ -1877,7 +1873,6 @@ def build_streamer_agent(
         context_service=context_service,
         event_bus=event_bus,
         tool_registry=tool_registry,
-        capabilities_provider=capabilities_provider,
         sqlite_store=sqlite_store,
         persona_provider=persona_provider,
         speech_config=speech_config,

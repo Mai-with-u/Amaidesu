@@ -4,7 +4,7 @@
       <div class="header-left">
         <h1 class="page-title">工具目录</h1>
         <p class="page-subtitle">
-          被动能力契约 · 由 ToolRegistry 统一调度 · 本页为只读目录，调用端点由工具体系团队提供
+          被动工具契约 · 由 ToolRegistry 统一调度 · 本页为只读目录，调用端点由工具体系团队提供
         </p>
       </div>
       <div class="header-actions">
@@ -22,8 +22,8 @@
         <div class="total-sub">来自 tools.toml [tools.output.config] 段</div>
       </article>
       <article class="total-card total-actions">
-        <div class="total-label">能力条目</div>
-        <div class="total-value mono">{{ capabilitiesCount }}</div>
+        <div class="total-label">工具条目</div>
+        <div class="total-value mono">{{ toolsCount }}</div>
         <div class="total-sub">来自 ToolRegistry.list_tools() 运行时实例</div>
       </article>
       <article class="total-card total-hint">
@@ -32,7 +32,7 @@
           :closable="false"
           show-icon
           title="两个数为何不一致？"
-          description="注册提供方是配置段声明的 Provider 数量；能力条目是 Provider 展开后向 Registry 注册的所有 ToolSpec 数量（同一个 Provider 可暴露多个 spec）。"
+          description="注册提供方是配置段声明的 Provider 数量；工具条目是 Provider 展开后向 Registry 注册的所有 ToolSpec 数量（同一个 Provider 可暴露多个 spec）。"
         />
       </article>
     </section>
@@ -41,7 +41,7 @@
     <section class="filter-row">
       <el-input
         v-model="searchQuery"
-        placeholder="按能力名搜索（支持模糊匹配，如 speak / tool.* ）"
+        placeholder="按工具名搜索（支持模糊匹配，如 speak / tool.* ）"
         clearable
         :prefix-icon="Search"
         class="search-input"
@@ -61,24 +61,24 @@
     </section>
 
     <!-- 加载 / 错误状态 -->
-    <div v-if="loadingCapabilities" class="state-block">
+    <div v-if="loadingTools" class="state-block">
       <el-skeleton :rows="4" animated />
     </div>
     <el-alert
-      v-else-if="capabilitiesError"
-      :title="capabilitiesError"
+      v-else-if="toolsError"
+      :title="toolsError"
       type="error"
       :closable="false"
       show-icon
       class="state-block"
     >
-      <el-button size="small" type="primary" @click="fetchCapabilities">重试</el-button>
+      <el-button size="small" type="primary" @click="fetchTools">重试</el-button>
     </el-alert>
 
-    <!-- 能力表格 -->
+    <!-- 工具表格 -->
     <section v-else class="catalog-block">
       <div class="catalog-meta">
-        共 <strong class="mono">{{ filteredActions.length }}</strong> / {{ capabilitiesCount }} 项
+        共 <strong class="mono">{{ filteredActions.length }}</strong> / {{ toolsCount }} 项
         <span v-if="searchQuery || activeProviders.size > 0" class="filter-suffix">
           （已应用过滤）
         </span>
@@ -90,7 +90,7 @@
         class="catalog-table"
         @row-click="openDetail"
       >
-        <el-table-column label="能力名" min-width="220">
+        <el-table-column label="工具名" min-width="220">
           <template #default="{ row }">
             <code class="action-name-cell">
               <span class="provider-prefix">{{ providerOf(row.name) }}</span>
@@ -131,7 +131,7 @@
         />
       </div>
       <div v-if="filteredActions.length === 0" class="empty-block">
-        <el-empty description="没有匹配的能力 — 调整搜索词或提供方筛选" />
+        <el-empty description="没有匹配的工具 — 调整搜索词或提供方筛选" />
       </div>
     </section>
 
@@ -162,7 +162,7 @@
         <section class="drawer-section">
           <h4 class="drawer-h">参数（只读）</h4>
           <div v-if="paramEntries.length === 0" class="empty-block mini">
-            <el-empty description="该能力无参数声明" :image-size="60" />
+            <el-empty description="该工具无参数声明" :image-size="60" />
           </div>
           <ul v-else class="param-list">
             <li v-for="entry in paramEntries" :key="entry.key" class="param-item">
@@ -203,33 +203,33 @@ import { computed, onMounted, ref } from 'vue';
 import { storeToRefs } from 'pinia';
 import { Refresh, Search } from '@element-plus/icons-vue';
 import { useComponentsStore } from '@/stores';
-import { capabilitiesApi } from '@/api';
-import type { ParameterSpec, UnifiedActionEntry } from '@/types';
+import { toolsApi } from '@/api';
+import type { ParameterSpec, ToolEntry } from '@/types';
 
 const componentsStore = useComponentsStore();
 const { toolsList, loading: loadingComponents } = storeToRefs(componentsStore);
 
 const providersTotal = computed(() => toolsList.value.length);
 
-const capabilities = ref<UnifiedActionEntry[]>([]);
-const loadingCapabilities = ref(false);
-const capabilitiesError = ref<string | null>(null);
+const tools = ref<ToolEntry[]>([]);
+const loadingTools = ref(false);
+const toolsError = ref<string | null>(null);
 
-async function fetchCapabilities() {
-  loadingCapabilities.value = true;
-  capabilitiesError.value = null;
+async function fetchTools() {
+  loadingTools.value = true;
+  toolsError.value = null;
   try {
-    const response = await capabilitiesApi.list();
-    capabilities.value = response.data.actions ?? [];
+    const response = await toolsApi.list();
+    tools.value = response.data.tools ?? [];
   } catch (e) {
-    capabilitiesError.value = e instanceof Error ? e.message : '无法加载能力列表';
-    capabilities.value = [];
+    toolsError.value = e instanceof Error ? e.message : '无法加载工具列表';
+    tools.value = [];
   } finally {
-    loadingCapabilities.value = false;
+    loadingTools.value = false;
   }
 }
 
-const capabilitiesCount = computed(() => capabilities.value.length);
+const toolsCount = computed(() => tools.value.length);
 
 // ===== Provider 聚合 =====
 
@@ -245,7 +245,7 @@ function localName(fullName: string): string {
 
 const providers = computed(() => {
   const set = new Set<string>();
-  for (const action of capabilities.value) {
+  for (const action of tools.value) {
     set.add(providerOf(action.name));
   }
   return [...set].sort();
@@ -253,7 +253,7 @@ const providers = computed(() => {
 
 const providerCounts = computed<Record<string, number>>(() => {
   const counts: Record<string, number> = {};
-  for (const action of capabilities.value) {
+  for (const action of tools.value) {
     const p = providerOf(action.name);
     counts[p] = (counts[p] ?? 0) + 1;
   }
@@ -276,10 +276,10 @@ function toggleProvider(p: string) {
   activeProviders.value = next;
 }
 
-const filteredActions = computed<UnifiedActionEntry[]>(() => {
+const filteredActions = computed<ToolEntry[]>(() => {
   const q = searchQuery.value.trim().toLowerCase();
   const providersFilter = activeProviders.value;
-  return capabilities.value.filter(a => {
+  return tools.value.filter(a => {
     if (providersFilter.size > 0 && !providersFilter.has(providerOf(a.name))) {
       return false;
     }
@@ -295,7 +295,7 @@ const filteredActions = computed<UnifiedActionEntry[]>(() => {
 
 const pageSize = 20;
 const currentPage = ref(1);
-const pagedActions = computed<UnifiedActionEntry[]>(() => {
+const pagedActions = computed<ToolEntry[]>(() => {
   const start = (currentPage.value - 1) * pageSize;
   return filteredActions.value.slice(start, start + pageSize);
 });
@@ -303,13 +303,13 @@ const pagedActions = computed<UnifiedActionEntry[]>(() => {
 // ===== 抽屉详情 =====
 
 const drawerOpen = ref(false);
-const activeAction = ref<UnifiedActionEntry | null>(null);
+const activeAction = ref<ToolEntry | null>(null);
 
 const drawerTitle = computed(() =>
-  activeAction.value ? `能力详情 · ${activeAction.value.name}` : '能力详情',
+  activeAction.value ? `工具详情 · ${activeAction.value.name}` : '工具详情',
 );
 
-function openDetail(row: UnifiedActionEntry) {
+function openDetail(row: ToolEntry) {
   activeAction.value = row;
   drawerOpen.value = true;
 }
@@ -339,7 +339,7 @@ function formatDefault(value: unknown): string {
 
 function refreshAll() {
   componentsStore.fetchComponents();
-  void fetchCapabilities();
+  void fetchTools();
 }
 
 onMounted(() => {

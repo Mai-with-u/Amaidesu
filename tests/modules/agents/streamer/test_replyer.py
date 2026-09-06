@@ -42,7 +42,7 @@ def _ok_payload(
 def _make_replyer(
     llm_return: Optional[str] = None,
     llm_side_effect: Optional[Exception] = None,
-    capabilities=None,
+    game_tools=None,
     config: Optional[dict] = None,
     profanity_filter: Optional[ProfanityFilter] = None,
 ):
@@ -55,11 +55,10 @@ def _make_replyer(
     prompt = MagicMock()
     prompt.render_safe = MagicMock(return_value="PROMPT")
 
-    cap_provider = None
-    if capabilities is not None:
-        cap_provider = MagicMock()
-        from src.modules.types.capabilities import UnifiedCapabilitiesView
-        cap_provider.get_all_capabilities = MagicMock(return_value=capabilities)
+    tool_registry = None
+    if game_tools is not None:
+        tool_registry = MagicMock()
+        tool_registry.list_tools = MagicMock(return_value=game_tools)
 
     cfg = {"replyer_llm": "llm"}
     if config:
@@ -69,7 +68,7 @@ def _make_replyer(
         config=cfg,
         llm_service=llm,
         prompt_service=prompt,
-        capabilities_provider=cap_provider,
+        tool_registry=tool_registry,
         profanity_filter=profanity_filter,
     )
     return r, llm, prompt
@@ -156,13 +155,13 @@ class TestReplyerGenerate:
 
     @pytest.mark.asyncio
     async def test_replyer_invalid_action_dropped(self) -> None:
-        """注入能力白名单后，非法 action → action 丢弃为 None，speech 保留。"""
-        from src.modules.types.capabilities import UnifiedActionEntry, UnifiedCapabilitiesView
+        """注入工具白名单后，非法 action → action 丢弃为 None，speech 保留。"""
+        from src.modules.tools.models import ToolSpec
 
-        view = UnifiedCapabilitiesView(actions=[UnifiedActionEntry(name="warudo.wave")])
+        game_tools = [ToolSpec(name="warudo.wave", description="挥手", provider="game")]
         r, _llm, _prompt = _make_replyer(
             llm_return=_ok_payload(text="哈哈", action="invalid.dance"),
-            capabilities=view,
+            game_tools=game_tools,
         )
         plan = _make_plan()
         persona = {"bot_name": "麦麦", "personality": "p", "style_constraints": "s"}

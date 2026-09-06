@@ -131,7 +131,7 @@
           <div v-else class="empty-state">暂无日志</div>
         </div>
 
-        <!-- Slot for additional content (e.g. CapabilitiesPanel) -->
+        <!-- Slot for additional content (e.g. ToolsPanel) -->
         <slot name="detail-panel"></slot>
       </div>
     </el-collapse-transition>

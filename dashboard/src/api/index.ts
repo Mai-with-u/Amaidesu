@@ -24,7 +24,7 @@ import type {
   LLMHistoryQueryParams,
   LLMHistoryResponse,
   LLMRequestHistory,
-  UnifiedCapabilitiesView,
+  ToolsView,
   SimulatorStatus,
   SimPersona,
   SimGift,
@@ -96,9 +96,9 @@ export const llmApi = {
   getRequestById: (requestId: string) => api.get<LLMRequestHistory>(`/llm/history/${requestId}`),
 };
 
-// ===== Capabilities（v2 工具 action 清单） =====
-export const capabilitiesApi = {
-  list: () => api.get<UnifiedCapabilitiesView>('/capabilities'),
+// ===== Tools（工具清单） =====
+export const toolsApi = {
+  list: () => api.get<ToolsView>('/tools'),
 };
 
 // ===== Simulator 控制面（世界模拟器：generate 生成 / replay 回放） =====

@@ -3,11 +3,6 @@
 跨阶段共享的类型定义,避免循环依赖。
 """
 
-from .capabilities import (
-    CapabilitiesProvider,
-    UnifiedActionEntry,
-    UnifiedCapabilitiesView,
-)
 from .message_type import (
     MESSAGE_TYPE_REGISTRY,
     MessageTypeNotRegistered,
@@ -22,9 +17,6 @@ from .message_type import (
 )
 
 __all__ = [
-    "CapabilitiesProvider",
-    "UnifiedActionEntry",
-    "UnifiedCapabilitiesView",
     "MESSAGE_TYPE_REGISTRY",
     "MessageTypeSpec",
     "MessageTypeRegistrationError",

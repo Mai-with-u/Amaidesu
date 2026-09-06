@@ -16,7 +16,8 @@
 
 与 StreamerAgent 的关系：
 - 本类是一个"纯函数式"的表达组件，由 StreamerAgent 持有并在 reply_tool.invoke 时调用。
-- 能力白名单逻辑（`_ensure_capabilities` / `_build_action`）在此独立实现，
+- 工具动作白名单逻辑（`_ensure_tool_list` / `_build_action`，数据源为
+  ToolRegistry 的 game 工具清单）在此独立实现，
   避免与 StreamerAgent 双向耦合。
 
 配置兼容：``replyer_client`` 配置键保留（向后兼容）；同时接受 ``replyer_llm``。
@@ -30,7 +31,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.modules.logging import get_logger
-from src.modules.types.capabilities import CapabilitiesProvider, UnifiedCapabilitiesView
+from src.modules.tools.models import ToolSpec
 from src.modules.types.emotion_vocab import Emotion
 
 from .message_buffer import MessageBuffer
@@ -67,7 +68,7 @@ class Replyer:
         config: Dict[str, Any],
         llm_service: Any,
         prompt_service: Any,
-        capabilities_provider: Optional[CapabilitiesProvider] = None,
+        tool_registry: Optional[Any] = None,
         profanity_filter: Optional["ProfanityFilter"] = None,
     ) -> None:
         """初始化 Replyer。
@@ -77,7 +78,7 @@ class Replyer:
                     读取 replyer_llm / replyer_client / enable_action_selection / bot_name。
             llm_service: LLM 管理器（使用 replyer_llm 指定的高质量客户端）。
             prompt_service: 提示词管理器（渲染 amaidesu_replyer 模板）。
-            capabilities_provider: 工具能力提供者（可选，用于动作白名单校验）。
+            tool_registry: 工具注册表（可选，用于动作白名单校验与动作清单注入）。
             profanity_filter: 敏感词过滤器（输出端净化入口；None 表示不净化）。
         """
         self._config: Dict[str, Any] = config or {}
@@ -88,12 +89,11 @@ class Replyer:
 
         self._llm_service = llm_service
         self._prompt_service = prompt_service
-        self._capabilities_provider = capabilities_provider
+        self._tool_registry = tool_registry
         self._profanity_filter = profanity_filter
         self.logger = get_logger("Replyer")
 
-        # 能力快照（首次 generate 时惰性加载并缓存）
-        self._capabilities_loaded: bool = False
+        # 工具清单（每次 generate 时实时查询，不缓存——动态注册即生效）
         self._valid_action_names: set[str] = set()
         self._action_list_str: str = ""
 
@@ -140,8 +140,8 @@ class Replyer:
             self.logger.debug("DecisionPlan.should_reply=False，Replyer 跳过生成")
             return None
 
-        # 惰性加载能力快照（用于动作白名单）
-        self._ensure_capabilities()
+        # 查询工具清单（用于动作白名单）
+        self._ensure_tool_list()
 
         # ① 注入人设 + 决策计划 + 弹幕上下文 + 会话历史 + Agenda 上下文，渲染 Replyer prompt
         prompt = self._render_prompt(plan, batch, persona, history, agenda)
@@ -312,25 +312,27 @@ class Replyer:
         new_result["speech"] = cleaned_speech
         return new_result
 
-    # ==================== 能力快照（惰性加载） ====================
+    # ==================== 工具清单（每次决策查询） ====================
 
-    def _ensure_capabilities(self) -> None:
-        """惰性加载并缓存工具能力快照（首次 generate 时调用一次）。"""
-        if self._capabilities_loaded:
-            return
-        self._capabilities_loaded = True
+    def _ensure_tool_list(self) -> None:
+        """查询工具清单用于动作白名单校验（每次 generate 时调用）。
 
-        if not self._enable_action_selection or self._capabilities_provider is None:
+        数据源为 ToolRegistry 中 provider="game" 的工具（游戏 Agent 的
+        choose_option / get_story 等）——主播表达引擎据此做动作白名单校验。
+        不缓存：新注册的 game 工具（如动态启停的 Agent）需在下一轮决策即生效，
+        registry 查询是内存遍历，几乎零成本。
+        """
+        if not self._enable_action_selection or self._tool_registry is None:
             return
 
         try:
-            view = self._capabilities_provider.get_all_capabilities()
+            specs = self._tool_registry.list_tools(provider="game")
         except Exception as e:
-            self.logger.warning(f"Replyer 查询工具能力失败，动作选择降级为禁用: {e}")
+            self.logger.warning(f"Replyer 查询工具清单失败，动作选择降级为禁用: {e}")
             return
 
-        self._valid_action_names = {entry.name for entry in view.actions}
-        self._action_list_str = _format_action_list(view)
+        self._valid_action_names = {spec.name for spec in specs}
+        self._action_list_str = _format_action_list(specs)
         self.logger.info(f"Replyer 已加载 {len(self._valid_action_names)} 个可用动作供选择")
 
     # ==================== LLM 响应归一化 ====================
@@ -512,21 +514,26 @@ def _render_history_text(history: Optional[List[Any]]) -> str:
     return "\n".join(lines)
 
 
-def _format_action_list(view: UnifiedCapabilitiesView) -> str:
-    """把能力视图渲染为供 prompt 使用的动作清单文本。"""
+def _format_action_list(specs: List[ToolSpec]) -> str:
+    """把工具清单（ToolSpec 列表）渲染为供 prompt 使用的动作清单文本。"""
     lines: List[str] = []
-    for entry in view.actions:
+    for spec in specs:
         param_parts: List[str] = []
-        for pname, spec in entry.parameters.items():
-            seg = f"{pname}:{spec.type}"
-            if spec.minimum is not None or spec.maximum is not None:
-                seg += f"[{spec.minimum}~{spec.maximum}]"
-            if spec.default is not None:
-                seg += f"=默认{spec.default}"
-            param_parts.append(seg)
+        schema = spec.parameters_schema or {}
+        properties = schema.get("properties") if isinstance(schema, dict) else None
+        if isinstance(properties, dict):
+            for pname, prop in properties.items():
+                if isinstance(prop, dict):
+                    ptype = prop.get("type", "string")
+                    seg = f"{pname}:{ptype}"
+                    if prop.get("minimum") is not None or prop.get("maximum") is not None:
+                        seg += f"[{prop.get('minimum')}~{prop.get('maximum')}]"
+                    if prop.get("default") is not None:
+                        seg += f"=默认{prop.get('default')}"
+                    param_parts.append(seg)
         params_str = f"（参数: {', '.join(param_parts)}）" if param_parts else ""
-        desc = entry.description or ""
-        lines.append(f"- {entry.name}: {desc}{params_str}")
+        desc = spec.description or ""
+        lines.append(f"- {spec.name}: {desc}{params_str}")
     return "\n".join(lines)
 
 

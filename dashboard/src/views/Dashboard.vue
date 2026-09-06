@@ -142,7 +142,7 @@ import { Document } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { storeToRefs } from 'pinia';
 import { useSystemStore, useComponentsStore, useEventsStore } from '@/stores';
-import { capabilitiesApi, llmApi, agendaApi } from '@/api';
+import { toolsApi, llmApi, agendaApi } from '@/api';
 import type { AgendaStateResponse, LLMUsageSummary } from '@/types';
 
 const systemStore = useSystemStore();
@@ -152,8 +152,8 @@ const router = useRouter();
 
 const { status } = storeToRefs(systemStore);
 
-/** 能力条目总数（ToolRegistry 运行时 spec 数，与工具目录页同源） */
-const toolCapabilityCount = ref<number | null>(null);
+/** 工具总数（ToolRegistry 运行时 spec 数，与工具目录页同源） */
+const toolCount = ref<number | null>(null);
 
 // ====== KPI / 卡片数据 ======
 
@@ -251,11 +251,11 @@ const groupCards = computed<GroupCard[]>(() => {
     {
       key: 'tools',
       title: '工具',
-      subtitle: '能力契约（v2 tool.result.*）',
+      subtitle: '工具契约（v2 tool.result.*）',
       started: totalCount('tools'),
-      total: toolCapabilityCount.value ?? totalCount('tools'),
+      total: toolCount.value ?? totalCount('tools'),
       statPrimary: '提供方',
-      statSecondary: '能力条目',
+      statSecondary: '工具条目',
       icon: ToolIcon,
       supportsRuntimeStop: false,
     },
@@ -425,10 +425,10 @@ onMounted(async () => {
   void fetchLLMSummary();
   void fetchAgendaState();
   try {
-    const res = await capabilitiesApi.list();
-    toolCapabilityCount.value = res.data.actions.length;
+    const res = await toolsApi.list();
+    toolCount.value = res.data.tools.length;
   } catch {
-    toolCapabilityCount.value = null; // 失败时回退显示提供方数
+    toolCount.value = null; // 失败时回退显示提供方数
   }
 });
 

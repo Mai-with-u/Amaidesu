@@ -1,13 +1,13 @@
 """
-Capabilities API
+Tools API（工具清单只读内省端点）
 
-暴露已注册工具的能力查询端点（只读）：
-- GET /api/v1/capabilities  ->  工具清单（按 provider 限定名）
+暴露已注册工具清单（只读）：
+- GET /api/v1/tools  ->  工具清单（按 provider 限定名）
 
 数据源：``DashboardServer.tool_registry.list_tools()``。
 
-⚠️ 协调点：本端点提供**只读**注册表内省。工具体系团队若后续提供正式的
-``/api/v1/tools`` 端点（含调用能力），本端点可并存或由其替代。
+删除（Wave U1 / B4）：
+- ~~GET /api/v1/handlers~~ — v1 遗物，零消费
 """
 
 from typing import TYPE_CHECKING, Any, Dict, List
@@ -39,7 +39,7 @@ def _convert_parameters_schema(schema: Any) -> Dict[str, Dict[str, Any]]:
         {"type": "object", "properties": {"k": {"type": "string", "description": "..."}},
          "required": ["k"]}
 
-    输出形态（CapabilitiesPanel.vue 消费的 ``Record<key, ParameterSpec>``）：
+    输出形态（前端工具目录页消费的 ``Record<key, ParameterSpec>``）：
         {"k": {"type": "string", "required": True, "description": "...",
                "default": ..., "minimum": ..., "maximum": ...}}
 
@@ -76,7 +76,7 @@ def _convert_parameters_schema(schema: Any) -> Dict[str, Dict[str, Any]]:
 
 
 def _build_action_entry(provider: str, tool_name: str, description: str, parameters_schema: Any) -> Dict[str, Any]:
-    """构造单个 action 条目（与 UnifiedActionEntry 对齐）。"""
+    """构造单个 action 条目（工具清单视图，供前端展示）。"""
     entry: Dict[str, Any] = {
         "name": f"{provider}.{tool_name}",
         "description": description or "",
@@ -85,15 +85,15 @@ def _build_action_entry(provider: str, tool_name: str, description: str, paramet
     return entry
 
 
-@router.get("/capabilities", summary="列出所有已注册工具（按 provider 限定名）")
-async def list_capabilities(
+@router.get("/tools", summary="列出所有已注册工具（按 provider 限定名）")
+async def list_tools(
     server: "DashboardServer" = Depends(get_dashboard_server),  # noqa: B008
 ) -> Dict[str, List[Dict[str, Any]]]:
     """工具注册表只读内省（v2 替代 v1 OutputHandlerManager 假数据）。
 
     Returns:
-        {"actions": [{"name": "<provider>.<tool>", "description": ...,
-                       "parameters": {...}}, ...]}
+        {"tools": [{"name": "<provider>.<tool>", "description": ...,
+                      "parameters": {...}}, ...]}
 
     Raises:
         HTTPException 503: tool_registry 未注入（通常发生在极简启动/测试场景）。
@@ -110,7 +110,7 @@ async def list_capabilities(
     except Exception:
         specs = []
 
-    actions = [
+    tools = [
         _build_action_entry(
             provider=getattr(spec, "provider", "builtin") or "builtin",
             tool_name=spec.name,
@@ -119,4 +119,4 @@ async def list_capabilities(
         )
         for spec in specs
     ]
-    return {"actions": actions}
+    return {"tools": tools}

@@ -1,7 +1,7 @@
-"""Capabilities API 测试套件（Wave U1 / B3-B4）
+"""Tools API 测试套件
 
 覆盖：
-1. **GET /api/v1/capabilities** — 从 ToolRegistry 读取工具清单并转换为
+1. **GET /api/v1/tools** — 从 ToolRegistry 读取工具清单并转换为
    前端 ParameterSpec 形状
 2. **/api/v1/handlers 端点已删除**
 3. tool_registry=None → 503
@@ -110,27 +110,27 @@ def client(config_dir: Path):
     set_dashboard_server(None)  # type: ignore[arg-type]
 
 
-def test_capabilities_returns_actions_with_provider_prefix(client: TestClient) -> None:
+def test_tools_returns_tools_with_provider_prefix(client: TestClient) -> None:
     """动作名 = provider.tool_name 全限定名。"""
-    resp = client.get("/api/v1/capabilities")
+    resp = client.get("/api/v1/tools")
     assert resp.status_code == 200
     body = resp.json()
-    names = {a["name"] for a in body["actions"]}
+    names = {a["name"] for a in body["tools"]}
     assert "builtin.speak" in names
     assert "game.show_image" in names
 
 
-def test_capabilities_action_description_passthrough(client: TestClient) -> None:
-    resp = client.get("/api/v1/capabilities")
-    by_name = {a["name"]: a for a in resp.json()["actions"]}
+def test_tools_action_description_passthrough(client: TestClient) -> None:
+    resp = client.get("/api/v1/tools")
+    by_name = {a["name"]: a for a in resp.json()["tools"]}
     assert by_name["builtin.speak"]["description"] == "TTS 语音合成"
     assert by_name["game.show_image"]["description"] == "显示图片"
 
 
-def test_capabilities_parameters_map_to_parameter_spec(client: TestClient) -> None:
+def test_tools_parameters_map_to_parameter_spec(client: TestClient) -> None:
     """parameters_schema.properties[*] → Record<key, ParameterSpec>。"""
-    resp = client.get("/api/v1/capabilities")
-    by_name = {a["name"]: a for a in resp.json()["actions"]}
+    resp = client.get("/api/v1/tools")
+    by_name = {a["name"]: a for a in resp.json()["tools"]}
 
     speak_params = by_name["builtin.speak"]["parameters"]
     assert speak_params["text"]["type"] == "string"
@@ -151,13 +151,13 @@ def test_capabilities_parameters_map_to_parameter_spec(client: TestClient) -> No
     assert image_params["permanent"]["default"] is False
 
 
-def test_capabilities_handlers_endpoint_removed(client: TestClient) -> None:
+def test_tools_handlers_endpoint_removed(client: TestClient) -> None:
     """Wave U1 / B4：/api/v1/handlers 端点已删除。"""
     resp = client.get("/api/v1/handlers")
     assert resp.status_code == 404
 
 
-def test_capabilities_returns_503_when_registry_missing(config_dir: Path) -> None:
+def test_tools_returns_503_when_registry_missing(config_dir: Path) -> None:
     """tool_registry 未注入时返回 503（与原契约一致）。"""
     from src.modules.config.core_schemas import DashboardConfig
     from src.modules.config.service import ConfigService
@@ -176,14 +176,14 @@ def test_capabilities_returns_503_when_registry_missing(config_dir: Path) -> Non
     )
     set_dashboard_server(server)
     try:
-        resp = TestClient(create_app()).get("/api/v1/capabilities")
+        resp = TestClient(create_app()).get("/api/v1/tools")
         assert resp.status_code == 503
     finally:
         set_dashboard_server(None)  # type: ignore[arg-type]
 
 
-def test_capabilities_empty_when_registry_empty(config_dir: Path) -> None:
-    """空注册表返回 actions=[]（不抛 500）。"""
+def test_tools_empty_when_registry_empty(config_dir: Path) -> None:
+    """空注册表返回 tools=[]（不抛 500）。"""
     from src.modules.config.core_schemas import DashboardConfig
     from src.modules.config.service import ConfigService
     from src.modules.dashboard.api.router import create_app
@@ -201,14 +201,14 @@ def test_capabilities_empty_when_registry_empty(config_dir: Path) -> None:
     )
     set_dashboard_server(server)
     try:
-        resp = TestClient(create_app()).get("/api/v1/capabilities")
+        resp = TestClient(create_app()).get("/api/v1/tools")
         assert resp.status_code == 200
-        assert resp.json() == {"actions": []}
+        assert resp.json() == {"tools": []}
     finally:
         set_dashboard_server(None)  # type: ignore[arg-type]
 
 
-def test_capabilities_magicmock_registry_returns_actions(config_dir: Path) -> None:
+def test_tools_magicmock_registry_returns_tools(config_dir: Path) -> None:
     """MagicMock（test_components_v2_api 风格）作为 registry 也能跑通（无异常路径）。"""
     from src.modules.config.core_schemas import DashboardConfig
     from src.modules.config.service import ConfigService
@@ -232,8 +232,8 @@ def test_capabilities_magicmock_registry_returns_actions(config_dir: Path) -> No
     )
     set_dashboard_server(server)
     try:
-        resp = TestClient(create_app()).get("/api/v1/capabilities")
+        resp = TestClient(create_app()).get("/api/v1/tools")
         assert resp.status_code == 200
-        assert resp.json()["actions"] == []
+        assert resp.json()["tools"] == []
     finally:
         set_dashboard_server(None)  # type: ignore[arg-type]

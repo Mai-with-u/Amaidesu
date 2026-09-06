@@ -104,7 +104,7 @@ class Planner:
         llm_service: Any,
         prompt_service: Any,
         room_state: RoomState,
-        capabilities_provider: Any = None,
+        tool_registry: Any = None,
         memory: Any = None,
         recall_top_k: int = _DEFAULT_RECALL_TOP_K,
         context_enabled: bool = True,
@@ -121,8 +121,8 @@ class Planner:
             prompt_service: 提示词管理器（``PromptManager`` 或鸭子类型），
                 需提供 ``render_safe(template_name, **vars) -> str`` 接口
             room_state: 直播间态势规则层实例（``RoomState``）
-            capabilities_provider: 可选的能力提供者，用于向 prompt 注入可用动作清单。
-                None 时 prompt 的 action_list 为空串。
+            tool_registry: 可选的工具注册表，用于向 prompt 注入可用动作清单
+                （provider="game" 的游戏 Agent 工具）。None 时 prompt 的 action_list 为空串。
             memory: 记忆后端（鸭子类型 ``MemoryProvider``）。``None`` 时记忆
                 召回段落渲染为 ``（暂无）``，Planner 走无记忆决策路径。功能可关闭
                 而非崩溃友好——主控装配时未注入则 Planner 整体降级。
@@ -153,7 +153,7 @@ class Planner:
         self._llm_service = llm_service
         self._prompt_service = prompt_service
         self._room_state = room_state
-        self._capabilities_provider = capabilities_provider
+        self._tool_registry = tool_registry
         # 记忆后端与召回深度
         self._memory = memory
         self._recall_top_k = recall_top_k
@@ -570,26 +570,22 @@ class Planner:
     def _get_action_list(self) -> str:
         """获取可用动作清单文本（供 prompt 注入）。
 
-        从 capabilities_provider 惰性查询；无 provider 或查询失败时返回空串
-        （prompt 模板中 ``$action_list`` 会被 ``render_safe`` 保留为字面子串，
-        但 Planner 的模板未使用该变量，空串足够）。
-
-        Returns:
-            动作清单文本；无可用动作时返回空串
+        从 tool_registry 按 provider="game" 惰性查询（游戏 Agent 的专属工具）；
+        无 provider 或查询失败时返回空串。
         """
-        if self._capabilities_provider is None:
+        if self._tool_registry is None:
             return ""
 
         try:
-            view = self._capabilities_provider.get_all_capabilities()
+            specs = self._tool_registry.list_tools(provider="game")
         except Exception as e:
-            self.logger.warning(f"查询工具能力失败: {e}")
+            self.logger.warning(f"查询工具清单失败: {e}")
             return ""
 
         lines: List[str] = []
-        for entry in getattr(view, "actions", []):
-            desc = getattr(entry, "description", "") or ""
-            lines.append(f"- {entry.name}: {desc}")
+        for spec in specs:
+            desc = getattr(spec, "description", "") or ""
+            lines.append(f"- {spec.name}: {desc}")
         return "\n".join(lines)
 
     @staticmethod

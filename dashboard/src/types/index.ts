@@ -311,7 +311,7 @@ export interface EventRecord {
   data: Record<string, unknown>;
 }
 
-// ==================== Capabilities ====================
+// ==================== Tools ====================
 
 export type ParameterType = 'string' | 'number' | 'integer' | 'boolean';
 
@@ -325,14 +325,14 @@ export interface ParameterSpec {
 }
 
 /** v2 工具 action（来自真实 ToolRegistry）。name 形如 `<provider>.<tool>`。 */
-export interface UnifiedActionEntry {
+export interface ToolEntry {
   name: string;
   description?: string;
   parameters: Record<string, ParameterSpec>;
 }
 
-export interface UnifiedCapabilitiesView {
-  actions: UnifiedActionEntry[];
+export interface ToolsView {
+  tools: ToolEntry[];
 }
 
 // ==================== Simulator 控制面（ADR-006） ====================

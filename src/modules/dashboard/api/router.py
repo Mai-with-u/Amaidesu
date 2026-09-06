@@ -9,7 +9,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.modules.dashboard.api import (
     agenda,
-    capabilities,
     components,
     config,
     debug,
@@ -20,6 +19,7 @@ from src.modules.dashboard.api import (
     simulator,
     streamer,
     system,
+    tools,
     traces,
 )
 
@@ -45,7 +45,7 @@ def create_app() -> FastAPI:
     app.include_router(config.router, prefix="/api/v1/config", tags=["Config"])
     app.include_router(debug.router, prefix="/api/v1/debug", tags=["Debug"])
     app.include_router(llm.router, prefix="/api/v1/llm", tags=["LLM"])
-    app.include_router(capabilities.router, prefix="/api/v1", tags=["Capabilities"])
+    app.include_router(tools.router, prefix="/api/v1", tags=["Tools"])
     app.include_router(events.router, prefix="/api/v1", tags=["Events"])
     app.include_router(traces.router, prefix="/api/v1", tags=["Traces"])
     app.include_router(agenda.router, prefix="/api/v1/agenda", tags=["Agenda"])
