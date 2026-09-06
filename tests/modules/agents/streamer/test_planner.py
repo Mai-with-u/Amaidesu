@@ -1,42 +1,69 @@
 """Planner 单元测试（Wave 6 Streamer Agent Stage 1 决策核心）。
 
 迁移自 ``tests/stages/decision/deciders/amaidesu/test_planner.py``，保持人设隔离 /
-零工具调用 / 客户端选择 / JSON 解析等核心契约。
+function calling 结构化输出 / 客户端选择 / tool_calls 解析等核心契约。
+
+v2.5：Planner LLM 调用改为 ``call_tools(tools=[produce_plan_fn_def])``，
+所有 LLM 响应 mock 形态对齐 ``LLMResponse(success, content, tool_calls)``。
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.agents.streamer.plan import DecisionPlan
-from src.agents.streamer.planner import Planner
+from src.agents.streamer.planner import Planner, PRODUCE_PLAN_FN_DEF
+from src.modules.llm.manager import LLMResponse
 
 
-def _make_llm_response(content: str, *, success: bool = True) -> MagicMock:
-    """构造模拟的 LLMResponse（鸭子类型：含 .success / .content 字段）。"""
-    m = MagicMock()
-    m.success = success
-    m.content = content
-    m.error = None if success else "mock error"
-    return m
+def _make_llm_response(
+    plan_args: Optional[Dict[str, Any]],
+    *,
+    success: bool = True,
+    tool_calls_override: Optional[List[Dict[str, Any]]] = None,
+) -> LLMResponse:
+    """构造模拟的 LLMResponse（function calling 形态：tool_calls 包 produce_plan）。
+
+    Args:
+        plan_args: produce_plan 的参数 dict（会被 json.dumps 注入 arguments 字符串）。
+            ``None`` 时返回空 tool_calls（模拟 LLM 未调用任何工具）。
+        success: 调用成功标志；``False`` 时 Planner 视为失败降级。
+        tool_calls_override: 自定义 tool_calls 列表（用于测试"调用了别的工具"等异常路径）。
+    """
+    if not success:
+        return LLMResponse(success=False, content=None, error="mock error")
+    if tool_calls_override is not None:
+        return LLMResponse(success=True, content="", tool_calls=tool_calls_override)
+    if plan_args is None:
+        return LLMResponse(success=True, content="", tool_calls=[])
+    return LLMResponse(
+        success=True,
+        content="",
+        tool_calls=[
+            {
+                "name": "produce_plan",
+                "arguments": json.dumps(plan_args, ensure_ascii=False),
+            }
+        ],
+    )
 
 
 def _make_planner(
     *,
     planner_llm: str = "llm_fast",
-    llm_return: str | None = None,
-    llm_raises: Exception | None = None,
+    llm_return: Any = None,
+    llm_raises: Optional[Exception] = None,
 ) -> tuple[Planner, MagicMock, MagicMock, MagicMock]:
-    """构造一个注入 mock 依赖的 Planner。"""
+    """构造一个注入 mock 依赖的 Planner（mock call_tools 而非 chat）。"""
     llm = MagicMock()
     if llm_raises is not None:
-        llm.chat = AsyncMock(side_effect=llm_raises)
+        llm.call_tools = AsyncMock(side_effect=llm_raises)
     else:
-        llm.chat = AsyncMock(return_value=llm_return)
+        llm.call_tools = AsyncMock(return_value=llm_return)
 
     prompt = MagicMock()
     prompt.render_safe = MagicMock(return_value="PROMPT")
@@ -59,16 +86,14 @@ class TestPlannerHappyPath:
     @pytest.mark.asyncio
     async def test_plan_forced_returns_plan(self) -> None:
         """mock LLM 返回 should_reply=true → 返回非空 DecisionPlan。"""
-        raw = json.dumps(
-            {
-                "should_reply": True,
-                "target": "m1",
-                "topic_summary": "打游戏",
-                "reply_guidance": "回应",
-                "confidence": 0.9,
-            }
-        )
-        planner, llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+        plan_args = {
+            "should_reply": True,
+            "target": "m1",
+            "topic_summary": "打游戏",
+            "reply_guidance": "回应",
+            "confidence": 0.9,
+        }
+        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(plan_args))
 
         plan = await planner.plan([], forced=True)
 
@@ -98,29 +123,23 @@ class TestPlannerPersonaIsolation:
         在 Amaidesu 的映射：personality+style_constraints=表达侧（Replyer），
         behavior_style=决策侧（Planner）。
         """
-        raw = json.dumps({"should_reply": False})
-        planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+        planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response({"should_reply": False}))
 
         await planner.plan([], forced=False)
 
         kwargs = prompt.render_safe.call_args.kwargs
         # 决策侧：必须注入 behavior_style
-        assert "behavior_style" in kwargs, (
-            "Planner prompt 必须注入 $behavior_style（行动准则）"
-        )
+        assert "behavior_style" in kwargs, "Planner prompt 必须注入 $behavior_style（行动准则）"
         # 身份/表达侧：仍必须隔离
         assert "personality" not in kwargs, "Planner prompt 不得注入 personality（仅 Replyer 消费）"
-        assert "style_constraints" not in kwargs, (
-            "Planner prompt 不得注入 style_constraints（仅 Replyer 消费）"
-        )
+        assert "style_constraints" not in kwargs, "Planner prompt 不得注入 style_constraints（仅 Replyer 消费）"
         assert "bot_name" not in kwargs, "Planner prompt 不得注入 bot_name（仅 Replyer 消费）"
 
     @pytest.mark.asyncio
     async def test_plan_behavior_style_default_placeholder_when_empty(self) -> None:
         """behavior_style 未注入时（空串），Planner 应渲染占位文本而非字面 $behavior_style。"""
-        raw = json.dumps({"should_reply": False})
         # _make_planner 不传 behavior_style → Planner 内部 _behavior_style=""
-        planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+        planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response({"should_reply": False}))
 
         await planner.plan([], forced=False)
 
@@ -128,17 +147,14 @@ class TestPlannerPersonaIsolation:
         rendered = kwargs.get("behavior_style")
         assert isinstance(rendered, str), "behavior_style 渲染值必须是字符串"
         # 占位文本包含"未配置"标识，避免字面 ``$behavior_style`` 漏到 prompt
-        assert "未配置" in rendered or "行动准则" in rendered, (
-            f"behavior_style 空时应渲染占位文本，实际: {rendered!r}"
-        )
+        assert "未配置" in rendered or "行动准则" in rendered, f"behavior_style 空时应渲染占位文本，实际: {rendered!r}"
 
     @pytest.mark.asyncio
     async def test_plan_behavior_style_propagates_when_set(self) -> None:
         """显式传入 behavior_style 时，渲染值必须如实透传（不做过滤/截断）。"""
-        raw = json.dumps({"should_reply": False})
         # 直接构造 Planner 注入 behavior_style
         llm = MagicMock()
-        llm.chat = AsyncMock(return_value=_make_llm_response(raw))
+        llm.call_tools = AsyncMock(return_value=_make_llm_response({"should_reply": False}))
         prompt = MagicMock()
         prompt.render_safe = MagicMock(return_value="PROMPT")
         rs = MagicMock()
@@ -165,46 +181,54 @@ class TestPlannerClientType:
 
     @pytest.mark.asyncio
     async def test_plan_uses_llm_fast(self) -> None:
-        """默认 planner_llm=llm_fast，且透传到 chat 调用。"""
-        raw = json.dumps({"should_reply": True})
+        """默认 planner_llm=llm_fast，且透传到 call_tools 调用。"""
         planner, llm, _prompt, _rs = _make_planner(
             planner_llm="llm_fast",
-            llm_return=_make_llm_response(raw),
+            llm_return=_make_llm_response({"should_reply": True}),
         )
 
         await planner.plan([], forced=True)
 
-        assert llm.chat.await_args.kwargs.get("client_type") == "llm_fast"
+        assert llm.call_tools.await_args.kwargs.get("client_type") == "llm_fast"
 
     @pytest.mark.asyncio
     async def test_plan_uses_configured_client(self) -> None:
         """配置成 llm 时应使用 llm（证明不硬编码）。"""
-        raw = json.dumps({"should_reply": True})
         planner, llm, _prompt, _rs = _make_planner(
             planner_llm="llm",
-            llm_return=_make_llm_response(raw),
+            llm_return=_make_llm_response({"should_reply": True}),
         )
 
         await planner.plan([], forced=True)
 
-        assert llm.chat.await_args.kwargs.get("client_type") == "llm"
+        assert llm.call_tools.await_args.kwargs.get("client_type") == "llm"
 
 
-class TestPlannerNoTools:
-    """Planner 不做工具调用。"""
+class TestPlannerUsesProducePlanTool:
+    """Planner 通过 produce_plan function calling 产出决策（Y 模型标准接口）。"""
 
     @pytest.mark.asyncio
-    async def test_plan_no_tools(self) -> None:
-        """chat 调用 kwargs 中不得包含 tools 参数。"""
-        raw = json.dumps({"should_reply": True})
-        planner, llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+    async def test_plan_calls_produce_plan_fn(self) -> None:
+        """call_tools 调用必须传 produce_plan function def（单元素工具列表）。"""
+        planner, llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response({"should_reply": True}))
 
         await planner.plan([], forced=True)
 
-        kwargs = llm.chat.await_args.kwargs
-        assert "tools" not in kwargs, "Planner chat 调用不得传 tools 参数"
-        args = llm.chat.await_args.args
-        assert len(args) <= 1, "chat 只允许 prompt 位置参数"
+        kwargs = llm.call_tools.await_args.kwargs
+        assert "tools" in kwargs, "call_tools 调用必须传 tools 参数"
+        tools = kwargs["tools"]
+        assert isinstance(tools, list) and len(tools) == 1, "Planner 只声明 produce_plan 一个工具"
+        assert tools[0].get("name") == "produce_plan", "工具函数名必须是 produce_plan"
+
+    @pytest.mark.asyncio
+    async def test_plan_passes_planner_llm_constant_alignment(self) -> None:
+        """运行时声明的 produce_plan fn def 与模块常量 ``PRODUCE_PLAN_FN_DEF`` 名称一致。"""
+        planner, llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response({"should_reply": True}))
+
+        await planner.plan([], forced=True)
+
+        tools = llm.call_tools.await_args.kwargs["tools"]
+        assert tools[0]["name"] == PRODUCE_PLAN_FN_DEF["name"], "运行时 fn def 必须与 PRODUCE_PLAN_FN_DEF 对齐"
 
 
 class TestPlannerFailurePaths:
@@ -222,7 +246,7 @@ class TestPlannerFailurePaths:
     @pytest.mark.asyncio
     async def test_plan_llm_unsuccessful_returns_none(self) -> None:
         """LLM 返回 success=False → 返回 None。"""
-        bad = _make_llm_response("", success=False)
+        bad = _make_llm_response(None, success=False)
         planner, _llm, _prompt, _rs = _make_planner(llm_return=bad)
 
         plan = await planner.plan([], forced=True)
@@ -230,42 +254,41 @@ class TestPlannerFailurePaths:
         assert plan is None
 
 
-class TestPlannerJsonParsing:
-    """JSON 解析测试。"""
+class TestPlannerToolCallsParsing:
+    """tool_calls 解析路径测试（v2.5 替代原 JSON 解析测试）。"""
 
     @pytest.mark.asyncio
-    async def test_plan_invalid_json_returns_none(self) -> None:
-        """脏 JSON → 解析失败 → 返回 None。"""
-        planner, _llm, _prompt, _rs = _make_planner(
-            llm_return=_make_llm_response("这不是 JSON，是主播的胡言乱语")
-        )
+    async def test_plan_empty_tool_calls_returns_none(self) -> None:
+        """LLM 没调用任何工具（tool_calls=[]）→ 决策结构缺失 → 返回 None。"""
+        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(None))
 
         plan = await planner.plan([], forced=True)
 
         assert plan is None
+        assert planner.last_failure == "llm_no_tool_calls"
 
     @pytest.mark.asyncio
-    async def test_plan_json_with_codeblock_stripped(self) -> None:
-        """带 ```json 包裹的合法 JSON 也能被清理后解析（_clean_llm_json 作用）。"""
-        raw = '```json\n{"should_reply": true, "target": "all"}\n```'
-        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+    async def test_plan_missing_produce_plan_tool_call_returns_none(self) -> None:
+        """LLM 调用了别的工具但没调 produce_plan → 决策结构缺失 → 返回 None。"""
+        bad_calls = [{"name": "other_tool", "arguments": "{}"}]
+        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(None, tool_calls_override=bad_calls))
 
         plan = await planner.plan([], forced=True)
 
-        assert plan is not None
-        assert plan.should_reply is True
-        assert plan.target == "all"
+        assert plan is None
+        assert planner.last_failure == "produce_plan_not_called"
 
     @pytest.mark.asyncio
-    async def test_plan_trailing_comma_tolerated(self) -> None:
-        """LLM 常见的尾随逗号错误应被 _clean_llm_json 修复。"""
-        raw = '{"should_reply": true, "target": "x", }'
-        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+    async def test_plan_invalid_arguments_json_returns_none(self) -> None:
+        """produce_plan.arguments 字符串不是合法 JSON → 返回 None。"""
+        bad_calls = [{"name": "produce_plan", "arguments": "这不是 JSON，是主播的胡言乱语"}]
+        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(None, tool_calls_override=bad_calls))
 
         plan = await planner.plan([], forced=True)
 
-        assert plan is not None
-        assert plan.should_reply is True
+        assert plan is None
+        assert planner.last_failure is not None
+        assert "json_parse_failed" in planner.last_failure
 
 
 class TestPlannerConfidenceGate:
@@ -273,16 +296,14 @@ class TestPlannerConfidenceGate:
 
     @pytest.mark.asyncio
     async def test_low_confidence_non_forced_silenced(self) -> None:
-        raw = json.dumps(
-            {
-                "should_reply": True,
-                "target": "all",
-                "topic_summary": "没想好聊什么",
-                "reply_guidance": "硬聊",
-                "confidence": 0.0,
-            }
-        )
-        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+        plan_args = {
+            "should_reply": True,
+            "target": "all",
+            "topic_summary": "没想好聊什么",
+            "reply_guidance": "硬聊",
+            "confidence": 0.0,
+        }
+        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(plan_args))
 
         plan = await planner.plan([], forced=False)
 
@@ -293,8 +314,8 @@ class TestPlannerConfidenceGate:
 
     @pytest.mark.asyncio
     async def test_low_confidence_forced_keeps_reply(self) -> None:
-        raw = json.dumps({"should_reply": True, "target": "sc_user", "confidence": 0.0})
-        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+        plan_args = {"should_reply": True, "target": "sc_user", "confidence": 0.0}
+        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(plan_args))
 
         plan = await planner.plan([], forced=True)
 
@@ -304,8 +325,8 @@ class TestPlannerConfidenceGate:
 
     @pytest.mark.asyncio
     async def test_confidence_at_threshold_keeps_reply(self) -> None:
-        raw = json.dumps({"should_reply": True, "confidence": 0.3})
-        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+        plan_args = {"should_reply": True, "confidence": 0.3}
+        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(plan_args))
 
         plan = await planner.plan([], forced=False)
 
@@ -319,16 +340,14 @@ class TestPlannerForcedFlag:
     @pytest.mark.asyncio
     async def test_plan_forced_flag_passed_to_prompt(self) -> None:
         """forced 标志的 True/False 值应区分传递到 prompt 变量。"""
-        raw_t = json.dumps({"should_reply": True})
-        planner_t, _llm_t, prompt_t, _rs_t = _make_planner(llm_return=_make_llm_response(raw_t))
+        planner_t, _llm_t, prompt_t, _rs_t = _make_planner(llm_return=_make_llm_response({"should_reply": True}))
         await planner_t.plan([], forced=True)
         kwargs_t = prompt_t.render_safe.call_args.kwargs
         assert "forced" in kwargs_t, "render_safe 必须接收 forced 变量"
         forced_true = kwargs_t["forced"]
         assert forced_true in (True, "true"), f"forced=True 时 prompt 变量应为 True 或 'true'，实际: {forced_true!r}"
 
-        raw_f = json.dumps({"should_reply": False})
-        planner_f, _llm_f, prompt_f, _rs_f = _make_planner(llm_return=_make_llm_response(raw_f))
+        planner_f, _llm_f, prompt_f, _rs_f = _make_planner(llm_return=_make_llm_response({"should_reply": False}))
         await planner_f.plan([], forced=False)
         kwargs_f = prompt_f.render_safe.call_args.kwargs
         assert "forced" in kwargs_f
@@ -336,9 +355,7 @@ class TestPlannerForcedFlag:
         assert forced_false in (False, "false"), (
             f"forced=False 时 prompt 变量应为 False 或 'false'，实际: {forced_false!r}"
         )
-        assert forced_true != forced_false, (
-            f"forced=True/False 的 prompt 变量必须不同，实际均为 {forced_true!r}"
-        )
+        assert forced_true != forced_false, f"forced=True/False 的 prompt 变量必须不同，实际均为 {forced_true!r}"
 
 
 class TestPlannerAgendaContext:
@@ -348,8 +365,7 @@ class TestPlannerAgendaContext:
     @pytest.mark.asyncio
     async def test_plan_agenda_text_passed_to_prompt(self) -> None:
         """agenda_text 非空 → 透传到 prompt 的 $context_block 内"环节描述"段。"""
-        raw = json.dumps({"should_reply": False})
-        planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+        planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response({"should_reply": False}))
 
         agenda_text = "当前环节：开场（1/3）\n任务：自我介绍"
         await planner.plan([], forced=False, agenda_text=agenda_text)
@@ -361,8 +377,7 @@ class TestPlannerAgendaContext:
     @pytest.mark.asyncio
     async def test_plan_no_agenda_text_uses_placeholder(self) -> None:
         """agenda_text=None/空 → 环节描述段使用 "（无）" 占位。"""
-        raw = json.dumps({"should_reply": False})
-        planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+        planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response({"should_reply": False}))
 
         await planner.plan([], forced=False, agenda_text=None)
 
@@ -378,8 +393,7 @@ class TestPlannerContextBlockStructure:
     @pytest.mark.asyncio
     async def test_context_block_has_eight_sections(self) -> None:
         """context_block 必须包含 PlannerAssembler 的全部 8 段标题。"""
-        raw = json.dumps({"should_reply": False})
-        planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+        planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response({"should_reply": False}))
 
         await planner.plan([], forced=True)
 
@@ -400,14 +414,13 @@ class TestPlannerContextBlockStructure:
     @pytest.mark.asyncio
     async def test_context_block_contains_danmaku_batch(self) -> None:
         """弹幕批次内容必须出现在 context_block 的"直播流（窗口）"段。"""
-        raw = json.dumps({"should_reply": False})
         # 构造一个带 user_nickname 的 NormalizedMessage 鸭子
         msg = MagicMock()
         msg.text = "主播好可爱"
         msg.user_nickname = "观众A"
         msg.user_id = "u_a"
         msg.data_type = "text"
-        planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+        planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response({"should_reply": False}))
 
         await planner.plan([msg], forced=False)
 
@@ -421,7 +434,6 @@ class TestPlannerContextBlockStructure:
     @pytest.mark.asyncio
     async def test_context_block_contains_environment(self) -> None:
         """直播间快照段含 EnvironmentBlock 渲染字段（未读摘要/key_changes）。"""
-        raw = json.dumps({"should_reply": False})
         snapshot = MagicMock()
         snapshot.heat = "high"
         snapshot.topics = ["游戏", "上号"]
@@ -431,7 +443,7 @@ class TestPlannerContextBlockStructure:
         snapshot.last_update_ms = 1
 
         llm = MagicMock()
-        llm.chat = AsyncMock(return_value=_make_llm_response(raw))
+        llm.call_tools = AsyncMock(return_value=_make_llm_response({"should_reply": False}))
         prompt = MagicMock()
         prompt.render_safe = MagicMock(return_value="PROMPT")
         rs = MagicMock()
@@ -463,7 +475,6 @@ class TestPlannerMemoryRecall:
         """fake memory 返回 hits → context_block 的"记忆召回"段含格式化文本。"""
         from src.modules.memory.models import MemoryHit
 
-        raw = json.dumps({"should_reply": False})
         hits = [
             MemoryHit(
                 memory_id=1,
@@ -495,7 +506,7 @@ class TestPlannerMemoryRecall:
         snapshot.last_update_ms = 1
 
         llm = MagicMock()
-        llm.chat = AsyncMock(return_value=_make_llm_response(raw))
+        llm.call_tools = AsyncMock(return_value=_make_llm_response({"should_reply": False}))
         prompt = MagicMock()
         prompt.render_safe = MagicMock(return_value="PROMPT")
         rs = MagicMock()
@@ -532,7 +543,6 @@ class TestPlannerMemoryRecall:
         """单条 hit 文本超过 80 字需截断（_RECALL_HIT_TEXT_CHARS）。"""
         from src.modules.memory.models import MemoryHit
 
-        raw = json.dumps({"should_reply": False})
         long_text = "这是一条非常长的记忆测试文本" * 10  # 超过 80 字符
         hits = [
             MemoryHit(
@@ -557,7 +567,7 @@ class TestPlannerMemoryRecall:
         snapshot.last_update_ms = 1
 
         llm = MagicMock()
-        llm.chat = AsyncMock(return_value=_make_llm_response(raw))
+        llm.call_tools = AsyncMock(return_value=_make_llm_response({"should_reply": False}))
         prompt = MagicMock()
         prompt.render_safe = MagicMock(return_value="PROMPT")
         rs = MagicMock()
@@ -582,8 +592,7 @@ class TestPlannerMemoryRecall:
     @pytest.mark.asyncio
     async def test_memory_none_renders_placeholder_only(self) -> None:
         """memory=None 时流程不炸，且 prompt 含"（暂无）"占位。"""
-        raw = json.dumps({"should_reply": False})
-        planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+        planner, _llm, prompt, _rs = _make_planner(llm_return=_make_llm_response({"should_reply": False}))
 
         plan = await planner.plan([], forced=False)
 
@@ -595,7 +604,6 @@ class TestPlannerMemoryRecall:
     @pytest.mark.asyncio
     async def test_memory_recall_empty_hits_renders_placeholder(self) -> None:
         """memory 返回空 list → 仍走模板占位（"暂无"），不等同于崩溃。"""
-        raw = json.dumps({"should_reply": False})
         memory = MagicMock()
         memory.recall = AsyncMock(return_value=[])
 
@@ -608,7 +616,7 @@ class TestPlannerMemoryRecall:
         snapshot.last_update_ms = 1
 
         llm = MagicMock()
-        llm.chat = AsyncMock(return_value=_make_llm_response(raw))
+        llm.call_tools = AsyncMock(return_value=_make_llm_response({"should_reply": False}))
         prompt = MagicMock()
         prompt.render_safe = MagicMock(return_value="PROMPT")
         rs = MagicMock()
@@ -630,7 +638,6 @@ class TestPlannerMemoryRecall:
     @pytest.mark.asyncio
     async def test_memory_recall_exception_does_not_crash(self) -> None:
         """memory.recall 抛异常 → Planner 不炸，返回 DecisionPlan（决策流程降级）。"""
-        raw = json.dumps({"should_reply": False})
         memory = MagicMock()
         memory.recall = AsyncMock(side_effect=RuntimeError("vector store 炸了"))
 
@@ -643,7 +650,7 @@ class TestPlannerMemoryRecall:
         snapshot.last_update_ms = 1
 
         llm = MagicMock()
-        llm.chat = AsyncMock(return_value=_make_llm_response(raw))
+        llm.call_tools = AsyncMock(return_value=_make_llm_response({"should_reply": False}))
         prompt = MagicMock()
         prompt.render_safe = MagicMock(return_value="PROMPT")
         rs = MagicMock()
@@ -665,38 +672,37 @@ class TestPlannerMemoryRecall:
         kwargs = prompt.render_safe.call_args.kwargs
         assert "## 记忆召回\n（暂无）" in kwargs["context_block"]
 
+
 class TestPlannerObservability:
     """决策可观测副产品：reply_to 解析 / 静默标记 / 失败原因 / 请求历史指针。"""
 
     @pytest.mark.asyncio
     async def test_reply_to_parsed_from_llm_output(self) -> None:
-        raw = json.dumps(
-            {
-                "should_reply": True,
-                "target": "观众A",
-                "reply_to": "abc123",
-                "topic_summary": "回应提问",
-                "reply_guidance": "回答问题",
-                "confidence": 0.9,
-            }
-        )
-        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+        plan_args = {
+            "should_reply": True,
+            "target": "观众A",
+            "reply_to": "abc123",
+            "topic_summary": "回应提问",
+            "reply_guidance": "回答问题",
+            "confidence": 0.9,
+        }
+        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(plan_args))
         plan = await planner.plan([])
         assert plan is not None
         assert plan.reply_to == "abc123"
 
     @pytest.mark.asyncio
     async def test_reply_to_absent_defaults_none(self) -> None:
-        raw = json.dumps({"should_reply": True, "target": "all", "confidence": 0.9})
-        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+        plan_args = {"should_reply": True, "target": "all", "confidence": 0.9}
+        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(plan_args))
         plan = await planner.plan([])
         assert plan is not None
         assert plan.reply_to is None
 
     @pytest.mark.asyncio
     async def test_low_confidence_downgrade_marks_silent_reason(self) -> None:
-        raw = json.dumps({"should_reply": True, "target": "all", "confidence": 0.0})
-        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+        plan_args = {"should_reply": True, "target": "all", "confidence": 0.0}
+        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(plan_args))
         plan = await planner.plan([], forced=False)
         assert plan is not None
         assert plan.should_reply is False
@@ -704,7 +710,8 @@ class TestPlannerObservability:
 
     @pytest.mark.asyncio
     async def test_last_failure_captures_json_parse_error(self) -> None:
-        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response("这不是JSON{"))
+        bad_calls = [{"name": "produce_plan", "arguments": "这不是JSON{"}]
+        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(None, tool_calls_override=bad_calls))
         plan = await planner.plan([])
         assert plan is None
         assert planner.last_failure is not None
@@ -712,20 +719,23 @@ class TestPlannerObservability:
 
     @pytest.mark.asyncio
     async def test_last_failure_none_on_success(self) -> None:
-        raw = json.dumps({"should_reply": False, "confidence": 0.9})
-        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(raw))
+        plan_args = {"should_reply": False, "confidence": 0.9}
+        planner, _llm, _prompt, _rs = _make_planner(llm_return=_make_llm_response(plan_args))
         await planner.plan([])
         assert planner.last_failure is None
 
     @pytest.mark.asyncio
     async def test_raw_content_and_request_id_captured(self) -> None:
-        raw = json.dumps({"should_reply": False, "confidence": 0.9})
-        resp = _make_llm_response(raw)
+        plan_args = {"should_reply": False, "confidence": 0.9}
+        resp = _make_llm_response(plan_args)
         resp.request_id = "req_abc123"
         planner, _llm, _prompt, _rs = _make_planner(llm_return=resp)
         await planner.plan([])
-        assert planner.last_raw_content == raw
+        # last_raw_content 现在是 produce_plan arguments 的 JSON 字符串（实际决策结构）
+        assert planner.last_raw_content == json.dumps(plan_args, ensure_ascii=False)
         assert planner.last_request_id == "req_abc123"
+
+
 # =============================================================================
 # [context] 组装器路径开关（context_enabled）与召回条数透传
 # =============================================================================
@@ -737,9 +747,8 @@ class TestPlannerContextEnabled:
     @pytest.mark.asyncio
     async def test_context_disabled_skips_recall_and_assembler(self) -> None:
         """enabled=False → memory.recall 不被调用、context_block 为裸窗口文本。"""
-        raw = json.dumps({"should_reply": False})
         llm = MagicMock()
-        llm.chat = AsyncMock(return_value=_make_llm_response(raw))
+        llm.call_tools = AsyncMock(return_value=_make_llm_response({"should_reply": False}))
         prompt = MagicMock()
         prompt.render_safe = MagicMock(return_value="PROMPT")
         rs = MagicMock()
@@ -767,9 +776,8 @@ class TestPlannerContextEnabled:
     @pytest.mark.asyncio
     async def test_recall_top_k_passed_to_memory(self) -> None:
         """recall_top_k 透传给 memory.recall（装配链：[context].memory_recall_long_term）。"""
-        raw = json.dumps({"should_reply": False})
         llm = MagicMock()
-        llm.chat = AsyncMock(return_value=_make_llm_response(raw))
+        llm.call_tools = AsyncMock(return_value=_make_llm_response({"should_reply": False}))
         prompt = MagicMock()
         prompt.render_safe = MagicMock(return_value="PROMPT")
         rs = MagicMock()
@@ -793,9 +801,8 @@ class TestPlannerContextEnabled:
     @pytest.mark.asyncio
     async def test_context_enabled_keeps_assembler_path(self) -> None:
         """默认（enabled=True）仍走组装器路径：context_block 含 section 渲染标记。"""
-        raw = json.dumps({"should_reply": False})
         llm = MagicMock()
-        llm.chat = AsyncMock(return_value=_make_llm_response(raw))
+        llm.call_tools = AsyncMock(return_value=_make_llm_response({"should_reply": False}))
         prompt = MagicMock()
         prompt.render_safe = MagicMock(return_value="PROMPT")
         rs = MagicMock()

@@ -13,7 +13,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import List, Optional
 from unittest.mock import MagicMock
 
@@ -182,7 +181,12 @@ class TestReplyToMessageIdResolution:
 
         bus.on(CoreEvents.STREAMER_SPEECH, _capture, model_class=StreamerSpeechPayload)
         agent = _make_minimal_agent(event_bus=bus)
-        reply_payload = json.dumps({"speech": "回复内容", "emotion": "happy"}, ensure_ascii=False)
+        reply_payload = {
+            "speech": "回复内容",
+            "emotion": {"name": "happy", "intensity": 0.5},
+            "actions": [],
+            "metadata": {},
+        }
         agent._dispatch_speech_and_emotion(reply_payload, "u1", reply_to_message_id="m9")
         await asyncio.sleep(0.05)
         await bus.cleanup()

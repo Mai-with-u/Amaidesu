@@ -7,6 +7,9 @@
 - speech 非空 + context_service 注入：ContextService.add_message 收到 ASSISTANT 消息
 - 缺 context_service：跳过历史写入，不抛异常
 
+Y 模型契约：``_dispatch_speech_and_emotion`` 入参 = ``reply_result.structured_content``（dict），
+不是 JSON 字符串（reply_tool 已把 Replyer.generate 返回 dict 装入 structured_content）。
+
 测试方法：用真 EventBus 订阅 ``streamer.speech``，在 ``_dispatch_speech_and_emotion``
 后等待 fire-and-forget 任务完成（``asyncio.sleep``），验证收到的事件 payload。
 """
@@ -14,7 +17,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
@@ -25,6 +27,7 @@ from src.modules.context.models import MessageRole
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.speech import StreamerSpeechPayload
+from src.modules.llm.manager import LLMResponse
 
 
 def _make_agent_config(**overrides: Any) -> StreamerAgentConfig:
@@ -51,7 +54,8 @@ def _build_streamer_agent_with_bus(
 ) -> StreamerAgent:
     """构造最小化 StreamerAgent：注入真 EventBus + 可选 TTS / context。"""
     llm = MagicMock()
-    llm.chat = AsyncMock(return_value=MagicMock(success=False, content=""))
+    llm.call_tools = AsyncMock(return_value=LLMResponse(success=False, error="not used"))
+    llm.chat = AsyncMock()  # 兼容旧调用（不应被实际触发）
     prompt = MagicMock()
     prompt.render_safe = MagicMock(return_value="PROMPT")
     if context_service is None:
@@ -117,8 +121,13 @@ async def test_streamer_speech_emitted_when_tts_disabled():
     )
     await agent._on_start()
     try:
-        payload_dict = {"speech": "今天好冷", "emotion": "", "action": "", "metadata": {}}
-        agent._dispatch_speech_and_emotion(json.dumps(payload_dict, ensure_ascii=False))
+        payload_dict = {
+            "speech": "今天好冷",
+            "emotion": "",
+            "actions": [],
+            "metadata": {},
+        }
+        agent._dispatch_speech_and_emotion(payload_dict)
 
         captured = await _wait_for_speech_event(bus)
         assert captured is not None, "TTS 关闭时仍应收到 streamer.speech"
@@ -148,8 +157,13 @@ async def test_streamer_speech_emitted_when_tts_enabled_and_no_engine():
         assert agent._tts_enabled is False
         assert agent._utterance_queue is None
 
-        payload_dict = {"speech": "降级模式", "emotion": "", "action": "", "metadata": {}}
-        agent._dispatch_speech_and_emotion(json.dumps(payload_dict))
+        payload_dict = {
+            "speech": "降级模式",
+            "emotion": "",
+            "actions": [],
+            "metadata": {},
+        }
+        agent._dispatch_speech_and_emotion(payload_dict)
 
         captured = await _wait_for_speech_event(bus)
         assert captured is not None, "tts_engine 缺失降级时仍应 emit 业务事件"
@@ -185,8 +199,13 @@ async def test_streamer_speech_and_tts_share_same_utterance_id():
 
         bus.on(CoreEvents.STREAMER_SPEECH, _capture, model_class=StreamerSpeechPayload)
 
-        payload_dict = {"speech": "复测一下 id", "emotion": "happy", "action": "", "metadata": {}}
-        agent._dispatch_speech_and_emotion(json.dumps(payload_dict, ensure_ascii=False))
+        payload_dict = {
+            "speech": "复测一下 id",
+            "emotion": {"name": "happy", "intensity": 0.5},
+            "actions": [],
+            "metadata": {},
+        }
+        agent._dispatch_speech_and_emotion(payload_dict)
 
         await asyncio.wait_for(event.wait(), timeout=2.0)
         # 等 TTS 引擎取走
@@ -226,8 +245,13 @@ async def test_empty_speech_does_not_emit_streamer_speech():
     await agent._on_start()
     try:
         for empty_speech in ["", "   ", "\n\t  "]:
-            payload_dict = {"speech": empty_speech, "emotion": "", "action": "", "metadata": {}}
-            agent._dispatch_speech_and_emotion(json.dumps(payload_dict))
+            payload_dict = {
+                "speech": empty_speech,
+                "emotion": "",
+                "actions": [],
+                "metadata": {},
+            }
+            agent._dispatch_speech_and_emotion(payload_dict)
 
         # 等 fire-and-forget 任务全部跑完
         await asyncio.sleep(0.05)
@@ -260,8 +284,13 @@ async def test_streamer_speech_writes_to_context_history():
     )
     await agent._on_start()
     try:
-        payload_dict = {"speech": "写入历史", "emotion": "happy", "action": "", "metadata": {}}
-        agent._dispatch_speech_and_emotion(json.dumps(payload_dict, ensure_ascii=False))
+        payload_dict = {
+            "speech": "写入历史",
+            "emotion": {"name": "happy", "intensity": 0.5},
+            "actions": [],
+            "metadata": {},
+        }
+        agent._dispatch_speech_and_emotion(payload_dict)
 
         # 等 fire-and-forget 历史写入任务跑完
         for _ in range(50):
@@ -285,7 +314,8 @@ async def test_streamer_speech_skips_context_when_service_missing():
     bus = EventBus()
     # context_service=None 直接通过 _build_streamer_agent_with_bus 不传
     llm = MagicMock()
-    llm.chat = AsyncMock(return_value=MagicMock(success=False, content=""))
+    llm.call_tools = AsyncMock(return_value=LLMResponse(success=False, error="not used"))
+    llm.chat = AsyncMock()  # 兼容旧调用（不应被实际触发）
     prompt = MagicMock()
     prompt.render_safe = MagicMock(return_value="PROMPT")
 
@@ -301,9 +331,14 @@ async def test_streamer_speech_skips_context_when_service_missing():
     )
     await agent._on_start()
     try:
-        payload_dict = {"speech": "无 ctx 也行", "emotion": "", "action": "", "metadata": {}}
+        payload_dict = {
+            "speech": "无 ctx 也行",
+            "emotion": "",
+            "actions": [],
+            "metadata": {},
+        }
         # 不应抛异常
-        agent._dispatch_speech_and_emotion(json.dumps(payload_dict, ensure_ascii=False))
+        agent._dispatch_speech_and_emotion(payload_dict)
         await asyncio.sleep(0.05)
 
         # 仍 emit 业务事件（与 context 缺失正交）
@@ -317,7 +352,7 @@ async def test_streamer_speech_skips_context_when_service_missing():
 
         bus.on(CoreEvents.STREAMER_SPEECH, _capture, model_class=StreamerSpeechPayload)
         # 重新触发一次确保订阅能接到（前面那次可能已被 fire-and-forget 跑过）
-        agent._dispatch_speech_and_emotion(json.dumps(payload_dict, ensure_ascii=False))
+        agent._dispatch_speech_and_emotion(payload_dict)
         await asyncio.wait_for(event.wait(), timeout=2.0)
         assert len(received) >= 1
     finally:

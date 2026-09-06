@@ -29,7 +29,6 @@ await agent.cleanup()
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 
 from src.modules.agents.base import BaseAgent
@@ -574,11 +573,16 @@ class StreamerAgent(BaseAgent):
         ]
 
     def _register_tools(self) -> None:
-        """构造三个工具 Provider 并注册到 ToolRegistry（若存在）。
+        """构造三个工具 Provider（Agent 内部协议，不注册进 ToolRegistry）。
 
-        Provider 构造与 registry 解耦：``_make_two_stage_decision`` 直接调用
-        ``_reply_provider.invoke``（Agent 决策循环内脏路径），不依赖外部
-        ToolRegistry 是否注入；registry 存在时才把 Provider 挂上去供外部消费。
+        Y 模型分层：reply / should_speak_proactively / parse_command 是
+        主播 Agent 自身出口（内部协议），只服务自身的决策循环与表达会话，
+        **不做全局能力**——不进 ToolRegistry（架构红线：Agent 内脏
+        不注册为全局工具）。``_make_two_stage_decision`` 直接调用
+        ``_reply_provider.invoke``（决策循环内脏路径）。
+
+        动作工具（warudo_*/obs_*/text_adv_* 等通用动作库）仍由
+        ToolRegistry 注册管理，LLM 经标准 tool calling 访问。
         """
 
         # reply tool（无条件构造——决策循环直连调用依赖）
@@ -604,14 +608,9 @@ class StreamerAgent(BaseAgent):
             command_mappings=self.typed_config.command_mappings,
         )
 
-        if self._tool_registry is None:
-            return
-
-        self._tool_registry.register_provider(self._reply_provider)
-        self._tool_registry.register_provider(self._proactive_provider)
-        self._tool_registry.register_provider(self._command_provider)
-
-        self._logger.info("StreamerAgent 3 个工具已注册：reply / should_speak_proactively / parse_command")
+        self._logger.info(
+            "StreamerAgent 3 个内部协议 Provider 已构造：reply / should_speak_proactively / parse_command（不入 ToolRegistry）"
+        )
 
     # ==================================================================
     # 事件订阅
@@ -1017,7 +1016,7 @@ class StreamerAgent(BaseAgent):
         # reply_to_message_id（Planner 指向的具体弹幕）随发言事件落库，形成
         # "主播回应了哪条弹幕"的可查询关联。
         speech_info = self._dispatch_speech_and_emotion(
-            reply_result.content,
+            reply_result.structured_content,
             self._resolve_reply_target_user(plan, batch),
             reply_to_message_id=plan.reply_to,
         )
@@ -1226,54 +1225,49 @@ class StreamerAgent(BaseAgent):
 
     def _dispatch_speech_and_emotion(
         self,
-        reply_content: Any,
+        reply_payload: Any,
         reply_target_user_id: Optional[str] = None,
         reply_to_message_id: Optional[str] = None,
     ) -> Optional[tuple]:
-        """解析 reply payload 并触发下游管线（决策循环安全：永不抛异常）。
+        """消费 reply 结构化结果并触发下游管线（决策循环安全：永不抛异常）。
 
         Args:
-            reply_content: ``ToolExecutionResult.content``（JSON 字符串），
-                解码为 ``{speech, emotion, action, metadata}``。
+            reply_payload: ``ToolExecutionResult.structured_content``（dict），
+                形态 ``{speech, emotion, actions}``；emotion 为
+                ``{"name": str, "intensity": float}``。
             reply_target_user_id: 本次回复的观众 user_id（可选；透传到
                 ``streamer.speech`` 业务事件，None 表示主动发言/无特定对象）。
             reply_to_message_id: 本次回复所指向弹幕的 message_id（可选；
                 来自 Planner 决策输出，透传到发言事件并落库为互动关联）。
 
         行为契约：
-        - JSON 解析失败 → WARN 日志 + 直接返回（决策循环不受影响）
+        - 非 dict 输入 → WARN 日志 + 直接返回（决策循环不受影响）
         - TTS 未启用 → 仍发布 ``streamer.speech`` 业务事件 + 写入 ContextService 历史
           （TTS 启用与否与主播发言业务事实正交；下游消费者仅依赖业务事件）
         - speech 非空 → 生成 utterance_id + 发布业务事件 + 写入历史；TTS 启用时
           复用同一 utterance_id 入 TTS 队列（与 ``tts.utterance.*`` 共用关联键）
         - emotion 非空 → ``asyncio.create_task`` 调 VTS 表情工具（fire-and-forget）
-        - action 字段：当前锁定范围**不接入**（决策调用路径，独立议题）
+        - actions 非空 → 逐条 ``asyncio.create_task`` 调 ToolRegistry（fire-and-forget）
         """
-        if not isinstance(reply_content, str) or not reply_content:
-            # reply 工具约定 content 为 JSON 字符串；空内容视作无发言
+        if not isinstance(reply_payload, dict):
+            self._logger.warning(f"reply structured_content 非 dict，跳过发言管线: {type(reply_payload).__name__}")
             return None
 
-        try:
-            payload = json.loads(reply_content)
-        except (TypeError, ValueError) as exc:
-            self._logger.warning(f"reply payload JSON 解析失败，跳过发言管线: {exc}")
-            return None
-
-        if not isinstance(payload, dict):
-            self._logger.warning("reply payload 非 dict，跳过发言管线")
-            return None
-
-        speech = payload.get("speech", "")
-        emotion = payload.get("emotion", "")
-        # action 字段：当前范围明确不接入决策调用（独立议题）；
-        # 这里只读取不消费，避免后续扩张时无谓往返。
-        action = payload.get("action", "")
-        _ = action  # 显式标注当前未使用，便于后续 grep 排查
-        _ = payload.get("metadata", {})  # metadata 当前也不消费
+        speech = reply_payload.get("speech", "")
+        emotion = reply_payload.get("emotion", "")
+        actions = reply_payload.get("actions", [])
 
         cleaned_speech = speech.strip() if isinstance(speech, str) else ""
-        emotion_str = emotion.strip() if isinstance(emotion, str) else ""
-        cleaned_emotion: Optional[str] = emotion_str or None
+        # emotion 新契约为 {name, intensity}；兼容旧字符串形态（防御）
+        if isinstance(emotion, dict):
+            cleaned_emotion: Optional[str] = str(emotion.get("name", "") or "").strip() or None
+        elif isinstance(emotion, str):
+            cleaned_emotion = emotion.strip() or None
+        else:
+            cleaned_emotion = None
+
+        # 动作工具调用（fire-and-forget；决策循环安全：失败仅记日志）
+        self._schedule_actions(actions)
 
         # emotion → VTS 表情调用跟随 TTS 启用门：TTS 关闭（无语音/无声卡场景）
         # 时 avatar 表情随同关闭，避免与改造前的"管线整体退化"语义漂移。
@@ -1439,6 +1433,56 @@ class StreamerAgent(BaseAgent):
             asyncio.create_task(_invoke_vts())
         except RuntimeError as exc:
             self._logger.warning(f"VTS 表情任务创建失败（已忽略）: emotion={emotion}, err={exc}")
+
+    def _schedule_actions(self, actions: Any) -> None:
+        """异步触发动作工具调用（fire-and-forget，失败不影响决策循环）。
+
+        ``actions`` 契约：``[{name: str, parameters: dict}, ...]``（来自
+        Replyer 的 tool_calls 非 reply 部分；LLM 通过标准 function calling
+        选择的动作工具）。
+
+        与 ``_schedule_vts_emotion`` 同模式：
+        - 每条动作独立 ``asyncio.create_task``（互不阻塞）
+        - registry 缺失时静默跳过
+        - 工具失败只记 WARN（注册表 invoke 本身不抛异常，双保险）
+        """
+        if not isinstance(actions, list) or not actions:
+            return
+
+        registry = self._tool_registry
+        if registry is None:
+            self._logger.debug(f"actions 触发条件不满足（tool_registry 缺失），跳过 {len(actions)} 条")
+            return
+
+        for action in actions:
+            if not isinstance(action, dict):
+                self._logger.debug(f"action 条目非 dict，跳过: {action!r}")
+                continue
+            name = str(action.get("name", "") or "").strip()
+            if not name:
+                self._logger.debug("action 条目缺 name，跳过")
+                continue
+            arguments = action.get("parameters") or action.get("arguments") or {}
+            if not isinstance(arguments, dict):
+                arguments = {}
+            invocation = ToolInvocation(
+                tool_name=name,
+                arguments=arguments,
+                source="streamer_agent.action",
+            )
+
+            async def _invoke_action(inv: ToolInvocation = invocation) -> None:
+                try:
+                    await registry.invoke(inv)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - 异步背景任务边界
+                    self._logger.warning(f"动作工具调用异常（已忽略）: tool={inv.tool_name}, err={exc}")
+
+            try:
+                asyncio.create_task(_invoke_action())
+            except RuntimeError as exc:
+                self._logger.warning(f"动作任务创建失败（已忽略）: tool={name}, err={exc}")
 
     def _consume_plan_assessment(self, plan: Any) -> None:
         """消费 Planner 评估字段，灌入 AgendaIdle。"""

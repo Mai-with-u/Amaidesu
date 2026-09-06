@@ -14,17 +14,19 @@
    personality + style_constraints = 表达侧（Replyer），behavior_style = 决策侧（Planner）。
 3. **快速模型**：使用 ``planner_llm``（默认 ``llm_fast``），与 Replyer 的
    ``replyer_llm``（默认 ``llm``）分离，避免共享客户端实例。
-4. **无工具调用**：`chat()` 调用不传 ``tools`` 参数——Planner 只做结构化 JSON 输出。
-5. **降级安全**：LLM 异常 / 脏 JSON 均返回 ``None``，由调用方（StreamerAgent 主循环）处理降级。
+4. **结构化决策输出**：`call_tools(tools=[produce_plan_fn_def])` 走标准 function calling，
+   Planner 是 Agent 内部协议（不进 ToolRegistry），由 LLM 通过 produce_plan 工具调用产出
+   DecisionPlan 字段。Planner **不执行**任何动作工具——它是决策器而非工具调用者。
+5. **降级安全**：LLM 异常 / 无 tool_calls / 参数解析失败均返回 ``None``，
+   由调用方（StreamerAgent 主循环）处理降级。
 6. **历史感知**：可选注入最近对话历史（``history``），渲染为 ``$conversation_history``
    注入 prompt，让 Planner 决策时能反重复（特别是主动发言时避免重复已聊过的话题）。
 
 数据流：
     batch + room_state.snapshot + history + forced/proactive + behavior_style
         ──▶ render_safe('amaidesu_planner')
-        ──▶ llm_service.chat(prompt, client_type=planner_llm)
-        ──▶ _clean_llm_json + json.loads
-        ──▶ DecisionPlan（或 None）
+        ──▶ llm_service.call_tools(prompt, tools=[produce_plan_fn_def], client_type=planner_llm)
+        ──▶ tool_calls[0]["arguments"] → json.loads → DecisionPlan（或 None）
 
 提示词内聚于本包 prompts/ 目录，键来自模板 frontmatter 的
 ``name: amaidesu_planner``。
@@ -33,8 +35,7 @@
 from __future__ import annotations
 
 import json
-import re
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.context.assembler import AssemblerInputs, PlannerAssembler
@@ -64,6 +65,49 @@ _RECALL_QUERY_BATCH_CHARS: int = 200
 
 #: 单条召回 hit 文本截断长度（控制 prompt 体积）。
 _RECALL_HIT_TEXT_CHARS: int = 80
+
+
+# ---------------------------------------------------------------------------
+# produce_plan function definition（Agent 内部协议，不进 ToolRegistry）
+# ---------------------------------------------------------------------------
+
+
+#: Planner 决策结构化输出的 function calling 声明。
+#:
+#: **为何显式声明而非从 ``DecisionPlan.model_json_schema()`` 自动生成**：
+#: 自动生成会包含 ``silent_reason``（仅 Planner 降级路径填写，LLM 不应输出）
+#: 与 ``version``（内部字段）——显式收窄到 LLM 真正应该填的字段集，避免噪声契约。
+#:
+#: **为何不进 ToolRegistry**：produce_plan 是 Planner 自身出口，
+#: 仅服务于主播 Agent 的 LLM 会话；ToolRegistry 是通用动作库，
+#: Agent 内脏注册为工具违反「主体性判据」红线（Agent 内脏 ≠ 工具）。
+PRODUCE_PLAN_FN_DEF: Dict[str, Any] = {
+    "name": "produce_plan",
+    "description": "对本批弹幕/当前直播间态势做决策：主播是否应该发言、回应谁、话题是什么",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "should_reply": {"type": "boolean"},
+            "target": {
+                "type": "string",
+                "nullable": True,
+                "description": "要回应的弹幕 message_id 或片段",
+            },
+            "reply_to": {
+                "type": "string",
+                "nullable": True,
+                "description": "本轮回复所指向弹幕的 message_id（从批次中选取）",
+            },
+            "topic_summary": {"type": "string"},
+            "reply_guidance": {"type": "string"},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "may_advance": {"type": "boolean"},
+            "need_more_time": {"type": "boolean"},
+            "branch_id": {"type": "string", "nullable": True},
+        },
+        "required": ["should_reply", "topic_summary", "confidence"],
+    },
+}
 
 
 # ---------------------------------------------------------------------------
@@ -117,12 +161,15 @@ class Planner:
                 - ``dict``：经 ``_PlannerConfig.from_dict()`` 解析（自动剥离未知字段）
                 - 已解析对象：若有 ``planner_llm`` 属性则直接读取
             llm_service: LLM 管理器（``LLMManager`` 或鸭子类型），
-                需提供 ``async chat(prompt, *, client_type) -> Response`` 接口
+                需提供 ``async call_tools(prompt, tools, *, client_type) -> LLMResponse``
+                接口（标准 function calling 入口）。保留兼容旧 ``chat()`` 形式需自行包装。
             prompt_service: 提示词管理器（``PromptManager`` 或鸭子类型），
                 需提供 ``render_safe(template_name, **vars) -> str`` 接口
             room_state: 直播间态势规则层实例（``RoomState``）
-            tool_registry: 可选的工具注册表，用于向 prompt 注入可用动作清单
-                （provider="game" 的游戏 Agent 工具）。None 时 prompt 的 action_list 为空串。
+            tool_registry: 已**废弃**，参数保留仅为不破坏 ``StreamerAgent`` 调用方。
+                Planner 不再向 prompt 注入动作工具清单——决策器不感知动作能力；
+                工具选择由下游 Replyer 阶段负责（Agent 内部协议 ``produce_plan`` 是
+                Planner 唯一的"工具"声明，不进 ``ToolRegistry``）。
             memory: 记忆后端（鸭子类型 ``MemoryProvider``）。``None`` 时记忆
                 召回段落渲染为 ``（暂无）``，Planner 走无记忆决策路径。功能可关闭
                 而非崩溃友好——主控装配时未注入则 Planner 整体降级。
@@ -153,7 +200,9 @@ class Planner:
         self._llm_service = llm_service
         self._prompt_service = prompt_service
         self._room_state = room_state
-        self._tool_registry = tool_registry
+        # tool_registry 参数保留以不破坏 StreamerAgent 调用方；内部不再使用
+        # （Planner 不感知动作工具；produce_plan 是 Agent 内部协议）
+        del tool_registry
         # 记忆后端与召回深度
         self._memory = memory
         self._recall_top_k = recall_top_k
@@ -226,7 +275,6 @@ class Planner:
         snapshot = self._room_state.get_snapshot()
         danmaku_text = self._render_batch(batch)
         history_text = self._render_history(history)
-        action_list = self._get_action_list()
 
         # 直播流窗口：历史在上、当前批在下（显式多对一，不强行一问一答）
         recent_chat_parts: List[str] = []
@@ -253,10 +301,11 @@ class Planner:
             memory_recall_section = await self._recall_memory(snapshot, batch)
 
             # PlannerAssembler 输入（★ Planner 零人设承诺 → persona=""）
+            # tool_definitions_block=""：Planner 不感知动作工具清单（决策器非工具调用者）
             try:
                 assembler_inputs = AssemblerInputs(
                     persona="",
-                    tool_definitions_block=action_list,
+                    tool_definitions_block="",
                     current_stage_label=None,
                     stage_descriptions=agenda_text or "",
                     timeline_blocks=[],
@@ -296,10 +345,13 @@ class Planner:
             self.last_failure = f"prompt_render_failed: {e}"
             return None
 
-        # 调用 LLM（★ 无 tools 参数）
+        # 调用 LLM（★ 标准 function calling：produce_plan 是 Agent 内部协议）
+        # Planner 不执行动作工具；唯一的"工具"声明是 produce_plan，用于结构化输出
+        # DecisionPlan 字段（不进 ToolRegistry）。
         try:
-            response = await self._llm_service.chat(
+            response = await self._llm_service.call_tools(
                 prompt=prompt,
+                tools=[PRODUCE_PLAN_FN_DEF],
                 client_type=self.planner_llm,
             )
         except Exception as e:
@@ -307,29 +359,34 @@ class Planner:
             self.last_failure = f"llm_error: {e}"
             return None
 
-        # 提取文本内容（兼容 LLMResponse / str 两种返回形式）
-        content = self._extract_content(response)
-        if content is None:
-            self.logger.warning("Planner LLM 返回空内容或调用失败（success=False）")
-            self.last_failure = "llm_empty_content"
+        # 提取 tool_calls（标准 function calling 输出形态）
+        tool_calls = self._extract_tool_calls(response)
+        if tool_calls is None:
+            self.logger.warning("Planner LLM 返回无 tool_calls 或调用失败（success=False）")
+            self.last_failure = "llm_no_tool_calls"
             return None
-        # 可观测副产品：原始输出 + 请求历史指针（鸭子类型 str 响应无 request_id）
-        self.last_raw_content = content
-        self.last_request_id = getattr(response, "request_id", None) or None
 
-        # 清理 + 解析 JSON → DecisionPlan
-        cleaned = self._clean_llm_json(content)
+        arguments_str = self._find_produce_plan_arguments(tool_calls)
+        if arguments_str is None:
+            self.logger.warning("Planner LLM 未调用 produce_plan 工具（决策结构缺失）")
+            self.last_failure = "produce_plan_not_called"
+            return None
+
         try:
-            parsed = json.loads(cleaned)
+            parsed = json.loads(arguments_str)
         except json.JSONDecodeError as e:
-            self.logger.warning(f"Planner JSON 解析失败: {e}, 原始内容前 200 字: {cleaned[:200]}")
+            self.logger.warning(f"Planner produce_plan arguments 解析失败: {e}, 原始前 200 字: {arguments_str[:200]}")
             self.last_failure = f"json_parse_failed: {e}"
             return None
 
         if not isinstance(parsed, dict):
-            self.logger.warning(f"Planner JSON 顶层非对象: {type(parsed).__name__}")
+            self.logger.warning(f"Planner produce_plan arguments 顶层非对象: {type(parsed).__name__}")
             self.last_failure = "json_not_object"
             return None
+
+        # 可观测副产品：原始输出记 arguments_str（实际决策结构）便于观察器定位
+        self.last_raw_content = arguments_str
+        self.last_request_id = getattr(response, "request_id", None) or None
 
         plan = self._build_plan(parsed)
         if plan is None:
@@ -359,26 +416,49 @@ class Planner:
     # ==================== 辅助方法 ====================
 
     @staticmethod
-    def _extract_content(response: Any) -> Optional[str]:
-        """从 LLM 响应中提取文本内容。
+    def _extract_tool_calls(response: Any) -> Optional[List[Dict[str, Any]]]:
+        """从 LLM 响应中提取 tool_calls 列表。
 
-        兼容两种返回形式：
-        - ``LLMResponse`` 对象（实际运行时，含 ``.success`` / ``.content`` 字段）
-        - ``str``（简化 mock 场景，如 QA 脚本中的 ``AsyncMock(return_value=json.dumps(...))``）
+        适配 ``LLMResponse.tool_calls`` 字段（OpenAI function calling 标准形态）；
+        调用失败（success=False）或 tool_calls 为空时返回 None。
 
         Args:
-            response: LLM 返回值
+            response: LLMResponse 鸭子类型
 
         Returns:
-            文本内容；调用失败（success=False）或无内容时返回 None
+            tool_calls 列表；失败或缺失时返回 None
         """
-        if isinstance(response, str):
-            return response
-        # 鸭子类型：检查 success 标志
         success = getattr(response, "success", True)
         if success is False:
             return None
-        return getattr(response, "content", None)
+        tool_calls = getattr(response, "tool_calls", None)
+        if not tool_calls:
+            return None
+        return tool_calls
+
+    @staticmethod
+    def _find_produce_plan_arguments(tool_calls: List[Dict[str, Any]]) -> Optional[str]:
+        """在 tool_calls 中查找 produce_plan 调用的 arguments（JSON 字符串）。
+
+        多个 tool_calls 时优先取第一个名为 produce_plan 的；找不到返回 None。
+
+        Args:
+            tool_calls: LLM 调用的工具列表
+
+        Returns:
+            produce_plan.arguments 字符串；未找到时返回 None
+        """
+        for tc in tool_calls:
+            if not isinstance(tc, dict):
+                continue
+            if tc.get("name") == "produce_plan":
+                args = tc.get("arguments")
+                if isinstance(args, str):
+                    return args
+                if isinstance(args, dict):
+                    # 容错：部分客户端可能直接返回 dict（已解析）
+                    return json.dumps(args, ensure_ascii=False)
+        return None
 
     def _build_plan(self, parsed: dict) -> Optional[DecisionPlan]:
         """从解析后的 JSON 字典构造 DecisionPlan。
@@ -566,55 +646,3 @@ class Planner:
                 continue
             lines.append(f"{role_str}: {content}")
         return "\n".join(lines)
-
-    def _get_action_list(self) -> str:
-        """获取可用动作清单文本（供 prompt 注入）。
-
-        主播 Agent 是核心消费方：默认可见全部已启用的工具
-        （list_tools 不带过滤，全量返回）；无 registry 或查询失败时返回空串。
-        """
-        if self._tool_registry is None:
-            return ""
-
-        try:
-            specs = self._tool_registry.list_tools()
-        except Exception as e:
-            self.logger.warning(f"查询工具清单失败: {e}")
-            return ""
-
-        lines: List[str] = []
-        for spec in specs:
-            desc = getattr(spec, "description", "") or ""
-            lines.append(f"- {spec.name}: {desc}")
-        return "\n".join(lines)
-
-    @staticmethod
-    def _clean_llm_json(raw_output: str) -> str:
-        """清理 LLM 返回的 JSON 字符串。
-
-        清理步骤：剥离 `````json`` / ``````` 代码块包裹、截取首个 ``{`` 到末个 ``}``
-        之间的内容（去掉 JSON 前后的解释文字）、修复尾随逗号（``,}`` → ``}``，``,]`` → ``]``）。
-
-        Args:
-            raw_output: LLM 原始返回文本
-
-        Returns:
-            清理后的 JSON 字符串
-        """
-        cleaned = raw_output.strip()
-        # 剥离 markdown 代码块包裹
-        cleaned = re.sub(r"^```json\s*", "", cleaned)
-        cleaned = re.sub(r"^```\s*", "", cleaned)
-        cleaned = re.sub(r"\s*```$", "", cleaned)
-        cleaned = cleaned.strip()
-
-        # 截取最外层 { } 之间的内容
-        first_brace = cleaned.find("{")
-        last_brace = cleaned.rfind("}")
-        if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
-            cleaned = cleaned[first_brace : last_brace + 1]
-
-        # 修复尾随逗号（LLM 常见错误）
-        cleaned = re.sub(r",\s*}", "}", cleaned)
-        cleaned = re.sub(r",\s*]", "]", cleaned)
-        return cleaned

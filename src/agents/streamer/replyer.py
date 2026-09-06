@@ -1,24 +1,24 @@
 """Replyer - 主播 Agent 表达引擎
 
-设计原则（人设分离承诺）：
+设计原则（Y 模型）：
 - Planner（决策阶段）：**零人设**，只决定"要不要回复 / 回复谁 / 聊什么"，输出 DecisionPlan。
 - Replyer（表达阶段，本模块）：**注入人设**，根据 plan + 弹幕批次 + 人设生成实际回复，
-  输出可直接被 TTS 等工具消费的 speech + emotion + action。
+  通过标准 function calling 一次性产出 speech + emotion + 动作列表。
 - 两者使用不同的 LLM 客户端：Planner 用快速模型（llm_fast），Replyer 用高质量模型（llm）。
 
 职责边界：
-- 只生成并**返回** dict（含 speech/emotion/action），**不**直接调用 reply_tool，
-  reply_tool 是 Agent 暴露给 LLM 调用的工具入口（表达引擎内脏 + 工具入口分层）。
-- **不调用 tools**（不做 function calling，纯文本 JSON 输出）。
+- 调用 LLMManager.call_tools(prompt, tools=...) 标准接口，向 LLM 声明 ``reply`` function
+  （Agent 内部协议——主播自身 LLM 会话的出口）+ 由 ToolRegistry 转换的动作工具 functions。
+- 解析 response.tool_calls：找到 ``reply`` call 取出 speech/emotion；
+  其余 tool_calls 收集为 actions 列表（返回给 StreamerAgent 主循环统一分发）。
+- **不**注册为工具；reply 工具契约本身由 ``tools/reply_tool.py`` 暴露给外层 Planner。
 - **敏感词净化**（输出端）：内置 ProfanityFilter 做"嘴"端净化——speech 输出前
   经词表过滤（替换或丢弃）。
-- LLM 输出后处理：JSON 清理解析、情绪降级 neutral、动作白名单校验。
 
 与 StreamerAgent 的关系：
 - 本类是一个"纯函数式"的表达组件，由 StreamerAgent 持有并在 reply_tool.invoke 时调用。
-- 工具动作白名单逻辑（`_ensure_tool_list` / `_build_action`，数据源为
-  ToolRegistry 的 game 工具清单）在此独立实现，
-  避免与 StreamerAgent 双向耦合。
+- 工具 actions 不做白名单校验：ToolRegistry 暴露给 LLM 时，LLM 只能选已注册工具，
+  结构化协议本身就是校验，不再需要白名单影子机制。
 
 配置兼容：``replyer_client`` 配置键保留（向后兼容）；同时接受 ``replyer_llm``。
 净化：内置 profanity filter（词表 + 替换 + drop_on_match 选项）。
@@ -31,7 +31,6 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.modules.logging import get_logger
-from src.modules.tools.models import ToolSpec
 from src.modules.types.emotion_vocab import Emotion
 
 from .message_buffer import MessageBuffer
@@ -55,12 +54,15 @@ _DEFAULT_STYLE_CONSTRAINTS = "口语化，使用网络流行语，避免机械�
 # Replyer 模板名（含 $personality/$style_constraints/$bot_name 人设注入）
 _REPLYER_TEMPLATE = "amaidesu_replyer"
 
+# reply function 名称（Agent 内部协议工具，与 tools/reply_tool.py 的 _REPLY_TOOL_NAME 对齐）
+_REPLY_FUNCTION_NAME = "reply"
+
 
 class Replyer:
     """表达引擎：消费 DecisionPlan + 弹幕 + 人设，生成实际回复。
 
-    不发布事件、不调用 tools。``generate()`` 返回 ``Optional[dict]``（含
-    speech/emotion/action_parameters），由 reply_tool 包装后返回给 LLM。
+    通过标准 function calling 协议一次性产出 speech + emotion + actions；
+    返回 ``Optional[dict]``，由 reply_tool 包装后返回给 LLM。
     """
 
     def __init__(
@@ -75,16 +77,15 @@ class Replyer:
 
         Args:
             config: 配置字典（兼容 StreamerAgentConfig 的子集字段），
-                    读取 replyer_llm / replyer_client / enable_action_selection / bot_name。
+                    读取 replyer_llm / replyer_client / bot_name。
             llm_service: LLM 管理器（使用 replyer_llm 指定的高质量客户端）。
             prompt_service: 提示词管理器（渲染 amaidesu_replyer 模板）。
-            tool_registry: 工具注册表（可选，用于动作白名单校验与动作清单注入）。
+            tool_registry: 工具注册表（可选，用于收集动作工具的 function 定义）。
             profanity_filter: 敏感词过滤器（输出端净化入口；None 表示不净化）。
         """
         self._config: Dict[str, Any] = config or {}
         # replyer_llm（新 agents_schemas 命名）+ replyer_client（向后兼容）
         self.replyer_llm: str = self._config.get("replyer_llm", self._config.get("replyer_client", "llm"))
-        self._enable_action_selection: bool = self._config.get("enable_action_selection", True)
         self._bot_name: str = self._config.get("bot_name", _DEFAULT_BOT_NAME)
 
         self._llm_service = llm_service
@@ -92,10 +93,6 @@ class Replyer:
         self._tool_registry = tool_registry
         self._profanity_filter = profanity_filter
         self.logger = get_logger("Replyer")
-
-        # 工具清单（每次 generate 时实时查询，不缓存——动态注册即生效）
-        self._valid_action_names: set[str] = set()
-        self._action_list_str: str = ""
 
     async def generate(
         self,
@@ -108,10 +105,10 @@ class Replyer:
         """根据 Planner 的决策计划 + 弹幕批次 + 人设，生成实际回复。
 
         流程：注入人设渲染 'amaidesu_replyer'（含 $personality/$style_constraints/
-        $bot_name）→ 调用高质量 LLM（replyer_llm，默认 llm，**不传 tools**）→
-        清理 + 解析 JSON → 组装（情绪降级 neutral、动作白名单校验，非法丢弃保留
-        speech）→ 敏感词净化 speech（替换或丢弃）→ 返回 dict（不发布事件；
-        reply_tool 负责 ToolExecutionResult 包装）。
+        $bot_name）→ 调用高质量 LLM（replyer_llm，**call_tools 标准接口**，
+        tools=[reply_fn_def] + action_fn_defs）→ 解析 response.tool_calls 提取
+        reply(speech/emotion) 与 actions → 情绪降级 neutral → 敏感词净化 →
+        返回 dict（不发布事件；reply_tool 负责 ToolExecutionResult 包装）。
 
         Args:
             plan: Planner 产出的决策计划（should_reply=True 时才应到达此处）。
@@ -119,73 +116,85 @@ class Replyer:
             persona: 人设字典（bot_name / personality / style_constraints）。
             history: 可选的最近会话历史（鸭子类型对象列表，需有 ``role`` 和 ``content`` 属性）；
                      role 可能是枚举（取 ``.value``），content 是 str。None 表示无历史可用，
-                     渲染为占位文本。用于让 Replyer 看到自己最近说过的话，避免冷场时反复
-                     生成相同句式。
+                     渲染为占位文本。
             agenda: 当前 Agenda 的渲染文本（可选）。由调用方（如 StreamerAgent
                 主循环）从 ``AgendaState`` 拼装后传入，描述当前环节的
-                title / task_description / key_points / 环节剩余时长 + 整场进度
-                （已进行时长 / 总计划时长 / 百分比）。``None`` 或空字符串时使用占位文本
-                "（当前无节目单）"——Replyer 在未启用 Agenda 机制时仍可正常工作。
-                透传到 prompt 的 ``$agenda`` 变量。**注意**：$agenda 是任务上下文
-                注入，不改变 Replyer 注入人设的分工（人设三件套 $personality /
-                $style_constraints / $bot_name 仍由本类负责注入）。
+                title / task_description / key_points / 环节剩余时长 + 整场进度。
+                透传到 prompt 的 ``$agenda`` 变量。
 
         Returns:
-            Dict 实例（含 speech/emotion/action/action_parameters/...）；LLM 异常或
-            解析失败时返回 None（silent 降级）。reply_tool 直接将此 dict 包装进
-            ToolExecutionResult 返回给 LLM。
+            Dict 实例（含 speech/emotion/actions/metadata）；LLM 异常、tool_calls 缺失
+            reply call、或 speech 为空时返回 None（silent 降级）。
+            reply_tool 直接将此 dict 包装进 ToolExecutionResult 返回给 LLM。
         """
         # 防御：Planner 已裁决 should_reply=True 才会进入此处；False 直接放弃。
         if not plan.should_reply:
             self.logger.debug("DecisionPlan.should_reply=False，Replyer 跳过生成")
             return None
 
-        # 查询工具清单（用于动作白名单）
-        self._ensure_tool_list()
-
         # ① 注入人设 + 决策计划 + 弹幕上下文 + 会话历史 + Agenda 上下文，渲染 Replyer prompt
         prompt = self._render_prompt(plan, batch, persona, history, agenda)
 
-        # 调用高质量 LLM（无 tools）
+        # ② 构造 function definitions：reply（Agent 内部协议）+ 来自 ToolRegistry 的动作工具
+        tools = [self._build_reply_function_def()] + self._collect_action_function_defs()
+
+        # ③ 调用高质量 LLM（call_tools 标准接口）
         try:
-            self.logger.info(f"Replyer 生成回复中 (plan.target={plan.target!r}, client={self.replyer_llm})")
-            response = await self._llm_service.chat(
+            self.logger.info(
+                f"Replyer 生成回复中 (plan.target={plan.target!r}, client={self.replyer_llm}, tools={len(tools)})"
+            )
+            response = await self._llm_service.call_tools(
                 prompt=prompt,
+                tools=tools,
                 client_type=self.replyer_llm,
             )
         except Exception as e:
             self.logger.error(f"Replyer LLM 调用异常: {e}", exc_info=True)
             return None
 
-        # 兼容真实 LLMResponse(.success/.content) 与测试 mock(直接字符串)
-        content = self._extract_content(response)
-        if content is None:
-            self.logger.warning("Replyer LLM 返回失败或空内容，silent 降级")
+        if not getattr(response, "success", False):
+            self.logger.warning(f"Replyer LLM 返回失败: {getattr(response, 'error', 'unknown')}, silent 降级")
             return None
 
-        # 清理 + JSON 解析
-        cleaned_json = _clean_llm_json(content)
-        try:
-            parsed_data = json.loads(cleaned_json)
-        except json.JSONDecodeError as e:
-            self.logger.error(f"Replyer JSON 解析失败: {e}, 清理后内容: {cleaned_json[:200]}")
-            return None
+        # ④ 解析 tool_calls（找 reply call 取 speech/emotion；其余收集为 actions）
+        speech, emotion_name, actions = self._parse_tool_calls(getattr(response, "tool_calls", None))
 
-        speech = (parsed_data.get("text", "") or parsed_data.get("speech", "")).strip()
         if not speech:
-            self.logger.info("Replyer LLM 返回空 text，silent 降级")
+            self.logger.info("Replyer LLM 未返回 reply 或 speech 为空，silent 降级")
             return None
 
-        # 组装回复（情绪降级 + 动作白名单）
-        result = self._create_result(parsed_data, speech, plan)
+        # ⑤ emotion 校验（合法枚举保留，非枚举降级 neutral）
+        valid_emotion_names = {e.value for e in Emotion}
+        if emotion_name not in valid_emotion_names:
+            self.logger.warning(f"Replyer 情绪 '{emotion_name}' 不在枚举中，降级为 neutral")
+            emotion_name = "neutral"
 
-        # 敏感词净化（净化职责归 Replyer 表达引擎）
+        # ⑥ 组装回复
+        result = {
+            "speech": speech,
+            "emotion": {
+                "name": emotion_name,
+                "intensity": 0.5,
+            },
+            "actions": actions,
+            "metadata": {
+                "source_id": "streamer_agent",
+                "target": plan.target,
+                "topic_summary": plan.topic_summary,
+                "reply_guidance": plan.reply_guidance,
+                "confidence": plan.confidence,
+            },
+        }
+
+        # ⑦ 敏感词净化（净化职责归 Replyer 表达引擎）
         result = self._apply_profanity_filter(result)
         if result is None:
             self.logger.warning("Replyer 输出被 profanity filter 丢弃（drop_on_match=True）")
             return None
 
-        self.logger.info(f"Replyer 生成回复: {result.get('speech', '')}")
+        self.logger.info(
+            f"Replyer 生成回复: speech={result.get('speech', '')[:50]!r}, actions={len(result.get('actions', []))}"
+        )
         return result
 
     # ==================== prompt 渲染（人设注入核心） ====================
@@ -215,74 +224,120 @@ class Replyer:
             plan=_render_plan_text(plan),
             danmaku_batch=_render_batch_text(batch),
             conversation_history=_render_history_text(history),
-            action_list=self._action_list_str or "（当前无可用动作，action 请留空字符串）",
             agenda=agenda_render,
         )
 
-    # ==================== 回复组装（情绪降级 + 动作白名单） ====================
+    # ==================== function 定义构造 ====================
 
-    def _create_result(
-        self,
-        parsed_data: Dict[str, Any],
-        speech: str,
-        plan: DecisionPlan,
-    ) -> Dict[str, Any]:
-        """从解析后的 JSON 构造回复 dict（speech + emotion + 经能力校验的 action）。
+    @staticmethod
+    def _build_reply_function_def() -> Dict[str, Any]:
+        """构造 reply function 定义（OpenAI function calling 形态）。
 
-        - 非法 emotion → 降级 neutral（12 枚举校验由 emotion_vocab 强制）。
-        - 非法 action（不在白名单）→ 丢弃 action，保留 speech。
+        reply 是 Agent 内部协议工具——只服务主播自身 LLM 会话，不进 ToolRegistry。
+        LLM 通过调用此函数输出 speech + emotion（emotion 是 emotion_vocab 12 枚举之一）。
         """
-        emotion_raw = str(parsed_data.get("emotion", "neutral")).lower()
-        valid_emotion_names = {e.value for e in Emotion}
-        if emotion_raw in valid_emotion_names:
-            emotion_name = emotion_raw
-        else:
-            self.logger.warning(f"Replyer 情绪 '{emotion_raw}' 不在枚举中，降级为 neutral")
-            emotion_name = "neutral"
-
-        action = self._build_action(parsed_data)
-
         return {
-            "speech": speech,
-            "emotion": {
-                "name": emotion_name,
-                "intensity": 0.5,
-            },
-            "action": action,
-            "metadata": {
-                "source_id": "streamer_agent",
-                "target": plan.target,
-                "topic_summary": plan.topic_summary,
-                "reply_guidance": plan.reply_guidance,
-                "confidence": plan.confidence,
+            "name": _REPLY_FUNCTION_NAME,
+            "description": (
+                "主播发言：输出你要对直播间说的话和情绪。"
+                "必填：speech（1-2 句口语化文本）；可选：emotion（12 枚举之一，缺省 neutral）。"
+                "调用此工具即代表你决定本轮发言；如需同时触发动作，可继续调用对应动作工具。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "speech": {
+                        "type": "string",
+                        "description": "要说的台词（1-2 句话，口语化，符合人设语气）",
+                    },
+                    "emotion": {
+                        "type": "string",
+                        "enum": [e.value for e in Emotion],
+                        "description": "情绪（12 枚举之一）",
+                    },
+                },
+                "required": ["speech"],
             },
         }
 
-    def _build_action(self, parsed_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """从 LLM 输出构造并校验动作字典。
+    def _collect_action_function_defs(self) -> List[Dict[str, Any]]:
+        """从 ToolRegistry 收集动作工具的 function 定义（OpenAI 形态）。
 
-        - 期望 ``action`` 为全限定名 ``<tool>.<local_action>``（来自能力清单）。
-        - 启用动作选择且已加载能力时，对动作名做白名单校验，非法则丢弃（保留 speech）。
-        - ``action_parameters`` 必须为 dict，否则忽略参数。
+        - 数据源：tool_registry.list_tools() 返回的 ToolSpec 列表。
+        - 过滤掉 ``name == "reply"``（防御：reply 不应注册到动作库；本模块内联定义）。
+        - 转换：``{"name": spec.name, "description": spec.description, "parameters": spec.parameters_schema}``。
+        - tool_registry 缺失或查询失败时返回空列表（reply 工具仍可用，仅无并发动作能力）。
         """
-        action_raw = str(parsed_data.get("action", "")).strip()
-        if not action_raw:
-            return None
+        if self._tool_registry is None:
+            return []
 
-        if self._enable_action_selection and self._valid_action_names:
-            if action_raw not in self._valid_action_names:
-                self.logger.warning(f"Replyer 选择的动作 '{action_raw}' 不在可用能力清单中，丢弃")
-                return None
+        try:
+            specs = self._tool_registry.list_tools()
+        except Exception as e:
+            self.logger.warning(f"Replyer 查询 ToolRegistry 失败，动作能力降级为空: {e}")
+            return []
 
-        raw_params = parsed_data.get("action_parameters") or parsed_data.get("parameters") or {}
-        parameters = raw_params if isinstance(raw_params, dict) else {}
-        if raw_params and not isinstance(raw_params, dict):
-            self.logger.warning(f"action_parameters 非对象（{type(raw_params).__name__}），忽略参数")
+        definitions: List[Dict[str, Any]] = []
+        for spec in specs:
+            # 防御：reply 已在 replyer 内联定义，不应出现在动作库
+            if spec.name == _REPLY_FUNCTION_NAME:
+                continue
+            entry: Dict[str, Any] = {
+                "name": spec.name,
+                "description": spec.description,
+            }
+            if spec.parameters_schema is not None:
+                entry["parameters"] = spec.parameters_schema
+            definitions.append(entry)
 
-        return {
-            "name": action_raw,
-            "parameters": parameters,
-        }
+        self.logger.debug(f"Replyer 已收集 {len(definitions)} 个动作工具 function 定义")
+        return definitions
+
+    # ==================== tool_calls 解析 ====================
+
+    @staticmethod
+    def _parse_tool_calls(
+        tool_calls: Optional[List[Dict[str, Any]]],
+    ) -> Tuple[str, Optional[str], List[Dict[str, Any]]]:
+        """从 LLMResponse.tool_calls 解析 reply(speech/emotion) 与 actions。
+
+        Args:
+            tool_calls: LLM 返回的 tool_calls 列表（OpenAI 形态：
+                        ``{"name": str, "arguments": str|dict, "id": str, "type": "function"}``）
+
+        Returns:
+            ``(speech, emotion_name, actions)``：
+            - speech: 找到 reply call 时的 speech 字符串；找不到 reply 或 speech 为空时为 ``""``
+            - emotion_name: reply call 提供的 emotion；未提供/非法时为 ``None``
+            - actions: 非 reply 的 tool_calls 列表，元素形如 ``{"name": str, "parameters": dict}``；
+                       arguments 解析失败时 ``parameters`` 为空 dict。
+        """
+        if not tool_calls:
+            return "", None, []
+
+        speech = ""
+        emotion_name: Optional[str] = None
+        actions: List[Dict[str, Any]] = []
+
+        for call in tool_calls:
+            name = call.get("name", "") if isinstance(call, dict) else ""
+            if name == _REPLY_FUNCTION_NAME:
+                args = _parse_call_arguments(call)
+                if isinstance(args, dict):
+                    raw_speech = args.get("speech", "")
+                    if isinstance(raw_speech, str):
+                        speech = raw_speech.strip()
+                    raw_emotion = args.get("emotion")
+                    if isinstance(raw_emotion, str) and raw_emotion:
+                        emotion_name = raw_emotion.lower()
+                continue
+
+            # 非 reply call → 收集为 action
+            raw_params = _parse_call_arguments(call)
+            parameters = raw_params if isinstance(raw_params, dict) else {}
+            actions.append({"name": name, "parameters": parameters})
+
+        return speech, emotion_name, actions
 
     # ==================== 敏感词净化（输出端） ====================
 
@@ -293,7 +348,7 @@ class Replyer:
         """敏感词净化（Replyer 表达引擎内部净化）。
 
         Args:
-            result: 待净化的回复 dict（含 speech / emotion / action）
+            result: 待净化的回复 dict（含 speech / emotion / actions）
 
         Returns:
             净化后的 result；``drop_on_match=True`` 且命中时返回 None（丢弃整条）。
@@ -311,51 +366,6 @@ class Replyer:
         new_result = dict(result)
         new_result["speech"] = cleaned_speech
         return new_result
-
-    # ==================== 工具清单（每次决策查询） ====================
-
-    def _ensure_tool_list(self) -> None:
-        """查询工具清单用于动作白名单校验（每次 generate 时调用）。
-
-        数据源为 ToolRegistry 全部已启用工具——主播表达引擎据此做动作白名单校验
-        （主播 Agent 默认可见所有已启用工具）。不缓存：新注册的工具（如动态启停
-        的 Agent）需在下一轮决策即生效，registry 查询是内存遍历，几乎零成本。
-        """
-        if not self._enable_action_selection or self._tool_registry is None:
-            return
-
-        try:
-            specs = self._tool_registry.list_tools()
-        except Exception as e:
-            self.logger.warning(f"Replyer 查询工具清单失败，动作选择降级为禁用: {e}")
-            return
-
-        self._valid_action_names = {spec.name for spec in specs}
-        self._action_list_str = _format_action_list(specs)
-        self.logger.info(f"Replyer 已加载 {len(self._valid_action_names)} 个可用动作供选择")
-
-    # ==================== LLM 响应归一化 ====================
-
-    @staticmethod
-    def _extract_content(response: Any) -> Optional[str]:
-        """从 LLM 返回值中提取文本内容。
-
-        兼容两种形态：
-        - 真实 LLMResponse 对象（生产）：检查 .success，取 .content。
-        - 直接字符串（测试 mock / QA 场景）：原样返回。
-
-        失败（success=False 或无 content）返回 None。
-        """
-        # 字符串形态（测试 mock 直接返回 JSON 字符串）
-        if isinstance(response, str):
-            return response
-
-        # LLMResponse 对象形态
-        success = getattr(response, "success", True)
-        if not success:
-            return None
-        content = getattr(response, "content", None)
-        return content
 
 
 # ============================================================================
@@ -446,29 +456,25 @@ class ProfanityFilter:
 
 
 # ============================================================================
-# 模块级辅助函数（_clean_llm_json / _render_*）
+# 模块级辅助函数
 # ============================================================================
 
 
-def _clean_llm_json(raw_output: str) -> str:
-    """清理 LLM 返回的 JSON 字符串（剥离代码块包裹、截取首末花括号、修复尾随逗号）。
+def _parse_call_arguments(call: Dict[str, Any]) -> Any:
+    """从单个 tool_call 中解析 arguments（兼容 str/dict 两种形态）。
 
-    独立为模块级函数以避免与 StreamerAgent 产生双向依赖。
+    OpenAI 标准 tool_call.arguments 是 JSON 字符串；部分客户端/测试可能直接传 dict。
+    解析失败时返回原始值（让 caller 自行降级）。
     """
-    cleaned = raw_output.strip()
-    cleaned = re.sub(r"^```json\s*", "", cleaned)
-    cleaned = re.sub(r"^```\s*", "", cleaned)
-    cleaned = re.sub(r"\s*```$", "", cleaned)
-    cleaned = cleaned.strip()
-
-    first_brace = cleaned.find("{")
-    last_brace = cleaned.rfind("}")
-    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
-        cleaned = cleaned[first_brace : last_brace + 1]
-
-    cleaned = re.sub(r",\s*}", "}", cleaned)
-    cleaned = re.sub(r",\s*]", "]", cleaned)
-    return cleaned
+    raw = call.get("arguments", {}) if isinstance(call, dict) else {}
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return raw
+    return {}
 
 
 def _render_plan_text(plan: DecisionPlan) -> str:
@@ -510,29 +516,6 @@ def _render_history_text(history: Optional[List[Any]]) -> str:
             lines.append(f"[系统] {content}")
             continue
         lines.append(f"{role_str}: {content}")
-    return "\n".join(lines)
-
-
-def _format_action_list(specs: List[ToolSpec]) -> str:
-    """把工具清单（ToolSpec 列表）渲染为供 prompt 使用的动作清单文本。"""
-    lines: List[str] = []
-    for spec in specs:
-        param_parts: List[str] = []
-        schema = spec.parameters_schema or {}
-        properties = schema.get("properties") if isinstance(schema, dict) else None
-        if isinstance(properties, dict):
-            for pname, prop in properties.items():
-                if isinstance(prop, dict):
-                    ptype = prop.get("type", "string")
-                    seg = f"{pname}:{ptype}"
-                    if prop.get("minimum") is not None or prop.get("maximum") is not None:
-                        seg += f"[{prop.get('minimum')}~{prop.get('maximum')}]"
-                    if prop.get("default") is not None:
-                        seg += f"=默认{prop.get('default')}"
-                    param_parts.append(seg)
-        params_str = f"（参数: {', '.join(param_parts)}）" if param_parts else ""
-        desc = spec.description or ""
-        lines.append(f"- {spec.name}: {desc}{params_str}")
     return "\n".join(lines)
 
 

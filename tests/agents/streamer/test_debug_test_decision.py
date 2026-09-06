@@ -9,6 +9,10 @@
 5. Reply 工具失败：error 回传 reply_tool_failed。
 6. proactive 直跑模式：_make_two_stage_decision 收到空批 + proactive=True。
 
+Y 模型：reply_tool.invoke 返回 ``ToolExecutionResult(success, structured_content=dict)``（不再是 content JSON 字符串）。
+本测试 patch ``agent._reply_provider.invoke`` 返回 ``structured_content`` dict，
+由 ``_dispatch_speech_and_emotion`` 直接消费。
+
 测试方法：mock Planner 与 ReplyToolProvider（替换 agent 内部组件），
 不触发真实 LLM；事件/历史 fire-and-forget 任务用 asyncio.sleep 收尾。
 """
@@ -16,14 +20,14 @@
 from __future__ import annotations
 
 import asyncio
-import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.agents.streamer.plan import DecisionPlan
 from src.agents.streamer.streamer_agent import StreamerAgent, StreamerAgentConfig
+from src.modules.llm.manager import LLMResponse
 
 
 def _make_agent_config(**overrides: Any) -> StreamerAgentConfig:
@@ -43,7 +47,8 @@ def _make_agent_config(**overrides: Any) -> StreamerAgentConfig:
 def _build_agent() -> StreamerAgent:
     """构造最小化 StreamerAgent（mock LLM / prompt / context）。"""
     llm = MagicMock()
-    llm.chat = AsyncMock(return_value=MagicMock(success=False, content=""))
+    llm.call_tools = AsyncMock(return_value=LLMResponse(success=False, error="not used"))
+    llm.chat = AsyncMock()
     prompt = MagicMock()
     prompt.render_safe = MagicMock(return_value="PROMPT")
     ctx = MagicMock()
@@ -63,18 +68,39 @@ def _patch_planner(agent: StreamerAgent, plan: Optional[DecisionPlan]) -> None:
     agent._planner.plan = AsyncMock(return_value=plan)
 
 
-def _patch_reply_provider(agent: StreamerAgent, content: Optional[str], error: Optional[str] = None) -> None:
-    """替换 reply Provider.invoke：返回携带 content/error 的 ToolExecutionResult 替身。"""
-    result = MagicMock()
-    result.success = content is not None
-    result.content = content or ""
-    result.error_message = error or ""
+def _patch_reply_provider(
+    agent: StreamerAgent, structured: Optional[Dict[str, Any]], error: Optional[str] = None
+) -> None:
+    """替换 reply Provider.invoke：返回携带 structured_content/error 的 ToolExecutionResult 替身。
+
+    Y 模型：成功时 ``structured_content`` 是 Replyer 返回的 dict（speech/emotion/actions/metadata），
+    失败时 ``success=False`` + ``error_message``。
+    """
+    from src.modules.tools.models import ToolExecutionResult
+
+    if structured is not None:
+        result = ToolExecutionResult(
+            tool_name="reply",
+            success=True,
+            structured_content=structured,
+        )
+    else:
+        result = ToolExecutionResult(
+            tool_name="reply",
+            success=False,
+            error_message=error or "",
+        )
     provider = MagicMock()
     provider.invoke = AsyncMock(return_value=result)
     agent._reply_provider = provider
 
 
-_REPLY_CONTENT = json.dumps({"speech": "欢迎来到直播间！", "emotion": "happy", "action": "", "metadata": {}})
+_REPLY_STRUCTURED: Dict[str, Any] = {
+    "speech": "欢迎来到直播间！",
+    "emotion": {"name": "happy", "intensity": 0.5},
+    "actions": [],
+    "metadata": {},
+}
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +156,7 @@ async def test_danmaku_mode_success_returns_full_view():
             confidence=0.9,
         ),
     )
-    _patch_reply_provider(agent, _REPLY_CONTENT)
+    _patch_reply_provider(agent, _REPLY_STRUCTURED)
 
     result = await agent.debug_test_decision(
         batch=[{"nickname": "测试观众", "text": "主播好"}],
@@ -249,7 +275,7 @@ async def test_proactive_mode_bypasses_rate_limit():
         agent,
         DecisionPlan(should_reply=True, confidence=0.8, topic_summary="主动话题"),
     )
-    _patch_reply_provider(agent, _REPLY_CONTENT)
+    _patch_reply_provider(agent, _REPLY_STRUCTURED)
 
     result = await agent.debug_test_decision(proactive=True)
 

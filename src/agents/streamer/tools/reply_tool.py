@@ -25,17 +25,22 @@
 from __future__ import annotations
 
 import inspect
-import json
-from typing import Any, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from src.modules.logging import get_logger
 from src.modules.tools import ToolInvocation, ToolSpec
 from src.modules.tools.models import ToolExecutionResult
+from src.modules.types.emotion_vocab import Emotion
 
 from ..plan import DecisionPlan
 from ..replyer import Replyer
 
-__all__ = ["build_reply_tool_spec", "build_reply_tool_invoker", "register_reply_tool"]
+__all__ = [
+    "build_reply_tool_spec",
+    "build_reply_tool_invoker",
+    "register_reply_tool",
+    "build_reply_function_def",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +100,49 @@ def build_reply_tool_spec() -> ToolSpec:
         kind="sync",
         provider="streamer",
     )
+
+
+# ---------------------------------------------------------------------------
+# OpenAI function 定义（replyer 内部协议，供 LLM call_tools 使用）
+#
+# 与 build_reply_tool_spec() 的区别：
+# - build_reply_tool_spec() 是 ToolRegistry 注册形态（Planner 触发 reply_tool.invoke）
+# - build_reply_function_def() 是标准 function calling 形态（Replyer 内 LLM 直接产出
+#   speech/emotion，不进 ToolRegistry）
+# ---------------------------------------------------------------------------
+
+
+_REPLY_FUNCTION_PARAMETERS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "speech": {
+            "type": "string",
+            "description": "要说的台词（1-2 句话，口语化，符合人设语气）",
+        },
+        "emotion": {
+            "type": "string",
+            "enum": [e.value for e in Emotion],
+            "description": "情绪（12 枚举之一）",
+        },
+    },
+    "required": ["speech"],
+}
+
+
+def build_reply_function_def() -> Dict[str, Any]:
+    """构造 reply 工具的 OpenAI function 定义（供 Replyer.call_tools 使用）。
+
+    reply 是主播 Agent 内部协议工具——只服务主播自身 LLM 会话，不进 ToolRegistry。
+    """
+    return {
+        "name": _REPLY_TOOL_NAME,
+        "description": (
+            "主播发言：输出你要对直播间说的话和情绪。"
+            "必填：speech（1-2 句口语化文本）；可选：emotion（12 枚举之一，缺省 neutral）。"
+            "调用此工具即代表你决定本轮发言；如需同时触发动作，可继续调用对应动作工具。"
+        ),
+        "parameters": _REPLY_FUNCTION_PARAMETERS_SCHEMA,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +290,7 @@ class ReplyToolProvider:
         return ToolExecutionResult(
             tool_name=_REPLY_TOOL_NAME,
             success=True,
-            content=json.dumps(result, ensure_ascii=False),
+            structured_content=result,
         )
 
 

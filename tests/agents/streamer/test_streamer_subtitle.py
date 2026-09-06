@@ -17,7 +17,6 @@ TTS / EventBus），直接调用 ``_dispatch_speech_and_emotion`` 验证
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
@@ -27,6 +26,7 @@ from src.agents.streamer.streamer_agent import StreamerAgent, StreamerAgentConfi
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.speech import StreamerSpeechPayload
+from src.modules.llm.manager import LLMResponse
 
 
 def _make_agent_config(**overrides: Any) -> StreamerAgentConfig:
@@ -53,7 +53,8 @@ def _build_streamer_agent(
 ) -> StreamerAgent:
     """构造最小化 StreamerAgent：mock LLM/Prompt/Context/字幕。"""
     llm = MagicMock()
-    llm.chat = AsyncMock(return_value=MagicMock(success=False, content=""))
+    llm.call_tools = AsyncMock(return_value=LLMResponse(success=False, error="not used"))
+    llm.chat = AsyncMock()  # 兼容旧调用（不应被实际触发）
     prompt = MagicMock()
     prompt.render_safe = MagicMock(return_value="PROMPT")
     ctx = MagicMock()
@@ -106,11 +107,11 @@ async def test_subtitle_service_show_called_with_speech_and_utterance_id():
     try:
         payload_dict = {
             "speech": "字幕测试文本",
-            "emotion": "happy",
-            "action": "",
+            "emotion": {"name": "happy", "intensity": 0.5},
+            "actions": [],
             "metadata": {},
         }
-        agent._dispatch_speech_and_emotion(json.dumps(payload_dict, ensure_ascii=False))
+        agent._dispatch_speech_and_emotion(payload_dict)
 
         # 等 fire-and-forget 字幕任务跑完
         for _ in range(50):
@@ -123,9 +124,7 @@ async def test_subtitle_service_show_called_with_speech_and_utterance_id():
         # 调用参数：(text, utterance_id)
         assert call_args.args[0] == "字幕测试文本"
         uid = call_args.args[1]
-        assert isinstance(uid, str) and uid.startswith("utt_"), (
-            f"utterance_id 应为 utt_ 前缀字符串，实际 {uid!r}"
-        )
+        assert isinstance(uid, str) and uid.startswith("utt_"), f"utterance_id 应为 utt_ 前缀字符串，实际 {uid!r}"
     finally:
         await agent._on_stop()
 
@@ -158,11 +157,11 @@ async def test_subtitle_service_shares_utterance_id_with_streamer_speech_and_tts
 
         payload_dict = {
             "speech": "id 关联校验",
-            "emotion": "neutral",
-            "action": "",
+            "emotion": {"name": "neutral", "intensity": 0.5},
+            "actions": [],
             "metadata": {},
         }
-        agent._dispatch_speech_and_emotion(json.dumps(payload_dict, ensure_ascii=False))
+        agent._dispatch_speech_and_emotion(payload_dict)
 
         # 等三路全部落地（事件 / TTS / 字幕）
         await asyncio.wait_for(speech_event.wait(), timeout=2.0)
@@ -200,9 +199,14 @@ async def test_subtitle_service_none_skips_show_without_error():
     )
     await agent._on_start()
     try:
-        payload_dict = {"speech": "无字幕也行", "emotion": "", "action": "", "metadata": {}}
+        payload_dict = {
+            "speech": "无字幕也行",
+            "emotion": "",
+            "actions": [],
+            "metadata": {},
+        }
         # 不应抛异常
-        agent._dispatch_speech_and_emotion(json.dumps(payload_dict, ensure_ascii=False))
+        agent._dispatch_speech_and_emotion(payload_dict)
         await asyncio.sleep(0.05)
         # 字段存储为 None
         assert agent._subtitle_service is None
@@ -231,15 +235,18 @@ async def test_empty_speech_does_not_trigger_subtitle():
     await agent._on_start()
     try:
         for empty_speech in ["", "   ", "\n\t  "]:
-            payload_dict = {"speech": empty_speech, "emotion": "", "action": "", "metadata": {}}
-            agent._dispatch_speech_and_emotion(json.dumps(payload_dict))
+            payload_dict = {
+                "speech": empty_speech,
+                "emotion": "",
+                "actions": [],
+                "metadata": {},
+            }
+            agent._dispatch_speech_and_emotion(payload_dict)
 
         # 等可能的 fire-and-forget 任务全部跑完
         await asyncio.sleep(0.05)
 
-        assert subtitle_service.show.await_count == 0, (
-            "空 speech 不应触发 subtitle_service.show"
-        )
+        assert subtitle_service.show.await_count == 0, "空 speech 不应触发 subtitle_service.show"
         # seq 不递增
         assert agent._utterance_seq == 0
     finally:
@@ -267,9 +274,14 @@ async def test_subtitle_service_exception_does_not_break_decision_loop(loguru_ca
     )
     await agent._on_start()
     try:
-        payload_dict = {"speech": "字幕坏了", "emotion": "", "action": "", "metadata": {}}
+        payload_dict = {
+            "speech": "字幕坏了",
+            "emotion": "",
+            "actions": [],
+            "metadata": {},
+        }
         # 不应抛异常
-        agent._dispatch_speech_and_emotion(json.dumps(payload_dict, ensure_ascii=False))
+        agent._dispatch_speech_and_emotion(payload_dict)
 
         # 等字幕任务失败 + TTS 入队执行
         for _ in range(50):
@@ -282,13 +294,8 @@ async def test_subtitle_service_exception_does_not_break_decision_loop(loguru_ca
         assert len(engine.handle_speech_calls) == 1
         # 应记 WARN 日志
         warn_records = [
-            r
-            for r in loguru_capture.records
-            if r["level"] == "WARNING" and "字幕 show 异常" in r["message"]
+            r for r in loguru_capture.records if r["level"] == "WARNING" and "字幕 show 异常" in r["message"]
         ]
-        assert warn_records, (
-            "字幕服务抛异常应记录 WARN 日志，实际: "
-            f"{[r['message'] for r in loguru_capture.records]}"
-        )
+        assert warn_records, f"字幕服务抛异常应记录 WARN 日志，实际: {[r['message'] for r in loguru_capture.records]}"
     finally:
         await agent._on_stop()

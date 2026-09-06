@@ -34,13 +34,16 @@ _PERSONA_SENTINEL = {
 
 
 def _make_llm_mock(content: str) -> MagicMock:
-    """构造 mock LLMManager：chat 返回给定内容（兼容 str 与 LLMResponse 鸭子类型）。"""
+    """构造 mock LLMManager：call_tools 返回给定内容（新契约走 LLMResponse/tool_calls）。"""
+    from src.modules.llm.manager import LLMResponse
+
     llm = MagicMock()
-    resp = MagicMock()
-    resp.success = True
-    resp.content = content
-    resp.error = None
-    llm.chat = AsyncMock(return_value=resp)
+    resp = LLMResponse(
+        success=True,
+        content="",
+        tool_calls=[{"name": "produce_plan", "arguments": content}],
+    )
+    llm.call_tools = AsyncMock(return_value=resp)
     return llm
 
 
@@ -99,12 +102,20 @@ class TestPersonaPipelineEndToEnd:
         # persona 的关键路径——Replyer.generate(plan, batch, persona, ...)。
         replyer = agent._replyer
 
-        # mock LLM 返回合法 Replyer JSON
+        # mock LLM 返回合法 Replyer tool_call（reply + speech/emotion）
+        from src.modules.llm.manager import LLMResponse
+
         replyer_payload = json.dumps(
-            {"text": "测试回复", "emotion": "neutral", "action": "", "action_parameters": {}},
+            {"speech": "测试回复", "emotion": "neutral"},
             ensure_ascii=False,
         )
-        replyer._llm_service.chat = AsyncMock(return_value=MagicMock(success=True, content=replyer_payload, error=None))
+        replyer._llm_service.call_tools = AsyncMock(
+            return_value=LLMResponse(
+                success=True,
+                content="",
+                tool_calls=[{"name": "reply", "arguments": replyer_payload}],
+            )
+        )
 
         from src.agents.streamer.plan import DecisionPlan
 
@@ -153,7 +164,15 @@ class TestPersonaPipelineEndToEnd:
             },
             ensure_ascii=False,
         )
-        llm.chat = AsyncMock(return_value=MagicMock(success=True, content=planner_payload, error=None))
+        from src.modules.llm.manager import LLMResponse
+
+        llm.call_tools = AsyncMock(
+            return_value=LLMResponse(
+                success=True,
+                content="",
+                tool_calls=[{"name": "produce_plan", "arguments": planner_payload}],
+            )
+        )
 
         from src.modules.types.base.normalized_message import NormalizedMessage
 
@@ -190,11 +209,19 @@ class TestPersonaPipelineEndToEnd:
 
         # 触发 Replyer.generate（路径与 test_replyer_renders_sentinel_persona_into_prompt 同）
         replyer_payload = json.dumps(
-            {"text": "ok", "emotion": "neutral", "action": "", "action_parameters": {}},
+            {"speech": "ok", "emotion": "neutral"},
             ensure_ascii=False,
         )
+        from src.modules.llm.manager import LLMResponse
+
         replyer = agent._replyer
-        replyer._llm_service.chat = AsyncMock(return_value=MagicMock(success=True, content=replyer_payload, error=None))
+        replyer._llm_service.call_tools = AsyncMock(
+            return_value=LLMResponse(
+                success=True,
+                content="",
+                tool_calls=[{"name": "reply", "arguments": replyer_payload}],
+            )
+        )
 
         from src.agents.streamer.plan import DecisionPlan
 

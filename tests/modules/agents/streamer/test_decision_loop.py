@@ -1,21 +1,28 @@
-"""StreamerAgent 决策循环集成测试（Wave 6 QA Scenario）
+"""StreamerAgent 决策循环集成测试（Y 模型：标准 function calling）。
+
+Planner / Replyer 改走 ``llm.call_tools(tools=[...])`` 后，测试 mock 同步对齐：
+- LLM 响应 = ``LLMResponse(success, content="", tool_calls=[{name, arguments(JSON str)}])``
+- Planner 调 ``produce_plan``；Replyer 调 ``reply``（Agent 内部协议工具）
+
+Y 模型分层（reply / proactive / command 不再注册进 ToolRegistry）：
+- reply 工具入口 = ``agent._reply_provider.invoke(...)``（决策循环直连）；
+  验证路径：直接断言 reply_provider 实例已构造 + invoke 被 await 过一次。
+- proactive / command 同理不入 ToolRegistry。
 
 QA Scenario（acceptance criteria）：
     Tool: Bash
-    Preconditions: 注入 mock 弹幕（room.message.danmaku）+ mock 工具响应
+    Preconditions: 注入 mock 弹幕（room.message.danmaku）+ mock call_tools 响应
     Steps:
-      1. python -c "实例化 StreamerAgent，投放一条弹幕事件"
-      2. 断言 Planner 收到并决策（mock 工具调用记录）
-      3. 断言 reply 工具被触发（生成回复意图）
+      1. 实例化 StreamerAgent，投放一条弹幕事件
+      2. 断言 Planner call_tools 被调用（produce_plan）
+      3. 断言 should_reply=true 时 Replyer call_tools 被调用（reply）
     Expected Result: Agent 决策循环跑通（mock 环境）
-    Evidence: .omo/evidence/w6-streamer-agent.txt
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -24,10 +31,9 @@ from src.agents.streamer.streamer_agent import StreamerAgent, StreamerAgentConfi
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
+from src.modules.llm.manager import LLMResponse
 from src.modules.tools import ToolRegistry, ToolInvocation
-from src.modules.tools.models import ToolExecutionResult
 from src.modules.types.base.normalized_message import NormalizedMessage
-from src.modules.events.payloads.base import BasePayload
 from src.modules.events.payloads.planner import PlannerDecisionPayload, StreamerStagePayload
 
 
@@ -50,20 +56,60 @@ def _make_normalized(text: str = "主播好可爱") -> NormalizedMessage:
     )
 
 
-def _replyer_json() -> str:
-    return json.dumps({"text": "谢谢支持！", "emotion": "happy"}, ensure_ascii=False)
+# ---------------------------------------------------------------------------
+# LLMResponse 工厂（Y 模型：call_tools 形态）
+# ---------------------------------------------------------------------------
 
 
-def _make_llm(content: str):
-    m = MagicMock()
-    m.success = True
-    m.content = content
-    return m
+def _planner_response(plan_args: dict) -> LLMResponse:
+    """构造 Planner 的 call_tools 响应（tool_calls[0] = produce_plan）。"""
+    return LLMResponse(
+        success=True,
+        content="",
+        tool_calls=[
+            {
+                "name": "produce_plan",
+                "arguments": json.dumps(plan_args, ensure_ascii=False),
+            }
+        ],
+    )
+
+
+def _replyer_response(speech: str, emotion: str = "happy", actions: list | None = None) -> LLMResponse:
+    """构造 Replyer 的 call_tools 响应（tool_calls[0] = reply，可选追加动作工具）。"""
+    tool_calls = [
+        {
+            "name": "reply",
+            "arguments": json.dumps({"speech": speech, "emotion": emotion}, ensure_ascii=False),
+        }
+    ]
+    if actions:
+        for action in actions:
+            tool_calls.append(
+                {
+                    "name": action["name"],
+                    "arguments": json.dumps(action.get("parameters", {}), ensure_ascii=False),
+                }
+            )
+    return LLMResponse(success=True, content="", tool_calls=tool_calls)
+
+
+def _replyer_failure(reason: str = "mock failure") -> LLMResponse:
+    """构造 Replyer LLM 失败响应（success=False）。"""
+    return LLMResponse(success=False, content=None, error=reason)
+
+
+# ---------------------------------------------------------------------------
+# Agent 装配（Y 模型 call_tools 形态）
+# ---------------------------------------------------------------------------
 
 
 def _setup_agent() -> tuple[StreamerAgent, EventBus, ToolRegistry, MagicMock, MagicMock]:
-    """构造完整测试 Agent：mock LLM + mock EventBus + mock ToolRegistry。"""
-    planner_llm_json = json.dumps(
+    """构造完整测试 Agent：mock LLM（call_tools）+ mock EventBus + mock ToolRegistry。
+
+    Planner 决策 should_reply=true；Replyer 产出 "谢谢支持！" + happy。
+    """
+    planner_resp = _planner_response(
         {
             "should_reply": True,
             "target": "u1",
@@ -72,19 +118,11 @@ def _setup_agent() -> tuple[StreamerAgent, EventBus, ToolRegistry, MagicMock, Ma
             "confidence": 0.9,
         }
     )
-    replyer_llm_json = json.dumps(
-        {
-            "text": "谢谢支持！",
-            "emotion": "happy",
-            "action": "",
-            "action_parameters": {},
-        },
-        ensure_ascii=False,
-    )
+    replyer_resp = _replyer_response("谢谢支持！", emotion="happy")
 
     llm = MagicMock()
-    # chat() async；Planner 调一次 → Replyer 调一次 → 两次 chat 调用
-    llm.chat = AsyncMock(side_effect=[_make_llm(planner_llm_json), _make_llm(replyer_llm_json)])
+    # call_tools() async；Planner 调一次 → Replyer 调一次 → 两次 call_tools 调用
+    llm.call_tools = AsyncMock(side_effect=[planner_resp, replyer_resp])
 
     prompt = MagicMock()
     prompt.render_safe = MagicMock(return_value="PROMPT")
@@ -117,18 +155,27 @@ def _setup_agent() -> tuple[StreamerAgent, EventBus, ToolRegistry, MagicMock, Ma
 
 
 @pytest.mark.asyncio
-async def test_decision_loop_danmaku_to_reply_tool():
-    """决策循环端到端：弹幕事件 → Planner → Replyer → reply 工具结果。"""
+async def test_decision_loop_danmaku_to_reply_provider():
+    """决策循环端到端：弹幕事件 → Planner.call_tools(produce_plan) → Replyer.call_tools(reply) → _reply_provider.invoke。
+
+    Y 模型：reply 是 Agent 内部协议，不进 ToolRegistry；直连 _reply_provider.invoke。
+    """
     agent, bus, registry, llm, prompt = _setup_agent()
 
-    # 启动 Agent
     await agent.start()
     try:
-        # 验证 reply / proactive / command 3 个工具已注册
-        tool_names = [spec.name for spec in registry.list_tools()]
-        assert "reply" in tool_names
-        assert "should_speak_proactively" in tool_names
-        assert "parse_command" in tool_names
+        # Y 模型：reply/proactive/command 不注册进 ToolRegistry（Agent 内部协议）；
+        # 改用 list_tools() 校验 Agent 自己声明的协议是否齐全（不依赖 registry.list_tools）。
+        spec_names = {spec.name for spec in agent.list_tools()}
+        assert "reply" in spec_names
+        assert "should_speak_proactively" in spec_names
+        assert "parse_command" in spec_names
+
+        # 同时确认 ToolRegistry 没有这三个（Y 分层）
+        registered_in_registry = {spec.name for spec in registry.list_tools()}
+        assert "reply" not in registered_in_registry
+        assert "should_speak_proactively" not in registered_in_registry
+        assert "parse_command" not in registered_in_registry
 
         # 1. 投放一条弹幕事件
         payload = _make_payload("主播好可爱！")
@@ -137,42 +184,30 @@ async def test_decision_loop_danmaku_to_reply_tool():
         # 给 Agent 一些时间处理事件 + flush 循环
         await asyncio.sleep(0.2)
 
-        # 2. 验证 Planner 决策被调用（mock LLM.chat 被调至少 1 次）
-        assert llm.chat.await_count >= 1, "Planner 应至少调一次 LLM"
+        # 2. 验证 Planner.call_tools 被调用（至少 1 次）
+        assert llm.call_tools.await_count >= 1, "Planner 应至少调一次 call_tools"
 
-        # 3. 验证 Planner 决策后 reply 工具被触发（mock LLM.chat 调 2 次 = Planner + Replyer）
-        # 如果 Planner should_reply=False 则只调 1 次；这里 mock 是 True → 调 2 次
-        assert llm.chat.await_count >= 2, "should_reply=true 时 Replyer 应被触发"
+        # 3. 验证 should_reply=true 时 Replyer 也被调用（≥2 次 = Planner + Replyer）
+        assert llm.call_tools.await_count >= 2, "should_reply=true 时 Replyer 应被触发"
 
-        # 4. 验证 reply 工具可独立调用（直接调 ToolRegistry.invoke）
-        result = await registry.invoke(
-            ToolInvocation(
-                tool_name="reply",
-                arguments={
-                    "topic_summary": "测试话题",
-                    "reply_guidance": "测试指引",
-                },
-                source="test",
-            )
-        )
-        # 第二次 chat 调用（Planner 那次）已被消费，第三次 chat 调用 返回 None/失败 → result 仍可能 success
-        # 关键验证：reply 工具确实被注册并可调用（不会抛 ModuleNotFoundError 或其他）
-        assert result is not None
+        # 4. 验证 reply_provider 已构造（Y 模型：直连 invoke；LLM 调 2 次 + total_replies 已覆盖调用验证）
+        assert agent._reply_provider is not None
 
         # 5. 验证统计计数
         stats = agent.get_statistics()
         assert stats["total_messages"] >= 1
+        assert stats["total_replies"] >= 1
     finally:
         await agent.cleanup()
 
 
 @pytest.mark.asyncio
 async def test_decision_loop_planner_no_reply_path():
-    """Planner should_reply=False → 不触发 Replyer（只有 Planner 一次 LLM 调用）。"""
-    planner_json = json.dumps({"should_reply": False, "confidence": 0.9})
+    """Planner should_reply=False → 不触发 Replyer.call_tools（只有 Planner 一次 call_tools）。"""
+    planner_resp = _planner_response({"should_reply": False, "confidence": 0.9})
 
     llm = MagicMock()
-    llm.chat = AsyncMock(return_value=_make_llm(planner_json))
+    llm.call_tools = AsyncMock(return_value=planner_resp)
 
     prompt = MagicMock()
     prompt.render_safe = MagicMock(return_value="PROMPT")
@@ -211,8 +246,8 @@ async def test_decision_loop_planner_no_reply_path():
 
         await asyncio.sleep(0.2)
 
-        # Planner 调 1 次 LLM（should_reply=False），Replyer 不调
-        assert llm.chat.await_count == 1, "should_reply=False 时 Replyer 不应被触发"
+        # Planner 调 1 次 call_tools（should_reply=False），Replyer 不调
+        assert llm.call_tools.await_count == 1, "should_reply=False 时 Replyer 不应被触发"
 
         stats = agent.get_statistics()
         assert stats["total_no_action"] >= 1
@@ -223,7 +258,7 @@ async def test_decision_loop_planner_no_reply_path():
 @pytest.mark.asyncio
 async def test_decision_loop_proactive_tool_invoke():
     """should_speak_proactively 工具可独立调用：返回触发 reason 或 None。"""
-    from src.agents.streamer.tools.proactive_tool import ProactiveToolProvider, register_proactive_tool
+    from src.agents.streamer.tools.proactive_tool import ProactiveToolProvider
     from src.agents.streamer.proactive_trigger import ProactiveTrigger
     from src.agents.streamer.room_state import RoomState
 
@@ -252,9 +287,7 @@ async def test_decision_loop_proactive_tool_invoke():
     registry.register_provider(provider)
 
     # 房间无最近消息 → 冷场 → 应触发 cold
-    result = await registry.invoke(
-        ToolInvocation(tool_name="should_speak_proactively", arguments={}, source="test")
-    )
+    result = await registry.invoke(ToolInvocation(tool_name="should_speak_proactively", arguments={}, source="test"))
     # 内容可能是 "cold" 或 ""（取决于状态）
     assert result is not None
 
@@ -262,7 +295,7 @@ async def test_decision_loop_proactive_tool_invoke():
 @pytest.mark.asyncio
 async def test_decision_loop_parse_command_tool():
     """parse_command 工具：返回解析后的命令 dict（is_command + name + args + action）。"""
-    from src.agents.streamer.tools.command_tool import CommandToolProvider, register_command_tool
+    from src.agents.streamer.tools.command_tool import CommandToolProvider
 
     provider = CommandToolProvider(
         command_prefix="/",
@@ -286,9 +319,7 @@ async def test_decision_loop_parse_command_tool():
 
     # 测试非命令文本
     result = await registry.invoke(
-        ToolInvocation(
-            tool_name="parse_command", arguments={"text": "普通弹幕"}, source="test"
-        )
+        ToolInvocation(tool_name="parse_command", arguments={"text": "普通弹幕"}, source="test")
     )
     assert result.success is True
     parsed = json.loads(result.content)
@@ -309,16 +340,11 @@ async def test_decision_loop_parse_command_tool():
 @pytest.mark.asyncio
 async def test_decision_loop_handle_message_direct():
     """handle_message 直接入口（测试用）：跳过 EventBus，直接调 Agent。"""
-    planner_json = json.dumps(
-        {"should_reply": True, "target": "u1", "topic_summary": "t", "confidence": 0.9}
-    )
-    replyer_json = json.dumps(
-        {"text": "OK", "emotion": "happy", "action": "", "action_parameters": {}},
-        ensure_ascii=False,
-    )
+    planner_resp = _planner_response({"should_reply": True, "target": "u1", "topic_summary": "t", "confidence": 0.9})
+    replyer_resp = _replyer_response("OK", emotion="happy")
 
     llm = MagicMock()
-    llm.chat = AsyncMock(side_effect=[_make_llm(planner_json), _make_llm(replyer_json)])
+    llm.call_tools = AsyncMock(side_effect=[planner_resp, replyer_resp])
     prompt = MagicMock()
     prompt.render_safe = MagicMock(return_value="PROMPT")
 
@@ -346,6 +372,7 @@ async def test_decision_loop_handle_message_direct():
 
     # 统计：消息已入缓冲
     assert agent.get_statistics()["total_messages"] == 1
+
 
 class TestDecisionObservability:
     """决策可观测收口：每轮决策恰好一条 planner.decision + 阶段事件成对。"""
@@ -395,7 +422,18 @@ class TestDecisionObservability:
     async def test_planner_failure_still_emits_decision_event(self):
         """Planner 失败（脏 JSON）也必须发决策事件——失败可见性是核心价值。"""
         agent, bus, registry, llm, prompt = _setup_agent()
-        llm.chat = AsyncMock(side_effect=[_make_llm("这不是JSON{")])
+        llm.call_tools = AsyncMock(
+            return_value=LLMResponse(
+                success=True,
+                content="",
+                tool_calls=[
+                    {
+                        "name": "produce_plan",
+                        "arguments": "这不是JSON{",
+                    }
+                ],
+            )
+        )
 
         decisions: list = []
 
@@ -422,7 +460,7 @@ class TestDecisionObservability:
     async def test_reply_to_flows_into_decision_event(self):
         """Planner 输出 reply_to → 决策事件携带 reply_to_message_id（互动分析关联键）。"""
         agent, bus, registry, llm, prompt = _setup_agent()
-        planner_json = json.dumps(
+        planner_resp = _planner_response(
             {
                 "should_reply": True,
                 "target": "观众A",
@@ -432,7 +470,8 @@ class TestDecisionObservability:
                 "confidence": 0.9,
             }
         )
-        llm.chat = AsyncMock(side_effect=[_make_llm(planner_json), _make_llm(_replyer_json())])
+        replyer_resp = _replyer_response("谢谢支持！", emotion="happy")
+        llm.call_tools = AsyncMock(side_effect=[planner_resp, replyer_resp])
 
         decisions: list = []
 
