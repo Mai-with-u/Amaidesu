@@ -41,7 +41,7 @@ ToolPackType = Literal[
     "understanding",  # 理解：VLM/ASR
     "output",  # 输出：TTS/字幕/皮套/OBS
     "content_engine",  # 内容引擎：游戏控制器
-    "external",  # 外部：MCP（外部工具源）
+    "external",  # 外部：MCP（通用 MCP 外部工具源，src/modules/tools/mcp/）
 ]
 
 
@@ -166,7 +166,7 @@ class ToolsConfig(BaseConfig):
     )
     external: Optional[ToolPackMeta] = Field(
         default=None,
-        description="外部工具源（v2 决策架构移除 MCP 桥接后暂无实现；保留 schema 供未来重启）",
+        description="外部 MCP 工具源（配置 servers 连接，工具全局注册到 ToolRegistry；见 src/modules/tools/mcp/）",
         json_schema_extra={"x-ui-type": "object"},
     )
     look_at_screen: Optional[LookAtScreenToolConfig] = Field(

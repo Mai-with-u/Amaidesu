@@ -544,6 +544,30 @@ async def create_app_components(
             )
             logger.info("look_at_screen 已注册（Pillow 截图后端）")
 
+        # --- 外部 MCP 工具源（[tools.external] 段驱动；可选能力，失败不阻断启动）---
+        # 必须在 start_all() 之前装配：任何启动阶段查询工具清单的消费方
+        # 需看到已注册的 MCP 工具。配置示例：
+        #   [tools.external]  enabled = true
+        #   [tools.external.config.servers.my_server]  url = "http://127.0.0.1:8766/mcp"
+        mcp_pack = (config.get("tools") or {}).get("external", {}) if isinstance(config, dict) else {}
+        if isinstance(mcp_pack, dict) and mcp_pack.get("enabled", False):
+            mcp_cfg = mcp_pack.get("config", {}) if isinstance(mcp_pack.get("config"), dict) else {}
+            try:
+                # 延迟 import：fastmcp 为可选重型依赖（避免启动强制加载）
+                from src.modules.tools.mcp import bind_mcp_tools
+
+                mcp_report = await bind_mcp_tools(tool_registry, mcp_cfg)
+                ok_count = sum(1 for s in mcp_report.values() if s["ok"])
+                server_count = len(mcp_report)
+                logger.info(f"MCP 外部工具源装配完成: 成功 {ok_count}/{server_count} 个 server")
+                for sname, sinfo in mcp_report.items():
+                    if not sinfo["ok"]:
+                        logger.warning(f"MCP server '{sname}' 装配失败: {sinfo['error']}")
+            except Exception as exc:  # noqa: BLE001 - MCP 装配失败不阻断启动
+                logger.warning(f"MCP 外部工具源装配异常（跳过）: {type(exc).__name__}: {exc}")
+        elif isinstance(mcp_pack, dict) and "servers" in (mcp_pack.get("config") or {}):
+            logger.warning("[tools.external].enabled=false 但配置了 servers —— MCP 工具未装配")
+
         agents_enabled = ((config.get("agents") or {}).get("enabled") or []) if isinstance(config, dict) else []
         if "game" in agents_enabled and "look_at_screen" not in tool_registry:
             logger.warning(

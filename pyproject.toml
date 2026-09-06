@@ -44,6 +44,7 @@ dependencies = [
     "tomlkit>=0.14.0",
     "python-frontmatter>=1.1.0",
     "watchfiles>=1.1.1",
+    "fastmcp>=3.0.0",
 ]
 
 [project.optional-dependencies]
