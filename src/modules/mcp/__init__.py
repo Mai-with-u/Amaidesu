@@ -1,8 +1,9 @@
 """通用 MCP 外部工具源（通道层，不含任何具体 MCP server 的知识）
 
 定位：
-- 读取 ``[tools.external]`` 配置 → 为每个 MCP server 建立连接 →
-  把 server 暴露的工具**全局注册**到 ToolRegistry（provider="mcp"）
+- 读取 ``[tools.mcp]`` 配置 → 为每个 MCP server 建立连接 →
+  把 server 暴露的工具**全局注册**到 ToolRegistry
+  （provider 默认 = server 名，如 maicraft → "maicraft"）
 - 任何 Agent（主播 / 游戏）均可像普通 code agent 一样看到并调用这些工具
   （ToolRegistry 统一分发）
 - **不包含 server 特定语义**：工具名的语义化（如 goal 组装、资源
@@ -18,7 +19,7 @@
 
     from src.modules.mcp import bind_mcp_tools
 
-    report = await bind_mcp_tools(registry, external_config_dict)
+    report = await bind_mcp_tools(registry, mcp_config_dict)
     # report = {"servers": {"<server名>": {"ok", "tools", "error"}}}
 """
 
@@ -43,15 +44,16 @@ async def bind_mcp_tools(
     registry: ToolRegistry,
     raw_config: Optional[Dict[str, Any]] = None,
     *,
-    provider: str = "mcp",
+    provider: str = "",
 ) -> BindReport:
     """装配 MCP 外部工具源：连接所有配置的 server 并注册其工具。
 
     Args:
         registry: 目标 ToolRegistry（由组合根构造持有）
-        raw_config: ``[tools.external].config`` 原始 dict
+        raw_config: ``[tools.mcp].config`` 原始 dict
             （键 ``servers`` → {别名: McpServerConfig}）
-        provider: 注册来源标记（默认 "mcp"；内容层可按需传 "game"）
+        provider: 注册来源标记（默认 "" = 用 **server 名** 作为 provider 标识，
+            如 maicraft → "maicraft"；也可显式传值覆盖，如 "game"）
 
     Returns:
         ``{server_name: {"ok", "tools", "error"}}`` 报告。
@@ -73,7 +75,7 @@ async def bind_mcp_tools(
                 client=client,
                 server_name=server_name,
                 prefix=server_cfg.prefix,
-                provider=provider,
+                provider=provider or server_name,
             )
             count = await prov.setup()
             if count == 0:

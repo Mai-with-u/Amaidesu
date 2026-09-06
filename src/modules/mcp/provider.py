@@ -6,11 +6,11 @@
 - ``invoke()``：剥前缀 → 转发到 MCP client → 映射结果；永远不抛异常
 
 ## 可见性语义（★ 关键设计）
-- ``provider="mcp"``：默认来源标记。注册后工具进入全局 ToolRegistry，
-  任何 Agent（主播 / 游戏）通过 ``registry.invoke()`` 均可调用——与
-  Claude Code 的 MCP 插件语义一致："看到"即"可调"。
-- 若内容层希望工具出现在 ``list_tools(provider="game")``（Planner/Replyer
-  的动作清单路径），可在装配时传 ``provider="game"`` 覆盖（按需，非硬编码）。
+- ``provider`` 默认 = server 名（如 maicraft → "maicraft"）：注册后工具进入
+  全局 ToolRegistry，任何 Agent（主播 / 游戏）通过 ``registry.invoke()``
+  均可调用——与 Claude Code 的 MCP 插件语义一致："看到"即"可调"。
+- 若内容层希望工具出现在指定 provider 过滤路径（如 ``list_tools(provider=
+  "game")``），可在装配时显式传 ``provider="game"`` 覆盖（按需，非硬编码）。
 """
 
 from __future__ import annotations
@@ -33,7 +33,8 @@ class McpToolProvider(ToolProvider):
     Attributes:
         server_name: MCP server 别名（来自配置 key）
         prefix: 工具名前缀（默认 ``<server_name>_``）
-        provider: 注册来源标记（"mcp" / "game"）
+        provider: 注册来源标记（默认 = server 名，如 "maicraft"；
+            可显式覆盖如 "game"）
     """
 
     def __init__(
@@ -42,12 +43,12 @@ class McpToolProvider(ToolProvider):
         client: McpClient,
         server_name: str,
         prefix: Optional[str] = None,
-        provider: str = "mcp",
+        provider: Optional[str] = None,
     ) -> None:
         self._client = client
         self.server_name = server_name
         self.prefix = prefix if prefix is not None else f"{server_name}_"
-        self._provider = provider
+        self._provider = provider or server_name
         self._specs: List[ToolSpec] = []
         self._synced = False
 

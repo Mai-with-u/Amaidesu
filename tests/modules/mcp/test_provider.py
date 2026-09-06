@@ -98,7 +98,7 @@ class TestProvider:
         assert count == 2
         specs = list(prov.list_tools())
         assert [s.name for s in specs] == ["serverA_perceive", "serverA_execute"]
-        assert specs[0].provider == "mcp"
+        assert specs[0].provider == "serverA"
         assert specs[1].parameters_schema == {"type": "object"}
 
     async def test_setup_connection_failure_returns_zero(self) -> None:

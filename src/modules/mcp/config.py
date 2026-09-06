@@ -1,17 +1,16 @@
 """MCP 外部工具源配置 Schema
 
-定义 ``[tools.external].config`` 段（tools.toml）的 Pydantic 校验模型，
+定义 ``[tools.mcp].config`` 段（tools.toml）的 Pydantic 校验模型，
 描述接入哪些 MCP server、以什么 transport 连接。
 
 配置结构（TOML 视角）::
 
-    [tools.external]
+    [tools.mcp]
     enabled = true
-    provider = "mcp"
 
-    [tools.external.config]
+    [tools.mcp.config]
     # 每个 MCP server 一个条目，key = server 名（也是工具名前缀来源）
-    [tools.external.config.servers.my_server]
+    [tools.mcp.config.servers.my_server]
     transport = "http"  # http（Streamable HTTP）| stdio
     url = "http://127.0.0.1:8766/mcp"  # http 传输时的端点
     # command / args 用于 stdio 传输
@@ -24,7 +23,8 @@
 设计要点：
 - 服务端能力契约（tools 的 JSON Schema 等）由运行时 ``list_tools`` 动态拉取，
   不在配置内硬编码；配置只描述"连谁、怎么连"。
-- 纯新增字段（tools_schemas.py 的 ``external`` 已存在），无需注册迁移钩子。
+- 配置段的权威 Schema 在 ``src/modules/config/tools_schemas.py``（McpDomainConfig）；
+  本模块的 McpExternalConfig 仅为 bind 路径的宽松解析器。
 """
 
 from __future__ import annotations
