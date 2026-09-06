@@ -19,8 +19,8 @@ import time
 from typing import Iterable, List, Optional
 
 from src.modules.logging import get_logger
-from src.modules.tools.mcp import mapper
-from src.modules.tools.mcp.client import McpClient
+from src.modules.mcp import mapper
+from src.modules.mcp.client import McpClient
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import ToolProvider
 

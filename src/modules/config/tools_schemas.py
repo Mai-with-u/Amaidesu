@@ -5,21 +5,40 @@
 段树结构（TOML 视角）::
 
     [tools]
-    enabled = ["perception", "understanding", "output", "external"]
+    enabled = ["perception", "output"]
 
-    [tools.perception.danmaku]
-    platform = "bilibili"
-    room_id = 12345
-    ...
+    # 形象域（每形象一 provider 实例；enabled 控制其工具可见性）
+    [tools.avatar.vts]
+    enabled = true
+    config = {...}
 
-    [tools.output.tts]
-    voice = "zh-CN-XiaoxiaoNeural"
-    ...
+    [tools.avatar.warudo]
+    enabled = false
+
+    # 演播域
+    [tools.studio.obs]
+    enabled = true
+    config = {...}
+
+    # 视觉基础模块（工具出口：look_at_screen）
+    [tools.vision]
+    enabled = true
+    config = {...}
+
+    # 记忆域（工具出口：query_memory）
+    [tools.memory]
+    enabled = true
+
+    # 通用 MCP 外部工具源通道
+    [tools.mcp]
+    enabled = true
+    config.servers = {...}
 
 设计原则：
-- 感知/理解/输出按"能力包"分组（而非按阶段）
-- 工具配置细节由具体 Tool Provider 的 Pydantic ConfigSchema 提供
-- 本文件提供聚合容器与元数据，组件字段由 ToolRegistry 注入
+- 工具提供者为「开关单元」：一个形象 / 一个 MCP server = 一个 enabled 开关。
+  开 = 其全部工具进入可见集；关 = 全部消失。开关控制权归属人类（配置 + Web UI）。
+- 感知/理解/输出按"能力包"分组（而非按阶段）；本文件为聚合容器与元数据，
+  组件字段由具体 Tool Provider 的 ConfigSchema 验证。
 """
 
 from __future__ import annotations
@@ -37,57 +56,63 @@ from src.modules.config.schemas.base import BaseConfig
 
 
 ToolPackType = Literal[
-    "perception",  # 感知：屏幕/音频/弹幕/遥测
-    "understanding",  # 理解：VLM/ASR
-    "output",  # 输出：TTS/字幕/皮套/OBS
-    "content_engine",  # 内容引擎：游戏控制器
-    "external",  # 外部：MCP（通用 MCP 外部工具源，src/modules/tools/mcp/）
+    "perception",  # 采集器包：屏幕/音频/弹幕/遥测（采集器域，不迁移）
+    "output",  # 输出包：TTS/字幕/皮套/OBS（保留包级列表，实际开关在域级）
 ]
 
 
 # ---------------------------------------------------------------------------
-# 通用工具包元数据
+# 工具域开关（单一事实源：每个提供者一个开关单元）
 # ---------------------------------------------------------------------------
 
 
-class ToolPackMeta(BaseConfig):
-    """工具包通用元数据（每个能力包共享）
+class ToolDomainConfig(BaseConfig):
+    """工具域开关基类（域级 enabled + 提供方自由 config）
 
     Attributes:
-        enabled: 是否启用此工具包
-        provider: 提供方（builtin/game/mcp）
-        config: 提供方具体配置（动态键，由 ToolRegistry 注入具体 Schema）
+        enabled: 是否启用该域（开 = 域下工具全部可见）
+        config: 提供方具体配置（动态键，由对应 Tool Provider 注入 Schema 验证）
     """
 
-    enabled: bool = Field(default=True, description="是否启用此工具包")
-    provider: Literal["builtin", "game", "mcp"] = Field(
-        default="builtin",
-        description="工具包提供方（builtin=框架内置, game=游戏 Agent；mcp=预留枚举值，暂无实现）",
-        json_schema_extra={
-            "x-ui-type": "select",
-            "x-options": ["builtin", "game", "mcp"],
-        },
-    )
+    enabled: bool = Field(default=True, description="是否启用该工具域（开=其工具全部可见）")
     config: Dict[str, Any] = Field(
         default_factory=dict,
-        description="工具包具体配置（由对应 Tool Provider 注入 Schema 后验证）",
+        description="工具域具体配置（由对应 Tool Provider 注入 Schema 后验证）",
     )
 
 
-# ---------------------------------------------------------------------------
-# 组件级配置的承载方式
-# ---------------------------------------------------------------------------
-# [tools.perception.config.bili_danmaku] / [tools.output.config.subtitle] 等
-# 组件级配置，归入对应工具包的 config 字典里。
-# 例如：
-#   [tools.perception.config.bili_danmaku]
-#   platform = "bilibili"
-#   room_id = 12345
-#   [tools.output.config.subtitle]
-#   window_width = 800
-#
-# 不为每个组件定义独立 BaseConfig（避免组件字段耦合到 Schema），
-# 由 ToolRegistry 在启动时对 config dict 做 Pydantic 校验。
+class AvatarDomainConfig(ToolDomainConfig):
+    """形象域开关（每个形象一实例：files[avatar].<name>.enabled）
+
+    ``[tools.avatar.vts]`` / ``[tools.avatar.warudo]`` 等动态段：
+    每个形象 = 一个开关单元，开 = 其全部工具进入可见集。
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+
+class StudioDomainConfig(ToolDomainConfig):
+    """演播域开关（``[tools.studio.obs]`` 等动态段）"""
+
+    model_config = ConfigDict(extra="allow")
+
+
+class VisionDomainConfig(ToolDomainConfig):
+    """视觉基础模块（工具出口 look_at_screen；被调才看，快照型）"""
+
+    model_config = ConfigDict(extra="allow")
+
+
+class MemoryDomainConfig(ToolDomainConfig):
+    """记忆域（工具出口 query_memory；LLM 主动检索关键词记忆）"""
+
+    model_config = ConfigDict(extra="allow")
+
+
+class McpDomainConfig(ToolDomainConfig):
+    """通用 MCP 外部工具源域（modules/mcp 通道；config.servers 声明 server 连接）"""
+
+    model_config = ConfigDict(extra="allow")
 
 
 # ---------------------------------------------------------------------------
@@ -95,83 +120,61 @@ class ToolPackMeta(BaseConfig):
 # ---------------------------------------------------------------------------
 
 
-class LookAtScreenToolConfig(BaseConfig):
-    """[tools.look_at_screen] 屏幕快照同步工具配置。
-
-    ``look_at_screen`` 是 L2 DI 工具（快照型→被调才看）：组合根在
-    ``enabled=true`` 时注入 Pillow 截图后端并注册到 ToolRegistry。
-    与 ``[tools.perception]``（采集器包配置，流型事件源）**无关**——
-    命名分属两个域，勿混。
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: bool = Field(
-        default=True,
-        description="是否在组合根注册 look_at_screen 工具（游戏 Agent 感知依赖它）",
-    )
-    default_max_width: int = Field(
-        default=1280,
-        ge=0,
-        description="默认图像缩放最大宽度（像素，0=不缩放；省 token 用）",
-    )
-
-
 class ToolsConfig(BaseConfig):
     """[tools] 段聚合
 
-    包含所有工具包（perception/understanding/output/content_engine/external）的元数据。
-
-    使用 ``extra="forbid"`` 拒绝未知工具包子段，避免拼写错误静默通过。
+    包含所有能力包元数据 + 工具域开关（avatar/studio/vision/memory/mcp）。
+    使用 ``extra="forbid"`` 拒绝未知子段，避免拼写错误静默通过。
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    # 启用的工具包列表
+    # 启用的工具包列表（保留兼容：perception/output）
     enabled: List[ToolPackType] = Field(
         default_factory=lambda: ["perception", "output"],
         description="启用的工具包列表",
         json_schema_extra={
             "x-ui-type": "multiselect",
-            "x-options": [
-                "perception",
-                "understanding",
-                "output",
-                "content_engine",
-                "external",
-            ],
+            "x-options": ["perception", "output"],
         },
     )
 
-    # 各工具包子配置（均为 Optional，未启用时 None）
-    perception: Optional[ToolPackMeta] = Field(
+    # 各能力包子配置（均为 Optional，未启用时 None）
+    perception: Optional[ToolDomainConfig] = Field(
         default=None,
-        description="感知工具包（屏幕/音频/弹幕/遥测）",
+        description="感知工具包（采集器配置：屏幕/音频/弹幕/遥测）",
         json_schema_extra={"x-ui-type": "object"},
     )
-    understanding: Optional[ToolPackMeta] = Field(
+    output: Optional[ToolDomainConfig] = Field(
         default=None,
-        description="理解工具包（VLM/ASR）",
+        description="输出工具包（TTS/字幕配置保留段；皮套/OBS 开关下放到域级）",
         json_schema_extra={"x-ui-type": "object"},
     )
-    output: Optional[ToolPackMeta] = Field(
-        default=None,
-        description="输出工具包（TTS/字幕/皮套/OBS）",
+
+    # 工具域开关（单一事实源；动态子段：avatar.<name> / studio.<name>）
+    avatar: Optional[Dict[str, AvatarDomainConfig]] = Field(
+        default_factory=dict,
+        description="形象域（每形象一实例：vts / warudo / vrchat ...，enabled 控制各形象工具）",
         json_schema_extra={"x-ui-type": "object"},
     )
-    content_engine: Optional[ToolPackMeta] = Field(
-        default=None,
-        description="内容引擎（游戏控制器）",
+    studio: Optional[Dict[str, StudioDomainConfig]] = Field(
+        default_factory=dict,
+        description="演播域（obs 等，enabled 控制各演播工具）",
         json_schema_extra={"x-ui-type": "object"},
     )
-    external: Optional[ToolPackMeta] = Field(
+    vision: Optional[VisionDomainConfig] = Field(
         default=None,
-        description="外部 MCP 工具源（配置 servers 连接，工具全局注册到 ToolRegistry；见 src/modules/tools/mcp/）",
+        description="视觉基础模块（工具出口 look_at_screen；enabled=true 时组合根注入 Pillow 后端）",
         json_schema_extra={"x-ui-type": "object"},
     )
-    look_at_screen: Optional[LookAtScreenToolConfig] = Field(
-        default_factory=LookAtScreenToolConfig,
-        description="屏幕快照同步工具（L2 DI，被调才看；enabled=true 时组合根注入 Pillow 后端）",
+    memory: Optional[MemoryDomainConfig] = Field(
+        default=None,
+        description="记忆域（工具出口 query_memory；enabled=true 时注册记忆检索工具）",
+        json_schema_extra={"x-ui-type": "object"},
+    )
+    mcp: Optional[McpDomainConfig] = Field(
+        default=None,
+        description="通用 MCP 外部工具源（config.servers 声明连接；enabled=true 时注册其工具）",
         json_schema_extra={"x-ui-type": "object"},
     )
 
@@ -189,15 +192,21 @@ class ToolsRootConfig(BaseConfig):
 
     tools: ToolsConfig = Field(
         default_factory=ToolsConfig,
-        description="[tools] 段聚合（启用列表 + 各工具包子配置）",
+        description="[tools] 段聚合（启用列表 + 各能力包/工具域配置）",
     )
 
 
 __all__ = [
     # 工具能力包类型
     "ToolPackType",
-    # 工具包元数据
-    "ToolPackMeta",
+    # 工具域开关基类
+    "ToolDomainConfig",
+    # 域配置
+    "AvatarDomainConfig",
+    "StudioDomainConfig",
+    "VisionDomainConfig",
+    "MemoryDomainConfig",
+    "McpDomainConfig",
     # 聚合
     "ToolsConfig",
     # 顶层根模型

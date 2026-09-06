@@ -108,7 +108,7 @@ GPTSoVITSConfigSchema: Optional[type] = _try_load_handler_schema(
     "GPTSoVITSProvider",
 )
 ObsControlConfigSchema: Optional[type] = _try_load_handler_schema(
-    "src.modules.tools.output.obs.obs_provider",
+    "src.modules.studio.obs.obs_provider",
     "OBSProvider",
 )
 OmniTTSConfigSchema: Optional[type] = _try_load_handler_schema(
@@ -125,15 +125,15 @@ SubtitleConfigSchema: Optional[type] = _try_load_handler_schema(
     "SubtitleGuiService",
 )
 VRChatConfigSchema: Optional[type] = _try_load_handler_schema(
-    "src.modules.tools.output.vts.vrchat_provider",
+    "src.modules.avatar.vts.vrchat_provider",
     "VRChatProvider",
 )
 VTSConfigSchema: Optional[type] = _try_load_handler_schema(
-    "src.modules.tools.output.vts.vts_provider",
+    "src.modules.avatar.vts.vts_provider",
     "VTSProvider",
 )
 WarudoConfigSchema: Optional[type] = _try_load_handler_schema(
-    "src.modules.tools.output.warudo.warudo_provider",
+    "src.modules.avatar.warudo.warudo_provider",
     "WarudoProvider",
 )
 

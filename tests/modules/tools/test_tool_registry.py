@@ -26,7 +26,7 @@ from src.modules.tools import (
     ToolSpec,
     tool,
 )
-from src.modules.tools.models import Provider, ToolExecutionResult
+from src.modules.tools.models import ToolExecutionResult
 
 
 # =============================================================================

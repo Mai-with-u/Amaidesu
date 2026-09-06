@@ -15,7 +15,7 @@ import pytest
 from src.modules.tools.models import ToolExecutionResult, ToolSpec
 from src.modules.tools.registry import ToolRegistry
 
-import src.modules.tools.mcp as mcp_module
+import src.modules.mcp as mcp_module
 
 
 class FakeTool:
@@ -113,7 +113,7 @@ def patch_mcp(monkeypatch: pytest.MonkeyPatch) -> Dict[str, FakeClient]:
 
 
 async def test_bind_two_servers_all_ok(patch_mcp) -> None:
-    from src.modules.tools.mcp import bind_mcp_tools
+    from src.modules.mcp import bind_mcp_tools
 
     patch_mcp["serverA"] = FakeClient([FakeTool("perceive"), FakeTool("execute")])
     patch_mcp["other"] = FakeClient([FakeTool("ping")])
@@ -140,7 +140,7 @@ async def test_bind_two_servers_all_ok(patch_mcp) -> None:
 
 
 async def test_single_server_failure_isolated(patch_mcp) -> None:
-    from src.modules.tools.mcp import bind_mcp_tools
+    from src.modules.mcp import bind_mcp_tools
 
     patch_mcp["broken"] = FakeClient([FakeTool("perceive")], connect_ok=False)
     patch_mcp["good"] = FakeClient([FakeTool("do")])
@@ -162,7 +162,7 @@ async def test_single_server_failure_isolated(patch_mcp) -> None:
 
 
 async def test_disabled_server_skipped(patch_mcp) -> None:
-    from src.modules.tools.mcp import bind_mcp_tools
+    from src.modules.mcp import bind_mcp_tools
 
     raw_cfg = {
         "servers": {
@@ -178,7 +178,7 @@ async def test_disabled_server_skipped(patch_mcp) -> None:
 
 
 async def test_empty_config_no_servers(patch_mcp) -> None:
-    from src.modules.tools.mcp import bind_mcp_tools
+    from src.modules.mcp import bind_mcp_tools
 
     registry = ToolRegistry()
     report = await bind_mcp_tools(registry, None)  # None → 空配置
@@ -188,7 +188,7 @@ async def test_empty_config_no_servers(patch_mcp) -> None:
 
 async def test_duplicate_prefix_collision_reported(patch_mcp) -> None:
     """两个 server 若前缀相同：先注册保留，后注册 tools=0 并带 error 说明。"""
-    from src.modules.tools.mcp import bind_mcp_tools
+    from src.modules.mcp import bind_mcp_tools
 
     patch_mcp["first"] = FakeClient([FakeTool("ping")])
     patch_mcp["second"] = FakeClient([FakeTool("ping")])

@@ -317,16 +317,15 @@ class Replyer:
     def _ensure_tool_list(self) -> None:
         """查询工具清单用于动作白名单校验（每次 generate 时调用）。
 
-        数据源为 ToolRegistry 中 provider="game" 的工具（游戏 Agent 的
-        choose_option / get_story 等）——主播表达引擎据此做动作白名单校验。
-        不缓存：新注册的 game 工具（如动态启停的 Agent）需在下一轮决策即生效，
-        registry 查询是内存遍历，几乎零成本。
+        数据源为 ToolRegistry 全部已启用工具——主播表达引擎据此做动作白名单校验
+        （主播 Agent 默认可见所有已启用工具）。不缓存：新注册的工具（如动态启停
+        的 Agent）需在下一轮决策即生效，registry 查询是内存遍历，几乎零成本。
         """
         if not self._enable_action_selection or self._tool_registry is None:
             return
 
         try:
-            specs = self._tool_registry.list_tools(provider="game")
+            specs = self._tool_registry.list_tools()
         except Exception as e:
             self.logger.warning(f"Replyer 查询工具清单失败，动作选择降级为禁用: {e}")
             return

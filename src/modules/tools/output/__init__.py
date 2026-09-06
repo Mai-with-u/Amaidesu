@@ -1,25 +1,16 @@
-"""渲染工具模块顶层入口
+"""Output 域的"残留"工具子包入口
 
-按组件族拆分到子包：
-
-| 子包 | 内容 |
-|---|---|
-| ``vts/``     | VTS 全家桶 + VRChat（VTSProvider, LipSyncProcessor, ExpressionController, HotkeyMatcher, IdleMotionController, VRChatProvider） |
-| ``warudo/``  | Warudo 全家桶（WarudoProvider + 状态类 + 后台任务 + SubtitleManager + Sender） |
-| ``subtitle/`` | Subtitle GUI 服务导出（``SubtitleGuiService``）；字幕基础设施由 subtitle 模块自治装配 |
-| ``obs/``     | OBS Provider（3 个工具：send_text / switch_scene / set_source_visibility） |
-| ``remote_stream/`` | 消息协议 + 分发器（无 websocket 脚手架） |
+经过 avatar / studio / vision 域迁移后，``src/modules/tools/output/`` 仅保留
+未迁移到对应域的子包（当前为 ``remote_stream/``）。avatar 域的 vts / warudo / vrchat
+位于 ``src/modules/avatar/``，studio 域的 obs 位于 ``src/modules/studio/obs/``。
+本文件仅作为该残留子包的转发入口，避免下游 ``from src.modules.tools.output import ...``
+历史用法静默失效。
 
 注：TTS 与字幕均已提升为基础设施。TTS 由 ``src/modules/tts/`` 自治装配；
 字幕由 ``src/modules/subtitle/build_subtitle_infrastructure`` 自治装配。两者
 均不通过 ``ToolRegistry`` 注册为可调用工具，而是配置驱动的语音/字幕组件。
 """
 
-from src.modules.tools.output.obs import (
-    OBSProvider,
-    create_obs_provider,
-    register_obs_tools,
-)
 from src.modules.tools.output.remote_stream import (
     AudioConfig,
     ImageConfig,
@@ -27,60 +18,8 @@ from src.modules.tools.output.remote_stream import (
     RemoteStreamTypes,
     StreamMessage,
 )
-from src.modules.tools.output.vts import (
-    ExpressionController,
-    HotkeyMatcher,
-    IdleMotionController,
-    LipSyncProcessor,
-    VRChatProvider,
-    VTSProvider,
-    create_vrchat_provider,
-    create_vts_provider,
-    register_vrchat_tools,
-    register_vts_tools,
-)
-from src.modules.tools.output.warudo import (
-    ActionSender,
-    BlinkTask,
-    ShiftTask,
-    TalkingHeadTask,
-    ThrowFishTask,
-    TypingActionTask,
-    WarudoProvider,
-    WarudoStateManager,
-    WarudoSubtitleManager,
-    create_warudo_provider,
-    register_warudo_tools,
-)
 
 __all__ = [
-    # VTS
-    "VTSProvider",
-    "VRChatProvider",
-    "LipSyncProcessor",
-    "ExpressionController",
-    "HotkeyMatcher",
-    "IdleMotionController",
-    "create_vts_provider",
-    "create_vrchat_provider",
-    "register_vts_tools",
-    "register_vrchat_tools",
-    # Warudo
-    "WarudoProvider",
-    "WarudoStateManager",
-    "WarudoSubtitleManager",
-    "BlinkTask",
-    "ShiftTask",
-    "TalkingHeadTask",
-    "ThrowFishTask",
-    "TypingActionTask",
-    "ActionSender",
-    "create_warudo_provider",
-    "register_warudo_tools",
-    # OBS
-    "OBSProvider",
-    "create_obs_provider",
-    "register_obs_tools",
     # RemoteStream
     "MessageType",
     "StreamMessage",

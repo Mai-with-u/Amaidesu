@@ -15,7 +15,7 @@ import pytest
 
 from src.modules.events.event_bus import EventBus
 from src.modules.tools import ToolInvocation
-from src.modules.tools.output.obs import obs_provider as obs_mod
+from src.modules.studio.obs import obs_provider as obs_mod
 
 
 def _make_obs_provider(monkeypatch: pytest.MonkeyPatch) -> "obs_mod.OBSProvider":

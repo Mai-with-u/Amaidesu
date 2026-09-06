@@ -23,7 +23,6 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Iterable, List
 from src.modules.events.payloads.tool_result import ToolResultPayload
 from src.modules.logging import get_logger
 from src.modules.tools.models import (
-    Provider,
     ToolExecutionResult,
     ToolInvocation,
     ToolSpec,
@@ -132,11 +131,12 @@ class ToolRegistry:
 
     # -------------------- 查询 --------------------
 
-    def list_tools(self, provider: Optional[Provider] = None) -> List[ToolSpec]:
+    def list_tools(self, provider: Optional[str] = None) -> List[ToolSpec]:
         """返回所有已注册工具的 spec。
 
         Args:
-            provider: 可选过滤（"builtin" / "game"；"mcp" 预留枚举值，暂无实现）
+            provider: 可选过滤（提供者标识，如 "vts" / "warudo" /
+                "obs" / "vision" / "maicraft"）；None 返回全部。
         """
         specs = [spec for spec, _ in self._tools.values()]
         if provider is not None:
@@ -224,7 +224,7 @@ class ToolRegistry:
     def to_llm_definitions(
         self,
         *,
-        provider: Optional[Provider] = None,
+        provider: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """返回 LLM 视角的工具定义列表（OpenAI 风格 function calling 形状）。
 

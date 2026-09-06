@@ -7,10 +7,10 @@ ToolProvider 协议实现，编排各引擎子件（``WarudoStateManager`` / 后
 - 暴露的工具：
   - ``warudo_set_expression``   - 设置 blendshape 表情参数
   - ``warudo_trigger_hotkey``   - 触发热键
-  - ``warudo_body_action``      - 触发身体动作
-  - ``warudo_head_action``      - 触发头部动作
-  - ``warudo_direct_action``    - 直接动作（蓝图节点名）
-  - ``warudo_push_subtitle``    - 推送字幕文本
+  - ``warudo_trigger_body``     - 触发身体动作
+  - ``warudo_trigger_head``     - 触发头部动作
+  - ``warudo_trigger_action``   - 直接动作（蓝图节点名）
+  - ``warudo_set_subtitle``     - 推送字幕文本
   - ``warudo_throw_fish``       - 抛鱼动画（带冷却）
   - ``warudo_set_sight``        - 设置视线状态
   - ``warudo_set_eyebrow``      - 设置眉毛状态
@@ -294,28 +294,28 @@ class WarudoProvider:
                 parameters_schema=_WARUDO_TRIGGER_HOTKEY_SCHEMA,
             ),
             ToolSpec(
-                name="warudo_body_action",
+                name="warudo_trigger_body",
                 description="Warudo 触发身体动作（姿势.json 蓝图）",
                 kind="sync",
                 provider="builtin",
                 parameters_schema=_WARUDO_BODY_ACTION_SCHEMA,
             ),
             ToolSpec(
-                name="warudo_head_action",
+                name="warudo_trigger_head",
                 description="Warudo 触发头部动作（头部动态.json 蓝图）",
                 kind="sync",
                 provider="builtin",
                 parameters_schema=_WARUDO_HEAD_ACTION_SCHEMA,
             ),
             ToolSpec(
-                name="warudo_direct_action",
+                name="warudo_trigger_action",
                 description="Warudo 直接动作（蓝图节点名）",
                 kind="sync",
                 provider="builtin",
                 parameters_schema=_WARUDO_DIRECT_ACTION_SCHEMA,
             ),
             ToolSpec(
-                name="warudo_push_subtitle",
+                name="warudo_set_subtitle",
                 description="Warudo 推送字幕文本（one-shot 模式）",
                 kind="sync",
                 provider="builtin",
@@ -378,17 +378,17 @@ class WarudoProvider:
                 return _ok(n, True, await self._send_expression(str(args["name"]), float(args["value"])))
             if n == "warudo_trigger_hotkey":
                 return _ok(n, True, await self._send_hotkey(str(args["hotkey_id"])))
-            if n == "warudo_body_action":
+            if n == "warudo_trigger_body":
                 return _ok(n, True, await self._send_action_internal("body_action", str(args["action"])))
-            if n == "warudo_head_action":
+            if n == "warudo_trigger_head":
                 return _ok(n, True, await self._send_action_internal("head_action", str(args["action"])))
-            if n == "warudo_direct_action":
+            if n == "warudo_trigger_action":
                 return _ok(
                     n,
                     True,
                     await self._send_action_internal(str(args["action"]), int(args.get("data", 1))),
                 )
-            if n == "warudo_push_subtitle":
+            if n == "warudo_set_subtitle":
                 await self.push_subtitle(str(args["speech"]), str(args.get("user_name", "MaiBot")))
                 return _ok(n, True)
             if n == "warudo_throw_fish":

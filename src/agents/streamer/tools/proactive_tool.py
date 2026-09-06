@@ -58,7 +58,7 @@ def build_proactive_tool_spec() -> ToolSpec:
         description=_PROACTIVE_TOOL_DESCRIPTION,
         parameters_schema=_PROACTIVE_PARAMETERS_SCHEMA,
         kind="sync",
-        provider="builtin",
+        provider="streamer",
     )
 
 

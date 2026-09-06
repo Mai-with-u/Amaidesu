@@ -60,7 +60,7 @@ def build_command_tool_spec() -> ToolSpec:
         description=_COMMAND_TOOL_DESCRIPTION,
         parameters_schema=_COMMAND_PARAMETERS_SCHEMA,
         kind="sync",
-        provider="builtin",
+        provider="streamer",
     )
 
 

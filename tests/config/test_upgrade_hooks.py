@@ -35,6 +35,7 @@ from src.modules.config.upgrade_hooks import (
     _migrate_tools_2_0_14,
     _migrate_core_2_0_14,
     _migrate_tools_2_0_15,
+    _migrate_tools_2_0_18,
     _strip_pipelines_2_0_4,
     _version_in_range,
     apply_upgrade_hooks,
@@ -1237,3 +1238,92 @@ class TestCoreHook2_0_14:
         assert _migrate_core_2_0_14({}) == []
         assert _migrate_core_2_0_14({"simulator": None}) == []
         assert _migrate_core_2_0_14({"simulator": "not-a-dict"}) == []
+
+
+class TestToolsHook2_0_18:
+    """tools.toml 2.0.18：工具域开关重构——output 拆 avatar/studio + vision/mcp 更名。
+
+    旧树（域开关藏 [tools.output].config.enabled 白名单）→ 新树（每域独立开关）：
+    - output.config 的 vts/warudo → [tools.avatar.vts]/[tools.avatar.warudo]
+    - output.config 的 obs → [tools.studio.obs]
+    - [tools.look_at_screen] → [tools.vision]
+    - [tools.external] → [tools.mcp]
+    - 迁移后删除旧段（output/look_at_screen/external）
+    """
+
+    def _old_structure(self) -> dict:
+        return {
+            "tools": {
+                "enabled": ["perception", "output"],
+                "output": {
+                    "enabled": True,
+                    "provider": "builtin",
+                    "config": {
+                        "enabled": ["vts", "warudo", "obs"],
+                        "vts": {"host": "127.0.0.1", "port": 8001},
+                        "warudo": {"url": "http://localhost:11000"},
+                        "obs": {"host": "127.0.0.1:4455"},
+                    },
+                },
+                "look_at_screen": {"enabled": True, "default_max_width": 1280},
+                "external": {"enabled": True, "config": {"servers": {"my_server": {"url": "http://x"}}}},
+                "perception": {"config": {"enabled": ["bili_danmaku"]}},
+            },
+        }
+
+    def test_migrates_output_to_avatar_studio(self):
+        data = self._old_structure()
+        changed = _migrate_tools_2_0_18(data)
+
+        tools = data["tools"]
+        assert tools["avatar"]["vts"]["enabled"] is True
+        assert tools["avatar"]["vts"]["config"] == {"host": "127.0.0.1", "port": 8001}
+        assert tools["avatar"]["warudo"]["enabled"] is True
+        assert tools["avatar"]["warudo"]["config"] == {"url": "http://localhost:11000"}
+        assert tools["studio"]["obs"]["enabled"] is True
+        assert tools["studio"]["obs"]["config"] == {"host": "127.0.0.1:4455"}
+        assert "tools.avatar.vts" in changed
+        assert "tools.avatar.warudo" in changed
+        assert "tools.studio.obs" in changed
+
+    def test_migrates_look_at_screen_to_vision(self):
+        data = self._old_structure()
+        _migrate_tools_2_0_18(data)
+
+        vision = data["tools"]["vision"]
+        assert vision["enabled"] is True
+        assert vision["config"]["default_max_width"] == 1280
+
+    def test_migrates_external_to_mcp(self):
+        data = self._old_structure()
+        _migrate_tools_2_0_18(data)
+
+        mcp = data["tools"]["mcp"]
+        assert mcp["config"]["servers"]["my_server"]["url"] == "http://x"
+
+    def test_removes_old_sections(self):
+        data = self._old_structure()
+        _migrate_tools_2_0_18(data)
+
+        tools = data["tools"]
+        for old_key in ("output", "look_at_screen", "external"):
+            assert old_key not in tools
+
+    def test_keeps_perception(self):
+        data = self._old_structure()
+        _migrate_tools_2_0_18(data)
+        assert data["tools"]["perception"]["config"]["enabled"] == ["bili_danmaku"]
+
+    def test_idempotent(self):
+        data = self._old_structure()
+        first = _migrate_tools_2_0_18(data)
+        second = _migrate_tools_2_0_18(data)
+        assert first != []
+        assert second == []
+        # 幂等：第二次运行不改动结构
+        assert data["tools"]["avatar"]["vts"]["enabled"] is True
+
+    def test_noop_when_path_missing(self):
+        assert _migrate_tools_2_0_18({}) == []
+        assert _migrate_tools_2_0_18({"tools": None}) == []
+        assert _migrate_tools_2_0_18({"tools": {}}) == []

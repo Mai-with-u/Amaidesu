@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from src.modules.tools.mcp.config import McpExternalConfig, McpServerConfig
+from src.modules.mcp.config import McpExternalConfig, McpServerConfig
 
 
 class TestServerConfig:

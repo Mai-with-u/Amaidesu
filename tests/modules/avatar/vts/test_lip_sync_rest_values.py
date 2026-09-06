@@ -7,7 +7,7 @@ LipSyncProcessor 表情静止值（rest values）测试
 
 import pytest
 
-from src.modules.tools.output.vts.lip_sync_processor import LipSyncProcessor
+from src.modules.avatar.vts.lip_sync_processor import LipSyncProcessor
 
 
 @pytest.fixture

@@ -570,14 +570,14 @@ class Planner:
     def _get_action_list(self) -> str:
         """获取可用动作清单文本（供 prompt 注入）。
 
-        从 tool_registry 按 provider="game" 惰性查询（游戏 Agent 的专属工具）；
-        无 provider 或查询失败时返回空串。
+        主播 Agent 是核心消费方：默认可见全部已启用的工具
+        （list_tools 不带过滤，全量返回）；无 registry 或查询失败时返回空串。
         """
         if self._tool_registry is None:
             return ""
 
         try:
-            specs = self._tool_registry.list_tools(provider="game")
+            specs = self._tool_registry.list_tools()
         except Exception as e:
             self.logger.warning(f"查询工具清单失败: {e}")
             return ""

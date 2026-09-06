@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.modules.tools.output.warudo.state.warudo_state_manager import (
+from src.modules.avatar.warudo.state.warudo_state_manager import (
     ALL_EYE_STATE,
     ALL_EYEBROW_STATE,
     ALL_MOUTH_STATE,

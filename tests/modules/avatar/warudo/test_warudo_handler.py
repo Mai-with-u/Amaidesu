@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.modules.tools import ToolInvocation
-from src.modules.tools.output.warudo.warudo_provider import WarudoProvider
+from src.modules.avatar.warudo.warudo_provider import WarudoProvider
 from src.modules.events.event_bus import EventBus
 
 

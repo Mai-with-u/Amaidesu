@@ -66,10 +66,10 @@ from src.modules.tts import build_tts_infrastructure
 from src.modules.storage.storage_ledger import StorageLedger
 from src.modules.tools import ToolRegistry
 from src.modules.tools.bootstrap import bind_core_tools
-from src.modules.tools.content_engine import StubContentEngine
+from src.agents.game.text_adv.content_engine import StubContentEngine
 from src.modules.tools.decorator import bind_pending_tools
-from src.modules.tools.perception.look_at_screen import LookAtScreenProvider
-from src.modules.tools.perception.pil_capture import PillowImageGrabCapture
+from src.modules.vision.look_at_screen import LookAtScreenProvider
+from src.modules.vision.pil_capture import PillowImageGrabCapture
 
 logger = get_logger("Main")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -500,21 +500,18 @@ async def create_app_components(
             session_manager=session_manager,
         )
 
-        # --- 核心工具包（output/* 的 L2 Provider） + L1 @tool pending 刷入 ---
+        # --- 核心域工具（avatar/studio 域开关，L2 Provider）+ L1 @tool pending 刷入 ---
         # 在 agent_manager.start_all() 之前完成 → StreamerAgent._on_start()
         # 调用 _register_tools() 时 registry 已就绪，可与 L2/L1 工具同台。
-        # 配置切片取法与 tools.perception.config 一致：先取
-        # [tools.output] 子段（ToolPackMeta），再取其 .config 字典作为
-        # bind_core_tools 入参；缺失则降级为 {}（多数包将走 schema 默认）。
-        # TTS/字幕装配由核心 [tts]/[subtitle] 段驱动（见各自 build 入口），
-        # bind_core_tools 不再处理 TTS/字幕。
-        tools_output_pack = (config.get("tools") or {}).get("output", {}) if isinstance(config, dict) else {}
-        output_pack_cfg = tools_output_pack.get("config", {}) if isinstance(tools_output_pack, dict) else {}
-        output_tools_config = output_pack_cfg if isinstance(output_pack_cfg, dict) else {}
+        # 配置：bind_core_tools 读取 [tools] 段的域开关（avatar.vts / studio.obs 等），
+        # 每个域段 enabled=true 才装配该提供者。TTS/字幕装配由核心 [tts]/[subtitle]
+        # 段驱动（见各自 build 入口），不在本段。
+        tools_cfg = (config.get("tools") or {}) if isinstance(config, dict) else {}
+        tools_section = tools_cfg if isinstance(tools_cfg, dict) else {}
 
         core_report = bind_core_tools(
             tool_registry,
-            output_tools_config,
+            tools_section,
         )
         core_succeeded = sum(1 for c in core_report.values() if c > 0)
         core_failed = [name for name, count in core_report.items() if count == 0]
@@ -528,33 +525,36 @@ async def create_app_components(
         else:
             logger.debug("@tool pending 表为空（L1 装饰器路径今日无产出）")
 
-        # --- 记忆检索工具（LLM 主动 query_memory）---
-        memory_tool_count = bind_memory_tools(tool_registry, memory)
-        logger.info(f"query_memory 记忆检索工具已注册（新增 {memory_tool_count} 个）")
+        # --- 记忆检索工具（LLM 主动 query_memory；[tools.memory] 域开关）---
+        memory_cfg = tools_section.get("memory", {}) if isinstance(tools_section, dict) else {}
+        if isinstance(memory_cfg, dict) and memory_cfg.get("enabled", False):
+            memory_tool_count = bind_memory_tools(tool_registry, memory)
+            logger.info(f"query_memory 记忆检索工具已注册（新增 {memory_tool_count} 个）")
 
-        # --- 屏幕快照工具 look_at_screen（L2 DI：组合根注入 Pillow 截图后端）---
-        # bootstrap 明文不接管 DI 工具（见 bootstrap.py 注释），由组合根按开关装配
-        las_cfg = (config.get("tools") or {}).get("look_at_screen", {}) if isinstance(config, dict) else {}
-        if isinstance(las_cfg, dict) and las_cfg.get("enabled", True):
+        # --- 视觉基础模块工具 look_at_screen（L2 DI：组合根注入 Pillow 截图后端）---
+        # bootstrap 明文不接管 DI 工具（见 bootstrap.py 注释），由组合根按 [tools.vision] 开关装配
+        vision_cfg = tools_section.get("vision", {}) if isinstance(tools_section, dict) else {}
+        if isinstance(vision_cfg, dict) and vision_cfg.get("enabled", False):
+            vision_config = vision_cfg.get("config", {}) if isinstance(vision_cfg.get("config"), dict) else {}
             tool_registry.register_provider(
                 LookAtScreenProvider(
                     screen_capture=PillowImageGrabCapture(),
-                    default_max_width=int(las_cfg.get("default_max_width", 1280) or 0),
+                    default_max_width=int(vision_config.get("default_max_width", 1280) or 0),
                 )
             )
             logger.info("look_at_screen 已注册（Pillow 截图后端）")
 
-        # --- 外部 MCP 工具源（[tools.external] 段驱动；可选能力，失败不阻断启动）---
+        # --- 通用 MCP 外部工具源（[tools.mcp] 段驱动；可选能力，失败不阻断启动）---
         # 必须在 start_all() 之前装配：任何启动阶段查询工具清单的消费方
         # 需看到已注册的 MCP 工具。配置示例：
-        #   [tools.external]  enabled = true
-        #   [tools.external.config.servers.my_server]  url = "http://127.0.0.1:8766/mcp"
-        mcp_pack = (config.get("tools") or {}).get("external", {}) if isinstance(config, dict) else {}
+        #   [tools.mcp]  enabled = true
+        #   [tools.mcp.config.servers.my_server]  url = "http://127.0.0.1:8766/mcp"
+        mcp_pack = tools_section.get("mcp", {}) if isinstance(tools_section, dict) else {}
         if isinstance(mcp_pack, dict) and mcp_pack.get("enabled", False):
             mcp_cfg = mcp_pack.get("config", {}) if isinstance(mcp_pack.get("config"), dict) else {}
             try:
                 # 延迟 import：fastmcp 为可选重型依赖（避免启动强制加载）
-                from src.modules.tools.mcp import bind_mcp_tools
+                from src.modules.mcp import bind_mcp_tools
 
                 mcp_report = await bind_mcp_tools(tool_registry, mcp_cfg)
                 ok_count = sum(1 for s in mcp_report.values() if s["ok"])
@@ -566,7 +566,7 @@ async def create_app_components(
             except Exception as exc:  # noqa: BLE001 - MCP 装配失败不阻断启动
                 logger.warning(f"MCP 外部工具源装配异常（跳过）: {type(exc).__name__}: {exc}")
         elif isinstance(mcp_pack, dict) and "servers" in (mcp_pack.get("config") or {}):
-            logger.warning("[tools.external].enabled=false 但配置了 servers —— MCP 工具未装配")
+            logger.warning("[tools.mcp].enabled=false 但配置了 servers —— MCP 工具未装配")
 
         agents_enabled = ((config.get("agents") or {}).get("enabled") or []) if isinstance(config, dict) else []
         if "game" in agents_enabled and "look_at_screen" not in tool_registry:

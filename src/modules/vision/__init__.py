@@ -1,8 +1,8 @@
 """
-Amaidesu 感知工具包
+Amaidesu 视觉基础模块（记忆型：设施 + 工具出口）
 
 定位：
-- 感知包 = 公用工具（任何 Agent 都可调用）
+- 视觉模块 = 公用基础设施（任何 Agent 都可调用）
 - 屏幕画面 = **快照型数据** → 同步工具（被调才看，不会"错过"）
 - 流型数据（弹幕/STT）= 采集器（CollectBus 事件源），不在此
 
@@ -14,14 +14,14 @@ Amaidesu 感知工具包
 
 注册方式：
 ```python
-from src.modules.tools.perception import LookAtScreenProvider
+from src.modules.vision import LookAtScreenProvider
 
 provider = LookAtScreenProvider(screen_capture=my_capture, text_reader=my_reader)
 registry.register_provider(provider)
 ```
 """
 
-from src.modules.tools.perception.look_at_screen import (
+from src.modules.vision.look_at_screen import (
     FakeScreenCapture,
     FakeTextReader,
     LookAtScreenProvider,

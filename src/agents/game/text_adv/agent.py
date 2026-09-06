@@ -3,16 +3,16 @@
 设计：
 - 继承 ``BaseAgent``（协议六面全部实现）
 - 构造注入依赖（llm/prompt/event_bus/tool_registry/content_engine/...）
-- 自带 game 专属工具（``choose_option`` / ``get_story``），provider="game"
+- 自带 game 专属工具（``text_adv_choose_option`` / ``text_adv_get_story``），provider="game"
 - 复用公用感知工具 ``look_at_screen``（provider="builtin"）—— 通过 ToolRegistry 调
 - 复用公用 content_engine 控制面（provider="builtin"）
 - 内部状态 ``TextAdvGameAgentState``（内容状态内部自由）
-- 感知-决策-推进闭环：``on_state_change`` → look_at_screen → decide → choose_option
+- 感知-决策-推进闭环：``on_state_change`` → look_at_screen → decide → text_adv_choose_option
 - 不继承任何"组合式引擎"（无组合式引擎定案）
 
 协议六面（最小契约）：
 - 生命周期：start/stop/cleanup（默认实现）
-- 工具提供：list_tools() → choose_option + get_story（provider="game"）
+- 工具提供：list_tools() → text_adv_choose_option + text_adv_get_story（provider="game"）
 - 事件上报：emit game.milestone / game.attention_required / game.error
 - 状态读写：内部 TextAdvGameAgentState（内容状态）
 - 健康：BaseAgent 心跳（默认实现）
@@ -33,7 +33,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game import GamePayload
 from src.modules.logging import get_logger
 from src.modules.tools import ToolSpec
-from src.modules.tools.content_engine import (
+from src.agents.game.text_adv.content_engine import (
     ContentEngine,
     ContentEngineProvider,
     StubContentEngine,
@@ -99,7 +99,7 @@ class TextAdvGameAgent(BaseAgent):
     - 构造注入：所有依赖经 ``__init__`` 参数传入（可 mock / 可替换）
     - list_tools：仅声明 Agent 专属工具（provider="game"），公用感知工具不声明
     - 感知复用：通过 ``ToolRegistry.invoke("look_at_screen")`` 调公用工具
-    - 推进专属："choose_option" 翻译为 content_engine 输入
+    - 推进专属："text_adv_choose_option" 翻译为 content_engine 输入
     """
 
     # ----- 元数据 -----
@@ -169,7 +169,7 @@ class TextAdvGameAgent(BaseAgent):
 
     async def _on_start(self) -> None:
         """启动钩子：注册 Agent 专属工具 + 启动 content_engine。"""
-        # 注册 Agent 专属工具（choose_option / get_story）
+        # 注册 Agent 专属工具（text_adv_choose_option / text_adv_get_story）
         if self._tool_registry is not None:
             self._register_tools()
             self._register_content_engine()
@@ -203,7 +203,7 @@ class TextAdvGameAgent(BaseAgent):
             engine=self._content_engine,
         )
         self._tool_registry.register_provider(self._game_provider)
-        self._logger.info("TextAdvGameAgent 工具已注册：choose_option / get_story")
+        self._logger.info("TextAdvGameAgent 工具已注册：text_adv_choose_option / text_adv_get_story")
 
     def _register_content_engine(self) -> None:
         """注册 ContentEngine 控制面（若用户没自己注册）。"""
@@ -278,7 +278,7 @@ class TextAdvGameAgent(BaseAgent):
         感知-推进闭环的核心入口：
             输入：屏幕文本 + 选项列表（mock 数据或真实采集）
             过程：调公用 look_at_screen 工具感知 → 解析更新内部状态 →
-            决策（简化：首选项）→ 调 choose_option 触发推进 →
+            决策（简化：首选项）→ 调 text_adv_choose_option 触发推进 →
             emit game.milestone 报告推进
             返回：本次闭环的统计 + 状态快照
 
@@ -333,11 +333,11 @@ class TextAdvGameAgent(BaseAgent):
             return result
         result["decision"] = chosen.option_id
 
-        # ---- 推进（调 choose_option）----
+        # ---- 推进（调 text_adv_choose_option）----
         try:
             advance_result = await self._tool_registry.invoke(
                 _make_invocation(
-                    "choose_option",
+                    "text_adv_choose_option",
                     arguments={"option_id": chosen.option_id},
                     source=self.name,
                 )

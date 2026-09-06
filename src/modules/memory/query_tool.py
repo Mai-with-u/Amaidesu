@@ -43,7 +43,7 @@ QUERY_MEMORY_SPEC = ToolSpec(
     },
     kind="sync",
     result_event="",
-    provider="builtin",
+    provider="memory",
 )
 
 

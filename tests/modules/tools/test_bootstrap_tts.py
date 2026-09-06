@@ -51,54 +51,69 @@ class TestBootstrapNoLongerHandlesTTS:
 
 
 class TestNonTTSPackagesUnchanged:
-    """非 TTS 包白名单逻辑保持不变（与历史契约一致）。"""
+    """非 TTS 包按域开关装配（与 v2 域开关契约一致）。"""
 
-    def test_subtitle_in_enabled_list_no_longer_registers_tool(self):
-        """字幕工具形态已退役：``enabled`` 列表中包含 ``"subtitle"`` 不再注册工具。
-
-        字幕由 ``src.modules.subtitle.build_subtitle_infrastructure`` 自治
-        装配并注入 StreamerAgent；bootstrap 对残留 ``"subtitle"`` 条目保持
-        静默忽略（白名单已无对应映射项），冷启动不报错。
-        """
+    def test_subtitle_domain_absent_registers_nothing(self):
+        """无 avatar/studio 域配置：bootstrap 不注册任何工具（防止隐式启用）。"""
         registry = ToolRegistry()
         report = bind_core_tools(
             registry,
-            config={"enabled": ["subtitle"]},
+            config={},
         )
-        assert registry.list_tools() == [], "字幕工具形态已退役，bootstrap 不应再注册任何工具"
-        assert "subtitle" not in report, "subtitle 不应出现在报告中（白名单已无映射项）"
+        assert registry.list_tools() == [], "无域开关配置，bootstrap 不应注册任何工具"
 
-    def test_vts_in_enabled_list_registers_vts_tools(self):
-        """vts 在 enabled 列表中：应注册 vts_* 工具。"""
+    def test_avatar_vts_enabled_registers_vts_tools(self):
+        """[tools.avatar.vts].enabled=true：应注册 vts_* 工具。"""
         registry = ToolRegistry()
         report = bind_core_tools(
             registry,
-            config={"enabled": ["vts"]},
+            config={
+                "avatar": {
+                    "vts": {"enabled": True, "config": {}},
+                },
+            },
         )
         vts_tools = [n.name for n in registry.list_tools() if n.name.startswith("vts_")]
-        assert vts_tools != [], "vts 在 enabled 中应被注册"
+        assert vts_tools != [], "avatar.vts 已启用应被注册"
         assert report.get("vts", 0) > 0
 
-    def test_subtitle_in_enabled_does_not_block_other_packages(self):
-        """``enabled`` 同时包含 ``"subtitle"`` 与 ``"vts"`` 时：subtitle 静默忽略，vts 正常注册。"""
+    def test_avatar_vts_disabled_registers_none(self):
+        """[tools.avatar.vts].enabled=false：不注册 vts_* 工具。"""
         registry = ToolRegistry()
         report = bind_core_tools(
             registry,
-            config={"enabled": ["subtitle", "vts"]},
+            config={
+                "avatar": {
+                    "vts": {"enabled": False, "config": {}},
+                },
+            },
         )
         vts_tools = [n.name for n in registry.list_tools() if n.name.startswith("vts_")]
-        assert vts_tools != [], "vts 应被注册"
-        assert "subtitle" not in report, "subtitle 不应在报告中出现（白名单已无映射项）"
+        assert vts_tools == [], "avatar.vts 未启用不应注册"
+        assert report.get("vts", 0) == 0
 
-    def test_missing_enabled_list_registers_nothing(self):
-        """config 中无 enabled 字段 → 非 TTS 包一律不装配（防止隐式启用）。"""
+    def test_studio_obs_enabled_registers_obs_tools(self):
+        """[tools.studio.obs].enabled=true：应注册 obs_* 工具。"""
+        registry = ToolRegistry()
+        bind_core_tools(
+            registry,
+            config={
+                "studio": {
+                    "obs": {"enabled": True, "config": {}},
+                },
+            },
+        )
+        obs_tools = [n.name for n in registry.list_tools() if n.name.startswith("obs_")]
+        assert obs_tools != [], "studio.obs 已启用应被注册"
+
+    def test_missing_domains_registers_nothing(self):
+        """config 无域段 → 一律不装配（防止隐式启用）。"""
         registry = ToolRegistry()
         bind_core_tools(registry, config={})
-        for key, *_ in _NON_TTS_PACKAGES:
-            for prefix in (key, f"{key}_"):
-                assert not any(
-                    n.name.startswith(prefix) for n in registry.list_tools()
-                ), f"{key} 不应被装配"
+        for prefix in ("vts_", "warudo_", "obs_", "vrchat_"):
+            assert not any(
+                n.name.startswith(prefix) for n in registry.list_tools()
+            ), f"{prefix} 不应被装配"
 
     def test_non_registry_argument_raises_type_error(self):
         with pytest.raises(TypeError):

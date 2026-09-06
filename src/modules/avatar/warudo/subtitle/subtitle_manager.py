@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional
 from aiohttp import WSMsgType, web
 
 from src.modules.logging import get_logger
-from src.modules.tools.output.warudo.subtitle.templates import render_subtitle_html
+from src.modules.avatar.warudo.subtitle.templates import render_subtitle_html
 
 
 class WarudoSubtitleManager:

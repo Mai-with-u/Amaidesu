@@ -61,7 +61,7 @@ def instantiate_agent(
 
     if name == "game":
         from src.agents.game.text_adv import TextAdvGameAgent, TextAdvGameConfig
-        from src.modules.tools.content_engine import StubContentEngine
+        from src.agents.game.text_adv.content_engine import StubContentEngine
 
         engine_name = str(config.get("engine", "text_adv") or "text_adv")
         if engine_name != "text_adv":

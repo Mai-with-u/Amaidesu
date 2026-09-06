@@ -75,10 +75,10 @@ def _convert_parameters_schema(schema: Any) -> Dict[str, Dict[str, Any]]:
     return result
 
 
-def _build_action_entry(provider: str, tool_name: str, description: str, parameters_schema: Any) -> Dict[str, Any]:
+def _build_action_entry(tool_name: str, description: str, parameters_schema: Any) -> Dict[str, Any]:
     """构造单个 action 条目（工具清单视图，供前端展示）。"""
     entry: Dict[str, Any] = {
-        "name": f"{provider}.{tool_name}",
+        "name": tool_name,
         "description": description or "",
         "parameters": _convert_parameters_schema(parameters_schema),
     }
@@ -112,7 +112,6 @@ async def list_tools(
 
     tools = [
         _build_action_entry(
-            provider=getattr(spec, "provider", "builtin") or "builtin",
             tool_name=spec.name,
             description=getattr(spec, "description", "") or "",
             parameters_schema=getattr(spec, "parameters_schema", None),

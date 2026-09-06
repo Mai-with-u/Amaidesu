@@ -2,7 +2,7 @@
 
 # 架构总览（v2.0.0）
 
-Amaidesu 是一个 **AI VTuber 框架**，v2.0.0 采用 **Agent（自主主体）+ 工具（能力契约）+ 存储（状态/记忆）+ 编排（Agenda 节目单）** 架构。系统采用**三通道协作**作为跨主体通信机制——命令（工具，主播→游戏，目标级意图，如 choose_option）、事件（EventBus，游戏→主播，里程碑/异常）、状态（工具，主播按需主动读取游戏封装读接口，如 get_story——按游戏实际需要设计，不强制单一 getStatus），事件拦截器挂在分发层做语义净化；Collector 从外部世界推入房间消息，Agent 拥有自己的决策循环并消费 ToolRegistry 中的工具完成表达与控制，Dashboard 仅作为 observer，不参与数据流。
+Amaidesu 是一个 **AI VTuber 框架**，v2.0.0 采用 **Agent（自主主体）+ 工具（能力契约）+ 存储（状态/记忆）+ 编排（Agenda 节目单）** 架构。系统采用**三通道协作**作为跨主体通信机制——命令（工具，主播→游戏，目标级意图，如 text_adv_choose_option）、事件（EventBus，游戏→主播，里程碑/异常）、状态（工具，主播按需主动读取游戏封装读接口，如 text_adv_get_story——按游戏实际需要设计，不强制单一 getStatus），事件拦截器挂在分发层做语义净化；Collector 从外部世界推入房间消息，Agent 拥有自己的决策循环并消费 ToolRegistry 中的工具完成表达与控制，Dashboard 仅作为 observer，不参与数据流。
 
 > 本文是**速查参考**（组件清单/目录结构/启动时序）。重构的来龙去脉与设计推导见 [v2.0.0 架构叙事](v2-architecture.md)。
 
@@ -261,7 +261,7 @@ sequenceDiagram
 | Subtitle | `builtin` | 3 | `push_subtitle` / `subtitle_clear` / `subtitle_show_test` |
 | VTS | `builtin` | 13 | `vts_smile` / `vts_close_eyes` / `vts_open_eyes` / `vts_set_expression` / `vts_set_parameter_value` / `vts_get_parameter_value` / `vts_trigger_hotkey` / `vts_load_item` / `vts_load_sticker` / `vts_set_idle_enabled` / `vts_reconnect` / `vts_get_stats` / `vts_lip_sync` |
 | VRChat | `builtin` | 3 | `vrchat_set_expression` / `vrchat_trigger_gesture` / `vrchat_get_stats` |
-| Warudo | `builtin` | 13 | `warudo_set_expression` / `warudo_trigger_hotkey` / `warudo_body_action` / `warudo_head_action` / `warudo_direct_action` / `warudo_push_subtitle` / `warudo_throw_fish` / `warudo_set_sight` / `warudo_set_eyebrow` / `warudo_set_eye` / `warudo_set_pupil` / `warudo_set_mouth` / `warudo_get_stats` |
+| Warudo | `builtin` | 13 | `warudo_set_expression` / `warudo_trigger_hotkey` / `warudo_trigger_body` / `warudo_trigger_head` / `warudo_trigger_action` / `warudo_set_subtitle` / `warudo_throw_fish` / `warudo_set_sight` / `warudo_set_eyebrow` / `warudo_set_eye` / `warudo_set_pupil` / `warudo_set_mouth` / `warudo_get_stats` |
 | OBS | `builtin` | 4 | `obs_send_text` / `obs_switch_scene` / `obs_set_source_visibility` / `obs_send_test` |
 | Remote Stream | — | 0（仅 `MessageType`/`StreamMessage` 协议 + `AudioConfig`/`ImageConfig`，无工具） | 留待外部 WebSocket 脚手架接入 |
 | Debug | — | 0（`dump_intent` 是函数非工具，DebugConfig 是 dataclass） | 调试输出 |

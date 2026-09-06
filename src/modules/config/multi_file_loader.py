@@ -54,7 +54,8 @@ _PHASE_TO_SECTION: dict[str, str] = {
 _PHASE_TO_COMPONENTS_PKG: dict[str, str] = {
     "input": "src.stages.input.collectors",
     "decision": "src.stages.decision.deciders",
-    # output handlers 已迁移到 src.modules.tools.output/
+    # output handlers 已迁移到 src.modules.avatar / src.modules.studio / src.modules.vision /
+    # src.modules.tools.output.remote_stream 等域
     "output": "src.modules.tools.output",
 }
 _PHASE_TO_REGISTRY: dict[tuple[str, str], str] = {
@@ -65,7 +66,7 @@ _PHASE_TO_REGISTRY: dict[tuple[str, str], str] = {
 
 # 配置版本号。权威定义：本文件的 ``CONFIG_VERSION`` 与 ``MetaConfig.version``
 # 默认值必须同步修改（改一必改二）。详见 AGENTS.md "配置 Schema 变更规则"。
-CONFIG_VERSION = "2.0.17"
+CONFIG_VERSION = "2.0.18"
 
 # 配置文件清单（按域划分）：core / model / agents / tools / memory / storage / background
 _CONFIG_FILES = [
@@ -721,10 +722,10 @@ _TTS_ENGINE_SCHEMA_LOADERS: dict[str, Callable[[], Optional[type[BaseModel]]]] =
 }
 
 _TOOL_PROVIDER_SCHEMA_LOADERS: dict[str, Callable[[], Optional[type[BaseModel]]]] = {
-    "vts": lambda: _try_import_provider_schema("src.modules.tools.output.vts.vts_provider", "VTSProvider"),
-    "vrchat": lambda: _try_import_provider_schema("src.modules.tools.output.vts.vrchat_provider", "VRChatProvider"),
-    "warudo": lambda: _try_import_provider_schema("src.modules.tools.output.warudo.warudo_provider", "WarudoProvider"),
-    "obs": lambda: _try_import_provider_schema("src.modules.tools.output.obs.obs_provider", "OBSProvider"),
+    "vts": lambda: _try_import_provider_schema("src.modules.avatar.vts.vts_provider", "VTSProvider"),
+    "vrchat": lambda: _try_import_provider_schema("src.modules.avatar.vts.vrchat_provider", "VRChatProvider"),
+    "warudo": lambda: _try_import_provider_schema("src.modules.avatar.warudo.warudo_provider", "WarudoProvider"),
+    "obs": lambda: _try_import_provider_schema("src.modules.studio.obs.obs_provider", "OBSProvider"),
 }
 
 # 字幕后端是基础设施（非工具），其 tk_gui 子段配置宿主为 core.toml [subtitle]。

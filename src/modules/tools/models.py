@@ -5,7 +5,7 @@
 - 时刻/时长字段约定：``*_ms``（毫秒 int）；不在本模块涉及时间字段
 - 多模态结果：``ResultBlock(kind)`` 支持 "text" / "image"
 - ``kind``：sync / async（唯一判别维度）
-- ``provider``：builtin / game（来源溯源）；"mcp" 预留枚举值，暂无实现
+- ``provider``：提供者标识（vts / warudo / obs / vision / memory / maicraft ...）
 """
 
 from __future__ import annotations
@@ -15,9 +15,6 @@ from typing import Any, Dict, List, Literal, Optional
 
 # 工具判别维度：sync（gather 等齐）/ async（fire-and-forget + 事件回传）
 Kind = Literal["sync", "async"]
-
-# 工具来源溯源：builtin（内置）/ game（游戏侧）/ mcp（预留）
-Provider = Literal["builtin", "game", "mcp"]
 
 # 多模态结果块种类
 BlockKind = Literal["text", "image"]
@@ -37,7 +34,8 @@ class ToolSpec:
         kind: "sync"（gather 等齐结果）/ "async"（fire-and-forget）
         result_event: 异步工具结果事件名，默认 ``tool.result.<name>``；
                       可定制（如 set_goal → ``tool.result.set_goal_feedback``）
-        provider: 来源溯源，"builtin" / "game"；"mcp" 预留枚举值，暂无实现
+        provider: 提供者标识（如 vts / warudo / obs / vision / memory /
+                   maicraft；溯源与过滤用，非白名单枚举）
         output_schema: 可选的 JSON Schema 形态的输出描述
     """
 
@@ -46,7 +44,7 @@ class ToolSpec:
     parameters_schema: Optional[Dict[str, Any]] = None
     kind: Kind = "sync"
     result_event: str = ""
-    provider: Provider = "builtin"
+    provider: str = ""
     output_schema: Optional[Dict[str, Any]] = None
 
     def resolve_result_event(self) -> str:
@@ -119,7 +117,6 @@ class ToolInvocation:
 
 __all__ = [
     "Kind",
-    "Provider",
     "BlockKind",
     "DEFAULT_RESULT_EVENT_PREFIX",
     "ToolSpec",

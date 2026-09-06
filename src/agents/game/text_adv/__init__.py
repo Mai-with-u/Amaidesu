@@ -6,7 +6,7 @@
 组成（全部自包含，无外部游戏特定依赖）：
 - :class:`TextAdvGameConfig` — Agent 配置 Schema（Pydantic）
 - :class:`TextAdvGameAgentState` — 游戏内部状态（内容状态内部自由）
-- :class:`TextAdvToolProvider` — Agent 专属工具（``choose_option`` / ``get_story``）
+- :class:`TextAdvToolProvider` — Agent 专属工具（``text_adv_choose_option`` / ``text_adv_get_story``）
 - :class:`TextAdvGameAgent` — 主 Agent（继承 BaseAgent）
 
 可被复用的框架能力（**不重写**）：

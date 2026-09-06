@@ -654,9 +654,69 @@ def _migrate_tools_2_0_15(data: dict[str, Any]) -> list[str]:
     return changed
 
 
-# ---------------------------------------------------------------------------
-# 升级钩子注册表
-# ---------------------------------------------------------------------------
+def _migrate_tools_2_0_18(data: dict[str, Any]) -> list[str]:
+    """tools.toml 2.0.18：工具域开关重构（output 拆 avatar/studio + vision/mcp 更名）
+
+    旧树（域开关藏 [tools.output].config.enabled 白名单）→ 新树（每域独立开关）:
+    - ``[tools.output.config].enabled`` 的 vts/warudo → 拆为 ``[tools.avatar.vts]/[tools.avatar.warudo]``
+      （保留其 config；缺失时补默认 enabled=true）
+    - ``[tools.output].config`` 的 obs → ``[tools.studio.obs]``（保留 config）
+    - ``[tools.look_at_screen]`` → ``[tools.vision]``（结构一致：enabled/default_max_width）
+    - ``[tools.external]`` → ``[tools.mcp]``（config.servers 结构一致）
+    - 迁移完后删除旧 ``[tools.output]`` 整段（其 enabled 白名单语义已失效）
+
+    保留 ``[tools.perception]``（采集器配置，迁移范围外）。
+    原地修改、幂等：无旧结构时返回空列表。
+    """
+    changed: list[str] = []
+
+    tools = data.get("tools")
+    if not isinstance(tools, dict):
+        return changed
+
+    # --- 1. output → avatar.vts / avatar.warudo ---
+    output = tools.get("output")
+    if isinstance(output, dict):
+        output_cfg = output.get("config")
+        if isinstance(output_cfg, dict):
+            enabled_list = output_cfg.get("enabled")
+            enabled_set = set(enabled_list) if isinstance(enabled_list, list) else set()
+
+            avatar = tools.setdefault("avatar", {})
+            for name, sub_cfg in (("vts", output_cfg.get("vts")), ("warudo", output_cfg.get("warudo"))):
+                if name in enabled_set or sub_cfg is not None:
+                    new_meta = {"enabled": True, "config": sub_cfg if isinstance(sub_cfg, dict) else {}}
+                    avatar[name] = new_meta
+                    changed.append(f"tools.avatar.{name}")
+
+            obs_cfg = output_cfg.get("obs")
+            if "obs" in enabled_set or obs_cfg is not None:
+                studio = tools.setdefault("studio", {})
+                studio["obs"] = {"enabled": True, "config": obs_cfg if isinstance(obs_cfg, dict) else {}}
+                changed.append("tools.studio.obs")
+
+    # --- 2. look_at_screen → vision ---
+    las = tools.get("look_at_screen")
+    if isinstance(las, dict):
+        tools["vision"] = {
+            "enabled": bool(las.get("enabled", True)),
+            "config": {k: v for k, v in las.items() if k != "enabled"},
+        }
+        changed.append("tools.vision")
+
+    # --- 3. external → mcp ---
+    external = tools.get("external")
+    if isinstance(external, dict):
+        tools["mcp"] = external
+        changed.append("tools.mcp")
+
+    # --- 4. 清理旧段 ---
+    for old_key in ("output", "look_at_screen", "external"):
+        if old_key in tools:
+            del tools[old_key]
+            changed.append(f"tools.{old_key}")
+
+    return changed
 
 
 CONFIG_UPGRADE_HOOKS: tuple[ConfigUpgradeHook, ...] = (
@@ -773,6 +833,12 @@ CONFIG_UPGRADE_HOOKS: tuple[ConfigUpgradeHook, ...] = (
         target_version="2.0.15",
         config_file="tools.toml",
         migrate=_migrate_tools_2_0_15,
+    ),
+    # 工具域开关重构：output 拆 avatar/studio + look_at_screen→vision + external→mcp
+    ConfigUpgradeHook(
+        target_version="2.0.18",
+        config_file="tools.toml",
+        migrate=_migrate_tools_2_0_18,
     ),
 )
 

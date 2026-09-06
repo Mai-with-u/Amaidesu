@@ -25,16 +25,14 @@ version = "2.0.3"
 
 def _make_spec(name: str, description: str, parameters_schema, provider: str = "builtin"):
     """构造 ToolSpec（避免 import 内部 dataclass 模块路径耦合）。"""
-    from typing import cast
-
-    from src.modules.tools.models import Provider, ToolSpec
+    from src.modules.tools.models import ToolSpec
 
     return ToolSpec(
         name=name,
         description=description,
         parameters_schema=parameters_schema,
         kind="sync",
-        provider=cast(Provider, provider),
+        provider=provider,
     )
 
 
@@ -110,21 +108,21 @@ def client(config_dir: Path):
     set_dashboard_server(None)  # type: ignore[arg-type]
 
 
-def test_tools_returns_tools_with_provider_prefix(client: TestClient) -> None:
-    """动作名 = provider.tool_name 全限定名。"""
+def test_tools_returns_tools_with_name(client: TestClient) -> None:
+    """动作名 = 工具自身名（名称已含 provider 前缀，不再拼接）。"""
     resp = client.get("/api/v1/tools")
     assert resp.status_code == 200
     body = resp.json()
     names = {a["name"] for a in body["tools"]}
-    assert "builtin.speak" in names
-    assert "game.show_image" in names
+    assert "speak" in names
+    assert "show_image" in names
 
 
 def test_tools_action_description_passthrough(client: TestClient) -> None:
     resp = client.get("/api/v1/tools")
     by_name = {a["name"]: a for a in resp.json()["tools"]}
-    assert by_name["builtin.speak"]["description"] == "TTS 语音合成"
-    assert by_name["game.show_image"]["description"] == "显示图片"
+    assert by_name["speak"]["description"] == "TTS 语音合成"
+    assert by_name["show_image"]["description"] == "显示图片"
 
 
 def test_tools_parameters_map_to_parameter_spec(client: TestClient) -> None:
@@ -132,7 +130,7 @@ def test_tools_parameters_map_to_parameter_spec(client: TestClient) -> None:
     resp = client.get("/api/v1/tools")
     by_name = {a["name"]: a for a in resp.json()["tools"]}
 
-    speak_params = by_name["builtin.speak"]["parameters"]
+    speak_params = by_name["speak"]["parameters"]
     assert speak_params["text"]["type"] == "string"
     assert speak_params["text"]["required"] is True
     assert speak_params["text"]["description"] == "要播报的文本"
@@ -144,7 +142,7 @@ def test_tools_parameters_map_to_parameter_spec(client: TestClient) -> None:
     assert speak_params["count"]["type"] == "integer"
     assert speak_params["count"]["required"] is False
 
-    image_params = by_name["game.show_image"]["parameters"]
+    image_params = by_name["show_image"]["parameters"]
     assert image_params["url"]["type"] == "string"
     assert image_params["url"]["required"] is True
     assert image_params["permanent"]["type"] == "boolean"

@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from src.modules.tools.mcp.mapper import (
+from src.modules.mcp.mapper import (
     normalize_tool_name,
     strip_tool_prefix,
     to_result,

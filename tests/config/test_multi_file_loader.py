@@ -119,7 +119,9 @@ class TestLoading:
         # perception 剥离已删除的 text_adv_game 采集器。
         # v2.0.17：事件历史与 LLM 请求历史入库——[events].persist 语义从
         # data/events/ JSONL 文件改为 SQLite event_history 表。
-        assert version == "2.0.17"
+        # v2.0.18：工具域开关重构——[tools.output] 拆 avatar/studio、look_at_screen→vision、
+        # external→mcp，CONFIG_VERSION 升 patch。
+        assert version == "2.0.18"
 
     def test_drift_fixed_on_load(self, temp_config_dir):
         generate_default_configs(temp_config_dir)

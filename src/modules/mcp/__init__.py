@@ -16,7 +16,7 @@
 
 装配入口（生产路径，组合根调用）::
 
-    from src.modules.tools.mcp import bind_mcp_tools
+    from src.modules.mcp import bind_mcp_tools
 
     report = await bind_mcp_tools(registry, external_config_dict)
     # report = {"servers": {"<server名>": {"ok", "tools", "error"}}}
@@ -27,10 +27,10 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 from src.modules.logging import get_logger
-from src.modules.tools.mcp.client import McpClient
-from src.modules.tools.mcp.config import McpExternalConfig, McpServerConfig
-from src.modules.tools.mcp.mapper import normalize_tool_name, strip_tool_prefix, to_result, to_spec
-from src.modules.tools.mcp.provider import McpToolProvider
+from src.modules.mcp.client import McpClient
+from src.modules.mcp.config import McpExternalConfig, McpServerConfig
+from src.modules.mcp.mapper import normalize_tool_name, strip_tool_prefix, to_result, to_spec
+from src.modules.mcp.provider import McpToolProvider
 from src.modules.tools.registry import ToolRegistry
 
 logger = get_logger("McpTools")

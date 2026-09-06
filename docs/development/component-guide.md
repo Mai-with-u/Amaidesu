@@ -292,7 +292,7 @@ async def asyncio_sleep_ms(ms: int) -> None:
 工具的典型形态：
 
 - **公用感知**（如 `look_at_screen`）——任何 Agent 都可能需要，放 `src/modules/tools/<domain>/`
-- **Agent 专属推进**（如 `choose_option`）——只服务于某个游戏 Agent，放该 Agent 自家包内 `src/agents/game/<name>/tools.py`
+- **Agent 专属推进**（如 `text_adv_choose_option`）——只服务于某个游戏 Agent，放该 Agent 自家包内 `src/agents/game/<name>/tools.py`
 
 ### 数据契约与协议速览
 
@@ -316,7 +316,7 @@ async def asyncio_sleep_ms(ms: int) -> None:
 | 注册到指定 registry | ✅ 传任意 `ToolRegistry` 实例 | ❌ 默认进 `default_tool_registry()` 单例；要隔离需 `registry=...` 参数 |
 | 多工具聚合 | ✅ 一个 Provider 可声明多个 `ToolSpec` | ❌ 一函数一工具 |
 | 测试隔离 | ✅ Fake 后端构造后注入 Provider，干净 | ⚠️ 默认污染全局 registry，需 `clear()` |
-| 现有生产工具 | ✅ `look_at_screen` / `choose_option` / `get_story` / `reply` / `should_speak_proactively` / `parse_command` / ContentEngine 控制面 | ❌ **生产零使用**；仅 `look_at_screen` 旧测试 等轻量声明 |
+| 现有生产工具 | ✅ `look_at_screen` / `text_adv_choose_option` / `text_adv_get_story` / `reply` / `should_speak_proactively` / `parse_command` / ContentEngine 控制面 | ❌ **生产零使用**；仅 `look_at_screen` 旧测试 等轻量声明 |
 | 推荐主路径 | ✅ **推荐** | ⚠️ 轻量声明 path（测试/未来用） |
 
 ### 最小骨架代码
@@ -515,7 +515,7 @@ async def my_lightweight_tool(invocation: ToolInvocation) -> ToolExecutionResult
 | 范例 | 文件 | 路径 |
 |------|------|------|
 | `look_at_screen`（公用 builtin，屏幕快照） | `src/modules/tools/perception/look_at_screen.py` | 路径 ① |
-| `choose_option` / `get_story`（Agent 专属 game Provider） | `src/agents/game/text_adv/tools.py` | 路径 ①（`provider="game"`） |
+| `text_adv_choose_option` / `text_adv_get_story`（Agent 专属 game Provider） | `src/agents/game/text_adv/tools.py` | 路径 ①（`provider="game"`） |
 | `reply`（Agent 专属 builtin Provider） | `src/agents/streamer/tools/reply_tool.py` | 路径 ①（`provider="builtin"`） |
 | `should_speak_proactively` / `parse_command`（Agent 专属 builtin Provider） | `src/agents/streamer/tools/proactive_tool.py`、`src/agents/streamer/tools/command_tool.py` | 路径 ① |
 | ContentEngine 控制面（`provider="builtin"`） | `src/modules/tools/content_engine.py` | 路径 ① |

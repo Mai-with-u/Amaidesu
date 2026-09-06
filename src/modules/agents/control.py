@@ -2,7 +2,7 @@
 AgentControl —— 框架级 Agent 控制
 
 - pause / resume / shutdown / restart 框架级工具
-- provider="builtin"（框架内置提供，非独立源）
+- provider="framework"（框架内置提供，非独立源）
 - 这些工具对所有 Agent 生效（BaseAgent 默认实现状态机 + 钩子）
 
 注册方式：
@@ -40,7 +40,7 @@ _AGENT_CONTROL_SPECS: List[ToolSpec] = [
             "required": ["name"],
         },
         kind="sync",
-        provider="builtin",
+        provider="framework",
     ),
     ToolSpec(
         name="resume_agent",
@@ -51,7 +51,7 @@ _AGENT_CONTROL_SPECS: List[ToolSpec] = [
             "required": ["name"],
         },
         kind="sync",
-        provider="builtin",
+        provider="framework",
     ),
     ToolSpec(
         name="shutdown_agent",
@@ -62,7 +62,7 @@ _AGENT_CONTROL_SPECS: List[ToolSpec] = [
             "required": ["name"],
         },
         kind="sync",
-        provider="builtin",
+        provider="framework",
     ),
     ToolSpec(
         name="restart_agent",
@@ -73,14 +73,14 @@ _AGENT_CONTROL_SPECS: List[ToolSpec] = [
             "required": ["name"],
         },
         kind="sync",
-        provider="builtin",
+        provider="framework",
     ),
     ToolSpec(
         name="list_agents",
         description="列出当前已注册的 Agent 名。",
         parameters_schema={"type": "object", "properties": {}, "required": []},
         kind="sync",
-        provider="builtin",
+        provider="framework",
     ),
     ToolSpec(
         name="agent_state",
@@ -91,7 +91,7 @@ _AGENT_CONTROL_SPECS: List[ToolSpec] = [
             "required": ["name"],
         },
         kind="sync",
-        provider="builtin",
+        provider="framework",
     ),
 ]
 

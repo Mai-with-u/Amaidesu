@@ -75,122 +75,127 @@ from src.modules.tools.registry import ToolRegistry
 logger = get_logger("ToolBootstrap")
 
 
-# (配置子键, 描述, 注册函数加载器)
+# (成员身份, 描述, 注册函数加载器)
+# 成员身份 = (域, 提供者键)：域段开关（avatar.vts 等）驱动装配。
 # 注册函数加载器：返回 ``Callable[[registry, config], provider]``，
-# 延迟 import 避免本模块被加载时拖入整条 output/* 依赖链。
-_EntrySpec = Tuple[str, str, Callable[[], Callable[..., Any]]]
+# 延迟 import 避免本模块被加载时拖入整条 avatar/studio 依赖链。
+_EntrySpec = Tuple[Tuple[str, str], str, Callable[[], Callable[..., Any]]]
 
 
 def _load_vts() -> Callable[..., Any]:
-    from src.modules.tools.output.vts.vts_provider import register_vts_tools
+    from src.modules.avatar.vts.vts_provider import register_vts_tools
 
     return register_vts_tools
 
 
 def _load_vrchat() -> Callable[..., Any]:
-    from src.modules.tools.output.vts.vrchat_provider import register_vrchat_tools
+    from src.modules.avatar.vts.vrchat_provider import register_vrchat_tools
 
     return register_vrchat_tools
 
 
 def _load_warudo() -> Callable[..., Any]:
-    from src.modules.tools.output.warudo.warudo_provider import register_warudo_tools
+    from src.modules.avatar.warudo.warudo_provider import register_warudo_tools
 
     return register_warudo_tools
 
 
 def _load_obs() -> Callable[..., Any]:
-    from src.modules.tools.output.obs.obs_provider import register_obs_tools
+    from src.modules.studio.obs.obs_provider import register_obs_tools
 
     return register_obs_tools
 
 
-# 非 TTS 输出包表（bootstrap 装配时按 [tools.output.config].enabled 白名单选择）
-_NON_TTS_PACKAGES: List[_EntrySpec] = [
-    ("vts", "VTubeStudio 控制", _load_vts),
-    ("vrchat", "VRChat OSC 桥接", _load_vrchat),
-    ("warudo", "Warudo 控制", _load_warudo),
-    ("obs", "OBS Studio 控制", _load_obs),
+# 工具域成员表：每个提供者绑定其域段（avatar.vts / avatar.warudo / studio.obs）。
+# 域段缺失或 enabled=false 时不装配（开关控制权归属人类：配置 + Web UI）。
+_DOMAIN_MEMBERS: List[_EntrySpec] = [
+    (("avatar", "vts"), "VTubeStudio 控制", _load_vts),
+    (("avatar", "vrchat"), "VRChat OSC 桥接", _load_vrchat),
+    (("avatar", "warudo"), "Warudo 控制", _load_warudo),
+    (("studio", "obs"), "OBS Studio 控制", _load_obs),
 ]
 
-# 对外保留的 _CORE_PACKAGES 兼容名（指代全部非 TTS 包）。运行时不使用，
-# 仅供外部静态分析 / 类型检查引用；实际装配由 enabled 列表门控。
-_CORE_PACKAGES: List[_EntrySpec] = list(_NON_TTS_PACKAGES)
+# 对外保留的 _NON_TTS_PACKAGES / _CORE_PACKAGES 兼容名（指代全部可控域包）。
+# 运行时不使用，仅供外部静态分析 / 类型检查引用；实际装配由域段开关门控。
+_NON_TTS_PACKAGES: List[_EntrySpec] = list(_DOMAIN_MEMBERS)
+_CORE_PACKAGES: List[_EntrySpec] = list(_DOMAIN_MEMBERS)
 
 
-def _resolve_provider_config(raw_config: Dict[str, Any], key: str) -> Dict[str, Any]:
-    """从 ``bind_core_tools`` 顶层 config 中取出 ``key`` 子配置。
+def _resolve_domain_config(tools_cfg: Dict[str, Any], domain: str, key: str) -> Dict[str, Any]:
+    """从 ``[tools]`` 顶层配置读出 ``domain.key`` 子段 DOMAIN 开关配置。
 
-    若 ``raw_config`` 为空 / 缺失 ``key``，返回空 dict（下游 register 函数
-    会按各自 ConfigSchema 走默认 / 抛错——抛错由调用方 try/except 兜底）。
+    返回该域的 ``config`` 字典（provider 具体配置）：
+    - ``[tools.avatar.vts] {enabled: true, config: {...}}`` → ``{...}``
+    - 域段缺失 / 非 dict → {}（下游 register 走默认 / 抛错兜底）
+
+    开关语义：域段不存在于配置即视为未启用（不装配），避免隐式行为漂移。
     """
-    if not raw_config:
+    if not isinstance(tools_cfg, dict):
         return {}
-    sub = raw_config.get(key)
-    if sub is None:
+    domain_cfg = tools_cfg.get(domain)
+    if not isinstance(domain_cfg, dict):
         return {}
-    if not isinstance(sub, dict):
-        logger.warning(f"bind_core_tools: config['{key}'] 不是 dict（type={type(sub).__name__}），忽略")
+    member_cfg = domain_cfg.get(key)
+    if not isinstance(member_cfg, dict):
         return {}
-    return dict(sub)
+    cfg = member_cfg.get("config")
+    return dict(cfg) if isinstance(cfg, dict) else {}
 
 
-def _resolve_enabled_list(raw_config: Dict[str, Any]) -> List[str]:
-    """从 ``[tools.output.config].enabled`` 列表读出非 TTS 包白名单。
-
-    缺失或非列表时返回空列表（视作"什么也不装配"，避免隐式行为漂移）。
-    """
-    enabled = raw_config.get("enabled") if isinstance(raw_config, dict) else None
-    if not isinstance(enabled, list):
-        return []
-    return [str(x) for x in enabled if isinstance(x, (str,))]
+def _domain_enabled(tools_cfg: Dict[str, Any], domain: str, key: str) -> bool:
+    """域开关：``[tools.<domain>.<key>].enabled``，默认 False（缺省不装配）。"""
+    if not isinstance(tools_cfg, dict):
+        return False
+    domain_cfg = tools_cfg.get(domain)
+    if not isinstance(domain_cfg, dict):
+        return False
+    member_cfg = domain_cfg.get(key)
+    if not isinstance(member_cfg, dict):
+        return False
+    return bool(member_cfg.get("enabled", False))
 
 
 def bind_core_tools(
     registry: ToolRegistry,
     config: Dict[str, Any] | None = None,
 ) -> Dict[str, int]:
-    """绑定 Amaidesu 核心非 TTS 工具包到 ``registry``。
+    """绑定 Amaidesu 核心域工具包到 ``registry``。
 
     装配规则：
 
-    - **非 TTS 输出包**——按 ``config["enabled"]`` 白名单装配；非 TTS
-      键未在列表中则不装配。TTS 引擎由核心 ``[tts]`` 段驱动装配，
-      经 ``src.modules.tts.build_tts_infrastructure`` 注入到 Agent，
-      不在本 bootstrap 范围。
+    - **按域开关装配**——``[tools.avatar.vts].enabled`` 等域段为 true 时
+      装配该提供者（形象/演播）；false 或段缺失则不装配
+    - TTS / 字幕为基础设施（core.toml 驱动），不在本 bootstrap 范围
 
     Args:
         registry: 目标注册器（由调用方构造并持有）
-        config: ``[tools.output.config]`` 子配置，键名见
-            ``_NON_TTS_PACKAGES``；传 ``None`` 表示所有非 TTS 包走"空配置"，
-            白名单为空时将一律不装配
+        config: ``[tools]`` 段（域开关容器），键名见 ``_DOMAIN_MEMBERS``；
+            传 ``None`` 表示所有域走"空配置"，一律不装配
 
     Returns:
-        ``{package_name: new_tool_count}`` 报告。失败 / 跳过包
+        ``{member_key: new_tool_count}`` 报告。失败 / 跳过成员
         ``count=0``。
     """
     if not isinstance(registry, ToolRegistry):
         raise TypeError(f"bind_core_tools: registry 必须是 ToolRegistry 实例，得到 {type(registry).__name__}")
 
-    raw_config: Dict[str, Any] = config if isinstance(config, dict) else {}
+    tools_cfg: Dict[str, Any] = config if isinstance(config, dict) else {}
 
     report: Dict[str, int] = {}
 
-    # --- 非 TTS 包按 enabled 白名单装配 ---
-    enabled_list = _resolve_enabled_list(raw_config)
-
-    for key, description, loader in _NON_TTS_PACKAGES:
-        if key not in enabled_list:
-            # 未在白名单里：跳过（不记 ERROR，预期行为）
+    # --- 按域开关装配 ---
+    for (domain, key), description, loader in _DOMAIN_MEMBERS:
+        if not _domain_enabled(tools_cfg, domain, key):
+            # 域未启用：跳过（不记 ERROR，预期行为）
             report[key] = 0
             continue
 
-        provider_config = _resolve_provider_config(raw_config, key)
+        provider_config = _resolve_domain_config(tools_cfg, domain, key)
         before_count = len(registry)
 
         try:
             register_fn = loader()
-        except Exception:  # noqa: BLE001 - 单包隔离边界
+        except Exception:  # noqa: BLE001 - 单成员隔离边界
             logger.error(
                 f"bind_core_tools: 加载 '{key}' 的 register 函数失败（{description}）",
                 exc_info=True,
@@ -200,7 +205,7 @@ def bind_core_tools(
 
         try:
             register_fn(registry=registry, config=provider_config)
-        except Exception as exc:  # noqa: BLE001 - 单包隔离边界
+        except Exception as exc:  # noqa: BLE001 - 单成员隔离边界
             logger.error(
                 f"bind_core_tools: 绑定 '{key}' 失败（{description}）: {type(exc).__name__}: {exc}",
                 exc_info=True,
@@ -220,5 +225,5 @@ def bind_core_tools(
 
 __all__ = [
     "bind_core_tools",
-    "_NON_TTS_PACKAGES",
+    "_DOMAIN_MEMBERS",
 ]

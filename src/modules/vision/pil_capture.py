@@ -19,7 +19,7 @@ from typing import List, Optional, Tuple
 from PIL import ImageGrab
 
 from src.modules.logging import get_logger
-from src.modules.tools.perception.look_at_screen import ScreenCaptureResult
+from src.modules.vision.look_at_screen import ScreenCaptureResult
 
 logger = get_logger("PillowImageGrabCapture")
 

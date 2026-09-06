@@ -44,7 +44,6 @@ from src.modules.logging import get_logger
 from src.modules.tools.models import (
     DEFAULT_RESULT_EVENT_PREFIX,
     Kind,
-    Provider,
     ToolExecutionResult,
     ToolInvocation,
     ToolSpec,
@@ -125,7 +124,7 @@ def tool(
     parameters_schema: Optional[dict] = None,
     kind: Kind = "sync",
     result_event: str = "",
-    provider: Provider = "builtin",
+    provider: str = "builtin",
     output_schema: Optional[dict] = None,
     registry: Optional[ToolRegistry] = None,
 ) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[ToolExecutionResult]]]:

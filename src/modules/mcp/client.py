@@ -25,7 +25,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from src.modules.logging import get_logger
-from src.modules.tools.mcp.config import McpServerConfig
+from src.modules.mcp.config import McpServerConfig
 
 logger = get_logger("McpClient")
 

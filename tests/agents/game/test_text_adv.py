@@ -4,12 +4,12 @@ QA Scenario（acceptance criteria）：
     Tool: Bash
     Preconditions: 注入 mock perception（FakeScreenCapture + FakeTextReader）
                    + FakeContentEngine + ToolRegistry 注册公用 look_at_screen
-                   + TextAdvGameAgent 专属 choose_option / get_story
+                   + TextAdvGameAgent 专属 text_adv_choose_option / text_adv_get_story
     Steps:
       1. 实例化 TextAdvGameAgent，注入一段 mock 屏幕文本 + 选项
       2. 调用 feed_state_change() 触发一次感知-推进闭环
       3. 断言 perception 被调用（look_at_screen tool）
-      4. 断言 advance 被触发（choose_option tool → content_engine.send_input）
+      4. 断言 advance 被触发（text_adv_choose_option tool → content_engine.send_input）
       5. 断言 game.milestone 事件被 emit
       6. 断言循环闭合（perception_count >= 1, advance_count >= 1）
     Expected Result: 感知-推进-循环闭路（mock 环境）
@@ -18,7 +18,7 @@ QA Scenario（acceptance criteria）：
 覆盖：
 - BaseAgent 协议六面在游戏 Agent 上的具体落地
 - 感知工具复用（look_at_screen 通过 ToolRegistry.invoke 调用）
-- 推进工具自备（choose_option provider="game"）
+- 推进工具自备（text_adv_choose_option provider="game"）
 - content_engine 控制面（send_input 触发 FakeContentEngine 记录）
 - 内部状态机（TextAdvGameAgentState：场景/选项/历史/去重）
 - game.* 事件 emit
@@ -41,21 +41,21 @@ from src.agents.game.text_adv import (
     TextAdvGameConfig,
     build_text_adv_agent,
 )
+from src.agents.game.text_adv.content_engine import (
+    ContentEngineProvider,
+    FakeContentEngine,
+)
 from src.agents.game.text_adv.state import TextAdvOption
 from src.modules.agents import AgentManager, AgentState
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game import GamePayload
-from src.modules.tools.content_engine import (
-    ContentEngineProvider,
-    FakeContentEngine,
-)
-from src.modules.tools.perception import (
+from src.modules.tools.registry import ToolRegistry
+from src.modules.vision import (
     FakeScreenCapture,
     FakeTextReader,
     LookAtScreenProvider,
 )
-from src.modules.tools.registry import ToolRegistry
 
 
 # =============================================================================
@@ -131,7 +131,7 @@ async def started_agent(
     ce_provider = ContentEngineProvider(engine=content_engine)
     registry.register_provider(ce_provider)
 
-    # 3) 构造 Agent；Agent 自己会在 _on_start 中注册 choose_option / get_story
+    # 3) 构造 Agent；Agent 自己会在 _on_start 中注册 text_adv_choose_option / text_adv_get_story
     manager = AgentManager(tool_registry=registry)
     agent = build_text_adv_agent(
         config=TextAdvGameConfig(),
@@ -178,13 +178,13 @@ def test_text_adv_agent_emits_game_events() -> None:
 
 
 def test_text_adv_agent_list_tools_returns_game_provider_specs() -> None:
-    """协议 2：list_tools 暴露 choose_option + get_story（provider="game"）。"""
+    """协议 2：list_tools 暴露 text_adv_choose_option + text_adv_get_story（provider="game"）。"""
     config = TextAdvGameConfig()
     agent = TextAdvGameAgent(config=config)
     specs = list(agent.list_tools())
     assert len(specs) == 2
     names = {s.name for s in specs}
-    assert names == {"choose_option", "get_story"}
+    assert names == {"text_adv_choose_option", "text_adv_get_story"}
     for s in specs:
         assert s.provider == "game"
         assert s.kind == "sync"
@@ -254,7 +254,7 @@ async def test_agent_lifecycle() -> None:
 
 
 async def test_agent_start_registers_own_tools() -> None:
-    """_on_start：自动注册 choose_option / get_story 到 ToolRegistry。"""
+    """_on_start：自动注册 text_adv_choose_option / text_adv_get_story 到 ToolRegistry。"""
     registry = ToolRegistry()
     manager = AgentManager(tool_registry=registry)
     agent = build_text_adv_agent(
@@ -263,11 +263,11 @@ async def test_agent_start_registers_own_tools() -> None:
         content_engine=FakeContentEngine(),
         tool_registry=registry,
     )
-    assert "choose_option" not in registry
-    assert "get_story" not in registry
+    assert "text_adv_choose_option" not in registry
+    assert "text_adv_get_story" not in registry
     await agent.start()
-    assert registry.has("choose_option")
-    assert registry.has("get_story")
+    assert registry.has("text_adv_choose_option")
+    assert registry.has("text_adv_get_story")
     await agent.stop()
 
 
@@ -285,7 +285,7 @@ async def test_perception_advance_loop_closed(
       1. 注入 mock 屏幕文本 + 选项
       2. 调用 feed_state_change() 触发一次闭环
       3. 断言 look_at_screen 被调用（perception_count == 1）
-      4. 断言 choose_option 被触发（advance_count == 1）
+      4. 断言 text_adv_choose_option 被触发（advance_count == 1）
       5. 断言 content_engine.send_input 被调用（content_engine.sent_inputs 长度 == 1）
       6. 断言 game.milestone 事件被 emit
     """
@@ -397,14 +397,14 @@ async def test_no_advance_when_screen_text_unchanged_and_no_options(
 
 
 # =============================================================================
-# choose_option / get_story 工具细节（TextAdvToolProvider）
+# text_adv_choose_option / text_adv_get_story 工具细节（TextAdvToolProvider）
 # =============================================================================
 
 
 async def test_choose_option_rejects_unknown_option(
     started_agent: Dict[str, object],
 ) -> None:
-    """choose_option(option_id="不存在") → 失败 result，不抛。"""
+    """text_adv_choose_option(option_id="不存在") → 失败 result，不抛。"""
     registry: ToolRegistry = started_agent["registry"]  # type: ignore[assignment]
 
     # 先喂一个有效场景让 Agent 有选项
@@ -418,7 +418,7 @@ async def test_choose_option_rejects_unknown_option(
 
     res = await registry.invoke(
         ToolInvocation(
-            tool_name="choose_option",
+            tool_name="text_adv_choose_option",
             arguments={"option_id": "nope"},
             source="test",
         )
@@ -430,7 +430,7 @@ async def test_choose_option_rejects_unknown_option(
 async def test_get_story_returns_state_snapshot(
     started_agent: Dict[str, object],
 ) -> None:
-    """get_story → 返回 state.to_dict() 快照。"""
+    """text_adv_get_story → 返回 state.to_dict() 快照。"""
     registry: ToolRegistry = started_agent["registry"]  # type: ignore[assignment]
     agent: TextAdvGameAgent = started_agent["agent"]  # type: ignore[assignment]
     expected_scene_text = "（场景：村口；遇到 NPC）\n1) 继续前进\n2) 回头看看"
@@ -442,7 +442,7 @@ async def test_get_story_returns_state_snapshot(
     from src.modules.tools.models import ToolInvocation
 
     res = await registry.invoke(
-        ToolInvocation(tool_name="get_story", arguments={}, source="test")
+        ToolInvocation(tool_name="text_adv_get_story", arguments={}, source="test")
     )
     assert res.success is True
     snap = res.structured_content
@@ -504,7 +504,7 @@ async def test_look_at_screen_with_fake_backend_returns_image_block() -> None:
 
 async def test_stub_content_engine_round_trip() -> None:
     """StubContentEngine：start/send_input/stop/get_state 全部正常。"""
-    from src.modules.tools.content_engine import (
+    from src.agents.game.text_adv.content_engine import (
         StubContentEngine,
         ContentInput,
     )
@@ -527,7 +527,7 @@ async def test_stub_content_engine_round_trip() -> None:
 
 async def test_content_engine_rejects_when_not_started() -> None:
     """引擎未启动时 send_input → 拒绝（accepted=False）。"""
-    from src.modules.tools.content_engine import (
+    from src.agents.game.text_adv.content_engine import (
         StubContentEngine,
         ContentInput,
     )
@@ -571,13 +571,13 @@ async def test_game_tools_audited_when_registered_via_registry() -> None:
     )
 
     await agent.start()
-    assert registry.has("choose_option")
-    assert registry.has("get_story")
+    assert registry.has("text_adv_choose_option")
+    assert registry.has("text_adv_get_story")
 
     assert manager.audit_tools(registry) == []
 
     empty_registry = ToolRegistry()
-    assert sorted(manager.audit_tools(empty_registry)) == ["choose_option", "get_story"]
+    assert sorted(manager.audit_tools(empty_registry)) == ["text_adv_choose_option", "text_adv_get_story"]
 
     await agent.stop()
 
@@ -590,13 +590,13 @@ async def test_game_tools_audited_when_registered_via_registry() -> None:
 async def test_choose_option_with_missing_option_id_returns_failure(
     started_agent: Dict[str, object],
 ) -> None:
-    """choose_option 缺 option_id → 失败 result，不抛。"""
+    """text_adv_choose_option 缺 option_id → 失败 result，不抛。"""
     registry: ToolRegistry = started_agent["registry"]  # type: ignore[assignment]
 
     from src.modules.tools.models import ToolInvocation
 
     res = await registry.invoke(
-        ToolInvocation(tool_name="choose_option", arguments={}, source="test")
+        ToolInvocation(tool_name="text_adv_choose_option", arguments={}, source="test")
     )
     assert res.success is False
     assert "option_id" in res.error_message
@@ -617,7 +617,7 @@ async def test_perception_failure_emits_game_error_event(
 
     # 直接通过 ToolRegistry 把 look_at_screen 替换为用 BoomCapture 的 provider
     # 这里我们改用 monkeypatch 风格：构造新 provider 覆盖旧 spec
-    from src.modules.tools.perception import LookAtScreenProvider
+    from src.modules.vision import LookAtScreenProvider
 
     boom_provider = LookAtScreenProvider(screen_capture=BoomCapture())
     # 由于 register 去重，需要先 clear registry 的 look_at_screen
@@ -625,7 +625,7 @@ async def test_perception_failure_emits_game_error_event(
     registry.register_provider(boom_provider)
     # ContentEngine 也要重新注册
     content_engine = started_agent["content_engine"]  # type: ignore[assignment]
-    from src.modules.tools.content_engine import ContentEngineProvider
+    from src.agents.game.text_adv.content_engine import ContentEngineProvider
 
     registry.register_provider(ContentEngineProvider(engine=content_engine))
     # Game provider 需要重新构造并注册

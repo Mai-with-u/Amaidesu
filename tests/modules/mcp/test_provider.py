@@ -11,8 +11,8 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
-from src.modules.tools.mcp.client import McpClient
-from src.modules.tools.mcp.provider import McpToolProvider
+from src.modules.mcp.client import McpClient
+from src.modules.mcp.provider import McpToolProvider
 from src.modules.tools.models import ToolInvocation
 
 

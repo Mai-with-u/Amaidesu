@@ -93,7 +93,7 @@ def build_reply_tool_spec() -> ToolSpec:
         description=_REPLY_TOOL_DESCRIPTION,
         parameters_schema=_REPLY_PARAMETERS_SCHEMA,
         kind="sync",
-        provider="builtin",
+        provider="streamer",
     )
 
 

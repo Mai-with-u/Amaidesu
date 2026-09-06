@@ -81,7 +81,7 @@ Amaidesu 的业务层组织方式经历过四代。git 历史考实了这条演�
 |---|---|
 | 核心功能也做成插件，必需与可选混杂 | 工具/存储/记忆/事件/LLM 全部是框架基础设施（`src/modules/`）；只有"主体"住在 Agent 包里 |
 | 服务注册机制，依赖运行时才暴露问题 | 无服务注册；构造器注入 + 事件/工具契约 |
-| 24 个插件互相依赖成石山 | 游戏 Agent 之间零依赖，经事件（`game.*`）/状态（工具，如 get_story）/指令（set_goal 类工具）三通道松耦合 |
+| 24 个插件互相依赖成石山 | 游戏 Agent 之间零依赖，经事件（`game.*`）/状态（工具，如 text_adv_get_story）/指令（set_goal 类工具）三通道松耦合 |
 | 消息流经中心中转，链路不清 | Agent → 工具/事件/存储直达，单向清晰 |
 | 全局/插件级配置混乱 | 七文件按领域拆分 + Pydantic Schema 校验 |
 
@@ -133,7 +133,7 @@ flowchart TB
 各层要点：
 
 - **主播 Agent**（`src/agents/streamer/`）：弹幕经 MessageBuffer 聚合，Planner 以 llm_fast 判断是否值得回复（置信度门槛），命中则调用自有 `reply` 工具——Replyer 表达引擎生成 speech/emotion/action 并做敏感词净化。**Planner 与 Replyer 是内脏，永不注册为工具。**Agenda 子系统（加载/运行状态/空转调度/持久化）承担"没观众时干什么"；后台双任务负责记账与话题聚合。
-- **游戏代理**（`src/agents/game/<game>/`）：AI 玩家范式——感知（公用 look_at_screen 快照）、推进（专属工具如 choose_option）、循环内聚于一个自包含包。加游戏 = 加包 + 配置，框架零改动。
+- **游戏代理**（`src/agents/game/<game>/`）：AI 玩家范式——感知（公用 look_at_screen 快照）、推进（专属工具如 text_adv_choose_option）、循环内聚于一个自包含包。加游戏 = 加包 + 配置，框架零改动。
 - **工具层**：约 60 个工具统一 ToolSpec 契约，三个来源——内置（进程内渲染/感知）、内容引擎（玩家引擎控制面）、MCP（外部扩展）。同步调用结果直返，异步工具经 `tool.result.<name>` 事件回传。
 - **存储层**：SQLite 11 表（场次/直播消息流/礼物/SC/话题/观众/Agenda 计划与运行时/游戏事件/时间线摘要/LLM 用量）+ schema_migrations 版本化迁移；模拟数据带 `simulated` 列，统计查询一律排除——模拟观众不是观众。
 
