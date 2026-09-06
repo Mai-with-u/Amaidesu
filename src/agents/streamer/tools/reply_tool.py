@@ -124,6 +124,12 @@ _REPLY_FUNCTION_PARAMETERS_SCHEMA: dict[str, Any] = {
             "enum": [e.value for e in Emotion],
             "description": "情绪（12 枚举之一）",
         },
+        "intensity": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "情绪强度（0.0-1.0，缺省 0.5；驱动虚拟形象表情幅度）",
+        },
     },
     "required": ["speech"],
 }

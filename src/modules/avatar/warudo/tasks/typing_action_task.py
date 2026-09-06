@@ -6,7 +6,7 @@ Warudo TypingActionTask - 打字时的手机抖动动作
 
 设计要点:
 - 接收 send_action_callback 发送 body_action 类型
-- is_typing 由外部(ReplyState)控制
+- is_typing 由外部控制
 - 后台循环 + 0.1s 步进,小幅度正弦波 + 抖动
 """
 

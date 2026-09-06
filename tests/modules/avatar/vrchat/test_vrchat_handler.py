@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.modules.avatar.vts.vrchat_provider import VRChatProvider as VRChatHandler
+from src.modules.avatar.vrchat.vrchat_provider import VRChatProvider as VRChatHandler
 from src.modules.events.event_bus import EventBus
 
 

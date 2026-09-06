@@ -64,20 +64,6 @@ class VRChatProvider:
 
     PROVIDER_NAME = "vrchat"
 
-    # 情感到 VRChat OSC 参数的映射
-    EMOTION_MAP: Dict[str, Dict[str, float]] = {
-        "neutral": {},
-        "happy": {"MouthSmile": 1.0},
-        "sad": {"MouthSmile": -0.3, "EyeOpen": 0.7},
-        "angry": {"EyeOpen": 0.6, "MouthSmile": -0.5},
-        "surprised": {"EyeOpen": 1.0, "MouthOpen": 0.5},
-        "confused": {"EyeOpen": 0.7, "MouthOpen": 0.2},
-        "scared": {"EyeOpen": 0.5, "MouthOpen": 0.3},
-        "love": {"MouthSmile": 0.8, "EyeOpen": 0.9},
-        "shy": {"MouthSmile": 0.3, "EyeOpen": 0.8},
-        "excited": {"MouthSmile": 1.0, "EyeOpen": 1.0},
-    }
-
     # 手势名称到 VRChat OSC 整数值的映射
     # 参考: https://docs.vrchat.com/docs/osc-as-a-parameter#emotes
     GESTURE_MAP: Dict[str, int] = {

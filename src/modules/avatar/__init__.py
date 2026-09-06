@@ -1,7 +1,8 @@
 """Avatar domain module — virtual avatar backend providers.
 
 Houses concrete avatar Provider implementations:
-- vts/ — VTubeStudio control (includes VRChat OSC bridge sub-provider)
+- vts/ — VTubeStudio control
+- vrchat/ — VRChat OSC bridge (independent backend, unrelated to VTS)
 - warudo/ — Warudo control
 
 One avatar backend = one Provider instance = one enable unit.

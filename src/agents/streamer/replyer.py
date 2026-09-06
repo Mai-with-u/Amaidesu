@@ -156,8 +156,8 @@ class Replyer:
             self.logger.warning(f"Replyer LLM 返回失败: {getattr(response, 'error', 'unknown')}, silent 降级")
             return None
 
-        # ④ 解析 tool_calls（找 reply call 取 speech/emotion；其余收集为 actions）
-        speech, emotion_name, actions = self._parse_tool_calls(getattr(response, "tool_calls", None))
+        # ④ 解析 tool_calls（找 reply call 取 speech/emotion/intensity；其余收集为 actions）
+        speech, emotion_name, emotion_intensity, actions = self._parse_tool_calls(getattr(response, "tool_calls", None))
 
         if not speech:
             self.logger.info("Replyer LLM 未返回 reply 或 speech 为空，silent 降级")
@@ -174,7 +174,7 @@ class Replyer:
             "speech": speech,
             "emotion": {
                 "name": emotion_name,
-                "intensity": 0.5,
+                "intensity": emotion_intensity,
             },
             "actions": actions,
             "metadata": {
@@ -298,25 +298,28 @@ class Replyer:
     @staticmethod
     def _parse_tool_calls(
         tool_calls: Optional[List[Dict[str, Any]]],
-    ) -> Tuple[str, Optional[str], List[Dict[str, Any]]]:
-        """从 LLMResponse.tool_calls 解析 reply(speech/emotion) 与 actions。
+    ) -> Tuple[str, Optional[str], float, List[Dict[str, Any]]]:
+        """从 LLMResponse.tool_calls 解析 reply(speech/emotion/intensity) 与 actions。
 
         Args:
             tool_calls: LLM 返回的 tool_calls 列表（OpenAI 形态：
                         ``{"name": str, "arguments": str|dict, "id": str, "type": "function"}``）
 
         Returns:
-            ``(speech, emotion_name, actions)``：
+            ``(speech, emotion_name, emotion_intensity, actions)``：
             - speech: 找到 reply call 时的 speech 字符串；找不到 reply 或 speech 为空时为 ``""``
             - emotion_name: reply call 提供的 emotion；未提供/非法时为 ``None``
+            - emotion_intensity: reply call 提供的情绪强度，clamp 到 [0.0, 1.0]；
+              未提供/非法时默认 0.5
             - actions: 非 reply 的 tool_calls 列表，元素形如 ``{"name": str, "parameters": dict}``；
                        arguments 解析失败时 ``parameters`` 为空 dict。
         """
         if not tool_calls:
-            return "", None, []
+            return "", None, 0.5, []
 
         speech = ""
         emotion_name: Optional[str] = None
+        emotion_intensity = 0.5
         actions: List[Dict[str, Any]] = []
 
         for call in tool_calls:
@@ -330,6 +333,11 @@ class Replyer:
                     raw_emotion = args.get("emotion")
                     if isinstance(raw_emotion, str) and raw_emotion:
                         emotion_name = raw_emotion.lower()
+                    raw_intensity = args.get("intensity")
+                    try:
+                        emotion_intensity = min(1.0, max(0.0, float(raw_intensity)))
+                    except (TypeError, ValueError):
+                        emotion_intensity = 0.5
                 continue
 
             # 非 reply call → 收集为 action
@@ -337,7 +345,7 @@ class Replyer:
             parameters = raw_params if isinstance(raw_params, dict) else {}
             actions.append({"name": name, "parameters": parameters})
 
-        return speech, emotion_name, actions
+        return speech, emotion_name, emotion_intensity, actions
 
     # ==================== 敏感词净化（输出端） ====================
 

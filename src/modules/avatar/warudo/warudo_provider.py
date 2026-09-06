@@ -132,61 +132,6 @@ class WarudoProvider:
 
     PROVIDER_NAME = "warudo"
 
-    _EMOTION_BLENDSHAPE_MAP: Dict[str, Dict[str, Dict[str, float]]] = {
-        "happy": {
-            "high": {"mouth_happy_strong": 1.0, "eyebrow_happy_strong": 0.8, "eye_happy_weak": 0.5},
-            "low": {"mouth_smlie_3": 1.0, "eyebrow_happy_weak": 0.5, "eye_happy_weak": 0.3},
-        },
-        "sad": {
-            "high": {"eyebrow_sad_strong": 1.0, "mouth_sad_weak": 0.8},
-            "low": {"eyebrow_sad_weak": 0.8, "mouth_sad_weak": 0.5},
-        },
-        "angry": {
-            "high": {"eyebrow_angry_strong": 1.0, "mouth_angry_weak": 0.6},
-            "low": {"eyebrow_angry_weak": 0.8, "mouth_angry_weak": 0.4},
-        },
-        "surprised": {
-            "high": {"mouth_happy_strong": 1.0, "eyebrow_happy_strong": 0.8},
-            "low": {"mouth_smlie_3": 0.6, "eyebrow_happy_weak": 0.5},
-        },
-        "shy": {
-            "high": {"mouth_smlie_3": 1.0, "eye_happy_weak": 0.5, "eyebrow_happy_weak": 0.3},
-            "low": {"mouth_smlie_2": 0.8, "eye_happy_weak": 0.3},
-        },
-        "love": {
-            "high": {"mouth_smlie_3": 1.0, "eye_happy_weak": 0.6},
-            "low": {"mouth_smlie_2": 0.8, "eye_happy_weak": 0.3},
-        },
-        "excited": {
-            "high": {
-                "mouth_happy_strong": 1.0,
-                "eyebrow_happy_strong": 1.0,
-                "eye_happy_weak": 0.8,
-            },
-            "low": {"mouth_smlie_3": 1.0, "eyebrow_happy_weak": 0.6, "eye_happy_weak": 0.5},
-        },
-        "confused": {
-            "high": {"eyebrow_sad_strong": 0.8, "mouth_sad_weak": 0.4},
-            "low": {"eyebrow_sad_weak": 0.6},
-        },
-        "scared": {
-            "high": {"eyebrow_sad_strong": 1.0, "mouth_happy_strong": 0.8},
-            "low": {"eyebrow_sad_weak": 0.6, "mouth_happy_strong": 0.4},
-        },
-        "thinking": {
-            "high": {"eyebrow_sad_weak": 0.8, "mouth_sad_weak": 0.4},
-            "low": {"mouth_sad_weak": 0.3},
-        },
-        "relaxed": {
-            "high": {"eye_happy_weak": 0.5, "mouth_smlie_2": 0.6},
-            "low": {"eye_happy_weak": 0.3, "mouth_smlie_2": 0.3},
-        },
-        "neutral": {"high": {}, "low": {}},
-    }
-
-    _INTENSITY_HIGH_THRESHOLD: float = 0.7
-    _INTENSITY_LOW_THRESHOLD: float = 0.3
-
     def __init__(
         self,
         config: Dict[str, Any],
@@ -207,20 +152,12 @@ class WarudoProvider:
         self.talking_head_interval: float = float(config.get("talking_head_interval", 0.1))
         self.throw_fish_cooldown: float = float(config.get("throw_fish_cooldown", 5.0))
 
-        # Action 三字典分类
-        self._action_hotkey_map: Dict[str, str] = {}
-        self._action_body_map: Dict[str, str] = {
-            "calm_pose": "平静，双手后放",
-            "think": "思考",
-        }
-        self._action_head_map: Dict[str, str] = {
-            "nod": "点头一次",
-            "shake": "摇头",
-        }
-        self._action_direct_map: Dict[str, str] = {
-            "throw_fish": "throw_fish",
-        }
-        self._action_map = self._action_head_map
+        # 动作目录（配置预声明：Warudo 侧无法枚举蓝图动作，由人类在配置里
+        # 登记可用动作名与说明，拼入工具描述供 LLM 选择；形态 {动作名: 说明}）
+        raw_catalog = config.get("action_catalog") or {}
+        self.action_catalog: Dict[str, str] = (
+            {str(k): str(v) for k, v in raw_catalog.items()} if isinstance(raw_catalog, dict) else {}
+        )
 
         # WebSocket 状态
         self.websocket: Any = None
@@ -277,7 +214,19 @@ class WarudoProvider:
     def name(self) -> str:
         return self.PROVIDER_NAME
 
+    def _action_catalog_summary(self) -> str:
+        """生成动作目录文本（拼入动作类工具描述，LLM 据此选动作名调用）。
+
+        Warudo 侧无法枚举蓝图动作，目录来自 ``[tools.avatar.warudo.config]
+        action_catalog`` 配置预声明；未配置时返回空串（描述退化为基础版）。
+        """
+        if not self.action_catalog:
+            return ""
+        items = "、".join(f"{name}（{desc}）" if desc else name for name, desc in self.action_catalog.items())
+        return f"。可用动作：{items}"
+
     def list_tools(self) -> list[ToolSpec]:
+        catalog = self._action_catalog_summary()
         return [
             ToolSpec(
                 name="warudo_set_expression",
@@ -288,28 +237,28 @@ class WarudoProvider:
             ),
             ToolSpec(
                 name="warudo_trigger_hotkey",
-                description="Warudo 触发热键",
+                description="Warudo 触发热键（按动作名）" + catalog,
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_WARUDO_TRIGGER_HOTKEY_SCHEMA,
             ),
             ToolSpec(
                 name="warudo_trigger_body",
-                description="Warudo 触发身体动作（姿势.json 蓝图）",
+                description="Warudo 触发身体动作（姿势.json 蓝图）" + catalog,
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_WARUDO_BODY_ACTION_SCHEMA,
             ),
             ToolSpec(
                 name="warudo_trigger_head",
-                description="Warudo 触发头部动作（头部动态.json 蓝图）",
+                description="Warudo 触发头部动作（头部动态.json 蓝图）" + catalog,
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_WARUDO_HEAD_ACTION_SCHEMA,
             ),
             ToolSpec(
                 name="warudo_trigger_action",
-                description="Warudo 直接动作（蓝图节点名）",
+                description="Warudo 直接动作（蓝图节点名）" + catalog,
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_WARUDO_DIRECT_ACTION_SCHEMA,
@@ -502,17 +451,6 @@ class WarudoProvider:
             self.logger.debug(f"字幕已推送: {speech[:50]}...")
         except Exception as e:
             self.logger.error(f"字幕推送失败: {e}")
-
-    async def start_talking(self) -> None:
-        if self.talking_head_task is not None:
-            self.talking_head_task.is_talking = True
-        self.state_manager.sight_state.set_state("camera", 1.0)
-        await self._send_action_internal("loading", "")
-
-    async def stop_talking(self) -> None:
-        if self.talking_head_task is not None:
-            self.talking_head_task.is_talking = False
-        self.state_manager.sight_state.set_state("camera", 0.0)
 
     def get_stats(self) -> Dict[str, Any]:
         return {

@@ -347,8 +347,66 @@ async def test_emotion_invokes_vts_set_expression_via_create_task():
         assert len(vts_calls) == 1
         call = vts_calls[0]
         assert call.arguments["parameters"] == {"MouthSmile": 1.0}
-        assert call.arguments["weight"] == 1.0
+        # intensity 直接映射为表情混合权重
+        assert call.arguments["weight"] == 0.5
         assert call.source == "streamer_agent.emotion"
+    finally:
+        await agent._on_stop()
+
+
+@pytest.mark.asyncio
+async def test_emotion_intensity_maps_to_vts_weight():
+    """emotion.intensity 透传为 vts_set_expression 的 weight（含 clamp）。"""
+    registry = ToolRegistry()
+    vts_invocations: List[ToolInvocation] = []
+    invoke_started = asyncio.Event()
+
+    async def _mock_vts_impl(invocation: ToolInvocation) -> ToolExecutionResult:
+        vts_invocations.append(invocation)
+        invoke_started.set()
+        return ToolExecutionResult(tool_name=invocation.tool_name, success=True)
+
+    from src.modules.tools import ToolSpec
+
+    registry.register(
+        ToolSpec(
+            name="vts_set_expression",
+            description="mock vts",
+            kind="sync",
+            provider="builtin",
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "parameters": {"type": "object"},
+                    "weight": {"type": "number"},
+                },
+                "required": ["parameters"],
+            },
+        ),
+        _mock_vts_impl,
+    )
+
+    agent = _build_streamer_agent(
+        tool_registry=registry,
+        tts_engine=_MockTTSEngine(),
+        speech_config={"enabled": True, "max_queue": 3, "render_timeout_ms": 1000},
+    )
+    await agent._on_start()
+    try:
+        agent._dispatch_speech_and_emotion(
+            {
+                "speech": "太兴奋了！！",
+                "emotion": {"name": "excited", "intensity": 0.9},
+                "actions": [],
+                "metadata": {},
+            }
+        )
+
+        await asyncio.wait_for(invoke_started.wait(), timeout=2.0)
+
+        vts_calls = [inv for inv in vts_invocations if inv.tool_name == "vts_set_expression"]
+        assert len(vts_calls) == 1
+        assert vts_calls[0].arguments["weight"] == 0.9
     finally:
         await agent._on_stop()
 

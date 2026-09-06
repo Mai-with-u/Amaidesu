@@ -89,7 +89,7 @@ def _load_vts() -> Callable[..., Any]:
 
 
 def _load_vrchat() -> Callable[..., Any]:
-    from src.modules.avatar.vts.vrchat_provider import register_vrchat_tools
+    from src.modules.avatar.vrchat.vrchat_provider import register_vrchat_tools
 
     return register_vrchat_tools
 

@@ -1259,8 +1259,13 @@ class StreamerAgent(BaseAgent):
 
         cleaned_speech = speech.strip() if isinstance(speech, str) else ""
         # emotion 新契约为 {name, intensity}；兼容旧字符串形态（防御）
+        cleaned_emotion_intensity = 0.5
         if isinstance(emotion, dict):
             cleaned_emotion: Optional[str] = str(emotion.get("name", "") or "").strip() or None
+            try:
+                cleaned_emotion_intensity = min(1.0, max(0.0, float(emotion.get("intensity", 0.5))))
+            except (TypeError, ValueError):
+                cleaned_emotion_intensity = 0.5
         elif isinstance(emotion, str):
             cleaned_emotion = emotion.strip() or None
         else:
@@ -1273,7 +1278,7 @@ class StreamerAgent(BaseAgent):
         # 时 avatar 表情随同关闭，避免与改造前的"管线整体退化"语义漂移。
         # 与 speech 派发独立（speech 空但 emotion 非空时仍可触发）。
         if cleaned_emotion and self._tts_enabled and self._utterance_queue is not None:
-            self._schedule_vts_emotion(cleaned_emotion)
+            self._schedule_vts_emotion(cleaned_emotion, intensity=cleaned_emotion_intensity)
 
         # speech 非空：先发布业务事件 + 写历史（与 TTS 启用与否正交），
         # TTS 启用时复用同一 utterance_id 入 TTS 队列。
@@ -1386,19 +1391,23 @@ class StreamerAgent(BaseAgent):
         except RuntimeError as exc:
             self._logger.warning(f"字幕 show 任务创建失败（已忽略）: utterance_id={utterance_id}, err={exc}")
 
-    def _schedule_vts_emotion(self, emotion: str) -> None:
+    def _schedule_vts_emotion(self, emotion: str, intensity: float = 0.5) -> None:
         """异步触发 VTS 表情调用（fire-and-forget，失败不影响决策循环）。
 
         VTS 工具契约（vts_set_expression）::
 
             arguments = {
                 "parameters": {param_name: value, ...},  # 表情参数映射
-                "weight": float,                         # 混合权重（默认 1.0）
+                "weight": float,                         # 混合权重（情绪强度驱动）
             }
 
         若 emotion 不在已知映射表中，DEBUG 日志提示"无映射"并跳过；
         已知映射但参数为空（如 ``neutral``）也照样发起调用，让 VTS
         工具自身的静默处理逻辑统一接管（不做空表达式的特判短路）。
+
+        Args:
+            emotion: 情绪枚举名（映射表键）。
+            intensity: Replyer 输出的情绪强度 [0.0, 1.0]，直接映射为表情混合权重。
         """
         vts_params = self._EMOTION_TO_VTS_PARAMS.get(emotion)
         if vts_params is None:
@@ -1416,7 +1425,7 @@ class StreamerAgent(BaseAgent):
             tool_name="vts_set_expression",
             arguments={
                 "parameters": dict(vts_params),
-                "weight": 1.0,
+                "weight": float(min(1.0, max(0.0, intensity))),
             },
             source="streamer_agent.emotion",
         )

@@ -455,7 +455,7 @@ class TestRealRepoTemplates:
     """真实仓库集成测试：约定扫描发现各组件内聚提示词"""
 
     def test_singleton_loads_exactly_expected_keys(self):
-        """全仓加载后键集合应精确等于 9 个声明式键（防漂移回归网）"""
+        """全仓加载后键集合应精确等于 8 个声明式键（防漂移回归网）"""
         reset_prompt_manager()
         try:
             manager = get_prompt_manager()
@@ -463,7 +463,6 @@ class TestRealRepoTemplates:
                 "amaidesu_planner",
                 "amaidesu_replyer",
                 "agenda_expand",
-                "vts_hotkey",
                 "viewer_message",
                 "sc_message",
                 "passerby_message",

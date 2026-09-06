@@ -46,9 +46,9 @@ flowchart TB
     end
 
     subgraph Registry["ToolRegistry (src/modules/tools/)"]
-        Out["output 族<br/>（TTS 提升为基础设施后已不含 TTS）<br/>subtitle / vts×13 / vrchat×3<br/>warudo×13 / obs×4 / remote_stream"]
-        Per["perception 族<br/>look_at_screen"]
-        CE["content_engine 族<br/>5 工具（generic 游戏契约）"]
+        Out["avatar 域（modules/avatar/）<br/>vts×12 / vrchat×3 / warudo×13<br/>studio 域（modules/studio/obs/）obs×4"]
+        Per["vision 域（modules/vision/）<br/>look_at_screen"]
+        CE["text_adv 动作工具<br/>（agents/game/text_adv/ 内聚）"]
         Mem["memory 族<br/>query_memory"]
         Ctrl["AgentControl 族<br/>pause/resume/shutdown/restart/list_agents/agent_state"]
     end
@@ -101,10 +101,11 @@ Amaidesu/
 │       │   ├── console/         #   控制台输入
 │       │   ├── screen/          #   屏幕变化
 │       │   └── stt/             #   语音识别
-│       ├── tools/               # 工具族（ToolRegistry + 各 Provider；按 provider=builtin|game 溯源）
-│       │   ├── output/          #   subtitle / vts / warudo / obs / remote_stream / debug（TTS 已在 v2.0.12 提升为基础设施，迁至 src/modules/tts/ 基础模块）
-│       │   ├── perception/      #   look_at_screen（同步快照工具）
-│       │   └── content_engine/  #   通用游戏引擎契约（5 工具 + StubContentEngine）
+│       ├── tools/               # 工具语法层（ToolRegistry / ToolSpec / @tool / bootstrap；零领域知识）
+│       ├── avatar/              # 形象域：vts/（VTSProvider + 引擎子件）、vrchat/（OSC 桥接）、warudo/（每形象 = 一 Provider 实例 = 一开关单元）
+│       ├── studio/              # 演播域：obs/
+│       ├── vision/              # 视觉域：look_at_screen（同步快照工具）+ 屏幕捕获设施
+│       ├── mcp/                 # MCP 基础模块（外部工具源通道）
 │       ├── events/              # EventBus + 事件拦截器（session_stamp 场次盖章 / rate_limit / similar_filter）
 │       │   ├── interceptors/    #   EventInterceptor 协议 + InterceptorChain
 │       │   └── payloads/        #   Payload 按域分包（v2.0.10 新增 utterance.py 承载 tts.utterance.* 三事件）
@@ -160,7 +161,7 @@ sequenceDiagram
     Main->>Sim: 4b) SimulatorService.setup(auto_start=not args.dry)<br/>（条件：[simulator].enabled=true；--dry 强制 auto_start=False 不产生 LLM 调用）
     Main->>Agt: 5) AgentManager + _register_agents_from_config
     Main->>TTS: 5a0) build_tts_infrastructure(core [tts], event_bus=bus)：按 [tts].provider 构造选中引擎实例（Provider 实例 or None），StreamerAgent 构造期注入（v2.0.12 起 TTS 已基础模块化，不再走 ToolRegistry）
-    Main->>Reg: 5a) bind_core_tools(registry, [tools.output.config] slice)（按 `[tools.output.config] enabled` 列表驱动非 TTS 工具族自注册：subtitle / vts / warudo / obs / vrchat 等；TTS 已不在此列）
+    Main->>Reg: 5a) bind_core_tools(registry, tools 配置)（按域开关 [tools.avatar.*] / [tools.studio.obs] 的 enabled 驱动各域 Provider 自注册：vts / vrchat / warudo / obs）
     Main->>Reg: 5b) bind_pending_tools(registry)（flush L1 @tool pending）
     Main->>Agt: 5c) start_all（触发各 Agent._register_tools 自注册；StreamerAgent 收到 `speech_config`（来自 `core [tts]`）+ 注入的 `tts_engine` 实例，按 `_tts_enabled` 双闸门决定是否构造 UtteranceQueue）
     Main->>Agt: 5d) audit_tools(registry)（只读审计 + 未实现声明 warning）
@@ -253,25 +254,21 @@ sequenceDiagram
 
 ### ③ 工具族
 
-总览：**v2.0.12 起约 51 个工具**（TTS 已提升为基础设施，迁至 `src/modules/tts/` 基础模块；ToolRegistry 中零 TTS 条目）；按 `provider ∈ {"builtin", "game"}` 溯源；`register_provider` 走 `ToolRegistry.register`。TTS 装配由 `build_tts_infrastructure(core [tts], event_bus)` 在组合根直接完成（按 `core.toml [tts].provider` 单选构造引擎实例），结果注入 StreamerAgent 构造期——不再经 ToolRegistry；非 TTS 工具族（subtitle / vts / warudo / obs / vrchat）的装配由 `bind_core_tools` 按 `[tools.output.config]` 的 `enabled` 列表驱动，详见 [启动时序](#启动时序) 5a 步骤。其余已知缺口见"已知缺口"。
+总览：约 51 个工具。`ToolSpec.provider` 是**提供者标识**（str：`vts` / `vrchat` / `warudo` / `obs` / `vision` / `memory` / `framework` / `streamer` / `game`），不再是大类枚举；主播 Agent 默认可见全部已启用工具（`registry.list_tools()` 全量），可见性由人类控制的域开关（`[tools.avatar.*].enabled` 等）决定。域装配由 `bind_core_tools` 按域开关驱动（avatar / studio），详见 [启动时序](#启动时序) 5a 步骤。其余已知缺口见"已知缺口"。
 
-| 族 | Provider | 工具数 | 工具名 |
+| 域/提供者 | provider 标识 | 工具数 | 工具名 |
 |----|----------|-------|--------|
-| TTS | （基础模块） | **v2.0.12 提升为基础设施**：4 引擎 Provider（`EdgeTTSProvider` / `GPTSoVITSProvider` / `VoiceboxProvider` / `OmniTTSProvider`）位于 `src/modules/tts/`，不再注册到 ToolRegistry；装配入口 `build_tts_infrastructure(tts_config, event_bus=None)` 按 `core.toml [tts].provider` 单选构造实例供 StreamerAgent 注入；未知 provider 回退 `edge_tts`。引擎自身在 `handle_speech(text, utterance_id=None)` 入口完成合成 + 播放，并按需发布 `tts.utterance.*` 三事件，详见 [ADR-007](adr/007-tts-infrastructure-pipeline.md)。 |
-| Subtitle | `builtin` | 3 | `push_subtitle` / `subtitle_clear` / `subtitle_show_test` |
-| VTS | `builtin` | 13 | `vts_smile` / `vts_close_eyes` / `vts_open_eyes` / `vts_set_expression` / `vts_set_parameter_value` / `vts_get_parameter_value` / `vts_trigger_hotkey` / `vts_load_item` / `vts_load_sticker` / `vts_set_idle_enabled` / `vts_reconnect` / `vts_get_stats` / `vts_lip_sync` |
-| VRChat | `builtin` | 3 | `vrchat_set_expression` / `vrchat_trigger_gesture` / `vrchat_get_stats` |
-| Warudo | `builtin` | 13 | `warudo_set_expression` / `warudo_trigger_hotkey` / `warudo_trigger_body` / `warudo_trigger_head` / `warudo_trigger_action` / `warudo_set_subtitle` / `warudo_throw_fish` / `warudo_set_sight` / `warudo_set_eyebrow` / `warudo_set_eye` / `warudo_set_pupil` / `warudo_set_mouth` / `warudo_get_stats` |
-| OBS | `builtin` | 4 | `obs_send_text` / `obs_switch_scene` / `obs_set_source_visibility` / `obs_send_test` |
-| Remote Stream | — | 0（仅 `MessageType`/`StreamMessage` 协议 + `AudioConfig`/`ImageConfig`，无工具） | 留待外部 WebSocket 脚手架接入 |
-| Debug | — | 0（`dump_intent` 是函数非工具，DebugConfig 是 dataclass） | 调试输出 |
-| Perception | `builtin` | 1 | `look_at_screen`（同步快照工具，注入 `ScreenCapture`/`TextReader` 后端；无后端时返回成功 + 空文本，不抛异常） |
-| Content Engine | `builtin` | 5 | `content_engine_start` / `content_engine_stop` / `content_engine_send_input` / `content_engine_status` / `content_engine_get_state`（包装 `ContentEngine` Protocol；`StubContentEngine` 默认实现，生产应注入真实引擎） |
-| Memory | `builtin` | 1 | `query_memory`（绑定 `MemoryProvider` 后才可用；查询文本召回 top_k 条记忆） |
-| Streamer 自带 | `builtin`（来自 Agent `list_tools()`） | 3 | `reply` / `should_speak_proactively` / `parse_command` |
-| Agent Control | `builtin` | 6 | `pause_agent` / `resume_agent` / `shutdown_agent` / `restart_agent` / `list_agents` / `agent_state` |
-
-合计：3 + 13 + 3 + 13 + 4 + 1 + 5 + 1 + 3 + 6 ≈ **51 个工具**（Remote Stream/Debug 不计；v2.0.12 起 TTS 提升为基础设施，工具数从 v2.0.10 的 53 降至 51——TTS Facade 1 个 + 选中引擎入口 1 个 共 2 个已迁出）。
+| TTS | （基础模块） | — | 4 引擎 Provider 位于 `src/modules/tts/`，不注册 ToolRegistry；`build_tts_infrastructure` 按 `core.toml [tts].provider` 单选构造注入 StreamerAgent，详见 [ADR-007](adr/007-tts-infrastructure-pipeline.md) |
+| Subtitle | （基础模块） | — | `src/modules/subtitle/`（`build_subtitle_infrastructure` 装配，不经 ToolRegistry） |
+| VTS（avatar 域） | `vts` | 12 | `vts_smile` / `vts_close_eyes` / `vts_open_eyes` / `vts_set_expression` / `vts_set_parameter_value` / `vts_get_parameter_value` / `vts_trigger_hotkey`（按热键名优先，连接后描述动态携带可用热键清单）/ `vts_load_item` / `vts_load_sticker` / `vts_set_idle_enabled` / `vts_reconnect` / `vts_get_stats` |
+| VRChat（avatar 域） | `vrchat` | 3 | `vrchat_set_expression` / `vrchat_trigger_gesture` / `vrchat_get_stats` |
+| Warudo（avatar 域） | `warudo` | 13 | `warudo_set_expression` / `warudo_trigger_hotkey` / `warudo_trigger_body` / `warudo_trigger_head` / `warudo_trigger_action` / `warudo_set_subtitle` / `warudo_throw_fish` / `warudo_set_sight` / `warudo_set_eyebrow` / `warudo_set_eye` / `warudo_set_pupil` / `warudo_set_mouth` / `warudo_get_stats`（动作类工具描述动态携带 `[tools.avatar.warudo.config].action_catalog` 预声明清单） |
+| OBS（studio 域） | `obs` | 4 | `obs_send_text` / `obs_switch_scene` / `obs_set_source_visibility` / `obs_send_test` |
+| Vision | `vision` | 1 | `look_at_screen`（同步快照工具，注入 `ScreenCapture`/`TextReader` 后端；无后端时返回成功 + 空文本，不抛异常） |
+| text_adv（game 域） | `game` | 2+ | `text_adv_choose_option` / `text_adv_get_story` 等（游戏侧 dispatch，`agents/game/text_adv/` 内聚） |
+| Memory | `memory` | 1 | `query_memory`（绑定 `MemoryProvider` 后才可用） |
+| Streamer 自带 | `streamer` | 3 | `reply`（Agent 内部协议工具）/ `should_speak_proactively` / `parse_command` |
+| Agent Control | `framework` | 6 | `pause_agent` / `resume_agent` / `shutdown_agent` / `restart_agent` / `list_agents` / `agent_state` |
 
 ## 核心概念
 
@@ -373,16 +370,29 @@ render_timeout_ms = 60000            # 单 utterance 超时（覆盖合成+播�
 api_url = "ws://127.0.0.1:9880"
 # ... gptsovits 引擎连接参数
 
-# tools.toml —— 启用哪些工具族（TTS 一族已在 v2.0.12 提升为基础设施，本表完全不含 TTS）
+# tools.toml —— 域开关（每域一开关单元：开 = 其全部工具可见，人类控制）
 [tools]
-enabled = ["perception", "output"]  # 顶层族启用开关（具体工具族内子工具通过该族的 register_provider 注册）
+enabled = ["perception"]  # 顶层族启用开关
 
 [tools.perception.config]
 enabled = ["stt"]  # Collector 在此启用（采集配置已迁移至 [tools.perception.config]）
 bili_danmaku_official = { ... }
 
-[tools.output.config]
-enabled = ["vts", "subtitle", "warudo", "obs"]  # 非 TTS 工具族：bind_core_tools 按此列表驱动 register_xxx_tools
+[tools.avatar.vts]        # 形象域：开一个形象 = 其全部工具进入可见集
+enabled = true
+[tools.avatar.vts.config] # 该形象的具体配置（连接参数 / idle / 热键相关）
+vts_host = "localhost"
+
+[tools.avatar.warudo]
+enabled = false
+[tools.avatar.warudo.config]
+action_catalog = { wave = "招手", nod = "点头" }  # 预声明动作清单（注入工具描述）
+
+[tools.avatar.vrchat]
+enabled = false
+
+[tools.studio.obs]
+enabled = true
 ```
 
 7 文件树、Schema 升级钩子、迁移测试等细节见 [配置 Schema 变更规则](../../AGENTS.md#配置-schema-变更规则) 与 `src/modules/config/` 下相关文档。
@@ -413,7 +423,7 @@ enabled = ["vts", "subtitle", "warudo", "obs"]  # 非 TTS 工具族：bind_core_
 
 > **v2.0.12 已闭环（§8 概念修正后最终态）**：原"渲染工具 `register_*_tools` 无自动调用点"——
 > - **TTS**：v2.0.12 起整体提升为基础设施，由 `src/modules/tts/build_tts_infrastructure(core [tts], event_bus)` 装配期直接构造引擎实例并注入 StreamerAgent，ToolRegistry 中零 TTS 条目；
-> - **非 TTS 工具族**（subtitle / vts / warudo / obs / vrchat）：由 `bind_core_tools` 按 `[tools.output.config]` 的 `enabled` 列表驱动自注册。
+> - **域工具**（avatar / studio）：由 `bind_core_tools` 按域开关（`[tools.avatar.*].enabled` / `[tools.studio.obs].enabled`）驱动自注册。
 > 详见 [启动时序](#启动时序) 5a0 / 5a 两步与 [ADR-007 §8 概念修正](adr/007-tts-infrastructure-pipeline.md#8-概念修正2026-09-05-落地adr-007-据此修订)。
 
 ## 相关文档
@@ -427,6 +437,8 @@ enabled = ["vts", "subtitle", "warudo", "obs"]  # 非 TTS 工具族：bind_core_
 - [测试指南](../development/testing-guide.md) - 测试分层（agents/architecture/config/dashboard/integration/modules + characterization/mocks 支撑）
 
 ---
+
+*最后更新：2026-09-06（avatar 域收口：vrchat 自 vts 包物理拆出为独立包 `src/modules/avatar/vrchat/`（域开关早已独立，本次补齐代码布局）；vts 热键工具改按名优先触发（hotkey_id 兜底），工具描述连接后动态携带可用热键清单；warudo 动作类工具描述动态携带 `[tools.avatar.warudo.config].action_catalog` 预声明清单，删除 6 张死映射表；LLM 热键匹配链整体删除（含 llm_* 6 配置键）；emotion intensity 全链路接线——reply function schema 新增 intensity 参数 → Replyer 解析 clamp → StreamerAgent 透传 → vts_set_expression weight；工具表 provider 列改提供者标识并修正 VTS 工具数漂移（13→12，vts_lip_sync 从未存在于注册表）；目录结构/全景图/配置示例同步域化新树；avatar/studio 工具 provider 标识化补齐（builtin→vts/vrchat/warudo）；新增 VTSProvider 本体测试与 warudo action_catalog 测试）*
 
 *最后更新：2026-09-06（场次语义落地：新增 src/modules/session/（LiveSessionManager，场次唯一事实源——开启/结束/删除/归属解析/防膨胀，live.started/ended 唯一发布方；启动不自动开新场次，无显式场次期间消息归默认场次单行复用）；live_sessions 主键语义从「房间号哈希映射」修正为「一场直播一行」（AUTOINCREMENT + source 列，房间降为普通属性），SCHEMA_VERSION 升至 4（v3→v4 迁移：存量行标记 legacy 并封闭悬空行，live_chat 增加 message_id/reply_to_message_id 回复关联列与索引）；事件层场次归属改由 SessionStampInterceptor 单点盖章（发布方不再填 live_session_id）；决策可观测：planner.decision（决策轮记录）与 streamer.stage（阶段状态）两事件上线，Planner 输出 reply_to 指向具体弹幕 message_id；模拟器回放自动开/关场次，SessionSelector 退役；Dashboard 新增 /api/v1/live-sessions 控制面）*
 

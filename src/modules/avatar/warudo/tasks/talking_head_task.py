@@ -6,7 +6,7 @@ Warudo TalkingHeadTask - 说话时的随机头部动作任务
 
 设计要点:
 - 接收 send_action_callback 而非 WebSocket 引用(避免紧耦合)
-- is_talking 由外部(ReplyState)控制
+- is_talking 由外部控制
 - 后台循环 + 0.1s 步进,正弦波 + 随机抖动
 """
 

@@ -43,15 +43,6 @@ if TYPE_CHECKING:
     pass
 
 
-LLM_AVAILABLE = False
-try:
-    import openai  # noqa: F401
-
-    LLM_AVAILABLE = True
-except ImportError:
-    pass
-
-
 # =============================================================================
 # 工具的 JSON Schema 描述
 # =============================================================================
@@ -107,9 +98,9 @@ _VTS_GET_PARAMETER_SCHEMA: Dict[str, Any] = {
 _VTS_TRIGGER_HOTKEY_SCHEMA: Dict[str, Any] = {
     "type": "object",
     "properties": {
-        "hotkey_id": {"type": "string", "description": "VTS 热键 ID"},
+        "name": {"type": "string", "description": "VTS 热键名称（优先；连接后可从工具描述中的可用热键清单选取）"},
+        "hotkey_id": {"type": "string", "description": "VTS 热键 ID（兜底；name 未匹配时使用）"},
     },
-    "required": ["hotkey_id"],
 }
 
 _VTS_LOAD_ITEM_SCHEMA: Dict[str, Any] = {
@@ -177,12 +168,10 @@ class VTSProvider:
         self,
         config: Dict[str, Any],
         event_bus: Optional[EventBus] = None,
-        prompt_service: Any = None,
     ):
         # 配置
         self.config = config
         self.event_bus = event_bus
-        self._prompt_service = prompt_service
         self.logger = get_logger(self.__class__.__name__)
 
         self.vts_host: str = config.get("vts_host", "localhost")
@@ -201,14 +190,6 @@ class VTSProvider:
             "confused": {"EyeOpenLeft": 0.7, "EyeOpenRight": 0.7, "MouthOpen": 0.2},
             "scared": {"EyeOpenLeft": 0.5, "EyeOpenRight": 0.5, "MouthOpen": 0.3},
             "neutral": {},
-        }
-        self._action_hotkey_map = {
-            "blink": "Blink",
-            "nod": "Nod",
-            "shake": "Shake",
-            "wave": "Wave",
-            "clap": "Clap",
-            "motion": "Motion",
         }
 
         self._vts: Any = None
@@ -250,12 +231,6 @@ class VTSProvider:
             logger_name=f"{self.__class__.__name__}.Hotkey",
             is_connected=lambda: self._is_connected,
             vts_request=self._make_vts_request_proxy(),
-            prompt_service=self._prompt_service,
-            openai_client=self._build_openai_client(config),
-            llm_model=str(config.get("llm_model", "gpt-4o-mini")),
-            llm_temperature=float(config.get("llm_temperature", 0.7)),
-            llm_max_tokens=int(config.get("llm_max_tokens", 50)),
-            llm_matching_enabled=bool(config.get("llm_matching_enabled", False)),
         )
         self.expression = ExpressionController(
             logger_name=f"{self.__class__.__name__}.Expression",
@@ -295,7 +270,7 @@ class VTSProvider:
         return self.PROVIDER_NAME
 
     def list_tools(self) -> List[ToolSpec]:
-        """声明本 Provider 暴露的工具列表"""
+        """声明本 Provider 暴露的工具列表（热键描述按连接状态动态携带可用清单）"""
         return [
             ToolSpec(
                 name="vts_smile",
@@ -339,7 +314,7 @@ class VTSProvider:
             ),
             ToolSpec(
                 name="vts_trigger_hotkey",
-                description="VTS 触发热键（按 hotkey_id）",
+                description="VTS 触发热键（按热键名 name 优先，hotkey_id 兜底）" + self._hotkey_catalog_summary(),
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_VTS_TRIGGER_HOTKEY_SCHEMA,
@@ -409,7 +384,10 @@ class VTSProvider:
             if invocation.tool_name == "vts_trigger_hotkey":
                 return _ok(
                     "vts_trigger_hotkey",
-                    await self.trigger_hotkey(str(args["hotkey_id"])),
+                    await self.trigger_hotkey(
+                        name=str(args.get("name", "") or ""),
+                        hotkey_id=str(args.get("hotkey_id", "") or ""),
+                    ),
                 )
             if invocation.tool_name == "vts_load_item":
                 instance_id = await self.load_item(**{k: v for k, v in args.items() if k != ""})
@@ -507,8 +485,35 @@ class VTSProvider:
     async def get_parameter_value(self, parameter_name: str) -> Optional[float]:
         return await self.expression.get_parameter(parameter_name)
 
-    async def trigger_hotkey(self, hotkey_id: str) -> bool:
-        return await self.hotkey_matcher.trigger_hotkey(hotkey_id)
+    def _hotkey_catalog_summary(self) -> str:
+        """生成可用热键清单文本（拼入 vts_trigger_hotkey 描述，LLM 据此选名调用）。
+
+        热键列表在 VTS 连接后由 ``HotkeyMatcher.load_hotkeys`` 加载；未连接 /
+        未加载时返回空串（描述退化为不含清单的基础版）。
+        """
+        names = [str(hotkey.get("name", "")) for hotkey in self.hotkey_matcher.hotkey_list if hotkey.get("name")]
+        if not names:
+            return ""
+        return f"。当前可用热键：{'、'.join(names)}"
+
+    async def trigger_hotkey(self, name: str = "", hotkey_id: str = "") -> bool:
+        """触发热键：按热键名解析（``find_by_name``）优先，``hotkey_id`` 兜底。
+
+        LLM 只能从工具描述中拿到热键名（VTS 内部 hotkeyID 是不透明 UUID），
+        因此调用侧以 name 为主入口；name 解析失败且有 id 时按 id 重试。
+        """
+        if name:
+            resolved = self.hotkey_matcher.find_by_name(name)
+            if resolved:
+                return await self.hotkey_matcher.trigger_hotkey(resolved)
+            if not hotkey_id:
+                self.logger.warning(f"VTS 热键名未匹配且无 hotkey_id 兜底: {name}")
+                return False
+            self.logger.warning(f"VTS 热键名未匹配，回退 hotkey_id: name={name}, id={hotkey_id}")
+        if hotkey_id:
+            return await self.hotkey_matcher.trigger_hotkey(hotkey_id)
+        self.logger.warning("VTS 触发热键失败：name 与 hotkey_id 均为空")
+        return False
 
     async def load_item(
         self,
@@ -569,33 +574,6 @@ class VTSProvider:
             self.logger.error(f"加载道具失败: {e}", exc_info=True)
             return None
 
-    async def unload_item(
-        self,
-        item_instance_id_list: Optional[List[str]] = None,
-        file_name_list: Optional[List[str]] = None,
-    ) -> bool:
-        if not self._is_connected:
-            self.logger.warning("VTS 未连接，无法卸载道具")
-            return False
-        try:
-            if not item_instance_id_list and not file_name_list:
-                return False
-            data = {
-                "instanceIDs": item_instance_id_list if item_instance_id_list else [],
-                "fileNames": file_name_list if file_name_list else [],
-            }
-            response = await self._vts.request(
-                self._vts.vts_request.BaseRequest(message_type="ItemUnloadRequest", data=data)
-            )
-            if response and response.get("messageType") == "ItemUnloadResponse":
-                self.logger.debug(f"道具已卸载: {data}")
-                return True
-            self.logger.warning(f"道具卸载失败: {response}")
-            return False
-        except Exception as e:
-            self.logger.error(f"卸载道具失败: {e}")
-            return False
-
     def _set_idle_enabled(self, enabled: bool) -> None:
         """启停 idle 拟人动画（不抛异常，重复启停幂等）"""
         if enabled and not self.idle_motion._running:
@@ -618,7 +596,6 @@ class VTSProvider:
             "error_count": self.error_count,
             "hotkey_count": len(self.hotkey_matcher.hotkey_list),
             "lip_sync_enabled": self.lip_sync_enabled,
-            "llm_matching_enabled": bool(self.config.get("llm_matching_enabled", False)),
         }
 
     # ===== 内部辅助 =====
@@ -630,24 +607,6 @@ class VTSProvider:
 
     async def _expression_set_param_proxy(self, parameter_name: str, value: float, weight: float = 1) -> bool:
         return await self.expression.set_parameter(parameter_name, value, weight)
-
-    def _build_openai_client(self, config: Dict[str, Any]) -> Optional[Any]:
-        llm_matching_enabled = bool(config.get("llm_matching_enabled", False))
-        llm_api_key = config.get("llm_api_key")
-        if not (llm_matching_enabled and LLM_AVAILABLE and llm_api_key):
-            return None
-        try:
-            import openai as _openai
-
-            client = _openai.AsyncOpenAI(
-                api_key=llm_api_key,
-                base_url=config.get("llm_base_url") if config.get("llm_base_url") else None,
-            )
-            self.logger.info("LLM 客户端初始化成功")
-            return client
-        except Exception as e:
-            self.logger.warning(f"LLM 客户端初始化失败: {e}")
-            return None
 
     def _make_vts_request_proxy(self) -> Any:
         """创建可调用代理，所有 VTS API 调用都经过同一把 asyncio.Lock 串行化"""
@@ -837,13 +796,11 @@ def _fail(tool_name: str, error_message: str) -> ToolExecutionResult:
 def create_vts_provider(
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
-    prompt_service: Any = None,
 ) -> VTSProvider:
     """构造 VTSProvider 实例（不启动，由调用方 setup）"""
     return VTSProvider(
         config=config,
         event_bus=event_bus,
-        prompt_service=prompt_service,
     )
 
 
@@ -851,13 +808,11 @@ def register_vts_tools(
     registry: Any,
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
-    prompt_service: Any = None,
 ) -> VTSProvider:
     """构造 VTSProvider 并注册到 registry。返回 Provider 实例供调用方管理生命周期。"""
     provider = create_vts_provider(
         config=config,
         event_bus=event_bus,
-        prompt_service=prompt_service,
     )
     if hasattr(registry, "register_provider"):
         registry.register_provider(provider)

@@ -1,29 +1,17 @@
 """
 HotkeyMatcher - VTS 热键匹配器
 
-负责 VTS 热键列表获取、触发与 LLM 辅助匹配。
+负责 VTS 热键列表获取、按名解析与触发。
 """
 
 import time
-from typing import TYPE_CHECKING, Any, Callable, Coroutine, Dict, List, Optional
+from typing import Any, Callable, Coroutine, Dict, List, Optional
 
 from src.modules.logging import get_logger
 
-if TYPE_CHECKING:
-    from src.modules.prompts.manager import PromptManager
-
-
-LLM_AVAILABLE = False
-try:
-    import openai  # noqa: F401
-
-    LLM_AVAILABLE = True
-except ImportError:
-    pass
-
 
 class HotkeyMatcher:
-    """VTS 热键匹配器（含 LLM 辅助）"""
+    """VTS 热键匹配器"""
 
     def __init__(
         self,
@@ -31,38 +19,24 @@ class HotkeyMatcher:
         logger_name: str,
         is_connected: Callable[[], bool],
         vts_request: Callable[..., Coroutine[Any, Any, Any]],
-        prompt_service: Optional["PromptManager"] = None,
-        openai_client: Optional[Any] = None,
-        llm_model: str = "gpt-4o-mini",
-        llm_temperature: float = 0.7,
-        llm_max_tokens: int = 50,
-        llm_matching_enabled: bool = False,
     ):
         self.logger = get_logger(logger_name)
         self._is_connected = is_connected
         self._vts_request = vts_request
-        self._prompt_service = prompt_service
-        self._openai_client = openai_client
-        self._llm_model = llm_model
-        self._llm_temperature = llm_temperature
-        self._llm_max_tokens = llm_max_tokens
-        self._llm_matching_enabled = llm_matching_enabled
 
         self.hotkey_list: List[Dict[str, Any]] = []
         self.hotkey_list_last_update: float = 0.0
 
-    def find_by_name(self, prefix: str, suffix: str = "") -> Optional[str]:
+    def find_by_name(self, name: str) -> Optional[str]:
+        """按热键名解析 hotkeyID：精确匹配优先，前缀匹配兜底。"""
         if not self.hotkey_list:
             return None
-        target_name = f"{prefix}_{suffix}" if suffix else prefix
         for hotkey in self.hotkey_list:
-            if hotkey.get("name") == target_name:
+            if hotkey.get("name") == name:
                 return hotkey.get("hotkeyID")
         for hotkey in self.hotkey_list:
-            name = hotkey.get("name", "")
-            if name.startswith(prefix):
-                if not suffix or suffix in name:
-                    return hotkey.get("hotkeyID")
+            if str(hotkey.get("name", "")).startswith(name):
+                return hotkey.get("hotkeyID")
         return None
 
     async def load_hotkeys(self) -> None:
@@ -98,44 +72,3 @@ class HotkeyMatcher:
         except Exception as e:
             self.logger.error(f"触发热键失败: {hotkey_id}: {e}")
             return False
-
-    async def find_best_match_with_llm(self, text: str) -> Optional[str]:
-        if not self._llm_matching_enabled or not LLM_AVAILABLE:
-            return None
-        if not self.hotkey_list:
-            self.logger.warning("热键列表为空，无法使用LLM匹配")
-            return None
-
-        hotkey_str = "\n".join([f"- {hotkey.get('name', '')}" for hotkey in self.hotkey_list])
-
-        if not self._prompt_service:
-            self.logger.debug("prompt_service 未注入,LLM hotkey matching 降级为关闭")
-            return None
-        prompt = self._prompt_service.render("vts_hotkey", text=text, hotkey_list_str=hotkey_str)
-
-        try:
-            if not self._openai_client:
-                self.logger.warning("LLM客户端未初始化")
-                return None
-
-            response = self._openai_client.chat.completions.create(
-                model=self._llm_model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=self._llm_temperature,
-                max_tokens=self._llm_max_tokens,
-            )
-
-            if response and response.choices:
-                selected_hotkey = response.choices[0].message.content.strip()
-                if selected_hotkey != "NONE" and selected_hotkey in [
-                    hotkey.get("name", "") for hotkey in self.hotkey_list
-                ]:
-                    self.logger.debug(f"LLM为文本'{text[:30]}...'选择了热键: {selected_hotkey}")
-                    return selected_hotkey
-                self.logger.debug(f"LLM认为文本'{text[:30]}...'没有合适的热键匹配")
-                return None
-            self.logger.warning("LLM API返回了无效响应")
-            return None
-        except Exception as e:
-            self.logger.error(f"LLM匹配热键失败: {e}")
-            return None

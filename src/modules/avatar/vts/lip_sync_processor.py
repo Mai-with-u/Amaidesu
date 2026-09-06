@@ -342,8 +342,10 @@ class LipSyncProcessor:
                     await self._lip_sync_task
                 except asyncio.CancelledError:
                     pass
-            except Exception:
-                pass
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.logger.warning(f"等待口型淡出任务结束异常（已忽略，嘴巴将直接归零）: {exc}")
         self._lip_sync_task = None
 
         # 确保嘴巴归零、表情回到静止值（EyeOpen 保持睁眼、MouthSmile 保持常驻微笑）
