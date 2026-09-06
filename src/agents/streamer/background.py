@@ -33,6 +33,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.logging import get_logger
+from src.modules.storage.sqlite_store import session_id_to_pk
 from src.modules.time_utils import now_ms as _real_now_ms
 
 from .room_state import RoomState
@@ -94,6 +95,7 @@ class BackgroundMaintainer:
         session_id: str = "live",
         memory: Optional[Any] = None,
         event_bus: Optional[EventBus] = None,
+        sqlite_store: Optional[Any] = None,
     ) -> None:
         """初始化。
 
@@ -112,6 +114,8 @@ class BackgroundMaintainer:
             memory: §1.50 记忆后端（鸭子类型 ``MemoryProvider``）。``None`` 时关闭
                 摘要/事件两路写入功能——BackgroundMaintainer 整体降级为"只记账"。
             event_bus: 可选 ``EventBus``；提供时 ``start()`` 阶段订阅礼物/SC 事件。
+            sqlite_store: 可选 ``SQLiteStore``；提供时每次摘要成功后写
+                ``timeline_summary``（摘要历史）与 ``topics``（当前话题快照投影）。
         """
         self._config = config
         self._room_state = room_state
@@ -119,9 +123,10 @@ class BackgroundMaintainer:
         self._live_session_store = live_session_store
         self._context_service = context_service
         self._session_id = session_id
-        # §1.50 写入面——memory / event_bus 由 main.py 装配；None 时整体降级
+        # 写入面——memory / event_bus / sqlite_store 由 main.py 装配；None 时各自降级
         self._memory = memory
         self._event_bus = event_bus
+        self._sqlite_store = sqlite_store
         # 同用户去抖时间戳表（user_id → last_ingest_ms）
         self._last_ingest_ms: Dict[str, int] = {}
         self._subscribed = False
@@ -311,20 +316,21 @@ class BackgroundMaintainer:
             self._logger.warning(f"压缩窗口检查失败: {exc}")
 
     async def _write_live_session(self, now_ms: int) -> None:
-        """把当前 RoomState 快照写入 live_sessions 表（§1.7 后台记账）。"""
+        """把当前 RoomState 快照写入 live_sessions 表（后台记账，每轻 tick 一次心跳）。"""
+        if self._live_session_store is None:
+            return
         snapshot = self._room_state.get_snapshot(now_ms=now_ms)
         # 热度数字映射：low=1, medium=2, high=3
         heat_map = {"low": 1, "medium": 2, "high": 3}
         heat_int = heat_map.get(snapshot.heat, 1)
 
-        if self._live_session_store is not None and hasattr(self._live_session_store, "update_live_session_heartbeat"):
-            await self._live_session_store.update_live_session_heartbeat(
-                session_id=self._session_id,
-                heat=heat_int,
-                viewer_count=0,  # TODO: 接入观众统计（W7+）
-                audience_total=0,
-                updated_at_ms=now_ms,
-            )
+        await self._live_session_store.update_live_session_heartbeat(
+            session_id=self._session_id,
+            heat=heat_int,
+            viewer_count=0,  # TODO: 接入观众统计
+            audience_total=0,
+            updated_at_ms=now_ms,
+        )
 
     async def _maybe_summarize(self, now_ms: int) -> None:
         """摘要门控（§1.7）：按热度频率调用 LLM（走 chat_fast profile）。"""
@@ -434,12 +440,52 @@ class BackgroundMaintainer:
         if getattr(response, "success", False) and getattr(response, "content", None):
             summary = response.content.strip()
             self._room_state.set_topic_summary(summary, now_ms=now_ms)
+            previous_summary_ms = self._last_summary_ms
             self._last_summary_ms = now_ms
             self._logger.debug(f"话题摘要已更新: {summary[:50]}")
-            # §1.50 写入面：摘要成功落地后 ingest，失败不阻断记账
+            # 摘要落地 → 记忆 + 存储两路写入，失败各自降级不阻断记账
             await self._ingest_topic_summary(summary)
+            await self._persist_topic_snapshot(summary, now_ms=now_ms, previous_summary_ms=previous_summary_ms)
         else:
             self._logger.warning("话题摘要 LLM 返回失败")
+
+    async def _persist_topic_snapshot(self, summary: str, *, now_ms: int, previous_summary_ms: int) -> None:
+        """摘要成功后把话题状态写入 ``timeline_summary`` 与 ``topics`` 表。
+
+        - ``timeline_summary``：一行一段摘要历史，窗口为 [上次摘要时刻, 本次]
+        - ``topics``：当前话题快照投影——先清本场旧行再插最新关键词 + 摘要句，
+          消费者读到的永远是当前话题状态（历史轨迹由 timeline_summary 承担）
+
+        异常降级：落库失败仅 warning，不阻断后台记账循环。
+        """
+        if self._sqlite_store is None:
+            return
+        try:
+            live_pk = session_id_to_pk(self._session_id)
+            window_start = previous_summary_ms or max(now_ms - self._summary_interval_ms, 0)
+            await self._sqlite_store.execute(
+                "INSERT INTO timeline_summary (live_session_id, start_ms, end_ms, summary, tags) VALUES (?, ?, ?, ?, ?)",
+                (live_pk, window_start, now_ms, summary, None),
+            )
+            snapshot = self._room_state.get_snapshot(now_ms=now_ms)
+            await self._sqlite_store.execute(
+                "DELETE FROM topics WHERE live_session_id=?",
+                (live_pk,),
+            )
+            for rank, keyword in enumerate(snapshot.topics):
+                await self._sqlite_store.execute(
+                    "INSERT INTO topics (live_session_id, label, source, score, trend, duration_ms, count) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (live_pk, keyword, "word_freq", 1.0 / (rank + 1), 0.0, self._summary_interval_ms, 0),
+                )
+            if summary:
+                await self._sqlite_store.execute(
+                    "INSERT INTO topics (live_session_id, label, source, score, trend, duration_ms, count) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (live_pk, summary, "llm_summary", 1.0, 0.0, self._summary_interval_ms, 1),
+                )
+        except Exception as exc:  # noqa: BLE001 边界处吸收 + 日志，不阻断记账循环
+            self._logger.warning(f"话题快照落库失败（timeline_summary/topics）: {exc}")
 
     @staticmethod
     def _format_history(history: list) -> str:

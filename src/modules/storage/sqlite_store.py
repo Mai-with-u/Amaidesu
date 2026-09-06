@@ -16,16 +16,18 @@ SQLiteStore —— 异步友好的 SQLite 访问层
 - 真同步调用放在 ``_run_in_executor`` 内部（防漏原则）
 
 ## 验收
-- 测试 ``tests/modules/storage/test_sqlite_store.py`` 覆盖：
-  - 13 张表全部创建
-  - schema_migrations 记录当前版本
+- 测试 ``tests/modules/storage/`` 覆盖：
+  - 13 张业务表 + 模块私有表全部创建（schema 统一建表）
+  - schema_migrations 记录并单调推进到当前版本
   - simulated 列存在且默认 False
+  - live_sessions 心跳/结账、llm_usage 插入等领域方法
   - ``table_exists`` / ``list_tables`` / ``is_healthy``
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import sqlite3
 import time
 from functools import partial
@@ -39,9 +41,29 @@ from src.modules.storage.schema import (
     build_schema_sql,
     list_expected_tables,
 )
+from src.modules.time_utils import now_ms
 
 
 logger = get_logger("SQLiteStore")
+
+
+# =============================================================================
+# 场次标识映射
+# =============================================================================
+
+
+def session_id_to_pk(session_id: str) -> int:
+    """把场次字符串 ID 映射为 ``live_sessions.id`` / ``*.live_session_id`` 的 INTEGER 主键。
+
+    这是字符串场次 ID 到整数主键的**唯一权威映射**：``live_sessions`` 心跳开行、
+    ``StorageLedger`` 写明细、``ContextService`` 启动回灌都必须走同一算法，
+    否则同一场次的数据会散落在不同主键下无法聚合。
+
+    算法：MD5 前 8 位十六进制 → 32 位无符号整数。稳定、跨进程一致、无外部依赖；
+    数值本身无业务语义，仅做主键/外键。
+    """
+    digest = hashlib.md5(session_id.encode("utf-8")).hexdigest()[:8]
+    return int(digest, 16)
 
 
 # =============================================================================
@@ -348,6 +370,127 @@ class SQLiteStore:
                     ),
                 )
                 return int(cur.lastrowid or 0)
+
+        return await self._run_in_executor(_exec)
+
+    async def insert_llm_usage(
+        self,
+        *,
+        model_name: str,
+        provider_name: str,
+        request_type: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        cache_hit_tokens: int = 0,
+        cache_miss_tokens: int = 0,
+        cost: float = 0.0,
+        duration_ms: int = 0,
+        profile_name: Optional[str] = None,
+        assign_name: Optional[str] = None,
+        live_session_id: Optional[int] = None,
+        timestamp_ms: Optional[int] = None,
+    ) -> int:
+        """插入一条 ``llm_usage`` 调用记录，返回 lastrowid。"""
+        ts = timestamp_ms if timestamp_ms is not None else now_ms()
+
+        def _exec() -> int:
+            with self._manager.transaction() as conn:
+                cur = conn.execute(
+                    "INSERT INTO llm_usage ("
+                    "live_session_id, model_name, assign_name, profile_name, provider_name,"
+                    " request_type, prompt_tokens, completion_tokens, total_tokens,"
+                    " cache_hit_tokens, cache_miss_tokens, cost, duration_ms, timestamp_ms"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        live_session_id,
+                        model_name,
+                        assign_name,
+                        profile_name,
+                        provider_name,
+                        request_type,
+                        prompt_tokens,
+                        completion_tokens,
+                        total_tokens,
+                        cache_hit_tokens,
+                        cache_miss_tokens,
+                        cost,
+                        duration_ms,
+                        ts,
+                    ),
+                )
+                return int(cur.lastrowid or 0)
+
+        return await self._run_in_executor(_exec)
+
+    # -------------------- live_sessions 场次状态 --------------------
+    # 场次行由心跳"首次写入即开行"：不引入独立的 session_manager，谁先心跳谁开行，
+    # 后续心跳只更新热度/计数。这样 StorageLedger 写明细时引用的场次主键必然有行可依。
+
+    async def update_live_session_heartbeat(
+        self,
+        *,
+        session_id: str,
+        heat: int,
+        viewer_count: int,
+        audience_total: int,
+        updated_at_ms: int,
+        platform: Optional[str] = None,
+    ) -> None:
+        """写入一次场次心跳：行不存在则开行（``started_at_ms = updated_at_ms``），
+        已存在则只更新 ``heat`` / ``viewer_count`` / ``audience_total`` / ``updated_at_ms``。
+
+        ``platform`` 仅在开行时生效（未知填 ``"unknown"``），后续心跳不覆盖。
+        ``stream_id`` 落原始 ``session_id`` 字符串，便于从主键反查场次。
+        """
+        pk = session_id_to_pk(session_id)
+
+        def _exec() -> None:
+            with self._manager.transaction() as conn:
+                conn.execute(
+                    "INSERT INTO live_sessions ("
+                    "id, stream_id, platform, started_at_ms, heat, viewer_count, audience_total, updated_at_ms"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(id) DO UPDATE SET "
+                    "heat=excluded.heat, "
+                    "viewer_count=excluded.viewer_count, "
+                    "audience_total=excluded.audience_total, "
+                    "updated_at_ms=excluded.updated_at_ms",
+                    (
+                        pk,
+                        session_id,
+                        platform or "unknown",
+                        updated_at_ms,
+                        heat,
+                        viewer_count,
+                        audience_total,
+                        updated_at_ms,
+                    ),
+                )
+
+        await self._run_in_executor(_exec)
+
+    async def end_live_session(self, *, session_id: str, ended_at_ms: int) -> bool:
+        """写入场次结束时间；返回是否命中已开行的场次（从未心跳过的场次无行可结）。"""
+        pk = session_id_to_pk(session_id)
+
+        def _exec() -> bool:
+            with self._manager.transaction() as conn:
+                cur = conn.execute(
+                    "UPDATE live_sessions SET ended_at_ms=?, updated_at_ms=? WHERE id=?",
+                    (ended_at_ms, ended_at_ms, pk),
+                )
+                return cur.rowcount > 0
+
+        return await self._run_in_executor(_exec)
+
+    async def get_live_session(self, *, session_id: str) -> Optional[sqlite3.Row]:
+        """按场次字符串 ID 查 ``live_sessions`` 单行；未开行返回 ``None``。"""
+        pk = session_id_to_pk(session_id)
+
+        def _exec() -> Optional[sqlite3.Row]:
+            with self._manager.transaction() as conn:
+                return conn.execute("SELECT * FROM live_sessions WHERE id=?", (pk,)).fetchone()
 
         return await self._run_in_executor(_exec)
 
@@ -760,20 +903,6 @@ class SQLiteStore:
 
         return await self._run_in_executor(_exec)
 
-    async def transaction(self):
-        """返回异步事务上下文管理器（与原始 ``manager.transaction`` 类似）。
-
-        用途：业务层批量操作需要显式事务边界时使用。一般简单读写可直接
-        ``await store.execute(...)``。
-        """
-        # 该方法在 SQLiteConnectionManager 上是同步 contextmanager，
-        # 因此把它包装成异步：asyncio 上下文层确保不会阻塞主循环
-        # （transaction 内部是 fast in-memory 操作）
-        raise NotImplementedError(
-            "显式事务请直接 await store.execute(...) 系列方法；"
-            "如必须使用底层事务，请用 store.manager.transaction() 自行 to_thread 封装"
-        )
-
     # -------------------- 内部 --------------------
 
     async def _run_in_executor(self, fn, /, *args, **kwargs):
@@ -818,7 +947,7 @@ class SQLiteStore:
                 logger.debug(f"SQLiteStore schema 已是当前版本: {SCHEMA_VERSION}")
 
 
-__all__ = ["SQLiteStore", "sqlite_store", "set_default_store"]
+__all__ = ["SQLiteStore", "sqlite_store", "set_default_store", "session_id_to_pk"]
 
 
 # 引入 ManagedSQLiteConnection 仅为类型导出便利（不在 __all__）

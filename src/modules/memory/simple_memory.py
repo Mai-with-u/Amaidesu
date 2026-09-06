@@ -32,16 +32,17 @@ SimpleMemory —— 关键词召回实现（Wave 3 / §1.50）
 签名禁止修改。
 
 ## 存储说明
-本模块在 SQLiteStore 数据库里**追加** 2 张表（与 11 表不在权威 schema 中，
-仅 SimpleMemory 内部用，命名加 ``_memory_`` 前缀避免与 11 表冲突）：
+本模块使用 SQLiteStore 数据库里 2 张**模块私有表**（``_`` 前缀表达"非业务
+数据平面、仅 SimpleMemory 读写"；DDL 权威在 ``storage/schema.py``，随
+``SQLiteStore.initialize()`` 统一建表，并纳入 ``SCHEMA_VERSION`` 版本管理）：
 - ``_memory_facts``：事实/事件记忆条目
 - ``_memory_profiles``：观众语义画像
 
-这两张表不是 wave-3 schema 权威定义的 11 张；SimpleMemory 内部数据隔离，
-未来接 A_Memorix 时整体替换。
+``SimpleMemory.initialize()`` 只做表自检，不再自带 DDL——建表职责单一归
+schema.py，避免两处 DDL 漂移。未来接 A_Memorix 时整体替换。
 
 ## 时间单位
-- Amaidesu 内部全毫秒（§1.53 9d）
+- Amaidesu 内部全毫秒
 - 接 A_Memorix 时在 adapter 层 ms → s（time_utils.ms_to_s/s_to_ms）——SimpleMemory
   走毫秒，零转换
 """
@@ -143,30 +144,6 @@ def _extract_keywords(query: str, max_keywords: int = 8) -> List[str]:
     return result[:max_keywords]
 
 
-# SimpleMemory 私有 DDL（不属 11 表，仅 SimpleMemory 后端使用）
-_SCHEMA_DDL = """
-CREATE TABLE IF NOT EXISTS _memory_facts (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    text          TEXT NOT NULL,
-    source        TEXT NOT NULL DEFAULT '',
-    tags          TEXT NOT NULL DEFAULT '',
-    importance    INTEGER NOT NULL DEFAULT 0,
-    timestamp_ms  INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS _memory_profiles (
-    person_id       TEXT PRIMARY KEY,
-    display_name    TEXT NOT NULL DEFAULT '',
-    tags            TEXT NOT NULL DEFAULT '',
-    summary         TEXT NOT NULL DEFAULT '',
-    updated_at_ms   INTEGER NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_memory_facts_timestamp ON _memory_facts(timestamp_ms);
-CREATE INDEX IF NOT EXISTS idx_memory_facts_source ON _memory_facts(source);
-"""
-
-
 class SimpleMemory(MemoryProvider):
     """关键词召回的记忆实现（SQLite 持久化）。"""
 
@@ -174,9 +151,13 @@ class SimpleMemory(MemoryProvider):
         self._store = store
 
     async def initialize(self) -> None:
-        """初始化：建私有表（幂等）。"""
-        await self._store.execute_script(_SCHEMA_DDL)
-        logger.debug("SimpleMemory 私有表已就绪")
+        """自检私有表已就位（DDL 由 SQLiteStore.initialize() 按 schema.py 统一建）。"""
+        for table in ("_memory_facts", "_memory_profiles"):
+            if not await self._store.table_exists(table):
+                raise RuntimeError(
+                    f"SimpleMemory 私有表 {table} 不存在：请先执行 SQLiteStore.initialize()（建表 DDL 权威在 storage/schema.py）"
+                )
+        logger.debug("SimpleMemory 私有表自检通过")
 
     # -------------------- 接口实现 --------------------
 

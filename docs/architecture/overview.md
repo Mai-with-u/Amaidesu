@@ -398,9 +398,15 @@ enabled = ["vts", "subtitle", "warudo", "obs"]  # 非 TTS 工具族：bind_core_
 
 1. **AudioStreamChannel 已拆除（2026-08-27）**。v2 pull 编排下无扇出场景，audio pub-sub 链路（`src/modules/streaming/`，300+ 行：AudioStreamChannel / AudioChunk / BackpressureStrategy）已删除；TTS 输出回归本地 `AudioDeviceManager.play_audio`（v2.0.10 由 `src/modules/tts/audio_device_manager.py` 上移至 `src/modules/audio/`，作为音频基础设施）；皮套口型同步责任短期由皮套软件自取本地音频流 / 中期由工具 invoke 能力重建。`LipSyncProcessor` 保留（无其他活跃调用方时仅作历史兜底，可按 git 历史回滚）。
 
-2. **存储记账器未从 payload 取 `simulated` 写入 SQLite 列**。`live_chat` / `gifts` / `super_chats` 表已有 `simulated INTEGER NOT NULL DEFAULT 0` 贯穿列（`src/modules/storage/schema.py:149/163/177`），但记账器写入链尚未从 `RoomMessagePayload.simulated` 读取该字段写入对应列。修复方向：记账器订阅 `room.message.*` 事件，从 payload 取值写入对应列；**不需升 `SCHEMA_VERSION`**（表结构已就位，仅缺数据迁移链）。本任务停在 payload 层标记完成（详见 ADR-006 §C 与 [模拟器指南 §4](../development/simulator-guide.md#4-simulated-溯源)）。
+2. **`tts.utterance.*` 订阅端接线尚未实现**。v2.0.10 三事件已发布，但当前生产代码**暂无订阅者**（字幕 Provider 由 StreamerAgent 通过 `speech` 文本直接 fire-and-forget，不订阅 utterance 事件；记账器同样预留）。字幕精准对齐是 utterance 事件的首要目标消费者，待字幕子系统接入事件总线后即可启用。详见 [事件系统 §TTS Utterance 域](event-system.md#tts-utterance-域v2010-新增) 与 [ADR-007 §后果](adr/007-tts-infrastructure-pipeline.md#后果consequences) 遗留项。
 
-3. **`tts.utterance.*` 订阅端接线尚未实现**。v2.0.10 三事件已发布，但当前生产代码**暂无订阅者**（字幕 Provider 由 StreamerAgent 通过 `speech` 文本直接 fire-and-forget，不订阅 utterance 事件；记账器同样预留）。字幕精准对齐是 utterance 事件的首要目标消费者，待字幕子系统接入事件总线后即可启用。详见 [事件系统 §TTS Utterance 域](event-system.md#tts-utterance-域v2010-新增) 与 [ADR-007 §后果](adr/007-tts-infrastructure-pipeline.md#后果consequences) 遗留项。
+3. **`game_events` 有写链但暂无数据源**。`StorageLedger` 已订阅 `game.*`（milestone / attention_required / error）落库 `game_events` 表，通路已就绪；但游戏代理（AI 玩家）尚未上线，全项目无发布方，表暂时为空。游戏代理落地后事件出现即自动落库，无需再改存储层。
+
+### 非缺口（设计如此，勿重复上报）
+
+- **`agenda_plan` 表无运行时写入**：原始大纲的权威源是 TOML 文件（`agenda_loader` 直接解析），该表保留接口但明确不做持久化（见 `agenda_store.py` 头注）。
+- **`enter` 事件不落库**：进场消息无对应明细表，属设计决定（`live_sessions` 心跳与进场是不同概念），`StorageLedger` 收到后 debug 日志丢弃。
+- **`simulated` 溯源已闭环**：`StorageLedger` 已从 `RoomMessagePayload.simulated` 端到端写穿 `live_chat` / `gifts` / `super_chats` 三表贯穿列，并有测试覆盖（`tests/modules/storage/test_storage_ledger.py::test_ledger_simulated_true_flows_to_column`）。
 
 > **v2.0.12 已闭环（§8 概念修正后最终态）**：原"渲染工具 `register_*_tools` 无自动调用点"——
 > - **TTS**：v2.0.12 起整体提升为基础设施，由 `src/modules/tts/build_tts_infrastructure(core [tts], event_bus)` 装配期直接构造引擎实例并注入 StreamerAgent，ToolRegistry 中零 TTS 条目；
@@ -418,6 +424,8 @@ enabled = ["vts", "subtitle", "warudo", "obs"]  # 非 TTS 工具族：bind_core_
 - [测试指南](../development/testing-guide.md) - 测试分层（agents/architecture/config/dashboard/integration/modules + characterization/mocks 支撑）
 
 ---
+
+*最后更新：2026-09-06（持久层写链补全：①`live_sessions` 心跳落链接通——`SQLiteStore.update_live_session_heartbeat` 首次心跳开行 + `end_live_session` 关闭链结账，`BackgroundMaintainer` 去除 hasattr 静默防御；②SimpleMemory 私有表 `_memory_facts`/`_memory_profiles` DDL 收编进 `storage/schema.py` 统一版本管理，`SCHEMA_VERSION` 升至 3，`SimpleMemory.initialize()` 改为表自检；③`llm_usage` 落库——`LLMManager` 构造器注入 `SQLiteStore`，成功调用旁路写明细，装配顺序调整为存储栈先于 LLM 服务；④`timeline_summary` + `topics` 落库——`BackgroundMaintainer` 摘要成功后写摘要历史与话题快照投影；⑤已知缺口清单重写：移除已闭环的 simulated 溯源条目，新增"非缺口"小节（agenda_plan/enter/simulated），新增 game_events 无写链条目；⑥删除 `SQLiteStore.transaction()` NotImplementedError 占位；⑦批次5：`StorageLedger` 扩展订阅 `game.*`（milestone/attention_required/error）落库 `game_events` 表，缺口清单对应条目改为「有写链但暂无数据源」。session_id→INTEGER 主键映射收敛为 `sqlite_store.session_id_to_pk` 单一权威，`StorageLedger._session_pk_to_int` 改为薄委托）*
 
 *最后更新：2026-09-05（世界发射器统一（ADR-006 修订）：MockCollector 整体删除——Mermaid 图 Ext 子图 Mock 节点与 Collectors 子图 CMock 节点移除、目录结构 collectors/mock/ 行删除、采集器组件表 mock_danmaku 行删除；确定性回放由 `SimulatorService` mode=replay 承载（详见 ADR-006 修订记录）。上下文四层架构落地：ContextService 定位为 L1 对话配对窗口——目录结构注释更新为"DialogueTurn 存取 + 启动时从 live_chat 回灌"；storage/ 目录注释补充 StorageLedger 唯一写穿入口（room.message.# + streamer.speech → live_chat/gifts/super_chats + viewers 统计）与 SQLiteStore 领域查询说明）*
 

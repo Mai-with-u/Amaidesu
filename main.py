@@ -60,6 +60,7 @@ from src.modules.subtitle import build_subtitle_infrastructure
 from src.modules.subtitle.backends import DashboardBackend
 from src.modules.tts import build_tts_infrastructure
 from src.modules.storage.storage_ledger import StorageLedger
+from src.modules.time_utils import now_ms
 from src.modules.tools import ToolRegistry
 from src.modules.tools.bootstrap import bind_core_tools
 from src.modules.tools.content_engine import StubContentEngine
@@ -331,9 +332,15 @@ async def create_app_components(
          event_recorder, collector_manager, agent_manager,
          simulator_service, sqlite_store, storage_ledger)
     """
+    # --- 存储与记忆（SQLiteStore + SimpleMemory）---
+    # 必须先于 LLMManager 构造：LLMManager 需要注入 store 做 llm_usage 落库
+    logger.info("初始化存储与记忆（SQLiteStore + SimpleMemory）...")
+    sqlite_store, memory = await build_memory_stack(config)
+    logger.info(f"存储与记忆已就绪（db={sqlite_store.db_path}）")
+
     # --- LLM 服务 ---
     logger.info("初始化 LLM 服务...")
-    llm_service = LLMManager()
+    llm_service = LLMManager(sqlite_store=sqlite_store)
     await llm_service.setup(config)
     logger.info("已创建 LLM 服务实例")
 
@@ -344,11 +351,6 @@ async def create_app_components(
     context_service = ContextService(config=context_service_config)
     await context_service.initialize()
     logger.info("已创建上下文服务实例")
-
-    # --- 存储与记忆（SQLiteStore + SimpleMemory）---
-    logger.info("初始化存储与记忆（SQLiteStore + SimpleMemory）...")
-    sqlite_store, memory = await build_memory_stack(config)
-    logger.info(f"存储与记忆已就绪（db={sqlite_store.db_path}）")
 
     # --- 启动回灌：ContextService ← live_chat（重启失忆修复）---
     # 必须在 StorageLedger 之前：回灌只读 live_chat，与后续订阅无依赖；但语义上
@@ -1069,6 +1071,13 @@ async def run_shutdown(
         logger.info("正在停止 StorageLedger...")
         await safe_log(storage_ledger.stop(), "StorageLedger")
         logger.info("StorageLedger 已停止")
+
+    # 场次结账：给本次直播的 live_sessions 行写 ended_at_ms（从未心跳开行的场次无行可结，返回 False）
+    if sqlite_store is not None:
+        await safe_log(
+            sqlite_store.end_live_session(session_id=_LIVE_SESSION_ID, ended_at_ms=now_ms()),
+            "live_sessions 场次结账",
+        )
 
     logger.info("等待待处理事件完成并清理 EventBus...")
     if event_bus is not None:

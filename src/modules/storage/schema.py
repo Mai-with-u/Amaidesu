@@ -1,22 +1,26 @@
 """
-存储 Schema 定义（Wave 3 / §1.50 / §1.53 9b 定案）
+存储 Schema 定义
 
-本模块是 13 张表的**单一事实源**，对应权威文档
-``.omo/drafts/amaidesu-v2-storage-schema.md``。如需变更表结构，先修改该
-权威文档再同步本文件。
+本模块是全部 SQLite 表的**单一事实源**：13 张业务表（11 张核心直播表 +
+2 张模拟器运行时表）+ 模块私有表（当前为 SimpleMemory 的 ``_memory_facts``
+/ ``_memory_profiles``）+ ``schema_migrations``。
+任何建表 DDL 都必须落在这里，不允许业务模块自带 ``CREATE TABLE``——否则
+表结构游离于 ``SCHEMA_VERSION`` 版本管理之外，迁移机制无法覆盖。
 
 ## 命名硬规则
-- 时间字段一律 ``*_ms``（毫秒 int，对齐 §1.44）
-- 场次叫 ``live_sessions``，消息流叫 ``live_chat``（§1.6 live chat 行业标准）
+- 时间字段一律 ``*_ms``（毫秒 int）
+- 场次叫 ``live_sessions``，消息流叫 ``live_chat``（live chat 行业标准）
 - ``live_chat`` / ``gifts`` / ``super_chats`` 表加 ``simulated`` 贯穿列
-  （§1.6 用户拍板：模拟数据用 False 默认 / True 标记，消费方 WHERE
-  ``simulated=0`` 排除模拟数据）
+  （模拟数据用 False 默认 / True 标记，消费方 WHERE ``simulated=0`` 排除模拟数据）
+- 模块私有表以 ``_`` 前缀命名，表达"非业务数据平面、仅所属模块读写"
 
 ## Schema 迁移机制
 - ``schema_migrations(version PK, applied_at_ms)``（复用 MaiBot 模式）
 - ``SCHEMA_VERSION`` 常量 = 当前权威版本
 - ``build_schema_sql()`` 返回完整建表 DDL（IF NOT EXISTS 幂等）
-- ``list_expected_tables()`` 返回期望表名（启动自检用）
+- ``list_expected_tables()`` 返回启动自检必须存在的业务表名（不含私有表：
+  私有表随所属模块后端启用与否而变化，不纳入"缺一即拒启"的闸门）
+- ``list_private_tables()`` 返回模块私有表名（所属模块自检用）
 """
 
 from __future__ import annotations
@@ -25,7 +29,7 @@ from dataclasses import dataclass
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级（见 AGENTS.md §"配置 Schema 变更规则"）
-SCHEMA_VERSION: int = 2
+SCHEMA_VERSION: int = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,7 +41,7 @@ class SchemaMigration:
 
 
 # =============================================================================
-# 13 张表 + schema_migrations（按权威文档顺序）
+# 13 张业务表 + 模块私有表 + schema_migrations
 # =============================================================================
 # - live_sessions           场次 + 直播实时状态（一场一行）
 # - live_chat               全量直播消息流（行业 live chat）
@@ -52,6 +56,8 @@ class SchemaMigration:
 # - llm_usage               LLM 调用记录
 # - sim_personas            模拟器常驻观众人设（运行时数据，WebUI 管理）
 # - sim_gifts               模拟器礼物目录（运行时数据，WebUI 管理）
+# - _memory_facts           SimpleMemory 事实记忆（模块私有）
+# - _memory_profiles        SimpleMemory 人物画像（模块私有）
 # - schema_migrations       版本管理
 # =============================================================================
 
@@ -98,13 +104,18 @@ def build_schema_sql() -> str:
         # sim_gifts —— 模拟器礼物目录
         + _SIM_GIFTS_SQL
         + "\n"
+        # _memory_facts / _memory_profiles —— SimpleMemory 模块私有表（含索引）
+        + _MEMORY_FACTS_SQL
+        + "\n"
+        + _MEMORY_PROFILES_SQL
+        + "\n"
         # schema_migrations —— 版本管理
         + _SCHEMA_MIGRATIONS_SQL
     )
 
 
 def list_expected_tables() -> List[str]:
-    """返回期望的全部表名（含 schema_migrations），用于启动自检/测试断言。"""
+    """返回启动自检必须存在的业务表名（含 schema_migrations），缺一即拒启。"""
     return [
         "live_sessions",
         "live_chat",
@@ -120,6 +131,14 @@ def list_expected_tables() -> List[str]:
         "sim_personas",
         "sim_gifts",
         "schema_migrations",
+    ]
+
+
+def list_private_tables() -> List[str]:
+    """返回模块私有表名（``_`` 前缀），供所属模块自检；不进入启动闸门。"""
+    return [
+        "_memory_facts",
+        "_memory_profiles",
     ]
 
 
@@ -328,6 +347,34 @@ CREATE TABLE IF NOT EXISTS sim_gifts (
 """.strip()
 
 
+# --- SimpleMemory 模块私有表（关键词召回的事实记忆 + 人物画像）---
+# 索引随表建立：召回按时间倒序取窗口、按来源过滤，两者都是热路径。
+
+_MEMORY_FACTS_SQL = """
+CREATE TABLE IF NOT EXISTS _memory_facts (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    text          TEXT NOT NULL,
+    source        TEXT NOT NULL DEFAULT '',
+    tags          TEXT NOT NULL DEFAULT '',
+    importance    INTEGER NOT NULL DEFAULT 0,
+    timestamp_ms  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memory_facts_timestamp ON _memory_facts(timestamp_ms);
+CREATE INDEX IF NOT EXISTS idx_memory_facts_source ON _memory_facts(source);
+""".strip()
+
+
+_MEMORY_PROFILES_SQL = """
+CREATE TABLE IF NOT EXISTS _memory_profiles (
+    person_id       TEXT PRIMARY KEY,
+    display_name    TEXT NOT NULL DEFAULT '',
+    tags            TEXT NOT NULL DEFAULT '',
+    summary         TEXT NOT NULL DEFAULT '',
+    updated_at_ms   INTEGER NOT NULL
+);
+""".strip()
+
+
 _SCHEMA_MIGRATIONS_SQL = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version        INTEGER PRIMARY KEY,
@@ -341,4 +388,5 @@ __all__ = [
     "SchemaMigration",
     "build_schema_sql",
     "list_expected_tables",
+    "list_private_tables",
 ]

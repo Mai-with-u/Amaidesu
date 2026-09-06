@@ -372,10 +372,11 @@ class StreamerAgent(BaseAgent):
             background_config,
             room_state=self._room_state,
             llm_service=llm_manager,
-            live_session_store=sqlite_store,  # duck-typed: update_live_session_heartbeat
+            live_session_store=sqlite_store,  # live_sessions 心跳落库（SQLiteStore.update_live_session_heartbeat）
             context_service=context_service,
             memory=memory,  # 记忆写入面：摘要 → ingest；None 时降级
             event_bus=event_bus,  # 高价值事件（礼物/SC）→ ingest
+            sqlite_store=sqlite_store,  # 摘要落地：timeline_summary + topics 快照
         )
 
         # 后台 flush 循环（Agent 主循环）

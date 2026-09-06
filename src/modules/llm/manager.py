@@ -9,12 +9,15 @@ LLM 管理器 - 核心基础设施
 import asyncio
 import time
 import uuid
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
 from src.modules.llm.clients.base import get_client_impl
 from src.modules.logging import get_logger
+
+if TYPE_CHECKING:
+    from src.modules.storage.sqlite_store import SQLiteStore
 
 # === 数据类定义 ===
 
@@ -113,7 +116,7 @@ class LLMManager:
         ```
     """
 
-    def __init__(self):
+    def __init__(self, sqlite_store: Optional["SQLiteStore"] = None):
         self.logger = get_logger("LLMManager")
         self._clients: Dict[str, Any] = {}  # profile_name -> client_instance
         self._profile_configs: Dict[str, Dict[str, Any]] = {}  # profile_name -> merged config (provider + profile)
@@ -121,6 +124,8 @@ class LLMManager:
         self._config: Dict[str, Any] = {}
         self._token_manager = None
         self._retry_config = RetryConfig()
+        # 注入后每次成功调用旁路写一条 llm_usage（失败降级不阻断调用）；None 时不落库
+        self._sqlite_store = sqlite_store
 
     async def setup(self, config: Dict[str, Any]) -> None:
         """
@@ -572,6 +577,15 @@ class LLMManager:
                         total_tokens=result.usage.get("total_tokens", 0),
                     )
 
+                # 旁路写 llm_usage 明细（失败降级，不影响调用链）
+                if result.success and result.usage and self._sqlite_store:
+                    await self._persist_llm_usage(
+                        client_type=client_type,
+                        method=method,
+                        result=result,
+                        duration_ms=int((time.time() - start_time) * 1000),
+                    )
+
                 # 记录成功的请求历史
                 self._record_request_history(
                     request_id=request_id,
@@ -604,6 +618,46 @@ class LLMManager:
         )
 
         return result
+
+    async def _persist_llm_usage(
+        self,
+        *,
+        client_type: str,
+        method: str,
+        result: LLMResponse,
+        duration_ms: int,
+    ) -> None:
+        """把一次成功调用的 token 消耗写入 ``llm_usage`` 表（``SQLiteStore`` 注入时生效）。
+
+        费用口径与请求历史一致（同走 ``TokenUsageManager._calculate_cost``）；
+        任何写入失败只记 warning，绝不阻断 LLM 调用链。
+        """
+        try:
+            usage = result.usage or {}
+            cost = 0.0
+            if self._token_manager is not None:
+                cost_info = self._token_manager._calculate_cost(
+                    result.model or client_type,
+                    usage.get("prompt_tokens", 0),
+                    usage.get("completion_tokens", 0),
+                )
+                cost = float(cost_info.get("cost", 0.0))
+            provider_name = self._profile_configs.get(client_type, {}).get("provider") or "unknown"
+            await self._sqlite_store.insert_llm_usage(
+                model_name=result.model or client_type,
+                provider_name=str(provider_name),
+                request_type=method,
+                prompt_tokens=int(usage.get("prompt_tokens", 0)),
+                completion_tokens=int(usage.get("completion_tokens", 0)),
+                total_tokens=int(usage.get("total_tokens", 0)),
+                cache_hit_tokens=int(usage.get("cache_hit_tokens", 0)),
+                cache_miss_tokens=int(usage.get("cache_miss_tokens", 0)),
+                cost=cost,
+                duration_ms=duration_ms,
+                profile_name=client_type,
+            )
+        except Exception as exc:  # noqa: BLE001 记账旁路，失败不阻断调用链
+            self.logger.warning(f"llm_usage 落库失败: {exc}")
 
     def _record_request_history(
         self,

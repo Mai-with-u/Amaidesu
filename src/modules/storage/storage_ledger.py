@@ -17,14 +17,16 @@ StorageLedger —— 直播间消息流落库记账器
   记 debug 日志后跳过（保持与现有"单条失败/缺关键字段降级"风格一致）。
   若 payload.target_user_id 非空，顺路调用 upsert_viewer_replied 把该观众的
   replied_count/interaction_count +1，形成"主播回复 → 观众被回复计数"闭环。
-- 端到端贯通 ``simulated`` 字段：payload.simulated → 表列 simulated INTEGER（主播发言天然非模拟，记 False）
+- 订阅 ``game.*``（milestone / attention_required / error，按 payload.event_type 判别），写入 game_events 表。
+  游戏代理（AI 玩家）尚未上线，当前无发布方——写链先行接通，事件出现即落库。
+- 端到端贯通 ``simulated`` 字段：payload.simulated → 表列 simulated INTEGER（主播发言/游戏事件天然非模拟，记 False）
 - 写入异常降级：单条失败 try/except 记 error 日志，不抛出、不影响主循环（即使记账器挂了，直播流也跑）
 
 ## 不做什么
-- 不主动建 live_sessions 行（由未来的 session_manager 负责），这里只把
+- 不主动建 live_sessions 行（由心跳首次写入即开行），这里只把
   payload.live_session_id（str）通过稳定 hash 映射为 INTEGER 主键。
 - 不做统计查询（消费者层 ``WHERE simulated=0``）
-- 不改 schema（表结构冻结在 v1；simulated 列已存在）
+- 不改 schema（表结构权威在 schema.py）
 
 ## 装配
 - 由 main.py 组合根构造：传入 EventBus + SQLiteStore，调用 ``await ledger.start()``
@@ -34,10 +36,10 @@ StorageLedger —— 直播间消息流落库记账器
 
 from __future__ import annotations
 
-import hashlib
 from typing import TYPE_CHECKING, Callable, Dict, Optional
 
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.room import (
     GiftInfo,
     RoomMessagePayload,
@@ -46,7 +48,7 @@ from src.modules.events.payloads.room import (
 )
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.logging import get_logger
-from src.modules.storage.sqlite_store import SQLiteStore
+from src.modules.storage.sqlite_store import SQLiteStore, session_id_to_pk
 from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:
@@ -58,17 +60,17 @@ logger = get_logger("StorageLedger")
 
 # 通配订阅名：覆盖 room.message.danmaku/gift/super_chat/enter 四类
 _ROOM_MESSAGE_WILDCARD = "room.message.#"
+# 通配订阅名：覆盖 game.milestone / game.attention_required / game.error（单层）
+_GAME_EVENT_WILDCARD = "game.*"
 
 
 def session_pk_to_int(session_id: str) -> int:
-    """把 payload.live_session_id（str）映射为 live_chat.live_session_id（INTEGER）。
+    """把 payload.live_session_id（str）映射为表主键（INTEGER）。
 
-    策略：MD5 前 8 hex 字符 → 32 位无符号整数。稳定、跨进程一致、无外部依赖。
-    数值无业务语义，仅做 FK；写入（StorageLedger）与读取（如模拟器的世界
-    窗口查询）必须共用本函数，保证同一 session 字符串映射到同一整数主键。
+    薄委托：权威算法在 ``sqlite_store.session_id_to_pk``（心跳开行、明细写入、
+    启动回灌共用）。保留本模块级名字是因为既有消费方（如模拟器服务）从这里导入。
     """
-    digest = hashlib.md5(session_id.encode("utf-8")).hexdigest()[:8]
-    return int(digest, 16)
+    return session_id_to_pk(session_id)
 
 
 class StorageLedger:
@@ -115,11 +117,20 @@ class StorageLedger:
         )
         self._subscriptions[CoreEvents.STREAMER_SPEECH] = speech_handler
 
+        game_handler = self._on_game_event
+        self.event_bus.on(
+            _GAME_EVENT_WILDCARD,
+            game_handler,
+            model_class=GamePayload,
+        )
+        self._subscriptions[_GAME_EVENT_WILDCARD] = game_handler
+
         self._started = True
         logger.info(
             f"StorageLedger 已订阅 {_ROOM_MESSAGE_WILDCARD}"
             "（danmaku→live_chat / gift→gifts / super_chat→super_chats / enter→debug 丢弃）"
-            f" + {CoreEvents.STREAMER_SPEECH}（→live_chat, sender_role=assistant）",
+            f" + {CoreEvents.STREAMER_SPEECH}（→live_chat, sender_role=assistant）"
+            f" + {_GAME_EVENT_WILDCARD}（milestone/attention_required/error→game_events）",
         )
 
     async def stop(self) -> None:
@@ -261,12 +272,44 @@ class StorageLedger:
                 exc_info=True,
             )
 
+    async def _on_game_event(
+        self,
+        event_name: str,
+        payload: GamePayload,
+        source: str,
+    ) -> None:
+        """``game.*`` 通配回调：游戏里程碑/安全阀/异常写入 game_events 表。
+
+        ``live_session_id`` 优先取 payload 自带值（游戏代理知道自己身处哪场直播）；
+        写入异常隔离：单条失败仅记 error 日志，不抛出。
+        """
+        try:
+            live_pk = self._session_pk(payload.live_session_id)
+            await self.sqlite_store.execute(
+                "INSERT INTO game_events (live_session_id, game, event_type, message, scene, timestamp_ms) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    live_pk,
+                    payload.game,
+                    payload.event_type,
+                    payload.message,
+                    payload.scene or None,
+                    payload.timestamp_ms,
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001 边界处吸收 + 日志
+            logger.error(
+                f"StorageLedger 写入游戏事件失败（event={event_name}, "
+                f"event_type={getattr(payload, 'event_type', '?')}）：{exc}",
+                exc_info=True,
+            )
+
     # -------------------- session_id 字符串 → live_chat.live_session_id INTEGER 映射 --------------------
 
     @staticmethod
     def _session_pk_to_int(session_id: str) -> int:
-        """委托模块级 ``session_pk_to_int``（写入与读取共用的唯一映射实现）。"""
-        return session_pk_to_int(session_id)
+        """薄委托：权威算法在 ``sqlite_store.session_id_to_pk``（单一映射实现）。"""
+        return session_id_to_pk(session_id)
 
     def _session_pk(self, session_id: str) -> int:
         cached = self._session_pk_cache.get(session_id)
