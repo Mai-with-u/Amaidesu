@@ -8,9 +8,10 @@ ToolRegistry —— 工具注册中心
 - 可选挂载 ``EventBus``：每次调用完成后 emit ``tool.result.<name>``，
   供 Dashboard 溯源（broadcaster 通配订阅 ``tool.result.#``）
 
-接口约定：register（去重保留先注册）/ list_tools / invoke
-（异常→error result 兜底）/ to_llm_definitions（内部→LLM 转换层，
-解耦协议）
+接口约定：register（去重保留先注册）/ register_provider（注册名统一
+``<provider>_<工具名>`` 前缀 + 记录 provider 声明的分类）/ list_tools /
+list_categories / invoke（异常→error result 兜底）/ to_llm_definitions
+（内部→LLM 转换层，解耦协议）
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import time
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Iterable, List, Optional
 
 from src.modules.events.payloads.tool_result import ToolResultPayload
@@ -37,6 +39,23 @@ ToolImplCallable = Callable[[ToolInvocation], Awaitable[ToolExecutionResult]]
 
 
 logger = get_logger("ToolRegistry")
+
+
+def _resolve_registered_name(spec: ToolSpec) -> str:
+    """把声明名解析为注册名（``<provider>_<name>``，无条件）。
+
+    注册名规则：``注册名 = <provider>_<工具名>``。provider 是全局唯一的
+    提供者名、工具名 provider 内唯一，二者拼出的注册名全局唯一，且满足
+    OpenAI / Anthropic function calling 对工具名字符集的要求（分隔符 `_`，
+    不用 `:`）。spec.name 已带 ``<provider>_`` 前缀时原样返回（存量 provider
+    对齐后常见）；未带则补前缀。provider 为空（匿名工具）时不做改写。
+    """
+    if not spec.provider:
+        return spec.name
+    prefix = f"{spec.provider}_"
+    if spec.name.startswith(prefix):
+        return spec.name
+    return f"{prefix}{spec.name}"
 
 
 # =============================================================================
@@ -93,6 +112,8 @@ class ToolRegistry:
         self._tools: Dict[str, tuple[ToolSpec, ToolImplCallable]] = {}
         # Provider 引用（仅诊断 / 重复检测）
         self._providers: List[ToolProvider] = []
+        # 提供者名 → 分类（provider 自声明；注册时记录，供 category 查询/过滤）
+        self._categories: Dict[str, str] = {}
         # 可选事件总线：挂载后每次调用完成 emit tool.result.<name>
         self._event_bus = event_bus
 
@@ -117,31 +138,74 @@ class ToolRegistry:
         return self.register(spec, impl)
 
     def register_provider(self, provider: ToolProvider) -> int:
-        """注册一个 Provider 的所有工具。返回新注册数（去重不计）。"""
+        """注册一个 Provider 的所有工具。返回新注册数（去重不计）。
+
+        注册名统一改写为 ``<provider>_<工具名>``（规则见
+        ``_resolve_registered_name``）：spec 未带前缀时用 ``dataclasses.replace``
+        拷贝改写 name 后再注册，**不污染** provider ``list_tools()`` 返回的
+        原 spec 对象。provider 声明的 ``category`` 一并记录（按 spec.provider
+        提供者名归组，供 ``list_categories()`` / ``list_tools(category=)`` 查询）。
+        """
         if provider in self._providers:
             logger.debug(f"Provider '{provider.name}' 已注册过（保留）")
             return 0
         self._providers.append(provider)
+        category = getattr(provider, "category", "") or ""
         new_count = 0
         for spec in provider.list_tools():
-            if self.register(spec, provider.invoke):
+            registered_name = _resolve_registered_name(spec)
+            reg_spec = spec
+            if registered_name != spec.name:
+                # 拷贝改写，避免把前缀写回 provider 原 spec（list_tools 可重复调用）
+                reg_spec = replace(spec, name=registered_name)
+            self._record_category(spec.provider, category)
+            if self.register(reg_spec, provider.invoke):
                 new_count += 1
         logger.info(f"Provider '{provider.name}' 已注册（含 {new_count} 个新工具，总数={len(self._tools)}）")
         return new_count
 
+    def _record_category(self, provider_name: str, category: str) -> None:
+        """记录"提供者名 → 分类"映射（先注册保留，冲突仅记日志）。"""
+        if not provider_name or not category:
+            return
+        prev = self._categories.get(provider_name)
+        if prev is None:
+            self._categories[provider_name] = category
+        elif prev != category:
+            logger.warning(f"提供者 '{provider_name}' 分类冲突：已记录 '{prev}'，忽略新声明 '{category}'")
+
     # -------------------- 查询 --------------------
 
-    def list_tools(self, provider: Optional[str] = None) -> List[ToolSpec]:
+    def list_tools(
+        self,
+        provider: Optional[str] = None,
+        category: Optional[str] = None,
+    ) -> List[ToolSpec]:
         """返回所有已注册工具的 spec。
 
         Args:
             provider: 可选过滤（提供者标识，如 "vts" / "warudo" /
-                "obs" / "vision" / "maicraft"）；None 返回全部。
+                "obs" / "vision" / "memory" / "maicraft"）；None 返回全部。
+            category: 可选过滤（提供者自声明的分类，如 "avatar" /
+                "studio" / "game"）；None 不按分类过滤。
+
+        Returns:
+            满足条件的 spec 列表（两个过滤条件为 AND 关系）。
         """
         specs = [spec for spec, _ in self._tools.values()]
         if provider is not None:
             specs = [s for s in specs if s.provider == provider]
+        if category is not None:
+            specs = [s for s in specs if self._categories.get(s.provider) == category]
         return specs
+
+    def list_categories(self) -> List[str]:
+        """返回当前已注册提供者声明的全部分类（去重、按名排序）。
+
+        分类由 provider 注册时自声明（ToolProvider.category）；本方法暴露
+        给后端查询（如 Dashboard 工具管理页按分类分组）。
+        """
+        return sorted({c for c in self._categories.values() if c})
 
     def get(self, name: str) -> Optional[ToolSpec]:
         """按名查 spec。"""
@@ -225,13 +289,14 @@ class ToolRegistry:
         self,
         *,
         provider: Optional[str] = None,
+        category: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """返回 LLM 视角的工具定义列表（OpenAI 风格 function calling 形状）。
 
         这是与 LLM 协议层之间的转换点（解耦 ToolSpec 与具体 LLM 协议）。
         """
         definitions: List[Dict[str, Any]] = []
-        for spec in self.list_tools(provider=provider):
+        for spec in self.list_tools(provider=provider, category=category):
             entry: Dict[str, Any] = {
                 "name": spec.name,
                 "description": spec.description,
@@ -253,6 +318,7 @@ class ToolRegistry:
         """清空所有注册（主要用于测试）。"""
         self._tools.clear()
         self._providers.clear()
+        self._categories.clear()
         logger.debug("ToolRegistry 已清空")
 
     # 兼容 inspect / debug

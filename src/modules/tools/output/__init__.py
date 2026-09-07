@@ -1,8 +1,8 @@
-"""Output 域的"残留"工具子包入口
+"""Output 分类的"残留"工具子包入口
 
-经过 avatar / studio / vision 域迁移后，``src/modules/tools/output/`` 仅保留
-未迁移到对应域的子包（当前为 ``remote_stream/``）。avatar 域的 vts / warudo / vrchat
-位于 ``src/modules/avatar/``，studio 域的 obs 位于 ``src/modules/studio/obs/``。
+经过 avatar / studio / vision 分类迁移后，``src/modules/tools/output/`` 仅保留
+未迁移到对应分类的子包（当前为 ``remote_stream/``）。avatar 分类的 vts / warudo / vrchat
+位于 ``src/modules/avatar/``，studio 分类的 obs 位于 ``src/modules/studio/obs/``。
 本文件仅作为该残留子包的转发入口，避免下游 ``from src.modules.tools.output import ...``
 历史用法静默失效。
 

@@ -64,6 +64,9 @@ class VRChatProvider:
 
     PROVIDER_NAME = "vrchat"
 
+    # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）
+    category = "avatar"
+
     # 手势名称到 VRChat OSC 整数值的映射
     # 参考: https://docs.vrchat.com/docs/osc-as-a-parameter#emotes
     GESTURE_MAP: Dict[str, int] = {

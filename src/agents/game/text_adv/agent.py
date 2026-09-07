@@ -3,16 +3,16 @@
 设计：
 - 继承 ``BaseAgent``（协议六面全部实现）
 - 构造注入依赖（llm/prompt/event_bus/tool_registry/content_engine/...）
-- 自带 game 专属工具（``text_adv_choose_option`` / ``text_adv_get_story``），provider="game"
-- 复用公用感知工具 ``look_at_screen``（provider="builtin"）—— 通过 ToolRegistry 调
-- 复用公用 content_engine 控制面（provider="builtin"）
+- 自带 game 分类专属工具（``text_adv_choose_option`` / ``text_adv_get_story``），provider="text_adv"
+- 复用公用感知工具（注册名 ``vision_look_at_screen``，provider="vision"）—— 通过 ToolRegistry 调
+- 复用公用 content_engine 控制面（provider="content_engine"）
 - 内部状态 ``TextAdvGameAgentState``（内容状态内部自由）
-- 感知-决策-推进闭环：``on_state_change`` → look_at_screen → decide → text_adv_choose_option
+- 感知-决策-推进闭环：``on_state_change`` → vision_look_at_screen → decide → text_adv_choose_option
 - 不继承任何"组合式引擎"（无组合式引擎定案）
 
 协议六面（最小契约）：
 - 生命周期：start/stop/cleanup（默认实现）
-- 工具提供：list_tools() → text_adv_choose_option + text_adv_get_story（provider="game"）
+- 工具提供：list_tools() → text_adv_choose_option + text_adv_get_story（provider="text_adv"）
 - 事件上报：emit game.milestone / game.attention_required / game.error
 - 状态读写：内部 TextAdvGameAgentState（内容状态）
 - 健康：BaseAgent 心跳（默认实现）
@@ -97,8 +97,8 @@ class TextAdvGameAgent(BaseAgent):
     实现方式：
     - 零框架改动：本文件**不修改**任何 ``modules/agents/`` / ``modules/tools/`` 文件
     - 构造注入：所有依赖经 ``__init__`` 参数传入（可 mock / 可替换）
-    - list_tools：仅声明 Agent 专属工具（provider="game"），公用感知工具不声明
-    - 感知复用：通过 ``ToolRegistry.invoke("look_at_screen")`` 调公用工具
+    - list_tools：仅声明 Agent 专属工具（provider="text_adv"），公用感知工具不声明
+    - 感知复用：通过 ``ToolRegistry.invoke("vision_look_at_screen")`` 调公用工具
     - 推进专属："text_adv_choose_option" 翻译为 content_engine 输入
     """
 
@@ -191,7 +191,7 @@ class TextAdvGameAgent(BaseAgent):
     # ==================================================================
 
     def list_tools(self) -> Iterable[ToolSpec]:
-        """声明 Agent 专属工具（provider="game"）。"""
+        """声明 Agent 专属工具（provider="text_adv"）。"""
         return [build_choose_option_spec(), build_get_story_spec()]
 
     def _register_tools(self) -> None:
@@ -297,11 +297,11 @@ class TextAdvGameAgent(BaseAgent):
             "engine_input_accepted": False,
         }
 
-        # ---- 感知（调公用 look_at_screen）----
+        # ---- 感知（调公用 vision_look_at_screen）----
         screen_text = new_screen_text
         try:
             perception = await self._tool_registry.invoke(
-                _make_invocation("look_at_screen", arguments={}, source=self.name)
+                _make_invocation("vision_look_at_screen", arguments={}, source=self.name)
             )
             self._perception_count += 1
             result["perception_called"] = True

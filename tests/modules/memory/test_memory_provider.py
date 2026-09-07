@@ -26,9 +26,7 @@ from typing import AsyncGenerator, Generator
 import pytest
 
 from src.modules.memory import (
-    MemoryHit,
     MemoryProvider,
-    MemoryWriteResult,
     PersonProfile,
     QueryMemoryToolProvider,
     SimpleMemory,
@@ -348,7 +346,7 @@ async def test_query_tool_empty_query_handled(memory: SimpleMemory) -> None:
 
 
 async def test_query_tool_via_tool_registry(memory: SimpleMemory) -> None:
-    """query_memory provider 注册到 ToolRegistry 后能正常 invoke。"""
+    """query_memory provider 注册到 ToolRegistry 后能正常 invoke（注册名带 memory_ 前缀）。"""
     await memory.ingest("Minecraft 中怎么合成下界合金？", source="seed")
 
     provider = QueryMemoryToolProvider(memory=memory)
@@ -356,8 +354,8 @@ async def test_query_tool_via_tool_registry(memory: SimpleMemory) -> None:
     registered = registry.register_provider(provider)
     assert registered == 1
 
-    # 已知工具
-    res = await registry.invoke(ToolInvocation(tool_name="query_memory", arguments={"query": "合金"}))
+    # 注册名 = memory_query_memory
+    res = await registry.invoke(ToolInvocation(tool_name="memory_query_memory", arguments={"query": "合金"}))
     assert res.success is True
     assert "合金" in res.content
 

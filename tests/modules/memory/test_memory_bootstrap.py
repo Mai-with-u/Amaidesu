@@ -15,7 +15,7 @@ memory/bootstrap.py 单元测试（Wave 8 / 记忆接线修复）
 from __future__ import annotations
 
 from pathlib import Path
-from typing import AsyncGenerator, Generator
+from typing import AsyncGenerator
 
 import pytest
 
@@ -229,14 +229,15 @@ async def test_bind_memory_tools_registers_query_memory(
     registry = ToolRegistry()
     new_count = bind_memory_tools(registry, mem)
     assert new_count == 1
-    assert "query_memory" in registry
+    # 注册名 = <provider>_<工具名>（provider="memory"）
+    assert "memory_query_memory" in registry
     assert len(registry) == 1
 
 
 async def test_bind_memory_tools_invoke_recalls_ingested_fact(
     built_stack: tuple[SQLiteStore, SimpleMemory],
 ) -> None:
-    """端到端：build → bind → ingest → invoke query_memory 召回中文事实。"""
+    """端到端：build → bind → ingest → invoke memory_query_memory 召回中文事实。"""
     _, mem = built_stack
     await mem.ingest("弹幕互动很有趣，今天观众很多", source="seed", importance=10)
 
@@ -245,7 +246,7 @@ async def test_bind_memory_tools_invoke_recalls_ingested_fact(
 
     # 用部分关键词触发召回（短 CJK 段取整段）
     res = await registry.invoke(
-        ToolInvocation(tool_name="query_memory", arguments={"query": "弹幕互动", "top_k": 3})
+        ToolInvocation(tool_name="memory_query_memory", arguments={"query": "弹幕互动", "top_k": 3})
     )
     assert res.success is True
     assert "弹幕" in res.content or "互动" in res.content

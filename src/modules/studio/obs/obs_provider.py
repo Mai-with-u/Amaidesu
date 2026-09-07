@@ -62,12 +62,15 @@ _OBS_SET_VISIBILITY_SCHEMA: Dict[str, Any] = {
 class OBSProvider:
     """OBS ToolProvider（send_text / switch_scene / set_source_visibility）"""
 
-    PROVIDER_NAME = "obs_control"
+    PROVIDER_NAME = "obs"
+
+    # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）
+    category = "studio"
 
     class ConfigSchema(BaseConfig):
         """OBS 控制配置"""
 
-        type: str = "obs_control"
+        type: str = "obs"
         host: str = Field(default="localhost", description="OBS WebSocket 主机地址")
         port: int = Field(default=4455, ge=1, le=65535, description="OBS WebSocket 端口")
         password: Optional[str] = Field(default=None, description="OBS WebSocket 密码")

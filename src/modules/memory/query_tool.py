@@ -14,7 +14,7 @@ LLM 可调用 ``query_memory(query, top_k)`` 返回相关记忆；结果以
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, ClassVar, List, Optional
 
 from src.modules.logging import get_logger
 from src.modules.memory.provider import MemoryProvider
@@ -57,6 +57,9 @@ class QueryMemoryToolProvider:
 
     memory: Optional[MemoryProvider] = None
 
+    # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）
+    category: ClassVar[str] = "memory"
+
     @property
     def name(self) -> str:
         return "QueryMemoryToolProvider"
@@ -65,9 +68,11 @@ class QueryMemoryToolProvider:
         yield QUERY_MEMORY_SPEC
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
+        # 注册名（memory_query_memory）即调用方使用的名；结果回显它保持溯源一致
+        tool_name = invocation.tool_name
         if self.memory is None:
             return ToolExecutionResult(
-                tool_name="query_memory",
+                tool_name=tool_name,
                 success=False,
                 error_message="query_memory 工具未绑定 MemoryProvider",
             )
@@ -81,7 +86,7 @@ class QueryMemoryToolProvider:
 
         if not query:
             return ToolExecutionResult(
-                tool_name="query_memory",
+                tool_name=tool_name,
                 success=True,
                 content="（空查询）",
             )
@@ -91,13 +96,13 @@ class QueryMemoryToolProvider:
         except Exception as exc:  # noqa: BLE001 - 边界
             logger.error(f"query_memory recall 失败: {exc}", exc_info=True)
             return ToolExecutionResult(
-                tool_name="query_memory",
+                tool_name=tool_name,
                 success=False,
                 error_message=f"recall 失败: {type(exc).__name__}: {exc}",
             )
 
         return ToolExecutionResult(
-            tool_name="query_memory",
+            tool_name=tool_name,
             success=True,
             content=_format_hits(hits),
         )

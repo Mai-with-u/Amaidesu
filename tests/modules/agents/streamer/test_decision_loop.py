@@ -283,11 +283,10 @@ async def test_decision_loop_proactive_tool_invoke():
         agenda_ready=False,
     )
 
-    registry = ToolRegistry()
-    registry.register_provider(provider)
-
+    # 主播内部协议工具不经 ToolRegistry 注册（Y 模型），按生产形态直调
+    # provider.invoke（裸名分发）
     # 房间无最近消息 → 冷场 → 应触发 cold
-    result = await registry.invoke(ToolInvocation(tool_name="should_speak_proactively", arguments={}, source="test"))
+    result = await provider.invoke(ToolInvocation(tool_name="should_speak_proactively", arguments={}, source="test"))
     # 内容可能是 "cold" 或 ""（取决于状态）
     assert result is not None
 
@@ -302,11 +301,10 @@ async def test_decision_loop_parse_command_tool():
         command_mappings={"chat": "chat", "attack": "attack"},
     )
 
-    registry = ToolRegistry()
-    registry.register_provider(provider)
-
+    # 主播内部协议工具不经 ToolRegistry 注册（Y 模型），按生产形态直调
+    # provider.invoke（裸名分发）
     # 测试合法命令
-    result = await registry.invoke(
+    result = await provider.invoke(
         ToolInvocation(tool_name="parse_command", arguments={"text": "/chat hello world"}, source="test")
     )
     assert result.success is True
@@ -318,7 +316,7 @@ async def test_decision_loop_parse_command_tool():
     assert parsed["supported"] is True
 
     # 测试非命令文本
-    result = await registry.invoke(
+    result = await provider.invoke(
         ToolInvocation(tool_name="parse_command", arguments={"text": "普通弹幕"}, source="test")
     )
     assert result.success is True
@@ -326,7 +324,7 @@ async def test_decision_loop_parse_command_tool():
     assert parsed["is_command"] is False
 
     # 测试不支持的命令
-    result = await registry.invoke(
+    result = await provider.invoke(
         ToolInvocation(tool_name="parse_command", arguments={"text": "/unknown foo"}, source="test")
     )
     assert result.success is True

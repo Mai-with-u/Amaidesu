@@ -132,6 +132,9 @@ class WarudoProvider:
 
     PROVIDER_NAME = "warudo"
 
+    # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）
+    category = "avatar"
+
     def __init__(
         self,
         config: Dict[str, Any],

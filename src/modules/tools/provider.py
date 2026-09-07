@@ -19,7 +19,7 @@ ToolProvider Protocol
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Iterable, List, Optional, Protocol, runtime_checkable
+from typing import Any, Awaitable, Callable, ClassVar, Iterable, List, Optional, Protocol, runtime_checkable
 
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 
@@ -32,6 +32,12 @@ ToolImpl = Callable[[ToolInvocation], Awaitable[ToolExecutionResult]]
 @runtime_checkable
 class ToolProvider(Protocol):
     """工具提供方协议"""
+
+    # 提供者自声明归属分类（avatar / studio / vision / memory / game / mcp /
+    # framework 等）。三个概念正交：provider = 提供者名（全局唯一，决定注册名
+    # 前缀）、category = 分组（供查询/过滤）、tools.toml 段 = 配置地址。
+    # 带默认值 → 实现方可省略；registry 以 getattr 兜底读取。
+    category: ClassVar[str] = ""
 
     @property
     def name(self) -> str:
@@ -65,13 +71,18 @@ class _SpecImplProvider:
     name: str
     spec_impl_pairs: List[tuple[ToolSpec, ToolImpl]]  # noqa: UP006 ——slots + List 在 3.12 兼容
     fallback_result_factory: Optional[Callable[[ToolInvocation], ToolExecutionResult]] = None
+    category: str = ""
 
     def list_tools(self) -> Iterable[ToolSpec]:
         return [spec for spec, _impl in self.spec_impl_pairs]
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
         for spec, impl in self.spec_impl_pairs:
-            if spec.name == invocation.tool_name:
+            # 注册名可能带 "<provider>_" 前缀（register_provider 统一改写）；
+            # 本 Provider 只认声明时的裸名，比对上剥前缀等价形式
+            if spec.name == invocation.tool_name or (
+                spec.provider and invocation.tool_name == f"{spec.provider}_{spec.name}"
+            ):
                 return await impl(invocation)
         # 未知：兜底失败（不抛）
         if self.fallback_result_factory is not None:
@@ -86,13 +97,14 @@ class _SpecImplProvider:
 def make_provider_from_specs(
     name: str,
     spec_impl_pairs: List[tuple[ToolSpec, ToolImpl]],  # noqa: UP006 ——见上
+    category: str = "",
 ) -> ToolProvider:
     """用一组 ``(spec, impl)`` 构造一个固定的 Provider。
 
     适用场景：内置工具（无状态、轻）；GameAgent/MCP 推荐手写类实现
     ``ToolProvider`` 协议（多状态/多步骤）。
     """
-    return _SpecImplProvider(name=name, spec_impl_pairs=spec_impl_pairs)
+    return _SpecImplProvider(name=name, spec_impl_pairs=spec_impl_pairs, category=category)
 
 
 __all__ = ["ToolProvider", "ToolImpl", "make_provider_from_specs"]

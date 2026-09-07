@@ -28,14 +28,16 @@ class ToolSpec:
     """工具规格（注册时声明；Planner 看到的就是这个）
 
     Attributes:
-        name: 工具唯一名（同 Registry 内去重）
+        name: 工具声明名（provider 内唯一）；经 ``ToolRegistry.register_provider``
+              注册时注册名统一为 ``<provider>_<name>``（已带前缀则原样），
+              LLM / 调用方看到的是注册名
         description: LLM 看的工具描述
         parameters_schema: JSON Schema 形态的参数描述（主流共识）；可为 None
         kind: "sync"（gather 等齐结果）/ "async"（fire-and-forget）
         result_event: 异步工具结果事件名，默认 ``tool.result.<name>``；
                       可定制（如 set_goal → ``tool.result.set_goal_feedback``）
         provider: 提供者标识（如 vts / warudo / obs / vision / memory /
-                   maicraft；溯源与过滤用，非白名单枚举）
+                  maicraft；溯源、注册名前缀与过滤用，非白名单枚举）
         output_schema: 可选的 JSON Schema 形态的输出描述
     """
 

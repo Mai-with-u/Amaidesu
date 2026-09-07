@@ -66,8 +66,10 @@ class FakeProvider:
     async def setup(self) -> int:
         if not self.client.connect_ok:
             return 0
+        # 与真实 McpToolProvider 对齐：provider = server 名（注册名前缀 =
+        # <provider>_，工具名已带 server 前缀 → 注册名不变）
         self._specs = [
-            ToolSpec(name=f"{self.prefix}{t.name}", description=t.description, provider="mcp")
+            ToolSpec(name=f"{self.prefix}{t.name}", description=t.description, provider=self.provider)
             for t in self.client.tools
         ]
         return len(self._specs)
@@ -187,7 +189,8 @@ async def test_empty_config_no_servers(patch_mcp) -> None:
 
 
 async def test_duplicate_prefix_collision_reported(patch_mcp) -> None:
-    """两个 server 若前缀相同：先注册保留，后注册 tools=0 并带 error 说明。"""
+    """显式 prefix 相同的两个 server：注册名含各自 provider（server 名）前缀，
+    仍全局唯一，不冲突（注册名 = <provider>_<工具名> 机制的兜底）。"""
     from src.modules.mcp import bind_mcp_tools
 
     patch_mcp["first"] = FakeClient([FakeTool("ping")])
@@ -205,5 +208,6 @@ async def test_duplicate_prefix_collision_reported(patch_mcp) -> None:
     assert report["first"]["ok"] is True
     assert report["first"]["tools"] == 1
     assert report["second"]["ok"] is True
-    assert report["second"]["tools"] == 0  # 重名被跳过
-    assert "占用" in report["second"]["error"]
+    assert report["second"]["tools"] == 1  # 注册名 first_same_ping / second_same_ping，互不冲突
+    names = {s.name for s in registry.list_tools()}
+    assert names == {"first_same_ping", "second_same_ping"}

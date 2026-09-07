@@ -147,6 +147,9 @@ class VTSProvider:
 
     PROVIDER_NAME = "vts"
 
+    # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）
+    category = "avatar"
+
     PARAM_MOUTH_SMILE = "MouthSmile"
     PARAM_MOUTH_OPEN = "MouthOpen"
     PARAM_EYE_OPEN_LEFT = "EyeOpenLeft"

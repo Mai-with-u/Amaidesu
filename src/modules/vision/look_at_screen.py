@@ -176,6 +176,9 @@ class LookAtScreenProvider(ToolProvider):
         >>> registry.register_provider(provider)
     """
 
+    # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）
+    category = "vision"
+
     def __init__(
         self,
         *,
@@ -204,6 +207,8 @@ class LookAtScreenProvider(ToolProvider):
         """执行 look_at_screen：截屏 + 可选 OCR + 返回 ResultBlocks。"""
         self._call_count += 1
         started_ms = int(time.time() * 1000)
+        # 注册名（vision_look_at_screen）即调用方使用的名；结果回显它保持溯源一致
+        tool_name = invocation.tool_name
 
         args = invocation.arguments or {}
         region_raw = args.get("region")
@@ -225,7 +230,7 @@ class LookAtScreenProvider(ToolProvider):
         # 采集后端不可用 → 优雅降级（不抛，返回成功 + 空文本 + 警告块）
         if self._capture is None:
             return ToolExecutionResult(
-                tool_name="look_at_screen",
+                tool_name=tool_name,
                 success=True,
                 content="(no screen capture backend installed; returning empty snapshot)",
                 blocks=[
@@ -249,7 +254,7 @@ class LookAtScreenProvider(ToolProvider):
         except Exception as exc:  # noqa: BLE001 - 边界处兜底
             logger.warning(f"look_at_screen 采集失败: {exc}", exc_info=True)
             return ToolExecutionResult(
-                tool_name="look_at_screen",
+                tool_name=tool_name,
                 success=False,
                 error_message=f"ScreenCapture.capture 失败: {type(exc).__name__}: {exc}",
                 timestamp_ms=int(time.time() * 1000),
@@ -259,7 +264,7 @@ class LookAtScreenProvider(ToolProvider):
         # 采集后端返回 None（场景：无显示/无权限）→ 同样优雅降级
         if result.image is None:
             return ToolExecutionResult(
-                tool_name="look_at_screen",
+                tool_name=tool_name,
                 success=True,
                 content="(screen capture returned empty)",
                 blocks=[
@@ -302,7 +307,7 @@ class LookAtScreenProvider(ToolProvider):
             blocks.append(ResultBlock(kind="text", text=""))
 
         return ToolExecutionResult(
-            tool_name="look_at_screen",
+            tool_name=tool_name,
             success=True,
             content=text or "(no text extracted)",
             blocks=blocks,

@@ -1,4 +1,4 @@
-﻿"""TextAdvGameAgent 单元测试 + 感知-推进-闭环 QA Scenario（Wave 7）
+"""TextAdvGameAgent 单元测试 + 感知-推进-闭环 QA Scenario（Wave 7）
 
 QA Scenario（acceptance criteria）：
     Tool: Bash
@@ -178,7 +178,7 @@ def test_text_adv_agent_emits_game_events() -> None:
 
 
 def test_text_adv_agent_list_tools_returns_game_provider_specs() -> None:
-    """协议 2：list_tools 暴露 text_adv_choose_option + text_adv_get_story（provider="game"）。"""
+    """协议 2：list_tools 暴露 text_adv_choose_option + text_adv_get_story（provider="text_adv"）。"""
     config = TextAdvGameConfig()
     agent = TextAdvGameAgent(config=config)
     specs = list(agent.list_tools())
@@ -186,7 +186,7 @@ def test_text_adv_agent_list_tools_returns_game_provider_specs() -> None:
     names = {s.name for s in specs}
     assert names == {"text_adv_choose_option", "text_adv_get_story"}
     for s in specs:
-        assert s.provider == "game"
+        assert s.provider == "text_adv"
         assert s.kind == "sync"
 
 
@@ -441,9 +441,7 @@ async def test_get_story_returns_state_snapshot(
 
     from src.modules.tools.models import ToolInvocation
 
-    res = await registry.invoke(
-        ToolInvocation(tool_name="text_adv_get_story", arguments={}, source="test")
-    )
+    res = await registry.invoke(ToolInvocation(tool_name="text_adv_get_story", arguments={}, source="test"))
     assert res.success is True
     snap = res.structured_content
     assert snap is not None
@@ -460,23 +458,21 @@ async def test_get_story_returns_state_snapshot(
 async def test_look_at_screen_graceful_when_no_backend(
     event_bus: EventBus,
 ) -> None:
-    """无 ScreenCapture 后端 → look_at_screen 返回成功 + 空文本 + 警告（不抛）。"""
+    """无 ScreenCapture 后端 → vision_look_at_screen 返回成功 + 空文本 + 警告（不抛）。"""
     from src.modules.tools.models import ToolInvocation
 
     registry = ToolRegistry()
     provider = LookAtScreenProvider(screen_capture=None, text_reader=None)
     registry.register_provider(provider)
 
-    res = await registry.invoke(
-        ToolInvocation(tool_name="look_at_screen", arguments={}, source="test")
-    )
+    res = await registry.invoke(ToolInvocation(tool_name="vision_look_at_screen", arguments={}, source="test"))
     assert res.success is True
     assert res.content  # 空提示文本
     assert any("ScreenCapture 未注入" in b.text for b in res.blocks)
 
 
 async def test_look_at_screen_with_fake_backend_returns_image_block() -> None:
-    """注入 FakeScreenCapture → look_at_screen 返回 image block + text block。"""
+    """注入 FakeScreenCapture → vision_look_at_screen 返回 image block + text block。"""
     from src.modules.tools.models import ToolInvocation
 
     registry = ToolRegistry()
@@ -487,9 +483,7 @@ async def test_look_at_screen_with_fake_backend_returns_image_block() -> None:
     provider = LookAtScreenProvider(screen_capture=capture, text_reader=reader)
     registry.register_provider(provider)
 
-    res = await registry.invoke(
-        ToolInvocation(tool_name="look_at_screen", arguments={}, source="test")
-    )
+    res = await registry.invoke(ToolInvocation(tool_name="vision_look_at_screen", arguments={}, source="test"))
     assert res.success is True
     assert res.content == "游戏文本片段"
     block_kinds = {b.kind for b in res.blocks}
@@ -595,9 +589,7 @@ async def test_choose_option_with_missing_option_id_returns_failure(
 
     from src.modules.tools.models import ToolInvocation
 
-    res = await registry.invoke(
-        ToolInvocation(tool_name="text_adv_choose_option", arguments={}, source="test")
-    )
+    res = await registry.invoke(ToolInvocation(tool_name="text_adv_choose_option", arguments={}, source="test"))
     assert res.success is False
     assert "option_id" in res.error_message
 

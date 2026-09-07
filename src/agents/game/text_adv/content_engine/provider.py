@@ -225,7 +225,7 @@ class FakeContentEngine:
 # ---------------------------------------------------------------------------
 
 # 提供者标识统一来源（ToolSpec.provider / 追溯用），避免字面量重复
-PROVIDER_NAME = "game"
+PROVIDER_NAME = "content_engine"
 
 _CONTENT_ENGINE_SPECS: List[ToolSpec] = [
     ToolSpec(
@@ -294,9 +294,13 @@ def build_content_engine_specs() -> List[ToolSpec]:
 class ContentEngineProvider(ToolProvider):
     """把 ContentEngine 封装成 5 个工具注册到 ToolRegistry。
 
-    工具来源 provider="builtin"（框架基础设施）。
+    工具来源 provider="content_engine"（独立提供者；工具名已带同名前缀，
+    注册名与声明名一致）。
     注意：本 Provider **不实现具体游戏逻辑**——它只是 ContentEngine 的薄包装。
     """
+
+    # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）
+    category = "game"
 
     def __init__(self, engine: ContentEngine) -> None:
         self._engine = engine

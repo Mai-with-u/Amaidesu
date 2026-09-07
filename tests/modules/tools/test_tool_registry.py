@@ -137,8 +137,12 @@ class _SampleProvider(ToolProvider):
     def name(self) -> str:
         return "SampleProvider"
 
+    # 自声明归属分类（provider 名 → 分类 正交）
+    category = "game"
+
     def __init__(self) -> None:
         self._specs: List[ToolSpec] = [
+            # 裸名（不带 provider 前缀）：register_provider 会自动补 "game_" 前缀
             ToolSpec(name="p_a", description="a", kind="sync", provider="game"),
             ToolSpec(name="p_b", description="b", kind="sync", provider="game"),
         ]
@@ -147,10 +151,12 @@ class _SampleProvider(ToolProvider):
         return list(self._specs)
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
-        if invocation.tool_name == "p_a":
-            return ToolExecutionResult(tool_name="p_a", success=True, content="from_a")
-        if invocation.tool_name == "p_b":
-            return ToolExecutionResult(tool_name="p_b", success=True, content="from_b")
+        # 注册名统一为 <provider>_<name>；本地分发剥前缀归一
+        local = invocation.tool_name.removeprefix("game_")
+        if local == "p_a":
+            return ToolExecutionResult(tool_name=invocation.tool_name, success=True, content="from_a")
+        if local == "p_b":
+            return ToolExecutionResult(tool_name=invocation.tool_name, success=True, content="from_b")
         return ToolExecutionResult(
             tool_name=invocation.tool_name,
             success=False,
@@ -158,19 +164,44 @@ class _SampleProvider(ToolProvider):
         )
 
 
-async def test_provider_registration_and_tools_listed(registry: ToolRegistry) -> None:
-    """注册 Provider 后，list_tools 包含 Provider 暴露的全部工具。"""
+async def test_provider_registration_auto_prefixes_bare_names(registry: ToolRegistry) -> None:
+    """裸名工具注册进 registry 时自动补 ``<provider>_`` 前缀（无条件）。"""
     provider = _SampleProvider()
     new_count = registry.register_provider(provider)
     assert new_count == 2
     tools = registry.list_tools()
     names = {t.name for t in tools}
-    assert names == {"p_a", "p_b"}
-    # provider 过滤
+    assert names == {"game_p_a", "game_p_b"}
+    # provider 过滤（按提供者名）
     game_tools = registry.list_tools(provider="game")
     assert len(game_tools) == 2
     builtin_tools = registry.list_tools(provider="builtin")
     assert len(builtin_tools) == 0
+    # 前缀改写不得污染 provider 返回的原 spec（list_tools 仍返回裸名）
+    raw_names = {s.name for s in provider.list_tools()}
+    assert raw_names == {"p_a", "p_b"}
+
+
+async def test_provider_category_recorded_and_queryable(registry: ToolRegistry) -> None:
+    """注册时记录 provider 自声明的分类；list_categories / category 过滤可用。"""
+    provider = _SampleProvider()
+    registry.register_provider(provider)
+    assert registry.list_categories() == ["game"]
+    cat_tools = registry.list_tools(category="game")
+    assert {t.name for t in cat_tools} == {"game_p_a", "game_p_b"}
+    assert registry.list_tools(category="avatar") == []
+    # 未声明分类的 provider 不产生空分类
+    assert registry.list_categories() == ["game"]
+
+
+async def test_provider_registered_name_invocable(registry: ToolRegistry) -> None:
+    """provider 分发剥前缀归一后，按注册名 invoke 可命中。"""
+    provider = _SampleProvider()
+    registry.register_provider(provider)
+    res = await registry.invoke(ToolInvocation(tool_name="game_p_a"))
+    assert res.success is True
+    assert res.content == "from_a"
+    assert res.tool_name == "game_p_a"
 
 
 async def test_register_provider_is_idempotent(registry: ToolRegistry) -> None:

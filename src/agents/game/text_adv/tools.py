@@ -2,8 +2,9 @@
 
 工具归属约定：
 - 游戏专属推进工具 = 游戏 Agent 自己准备（list_tools 声明）
-- provider="game"（来源溯源：玩家引擎 Agent 声明的工具）
-- 这些工具**不是**公用感知/控制工具 —— 它们内含游戏域逻辑
+- provider="text_adv"（来源溯源：文字冒险 Agent 声明的工具，工具名已带
+  同名前缀，注册名与声明名一致）
+- 这些工具**不是**公用感知/控制工具 —— 它们内含游戏内容逻辑
   （option_id → content_engine 翻译）
 
 提供两个工具：
@@ -15,7 +16,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, ClassVar, Dict, Iterable, Optional
 
 from src.modules.logging import get_logger
 from src.agents.game.text_adv.content_engine import ContentEngine, ContentInput
@@ -36,7 +37,7 @@ logger = get_logger("text_adv_tools")
 # ---------------------------------------------------------------------------
 
 # 提供者标识统一来源（ToolSpec.provider / 追溯用），避免字面量重复
-PROVIDER_NAME = "game"
+PROVIDER_NAME = "text_adv"
 
 
 def build_choose_option_spec() -> ToolSpec:
@@ -101,7 +102,7 @@ def build_get_story_spec() -> ToolSpec:
 
 @dataclass(slots=True)
 class TextAdvToolProvider(ToolProvider):
-    """文字冒险 Agent 的专属工具 Provider（provider="game"）
+    """文字冒险 Agent 的专属工具 Provider（provider="text_adv"）
 
     持有 :class:`TextAdvGameAgentState` 和 :class:`ContentEngine`，
     把选项推进翻译为 content_engine 输入调用。
@@ -113,6 +114,9 @@ class TextAdvToolProvider(ToolProvider):
 
     state: TextAdvGameAgentState
     engine: ContentEngine
+
+    # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）
+    category: ClassVar[str] = "game"
 
     # 测试/统计辅助字段
     choose_option_calls: int = 0

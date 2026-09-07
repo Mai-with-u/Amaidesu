@@ -47,11 +47,11 @@ flowchart TB
     end
 
     subgraph Registry["ToolRegistry (src/modules/tools/)"]
-        Out["avatar 域（modules/avatar/）<br/>vts×12 / vrchat×3 / warudo×13<br/>studio 域（modules/studio/obs/）obs×4"]
-        Per["vision 域（modules/vision/）<br/>look_at_screen"]
+        Out["avatar 分类（modules/avatar/）<br/>vts×12 / vrchat×3 / warudo×13<br/>studio 分类（modules/studio/obs/）obs×4"]
+        Per["vision 分类（modules/vision/）<br/>vision_look_at_screen"]
         CE["text_adv 动作工具<br/>（agents/game/text_adv/ 内聚）"]
-        Mem["memory 族<br/>query_memory"]
-        Ctrl["AgentControl 族<br/>pause/resume/shutdown/restart/list_agents/agent_state"]
+        Mem["memory 分类<br/>memory_query_memory"]
+        Ctrl["framework 分类<br/>framework_pause_agent 等 6 个 AgentControl 工具"]
     end
 
     subgraph InFra["共享基础设施 src/modules/"]
@@ -105,9 +105,9 @@ Amaidesu/
 │       │   ├── screen/          #   屏幕变化
 │       │   └── stt/             #   语音识别
 │       ├── tools/               # 工具语法层（ToolRegistry / ToolSpec / @tool / bootstrap；零领域知识）
-│       ├── avatar/              # 形象域：vts/（VTSProvider + 引擎子件）、vrchat/（OSC 桥接）、warudo/（每形象 = 一 Provider 实例 = 一开关单元）
-│       ├── studio/              # 演播域：obs/
-│       ├── vision/              # 视觉域：look_at_screen（同步快照工具）+ 屏幕捕获设施
+│       ├── avatar/              # avatar 分类：vts/（VTSProvider + 引擎子件）、vrchat/（OSC 桥接）、warudo/（每形象 = 一 Provider 实例 = 一开关单元）
+│       ├── studio/              # studio 分类：obs/
+│       ├── vision/              # vision 分类：vision_look_at_screen（同步快照工具）+ 屏幕捕获设施
 │       ├── mcp/                 # MCP 基础模块（外部工具源通道）
 │       ├── events/              # EventBus + 事件拦截器（session_stamp 场次盖章 / rate_limit / similar_filter）
 │       │   ├── interceptors/    #   EventInterceptor 协议 + InterceptorChain
@@ -118,7 +118,7 @@ Amaidesu/
 │       ├── di/                  # 依赖注入工具
 │       ├── llm/                 # LLM 服务（provider + profile 两层）
 │       ├── logging/             # 日志 + LogStreamer
-│       ├── memory/              # MemoryProvider + SimpleMemory + query_memory 工具
+│       ├── memory/              # MemoryProvider + SimpleMemory + memory_query_memory 工具
 │       ├── prompts/             # PromptManager（声明式键自动发现）
 │       ├── session/             # 直播场次管理（LiveSessionManager：开启/结束/删除/归属解析/防膨胀；live.started/ended 唯一发布方；默认场次兜底）
 │       ├── simulator/           # 世界模拟器（开发基础设施，ADR-006）：三模式发射器（generate LLM 生成 / replay 录制回放 / off）；SimulatorService + PersonaPool / CadenceGenerator / GiftGenerator / SimulatorLLMWrapper / TokenBudgetController / ReplayEngine；回放启停自动开/关场次；人设礼物入 SQLite（sim_personas/sim_gifts + 内置种子），观众上下文读 live_chat 窗口。默认 enabled=false，生产零沾染。详见 docs/development/simulator-guide.md。
@@ -231,7 +231,7 @@ sequenceDiagram
 |------|------|
 | `base.py` | `BaseAgent` 协议六面（§1.49）：1.生命周期（start/stop/cleanup + 工厂重建）、2.工具提供（`list_tools()`）、3.事件上报（`emit_event` + `emits_events` 可选声明）、4.状态读写（`_state` + heartbeat）、5.健康（`note_heartbeat/is_alive/dead_threshold_ms`）、6.元数据（`name/description`）。状态机：`CREATED → STARTING → RUNNING → PAUSED → STOPPING → STOPPED → ERRORED`。 |
 | `manager.py` | `AgentManager`：注册 / 启动（LIFO） / 停止 / cleanup / 动态启停（`start_agent`/`stop_agent`/`enable_agent`/`disable_agent`）；`audit_tools(registry) -> list[str]` 启动后只读审计未实现工具声明（不参与注册） |
-| `control.py` | `AgentControl`（直调接口） + `AgentControlProvider`（注册到 ToolRegistry），对外暴露 6 个 builtin 工具：`pause_agent` / `resume_agent` / `shutdown_agent` / `restart_agent` / `list_agents` / `agent_state` |
+| `control.py` | `AgentControl`（直调接口） + `AgentControlProvider`（注册到 ToolRegistry），对外暴露 6 个 framework 工具（注册名带前缀）：`framework_pause_agent` / `framework_resume_agent` / `framework_shutdown_agent` / `framework_restart_agent` / `framework_list_agents` / `framework_agent_state` |
 | `factory.py` | `SUPPORTED_AGENTS = ("streamer", "game")` + `instantiate_agent(name, config, ...)` 中央化配置名 → 类映射，供组合根与 Dashboard 动态启停共用 |
 
 #### 业务层（`src/agents/`）
@@ -257,21 +257,23 @@ sequenceDiagram
 
 ### ③ 工具族
 
-总览：约 51 个工具。`ToolSpec.provider` 是**提供者标识**（str：`vts` / `vrchat` / `warudo` / `obs` / `vision` / `memory` / `framework` / `streamer` / `game`），不再是大类枚举；主播 Agent 默认可见全部已启用工具（`registry.list_tools()` 全量），可见性由人类控制的域开关（`[tools.avatar.*].enabled` 等）决定。域装配由 `bind_core_tools` 按域开关驱动（avatar / studio），详见 [启动时序](#启动时序) 5a 步骤。其余已知缺口见"已知缺口"。
+总览：约 51 个工具。注册名 = `ToolSpec.provider`（**提供者标识**，全局唯一，如 `vts` / `vrchat` / `warudo` / `obs` / `vision` / `memory` / `framework` / `text_adv` / `content_engine`）+ `_` + 工具声明名——LLM 与调用方只见注册名（未带前缀的声明名注册时自动补前缀）。provider 自声明**分类**（avatar / studio / vision / memory / game / mcp / framework，经 `registry.list_categories()` / `list_tools(category=)` 查询）；tools.toml 段为配置地址，三者正交。主播 Agent 默认可见全部已启用工具（`registry.list_tools()` 全量），可见性由人类控制的开关（`[tools.avatar.*].enabled` 等）决定。装配由 `bind_core_tools` 按 avatar/studio 开关驱动，详见 [启动时序](#启动时序) 5a 步骤。其余已知缺口见"已知缺口"。
 
-| 域/提供者 | provider 标识 | 工具数 | 工具名 |
+| 分类 | provider 标识 | 工具数 | 工具名（注册名） |
 |----|----------|-------|--------|
 | TTS | （基础模块） | — | 4 引擎 Provider 位于 `src/modules/tts/`，不注册 ToolRegistry；`build_tts_infrastructure` 按 `core.toml [tts].provider` 单选构造注入 StreamerAgent，详见 [ADR-007](adr/007-tts-infrastructure-pipeline.md) |
 | Subtitle | （基础模块） | — | `src/modules/subtitle/`（`build_subtitle_infrastructure` 装配，不经 ToolRegistry） |
-| VTS（avatar 域） | `vts` | 12 | `vts_smile` / `vts_close_eyes` / `vts_open_eyes` / `vts_set_expression` / `vts_set_parameter_value` / `vts_get_parameter_value` / `vts_trigger_hotkey`（按热键名优先，连接后描述动态携带可用热键清单）/ `vts_load_item` / `vts_load_sticker` / `vts_set_idle_enabled` / `vts_reconnect` / `vts_get_stats` |
-| VRChat（avatar 域） | `vrchat` | 3 | `vrchat_set_expression` / `vrchat_trigger_gesture` / `vrchat_get_stats` |
-| Warudo（avatar 域） | `warudo` | 13 | `warudo_set_expression` / `warudo_trigger_hotkey` / `warudo_trigger_body` / `warudo_trigger_head` / `warudo_trigger_action` / `warudo_set_subtitle` / `warudo_throw_fish` / `warudo_set_sight` / `warudo_set_eyebrow` / `warudo_set_eye` / `warudo_set_pupil` / `warudo_set_mouth` / `warudo_get_stats`（动作类工具描述动态携带 `[tools.avatar.warudo.config].action_catalog` 预声明清单） |
-| OBS（studio 域） | `obs` | 4 | `obs_send_text` / `obs_switch_scene` / `obs_set_source_visibility` / `obs_send_test` |
-| Vision | `vision` | 1 | `look_at_screen`（同步快照工具，注入 `ScreenCapture`/`TextReader` 后端；无后端时返回成功 + 空文本，不抛异常） |
-| text_adv（game 域） | `game` | 2+ | `text_adv_choose_option` / `text_adv_get_story` 等（游戏侧 dispatch，`agents/game/text_adv/` 内聚） |
-| Memory | `memory` | 1 | `query_memory`（绑定 `MemoryProvider` 后才可用） |
-| Streamer 自带 | `streamer` | 3 | `reply`（Agent 内部协议工具）/ `should_speak_proactively` / `parse_command` |
-| Agent Control | `framework` | 6 | `pause_agent` / `resume_agent` / `shutdown_agent` / `restart_agent` / `list_agents` / `agent_state` |
+| avatar | `vts` | 12 | `vts_smile` / `vts_close_eyes` / `vts_open_eyes` / `vts_set_expression` / `vts_set_parameter_value` / `vts_get_parameter_value` / `vts_trigger_hotkey`（按热键名优先，连接后描述动态携带可用热键清单）/ `vts_load_item` / `vts_load_sticker` / `vts_set_idle_enabled` / `vts_reconnect` / `vts_get_stats` |
+| avatar | `vrchat` | 3 | `vrchat_set_expression` / `vrchat_trigger_gesture` / `vrchat_get_stats` |
+| avatar | `warudo` | 13 | `warudo_set_expression` / `warudo_trigger_hotkey` / `warudo_trigger_body` / `warudo_trigger_head` / `warudo_trigger_action` / `warudo_set_subtitle` / `warudo_throw_fish` / `warudo_set_sight` / `warudo_set_eyebrow` / `warudo_set_eye` / `warudo_set_pupil` / `warudo_set_mouth` / `warudo_get_stats`（动作类工具描述动态携带 `[tools.avatar.warudo.config].action_catalog` 预声明清单） |
+| studio | `obs` | 4 | `obs_send_text` / `obs_switch_scene` / `obs_set_source_visibility` / `obs_send_test` |
+| vision | `vision` | 1 | `vision_look_at_screen`（同步快照工具，注入 `ScreenCapture`/`TextReader` 后端；无后端时返回成功 + 空文本，不抛异常） |
+| game | `text_adv` | 2 | `text_adv_choose_option` / `text_adv_get_story`（游戏侧 dispatch，`agents/game/text_adv/` 内聚） |
+| game | `content_engine` | 5 | `content_engine_start` / `content_engine_stop` / `content_engine_send_input` / `content_engine_status` / `content_engine_get_state`（通用游戏内容引擎控制面） |
+| memory | `memory` | 1 | `memory_query_memory`（绑定 `MemoryProvider` 后才可用） |
+| mcp | `<server 名>` | 按 server | `maicraft_*` 等（MCP server 工具经通道注册，provider = server 名） |
+| Streamer 自带 | `streamer` | 3 | `reply` / `should_speak_proactively` / `parse_command`（Agent 内部协议工具，**不入 ToolRegistry**） |
+| framework | `framework` | 6 | `framework_pause_agent` / `framework_resume_agent` / `framework_shutdown_agent` / `framework_restart_agent` / `framework_list_agents` / `framework_agent_state` |
 
 ## 核心概念
 
@@ -282,7 +284,7 @@ sequenceDiagram
 | 谁驱动 | **自我驱动**（持有 asyncio 主循环/后台任务，心跳、状态机、`start/stop`） | **被调才干活**（纯被动，调用即返回 `ToolExecutionResult`） |
 | 形态 | 继承 `BaseAgent`，可发事件、可订阅、可销毁重建 | 继承 `ToolProvider`，`list_tools()` + `invoke(ToolInvocation)` |
 | 暴露 | 整个生命周期 + `list_tools()` 聚合到 ToolRegistry | 只通过 `ToolRegistry.invoke(name, args)` 暴露给 LLM |
-| 例子 | `StreamerAgent`（Planner 循环 + 后台 BackgroundMaintainer）、`TextAdvGameAgent` | `look_at_screen`、`content_engine_send_input`、`vts_set_expression` |
+| 例子 | `StreamerAgent`（Planner 循环 + 后台 BackgroundMaintainer）、`TextAdvGameAgent` | `vision_look_at_screen`、`content_engine_send_input`、`vts_set_expression` |
 
 **判别口诀**："谁驱动谁"——能自我维持状态/轮询/心跳的就是 Agent，只在被调用时执行的就是 Tool。
 
@@ -295,7 +297,7 @@ sequenceDiagram
 | **`BaseCollector`** | `start()` → 内部 `_start_collect_task()` 后台消费 `collect()` 生成器（v2 主动推事件模式） | `stop()` → 取消后台任务 | `cleanup()` → `_on_cleanup()` | `collect()`（子类实现，返回 `AsyncIterator[NormalizedMessage]`） |
 | **`BaseAgent`** | `start()` → `_on_start()` 钩子 + 心跳 | `stop()` → `_on_stop()` 钩子；额外 `pause()`/`resume()`/`shutdown()`（更严格） | `cleanup()` → `_on_cleanup()` 钩子 | `list_tools()` 抽象 + 自由 `emit_event` + 可选 `emits_events` 声明 |
 
-状态机（两者镜像）：`CREATED → STARTING → RUNNING → STOPPING → STOPPED → ERRORED`；Agent 额外有 `PAUSED` 用于 `pause_agent` 控制。
+状态机（两者镜像）：`CREATED → STARTING → RUNNING → STOPPING → STOPPED → ERRORED`；Agent 额外有 `PAUSED` 用于 `framework_pause_agent` 控制。
 
 ### 事件系统（摘要）
 
@@ -318,9 +320,9 @@ EventBus 是事件通道（三通道协作之一，承载游戏→主播的事�
 v2 不再支持"插件系统"——`src/modules/plugins/` 已移除。新功能通过 **Agent 包内聚**实现：
 
 - **内容特有逻辑全部内聚**到 `src/agents/<family>/<name>/`，框架层（`src/modules/`）**零改动**
-- 例：新增"MC Agent" → 在 `src/agents/game/minecraft/` 建包，内含 `agent.py`（继承 `BaseAgent`）、`engine.py`（实现 `ContentEngine` Protocol）、`state.py` 等；Agent 自有工具在 `_register_tools()` 中自己 `registry.register_provider(provider)`；公用 builtin 由 `bind_core_tools` 显式装配；启动结束 `audit_tools` 审计
+- 例：新增"MC Agent" → 在 `src/agents/game/minecraft/` 建包，内含 `agent.py`（继承 `BaseAgent`）、`engine.py`（实现 `ContentEngine` Protocol）、`state.py` 等；Agent 自有工具在 `_register_tools()` 中自己 `registry.register_provider(provider)`（注册名自动带 `<provider>_` 前缀）；公用工具由 `bind_core_tools` 显式装配；启动结束 `audit_tools` 审计
 - 例：新增"播报 Agent" → 在 `src/agents/announcer/` 建包，自己订阅自己感兴趣的事件，自己实现 `list_tools()`
-- **禁止**为新功能在 `src/modules/` 加新域（除非它真的是跨阶段基础设施）；**禁止**通过 monkey-patching 或 import 副作用往框架注入行为
+- **禁止**为新功能在 `src/modules/` 加新模块分组（除非它真的是跨阶段基础设施）；**禁止**通过 monkey-patching 或 import 副作用往框架注入行为
 
 判别口诀："这是给现有 Agent 加工具，还是这本身就是个新主体？"——加工具进 Agent 自己的包；新主体开新 Agent 包。
 
@@ -373,7 +375,7 @@ render_timeout_ms = 60000            # 单 utterance 超时（覆盖合成+播�
 api_url = "ws://127.0.0.1:9880"
 # ... gptsovits 引擎连接参数
 
-# tools.toml —— 域开关（每域一开关单元：开 = 其全部工具可见，人类控制）
+# tools.toml —— 分类开关（avatar/studio 等分类各一开关单元：开 = 其全部工具可见，人类控制）
 [tools]
 enabled = ["perception"]  # 顶层族启用开关
 
@@ -381,7 +383,7 @@ enabled = ["perception"]  # 顶层族启用开关
 enabled = ["stt"]  # Collector 在此启用（采集配置已迁移至 [tools.perception.config]）
 bili_danmaku_official = { ... }
 
-[tools.avatar.vts]        # 形象域：开一个形象 = 其全部工具进入可见集
+[tools.avatar.vts]        # avatar 分类：开一个形象 = 其全部工具进入可见集
 enabled = true
 [tools.avatar.vts.config] # 该形象的具体配置（连接参数 / idle / 热键相关）
 vts_host = "localhost"
@@ -440,6 +442,8 @@ enabled = true
 - [测试指南](../development/testing-guide.md) - 测试分层（agents/architecture/config/dashboard/integration/modules + characterization/mocks 支撑）
 
 ---
+
+*最后更新：2026-09-07（工具体系重构：注册名 = `<provider>_<工具名>` 无条件前缀（register_provider 内统一改写，spec 已带前缀则原样）；`ToolProvider` 协议新增 `category` 自声明分类（avatar/studio/vision/memory/game/mcp/framework），registry 提供 `list_categories()` 与 `list_tools(category=)`；存量对齐——obs provider 值 `obs_control`→`obs`、text_adv 工具 provider `game`→`text_adv`、content_engine provider `game`→`content_engine`、各 avatar/studio/vision/memory/framework provider 补齐 category；look_at_screen 注册名变 `vision_look_at_screen`、query_memory 变 `memory_query_memory`、AgentControl 六工具变 `framework_*`；minecraft 工具（provider=game、mc_* 裸名）注册名暂变 `game_mc_*` 属预期过渡态，其最终对齐随 minecraft ReAct 重构批完成；工具分类语义措辞统一"域"→"分类"）*
 
 *最后更新：2026-09-06（avatar 域收口：vrchat 自 vts 包物理拆出为独立包 `src/modules/avatar/vrchat/`（域开关早已独立，本次补齐代码布局）；vts 热键工具改按名优先触发（hotkey_id 兜底），工具描述连接后动态携带可用热键清单；warudo 动作类工具描述动态携带 `[tools.avatar.warudo.config].action_catalog` 预声明清单，删除 6 张死映射表；LLM 热键匹配链整体删除（含 llm_* 6 配置键）；emotion intensity 全链路接线——reply function schema 新增 intensity 参数 → Replyer 解析 clamp → StreamerAgent 透传 → vts_set_expression weight；工具表 provider 列改提供者标识并修正 VTS 工具数漂移（13→12，vts_lip_sync 从未存在于注册表）；目录结构/全景图/配置示例同步域化新树；avatar/studio 工具 provider 标识化补齐（builtin→vts/vrchat/warudo）；新增 VTSProvider 本体测试与 warudo action_catalog 测试）*
 

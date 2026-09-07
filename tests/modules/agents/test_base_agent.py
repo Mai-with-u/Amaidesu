@@ -395,21 +395,21 @@ async def test_agent_control_list_tools_via_registry(sample_agent: _SampleAgent)
     n = reg.register_provider(control_provider)
     assert n >= 6, "AgentControl 应暴露 pause/resume/shutdown/restart/list_agents/agent_state 等工具"
 
-    # 6 个工具
+    # 注册名统一带 provider 前缀（framework_）
     expected = {
-        "pause_agent",
-        "resume_agent",
-        "shutdown_agent",
-        "restart_agent",
-        "list_agents",
-        "agent_state",
+        "framework_pause_agent",
+        "framework_resume_agent",
+        "framework_shutdown_agent",
+        "framework_restart_agent",
+        "framework_list_agents",
+        "framework_agent_state",
     }
     names = {spec.name for spec in reg.list_tools()}
     assert expected.issubset(names)
 
 
 async def test_agent_control_invoke_pause_agent(sample_agent: _SampleAgent) -> None:
-    """通过工具调用 pause_agent（不直接调 Agent 方法）。"""
+    """通过工具调用 framework_pause_agent（不直接调 Agent 方法）。"""
     mgr = AgentManager()
     mgr.register(sample_agent)
     await sample_agent.start()
@@ -418,13 +418,13 @@ async def test_agent_control_invoke_pause_agent(sample_agent: _SampleAgent) -> N
     reg = ToolRegistry()
     reg.register_provider(control_provider)
 
-    res = await reg.invoke(ToolInvocation(tool_name="pause_agent", arguments={"name": "sample_agent"}))
+    res = await reg.invoke(ToolInvocation(tool_name="framework_pause_agent", arguments={"name": "sample_agent"}))
     assert res.success is True
     assert sample_agent.state == AgentState.PAUSED
 
 
 async def test_agent_control_invoke_list_agents(sample_agent: _SampleAgent) -> None:
-    """list_agents 工具返回 Agent 名字列表。"""
+    """framework_list_agents 工具返回 Agent 名字列表。"""
     mgr = AgentManager()
     mgr.register(sample_agent)
 
@@ -432,13 +432,13 @@ async def test_agent_control_invoke_list_agents(sample_agent: _SampleAgent) -> N
     reg = ToolRegistry()
     reg.register_provider(control_provider)
 
-    res = await reg.invoke(ToolInvocation(tool_name="list_agents", arguments={}))
+    res = await reg.invoke(ToolInvocation(tool_name="framework_list_agents", arguments={}))
     assert res.success is True
     assert "sample_agent" in res.content
 
 
 async def test_agent_control_invoke_agent_state(sample_agent: _SampleAgent) -> None:
-    """agent_state 工具返回状态信息。"""
+    """framework_agent_state 工具返回状态信息。"""
     mgr = AgentManager()
     mgr.register(sample_agent)
     await sample_agent.start()
@@ -447,7 +447,7 @@ async def test_agent_control_invoke_agent_state(sample_agent: _SampleAgent) -> N
     reg = ToolRegistry()
     reg.register_provider(control_provider)
 
-    res = await reg.invoke(ToolInvocation(tool_name="agent_state", arguments={"name": "sample_agent"}))
+    res = await reg.invoke(ToolInvocation(tool_name="framework_agent_state", arguments={"name": "sample_agent"}))
     assert res.success is True
     assert "running" in res.content
     assert "sample_agent" in res.content
@@ -464,7 +464,7 @@ async def test_agent_control_invoke_unknown_agent_returns_failure(
     reg = ToolRegistry()
     reg.register_provider(control_provider)
 
-    res = await reg.invoke(ToolInvocation(tool_name="pause_agent", arguments={"name": "absent"}))
+    res = await reg.invoke(ToolInvocation(tool_name="framework_pause_agent", arguments={"name": "absent"}))
     assert res.success is False
     assert "未找到" in res.error_message or "absent" in res.error_message
 

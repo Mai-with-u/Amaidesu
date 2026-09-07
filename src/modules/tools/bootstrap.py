@@ -76,7 +76,7 @@ logger = get_logger("ToolBootstrap")
 
 
 # (成员身份, 描述, 注册函数加载器)
-# 成员身份 = (域, 提供者键)：域段开关（avatar.vts 等）驱动装配。
+# 成员身份 = (分类段, 提供者键)：分类段开关（avatar.vts 等）驱动装配。
 # 注册函数加载器：返回 ``Callable[[registry, config], provider]``，
 # 延迟 import 避免本模块被加载时拖入整条 avatar/studio 依赖链。
 _EntrySpec = Tuple[Tuple[str, str], str, Callable[[], Callable[..., Any]]]
@@ -106,8 +106,8 @@ def _load_obs() -> Callable[..., Any]:
     return register_obs_tools
 
 
-# 工具域成员表：每个提供者绑定其域段（avatar.vts / avatar.warudo / studio.obs）。
-# 域段缺失或 enabled=false 时不装配（开关控制权归属人类：配置 + Web UI）。
+# 工具分类成员表：每个提供者绑定其分类段（avatar.vts / avatar.warudo / studio.obs）。
+# 分类段缺失或 enabled=false 时不装配（开关控制权归属人类：配置 + Web UI）。
 _DOMAIN_MEMBERS: List[_EntrySpec] = [
     (("avatar", "vts"), "VTubeStudio 控制", _load_vts),
     (("avatar", "vrchat"), "VRChat OSC 桥接", _load_vrchat),
@@ -115,20 +115,20 @@ _DOMAIN_MEMBERS: List[_EntrySpec] = [
     (("studio", "obs"), "OBS Studio 控制", _load_obs),
 ]
 
-# 对外保留的 _NON_TTS_PACKAGES / _CORE_PACKAGES 兼容名（指代全部可控域包）。
-# 运行时不使用，仅供外部静态分析 / 类型检查引用；实际装配由域段开关门控。
+# 对外保留的 _NON_TTS_PACKAGES / _CORE_PACKAGES 兼容名（指代全部可控分类包）。
+# 运行时不使用，仅供外部静态分析 / 类型检查引用；实际装配由分类段开关门控。
 _NON_TTS_PACKAGES: List[_EntrySpec] = list(_DOMAIN_MEMBERS)
 _CORE_PACKAGES: List[_EntrySpec] = list(_DOMAIN_MEMBERS)
 
 
 def _resolve_domain_config(tools_cfg: Dict[str, Any], domain: str, key: str) -> Dict[str, Any]:
-    """从 ``[tools]`` 顶层配置读出 ``domain.key`` 子段 DOMAIN 开关配置。
+    """从 ``[tools]`` 顶层配置读出 ``domain.key`` 子段开关配置。
 
-    返回该域的 ``config`` 字典（provider 具体配置）：
+    返回该分类的 ``config`` 字典（provider 具体配置）：
     - ``[tools.avatar.vts] {enabled: true, config: {...}}`` → ``{...}``
-    - 域段缺失 / 非 dict → {}（下游 register 走默认 / 抛错兜底）
+    - 分类段缺失 / 非 dict → {}（下游 register 走默认 / 抛错兜底）
 
-    开关语义：域段不存在于配置即视为未启用（不装配），避免隐式行为漂移。
+    开关语义：分类段不存在于配置即视为未启用（不装配），避免隐式行为漂移。
     """
     if not isinstance(tools_cfg, dict):
         return {}
@@ -143,7 +143,7 @@ def _resolve_domain_config(tools_cfg: Dict[str, Any], domain: str, key: str) -> 
 
 
 def _domain_enabled(tools_cfg: Dict[str, Any], domain: str, key: str) -> bool:
-    """域开关：``[tools.<domain>.<key>].enabled``，默认 False（缺省不装配）。"""
+    """分类开关：``[tools.<domain>.<key>].enabled``，默认 False（缺省不装配）。"""
     if not isinstance(tools_cfg, dict):
         return False
     domain_cfg = tools_cfg.get(domain)
@@ -159,18 +159,18 @@ def bind_core_tools(
     registry: ToolRegistry,
     config: Dict[str, Any] | None = None,
 ) -> Dict[str, int]:
-    """绑定 Amaidesu 核心域工具包到 ``registry``。
+    """绑定 Amaidesu 核心分类工具包到 ``registry``。
 
     装配规则：
 
-    - **按域开关装配**——``[tools.avatar.vts].enabled`` 等域段为 true 时
-      装配该提供者（形象/演播）；false 或段缺失则不装配
+    - **按分类开关装配**——``[tools.avatar.vts].enabled`` 等分类段为 true 时
+      装配该提供者（avatar 分类 / studio 分类）；false 或段缺失则不装配
     - TTS / 字幕为基础设施（core.toml 驱动），不在本 bootstrap 范围
 
     Args:
         registry: 目标注册器（由调用方构造并持有）
-        config: ``[tools]`` 段（域开关容器），键名见 ``_DOMAIN_MEMBERS``；
-            传 ``None`` 表示所有域走"空配置"，一律不装配
+        config: ``[tools]`` 段（分类开关容器），键名见 ``_DOMAIN_MEMBERS``；
+            传 ``None`` 表示所有分类走"空配置"，一律不装配
 
     Returns:
         ``{member_key: new_tool_count}`` 报告。失败 / 跳过成员
@@ -183,10 +183,10 @@ def bind_core_tools(
 
     report: Dict[str, int] = {}
 
-    # --- 按域开关装配 ---
+    # --- 按分类开关装配 ---
     for (domain, key), description, loader in _DOMAIN_MEMBERS:
         if not _domain_enabled(tools_cfg, domain, key):
-            # 域未启用：跳过（不记 ERROR，预期行为）
+            # 分类未启用：跳过（不记 ERROR，预期行为）
             report[key] = 0
             continue
 

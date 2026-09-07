@@ -15,7 +15,7 @@ tool_registry.register_provider(provider)
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterable, List, Optional
+from typing import ClassVar, Iterable, List, Optional
 
 from src.modules.agents.manager import AgentManager
 from src.modules.logging import get_logger
@@ -180,6 +180,9 @@ class AgentControlProvider(ToolProvider):
     manager: AgentManager
     _control: AgentControl = field(init=False)
 
+    # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）
+    category: ClassVar[str] = "framework"
+
     def __post_init__(self) -> None:
         self._control = AgentControl(self.manager)
         # 复制 event_bus 引用（如果 manager 上有）— 此处简化，不注入
@@ -194,23 +197,26 @@ class AgentControlProvider(ToolProvider):
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
         args = invocation.arguments or {}
         name = invocation.tool_name
+        # 注册名统一带 provider 前缀（framework_）；代码内直调可能用裸名，
+        # 分发前剥前缀归一（不匹配前缀时原样保留）
+        local_name = name.removeprefix("framework_")
         target_name = str(args.get("name", ""))
         try:
-            if name == "pause_agent":
+            if local_name == "pause_agent":
                 ok = await self._control.pause(target_name)
-            elif name == "resume_agent":
+            elif local_name == "resume_agent":
                 ok = await self._control.resume(target_name)
-            elif name == "shutdown_agent":
+            elif local_name == "shutdown_agent":
                 ok = await self._control.shutdown(target_name)
-            elif name == "restart_agent":
+            elif local_name == "restart_agent":
                 ok = await self._control.restart(target_name)
-            elif name == "list_agents":
+            elif local_name == "list_agents":
                 return ToolExecutionResult(
                     tool_name=name,
                     success=True,
                     content=", ".join(self._control.list_agents()) or "（无 Agent）",
                 )
-            elif name == "agent_state":
+            elif local_name == "agent_state":
                 info = self._control.state_of(target_name)
                 if info is None:
                     return ToolExecutionResult(
