@@ -19,7 +19,7 @@ Kind = Literal["sync", "async"]
 # 多模态结果块种类
 BlockKind = Literal["text", "image"]
 
-# 默认异步结果事件名（前缀）；可定制（如 set_goal → tool.result.set_goal_feedback）
+# 默认异步结果事件名（前缀）；可定制（如 some_tool → tool.result.some_tool_feedback）
 DEFAULT_RESULT_EVENT_PREFIX = "tool.result."
 
 
@@ -35,7 +35,7 @@ class ToolSpec:
         parameters_schema: JSON Schema 形态的参数描述（主流共识）；可为 None
         kind: "sync"（gather 等齐结果）/ "async"（fire-and-forget）
         result_event: 异步工具结果事件名，默认 ``tool.result.<name>``；
-                      可定制（如 set_goal → ``tool.result.set_goal_feedback``）
+                      可定制（如 some_tool → ``tool.result.some_tool_feedback``）
         provider: 提供者标识（如 vts / warudo / obs / vision / memory /
                   maicraft；溯源、注册名前缀与过滤用，非白名单枚举）
         output_schema: 可选的 JSON Schema 形态的输出描述

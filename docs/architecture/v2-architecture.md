@@ -66,7 +66,8 @@ Amaidesu 的业务层组织方式经历过四代。git 历史考实了这条演�
 
 | | 驱动方式 | 循环/目标 | 例子 |
 |---|---|---|---|
-| **Agent** | 自我驱动，没人调也在跑 | 有 | 主播 Planner 决策循环、游戏代理 AI 玩家 |
+| **主播 Agent** | 自我驱动（唯一），直播期间持续运行 | 有 | 主播 Planner 决策循环 |
+| **游戏 Agent** | 命令驱动（类 Code Agent）：命令启动任务内有界循环，完成即停、空闲零消耗 | 任务内 | MinecraftAgent（set_goal 唤醒） |
 | **工具** | 被动驱动，被调才干活 | 无 | Replyer 表达引擎、屏幕捕捉、VLM（TTS 自 v2.0.12 §8 修正起已是基础模块，不再是工具） |
 
 以及一句对内容生产者的解放：**直播内容是编排配置 + Planner 上下文/行为模式的变化，不是代码模块。** 加一档节目不需要写代码，加一类游戏才需要一个新 Agent 包。
@@ -108,9 +109,9 @@ Amaidesu 的业务层组织方式经历过四代。git 历史考实了这条演�
 
 ```mermaid
 flowchart TB
-    subgraph Agents["Agent 层（自我驱动）"]
+    subgraph Agents["Agent 层（主播自我驱动 / 游戏命令驱动）"]
         SA["主播 StreamerAgent<br/>MessageBuffer → Planner 决策循环 → reply 工具 → Replyer 表达引擎<br/>+ Agenda 子系统 + 后台双任务"]
-        GA["游戏代理 TextAdvGameAgent<br/>感知/推进/循环内聚（AI 玩家范式）"]
+        GA["游戏代理（命令驱动）<br/>MinecraftAgent：set_goal 唤醒任务内有界循环（AI 玩家范式）"]
     end
     subgraph Tools["工具层（被动能力，ToolRegistry 注册）"]
         T1["output：字幕 / VTS / Warudo / OBS…<br/>（TTS 自 v2.0.12 §8 起迁至基础模块层）"]

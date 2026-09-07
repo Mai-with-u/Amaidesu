@@ -1,13 +1,14 @@
-"""MinecraftAgent —— Minecraft 世界中的 AI 玩家
+"""MinecraftAgent —— Minecraft 世界中的 AI 玩家（普通 ReAct Agent）
 
 自包含包（内容特有逻辑内聚，框架零改动）：
-- ``config.py``        配置 Schema（tick_seconds 等）
-- ``state.py``         Agent 内存状态（todo/memo/milestones/current_goal）
-- ``tools.py``         局部工具（mc_todo / mc_memo / mc_get_state）Spec + Provider
-- ``maicraft_adapter.py``  slim 适配（唯一知道 maicraft_* 工具名 / 参数 / 返回结构的地方）
-- ``agent.py``         MinecraftAgent（BaseAgent）：决策循环
+- ``config.py``        运行时配置（max_steps 防失控）
+- ``state.py``         Agent 内存状态（todo/notebook/milestones）
+- ``tools.py``         局部工具（todo/notebook/get_state/assign）Spec + Provider
+- ``agent.py``         MinecraftAgent（BaseAgent）：命令驱动 ReAct 循环
+- ``prompts/``         系统提示词（ReAct 工作方式引导）
 """
 
-from .agent import MinecraftAgent, MinecraftConfig, build_minecraft_agent
+from .agent import MinecraftAgent
+from .config import MinecraftConfig
 
-__all__ = ["MinecraftAgent", "MinecraftConfig", "build_minecraft_agent"]
+__all__ = ["MinecraftAgent", "MinecraftConfig"]

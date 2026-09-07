@@ -645,6 +645,13 @@ class StreamerAgent(BaseAgent):
             model_class=GamePayload,
             priority=40,
         )
+        # 游戏异常也进叙事（如"无法执行目标：LLM 未注入"）——否则主播不知命令失败
+        self._event_bus.on(
+            CoreEvents.GAME_ERROR,
+            self._on_game_event,
+            model_class=GamePayload,
+            priority=40,
+        )
         self._logger.info("StreamerAgent 已订阅 room.message.danmaku / game.*")
 
     async def _on_game_event(

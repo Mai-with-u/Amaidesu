@@ -937,17 +937,21 @@ async def _register_agents_from_config(
                     from src.agents.game.minecraft import MinecraftAgent
                     from src.agents.game.minecraft.config import MinecraftConfig
 
+                    mc_section = game_cfg_dict.get("minecraft")
+                    mc_section = mc_section if isinstance(mc_section, dict) else {}
                     try:
-                        minecraft_cfg = MinecraftConfig(**{k: v for k, v in game_cfg_dict.items() if k != "engine"})
+                        minecraft_cfg = MinecraftConfig(**mc_section)
                     except Exception as e:
                         logger.warning(f"解析 MinecraftConfig 失败: {e}; 使用默认配置")
                         minecraft_cfg = MinecraftConfig()
                     minecraft_agent = MinecraftAgent(
                         config=minecraft_cfg,
                         llm_manager=llm_service,
+                        llm_profile=str(game_cfg_dict.get("command_llm", "llm") or "llm"),
                         prompt_manager=get_prompt_manager(),
                         event_bus=event_bus,
                         tool_registry=tool_registry,
+                        live_session_id=_LIVE_SESSION_ID,
                     )
                     manager.register(
                         minecraft_agent,

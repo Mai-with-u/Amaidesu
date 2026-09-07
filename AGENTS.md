@@ -12,6 +12,7 @@
 | 了解代码规范 | [开发规范](docs/development-guide.md) |
 | 理解架构设计 | [v2.0.0 架构叙事](docs/architecture/v2-architecture.md) |
 | 速查组件/目录/时序 | [架构总览](docs/architecture/overview.md) |
+| 理解游戏 Agent 设计 | [MinecraftAgent 设计](docs/architecture/minecraft-agent.md) |
 | 理解事件系统 | [事件系统](docs/architecture/event-system.md) |
 | 开发采集器/工具/Agent | [组件开发指南](docs/development/component-guide.md) |
 | 开发事件拦截器 | [事件系统](docs/architecture/event-system.md#事件拦截器interceptor) |
@@ -69,8 +70,9 @@
 
 **架构一句话**：Amaidesu 2.0.0 = **Agent（自主主体）+ 工具（能力契约）+ 存储（状态/记忆）+ 编排（Agenda 节目单）**。完整推导见 [v2.0.0 架构叙事](docs/architecture/v2-architecture.md)。
 
-**主体性判据（★ 最高约束）**：Agent 与工具的唯一判别是"谁驱动谁"——
-- **Agent**：自我驱动，没人调也在跑，有循环/目标（主播 Planner、游戏代理 AI 玩家）
+**主体性判据（★ 最高约束）**：组件按驱动方式三分——
+- **主播 Agent**：自我驱动（唯一）——直播期间持续运行决策循环，没人调也在跑
+- **游戏 Agent**：命令驱动（类 Code Agent）——收到命令才启动任务内有界循环，任务完成即停、空闲零消耗；因有自身状态与任务内自主决策，仍是 Agent 而非工具
 - **工具**：被动驱动，被调才干活，无循环（Replyer 表达引擎、屏幕捕捉、VLM；TTS 自 v2.0.12 §8 修正起已是基础模块，不再是工具）
 - **直播内容是编排配置 + Planner 上下文/行为模式的变化，不是代码模块**
 
@@ -91,6 +93,7 @@
 |------|-----------|
 | 事件表（含发布者/订阅者/数据类型） | `docs/architecture/event-system.md` |
 | 数据流图 / 组件清单 / 目录结构 | `docs/architecture/overview.md` |
+| MinecraftAgent 设计（游戏 Agent 范式） | `docs/architecture/minecraft-agent.md` |
 | 生命周期表 / 三范式开发指南 | `docs/development/component-guide.md` |
 | 架构决策记录（ADR） | `docs/architecture/adr/` |
 | 数据流规则约束 | `docs/architecture/data-flow.md` |
@@ -165,7 +168,7 @@ event_bus.on("tool.result.#", self.on_tool_result, model_class=ToolResultPayload
 | 类型 | 职责 | 基类/协议 | 位置 |
 |------|------|----------|------|
 | **采集器 Collector** | 持续流型数据源，主动推事件（`room.message.*` 等） | `BaseCollector.collect()` 返回 AsyncIterator | `src/modules/collectors/<域>/` |
-| **业务 Agent** | 自我驱动主体（主播/游戏代理），决策循环内聚 | `BaseAgent`（协议六面 + `list_tools()` 抽象） | `src/agents/<family>/<name>/` |
+| **业务 Agent** | 主播自我驱动 / 游戏命令驱动（类 Code Agent，任务内有界循环），决策循环内聚 | `BaseAgent`（协议六面 + `list_tools()` 抽象） | `src/agents/<family>/<name>/` |
 | **工具 Tool** | 被动能力契约（渲染/感知/内容引擎），被调才干活 | `ToolProvider` Protocol + `ToolSpec` | `src/modules/tools/<包>/` 或 Agent 包内 |
 
 添加组件三步：
@@ -211,7 +214,7 @@ logger.info("信息日志"); logger.error("错误日志", exc_info=True)
 ### 依赖注入 / 配置读取
 
 - **服务对象**（LLMManager、PromptManager、EventBus 等）→ 构造器注入（DI）；禁止把服务塞进 Context 容器传递。详见 [依赖注入指南](docs/development/dependency-injection.md)
-- 配置：`config/` 目录 **7 文件**（core/model/agents/tools/memory/storage/background，首次运行从 Schema 自动生成；CONFIG_VERSION 2.0.16）；Agent 启用 `[agents].enabled` / 工具包启用 `[tools].enabled` / 拦截器配置 `[interceptors.*]`
+- 配置：`config/` 目录 **7 文件**（core/model/agents/tools/memory/storage/background，首次运行从 Schema 自动生成；CONFIG_VERSION 以 `multi_file_loader.py` 为准，勿在本文标注具体值——历史教训：标注长期滞后误导）；Agent 启用 `[agents].enabled` / 工具包启用 `[tools].enabled` / 拦截器配置 `[interceptors.*]`
 
 ## 多工作树并行开发
 
@@ -299,6 +302,12 @@ Web Dashboard 两种模式（生产 60214 / 开发 60315）说明见 [快速开�
 *最后更新：2026-09-06（遗留接线补全：core.toml [context] 段与 Planner 组装路径实际接线——enabled 开关（false 时跳过组装器与记忆召回、以直播流窗口文本作为 context_block）+ memory_recall_long_term 驱动 Planner.recall_top_k；删除无实现载体的 memory_recall_viewers（SimpleMemory 无画像批量召回接口）与 cache_ttl_ms（纯函数组装器 + 每批动态窗口下无正确缓存语义），CONFIG_VERSION 2.0.15 → 2.0.16，漂移写回自动清理用户文件冗余键；agenda.update 由 StreamerAgent 在环节推进/手动控制后实际发布（此前只有订阅端，前端Dashboard/OutlineWorkbench 依赖该事件重拉节目单快照）；新增 CoreEvents.ROOM_MESSAGE_WILDCARD 通配订阅常量，storage_ledger 字面量改用常量）*
 
 *最后更新：2026-09-06（接线收口：CONFIG_VERSION 2.0.4 → 2.0.15（实际值以 `multi_file_loader.py` 为准，此前本文档长期标注 2.0.4 已严重滞后）；2.0.15 收口 tools.toml 僵尸配置（output enabled 剥离 subtitle、删除 debug_console/sticker/remote_stream 死子段、obs_control 改名 obs、perception 剥离已删除的 text_adv_game 采集器），新增 `_migrate_tools_2_0_15` 钩子及迁移测试；拦截器新增 声明式作用域 `scope_prefixes`（空 = 不限域），限流/相似过滤显式限定 `room.message.*`；`ToolRegistry` 可挂载 EventBus 广播 `tool.result.<name>`；组合根发布 `core.startup`/`core.shutdown`；修复 EventHistoryRecorder 对 game.* 订阅的 model_class 错配；删除 v1 遗留：`src/modules/di/`（反射式装配，文档已同步）、`types/intent.py` 类型闭环、`integrations/amaidesu_plugin/`、`tests/mocks/` 死 mock、一次性 scripts；pyproject 清理零引用依赖）*
+
+*最后更新：2026-09-08（MinecraftAgent ReAct 重构：从命令驱动 decide 协议（Intent 换皮）改为普通 ReAct Agent——系统提示词+工具面即全部编程、主播即用户；工具名对齐前缀机制 minecraft_assign/minecraft_todo/minecraft_notebook/minecraft_get_state（provider=minecraft 全名）；assign 纯消息投递不代写 todo、notebook 持久工作记忆；adapter 删除 agent 零 maicraft 知识（registry 动态工具面 + MCP 天然路由 server_id 判定冗余删除）；事件确定性化（todo-done diff 里程碑/交付总结/max_steps 挂起/error）；对话用已有 chat_messages + 完整 tool_call 格式喂回 + 旧观察压缩；CONFIG_VERSION 2.0.20 → 2.0.21（minecraft 段删 tick_interval_ms/server_id、增 max_steps）；旧 decide 提示词删除、新 amaidesu_minecraft_agent 系统提示词）*
+
+*最后更新：2026-09-07（工具注册名无条件 provider 前缀 + provider 分类声明（89763443）：注册名=<provider>_<工具名>、spec 未带前缀时 replace 拷贝改写、ToolProvider.category 协议属性、list_categories()/list_tools(category=)/to_llm_definitions(category=)、存量 provider 对齐（obs/vison/memory/framework/game）、调用方与测试对齐、"域"→"分类"措辞清理）*
+
+*最后更新：2026-09-07（主体性判据三分修正（用户拍板）：主播 Agent=自我驱动（唯一）/ 游戏 Agent=命令驱动（类 Code Agent，命令启动任务内有界循环、完成即停、空闲零消耗）/ 工具=被动调用；MinecraftAgent 按此重构为事件唤醒（set_goal 触发 _goal_worker→_run_goal），删除存在性心跳循环；同批修复：感知数据进 prompt、adapter ok 保留、attention 安全阀轮询、command_llm/live_session_id 接线、[agents.game.minecraft] 配置段接入（CONFIG_VERSION 2.0.20）、set_goal 写入 todo、决策 LLM 暴露 mc_todo/mc_memo、任务跟踪防重复派发）*
 
 *上次更新：2026-09-05（上下文四层架构落地：「其他约定」节 ContextService 条目补充为"L1 对话配对窗口（内存，DialogueTurn 配对视图；不持久化——启动时由组合根从 SQLite `live_chat` 通过 `seed_dialogue_turns` 回灌，见 `main.py::_bootstrap_context_from_live_chat`）"；「高频 API 速查」节未改；同日 v2.0.12 §8 概念修正：TTS 提升为基础设施（基础模块）。架构红线节"主体性判据"工具例子清单中 TTS 加注"自 v2.0.12 §8 修正起已是基础模块，不再是工具"——其余三例仍为工具；高频 API 速查节"事件系统" + "命名约定" + "依赖注入"未改；事件 Payload / 配置 Schema / 三范式 / 拦截器节未改；同日术语统一：'退役出工具池'改为'提升为基础设施'（避免误导为降级））
 

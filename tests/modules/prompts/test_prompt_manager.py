@@ -466,7 +466,7 @@ class TestRealRepoTemplates:
                 "passerby_message",
                 "warmup_message",
                 "persona_generation",
-                "amaidesu_minecraft_decide",
+                "amaidesu_minecraft_agent",
             }
         finally:
             reset_prompt_manager()

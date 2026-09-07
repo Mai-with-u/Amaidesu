@@ -21,6 +21,7 @@
 | [事件系统](architecture/event-system.md) | EventBus 使用指南 |
 | [事件命名规范](architecture/event-naming-convention.md) | 语义域事件命名规则 |
 | [架构决策记录](architecture/adr/README.md) | ADR 格式说明与决策清单 |
+| [MinecraftAgent 设计](architecture/minecraft-agent.md) | 游戏 Agent（AI 玩家）范式与 ReAct 循环设计 |
 
 ### 开发指南
 

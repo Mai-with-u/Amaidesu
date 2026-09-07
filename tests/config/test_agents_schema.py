@@ -99,10 +99,19 @@ class TestGameAgentConfig:
         cfg = GameAgentConfig()
         assert cfg.engine == "minecraft"
         assert cfg.command_llm == "llm"
+        assert cfg.minecraft.max_steps == 50
 
     def test_engine_field_override(self):
         cfg = GameAgentConfig(engine="stardew")
         assert cfg.engine == "stardew"
+
+    def test_minecraft_section_override(self):
+        cfg = GameAgentConfig(minecraft={"max_steps": 120})
+        assert cfg.minecraft.max_steps == 120
+
+    def test_minecraft_max_steps_below_minimum_rejected(self):
+        with pytest.raises(ValidationError):
+            GameAgentConfig(minecraft={"max_steps": 0})
 
 
 class TestJsonSchemaExtra:

@@ -122,7 +122,9 @@ class TestLoading:
         # v2.0.18：工具域开关重构——[tools.output] 拆 avatar/studio、look_at_screen→vision、
         # external→mcp，CONFIG_VERSION 升 patch。
         # v2.0.19：旧树→新树自足全量迁移（含 vrchat 补迁）+ vts llm_* 死配置清理。
-        assert version == "2.0.19"
+        # v2.0.20：Minecraft 接入——[agents.game] 新增 minecraft 嵌套段
+        # （tick_interval_ms/server_id），tick 计时字段归一毫秒。
+        assert version == "2.0.21"
 
     def test_drift_fixed_on_load(self, temp_config_dir):
         generate_default_configs(temp_config_dir)

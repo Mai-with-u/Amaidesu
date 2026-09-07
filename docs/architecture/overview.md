@@ -43,7 +43,7 @@ flowchart TB
 
     subgraph Game["GameAgent (src/agents/game/)"]
         TextAdv["TextAdvGameAgent<br/>+ StubContentEngine<br/>+ content_engine_* 5 工具"]
-        MC["MinecraftAgent<br/>+ maicraft 语义工具（MCP）<br/>+ mc_todo / mc_memo / mc_get_state / mc_set_goal"]
+        MC["MinecraftAgent<br/>+ maicraft 语义工具（MCP）<br/>+ minecraft_todo / minecraft_notebook / minecraft_get_state / minecraft_assign"]
     end
 
     subgraph Registry["ToolRegistry (src/modules/tools/)"]
@@ -94,7 +94,7 @@ Amaidesu/
 │   │   ├── streamer/            #   主播 Agent（Planner/Replyer/Agenda/工具/后台维护）
 │   │   └── game/                #   游戏 Agent（AI 玩家范式）
 │   │       ├── text_adv/        #     文字冒险 GameAgent 范例（content_engine 范式）
-│   │       └── minecraft/       #     Minecraft GameAgent（maicraft MCP 语义工具 + mc_todo/mc_memo/mc_get_state/mc_set_goal）
+│   │       └── minecraft/       #     Minecraft GameAgent（maicraft MCP 语义工具 + minecraft_todo/minecraft_notebook/minecraft_get_state/minecraft_assign）
 │   └── modules/                 # 共享模块（基础设施 + 领域组件）
 │       ├── agents/              # Agent 框架层：BaseAgent 协议六面 / AgentManager / AgentControl 6 工具 / factory(SUPPORTED_AGENTS)
 │       ├── audio/               # v2.0.10 抽出：AudioDeviceManager（声卡播放 / 录音），原 `src/modules/tts/audio_device_manager.py` 上移
@@ -281,10 +281,10 @@ sequenceDiagram
 
 | 维度 | Agent | Tool |
 |------|-------|------|
-| 谁驱动 | **自我驱动**（持有 asyncio 主循环/后台任务，心跳、状态机、`start/stop`） | **被调才干活**（纯被动，调用即返回 `ToolExecutionResult`） |
+| 谁驱动 | 主播**自我驱动**（持续循环）；游戏**命令驱动**（类 Code Agent：命令唤醒任务内有界循环，完成即停，空闲零消耗） | **被调才干活**（纯被动，调用即返回 `ToolExecutionResult`） |
 | 形态 | 继承 `BaseAgent`，可发事件、可订阅、可销毁重建 | 继承 `ToolProvider`，`list_tools()` + `invoke(ToolInvocation)` |
 | 暴露 | 整个生命周期 + `list_tools()` 聚合到 ToolRegistry | 只通过 `ToolRegistry.invoke(name, args)` 暴露给 LLM |
-| 例子 | `StreamerAgent`（Planner 循环 + 后台 BackgroundMaintainer）、`TextAdvGameAgent` | `vision_look_at_screen`、`content_engine_send_input`、`vts_set_expression` |
+| 例子 | `StreamerAgent`（Planner 循环 + 后台 BackgroundMaintainer）、`TextAdvGameAgent`、`MinecraftAgent`（命令唤醒任务执行） | `vision_look_at_screen`、`content_engine_send_input`、`vts_set_expression` |
 
 **判别口诀**："谁驱动谁"——能自我维持状态/轮询/心跳的就是 Agent，只在被调用时执行的就是 Tool。
 

@@ -4,7 +4,7 @@
 
 配置名映射：
 - streamer → StreamerAgent
-- game    → TextAdvGameAgent（引擎 text_adv）
+- game    → 按 engine 分派（minecraft → MinecraftAgent（默认）/ text_adv → TextAdvGameAgent）
 - custom  → 用户自定义注册（占位，不实例化）
 """
 
@@ -65,13 +65,16 @@ def instantiate_agent(
             from src.agents.game.minecraft import MinecraftAgent
             from src.agents.game.minecraft.config import MinecraftConfig
 
+            mc_section = config.get("minecraft")
+            mc_section = mc_section if isinstance(mc_section, dict) else {}
             try:
-                minecraft_cfg = MinecraftConfig(**{k: v for k, v in config.items() if k != "engine"})
+                minecraft_cfg = MinecraftConfig(**mc_section)
             except Exception:
                 minecraft_cfg = MinecraftConfig()
             return MinecraftAgent(
                 config=minecraft_cfg,
                 llm_manager=llm_manager,
+                llm_profile=str(config.get("command_llm", "llm") or "llm"),
                 prompt_manager=prompt_manager,
                 event_bus=event_bus,
                 tool_registry=tool_registry,

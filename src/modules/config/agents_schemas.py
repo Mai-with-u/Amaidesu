@@ -151,14 +151,28 @@ class StreamerAgentConfig(BaseConfig):
 
 
 # ---------------------------------------------------------------------------
-# [agents.game] 配置（占位，由具体游戏 Agent 实现补全字段）
+# [agents.game] 配置（engine 子段按具体游戏实现展开）
 # ---------------------------------------------------------------------------
 
 
-class GameAgentConfig(BaseConfig):
-    """游戏 Agent 配置（占位）
+class MinecraftGameSettings(BaseConfig):
+    """Minecraft 游戏 Agent 配置段（[agents.game.minecraft]）
 
-    ``engine`` 标识具体游戏实现（如 "minecraft" / "stardew" 等）。
+    可配置字段与运行时 ``MinecraftConfig`` 的对应字段同步维护。
+    """
+
+    max_steps: int = Field(
+        default=50,
+        ge=1,
+        description="单任务 ReAct 循环最大步数（超出挂起上报，防失控）",
+    )
+
+
+class GameAgentConfig(BaseConfig):
+    """游戏 Agent 配置
+
+    ``engine`` 标识具体游戏实现（如 "minecraft" / "stardew" 等）；
+    各引擎专属配置放同名子段（如 ``[agents.game.minecraft]``）。
     """
 
     enabled: bool = Field(default=True, description="是否启用游戏 Agent")
@@ -169,6 +183,10 @@ class GameAgentConfig(BaseConfig):
     command_llm: str = Field(
         default="llm",
         description="游戏 Agent 决策用的 LLM profile 名",
+    )
+    minecraft: MinecraftGameSettings = Field(
+        default_factory=MinecraftGameSettings,
+        description="Minecraft 引擎专属配置",
     )
 
 
