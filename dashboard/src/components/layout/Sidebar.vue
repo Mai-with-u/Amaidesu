@@ -20,7 +20,7 @@
         </el-menu-item>
         <el-menu-item index="/tools">
           <el-icon><Tools /></el-icon>
-          <span>工具目录</span>
+          <span>工具</span>
         </el-menu-item>
         <el-menu-item index="/eventlog">
           <el-icon><Document /></el-icon>

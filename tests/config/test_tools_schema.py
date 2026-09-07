@@ -3,8 +3,8 @@
 测试 src/modules/config/tools_schemas.py：
 1. ToolsRootConfig 根结构（tools 子段）
 2. ToolsConfig 聚合：enabled 列表 + perception/output 包 + 工具域开关（avatar/studio/vision/memory/mcp）
-3. ToolDomainConfig 开关语义（enabled + config）
-4. avatar/studio 动态子段（Dict[str, DomainConfig]）
+3. ToolProviderConfig 开关语义（enabled + config）
+4. avatar/studio 动态子段（Dict[str, ProviderConfig]）
 5. json_schema_extra UI 元数据
 """
 
@@ -14,15 +14,15 @@ import pytest
 from pydantic import ValidationError
 
 from src.modules.config.tools_schemas import (
-    AvatarDomainConfig,
-    McpDomainConfig,
-    MemoryDomainConfig,
-    StudioDomainConfig,
-    ToolDomainConfig,
+    AvatarProviderConfig,
+    McpProviderConfig,
+    MemoryProviderConfig,
+    StudioProviderConfig,
+    ToolProviderConfig,
     ToolPackType,
     ToolsConfig,
     ToolsRootConfig,
-    VisionDomainConfig,
+    VisionProviderConfig,
 )
 
 
@@ -70,14 +70,14 @@ class TestToolsConfigPackAndDomains:
         assert cfg.mcp is None
 
 
-class TestToolDomainConfig:
+class TestToolProviderConfig:
     def test_default_enabled_true(self):
-        cfg = ToolDomainConfig()
+        cfg = ToolProviderConfig()
         assert cfg.enabled is True
         assert cfg.config == {}
 
     def test_custom_enabled_and_config(self):
-        cfg = ToolDomainConfig(enabled=False, config={"key": "value"})
+        cfg = ToolProviderConfig(enabled=False, config={"key": "value"})
         assert cfg.enabled is False
         assert cfg.config == {"key": "value"}
 
@@ -92,25 +92,25 @@ class TestAvatarStudioDomains:
         assert cfg.studio["obs"].enabled is True
 
     def test_domain_extra_allowed(self):
-        cfg = AvatarDomainConfig(enabled=True, extra_field="x")
+        cfg = AvatarProviderConfig(enabled=True, extra_field="x")
         assert cfg.extra_field == "x"
 
 
 class TestSpecializedDomains:
     def test_vision(self):
-        cfg = VisionDomainConfig(enabled=True, config={"default_max_width": 1280})
+        cfg = VisionProviderConfig(enabled=True, config={"default_max_width": 1280})
         assert cfg.enabled is True
 
     def test_memory(self):
-        cfg = MemoryDomainConfig(enabled=True)
+        cfg = MemoryProviderConfig(enabled=True)
         assert cfg.config == {}
 
     def test_mcp(self):
-        cfg = McpDomainConfig(enabled=True, config={"servers": {}})
+        cfg = McpProviderConfig(enabled=True, config={"servers": {}})
         assert cfg.config == {"servers": {}}
 
     def test_studio_specialized(self):
-        cfg = StudioDomainConfig(enabled=True)
+        cfg = StudioProviderConfig(enabled=True)
         assert cfg.enabled is True
 
 

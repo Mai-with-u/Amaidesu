@@ -114,6 +114,9 @@ class ToolRegistry:
         self._providers: List[ToolProvider] = []
         # 提供者名 → 分类（provider 自声明；注册时记录，供 category 查询/过滤）
         self._categories: Dict[str, str] = {}
+        # 停用的工具名集合：工具仍保留在注册表中（工具页可见全集），
+        # 但对 LLM 不可见（list_tools 默认排除）且调用被拒绝
+        self._disabled: set[str] = set()
         # 可选事件总线：挂载后每次调用完成 emit tool.result.<name>
         self._event_bus = event_bus
 
@@ -180,19 +183,26 @@ class ToolRegistry:
         self,
         provider: Optional[str] = None,
         category: Optional[str] = None,
+        *,
+        include_disabled: bool = False,
     ) -> List[ToolSpec]:
-        """返回所有已注册工具的 spec。
+        """返回已注册工具的 spec（默认排除停用工具）。
 
         Args:
             provider: 可选过滤（提供者标识，如 "vts" / "warudo" /
                 "obs" / "vision" / "memory" / "maicraft"）；None 返回全部。
             category: 可选过滤（提供者自声明的分类，如 "avatar" /
                 "studio" / "game"）；None 不按分类过滤。
+            include_disabled: True 时包含已停用工具（工具页展示全集用）；
+                LLM 可见性（Planner / Replyer / to_llm_definitions）走默认
+                排除路径。
 
         Returns:
-            满足条件的 spec 列表（两个过滤条件为 AND 关系）。
+            满足条件的 spec 列表（过滤条件为 AND 关系）。
         """
         specs = [spec for spec, _ in self._tools.values()]
+        if not include_disabled:
+            specs = [s for s in specs if s.name not in self._disabled]
         if provider is not None:
             specs = [s for s in specs if s.provider == provider]
         if category is not None:
@@ -216,6 +226,35 @@ class ToolRegistry:
         """是否存在指定工具。"""
         return name in self._tools
 
+    def category_of(self, name: str) -> str:
+        """返回工具所属提供者声明的分类（未知工具 / 未声明返回空串）。"""
+        spec = self.get(name)
+        if spec is None:
+            return ""
+        return self._categories.get(spec.provider, "")
+
+    # -------------------- 停用 --------------------
+
+    def apply_disabled(self, names: Iterable[str]) -> int:
+        """整体设置停用集合（组合根装配完成后调用；未知名字忽略）。
+
+        Returns:
+            实际生效的停用工具数（即注册表中存在的名字数）。
+        """
+        self._disabled = {n for n in names if n in self._tools}
+        if self._disabled:
+            logger.info(f"ToolRegistry 已停用 {len(self._disabled)} 个工具: {sorted(self._disabled)}")
+        return len(self._disabled)
+
+    def is_disabled(self, name: str) -> bool:
+        """工具是否处于停用状态。"""
+        return name in self._disabled
+
+    @property
+    def disabled_tools(self) -> List[str]:
+        """当前停用的工具名（排序后快照）。"""
+        return sorted(self._disabled)
+
     # -------------------- 调用 --------------------
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
@@ -234,6 +273,14 @@ class ToolRegistry:
                 tool_name=invocation.tool_name,
                 success=False,
                 error_message=f"未知工具: '{invocation.tool_name}'",
+                timestamp_ms=int(time.time() * 1000),
+            )
+        if invocation.tool_name in self._disabled:
+            logger.warning(f"工具 '{invocation.tool_name}' 已停用，拒绝调用（source={invocation.source or 'unknown'}）")
+            return ToolExecutionResult(
+                tool_name=invocation.tool_name,
+                success=False,
+                error_message=f"工具 '{invocation.tool_name}' 已停用（可在 Web UI 工具页重新启用）",
                 timestamp_ms=int(time.time() * 1000),
             )
         spec, impl = pair
@@ -319,6 +366,7 @@ class ToolRegistry:
         self._tools.clear()
         self._providers.clear()
         self._categories.clear()
+        self._disabled.clear()
         logger.debug("ToolRegistry 已清空")
 
     # 兼容 inspect / debug

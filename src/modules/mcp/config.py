@@ -23,7 +23,7 @@
 设计要点：
 - 服务端能力契约（tools 的 JSON Schema 等）由运行时 ``list_tools`` 动态拉取，
   不在配置内硬编码；配置只描述"连谁、怎么连"。
-- 配置段的权威 Schema 在 ``src/modules/config/tools_schemas.py``（McpDomainConfig）；
+- 配置段的权威 Schema 在 ``src/modules/config/tools_schemas.py``（McpProviderConfig）；
   本模块的 McpExternalConfig 仅为 bind 路径的宽松解析器。
 """
 

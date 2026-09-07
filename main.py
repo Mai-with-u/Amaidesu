@@ -569,11 +569,19 @@ async def create_app_components(
             logger.warning("[tools.mcp].enabled=false 但配置了 servers —— MCP 工具未装配")
 
         agents_enabled = ((config.get("agents") or {}).get("enabled") or []) if isinstance(config, dict) else []
-        if "game" in agents_enabled and "look_at_screen" not in tool_registry:
+        if "game" in agents_enabled and "vision_look_at_screen" not in tool_registry:
             logger.warning(
-                "游戏 Agent 已启用但 look_at_screen 未注册"
-                "（[tools.look_at_screen].enabled=false？）——感知将走空快照降级路径"
+                "游戏 Agent 已启用但 vision_look_at_screen 未注册"
+                "（[tools.vision].enabled=false？）——感知将走空快照降级路径"
             )
+
+        # --- 工具级停用（[tools].disabled_tools 列表；在全部装配完成后应用）---
+        # 停用的工具保留在注册表中（工具页可见全集），但对 LLM 不可见且调用被拒绝
+        disabled_raw = tools_section.get("disabled_tools") if isinstance(tools_section, dict) else []
+        disabled_names = [n for n in disabled_raw if isinstance(n, str)] if isinstance(disabled_raw, list) else []
+        if disabled_names:
+            applied = tool_registry.apply_disabled(disabled_names)
+            logger.info(f"已按 [tools].disabled_tools 停用 {applied} 个工具（重启前配置为唯一事实源）")
 
         await agent_manager.start_all()
         logger.info(f"AgentManager 已启动（{len(agent_manager)} 个 Agent）")

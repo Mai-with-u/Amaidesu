@@ -59,11 +59,11 @@ _SECTION_MAP: dict[str, str] = {
     "llm_summary": "model.toml",
     "llm_agenda": "model.toml",
     "llm_outline": "model.toml",  # 旧键名，改名 llm_agenda 由 upgrade hook 处理
-    # 阶段组件段 → 域文件（具体合并到对应子段由 CrossFileMigration 后续处理）
+    # 阶段组件段 → 目标配置文件（具体合并到对应子段由 CrossFileMigration 后续处理）
     "deciders": "decision.toml",
     "collectors": "input.toml",
     "handlers": "output.toml",
-    # 新文件体系的域段（首次迁移即写入默认值）
+    # 新文件体系的配置段（首次迁移即写入默认值）
     "agents": "agents.toml",
     "tools": "tools.toml",
     "memory": "memory.toml",

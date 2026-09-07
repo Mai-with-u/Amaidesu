@@ -124,7 +124,8 @@ class TestLoading:
         # v2.0.19：旧树→新树自足全量迁移（含 vrchat 补迁）+ vts llm_* 死配置清理。
         # v2.0.20：Minecraft 接入——[agents.game] 新增 minecraft 嵌套段
         # （tick_interval_ms/server_id），tick 计时字段归一毫秒。
-        assert version == "2.0.21"
+        # v2.0.22：[tools] 新增 disabled_tools（工具级停用列表，纯新增字段无迁移）。
+        assert version == "2.0.22"
 
     def test_drift_fixed_on_load(self, temp_config_dir):
         generate_default_configs(temp_config_dir)

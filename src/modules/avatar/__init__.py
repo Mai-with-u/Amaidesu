@@ -1,10 +1,10 @@
-"""Avatar domain module — virtual avatar backend providers.
+"""虚拟形象提供者包（avatar）。
 
-Houses concrete avatar Provider implementations:
-- vts/ — VTubeStudio control
-- vrchat/ — VRChat OSC bridge (independent backend, unrelated to VTS)
-- warudo/ — Warudo control
+收录各虚拟形象后端的 Provider 实现：
+- vts/ — VTubeStudio 控制
+- vrchat/ — VRChat OSC 桥接（独立后端，与 VTS 无关）
+- warudo/ — Warudo 控制
 
-One avatar backend = one Provider instance = one enable unit.
-``[tools.avatar.<name>]`` config controls visibility; on = all tools visible,
-off = all gone."""
+一个形象后端 = 一个 Provider 实例 = 一个启用单元。
+``[tools.avatar.<name>]`` 配置控制其工具可见性：开 = 全部可见，关 = 全部消失。
+"""

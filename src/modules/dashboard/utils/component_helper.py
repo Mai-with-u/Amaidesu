@@ -5,14 +5,15 @@
 基于 ManagerStatusProvider 协议与阶段层解耦。
 
 另提供基于配置全集 + 运行时 Manager 的摘要构建函数：
-- 配置全集 = agents.toml [agents] 子键 / tools.toml [tools.perception.config] /
-  [tools.output.config] 子键（"可用组件"清单）
+- 配置全集 = agents.toml [agents] 子键 / tools.toml [tools.perception.config]
+  子键（"可用组件"清单）
 - 未在启用列表的组件以 is_enabled=False 占位（组件管理页可快速启用）
+- 工具不在本清单：工具以"域开关单元"管理（见 tools API 的 domains 端点），
+  与组件启停语义不同
 
 description 来源：
 - 采集器：CollectorManager._collectors[name].description（注册时填写）
 - Agent：AgentManager._agents[name].description
-- 工具：ToolRegistry.list_tools() 中 ToolSpec.description
 """
 
 from typing import Any, Dict, List, Optional
@@ -77,20 +78,20 @@ def _find_detail(manager: Optional[ManagerStatusProvider], name: str, phase: str
 
 
 def get_v2_component_list(config_main: Optional[Dict[str, Any]], server: Any) -> Dict[str, List[ComponentSummary]]:
-    """构建 v2 三组组件列表（采集器 / Agent / 工具）。
+    """构建 v2 两组组件列表（采集器 / Agent）。
 
     数据源：
     - 采集器：tools.toml ``[tools.perception.config]`` 的子键（感知源全集）
     - Agent：agents.toml ``[agents]`` 的子键（enabled 之外的键）
-    - 工具：tools.toml ``[tools.output.config]`` 的子键（输出工具全集）
 
     未在启用列表中的组件以 ``is_enabled=False`` 占位，组件管理页可快速启停。
     运行时状态（is_started）优先取 Manager 实际状态。
-    description 字段在已注册实例存在时取管理器/ToolSpec 的描述，否则空串。
+    description 字段在已注册实例存在时取管理器的描述，否则空串。
+    工具不在此清单：工具以"域开关单元"管理（tools API 的 domains 端点）。
 
     Args:
         config_main: 拍平后的主配置 dict（ConfigService.main_config）。
-        server: DashboardServer（借助 collector_manager / agent_manager / tool_registry）。
+        server: DashboardServer（借助 collector_manager / agent_manager）。
     """
     config_main = config_main or {}
     running_collectors = _running_names(getattr(server, "collector_manager", None), "list_running")
@@ -103,7 +104,6 @@ def get_v2_component_list(config_main: Optional[Dict[str, Any]], server: Any) ->
         getattr(server, "agent_manager", None),
         "_agents",
     )
-    tool_descriptions = _tool_descriptions(getattr(server, "tool_registry", None))
 
     collectors = _build_from_config(
         config_root=_nested(config_main, "tools", "perception", "config"),
@@ -119,16 +119,7 @@ def get_v2_component_list(config_main: Optional[Dict[str, Any]], server: Any) ->
         running_names=running_agents,
         descriptions=agent_descriptions,
     )
-    tools = _build_from_config(
-        config_root=_nested(config_main, "tools", "output", "config"),
-        enabled_list=_nested(config_main, "tools", "output", "config", "enabled") or [],
-        group="tools",
-        phase="output",
-        component_type="tool",
-        running_names=set(),
-        descriptions=tool_descriptions,
-    )
-    return {"collectors": collectors, "agents": agents, "tools": tools}
+    return {"collectors": collectors, "agents": agents}
 
 
 def _running_names(manager: Any, method: str) -> set[str]:
@@ -158,25 +149,6 @@ def _manager_descriptions(manager: Any, attr_name: str) -> Dict[str, str]:
         desc = getattr(reg, "description", "") or ""
         if desc:
             result[key] = desc
-    return result
-
-
-def _tool_descriptions(registry: Any) -> Dict[str, str]:
-    """从 ToolRegistry 提取已注册 ToolSpec 的 description 字典。
-
-    工具规格的 description 是 LLM 视角的描述，Dashboard 组件管理页可复用。
-    """
-    if registry is None:
-        return {}
-    try:
-        specs = registry.list_tools()
-    except Exception:
-        return {}
-    result: Dict[str, str] = {}
-    for spec in specs:
-        desc = getattr(spec, "description", "") or ""
-        if desc:
-            result[spec.name] = desc
     return result
 
 

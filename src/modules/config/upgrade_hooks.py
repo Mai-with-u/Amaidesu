@@ -248,7 +248,7 @@ def _strip_pipelines_2_0_4(data: dict[str, Any]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# 跨域迁移 hooks
+# 跨文件迁移 hooks
 # ---------------------------------------------------------------------------
 
 
@@ -655,9 +655,9 @@ def _migrate_tools_2_0_15(data: dict[str, Any]) -> list[str]:
 
 
 def _migrate_tools_2_0_18(data: dict[str, Any]) -> list[str]:
-    """tools.toml 2.0.18：工具域开关重构（output 拆 avatar/studio + vision/mcp 更名）
+    """tools.toml 2.0.18：工具提供者开关重构（output 拆 avatar/studio + vision/mcp 更名）
 
-    旧树（域开关藏 [tools.output].config.enabled 白名单）→ 新树（每域独立开关）:
+    旧树（开关藏在 [tools.output].config.enabled 白名单）→ 新树（每个提供者独立开关）:
     - ``[tools.output.config].enabled`` 的 vts/warudo → 拆为 ``[tools.avatar.vts]/[tools.avatar.warudo]``
       （保留其 config；缺失时补默认 enabled=true）
     - ``[tools.output].config`` 的 obs → ``[tools.studio.obs]``（保留 config）
@@ -723,14 +723,14 @@ def _migrate_tools_2_0_19(data: dict[str, Any]) -> list[str]:
     """tools.toml 2.0.19：自足完成旧树→新树全量迁移 + vts llm_* 死配置清理。
 
     为什么重做 2.0.18 的迁移：``current_ver`` 取自 core.toml 的
-    ``[meta].version``，而各域文件的实际结构可能落后于它（2.0.18 写回失败、
+    ``[meta].version``，而各配置文件的实际结构可能落后于它（2.0.18 写回失败、
     或 core.toml 已随更早版本升上去导致左开区间跳过 2.0.18 钩子）。本钩子
     幂等覆盖全部旧结构，保证任意起始版本 ≤ 2.0.19 的文件一次跑完迁移。
 
     - 补迁 vrchat（2.0.18 遗漏）：``[tools.output].config.vrchat`` →
       ``[tools.avatar.vrchat]``——必须在 2.0.18 删除旧 output 段之前搬出，
       否则用户值随整段删除丢失
-    - 复用 2.0.18 迁移（vts/warudo/obs 域拆分 + look_at_screen/external 更名
+    - 复用 2.0.18 迁移（vts/warudo/obs 提供者拆分 + look_at_screen/external 更名
       + 删除旧段）
     - 删除 ``avatar.vts.config`` 的 ``llm_*`` 死键（LLM 热键匹配链已删除，
       被"按名触发 + 工具描述携带热键清单"取代）
@@ -903,7 +903,7 @@ CONFIG_UPGRADE_HOOKS: tuple[ConfigUpgradeHook, ...] = (
         config_file="tools.toml",
         migrate=_migrate_tools_2_0_15,
     ),
-    # 工具域开关重构：output 拆 avatar/studio + look_at_screen→vision + external→mcp
+    # 工具提供者开关重构：output 拆 avatar/studio + look_at_screen→vision + external→mcp
     ConfigUpgradeHook(
         target_version="2.0.18",
         config_file="tools.toml",

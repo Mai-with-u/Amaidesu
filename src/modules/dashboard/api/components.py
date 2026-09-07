@@ -1,12 +1,13 @@
 """
 组件管理 API
 
-提供 采集器 / Agent / 工具 三组组件的状态查询和控制接口。
+提供 采集器 / Agent 两组组件的状态查询和控制接口。
 数据源为拍平后的主配置（ConfigService.main_config）与运行时
-CollectorManager / AgentManager / ToolRegistry。
+CollectorManager / AgentManager。
 
-路径参数 ``group`` ∈ {"collectors", "agents", "tools"}；ComponentSummary.description
-由管理器注册/工具规格填充（空串兜底）。
+路径参数 ``group`` ∈ {"collectors", "agents"}；ComponentSummary.description
+由管理器注册填充（空串兜底）。工具不在此管理：工具以"域开关单元"管理
+（见 tools API 的 domains 端点）。
 """
 
 from typing import TYPE_CHECKING, Annotated, Any, Dict, List
@@ -41,7 +42,6 @@ ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 _GROUP_TO_CONFIG: Dict[str, tuple[str, List[str]]] = {
     "collectors": ("tools", ["tools", "perception", "config"]),
     "agents": ("agents", ["agents"]),
-    "tools": ("tools", ["tools", "output", "config"]),
 }
 
 
@@ -74,7 +74,6 @@ def _sync_enabled_config(server: "DashboardServer", group: str, name: str, *, en
     group 映射（v2）：
     - collectors → tools.toml ``[tools.perception.config].enabled``
     - agents → agents.toml ``[agents].enabled``
-    - tools → tools.toml ``[tools.output.config].enabled``
     """
     section_info = _GROUP_TO_CONFIG.get(group)
     if section_info is None:
@@ -108,13 +107,12 @@ def _sync_enabled_config(server: "DashboardServer", group: str, name: str, *, en
 
 @router.get("", response_model=ComponentListResponse)
 async def list_components(server: ServerDep) -> ComponentListResponse:
-    """获取所有组件列表（v2：采集器 / Agent / 工具，含未启用组件）"""
+    """获取所有组件列表（v2：采集器 / Agent，含未启用组件）"""
     main_config = server.config_service.main_config if server.config_service else {}
     grouped = get_v2_component_list(main_config, server)
     return ComponentListResponse(
         collectors=grouped["collectors"],
         agents=grouped["agents"],
-        tools=grouped["tools"],
     )
 
 
@@ -124,7 +122,7 @@ async def get_component(
     name: str,
     server: ServerDep,
 ) -> ComponentDetailResponse:
-    """获取单个组件详情（group ∈ {collectors, agents, tools}）"""
+    """获取单个组件详情（group ∈ {collectors, agents}）"""
     if group not in _GROUP_TO_CONFIG:
         raise HTTPException(status_code=404, detail=f"Unknown component group: {group}")
     main_config = server.config_service.main_config if server.config_service else {}
@@ -144,7 +142,7 @@ async def control_component(
 ) -> ComponentControlResponse:
     """控制组件：优先动态启停（实例→配置），失败回退配置写回（重启后生效）
 
-    group ∈ {"collectors", "agents", "tools"}（路径参数统一为 group）。
+    group ∈ {"collectors", "agents"}（路径参数统一为 group）。
     """
     if group not in _GROUP_TO_CONFIG:
         raise HTTPException(status_code=400, detail=f"Invalid group: {group}")
@@ -216,7 +214,7 @@ async def _try_dynamic_start(server: "DashboardServer", group: str, name: str) -
             return ComponentControlResponse(success=True, message=f"Agent {name} 已启动并加入启用配置")
         return ComponentControlResponse(success=False, message=f"Agent {name} 启动失败（已尝试动态启用）")
 
-    return None  # tools 组：无实例语义，走配置写回
+    return None  # 未知 group 或无实例语义：由调用方回退配置写回
 
 
 async def _try_dynamic_stop(server: "DashboardServer", group: str, name: str) -> ComponentControlResponse | None:
@@ -249,8 +247,6 @@ def _read_sub_config(main_config: dict, top_section: str, group: str, name: str)
     if top_section == "tools":
         if group == "collectors":
             return dict((main_config.get("tools") or {}).get("perception", {}).get("config", {}).get(name) or {})
-        if group == "tools":
-            return dict((main_config.get("tools") or {}).get("output", {}).get("config", {}).get(name) or {})
     if top_section == "agents":
         return dict((main_config.get("agents") or {}).get(name) or {})
     return {}

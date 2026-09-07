@@ -37,6 +37,9 @@ class McpToolProvider(ToolProvider):
             可显式覆盖如 "game"）
     """
 
+    # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）
+    category = "mcp"
+
     def __init__(
         self,
         *,

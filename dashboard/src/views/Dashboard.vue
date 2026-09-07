@@ -152,8 +152,11 @@ const router = useRouter();
 
 const { status } = storeToRefs(systemStore);
 
-/** 工具总数（ToolRegistry 运行时 spec 数，与工具目录页同源） */
+/** 工具总数（ToolRegistry 运行时 spec 数，与工具页同源） */
 const toolCount = ref<number | null>(null);
+
+/** 工具提供者数（runtime spec 的 distinct provider，与工具页同源） */
+const providerCount = ref<number | null>(null);
 
 // ====== KPI / 卡片数据 ======
 
@@ -214,13 +217,13 @@ const ToolIcon = {
   },
 };
 
-function startedCount(group: 'collectors' | 'agents' | 'tools'): number {
+function startedCount(group: 'collectors' | 'agents'): number {
   const list = componentsStore.components?.[group];
   if (!list || list.length === 0) return 0;
   return list.filter(c => c.is_started).length;
 }
 
-function totalCount(group: 'collectors' | 'agents' | 'tools'): number {
+function totalCount(group: 'collectors' | 'agents'): number {
   return componentsStore.components?.[group]?.length ?? 0;
 }
 
@@ -252,9 +255,9 @@ const groupCards = computed<GroupCard[]>(() => {
       key: 'tools',
       title: '工具',
       subtitle: '工具契约（v2 tool.result.*）',
-      started: totalCount('tools'),
-      total: toolCount.value ?? totalCount('tools'),
-      statPrimary: '提供方',
+      started: providerCount.value ?? 0,
+      total: toolCount.value ?? 0,
+      statPrimary: '提供者',
       statSecondary: '工具条目',
       icon: ToolIcon,
       supportsRuntimeStop: false,
@@ -427,8 +430,10 @@ onMounted(async () => {
   try {
     const res = await toolsApi.list();
     toolCount.value = res.data.tools.length;
+    providerCount.value = new Set(res.data.tools.map(t => t.provider).filter(Boolean)).size;
   } catch {
-    toolCount.value = null; // 失败时回退显示提供方数
+    toolCount.value = null; // 失败时回退显示 0
+    providerCount.value = null;
   }
 });
 

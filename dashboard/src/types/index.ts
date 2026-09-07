@@ -62,7 +62,7 @@ export interface SystemStatusResponse {
  */
 export interface ComponentSummary {
   name: string;
-  group: 'collectors' | 'agents' | 'tools';
+  group: 'collectors' | 'agents';
   type: string;
   kind?: string;
   description?: string;
@@ -70,15 +70,15 @@ export interface ComponentSummary {
   is_enabled: boolean;
 }
 
+/** 工具不在组件清单：工具以"域开关单元"管理（见 ToolDomainUnit） */
 export interface ComponentListResponse {
   collectors: ComponentSummary[];
   agents: ComponentSummary[];
-  tools: ComponentSummary[];
 }
 
 export interface ComponentDetail {
   name: string;
-  group: 'collectors' | 'agents' | 'tools';
+  group: 'collectors' | 'agents';
   type: string;
   description?: string;
   is_started: boolean;
@@ -324,15 +324,73 @@ export interface ParameterSpec {
   maximum?: number;
 }
 
-/** v2 工具 action（来自真实 ToolRegistry）。name 形如 `<provider>.<tool>`。 */
+/**
+ * 已注册工具条目（GET /api/v1/tools）。
+ *
+ * `name` 为完整工具名（`<provider>_<动词>_<对象>`，前缀内嵌）；`provider` /
+ * `kind` / `category` 来自 ToolSpec 与注册时声明的提供者分类，不再从名字推断。
+ */
 export interface ToolEntry {
   name: string;
   description?: string;
   parameters: Record<string, ParameterSpec>;
+  /** 工具提供者标识（vts / warudo / obs / vision / memory / text_adv / framework / <mcp server 名>） */
+  provider?: string;
+  /** 同步（gather 等齐）/ 异步（fire-and-forget + 事件回传） */
+  kind?: 'sync' | 'async';
+  /** 提供者分类（avatar / studio / vision / memory / mcp / game / framework） */
+  category?: string;
+  /** 是否已停用（对 LLM 不可见且不可调用；[tools].disabled_tools 驱动） */
+  disabled?: boolean;
+  /** 异步工具的结果回传事件名（仅 kind === 'async' 时存在） */
+  result_event?: string;
 }
 
 export interface ToolsView {
   tools: ToolEntry[];
+}
+
+/** 工具提供者（GET /api/v1/tools/categories 中分类下的成员） */
+export interface ToolProviderUnit {
+  /** 提供者配置键（vts / vrchat / warudo / obs；mcp 下为 server 名） */
+  key: string;
+  /** 工具 provider 标识（通常与 key 相同，例外：obs → obs_control） */
+  provider_name: string;
+  description: string;
+  /** 配置态：[tools.<分类>.<键>].enabled */
+  enabled: boolean;
+  /** 该提供者是否在配置中声明过（false = 已知成员但配置未写，可首次开启） */
+  in_config: boolean;
+  /** Agent 自声明分类（game）不可开关 */
+  switchable: boolean;
+  /** 运行态：registry 中该提供者已注册的工具数（含停用） */
+  tool_count: number;
+  /** 其中停用的工具数 */
+  disabled_count: number;
+}
+
+/** 工具提供者分类（GET /api/v1/tools/categories） */
+export interface ToolCategoryView {
+  category: string;
+  providers: ToolProviderUnit[];
+}
+
+export interface ToolCategoriesView {
+  categories: ToolCategoryView[];
+}
+
+export type ToolProviderControlAction = 'enable' | 'disable';
+
+export interface ToolControlResponse {
+  success: boolean;
+  enabled: boolean;
+  message: string;
+}
+
+export interface ToolProviderControlResponse {
+  success: boolean;
+  enabled: boolean;
+  message: string;
 }
 
 // ==================== Simulator 控制面（ADR-006） ====================

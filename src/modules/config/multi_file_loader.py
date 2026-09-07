@@ -66,7 +66,7 @@ _PHASE_TO_REGISTRY: dict[tuple[str, str], str] = {
 
 # 配置版本号。权威定义：本文件的 ``CONFIG_VERSION`` 与 ``MetaConfig.version``
 # 默认值必须同步修改（改一必改二）。详见 AGENTS.md "配置 Schema 变更规则"。
-CONFIG_VERSION = "2.0.21"
+CONFIG_VERSION = "2.0.22"
 
 # 配置文件清单（按域划分）：core / model / agents / tools / memory / storage / background
 _CONFIG_FILES = [
@@ -659,7 +659,7 @@ def _table_from_model(instance: BaseModel) -> Any:
 def _dict_to_toml_table(data: dict[str, Any]) -> Any:
     """把嵌套 dict 转 tomlkit Table（值为 Pydantic 模型时递归展开为表）。
 
-    动态域字段（如 ``avatar: Dict[str, AvatarDomainConfig]``）的模型值
+    动态分类字段（如 ``avatar: Dict[str, AvatarProviderConfig]``）的模型值
     若不展开，tomlkit 无法序列化直接报错。
     """
     table = tomlkit.table()

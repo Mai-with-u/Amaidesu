@@ -25,6 +25,10 @@ import type {
   LLMHistoryResponse,
   LLMRequestHistory,
   ToolsView,
+  ToolCategoriesView,
+  ToolProviderControlAction,
+  ToolControlResponse,
+  ToolProviderControlResponse,
   SimulatorStatus,
   SimPersona,
   SimGift,
@@ -96,9 +100,17 @@ export const llmApi = {
   getRequestById: (requestId: string) => api.get<LLMRequestHistory>(`/llm/history/${requestId}`),
 };
 
-// ===== Tools（工具清单） =====
+// ===== Tools（工具清单 + 提供者分类面板） =====
+// 提供者开关写回 tools.toml 后需重启应用生效（工具注册发生在组合根装配期）。
 export const toolsApi = {
   list: () => api.get<ToolsView>('/tools'),
+  listCategories: () => api.get<ToolCategoriesView>('/tools/categories'),
+  controlProvider: (category: string, key: string, action: ToolProviderControlAction) =>
+    api.post<ToolProviderControlResponse>(`/tools/categories/${category}/${key}/control`, {
+      action,
+    }),
+  controlTool: (name: string, action: ToolProviderControlAction) =>
+    api.post<ToolControlResponse>(`/tools/${name}/control`, { action }),
 };
 
 // ===== Simulator 控制面（世界模拟器：generate 生成 / replay 回放） =====

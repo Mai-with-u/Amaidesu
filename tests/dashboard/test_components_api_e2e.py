@@ -109,7 +109,8 @@ def test_list_components_returns_all_groups_with_disabled(client: TestClient) ->
     assert resp.status_code == 200
     data = resp.json()
 
-    assert set(data) == {"collectors", "agents", "tools", "input", "decision", "output"}
+    # 工具不在组件清单（域开关单元归 tools API 的 domains 端点管）
+    assert set(data) == {"collectors", "agents", "input", "decision", "output"}
 
     collectors = {c["name"]: c for c in data["collectors"]}
     assert set(collectors) == {"bili_danmaku", "console_input"}
@@ -123,10 +124,6 @@ def test_list_components_returns_all_groups_with_disabled(client: TestClient) ->
     assert agents["streamer"]["is_enabled"] is True
     assert agents["streamer"]["is_started"] is False
     assert agents["game"]["is_enabled"] is False
-
-    tools = {c["name"]: c for c in data["tools"]}
-    assert set(tools) == {"vts"}
-    assert tools["vts"]["is_enabled"] is True
 
 
 def test_control_start_dynamically_starts_collector(client: TestClient, config_dir: Path) -> None:

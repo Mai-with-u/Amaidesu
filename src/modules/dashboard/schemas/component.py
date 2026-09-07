@@ -43,12 +43,14 @@ class ComponentDetail(BaseModel):
 
 
 class ComponentListResponse(BaseModel):
-    """组件列表响应（v2：collectors/agents/tools 三组 + 旧阶段兼容字段）"""
+    """组件列表响应（v2：collectors/agents 两组 + 旧阶段兼容字段）
+
+    工具不在此清单：工具以"域开关单元"管理（tools API 的 domains 端点）。
+    """
 
     # v2 分组（前端主数据源）
     collectors: list[ComponentSummary] = []
     agents: list[ComponentSummary] = []
-    tools: list[ComponentSummary] = []
     # 旧阶段兼容（deprecated，前端有 phase→group 兜底）
     input: list[ComponentSummary] = []
     decision: list[ComponentSummary] = []
