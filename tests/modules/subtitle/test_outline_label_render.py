@@ -70,3 +70,28 @@ def test_wrap_lines_respects_width():
     assert len(lines) >= 2
     for line in lines:
         assert font.getlength(line) <= 780
+
+
+def test_required_height_empty_text_is_zero():
+    assert _make_label(text="").required_height() == 0
+
+
+def test_required_height_zero_before_canvas_layout():
+    class NarrowCanvas:
+        def winfo_width(self):
+            return 1
+
+    label = _make_label(text="测试字幕")
+    label.canvas = NarrowCanvas()
+    assert label.required_height() == 0
+
+
+def test_required_height_grows_with_wrapped_lines():
+    single = _make_label(text="短字幕")
+    multi = _make_label(
+        text="这是一段相当长的字幕文本，需要折成多行才能完整展示在画布宽度内，用来验证高度测量随行数增长"
+    )
+    single_h = single.required_height()
+    multi_h = multi.required_height()
+    assert single_h > 0
+    assert multi_h > single_h

@@ -137,6 +137,31 @@ class OutlineLabel:
         except Exception:
             self.logger.error("PIL 字幕渲染失败（ImageTk 不可用？）", exc_info=True)
 
+    def _line_height(self) -> int:
+        return int(self._font_px * 1.35)
+
+    def required_height(self) -> int:
+        """当前文本在画布宽度内折行后所需的渲染高度（物理像素）。
+
+        供窗口高度自适应使用：窗口比内容矮时，居中绘制的首尾行会落
+        在窗口外被裁掉。画布尚未完成布局（宽度 ≤ 1）、文本为空或字体
+        不可用时返回 0，由调用方回退到窗口默认高度。
+        """
+        if not self.display_text:
+            return 0
+        width = self.canvas.winfo_width()
+        if width <= 1:
+            return 0
+        font = self._load_font()
+        if font is None:
+            return 0
+        lines = self._wrap_lines(font, width)
+        if not lines:
+            return 0
+        # 额外留出描边膨胀与上下贴边的余量
+        pad = 8 + (2 * self.outline_width if self.outline_enabled else 0)
+        return len(lines) * self._line_height() + pad
+
     def _render_text(self, width: int, height: int, bg_color: str) -> Optional[Image.Image]:
         """按色键背景合成文字+描边。
 
@@ -158,7 +183,7 @@ class OutlineLabel:
             return None
 
         img = Image.new("RGB", (width, height), bg_rgb)
-        line_h = int(self._font_px * 1.35)
+        line_h = self._line_height()
         total_h = len(lines) * line_h
         y = (height - total_h) // 2
         for line in lines:
@@ -314,6 +339,10 @@ class SubtitleGuiService:
         self._gui_running = True
         self.is_visible = False
         self._started = False
+        # 首次调整高度时按"配置逻辑高度 × 实测 DPI 缩放"推算（物理像素），
+        # 作为高度自适应的下限；不在启动时测量，窗口布局未稳定时会读到
+        # 陈旧值
+        self._default_window_height_px: Optional[int] = None
 
     @property
     def enabled(self) -> bool:
@@ -470,6 +499,43 @@ class SubtitleGuiService:
         if self._gui_running and self.root:
             self.root.after(100, self._check_queue)
 
+    def _apply_window_height(self, target_height_px: int) -> None:
+        """把窗口高度调到 ``target_height_px``（物理像素），底边锚定不动。
+
+        字幕窗口贴底展示，内容变高时只向上扩展；目标高度低于窗口默认
+        高度时取默认高度（清空/短文本回落到常规条幅尺寸）。geometry 的
+        宽高参数会被 CustomTkinter 按 DPI 缩放（位置不缩放，winfo 系列
+        返回物理像素），因此宽高都要先除以缩放系数再请求，否则窗口每
+        次调整都会被再放大一圈；缩放系数用"请求 → 回读实测 → 校正"收
+        敛，不依赖固定换算口径。
+        """
+        if not self.root or not self._gui_running:
+            return
+        h_scale = self.root.winfo_fpixels("1i") / 96.0
+        if h_scale <= 0:
+            return
+        if self._default_window_height_px is None:
+            # 配置的窗口高度是 geometry 逻辑单位，物理高度按实测缩放换算
+            self._default_window_height_px = max(round(self.window_height * h_scale), 1)
+        target_h = max(target_height_px, self._default_window_height_px)
+        target_w = self.root.winfo_width()
+        w_scale = h_scale
+        for _ in range(3):
+            w_req = max(1, round(target_w / w_scale))
+            h_req = max(1, round(target_h / h_scale))
+            bottom = self.root.winfo_y() + self.root.winfo_height()
+            y = max(0, bottom - target_h)
+            self.root.geometry(f"{w_req}x{h_req}+{self.root.winfo_x()}+{y}")
+            self.root.update_idletasks()
+            h_ok = abs(self.root.winfo_height() - target_h) <= 2
+            w_ok = abs(self.root.winfo_width() - target_w) <= 2
+            if h_ok and w_ok:
+                return
+            if not h_ok:
+                h_scale = self.root.winfo_height() / max(h_req, 1)
+            if not w_ok:
+                w_scale = self.root.winfo_width() / max(w_req, 1)
+
     def _update_subtitle_display(self, text: str):
         if not self.text_label or not self._gui_running:
             return
@@ -479,6 +545,9 @@ class SubtitleGuiService:
                     self.root.deiconify()
                     self.is_visible = True
                 self.text_label.configure_text(text=text)
+                # 窗口高度随内容自适应：固定高度下多行文本居中绘制时
+                # 首尾行会落在窗口外被裁掉
+                self._apply_window_height(self.text_label.required_height())
                 self.last_voice_time_ms = now_ms()
                 self.logger.debug(f"已更新字幕: {text[:30]}...")
             elif not self.always_show_window and self.is_visible and self.auto_hide and self.root:
@@ -504,12 +573,14 @@ class SubtitleGuiService:
                             self.text_label.configure_text(text="等待语音/弹幕输入...")
                         else:
                             self.text_label.configure_text(text="")
+                        self._apply_window_height(0)
                 else:
                     self.logger.debug("自动隐藏字幕窗口")
                     self.root.withdraw()
                     self.is_visible = False
                     if self.text_label:
                         self.text_label.configure_text(text="")
+                        self._apply_window_height(0)
             if self._gui_running and self.root:
                 self.root.after(100, self._check_auto_hide)
         except Exception as e:
@@ -609,4 +680,5 @@ class SubtitleGuiService:
                 self.text_label.configure_text(text="等待语音/弹幕输入...")
             else:
                 self.text_label.configure_text(text="")
+            self._apply_window_height(0)
             self.logger.info("已清空字幕内容")
