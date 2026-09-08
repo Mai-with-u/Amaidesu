@@ -7,8 +7,10 @@
   / stdio（子进程拉起，如 npx）
 - 生命周期：``connect()`` 建立连接并预拉工具列表；``close()`` 关闭；
   ``call_tool()`` 转发调用并返回 mcp 原始结果（由 mapper 转换）
-- 所有方法不抛异常给上层通道语义之外的调用方？——由 Provider 层统一
-  转换为 ``ToolExecutionResult``；本类保持轻量，仅在连接层面兜底。
+- 资源订阅（标准 MCP resources/subscribe）：``subscribe_resource(uri, callback)``
+  登记"举旗"回调，server 推送资源更新通知时分发；活跃订阅集合持久于实例，
+  重连成功后自动重发订阅请求（尽力而为）。通知只表达"资源变了"，内容
+  核实由消费方负责（通知是提示，不是事实源）。
 
 设计要点：
 - FastMCP 的 ``Client`` 用 ``async with`` 上下文管理连接；本类内部持有
@@ -22,12 +24,16 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from src.modules.logging import get_logger
 from src.modules.mcp.config import McpServerConfig
 
 logger = get_logger("McpClient")
+
+# 资源更新通知回调（参数 = 资源 URI）。约定"举旗"级极简动作（set 事件/入队），
+# 业务核实留在消费方自己的协程——本回调跑在 fastmcp 消息循环内。
+ResourceUpdateCallback = Callable[[str], None]
 
 
 class McpClient:
@@ -43,6 +49,50 @@ class McpClient:
         self.config = config
         self._client: Any = None  # fastmcp.Client（延迟构造）
         self._connected = False
+        # 活跃资源订阅（uri → 举旗回调）：持久于实例，重连成功后据此重发订阅请求
+        self._subscriptions: Dict[str, ResourceUpdateCallback] = {}
+
+    @staticmethod
+    def _build_message_handler(subscriptions: Dict[str, ResourceUpdateCallback]) -> Any:
+        """构造 fastmcp MessageHandler 实例：资源更新通知按 URI 分发到注册表。
+
+        以工厂函数封闭注册表引用（同一 dict 对象与实例共享，增删即时可见）；
+        回调异常兜底吞掉——通知处理抛错会干扰 fastmcp 消息循环。
+        """
+        # 延迟 import：fastmcp 为可选重型依赖（与 Client 同策略）
+        from fastmcp.client.client import MessageHandler
+
+        class _ResourceUpdateHandler(MessageHandler):
+            async def on_resource_updated(self, message: Any) -> None:
+                uri = str(getattr(getattr(message, "params", None), "uri", ""))
+                callback = subscriptions.get(uri)
+                if callback is None:
+                    return
+                try:
+                    callback(uri)
+                except Exception as exc:  # noqa: BLE001 - 通知回调边界兜底
+                    logger.warning(f"MCP 资源更新回调执行失败（uri={uri}）: {type(exc).__name__}: {exc}")
+
+        return _ResourceUpdateHandler()
+
+    async def _resubscribe_all(self) -> None:
+        """重连后对活跃订阅集合逐个重发订阅请求（尽力而为，失败记日志）。
+
+        失败的订阅保留在集合中——下次重连再试；断连窗口内的资源变化由
+        消费方的周期兜底覆盖（通知本就是可丢的提示）。
+        """
+        if not self._subscriptions or self._client is None:
+            return
+        session = getattr(self._client, "session", None)
+        if session is None:
+            logger.warning(f"MCP server '{self.name}' session 不可用，重订阅跳过")
+            return
+        for uri in list(self._subscriptions):
+            try:
+                await session.subscribe_resource(uri)
+                logger.info(f"MCP server '{self.name}' 重连后重发订阅 '{uri}'")
+            except Exception as exc:  # noqa: BLE001 - 单订阅失败不阻断其余
+                logger.warning(f"MCP server '{self.name}' 重连后重订阅 '{uri}' 失败: {type(exc).__name__}: {exc}")
 
     @property
     def connected(self) -> bool:
@@ -92,11 +142,12 @@ class McpClient:
                 except Exception:  # noqa: BLE001 - 旧实例释放失败不阻断重连
                     pass
             transport = self._build_transport()
-            client = Client(transport)
+            client = Client(transport, message_handler=self._build_message_handler(self._subscriptions))
             await client.__aenter__()
             self._client = client
             self._connected = True
             logger.info(f"MCP server '{self.name}' 已连接（transport={self.config.transport}）")
+            await self._resubscribe_all()
             return True
         except Exception as exc:  # noqa: BLE001 - 连接边界兜底
             logger.warning(f"MCP server '{self.name}' 连接失败: {type(exc).__name__}: {exc}")
@@ -136,6 +187,77 @@ class McpClient:
             return True
         logger.info(f"MCP server '{self.name}' 探活：未连接，尝试重连")
         return await self.connect()
+
+    async def subscribe_resource(self, uri: str, callback: ResourceUpdateCallback) -> Callable[[], Any]:
+        """订阅资源更新通知（标准 MCP resources/subscribe），返回退订句柄。
+
+        通知到达时按 URI 分发调用 ``callback(uri)``（举旗级，见模块 docstring）。
+        订阅登记持久于实例：断连重连后自动重发订阅请求。
+
+        Args:
+            uri: 资源 URI（如 "maicraft://attention"）
+            callback: 更新通知回调（参数 = uri 字符串）
+
+        Returns:
+            退订句柄（async callable）：移除本地登记 + 发标准退订请求；
+            网络退订失败仅记日志（本地登记已除名，通知不再分发）。
+
+        Raises:
+            RuntimeError: 未连接或 fastmcp session 不可用——订阅是显式动作，
+                失败让消费方感知（可降级为周期轮询兜底）。
+        """
+        if not self._connected or self._client is None:
+            raise RuntimeError(f"MCP server '{self.name}' 未连接，无法订阅资源 '{uri}'")
+        session = getattr(self._client, "session", None)
+        if session is None:
+            raise RuntimeError(f"MCP server '{self.name}' fastmcp session 不可用，无法订阅资源 '{uri}'")
+        await session.subscribe_resource(uri)
+        self._subscriptions[uri] = callback
+        logger.info(f"MCP server '{self.name}' 已订阅资源 '{uri}'")
+
+        async def unsubscribe() -> None:
+            self._subscriptions.pop(uri, None)
+            if self._connected and self._client is not None:
+                current = getattr(self._client, "session", None)
+                if current is not None:
+                    try:
+                        await current.unsubscribe_resource(uri)
+                    except Exception as exc:  # noqa: BLE001 - 退订失败不影响本地除名
+                        logger.warning(f"MCP server '{self.name}' 退订 '{uri}' 失败: {type(exc).__name__}: {exc}")
+            logger.info(f"MCP server '{self.name}' 已退订资源 '{uri}'")
+
+        return unsubscribe
+
+    async def read_resource(self, uri: str) -> Any:
+        """读取资源内容（直通 fastmcp，返回 ReadResourceResult）。
+
+        Returns:
+            fastmcp 原始结果；未连接/读取失败返回 None（由消费方兜底）
+        """
+        if not self._connected or self._client is None:
+            logger.warning(f"MCP server '{self.name}' 未连接，read_resource 返回 None")
+            return None
+        try:
+            return await self._client.read_resource(uri)
+        except Exception as exc:  # noqa: BLE001 - 通道边界兜底
+            logger.warning(f"MCP server '{self.name}' read_resource '{uri}' 失败: {type(exc).__name__}: {exc}")
+            return None
+
+    async def list_resources(self) -> List[Any]:
+        """列出 server 暴露的资源元数据（直通 fastmcp）。
+
+        Returns:
+            mcp.types.Resource 列表；未连接/失败返回空列表
+        """
+        if not self._connected or self._client is None:
+            logger.warning(f"MCP server '{self.name}' 未连接，list_resources 返回空")
+            return []
+        try:
+            resources = await self._client.list_resources()
+            return list(resources or [])
+        except Exception as exc:  # noqa: BLE001 - 通道边界兜底
+            logger.warning(f"MCP server '{self.name}' list_resources 失败: {type(exc).__name__}: {exc}")
+            return []
 
     async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
         """调用 server 上的工具，返回 FastMCP CallToolResult（原始结果）。
@@ -189,4 +311,4 @@ class McpClient:
         logger.info(f"MCP server '{self.name}' 已关闭")
 
 
-__all__ = ["McpClient"]
+__all__ = ["McpClient", "ResourceUpdateCallback"]
