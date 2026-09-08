@@ -544,6 +544,40 @@ class WarudoProvider(BaseToolProvider):
             self._connection_task = asyncio.create_task(self._connection_loop(uri), name="Warudo_Reconnect")
             self.logger.info("Warudo WebSocket 后台重连任务已启动")
 
+    async def connect(self) -> bool:
+        """手动建立 Warudo WebSocket 连接（手动重连的"建立"半步）。
+
+        直接委托 ``_connect``：内部会尝试一次 ``websockets.connect`` 并启
+        动后台 ``_connection_loop``（若尚未运行）。返回 ``_is_connected`` 真
+        值——即使首次 connect 失败，后台循环仍会持续重试；上层判定重连
+        成败看本次是否建立成功。手动 connect 与后台循环属低频可接受并发。
+        """
+        self.logger.info("手动触发 Warudo 连接")
+        await self._connect()
+        return self._is_connected
+
+    async def disconnect(self) -> bool:
+        """手动断开 Warudo WebSocket 连接（手动重连的"断开"半步）。
+
+        与 ``cleanup`` 不同：仅关当前 websocket 与 ``_action_sender`` 绑定的
+        websocket 引用、置 ``_is_connected=False``，**不动** ``_should_stop``
+        标志与后台 ``_connection_loop`` 任务——后台循环负责后续自动重连，
+        手动断开不破坏 setup 语义（``_has_started`` 保持 True）。websocket
+        关闭做 try/except 兜底（超时或已关闭均不阻断）。返回 True 表达
+        "断开动作已发出"。
+        """
+        self.logger.info("手动断开 Warudo 连接")
+        if self.websocket is not None:
+            try:
+                await asyncio.wait_for(self.websocket.close(), timeout=2.0)
+            except (asyncio.TimeoutError, Exception) as e:
+                self.logger.warning(f"手动关闭 Warudo WebSocket 异常（忽略）: {e}")
+            finally:
+                self.websocket = None
+                self._is_connected = False
+                self._action_sender.set_websocket(None)
+        return True
+
     async def _connection_loop(self, uri: str) -> None:
         self.logger.info("Warudo WebSocket 重连循环已启动")
         while not self._should_stop:

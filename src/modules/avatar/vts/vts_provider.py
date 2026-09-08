@@ -774,6 +774,34 @@ class VTSProvider(BaseToolProvider):
         finally:
             self._is_connected = False
 
+    async def connect(self) -> bool:
+        """手动建立 VTS 连接（手动重连的"建立"半步）。
+
+        直接委托 ``_connect``（内部已带 ``_is_connecting`` / ``_is_connected``
+        短路，无需重复判重）。返回 bool 以 ``_is_connected`` 为准——即便
+        ``_connect`` 异常被内部 try 吞掉，此处的真值与 VTS WebSocket 实际
+        状态一致。手动 connect 与后台 ``_reconnect_loop`` 属低频可接受并发
+        场景，不强制互斥。
+        """
+        self.logger.info("手动触发 VTS 连接")
+        await self._connect()
+        return self._is_connected
+
+    async def disconnect(self) -> bool:
+        """手动断开 VTS 连接（手动重连的"断开"半步）。
+
+        复用 ``_disconnect`` 的关闭逻辑：停 idle → 取消后台重连循环 →
+        关 VTS WebSocket → 置 ``_is_connected=False``。区别于 ``cleanup``
+        的是**不重置** ``_has_started``——手动断开不破坏 setup 语义，后续
+        仍可再 connect。后台 ``_reconnect_loop`` 被取消后手动重连场景下
+        不自动恢复：调用方（``reconnect_provider``）在 connect 成功后下次
+        ``_vts_health_check`` 仍能驱动恢复路径，不阻塞熔断器复位。返回
+        True 表达"断开动作已完成"。
+        """
+        self.logger.info("手动断开 VTS 连接")
+        await self._disconnect()
+        return True
+
 
 # =============================================================================
 # 工厂与注册辅助
