@@ -128,21 +128,33 @@ class McpClient:
             arguments: 工具参数 dict
 
         Returns:
-            CallToolResult；未连接 / 调用失败时返回 None（由 Provider 转换为错误结果）
+            CallToolResult；未连接 / 传输层调用失败时返回 None（由 Provider 转换为错误结果）
+
+        Raises:
+            ToolError: server 正常应答的业务错误（参数错/状态冲突等）——
+                round-trip 完整、连接无恙，不标记断连；由 Provider 转为失败结果
         """
         if not self._connected or self._client is None:
             # 长时间运行后连接可能静默断开：惰性重连一次，失败才放弃
             logger.info(f"MCP server '{self.name}' 未连接，尝试重连后调用 '{tool_name}'")
             if not await self.connect():
                 return None
+        # fastmcp 为可选重型依赖：业务异常类在调用点延迟获取（与 connect 的延迟导入同策略）
+        from fastmcp.exceptions import ToolError
+
         try:
             started = time.time()
             result = await self._client.call_tool(tool_name, arguments)
             duration_ms = int((time.time() - started) * 1000)
             logger.debug(f"MCP 调用 {self.name}.{tool_name} 完成（{duration_ms}ms）")
             return result
+        except ToolError as exc:
+            # server 正常应答的业务错误（参数错/状态冲突等）：round-trip 完整，连接无恙——
+            # 保持连接不断开，错误上抛由 Provider 转述给调用方（LLM 据此自纠）
+            logger.warning(f"MCP server '{self.name}' 工具 '{tool_name}' 业务错误（连接保持）: {exc}")
+            raise
         except Exception as exc:  # noqa: BLE001 - 通道边界兜底
-            # 调用异常多为连接层失效（断线/服务重启）：标记断开，下次调用触发重连
+            # 传输层故障（断线/服务重启）：标记断开，下次调用触发重连
             logger.warning(f"MCP server '{self.name}' 调用工具 '{tool_name}' 失败: {type(exc).__name__}: {exc}")
             self._connected = False
             self._client = None

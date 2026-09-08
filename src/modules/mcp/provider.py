@@ -112,7 +112,20 @@ class McpToolProvider(ToolProvider):
                 duration_ms=int(time.time() * 1000) - started_ms,
             )
 
-        result = await self._client.call_tool(mcp_name, dict(invocation.arguments or {}))
+        # fastmcp 为可选重型依赖：业务异常类在调用点延迟获取（与 client 延迟导入同策略）
+        from fastmcp.exceptions import ToolError
+
+        try:
+            result = await self._client.call_tool(mcp_name, dict(invocation.arguments or {}))
+        except ToolError as exc:
+            # server 业务错误透传给调用方（LLM 据此自纠）；连接由 client 层保持，不断开
+            duration_ms = int(time.time() * 1000) - started_ms
+            return ToolExecutionResult(
+                tool_name=full_name,
+                success=False,
+                error_message=f"MCP 业务错误: {exc}",
+                duration_ms=duration_ms,
+            )
         duration_ms = int(time.time() * 1000) - started_ms
         return mapper.to_result(result, tool_name=full_name, duration_ms=duration_ms)
 
