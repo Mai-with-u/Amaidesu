@@ -287,11 +287,10 @@ class UtteranceQueue:
             # worker 被取消时向上抛，让 worker_loop 退出
             raise
         except Exception as exc:  # noqa: BLE001 - 防御性兜底
+            # speak 引擎内部已打过带上下文的错误日志，此处只计数并继续，
+            # 不再重复打 traceback（连接类环境故障会刷数百行噪声）
             self._total_errors += 1
-            self._logger.error(
-                f"speak 调用异常（已忽略，继续下一条）: utterance_id={item.utterance_id}, err={exc}",
-                exc_info=True,
-            )
+            self._logger.error(f"speak 调用异常（已忽略，继续下一条）: utterance_id={item.utterance_id}, err={exc}")
 
 
 __all__ = [
