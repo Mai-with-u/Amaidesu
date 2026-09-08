@@ -9,12 +9,16 @@ ToolRegistry —— 工具注册中心
   供 Dashboard 溯源（broadcaster 通配订阅 ``tool.result.#``）
 - 可选熔断器：连续失败计数达阈值则摘除工具（tripped），
   配套 ``ToolHealthMonitor`` 做探活恢复（``src/modules/tools/health.py``）
+- 可选归属限定：``register_provider(owner_agent="...")`` 注册的工具默认不进入
+  LLM 通用工具面，仅供对应 Agent 的域内查询（``list_tools(provider=...)``）消费
 
 接口约定：register（去重保留先注册）/ register_provider（注册名统一
-``<provider>_<工具名>`` 前缀 + 记录 provider 声明的分类）/ list_tools /
-list_categories / invoke（异常→error result 兜底）/ to_llm_definitions
-（内部→LLM 转换层，解耦协议）/ recover_tool（探活通过后复位熔断）/
-probe_tool（按名定位 provider 并调用其 ``health_check`` 拿回 bool）。
+``<provider>_<工具名>`` 前缀 + 记录 provider 声明的分类 + 可选归属限定）
+/ list_tools（一般面排除归属限定 / provider 域查询不受限 / include_scoped 运营
+面包一切） / list_categories / invoke（异常→error result 兜底）/
+to_llm_definitions（内部→LLM 转换层，解耦协议）/ recover_tool（探活通过后复位熔断）/
+probe_tool（按名定位 provider 并调用其 ``health_check`` 拿回 bool）/
+scoped_owner_of（按名查归属 Agent）。
 """
 
 from __future__ import annotations
@@ -156,6 +160,10 @@ class ToolRegistry:
         # 注册名 → 所属 BaseToolProvider 实例（register_provider 时记录；
         # 探活按此直查归属，避免 provider.name 与 spec.provider 的字符串耦合）
         self._tool_owner: Dict[str, BaseToolProvider] = {}
+        # 注册名 → 归属 Agent 名（owner_agent 非空时记录；归属限定的语义是"注册进
+        # registry 但默认不进一般工具面，供该 Agent 的域内查询使用"）。空串/缺失
+        # 表示无归属限定，与 list_tools 一般面的过滤语义一致。
+        self._scoped_owner: Dict[str, str] = {}
 
     # -------------------- 注册 --------------------
 
@@ -177,7 +185,7 @@ class ToolRegistry:
         """``register`` 的别名。"""
         return self.register(spec, impl)
 
-    def register_provider(self, provider: ToolProvider) -> int:
+    def register_provider(self, provider: ToolProvider, *, owner_agent: str = "") -> int:
         """注册一个 Provider 的所有工具。返回新注册数（去重不计）。
 
         注册名统一改写为 ``<provider>_<工具名>``（规则见
@@ -185,6 +193,13 @@ class ToolRegistry:
         拷贝改写 name 后再注册，**不污染** provider ``list_tools()`` 返回的
         原 spec 对象。provider 声明的 ``category`` 一并记录（按 spec.provider
         提供者名归组，供 ``list_categories()`` / ``list_tools(category=)`` 查询）。
+
+        归属限定（``owner_agent``）：非空时本次注册的全部工具被标记为归属该 Agent，
+        在 ``list_tools(provider=None, include_scoped=False)`` 默认面被排除——
+        仅供该 Agent 自己的域内查询（``list_tools(provider=...)``）消费。
+        用于"Agent 私有 MCP"等场景：注册到全局 registry 但默认对其它 Agent 不可见。
+        归属限定只约束发现面，``invoke()`` 不校验——LLM 幻觉编名直调保留工具是
+        已知的受众治理边界。
 
         迁移完整性提示：传入对象非 ``BaseToolProvider`` 子类时记 WARNING
         （每次注册都记——迁移未完成的持续信号，提示补齐 BaseToolProvider 继承）。
@@ -215,6 +230,8 @@ class ToolRegistry:
             # 不经 provider.name 字符串匹配（name 与 spec.provider 无须同值）
             if isinstance(provider, BaseToolProvider):
                 self._tool_owner[registered_name] = provider
+            if owner_agent:
+                self._scoped_owner[registered_name] = owner_agent
         logger.info(f"Provider '{provider.name}' 已注册（含 {new_count} 个新工具，总数={len(self._tools)}）")
         return new_count
 
@@ -237,8 +254,16 @@ class ToolRegistry:
         *,
         include_disabled: bool = False,
         include_tripped: bool = False,
+        include_scoped: bool = False,
     ) -> List[ToolSpec]:
-        """返回已注册工具的 spec（默认排除停用/熔断工具）。
+        """返回已注册工具的 spec（默认排除停用/熔断/归属限定工具）。
+
+        归属限定的三方过滤语义：
+        - 一般查询（``provider is None`` 且 ``include_scoped=False``）→
+          排除所有归属限定工具（LLM 默认工具面）
+        - 显式域查询（``provider is not None``）→ 不做归属过滤
+          （Agent 自身通过 ``list_tools(provider="<其 provider>")`` 拉自己的工具面）
+        - 运营查询（``include_scoped=True``）→ 包含一切（Dashboard 工具页用）
 
         Args:
             provider: 可选过滤（提供者标识，如 "vts" / "warudo" /
@@ -250,6 +275,7 @@ class ToolRegistry:
                 排除路径。
             include_tripped: True 时包含熔断中的工具（Dashboard 工具页展示全集用）。
                 默认排除以避免 LLM 看见已被摘除的工具。
+            include_scoped: True 时包含归属限定工具（Dashboard 工具页全集用）。
 
         Returns:
             满足条件的 spec 列表（过滤条件为 AND 关系）。
@@ -259,6 +285,8 @@ class ToolRegistry:
             specs = [s for s in specs if s.name not in self._disabled]
         if not include_tripped:
             specs = [s for s in specs if not self.is_tripped(s.name)]
+        if provider is None and not include_scoped:
+            specs = [s for s in specs if s.name not in self._scoped_owner]
         if provider is not None:
             specs = [s for s in specs if s.provider == provider]
         if category is not None:
@@ -288,6 +316,16 @@ class ToolRegistry:
         if spec is None:
             return ""
         return self._categories.get(spec.provider, "")
+
+    def scoped_owner_of(self, name: str) -> str:
+        """返回工具的归属 Agent 名（无归属限定返回空串）。
+
+        仅 ``register_provider(owner_agent=<非空>)`` 注册的工具才会有非空归属；
+        通用工具（普通 Provider 注册的、@tool 装饰的）一律返回 ``""``。
+        用于 Dashboard 工具页标注归属、Agent 启动期校验"我注册的 MCP 工具是否
+        真的带了我的 owner_agent"。
+        """
+        return self._scoped_owner.get(name, "")
 
     # -------------------- 停用 --------------------
 
@@ -609,6 +647,7 @@ class ToolRegistry:
         self._disabled.clear()
         self._health.clear()
         self._tool_owner.clear()
+        self._scoped_owner.clear()
         logger.debug("ToolRegistry 已清空")
 
     # 兼容 inspect / debug

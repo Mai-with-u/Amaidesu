@@ -27,6 +27,7 @@ from src.modules.tools import (
     tool,
 )
 from src.modules.tools.models import ToolExecutionResult
+from src.modules.tools.provider import BaseToolProvider
 
 
 # =============================================================================
@@ -401,3 +402,122 @@ async def test_invoke_without_event_bus_skips_emit(registry: ToolRegistry) -> No
     registry.register(ToolSpec(name="quiet", description="d", kind="sync"), _ok)
     res = await registry.invoke(ToolInvocation(tool_name="quiet"))
     assert res.success is True  # 不抛即通过
+
+
+# =============================================================================
+# 归属限定（owner_agent）
+#
+# 三方过滤语义：
+# - 一般查询（provider=None 且 include_scoped=False）→ 排除归属限定工具
+# - provider 域查询（provider 非 None）→ 不做归属过滤（Agent 拉自己的工具面）
+# - 运营查询（include_scoped=True）→ 包含一切（Dashboard 工具页）
+# invoke() 不校验归属——受众治理只管发现面。
+# =============================================================================
+
+
+def test_register_provider_owner_agent_records_scoped_owner(registry: ToolRegistry) -> None:
+    """register_provider 传 owner_agent 非空时，每个工具的 _scoped_owner 被标记。"""
+    provider = _SampleProvider()
+    new_count = registry.register_provider(provider, owner_agent="minecraft")
+    assert new_count == 2
+    assert registry.scoped_owner_of("game_p_a") == "minecraft"
+    assert registry.scoped_owner_of("game_p_b") == "minecraft"
+
+
+def test_register_provider_default_owner_agent_is_empty(registry: ToolRegistry) -> None:
+    """不传 owner_agent 时，工具无归属限定（与原行为一致）。"""
+    provider = _SampleProvider()
+    registry.register_provider(provider)
+    assert registry.scoped_owner_of("game_p_a") == ""
+    assert registry.scoped_owner_of("game_p_b") == ""
+
+
+def test_list_tools_default_excludes_scoped_tools(registry: ToolRegistry) -> None:
+    """一般查询（provider=None 且 include_scoped=False）排除归属限定工具。"""
+
+    class PublicProvider(BaseToolProvider):
+        @property
+        def name(self) -> str:
+            return "PublicProvider"
+
+        def list_tools(self):
+            return [ToolSpec(name="public_x", description="x", kind="sync", provider="public")]
+
+        async def invoke(self, invocation: ToolInvocation):
+            return ToolExecutionResult(tool_name=invocation.tool_name, success=True, content="from_public")
+
+    scoped = _SampleProvider()
+    registry.register_provider(scoped, owner_agent="minecraft")
+    registry.register_provider(PublicProvider())
+
+    names = {t.name for t in registry.list_tools()}
+    assert "public_x" in names
+    assert "game_p_a" not in names
+    assert "game_p_b" not in names
+
+
+def test_list_tools_include_scoped_returns_all(registry: ToolRegistry) -> None:
+    """运营查询（include_scoped=True）含一切：归属限定工具也在内。"""
+
+    class PublicProvider(BaseToolProvider):
+        @property
+        def name(self) -> str:
+            return "PublicProvider"
+
+        def list_tools(self):
+            return [ToolSpec(name="public_x", description="x", kind="sync", provider="public")]
+
+        async def invoke(self, invocation: ToolInvocation):
+            return ToolExecutionResult(tool_name=invocation.tool_name, success=True, content="from_public")
+
+    scoped = _SampleProvider()
+    registry.register_provider(scoped, owner_agent="minecraft")
+    registry.register_provider(PublicProvider())
+
+    names = {t.name for t in registry.list_tools(include_scoped=True)}
+    assert names == {"game_p_a", "game_p_b", "public_x"}
+
+
+def test_list_tools_provider_query_bypasses_scoped_filter(registry: ToolRegistry) -> None:
+    """provider 域查询（provider 非 None）不做归属过滤——MinecraftAgent 拉自己工具面的前提。
+
+    这是与"排除归属限定"一般面的关键区别：Agent 拉自己 provider 名下的工具时，
+    必须能看到（否则 MinecraftAgent.list_tools(provider="maicraft") 会变空）。
+    """
+    scoped = _SampleProvider()
+    registry.register_provider(scoped, owner_agent="minecraft")
+
+    assert registry.list_tools() == []
+    names = {t.name for t in registry.list_tools(provider="game")}
+    assert names == {"game_p_a", "game_p_b"}
+
+
+def test_scoped_owner_of_unknown_tool_returns_empty(registry: ToolRegistry) -> None:
+    """未知工具的归属查询返回空串（与"未声明"语义一致）。"""
+    assert registry.scoped_owner_of("never_registered") == ""
+
+
+def test_clear_resets_scoped_owner(registry: ToolRegistry) -> None:
+    """clear() 同步清空 _scoped_owner（与其他内部容器一致）。"""
+    scoped = _SampleProvider()
+    registry.register_provider(scoped, owner_agent="minecraft")
+    assert registry.scoped_owner_of("game_p_a") == "minecraft"
+
+    registry.clear()
+    assert registry.scoped_owner_of("game_p_a") == ""
+
+
+async def test_invoke_scoped_tool_is_not_blocked_by_ownership(registry: ToolRegistry) -> None:
+    """受众治理只管发现面：归属限定的工具在 invoke 时不校验归属——LLM 幻觉编名
+    直调保留工具是已知的受众治理边界，此测试固定该契约。
+
+    ``list_tools()`` 默认排除该工具，但 ``invoke()`` 仍按"已知工具"路径执行。
+    """
+    provider = _SampleProvider()
+    registry.register_provider(provider, owner_agent="minecraft")
+
+    # 受众治理只管发现面：invoke 仍能命中归属限定的工具
+    assert registry.list_tools() == []
+    res = await registry.invoke(ToolInvocation(tool_name="game_p_a"))
+    assert res.success is True
+    assert res.content == "from_a"
