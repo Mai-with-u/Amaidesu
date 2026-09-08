@@ -193,6 +193,8 @@ class MinecraftAgentConfig(BaseConfig):
     Attributes:
         command_llm: 决策用的 LLM profile 名（引用 model.toml）
         max_steps: 单任务 ReAct 循环最大步数（防失控挂起）
+        execute_poll_interval_ms: handoff 周期兜底核实间隔（毫秒）
+        execute_wait_timeout_ms: 后台任务单轮 wait_timeout 上限（毫秒）
         mcp: Agent 私有 MCP server 配置——位置即归属，启用时由 MinecraftAgent
             在 _on_start 装配并以 owner_agent="minecraft" 注册进全局 ToolRegistry，
             默认不对其它 Agent 暴露（归属限定语义）。enabled=false 时不装配。
@@ -206,6 +208,16 @@ class MinecraftAgentConfig(BaseConfig):
         default=50,
         ge=1,
         description="单任务 ReAct 循环最大步数（超出挂起上报，防失控）",
+    )
+    execute_poll_interval_ms: int = Field(
+        default=2000,
+        ge=100,
+        description="handoff 周期兜底核实任务快照的间隔（毫秒）",
+    )
+    execute_wait_timeout_ms: int = Field(
+        default=1_800_000,
+        ge=1000,
+        description="后台任务单轮 wait_timeout 上限（毫秒，到点注入告警不杀任务）",
     )
     mcp: McpServerConfig = Field(
         default_factory=lambda: McpServerConfig(url="http://127.0.0.1:8766/mcp"),

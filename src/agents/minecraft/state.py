@@ -1,6 +1,6 @@
 """MinecraftAgent 内存状态（Agent 内部自由）
 
-状态归属：todo（待办）/ notebook（工作笔记）/ milestones（里程碑）
+状态归属：todo（待办）/ notebook（工作笔记）/ reports（近期上报）
 全部内存存储，不持久化（Agent 生命周期内有效；跨场次恢复后续按需添加）。
 
 不建模游戏世界数据（health/food/坐标等）——那是 maicraft 执行层的事；
@@ -11,10 +11,10 @@ maicraft 返回原样给 LLM 读，本状态只承载 Agent 自己的"指令 + �
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List
 
-# 里程碑保留条数（近期叙事够用）
-MAX_MILESTONES = 10
+# 近期上报保留条数（主播状态查询够用）
+MAX_REPORTS = 10
 
 
 @dataclass(slots=True)
@@ -32,12 +32,12 @@ class MinecraftAgentState:
     Attributes:
         todos: 待办列表（minecraft_todo 全量文档）
         notebook: 工作笔记全文（minecraft_notebook 全量文档）
-        milestones: 近期里程碑（emit game.milestone 时同步；最多 MAX_MILESTONES 条）
+        reports: 近期上报（emit game.report 时同步；最多 MAX_REPORTS 条）
     """
 
     todos: List[TodoItem] = field(default_factory=list)
     notebook: str = ""
-    milestones: List[str] = field(default_factory=list)
+    reports: List[Dict[str, str]] = field(default_factory=list)
 
     # ---- todo 文档操作 ----
 
@@ -51,10 +51,6 @@ class MinecraftAgentState:
         """导出待办文档（minecraft_todo read）。"""
         return {"todos": [{"content": t.content, "status": t.status} for t in self.todos]}
 
-    def done_set(self) -> Set[str]:
-        """当前已完成待办的内容集合（里程碑 diff 用——pending→done 转变检测）。"""
-        return {t.content for t in self.todos if t.status == "done"}
-
     # ---- notebook 文档操作 ----
 
     def set_notebook(self, content: str) -> None:
@@ -65,23 +61,23 @@ class MinecraftAgentState:
         """导出工作笔记文档（minecraft_notebook read）。"""
         return {"content": self.notebook}
 
-    # ---- 里程碑 ----
+    # ---- 上报 ----
 
-    def add_milestone(self, message: str) -> None:
-        """新增里程碑（emit game.milestone 时同步；保留最近 MAX_MILESTONES 条）。"""
-        self.milestones.append(message)
-        if len(self.milestones) > MAX_MILESTONES:
-            self.milestones = self.milestones[-MAX_MILESTONES:]
+    def add_report(self, kind: str, content: str, scene: str = "") -> None:
+        """新增上报（emit game.report 时同步；保留最近 MAX_REPORTS 条）。"""
+        self.reports.append({"kind": kind, "content": content, "scene": scene})
+        if len(self.reports) > MAX_REPORTS:
+            self.reports = self.reports[-MAX_REPORTS:]
 
     # ---- 状态导出（minecraft_get_state）----
 
     def to_dict(self) -> Dict[str, Any]:
-        """导出完整状态快照（minecraft_get_state：todo/notebook/milestones 三元组）。"""
+        """导出完整状态快照（minecraft_get_state：todo/notebook/reports 三元组）。"""
         return {
             "todo": self.todo_doc()["todos"],
             "notebook": self.notebook,
-            "recent_milestones": list(self.milestones),
+            "recent_reports": [dict(r) for r in self.reports],
         }
 
 
-__all__ = ["MinecraftAgentState", "TodoItem", "MAX_MILESTONES"]
+__all__ = ["MinecraftAgentState", "TodoItem", "MAX_REPORTS"]
