@@ -6,18 +6,21 @@
 - 行级写入经 ``SQLiteStore`` 的 live_sessions 领域方法（主键 AUTOINCREMENT）；
 - 生命周期广播 ``live.started`` / ``live.ended`` 事件；
 - 对下游（StorageLedger / 场次盖章拦截器 / 模拟器 / Dashboard API）暴露
-  ``resolve_pk()``——显式场次进行中返回其主键，否则返回默认场次主键。
+  ``resolve_pk()``——显式场次进行中返回其主键，否则返回 ``None``。
 
-## 防膨胀设计
+## 显式开启场次才落库
 
 把"开场次"从进程启动的副作用变为**显式业务动作**：
 
 - 进程启动**不**自动开新场次；
-- 无显式场次期间，所有消息归属一个**默认场次**（scratch 兜底桶，固定复用
-  一行）——链路行为与正式场次完全一致（落库/回灌/决策上下文），但不膨胀；
+- 无显式场次期间 ``resolve_pk()`` 返回 ``None``——下游 StorageLedger 等落库
+  路径据此跳过；事件总线分发、WebUI 显示、Agent 决策链路照常工作（消息仅
+  在内存流转，不写入 live_chat / gifts / super_chats）；
 - 显式场次由手动开关或模拟器回放开启；结束时若无任何明细行则整行丢弃
   （空场次不留行）；
 - 场次可删除（级联清明细），调试产生的场次随手清理。
+
+跨场次对话记忆由 SimpleMemory / 摘要机制承载，本模块不参与启动期回灌。
 """
 
 from __future__ import annotations
@@ -36,17 +39,14 @@ if TYPE_CHECKING:
 
 logger = get_logger("LiveSessionManager")
 
-# 默认场次的 stream_id 标记（房间语义上的"无房间"哨兵值）
-SCRATCH_STREAM_ID = "__scratch__"
-
 
 class LiveSessionManager:
     """直播场次管理器：开启/结束/删除场次 + 场次归属解析。
 
     不变量：
     - 至多一个显式进行中场次（开启新场次前自动结束旧场次）；
-    - 默认场次行存在且未结束（懒创建，被删除后下次解析自动重建）；
-    - 空显式场次在结账时整行丢弃。
+    - 空显式场次在结账时整行丢弃；
+    - 无显式场次期间 ``resolve_pk()`` 返回 ``None``，不创建任何兜底行。
     """
 
     def __init__(
@@ -63,19 +63,19 @@ class LiveSessionManager:
         self._room_id = room_id
         self._active_pk: Optional[int] = None
         self._active_source: str = ""
-        self._scratch_pk: Optional[int] = None
         self._lock = asyncio.Lock()
         self._started = False
 
     # -------------------- 生命周期 --------------------
 
     async def start(self) -> None:
-        """启动：收口上次残留 + 确保默认场次就位。幂等。"""
+        """启动：收口上次残留的显式进行中场次。幂等。"""
         if self._started:
             return
 
-        # 1. 残留收口：上次进程未正常退出的"进行中"显式场次，以最后活动
-        #    时刻封闭（没有可重建的真实结束边界）
+        # 残留收口：上次进程未正常退出的"进行中"显式场次，以最后活动
+        # 时刻封闭（没有可重建的真实结束边界）。本次进程不会自动开新场次；
+        # 无显式场次期间，``resolve_pk()`` 返回 None，下游落库路径据此跳过。
         for row in await self._store.list_dangling_live_sessions():
             ended = int(row["updated_at_ms"] or row["started_at_ms"])
             await self._store.close_live_session(live_session_id=int(row["id"]), ended_at_ms=ended)
@@ -84,11 +84,8 @@ class LiveSessionManager:
                 f"（ended_at_ms 补为最后活动时刻 {ended}）"
             )
 
-        # 2. 默认场次就位
-        await self._ensure_scratch()
-
         self._started = True
-        logger.info("LiveSessionManager 已启动（启动不自动开新场次；显式场次经 open_session 开启）")
+        logger.info("LiveSessionManager 已启动（启动不自动开新场次；显式场次经 open_session 开启；无场次时消息不落库）")
 
     async def stop(self) -> None:
         """停止（进程退出收口由 run_shutdown 显式调 close_session，这里仅复位标记）。"""
@@ -185,9 +182,9 @@ class LiveSessionManager:
     async def delete_session(self, live_session_id: int) -> bool:
         """删除场次（级联清明细）。进行中场次先自动结束再删。
 
-        默认场次也可删（下次解析自动重建）。目标行不存在返回 False——
-        注意进行中的空场次在收口阶段即被整行丢弃，本方法先探明行存在
-        再收口，避免"收口即删光 → DELETE 落空"被误报为不存在。
+        目标行不存在返回 False——注意进行中的空场次在收口阶段即被整行
+        丢弃，本方法先探明行存在再收口，避免"收口即删光 → DELETE 落空"
+        被误报为不存在。
         """
         async with self._lock:
             row = await self._store.get_live_session(live_session_id=live_session_id)
@@ -196,40 +193,19 @@ class LiveSessionManager:
             if live_session_id == self._active_pk:
                 await self._close_active(reason="删除场次前自动结束", ended_at_ms=now_ms())
             await self._store.delete_live_session(live_session_id=live_session_id)
-            if live_session_id == self._scratch_pk:
-                self._scratch_pk = None
             logger.info(f"场次已删除: id={live_session_id}（明细级联清除）")
             return True
 
     # -------------------- 场次归属解析 --------------------
 
-    async def resolve_pk(self) -> int:
-        """解析"当前场次"主键：显式场次进行中返回其主键，否则默认场次主键。
+    async def resolve_pk(self) -> Optional[int]:
+        """解析"当前场次"主键：显式场次进行中返回其主键，否则返回 ``None``。
 
         下游（StorageLedger 写明细 / 场次盖章拦截器 / 模拟器世界窗口）统一
-        经此归属，不再各自维护场次语义。
+        经此归属，不再各自维护场次语义。返回 ``None`` 时表示无进行中场次
+        ——落库路径据此跳过，事件分发链路照常运行。
         """
-        if self._active_pk is not None:
-            return self._active_pk
-        return await self._ensure_scratch()
-
-    async def _ensure_scratch(self) -> int:
-        """确保默认场次兜底行存在并返回其主键（幂等，跨进程单行）。"""
-        if self._scratch_pk is not None:
-            return self._scratch_pk
-        row = await self._store.get_scratch_live_session()
-        if row is not None:
-            self._scratch_pk = int(row["id"])
-            return self._scratch_pk
-        self._scratch_pk = await self._store.insert_live_session(
-            stream_id=SCRATCH_STREAM_ID,
-            platform="scratch",
-            started_at_ms=now_ms(),
-            title="默认场次（未显式开启场次时的消息归属）",
-            source="scratch",
-        )
-        logger.info(f"默认场次兜底行已创建: id={self._scratch_pk}")
-        return self._scratch_pk
+        return self._active_pk
 
     # -------------------- 查询访问面 --------------------
 
@@ -250,7 +226,7 @@ class LiveSessionManager:
         source: Optional[str] = None,
         title_keyword: Optional[str] = None,
     ) -> List:
-        """场次列表（默认场次置顶 + 显式场次倒序 + 消息数），供 Dashboard API / 控制台侧边栏。"""
+        """场次列表（显式场次按开始时间倒序 + 消息数），供 Dashboard API / 控制台侧边栏。"""
         return await self._store.list_live_sessions(limit=limit, source=source, title_keyword=title_keyword)
 
     @property
@@ -326,4 +302,4 @@ class LiveSessionManager:
         return items[-limit:]
 
 
-__all__ = ["LiveSessionManager", "SCRATCH_STREAM_ID"]
+__all__ = ["LiveSessionManager"]

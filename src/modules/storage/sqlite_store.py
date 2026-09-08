@@ -476,30 +476,15 @@ class SQLiteStore:
 
         return await self._run_in_executor(_exec)
 
-    async def get_scratch_live_session(self) -> Optional[sqlite3.Row]:
-        """查默认场次兜底行（source='scratch' 且未结束）；不存在返回 None。"""
-
-        def _exec() -> Optional[sqlite3.Row]:
-            with self._manager.transaction() as conn:
-                return conn.execute(
-                    "SELECT * FROM live_sessions WHERE source='scratch' AND ended_at_ms IS NULL ORDER BY id LIMIT 1"
-                ).fetchone()
-
-        return await self._run_in_executor(_exec)
-
     async def list_dangling_live_sessions(self) -> List[sqlite3.Row]:
-        """列出未结账的显式场次（ended_at_ms IS NULL 且非 scratch）。
+        """列出未结账的显式场次（ended_at_ms IS NULL）。
 
         用于启动期收口：上次进程未正常退出的残留"进行中"场次。
         """
 
         def _exec() -> List[sqlite3.Row]:
             with self._manager.transaction() as conn:
-                return list(
-                    conn.execute(
-                        "SELECT * FROM live_sessions WHERE ended_at_ms IS NULL AND source != 'scratch'"
-                    ).fetchall()
-                )
+                return list(conn.execute("SELECT * FROM live_sessions WHERE ended_at_ms IS NULL").fetchall())
 
         return await self._run_in_executor(_exec)
 
@@ -547,12 +532,13 @@ class SQLiteStore:
     ) -> List[sqlite3.Row]:
         """列出场次（附消息数），供场次列表/回看选择。
 
-        排序：默认场次（scratch 兜底行）恒置顶，其余按开始时间倒序。
+        排序：按开始时间倒序。无显式场次期间不创建兜底行；列表只含历史
+        显式场次。
         筛选：``source`` 精确匹配来源；``title_keyword`` 对 title 做包含匹配。
 
         Args:
             limit: 最多返回条数
-            source: 来源过滤（manual / replay / scratch / legacy）；None 不过滤
+            source: 来源过滤（manual / replay / legacy）；None 不过滤
             title_keyword: 标题关键字；None 或空串不过滤
         """
 
@@ -575,7 +561,7 @@ class SQLiteStore:
                         "SELECT COUNT(*) FROM live_chat c WHERE c.live_session_id = s.id"
                         ") AS message_count "
                         f"FROM live_sessions s {where_clause} "
-                        "ORDER BY (s.source='scratch') DESC, s.started_at_ms DESC LIMIT ?",
+                        "ORDER BY s.started_at_ms DESC LIMIT ?",
                         params,
                     ).fetchall()
                 )
@@ -587,8 +573,8 @@ class SQLiteStore:
     # 收进 store（让消费方拿到 row 后自行组装）。
     #
     # 排序不变量：所有时间序列查询以 ``timestamp_ms`` 排序，禁止依赖 INSERT 顺序。
-    # 回灌语义：取"最近 N 条"必须先 DESC LIMIT，再 Python 内反转；直接 ASC LIMIT
-    # 会取到最老的一批，破坏 ContextService 重启回灌的正确性。
+    # 取"最近 N 条"必须先 DESC LIMIT，再 Python 内反转；直接 ASC LIMIT 会取到
+    # 最老的一批，破坏时间线回看的正确性。
 
     # list_viewer_stats 排序白名单——防 SQL 注入，禁止字符串拼接列名
     _VIEWER_ORDER_BY_WHITELIST: tuple = (
@@ -628,25 +614,6 @@ class SQLiteStore:
                     )
                 rows = cur.fetchall()
             # DESC 取到的是 [新→旧]，反转回 [旧→新] 满足调用方约定
-            return list(reversed(rows))
-
-        return await self._run_in_executor(_exec)
-
-    async def list_latest_live_chat(self, *, limit: int = 60) -> List[sqlite3.Row]:
-        """取全局最近 ``limit`` 条消息（跨场次），按时间**正序**返回（旧→新）。
-
-        启动回灌语义：重启后主播应延续"最近一段对话"，跨场次取全局最新
-        窗口（上一次结束的场次天然位于窗口尾部）。实现同 ``list_recent_live_chat``：
-        先 DESC LIMIT 再 Python 内反转。
-        """
-
-        def _exec() -> List[sqlite3.Row]:
-            with self._manager.transaction() as conn:
-                cur = conn.execute(
-                    "SELECT * FROM live_chat ORDER BY timestamp_ms DESC LIMIT ?",
-                    (limit,),
-                )
-                rows = cur.fetchall()
             return list(reversed(rows))
 
         return await self._run_in_executor(_exec)

@@ -49,7 +49,6 @@
             <el-option label="全部来源" value="" />
             <el-option label="手动" value="manual" />
             <el-option label="回放" value="replay" />
-            <el-option label="默认" value="scratch" />
             <el-option label="历史" value="legacy" />
           </el-select>
         </div>
@@ -73,7 +72,7 @@
               <span>{{ item.message_count }} 条</span>
             </div>
             <div
-              v-if="!item.is_active && item.source !== 'scratch' && item.source !== 'legacy'"
+              v-if="!item.is_active && item.source !== 'legacy'"
               class="session-actions"
             >
               <el-popconfirm
@@ -88,7 +87,7 @@
             </div>
           </li>
         </ul>
-        <p class="sessions-hint">启动不自动开场次；未开启期间的消息归入默认场次</p>
+        <p class="sessions-hint">启动不自动开场次；未开启期间消息仅在内存中流转（测试模式，不落库）</p>
       </aside>
 
       <!-- ============================================================ -->
@@ -115,6 +114,16 @@
           </template>
           <span v-else class="slate-idle">节目单未运行或未接入</span>
         </section>
+
+        <el-alert
+          v-if="showTestModeNotice"
+          class="test-mode-notice"
+          type="info"
+          :closable="false"
+          show-icon
+          title="未开启直播场次"
+          description="当前消息仅在内存中流转用于测试，不会保存到数据库；正式直播请先在左侧开启场次"
+        />
 
         <section class="stage" aria-label="时间线">
           <header class="stage-bar" :class="{ 'is-paused': paused && sessionMode === 'live' }">
@@ -427,7 +436,6 @@ const STAGE_LABEL: Record<string, string> = {
 const SOURCE_LABEL: Record<string, string> = {
   manual: '手动',
   replay: '回放',
-  scratch: '默认',
   legacy: '历史',
 };
 
@@ -857,6 +865,10 @@ const sessions = ref<LiveSessionItem[]>([]);
 /** 进行中的显式场次主键（来自 API 响应，不受侧边栏筛选影响——筛选只是视图） */
 const activeSessionId = ref<number | null>(null);
 const activeExplicitSession = computed(() => activeSessionId.value !== null);
+/** 测试模式提示：实时模式下无任何进行中的显式场次，消息仅在内存中流转、不落库 */
+const showTestModeNotice = computed(
+  () => sessionMode.value === 'live' && !activeExplicitSession.value,
+);
 /** 场次筛选：标题关键字 + 来源（服务端筛选） */
 const sessionQuery = ref('');
 const sessionSourceFilter = ref('');
@@ -866,7 +878,6 @@ const selectedSession = ref<LiveSessionItem | null>(null);
 function sessionTitle(item: LiveSessionItem | null): string {
   if (!item) return '';
   if (item.title) return item.title;
-  if (item.source === 'scratch') return '默认场次';
   return `场次 #${item.live_session_id}`;
 }
 
@@ -882,7 +893,7 @@ function sessionTimeLabel(item: LiveSessionItem): string {
 
 function isSelected(item: LiveSessionItem): boolean {
   if (sessionMode.value === 'live') {
-    return item.is_active || item.source === 'scratch';
+    return item.is_active;
   }
   return selectedSession.value?.live_session_id === item.live_session_id;
 }
@@ -945,9 +956,9 @@ async function removeSession(item: LiveSessionItem): Promise<void> {
   await loadSessions();
 }
 
-/** 历史场次 → 回看模式；临时/进行中场次 → 实时模式 */
+/** 历史场次 → 回看模式；进行中场次 → 实时模式 */
 function selectSession(item: LiveSessionItem): void {
-  if (item.is_active || item.source === 'scratch') {
+  if (item.is_active) {
     backToLive();
     return;
   }
@@ -1661,9 +1672,6 @@ onUnmounted(() => {
 .session-badge.is-replay {
   color: var(--color-agenda);
   border-color: var(--color-agenda);
-}
-.session-badge.is-scratch {
-  color: var(--text-placeholder);
 }
 
 .session-meta {

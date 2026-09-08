@@ -618,7 +618,7 @@ export * from './trace';
 /** 场次列表条目（GET /api/v1/live-sessions） */
 export interface LiveSessionItem {
   live_session_id: number;
-  /** 场次来源：manual=手动 / replay=模拟器回放 / scratch=默认场次兜底 / legacy=历史遗留 */
+  /** 场次来源：manual=手动 / replay=模拟器回放 / legacy=历史遗留 */
   source: string;
   title: string | null;
   room_id: string;

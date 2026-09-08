@@ -6,7 +6,7 @@ live_sessions 场次状态写链单测（场次主键语义：一行 = 一场直
 - update_live_session_stats 只更新已存在行（行不存在返回 False，不建行）
 - close_live_session 结账（幂等：已结账行不覆盖）
 - count_session_details 空场次判定；delete_live_session 级联清明细
-- get_scratch_live_session / list_dangling_live_sessions 语义
+- list_dangling_live_sessions 语义
 - BackgroundMaintainer 轻 tick 经 LiveSessionManager 解析归属真正写进表
 """
 
@@ -176,19 +176,15 @@ async def test_cascade_delete_keeps_agenda_tables(store: SQLiteStore) -> None:
     assert len(rows) == 1
 
 
-# ===== scratch / dangling =====
+# ===== dangling 收口 =====
 
 
 @pytest.mark.asyncio
-async def test_scratch_and_dangling_queries(store: SQLiteStore) -> None:
-    scratch_pk = await store.insert_live_session(stream_id="__scratch__", source="scratch", started_at_ms=500)
+async def test_list_dangling_live_sessions_returns_unclosed(store: SQLiteStore) -> None:
+    """未结账（ended_at_ms IS NULL）的场次被列入 dangling；已结账行不入选。"""
     await store.insert_live_session(started_at_ms=1_000, source="manual")  # 进行中显式场次（dangling）
-    await store.insert_live_session(started_at_ms=2_000, source="legacy")  # 已结账遗留行
-    await store.execute("UPDATE live_sessions SET ended_at_ms=? WHERE started_at_ms=?", (3_000, 2_000))
-
-    scratch = await store.get_scratch_live_session()
-    assert scratch is not None
-    assert int(scratch["id"]) == scratch_pk
+    ended = await store.insert_live_session(started_at_ms=2_000, source="legacy")  # 已结账遗留行
+    await store.execute("UPDATE live_sessions SET ended_at_ms=? WHERE id=?", (3_000, ended))
 
     dangling = await store.list_dangling_live_sessions()
     assert len(dangling) == 1
@@ -268,17 +264,14 @@ def test_fake_session_manager_contract() -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_sessions_scratch_first_then_desc(store: SQLiteStore) -> None:
-    """默认场次恒置顶；显式场次按开始时间倒序（即使显式场次比默认场次更新）。"""
-    await store.insert_live_session(started_at_ms=1_000, source="manual", title="早场")
-    scratch = await store.insert_live_session(source="scratch", started_at_ms=2_000)
+async def test_list_live_sessions_orders_by_started_at_desc(store: SQLiteStore) -> None:
+    """无默认场次兜底：列表按开始时间倒序（最新场次在前）。"""
+    old = await store.insert_live_session(started_at_ms=1_000, source="manual", title="早场")
     newest = await store.insert_live_session(started_at_ms=9_000, source="manual", title="新场")
 
     rows = await store.list_live_sessions()
     ids = [int(r["id"]) for r in rows]
-    assert ids[0] == scratch, "默认场次必须置顶"
-    assert ids[1] == newest
-    assert ids[2] == int(rows[2]["id"])
+    assert ids == [newest, old], f"按 started_at_ms 倒序，实际 {ids}"
 
 
 @pytest.mark.asyncio

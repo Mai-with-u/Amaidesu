@@ -35,7 +35,6 @@ from src.modules.collectors.manager import CollectorManager
 from src.modules.config.core_schemas import ContextAssemblerConfig, DashboardConfig, EventHistoryConfig
 from src.modules.config.service import ConfigService
 from src.modules.context import ContextService
-from src.modules.context.models import DialogueTurn
 from src.modules.dashboard.server import DashboardServer
 from src.modules.events import (
     EventBus,
@@ -335,8 +334,8 @@ async def create_app_components(
         storage_ledger_auto_start: 是否启动 StorageLedger 订阅。
             ``--dry`` 模式传 False，避免组合根冒烟时事件被处理（写入数据库）。
             关闭链（``run_shutdown``）无论如何都会 ``stop()`` 一次，幂等安全。
-        session_manager_auto_start: 是否启动 LiveSessionManager（残留场次收口 +
-            临时兜底场次就位）。``--dry`` 模式传 False，避免冒烟写库。
+        session_manager_auto_start: 是否启动 LiveSessionManager（残留场次收口）。
+            ``--dry`` 模式传 False，避免冒烟写库。
 
     Returns:
         (context_service, event_bus, llm_service, dashboard_server,
@@ -369,18 +368,17 @@ async def create_app_components(
         config.get("context", {}) if isinstance(config, dict) else {}
     )
 
-    # --- 启动回灌：ContextService ← live_chat（重启失忆修复）---
-    # 必须在 StorageLedger 之前：回灌只读 live_chat，与后续订阅无依赖；但语义上
-    # 紧跟存储就绪（SQLiteStore 已 initialize）——先让主播/Planner 一启动就看到上次
-    # 说过什么。函数内已 try/except，外层不再重复包裹。
-    await _bootstrap_context_from_live_chat(context_service, sqlite_store)
+    # --- 启动期不进行任何上下文回灌（每次启动 = 干净测试环境）---
+    # 跨场次对话记忆由 SimpleMemory / 摘要机制承载，不在组合根做 live_chat 回灌。
+    # 无显式场次期间消息仅在内存流转，落库路径依据 0 值跳过。
 
     # --- EventBus + 场次管理 + 拦截器 ---
     logger.info("初始化事件总线...")
     event_bus = EventBus()
 
-    # LiveSessionManager：场次唯一事实源（开启/结束/删除/归属解析/防膨胀）。
-    # 启动不自动开新场次；无显式场次期间消息归属临时兜底场次（固定复用一行）。
+    # LiveSessionManager：场次唯一事实源（开启/结束/删除/归属解析）。
+    # 启动不自动开新场次；无显式场次期间 ``resolve_pk()`` 返回 None，
+    # 下游 StorageLedger 据此跳过落库。
     session_manager = LiveSessionManager(sqlite_store, event_bus)
     if session_manager_auto_start:
         await session_manager.start()
@@ -707,95 +705,6 @@ async def _start_storage_ledger(
     except Exception as exc:
         logger.warning(f"StorageLedger 构造/启动失败: {exc}")
         return None
-
-
-async def _bootstrap_context_from_live_chat(
-    context_service: ContextService,
-    sqlite_store: SQLiteStore,
-    session_id: str = _LIVE_SESSION_ID,
-    message_limit: int = 60,
-) -> int:
-    """启动时从 live_chat 回灌最近对话到 ContextService（重启失忆修复）。
-
-    取全局最近 ``message_limit`` 条消息（跨场次，时间正序），按 ``sender_role``
-    聚合为 ``DialogueTurn``：观众行追加到当前轮的 ``viewer_messages``；
-    主播行闭合当前轮（``assistant_message`` 取主播内容，``end_timestamp``
-    取该消息时间戳）。尾部未闭合的观众消息也作为最后一轮（assistant 为
-    ``None``）。跨场次取全局最新窗口——上一次结束的场次天然位于窗口尾部，
-    主播重启后延续"最近一段对话"。
-
-    回灌失败仅记 warning，不阻断启动：无历史时静默跳过（返回 0）。
-
-    Args:
-        context_service: 目标上下文服务。
-        sqlite_store: 持久化存储（读 live_chat）。
-        session_id: ContextService 会话键（L1 对话窗口逻辑键，固定 "live"）。
-        message_limit: 取最近多少条原消息（聚合后轮数会更少）。
-
-    Returns:
-        实际灌入的轮数（不含失败轮）。
-    """
-    try:
-        rows = await sqlite_store.list_latest_live_chat(limit=message_limit)
-    except Exception as exc:  # noqa: BLE001 - 启动边界，不阻断
-        logger.warning(f"ContextService 回灌读取 live_chat 失败（不影响启动）: {exc}")
-        return 0
-
-    if not rows:
-        logger.debug("ContextService 回灌跳过：live_chat 无历史消息")
-        return 0
-
-    turns: list = []
-    pending_viewers: list = []
-    pending_start_ts: Optional[float] = None
-    pending_end_ts: Optional[float] = None
-
-    for row in rows:
-        # row["timestamp_ms"] 是 INTEGER 毫秒；DialogueTurn 用 float 秒
-        # （与 ContextService 现有 time.time() 语义一致）
-        ts_sec = float(row["timestamp_ms"]) / 1000.0
-        if row["sender_role"] == "assistant":
-            turns.append(
-                DialogueTurn(
-                    session_id=session_id,
-                    viewer_messages=list(pending_viewers),
-                    assistant_message=row["content"],
-                    assistant_emotion=None,
-                    start_timestamp=pending_start_ts if pending_start_ts is not None else ts_sec,
-                    end_timestamp=ts_sec,
-                )
-            )
-            pending_viewers = []
-            pending_start_ts = None
-            pending_end_ts = None
-        else:
-            if pending_start_ts is None:
-                pending_start_ts = ts_sec
-            pending_viewers.append(row["content"])
-            pending_end_ts = ts_sec
-
-    if pending_viewers or pending_start_ts is not None:
-        turns.append(
-            DialogueTurn(
-                session_id=session_id,
-                viewer_messages=pending_viewers,
-                assistant_message=None,
-                assistant_emotion=None,
-                start_timestamp=pending_start_ts if pending_start_ts is not None else 0.0,
-                end_timestamp=pending_end_ts if pending_end_ts is not None else 0.0,
-            )
-        )
-
-    try:
-        await context_service.seed_dialogue_turns(session_id, turns)
-    except Exception as exc:  # noqa: BLE001 - 启动边界，不阻断
-        logger.warning(f"ContextService 回灌写入失败（不影响启动）: {exc}")
-        return 0
-
-    logger.info(
-        f"ContextService 已从 live_chat 回灌 {len(turns)} 轮对话（session_id={session_id!r}，原消息 {len(rows)} 条）"
-    )
-    return len(turns)
 
 
 async def _start_log_streamer():
@@ -1178,7 +1087,7 @@ async def run_shutdown(
         logger.info("StorageLedger 已停止")
 
     # 场次结账：进行中的显式场次在进程退出时收口（live.ended 事件 + 结束时间；
-    # 空场次整行丢弃）。临时兜底场次保留（跨进程复用，不膨胀）。
+    # 空场次整行丢弃）。无显式场次时 close_session 返回 False 静默跳过。
     if session_manager is not None:
         await safe_log(
             session_manager.close_session(reason="进程退出"),

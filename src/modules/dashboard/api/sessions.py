@@ -5,10 +5,11 @@
 - ``GET  /sessions``           场次列表（倒序 + 消息数，供控制台场次侧边栏）
 - ``POST /sessions/open``      开启新场次（进行中场次先自动结束）
 - ``POST /sessions/{id}/close`` 结束指定场次（须为当前进行中场次）
-- ``DELETE /sessions/{id}``    删除场次（级联清除明细；默认场次删除后自动重建）
+- ``DELETE /sessions/{id}``    删除场次（级联清除明细）
 
 场次归属由 ``LiveSessionManager`` 负责（唯一事实源）；本层只做参数校验与
-结果序列化，不含场次语义。
+结果序列化，不含场次语义。无显式场次期间消息不落库，因此列表只含历史
+显式场次。
 """
 
 from typing import TYPE_CHECKING, Annotated, Any, Dict, List, Optional
@@ -33,7 +34,7 @@ class SessionItem(BaseModel):
     """场次列表条目"""
 
     live_session_id: int = Field(..., description="场次主键（live_sessions.id）")
-    source: str = Field(default="manual", description="场次来源：manual / replay / scratch / legacy")
+    source: str = Field(default="manual", description="场次来源：manual / replay / legacy")
     title: Optional[str] = Field(default=None, description="场次标题")
     room_id: str = Field(default="", description="房间/频道标识（普通属性）")
     platform: str = Field(default="", description="平台标识")
@@ -93,17 +94,17 @@ def _row_to_item(row: Any, active_pk: Optional[int]) -> SessionItem:
 
 
 # 来源筛选白名单（防脏值进 SQL 语义层）
-_SESSION_SOURCE_FILTERS = frozenset({"manual", "replay", "scratch", "legacy"})
+_SESSION_SOURCE_FILTERS = frozenset({"manual", "replay", "legacy"})
 
 
 @router.get("", response_model=SessionListResponse)
 async def list_sessions(
     server: ServerDep,
     limit: Annotated[int, Query(ge=1, le=200, description="最多返回条数")] = 50,
-    source: Annotated[Optional[str], Query(description="来源筛选：manual / replay / scratch / legacy")] = None,
+    source: Annotated[Optional[str], Query(description="来源筛选：manual / replay / legacy")] = None,
     q: Annotated[Optional[str], Query(description="标题关键字筛选")] = None,
 ) -> SessionListResponse:
-    """列出直播场次（默认场次置顶，其余按开始时间倒序，附消息数），支持来源与标题筛选。"""
+    """列出直播场次（按开始时间倒序，附消息数），支持来源与标题筛选。"""
     manager = _require_session_manager(server)
     if manager is None:
         raise HTTPException(status_code=503, detail="LiveSessionManager 未装配")

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import pytest
 
@@ -11,12 +11,17 @@ from src.modules.events.interceptors.session_stamp import SessionStampIntercepto
 
 
 class _FakeSessionManager:
-    def __init__(self, pk: int = 42, *, raise_on_resolve: bool = False) -> None:
+    def __init__(
+        self,
+        pk: Optional[int] = 42,
+        *,
+        raise_on_resolve: bool = False,
+    ) -> None:
         self._pk = pk
         self._raise = raise_on_resolve
         self.calls = 0
 
-    async def resolve_pk(self) -> int:
+    async def resolve_pk(self) -> Optional[int]:
         self.calls += 1
         if self._raise:
             raise RuntimeError("解析失败")
@@ -57,6 +62,16 @@ async def test_skips_payload_without_field() -> None:
 async def test_resolve_failure_passes_payload_through() -> None:
     ic = SessionStampInterceptor(_FakeSessionManager(raise_on_resolve=True))
     payload: Dict[str, Any] = {"live_session_id": 0}
+    out = await ic.intercept("room.message.danmaku", payload, "test")
+    assert out is not None
+    assert out["live_session_id"] == 0
+
+
+@pytest.mark.asyncio
+async def test_passthrough_when_resolve_returns_none() -> None:
+    """``resolve_pk()`` 返回 None 时 payload 原样放行（live_session_id 保持 0），由落库路径跳过。"""
+    ic = SessionStampInterceptor(_FakeSessionManager(pk=None))
+    payload: Dict[str, Any] = {"live_session_id": 0, "content": "无场次"}
     out = await ic.intercept("room.message.danmaku", payload, "test")
     assert out is not None
     assert out["live_session_id"] == 0

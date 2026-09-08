@@ -147,10 +147,16 @@ class StorageLedger:
         """room.message.* 通配回调：分发到对应明细表写入。
 
         异常隔离：单条失败仅记 error 日志，不抛出（即使记账器挂了，主直播流仍跑）。
+        无显式场次期间 ``live_pk`` 为 None，所有消息仅在内存流转、不落库。
         """
         try:
             msg_type = payload.message_type
             live_pk = await self._resolve_live_pk(payload.live_session_id)
+            if live_pk is None:
+                logger.debug(
+                    f"{_ROOM_MESSAGE_WILDCARD} 事件无法归属场次（未开启显式场次），跳过落库（message_type={msg_type}）"
+                )
+                return
             if msg_type == "danmaku":
                 await self.sqlite_store.insert_live_chat(
                     live_session_id=live_pk,
@@ -243,7 +249,7 @@ class StorageLedger:
             live_pk = await self._resolve_live_pk(payload.live_session_id)
             if live_pk is None:
                 logger.debug(
-                    f"{CoreEvents.STREAMER_SPEECH} 事件无法归属场次（未盖章且无 LiveSessionManager），"
+                    f"{CoreEvents.STREAMER_SPEECH} 事件无法归属场次（未开启显式场次或未盖章），"
                     f"跳过落库（utterance_id={payload.utterance_id}）",
                 )
                 return

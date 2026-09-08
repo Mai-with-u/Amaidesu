@@ -151,7 +151,7 @@ export const simulatorApi = {
 
 // ===== 直播场次（直播控制台） =====
 //
-// `GET /live-sessions`：场次列表（倒序 + 消息数，含默认场次兜底行）。
+// `GET /live-sessions`：场次列表（倒序 + 消息数）。
 // `POST /live-sessions/open`：开启新场次（进行中场次自动结束）。
 // `POST /live-sessions/{id}/close`：结束场次（空场次整行丢弃）。
 // `DELETE /live-sessions/{id}`：删除场次（级联清明细）。

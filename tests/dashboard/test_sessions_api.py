@@ -86,10 +86,10 @@ def client(temp_db_path: Path) -> Generator[TestClient, None, None]:
 
 
 def test_open_list_close_flow(client: TestClient) -> None:
-    # 初始：只有默认场次兜底行
+    # 初始：无任何场次（启动不自动开新场次）
     body = client.get("/api/v1/live-sessions").json()
     assert body["active_session_id"] is None
-    assert any(item["source"] == "scratch" for item in body["items"])
+    assert body["items"] == []
 
     # 开启
     opened = client.post("/api/v1/live-sessions/open", json={"title": "晚间场"}).json()
@@ -114,7 +114,7 @@ def test_open_list_close_flow(client: TestClient) -> None:
 
 def test_close_mismatched_session_returns_409(client: TestClient) -> None:
     client.post("/api/v1/live-sessions/open", json={})
-    other = client.post("/api/v1/live-sessions/open", json={}).json()["live_session_id"]
+    client.post("/api/v1/live-sessions/open", json={})
     # 开第二个场次时第一个已被自动结束；指定一个已结束的 id → 409
     stale = client.get("/api/v1/live-sessions").json()["active_session_id"]
     r = client.post(f"/api/v1/live-sessions/{stale + 100000}/close")
@@ -138,10 +138,9 @@ def test_session_timeline_merges_details_and_events(client: TestClient) -> None:
 
     from src.modules.events.event_history import EventRecord
 
-    body = client.get("/api/v1/live-sessions").json()
-    # 当前无显式场次：用默认场次兜底行验证（其明细与事件均可回看）
-    scratch = next(item for item in body["items"] if item["source"] == "scratch")
-    pk = scratch["live_session_id"]
+    # 开启一场显式场次用于回看（启动不自动开新场次，需手动开）
+    opened = client.post("/api/v1/live-sessions/open", json={"title": "回看测试"}).json()
+    pk = opened["live_session_id"]
 
     # 直连底层组件造数据（HTTP 层没有造数端点）
     server = _server_ref()

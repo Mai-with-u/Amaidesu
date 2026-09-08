@@ -9,6 +9,7 @@ StorageLedger 集成测试（溯源链收口）
 - game.* 事件 → game_events 表（milestone/attention_required/error 三类）
 - 写入失败隔离：注入异常后下一条仍能落库，不传播到 emit 路径
 - 关闭后：取消订阅，新增事件不再落库
+- 无显式场次：``resolve_pk()`` 返回 ``None`` 时全部不写（消息仅在内存流转）
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 from pathlib import Path
-from typing import AsyncGenerator, Generator
+from typing import AsyncGenerator, Generator, Optional
 
 import pytest
 
@@ -34,10 +35,10 @@ _FAKE_PK = 4242
 
 
 class _FakeSessionManager:
-    def __init__(self, pk: int = _FAKE_PK) -> None:
+    def __init__(self, pk: Optional[int] = _FAKE_PK) -> None:
         self._pk = pk
 
-    async def resolve_pk(self) -> int:
+    async def resolve_pk(self) -> Optional[int]:
         return self._pk
 
 
@@ -776,3 +777,133 @@ async def test_ledger_streamer_speech_persists_reply_to_message_id(
         assert [str(r["reply"]) for r in joined] == ["今天玩《双人成行》！"]
     finally:
         await ledger.stop()
+
+
+# =============================================================================
+# 无显式场次：resolve_pk() 返回 None → 全类型事件不落库
+# =============================================================================
+
+
+class _CountingStore(SQLiteStore):
+    """对 insert_* 计数；其余方法透传。验证无场次时落库路径完全未被调用。"""
+
+    def __init__(self, db_path: Path) -> None:
+        super().__init__(db_path)
+        self.insert_calls: list[str] = []
+
+    async def insert_live_chat(self, *args, **kwargs):  # type: ignore[override]
+        self.insert_calls.append("insert_live_chat")
+        return await super().insert_live_chat(*args, **kwargs)
+
+    async def insert_gift(self, *args, **kwargs):  # type: ignore[override]
+        self.insert_calls.append("insert_gift")
+        return await super().insert_gift(*args, **kwargs)
+
+    async def insert_super_chat(self, *args, **kwargs):  # type: ignore[override]
+        self.insert_calls.append("insert_super_chat")
+        return await super().insert_super_chat(*args, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_ledger_danmaku_skipped_when_no_active_session(
+    event_bus: EventBus, temp_db_path: Path
+) -> None:
+    """``resolve_pk()`` 返回 None 时，danmaku 不应调用 ``insert_live_chat``，表中无新行。"""
+    store = _CountingStore(temp_db_path)
+    await store.initialize()
+    ledger = StorageLedger(
+        event_bus=event_bus,
+        sqlite_store=store,
+        session_manager=_FakeSessionManager(pk=None),
+    )
+    await ledger.start()
+    try:
+        payload = make_room_message(message_type="danmaku", content="无场次弹幕")
+        await event_bus.emit(CoreEvents.ROOM_MESSAGE_DANMAKU, payload, source="t", wait=True)
+
+        rows = await store.execute("SELECT * FROM live_chat")
+        assert rows == [], "无显式场次时 live_chat 应保持空"
+        assert "insert_live_chat" not in store.insert_calls
+    finally:
+        await ledger.stop()
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_ledger_gift_skipped_when_no_active_session(
+    event_bus: EventBus, temp_db_path: Path
+) -> None:
+    store = _CountingStore(temp_db_path)
+    await store.initialize()
+    ledger = StorageLedger(
+        event_bus=event_bus,
+        sqlite_store=store,
+        session_manager=_FakeSessionManager(pk=None),
+    )
+    await ledger.start()
+    try:
+        payload = make_room_message(message_type="gift", gift_name="小星星", gift_count=1)
+        await event_bus.emit(CoreEvents.ROOM_MESSAGE_GIFT, payload, source="t", wait=True)
+
+        rows = await store.execute("SELECT * FROM gifts")
+        assert rows == []
+        assert "insert_gift" not in store.insert_calls
+    finally:
+        await ledger.stop()
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_ledger_streamer_speech_skipped_when_no_active_session(
+    event_bus: EventBus, temp_db_path: Path
+) -> None:
+    store = _CountingStore(temp_db_path)
+    await store.initialize()
+    ledger = StorageLedger(
+        event_bus=event_bus,
+        sqlite_store=store,
+        session_manager=_FakeSessionManager(pk=None),
+    )
+    await ledger.start()
+    try:
+        payload = StreamerSpeechPayload(
+            utterance_id="utt_no_session",
+            text="无场次发言",
+            timestamp_ms=1,
+        )
+        await event_bus.emit(CoreEvents.STREAMER_SPEECH, payload, source="t", wait=True)
+
+        rows = await store.execute("SELECT * FROM live_chat")
+        assert rows == []
+        assert "insert_live_chat" not in store.insert_calls
+    finally:
+        await ledger.stop()
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_ledger_game_event_skipped_when_no_active_session(
+    event_bus: EventBus, temp_db_path: Path
+) -> None:
+    store = _CountingStore(temp_db_path)
+    await store.initialize()
+    ledger = StorageLedger(
+        event_bus=event_bus,
+        sqlite_store=store,
+        session_manager=_FakeSessionManager(pk=None),
+    )
+    await ledger.start()
+    try:
+        payload = GamePayload(
+            live_session_id="test_session",
+            game="minecraft",
+            event_type="milestone",
+            message="无场次游戏事件",
+        )
+        await event_bus.emit("game.milestone", payload, source="t", wait=True)
+
+        rows = await store.execute("SELECT * FROM game_events")
+        assert rows == []
+    finally:
+        await ledger.stop()
+        await store.close()

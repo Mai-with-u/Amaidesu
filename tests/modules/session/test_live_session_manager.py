@@ -1,4 +1,8 @@
-"""LiveSessionManager 单测：场次生命周期 / 防膨胀 / 归属解析 / 生命周期事件。"""
+"""LiveSessionManager 单测：场次生命周期 / 归属解析 / 生命周期事件。
+
+显式开启场次才落库语义：无显式场次期间 ``resolve_pk()`` 返回 ``None``，
+不创建任何兜底行——下游落库路径据此跳过。
+"""
 
 from __future__ import annotations
 
@@ -13,7 +17,7 @@ import pytest
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
-from src.modules.session import LiveSessionManager, SCRATCH_STREAM_ID
+from src.modules.session import LiveSessionManager
 from src.modules.storage.sqlite_store import SQLiteStore
 
 
@@ -60,20 +64,19 @@ class _Collector:
 
 
 @pytest.mark.asyncio
-async def test_start_creates_scratch_and_resolves_to_it(store: SQLiteStore, bus: EventBus) -> None:
+async def test_resolve_pk_returns_none_without_active_session(store: SQLiteStore, bus: EventBus) -> None:
+    """无显式场次时 ``resolve_pk()`` 返回 ``None``，且不创建任何 live_sessions 行。"""
     manager = _make_manager(store, bus)
     collector = _Collector(bus)
     await manager.start()
 
-    pk = await manager.resolve_pk()
-    row = await store.get_live_session(live_session_id=pk)
-    assert row is not None
-    assert row["source"] == "scratch"
-    assert row["stream_id"] == SCRATCH_STREAM_ID
-    # 默认场次是兜底桶，不是一场直播：不发 live.started
+    assert await manager.resolve_pk() is None
+    assert manager.active_pk is None
+    rows = await store.execute("SELECT * FROM live_sessions")
+    assert rows == [], "无显式场次期间不应自动建任何兜底行"
+
+    # 不发 live.started（不开场次就没有生命周期事件）
     assert collector.started == []
-    # 反复解析稳定
-    assert await manager.resolve_pk() == pk
 
 
 @pytest.mark.asyncio
@@ -161,28 +164,6 @@ async def test_close_without_active_returns_false(store: SQLiteStore, bus: Event
 
 
 @pytest.mark.asyncio
-async def test_delete_session_cascades_and_scratch_rebuilds(store: SQLiteStore, bus: EventBus) -> None:
-    manager = _make_manager(store, bus)
-    await manager.start()
-
-    scratch_pk = await manager.resolve_pk()
-    await store.insert_live_chat(
-        live_session_id=scratch_pk,
-        timestamp_ms=1_000,
-        sender_role="viewer",
-        content="临时消息",
-        message_type="danmaku",
-    )
-    assert await manager.delete_session(scratch_pk) is True
-    rows = await store.execute("SELECT * FROM live_chat")
-    assert rows == []
-
-    # 默认场次删除后下次解析自动重建
-    rebuilt = await manager.resolve_pk()
-    assert rebuilt != scratch_pk
-
-
-@pytest.mark.asyncio
 async def test_delete_active_session_closes_first(store: SQLiteStore, bus: EventBus) -> None:
     manager = _make_manager(store, bus)
     collector = _Collector(bus)
@@ -193,6 +174,28 @@ async def test_delete_active_session_closes_first(store: SQLiteStore, bus: Event
     await asyncio.sleep(0.02)
     assert manager.active_pk is None
     assert collector.ended and collector.ended[0].live_session_id == pk
+
+
+@pytest.mark.asyncio
+async def test_delete_session_cascades_detail_rows(store: SQLiteStore, bus: EventBus) -> None:
+    """删除场次：live_chat 等明细级联清除；行不存在返回 False。"""
+    manager = _make_manager(store, bus)
+    await manager.start()
+
+    pk = await manager.open_session()
+    await store.insert_live_chat(
+        live_session_id=pk,
+        timestamp_ms=1_000,
+        sender_role="viewer",
+        content="弹幕",
+        message_type="danmaku",
+    )
+    assert await manager.delete_session(pk) is True
+    rows = await store.execute("SELECT * FROM live_chat")
+    assert rows == []
+
+    # 不存在的行返回 False
+    assert await manager.delete_session(pk) is False
 
 
 @pytest.mark.asyncio
@@ -210,3 +213,18 @@ async def test_startup_closes_dangling_sessions(store: SQLiteStore, bus: EventBu
     assert row is not None
     assert row["ended_at_ms"] == 9_000
     assert manager.active_pk is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_pk_after_close_returns_none(store: SQLiteStore, bus: EventBus) -> None:
+    """显式场次结束 → ``resolve_pk()`` 回到 None，无兜底行补建。"""
+    manager = _make_manager(store, bus)
+    await manager.start()
+
+    pk = await manager.open_session()
+    assert await manager.resolve_pk() == pk
+    await manager.close_session()
+    assert await manager.resolve_pk() is None
+    # 唯一在场 live_sessions 行是已关闭的 pk（empty_discarded=False 因为没有明细也没显式 insert）
+    rows = await store.execute("SELECT * FROM live_sessions WHERE ended_at_ms IS NULL")
+    assert rows == [], "无显式场次期间不应有 ended_at_ms IS NULL 的进行中行"

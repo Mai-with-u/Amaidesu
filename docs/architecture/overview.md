@@ -119,7 +119,7 @@ Amaidesu/
 │       ├── logging/             # 日志 + LogStreamer
 │       ├── memory/              # MemoryProvider + SimpleMemory + memory_query_memory 工具
 │       ├── prompts/             # PromptManager（声明式键自动发现）
-│       ├── session/             # 直播场次管理（LiveSessionManager：开启/结束/删除/归属解析/防膨胀；live.started/ended 唯一发布方；默认场次兜底）
+│       ├── session/             # 直播场次管理（LiveSessionManager：开启/结束/删除/归属解析；live.started/ended 唯一发布方；无显式场次期间消息仅在内存流转不落库）
 │       ├── simulator/           # 世界模拟器（开发基础设施，ADR-006）：三模式发射器（generate LLM 生成 / replay 录制回放 / off）；SimulatorService + PersonaPool / CadenceGenerator / GiftGenerator / SimulatorLLMWrapper / TokenBudgetController / ReplayEngine；回放启停自动开/关场次；人设礼物入 SQLite（sim_personas/sim_gifts + 内置种子），观众上下文读 live_chat 窗口。默认 enabled=false，生产零沾染。详见 docs/development/simulator-guide.md。
 │       ├── storage/             # SQLite 存储层（StorageLedger 唯一写穿入口：订阅 room.message.# + streamer.speech，按 LiveSessionManager 解析的场次归属写 live_chat/gifts/super_chats + 维护 viewers 统计；SQLiteStore 提供领域查询与场次行管理；live_chat 含 message_id/reply_to_message_id 回复关联列）
 │       └── types/               # 共享类型（NormalizedMessage 等）
