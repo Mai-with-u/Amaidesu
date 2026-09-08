@@ -84,7 +84,7 @@ max_steps = 50   # 单任务 ReAct 循环最大步数（超出挂起上报，防
 
 - agent 领域核心零 maicraft 知识：工具面经 registry 动态发现；MCP server 连接由通道层路由（`McpToolProvider` 绑定 server 的 client），agent 不感知
 - 工具失败作为错误观察喂回 LLM（ReAct 标准，LLM 自调整）；连续失败由 max_steps 兜底
-- 内容特有逻辑内聚 `src/agents/game/minecraft/` 包（加内容=加包+配置，框架零改动）
+- 内容特有逻辑内聚 `src/agents/minecraft/` 包（加内容=加包+配置，框架零改动）
 
 ## 相关文档
 

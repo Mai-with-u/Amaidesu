@@ -292,7 +292,7 @@ async def asyncio_sleep_ms(ms: int) -> None:
 工具的典型形态：
 
 - **公用感知**（如 `look_at_screen`）——任何 Agent 都可能需要，放 `src/modules/tools/<domain>/`
-- **Agent 专属推进**（如 `text_adv_choose_option`）——只服务于某个游戏 Agent，放该 Agent 自家包内 `src/agents/game/<name>/tools.py`
+- **Agent 专属推进**（如 `text_adv_choose_option`）——只服务于某个游戏 Agent，放该 Agent 自家包内 `src/agents/<name>/tools.py`
 
 ### 数据契约与协议速览
 
@@ -323,12 +323,12 @@ async def asyncio_sleep_ms(ms: int) -> None:
 
 #### 路径 ①：`ToolProvider` 类（**生产推荐**）
 
-参考：`src/modules/tools/perception/look_at_screen.py`（公用 builtin 工具）、`src/agents/game/text_adv/tools.py`（game 专属 Provider）。
+参考：`src/modules/tools/perception/look_at_screen.py`（公用 builtin 工具）、`src/agents/text_adv/tools.py`（text_adv 专属 Provider）。
 
 ```python
 """
 my_tool.py —— 示例工具（路径 ①：ToolProvider 类）
-放 src/modules/tools/<domain>/my_tool.py 或 src/agents/<family>/<name>/tools.py
+放 src/modules/tools/<domain>/my_tool.py 或 src/agents/<name>/tools.py
 """
 from __future__ import annotations
 
@@ -489,7 +489,7 @@ async def my_lightweight_tool(invocation: ToolInvocation) -> ToolExecutionResult
 
 | 步骤 | 位置 | 操作 |
 |------|------|------|
-| ① 放代码 | `src/modules/tools/<domain>/my_tool.py`（公用 builtin 工具）或 `src/agents/<family>/<name>/tools.py`（Agent 专属） | Provider 类 `XxxToolProvider` + `build_xxx_spec()` |
+| ① 放代码 | `src/modules/tools/<domain>/my_tool.py`（公用 builtin 工具）或 `src/agents/<name>/tools.py`（Agent 专属） | Provider 类 `XxxToolProvider` + `build_xxx_spec()` |
 | ② 注册 | Agent 专属：在该 Agent 的 `_register_tools` 中 `self._tool_registry.register_provider(provider)`；公用 builtin：在装配根 `main.py` 或专门的 wiring 模块中注册 | |
 | ③ 配置（可选） | Agent 专属工具一般无独立配置段（行为由 Agent 配置决定）；公用 builtin 工具若需要开关，放 `[tools.perception.config.<tool_name>]` 或 `[tools.output.config.<tool_name>]` | |
 | ④ 列出与转换 | `ToolRegistry.to_llm_definitions()` 自动从 `ToolSpec.parameters_schema` 派生 OpenAI 风格 function calling 定义供 LLM 看 | |
@@ -515,7 +515,7 @@ async def my_lightweight_tool(invocation: ToolInvocation) -> ToolExecutionResult
 | 范例 | 文件 | 路径 |
 |------|------|------|
 | `look_at_screen`（公用 builtin，屏幕快照） | `src/modules/tools/perception/look_at_screen.py` | 路径 ① |
-| `text_adv_choose_option` / `text_adv_get_story`（Agent 专属 game Provider） | `src/agents/game/text_adv/tools.py` | 路径 ①（`provider="game"`） |
+| `text_adv_choose_option` / `text_adv_get_story`（Agent 专属 Provider，分类 game） | `src/agents/text_adv/tools.py` | 路径 ①（`provider="text_adv"`） |
 | `reply`（Agent 专属 builtin Provider） | `src/agents/streamer/tools/reply_tool.py` | 路径 ①（`provider="builtin"`） |
 | `should_speak_proactively` / `parse_command`（Agent 专属 builtin Provider） | `src/agents/streamer/tools/proactive_tool.py`、`src/agents/streamer/tools/command_tool.py` | 路径 ① |
 | ContentEngine 控制面（`provider="builtin"`） | `src/modules/tools/content_engine.py` | 路径 ① |
@@ -571,12 +571,12 @@ async def my_lightweight_tool(invocation: ToolInvocation) -> ToolExecutionResult
 
 ### 最小骨架代码
 
-参考：`src/agents/streamer/streamer_agent.py`（业务 Agent 完整范例）、`src/agents/game/text_adv/agent.py`（游戏 Agent 自包含包范例）。
+参考：`src/agents/streamer/streamer_agent.py`（业务 Agent 完整范例）、`src/agents/text_adv/agent.py`（游戏 Agent 自包含包范例）。
 
 ```python
 """
 my_agent.py —— 示例 Agent
-放 src/agents/<family>/<name>/agent.py
+放 src/agents/<name>/agent.py
 """
 from __future__ import annotations
 
@@ -712,7 +712,7 @@ class MyAgent(BaseAgent):
         self.logger.debug(f"收到 {event_name}: {getattr(payload, 'content', '')[:40]}")
 ```
 
-**同包内工具**（`src/agents/<family>/<name>/my_tool.py`，参见「添加工具」章 路径 ①）：
+**同包内工具**（`src/agents/<name>/my_tool.py`，参见「添加工具」章 路径 ①）：
 
 ```python
 # my_tool.py（放在同包内，provider="game" 或 "builtin" 按业务归属）
@@ -737,7 +737,7 @@ class MyToolProvider(ToolProvider):
 
 | 步骤 | 位置 | 操作 |
 |------|------|------|
-| ① 放代码 | `src/agents/<family>/<name>/` 自包含包（`agent.py` + `tools.py` + `state.py` + 业务模块） | 类名 `XxxAgent(BaseAgent)`；`name = "<注册名>"` |
+| ① 放代码 | `src/agents/<name>/` 自包含包（`agent.py` + `tools.py` + `state.py` + 业务模块） | 类名 `XxxAgent(BaseAgent)`；`name = "<注册名>"` |
 | ② 注册工厂 | `src/modules/agents/factory.py` | `SUPPORTED_AGENTS` 元组加 `<注册名>`；加 `if name == "<注册名>":` 分支做 `instantiate_agent` |
 | ③ 写配置 | `config/agents.toml` 的 `[agents]` | `enabled = ["<注册名>"]` + `[agents.<注册名>]` 子段（参考 `StreamerAgentConfig` 字段） |
 | ④ 装配调用 | `main.py._register_agents_from_config` 或 `AgentManager.enable_agent(name, config, ...)` | 工厂实例化 → 构造器注入依赖 → `manager.register(agent, spec_provider="<builtin\|game\|mcp>")` → `manager.start_agent(name)` |
@@ -746,9 +746,9 @@ class MyToolProvider(ToolProvider):
 
 **业务包放置规范**（防"插件换皮"红线）：
 
-- **业务包**放 `src/agents/<family>/<name>/`（`family` ∈ {`streamer`, `game`, ...}）
+- **业务包**放 `src/agents/<name>/`（目录名 = Agent 注册名，如 `streamer` / `minecraft` / `text_adv`）
 - **内容特有逻辑**必须**内聚**在该包内（state / tools / prompts / 业务子组件），**框架零改动**——证明范式的关键
-- **游戏类**放 `src/agents/game/<game>/`（`text_adv` / `minecraft` / ...）；`provider="game"`
+- **游戏类**放 `src/agents/<game>/`（`minecraft` / `text_adv` / ...）；工具 `provider` 用注册名，`category` 声明 `game`
 - **公用感知/控制工具**放 `src/modules/tools/<domain>/`（不要散落到各业务包）
 
 **谁调用注册？**
@@ -772,8 +772,8 @@ class MyToolProvider(ToolProvider):
 |------|------|------|
 | StreamerAgent（业务 Agent） | `src/agents/streamer/streamer_agent.py` | 完整范例：订阅事件 + 后台双任务 + Agenda + 三工具 Provider |
 | StreamerAgent 工具 | `src/agents/streamer/tools/{reply_tool,proactive_tool,command_tool}.py` | `provider="builtin"`；StreamerAgent 内部用 |
-| TextAdvGameAgent（游戏 Agent） | `src/agents/game/text_adv/agent.py` | 自包含包；`provider="game"`；感知-推进闭环 |
-| TextAdvGameAgent 工具 | `src/agents/game/text_adv/tools.py` | `provider="game"`；Agent 专属推进工具 |
+| TextAdvGameAgent（游戏 Agent） | `src/agents/text_adv/agent.py` | 自包含包；`provider="text_adv"`（分类 game）；感知-推进闭环 |
+| TextAdvGameAgent 工具 | `src/agents/text_adv/tools.py` | `provider="text_adv"`（分类 game）；Agent 专属推进工具 |
 | StreamerAgent 便捷工厂 | `src/agents/streamer/streamer_agent.py::build_streamer_agent` | 构造 + register 一站式 |
 
 ---

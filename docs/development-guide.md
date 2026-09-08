@@ -442,7 +442,7 @@ enabled = true
 | 类型 | 职责 | 位置 |
 |------|------|------|
 | 采集器 Collector | 持续流型数据源，主动 emit 语义域事件 | `src/modules/collectors/<域>/` |
-| 业务 Agent | 自主驱动主体（主播 Planner/Replyer、game text_adv 等） | `src/agents/<family>/<name>/` |
+| 业务 Agent | 自主驱动主体（主播 Planner/Replyer、游戏代理 minecraft / text_adv 等） | `src/agents/<name>/`（目录名 = 注册名） |
 | 工具 Tool | 被动能力契约（渲染/感知/内容引擎），经 ToolRegistry 调度 | `src/modules/tools/<包>/` 或 Agent 包内 |
 
 ### 10.2 添加新组件

@@ -114,15 +114,14 @@ replyer_llm = "llm"          # Replyer 用的 LLM profile 名
 # profanity_enabled = false
 ```
 
-`game` 是游戏 Agent 总开关，`engine` 字段选择具体游戏实现（当前唯一可用的是 `text_adv` 文字冒险示例）：
+每个游戏 Agent 是一份独立顶级配置段，启用即在 `enabled` 列表加名（当前可用：`text_adv` 文字冒险示例，零依赖开箱可玩；`minecraft` 需 MCP 服务器）：
 
 ```toml
 [agents]
-enabled = ["streamer", "game"]
+enabled = ["streamer", "text_adv"]
 
-[agents.game]
+[agents.text_adv]
 command_llm = "llm"
-# engine = "text_adv"   # 当前仅支持 text_adv
 ```
 
 #### 启用采集器
@@ -207,7 +206,7 @@ uv run python main.py --dry
 | `core.toml` | `[interceptors.rate_limit]` / `[interceptors.similar_filter]` | 事件拦截器（作用于弹幕流，见 §3.4） |
 | `model.toml` | `[[llm_providers]]` | LLM provider 池（可复用 API 连接） |
 | `model.toml` | `[llm]` / `[llm_fast]` / `[vlm]` / `[llm_local]` / `[llm_summary]` / `[llm_agenda]` | LLM profile（引用 provider + 覆盖参数） |
-| `agents.toml` | `[agents]` + `[agents.streamer]` + `[agents.game]` | 业务 Agent 启用与子配置（替代旧 `[deciders]`） |
+| `agents.toml` | `[agents]` 启用列表 + `[agents.<name>]` 各 Agent 顶级自包含子配置 | 业务 Agent 启用与配置 |
 | `tools.toml` | `[tools]` + `[tools.perception]` / `[tools.understanding]` / `[tools.output]` / `[tools.content_engine]` / `[tools.external]` | 工具包启用与子配置（替代旧 `[collectors]` / `[handlers]`） |
 | `memory.toml` | `[memory]` + 子表 | 记忆后端（`backend="simple"` 或 `"amemorix"`） |
 | `storage.toml` | `[storage.sqlite]` | SQLite 存储（`db_path` / `wal` / `busy_timeout_ms`） |
@@ -242,7 +241,7 @@ uv run python main.py --dry
 | `stt` | 语音转文字（讯飞 ASR + VAD） | `stt.iflytek_asr` / `stt.vad` / `stt.audio` / `stt.message_config` |
 | `mock_danmaku` | 从 `data/*.jsonl` 回放（调试用） | `log_file_path` / `send_interval` / `loop_playback` |
 
-> `text_adv_game` 仍在采集器 Schema 中保留，但实际已迁移到 `src/agents/game/text_adv/` 作为 Agent 实现，不再通过采集器配置。
+> `text_adv_game` 仍在采集器 Schema 中保留，但实际已迁移到 `src/agents/text_adv/` 作为 Agent 实现，不再通过采集器配置。
 
 #### 业务 Agent（`SUPPORTED_AGENTS`）
 

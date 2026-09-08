@@ -42,7 +42,7 @@ flowchart TB
         UQ["UtteranceQueue<br/>FIFO 串行播放队列<br/>丢最旧 / 单 worker / 渲染超时"]
     end
 
-    subgraph Game["GameAgent (src/agents/game/)"]
+    subgraph Game["游戏 Agent (src/agents/ 顶级自包含包)"]
         TextAdv["TextAdvGameAgent<br/>+ StubContentEngine<br/>+ content_engine_* 5 工具"]
         MC["MinecraftAgent<br/>+ maicraft 语义工具（MCP）<br/>+ minecraft_todo / minecraft_notebook / minecraft_get_state / minecraft_assign"]
     end
@@ -50,7 +50,7 @@ flowchart TB
     subgraph Registry["ToolRegistry (src/modules/tools/)"]
         Out["avatar 分类（modules/avatar/）<br/>vts×12 / vrchat×3 / warudo×13<br/>studio 分类（modules/studio/obs/）obs×4"]
         Per["vision 分类（modules/vision/）<br/>vision_look_at_screen"]
-        CE["text_adv 动作工具<br/>（agents/game/text_adv/ 内聚）"]
+        CE["text_adv 动作工具<br/>（agents/text_adv/ 内聚）"]
         Mem["memory 分类<br/>memory_query_memory"]
         Ctrl["framework 分类<br/>framework_pause_agent 等 6 个 AgentControl 工具"]
     end
@@ -252,7 +252,7 @@ sequenceDiagram
 | **命令解析** | `command/command.py` + `command/command_parser.py` + `command/command_registry.py`（`tools/command_tool.py` 的底层纯解析原语） |
 | **提示词** | `prompts/amaidesu_planner.md` + `prompts/amaidesu_replyer.md` + `prompts/agenda_expand.md` |
 
-`src/agents/game/text_adv/` 文字冒险 GameAgent 范例（§1.5.1 content_engine 范式）：`agent.py`（继承 `BaseAgent`）、`state.py`（剧情状态）、`tools.py`（游戏侧 dispatch），构造时注入 `content_engine=StubContentEngine(engine_kind="text_adv")`，通过 `content_engine_*` 5 工具间接驱动引擎；预留 `engine` 配置项以便未来挂 `MinecraftEngine` 等真实实现。
+`src/agents/text_adv/` 文字冒险 GameAgent 范例（content_engine 范式）：`agent.py`（继承 `BaseAgent`）、`state.py`（剧情状态）、`tools.py`（游戏侧 dispatch），构造时注入 `content_engine=StubContentEngine(engine_kind="text_adv")`，通过 `content_engine_*` 5 工具间接驱动引擎。
 
 ### ③ 工具族
 
@@ -267,7 +267,7 @@ sequenceDiagram
 | avatar | `warudo` | 13 | `warudo_set_expression` / `warudo_trigger_hotkey` / `warudo_trigger_body` / `warudo_trigger_head` / `warudo_trigger_action` / `warudo_set_subtitle` / `warudo_throw_fish` / `warudo_set_sight` / `warudo_set_eyebrow` / `warudo_set_eye` / `warudo_set_pupil` / `warudo_set_mouth` / `warudo_get_stats`（动作类工具描述动态携带 `[tools.avatar.warudo.config].action_catalog` 预声明清单） |
 | studio | `obs` | 4 | `obs_send_text` / `obs_switch_scene` / `obs_set_source_visibility` / `obs_send_test` |
 | vision | `vision` | 1 | `vision_look_at_screen`（同步快照工具，注入 `ScreenCapture`/`TextReader` 后端；无后端时返回成功 + 空文本，不抛异常） |
-| game | `text_adv` | 2 | `text_adv_choose_option` / `text_adv_get_story`（游戏侧 dispatch，`agents/game/text_adv/` 内聚） |
+| game | `text_adv` | 2 | `text_adv_choose_option` / `text_adv_get_story`（游戏侧 dispatch，`agents/text_adv/` 内聚） |
 | game | `content_engine` | 5 | `content_engine_start` / `content_engine_stop` / `content_engine_send_input` / `content_engine_status` / `content_engine_get_state`（通用游戏内容引擎控制面） |
 | memory | `memory` | 1 | `memory_query_memory`（绑定 `MemoryProvider` 后才可用） |
 | mcp | `<server 名>` | 按 server | `maicraft_*` 等（MCP server 工具经通道注册，provider = server 名） |
@@ -318,8 +318,8 @@ EventBus 是事件通道（三通道协作之一，承载游戏→主播的事�
 
 v2 不再支持"插件系统"——`src/modules/plugins/` 已移除。新功能通过 **Agent 包内聚**实现：
 
-- **内容特有逻辑全部内聚**到 `src/agents/<family>/<name>/`，框架层（`src/modules/`）**零改动**
-- 例：新增"MC Agent" → 在 `src/agents/game/minecraft/` 建包，内含 `agent.py`（继承 `BaseAgent`）、`engine.py`（实现 `ContentEngine` Protocol）、`state.py` 等；Agent 自有工具在 `_register_tools()` 中自己 `registry.register_provider(provider)`（注册名自动带 `<provider>_` 前缀）；公用工具由 `bind_core_tools` 显式装配；启动结束 `audit_tools` 审计
+- **内容特有逻辑全部内聚**到 `src/agents/<name>/`（目录名 = Agent 注册名），框架层（`src/modules/`）**零改动**
+- 例：新增"MC Agent" → 在 `src/agents/minecraft/` 建包，内含 `agent.py`（继承 `BaseAgent`）、`engine.py`（实现 `ContentEngine` Protocol）、`state.py` 等；Agent 自有工具在 `_register_tools()` 中自己 `registry.register_provider(provider)`（注册名自动带 `<provider>_` 前缀）；公用工具由 `bind_core_tools` 显式装配；启动结束 `audit_tools` 审计
 - 例：新增"播报 Agent" → 在 `src/agents/announcer/` 建包，自己订阅自己感兴趣的事件，自己实现 `list_tools()`
 - **禁止**为新功能在 `src/modules/` 加新模块分组（除非它真的是跨阶段基础设施）；**禁止**通过 monkey-patching 或 import 副作用往框架注入行为
 
@@ -348,18 +348,18 @@ agent = StreamerAgent(
 v2 配置为 7 文件树（`core / model / agents / tools / memory / storage / background`），Pydantic Schema 驱动生成/验证/迁移。`[agents]` 与 `[tools]` 段分别管控主体与能力的启用。
 
 ```toml
-# agents.toml —— 启用哪些 Agent
+# agents.toml —— 启用哪些 Agent（每个 Agent 一份顶级自包含子配置，无分类层）
 [agents]
-enabled = ["streamer", "game"]
+enabled = ["streamer", "text_adv"]
 
 [agents.streamer]
 planner_llm = "llm_fast"
 replyer_llm  = "llm"
 # ... StreamerAgentConfig 其他字段
 
-[agents.game]
-engine = "text_adv"
-# ... TextAdvGameConfig 其他字段
+[agents.text_adv]
+command_llm = "llm"
+# ... TextAdvAgentConfig 其他字段
 ```
 
 ```toml

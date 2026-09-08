@@ -110,7 +110,7 @@ subgraph StreamerAgent["StreamerAgent src/agents/streamer/"]
 
 - **业务包 `src/agents/` 与框架模块 `src/modules/` 不反向 import**。`src/agents/streamer/` 内的 Agent 可以从 `src/modules/` 导入（事件、工具、配置、LLM、存储），但 `src/modules/` 不得 import 任何 `src/agents/` 的实现。
 - **共享契约放 `src/modules/types/`**。如 `NormalizedMessage`（`message_type.py`）/ `CapabilitiesProvider` Protocol（`capabilities.py`）/ `Emotion` 枚举 / `ToolProvider` 协议等。任何 Agent/工具都可能用到的基础类型都在这里。
-- **框架层不得含直播/游戏内容特有逻辑**。"MC 怎么挖矿""主播怎么读弹幕"这类内容逻辑必须内聚到 `src/agents/<family>/<name>/` 包内。框架层只定义协议与基础设施，加新内容=加新 Agent 包+改配置，框架零改动。
+- **框架层不得含直播/游戏内容特有逻辑**。"MC 怎么挖矿""主播怎么读弹幕"这类内容逻辑必须内聚到 `src/agents/<name>/` 包内（目录名 = Agent 注册名）。框架层只定义协议与基础设施，加新内容=加新 Agent 包+改配置，框架零改动。
 
 这条守护的是**可替换 / 可测试 / 无编译期环**。Agent 不该认识具体工具实现类，只该认识 `ToolRegistry` 抽象和共享层的 Protocol。
 
@@ -137,7 +137,7 @@ subgraph StreamerAgent["StreamerAgent src/agents/streamer/"]
 v2 不再有"插件系统"。所有新功能通过 Agent 包内聚实现，框架零改动。具体规则：
 
 - **Planner/Replyer 是 StreamerAgent 的内部器官，不得注册为工具**。它们是 Agent 的决策循环与表达引擎（`planner.py` / `replyer.py` 同处 `src/agents/streamer/`），内部直接 await，不经 ToolRegistry 中转。"把 Planner 注册成工具"就是插件换皮的典型形态——把 Agent 内脏拆出来假装是工具。
-- **内容特有逻辑全部内聚到 `src/agents/<family>/<name>/` 包内**。例：新增"MC Agent" → 在 `src/agents/game/minecraft/` 建包，内含 `agent.py`（继承 `BaseAgent`）、`engine.py`（实现 `ContentEngine` Protocol）、`state.py` 等；Agent 自有工具在 `_register_tools()` 中自己 `registry.register_provider(provider)`；公用 builtin 由装配根 `main.py` 的 `bind_core_tools(registry, slice)` 显式调 `register_*_tools(registry, config)`，`bind_pending_tools(registry)` flush L1 `@tool` pending；启动结束 `audit_tools` 审计。
+- **内容特有逻辑全部内聚到 `src/agents/<name>/` 包内**（目录名 = Agent 注册名）。例：新增"MC Agent" → 在 `src/agents/minecraft/` 建包，内含 `agent.py`（继承 `BaseAgent`）、`engine.py`（实现 `ContentEngine` Protocol）、`state.py` 等；Agent 自有工具在 `_register_tools()` 中自己 `registry.register_provider(provider)`；公用 builtin 由装配根 `main.py` 的 `bind_core_tools(registry, slice)` 显式调 `register_*_tools(registry, config)`，`bind_pending_tools(registry)` flush L1 `@tool` pending；启动结束 `audit_tools` 审计。
 - **加内容 = 加包 + 配置**，框架层零改动。**禁止**为新功能在 `src/modules/` 加新域；**禁止**通过 monkey-patching 或 import 副作用往框架注入行为。
 - **快照型能力是被调才干活的工具，持续流型才是采集器**。`look_at_screen`（截图感知，返回当前画面）是工具，因为它被 LLM 决策时才看一眼；屏幕持续变化检测（`ScreenChangeCollector`）才是采集器，因为它推"屏幕变了"事件流。判别口诀："谁驱动谁"——能自我维持状态/轮询/心跳的是 Agent，只在被调用时执行的是 Tool。
 
@@ -148,7 +148,7 @@ v2 不再有"插件系统"。所有新功能通过 Agent 包内聚实现，框�
 | 禁止模式 | 原因 | 替代方案 |
 |---------|------|---------|
 | 把 Agent 内脏注册为工具（如 Planner/Replyer） | 插件换皮 | 内脏留在 Agent 包内，经 `BaseAgent.list_tools()` 暴露 Agent 自有工具（如 StreamerAgent 暴露 `reply` / `should_speak_proactively` / `parse_command`） |
-| 内容逻辑写进框架层（`src/modules/`） | 破坏"加包不加框架"红线 | `src/agents/<family>/<game>/` 自包含包；框架只保留协议、抽象、跨组件基础设施 |
+| 内容逻辑写进框架层（`src/modules/`） | 破坏"加包不加框架"红线 | `src/agents/<name>/` 自包含包；框架只保留协议、抽象、跨组件基础设施 |
 | 采集器订阅 Agent/工具结果事件（如 `tool.result.#` / `planner.checkpoint`） | 防环；采集器角色定位为"数据生产者" | 采集器只 emit `room.message.*`，订阅交给 Agent 与 Observer |
 | Agent import 具体工具实现类 | 耦合到具体实现 | 经 `ToolRegistry.invoke(name, args)` 调用；能力发现走 `ToolRegistry.list_tools()` 或 `CapabilitiesProvider` Protocol |
 | 快照感知做成采集器（持续 emit "屏幕当前画面"） | 违反主体性判据（无自主循环、无持续事件流价值） | 实现 `ToolProvider` 接口，`invoke()` 时按需截图并返回；不主动推事件 |

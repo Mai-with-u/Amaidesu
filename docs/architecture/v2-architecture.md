@@ -134,7 +134,7 @@ flowchart TB
 各层要点：
 
 - **主播 Agent**：`src/agents/streamer/`——弹幕窗 MessageBuffer 聚合，Planner 以 ReAct 循环决策（工具面 = 全局 ToolRegistry + reply 局部工具，`planner_llm` 默认 llm 高质量模型，`planner_max_steps=8` 防失控）：查信息（游戏状态/记忆）→ 调 `reply` 工具 → Replyer 表达引擎生成 speech/emotion/action（含敏感词净化）。**Planner 与 Replyer 都是内脏，两者都不注册为工具**（reply_tool 是 LLM 调用入口）。Agenda 子系统管理环节/冷场状态/轮转节奏/持久化队列中的"没有弹幕时说什么"，与后台弹幕机双轨互动。
-- **游戏代理**（`src/agents/game/<game>/`）：AI 玩家范式——感知（公用 look_at_screen 快照）、推进（专属工具如 text_adv_choose_option）、循环内聚于一个自包含包。加游戏 = 加包 + 配置，框架零改动。
+- **游戏代理**（`src/agents/<name>/`，如 minecraft / text_adv）：AI 玩家范式——感知（公用 look_at_screen 快照）、推进（专属工具如 text_adv_choose_option）、循环内聚于一个自包含包。加游戏 = 加包 + 配置，框架零改动。
 - **工具层**：约 60 个工具统一 ToolSpec 契约，三个来源——内置（进程内渲染/感知）、内容引擎（玩家引擎控制面）、MCP（外部扩展）。同步调用结果直返，异步工具经 `tool.result.<name>` 事件回传。
 - **存储层**：SQLite 11 表（场次/直播消息流/礼物/SC/话题/观众/Agenda 计划与运行时/游戏事件/时间线摘要/LLM 用量）+ schema_migrations 版本化迁移；模拟数据带 `simulated` 列，统计查询一律排除——模拟观众不是观众。
 
